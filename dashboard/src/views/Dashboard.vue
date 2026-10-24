@@ -52,7 +52,7 @@
           <h2 class="card-title">直播对话流</h2>
           <span class="card-hint">最近 {{ liveEntries.length }} 条 · 实时折叠</span>
           <span class="grow" />
-          <a class="card-link" @click.prevent="router.push('/live')">打开直播控制台</a>
+          <a class="card-link" href="/live" @click.prevent="router.push('/live')">打开直播控制台</a>
         </div>
         <div class="feed-scroll">
           <FeedTimeline :entries="liveEntries" compact empty-text="暂无直播活动" />
@@ -122,7 +122,7 @@
 
     <!-- 基座一行 -->
     <footer class="infra-row" aria-label="基座状态">
-      <a class="infra-link" @click.prevent="router.push('/collectors')">
+      <a class="infra-link" href="/collectors" @click.prevent="router.push('/collectors')">
         <span>采集</span>
         <span class="mono">{{ infra.collectors.started }} / {{ infra.collectors.total }}</span>
         <span v-if="infra.collectors.idleNames.length > 0" class="infra-idle mono">
@@ -130,7 +130,7 @@
         </span>
       </a>
       <span class="infra-sep" aria-hidden="true">·</span>
-      <a class="infra-link" @click.prevent="router.push('/tools')">
+      <a class="infra-link" href="/tools" @click.prevent="router.push('/tools')">
         <span>工具熔断</span>
         <span class="mono" :class="{ 'is-warn': infra.tools.tripped > 0 }">
           {{ infra.tools.tripped }}
@@ -140,6 +140,7 @@
       <a
         class="infra-link"
         :class="{ 'is-disabled': infra.rundown.unavailable }"
+        href="/outline"
         @click.prevent="router.push('/outline')"
       >
         <span>节目</span>

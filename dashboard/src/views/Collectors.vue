@@ -56,6 +56,9 @@
           role="option"
           :aria-selected="c.name === selectedName"
           @click="select(c.name)"
+          tabindex="0"
+          @keydown.enter.prevent="select(c.name)"
+          @keydown.space.prevent="select(c.name)"
         >
           <span class="md-status-dot" aria-hidden="true" />
           <span class="md-row-name" :title="c.name">{{ c.name }}</span>

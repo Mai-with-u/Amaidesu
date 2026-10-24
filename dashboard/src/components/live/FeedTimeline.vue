@@ -180,16 +180,6 @@
           </p>
           <p v-if="entry.note" class="act-note">{{ entry.note }}</p>
           <div class="d-meta">
-            <span v-if="batchSizeOf(entry) > 0" class="mono">批次 {{ batchSizeOf(entry) }} 条</span>
-            <span v-if="plannerMsOf(entry)" class="mono">决策 {{ plannerMsOf(entry) }}ms</span>
-            <span v-if="replyMsOf(entry)" class="mono">生成 {{ replyMsOf(entry) }}ms</span>
-            <span
-              v-if="cacheLabelOf(entry)"
-              class="d-pill d-pill--cache"
-              :title="cacheTitleOf(entry)"
-            >
-              {{ cacheLabelOf(entry) }}
-            </span>
             <span
               v-if="tokensLabelOf(entry)"
               class="d-pill d-pill--token"
@@ -197,13 +187,28 @@
             >
               Token {{ tokensLabelOf(entry) }}
             </span>
-            <span
-              v-if="modelNameOf(entry)"
-              class="d-pill d-pill--model"
-              :title="modelNameOf(entry)"
-            >
-              {{ modelNameOf(entry) }}
-            </span>
+            <details class="d-meta-more">
+              <summary>诊断</summary>
+              <span v-if="batchSizeOf(entry) > 0" class="mono"
+                >批次 {{ batchSizeOf(entry) }} 条</span
+              >
+              <span v-if="plannerMsOf(entry)" class="mono">决策 {{ plannerMsOf(entry) }}ms</span>
+              <span v-if="replyMsOf(entry)" class="mono">生成 {{ replyMsOf(entry) }}ms</span>
+              <span
+                v-if="cacheLabelOf(entry)"
+                class="d-pill d-pill--cache"
+                :title="cacheTitleOf(entry)"
+              >
+                {{ cacheLabelOf(entry) }}
+              </span>
+              <span
+                v-if="modelNameOf(entry)"
+                class="d-pill d-pill--model"
+                :title="modelNameOf(entry)"
+              >
+                {{ modelNameOf(entry) }}
+              </span>
+            </details>
             <el-popover
               placement="top-start"
               :width="400"
@@ -229,7 +234,7 @@
               v-if="entry.llmRequestId"
               class="d-link"
               :href="`/llm/history?request_id=${encodeURIComponent(entry.llmRequestId)}`"
-              @click.stop
+              @click.stop.prevent="openLlmRequest(entry.llmRequestId)"
             >
               完整请求 ↗
             </a>
@@ -237,6 +242,9 @@
               v-if="entry.llmRequestId"
               class="d-link"
               role="button"
+              tabindex="0"
+              @keydown.enter.prevent="toggleThinking(entry)"
+              @keydown.space.prevent="toggleThinking(entry)"
               :title="
                 expandedThinking.has(entry.id)
                   ? '收起模型推理正文'
@@ -274,26 +282,29 @@
           <p class="act-text">{{ entry.text }}</p>
           <div class="d-meta">
             <span
-              v-if="cacheLabelOf(entry)"
-              class="d-pill d-pill--cache"
-              :title="cacheTitleOf(entry)"
-            >
-              {{ cacheLabelOf(entry) }}
-            </span>
-            <span
               v-if="tokensLabelOf(entry)"
               class="d-pill d-pill--token"
               :title="tokensTitleOf(entry)"
             >
               Token {{ tokensLabelOf(entry) }}
             </span>
-            <span
-              v-if="modelNameOf(entry)"
-              class="d-pill d-pill--model"
-              :title="modelNameOf(entry)"
-            >
-              {{ modelNameOf(entry) }}
-            </span>
+            <details class="d-meta-more">
+              <summary>诊断</summary>
+              <span
+                v-if="cacheLabelOf(entry)"
+                class="d-pill d-pill--cache"
+                :title="cacheTitleOf(entry)"
+              >
+                {{ cacheLabelOf(entry) }}
+              </span>
+              <span
+                v-if="modelNameOf(entry)"
+                class="d-pill d-pill--model"
+                :title="modelNameOf(entry)"
+              >
+                {{ modelNameOf(entry) }}
+              </span>
+            </details>
             <el-popover
               placement="top-start"
               :width="400"
@@ -319,13 +330,16 @@
               v-if="entry.llmRequestId"
               class="d-link"
               :href="`/llm/history?request_id=${encodeURIComponent(entry.llmRequestId)}`"
-              @click.stop
+              @click.stop.prevent="openLlmRequest(entry.llmRequestId)"
             >
               完整请求 ↗
             </a>
             <a
               class="d-link"
               role="button"
+              tabindex="0"
+              @keydown.enter.prevent="toggleThinking(entry)"
+              @keydown.space.prevent="toggleThinking(entry)"
               :title="
                 expandedThinking.has(entry.id)
                   ? '收起模型推理正文'
@@ -409,8 +423,13 @@
                   <span class="t-payload-tag t-payload-tag--error">错误</span>
                   <el-icon
                     class="copy-icon"
-                    title="复制"
+                    role="button"
+                    tabindex="0"
+                    aria-label="复制错误信息"
+                    title="复制错误信息"
                     @click.stop="copyText(toolErrorOf(entry))"
+                    @keydown.enter.prevent="copyText(toolErrorOf(entry))"
+                    @keydown.space.prevent="copyText(toolErrorOf(entry))"
                   >
                     <CopyDocument />
                   </el-icon>
@@ -422,8 +441,13 @@
                   <span class="t-payload-tag">参数</span>
                   <el-icon
                     class="copy-icon"
+                    role="button"
+                    tabindex="0"
+                    aria-label="复制参数 JSON"
                     title="复制 JSON"
                     @click.stop="copyJson(toolDetail(entry).args)"
+                    @keydown.enter.prevent="copyJson(toolDetail(entry).args)"
+                    @keydown.space.prevent="copyJson(toolDetail(entry).args)"
                   >
                     <CopyDocument />
                   </el-icon>
@@ -441,8 +465,13 @@
                   <span class="t-payload-tag">结果</span>
                   <el-icon
                     class="copy-icon"
+                    role="button"
+                    tabindex="0"
+                    aria-label="复制结果 JSON"
                     title="复制 JSON"
                     @click.stop="copyJson(toolDetail(entry).result)"
+                    @keydown.enter.prevent="copyJson(toolDetail(entry).result)"
+                    @keydown.space.prevent="copyJson(toolDetail(entry).result)"
                   >
                     <CopyDocument />
                   </el-icon>
@@ -623,6 +652,7 @@
  * 可点并上抛 roundClick，由页面决定跳转去向；默认关闭，首页复用不受影响。
  */
 import { computed, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { CopyDocument, Monitor } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
@@ -667,6 +697,8 @@ interface Props {
   anchorEntryId?: string | null;
 }
 
+const router = useRouter();
+
 const props = withDefaults(defineProps<Props>(), {
   compact: false,
   layout: 'timeline',
@@ -684,6 +716,10 @@ const emit = defineEmits<{
 /** 行是否可点：仅四类带轮次 ID 的行（判定口径在 liveFeed.isRoundLinkable） */
 function isRoundClickable(entry: ShowEntry): boolean {
   return props.roundClickable && isRoundLinkable(entry);
+}
+
+function openLlmRequest(requestId: string): void {
+  void router.push({ path: '/llm/history', query: { request_id: requestId } });
 }
 
 function onRowClick(entry: ShowEntry): void {
@@ -1459,6 +1495,30 @@ async function copyText(text: string): Promise<void> {
 }
 
 /* 统计胶囊：底色块让各项统计在元信息行里一眼可分（缓存=绿 / 用量=蓝 / 模型=中性描边 / 水位=蓝） */
+.d-meta-more[open] {
+  display: contents;
+}
+
+.d-meta-more > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.d-meta-more > summary:hover {
+  color: var(--text-primary);
+}
+
+.d-meta-more > summary::-webkit-details-marker {
+  display: none;
+}
+
 .d-pill {
   padding: 0 6px;
   border-radius: var(--radius-sm);

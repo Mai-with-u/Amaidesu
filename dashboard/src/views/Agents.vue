@@ -17,7 +17,6 @@
           <!-- 批量启停影响所有 Agent（直播中误点全部停止会直接停摆），先确认再执行 -->
           <div class="md-batch-actions">
             <el-button
-              size="small"
               type="success"
               plain
               class="batch-btn"
@@ -29,7 +28,6 @@
               全部启动
             </el-button>
             <el-button
-              size="small"
               type="danger"
               plain
               class="batch-btn"
@@ -60,6 +58,9 @@
             role="option"
             :aria-selected="a.name === selectedName"
             @click="select(a.name)"
+            tabindex="0"
+            @keydown.enter.prevent="select(a.name)"
+            @keydown.space.prevent="select(a.name)"
           >
             <span class="md-status-dot" aria-hidden="true" />
             <span class="md-row-name" :title="a.name">{{ a.name }}</span>
@@ -104,7 +105,6 @@
               <el-button
                 v-if="!selected.is_started"
                 type="primary"
-                size="small"
                 plain
                 :loading="actionLoading[`${selected.name}-start`]"
                 @click="handleControl('start')"
@@ -113,7 +113,6 @@
               </el-button>
               <el-button
                 v-else
-                size="small"
                 plain
                 :loading="actionLoading[`${selected.name}-stop`]"
                 @click="handleControl('stop')"
@@ -123,7 +122,6 @@
               <!-- 暂停/恢复互斥：同理只渲染可用的一项 -->
               <el-button
                 v-if="selectedState !== 'paused'"
-                size="small"
                 plain
                 :disabled="!agentStateOf(selected.name)"
                 :loading="controlLoading[`${selected.name}-pause`]"
@@ -182,7 +180,6 @@
               <span class="md-chip-value mono">{{ latestDecisionLabel }}</span>
             </div>
             <el-button
-              size="small"
               text
               aria-label="刷新状态"
               title="刷新状态"
@@ -239,7 +236,6 @@
                 </el-tag>
               </div>
               <el-button
-                size="small"
                 text
                 aria-label="刷新任务"
                 title="刷新任务"
