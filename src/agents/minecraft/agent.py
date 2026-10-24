@@ -1282,9 +1282,9 @@ class MinecraftAgent(BaseAgent):
             # 这里只说明来龙去脉、提醒复活后先看一眼自己，不催模型重下目标。
             if self._batch_active or not self._task_finished:
                 self._inject_wakeup_message(self._body_notice_content(kind, notice, message))
-            # 上报主播的是给观众听的白话（模型那边仍收 Mod 原话）：和注意流采集器的叙事同一套说法；
-            # 经素材调度器发送，超阈值长文再走保信息摘要兜底
-            self._schedule_attention_material(summarize(classify(kind) or "unknown", kind, message))
+            # 必须传 Mod 原话：白话速览的分句改写器会整段丢弃排查类分句（实测 30 句输入只剩
+            # 一句"有件事没办成"），排查细节全灭；长度交给素材调度器（长文压缩、短文直通）
+            self._schedule_attention_material(message)
             return
         if not self._batch_active or (kind, message) in self._body_notified:
             return

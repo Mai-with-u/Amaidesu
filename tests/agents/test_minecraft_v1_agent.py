@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
-from src.agents.minecraft.attention_matrix import classify, summarize
 from src.agents.minecraft.glance import glance_brief, glance_scene
 from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of, reply_of
 from src.agents.minecraft.tools import MaicraftMcpProvider
@@ -531,8 +530,8 @@ async def test_character_death_tells_the_running_task_and_the_streamer() -> None
         for call in bus.emit.await_args_list
         if isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
     ]
-    # 上报主播的是白话（模型那边仍收 Mod 原话，见上面的唤醒正文）
-    assert any(alert.message.startswith("死了：") for alert in alerts)
+    # 上报主播的是 Mod 原话（死亡属短事件直通；长排查文由素材调度器压缩）
+    assert any("角色死了" in alert.message and "主任务停在原地" in alert.message for alert in alerts)
     assert agent._goals.tracked_ids() == [1], "死亡不结束目标"
     await agent.stop()
 
@@ -1205,8 +1204,8 @@ class _SummaryLlm:
         return self.behavior(messages)
 
 
-async def test_body_event_reaches_streamer_as_white_talk() -> None:
-    """身体事件经白话速览转一句观众话发出：白话已是短句，不再触发保信息摘要压缩。"""
+async def test_long_body_event_is_summarized_before_reaching_the_streamer() -> None:
+    """长文概述器：超过阈值的长文经 summary 档压缩后两栏发出，短文直通不调 LLM。"""
     server = FakeMaicraft()
     llm = _SummaryLlm(lambda messages: _resp("饿了：翻过箱子没有、合成缺干海带块、烧炼缺原料"))
     agent, _llm, bus = await _start(server, lambda messages: _resp("好"))
@@ -1218,11 +1217,22 @@ async def test_body_event_reaches_streamer_as_white_talk() -> None:
     await agent._on_body_event({"kind": "need_unhandled", "message": long_text})
     await _wait_until(lambda: len(_attention_events(bus)) == 2)
 
-    # 白话速览把长短事件都转成一句观众话，整篇原文不再进主播素材
-    assert llm.calls == [], "白话短句直通，不调概述档"
-    first, second = _attention_events(bus)
-    assert first.message == summarize(classify("need_unhandled") or "unknown", "need_unhandled", short)
-    assert second.message == summarize(classify("need_unhandled") or "unknown", "need_unhandled", long_text)
+    assert llm.calls and llm.calls[0]["profile"] == "summary", "概述走 summary 档"
+    assert "只压缩不评价" in llm.calls[0]["messages"][0]["content"], "提示词只压缩不评价"
+    first, summarized = _attention_events(bus)
+    assert first.message == short and first.scene == "", "短文直通，不调概述"
+    assert "干海带块" in summarized.message, "概述保信息"
+    assert summarized.scene.startswith("原文留档：") and long_text in summarized.scene, "原文留档进载荷"
+    await agent.stop()
+
+    # 白话化只改说法不去内容：各不相同的排查分句重写后仍超阈值，压缩兜底照常触发
+    # 互不重复的排查分句（去重逻辑压不短），白话化后仍超 300 字阈值
+    heterogeneous = "，".join(f"挖了第{i}层都没有找到铁矿，背包里只剩{i}块圆石" for i in range(30))
+    await agent._on_body_event({"kind": "need_unhandled", "message": heterogeneous})
+    await _wait_until(lambda: len(_attention_events(bus)) == 3)
+    assert llm.calls and llm.calls[0]["profile"] == "summary", "白话化仍超阈值的长文走保信息摘要"
+    third = _attention_events(bus)[2]
+    assert third.scene.startswith("原文留档："), "留档进 scene"
     await agent.stop()
 
 
