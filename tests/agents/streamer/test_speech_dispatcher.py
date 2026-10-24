@@ -365,3 +365,100 @@ async def test_reaction_speaks_once_the_mouth_is_free(started) -> None:
     assert engine.calls[-1] == ("疼疼疼！", utterance_id)
     payload = captured[-1][1]
     assert (payload.text, payload.emotion, payload.round_id) == ("疼疼疼！", "scared", "mouth_1")
+
+
+def _spy_emit_busy(dispatcher: SpeechDispatcher) -> dict:
+    """记下每句业务事件发出那一刻嘴是不是还占着（排在别人后面出声的台词，发出时嘴是忙的）。"""
+    busy_at_emit: dict = {}
+    original = dispatcher._emit_streamer_speech
+
+    async def _spy(utterance_id: str, text: str, *args: Any, **kwargs: Any) -> None:
+        busy_at_emit[text] = dispatcher.utterance_queue.busy
+        await original(utterance_id, text, *args, **kwargs)
+
+    dispatcher._emit_streamer_speech = _spy
+    return busy_at_emit
+
+
+async def test_reaction_gives_up_when_a_planner_line_takes_the_gap(started) -> None:
+    """前一句播完时 Planner 的下一句先占了空档：嘴空完再看一眼，剩下的时间等不到就作废，不排到那句后面。"""
+    engine = _Engine(delay_s=0.3)
+    dispatcher = await started(engine=engine, config=_TTS_ON)
+    await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
+    planner = asyncio.create_task(dispatcher.dispatch({"speech": "第二句", "emotion": {}}))
+
+    result = await dispatcher.dispatch_reaction(
+        "疼疼疼！", emotion="scared", emotion_intensity=0.7, wait_ms=500, gap_ms=100
+    )
+    await planner
+
+    assert result is None
+    await _until(lambda: len(engine.calls) == 2)
+    await asyncio.sleep(0.4)
+    assert [text for text, _ in engine.calls] == ["第一句", "第二句"]
+
+
+async def test_reaction_that_lost_the_gap_waits_for_a_free_mouth_instead_of_queueing_behind(started) -> None:
+    """空档被 Planner 那句占了但时间还够：等那句播完再出声，发出那一刻嘴是空的。"""
+    engine = _Engine(delay_s=0.3)
+    dispatcher = await started(engine=engine, config=_TTS_ON)
+    busy_at_emit = _spy_emit_busy(dispatcher)
+    await dispatcher.dispatch({"speech": "第一句", "emotion": {}})
+    planner = asyncio.create_task(dispatcher.dispatch({"speech": "第二句", "emotion": {}}))
+
+    result = await dispatcher.dispatch_reaction(
+        "疼疼疼！", emotion="scared", emotion_intensity=0.7, wait_ms=2000, gap_ms=100
+    )
+    await planner
+
+    assert result is not None
+    assert busy_at_emit == {"第一句": False, "第二句": False, "疼疼疼！": False}
+    await _until(lambda: len(engine.calls) == 3)
+    assert [text for text, _ in engine.calls] == ["第一句", "第二句", "疼疼疼！"]
+
+
+async def test_planner_line_waits_while_a_reaction_holds_the_gap(started) -> None:
+    """嘴已占下空档、还在发出它那句时，Planner 的下一句不能抢先：等嘴那句排进去播完再说。"""
+    engine = _Engine(delay_s=0.2)
+    dispatcher = await started(engine=engine, config=_TTS_ON)
+    original = dispatcher._emit_streamer_speech
+
+    async def _slow_emit(utterance_id: str, text: str, *args: Any, **kwargs: Any) -> None:
+        if text == "疼疼疼！":
+            # 拉长"占下空档到入队"之间的窗口，让 Planner 那句恰好在这时到
+            await asyncio.sleep(0.2)
+        await original(utterance_id, text, *args, **kwargs)
+
+    dispatcher._emit_streamer_speech = _slow_emit
+    reaction = asyncio.create_task(
+        dispatcher.dispatch_reaction("疼疼疼！", emotion="scared", emotion_intensity=0.7, wait_ms=1000)
+    )
+    await asyncio.sleep(0.05)
+    await dispatcher.dispatch({"speech": "接着说", "emotion": {}})
+
+    assert await reaction is not None
+    await _until(lambda: len(engine.calls) == 2)
+    assert [text for text, _ in engine.calls] == ["疼疼疼！", "接着说"]
+
+
+@pytest.mark.parametrize("tts_on", [True, False])
+async def test_reaction_reports_the_moment_it_starts_playing(started, tts_on: bool) -> None:
+    """开始播的回调：TTS 开着时在这句交给 TTS 的那一刻（前一句已播完），关着时在发出的那一刻。"""
+    engine = _Engine(delay_s=0.2)
+    dispatcher = await started(engine=engine, config=_TTS_ON if tts_on else {"enabled": False})
+    await dispatcher.dispatch({"speech": "前一句", "emotion": {}})
+    marks: list[int] = []
+
+    await dispatcher.dispatch_reaction(
+        "疼疼疼！",
+        emotion="scared",
+        emotion_intensity=0.7,
+        wait_ms=2000,
+        on_started=lambda: marks.append(len(engine.calls)),
+    )
+
+    if tts_on:
+        await _until(lambda: len(engine.calls) == 2)
+        assert marks == [1]
+    else:
+        assert marks == [0]

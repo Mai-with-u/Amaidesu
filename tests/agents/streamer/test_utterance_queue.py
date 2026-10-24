@@ -262,3 +262,26 @@ async def test_passage_not_started_yet_is_not_cut() -> None:
         assert queue.get_stats()["interrupted"] == 0
     finally:
         await queue.stop()
+
+
+async def test_start_callback_fires_when_its_turn_comes_and_never_for_a_skipped_line() -> None:
+    """轮到这句、交给 TTS 之前回调一次（嘴按这一刻记延迟）；过期跳过的不回调，回调出错这句照常播。"""
+    recorder = _Recorder()
+    clock = _Clock()
+    queue = _queue_with(recorder, clock=clock)
+    started: List[tuple[str, int]] = []
+
+    def _broken() -> None:
+        raise RuntimeError("回调坏了")
+
+    await queue.enqueue("stale", "哇什么东西", ttl_ms=6000, on_start=lambda: started.append(("stale", 0)))
+    await queue.enqueue("ouch", "疼疼疼！", on_start=lambda: started.append(("ouch", len(recorder.calls))))
+    await queue.enqueue("broken", "还好还好", on_start=_broken)
+    clock.now += 7000
+    await queue.start()
+    try:
+        await _wait_for(lambda: len(recorder.calls) == 2)
+        assert started == [("ouch", 0)], "回调在这句交给 TTS 之前"
+        assert [uid for _, uid in recorder.calls] == ["ouch", "broken"]
+    finally:
+        await queue.stop()

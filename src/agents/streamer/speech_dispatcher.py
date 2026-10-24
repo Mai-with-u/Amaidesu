@@ -80,6 +80,11 @@ class SpeechDispatcher:
         # 每句话发出后的回调（嘴用它记下她说过的每句话，Planner 的与嘴自己的都算）。
         # 代码直连而不是订阅 streamer.speech：Agent 不订阅自己的输出事件
         self._spoken_listener: Optional[Callable[[str, int], None]] = None
+        # 空档占位：一路发言等到嘴空、到它那句排进播放队列之间，别的发言都当嘴还忙。
+        # 不占位的话，Planner 那句和嘴的反应同时等到空档时都会放行，嘴那句被挤到后面晚十几秒才出声
+        self._slot_claimed = False
+        self._slot_free = asyncio.Event()
+        self._slot_free.set()
 
     def _spawn(self, coro: Coroutine[Any, Any, Any], *, label: str) -> None:
         """把后台 coroutine 创建并纳入强引用持有（决策循环同步返回，不等待）。
@@ -272,22 +277,26 @@ class SpeechDispatcher:
         # 再发布业务事件 + 写历史（与 TTS 启用与否正交），TTS 启用时复用
         # 同一 utterance_id 入 TTS 队列。
         if cleaned_speech:
-            await self._wait_for_playback_slot()
-            utterance_id = self._next_utterance_id()
-            await self._emit_streamer_speech(
-                utterance_id,
-                cleaned_speech,
-                cleaned_emotion,
-                cleaned_emotion_intensity,
-                target_user_id,
-                reply_to_message_id=reply_to_message_id,
-                round_id=round_id,
-                llm_request_id=reply_payload.get("llm_request_id"),
-            )
-            self._schedule_subtitle_show(cleaned_speech, utterance_id)
-            self._notify_spoken(cleaned_speech)
-            if self._tts_enabled and self._utterance_queue is not None:
-                await self._utterance_queue.enqueue(utterance_id, cleaned_speech)
+            claimed = await self._wait_for_playback_slot()
+            try:
+                utterance_id = self._next_utterance_id()
+                await self._emit_streamer_speech(
+                    utterance_id,
+                    cleaned_speech,
+                    cleaned_emotion,
+                    cleaned_emotion_intensity,
+                    target_user_id,
+                    reply_to_message_id=reply_to_message_id,
+                    round_id=round_id,
+                    llm_request_id=reply_payload.get("llm_request_id"),
+                )
+                self._schedule_subtitle_show(cleaned_speech, utterance_id)
+                self._notify_spoken(cleaned_speech)
+                if self._tts_enabled and self._utterance_queue is not None:
+                    await self._utterance_queue.enqueue(utterance_id, cleaned_speech)
+            finally:
+                if claimed:
+                    self._release_slot()
             return cleaned_speech, cleaned_emotion, utterance_id
 
         return None
@@ -303,12 +312,17 @@ class SpeechDispatcher:
         priority: int = 5,
         round_id: str = "",
         llm_request_id: Optional[str] = None,
+        on_started: Optional[Callable[[], None]] = None,
     ) -> Optional[str]:
         """嘴的发声方式：前面还有话没播完时最多等 ``wait_ms``，等不到整句作废；能出声的插到其他待播台词前面。
 
         和 :meth:`dispatch` 的区别：dispatch 等待超时照样放行（发言总要发），而突发反应过了时效
         就不该再说。作废发生在业务事件发出之前，记录里不会留下"说了却没出声"的台词。
-        前面那句刚播完时再空 ``gap_ms`` 才出声，两句不挤在一起。
+        前面那句刚播完时再空 ``gap_ms`` 才出声，两句不挤在一起；空完重新看一眼，空档已经被
+        Planner 那句占了，就在剩下的时间里接着等。``wait_ms`` 从调用时算起，总共只等这么久。
+
+        ``on_started`` 在这句轮到播放、交给 TTS 的那一刻调用（TTS 关着时就是发出的那一刻），
+        嘴用它按实际开始播的时刻记延迟。
 
         Returns:
             本句的 utterance_id；空台词或作废时返回 None。
@@ -317,29 +331,79 @@ class SpeechDispatcher:
         if not text:
             return None
         queue = self._utterance_queue
-        if self._tts_enabled and queue is not None and queue.busy:
-            if not await queue.wait_idle(timeout_ms=max(1, wait_ms)):
+        claimed = False
+        if self._tts_enabled and queue is not None:
+            claimed = await self._claim_slot(timeout_ms=max(1, wait_ms), gap_ms=gap_ms)
+            if not claimed:
                 self._logger.info(f"反应等不到前一句播完（>{wait_ms}ms），整句作废: {text[:30]}")
                 return None
-            if gap_ms > 0:
-                await asyncio.sleep(gap_ms / 1000.0)
-        utterance_id = self._next_utterance_id()
-        await self._emit_streamer_speech(
-            utterance_id,
-            text,
-            emotion,
-            emotion_intensity,
-            round_id=round_id,
-            llm_request_id=llm_request_id,
-        )
-        self._schedule_subtitle_show(text, utterance_id)
-        self._notify_spoken(text)
-        if self._tts_enabled and queue is not None:
-            # 已经发出业务事件，就不再设过期：记录里有的台词一定要出声
-            await queue.enqueue(utterance_id, text, priority=priority)
+        try:
+            utterance_id = self._next_utterance_id()
+            await self._emit_streamer_speech(
+                utterance_id,
+                text,
+                emotion,
+                emotion_intensity,
+                round_id=round_id,
+                llm_request_id=llm_request_id,
+            )
+            self._schedule_subtitle_show(text, utterance_id)
+            self._notify_spoken(text)
+            if self._tts_enabled and queue is not None:
+                # 已经发出业务事件，就不再设过期：记录里有的台词一定要出声
+                await queue.enqueue(utterance_id, text, priority=priority, on_start=on_started)
+            elif on_started is not None:
+                on_started()
+        finally:
+            if claimed:
+                self._release_slot()
         return utterance_id
 
-    async def _wait_for_playback_slot(self) -> None:
+    def _slot_taken(self) -> bool:
+        """嘴是否被占着：前一句还在合成或播放、队里还有待播的，或者另一路发言已经占下了空档。"""
+        queue = self._utterance_queue
+        return self._slot_claimed or (queue is not None and queue.busy)
+
+    async def _claim_slot(self, *, timeout_ms: Optional[int], gap_ms: int = 0) -> bool:
+        """等到嘴空并占下这个空档；超时返回 False，不占位。
+
+        判定空闲与占位之间没有 await：两路发言同时等到空档时只有先判定的那路占得到，另一路接着等
+        （占位那路的台词入队后队列变忙，后到的那路再等这一句播完）。``gap_ms``：等过前一句时再空
+        这么久才开口，空完重新判定一次。``timeout_ms=None`` 表示不限时。
+        """
+        deadline = None if timeout_ms is None else now_ms() + timeout_ms
+        waited = False
+        while True:
+            if not self._slot_taken():
+                if waited and gap_ms > 0:
+                    waited = False
+                    await asyncio.sleep(gap_ms / 1000.0)
+                    continue
+                self._slot_claimed = True
+                self._slot_free.clear()
+                return True
+            remaining = None if deadline is None else deadline - now_ms()
+            if remaining is not None and remaining <= 0:
+                return False
+            waited = True
+            queue = self._utterance_queue
+            if self._slot_claimed or queue is None:
+                # 另一路已占下空档、正在发出它那句：等它让出，再回头看队列
+                try:
+                    await asyncio.wait_for(
+                        self._slot_free.wait(), timeout=None if remaining is None else remaining / 1000.0
+                    )
+                except asyncio.TimeoutError:
+                    return False
+            elif not await queue.wait_idle(timeout_ms=remaining):
+                return False
+
+    def _release_slot(self) -> None:
+        """占位那路的台词已经入队（或中途出错），让出空档。"""
+        self._slot_claimed = False
+        self._slot_free.set()
+
+    async def _wait_for_playback_slot(self) -> bool:
         """背压闸：上一句播完（队列排空）才放行本次发言。
 
         发言节奏跟随语音播放，消除"思考快过嘴速"的错位（想完五句嘴还在
@@ -348,14 +412,18 @@ class SpeechDispatcher:
         未启用/降级（无队列）。等待超时 fail-open——发言总是要发，节奏
         错位可接受，丢发言不可接受；超时上限 0 表示不限时（依赖引擎侧
         fail-fast 与 render_timeout 看门狗排空队列）。
+
+        等到了就占下空档（见 :meth:`_claim_slot`）并返回 True，调用方在这句入队后让出；
+        跳过等待或超时放行时不占位，返回 False。
         """
         queue = self._utterance_queue
         if not self._speech_wait_playback or not self._tts_enabled or queue is None:
-            return
+            return False
         timeout_ms = self._speech_wait_timeout_ms
-        ok = await queue.wait_idle(timeout_ms=timeout_ms if timeout_ms > 0 else None)
-        if not ok:
+        claimed = await self._claim_slot(timeout_ms=timeout_ms if timeout_ms > 0 else None)
+        if not claimed:
             self._logger.warning(f"等待上一句播完超时（>{timeout_ms}ms），放行本轮发言（播放继续追赶）")
+        return claimed
 
     # ==================================================================
     # 下游扇出（业务事件同步发出；字幕/TTS 异步扇出不阻塞决策循环）

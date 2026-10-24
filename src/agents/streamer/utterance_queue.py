@@ -67,6 +67,7 @@ class _UtteranceItem:
         priority: 优先级，越大越先播；同级先来先播。
         expires_at_ms: 过期时刻（Unix 毫秒），轮到它时已过就跳过；0 = 不过期。
         segment: 段落号：长段话拆成的几句共用一个，空串 = 独立一句。
+        on_start: 轮到这句、交给 TTS 的那一刻调用一次；没轮到就被丢掉时不调用。
     """
 
     utterance_id: str
@@ -74,6 +75,7 @@ class _UtteranceItem:
     priority: int = 0
     expires_at_ms: int = 0
     segment: str = ""
+    on_start: Optional[Callable[[], None]] = None
 
 
 class UtteranceQueue:
@@ -165,6 +167,7 @@ class UtteranceQueue:
         priority: int = 0,
         ttl_ms: int = 0,
         segment: str = "",
+        on_start: Optional[Callable[[], None]] = None,
     ) -> bool:
         """将一条 utterance 投入播放队列。
 
@@ -178,6 +181,9 @@ class UtteranceQueue:
             priority: 优先级，越大越先播（默认 0：全部同级即原来的 FIFO）。
             ttl_ms: 多久之内没轮到就作废（0 = 不过期）。突发反应用：过时了不该再说。
             segment: 段落号：长段话拆成的几句共用一个。
+            on_start: 轮到这句、交给 TTS 的那一刻调用一次（流式引擎此刻发
+                ``tts.utterance.started``，字幕和口型也从这时开始）；用来记它实际
+                排了多久，回调出错只记日志不挡播放。
 
         Returns:
             是否被接受；队列停用、或队满时新条目优先级最低被丢掉时返回 False。
@@ -188,7 +194,12 @@ class UtteranceQueue:
 
         expires_at_ms = self._clock() + ttl_ms if ttl_ms > 0 else 0
         item = _UtteranceItem(
-            utterance_id=utterance_id, text=text, priority=priority, expires_at_ms=expires_at_ms, segment=segment
+            utterance_id=utterance_id,
+            text=text,
+            priority=priority,
+            expires_at_ms=expires_at_ms,
+            segment=segment,
+            on_start=on_start,
         )
         async with self._lock:
             self._drop_interrupted_segment(item)
@@ -372,7 +383,8 @@ class UtteranceQueue:
                     # "队列已空但 processing 未置位"的假空闲窗口
                     self._processing = True
 
-                # 在锁外执行 speak（避免阻塞其他 enqueue）
+                # 在锁外执行 speak（避免阻塞其他 enqueue）；交给 TTS 之前先告诉上游"轮到这句了"
+                self._notify_start(item)
                 try:
                     await self._dispatch(item)
                 finally:
@@ -383,6 +395,15 @@ class UtteranceQueue:
             raise
         except Exception as exc:  # noqa: BLE001 - worker 边界兜底
             self._logger.exception(f"worker 循环异常退出: {exc}")
+
+    def _notify_start(self, item: _UtteranceItem) -> None:
+        """轮到这句时回调一次；回调是旁路记录，出错只记日志，这句照常播。"""
+        if item.on_start is None:
+            return
+        try:
+            item.on_start()
+        except Exception as exc:  # noqa: BLE001 - 旁路回调失败不挡播放
+            self._logger.warning(f"开播回调失败（已忽略）: utterance_id={item.utterance_id}, err={exc}", exc=True)
 
     def _pop_fresh(self) -> Optional[_UtteranceItem]:
         """取下一条还没过期的；过期的直接作废（反应过时了再说只会更怪）。"""

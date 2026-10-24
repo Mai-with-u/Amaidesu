@@ -9,7 +9,8 @@
 - 依据：系统提示词只有人设和几条规矩，事实全在每次附上的现场卡里（现在的状态、手上的目标、刚发生的事、
   她刚说过的话）——实验里没有这张卡的瘦嘴会理直气壮地编现场。
 - 兜底：输出"情绪：台词"或"[沉默]"；台词按完整句子截到长度预算、过敏感词过滤、和她最近说过的话比
-  重合度，重复的直接丢弃不重试。出声走发声分发器的反应通道：前一句没播完最多等一会儿，等不到整句作废。
+  重合度，重复的直接丢弃不重试。出声走发声分发器的反应通道：前一句没播完最多等一会儿，等不到整句作废；
+  每句真轮到播放时记一条日志，写明生成、等前一句、从事件到开始播各用了多久。
 
 嘴只说话，不做事：委派、流程单、查询仍归 Planner。
 """
@@ -20,6 +21,7 @@ import asyncio
 import re
 from collections import deque
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Sequence
 
 from src.modules.logging import get_logger
@@ -223,9 +225,14 @@ class Mouth:
         text = self._guard(text)
         if not text:
             return None
-        if self._clock() - min(trigger.at_ms for trigger in fresh) > _MAX_REACTION_AGE_MS:
+        event_at = min(trigger.at_ms for trigger in fresh)
+        if self._clock() - event_at > _MAX_REACTION_AGE_MS:
             self._logger.info(f"反应生成太慢，已过时效，不说了: {text}")
             return None
+        # 延迟日志等这句真轮到播放时再记：被前一句压着排队的那段也算进"从事件到开始播"
+        on_started = partial(
+            self._log_started, text, self._trigger_text(fresh), generated - started, event_at, self._clock()
+        )
         utterance_id = await self._speech.dispatch_reaction(
             text,
             emotion=emotion.value,
@@ -235,16 +242,20 @@ class Mouth:
             priority=_PRIORITY,
             round_id=f"mouth_{started}",
             llm_request_id=getattr(response, "request_id", None) or None,
+            on_started=on_started,
         )
         if utterance_id is None:
             return None
-        spoken_at = self._clock()
-        self._room_state.record_speech(spoken_at)
-        self._logger.info(
-            f"嘴：{text}（由头：{self._trigger_text(fresh)}；生成 {generated - started}ms，"
-            f"从事件到出声 {spoken_at - min(trigger.at_ms for trigger in fresh)}ms）"
-        )
+        self._room_state.record_speech(self._clock())
         return text
+
+    def _log_started(self, text: str, trigger_text: str, generate_ms: int, event_at_ms: int, ready_at_ms: int) -> None:
+        """这句轮到播放（交给 TTS）时记一条：生成用了多久、等前一句等了多久、从事件到开始播一共多久。"""
+        now = self._clock()
+        self._logger.info(
+            f"嘴：{text}（由头：{trigger_text}；生成 {generate_ms}ms，等前一句 {now - ready_at_ms}ms，"
+            f"从事件到开始播 {now - event_at_ms}ms）"
+        )
 
     # ---------------- 输入 ----------------
 

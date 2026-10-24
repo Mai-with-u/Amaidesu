@@ -217,6 +217,24 @@ async def test_loop_merges_back_to_back_triggers_into_one_reaction(prompts: Any)
     assert "被苦力怕炸到一下；有件事没办成：饿了但没吃上" in last
 
 
+async def test_latency_is_logged_when_the_line_actually_starts_playing(prompts: Any, loguru_capture: Any) -> None:
+    """延迟日志等这句真轮到播放时才记：等前一句的那段算进"从事件到开始播"，还没轮到就不记。"""
+    clock = _Clock()
+    llm, speech = _LLM("scared：疼疼疼！"), _Speech()
+    mouth = _mouth(llm, speech, prompts, clock=clock)
+
+    assert await mouth.react_once([_trigger(at_ms=clock.now - 1_000)]) == "疼疼疼！"
+
+    def _latency_logs() -> List[str]:
+        return [record["message"] for record in loguru_capture.records if record["message"].startswith("嘴：")]
+
+    assert _latency_logs() == []
+    clock.now += 4_000
+    speech.calls[0]["on_started"]()
+    assert len(_latency_logs()) == 1
+    assert "等前一句 4000ms" in _latency_logs()[0] and "从事件到开始播 5000ms" in _latency_logs()[0]
+
+
 # ---------------- 接线 ----------------
 
 
