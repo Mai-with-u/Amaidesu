@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner, _Intent
+from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner_render import Intent
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.utils.time_utils import now_ms
@@ -66,7 +67,7 @@ def _planner(
 
 
 async def _reference(planner: Planner) -> str:
-    text = await planner._assemble_reference([], None, None, False, False, "")
+    text, _failure = await planner._assemble_reference([], None, None, False, False, "")
     assert text is not None
     return text
 
@@ -130,8 +131,8 @@ async def test_unread_summary_consumed_once() -> None:
     room_state.set_topic_summary("观众向主播问好并表达惊喜")
     planner = Planner({}, MagicMock(), MagicMock(), room_state, context_enabled=True)
 
-    first = await planner._assemble_reference([], None, None, False, False, "")
-    second = await planner._assemble_reference([], None, None, False, False, "")
+    first, _ = await planner._assemble_reference([], None, None, False, False, "")
+    second, _ = await planner._assemble_reference([], None, None, False, False, "")
 
     assert "未读摘要: 观众向主播问好并表达惊喜" in first
     assert "未读摘要" not in second
@@ -161,7 +162,7 @@ async def test_game_report_supersedes_inflight_intents() -> None:
     await planner._invoke_registry_tool("framework_delegate", {"agent": "minecraft", "instruction": "挖石料"})
     # 委派在途期间说出口的对进展的猜测（此刻与回执说法矛盾）
     planner._recent_intents.append(
-        _Intent(at_ms=now_ms(), topic_summary="石料到现在都还没挖进包", reply_guidance="懊恼地汇报白挥了一镐")
+        Intent(at_ms=now_ms(), topic_summary="石料到现在都还没挖进包", reply_guidance="懊恼地汇报白挥了一镐")
     )
     planner.note_game_report("minecraft", "delivery")
     text = await _reference(planner)
@@ -178,7 +179,7 @@ async def test_intent_outside_delegation_window_is_not_superseded() -> None:
     base = now_ms()
     # 委派开始前说的一轮
     planner._recent_intents.append(
-        _Intent(at_ms=base - 60_000, topic_summary="和观众打了个招呼", reply_guidance="热情")
+        Intent(at_ms=base - 60_000, topic_summary="和观众打了个招呼", reply_guidance="热情")
     )
     await planner._invoke_registry_tool("framework_delegate", {"agent": "minecraft", "instruction": "挖石料"})
     delegation = planner._delegations["minecraft"]
@@ -186,7 +187,7 @@ async def test_intent_outside_delegation_window_is_not_superseded() -> None:
     delegation.reported_ms = base + 30_000
     # 回执之后说的一轮
     planner._recent_intents.append(
-        _Intent(at_ms=base + 60_000, topic_summary="包里攒了 19 块圆石", reply_guidance="报喜")
+        Intent(at_ms=base + 60_000, topic_summary="包里攒了 19 块圆石", reply_guidance="报喜")
     )
     text = await _reference(planner)
 

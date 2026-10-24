@@ -261,11 +261,11 @@ async def test_speech_event_precedes_round_end_events() -> None:
             "reply_guidance": "热情一点",
             "silent_reason": None,
             "reply_duration_ms": 12,
+            "raw_content": "RAW",
+            "llm_request_id": "req_1",
             "reply_payload": {"speech": "你好呀", "emotion": {"name": "happy", "intensity": 0.5}, "actions": []},
         }
     )
-    planner.last_raw_content = "RAW"
-    planner.last_request_id = "req_1"
     executor = DecisionRoundExecutor(
         planner=planner,
         speech=SpeechDispatcher(event_bus=bus, subtitle_service=None, tts_engine=None, speech_config=None),

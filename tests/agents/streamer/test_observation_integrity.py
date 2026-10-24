@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner, _render_observation
+from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner_render import render_observation
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.payload import Reasoning
 from src.modules.tools.models import ResultBlock, ToolExecutionResult
@@ -50,7 +51,7 @@ def test_render_observation_keeps_every_field_and_non_mapping_payloads() -> None
     payload = _surroundings_shaped()
     assert len(json.dumps(payload, ensure_ascii=False)) > 6144
     for value in (payload, {"tasks": ["任务" * 10000 + "保留入口"]}, ["x " * 5000], "内容" * 9000):
-        assert json.loads(_render_observation(value)) == value
+        assert json.loads(render_observation(value)) == value
 
 
 _ARTICLE = "这是一段很长的中文检索正文，讲 Minecraft 的红石机制。" * 200

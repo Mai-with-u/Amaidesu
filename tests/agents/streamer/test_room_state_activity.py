@@ -57,7 +57,7 @@ async def test_planner_reference_contains_activity_section() -> None:
         room_state=state,
         context_enabled=False,  # 裸路径：情境段即整段参考文本
     )
-    text = await planner._assemble_reference([], None, None, False, False, "")
+    text, _ = await planner._assemble_reference([], None, None, False, False, "")
     assert "【房间活跃度】" in text
     assert "近 10 分钟新增观看" in text
     assert "近 1 分钟弹幕" in text
@@ -107,7 +107,7 @@ async def _silence_reference(state: RoomState, cold_silence_ms: int) -> str:
         room_state=state,
         context_enabled=False,  # 裸路径：情境段即整段参考文本
     )
-    text = await planner._assemble_reference([], None, None, False, True, "")
+    text, _ = await planner._assemble_reference([], None, None, False, True, "")
     assert text is not None
     return text
 

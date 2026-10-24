@@ -67,5 +67,7 @@ async def test_planner_reference_marks_priority_only_for_forced_batch() -> None:
         room_state=MagicMock(last_speech_ms=None),
         context_enabled=False,
     )
-    assert "优先回应" in await planner._assemble_reference([], None, None, True, False, "")
-    assert "优先回应" not in await planner._assemble_reference([], None, None, False, False, "")
+    forced_ref, _ = await planner._assemble_reference([], None, None, True, False, "")
+    plain_ref, _ = await planner._assemble_reference([], None, None, False, False, "")
+    assert "优先回应" in forced_ref
+    assert "优先回应" not in plain_ref

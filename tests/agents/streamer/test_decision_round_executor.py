@@ -44,13 +44,9 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
     planner = MagicMock()
     if planner_error:
         planner.plan = AsyncMock(side_effect=RuntimeError("boom"))
-        planner.last_raw_content = ""
-        planner.last_request_id = None
-        planner.last_failure = "llm down"
     else:
-        planner.plan = AsyncMock(return_value=outcome)
-        planner.last_raw_content = "RAW"
-        planner.last_request_id = "req_1"
+        # 原始输出与请求指针随 outcome 带回（plan() 的返回值契约）
+        planner.plan = AsyncMock(return_value={**outcome, "raw_content": "RAW", "llm_request_id": "req_1"})
 
     speech = MagicMock()
     # dispatch 现为 async（发言事件同步发出契约）；返回值三元组不变

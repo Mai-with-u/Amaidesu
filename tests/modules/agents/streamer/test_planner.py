@@ -189,16 +189,16 @@ async def test_failures_degrade_without_raising() -> None:
     assert (outcome["replied"], outcome["silent_reason"]) == (False, "natural")
 
     planner, _llm, prompt = _make_planner([_resp(content="思考中")])
-    await planner.plan([_msg()])
-    assert planner.last_raw_content == "思考中"  # last_* 副产品每轮填充
+    outcome = await planner.plan([_msg()])
+    assert outcome["raw_content"] == "思考中"  # 原始输出随 outcome 带回
     planner._llm_service.generate = AsyncMock(side_effect=RuntimeError("boom"))
     outcome = await planner.plan([_msg()])
-    assert (outcome["silent_reason"], planner.last_failure is not None) == ("llm_error", True)
-    assert "boom" in outcome["error"] and "boom" in planner.last_failure
+    assert (outcome["silent_reason"], outcome["error"] is not None) == ("llm_error", True)
+    assert "boom" in outcome["error"]
 
     prompt.render = MagicMock(side_effect=RuntimeError("template missing"))
     outcome = await planner.plan([_msg()])
-    assert outcome["silent_reason"] == "prompt_render_failed" and "template missing" in planner.last_failure
+    assert outcome["silent_reason"] == "prompt_render_failed" and "template missing" in (outcome["error"] or "")
 
 
 async def test_context_assembly_paths() -> None:

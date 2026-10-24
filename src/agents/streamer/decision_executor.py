@@ -267,7 +267,7 @@ class DecisionRoundExecutor:
         session_recap = self._session_recap_provider() if self._session_recap_provider else ""
 
         # Planner ReAct 决策（循环内完成查信息与 reply 调用；失败细节经
-        # Planner.last_failure 带出，供决策事件区分降级原因）
+        # outcome.error 带出，供决策事件区分降级原因）
         planner_started_ms = now_ms()
         thinking = None
         if self._thinking_sink is not None and self._thinking_enabled:
@@ -291,16 +291,14 @@ class DecisionRoundExecutor:
             outcome = None
             result["error"] = f"planner_failed: {exc}"
         result["planner_duration_ms"] = now_ms() - planner_started_ms
-        result["planner_raw"] = getattr(self._planner, "last_raw_content", "") or ""
-        result["llm_request_id"] = getattr(self._planner, "last_request_id", None)
+        # 原始输出与请求指针随 outcome 带回（plan() 的返回值契约）；异常收场时没有
+        # outcome，保持空值——异常本身已写进 result.error
+        result["planner_raw"] = str(outcome.get("raw_content", "") or "") if outcome is not None else ""
+        result["llm_request_id"] = outcome.get("llm_request_id") if outcome is not None else None
 
         if outcome is None:
             self._stats.planner_failures += 1
             self._stats.total_no_action += 1
-            detail = getattr(self._planner, "last_failure", None)
-            result["error"] = result["error"] or (
-                f"planner_failed: {detail}" if detail else "planner_failed: 决策循环异常"
-            )
             result["total_duration_ms"] = now_ms() - started_ms
             return result
 
