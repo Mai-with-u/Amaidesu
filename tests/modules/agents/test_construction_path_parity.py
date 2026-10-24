@@ -14,7 +14,7 @@ import main as app_main
 from src.agents.minecraft.agent import MINECRAFT_PROFILE
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.factory import SUPPORTED_AGENTS, instantiate_agent
-from src.modules.agents.manager import AgentManager
+from src.modules.agents.manager import AgentDeps, AgentManager
 from src.modules.tools.registry import ToolRegistry
 
 # 两路径共用的服务面（值本身不重要，等价性比较的是关键字集合）
@@ -88,7 +88,7 @@ async def test_startup_and_enable_paths_pass_the_same_constructor_keywords() -> 
 
         manager = AgentManager(tool_registry=SERVICES["tool_registry"])
         for name in SUPPORTED_AGENTS:
-            await manager.enable_agent(name, {}, **SERVICES)
+            await manager.enable_agent(name, {}, deps=AgentDeps(**SERVICES))
         enable = {c["name"]: set(c) - {"name", "config"} for c in calls}
 
     assert set(startup) == set(enable) == set(SUPPORTED_AGENTS)  # 两条路径都覆盖全部注册名
@@ -149,7 +149,7 @@ async def test_enable_agent_falls_back_to_the_manager_repositories() -> None:
     )
     with patch("src.modules.agents.factory.instantiate_agent", side_effect=fake):
         assert await manager.enable_agent(
-            "streamer", {}, llm_manager=object(), prompt_manager=object()
+            "streamer", {}, deps=AgentDeps(llm_manager=object(), prompt_manager=object())
         )  # Dashboard 动态启用路径
     assert calls
     for key, member in (

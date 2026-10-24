@@ -4,7 +4,7 @@ AgentManager 仓储 / tool_registry 回退逻辑测试。
 覆盖：
 - ``AgentManager(viewer_profile_repo=..., recap_repo=...)`` 成员持有
 - ``enable_agent(name)`` 不传仓储 → 回退到成员（Dashboard 动态启用场景）
-- ``enable_agent(name, recap_repo=explicit)`` → 显式值覆盖成员
+- ``enable_agent(name, deps=AgentDeps(recap_repo=explicit))`` → 显式值覆盖成员
 - ``tool_registry`` 同样的回退逻辑
 - ``instantiate_agent`` 签名接受主播记忆两仓储与游戏事件仓储
 
@@ -21,7 +21,7 @@ from unittest.mock import patch
 import pytest
 
 from src.modules.agents.base import BaseAgent
-from src.modules.agents.manager import AgentManager
+from src.modules.agents.manager import AgentDeps, AgentManager
 from src.modules.tools import ToolRegistry
 
 
@@ -67,7 +67,7 @@ async def manager_with_repos(stub_factory) -> AsyncGenerator[tuple[AgentManager,
 
 async def _enable(mgr: AgentManager, **kwargs: Any) -> bool:
     return await mgr.enable_agent(
-        "streamer", config={}, llm_manager=None, prompt_manager=None, event_bus=None, **kwargs
+        "streamer", config={}, deps=AgentDeps(llm_manager=None, prompt_manager=None, event_bus=None, **kwargs)
     )
 
 

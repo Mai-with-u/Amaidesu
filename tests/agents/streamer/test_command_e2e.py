@@ -12,7 +12,7 @@ import pytest
 
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.control import build_agent_control_provider
-from src.modules.agents.manager import AgentManager
+from src.modules.agents.manager import AgentDeps, AgentManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -84,10 +84,12 @@ class _Harness:
         assert await self.manager.enable_agent(
             "streamer",
             config,
-            llm_manager=stub_llm(),
-            prompt_manager=stub_prompt(),
-            event_bus=self.bus,
-            tool_registry=self.registry,
+            deps=AgentDeps(
+                llm_manager=stub_llm(),
+                prompt_manager=stub_prompt(),
+                event_bus=self.bus,
+                tool_registry=self.registry,
+            ),
         )
 
     async def emit_danmaku(self, text: str, user_id: str = "u1") -> None:
