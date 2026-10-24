@@ -178,6 +178,7 @@ import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import PulseChart from '@/components/dashboard/PulseChart.vue';
 import { EVENT } from '@/types/events';
 import { useChartPalette } from '@/composables/useECharts';
+import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
 import {
   buildPulse,
   bufferCounts,
@@ -391,9 +392,8 @@ const infra = computed(() => {
   };
 });
 
-// 周期刷新（采集/工具/主播/节目/场次）
-
-let refreshTimer: ReturnType<typeof setInterval> | null = null;
+// 周期刷新（采集/工具/主播/节目/场次）：12s 快照轮询随激活态启停，
+// 首屏快照由 onMounted 的显式拉取负责，轮询只做周期保鲜
 
 async function refreshSnapshot(): Promise<void> {
   // 组件清单由 systemStore 轮询驱动（1s tick），这里只补独立 REST
@@ -425,18 +425,7 @@ async function refreshSnapshot(): Promise<void> {
   }
 }
 
-function startRefresh(): void {
-  refreshTimer = setInterval(() => {
-    void refreshSnapshot();
-  }, 12000);
-}
-
-function stopRefresh(): void {
-  if (refreshTimer !== null) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
-  }
-}
+useKeepAlivePolling(() => void refreshSnapshot(), 12000);
 
 // 收到 rundown.changed 时立即刷新流程单快照（避免等下个 12s tick）
 watch(
@@ -462,16 +451,14 @@ onMounted(async () => {
   void fetchLLM();
 });
 
-// keep-alive 全路由下 onUnmounted 不会触发，轮询启停须挂 activated/deactivated，
-// 否则离开本页后 1s 系统轮询与 12s 快照轮询仍永久常驻
+// keep-alive 全路由下 onUnmounted 不会触发：1s 系统轮询在此手动启停
+//（引用计数共享语义在 systemStore 内），12s 快照轮询已由 useKeepAlivePolling 声明
 onActivated(() => {
   systemStore.startPolling(1000);
-  startRefresh();
 });
 
 onDeactivated(() => {
   systemStore.stopPolling();
-  stopRefresh();
 });
 </script>
 

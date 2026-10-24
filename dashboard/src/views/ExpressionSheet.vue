@@ -20,11 +20,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onScopeDispose, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 
-import { NEUTRAL_EMOTION, useExpressionSheetWidget } from '@/composables/useExpressionSheetWidget';
 import { useWebSocketStore } from '@/stores/websocket';
+import type { WebSocketMessage } from '@/types';
 
 /**
  * 表情差分嵌入页（给 OBS/直播姬浏览器源嵌的全屏透明页，形态参照 Subtitle.vue）。
@@ -46,13 +46,35 @@ const route = useRoute();
 /** 预览态（管理页"打开"按钮带 ?preview=1）才允许占位提示渲染 */
 const isPreview = computed(() => route.query.preview === '1');
 
-// WS 复用共享事件流连接（useWebSocketStore → api/websocket，重连循环收敛在共享客户端内）
+// 小部件事件订阅：
+// 订阅主事件 WS 流（订阅句柄由 useWebSocketStore → api/websocket 的共享连接
+// 注入，不自绘重连循环），过滤 streamer.speech 事件，取 payload 的 emotion
+// 字段驱动差分图切换。streamer.speech 的 emotion 由生产者保证为 17 枚举值
+// 之一，非法值兜底回 neutral。事件消费边界（v1 范围）：LLM 直调
+// expression_sheet_set_expression 工具的场景不经事件流，不反射到本页。
+//
+// 生命周期语义：本页是给 OBS/直播姬浏览器源嵌的全屏展示页——非 keep-alive
+// 容器，setup 订阅 + 连接，作用域销毁（onScopeDispose）退订；若未来挂进
+// keep-alive，须改为 activated/deactivated 启停订阅，避免隐藏页白耗。
+
+/** 兜底差分图的情绪名（对应后端 Emotion.NEUTRAL 枚举值） */
+const NEUTRAL_EMOTION = 'neutral';
+
+/** streamer.speech 事件名（WS 广播 type 沿用事件名） */
+const STREAMER_SPEECH_TYPE = 'streamer.speech';
+
 const wsStore = useWebSocketStore();
-const { emotion } = useExpressionSheetWidget({
-  subscribe: wsStore.subscribe,
-  unsubscribe: wsStore.unsubscribe,
-  connect: wsStore.connect,
-});
+const emotion = ref<string>(NEUTRAL_EMOTION);
+
+const onSpeechMessage = (msg: WebSocketMessage): void => {
+  if (msg.type !== STREAMER_SPEECH_TYPE) return;
+  const raw = msg.data?.emotion;
+  emotion.value = typeof raw === 'string' && raw ? raw : NEUTRAL_EMOTION;
+};
+
+wsStore.connect();
+wsStore.subscribe(onSpeechMessage);
+onScopeDispose(() => wsStore.unsubscribe(onSpeechMessage));
 
 /** 展示态：normal=情绪差分图；fallback=neutral 兜底图；unconfigured=未配置占位 */
 const displayState = ref<'normal' | 'fallback' | 'unconfigured'>('normal');

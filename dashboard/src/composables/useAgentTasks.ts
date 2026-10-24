@@ -6,13 +6,15 @@
  * 静默刷新（WS 全量订阅已入事件 store，这里只数增量）——但该事件只在任务
  * 状态跃迁时发射，稳态执行期一条都没有，漏接一次（页面开在委派前、WS 断连
  * 且回填失败）账面就会停在旧快照，故另有轻量轮询兜底追平。硬取消走 agents
- * REST。确认框等交互语义归页面层，本组合式只管数据。
+ * REST，取消前的确认微流程（确认框文案两处消费页同源）也收在本组合式内。
  */
-import { computed, onActivated, onDeactivated, onScopeDispose, ref, watch, type Ref } from 'vue';
+import { computed, ref, watch, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { agentsApi, tasksApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
+import { confirmAction } from '@/utils/confirmAction';
+import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
 import type { TaskCard, TaskSnapshotResponse } from '@/types';
 
 /** 静默轮询周期：快照接口是内存账本读取，代价极小 */
@@ -77,21 +79,12 @@ export function useAgentTasks(target: Ref<string | null>) {
   );
 
   // 轮询兜底：task.changed 只在状态跃迁时发射，稳态运行期无事件可依赖。
-  // 消费方多在全局 keep-alive 内，scope 永不 dispose——激活态启停 + 销毁兜底
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
-  const startPolling = (): void => {
-    if (pollTimer !== undefined) return;
-    pollTimer = setInterval(() => void refresh(true), POLL_INTERVAL_MS);
-  };
-  const stopPolling = (): void => {
-    if (pollTimer === undefined) return;
-    clearInterval(pollTimer);
-    pollTimer = undefined;
-  };
-  startPolling();
-  onActivated(startPolling);
-  onDeactivated(stopPolling);
-  onScopeDispose(stopPolling);
+  // 消费方多在全局 keep-alive 内，scope 永不 dispose——setup 即启动 + 激活态
+  // 启停 + 销毁兜底（启停原语在 useKeepAlivePolling）
+  useKeepAlivePolling(() => refresh(true), POLL_INTERVAL_MS, {
+    startOnSetup: true,
+    stopOnDispose: true,
+  });
 
   /** 硬取消：清追踪 + 账面 cancelled + 通知停手；成败都刷新账面 */
   async function cancelTask(taskId: string): Promise<void> {
@@ -106,5 +99,18 @@ export function useAgentTasks(target: Ref<string | null>) {
     await refresh(true);
   }
 
-  return { runningTasks, finishedTasks, refreshing, refresh, cancelTask };
+  /** 带确认的取消入口（Agent 任务板与直播控制台任务卡共用同一确认文案） */
+  async function cancelTaskWithConfirm(task: TaskCard): Promise<void> {
+    const ok = await confirmAction(
+      `确认取消任务 ${task.task_id}？将强制清账并通知该 Agent 停手`,
+      '取消任务确认',
+      {
+        confirmButtonText: '确认取消',
+      },
+    );
+    if (!ok) return;
+    await cancelTask(task.task_id);
+  }
+
+  return { runningTasks, finishedTasks, refreshing, refresh, cancelTask, cancelTaskWithConfirm };
 }

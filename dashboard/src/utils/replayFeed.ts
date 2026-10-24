@@ -10,14 +10,12 @@
 import {
   buildLiveEntries,
   formatAmount,
-  isRecord,
   makeEntry,
   mergeEntriesByTime,
-  num,
-  str,
   type FeedEvent,
   type ShowEntry,
 } from '@/utils/liveFeed';
+import { isRecord, num, str } from '@/utils/guards';
 import type { SessionTimelineItem, WsMessageType } from '@/types';
 
 /** 场次时间线明细 → 展示条目（入参顺序即输出顺序；id 带 rp- 前缀与实时条目区分） */

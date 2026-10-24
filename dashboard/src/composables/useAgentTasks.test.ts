@@ -34,6 +34,10 @@ vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
 
+vi.mock('@/utils/confirmAction', () => ({ confirmAction: vi.fn() }));
+import { confirmAction } from '@/utils/confirmAction';
+const confirmActionMock = vi.mocked(confirmAction);
+
 const listTasksMock = vi.mocked(tasksApi.listTasks);
 const cancelAgentTaskMock = vi.mocked(agentsApi.cancelAgentTask);
 
@@ -77,6 +81,7 @@ describe('useAgentTasks', () => {
     scope = effectScope();
     listTasksMock.mockReset();
     cancelAgentTaskMock.mockReset();
+    confirmActionMock.mockReset();
     listTasksMock.mockResolvedValue(snapshot([]));
     useEventsStore().events = [];
   });
@@ -178,6 +183,22 @@ describe('useAgentTasks', () => {
 
     await expect(composable.cancelTask('task_9')).resolves.toBeUndefined();
     expect(ElMessage.error).toHaveBeenCalledWith('任务未知');
+  });
+
+  it('cancelTaskWithConfirm：用户确认后取消；取消确认则不动 API', async () => {
+    cancelAgentTaskMock.mockResolvedValue({ data: { cancelled: true } } as never);
+    const target = ref<string | null>('minecraft');
+    const composable = mount(target);
+    await vi.advanceTimersByTimeAsync(0);
+
+    confirmActionMock.mockResolvedValue(true);
+    await composable.cancelTaskWithConfirm(task('minecraft', 'task_7'));
+    expect(cancelAgentTaskMock).toHaveBeenCalledWith('minecraft', 'task_7');
+
+    cancelAgentTaskMock.mockClear();
+    confirmActionMock.mockResolvedValue(false);
+    await composable.cancelTaskWithConfirm(task('minecraft', 'task_8'));
+    expect(cancelAgentTaskMock).not.toHaveBeenCalled();
   });
 
   it('静默刷新失败不打扰；显式刷新失败弹错', async () => {

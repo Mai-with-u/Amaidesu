@@ -384,16 +384,7 @@
  * 主从通用逻辑（选中保持 / 控制 / 批量 / 状态文案）见 useComponentMasterDetail；
  * 本页事件流缓冲仅作深链与最近决策指标的数据源，不再渲染流水面板。
  */
-import {
-  computed,
-  nextTick,
-  onActivated,
-  onDeactivated,
-  onMounted,
-  reactive,
-  ref,
-  watch,
-} from 'vue';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
 import { ArrowDown, Loading, Refresh } from '@element-plus/icons-vue';
@@ -412,13 +403,16 @@ import {
 import { taskStatusText, useAgentTasks } from '@/composables/useAgentTasks';
 import { useAgentDeepLink, type AgentDeepLink } from '@/composables/useAgentDeepLink';
 import { useNowTick } from '@/composables/useNowTick';
+import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
 import {
   useComponentMasterDetail,
   type ComponentStreamItem,
 } from '@/composables/useComponentMasterDetail';
 import { groupDecisionRounds } from '@/utils/decisionRounds';
-import type { AgentControlActionType, AgentInfo, TaskCard } from '@/types';
-import { isRecord, relativeTime as relativeTimeLabel, str } from '@/utils/liveFeed';
+import { waitFor } from '@/utils/waitFor';
+import type { AgentControlActionType, AgentInfo } from '@/types';
+import { isRecord, str } from '@/utils/guards';
+import { relativeTime as relativeTimeLabel } from '@/utils/liveFeed';
 import { formatDurationShort } from '@/utils/format';
 import '@/styles/component-master-detail.css';
 
@@ -474,9 +468,11 @@ const highlightedRoundId = ref('');
 const agentStates = ref<Record<string, AgentInfo>>({});
 const stateRefreshing = ref(false);
 
-// 后台轮询静默失败（不打扰用户），手动刷新失败才弹错
+// 后台轮询静默失败（不打扰用户），手动刷新失败才弹错。
+// 8s 状态轮询随激活态启停（useKeepAlivePolling），轮询走静默形态、
+// 首屏名册由 onMounted 的显式拉取负责
 const STATE_POLL_INTERVAL_MS = 8000;
-let statePollTimer: ReturnType<typeof setInterval> | null = null;
+useKeepAlivePolling(refreshAgentStates, STATE_POLL_INTERVAL_MS, { args: [true] });
 
 async function refreshAgentStates(silent = false): Promise<void> {
   if (!silent) stateRefreshing.value = true;
@@ -649,20 +645,9 @@ const {
   finishedTasks,
   refreshing: tasksRefreshing,
   refresh: refreshTasks,
-  cancelTask: cancelTaskRequest,
+  // 取消前的确认微流程与直播控制台同源（useAgentTasks 收口）
+  cancelTaskWithConfirm: cancelTask,
 } = useAgentTasks(selectedName);
-
-async function cancelTask(task: TaskCard): Promise<void> {
-  const ok = await confirmAction(
-    `确认取消任务 ${task.task_id}？将强制清账并通知该 Agent 停手`,
-    '取消任务确认',
-    {
-      confirmButtonText: '确认取消',
-    },
-  );
-  if (!ok) return;
-  await cancelTaskRequest(task.task_id);
-}
 
 // 干预输入条：模式集合与传输按选中 Agent 分派——单一事实源在
 // useAgentIntervention（主播三模式复用直播控制台同款通道，minecraft 递话/委派）
@@ -714,18 +699,19 @@ watch(
   { immediate: true },
 );
 
-/** 高亮定位目标轮：等卡渲染（事件回填异步）后滚到卡中央，约 3 秒撤掉高亮 */
+/** 高亮定位目标轮：等卡渲染（事件回填异步，有界探测防空转）后滚到卡中央，
+ *  约 3 秒撤掉高亮 */
 async function highlightRound(roundId: string): Promise<void> {
   highlightedRoundId.value = roundId;
   await nextTick();
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const el = roundsPanelRef.value?.querySelector(`[data-round-id="${CSS.escape(roundId)}"]`);
-    if (el) {
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      break;
-    }
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
+  const selector = `[data-round-id="${CSS.escape(roundId)}"]`;
+  await waitFor(() => Boolean(roundsPanelRef.value?.querySelector(selector)), {
+    tries: 20,
+    intervalMs: 100,
+  });
+  roundsPanelRef.value
+    ?.querySelector(selector)
+    ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   window.setTimeout(() => {
     if (highlightedRoundId.value === roundId) highlightedRoundId.value = '';
   }, 3000);
@@ -739,16 +725,6 @@ onMounted(() => {
   // 任务快照由 useAgentTasks 在选中目标就绪时拉取，这里不再重复首拉
   // 深链消费：读一次 query 并已由 replace 清参（刷新/前进后退不重复高亮）
   pendingDeepLink.value = consumeDeepLink();
-});
-
-// keep-alive 全路由下 onUnmounted 不触发，状态轮询启停挂 activated/deactivated 防切页常驻
-onActivated(() => {
-  // 状态轮询：心跳/存活/状态随时间自动保鲜
-  statePollTimer = setInterval(() => void refreshAgentStates(true), STATE_POLL_INTERVAL_MS);
-});
-
-onDeactivated(() => {
-  if (statePollTimer) clearInterval(statePollTimer);
 });
 </script>
 

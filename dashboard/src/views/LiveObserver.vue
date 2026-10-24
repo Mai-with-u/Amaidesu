@@ -421,8 +421,8 @@ import { useTimelineAnchor } from '@/composables/live/useTimelineAnchor';
 import { useConsoleViewMode } from '@/composables/live/useConsoleViewMode';
 import { confirmAction } from '@/utils/confirmAction';
 import { formatNumber } from '@/utils/format';
+import { waitFor } from '@/utils/waitFor';
 import { MAX_ENTRIES, isConversationEntry, relativeTime, type ShowEntry } from '@/utils/liveFeed';
-import type { TaskCard } from '@/types';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import AgentMemoPanel from '@/components/live/AgentMemoPanel.vue';
 
@@ -520,14 +520,13 @@ const { anchoredId, anchorAt } = useTimelineAnchor({
 });
 
 /** 回放首屏加载完成后再锚定（loadReplayTimeline 由场次模式 watch 异步触发，
- *  有界等待防止诊断流缺失时空转） */
+ *  有界等待防止诊断流缺失时空转；等待期间切走场次则放弃锚定） */
 async function anchorAfterReplayLoad(targetMs: number): Promise<void> {
-  for (let i = 0; i < 50; i += 1) {
-    if (sessionMode.value !== 'replay') return;
-    if (displayEntries.value.length > 0) break;
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  await anchorAt(targetMs);
+  await waitFor(() => sessionMode.value !== 'replay' || displayEntries.value.length > 0, {
+    tries: 50,
+    intervalMs: 100,
+  });
+  if (sessionMode.value === 'replay') await anchorAt(targetMs);
 }
 
 const sendBarRef = ref<InstanceType<typeof InterventionInput> | null>(null);
@@ -560,19 +559,8 @@ watch(interventionTarget, target => {
 
 // minecraft 目标的进行中任务（紧循环：发话→看任务→取消）。
 // 数据流与 Agent 页任务板同源（useAgentTasks）；主播无任务账本不展示
-const { runningTasks, cancelTask: cancelTaskRequest } = useAgentTasks(interventionTarget);
-
-async function cancelTask(task: TaskCard): Promise<void> {
-  const ok = await confirmAction(
-    `确认取消任务 ${task.task_id}？将强制清账并通知该 Agent 停手`,
-    '取消任务确认',
-    {
-      confirmButtonText: '确认取消',
-    },
-  );
-  if (!ok) return;
-  await cancelTaskRequest(task.task_id);
-}
+// 取消前的确认微流程与 Agent 任务板同源（useAgentTasks 收口）
+const { runningTasks, cancelTaskWithConfirm: cancelTask } = useAgentTasks(interventionTarget);
 
 /** 时间线行点击 → Agent 页对应决策轮（可点行已由 FeedTimeline 按轮次 ID 过滤） */
 function jumpToAgentRound(entry: ShowEntry): void {

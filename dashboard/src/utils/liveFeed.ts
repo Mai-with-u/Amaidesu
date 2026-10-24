@@ -10,6 +10,7 @@
 // 调用方如需展示相对时间请使用 relativeTime。
 
 import { summarizeEvent } from './eventSummary';
+import { bool, isRecord, num, str } from './guards';
 import type { WebSocketMessage } from '@/types';
 import {
   EVENT,
@@ -135,24 +136,6 @@ export interface ThinkingStep {
 export interface ToolArgPill {
   key: string;
   value: string;
-}
-
-// 通用取值助手
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-export function str(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-export function num(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-export function bool(value: unknown): boolean {
-  return value === true;
 }
 
 export function formatAmount(amount: number): string {

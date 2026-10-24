@@ -13,7 +13,8 @@
 
 import type { WebSocketMessage } from '@/types';
 import { EVENT, EVENT_FAMILY, isToolResultEvent } from '@/types/events';
-import { bool, isRecord, num, pickToolText, str, summarizeToolArgs } from './liveFeed';
+import { bool, isRecord, num, str } from './guards';
+import { pickToolText, summarizeToolArgs } from './liveFeed';
 
 /** 事件输入形状：与 events store 条目一致（WS 消息 + 去重 id） */
 export type DecisionEvent = WebSocketMessage & { id: string };
