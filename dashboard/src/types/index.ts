@@ -846,14 +846,22 @@ export interface RundownStateResponse {
  * - `pause` / `resume` 仅在对应状态合法；
  * - `goto` 需要 `segment_id`；
  * - `next` 在末段时结束整场流程单；
- * - `restart` 整场重开（游标回首环节、计时清零；导演通道）。
+ * - `restart` 整场重开（游标回首环节、计时清零；导演通道）；
+ * - `insert` 需要 `payload`（应急插话题：当前环节后插一次性环节）。
  */
-export type RundownControlAction = 'pause' | 'resume' | 'next' | 'goto' | 'restart';
+export type RundownControlAction = 'pause' | 'resume' | 'next' | 'goto' | 'restart' | 'insert';
+
+/** `insert` 动作的一次性应急话题内容（标题必填，内容可选）。 */
+export interface RundownInsertPayload {
+  title: string;
+  content?: string;
+}
 
 /** `POST /api/v1/rundown/control` 请求体。 */
 export interface RundownControlRequest {
   action: RundownControlAction;
   segment_id?: string;
+  payload?: RundownInsertPayload;
 }
 
 /**

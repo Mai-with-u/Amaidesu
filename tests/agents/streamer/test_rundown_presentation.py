@@ -161,3 +161,44 @@ async def test_control_restart_rejected_when_armed() -> None:
 
     assert success is False and message == "流程单尚未开始"
     assert snapshot is not None and snapshot["status"] == "armed"
+
+
+# ---------------------------------------------------------------------------
+# insert（导演应急插话题）
+# ---------------------------------------------------------------------------
+
+
+def test_insert_inserts_after_current_and_next_lands_on_it() -> None:
+    state = _loaded_state()
+    success, message, snapshot = apply_rundown_control(
+        state, "insert", payload={"title": "应急话题", "content": "聊聊最近的趣事"}
+    )
+    assert success is True and message == "已执行"
+    assert snapshot is not None and snapshot["total"] == 5
+    # 游标不动，插入环节在 index+1；下一次 next 落到它
+    assert [s["id"] for s in build_rundown_view(state)["segments"]][1].startswith("insert-")
+    assert state.next(by="human") is None
+    assert state.current_segment.title == "应急话题"
+
+
+def test_insert_missing_title_rejected() -> None:
+    state = _loaded_state()
+    for payload in (None, {}, {"title": "   "}, "不是字典"):
+        success, message, snapshot = apply_rundown_control(state, "insert", payload=payload)
+        assert success is False and "title" in message
+        assert snapshot is None
+    # 拒绝不变更
+    assert len(state.rundown.segments) == 4
+
+
+def test_insert_rejected_without_rundown_and_when_done() -> None:
+    success, message, snapshot = apply_rundown_control(RundownState(), "insert", payload={"title": "话题"})
+    assert success is False and message == "未加载流程单" and snapshot["status"] == "idle"
+
+    state = _loaded_state()
+    assert apply_rundown_control(state, "insert", payload={"title": "话题"})[0] is True
+    for _ in range(5):
+        apply_rundown_control(state, "next")
+    success, message, snapshot = apply_rundown_control(state, "insert", payload={"title": "话题"})
+    assert success is False and message == "流程单已完成"
+    assert snapshot is not None and snapshot["status"] == "done"

@@ -1489,10 +1489,16 @@ class StreamerAgent(BaseAgent):
         action: str,
         *,
         segment_id: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
         now_ms: Optional[int] = None,
     ) -> tuple[bool, str, Optional[Dict[str, Any]]]:
-        """执行 Dashboard 手动控制动作（动作翻译见 rundown 子包）。"""
-        return await self._rundown_coord.control(action, segment_id=segment_id, now_ms=now_ms)
+        """执行 Dashboard 手动控制动作（动作翻译见 rundown 子包；insert 的 payload 为 ``{title, content?}``）。"""
+        return await self._rundown_coord.control(
+            action,
+            segment_id=segment_id,
+            payload=payload,
+            now_ms=now_ms,
+        )
 
     async def switch_rundown(self, rundown_id: str) -> tuple[bool, str, Optional[Dict[str, Any]]]:
         """直播中热切换流程单（Dashboard activate 的运行态写穿）。"""

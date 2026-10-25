@@ -57,6 +57,7 @@ class _RundownControlCallable(Protocol):
         action: str,
         *,
         segment_id: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
         now_ms: Optional[int] = None,
     ) -> tuple[bool, str, Optional[Dict[str, Any]]]: ...
 
@@ -174,6 +175,7 @@ async def control_rundown(
         ok, message, snapshot = await control(
             action_value,
             segment_id=request.segment_id,
+            payload=request.payload.model_dump() if request.payload is not None else None,
         )
     except Exception as exc:
         return RundownControlResponse(

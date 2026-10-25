@@ -257,3 +257,48 @@ def test_activate_swallows_switch_exception(make_client, repo: FakeRundownRepo) 
     _seed(repo, "rd_pick")
     body = client.post("/api/v1/rundowns/rd_pick/activate").json()
     assert body["success"] is False and "配置已指向" in body["message"]
+
+
+class FakeControlAgent:
+    """仅实现 rundown_control 门面的替身：记录调用参数，回放可编程结果。"""
+
+    def __init__(
+        self,
+        result: Tuple[bool, str, Optional[Dict[str, Any]]] = (True, "已执行", None),
+    ) -> None:
+        self.result = result
+        self.calls: List[Dict[str, Any]] = []
+
+    async def rundown_control(
+        self,
+        action: str,
+        *,
+        segment_id: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+        now_ms: Optional[int] = None,
+    ):
+        self.calls.append({"action": action, "segment_id": segment_id, "payload": payload})
+        return self.result
+
+
+def test_control_insert_passthrough_payload_to_agent(make_client) -> None:
+    agent = FakeControlAgent(result=(True, "已执行", {"status": "running"}))
+    client = make_client(agent)
+    body = client.post(
+        "/api/v1/rundown/control",
+        json={"action": "insert", "payload": {"title": "应急话题", "content": "聊聊趣事"}},
+    ).json()
+    assert body["success"] is True and body["message"] == "已执行" and body["snapshot"] == {"status": "running"}
+    assert agent.calls == [
+        {"action": "insert", "segment_id": None, "payload": {"title": "应急话题", "content": "聊聊趣事"}}
+    ]
+
+
+def test_control_insert_missing_title_rejected_by_schema(make_client) -> None:
+    agent = FakeControlAgent()
+    client = make_client(agent)
+    # title 空串被 Pydantic min_length 拦在请求层（422），不落到 agent；
+    # 纯空白由状态机翻译层 strip 后拒绝（真实现路径已在 presentation 测试锁定）
+    resp = client.post("/api/v1/rundown/control", json={"action": "insert", "payload": {"title": ""}})
+    assert resp.status_code == 422
+    assert agent.calls == []

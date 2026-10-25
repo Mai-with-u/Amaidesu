@@ -752,3 +752,57 @@ def test_export_progress_minimal_exposure(h: _Harness) -> None:
     }
     idle_progress = RundownState().export_progress()
     assert idle_progress == {}
+
+
+# ---------------------------------------------------------------------------
+# insert_after_current（导演应急插话题：当前环节后插一次性环节）
+# ---------------------------------------------------------------------------
+
+
+def _insert_segment() -> RundownSegment:
+    return _segment("insert-1", "应急话题", 300_000)
+
+
+def test_insert_after_current_becomes_next(h: _Harness) -> None:
+    h.begin()
+    h.clock.advance(60_000)
+    assert h.state.insert_after_current(_insert_segment(), by="human", now_ms=h.now) is None
+    # 游标不动：当前环节继续播，插入环节位于 index+1，下一次 next 即落到它
+    assert (h.state.status, h.state.index, h.state.current_segment_id) == ("running", 0, "opening")
+    assert h.state.rundown.segments[1].id == "insert-1"
+    # 计时锚点不被插入打断
+    assert h.state._segment_elapsed_ms(h.now) == 60_000
+    payload = h.events[-1][1]
+    assert (payload.action, payload.segment_id, payload.index, payload.total) == ("insert", "insert-1", 0, 4)
+    # next 推进落到插入环节
+    h.clock.advance(60_000)
+    assert h.state.next(by="human", now_ms=h.now) is None
+    assert (h.state.index, h.state.current_segment_id) == (1, "insert-1")
+
+
+def test_insert_in_paused_stays_frozen(h: _Harness) -> None:
+    h.begin()
+    h.state.pause(by="human", now_ms=h.now)
+    frozen = h.state.paused_at_ms
+    assert h.state.insert_after_current(_insert_segment(), by="human", now_ms=h.now) is None
+    # paused 态保持暂停冻结：锚点与暂停态原样
+    assert (h.state.status, h.state.paused_at_ms, h.state.index) == ("paused", frozen, 0)
+    assert h.state.rundown.segments[1].id == "insert-1"
+
+
+def test_insert_rejections(h: _Harness) -> None:
+    h.begin()
+    h.finish()
+    # done 拒绝：无"当前环节之后"可言（续命场景走 Agent 的 append 通道）
+    assert h.state.insert_after_current(_insert_segment(), by="human", now_ms=h.now).reason == "already_done"
+    # 重复 id 拒绝且不变更
+    reject = h.state.insert_after_current(_segment("closing", "重复 id"), by="human", now_ms=h.now)
+    assert reject is not None and reject.reason == "duplicate_segment_id"
+    assert reject.available_ids == ["opening", "chat", "closing"]
+    assert len(h.state.rundown.segments) == 3
+    # 未加载拒绝；非法 by 抛 ValueError
+    state = RundownState()
+    assert state.insert_after_current(_insert_segment(), by="human").reason == "no_rundown_loaded"
+    h2 = _Harness().load().begin()
+    with pytest.raises(ValueError):
+        h2.state.insert_after_current(_insert_segment(), by="agent")
