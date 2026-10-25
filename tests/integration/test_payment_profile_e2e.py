@@ -141,7 +141,7 @@ async def test_payment_flow_and_platform_isolation(stack) -> None:
 
     # 平台身份隔离：同 user_id 的 B 站行与 console 行各一行
     viewers = await store.execute(
-        "SELECT * FROM viewers WHERE user_id='u_bili' ORDER BY platform"
+        "SELECT * FROM viewers WHERE account_id='u_bili' ORDER BY platform"
     )
     assert len(viewers) == 2
     by_platform = {row["platform"]: row for row in viewers}

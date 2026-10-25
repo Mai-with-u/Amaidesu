@@ -1,6 +1,7 @@
 """ViewerProfileRepo（观众画像仓储）单元测试
 
-覆盖：upsert / get（含已整理时刻）/ 空文本拒写 / 列表分页搜索 / 人工纠正 / 删除 / 计数。
+覆盖：upsert / get（含已整理时刻）/ 空文本拒写 / 未建档观众拒写 / 列表分页搜索 / 人工纠正 / 删除 / 计数。
+画像以内部观众 ID 为键，调用方按平台 + 外部 ID 读写；用例先给用到的外部 ID 建档。
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import pytest
 
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.repos import ViewerProfileRepo
+from tests.modules.storage.viewer_seed import seed_viewer
 
 
 @pytest.fixture
@@ -33,6 +35,9 @@ async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
 
 @pytest.fixture
 async def repo(store: SQLiteDatabase) -> ViewerProfileRepo:
+    # 画像只给已建档的观众：先为用例里出现的外部 ID 建档（ghost 故意不建）
+    for user_id in ("u1", *(f"u_{i}" for i in range(5))):
+        await seed_viewer(store.viewers, platform="bilibili", user_id=user_id, user_name=user_id, timestamp_ms=1)
     return store.viewer_profiles
 
 
@@ -63,6 +68,11 @@ async def test_upsert_rejects_empty_text_and_identity(repo: ViewerProfileRepo) -
         is False
     )
     assert await repo.upsert_profile(platform="", user_id="u1", profile_text="x", last_compressed_at_ms=1) is False
+    # 未建档的观众没有画像可挂
+    assert (
+        await repo.upsert_profile(platform="bilibili", user_id="ghost", profile_text="x", last_compressed_at_ms=1)
+        is False
+    )
     assert await repo.get_profile_text(platform="bilibili", user_id="u1") is None
 
 

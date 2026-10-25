@@ -15,8 +15,9 @@
 
 **观众与画像**
 
-- `viewers`：跨场观众统计，身份键 `UNIQUE(platform, user_id)`（ADR-029）。
-- `viewer_profiles`：观众印象文本，收播时批量整理（ADR-042）。
+- `viewers`：观众，一行一人（按平台），同一行记账号 ID 与开放平台 ID，带跨场统计；新出现的 ID 按当前昵称关联老观众，超出时限转人工确认（ADR-047）。明细四表经 `viewer_id` 挂到观众，并保留收到时的原始外部 ID。
+- `viewer_names`：观众用过的昵称（含曾用名），只在新建、改名、合并时写入。
+- `viewer_profiles`：观众印象文本，按观众 ID 存，收播时批量整理（ADR-042）。
 - `session_recaps`：场次回顾，收播写、开播注入。
 
 **流程单（五表族，ADR-011）**
@@ -75,3 +76,4 @@
 - [ADR-029](../decisions/029-viewer-identity-key-and-currency-unit.md)　观众身份复合键与货币口径
 - [ADR-039](../decisions/039-event-replay-diagnostics-source.md)　回看以诊断事件流为事实源
 - [ADR-042](../decisions/042-streamer-memory-recap-and-roster.md)　场次回顾 + 观众画像
+- [ADR-047](../decisions/047-viewer-identity-mapping.md)　观众身份映射

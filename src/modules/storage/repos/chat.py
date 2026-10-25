@@ -36,11 +36,14 @@ class ChatRepo(BaseRepo):
         message_id: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
         simulated: bool = False,
+        viewer_id: Optional[int] = None,
+        id_kind: str = "",
     ) -> int:
         """插入一条 live_chat 行，返回 lastrowid。
 
         ``message_id``（观众行）/ ``reply_to_message_id``（主播行）构成
-        "主播发言回复了哪条弹幕"的关联键（互动分析数据面）。
+        "主播发言回复了哪条弹幕"的关联键（互动分析数据面）。观众行带
+        ``viewer_id``（内部观众 ID）与 ``id_kind``（``sender_id`` 的 ID 种类）。
         """
 
         def _exec() -> int:
@@ -48,8 +51,8 @@ class ChatRepo(BaseRepo):
                 cur = conn.execute(
                     "INSERT INTO live_chat ("
                     "live_session_id, timestamp_ms, platform, sender_role, sender_id, sender_name,"
-                    " content, message_type, message_id, reply_to_message_id, simulated"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " content, message_type, message_id, reply_to_message_id, simulated, viewer_id, id_kind"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         live_session_id,
                         timestamp_ms,
@@ -62,6 +65,8 @@ class ChatRepo(BaseRepo):
                         message_id,
                         reply_to_message_id,
                         1 if simulated else 0,
+                        viewer_id,
+                        id_kind,
                     ),
                 )
                 return int(cur.lastrowid or 0)
@@ -93,6 +98,8 @@ class ChatRepo(BaseRepo):
         msg_id: str = "",
         raw_data: Optional[str] = None,
         simulated: bool = False,
+        viewer_id: Optional[int] = None,
+        id_kind: str = "",
     ) -> int:
         """插入一条 gifts 行（付费明细全字段），返回 lastrowid。
 
@@ -108,8 +115,8 @@ class ChatRepo(BaseRepo):
                     "live_session_id, timestamp_ms, platform, user_id, user_name,"
                     " gift_id, gift_name, quantity, unit_price, total_price, paid_price, currency,"
                     " guard_level, fans_medal_level, fans_medal_name,"
-                    " combo_id, combo_count, combo_gift, blind_gift_id, msg_id, raw_data, simulated"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " combo_id, combo_count, combo_gift, blind_gift_id, msg_id, raw_data, simulated, viewer_id, id_kind"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         live_session_id,
                         timestamp_ms,
@@ -133,6 +140,8 @@ class ChatRepo(BaseRepo):
                         msg_id,
                         raw_data,
                         1 if simulated else 0,
+                        viewer_id,
+                        id_kind,
                     ),
                 )
                 return int(cur.lastrowid or 0)
@@ -158,6 +167,8 @@ class ChatRepo(BaseRepo):
         message_id: str = "",
         raw_data: Optional[str] = None,
         simulated: bool = False,
+        viewer_id: Optional[int] = None,
+        id_kind: str = "",
     ) -> int:
         """插入一条 super_chats 行（付费明细全字段），返回 lastrowid。
 
@@ -171,8 +182,8 @@ class ChatRepo(BaseRepo):
                     "INSERT INTO super_chats ("
                     "live_session_id, timestamp_ms, platform, user_id, user_name, message,"
                     " total_price, currency, start_time, end_time,"
-                    " guard_level, fans_medal_level, fans_medal_name, message_id, raw_data, simulated"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " guard_level, fans_medal_level, fans_medal_name, message_id, raw_data, simulated, viewer_id, id_kind"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         live_session_id,
                         timestamp_ms,
@@ -190,6 +201,8 @@ class ChatRepo(BaseRepo):
                         message_id,
                         raw_data,
                         1 if simulated else 0,
+                        viewer_id,
+                        id_kind,
                     ),
                 )
                 return int(cur.lastrowid or 0)
@@ -214,6 +227,8 @@ class ChatRepo(BaseRepo):
         msg_id: str = "",
         raw_data: Optional[str] = None,
         simulated: bool = False,
+        viewer_id: Optional[int] = None,
+        id_kind: str = "",
     ) -> int:
         """插入一条 guards 行（大航海开通/续费购买事件），返回 lastrowid。
 
@@ -227,8 +242,8 @@ class ChatRepo(BaseRepo):
                     "INSERT INTO guards ("
                     "live_session_id, timestamp_ms, platform, user_id, user_name,"
                     " guard_level, guard_num, guard_unit, total_price, currency,"
-                    " fans_medal_level, fans_medal_name, msg_id, raw_data, simulated"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " fans_medal_level, fans_medal_name, msg_id, raw_data, simulated, viewer_id, id_kind"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         live_session_id,
                         timestamp_ms,
@@ -245,6 +260,8 @@ class ChatRepo(BaseRepo):
                         msg_id,
                         raw_data,
                         1 if simulated else 0,
+                        viewer_id,
+                        id_kind,
                     ),
                 )
                 return int(cur.lastrowid or 0)

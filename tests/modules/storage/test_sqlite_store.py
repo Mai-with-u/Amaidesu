@@ -131,7 +131,7 @@ async def test_viewer_counters_accumulate_by_viewer_id(store: SQLiteDatabase) ->
     row = await viewers.get_viewer_stats(platform="bilibili", user_id="u1")
     counters = ("message_count", "gift_count", "replied_count", "interaction_count", "last_active_ms")
     assert tuple(row[k] for k in counters) == (2, 1, 1, 4, 4000)
-    assert (row["id"], row["user_name"], row["user_id"]) == (vid, "张三（新昵称）", "u1")
+    assert (row["id"], row["user_name"], row["account_id"], row["user_id"]) == (vid, "张三（新昵称）", "u1", "u1")
 
     # 付费即互动只在第一笔互动时记 1：已发过言的观众付费不重复计互动
     await viewers.record_paid(viewer_id=vid, amount=1000, timestamp_ms=5000)

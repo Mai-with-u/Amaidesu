@@ -1,7 +1,7 @@
 """
 存储 Schema 定义
 
-本模块是全部 SQLite 表的**单一事实源**：21 张业务表（11 张核心直播表 +
+本模块是全部 SQLite 表的**单一事实源**：22 张业务表（12 张核心直播表 +
 2 张模拟器运行时表 + 5 张流程单域表 + 2 张观众画像表 + 1 张 LLM 请求历史表）
 + ``schema_migrations``。
 任何建表 DDL 都必须落在这里，不允许业务模块自带 ``CREATE TABLE``——否则
@@ -22,12 +22,13 @@
   贯穿列（模拟数据用 False 默认 / True 标记，消费方 WHERE ``simulated=0``
   排除模拟数据）；``simulated`` 与 ``platform`` 正交——模拟器造的是 B 站
   格式数据（platform=bilibili + simulated=1），过滤假数据靠 simulated
-- **观众身份键 = ``(platform, user_id)`` 复合键**（观众画像/统计/明细表统一）。
-  platform 是本项目自定的稳定键：平台名（``bilibili`` / ``douyin`` / …）+
-  调试保留字 ``console``（控制台输入无 simulated 标记，靠 platform 隔离
-  身份；模拟器数据归 bilibili，由 simulated 区分真假），由采集器作为
-  装配期常量注入。不同平台账号视为不同的人，付费/统计天然按平台隔离，
-  不跨平台聚合
+- **观众 = ``viewers`` 一行**（一行一人，按平台），``viewers.id`` 是内部观众
+  ID，明细四表与画像经 ``viewer_id`` 引用它。外部身份记在同一行：
+  ``account_id``（平台账号 ID，B 站 uid）与 ``open_id`` + ``open_app_id``
+  （开放平台发给某个应用的 ID）。明细行另存收到时的原始外部 ID（``sender_id`` /
+  ``user_id``）及其种类 ``id_kind``。platform 是本项目自定的稳定键：平台名
+  （``bilibili`` / ``douyin`` / …）+ 调试保留字 ``console``，由采集器作为
+  装配期常量注入；不同平台的观众始终是不同行，付费/统计按平台隔离
 - 付费明细三表（gifts / super_chats / guards）金额单位 = **平台最小虚拟
   货币单位**（B 站金瓜子，1000 金瓜子 = 1 元），取值口径 = 标价（实付另记
   ``paid_price``）；``currency`` 带平台前缀（``bilibili_gold_coin`` /
@@ -53,7 +54,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 17
+SCHEMA_VERSION: int = 18
 
 
 # =============================================================================
@@ -65,7 +66,8 @@ SCHEMA_VERSION: int = 17
 # - super_chats             SC 明细（独立副表）
 # - guards                  大航海开通/续费明细（购买事件表）
 # - topics                  话题（每行一个，1NF）
-# - viewers                 观众统计（跨场客观数字）
+# - viewers                 观众（一行一人，记外部 ID 与跨场客观数字）
+# - viewer_names            观众昵称记录（含曾用名）
 # - viewer_profiles         观众画像（每位常客一份 LLM 维护的印象文本，主播认人的依据）
 # - session_recaps          场次回顾（每场一份收播总结，主播跨场次记得自己做过什么）
 # - game_events             游戏里程碑事件
@@ -106,6 +108,9 @@ def build_schema_sql() -> str:
         + "\n"
         # viewers —— 观众统计
         + _VIEWERS_SQL
+        + "\n"
+        # viewer_names —— 观众昵称记录
+        + _VIEWER_NAMES_SQL
         + "\n"
         # viewer_profiles —— 观众画像
         + _VIEWER_PROFILES_SQL
@@ -161,6 +166,7 @@ def list_expected_tables() -> List[str]:
         "guards",
         "topics",
         "viewers",
+        "viewer_names",
         "viewer_profiles",
         "session_recaps",
         "rundowns",
@@ -210,6 +216,8 @@ CREATE TABLE IF NOT EXISTS live_chat (
     sender_role      TEXT NOT NULL,
     sender_id        TEXT,
     sender_name      TEXT,
+    viewer_id        INTEGER,
+    id_kind          TEXT NOT NULL DEFAULT '',
     content          TEXT NOT NULL,
     message_type     TEXT NOT NULL,
     message_id       TEXT,
@@ -228,6 +236,8 @@ CREATE TABLE IF NOT EXISTS gifts (
     platform          TEXT NOT NULL DEFAULT '',
     user_id           TEXT NOT NULL,
     user_name         TEXT NOT NULL,
+    viewer_id         INTEGER,
+    id_kind           TEXT NOT NULL DEFAULT '',
     gift_id           INTEGER NOT NULL DEFAULT 0,
     gift_name         TEXT NOT NULL,
     quantity          INTEGER NOT NULL,
@@ -258,6 +268,8 @@ CREATE TABLE IF NOT EXISTS super_chats (
     platform          TEXT NOT NULL DEFAULT '',
     user_id           TEXT NOT NULL,
     user_name         TEXT NOT NULL,
+    viewer_id         INTEGER,
+    id_kind           TEXT NOT NULL DEFAULT '',
     message           TEXT NOT NULL,
     total_price       INTEGER NOT NULL DEFAULT 0,
     currency          TEXT NOT NULL DEFAULT '',
@@ -282,6 +294,8 @@ CREATE TABLE IF NOT EXISTS guards (
     platform          TEXT NOT NULL DEFAULT '',
     user_id           TEXT NOT NULL,
     user_name         TEXT NOT NULL,
+    viewer_id         INTEGER,
+    id_kind           TEXT NOT NULL DEFAULT '',
     guard_level       INTEGER NOT NULL DEFAULT 0,
     guard_num         INTEGER NOT NULL DEFAULT 0,
     guard_unit        TEXT NOT NULL DEFAULT '',
@@ -315,8 +329,14 @@ _VIEWERS_SQL = """
 CREATE TABLE IF NOT EXISTS viewers (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     platform            TEXT NOT NULL DEFAULT '',
-    user_id             TEXT NOT NULL,
+    account_id          TEXT,
+    open_id             TEXT,
+    open_app_id         TEXT,
     user_name           TEXT NOT NULL,
+    name_seen_ms        INTEGER NOT NULL DEFAULT 0,
+    simulated           INTEGER NOT NULL DEFAULT 0,
+    link_status         TEXT NOT NULL DEFAULT 'confirmed',
+    link_candidate_id   INTEGER,
     message_count       INTEGER NOT NULL DEFAULT 0,
     gift_count          INTEGER NOT NULL DEFAULT 0,
     replied_count       INTEGER NOT NULL DEFAULT 0,
@@ -324,7 +344,24 @@ CREATE TABLE IF NOT EXISTS viewers (
     paid_count          INTEGER NOT NULL DEFAULT 0,
     paid_amount         INTEGER NOT NULL DEFAULT 0,
     last_active_ms      INTEGER NOT NULL,
-    UNIQUE(platform, user_id)
+    UNIQUE(platform, account_id),
+    UNIQUE(platform, open_app_id, open_id)
+);
+""".strip()
+
+
+# --- viewer_names —— 观众昵称记录 ---
+# 每位观众用过的每个昵称一行（含当前昵称）；只在新建观众、改名、合并时写入。
+# 当前昵称的最近出现时刻以 viewers.name_seen_ms 为准，本表不逐条消息刷新。
+
+_VIEWER_NAMES_SQL = """
+CREATE TABLE IF NOT EXISTS viewer_names (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    viewer_id        INTEGER NOT NULL,
+    user_name        TEXT NOT NULL,
+    first_seen_ms    INTEGER NOT NULL,
+    last_seen_ms     INTEGER NOT NULL,
+    UNIQUE(viewer_id, user_name)
 );
 """.strip()
 
@@ -337,12 +374,10 @@ CREATE TABLE IF NOT EXISTS viewers (
 _VIEWER_PROFILES_SQL = """
 CREATE TABLE IF NOT EXISTS viewer_profiles (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-    platform               TEXT NOT NULL,
-    user_id                TEXT NOT NULL,
+    viewer_id              INTEGER NOT NULL UNIQUE,
     profile_text           TEXT NOT NULL,
     last_compressed_at_ms  INTEGER NOT NULL DEFAULT 0,
-    updated_at_ms          INTEGER NOT NULL,
-    UNIQUE(platform, user_id)
+    updated_at_ms          INTEGER NOT NULL
 );
 """.strip()
 

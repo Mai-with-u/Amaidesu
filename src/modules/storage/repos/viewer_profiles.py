@@ -1,7 +1,12 @@
 """ViewerProfileRepo —— 观众画像仓储（viewer_profiles）。
 
-每位常客一行印象文本，身份键 ``(platform, user_id)``。昵称不进本表
-（随改名漂移，权威在 ``viewers``），注入与工具查询时经 ``ViewerRepo`` 实时解析。
+每位常客一行印象文本，以内部观众 ID（``viewer_id``）为键：同一位观众换了
+数据源、被关联上新的外部 ID 后，画像仍是同一份。昵称不进本表（随改名漂移，
+权威在 ``viewers``），注入与工具查询时经 ``ViewerRepo`` 实时解析。
+
+调用方目前拿着消息里的平台 + 外部 ID（账号 ID 或开放平台 ID），本仓储在
+内部换算成观众；返回行带 ``platform`` / ``user_id``（代表外部 ID，账号 ID
+优先）两列。
 
 ``last_compressed_at_ms`` 是已整理到的时间点：该时刻之前的弹幕与付费记录
 已融进印象，收播时只把这之后的新话喂给下一次更新。
@@ -15,6 +20,16 @@ from typing import Any, List, Optional, Tuple
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.utils.time_utils import now_ms
 
+# 平台 + 外部 ID → 内部观众 ID（参数顺序：platform, external_id, external_id）
+_VIEWER_ID_SQL = "SELECT id FROM viewers WHERE platform=? AND (account_id=? OR open_id=?) ORDER BY id LIMIT 1"
+_VIEWER_ID_SUBQUERY = f"({_VIEWER_ID_SQL})"
+_PROFILE_COLUMNS = (
+    "v.platform AS platform, COALESCE(v.account_id, v.open_id, '') AS user_id, p.viewer_id AS viewer_id,"
+    " p.profile_text AS profile_text, p.last_compressed_at_ms AS last_compressed_at_ms,"
+    " p.updated_at_ms AS updated_at_ms"
+)
+_PROFILE_FROM = " FROM viewer_profiles p JOIN viewers v ON v.id = p.viewer_id"
+
 
 class ViewerProfileRepo(BaseRepo):
     """viewer_profiles 表的读写入口（主播 Agent 收播更新 / Planner 注入 / WebUI 管理）。"""
@@ -25,8 +40,8 @@ class ViewerProfileRepo(BaseRepo):
         def _exec() -> Optional[str]:
             with self._manager.transaction() as conn:
                 row = conn.execute(
-                    "SELECT profile_text FROM viewer_profiles WHERE platform=? AND user_id=?",
-                    (platform, user_id),
+                    f"SELECT profile_text FROM viewer_profiles WHERE viewer_id={_VIEWER_ID_SUBQUERY}",  # noqa: S608
+                    (platform, user_id, user_id),
                 ).fetchone()
                 return str(row["profile_text"]) if row else None
 
@@ -38,9 +53,8 @@ class ViewerProfileRepo(BaseRepo):
         def _exec() -> Optional[sqlite3.Row]:
             with self._manager.transaction() as conn:
                 return conn.execute(
-                    "SELECT platform, user_id, profile_text, last_compressed_at_ms, updated_at_ms"
-                    " FROM viewer_profiles WHERE platform=? AND user_id=?",
-                    (platform, user_id),
+                    f"SELECT {_PROFILE_COLUMNS}{_PROFILE_FROM} WHERE p.viewer_id={_VIEWER_ID_SUBQUERY}",  # noqa: S608
+                    (platform, user_id, user_id),
                 ).fetchone()
 
         return await self._run_in_executor(_exec)
@@ -53,7 +67,10 @@ class ViewerProfileRepo(BaseRepo):
         profile_text: str,
         last_compressed_at_ms: int,
     ) -> bool:
-        """写入或更新印象（收播更新写回；已整理时刻一并推进）。空文本不写，返回 False。"""
+        """写入或更新印象（收播更新写回；已整理时刻一并推进）。
+
+        空文本、缺身份、或这位观众还没建档（画像只给有统计的观众）时不写，返回 False。
+        """
         text = (profile_text or "").strip()
         if not text or not platform or not user_id:
             return False
@@ -61,14 +78,17 @@ class ViewerProfileRepo(BaseRepo):
 
         def _exec() -> bool:
             with self._manager.transaction() as conn:
+                row = conn.execute(_VIEWER_ID_SQL, (platform, user_id, user_id)).fetchone()
+                if row is None:
+                    return False
                 conn.execute(
-                    "INSERT INTO viewer_profiles(platform, user_id, profile_text, last_compressed_at_ms, updated_at_ms)"
-                    " VALUES (?, ?, ?, ?, ?)"
-                    " ON CONFLICT(platform, user_id) DO UPDATE SET"
+                    "INSERT INTO viewer_profiles(viewer_id, profile_text, last_compressed_at_ms, updated_at_ms)"
+                    " VALUES (?, ?, ?, ?)"
+                    " ON CONFLICT(viewer_id) DO UPDATE SET"
                     " profile_text=excluded.profile_text,"
                     " last_compressed_at_ms=excluded.last_compressed_at_ms,"
                     " updated_at_ms=excluded.updated_at_ms",
-                    (platform, user_id, text, int(last_compressed_at_ms), ts),
+                    (int(row["id"]), text, int(last_compressed_at_ms), ts),
                 )
                 return True
 
@@ -83,15 +103,15 @@ class ViewerProfileRepo(BaseRepo):
     ) -> Tuple[int, List[sqlite3.Row]]:
         """画像列表（WebUI 管理接口）：搜索 + 分页，返回 ``(命中总数, 当页行)``。
 
-        ``search`` 非空时对 profile_text / user_id 做 LIKE 子串匹配。
+        ``search`` 非空时对印象文本与观众的外部 ID 做 LIKE 子串匹配。
         """
         clauses: List[str] = []
         params: List[Any] = []
         keyword = (search or "").strip()
         if keyword:
-            clauses.append("(profile_text LIKE ? OR user_id LIKE ?)")
+            clauses.append("(p.profile_text LIKE ? OR v.account_id LIKE ? OR v.open_id LIKE ?)")
             like = f"%{keyword}%"
-            params.extend([like, like])
+            params.extend([like, like, like])
         where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         page_limit = max(1, min(int(limit), 200))
         page_offset = max(0, int(offset))
@@ -99,12 +119,12 @@ class ViewerProfileRepo(BaseRepo):
         def _exec() -> Tuple[int, List[sqlite3.Row]]:
             with self._manager.transaction() as conn:
                 total_row = conn.execute(
-                    f"SELECT COUNT(*) AS n FROM viewer_profiles{where_sql}",  # noqa: S608 子句只含占位符
+                    f"SELECT COUNT(*) AS n{_PROFILE_FROM}{where_sql}",  # noqa: S608 子句只含占位符
                     tuple(params),
                 ).fetchone()
                 rows = conn.execute(
-                    "SELECT platform, user_id, profile_text, last_compressed_at_ms, updated_at_ms"
-                    f" FROM viewer_profiles{where_sql} ORDER BY updated_at_ms DESC LIMIT ? OFFSET ?",  # noqa: S608
+                    f"SELECT {_PROFILE_COLUMNS}{_PROFILE_FROM}{where_sql}"  # noqa: S608
+                    " ORDER BY p.updated_at_ms DESC LIMIT ? OFFSET ?",
                     [*params, page_limit, page_offset],
                 ).fetchall()
             total = int(total_row["n"]) if total_row else 0
@@ -131,8 +151,8 @@ class ViewerProfileRepo(BaseRepo):
         def _exec() -> bool:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "UPDATE viewer_profiles SET profile_text=?, updated_at_ms=? WHERE platform=? AND user_id=?",
-                    (text, now_ms(), platform, user_id),
+                    f"UPDATE viewer_profiles SET profile_text=?, updated_at_ms=? WHERE viewer_id={_VIEWER_ID_SUBQUERY}",  # noqa: S608
+                    (text, now_ms(), platform, user_id, user_id),
                 )
                 return cur.rowcount > 0
 
@@ -144,8 +164,8 @@ class ViewerProfileRepo(BaseRepo):
         def _exec() -> bool:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "DELETE FROM viewer_profiles WHERE platform=? AND user_id=?",
-                    (platform, user_id),
+                    f"DELETE FROM viewer_profiles WHERE viewer_id={_VIEWER_ID_SUBQUERY}",  # noqa: S608
+                    (platform, user_id, user_id),
                 )
                 return cur.rowcount > 0
 

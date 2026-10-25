@@ -1,14 +1,19 @@
-"""测试造数：按外部 ID 给观众记一笔（先解析观众，再按观众 ID 计数），与记账器的写法一致。"""
+"""测试造数：按外部账号 ID 给观众记一笔（先解析观众，再按观众 ID 计数），与记账器的写法一致。"""
 
 from __future__ import annotations
 
 from src.modules.storage.repos import ViewerRepo
 
 async def seed_viewer(viewers: ViewerRepo, *, platform: str, user_id: str, user_name: str, timestamp_ms: int) -> int:
-    """按外部 ID 解析（必要时新建）观众，返回内部观众 ID。"""
-    return await viewers.resolve_viewer(
-        platform=platform, external_id=user_id, user_name=user_name, timestamp_ms=timestamp_ms
+    """按账号 ID 解析（必要时新建）观众，返回内部观众 ID。"""
+    result = await viewers.resolve_viewer(
+        platform=platform,
+        id_kind="account",
+        external_id=user_id,
+        user_name=user_name,
+        timestamp_ms=timestamp_ms,
     )
+    return result.viewer_id
 
 
 async def seed_message(viewers: ViewerRepo, *, platform: str, user_id: str, user_name: str, timestamp_ms: int) -> int:

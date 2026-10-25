@@ -8,7 +8,8 @@ StorageLedger —— 直播间消息流落库记账器
 ## 职责
 - 订阅 ``room.message.#``（MQTT 风格通配），按 payload.message_type 分发。
   观众消息（弹幕/礼物/SC/上舰）先经 ``ViewerRepo.resolve_viewer`` 归到一位
-  观众（按 ID 命中，没见过就新建），计数按观众 ID 累加：
+  观众（按 ID 命中，没见过就新建），
+  明细行带上 ``viewer_id`` 与 ``id_kind``，计数按观众 ID 累加：
   - ``danmaku``   → live_chat（+ 观众发言计数）
   - ``gift``      → gifts 全字段（+ 送礼计数；金瓜子礼物另计付费统计
     paid_count/paid_amount，银瓜子免费礼物不计）
@@ -179,6 +180,7 @@ class StorageLedger:
                 )
                 return
             viewer_id = await self._resolve_viewer(payload) if msg_type in _VIEWER_MESSAGE_TYPES else None
+            id_kind = payload.user.id_kind if msg_type in _VIEWER_MESSAGE_TYPES else ""
             if msg_type == "danmaku":
                 await self.chat_repo.insert_live_chat(
                     live_session_id=live_pk,
@@ -191,6 +193,8 @@ class StorageLedger:
                     message_type=msg_type,
                     message_id=payload.message_id or None,
                     simulated=payload.simulated,
+                    viewer_id=viewer_id,
+                    id_kind=id_kind,
                 )
                 if viewer_id is not None:
                     await self.viewer_repo.record_message(viewer_id=viewer_id, timestamp_ms=payload.timestamp_ms)
@@ -223,6 +227,8 @@ class StorageLedger:
                     msg_id=gift.msg_id,
                     raw_data=gift.raw_data or None,
                     simulated=payload.simulated,
+                    viewer_id=viewer_id,
+                    id_kind=id_kind,
                 )
                 if viewer_id is None:
                     return
@@ -254,6 +260,8 @@ class StorageLedger:
                     message_id=sc.message_id,
                     raw_data=sc.raw_data or None,
                     simulated=payload.simulated,
+                    viewer_id=viewer_id,
+                    id_kind=id_kind,
                 )
                 # SC 与礼物同为付费行为，统计处理保持一致
                 if viewer_id is not None and self._is_paid_currency(sc.currency):
@@ -282,6 +290,8 @@ class StorageLedger:
                         msg_id=guard.msg_id,
                         raw_data=guard.raw_data or None,
                         simulated=payload.simulated,
+                        viewer_id=viewer_id,
+                        id_kind=id_kind,
                     )
                     if viewer_id is not None and self._is_paid_currency(guard.currency):
                         await self.viewer_repo.record_paid(
@@ -300,6 +310,8 @@ class StorageLedger:
                     message_type=msg_type,
                     message_id=payload.message_id or None,
                     simulated=payload.simulated,
+                    viewer_id=viewer_id,
+                    id_kind=id_kind,
                 )
                 return
             if msg_type == "partner_speech":
@@ -426,22 +438,27 @@ class StorageLedger:
     async def _resolve_viewer(self, payload: RoomMessagePayload) -> Optional[int]:
         """把消息的外部身份归到一位观众，返回内部观众 ID。
 
-        解析失败只记日志、返回 None：明细照常落库，这一条不计观众统计——
+        解析失败只记日志、返回 None：明细照常落库（不带观众 ID），这一条不计观众统计——
         观众记账出错不能连累直播消息本身丢失。
         """
         try:
-            return await self.viewer_repo.resolve_viewer(
+            result = await self.viewer_repo.resolve_viewer(
                 platform=payload.platform,
+                id_kind=payload.user.id_kind,
                 external_id=payload.user.id,
+                open_app_id=payload.user.open_app_id,
                 user_name=payload.user.name,
                 timestamp_ms=payload.timestamp_ms,
+                simulated=payload.simulated,
             )
-        except Exception as exc:  # noqa: BLE001 观众解析失败只少记一笔统计，明细照常落库
+        except Exception as exc:  # noqa: BLE001 观众解析失败降级为不带观众 ID 落明细
             logger.error(
-                f"观众身份解析失败，本条不计观众统计（{payload.platform}/{payload.user.id}）：{exc}",
+                f"观众身份解析失败，本条明细不带观众 ID、不计观众统计（{payload.platform}/{payload.user.id_kind}:"
+                f"{payload.user.id}）：{exc}",
                 exc=True,
             )
             return None
+        return result.viewer_id
 
     # -------------------- 场次归属解析 --------------------
 

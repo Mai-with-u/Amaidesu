@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from src.modules.storage.database import SQLiteDatabase
+from tests.modules.storage.viewer_seed import seed_viewer
 
 
 @pytest.fixture
@@ -16,8 +17,9 @@ async def memory_client(api, store: SQLiteDatabase, event_bus):
 
 
 async def _seed_profiles(store: SQLiteDatabase, count: int) -> None:
-    """user_id 递增，文本含可搜索关键词。"""
+    """user_id 递增，文本含可搜索关键词；画像只挂在已建档的观众上，先建档。"""
     for i in range(count):
+        await seed_viewer(store.viewers, platform="bilibili", user_id=f"u_{i}", user_name=f"观众{i}", timestamp_ms=1)
         text = f"印象{i}：喜欢Minecraft" if i % 2 else f"印象{i}：喜欢恐怖游戏"
         await store.viewer_profiles.upsert_profile(
             platform="bilibili", user_id=f"u_{i}", profile_text=text, last_compressed_at_ms=1_000 + i

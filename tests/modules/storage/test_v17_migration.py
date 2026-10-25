@@ -1,7 +1,7 @@
 """v17 迁移单测：流程单模板拆行 / 四新表 / 七处死列清理。
 
 覆盖（重点验证**存量旧库实际写回落盘**，不只测新库建表）：
-- 新库 DDL 即最新形态：四新表在位、七处遗留列不存在，SCHEMA_VERSION = 17
+- 新库 DDL 即最新形态：四新表在位、七处遗留列不存在，SCHEMA_VERSION 推进到 17
 - v16 形状旧库升级：``segments_json`` 行拆正确、key_points 拼进
   ``task_description``（空描述直写 / 非空描述另起一行"要点："）、旧列消失、
   ``llm_requests`` / ``live_chat`` / ``timeline_summary`` 死列 DROP
@@ -147,7 +147,7 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def test_new_database_has_v17_shape(temp_dir: Path) -> None:
     """新库：DDL 即最新形态（四新表在位、七处死列不存在）。"""
-    assert SCHEMA_VERSION == 17
+    assert SCHEMA_VERSION >= 17
     db = SQLiteDatabase(temp_dir / "fresh.db")
     asyncio.run(db.initialize())
     try:

@@ -165,9 +165,13 @@ async def test_room_message_upserts_viewer_stats(
     user = RoomMessageUser(id="v1", name="观众甲")
     await _emit(event_bus, event, make_room_message(user=user, timestamp_ms=1_700_000_000_001, **payload_kwargs))
 
-    (row,) = await store.execute("SELECT * FROM viewers WHERE user_id='v1'")
+    (row,) = await store.execute("SELECT * FROM viewers WHERE account_id='v1'")
     assert {k: row[k] for k in expected} == expected
     assert (row["user_name"], row["last_active_ms"]) == ("观众甲", 1_700_000_000_001)
+    # 明细行挂上内部观众 ID，并记下原始外部 ID 的种类
+    table = {"danmaku": "live_chat", "gift": "gifts", "super_chat": "super_chats"}[payload_kwargs["message_type"]]
+    (detail,) = await store.execute(f"SELECT viewer_id, id_kind FROM {table}")
+    assert (detail["viewer_id"], detail["id_kind"]) == (row["id"], "account")
 
 
 async def test_streamer_speech_persists_reply_link_and_replied_stat(
@@ -188,7 +192,7 @@ async def test_streamer_speech_persists_reply_link_and_replied_stat(
     )
     assert [r["reply"] for r in joined] == ["今天玩《双人成行》！"]
 
-    (viewer,) = await store.execute("SELECT * FROM viewers WHERE user_id='tester'")
+    (viewer,) = await store.execute("SELECT * FROM viewers WHERE account_id='tester'")
     assert (viewer["replied_count"], viewer["interaction_count"], viewer["message_count"]) == (1, 2, 1)
 
     # 回复一个从没发过言（未建档）的外部 ID：只落主播发言，不凭空建观众

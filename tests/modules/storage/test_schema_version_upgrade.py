@@ -52,7 +52,8 @@ def test_build_schema_sql_is_current_shape() -> None:
         "CREATE TABLE IF NOT EXISTS guards",
         "CREATE TABLE IF NOT EXISTS viewer_profiles",
         "CREATE TABLE IF NOT EXISTS session_recaps",
-        "UNIQUE(platform, user_id)",
+        "UNIQUE(platform, account_id)",
+        "CREATE TABLE IF NOT EXISTS viewer_names",
         "preview_text",
         # v17 清理后不再出现的遗留列（死列 / 出库列）
         "rundown_segments",
@@ -198,7 +199,9 @@ async def test_v9_to_v10_migration_semantics(db_path: Path) -> None:
             if idx["unique"]:
                 cols = await store.execute(f"PRAGMA index_info({idx['name']})")
                 unique_cols.add(tuple(c["name"] for c in cols))
-        assert ("platform", "user_id") in unique_cols
+        assert ("platform", "account_id") in unique_cols
+        # 存量明细按旧身份回填到观众：u_old 不是纯数字也不是 UUID，按账号 ID 保留
+        assert (viewer["account_id"], gift["viewer_id"], gift["id_kind"]) == ("u_old", viewer["id"], "account")
         assert (await store.execute("SELECT * FROM live_chat"))[0]["platform"] == "bilibili"
         assert await store.table_exists("_memory_facts") is False
         assert await store.table_exists("viewer_facts") is False  # 随 v15 退役：旧库升级后不应再有该表
