@@ -40,7 +40,13 @@
       >
         <el-table-column label="观众" width="220">
           <template #default="{ row }">
-            <span class="mono viewer-cell">{{ row.platform }}/{{ row.user_id }}</span>
+            <router-link
+              :to="`/viewers/${row.viewer_id}`"
+              class="viewer-cell"
+              :title="`观众 #${row.viewer_id}`"
+            >
+              {{ rowKey(row) }}
+            </router-link>
           </template>
         </el-table-column>
         <el-table-column label="印象" min-width="320">
@@ -120,7 +126,8 @@
  *
  * 数据接口：/api/v1/memory/*（画像列表 / 纠正 / 删除 / 统计）。印象由主播在每场
  * 收播时为本场活跃的常客整理，这里只提供人工查看与纠正。
- * 搜索 250ms 防抖走服务端 LIKE（印象文本 / user_id）。
+ * 搜索 250ms 防抖走服务端 LIKE（印象文本 / 观众当前昵称）。画像按内部观众 ID 读写，
+ * 观众列可点进档案页。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { Search } from '@element-plus/icons-vue';
@@ -148,7 +155,7 @@ const shownRange = computed(() => {
 });
 
 function rowKey(row: ViewerProfileItem): string {
-  return `${row.platform}/${row.user_id}`;
+  return `${row.user_name || '（未留名）'}（${row.platform}）`;
 }
 
 async function loadProfiles(): Promise<void> {
@@ -219,7 +226,7 @@ async function saveProfile(): Promise<void> {
   }
   saving.value = true;
   try {
-    await memoryApi.updateProfile(target.platform, target.user_id, { profile_text: text });
+    await memoryApi.updateProfile(target.viewer_id, { profile_text: text });
     ElMessage.success('已纠正印象');
     editVisible.value = false;
     reload();
@@ -239,7 +246,7 @@ async function removeProfile(profile: ViewerProfileItem): Promise<void> {
   )
     return;
   try {
-    await memoryApi.deleteProfile(profile.platform, profile.user_id);
+    await memoryApi.deleteProfile(profile.viewer_id);
     ElMessage.success('已删除');
     reload();
   } catch {

@@ -70,8 +70,9 @@ def _prompts() -> MagicMock:
     return prompt_manager
 
 
-async def _viewer_says(store: SQLiteDatabase, pk: int, user_id: str, name: str, text: str, ts: int) -> None:
-    """造一条观众弹幕：live_chat 行 + viewers 统计（与记账器写穿同效果）。"""
+async def _viewer_says(store: SQLiteDatabase, pk: int, user_id: str, name: str, text: str, ts: int) -> int:
+    """造一条观众弹幕：先归到观众并计数，再落带观众 ID 的 live_chat 行（与记账器同效果），返回观众 ID。"""
+    viewer_id = await seed_message(store.viewers, platform="bilibili", user_id=user_id, user_name=name, timestamp_ms=ts)
     await store.chat.insert_live_chat(
         live_session_id=pk,
         timestamp_ms=ts,
@@ -82,8 +83,16 @@ async def _viewer_says(store: SQLiteDatabase, pk: int, user_id: str, name: str, 
         message_type="danmaku",
         platform="bilibili",
         message_id=f"{user_id}-{ts}",
+        viewer_id=viewer_id,
+        id_kind="account",
     )
-    await seed_message(store.viewers, platform="bilibili", user_id=user_id, user_name=name, timestamp_ms=ts)
+    return viewer_id
+
+
+async def _profile_text(store: SQLiteDatabase, user_id: str) -> Any:
+    """按外部 ID 找到观众再取画像；观众没建档时返回 None。"""
+    viewer_id = await store.viewers.find_viewer_id(platform="bilibili", external_id=user_id)
+    return await store.viewer_profiles.get_profile_text(viewer_id=viewer_id) if viewer_id is not None else None
 
 
 async def _streamer_says(store: SQLiteDatabase, pk: int, text: str, ts: int) -> None:
@@ -237,7 +246,7 @@ async def test_roster_threshold_watermark_and_batch(store: SQLiteDatabase) -> No
 
     writer = _roster_writer(store, llm, min_interactions=3, batch_max=1)
     assert await writer.update_for_session(pk) == 1  # 两人达标，上限 1 人
-    assert await store.viewer_profiles.get_profile_text(platform="bilibili", user_id="u_new") is None
+    assert await _profile_text(store, "u_new") is None
 
     writer = _roster_writer(store, llm, min_interactions=3, batch_max=5)
     assert await writer.update_for_session(pk) == 1  # 已更新的那位上次整理后没新话，只剩另一位
@@ -252,7 +261,7 @@ async def test_roster_llm_failure_leaves_profile_absent(store: SQLiteDatabase) -
     for i in range(3):
         await _viewer_says(store, pk, "u1", "老王", f"第{i}句", 1_000 + i)
     assert await _roster_writer(store, _llm(success=False)).update_for_session(pk) == 0
-    assert await store.viewer_profiles.get_profile(platform="bilibili", user_id="u1") is None
+    assert await _profile_text(store, "u1") is None
 
 
 @pytest.mark.asyncio
@@ -316,17 +325,19 @@ async def test_recall_session_tool(store: SQLiteDatabase) -> None:
 
 @pytest.mark.asyncio
 async def test_recall_viewer_tool(store: SQLiteDatabase) -> None:
-    await seed_message(store.viewers, platform="bilibili", user_id="u1", user_name="老王", timestamp_ms=1)
-    await store.viewer_profiles.upsert_profile(
-        platform="bilibili", user_id="u1", profile_text="老粉，爱看挖矿", last_compressed_at_ms=1
-    )
+    vid = await seed_message(store.viewers, platform="bilibili", user_id="u1", user_name="老王", timestamp_ms=1)
+    await store.viewer_profiles.upsert_profile(viewer_id=vid, profile_text="老粉，爱看挖矿", last_compressed_at_ms=1)
     provider = build_memory_tool_provider(
         recap_repo=store.recaps, profile_repo=store.viewer_profiles, viewer_repo=store.viewers
     )
 
     assert "老粉，爱看挖矿" in await _invoke(provider, "memory_recall_viewer", nickname="老王")
-    assert "老粉，爱看挖矿" in await _invoke(provider, "memory_recall_viewer", user_id="u1")
+    assert "老粉，爱看挖矿" in await _invoke(provider, "memory_recall_viewer", viewer_id=vid)
     assert "没找到" in await _invoke(provider, "memory_recall_viewer", nickname="路人")
+    # 改名后用以前的名字也能找到，并提醒主播对方现在叫什么
+    await seed_message(store.viewers, platform="bilibili", user_id="u1", user_name="王老", timestamp_ms=2)
+    by_old_name = await _invoke(provider, "memory_recall_viewer", nickname="老王")
+    assert "老粉，爱看挖矿" in by_old_name and "现在叫「王老」" in by_old_name
     assert "请提供" in await _invoke(provider, "memory_recall_viewer")
 
 
@@ -401,7 +412,7 @@ async def test_bootstrap_backfills_recap_roster_and_section(store: SQLiteDatabas
     await agent._bootstrap_recaps()
 
     assert await store.recaps.get_recap(live_session_id=pk) is not None
-    assert await store.viewer_profiles.get_profile_text(platform="bilibili", user_id="u1") == "补写结果"
+    assert await _profile_text(store, "u1") == "补写结果"
     assert "补写结果" in agent._session_recap_text()
 
 
@@ -418,7 +429,7 @@ async def test_live_ended_settles_recap_and_roster(store: SQLiteDatabase) -> Non
     await asyncio.gather(*agent._bg_tasks)
 
     assert await store.recaps.get_recap(live_session_id=pk) is not None
-    assert await store.viewer_profiles.get_profile_text(platform="bilibili", user_id="u1") == "整理结果"
+    assert await _profile_text(store, "u1") == "整理结果"
 
     other_pk = await _ended_session(store)
     await _streamer_says(store, other_pk, "又一场", 2_000)

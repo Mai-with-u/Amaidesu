@@ -23,10 +23,9 @@ WebUI 以"历史累计 / 现存记录"口径标注这一差异。付费统计（
 ``paid_amount``）：付费次数 = 礼物 + SC + 上舰，金额单位 = 平台最小虚拟货币
 单位（B 站金瓜子）；免费礼物（银瓜子）由调用方按 ``currency`` 过滤后不计入。
 
-按外部 ID 查询的读接口（``get_viewer_stats`` / ``list_viewer_stats`` /
-``get_viewer_id_by_name``）给只拿得到消息里外部 ID 的调用方用：返回行带
-``user_id`` 列 = 该观众的代表外部 ID（账号 ID 优先，其次开放平台 ID，没有
-真实 ID 时为空串）。
+读接口按内部观众 ID 取数；只拿得到消息里外部 ID 的调用方先经 ``find_viewer_id``
+换算。返回的观众行带 ``user_id`` 列 = 代表外部 ID（账号 ID 优先，其次开放平台 ID，
+没有真实 ID 时为空串），供展示用。
 """
 
 from __future__ import annotations
@@ -52,6 +51,8 @@ _MASK_MARK = "***"
 _USER_ID_EXPR = "COALESCE(account_id, open_id, '')"
 _SELECT_VIEWER = f"SELECT *, {_USER_ID_EXPR} AS user_id FROM viewers"
 _MATCH_EXTERNAL = "platform=? AND (account_id=? OR open_id=?)"
+# 展示曾用名时最多带几个（最近用过的在前）
+_FORMER_NAMES_LIMIT = 3
 
 
 def is_placeholder_name(name: Optional[str]) -> bool:
@@ -70,6 +71,15 @@ class ViewerResolution:
     candidate_id: Optional[int] = None
 
 
+@dataclass(frozen=True)
+class ViewerNameMatch:
+    """按昵称找到的观众：``by_former_name`` 为真表示命中的是他的曾用名。"""
+
+    viewer_id: int
+    current_name: str
+    by_former_name: bool
+
+
 class ViewerRepo(BaseRepo):
     """viewers 观众表与 viewer_names 昵称记录的读写。"""
 
@@ -84,7 +94,16 @@ class ViewerRepo(BaseRepo):
         "last_active_ms",
     )
 
-    # -------------------- 按外部 ID 查询 --------------------
+    # -------------------- 读取 --------------------
+
+    async def get_viewer(self, *, viewer_id: int) -> Optional[sqlite3.Row]:
+        """按内部观众 ID 取观众行（带 ``user_id`` 代表外部 ID 列）；不存在返回 None。"""
+
+        def _exec() -> Optional[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return conn.execute(f"{_SELECT_VIEWER} WHERE id=?", (int(viewer_id),)).fetchone()  # noqa: S608
+
+        return await self._run_in_executor(_exec)
 
     async def get_viewer_stats(self, *, platform: str, user_id: str) -> Optional[sqlite3.Row]:
         """按平台 + 外部 ID 查单行观众（带 ``user_id`` 代表外部 ID 列）；未命中返回 None。"""
@@ -97,6 +116,27 @@ class ViewerRepo(BaseRepo):
                 ).fetchone()
 
         return await self._run_in_executor(_exec)
+
+    async def list_names(self, *, viewer_id: int) -> List[sqlite3.Row]:
+        """观众用过的昵称（含当前昵称），最近出现的在前。"""
+
+        def _exec() -> List[sqlite3.Row]:
+            with self._manager.transaction() as conn:
+                return list(
+                    conn.execute(
+                        "SELECT user_name, first_seen_ms, last_seen_ms FROM viewer_names WHERE viewer_id=?"
+                        " ORDER BY last_seen_ms DESC, first_seen_ms DESC",
+                        (int(viewer_id),),
+                    ).fetchall()
+                )
+
+        return await self._run_in_executor(_exec)
+
+    async def list_former_names(self, *, viewer_id: int, current_name: str) -> List[str]:
+        """曾用名（不含当前昵称），最近用过的在前，最多几个——给主播认人用。"""
+        rows = await self.list_names(viewer_id=viewer_id)
+        names = [str(row["user_name"]) for row in rows if str(row["user_name"]) != current_name]
+        return names[:_FORMER_NAMES_LIMIT]
 
     async def list_viewer_stats(
         self,
@@ -288,22 +328,29 @@ class ViewerRepo(BaseRepo):
 
         await self._run_in_executor(_exec)
 
-    async def get_viewer_id_by_name(self, *, platform: str, user_name: str) -> Optional[str]:
-        """按当前昵称反查代表外部 ID（最近活跃优先）；未命中或该观众没有真实 ID 返回 None。
+    async def find_by_name(self, *, platform: str, user_name: str) -> Optional[ViewerNameMatch]:
+        """按昵称找人：先比当前昵称（最近活跃优先），没有再比曾用名（最近用过的优先）。
 
         画像查询的"昵称找人"路径：画像表不存昵称（昵称随改名漂移，权威在
-        viewers），注入/工具查询时经本方法实时解析。
+        viewers），注入/工具查询时经本方法实时解析。主播口中的"那个叫甲的"
+        可能指已经改名的老观众，所以曾用名也要能找到。
         """
 
-        def _exec() -> Optional[str]:
+        def _exec() -> Optional[ViewerNameMatch]:
             with self._manager.transaction() as conn:
                 row = conn.execute(
-                    f"SELECT {_USER_ID_EXPR} AS user_id FROM viewers"  # noqa: S608 常量片段
-                    f" WHERE platform=? AND user_name=? AND {_USER_ID_EXPR}<>''"
+                    "SELECT id, user_name FROM viewers WHERE platform=? AND user_name=?"
                     " ORDER BY last_active_ms DESC LIMIT 1",
                     (platform, user_name),
                 ).fetchone()
-                return str(row["user_id"]) if row else None
+                if row is not None:
+                    return ViewerNameMatch(int(row["id"]), str(row["user_name"]), False)
+                row = conn.execute(
+                    "SELECT v.id AS id, v.user_name AS user_name FROM viewer_names n JOIN viewers v ON v.id = n.viewer_id"
+                    " WHERE v.platform=? AND n.user_name=? ORDER BY n.last_seen_ms DESC LIMIT 1",
+                    (platform, user_name),
+                ).fetchone()
+                return ViewerNameMatch(int(row["id"]), str(row["user_name"]), True) if row else None
 
         return await self._run_in_executor(_exec)
 
@@ -434,4 +481,4 @@ def _insert_viewer(
     return viewer_id
 
 
-__all__ = ["ViewerRepo", "ViewerResolution", "is_placeholder_name"]
+__all__ = ["ViewerNameMatch", "ViewerRepo", "ViewerResolution", "is_placeholder_name"]

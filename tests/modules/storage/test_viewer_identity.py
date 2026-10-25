@@ -60,16 +60,15 @@ async def test_same_id_is_same_viewer_and_rename_is_recorded(store: SQLiteDataba
 async def test_new_id_links_to_old_viewer_by_current_name_within_window(store: SQLiteDatabase) -> None:
     viewers = store.viewers
     old = await _resolve(viewers, "1001", "甲", 1_000)
-    await store.viewer_profiles.upsert_profile(
-        platform="bilibili", user_id="1001", profile_text="老观众", last_compressed_at_ms=1
-    )
+    await store.viewer_profiles.upsert_profile(viewer_id=old.viewer_id, profile_text="老观众", last_compressed_at_ms=1)
     # 换到开放平台源：同名、昵称 30 天内出现过、唯一候选 → 同一个人
     linked = await _resolve(viewers, OPEN_ID, "甲", 1_000 + 30 * DAY, id_kind="open", open_app_id="app1")
     assert (linked.viewer_id, linked.outcome) == (old.viewer_id, "linked_by_name")
     row = await _row(store, old.viewer_id)
     assert (row["account_id"], row["open_id"], row["open_app_id"]) == ("1001", OPEN_ID, "app1")
-    # 画像跟着人走：按新 ID 也能取到
-    assert await store.viewer_profiles.get_profile_text(platform="bilibili", user_id=OPEN_ID) == "老观众"
+    # 画像跟着人走：按新 ID 换算出来的还是这位观众，取到同一份画像
+    via_open_id = await viewers.find_viewer_id(platform="bilibili", external_id=OPEN_ID)
+    assert await store.viewer_profiles.get_profile_text(viewer_id=via_open_id) == "老观众"
     # 之后同一个 open_id 直接按 ID 命中
     assert (await _resolve(viewers, OPEN_ID, "甲", 2 * WINDOW, id_kind="open", open_app_id="app1")).outcome == (
         "matched_id"

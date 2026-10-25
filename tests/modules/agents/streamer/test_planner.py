@@ -1,6 +1,6 @@
 """Planner ReAct 循环：工具列表、reply 收尾 / 自然终止 / 超步、registry 路由与观察回灌、降级、上下文与记忆、消息构成"""
 
-from typing import Any
+from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -244,23 +244,37 @@ async def test_elapsed_live_duration_line(provider, expected) -> None:
     assert (expected in reference) if expected else ("已开播时长" not in reference)
 
 
+def _viewer_repo(former: Dict[int, List[str]] | None = None) -> MagicMock:
+    """观众仓储替身：外部 ID "u_<n>" 换算成观众 n（其余为 1），昵称"老王"，曾用名按 ``former`` 给。"""
+
+    async def find(*, platform: str, external_id: str) -> int:
+        return int(external_id[2:]) + 100 if external_id.startswith("u_") and external_id[2:].isdigit() else 1
+
+    async def former_names(*, viewer_id: int, current_name: str) -> List[str]:
+        return (former or {}).get(viewer_id, [])
+
+    repo = MagicMock()
+    repo.find_viewer_id = AsyncMock(side_effect=find)
+    repo.get_viewer = AsyncMock(return_value={"user_name": "老王"})
+    repo.list_former_names = AsyncMock(side_effect=former_names)
+    return repo
+
+
 async def test_person_profiles_are_injected_without_placeholders_and_failures_do_not_block() -> None:
     profile_repo = MagicMock()
     profile_repo.get_profile_text = AsyncMock(return_value="老粉，喜欢工作台话题")
-    viewer_repo = MagicMock()
-    viewer_repo.get_viewer_stats = AsyncMock(return_value={"user_name": "老王"})
-    planner, llm, _prompt = _make_planner([_resp()], profile_repo=profile_repo, viewer_repo=viewer_repo)
+    planner, llm, _prompt = _make_planner([_resp()], profile_repo=profile_repo, viewer_repo=_viewer_repo({1: ["王哥"]}))
     await planner.plan([_msg("工作台")])
-    # 昵称从 viewers 实时取，画像行与弹幕侧"老王: ..."同源可关联
-    assert "- 老王: 老粉，喜欢工作台话题" in _reference_message(llm)["content"]
+    # 昵称从 viewers 实时取，画像行与弹幕侧"老王: ..."同源可关联；改过名的带上以前的名字
+    assert "- 老王（以前叫王哥）: 老粉，喜欢工作台话题" in _reference_message(llm)["content"]
 
     # 无画像的候选不占位，其余照常注入
-    async def profile(*, platform: str, user_id: str) -> str:
-        return "" if user_id == "u_无画像" else "有画像"
+    async def profile(*, viewer_id: int) -> str:
+        return "" if viewer_id == 107 else "有画像"
 
     profile_repo.get_profile_text = AsyncMock(side_effect=profile)
     portraitless = _msg("随便聊聊")
-    portraitless.user.id = "u_无画像"
+    portraitless.user.id = "u_7"
     section = await planner._collect_person_profiles([portraitless, _msg("有画像的人说话")])
     assert section.count("- ") == 1 and "有画像" in section
 
@@ -272,8 +286,14 @@ async def test_person_profiles_are_injected_without_placeholders_and_failures_do
     section = await planner._collect_person_profiles(batch)
     assert section.startswith("（内部参考") and section.count("- ") == 5 and section.count("画" * 900) == 5
 
+    # 同一位观众的两个外部 ID（换过数据源）只注入一次
+    twins = [_msg("账号 ID 说话"), _msg("开放平台 ID 说话")]
+    twins[0].user.id, twins[1].user.id = "uid-x", "open-x"
+    section = await planner._collect_person_profiles(twins)
+    assert section.count("- ") == 1
+
     profile_repo.get_profile_text = AsyncMock(side_effect=RuntimeError("db down"))  # 画像查询异常静默降级
-    planner, _llm, _prompt = _make_planner([_resp()], profile_repo=profile_repo)
+    planner, _llm, _prompt = _make_planner([_resp()], profile_repo=profile_repo, viewer_repo=_viewer_repo())
     assert (await planner.plan([_msg()]))["silent_reason"] == "natural"
 
 

@@ -128,19 +128,19 @@ async def test_viewer_counters_accumulate_by_viewer_id(store: SQLiteDatabase) ->
     await seed_gift(viewers, platform="bilibili", user_id="u1", user_name="张三（新昵称）", timestamp_ms=3000)
     await seed_replied(viewers, platform="bilibili", user_id="u1", timestamp_ms=4000)
 
-    row = await viewers.get_viewer_stats(platform="bilibili", user_id="u1")
+    row = await viewers.get_viewer(viewer_id=vid)
     counters = ("message_count", "gift_count", "replied_count", "interaction_count", "last_active_ms")
     assert tuple(row[k] for k in counters) == (2, 1, 1, 4, 4000)
     assert (row["id"], row["user_name"], row["account_id"], row["user_id"]) == (vid, "张三（新昵称）", "u1", "u1")
 
     # 付费即互动只在第一笔互动时记 1：已发过言的观众付费不重复计互动
     await viewers.record_paid(viewer_id=vid, amount=1000, timestamp_ms=5000)
-    row = await viewers.get_viewer_stats(platform="bilibili", user_id="u1")
+    row = await viewers.get_viewer(viewer_id=vid)
     assert (row["paid_count"], row["paid_amount"], row["interaction_count"]) == (1, 1000, 4)
 
     # 未建档的外部 ID：只查不建
     assert await viewers.find_viewer_id(platform="bilibili", external_id="nobody") is None
-    assert await viewers.get_viewer_stats(platform="bilibili", user_id="nobody") is None
+    assert await viewers.get_viewer(viewer_id=vid + 100) is None
 
 
 async def test_list_viewer_stats_ordering_paging_and_whitelist(store: SQLiteDatabase) -> None:

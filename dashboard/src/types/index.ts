@@ -1186,10 +1186,11 @@ export interface ViewerSessionsResponse {
 
 // ===== 观众画像管理（/api/v1/memory） =====
 
-/** 一位观众的印象（viewer_profiles 单行） */
+/** 一位观众的印象（viewer_profiles 单行 + 观众的平台与当前昵称） */
 export interface ViewerProfileItem {
+  viewer_id: number;
   platform: string;
-  user_id: string;
+  user_name: string;
   profile_text: string;
   /** 已整理到的时间点：该时刻前的弹幕与付费记录已融进印象 */
   last_compressed_at_ms: number;

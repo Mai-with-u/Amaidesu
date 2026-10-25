@@ -210,7 +210,8 @@ async def test_session_settle_to_roster_and_recap_to_planner(stack) -> None:
         prompt_manager=prompt_manager,
     )
     assert await roster.update_for_session(pk) == 1
-    assert await store.viewer_profiles.get_profile_text(platform="bilibili", user_id="u_new") is None
+    newcomer = await store.viewers.find_viewer_id(platform="bilibili", external_id="u_new")
+    assert await store.viewer_profiles.get_profile_text(viewer_id=newcomer) is None
     roster_prompt = roster_llm.generate.await_args.args[0]
     assert "今晚想看你挖钻石0" in roster_prompt  # 原料是本人原话
 

@@ -6,8 +6,10 @@
 
 - ``GET  /memory/stats``                               总量统计（常客数 / 最近更新）
 - ``GET  /memory/profiles``                            画像列表（搜索 / 分页）
-- ``PATCH /memory/profiles/{platform}/{user_id}``      人工纠正印象文本
-- ``DELETE /memory/profiles/{platform}/{user_id}``     删除印象（删除后该观众回到无印象态）
+- ``PATCH /memory/profiles/{viewer_id}``               人工纠正印象文本
+- ``DELETE /memory/profiles/{viewer_id}``              删除印象（删除后该观众回到无印象态）
+
+画像以内部观众 ID 为键；列表行带观众的平台与当前昵称，供页面直接展示。
 
 未注入仓储（极简启动 / 部分测试装配）时端点返回 503。
 """
@@ -45,10 +47,11 @@ class MemoryStatsResponse(BaseModel):
 
 
 class ViewerProfileItem(BaseModel):
-    """一位观众的印象（``viewer_profiles`` 行内容）。"""
+    """一位观众的印象（``viewer_profiles`` 行内容 + 观众的平台与当前昵称）。"""
 
+    viewer_id: int
     platform: str
-    user_id: str
+    user_name: str
     profile_text: str
     last_compressed_at_ms: int = Field(description="已整理到的时间点（该时刻前的弹幕与付费记录已融进印象）")
     updated_at_ms: int
@@ -85,7 +88,7 @@ async def get_memory_stats(server: ServerDep) -> MemoryStatsResponse:
 @router.get("/profiles", response_model=ViewerProfileListResponse)
 async def list_viewer_profiles(
     server: ServerDep,
-    search: str = Query(default="", max_length=200, description="子串搜索印象文本 / user_id"),
+    search: str = Query(default="", max_length=200, description="子串搜索印象文本 / 观众昵称"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ViewerProfileListResponse:
@@ -96,8 +99,9 @@ async def list_viewer_profiles(
         total=total,
         items=[
             ViewerProfileItem(
+                viewer_id=int(row["viewer_id"]),
                 platform=str(row["platform"]),
-                user_id=str(row["user_id"]),
+                user_name=str(row["user_name"]),
                 profile_text=str(row["profile_text"]),
                 last_compressed_at_ms=int(row["last_compressed_at_ms"]),
                 updated_at_ms=int(row["updated_at_ms"]),
@@ -107,10 +111,9 @@ async def list_viewer_profiles(
     )
 
 
-@router.patch("/profiles/{platform}/{user_id}", response_model=MutationResponse)
+@router.patch("/profiles/{viewer_id}", response_model=MutationResponse)
 async def update_viewer_profile(
-    platform: str,
-    user_id: str,
+    viewer_id: int,
     request: ViewerProfileUpdateRequest,
     server: ServerDep,
 ) -> MutationResponse:
@@ -118,17 +121,17 @@ async def update_viewer_profile(
     repo = _require_repo(server)
     if not request.profile_text.strip():
         raise HTTPException(status_code=422, detail="profile_text 不能为空白")
-    updated = await repo.update_profile_text(platform=platform, user_id=user_id, profile_text=request.profile_text)
+    updated = await repo.update_profile_text(viewer_id=viewer_id, profile_text=request.profile_text)
     if not updated:
-        raise HTTPException(status_code=404, detail=f"印象不存在: {platform}/{user_id}")
+        raise HTTPException(status_code=404, detail=f"印象不存在: 观众 #{viewer_id}")
     return MutationResponse(success=True)
 
 
-@router.delete("/profiles/{platform}/{user_id}", response_model=MutationResponse)
-async def delete_viewer_profile(platform: str, user_id: str, server: ServerDep) -> MutationResponse:
+@router.delete("/profiles/{viewer_id}", response_model=MutationResponse)
+async def delete_viewer_profile(viewer_id: int, server: ServerDep) -> MutationResponse:
     """删除印象；不存在时 404。"""
     repo = _require_repo(server)
-    deleted = await repo.delete_profile(platform=platform, user_id=user_id)
+    deleted = await repo.delete_profile(viewer_id=viewer_id)
     if not deleted:
-        raise HTTPException(status_code=404, detail=f"印象不存在: {platform}/{user_id}")
+        raise HTTPException(status_code=404, detail=f"印象不存在: 观众 #{viewer_id}")
     return MutationResponse(success=True)

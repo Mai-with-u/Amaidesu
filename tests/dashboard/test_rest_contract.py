@@ -403,8 +403,9 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
         memory_api.ViewerProfileListResponse,
         (
             "total",
+            "items.viewer_id",
             "items.platform",
-            "items.user_id",
+            "items.user_name",
             "items.profile_text",
             "items.last_compressed_at_ms",
             "items.updated_at_ms",

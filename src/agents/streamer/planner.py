@@ -162,8 +162,8 @@ class Planner:
             tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作类工具）。
             profile_repo: 观众画像查询（``ViewerProfileRepo`` 结构契约，只用
                 ``get_profile_text``）；None 时无画像注入。
-            viewer_repo: ``ViewerRepo``（观众统计仓储）——画像注入时经它实时取
-                昵称（昵称会漂移不进画像文本）；None 时注入行回退 platform/user_id。
+            viewer_repo: ``ViewerRepo``（观众仓储）——画像注入时把消息里的外部 ID
+                换算成观众、实时取昵称与曾用名（昵称会漂移不进画像文本）；None 时无画像注入。
             context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
             behavior_style: 人设行为准则（决策侧）。
             bot_name: 主播名字（她是谁）。
@@ -1053,12 +1053,16 @@ class Planner:
         self,
         batch: List[Any],
     ) -> str:
-        """按本批发言时间倒序注入全部已有印象（观众画像），完整保留人物经历与偏好。"""
-        if self._profile_repo is None or not batch:
+        """按本批发言时间倒序注入全部已有印象（观众画像），完整保留人物经历与偏好。
+
+        消息只带外部 ID：先换算成观众（同一个人换了数据源也是同一份画像），按观众去重；
+        还没建档的（记账器尚未落库的新观众）没有画像，跳过。
+        """
+        if self._profile_repo is None or self._viewer_repo is None or not batch:
             return ""
 
         # 候选收集：发言时间倒序去重（最新发言优先；batch 本身按时间正序）
-        candidates: List[tuple[str, str]] = []  # (platform, user_id)
+        candidates: List[tuple[str, str]] = []  # (platform, 外部 ID)
         seen: set[tuple[str, str]] = set()
         for msg in reversed(batch):
             platform = _as_id_str(getattr(msg, "platform", None))
@@ -1072,35 +1076,41 @@ class Planner:
             seen.add(key)
             candidates.append(key)
 
-        if not candidates:
-            return ""
-
         lines: List[str] = []
+        injected: set[int] = set()
         for platform, user_id in candidates:
             try:
-                profile_text = await self._profile_repo.get_profile_text(platform=platform, user_id=user_id)
+                viewer_id = await self._viewer_repo.find_viewer_id(platform=platform, external_id=user_id)
+                if viewer_id is None or viewer_id in injected:
+                    continue
+                injected.add(viewer_id)
+                profile_text = await self._profile_repo.get_profile_text(viewer_id=viewer_id)
             except Exception as exc:
                 self.logger.warning(f"画像查询失败（{platform}/{user_id}，跳过该人）: {exc}")
                 continue
             if not profile_text:
                 continue  # 无画像不注入、不占位
             text = profile_text.replace("\n", " ").strip()
-            display = await self._viewer_nickname(platform, user_id) or f"{platform}/{user_id}"
-            line = f"- {display}: {text}"
-            lines.append(line)
+            display = await self._viewer_display(viewer_id) or f"{platform}/{user_id}"
+            lines.append(f"- {display}: {text}")
 
         if not lines:
             return ""
         header = "（内部参考，帮助识别老观众；不要逐字复述，与当前对话冲突时以当前对话为准）"
         return "\n".join([header, *lines])
 
-    async def _viewer_nickname(self, platform: str, user_id: str) -> str:
-        """从 viewers 统计表实时取观众昵称；仓储未注入或查询失败回退空串。"""
-        if self._viewer_repo is None:
-            return ""
+    async def _viewer_display(self, viewer_id: int) -> str:
+        """观众的展示名：当前昵称，改过名的带上曾用名（"乙（以前叫甲）"）。
+
+        场次回顾按当时的名字写，主播要知道"乙就是以前的甲"才对得上号；查询失败回退空串。
+        """
         try:
-            row = await self._viewer_repo.get_viewer_stats(platform=platform, user_id=user_id)
-            return str(row["user_name"]) if row is not None else ""
+            row = await self._viewer_repo.get_viewer(viewer_id=viewer_id)
+            if row is None:
+                return ""
+            name = str(row["user_name"])
+            former = await self._viewer_repo.list_former_names(viewer_id=viewer_id, current_name=name)
         except Exception as exc:
-            self.logger.warning(f"观众昵称查询失败（{platform}/{user_id}）: {exc}")
+            self.logger.warning(f"观众昵称查询失败（viewer {viewer_id}）: {exc}")
             return ""
+        return f"{name}（以前叫{'、'.join(former)}）" if former else name

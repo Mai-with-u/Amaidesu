@@ -182,7 +182,11 @@ class RegularsRosterWriter:
 
     async def _update_one(self, live_session_id: int, platform: str, user_id: str, nickname: str) -> bool:
         """单人更新：旧印象 + 上次整理之后的本场原话 + 付费记录 → LLM → 写回并推进已整理时刻。"""
-        existing = await self._profiles.get_profile(platform=platform, user_id=user_id)
+        # 画像按内部观众 ID 存：先把外部 ID 换算成观众（达门槛的观众必已建档，这里兜底）
+        viewer_id = await self._viewers.find_viewer_id(platform=platform, external_id=user_id)
+        if viewer_id is None:
+            return False
+        existing = await self._profiles.get_profile(viewer_id=viewer_id)
         old_text = str(existing["profile_text"]) if existing is not None else ""
         watermark = int(existing["last_compressed_at_ms"]) if existing is not None else 0
 
@@ -217,10 +221,7 @@ class RegularsRosterWriter:
         if not profile_text:
             return False
         await self._profiles.upsert_profile(
-            platform=platform,
-            user_id=user_id,
-            profile_text=profile_text,
-            last_compressed_at_ms=now_ms(),
+            viewer_id=viewer_id, profile_text=profile_text, last_compressed_at_ms=now_ms()
         )
         logger.debug(f"常客印象已更新（{platform}/{user_id}）: {profile_text[:50]}")
         return True

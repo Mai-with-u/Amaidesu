@@ -16,14 +16,15 @@ async def memory_client(api, store: SQLiteDatabase, event_bus):
     return await api(event_bus=event_bus, viewer_profile_repo=store.viewer_profiles)
 
 
-async def _seed_profiles(store: SQLiteDatabase, count: int) -> None:
-    """user_id 递增，文本含可搜索关键词；画像只挂在已建档的观众上，先建档。"""
+async def _seed_profiles(store: SQLiteDatabase, count: int) -> list[int]:
+    """观众递增，文本含可搜索关键词；画像只挂在已建档的观众上，先建档。返回观众 ID。"""
+    vids = []
     for i in range(count):
-        await seed_viewer(store.viewers, platform="bilibili", user_id=f"u_{i}", user_name=f"观众{i}", timestamp_ms=1)
+        vid = await seed_viewer(store.viewers, platform="bilibili", user_id=f"u_{i}", user_name=f"观众{i}", timestamp_ms=1)
         text = f"印象{i}：喜欢Minecraft" if i % 2 else f"印象{i}：喜欢恐怖游戏"
-        await store.viewer_profiles.upsert_profile(
-            platform="bilibili", user_id=f"u_{i}", profile_text=text, last_compressed_at_ms=1_000 + i
-        )
+        await store.viewer_profiles.upsert_profile(viewer_id=vid, profile_text=text, last_compressed_at_ms=1_000 + i)
+        vids.append(vid)
+    return vids
 
 
 async def test_roster_list_shape_search_and_paging(memory_client, store) -> None:
@@ -31,7 +32,9 @@ async def test_roster_list_shape_search_and_paging(memory_client, store) -> None
 
     await _seed_profiles(store, 5)
     body = (await memory_client.get("/api/v1/memory/profiles")).json()
-    assert set(body["items"][0]) == {"platform", "user_id", "profile_text", "last_compressed_at_ms", "updated_at_ms"}
+    assert set(body["items"][0]) == {
+        "viewer_id", "platform", "user_name", "profile_text", "last_compressed_at_ms", "updated_at_ms"
+    }  # fmt: skip
     assert body["total"] == 5
 
     found = (await memory_client.get("/api/v1/memory/profiles", params={"search": "Minecraft"})).json()
@@ -42,18 +45,18 @@ async def test_roster_list_shape_search_and_paging(memory_client, store) -> None
         for offset in (0, 2)
     ]
     assert all(page["total"] == 5 and len(page["items"]) == 2 for page in pages)
-    assert {i["user_id"] for i in pages[0]["items"]}.isdisjoint({i["user_id"] for i in pages[1]["items"]})
+    assert {i["viewer_id"] for i in pages[0]["items"]}.isdisjoint({i["viewer_id"] for i in pages[1]["items"]})
 
 
 async def test_roster_entry_update_and_delete(memory_client, store) -> None:
-    await _seed_profiles(store, 1)
-    url = "/api/v1/memory/profiles/bilibili/u_0"
+    (vid,) = await _seed_profiles(store, 1)
+    url = f"/api/v1/memory/profiles/{vid}"
 
     res = await memory_client.patch(url, json={"profile_text": "人工纠正后的印象"})
     assert (res.status_code, res.json()) == (200, {"success": True})
     assert (await memory_client.get("/api/v1/memory/profiles", params={"search": "人工纠正"})).json()["total"] == 1
     assert (await memory_client.patch(url, json={"profile_text": "   "})).status_code == 422
-    missing = await memory_client.patch("/api/v1/memory/profiles/bilibili/nobody", json={"profile_text": "x"})
+    missing = await memory_client.patch("/api/v1/memory/profiles/99999", json={"profile_text": "x"})
     assert missing.status_code == 404
 
     assert (await memory_client.delete(url)).json() == {"success": True}

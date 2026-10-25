@@ -5,8 +5,9 @@
 
 - ``recall_session(n_back)``——往前第 n 场的回顾（1 = 上一场）。主播要回答
   "上次玩到哪了""上周答应的事"时用它，不用猜关键词
-- ``recall_viewer(nickname | user_id)``——观众画像里对某位观众的印象；昵称经
-  ``viewers`` 反查身份键（印象文本不存昵称，昵称随改名漂移）
+- ``recall_viewer(nickname | viewer_id)``——观众画像里对某位观众的印象；昵称经
+  ``viewers`` 反查观众（印象文本不存昵称，昵称随改名漂移），当前昵称找不到时
+  也认曾用名，并告诉主播对方现在叫什么
 
 简单工具正典路径：``ToolSpec`` + 普通 async 函数（``as_tool_impl`` 包装）+
 ``make_provider_from_specs`` 组装，主播 Agent 启动时一行 ``register_tool_provider``。
@@ -81,14 +82,15 @@ RECALL_VIEWER_SPEC = ToolSpec(
     name="recall_viewer",
     description=(
         "查观众画像里对某位观众的印象（偏好、性格、与主播的关系、待回应的历史）。"
-        "提供 nickname（昵称）或 user_id 之一；只有互动够多的常客才有印象，没有就是还不熟。"
+        "提供 nickname（昵称，改过名的观众用以前的名字也能找到）或 viewer_id 之一；"
+        "只有互动够多的常客才有印象，没有就是还不熟。"
     ),
     parameters_schema={
         "type": "object",
         "properties": {
-            "nickname": {"type": "string", "description": "观众昵称（经统计表反查用户 ID）"},
-            "user_id": {"type": "string", "description": "平台用户 ID"},
-            "platform": {"type": "string", "description": "平台标识，默认 bilibili"},
+            "nickname": {"type": "string", "description": "观众昵称（当前昵称或曾用名）"},
+            "viewer_id": {"type": "integer", "description": "观众编号（之前查询结果里给出的 #编号）"},
+            "platform": {"type": "string", "description": "按昵称查时的平台标识，默认 bilibili"},
         },
         "required": [],
     },
@@ -176,7 +178,7 @@ def build_memory_tool_provider(
     Args:
         recap_repo: ``SessionRecapRepo``——场次回顾查询
         profile_repo: ``ViewerProfileRepo``——观众印象查询
-        viewer_repo: ``ViewerRepo``——昵称反查（可选；缺失时只能按 user_id 查）
+        viewer_repo: ``ViewerRepo``——昵称反查与展示名（可选；缺失时只能按 viewer_id 查）
         current_session_provider: 返回进行中场次主键的回调（``None`` = 未开播）；
             本场还没收播，往前数时要把它排除掉
     """
@@ -199,22 +201,29 @@ def build_memory_tool_provider(
     async def _recall_viewer(invocation: ToolInvocation) -> str:
         args = invocation.arguments or {}
         nickname = str(args.get("nickname", "") or "").strip()
-        user_id = str(args.get("user_id", "") or "").strip()
         platform = str(args.get("platform", "") or "").strip() or _DEFAULT_PLATFORM
-        if not nickname and not user_id:
-            return "（请提供 nickname 或 user_id）"
-        if not user_id:
+        try:
+            viewer_id = int(args["viewer_id"]) if args.get("viewer_id") not in (None, "") else None
+        except (TypeError, ValueError):
+            return "（viewer_id 必须是观众编号数字）"
+        if not nickname and viewer_id is None:
+            return "（请提供 nickname 或 viewer_id）"
+        note = ""
+        if viewer_id is None:
             if viewer_repo is None:
-                return "（无法按昵称反查观众，请提供 user_id）"
-            resolved = await viewer_repo.get_viewer_id_by_name(platform=platform, user_name=nickname)
-            if not resolved:
-                return f"（没找到叫「{nickname}」的观众，可能还没互动过或改过名）"
-            user_id = str(resolved)
-        profile_text = await profile_repo.get_profile_text(platform=platform, user_id=user_id)
-        label = nickname or f"{platform}/{user_id}"
+                return "（无法按昵称反查观众，请提供 viewer_id）"
+            match = await viewer_repo.find_by_name(platform=platform, user_name=nickname)
+            if match is None:
+                return f"（没找到叫「{nickname}」的观众，可能还没互动过）"
+            viewer_id = match.viewer_id
+            # 命中的是曾用名：告诉主播对方现在叫什么，免得拿旧名字称呼
+            if match.by_former_name:
+                note = f"（「{nickname}」是以前的名字，现在叫「{match.current_name}」）"
+        label = f"{nickname or '这位观众'}（观众 #{viewer_id}）"
+        profile_text = await profile_repo.get_profile_text(viewer_id=viewer_id)
         if not profile_text:
-            return f"（对 {label} 还没有形成印象——互动不多或还没收播整理过）"
-        return f"对 {label} 的印象：\n{profile_text}"
+            return f"{note}（对 {label} 还没有形成印象——互动不多或还没收播整理过）"
+        return f"{note}对 {label} 的印象：\n{profile_text}"
 
     return make_provider_from_specs(
         MEMORY_PROVIDER_NAME,
