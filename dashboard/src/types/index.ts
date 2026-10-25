@@ -1219,6 +1219,41 @@ export interface ViewerSessionsResponse {
   items: ViewerSessionItem[];
 }
 
+/** 一位待确认观众：新建的这一位 + 建议并入的老观众，供人工比对 */
+export interface PendingViewerItem {
+  viewer_id: number;
+  platform: string;
+  user_name: string;
+  account_id: string | null;
+  open_id: string | null;
+  message_count: number;
+  interaction_count: number;
+  /** 付费总额（金瓜子） */
+  paid_amount: number;
+  last_active_ms: number;
+  candidate: ViewerBrief | null;
+  candidate_account_id: string | null;
+  candidate_open_id: string | null;
+  /** 老观众最近一次以该昵称出现的时刻 */
+  candidate_name_seen_ms: number;
+  candidate_message_count: number;
+  candidate_interaction_count: number;
+  candidate_paid_amount: number;
+  candidate_last_active_ms: number;
+  /** 老观众用过的昵称（最近在前） */
+  candidate_names: string[];
+}
+
+export interface PendingViewersResponse {
+  total: number;
+  items: PendingViewerItem[];
+}
+
+/** 观众身份人工处理的结果：处理后应查看的观众（合并的目标 / 拆出的新观众 / 原观众） */
+export interface ViewerIdentityActionResponse {
+  viewer_id: number;
+}
+
 // ===== 观众画像管理（/api/v1/memory） =====
 
 /** 一位观众的印象（viewer_profiles 单行 + 观众的平台与当前昵称） */

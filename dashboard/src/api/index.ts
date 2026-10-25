@@ -96,6 +96,8 @@ import type {
   ViewerDialogueResponse,
   ViewerContributions,
   ViewerSessionsResponse,
+  PendingViewersResponse,
+  ViewerIdentityActionResponse,
   ViewerProfileListResponse,
   ViewerProfileUpdatePayload,
   MemoryMutationResponse,
@@ -331,13 +333,15 @@ export const logsApi = {
   }) => api.get<LogsQueryResponse>('/logs', { params }),
 };
 
-// 观众（列表 / 分析 / 档案 / 对话 / 贡献 / 场次）
+// 观众（列表 / 分析 / 档案 / 对话 / 贡献 / 场次 / 身份人工处理）
 //
 // `GET /viewers`：观众列表（搜索/排序/分页，total 为命中搜索的全计数，
 // 首页"观众总数"也取 total）。
 // `GET /viewers/insights`：活跃分桶 + 回复覆盖 + 按天弹幕量（互动分析页）。
 // `GET /viewers/{viewerId}...`：单观众档案与明细聚合（详情页三 tab 的数据面），
 // 按内部观众 ID 定位——同一位观众可能有账号 ID 与开放平台 ID 两种外部 ID。
+// `GET /viewers/pending` + `POST /viewers/{viewerId}/merge|keep|unlink`：
+// 与老观众同名、待人工确认的观众，及合并 / 保持新建 / 取消关联。
 export const viewersApi = {
   list: (params?: { search?: string; order_by?: string; limit?: number; offset?: number }) =>
     api.get<ViewerListResponse>('/viewers', { params }),
@@ -349,6 +353,16 @@ export const viewersApi = {
   contributions: (viewerId: number, params?: { limit?: number }) =>
     api.get<ViewerContributions>(`/viewers/${viewerId}/contributions`, { params }),
   sessions: (viewerId: number) => api.get<ViewerSessionsResponse>(`/viewers/${viewerId}/sessions`),
+  pending: (params?: { limit?: number; offset?: number }) =>
+    api.get<PendingViewersResponse>('/viewers/pending', { params }),
+  merge: (viewerId: number, targetViewerId: number) =>
+    api.post<ViewerIdentityActionResponse>(`/viewers/${viewerId}/merge`, {
+      target_viewer_id: targetViewerId,
+    }),
+  keepSeparate: (viewerId: number) =>
+    api.post<ViewerIdentityActionResponse>(`/viewers/${viewerId}/keep`),
+  unlink: (viewerId: number, idKind: 'account' | 'open') =>
+    api.post<ViewerIdentityActionResponse>(`/viewers/${viewerId}/unlink`, { id_kind: idKind }),
 };
 
 // Streamer 测试台（主播发言调试）

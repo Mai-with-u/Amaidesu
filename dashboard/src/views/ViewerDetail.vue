@@ -42,6 +42,9 @@
       </div>
     </section>
 
+    <!-- 身份：外部 ID / 用过的昵称 / 待确认与合并、取消关联                 -->
+    <ViewerIdentityCard v-if="detail" :detail="detail" @navigate="openViewer" />
+
     <!-- 三区：对话 / 贡献 / 场次                                        -->
     <section v-if="detail" class="tabs-card">
       <el-tabs v-model="activeTab">
@@ -204,17 +207,19 @@
 
 <script setup lang="ts">
 /**
- * 观众详情 —— 单观众档案：统计徽章 + 对话交织 + 贡献明细 + 参与场次
+ * 观众详情 —— 单观众档案：统计徽章 + 身份卡 + 对话交织 + 贡献明细 + 参与场次
  *
  * 按内部观众 ID 定位（路由 /viewers/:viewerId）。数据面：
  * - GET /viewers/{viewerId}：档案聚合（统计行 + 外部 ID + 用过的昵称 + 三表边界 + 贡献汇总 + 场次数）
  * - GET /viewers/{viewerId}/messages：对话批次——观众消息与主播回复按时间交织，
  *   "加载更早"以 next_before 游标向前翻，跨批按后端行 id 去重
  * - GET /viewers/{viewerId}/contributions、/sessions：明细表
- * 贡献/场次 tab 懒加载（首次切换才取数）。
+ * 贡献/场次 tab 懒加载（首次切换才取数）。身份卡做完合并 / 拆分后跳到该看的观众。
  */
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { viewersApi } from '@/api';
+import ViewerIdentityCard from '@/components/viewers/ViewerIdentityCard.vue';
 import { relativeAge } from '@/utils/format';
 import type {
   ViewerContributions,
@@ -224,6 +229,7 @@ import type {
 } from '@/types';
 
 const props = defineProps<{ viewerId: number }>();
+const router = useRouter();
 
 const detail = ref<ViewerDetail | null>(null);
 const loadError = ref('');
@@ -356,6 +362,15 @@ function resetAndLoad(): void {
 }
 
 watch(() => props.viewerId, resetAndLoad);
+
+/** 身份卡处理完：换观众就跳过去，还是这一位（保持新建）就原地刷新 */
+function openViewer(viewerId: number): void {
+  if (viewerId === props.viewerId) {
+    resetAndLoad();
+    return;
+  }
+  void router.push(`/viewers/${viewerId}`);
+}
 
 onMounted(async () => {
   await loadDetail();
