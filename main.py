@@ -1158,6 +1158,7 @@ async def _start_dashboard(
     viewer_repo=None,
     chat_repo=None,
     viewer_profile_repo=None,
+    viewer_identity_repo=None,
     event_repo=None,
     recap_repo=None,
     rundown_transition_repo=None,
@@ -1194,6 +1195,8 @@ async def _start_dashboard(
             chat_repo=chat_repo,
             # 观众画像仓储：/api/v1/memory/* 管理接口与主播 Agent 共用同一张表
             viewer_profile_repo=viewer_profile_repo,
+            # 观众身份人工处理：待确认页、合并与取消关联（/api/v1/viewers/pending|merge|keep|unlink）
+            viewer_identity_repo=viewer_identity_repo,
             # 场次复盘面：game_events 计数仓储与 db 快照路径（/api/v1/review*）
             event_repo=event_repo,
             # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
