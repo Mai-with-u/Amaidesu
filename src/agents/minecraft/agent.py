@@ -56,7 +56,7 @@ from src.agents.minecraft.maicraft import (
 from src.agents.minecraft.repeated_notice import notice_present, repeat_reference
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction, WakeEvenIdle
-from src.agents.minecraft.tools import MinecraftToolProvider
+from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.context import PrefixGuard, TailImages
 from src.modules.events.event_bus import EventBus
@@ -73,6 +73,7 @@ from src.modules.skills import SkillLibrary
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
+from src.modules.tools.tasks import TERMINAL_TASK_STATES
 from src.modules.vision.image_store import get_image_store
 
 from .config import MinecraftConfig
@@ -145,6 +146,35 @@ _RECENT_FINISHED_GOALS = 6
 
 # 只读查询目标的操作：一整轮都在查还在跑的目标、没做别的，就是在轮询等结果。
 _GOAL_POLLING_OPERATIONS = frozenset({"get", "list"})
+
+# 长自由文本事件的概述阈值：发给主播素材前超过它先用 summary 档压成保信息摘要，
+# 短文直通（进展类事件中位几十字符，天然分开）
+_ATTENTION_SUMMARY_THRESHOLD_CHARS = 300
+# 概述降级的首句斩尾上限：只留第一句，再多截断（斩尾是兜底，不弃用）
+_SUMMARY_FALLBACK_MAX_CHARS = 120
+# 概述走 summary 档（低成本，每场几次调用）
+_SUMMARY_PROFILE = "summary"
+
+
+def _first_sentence_truncation(text: str) -> str:
+    """概述的降级形态：只留第一句，句子本身太长再硬截断。"""
+    stripped = str(text or "").strip()
+    for separator in ("。", "！", "？", "!?", "\n"):
+        index = stripped.find(separator)
+        if index >= 0:
+            stripped = stripped[: index + len(separator)]
+            break
+    if len(stripped) > _SUMMARY_FALLBACK_MAX_CHARS:
+        stripped = stripped[:_SUMMARY_FALLBACK_MAX_CHARS]
+    return stripped
+
+
+# 概述提示词：只压缩不评价——防多出一个自由发挥的转述者
+_SUMMARY_COMPRESS_INSTRUCTION = (
+    "把下面这段 Minecraft 游戏事件长文压缩成一段保信息摘要：保留目标、试过的办法、"
+    "失败或缺的东西、数量与下一步指向等全部事实细节；只压缩不评价——不加评论、"
+    "不臆测、不改变任何事实。直接输出摘要正文。"
+)
 
 
 class MinecraftAgent(BaseAgent):
@@ -288,6 +318,8 @@ class MinecraftAgent(BaseAgent):
         self._batch_active: bool = False
         self._batch_body_events: List[Dict[str, Any]] = []
         self._body_notified: set = set()
+        # 在跑的长文概述后台任务：持引用防被垃圾回收，完成即移除
+        self._summary_tasks: set[asyncio.Task[None]] = set()
         # 挂在消息队列里、还没被模型读到的那条天色通知：新的天色来了就把它换掉，队列里只留最新一条。
         self._sky_notice: Optional[tuple] = None
         self._task_reported = False
@@ -374,11 +406,12 @@ class MinecraftAgent(BaseAgent):
             return
         # 函数内 import：mcp 模块涉及 fastmcp 重型依赖，按"可选重型依赖延迟加载"只在启动期导入一次。
         from src.modules.mcp.client import McpClient
-        from src.modules.mcp.provider import McpToolProvider
 
         client = McpClient(name=PROVIDER, config=self.typed_config.mcp)
         self._mcp_client = client
-        prov = McpToolProvider(client=client, server_name=PROVIDER, provider=PROVIDER)
+        prov = MaicraftMcpProvider(
+            client=client, server_name=PROVIDER, provider=PROVIDER, goal_lookup=self._call_maicraft
+        )
         self._mcp_provider = prov
         prov.on_tools_refreshed = self._on_mcp_tools_ready
         prov.switch_config = {"file": "agents.toml", "key": "agents.minecraft.mcp.enabled"}
@@ -591,7 +624,18 @@ class MinecraftAgent(BaseAgent):
         return None
 
     def cancel_task(self, task_id: str, source: str = "") -> bool:
-        """硬取消：清委派追踪清单 + 账面 cancelled + 注入停手通知（不打断当前工具调用）。"""
+        """硬取消：清委派追踪清单 + 账面 cancelled + 注入停手通知（不打断当前工具调用）。
+
+        还排在消息队列里、没被任何批次吸收的委派单同样可撤：直接出队并记账，
+        不注入停手通知（模型根本没见过这条指令，无需停手）。
+        """
+        queued = [item for item in self._message_queue if item[0] == task_id]
+        if queued:
+            self._message_queue = deque(item for item in self._message_queue if item[0] != task_id)
+            if self._task_tracker is not None:
+                self._task_tracker.ledger.update(task_id, "cancelled", summary=f"被取消（source={source or '未知'}）")
+            self._logger.info(f"MinecraftAgent 队列中的委派已撤（task_id={task_id}, source={source or '未知'}）")
+            return True
         if task_id not in self._delegated_batch_ids and task_id not in self._delegated_finished_ids:
             return False
         if task_id in self._delegated_batch_ids:
@@ -999,8 +1043,10 @@ class MinecraftAgent(BaseAgent):
             return
         if name == EXECUTE:
             if run.finished:
-                # 当场完成的目标（记地点、只读分析）没有后台过程，结果已经在回复里。
+                # 当场完成的目标（记地点、只读分析）没有后台过程，结果已经在回复里；
+                # 账面仍要记：先登记再写终态，直接写会因条目不存在而落空（终态变化广播不出来）。
                 self._remember_finished(run)
+                self._register_and_settle_goal(run)
                 return
             self._track_goal(run)
             return
@@ -1052,6 +1098,18 @@ class MinecraftAgent(BaseAgent):
             )
         self._logger.info(f"开始跟踪目标 {run.goal_id}（{run.ability}）：{run.state}")
 
+    def _register_and_settle_goal(self, run: GoalRun) -> None:
+        """execute 当场返回终态的目标补记账：先按受理登记、再写终态，账本才广播得出这次变化。"""
+        if self._task_tracker is not None:
+            self._task_tracker.track(
+                task_id=ledger_task_id(run.goal_id),
+                provider=PROVIDER,
+                tool=EXECUTE,
+                initiator=self.name,
+                snapshot=run.data,
+            )
+        self._update_goal_ledger(run)
+
     def _note_goal(self, run: GoalRun) -> None:
         """记下目标此刻的样子：任务状态、看一眼与交付门禁都读它。"""
         note: Dict[str, Any] = {"goal_id": run.goal_id, "ability": run.ability, "state": run.state}
@@ -1076,9 +1134,60 @@ class MinecraftAgent(BaseAgent):
         ledger = getattr(self._task_tracker, "ledger", None)
         if ledger is None:
             return
-        ledger.update(
-            ledger_task_id(run.goal_id), ledger_status_of(run), snapshot=run.data, summary=summary or run.summary
-        )
+        status = ledger_status_of(run)
+        ledger.update(ledger_task_id(run.goal_id), status, snapshot=run.data, summary=summary or run.summary)
+        if status in TERMINAL_TASK_STATES:
+            self._settle_batch_delegations(status, self._dry_goal_summary(run))
+
+    @staticmethod
+    def _dry_goal_summary(run: GoalRun) -> str:
+        """目标终态给委派账的干巴机器摘要：只陈述结果，话术语义留给 LLM 的交付语。"""
+        label = run.result_status or "结束"
+        return f"游戏目标 {run.goal_id}（{run.ability}）{label}：{run.summary}"
+
+    def _settle_batch_delegations(self, status: str, summary: str) -> None:
+        """批级关联：本批吸收的委派共享批内目标的终态，干巴机器摘要先到账保底。
+
+        LLM 的交付/升级后到时按终态粘滞改不动状态（条目已移除，重复写入无效），
+        它的话术经 game.report 走主播侧；这里保证的是"LLM 一句没说也有回音"。
+        粗糙性已知并接受：一批委派共享批内目标终态，批中途某个目标先失败就先写失败。
+        """
+        ledger = getattr(self._task_tracker, "ledger", None)
+        if ledger is None:
+            return
+        for task_id in list(self._delegated_finished_ids):
+            if ledger.get(task_id) is None:
+                # 已被早到的目标终态或 LLM 交付写过终态：状态粘滞，不回退
+                continue
+            ledger.update(task_id, status, summary=summary)
+
+    def _flag_batch_delegations_stalled(self, goal_id: int, ability: str) -> None:
+        """STALLED 打进本批委派账的快照（中间态）：主播侧渲染看得到"停着没动静"。
+
+        目标随后结束（或恢复有动静）时分别由终态直写与常规进度写入覆盖掉这份标记。
+        """
+        ledger = getattr(self._task_tracker, "ledger", None)
+        if ledger is None:
+            return
+        for task_id in list(self._delegated_finished_ids):
+            record = ledger.get(task_id)
+            if record is None:
+                continue
+            stalled = dict(record.snapshot.get("stalled_goals") or {})
+            stalled[str(goal_id)] = ability
+            ledger.update(task_id, "running", snapshot={**record.snapshot, "stalled_goals": stalled})
+
+    def _note_goal_stalled(self, run: GoalRun) -> None:
+        """Mod 报告目标停着没动静的账面中间态：快照带停滞标记，本批委派账同步打标。"""
+        ledger = getattr(self._task_tracker, "ledger", None)
+        if ledger is not None:
+            ledger.update(
+                ledger_task_id(run.goal_id),
+                ledger_status_of(run),
+                snapshot={**run.data, "stalled": True},
+                summary=f"Mod 报告目标长时间没有新事件，仍未结束：{run.doing or run.ability}",
+            )
+        self._flag_batch_delegations_stalled(run.goal_id, run.ability)
 
     def _actionable_goals(self) -> List[int]:
         """要模型动手才会往下走的目标：在等回答的、被暂停的。"""
@@ -1088,11 +1197,16 @@ class MinecraftAgent(BaseAgent):
             if note.get("state") == AWAITING_ANSWER or goal_id in self._paused_goals
         )
 
-    async def _on_goal_changed(self, run: GoalRun, after_world_change: bool = False, self_brief: str = "") -> None:
+    async def _on_goal_changed(
+        self, run: GoalRun, after_world_change: bool = False, self_brief: str = "", stalled: bool = False
+    ) -> None:
         """事件流说目标变了：记账，并在需要模型处理时带着结果唤醒任务。
 
         ``after_world_change``：事件流换了编号（重进世界或游戏重启）后重新核对时查到的样子。
         ``self_brief``：结束事件带来的结束那一刻角色的一行自身摘要，没有时为空串。
+        ``stalled``：Mod 侧停滞判定引来（目标长时间没有新事件仍未结束）——记账本中间态
+        并转发"有目标停着没动静"给主播；不另唤醒模型（Mod 节流过，模型侧由任务账本
+        的停滞告警兜底）。
         """
         before = self._goal_notes.get(run.goal_id, {})
         if run.finished:
@@ -1103,6 +1217,13 @@ class MinecraftAgent(BaseAgent):
             self._inject_wakeup_message(self._finish_notice(run, self_brief))
             return
         self._note_goal(run)
+        if stalled:
+            self._note_goal_stalled(run)
+            await self._emit_game_event(
+                "attention_required",
+                f"有目标停着没动静：目标 {run.goal_id}（{self._goal_label(run)}）很长时间没有新事件，还没结束。",
+            )
+            return
         self._update_goal_ledger(run)
         if run.state == AWAITING_ANSWER and before.get("question") != run.question:
             self._inject_wakeup_message(
@@ -1183,6 +1304,7 @@ class MinecraftAgent(BaseAgent):
         ledger = getattr(self._task_tracker, "ledger", None)
         if ledger is not None:
             ledger.update(ledger_task_id(goal_id), "failed", summary=reason)
+        self._settle_batch_delegations("failed", f"游戏目标 {goal_id} 不在了：{reason}")
         self._inject_wakeup_message(f"[系统] 目标 {goal_id} 不在了：{reason}。按现场重新决定下一步。")
 
     async def _on_body_event(self, event: Dict[str, Any]) -> None:
@@ -1221,8 +1343,9 @@ class MinecraftAgent(BaseAgent):
             # 这里只说明来龙去脉、提醒复活后先看一眼自己，不催模型重下目标。
             if self._batch_active or not self._task_finished:
                 self._inject_wakeup_message(self._body_notice_content(kind, notice, message))
-            # 上报主播的是给观众听的白话（模型那边仍收 Mod 原话）：和注意流采集器的叙事同一套说法
-            await self._emit_game_event("attention_required", summarize(classify(kind) or "unknown", kind, message))
+            # 必须传 Mod 原话：白话速览的分句改写器会整段丢弃排查类分句（实测 30 句输入只剩
+            # 一句"有件事没办成"），排查细节全灭；长度交给素材调度器（长文压缩、短文直通）
+            self._schedule_attention_material(message)
             return
         if not self._batch_active or (kind, message) in self._body_notified:
             return
@@ -1231,6 +1354,48 @@ class MinecraftAgent(BaseAgent):
         spoken = summarize(classify(kind) or "unknown", kind, message)
         notice = f"执行任务时{spoken}" if kind == "temporary_task_started" else spoken
         await self._emit_game_event("attention_required", notice, already_resolved=kind == "temporary_task_finished")
+
+    def _schedule_attention_material(self, message: str) -> None:
+        """把一条身体事件转成主播素材（game.attention_required）：长文先概述，不阻塞事件主流程。
+
+        超过阈值的长自由文本（need_unhandled 的逐来源排查说明、目标失败枚举等）经 summary 档
+        压成保信息摘要再发；载荷两栏——概述进 message，原文留档进 scene。概述是后台任务：
+        失败静默降级为首句斩尾并记 debug 日志。
+        """
+        if len(message) <= _ATTENTION_SUMMARY_THRESHOLD_CHARS:
+            task = asyncio.create_task(self._emit_attention_material(message))
+        else:
+            task = asyncio.create_task(self._emit_attention_material_with_summary(message))
+        self._summary_tasks.add(task)
+        task.add_done_callback(self._summary_tasks.discard)
+
+    async def _emit_attention_material(self, message: str) -> None:
+        await self._emit_game_event("attention_required", message)
+
+    async def _emit_attention_material_with_summary(self, message: str) -> None:
+        """长文的两栏载荷：压缩概述进素材，原文留档；概述拿不到就降级首句斩尾。"""
+        summary = await self._summarize_long_text(message)
+        await self._emit_game_event("attention_required", summary, scene=f"原文留档：{message}")
+
+    async def _summarize_long_text(self, message: str) -> str:
+        """长自由文本 → 保信息摘要（summary 档）；失败降级首句斩尾（debug 记原因）。"""
+        if self._llm is None:
+            return _first_sentence_truncation(message)
+        try:
+            response = await self._llm.generate(
+                [{"role": "user", "content": f"{_SUMMARY_COMPRESS_INSTRUCTION}\n\n{message}"}],
+                profile=_SUMMARY_PROFILE,
+            )
+        except Exception as exc:  # noqa: BLE001 - 概述失败静默降级，不影响事件主流程
+            self._logger.debug(f"长文概述调用失败，降级首句斩尾: {type(exc).__name__}: {exc}", exc=True)
+            return _first_sentence_truncation(message)
+        summary = (response.content or "").strip()
+        if response.success and summary and not response.tool_calls:
+            return summary
+        self._logger.debug(
+            f"长文概述响应不可用（success={response.success}，带工具调用={bool(response.tool_calls)}），降级首句斩尾"
+        )
+        return _first_sentence_truncation(message)
 
     def _body_notice_content(self, kind: str, notice: str, message: str) -> str:
         """身体通知交给模型的正文。

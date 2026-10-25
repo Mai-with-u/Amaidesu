@@ -33,10 +33,7 @@ from src.modules.diagnostics.readers import (
     read_request_breakdown,
 )
 from src.modules.llm.quota import ProviderQuota
-from src.modules.llm.request_history_manager import (
-    count_image_parts,
-    get_global_request_history_manager,
-)
+from src.modules.llm.request_history_manager import count_image_parts
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -232,6 +229,7 @@ async def get_usage_summary(server: ServerDep) -> LLMUsageSummaryResponse:
 
 @router.get("/history", response_model=LLMHistoryListResponse)
 async def get_history(
+    server: ServerDep,
     page: Annotated[int, Query(ge=1, description="页码")] = 1,
     page_size: Annotated[int, Query(ge=1, le=100, description="每页数量")] = 50,
     model_name: Annotated[Optional[str], Query(description="模型名称筛选")] = None,
@@ -241,7 +239,7 @@ async def get_history(
     success_only: Annotated[Optional[bool], Query(description="只返回成功的请求")] = None,
 ) -> LLMHistoryListResponse:
     """获取请求历史列表"""
-    history_manager = get_global_request_history_manager()
+    history_manager = server.request_history_manager
     result = await history_manager.get_history(
         profile_name=profile_name,
         model_name=model_name,
@@ -266,19 +264,20 @@ async def get_history(
 
 
 @router.get("/history/models", response_model=List[str])
-async def get_available_models() -> List[str]:
+async def get_available_models(server: ServerDep) -> List[str]:
     """获取历史记录中出现过的模型名（去重升序；供筛选下拉全量候选项）"""
-    history_manager = get_global_request_history_manager()
+    history_manager = server.request_history_manager
     return await history_manager.get_available_models()
 
 
 @router.get("/history/statistics", response_model=LLMHistoryStatisticsResponse)
 async def get_statistics(
+    server: ServerDep,
     start_time: Annotated[Optional[int], Query(description="开始时间（毫秒时间戳）")] = None,
     end_time: Annotated[Optional[int], Query(description="结束时间（毫秒时间戳）")] = None,
 ) -> LLMHistoryStatisticsResponse:
     """获取历史统计信息"""
-    history_manager = get_global_request_history_manager()
+    history_manager = server.request_history_manager
     stats = await history_manager.get_statistics(start_time=start_time, end_time=end_time)
 
     # 转换 model_stats
@@ -315,9 +314,9 @@ async def get_statistics(
 
 
 @router.get("/history/{request_id}", response_model=Optional[LLMRequestHistoryResponse])
-async def get_request_by_id(request_id: str) -> Optional[LLMRequestHistoryResponse]:
+async def get_request_by_id(request_id: str, server: ServerDep) -> Optional[LLMRequestHistoryResponse]:
     """获取单个请求详情"""
-    history_manager = get_global_request_history_manager()
+    history_manager = server.request_history_manager
     record = await history_manager.get_request_by_id(request_id)
 
     if not record:
@@ -330,7 +329,9 @@ async def get_request_by_id(request_id: str) -> Optional[LLMRequestHistoryRespon
 
 
 @router.post("/history/stats", response_model=LLMRequestStatsBatchResponse)
-async def get_request_stats_batch(request: LLMRequestStatsBatchRequest) -> LLMRequestStatsBatchResponse:
+async def get_request_stats_batch(
+    request: LLMRequestStatsBatchRequest, server: ServerDep
+) -> LLMRequestStatsBatchResponse:
     """按 id 批量取请求统计（仅库查询统计列，不含正文大字段）。
 
     时间线统计胶囊合批懒取专用：一次回看首屏有数百张带请求指针的卡，
@@ -338,7 +339,7 @@ async def get_request_stats_batch(request: LLMRequestStatsBatchRequest) -> LLMRe
     （统计胶囊只消费 usage/model 几个数），合批轻端点把 N 个重请求收敛
     为 1 个轻请求。
     """
-    history_manager = get_global_request_history_manager()
+    history_manager = server.request_history_manager
     stats = await history_manager.get_request_stats_by_ids(request.request_ids)
     return LLMRequestStatsBatchResponse(
         stats={request_id: LLMRequestStatsItem(**item) for request_id, item in stats.items()}

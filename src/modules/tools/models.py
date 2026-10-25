@@ -139,6 +139,17 @@ def tool_result_fail(tool_name: str, error_message: str) -> ToolExecutionResult:
 
 
 @dataclass(slots=True)
+class ToolCallAttachment:
+    """随调用附带的交接材料，registry 不感知，由具体工具的调用方与 Provider 约定形状。
+
+    标记基类：框架层只提供类型位置，不定义任何字段——具体形状由各 Agent
+    域内的子类承载（如 streamer 的 ``ReplyRoundAttachment``），保证依赖方向
+    不反向（tools/ 不 import agents/）。与 ``arguments`` 的分工：arguments
+    由 LLM 生成、模型可伪造；attachment 由宿主代码构造、模型不可见。
+    """
+
+
+@dataclass(slots=True)
 class ToolInvocation:
     """工具调用请求（Planner → Registry → 执行函数）
 
@@ -156,6 +167,10 @@ class ToolInvocation:
             什么场景"（观测维度），本字段记"结果由谁消费"（能力维度）。
             管线式调用（结果不进任何 LLM 对话，如 text_adv 读屏）留空串
             ——空串按非视觉处理（保守降级）
+        attachment: 随调用附带的交接材料（``ToolCallAttachment`` 子类，由调用方
+            与具体工具的 Provider 约定形状）；None = 本窗无宿主材料。与
+            arguments 的分工：arguments 由 LLM 生成、模型可伪造，attachment
+            由宿主代码构造、不经 LLM
     """
 
     tool_name: str
@@ -165,6 +180,7 @@ class ToolInvocation:
     source: str = ""
     round_id: str = ""
     caller_profile: str = ""
+    attachment: Optional[ToolCallAttachment] = None
 
 
 __all__ = [
@@ -176,5 +192,6 @@ __all__ = [
     "ToolExecutionResult",
     "tool_result_ok",
     "tool_result_fail",
+    "ToolCallAttachment",
     "ToolInvocation",
 ]

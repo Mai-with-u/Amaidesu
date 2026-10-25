@@ -20,6 +20,7 @@
                 size="small"
                 text
                 :icon="Refresh"
+                aria-label="刷新事件总线统计"
                 :loading="busStatsLoading"
                 @click="fetchBusStats"
               />
@@ -139,7 +140,11 @@
             v-for="event in visibleEvents"
             :key="event.id"
             class="event-row"
+            role="button"
+            tabindex="0"
             @click="toggleEventExpand(event.id)"
+            @keydown.enter.prevent="toggleEventExpand(event.id)"
+            @keydown.space.prevent="toggleEventExpand(event.id)"
           >
             <span class="event-time mono">{{ formatEventTime(event.timestamp_ms) }}</span>
             <span class="event-type" :class="getEventClass(event.type)">{{ event.type }}</span>
@@ -161,12 +166,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, nextTick, onMounted, onUnmounted, ref } from 'vue';
+import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { Document, VideoPause, VideoPlay, Search, Delete, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { storeToRefs } from 'pinia';
 import { debugApi } from '@/api';
+import { confirmAction } from '@/utils/confirmAction';
 import type { EventBusStatsResponse } from '@/types';
 import DOMPurify from 'dompurify';
 import { formatDateMD, formatTimeHMS } from '@/utils/format';
@@ -187,6 +194,56 @@ const isPaused = ref(false);
 const searchQuery = ref('');
 const selectedTypes = ref<string[]>([]);
 const expandedEvents = ref<Set<string>>(new Set());
+
+const route = useRoute();
+const router = useRouter();
+
+// query.type 兼容单值与重复键（?type=a&type=b），统一为字符串数组
+function readTypeList(raw: typeof route.query.type): string[] {
+  if (Array.isArray(raw)) return raw.map(String);
+  return raw ? [String(raw)] : [];
+}
+
+// 深链初始化：?q=&type= 在 setup 期写入筛选状态，早于首次渲染
+const querySearch = String(route.query.q ?? '');
+if (querySearch) {
+  searchQuery.value = querySearch;
+}
+const queryTypes = readTypeList(route.query.type);
+if (queryTypes.length > 0) {
+  selectedTypes.value = queryTypes;
+}
+
+// 筛选变更回写 URL：q=搜索词、type=事件类型（可重复）；空值/默认态删键而非留空串，
+// replace 不产生历史记录。客户端筛选不触发请求，故无回写循环风险
+watch([searchQuery, selectedTypes], () => {
+  const query: Record<string, string | string[]> = {};
+  if (searchQuery.value.trim()) {
+    query.q = searchQuery.value;
+  }
+  if (selectedTypes.value.length > 0) {
+    query.type = selectedTypes.value;
+  }
+  void router.replace({ query });
+});
+
+// 前进/后退恢复：query 变化与当前状态一致（本页 replace 触发）时跳过，
+// 否则视为用户导航，把 query 写回筛选状态
+watch(
+  () => route.query,
+  query => {
+    const nextSearch = String(query.q ?? '');
+    const nextTypes = readTypeList(query.type);
+    if (
+      nextSearch === searchQuery.value &&
+      nextTypes.join('\u0000') === selectedTypes.value.join('\u0000')
+    ) {
+      return;
+    }
+    searchQuery.value = nextSearch;
+    selectedTypes.value = nextTypes;
+  },
+);
 
 // 渲染上限：非虚拟滚动下列表面积的护栏（超出时渲染最新一端并提示）
 const MAX_RENDER_ROWS = 400;
@@ -295,7 +352,14 @@ function togglePause() {
 }
 
 // 清空事件
-function clearEvents() {
+async function clearEvents() {
+  if (
+    !(await confirmAction(
+      '将清空当前事件列表（仅内存缓冲，不影响落盘文件）。确定要清空吗？',
+      '清空事件列表',
+    ))
+  )
+    return;
   eventsStore.clearEvents();
   expandedEvents.value.clear();
   ElMessage.success('已清空事件列表');
@@ -609,7 +673,7 @@ onUnmounted(() => {
 
 .event-type {
   padding: 2px 8px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.5px;
   border-radius: var(--radius-sm);

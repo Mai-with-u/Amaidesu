@@ -156,6 +156,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { confirmAction } from '@/utils/confirmAction';
 import { debugApi } from '@/api';
 import type { SubtitleStatusResponse, TtsStatusResponse } from '@/types';
 
@@ -285,6 +286,13 @@ async function sendSubtitle(): Promise<void> {
 }
 
 async function clearSubtitle(): Promise<void> {
+  if (
+    !(await confirmAction(
+      '将清空后端当前字幕（OBS 字幕源会立即变空白）。确定要清空吗？',
+      '清空字幕',
+    ))
+  )
+    return;
   subtitleClearing.value = true;
   try {
     const { data } = await debugApi.clearSubtitle();

@@ -99,14 +99,10 @@ class _FakeAgentManager:
         name: str,
         config: Optional[dict] = None,
         *,
-        llm_manager: Any = None,
-        prompt_manager: Any = None,
-        event_bus: Any = None,
+        deps: Any = None,
         **_kwargs: Any,
     ) -> bool:
-        self.enable_calls.append(
-            {"name": name, "config": dict(config or {}), "llm_manager": llm_manager, "prompt_manager": prompt_manager}
-        )
+        self.enable_calls.append({"name": name, "config": dict(config or {}), "deps": deps})
         self.register(name, object())
         return True
 
@@ -184,7 +180,7 @@ def test_restart_agent_passes_fresh_config_and_shared_managers() -> None:
     assert len(manager.enable_calls) == 1
     call = manager.enable_calls[0]
     assert call["config"] == {"persona": {"bot_name": "新名字"}}  # 重建用磁盘新配置，不是记住的旧入参
-    assert call["llm_manager"] is llm and call["prompt_manager"] is prompts  # 共享服务原样透传
+    assert call["deps"].llm_manager is llm and call["deps"].prompt_manager is prompts  # 共享服务原样透传
 
 
 def test_restart_reports_stop_failure_and_keeps_old_instance() -> None:

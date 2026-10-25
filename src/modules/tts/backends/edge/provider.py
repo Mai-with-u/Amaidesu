@@ -20,14 +20,7 @@ import numpy as np
 from src.modules.config.core_schemas import EdgeTTSParams
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-from ...common import (
-    build_stats_dict,
-    normalize_tts_text,
-    compute_duration_ms,
-    emit_utterance_failed,
-    emit_utterance_finished,
-    emit_utterance_started,
-)
+from ...common import build_stats_dict, prepare_speech_text, synthesize_play_and_notify
 
 if TYPE_CHECKING:
     pass
@@ -128,69 +121,16 @@ class EdgeTTSProvider:
         """
         if not self._has_started:
             await self.setup()
-        if not text:
-            self.logger.debug("TTS 文本为空，跳过渲染")
-            return
-        # 合成前的符号清洗只作用于合成文本；utterance 事件的 speech_text
-        # 是字幕等消费方的展示面，必须携带规范化前原文
-        final_text = normalize_tts_text(text)
-        if not final_text.strip():
-            self.logger.debug("文本规范化后为空，跳过渲染")
+        final_text = prepare_speech_text(self.logger, text)
+        if final_text is None:
             return
         async with self.tts_lock:
-            await self._synthesize(final_text, utterance_id=utterance_id, speech_text=text)
-
-    async def _synthesize(self, text: str, utterance_id: Optional[str] = None, *, speech_text: str) -> None:
-        """执行 TTS 合成 + 播放
-
-        Args:
-            text: 送合成的规范化文本。
-            utterance_id: 一次发声实例的唯一 ID；非 None 时发布生命周期事件。
-            speech_text: 事件展示文本（规范化前原文，字幕按此展示）。
-        """
-        self.logger.debug(f"开始 TTS 渲染: '{text[:30]}...'")
-        try:
-            audio_array, samplerate = await self._edge_tts_synthesize(text)
-            duration_ms = compute_duration_ms(len(audio_array), samplerate)
-            self.logger.debug(f"音频时长: {duration_ms}毫秒")
-
-            await emit_utterance_started(
-                self.event_bus,
+            await synthesize_play_and_notify(
+                self,
                 utterance_id=utterance_id,
-                speech_text=speech_text,
-                engine=self.PROVIDER_NAME,
-                duration_ms=duration_ms,
+                speech_text=text,
+                synthesize=lambda: self._edge_tts_synthesize(final_text),
             )
-
-            self.logger.debug("开始播放音频...")
-            await self.audio_manager.play_audio(audio_array, samplerate=samplerate)
-
-            await emit_utterance_finished(
-                self.event_bus,
-                utterance_id=utterance_id,
-                engine=self.PROVIDER_NAME,
-                duration_ms=duration_ms,
-            )
-
-            self.render_count += 1
-        except asyncio.CancelledError:
-            # 协程取消不会停止已提交给声卡的播放（sounddevice 线程独立于
-            # 事件循环），超时取消时必须显式截断，否则与下一条语音重叠
-            if self.audio_manager:
-                self.audio_manager.stop_audio()
-            self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
-            raise
-        except Exception as e:
-            self.error_count += 1
-            await emit_utterance_failed(
-                self.event_bus,
-                utterance_id=utterance_id,
-                speech_text=speech_text,
-                engine=self.PROVIDER_NAME,
-                error_message=f"{type(e).__name__}: {e}",
-            )
-            self.logger.exception(f"TTS 渲染失败: {e}")
-            raise
 
     async def _edge_tts_synthesize(self, text: str) -> Tuple[np.ndarray, int]:
         """调用 Edge TTS 合成"""

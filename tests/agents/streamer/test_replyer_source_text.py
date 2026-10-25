@@ -134,7 +134,9 @@ async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
         return_value=Response(
             success=True,
             content="",
-            tool_calls=[ToolCall(id="c1", name="streamer_reply", arguments={"topic_summary": "游戏里有人问", "is_novel": True})],
+            tool_calls=[
+                ToolCall(id="c1", name="streamer_reply", arguments={"topic_summary": "游戏里有人问", "is_novel": True})
+            ],
         )
     )
     prompt = MagicMock()
@@ -159,7 +161,8 @@ async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
 
     assert outcome["replied"] is True
     assert seen == [["[20:01 minecraft] 玩家 Steve：在吗"]]
-    assert provider._round_game_chat == []
+    # 游戏聊天原话随调用单一次性传入：Provider 上不再有跨调用槽位
+    assert not hasattr(provider, "_round_game_chat")
 
 
 async def test_executor_splits_game_chat_view() -> None:

@@ -40,7 +40,6 @@ from src.modules.llm.bootstrap import (
     resolve_profile_name,
     validate_profile_binding,
 )
-from src.modules.llm.client import LLMResponse
 from src.modules.llm.clients import resolve_client_method
 from src.modules.llm.context_meter import ContextBreakdown, estimate_breakdown, extract_request_sections
 from src.modules.llm.errors import (
@@ -53,7 +52,13 @@ from src.modules.llm.errors import (
 )
 from src.modules.llm.interrupt import guarded_call
 from src.modules.llm.observation import calculate_cost, record_usage
-from src.modules.llm.request_history_manager import build_prompt_preview, count_image_parts
+from src.modules.llm.request_history_manager import (
+    RequestHistoryManager,
+    RequestRecord,
+    TokenUsage,
+    build_prompt_preview,
+    count_image_parts,
+)
 from src.modules.llm.payload import (
     ContextPart,
     GenerateRequest,
@@ -65,14 +70,13 @@ from src.modules.llm.payload import (
     TextPart,
     ToolCall,
     ToolSpec,
-    Usage,
 )
 from src.modules.logging import get_logger
 from src.modules.storage.repos import LLMRepo
 from src.modules.storage.repos.llm import LLMRequestInsert
 from src.modules.vision.image_store import get_image_store
 
-__all__ = ["LLMManager", "LLMResponse", "RetryConfig", "inline_payload_spans"]
+__all__ = ["LLMManager", "RetryConfig", "inline_payload_spans"]
 
 
 class RetryConfig(BaseModel):
@@ -97,10 +101,7 @@ _RETRY_POLICY: Dict[type, str] = {
 }
 
 
-# === 契约归一化与新旧响应适配（Engine 的固定职责：消费方输入 → payload → Client）===
-
-_PAYLOAD_METHODS = frozenset({"generate", "generate_vision", "generate_audio"})
-"""走中立 payload 契约的客户端能力名（Client 返回 payload.Response）。"""
+# === 契约归一化（Engine 的固定职责：消费方输入 → payload → Client）===
 
 
 def _content_to_parts(content: Any) -> List[Any]:
@@ -228,7 +229,7 @@ def _request_for_model(request: GenerateRequest, model: _ResolvedModel) -> Gener
     return request.model_copy(update={"messages": messages})
 
 
-def _echo_reasoning(response: LLMResponse, model: _ResolvedModel) -> Optional[Reasoning]:
+def _echo_reasoning(response: Response, model: _ResolvedModel) -> Optional[Reasoning]:
     """开着回传开关的模型产出思考时，打包成可回传的思考交给调用方。
 
     开关关闭时不附带，调用方的历史里就不会出现思考，上下文预算也不计它；
@@ -398,92 +399,27 @@ def _guard_inline_payload(request: GenerateRequest) -> None:
             )
 
 
-def _payload_response_to_legacy(resp: Response) -> LLMResponse:
-    """payload.Response → 遗留 LLMResponse（记账/请求历史链路仍消费遗留形状）"""
-    return LLMResponse(
-        success=resp.success,
-        content=resp.content,
-        model=resp.model,
-        usage=(
-            {
-                k: v
-                for k, v in {
-                    "prompt_tokens": resp.usage.prompt_tokens,
-                    "completion_tokens": resp.usage.completion_tokens,
-                    "total_tokens": resp.usage.total_tokens,
-                    "cache_hit_tokens": resp.usage.cache_hit_tokens,
-                    "cache_miss_tokens": resp.usage.cache_miss_tokens,
-                    "reasoning_tokens": resp.usage.reasoning_tokens,
-                }.items()
-                if v is not None
-            }
-            if resp.usage is not None
-            else None
-        ),
-        tool_calls=[
-            {
-                "id": tc.id,
-                "type": "function",
-                "function": {"name": tc.name, "arguments": tc.arguments},
-                **(
-                    {"raw_arguments": tc.raw_arguments, "arguments_error": tc.arguments_error}
-                    if tc.arguments_error is not None
-                    else {}
-                ),
-            }
-            for tc in resp.tool_calls
-        ],
-        finish_reason=resp.finish_reason,
-        reasoning_content=resp.reasoning_content,
-        reasoning_format=resp.reasoning_format,
-        reasoning_echo=resp.reasoning_echo,
-        error=resp.error,
-        request_id=resp.request_id,
-        usage_raw_json=resp.usage_raw_json,
-        audio_base64=resp.audio_base64,
-        audio_format=resp.audio_format,
-    )
+def _tool_calls_to_protocol(tool_calls: List[ToolCall]) -> List[Dict[str, Any]]:
+    """中立 ToolCall → OpenAI 嵌套 dict 形态（诊断文件 ``tool_calls`` 字段的落盘形状）。
 
-
-def _legacy_response_to_payload(result: LLMResponse) -> Response:
-    """遗留 LLMResponse → payload.Response（Engine 对外统一返回中立形状）"""
-    tool_calls = [
-        ToolCall(
-            id=tc.get("id", ""),
-            name=tc.get("function", {}).get("name", ""),
-            arguments=tc.get("function", {}).get("arguments", {}),
-            raw_arguments=tc.get("raw_arguments"),
-            arguments_error=tc.get("arguments_error"),
-        )
-        for tc in (result.tool_calls or [])
-        if isinstance(tc, dict)
+    诊断正文按 ``request_id`` 与库行关联、由 Dashboard 读侧回查渲染，该文件
+    形态是既有读侧契约（``{"id", "type", "function": {"name", "arguments"}}``，
+    arguments 为对象），与喂回多轮 ReAct 历史的形态一致，不随引擎内部契约
+    归一改变。
+    """
+    return [
+        {
+            "id": tc.id,
+            "type": "function",
+            "function": {"name": tc.name, "arguments": tc.arguments},
+            **(
+                {"raw_arguments": tc.raw_arguments, "arguments_error": tc.arguments_error}
+                if tc.arguments_error is not None
+                else {}
+            ),
+        }
+        for tc in tool_calls
     ]
-    usage = None
-    if result.usage is not None:
-        usage = Usage(
-            prompt_tokens=result.usage.get("prompt_tokens", 0),
-            completion_tokens=result.usage.get("completion_tokens", 0),
-            total_tokens=result.usage.get("total_tokens", 0),
-            cache_hit_tokens=result.usage.get("cache_hit_tokens"),
-            cache_miss_tokens=result.usage.get("cache_miss_tokens"),
-            reasoning_tokens=result.usage.get("reasoning_tokens"),
-        )
-    return Response(
-        success=result.success,
-        content=result.content,
-        tool_calls=tool_calls,
-        finish_reason=result.finish_reason,
-        usage=usage,
-        model=result.model,
-        reasoning_content=result.reasoning_content,
-        reasoning_format=result.reasoning_format,
-        reasoning_echo=result.reasoning_echo,
-        error=result.error,
-        request_id=result.request_id,
-        usage_raw_json=result.usage_raw_json,
-        audio_base64=result.audio_base64,
-        audio_format=result.audio_format,
-    )
 
 
 class LLMManager:
@@ -518,6 +454,7 @@ class LLMManager:
         llm_repo: Optional[LLMRepo] = None,
         live_session_resolver: Optional[Callable[[], Optional[int]]] = None,
         diagnostics_writer: Optional[DiagnosticsWriter] = None,
+        request_history_manager: Optional[RequestHistoryManager] = None,
     ) -> None:
         self.logger = get_logger("LLMManager")
         # provider_name -> provider 配置 + 客户端实例（共享连接）
@@ -546,6 +483,11 @@ class LLMManager:
         # 注入后每次调用（成功/失败）把请求正文出库到诊断文件（logs/llm_requests/
         # 按小时流）；None 时不写文件。fire-and-forget 旁路，失败不阻断调用链
         self._diagnostics_writer = diagnostics_writer
+        # 请求历史管理器（构造期注入；缺省自建仅内存缓存的实例）。组合根构造
+        # 一份带 llm_repo 的共享实例同时传给 DashboardServer，写读同源
+        self._request_history_manager = (
+            request_history_manager if request_history_manager is not None else (RequestHistoryManager())
+        )
         # 随机策略 RNG（lazy 创建，按 seed 决定是否固定）
         self._rng: Optional[random.Random] = None
 
@@ -667,7 +609,7 @@ class LLMManager:
             on_delta=on_delta,
             interrupt_flag=interrupt,
         )
-        return _legacy_response_to_payload(result)
+        return result
 
     async def generate_vision(
         self,
@@ -696,7 +638,7 @@ class LLMManager:
             images=images,
             interrupt_flag=interrupt,
         )
-        return _legacy_response_to_payload(result)
+        return result
 
     async def generate_audio(
         self,
@@ -732,7 +674,7 @@ class LLMManager:
             audio_format=audio_format,
             interrupt_flag=interrupt,
         )
-        return _legacy_response_to_payload(result)
+        return result
 
     # === 内部：profile 解析 ===
 
@@ -841,11 +783,11 @@ class LLMManager:
         profile_name: str,
         method: str,
         **kwargs: Any,
-    ) -> LLMResponse:
+    ) -> Response:
         """按 model_list 顺序逐个尝试；当前模型失败（超时或异常）切下一个。
 
         Returns:
-            LLMResponse：首个成功的模型响应；全部失败则返回 success=False 且
+            Response：首个成功的模型响应；全部失败则返回 success=False 且
             ``error`` 字段列出尝试过的所有模型名。
         """
         profile = self._get_profile(profile_name)
@@ -887,8 +829,14 @@ class LLMManager:
             )
 
             if response is not None:
-                response.request_id = request_id
-                response.reasoning_echo = _echo_reasoning(response, resolved_model)
+                # 派生副本回填引擎侧字段（请求历史键 + 思考回传），不改写
+                # Client 返回的响应对象——它可能被客户端复用，改写会污染后续调用
+                response = response.model_copy(
+                    update={
+                        "request_id": request_id,
+                        "reasoning_echo": _echo_reasoning(response, resolved_model),
+                    }
+                )
                 if idx > 0:
                     self.logger.warning(
                         f"[LLM 故障切换] profile={profile_name} 切到 {resolved_model.model_name}（之前尝试 {attempted_models[:-1]} 失败）"
@@ -905,7 +853,7 @@ class LLMManager:
         self.logger.error(
             f"[LLM 全部失败] profile={profile_name} 尝试模型 {attempted_models} 均失败，最后错误={last_error}"
         )
-        result = LLMResponse(
+        result = Response(
             success=False,
             content=None,
             error=f"全部模型失败 {attempted_models}: {last_error}",
@@ -933,7 +881,7 @@ class LLMManager:
         start_time: float,
         slow_threshold_ms: int,
         **kwargs: Any,
-    ) -> Tuple[Optional[LLMResponse], Optional[str]]:
+    ) -> Tuple[Optional[Response], Optional[str]]:
         """等待当前模型完成，调用方取消时回收整个请求和重试任务。"""
         call_kwargs = dict(kwargs)
         call_kwargs["model"] = model_identifier
@@ -977,7 +925,7 @@ class LLMManager:
         start_time: float,
         slow_threshold_ms: int,
         call_kwargs: Dict[str, Any],
-    ) -> Tuple[Optional[LLMResponse], Optional[str]]:
+    ) -> Tuple[Optional[Response], Optional[str]]:
         """单模型重试循环：按 ``_RETRY_POLICY`` 分类表驱动重试/切换/中止。"""
         max_retries = int(provider_cfg.get("max_retries", self._retry_config.max_retries) or 0)
         base_delay = float(provider_cfg.get("retry_delay", self._retry_config.base_delay) or 0.0)
@@ -992,10 +940,6 @@ class LLMManager:
                 # 能力解析走 clients 调度表，不在引擎层对客户端做 getattr 动态分派
                 method_func = resolve_client_method(client, method)
                 response = await method_func(**call_kwargs)
-                if method in _PAYLOAD_METHODS:
-                    # 中立 payload 契约路径：Client 返回 payload.Response，
-                    # 记账/请求历史链路仍消费遗留形状，此处统一适配
-                    response = _payload_response_to_legacy(response)
                 attempt_elapsed_ms = int((time.time() - attempt_start) * 1000)
                 if attempt_elapsed_ms >= slow_threshold_ms:
                     self.logger.warning(
@@ -1045,7 +989,7 @@ class LLMManager:
         profile_name: str,
         model_name: str,
         method: str,
-        result: LLMResponse,
+        result: Response,
         kwargs: Dict[str, Any],
         start_time: float,
     ) -> None:
@@ -1088,14 +1032,14 @@ class LLMManager:
         request_id: str,
         profile_name: str,
         model_name: str,
-        result: LLMResponse,
+        result: Response,
         kwargs: Dict[str, Any],
     ) -> Optional[ContextBreakdown]:
         """估算本次调用的上下文分段占用（监控口径，失败返回 None 不阻断调用链）。"""
         sections = extract_request_sections(kwargs)
         if sections is None:
             return None
-        api_prompt_tokens = int((result.usage or {}).get("prompt_tokens", 0) or 0)
+        api_prompt_tokens = result.usage.prompt_tokens if result.usage is not None else 0
         try:
             return estimate_breakdown(
                 request_id=request_id,
@@ -1147,7 +1091,7 @@ class LLMManager:
         profile_name: str,
         model_name: str,
         method: str,
-        result: LLMResponse,
+        result: Response,
         kwargs: Dict[str, Any],
         duration_ms: int,
         breakdown: Optional[ContextBreakdown] = None,
@@ -1163,16 +1107,16 @@ class LLMManager:
         if self._llm_repo is None:
             return
         try:
-            usage = result.usage or {}
+            usage = result.usage.model_dump() if result.usage is not None else {}
             cost = 0.0
             if usage:
                 cost_info = calculate_cost(
                     self._model_prices,
                     result.model or model_name,
-                    usage.get("prompt_tokens", 0),
-                    usage.get("completion_tokens", 0),
-                    cache_hit_tokens=int(usage.get("cache_hit_tokens", 0) or 0),
-                    cache_miss_tokens=int(usage.get("cache_miss_tokens", 0) or 0),
+                    usage["prompt_tokens"],
+                    usage["completion_tokens"],
+                    cache_hit_tokens=int(usage.get("cache_hit_tokens") or 0),
+                    cache_miss_tokens=int(usage.get("cache_miss_tokens") or 0),
                 )
                 cost = float(cost_info.get("cost", 0.0))
             provider_name = "unknown"
@@ -1183,18 +1127,19 @@ class LLMManager:
             # IGNORE 对同一 request_id 幂等。正文大字段出库到诊断文件
             # （_record_request_history 统一写），库行只存统计与预览摘要
             request_params_snapshot = self._build_request_params(kwargs)
+            model_usage = result.usage
             request_row = LLMRequestInsert(
                 request_id=request_id,
                 timestamp_ms=int(time.time() * 1000),
                 profile_name=profile_name,
                 model_name=result.model or model_name,
                 response_content=result.content,
-                prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                completion_tokens=int(usage.get("completion_tokens", 0)),
-                total_tokens=int(usage.get("total_tokens", 0)),
-                cache_hit_tokens=int(usage.get("cache_hit_tokens", 0)),
-                cache_miss_tokens=int(usage.get("cache_miss_tokens", 0)),
-                reasoning_tokens=int(usage.get("reasoning_tokens") or 0),
+                prompt_tokens=model_usage.prompt_tokens if model_usage else 0,
+                completion_tokens=model_usage.completion_tokens if model_usage else 0,
+                total_tokens=model_usage.total_tokens if model_usage else 0,
+                cache_hit_tokens=int(model_usage.cache_hit_tokens or 0) if model_usage else 0,
+                cache_miss_tokens=int(model_usage.cache_miss_tokens or 0) if model_usage else 0,
+                reasoning_tokens=int(model_usage.reasoning_tokens or 0) if model_usage else 0,
                 cost=cost,
                 success=result.success,
                 error=result.error,
@@ -1232,7 +1177,7 @@ class LLMManager:
         self,
         request_id: str,
         profile_name: str,
-        result: LLMResponse,
+        result: Response,
         kwargs: Dict[str, Any],
         start_time: float,
         breakdown: Optional[ContextBreakdown] = None,
@@ -1248,13 +1193,6 @@ class LLMManager:
         排障的第一手材料）；fire-and-forget 旁路，任何失败只告警。
         """
         try:
-            # 必须函数体内 import：测试用 patch 拦截该路径，顶部 import 会使 patch 失效
-            from src.modules.llm.request_history_manager import (
-                RequestRecord,
-                TokenUsage,
-                get_global_request_history_manager,
-            )
-
             latency_ms = int((time.time() - start_time) * 1000)
             model_name = result.model or "unknown"
 
@@ -1270,23 +1208,22 @@ class LLMManager:
             )
 
             usage = None
-            if result.usage:
+            if result.usage is not None:
                 usage = TokenUsage(
-                    prompt_tokens=result.usage.get("prompt_tokens", 0),
-                    completion_tokens=result.usage.get("completion_tokens", 0),
-                    total_tokens=result.usage.get("total_tokens", 0),
+                    prompt_tokens=result.usage.prompt_tokens,
+                    completion_tokens=result.usage.completion_tokens,
+                    total_tokens=result.usage.total_tokens,
                 )
 
             cost = 0.0
             if usage:
-                vendor_usage = result.usage or {}
                 cost_info = calculate_cost(
                     self._model_prices,
                     model_name,
                     usage.prompt_tokens,
                     usage.completion_tokens,
-                    cache_hit_tokens=int(vendor_usage.get("cache_hit_tokens", 0) or 0),
-                    cache_miss_tokens=int(vendor_usage.get("cache_miss_tokens", 0) or 0),
+                    cache_hit_tokens=int(result.usage.cache_hit_tokens or 0),
+                    cache_miss_tokens=int(result.usage.cache_miss_tokens or 0),
                 )
                 cost = cost_info.get("cost", 0.0)
 
@@ -1303,8 +1240,7 @@ class LLMManager:
                 latency_ms=latency_ms,
             )
 
-            history_manager = get_global_request_history_manager()
-            history_manager.record_request(record)
+            self._request_history_manager.record_request(record)
         except Exception as e:  # noqa: BLE001
             self.logger.warning(f"记录请求历史失败: {e}")
 
@@ -1315,7 +1251,7 @@ class LLMManager:
         profile_name: str,
         model_name: str,
         request_params: Dict[str, Any],
-        result: LLMResponse,
+        result: Response,
         breakdown: Optional[ContextBreakdown] = None,
     ) -> None:
         """请求正文出库：单请求一条诊断记录进 ``logs/llm_requests/`` 小时流。
@@ -1336,7 +1272,7 @@ class LLMManager:
             "request_params": request_params,
             "response_content": result.content,
             "reasoning_content": result.reasoning_content,
-            "tool_calls": result.tool_calls or [],
+            "tool_calls": _tool_calls_to_protocol(result.tool_calls),
             "usage_raw_json": result.usage_raw_json,
             "breakdown": breakdown.model_dump() if breakdown is not None else None,
         }

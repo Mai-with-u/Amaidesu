@@ -33,7 +33,8 @@ _LIFECYCLE_EVENTS = {
 _SPEECH_EVENT = "streamer.speech"
 _DECISION_EVENT = "planner.decision"
 _ENTER_EVENT = "room.message.enter"
-_CHAT_EVENT = "game.chat.received"
+# 观众弹幕走 room.message.danmaku；game.chat.received 是游戏内聊天（含系统消息），不是弹幕
+_CHAT_EVENT = "room.message.danmaku"
 _LLM_EVENT = "llm.context.used"
 
 
@@ -125,30 +126,33 @@ def _print_session_stats(events: list[dict[str, Any]]) -> None:
     print()
 
 
-def _print_llm_usage(path: Optional[Path]) -> None:
+def _print_llm_usage(paths: list[Path], since: Optional[str], until: Optional[str]) -> None:
     print("== LLM 用量（按请求全文统计）==")
-    if path is None:
+    if not paths:
         print("（未提供 --llm，跳过；缓存命中率只有请求全文里有）")
         return
     stats: dict[str, dict[str, int]] = {}
-    for row in read_jsonl(path):
-        profile = str(row.get("profile_name") or "?")
-        bucket = stats.setdefault(profile, collections.defaultdict(int))
-        bucket["calls"] += 1
-        if not row.get("success", True):
-            bucket["fail"] += 1
-        try:
-            usage = json.loads(str(row.get("usage_raw_json") or "{}"))
-        except json.JSONDecodeError:
-            usage = {}
-        prompt = int(usage.get("prompt_tokens") or 0)
-        bucket["prompt"] += prompt
-        bucket["max_prompt"] = max(bucket["max_prompt"], prompt)
-        details = usage.get("prompt_tokens_details") or {}
-        bucket["cached"] += int(details.get("cached_tokens") or 0) if isinstance(details, dict) else 0
-        bucket["completion"] += int(usage.get("completion_tokens") or 0)
-        out_details = usage.get("completion_tokens_details") or {}
-        bucket["reasoning"] += int(out_details.get("reasoning_tokens") or 0) if isinstance(out_details, dict) else 0
+    for path in paths:
+        for row in read_jsonl(path):
+            if not _in_window(int(row.get("timestamp_ms") or 0), since, until):
+                continue
+            profile = str(row.get("profile_name") or "?")
+            bucket = stats.setdefault(profile, collections.defaultdict(int))
+            bucket["calls"] += 1
+            if not row.get("success", True):
+                bucket["fail"] += 1
+            try:
+                usage = json.loads(str(row.get("usage_raw_json") or "{}"))
+            except json.JSONDecodeError:
+                usage = {}
+            prompt = int(usage.get("prompt_tokens") or 0)
+            bucket["prompt"] += prompt
+            bucket["max_prompt"] = max(bucket["max_prompt"], prompt)
+            details = usage.get("prompt_tokens_details") or {}
+            bucket["cached"] += int(details.get("cached_tokens") or 0) if isinstance(details, dict) else 0
+            bucket["completion"] += int(usage.get("completion_tokens") or 0)
+            out_details = usage.get("completion_tokens_details") or {}
+            bucket["reasoning"] += int(out_details.get("reasoning_tokens") or 0) if isinstance(out_details, dict) else 0
     for profile, bucket in sorted(stats.items()):
         hit = bucket["cached"] / bucket["prompt"] * 100 if bucket["prompt"] else 0.0
         print(
@@ -162,13 +166,27 @@ def _print_llm_usage(path: Optional[Path]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="直播会话概览统计（事件分布/生命周期/场次数据/LLM 用量）")
-    parser.add_argument("--events", type=Path, required=True, help="事件日志 JSONL（可多次给以合并跨小时场次）")
-    parser.add_argument("--llm", type=Path, help="LLM 请求全文 JSONL（可选；给出来才统计缓存命中率）")
+    parser.add_argument(
+        "--events",
+        type=Path,
+        required=True,
+        action="append",
+        help="事件日志 JSONL（可多次给以合并跨小时场次）",
+    )
+    parser.add_argument(
+        "--llm",
+        type=Path,
+        action="append",
+        help="LLM 请求全文 JSONL（可选，可多次给；给出来才统计缓存命中率）",
+    )
     parser.add_argument("--since", help="窗口起点，本地 HH:MM")
     parser.add_argument("--until", help="窗口终点，本地 HH:MM")
     args = parser.parse_args()
 
-    event_rows = read_jsonl(args.events)
+    event_rows: list[dict[str, Any]] = []
+    for events_path in args.events:
+        event_rows.extend(read_jsonl(events_path))
+    event_rows.sort(key=lambda row: int(row.get("timestamp_ms") or 0))
     if args.since or args.until:
         event_rows = [e for e in event_rows if _in_window(int(e.get("timestamp_ms") or 0), args.since, args.until)]
     if not event_rows:
@@ -184,7 +202,7 @@ def main() -> None:
 
     _print_lifecycle(event_rows)
     _print_session_stats(event_rows)
-    _print_llm_usage(args.llm)
+    _print_llm_usage(args.llm or [], args.since, args.until)
 
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, Optional
 
 from src.modules.logging import get_logger
+from src.modules.mcp.provider import McpToolProvider
 from src.modules.skills import SKILL_TOOL_NAME, build_skill_spec
 from src.modules.tools.models import (
     ToolExecutionResult,
@@ -39,6 +40,7 @@ from src.modules.tools.models import (
 )
 from src.modules.tools.provider import BaseToolProvider
 
+from .maicraft import GOAL, MaicraftReply, goal_id_of_ledger, goal_run_of, ledger_status_of
 from .state import MinecraftAgentState
 
 logger = get_logger("MinecraftTools")
@@ -274,6 +276,39 @@ def build_wait_spec() -> ToolSpec:
 # ---------------------------------------------------------------------------
 
 
+class MaicraftMcpProvider(McpToolProvider):
+    """MaiCraft 私有 MCP Provider：补目标任务的查询适配器，激活任务跟踪循环的周期兜底。
+
+    通用 MCP 查询适配器按"server 侧有任务查询工具"的形态约定（``task_query_tool``
+    + ``task_status_map``）声明；MaiCraft v1 没有那种工具，任务快照经
+    ``goal(get)`` 读、账本编号要先还原成目标编号——形态对不上，所以在绑定处
+    用子类就地适配：``goal_lookup`` 由 Agent 注入（即宿主自己的 MaiCraft 读取通道）。
+    """
+
+    def __init__(
+        self, *, goal_lookup: Callable[[str, Dict[str, Any]], Awaitable[MaicraftReply]], **kwargs: Any
+    ) -> None:
+        super().__init__(**kwargs)
+        self._goal_lookup = goal_lookup
+
+    async def query_task(self, task_id: str) -> Optional[dict]:
+        """按账本编号查目标快照：``maicraft-goal-N`` 还原成目标编号后调 ``goal(get)``。
+
+        连接失败、目标查不到或回复读不懂一律返回 ``None``（跟踪循环按无新事实
+        处理，不据此改账）。
+        """
+        goal_id = goal_id_of_ledger(task_id)
+        if goal_id is None:
+            return None
+        reply = await self._goal_lookup(GOAL, {"operation": "get", "goal_id": goal_id})
+        if not reply.ok:
+            return None
+        run = goal_run_of(reply.data)
+        if run is None:
+            return None
+        return {"status": ledger_status_of(run), "snapshot": run.data, "summary": run.summary}
+
+
 @dataclass(slots=True)
 class MinecraftToolProvider(BaseToolProvider):
     """MinecraftAgent 局部工具 Provider
@@ -431,6 +466,7 @@ class MinecraftToolProvider(BaseToolProvider):
 
 __all__ = [
     "MinecraftToolProvider",
+    "MaicraftMcpProvider",
     "build_todo_spec",
     "build_notebook_spec",
     "build_get_work_log_spec",

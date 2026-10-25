@@ -20,10 +20,12 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.modules.tools.models import ToolCallAttachment
 from src.modules.types.emotion_vocab import Emotion
 
 
@@ -44,4 +46,32 @@ class DecisionPlan(BaseModel):
     intensity: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
-__all__ = ["DecisionPlan"]
+@dataclass(slots=True)
+class ReplyRoundAttachment(ToolCallAttachment):
+    """reply 调用的本窗交接材料（``ToolCallAttachment`` 的 streamer 域子类）。
+
+    Planner（宿主代码）在每次 reply 调用前构造、随 ``ToolInvocation.attachment``
+    传入 reply 工具；生命周期 = 单次调用，不经 LLM、模型不可伪造。
+    与本文件 ``DecisionPlan`` 的分工：DecisionPlan 是 LLM 决策产物的契约形态，
+    本类是宿主随调用单附带的材料，两者在 reply_tool ↔ Replyer 边界汇合。
+    字段沿用原槽位语义，全部带默认值 = "无本窗材料"。
+
+    Attributes:
+        thinking_callback: 本轮 replyer 阶段的思考流回调（LLM 层形态 ``on_delta``）
+        round_batch: 本轮弹幕批——表达侧据此看到观众原话，回应弹幕时不会被
+            当成"本批无弹幕"的主动发言
+        game_chat: 本窗新到的游戏聊天原话——玩家在游戏里搭话促发的一轮弹幕批
+            是空的，没有它表达侧只能看到转述
+        state_facts: 本窗状态跃迁事实块——表达侧的客观事实底稿
+        gate_exempt: 本窗是否豁免台词重合度检查（收播道别窗：道别话题与
+            收尾环节发言字面重合是常态）
+    """
+
+    thinking_callback: Optional[Any] = None
+    round_batch: List[Any] = field(default_factory=list)
+    game_chat: List[str] = field(default_factory=list)
+    state_facts: str = ""
+    gate_exempt: bool = False
+
+
+__all__ = ["DecisionPlan", "ReplyRoundAttachment"]

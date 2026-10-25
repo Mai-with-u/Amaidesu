@@ -5,6 +5,7 @@
  */
 import { computed, reactive, ref, watch, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { confirmAction } from '@/utils/confirmAction';
 import { useComponentsStore } from '@/stores';
 import { getApiErrorMessage } from '@/utils/apiError';
 import type { ComponentControlAction, ComponentSummary, WebSocketMessage } from '@/types';
@@ -43,6 +44,7 @@ export function useComponentMasterDetail<TItem extends ComponentStreamItem>(
   options: Options<TItem>,
 ) {
   const componentsStore = useComponentsStore();
+  const noun = options.noun;
 
   // 选中状态：默认首个 RUNNING，否则首个 enabled，否则首个；选中项仍存在时保持
   const selectedName = ref<string | null>(null);
@@ -154,7 +156,14 @@ export function useComponentMasterDetail<TItem extends ComponentStreamItem>(
     paused.value = !paused.value;
   }
 
-  function clearStream(): void {
+  async function clearStream(): Promise<void> {
+    if (
+      !(await confirmAction(
+        `将清空当前${noun}数据流展示（仅内存缓冲）。确定要清空吗？`,
+        `清空${noun}数据流`,
+      ))
+    )
+      return;
     streamItems.value = [];
   }
 

@@ -208,7 +208,7 @@ async def test_agent_control_provider_exposes_roster_only_for_receiving_agents(s
     mgr.register(sample_agent)  # 未覆写接收入口 → 不进任何名册
     bare = build_agent_control_provider(mgr)
     assert isinstance(bare, ToolProvider)
-    assert {s.name for s in bare.list_tools()} == {"delegate", "prompt", "task_status"}
+    assert {s.name for s in bare.list_tools()} == {"delegate", "prompt", "task_status", "task_cancel"}
     assert (
         "enum"
         not in next(s for s in bare.list_tools() if s.name == "delegate").parameters_schema["properties"]["agent"]
@@ -218,7 +218,7 @@ async def test_agent_control_provider_exposes_roster_only_for_receiving_agents(s
     await sample_agent.start()
     provider = build_agent_control_provider(mgr)
     reg = ToolRegistry()
-    assert reg.register_provider(provider) == 3
+    assert reg.register_provider(provider) == 4
 
     # 6 个控制工具已移出 LLM 工具面（控制面经 DashboardServer 直调 AgentControl）
     removed = {
@@ -226,7 +226,7 @@ async def test_agent_control_provider_exposes_roster_only_for_receiving_agents(s
         for n in ("pause_agent", "resume_agent", "shutdown_agent", "restart_agent", "list_agents", "agent_state")
     }
     names = {spec.full_name for spec in reg.list_tools(for_agent="streamer")}
-    assert {"framework_delegate", "framework_prompt", "framework_task_status"} <= names and removed.isdisjoint(names)
+    assert {"framework_delegate", "framework_prompt", "framework_task_status", "framework_task_cancel"} <= names and removed.isdisjoint(names)
     for tool in ("delegate", "prompt"):
         spec = next(s for s in provider.list_tools() if s.name == tool)
         assert spec.parameters_schema["properties"]["agent"]["enum"] == ["receiving_agent"]

@@ -5,6 +5,9 @@ utterance 生命周期事件发布上存在重复逻辑，本模块集中收纳�
 
 提供的能力：
 
+- ``prepare_speech_text``：合成前奏的文本规范化与空文本早退判定
+- ``synthesize_play_and_notify``：全量引擎的 utterance 编排主干（合成→
+  started→播放→finished，含取消截断与失败事件）
 - ``compute_duration_ms``：从 PCM 样本数 + 采样率计算播放时长（毫秒）
 - ``build_stats_dict``：统一的 Provider 状态统计 dict 构造
 - ``emit_utterance_started`` / ``emit_utterance_finished`` /
@@ -13,6 +16,8 @@ utterance 生命周期事件发布上存在重复逻辑，本模块集中收纳�
 设计约束：
 
 - 函数级复用，不引入基类（Provider 执行模型差异大，强抽基类 = 抽象泄漏）
+- 编排骨架只收拢全量引擎（合成完拿完整 PCM 再播）的同构主干；流式引擎
+  （gptsovits）的事件时序与截断语义本质不同，主干留在引擎内
 - TTS 引擎只发自己的 utterance 事件，不订阅任何事件
 - 引擎 ``event_bus`` 为可选（测试 / 直调场景可传 None）；None 时静默跳过发布
 - 事件发布走 CoreEvents 常量，不硬编码事件名字符串
@@ -20,8 +25,9 @@ utterance 生命周期事件发布上存在重复逻辑，本模块集中收纳�
 
 from __future__ import annotations
 
+import asyncio
 import re
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional, Tuple
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.utterance import (
@@ -64,6 +70,94 @@ def normalize_tts_text(text: str) -> str:
     """
     text = _TTS_KEEP_PATTERN.sub("，", text)
     return _TTS_MULTI_COMMA.sub("，", text)
+
+
+# ---------------------------------------------------------------------------
+# Utterance 编排骨架
+# ---------------------------------------------------------------------------
+
+
+def prepare_speech_text(logger: Any, text: str) -> Optional[str]:
+    """合成前奏的文本规范化与空文本早退判定。
+
+    返回送合成的规范化文本；规范化后为空白时返回 None（调用方直接返回，
+    不发任何事件、不计任何计数）。utterance 事件的 ``speech_text`` 由调用方
+    另行携带规范化前原文，不经本函数。
+    """
+    final_text = normalize_tts_text(text)
+    if not final_text.strip():
+        logger.debug("文本规范化后为空，跳过渲染")
+        return None
+    return final_text
+
+
+async def synthesize_play_and_notify(
+    provider: Any,
+    *,
+    utterance_id: Optional[str],
+    speech_text: str,
+    synthesize: Callable[[], Awaitable[Tuple[Any, int]]],
+) -> None:
+    """全量引擎的 utterance 编排主干；引擎只提供"文本→音频"一步。
+
+    事件序列固定：started（含按 PCM 精确计算的时长）→ 播放 → finished。
+    取消（编排队列看门狗超时）时已提交给声卡的播放必须显式截断，否则与下
+    一条语音重叠；失败先记日志再发 failed 事件并向上抛，由编排队列兜底。
+    utterance_id / event_bus 缺失时事件发布静默跳过（见 emit_* 系列），
+    播放照常执行。
+
+    Args:
+        provider: 引擎实例，需暴露 ``event_bus`` / ``logger`` /
+            ``audio_manager``（play_audio / stop_audio）/ ``render_count`` /
+            ``error_count`` / ``PROVIDER_NAME``。
+        utterance_id: 一次发声实例的唯一 ID。
+        speech_text: 事件展示文本（规范化前原文，字幕按此展示）。
+        synthesize: "文本→音频"钩子，返回 (PCM 数组, 采样率)；返回空数组
+            时跳过播放与事件（视为无可播内容，非失败）。
+    """
+    engine = provider.PROVIDER_NAME
+    try:
+        audio_array, samplerate = await synthesize()
+        if len(audio_array) == 0:
+            provider.logger.warning("合成返回空音频，跳过播放")
+            return
+        duration_ms = compute_duration_ms(len(audio_array), samplerate)
+
+        await emit_utterance_started(
+            provider.event_bus,
+            utterance_id=utterance_id,
+            speech_text=speech_text,
+            engine=engine,
+            duration_ms=duration_ms,
+        )
+
+        await provider.audio_manager.play_audio(audio_array, samplerate=samplerate)
+        provider.render_count += 1
+
+        await emit_utterance_finished(
+            provider.event_bus,
+            utterance_id=utterance_id,
+            engine=engine,
+            duration_ms=duration_ms,
+        )
+    except asyncio.CancelledError:
+        # 协程取消不会停止已提交给声卡的播放（声卡线程独立于事件循环），
+        # 超时取消时必须显式截断，否则与下一条语音重叠
+        if provider.audio_manager is not None:
+            provider.audio_manager.stop_audio()
+        provider.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
+        raise
+    except Exception as e:
+        provider.error_count += 1
+        provider.logger.exception(f"TTS 渲染失败: {e}")
+        await emit_utterance_failed(
+            provider.event_bus,
+            utterance_id=utterance_id,
+            speech_text=speech_text,
+            engine=engine,
+            error_message=f"{type(e).__name__}: {e}",
+        )
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +324,8 @@ async def emit_utterance_failed(
 
 
 __all__ = [
+    "prepare_speech_text",
+    "synthesize_play_and_notify",
     "compute_duration_ms",
     "build_stats_dict",
     "emit_utterance_started",

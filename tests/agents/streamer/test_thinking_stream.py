@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, cast
 from unittest.mock import AsyncMock, MagicMock
 
+from src.agents.streamer.plan import ReplyRoundAttachment
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.replyer import Replyer
 from src.agents.streamer.thinking_stream import ThinkingStreamContext
@@ -80,7 +81,7 @@ async def test_planner_passes_thinking_callback_to_llm():
     assert any(c["text_delta"] == "决策中思考" and c["phase"] == "planner" for c in sink.calls)
 
 
-# ReplyToolProvider：思考回调一次性槽位
+# ReplyToolProvider：思考回调随 attachment 传入
 
 
 def _make_provider_with_replyer_capture() -> tuple[ReplyToolProvider, Dict[str, Any]]:
@@ -99,26 +100,24 @@ def _make_provider_with_replyer_capture() -> tuple[ReplyToolProvider, Dict[str, 
     return provider, captured
 
 
-async def test_provider_sets_and_clears_thinking_callback():
+async def test_provider_passes_thinking_callback_via_attachment():
     provider, captured = _make_provider_with_replyer_capture()
     sink = _RecordingSink()
     ctx = ThinkingStreamContext(sink, round_id="round_1")
     callback = ctx.callback_for("replyer", 1)
 
-    provider.set_thinking_callback(callback)
     result = await provider.invoke(
         ToolInvocation(
             tool_name="streamer_reply",
             arguments={"topic_summary": "s", "is_novel": True},
             source="planner-react",
+            attachment=ReplyRoundAttachment(thinking_callback=callback),
         )
     )
 
     assert result.success is True
     assert captured["on_delta"] is callback
     assert any(c["text_delta"] == "表达侧思考" for c in sink.calls)
-    # 一次性槽位：invoke 后清理
-    assert provider._thinking_callback is None
 
 
 # ReplyToolProvider：观测旁路（planner.verdict）异常隔离

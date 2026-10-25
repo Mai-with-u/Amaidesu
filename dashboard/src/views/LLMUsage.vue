@@ -15,7 +15,7 @@
     </header>
 
     <!-- 统计卡片 -->
-    <section class="stats-cards stagger-in">
+    <section class="stats-cards">
       <div class="stat-card cost">
         <div class="stat-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -590,7 +590,9 @@ onMounted(() => {
   align-items: center;
   gap: var(--spacing-md);
   box-shadow: var(--shadow-sm);
-  transition: all var(--transition-normal);
+  transition:
+    box-shadow var(--transition-normal),
+    border-color var(--transition-normal);
   position: relative;
   overflow: hidden;
 }

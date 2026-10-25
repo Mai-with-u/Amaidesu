@@ -10,11 +10,9 @@ CustomTkinter 窗口、长驻线程、文本队列、自动隐藏、右键菜单
 from __future__ import annotations
 
 import contextlib
-import ctypes
 import glob
 import os
 import queue
-import sys
 import threading
 import tkinter as tk
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -23,6 +21,17 @@ from PIL import Image, ImageColor, ImageFilter, ImageFont, ImageTk
 
 from src.modules.config.core_schemas import SubtitleGuiParams
 from src.modules.logging import ModuleLogger, get_logger
+from src.modules.subtitle.backends.window_geometry import (
+    MonitorRect,
+    clamp_into_rect,
+    clamp_position,
+    clamp_top_to_monitor,
+    enumerate_monitors,
+    monitor_under_point,
+    parse_requested_size,
+    primary_monitor_rect,
+    virtual_screen_bounds,
+)
 from src.modules.utils.time_utils import now_ms
 
 try:
@@ -41,89 +50,6 @@ logger = get_logger("OutlineLabel")
 # 窗口的一部分，高度自适应要按这份内边距把窗口算得比内容高一点
 _LABEL_PADX = 10
 _LABEL_PADY = 5
-
-
-class _MonitorRect(ctypes.Structure):
-    """``MONITORINFO`` 里的显示器矩形（物理像素）。"""
-
-    _fields_ = [
-        ("left", ctypes.c_long),
-        ("top", ctypes.c_long),
-        ("right", ctypes.c_long),
-        ("bottom", ctypes.c_long),
-    ]
-
-
-class _MonitorInfo(ctypes.Structure):
-    """``GetMonitorInfoW`` 的出参结构；``rcMonitor`` 为显示器整体矩形。
-
-    取整体矩形而非 ``rcWork``：隐藏任务栏的区域仍属显示器，字幕窗停在那里
-    依然可见可抓，按工作区夹取会平白多出一条够不着的带。
-    """
-
-    _fields_ = [
-        ("cbSize", ctypes.c_ulong),
-        ("rcMonitor", _MonitorRect),
-        ("rcWork", _MonitorRect),
-        ("dwFlags", ctypes.c_ulong),
-    ]
-
-
-def _virtual_screen_bounds() -> Optional[Tuple[int, int, int, int]]:
-    """Windows 虚拟桌面范围 (left, top, right, bottom)；取不到返回 None。
-
-    口径是物理像素，与 Tk 的窗口位置参数（``geometry`` 的 ``+x+y``、事件里的
-    ``x_root``）同口径——前提是进程为 per-monitor DPI 感知，见
-    ``src.modules.utils.windows_dpi``。
-    """
-    try:
-        user32 = ctypes.windll.user32
-        left = user32.GetSystemMetrics(76)  # SM_XVIRTUALSCREEN
-        top = user32.GetSystemMetrics(77)  # SM_YVIRTUALSCREEN
-        width = user32.GetSystemMetrics(78)  # SM_CXVIRTUALSCREEN
-        height = user32.GetSystemMetrics(79)  # SM_CYVIRTUALSCREEN
-        if width > 0 and height > 0:
-            return left, top, left + width, top + height
-    except Exception as e:
-        # 非 Windows 或 ctypes 不可用时退回 Tk 报告的屏幕尺寸，不留异常路径
-        logger.debug(f"读取虚拟桌面范围失败: {e}")
-    return None
-
-
-def _enumerate_monitors() -> Optional[List[Tuple[int, int, int, int]]]:
-    """枚举显示器矩形 (left, top, right, bottom)，物理像素；失败返回 None。
-
-    逐台枚举而不是只看虚拟桌面包围盒：显示器拼不成矩形时（L 形、上下错位），
-    包围盒里存在没有任何显示器覆盖的空洞，把窗口夹取到包围盒内会把它放进
-    空洞——窗口既看不见也点不到，而无边框窗没有任务栏入口，等于丢失。
-    """
-    if sys.platform != "win32":
-        return None
-    rects: List[Tuple[int, int, int, int]] = []
-    callback_type = ctypes.WINFUNCTYPE(
-        ctypes.c_int,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.POINTER(_MonitorRect),
-        ctypes.c_double,
-    )
-
-    def _collect(hmonitor: Any, _hdc: Any, _rect: Any, _data: Any) -> int:
-        info = _MonitorInfo()
-        info.cbSize = ctypes.sizeof(_MonitorInfo)
-        if ctypes.windll.user32.GetMonitorInfoW(ctypes.c_void_p(hmonitor), ctypes.byref(info)):
-            mon = info.rcMonitor
-            if mon.right > mon.left and mon.bottom > mon.top:
-                rects.append((mon.left, mon.top, mon.right, mon.bottom))
-        return 1
-
-    try:
-        if not ctypes.windll.user32.EnumDisplayMonitors(None, None, callback_type(_collect), 0):
-            logger.debug("EnumDisplayMonitors 未枚举到显示器")
-    except Exception as e:
-        logger.debug(f"枚举显示器矩形失败: {e}")
-        return None
-    return rects or None
 
 
 class OutlineLabel:
@@ -810,23 +736,14 @@ class SubtitleGuiService:
             return float(scale)
         if self._last_requested_height_px > 1:
             try:
-                requested = self._parse_requested_size(self.root.geometry())[1]
+                requested = parse_requested_size(self.root.geometry())[1]
             except Exception:
                 requested = None
             if requested:
                 measured = self.root.winfo_height() / requested
-                if measured > 0:
-                    return measured
+            if measured > 0:
+                return measured
         return 1.0
-
-    @staticmethod
-    def _parse_requested_size(geometry_string: str) -> Tuple[int, int]:
-        """解析 geometry 串中的宽高（逻辑单位）；无尺寸段时返回 (0, 0)。"""
-        size = geometry_string.partition("+")[0]
-        width_str, _, height_str = size.partition("x")
-        width = int(width_str) if width_str.isdigit() else 0
-        height = int(height_str) if height_str.isdigit() else 0
-        return width, height
 
     def _sync_window_metrics(self) -> None:
         """以当前窗口几何重设尺寸基准与底边锚点。
@@ -1137,7 +1054,7 @@ class SubtitleGuiService:
         if injected is not None:
             return injected
         if self._screen_bounds is None:
-            self._screen_bounds = _virtual_screen_bounds() or (
+            self._screen_bounds = virtual_screen_bounds() or (
                 0,
                 0,
                 self.root.winfo_screenwidth(),
@@ -1146,33 +1063,20 @@ class SubtitleGuiService:
         return self._screen_bounds
 
     def _clamp_top_to_monitor(self, top: int, height_px: int) -> int:
-        """把顶边夹到当前显示器的上下沿内（横向不动，由拖动夹取负责）。
-
-        高度自适应只改高度与顶边，横向位置保持原样；这里也只回收纵向越界——
-        锚点贴在显示器下沿时内容变高会把顶边算到屏外，窗口高于显示器时则优先
-        保住顶边可见，否则用户再也点不到它。
-        """
+        """顶边纵向夹取：窗口所在显示器的上下沿为界（数学见 window_geometry）。"""
         rect = self._monitor_under_window()
         if rect is None:
             return top
-        _, mon_top, _, mon_bottom = rect
-        if height_px > mon_bottom - mon_top:
-            return mon_top
-        return min(max(top, mon_top), mon_bottom - height_px)
+        return clamp_top_to_monitor(top, height_px, rect)
 
-    def _monitor_under_window(self) -> Optional[Tuple[int, int, int, int]]:
+    def _monitor_under_window(self) -> Optional[MonitorRect]:
         """窗口所在（或离窗口最近）的显示器矩形；无显示器信息时返回 None。"""
         if not self.root:
             return None
         rects = self._monitor_rects()
         if not rects:
             return None
-        x, y = self.root.winfo_x(), self.root.winfo_y()
-        for rect in rects:
-            left, top, right, bottom = rect
-            if left <= x < right and top <= y < bottom:
-                return rect
-        return self._nearest_monitor(x, y)
+        return monitor_under_point(self.root.winfo_x(), self.root.winfo_y(), rects)
 
     def _anchor_bottom_px(self) -> int:
         """本次高度调整要用的底边锚点：窗口实际底边，且不越过所在显示器下沿。
@@ -1200,97 +1104,37 @@ class SubtitleGuiService:
         if injected:
             return list(injected)
         if self._monitors is None:
-            self._monitors = _enumerate_monitors()
+            self._monitors = enumerate_monitors()
         if self._monitors:
             return self._monitors
         return [self._window_bounds()]
 
-    def _primary_monitor_rect(self) -> Tuple[int, int, int, int]:
+    def _primary_monitor_rect(self) -> MonitorRect:
         """主显示器矩形（虚拟桌面原点所在的那台）；取不到时退回虚拟桌面范围。"""
-        rects = self._monitor_rects()
-        for rect in rects:
-            left, top, right, bottom = rect
-            if left <= 0 < right and top <= 0 < bottom:
-                return rect
-        return self._window_bounds()
-
-    @staticmethod
-    def _keep_visible_px(size_px: int) -> int:
-        """窗口在某个方向上至少要留在显示器内的长度。
-
-        取窗口在该方向尺寸的一半：窗口被拖到显示器边缘时仍有一半可见，标题与
-        字幕都还能看见、也点得到；窗口比显示器还大时这条下限按显示器尺寸收窄，
-        保证窗口不会因为"要求可见一半"而被完全推出屏外。
-        """
-        return max(size_px // 2, 40)
+        rect = primary_monitor_rect(self._monitor_rects())
+        return rect if rect is not None else self._window_bounds()
 
     def _clamp_position(self, x: int, y: int) -> Tuple[int, int]:
-        """把窗口位置夹到指针所在显示器内（横向不出屏、底边不出下沿）。
-
-        窗口一旦被拖到显示器外就再也抓不回来，而字幕窗是无边框透明窗、没有
-        任务栏入口；位置改动一律过这道闸。夹取按指针位置选显示器，而不是落点
-        所在的那台：拖到显示器边缘时落点可能已经越过边界（甚至落进多显示器
-        拼不成矩形时的空洞），按落点选会让窗口在相邻显示器间跳来跳去。指针与
-        落点都没落在任何显示器上时，夹到离落点最近的那台——按虚拟桌面包围盒
-        夹取可能把窗口放进空洞，那和无显示器覆盖是一回事。
-        """
+        """把窗口位置夹到指针所在显示器内（选屏策略见 window_geometry.clamp_position）。"""
         pointer_x, pointer_y = self._pointer_pos
-        # 优先指针所在的那台，其次落点所在的那台
-        for px, py in ((pointer_x, pointer_y), (x, y)):
-            for rect in self._monitor_rects():
-                mon_left, mon_top, mon_right, mon_bottom = rect
-                if mon_left <= px < mon_right and mon_top <= py < mon_bottom:
-                    return self._clamp_into(rect, x, y)
-        return self._clamp_into(self._nearest_monitor(x, y), x, y)
-
-    def _nearest_monitor(self, x: int, y: int) -> Tuple[int, int, int, int]:
-        """离给定点最近的显示器矩形：到各显示器矩形的距离取最小。
-
-        点到矩形的距离为两轴方向"超出矩形范围"的分量平方和；点在矩形内时
-        距离为 0（正常情况下走不到这里，作为兜底语义保留）。
-        """
-        best_rect: Optional[Tuple[int, int, int, int]] = None
-        best_distance = 0
-        for rect in self._monitor_rects():
-            left, top, right, bottom = rect
-            dx = max(left - x, 0, x - right)
-            dy = max(top - y, 0, y - bottom)
-            distance = dx * dx + dy * dy
-            if best_rect is None or distance < best_distance:
-                best_rect, best_distance = rect, distance
-        return best_rect if best_rect is not None else self._window_bounds()
+        return clamp_position(
+            x,
+            y,
+            pointer_x,
+            pointer_y,
+            self._monitor_rects(),
+            self._target_width_px,
+            self.root.winfo_height(),
+        )
 
     def _clamp_into(
         self,
-        rect: Tuple[int, int, int, int],
+        rect: MonitorRect,
         x: int,
         y: int,
     ) -> Tuple[int, int]:
-        """把窗口位置夹进单台显示器：横向整体可见、纵向底边不出下沿。
-
-        位置是窗口左上角，右探出的部分按**窗口实际尺寸**回收：跨显示器拖动时
-        窗口管理器会按目标屏幕的 DPI 重排窗口，尺寸与拖动开始时不同，按配置
-        尺寸夹取会留下"程序以为在屏内、实际探出屏外"的偏差。底边同样不越过
-        下沿；顶边允许探出上沿——内容变高时窗口只向上长，把整条窗口往下拽会
-        让字幕条离开用户放的位置。窗口高/宽大于显示器时（装不下）改为保住
-        顶边与至少一半可见，否则用户再也点不到它。
-        """
-        mon_left, mon_top, mon_right, mon_bottom = rect
-        mon_width = mon_right - mon_left
-        mon_height = mon_bottom - mon_top
-        win_w = max(self._target_width_px, 1)
-        win_h = max(self.root.winfo_height(), 1)
-        keep_x = self._keep_visible_px(win_w)
-        keep_y = self._keep_visible_px(win_h)
-        # 横向：放得下就整体可见；放不下则至少留 keep 像素在显示器内
-        x_min = mon_left if win_w <= mon_width else mon_right - keep_x
-        x_max = mon_right - win_w if win_w <= mon_width else mon_left - win_w + keep_x
-        # 纵向：底边锚定是"字幕条停在哪"的事实源——窗口放得下时保证底边落在显示器
-        # 内，顶边可以探出上沿（内容变高只向上长，不把整条窗口往下拽）；窗口高于
-        # 显示器时才反过来保住顶边可见，否则用户点不到它
-        y_min = mon_top if win_h <= mon_height else mon_bottom - keep_y
-        y_max = mon_bottom - win_h if win_h <= mon_height else mon_top
-        return min(max(x, x_min), x_max), min(max(y, y_min), y_max)
+        """把窗口位置夹进单台显示器；窗口实际尺寸由此处从窗口回读取供。"""
+        return clamp_into_rect(rect, x, y, self._target_width_px, self.root.winfo_height())
 
     def _start_move(self, event: tk.Event) -> None:
         """记录拖动起点：按下时的指针屏幕坐标与窗口位置。

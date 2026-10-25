@@ -14,7 +14,7 @@
 - arguments: ``{topic_summary, emotion, intensity, is_novel, reply_guidance?, target?}``
 - 发言闸门：``is_novel=false`` 立即打回；生成后的成品台词对最近发言做
   bigram 包含率检查（topic_gate 纯函数），超阈值同样打回——每个决策窗
-  最多打回 1 次后引导沉默（计数由 Planner 每窗 ``reset_speech_gate`` 清零）
+  最多打回 1 次后引导沉默（计数在检测到新决策窗 round_id 时清零）
 - 失败兜底：ToolExecutionResult(success=False, error_message=...)
 """
 
@@ -37,7 +37,7 @@ from src.modules.tools.models import ToolExecutionResult
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.types.emotion_vocab import Emotion
 
-from ..plan import DecisionPlan
+from ..plan import DecisionPlan, ReplyRoundAttachment
 from ..replyer import Replyer
 
 __all__ = [
@@ -190,54 +190,26 @@ class ReplyToolProvider(BaseToolProvider):
         # 台词级重合度检查参数：比对最近多少条已说发言、包含率超过多少打回
         self._gate_window = max(0, int(gate_window))
         self._gate_ratio = float(gate_ratio)
-        # 本决策窗内台词重合度检查已打回的次数（Planner 每窗 reset_speech_gate 清零；
+        # 本决策窗内台词重合度检查已打回的次数（检测到新决策窗 round_id 即清零；
         # 打回 1 次后仍重复即引导本轮沉默，不再给重试机会）
         self._gate_bounces: int = 0
-        # 本窗是否豁免台词重合度检查（收播道别窗：道别话题与收尾环节发言字面重合是常态）
-        self._gate_exempt: bool = False
-        # 本轮思考流回调（LLM 层形态 on_delta）；由 Planner 在 reply 调用前设置、
-        # 调用后清理（一次性槽位，ReAct 串行无并发）
-        self._thinking_callback: Optional[Any] = None
-        # 本轮弹幕批（Planner 在 reply 调用前设置、调用后清理）：表达侧据此看到观众原话，
-        # 回应弹幕时不会被当成"本批无弹幕"的主动发言
-        self._round_batch: List[Any] = []
-        # 本窗新到的游戏聊天原话（Planner 在 reply 调用前设置、调用后清理）：玩家在游戏里搭话
-        # 促发的一轮弹幕批是空的，没有它表达侧只能看到转述，会当成冷场自言自语
-        self._round_game_chat: List[str] = []
-        # 本窗状态跃迁事实块（Planner 在 reply 调用前设置、调用后清理）：表达侧的客观事实底稿
-        self._round_state_facts: str = ""
+        # 上次 reply 调用所在的决策窗（round_id 每决策窗唯一且同窗不变，由
+        # decision_executor 单调自增生成）；变化即新窗，打回计数随之清零
+        self._gate_round_id: str = ""
         # 可选 EventBus：reply 调用入口发布 planner.verdict（裁决时刻即时事实）
         self._event_bus = event_bus
         self._logger = get_logger("ReplyTool")
 
-    def set_thinking_callback(self, callback: Optional[Any]) -> None:
-        """设置/清理本轮 replyer 阶段的思考流回调（Planner 每轮一次性注入）。"""
-        self._thinking_callback = callback
+    def _advance_gate_round(self, round_id: str) -> None:
+        """检测决策窗切换：round_id 变化即新窗，清零台词重合度打回计数。
 
-    def set_round_batch(self, batch: Optional[List[Any]]) -> None:
-        """设置/清理本轮弹幕批（Planner 每轮一次性注入；None 即清空）。"""
-        self._round_batch = list(batch or [])
-
-    def set_round_game_chat(self, lines: Optional[List[str]]) -> None:
-        """设置/清理本窗新到的游戏聊天原话（Planner 每轮一次性注入；None 即清空）。"""
-        self._round_game_chat = list(lines or [])
-
-    def set_round_state_facts(self, text: Optional[str]) -> None:
-        """设置/清理本窗状态跃迁事实块（Planner 每轮一次性注入；None 即清空）。"""
-        self._round_state_facts = str(text or "")
-
-    def reset_speech_gate(self) -> None:
-        """清零本决策窗的台词重合度打回计数（Planner 每窗 plan() 入口调用）。"""
-        self._gate_bounces = 0
-
-    def set_speech_gate_exempt(self, exempt: bool) -> None:
-        """设置本窗是否豁免台词重合度检查（收播道别窗由 Planner 在 reply 调用前设置）。"""
-        self._gate_exempt = bool(exempt)
-
-    @property
-    def gate_bounces(self) -> int:
-        """本决策窗内台词重合度检查已打回的次数（观测口径，Planner 写进 outcome）。"""
-        return self._gate_bounces
+        时序与原"Planner 每窗 plan() 入口清零"等价——清零发生在新窗首次
+        reply 调用前；round_id 为空串（无窗关联的裸调用）视为同一无窗上下文，
+        不触发清零。
+        """
+        if round_id and round_id != self._gate_round_id:
+            self._gate_round_id = round_id
+            self._gate_bounces = 0
 
     async def _emit_verdict(self, args: Dict[str, Any], round_id: str) -> None:
         """发布 ``planner.verdict``（裁决时刻即时事实；观测旁路，失败不阻断）。
@@ -317,6 +289,9 @@ class ReplyToolProvider(BaseToolProvider):
 
         契约：
         - 接收 invocation.arguments：topic_summary / reply_guidance / target / emotion / intensity
+        - 本窗交接材料（思考流回调/弹幕批/游戏聊天/状态事实块/闸豁免）从
+          ``invocation.attachment`` 取（``ReplyRoundAttachment``；None 按空材料处理，
+          attachment 为其他类型属编程错误，返回失败结果暴露）
         - 把意图参数适配为 DecisionPlan(should_reply=True)（Replyer.generate 接口形态）
         - 调用 Replyer.generate
         - 返回 ToolExecutionResult（成功时 structured_content 为结果 dict，失败时 error_message 非空）
@@ -328,7 +303,25 @@ class ReplyToolProvider(BaseToolProvider):
                 error_message=f"ReplyToolProvider 不处理工具 '{invocation.tool_name}'",
             )
 
+        attachment = invocation.attachment
+        if attachment is not None and not isinstance(attachment, ReplyRoundAttachment):
+            self._logger.error(
+                f"reply_tool: attachment 类型不符（期望 ReplyRoundAttachment，"
+                f"实为 {type(attachment).__name__}），按编程错误打回"
+            )
+            return ToolExecutionResult(
+                tool_name=invocation.tool_name,
+                success=False,
+                error_message=(f"attachment 类型不符：期望 ReplyRoundAttachment，实为 {type(attachment).__name__}"),
+            )
+        # None = 本窗无宿主材料，按空材料处理
+        materials = attachment if attachment is not None else ReplyRoundAttachment()
+
         args = invocation.arguments or {}
+
+        # 决策窗切换检测：round_id 变化即新窗，清零台词重合度打回计数
+        # （时序等价于"每窗入口清零"——生效在新窗首次 reply 调用前）
+        self._advance_gate_round(invocation.round_id)
 
         # 裁决时刻即时事实：reply 被调用即 Planner 已决定回应（表达生成之前）
         await self._emit_verdict(args, round_id=invocation.round_id)
@@ -357,8 +350,8 @@ class ReplyToolProvider(BaseToolProvider):
                 error_message="你自评这是重复——要么换个新角度拿出真内容重新调用（新进展，或她对这件事的新态度、新联想），要么本轮别发言",
             )
 
-        # 本轮弹幕批由 Planner 调用前注入；主动发言或脱离 Planner 调用时为空列表
-        batch: List[Any] = list(self._round_batch)
+        # 本窗弹幕批随 attachment 传入；主动发言或脱离 Planner 调用时为空列表
+        batch: List[Any] = list(materials.round_batch)
 
         # 情绪值先收敛到枚举：名单外的近义词就近映射，不为一个情绪词打回整轮
         emotion, emotion_note = coerce_emotion(args.get("emotion", "neutral"))
@@ -394,18 +387,16 @@ class ReplyToolProvider(BaseToolProvider):
                 error_message=f"reply_tool 依赖解析失败: {type(exc).__name__}: {exc}",
             )
 
-        # 一次性槽位：取出即清（防异常路径残留跨轮回调；Planner finally 兜底再清一次）
-        thinking_callback = self._thinking_callback
-        self._thinking_callback = None
+        # 思考流回调随 attachment 一次性传入（调用即弃，无跨轮残留）
         try:
             result = await self._replyer.generate(
                 plan=plan,
                 batch=batch,
                 history=history,
                 rundown=rundown,
-                on_delta=thinking_callback,
-                game_chat=list(self._round_game_chat),
-                state_facts=self._round_state_facts,
+                on_delta=materials.thinking_callback,
+                game_chat=list(materials.game_chat),
+                state_facts=materials.state_facts,
             )
         except Exception as exc:
             self._logger.exception(f"reply_tool: Replyer.generate 抛出未捕获异常: {exc}")
@@ -423,9 +414,9 @@ class ReplyToolProvider(BaseToolProvider):
             )
 
         # 台词级重合度检查（第二道闸，生成后）：成品台词对最近发言的包含率超阈值即打回；
-        # 每个决策窗打回 1 次后仍重复，改引导本轮沉默（计数由 Planner 每窗清零）
+        # 每个决策窗打回 1 次后仍重复，改引导本轮沉默（计数在检测到新决策窗 round_id 时清零）
         speech = str(result.get("speech") or "")
-        if self._gate_exempt:
+        if materials.gate_exempt:
             self._logger.info("发言闸豁免：is_novel=true 结果=pass 重合度=未检查")
         else:
             ratio = speech_overlap_ratio(speech, await self._recent_speeches())
@@ -449,6 +440,8 @@ class ReplyToolProvider(BaseToolProvider):
                     tool_name=invocation.tool_name,
                     success=False,
                     error_message=error_message,
+                    # 打回计数随失败结果回传（Planner 观测口径；新颖自检打回不计此数）
+                    structured_content={"speech_gate_bounces": self._gate_bounces},
                 )
             self._logger.info(f"发言闸放行：is_novel=true 结果=pass 重合度={ratio:.2f}")
 

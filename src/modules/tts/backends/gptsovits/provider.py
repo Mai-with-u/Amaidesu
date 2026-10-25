@@ -22,6 +22,7 @@ from src.modules.logging import get_logger
 from ...common import (
     normalize_tts_text,
     build_stats_dict,
+    prepare_speech_text,
     emit_utterance_failed,
     emit_utterance_finished,
     emit_utterance_started,
@@ -186,21 +187,14 @@ class GPTSoVITSProvider:
         """
         if not self._has_started:
             await self.setup()
-        if not text or not text.strip():
-            self.logger.debug("TTS 文本为空，跳过渲染")
-            return
-
         original_text = text.strip()
-        self.logger.debug(f"准备 TTS: '{original_text[:50]}...'")
-
-        # 文本清洗
-        final_text = normalize_tts_text(original_text)
-        if final_text != original_text:
-            self.logger.debug(f"文本清洗: 移除了 {len(original_text) - len(final_text)} 个不支持字符")
-        if not final_text.strip():
-            self.logger.debug("清洗后文本为空，跳过渲染")
+        final_text = prepare_speech_text(self.logger, original_text)
+        if final_text is None:
             return
 
+        # 流式引擎不走 common 编排骨架：started 须在合成前发布（duration=None）、
+        # finished 时长为整段估时、截断须先等在途写线程收敛再关流——事件时序
+        # 与截断语义同全量骨架本质不同（见 common.synthesize_play_and_notify 设计约束）。
         # 流式引擎合成未完时 duration_ms 传 None；started 在首块 PCM 写声卡前发布。
         # 事件 speech_text 传规范化前原文：字幕是展示面，不随合成清洗改写
         await emit_utterance_started(

@@ -56,6 +56,9 @@
           role="option"
           :aria-selected="c.name === selectedName"
           @click="select(c.name)"
+          tabindex="0"
+          @keydown.enter.prevent="select(c.name)"
+          @keydown.space.prevent="select(c.name)"
         >
           <span class="md-status-dot" aria-hidden="true" />
           <span class="md-row-name" :title="c.name">{{ c.name }}</span>
@@ -178,10 +181,10 @@
               </el-tag>
             </div>
             <div class="md-stream-controls">
-              <el-button size="small" :type="paused ? 'primary' : 'default'" @click="togglePause">
+              <el-button :type="paused ? 'primary' : 'default'" @click="togglePause">
                 {{ paused ? '继续' : '暂停' }}
               </el-button>
-              <el-button size="small" :disabled="streamEntries.length === 0" @click="clearStream">
+              <el-button :disabled="streamEntries.length === 0" @click="clearStream">
                 清空
               </el-button>
             </div>

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.agents.streamer.plan import ReplyRoundAttachment
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider
 from src.agents.streamer.topic_gate import (
     SPEECH_DUPLICATE_RATIO,
@@ -62,8 +63,14 @@ def test_speech_gate_window_default() -> None:
 # reply 工具接线：is_novel 自检打回 → 台词重合度打回 → 每窗重试上限
 
 
-def _invocation(arguments: dict[str, Any]) -> ToolInvocation:
-    return ToolInvocation(tool_name="streamer_reply", arguments=arguments, source="planner-react")
+def _invocation(arguments: dict[str, Any], round_id: str = "", attachment: Any = None) -> ToolInvocation:
+    return ToolInvocation(
+        tool_name="streamer_reply",
+        arguments=arguments,
+        source="planner-react",
+        round_id=round_id,
+        attachment=attachment,
+    )
 
 
 def _history(*speeches: str) -> List[Any]:
@@ -121,7 +128,7 @@ async def test_duplicate_speech_bounces_with_overlap_summary() -> None:
     assert result.success is False
     assert result.error_message is not None and "重合度" in result.error_message
     assert "真内容" in result.error_message
-    assert provider.gate_bounces == 1
+    assert result.structured_content == {"speech_gate_bounces": 1}
 
 
 async def test_speech_gate_retry_limit_one_per_window() -> None:
@@ -135,17 +142,16 @@ async def test_speech_gate_retry_limit_one_per_window() -> None:
     replyer.generate = _repeat  # type: ignore[method-assign]
     arguments = {"topic_summary": "石料", "is_novel": True, "emotion": "neutral", "intensity": 0.5}
 
-    first = await provider.invoke(_invocation(dict(arguments)))
+    first = await provider.invoke(_invocation(dict(arguments), round_id="window-1"))
     assert first.success is False and "真内容" in (first.error_message or "")
 
-    second = await provider.invoke(_invocation(dict(arguments)))
+    second = await provider.invoke(_invocation(dict(arguments), round_id="window-1"))
     assert second.success is False
     assert second.error_message is not None and "保持沉默" in second.error_message
     assert "不再调用任何工具" in second.error_message
 
-    # 新决策窗：Planner 在 plan() 入口清零，重新拿到完整的重试机会
-    provider.reset_speech_gate()
-    third = await provider.invoke(_invocation(dict(arguments)))
+    # 新决策窗：round_id 变化即清零，重新拿到完整的重试机会
+    third = await provider.invoke(_invocation(dict(arguments), round_id="window-2"))
     assert third.success is False and "真内容" in (third.error_message or "")
 
 
@@ -159,8 +165,45 @@ async def test_fresh_speech_passes_and_logs_telemetry() -> None:
             _invocation({"topic_summary": "水车", "is_novel": True, "emotion": "neutral", "intensity": 0.5})
         )
     assert result.success is True
-    assert provider.gate_bounces == 0
     assert any("is_novel=true" in r and "结果=pass" in r and "重合度=" in r for r in records)
+
+
+async def test_new_round_id_resets_bounce_counter() -> None:
+    """换决策窗（round_id 变化）即清零打回计数：新窗首次重合仍按首次话术打回，
+    计数从 1 重新起算；同窗调用不重置。"""
+    provider = _provider(_history("我在游戏里挖到了石料"))
+    replyer = provider._replyer
+
+    async def _repeat(**kwargs: Any) -> dict[str, Any]:
+        return {"speech": "我在游戏里挖到了石料呀", "llm_request_id": None}
+
+    replyer.generate = _repeat  # type: ignore[method-assign]
+    arguments = {"topic_summary": "石料", "is_novel": True, "emotion": "neutral", "intensity": 0.5}
+
+    first = await provider.invoke(_invocation(dict(arguments), round_id="window-1"))
+    assert first.structured_content == {"speech_gate_bounces": 1}
+
+    # 同窗第二次重合：计数累加到 2（进重试耗尽分支）
+    second = await provider.invoke(_invocation(dict(arguments), round_id="window-1"))
+    assert second.structured_content == {"speech_gate_bounces": 2}
+
+    # 换窗：计数清零，重合台词重新按首次话术打回
+    third = await provider.invoke(_invocation(dict(arguments), round_id="window-2"))
+    assert third.structured_content == {"speech_gate_bounces": 1}
+    assert "真内容" in (third.error_message or "")
+
+
+async def test_wrong_attachment_type_fails_invoke() -> None:
+    """attachment 不是 ReplyRoundAttachment：按编程错误以失败结果暴露，不静默。"""
+    provider = _provider()
+    result = await provider.invoke(
+        _invocation(
+            {"topic_summary": "话题", "is_novel": True, "emotion": "neutral", "intensity": 0.5},
+            attachment="not-an-attachment",
+        )
+    )
+    assert result.success is False
+    assert result.error_message is not None and "attachment 类型不符" in result.error_message
 
 
 async def test_gate_exempt_window_skips_overlap_check() -> None:
@@ -172,9 +215,11 @@ async def test_gate_exempt_window_skips_overlap_check() -> None:
         return {"speech": "谢谢大家今天的陪伴，我们下次再见呀", "llm_request_id": None}
 
     replyer.generate = _farewell  # type: ignore[method-assign]
-    provider.set_speech_gate_exempt(True)
     result = await provider.invoke(
-        _invocation({"topic_summary": "道别", "is_novel": True, "emotion": "neutral", "intensity": 0.5})
+        _invocation(
+            {"topic_summary": "道别", "is_novel": True, "emotion": "neutral", "intensity": 0.5},
+            attachment=ReplyRoundAttachment(gate_exempt=True),
+        )
     )
     assert result.success is True
 
@@ -256,11 +301,12 @@ def _provider_with_fixed_speech(history: Optional[List[Any]] = None) -> ReplyToo
 
 async def test_planner_passes_duplicate_speech_to_next_window_clean() -> None:
     """台词重合打回经工具回执喂回：本窗 reply_failures 计数、打回话术进观察，
-    outcome.speech_gate_bounces 读自 Provider 槽位；下一窗计数从零开始。"""
+    outcome.speech_gate_bounces 读自失败结果的 structured_content；换窗
+    （round_id 变化）后计数从零开始。"""
     provider = _provider_with_fixed_speech(_history("我在游戏里挖到了石料"))
     planner, llm = _planner_with_real_provider(provider, [_reply_call("石料"), _silent_call()])
 
-    outcome = await planner.plan([], proactive=True)
+    outcome = await planner.plan([], proactive=True, round_id="window-1")
 
     assert (outcome["replied"], outcome["silent_reason"], outcome["speech"]) == (False, "natural", None)
     assert outcome["reply_failures"] == 1
@@ -269,9 +315,9 @@ async def test_planner_passes_duplicate_speech_to_next_window_clean() -> None:
     tool_texts = [m["content"] for m in last_messages if m.get("role") == "tool"]
     assert len(tool_texts) == 1 and "真内容" in tool_texts[0]
 
-    # 下一窗：打回计数已随 plan() 入口清零，重合台词再次拿到完整的首次打回话术
+    # 下一窗：round_id 变化使 Provider 清零，重合台词再次拿到完整的首次打回话术
     llm.generate.side_effect = [_reply_call("石料"), _silent_call()]
-    outcome = await planner.plan([], proactive=True)
+    outcome = await planner.plan([], proactive=True, round_id="window-2")
     assert outcome["speech_gate_bounces"] == 1
     last_messages = llm.generate.call_args_list[-1].args[0]
     tool_texts = [m["content"] for m in last_messages if m.get("role") == "tool"]
@@ -283,7 +329,7 @@ async def test_planner_gate_bounces_accumulate_within_window() -> None:
     provider = _provider_with_fixed_speech(_history("我在游戏里挖到了石料"))
     planner, llm = _planner_with_real_provider(provider, [_reply_call("石料"), _reply_call("石料"), _silent_call()])
 
-    outcome = await planner.plan([], proactive=True)
+    outcome = await planner.plan([], proactive=True, round_id="window-1")
 
     assert outcome["silent_reason"] == "natural"
     assert outcome["speech_gate_bounces"] == 2

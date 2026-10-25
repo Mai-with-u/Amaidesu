@@ -40,6 +40,40 @@ class AgentRegistration:
     spec_provider: str = "framework"  # 工具来源溯源标记
 
 
+@dataclass(slots=True)
+class AgentDeps:
+    """enable_agent 的依赖集合（值对象）。
+
+    字段与 Agent 构造所需的基础设施透传一一对应；全部 Optional 默认 None
+    ——None 表示未显式指定，由 AgentManager 回退到构造时注入的成员默认
+    （显式传参覆盖、未传回落默认）。签名、回退解析、rebuild 存档三处
+    共用此对象，新增依赖只改这里。
+    """
+
+    llm_manager: Optional[object] = None
+    prompt_manager: Optional[object] = None
+    event_bus: Optional[object] = None
+    tool_registry: Optional[ToolRegistry] = None
+    thinking_sink: Optional[Any] = None
+    speech_config: Optional[Dict[str, Any]] = None
+    tts_engine: Optional[Any] = None
+    subtitle_service: Optional[Any] = None
+    session_manager: Optional[Any] = None
+    rundown_repo: Optional[Any] = None
+    rundown_instance_repo: Optional[Any] = None
+    rundown_transition_repo: Optional[Any] = None
+    chat_repo: Optional[Any] = None
+    sessions_repo: Optional[Any] = None
+    topic_repo: Optional[Any] = None
+    viewer_repo: Optional[Any] = None
+    viewer_profile_repo: Optional[Any] = None
+    recap_repo: Optional[Any] = None
+    event_repo: Optional[Any] = None
+    context_assembler_config: Optional[Any] = None
+    task_tracker: Optional[Any] = None
+    task_ledger: Optional[Any] = None
+
+
 class AgentManager:
     """统一管理：注册 / 启动 / 监控 / 重启所有 Agent。
 
@@ -201,27 +235,7 @@ class AgentManager:
         name: str,
         config: Optional[dict] = None,
         *,
-        llm_manager: Optional[object] = None,
-        prompt_manager: Optional[object] = None,
-        event_bus: Optional[object] = None,
-        tool_registry: Optional[ToolRegistry] = None,
-        thinking_sink: Optional[Any] = None,
-        speech_config: Optional[Dict[str, Any]] = None,
-        tts_engine: Optional[Any] = None,
-        subtitle_service: Optional[Any] = None,
-        session_manager: Optional[Any] = None,
-        rundown_repo: Optional[Any] = None,
-        rundown_instance_repo: Optional[Any] = None,
-        rundown_transition_repo: Optional[Any] = None,
-        chat_repo: Optional[Any] = None,
-        sessions_repo: Optional[Any] = None,
-        topic_repo: Optional[Any] = None,
-        viewer_repo: Optional[Any] = None,
-        viewer_profile_repo: Optional[Any] = None,
-        recap_repo: Optional[Any] = None,
-        event_repo: Optional[Any] = None,
-        context_assembler_config: Optional[Any] = None,
-        task_tracker: Optional[Any] = None,
+        deps: Optional[AgentDeps] = None,
     ) -> bool:
         """动态启用 Agent：实例化（配置段名）→ 注册 → 启动。
 
@@ -229,44 +243,47 @@ class AgentManager:
         显式声明 name，不会触发；见下方对齐处注释），保证
         list_agents()/get_agent_by_name() 与配置 enabled 列表一致。
 
-        构造经 ``factory.instantiate_agent`` 单一构造路径；基础设施参数
-        （speech/tts/subtitle/session/thinking/task_tracker 等）按需透传，
-        Dashboard 场景无对应基建时保持 None（Agent 各自降级）。
+        构造经 ``factory.instantiate_agent`` 单一构造路径；基础设施依赖
+        集中在 ``deps``（``AgentDeps`` 值对象），Dashboard 场景无对应基建
+        时保持 None（Agent 各自降级）。
 
-        ``tool_registry`` / 各仓储未显式传入时回退到 ``__init__`` 成员；
-        Dashboard 动态启停场景一般不传这些，回退保证 Agent 不再拿到 None。
+        ``deps`` 中未指定的项（None）回退到 ``__init__`` 成员；Dashboard
+        动态启停场景一般只传少数几项，回退保证 Agent 不再拿到 None。
         """
         # 函数内 import：factory 顶层拉起 skills 等依赖链，仅在动态启停真正实例化 Agent 时加载
         from src.modules.agents.factory import instantiate_agent
 
-        effective_registry = tool_registry if tool_registry is not None else self._tool_registry
-        effective_rundown_repo = rundown_repo if rundown_repo is not None else self._rundown_repo
+        d = deps if deps is not None else AgentDeps()
+        effective_registry = d.tool_registry if d.tool_registry is not None else self._tool_registry
+        effective_rundown_repo = d.rundown_repo if d.rundown_repo is not None else self._rundown_repo
         effective_instance_repo = (
-            rundown_instance_repo if rundown_instance_repo is not None else self._rundown_instance_repo
+            d.rundown_instance_repo if d.rundown_instance_repo is not None else self._rundown_instance_repo
         )
         effective_transition_repo = (
-            rundown_transition_repo if rundown_transition_repo is not None else self._rundown_transition_repo
+            d.rundown_transition_repo if d.rundown_transition_repo is not None else self._rundown_transition_repo
         )
-        effective_chat_repo = chat_repo if chat_repo is not None else self._chat_repo
-        effective_sessions_repo = sessions_repo if sessions_repo is not None else self._sessions_repo
-        effective_topic_repo = topic_repo if topic_repo is not None else self._topic_repo
-        effective_viewer_repo = viewer_repo if viewer_repo is not None else self._viewer_repo
-        effective_profile_repo = viewer_profile_repo if viewer_profile_repo is not None else self._viewer_profile_repo
-        effective_recap_repo = recap_repo if recap_repo is not None else self._recap_repo
-        effective_event_repo = event_repo if event_repo is not None else self._event_repo
+        effective_chat_repo = d.chat_repo if d.chat_repo is not None else self._chat_repo
+        effective_sessions_repo = d.sessions_repo if d.sessions_repo is not None else self._sessions_repo
+        effective_topic_repo = d.topic_repo if d.topic_repo is not None else self._topic_repo
+        effective_viewer_repo = d.viewer_repo if d.viewer_repo is not None else self._viewer_repo
+        effective_profile_repo = (
+            d.viewer_profile_repo if d.viewer_profile_repo is not None else self._viewer_profile_repo
+        )
+        effective_recap_repo = d.recap_repo if d.recap_repo is not None else self._recap_repo
+        effective_event_repo = d.event_repo if d.event_repo is not None else self._event_repo
 
         instance = instantiate_agent(
             name,
             config or {},
-            llm_manager=llm_manager,
-            prompt_manager=prompt_manager,
-            event_bus=event_bus,
+            llm_manager=d.llm_manager,
+            prompt_manager=d.prompt_manager,
+            event_bus=d.event_bus,
             tool_registry=effective_registry,
-            thinking_sink=thinking_sink,
-            speech_config=speech_config,
-            tts_engine=tts_engine,
-            subtitle_service=subtitle_service,
-            session_manager=session_manager,
+            thinking_sink=d.thinking_sink,
+            speech_config=d.speech_config,
+            tts_engine=d.tts_engine,
+            subtitle_service=d.subtitle_service,
+            session_manager=d.session_manager,
             rundown_repo=effective_rundown_repo,
             rundown_instance_repo=effective_instance_repo,
             rundown_transition_repo=effective_transition_repo,
@@ -277,8 +294,9 @@ class AgentManager:
             viewer_profile_repo=effective_profile_repo,
             recap_repo=effective_recap_repo,
             event_repo=effective_event_repo,
-            context_assembler_config=context_assembler_config,
-            task_tracker=task_tracker,
+            context_assembler_config=d.context_assembler_config,
+            task_tracker=d.task_tracker,
+            task_ledger=d.task_ledger,
         )
         if instance is None:
             logger.warning(f"未实现的 Agent: {name}")
@@ -296,30 +314,9 @@ class AgentManager:
         if name in self._supervisor_quarantined:
             self._supervisor_quarantined.discard(name)
             self._rebuild_failures.pop(name, None)
-        # 记住构造入参（重建入口 rebuild 依赖；回退成员后的有效值不回填——
-        # 重建时 enable_agent 会再走一次同样的回退逻辑）
-        self._enable_args[name] = {
-            "config": config,
-            "llm_manager": llm_manager,
-            "prompt_manager": prompt_manager,
-            "event_bus": event_bus,
-            "tool_registry": tool_registry,
-            "thinking_sink": thinking_sink,
-            "speech_config": speech_config,
-            "tts_engine": tts_engine,
-            "subtitle_service": subtitle_service,
-            "session_manager": session_manager,
-            "rundown_repo": rundown_repo,
-            "chat_repo": chat_repo,
-            "sessions_repo": sessions_repo,
-            "topic_repo": topic_repo,
-            "viewer_repo": viewer_repo,
-            "viewer_profile_repo": viewer_profile_repo,
-            "recap_repo": recap_repo,
-            "event_repo": event_repo,
-            "context_assembler_config": context_assembler_config,
-            "task_tracker": task_tracker,
-        }
+        # 记住构造入参（重建入口 rebuild 依赖；deps 内回退成员后的有效值
+        # 不回填——重建时 enable_agent 会再走一次同样的回退逻辑）
+        self._enable_args[name] = {"config": config, "deps": deps}
         return await self.start_agent(name)
 
     async def disable_agent(self, name: str) -> bool:
@@ -361,7 +358,7 @@ class AgentManager:
             logger.warning(f"Agent '{name}' 重建前清理失败，放弃重建")
             return False
         logger.info(f"Agent '{name}' 开始重建（stop → 重新构造 → start）")
-        if not await self.enable_agent(name, **args):
+        if not await self.enable_agent(name, args["config"], deps=args["deps"]):
             return False
         new_agent = self.get_agent_by_name(name)
         if new_agent is not None:
@@ -555,4 +552,4 @@ class AgentManager:
         return sorted(missing)
 
 
-__all__ = ["AgentManager", "AgentRegistration"]
+__all__ = ["AgentDeps", "AgentManager", "AgentRegistration"]

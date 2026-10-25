@@ -522,7 +522,9 @@ const { status } = useRawWebSocket('/ws/widget/game2048', {
   font-weight: bold;
   color: rgba(255, 255, 255, 0.92);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
-  transition: all 0.1s ease-out;
+  transition:
+    background-color 0.1s ease-out,
+    border-color 0.1s ease-out;
 }
 
 .keycap.pressed {

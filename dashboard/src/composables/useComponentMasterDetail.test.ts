@@ -3,6 +3,7 @@
 // 与批量控制的分支文案、事件流缓冲（映射/封顶/暂停/清空）、状态标签。
 
 import { effectScope, nextTick, ref, type EffectScope, type Ref } from 'vue';
+import { confirmAction } from '@/utils/confirmAction';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { ElMessage } from 'element-plus';
@@ -23,6 +24,9 @@ vi.mock('@/stores', () => ({
   }),
 }));
 
+vi.mock('@/utils/confirmAction', () => ({
+  confirmAction: vi.fn(async () => true),
+}));
 vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
@@ -213,7 +217,16 @@ describe('useComponentMasterDetail 事件流', () => {
     await nextTick();
     expect(f.comp.streamItems.value).toHaveLength(2);
 
-    f.comp.clearStream();
+    await f.comp.clearStream();
+    expect(f.comp.streamItems.value).toHaveLength(0);
     expect(f.comp.streamItems.value).toEqual([]);
+  });
+
+  it('清空需确认：用户取消则数据保留', async () => {
+    const f = setup([summary('a', { is_started: true })], [event('e1')]);
+    await nextTick();
+    vi.mocked(confirmAction).mockResolvedValueOnce(false);
+    await f.comp.clearStream();
+    expect(f.comp.streamItems.value).toHaveLength(1);
   });
 });

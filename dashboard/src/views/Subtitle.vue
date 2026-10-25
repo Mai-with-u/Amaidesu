@@ -107,7 +107,7 @@ body,
   align-items: flex-end;
   justify-content: center;
   box-sizing: border-box;
-  font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
 }
 
 .subtitle-area {

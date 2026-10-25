@@ -7,19 +7,21 @@ import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.glance import glance_brief, glance_scene
-from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
+from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of, reply_of
+from src.agents.minecraft.tools import MaicraftMcpProvider
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.engine import _guard_inline_payload, _normalize_generate_input
 from src.modules.llm.errors import UnsendableRequestError
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
 from src.modules.skills import SkillLibrary
+from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger, TaskTracker
 
@@ -327,6 +329,111 @@ async def test_goals_are_mirrored_into_the_shared_task_ledger() -> None:
     await agent.stop()
 
 
+async def test_execute_finishing_inline_still_lands_in_the_ledger() -> None:
+    """execute 当场返回终态的目标也要记账：先登记再写终态，终态变化广播得出来。
+
+    回归形态（场次40 goal-489/490）：当场完成的路径过去只记进最近结束清单，
+    账本从未登记，终态写入落空，主播与任务面看不到任何 task.changed。
+    """
+    server = FakeMaicraft()
+    ledger = TaskLedger()
+    ledger_bus = SimpleNamespace(emit=AsyncMock())
+    ledger._event_bus = ledger_bus
+    tracker = TaskTracker(ToolRegistry(), ledger)
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if any(message.get("role") == "tool" and "记住了" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "记好了"})])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "remember", "parameters": {"name": "家"}}})])
+
+    agent, llm, bus = await _start(server, script, tracker=tracker)
+    agent.receive_delegation(instruction="记一下家", task_id="d-1")
+    await _wait_until(lambda: len(_reports(bus)) == 1)
+    assert "maicraft-goal-1" not in ledger, "终态条目已按约定移除"
+
+    changed = [
+        call.args[1]
+        for call in ledger_bus.emit.await_args_list
+        if call.args and getattr(call.args[1], "task_id", "") == "maicraft-goal-1"
+    ]
+    assert changed and changed[0].status == "succeeded", "当场完成的终态广播 task.changed"
+    assert agent._goals.tracked_ids() == [], "当场完成的目标不进跟踪名单"
+    await agent.stop()
+
+
+def _goal_lookup_of(server: FakeMaicraft) -> Callable[[str, Dict[str, Any]], Awaitable[MaicraftReply]]:
+    """替身服务器的宿主读取通道：和真实 Agent 一样经 invoke + reply_of 走。"""
+
+    async def lookup(name: str, arguments: Dict[str, Any]) -> MaicraftReply:
+        result = await server.invoke(ToolInvocation(tool_name=name, arguments=arguments))
+        return reply_of(result)
+
+    return lookup
+
+
+async def test_goal_query_adapter_maps_goal_get_to_ledger_shapes() -> None:
+    """查询适配器：goal(get) 的运行状态映射成账本词表；不是目标编号或查不到时无新事实。"""
+    server = FakeMaicraft()
+    await server.invoke(ToolInvocation(tool_name="maicraft_execute", arguments={"goal": {"ability": "gather"}}))
+    provider = MaicraftMcpProvider(
+        client=SimpleNamespace(), server_name="maicraft", goal_lookup=_goal_lookup_of(server)
+    )
+
+    running = await provider.query_task("maicraft-goal-1")
+    assert running is not None and running["status"] == "running"
+
+    server.ask(1)
+    asked = await provider.query_task("maicraft-goal-1")
+    assert asked is not None and asked["status"] == "waiting_for_decision"
+
+    server.finish(1, status="partial", summary="只砍到 2 块")
+    finished = await provider.query_task("maicraft-goal-1")
+    assert finished is not None and finished["status"] == "failed", "部分完成按账本词表记失败"
+    assert finished["summary"] == "只砍到 2 块"
+    assert finished["snapshot"]["goal_id"] == 1
+
+    assert await provider.query_task("deleg_1_1") is None, "委派编号不是目标编号"
+    assert await provider.query_task("maicraft-goal-99") is None, "查不到的目标按无新事实处理"
+
+
+async def test_tracker_fallback_verification_uses_the_goal_query_adapter() -> None:
+    """跟踪循环的周期兜底：经适配器核实目标状态并写账，事件流通知缺了也能对上账。"""
+    server = FakeMaicraft()
+    await server.invoke(ToolInvocation(tool_name="maicraft_execute", arguments={"goal": {"ability": "gather"}}))
+    provider = MaicraftMcpProvider(
+        client=SimpleNamespace(), server_name="maicraft", goal_lookup=_goal_lookup_of(server)
+    )
+    # 未连真 server（setup 没跑）时工具缓存为空；归属映射按注册后的样子补一个 execute 的 spec。
+    provider._specs = [
+        ToolSpec(
+            name="execute",
+            description="execute",
+            parameters_schema={"type": "object"},
+            kind="sync",
+            provider="maicraft",
+        )
+    ]
+    registry = ToolRegistry()
+    registry.register_provider(provider)
+    ledger = TaskLedger()
+    tracker = TaskTracker(registry, ledger)
+    ledger.register(
+        task_id="maicraft-goal-1",
+        provider="maicraft",
+        tool="maicraft_execute",
+        initiator="minecraft",
+        executor="maicraft",
+        source="provider",
+    )
+
+    await tracker.step()
+    assert ledger.get("maicraft-goal-1").status == "running"
+
+    server.finish(1, status="done", summary="砍了 5 块原木")
+    await tracker.step()
+    assert "maicraft-goal-1" not in ledger, "周期兜底核实出终态，条目移除"
+
+
 async def test_glance_shows_body_nearby_things_and_running_goals() -> None:
     server = FakeMaicraft()
     agent, llm, bus = await _start(server, lambda messages: _resp("好"))
@@ -425,8 +532,8 @@ async def test_character_death_tells_the_running_task_and_the_streamer() -> None
         for call in bus.emit.await_args_list
         if isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
     ]
-    # 上报主播的是白话（模型那边仍收 Mod 原话，见上面的唤醒正文）
-    assert any(alert.message.startswith("死了：") for alert in alerts)
+    # 上报主播的是 Mod 原话（死亡属短事件直通；长排查文由素材调度器压缩）
+    assert any("角色死了" in alert.message and "主任务停在原地" in alert.message for alert in alerts)
     assert agent._goals.tracked_ids() == [1], "死亡不结束目标"
     await agent.stop()
 
@@ -1072,4 +1179,171 @@ async def test_a_body_that_cannot_send_anything_says_it_is_broken_instead_of_wai
     agent.receive_delegation(instruction="最后去砍一次树", task_id="d-4")
     await _wait_until(lambda: len(_reports(bus)) == 1)
     assert not agent._body_fault and agent._glance_work()["state"] != "卡住了，正等我拿主意"
+    await agent.stop()
+
+
+async def test_a_failed_goal_settles_the_batch_delegations_with_a_dry_summary() -> None:
+    """批级关联：批内目标终态直写本批委派账（干巴保底），LLM 后到的交付改不动状态。"""
+    server = FakeMaicraft()
+    ledger = TaskLedger()
+    ledger_bus = SimpleNamespace(emit=AsyncMock())
+    ledger._event_bus = ledger_bus
+    tracker = TaskTracker(ToolRegistry(), ledger)
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if "目标 1" in _texts(messages) or "结束了" in _texts(messages):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "没做成，坑壁有缺口"})])
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "等"})])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
+
+    agent, llm, bus = await _start(server, script, tracker=tracker)
+    # 委派单由框架受理时登记（framework provider 的职责），这里按生产形态预登记
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+    )
+    agent.receive_delegation(instruction="去挖坑壁后面的矿", task_id="d-1")
+    await _wait_until(lambda: "maicraft-goal-1" in ledger)
+    await _wait_until(lambda: ledger.get("d-1") is not None and ledger.get("d-1").status == "running")
+
+    server.finish(1, status="failed", summary="坑壁有缺口，够不着")
+    await _wait_until(lambda: "maicraft-goal-1" not in ledger)
+    await _wait_until(lambda: ledger.get("d-1") is None)
+
+    changed = [
+        call.args[1]
+        for call in ledger_bus.emit.await_args_list
+        if call.args and getattr(call.args[1], "task_id", "") == "d-1"
+    ]
+    assert changed and changed[0].status == "failed"
+    assert "坑壁有缺口" in changed[0].summary, "保底摘要是干巴但真实的机器摘要"
+
+    agent._finish_delegated("succeeded", summary="delivery: 没做成，坑壁有缺口")
+    assert ledger.get("d-1") is None, "终态粘滞：LLM 后到的交付不复活也不回退账面状态"
+    await agent.stop()
+
+
+async def test_a_stalled_goal_lands_in_ledgers_and_reaches_the_streamer() -> None:
+    """STALLED 消费：账本中间态（快照带停滞标记）+ 委派账打标 + 叙事转发；不唤醒模型。"""
+    server = FakeMaicraft()
+    ledger = TaskLedger()
+    tracker = TaskTracker(ToolRegistry(), ledger)
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "等"})])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
+
+    agent, llm, bus = await _start(server, script, tracker=tracker)
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+    )
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: "maicraft-goal-1" in ledger and ledger.get("d-1") is not None)
+
+    server._append("stalled", 1, "目标很久没有新事件")
+    await _wait_until(
+        lambda: any(
+            isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
+            for call in bus.emit.await_args_list
+        )
+    )
+    attention = [
+        call.args[1]
+        for call in bus.emit.await_args_list
+        if isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
+    ][-1]
+    assert "停着没动静" in attention.message
+
+    goal_record = ledger.get("maicraft-goal-1")
+    assert goal_record is not None and goal_record.status == "running", "停滞是中间态不是终态"
+    assert goal_record.snapshot.get("stalled") is True
+    assert ledger.get("d-1").snapshot.get("stalled_goals", {}).get("1") == "maicraft:gather", "批级委派账同步打标"
+    queued = "".join(str(item[-1]) for item in agent._message_queue)
+    assert "停着没动静" not in queued and "结束了" not in queued, "停滞不唤醒模型（模型侧由账本停滞告警兜底）"
+    await agent.stop()
+
+
+def _attention_events(bus: MagicMock) -> List[GamePayload]:
+    return [
+        call.args[1]
+        for call in bus.emit.await_args_list
+        if isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
+    ]
+
+
+class _SummaryLlm:
+    """summary 档替身：记下收到的档位与提示，按剧本回复或抛错。"""
+
+    def __init__(self, behavior: Callable[[List[Dict[str, Any]]], Response]) -> None:
+        self.behavior = behavior
+        self.calls: List[Dict[str, Any]] = []
+
+    async def generate(self, messages: List[Dict[str, Any]], **kwargs: Any) -> Response:
+        self.calls.append({"messages": messages, "profile": kwargs.get("profile")})
+        return self.behavior(messages)
+
+
+async def test_long_body_event_is_summarized_before_reaching_the_streamer() -> None:
+    """长文概述器：超过阈值的长文经 summary 档压缩后两栏发出，短文直通不调 LLM。"""
+    server = FakeMaicraft()
+    llm = _SummaryLlm(lambda messages: _resp("饿了：翻过箱子没有、合成缺干海带块、烧炼缺原料"))
+    agent, _llm, bus = await _start(server, lambda messages: _resp("好"))
+    agent._llm = llm
+
+    short = "吃了一个苹果"
+    await agent._on_body_event({"kind": "need_unhandled", "message": short})
+    long_text = "饿了没吃上。" + "翻过箱子没有面包，合成台缺干海带块，烧炼炉缺原料，64 格内没有可猎动物。" * 20
+    await agent._on_body_event({"kind": "need_unhandled", "message": long_text})
+    await _wait_until(lambda: len(_attention_events(bus)) == 2)
+
+    assert llm.calls and llm.calls[0]["profile"] == "summary", "概述走 summary 档"
+    assert "只压缩不评价" in llm.calls[0]["messages"][0]["content"], "提示词只压缩不评价"
+    first, summarized = _attention_events(bus)
+    assert first.message == short and first.scene == "", "短文直通，不调概述"
+    assert "干海带块" in summarized.message, "概述保信息"
+    assert summarized.scene.startswith("原文留档：") and long_text in summarized.scene, "原文留档进载荷"
+    await agent.stop()
+
+    # 白话化只改说法不去内容：各不相同的排查分句重写后仍超阈值，压缩兜底照常触发
+    # 互不重复的排查分句（去重逻辑压不短），白话化后仍超 300 字阈值
+    heterogeneous = "，".join(f"挖了第{i}层都没有找到铁矿，背包里只剩{i}块圆石" for i in range(30))
+    await agent._on_body_event({"kind": "need_unhandled", "message": heterogeneous})
+    await _wait_until(lambda: len(_attention_events(bus)) == 3)
+    assert llm.calls and llm.calls[0]["profile"] == "summary", "白话化仍超阈值的长文走保信息摘要"
+    third = _attention_events(bus)[2]
+    assert third.scene.startswith("原文留档："), "留档进 scene"
+    await agent.stop()
+
+
+async def test_summary_failure_falls_back_to_first_sentence() -> None:
+    """压缩兜底仍有效：素材调度器直接收到超阈值长文时走 summary 档，概述失败降级首句斩尾。"""
+    server = FakeMaicraft()
+
+    def boom(messages: List[Dict[str, Any]]) -> Response:
+        raise RuntimeError("summary 引擎不可用")
+
+    llm = _SummaryLlm(boom)
+    agent, _llm, bus = await _start(server, lambda messages: _resp("好"))
+    agent._llm = llm
+
+    long_text = "饿了没吃上。翻过箱子没有面包，合成台缺干海带块，烧炼炉缺原料。" + "细节" * 200
+    # 直呼调度器（白话速览异常超长时的兜底路径）
+    agent._schedule_attention_material(long_text)
+    await _wait_until(lambda: len(_attention_events(bus)) == 1)
+
+    emitted = _attention_events(bus)[0]
+    assert emitted.message.startswith("饿了没吃上。"), "降级为首句斩尾"
+    assert "细节" not in emitted.message, "斩尾不带后半长文"
+    assert long_text in emitted.scene, "原文留档仍在"
     await agent.stop()

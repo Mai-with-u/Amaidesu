@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import aiohttp
 import numpy as np
@@ -20,14 +20,7 @@ import numpy as np
 from src.modules.config.core_schemas import VoiceboxParams
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-from ...common import (
-    build_stats_dict,
-    normalize_tts_text,
-    compute_duration_ms,
-    emit_utterance_failed,
-    emit_utterance_finished,
-    emit_utterance_started,
-)
+from ...common import build_stats_dict, prepare_speech_text, synthesize_play_and_notify
 
 if TYPE_CHECKING:
     pass
@@ -141,85 +134,36 @@ class VoiceboxProvider:
         """
         if not self._has_started:
             await self.setup()
-        # 合成前的符号清洗只作用于合成文本；utterance 事件的 speech_text
-        # 是字幕等消费方的展示面，必须携带规范化前原文
-        final_text = normalize_tts_text(text)
-        if not final_text.strip():
-            self.logger.debug("文本规范化后为空，跳过渲染")
+        final_text = prepare_speech_text(self.logger, text)
+        if final_text is None:
             return
         if self.tts_lock is None:
             self.tts_lock = asyncio.Lock()
         async with self.tts_lock:
-            await self._synthesize(final_text, utterance_id=utterance_id, speech_text=text)
-
-    async def _synthesize(self, text: str, utterance_id: Optional[str] = None, *, speech_text: str) -> None:
-        """合成并播放（全量引擎：合成完拿完整 PCM，duration_ms 精确计算）
-
-        异常处理：合成（HTTP 三段）或播放（play_audio）任一阶段失败都先发
-        failed 事件再向上抛，由编排队列兜底。
-
-        Args:
-            text: 送合成的规范化文本。
-            utterance_id: 一次发声实例的唯一 ID；非 None 时发布生命周期事件。
-            speech_text: 事件展示文本（规范化前原文，字幕按此展示）。
-        """
-        try:
-            if not self._session or self._session.closed:
-                raise RuntimeError("Voicebox HTTP 会话未初始化")
-            if not self.profile_id:
-                raise RuntimeError("未配置 profile_id，请先在 Voicebox 中克隆音色并填写配置")
-
-            generation_id = await self._create_generation(text)
-            await self._wait_for_completion(generation_id)
-            audio_data = await self._download_audio(generation_id)
-
-            # 函数体内导入：单元测试 patch wav_decoder.extract_pcm_from_wav 拦截
-            # 解码，顶部导入会使 patch 失效
-            from src.modules.tts.wav_decoder import extract_pcm_from_wav
-
-            pcm_data = extract_pcm_from_wav(audio_data)
-            audio_array = np.frombuffer(pcm_data, dtype=DTYPE)
-
-            if len(audio_array) == 0:
-                self.logger.warning("Voicebox 返回空音频，跳过播放")
-                return
-
-            duration_ms = compute_duration_ms(len(audio_array), self.sample_rate)
-
-            await emit_utterance_started(
-                self.event_bus,
+            await synthesize_play_and_notify(
+                self,
                 utterance_id=utterance_id,
-                speech_text=speech_text,
-                engine=self.PROVIDER_NAME,
-                duration_ms=duration_ms,
+                speech_text=text,
+                synthesize=lambda: self._synthesize_audio(final_text),
             )
 
-            await self.audio_manager.play_audio(audio_array, samplerate=self.sample_rate)
-            self.render_count += 1
+    async def _synthesize_audio(self, text: str) -> Tuple[np.ndarray, int]:
+        """文本 → 音频（Voicebox HTTP 三段：创建任务 → 轮询状态 → 下载 WAV 并解码）"""
+        if not self._session or self._session.closed:
+            raise RuntimeError("Voicebox HTTP 会话未初始化")
+        if not self.profile_id:
+            raise RuntimeError("未配置 profile_id，请先在 Voicebox 中克隆音色并填写配置")
 
-            await emit_utterance_finished(
-                self.event_bus,
-                utterance_id=utterance_id,
-                engine=self.PROVIDER_NAME,
-                duration_ms=duration_ms,
-            )
-        except asyncio.CancelledError:
-            # 协程取消不会停止已提交给声卡的播放，超时取消时必须显式截断
-            if self.audio_manager:
-                self.audio_manager.stop_audio()
-            self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
-            raise
-        except Exception as e:
-            self.error_count += 1
-            self.logger.exception(f"Voicebox 合成/播放失败: {e}")
-            await emit_utterance_failed(
-                self.event_bus,
-                utterance_id=utterance_id,
-                speech_text=speech_text,
-                engine=self.PROVIDER_NAME,
-                error_message=f"{type(e).__name__}: {e}",
-            )
-            raise
+        generation_id = await self._create_generation(text)
+        await self._wait_for_completion(generation_id)
+        audio_data = await self._download_audio(generation_id)
+
+        # 函数体内导入：单元测试 patch wav_decoder.extract_pcm_from_wav 拦截
+        # 解码，顶部导入会使 patch 失效
+        from src.modules.tts.wav_decoder import extract_pcm_from_wav
+
+        pcm_data = extract_pcm_from_wav(audio_data)
+        return np.frombuffer(pcm_data, dtype=DTYPE), self.sample_rate
 
     async def _create_generation(self, text: str) -> str:
         """POST /generate"""

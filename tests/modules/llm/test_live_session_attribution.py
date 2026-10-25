@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from src.modules.llm.engine import LLMManager
+from src.modules.llm.payload import Response, Usage
 from src.modules.storage.connection import SQLiteConnectionManager
 from src.modules.storage.repos.llm import LLMRepo
 from src.modules.storage.schema import build_schema_sql
@@ -26,16 +25,13 @@ async def test_usage_live_session_attribution(tmp_path, resolver, expected) -> N
     conn.connection().executescript(build_schema_sql())
     kwargs = {} if resolver == "absent" else {"live_session_resolver": resolver}
     manager = LLMManager(llm_repo=LLMRepo(conn), **kwargs)
-    result = SimpleNamespace(
+    # 引擎内部契约是中立 payload.Response；usage 走 Usage 模型（provider 未上报项为 None）
+    result = Response(
         success=True,
         content="ok",
-        reasoning_content=None,
-        tool_calls=[],
         model="m1",
         request_id="rid-1",
-        error=None,
-        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-        usage_raw_json=None,
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
     )
     await manager._persist_llm_call(
         request_id="r1",

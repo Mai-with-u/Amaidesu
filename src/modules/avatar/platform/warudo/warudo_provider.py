@@ -18,7 +18,7 @@ LLM 暴露。情绪用哪些表情键由表情档案配置（``expression_profil
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import Field
 
@@ -34,7 +34,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec, tool_result_fail, tool_result_ok
-from src.modules.tools.provider import BaseToolProvider
+from src.modules.tools.provider import ConnectionToolProvider, wire_connection_tools
 from src.modules.types.emotion_vocab import Emotion
 
 from .expression_profile import BLINK_KEY, WarudoExpressionConfig
@@ -100,7 +100,7 @@ BUILTIN_MOTIONS: Dict[str, str] = {
 # =============================================================================
 
 
-class WarudoProvider(BaseToolProvider):
+class WarudoProvider(ConnectionToolProvider):
     """Warudo 虚拟形象 ToolProvider
 
     实现 ToolProvider 协议，编排各引擎子件。
@@ -222,10 +222,6 @@ class WarudoProvider(BaseToolProvider):
         self._has_started = False
         self.render_count = 0
         self.error_count = 0
-        # 连接态变化回调（注册接线方注入：True=已连接 / False=已断开）。
-        # 注册表据此 refresh_provider_tools 换血工具集——未连接降级登记 0 工具，
-        # 连接成功补注册，断连摘除；None = 未接线（工具表停在装配期快照）。
-        self.on_connection_changed: Optional[Callable[[bool], None]] = None
         # 事件订阅句柄（setup 时绑定，cleanup 时退订）
         self._speech_emotion_handler: Optional[Any] = None
         self._speaking_state_handles: Optional[Any] = None
@@ -252,14 +248,13 @@ class WarudoProvider(BaseToolProvider):
         catalog.append({"name": _THROW_FISH_ACTION, "description": "抛鱼动画（内置，带冷却）"})
         return catalog
 
-    def list_tools(self) -> list[ToolSpec]:
-        """声明本 Provider 暴露的工具列表（预设目录走 list_preset_actions 结果，不进描述）。
+    def _connected_tools(self) -> list[ToolSpec]:
+        """连接建立后暴露的工具列表（预设目录走 list_preset_actions 结果，不进描述）。
 
-        随连接态动态：未连接返回空（降级登记，Agent 工具表不含 warudo_*）；
-        连接建立后由连接态回调驱动注册表刷新补注册。
+        未连接时清单为空（基类 ``list_tools`` 降级返回空，Agent 工具表不含
+        warudo_*）；此处只负责连接后的全量声明，清单变化经连接态回调驱动
+        注册表刷新补注册。
         """
-        if not self._is_connected:
-            return []
         specs = contract_tool_specs(
             self.PROVIDER_NAME,
             set_expression="Warudo 设置主播当前情绪（17 枚举值 + 强度，持续生效直至下次设置）",
@@ -452,7 +447,7 @@ class WarudoProvider(BaseToolProvider):
                 self._is_connected = False
                 if was_connected:
                     # 连接态换血：cleanup 前先摘除工具（走到这里必是 True→False 迁移）
-                    self._fire_connection_changed(False)
+                    self.mark_disconnected()
 
         self._action_sender.set_websocket(None)
         self._has_started = False
@@ -495,20 +490,6 @@ class WarudoProvider(BaseToolProvider):
             return False
         return not self._ws_closed
 
-    def _fire_connection_changed(self, connected: bool) -> None:
-        """连接态变化通知（仅真实迁移时调用）：驱动注册表刷新工具集。
-
-        回调异常隔离记录不上抛——通知失败只影响工具表刷新时机（下轮重连
-        循环迁移时再触发），不反噬连接流程。未接线（None）时静默跳过。
-        """
-        callback = self.on_connection_changed
-        if callback is None:
-            return
-        try:
-            callback(connected)
-        except Exception as exc:  # noqa: BLE001 - 通知旁路，不反噬连接流程
-            self.logger.error(f"Warudo 连接态回调异常（已忽略）: {type(exc).__name__}: {exc}", exc=True)
-
     async def _connect(self) -> None:
         if not WEBSOCKETS_AVAILABLE:
             self.logger.error("websockets 库未安装，无法连接 Warudo")
@@ -521,7 +502,7 @@ class WarudoProvider(BaseToolProvider):
             self.websocket = await websockets.connect(uri)
             self._is_connected = True
             # 连接态换血：装配期降级登记的 0 工具在此补注册（回调由注册接线方提供）
-            self._fire_connection_changed(True)
+            self.mark_connected()
             self.logger.info(f"已连接到 Warudo: {uri}")
         except Exception as e:
             self.logger.warning(f"首次连接 Warudo 失败({e})，将由后台重连循环处理")
@@ -566,7 +547,7 @@ class WarudoProvider(BaseToolProvider):
                 self._action_sender.set_websocket(None)
                 if was_connected:
                     # 连接态换血：手动断开摘除工具（走到这里必是 True→False 迁移）
-                    self._fire_connection_changed(False)
+                    self.mark_disconnected()
         return True
 
     async def _connection_loop(self, uri: str) -> None:
@@ -579,7 +560,7 @@ class WarudoProvider(BaseToolProvider):
                     self._is_connected = True
                     self._action_sender.set_websocket(self.websocket)
                     # 连接态换血：断连期摘除的工具在此补注册（回调由注册接线方提供）
-                    self._fire_connection_changed(True)
+                    self.mark_connected()
                     self.logger.info(f"已连接到 Warudo: {uri}")
 
                     if self._first_connection:
@@ -602,7 +583,7 @@ class WarudoProvider(BaseToolProvider):
                     self._action_sender.set_websocket(None)
                     if was_connected:
                         # 连接态换血：摘除断连工具（Agent 工具表不再包含 warudo_*）
-                        self._fire_connection_changed(False)
+                        self.mark_disconnected()
                     self.logger.debug(f"WebSocket 断开，{self.reconnect_delay_seconds}秒后重连...")
                     try:
                         await asyncio.sleep(self.reconnect_delay_seconds)
@@ -664,9 +645,9 @@ def register_warudo_tools(
 ) -> WarudoProvider:
     """构造 WarudoProvider 并注册到 registry。返回 Provider 实例供调用方管理生命周期。
 
-    注册接线：装配期未连接 → 降级登记 0 工具（MCP/VTS 同款）；连接态回调驱动
-    ``registry.refresh_provider_tools``——连接成功补注册、断连摘除，工具表
-    始终与真实连接态一致。
+    注册接线：装配期未连接 → 降级登记 0 工具（中间层标准语义）；连接态
+    回调经 ``wire_connection_tools`` 接入，驱动 ``registry.refresh_provider_tools``
+    补注册 / 摘除，工具表始终与真实连接态一致。
     """
     provider = create_warudo_provider(
         config=config,
@@ -674,5 +655,5 @@ def register_warudo_tools(
         lipsync_analyzer=lipsync_analyzer,
     )
     registry.register_provider(provider)
-    provider.on_connection_changed = lambda _connected: registry.refresh_provider_tools(provider)
+    wire_connection_tools(provider, registry)
     return provider

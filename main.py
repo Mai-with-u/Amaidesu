@@ -57,7 +57,7 @@ from src.modules.events.interceptors import (
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import CoreShutdownPayload, CoreStartupPayload
 from src.modules.llm.engine import LLMManager
-from src.modules.llm.request_history_manager import get_global_request_history_manager
+from src.modules.llm.request_history_manager import RequestHistoryManager
 from src.modules.logging import configure_from_config, get_logger
 from src.modules.logging.log_streamer import LogStreamer
 from src.modules.maibot_sync import (
@@ -411,14 +411,15 @@ async def create_app_components(
     # --- LLM 服务 ---
     logger.info("初始化 LLM 服务...")
     # 场次归属解析器：落库时取当前显式场次主键（无场次 → NULL = 场间消耗）
+    # 请求历史管理器：一份带 llm_repo 的共享实例同时传给引擎（写）与 Dashboard（读）
+    request_history_manager = RequestHistoryManager(llm_repo=database.llm)
     llm_service = LLMManager(
         llm_repo=database.llm,
         live_session_resolver=lambda: session_manager.active_pk,
         diagnostics_writer=diagnostics_writer,
+        request_history_manager=request_history_manager,
     )
     await llm_service.setup(config)
-    # 请求历史落库目标注入（全局单例可能已被惰性创建，须显式 attach）
-    get_global_request_history_manager().attach_repo(database.llm)
     logger.info("已创建 LLM 服务实例")
 
     # --- 上下文组装器配置归位至 [agents.streamer.context]；下游组装路径直接读 cfg.context ---
@@ -634,6 +635,7 @@ async def create_app_components(
             event_bus,
             tool_registry,
             task_tracker,
+            task_ledger,
             tts_section=tts_section,
             tts_engine=tts_engine,
             # 有 TTS 时字幕走播放事件跟随器，编排层不再直出（互斥择流）
@@ -854,6 +856,8 @@ async def create_app_components(
             viewer_profile_repo=database.viewer_profiles,
             # 任务卡快照与运营委派的数据源（通用任务基建）
             task_tracker=task_tracker,
+            # 请求历史管理器：与引擎写入侧同源的共享实例
+            request_history_manager=request_history_manager,
             # 基础设施直测面：/api/v1/debug/subtitle|tts 端点的数据源
             subtitle_service=subtitle_service,
             tts_engine=tts_engine,
@@ -1081,6 +1085,7 @@ async def _register_agents_from_config(
     event_bus,
     tool_registry=None,
     task_tracker=None,
+    task_ledger=None,
     *,
     tts_section: Optional[Dict[str, Any]] = None,
     tts_engine: Optional[Any] = None,
@@ -1170,6 +1175,7 @@ async def _register_agents_from_config(
             # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
             context_assembler_config=None,
             task_tracker=task_tracker,
+            task_ledger=task_ledger,
         )
         if agent is None:
             logger.warning(f"Agent '{agent_name}' 实例化失败（工厂未返回实例）")
@@ -1202,6 +1208,7 @@ async def _start_dashboard(
     task_tracker=None,
     subtitle_service=None,
     tts_engine=None,
+    request_history_manager=None,
 ):
     """启动 DashboardServer（仅作为 WebUI observer，不参与决策数据流）。"""
     try:
@@ -1217,6 +1224,7 @@ async def _start_dashboard(
             agent_manager=agent_manager,
             tool_registry=(agent_manager.tool_registry if agent_manager else None),
             llm_manager=llm_service,
+            request_history_manager=request_history_manager,
             prompt_manager=get_prompt_manager(),
             log_streamer=log_streamer,
             simulator_service=simulator_service,

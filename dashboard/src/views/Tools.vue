@@ -11,7 +11,7 @@
           </span>
         </div>
         <div class="list-header-actions">
-          <el-button size="small" :loading="loading" @click="refreshAll">刷新</el-button>
+          <el-button :loading="loading" @click="refreshAll">刷新</el-button>
         </div>
       </header>
 
@@ -26,7 +26,7 @@
         show-icon
         class="list-error"
       >
-        <el-button size="small" type="primary" @click="refreshAll">重试</el-button>
+        <el-button type="primary" @click="refreshAll">重试</el-button>
       </el-alert>
       <div v-else-if="categoryNav.length === 0" class="list-empty">
         <el-empty :image-size="64" description="暂无分类数据" />
@@ -43,6 +43,9 @@
           }"
           role="option"
           :aria-selected="cat.category === activeCategory"
+          tabindex="0"
+          @keydown.enter.prevent="selectCategory(cat.category)"
+          @keydown.space.prevent="selectCategory(cat.category)"
           @click="selectCategory(cat.category)"
         >
           <span class="status-dot" aria-hidden="true" />
@@ -310,13 +313,22 @@
             ref="descRef"
             class="detail-desc"
             :class="{ 'is-expanded': descExpanded, 'is-toggleable': descClamped || descExpanded }"
+            role="button"
+            tabindex="0"
             @click="toggleDesc"
+            @keydown.enter.prevent="toggleDesc"
+            @keydown.space.prevent="toggleDesc"
           >
             {{ activeTool.description || '（无描述）' }}
           </p>
-          <span v-if="descClamped || descExpanded" class="desc-toggle" @click="toggleDesc">
+          <button
+            v-if="descClamped || descExpanded"
+            type="button"
+            class="desc-toggle"
+            @click="toggleDesc"
+          >
             {{ descExpanded ? '收起' : '展开全文' }}
-          </span>
+          </button>
         </section>
 
         <section class="detail-section params-section">
@@ -364,9 +376,7 @@
         </section>
         <!-- 执行按钮在参数滚动区之外：填多少参数都常驻可见 -->
         <div class="invoke-bar">
-          <el-button type="primary" size="small" :loading="invoking" @click="onInvoke">
-            执行调用
-          </el-button>
+          <el-button type="primary" :loading="invoking" @click="onInvoke"> 执行调用 </el-button>
           <span v-if="isInternalTool" class="invoke-hint">内部工具，调用真实生效</span>
         </div>
 
@@ -651,7 +661,7 @@ onMounted(() => {
 .count-tag {
   flex-shrink: 0;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   height: 18px;
   padding: 0 6px;
   line-height: 16px;

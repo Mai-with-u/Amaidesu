@@ -26,6 +26,7 @@ from src.modules.dashboard.widget import DanmakuWidgetService, Game2048WidgetSer
 from src.modules.dashboard.widget.models import DanmakuWidgetConfig, SubtitleWidgetConfig
 from src.modules.dashboard.widget.routes import WidgetGateway, create_widget_router
 from src.modules.llm.quota import ProviderQuotaService
+from src.modules.llm.request_history_manager import RequestHistoryManager
 from src.modules.logging import get_logger
 from src.modules.logging.log_streamer import LogStreamer
 
@@ -88,6 +89,7 @@ class DashboardServer:
         subtitle_service: Optional[Any] = None,
         tts_engine: Optional[Any] = None,
         diagnostics_writer: Optional["DiagnosticsWriter"] = None,
+        request_history_manager: Optional[RequestHistoryManager] = None,
     ) -> None:
         self.event_bus = event_bus
         self.collector_manager = collector_manager
@@ -128,6 +130,11 @@ class DashboardServer:
         self.chat_repo = chat_repo
         # 注入 LLMRepo 让 `/api/v1/llm/usage*` 从 SQLite 聚合用量；未注入时相关端点返回空数据
         self.llm_repo = llm_repo
+        # 请求历史管理器（与 LLMManager 写入侧同源，组合根传同一实例）；
+        # 未注入（极简启动/测试）时自建仅内存缓存的实例，历史查询返回空数据
+        self.request_history_manager: RequestHistoryManager = (
+            request_history_manager if request_history_manager is not None else RequestHistoryManager()
+        )
         # 注入 RundownRepo 让 `/api/v1/rundowns*` 承载流程单库 CRUD；
         # 未注入（极简启动/测试）时相关端点降级 success=false
         self.rundown_repo = rundown_repo

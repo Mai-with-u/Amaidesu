@@ -40,10 +40,8 @@
           <h2 class="sessions-title">场次</h2>
           <span class="grow" />
           <template v-if="isFullMode">
-            <el-button size="small" type="primary" @click="openSession">开启</el-button>
-            <el-button size="small" :disabled="!activeExplicitSession" @click="closeSession"
-              >结束</el-button
-            >
+            <el-button type="primary" @click="openSession">开启</el-button>
+            <el-button :disabled="!activeExplicitSession" @click="closeSession">结束</el-button>
           </template>
         </header>
         <div class="sessions-filters">
@@ -62,6 +60,10 @@
             class="session-card"
             :class="{ 'is-selected': isSelected(item), 'is-live': item.is_active }"
             @click="selectSession(item)"
+            role="button"
+            tabindex="0"
+            @keydown.enter.prevent="selectSession(item)"
+            @keydown.space.prevent="selectSession(item)"
           >
             <div class="session-top">
               <span class="session-name" :title="sessionTitle(item)">{{ sessionTitle(item) }}</span>
@@ -132,6 +134,10 @@
           测试模式：未开启场次，消息仅在内存中流转不落库
         </div>
 
+        <div v-if="!wsConnected" class="ws-down-notice" role="status">
+          连接断开 · 自动重连中，期间消息可能缺失
+        </div>
+
         <section class="stage" aria-label="时间线">
           <header class="stage-bar" :class="{ 'is-paused': paused && sessionMode === 'live' }">
             <h2 class="stage-title">
@@ -155,6 +161,7 @@
                 观众消息与场次边界始终可见；实时与回看两模式通用 -->
             <span class="agent-filter">
               <el-check-tag
+                title="快捷键：1"
                 :checked="agentFilter === 'all'"
                 size="small"
                 @change="(checked: boolean) => handleAgentChip('all', checked)"
@@ -162,6 +169,7 @@
                 全部
               </el-check-tag>
               <el-check-tag
+                title="快捷键：2"
                 :checked="agentFilter === 'streamer'"
                 size="small"
                 @change="(checked: boolean) => handleAgentChip('streamer', checked)"
@@ -169,6 +177,7 @@
                 主播
               </el-check-tag>
               <el-check-tag
+                title="快捷键：3"
                 :checked="agentFilter === 'game'"
                 size="small"
                 @change="(checked: boolean) => handleAgentChip('game', checked)"
@@ -183,16 +192,31 @@
                 <el-radio-button value="chat">会话</el-radio-button>
               </el-radio-group>
               <span class="stage-count mono">{{ entries.length }} / {{ MAX_ENTRIES }}</span>
-              <el-button size="small" :type="paused ? 'primary' : 'default'" @click="togglePause">
+              <el-button
+                :type="paused ? 'primary' : 'default'"
+                title="快捷键：空格"
+                @click="togglePause"
+              >
                 {{ paused ? '继续' : '暂停' }}
               </el-button>
-              <el-button size="small" :disabled="entries.length === 0" @click="clearTimeline">
-                清空
+              <el-button
+                class="shortcut-help"
+                text
+                aria-label="键盘快捷键帮助"
+                title="键盘快捷键（?）"
+                @click="showShortcuts = true"
+              >
+                <el-icon><QuestionFilled /></el-icon>
               </el-button>
+              <el-button :disabled="entries.length === 0" @click="clearTimeline"> 清空 </el-button>
             </template>
             <!-- 回到实时只跟场次模式挂钩（回看态导航）；不能 v-else 接前一 template——
                  那里复合了 isFullMode，简洁档实时态会误显本按钮 -->
-            <el-button v-if="sessionMode !== 'live'" size="small" type="primary" @click="backToLive"
+            <el-button
+              v-if="sessionMode !== 'live'"
+              type="primary"
+              title="快捷键：F"
+              @click="backToLive"
               >回到实时</el-button
             >
           </header>
@@ -311,6 +335,21 @@
         </section>
       </section>
     </div>
+    <!-- 快捷键帮助：? 号或 stage-bar 的"快捷键"按钮唤起 -->
+    <el-dialog v-model="showShortcuts" title="键盘快捷键" width="420px">
+      <ul class="shortcut-list">
+        <li><kbd>Space</kbd><span>暂停 / 继续时间线</span></li>
+        <li>
+          <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd><span>来源过滤：全部 / 主播 / 游戏 Agent</span>
+        </li>
+        <li><kbd>F</kbd><span>回到实时（回看模式下）</span></li>
+        <li><kbd>?</kbd><span>打开本帮助</span></li>
+        <li>
+          <kbd>Tab</kbd> <kbd>↑</kbd> <kbd>↓</kbd
+          ><span>输入条内：切换模式 / 回溯历史（需输入框聚焦）</span>
+        </li>
+      </ul>
+    </el-dialog>
   </div>
 </template>
 
@@ -358,10 +397,10 @@
  * （useTimelineScroll）。全局共享态（events 流、WS 连接）仍在 Pinia store。
  * 本组件只做装配与跨块的少量编排（清空时间线联动未读计数）。
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
-import { Loading } from '@element-plus/icons-vue';
+import { Loading, QuestionFilled } from '@element-plus/icons-vue';
 import { useWebSocketStore, useEventsStore } from '@/stores';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
 import { useNowTick } from '@/composables/useNowTick';
@@ -541,7 +580,14 @@ function jumpToAgentRound(entry: ShowEntry): void {
 }
 
 /** 清空时间线：条目与思考行水位归时间线块，未读计数归滚动块 */
-function clearTimeline(): void {
+async function clearTimeline(): Promise<void> {
+  if (
+    !(await confirmAction(
+      '将清空当前时间线展示（回看与实时缓冲都会清掉，落盘历史不受影响）。确定要清空吗？',
+      '清空时间线',
+    ))
+  )
+    return;
   clearTimelineEntries();
   resetUnseen();
 }
@@ -549,6 +595,59 @@ function clearTimeline(): void {
 // 秒级时钟：驱动顶部环节横幅的相对时间刷新
 
 const nowTick = useNowTick();
+
+// 键盘快捷键：直播中双手常不在鼠标上，最小集覆盖暂停/过滤/回实时。
+// keep-alive 页面用激活态挂摘，避免别的页面误触控制台快捷键。
+const showShortcuts = ref(false);
+
+function onConsoleKeydown(e: KeyboardEvent): void {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const target = e.target as HTMLElement | null;
+  if (
+    target &&
+    (target.tagName === 'INPUT' ||
+      target.tagName === 'TEXTAREA' ||
+      target.tagName === 'SELECT' ||
+      target.isContentEditable)
+  ) {
+    return;
+  }
+  if (e.key === '?') {
+    e.preventDefault();
+    showShortcuts.value = !showShortcuts.value;
+    return;
+  }
+  if (sessionMode.value !== 'live') {
+    if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      backToLive();
+    }
+    return;
+  }
+  switch (e.key) {
+    case ' ':
+      e.preventDefault();
+      togglePause();
+      break;
+    case '1':
+      e.preventDefault();
+      handleAgentChip('all', true);
+      break;
+    case '2':
+      e.preventDefault();
+      handleAgentChip('streamer', true);
+      break;
+    case '3':
+      e.preventDefault();
+      handleAgentChip('game', true);
+      break;
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onConsoleKeydown));
+onActivated(() => window.addEventListener('keydown', onConsoleKeydown));
+onDeactivated(() => window.removeEventListener('keydown', onConsoleKeydown));
+onUnmounted(() => window.removeEventListener('keydown', onConsoleKeydown));
 
 // 生命周期
 
@@ -827,7 +926,7 @@ onMounted(() => {
   flex-shrink: 0;
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   background: var(--bg-card);
   color: var(--text-secondary);
@@ -843,7 +942,7 @@ onMounted(() => {
   align-items: center;
   gap: 6px;
   margin-top: 3px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 .session-time {
@@ -904,7 +1003,7 @@ onMounted(() => {
 .sessions-hint {
   margin: 0;
   padding: 8px 10px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--text-placeholder);
   border-top: 1px solid var(--border-color-light);
@@ -939,7 +1038,7 @@ onMounted(() => {
 }
 
 .slate-eyebrow {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.6px;
   color: var(--color-rundown);
@@ -1003,6 +1102,47 @@ onMounted(() => {
   background: var(--bg-hover);
   font-size: 11px;
   color: var(--text-placeholder);
+}
+
+/* 快捷键帮助入口：弱化的 ? 图标位 */
+.shortcut-help {
+  margin-left: auto;
+}
+
+/* 快捷键帮助列表 */
+.shortcut-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+.shortcut-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  font-size: 13px;
+  color: var(--text-regular);
+}
+.shortcut-list kbd {
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+/* 断线横幅：whisper 音量，但必须可读——直播中"时间线不动了"要有明确解释 */
+.ws-down-notice {
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-bg);
+  font-size: 12px;
+  color: var(--color-warning);
 }
 
 /* 时间线容器                                                    */
@@ -1107,7 +1247,7 @@ onMounted(() => {
 
 .task-strip-status {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   padding: 1px 8px;
   border-radius: 999px;
@@ -1125,7 +1265,7 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 
@@ -1187,7 +1327,7 @@ onMounted(() => {
   border-radius: 999px;
   background: var(--color-agent-bg);
   color: var(--color-agent);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
 }

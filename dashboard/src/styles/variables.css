@@ -1,6 +1,10 @@
 /**
  * 全局 CSS 变量 - 支持主题切换
  * 基于 WEBUI_STYLE_SPEC.md 规范
+ *
+ * 色板维持组件库默认值，不做品牌化定制：多轮自定义配色（角色橙、鲜亮橙、
+ * 交互蓝）经使用裁定均不如出厂体系，保留默认是审慎后的决定。深浅两主题
+ * 仅在此处定义，Element Plus 的深色对齐见文件尾。
  */
 
 /* ===== 浅色主题（默认）===== */
@@ -80,8 +84,18 @@
 
   /* 字体 */
   --font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
+    'Noto Sans CJK SC', sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace;
+
+  /* 字号阶梯：新样式从这里取值，不再新写 11px 以下的裸值 */
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
 
   /* Domain 颜色（v2 三组语义） */
   --color-collector: #3b82f6;

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Set
 import tomllib
 
 from src.modules.agents.companions import start_companions, stop_companions
+from src.modules.agents.manager import AgentDeps
 from src.modules.collectors.factory import SUPPORTED_COLLECTORS
 from src.modules.logging import get_logger
 
@@ -138,9 +139,11 @@ async def start_instance(
         ok = await manager.enable_agent(
             name,
             sub_config,
-            llm_manager=ctx.llm_manager,
-            prompt_manager=ctx.prompt_manager,
-            event_bus=ctx.event_bus,
+            deps=AgentDeps(
+                llm_manager=ctx.llm_manager,
+                prompt_manager=ctx.prompt_manager,
+                event_bus=ctx.event_bus,
+            ),
         )
         if ok:
             await _ensure_agent_companions(ctx, name, sub_config)

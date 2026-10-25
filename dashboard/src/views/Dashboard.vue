@@ -35,12 +35,11 @@
           <span class="verdict-meta-item">主动发言</span>
           <el-switch
             v-model="proactiveEnabled"
-            size="small"
             :loading="proactiveToggling"
             @change="onProactiveToggle"
           />
         </div>
-        <el-button class="verdict-eventlog" type="primary" plain size="small" @click="goEventLog">
+        <el-button class="verdict-eventlog" type="primary" plain @click="goEventLog">
           事件流
         </el-button>
       </div>
@@ -53,7 +52,7 @@
           <h2 class="card-title">直播对话流</h2>
           <span class="card-hint">最近 {{ liveEntries.length }} 条 · 实时折叠</span>
           <span class="grow" />
-          <a class="card-link" @click.prevent="router.push('/live')">深度观察 → 直播控制台</a>
+          <a class="card-link" href="/live" @click.prevent="router.push('/live')">打开直播控制台</a>
         </div>
         <div class="feed-scroll">
           <FeedTimeline :entries="liveEntries" compact empty-text="暂无直播活动" />
@@ -123,7 +122,7 @@
 
     <!-- 基座一行 -->
     <footer class="infra-row" aria-label="基座状态">
-      <a class="infra-link" @click.prevent="router.push('/collectors')">
+      <a class="infra-link" href="/collectors" @click.prevent="router.push('/collectors')">
         <span>采集</span>
         <span class="mono">{{ infra.collectors.started }} / {{ infra.collectors.total }}</span>
         <span v-if="infra.collectors.idleNames.length > 0" class="infra-idle mono">
@@ -131,7 +130,7 @@
         </span>
       </a>
       <span class="infra-sep" aria-hidden="true">·</span>
-      <a class="infra-link" @click.prevent="router.push('/tools')">
+      <a class="infra-link" href="/tools" @click.prevent="router.push('/tools')">
         <span>工具熔断</span>
         <span class="mono" :class="{ 'is-warn': infra.tools.tripped > 0 }">
           {{ infra.tools.tripped }}
@@ -141,13 +140,13 @@
       <a
         class="infra-link"
         :class="{ 'is-disabled': infra.rundown.unavailable }"
+        href="/outline"
         @click.prevent="router.push('/outline')"
       >
         <span>节目</span>
         <span class="mono">{{ infra.rundown.text }}</span>
       </a>
       <span class="grow" />
-      <span class="infra-hint mono">→</span>
     </footer>
   </div>
 </template>
@@ -884,7 +883,7 @@ onDeactivated(() => {
   color: var(--text-secondary);
 }
 .stat-cap {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
 }
 .stat-divider {
@@ -924,8 +923,7 @@ onDeactivated(() => {
 }
 .infra-link.is-disabled,
 .infra-idle,
-.infra-sep,
-.infra-hint {
+.infra-sep {
   color: var(--text-placeholder);
 }
 .infra-idle {
@@ -934,9 +932,6 @@ onDeactivated(() => {
 .infra-link .mono.is-warn {
   color: var(--color-danger);
   font-weight: 700;
-}
-.infra-hint {
-  font-size: 14px;
 }
 
 /* 响应式 */

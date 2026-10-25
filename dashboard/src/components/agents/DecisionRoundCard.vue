@@ -185,7 +185,7 @@ function toolTitle(tool: DecisionRoundToolItem): string {
 }
 
 .round-kind {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.4px;
   color: var(--color-agent);
@@ -193,7 +193,7 @@ function toolTitle(tool: DecisionRoundToolItem): string {
 }
 
 .round-id {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
   white-space: nowrap;
   overflow: hidden;
@@ -206,7 +206,7 @@ function toolTitle(tool: DecisionRoundToolItem): string {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-color-light);
   background: var(--bg-card);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -218,7 +218,7 @@ function toolTitle(tool: DecisionRoundToolItem): string {
 .round-chip {
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   background: var(--color-agent-bg);
   color: var(--color-agent);
@@ -226,7 +226,7 @@ function toolTitle(tool: DecisionRoundToolItem): string {
 }
 
 .round-time {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
   flex-shrink: 0;
 }
@@ -245,7 +245,7 @@ function toolTitle(tool: DecisionRoundToolItem): string {
 .round-fold summary::before {
   content: '▸';
   margin-right: 4px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .round-fold[open] summary::before {
   content: '▾';
@@ -335,7 +335,7 @@ function toolTitle(tool: DecisionRoundToolItem): string {
 .round-emotion {
   padding: 0 6px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--color-agent);
   background: var(--color-agent-bg);
@@ -395,7 +395,7 @@ function toolTitle(tool: DecisionRoundToolItem): string {
 }
 
 .tool-status {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--color-success);
   flex-shrink: 0;
@@ -414,7 +414,7 @@ function toolTitle(tool: DecisionRoundToolItem): string {
 }
 
 .round-duration {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-placeholder);
 }
 
@@ -436,7 +436,7 @@ function toolTitle(tool: DecisionRoundToolItem): string {
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--text-secondary);
   white-space: pre-wrap;

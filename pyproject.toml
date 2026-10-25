@@ -133,3 +133,16 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.uv]
+# 包索引显式固化：uv 重新解析锁文件时会按当时生效的索引固化下载源，不在
+# 此声明的话，开发者本机的 pip 镜像配置（如清华源）会渗入 uv.lock，产生
+# 千行 URL 噪音且各机器不一致。取官方源的理由：CI 在海外走官方快且稳；
+# uv 全局缓存让每个包只在首次联网下载一次，日常安装零下载，国内开发者仅
+# 冷缓存或新增依赖时慢一次，需要加速用 HTTPS 代理（网络层方案，不动锁文
+# 件）。uv 没有镜像重写机制，把此处改成镜像源会将镜像固化进锁文件并拖
+# 慢 CI，切换前先权衡这两头。
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true

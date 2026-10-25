@@ -63,13 +63,13 @@ async def test_preset_action_catalog_comes_from_result_not_description() -> None
     result = await provider.list_preset_actions()
     assert [a["name"] for a in result.structured_content["actions"]] == ["Wave", "Nod"]
 
-    provider._is_connected = True  # 工具表仅连接态非空
+    provider.mark_connected()  # 工具表仅连接态非空
     specs = provider.list_tools()
     assert {s.full_name for s in specs} == VTS_TOOLS and all(s.provider == "vts" for s in specs)
     expression = next(s for s in specs if s.full_name == "vts_set_expression")
     assert "Wave" not in expression.description  # 描述不承载目录，目录现取
 
-    provider._is_connected = False
+    provider.mark_disconnected()
     assert provider.list_tools() == []  # 未连接（含装配期）工具表为空：降级登记，Agent 不可见不可调
 
 
@@ -244,10 +244,8 @@ def test_register_vts_tools_registers_degraded_then_follows_connection_state() -
     card = next(p for p in registry.list_providers() if p["name"] == "vts")
     assert card["tool_count"] == 0 and registry.list_tools(provider="vts") == []  # 装配期降级登记 0 工具
 
-    provider._is_connected = True
-    provider._fire_connection_changed(True)
+    provider.mark_connected()
     assert {s.full_name for s in registry.list_tools(provider="vts")} == VTS_TOOLS  # 连上后补注册
 
-    provider._is_connected = False
-    provider._fire_connection_changed(False)
+    provider.mark_disconnected()
     assert registry.list_tools(provider="vts") == []  # 断连摘除

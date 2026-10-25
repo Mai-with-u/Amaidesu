@@ -12,7 +12,8 @@ MaiCraft v1 的事件流里大部分是目标运行的处境变化（开始、�
 - 步进完成（`step_finished`）：主播可讲的进展——画面在动、Mod 自带结论句（如"采集完成：8 个
   橡木原木进了背包"）——转成 `game.milestone`，走主播侧现成的订阅与落库；
 - 目标开始/提问/暂停/继续：游戏 Agent 的任务通道，留在上游；
-- 目标完成/失败/卡住：不经这里——交付与升级走 `game.report`（自带主播唤醒）。
+- 目标完成/失败/卡住（`stalled`）：不经这里——完成与失败走 `game.report`（自带主播唤醒），
+  卡住由游戏 Agent 记账本中间态并转发"有目标停着没动静"。
 
 提醒（快溺水、装备快坏、黑暗里反复挨打这类）是写给游戏 Agent 的维护提示，证据在 observe(self) 里，
 不是遭遇本身；转给主播只会变成一串重复的"身体事件"，把真正的挨打和死亡挤掉，所以不进叙事通道。
@@ -70,8 +71,10 @@ _SOURCE_KINDS: Dict[str, str] = {
 }
 
 #: 目标运行的处境变化与死亡恢复决策的执行结果：游戏 Agent 的任务通道，不进叙事通道
-# （步进完成除外——它转 milestone；目标完成/失败/卡住不经这里，交付与升级走 game.report）
-_GOAL_KINDS = frozenset({"started", "asked", "paused", "resumed", "finished", "death_recovery_applied"})
+# （步进完成除外——它转 milestone）。目标完成/失败不经这里，交付与升级走 game.report；
+# 卡住（stalled，Mod 侧"长时间没有新事件仍未结束"）同样归任务通道：账本中间态与
+# "有目标停着没动静"的叙事转发由游戏 Agent 处理，不走身体事件分类。
+_GOAL_KINDS = frozenset({"started", "asked", "paused", "resumed", "finished", "stalled", "death_recovery_applied"})
 
 #: 写给游戏 Agent 自己的：维护提示（证据在 observe(self) 里）与计时到点（它给自己定的回头看一眼），
 #: 都不是遭遇，不进叙事通道；计时到点后游戏 Agent 去做的事另走步进完成与交付，主播从那里讲。

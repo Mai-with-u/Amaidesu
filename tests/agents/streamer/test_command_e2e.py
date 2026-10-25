@@ -12,7 +12,7 @@ import pytest
 
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.control import build_agent_control_provider
-from src.modules.agents.manager import AgentManager
+from src.modules.agents.manager import AgentDeps, AgentManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -34,7 +34,7 @@ class _MinecraftStubAgent(BaseAgent):
     name = "minecraft"
     description = "minecraft stub"
 
-    def __init__(self) -> None:
+    def __init__(self, ledger: TaskLedger) -> None:
         self.__class__ = type(
             "_MinecraftStubAgent_instance",
             (type(self),),
@@ -42,6 +42,8 @@ class _MinecraftStubAgent(BaseAgent):
         )
         super().__init__()
         self.received: List[tuple[str, str]] = []  # (task_id, instruction)
+        self._cancelled: List[str] = []
+        self._ledger = ledger  # 与真实 minecraft 相同的账面契约：撤单负责写 cancelled 终态
 
     def list_tools(self):
         return []
@@ -49,6 +51,14 @@ class _MinecraftStubAgent(BaseAgent):
     def receive_delegation(self, *, instruction: str, task_id: str):
         self.received.append((task_id, instruction))
         return None
+
+    def cancel_task(self, task_id: str, source: str = "") -> bool:
+        """对齐 minecraft 契约：登记过的委派可撤一次，撤单写账面 cancelled 终态。"""
+        if any(t == task_id for t, _ in self._cancelled) or not any(t == task_id for t, _ in self.received):
+            return False
+        self._cancelled.append((task_id, source))
+        self._ledger.update(task_id, "cancelled", summary=f"被取消（source={source or '未知'}）")
+        return True
 
 
 class _Harness:
@@ -62,7 +72,7 @@ class _Harness:
         self.registry.register_provider(build_agent_control_provider(self.manager, self.ledger))
         self.minecraft_stub: Optional[_MinecraftStubAgent] = None
         if with_minecraft:
-            self.minecraft_stub = _MinecraftStubAgent()
+            self.minecraft_stub = _MinecraftStubAgent(self.ledger)
             self.manager.register(self.minecraft_stub)
 
     async def start_streamer(self) -> None:
@@ -74,10 +84,12 @@ class _Harness:
         assert await self.manager.enable_agent(
             "streamer",
             config,
-            llm_manager=stub_llm(),
-            prompt_manager=stub_prompt(),
-            event_bus=self.bus,
-            tool_registry=self.registry,
+            deps=AgentDeps(
+                llm_manager=stub_llm(),
+                prompt_manager=stub_prompt(),
+                event_bus=self.bus,
+                tool_registry=self.registry,
+            ),
         )
 
     async def emit_danmaku(self, text: str, user_id: str = "u1") -> None:
@@ -143,17 +155,28 @@ async def test_danmaku_command_delegates_and_registers_task(
 
 
 async def test_unwhitelisted_and_rate_limited_commands_do_not_delegate(harness: _Harness) -> None:
-    """白名单外不委派；同一用户默认 rate_max=3，第 4 条起不委派，其他用户不受影响。"""
+    """白名单外不委派；同一用户默认 rate_max=3，第 4 条起不委派，其他用户不受影响。
+
+    在途拒门（同目标只接一件）生效后，已受理的单先撤掉再发下一条，
+    让限流计数在无在途阻挡的情况下独立得到验证。
+    """
     await harness.start_streamer()
     await harness.emit_danmaku("/admin all")
     assert harness.minecraft_stub.received == [] and len(harness.ledger) == 0
 
     for _ in range(4):
         await harness.emit_danmaku("/come", user_id="u1")
-    assert len(harness.ledger) == 3
+        in_flight = harness.ledger_task_ids()
+        if not in_flight:
+            continue  # 第 4 条被限流拒收，没有在途单可撤
+        cancel = await harness.registry.invoke(
+            ToolInvocation(tool_name="framework_task_cancel", arguments={"task_id": in_flight[0]}, source="test")
+        )
+        assert cancel.success is True
     assert len({task_id for task_id, _ in harness.minecraft_stub.received}) == 3
     await harness.emit_danmaku("/sleep", user_id="u2")
-    assert len(harness.minecraft_stub.received) == len(harness.ledger) == 4
+    assert len(harness.minecraft_stub.received) == 4
+    assert len(harness.ledger) == 1  # 撤掉的 3 张终态移出账本，账上只剩在途的 sleep
 
 
 async def test_minecraft_not_enabled_rejects_without_crash(loguru_capture) -> None:
