@@ -1,8 +1,8 @@
 # ADR-047：观众身份映射（账号 ID 与开放平台 ID 同行 / 同平台按昵称关联 / 超出时限转人工确认）
 
-- 状态：草案（采纳后取代 [ADR-029](029-viewer-identity-key-and-currency-unit.md) 的"身份键"一节；货币口径与付费明细部分不变）
+- 状态：已采纳（2026-10-25；取代 [ADR-029](029-viewer-identity-key-and-currency-unit.md) 的"身份键"一节，货币口径与付费明细部分不变）
 - 日期：2026-10-25
-- 实现提交：尚未实现（草案阶段只有本文档，`git log -- docs/decisions/047-viewer-identity-mapping.md`）
+- 实现提交：分批实现中，`git log --grep=ADR-047` 可检索各批提交
 
 ## 背景（Context）
 

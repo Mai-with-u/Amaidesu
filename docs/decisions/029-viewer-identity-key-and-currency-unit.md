@@ -20,7 +20,7 @@
 
 ### 身份键
 
-> 本节拟由 [ADR-047：观众身份映射](047-viewer-identity-mapping.md)（草案）取代；草案采纳前仍按本节执行。
+> 本节已由 [ADR-047：观众身份映射](047-viewer-identity-mapping.md) 取代。
 
 - 不同平台账号视为不同的人。platform 是本项目自定的稳定键：平台名（`bilibili` / `douyin` / …）+ 调试保留字 `console`，由采集器作为**装配期常量**统一注入（先例：`LiveSessionManager` 构造参数），不是发布方逐条手填的配置项。
 - 保留字只剩 `console`：控制台输入没有 simulated 标记，身份隔离只能靠 platform。模拟器数据归 `bilibili`（platform=bilibili + simulated=1），真假过滤靠 `simulated` 贯穿列——两者正交，模拟器要的正是走真实 B 站链路做端到端验证。
@@ -71,6 +71,6 @@
 ## 关联
 
 - [ADR-042：主播记忆改为场次回顾 + 观众画像](042-streamer-memory-recap-and-roster.md)——观众画像以本决策的身份键定位观众
-- [ADR-047：观众身份映射](047-viewer-identity-mapping.md)（草案）——拟取代本决策的"身份键"一节
+- [ADR-047：观众身份映射](047-viewer-identity-mapping.md)——取代本决策的"身份键"一节
 - [LAPLACE Event Bridge 弹幕接入](../guides/laplace-bridge.md)——该源的礼物按“源受限例外”以实付价统计贡献
 - 表结构权威：`src/modules/storage/schema.py`；展示换算：`src/modules/types/currency.py`
