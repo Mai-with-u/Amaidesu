@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import List
+from typing import Callable, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -94,6 +94,16 @@ def _agent(rig: _Rig, name: str) -> _StubAgent:
     return rig.manager.get_agent_by_name(name)  # type: ignore[return-value]
 
 
+async def _wait_until(predicate: Callable[[], bool], *, timeout_s: float = 2.0) -> None:
+    """轮询等待事件经后台调度送达，代替固定 sleep：全量高负载下事件迟到属正常时序，不应误判为缺陷。"""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while not predicate():
+        if loop.time() > deadline:
+            raise AssertionError(f"等待事件送达超时（{timeout_s}s）")
+        await asyncio.sleep(0.005)
+
+
 async def test_delegation_full_chain_and_status_query(rig: _Rig) -> None:
     received: List[TaskChangedPayload] = []
 
@@ -118,7 +128,7 @@ async def test_delegation_full_chain_and_status_query(rig: _Rig) -> None:
     assert status["snapshot"]["instruction"] == "盖一座房子"
 
     b.finish(rig.ledger)
-    await asyncio.sleep(0.03)
+    await _wait_until(lambda: any(p.task_id == task_id for p in received))
     # accepted→running 属安静组（发起方已持回执，不唤醒）；终态必达
     assert [p.status for p in received if p.task_id == task_id] == ["succeeded"]
     assert all(p.initiator == "agent_a" and p.executor == "agent_b" for p in received)
@@ -137,7 +147,7 @@ async def test_execution_failure_ends_in_failed_terminal_after_being_registered(
 
     rig.bus.on(CoreEvents.TASK_CHANGED, on_changed, model_class=TaskChangedPayload)
     _agent(rig, "agent_b").finish(rig.ledger, failed=True)
-    await asyncio.sleep(0.03)
+    await _wait_until(lambda: bool(statuses))
     assert statuses[-1] == "failed" and rig.ledger.get(task_id) is None
     unknown = await rig.call("framework_task_status", {"task_id": "nope-123"})
     assert unknown.success is False and "任务不存在" in unknown.error_message
@@ -188,7 +198,7 @@ async def test_prompt_is_acknowledged_without_ledger_entry_and_broadcast(rig: _R
 
     rig.bus.on(CoreEvents.AGENT_PROMPTED, on_prompted, model_class=AgentPromptedPayload)
     res = await rig.call("framework_prompt", {"agent": "agent_b", "content": "先去东侧看看"})
-    await asyncio.sleep(0.03)
+    await _wait_until(lambda: len(prompted) == 1)
 
     assert res.success and res.structured_content == {"delivered": True, "executor": "agent_b"}  # 无任务号
     assert _agent(rig, "agent_b").prompts_received == [("先去东侧看看", "agent_a")]
@@ -429,8 +439,8 @@ async def test_live_ended_settles_suspended_delegations(mc: _McRig) -> None:
 
     assert mc.ledger.get(task_id) is None, "悬置条目已强制结算移除"
     assert mc.minecraft._delegations.finished_ids == ()
-    await asyncio.sleep(0.05)  # task.changed 经后台任务调度广播，让一拍再断言
-    assert changed[-1].status == "cancelled"
+    # task.changed 经后台任务调度广播，轮询等最新一条落到 cancelled
+    await _wait_until(lambda: bool(changed) and changed[-1].status == "cancelled")
     assert "下播自动收尾" in changed[-1].summary
 
 
