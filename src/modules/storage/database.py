@@ -44,6 +44,7 @@ from src.modules.storage.repos import (
     SessionRepo,
     SimRepo,
     TopicRepo,
+    ViewerIdentityRepo,
     ViewerProfileRepo,
     ViewerRepo,
 )
@@ -111,6 +112,8 @@ class SQLiteDatabase:
         self.sessions = SessionRepo(self._manager)
         self.chat = ChatRepo(self._manager)
         self.viewers = ViewerRepo(self._manager)
+        # 观众身份的人工处理（待确认、合并、取消关联；WebUI 写操作）
+        self.viewer_identity = ViewerIdentityRepo(self._manager)
         self.sim = SimRepo(self._manager)
         self.events = EventRepo(self._manager)
         self.llm = LLMRepo(self._manager)
