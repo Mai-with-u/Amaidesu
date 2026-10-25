@@ -5,9 +5,18 @@
 发给某个应用的 ID）。记账器对每条观众消息先 ``resolve_viewer`` 归到一位观众，
 再按观众 ID 记计数。
 
-**解析规则**（同一平台内）：同种 ID 命中就是这个人，每次命中刷新
-``name_seen_ms``，昵称变了则改名并记入昵称记录（``viewer_names``）；ID 没见过
-就新建。占位昵称（采集器拿不到昵称时填的值、打码昵称）不覆盖已知昵称。
+**解析规则**（同一平台内）：
+
+1. 同种 ID 命中就是这个人；每次命中刷新 ``name_seen_ms``，昵称变了则改名并
+   记入昵称记录（``viewer_names``）。
+2. ID 未命中时，在同平台、同 ``simulated`` 的观众里找当前昵称完全相同、且对应
+   ID 列空着的候选。对应列已有另一个值的同名观众不是候选——同一种 ID 不同值
+   就是另一个账号，说明昵称已经易主。
+3. 没有候选就新建；唯一候选且它的昵称在时限内出现过，就把新 ID 记到它身上；
+   超出时限或候选不止一个，则新建并标为待确认，建议并入昵称最近出现的候选。
+4. 占位昵称（采集器拿不到昵称时填的值、打码昵称）不参与匹配，也不覆盖已知昵称。
+
+只按当前昵称匹配，曾用名不参与：旧昵称可能已经被别人拿走。
 
 计数口径为**历史累计**：场次删除会级联清理明细，但本表计数不随之回滚，
 WebUI 以"历史累计 / 现存记录"口径标注这一差异。付费统计（``paid_count`` /
@@ -31,7 +40,7 @@ from src.modules.storage.repos._base import BaseRepo
 from src.modules.utils.time_utils import now_ms
 
 IdKind = Literal["account", "open"]
-ResolveOutcome = Literal["matched_id", "created"]
+ResolveOutcome = Literal["matched_id", "linked_by_name", "created", "pending"]
 
 # 采集器拿不到昵称时填的占位名：官方开放平台填 unknown，LAPLACE 与旧版填"未知用户"，
 # 早期主播回复尚未建档的观众时记过"?"；这些名字不代表任何人
@@ -46,7 +55,7 @@ _MATCH_EXTERNAL = "platform=? AND (account_id=? OR open_id=?)"
 
 
 def is_placeholder_name(name: Optional[str]) -> bool:
-    """昵称是否为占位值（不覆盖已知昵称、不进昵称记录）。"""
+    """昵称是否为占位值（不参与昵称匹配、不覆盖已知昵称、不进昵称记录）。"""
     text = (name or "").strip()
     return text.lower() in _PLACEHOLDER_NAMES or _MASK_MARK in text
 
@@ -57,6 +66,8 @@ class ViewerResolution:
 
     viewer_id: int
     outcome: ResolveOutcome
+    # outcome=pending 时为建议并入的老观众；linked_by_name 时为被关联的观众（同 viewer_id）
+    candidate_id: Optional[int] = None
 
 
 class ViewerRepo(BaseRepo):
@@ -175,6 +186,7 @@ class ViewerRepo(BaseRepo):
         external_id: str,
         user_name: str,
         timestamp_ms: int,
+        name_match_window_ms: int,
         open_app_id: str = "",
         simulated: bool = False,
     ) -> ViewerResolution:
@@ -189,7 +201,19 @@ class ViewerRepo(BaseRepo):
                 if viewer_id is not None:
                     _touch_name(conn, viewer_id, user_name, timestamp_ms)
                     return ViewerResolution(viewer_id, "matched_id")
-                # ID 没见过：新建观众
+                # ID 没见过：按当前昵称找同平台的老观众，时限内唯一候选才自动关联
+                candidates = (
+                    []
+                    if is_placeholder_name(user_name)
+                    else _name_candidates(conn, platform, id_kind, open_app_id, user_name, simulated)
+                )
+                if len(candidates) == 1 and timestamp_ms - int(candidates[0]["name_seen_ms"]) <= name_match_window_ms:
+                    linked = int(candidates[0]["id"])
+                    _attach_id(conn, linked, id_kind, external_id, open_app_id)
+                    _touch_name(conn, linked, user_name, timestamp_ms)
+                    return ViewerResolution(linked, "linked_by_name", linked)
+                # 超出时限或候选不唯一：先建新观众照常处理消息，挂一条并入建议等人工确认
+                suggested = max(candidates, key=lambda r: int(r["name_seen_ms"]))["id"] if candidates else None
                 new_id = _insert_viewer(
                     conn,
                     platform=platform,
@@ -199,8 +223,11 @@ class ViewerRepo(BaseRepo):
                     user_name=user_name,
                     timestamp_ms=timestamp_ms,
                     simulated=simulated,
+                    candidate_id=int(suggested) if suggested is not None else None,
                 )
-                return ViewerResolution(new_id, "created")
+                if suggested is None:
+                    return ViewerResolution(new_id, "created")
+                return ViewerResolution(new_id, "pending", int(suggested))
 
         return await self._run_in_executor(_exec)
 
@@ -309,6 +336,38 @@ def _find_by_id(
     return int(row["id"])
 
 
+def _name_candidates(
+    conn: sqlite3.Connection,
+    platform: str,
+    id_kind: IdKind,
+    open_app_id: str,
+    user_name: str,
+    simulated: bool,
+) -> List[sqlite3.Row]:
+    """同平台、同真假、当前昵称相同、且对应 ID 列"空着"的老观众。
+
+    账号 ID：候选的 ``account_id`` 为空。开放平台 ID：候选的 ``open_id`` 为空，
+    或它的 ``open_id`` 来自另一个已知应用（换了开放平台应用）；应用不明的存量
+    ``open_id`` 无法判断是不是同一个应用，按"已有另一个值"处理。
+    """
+    rows = conn.execute(
+        "SELECT id, name_seen_ms, account_id, open_id, open_app_id FROM viewers"
+        " WHERE platform=? AND simulated=? AND user_name=?",
+        (platform, 1 if simulated else 0, user_name),
+    ).fetchall()
+    if id_kind == "account":
+        return [r for r in rows if r["account_id"] is None]
+    return [r for r in rows if r["open_id"] is None or (r["open_app_id"] and r["open_app_id"] != open_app_id)]
+
+
+def _attach_id(conn: sqlite3.Connection, viewer_id: int, id_kind: IdKind, external_id: str, open_app_id: str) -> None:
+    """把新 ID 记到观众身上；换开放平台应用时覆盖旧的 open_id 与应用 ID。"""
+    if id_kind == "account":
+        conn.execute("UPDATE viewers SET account_id=? WHERE id=?", (external_id, viewer_id))
+    else:
+        conn.execute("UPDATE viewers SET open_id=?, open_app_id=? WHERE id=?", (external_id, open_app_id, viewer_id))
+
+
 def _record_name(conn: sqlite3.Connection, viewer_id: int, user_name: str, timestamp_ms: int) -> None:
     """昵称记录：首次出现建行，改回用过的旧名沿用原行并推后最晚出现时刻。"""
     conn.execute(
@@ -350,11 +409,12 @@ def _insert_viewer(
     user_name: str,
     timestamp_ms: int,
     simulated: bool,
+    candidate_id: Optional[int],
 ) -> int:
-    """新建观众（计数全 0），返回内部观众 ID。"""
+    """新建观众（计数全 0），有并入建议时标为待确认；返回内部观众 ID。"""
     cur = conn.execute(
         "INSERT INTO viewers(platform, account_id, open_id, open_app_id, user_name, name_seen_ms, simulated,"
-        " last_active_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        " link_status, link_candidate_id, last_active_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             platform,
             external_id if id_kind == "account" else None,
@@ -363,6 +423,8 @@ def _insert_viewer(
             user_name,
             timestamp_ms,
             1 if simulated else 0,
+            "pending" if candidate_id is not None else "confirmed",
+            candidate_id,
             timestamp_ms,
         ),
     )

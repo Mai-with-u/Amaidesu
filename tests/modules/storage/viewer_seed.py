@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from src.modules.storage.repos import ViewerRepo
 
+# 造数不关心按昵称关联的时限，取一个足够长的值
+_WINDOW_MS = 90 * 86_400_000
+
+
 async def seed_viewer(viewers: ViewerRepo, *, platform: str, user_id: str, user_name: str, timestamp_ms: int) -> int:
     """按账号 ID 解析（必要时新建）观众，返回内部观众 ID。"""
     result = await viewers.resolve_viewer(
@@ -12,6 +16,7 @@ async def seed_viewer(viewers: ViewerRepo, *, platform: str, user_id: str, user_
         external_id=user_id,
         user_name=user_name,
         timestamp_ms=timestamp_ms,
+        name_match_window_ms=_WINDOW_MS,
     )
     return result.viewer_id
 

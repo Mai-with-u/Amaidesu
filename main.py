@@ -39,6 +39,7 @@ from src.modules.config.core_schemas import (
     EventHistoryConfig,
 )
 from src.modules.config.service import ConfigService
+from src.modules.config.storage_schemas import ViewerIdentityConfig
 from src.modules.dashboard.server import DashboardServer
 from src.modules.dashboard.stream_preview import StreamPreviewHub
 from src.modules.diagnostics import DiagnosticsWriter, TtsDiagnosticsRecorder
@@ -443,11 +444,14 @@ async def create_app_components(
         logger.info("TTS 合成诊断记录已启动")
 
     # --- StorageLedger（订阅 room.message.# 落业务表）---
+    # storage.toml [viewers]：新出现的观众 ID 按昵称自动关联老观众的时限
+    viewer_identity_config = ViewerIdentityConfig.from_dict(config.get("viewers") or {})
     storage_ledger: Optional[StorageLedger] = await _start_storage_ledger(
         event_bus,
         database,
         auto_start=storage_ledger_auto_start,
         session_manager=session_manager,
+        name_match_window_ms=viewer_identity_config.name_match_window_days * 86_400_000,
     )
 
     # --- 直播近况与整场记录同步给 MaiBot（[maibot_sync]）---
@@ -951,6 +955,7 @@ async def _start_storage_ledger(
     *,
     auto_start: bool = True,
     session_manager: Optional["LiveSessionManager"] = None,
+    name_match_window_ms: Optional[int] = None,
 ) -> Optional[StorageLedger]:
     """构造 StorageLedger 并按 ``auto_start`` 决定是否订阅。
 
@@ -959,7 +964,8 @@ async def _start_storage_ledger(
 
     ``session_manager`` 注入后，主播发言（``streamer.speech``）与观众明细
     按其解析的当前场次归属落 ``live_chat`` 等业务表；不注入则按无场次降级
-    跳过（与既有降级风格一致）。
+    跳过（与既有降级风格一致）。``name_match_window_ms`` 是新出现的观众 ID
+    按昵称自动关联老观众的时限，不传取默认值。
     """
     try:
         ledger = StorageLedger(
@@ -968,6 +974,7 @@ async def _start_storage_ledger(
             viewer_repo=database.viewers,
             event_repo=database.events,
             session_manager=session_manager,
+            name_match_window_ms=name_match_window_ms,
         )
         if auto_start:
             await ledger.start()

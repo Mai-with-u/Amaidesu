@@ -8,6 +8,9 @@
     db_path = "data/amaidesu.db"
     busy_timeout_ms = 5000
 
+    [viewers]
+    name_match_window_days = 90
+
 > **db_path 单一权威**：所有业务表（含主播记忆的观众画像与场次回顾）共用
 > 同一 SQLite 文件，路径权威在 ``[sqlite].db_path``。
 >
@@ -59,6 +62,30 @@ class SqliteStorageConfig(BaseConfig):
 
 
 # ---------------------------------------------------------------------------
+# 观众身份关联
+# ---------------------------------------------------------------------------
+
+
+class ViewerIdentityConfig(BaseConfig):
+    """观众身份关联配置（``[viewers]`` 顶层段）
+
+    同一平台出现没见过的外部 ID 时，记账器按当前昵称找老观众：昵称在时限内
+    出现过、且只有一位候选才自动关联；超出时限说明昵称可能已经易主（老观众
+    改名后旧名被别人拿走），转为待人工确认。
+
+    Attributes:
+        name_match_window_days: 自动关联的时限（天）
+    """
+
+    name_match_window_days: int = Field(
+        default=90,
+        ge=1,
+        title="昵称关联时限",
+        description="新出现的观众 ID 按昵称关联老观众时，老观众的这个昵称多少天内出现过才自动关联；超出则等人工确认",
+    )
+
+
+# ---------------------------------------------------------------------------
 # 顶层根模型（对应 config/storage.toml）
 # ---------------------------------------------------------------------------
 
@@ -68,6 +95,7 @@ class StorageRootConfig(BaseConfig):
 
     对应 ``config/storage.toml`` 文件。顶层扁平结构：
     - ``[sqlite]``：数据库连接配置
+    - ``[viewers]``：观众身份关联
 
     注：存储装配（``storage/bootstrap.py``）从 ``config["sqlite"]`` 直接读取
     （顶层扁平段位，无包裹层）。
@@ -84,9 +112,15 @@ class StorageRootConfig(BaseConfig):
         title="SQLite 配置",
         description="SQLite 存储后端配置（全部业务表共用同一库）",
     )
+    viewers: ViewerIdentityConfig = Field(
+        default_factory=ViewerIdentityConfig,
+        title="观众身份",
+        description="观众身份关联（按昵称把新出现的 ID 关联到老观众）",
+    )
 
 
 __all__ = [
     "SqliteStorageConfig",
     "StorageRootConfig",
+    "ViewerIdentityConfig",
 ]

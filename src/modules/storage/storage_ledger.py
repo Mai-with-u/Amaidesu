@@ -8,7 +8,7 @@ StorageLedger —— 直播间消息流落库记账器
 ## 职责
 - 订阅 ``room.message.#``（MQTT 风格通配），按 payload.message_type 分发。
   观众消息（弹幕/礼物/SC/上舰）先经 ``ViewerRepo.resolve_viewer`` 归到一位
-  观众（按 ID 命中，没见过就新建），
+  观众（按 ID 命中，或按当前昵称在时限内关联老观众，否则新建/待确认），
   明细行带上 ``viewer_id`` 与 ``id_kind``，计数按观众 ID 累加：
   - ``danmaku``   → live_chat（+ 观众发言计数）
   - ``gift``      → gifts 全字段（+ 送礼计数；金瓜子礼物另计付费统计
@@ -49,6 +49,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Optional
 
+from src.modules.config.storage_schemas import ViewerIdentityConfig
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.room import RoomMessagePayload
@@ -70,6 +71,7 @@ _ROOM_MESSAGE_WILDCARD = CoreEvents.ROOM_MESSAGE_WILDCARD
 _GAME_EVENT_WILDCARD = "game.*"
 # 会更新观众统计的消息类型：只有这些先解析观众身份（进房不建观众，联动对象不是观众）
 _VIEWER_MESSAGE_TYPES = frozenset({"danmaku", "gift", "super_chat", "guard"})
+_DAY_MS = 86_400_000
 
 
 class StorageLedger:
@@ -88,6 +90,7 @@ class StorageLedger:
         event_repo: EventRepo,
         *,
         session_manager: Optional["LiveSessionManager"] = None,
+        name_match_window_ms: Optional[int] = None,
     ) -> None:
         self.event_bus = event_bus
         self.chat_repo = chat_repo
@@ -95,6 +98,12 @@ class StorageLedger:
         self.event_repo = event_repo
         # 场次归属解析（payload 未盖章时回退）；None 时按无场次降级跳过
         self._session_manager = session_manager
+        # 按昵称自动关联老观众的时限；未传时取 storage.toml [viewers] 的默认值
+        self._name_match_window_ms = (
+            name_match_window_ms
+            if name_match_window_ms is not None
+            else ViewerIdentityConfig().name_match_window_days * _DAY_MS
+        )
         # 订阅句柄表（stop 时按 event_name 取消）
         self._subscriptions: dict[str, Callable] = {}
         self._started = False
@@ -436,7 +445,7 @@ class StorageLedger:
     # -------------------- 观众身份解析 --------------------
 
     async def _resolve_viewer(self, payload: RoomMessagePayload) -> Optional[int]:
-        """把消息的外部身份归到一位观众，返回内部观众 ID。
+        """把消息的外部身份归到一位观众；按昵称关联或转待确认时记日志。
 
         解析失败只记日志、返回 None：明细照常落库（不带观众 ID），这一条不计观众统计——
         观众记账出错不能连累直播消息本身丢失。
@@ -450,6 +459,7 @@ class StorageLedger:
                 user_name=payload.user.name,
                 timestamp_ms=payload.timestamp_ms,
                 simulated=payload.simulated,
+                name_match_window_ms=self._name_match_window_ms,
             )
         except Exception as exc:  # noqa: BLE001 观众解析失败降级为不带观众 ID 落明细
             logger.error(
@@ -458,6 +468,16 @@ class StorageLedger:
                 exc=True,
             )
             return None
+        if result.outcome == "linked_by_name":
+            logger.info(
+                f"新出现的观众 ID 按昵称关联到老观众（{payload.platform}/{payload.user.id_kind}:{payload.user.id}"
+                f" → viewer {result.viewer_id}，昵称 {payload.user.name!r}）"
+            )
+        elif result.outcome == "pending":
+            logger.info(
+                f"新观众与老观众同名但超出关联时限或候选不唯一，已建档待人工确认（viewer {result.viewer_id}"
+                f"，建议并入 viewer {result.candidate_id}，昵称 {payload.user.name!r}）"
+            )
         return result.viewer_id
 
     # -------------------- 场次归属解析 --------------------

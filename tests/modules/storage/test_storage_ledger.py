@@ -243,6 +243,22 @@ async def test_viewer_upsert_failure_keeps_main_row(
     assert await store.execute("SELECT * FROM viewers") == []
 
 
+async def test_switching_source_keeps_one_viewer_by_name(ledger, store: SQLiteDatabase, event_bus: EventBus) -> None:
+    # LAPLACE 源给账号 uid，换到官方开放平台源后只有 open_id：同名、时限内 → 仍是同一位观众
+    uid_user = RoomMessageUser(id="1001", name="老王")
+    open_user = RoomMessageUser(id="39b8fedb-60a5-4e29-ac75-b16955f7e632", name="老王", id_kind="open", open_app_id="a")
+    await _emit(event_bus, CoreEvents.ROOM_MESSAGE_DANMAKU, make_room_message(user=uid_user, content="一"))
+    await _emit(event_bus, CoreEvents.ROOM_MESSAGE_DANMAKU, make_room_message(user=open_user, content="二"))
+
+    (viewer,) = await store.execute("SELECT * FROM viewers")
+    assert (viewer["account_id"], viewer["open_id"], viewer["message_count"]) == ("1001", open_user.id, 2)
+    chat = await store.execute("SELECT sender_id, viewer_id, id_kind FROM live_chat ORDER BY id")
+    assert [(r["sender_id"], r["viewer_id"], r["id_kind"]) for r in chat] == [
+        ("1001", viewer["id"], "account"),
+        (open_user.id, viewer["id"], "open"),  # 明细保留收到时的原始外部 ID 与种类
+    ]
+
+
 async def test_broken_gift_does_not_block_next_write(ledger, store: SQLiteDatabase, event_bus: EventBus) -> None:
     broken = RoomMessagePayload(
         live_session_id=0,
