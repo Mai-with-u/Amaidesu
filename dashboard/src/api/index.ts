@@ -18,6 +18,7 @@ import type {
   AgentCancelTaskResponse,
   SystemStatusResponse,
   SystemHealthResponse,
+  SystemHealthWallResponse,
   ChangelogResponse,
   ConfigGetResponse,
   ConfigBatchSaveResponse,
@@ -113,6 +114,7 @@ const api = axios.create({
 export const systemApi = {
   getStatus: () => api.get<SystemStatusResponse>('/system/status'),
   getHealth: () => api.get<SystemHealthResponse>('/system/health'),
+  fetchSystemHealth: () => api.get<SystemHealthWallResponse>('/system/health'),
   getChangelog: () => api.get<ChangelogResponse>('/system/changelog'),
 };
 

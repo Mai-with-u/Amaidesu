@@ -88,6 +88,139 @@ def test_removed_stats_endpoint_and_health(client) -> None:
     assert (resp.status_code, resp.json()["status"]) == (200, "ok")
 
 
+# 连接健康墙（/system/health 的 domains 聚合）
+
+
+class _FakeTtsEngine:
+    def __init__(self, stats: dict) -> None:
+        self._stats = stats
+
+    def get_stats(self) -> dict:
+        return dict(self._stats)
+
+
+class _FakeProvider:
+    """模拟工具提供者：category/连接态形态可调，覆盖注册表里的三种连接态暴露方式"""
+
+    def __init__(
+        self,
+        name: str,
+        category: str = "",
+        *,
+        is_connected: bool | None = None,
+        stats_connected: bool | None = None,
+        private_connected: bool | None = None,
+        last_error: str = "",
+        supports_reconnect: bool = False,
+    ) -> None:
+        self.name = name
+        self.category = category
+        self.last_error = last_error
+        self.supports_reconnect = supports_reconnect
+        if is_connected is not None:
+            self.is_connected = is_connected
+        if stats_connected is not None:
+            self.get_stats = lambda: {"name": name, "is_connected": stats_connected}
+        if private_connected is not None:
+            self._connected = private_connected
+
+
+class _FakeRegistry:
+    def __init__(self, providers: list) -> None:
+        self._providers = providers
+
+    def __len__(self) -> int:
+        return len(self._providers)
+
+
+def _health_client(mount, config_service: ConfigService, **components):
+    registry = MagicMock()
+    registry.__len__.return_value = 2
+    server_kwargs = {
+        "event_bus": _FakeEventBus({}),
+        "config_service": config_service,
+        "tool_registry": components.pop("tool_registry", registry),
+        **components,
+    }
+    client = mount(**server_kwargs)
+    from src.modules.dashboard.dependencies import get_dashboard_server
+
+    get_dashboard_server()._is_running = True
+    return client
+
+
+def test_health_wall_shape_and_unknown_placeholder(mount, config_service: ConfigService) -> None:
+    """无 TTS/工具装配时按 unknown 占位如实展示，不硬造状态。"""
+    client = _health_client(mount, config_service)
+    body = client.get("/api/v1/system/health").json()
+    assert body["status"] == "ok" and isinstance(body["checked_at_ms"], int)
+    assert set(body["domains"]) == {"tts", "avatar", "obs", "maibot", "tools_providers", "collectors", "agents"}
+    assert body["domains"]["tts"][0]["state"] == "unknown"
+    assert body["domains"]["maibot"][0]["state"] == "unknown"
+    for domain_items in body["domains"].values():
+        for item in domain_items:
+            assert set(item) == {"name", "state", "detail", "last_error", "supports_reconnect"}
+            assert item["state"] in {"ok", "degraded", "offline", "unknown"}
+
+
+def test_health_wall_tts_and_provider_states(mount, config_service: ConfigService) -> None:
+    """TTS 走引擎 get_stats；提供者按分类归域（avatar/obs/其余），连接态与重连位透传。"""
+    registry = _FakeRegistry(
+        [
+            _FakeProvider("vts", "avatar", private_connected=True, supports_reconnect=True),
+            _FakeProvider("warudo", "avatar", is_connected=False, supports_reconnect=True, last_error="连接超时"),
+            _FakeProvider("obs", "studio", stats_connected=True, last_error="上次抖动"),
+            _FakeProvider("web_search", "web", is_connected=True),
+            _FakeProvider("mystery", "", supports_reconnect=True),
+        ]
+    )
+    client = _health_client(
+        mount,
+        config_service,
+        tool_registry=registry,
+        tts_engine=_FakeTtsEngine({"name": "GPTSoVITS", "is_connected": True}),
+    )
+    domains = client.get("/api/v1/system/health").json()["domains"]
+
+    assert domains["tts"] == [
+        {"name": "tts", "state": "ok", "detail": "引擎 GPTSoVITS", "last_error": "", "supports_reconnect": False}
+    ]
+
+    avatar = {item["name"]: item for item in domains["avatar"]}
+    assert avatar["vts"]["state"] == "ok" and avatar["vts"]["supports_reconnect"] is True
+    assert avatar["warudo"]["state"] == "offline" and avatar["warudo"]["last_error"] == "连接超时"
+
+    assert domains["obs"][0]["name"] == "obs"
+    assert domains["obs"][0]["state"] == "degraded"  # 已连接但残留最近失败摘要
+
+    others = {item["name"]: item for item in domains["tools_providers"]}
+    assert set(others) == {"web_search", "mystery"}
+    assert others["web_search"]["state"] == "ok"
+    assert others["mystery"]["state"] == "unknown" and others["mystery"]["supports_reconnect"] is True
+
+
+def test_health_wall_tts_without_connection_info(mount, config_service: ConfigService) -> None:
+    client = _health_client(mount, config_service, tts_engine=_FakeTtsEngine({"name": "X"}))
+    assert client.get("/api/v1/system/health").json()["domains"]["tts"][0]["state"] == "unknown"
+
+
+def test_health_wall_domain_probe_failure_degrades(mount, config_service: ConfigService, monkeypatch) -> None:
+    """单域探查异常只降级该域为 unknown 项，不影响其余域与整体 200。"""
+    client = _health_client(mount, config_service, tts_engine=object())
+    monkeypatch.setattr(system_api, "_build_component_items", lambda *_: (_ for _ in ()).throw(RuntimeError("boom")))
+    body = client.get("/api/v1/system/health").json()
+    assert body["domains"]["collectors"] == [
+        {
+            "name": "collectors",
+            "state": "unknown",
+            "detail": "状态探查失败",
+            "last_error": "",
+            "supports_reconnect": False,
+        }
+    ]
+    assert body["domains"]["tts"][0]["state"] == "unknown"
+
+
 def test_changelog_serves_repo_file_and_degrades_to_503(client, monkeypatch: pytest.MonkeyPatch) -> None:
     resp = client.get("/api/v1/system/changelog")
     repo_changelog = Path(__file__).resolve().parents[2] / "CHANGELOG.md"

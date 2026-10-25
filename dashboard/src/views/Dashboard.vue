@@ -120,6 +120,9 @@
       <span class="stat-strip-tail">本地缓冲窗口</span>
     </section>
 
+    <!-- 连接健康墙：开播前外部连接一眼可查 + 一键自检 -->
+    <HealthWall />
+
     <!-- 基座一行 -->
     <footer class="infra-row" aria-label="基座状态">
       <a class="infra-link" href="/collectors" @click.prevent="router.push('/collectors')">
@@ -176,6 +179,7 @@ import type {
 } from '@/types';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import PulseChart from '@/components/dashboard/PulseChart.vue';
+import HealthWall from '@/components/dashboard/HealthWall.vue';
 import { EVENT } from '@/types/events';
 import { useChartPalette } from '@/composables/useECharts';
 import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';

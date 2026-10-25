@@ -4,6 +4,8 @@
 定义系统状态相关的数据模型。
 """
 
+from typing import Dict, List, Literal, Optional
+
 from pydantic import BaseModel
 
 
@@ -32,11 +34,31 @@ class SystemStatusResponse(BaseModel):
     event_bus: EventBusStats
 
 
+DomainHealthState = Literal["ok", "degraded", "offline", "unknown"]
+
+
+class DomainHealthItem(BaseModel):
+    """连接健康墙单项：一个可观测组件的连接态快照（只读探查，不触发动作）。"""
+
+    name: str
+    state: DomainHealthState = "unknown"
+    detail: str = ""
+    last_error: str = ""
+    supports_reconnect: bool = False
+
+
 class HealthResponse(BaseModel):
-    """健康检查响应"""
+    """健康检查响应
+
+    ``status``/``timestamp_ms`` 是进程存活面（既有消费方依赖）；
+    ``domains`` 是连接健康墙聚合（按域分组的组件连接态，可能为空——
+    早期启动或聚合数据源缺失时只回答"进程活着"）。
+    """
 
     status: str = "ok"
     timestamp_ms: int
+    checked_at_ms: Optional[int] = None
+    domains: Dict[str, List[DomainHealthItem]] = {}
 
 
 class ChangelogResponse(BaseModel):

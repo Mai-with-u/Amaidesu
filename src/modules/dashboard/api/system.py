@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.system import (
     ChangelogResponse,
+    DomainHealthItem,
     EventBusStats,
     GroupStatus,
     HealthResponse,
@@ -130,9 +131,160 @@ def _get_app_version() -> str:
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health_check() -> HealthResponse:
-    """健康检查"""
-    return HealthResponse(status="ok", timestamp_ms=now_ms())
+async def health_check(server: ServerDep) -> HealthResponse:
+    """健康检查 + 连接健康墙聚合
+
+    ``status``/``timestamp_ms`` 回答"进程活着"；``domains`` 只读探查各域
+    既有管理器/注册表汇总连接态（TTS 引擎、工具提供者、采集器、Agent）。
+    单域探查失败只降级为 unknown 项，不影响整体响应——健康墙是观测面，
+    不能因观测本身故障而 500。
+    """
+    now = now_ms()
+    return HealthResponse(
+        status="ok",
+        timestamp_ms=now,
+        checked_at_ms=now,
+        domains=_build_health_domains(server),
+    )
+
+
+def _build_health_domains(server: "DashboardServer") -> Dict[str, list[DomainHealthItem]]:
+    """按域聚合连接态；每域独立兜底，探查异常降级为该域一个 unknown 项。"""
+    builders = {
+        "tts": _build_tts_items,
+        "avatar": lambda s: _build_provider_items(s, {"avatar"}),
+        "obs": lambda s: _build_provider_items(s, {"studio"}),
+        "maibot": _build_maibot_items,
+        "tools_providers": lambda s: _build_provider_items(s, None),
+        "collectors": lambda s: _build_component_items(s, "collectors"),
+        "agents": lambda s: _build_component_items(s, "agents"),
+    }
+    domains: Dict[str, Any] = {}
+    for domain, build in builders.items():
+        try:
+            domains[domain] = build(server)
+        except Exception:
+            logger.warning(f"连接健康墙探查 {domain} 域失败，按 unknown 展示", exc=True)
+            domains[domain] = [DomainHealthItem(name=domain, state="unknown", detail="状态探查失败")]
+    return domains
+
+
+def _build_tts_items(server: "DashboardServer") -> list[DomainHealthItem]:
+    """TTS 域：透传引擎 ``get_stats()``（与 /debug/tts/status 同数据源）。"""
+    engine = getattr(server, "tts_engine", None)
+    if engine is None:
+        return [
+            DomainHealthItem(
+                name="tts",
+                state="unknown",
+                detail="TTS 引擎未装配（未配置或极简启动）",
+            )
+        ]
+    get_stats = getattr(engine, "get_stats", None)
+    stats = dict(get_stats()) if callable(get_stats) else {}
+    connected = stats.get("is_connected")
+    if isinstance(connected, bool):
+        state = "ok" if connected else "offline"
+        detail = f"引擎 {stats.get('name', '')}".strip()
+        return [DomainHealthItem(name="tts", state=state, detail=detail)]
+    return [DomainHealthItem(name="tts", state="unknown", detail="引擎未暴露连接态")]
+
+
+def _build_maibot_items(server: "DashboardServer") -> list[DomainHealthItem]:
+    """MaiBot 桥接域：近况上报器由进程根持有、未注入 DashboardServer，
+    无可只读查询的连接态；按约定返回 unknown 占位，不硬造状态。"""
+    return [
+        DomainHealthItem(
+            name="maibot_sync",
+            state="unknown",
+            detail="近况推送连接态未接入查询通道（见服务端日志）",
+        )
+    ]
+
+
+def _build_provider_items(server: "DashboardServer", categories: set[str] | None) -> list[DomainHealthItem]:
+    """工具提供者域连接态。``categories`` 为 None 时收其余全部提供者。
+
+    连接态读取口径：公开属性优先（``is_connected`` / ``get_stats()``），
+    ConnectionToolProvider 的私有 ``_connected`` 兜底——注册表未提供
+    provider 对象的公开列举，此处只读访问 ``_providers`` 不做任何写入。
+    """
+    registry = getattr(server, "tool_registry", None)
+    providers = list(getattr(registry, "_providers", None) or []) if registry is not None else []
+    items: list[DomainHealthItem] = []
+    for provider in providers:
+        category = str(getattr(provider, "category", "") or "")
+        if categories is not None:
+            if category not in categories:
+                continue
+        elif category in {"avatar", "studio"}:
+            continue
+        items.append(_provider_health_item(provider))
+    return items
+
+
+def _provider_health_item(provider: Any) -> DomainHealthItem:
+    """从单个 provider 对象只读推导健康墙条目。"""
+    name = str(getattr(provider, "name", "") or type(provider).__name__)
+    connected = _provider_connected(provider)
+    last_error = str(getattr(provider, "last_error", "") or "")
+    if connected is True:
+        # 已连接但残留最近一次失败摘要：连接抖动过，按降级提示
+        state = "degraded" if last_error else "ok"
+    elif connected is False:
+        state = "offline"
+    else:
+        state = "unknown"
+    detail = {True: "已连接", False: "未连接", None: "连接态不可见"}[connected]
+    return DomainHealthItem(
+        name=name,
+        state=state,  # type: ignore[arg-type]
+        detail=detail,
+        last_error=last_error,
+        supports_reconnect=bool(getattr(provider, "supports_reconnect", False)),
+    )
+
+
+def _provider_connected(provider: Any) -> bool | None:
+    """只读探查 provider 连接态；各形态都查不到时返回 None（unknown）。"""
+    value = getattr(provider, "is_connected", None)
+    if isinstance(value, bool):
+        return value
+    getter = getattr(provider, "get_stats", None)
+    if callable(getter):
+        try:
+            stats = getter()
+        except Exception:
+            logger.warning(f"读取 provider '{getattr(provider, 'name', '?')}' 状态失败", exc=True)
+            stats = {}
+        if isinstance(stats, dict) and isinstance(stats.get("is_connected"), bool):
+            return bool(stats["is_connected"])
+    raw = getattr(provider, "_connected", None)
+    if isinstance(raw, bool):
+        return raw
+    return None
+
+
+def _build_component_items(server: "DashboardServer", group: str) -> list[DomainHealthItem]:
+    """采集器 / Agent 域：按组件清单逐项映射运行态。
+
+    state 口径：已启动 → ok；已启用未启动 → degraded；配置未启用 → offline
+    （停用是用户选择，但健康墙回答的是"现在跑没跑"，detail 说明原因）。
+    """
+    grouped = get_v2_component_list(build_config_view(server), server)
+    items: list[DomainHealthItem] = []
+    for component in grouped.get(group, []):
+        name = str(getattr(component, "name", "") or "?")
+        enabled = bool(getattr(component, "is_enabled", False))
+        started = bool(getattr(component, "is_started", False))
+        if started:
+            state, detail = "ok", "运行中"
+        elif enabled:
+            state, detail = "degraded", "已启用但未启动"
+        else:
+            state, detail = "offline", "配置未启用"
+        items.append(DomainHealthItem(name=name, state=state, detail=detail))  # type: ignore[arg-type]
+    return items
 
 
 @router.get("/changelog", response_model=ChangelogResponse)

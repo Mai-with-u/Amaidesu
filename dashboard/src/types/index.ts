@@ -61,6 +61,23 @@ export interface SystemHealthResponse {
   timestamp_ms: number;
 }
 
+/** 连接健康墙单项：一个可观测组件的连接态快照（GET /system/health）。 */
+export interface SystemHealthItem {
+  name: string;
+  state: 'ok' | 'degraded' | 'offline' | 'unknown';
+  detail: string;
+  last_error: string;
+  supports_reconnect: boolean;
+}
+
+/** 连接健康墙响应：按域分组的组件连接态（domains 为空 = 聚合数据源缺失）。 */
+export interface SystemHealthWallResponse {
+  status: string;
+  timestamp_ms: number;
+  checked_at_ms: number | null;
+  domains: Record<string, SystemHealthItem[]>;
+}
+
 // 组件
 /**
  * 组件摘要。
