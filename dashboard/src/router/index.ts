@@ -67,7 +67,7 @@ const router = createRouter({
     },
     {
       // 按内部观众 ID 定位档案页；路径段是数字，转成 number 传给页面
-      path: '/viewers/:viewerId(\d+)',
+      path: '/viewers/:viewerId(\\d+)',
       name: 'viewer-detail',
       component: () => import('@/views/ViewerDetail.vue'),
       props: route => ({ viewerId: Number(route.params.viewerId) }),
