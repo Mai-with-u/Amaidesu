@@ -109,6 +109,12 @@ def no_real_tk_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(SubtitleGuiService, "start", lambda self: None)
 
 
+def test_unpatched_start_fails_the_test_instead_of_opening_a_window() -> None:
+    """根 conftest 的防护：没换成替身就启动字幕窗口，用例直接失败，桌面上不弹真实窗口。"""
+    with pytest.raises(pytest.fail.Exception, match="Tk 字幕窗口"):
+        SubtitleGuiService(config={}).start()
+
+
 @pytest.mark.usefixtures("no_real_tk_thread")
 def test_assembly_registers_one_tk_backend_without_starting_the_service() -> None:
     service = build_subtitle_infrastructure({"window_title": "test-title", "font_size": 32})

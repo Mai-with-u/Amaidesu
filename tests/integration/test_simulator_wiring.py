@@ -6,6 +6,9 @@
 
 组合根内部依赖 EventBus/LLMManager/ConfigService 等组件：用最小 config 让 CollectorManager/AgentManager/
 DashboardServer 走零装配路径，并 monkey-patch LLMManager.setup 跳过真实 provider 池校验（测试目标不是 LLM）。
+数据库指向临时文件（不碰项目里的 ``data/amaidesu.db``），诊断落盘关闭（不往项目 ``logs/``
+写事件记录），字幕关闭（不弹真实 Tk 字幕窗口，它的后台线程会在用例结束后继续写日志，
+混进后面日志测试的输出）。
 """
 
 from __future__ import annotations
@@ -22,10 +25,10 @@ from src.modules.logging.log_streamer import _LIVE_STREAMERS
 from src.modules.simulator.service import SimulatorService
 
 # create_app_components 返回元组的下标（共 15 项）
-EVENT_BUS, LLM, AGENT_MANAGER, SIMULATOR, SESSION_MANAGER, MAIBOT_SYNC = 0, 1, 5, 6, 9, 14
+EVENT_BUS, LLM, AGENT_MANAGER, SIMULATOR, DATABASE, SESSION_MANAGER, MAIBOT_SYNC = 0, 1, 5, 6, 7, 9, 14
 
 
-def _minimal_config(simulator_enabled: bool) -> Dict[str, Any]:
+def _minimal_config(simulator_enabled: bool, db_path: Path) -> Dict[str, Any]:
     """只填 create_app_components 必经路径所需的最小字段，不含真实生产配置。"""
     return {
         "general": {"platform_id": "test"},
@@ -33,6 +36,8 @@ def _minimal_config(simulator_enabled: bool) -> Dict[str, Any]:
         "events": {"history_size": 100},
         "dashboard": {"enabled": False},
         "logging": {"level": "WARNING"},
+        "subtitle": {"enabled": False},
+        "diagnostics": {"enabled": False},
         "interceptors": {},
         "simulator": {
             "enabled": simulator_enabled,
@@ -44,6 +49,7 @@ def _minimal_config(simulator_enabled: bool) -> Dict[str, Any]:
         "agents": {},
         "memory": {},
         "storage": {},
+        "sqlite": {"db_path": str(db_path)},
         "background": {},
         "llm_providers": [],  # 空 provider 池：LLMManager.setup 被替身掉，不报错即可
         "llm": {"client_type": "", "model": ""},
@@ -65,7 +71,8 @@ def _stub_llm_and_base_dir(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def _assemble(tmp_path: Path, *, simulator_enabled: bool, auto_start: bool = True, **config_patch: Any):
     config_service = ConfigService(base_dir=str(tmp_path))
-    config_service._main_config = _minimal_config(simulator_enabled) | config_patch  # 绕开真实 TOML 加载
+    # 绕开真实 TOML 加载；库文件放进本用例的临时目录
+    config_service._main_config = _minimal_config(simulator_enabled, tmp_path / "wiring.db") | config_patch
     config_service._initialized = True
     return await app_main.create_app_components(
         config=config_service.main_config,
@@ -85,6 +92,8 @@ async def _cleanup(result: tuple) -> None:
     await result[EVENT_BUS].cleanup()
     if result[LLM] is not None:
         await result[LLM].cleanup()
+    # 关掉临时库的连接，临时目录才能被清理
+    await result[DATABASE].close()
 
 
 async def test_log_streamer_persist_dir_is_passed_through_as_is(tmp_path: Path) -> None:

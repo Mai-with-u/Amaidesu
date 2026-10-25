@@ -2,7 +2,8 @@
 
 Dashboard 在其他组合根测试里是关着的，参数传错（例如给 ``_start_dashboard`` 多传一个
 它不认识的关键字）只会在真实启动时才炸。这里开启 Dashboard、用替身服务器接住构造参数；
-数据库指向临时文件，不碰项目里的 ``data/amaidesu.db``。
+数据库指向临时文件，不碰项目里的 ``data/amaidesu.db``；诊断落盘关闭，不往项目 ``logs/``
+写事件记录；字幕关闭，不弹真实 Tk 字幕窗口。
 """
 
 from __future__ import annotations
@@ -56,6 +57,8 @@ def _config(db_path: Path) -> Dict[str, Any]:
         "events": {"history_size": 100},
         "dashboard": {"enabled": True, "auto_open_browser": False},
         "logging": {"level": "WARNING"},
+        "subtitle": {"enabled": False},
+        "diagnostics": {"enabled": False},
         "interceptors": {},
         "simulator": {"enabled": False},
         "tools": {},
