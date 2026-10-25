@@ -44,7 +44,7 @@ async def test_transcript_merges_chat_and_super_chats_in_time_order(store: SQLit
     chat = store.chat
     await chat.insert_live_chat(
         live_session_id=pk, timestamp_ms=BASE_MS + 1_000, sender_role="viewer", content="来了来了",
-        message_type="danmaku", sender_id="1001", sender_name="小明", platform="bilibili",
+        message_type="danmaku", sender_id="1001", sender_name="小明", platform="bilibili", viewer_id=7,
     )  # fmt: skip
     await chat.insert_live_chat(
         live_session_id=pk, timestamp_ms=BASE_MS + 2_000, sender_role="assistant", content="欢迎小明！",
@@ -75,7 +75,8 @@ async def test_transcript_merges_chat_and_super_chats_in_time_order(store: SQLit
     )
     assert (body["started_at_ms"], body["ended_at_ms"]) == (BASE_MS, BASE_MS + 3_600_000)
     assert body["lines"] == [
-        {"ts_ms": BASE_MS + 1_000, "role": "viewer", "user_id": "1001", "user_name": "小明", "text": "来了来了"},
+        # 归到观众的行用内部观众 ID（换了数据源在 MaiBot 里也是同一个人）；没归到观众的旧行回退原始外部 ID
+        {"ts_ms": BASE_MS + 1_000, "role": "viewer", "user_id": "viewer:7", "user_name": "小明", "text": "来了来了"},
         {"ts_ms": BASE_MS + 1_500, "role": "viewer", "user_id": "1002", "user_name": "阿花", "text": "[醒目留言 ¥30] 加油"},
         {"ts_ms": BASE_MS + 2_000, "role": "streamer", "user_id": "", "user_name": "", "text": "欢迎小明！"},
     ]

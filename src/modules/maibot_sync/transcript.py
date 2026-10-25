@@ -9,6 +9,10 @@
 礼物不收：连击礼物量大而信息少，谁撑了场已经写在场次回顾里。
 
 模拟器回放出来的场次（``source="replay"``）、还没结账的场次不出记录。
+
+观众行的 ``user_id`` 用内部观众 ID（``viewer:<编号>``），不用收到时的外部 ID：
+同一位观众换了数据源（账号 uid / 开放平台 open_id）在 MaiBot 里仍是同一个人。
+没归到观众的旧明细行回退为原始外部 ID；联动对象沿用原值。
 """
 
 from __future__ import annotations
@@ -33,6 +37,16 @@ _SUPER_CHAT_ROWS = 2_000
 _REPLAY_SOURCE = "replay"
 # live_chat.sender_role → 契约里的说话人角色
 _ROLE_BY_SENDER = {"viewer": "viewer", "partner": "partner", "assistant": "streamer"}
+
+
+def _viewer_user_id(row: sqlite3.Row, external_column: str) -> str:
+    """观众行推给插件的 user_id：有内部观众 ID 用 ``viewer:<编号>``，否则回退原始外部 ID。
+
+    加前缀是为了不和平台账号 uid 撞号（B 站 uid 也是纯数字）。
+    """
+    if row["viewer_id"] is not None:
+        return f"viewer:{int(row['viewer_id'])}"
+    return str(row[external_column] or "")
 
 
 class StorageTranscriptSource:
@@ -86,11 +100,18 @@ class StorageTranscriptSource:
             text = str(row["content"] or "").strip()
             if role is None or not text or int(row["simulated"] or 0):
                 continue
+            # 主播不带 ID；观众用内部观众 ID；联动对象沿用原值
+            if role == "streamer":
+                user_id = ""
+            elif role == "viewer":
+                user_id = _viewer_user_id(row, "sender_id")
+            else:
+                user_id = str(row["sender_id"] or "")
             lines.append(
                 {
                     "ts_ms": int(row["timestamp_ms"]),
                     "role": role,
-                    "user_id": "" if role == "streamer" else str(row["sender_id"] or ""),
+                    "user_id": user_id,
                     "user_name": "" if role == "streamer" else str(row["sender_name"] or ""),
                     "text": text,
                 }
@@ -110,7 +131,7 @@ class StorageTranscriptSource:
                 {
                     "ts_ms": int(row["timestamp_ms"]),
                     "role": "viewer",
-                    "user_id": str(row["user_id"] or ""),
+                    "user_id": _viewer_user_id(row, "user_id"),
                     "user_name": str(row["user_name"] or ""),
                     "text": f"{label} {text}",
                 }
