@@ -22,6 +22,7 @@ from src.agents.streamer import replyer
 from src.agents.streamer.config import StreamerConfig, StreamerPersonaConfig
 from src.agents.streamer.plan import DecisionPlan
 from src.agents.text_adv.config import TextAdvConfig
+from src.modules.agents.deps import AgentDeps
 from src.modules.agents.factory import instantiate_agent
 from src.modules.config.agents_schemas import AgentsConfig
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -46,10 +47,7 @@ def streamer() -> tuple[Any, MagicMock, MagicMock]:
     agent = instantiate_agent(
         "streamer",
         {"persona": _PERSONA},
-        llm_manager=llm,
-        prompt_manager=prompt,
-        event_bus=MagicMock(),
-        tool_registry=MagicMock(),
+        deps=AgentDeps(llm_manager=llm, prompt_manager=prompt, event_bus=MagicMock(), tool_registry=MagicMock()),
     )
     assert agent is not None
     return agent, llm, prompt

@@ -20,7 +20,7 @@ import numpy as np
 from src.modules.config.core_schemas import EdgeTTSParams
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-from ...common import build_stats_dict, prepare_speech_text, synthesize_play_and_notify
+from ...common import build_stats_dict, run_full_engine_speech
 
 if TYPE_CHECKING:
     pass
@@ -112,28 +112,21 @@ class EdgeTTSProvider:
     # ===== 业务方法 =====
 
     async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
-        """合成并播放语音。
+        """合成并播放语音（发声四步前奏走公共入口，引擎只剩合成差异）。
 
         Args:
             text: 要合成的文本。
             utterance_id: 一次发声实例的唯一 ID；非 None 时按
                 ``tts.utterance.*`` 生命周期发布事件。
         """
-        if not self._has_started:
-            await self.setup()
-        final_text = prepare_speech_text(self.logger, text)
-        if final_text is None:
-            return
-        async with self.tts_lock:
-            await synthesize_play_and_notify(
-                self,
-                utterance_id=utterance_id,
-                speech_text=text,
-                synthesize=lambda: self._edge_tts_synthesize(final_text),
-            )
+        await run_full_engine_speech(self, text=text, utterance_id=utterance_id, synthesize=self._edge_tts_synthesize)
 
     async def _edge_tts_synthesize(self, text: str) -> Tuple[np.ndarray, int]:
-        """调用 Edge TTS 合成"""
+        """调用 Edge TTS 合成（失败直接抛出）。
+
+        异常不在此处理：由公共骨架统一计错误数、发 ``tts.utterance.failed``
+        并上抛给编排队列兜底——引擎侧吞错会让失败以假音频形态静默过关。
+        """
         if "edge_tts" not in globals():
             raise RuntimeError("Edge TTS 未安装")
         tmp_filename = None
@@ -145,9 +138,6 @@ class EdgeTTSProvider:
             self.logger.debug(f"Edge TTS 合成完成: {tmp_filename}")
             audio_array, samplerate = await asyncio.to_thread(sf.read, tmp_filename, dtype="float32")
             return audio_array, samplerate
-        except Exception as e:
-            self.logger.exception(f"Edge TTS 合成失败: {e}")
-            return np.zeros(44100, dtype=np.float32), 16000
         finally:
             if tmp_filename:
                 try:

@@ -6,6 +6,7 @@
 
 import { onScopeDispose, type Ref } from 'vue';
 import { useWebSocketStore } from '@/stores/websocket';
+import { isToolHealthEvent } from '@/types/events';
 import type { ToolEntry, ToolHealth, ToolHealthEventData, WebSocketMessage } from '@/types';
 
 export function useToolHealth(tools: Ref<ToolEntry[]>) {
@@ -28,7 +29,7 @@ export function useToolHealth(tools: Ref<ToolEntry[]>) {
   }
 
   function handleHealthMessage(msg: WebSocketMessage): void {
-    if (!msg.type.startsWith('tool.health.')) return;
+    if (!isToolHealthEvent(msg.type)) return;
     if (!isToolHealthEventData(msg.data)) return;
     const payload = msg.data;
     if (payload.state === 'open') {

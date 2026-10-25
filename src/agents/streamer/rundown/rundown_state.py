@@ -60,7 +60,7 @@ class RundownReject:
 
     Attributes:
         reason: 人类可读原因码（如 ``"unknown_segment_id"`` / ``"min_duration_not_met"`` /
-            ``"already_done"`` / ``"not_running"`` / ``"not_paused"``）
+            ``"already_done"`` / ``"not_running"`` / ``"not_paused"`` / ``"blank_title_target"``）
         available_ids: 当前流程单的全部环节 id（未知 id 拒绝时填充）
         remaining_ms: 距 ``min_duration_ms`` 还差多少 ms（``min_duration`` 拒绝时填充）
     """
@@ -68,6 +68,18 @@ class RundownReject:
     reason: str
     available_ids: List[str] = field(default_factory=list)
     remaining_ms: int = 0
+
+
+def _blank_title_reject(segment: RundownSegment) -> Optional[RundownReject]:
+    """空标题目标门禁（纵深防御）：``next`` / ``goto`` 的目标段标题必须非空。
+
+    标题非空已由 ``RundownSegment`` 模型层校验拦住正常入口；此处拦绕过
+    校验的脏数据形态（历史存量 / 原地改写的鸭子实例）。收敛在状态机
+    （唯一变更边界）后，Agent 工具与 Dashboard 手动两条通路同拦。
+    """
+    if segment.title.strip():
+        return None
+    return RundownReject(reason="blank_title_target")
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +114,9 @@ _BEGIN_VALID_BY: frozenset[str] = frozenset({"system", "human"})
 
 #: append 的独立白名单：追加是 Agent 的计划扩展权（导演改单走编辑写穿通道）
 _APPEND_VALID_BY: frozenset[str] = frozenset({"agent"})
+
+#: insert 的独立白名单：插话题是导演的应急编排权（冷场时在当前环节后插一次性环节）
+_INSERT_VALID_BY: frozenset[str] = frozenset({"human"})
 
 #: 单场流程单环节总数上限：防止 Agent 无限追加把情境文本撑爆
 SEGMENTS_MAX: int = 20
@@ -363,14 +378,17 @@ class RundownState:
                 reason="unknown_segment_id",
                 available_ids=available,
             )
+        target_seg = next(seg for seg in self.rundown.segments if seg.id == segment_id)
+        reject = _blank_title_reject(target_seg)
+        if reject is not None:
+            return reject
 
         now = self._resolve_now(now_ms)
         reject = self._min_duration_reject(by=by, now=now)
         if reject is not None:
             return reject
 
-        target_idx = next(i for i, seg in enumerate(self.rundown.segments) if seg.id == segment_id)
-        target_seg = self.rundown.segments[target_idx]
+        target_idx = self.rundown.segments.index(target_seg)
         # armed 态实际推进隐含起算：双锚点 = 动作时刻，不发单独 begin 事件
         self._begin_if_armed(now)
         # 暂停态下切换环节先结算暂停时长（进整场累计，不蒸发）
@@ -437,6 +455,9 @@ class RundownState:
         # 普通推进（armed 态先隐含起算；暂停态下先结算暂停时长，进整场累计不蒸发）
         target_idx = self.index + 1
         target_seg = self.rundown.segments[target_idx]
+        reject = _blank_title_reject(target_seg)
+        if reject is not None:
+            return reject
         self._begin_if_armed(now)
         self._settle_pause_if_paused(now)
         self.index = target_idx
@@ -602,6 +623,64 @@ class RundownState:
 
         self._apply_change(
             action="append",
+            segment_id=segment.id,
+            segment_title=segment.title,
+            by=cast(RundownActor, by),
+            now_ms=now,
+        )
+        return None
+
+    def insert_after_current(
+        self,
+        segment: RundownSegment,
+        *,
+        by: str,
+        now_ms: Optional[int] = None,
+    ) -> Optional[RundownReject]:
+        """在当前环节之后插入一次性环节（导演的应急插话题权）。
+
+        与 :meth:`append_segment` 的差异：插入位置是游标之后（``index + 1``）
+        而非列表尾部——下一次 ``next`` 即落到该环节，无需 ``goto``。
+
+        ``by`` 用独立白名单，仅接受 ``"human"``；非法值抛 ``ValueError``。
+
+        - 未加载 / ``seg_id`` 与现有环节冲突 / 环节总数达 :data:`SEGMENTS_MAX`
+          / 已 done（无"当前环节之后"可言）→ 结构化拒绝（不变更、不发事件）。
+        - **游标不动**：当前环节继续播；armed 态（未起算）同 append 先隐含
+          起算；paused 态保持暂停冻结，新环节计时在恢复后才开始。
+
+        Returns:
+            ``None`` 表示接受；``RundownReject`` 表示拒绝（不变更、不发事件）。
+        """
+        if by not in _INSERT_VALID_BY:
+            raise ValueError(f"RundownState.insert_after_current: 非法 by={by!r}，仅接受 {_INSERT_VALID_BY}")
+        if self.rundown is None:
+            return RundownReject(reason="no_rundown_loaded")
+        available = [seg.id for seg in self.rundown.segments]
+        if segment.id in available:
+            return RundownReject(reason="duplicate_segment_id", available_ids=available)
+        if len(available) >= SEGMENTS_MAX:
+            return RundownReject(reason="limit_reached")
+        if self.index >= len(available):
+            return RundownReject(reason="already_done")
+
+        now = self._resolve_now(now_ms)
+        # armed 态隐含起算（与 append 同款）；paused 冻结不结算——插入不动计时
+        self._begin_if_armed(now)
+        insert_at = self.index + 1
+        # model_copy 替换环节列表而非原地改：防污染内置 DEFAULT_RUNDOWN 全局单例
+        self.rundown = self.rundown.model_copy(
+            update={
+                "segments": [
+                    *self.rundown.segments[:insert_at],
+                    segment,
+                    *self.rundown.segments[insert_at:],
+                ]
+            }
+        )
+
+        self._apply_change(
+            action="insert",
             segment_id=segment.id,
             segment_title=segment.title,
             by=cast(RundownActor, by),

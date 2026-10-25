@@ -233,6 +233,7 @@ import { computed, onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { Setting } from '@element-plus/icons-vue';
 import { useComponentsStore, useEventsStore } from '@/stores';
+import { EVENT } from '@/types/events';
 import { useNowTick } from '@/composables/useNowTick';
 import { useScrollFollow } from '@/composables/useScrollFollow';
 import {
@@ -248,7 +249,7 @@ import '@/styles/component-master-detail.css';
 // 归因映射：采集器名 → 消息族白名单（payload.message_type 判别）
 //
 // 核对来源（采集器在 EventBus 上发 room.message.* 事件；Dashboard WS 层把
-// 4 种事件统一广播为 "room.message"，消息种类由 payload.message_type 携带）：
+// 整族折叠广播为 "room.message"，消息种类由 payload.message_type 携带）：
 // - console_input_collector.py: `_emit_semantic_event` 按 data_type 发 4 种事件
 // - bili_danmaku_official_collector.py: WS 弹幕/礼物/SC/进房全部走 _emit_semantic_event
 // - bili_danmaku_collector.py (legacy): 仅 _emit_semantic_event 发 room.message.danmaku
@@ -268,8 +269,8 @@ const COLLECTOR_EVENT_FAMILIES: Record<string, readonly string[]> = {
   stt: ['danmaku'],
 };
 
-/** Dashboard WS 把 4 种 room.message.* EventBus 事件统一广播为此类型 */
-const ROOM_MESSAGE_WS_TYPE = 'room.message';
+/** Dashboard WS 把 room.message.* 族 EventBus 事件统一折叠广播为此类型 */
+const ROOM_MESSAGE_WS_TYPE = EVENT.roomMessage;
 
 /** 空列表 = 不区分消息族，匹配全部 room.message 事件 */
 const DEFAULT_FAMILIES: readonly string[] = [];

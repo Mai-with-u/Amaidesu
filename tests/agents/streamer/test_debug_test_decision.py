@@ -16,7 +16,11 @@ _REPLY: Dict[str, Any] = {"speech": "欢迎来到直播间！", "emotion": {"nam
 def _agent(outcome: Optional[Dict[str, Any]], reply: Optional[Dict[str, Any]] = None):
     """Planner 直接给出本轮结论；reply 工具按 reply 返回成功或失败。"""
     agent = make_streamer_agent()
-    agent._rounds._planner.plan = AsyncMock(return_value=outcome)
+    if outcome is None:
+        # plan() 异常收场：决策失败由执行器捕获后写 error
+        agent._rounds._planner.plan = AsyncMock(side_effect=RuntimeError("planner boom"))
+    else:
+        agent._rounds._planner.plan = AsyncMock(return_value=outcome)
     result = (
         ToolExecutionResult(tool_name="reply", success=True, structured_content=reply)
         if reply is not None

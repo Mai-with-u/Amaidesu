@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from src.modules.agents.base import BaseAgent
+from src.modules.agents.deps import AgentDeps
 from src.modules.logging import get_logger
 from src.modules.skills import get_skill_library
 
@@ -30,47 +31,32 @@ def instantiate_agent(
     name: str,
     config: Optional[dict[str, Any]],
     *,
-    llm_manager: Any,
-    prompt_manager: Any,
-    event_bus: Any = None,
-    tool_registry: Any = None,
-    thinking_sink: Optional[Any] = None,
-    speech_config: Optional[dict[str, Any]] = None,
-    tts_engine: Optional[Any] = None,
-    subtitle_service: Optional[Any] = None,
-    session_manager: Optional[Any] = None,
-    rundown_repo: Optional[Any] = None,
-    rundown_instance_repo: Optional[Any] = None,
-    rundown_transition_repo: Optional[Any] = None,
-    chat_repo: Optional[Any] = None,
-    sessions_repo: Optional[Any] = None,
-    topic_repo: Optional[Any] = None,
-    viewer_repo: Optional[Any] = None,
-    viewer_profile_repo: Optional[Any] = None,
-    recap_repo: Optional[Any] = None,
-    event_repo: Optional[Any] = None,
-    context_assembler_config: Optional[Any] = None,
-    task_tracker: Optional[Any] = None,
-    task_ledger: Optional[Any] = None,
+    deps: AgentDeps,
 ) -> Optional[BaseAgent]:
     """按名实例化 Agent；未知名字返回 None。
 
-    基础设施参数按各 Agent 实际需要透传（未列出的 Agent 忽略对应参数）：
+    基础设施依赖经 ``deps``（``AgentDeps`` 值对象）整体传入——依赖清单
+    单点定义在该类，本工厂不再自持签名。工厂收到的是**已解析**的值：
+    None 字段 = 该基建确实未装配，Agent 按各自降级语义处理（回退合成
+    是调用方 ``AgentManager._resolve_deps`` 的职责，不在本层）。
+
+    依赖按各 Agent 实际需要取用（其余字段忽略）：
     - streamer：thinking_sink / speech_config / tts_engine / subtitle_service /
       session_manager / rundown_repo / rundown_instance_repo /
       rundown_transition_repo / chat_repo / sessions_repo / topic_repo /
       viewer_repo / viewer_profile_repo / recap_repo / event_repo /
-      context_assembler_config / task_ledger（委派渲染的机器状态查询源）。仓储缺省 None 时对应能力降级（chat_repo 缺失
-      = 对话历史读取整体短路，Planner/Replyer 无历史上下文；记忆两仓储缺失
-      = 场次回顾 / 观众画像整体关闭），组合根必须传入
+      context_assembler_config / task_ledger（委派渲染的机器状态查询源）。
+      仓储为 None 时对应能力降级（chat_repo 缺失 = 对话历史读取整体短路，
+      Planner/Replyer 无历史上下文；记忆两仓储缺失 = 场次回顾 / 观众画像
+      整体关闭），组合根必须传入
     - minecraft：thinking_sink / task_tracker；llm_profile 使用 Agent
       类默认值（``[llm_profiles.minecraft]`` 段）；技能库在工厂内取全局单例注入
     - text_adv：基础四件套 + 工厂内装配的感知/动作依赖（读屏 reader /
       窗口后端 / 帧采集后端 / 键鼠后端）；tool_registry 供启动期自注册工具面
 
-    ``thinking_sink`` 关键字参数透传给 StreamerAgent 与 MinecraftAgent
-    （鸭子类型：任何带 ``on_thinking_delta`` 方法的对象）；缺省 None 时
-    两 Agent 的思考流旁路整体短路，决策循环行为与无旁路完全一致。
+    ``thinking_sink`` 透传给 StreamerAgent 与 MinecraftAgent（鸭子类型：
+    任何带 ``on_thinking_delta`` 方法的对象）；None 时两 Agent 的思考流
+    旁路整体短路，决策循环行为与无旁路完全一致。
     """
     config = config if isinstance(config, dict) else {}
 
@@ -95,27 +81,27 @@ def instantiate_agent(
         )
         return StreamerAgent(
             config=cfg_obj,
-            llm_manager=llm_manager,
-            prompt_manager=prompt_manager,
-            event_bus=event_bus,
-            tool_registry=tool_registry,
-            rundown_repo=rundown_repo,
-            rundown_instance_repo=rundown_instance_repo,
-            rundown_transition_repo=rundown_transition_repo,
-            chat_repo=chat_repo,
-            sessions_repo=sessions_repo,
-            topic_repo=topic_repo,
-            viewer_repo=viewer_repo,
-            viewer_profile_repo=viewer_profile_repo,
-            recap_repo=recap_repo,
-            event_repo=event_repo,
-            context_assembler_config=context_assembler_config,
-            speech_config=speech_config,
-            tts_engine=tts_engine,
-            subtitle_service=subtitle_service,
-            session_manager=session_manager,
-            thinking_sink=thinking_sink,
-            task_ledger=task_ledger,
+            llm_manager=deps.llm_manager,
+            prompt_manager=deps.prompt_manager,
+            event_bus=deps.event_bus,
+            tool_registry=deps.tool_registry,
+            rundown_repo=deps.rundown_repo,
+            rundown_instance_repo=deps.rundown_instance_repo,
+            rundown_transition_repo=deps.rundown_transition_repo,
+            chat_repo=deps.chat_repo,
+            sessions_repo=deps.sessions_repo,
+            topic_repo=deps.topic_repo,
+            viewer_repo=deps.viewer_repo,
+            viewer_profile_repo=deps.viewer_profile_repo,
+            recap_repo=deps.recap_repo,
+            event_repo=deps.event_repo,
+            context_assembler_config=deps.context_assembler_config,
+            speech_config=deps.speech_config,
+            tts_engine=deps.tts_engine,
+            subtitle_service=deps.subtitle_service,
+            session_manager=deps.session_manager,
+            thinking_sink=deps.thinking_sink,
+            task_ledger=deps.task_ledger,
         )
 
     if name == "minecraft":
@@ -130,12 +116,12 @@ def instantiate_agent(
             minecraft_cfg = MinecraftConfig()
         return MinecraftAgent(
             config=minecraft_cfg,
-            llm_manager=llm_manager,
-            prompt_manager=prompt_manager,
-            event_bus=event_bus,
-            tool_registry=tool_registry,
-            thinking_sink=thinking_sink,
-            task_tracker=task_tracker,
+            llm_manager=deps.llm_manager,
+            prompt_manager=deps.prompt_manager,
+            event_bus=deps.event_bus,
+            tool_registry=deps.tool_registry,
+            thinking_sink=deps.thinking_sink,
+            task_tracker=deps.task_tracker,
             skill_library=get_skill_library(),
         )
 
@@ -157,12 +143,12 @@ def instantiate_agent(
         # tool_registry 同时传给 Agent 供启动期自注册工具面（与另两 Agent 同通道）
         return TextAdvGameAgent(
             config=text_adv_cfg,
-            vision_reader=RegistryVisionReader(tool_registry, source=name),
+            vision_reader=RegistryVisionReader(deps.tool_registry, source=name),
             window_backend=PyGetWindowBackend(),
             capture=MssScreenCapture(),
             input_backend=PyAutoGuiInputBackend(),
-            tool_registry=tool_registry,
-            event_bus=event_bus,
+            tool_registry=deps.tool_registry,
+            event_bus=deps.event_bus,
         )
 
     if name == "game_2048":
@@ -177,8 +163,8 @@ def instantiate_agent(
         # 棋盘与策略全部进程内，无外部依赖可装配；tool_registry 供启动期自注册工具面
         return Game2048Agent(
             config=game_2048_cfg,
-            tool_registry=tool_registry,
-            event_bus=event_bus,
+            tool_registry=deps.tool_registry,
+            event_bus=deps.event_bus,
         )
 
     return None

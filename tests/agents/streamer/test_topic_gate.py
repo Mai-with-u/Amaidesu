@@ -13,6 +13,7 @@ from src.agents.streamer.tools.reply_tool import ReplyToolProvider
 from src.agents.streamer.topic_gate import (
     SPEECH_DUPLICATE_RATIO,
     SPEECH_GATE_WINDOW,
+    SpeechGate,
     speech_overlap_ratio,
     strip_citations,
 )
@@ -227,7 +228,9 @@ async def test_gate_exempt_window_skips_overlap_check() -> None:
 async def test_gate_window_config_zero_disables_check() -> None:
     """窗口配置为 0 即关闭台词重合度检查（自检 false 仍打回）。"""
     provider = ReplyToolProvider(
-        replyer=_RepeatReplyer(), history_provider=lambda: _history("我在游戏里挖到了石料"), gate_window=0
+        replyer=_RepeatReplyer(),
+        history_provider=lambda: _history("我在游戏里挖到了石料"),
+        gate=SpeechGate(window=0),
     )
     result = await provider.invoke(
         _invocation({"topic_summary": "石料", "is_novel": True, "emotion": "neutral", "intensity": 0.5})
@@ -302,11 +305,13 @@ def _provider_with_fixed_speech(history: Optional[List[Any]] = None) -> ReplyToo
 async def test_planner_passes_duplicate_speech_to_next_window_clean() -> None:
     """台词重合打回经工具回执喂回：本窗 reply_failures 计数、打回话术进观察，
     outcome.speech_gate_bounces 读自失败结果的 structured_content；换窗
-    （round_id 变化）后计数从零开始。"""
+    （round_id 变化）后计数从零开始。
+
+    闸语料走新契约：Planner 从 plan(history=...) 算好随 attachment 携带。"""
     provider = _provider_with_fixed_speech(_history("我在游戏里挖到了石料"))
     planner, llm = _planner_with_real_provider(provider, [_reply_call("石料"), _silent_call()])
 
-    outcome = await planner.plan([], proactive=True, round_id="window-1")
+    outcome = await planner.plan([], proactive=True, round_id="window-1", history=_history("我在游戏里挖到了石料"))
 
     assert (outcome["replied"], outcome["silent_reason"], outcome["speech"]) == (False, "natural", None)
     assert outcome["reply_failures"] == 1
@@ -317,7 +322,7 @@ async def test_planner_passes_duplicate_speech_to_next_window_clean() -> None:
 
     # 下一窗：round_id 变化使 Provider 清零，重合台词再次拿到完整的首次打回话术
     llm.generate.side_effect = [_reply_call("石料"), _silent_call()]
-    outcome = await planner.plan([], proactive=True, round_id="window-2")
+    outcome = await planner.plan([], proactive=True, round_id="window-2", history=_history("我在游戏里挖到了石料"))
     assert outcome["speech_gate_bounces"] == 1
     last_messages = llm.generate.call_args_list[-1].args[0]
     tool_texts = [m["content"] for m in last_messages if m.get("role") == "tool"]
@@ -329,10 +334,39 @@ async def test_planner_gate_bounces_accumulate_within_window() -> None:
     provider = _provider_with_fixed_speech(_history("我在游戏里挖到了石料"))
     planner, llm = _planner_with_real_provider(provider, [_reply_call("石料"), _reply_call("石料"), _silent_call()])
 
-    outcome = await planner.plan([], proactive=True, round_id="window-1")
+    outcome = await planner.plan([], proactive=True, round_id="window-1", history=_history("我在游戏里挖到了石料"))
 
     assert outcome["silent_reason"] == "natural"
     assert outcome["speech_gate_bounces"] == 2
     last_messages = llm.generate.call_args_list[-1].args[0]
     tool_texts = [m["content"] for m in last_messages if m.get("role") == "tool"]
     assert len(tool_texts) == 2 and "保持沉默" in tool_texts[1]
+
+
+async def test_gate_corpus_rides_with_attachment_not_provider() -> None:
+    """语料随 attachment 携带：attachment.speech_history 在场即生效，不再读 history_provider。"""
+    from src.agents.streamer.plan import ReplyRoundAttachment
+
+    provider = _provider(None)  # 无 provider 也不影响——语料不从 provider 来
+    replyer = provider._replyer
+
+    async def _repeat(**kwargs: Any) -> dict[str, Any]:
+        return {"speech": "我在游戏里挖到了石料呀", "llm_request_id": None}
+
+    replyer.generate = _repeat  # type: ignore[method-assign]
+    result = await provider.invoke(
+        _invocation(
+            {"topic_summary": "石料", "is_novel": True, "emotion": "neutral", "intensity": 0.5},
+            attachment=ReplyRoundAttachment(speech_history=["我在游戏里挖到了石料"]),
+        )
+    )
+    assert result.success is False and "重合度" in (result.error_message or "")
+
+    # 空列表 = 确认本窗前无台词：无从比对即放行
+    result = await provider.invoke(
+        _invocation(
+            {"topic_summary": "石料", "is_novel": True, "emotion": "neutral", "intensity": 0.5},
+            attachment=ReplyRoundAttachment(speech_history=[]),
+        )
+    )
+    assert result.success is True

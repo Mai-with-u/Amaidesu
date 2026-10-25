@@ -80,11 +80,12 @@ class _MinimalEngine:
         ("post", "/api/v1/debug/subtitle/clear", ""),
         ("get", "/api/v1/debug/subtitle/status", ""),
         ("post", "/api/v1/debug/tts/test", "TTS"),
+        ("post", "/api/v1/debug/tts/say", "TTS"),
         ("get", "/api/v1/debug/tts/status", ""),
     ],
 )
 def test_endpoints_return_503_when_service_missing(mount, method: str, path: str, detail: str) -> None:
-    kwargs = {"json": {"text": "测试"}} if path.endswith("/test") else {}
+    kwargs = {"json": {"text": "测试"}} if path.endswith(("/test", "/say")) else {}
     resp = getattr(mount(), method)(path, **kwargs)
     assert resp.status_code == 503 and detail in str(resp.json().get("detail", ""))
 
@@ -157,6 +158,20 @@ def test_tts_audio_mode_returns_base64_and_filters_unset_overrides(mount) -> Non
 def test_tts_audio_mode_failures(mount, engine, message: str) -> None:
     resp = mount(tts_engine=engine).post("/api/v1/debug/tts/test", json={"text": "试听", "play_on_device": False})
     assert resp.status_code == 200 and resp.json()["success"] is False and message in resp.json()["error"]
+
+
+def test_tts_say_replays_text_with_say_prefix_and_reports_failure(mount) -> None:
+    """台前重播：同文本重合成（走 handle_speech 完整链路），失败回 success=false。"""
+    engine = FakeTtsEngine()
+    body = mount(tts_engine=engine).post("/api/v1/debug/tts/say", json={"text": "重播这句"}).json()
+    assert (body["success"], body["error"]) == (True, None)
+    (call,) = engine.speech_calls
+    assert call["text"] == "重播这句" and call["utterance_id"].startswith("debug-say-")
+    assert body["utterance_id"] == call["utterance_id"]
+
+    failing = mount(tts_engine=FakeTtsEngine(speech_exception=RuntimeError("TTS 服务不可达")))
+    body = failing.post("/api/v1/debug/tts/say", json={"text": "重播"}).json()
+    assert body["success"] is False and "TTS 服务不可达" in body["error"] and body["utterance_id"] is not None
 
 
 def test_tts_status_passes_engine_stats_through(mount) -> None:

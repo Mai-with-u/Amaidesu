@@ -193,6 +193,9 @@
           <el-button :icon="ArrowRightBold" :loading="actionLoading === 'next'" @click="handleNext">
             切到下一环节
           </el-button>
+          <el-button :icon="MagicStick" :loading="insertLoading" @click="openInsertDialog">
+            插入话题
+          </el-button>
         </div>
 
         <div v-if="nextSegment" class="next-line">
@@ -545,6 +548,33 @@
         <el-button type="primary" @click="saveSegmentDialog">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 应急插话题：冷场时在当前环节后插一次性环节（服务端生成环节 id 与预期时长） -->
+    <el-dialog
+      v-model="insertDialogOpen"
+      title="插入应急话题"
+      width="480px"
+      class="insert-dialog"
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="70px">
+        <el-form-item label="标题" required>
+          <el-input v-model="insertForm.title" placeholder="话题标题（必填）" maxlength="50" />
+        </el-form-item>
+        <el-form-item label="内容">
+          <el-input
+            v-model="insertForm.content"
+            type="textarea"
+            :rows="3"
+            placeholder="话题引导词，注入主播 Agent 情境；可留空"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="insertDialogOpen = false">取消</el-button>
+        <el-button type="primary" :loading="insertLoading" @click="submitInsert">插入</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -567,16 +597,20 @@ import {
   ArrowRightBold,
   EditPen,
   Files,
+  MagicStick,
   Plus,
   Position,
   Refresh,
   RefreshLeft,
   VideoPause,
 } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import { rundownApi } from '@/api';
 import { useRundownState } from '@/composables/rundown/useRundownState';
 import { useRundownDisplay } from '@/composables/rundown/useRundownDisplay';
 import { useRundownLibrary } from '@/composables/rundown/useRundownLibrary';
 import { confirmAction } from '@/utils/confirmAction';
+import { getApiErrorMessage } from '@/utils/apiError';
 import type { RundownSegmentView } from '@/types';
 
 // 装配：运行态 → 展示派生（消费 state/currentSegment）→ 库与编辑器（消费 state/fetchState）
@@ -674,6 +708,43 @@ async function handleRestart(): Promise<void> {
   );
   if (!ok) return;
   void performControl('restart');
+}
+
+// 应急插话题：走 rundownApi.control 直调（带 payload 的动作形态与常规控制不同，
+// 不并入 useRundownState.performControl）；成功后回拉完整 state 刷新环节列表
+const insertDialogOpen = ref(false);
+const insertLoading = ref(false);
+const insertForm = ref<{ title: string; content: string }>({ title: '', content: '' });
+
+function openInsertDialog(): void {
+  insertForm.value = { title: '', content: '' };
+  insertDialogOpen.value = true;
+}
+
+async function submitInsert(): Promise<void> {
+  const title = insertForm.value.title.trim();
+  if (!title) {
+    ElMessage.warning('请填写话题标题');
+    return;
+  }
+  insertLoading.value = true;
+  try {
+    const res = await rundownApi.control({
+      action: 'insert',
+      payload: { title, content: insertForm.value.content.trim() || undefined },
+    });
+    if (!res.data.success) {
+      ElMessage.error(res.data.message || '插入话题失败');
+      return;
+    }
+    ElMessage.success(res.data.message || '已插入话题');
+    insertDialogOpen.value = false;
+    await fetchState({ silent: true });
+  } catch (e) {
+    ElMessage.error(getApiErrorMessage(e, '插入话题失败'));
+  } finally {
+    insertLoading.value = false;
+  }
 }
 </script>
 

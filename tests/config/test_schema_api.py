@@ -110,3 +110,14 @@ def test_widget_markers_options_precision_and_bounds_reach_generated_fields() ->
     dashboard = {f["name"]: f for f in _generate(DashboardConfig)["fields"]}
     for name in ("port", "vite_dev_port"):
         assert (dashboard[name].get("minValue"), dashboard[name].get("maxValue")) == (1, 65535)
+
+
+def test_tts_provider_options_injected_from_assembly() -> None:
+    """TTS 引擎候选 = tts 装配表键集（读侧单点注入，定义处不手抄）。"""
+    from src.modules.config.infra_schemas import InfraRootConfig
+    from src.modules.tts.assembly import TTS_PROVIDER_NAMES
+
+    tts_schema = ConfigSchemaGenerator.generate_config_schema(InfraRootConfig)["nested"]["tts"]
+    provider = next(f for f in tts_schema["fields"] if f["name"] == "provider")
+    assert provider.get("options") == list(TTS_PROVIDER_NAMES)
+    assert set(provider["options"]) == {"edge_tts", "gptsovits", "voicebox", "omni_tts"}

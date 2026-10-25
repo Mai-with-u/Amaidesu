@@ -99,6 +99,25 @@ class TtsTestResponse(BaseModel):
     audio_base64: Optional[str] = None
 
 
+class TtsSayRequest(BaseModel):
+    """TTS 台前重播请求：要重新合成播放的文本。
+
+    重播语义 = 同文本重合成：utterance 生命周期事件不留档文本与
+    utterance_id 的映射，但事件载荷与发言卡都持有原文本，前端把原文本
+    原样传回即可，无需服务端按 ID 反查。
+    """
+
+    text: str
+
+
+class TtsSayResponse(BaseModel):
+    """TTS 台前重播响应（同步长请求；合成失败时引擎已发 tts.utterance.failed）"""
+
+    success: bool
+    utterance_id: Optional[str] = None
+    error: Optional[str] = None
+
+
 class TtsStatusResponse(BaseModel):
     """TTS 引擎状态：透传 ``get_stats()``（name/is_connected/计数等）"""
 

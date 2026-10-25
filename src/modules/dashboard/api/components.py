@@ -9,17 +9,16 @@ agents.toml（``[agents]`` 段），运行时为 CollectorManager / AgentManager
 由管理器注册填充（空串兜底）。工具不在此管理：工具以"域开关单元"管理
 （见 tools API 的 categories 端点）。
 
-配置写盘一律经统一写回器 ``update_config_values``（Schema 校验 + 备份 +
-注释重生成），不再做 TOML 原位编辑。
+配置写盘经 ``config_adapter.apply_config_updates`` 统一编排（前置校验 →
+统一写回器 → 按域热重载 → agents / collectors 组件重建热应用），与设置页
+保存同一管线；按钮的动态启停在实例层完成后，写回只落盘不重建。
 """
 
-from typing import TYPE_CHECKING, Annotated, Any, Dict, List
+from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.modules.agents.companions import owner_of
-from src.modules.config.errors import ConfigValidationError
-from src.modules.config.multi_file_loader import update_config_values
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.component import (
     ComponentControlAction,
@@ -33,6 +32,7 @@ from src.modules.dashboard.services.component_runtime import (
     start_instance,
     stop_instance,
 )
+from src.modules.dashboard.services.config_adapter import apply_config_updates
 from src.modules.dashboard.utils.component_helper import (
     build_config_view,
     config_dir,
@@ -51,36 +51,46 @@ router = APIRouter()
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
-# v2：group（路径参数）→ 配置文件名 + enabled 列表在文件内的点分键路径。
+# v2：group（路径参数）→ enabled 名单的 API 键（scope 前缀 + 文件内点分路径）。
 # 采集器名单在 collectors.toml 顶层（无嵌套段）；Agent 名单在 [agents] 段内。
-_GROUP_TO_FILE: Dict[str, tuple[str, str]] = {
-    "collectors": ("collectors.toml", "enabled"),
-    "agents": ("agents.toml", "agents.enabled"),
+_GROUP_TO_KEY: Dict[str, str] = {
+    "collectors": "collectors.enabled",
+    "agents": "agents.agents.enabled",
 }
 
 
 def _read_enabled_list(server: "DashboardServer", group: str) -> List[str]:
     """读指定组件组的 enabled 名单（collectors.toml 顶层 / agents.toml [agents]）。"""
-    file_name, dotted_key = _GROUP_TO_FILE[group]
-    doc = read_toml_dict(config_dir(server) / file_name)
-    node: Any = doc
-    for part in dotted_key.split("."):
-        node = node.get(part) if isinstance(node, dict) else None
-        if node is None:
-            return []
+    if group == "collectors":
+        doc = read_toml_dict(config_dir(server) / "collectors.toml")
+        node: Any = doc.get("enabled")
+    else:
+        doc = read_toml_dict(config_dir(server) / "agents.toml")
+        agents = doc.get("agents")
+        node = agents.get("enabled") if isinstance(agents, dict) else None
     return [n for n in node if isinstance(n, str)] if isinstance(node, list) else []
 
 
-def _sync_enabled_config(server: "DashboardServer", group: str, name: str, *, enable: bool) -> ComponentControlResponse:
-    """把组件名加入/移除对应配置文件 enabled 名单（经统一写回器幂等写回）。
+async def _sync_enabled_config(
+    server: "DashboardServer",
+    group: str,
+    name: str,
+    *,
+    enable: bool,
+    hot_context: Optional[ComponentRuntimeContext] = None,
+) -> ComponentControlResponse:
+    """把组件名加入/移除对应配置文件 enabled 名单（经配置写路径统一编排）。
 
-    group 映射（v2）：
-    - collectors → collectors.toml 顶层 ``enabled``
-    - agents → agents.toml ``[agents].enabled``
+    统一入口与设置页保存同一管线：前置校验 → 统一写回器 → 按域热重载 →
+    （注入 ``hot_context`` 时）agents / collectors 域的组件重建热应用。
+    按钮的动态启停路径已在实例层完成变更，调用时不传 ``hot_context``，
+    只落盘不重建。
     """
-    if group not in _GROUP_TO_FILE:
+    if group not in _GROUP_TO_KEY:
         return ComponentControlResponse(success=False, message=f"未知组件组: {group}")
-    file_name, dotted_key = _GROUP_TO_FILE[group]
+    if server.config_service is None:
+        return ComponentControlResponse(success=False, message="Config service 不可用")
+    api_key = _GROUP_TO_KEY[group]
 
     try:
         enabled = _read_enabled_list(server, group)
@@ -88,14 +98,20 @@ def _sync_enabled_config(server: "DashboardServer", group: str, name: str, *, en
             enabled.append(name)
         elif not enable and name in enabled:
             enabled.remove(name)
-        try:
-            update_config_values(config_dir(server), file_name, {dotted_key: enabled})
-        except ConfigValidationError as exc:
-            return ComponentControlResponse(success=False, message=f"配置校验失败: {exc}")
+        outcome = await apply_config_updates(
+            server.config_service,
+            config_dir(server),
+            [(api_key, enabled)],
+            hot_context=hot_context,
+        )
+        if not outcome.success:
+            return ComponentControlResponse(success=False, message=outcome.message)
         action_text = "加入启用列表" if enable else "从启用列表移除"
+        file_text = f"（写入 {outcome.target_file}）" if outcome.target_file else ""
+        effect_text = "重启后生效" if outcome.requires_restart else "已即时生效"
         return ComponentControlResponse(
             success=True,
-            message=f"组件 {name} 已{action_text}（{file_name}），重启后生效",
+            message=f"组件 {name} 已{action_text}{file_text}，{effect_text}",
         )
     except Exception as e:
         return ComponentControlResponse(success=False, message=f"配置同步失败: {e}")
@@ -122,7 +138,7 @@ async def control_component(
 
     group ∈ {"collectors", "agents"}（路径参数统一为 group）。
     """
-    if group not in _GROUP_TO_FILE:
+    if group not in _GROUP_TO_KEY:
         raise HTTPException(status_code=400, detail=f"Invalid group: {group}")
     # 附属采集器随所属 Agent 开关，单独开关没有意义（Agent 不在时只会空转重试），也不该写进 collectors.toml
     owner = owner_of(name) if group == "collectors" else None
@@ -137,22 +153,32 @@ async def control_component(
         if dyn is not None and dyn.success:
             resp = dyn
         else:
-            resp = _sync_enabled_config(server, group, name, enable=True)
+            resp = await _sync_enabled_config(
+                server, group, name, enable=True, hot_context=ComponentRuntimeContext.from_server(server)
+            )
     elif request.action == ComponentControlAction.STOP:
         dyn_resp = await _try_dynamic_stop(server, group, name)
-        resp = dyn_resp or _sync_enabled_config(server, group, name, enable=False)
+        resp = dyn_resp or await _sync_enabled_config(
+            server, group, name, enable=False, hot_context=ComponentRuntimeContext.from_server(server)
+        )
     elif request.action == ComponentControlAction.RESTART:
         stop_resp = await _try_dynamic_stop(server, group, name)
-        stop_resp = stop_resp or _sync_enabled_config(server, group, name, enable=False)
+        stop_resp = stop_resp or await _sync_enabled_config(
+            server, group, name, enable=False, hot_context=ComponentRuntimeContext.from_server(server)
+        )
         if not stop_resp.success:
             return stop_resp
         dyn = await _try_dynamic_start(server, group, name)
-        resp = dyn if dyn is not None and dyn.success else _sync_enabled_config(server, group, name, enable=True)
+        resp = (
+            dyn
+            if dyn is not None and dyn.success
+            else await _sync_enabled_config(
+                server, group, name, enable=True, hot_context=ComponentRuntimeContext.from_server(server)
+            )
+        )
     else:
         return ComponentControlResponse(success=False, message=f"Unknown action: {request.action}")
 
-    if resp.success and server.config_service is not None:
-        await server.config_service.reload_config()
     return resp
 
 
@@ -172,7 +198,8 @@ async def _try_dynamic_start(server: "DashboardServer", group: str, name: str) -
     if not result.success:
         return ComponentControlResponse(success=False, message=f"{label} {name} 启动失败：{result.detail}")
     if result.created:
-        _sync_enabled_config(server, group, name, enable=True)
+        # 实例层已即时变更，这里只落盘配置（不传热应用上下文，避免重复重建）
+        await _sync_enabled_config(server, group, name, enable=True)
         return ComponentControlResponse(success=True, message=f"{label} {name} 已启动并加入启用配置")
     return ComponentControlResponse(success=True, message=f"{label} {name} 已启动")
 
@@ -189,6 +216,7 @@ async def _try_dynamic_stop(server: "DashboardServer", group: str, name: str) ->
         return None
     label = "Agent" if group == "agents" else "组件"
     if ok:
-        _sync_enabled_config(server, group, name, enable=False)
+        # 实例层已即时停止，这里只落盘配置（不传热应用上下文，避免重复重建）
+        await _sync_enabled_config(server, group, name, enable=False)
         return ComponentControlResponse(success=True, message=f"{label} {name} 已停止并从启用配置移除")
     return ComponentControlResponse(success=False, message=f"{label} {name} 停止失败")

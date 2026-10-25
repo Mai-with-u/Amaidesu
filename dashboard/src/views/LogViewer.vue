@@ -111,9 +111,9 @@
         :has-newer="windowHasNewer"
         :window-active="windowActive"
         :exhausted-text="exhaustedText"
-        @load-older="onLoadOlder"
-        @load-newer="onLoadNewer"
-        @jump="onJump"
+        @load-older="loadOlder"
+        @load-newer="loadNewer"
+        @jump="jump"
         @exit="onExitWindow"
       />
       <span v-if="persistAvailable === false" class="persist-note"
@@ -212,8 +212,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { computed, markRaw, onMounted, onUnmounted, ref, watch, type Ref } from 'vue';
 import {
   Document,
   VideoPause,
@@ -228,6 +227,9 @@ import { confirmAction } from '@/utils/confirmAction';
 import { storeToRefs } from 'pinia';
 import { useLogsStore, type LogEntry } from '@/stores/logs';
 import { collapseAdjacentLogs } from '@/utils/logCollapse';
+import { useLogStreamQuery } from '@/composables/useLogStreamQuery';
+import { useStreamPageQuery } from '@/composables/useStreamPageQuery';
+import { useAutoScrollFollow } from '@/composables/useAutoScrollFollow';
 
 const logsStore = useLogsStore();
 const {
@@ -254,57 +256,29 @@ const expandedLogs = ref<Set<string>>(new Set());
 const expandedGroups = ref<Set<string>>(new Set());
 const isRealtimeScroll = ref(true);
 
-const route = useRoute();
-const router = useRouter();
-
-// query 的单值与重复键（?level=INFO&level=ERROR）统一读为字符串数组
-function readQueryList(raw: unknown): string[] {
-  if (Array.isArray(raw)) return raw.map(String);
-  return raw ? [String(raw)] : [];
-}
-
-// 深链初始化：?level=&module= 在 setup 期写入筛选状态；level 过滤掉不在级别表里的值
-const queryLevels = readQueryList(route.query.level).filter(level =>
-  (LOG_LEVELS as readonly string[]).includes(level),
-);
-if (queryLevels.length > 0) {
-  selectedLevels.value = queryLevels;
-}
-const queryModules = readQueryList(route.query.module);
-if (queryModules.length > 0) {
-  selectedModules.value = queryModules;
-}
-
-// 筛选变更回写 URL：level/module 可重复键，空数组（默认态）删键而非留空串，
-// replace 不产生历史记录。客户端筛选不触发请求，故无回写循环风险
-watch([selectedLevels, selectedModules], () => {
-  const query: Record<string, string | string[]> = {};
-  if (selectedLevels.value.length > 0) {
-    query.level = selectedLevels.value;
-  }
-  if (selectedModules.value.length > 0) {
-    query.module = selectedModules.value;
-  }
-  void router.replace({ query });
+// 深链四件套（初始化/回写/恢复）：机械在 useStreamPageQuery，
+// 键名映射与 level 级别表白名单过滤是本页域知识
+useStreamPageQuery({
+  fields: [
+    {
+      key: 'level',
+      get: () => selectedLevels.value,
+      set: values => {
+        selectedLevels.value = values.filter(level =>
+          (LOG_LEVELS as readonly string[]).includes(level),
+        );
+      },
+    },
+    {
+      key: 'module',
+      get: () => selectedModules.value,
+      set: values => {
+        selectedModules.value = values;
+      },
+    },
+  ],
+  watchSources: [selectedLevels, selectedModules],
 });
-
-// 前进/后退恢复：query 变化与当前状态一致（本页 replace 触发）时跳过，
-// 否则视为用户导航，把 query 写回筛选状态
-watch(
-  () => route.query,
-  query => {
-    const nextLevels = readQueryList(query.level);
-    const nextModules = readQueryList(query.module);
-    if (
-      nextLevels.join('\u0000') === selectedLevels.value.join('\u0000') &&
-      nextModules.join('\u0000') === selectedModules.value.join('\u0000')
-    ) {
-      return;
-    }
-    selectedLevels.value = nextLevels;
-    selectedModules.value = nextModules;
-  },
-);
 
 // 动态图标
 const pausePlayIcon = computed(() => (isPaused.value ? markRaw(VideoPlay) : markRaw(VideoPause)));
@@ -313,9 +287,28 @@ const scrollModeIcon = computed(() =>
   isRealtimeScroll.value ? markRaw(RefreshRight) : markRaw(Unlock),
 );
 
-// 显示列表：历史浏览窗口优先，否则实时尾部
-const displayLogs = computed<LogEntry[]>(() => windowLogs.value ?? logs.value);
-const windowActive = computed(() => windowLogs.value !== null);
+// 显示列表/筛选/计数/翻页锚定：共享查询机械（谓词为本页域知识）
+const {
+  displayItems: displayLogs,
+  windowActive,
+  filteredItems: filteredLogs,
+  countBy,
+  scrollListTo,
+  loadOlder,
+  loadNewer,
+  jump,
+} = useLogStreamQuery({
+  live: logs,
+  window: windowLogs,
+  fetchOlder: () => logsStore.fetchOlder(),
+  fetchNewer: () => logsStore.fetchNewer(),
+  jumpTo: timestampMs => logsStore.jumpTo(timestampMs),
+  listEl: logListRef,
+  predicates: [
+    log => selectedLevels.value.length === 0 || selectedLevels.value.includes(log.level),
+    log => selectedModules.value.length === 0 || selectedModules.value.includes(log.module),
+  ],
+});
 
 // 更早耗尽提示：窗口起点随查询口径变化（默认启动、跳转后为所选时刻），文案不写死
 const exhaustedText = computed(
@@ -324,27 +317,12 @@ const exhaustedText = computed(
 
 // 级别/模块计数基于当前显示列表
 function getLevelCount(level: string): number {
-  return displayLogs.value.filter(log => log.level === level).length;
+  return countBy(log => log.level === level);
 }
 
 function getModuleCount(module: string): number {
-  return displayLogs.value.filter(log => log.module === module).length;
+  return countBy(log => log.module === module);
 }
-
-// 筛选后的日志列表（级别/模块为客户端筛选；搜索态正文筛选已在服务端完成）
-const filteredLogs = computed(() => {
-  let result = displayLogs.value;
-
-  if (selectedLevels.value.length > 0) {
-    result = result.filter(log => selectedLevels.value.includes(log.level));
-  }
-
-  if (selectedModules.value.length > 0) {
-    result = result.filter(log => selectedModules.value.includes(log.module));
-  }
-
-  return result;
-});
 
 // 同因折叠：相邻同级别/同模块/同正文合并为一组
 const collapsedRows = computed(() => collapseAdjacentLogs(filteredLogs.value));
@@ -371,18 +349,6 @@ function onSearchClear() {
   if (!isSearchMode.value) return;
   isSearchMode.value = false;
   logsStore.exitWindow();
-}
-
-function onLoadOlder() {
-  void logsStore.fetchOlder().then(() => scrollListTo('top'));
-}
-
-function onLoadNewer() {
-  void logsStore.fetchNewer().then(() => scrollListTo('bottom'));
-}
-
-function onJump(timestampMs: number) {
-  void logsStore.jumpTo(timestampMs).then(() => scrollListTo('top'));
 }
 
 function onExitWindow() {
@@ -465,64 +431,38 @@ function shouldShowExpand(message: string): boolean {
   return message.length > 100 || message.includes('\n');
 }
 
-function toggleLogExpand(key: string) {
-  if (expandedLogs.value.has(key)) {
-    expandedLogs.value.delete(key);
+// Set 整体重赋值以触发响应式；正文展开与重复组展开共用同一机械
+function toggleInSet(setRef: Ref<Set<string>>, key: string): void {
+  if (setRef.value.has(key)) {
+    setRef.value.delete(key);
   } else {
-    expandedLogs.value.add(key);
+    setRef.value.add(key);
   }
-  expandedLogs.value = new Set(expandedLogs.value);
+  setRef.value = new Set(setRef.value);
 }
 
-function toggleGroupExpand(key: string) {
-  if (expandedGroups.value.has(key)) {
-    expandedGroups.value.delete(key);
-  } else {
-    expandedGroups.value.add(key);
-  }
-  expandedGroups.value = new Set(expandedGroups.value);
+function toggleLogExpand(key: string): void {
+  toggleInSet(expandedLogs, key);
+}
+
+function toggleGroupExpand(key: string): void {
+  toggleInSet(expandedGroups, key);
 }
 
 // ------------------------------------------------------------------
 // 滚动
 // ------------------------------------------------------------------
 
-function scrollListTo(position: 'top' | 'bottom') {
-  void nextTick(() => {
-    if (!logListRef.value) return;
-    logListRef.value.scrollTop = position === 'top' ? 0 : logListRef.value.scrollHeight;
-  });
-}
-
-// 自动滚动到底部 - 使用 requestAnimationFrame 节流，避免强制同步布局
-let scrollRAFId: number | null = null;
-let pendingScroll = false;
-
-function scrollToBottom() {
-  if (pendingScroll) return;
-  pendingScroll = true;
-
-  scrollRAFId = requestAnimationFrame(() => {
-    pendingScroll = false;
-    nextTick(() => {
-      if (logListRef.value) {
-        logListRef.value.scrollTop = logListRef.value.scrollHeight;
-      }
-    });
-  });
-}
-
-// 处理滚动事件（仅实时模式：用户滚离底部切自由滚动；历史浏览态自由滚动）
-function handleScroll() {
-  if (!logListRef.value || windowActive.value || isRealtimeScroll.value === false) return;
-
-  const { scrollTop, scrollHeight, clientHeight } = logListRef.value;
-  const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
-
-  if (!isAtBottom) {
+// 滚动锚定已收进 useLogStreamQuery（scrollListTo 随需解构；翻页/跳转自动锚定）
+// 自动滚底的 RAF 节流/初始滚底/卸载清理收进 useAutoScrollFollow；
+// 仅实时滚动且非历史浏览态才判离底，滚离即切自由滚动
+const { scrollToBottom, handleScroll } = useAutoScrollFollow({
+  container: logListRef,
+  canHandleScroll: () => !windowActive.value && isRealtimeScroll.value,
+  onLeaveBottom: () => {
     isRealtimeScroll.value = false;
-  }
-}
+  },
+});
 
 // 监听日志变化，自动滚动（历史浏览/暂停态不跟随）
 let unsubscribe: (() => void) | null = null;
@@ -533,16 +473,11 @@ onMounted(() => {
       scrollToBottom();
     }
   });
-
-  scrollToBottom();
 });
 
 onUnmounted(() => {
   if (unsubscribe) {
     unsubscribe();
-  }
-  if (scrollRAFId !== null) {
-    cancelAnimationFrame(scrollRAFId);
   }
 });
 </script>

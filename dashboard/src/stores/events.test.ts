@@ -27,14 +27,17 @@ vi.mock('@/api', () => ({
 
 import { useEventsStore } from '@/stores/events';
 
-/** 构造一条实时事件消息（WS 协议：总线事件带 kind="event"） */
-function makeMessage(overrides: Partial<WebSocketMessage> & { type: string }): WebSocketMessage {
+/** 构造一条实时事件消息（WS 协议：总线事件带 kind="event"）。
+ *  type 允许合成词汇（去重/排序测试不依赖真实事件名），显式断言 = 线上字符串按契约收口 */
+function makeMessage(
+  overrides: Partial<Omit<WebSocketMessage, 'type'>> & { type: string },
+): WebSocketMessage {
   return {
     kind: 'event',
     timestamp_ms: 1000,
     data: {},
     ...overrides,
-  };
+  } as WebSocketMessage;
 }
 
 /** 构造一条 history/REST 载荷条目 */

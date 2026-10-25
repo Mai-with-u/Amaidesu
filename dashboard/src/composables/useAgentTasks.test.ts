@@ -14,6 +14,7 @@ import { agentsApi, tasksApi } from '@/api';
 import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
 import { useAgentTasks, taskStatusText } from '@/composables/useAgentTasks';
+import type { WsMessageType } from '@/types';
 
 vi.mock('@/api', async importOriginal => ({
   ...(await importOriginal<object>()),
@@ -32,6 +33,10 @@ vi.mock('@/stores', async () => {
 vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }));
+
+vi.mock('@/utils/confirmAction', () => ({ confirmAction: vi.fn() }));
+import { confirmAction } from '@/utils/confirmAction';
+const confirmActionMock = vi.mocked(confirmAction);
 
 const listTasksMock = vi.mocked(tasksApi.listTasks);
 const cancelAgentTaskMock = vi.mocked(agentsApi.cancelAgentTask);
@@ -57,11 +62,14 @@ function snapshot(running: ReturnType<typeof task>[], finished: ReturnType<typeo
 }
 
 let seq = 0;
-/** 往事件 store 塞一条 WS 事件（shape 与 events store 入口一致） */
+/** 往事件 store 塞一条 WS 事件（shape 与 events store 入口一致）。type 允许合成词汇，显式断言 = 线上字符串按契约收口 */
 function pushEvent(type: string): void {
   const store = useEventsStore();
   seq += 1;
-  store.events = [...store.events, { id: `e${seq}`, type, timestamp_ms: 1000, data: {} }];
+  store.events = [
+    ...store.events,
+    { id: `e${seq}`, type: type as WsMessageType, timestamp_ms: 1000, data: {} },
+  ];
 }
 
 describe('useAgentTasks', () => {
@@ -73,6 +81,7 @@ describe('useAgentTasks', () => {
     scope = effectScope();
     listTasksMock.mockReset();
     cancelAgentTaskMock.mockReset();
+    confirmActionMock.mockReset();
     listTasksMock.mockResolvedValue(snapshot([]));
     useEventsStore().events = [];
   });
@@ -174,6 +183,22 @@ describe('useAgentTasks', () => {
 
     await expect(composable.cancelTask('task_9')).resolves.toBeUndefined();
     expect(ElMessage.error).toHaveBeenCalledWith('任务未知');
+  });
+
+  it('cancelTaskWithConfirm：用户确认后取消；取消确认则不动 API', async () => {
+    cancelAgentTaskMock.mockResolvedValue({ data: { cancelled: true } } as never);
+    const target = ref<string | null>('minecraft');
+    const composable = mount(target);
+    await vi.advanceTimersByTimeAsync(0);
+
+    confirmActionMock.mockResolvedValue(true);
+    await composable.cancelTaskWithConfirm(task('minecraft', 'task_7'));
+    expect(cancelAgentTaskMock).toHaveBeenCalledWith('minecraft', 'task_7');
+
+    cancelAgentTaskMock.mockClear();
+    confirmActionMock.mockResolvedValue(false);
+    await composable.cancelTaskWithConfirm(task('minecraft', 'task_8'));
+    expect(cancelAgentTaskMock).not.toHaveBeenCalled();
   });
 
   it('静默刷新失败不打扰；显式刷新失败弹错', async () => {

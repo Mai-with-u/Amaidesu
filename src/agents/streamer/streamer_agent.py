@@ -70,6 +70,7 @@ from .message_buffer import MessageBuffer
 from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
 from .planner import Planner
 from .proactive_trigger import ProactiveTrigger
+from .proactive_signals import ProactiveSignals
 from .replyer import WordFilter, Replyer
 from .room_state import RoomState
 from .scene_card import brief_of
@@ -78,6 +79,7 @@ from .game_ledger import GameLedger
 from .stats import StreamerStats
 from .timeline import GameEventBatch, StreamerTimeline, TimelineTurn
 from .timing_gate import TimingGate
+from .topic_gate import SpeechGate
 from .tools.reply_tool import ReplyToolProvider
 from .command.router import CommandRouter
 from .config import StreamerConfig
@@ -380,7 +382,6 @@ class StreamerAgent(BaseAgent):
         background_config = {
             "enabled": bg.enabled,
             "light_tick_ms": bg.light_tick_ms,
-            "cold_timeout_ms": bg.cold_timeout_ms,
             "summary_interval_ms": bg.summary_interval_ms,
             "compressor_concurrency": bg.compressor.concurrency,
             "compressor_queue_max": bg.compressor.queue_max,
@@ -443,12 +444,9 @@ class StreamerAgent(BaseAgent):
         # 场次进行位：live.started 置位 / live.ended 复位。主动发言的业务边界
         # = 场次——没开播只回弹幕不主动开题，开场白（rundown opening）等开播
         self._live_active: bool = False
-        # 一次性 pending flag（外部 API 触发主动发言）
-        self._external_proactive_pending: bool = False
-        # 流程单环节切换触发 flag（协调器变更回调置位；经 _on_rundown_changed_proactive）
-        self._rundown_proactive_pending: bool = False
-        # 游戏待定夺触发 flag（game.report 事件置位；下次空缓冲 tick 消费）
-        self._game_decision_pending: bool = False
+        # 一次性主动触发信号（外部点播/流程单环节/游戏待定夺）：状态与
+        # 消费纪律一处声明（game/rundown 确认消费、external 读即消费）
+        self._proactive_signals = ProactiveSignals()
 
         # 统计（决策循环各分支增量；对外经 get_statistics 导出）
         self._stats = StreamerStats()
@@ -530,8 +528,12 @@ class StreamerAgent(BaseAgent):
             game_events_provider=self._current_game_batch,
             reminders_provider=self._drain_reminders,
             session_recap_provider=self._session_recap_text,
+            window_boundary=self._drain_game_events,
             logger=self._logger,
         )
+
+        # 发言重合度闸：reply 工具与嘴共用同一份判定语义（窗口与阈值同源配置）
+        self._speech_gate = SpeechGate(window=config.speech_gate_window, ratio=config.speech_gate_ratio)
 
         # 嘴（Agent 内部件，代码直连）：游戏里出事时不经 Planner 当场出一句短反应。
         # 开关关闭时不构造，所有路径与原来一致
@@ -549,8 +551,7 @@ class StreamerAgent(BaseAgent):
                     "style_constraints": config.persona.style_constraints,
                 },
                 speech_max_chars=config.speech_max_chars,
-                gate_window=config.speech_gate_window,
-                gate_ratio=config.speech_gate_ratio,
+                gate=self._speech_gate,
                 word_filter=self._word_filter,
                 goals_provider=self._planner.current_goals,
                 notebook_provider=self._notebook.read,
@@ -715,8 +716,7 @@ class StreamerAgent(BaseAgent):
             history_provider=self._read_history_sync,
             rundown_text_provider=self._rundown_coord.build_text_sync,
             event_bus=self._event_bus,
-            gate_window=self.typed_config.speech_gate_window,
-            gate_ratio=self.typed_config.speech_gate_ratio,
+            gate=self._speech_gate,
         )
         # Planner 的 reply 调用经 registry；绑定 Provider 仅供引用/诊断（材料走 attachment）
         self._planner.bind_reply_provider(self._reply_provider)
@@ -999,14 +999,17 @@ class StreamerAgent(BaseAgent):
                 self._mouth.note_game(message)
                 self._mouth.react(f"game:{payload.event_type}", message, urgent=True)
             if payload.event_type == "report":
-                self._game_decision_pending = True
+                self._proactive_signals.set_game()
                 # 游戏里做完或卡住待定夺：【我手头在游戏里做的事】里那件事随之标成已上报
                 self._planner.note_game_report(payload.game, payload.report_kind or "")
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏事件失败: {exc}", exc=True)
 
     def _drain_game_events(self) -> GameEventBatch:
-        """决策窗边界：账本整批出账，本批时间线条目落进时间线，批次行交决策链。
+        """决策窗边界收口：账本整批出账，本批时间线条目落进时间线，批次行交决策链。
+
+        由决策执行器的 ``window_boundary`` 每轮第一步显式执行（先于历史读取，
+        出账行才能进本轮投影）——收口只发生在窗边界恰好一处，读历史是纯读。
 
         折叠过多条的行附计数说明（"另 N 次相同"）后再入时间线；时间线条目只追加
         不改写，相邻窗口的历史前缀逐字一致。私聊行不进时间线，单独随批次交本窗
@@ -1064,7 +1067,7 @@ class StreamerAgent(BaseAgent):
                 # 死亡是要紧事：与 game.report 同款置位待定夺信号，下次空缓冲 tick 立即
                 # 促发一轮决策（绕最小间隔与每小时上限）。死亡连发时连窗是有意行为——
                 # 那是叙事价值最高的时刻，主播应当场知道、当场解说。
-                self._game_decision_pending = True
+                self._proactive_signals.set_game()
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集身体侧事件失败: {exc}", exc=True)
 
@@ -1098,7 +1101,7 @@ class StreamerAgent(BaseAgent):
                 if self._mouth is not None:
                     self._mouth.note_game(body)
             if payload.kind == "player":
-                self._game_decision_pending = True
+                self._proactive_signals.set_game()
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏聊天失败: {exc}", exc=True)
 
@@ -1193,13 +1196,13 @@ class StreamerAgent(BaseAgent):
 
     def trigger_external_proactive(self, topic_hint: Optional[str] = None) -> None:
         """外部 API 触发主动发言（Dashboard / API 调用）。"""
-        self._external_proactive_pending = True
+        self._proactive_signals.set_external()
         if topic_hint:
             self._logger.info(f"外部主动发言触发: {topic_hint}")
 
     def _on_rundown_changed_proactive(self) -> None:
         """流程单环节变更通知（协调器回调）：置位 proactive 即时信号，下个 tick 消费。"""
-        self._rundown_proactive_pending = True
+        self._proactive_signals.set_rundown()
 
     def receive_prompt(self, *, content: str, source: str = "") -> bool:
         """接收递话（运营/跨 Agent 留言）：入提醒队列，下个决策窗必达。
@@ -1339,31 +1342,23 @@ class StreamerAgent(BaseAgent):
                 if not self._reminder_queue and not self._live_active:
                     return
                 live_gated = not self._live_active
-                rundown_pending = False if live_gated else self._rundown_proactive_pending
-                game_pending = False if live_gated else self._game_decision_pending
-                if not live_gated:
-                    self._game_decision_pending = False
+                tick = self._proactive_signals.read_for_tick(live=self._live_active)
                 reason = self._proactive_trigger.should_trigger(
                     self._room_state,
                     now_ms(),
-                    external_pending=False if live_gated else self._external_proactive_pending,
-                    rundown_pending=rundown_pending,
+                    external_pending=tick.external_pending,
+                    rundown_pending=tick.rundown_pending,
                     rundown_overdue=False if live_gated else self._rundown_coord.is_overdue(),
                     rundown_ready=False if live_gated else self._rundown_coord.is_active(),
-                    game_pending=game_pending,
+                    game_pending=tick.game_pending,
                     # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
                     # （送达在决策执行器取空队列处发生，任何决策窗都会消费）
                     reminder_pending=bool(self._reminder_queue),
                 )
-                # 环节切换信号在确认消费后才清零：should_trigger 里总开关关闭 /
-                # reminder 抢先返回时不会走到 rundown_pending 分支，信号保留，
-                # 重新满足条件后开场白还能补说（pending 分支优先级高于
-                # overdue，返回 "rundown" 且 rundown_pending=True 时
-                # 必然源自本信号）。game_pending 同形态问题按任务范围界定暂不处理。
-                if rundown_pending and reason == "rundown":
-                    self._rundown_proactive_pending = False
-                if not live_gated:
-                    self._external_proactive_pending = False
+                # 消费纪律一处声明（见 proactive_signals）：game / rundown 确认
+                # 消费（被 reminder 抢先或总开关关闭时保留，条件满足后补触发）；
+                # external 已在读数时消费（尽力而为的点播推动）
+                self._proactive_signals.confirm(reason, tick)
                 if reason is not None:
                     self._stats.total_proactive += 1
                     self._logger.info(f"主动发言触发: {reason}")
@@ -1494,10 +1489,16 @@ class StreamerAgent(BaseAgent):
         action: str,
         *,
         segment_id: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
         now_ms: Optional[int] = None,
     ) -> tuple[bool, str, Optional[Dict[str, Any]]]:
-        """执行 Dashboard 手动控制动作（动作翻译见 rundown 子包）。"""
-        return await self._rundown_coord.control(action, segment_id=segment_id, now_ms=now_ms)
+        """执行 Dashboard 手动控制动作（动作翻译见 rundown 子包；insert 的 payload 为 ``{title, content?}``）。"""
+        return await self._rundown_coord.control(
+            action,
+            segment_id=segment_id,
+            payload=payload,
+            now_ms=now_ms,
+        )
 
     async def switch_rundown(self, rundown_id: str) -> tuple[bool, str, Optional[Dict[str, Any]]]:
         """直播中热切换流程单（Dashboard activate 的运行态写穿）。"""
@@ -1524,15 +1525,14 @@ class StreamerAgent(BaseAgent):
     async def _read_history(self) -> Optional[List[Any]]:
         """读取当前对话并经时间线投影：前情提要各章 + 工作层原文，按主播看到的先后排列。
 
+        纯读，无副作用——决策窗边界收口（游戏账本出账、私聊清空）由决策
+        执行器的 ``window_boundary`` 在轮首显式执行（见 ``_drain_game_events``），
+        本方法只负责把已入账的时间线行读出来。
+
         显式场次进行中时，live_chat 是已落库对话的事实源；没开场次时的对话与
         调试注入的观众消息不会落库，由内存对话轮按发生时刻并入同一条时间线。
         读库失败返回 None（宁可本轮无历史，也不拿残缺历史冒充完整对话）。
-
-        决策窗边界在此收口：待入账的游戏事件队列整批追加进时间线（本方法每轮
-        决策先被调用一次，队列只在这里消费），本批行同时记为"本轮新入账批次"
-        供决策执行器与状态事实块取用。
         """
-        self._drain_game_events()
         stored: List[_LiveChatTurn] = []
         live_pk: Optional[int] = None
         if self._chat is not None and self._session_manager is not None:

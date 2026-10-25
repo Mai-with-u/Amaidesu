@@ -2,7 +2,7 @@
  * 场次复盘页纯函数（SessionReview.vue 与其单测共享）
  *
  * 设计纪律：代码只做"计算 + 染色"，不做告警判定——超阈染色阈值是前端
- * 常量，卡片副文案自带口径便于人工核验（设计定案 §1 收口）。
+ * 常量，卡片副文案自带口径便于人工核验。
  */
 
 import type { WaterlineSeries, WaterlinePoint } from '@/types/review';

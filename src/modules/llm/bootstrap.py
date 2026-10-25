@@ -78,7 +78,7 @@ class _ResolvedModel(BaseModel):
         model_identifier: 实际 API 模型标识
         provider_name: 关联 provider 名
         visual: 是否声明视觉能力（对应 ``llm_models[].visual``）；能力协商
-            的查询出口经此判定"当前主模型能否看图"（ADR-037）
+            的查询出口经此判定"当前主模型能否看图"
         reasoning_echo: 工具循环内是否回传该模型自己产出的思考（对应
             ``llm_models[].reasoning_echo``）
     """

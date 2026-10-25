@@ -32,7 +32,7 @@ from .config import StreamerMouthConfig
 from .replyer import WordFilter, fit_to_budget
 from .scene_card import GoalLine, SceneInputs, build_scene_card
 from .tools.reply_tool import coerce_emotion
-from .topic_gate import speech_overlap_ratio
+from .topic_gate import SpeechGate
 
 __all__ = ["MOUTH_TEMPLATE", "Mouth", "SCENE_CHANGING_BODY_KINDS", "Trigger", "URGENT_BODY_KINDS", "URGENT_GAME_TYPES"]
 
@@ -90,8 +90,7 @@ class Mouth:
         room_state: Any,
         persona: Dict[str, str],
         speech_max_chars: int,
-        gate_window: int,
-        gate_ratio: float,
+        gate: SpeechGate,
         word_filter: Optional[WordFilter],
         goals_provider: Callable[[], Sequence[GoalLine]],
         notebook_provider: Callable[[], str],
@@ -110,8 +109,7 @@ class Mouth:
         self._room_state = room_state
         self._persona = persona
         self._speech_max_chars = speech_max_chars
-        self._gate_window = gate_window
-        self._gate_ratio = gate_ratio
+        self._gate = gate
         self._word_filter = word_filter
         self._goals_provider = goals_provider
         self._notebook_provider = notebook_provider
@@ -357,10 +355,8 @@ class Mouth:
                 self._logger.info("嘴的台词命中敏感词，整句丢弃")
                 return ""
             text = cleaned
-        recent = [record.text for record in self._records if record.kind == "speech"][-self._gate_window :]
-        if self._gate_window > 0 and recent:
-            ratio = speech_overlap_ratio(text, recent)
-            if ratio >= self._gate_ratio:
-                self._logger.info(f"嘴的台词和最近说过的重复（重合度 {ratio:.2f}），丢弃: {text}")
-                return ""
+        verdict = self._gate.verdict(text, [record.text for record in self._records if record.kind == "speech"])
+        if not verdict.passed:
+            self._logger.info(f"嘴的台词和最近说过的重复（重合度 {verdict.ratio:.2f}），丢弃: {text}")
+            return ""
         return text

@@ -1,5 +1,5 @@
 /**
- * 思考流（WS kind="stream"；ADR-008 best-effort 观测通道）的视图层消费。
+ * 思考流（WS kind="stream"；best-effort 观测通道）的视图层消费。
  *
  * 只在视图层合成：按 (round_id, phase, step) 累积思考段，再合成 kind='thinking'
  * 的时间线行与事件条目按时间归并（不进 events store、不落库、不回看）。
@@ -17,6 +17,7 @@ import {
   type ThinkingStep,
 } from '@/utils/liveFeed';
 import type { ThinkingDelta, WebSocketMessage } from '@/types';
+import { STREAM } from '@/types/events';
 
 const THINKING_ROUNDS_MAX = 20;
 /** 单轮步骤上限：ReAct 步数无理论上限，长任务期间会无限累积推高渲染面；
@@ -54,7 +55,7 @@ let thinkingFlushTimer: ReturnType<typeof setTimeout> | null = null;
 let wsAttached = false;
 
 function handleThinkingMessage(message: WebSocketMessage): void {
-  if (message.kind !== 'stream' || message.type !== 'thinking.delta') return;
+  if (message.kind !== 'stream' || message.type !== STREAM.thinkingDelta) return;
   const deltas = (message.data.deltas ?? []) as ThinkingDelta[];
   for (const delta of deltas) pendingDeltas.push({ delta, tsMs: message.timestamp_ms });
   if (thinkingFlushTimer) return;

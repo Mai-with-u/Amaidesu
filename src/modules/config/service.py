@@ -2,12 +2,10 @@
 ConfigService - 统一的配置管理服务
 
 职责:
-- 提供统一的配置加载接口
+- 提供统一的配置加载接口（多文件模式：按文件视图 + 拍平合并视图）
 - 集中管理所有配置加载逻辑
-- 支持 Collector/Decider/Handler 等组件的配置获取
-- 配置合并策略：主配置覆盖组件配置
-- 二级配置合并：Schema默认值 → 主配置覆盖
-- 配置热重载：FileWatcher + 回调机制 + Schema API
+- 拦截器配置读取
+- 配置热重载：FileWatcher + 回调机制
 """
 
 import asyncio
@@ -19,7 +17,6 @@ from typing import (
     Callable,
     Dict,
     List,
-    Literal,
     Optional,
     Sequence,
     Tuple,
@@ -33,20 +30,6 @@ from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
     from src.modules.config.file_watcher import FileChange, FileWatcher
-
-# 阶段 → 主配置节名映射
-_PHASE_SECTION: Dict[str, str] = {
-    "input": "collectors",
-    "output": "handlers",
-    "decision": "deciders",
-}
-
-# 各阶段配置节中的元数据字段（非组件配置，需排除）
-_PHASE_METADATA_FIELDS: Dict[str, set] = {
-    "input": {"enabled"},
-    "output": {"enabled", "concurrent_rendering", "error_handling", "render_timeout_ms"},
-    "decision": {"enabled"},
-}
 
 # 热重载回调签名: 支持 (scopes) 或 () 两种调用形态
 ConfigReloadCallback = Union[
@@ -90,7 +73,6 @@ class ConfigService:
         config, was_created = config_service.initialize()
 
         general_config = config_service.get_section("general")
-        input_config = config_service.get_config_with_defaults("console", "input")
         interceptor_config = config_service.get_interceptor_config("rate_limit")
 
         # 热重载
@@ -318,32 +300,6 @@ class ConfigService:
 
         return self.get_section("interceptors", {}).get(interceptor_name, {}).copy()
 
-    def get_all_configs(self, phase: str = "input") -> Dict[str, Dict[str, Any]]:
-        """
-        获取指定阶段所有组件的配置
-
-        Args:
-            phase: 阶段（"input"、"output" 或 "decision"，默认 "input"）
-
-        Returns:
-            字典，键为组件名称，值为该组件的配置
-        """
-        if not self._initialized:
-            self.logger.warning("ConfigService 未初始化，返回空配置")
-            return {}
-
-        section_name = _PHASE_SECTION.get(phase)
-        if section_name is None:
-            self.logger.warning(f"未知的组件阶段: {phase}")
-            return {}
-
-        section = self.get_section(section_name, {})
-        exclude_fields = _PHASE_METADATA_FIELDS.get(phase, set())
-
-        return {
-            name: cfg.copy() for name, cfg in section.items() if name not in exclude_fields and isinstance(cfg, dict)
-        }
-
     def get_all_interceptor_configs(self) -> Dict[str, Dict[str, Any]]:
         """获取所有事件拦截器的配置"""
         if not self._initialized:
@@ -351,29 +307,6 @@ class ConfigService:
             return {}
 
         return self.get_section("interceptors", {}).copy()
-
-    def is_config_enabled(self, name: str, phase: str = "input") -> bool:
-        """
-        检查组件是否启用
-
-        Args:
-            name: 组件名称
-            phase: 阶段（"input" 或 "output"，默认 "input"）
-
-        Returns:
-            是否启用
-        """
-        if not self._initialized:
-            self.logger.warning("ConfigService 未初始化，返回 False")
-            return False
-
-        section_name = _PHASE_SECTION.get(phase)
-        if section_name is None:
-            self.logger.warning(f"未知的组件阶段: {phase}")
-            return False
-
-        enabled_list = self.get_section(section_name, {}).get("enabled", [])
-        return name in enabled_list
 
     def is_interceptor_enabled(self, interceptor_name: str) -> bool:
         """
@@ -397,104 +330,6 @@ class ConfigService:
             return True
 
         return bool(interceptor_config.get("enabled", True))
-
-    # ========== 组件配置方法 ==========
-
-    def get_config_with_defaults(
-        self,
-        name: str,
-        phase: Literal["input", "output", "decision"],
-        schema_class: Optional[type] = None,
-    ) -> Dict[str, Any]:
-        """
-        获取组件配置（二级合并）
-
-        配置合并顺序（后者覆盖前者）:
-        1. Schema默认值（从Pydantic Schema类获取）
-        2. 主配置覆盖 (config.toml中的 [collectors.{name}] / [deciders.{name}] / [handlers.{name}])
-
-        Args:
-            name: 组件名称
-            phase: 阶段（input/output/decision）
-            schema_class: Pydantic Schema类（可选，用于类型验证和默认值）
-
-        Returns:
-            合并后的配置字典
-
-        Raises:
-            ValidationError: 如果schema_class提供且配置验证失败
-        """
-        if not self._initialized:
-            self.logger.warning("ConfigService 未初始化，返回空配置")
-            return {}
-
-        if phase not in _PHASE_SECTION:
-            self.logger.error(f"未知的组件阶段: {phase}")
-            return {}
-
-        result = self._get_schema_defaults(schema_class, name)
-
-        global_override = self.load_global_overrides(phase, name)
-        if global_override:
-            result = deep_merge_configs(result, global_override)
-
-        if schema_class is not None:
-            try:
-                schema_fields = set(schema_class.model_fields.keys())
-                extra_fields = {k: v for k, v in result.items() if k not in schema_fields}
-
-                # 通过 from_dict 加载，自动剥离未知字段（配合 extra="forbid"）
-                if hasattr(schema_class, "from_dict"):
-                    validated = schema_class.from_dict(result)
-                else:
-                    validated = schema_class(**result)
-                result = validated.model_dump(exclude_unset=False)
-                result.update(extra_fields)
-            except Exception as e:
-                self.logger.error(f"配置验证失败: {name} - {e}")
-                raise
-
-        return result
-
-    def _get_schema_defaults(self, schema_class: Optional[type], name: str) -> Dict[str, Any]:
-        """从Schema类获取默认值"""
-        if schema_class is None:
-            return {}
-
-        try:
-            schema_instance = schema_class.model_construct()
-            return schema_instance.model_dump(exclude_unset=False)
-        except Exception as e:
-            self.logger.warning(f"Schema默认值获取失败 ({name}): {e}")
-            return {}
-
-    def load_global_overrides(self, phase: str, name: str) -> Dict[str, Any]:
-        """
-        加载主配置中指定组件的覆盖配置
-
-        读取路径：
-        - input 阶段：[collectors.{name}]
-        - output 阶段：[handlers.{name}]
-        - decision 阶段：[deciders.{name}]
-
-        Args:
-            phase: 阶段（input/output/decision）
-            name: 组件名称
-
-        Returns:
-            主配置覆盖字典（如果不存在则返回空字典）
-        """
-        section_name = _PHASE_SECTION.get(phase)
-        if section_name is None:
-            self.logger.warning(f"未知的组件阶段: {phase}")
-            return {}
-
-        section = self._main_config.get(section_name, {})
-        if not isinstance(section, dict):
-            return {}
-
-        config = section.get(name, {})
-        return config.copy() if isinstance(config, dict) else {}
 
     # ========== 热重载 + Schema API ==========
 
@@ -587,8 +422,8 @@ class ConfigService:
         """重载配置文件并调用所有已注册回调。
 
         Args:
-            changed_scopes: 要重载的 scope 列表 (core/model/input/decision/output)。
-                None 表示重载全部。
+            changed_scopes: 要重载的 scope 列表（agents/collectors/tools/avatar/
+                model/storage/infra 的子集）。None 表示重载全部。
 
         Returns:
             True 表示重载流程完成 (即使个别回调失败)，False 表示加载失败。
@@ -696,31 +531,3 @@ class ConfigService:
         await self._file_watcher.stop()
         self._file_watcher = None
         self.logger.info("ConfigService 文件监视器已停止")
-
-
-def deep_merge_configs(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    深度合并两个字典，后者覆盖前者
-
-    合并规则:
-    - 基本类型（str, int, float, bool）: override直接覆盖
-    - 字典类型: 递归合并
-    - 列表类型: override完全替换（不合并）
-    - None: 跳过
-    """
-    result = base.copy()
-
-    for key, value in override.items():
-        if value is None:
-            continue
-
-        if key not in result:
-            result[key] = value
-        elif isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = deep_merge_configs(result[key], value)
-        elif isinstance(result[key], list) and isinstance(value, list):
-            result[key] = value
-        else:
-            result[key] = value
-
-    return result

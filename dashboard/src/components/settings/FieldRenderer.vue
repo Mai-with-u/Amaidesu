@@ -204,6 +204,14 @@
 import { ref, computed, watch } from 'vue';
 import { InfoFilled } from '@element-plus/icons-vue';
 import type { ConfigFieldSchema } from '@/types/settings';
+import {
+  defaultPlaceholder as defaultPlaceholderOf,
+  isEqualJSON,
+  isLongTextOf,
+  tupleJoin,
+  tupleSplit,
+  validateValue as validateField,
+} from '@/utils/configField';
 import ArrayEditor from './ArrayEditor.vue';
 import DictEditor from './DictEditor.vue';
 
@@ -228,17 +236,8 @@ watch(
   },
 );
 
-// 是否为长文本：显式 widget 声明优先（x-ui-widget: textarea / input）；无声明按值
-// 形态判断——描述长度与输入形态无关（短枚举值配长描述会被误判成文本域）
-const isLongText = computed(() => {
-  if (props.field.widget === 'textarea') return true;
-  if (props.field.widget === 'input') return false;
-  if (props.field.type !== 'string') return false;
-  const value = String(props.modelValue ?? '');
-  return (
-    value.includes('\n') || value.length > 80 || (props.field.validation?.max_length ?? 0) > 100
-  );
-});
+// 是否为长文本（判定规则见 utils/configField.ts 的 isLongTextOf）
+const isLongText = computed(() => isLongTextOf(props.field, props.modelValue));
 
 // 描述展示形态：icon = 标签旁 ⓘ 悬浮（缺省 inline = 内联段落）
 const showDescriptionIcon = computed(() => (props.field.descriptionDisplay ?? 'inline') === 'icon');
@@ -256,45 +255,33 @@ const sliderModel = computed<number>({
   },
 });
 
-// 占位提示：默认值加「默认」前缀，与已填值区分（裸默认值会被误读为来源不明的灰字建议）；
-// 敏感字段不回显默认值形态
-const defaultPlaceholder = computed(() => {
-  if (props.field.sensitive) return '';
-  const d = props.field.default;
-  if (d === null || d === undefined || d === '') return '';
-  return `默认 ${String(d)}`;
-});
+// 占位提示（规则见 utils/configField.ts 的 defaultPlaceholder）
+const defaultPlaceholder = computed(() => defaultPlaceholderOf(props.field));
 
 // 选择选项
 const selectOptions = computed(() => {
   return props.field.validation?.options || [];
 });
 
-// 定长数值元组：按标记长度拆成并排数字输入；全填齐才产出数组，任一空缺回退 null（= 未指定）
+// 定长数值元组：按标记长度拆成并排数字输入（拆合规则见 utils/configField.ts）
 const tupleLength = computed(() =>
   props.field.widget === 'fixed-tuple' ? (props.field.tupleLength ?? 4) : 0,
 );
 
-const tupleValues = computed<(number | undefined)[]>(() => {
-  const arr = Array.isArray(localValue.value) ? localValue.value : [];
-  return Array.from({ length: tupleLength.value }, (_, i) =>
-    typeof arr[i] === 'number' ? (arr[i] as number) : undefined,
-  );
-});
+const tupleValues = computed<(number | undefined)[]>(() =>
+  tupleSplit(localValue.value, tupleLength.value),
+);
 
 function setTupleValue(index: number, value: number | undefined) {
   const next = [...tupleValues.value];
   next[index] = value;
-  const complete = next.every(v => typeof v === 'number');
-  localValue.value = complete ? next.map(v => v as number) : null;
+  localValue.value = tupleJoin(next);
   handleChange();
 }
 
-// 是否已修改
+// 是否已修改：JSON 序列化比较（语义与原实现一致，非深比较）
 const isModified = computed(() => {
-  return (
-    JSON.stringify(localValue.value) !== JSON.stringify(props.originalValue ?? props.field.default)
-  );
+  return !isEqualJSON(localValue.value, props.originalValue ?? props.field.default);
 });
 
 // 错误信息
@@ -309,54 +296,12 @@ function setDictValue(val: unknown) {
 // 处理变更
 function handleChange() {
   // 验证
-  error.value = validateValue(localValue.value);
+  error.value = validateField(props.field, localValue.value);
 
   // 如果验证通过，发送更新
   if (!error.value) {
     emit('update:modelValue', localValue.value);
   }
-}
-
-// 验证值
-function validateValue(value: unknown): string | null {
-  const { field } = props;
-
-  // 必填检查
-  if (field.required && (value === null || value === undefined || value === '')) {
-    return '此字段为必填项';
-  }
-
-  // 类型特定验证
-  if (field.validation) {
-    const { min, max, min_length, max_length, pattern } = field.validation;
-
-    if (field.type === 'integer' || field.type === 'float') {
-      if (min !== undefined && (value as number) < min) {
-        return `最小值为 ${min}`;
-      }
-      if (max !== undefined && (value as number) > max) {
-        return `最大值为 ${max}`;
-      }
-    }
-
-    if (field.type === 'string') {
-      const str = value as string;
-      if (min_length !== undefined && str.length < min_length) {
-        return `最少 ${min_length} 个字符`;
-      }
-      if (max_length !== undefined && str.length > max_length) {
-        return `最多 ${max_length} 个字符`;
-      }
-      if (pattern) {
-        const regex = new RegExp(pattern);
-        if (!regex.test(str)) {
-          return '格式不正确';
-        }
-      }
-    }
-  }
-
-  return null;
 }
 
 // 对象类型辅助方法

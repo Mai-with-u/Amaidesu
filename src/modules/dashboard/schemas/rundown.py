@@ -27,6 +27,18 @@ class RundownControlAction(str, Enum):
     GOTO = "goto"
     RENEW = "renew"
     RESTART = "restart"
+    INSERT = "insert"
+
+
+class RundownInsertPayload(BaseModel):
+    """``action="insert"`` 的一次性应急话题内容（冷场时插在当前环节之后）。
+
+    只收最小集：标题必填、内容可选；环节 id 与预期时长由服务端生成，
+    不进用户契约面。
+    """
+
+    title: str = Field(..., min_length=1, description="话题标题（非空）")
+    content: Optional[str] = Field(default=None, description="话题内容/引导词（可选，注入环节目标）")
 
 
 class RundownSegmentView(BaseModel):
@@ -62,6 +74,7 @@ class RundownControlRequest(BaseModel):
 
     action: RundownControlAction
     segment_id: Optional[str] = None
+    payload: Optional[RundownInsertPayload] = None
 
 
 class RundownControlResponse(BaseModel):
@@ -122,6 +135,7 @@ __all__ = [
     "RundownControlResponse",
     "RundownConfigView",
     "RundownDefinition",
+    "RundownInsertPayload",
     "RundownListResponse",
     "RundownMutateResponse",
     "RundownSegmentView",

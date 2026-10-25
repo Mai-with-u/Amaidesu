@@ -10,7 +10,17 @@
 // 调用方如需展示相对时间请使用 relativeTime。
 
 import { summarizeEvent } from './eventSummary';
+import { bool, isRecord, num, str } from './guards';
 import type { WebSocketMessage } from '@/types';
+import {
+  EVENT,
+  EVENT_FAMILY,
+  isCoreFamilyEvent,
+  isGameBodyEvent,
+  isGameFamilyEvent,
+  isToolHealthEvent,
+  isToolResultEvent,
+} from '@/types/events';
 import { formatDurationShort } from '@/utils/format';
 
 // 常量
@@ -126,24 +136,6 @@ export interface ThinkingStep {
 export interface ToolArgPill {
   key: string;
   value: string;
-}
-
-// 通用取值助手
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-export function str(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-export function num(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-export function bool(value: unknown): boolean {
-  return value === true;
 }
 
 export function formatAmount(amount: number): string {
@@ -423,7 +415,8 @@ export function callerSourceLabel(source: string): string {
  * arguments 字段由后端并行新增（ToolResultPayload.arguments），事件里缺失时取 null。
  */
 function fromToolResult(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
-  const toolName = str(data.tool_name) || event.type.slice('tool.result.'.length) || 'tool';
+  const toolName =
+    str(data.tool_name) || event.type.slice(EVENT_FAMILY.toolResult.length) || 'tool';
   const status = str(data.status);
   const failed = status === 'error';
   const spoken = pickToolText(data.result);
@@ -545,7 +538,7 @@ export function fromStage(id: string, tsMs: number, data: Record<string, unknown
 
 /** 场次边界：live.started / live.ended */
 function fromLiveBoundary(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
-  const started = event.type === 'live.started';
+  const started = event.type === EVENT.liveStarted;
   const title = str(data.title);
   const reason = str(data.reason);
   return makeEntry({
@@ -593,7 +586,7 @@ function fromTtsFailed(event: FeedEvent, data: Record<string, unknown>): ShowEnt
 /** 系统事件：core.error / core.startup / core.shutdown。
  *  error 是显性失败行（红色，参照 TTS 失败行先例）；启停是中性运营标记行 */
 export function fromSystemEvent(event: FeedEvent, data: Record<string, unknown>): ShowEntry | null {
-  if (event.type === 'core.error') {
+  if (event.type === EVENT.coreError) {
     const message = str(data.message) || '原因未知';
     return makeEntry({
       id: event.id,
@@ -605,7 +598,7 @@ export function fromSystemEvent(event: FeedEvent, data: Record<string, unknown>)
       failed: true,
     });
   }
-  if (event.type === 'core.startup') {
+  if (event.type === EVENT.coreStartup) {
     return makeEntry({
       id: event.id,
       kind: 'system',
@@ -614,7 +607,7 @@ export function fromSystemEvent(event: FeedEvent, data: Record<string, unknown>)
       badge: '启动',
     });
   }
-  if (event.type === 'core.shutdown') {
+  if (event.type === EVENT.coreShutdown) {
     return makeEntry({
       id: event.id,
       kind: 'system',
@@ -641,7 +634,7 @@ function fromMilestone(event: FeedEvent, data: Record<string, unknown>): ShowEnt
 /** game.* 事件 → ShowEntry（GamePayload，event_type 判别）。
  *  非 game.* 事件返回 null；game.milestone 不走此函数（旧路径在 LiveObserver 本地维护） */
 export function toGameEntry(event: FeedEvent): ShowEntry | null {
-  if (!event.type.startsWith('game.')) return null;
+  if (!isGameFamilyEvent(event.type)) return null;
   const data = isRecord(event.data) ? event.data : {};
   const eventType = str(data.event_type) || event.type.slice('game.'.length);
   const reportKind = str(data.report_kind);
@@ -705,7 +698,7 @@ function fromAgentReply(event: FeedEvent, data: Record<string, unknown>): ShowEn
 /** 游戏身体事件：game.body.*（BodyEventPayload，kind 为判别字段）。
  *  轻量小行（对齐 whisper 级别），死亡行红色醒目；summary 已是叙事化中文事实 */
 function fromBodyEvent(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
-  const kind = str(data.kind) || event.type.slice('game.body.'.length);
+  const kind = str(data.kind) || event.type.slice(EVENT_FAMILY.gameBody.length);
   const badge =
     kind === 'attacked'
       ? '遇袭'
@@ -764,7 +757,8 @@ function fromGameChat(event: FeedEvent, data: Record<string, unknown>): ShowEntr
 /** 工具健康跃迁：tool.health.*（ToolHealthPayload，仅 open/closed 跃迁时发射）。
  *  熔断 → 警告系统行（failed 承载红色），恢复 → 普通系统行 */
 function fromToolHealth(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
-  const toolName = str(data.tool_name) || event.type.slice('tool.health.'.length) || 'tool';
+  const toolName =
+    str(data.tool_name) || event.type.slice(EVENT_FAMILY.toolHealth.length) || 'tool';
   const open = str(data.state) === 'open';
   const failureCount = num(data.failure_count) ?? 0;
   const lastError = str(data.last_error);
@@ -779,40 +773,35 @@ function fromToolHealth(event: FeedEvent, data: Record<string, unknown>): ShowEn
   });
 }
 
-/** 非控制台事件（system.* 等）返回 null，不进时间线 */
+/** 非控制台事件（未知 type 等）返回 null，不进时间线 */
 export function toEntry(event: FeedEvent): ShowEntry | null {
   const data = isRecord(event.data) ? event.data : {};
-  if (event.type === 'agent.prompted') return fromPrompt(event, data);
-  if (event.type === 'agent.replied') return fromAgentReply(event, data);
-  // WS 广播把 4 种 room.message.* 统一为 "room.message"，种类由 payload.message_type 判别
-  if (event.type === 'room.message') return fromRoomMessage(event, data);
-  if (event.type === 'streamer.speech') return fromSpeech(event, data);
-  if (event.type === 'planner.verdict') return fromVerdict(event.id, event.timestamp_ms, data);
-  if (event.type === 'planner.decision') return fromDecision(event.id, event.timestamp_ms, data);
-  if (event.type === 'streamer.stage') return fromStage(event.id, event.timestamp_ms, data);
-  if (event.type === 'live.started' || event.type === 'live.ended')
+  if (event.type === EVENT.agentPrompted) return fromPrompt(event, data);
+  if (event.type === EVENT.agentReplied) return fromAgentReply(event, data);
+  // room.message.* 族折叠广播，成员由 payload.message_type 判别
+  if (event.type === EVENT.roomMessage) return fromRoomMessage(event, data);
+  if (event.type === EVENT.streamerSpeech) return fromSpeech(event, data);
+  if (event.type === EVENT.plannerVerdict) return fromVerdict(event.id, event.timestamp_ms, data);
+  if (event.type === EVENT.plannerDecision) return fromDecision(event.id, event.timestamp_ms, data);
+  if (event.type === EVENT.streamerStage) return fromStage(event.id, event.timestamp_ms, data);
+  if (event.type === EVENT.liveStarted || event.type === EVENT.liveEnded)
     return fromLiveBoundary(event, data);
-  if (event.type.startsWith('tool.result.')) return fromToolResult(event, data);
-  if (event.type === 'rundown.changed') return fromRundown(event, data);
-  if (event.type === 'tts.utterance.failed') return fromTtsFailed(event, data);
+  if (isToolResultEvent(event.type)) return fromToolResult(event, data);
+  if (event.type === EVENT.rundownChanged) return fromRundown(event, data);
+  if (event.type === EVENT.ttsUtteranceFailed) return fromTtsFailed(event, data);
   // TTS 播报态两端点不新增行：buildLiveEntries 按 utterance_id 回填到既有发言行
-  if (event.type === 'tts.utterance.started' || event.type === 'tts.utterance.finished')
+  if (event.type === EVENT.ttsUtteranceStarted || event.type === EVENT.ttsUtteranceFinished)
     return null;
-  if (event.type.startsWith('tool.health.')) return fromToolHealth(event, data);
-  if (event.type.startsWith('game.body.')) return fromBodyEvent(event, data);
-  if (event.type === 'game.chat.received') return fromGameChat(event, data);
-  if (
-    event.type === 'core.error' ||
-    event.type === 'core.startup' ||
-    event.type === 'core.shutdown'
-  )
-    return fromSystemEvent(event, data);
+  if (isToolHealthEvent(event.type)) return fromToolHealth(event, data);
+  if (isGameBodyEvent(event.type)) return fromBodyEvent(event, data);
+  if (event.type === EVENT.gameChatReceived) return fromGameChat(event, data);
+  if (isCoreFamilyEvent(event.type)) return fromSystemEvent(event, data);
   // game.milestone 旧路径由 LiveObserver 本地处理；其他 game.*（report/attention_required/error）统一走 toGameEntry
-  if (event.type === 'game.milestone') return fromMilestone(event, data);
+  if (event.type === EVENT.gameMilestone) return fromMilestone(event, data);
   if (
-    event.type === 'game.report' ||
-    event.type === 'game.attention_required' ||
-    event.type === 'game.error'
+    event.type === EVENT.gameReport ||
+    event.type === EVENT.gameAttentionRequired ||
+    event.type === EVENT.gameError
   )
     return toGameEntry(event);
   return null;
@@ -876,10 +865,10 @@ export function buildLiveEntries(events: FeedEvent[], hiddenIds: Set<string>): S
   for (const event of events) {
     if (hiddenIds.has(event.id)) continue;
     // TTS 播报态：就地改写目标发言行，不产生新条目；发言行不在列（被裁剪/未渲染）则丢弃
-    if (event.type === 'tts.utterance.started' || event.type === 'tts.utterance.finished') {
+    if (event.type === EVENT.ttsUtteranceStarted || event.type === EVENT.ttsUtteranceFinished) {
       const utteranceId = str(isRecord(event.data) ? event.data.utterance_id : '');
       const speech = utteranceId ? speechByUtterance.get(utteranceId) : undefined;
-      if (speech) speech.ttsState = event.type === 'tts.utterance.started' ? 'speaking' : 'done';
+      if (speech) speech.ttsState = event.type === EVENT.ttsUtteranceStarted ? 'speaking' : 'done';
       continue;
     }
     const entry = toEntry(event);

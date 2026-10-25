@@ -28,16 +28,15 @@ server 清单变化换血），再对归属该 Provider 的已熔断工具做探
 """
 
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from src.modules.config.errors import ConfigValidationError
-from src.modules.config.multi_file_loader import update_config_values
 from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.dashboard.services.component_runtime import ComponentRuntimeContext
+from src.modules.dashboard.services.config_adapter import ConfigApplyOutcome, apply_config_updates
 from src.modules.dashboard.services.tool_catalog import (
     AGENT_CATEGORIES,
     CATEGORY_LEVEL_KEYS,
@@ -299,18 +298,32 @@ async def list_tool_categories(
     return ToolCatalogResponse.model_validate(build_tool_catalog(registry, tools_cfg, main_config))
 
 
-def _write_config_updates(config_dir: Path, file_name: str, updates: Dict[str, Any]) -> None:
-    """经统一写回器把变更并入指定配置文件（Schema 校验 + 备份 + 注释重生成）。
+async def _apply_config_toggle(server: "DashboardServer", changes: list[tuple[str, Any]]) -> ConfigApplyOutcome:
+    """经配置写路径统一编排落盘（与设置页保存同一管线：校验 → 写回 → 热重载 →
+    agents / collectors 域组件重建热应用）。
 
-    校验失败（ConfigValidationError）映射 400——属调用方提交的非法值；
-    其余异常映射 500。校验失败时磁盘零写入。
+    入参是带 scope 前缀的 API 键值对；前置校验或 Schema 校验失败按 422 拒绝，
+    磁盘零写入。
     """
-    try:
-        update_config_values(config_dir, file_name, updates)
-    except ConfigValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001 - 配置写回边界
-        raise HTTPException(status_code=500, detail=f"配置写回失败: {exc}") from exc
+    if server.config_service is None:
+        raise HTTPException(status_code=503, detail="Config service 不可用")
+    outcome = await apply_config_updates(
+        server.config_service,
+        config_dir(server),
+        changes,
+        hot_context=ComponentRuntimeContext.from_server(server),
+    )
+    if not outcome.success:
+        raise HTTPException(status_code=422, detail=outcome.message)
+    return outcome
+
+
+def _toggle_message(outcome: ConfigApplyOutcome, subject: str, *, enable: bool) -> str:
+    """开关写回的响应话术：落盘位置与生效方式照实说（热域组件已重建即已生效）。"""
+    action_text = "启用" if enable else "停用"
+    where = f"（写入 {outcome.target_file}）" if outcome.target_file else ""
+    effect = "已即时生效" if not outcome.requires_restart else "重启后生效"
+    return f"{subject} 已{action_text}{where}，{effect}"
 
 
 @router.post("/tools/categories/{category}/{key}/control", summary="提供者开关写回（重启后生效）")
@@ -320,19 +333,20 @@ async def control_tool_provider(
     request: ProviderControlRequest,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
 ) -> Dict[str, Any]:
-    """把提供者开关写回其声明配置（统一写回器 update_config_values）。
+    """把提供者开关写回其声明配置（配置写路径统一编排）。
 
-    写回位置按成员类型区分（点分键，不含 scope 前缀）：
+    写回位置按成员类型区分（点分键，API 键带 scope 前缀）：
     - 提供者自带开关地址（``switch_config``，如 Agent 私有 MCP）：写声明
-      的文件与键（``agents.minecraft.mcp.enabled`` → agents.toml）
-    - avatar 平台成员：``platform.enabled`` 启用名单增删（avatar.toml 文件内路径）
+      的文件与键（``agents.minecraft.mcp.enabled`` → agents.toml；agents 域
+      在跑组件随写回重建，已即时生效）
+    - avatar 平台成员：``avatar.platform.enabled`` 启用名单增删
     - studio 成员：``tools.<分类>.<键>.enabled``
     - vision（键与分类名相同）：``tools.<分类>.enabled``
     - mcp 全局 server：``tools.mcp.config.servers.<键>.enabled``
     - game / framework / memory 等随 Agent 分类不可开关（400）
 
-    工具注册发生在组合根装配期（启动时），无动态启停语义——写盘后不触发热
-    重载，重启后生效。
+    工具与虚拟形象域的注册发生在组合根装配期（启动时），无动态启停语义
+    ——写盘后重启生效。
     """
     if category in AGENT_CATEGORIES:
         raise HTTPException(status_code=400, detail="随 Agent 启用的工具分类不可开关（随 agents.enabled）")
@@ -354,12 +368,12 @@ async def control_tool_provider(
         dotted_key = str(switch.get("key") or "")
         if not file_name or not dotted_key:
             raise HTTPException(status_code=500, detail=f"提供者 {category}/{key} 的开关地址声明不完整")
-        _write_config_updates(cfg_dir, file_name, {dotted_key: enable})
-        action_text = "启用" if enable else "停用"
+        scope = file_name.removesuffix(".toml")
+        outcome = await _apply_config_toggle(server, [(f"{scope}.{dotted_key}", enable)])
         return {
             "success": True,
             "enabled": enable,
-            "message": f"工具提供者 {category}.{key} 已{action_text}（写入 {file_name}），重启后生效",
+            "message": _toggle_message(outcome, f"工具提供者 {category}.{key}", enable=enable),
         }
 
     if category == MCP_CATEGORY:
@@ -377,25 +391,22 @@ async def control_tool_provider(
                 names.append(key)
         else:
             names = [n for n in names if n != key]
-        _write_config_updates(cfg_dir, "avatar.toml", {"platform.enabled": names})
-        action_text = "启用" if enable else "停用"
+        outcome = await _apply_config_toggle(server, [("avatar.platform.enabled", names)])
         return {
             "success": True,
             "enabled": enable,
-            "message": f"虚拟形象平台 {category}.{key} 已{action_text}（写入 avatar.toml），重启后生效",
+            "message": _toggle_message(outcome, f"虚拟形象平台 {category}.{key}", enable=enable),
         }
     elif (category, key) in PROVIDER_DESCRIPTIONS:
         dotted_key = f"tools.{category}.enabled" if key in CATEGORY_LEVEL_KEYS else f"tools.{category}.{key}.enabled"
     else:
         raise HTTPException(status_code=400, detail=f"未知工具提供者: {category}/{key}")
 
-    _write_config_updates(cfg_dir, "tools.toml", {dotted_key: enable})
-
-    action_text = "启用" if enable else "停用"
+    outcome = await _apply_config_toggle(server, [(f"tools.{dotted_key}", enable)])
     return {
         "success": True,
         "enabled": enable,
-        "message": f"工具提供者 {category}.{key} 已{action_text}（写入 tools.toml），重启后生效",
+        "message": _toggle_message(outcome, f"工具提供者 {category}.{key}", enable=enable),
     }
 
 
@@ -440,13 +451,11 @@ async def control_tool(
     if unknown:
         logger.warning(f"disabled_tools 含运行时未注册的工具名（重启后若仍不存在则不生效）: {unknown}")
 
-    _write_config_updates(cfg_dir, "tools.toml", {"tools.disabled_tools": disabled})
-
-    action_text = "启用" if enable else "停用"
+    outcome = await _apply_config_toggle(server, [("tools.tools.disabled_tools", disabled)])
     return {
         "success": True,
         "enabled": enable,
-        "message": f"工具 {full_name} 已{action_text}（写入 tools.toml），重启后生效",
+        "message": _toggle_message(outcome, f"工具 {full_name}", enable=enable),
     }
 
 

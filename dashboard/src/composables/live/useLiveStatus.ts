@@ -9,7 +9,8 @@ import { computed, ref } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useEventsStore } from '@/stores';
 import { simulatorApi } from '@/api';
-import { STAGE_LABEL, bool, isRecord, str } from '@/utils/liveFeed';
+import { bool, isRecord, str } from '@/utils/guards';
+import { STAGE_LABEL } from '@/utils/liveFeed';
 
 interface RundownBanner {
   order: number;

@@ -167,6 +167,12 @@ import { ElMessage } from 'element-plus';
 import { visionApi, configApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { formatTimeHMS as formatTime } from '@/utils/format';
+import {
+  clientToImgCss as clientToImgCssInRect,
+  imgCssToMonitor as imgCssToMonitorIn,
+  normalizeRegion,
+  regionsEqual,
+} from '@/utils/monitorGeometry';
 import type { VisionMonitor } from '@/types';
 import api from '@/api';
 
@@ -230,17 +236,13 @@ function syncRegionInput() {
 
 watch(regionMonitor, syncRegionInput, { immediate: true });
 
-// 把输入框写回 regionMonitor（用户手工改输入框时同步）
+// 把输入框写回 regionMonitor（用户手工改输入框时同步）：
+// 输入框全零占位归一化为 null（全屏），其余原样写入
 watch(
   regionInput,
   next => {
     if (!regionMonitor.value) return;
-    const [x1, y1, x2, y2] = next;
-    if (x1 === 0 && y1 === 0 && x2 === 0 && y2 === 0) {
-      regionMonitor.value = null;
-      return;
-    }
-    regionMonitor.value = [x1, y1, x2, y2];
+    regionMonitor.value = normalizeRegion(next);
   },
   { deep: true },
 );
@@ -255,11 +257,7 @@ const lastSavedAt = ref<number | null>(null);
 const hasPendingChange = computed(() => {
   if (initialMonitorIndex.value === null) return true; // 尚未加载初值时也允许保存
   if (monitorIndex.value !== initialMonitorIndex.value) return true;
-  const cur = regionMonitor.value;
-  const init = initialRegion.value;
-  if (cur === null && init === null) return false;
-  if (cur === null || init === null) return true;
-  return cur.some((v, i) => v !== init[i]);
+  return !regionsEqual(regionMonitor.value, initialRegion.value);
 });
 
 // 配置键（与后端约定一致：scope + 文件内点分路径）
@@ -391,36 +389,26 @@ watch(regionMonitor, () => {
 
 /**
  * 鼠标 client 坐标 → 图内 CSS 像素坐标。
- * 限定在图片框内；越界裁剪。
+ * 从当前预览图取框矩形后交给纯几何函数换算。
  */
 function clientToImgCss(clientX: number, clientY: number): { x: number; y: number } | null {
   const el = previewImg.value;
   if (!el) return null;
-  const rect = el.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) return null;
-  const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
-  const y = Math.max(0, Math.min(rect.height, clientY - rect.top));
-  return { x, y };
+  return clientToImgCssInRect(clientX, clientY, el.getBoundingClientRect());
 }
 
 /**
  * 图内 CSS 像素坐标 → 显示器原始像素坐标（相对显示器左上角）。
- * 用图自然宽高（后端返回的 width/height）做比例换算；
- * 若图片被 CSS 缩放显示，比例仍正确。
+ * 框矩形与图片自然宽高（后端返回的 width/height）交给纯几何函数做比例换算。
  */
 function imgCssToMonitor(cssX: number, cssY: number): { x: number; y: number } {
   const el = previewImg.value;
   const rect = el?.getBoundingClientRect();
   const size = previewSize.value;
-  if (!el || !rect || !size || rect.width === 0 || rect.height === 0) {
+  if (!el || !rect || !size) {
     return { x: Math.round(cssX), y: Math.round(cssY) };
   }
-  const ratioX = size.width / rect.width;
-  const ratioY = size.height / rect.height;
-  return {
-    x: Math.round(cssX * ratioX),
-    y: Math.round(cssY * ratioY),
-  };
+  return imgCssToMonitorIn(cssX, cssY, rect, size);
 }
 
 function onDragStart(ev: MouseEvent) {

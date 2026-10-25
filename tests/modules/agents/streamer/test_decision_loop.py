@@ -149,24 +149,24 @@ async def test_proactive_is_gated_by_live_session_not_by_danmaku(rig_factory) ->
     """开播前主动发言静默且 pending 保留，开播后首个 tick 消费；下播收闸，下场前 pending 保留。"""
     rig = await rig_factory([_planner_step()], proactive={"enabled": True})
     agent = rig.agent
-    agent._rundown_proactive_pending = True
+    agent._proactive_signals.set_rundown()
     await asyncio.sleep(0.2)
-    assert agent.get_statistics()["total_proactive"] == 0 and agent._rundown_proactive_pending is True
+    assert agent.get_statistics()["total_proactive"] == 0 and agent._proactive_signals.rundown_pending is True
 
     await rig.bus.emit(
         CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1, source="manual", title="测试场"), source="test"
     )
     await asyncio.sleep(0.2)
     assert agent._live_active is True and agent.get_statistics()["total_proactive"] >= 1
-    assert agent._rundown_proactive_pending is False
+    assert agent._proactive_signals.rundown_pending is False
 
     await rig.bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=1, reason="手动结束"), source="test")
     await asyncio.sleep(0.1)
     assert agent._live_active is False
-    agent._rundown_proactive_pending = True
+    agent._proactive_signals.set_rundown()
     baseline = agent.get_statistics()["total_proactive"]
     await asyncio.sleep(0.3)
-    assert agent.get_statistics()["total_proactive"] == baseline and agent._rundown_proactive_pending is True
+    assert agent.get_statistics()["total_proactive"] == baseline and agent._proactive_signals.rundown_pending is True
 
 
 async def test_rundown_pending_survives_disabled_switch_and_fires_after_reenable(rig_factory) -> None:
@@ -176,14 +176,14 @@ async def test_rundown_pending_survives_disabled_switch_and_fires_after_reenable
     await rig.bus.emit(
         CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1, source="manual", title="测试场"), source="test"
     )
-    agent._rundown_proactive_pending = True
+    agent._proactive_signals.set_rundown()
     await asyncio.sleep(0.2)
     # 开关关闭期间信号不被静默消费
-    assert agent.get_statistics()["total_proactive"] == 0 and agent._rundown_proactive_pending is True
+    assert agent.get_statistics()["total_proactive"] == 0 and agent._proactive_signals.rundown_pending is True
 
     agent._proactive_trigger.set_enabled(True)
     await asyncio.sleep(0.2)
-    assert agent._rundown_proactive_pending is False
+    assert agent._proactive_signals.rundown_pending is False
     assert agent.get_statistics()["total_proactive"] >= 1
 
 
@@ -198,18 +198,18 @@ async def test_rundown_pending_survives_reminder_preemption(rig_factory) -> None
     await rig.bus.emit(
         CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1, source="manual", title="测试场"), source="test"
     )
-    agent._rundown_proactive_pending = True
+    agent._proactive_signals.set_rundown()
     agent._reminder_queue.append("后台留言")
     real_execute = agent._execute_round
     agent._execute_round = AsyncMock()  # 递话滞留队列，reminder 每 tick 都抢先
     await asyncio.sleep(0.15)
     # reminder 抢占每个 tick，rundown 信号保留待送达窗口让位之后
-    assert agent.get_statistics()["total_proactive"] >= 1 and agent._rundown_proactive_pending is True
+    assert agent.get_statistics()["total_proactive"] >= 1 and agent._proactive_signals.rundown_pending is True
 
     agent._execute_round = real_execute
     agent._reminder_queue.clear()
     await asyncio.sleep(0.15)
-    assert agent._rundown_proactive_pending is False
+    assert agent._proactive_signals.rundown_pending is False
     assert agent.get_statistics()["total_proactive"] >= 2
 
 
@@ -288,11 +288,11 @@ async def test_no_proactive_without_live_and_without_reminder(rig_factory) -> No
     """未开播且无递话维持静默：早退不触发决策、不消费 pending 信号（现状不回归）。"""
     rig = await rig_factory([_planner_step()], proactive={"enabled": True})
     agent = rig.agent
-    agent._rundown_proactive_pending = True
-    agent._external_proactive_pending = True
+    agent._proactive_signals.set_rundown()
+    agent._proactive_signals.set_external()
     await asyncio.sleep(0.3)
     assert rig.decisions == []
-    assert agent._rundown_proactive_pending is True and agent._external_proactive_pending is True
+    assert agent._proactive_signals.rundown_pending is True and agent._proactive_signals.external_pending is True
 
 
 # 统计字段口径

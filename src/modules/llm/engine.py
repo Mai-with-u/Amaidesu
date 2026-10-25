@@ -722,7 +722,7 @@ class LLMManager:
     def is_profile_visual(self, profile: Optional[str]) -> bool:
         """该 profile 当前主模型是否声明视觉能力（``llm_models[].visual``）。
 
-        能力协商出口（ADR-037）：观察组装（工具结果图附不附）与视觉工具
+        能力协商出口：观察组装（工具结果图附不附）与视觉工具
         （VLM 调不调）据此分叉。"当前主模型" = selection_strategy 排序后的
         failover 首位，与实际请求的首选一致。解析失败 / 无模型按 False——
         判错方向的代价是多一次 VLM 转述，而不是 agent 拿到看不懂的图。

@@ -244,6 +244,20 @@ async def test_edge_skips_blank_text_and_lazily_sets_up(event_bus: EventBus) -> 
     assert provider.render_count == 1 and mgr.play_audio.await_count == 1
 
 
+async def test_edge_synthesize_failure_propagates_instead_of_silent_audio(event_bus: EventBus) -> None:
+    """真路径失败上抛：直压 edge_tts.Communicate，穿过真实方法体。
+
+    上面参数化的失败契约用整方法替身换掉 ``_edge_tts_synthesize``，守不住
+    方法体内部的吞错——引擎曾把合成异常吃掉并返回静音假音频（错误计数与
+    failed 事件全被绕过），只有真路径红灯能拦住这类回归。
+    """
+    provider = EdgeTTSProvider(config={"type": "edge_tts"}, event_bus=event_bus)
+    fake_edge = MagicMock(Communicate=MagicMock(side_effect=RuntimeError("boom")))
+    with patch("src.modules.tts.backends.edge.provider.edge_tts", fake_edge, create=True):
+        with pytest.raises(RuntimeError, match="boom"):
+            await provider._edge_tts_synthesize("你好")
+
+
 async def test_voicebox_without_profile_id_fails_before_synthesis(event_bus: EventBus) -> None:
     provider = VoiceboxProvider(config={"type": "voicebox"}, event_bus=event_bus)  # 不带 profile_id
     with fake_http_session():

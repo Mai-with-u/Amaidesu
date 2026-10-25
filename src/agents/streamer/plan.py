@@ -28,6 +28,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.modules.tools.models import ToolCallAttachment
 from src.modules.types.emotion_vocab import Emotion
 
+from .canonical import turn_to_message
+
 
 class DecisionPlan(BaseModel):
     """决策阶段产出 / 表达阶段消费的结构化计划。
@@ -65,6 +67,10 @@ class ReplyRoundAttachment(ToolCallAttachment):
         state_facts: 本窗状态跃迁事实块——表达侧的客观事实底稿
         gate_exempt: 本窗是否豁免台词重合度检查（收播道别窗：道别话题与
             收尾环节发言字面重合是常态）
+        speech_history: 发言闸比对语料——本窗开始前主播已说过的台词（旧→新，
+            未截窗口，闸按自家窗口参数截取）；与本窗批材料同源同生命周期，
+            打回重试共用这一份。``None`` = 调用方未随单携带（裸调用，工具内
+            兜底现读）；空列表 = 确认本窗前无台词（刚开播），空语料即放行
     """
 
     thinking_callback: Optional[Any] = None
@@ -72,6 +78,22 @@ class ReplyRoundAttachment(ToolCallAttachment):
     game_chat: List[str] = field(default_factory=list)
     state_facts: str = ""
     gate_exempt: bool = False
+    speech_history: Optional[List[str]] = None
 
 
-__all__ = ["DecisionPlan", "ReplyRoundAttachment"]
+def assistant_speech_lines(history: Optional[List[Any]]) -> List[str]:
+    """历史里主播已说过的台词原文（旧→新）——发言闸的比对语料。
+
+    历史里自己说过的话才是观众听过的内容。决策窗起点由 Planner 从本窗
+    历史算一次，随 attachment 交 reply 工具（见 ``ReplyRoundAttachment.speech_history``）。
+    """
+    lines: List[str] = []
+    for turn in history or []:
+        message = turn_to_message(turn)
+        content = str(message.get("content") or "").strip()
+        if message.get("role") == "assistant" and content:
+            lines.append(content)
+    return lines
+
+
+__all__ = ["DecisionPlan", "ReplyRoundAttachment", "assistant_speech_lines"]

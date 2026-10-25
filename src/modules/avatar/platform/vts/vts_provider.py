@@ -30,15 +30,16 @@ from pydantic import Field
 
 from src.modules.avatar.speech_binding import bind_speech_emotion, bind_speaking_state
 from src.modules.avatar.tool_common import (
-    clamp_intensity,
     contract_tool_specs,
     dispatch_tool,
+    scaled_emotion_weights,
     unknown_action_fail,
 )
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
+from src.modules.utils.backoff import ExponentialBackoff
 from src.modules.utils.task_utils import spawn_background_task
 from src.modules.tools.models import (
     ToolExecutionResult,
@@ -94,8 +95,12 @@ class VTSProvider(ConnectionToolProvider):
     PARAM_EYE_OPEN_LEFT = "EyeOpenLeft"
     PARAM_EYE_OPEN_RIGHT = "EyeOpenRight"
 
-    # VTS 断线自动重连间隔（秒）：覆盖 Amaidesu 先于 VTS 启动、VTS 中途重启两种场景
+    # VTS 断线自动重连的巡检节拍（秒）：覆盖 Amaidesu 先于 VTS 启动、VTS 中途
+    # 重启两种场景；探活与换模跟随也吃这个节拍，长关时重连尝试另按退避压频
     _RECONNECT_INTERVAL_S = 5.0
+    # 重连尝试的退避（VTS 长关时压住整点尝试与日志；连上即复位回起点）
+    _RECONNECT_BACKOFF_BASE_MS = 5_000
+    _RECONNECT_BACKOFF_CAP_MS = 60_000
 
     class ConfigSchema(BaseConfig):
         """VTS 配置（连接 + Idle 两段；口型分析调参在 ``[avatar.lipsync]`` 共享件段）
@@ -319,6 +324,12 @@ class VTSProvider(ConnectionToolProvider):
         self._vts_api_lock = asyncio.Lock()
         self._is_connecting = False
         self._reconnect_task: Optional[asyncio.Task] = None
+        # 重连尝试退避：连续失败时按指数间隔跳过巡检整点（节拍保持 5s，
+        # 只压重连这一路）；连上即复位
+        self._reconnect_backoff = ExponentialBackoff(
+            base_delay_ms=self._RECONNECT_BACKOFF_BASE_MS, cap_delay_ms=self._RECONNECT_BACKOFF_CAP_MS
+        )
+        self._reconnect_skip_polls = 0
         self._is_connected = False
         self._has_started = False
         # idle 归一化值 → 参数原生量纲的缩放表（连接后按 VTS 实际范围构建；未知 = 1.0）
@@ -560,11 +571,10 @@ class VTSProvider(ConnectionToolProvider):
         ``neutral`` 映射为空参数表（表情交回 idle/基线渲染）。映射表外的
         情绪名按失败结果返回（词表编译期已知，出现未知名即调用方契约破坏）。
         """
-        params = self._emotion_map.get(emotion)
-        if params is None:
+        resolved = scaled_emotion_weights(emotion, intensity, self._emotion_map)
+        if resolved is None:
             return tool_result_fail("vts_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
-        factor = clamp_intensity(intensity)
-        scaled = {name: value * factor for name, value in params.items()}
+        factor, scaled = resolved
         success = await self.expression.set_multi_parameter(scaled, 1.0)
         return tool_result_ok(
             "vts_set_expression",
@@ -929,6 +939,24 @@ class VTSProvider(ConnectionToolProvider):
         except Exception:
             return False
 
+    async def _attempt_reconnect(self) -> None:
+        """未连接时的整点重连尝试：连上复位退避，失败按指数间隔排后续节拍。
+
+        巡检节拍（探活 / 换模跟随）保持恒定；只有重连这一路按退避压频
+        （5s→10s→20s→…→60s 封顶），VTS 长关时不再每个节拍都尝试并打日志。
+        """
+        if self._reconnect_skip_polls > 0:
+            self._reconnect_skip_polls -= 1
+            return
+        self.logger.info("VTS 未连接，尝试自动重连...")
+        await self._connect()
+        if self._is_connected:
+            self._reconnect_backoff.reset()
+            self._reconnect_skip_polls = 0
+        else:
+            delay_ms = self._reconnect_backoff.next_delay_ms()
+            self._reconnect_skip_polls = max(1, round(delay_ms / (self._RECONNECT_INTERVAL_S * 1000)))
+
     async def _reconnect_loop(self) -> None:
         try:
             while True:
@@ -936,9 +964,12 @@ class VTSProvider(ConnectionToolProvider):
                 if self._is_connecting:
                     continue
                 if not self._is_connected:
-                    self.logger.info("VTS 未连接，尝试自动重连...")
-                    await self._connect()
+                    await self._attempt_reconnect()
                     continue
+                if self._reconnect_skip_polls:
+                    # 手动重连或外部恢复连上：清掉旧失败留下的退避窗口，下次断线从起点起算
+                    self._reconnect_skip_polls = 0
+                    self._reconnect_backoff.reset()
                 if not await self._vts_health_check():
                     self.logger.warning("VTS 连接已断开（VTS 可能已重启），准备自动重连")
                     self._is_connected = False

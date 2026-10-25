@@ -169,8 +169,6 @@ async def test_executor_splits_game_chat_view() -> None:
     """决策执行器把游戏聊天全文交给 Planner 参考段，本窗新到的原话另传。"""
     planner = MagicMock()
     planner.plan = AsyncMock(return_value={"replied": False, "silent_reason": "natural"})
-    planner.last_raw_content = ""
-    planner.last_request_id = None
     executor = DecisionRoundExecutor(
         planner=planner,
         speech=MagicMock(),

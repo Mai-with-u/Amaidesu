@@ -111,9 +111,12 @@ class DecisionRoundExecutor:
         reminders_provider: Optional[Callable[[], str]] = None,
         logger: Optional[ModuleLogger] = None,
         session_recap_provider: Optional[Callable[[], str]] = None,
+        window_boundary: Optional[Callable[[], Any]] = None,
     ) -> None:
         """``history_provider`` 等 provider 返回值形态：
 
+        - window_boundary: 决策窗边界收口（账本整批出账：游戏事件进时间线与
+          本窗批次、私聊清空）——每轮第一步显式执行，先于一切读取；缺省 = 无收口
         - history: ``Optional[List]``（None/空 = 无历史，鸭子类型对话轮）
         - rundown_text: ``Optional[str]``（None = 无流程单情境）
         - game_events: ``GameEventBatch``（本轮新入账的游戏事件批次：时间线新行进
@@ -131,6 +134,7 @@ class DecisionRoundExecutor:
         self._stats = stats
         self._thinking_sink = thinking_sink
         self._thinking_enabled = thinking_enabled
+        self._window_boundary = window_boundary
         self._history_provider = history_provider
         self._rundown_text_provider = rundown_text_provider
         self._game_events_provider = game_events_provider
@@ -251,7 +255,12 @@ class DecisionRoundExecutor:
             "total_duration_ms": now_ms() - started_ms,
         }
 
-        # 读历史（live_chat 单一事实源；无显式场次时为空）
+        # 决策窗边界收口：账本整批出账、私聊清空（先于一切读取——出账的时间线
+        # 行要进本轮历史投影，本窗批次随 game_events 取用）
+        if self._window_boundary is not None:
+            self._window_boundary()
+
+        # 读历史（live_chat 单一事实源；无显式场次时为空）——纯读，无副作用
         history = await self._history_provider()
 
         # 拼装流程单上下文
@@ -267,7 +276,7 @@ class DecisionRoundExecutor:
         session_recap = self._session_recap_provider() if self._session_recap_provider else ""
 
         # Planner ReAct 决策（循环内完成查信息与 reply 调用；失败细节经
-        # Planner.last_failure 带出，供决策事件区分降级原因）
+        # outcome.error 带出，供决策事件区分降级原因）
         planner_started_ms = now_ms()
         thinking = None
         if self._thinking_sink is not None and self._thinking_enabled:
@@ -291,16 +300,14 @@ class DecisionRoundExecutor:
             outcome = None
             result["error"] = f"planner_failed: {exc}"
         result["planner_duration_ms"] = now_ms() - planner_started_ms
-        result["planner_raw"] = getattr(self._planner, "last_raw_content", "") or ""
-        result["llm_request_id"] = getattr(self._planner, "last_request_id", None)
+        # 原始输出与请求指针随 outcome 带回（plan() 的返回值契约）；异常收场时没有
+        # outcome，保持空值——异常本身已写进 result.error
+        result["planner_raw"] = str(outcome.get("raw_content", "") or "") if outcome is not None else ""
+        result["llm_request_id"] = outcome.get("llm_request_id") if outcome is not None else None
 
         if outcome is None:
             self._stats.planner_failures += 1
             self._stats.total_no_action += 1
-            detail = getattr(self._planner, "last_failure", None)
-            result["error"] = result["error"] or (
-                f"planner_failed: {detail}" if detail else "planner_failed: 决策循环异常"
-            )
             result["total_duration_ms"] = now_ms() - started_ms
             return result
 

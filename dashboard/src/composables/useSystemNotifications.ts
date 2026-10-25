@@ -19,6 +19,7 @@
 import { onScopeDispose } from 'vue';
 import { ElNotification } from 'element-plus';
 import { useWebSocketStore } from '@/stores';
+import { EVENT } from '@/types/events';
 import type { WebSocketMessage } from '@/types';
 
 /** 相同正文去重窗口（毫秒） */
@@ -70,7 +71,7 @@ export function useSystemNotifications(): void {
     const now = Date.now();
     pruneWindows(now);
 
-    if (msg.type === 'core.error') {
+    if (msg.type === EVENT.coreError) {
       const text = messageText(msg.data);
       if (!text) return;
       // 去重优先于限流：重复正文即使有额度也不再弹
@@ -88,12 +89,12 @@ export function useSystemNotifications(): void {
       return;
     }
 
-    if (msg.type === 'core.shutdown') {
+    if (msg.type === EVENT.coreShutdown) {
       notify('warning', '服务已关闭', messageText(msg.data) || 'Amaidesu 正在关闭');
       return;
     }
 
-    if (msg.type === 'core.startup') {
+    if (msg.type === EVENT.coreStartup) {
       notify('success', '服务已启动', messageText(msg.data) || 'Amaidesu 已就绪');
     }
   }

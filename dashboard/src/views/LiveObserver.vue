@@ -33,6 +33,12 @@
       </el-radio-group>
     </header>
 
+    <!-- 状态条挂载区（完整档）：实时计分板 + TTS 台前水位 -->
+    <div v-if="isFullMode" class="console-strip">
+      <ScoreboardStrip :active-session="activeSessionItem" />
+      <TtsWaterLevel />
+    </div>
+
     <div class="console-body">
       <!-- 左栏：场次侧边栏（当前 + 历史回看 + 生命周期开关）               -->
       <aside class="sessions" aria-label="直播场次">
@@ -139,21 +145,30 @@
         </div>
 
         <section class="stage" aria-label="时间线">
-          <header class="stage-bar" :class="{ 'is-paused': paused && sessionMode === 'live' }">
+          <header
+            class="stage-bar"
+            :class="{ 'is-paused': paused && sessionMode === 'live' && !replayActive }"
+          >
             <h2 class="stage-title">
               {{
-                sessionMode === 'live' ? '实时时间线' : `回看 · ${sessionTitle(selectedSession)}`
+                replayActive
+                  ? '回放调试'
+                  : sessionMode === 'live'
+                    ? '实时时间线'
+                    : `回看 · ${sessionTitle(selectedSession)}`
               }}
             </h2>
             <span class="stage-hint">
               {{
-                sessionMode === 'live'
-                  ? paused
-                    ? '已暂停 · 事件仍在后台累积'
-                    : '消息与决策按时间交织，最新在下方'
-                  : replayPruned
-                    ? '部分时段的事件诊断数据已清理，对应区间仅显示消息明细'
-                    : '历史回看（事件侧与实时同卡面：工具/决策/思考等）'
+                replayActive
+                  ? `回放 · ${sessionTitle(replaySession)}（实时新事件入缓冲不渲染）`
+                  : sessionMode === 'live'
+                    ? paused
+                      ? '已暂停 · 事件仍在后台累积'
+                      : '消息与决策按时间交织，最新在下方'
+                    : replayPruned
+                      ? '部分时段的事件诊断数据已清理，对应区间仅显示消息明细'
+                      : '历史回看（事件侧与实时同卡面：工具/决策/思考等）'
               }}
             </span>
             <span class="grow" />
@@ -185,7 +200,56 @@
                 游戏 Agent
               </el-check-tag>
             </span>
-            <template v-if="sessionMode === 'live' && isFullMode">
+            <!-- 回放调试入口：选历史场次 + 可选起始时刻，整条时间线切归档数据 -->
+            <span v-if="!replayActive" class="replay-entry">
+              <el-select
+                v-model="replaySessionId"
+                size="small"
+                class="replay-entry-session"
+                placeholder="选择场次"
+                clearable
+                aria-label="回放场次"
+              >
+                <el-option
+                  v-for="item in replayCandidateSessions"
+                  :key="item.live_session_id"
+                  :label="sessionTitle(item)"
+                  :value="item.live_session_id"
+                />
+              </el-select>
+              <el-date-picker
+                v-model="replayStartAt"
+                type="datetime"
+                size="small"
+                class="replay-entry-start"
+                placeholder="起始时间（可选）"
+                :disabled="!replaySessionId"
+                aria-label="回放起始时间"
+              />
+              <el-button
+                size="small"
+                :disabled="!replaySessionId || replayPhase === 'loading'"
+                :loading="replayPhase === 'loading'"
+                @click="enterReplay"
+              >
+                回放
+              </el-button>
+            </span>
+            <!-- 回放控制条：播放/步进/倍速/进度/退出（状态机在 useTimelineReplay） -->
+            <ReplayControlBar
+              v-if="replayActive"
+              :playing="replayPlaying"
+              :speed="replaySpeed"
+              :cursor="replayCursor"
+              :total="replayTotalCount"
+              :loading="replayPhase === 'loading'"
+              @toggle-play="replayTogglePlay"
+              @step-forward="replayStepForward"
+              @step-back="replayStepBack"
+              @update:speed="replaySetSpeed"
+              @exit="exitReplay"
+            />
+            <template v-if="sessionMode === 'live' && isFullMode && !replayActive">
               <!-- 显示模式：时间线=单列沿脊线；会话=观众左/主播右气泡对齐 -->
               <el-radio-group v-model="displayMode" size="small">
                 <el-radio-button value="timeline">时间线</el-radio-button>
@@ -213,7 +277,7 @@
             <!-- 回到实时只跟场次模式挂钩（回看态导航）；不能 v-else 接前一 template——
                  那里复合了 isFullMode，简洁档实时态会误显本按钮 -->
             <el-button
-              v-if="sessionMode !== 'live'"
+              v-if="sessionMode !== 'live' && !replayActive"
               type="primary"
               title="快捷键：F"
               @click="backToLive"
@@ -224,7 +288,10 @@
           <div class="stage-body">
             <div ref="scrollRef" class="stage-scroll" @scroll.passive="onScroll">
               <!-- 回看向前翻页：置顶"加载更早"，与滚动容器同流（滚回顶部即见） -->
-              <div v-if="sessionMode === 'replay' && replayHasMore" class="replay-older">
+              <div
+                v-if="sessionMode === 'replay' && replayHasMore && !replayActive"
+                class="replay-older"
+              >
                 <el-button
                   size="small"
                   :loading="replayLoadingMore"
@@ -288,7 +355,7 @@
           <!-- Agent 备忘录/待办面板：跟随时间线来源过滤只显对应节（纯观测只读）。
              只在实际时档 + 完整档显示（回看无快照语义、简洁档藏运营面） -->
           <AgentMemoPanel
-            v-if="sessionMode === 'live' && isFullMode"
+            v-if="sessionMode === 'live' && isFullMode && !replayActive"
             :target="agentFilter"
             class="memo-panel-dock"
           />
@@ -297,7 +364,7 @@
                共享输入条（Tab/Shift+Tab 切模式、Enter 发送、↑↓ 回溯历史）。
                模式与传输随目标切换，主播目标复用既有行为（昵称插槽、在途 chip）；
                强制回应为后台执行：发送后立即可继续输入，在途状态由状态 chip 承载 -->
-          <div v-if="sessionMode === 'live' && isFullMode" class="input-dock">
+          <div v-if="sessionMode === 'live' && isFullMode && !replayActive" class="input-dock">
             <div class="input-target">
               <span class="input-target-label">发给</span>
               <el-radio-group v-model="interventionTarget" size="small">
@@ -402,6 +469,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import { Loading, QuestionFilled } from '@element-plus/icons-vue';
 import { useWebSocketStore, useEventsStore } from '@/stores';
+import { EVENT } from '@/types/events';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
 import { useNowTick } from '@/composables/useNowTick';
 import { useLiveSessions } from '@/composables/live/useLiveSessions';
@@ -418,12 +486,18 @@ import { taskStatusText, useAgentTasks } from '@/composables/useAgentTasks';
 import { useTimelineScroll } from '@/composables/live/useTimelineScroll';
 import { useTimelineAnchor } from '@/composables/live/useTimelineAnchor';
 import { useConsoleViewMode } from '@/composables/live/useConsoleViewMode';
+import { useTimelineReplay } from '@/composables/live/useTimelineReplay';
+import ReplayControlBar from '@/components/live/ReplayControlBar.vue';
 import { confirmAction } from '@/utils/confirmAction';
+import { ElMessage } from 'element-plus';
 import { formatNumber } from '@/utils/format';
+import { waitFor } from '@/utils/waitFor';
 import { MAX_ENTRIES, isConversationEntry, relativeTime, type ShowEntry } from '@/utils/liveFeed';
-import type { TaskCard } from '@/types';
+import type { LiveSessionItem } from '@/types';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import AgentMemoPanel from '@/components/live/AgentMemoPanel.vue';
+import ScoreboardStrip from '@/components/live/ScoreboardStrip.vue';
+import TtsWaterLevel from '@/components/live/TtsWaterLevel.vue';
 
 // 装配：场次侧边栏 → 思考流 → 时间线内容 → 滚动跟随 → 干预输入条
 // （依赖沿参数单向流动：时间线消费场次模式与思考行，滚动跟随消费展示条目）
@@ -436,7 +510,7 @@ const eventsStore = useEventsStore();
 const watchedLabel = computed<string | null>(() => {
   const list = eventsStore.events;
   for (let i = list.length - 1; i >= 0; i--) {
-    if (list[i].type !== 'room.state') continue;
+    if (list[i].type !== EVENT.roomState) continue;
     const value = list[i].data.audience_total;
     return typeof value === 'number' && Number.isFinite(value) && value >= 0
       ? formatNumber(value)
@@ -490,17 +564,92 @@ const {
 
 const { rundownBanner, stageChip, simulatorChip, loadSimulatorStatus } = useLiveStatus();
 
+/** 状态条数据源：当前进行中的显式场次（无进行中场次时计分板时长显示占位） */
+const activeSessionItem = computed<LiveSessionItem | null>(
+  () => sessions.value.find(s => s.is_active) ?? null,
+);
+
+// 回放调试：整条时间线切归档数据按事件步进（状态机见 useTimelineReplay）。
+// 来源过滤复用 agentFilter（room 组与观众消息始终可见，与实时/回看同口径）
+const {
+  phase: replayPhase,
+  session: replaySession,
+  playing: replayPlaying,
+  speed: replaySpeed,
+  active: replayActive,
+  cursor: replayCursor,
+  cursorTsMs: replayCursorTs,
+  visibleEntries: replayVisibleEntries,
+  totalCount: replayTotalCount,
+  start: startReplay,
+  exit: exitReplayState,
+  togglePlay: replayTogglePlay,
+  pause: replayPause,
+  stepForward: replayStepForward,
+  stepBack: replayStepBack,
+  setSpeed: replaySetSpeed,
+  jumpToTime: replayJumpToTime,
+} = useTimelineReplay({ agentFilter });
+
+/** 回放入口的场次选择与可选起始时刻 */
+const replaySessionId = ref<number | null>(null);
+const replayStartAt = ref<Date | null>(null);
+/** 回放候选：历史场次（进行中场次没有可回放的归档全量） */
+const replayCandidateSessions = computed(() => sessions.value.filter(item => !item.is_active));
+
+/** 进入回放：整条时间线切到归档渲染；起始时刻缺省从第一条开始（暂停态） */
+async function enterReplay(): Promise<void> {
+  const item = replayCandidateSessions.value.find(
+    candidate => candidate.live_session_id === replaySessionId.value,
+  );
+  if (!item) return;
+  await startReplay(item, replayStartAt.value?.getTime());
+}
+
+/** 回放期间到达的实时事件数：进入回放时快照事件缓冲长度，退出时差值即错过量
+ *  （events store 全程缓冲不丢，退出回放不需要补拉请求） */
+const replayMissedSnapshot = ref(0);
+watch(replayActive, active => {
+  if (active) replayMissedSnapshot.value = eventsStore.events.length;
+});
+
+/** 退出回放：确认后回到实时流；有错过条数时如实提示 */
+async function exitReplay(): Promise<void> {
+  if (!replayActive.value) return;
+  const missed = Math.max(0, eventsStore.events.length - replayMissedSnapshot.value);
+  const confirmed = await confirmAction(
+    missed > 0
+      ? `退出回放并回到实时流？回放期间到达的 ${missed} 条实时事件已在缓冲中，回到实时后立即显示。`
+      : '退出回放并回到实时流？',
+    '退出回放',
+  );
+  if (!confirmed) return;
+  exitReplayState();
+  replaySessionId.value = null;
+  replayStartAt.value = null;
+  if (missed > 0) {
+    ElMessage.info(`已退出回放，缓冲中的 ${missed} 条实时事件已回到时间线`);
+  }
+}
+
 // 视图档位：完整=上图全量运营面；简洁=观众视角的纯浏览——除藏运营操作件外，
 // 时间线内容本身也过滤成对话流（发言/弹幕/礼物/场次边界），
 // 工具/决策/阶段等管线诊断卡整卡不出现
 const { viewMode, isFullMode } = useConsoleViewMode();
 
-/** 喂给时间线的展示条目：完整档原样；简洁档按对话口径过滤（口径在 liveFeed.isConversationEntry） */
-const displayEntries = computed<ShowEntry[]>(() =>
-  isFullMode.value ? entries.value : entries.value.filter(isConversationEntry),
-);
+/** 喂给时间线的展示条目：回放调试=归档前缀（组合式内已过 agentFilter，再过
+ *  档位口径）；其余模式=实时/回看缓冲（完整档原样；简洁档按对话口径过滤，
+ *  口径在 liveFeed.isConversationEntry） */
+const displayEntries = computed<ShowEntry[]>(() => {
+  if (replayActive.value) {
+    const prefix = replayVisibleEntries.value;
+    return isFullMode.value ? prefix : prefix.filter(isConversationEntry);
+  }
+  return isFullMode.value ? entries.value : entries.value.filter(isConversationEntry);
+});
 
 const timelineEmptyText = computed(() => {
+  if (replayActive.value) return '该场次归档暂无条目';
   if (sessionMode.value === 'live') return '静候消息与决策——注入一条弹幕试试';
   return isFullMode.value ? '该场次暂无可回看条目' : '简洁档只显示发言与弹幕——该场次暂无对话内容';
 });
@@ -519,14 +668,13 @@ const { anchoredId, anchorAt } = useTimelineAnchor({
 });
 
 /** 回放首屏加载完成后再锚定（loadReplayTimeline 由场次模式 watch 异步触发，
- *  有界等待防止诊断流缺失时空转） */
+ *  有界等待防止诊断流缺失时空转；等待期间切走场次则放弃锚定） */
 async function anchorAfterReplayLoad(targetMs: number): Promise<void> {
-  for (let i = 0; i < 50; i += 1) {
-    if (sessionMode.value !== 'replay') return;
-    if (displayEntries.value.length > 0) break;
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  await anchorAt(targetMs);
+  await waitFor(() => sessionMode.value !== 'replay' || displayEntries.value.length > 0, {
+    tries: 50,
+    intervalMs: 100,
+  });
+  if (sessionMode.value === 'replay') await anchorAt(targetMs);
 }
 
 const sendBarRef = ref<InstanceType<typeof InterventionInput> | null>(null);
@@ -559,19 +707,8 @@ watch(interventionTarget, target => {
 
 // minecraft 目标的进行中任务（紧循环：发话→看任务→取消）。
 // 数据流与 Agent 页任务板同源（useAgentTasks）；主播无任务账本不展示
-const { runningTasks, cancelTask: cancelTaskRequest } = useAgentTasks(interventionTarget);
-
-async function cancelTask(task: TaskCard): Promise<void> {
-  const ok = await confirmAction(
-    `确认取消任务 ${task.task_id}？将强制清账并通知该 Agent 停手`,
-    '取消任务确认',
-    {
-      confirmButtonText: '确认取消',
-    },
-  );
-  if (!ok) return;
-  await cancelTaskRequest(task.task_id);
-}
+// 取消前的确认微流程与 Agent 任务板同源（useAgentTasks 收口）
+const { runningTasks, cancelTaskWithConfirm: cancelTask } = useAgentTasks(interventionTarget);
 
 /** 时间线行点击 → Agent 页对应决策轮（可点行已由 FeedTimeline 按轮次 ID 过滤） */
 function jumpToAgentRound(entry: ShowEntry): void {
@@ -617,6 +754,17 @@ function onConsoleKeydown(e: KeyboardEvent): void {
     showShortcuts.value = !showShortcuts.value;
     return;
   }
+  // 回放调试优先：空格=播放/暂停，F=退出回放（退出流程含确认）
+  if (replayActive.value) {
+    if (e.key === ' ') {
+      e.preventDefault();
+      replayTogglePlay();
+    } else if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      void exitReplay();
+    }
+    return;
+  }
   if (sessionMode.value !== 'live') {
     if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
@@ -646,17 +794,57 @@ function onConsoleKeydown(e: KeyboardEvent): void {
 
 onMounted(() => window.addEventListener('keydown', onConsoleKeydown));
 onActivated(() => window.addEventListener('keydown', onConsoleKeydown));
-onDeactivated(() => window.removeEventListener('keydown', onConsoleKeydown));
+onDeactivated(() => {
+  window.removeEventListener('keydown', onConsoleKeydown);
+  // keep-alive 失活即暂停回放播放（停表）；重激活不自动续播——
+  // 回放调试是主动操作，切页回来静默续播易误判时间线状态
+  replayPause();
+});
 onUnmounted(() => window.removeEventListener('keydown', onConsoleKeydown));
+
+// 回放位置深链（useStreamPageQuery 的同款机械，就地实现）：?rp=<场次id>&rpt=
+// <游标时刻毫秒>。回放场次或游标推进即回写（replace 不产生历史记录，缺值删键）；
+// 刷新页面按 query 还原：载归档后 jumpToTime 落回原游标位置。
+// 就地而非复用 useStreamPageQuery 的理由：后者回写时会整表替换 query（只保留
+// 注册字段），会抹掉本页既有的 ?session=&at= 回看深链；此处改为在原 query 上
+// 只增删自己的两个键，两套深链互不踩踏
+const REPLAY_QUERY_SESSION = 'rp';
+const REPLAY_QUERY_CURSOR = 'rpt';
+
+watch([replaySession, replayCursorTs], () => {
+  const sid = replaySession.value?.live_session_id;
+  const ts = replayCursorTs.value;
+  const query: Record<string, string> = {};
+  for (const [key, value] of Object.entries(route.query)) {
+    if (typeof value === 'string') query[key] = value;
+  }
+  if (sid != null) query[REPLAY_QUERY_SESSION] = String(sid);
+  else delete query[REPLAY_QUERY_SESSION];
+  if (ts != null) query[REPLAY_QUERY_CURSOR] = String(ts);
+  else delete query[REPLAY_QUERY_CURSOR];
+  void router.replace({ query });
+});
+
+/** 深链还原：rp 指向的历史场次存在则进入回放，载归档完成后跳到 rpt 游标时刻 */
+async function restoreReplayFromQuery(): Promise<void> {
+  const sid = Number(route.query[REPLAY_QUERY_SESSION]);
+  if (!Number.isFinite(sid) || sid <= 0) return;
+  const target = sessions.value.find(item => item.live_session_id === sid && !item.is_active);
+  if (!target) return;
+  await startReplay(target);
+  const ts = Number(route.query[REPLAY_QUERY_CURSOR]);
+  if (Number.isFinite(ts) && ts > 0) replayJumpToTime(ts);
+}
 
 // 生命周期
 
 onMounted(() => {
-  void loadSessions().then(() => {
+  void loadSessions().then(async () => {
     // 直达预过滤：场次复盘页经 ?session=<id[,id...]> 跳入时选中该历史场次进回看
     //（列表加载完成后才能命中；无效 id 静默忽略，维持实时模式）。
     // 复盘侧多选合并可带多场，回看视图一次只呈现一场——按链接顺序选中首个命中场次，
     // 其余 id 保留在链接中供手动切换
+    let deepLinked = false;
     const deepLinkIds = String(route.query.session ?? '')
       .split(',')
       .map(Number)
@@ -665,6 +853,7 @@ onMounted(() => {
       const target = sessions.value.find(s => s.live_session_id === id);
       if (target && !target.is_active) {
         selectSession(target);
+        deepLinked = true;
         // 时刻锚定（复盘页指标卡深链）：at=毫秒时刻，回看加载完成后定位高亮
         const anchorMs = Number(route.query.at);
         if (Number.isFinite(anchorMs) && anchorMs > 0) {
@@ -673,6 +862,8 @@ onMounted(() => {
         break;
       }
     }
+    // 回放调试深链还原（?rp=&rpt=）：与回看深链并存时优先回放（链接语义更具体）
+    if (!deepLinked) await restoreReplayFromQuery();
   });
   void loadSimulatorStatus();
 });
@@ -698,6 +889,19 @@ onMounted(() => {
   align-items: baseline;
   gap: var(--spacing-sm);
   flex-shrink: 0;
+}
+
+/* 状态条挂载区（顶栏与主体之间）：计分板左、TTS 水位右 */
+.console-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-md, 16px);
+  flex-shrink: 0;
+}
+
+.console-strip > .tts-water {
+  margin-left: auto;
 }
 
 .console-title {
@@ -1362,6 +1566,22 @@ onMounted(() => {
 .stage-scroll::-webkit-scrollbar-thumb {
   background: var(--border-color-dark);
   border-radius: 3px;
+}
+
+/* 回放调试入口：场次下拉 + 起始时刻 + 进入按钮（行内排布，随 stage-bar 折行） */
+.replay-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.replay-entry-session {
+  width: 150px;
+}
+.replay-entry-start {
+  width: 180px;
+}
+.replay-entry-start :deep(.el-input__wrapper) {
+  padding-left: 6px;
 }
 
 /* 回看向旧翻页条：滚动流内置顶居中 */

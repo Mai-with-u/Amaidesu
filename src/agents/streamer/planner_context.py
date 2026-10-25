@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional, Tuple
 
@@ -22,9 +22,7 @@ class EnvironmentBlock:
 
     minute_bucket_ms: int  # 分钟级时刻（避免秒级毒化缓存）
     duration_so_far_ms: int
-    current_stage_label: Optional[str] = None  # 当前环节标题（RundownState 当前环节）
     unread_summary: str = ""  # 未读行为流摘要
-    key_changes: List[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -86,14 +84,8 @@ def _render_environment(env: Optional[EnvironmentBlock]) -> str:
     # 未开播/数据源缺失时为 0，渲染无信息量——跳过而非显示 "0 分钟"
     if env.duration_so_far_ms > 0:
         lines.append(f"- 已开播时长: {_format_duration_minutes(env.duration_so_far_ms)}")
-    if env.current_stage_label:
-        lines.append(f"- 当前环节: {env.current_stage_label}")
     if env.unread_summary:
         lines.append(f"- 未读摘要: {env.unread_summary}")
-    if env.key_changes:
-        lines.append("- 关键变化:")
-        for change in env.key_changes:
-            lines.append(f"  - {change}")
     return "\n".join(lines)
 
 

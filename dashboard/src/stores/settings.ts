@@ -161,17 +161,6 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  async function restartService(): Promise<ConfigUpdateResponse> {
-    try {
-      const response = await api.post<ConfigUpdateResponse>('/config/restart');
-      if (response.data.success) pendingRestart.value = false;
-      return response.data;
-    } catch (e) {
-      console.error('Failed to restart service:', e);
-      return { success: false, message: '重启服务失败' };
-    }
-  }
-
   function discardChanges() {
     // 重置当前值为原始值
     currentValues.value = JSON.parse(JSON.stringify(originalValues.value));
@@ -283,7 +272,6 @@ export const useSettingsStore = defineStore('settings', () => {
     // 动作
     fetchSchema,
     saveChanges,
-    restartService,
     discardChanges,
     updateCurrentValues,
     updatePendingChanges,

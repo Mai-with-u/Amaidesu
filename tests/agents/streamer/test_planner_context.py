@@ -19,9 +19,7 @@ def _production_inputs() -> AssemblerInputs:
         environment=EnvironmentBlock(
             minute_bucket_ms=1_760_000_000_000,
             duration_so_far_ms=45 * 60_000,
-            current_stage_label="开场",
             unread_summary="3 条未读互动",
-            key_changes=[],
         ),
         person_profile_section="- bilibili/alice: 上次问过新皮肤",
     )

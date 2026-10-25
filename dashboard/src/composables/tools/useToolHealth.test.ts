@@ -35,7 +35,7 @@ function healthMessage(
   partial: Partial<WebSocketMessage['data']> & { type?: string },
 ): WebSocketMessage {
   return {
-    type: partial.type ?? 'tool.health.prov_search',
+    type: (partial.type ?? 'tool.health.prov_search') as WebSocketMessage['type'],
     timestamp_ms: 1_000,
     data: {
       tool_name: 'search',
@@ -89,7 +89,7 @@ describe('useToolHealth', () => {
     subscribers[0](healthMessage({ tool_name: 'other' }));
     expect(tools.value[0].health).toBeUndefined();
 
-    subscribers[0]({ type: 'tool.other', timestamp_ms: 1, data: {} });
+    subscribers[0]({ type: 'tool.other' as WebSocketMessage['type'], timestamp_ms: 1, data: {} });
     subscribers[0]({ type: 'tool.health.search', timestamp_ms: 1, data: { tool_name: 'search' } });
     expect(tools.value[0].health).toBeUndefined();
   });

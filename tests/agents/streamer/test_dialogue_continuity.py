@@ -15,6 +15,7 @@ import pytest
 
 from src.agents.streamer import canonical
 from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner_render import Delegation, render_delegations
 from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider
@@ -551,57 +552,39 @@ def test_prompts_forbid_inventing_off_game_life_events(prompts: Any) -> None:
     assert "不编现实生活里的经历" in system and "事情只说游戏里和直播间里真发生过的" in system
 
 
-async def test_delegation_rendering_merges_machine_status_and_stall_age() -> None:
+def test_delegation_rendering_merges_machine_status_and_stall_age() -> None:
     """委派状态行合并机器账：在途按账本时间戳提示没有新进展，停滞打标直说，交付语仍在。"""
-    planner = _planner()
-    planner._tool_registry.invoke = AsyncMock(
-        return_value=ToolExecutionResult(
-            tool_name="framework_delegate",
-            success=True,
-            structured_content={"accepted": True, "task_id": "deleg_1", "executor": "minecraft"},
-        )
-    )
-    await planner._invoke_registry_tool("framework_delegate", {"agent": "minecraft", "instruction": "挖石料"})
     now = now_ms()
+    delegations = {
+        "minecraft": Delegation(agent="minecraft", instruction="挖石料", task_id="deleg_1", at_ms=now - 60_000)
+    }
+
+    def render(record: Optional[Dict[str, Any]], *, bind: bool = True) -> str:
+        provider = (lambda task_id: record) if bind else None
+        return render_delegations(delegations, provider, now)
 
     # 账本已终态移除（目标终态直写后、交付语未到）：保底说已了结
-    planner.bind_delegation_status_provider(lambda task_id: None)
-    assert "账面上已了结" in planner._render_delegations(now)
+    assert "账面上已了结" in render(None)
 
     # 账本在途、刚刷新：普通"还在做"
-    planner.bind_delegation_status_provider(
-        lambda task_id: {"status": "running", "updated_at_ms": now - 30_000, "snapshot": {}}
-    )
-    assert "还在做，还没做完" in planner._render_delegations(now)
+    assert "还在做，还没做完" in render({"status": "running", "updated_at_ms": now - 30_000, "snapshot": {}})
 
     # 账本 5 分钟没刷新：提示没有新进展（数据来自账本时间戳）
-    planner.bind_delegation_status_provider(
-        lambda task_id: {"status": "running", "updated_at_ms": now - 5 * 60_000, "snapshot": {}}
-    )
-    assert "没有新进展" in planner._render_delegations(now)
+    assert "没有新进展" in render({"status": "running", "updated_at_ms": now - 5 * 60_000, "snapshot": {}})
 
     # 游戏侧停滞打标：直说停着没动静
-    planner.bind_delegation_status_provider(
-        lambda task_id: {
-            "status": "running",
-            "updated_at_ms": now - 30_000,
-            "snapshot": {"stalled_goals": {"1": "maicraft:gather"}},
-        }
+    stalled = render(
+        {"status": "running", "updated_at_ms": now - 30_000, "snapshot": {"stalled_goals": {"1": "maicraft:gather"}}}
     )
-    assert "停着没动静" in planner._render_delegations(now) and "maicraft:gather" in planner._render_delegations(now)
+    assert "停着没动静" in stalled and "maicraft:gather" in stalled
 
     # 账本等定夺：渲染停着等主意
-    planner.bind_delegation_status_provider(
-        lambda task_id: {"status": "waiting_for_decision", "updated_at_ms": now - 60_000, "snapshot": {}}
-    )
-    assert "停着等我和观众拿主意" in planner._render_delegations(now)
+    assert "停着等我和观众拿主意" in render({"status": "waiting_for_decision", "updated_at_ms": now - 60_000, "snapshot": {}})
 
-    # LLM 交付语后到：仍以交付语显示（终态条目已从账本移除）
-    planner.note_game_report("minecraft", "delivery")
-    assert "做完" in planner._render_delegations(now)
+    # LLM 交付语后到：仍以交付语显示（终态条目已从账本移除，机器账查不到）
+    delegations["minecraft"].report_kind = "delivery"
+    delegations["minecraft"].reported_ms = now - 10_000
+    assert "做完" in render(None)
 
     # 未绑定状态查询（缺 task_ledger）：降级回只有交付语的渲染
-    planner2 = _planner()
-    planner2._delegations["minecraft"] = planner._delegations["minecraft"]
-    planner2.note_game_report("minecraft", "delivery")
-    assert "做完" in planner2._render_delegations(now)
+    assert "做完" in render(None, bind=False)

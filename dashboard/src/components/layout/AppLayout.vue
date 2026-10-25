@@ -12,6 +12,9 @@
       </div>
 
       <div class="header-right">
+        <!-- 告警收件箱：铃铛 + 未读徽标，点开抽屉翻看持久告警 -->
+        <AlertBell />
+
         <!-- 连接状态 -->
         <div class="connection-status" :class="{ connected: isConnected }">
           <span class="status-dot" :class="isConnected ? 'running' : 'stopped'"></span>
@@ -64,7 +67,6 @@
   <RestartOverlay
     :visible="overlayVisible"
     :status="overlayStatus"
-    :progress="overlayProgress"
     :elapsed="overlayElapsed"
     :check-attempts="overlayCheckAttempts"
     :max-attempts="overlayMaxAttempts"
@@ -78,6 +80,7 @@ import { Sunny, Moon, SwitchButton } from '@element-plus/icons-vue';
 import { confirmAction } from '@/utils/confirmAction';
 import Sidebar from './Sidebar.vue';
 import RestartOverlay from './RestartOverlay.vue';
+import AlertBell from './AlertBell.vue';
 import { useThemeStore, useWebSocketStore } from '@/stores';
 import { useAppRestartStore } from '@/stores/appRestart';
 import { storeToRefs } from 'pinia';
@@ -96,7 +99,6 @@ const {
   restarting,
   overlayVisible,
   overlayStatus,
-  overlayProgress,
   overlayElapsed,
   overlayCheckAttempts,
   overlayMaxAttempts,

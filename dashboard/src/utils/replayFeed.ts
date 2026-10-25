@@ -10,15 +10,13 @@
 import {
   buildLiveEntries,
   formatAmount,
-  isRecord,
   makeEntry,
   mergeEntriesByTime,
-  num,
-  str,
   type FeedEvent,
   type ShowEntry,
 } from '@/utils/liveFeed';
-import type { SessionTimelineItem } from '@/types';
+import { isRecord, num, str } from '@/utils/guards';
+import type { SessionTimelineItem, WsMessageType } from '@/types';
 
 /** 场次时间线明细 → 展示条目（入参顺序即输出顺序；id 带 rp- 前缀与实时条目区分） */
 export function buildReplayEntries(items: SessionTimelineItem[]): ShowEntry[] {
@@ -28,7 +26,13 @@ export function buildReplayEntries(items: SessionTimelineItem[]): ShowEntry[] {
     const id = `rp-${entry.ts_ms}-${index}`;
     if (entry.kind === 'event') {
       const data = isRecord(entry.data) ? entry.data : {};
-      feedEvents.push({ id, type: str(entry.event_type), timestamp_ms: entry.ts_ms, data });
+      // REST 边界：event_type 是线上字符串，词汇由后端契约测试守护，此处显式收口
+      feedEvents.push({
+        id,
+        type: str(entry.event_type) as WsMessageType,
+        timestamp_ms: entry.ts_ms,
+        data,
+      });
       return;
     }
     if (entry.kind === 'speech') {

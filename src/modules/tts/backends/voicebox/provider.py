@@ -20,7 +20,7 @@ import numpy as np
 from src.modules.config.core_schemas import VoiceboxParams
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
-from ...common import build_stats_dict, prepare_speech_text, synthesize_play_and_notify
+from ...common import build_stats_dict, run_full_engine_speech
 
 if TYPE_CHECKING:
     pass
@@ -125,27 +125,14 @@ class VoiceboxProvider:
     # ===== 业务方法 =====
 
     async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
-        """TTS 播放入口。
+        """TTS 播放入口（发声四步前奏走公共入口，引擎只剩合成差异）。
 
         Args:
             text: 要合成的文本。
             utterance_id: 一次发声实例的唯一 ID；非 None 时按
                 ``tts.utterance.*`` 生命周期发布事件。
         """
-        if not self._has_started:
-            await self.setup()
-        final_text = prepare_speech_text(self.logger, text)
-        if final_text is None:
-            return
-        if self.tts_lock is None:
-            self.tts_lock = asyncio.Lock()
-        async with self.tts_lock:
-            await synthesize_play_and_notify(
-                self,
-                utterance_id=utterance_id,
-                speech_text=text,
-                synthesize=lambda: self._synthesize_audio(final_text),
-            )
+        await run_full_engine_speech(self, text=text, utterance_id=utterance_id, synthesize=self._synthesize_audio)
 
     async def _synthesize_audio(self, text: str) -> Tuple[np.ndarray, int]:
         """文本 → 音频（Voicebox HTTP 三段：创建任务 → 轮询状态 → 下载 WAV 并解码）"""

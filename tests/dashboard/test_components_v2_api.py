@@ -93,7 +93,7 @@ def test_edge_configs_and_response_serialization() -> None:
 
     grouped = get_v2_component_list(_make_config(), _make_server())
     data = ComponentListResponse(collectors=grouped["collectors"], agents=grouped["agents"]).model_dump()
-    assert set(data["collectors"][0]) >= {"name", "group", "phase", "type", "is_started", "is_enabled"}
+    assert set(data["collectors"][0]) >= {"name", "group", "type", "is_started", "is_enabled"}
 
 
 def test_description_comes_from_manager_and_defaults_to_empty() -> None:

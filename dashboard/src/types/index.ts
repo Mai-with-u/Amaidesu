@@ -1,5 +1,9 @@
 // 后端 REST/WS 接口的类型定义；事件名以语义域事件名为准。
 
+import type { WsKind, WsMessageType } from './events';
+
+export type { WsKind, WsMessageType };
+
 // 系统状态
 
 /**
@@ -16,7 +20,7 @@ export interface GroupStatus {
 }
 
 /**
- * EventBus 总吞吐统计（顶层暴露，不再走 phase）。
+ * EventBus 总吞吐统计（顶层暴露）。
  */
 export interface EventBusStats {
   total_events: number;
@@ -49,6 +53,29 @@ export interface SystemStatusResponse {
  */
 export interface ChangelogResponse {
   content: string;
+}
+
+/** 健康检查响应（GET /api/v1/system/health） */
+export interface SystemHealthResponse {
+  status: string;
+  timestamp_ms: number;
+}
+
+/** 连接健康墙单项：一个可观测组件的连接态快照（GET /system/health）。 */
+export interface SystemHealthItem {
+  name: string;
+  state: 'ok' | 'degraded' | 'offline' | 'unknown';
+  detail: string;
+  last_error: string;
+  supports_reconnect: boolean;
+}
+
+/** 连接健康墙响应：按域分组的组件连接态（domains 为空 = 聚合数据源缺失）。 */
+export interface SystemHealthWallResponse {
+  status: string;
+  timestamp_ms: number;
+  checked_at_ms: number | null;
+  domains: Record<string, SystemHealthItem[]>;
 }
 
 // 组件
@@ -135,6 +162,11 @@ export interface AgentPromptResponse {
   delivered: boolean;
 }
 
+/** 任务硬取消响应（任务未知/已终态 404） */
+export interface AgentCancelTaskResponse {
+  cancelled: boolean;
+}
+
 /** Agent 直派受理回执（派新任务，登记账本） */
 export interface AgentDelegateResponse {
   accepted: boolean;
@@ -178,9 +210,33 @@ export interface TaskSnapshotResponse {
 }
 
 // 配置
-//
-// 配置读写经 stores/settings.ts 直连 `/api/v1/config/*`（响应形状内联于
-// store），前端无独立 ConfigResponse 类型。
+
+/** 合并视图响应（GET /api/v1/config）：顶层键为七个配置 scope 的展平字典 */
+export interface ConfigGetResponse {
+  config: Record<string, unknown>;
+}
+
+/** 批量写回中单条变更的处理结果 */
+export interface ConfigBatchResultItem {
+  key: string;
+  success: boolean;
+}
+
+/** 批量写回中失败条目的错误明细 */
+export interface ConfigBatchErrorItem {
+  key: string;
+  message: string;
+}
+
+/** 批量原子写回响应（POST /api/v1/config/batch）：全成或整批回退；
+ *  requires_restart 表示改动须重启生效 */
+export interface ConfigBatchSaveResponse {
+  success: boolean;
+  message: string;
+  requires_restart?: boolean;
+  results?: ConfigBatchResultItem[];
+  errors?: ConfigBatchErrorItem[];
+}
 
 // 调试注入
 
@@ -250,6 +306,18 @@ export interface TtsTestResponse {
   error?: string;
   /** 生成试听模式返回的完整 wav 音频（base64） */
   audio_base64?: string;
+}
+
+/** 台前重播请求：同文本重合成（utterance 事件无服务端留档，前端回传原文本） */
+export interface TtsSayRequest {
+  text: string;
+}
+
+/** 台前重播响应（同步长请求；合成失败时引擎已发 tts.utterance.failed） */
+export interface TtsSayResponse {
+  success: boolean;
+  utterance_id?: string;
+  error?: string;
 }
 
 export interface TtsStatusResponse {
@@ -351,15 +419,15 @@ export interface TriggerProactiveResponse {
 /**
  * WebSocket 消息。
  *
- * `type` 字段是 WS 广播类型：4 种 room.message.* EventBus 事件统一广播为
- * `room.message`（消息种类由 payload.message_type 判别）；其余沿用事件名
- * （`streamer.speech` / `rundown.changed` / `planner.decision` /
- * `tool.result.<name>` / `game.*` / `live.*` / `system.*`）。
+ * `type` 字段是 WS 广播类型，词汇与折叠规则见 `./events`（前端唯一事实源，
+ * 与后端 broadcaster 订阅清单对账）：直通事件的 type = 事件名；room.message.*
+ * 与 room.state.* 折叠为族类型（成员由载荷字段判别）；通配族的 type 为
+ * 具体事件名（如 `tool.result.<name>`）。
  */
 export interface WebSocketMessage {
-  /** 消息类别："event"=事件广播（缺省，进事件缓冲）；"stream"=观测流（独立缓冲，不入事件通道） */
-  kind?: string;
-  type: string;
+  /** 消息类别："event"=事件广播（缺省，进事件缓冲）；"stream"=观测流；"log"=日志通道；"transport"=握手心跳（后两者不入事件通道） */
+  kind?: WsKind;
+  type: WsMessageType;
   /** 消息时刻（Unix 毫秒） */
   timestamp_ms: number;
   data: Record<string, unknown>;
@@ -380,6 +448,16 @@ export interface ThinkingDelta {
 export interface SubscribeRequest {
   action: 'subscribe' | 'unsubscribe';
   events: string[];
+}
+
+// 事件历史（GET /events，游标续传 + 落盘扩容）
+
+/** 事件历史查询响应：断线/刷新后补缺口（since_id）与时间窗查询共用 */
+export interface EventListResponse {
+  events: WebSocketMessage[];
+  total: number;
+  has_more: boolean;
+  has_more_newer?: boolean;
 }
 
 // 日志历史（GET /logs，扫 logs/webui 按天落盘 JSONL）
@@ -570,7 +648,7 @@ export interface ToolReconnectResponse {
   refreshed?: { added: string[]; removed: string[]; count: number } | null;
 }
 
-// Simulator 控制面（ADR-006）
+// Simulator 控制面
 
 /**
  * SimulatorService 实时状态（`/api/v1/simulator/status` 响应）。
@@ -643,6 +721,49 @@ export interface SimulatorControlResponse {
   success: boolean;
   message: string;
   is_running?: boolean;
+}
+
+/** 可回放录制日期列表响应（GET /api/v1/simulator/replay/dates） */
+export interface ReplayDatesResponse {
+  dates: ReplayDateEntry[];
+}
+
+/** 常驻人设列表响应（GET /api/v1/simulator/personas；pool 未装配时为空列表 + is_available=false） */
+export interface PersonaListResponse {
+  personas: SimPersona[];
+  is_available: boolean;
+}
+
+/** 新增常驻人设响应（失败时 persona 为空） */
+export interface PersonaCreateResponse {
+  success: boolean;
+  message?: string;
+  persona?: SimPersona;
+}
+
+/** 常驻人设更新 / 删除的通用响应 */
+export interface PersonaOperationResponse {
+  success: boolean;
+  message?: string;
+}
+
+/** 礼物目录列表响应（GET /api/v1/simulator/gifts；生成器未装配时为空列表 + is_available=false） */
+export interface GiftListResponse {
+  gifts: SimGift[];
+  is_available: boolean;
+}
+
+/** 新增礼物响应（失败时 gift 为空） */
+export interface GiftCreateResponse {
+  success: boolean;
+  message?: string;
+  gift?: SimGift;
+}
+
+/** 礼物更新 / 删除的通用响应 */
+export interface GiftOperationResponse {
+  success: boolean;
+  message?: string;
 }
 
 // Rundown（流程单编排页）
@@ -725,14 +846,22 @@ export interface RundownStateResponse {
  * - `pause` / `resume` 仅在对应状态合法；
  * - `goto` 需要 `segment_id`；
  * - `next` 在末段时结束整场流程单；
- * - `restart` 整场重开（游标回首环节、计时清零；导演通道）。
+ * - `restart` 整场重开（游标回首环节、计时清零；导演通道）；
+ * - `insert` 需要 `payload`（应急插话题：当前环节后插一次性环节）。
  */
-export type RundownControlAction = 'pause' | 'resume' | 'next' | 'goto' | 'restart';
+export type RundownControlAction = 'pause' | 'resume' | 'next' | 'goto' | 'restart' | 'insert';
+
+/** `insert` 动作的一次性应急话题内容（标题必填，内容可选）。 */
+export interface RundownInsertPayload {
+  title: string;
+  content?: string;
+}
 
 /** `POST /api/v1/rundown/control` 请求体。 */
 export interface RundownControlRequest {
   action: RundownControlAction;
   segment_id?: string;
+  payload?: RundownInsertPayload;
 }
 
 /**
@@ -815,6 +944,17 @@ export interface LiveSessionListResponse {
   active_session_id: number | null;
 }
 
+/** 开启新场次响应（POST /api/v1/live-sessions/open） */
+export interface SessionOpenResponse {
+  live_session_id: number;
+}
+
+/** 场次动作通用响应（close / rename / remove 共用） */
+export interface SessionActionResponse {
+  success: boolean;
+  detail: string;
+}
+
 /** 单场时间线条目（GET /api/v1/live-sessions/{id}/timeline） */
 export interface SessionTimelineItem {
   /** danmaku / gift / super_chat / speech / event */
@@ -888,6 +1028,42 @@ export interface VisionPreviewResponse {
   height: number;
   monitor_index: number;
   region: number[] | null;
+}
+
+/** 单平台虚拟形象调试状态（`GET /avatar/debug/status` 成员） */
+export interface AvatarDebugPlatformStatus {
+  platform: string;
+  connected: boolean | null;
+  /** 各平台均未暴露"当前表情"读取通道，恒为 null（预留字段） */
+  current_expression: string | null;
+  detail: string;
+  actions: { name: string; type?: string }[];
+  emotions: string[];
+  stats: Record<string, unknown>;
+}
+
+/** `GET /avatar/debug/status` 响应 */
+export interface AvatarDebugStatusResponse {
+  platforms: AvatarDebugPlatformStatus[];
+}
+
+/** `POST /avatar/debug/trigger` 请求 */
+export interface AvatarDebugTriggerRequest {
+  platform: string;
+  kind: 'expression' | 'parameter' | 'action';
+  key: string;
+  value: number;
+}
+
+/** `POST /avatar/debug/trigger` 响应（success=false 表示业务拒绝，原因在 detail） */
+export interface AvatarDebugTriggerResponse {
+  platform: string;
+  kind: string;
+  key: string;
+  value: number;
+  success: boolean;
+  detail: string;
+  structured_content: Record<string, unknown> | null;
 }
 
 /** 单行观众统计（viewers 表行投影） */

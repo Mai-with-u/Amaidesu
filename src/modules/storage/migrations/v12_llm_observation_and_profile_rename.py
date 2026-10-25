@@ -2,17 +2,17 @@
 
 一次迁移涵盖三块列变更（各自独立幂等，合并升版避免多次迁移）：
 
-1. **思考量观测**（§2 决策第 1 条）
+1. **思考量观测**
    - ``llm_usage`` + ``reasoning_tokens``（NOT NULL DEFAULT 0）：聚合统计面
    - ``llm_requests`` + ``reasoning_tokens``（NOT NULL DEFAULT 0）：请求明细
      自带思考量；前端解析 JSON 即可展示，避面解析即弃信息丢失
 
-2. **原始 usage 兜底**（§2 决策第 2 条）
+2. **原始 usage 兜底**
    - ``llm_requests`` + ``usage_raw_json``（TEXT 可空）：解析即弃链路唯一兜底
      入口，存库即不再做格式加工；用量字段新增（解析/补默认）后可对历史行
      重放补数
 
-3. **请求历史正名**（§2 扩容）
+3. **请求历史正名**
    - ``llm_requests.client_type`` → ``profile_name``：列改名（SQLite RENAME
      COLUMN 需 SQLite ≥3.25，旧库走重建表搬运以保兼容）；旧值域
      ``llm/llm_fast/llm_summary/vlm`` 原样保留不映射（不伪造历史）

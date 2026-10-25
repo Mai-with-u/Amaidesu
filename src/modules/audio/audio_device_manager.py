@@ -15,7 +15,10 @@ import numpy as np
 
 from src.modules.logging import get_logger
 
-# sounddevice 是可选依赖：缺失时保持模块可加载，相关 API 走优雅降级路径
+# sounddevice 是可选依赖：缺失时保持模块可加载，相关 API 走优雅降级路径。
+# 注意 import sounddevice 有副作用——导入期即初始化 PortAudio，无音频子系统
+# 的环境（如无头 CI 的 Linux runner）会抛 PortAudioError 而非 ImportError，
+# 故降级须一并兜住；否则模块在收集期炸穿，"保持可加载"名存实亡。
 DEPENDENCIES_OK = False
 try:
     import sounddevice as sd
@@ -23,6 +26,10 @@ try:
     DEPENDENCIES_OK = True
 except ImportError:
     pass
+except Exception as exc:  # noqa: BLE001 - 降级路径本身：记录后按依赖不可用处理
+    get_logger("AudioDeviceManager").debug(
+        f"sounddevice 导入期初始化失败，音频 API 走降级路径: {type(exc).__name__}: {exc}"
+    )
 
 
 class AudioDeviceManager:

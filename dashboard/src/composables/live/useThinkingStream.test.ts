@@ -10,7 +10,7 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { WebSocketMessage } from '@/types';
+import type { WebSocketMessage, WsMessageType } from '@/types';
 
 type MessageHandler = (message: WebSocketMessage) => void;
 
@@ -78,7 +78,7 @@ describe('useThinkingStream', () => {
     handler({ kind: 'event', type: 'room.message', timestamp_ms: 1, data: {} } as WebSocketMessage);
     handler({
       kind: 'stream',
-      type: 'other.stream',
+      type: 'other.stream' as WsMessageType,
       timestamp_ms: 1,
       data: {},
     } as WebSocketMessage);

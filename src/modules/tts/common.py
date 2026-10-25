@@ -5,6 +5,8 @@ utterance 生命周期事件发布上存在重复逻辑，本模块集中收纳�
 
 提供的能力：
 
+- ``run_full_engine_speech``：全量引擎的发声入口（自治生命周期 + 规范化
+  + 串行锁 + 编排骨架，四步前奏收拢）
 - ``prepare_speech_text``：合成前奏的文本规范化与空文本早退判定
 - ``synthesize_play_and_notify``：全量引擎的 utterance 编排主干（合成→
   started→播放→finished，含取消截断与失败事件）
@@ -89,6 +91,43 @@ def prepare_speech_text(logger: Any, text: str) -> Optional[str]:
         logger.debug("文本规范化后为空，跳过渲染")
         return None
     return final_text
+
+
+async def run_full_engine_speech(
+    provider: Any,
+    *,
+    text: str,
+    utterance_id: Optional[str],
+    synthesize: Callable[[str], Awaitable[Tuple[Any, int]]],
+) -> None:
+    """全量引擎的发声入口：ensure_setup → 规范化 → 串行锁 → 编排骨架。
+
+    引擎的 ``handle_speech`` 只剩"文本→音频怎么合成"的差异；本入口收拢
+    之前在各引擎逐字重复的四步前奏。``synthesize`` 收规范化后的文本，
+    返回 (PCM 数组, 采样率)。流式引擎（gptsovits）不走本入口——其事件
+    时序与截断语义见 ``synthesize_play_and_notify`` 的设计约束。
+
+    Args:
+        provider: 引擎实例，需暴露 ``_has_started`` / ``setup()`` / ``logger``
+            / ``tts_lock``（缺失时惰性创建）及编排骨架所需的成员。
+        text: 要合成的原始文本（规范化前）。
+        utterance_id: 一次发声实例的唯一 ID；None 时事件发布跳过。
+        synthesize: "规范化文本→音频"钩子。
+    """
+    if not provider._has_started:
+        await provider.setup()
+    final_text = prepare_speech_text(provider.logger, text)
+    if final_text is None:
+        return
+    if getattr(provider, "tts_lock", None) is None:
+        provider.tts_lock = asyncio.Lock()
+    async with provider.tts_lock:
+        await synthesize_play_and_notify(
+            provider,
+            utterance_id=utterance_id,
+            speech_text=text,
+            synthesize=lambda: synthesize(final_text),
+        )
 
 
 async def synthesize_play_and_notify(
@@ -324,6 +363,7 @@ async def emit_utterance_failed(
 
 
 __all__ = [
+    "run_full_engine_speech",
     "prepare_speech_text",
     "synthesize_play_and_notify",
     "compute_duration_ms",

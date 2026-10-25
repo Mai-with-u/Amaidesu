@@ -1,0 +1,331 @@
+/* 时间线卡片共享层：跨卡共用的叶子类与 act/decision 框架。
+ *
+ * 纯 css（不带 scoped），以 .feed-timeline 为作用域前缀——chip / stamp / act
+ * 这类名字在库内其他组件里各有自己的定义，前缀防止本文件泄漏到时间线之外。
+ * 卡片专属版式在各卡自己的 scoped 样式里；卡片内变体（如 .chat--sc .chip、
+ * .decision.is-failed）以更高优先级覆盖此处的基类。 */
+
+.feed-timeline .stamp {
+  font-size: 11px;
+  color: var(--text-placeholder);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.feed-timeline .chip {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color-light);
+  flex-shrink: 0;
+}
+
+.feed-timeline .money {
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* 决策轮可点行（卡根类）：指针 + 描边提示可跳（roundClickable 开启时才有） */
+.feed-timeline .is-round-clickable {
+  cursor: pointer;
+}
+.feed-timeline .is-round-clickable:hover {
+  outline: 1px solid var(--color-primary);
+}
+
+/* act 卡框架：工具/发言/游戏三卡共用的面板形态（margin 对齐 38px 脊线列） */
+.feed-timeline .act {
+  margin-left: 38px; /* 与决策卡同列对齐 */
+  max-width: 92%;
+  min-width: 240px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-tool-bg);
+  border-left: 2px solid var(--color-tool);
+}
+.feed-timeline .act.is-failed {
+  background: var(--color-danger-bg);
+  border-left-color: var(--color-danger);
+}
+.feed-timeline .act.is-failed .act-kind {
+  color: var(--color-danger);
+}
+.feed-timeline .act.is-speak {
+  padding: 10px 14px;
+  box-shadow: var(--shadow-sm);
+}
+.feed-timeline .act.is-speak .act-text {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.feed-timeline .act.is-speak .act-text::before {
+  content: '「';
+  color: var(--color-tool);
+}
+.feed-timeline .act.is-speak .act-text::after {
+  content: '」';
+  color: var(--color-tool);
+}
+
+/* 游戏 Agent 上报变体：游戏域色（粉）左边线 + 浅粉底 */
+.feed-timeline .act.is-agent-game {
+  background: var(--color-game-bg);
+  border-left-color: var(--color-game);
+}
+.feed-timeline .act.is-agent-game.is-failed {
+  background: var(--color-danger-bg);
+  border-left-color: var(--color-danger);
+}
+
+/* 决策/响应卡框架：决策是主播的内部盘算（未发声不染产出色，走中性灰），响应走游戏域色变体 */
+.feed-timeline .decision {
+  margin-left: 38px; /* 28px 头像 + 10px 间距：与气泡体对齐 */
+  max-width: 92%;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+  border-left: 3px solid var(--border-color-dark);
+}
+.feed-timeline .decision.is-agent-game {
+  background: var(--color-game-bg);
+  border-left-color: var(--color-game);
+}
+
+/* act 头部与徽标族：六类卡共用 */
+.feed-timeline .act-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+.feed-timeline .act-kind {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  color: var(--color-agent);
+  flex-shrink: 0;
+}
+.feed-timeline .act-kind--speech {
+  color: var(--color-tool);
+}
+.feed-timeline .act-kind--game {
+  color: var(--color-game);
+}
+
+.feed-timeline .act-badge {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--color-danger);
+  color: var(--text-inverse);
+  flex-shrink: 0;
+}
+.feed-timeline .act-badge.is-silent-badge {
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color-dark);
+}
+/* 成功徽标：复用 .act-badge 形状但改用安全色 */
+.feed-timeline .act-badge.is-success-badge {
+  background: var(--color-success);
+  color: var(--text-inverse);
+}
+
+.feed-timeline .act-source {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color-light);
+  flex-shrink: 0;
+}
+
+.feed-timeline .act-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-regular);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.feed-timeline .act-note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-danger);
+  word-break: break-word;
+}
+
+/* QQ 风格引用块：被回复弹幕的「昵称 + 原文」摘要（决策/发言卡共用） */
+.feed-timeline .reply-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  border-left: 3px solid var(--border-color-dark);
+  min-width: 0;
+}
+.feed-timeline .reply-quote-name {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.feed-timeline .reply-quote-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-regular);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+.feed-timeline .reply-quote-fallback {
+  font-size: 11px;
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--text-placeholder);
+}
+
+/* 统计元信息行与胶囊族：决策/响应/发言卡共用
+   （缓存=绿 / 用量=蓝 / 模型=中性描边 / 水位=蓝，底色块让各项统计一眼可分） */
+.feed-timeline .d-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-placeholder);
+}
+
+/* 简洁档：藏诊断胶囊行（缓存/Token/模型/上下文/完整请求），只留内容本体 */
+.feed-timeline.is-simple .d-meta {
+  display: none;
+}
+
+.feed-timeline .d-link {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-primary);
+  text-decoration: none;
+  cursor: pointer;
+}
+.feed-timeline .d-link:hover {
+  text-decoration: underline;
+}
+
+.feed-timeline .d-meta-more[open] {
+  display: contents;
+}
+
+.feed-timeline .d-meta-more > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.feed-timeline .d-meta-more > summary:hover {
+  color: var(--text-primary);
+}
+
+.feed-timeline .d-meta-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.feed-timeline .d-pill {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  flex-shrink: 0;
+  cursor: default;
+}
+.feed-timeline .d-pill--cache {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+.feed-timeline .d-pill--token {
+  background: rgba(64, 158, 255, 0.12);
+  color: var(--color-primary);
+}
+.feed-timeline .d-pill--model {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color-light);
+}
+/* 上下文水位胶囊：迷你进度条 + 百分比；>80% 转警告橙（色阶与用量页水位条一致） */
+.feed-timeline .d-pill--ctx {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(64, 158, 255, 0.12);
+  color: var(--color-primary);
+}
+.feed-timeline .d-pill--ctx.is-warn {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+.feed-timeline .d-pill-ctx-bar {
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(127, 127, 127, 0.3);
+  overflow: hidden;
+}
+.feed-timeline .d-pill-ctx-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+/* 思考区：决策/裁决/响应卡的推理正文（LLM 请求历史懒取，整段非流式） */
+.feed-timeline .d-thinking {
+  flex-basis: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border-color-dark);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+}
+.feed-timeline .d-thinking pre {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.feed-timeline .d-thinking-empty {
+  font-size: 11px;
+  color: var(--text-placeholder);
+}

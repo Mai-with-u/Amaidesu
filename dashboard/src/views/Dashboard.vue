@@ -120,6 +120,9 @@
       <span class="stat-strip-tail">本地缓冲窗口</span>
     </section>
 
+    <!-- 连接健康墙：开播前外部连接一眼可查 + 一键自检 -->
+    <HealthWall />
+
     <!-- 基座一行 -->
     <footer class="infra-row" aria-label="基座状态">
       <a class="infra-link" href="/collectors" @click.prevent="router.push('/collectors')">
@@ -176,8 +179,19 @@ import type {
 } from '@/types';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import PulseChart from '@/components/dashboard/PulseChart.vue';
+import HealthWall from '@/components/dashboard/HealthWall.vue';
+import { EVENT } from '@/types/events';
 import { useChartPalette } from '@/composables/useECharts';
-import { formatTimeHM } from '@/utils/format';
+import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
+import {
+  buildPulse,
+  bufferCounts,
+  formatUptime,
+  heartbeatOf,
+  verdictOf,
+  type BucketWindow,
+  type CollectorSummary,
+} from '@/utils/dashboardInsight';
 import { buildLiveEntries, type FeedEvent, type ShowEntry } from '@/utils/liveFeed';
 
 const router = useRouter();
@@ -190,12 +204,6 @@ const { status } = storeToRefs(systemStore);
 const uptimeMs = computed(() => status.value?.uptime_ms ?? 0);
 
 // 组件 / 工具 / 主播 / 流程单 / 场次（REST 周期刷）
-
-interface CollectorSummary {
-  name: string;
-  is_started: boolean;
-  is_enabled: boolean;
-}
 
 const collectors = ref<CollectorSummary[]>([]);
 const tools = ref<ToolEntry[]>([]);
@@ -305,87 +313,27 @@ const failItems = computed(() => [
   { key: 'replyer', label: '生成失败', value: stats.value.replyerFailures },
 ]);
 
-const heartbeat = computed<{ text: string; tone: 'live' | 'fresh' | 'stale' | 'silent' }>(() => {
-  const events = eventsStore.events;
-  let latest = 0;
-  for (const event of events) {
-    if (event.type === 'streamer.stage') continue;
-    if (!event.type.startsWith('planner.') && event.type !== 'streamer.speech') continue;
-    if (event.timestamp_ms > latest) latest = event.timestamp_ms;
-  }
-  if (latest === 0) return { text: '尚未触发', tone: 'silent' };
-  const diffSec = Math.max(0, Math.floor((Date.now() - latest) / 1000));
-  if (diffSec < 60) return { text: `${diffSec}s 前`, tone: 'live' };
-  if (diffSec < 300)
-    return { text: `${Math.floor(diffSec / 60)}m ${diffSec % 60}s 前`, tone: 'fresh' };
-  const text =
-    diffSec < 3600 ? `${Math.floor(diffSec / 60)}m 前` : `${Math.floor(diffSec / 3600)}h 前`;
-  return { text, tone: 'stale' };
-});
+const heartbeat = computed(() => heartbeatOf(eventsStore.events, Date.now()));
 
 // 活动脉搏：60 分钟按分钟分桶的弹幕 / 发言双系列
-
-const PULSE_BUCKETS = 60;
-/** 活动脉搏分桶宽度（毫秒）：按分钟分桶 */
-const PULSE_BUCKET_MS = 60_000;
 
 // 柱色经 palette 运行时取值：canvas 不解析 CSS 变量
 const chartPalette = useChartPalette();
 
-interface BucketWindow {
-  labels: string[];
-  series: { label: string; color: string; values: number[] }[];
+function buildPulseWindow(events: FeedEvent[]): BucketWindow {
+  return buildPulse(events, Date.now(), {
+    audience: chartPalette.value.collectorColor,
+    streamer: chartPalette.value.agentColor,
+  });
 }
 
-function buildPulse(events: FeedEvent[]): BucketWindow {
-  // 当前分钟对齐到 60s 边界；窗口 = [now-59min, now]，labels[i] = 窗口内第 i 分钟 HH:MM
-  const nowMs = Date.now();
-  const windowEnd = Math.floor(nowMs / PULSE_BUCKET_MS) * PULSE_BUCKET_MS;
-  const windowStart = windowEnd - (PULSE_BUCKETS - 1) * PULSE_BUCKET_MS;
-
-  const audience = new Array<number>(PULSE_BUCKETS).fill(0);
-  const streamer = new Array<number>(PULSE_BUCKETS).fill(0);
-  const labels = new Array<string>(PULSE_BUCKETS);
-  for (let i = 0; i < PULSE_BUCKETS; i++) {
-    const d = new Date(windowStart + i * PULSE_BUCKET_MS);
-    labels[i] = formatTimeHM(d.getTime());
-  }
-  for (const event of events) {
-    const ts = event.timestamp_ms;
-    if (ts < windowStart || ts > windowEnd + PULSE_BUCKET_MS) continue;
-    const idx = Math.floor((ts - windowStart) / PULSE_BUCKET_MS);
-    if (idx < 0 || idx >= PULSE_BUCKETS) continue;
-    if (event.type === 'room.message') audience[idx] += 1;
-    else if (event.type === 'streamer.speech') streamer[idx] += 1;
-  }
-  return {
-    labels,
-    series: [
-      { label: '观众消息', color: chartPalette.value.collectorColor, values: audience },
-      { label: '主播发言', color: chartPalette.value.agentColor, values: streamer },
-    ],
-  };
-}
-
-const pulseWindow = computed(() => buildPulse(eventsStore.events));
+const pulseWindow = computed(() => buildPulseWindow(eventsStore.events));
 const pulseSeries = computed(() => pulseWindow.value.series);
 const pulseLabels = computed(() => pulseWindow.value.labels);
 
 // 今日缓冲窗口按类型分桶（仅取 room.message）
 
-const bufferCounts = computed(() => {
-  const result = { danmaku: 0, gift: 0, superChat: 0, enter: 0 };
-  for (const event of eventsStore.events) {
-    if (event.type !== 'room.message') continue;
-    const data = event.data as Record<string, unknown> | undefined;
-    const mt = (data?.message_type ?? '') as string;
-    if (mt === 'danmaku') result.danmaku += 1;
-    else if (mt === 'gift') result.gift += 1;
-    else if (mt === 'super_chat') result.superChat += 1;
-    else if (mt === 'enter') result.enter += 1;
-  }
-  return result;
-});
+const bufferCountsValue = computed(() => bufferCounts(eventsStore.events));
 
 interface StatItem {
   key: string;
@@ -395,10 +343,10 @@ interface StatItem {
 }
 
 const statsStrip = computed<StatItem[]>(() => [
-  { key: 'danmaku', label: '弹幕', value: bufferCounts.value.danmaku, window: '缓冲' },
-  { key: 'gift', label: '礼物', value: bufferCounts.value.gift, window: '缓冲' },
-  { key: 'sc', label: 'SC', value: bufferCounts.value.superChat, window: '缓冲' },
-  { key: 'enter', label: '进场', value: bufferCounts.value.enter, window: '缓冲' },
+  { key: 'danmaku', label: '弹幕', value: bufferCountsValue.value.danmaku, window: '缓冲' },
+  { key: 'gift', label: '礼物', value: bufferCountsValue.value.gift, window: '缓冲' },
+  { key: 'sc', label: 'SC', value: bufferCountsValue.value.superChat, window: '缓冲' },
+  { key: 'enter', label: '进场', value: bufferCountsValue.value.enter, window: '缓冲' },
   { key: 'viewers', label: '观众', value: viewerCount.value, window: '入库以来' },
   { key: 'replies', label: '回复', value: stats.value.replies, window: '启动以来' },
   { key: 'proactive', label: '主动', value: stats.value.proactive, window: '启动以来' },
@@ -406,50 +354,18 @@ const statsStrip = computed<StatItem[]>(() => [
 
 // 结论条：异常 > 降级 > 直播中 > 空闲
 
-/** core.error 判新的回看窗口（毫秒） */
-const ERROR_WINDOW_MS = 300_000;
-
-interface Verdict {
-  tone: 'error' | 'warn' | 'live' | 'idle';
-  phrase: string;
-  detail: string;
-}
-
-const verdict = computed<Verdict>(() => {
-  // a) 异常：工具熔断 或 最近 5 分钟内的 core.error
-  const tripped = tools.value.filter(t => t.health?.state === 'tripped');
-  if (tripped.length > 0) {
-    const head = tripped[0];
-    return { tone: 'error', phrase: '异常', detail: `工具 ${head.name} 熔断` };
-  }
-  const nowMs = Date.now();
-  const recentError = eventsStore.events.find(event => {
-    if (event.type !== 'core.error') return false;
-    return nowMs - event.timestamp_ms <= ERROR_WINDOW_MS;
-  });
-  if (recentError) {
-    return { tone: 'error', phrase: '异常', detail: '最近 5 分钟内出现系统错误' };
-  }
-
-  // b) 降级：启用了采集器但没跑 / 主播 Agent 未注册
-  const idleCollectors = collectors.value.filter(c => c.is_enabled && !c.is_started);
-  if (idleCollectors.length > 0) {
-    const names = idleCollectors
-      .slice(0, 3)
-      .map(c => c.name)
-      .join('、');
-    return { tone: 'warn', phrase: '降级', detail: `采集器 ${names} 未运行` };
-  }
-  if (!streamerAvailable.value) {
-    return { tone: 'warn', phrase: '降级', detail: '主播 Agent 未注册' };
-  }
-  // c) 直播中：存在活跃场次
-  if (sessions.value?.active_session_id != null) {
-    return { tone: 'live', phrase: '直播中', detail: '' };
-  }
-  // d) 空闲
-  return { tone: 'idle', phrase: '空闲', detail: '系统就绪 · 等待场次' };
-});
+const verdict = computed(() =>
+  verdictOf(
+    {
+      tools: tools.value,
+      events: eventsStore.events,
+      collectors: collectors.value,
+      streamerAvailable: streamerAvailable.value,
+      sessions: sessions.value,
+    },
+    Date.now(),
+  ),
+);
 
 // 基座一行：采集、工具熔断、节目
 
@@ -480,9 +396,8 @@ const infra = computed(() => {
   };
 });
 
-// 周期刷新（采集/工具/主播/节目/场次）
-
-let refreshTimer: ReturnType<typeof setInterval> | null = null;
+// 周期刷新（采集/工具/主播/节目/场次）：12s 快照轮询随激活态启停，
+// 首屏快照由 onMounted 的显式拉取负责，轮询只做周期保鲜
 
 async function refreshSnapshot(): Promise<void> {
   // 组件清单由 systemStore 轮询驱动（1s tick），这里只补独立 REST
@@ -514,39 +429,18 @@ async function refreshSnapshot(): Promise<void> {
   }
 }
 
-function startRefresh(): void {
-  refreshTimer = setInterval(() => {
-    void refreshSnapshot();
-  }, 12000);
-}
-
-function stopRefresh(): void {
-  if (refreshTimer !== null) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
-  }
-}
+useKeepAlivePolling(() => void refreshSnapshot(), 12000);
 
 // 收到 rundown.changed 时立即刷新流程单快照（避免等下个 12s tick）
 watch(
   () => eventsStore.events[eventsStore.events.length - 1]?.type,
   type => {
-    if (type === 'rundown.changed')
+    if (type === EVENT.rundownChanged)
       void rundownApi.getState().then(r => (rundownState.value = r.data));
   },
 );
 
 // 工具函数
-
-function formatUptime(ms: number): string {
-  const totalSec = Math.floor(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
 
 function goEventLog(): void {
   router.push('/eventlog');
@@ -561,16 +455,14 @@ onMounted(async () => {
   void fetchLLM();
 });
 
-// keep-alive 全路由下 onUnmounted 不会触发，轮询启停须挂 activated/deactivated，
-// 否则离开本页后 1s 系统轮询与 12s 快照轮询仍永久常驻
+// keep-alive 全路由下 onUnmounted 不会触发：1s 系统轮询在此手动启停
+//（引用计数共享语义在 systemStore 内），12s 快照轮询已由 useKeepAlivePolling 声明
 onActivated(() => {
   systemStore.startPolling(1000);
-  startRefresh();
 });
 
 onDeactivated(() => {
   systemStore.stopPolling();
-  stopRefresh();
 });
 </script>
 

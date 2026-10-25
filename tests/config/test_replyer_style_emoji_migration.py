@@ -31,7 +31,7 @@ def test_old_default_rewritten_and_version_advanced(tmp_path: Path) -> None:
 
     doc = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
     assert doc["agents"]["streamer"]["persona"]["style_constraints"] == "口语化，使用网络流行语，避免机械式回复"
-    assert doc["meta"]["version"] == "2.0.48"
+    assert doc["meta"]["version"] == "2.0.49"
 
     first = path.read_text(encoding="utf-8-sig")
     load_config_dir(tmp_path)
@@ -47,7 +47,7 @@ def test_user_custom_value_untouched(tmp_path: Path) -> None:
 
     doc = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
     assert doc["agents"]["streamer"]["persona"]["style_constraints"] == "简短、犀利，带点方言味"
-    assert doc["meta"]["version"] == "2.0.48"
+    assert doc["meta"]["version"] == "2.0.49"
 
 
 def test_hook_is_idempotent() -> None:

@@ -126,6 +126,12 @@ const router = createRouter({
       component: () => import('@/views/Debug.vue'),
     },
     {
+      // 形象表情调试台（四平台连接态 / 表情触发 / 参数直调）
+      path: '/avatar-debug',
+      name: 'avatar-debug',
+      component: () => import('@/views/AvatarDebug.vue'),
+    },
+    {
       path: '/outline',
       name: 'outline-workbench',
       component: () => import('@/views/OutlineWorkbench.vue'),

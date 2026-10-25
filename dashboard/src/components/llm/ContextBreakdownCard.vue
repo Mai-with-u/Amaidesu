@@ -125,11 +125,50 @@
   </div>
 </template>
 
+<script lang="ts">
+/**
+ * 额度查询的模块级缓存：面板每次弹出都会重新挂载，60s 内同一模型反复悬停
+ * 直接复用上次结果，Usage 区不闪现；同一模型的并发请求合并为一次。查询失败
+ * 按"无额度"处理并同样缓存。缓存放模块作用域而非组件实例：面板每次弹出
+ * 都重新挂载，实例字段会让缓存随挂载失效。
+ */
+import { llmApi } from '@/api';
+import type { LLMProviderQuota } from '@/types';
+
+const CACHE_TTL_MS = 60_000;
+const cache = new Map<string, { at: number; data: LLMProviderQuota | null }>();
+const inflight = new Map<string, Promise<LLMProviderQuota | null>>();
+
+function cachedQuota(modelName: string): LLMProviderQuota | null | undefined {
+  const hit = cache.get(modelName);
+  return hit && Date.now() - hit.at < CACHE_TTL_MS ? hit.data : undefined;
+}
+
+function fetchQuota(modelName: string): Promise<LLMProviderQuota | null> {
+  const pending = inflight.get(modelName);
+  if (pending) return pending;
+  const request = llmApi
+    .getProviderQuota(modelName)
+    .then(response => response.data ?? null)
+    .catch((error: unknown) => {
+      // 额度属增强信息：失败只隐藏 Usage 区，不打断上下文明细
+      console.error('Failed to fetch provider quota:', error);
+      return null;
+    })
+    .then(data => {
+      cache.set(modelName, { at: Date.now(), data });
+      return data;
+    })
+    .finally(() => inflight.delete(modelName));
+  inflight.set(modelName, request);
+  return request;
+}
+</script>
+
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import type { LLMContextBreakdown, LLMContextSection, LLMQuotaWindow } from '@/types';
 import { useNowTick } from '@/composables/useNowTick';
-import { useProviderQuota } from '@/composables/useProviderQuota';
 import { formatQuotaAmount, formatResetIn, quotaLevel } from '@/utils/providerQuota';
 
 /**
@@ -161,7 +200,29 @@ const expanded = ref<Set<string>>(new Set());
 /** 鼠标所在的分段（含 free），用于在分段条上高亮对应色块 */
 const hoverKey = ref<string | null>(null);
 /** 面板对应模型所属平台的额度；平台不支持或查询失败为 null，用量区随之隐藏 */
-const quota = useProviderQuota(computed(() => props.breakdown?.model_name));
+const quota = ref<LLMProviderQuota | null>(null);
+watch(
+  computed(() => props.breakdown?.model_name),
+  async name => {
+    if (!name) {
+      quota.value = null;
+      return;
+    }
+    // 缓存命中直接同步填充；未命中先清空，等请求回来再显示
+    const hit = cachedQuota(name);
+    if (hit !== undefined) {
+      quota.value = hit;
+      return;
+    }
+    quota.value = null;
+    const data = await fetchQuota(name);
+    // 等待期间换了模型时丢弃旧结果
+    if (props.breakdown?.model_name === name) {
+      quota.value = data;
+    }
+  },
+  { immediate: true },
+);
 /** 驱动重置倒计时逐秒刷新 */
 const now = useNowTick();
 watch(

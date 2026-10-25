@@ -409,7 +409,7 @@ class TTSConfig(BaseConfig):
 
     Attributes:
         enabled: TTS 总开关；关闭后即便底层引擎构造完成也不会自动发声。
-        provider: 装配时据此选择唯一激活引擎（edge_tts/gptsovits/voicebox/omni_tts）。
+        provider: 装配时据此选择唯一激活引擎（候选名单 = tts 装配表键集，随装配走）。
         max_queue: 发声播放队列上限；队列满时丢最旧一条保证新鲜度。
         render_timeout_ms: 单次发声（合成+播放）超时（毫秒）；0 表示不限制。
         wait_playback: 主播发言等上一句播完再放行（发言节奏 = 嘴速）。
@@ -429,11 +429,10 @@ class TTSConfig(BaseConfig):
     provider: str = Field(
         default="gptsovits",
         title="TTS 引擎",
-        description="装配时据此选择唯一激活引擎（edge_tts/gptsovits/voicebox/omni_tts）",
-        json_schema_extra={
-            "x-ui-type": "select",
-            "x-options": ["edge_tts", "gptsovits", "voicebox", "omni_tts"],
-        },
+        # 候选名单不在此手抄：schema 生成时由装配表键集读侧注入
+        # （schema_generator._apply_registry_options，与装配校验同源）
+        description="装配时据此选择唯一激活引擎",
+        json_schema_extra={"x-ui-type": "select"},
     )
     max_queue: int = Field(
         default=3,

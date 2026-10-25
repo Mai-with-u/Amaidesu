@@ -24,13 +24,10 @@ Dashboard / WebUI 可消费的 schema dict，不修改既有模型、不引入�
 限制
 ----
 - 仅支持 Pydantic v2 Field 约束 (ge, le, gt, lt, pattern, min_length, max_length)。
-- ``__ui_parent__`` / ``__ui_label__`` / ``__ui_advanced__`` 等 UI 标记当前
-  未使用，保留读取能力但不影响输出。
 """
 
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Any, Callable, Dict, List, Optional, Union, cast, get_args, get_origin
 
 from pydantic import BaseModel
@@ -85,22 +82,6 @@ def _is_basemodel_subclass(annotation: Any) -> bool:
 
 class ConfigSchemaGenerator:
     """将 Pydantic 配置类转为 UI 友好的 schema dict。"""
-
-    # ----- 字段文档 -----
-    @staticmethod
-    @lru_cache(maxsize=None)
-    def _get_class_field_docs(config_class: type) -> Dict[str, str]:
-        """提取字段文档：若配置类提供 ``get_class_field_docs`` 方法则调用。"""
-        getter = getattr(config_class, "get_class_field_docs", None)
-        if callable(getter):
-            try:
-                result = getter()
-                # get_class_field_docs 可能返回 dict[bytes, bytes]，统一转 str
-                if isinstance(result, dict):
-                    return {str(k): str(v) for k, v in result.items()}
-            except Exception as exc:
-                logger.debug(f"调用 {config_class.__name__}.get_class_field_docs() 失败: {exc}")
-        return {}
 
     @staticmethod
     def _build_label(label: str) -> Dict[str, str]:
@@ -231,13 +212,11 @@ class ConfigSchemaGenerator:
         field_name: str,
         annotation: Any,
         field_info: FieldInfo,
-        field_docs: Dict[str, str],
     ) -> Dict[str, Any]:
         """构造单个字段的 UI schema。"""
         field_type = cls._map_field_type(annotation)
-        raw_description = field_docs.get(field_name, field_info.description or "")
         # _wrap_ 标记转换为换行符
-        description = raw_description.replace("_wrap_", "\n").strip("\n")
+        description = (field_info.description or "").replace("_wrap_", "\n").strip("\n")
 
         schema: Dict[str, Any] = {
             "name": field_name,
@@ -333,40 +312,26 @@ class ConfigSchemaGenerator:
         cls,
         config_class: type,
         include_nested: bool = True,
-        skip_internal_fields: bool = True,
     ) -> Dict[str, Any]:
         """Pydantic 类 -> UI schema dict。
 
         Args:
             config_class: Pydantic BaseModel 子类（建议继承 ``BaseConfig``）。
             include_nested: 是否递归展开 ``BaseConfig``/BaseModel 类型的字段。
-            skip_internal_fields: 是否跳过 ``type`` / ``field_docs`` 等元字段。
         """
         if not (isinstance(config_class, type) and issubclass(config_class, BaseModel)):
             raise TypeError(f"config_class 必须是 pydantic.BaseModel 子类，收到: {config_class!r}")
 
         fields: List[Dict[str, Any]] = []
         nested: Dict[str, Dict[str, Any]] = {}
-        field_docs = cls._get_class_field_docs(config_class)
-
-        # 内部需要跳过的字段
-        skip_names = {
-            "field_docs",
-            "_validate_any",
-            "suppress_any_warning",
-        }
 
         for field_name, field_info in config_class.model_fields.items():
-            if skip_internal_fields and field_name in skip_names:
-                continue
-
             annotation = field_info.annotation
             field_schema = cls._build_field_schema(
                 config_class,
                 field_name,
                 annotation,
                 field_info,
-                field_docs,
             )
             fields.append(field_schema)
 
@@ -382,16 +347,6 @@ class ConfigSchemaGenerator:
             "nested": nested,
         }
 
-        # UI 分组元数据（__ui_*__ 类标记；当前未使用）
-        ui_parent = getattr(config_class, "__ui_parent__", "")
-        ui_label = getattr(config_class, "__ui_label__", "")
-        ui_advanced = bool(getattr(config_class, "__ui_advanced__", False))
-        if ui_parent:
-            schema["uiParent"] = ui_parent
-        if ui_label:
-            schema["uiLabel"] = ui_label
-        schema["uiAdvanced"] = ui_advanced
-
         _apply_registry_options(schema, config_class)
 
         return schema
@@ -405,21 +360,32 @@ class ConfigSchemaGenerator:
 def _apply_registry_options(schema: Dict[str, Any], config_class: type) -> None:
     """把注册表驱动的动态候选名单注入 schema（读取侧单点化）。
 
-    collectors.enabled 的候选 = 采集器注册表键集，名单随注册表走，
-    Schema 定义处不再手抄（手抄与注册表必然漂移）。定义处直引注册表
-    会成环（collectors_schemas → registry → 组件包 → multi_file_loader
-    → collectors_schemas），故在 schema 服务路径上注入。二期 tools/avatar
-    域接入时在此扩展。
+    - collectors.enabled 的候选 = 采集器注册表键集，名单随注册表走，
+      Schema 定义处不再手抄（手抄与注册表必然漂移）。定义处直引注册表
+      会成环（collectors_schemas → registry → 组件包 → multi_file_loader
+      → collectors_schemas），故在 schema 服务路径上注入。
+    - infra.toml 的 [tts].provider 候选 = tts 装配表键集（加引擎只改
+      装配表一处，schema 选项与装配校验同源）。
     """
-    if getattr(config_class, "__file_name__", "") != "collectors.toml":
-        return
-    # 函数内 import 规避循环依赖（注册表拉起组件包，组件包引用本包）
-    from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
+    file_name = getattr(config_class, "__file_name__", "")
+    if file_name == "collectors.toml":
+        # 函数内 import 规避循环依赖（注册表拉起组件包，组件包引用本包）
+        from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
 
-    ensure_component_registry()
-    for field in schema.get("fields", []):
-        if field.get("name") == "enabled":
-            field["options"] = sorted(COLLECTOR_SCHEMAS)
+        ensure_component_registry()
+        for field in schema.get("fields", []):
+            if field.get("name") == "enabled":
+                field["options"] = sorted(COLLECTOR_SCHEMAS)
+    elif file_name == "infra.toml":
+        tts_schema = (schema.get("nested") or {}).get("tts")
+        if isinstance(tts_schema, dict):
+            # 函数内 import：装配链经引擎包拉起 numpy/soundfile 等重依赖，
+            # 延迟到 infra schema 生成路径再加载
+            from src.modules.tts.assembly import TTS_PROVIDER_NAMES
+
+            for field in tts_schema.get("fields", []):
+                if field.get("name") == "provider":
+                    field["options"] = list(TTS_PROVIDER_NAMES)
 
 
 def get_field_count(schema: Dict[str, Any]) -> int:

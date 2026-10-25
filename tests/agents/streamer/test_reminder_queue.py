@@ -78,6 +78,7 @@ async def test_planner_reference_contains_reminder_section_only_when_present() -
         context_enabled=False,
     )
     common: dict = {"forced": False, "proactive": False}
-    with_reminder = await planner._assemble_reference([], None, None, reminders="- 上线新活动", **common)
+    with_reminder, _ = await planner._assemble_reference([], None, None, reminders="- 上线新活动", **common)
     assert "【运营提醒】" in with_reminder and "上线新活动" in with_reminder
-    assert "【运营提醒】" not in await planner._assemble_reference([], None, None, **common)
+    without_reminder, _ = await planner._assemble_reference([], None, None, **common)
+    assert "【运营提醒】" not in without_reminder

@@ -182,7 +182,7 @@ def _rundown_with_blank_title() -> Rundown:
     """中段标题全空白的流程单（编辑器漏填的脏数据形态）。
 
     标题非空校验已下沉模型层，构造后原地改脏以模拟绕过模型校验的鸭子实例
-    （如历史存量数据）——工具层守卫保留为纵深防御，正是拦这类形态。
+    （如历史存量数据）——状态机守卫保留为纵深防御，正是拦这类形态。
     """
     rundown = Rundown(
         rundown_id="blank_rd",
@@ -198,7 +198,11 @@ def _rundown_with_blank_title() -> Rundown:
 
 @pytest.mark.parametrize("action", ["next", "goto"])
 def test_invoke_blank_title_target_rejected(action: str) -> None:
-    """切换到标题为空/全空白的目标环节被工具校验拒绝（不发 rundown.changed）。"""
+    """切换到标题为空/全空白的目标环节被状态机拒绝（不发 rundown.changed）。
+
+    门禁收敛在 ``RundownState``（唯一变更边界），工具只透传拒绝原因码——
+    Dashboard 手动通路同受此拦，不再有只有 Agent 被拦的分叉。
+    """
     provider, _clock = _provider(_rundown_with_blank_title())
     emitted: list[Any] = []
     provider._state._emit = lambda name, payload: emitted.append(payload)
@@ -206,7 +210,7 @@ def test_invoke_blank_title_target_rejected(action: str) -> None:
     result = _call(provider, action=action, segment_id="b")
 
     assert result["ok"] is False
-    assert "标题" in result["error"]
+    assert result["reason"] == "blank_title_target"
     assert emitted == []
     assert provider._state.get_snapshot()["current"]["id"] == "a"
 

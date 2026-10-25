@@ -169,10 +169,8 @@ main_config, was_created = config_service.initialize()
 # 获取配置节
 general_config = config_service.get_section("general")
 
-# 获取 Collector 配置（合并 Schema 默认值）
-input_config = config_service.get_config_with_defaults(
-    "console_input", phase="input"
-)
+# 读取采集器文件视图（collectors.toml 顶层：enabled 名单 + 各采集器段）
+collectors_view = config_service.get_file_section("collectors")
 ```
 
 > 配置文件的完整结构与 LLM provider/profile 两层模型见 [快速开始 - 编辑配置](../getting-started.md#25-编辑配置)。
@@ -212,21 +210,7 @@ enabled = true                # vision_look_at_screen（mss 抓屏 + VLM 转文�
 
 ### 配置合并
 
-ConfigService 支持**配置合并**，优先级如下：
-
-```
-Schema 默认值（优先级低） → 配置文件覆盖（优先级高）
-```
-
-#### 获取合并后的配置
-
-```python
-# 获取带默认值合并的组件配置（phase 为兼容参数：input=采集器 / output=渲染工具）
-config = config_service.get_config_with_defaults(
-    "console_input",      # 组件名称
-    phase="input"
-)
-```
+合并发生在加载管线内：Schema 默认值先落底，配置文件的显式值覆盖，漂移写回把缺失字段按 Schema 补齐落盘（`multi_file_loader`）。组件运行期读自身配置段即得完整形态，无须二次合并。
 
 > Schema 权威定义在 `src/modules/config/{core,model,agents,collectors,tools,storage,infra}_schemas.py`（Pydantic），组件嵌套配置类随所属域定义，由 `multi_file_loader` 的漂移写回闭环自动补齐用户文件缺失字段。
 
@@ -239,12 +223,8 @@ general = config_service.get_section("general")
 # 获取配置项
 platform_id = config_service.get("platform_id", section="general")
 
-# 获取带默认值的组件配置
-cfg = config_service.get_config_with_defaults("console_input", phase="input")
-
-# 检查组件是否启用
-if config_service.is_config_enabled("console_input", phase="input"):
-    # ...
+# 按文件取配置段（collectors.toml 顶层无包裹表，须用文件视图）
+collectors_view = config_service.get_file_section("collectors")
 
 # 拦截器配置（infra.toml [interceptors.*]）
 pipe_cfg = config_service.get_interceptor_config("rate_limit")

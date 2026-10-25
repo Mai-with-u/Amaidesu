@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import type { WebSocketMessage } from '@/types';
+import type { WebSocketMessage, WsMessageType } from '@/types';
 
 /** 极简 WebSocket 桩：记录 send 内容，readyState 与回调由测试手动驱动 */
 class FakeWebSocket {
@@ -102,7 +102,7 @@ describe('websocket store 订阅分发', () => {
     store.subscribe(msg => void receivedA.push(msg));
     store.subscribe(msg => void receivedB.push(msg));
 
-    const msg: WebSocketMessage = { type: 'evt.a', timestamp_ms: 1000, data: {} };
+    const msg: WebSocketMessage = { type: 'evt.a' as WsMessageType, timestamp_ms: 1000, data: {} };
     currentSocket().simulateMessage(msg);
 
     expect(receivedA).toEqual([msg]);
@@ -117,7 +117,11 @@ describe('websocket store 订阅分发', () => {
     store.subscribe(handler);
     store.subscribe(handler);
 
-    currentSocket().simulateMessage({ type: 'evt.a', timestamp_ms: 1000, data: {} });
+    currentSocket().simulateMessage({
+      type: 'evt.a' as WsMessageType,
+      timestamp_ms: 1000,
+      data: {},
+    });
 
     expect(received).toHaveLength(1);
   });
@@ -132,7 +136,11 @@ describe('websocket store 订阅分发', () => {
     // 未注册过的处理器，退订应零操作
     expect(() => store.unsubscribe(handler)).not.toThrow();
 
-    currentSocket().simulateMessage({ type: 'evt.a', timestamp_ms: 1000, data: {} });
+    currentSocket().simulateMessage({
+      type: 'evt.a' as WsMessageType,
+      timestamp_ms: 1000,
+      data: {},
+    });
 
     expect(received).toHaveLength(0);
   });
@@ -274,7 +282,11 @@ describe('wsClient 断线重连退避状态机', () => {
     await openOnce(wsClient);
 
     expect(() => currentSocket().onmessage?.({ data: 'not-json' })).not.toThrow();
-    currentSocket().simulateMessage({ type: 'evt.ok', timestamp_ms: 1000, data: {} });
+    currentSocket().simulateMessage({
+      type: 'evt.ok' as WsMessageType,
+      timestamp_ms: 1000,
+      data: {},
+    });
 
     expect(received.map(m => m.type)).toEqual(['evt.ok']);
   });

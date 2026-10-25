@@ -911,6 +911,24 @@ def _retire_streamer_narrative(data: Dict[str, Any]) -> List[str]:
 register_file_hook("agents.toml", "retire_streamer_narrative", "2.0.48", _retire_streamer_narrative)
 
 
+def _drop_background_cold_timeout(data: Dict[str, Any]) -> List[str]:
+    """agents.toml v2.0.49：删 ``[agents.streamer.background].cold_timeout_ms``。
+
+    该字段读进后台维护器后无任何消费点；冷场判定只认 ``proactive`` 段的
+    ``cold_timeout_ms``——同一概念两处定义且默认值还不一致（60s vs 45s），
+    调参只会被误导。字段退役，存量键原地删除。对已迁移数据零变更（幂等）。
+    """
+    streamer = (data.get("agents") or {}).get("streamer")
+    background = streamer.get("background") if isinstance(streamer, dict) else None
+    if isinstance(background, dict) and "cold_timeout_ms" in background:
+        del background["cold_timeout_ms"]
+        return ["agents.streamer.background.cold_timeout_ms"]
+    return []
+
+
+register_file_hook("agents.toml", "drop_background_cold_timeout", "2.0.49", _drop_background_cold_timeout)
+
+
 def _upgrade_widget_drop_html_page(data: Dict[str, Any]) -> List[str]:
     """infra.toml v2.0.43：删三个小部件段的 ``enable_html_page`` 键。
 

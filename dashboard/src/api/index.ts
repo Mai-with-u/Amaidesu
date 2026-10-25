@@ -15,8 +15,14 @@ import type {
   AgentListResponse,
   AgentPromptResponse,
   AgentState,
+  AgentCancelTaskResponse,
   SystemStatusResponse,
+  SystemHealthResponse,
+  SystemHealthWallResponse,
   ChangelogResponse,
+  ConfigGetResponse,
+  ConfigBatchSaveResponse,
+  EventListResponse,
   ComponentListResponse,
   ComponentControlRequest,
   ComponentControlResponse,
@@ -29,6 +35,8 @@ import type {
   SubtitleStatusResponse,
   TtsTestRequest,
   TtsTestResponse,
+  TtsSayRequest,
+  TtsSayResponse,
   TtsStatusResponse,
   ConfigUpdateResponse,
   LLMContextBreakdown,
@@ -50,8 +58,16 @@ import type {
   ToolReconnectResponse,
   SimulatorStatus,
   SimPersona,
-  ReplayDateEntry,
+  ReplayDatesResponse,
+  PersonaListResponse,
+  PersonaCreateResponse,
+  PersonaOperationResponse,
+  GiftListResponse,
+  GiftCreateResponse,
+  GiftOperationResponse,
   SimGift,
+  SessionOpenResponse,
+  SessionActionResponse,
   TaskSnapshotResponse,
   SimulatorControlResponse,
   RundownStateResponse,
@@ -85,7 +101,9 @@ import type {
   MemoryMutationResponse,
   MemoryStatsResponse,
   LogsQueryResponse,
-  WebSocketMessage,
+  AvatarDebugStatusResponse,
+  AvatarDebugTriggerRequest,
+  AvatarDebugTriggerResponse,
 } from '@/types';
 
 const api = axios.create({
@@ -100,7 +118,8 @@ const api = axios.create({
 
 export const systemApi = {
   getStatus: () => api.get<SystemStatusResponse>('/system/status'),
-  getHealth: () => api.get<{ status: string; timestamp_ms: number }>('/system/health'),
+  getHealth: () => api.get<SystemHealthResponse>('/system/health'),
+  fetchSystemHealth: () => api.get<SystemHealthWallResponse>('/system/health'),
   getChangelog: () => api.get<ChangelogResponse>('/system/changelog'),
 };
 
@@ -122,16 +141,10 @@ export const componentApi = {
 // 视图读取，以及小部件管理页等页面直接使用的批量原子写回入口。
 export const configApi = {
   restart: () => api.post<ConfigUpdateResponse>('/config/restart'),
-  getConfig: () => api.get<{ config: Record<string, unknown> }>('/config'),
+  getConfig: () => api.get<ConfigGetResponse>('/config'),
   // 批量原子写回：全成或整批回退（后端保证）；requires_restart 表示改动须重启生效
   saveBatch: (changes: { key: string; value: unknown }[]) =>
-    api.post<{
-      success: boolean;
-      message: string;
-      requires_restart?: boolean;
-      results?: { key: string; success: boolean }[];
-      errors?: { key: string; message: string }[];
-    }>('/config/batch', { changes }),
+    api.post<ConfigBatchSaveResponse>('/config/batch', { changes }),
 };
 
 // 调试注入
@@ -149,6 +162,9 @@ export const debugApi = {
   getSubtitleStatus: () => api.get<SubtitleStatusResponse>('/debug/subtitle/status'),
   testTts: (request: TtsTestRequest) =>
     api.post<TtsTestResponse>('/debug/tts/test', request, { timeout: 60000 }),
+  // 台前重播：同文本重合成（发言卡"重播"按钮数据面），走 handle_speech 完整生产链路
+  sayTts: (request: TtsSayRequest) =>
+    api.post<TtsSayResponse>('/debug/tts/say', request, { timeout: 60000 }),
   getTtsStatus: () => api.get<TtsStatusResponse>('/debug/tts/status'),
 };
 
@@ -216,7 +232,7 @@ export const agentsApi = {
     api.post<AgentDelegateResponse>(`/agents/${name}/delegate`, { instruction }),
   /** 硬取消：清追踪 + 账面 cancelled + 通知停手（任务未知/已终态 404） */
   cancelAgentTask: (name: string, taskId: string) =>
-    api.post<{ cancelled: boolean }>(`/agents/${name}/tasks/${taskId}/cancel`),
+    api.post<AgentCancelTaskResponse>(`/agents/${name}/tasks/${taskId}/cancel`),
   /** 备忘录/待办快照（只读观测：主播 = notebook；minecraft = notebook/todos/reports 三元组） */
   getAgentMemo: (name: string) => api.get<AgentMemoResponse>(`/agents/${name}/memo`),
 };
@@ -239,27 +255,22 @@ export const simulatorApi = {
       replayDate ? { replay_date: replayDate } : {},
     ),
   stop: () => api.post<SimulatorControlResponse>('/simulator/stop'),
-  listReplayDates: () => api.get<{ dates: ReplayDateEntry[] }>('/simulator/replay/dates'),
+  listReplayDates: () => api.get<ReplayDatesResponse>('/simulator/replay/dates'),
 
-  listPersonas: () =>
-    api.get<{ personas: SimPersona[]; is_available: boolean }>('/simulator/personas'),
+  listPersonas: () => api.get<PersonaListResponse>('/simulator/personas'),
   createPersona: (payload: Partial<SimPersona>) =>
-    api.post<{ success: boolean; message?: string; persona?: SimPersona }>(
-      '/simulator/personas',
-      payload,
-    ),
+    api.post<PersonaCreateResponse>('/simulator/personas', payload),
   updatePersona: (userId: string, payload: Partial<SimPersona>) =>
-    api.patch<{ success: boolean; message?: string }>(`/simulator/personas/${userId}`, payload),
+    api.patch<PersonaOperationResponse>(`/simulator/personas/${userId}`, payload),
   deletePersona: (userId: string) =>
-    api.delete<{ success: boolean; message?: string }>(`/simulator/personas/${userId}`),
+    api.delete<PersonaOperationResponse>(`/simulator/personas/${userId}`),
 
-  listGifts: () => api.get<{ gifts: SimGift[]; is_available: boolean }>('/simulator/gifts'),
+  listGifts: () => api.get<GiftListResponse>('/simulator/gifts'),
   createGift: (payload: Partial<SimGift>) =>
-    api.post<{ success: boolean; message?: string; gift?: SimGift }>('/simulator/gifts', payload),
+    api.post<GiftCreateResponse>('/simulator/gifts', payload),
   updateGift: (giftId: string, payload: Partial<SimGift>) =>
-    api.patch<{ success: boolean; message?: string }>(`/simulator/gifts/${giftId}`, payload),
-  deleteGift: (giftId: string) =>
-    api.delete<{ success: boolean; message?: string }>(`/simulator/gifts/${giftId}`),
+    api.patch<GiftOperationResponse>(`/simulator/gifts/${giftId}`, payload),
+  deleteGift: (giftId: string) => api.delete<GiftOperationResponse>(`/simulator/gifts/${giftId}`),
 };
 
 // 直播场次（直播控制台）
@@ -275,12 +286,11 @@ export const liveSessionsApi = {
   list: (params?: { source?: string; q?: string; limit?: number }) =>
     api.get<LiveSessionListResponse>('/live-sessions', { params }),
   open: (payload?: { title?: string }) =>
-    api.post<{ live_session_id: number }>('/live-sessions/open', payload ?? {}),
-  close: (id: number) =>
-    api.post<{ success: boolean; detail: string }>(`/live-sessions/${id}/close`),
+    api.post<SessionOpenResponse>('/live-sessions/open', payload ?? {}),
+  close: (id: number) => api.post<SessionActionResponse>(`/live-sessions/${id}/close`),
   rename: (id: number, title?: string) =>
-    api.patch<{ success: boolean; detail: string }>(`/live-sessions/${id}`, { title }),
-  remove: (id: number) => api.delete<{ success: boolean; detail: string }>(`/live-sessions/${id}`),
+    api.patch<SessionActionResponse>(`/live-sessions/${id}`, { title }),
+  remove: (id: number) => api.delete<SessionActionResponse>(`/live-sessions/${id}`),
   timeline: (id: number, params?: { limit?: number; before_timestamp_ms?: number }) =>
     api.get<SessionTimelineResponse>(`/live-sessions/${id}/timeline`, { params }),
   // 单场流程单执行回看（rundown_transitions 事实行重放：各环节实际停留 vs 预计）
@@ -301,13 +311,7 @@ export const eventsApi = {
     start_ms?: number;
     before_timestamp_ms?: number;
     take?: 'newest' | 'oldest';
-  }) =>
-    api.get<{
-      events: WebSocketMessage[];
-      total: number;
-      has_more: boolean;
-      has_more_newer?: boolean;
-    }>('/events', { params }),
+  }) => api.get<EventListResponse>('/events', { params }),
 };
 
 // 日志落盘历史（日志查看器"加载更早/时间跳转/服务端搜索"数据源）
@@ -378,6 +382,18 @@ export const visionApi = {
   listMonitors: () => api.get<VisionMonitorsResponse>('/vision/monitors'),
   preview: (params: { monitor_index: number; region?: string; max_width?: number }) =>
     api.get<VisionPreviewResponse>('/vision/preview', { params }),
+};
+
+// 虚拟形象调试台（形象表情调试）
+//
+// `GET /avatar/debug/status`：四平台连接态 / 当前表情 / 动作目录 / 统计摘要，
+// 全部走平台无关契约面（同语义跨平台同名工具）；未装配平台按 connected=false 降级列出。
+// `POST /avatar/debug/trigger`：转发触发表情（17 情绪 + 强度）或参数直调
+// （仅 VTS）；前置不满足返回 404/409/400，业务拒绝以 success=false 的 200 回传。
+export const avatarApi = {
+  getDebugStatus: () => api.get<AvatarDebugStatusResponse>('/avatar/debug/status'),
+  triggerDebug: (request: AvatarDebugTriggerRequest) =>
+    api.post<AvatarDebugTriggerResponse>('/avatar/debug/trigger', request),
 };
 
 // Rundown（流程单编排页）

@@ -11,6 +11,7 @@ from src.agents.streamer.config import StreamerMouthConfig
 from src.agents.streamer.mouth import Mouth, Trigger
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.scene_card import GoalLine
+from src.agents.streamer.topic_gate import SpeechGate
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -79,8 +80,7 @@ def _mouth(
         room_state=RoomState(),
         persona={"bot_name": "麦麦", "personality": "嘴硬但心软", "style_constraints": "口语化，短句为主"},
         speech_max_chars=40,
-        gate_window=10,
-        gate_ratio=0.5,
+        gate=SpeechGate(window=10, ratio=0.5),
         word_filter=None,
         goals_provider=lambda: [GoalLine(game="minecraft", instruction="回到基地家中", started_ms=NOW - 120_000)],
         notebook_provider=lambda: "",
@@ -251,12 +251,12 @@ async def test_with_mouth_on_death_goes_to_the_mouth_not_the_planner() -> None:
     reactions: List[tuple] = []
     agent._mouth.react = lambda key, text, **kw: reactions.append((key, text, kw))  # type: ignore[union-attr,method-assign]
     await agent._on_body_event("game.body.died", payload, "maicraft_attention")
-    assert agent._game_decision_pending is False
+    assert agent._proactive_signals.game_pending is False
     assert reactions == [("body:died", "死了：被蜘蛛杀死了", {"urgent": True, "refresh_scene": True})]
 
     plain = make_streamer_agent()
     await plain._on_body_event("game.body.died", payload, "maicraft_attention")
-    assert plain._game_decision_pending is True
+    assert plain._proactive_signals.game_pending is True
 
 
 async def test_with_mouth_on_progress_reacts_but_attention_alerts_do_not() -> None:
@@ -273,7 +273,7 @@ async def test_with_mouth_on_progress_reacts_but_attention_alerts_do_not() -> No
     error = GamePayload(game="minecraft", event_type="error", message="LLM 推理异常: ValueError: 请求被拒")
     await agent._on_game_event("game.error", error, "minecraft")
 
-    assert reactions == ["game:report"] and agent._game_decision_pending is True
+    assert reactions == ["game:report"] and agent._proactive_signals.game_pending is True
     assert all("LLM 推理异常" not in record.text for record in agent._mouth._records)  # type: ignore[union-attr]
 
 

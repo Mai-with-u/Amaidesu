@@ -93,7 +93,7 @@ async def test_delegation_render_without_task_id() -> None:
     planner = Planner({}, MagicMock(), MagicMock(), RoomState(), tool_registry=registry, context_enabled=False)
 
     await planner._invoke_registry_tool("framework_delegate", {"agent": "minecraft", "instruction": "挖 deleg_9 石料"})
-    text = await planner._assemble_reference([], None, None, False, False, "")
+    text, _ = await planner._assemble_reference([], None, None, False, False, "")
 
     assert "deleg_" not in text
     assert "开始做一个任务：挖 一个游戏任务 石料" in text
