@@ -172,7 +172,10 @@ def test_platform_stamp_identity_guard_and_danmaku_message_id(collector: BiliDan
         SuperChatMessage.from_dict(_sc_raw()),
         GuardMessage.from_dict(_guard_raw()),
     ):
-        assert collector._create_payload(message).platform == "bilibili"  # 装配期常量，全部类型统一盖章
+        payload = collector._create_payload(message)
+        assert payload.platform == "bilibili"  # 装配期常量，全部类型统一盖章
+        # 开放平台 ID 标明种类与发出它的应用（配置的 app_id），记账器据此与账号 uid 区分
+        assert (payload.user.id_kind, payload.user.open_app_id) == ("open", "y")
 
     missing_id = _gift_raw()
     missing_id["data"]["open_id"] = ""
@@ -264,7 +267,12 @@ async def test_legacy_danmaku_stamps_platform_and_drops_missing_uid() -> None:
 
     payload = await collector._create_danmaku_message(_legacy_item())
     assert payload is not None
-    assert (payload.platform, payload.user.id, payload.user.name) == ("bilibili", "12345", "甲")  # 与 LAPLACE 同属 B 站 uid
+    assert (payload.platform, payload.user.id, payload.user.name) == (
+        "bilibili",
+        "12345",
+        "甲",
+    )  # 与 LAPLACE 同属 B 站 uid
+    assert (payload.user.id_kind, payload.user.open_app_id) == ("account", "")
 
     for missing in (_legacy_item(uid=0), {k: v for k, v in _legacy_item().items() if k != "uid"}):
         assert await collector._create_danmaku_message(missing) is None  # 不再用昵称兜底，防多用户退化成同一身份

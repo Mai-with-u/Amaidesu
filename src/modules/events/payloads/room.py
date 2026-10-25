@@ -34,13 +34,23 @@ class RoomMessageUser(BaseModel):
     """
     直播间消息发送者信息（嵌套子结构）
 
+    同一平台可能有两种用户 ID：账号本身的 ID（B 站 uid）与开放平台发给某个
+    应用的 ID（B 站 open_id）。``id_kind`` 说明 ``id`` 属于哪一种，由采集器
+    作为装配期常量写入；记账器据此把消息归到同一位观众身上。
+
     Attributes:
-        id: 用户唯一 ID（平台 user_id）
+        id: 用户外部 ID（种类见 ``id_kind``）
         name: 用户昵称（显示名）
+        id_kind: ``account``（账号 ID）/ ``open``（开放平台 ID）
+        open_app_id: ``id_kind=open`` 时为发出该 ID 的开放平台应用 ID，否则为空
     """
 
-    id: str = Field(..., description="用户唯一 ID（平台 user_id）")
+    id: str = Field(..., description="用户外部 ID（种类见 id_kind）")
     name: str = Field(..., description="用户昵称（显示名）")
+    id_kind: Literal["account", "open"] = Field(
+        default="account", description="ID 种类：account=平台账号 ID / open=开放平台发给应用的 ID"
+    )
+    open_app_id: str = Field(default="", description="id_kind=open 时发出该 ID 的开放平台应用 ID；否则为空")
 
     model_config = ConfigDict(
         json_schema_extra={

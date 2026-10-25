@@ -373,13 +373,16 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             )
             return None
         timestamp_ms = int(bili_msg.timestamp * 1000) if bili_msg.timestamp else now_ms()
+        # 开放平台只给 open_id（账号 uid 已废弃、恒为 0），并且 open_id 可能按应用划分：
+        # 标明 ID 种类与发出它的应用，记账器才能把它和账号 uid 区分开、换应用时不混淆
+        user = RoomMessageUser(id=user_id, name=user_name, id_kind="open", open_app_id=self.app_id)
 
         if isinstance(bili_msg, DanmakuMessage):
             self.logger.debug(f"[弹幕] {bili_msg.uname}: {bili_msg.msg}")
             return RoomMessagePayload(
                 message_type="danmaku",
                 platform=_PLATFORM,
-                user=RoomMessageUser(id=user_id, name=user_name),
+                user=user,
                 content=bili_msg.msg,
                 message_id=bili_msg.msg_id,
                 timestamp_ms=timestamp_ms,
@@ -390,7 +393,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             return RoomMessagePayload(
                 message_type="enter",
                 platform=_PLATFORM,
-                user=RoomMessageUser(id=user_id, name=user_name),
+                user=user,
                 content="",
                 timestamp_ms=timestamp_ms,
             )
@@ -406,7 +409,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             return RoomMessagePayload(
                 message_type="gift",
                 platform=_PLATFORM,
-                user=RoomMessageUser(id=user_id, name=user_name),
+                user=user,
                 content="",
                 gift=GiftInfo(
                     name=gift_name,
@@ -434,7 +437,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             return RoomMessagePayload(
                 message_type="super_chat",
                 platform=_PLATFORM,
-                user=RoomMessageUser(id=user_id, name=user_name),
+                user=user,
                 content=bili_msg.message,
                 sc=SuperChatInfo(
                     total_price=bili_msg.rmb * _RMB_TO_GOLD_COIN,
@@ -456,7 +459,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             return RoomMessagePayload(
                 message_type="guard",
                 platform=_PLATFORM,
-                user=RoomMessageUser(id=user_id, name=user_name),
+                user=user,
                 content=f"{bili_msg.uname} 开通了{guard_name}",
                 guard=GuardInfo(
                     guard_level=bili_msg.guard_level,
