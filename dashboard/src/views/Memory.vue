@@ -155,7 +155,9 @@ const shownRange = computed(() => {
 });
 
 function rowKey(row: ViewerProfileItem): string {
-  return `${row.user_name || '（未留名）'}（${row.platform}）`;
+  // 调试注入等没有平台的观众只显示昵称，不留空括号
+  const name = row.user_name || '（未留名）';
+  return row.platform ? `${name}（${row.platform}）` : name;
 }
 
 async function loadProfiles(): Promise<void> {

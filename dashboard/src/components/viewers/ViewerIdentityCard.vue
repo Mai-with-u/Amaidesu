@@ -235,7 +235,9 @@ function unlink(kind: 'account' | 'open', label: string): void {
 }
 
 .id-label {
-  width: 72px;
+  flex-shrink: 0;
+  width: 84px;
+  white-space: nowrap;
   color: var(--text-secondary);
 }
 
@@ -248,6 +250,7 @@ function unlink(kind: 'account' | 'open', label: string): void {
 }
 
 .id-note {
+  white-space: nowrap;
   font-size: 11px;
   color: var(--text-placeholder);
 }
