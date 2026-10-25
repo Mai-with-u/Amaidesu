@@ -133,7 +133,11 @@ class EdgeTTSProvider:
             )
 
     async def _edge_tts_synthesize(self, text: str) -> Tuple[np.ndarray, int]:
-        """调用 Edge TTS 合成"""
+        """调用 Edge TTS 合成（失败直接抛出）。
+
+        异常不在此处理：由公共骨架统一计错误数、发 ``tts.utterance.failed``
+        并上抛给编排队列兜底——引擎侧吞错会让失败以假音频形态静默过关。
+        """
         if "edge_tts" not in globals():
             raise RuntimeError("Edge TTS 未安装")
         tmp_filename = None
@@ -145,9 +149,6 @@ class EdgeTTSProvider:
             self.logger.debug(f"Edge TTS 合成完成: {tmp_filename}")
             audio_array, samplerate = await asyncio.to_thread(sf.read, tmp_filename, dtype="float32")
             return audio_array, samplerate
-        except Exception as e:
-            self.logger.exception(f"Edge TTS 合成失败: {e}")
-            return np.zeros(44100, dtype=np.float32), 16000
         finally:
             if tmp_filename:
                 try:
