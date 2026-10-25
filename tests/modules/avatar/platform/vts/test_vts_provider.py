@@ -249,3 +249,32 @@ def test_register_vts_tools_registers_degraded_then_follows_connection_state() -
 
     provider.mark_disconnected()
     assert registry.list_tools(provider="vts") == []  # 断连摘除
+
+
+async def test_reconnect_attempts_back_off_and_reset_on_success() -> None:
+    """VTS 长关：重连尝试按指数间隔跳过巡检整点（压频不打日志风暴），连上即复位。"""
+    from src.modules.utils.backoff import ExponentialBackoff
+
+    provider = _build_provider()
+    provider._connect = AsyncMock()  # 不翻转 _is_connected = 连接失败
+    provider._reconnect_backoff = ExponentialBackoff(base_delay_ms=10_000, cap_delay_ms=60_000)
+
+    await provider._attempt_reconnect()  # 尝试 1：失败 → 跳 2 拍（10s 退避 / 5s 节拍）
+    assert provider._reconnect_skip_polls == 2
+    await provider._attempt_reconnect()  # 退避窗口内：只消耗节拍，不触网
+    await provider._attempt_reconnect()
+    assert provider._connect.await_count == 1
+    await provider._attempt_reconnect()  # 尝试 2：失败 → 跳 4 拍（20s 退避 / 5s 节拍）
+    assert provider._reconnect_skip_polls == 4 and provider._connect.await_count == 2
+
+    for _ in range(provider._reconnect_skip_polls):
+        await provider._attempt_reconnect()  # 排空退避窗口：期间不触网
+    assert provider._connect.await_count == 2
+
+    async def _succeed() -> None:
+        provider._is_connected = True
+
+    provider._connect = AsyncMock(side_effect=_succeed)  # type: ignore[assignment]
+    await provider._attempt_reconnect()  # 尝试 3：连上 → 复位
+    assert provider._reconnect_skip_polls == 0
+    assert provider._reconnect_backoff.next_delay_ms() == 10_000, "下一次失败从起点重新起算"

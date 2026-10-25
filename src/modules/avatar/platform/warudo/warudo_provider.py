@@ -35,6 +35,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec, tool_result_fail, tool_result_ok
 from src.modules.tools.provider import ConnectionToolProvider, wire_connection_tools
+from src.modules.utils.backoff import ExponentialBackoff
 
 from .expression_profile import BLINK_KEY, WarudoExpressionConfig
 from .lip_sync_renderer import WarudoLipSyncRenderer
@@ -174,6 +175,11 @@ class WarudoProvider(ConnectionToolProvider):
         self.ws_host: str = self.typed_config.ws_host
         self.ws_port: int = self.typed_config.ws_port
         self.reconnect_delay_seconds: float = self.typed_config.reconnect_delay_seconds
+        # 重连等待退避：以配置的重连间隔为起点，连续失败时指数拉长（60s 封顶），
+        # 连上即复位——Warudo 长关时不再按固定间隔无限打日志
+        self._reconnect_backoff = ExponentialBackoff(
+            base_delay_ms=max(1, int(self.reconnect_delay_seconds * 1000)), cap_delay_ms=60_000
+        )
         self.talking_head_enabled: bool = self.typed_config.talking_head_enabled
         self.talking_head_interval: float = self.typed_config.talking_head_interval
         self.throw_fish_cooldown: float = self.typed_config.throw_fish_cooldown
@@ -561,6 +567,8 @@ class WarudoProvider(ConnectionToolProvider):
                     # 连接态换血：断连期摘除的工具在此补注册（回调由注册接线方提供）
                     self.mark_connected()
                     self.logger.info(f"已连接到 Warudo: {uri}")
+                    # 连上即复位：下一次断开的等待从配置的间隔重新起算
+                    self._reconnect_backoff.reset()
 
                     if self._first_connection:
                         self._first_connection = False
@@ -583,9 +591,10 @@ class WarudoProvider(ConnectionToolProvider):
                     if was_connected:
                         # 连接态换血：摘除断连工具（Agent 工具表不再包含 warudo_*）
                         self.mark_disconnected()
-                    self.logger.debug(f"WebSocket 断开，{self.reconnect_delay_seconds}秒后重连...")
+                    delay_s = self._reconnect_backoff.next_delay_ms() / 1000
+                    self.logger.debug(f"WebSocket 断开，{delay_s:.0f}秒后重连...")
                     try:
-                        await asyncio.sleep(self.reconnect_delay_seconds)
+                        await asyncio.sleep(delay_s)
                     except asyncio.CancelledError:
                         break
 

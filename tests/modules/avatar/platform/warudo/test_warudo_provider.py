@@ -195,3 +195,26 @@ async def test_disconnect_closes_only_the_websocket_and_keeps_background_loop() 
     provider.websocket, provider._is_connected = broken, True
     assert await provider.disconnect() is True  # close 抛异常也要置为断开
     assert provider.websocket is None and provider._is_connected is False
+
+
+async def test_connection_loop_backs_off_between_reconnect_attempts(monkeypatch) -> None:
+    """Warudo 长关：重连等待从配置间隔起指数拉长——固定 10ms 间隔下 0.2s 会尝试
+    约 20 次，退避（10→20→40→80ms）下只应有个位数次。"""
+    import asyncio
+
+    provider = _provider(reconnect_delay_seconds=0.01)
+    attempts = {"n": 0}
+
+    async def _refused(uri: str) -> None:
+        attempts["n"] += 1
+        raise ConnectionRefusedError("Warudo 未开")
+
+    monkeypatch.setattr("src.modules.avatar.platform.warudo.warudo_provider.websockets.connect", _refused)
+    task = asyncio.create_task(provider._connection_loop("ws://localhost:19190"))
+    try:
+        await asyncio.sleep(0.2)
+    finally:
+        provider._should_stop = True
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    assert 2 <= attempts["n"] <= 10
