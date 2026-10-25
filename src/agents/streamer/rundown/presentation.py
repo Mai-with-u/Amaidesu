@@ -107,6 +107,7 @@ def apply_rundown_control(
                     f"当前环节最少停留未到（还需约 {max(1, round(reject.remaining_ms / 1000))} 秒）"
                 ),
                 "unknown_segment_id": f"环节不存在（可用: {', '.join(reject.available_ids)}）",
+                "blank_title_target": "目标环节标题为空（数据问题），请在流程单编辑中补全标题后再切换",
                 "already_done": "流程单已完成",
                 "not_started": "流程单尚未开始",
                 "already_begun": "流程单已开始",

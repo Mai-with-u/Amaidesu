@@ -60,6 +60,30 @@ def test_control_rejections(loaded: bool, action: str, kwargs: dict, message: st
         assert snapshot["status"] == "idle"
 
 
+def test_control_blank_title_target_rejected_for_human() -> None:
+    """human 通路同拦空标题目标：门禁收敛在状态机后 Dashboard 手动控制不再绕过。"""
+    from src.modules.storage.models.rundown import Rundown, RundownSegment
+
+    rundown = Rundown(
+        rundown_id="blank_rd",
+        title="空标题流程单",
+        segments=[
+            RundownSegment(id="a", title="开场", task_description="目标", expected_ms=60_000),
+            RundownSegment(id="b", title="闲聊", task_description="目标", expected_ms=60_000),
+        ],
+    )
+    rundown.segments[1].title = "   "  # 原地改脏，模拟绕过模型校验的存量数据
+    state = _loaded_state()
+    state.load(rundown)
+
+    success, message, snapshot = apply_rundown_control(state, "goto", segment_id="b")
+    assert success is False and message.startswith("目标环节标题为空")
+    assert snapshot is not None and snapshot["current"]["id"] == "a"
+
+    success, message, _ = apply_rundown_control(state, "next")
+    assert success is False and message.startswith("目标环节标题为空")
+
+
 async def test_control_pause_then_resume_again_rejected() -> None:
     """pause → resume 正常链；重复 resume 被 not_paused 话术拒绝。"""
     state = _loaded_state()

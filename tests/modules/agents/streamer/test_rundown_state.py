@@ -161,6 +161,31 @@ def test_goto_unknown_id_and_no_rundown_are_rejected_without_mutation(h: _Harnes
     assert RundownState().goto("opening", by="human").reason == "no_rundown_loaded"
 
 
+@pytest.mark.parametrize("by", ["agent", "human"])
+class TestBlankTitleTargetRejected:
+    """空标题目标门禁（纵深防御）：拦绕过模型校验的脏数据，两条通路同拦。"""
+
+    def _dirty_rundown(self) -> Rundown:
+        rundown = _rundown(_segment("a", "开场"), _segment("b", "闲聊"))
+        rundown.segments[1].title = "   "  # 原地改脏，模拟历史存量鸭子实例
+        return rundown
+
+    def test_goto_blank_title(self, h: _Harness, by: str) -> None:
+        h.state.load(self._dirty_rundown(), now_ms=h.now)
+        h.events.clear()
+        reject = h.state.goto("b", by=by, now_ms=h.now)
+        assert reject is not None and reject.reason == "blank_title_target"
+        assert h.state.current_segment_id == "a" and h.events == []
+
+    def test_next_into_blank_title(self, h: _Harness, by: str) -> None:
+        h.state.load(self._dirty_rundown(), now_ms=h.now)
+        h.state.begin(by="system", now_ms=h.now)
+        h.events.clear()
+        reject = h.state.next(by=by, now_ms=h.now)
+        assert reject is not None and reject.reason == "blank_title_target"
+        assert h.state.current_segment_id == "a" and h.events == []
+
+
 def test_next_finishes_then_rejects_further_advance(h: _Harness) -> None:
     h.drive_to_last()
     h.events.clear()
