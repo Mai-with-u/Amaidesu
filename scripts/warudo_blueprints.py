@@ -53,8 +53,8 @@ def _load_expression(config_path: Path) -> WarudoExpressionConfig:
     if not config_path.is_file():
         print(f"未找到 {config_path}，按默认 VRM 标准档案生成")
         return WarudoExpressionConfig()
-    with config_path.open("rb") as fh:
-        data = tomllib.load(fh)
+    # utf-8-sig 兼容带 BOM 的文件（历史版本管线写回带 BOM；tomllib 拒绝 BOM）
+    data = tomllib.loads(config_path.read_text(encoding="utf-8-sig"))
     section = data.get("platform", {}).get("warudo", {}).get("expression")
     if section is None:
         print(f"{config_path} 里没有 [platform.warudo.expression]，按默认 VRM 标准档案生成")

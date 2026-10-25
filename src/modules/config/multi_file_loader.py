@@ -450,14 +450,8 @@ def _write_back_schema_file(
     file_path = config_dir / file_name
     content = _serialize_instance_to_toml(schema_cls, instance)
 
-    has_bom = False
-    try:
-        with open(file_path, "rb") as f:
-            has_bom = f.read(3) == b"\xef\xbb\xbf"
-    except OSError:
-        # 文件尚不存在（首次生成路径）时探测不到 BOM，按无 BOM 写入即可
-        pass
-    new_bytes = content.encode("utf-8-sig" if has_bom else "utf-8")
+    # 统一无 BOM 落盘：存量带 BOM 的文件借此在下次写回时自然剥离
+    new_bytes = content.encode("utf-8")
 
     # 内容不变短路：不写盘、不备份，避免 mtime 噪音与重写放大
     try:
@@ -485,7 +479,7 @@ def _ensure_required_files(config_dir: Path) -> list[str]:
             continue
         logger.info(f"缺失配置文件 {fname}，自动生成...")
         content = _generate_root_toml(fname, _ROOT_SCHEMAS[fname], extra_sections=_materializable_sections(fname))
-        (config_dir / fname).write_text(content, encoding="utf-8-sig")
+        (config_dir / fname).write_text(content, encoding="utf-8")
         generated.append(fname)
     return generated
 
@@ -498,7 +492,7 @@ def generate_default_configs(config_dir: Path) -> None:
     for fname in _CONFIG_FILES:
         path = config_dir / fname
         content = _generate_root_toml(fname, _ROOT_SCHEMAS[fname], extra_sections=_materializable_sections(fname))
-        path.write_text(content, encoding="utf-8-sig")
+        path.write_text(content, encoding="utf-8")
         logger.info(f"已生成 {fname}")
 
 

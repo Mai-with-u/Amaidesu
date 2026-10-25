@@ -40,7 +40,7 @@ def config_dir(server: "DashboardServer") -> Path:
 def read_toml_dict(path: Path) -> Dict[str, Any]:
     """读 TOML 文件为 dict（只读；缺失/解析失败返回空 dict）。
 
-    配置管线落盘带 BOM，以 utf-8-sig 剥除后再交给 tomllib（tomllib 拒绝 BOM）。
+    存量配置文件可能带 BOM，以 utf-8-sig 剥除后再交给 tomllib（tomllib 拒绝 BOM）。
     """
     if not path.exists():
         return {}
