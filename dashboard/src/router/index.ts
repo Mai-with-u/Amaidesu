@@ -56,6 +56,11 @@ const router = createRouter({
       component: () => import('@/views/ViewerInsights.vue'),
     },
     {
+      path: '/viewers/pending',
+      name: 'viewer-pending',
+      component: () => import('@/views/ViewerPending.vue'),
+    },
+    {
       path: '/viewers',
       name: 'viewers',
       component: () => import('@/views/Viewers.vue'),

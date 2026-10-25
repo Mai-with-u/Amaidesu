@@ -12,6 +12,10 @@
       </div>
       <div class="header-actions">
         <el-button type="primary" plain :loading="loading" @click="load">刷新</el-button>
+        <!-- 有观众与老观众同名、等人工确认是不是同一个人时，入口带上数量提醒 -->
+        <router-link to="/viewers/pending" class="insights-link">
+          待确认观众<template v-if="pendingTotal > 0">（{{ pendingTotal }}）</template> →
+        </router-link>
         <router-link to="/viewers/insights" class="insights-link">互动分析 →</router-link>
       </div>
     </header>
@@ -116,7 +120,7 @@
  * 数据面：GET /viewers（viewers 表，StorageLedger 写穿的跨场计数）。
  * 搜索 250ms 防抖走服务端 LIKE（外部 ID / 昵称），排序取后端白名单列；
  * 点行按内部观众 ID 进入 /viewers/:viewerId 档案页（外部 ID 列只作展示：
- * 同一位观众可能有账号 ID 与开放平台 ID 两种）。
+ * 同一位观众可能有账号 ID 与开放平台 ID 两种）。头部入口显示待确认观众数。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -144,6 +148,7 @@ const pageSize = 20;
 const items = ref<ViewerListItem[]>([]);
 const total = ref(0);
 const loading = ref(false);
+const pendingTotal = ref(0);
 
 const shownRange = computed(() => {
   if (total.value === 0) return '0';
@@ -165,6 +170,12 @@ async function load(): Promise<void> {
     total.value = response.data.total;
   } finally {
     loading.value = false;
+  }
+  // 待确认数只用于入口提醒，取不到不影响列表
+  try {
+    pendingTotal.value = (await viewersApi.pending({ limit: 1 })).data.total;
+  } catch {
+    pendingTotal.value = 0;
   }
 }
 
