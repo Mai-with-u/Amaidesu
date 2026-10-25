@@ -27,7 +27,7 @@ def _write_old_narrative(tmp_path: Path, version: str = "2.0.47") -> Path:
 
 
 def test_narrative_section_removed_and_written_back(tmp_path: Path) -> None:
-    """整段删除落盘、版本推进到 2.0.48；再次加载零变更（幂等）。"""
+    """整段删除落盘、版本推进到链上界；再次加载零变更（幂等）。"""
     generate_default_configs(tmp_path)
     path = _write_old_narrative(tmp_path)
 
@@ -35,7 +35,7 @@ def test_narrative_section_removed_and_written_back(tmp_path: Path) -> None:
 
     doc = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
     assert "narrative" not in doc["agents"]["streamer"]
-    assert doc["meta"]["version"] == "2.0.48"
+    assert doc["meta"]["version"] == "2.0.49"
 
     first = path.read_text(encoding="utf-8-sig")
     load_config_dir(tmp_path)

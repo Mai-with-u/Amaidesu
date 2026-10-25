@@ -20,7 +20,7 @@
     enabled, memory_recall_long_term
 
     [agents.streamer.background]
-    enabled, light_tick_ms, cold_timeout_ms, summary_interval_ms
+    enabled, light_tick_ms, summary_interval_ms
 
     [agents.streamer.background.compressor]
     concurrency, queue_max
@@ -170,12 +170,6 @@ class StreamerBackgroundConfig(BaseConfig):
         le=60_000,
         description="后台维护循环的巡检间隔（毫秒）",
         json_schema_extra={"x-ui-advanced": True},
-    )
-    cold_timeout_ms: int = Field(
-        title="冷场判定阈值",
-        default=60_000,
-        ge=0,
-        description="房间冷场判定阈值（毫秒）",
     )
     summary_interval_ms: int = Field(
         title="摘要间隔",

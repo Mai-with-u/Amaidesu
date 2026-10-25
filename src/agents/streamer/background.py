@@ -46,7 +46,6 @@ __all__ = ["BackgroundMaintainer"]
 # ---------------------------------------------------------------------------
 
 _DEFAULT_LIGHT_TICK_MS = 5_000
-_DEFAULT_COLD_TIMEOUT_MS = 60_000
 _DEFAULT_SUMMARY_INTERVAL_MS = 60_000
 # 摘要 LLM 绑定：由代码显式声明（配置不承载绑定；封闭 profile 六成员之一，
 # 与 Planner / Replyer 隔离，对应 model.toml [llm_profiles.summary]）
@@ -102,7 +101,6 @@ class BackgroundMaintainer:
             config: 配置字典或对象；读取
                 - ``enabled``（默认 True）
                 - ``light_tick_ms``（默认 5000）
-                - ``cold_timeout_ms``（默认 60000）
                 - ``summary_interval_ms``（默认 60000）
                 - ``compressor_concurrency``（默认 1）
                 - ``compressor_queue_max``（默认 100）
@@ -139,7 +137,6 @@ class BackgroundMaintainer:
 
         self._enabled: bool = bool(_cfg(config, "enabled", True))
         self._light_tick_ms: int = _cfg(config, "light_tick_ms", _DEFAULT_LIGHT_TICK_MS)
-        self._cold_timeout_ms: int = _cfg(config, "cold_timeout_ms", _DEFAULT_COLD_TIMEOUT_MS)
         self._summary_interval_ms: int = _cfg(config, "summary_interval_ms", _DEFAULT_SUMMARY_INTERVAL_MS)
 
         self._light_task: Optional[asyncio.Task] = None
