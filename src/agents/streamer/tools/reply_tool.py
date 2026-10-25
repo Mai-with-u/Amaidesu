@@ -268,10 +268,10 @@ class ReplyToolProvider(BaseToolProvider):
             return None
 
     async def _recent_speeches(self) -> List[str]:
-        """对话历史 assistant 行的台词原文（旧→新，截取检查窗口最近 N 条）。
+        """兜底语料：裸调用（无 attachment）时现读历史的 assistant 台词行。
 
-        台词级查重的语料来源：历史里自己说过的话才是观众听过的内容；
-        历史读取失败按空语料处理（无从比对即放行，不反噬表达链路）。
+        Planner 路径的语料由 attachment 随单携带（窗起点算好，与本窗批材料
+        同源）；历史读取失败按空语料处理（无从比对即放行，不反噬表达链路）。
         """
         history = await self._resolve_history()
         if not history:
@@ -283,6 +283,12 @@ class ReplyToolProvider(BaseToolProvider):
             if message.get("role") == "assistant" and content:
                 lines.append(content)
         return lines[-self._gate_window :] if self._gate_window > 0 else []
+
+    def _gate_corpus(self, materials: ReplyRoundAttachment) -> Optional[List[str]]:
+        """发言闸比对语料：随单携带优先（未截窗口，按闸窗口截取）；未携带返回 None（走兜底现读）。"""
+        if materials.speech_history is None:
+            return None
+        return materials.speech_history[-self._gate_window :] if self._gate_window > 0 else []
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         """reply 工具的 invoke（ToolProvider 协议）。
@@ -419,7 +425,10 @@ class ReplyToolProvider(BaseToolProvider):
         if materials.gate_exempt:
             self._logger.info("发言闸豁免：is_novel=true 结果=pass 重合度=未检查")
         else:
-            ratio = speech_overlap_ratio(speech, await self._recent_speeches())
+            corpus = self._gate_corpus(materials)
+            if corpus is None:
+                corpus = await self._recent_speeches()
+            ratio = speech_overlap_ratio(speech, corpus)
             if ratio >= self._gate_ratio:
                 retry_exhausted = self._gate_bounces >= 1
                 self._gate_bounces += 1

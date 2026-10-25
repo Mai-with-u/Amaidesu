@@ -101,11 +101,16 @@ async def test_game_reports_and_delegations_enter_timeline_in_time_order(store: 
     await agent._on_game_event("game.report", report, "test")
     await _viewer_turns(store, 5, 1)
 
+    # 窗边界出账（决策执行器每轮第一步）先行，读历史是纯读
+    agent._drain_game_events()
     view = await agent._read_history()
     assert [getattr(turn, "message_id", "") or "note" for turn in view] == ["m1", "note", "m2", "m5"]
     # 行首是发生时刻的钟点，写入后不再变化
     assert view[1].message_type == GAME_MESSAGE_TYPE
     assert view[1].content.endswith(" 游戏·minecraft·report] 木头砍好了")
+
+    # 读历史不改任何状态：再读一遍逐字一致（出账只发生在窗边界）
+    assert await agent._read_history() == view
 
     agent._record_delegation("minecraft", "去砍点木头")
     later = await agent._read_history()
@@ -113,6 +118,21 @@ async def test_game_reports_and_delegations_enter_timeline_in_time_order(store: 
 
     await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=2), "test")
     assert agent._timeline_notes == []
+
+
+async def test_read_history_is_pure_read_without_window_boundary(store: SQLiteDatabase) -> None:
+    """读历史不代收窗边界职责：待入账游戏事件未出账前不进投影，批次保持原样。"""
+    agent = _agent(store, 1)
+    await _viewer_turns(store, 1, 1)
+    report = GamePayload(game="minecraft", event_type="report", message="木头砍好了", timestamp_ms=1001)
+    await agent._on_game_event("game.report", report, "test")
+
+    view = await agent._read_history()
+
+    assert [getattr(turn, "message_id", "") or "note" for turn in view] == ["m1"], "未出账的游戏事件不在时间线里"
+    batch_before = agent._current_game_batch()
+    assert await agent._read_history() == view
+    assert agent._current_game_batch() is batch_before, "读历史不覆写本窗批次"
 
 
 def _maintainer(store: SQLiteDatabase, pk: Optional[int] = 1, prompt_manager=None):

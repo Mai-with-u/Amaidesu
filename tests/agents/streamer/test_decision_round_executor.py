@@ -81,6 +81,40 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
     return executor, deps
 
 
+async def test_window_boundary_runs_once_before_history_read():
+    """窗边界收口（出账）每轮恰好一次，且先于历史读取——出账行才能进本轮投影。"""
+    calls: list[str] = []
+
+    def _boundary() -> None:
+        calls.append("boundary")
+
+    async def _history() -> list:
+        calls.append("history")
+        return []
+
+    planner = MagicMock()
+    planner.plan = AsyncMock(return_value={**_OKAY_OUTCOME, "raw_content": "RAW"})
+    speech = MagicMock()
+    speech.dispatch = AsyncMock(return_value=None)
+    executor = DecisionRoundExecutor(
+        planner=planner,
+        speech=speech,
+        event_bus=None,
+        room_state=MagicMock(),
+        proactive_trigger=MagicMock(),
+        stats=StreamerStats(),
+        thinking_sink=None,
+        thinking_enabled=False,
+        history_provider=_history,
+        rundown_text_provider=MagicMock(return_value=None),
+        window_boundary=_boundary,
+    )
+
+    await executor.execute([], forced=False, trigger_reason="batch:flush")
+
+    assert calls == ["boundary", "history"], "收口先于读取，且每轮各恰好一次"
+
+
 # happy：一轮决策的完整产出
 
 

@@ -42,7 +42,7 @@ from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
-from src.agents.streamer.plan import ReplyRoundAttachment
+from src.agents.streamer.plan import ReplyRoundAttachment, assistant_speech_lines
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
 from src.agents.streamer.planner_render import (
     Delegation,
@@ -460,6 +460,10 @@ class Planner:
             # 空窗兜底：对话与参考全空时保底一条 user 消息（部分协议要求非 system 消息存在）
             messages.append({"role": "user", "content": "（本窗无对话与参考内容）"})
 
+        # 发言闸语料：本窗历史里的已说台词，窗起点算一次随单携带（reply 工具
+        # 不再为查重单独读历史——读是纯读，无决策窗出账副作用）
+        speech_history = assistant_speech_lines(history)
+
         # 直播画面只挂在本窗第一次请求的尾部：后续 ReAct 步骤靠模型第一步的判断继续
         frame_tail = self._live_frame_message()
         steps = 0
@@ -546,6 +550,7 @@ class Planner:
                         thinking=thinking,
                         round_id=round_id,
                         game_chat=fresh_game_chat,
+                        speech_history=speech_history,
                     )
                 else:
                     observation = await self._invoke_registry_tool(
@@ -856,12 +861,13 @@ class Planner:
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
         game_chat: Optional[List[str]] = None,
+        speech_history: Optional[List[str]] = None,
     ) -> tuple[str, bool]:
         """执行 reply 工具（经 ToolRegistry 统一调用）；成功时把产出写进 outcome 并返回 (观察, replied=True)。
 
         统一调用路径：reply 与其他工具一样经 ``registry.invoke``（观测/停用/
         熔断复用既有机制，tool.result 事件照发）。本窗交接材料（thinking 回调/
-        弹幕批/游戏聊天/状态事实块/闸豁免）打包进 ``ReplyRoundAttachment``、
+        弹幕批/游戏聊天/状态事实块/闸豁免/闸语料）打包进 ``ReplyRoundAttachment``、
         随 ``ToolInvocation.attachment`` 传入——材料生命周期 = 调用生命周期，
         调用即弃，无跨轮残留。
         发言闸（新颖自检 + 台词级重合度检查）在 reply 工具内部执行：打回以
@@ -886,6 +892,8 @@ class Planner:
                 state_facts=GameLedger.compose_facts(self._round_facts_text, self._round_tool_receipts),
                 # 道别窗豁免台词重合度检查
                 gate_exempt=self._round_bypass_topic_gate,
+                # 闸语料：本窗起点算好的已说台词，重试共用（None = 本窗无历史可查）
+                speech_history=speech_history,
             )
             result = await self._tool_registry.invoke(
                 ToolInvocation(

@@ -529,6 +529,7 @@ class StreamerAgent(BaseAgent):
             game_events_provider=self._current_game_batch,
             reminders_provider=self._drain_reminders,
             session_recap_provider=self._session_recap_text,
+            window_boundary=self._drain_game_events,
             logger=self._logger,
         )
 
@@ -1005,7 +1006,10 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"收集游戏事件失败: {exc}", exc=True)
 
     def _drain_game_events(self) -> GameEventBatch:
-        """决策窗边界：账本整批出账，本批时间线条目落进时间线，批次行交决策链。
+        """决策窗边界收口：账本整批出账，本批时间线条目落进时间线，批次行交决策链。
+
+        由决策执行器的 ``window_boundary`` 每轮第一步显式执行（先于历史读取，
+        出账行才能进本轮投影）——收口只发生在窗边界恰好一处，读历史是纯读。
 
         折叠过多条的行附计数说明（"另 N 次相同"）后再入时间线；时间线条目只追加
         不改写，相邻窗口的历史前缀逐字一致。私聊行不进时间线，单独随批次交本窗
@@ -1523,15 +1527,14 @@ class StreamerAgent(BaseAgent):
     async def _read_history(self) -> Optional[List[Any]]:
         """读取当前对话并经时间线投影：前情提要各章 + 工作层原文，按主播看到的先后排列。
 
+        纯读，无副作用——决策窗边界收口（游戏账本出账、私聊清空）由决策
+        执行器的 ``window_boundary`` 在轮首显式执行（见 ``_drain_game_events``），
+        本方法只负责把已入账的时间线行读出来。
+
         显式场次进行中时，live_chat 是已落库对话的事实源；没开场次时的对话与
         调试注入的观众消息不会落库，由内存对话轮按发生时刻并入同一条时间线。
         读库失败返回 None（宁可本轮无历史，也不拿残缺历史冒充完整对话）。
-
-        决策窗边界在此收口：待入账的游戏事件队列整批追加进时间线（本方法每轮
-        决策先被调用一次，队列只在这里消费），本批行同时记为"本轮新入账批次"
-        供决策执行器与状态事实块取用。
         """
-        self._drain_game_events()
         stored: List[_LiveChatTurn] = []
         live_pk: Optional[int] = None
         if self._chat is not None and self._session_manager is not None:
