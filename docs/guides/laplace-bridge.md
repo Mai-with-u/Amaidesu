@@ -79,6 +79,32 @@ room_id = 0           # 0=不过滤；填写时使用规范长房间号
 
 采集器启动后会无限重连，因此 Amaidesu、leb-server、控制台的启动顺序不限；首次连接失败只记录 warning，不阻塞启动。
 
+## 验证
+
+两处判据逐层核对，全程不需要额外工具：
+
+1. **接入成功**：Amaidesu 日志出现 `LAPLACE Event Bridge 已连接: ...` 与 `LAPLACE Event Bridge 握手完成: clientId=...` 两条 info（`--filter LaplaceBridgeClient` 可只看该采集器的日志）。
+2. **全链路通**：开播后在直播间发一条弹幕，dashboard 实时事件流出现 `room.message.danmaku`；礼物、SC、上舰分别对应 `room.message.gift` / `room.message.super_chat` / `room.message.guard`。
+
+leb-server 与控制台晚于 Amaidesu 启动不影响判据成立——采集器无限重连，对端就绪后日志即出现。
+
+## 弹幕进 OBS 直播画面
+
+LAPLACE 自带的 OBS 覆盖层负责把弹幕渲染进直播画面，配置入口与事件采集相互独立：
+
+1. 打开 LAPLACE Chat 配置页 `https://chat.laplace.live/`（注意不是 `/dashboard/<房间号>` 控制台页），输入房间号，复制配置页生成的**弹幕链接**（以页面实际生成的为准，不要手工拼 URL）。
+2. 在 OBS 新建「浏览器」来源，URL 填弹幕链接，宽高建议 1920×1080；覆盖层是透明背景，位置与大小按画面摆放。
+3. 弹幕样式优先使用官方[云端模版](https://laplace.live/chat/templates)；需要微调时再把自定义 CSS 粘贴到浏览器来源的「自定义 CSS」框，它会覆盖云端模版。暗色跟随、按场景切换样式、礼物特效等见官方 [Using It in OBS](https://laplace.live/chat/using-it-in-obs) 文档。
+
+两个页面的分工：
+
+| 页面 | 作用 | 不开的后果 |
+|---|---|---|
+| OBS 浏览器来源（弹幕链接） | 渲染弹幕画面，直连 B 站，与 leb-server 无关 | 画面上没有弹幕 |
+| dashboard 控制台页（普通浏览器） | 事件源，喂 leb-server → Amaidesu | Amaidesu 收不到任何事件 |
+
+OBS 的浏览器来源运行在 OBS 内嵌浏览器中，不受后台标签节流影响；只有 dashboard 控制台页开在普通浏览器里，需要按「配置步骤 2」的提示加白名单。
+
 ## 事件映射
 
 Laplace 的 `message` / `gift` / `superchat` / `toast` / `interaction` 分别映射为
