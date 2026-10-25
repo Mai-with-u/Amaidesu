@@ -13,7 +13,7 @@
 - **读屏**：经 ToolRegistry 调用公共工具 `vision_look_at_screen`（不是 text_adv 私有的，任何 Agent 都可调用）
 - **帧采集**：mss 截屏（供画面稳定判定与帧级去重）
 - **窗口后端**：pygetwindow（按标题关键词查找游戏窗口、夺焦、检查前台与几何）
-- **键鼠注入**：pyautogui（工具动作出口：推进按键、选项点击）
+- **键鼠注入**：ctypes 直调 Win32 SendInput/SetCursorPos（工具动作出口：推进按键、选项点击）
 
 ### 生命周期：空闲零消耗
 

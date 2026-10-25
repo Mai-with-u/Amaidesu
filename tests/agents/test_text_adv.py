@@ -130,7 +130,7 @@ def test_metadata_builder_and_factory_wiring(monkeypatch: pytest.MonkeyPatch) ->
     )
     assert isinstance(built, TextAdvGameAgent) and built.auto is False  # 返回未启动实例
 
-    monkeypatch.setattr("src.agents.text_adv.input.PyAutoGuiInputBackend", FakeInputBackend)
+    monkeypatch.setattr("src.agents.text_adv.input.Win32InputBackend", FakeInputBackend)
     registry = ToolRegistry()
     agent = instantiate_agent(
         "text_adv",

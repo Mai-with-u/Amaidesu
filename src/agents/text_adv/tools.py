@@ -299,8 +299,8 @@ class TextAdvToolProvider(BaseToolProvider):
     # ==================================================================
 
     async def _inject(self, action: Callable[[], None]) -> None:
-        """在 worker 线程执行键鼠注入：pyautogui 为同步 API，事件循环内直接
-        调用会按注入时长冻结整个进程（hold 按住多久停摆多久）。"""
+        """在 worker 线程执行键鼠注入：注入 API（SendInput/sleep）为同步调用，
+        事件循环内直接调用会按注入时长冻结整个进程（hold 按住多久停摆多久）。"""
         await asyncio.to_thread(action)
 
     async def _invoke_advance(self, started_ms: int) -> ToolExecutionResult:

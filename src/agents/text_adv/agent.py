@@ -393,7 +393,7 @@ def build_text_adv_agent(
         vision_reader: 读屏后端（如 RegistryVisionReader）
         window_backend: 窗口后端（如 PyGetWindowBackend）
         capture: 帧采集后端（与屏幕线 ScreenCapture 协议同形）
-        input_backend: 键鼠注入后端（如 PyAutoGuiInputBackend）
+        input_backend: 键鼠注入后端（如 Win32InputBackend）
         tool_registry: 可选 ToolRegistry（启动期注册工具面）
         event_bus: 可选 EventBus（game.* 事件发射）
 

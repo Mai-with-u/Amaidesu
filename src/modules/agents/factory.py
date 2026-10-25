@@ -128,7 +128,7 @@ def instantiate_agent(
     if name == "text_adv":
         # 函数内 import：text_adv 包（感知/动作后端依赖链）仅在实例化时加载
         from src.agents.text_adv import TextAdvConfig, TextAdvGameAgent
-        from src.agents.text_adv.input import PyAutoGuiInputBackend
+        from src.agents.text_adv.input import Win32InputBackend
         from src.agents.text_adv.vlm import RegistryVisionReader
         from src.agents.text_adv.window import PyGetWindowBackend
         from src.modules.vision import MssScreenCapture
@@ -146,7 +146,7 @@ def instantiate_agent(
             vision_reader=RegistryVisionReader(deps.tool_registry, source=name),
             window_backend=PyGetWindowBackend(),
             capture=MssScreenCapture(),
-            input_backend=PyAutoGuiInputBackend(),
+            input_backend=Win32InputBackend(),
             tool_registry=deps.tool_registry,
             event_bus=deps.event_bus,
         )
