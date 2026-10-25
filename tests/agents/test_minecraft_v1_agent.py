@@ -675,7 +675,10 @@ async def test_a_timer_due_while_the_task_is_being_delivered_still_wakes() -> No
         if "[计时]" in _texts(messages):
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "炉子烧好了"})])
         # 模型还在想这一步时计时到点（任务进行中），这一步随即交付。
-        holder["agent"]._wake_for_timer(_TIMER_DUE)
+        # script 是同步回调，用事件真实入口的协程排到本步之后立刻执行。
+        asyncio.get_running_loop().create_task(
+            holder["agent"]._on_body_event({"kind": "timer_due", "message": _TIMER_DUE, "cursor": 1})
+        )
         return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
 
     agent, llm, bus = await _start(server, script)
@@ -1134,7 +1137,7 @@ async def test_a_failed_goal_settles_the_batch_delegations_with_a_dry_summary() 
     assert changed and changed[0].status == "failed"
     assert "坑壁有缺口" in changed[0].summary, "保底摘要是干巴但真实的机器摘要"
 
-    agent._finish_delegated("succeeded", summary="delivery: 没做成，坑壁有缺口")
+    agent._delegations.finish("succeeded", summary="delivery: 没做成，坑壁有缺口")
     assert ledger.get("d-1") is None, "终态粘滞：LLM 后到的交付不复活也不回退账面状态"
     await agent.stop()
 
@@ -1249,8 +1252,8 @@ async def test_summary_failure_falls_back_to_first_sentence() -> None:
     agent._llm = llm
 
     long_text = "饿了没吃上。翻过箱子没有面包，合成台缺干海带块，烧炼炉缺原料。" + "细节" * 200
-    # 直呼调度器（白话速览异常超长时的兜底路径）
-    agent._schedule_attention_material(long_text)
+    # 直呼素材发布器（白话速览异常超长时的兜底路径）
+    agent._attention_material.schedule(long_text)
     await _wait_until(lambda: len(_attention_events(bus)) == 1)
 
     emitted = _attention_events(bus)[0]

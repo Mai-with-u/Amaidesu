@@ -26,8 +26,9 @@ from contextlib import suppress
 from copy import deepcopy
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
-from src.agents.minecraft.attention_matrix import classify, summarize
+from src.agents.minecraft.attention_material import AttentionMaterialPublisher
 from src.agents.minecraft.context import FACTS_KEY, MinecraftHistoryCompactor, close_interrupted_calls, json_text
+from src.agents.minecraft.delegation_book import DelegationBook
 from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_label, pause_notice
 from src.agents.minecraft.glance import glance_brief, glance_scene, glance_self
 from src.agents.minecraft.goals import GoalWatch
@@ -45,7 +46,14 @@ from src.agents.minecraft.maicraft import (
     goal_run_of,
     reply_of,
 )
-from src.agents.minecraft.repeated_notice import notice_present, repeat_reference
+from src.agents.minecraft.notice_router import (
+    GAME_NOT_CONNECTED,
+    MAX_BATCH_BODY_EVENTS,
+    PROMPT_SOURCE_LABELS,
+    attention_notice,
+    body_notice_content,
+    route_body_event,
+)
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction, WakeEvenIdle
 from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
@@ -73,78 +81,8 @@ __all__ = ["MinecraftAgent"]
 # 游戏决策使用独立用途。
 MINECRAFT_PROFILE = "minecraft"
 
-# 递话来源标签：运营在控制面直接说的话与主播决策循环递来的补充分开标注。
-_PROMPT_SOURCE_LABELS = {"operator": "[运营原话]", "planner-react": "[主播补充]"}
-
-# 本批任务期间保留的身体事件条数上限（上报携带的任务上下文，多了只会淹没重点）
-_MAX_BATCH_BODY_EVENTS = 5
-# 需要告诉任务的身体事件：其余种类（临时任务开始与结束）只记进本批上下文、上报主播。
-_BODY_NOTICES = {
-    "need_unhandled": "[身体] {message}。这是观察不是命令：身体自己处理不了它，需要时调整计划或上报主播。",
-    "character_died": (
-        "[身体] {message}。Mod 会挂出一条死亡恢复决策等你回答，按问题里给的选项选（选重生才会复活）；"
-        "目标保留着，复活后接着做。复活后先 maicraft_observe(what=self) 看一眼自己"
-        "（位置变了，背包可能也变了），再决定要不要调整计划或上报主播。"
-    ),
-}
-
-# 跟随中的处境变化：跟随还在进行，角色自己会等、会找，模型据此决定要不要换许可重下、取消或跟主播说一声。
-_FOLLOW_NOTICE = (
-    "[跟随] {message}。这是观察不是命令：跟随还在进行，跟不过去会原地等、跟丢了会自己找；"
-    "需要时换许可重下（例如放开 change_blocks）、取消，或跟主播说一声。"
-)
-
-# 天色变了（天黑、天亮、下雨、雨停）：身体照常做手上的事，夜里能弄到床会自己找空当去睡、
-# 弄不到床又打不过会挖坑封顶熬到天亮；模型据此决定要不要专门安排睡觉、回家或赶在天黑前收尾。
-_SKY_NOTICE = (
-    "[天色] {message}。这是观察不是命令：身体照常做手上的事，夜里能弄到床会自己找空当去睡，"
-    "弄不到床又打不过会挖坑封顶熬到天亮；要专门安排睡觉、回家或赶在天黑前收尾就调整计划，不用就接着做。"
-)
-
-# 计时到点：模型自己用 timer 设的"过 N 秒叫我"到了，Mod 那句话（编号、备注、设了多少秒、此刻天色）原样带上；
-# 计时到点就用掉了，还要再等得重新设，说清这一点免得模型以为它还挂着。
-_TIMER_NOTICE = (
-    "[计时] {message}。这是你自己用 timer 设的到点提醒：按备注去看一眼、做决定；"
-    "这个计时已经用掉了，还要再等就重新设一个。"
-)
-
-# 游戏没连上时拒收委派的原因：经委派工具原样回给派活的一方，它据此等连上再派，
-# 不让这边接了活却只能拿截屏一块块显示器去找游戏窗口。
-_GAME_NOT_CONNECTED = (
-    "游戏没连上：maicraft 一个工具都没有（Minecraft 客户端没开，或 MaiCraft 的 MCP 没连上），没法操作角色；连上后再派"
-)
-
 # 只读查询目标的操作：一整轮都在查还在跑的目标、没做别的，就是在轮询等结果。
 _GOAL_POLLING_OPERATIONS = frozenset({"get", "list"})
-
-# 长自由文本事件的概述阈值：发给主播素材前超过它先用 summary 档压成保信息摘要，
-# 短文直通（进展类事件中位几十字符，天然分开）
-_ATTENTION_SUMMARY_THRESHOLD_CHARS = 300
-# 概述降级的首句斩尾上限：只留第一句，再多截断（斩尾是兜底，不弃用）
-_SUMMARY_FALLBACK_MAX_CHARS = 120
-# 概述走 summary 档（低成本，每场几次调用）
-_SUMMARY_PROFILE = "summary"
-
-
-def _first_sentence_truncation(text: str) -> str:
-    """概述的降级形态：只留第一句，句子本身太长再硬截断。"""
-    stripped = str(text or "").strip()
-    for separator in ("。", "！", "？", "!?", "\n"):
-        index = stripped.find(separator)
-        if index >= 0:
-            stripped = stripped[: index + len(separator)]
-            break
-    if len(stripped) > _SUMMARY_FALLBACK_MAX_CHARS:
-        stripped = stripped[:_SUMMARY_FALLBACK_MAX_CHARS]
-    return stripped
-
-
-# 概述提示词：只压缩不评价——防多出一个自由发挥的转述者
-_SUMMARY_COMPRESS_INSTRUCTION = (
-    "把下面这段 Minecraft 游戏事件长文压缩成一段保信息摘要：保留目标、试过的办法、"
-    "失败或缺的东西、数量与下一步指向等全部事实细节；只压缩不评价——不加评论、"
-    "不臆测、不改变任何事实。直接输出摘要正文。"
-)
 
 
 class MinecraftAgent(BaseAgent):
@@ -253,9 +191,9 @@ class MinecraftAgent(BaseAgent):
         self._tail_images = TailImages()
         # 相邻两次推理请求的历史只该在尾部追加；集中整理与开新任务之外的改写记告警
         self._prefix_guard = PrefixGuard("MinecraftAgent")
-        # 本批已吸收的委派任务号（进入 running）与待写终态的委派任务号
-        self._delegated_batch_ids: List[str] = []
-        self._delegated_finished_ids: List[str] = []
+        # 委派账：批内追踪（两份任务号清单）与账面写入的单一管辖；批任务号
+        # 只读视图供目标账本联动结算。批生命周期由本 Agent 驱动，账只管记账
+        self._delegations = DelegationBook(task_tracker=task_tracker, agent_name=self.name)
 
         # 后台目标账本：在跟踪的目标此刻的样子、最近结束的目标、被暂停的目标，
         # 以及目标 ↔ 任务账/委派账的记账联动（通知路由留在 Agent）。
@@ -263,8 +201,6 @@ class MinecraftAgent(BaseAgent):
         # 最近一条身体急事收尾的那句话与收到的时刻：紧接着到的暂停通知带上它，说清主任务为什么停在半路。
         self._urgent_before_pause: Optional[tuple[str, float]] = None
 
-        # 通用任务基建（组合根注入；缺省 None = 委派与目标都不记账，只在本 Agent 内跟踪）
-        self._task_tracker: Optional[Any] = task_tracker
         # Agent 私有 MCP（_on_start 装配）
         self._mcp_client: Optional[Any] = None
         self._mcp_provider: Optional[Any] = None
@@ -284,8 +220,11 @@ class MinecraftAgent(BaseAgent):
         self._batch_active: bool = False
         self._batch_body_events: List[Dict[str, Any]] = []
         self._body_notified: set = set()
-        # 在跑的长文概述后台任务：持引用防被垃圾回收，完成即移除
-        self._summary_tasks: set[asyncio.Task[None]] = set()
+        # 主播素材发布器：身体事件原文 → game.attention_required（长文先概述，后台发布）
+        self._attention_material = AttentionMaterialPublisher(
+            llm_getter=lambda: self._llm,
+            emit=lambda message, scene=None: self._emit_game_event("attention_required", message, scene=scene or ""),
+        )
         # 挂在消息队列里、还没被模型读到的那条天色通知：新的天色来了就把它换掉，队列里只留最新一条。
         self._sky_notice: Optional[tuple] = None
         self._task_reported = False
@@ -330,36 +269,11 @@ class MinecraftAgent(BaseAgent):
         self._live_active = False
         dropped = len(self._message_queue)
         self._message_queue.clear()
-        settled = self._settle_delegated_on_live_end()
+        settled = self._delegations.settle_on_live_end()
         self._logger.info(
             f"场次已结束（id={payload.live_session_id}）：minecraft 收工"
             f"（在途批跑完当前步即停；丢弃 {dropped} 条未处理消息；强制结算 {settled} 个悬置委派任务）"
         )
-
-    def _settle_delegated_on_live_end(self) -> int:
-        """下播强制结算：名下所有非终态委派任务置 cancelled（结算原因"下播自动收尾"）。
-
-        挂在 waiting_for_decision 的悬置条目若不收尾，任务账本跨场残留、
-        下次开播前状态不清——收工兜底（丢消息 + 收工态拒收新委派）之外
-        把已在账的也一并结清。单写者规则不破：agent 型任务本就由执行
-        Agent（自己）写入。 Returns: 结算条数。
-        """
-        if self._task_tracker is None:
-            return 0
-        ledger = self._task_tracker.ledger
-        settled = 0
-        for task_id in ledger.active_task_ids():
-            record = ledger.get(task_id)
-            if record is None or record.source != "agent" or record.executor != self.name:
-                continue
-            if ledger.update(task_id, "cancelled", summary="下播自动收尾") is not None:
-                settled += 1
-            else:
-                self._logger.debug(f"下播结算跳过任务 {task_id}（幂等或已终态移除）")
-        # 追踪清单随账面清空：跨场不再有可"重写 running"的旧任务
-        self._delegated_batch_ids.clear()
-        self._delegated_finished_ids.clear()
-        return settled
 
     async def _bind_agent_owned_mcp(self) -> None:
         """装配 Agent 私有 MCP server（[agents.minecraft.mcp]）——失败常驻重试。
@@ -566,7 +480,7 @@ class MinecraftAgent(BaseAgent):
         if not self._live_active:
             self._logger.warning(f"收工态拒收递话（source={source or '未知'}）：{content[:60]}")
             return False
-        label = _PROMPT_SOURCE_LABELS.get(source, "")
+        label = PROMPT_SOURCE_LABELS.get(source, "")
         self._message_queue.append(MinecraftInstruction("", f"{label}\n{content}" if label else content))
         self._wake_event.set()
         self._logger.info(f"MinecraftAgent 收到递话（source={source or '未知'}）：{content[:60]}")
@@ -576,14 +490,13 @@ class MinecraftAgent(BaseAgent):
         """接收委派（framework_delegate）：指令入队（带任务号）+ 唤醒；收工态拒收并如实记账；游戏没连上时拒收并说明原因。"""
         if not self._live_active:
             self._logger.warning(f"收工态拒收委派（task_id={task_id}）：{instruction[:60]}")
-            if self._task_tracker is not None:
-                self._task_tracker.ledger.update(task_id, "cancelled", summary="收工态拒收（下播即收工）")
+            self._delegations.reject(task_id, summary="收工态拒收（下播即收工）")
             return None
         if not self._has_maicraft_tools():
             # 开播了但 maicraft 一个工具都没有（客户端没开、MCP 没连上）：接下来没有任何办法操作角色，
             # 接了只会拿截屏翻显示器找游戏窗口白耗几分钟。直接拒收，原因原样回给派活的一方，等连上再派。
             self._logger.warning(f"游戏没连上，拒收委派（task_id={task_id}）：{instruction[:60]}")
-            return _GAME_NOT_CONNECTED
+            return GAME_NOT_CONNECTED
         self._message_queue.append(MinecraftInstruction(task_id, instruction))
         self._wake_event.set()
         self._logger.info(f"MinecraftAgent 收到委派（task_id={task_id}）：{instruction[:60]}")
@@ -598,18 +511,11 @@ class MinecraftAgent(BaseAgent):
         queued = [item for item in self._message_queue if item[0] == task_id]
         if queued:
             self._message_queue = deque(item for item in self._message_queue if item[0] != task_id)
-            if self._task_tracker is not None:
-                self._task_tracker.ledger.update(task_id, "cancelled", summary=f"被取消（source={source or '未知'}）")
+            self._delegations.reject(task_id, summary=f"被取消（source={source or '未知'}）")
             self._logger.info(f"MinecraftAgent 队列中的委派已撤（task_id={task_id}, source={source or '未知'}）")
             return True
-        if task_id not in self._delegated_batch_ids and task_id not in self._delegated_finished_ids:
+        if not self._delegations.cancel(task_id, summary=f"被取消（source={source or '未知'}）"):
             return False
-        if task_id in self._delegated_batch_ids:
-            self._delegated_batch_ids.remove(task_id)
-        if task_id in self._delegated_finished_ids:
-            self._delegated_finished_ids.remove(task_id)
-        if self._task_tracker is not None:
-            self._task_tracker.ledger.update(task_id, "cancelled", summary=f"被取消（source={source or '未知'}）")
         self._inject_wakeup_message(
             f"[系统] 任务 {task_id} 已被取消，请停止相关工作；还在跑的游戏目标用 maicraft_goal(operation=cancel) 取消。"
         )
@@ -716,12 +622,12 @@ class MinecraftAgent(BaseAgent):
                 elif isinstance(queued, WakeEvenIdle):
                     self._task_suspended = False
                 if task_id:
-                    self._delegated_batch_ids.append(task_id)
+                    self._delegations.absorb(task_id)
                 messages.append({"role": "user", "content": content})
             if opening_due:
                 opening_due = False
                 await self._skill_support.append_opening_bundle(messages)
-            self._mark_delegated_running()
+            self._delegations.mark_running()
             steps += 1
 
             if not await self._prepare_context(messages, tool_defs):
@@ -866,7 +772,7 @@ class MinecraftAgent(BaseAgent):
             delivery = content.strip()
             await self._emit_report("delivery", delivery or "任务完成")
             self._task_finished = True
-            self._finish_delegated("succeeded", summary=delivery or "任务完成")
+            self._delegations.finish("succeeded", summary=delivery or "任务完成")
             self._logger.info(f"任务批次自然终止（{steps} 步），系统兜底交付")
         return False
 
@@ -981,7 +887,7 @@ class MinecraftAgent(BaseAgent):
             self._goals.untrack(run.goal_id)
             self._goal_ledger.forget(run.goal_id)
             self._goal_ledger.remember_finished(run)
-            self._goal_ledger.update_task_ledger(run, batch_task_ids=self._delegated_finished_ids)
+            self._goal_ledger.update_task_ledger(run, batch_task_ids=self._delegations.finished_ids)
             return
         if not self._goals.tracking(run.goal_id) and arguments.get("operation") == "resume":
             # 重启或重进世界后恢复的目标：模型明确解除暂停，从此由宿主跟踪。
@@ -989,7 +895,7 @@ class MinecraftAgent(BaseAgent):
             return
         if self._goals.tracking(run.goal_id):
             self._goal_ledger.note(run)
-            self._goal_ledger.update_task_ledger(run, batch_task_ids=self._delegated_finished_ids)
+            self._goal_ledger.update_task_ledger(run, batch_task_ids=self._delegations.finished_ids)
 
     def _polls_running_goal(self, name: str, arguments: Dict[str, Any]) -> bool:
         """这次调用只是在查询还在跑的目标（没提问、没被暂停），不算推进。
@@ -1029,18 +935,18 @@ class MinecraftAgent(BaseAgent):
         """
         before = self._goal_ledger.note_of(run.goal_id)
         if run.finished:
-            self._goal_ledger.settle_finished(run, batch_task_ids=self._delegated_finished_ids)
+            self._goal_ledger.settle_finished(run, batch_task_ids=self._delegations.finished_ids)
             self._inject_wakeup_message(finish_notice(run, self_brief))
             return
         self._goal_ledger.note(run)
         if stalled:
-            self._goal_ledger.note_stalled(run, batch_task_ids=self._delegated_finished_ids)
+            self._goal_ledger.note_stalled(run, batch_task_ids=self._delegations.finished_ids)
             await self._emit_game_event(
                 "attention_required",
                 f"有目标停着没动静：目标 {run.goal_id}（{goal_label(run)}）很长时间没有新事件，还没结束。",
             )
             return
-        self._goal_ledger.update_task_ledger(run, batch_task_ids=self._delegated_finished_ids)
+        self._goal_ledger.update_task_ledger(run, batch_task_ids=self._delegations.finished_ids)
         if run.state == AWAITING_ANSWER and before.get("question") != run.question:
             self._inject_wakeup_message(
                 f"[系统] 目标 {run.goal_id}（{goal_label(run)}）在等你回答：{json_text(run.question)}。"
@@ -1066,118 +972,46 @@ class MinecraftAgent(BaseAgent):
 
     async def _on_goal_gone(self, goal_id: int, reason: str) -> None:
         """在跟踪的目标查不到了（多半是换了世界）：如实告诉任务，不让它挂着等不来的结果。"""
-        self._goal_ledger.mark_gone(goal_id, reason, batch_task_ids=self._delegated_finished_ids)
+        self._goal_ledger.mark_gone(goal_id, reason, batch_task_ids=self._delegations.finished_ids)
         self._inject_wakeup_message(f"[系统] 目标 {goal_id} 不在了：{reason}。按现场重新决定下一步。")
 
     async def _on_body_event(self, event: Dict[str, Any]) -> None:
-        """生存需求的临时任务、处理不了的需求、角色死亡、跟随的处境变化、天色变了与计时到点：都记进本批上下文。
+        """身体事件记进本批上下文，并按路由表分派到通道。
 
-        处理不了的需求、角色死亡、跟随的处境变化唤醒任务告诉模型（前两种同时告诉主播）；
-        计时到点手上没有任务也叫醒模型；天色变了不唤醒，挂在队列里随下一次唤醒带给模型；临时任务的开始与结束只告诉主播。
-        临时任务收尾那句话另外留给紧接着的暂停通知：撤离后主任务停在半路时，游戏 Agent 从暂停通知里读到它。
+        每类事件走哪条通道、对模型说什么话，由 ``notice_router`` 的路由表定义
+        （唤醒语义与文案的取舍在那里一处可查）；本方法只执行通道动作。
         """
         kind = str(event.get("kind") or "")
         message = str(event.get("message") or kind)
         record = {"event_type": kind, "message": message, "cursor": event.get("cursor")}
         self._batch_body_events.append(record)
-        if len(self._batch_body_events) > _MAX_BATCH_BODY_EVENTS:
-            self._batch_body_events = self._batch_body_events[-_MAX_BATCH_BODY_EVENTS:]
-        if kind == "temporary_task_finished":
+        if len(self._batch_body_events) > MAX_BATCH_BODY_EVENTS:
+            self._batch_body_events = self._batch_body_events[-MAX_BATCH_BODY_EVENTS:]
+        route = route_body_event(kind)
+        if route.urgent_marker:
             # 急事收尾：撤离甩开追兵后人已不在原地，Mod 写"主任务停在半路等下一步指示"，紧接着把主任务挂成暂停。
             # 记下这句交给随后的暂停通知，游戏 Agent 才知道是撤离把角色带离了原地，不会猜成游戏重连。
             self._urgent_before_pause = (message, time.monotonic())
-        if kind == "sky_changed":
-            # 天黑、天亮、下雨、雨停：只挂进队列不唤醒；给观众的叙述由注意流采集器出，这里不再上报主播。
-            self._carry_sky_notice(message)
-            return
-        if kind == "follow_status":
-            # 跟随的处境变了：任务还没结束就告诉模型；给观众的叙述由注意流采集器出，这里不再上报主播。
+        if route.channel == "carry_sky":
+            self._carry_sky_notice(route.template.format(message=message))
+        elif route.channel == "wake_even_idle":
+            self._wake_even_idle(route.template.format(message=message))
+        elif route.channel == "inject_if_busy":
             if self._batch_active or not self._task_finished:
-                self._inject_wakeup_message(_FOLLOW_NOTICE.format(message=message))
-            return
-        if kind == "timer_due":
-            self._wake_for_timer(message)
-            return
-        notice = _BODY_NOTICES.get(kind)
-        if notice is not None:
-            # 处理不了的需求、角色死亡：身体自己顾不过来，任务还没结束就注入一条通知唤醒模型，同时上报主播。
-            # 死亡时 Mod 让目标停在原地，另挂一条死亡恢复决策等模型选（决策提问另由决策回调唤醒）；
-            # 这里只说明来龙去脉、提醒复活后先看一眼自己，不催模型重下目标。
-            if self._batch_active or not self._task_finished:
-                self._inject_wakeup_message(self._body_notice_content(kind, notice, message))
-            # 必须传 Mod 原话：白话速览的分句改写器会整段丢弃排查类分句（实测 30 句输入只剩
-            # 一句"有件事没办成"），排查细节全灭；长度交给素材调度器（长文压缩、短文直通）
-            self._schedule_attention_material(message)
-            return
-        if not self._batch_active or (kind, message) in self._body_notified:
-            return
-        self._body_notified.add((kind, message))
-        # 任务进行中的急事：开头点明是在做事时碰上的，正文是白话化的 Mod 原话
-        spoken = summarize(classify(kind) or "unknown", kind, message)
-        notice = f"执行任务时{spoken}" if kind == "temporary_task_started" else spoken
-        await self._emit_game_event("attention_required", notice, already_resolved=kind == "temporary_task_finished")
-
-    def _schedule_attention_material(self, message: str) -> None:
-        """把一条身体事件转成主播素材（game.attention_required）：长文先概述，不阻塞事件主流程。
-
-        超过阈值的长自由文本（need_unhandled 的逐来源排查说明、目标失败枚举等）经 summary 档
-        压成保信息摘要再发；载荷两栏——概述进 message，原文留档进 scene。概述是后台任务：
-        失败静默降级为首句斩尾并记 debug 日志。
-        """
-        if len(message) <= _ATTENTION_SUMMARY_THRESHOLD_CHARS:
-            task = asyncio.create_task(self._emit_attention_material(message))
-        else:
-            task = asyncio.create_task(self._emit_attention_material_with_summary(message))
-        self._summary_tasks.add(task)
-        task.add_done_callback(self._summary_tasks.discard)
-
-    async def _emit_attention_material(self, message: str) -> None:
-        await self._emit_game_event("attention_required", message)
-
-    async def _emit_attention_material_with_summary(self, message: str) -> None:
-        """长文的两栏载荷：压缩概述进素材，原文留档；概述拿不到就降级首句斩尾。"""
-        summary = await self._summarize_long_text(message)
-        await self._emit_game_event("attention_required", summary, scene=f"原文留档：{message}")
-
-    async def _summarize_long_text(self, message: str) -> str:
-        """长自由文本 → 保信息摘要（summary 档）；失败降级首句斩尾（debug 记原因）。"""
-        if self._llm is None:
-            return _first_sentence_truncation(message)
-        try:
-            response = await self._llm.generate(
-                [{"role": "user", "content": f"{_SUMMARY_COMPRESS_INSTRUCTION}\n\n{message}"}],
-                profile=_SUMMARY_PROFILE,
+                self._inject_wakeup_message(
+                    body_notice_content(route, message, history=self._messages, queue=self._message_queue)
+                )
+            if route.publish_material:
+                # 必须传 Mod 原话：白话速览的分句改写器会整段丢弃排查类分句（实测 30 句输入只剩
+                # 一句"有件事没办成"），排查细节全灭；长度交给素材发布器（长文压缩、短文直通）
+                self._attention_material.schedule(message)
+        elif route.channel == "attention_event":
+            if not self._batch_active or (kind, message) in self._body_notified:
+                return
+            self._body_notified.add((kind, message))
+            await self._emit_game_event(
+                "attention_required", attention_notice(route, message), already_resolved=route.already_resolved
             )
-        except Exception as exc:  # noqa: BLE001 - 概述失败静默降级，不影响事件主流程
-            self._logger.debug(f"长文概述调用失败，降级首句斩尾: {type(exc).__name__}: {exc}", exc=True)
-            return _first_sentence_truncation(message)
-        summary = (response.content or "").strip()
-        if response.success and summary and not response.tool_calls:
-            return summary
-        self._logger.debug(
-            f"长文概述响应不可用（success={response.success}，带工具调用={bool(response.tool_calls)}），降级首句斩尾"
-        )
-        return _first_sentence_truncation(message)
-
-    def _body_notice_content(self, kind: str, notice: str, message: str) -> str:
-        """身体通知交给模型的正文。
-
-        处理不了的需求（饿了没吃上的说明会列出每个来源没弄到的原因，常有几千字）和对话历史里、
-        或待读队列里一字不差的那条重复时，只留一句指回前面那条；前面那条已被历史整理换成摘要、
-        或根本还没读到时，指过去没有意义，完整展示。其余通知（角色死亡等）每次都是新事实，原样给。
-        """
-        content = notice.format(message=message)
-        if kind != "need_unhandled" or not notice_present(content, self._messages, self._message_queue):
-            return content
-        return repeat_reference(message)
-
-    def _wake_for_timer(self, message: str) -> None:
-        """计时到点：模型自己设的"过 N 秒叫我"到了，不管手上有没有任务都叫醒它，Mod 那句话原样带上。
-
-        不能像跟随那样只在任务进行中才说：模型设完计时多半去干别的、交付了或闲着，只在任务中才叫就永远等不到。
-        给观众的叙述不出：这是模型给自己定的回头看一眼，注意流分类表把它归进静默。
-        """
-        self._wake_even_idle(_TIMER_NOTICE.format(message=message))
 
     def _wake_even_idle(self, content: str) -> None:
         """排一条闲着也要叫醒模型的通知（计时到点、Mod 挂出的决策），并叫醒 worker。
@@ -1192,20 +1026,19 @@ class MinecraftAgent(BaseAgent):
         self._message_queue.append(WakeEvenIdle("", content))
         self._wake_event.set()
 
-    def _carry_sky_notice(self, message: str) -> None:
-        """天色变了：任务还没结束就挂进消息队列但不唤醒，随本批下一步或下一次唤醒（目标结束、提问、暂停、主播新指令）带给模型。
+    def _carry_sky_notice(self, content: str) -> None:
+        """挂一条不唤醒模型的通知，队列里只留最新一条（天色用）。
 
-        天黑后身体自己会去睡或封顶自保，用不着模型立刻插手；为一次天黑天亮就把等着目标的模型叫醒，
-        只会白花一次推理、打断它手上的安排。队列里只留最新一条：长目标跑过几轮昼夜时，模型醒来只要知道现在的天色。
+        随本批下一步或下一次唤醒（目标结束、提问、暂停、主播新指令）带给模型；
         任务已交付时不挂：空闲的游戏 Agent 不会处理它，等到下个任务才读到只会是过时的天色。
         """
-        # 先撤下还没被读到的上一条天色，再按任务是否还在进行决定挂不挂这一条。
+        # 先撤下还没被读到的上一条，再按任务是否还在进行决定挂不挂这一条。
         stale, self._sky_notice = self._sky_notice, None
         if stale is not None and stale in self._message_queue:
             self._message_queue.remove(stale)
         if not self._batch_active and self._task_finished:
             return
-        self._sky_notice = ("", _SKY_NOTICE.format(message=message))
+        self._sky_notice = ("", content)
         self._message_queue.append(self._sky_notice)
 
     @staticmethod
@@ -1387,44 +1220,13 @@ class MinecraftAgent(BaseAgent):
         return work
 
     # ==================================================================
-    # 委派账面与上报
+    # 上报
     # ==================================================================
-
-    def _mark_delegated_running(self) -> None:
-        """把本批吸收的委派任务标记为进行中，并入终态追踪清单。"""
-        if self._task_tracker is None:
-            self._delegated_batch_ids.clear()
-            return
-        for task_id in self._delegated_finished_ids:
-            self._task_tracker.ledger.update(task_id, "running", summary="执行 Agent 已恢复原任务")
-        for task_id in self._delegated_batch_ids:
-            self._task_tracker.ledger.update(task_id, "running", summary="执行 Agent 已开始处理")
-            self._delegated_finished_ids.append(task_id)
-        self._delegated_batch_ids.clear()
-
-    def _finish_delegated(self, status: str, *, summary: str) -> None:
-        if self._task_tracker is None:
-            return
-        for task_id in self._delegated_finished_ids:
-            self._task_tracker.ledger.update(task_id, status, summary=summary)
-        self._delegated_finished_ids.clear()
-
-    def _hold_delegated(self, reason: str) -> None:
-        """委派停在待定夺：保留追踪清单，主播回话后批次重启时重写 running。"""
-        if self._task_tracker is None:
-            return
-        for task_id in self._delegated_finished_ids:
-            self._task_tracker.ledger.update(
-                task_id,
-                "waiting_for_decision",
-                summary=reason,
-                snapshot={"waiting_for_instruction": True, "reason": reason},
-            )
 
     async def _suspend_with_report(self, reason: str) -> None:
         """角色已停止自动行动：主动上报待定夺，并保留原委派。"""
         self._task_suspended = True
-        self._hold_delegated(reason)
+        self._delegations.hold(reason)
         await self._emit_report("escalation", reason)
 
     async def _handle_report(self, kind: str, content: str, scene: str) -> Optional[str]:
@@ -1442,9 +1244,9 @@ class MinecraftAgent(BaseAgent):
         self._task_finished = kind == "delivery"
         self._task_suspended = kind == "escalation"
         if kind == "delivery":
-            self._finish_delegated("succeeded", summary=f"{kind}: {content}")
+            self._delegations.finish("succeeded", summary=f"{kind}: {content}")
         else:
-            self._hold_delegated(f"{kind}: {content}")
+            self._delegations.hold(f"{kind}: {content}")
         return None
 
     # ==================================================================

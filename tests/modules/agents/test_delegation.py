@@ -59,9 +59,7 @@ class _StubAgent(BaseAgent):
         return True
 
     def cancel_task(self, task_id: str, source: str = "") -> bool:
-        if any(tid == task_id for tid, _ in self.received) and not any(
-            tid == task_id for tid, _ in self.cancel_calls
-        ):
+        if any(tid == task_id for tid, _ in self.received) and not any(tid == task_id for tid, _ in self.cancel_calls):
             self.cancel_calls.append((task_id, source))
             return True
         return False
@@ -285,7 +283,6 @@ async def test_task_cancel_rejects_non_framework_ids_and_unknown(rig: _Rig) -> N
     assert res.success is False and "task_id" in res.error_message
 
 
-
 # 真实 minecraft Agent：入队带任务号、批次状态写回、硬取消、断连恢复续跑
 
 
@@ -324,8 +321,8 @@ class _McRig(_Rig):
         while queue:
             tid, _content = queue.popleft()
             if tid:
-                self.minecraft._delegated_batch_ids.append(tid)
-        self.minecraft._mark_delegated_running()
+                self.minecraft._delegations.absorb(tid)
+        self.minecraft._delegations.mark_running()
 
     def queued_notices(self) -> List[str]:
         return [content for tid, content in self.minecraft._message_queue if not tid]
@@ -354,10 +351,10 @@ async def test_minecraft_hard_cancel_clears_ledger_tracking_and_notifies(mc: _Mc
 
     assert mc.minecraft.cancel_task(task_id, source="operator") is True
     assert mc.ledger.get(task_id) is None
-    assert mc.minecraft._delegated_batch_ids == [] and mc.minecraft._delegated_finished_ids == []
+    assert mc.minecraft._delegations.finished_ids == ()
     assert any(task_id in notice and "已被取消" in notice for notice in mc.queued_notices())  # 停手通知已入队
 
-    mc.minecraft._finish_delegated("succeeded", summary="迟到的收尾")  # 追踪清单已清空，账面不被污染
+    mc.minecraft._delegations.finish("succeeded", summary="迟到的收尾")  # 追踪清单已清空，账面不被污染
     assert mc.ledger.get(task_id) is None
     assert mc.minecraft.cancel_task(task_id, source="operator") is False  # 已终态再取消（REST 映射 404）
 
@@ -369,7 +366,7 @@ async def test_minecraft_cancel_clears_suspended_zombie(mc: _McRig) -> None:
     assert mc.ledger.get(task_id).status == "waiting_for_decision"
 
     assert mc.minecraft.cancel_task(task_id, source="operator") is True
-    assert mc.ledger.get(task_id) is None and mc.minecraft._delegated_finished_ids == []
+    assert mc.ledger.get(task_id) is None and mc.minecraft._delegations.finished_ids == ()
 
 
 async def test_framework_task_cancel_reaches_minecraft(mc: _McRig) -> None:
@@ -396,14 +393,14 @@ async def test_escalation_waits_for_decision_and_mcp_recovery_resumes(mc: _McRig
     record = mc.ledger.get(task_id)
     assert record is not None and record.status == "waiting_for_decision"
     assert record.snapshot.get("waiting_for_instruction") is True
-    assert mc.minecraft._delegated_finished_ids == [task_id] and mc.minecraft._task_suspended is True
+    assert mc.minecraft._delegations.finished_ids == (task_id,) and mc.minecraft._task_suspended is True
 
     mc.minecraft._on_mcp_recovered()
     assert mc.minecraft._task_suspended is False and mc.minecraft._wake_event.is_set()
     assert any("连接已恢复" in notice for notice in mc.queued_notices())
 
     mc.minecraft._message_queue.clear()  # 通知被下一步 flush 吸收，旧委派重写 running（账面复活）
-    mc.minecraft._mark_delegated_running()
+    mc.minecraft._delegations.mark_running()
     assert mc.ledger.get(task_id).status == "running"
     await mc.minecraft._handle_report("delivery", "现场评估后继续并完成", scene="")
     assert mc.ledger.get(task_id) is None
@@ -431,7 +428,7 @@ async def test_live_ended_settles_suspended_delegations(mc: _McRig) -> None:
     )
 
     assert mc.ledger.get(task_id) is None, "悬置条目已强制结算移除"
-    assert mc.minecraft._delegated_finished_ids == [] and mc.minecraft._delegated_batch_ids == []
+    assert mc.minecraft._delegations.finished_ids == ()
     await asyncio.sleep(0.05)  # task.changed 经后台任务调度广播，让一拍再断言
     assert changed[-1].status == "cancelled"
     assert "下播自动收尾" in changed[-1].summary
