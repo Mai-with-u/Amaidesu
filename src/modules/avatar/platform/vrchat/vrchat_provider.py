@@ -22,11 +22,23 @@ from pydantic import Field
 
 from src.modules.avatar.platform.vrchat.chatbox import VRChatChatboxBackend
 from src.modules.avatar.speech_binding import bind_speech_emotion
+from src.modules.avatar.tool_common import (
+    clamp_intensity,
+    contract_tool_specs,
+    dispatch_tool,
+    unknown_action_fail,
+)
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
-from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.models import (
+    ToolExecutionResult,
+    ToolInvocation,
+    ToolSpec,
+    tool_result_fail,
+    tool_result_ok,
+)
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.types.emotion_vocab import Emotion
 
@@ -38,37 +50,6 @@ try:
 except ImportError:
     PYTHON_OSC_AVAILABLE = False
     SimpleUDPClient = None  # type: ignore
-
-
-_VRCHAT_SET_EXPRESSION_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "emotion": {
-            "type": "string",
-            "enum": [e.value for e in Emotion],
-            "description": "情绪（17 枚举值之一，小写）",
-        },
-        "intensity": {
-            "type": "number",
-            "minimum": 0.0,
-            "maximum": 1.0,
-            "default": 0.5,
-            "description": "情绪强度（0.0–1.0）",
-        },
-    },
-    "required": ["emotion"],
-}
-
-_VRCHAT_TRIGGER_PRESET_ACTION_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "description": "预设动作名（取自 vrchat_list_preset_actions 返回的动作目录）",
-        },
-    },
-    "required": ["action"],
-}
 
 
 class VRChatProvider(BaseToolProvider):
@@ -174,47 +155,33 @@ class VRChatProvider(BaseToolProvider):
         return self.PROVIDER_NAME
 
     def list_tools(self) -> list[ToolSpec]:
-        return [
-            ToolSpec(
-                name="set_expression",
-                description=(
-                    "VRChat 设置主播当前情绪（17 枚举值 + 强度）。"
-                    "VRChat OSC 参数每 avatar 自定义、无标准表情通道，当前不渲染情绪面，"
-                    "动作类表达走 vrchat_trigger_preset_action"
-                ),
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_VRCHAT_SET_EXPRESSION_SCHEMA,
+        # 三个契约工具的声明样板走公共件；description 是平台文案，关键字传入
+        return contract_tool_specs(
+            self.PROVIDER_NAME,
+            set_expression=(
+                "VRChat 设置主播当前情绪（17 枚举值 + 强度）。"
+                "VRChat OSC 参数每 avatar 自定义、无标准表情通道，当前不渲染情绪面，"
+                "动作类表达走 vrchat_trigger_preset_action"
             ),
-            ToolSpec(
-                name="list_preset_actions",
-                description="列出 VRChat 可演的预设动作目录（挥手、鼓掌、跳舞等）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-            ),
-            ToolSpec(
-                name="trigger_preset_action",
-                description="触发一个预设动作（动作名取自 vrchat_list_preset_actions 返回的目录）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_VRCHAT_TRIGGER_PRESET_ACTION_SCHEMA,
-            ),
-        ]
+            list_preset_actions="列出 VRChat 可演的预设动作目录（挥手、鼓掌、跳舞等）",
+            trigger_preset_action="触发一个预设动作（动作名取自 vrchat_list_preset_actions 返回的目录）",
+        )
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
+        """分发到对应的 handler 方法（handlers 每次现构造，捕获本次参数）。"""
         args = invocation.arguments or {}
-        try:
-            n = invocation.tool_name
-            if n == "vrchat_set_expression":
-                return await self.set_expression(str(args.get("emotion", "")), float(args.get("intensity", 0.5)))
-            if n == "vrchat_list_preset_actions":
-                return await self.list_preset_actions()
-            if n == "vrchat_trigger_preset_action":
-                return await self.trigger_preset_action(str(args.get("action", "")))
-            return _fail(n, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'")
-        except Exception as exc:  # noqa: BLE001
-            self.logger.exception(f"VRChat 工具 {invocation.tool_name} 调用异常: {exc}")
-            return _fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
+        return await dispatch_tool(
+            invocation,
+            self.PROVIDER_NAME,
+            {
+                "vrchat_set_expression": lambda: self.set_expression(
+                    str(args.get("emotion", "")), float(args.get("intensity", 0.5))
+                ),
+                "vrchat_list_preset_actions": self.list_preset_actions,
+                "vrchat_trigger_preset_action": lambda: self.trigger_preset_action(str(args.get("action", ""))),
+            },
+            self.logger,
+        )
 
     # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
 
@@ -226,9 +193,9 @@ class VRChatProvider(BaseToolProvider):
         映射表外的情绪名按失败结果返回。动作类表达走 trigger_preset_action。
         """
         if emotion not in {e.value for e in Emotion}:
-            return _fail("vrchat_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
-        factor = min(1.0, max(0.0, float(intensity)))
-        return _ok(
+            return tool_result_fail("vrchat_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
+        factor = clamp_intensity(intensity)
+        return tool_result_ok(
             "vrchat_set_expression",
             True,
             {
@@ -242,22 +209,16 @@ class VRChatProvider(BaseToolProvider):
     async def list_preset_actions(self) -> ToolExecutionResult:
         """列出可演预设目录（配置的动作表）。"""
         actions = [{"name": name, "type": "emote"} for name in self.emotes]
-        return _ok("vrchat_list_preset_actions", True, {"actions": actions})
+        return tool_result_ok("vrchat_list_preset_actions", True, {"actions": actions})
 
     async def trigger_preset_action(self, action: str) -> ToolExecutionResult:
         """触发一个预设动作；未知名把目录随失败结果返回（失败即发现）。"""
         action = action.strip()
         if action in self.emotes:
             self._trigger_emote(action)
-            return _ok("vrchat_trigger_preset_action", True, {"action": action})
-        catalog = [entry["name"] for entry in (await self.list_preset_actions()).structured_content["actions"]]
-        return ToolExecutionResult(
-            tool_name="vrchat_trigger_preset_action",
-            success=False,
-            error_message=f"未知预设动作 '{action}'",
-            structured_content={"available_actions": catalog},
-            content=str(catalog),
-        )
+            return tool_result_ok("vrchat_trigger_preset_action", True, {"action": action})
+        catalog = [name for name in self.emotes]
+        return unknown_action_fail("vrchat_trigger_preset_action", action, catalog)
 
     # ===== 生命周期 =====
 
@@ -366,23 +327,6 @@ class VRChatProvider(BaseToolProvider):
         self.osc_client = None
         self._is_connected = False
         self.logger.info("VRChat OSC 连接已断开")
-
-
-def _ok(tool_name: str, success: bool, structured: Any = None) -> ToolExecutionResult:
-    return ToolExecutionResult(
-        tool_name=tool_name,
-        success=bool(success),
-        structured_content=structured,
-        content="" if structured is None else str(structured),
-    )
-
-
-def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
-    return ToolExecutionResult(
-        tool_name=tool_name,
-        success=False,
-        error_message=error_message,
-    )
 
 
 def create_vrchat_provider(

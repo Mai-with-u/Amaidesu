@@ -34,7 +34,13 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
-from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.models import (
+    ToolExecutionResult,
+    ToolInvocation,
+    ToolSpec,
+    tool_result_fail,
+    tool_result_ok,
+)
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.types.emotion_vocab import Emotion
 
@@ -165,22 +171,22 @@ class ExpressionSheetProvider(BaseToolProvider):
         小部件页按 ``image_url`` 取图展示。
         """
         if emotion not in {e.value for e in Emotion}:
-            return _fail("expression_sheet_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
+            return tool_result_fail("expression_sheet_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
         if not self.is_ready:
-            return _fail("expression_sheet_set_expression", self._not_ready_hint())
+            return tool_result_fail("expression_sheet_set_expression", self._not_ready_hint())
         factor = min(1.0, max(0.0, float(intensity)))
         filename = self._emotion_images.get(emotion)
         if filename is None:
             filename = self._emotion_images.get(FALLBACK_EMOTION)
             if filename is None:
-                return _fail(
+                return tool_result_fail(
                     "expression_sheet_set_expression",
                     f"目录中缺少 {emotion} 的差分图，且无 {FALLBACK_EMOTION}.png 兜底"
                     f"（目录：{self.image_dir}，已扫描到：{sorted(self._emotion_images.values())}）",
                 )
             self.logger.debug(f"情绪 '{emotion}' 缺差分图，回退 {filename}")
         self.render_count += 1
-        return _ok(
+        return tool_result_ok(
             "expression_sheet_set_expression",
             True,
             {
@@ -192,7 +198,7 @@ class ExpressionSheetProvider(BaseToolProvider):
 
     async def list_preset_actions(self) -> ToolExecutionResult:
         """列出可演预设目录（当前为空目录：静态立绘无动作面，后补）。"""
-        return _ok("expression_sheet_list_preset_actions", True, {"actions": []})
+        return tool_result_ok("expression_sheet_list_preset_actions", True, {"actions": []})
 
     async def trigger_preset_action(self, action: str) -> ToolExecutionResult:
         """触发一个预设动作；当前无动作可触发，未知名随空目录一并返回（失败即发现）。"""
@@ -288,23 +294,6 @@ class ExpressionSheetProvider(BaseToolProvider):
             f"表情差分形象未就绪：{self.last_error or '差分图片目录未就绪'}。"
             "请配置 avatar.toml [avatar.platform.expression_sheet] image_dir 后重启"
         )
-
-
-def _ok(tool_name: str, success: bool, structured: Any = None) -> ToolExecutionResult:
-    return ToolExecutionResult(
-        tool_name=tool_name,
-        success=bool(success),
-        structured_content=structured,
-        content="" if structured is None else str(structured),
-    )
-
-
-def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
-    return ToolExecutionResult(
-        tool_name=tool_name,
-        success=False,
-        error_message=error_message,
-    )
 
 
 def create_expression_sheet_provider(
