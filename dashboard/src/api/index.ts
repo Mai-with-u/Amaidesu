@@ -101,6 +101,9 @@ import type {
   MemoryMutationResponse,
   MemoryStatsResponse,
   LogsQueryResponse,
+  AvatarDebugStatusResponse,
+  AvatarDebugTriggerRequest,
+  AvatarDebugTriggerResponse,
 } from '@/types';
 
 const api = axios.create({
@@ -379,6 +382,18 @@ export const visionApi = {
   listMonitors: () => api.get<VisionMonitorsResponse>('/vision/monitors'),
   preview: (params: { monitor_index: number; region?: string; max_width?: number }) =>
     api.get<VisionPreviewResponse>('/vision/preview', { params }),
+};
+
+// 虚拟形象调试台（形象表情调试）
+//
+// `GET /avatar/debug/status`：四平台连接态 / 当前表情 / 动作目录 / 统计摘要，
+// 全部走平台无关契约面（同语义跨平台同名工具）；未装配平台按 connected=false 降级列出。
+// `POST /avatar/debug/trigger`：转发触发表情（17 情绪 + 强度）或参数直调
+// （仅 VTS）；前置不满足返回 404/409/400，业务拒绝以 success=false 的 200 回传。
+export const avatarApi = {
+  getDebugStatus: () => api.get<AvatarDebugStatusResponse>('/avatar/debug/status'),
+  triggerDebug: (request: AvatarDebugTriggerRequest) =>
+    api.post<AvatarDebugTriggerResponse>('/avatar/debug/trigger', request),
 };
 
 // Rundown（流程单编排页）

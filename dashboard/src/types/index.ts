@@ -1022,6 +1022,42 @@ export interface VisionPreviewResponse {
   region: number[] | null;
 }
 
+/** 单平台虚拟形象调试状态（`GET /avatar/debug/status` 成员） */
+export interface AvatarDebugPlatformStatus {
+  platform: string;
+  connected: boolean | null;
+  /** 各平台均未暴露"当前表情"读取通道，恒为 null（预留字段） */
+  current_expression: string | null;
+  detail: string;
+  actions: { name: string; type?: string }[];
+  emotions: string[];
+  stats: Record<string, unknown>;
+}
+
+/** `GET /avatar/debug/status` 响应 */
+export interface AvatarDebugStatusResponse {
+  platforms: AvatarDebugPlatformStatus[];
+}
+
+/** `POST /avatar/debug/trigger` 请求 */
+export interface AvatarDebugTriggerRequest {
+  platform: string;
+  kind: 'expression' | 'parameter' | 'action';
+  key: string;
+  value: number;
+}
+
+/** `POST /avatar/debug/trigger` 响应（success=false 表示业务拒绝，原因在 detail） */
+export interface AvatarDebugTriggerResponse {
+  platform: string;
+  kind: string;
+  key: string;
+  value: number;
+  success: boolean;
+  detail: string;
+  structured_content: Record<string, unknown> | null;
+}
+
 /** 单行观众统计（viewers 表行投影） */
 export interface ViewerListItem {
   user_id: string;
