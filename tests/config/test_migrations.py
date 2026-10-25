@@ -323,6 +323,19 @@ def _check_minecraft_companions(d: Path) -> None:
     assert "maicraft_attention" not in doc and "maicraft_chat" not in doc
 
 
+def _seed_bili_danmaku_message_config(d: Path) -> None:
+    doc = _rewound(d, "collectors.toml", "2.0.43")
+    doc["bili_danmaku"]["room_id"] = 12345
+    doc["bili_danmaku"]["message_config"] = {"default_user_id": "guest", "platform": "bilibili"}
+    write_doc(d, "collectors.toml", doc)
+
+
+def _check_bili_danmaku_message_config(d: Path) -> None:
+    section = read_doc(d, "collectors.toml")["bili_danmaku"]  # 缺 uid 改为丢弃、平台写死，整段退役
+    assert "message_config" not in section
+    assert section["room_id"] == 12345  # 同段其他配置原样保留
+
+
 CASES = [
     Case("force-field-rename", ("agents.toml",), _seed_force, _check_force),
     Case("text-adv-fake-knobs", ("agents.toml",), _seed_text_adv, _check_text_adv),
@@ -372,6 +385,12 @@ CASES = [
     ),
     Case(
         "minecraft-companion-collectors", ("collectors.toml",), _seed_minecraft_companions, _check_minecraft_companions
+    ),
+    Case(
+        "bili-danmaku-message-config",
+        ("collectors.toml",),
+        _seed_bili_danmaku_message_config,
+        _check_bili_danmaku_message_config,
     ),
     Case("widget-html-page", ("infra.toml",), _seed_widget_html_page, _check_widget_html_page),
 ]

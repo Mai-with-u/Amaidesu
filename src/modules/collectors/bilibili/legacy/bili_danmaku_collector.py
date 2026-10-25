@@ -16,7 +16,7 @@ try:
 except ImportError:
     aiohttp = None
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
@@ -26,26 +26,8 @@ from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
-
-class BiliDanmakuMessageConfig(BaseModel):
-    """Bilibili 弹幕消息处理配置（显式子模型——替代原 free-form dict）
-
-    default_user_id：未提供 uid 时使用的占位标识
-    platform：来源平台标识（默认 bilibili）
-    """
-
-    default_user_id: str = Field(
-        default="",
-        title="默认用户 ID",
-        description="弹幕未带 uid 时使用的占位标识（空 = 用昵称兜底）",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    platform: str = Field(
-        default="bilibili",
-        title="来源平台",
-        description="消息的来源平台标识",
-        json_schema_extra={"x-ui-advanced": True},
-    )
+# 平台标识是身份键 (platform, user_id) 的组成部分，由采集器作为装配期常量盖章，不开放配置
+_PLATFORM = "bilibili"
 
 
 class BiliDanmakuCollector(BaseCollector):
@@ -68,11 +50,6 @@ class BiliDanmakuCollector(BaseCollector):
 
         room_id: int = Field(default=0, title="直播间号", description="B站直播间号（0 = 未配置）")
         poll_interval: int = Field(default=3, title="轮询间隔", description="多久拉一次新弹幕（秒）", ge=1)
-        message_config: BiliDanmakuMessageConfig = Field(
-            default_factory=BiliDanmakuMessageConfig,
-            title="消息设置",
-            description="弹幕消息的身份与平台标识配置",
-        )
         emit_semantic_events: bool = Field(
             default=True,
             title="发语义事件",
@@ -104,7 +81,6 @@ class BiliDanmakuCollector(BaseCollector):
         self.typed_config = self.ConfigSchema.from_dict(self.config)
         self.room_id = self.typed_config.room_id
         self.poll_interval = self.typed_config.poll_interval
-        self.message_config = self.typed_config.message_config
         self._emit_semantic_events = self.typed_config.emit_semantic_events
         self.api_url = f"https://api.live.bilibili.com/xlive/web-room/v1/dM/gethistory?roomid={self.room_id}"
 
@@ -113,6 +89,8 @@ class BiliDanmakuCollector(BaseCollector):
         self._latest_timestamp: int = int(time.time() * 1000)
         self._session: Optional[aiohttp.ClientSession] = None
         self.is_started: bool = False
+        # 缺 uid 的弹幕每轮轮询都可能出现：只有第一次记 warning，之后降为 debug，避免刷屏
+        self._uid_missing_warned: bool = False
 
     async def start(self) -> None:
         """启动：开后台任务消费 collect()（内部 emit room.message.*）。"""
@@ -259,24 +237,35 @@ class BiliDanmakuCollector(BaseCollector):
             item: Bilibili API 返回的弹幕项
 
         Returns:
-            RoomMessagePayload: 弹幕事件载荷
+            RoomMessagePayload: 弹幕事件载荷；无文本或缺 uid 时返回 None（丢弃）
         """
         text = item.get("text", "")
         nickname = item.get("nickname", "未知用户")
 
-        # 默认 user_id
-        user_id = item.get("uid") or self.message_config.default_user_id or f"bili_{nickname}"
-
         if not text:
+            return None
+
+        # 接口没给 uid（缺字段或匿名请求时的 0）就丢弃这条弹幕：用昵称或固定占位符顶替，
+        # 会让多个观众并成同一个身份、画像互相串，宁缺毋滥。同一实例只在第一次记 warning
+        uid = item.get("uid")
+        if not uid:
+            detail = f"uid={uid!r}, nickname={nickname!r}"
+            if not self._uid_missing_warned:
+                self._uid_missing_warned = True
+                self.logger.warning(f"B 站弹幕缺少 uid（已丢弃，防多用户退化混淆）: {detail}；后续同类弹幕降为 debug")
+            else:
+                self.logger.debug(f"B 站弹幕缺少 uid（已丢弃）: {detail}")
             return None
 
         # 弹幕时间戳：优先使用 Bilibili API 返回的秒级时间戳（check_info.ts），缺失时兜底当前时间
         ts = item.get("check_info", {}).get("ts")
         timestamp_ms = int(ts * 1000) if ts else now_ms()
 
+        # platform 与官方源、LAPLACE 源统一盖 bilibili，uid 和 LAPLACE 的 uid 同属 B 站数字账号
         return RoomMessagePayload(
             message_type="danmaku",
-            user=RoomMessageUser(id=str(user_id), name=nickname),
+            platform=_PLATFORM,
+            user=RoomMessageUser(id=str(uid), name=nickname),
             content=text,
             timestamp_ms=timestamp_ms,
         )

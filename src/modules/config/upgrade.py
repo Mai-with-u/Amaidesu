@@ -644,6 +644,37 @@ register_file_hook(
 )
 
 
+# 旧版 B 站弹幕采集器 message_config 两个键的旧默认值：不等于它说明用户改过，迁移时记警告
+_BILI_DANMAKU_MESSAGE_OLD_DEFAULTS = {"default_user_id": "", "platform": "bilibili"}
+
+
+def _drop_bili_danmaku_message_config(data: Dict[str, Any]) -> List[str]:
+    """collectors.toml v2.0.44：删 ``[bili_danmaku.message_config]`` 段。
+
+    旧版 B 站弹幕采集器改为缺 uid 即丢弃：``default_user_id`` 是"缺 uid 时的占位身份"，
+    会让所有缺 uid 的观众并成一个人，随兜底一起退役；``platform`` 是身份键的组成部分，
+    改由采集器写死为 ``bilibili``，不再开放配置。段里改过的值（不等于旧默认）记一条
+    警告说明它已失效。对已迁移数据零变更（幂等）。
+    """
+    section = data.get("bili_danmaku")
+    if not isinstance(section, dict) or "message_config" not in section:
+        return []
+    message_config = section.pop("message_config")
+    if isinstance(message_config, dict):
+        for key, old_default in _BILI_DANMAKU_MESSAGE_OLD_DEFAULTS.items():
+            value = message_config.get(key)
+            if value is not None and value != old_default:
+                logger.warning(
+                    f"collectors.toml [bili_danmaku.message_config].{key} = {value!r} 已失效并删除："
+                    "缺 uid 的弹幕改为丢弃，平台标识固定为 bilibili"
+                )
+    return ["bili_danmaku.message_config"]
+
+
+# 生产钩子登记：collectors.toml v2.0.44（旧版 B 站弹幕采集器退役 message_config）
+register_file_hook("collectors.toml", "drop_bili_danmaku_message_config", "2.0.44", _drop_bili_danmaku_message_config)
+
+
 # Minecraft 字符预算的历届默认值：等于其中之一说明用户没改过，换用新的 token 预算默认值
 _MINECRAFT_CHAR_BUDGET_DEFAULTS = (120_000, 160_000)
 # 实测 Minecraft 历史约 2.9 字符折 1 token（16 万字符 ≈ 55k token），换算取整按 3

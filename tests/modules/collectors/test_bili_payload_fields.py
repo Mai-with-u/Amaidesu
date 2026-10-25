@@ -254,6 +254,23 @@ async def test_watched_change_is_a_state_event_gated_by_config(overrides: dict, 
     assert (payload.platform, payload.audience_total) == ("bilibili", 12000)
 
 
+def _legacy_item(**extra: Any) -> dict:
+    """旧版历史弹幕接口的单条弹幕形状。"""
+    return {"text": "hi", "nickname": "甲", "uid": 12345, "check_info": {"ts": 1700000000}, **extra}
+
+
+async def test_legacy_danmaku_stamps_platform_and_drops_missing_uid() -> None:
+    collector = BiliDanmakuCollector(config={"room_id": 1}, event_bus=None)
+
+    payload = await collector._create_danmaku_message(_legacy_item())
+    assert payload is not None
+    assert (payload.platform, payload.user.id, payload.user.name) == ("bilibili", "12345", "甲")  # 与 LAPLACE 同属 B 站 uid
+
+    for missing in (_legacy_item(uid=0), {k: v for k, v in _legacy_item().items() if k != "uid"}):
+        assert await collector._create_danmaku_message(missing) is None  # 不再用昵称兜底，防多用户退化成同一身份
+    assert collector._uid_missing_warned is True  # 首条告警后同类降为 debug
+
+
 def test_collector_registration_metadata_and_semantic_event_switch() -> None:
     for cls, name in ((BiliDanmakuOfficialCollector, "bili_danmaku_official"), (BiliDanmakuCollector, "bili_danmaku")):
         assert issubclass(cls, BaseCollector) and cls.name == name and "Bilibili" in cls.description
