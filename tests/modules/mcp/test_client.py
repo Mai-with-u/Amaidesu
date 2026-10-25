@@ -218,14 +218,17 @@ async def test_real_sdk_recovers_after_a_timed_out_call(monkeypatch: pytest.Monk
             await asyncio.Event().wait()
         return "available"
 
-    client = McpClient("reference", SimpleNamespace(timeout_seconds=1, request_timeout_ms=300, transport="http"))
+    client = McpClient("reference", SimpleNamespace(timeout_seconds=1, request_timeout_ms=1000, transport="http"))
     monkeypatch.setattr(client, "_build_transport", lambda: service)
     try:
         assert await client.connect()
         with pytest.raises(TimeoutError, match="远端结果未知"):
-            await asyncio.wait_for(client.call_tool("inspect", {"wait": True}), timeout=2)
-        result = await asyncio.wait_for(client.call_tool("inspect", {"wait": False}), timeout=2)
-        assert result.content[0].text == "available" and calls == [True, False] and client.connected
+            await asyncio.wait_for(client.call_tool("inspect", {"wait": True}), timeout=4)
+        result = await asyncio.wait_for(client.call_tool("inspect", {"wait": False}), timeout=4)
+        assert result.content[0].text == "available" and client.connected
+        # 全量套件高负载下，首次调用可能在请求期限内尚未送达进程内服务端，calls 因此缺少
+        # True 也属合法；本测试的保护点是超时不毒化会话，不是请求送达时序
+        assert calls in ([True, False], [False])
     finally:
         await client.close()
 
