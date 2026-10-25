@@ -26,12 +26,15 @@ reply 工具在生成台词**之后**、返回工具结果之前，用本模块�
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Sequence
 
 __all__ = [
     "NGRAM_SIZE",
     "SPEECH_DUPLICATE_RATIO",
     "SPEECH_GATE_WINDOW",
+    "SpeechGate",
+    "SpeechGateVerdict",
     "char_bigrams",
     "speech_overlap_ratio",
     "strip_citations",
@@ -113,3 +116,31 @@ def speech_overlap_ratio(speech: str, recent_speeches: Sequence[str]) -> float:
     if not known:
         return 0.0
     return len(candidate & known) / len(candidate)
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechGateVerdict:
+    """一句台词的重合度闸判定结果（ratio 附带供打回话术与观测）。"""
+
+    passed: bool
+    ratio: float
+
+
+class SpeechGate:
+    """台词重合度闸：成品台词对最近已说发言的 bigram 包含率检查。
+
+    判定口径见模块头部；窗口与阈值由构造注入（配置同源，Agent 构造
+    一份给 reply 工具与嘴共享）。语料传旧→新的完整列表，窗口截取在
+    闸内完成；调用方各自处置打回——reply 工具打回并引导重试，嘴直接
+    丢弃。
+    """
+
+    def __init__(self, *, window: int = SPEECH_GATE_WINDOW, ratio: float = SPEECH_DUPLICATE_RATIO) -> None:
+        self._window = max(0, int(window))
+        self._ratio = float(ratio)
+
+    def verdict(self, speech: str, recent_speeches: Sequence[str]) -> SpeechGateVerdict:
+        """判定一句台词是否与最近发言大面积重复（窗口 0 = 不检查恒放行）。"""
+        corpus = list(recent_speeches)[-self._window :] if self._window > 0 else []
+        ratio = speech_overlap_ratio(speech, corpus)
+        return SpeechGateVerdict(passed=ratio < self._ratio, ratio=ratio)

@@ -13,6 +13,7 @@ from src.agents.streamer.tools.reply_tool import ReplyToolProvider
 from src.agents.streamer.topic_gate import (
     SPEECH_DUPLICATE_RATIO,
     SPEECH_GATE_WINDOW,
+    SpeechGate,
     speech_overlap_ratio,
     strip_citations,
 )
@@ -227,7 +228,9 @@ async def test_gate_exempt_window_skips_overlap_check() -> None:
 async def test_gate_window_config_zero_disables_check() -> None:
     """窗口配置为 0 即关闭台词重合度检查（自检 false 仍打回）。"""
     provider = ReplyToolProvider(
-        replyer=_RepeatReplyer(), history_provider=lambda: _history("我在游戏里挖到了石料"), gate_window=0
+        replyer=_RepeatReplyer(),
+        history_provider=lambda: _history("我在游戏里挖到了石料"),
+        gate=SpeechGate(window=0),
     )
     result = await provider.invoke(
         _invocation({"topic_summary": "石料", "is_novel": True, "emotion": "neutral", "intensity": 0.5})
