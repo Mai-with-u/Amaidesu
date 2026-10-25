@@ -728,9 +728,7 @@ class Planner:
         env_block = EnvironmentBlock(
             minute_bucket_ms=(current_ms // 60000) * 60000,
             duration_so_far_ms=duration_so_far_ms,
-            current_stage_label=None,
             unread_summary=self._room_state.consume_topic_summary(),
-            key_changes=[],
         )
 
         person_profile_section = await self._collect_person_profiles(batch)
