@@ -103,6 +103,8 @@ declare module 'vue' {
     ToolCard: typeof import('./src/components/live/cards/ToolCard.vue')['default']
     TrendChart: typeof import('./src/components/llm/TrendChart.vue')['default']
     TtsWaterLevel: typeof import('./src/components/live/TtsWaterLevel.vue')['default']
+    ViewerIdentityCard: typeof import('./src/components/viewers/ViewerIdentityCard.vue')['default']
+    ViewerPicker: typeof import('./src/components/viewers/ViewerPicker.vue')['default']
     VisionCapturePanel: typeof import('./src/components/vision/VisionCapturePanel.vue')['default']
     WhisperCard: typeof import('./src/components/live/cards/WhisperCard.vue')['default']
     WidgetStatusBadge: typeof import('./src/components/widget/WidgetStatusBadge.vue')['default']
