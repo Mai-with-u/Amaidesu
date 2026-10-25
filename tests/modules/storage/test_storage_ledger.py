@@ -24,6 +24,8 @@ _TABLES = ("live_chat", "gifts", "super_chats", "game_events")
 class _FakeSessionManager:
     def __init__(self, pk: Optional[int]) -> None:
         self._pk = pk
+        # 主播发言行的平台归属（与采集器的 platform 一致，被回复计数据此找观众）
+        self.platform = "bilibili"
 
     async def resolve_pk(self) -> Optional[int]:
         return self._pk
@@ -173,7 +175,7 @@ async def test_streamer_speech_persists_reply_link_and_replied_stat(
 ) -> None:
     question = make_room_message(content="主播玩什么游戏？", message_id="msg_viewer_1")
     await _emit(event_bus, CoreEvents.ROOM_MESSAGE_DANMAKU, question)
-    speech = _speech("今天玩《双人成行》！", target_user_id="u123", reply_to_message_id="msg_viewer_1")
+    speech = _speech("今天玩《双人成行》！", target_user_id="tester", reply_to_message_id="msg_viewer_1")
     await _emit(event_bus, CoreEvents.STREAMER_SPEECH, speech)
 
     (row,) = await store.execute("SELECT * FROM live_chat WHERE message_type='speak'")
@@ -186,8 +188,12 @@ async def test_streamer_speech_persists_reply_link_and_replied_stat(
     )
     assert [r["reply"] for r in joined] == ["今天玩《双人成行》！"]
 
-    (viewer,) = await store.execute("SELECT * FROM viewers WHERE user_id='u123'")
-    assert (viewer["replied_count"], viewer["interaction_count"], viewer["message_count"]) == (1, 1, 0)
+    (viewer,) = await store.execute("SELECT * FROM viewers WHERE user_id='tester'")
+    assert (viewer["replied_count"], viewer["interaction_count"], viewer["message_count"]) == (1, 2, 1)
+
+    # 回复一个从没发过言（未建档）的外部 ID：只落主播发言，不凭空建观众
+    await _emit(event_bus, CoreEvents.STREAMER_SPEECH, _speech("你好陌生人", target_user_id="u_unknown"))
+    assert len(await store.execute("SELECT * FROM viewers")) == 1
 
 
 async def test_streamer_speech_insert_failure_is_swallowed(
@@ -216,8 +222,8 @@ async def test_streamer_speech_insert_failure_is_swallowed(
 @pytest.mark.parametrize(
     ("method", "event", "payload"),
     [
-        ("upsert_viewer_message", CoreEvents.ROOM_MESSAGE_DANMAKU, make_room_message(content="upsert 会炸")),
-        ("upsert_viewer_replied", CoreEvents.STREAMER_SPEECH, _speech("upsert 会炸", target_user_id="u_exc")),
+        ("resolve_viewer", CoreEvents.ROOM_MESSAGE_DANMAKU, make_room_message(content="upsert 会炸")),
+        ("find_viewer_id", CoreEvents.STREAMER_SPEECH, _speech("upsert 会炸", target_user_id="u_exc")),
     ],
 )
 async def test_viewer_upsert_failure_keeps_main_row(

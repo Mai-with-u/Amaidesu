@@ -6,6 +6,7 @@ from typing import Any
 
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.utils.time_utils import now_ms
+from tests.modules.storage.viewer_seed import seed_gift, seed_message
 
 PLATFORM = "bilibili"
 BASE = 1_700_000_000_000
@@ -14,7 +15,7 @@ DAY = 86_400_000
 
 async def _seed_viewer(store: SQLiteDatabase, user_id: str, user_name: str, last_active_ms: int | None = None) -> None:
     ts = last_active_ms if last_active_ms is not None else now_ms()
-    await store.viewers.upsert_viewer_message(platform=PLATFORM, user_id=user_id, user_name=user_name, timestamp_ms=ts)
+    await seed_message(store.viewers, platform=PLATFORM, user_id=user_id, user_name=user_name, timestamp_ms=ts)
 
 
 async def _chat(store: SQLiteDatabase, ts: int, sender_id: str | None = "u_d", **kwargs: Any) -> None:
@@ -81,7 +82,7 @@ async def test_insight_buckets_are_mutually_exclusive(store: SQLiteDatabase) -> 
     # 以 now 为锚错开数量级，避开本地时区零点临界
     for user_id, age in (("u_today", 0), ("u_week", 3 * DAY), ("u_month", 20 * DAY), ("u_older", 60 * DAY)):
         await _seed_viewer(store, user_id, user_id, last_active_ms=now - age)
-    await store.viewers.upsert_viewer_gift(platform=PLATFORM, user_id="u_today", user_name="今天", timestamp_ms=now)
+    await seed_gift(store.viewers, platform=PLATFORM, user_id="u_today", user_name="今天", timestamp_ms=now)
 
     assert await store.viewers.viewer_insight_buckets() == {
         "total": 4,

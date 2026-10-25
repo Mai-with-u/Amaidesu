@@ -6,6 +6,7 @@ import pytest
 
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.utils.time_utils import now_ms
+from tests.modules.storage.viewer_seed import seed_gift, seed_message, seed_replied
 
 BASE = 1_700_000_000_000
 DAY = 86_400_000
@@ -17,7 +18,7 @@ async def viewers_client(api, store: SQLiteDatabase, event_bus):
 
 
 async def _message(store: SQLiteDatabase, user_id: str, name: str, ts: int) -> None:
-    await store.viewers.upsert_viewer_message(platform="bilibili", user_id=user_id, user_name=name, timestamp_ms=ts)
+    await seed_message(store.viewers, platform="bilibili", user_id=user_id, user_name=name, timestamp_ms=ts)
 
 
 async def _chat(store: SQLiteDatabase, ts: int, session: int = 1, user: str = "u_full", **kwargs) -> None:
@@ -31,7 +32,7 @@ async def _chat(store: SQLiteDatabase, ts: int, session: int = 1, user: str = "u
 async def _seed_full_viewer(store: SQLiteDatabase) -> None:
     """一个完整观众：场次 1 两条发言 + 礼物，场次 2 一条主播回复 + SC。"""
     await _message(store, "u_full", "富观众", BASE + 5_000)
-    await store.viewers.upsert_viewer_replied(platform="bilibili", user_id="u_full", timestamp_ms=BASE + 5_500)
+    await seed_replied(store.viewers, platform="bilibili", user_id="u_full", timestamp_ms=BASE + 5_500)
     await _chat(store, BASE, content="第一条", message_id="fm1")
     await _chat(store, BASE + 1_000, content="第二条", message_id="fm2")
     await _chat(
@@ -55,9 +56,7 @@ async def test_list_fields_order_search_and_paging(viewers_client, store) -> Non
 
     for i in range(5):
         await _message(store, f"u{i}", f"观众{i}", BASE + i)
-    await store.viewers.upsert_viewer_gift(
-        platform="bilibili", user_id="u0", user_name="观众0", timestamp_ms=BASE + 1_000
-    )
+    await seed_gift(store.viewers, platform="bilibili", user_id="u0", user_name="观众0", timestamp_ms=BASE + 1_000)
 
     body = (await client.get("/api/v1/viewers")).json()
     assert body["total"] == 5

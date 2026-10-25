@@ -6,12 +6,13 @@ StorageLedger —— 直播间消息流落库记账器
 - StorageLedger       → SQLite 业务表（live chat 行业标准数据平面）
 
 ## 职责
-- 订阅 ``room.message.#``（MQTT 风格通配），按 payload.message_type 分发：
-  - ``danmaku``   → live_chat（+ 顺路 upsert viewers.message_count）
-  - ``gift``      → gifts 全字段（+ 顺路 upsert viewers.gift_count；金瓜子
-    礼物另计付费统计 paid_count/paid_amount，银瓜子免费礼物不计）
-  - ``super_chat`` → super_chats 全字段（+ upsert viewers 付费统计——SC 与
-    礼物同为付费行为，处理一致；此前 SC 只写明细、统计空白是缺陷）
+- 订阅 ``room.message.#``（MQTT 风格通配），按 payload.message_type 分发。
+  观众消息（弹幕/礼物/SC/上舰）先经 ``ViewerRepo.resolve_viewer`` 归到一位
+  观众（按 ID 命中，没见过就新建），计数按观众 ID 累加：
+  - ``danmaku``   → live_chat（+ 观众发言计数）
+  - ``gift``      → gifts 全字段（+ 送礼计数；金瓜子礼物另计付费统计
+    paid_count/paid_amount，银瓜子免费礼物不计）
+  - ``super_chat`` → super_chats 全字段（+ 付费统计——SC 与礼物同为付费行为）
   - ``guard``     → guards 购买事件表（+ 付费统计），live_chat 保留 guard 行
     （message_type="guard"；content 即人读描述，不计观众发言统计）
   - ``partner_speech`` → live_chat（sender_role="partner"，**不**计观众统计）
@@ -19,15 +20,15 @@ StorageLedger —— 直播间消息流落库记账器
 - viewers 写穿伴随：选在主表落库同点 upsert，避免后台 tick 的重复扫描与时序问题
 - 订阅 ``streamer.speech`` 业务事件（主播发言），写入 live_chat（sender_role="assistant"，message_type="speak"）。
   场次归属取 payload.live_session_id（场次盖章拦截器已注入；0 时回退 LiveSessionManager 解析）。
-  若 payload.target_user_id 非空，顺路调用 upsert_viewer_replied 把该观众的
-  replied_count/interaction_count +1，形成"主播回复 → 观众被回复计数"闭环。
+  若 payload.target_user_id 非空，按外部 ID 找到该观众，把 replied_count /
+  interaction_count +1，形成"主播回复 → 观众被回复计数"闭环（找不到就跳过）。
   payload.reply_to_message_id 落 live_chat.reply_to_message_id 列——"主播回应了
   哪条弹幕"是可查询事实（观众行 message_id ↔ 主播行 reply_to_message_id）。
 - 订阅 ``game.*``（milestone / attention_required / error，按 payload.event_type 判别），写入 game_events 表。
   游戏代理（AI 玩家）尚未上线，当前无发布方——写链先行接通，事件出现即落库。
 - 端到端贯通 ``simulated`` 字段：payload.simulated → 表列 simulated INTEGER（主播发言/游戏事件天然非模拟，记 False）
 - 平台归属：payload.platform（采集器装配期常量注入）落明细行 platform 列；
-  viewers 行身份键 = (platform, user_id)。主播发言行经 LiveSessionManager.platform 取值。
+  主播发言行经 LiveSessionManager.platform 取值。
 - 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环（即使记账器挂了，直播流也跑）
 
 ## 不做什么
@@ -66,6 +67,8 @@ logger = get_logger("StorageLedger")
 _ROOM_MESSAGE_WILDCARD = CoreEvents.ROOM_MESSAGE_WILDCARD
 # 通配订阅名：覆盖 game.milestone / game.attention_required / game.error（单层）
 _GAME_EVENT_WILDCARD = "game.*"
+# 会更新观众统计的消息类型：只有这些先解析观众身份（进房不建观众，联动对象不是观众）
+_VIEWER_MESSAGE_TYPES = frozenset({"danmaku", "gift", "super_chat", "guard"})
 
 
 class StorageLedger:
@@ -175,6 +178,7 @@ class StorageLedger:
                     f"{_ROOM_MESSAGE_WILDCARD} 事件无法归属场次（未开启显式场次），跳过落库（message_type={msg_type}）"
                 )
                 return
+            viewer_id = await self._resolve_viewer(payload) if msg_type in _VIEWER_MESSAGE_TYPES else None
             if msg_type == "danmaku":
                 await self.chat_repo.insert_live_chat(
                     live_session_id=live_pk,
@@ -188,12 +192,8 @@ class StorageLedger:
                     message_id=payload.message_id or None,
                     simulated=payload.simulated,
                 )
-                await self.viewer_repo.upsert_viewer_message(
-                    platform=payload.platform,
-                    user_id=payload.user.id,
-                    user_name=payload.user.name,
-                    timestamp_ms=payload.timestamp_ms,
-                )
+                if viewer_id is not None:
+                    await self.viewer_repo.record_message(viewer_id=viewer_id, timestamp_ms=payload.timestamp_ms)
                 return
             if msg_type == "gift":
                 gift = payload.gift
@@ -224,19 +224,12 @@ class StorageLedger:
                     raw_data=gift.raw_data or None,
                     simulated=payload.simulated,
                 )
-                await self.viewer_repo.upsert_viewer_gift(
-                    platform=payload.platform,
-                    user_id=payload.user.id,
-                    user_name=payload.user.name,
-                    timestamp_ms=payload.timestamp_ms,
-                )
+                if viewer_id is None:
+                    return
+                await self.viewer_repo.record_gift(viewer_id=viewer_id, timestamp_ms=payload.timestamp_ms)
                 if self._is_paid_currency(gift.currency):
-                    await self.viewer_repo.upsert_viewer_paid(
-                        platform=payload.platform,
-                        user_id=payload.user.id,
-                        user_name=payload.user.name,
-                        amount=gift.total_price,
-                        timestamp_ms=payload.timestamp_ms,
+                    await self.viewer_repo.record_paid(
+                        viewer_id=viewer_id, amount=gift.total_price, timestamp_ms=payload.timestamp_ms
                     )
                 return
             if msg_type == "super_chat":
@@ -262,15 +255,10 @@ class StorageLedger:
                     raw_data=sc.raw_data or None,
                     simulated=payload.simulated,
                 )
-                # SC 与礼物同为付费行为，统计处理保持一致（此前 SC 不进 viewers
-                # 是两级缺陷：明细不写统计表、事实层不按人组织，观众统计空白）
-                if self._is_paid_currency(sc.currency):
-                    await self.viewer_repo.upsert_viewer_paid(
-                        platform=payload.platform,
-                        user_id=payload.user.id,
-                        user_name=payload.user.name,
-                        amount=sc.total_price,
-                        timestamp_ms=payload.timestamp_ms,
+                # SC 与礼物同为付费行为，统计处理保持一致
+                if viewer_id is not None and self._is_paid_currency(sc.currency):
+                    await self.viewer_repo.record_paid(
+                        viewer_id=viewer_id, amount=sc.total_price, timestamp_ms=payload.timestamp_ms
                     )
                 return
             if msg_type == "guard":
@@ -295,13 +283,9 @@ class StorageLedger:
                         raw_data=guard.raw_data or None,
                         simulated=payload.simulated,
                     )
-                    if self._is_paid_currency(guard.currency):
-                        await self.viewer_repo.upsert_viewer_paid(
-                            platform=payload.platform,
-                            user_id=payload.user.id,
-                            user_name=payload.user.name,
-                            amount=guard.total_price,
-                            timestamp_ms=payload.timestamp_ms,
+                    if viewer_id is not None and self._is_paid_currency(guard.currency):
+                        await self.viewer_repo.record_paid(
+                            viewer_id=viewer_id, amount=guard.total_price, timestamp_ms=payload.timestamp_ms
                         )
                 else:
                     logger.debug("guard 事件 payload.guard 为空，仅落 live_chat 文本行")
@@ -389,11 +373,14 @@ class StorageLedger:
                 simulated=False,
             )
             if payload.target_user_id:
-                await self.viewer_repo.upsert_viewer_replied(
-                    platform=self._speech_platform(),
-                    user_id=payload.target_user_id,
-                    timestamp_ms=payload.timestamp_ms,
+                # 被回复的观众在发言时已建档；按外部 ID 找不到（如开场前的弹幕）就不记
+                viewer_id = await self.viewer_repo.find_viewer_id(
+                    platform=self._speech_platform(), external_id=payload.target_user_id
                 )
+                if viewer_id is None:
+                    logger.debug(f"被回复的观众未建档，跳过被回复计数（target_user_id={payload.target_user_id}）")
+                else:
+                    await self.viewer_repo.record_replied(viewer_id=viewer_id, timestamp_ms=payload.timestamp_ms)
         except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
             logger.error(
                 f"StorageLedger 写入主播发言失败（event={event_name}, "
@@ -433,6 +420,28 @@ class StorageLedger:
                 f"event_type={getattr(payload, 'event_type', '?')}）：{exc}",
                 exc=True,
             )
+
+    # -------------------- 观众身份解析 --------------------
+
+    async def _resolve_viewer(self, payload: RoomMessagePayload) -> Optional[int]:
+        """把消息的外部身份归到一位观众，返回内部观众 ID。
+
+        解析失败只记日志、返回 None：明细照常落库，这一条不计观众统计——
+        观众记账出错不能连累直播消息本身丢失。
+        """
+        try:
+            return await self.viewer_repo.resolve_viewer(
+                platform=payload.platform,
+                external_id=payload.user.id,
+                user_name=payload.user.name,
+                timestamp_ms=payload.timestamp_ms,
+            )
+        except Exception as exc:  # noqa: BLE001 观众解析失败只少记一笔统计，明细照常落库
+            logger.error(
+                f"观众身份解析失败，本条不计观众统计（{payload.platform}/{payload.user.id}）：{exc}",
+                exc=True,
+            )
+            return None
 
     # -------------------- 场次归属解析 --------------------
 

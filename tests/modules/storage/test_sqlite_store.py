@@ -8,6 +8,7 @@ import pytest
 
 from src.modules.storage import SCHEMA_VERSION, SQLiteConnectionManager, list_expected_tables
 from src.modules.storage.database import SQLiteDatabase
+from tests.modules.storage.viewer_seed import seed_gift, seed_message, seed_replied, seed_viewer
 
 
 async def _columns(store: SQLiteDatabase, table: str) -> dict:
@@ -116,36 +117,41 @@ async def test_recent_live_chat_takes_latest_window_in_chronological_order(store
     assert await by_user(user_id="nobody", since_timestamp_ms=0) == []
 
 
-async def test_viewer_upserts_accumulate_counters(store: SQLiteDatabase) -> None:
+async def test_viewer_counters_accumulate_by_viewer_id(store: SQLiteDatabase) -> None:
     viewers = store.viewers
-    await viewers.upsert_viewer_message(platform="bilibili", user_id="u1", user_name="张三", timestamp_ms=1000)
-    await viewers.upsert_viewer_message(
-        platform="bilibili", user_id="u1", user_name="张三（新昵称）", timestamp_ms=2000
+    vid = await seed_message(viewers, platform="bilibili", user_id="u1", user_name="张三", timestamp_ms=1000)
+    # 同一账号 ID 换了昵称：仍是同一位观众，昵称更新
+    assert (
+        await seed_message(viewers, platform="bilibili", user_id="u1", user_name="张三（新昵称）", timestamp_ms=2000)
+        == vid
     )
-    await viewers.upsert_viewer_gift(platform="bilibili", user_id="u1", user_name="张三（新昵称）", timestamp_ms=3000)
-    # replied 不覆盖已知昵称
-    await viewers.upsert_viewer_replied(platform="bilibili", user_id="u1", timestamp_ms=4000)
+    await seed_gift(viewers, platform="bilibili", user_id="u1", user_name="张三（新昵称）", timestamp_ms=3000)
+    await seed_replied(viewers, platform="bilibili", user_id="u1", timestamp_ms=4000)
 
     row = await viewers.get_viewer_stats(platform="bilibili", user_id="u1")
     counters = ("message_count", "gift_count", "replied_count", "interaction_count", "last_active_ms")
     assert tuple(row[k] for k in counters) == (2, 1, 1, 4, 4000)
-    assert row["user_name"] == "张三（新昵称）"
+    assert (row["id"], row["user_name"], row["user_id"]) == (vid, "张三（新昵称）", "u1")
 
-    # replied 首建未知观众：昵称占位 "?"
-    await viewers.upsert_viewer_replied(platform="bilibili", user_id="u_new", timestamp_ms=5000)
-    row = await viewers.get_viewer_stats(platform="bilibili", user_id="u_new")
-    assert (row["user_name"], row["replied_count"], row["message_count"]) == ("?", 1, 0)
+    # 付费即互动只在第一笔互动时记 1：已发过言的观众付费不重复计互动
+    await viewers.record_paid(viewer_id=vid, amount=1000, timestamp_ms=5000)
+    row = await viewers.get_viewer_stats(platform="bilibili", user_id="u1")
+    assert (row["paid_count"], row["paid_amount"], row["interaction_count"]) == (1, 1000, 4)
+
+    # 未建档的外部 ID：只查不建
+    assert await viewers.find_viewer_id(platform="bilibili", external_id="nobody") is None
     assert await viewers.get_viewer_stats(platform="bilibili", user_id="nobody") is None
 
 
 async def test_list_viewer_stats_ordering_paging_and_whitelist(store: SQLiteDatabase) -> None:
     viewers = store.viewers
     for ts in (1, 2):
-        await viewers.upsert_viewer_message(platform="bilibili", user_id="u_msg", user_name="m", timestamp_ms=ts)
+        await seed_message(viewers, platform="bilibili", user_id="u_msg", user_name="m", timestamp_ms=ts)
     for ts in (3, 4, 5):
-        await viewers.upsert_viewer_gift(platform="bilibili", user_id="u_gift", user_name="g", timestamp_ms=ts)
+        await seed_gift(viewers, platform="bilibili", user_id="u_gift", user_name="g", timestamp_ms=ts)
+    await seed_viewer(viewers, platform="bilibili", user_id="u_repl", user_name="r", timestamp_ms=5)
     for ts in (6, 7):
-        await viewers.upsert_viewer_replied(platform="bilibili", user_id="u_repl", timestamp_ms=ts)
+        await seed_replied(viewers, platform="bilibili", user_id="u_repl", timestamp_ms=ts)
 
     rows, total = await viewers.list_viewer_stats()
     assert (rows[0]["user_id"], len(rows), total) == ("u_msg", 3, 3)  # 默认按 message_count

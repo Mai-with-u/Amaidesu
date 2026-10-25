@@ -1,7 +1,8 @@
 """ViewerRepo —— viewers 观众统计表仓储。
 
-跨场客观数字（发言/送礼/被回复/互动/付费计数），由 StorageLedger 在主表
-落库同点 upsert 写穿，dashboard 读取排行与观众档案。
+跨场客观数字（发言/送礼/被回复/互动/付费计数）。记账器对每条观众消息先
+``resolve_viewer`` 把外部身份归到一位观众（``viewers.id`` 即内部观众 ID），
+再按观众 ID 累加计数；dashboard 读取排行与观众档案。
 
 **身份键 = ``(platform, user_id)`` 复合键**（表唯一约束）：B 站真实观众与
 console 调试用户等不同平台账号视为不同的人，统计天然隔离。所有读写按
@@ -137,105 +138,79 @@ class ViewerRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def upsert_viewer_message(self, *, platform: str, user_id: str, user_name: str, timestamp_ms: int) -> None:
-        """观众发言计数：``message_count`` +1，``interaction_count`` +1。"""
+    async def resolve_viewer(self, *, platform: str, external_id: str, user_name: str, timestamp_ms: int) -> int:
+        """把消息的外部身份归到一位观众，返回内部观众 ID：已建档则更新昵称，没建档则新建（计数全 0）。"""
 
-        def _exec() -> None:
-            with self._manager.transaction() as conn:
-                conn.execute(
-                    "INSERT INTO viewers("
-                    "platform, user_id, user_name, message_count, gift_count, replied_count,"
-                    " interaction_count, paid_count, paid_amount, last_active_ms"
-                    ") VALUES (?, ?, ?, 1, 0, 0, 1, 0, 0, ?) "
-                    "ON CONFLICT(platform, user_id) DO UPDATE SET "
-                    "user_name=excluded.user_name, "
-                    "message_count=message_count+1, "
-                    "interaction_count=interaction_count+1, "
-                    "last_active_ms=excluded.last_active_ms",
-                    (platform, user_id, user_name, timestamp_ms),
+        def _exec() -> int:
+            # 先查后建必须拿写锁再查：记账器并发处理同一位新观众的两条消息时，
+            # 后到的一条要等先到的建档提交后再查，才不会重复新建、撞唯一约束丢统计
+            with self._manager.transaction(immediate=True) as conn:
+                row = conn.execute(
+                    "SELECT id, user_name FROM viewers WHERE platform=? AND user_id=?", (platform, external_id)
+                ).fetchone()
+                if row is not None:
+                    if row["user_name"] != user_name:
+                        conn.execute("UPDATE viewers SET user_name=? WHERE id=?", (user_name, int(row["id"])))
+                    return int(row["id"])
+                cur = conn.execute(
+                    "INSERT INTO viewers(platform, user_id, user_name, last_active_ms) VALUES (?, ?, ?, ?)",
+                    (platform, external_id, user_name, timestamp_ms),
                 )
+                return int(cur.lastrowid or 0)
 
-        await self._run_in_executor(_exec)
+        return await self._run_in_executor(_exec)
 
-    async def upsert_viewer_gift(self, *, platform: str, user_id: str, user_name: str, timestamp_ms: int) -> None:
-        """观众送礼计数：``gift_count`` +1，``interaction_count`` +1。
+    async def find_viewer_id(self, *, platform: str, external_id: str) -> Optional[int]:
+        """按外部 ID 查观众 ID；只查不建，未命中返回 None。"""
 
-        只更新互动与件数维度，付费金额走 ``upsert_viewer_paid``（免费礼物
-        计互动不计付费，两路分开由调用方编排）。
+        def _exec() -> Optional[int]:
+            with self._manager.transaction() as conn:
+                row = conn.execute(
+                    "SELECT id FROM viewers WHERE platform=? AND user_id=?", (platform, external_id)
+                ).fetchone()
+                return int(row["id"]) if row else None
+
+        return await self._run_in_executor(_exec)
+
+    async def record_message(self, *, viewer_id: int, timestamp_ms: int) -> None:
+        """观众发言：``message_count`` +1，``interaction_count`` +1。"""
+        await self._bump(
+            viewer_id, timestamp_ms, "message_count=message_count+1, interaction_count=interaction_count+1"
+        )
+
+    async def record_gift(self, *, viewer_id: int, timestamp_ms: int) -> None:
+        """观众送礼：``gift_count`` +1，``interaction_count`` +1（付费金额另走 ``record_paid``）。"""
+        await self._bump(viewer_id, timestamp_ms, "gift_count=gift_count+1, interaction_count=interaction_count+1")
+
+    async def record_paid(self, *, viewer_id: int, amount: int, timestamp_ms: int) -> None:
+        """观众付费：``paid_count`` +1，``paid_amount`` +amount（金瓜子）。
+
+        付费即互动，但只在这是该观众的第一笔互动时记 1：礼物的互动已由
+        ``record_gift`` 记过，避免一次事件计两次。调用方须先按 ``currency``
+        过滤——免费礼物（银瓜子/空币种）不应进入本方法。
         """
+        await self._bump(
+            viewer_id,
+            timestamp_ms,
+            "paid_count=paid_count+1, paid_amount=paid_amount+?,"
+            " interaction_count=interaction_count+(CASE WHEN interaction_count=0 THEN 1 ELSE 0 END)",
+            (int(amount),),
+        )
+
+    async def record_replied(self, *, viewer_id: int, timestamp_ms: int) -> None:
+        """主播回复了该观众：``replied_count`` +1，``interaction_count`` +1。"""
+        await self._bump(
+            viewer_id, timestamp_ms, "replied_count=replied_count+1, interaction_count=interaction_count+1"
+        )
+
+    async def _bump(self, viewer_id: int, timestamp_ms: int, set_sql: str, params: Tuple[Any, ...] = ()) -> None:
+        """按观众 ID 累加计数并刷新最近活跃时刻（``set_sql`` 只来自本类常量）。"""
 
         def _exec() -> None:
             with self._manager.transaction() as conn:
                 conn.execute(
-                    "INSERT INTO viewers("
-                    "platform, user_id, user_name, message_count, gift_count, replied_count,"
-                    " interaction_count, paid_count, paid_amount, last_active_ms"
-                    ") VALUES (?, ?, ?, 0, 1, 0, 1, 0, 0, ?) "
-                    "ON CONFLICT(platform, user_id) DO UPDATE SET "
-                    "user_name=excluded.user_name, "
-                    "gift_count=gift_count+1, "
-                    "interaction_count=interaction_count+1, "
-                    "last_active_ms=excluded.last_active_ms",
-                    (platform, user_id, user_name, timestamp_ms),
-                )
-
-        await self._run_in_executor(_exec)
-
-    async def upsert_viewer_paid(
-        self,
-        *,
-        platform: str,
-        user_id: str,
-        user_name: str,
-        amount: int,
-        timestamp_ms: int,
-    ) -> None:
-        """观众付费计数：``paid_count`` +1，``paid_amount`` +amount。
-
-        ``amount`` 单位 = 平台最小虚拟货币单位（B 站金瓜子）；调用方须先行
-        按 ``currency`` 过滤——免费礼物（银瓜子/空币种）不应进入本方法。
-        SC 观众由此进入 viewers 统计（此前 SC 只写明细表、统计空白）。
-        互动计数只在新首建行时记 1（付费即互动）；行已存在时不重复累加——
-        礼物的互动维度由 ``upsert_viewer_gift`` 承担，避免一次事件计两次。
-        """
-
-        def _exec() -> None:
-            with self._manager.transaction() as conn:
-                conn.execute(
-                    "INSERT INTO viewers("
-                    "platform, user_id, user_name, message_count, gift_count, replied_count,"
-                    " interaction_count, paid_count, paid_amount, last_active_ms"
-                    ") VALUES (?, ?, ?, 0, 0, 0, 1, 1, ?, ?) "
-                    "ON CONFLICT(platform, user_id) DO UPDATE SET "
-                    "user_name=excluded.user_name, "
-                    "paid_count=paid_count+1, "
-                    "paid_amount=paid_amount+excluded.paid_amount, "
-                    "last_active_ms=excluded.last_active_ms",
-                    (platform, user_id, user_name, amount, timestamp_ms),
-                )
-
-        await self._run_in_executor(_exec)
-
-    async def upsert_viewer_replied(self, *, platform: str, user_id: str, timestamp_ms: int) -> None:
-        """主播回复该用户计数：``replied_count`` +1，``interaction_count`` +1。
-
-        若该 (platform, user_id) 首次进入统计行（未发过言也未送过礼），以
-        "?" 占位 user_name 首建——不强制外部补传用户名（用户名的权威来源
-        是发言/礼物事件）。
-        """
-
-        def _exec() -> None:
-            with self._manager.transaction() as conn:
-                conn.execute(
-                    "INSERT INTO viewers("
-                    "platform, user_id, user_name, message_count, gift_count, replied_count,"
-                    " interaction_count, paid_count, paid_amount, last_active_ms"
-                    ") VALUES (?, ?, '?', 0, 0, 1, 1, 0, 0, ?) "
-                    "ON CONFLICT(platform, user_id) DO UPDATE SET "
-                    "replied_count=replied_count+1, "
-                    "interaction_count=interaction_count+1, "
-                    "last_active_ms=excluded.last_active_ms",
-                    (platform, user_id, timestamp_ms),
+                    f"UPDATE viewers SET {set_sql}, last_active_ms=? WHERE id=?",  # noqa: S608 常量片段
+                    (*params, timestamp_ms, viewer_id),
                 )
 
         await self._run_in_executor(_exec)

@@ -32,6 +32,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.tools import ToolInvocation, ToolRegistry
+from tests.modules.storage.viewer_seed import seed_message
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +83,7 @@ async def _viewer_says(store: SQLiteDatabase, pk: int, user_id: str, name: str, 
         platform="bilibili",
         message_id=f"{user_id}-{ts}",
     )
-    await store.viewers.upsert_viewer_message(platform="bilibili", user_id=user_id, user_name=name, timestamp_ms=ts)
+    await seed_message(store.viewers, platform="bilibili", user_id=user_id, user_name=name, timestamp_ms=ts)
 
 
 async def _streamer_says(store: SQLiteDatabase, pk: int, text: str, ts: int) -> None:
@@ -315,7 +316,7 @@ async def test_recall_session_tool(store: SQLiteDatabase) -> None:
 
 @pytest.mark.asyncio
 async def test_recall_viewer_tool(store: SQLiteDatabase) -> None:
-    await store.viewers.upsert_viewer_message(platform="bilibili", user_id="u1", user_name="老王", timestamp_ms=1)
+    await seed_message(store.viewers, platform="bilibili", user_id="u1", user_name="老王", timestamp_ms=1)
     await store.viewer_profiles.upsert_profile(
         platform="bilibili", user_id="u1", profile_text="老粉，爱看挖矿", last_compressed_at_ms=1
     )
