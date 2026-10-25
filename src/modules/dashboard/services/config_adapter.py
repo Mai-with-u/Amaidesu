@@ -658,7 +658,12 @@ async def _apply_and_reload(
     hot_report = None
     if hot_context is not None and any(s in ("agents", "collectors") for s in scopes):
         hot_report = await hot_apply_components(hot_context, config_service, config_dir, keys)
-    hot_applied = bool(reloaded) and all(s in _HOT_SCOPES for s in scopes)
+    # 热生效判真：infra 靠重载本身；agents / collectors 必须组件重建真的跑过
+    # （hot_report 在场）才算——没传热应用上下文时这两个域照实报"需重启"，
+    # 不虚报已生效
+    hot_applied = bool(reloaded) and all(
+        s == "infra" or (s in ("agents", "collectors") and hot_report is not None) for s in scopes
+    )
     return True, not hot_applied, None, hot_report
 
 
