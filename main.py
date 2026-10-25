@@ -75,7 +75,7 @@ from src.modules.simulator import SimulatorService
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.subtitle import build_subtitle_infrastructure
 from src.modules.subtitle.backends import DashboardBackend
-from src.modules.tts import build_tts_infrastructure
+from src.modules.tts import TTSProvider, build_tts_infrastructure
 from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools import TaskLedger, TaskTracker, ToolHealthMonitor, ToolRegistry
 from src.modules.tools.tasks import resolve_tasks_config
@@ -536,6 +536,9 @@ async def create_app_components(
     # 无 [agents] 段时不进装配分支，但后续 provider 启动段仍会引用，须预置
     tool_registry: Optional[ToolRegistry] = None
     thinking_hub: Optional[StreamPreviewHub] = None
+    # Dashboard 装配段同样引用任务跟踪器与 TTS 引擎：无 [agents] 段时两者都不构造，以 None 交给 Dashboard
+    task_tracker: Optional[TaskTracker] = None
+    tts_engine: Optional[TTSProvider] = None
     agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
     if agents_config:
         logger.info("初始化 AgentManager（src/agents/）...")

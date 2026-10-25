@@ -50,7 +50,7 @@ def _stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     _FakeDashboardServer.instances.clear()
 
 
-def _config(db_path: Path) -> Dict[str, Any]:
+def _config(db_path: Path, agents: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "general": {"platform_id": "test"},
         "context": {},
@@ -62,7 +62,7 @@ def _config(db_path: Path) -> Dict[str, Any]:
         "interceptors": {},
         "simulator": {"enabled": False},
         "tools": {},
-        "agents": {"enabled": []},  # 非空：组合根才装配任务跟踪器（Dashboard 依赖它）
+        "agents": agents,
         "memory": {},
         "storage": {},
         "sqlite": {"db_path": str(db_path)},
@@ -73,9 +73,11 @@ def _config(db_path: Path) -> Dict[str, Any]:
     }
 
 
-async def test_dashboard_receives_viewer_repos(tmp_path: Path) -> None:
+@pytest.mark.parametrize("agents", [{"enabled": []}, {}], ids=["agents_section", "no_agents_section"])
+async def test_dashboard_receives_viewer_repos(tmp_path: Path, agents: Dict[str, Any]) -> None:
+    """没有 [agents] 段时组合根不构造任务跟踪器与 TTS 引擎，Dashboard 照样装配、以 None 接收两者。"""
     config_service = ConfigService(base_dir=str(tmp_path))
-    config_service._main_config = _config(tmp_path / "wiring.db")  # 绕开真实 TOML 加载
+    config_service._main_config = _config(tmp_path / "wiring.db", agents)  # 绕开真实 TOML 加载
     config_service._initialized = True
     result = await app_main.create_app_components(
         config=config_service.main_config,
