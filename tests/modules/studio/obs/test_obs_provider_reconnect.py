@@ -1,6 +1,6 @@
 """OBSProvider.connect / disconnect / supports_reconnect 单测。
 
-mock obsws-python（不发真实 WebSocket 请求）——验证：
+mock obs-websocket-py 适配层（不发真实 WebSocket 请求）——验证：
 - connect 委托内部 _connect_obs，透传 bool
 - disconnect 仅关 obs_connection，**不动** _has_started（保持 setup 语义）
 - supports_reconnect 因覆写 connect → True
@@ -12,11 +12,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.modules.studio.obs import obs_client
 from src.modules.studio.obs import obs_provider as obs_mod
 
 
 def _make_obs_provider(monkeypatch: pytest.MonkeyPatch) -> "obs_mod.OBSProvider":
-    monkeypatch.setattr(obs_mod, "obs", MagicMock())
+    monkeypatch.setattr(obs_client, "ObsClient", MagicMock())
     return obs_mod.OBSProvider(
         config={
             "type": "obs_control",

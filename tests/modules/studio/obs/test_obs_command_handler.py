@@ -14,13 +14,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.modules.events.event_bus import EventBus
+from src.modules.studio.obs import obs_client
 from src.modules.studio.obs import obs_provider as obs_mod
 from src.modules.tools import ToolInvocation
 
 
 def _make_obs_provider(monkeypatch: pytest.MonkeyPatch) -> "obs_mod.OBSProvider":
-    """构造一个最小可用的 OBSProvider，绕过 obsws-python 依赖。"""
-    monkeypatch.setattr(obs_mod, "obs", MagicMock())
+    """构造一个最小可用的 OBSProvider，绕过 obs-websocket-py 依赖。"""
+    monkeypatch.setattr(obs_client, "ObsClient", MagicMock())
     return obs_mod.OBSProvider(
         config={
             "type": "obs_control",

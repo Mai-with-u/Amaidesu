@@ -6,7 +6,7 @@ OBSProvider - OBS 控制工具集
 - ``obs_switch_scene``       - 切换 OBS 场景
 - ``obs_set_source_visibility`` - 控制源可见性
 
-通过 ``obsws-python`` 控制 OBS Studio；依赖缺失时软降级。
+通过 ``obs-websocket-py`` 控制 OBS Studio；依赖缺失时软降级。
 """
 
 from __future__ import annotations
@@ -19,19 +19,13 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger, silence_third_party_logger
+from src.modules.studio.obs import obs_client
 from src.modules.studio.obs.obs_errors import describe_obs_error
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import ConnectionToolProvider, wire_connection_tools
 
 if TYPE_CHECKING:
     pass
-
-
-# obsws-python 软降级
-try:
-    import obsws_python as obs
-except ImportError:
-    obs = None
 
 # 失败原因里指向的密码配置项（工具段在 tools.toml，与直播画面采集器的 [live_frame] 分开配置）
 _PASSWORD_SETTING = "tools.toml 的 [tools.studio.obs.config].password"
@@ -211,8 +205,8 @@ class OBSProvider(ConnectionToolProvider):
             return _fail(n, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'")
         except Exception as exc:  # noqa: BLE001
             self.logger.exception(f"OBS 工具 {invocation.tool_name} 调用异常: {exc}")
-            # 连接类异常（连接被关闭 / obsws 超时 / 管道断裂）：首次失败即摘除工具，
-            # 不等熔断器兜底；业务性失败（场景/来源不存在等）不误摘
+            # 连接类异常（连接被关闭 / 请求超时 / 管道断裂）：首次失败即摘除工具，
+            # 不等熔断器兜底；业务性失败（场景/来源不存在等 OBSRequestError）不误摘
             if self._connected and _is_connection_error(exc):
                 self.logger.warning("OBS 工具调用遇连接类异常，摘除断连工具")
                 self.mark_disconnected()
@@ -223,8 +217,8 @@ class OBSProvider(ConnectionToolProvider):
     async def setup(self) -> None:
         if self._has_started:
             return
-        if obs is None:
-            raise RuntimeError("obsws-python库未安装，请运行: uv add obsws-python")
+        if not obs_client.AVAILABLE:
+            raise RuntimeError("obs-websocket-py库未安装，请运行: uv sync")
         await self._connect_obs()
         self._has_started = True
 
@@ -247,7 +241,7 @@ class OBSProvider(ConnectionToolProvider):
     async def connect(self) -> bool:
         """手动建立 OBS 连接（手动重连的"建立"半步）。
 
-        委托 ``_connect_obs``：底层已对 obsws-python 缺失 / 连接异常做了 try/
+        委托 ``_connect_obs``：底层已对 obs-websocket-py 缺失 / 连接异常做了 try/
         except 兜底并返回 bool，本层不另捕。``_has_started`` 保持不变——
         手动 connect 假设 setup 已先完成（组合根装配期调过），属于 setup
         内部的连接刷新，**不**重置 ``_has_started`` 标志。
@@ -263,7 +257,7 @@ class OBSProvider(ConnectionToolProvider):
 
         与 ``cleanup`` 不同：仅关闭 ``obs_connection`` 并清空本地句柄 + 置
         ``is_connected=False``，**不重置** ``_has_started``——保持 setup 语
-        义（仍可再 connect）。obsws-python 的 ``disconnect`` 同步调用，做
+        义（仍可再 connect）。obs-websocket-py 的 ``disconnect`` 同步调用，做
         try/except 兜底（断连中或重复断连不阻断）。返回 True 表达"断开动
         作已完成"。
         """
@@ -287,7 +281,7 @@ class OBSProvider(ConnectionToolProvider):
             self.logger.warning("OBS 未连接，无法切换场景")
             return False
         try:
-            self.obs_connection.set_current_program_scene(scene_name)
+            self.obs_connection.call(obs_client.obs_requests.SetCurrentProgramScene(sceneName=scene_name))
             self.logger.info(f"已切换到场景: {scene_name}")
             return True
         except Exception as e:
@@ -304,9 +298,17 @@ class OBSProvider(ConnectionToolProvider):
         try:
             # obs-websocket 5 没有全局的来源开关，显隐挂在场景项上：
             # 取当前节目场景（观众正看到的）→ 在其中找到该来源的场景项 → 设这个场景项的显隐
-            scene_name = self.obs_connection.get_current_program_scene().current_program_scene_name
-            item_id = self.obs_connection.get_scene_item_id(scene_name, source_name).scene_item_id
-            self.obs_connection.set_scene_item_enabled(scene_name, item_id, visible)
+            scene_name = self.obs_connection.call(
+                obs_client.obs_requests.GetCurrentProgramScene()
+            ).getCurrentProgramSceneName()
+            item_id = self.obs_connection.call(
+                obs_client.obs_requests.GetSceneItemId(sceneName=scene_name, sourceName=source_name)
+            ).getSceneItemId()
+            self.obs_connection.call(
+                obs_client.obs_requests.SetSceneItemEnabled(
+                    sceneName=scene_name, sceneItemId=item_id, sceneItemEnabled=visible
+                )
+            )
             self.logger.debug(f"已设置场景「{scene_name}」里来源「{source_name}」的可见性: {visible}")
             return True
         except Exception as e:
@@ -337,10 +339,12 @@ class OBSProvider(ConnectionToolProvider):
     async def _set_text_source(self, text: str) -> None:
         if not self.obs_connection:
             raise RuntimeError("OBS 未连接")
-        self.obs_connection.set_input_settings(
-            self.text_source_name,
-            {"text": text},
-            True,
+        self.obs_connection.call(
+            obs_client.obs_requests.SetInputSettings(
+                inputName=self.text_source_name,
+                inputSettings={"text": text},
+                overlay=True,
+            )
         )
 
     async def _send_typewriter_effect(self, text: str) -> None:
@@ -375,18 +379,15 @@ class OBSProvider(ConnectionToolProvider):
             raise
 
     async def _connect_obs(self) -> bool:
-        if not obs:
-            self.logger.error("obsws-python库未安装")
+        if not obs_client.AVAILABLE:
+            self.logger.error("obs-websocket-py库未安装")
             return False
-        # obsws-python 连接时以 INFO 级明文打印密码，连不上、请求被拒时每次都打整段堆栈，
+        # obs-websocket-py 连接阶段会以 DEBUG/INFO 级打印连接参数，连不上时每次都打整段堆栈，
         # 且经标准库兜底处理器直出控制台；先压住，失败原因由本类翻译后经项目日志记录
-        silence_third_party_logger("obsws_python")
+        silence_third_party_logger("obswebsocket")
         try:
-            client = obs.ReqClient(
-                host=self.host,
-                port=self.port,
-                password=self.password if self.password else None,
-            )
+            client = obs_client.ObsClient(host=self.host, port=self.port, password=self.password, timeout=10)
+            client.connect()
         except Exception as e:
             # 握手阶段失败（OBS 没开、没启用 WebSocket 服务器、密码不对等）：翻译原因后报连接失败
             self.logger.error(f"连接 OBS 失败：{self._describe(e, connected=False)}")
@@ -412,7 +413,7 @@ class OBSProvider(ConnectionToolProvider):
         return True
 
     def _close_client(self, client: Any) -> None:
-        """断开一条 obsws 连接；断开阶段的失败只记录，不影响之后重连。"""
+        """断开一条 OBS WebSocket 连接；断开阶段的失败只记录，不影响之后重连。"""
         try:
             client.disconnect()
         except Exception as e:
@@ -438,13 +439,13 @@ class OBSProvider(ConnectionToolProvider):
 
 
 def _is_connection_error(exc: Exception) -> bool:
-    """判定是否连接类异常（保守策略）：只认 obsws/websocket 专属异常与底层
-    管道断裂——业务性失败（场景/来源不存在等 OBSSDKRequestError）不误摘。
+    """判定是否连接类异常（保守策略）：只认 websocket 连接关闭与底层管道断裂/超时——
+    业务性失败（场景/来源不存在等 OBSRequestError）不误摘。
     按类名识别以兼容依赖缺失时的降级路径（同 obs_errors 的惯例）。
     """
     name = type(exc).__name__
-    return name in ("OBSSDKTimeoutError", "WebSocketConnectionClosedException") or isinstance(
-        exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
+    return "WebSocketConnectionClosedException" in name or isinstance(
+        exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, TimeoutError)
     )
 
 

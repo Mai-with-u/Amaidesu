@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.modules.studio.obs import obs_client
 from src.modules.studio.obs import obs_provider as obs_mod
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 from src.modules.tools.registry import ToolRegistry
@@ -36,7 +37,7 @@ def _config() -> Dict[str, Any]:
 
 
 def _make_obs_provider(monkeypatch: pytest.MonkeyPatch) -> obs_mod.OBSProvider:
-    monkeypatch.setattr(obs_mod, "obs", MagicMock())
+    monkeypatch.setattr(obs_client, "ObsClient", MagicMock())
     return obs_mod.OBSProvider(config=_config(), event_bus=None)
 
 
@@ -85,13 +86,13 @@ async def test_connect_success_after_failure_reRegisters_tools(monkeypatch: pyte
     provider.mark_connected()
 
     # 首次连接类失败（握手失败视为连接类，摘除既有登记）
-    req_client = MagicMock(side_effect=ConnectionResetError("连接被重置"))
-    monkeypatch.setattr(obs_mod, "obs", MagicMock(ReqClient=req_client))
+    obs_client_factory = MagicMock(side_effect=ConnectionResetError("连接被重置"))
+    monkeypatch.setattr(obs_client, "ObsClient", obs_client_factory)
     assert await provider.connect() is False
     assert _registry_names(registry) == set()
 
     # 手动重连成功：4 工具补回
-    monkeypatch.setattr(obs_mod, "obs", MagicMock(ReqClient=MagicMock(return_value=MagicMock())))
+    monkeypatch.setattr(obs_client, "ObsClient", MagicMock(return_value=MagicMock()))
     assert await provider.connect() is True
     assert _registry_names(registry) == _OBS_TOOLS
 

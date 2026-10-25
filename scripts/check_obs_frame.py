@@ -92,29 +92,33 @@ def main() -> int:
     print("  [通过] 端口可达")
 
     print("[2/5] WebSocket 握手与身份验证")
-    silence_third_party_logger("obsws_python")
+    silence_third_party_logger("obswebsocket")
     try:
-        import obsws_python as obs
+        # 可选重型依赖延迟加载：脚本其余诊断步骤（端口探测等）不依赖它也能给出结果
+        from src.modules.studio.obs.obs_client import ObsClient, obs_requests
 
-        client = obs.ReqClient(host=host, port=port, password=config["obs_password"] or None, timeout=3)
+        client = ObsClient(host=host, port=port, password=config["obs_password"] or "", timeout=3)
+        client.connect()
     except Exception as error:  # noqa: BLE001 - 诊断脚本把任何失败翻译成原因后退出
         return _fail("身份验证", error, config)
     print("  [通过] 已连上并通过验证")
 
     try:
         print("[3/5] OBS 版本与支持的图片格式")
-        version = client.get_version()
-        formats: List[str] = [str(item).lower() for item in getattr(version, "supported_image_formats", []) or []]
+        version = client.call(obs_requests.GetVersion())
+        formats: List[str] = [str(item).lower() for item in version.getSupportedImageFormats() or []]
         print(
-            f"  OBS {getattr(version, 'obs_version', '?')}，obs-websocket {getattr(version, 'obs_web_socket_version', '?')}；"
+            f"  OBS {version.getObsVersion()}，obs-websocket {version.getObsWebSocketVersion()}；"
             f"JPEG {'支持' if 'jpg' in formats or 'jpeg' in formats else '不支持（将用 PNG，体积更大）'}"
         )
-        video = client.get_video_settings()
-        print(f"  画布 {video.base_width}×{video.base_height}，输出 {video.output_width}×{video.output_height}")
+        video = client.call(obs_requests.GetVideoSettings())
+        print(
+            f"  画布 {video.getBaseWidth()}×{video.getBaseHeight()}，输出 {video.getOutputWidth()}×{video.getOutputHeight()}"
+        )
 
         print("[4/5] 要截的场景或来源")
-        program = client.get_current_program_scene().current_program_scene_name
-        scenes = [item.get("sceneName", "") for item in getattr(client.get_scene_list(), "scenes", []) or []]
+        program = client.call(obs_requests.GetCurrentProgramScene()).getCurrentProgramSceneName()
+        scenes = [item.get("sceneName", "") for item in client.call(obs_requests.GetSceneList()).getScenes() or []]
         source = config["obs_source"] or program
         print(f"  当前节目场景：{program}；全部场景：{'、'.join(reversed(scenes)) or '（无）'}")
         print(f"  将截：{source}{'（当前节目场景）' if not config['obs_source'] else ''}")
@@ -122,14 +126,22 @@ def main() -> int:
         print(f"[5/5] 连续截 {_SHOTS} 帧")
         fmt = next((item for item in ("jpg", "jpeg", "png") if item in formats), "jpg")
         width = int(config["max_width"])
-        height = max(8, round(width * video.output_height / video.output_width))
+        height = max(8, round(width * video.getOutputHeight() / video.getOutputWidth()))
         costs: List[float] = []
         first = b""
         for _ in range(_SHOTS):
             started = time.perf_counter()
-            response = client.get_source_screenshot(source, fmt, width, height, 70)
+            response = client.call(
+                obs_requests.GetSourceScreenshot(
+                    sourceName=source,
+                    imageFormat=fmt,
+                    imageWidth=width,
+                    imageHeight=height,
+                    imageCompressionQuality=70,
+                )
+            )
             costs.append((time.perf_counter() - started) * 1000)
-            image = base64.b64decode(str(response.image_data).partition(",")[2])
+            image = base64.b64decode(str(response.getImageData()).partition(",")[2])
             first = first or image
     except Exception as error:  # noqa: BLE001 - 诊断脚本把任何失败翻译成原因后退出
         return _fail("截图", error, config)

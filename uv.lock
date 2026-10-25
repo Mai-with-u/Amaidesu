@@ -153,7 +153,7 @@ dependencies = [
     { name = "loguru" },
     { name = "mss" },
     { name = "numpy" },
-    { name = "obsws-python" },
+    { name = "obs-websocket-py" },
     { name = "openai" },
     { name = "packaging" },
     { name = "pillow" },
@@ -204,7 +204,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "mss", specifier = ">=9.0.0" },
     { name = "numpy", specifier = ">=1.24.0" },
-    { name = "obsws-python", specifier = ">=1.6.0" },
+    { name = "obs-websocket-py", specifier = ">=1.0" },
     { name = "openai", specifier = ">=1.0.0" },
     { name = "packaging", specifier = ">=24.0" },
     { name = "pillow", specifier = ">=10.0.0" },
@@ -1717,15 +1717,14 @@ wheels = [
 ]
 
 [[package]]
-name = "obsws-python"
-version = "1.8.0"
+name = "obs-websocket-py"
+version = "1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "websocket-client" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d6/2f/624af34a5b0f09fbf858bf6743521a8626d712671ac49573e625ad1c97d3/obsws_python-1.8.0.tar.gz", hash = "sha256:e082894f80deb0836861fdc3c222e497308c8f66328da6075baba5b456a20971", size = 28727, upload-time = "2025-07-01T08:24:11.652Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/97/4b/537f3d372f065b2aeeac3812228066eb70f47436adf88aaacc94eb5fd4e1/obsws_python-1.8.0-py3-none-any.whl", hash = "sha256:537bde416e149b6f59e0b2f31761d4a40329feafec171bde6fc1346ab8516e28", size = 30819, upload-time = "2025-07-01T08:24:10.086Z" },
+    { url = "https://files.pythonhosted.org/packages/79/79/9d97d956d4ec2bf621770363bf5de02bf404abfe674be0cf4630f4b80878/obs_websocket_py-1.0-py3-none-any.whl", hash = "sha256:c563a57a551d3c07428fa066b5b3e6e5963f634fb0f54408a9b46ff5b7441d65", size = 8462, upload-time = "2023-02-20T22:49:11.522Z" },
 ]
 
 [[package]]

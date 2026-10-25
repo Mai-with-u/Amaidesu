@@ -17,6 +17,8 @@ from src.modules.collectors.frame.live_frame_collector import (
     describe_live_frame_obs_error,
     frame_change,
 )
+from src.modules.studio.obs import obs_client
+from src.modules.studio.obs.obs_client import OBSRequestError
 from src.modules.vision.image_store import VisionImageStore, set_image_store
 
 
@@ -121,33 +123,51 @@ def test_config_defaults_are_constructible() -> None:
 
 
 class _FakeObsClient:
-    """obsws ReqClient 替身：记录调用，按需在截图时失败。"""
+    """ObsClient 替身：记录调用，按需在截图时失败。"""
 
     instances: List["_FakeObsClient"] = []
     fail_screenshot: Optional[Exception] = None
 
-    def __init__(self, **kwargs: object) -> None:
-        self.kwargs = kwargs
+    def __init__(self, *, host: str, port: int, password: str, timeout: int) -> None:
+        self.kwargs = {"host": host, "port": port, "password": password, "timeout": timeout}
         self.disconnected = False
         self.shots: List[tuple] = []
         _FakeObsClient.instances.append(self)
 
-    def get_version(self) -> object:
-        return SimpleNamespace(supported_image_formats=["bmp", "jpeg", "jpg", "png"])
+    def connect(self) -> None:
+        return None
 
-    def get_video_settings(self) -> object:
-        return SimpleNamespace(base_width=2560, base_height=1440, output_width=1920, output_height=1080)
-
-    def get_current_program_scene(self) -> object:
-        return SimpleNamespace(current_program_scene_name="游戏场景")
-
-    def get_source_screenshot(self, name: str, fmt: str, width: int, height: int, quality: int) -> object:
-        if _FakeObsClient.fail_screenshot is not None:
-            raise _FakeObsClient.fail_screenshot
-        self.shots.append((name, fmt, width, height, quality))
-        buffer = io.BytesIO()
-        Image.new("RGB", (width, height), (90, 90, 90)).save(buffer, format="JPEG")
-        return SimpleNamespace(image_data="data:image/jpg;base64," + base64.b64encode(buffer.getvalue()).decode())
+    def call(self, request: object) -> object:
+        name = type(request).__name__
+        if name == "GetVersion":
+            return SimpleNamespace(getSupportedImageFormats=lambda: ["bmp", "jpeg", "jpg", "png"])
+        if name == "GetVideoSettings":
+            return SimpleNamespace(
+                getBaseWidth=lambda: 2560,
+                getBaseHeight=lambda: 1440,
+                getOutputWidth=lambda: 1920,
+                getOutputHeight=lambda: 1080,
+            )
+        if name == "GetCurrentProgramScene":
+            return SimpleNamespace(getCurrentProgramSceneName=lambda: "游戏场景")
+        if name == "GetSourceScreenshot":
+            if _FakeObsClient.fail_screenshot is not None:
+                raise _FakeObsClient.fail_screenshot
+            args = request.data()
+            shot = (
+                args["sourceName"],
+                args["imageFormat"],
+                args["imageWidth"],
+                args["imageHeight"],
+                args["imageCompressionQuality"],
+            )
+            self.shots.append(shot)
+            width, height = args["imageWidth"], args["imageHeight"]
+            buffer = io.BytesIO()
+            Image.new("RGB", (width, height), (90, 90, 90)).save(buffer, format="JPEG")
+            encoded = base64.b64encode(buffer.getvalue()).decode()
+            return SimpleNamespace(getImageData=lambda: "data:image/jpg;base64," + encoded)
+        raise AssertionError(f"替身未实现的请求：{name}")
 
     def disconnect(self) -> None:
         self.disconnected = True
@@ -157,7 +177,7 @@ class _FakeObsClient:
 def fake_obs(monkeypatch: pytest.MonkeyPatch) -> type:
     _FakeObsClient.instances = []
     _FakeObsClient.fail_screenshot = None
-    monkeypatch.setattr("obsws_python.ReqClient", _FakeObsClient)
+    monkeypatch.setattr(obs_client, "ObsClient", _FakeObsClient)
     return _FakeObsClient
 
 
@@ -166,7 +186,7 @@ async def test_obs_grabber_shoots_program_scene_as_jpeg(fake_obs: type) -> None:
     grabber = ObsFrameGrabber(host="localhost", port=4455, password="", source="", max_width=768)
     frame = await grabber.grab()
     client = fake_obs.instances[0]
-    assert client.kwargs == {"host": "localhost", "port": 4455, "password": None, "timeout": 3}
+    assert client.kwargs == {"host": "localhost", "port": 4455, "password": "", "timeout": 3}
     assert client.shots == [("游戏场景", "jpg", 768, 432, 70)]
     assert frame is not None and (frame.width, frame.height) == (768, 432)
     assert frame.data_url.startswith("data:image/jpeg;base64,")
@@ -186,13 +206,12 @@ async def test_obs_grabber_drops_client_on_failure_and_reconnects(fake_obs: type
 
 def test_obs_errors_are_translated_to_fixes() -> None:
     """常见失败翻译成照着改的原因：没开、要密码、密码不对、找不到来源。"""
-    from obsws_python.error import OBSSDKError, OBSSDKRequestError
 
     def describe(error: BaseException) -> str:
         return describe_live_frame_obs_error(error, host="localhost", port=4455, source="游戏画面")
 
     assert "启用 WebSocket 服务器" in describe(ConnectionRefusedError())
-    assert "obs_password" in describe(OBSSDKError("authentication enabled but no password provided"))
-    assert "密码不一致" in describe(OBSSDKError("failed to identify client with the server"))
-    assert "找不到要截的场景或来源「游戏画面」" in describe(OBSSDKRequestError("GetSourceScreenshot", 600, "x"))
+    assert "obs_password" in describe(Exception("Empty response to Identify, password may be inconnect."))
+    assert "密码不一致" in describe(Exception("failed to identify client with the server"))
+    assert "找不到要截的场景或来源「游戏画面」" in describe(OBSRequestError("GetSourceScreenshot", 600, "x"))
     assert "超时" in describe(TimeoutError())

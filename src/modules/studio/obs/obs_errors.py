@@ -1,11 +1,12 @@
-"""OBS 失败原因翻译：把 obsws-python / websocket-client 抛出的异常翻成能照着改的原因。
+"""OBS 失败原因翻译：把 obs-websocket-py / websocket-client 抛出的异常翻成能照着改的原因。
 
 直播画面采集器、OBS 控制工具与诊断脚本共用。两边的连接参数配在不同文件里（采集器在
 ``collectors.toml`` 的 ``[live_frame]``，控制工具在 ``tools.toml`` 的
 ``[tools.studio.obs.config]``），找的资源也不同（要截的画面 / 要切的场景 / 要写的文本源），
 所以"密码填在哪"和"找不到时该查什么"由调用方给出。
 
-obsws-python 与 websocket-client 的异常按类名识别，不在这里导入它们：没装依赖时同样要能说清原因。
+异常按类名与消息文本识别，不在这里导入 obs-websocket-py：没装依赖时同样要能说清原因。
+websocket-client 是 obs-websocket-py 的底层，其连接类异常仍会漏到这里。
 """
 
 from __future__ import annotations
@@ -35,25 +36,29 @@ def describe_obs_error(
     text = str(error)
     where = f"{host}:{port}"
     if isinstance(error, ImportError):
-        return "没装 obsws-python：在项目目录执行 uv sync 安装依赖"
+        return "没装 obs-websocket-py：在项目目录执行 uv sync 安装依赖"
     if isinstance(error, ConnectionRefusedError):
         return (
             f"连不上 OBS（{where}）：OBS 没开，或没在「工具 → WebSocket 服务器设置」里勾选启用 WebSocket 服务器"
             "（需要 OBS 28 及以上，端口默认 4455）"
         )
-    if isinstance(error, TimeoutError) or name in ("WebSocketTimeoutException", "OBSSDKTimeoutError"):
+    if isinstance(error, TimeoutError) or name == "WebSocketTimeoutException":
         return f"连接 OBS（{where}）超时：检查地址、端口与防火墙；OBS 卡死时也会超时"
-    if "no password provided" in text:
-        return f"OBS 开启了身份验证：在 {password_setting} 填 WebSocket 服务器密码"
-    if name == "OBSSDKRequestError":
+    if name == "OBSRequestError":
         code = getattr(error, "code", None)
         if code == 600 and not_found:
             return not_found
         return f"OBS 拒绝了 {getattr(error, 'req_name', '请求')}（代码 {code}）：{text}"
-    # 请求阶段 OBS 正常退出会先发关闭帧，obsws-python 读到空串后 JSON 解析失败；直接断网则是连接被关闭
+    # 请求阶段 OBS 正常退出会先发关闭帧，读到空串后 JSON 解析失败；直接断网则是连接被关闭
     closed = name == "WebSocketConnectionClosedException" or isinstance(error, json.JSONDecodeError)
     if isinstance(error, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)) or (connected and closed):
         return f"与 OBS（{where}）的连接断开了：OBS 关闭或重启过"
-    if name == "WebSocketConnectionClosedException" or "failed to identify" in text:
+    # 身份验证被拒时库抛裸的连接关闭异常；密码没填对时握手回执是空串，
+    # 库报 "password may be inconnect"（库自己的拼写，原样匹配）
+    if (
+        name == "WebSocketConnectionClosedException"
+        or "failed to identify" in text
+        or "password may be inconnect" in text
+    ):
         return f"OBS 拒绝了身份验证：{password_setting} 与 OBS「WebSocket 服务器设置」里的密码不一致"
     return f"{name}: {text}"

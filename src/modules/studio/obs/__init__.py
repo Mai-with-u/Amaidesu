@@ -5,7 +5,7 @@
 - ``obs_switch_scene``       - 切换 OBS 场景
 - ``obs_set_source_visibility`` - 控制源可见性
 
-通过 ``obsws-python`` 控制 OBS Studio；依赖缺失时软降级。
+通过 ``obs-websocket-py`` 控制 OBS Studio；依赖缺失时软降级。
 """
 
 from .obs_provider import OBSProvider, create_obs_provider, register_obs_tools

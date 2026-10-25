@@ -105,9 +105,9 @@ class ObsFrameGrabber:
     """经 obs-websocket 截 OBS 画面（同步客户端放线程里跑，不阻塞事件循环）。
 
     首次取帧时连接：读 OBS 支持的图片格式（优先 JPEG）与输出分辨率（按宽度等比
-    算高度）。连接中途断开就丢掉客户端，下次取帧重连。obsws-python 自带的日志会以
-    INFO 级明文打印连接密码、连不上时每次都打整段堆栈，一律压住，失败原因由
-    ``describe`` 翻译后经项目日志按抽样记录。
+    算高度）。连接中途断开就丢掉客户端，下次取帧重连。obs-websocket-py 自带的日志
+    会打印连接参数、连不上时每次都打整段堆栈，一律压住，失败原因由 ``describe``
+    翻译后经项目日志按抽样记录。
     """
 
     def __init__(self, *, host: str, port: int, password: str, source: str, max_width: int) -> None:
@@ -120,7 +120,7 @@ class ObsFrameGrabber:
         self._height = 0
         self._format = "jpg"
         self._logger = get_logger("LiveFrameCollector")
-        silence_third_party_logger("obsws_python")
+        silence_third_party_logger("obswebsocket")
 
     async def grab(self) -> Optional[GrabbedFrame]:
         return await asyncio.to_thread(self._grab_sync)
@@ -141,38 +141,56 @@ class ObsFrameGrabber:
 
     def _connect(self) -> Any:
         """连接 OBS，读支持的图片格式与输出分辨率；中途失败先断开再抛出。"""
-        # 可选重型依赖延迟加载：没装 obsws-python 时只有 obs 来源不可用，桌面截屏照常
-        import obsws_python as obs
+        # 可选重型依赖延迟加载：没装 obs-websocket-py 时只有 obs 来源不可用，桌面截屏照常
+        from src.modules.studio.obs.obs_client import ObsClient, obs_requests
 
-        client = obs.ReqClient(host=self._host, port=self._port, password=self._password or None, timeout=3)
+        client = ObsClient(host=self._host, port=self._port, password=self._password or "", timeout=3)
+        client.connect()
         try:
-            formats = [
-                str(item).lower() for item in getattr(client.get_version(), "supported_image_formats", None) or []
-            ]
+            version = client.call(obs_requests.GetVersion())
+            formats = [str(item).lower() for item in version.getSupportedImageFormats() or []]
             self._format = next(
                 (item for item in ("jpg", "jpeg", "png") if item in formats), formats[0] if formats else "jpg"
             )
-            video = client.get_video_settings()
+            video = client.call(obs_requests.GetVideoSettings())
         except Exception:
             self._disconnect(client)
             raise
-        width = int(getattr(video, "output_width", 0) or getattr(video, "base_width", 0) or 16)
-        height = int(getattr(video, "output_height", 0) or getattr(video, "base_height", 0) or 9)
+        try:
+            width = int(video.getOutputWidth() or video.getBaseWidth() or 16)
+            height = int(video.getOutputHeight() or video.getBaseHeight() or 9)
+        except KeyError:
+            # 协议回执缺分辨率字段：按 16:9 兜底，高度只影响请求的缩放参数
+            width, height = 16, 9
         self._height = max(8, round(self._max_width * height / width))
         return client
 
     def _grab_sync(self) -> Optional[GrabbedFrame]:
+        # 同 _connect：obs-websocket-py 为可选重型依赖，取帧路径按需加载
+        from src.modules.studio.obs.obs_client import obs_requests
+
         if self._client is None:
             self._client = self._connect()
         try:
-            source = self._source or self._client.get_current_program_scene().current_program_scene_name
-            response = self._client.get_source_screenshot(source, self._format, self._max_width, self._height, 70)
+            if self._source:
+                source = self._source
+            else:
+                source = self._client.call(obs_requests.GetCurrentProgramScene()).getCurrentProgramSceneName()
+            response = self._client.call(
+                obs_requests.GetSourceScreenshot(
+                    sourceName=source,
+                    imageFormat=self._format,
+                    imageWidth=self._max_width,
+                    imageHeight=self._height,
+                    imageCompressionQuality=70,
+                )
+            )
         except Exception:
             # 连接断了（OBS 重启等）或来源名不对：丢掉客户端，下次取帧重连
             client, self._client = self._client, None
             self._disconnect(client)
             raise
-        data_url = str(getattr(response, "image_data", "") or "")
+        data_url = str(response.getImageData() or "")
         head, _, encoded = data_url.partition(",")
         if not encoded:
             return None

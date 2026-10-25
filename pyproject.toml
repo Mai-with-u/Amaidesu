@@ -35,7 +35,7 @@ dependencies = [
     "openai>=1.0.0",
     "json_repair>=0.15.0",
     # OBS 控制
-    "obsws-python>=1.6.0",
+    "obs-websocket-py>=1.0",
     # GUI
     "customtkinter>=5.2.0",
     # 自动化和 OSC
