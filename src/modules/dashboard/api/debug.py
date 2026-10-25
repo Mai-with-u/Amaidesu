@@ -6,7 +6,7 @@
 
 import base64
 import uuid
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -20,6 +20,8 @@ from src.modules.dashboard.schemas.debug import (
     SubtitleStatusResponse,
     SubtitleTestRequest,
     SubtitleTestResponse,
+    TtsSayRequest,
+    TtsSayResponse,
     TtsStatusResponse,
     TtsTestRequest,
     TtsTestResponse,
@@ -209,6 +211,23 @@ async def get_subtitle_status(
     )
 
 
+async def _play_utterance(engine: Any, text: str, id_prefix: str) -> tuple[str, Optional[str]]:
+    """驱动 TTS 引擎试说一句（合成 + 声卡播放 + utterance 事件 + 字幕联动）。
+
+    返回 ``(utterance_id, error)``：成功时 error 为 None；失败时引擎协议
+    约定已主动发 ``tts.utterance.failed``，此处只回传 HTTP 面的失败原因。
+    test（试说）与 say（台前重播）共用本调用路径。
+    """
+    utterance_id = f"{id_prefix}-{now_ms()}"
+    try:
+        await engine.handle_speech(text, utterance_id=utterance_id)
+    except Exception as e:
+        logger.exception(f"TTS 试说失败: {e}")
+        return utterance_id, str(e)
+    logger.info(f"TTS 试说完成: utterance_id={utterance_id}")
+    return utterance_id, None
+
+
 @router.post("/tts/test", response_model=TtsTestResponse)
 async def test_tts(
     request: TtsTestRequest,
@@ -246,16 +265,29 @@ async def test_tts(
         logger.info(f"TTS 调试合成完成: {len(audio)} bytes, overrides={overrides}")
         return TtsTestResponse(success=True, audio_base64=audio_base64)
 
-    utterance_id = f"debug-test-{now_ms()}"
-    try:
-        await engine.handle_speech(request.text, utterance_id=utterance_id)
-    except Exception as e:
-        # 引擎协议约定：合成失败已主动发 tts.utterance.failed（字幕照常
-        # 显示该句文本），此处只做 HTTP 面的成败回传
-        logger.exception(f"TTS 试说失败: {e}")
-        return TtsTestResponse(success=False, utterance_id=utterance_id, error=str(e))
-    logger.info(f"TTS 试说完成: utterance_id={utterance_id}")
+    utterance_id, error = await _play_utterance(engine, request.text, "debug-test")
+    if error is not None:
+        return TtsTestResponse(success=False, utterance_id=utterance_id, error=error)
     return TtsTestResponse(success=True, utterance_id=utterance_id)
+
+
+@router.post("/tts/say", response_model=TtsSayResponse)
+async def say_tts(
+    request: TtsSayRequest,
+    server: ServerDep,
+) -> TtsSayResponse:
+    """台前重播：把给定文本重新合成并在声卡播放（发言卡"重播"按钮数据面）。
+
+    重播 = 同文本重合成：utterance 生命周期事件不留 utterance_id → 文本的
+    服务端留档，前端持原文本直接回传。与 ``/tts/test`` 试说共用
+    ``handle_speech`` 完整生产链路（utterance 事件 + 字幕联动）。同步长
+    请求，前端需放宽超时并做 loading 防连点。
+    """
+    engine = _get_tts_engine(server)
+    utterance_id, error = await _play_utterance(engine, request.text, "debug-say")
+    if error is not None:
+        return TtsSayResponse(success=False, utterance_id=utterance_id, error=error)
+    return TtsSayResponse(success=True, utterance_id=utterance_id)
 
 
 @router.get("/tts/status", response_model=TtsStatusResponse)

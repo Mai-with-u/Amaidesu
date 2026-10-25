@@ -33,6 +33,12 @@
       </el-radio-group>
     </header>
 
+    <!-- 状态条挂载区（完整档）：实时计分板 + TTS 台前水位 -->
+    <div v-if="isFullMode" class="console-strip">
+      <ScoreboardStrip :active-session="activeSessionItem" />
+      <TtsWaterLevel />
+    </div>
+
     <div class="console-body">
       <!-- 左栏：场次侧边栏（当前 + 历史回看 + 生命周期开关）               -->
       <aside class="sessions" aria-label="直播场次">
@@ -423,8 +429,11 @@ import { confirmAction } from '@/utils/confirmAction';
 import { formatNumber } from '@/utils/format';
 import { waitFor } from '@/utils/waitFor';
 import { MAX_ENTRIES, isConversationEntry, relativeTime, type ShowEntry } from '@/utils/liveFeed';
+import type { LiveSessionItem } from '@/types';
 import FeedTimeline from '@/components/live/FeedTimeline.vue';
 import AgentMemoPanel from '@/components/live/AgentMemoPanel.vue';
+import ScoreboardStrip from '@/components/live/ScoreboardStrip.vue';
+import TtsWaterLevel from '@/components/live/TtsWaterLevel.vue';
 
 // 装配：场次侧边栏 → 思考流 → 时间线内容 → 滚动跟随 → 干预输入条
 // （依赖沿参数单向流动：时间线消费场次模式与思考行，滚动跟随消费展示条目）
@@ -490,6 +499,11 @@ const {
 });
 
 const { rundownBanner, stageChip, simulatorChip, loadSimulatorStatus } = useLiveStatus();
+
+/** 状态条数据源：当前进行中的显式场次（无进行中场次时计分板时长显示占位） */
+const activeSessionItem = computed<LiveSessionItem | null>(
+  () => sessions.value.find(s => s.is_active) ?? null,
+);
 
 // 视图档位：完整=上图全量运营面；简洁=观众视角的纯浏览——除藏运营操作件外，
 // 时间线内容本身也过滤成对话流（发言/弹幕/礼物/场次边界），
@@ -687,6 +701,19 @@ onMounted(() => {
   align-items: baseline;
   gap: var(--spacing-sm);
   flex-shrink: 0;
+}
+
+/* 状态条挂载区（顶栏与主体之间）：计分板左、TTS 水位右 */
+.console-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-md, 16px);
+  flex-shrink: 0;
+}
+
+.console-strip > .tts-water {
+  margin-left: auto;
 }
 
 .console-title {

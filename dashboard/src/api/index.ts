@@ -35,6 +35,8 @@ import type {
   SubtitleStatusResponse,
   TtsTestRequest,
   TtsTestResponse,
+  TtsSayRequest,
+  TtsSayResponse,
   TtsStatusResponse,
   ConfigUpdateResponse,
   LLMContextBreakdown,
@@ -157,6 +159,9 @@ export const debugApi = {
   getSubtitleStatus: () => api.get<SubtitleStatusResponse>('/debug/subtitle/status'),
   testTts: (request: TtsTestRequest) =>
     api.post<TtsTestResponse>('/debug/tts/test', request, { timeout: 60000 }),
+  // 台前重播：同文本重合成（发言卡"重播"按钮数据面），走 handle_speech 完整生产链路
+  sayTts: (request: TtsSayRequest) =>
+    api.post<TtsSayResponse>('/debug/tts/say', request, { timeout: 60000 }),
   getTtsStatus: () => api.get<TtsStatusResponse>('/debug/tts/status'),
 };
 

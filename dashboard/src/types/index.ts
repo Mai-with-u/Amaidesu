@@ -308,6 +308,18 @@ export interface TtsTestResponse {
   audio_base64?: string;
 }
 
+/** 台前重播请求：同文本重合成（utterance 事件无服务端留档，前端回传原文本） */
+export interface TtsSayRequest {
+  text: string;
+}
+
+/** 台前重播响应（同步长请求；合成失败时引擎已发 tts.utterance.failed） */
+export interface TtsSayResponse {
+  success: boolean;
+  utterance_id?: string;
+  error?: string;
+}
+
 export interface TtsStatusResponse {
   available: boolean;
   stats: Record<string, unknown>;

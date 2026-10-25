@@ -2,6 +2,10 @@
      统计胶囊取 Replyer 表达请求（决策卡上是 Planner 请求，二者互补）；
      无指针的旧事件不渲染统计行 -->
 <script setup lang="ts">
+import { ref } from 'vue';
+import { ElMessage } from 'element-plus';
+import { debugApi } from '@/api';
+import { getApiErrorMessage } from '@/utils/apiError';
 import { relativeTime } from '@/utils/liveFeed';
 import { useTimelineCardHost } from './context';
 import type { CardProps } from './registry';
@@ -10,6 +14,30 @@ import CtxPill from './CtxPill.vue';
 defineProps<CardProps>();
 
 const host = useTimelineCardHost();
+
+// 台前重播：同文本重合成（debug/tts/say，走引擎完整生产链路，声卡出声）。
+// 同步长请求，按钮 loading 防连点；失败保留重试入口，错误提示统一走
+// getApiErrorMessage
+const replaying = ref(false);
+const replayFailed = ref(false);
+
+async function replay(entryText: string): Promise<void> {
+  if (replaying.value || !entryText) return;
+  replaying.value = true;
+  replayFailed.value = false;
+  try {
+    const response = await debugApi.sayTts({ text: entryText });
+    if (!response.data.success) {
+      replayFailed.value = true;
+      ElMessage.error(response.data.error || 'TTS 重播失败');
+    }
+  } catch (error) {
+    replayFailed.value = true;
+    ElMessage.error(getApiErrorMessage(error, 'TTS 重播失败'));
+  } finally {
+    replaying.value = false;
+  }
+}
 </script>
 
 <template>
@@ -26,6 +54,17 @@ const host = useTimelineCardHost();
       <span v-if="entry.ttsState" class="tts-state">{{
         entry.ttsState === 'speaking' ? '播报中' : '已播完'
       }}</span>
+      <!-- 台前重播：原文本重新合成播放（合成失败句保留重试入口） -->
+      <el-button
+        class="replay-btn"
+        link
+        size="small"
+        :loading="replaying"
+        :title="replayFailed ? '上次重播失败，点击重试' : '重新合成播放这句发言'"
+        @click.stop="replay(entry.text)"
+      >
+        {{ replayFailed ? '重试' : '▶ 重播' }}
+      </el-button>
       <span class="grow" />
       <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
     </div>
@@ -86,6 +125,12 @@ const host = useTimelineCardHost();
   font-weight: 600;
   color: var(--color-tool);
   background: var(--color-tool-bg);
+  flex-shrink: 0;
+}
+
+/* 台前重播入口：弱化为头部小链接钮，不与统计胶囊争注意力 */
+.replay-btn {
+  font-size: 11px;
   flex-shrink: 0;
 }
 
