@@ -872,11 +872,13 @@ async def create_app_components(
             # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
             recap_repo=database.recaps,
             rundown_transition_repo=database.rundown_transitions,
-            # 观众域只读查询接口：列表 / 档案 / 对话 / 贡献聚合直查存储层
+            # 观众域查询接口：列表 / 档案 / 对话 / 贡献聚合直查存储层
             viewer_repo=database.viewers,
             chat_repo=database.chat,
             # 观众画像仓储：/api/v1/memory/* 管理接口与主播 Agent 共用同一张表
             viewer_profile_repo=database.viewer_profiles,
+            # 观众身份人工处理：待确认页、合并与取消关联
+            viewer_identity_repo=database.viewer_identity,
             # 任务卡快照与运营委派的数据源（通用任务基建）
             task_tracker=task_tracker,
             # 请求历史管理器：与引擎写入侧同源的共享实例

@@ -1,14 +1,19 @@
 """观众数据端点
 
 观众域的 WebUI 消费面：``viewers`` 观众表 + 明细四表（live_chat / gifts /
-super_chats / guards）按内部观众 ID（``viewer_id``）的聚合查询，全部只读。
+super_chats / guards）按内部观众 ID（``viewer_id``）的聚合查询，以及观众身份
+的人工处理（待确认、合并、取消关联）。
 
 - ``GET /viewers``                         观众列表（平台过滤 / 搜索 / 排序 / 分页）
 - ``GET /viewers/insights``                互动分析聚合（活跃分桶 / 回复覆盖 / 按天弹幕量）
+- ``GET /viewers/pending``                 待确认观众及其建议并入的老观众
 - ``GET /viewers/{viewer_id}``             单观众档案（统计 + 外部 ID + 用过的昵称 + 贡献汇总）
 - ``GET /viewers/{viewer_id}/messages``    对话批次（观众消息与主播回复交织，游标分页）
 - ``GET /viewers/{viewer_id}/contributions`` 礼物与 SC 明细 + 汇总
 - ``GET /viewers/{viewer_id}/sessions``    参与场次聚合
+- ``POST /viewers/{viewer_id}/merge``      把这位观众并入另一位
+- ``POST /viewers/{viewer_id}/keep``       保持新建（清除待确认标记）
+- ``POST /viewers/{viewer_id}/unlink``     把一个外部 ID 拆成新观众
 
 同一位观众可能有账号 ID 与开放平台 ID 两种外部 ID，单观众端点一律按内部观众 ID
 定位；列表行的 ``user_id`` 是代表外部 ID（账号 ID 优先），只作展示。
@@ -18,12 +23,13 @@ super_chats / guards）按内部观众 ID（``viewer_id``）的聚合查询，�
 页面如实呈现这些边界，不臆造数据。
 """
 
-from typing import TYPE_CHECKING, Annotated, Any, List, Optional
+from typing import TYPE_CHECKING, Annotated, Any, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.storage.repos.viewer_identity import ViewerIdentityError
 from src.modules.types.currency import to_cny
 
 if TYPE_CHECKING:
@@ -40,6 +46,14 @@ def _require_viewer_repo(server: "DashboardServer") -> Any:
     repo = server.viewer_repo
     if repo is None:
         raise HTTPException(status_code=503, detail="观众统计仓储不可用")
+    return repo
+
+
+def _require_identity_repo(server: "DashboardServer") -> Any:
+    """取观众身份人工处理仓储，未装配时 503。"""
+    repo = getattr(server, "viewer_identity_repo", None)
+    if repo is None:
+        raise HTTPException(status_code=503, detail="观众身份仓储不可用")
     return repo
 
 
@@ -206,6 +220,54 @@ class ViewerSessionsResponse(BaseModel):
     items: List[ViewerSessionItem]
 
 
+class PendingViewerItem(BaseModel):
+    """一位待确认观众：新建的这一位 + 建议并入的老观众，供人工比对。"""
+
+    viewer_id: int
+    platform: str
+    user_name: str
+    account_id: Optional[str] = None
+    open_id: Optional[str] = None
+    message_count: int
+    interaction_count: int
+    paid_amount: int = Field(default=0, description="付费总额（金瓜子）")
+    last_active_ms: int
+    candidate: Optional[ViewerBrief] = None
+    candidate_account_id: Optional[str] = None
+    candidate_open_id: Optional[str] = None
+    candidate_name_seen_ms: int = Field(default=0, description="老观众最近一次以该昵称出现的时刻")
+    candidate_message_count: int = 0
+    candidate_interaction_count: int = 0
+    candidate_paid_amount: int = 0
+    candidate_last_active_ms: int = 0
+    candidate_names: List[str] = Field(default_factory=list, description="老观众用过的昵称（最近在前）")
+
+
+class PendingViewersResponse(BaseModel):
+    """待确认观众列表（最近活跃在前）。"""
+
+    total: int
+    items: List[PendingViewerItem]
+
+
+class MergeRequest(BaseModel):
+    """合并请求：把路径里的观众并入 ``target_viewer_id``。"""
+
+    target_viewer_id: int
+
+
+class UnlinkRequest(BaseModel):
+    """取消关联请求：拆出哪一种外部 ID。"""
+
+    id_kind: Literal["account", "open"]
+
+
+class IdentityActionResponse(BaseModel):
+    """人工处理结果：``viewer_id`` 为处理后应跳转查看的观众（合并的目标 / 拆出的新观众 / 原观众）。"""
+
+    viewer_id: int
+
+
 def _row_to_list_item(row: Any) -> ViewerListItem:
     return ViewerListItem(
         viewer_id=int(row["id"]),
@@ -270,6 +332,49 @@ async def viewer_insights(
         gift_viewers=int(buckets.get("gift_viewers", 0)),
         daily_danmaku=[DailyDanmakuPoint(day=str(row["day"]), count=int(row["count"])) for row in daily],
     )
+
+
+@router.get("/pending", response_model=PendingViewersResponse)
+async def list_pending_viewers(
+    server: ServerDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> PendingViewersResponse:
+    """待确认观众：与老观众同名但超出关联时限或候选不唯一，等人工判断是不是同一个人。"""
+    identity_repo = _require_identity_repo(server)
+    viewer_repo = _require_viewer_repo(server)
+    total, rows = await identity_repo.list_pending(limit=limit, offset=offset)
+    items: List[PendingViewerItem] = []
+    for row in rows:
+        candidate_id = row["candidate_id"]
+        names = await viewer_repo.list_names(viewer_id=int(candidate_id)) if candidate_id is not None else []
+        items.append(
+            PendingViewerItem(
+                viewer_id=int(row["viewer_id"]),
+                platform=str(row["platform"] or ""),
+                user_name=str(row["user_name"] or ""),
+                account_id=row["account_id"],
+                open_id=row["open_id"],
+                message_count=int(row["message_count"] or 0),
+                interaction_count=int(row["interaction_count"] or 0),
+                paid_amount=int(row["paid_amount"] or 0),
+                last_active_ms=int(row["last_active_ms"] or 0),
+                candidate=(
+                    ViewerBrief(viewer_id=int(candidate_id), user_name=str(row["candidate_name"] or ""))
+                    if candidate_id is not None
+                    else None
+                ),
+                candidate_account_id=row["candidate_account_id"],
+                candidate_open_id=row["candidate_open_id"],
+                candidate_name_seen_ms=int(row["candidate_name_seen_ms"] or 0),
+                candidate_message_count=int(row["candidate_message_count"] or 0),
+                candidate_interaction_count=int(row["candidate_interaction_count"] or 0),
+                candidate_paid_amount=int(row["candidate_paid_amount"] or 0),
+                candidate_last_active_ms=int(row["candidate_last_active_ms"] or 0),
+                candidate_names=[str(name_row["user_name"]) for name_row in names],
+            )
+        )
+    return PendingViewersResponse(total=total, items=items)
 
 
 @router.get("/{viewer_id}", response_model=ViewerDetailResponse)
@@ -420,3 +525,34 @@ async def viewer_sessions(viewer_id: int, server: ServerDep) -> ViewerSessionsRe
             for row in rows
         ]
     )
+
+
+@router.post("/{viewer_id}/merge", response_model=IdentityActionResponse)
+async def merge_viewer(viewer_id: int, request: MergeRequest, server: ServerDep) -> IdentityActionResponse:
+    """把这位观众并入 ``target_viewer_id``（待确认页的"同意""改选"与档案页的手动合并都走这里）。"""
+    identity_repo = _require_identity_repo(server)
+    try:
+        await identity_repo.merge(source_id=viewer_id, target_id=request.target_viewer_id)
+    except ViewerIdentityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return IdentityActionResponse(viewer_id=request.target_viewer_id)
+
+
+@router.post("/{viewer_id}/keep", response_model=IdentityActionResponse)
+async def keep_viewer_separate(viewer_id: int, server: ServerDep) -> IdentityActionResponse:
+    """保持新建：确认这位待确认观众与建议的老观众不是同一个人。"""
+    identity_repo = _require_identity_repo(server)
+    if not await identity_repo.keep_separate(viewer_id=viewer_id):
+        raise HTTPException(status_code=409, detail=f"观众 #{viewer_id} 不存在或不在待确认状态")
+    return IdentityActionResponse(viewer_id=viewer_id)
+
+
+@router.post("/{viewer_id}/unlink", response_model=IdentityActionResponse)
+async def unlink_viewer_id(viewer_id: int, request: UnlinkRequest, server: ServerDep) -> IdentityActionResponse:
+    """取消关联：把这位观众身上的一种外部 ID 拆成新观众，返回新观众 ID。"""
+    identity_repo = _require_identity_repo(server)
+    try:
+        new_id = await identity_repo.unlink(viewer_id=viewer_id, id_kind=request.id_kind)
+    except ViewerIdentityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return IdentityActionResponse(viewer_id=new_id)

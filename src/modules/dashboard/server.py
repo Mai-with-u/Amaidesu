@@ -81,6 +81,7 @@ class DashboardServer:
         llm_repo: Optional[Any] = None,
         rundown_repo: Optional[Any] = None,
         viewer_profile_repo: Optional[Any] = None,
+        viewer_identity_repo: Optional[Any] = None,
         event_repo: Optional[Any] = None,
         recap_repo: Optional[Any] = None,
         rundown_transition_repo: Optional[Any] = None,
@@ -141,6 +142,9 @@ class DashboardServer:
         # 注入 ViewerProfileRepo 让 `/api/v1/memory/*` 承载观众画像管理接口
         # （列表/纠正/删除）；未注入（极简启动/测试）时相关端点返回 503
         self.viewer_profile_repo = viewer_profile_repo
+        # 注入 ViewerIdentityRepo 让 `/api/v1/viewers/pending|merge|keep|unlink` 承载观众身份的
+        # 人工处理（待确认、合并、取消关联）；未注入（极简启动/测试）时相关端点返回 503
+        self.viewer_identity_repo = viewer_identity_repo
         # 注入 EventRepo 让 /api/v1/review 的游戏事件计数直查 game_events；
         # storage_db_path 供 /api/v1/review/export 打包 db 一致性快照副本；
         # 未注入时相应分节/打包项按缺数据降级
