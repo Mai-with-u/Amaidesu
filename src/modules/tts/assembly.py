@@ -37,10 +37,6 @@ if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
 
 
-# 已知 provider 集合。装配时按 [tts].provider 单选；未知 provider 回退到
-# edge_tts 并记 ERROR 日志。
-_KNOWN_PROVIDERS = frozenset({"edge_tts", "gptsovits", "voicebox", "omni_tts"})
-
 # --- 装配适配行：注册表统一契约的执行点 ------------------------------
 # 引擎工厂只持真实依赖；"共享装配上下文中的哪些东西喂给哪个引擎"由各
 # 适配行决定。四行统一签名 (config, event_bus, audio_sink, llm_service)，
@@ -93,6 +89,12 @@ _PROVIDER_FACTORIES = {
     "voicebox": _assemble_voicebox,
     "omni_tts": _assemble_omni_tts,
 }
+
+# TTS 引擎名单的唯一事实源 = 装配表键集：schema 的候选选项（读侧注入）与
+# 装配校验同源，加引擎只改装配表一处。装配时按 [tts].provider 单选；
+# 未知 provider 回退到 edge_tts 并记 ERROR 日志。
+TTS_PROVIDER_NAMES: tuple[str, ...] = tuple(sorted(_PROVIDER_FACTORIES))
+_KNOWN_PROVIDERS = frozenset(_PROVIDER_FACTORIES)
 
 # provider 名 → 中文描述（用于日志/文档）
 _PROVIDER_DESCRIPTIONS = {
@@ -192,6 +194,7 @@ def build_tts_infrastructure(
 
 
 __all__ = [
+    "TTS_PROVIDER_NAMES",
     "build_tts_infrastructure",
     "_KNOWN_PROVIDERS",
     "_PROVIDER_FACTORIES",
