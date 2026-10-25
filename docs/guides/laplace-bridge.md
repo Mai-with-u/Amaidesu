@@ -18,7 +18,7 @@ Amaidesu bili_danmaku_laplace 采集器 (client 角色)
 Planner / 存储 / 字幕 / 虚拟形象
 ```
 
-LAPLACE 是**传输层**，事件仍属于 B 站：采集器统一写 `platform="bilibili"`；观众身份沿用 B 站 `uid`，与 legacy `bili_danmaku` 同命名空间，与 `bili_danmaku_official` 的 `open_id` 不互通。礼物金额只能按源提供的折扣后总价记录，口径差异见“已知限制”。
+LAPLACE 是**传输层**，事件仍属于 B 站：采集器统一写 `platform="bilibili"`；观众身份沿用 B 站 `uid`（记为账号 ID），与 legacy `bili_danmaku` 相同；`bili_danmaku_official` 给的是 `open_id`（开放平台 ID），两者没有对照，换源后靠昵称关联到同一位观众（见“已知限制”）。礼物金额只能按源提供的折扣后总价记录，口径差异见“已知限制”。
 
 ## 前置条件
 
@@ -75,7 +75,7 @@ room_id = 0           # 0=不过滤；填写时使用规范长房间号
 [`BiliDanmakuLaplaceCollector.ConfigSchema`](../../src/modules/collectors/bilibili/laplace/bili_danmaku_laplace_collector.py)。
 未写的键由配置加载管线补默认值并写回，不需要手工抄一份字段表。
 
-**同一房间只启用一种 B 站消息源**（`bili_danmaku` / `bili_danmaku_official` / `bili_danmaku_laplace` 三选一），也不要中途换源。同时启用多个真实源会让同一条弹幕被采集多次，导致落库与统计翻倍；中途换源会让同一观众在 viewers/画像里拆成两个身份。
+**同一房间只启用一种 B 站消息源**（`bili_danmaku` / `bili_danmaku_official` / `bili_danmaku_laplace` 三选一）。同时启用多个真实源会让同一条弹幕被采集多次，导致落库与统计翻倍。中途换源可以：新出现的 ID 会按昵称关联到老观众，拿不准的进 WebUI「观众 → 待确认观众」由人确认。
 
 采集器启动后会无限重连，因此 Amaidesu、leb-server、控制台的启动顺序不限；首次连接失败只记录 warning，不阻塞启动。
 
@@ -90,7 +90,7 @@ Laplace 的 `message` / `gift` / `superchat` / `toast` / `interaction` 分别映
 ## 已知限制
 
 - **实时流，无历史补播**：断线期间的事件不会补发；重连后依靠 `id` / `stableKey` / 内容指纹去重，降低重复落库概率。gift 的事件 `id` 可能由上游按“时间戳:房间:UID”生成，采集器不单独用 `id` 判断重复，而是比较 uid、礼物 ID、数量、价格、时间戳等内容字段，避免同一用户同一时间戳的不同礼物被误删。
-- **观众身份与 official 不互通**：Laplace 公开事件只有 `uid`（legacy 链路是真实 B 站 UID；Open Platform 来源的 `uid` 已废弃、恒 0，且不提供 `open_id`）。本采集器与 legacy 同命名空间，`bili_danmaku_official` 用 `open_id`；切换消息源会让同一观众在 viewers/画像里变成两个身份，同一房间不要混用、不要中途换源。B 站字段定义见[开放平台文档](https://open-live.bilibili.com/document/f9ce25be-312e-1f4a-85fd-fef21f1637f8)。
+- **与 official 只能靠昵称对上**：Laplace 公开事件只有 `uid`（legacy 链路是真实 B 站 UID；Open Platform 来源的 `uid` 已废弃、恒 0，且不提供 `open_id`），`bili_danmaku_official` 只有 `open_id`，两者没有对照。换源后，新出现的 ID 若与老观众同名、且老观众的这个昵称 90 天内出现过（`storage.toml` 的 `[viewers].name_match_window_days`），自动视为同一人；超出时限或同名的不止一位，转入 WebUI 待确认页人工处理，错关联可在观众档案页取消关联。B 站字段定义见[开放平台文档](https://open-live.bilibili.com/document/f9ce25be-312e-1f4a-85fd-fef21f1637f8)。
 - **礼物金额按实付价统计**：Laplace 只提供含舰队折扣的实付总价，采集器把它同时写入 `total_price` 与 `paid_price`；`unit_price` 是由总价反推的近似值。该源没有标价，按“源只提供实付价时以实付价计贡献”的例外口径统计，因此 laplace 礼物的贡献不高于标价，跨源对比时需注意。
 - **连击信息缺失**：Laplace `gift` 事件只提供 `giftAmount`，没有 `combo_id` / `combo_count`；`GiftInfo` 的 `combo_*` 保持默认，连击归并只能按消息量处理。
 - **SC 金额按人民币换算**：Laplace 的 `priceNormalized` 是实际货币单位（人民币元），采集器优先用它 ×1000 转为金瓜子；只有该字段缺失或非正数时才回退 `price`。金额大小与单位无关，不能按金额猜单位。
@@ -107,6 +107,6 @@ Laplace 的 `message` / `gift` / `superchat` / `toast` / `interaction` 分别映
 | 日志「认证失败（401）」 | `token` 与 leb-server `--auth` 不一致，或控制台密码与之一致但 Amaidesu 未填 |
 | 连接成功但没有事件 | 确认控制台在 `/dashboard/<房间号>` 页面、Event Bridge 显示已连接、直播间确实在开播；若日志提示缺少 uid，检查「进阶」登录同步，或确认连接方式不是「开放平台」 |
 | 日志「Laplace 事件缺少 uid（已丢弃）」 | 在控制台「进阶」配置登录同步；「开放平台」来源 uid 恒 0 且不转发 open_id，当前不可用 |
-| 同一观众变成两个身份 | 检查是否在 official 与 laplace/legacy 之间换过源；两者身份键不同，不会自动合并 |
+| 同一观众变成两个身份 | 换源后昵称超出关联时限或同名候选不止一位时会先分成两位：到 WebUI「观众 → 待确认观众」确认合并，或在档案页手动并入 |
 | 事件被过滤 | 检查 `room_id` 是否与事件 `origin` 一致；填 0 可先排除过滤因素 |
 | 同一弹幕出现两次 | 检查 `enabled` 是否同时启用了 legacy/official/laplace 中的多个 |
