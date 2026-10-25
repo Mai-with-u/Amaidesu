@@ -2,7 +2,7 @@
 
 - 状态：已采纳（2026-10-25；取代 [ADR-029](029-viewer-identity-key-and-currency-unit.md) 的"身份键"一节，货币口径与付费明细部分不变）
 - 日期：2026-10-25
-- 实现提交：分批实现中，`git log --grep=ADR-047` 可检索各批提交
+- 实现提交：分批实现（共十余笔），`git log --grep=ADR-047` 可检索各批提交
 
 ## 背景（Context）
 
