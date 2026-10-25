@@ -319,7 +319,8 @@ class SessionRecapWriter:
             speakers = await self._chat.list_session_speakers(live_session_id=live_session_id, limit=_SPEAKER_ROWS)
             if speakers:
                 names = "、".join(
-                    f"{row['user_name'] or row['user_id']}（{int(row['message_count'])} 条）" for row in speakers
+                    f"{row['user_name'] or '观众 #' + str(row['viewer_id'])}（{int(row['message_count'])} 条）"
+                    for row in speakers
                 )
                 lines.append(f"弹幕最多的观众：{names}")
         except Exception as exc:

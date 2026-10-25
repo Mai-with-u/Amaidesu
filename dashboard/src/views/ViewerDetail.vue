@@ -6,7 +6,9 @@
       <h1 class="profile-name" :title="detail.user_name || '（未留名）'">
         {{ detail.user_name || '（未留名）' }}
       </h1>
-      <code class="mono profile-id" :title="detail.user_id">{{ detail.user_id }}</code>
+      <code class="mono profile-id" :title="detail.user_id"
+        >#{{ detail.viewer_id }} · {{ detail.user_id || '无外部 ID' }}</code
+      >
       <span class="head-badge">发言 {{ detail.message_count }}</span>
       <span class="head-badge">被回复 {{ detail.replied_count }}</span>
       <span class="head-badge">最后活跃 {{ relativeAge(detail.last_active_ms) }}</span>
@@ -204,11 +206,11 @@
 /**
  * 观众详情 —— 单观众档案：统计徽章 + 对话交织 + 贡献明细 + 参与场次
  *
- * 数据面：
- * - GET /viewers/{userId}：档案聚合（统计行 + 三表边界 + 贡献汇总 + 场次数）
- * - GET /viewers/{userId}/messages：对话批次——观众消息与主播回复按时间交织，
+ * 按内部观众 ID 定位（路由 /viewers/:viewerId）。数据面：
+ * - GET /viewers/{viewerId}：档案聚合（统计行 + 外部 ID + 用过的昵称 + 三表边界 + 贡献汇总 + 场次数）
+ * - GET /viewers/{viewerId}/messages：对话批次——观众消息与主播回复按时间交织，
  *   "加载更早"以 next_before 游标向前翻，跨批按后端行 id 去重
- * - GET /viewers/{userId}/contributions、/sessions：明细表
+ * - GET /viewers/{viewerId}/contributions、/sessions：明细表
  * 贡献/场次 tab 懒加载（首次切换才取数）。
  */
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
@@ -221,7 +223,7 @@ import type {
   ViewerSessionItem,
 } from '@/types';
 
-const props = defineProps<{ userId: string }>();
+const props = defineProps<{ viewerId: number }>();
 
 const detail = ref<ViewerDetail | null>(null);
 const loadError = ref('');
@@ -272,7 +274,7 @@ async function loadDetail(): Promise<void> {
   detail.value = null;
   loadError.value = '';
   try {
-    const response = await viewersApi.detail(props.userId);
+    const response = await viewersApi.detail(props.viewerId);
     detail.value = response.data;
     await loadDialogue();
   } catch {
@@ -283,7 +285,7 @@ async function loadDetail(): Promise<void> {
 async function loadDialogue(): Promise<void> {
   dialogueLoading.value = true;
   try {
-    const response = await viewersApi.messages(props.userId, { limit: 30 });
+    const response = await viewersApi.messages(props.viewerId, { limit: 30 });
     mergeDialogue(response.data.items, response.data.next_before);
   } finally {
     dialogueLoading.value = false;
@@ -294,7 +296,7 @@ async function loadEarlier(): Promise<void> {
   if (nextBefore.value == null || dialogueLoading.value) return;
   dialogueLoading.value = true;
   try {
-    const response = await viewersApi.messages(props.userId, {
+    const response = await viewersApi.messages(props.viewerId, {
       before_timestamp_ms: nextBefore.value,
       limit: 30,
     });
@@ -319,7 +321,7 @@ async function loadContrib(): Promise<void> {
   if (contrib.value || contribLoading.value) return;
   contribLoading.value = true;
   try {
-    const response = await viewersApi.contributions(props.userId);
+    const response = await viewersApi.contributions(props.viewerId);
     contrib.value = response.data;
   } finally {
     contribLoading.value = false;
@@ -330,7 +332,7 @@ async function loadSessions(): Promise<void> {
   if (sessions.value.length > 0 || sessionsLoading.value) return;
   sessionsLoading.value = true;
   try {
-    const response = await viewersApi.sessions(props.userId);
+    const response = await viewersApi.sessions(props.viewerId);
     sessions.value = response.data.items;
   } finally {
     sessionsLoading.value = false;
@@ -343,18 +345,17 @@ watch(activeTab, tab => {
   if (tab === 'sessions') void loadSessions();
 });
 
-watch(
-  () => props.userId,
-  () => {
-    dialogueItems.value = [];
-    dialogueExhausted.value = false;
-    nextBefore.value = null;
-    contrib.value = null;
-    sessions.value = [];
-    activeTab.value = 'dialogue';
-    void loadDetail();
-  },
-);
+function resetAndLoad(): void {
+  dialogueItems.value = [];
+  dialogueExhausted.value = false;
+  nextBefore.value = null;
+  contrib.value = null;
+  sessions.value = [];
+  activeTab.value = 'dialogue';
+  void loadDetail();
+}
+
+watch(() => props.viewerId, resetAndLoad);
 
 onMounted(async () => {
   await loadDetail();

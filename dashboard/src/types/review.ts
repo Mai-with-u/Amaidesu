@@ -83,8 +83,9 @@ export interface ReviewViewers {
   /** 回头观众数（场内发言但历史首条发言早于本场） */
   returning_viewers: number;
   top_speakers: Array<{
+    /** 内部观众 ID（同一位观众换了数据源也只算一人） */
+    viewer_id: number;
     platform: string;
-    user_id: string;
     user_name: string;
     message_count: number;
   }>;

@@ -21,7 +21,7 @@
       <el-input
         v-model="searchText"
         class="search-input"
-        placeholder="搜索昵称或 user_id"
+        placeholder="搜索昵称或外部 ID"
         clearable
         :prefix-icon="Search"
       />
@@ -52,11 +52,19 @@
             <span class="name-cell" :title="row.user_name || '（未留名）'">
               {{ row.user_name || '（未留名）' }}
             </span>
+            <el-tag
+              v-if="row.link_status === 'pending'"
+              size="small"
+              type="warning"
+              class="pending-tag"
+            >
+              待确认
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="user_id" min-width="150">
+        <el-table-column label="外部 ID" min-width="150">
           <template #default="{ row }">
-            <code class="mono id-cell" :title="row.user_id">{{ row.user_id }}</code>
+            <code class="mono id-cell" :title="row.user_id">{{ row.user_id || '—' }}</code>
           </template>
         </el-table-column>
         <el-table-column prop="message_count" label="发言" width="90" sortable />
@@ -106,8 +114,9 @@
  * 观众列表 —— 跨场次观众统计的检索入口
  *
  * 数据面：GET /viewers（viewers 表，StorageLedger 写穿的跨场计数）。
- * 搜索 250ms 防抖走服务端 LIKE（user_id / user_name），排序取后端白名单列；
- * 点行进入 /viewers/:userId 档案页。
+ * 搜索 250ms 防抖走服务端 LIKE（外部 ID / 昵称），排序取后端白名单列；
+ * 点行按内部观众 ID 进入 /viewers/:viewerId 档案页（外部 ID 列只作展示：
+ * 同一位观众可能有账号 ID 与开放平台 ID 两种）。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -165,7 +174,7 @@ function onPageChange(next: number): void {
 }
 
 function goDetail(row: ViewerListItem): void {
-  void router.push(`/viewers/${encodeURIComponent(row.user_id)}`);
+  void router.push(`/viewers/${row.viewer_id}`);
 }
 
 // 搜索防抖：停顿 250ms 再请求；排序变化即时刷新并回到第一页
@@ -250,6 +259,10 @@ onMounted(() => {
 .name-cell {
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.pending-tag {
+  margin-left: var(--spacing-xs);
 }
 
 .id-cell {

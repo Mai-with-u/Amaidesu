@@ -105,18 +105,6 @@ class ViewerRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def get_viewer_stats(self, *, platform: str, user_id: str) -> Optional[sqlite3.Row]:
-        """按平台 + 外部 ID 查单行观众（带 ``user_id`` 代表外部 ID 列）；未命中返回 None。"""
-
-        def _exec() -> Optional[sqlite3.Row]:
-            with self._manager.transaction() as conn:
-                return conn.execute(
-                    f"{_SELECT_VIEWER} WHERE {_MATCH_EXTERNAL} ORDER BY id LIMIT 1",  # noqa: S608 常量片段
-                    (platform, user_id, user_id),
-                ).fetchone()
-
-        return await self._run_in_executor(_exec)
-
     async def list_names(self, *, viewer_id: int) -> List[sqlite3.Row]:
         """观众用过的昵称（含当前昵称），最近出现的在前。"""
 

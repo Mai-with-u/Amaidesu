@@ -460,7 +460,7 @@ class ChatRepo(BaseRepo):
     async def count_session_viewer_cohorts(self, *, live_session_id: int, started_at_ms: int) -> Dict[str, int]:
         """单场观众构成：场内发言观众数 / 新观众数（历史首条发言落在本场）。
 
-        新旧判定锚点 = 该观众（platform+sender_id）在全表的历史首条发言时刻：
+        新旧判定锚点 = 该观众（内部观众 ID）在全表的历史首条发言时刻：
         ``first_ms >= started_at_ms`` 即新观众（首 条发言就在本场）；回头观众由
         聚合层用 ``active_total - new`` 推得。全表 GROUP BY 只在复盘页低频触发。
         """
@@ -471,11 +471,10 @@ class ChatRepo(BaseRepo):
                     "SELECT COUNT(*) AS active_total,"
                     " COALESCE(SUM(CASE WHEN first_ms >= ? THEN 1 ELSE 0 END), 0) AS new_viewers"
                     " FROM ("
-                    "  SELECT platform, sender_id, MIN(timestamp_ms) AS first_ms"
+                    "  SELECT viewer_id, MIN(timestamp_ms) AS first_ms"
                     "  FROM live_chat"
-                    "  WHERE sender_role='viewer' AND platform<>''"
-                    "    AND sender_id IS NOT NULL AND sender_id<>''"
-                    "  GROUP BY platform, sender_id"
+                    "  WHERE sender_role='viewer' AND viewer_id IS NOT NULL"
+                    "  GROUP BY viewer_id"
                     "  HAVING MAX(CASE WHEN live_session_id=? THEN 1 ELSE 0 END) = 1"
                     " )",
                     (int(started_at_ms), int(live_session_id)),
@@ -542,10 +541,10 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_user_dialogue(
+    async def list_viewer_dialogue(
         self,
         *,
-        user_id: str,
+        viewer_id: int,
         before_timestamp_ms: Optional[int] = None,
         limit: int = 30,
     ) -> List[sqlite3.Row]:
@@ -561,8 +560,8 @@ class ChatRepo(BaseRepo):
 
         def _exec() -> List[sqlite3.Row]:
             with self._manager.transaction() as conn:
-                clauses = ["sender_id=?", "sender_role='viewer'"]
-                params: List[Any] = [user_id]
+                clauses = ["viewer_id=?", "sender_role='viewer'"]
+                params: List[Any] = [int(viewer_id)]
                 if before_timestamp_ms is not None:
                     clauses.append("timestamp_ms<?")
                     params.append(before_timestamp_ms)
@@ -587,7 +586,7 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def get_user_activity_bounds(self, *, user_id: str) -> Optional[Tuple[int, int]]:
+    async def get_viewer_activity_bounds(self, *, viewer_id: int) -> Optional[Tuple[int, int]]:
         """观众在明细三表中的时间边界 ``(first_ms, last_ms)``；无任何明细返回 None。
 
         覆盖 live_chat（发言）/ gifts / super_chats 三源取最小与最大——只送过
@@ -598,11 +597,11 @@ class ChatRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 row = conn.execute(
                     "SELECT MIN(m) AS first_ms, MAX(m) AS last_ms FROM ("
-                    " SELECT timestamp_ms AS m FROM live_chat WHERE sender_id=? AND sender_role='viewer'"
-                    " UNION ALL SELECT timestamp_ms FROM gifts WHERE user_id=?"
-                    " UNION ALL SELECT timestamp_ms FROM super_chats WHERE user_id=?"
+                    " SELECT timestamp_ms AS m FROM live_chat WHERE viewer_id=? AND sender_role='viewer'"
+                    " UNION ALL SELECT timestamp_ms FROM gifts WHERE viewer_id=?"
+                    " UNION ALL SELECT timestamp_ms FROM super_chats WHERE viewer_id=?"
                     ")",
-                    (user_id, user_id, user_id),
+                    (int(viewer_id), int(viewer_id), int(viewer_id)),
                 ).fetchone()
                 if row is None or row["first_ms"] is None:
                     return None
@@ -610,21 +609,21 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_user_gifts(self, *, user_id: str, limit: int = 100) -> List[sqlite3.Row]:
+    async def list_viewer_gifts(self, *, viewer_id: int, limit: int = 100) -> List[sqlite3.Row]:
         """取观众的礼物明细行（时间倒序，最新在前）。"""
 
         def _exec() -> List[sqlite3.Row]:
             with self._manager.transaction() as conn:
                 return list(
                     conn.execute(
-                        "SELECT * FROM gifts WHERE user_id=? ORDER BY timestamp_ms DESC LIMIT ?",
-                        (user_id, limit),
+                        "SELECT * FROM gifts WHERE viewer_id=? ORDER BY timestamp_ms DESC LIMIT ?",
+                        (int(viewer_id), limit),
                     ).fetchall()
                 )
 
         return await self._run_in_executor(_exec)
 
-    async def list_user_guards(self, *, user_id: str, limit: int = 100) -> List[sqlite3.Row]:
+    async def list_viewer_guards(self, *, viewer_id: int, limit: int = 100) -> List[sqlite3.Row]:
         """取观众的大航海开通/续费明细行（时间倒序，最新在前）。
 
         "当前舰长"的派生消费方按最后记录 + 周期自行判断，本层只供明细。
@@ -634,28 +633,28 @@ class ChatRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 return list(
                     conn.execute(
-                        "SELECT * FROM guards WHERE user_id=? ORDER BY timestamp_ms DESC LIMIT ?",
-                        (user_id, limit),
+                        "SELECT * FROM guards WHERE viewer_id=? ORDER BY timestamp_ms DESC LIMIT ?",
+                        (int(viewer_id), limit),
                     ).fetchall()
                 )
 
         return await self._run_in_executor(_exec)
 
-    async def list_user_super_chats(self, *, user_id: str, limit: int = 100) -> List[sqlite3.Row]:
+    async def list_viewer_super_chats(self, *, viewer_id: int, limit: int = 100) -> List[sqlite3.Row]:
         """取观众的 SC 明细行（时间倒序，最新在前）。"""
 
         def _exec() -> List[sqlite3.Row]:
             with self._manager.transaction() as conn:
                 return list(
                     conn.execute(
-                        "SELECT * FROM super_chats WHERE user_id=? ORDER BY timestamp_ms DESC LIMIT ?",
-                        (user_id, limit),
+                        "SELECT * FROM super_chats WHERE viewer_id=? ORDER BY timestamp_ms DESC LIMIT ?",
+                        (int(viewer_id), limit),
                     ).fetchall()
                 )
 
         return await self._run_in_executor(_exec)
 
-    async def summarize_user_contributions(self, *, user_id: str) -> Dict[str, float]:
+    async def summarize_viewer_contributions(self, *, viewer_id: int) -> Dict[str, float]:
         """观众贡献汇总：礼物总件数、付费总额（金瓜子，含礼物/SC）与 SC 条数。
 
         金额单位 = 平台最小虚拟货币单位（B 站金瓜子），礼物 ``total_price``
@@ -667,18 +666,18 @@ class ChatRepo(BaseRepo):
         def _exec() -> Dict[str, float]:
             with self._manager.transaction() as conn:
                 gift_row = conn.execute(
-                    "SELECT COALESCE(SUM(quantity), 0) AS n FROM gifts WHERE user_id=? AND currency NOT IN (?, ?)",
-                    (user_id, "bilibili_silver_coin", ""),
+                    "SELECT COALESCE(SUM(quantity), 0) AS n FROM gifts WHERE viewer_id=? AND currency NOT IN (?, ?)",
+                    (int(viewer_id), "bilibili_silver_coin", ""),
                 ).fetchone()
                 sc_row = conn.execute(
                     "SELECT COALESCE(SUM(total_price), 0) AS amount, COUNT(*) AS n FROM super_chats"
-                    " WHERE user_id=? AND currency NOT IN (?, ?)",
-                    (user_id, "bilibili_silver_coin", ""),
+                    " WHERE viewer_id=? AND currency NOT IN (?, ?)",
+                    (int(viewer_id), "bilibili_silver_coin", ""),
                 ).fetchone()
                 gift_amount_row = conn.execute(
                     "SELECT COALESCE(SUM(total_price), 0) AS amount FROM gifts"
-                    " WHERE user_id=? AND currency NOT IN (?, ?)",
-                    (user_id, "bilibili_silver_coin", ""),
+                    " WHERE viewer_id=? AND currency NOT IN (?, ?)",
+                    (int(viewer_id), "bilibili_silver_coin", ""),
                 ).fetchone()
                 return {
                     "gift_total_count": int(gift_row["n"]) if gift_row else 0,
@@ -715,7 +714,7 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_user_sessions(self, *, user_id: str) -> List[sqlite3.Row]:
+    async def list_viewer_sessions(self, *, viewer_id: int) -> List[sqlite3.Row]:
         """观众参与过的场次：按场次聚合发言数与时间范围，最近参与在前。
 
         join ``live_sessions`` 取标题；场次行可能已删除（明细级联删除保证
@@ -729,10 +728,10 @@ class ChatRepo(BaseRepo):
                         "SELECT lc.live_session_id, ls.title, COUNT(*) AS message_count,"
                         " MIN(lc.timestamp_ms) AS first_ms, MAX(lc.timestamp_ms) AS last_ms"
                         " FROM live_chat lc LEFT JOIN live_sessions ls ON ls.id=lc.live_session_id"
-                        " WHERE lc.sender_id=? AND lc.sender_role='viewer'"
+                        " WHERE lc.viewer_id=? AND lc.sender_role='viewer'"
                         " GROUP BY lc.live_session_id"
                         " ORDER BY first_ms DESC",
-                        (user_id,),
+                        (int(viewer_id),),
                     ).fetchall()
                 )
 
@@ -764,8 +763,8 @@ class ChatRepo(BaseRepo):
     async def list_session_speakers(self, *, live_session_id: int, limit: int = 10) -> List[sqlite3.Row]:
         """本场发言最多的观众（按弹幕条数倒序），观众画像收播更新的候选来源。
 
-        只统计 ``sender_role='viewer'`` 且带身份键的行；昵称权威仍在 viewers，
-        这里的 user_name 只是该观众本场留下的昵称之一（聚合近似）。
+        只统计 ``sender_role='viewer'`` 且已归到观众（带 ``viewer_id``）的行；
+        ``user_name`` 是该观众本场留下的昵称之一（聚合近似，昵称权威在 viewers）。
         """
         page_limit = max(1, min(int(limit), 100))
 
@@ -773,12 +772,11 @@ class ChatRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 return list(
                     conn.execute(
-                        "SELECT platform, sender_id AS user_id, MAX(sender_name) AS user_name,"
+                        "SELECT viewer_id, MAX(platform) AS platform, MAX(sender_name) AS user_name,"
                         " COUNT(*) AS message_count, MAX(timestamp_ms) AS last_ms"
                         " FROM live_chat"
-                        " WHERE live_session_id=? AND sender_role='viewer'"
-                        " AND sender_id IS NOT NULL AND sender_id<>'' AND platform<>''"
-                        " GROUP BY platform, sender_id"
+                        " WHERE live_session_id=? AND sender_role='viewer' AND viewer_id IS NOT NULL"
+                        " GROUP BY viewer_id"
                         " ORDER BY message_count DESC, last_ms DESC LIMIT ?",
                         (int(live_session_id), page_limit),
                     ).fetchall()
@@ -786,12 +784,11 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_session_user_messages(
+    async def list_session_viewer_messages(
         self,
         *,
         live_session_id: int,
-        platform: str,
-        user_id: str,
+        viewer_id: int,
         since_ms: int = 0,
         limit: int = 30,
     ) -> List[sqlite3.Row]:
@@ -806,10 +803,10 @@ class ChatRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 rows = conn.execute(
                     "SELECT * FROM live_chat"
-                    " WHERE live_session_id=? AND platform=? AND sender_id=? AND sender_role='viewer'"
+                    " WHERE live_session_id=? AND viewer_id=? AND sender_role='viewer'"
                     " AND timestamp_ms>?"
                     " ORDER BY timestamp_ms DESC LIMIT ?",
-                    (int(live_session_id), platform, user_id, int(since_ms), page_limit),
+                    (int(live_session_id), int(viewer_id), int(since_ms), page_limit),
                 ).fetchall()
                 return list(reversed(rows))
 

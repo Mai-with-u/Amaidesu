@@ -143,8 +143,8 @@ class ReviewGame(BaseModel):
 class ViewerSpeakerItem(BaseModel):
     """活跃观众条目（单场发言计数）。"""
 
+    viewer_id: int
     platform: str
-    user_id: str
     user_name: str = ""
     message_count: int = 0
 
@@ -153,7 +153,7 @@ class ReviewViewers(BaseModel):
     """场内观众侧聚合（单场视图；合并视图为 None）。"""
 
     active_total: int = 0
-    """场内发过言的观众数（platform+sender_id 去重）。"""
+    """场内发过言的观众数（按内部观众 ID 去重）。"""
     new_viewers: int = 0
     """新观众数（历史首条发言落在本场窗口内）。"""
     returning_viewers: int = 0

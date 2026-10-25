@@ -23,6 +23,7 @@ from src.modules.dashboard.services.session_review import (
     longest_silence_ms,
     percentile,
 )
+from tests.modules.storage.viewer_seed import seed_viewer
 
 BASE = 1_700_000_000_000
 
@@ -130,6 +131,12 @@ async def _seed_chat(
     sender_name: str | None = None,
     platform: str = "",
 ) -> None:
+    # 观众行先归到观众（与记账器一致），明细带上观众 ID
+    viewer_id = None
+    if role == "viewer" and sender_id:
+        viewer_id = await seed_viewer(
+            store.viewers, platform=platform, user_id=sender_id, user_name=sender_name or "", timestamp_ms=ts
+        )
     await store.chat.insert_live_chat(
         live_session_id=pk,
         timestamp_ms=ts,
@@ -139,6 +146,7 @@ async def _seed_chat(
         sender_id=sender_id,
         sender_name=sender_name,
         platform=platform,
+        viewer_id=viewer_id,
     )
 
 

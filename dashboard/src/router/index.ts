@@ -50,7 +50,7 @@ const router = createRouter({
       component: () => import('@/views/LiveObserver.vue'),
     },
     {
-      // 静态段须先于 /viewers/:userId 声明，避免被动态段吞掉
+      // 静态段须先于 /viewers/:viewerId 声明，避免被动态段吞掉
       path: '/viewers/insights',
       name: 'viewer-insights',
       component: () => import('@/views/ViewerInsights.vue'),
@@ -61,10 +61,11 @@ const router = createRouter({
       component: () => import('@/views/Viewers.vue'),
     },
     {
-      path: '/viewers/:userId',
+      // 按内部观众 ID 定位档案页；路径段是数字，转成 number 传给页面
+      path: '/viewers/:viewerId(\d+)',
       name: 'viewer-detail',
       component: () => import('@/views/ViewerDetail.vue'),
-      props: true,
+      props: route => ({ viewerId: Number(route.params.viewerId) }),
     },
     {
       path: '/settings',

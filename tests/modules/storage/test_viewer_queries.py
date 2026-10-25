@@ -11,6 +11,8 @@ from tests.modules.storage.viewer_seed import seed_gift, seed_message
 PLATFORM = "bilibili"
 BASE = 1_700_000_000_000
 DAY = 86_400_000
+# 明细按内部观众 ID 查询：用例里的外部 ID 对应固定的观众编号（明细行直接带上）
+VIEWER_IDS = {"u_d": 1, "u_other": 2, "u_b": 3, "u_c": 4, "u_s": 5, "u1": 6, "u2": 7, "u3": 8}
 
 
 async def _seed_viewer(store: SQLiteDatabase, user_id: str, user_name: str, last_active_ms: int | None = None) -> None:
@@ -23,6 +25,8 @@ async def _chat(store: SQLiteDatabase, ts: int, sender_id: str | None = "u_d", *
     kwargs.setdefault("sender_role", "viewer")
     kwargs.setdefault("content", "发言")
     kwargs.setdefault("message_type", "danmaku")
+    if kwargs["sender_role"] == "viewer":
+        kwargs.setdefault("viewer_id", VIEWER_IDS.get(sender_id or ""))
     await store.chat.insert_live_chat(timestamp_ms=ts, sender_id=sender_id, **kwargs)
 
 
@@ -33,6 +37,7 @@ async def _gift(store: SQLiteDatabase, ts: int, user_id: str, quantity: int, tot
         platform=PLATFORM,
         user_id=user_id,
         user_name="礼官",
+        viewer_id=VIEWER_IDS[user_id],
         gift_name="小心心",
         quantity=quantity,
         total_price=total_price,
@@ -47,6 +52,7 @@ async def _sc(store: SQLiteDatabase, ts: int, user_id: str, total_price: int) ->
         platform=PLATFORM,
         user_id=user_id,
         user_name="礼官",
+        viewer_id=VIEWER_IDS[user_id],
         total_price=total_price,
         currency="bilibili_gold_coin",
         message="SC",
@@ -103,7 +109,7 @@ async def test_dialogue_interleaves_own_replies_with_cursor(store: SQLiteDatabas
     await _chat(store, BASE + 100, "u_other", message_id="others")
     await _chat(store, BASE + 200, None, sender_role="assistant", message_type="speech", reply_to_message_id="others")
 
-    rows = await store.chat.list_user_dialogue(user_id="u_d", limit=10)
+    rows = await store.chat.list_viewer_dialogue(viewer_id=VIEWER_IDS["u_d"], limit=10)
     assert [(r["sender_role"], r["timestamp_ms"]) for r in rows] == [
         ("viewer", BASE),
         ("viewer", BASE + 1000),
@@ -111,37 +117,37 @@ async def test_dialogue_interleaves_own_replies_with_cursor(store: SQLiteDatabas
         ("viewer", BASE + 2000),
     ]
     # 首批取最近 2 条观众消息并交织回复；游标翻更早只剩 m1
-    batch = await store.chat.list_user_dialogue(user_id="u_d", limit=2)
+    batch = await store.chat.list_viewer_dialogue(viewer_id=VIEWER_IDS["u_d"], limit=2)
     assert [r["message_id"] for r in batch if r["sender_role"] == "viewer"] == ["m2", "m3"]
     assert any(r["sender_role"] == "assistant" for r in batch)
-    batch = await store.chat.list_user_dialogue(user_id="u_d", limit=2, before_timestamp_ms=BASE + 1000)
+    batch = await store.chat.list_viewer_dialogue(viewer_id=VIEWER_IDS["u_d"], limit=2, before_timestamp_ms=BASE + 1000)
     assert [r["message_id"] for r in batch] == ["m1"]
 
 
 async def test_activity_bounds_span_chat_gifts_and_super_chats(store: SQLiteDatabase) -> None:
-    assert await store.chat.get_user_activity_bounds(user_id="u_b") is None
+    assert await store.chat.get_viewer_activity_bounds(viewer_id=VIEWER_IDS["u_b"]) is None
     await _chat(store, BASE + 5_000, "u_b")
     await _gift(store, BASE, "u_b", 1, 1000)
     await _sc(store, BASE + 9_000, "u_b", 30_000)
-    assert await store.chat.get_user_activity_bounds(user_id="u_b") == (BASE, BASE + 9_000)
+    assert await store.chat.get_viewer_activity_bounds(viewer_id=VIEWER_IDS["u_b"]) == (BASE, BASE + 9_000)
 
 
 async def test_user_contributions_detail_and_summary(store: SQLiteDatabase) -> None:
-    assert await store.chat.summarize_user_contributions(user_id="u_c") == {
+    assert await store.chat.summarize_viewer_contributions(viewer_id=VIEWER_IDS["u_c"]) == {
         "gift_total_count": 0,
         "gift_total_amount": 0,
         "sc_total_amount": 0,
         "sc_total_count": 0,
     }
-    assert await store.chat.list_user_gifts(user_id="u_c") == []
+    assert await store.chat.list_viewer_gifts(viewer_id=VIEWER_IDS["u_c"]) == []
 
     await _gift(store, BASE, "u_c", 2, 2000)
     await _gift(store, BASE + 1_000, "u_c", 3, 300)
     await _sc(store, BASE + 2_000, "u_c", 50_000)
 
-    assert [r["quantity"] for r in await store.chat.list_user_gifts(user_id="u_c")] == [3, 2]  # 时间倒序
-    assert len(await store.chat.list_user_super_chats(user_id="u_c")) == 1
-    summary = await store.chat.summarize_user_contributions(user_id="u_c")
+    assert [r["quantity"] for r in await store.chat.list_viewer_gifts(viewer_id=VIEWER_IDS["u_c"])] == [3, 2]  # 时间倒序
+    assert len(await store.chat.list_viewer_super_chats(viewer_id=VIEWER_IDS["u_c"])) == 1
+    summary = await store.chat.summarize_viewer_contributions(viewer_id=VIEWER_IDS["u_c"])
     assert (summary["gift_total_count"], summary["sc_total_amount"], summary["sc_total_count"]) == (5, 50_000, 1)
 
 
@@ -151,7 +157,7 @@ async def test_user_sessions_grouped_with_optional_title(store: SQLiteDatabase) 
     await _chat(store, BASE, "u_s", live_session_id=101)
     await _chat(store, BASE + DAY, "u_s", live_session_id=pk)
 
-    rows = await store.chat.list_user_sessions(user_id="u_s")
+    rows = await store.chat.list_viewer_sessions(viewer_id=VIEWER_IDS["u_s"])
     assert [(r["live_session_id"], r["title"], r["message_count"]) for r in rows] == [(pk, "周六场", 1), (101, None, 1)]
 
 

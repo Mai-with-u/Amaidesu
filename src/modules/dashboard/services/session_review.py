@@ -436,8 +436,8 @@ class SessionReviewAggregator:
             returning_viewers=max(0, active_total - new_viewers),
             top_speakers=[
                 ViewerSpeakerItem(
-                    platform=str(row["platform"]),
-                    user_id=str(row["user_id"]),
+                    viewer_id=int(row["viewer_id"]),
+                    platform=str(row["platform"] or ""),
                     user_name=str(row["user_name"] or ""),
                     message_count=int(row["message_count"] or 0),
                 )

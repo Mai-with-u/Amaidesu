@@ -1,17 +1,17 @@
-"""观众数据只读端点
+"""观众数据端点
 
-观众域的 WebUI 消费面：``viewers`` 统计表 + 明细四表（live_chat / gifts /
-super_chats / guards）按 ``(platform, user_id)`` 的聚合查询，全部只读。
+观众域的 WebUI 消费面：``viewers`` 观众表 + 明细四表（live_chat / gifts /
+super_chats / guards）按内部观众 ID（``viewer_id``）的聚合查询，全部只读。
 
-- ``GET /viewers``                      观众列表（平台过滤 / 搜索 / 排序 / 分页）
-- ``GET /viewers/insights``             互动分析聚合（活跃分桶 / 回复覆盖 / 按天弹幕量）
-- ``GET /viewers/{user_id}``            单观众档案（统计 + 活跃边界 + 贡献汇总）
-- ``GET /viewers/{user_id}/messages``   对话批次（观众消息与主播回复交织，游标分页）
-- ``GET /viewers/{user_id}/contributions`` 礼物与 SC 明细 + 汇总
-- ``GET /viewers/{user_id}/sessions``   参与场次聚合
+- ``GET /viewers``                         观众列表（平台过滤 / 搜索 / 排序 / 分页）
+- ``GET /viewers/insights``                互动分析聚合（活跃分桶 / 回复覆盖 / 按天弹幕量）
+- ``GET /viewers/{viewer_id}``             单观众档案（统计 + 外部 ID + 用过的昵称 + 贡献汇总）
+- ``GET /viewers/{viewer_id}/messages``    对话批次（观众消息与主播回复交织，游标分页）
+- ``GET /viewers/{viewer_id}/contributions`` 礼物与 SC 明细 + 汇总
+- ``GET /viewers/{viewer_id}/sessions``    参与场次聚合
 
-身份键 = ``(platform, user_id)`` 复合键：单观众端点以 ``platform`` 查询参数
-定位（默认 bilibili），列表端点不传 platform 时返回全部平台。
+同一位观众可能有账号 ID 与开放平台 ID 两种外部 ID，单观众端点一律按内部观众 ID
+定位；列表行的 ``user_id`` 是代表外部 ID（账号 ID 优先），只作展示。
 
 金额口径：存储层为平台最小虚拟货币单位（B 站金瓜子），本层展示 ÷1000 = 元。
 数据现实：上舰（guard）进 guards 明细表；进房 / 关注 / 点赞不落库——
@@ -34,9 +34,6 @@ router = APIRouter()
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
-# 单观众端点的默认平台（本项目生产平台）
-_DEFAULT_PLATFORM = "bilibili"
-
 
 def _require_viewer_repo(server: "DashboardServer") -> Any:
     """取观众统计仓储，未装配时 503。"""
@@ -57,9 +54,11 @@ def _require_chat_repo(server: "DashboardServer") -> Any:
 class ViewerListItem(BaseModel):
     """单行观众统计（viewers 表行的投影）。"""
 
+    viewer_id: int = Field(description="内部观众 ID（单观众端点按它定位）")
     platform: str
-    user_id: str
+    user_id: str = Field(description="代表外部 ID（账号 ID 优先，其次开放平台 ID；没有真实 ID 时为空）")
     user_name: str
+    link_status: str = Field(default="confirmed", description="confirmed=已确认 / pending=待人工确认")
     message_count: int
     gift_count: int
     replied_count: int
@@ -96,12 +95,34 @@ class ViewerInsightsResponse(BaseModel):
     daily_danmaku: List[DailyDanmakuPoint]
 
 
-class ViewerDetailResponse(BaseModel):
-    """单观众档案：viewers 统计行 + 明细表聚合。"""
+class ViewerNameItem(BaseModel):
+    """观众用过的一个昵称及其最早、最晚出现时刻。"""
 
-    platform: str
-    user_id: str
     user_name: str
+    first_seen_ms: int
+    last_seen_ms: int
+
+
+class ViewerBrief(BaseModel):
+    """另一位观众的简要信息（待确认的并入建议等）。"""
+
+    viewer_id: int
+    user_name: str
+
+
+class ViewerDetailResponse(BaseModel):
+    """单观众档案：viewers 观众行 + 用过的昵称 + 明细表聚合。"""
+
+    viewer_id: int
+    platform: str
+    user_id: str = Field(description="代表外部 ID（账号 ID 优先）")
+    account_id: Optional[str] = Field(default=None, description="平台账号 ID（B 站 uid）")
+    open_id: Optional[str] = Field(default=None, description="开放平台 ID（B 站 open_id）")
+    open_app_id: Optional[str] = Field(default=None, description="发出 open_id 的开放平台应用；空串 = 存量数据不明")
+    user_name: str
+    names: List[ViewerNameItem] = Field(default_factory=list, description="用过的昵称（含当前昵称），最近在前")
+    link_status: str = Field(default="confirmed", description="confirmed=已确认 / pending=待人工确认")
+    link_candidate: Optional[ViewerBrief] = Field(default=None, description="待确认时建议并入的老观众")
     message_count: int
     gift_count: int
     replied_count: int
@@ -187,9 +208,11 @@ class ViewerSessionsResponse(BaseModel):
 
 def _row_to_list_item(row: Any) -> ViewerListItem:
     return ViewerListItem(
+        viewer_id=int(row["id"]),
         platform=str(row["platform"] or ""),
-        user_id=str(row["user_id"]),
+        user_id=str(row["user_id"] or ""),
         user_name=str(row["user_name"] or ""),
+        link_status=str(row["link_status"] or "confirmed"),
         message_count=int(row["message_count"] or 0),
         gift_count=int(row["gift_count"] or 0),
         replied_count=int(row["replied_count"] or 0),
@@ -203,7 +226,7 @@ def _row_to_list_item(row: Any) -> ViewerListItem:
 @router.get("", response_model=ViewerListResponse)
 async def list_viewers(
     server: ServerDep,
-    search: Annotated[Optional[str], Query(description="user_id / 昵称模糊搜索")] = None,
+    search: Annotated[Optional[str], Query(description="外部 ID / 昵称模糊搜索")] = None,
     platform: Annotated[Optional[str], Query(description="平台过滤；不传返回全部平台")] = None,
     order_by: str = "message_count",
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
@@ -249,25 +272,41 @@ async def viewer_insights(
     )
 
 
-@router.get("/{user_id}", response_model=ViewerDetailResponse)
-async def get_viewer(
-    user_id: str,
-    server: ServerDep,
-    platform: Annotated[str, Query(description="平台标识（身份键组成部分）")] = _DEFAULT_PLATFORM,
-) -> ViewerDetailResponse:
-    """单观众档案：统计行 + 活跃边界 + 贡献汇总 + 参与场次数。"""
+@router.get("/{viewer_id}", response_model=ViewerDetailResponse)
+async def get_viewer(viewer_id: int, server: ServerDep) -> ViewerDetailResponse:
+    """单观众档案：观众行 + 外部 ID + 用过的昵称 + 活跃边界 + 贡献汇总 + 参与场次数。"""
     viewer_repo = _require_viewer_repo(server)
     chat_repo = _require_chat_repo(server)
-    row = await viewer_repo.get_viewer_stats(platform=platform, user_id=user_id)
+    row = await viewer_repo.get_viewer(viewer_id=viewer_id)
     if row is None:
-        raise HTTPException(status_code=404, detail=f"观众不存在: {platform}/{user_id}")
-    bounds = await chat_repo.get_user_activity_bounds(user_id=user_id)
-    summary = await chat_repo.summarize_user_contributions(user_id=user_id)
-    sessions = await chat_repo.list_user_sessions(user_id=user_id)
+        raise HTTPException(status_code=404, detail=f"观众不存在: #{viewer_id}")
+    names = await viewer_repo.list_names(viewer_id=viewer_id)
+    candidate = None
+    if row["link_candidate_id"] is not None:
+        candidate_row = await viewer_repo.get_viewer(viewer_id=int(row["link_candidate_id"]))
+        if candidate_row is not None:
+            candidate = ViewerBrief(viewer_id=int(candidate_row["id"]), user_name=str(candidate_row["user_name"]))
+    bounds = await chat_repo.get_viewer_activity_bounds(viewer_id=viewer_id)
+    summary = await chat_repo.summarize_viewer_contributions(viewer_id=viewer_id)
+    sessions = await chat_repo.list_viewer_sessions(viewer_id=viewer_id)
     return ViewerDetailResponse(
+        viewer_id=int(row["id"]),
         platform=str(row["platform"] or ""),
-        user_id=str(row["user_id"]),
+        user_id=str(row["user_id"] or ""),
+        account_id=row["account_id"],
+        open_id=row["open_id"],
+        open_app_id=row["open_app_id"],
         user_name=str(row["user_name"] or ""),
+        names=[
+            ViewerNameItem(
+                user_name=str(name_row["user_name"]),
+                first_seen_ms=int(name_row["first_seen_ms"]),
+                last_seen_ms=int(name_row["last_seen_ms"]),
+            )
+            for name_row in names
+        ],
+        link_status=str(row["link_status"] or "confirmed"),
+        link_candidate=candidate,
         message_count=int(row["message_count"] or 0),
         gift_count=int(row["gift_count"] or 0),
         replied_count=int(row["replied_count"] or 0),
@@ -284,9 +323,9 @@ async def get_viewer(
     )
 
 
-@router.get("/{user_id}/messages", response_model=DialogueResponse)
+@router.get("/{viewer_id}/messages", response_model=DialogueResponse)
 async def viewer_dialogue(
-    user_id: str,
+    viewer_id: int,
     server: ServerDep,
     before_timestamp_ms: Annotated[Optional[int], Query(description="游标：取早于该时刻的批次")] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
@@ -297,8 +336,8 @@ async def viewer_dialogue(
     ``next_before`` 置 NULL。
     """
     chat_repo = _require_chat_repo(server)
-    rows = await chat_repo.list_user_dialogue(
-        user_id=user_id,
+    rows = await chat_repo.list_viewer_dialogue(
+        viewer_id=viewer_id,
         before_timestamp_ms=before_timestamp_ms,
         limit=limit,
     )
@@ -325,17 +364,17 @@ async def viewer_dialogue(
     return DialogueResponse(items=items, next_before=next_before)
 
 
-@router.get("/{user_id}/contributions", response_model=ContributionsResponse)
+@router.get("/{viewer_id}/contributions", response_model=ContributionsResponse)
 async def viewer_contributions(
-    user_id: str,
+    viewer_id: int,
     server: ServerDep,
     limit: Annotated[int, Query(ge=1, le=100, description="礼物 / SC 明细各自最多条数")] = 100,
 ) -> ContributionsResponse:
     """观众贡献：礼物与 SC 明细（时间倒序）+ 汇总数字。"""
     chat_repo = _require_chat_repo(server)
-    summary = await chat_repo.summarize_user_contributions(user_id=user_id)
-    gift_rows = await chat_repo.list_user_gifts(user_id=user_id, limit=limit)
-    sc_rows = await chat_repo.list_user_super_chats(user_id=user_id, limit=limit)
+    summary = await chat_repo.summarize_viewer_contributions(viewer_id=viewer_id)
+    gift_rows = await chat_repo.list_viewer_gifts(viewer_id=viewer_id, limit=limit)
+    sc_rows = await chat_repo.list_viewer_super_chats(viewer_id=viewer_id, limit=limit)
     return ContributionsResponse(
         gift_total_count=int(summary.get("gift_total_count", 0)),
         sc_total_amount=to_cny(int(summary.get("sc_total_amount", 0))) or 0.0,
@@ -364,11 +403,11 @@ async def viewer_contributions(
     )
 
 
-@router.get("/{user_id}/sessions", response_model=ViewerSessionsResponse)
-async def viewer_sessions(user_id: str, server: ServerDep) -> ViewerSessionsResponse:
+@router.get("/{viewer_id}/sessions", response_model=ViewerSessionsResponse)
+async def viewer_sessions(viewer_id: int, server: ServerDep) -> ViewerSessionsResponse:
     """观众参与过的场次（按场次聚合发言数与时间范围，最近参与在前）。"""
     chat_repo = _require_chat_repo(server)
-    rows = await chat_repo.list_user_sessions(user_id=user_id)
+    rows = await chat_repo.list_viewer_sessions(viewer_id=viewer_id)
     return ViewerSessionsResponse(
         items=[
             ViewerSessionItem(

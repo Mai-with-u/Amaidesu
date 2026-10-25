@@ -336,21 +336,19 @@ export const logsApi = {
 // `GET /viewers`：观众列表（搜索/排序/分页，total 为命中搜索的全计数，
 // 首页"观众总数"也取 total）。
 // `GET /viewers/insights`：活跃分桶 + 回复覆盖 + 按天弹幕量（互动分析页）。
-// `GET /viewers/{userId}...`：单观众档案与明细聚合（详情页三 tab 的数据面）。
+// `GET /viewers/{viewerId}...`：单观众档案与明细聚合（详情页三 tab 的数据面），
+// 按内部观众 ID 定位——同一位观众可能有账号 ID 与开放平台 ID 两种外部 ID。
 export const viewersApi = {
   list: (params?: { search?: string; order_by?: string; limit?: number; offset?: number }) =>
     api.get<ViewerListResponse>('/viewers', { params }),
   insights: (params?: { days?: number }) =>
     api.get<ViewerInsights>('/viewers/insights', { params }),
-  detail: (userId: string) => api.get<ViewerDetail>(`/viewers/${encodeURIComponent(userId)}`),
-  messages: (userId: string, params?: { before_timestamp_ms?: number; limit?: number }) =>
-    api.get<ViewerDialogueResponse>(`/viewers/${encodeURIComponent(userId)}/messages`, { params }),
-  contributions: (userId: string, params?: { limit?: number }) =>
-    api.get<ViewerContributions>(`/viewers/${encodeURIComponent(userId)}/contributions`, {
-      params,
-    }),
-  sessions: (userId: string) =>
-    api.get<ViewerSessionsResponse>(`/viewers/${encodeURIComponent(userId)}/sessions`),
+  detail: (viewerId: number) => api.get<ViewerDetail>(`/viewers/${viewerId}`),
+  messages: (viewerId: number, params?: { before_timestamp_ms?: number; limit?: number }) =>
+    api.get<ViewerDialogueResponse>(`/viewers/${viewerId}/messages`, { params }),
+  contributions: (viewerId: number, params?: { limit?: number }) =>
+    api.get<ViewerContributions>(`/viewers/${viewerId}/contributions`, { params }),
+  sessions: (viewerId: number) => api.get<ViewerSessionsResponse>(`/viewers/${viewerId}/sessions`),
 };
 
 // Streamer 测试台（主播发言调试）

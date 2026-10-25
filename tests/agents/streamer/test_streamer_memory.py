@@ -268,26 +268,26 @@ async def test_roster_llm_failure_leaves_profile_absent(store: SQLiteDatabase) -
 async def test_payment_material_lines() -> None:
     """原料行含付费汇总、三类明细与最近一次付费时的身份快照；仓储缺失降级为空。"""
     chat_repo = MagicMock()
-    chat_repo.summarize_user_contributions = AsyncMock(
+    chat_repo.summarize_viewer_contributions = AsyncMock(
         return_value={"gift_total_amount": 2000, "sc_total_amount": 50_000}
     )
     medal = {"fans_medal_level": 21, "fans_medal_name": "粉丝团"}
-    chat_repo.list_user_gifts = AsyncMock(
+    chat_repo.list_viewer_gifts = AsyncMock(
         return_value=[{"timestamp_ms": 100, "gift_name": "小星星", "quantity": 3, "guard_level": 3, **medal}]
     )
-    chat_repo.list_user_super_chats = AsyncMock(
+    chat_repo.list_viewer_super_chats = AsyncMock(
         return_value=[{"timestamp_ms": 200, "message": "加油", "guard_level": 0, **medal}]
     )
-    chat_repo.list_user_guards = AsyncMock(
+    chat_repo.list_viewer_guards = AsyncMock(
         return_value=[{"timestamp_ms": 300, "guard_level": 3, "guard_num": 1, "guard_unit": "月", **medal}]
     )
 
-    joined = "\n".join(await collect_payment_material(chat_repo, "u1"))
+    joined = "\n".join(await collect_payment_material(chat_repo, 1))
 
     assert "累计付费约 52 元" in joined
     assert "送出礼物 小星星×3" in joined and "发送 SC「加油」" in joined and "开通舰长（1月）" in joined
     assert "最近一次付费时的身份：舰长、粉丝团21 级牌" in joined
-    assert await collect_payment_material(None, "u1") == []
+    assert await collect_payment_material(None, 1) == []
 
 
 # ---------------------------------------------------------------------------

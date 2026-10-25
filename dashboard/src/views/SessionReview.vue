@@ -203,12 +203,8 @@
             <span class="chip mono">回头观众 {{ review.viewers.returning_viewers }}</span>
           </div>
           <ol v-if="review.viewers.top_speakers.length" class="top-speakers">
-            <li
-              v-for="sp in review.viewers.top_speakers"
-              :key="sp.platform + ':' + sp.user_id"
-              class="top-speaker"
-            >
-              <span class="top-name">{{ sp.user_name || sp.user_id }}</span>
+            <li v-for="sp in review.viewers.top_speakers" :key="sp.viewer_id" class="top-speaker">
+              <span class="top-name">{{ sp.user_name || `观众 #${sp.viewer_id}` }}</span>
               <span class="grow" />
               <span class="mono top-count">{{ sp.message_count }} 条</span>
             </li>

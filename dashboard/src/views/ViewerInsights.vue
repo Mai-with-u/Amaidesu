@@ -78,11 +78,11 @@
               <h2 class="card-title">礼物件数 Top 5</h2>
             </div>
             <ul class="top-list">
-              <li v-for="(item, index) in giftTop" :key="item.user_id" class="top-row">
+              <li v-for="(item, index) in giftTop" :key="item.viewer_id" class="top-row">
                 <span class="top-rank mono">#{{ index + 1 }}</span>
                 <router-link
                   class="top-name"
-                  :to="`/viewers/${encodeURIComponent(item.user_id)}`"
+                  :to="`/viewers/${item.viewer_id}`"
                   :title="item.user_name || item.user_id"
                 >
                   {{ item.user_name || item.user_id }}
@@ -99,11 +99,11 @@
               <span class="card-hint">主播回应最多的观众</span>
             </div>
             <ul class="top-list">
-              <li v-for="(item, index) in repliedTop" :key="item.user_id" class="top-row">
+              <li v-for="(item, index) in repliedTop" :key="item.viewer_id" class="top-row">
                 <span class="top-rank mono">#{{ index + 1 }}</span>
                 <router-link
                   class="top-name"
-                  :to="`/viewers/${encodeURIComponent(item.user_id)}`"
+                  :to="`/viewers/${item.viewer_id}`"
                   :title="item.user_name || item.user_id"
                 >
                   {{ item.user_name || item.user_id }}

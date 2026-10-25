@@ -40,7 +40,7 @@ _MESSAGE_LINE_CHARS = 80
 _PAYMENT_MATERIAL_ROWS = 3
 
 
-async def collect_payment_material(chat_repo: Any, user_id: str, *, rows: int = _PAYMENT_MATERIAL_ROWS) -> List[str]:
+async def collect_payment_material(chat_repo: Any, viewer_id: int, *, rows: int = _PAYMENT_MATERIAL_ROWS) -> List[str]:
     """直接查付费明细三表，产出印象原料行（汇总 / 最近明细 / 付费时身份快照）。
 
     全部异常降级为缺行——结构化原料缺失只让印象少一分厚重，不阻断生成。
@@ -50,7 +50,7 @@ async def collect_payment_material(chat_repo: Any, user_id: str, *, rows: int = 
         return []
     lines: List[str] = []
     try:
-        summary = await chat_repo.summarize_user_contributions(user_id=user_id)
+        summary = await chat_repo.summarize_viewer_contributions(viewer_id=viewer_id)
         gold = int(summary.get("gift_total_amount", 0)) + int(summary.get("sc_total_amount", 0))
         yuan = to_cny(gold)
         if yuan:
@@ -61,7 +61,7 @@ async def collect_payment_material(chat_repo: Any, user_id: str, *, rows: int = 
     # 三表明细合并取最近 N 条（时间倒序），并从最近一条取付费时的身份快照
     entries: List[tuple[int, str, int, int, str]] = []  # (ts, 描述, fans_medal_level, guard_level, medal_name)
     try:
-        for row in await chat_repo.list_user_gifts(user_id=user_id, limit=rows):
+        for row in await chat_repo.list_viewer_gifts(viewer_id=viewer_id, limit=rows):
             entries.append(
                 (
                     int(row["timestamp_ms"]),
@@ -71,7 +71,7 @@ async def collect_payment_material(chat_repo: Any, user_id: str, *, rows: int = 
                     str(row["fans_medal_name"] or ""),
                 )
             )
-        for row in await chat_repo.list_user_super_chats(user_id=user_id, limit=rows):
+        for row in await chat_repo.list_viewer_super_chats(viewer_id=viewer_id, limit=rows):
             entries.append(
                 (
                     int(row["timestamp_ms"]),
@@ -81,7 +81,7 @@ async def collect_payment_material(chat_repo: Any, user_id: str, *, rows: int = 
                     str(row["fans_medal_name"] or ""),
                 )
             )
-        for row in await chat_repo.list_user_guards(user_id=user_id, limit=rows):
+        for row in await chat_repo.list_viewer_guards(viewer_id=viewer_id, limit=rows):
             guard_name = GUARD_LEVEL_NAMES.get(int(row["guard_level"] or 0), "大航海")
             entries.append(
                 (
@@ -154,60 +154,51 @@ class RegularsRosterWriter:
         for row in speakers:
             if updated >= self._batch_max:
                 break
-            platform = str(row["platform"] or "")
-            user_id = str(row["user_id"] or "")
-            if not platform or not user_id:
-                continue
-            if not await self._meets_threshold(platform, user_id):
+            viewer_id = int(row["viewer_id"])
+            if not await self._meets_threshold(viewer_id):
                 continue
             try:
-                if await self._update_one(int(live_session_id), platform, user_id, str(row["user_name"] or "")):
+                if await self._update_one(int(live_session_id), viewer_id, str(row["user_name"] or "")):
                     updated += 1
             except Exception as exc:
-                logger.warning(f"常客印象更新失败（{platform}/{user_id}，跳过该人）: {exc}")
+                logger.warning(f"常客印象更新失败（viewer {viewer_id}，跳过该人）: {exc}")
         if updated:
             logger.info(f"观众画像已更新 {updated} 人（场次 {live_session_id}）")
         return updated
 
-    async def _meets_threshold(self, platform: str, user_id: str) -> bool:
+    async def _meets_threshold(self, viewer_id: int) -> bool:
         """``viewers`` 累计互动量达门槛才建档；统计行缺失视为不达标。"""
         try:
-            stats = await self._viewers.get_viewer_stats(platform=platform, user_id=user_id)
+            stats = await self._viewers.get_viewer(viewer_id=viewer_id)
         except Exception as exc:
-            logger.warning(f"读取观众统计失败（{platform}/{user_id}）: {exc}")
+            logger.warning(f"读取观众统计失败（viewer {viewer_id}）: {exc}")
             return False
         if stats is None:
             return False
         return int(stats["interaction_count"] or 0) >= self._min_interactions
 
-    async def _update_one(self, live_session_id: int, platform: str, user_id: str, nickname: str) -> bool:
+    async def _update_one(self, live_session_id: int, viewer_id: int, nickname: str) -> bool:
         """单人更新：旧印象 + 上次整理之后的本场原话 + 付费记录 → LLM → 写回并推进已整理时刻。"""
-        # 画像按内部观众 ID 存：先把外部 ID 换算成观众（达门槛的观众必已建档，这里兜底）
-        viewer_id = await self._viewers.find_viewer_id(platform=platform, external_id=user_id)
-        if viewer_id is None:
-            return False
         existing = await self._profiles.get_profile(viewer_id=viewer_id)
         old_text = str(existing["profile_text"]) if existing is not None else ""
         watermark = int(existing["last_compressed_at_ms"]) if existing is not None else 0
 
-        messages = await self._chat.list_session_user_messages(
+        messages = await self._chat.list_session_viewer_messages(
             live_session_id=live_session_id,
-            platform=platform,
-            user_id=user_id,
+            viewer_id=viewer_id,
             since_ms=watermark,
             limit=_MESSAGE_ROWS,
         )
         if not messages:
             return False  # 上次整理之后没新话（同一场重复收尾），不空转
 
-        display = nickname or f"{platform}/{user_id}"
         prompt_parts = [
-            f"观众：{display}（{platform}/{user_id}）",
+            f"观众：{nickname or f'观众 #{viewer_id}'}",
             f"【旧印象】\n{old_text}" if old_text else "【旧印象】（无，首次建档）",
             "【这场说过的话】",
             *[f"- {str(row['content'] or '').strip()[:_MESSAGE_LINE_CHARS]}" for row in messages],
         ]
-        structured_lines = await collect_payment_material(self._chat, user_id)
+        structured_lines = await collect_payment_material(self._chat, viewer_id)
         if structured_lines:
             prompt_parts.append("【付费与身份】")
             prompt_parts.extend(structured_lines)
@@ -215,7 +206,7 @@ class RegularsRosterWriter:
 
         response = await self._llm.generate(prompt, profile=SUMMARY_PROFILE, system=self._get_system_prompt())
         if not (getattr(response, "success", False) and getattr(response, "content", None)):
-            logger.warning(f"常客印象 LLM 返回失败（{platform}/{user_id}）")
+            logger.warning(f"常客印象 LLM 返回失败（viewer {viewer_id}）")
             return False
         profile_text = str(response.content).strip()[: self._profile_max_length]
         if not profile_text:
@@ -223,7 +214,7 @@ class RegularsRosterWriter:
         await self._profiles.upsert_profile(
             viewer_id=viewer_id, profile_text=profile_text, last_compressed_at_ms=now_ms()
         )
-        logger.debug(f"常客印象已更新（{platform}/{user_id}）: {profile_text[:50]}")
+        logger.debug(f"常客印象已更新（viewer {viewer_id}）: {profile_text[:50]}")
         return True
 
     def _get_system_prompt(self) -> str:

@@ -1066,10 +1066,18 @@ export interface AvatarDebugTriggerResponse {
   structured_content: Record<string, unknown> | null;
 }
 
+/** 观众身份确认状态：confirmed=已确认 / pending=与老观众同名、待人工确认是不是同一个人 */
+export type ViewerLinkStatus = 'confirmed' | 'pending';
+
 /** 单行观众统计（viewers 表行投影） */
 export interface ViewerListItem {
+  /** 内部观众 ID：档案页与各单观众接口按它定位 */
+  viewer_id: number;
+  platform: string;
+  /** 代表外部 ID（账号 ID 优先，其次开放平台 ID；没有真实 ID 时为空），只作展示 */
   user_id: string;
   user_name: string;
+  link_status: ViewerLinkStatus;
   message_count: number;
   gift_count: number;
   replied_count: number;
@@ -1105,10 +1113,37 @@ export interface ViewerInsights {
   daily_danmaku: DailyDanmakuPoint[];
 }
 
-/** 单观众档案（GET /api/v1/viewers/{userId}） */
-export interface ViewerDetail {
-  user_id: string;
+/** 观众用过的一个昵称及其最早、最晚出现时刻 */
+export interface ViewerNameItem {
   user_name: string;
+  first_seen_ms: number;
+  last_seen_ms: number;
+}
+
+/** 另一位观众的简要信息（并入建议等） */
+export interface ViewerBrief {
+  viewer_id: number;
+  user_name: string;
+}
+
+/** 单观众档案（GET /api/v1/viewers/{viewerId}） */
+export interface ViewerDetail {
+  viewer_id: number;
+  platform: string;
+  /** 代表外部 ID（账号 ID 优先） */
+  user_id: string;
+  /** 平台账号 ID（B 站 uid） */
+  account_id: string | null;
+  /** 开放平台 ID（B 站 open_id） */
+  open_id: string | null;
+  /** 发出 open_id 的开放平台应用；空串 = 存量数据不明 */
+  open_app_id: string | null;
+  user_name: string;
+  /** 用过的昵称（含当前昵称），最近在前 */
+  names: ViewerNameItem[];
+  link_status: ViewerLinkStatus;
+  /** 待确认时建议并入的老观众 */
+  link_candidate: ViewerBrief | null;
   message_count: number;
   gift_count: number;
   replied_count: number;
@@ -1162,7 +1197,7 @@ export interface ViewerSuperChatItem {
   simulated: boolean;
 }
 
-/** 观众贡献：汇总 + 明细（GET /api/v1/viewers/{userId}/contributions） */
+/** 观众贡献：汇总 + 明细（GET /api/v1/viewers/{viewerId}/contributions） */
 export interface ViewerContributions {
   gift_total_count: number;
   sc_total_amount: number;
