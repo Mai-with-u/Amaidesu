@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import AppLayout from '@/components/layout/AppLayout.vue';
+// 导演命令面板挂全局层：热键与浮层都不依赖具体页面（keep-alive 之外，切页不销毁）
+import CommandPalette from '@/components/dashboard/CommandPalette.vue';
 </script>
 
 <template>
@@ -15,6 +17,8 @@ import AppLayout from '@/components/layout/AppLayout.vue';
     </AppLayout>
     <component :is="Component" v-else />
   </router-view>
+  <!-- 全局命令面板（Ctrl/Cmd+K），遮罩浮层形态，不进布局头部 -->
+  <CommandPalette />
 </template>
 
 <style>
