@@ -413,13 +413,13 @@ async def create_app_components(
     # --- LLM 服务 ---
     logger.info("初始化 LLM 服务...")
     # 场次归属解析器：落库时取当前显式场次主键（无场次 → NULL = 场间消耗）
-    # 请求历史管理器：一份带 llm_repo 的共享实例同时传给引擎（写）与 Dashboard（读）
+    # 请求历史管理器：一份带 llm_repo 的共享实例传给 Dashboard（读）；引擎出账
+    # 走 observation 单入口，不再经它写库
     request_history_manager = RequestHistoryManager(llm_repo=database.llm)
     llm_service = LLMManager(
         llm_repo=database.llm,
         live_session_resolver=lambda: session_manager.active_pk,
         diagnostics_writer=diagnostics_writer,
-        request_history_manager=request_history_manager,
     )
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")

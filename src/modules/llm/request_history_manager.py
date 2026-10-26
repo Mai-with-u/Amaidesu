@@ -1,296 +1,48 @@
+"""LLM 请求历史读面（SQLite ``llm_requests`` 表之上的查询接口）
+
+写入侧已收敛到 :mod:`src.modules.llm.observation` 的出账单一入口（引擎在
+每次调用结束时一次落账）；本类只承担 Dashboard 的查询面：把仓储查询结果
+映射为历史记录字典，查询签名与返回形状对下游保持稳定。
+
+生产装配由组合根注入 ``LLMRepo``（与引擎写侧同库同源）；未注入时查询
+返回空结果（仅装配退化场景，不提供替代的查询语义）。
+
+实例经构造器注入持有方（DashboardServer 查询），组合根构造一份共享实例
+传入，不做全局单例。
 """
-LLM 请求历史记录管理器
 
-负责记录每次 LLM 请求的完整信息，包括请求参数、响应内容、Token 使用量、费用等。
-持久化目标是 SQLite ``llm_requests`` 表（组合根构造时注入 ``llm_repo``）；
-未注入时仅保留内存环形缓存（查询范围随之受限）。
+from __future__ import annotations
 
-实例经构造器注入持有方（LLMManager 写入、DashboardServer 查询），
-组合根构造一份共享实例分别传入，不做全局单例。
-"""
-
-import uuid
-from collections import deque
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
-
-from src.modules.llm.observation import record_request
+from src.modules.llm.observation import build_prompt_preview, count_image_parts  # noqa: F401  再导出：Dashboard（api/llm.py）与预览测试从此模块引用这两个写侧助手
 from src.modules.logging import get_logger
-from src.modules.storage.repos.llm import LLMRequestInsert
-from src.modules.utils.task_utils import spawn_background_task
-from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.storage.repos import LLMRepo
 
-CACHE_SIZE = 100  # 内存缓存大小
-
-# 列表预览摘要长度（字符）：统计行的"一眼认出"口径，避免摘要列自身膨胀
-_PREVIEW_MAX_CHARS = 50
-
-
-def build_prompt_preview(request_params: Any) -> str:
-    """从请求参数提取列表页 Prompt 预览摘要。
-
-    取 ``messages`` 里最后一条有正文的消息（与触发语境最接近），兼容两种
-    消息形态：OpenAI 原生（``content`` 字符串或多模态列表）与中立 payload
-    契约（``parts`` 片段列表，图像片段以占位符呈现）。截取固定长度——正文
-    已出库到诊断文件，摘要列只承担列表页辨识。
-    """
-    messages = request_params.get("messages") if isinstance(request_params, dict) else None
-    if not isinstance(messages, list):
-        return ""
-    for message in reversed(messages):
-        text = _message_body_text(message).strip()
-        if text:
-            return text[:_PREVIEW_MAX_CHARS]
-    return ""
-
-
-def _message_body_text(message: Any) -> str:
-    """单条消息的正文文本（OpenAI content 形态与中立 parts 形态通吃）。"""
-    if not isinstance(message, dict):
-        return ""
-    lines: List[str] = []
-    content = message.get("content")
-    if isinstance(content, str):
-        lines.append(content)
-    elif isinstance(content, list):
-        for piece in content:
-            if isinstance(piece, str):
-                lines.append(piece)
-            elif isinstance(piece, dict) and piece.get("type") == "text" and isinstance(piece.get("text"), str):
-                lines.append(piece["text"])
-    parts = message.get("parts")
-    if isinstance(parts, list):
-        for piece in parts:
-            if isinstance(piece, str):
-                lines.append(piece)
-            elif isinstance(piece, dict):
-                if isinstance(piece.get("text"), str):
-                    lines.append(piece["text"])
-                elif piece.get("type") == "image":
-                    lines.append("[图片内容已省略]")
-    return "\n".join(line for line in lines if line)
-
-
-def count_image_parts(request_params: Any) -> int:
-    """统计请求消息里的图像片段数量（中立契约 ``{type:"image"}`` part）。
-
-    正文大字段已出库到诊断文件，列表行无消息体可查，计数必须在写侧随行
-    落库（WebUI 历史列表"本次注入 N 张截图"徽标的数据源）。非列表形态的
-    输入一律计 0。
-    """
-    messages = request_params.get("messages") if isinstance(request_params, dict) else None
-    if not isinstance(messages, list):
-        return 0
-    count = 0
-    for message in messages:
-        if not isinstance(message, dict) or not isinstance(message.get("parts"), list):
-            continue
-        for piece in message["parts"]:
-            if isinstance(piece, dict) and piece.get("type") == "image":
-                count += 1
-    return count
-
-
-class TokenUsage(BaseModel):
-    """Token 使用量"""
-
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
-    reasoning_tokens: Optional[int] = None
-
-
-class RequestRecord(BaseModel):
-    """LLM 请求记录（内存缓存形态；落库只取统计与摘要，正文出库到诊断文件）。
-
-    ``request_params`` 仅在内存留存：写库前用它截取 ``preview_text`` 摘要与
-    ``image_count`` 计数，本身不落库。``profile_name`` 替换历史 ``client_type``：
-    该字段实际承载的是 LLM 用途 profile 名（planner / replyer / summary /
-    minecraft / minecraft_builder / vision / simulator）；与
-    ``LLMProviderConfig.client_type``（客户端实现标识）概念不同。历史行
-    client_type 值（llm / llm_fast / llm_summary / vlm）原样保留以备历史查询
-    （不映射）。
-    """
-
-    request_id: str = Field(default_factory=lambda: f"req_{uuid.uuid4().hex[:12]}")
-    timestamp: int = Field(default_factory=lambda: now_ms())
-    profile_name: str
-    model_name: str
-    request_params: Dict[str, Any] = Field(default_factory=dict)
-    response_content: Optional[str] = None
-    usage: Optional[TokenUsage] = None
-    cost: float = 0.0
-    success: bool = True
-    error: Optional[str] = None
-    latency_ms: int = 0
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式"""
-        return {
-            "request_id": self.request_id,
-            "timestamp": self.timestamp,
-            "profile_name": self.profile_name,
-            "model_name": self.model_name,
-            "request_params": self.request_params,
-            "response_content": self.response_content,
-            "usage": self.usage.model_dump() if self.usage else None,
-            "cost": self.cost,
-            "success": self.success,
-            "error": self.error,
-            "latency_ms": self.latency_ms,
-        }
-
-
-class HistoryFilter(BaseModel):
-    """历史记录查询过滤器"""
-
-    profile_name: Optional[str] = None
-    model_name: Optional[str] = None
-    start_time: Optional[int] = None  # 毫秒时间戳
-    end_time: Optional[int] = None  # 毫秒时间戳
-    success_only: Optional[bool] = None
-    page: int = 1
-    page_size: int = 50
-
 
 class RequestHistoryManager:
-    """LLM 请求历史记录管理器
+    """LLM 请求历史查询管理器（``llm_requests`` 表的读侧唯一入口）
 
-    功能：
-    - 记录每次 LLM 请求的完整信息（内存缓存 + SQLite ``llm_requests`` 表）
-    - 写库经事件循环 fire-and-forget，失败仅告警，不影响 LLM 调用链
-    - 支持分页、筛选功能（有存储时走 SQL；无存储时查内存缓存）
+    支持分页、筛选、统计与清理；全部转发到 ``LLMRepo`` 的 SQL 查询，
+    本层只做行 → 历史记录字典的形状映射。
     """
 
-    def __init__(
-        self,
-        cache_size: int = CACHE_SIZE,
-        enabled: bool = True,
-        llm_repo: Optional["LLMRepo"] = None,
-    ) -> None:
-        """初始化请求历史记录管理器
+    def __init__(self, llm_repo: Optional["LLMRepo"] = None) -> None:
+        """初始化请求历史查询管理器
 
         Args:
-            cache_size: 内存缓存大小
-            enabled: 是否启用记录功能。测试环境关闭以避免污染数据库
-            llm_repo: 持久化目标（LLMRepo）；未注入时仅内存缓存（可后续 attach_repo）
+            llm_repo: 查询目标（LLMRepo）；None 时查询一律返回空结果
         """
-        # 初始化 logger
         self.logger = get_logger("RequestHistoryManager")
-
-        # 记录开关（测试环境关闭）
-        self.enabled = enabled
-
-        # 持久化目标
         self._llm_repo = llm_repo
 
-        # 内存缓存（使用 deque 限制大小）
-        self._cache: deque = deque(maxlen=cache_size)
-
-        # fire-and-forget 后台任务强引用（防 GC 中途回收 + 异常可见化）
-        self._bg_tasks: set = set()
-
-    def attach_repo(self, llm_repo: Optional["LLMRepo"]) -> None:
-        """组合根注入持久化目标（全局单例可能先于组合根被惰性创建）。"""
-        self._llm_repo = llm_repo
-
-    @property
-    def llm_repo(self) -> Optional["LLMRepo"]:
-        """当前注入的持久化目标（测试可读）。"""
-        return self._llm_repo
-
-    # -------------------- 写入 --------------------
-
-    def record_request(self, record: RequestRecord) -> str:
-        """记录一次请求
-
-        Args:
-            record: 请求记录对象
-
-        Returns:
-            请求 ID
-        """
-        if not self.enabled:
-            return record.request_id
-
-        record_dict = record.to_dict()
-
-        # 更新内存缓存
-        self._cache.append(record_dict)
-
-        # 异步写库（fire-and-forget；无事件循环的同步上下文仅保留内存缓存）
-        if self._llm_repo is not None:
-            spawn_background_task(
-                self._persist_request(record_dict),
-                logger=self.logger,
-                tasks=self._bg_tasks,
-                label="RequestHistoryManager.persist_request",
-            )
-
-        self.logger.debug(
-            f"记录请求: {record.request_id}, 模型: {record.model_name}, "
-            f"耗时: {record.latency_ms}ms, 成功: {record.success}"
-        )
-        return record.request_id
-
-    async def _persist_request(self, record_dict: Dict[str, Any]) -> None:
-        """写单条请求到 ``llm_requests`` 表；失败仅告警（记账旁路语义）。
-
-        库行只存统计与摘要：正文（request_params / response_content）与
-        分段占用由调用链写侧出库到诊断文件，``response_content`` 保留正文
-        存档。SQLite 写入统一走 observation（两表唯一写入者），本方法只负责
-        把请求记录字典整理成插入载荷。profile_name 字段承载 LLM 用途 profile
-        名；历史数据经 v12 迁移后该列已改名，传入字段名仍维持 ``profile_name``。
-        """
+    def _repo(self) -> Optional["LLMRepo"]:
+        """取当前注入的查询目标；未注入时告警一次并返回 None。"""
         if self._llm_repo is None:
-            return
-        usage = record_dict.get("usage") or {}
-        try:
-            await record_request(
-                self._llm_repo,
-                LLMRequestInsert(
-                    request_id=record_dict["request_id"],
-                    timestamp_ms=record_dict.get("timestamp", 0),
-                    profile_name=record_dict.get("profile_name", ""),
-                    model_name=record_dict.get("model_name", ""),
-                    response_content=record_dict.get("response_content"),
-                    prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                    completion_tokens=int(usage.get("completion_tokens", 0)),
-                    total_tokens=int(usage.get("total_tokens", 0)),
-                    cache_hit_tokens=int(usage.get("cache_hit_tokens", 0)),
-                    cache_miss_tokens=int(usage.get("cache_miss_tokens", 0)),
-                    reasoning_tokens=int(usage.get("reasoning_tokens") or 0),
-                    cost=float(record_dict.get("cost", 0.0)),
-                    success=bool(record_dict.get("success", True)),
-                    error=record_dict.get("error"),
-                    latency_ms=int(record_dict.get("latency_ms", 0)),
-                    preview_text=build_prompt_preview(record_dict.get("request_params")),
-                    image_count=count_image_parts(record_dict.get("request_params")),
-                ),
-            )
-        except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
-            self.logger.warning(f"请求历史写库失败: {exc}")
-
-    def record_request_from_dict(self, data: Dict[str, Any]) -> str:
-        """从字典记录一次请求
-
-        Args:
-            data: 请求记录字典
-
-        Returns:
-            请求 ID
-        """
-        # 处理 usage 字段
-        if "usage" in data and isinstance(data["usage"], dict):
-            data["usage"] = TokenUsage(**data["usage"])
-
-        record = RequestRecord(**data)
-        return self.record_request(record)
+            self.logger.warning("请求历史管理器未接入存储，查询返回空结果（请检查组合根装配）")
+        return self._llm_repo
 
     # -------------------- 查询 --------------------
 
@@ -338,53 +90,35 @@ class RequestHistoryManager:
         Returns:
             请求记录字典，未找到返回 None
         """
-        if self._llm_repo is not None:
-            row = await self._llm_repo.get_llm_request_by_id(request_id)
-            return self._row_to_record(row) if row is not None else None
-
-        # 无存储：查内存缓存
-        for record in self._cache:
-            if record.get("request_id") == request_id:
-                return record
-        return None
+        repo = self._repo()
+        if repo is None:
+            return None
+        row = await repo.get_llm_request_by_id(request_id)
+        return self._row_to_record(row) if row is not None else None
 
     async def get_request_stats_by_ids(self, request_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         """按 id 批量取请求统计（仅统计列，不含正文大字段）。
 
         观察面统计胶囊合批懒取的数据面：返回 ``id → 统计字典``，未命中的
-        id 不在结果中（前端按缺渲染不取数）。无库模式扫内存缓存的同名列。
+        id 不在结果中（前端按缺渲染不取数）。
         """
         unique = [rid for rid in dict.fromkeys(request_ids) if rid]
         if not unique:
             return {}
-        if self._llm_repo is not None:
-            rows = await self._llm_repo.get_llm_request_stats(unique)
-            return {
-                str(row.get("request_id")): {
-                    "model_name": str(row.get("model_name") or ""),
-                    "prompt_tokens": int(row.get("prompt_tokens") or 0),
-                    "completion_tokens": int(row.get("completion_tokens") or 0),
-                    "cache_hit_tokens": int(row.get("cache_hit_tokens") or 0),
-                    "cache_miss_tokens": int(row.get("cache_miss_tokens") or 0),
-                }
-                for row in rows
+        repo = self._repo()
+        if repo is None:
+            return {}
+        rows = await repo.get_llm_request_stats(unique)
+        return {
+            str(row.get("request_id")): {
+                "model_name": str(row.get("model_name") or ""),
+                "prompt_tokens": int(row.get("prompt_tokens") or 0),
+                "completion_tokens": int(row.get("completion_tokens") or 0),
+                "cache_hit_tokens": int(row.get("cache_hit_tokens") or 0),
+                "cache_miss_tokens": int(row.get("cache_miss_tokens") or 0),
             }
-
-        wanted = set(unique)
-        stats: Dict[str, Dict[str, Any]] = {}
-        for record in self._cache:
-            request_id = record.get("request_id")
-            if request_id not in wanted:
-                continue
-            usage = record.get("usage") if isinstance(record.get("usage"), dict) else {}
-            stats[str(request_id)] = {
-                "model_name": str(record.get("model_name") or ""),
-                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-                "completion_tokens": int(usage.get("completion_tokens") or 0),
-                "cache_hit_tokens": int(record.get("cache_hit_tokens") or 0),
-                "cache_miss_tokens": int(record.get("cache_miss_tokens") or 0),
-            }
-        return stats
+            for row in rows
+        }
 
     async def get_history(
         self,
@@ -399,7 +133,7 @@ class RequestHistoryManager:
         """获取历史列表（时间倒序分页）
 
         Args:
-            client_type: 客户端类型筛选
+            profile_name: LLM 用途 profile 名筛选
             model_name: 模型名称筛选
             start_time: 开始时间（毫秒时间戳）
             end_time: 结束时间（毫秒时间戳）
@@ -410,38 +144,21 @@ class RequestHistoryManager:
         Returns:
             包含 records, total, page, page_size, total_pages 的字典
         """
-        if self._llm_repo is not None:
-            result = await self._llm_repo.query_llm_requests(
-                profile_name=profile_name,
-                model_name=model_name,
-                start_time=start_time,
-                end_time=end_time,
-                success_only=success_only,
-                page=page,
-                page_size=page_size,
-            )
-            records = [self._row_to_record(row) for row in result["rows"]]
-            total = int(result["total"])
-        else:
-            # 无存储：过滤内存缓存
-            filtered = []
-            for record in self._cache:
-                if profile_name and record.get("profile_name") != profile_name:
-                    continue
-                if model_name and record.get("model_name") != model_name:
-                    continue
-                if start_time is not None and record.get("timestamp", 0) < start_time:
-                    continue
-                if end_time is not None and record.get("timestamp", 0) > end_time:
-                    continue
-                if success_only is not None and record.get("success") != success_only:
-                    continue
-                filtered.append(record)
-            filtered.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
-            total = len(filtered)
-            start_idx = (page - 1) * page_size
-            records = filtered[start_idx : start_idx + page_size]
-
+        empty = {"records": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
+        repo = self._repo()
+        if repo is None:
+            return empty
+        result = await repo.query_llm_requests(
+            profile_name=profile_name,
+            model_name=model_name,
+            start_time=start_time,
+            end_time=end_time,
+            success_only=success_only,
+            page=page,
+            page_size=page_size,
+        )
+        records = [self._row_to_record(row) for row in result["rows"]]
+        total = int(result["total"])
         return {
             "records": records,
             "total": total,
@@ -470,84 +187,27 @@ class RequestHistoryManager:
                 "message": "必须设置 confirm=True 才能执行清除操作",
             }
 
-        if self._llm_repo is None:
+        repo = self._repo()
+        if repo is None:
             return {
                 "success": False,
                 "message": "未接入持久化存储，无历史可清除",
             }
 
         try:
-            deleted = await self._llm_repo.delete_llm_requests_before(before_date=before_date)
-
-            # 同步修剪内存缓存
-            if before_date is None:
-                self._cache.clear()
-            else:
-                cutoff_ms = int(datetime.strptime(before_date, "%Y-%m-%d").timestamp() * 1000)
-                self._cache = deque(
-                    (r for r in self._cache if r.get("timestamp", 0) >= cutoff_ms),
-                    maxlen=self._cache.maxlen,
-                )
-
+            deleted = await repo.delete_llm_requests_before(before_date=before_date)
             self.logger.info(f"已清除 {deleted} 条请求历史记录")
             return {
                 "success": True,
                 "cleared_records": deleted,
                 "message": f"成功清除 {deleted} 条记录",
             }
-        except Exception as e:
-            self.logger.error(f"清除历史记录失败: {e}")
+        except Exception as e:  # noqa: BLE001 边界处吸收 + 日志
+            self.logger.error(f"清除历史记录失败: {e}", exc=True)
             return {
                 "success": False,
                 "message": f"清除失败: {e}",
             }
-
-    @staticmethod
-    def _statistics_from_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """对记录列表做统计聚合（无存储时的内存回退路径）。"""
-        total_requests = len(records)
-        successful_requests = sum(1 for r in records if r.get("success"))
-
-        total_prompt_tokens = 0
-        total_completion_tokens = 0
-        total_tokens = 0
-        total_cost = 0.0
-        total_latency = 0
-
-        model_stats: Dict[str, Dict[str, Any]] = {}
-        client_stats: Dict[str, int] = {}
-
-        for record in records:
-            usage = record.get("usage") or {}
-            total_prompt_tokens += usage.get("prompt_tokens", 0)
-            total_completion_tokens += usage.get("completion_tokens", 0)
-            total_tokens += usage.get("total_tokens", 0)
-            total_cost += record.get("cost", 0)
-            total_latency += record.get("latency_ms", 0)
-
-            model_name = record.get("model_name", "unknown")
-            if model_name not in model_stats:
-                model_stats[model_name] = {"count": 0, "total_tokens": 0, "total_cost": 0.0}
-            model_stats[model_name]["count"] += 1
-            model_stats[model_name]["total_tokens"] += usage.get("total_tokens", 0)
-            model_stats[model_name]["total_cost"] += record.get("cost", 0)
-
-            profile_name = record.get("profile_name", "unknown")
-            client_stats[profile_name] = client_stats.get(profile_name, 0) + 1
-
-        return {
-            "total_requests": total_requests,
-            "successful_requests": successful_requests,
-            "failed_requests": total_requests - successful_requests,
-            "success_rate": successful_requests / total_requests if total_requests > 0 else 0,
-            "total_prompt_tokens": total_prompt_tokens,
-            "total_completion_tokens": total_completion_tokens,
-            "total_tokens": total_tokens,
-            "total_cost": total_cost,
-            "avg_latency_ms": total_latency / total_requests if total_requests > 0 else 0,
-            "model_stats": model_stats,
-            "client_stats": client_stats,
-        }
 
     async def get_statistics(
         self,
@@ -564,13 +224,26 @@ class RequestHistoryManager:
             统计信息字典
         """
         time_range = {"start": start_time, "end": end_time}
+        repo = self._repo()
+        if repo is None:
+            return {
+                "total_requests": 0,
+                "successful_requests": 0,
+                "failed_requests": 0,
+                "success_rate": 0,
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
+                "total_tokens": 0,
+                "total_cost": 0.0,
+                "cache_hit_tokens": 0,
+                "cache_miss_tokens": 0,
+                "avg_latency_ms": 0.0,
+                "model_stats": {},
+                "client_stats": {},
+                "time_range": time_range,
+            }
 
-        if self._llm_repo is None:
-            stats = self._statistics_from_records(list(self._cache))
-            stats["time_range"] = time_range
-            return stats
-
-        stats = await self._llm_repo.llm_request_statistics(start_time=start_time, end_time=end_time)
+        stats = await repo.llm_request_statistics(start_time=start_time, end_time=end_time)
         overall = stats["overall"]
         total_requests = int(overall.get("total", 0))
         successful_requests = int(overall.get("success_count", 0))
@@ -610,26 +283,20 @@ class RequestHistoryManager:
         """获取有历史记录的日期列表
 
         Returns:
-            日期字符串列表（降序）；无存储时返回空列表
+            日期字符串列表（降序）；未接入存储返回空列表
         """
-        if self._llm_repo is None:
+        repo = self._repo()
+        if repo is None:
             return []
-        return await self._llm_repo.llm_request_available_dates()
+        return await repo.llm_request_available_dates()
 
     async def get_available_models(self) -> List[str]:
         """获取历史记录中出现过的模型名列表
 
         Returns:
-            模型名列表（去重升序）；无存储时返回空列表
+            模型名列表（去重升序）；未接入存储返回空列表
         """
-        if self._llm_repo is None:
+        repo = self._repo()
+        if repo is None:
             return []
-        return await self._llm_repo.llm_request_models()
-
-    def get_cache_size(self) -> int:
-        """获取当前缓存大小
-
-        Returns:
-            缓存中的记录数
-        """
-        return len(self._cache)
+        return await repo.llm_request_models()

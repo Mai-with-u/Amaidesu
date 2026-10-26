@@ -35,7 +35,7 @@ async def test_on_delta_fires_before_call_completes() -> None:
         "llm_profiles": {"planner": {"model_list": ["m1"]}},
     }
     with patch.dict(_CLIENT_DISPATCH, {"typewriter": TypewriterFakeClient}):
-        with patch("src.modules.llm.engine.record_usage", new_callable=AsyncMock):
+        with patch("src.modules.llm.engine.record_call_outcome", new_callable=AsyncMock):
             manager = LLMManager(llm_repo=object())
             await manager.setup(config)
             response = await manager.generate("你好", profile="planner", on_delta=consumer)

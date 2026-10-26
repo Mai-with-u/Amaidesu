@@ -51,14 +51,7 @@ from src.modules.llm.errors import (
     UnsendableRequestError,
 )
 from src.modules.llm.interrupt import guarded_call
-from src.modules.llm.observation import calculate_cost, record_usage
-from src.modules.llm.request_history_manager import (
-    RequestHistoryManager,
-    RequestRecord,
-    TokenUsage,
-    build_prompt_preview,
-    count_image_parts,
-)
+from src.modules.llm.observation import record_call_outcome
 from src.modules.llm.payload import (
     ContextPart,
     GenerateRequest,
@@ -73,7 +66,6 @@ from src.modules.llm.payload import (
 )
 from src.modules.logging import get_logger
 from src.modules.storage.repos import LLMRepo
-from src.modules.storage.repos.llm import LLMRequestInsert
 from src.modules.vision.image_store import get_image_store
 
 __all__ = ["LLMManager", "RetryConfig", "inline_payload_spans"]
@@ -454,7 +446,6 @@ class LLMManager:
         llm_repo: Optional[LLMRepo] = None,
         live_session_resolver: Optional[Callable[[], Optional[int]]] = None,
         diagnostics_writer: Optional[DiagnosticsWriter] = None,
-        request_history_manager: Optional[RequestHistoryManager] = None,
     ) -> None:
         self.logger = get_logger("LLMManager")
         # provider_name -> provider 配置 + 客户端实例（共享连接）
@@ -483,11 +474,6 @@ class LLMManager:
         # 注入后每次调用（成功/失败）把请求正文出库到诊断文件（logs/llm_requests/
         # 按小时流）；None 时不写文件。fire-and-forget 旁路，失败不阻断调用链
         self._diagnostics_writer = diagnostics_writer
-        # 请求历史管理器（构造期注入；缺省自建仅内存缓存的实例）。组合根构造
-        # 一份带 llm_repo 的共享实例同时传给 DashboardServer，写读同源
-        self._request_history_manager = (
-            request_history_manager if request_history_manager is not None else (RequestHistoryManager())
-        )
         # 随机策略 RNG（lazy 创建，按 seed 决定是否固定）
         self._rng: Optional[random.Random] = None
 
@@ -859,9 +845,11 @@ class LLMManager:
             error=f"全部模型失败 {attempted_models}: {last_error}",
             request_id=request_id,
         )
-        self._record_request_history(
+        await self._record_call_outcome(
             request_id=request_id,
             profile_name=profile_name,
+            model_name="",
+            request_type=method,
             result=result,
             kwargs=kwargs,
             start_time=start_time,
@@ -993,7 +981,7 @@ class LLMManager:
         kwargs: Dict[str, Any],
         start_time: float,
     ) -> None:
-        """成功路径后置动作：上下文分段估算 + 两账落库 + 请求历史 + 水位事件"""
+        """成功路径后置动作：上下文分段估算 + 出账落账 + 诊断正文出库 + 水位事件"""
         breakdown = self._build_context_breakdown(
             request_id=request_id,
             profile_name=profile_name,
@@ -1001,25 +989,11 @@ class LLMManager:
             result=result,
             kwargs=kwargs,
         )
-        if result.usage and self._llm_repo:
-            duration_ms = int((time.time() - start_time) * 1000)
-            try:
-                await self._persist_llm_call(
-                    request_id=request_id,
-                    profile_name=profile_name,
-                    model_name=model_name,
-                    method=method,
-                    result=result,
-                    kwargs=kwargs,
-                    duration_ms=duration_ms,
-                    breakdown=breakdown,
-                )
-            except Exception as exc:  # noqa: BLE001
-                # 兜底（_persist_llm_call 内部已 try/except；此处防止传播异常）
-                self.logger.warning(f"两账落库包装失败: {exc}")
-        self._record_request_history(
+        await self._record_call_outcome(
             request_id=request_id,
             profile_name=profile_name,
+            model_name=model_name,
+            request_type=method,
             result=result,
             kwargs=kwargs,
             start_time=start_time,
@@ -1084,165 +1058,66 @@ class LLMManager:
                 request_params["reasoning_effort"] = req_reasoning
         return {k: v for k, v in request_params.items() if v is not None}
 
-    async def _persist_llm_call(
+    async def _record_call_outcome(
         self,
         *,
         request_id: str,
         profile_name: str,
         model_name: str,
-        method: str,
-        result: Response,
-        kwargs: Dict[str, Any],
-        duration_ms: int,
-        breakdown: Optional[ContextBreakdown] = None,
-    ) -> None:
-        """一次成功调用的两账同事务落库（``llm_usage`` + ``llm_requests`` 原子写入）。
-
-        ``LLMRepo`` 注入且结果带 usage 时生效；聚合账与请求明细共享同一
-        ``request_id``，经 observation（``record_usage`` 携带明细载荷）在单个
-        SQLite 事务内写入，第二步失败整体回滚。费用口径统一走
-        ``observation.calculate_cost``（请求历史同口径）；任何写入失败只记
-        warning，绝不阻断 LLM 调用链。
-        """
-        if self._llm_repo is None:
-            return
-        try:
-            usage = result.usage.model_dump() if result.usage is not None else {}
-            cost = 0.0
-            if usage:
-                cost_info = calculate_cost(
-                    self._model_prices,
-                    result.model or model_name,
-                    usage["prompt_tokens"],
-                    usage["completion_tokens"],
-                    cache_hit_tokens=int(usage.get("cache_hit_tokens") or 0),
-                    cache_miss_tokens=int(usage.get("cache_miss_tokens") or 0),
-                )
-                cost = float(cost_info.get("cost", 0.0))
-            provider_name = "unknown"
-            if model_name in self._models:
-                _, provider_name = self._models[model_name]
-            # 请求明细行与 _record_request_history 的 RequestRecord 同源同构
-            # （request_params 构造共用）；先于历史链路落库，其 INSERT OR
-            # IGNORE 对同一 request_id 幂等。正文大字段出库到诊断文件
-            # （_record_request_history 统一写），库行只存统计与预览摘要
-            request_params_snapshot = self._build_request_params(kwargs)
-            model_usage = result.usage
-            request_row = LLMRequestInsert(
-                request_id=request_id,
-                timestamp_ms=int(time.time() * 1000),
-                profile_name=profile_name,
-                model_name=result.model or model_name,
-                response_content=result.content,
-                prompt_tokens=model_usage.prompt_tokens if model_usage else 0,
-                completion_tokens=model_usage.completion_tokens if model_usage else 0,
-                total_tokens=model_usage.total_tokens if model_usage else 0,
-                cache_hit_tokens=int(model_usage.cache_hit_tokens or 0) if model_usage else 0,
-                cache_miss_tokens=int(model_usage.cache_miss_tokens or 0) if model_usage else 0,
-                reasoning_tokens=int(model_usage.reasoning_tokens or 0) if model_usage else 0,
-                cost=cost,
-                success=result.success,
-                error=result.error,
-                latency_ms=duration_ms,
-                preview_text=build_prompt_preview(request_params_snapshot),
-                image_count=count_image_parts(request_params_snapshot),
-            )
-            # 落库统一走 observation.record_usage（两表唯一写入点）；携带明细
-            # 载荷即两账同事务，缓存列与成本入参的处理收敛在 observation 侧
-            # 场次归属：注入了解析器时取当前显式场次主键；无进行中场次落
-            # NULL = 场间消耗（归因口径与 live_sessions 主键对齐）
-            live_session_id: Optional[int] = None
-            if self._live_session_resolver is not None:
-                try:
-                    live_session_id = self._live_session_resolver()
-                except Exception as exc:  # noqa: BLE001 - 归属解析失败不阻断落库
-                    self.logger.warning(f"llm_usage 场次归属解析失败（落 NULL）: {exc}")
-                    live_session_id = None
-            await record_usage(
-                self._llm_repo,
-                model_name=result.model or model_name,
-                provider_name=str(provider_name),
-                request_type=method,
-                usage=usage,
-                cost=cost,
-                duration_ms=duration_ms,
-                profile_name=profile_name,
-                live_session_id=live_session_id,
-                request=request_row,
-            )
-        except Exception as exc:  # noqa: BLE001
-            self.logger.warning(f"两账落库失败: {exc}")
-
-    def _record_request_history(
-        self,
-        request_id: str,
-        profile_name: str,
+        request_type: str,
         result: Response,
         kwargs: Dict[str, Any],
         start_time: float,
         breakdown: Optional[ContextBreakdown] = None,
     ) -> None:
-        """记录请求历史（成功 / 失败路径均调用）
+        """一次调用（成功或失败）的出账单一入口。
 
-        profile_name 是请求落入的 LLM 用途（planner / replyer / summary / minecraft
-        / minecraft_builder / vision / simulator）；与 ``LLMProviderConfig.client_type``
-        （客户端实现标识）概念不同——两者曾共用 ``client_type`` 字段名导致历史值域
-        混杂，现已将落库列改名为 ``profile_name``。
-
-        同时把请求正文出库到诊断文件（成功/失败都写——失败请求的上下文正是
-        排障的第一手材料）；fire-and-forget 旁路，任何失败只告警。
+        诊断正文出库（成功/失败都写——失败请求的上下文正是排障的第一手材料）
+        与两账落账（经 observation ``record_call_outcome``：成功且带 usage 时
+        ``llm_usage`` + ``llm_requests`` 同事务，失败行 success=False 与无
+        usage 的成功调用只写请求明细）。任何落账失败只告警，不阻断调用链。
         """
-        try:
-            latency_ms = int((time.time() - start_time) * 1000)
-            model_name = result.model or "unknown"
-
-            request_params = self._build_request_params(kwargs)
-
-            self._write_request_payload(
-                request_id=request_id,
-                profile_name=profile_name,
-                model_name=model_name,
-                request_params=request_params,
-                result=result,
-                breakdown=breakdown,
-            )
-
-            usage = None
-            if result.usage is not None:
-                usage = TokenUsage(
-                    prompt_tokens=result.usage.prompt_tokens,
-                    completion_tokens=result.usage.completion_tokens,
-                    total_tokens=result.usage.total_tokens,
+        request_params = self._build_request_params(kwargs)
+        if self._llm_repo is not None:
+            try:
+                provider_name = "unknown"
+                if model_name in self._models:
+                    _, provider_name = self._models[model_name]
+                # 场次归属：注入了解析器时取当前显式场次主键；无进行中场次落
+                # NULL = 场间消耗（归因口径与 live_sessions 主键对齐）
+                live_session_id: Optional[int] = None
+                if self._live_session_resolver is not None:
+                    try:
+                        live_session_id = self._live_session_resolver()
+                    except Exception as exc:  # noqa: BLE001 - 归属解析失败不阻断落账
+                        self.logger.warning(f"llm_usage 场次归属解析失败（落 NULL）: {exc}")
+                        live_session_id = None
+                await record_call_outcome(
+                    self._llm_repo,
+                    request_id=request_id,
+                    profile_name=profile_name,
+                    model_name=result.model or model_name or "unknown",
+                    request_type=request_type,
+                    provider_name=provider_name,
+                    model_prices=self._model_prices,
+                    success=result.success,
+                    error=result.error,
+                    response_content=result.content,
+                    latency_ms=int((time.time() - start_time) * 1000),
+                    request_params=request_params,
+                    usage=result.usage.model_dump() if result.usage is not None else None,
+                    live_session_id=live_session_id,
                 )
-
-            cost = 0.0
-            if usage:
-                cost_info = calculate_cost(
-                    self._model_prices,
-                    model_name,
-                    usage.prompt_tokens,
-                    usage.completion_tokens,
-                    cache_hit_tokens=int(result.usage.cache_hit_tokens or 0),
-                    cache_miss_tokens=int(result.usage.cache_miss_tokens or 0),
-                )
-                cost = cost_info.get("cost", 0.0)
-
-            record = RequestRecord(
-                request_id=request_id,
-                profile_name=profile_name,
-                model_name=model_name,
-                request_params=request_params,
-                response_content=result.content,
-                usage=usage,
-                cost=cost,
-                success=result.success,
-                error=result.error,
-                latency_ms=latency_ms,
-            )
-
-            self._request_history_manager.record_request(record)
-        except Exception as e:  # noqa: BLE001
-            self.logger.warning(f"记录请求历史失败: {e}")
+            except Exception as exc:  # noqa: BLE001 记账旁路：失败不阻断调用链
+                self.logger.warning(f"LLM 调用出账落库失败: {exc}", exc=True)
+        self._write_request_payload(
+            request_id=request_id,
+            profile_name=profile_name,
+            model_name=result.model or model_name or "unknown",
+            request_params=request_params,
+            result=result,
+            breakdown=breakdown,
+        )
 
     def _write_request_payload(
         self,

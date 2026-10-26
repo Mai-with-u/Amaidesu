@@ -1,12 +1,11 @@
-"""RequestHistoryManager：llm_requests 落库（正文出库只留统计与预览）、分页筛选、统计、清理与无库缓存回退"""
+"""RequestHistoryManager 读面：llm_requests 分页筛选、统计、清理与无库退化；写侧经 observation 出账入口落库"""
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
-from src.modules.llm.request_history_manager import RequestHistoryManager, RequestRecord, TokenUsage
+from src.modules.llm.observation import record_call_outcome
+from src.modules.llm.request_history_manager import RequestHistoryManager
 from src.modules.storage.database import SQLiteDatabase
 
 
@@ -15,39 +14,49 @@ def manager(store: SQLiteDatabase) -> RequestHistoryManager:
     return RequestHistoryManager(llm_repo=store.llm)
 
 
-def _record(request_id: str, *, ts_ms: int, model: str = "glm-x", success: bool = True, tokens: int = 10, **kwargs):
-    usage = TokenUsage(prompt_tokens=tokens, completion_tokens=tokens // 2, total_tokens=tokens + tokens // 2)
-    return RequestRecord(
+async def _record_outcome(
+    store: SQLiteDatabase,
+    request_id: str,
+    *,
+    ts_ms: int,
+    model: str = "glm-x",
+    success: bool = True,
+    tokens: int = 10,
+    reasoning_tokens: int | None = None,
+    profile_name: str = "planner",
+    request_params: dict | None = None,
+) -> None:
+    """经 observation 出账单一入口写一条请求明细（与引擎同路径）。"""
+    usage = None
+    if success:
+        usage = {
+            "prompt_tokens": tokens,
+            "completion_tokens": tokens // 2,
+            "total_tokens": tokens + tokens // 2,
+        }
+        if reasoning_tokens is not None:
+            usage["reasoning_tokens"] = reasoning_tokens
+    await record_call_outcome(
+        store.llm,
         request_id=request_id,
-        timestamp=ts_ms,
-        profile_name=kwargs.pop("profile_name", "planner"),
+        profile_name=profile_name,
         model_name=model,
-        request_params={"messages": [{"role": "user", "content": "hi"}]},
-        response_content="回复" if success else None,
-        usage=usage if success else None,
-        cost=0.01,
+        request_type="generate",
+        model_prices={},
         success=success,
         error=None if success else "boom",
+        response_content="回复" if success else None,
         latency_ms=123,
-        **kwargs,
+        timestamp_ms=ts_ms,
+        request_params=request_params or {"messages": [{"role": "user", "content": "hi"}]},
+        usage=usage,
     )
 
 
-async def _wait_for_count(store: SQLiteDatabase, expected: int) -> None:
-    """record_request 是 fire-and-forget 写入，轮询等落库。"""
-
-    async def _poll() -> None:
-        while (await store.execute("SELECT COUNT(*) AS n FROM llm_requests"))[0]["n"] < expected:
-            await asyncio.sleep(0.01)
-
-    await asyncio.wait_for(_poll(), 3.0)
-
-
 async def test_records_persist_and_query_with_paging_filters_and_detail(store, manager) -> None:
-    manager.record_request(_record("req-0", ts_ms=1_000))
-    manager.record_request(_record("req-1", ts_ms=2_000, success=False))
-    manager.record_request(_record("req-2", ts_ms=3_000, model="glm-y", profile_name="replyer"))
-    await _wait_for_count(store, 3)
+    await _record_outcome(store, "req-0", ts_ms=1_000)
+    await _record_outcome(store, "req-1", ts_ms=2_000, success=False)
+    await _record_outcome(store, "req-2", ts_ms=3_000, model="glm-y", profile_name="replyer")
 
     row = (await store.execute("SELECT * FROM llm_requests WHERE request_id='req-0'"))[0]
     assert (row["total_tokens"], row["success"]) == (15, 1)
@@ -73,8 +82,7 @@ async def test_records_persist_and_query_with_paging_filters_and_detail(store, m
 
 async def test_body_fields_leave_db_keeping_statistics_and_preview(store, manager) -> None:
     """正文不入库（v17 起出库列已退役，正文在诊断文件）；profile_name / reasoning_tokens / preview_text 落库并还原。"""
-    record = _record("req-v14", ts_ms=7_000).to_dict()
-    record["request_params"] = {
+    params = {
         "messages": [
             {"role": "system", "content": "system prompt"},
             {
@@ -86,9 +94,7 @@ async def test_body_fields_leave_db_keeping_statistics_and_preview(store, manage
             },
         ]
     }
-    record["usage"]["reasoning_tokens"] = 3
-    manager.record_request_from_dict(record)
-    await _wait_for_count(store, 1)
+    await _record_outcome(store, "req-v14", ts_ms=7_000, reasoning_tokens=3, request_params=params)
 
     # 出库列已整列退役：表结构里不再有这些列
     columns = {row["name"] for row in await store.execute("PRAGMA table_info(llm_requests)")}
@@ -109,9 +115,8 @@ async def test_body_fields_leave_db_keeping_statistics_and_preview(store, manage
 
 
 async def test_statistics_dates_and_clear(store, manager) -> None:
-    manager.record_request(_record("req-1", ts_ms=1_750_000_000_000))
-    manager.record_request(_record("req-2", ts_ms=1_790_000_000_000, success=False))
-    await _wait_for_count(store, 2)
+    await _record_outcome(store, "req-1", ts_ms=1_750_000_000_000)
+    await _record_outcome(store, "req-2", ts_ms=1_790_000_000_000, success=False)
 
     stats = await manager.get_statistics()
     assert (stats["total_requests"], stats["successful_requests"], stats["failed_requests"]) == (2, 1, 1)
@@ -130,9 +135,8 @@ async def test_statistics_dates_and_clear(store, manager) -> None:
 
 
 async def test_request_stats_by_ids_from_store(store, manager) -> None:
-    manager.record_request(_record("req-s1", ts_ms=1_000, tokens=100))
-    manager.record_request(_record("req-s2", ts_ms=2_000, model="glm-y", tokens=30))
-    await _wait_for_count(store, 2)
+    await _record_outcome(store, "req-s1", ts_ms=1_000, tokens=100)
+    await _record_outcome(store, "req-s2", ts_ms=2_000, model="glm-y", tokens=30)
 
     stats = await manager.get_request_stats_by_ids(["req-s1", "req-s1", "req-s2", "missing"])
     assert stats == {
@@ -149,16 +153,14 @@ async def test_request_stats_by_ids_from_store(store, manager) -> None:
     assert await manager.get_request_stats_by_ids([]) == {}
 
 
-async def test_without_store_queries_fall_back_to_memory_cache() -> None:
+async def test_without_repo_queries_return_empty() -> None:
+    """未注入仓储（装配退化场景）：查询返回空结果，不提供替代查询语义。"""
     manager = RequestHistoryManager(llm_repo=None)
-    manager.record_request(_record("req-cache", ts_ms=1_000, tokens=8))
-    assert manager.get_cache_size() == 1
-
     history = await manager.get_history()
-    assert history["total"] == 1 and history["records"][0]["request_id"] == "req-cache"
-    assert await manager.get_request_by_id("req-cache") is not None
-    assert (await manager.get_statistics())["total_requests"] == 1
+    assert history["total"] == 0 and history["records"] == []
+    assert await manager.get_request_by_id("req-cache") is None
+    assert (await manager.get_statistics())["total_requests"] == 0
     assert await manager.get_available_dates() == []
-    stats = await manager.get_request_stats_by_ids(["req-cache", "missing"])
-    assert list(stats) == ["req-cache"]
-    assert (stats["req-cache"]["prompt_tokens"], stats["req-cache"]["completion_tokens"]) == (8, 4)
+    assert await manager.get_available_models() == []
+    assert await manager.get_request_stats_by_ids(["req-cache"]) == {}
+    assert (await manager.clear_history(confirm=True))["success"] is False

@@ -1,4 +1,4 @@
-"""缓存 token 记账：客户端归一化厂商缓存字段 → record_usage 落 llm_usage（未上报落 0）→ 分段计价判据"""
+"""缓存 token 记账：客户端归一化厂商缓存字段 → 出账入口落 llm_usage（未上报落 0）→ 分段计价判据"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from src.modules.llm.client import BaseLLMClient
 from src.modules.llm.clients import _CLIENT_DISPATCH
 from src.modules.llm.clients.openai.client import OpenAIClient
 from src.modules.llm.engine import LLMManager
-from src.modules.llm.observation import calculate_cost, record_usage
+from src.modules.llm.observation import calculate_cost, record_call_outcome
 from src.modules.llm.payload import GenerateRequest, Response, Usage
 from src.modules.storage.connection import SQLiteConnectionManager
 from src.modules.storage.repos.llm import LLMRepo
@@ -75,12 +75,20 @@ def test_extract_usage_normalizes_cache_fields(prompt: int, fields: dict, expect
 @pytest.mark.parametrize(
     ("prompt", "fields", "expected"), [(200, _OPENAI_STYLE, (100, 100)), (64, _DEEPSEEK_STYLE, (50, 14))]
 )
-async def test_record_usage_persists_extracted_cache(conn_manager, prompt: int, fields: dict, expected) -> None:
+async def test_record_call_outcome_persists_extracted_cache(conn_manager, prompt: int, fields: dict, expected) -> None:
     extracted = OpenAIClient._extract_usage(
         SimpleNamespace(prompt_tokens=prompt, completion_tokens=8, total_tokens=prompt + 8, **fields)
     )
-    await record_usage(
-        LLMRepo(conn_manager), model_name="probe-model", provider_name="fake", request_type="generate", usage=extracted
+    await record_call_outcome(
+        LLMRepo(conn_manager),
+        request_id="req-cache",
+        profile_name="planner",
+        model_name="probe-model",
+        request_type="generate",
+        model_prices={},
+        success=True,
+        response_content="ok",
+        usage=extracted,
     )
     assert _cache_columns(conn_manager) == [expected]
 

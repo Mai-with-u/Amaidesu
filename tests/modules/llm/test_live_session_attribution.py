@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from src.modules.llm.engine import LLMManager
@@ -33,15 +35,18 @@ async def test_usage_live_session_attribution(tmp_path, resolver, expected) -> N
         request_id="rid-1",
         usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
     )
-    await manager._persist_llm_call(
+    await manager._record_call_outcome(
         request_id="r1",
         profile_name="planner",
         model_name="m1",
-        method="generate",
+        request_type="generate",
         result=result,
         kwargs={},
-        duration_ms=5,
+        start_time=time.time(),
     )
     with conn.transaction() as db:
         rows = [tuple(r) for r in db.execute("SELECT live_session_id, total_tokens FROM llm_usage").fetchall()]
+        detail = [tuple(r) for r in db.execute("SELECT request_id, success, total_tokens FROM llm_requests").fetchall()]
     assert rows == [(expected, 15)]
+    # 出账单一入口：聚合账之外同事务写请求明细行
+    assert detail == [("r1", 1, 15)]
