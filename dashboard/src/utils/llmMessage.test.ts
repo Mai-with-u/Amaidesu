@@ -5,7 +5,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { estimateBase64Bytes, normalizeMessage } from './llmMessage';
+import {
+  estimateBase64Bytes,
+  estimateMessageTokens,
+  estimateTextTokens,
+  normalizeMessage,
+} from './llmMessage';
 
 describe('正文提取（messageText）', () => {
   it('字符串片段与 text 片段按序拼接', () => {
@@ -117,5 +122,45 @@ describe('退化输入', () => {
 
   it('tool_call_id 非字符串回退 undefined', () => {
     expect(normalizeMessage({ role: 'tool', tool_call_id: 7 }).toolCallId).toBeUndefined();
+  });
+});
+
+describe('token 粗估（estimateTextTokens / estimateMessageTokens）', () => {
+  it('空文本为 0，非空文本至少估 1', () => {
+    expect(estimateTextTokens('')).toBe(0);
+    expect(estimateTextTokens('a')).toBe(1);
+  });
+
+  it('中文按 1 字/token 计', () => {
+    expect(estimateTextTokens('四个中文字')).toBe(5); // 5 个汉字
+  });
+
+  it('其他文本按 4 字符/token 计', () => {
+    expect(estimateTextTokens('abcdefgh')).toBe(2); // 8 / 4
+  });
+
+  it('中英混算：CJK 计 1 字、其余计 1/4', () => {
+    // 4 CJK + 4 ASCII → 4 + 1 = 5
+    expect(estimateTextTokens('四个汉字abcd')).toBe(5);
+  });
+
+  it('消息估算 = 正文 + 各工具调用名与参数', () => {
+    const msg = normalizeMessage({
+      role: 'assistant',
+      parts: ['四个汉字'],
+      tool_calls: [{ id: 'c1', name: 'speak', arguments: { text: '你好' } }],
+    });
+    // 正文 4 + 名字 5 个 ASCII(1.25→1 round) + 参数 {"text": "你好"} ≈ 5 CJK(你好+，无) ...
+    // 只验证总量等于各项之和，不锁定具体 JSON 序列化长度
+    const expected =
+      estimateTextTokens('四个汉字') +
+      estimateTextTokens('speak') +
+      estimateTextTokens(JSON.stringify({ text: '你好' }, null, 2));
+    expect(estimateMessageTokens(msg)).toBe(expected);
+  });
+
+  it('无工具调用的消息只计正文', () => {
+    const msg = normalizeMessage({ role: 'user', parts: ['abcdefgh'] });
+    expect(estimateMessageTokens(msg)).toBe(estimateTextTokens('abcdefgh'));
   });
 });

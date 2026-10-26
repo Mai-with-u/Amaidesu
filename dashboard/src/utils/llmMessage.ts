@@ -42,6 +42,26 @@ export function estimateBase64Bytes(data: string): number {
   return Math.floor((payload.length * 3) / 4);
 }
 
+/** CJK 字符集：汉字 / 假名 / 谚文 / 全角标点，分词器里普遍约 1 字 1 token */
+const CJK_CHAR_RE = /[\u3000-\u303f\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af\uff00-\uffef]/g;
+
+/** 粗估文本 token 数。供应商只在响应里回报一次总用量，没有逐消息精确计数，
+ *  这里按"中文约 1 字/token、其他约 4 字符/token"粗估，用于定位体积大头，非精确值 */
+export function estimateTextTokens(text: string): number {
+  if (!text) return 0;
+  const cjkCount = (text.match(CJK_CHAR_RE) ?? []).length;
+  return Math.max(1, Math.round(cjkCount + (text.length - cjkCount) / 4));
+}
+
+/** 单条消息的粗估 token 数：正文 + 工具调用名与参数（图像 token 随模型与分辨率浮动，不计） */
+export function estimateMessageTokens(message: PreviewMessage): number {
+  let total = estimateTextTokens(message.content);
+  for (const tc of message.toolCalls) {
+    total += estimateTextTokens(tc.name) + estimateTextTokens(tc.arguments);
+  }
+  return total;
+}
+
 /** 图像片段 → PreviewImage；裸 base64（无 data: 前缀）补 png 前缀兜底 */
 function toPreviewImage(raw: unknown): PreviewImage | null {
   if (typeof raw !== 'string' || raw.length === 0) return null;
