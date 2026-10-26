@@ -21,7 +21,6 @@ from pydantic import Field
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
@@ -201,9 +200,9 @@ class BiliDanmakuCollector(BaseCollector):
                         for item in new_danmakus:
                             payload = await self._create_danmaku_message(item)
                             if payload:
-                                # emit room.message.danmaku 语义事件
+                                # emit room.message.danmaku 语义事件（扇出统一走基类深入口）
                                 if self._emit_semantic_events:
-                                    await self._emit_semantic_event(payload)
+                                    await self.publish_room_message(payload)
                                 yield payload
                     else:
                         self.logger.debug("没有新的弹幕")
@@ -220,14 +219,6 @@ class BiliDanmakuCollector(BaseCollector):
             self.logger.warning("轮询 Bilibili API 超时")
         except Exception as e:
             self.logger.exception(f"处理 Bilibili 弹幕时发生未知错误: {e}")
-
-    async def _emit_semantic_event(self, payload: RoomMessagePayload) -> None:
-        """emit room.message.danmaku 语义事件"""
-        try:
-            # 场次归属由场次盖章拦截器统一注入；message_id 透传（回复关联键）
-            await self.emit_event(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)
-        except Exception as e:
-            self.logger.debug(f"emit 语义事件失败: {e}", exc=True)
 
     async def _create_danmaku_message(self, item: Dict[str, Any]) -> Optional[RoomMessagePayload]:
         """

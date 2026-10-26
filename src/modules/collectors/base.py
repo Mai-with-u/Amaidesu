@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
+from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
@@ -21,6 +23,17 @@ from src.modules.utils.time_utils import now_ms
 EventBusLike = Any
 
 logger = get_logger("BaseCollector")
+
+# message_type → room.message.* 语义事件名（CoreEvents 为单一词汇源）。
+# 事件名末段 == message_type，由 EventBus 的判别一致性校验兜底；
+# 各采集器不得自带私有映射表，统一走 ``publish_room_message``。
+_MESSAGE_TYPE_TO_EVENT: Dict[str, str] = {
+    "danmaku": CoreEvents.ROOM_MESSAGE_DANMAKU,
+    "enter": CoreEvents.ROOM_MESSAGE_ENTER,
+    "gift": CoreEvents.ROOM_MESSAGE_GIFT,
+    "super_chat": CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+    "guard": CoreEvents.ROOM_MESSAGE_GUARD,
+}
 
 
 class CollectorState(str, Enum):
@@ -161,6 +174,37 @@ class BaseCollector:
         return None  # 默认空操作：子类覆写
 
     # ---------------- emit 封装 ----------------
+
+    async def publish_room_message(self, payload: RoomMessagePayload) -> bool:
+        """深入口：RoomMessagePayload → ``room.message.*`` 语义事件扇出。
+
+        收拢各采集器漂移的私有映射：按载荷的 ``message_type`` 选 CoreEvents
+        语义事件名发布。统一兜底策略——未知 ``message_type`` 记 warning（不抛
+        异常）；身份键（``user.id``）缺失宁缺毋滥直接丢弃，兜底 id 会让多个
+        无 id 用户退化成同一行、身份互相混淆；emit 失败记 warning 不中断采集。
+
+        Args:
+            payload: 直播间行为流载荷
+
+        Returns:
+            是否真的发布了一条语义事件（丢弃/未知类型/emit 失败均为 False）
+        """
+        if not payload.user.id:
+            logger.warning(
+                f"Collector '{self.name}' 载荷缺失身份键 user.id，丢弃（防多用户退化混淆）: "
+                f"message_type={payload.message_type}"
+            )
+            return False
+        event_name = _MESSAGE_TYPE_TO_EVENT.get(payload.message_type)
+        if event_name is None:
+            logger.warning(f"Collector '{self.name}' 未知 message_type，跳过 emit: {payload.message_type}")
+            return False
+        try:
+            await self.emit_event(event_name, payload)
+        except Exception as exc:  # noqa: BLE001 - emit 边界，失败不影响后续采集
+            logger.warning(f"Collector '{self.name}' emit 语义事件失败: {event_name}", exc=exc)
+            return False
+        return True
 
     async def emit_event(
         self,

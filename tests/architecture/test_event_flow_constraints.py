@@ -15,6 +15,10 @@ from src.modules.events.names import CoreEvents
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 DOMAIN_ROOTS = {"agent": SRC / "agents", "tool": SRC / "modules" / "tools"}
+# room.message.* 语义事件扇出的唯一收口：message_type → 事件名映射只允许存在于
+# BaseCollector（publish_room_message），各采集器模块不得自带私有映射表
+COLLECTOR_FANOUT_OWNER = SRC / "modules" / "collectors" / "base.py"
+COLLECTOR_ROOT = SRC / "modules" / "collectors"
 
 CORE_EVENT_VALUES: Dict[str, str] = {
     name: getattr(CoreEvents, name)
@@ -75,6 +79,45 @@ def _subscriptions(domain: str) -> List[Dict]:
 
 def _describe(violations: List[Dict]) -> str:
     return "\n".join(f"  - {v['where']} subscribes to {v['event']}" for v in violations)
+
+
+def _core_events_references(path: Path) -> List[str]:
+    """AST 扫描一个文件里引用的 ``CoreEvents.X`` 常量名。"""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except SyntaxError:
+        return []
+    names = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "CoreEvents":
+            names.append(node.attr)
+    return names
+
+
+# 五类行为流事件的扇出收口名单；PARTNER_SPEECH 由 stt 采集器直发（单一类型
+# 无映射表，不在收口范围），ROOM_MESSAGE_WILDCARD 是订阅标识不是发布事件名
+_FANOUT_EVENT_ATTRS = {
+    "ROOM_MESSAGE_DANMAKU",
+    "ROOM_MESSAGE_GIFT",
+    "ROOM_MESSAGE_SUPER_CHAT",
+    "ROOM_MESSAGE_GUARD",
+    "ROOM_MESSAGE_ENTER",
+}
+
+
+def test_room_message_fanout_mapping_lives_only_in_base_collector() -> None:
+    """采集器模块不得自带 message_type→事件名映射表，扇出统一走 BaseCollector。"""
+    violations: List[Dict] = []
+    for path in COLLECTOR_ROOT.rglob("*.py"):
+        if path == COLLECTOR_FANOUT_OWNER:
+            continue
+        if attrs := [a for a in _core_events_references(path) if a in _FANOUT_EVENT_ATTRS]:
+            violations.append({"where": str(path.relative_to(SRC.parent)), "events": attrs})
+    assert not violations, (
+        "room.message.* 扇出已收口到 BaseCollector.publish_room_message，"
+        "采集器模块引用 CoreEvents.ROOM_MESSAGE_* 即私有映射残留：\n"
+        + "\n".join(f"  - {v['where']}: {v['events']}" for v in violations)
+    )
 
 
 def test_tool_domain_never_subscribes_to_input_or_decision_events() -> None:

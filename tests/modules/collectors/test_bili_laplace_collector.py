@@ -432,7 +432,7 @@ async def test_emit_maps_to_core_event() -> None:
     collector = BiliDanmakuLaplaceCollector(config={}, event_bus=bus)
     payload = collector._mapper.to_payload(_message_event())
     assert payload is not None
-    await collector._emit_semantic_event(payload)
+    await collector.publish_room_message(payload)
     assert bus.events == [(CoreEvents.ROOM_MESSAGE_DANMAKU, payload)]
 
 
@@ -447,7 +447,7 @@ async def test_real_event_bus_discriminant() -> None:
     collector = BiliDanmakuLaplaceCollector(config={}, event_bus=bus)
     payload = collector._mapper.to_payload(_message_event())
     assert payload is not None
-    await collector._emit_semantic_event(payload)
+    await collector.publish_room_message(payload)
     await _wait_until(lambda: bool(received))
     assert received[0].message_type == "danmaku"
     await bus.cleanup()

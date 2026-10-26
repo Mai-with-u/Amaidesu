@@ -289,9 +289,9 @@ class BiliDanmakuOfficialCollector(BaseCollector):
 
             payload = self._create_payload(bili_message)
 
-            # emit 语义域事件 room.message.*（受配置门控）
+            # emit 语义域事件 room.message.*（受配置门控；扇出与兜底统一走基类深入口）
             if payload is not None and self._emit_semantic_events:
-                await self._emit_semantic_event(payload)
+                await self.publish_room_message(payload)
 
             if payload is not None:
                 self.logger.debug(f"消息已处理: {payload.content[:50]}...")
@@ -323,21 +323,6 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                 audience_total=watched_msg.watched_count,
             ),
         )
-
-    async def _emit_semantic_event(self, payload: RoomMessagePayload) -> None:
-        """按载荷的 message_type 选事件名并 emit room.message.* 事件。"""
-        event_map = {
-            "danmaku": CoreEvents.ROOM_MESSAGE_DANMAKU,
-            "enter": CoreEvents.ROOM_MESSAGE_ENTER,
-            "gift": CoreEvents.ROOM_MESSAGE_GIFT,
-            "super_chat": CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
-            "guard": CoreEvents.ROOM_MESSAGE_GUARD,
-        }
-        event_name = event_map.get(payload.message_type)
-        if event_name is None:
-            self.logger.debug(f"未知 message_type '{payload.message_type}'，跳过 emit")
-            return
-        await self.emit_event(event_name, payload)
 
     def _create_message_from_dict(self, data: Dict[str, Any]) -> Optional[BiliBaseMessage]:
         """从字典创建对应的消息对象"""

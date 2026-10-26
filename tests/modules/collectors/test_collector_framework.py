@@ -113,6 +113,40 @@ def test_errored_collector_counts_as_unhealthy(manager: CollectorManager) -> Non
     assert manager.is_all_healthy() is False and "err" in manager.get_unhealthy()
 
 
+def _room_payload(message_type: str, user_id: str = "u1") -> RoomMessagePayload:
+    return RoomMessagePayload(message_type=message_type, user=RoomMessageUser(id=user_id, name="测试"), content="内容")
+
+
+async def test_publish_room_message_fans_out_by_message_type() -> None:
+    """深入口按 message_type 选 CoreEvents 语义事件；返回值标记是否真的发布。"""
+    cases = {
+        "danmaku": CoreEvents.ROOM_MESSAGE_DANMAKU,
+        "gift": CoreEvents.ROOM_MESSAGE_GIFT,
+        "super_chat": CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+        "guard": CoreEvents.ROOM_MESSAGE_GUARD,
+        "enter": CoreEvents.ROOM_MESSAGE_ENTER,
+    }
+    for message_type, event_name in cases.items():
+        bus = _FakeBus()
+        collector = _ScriptedCollector(bus, [], emit=False)
+        assert await collector.publish_room_message(_room_payload(message_type)) is True
+        assert bus.events == [(event_name, bus.events[0][1])]
+
+
+async def test_publish_room_message_drops_unknown_type_and_missing_identity() -> None:
+    """未知 message_type 记 warning 不抛异常；身份键缺失宁缺毋滥丢弃——两者都不发布。"""
+    bus = _FakeBus()
+    collector = _ScriptedCollector(bus, [], emit=False)
+
+    # message_type 是 Literal、正常构造造不出未知值：绕过校验模拟字段落错/上游漂移
+    unknown = RoomMessagePayload.model_construct(
+        message_type="mystery_type", user=RoomMessageUser(id="u1", name="测试"), content="内容"
+    )
+    assert await collector.publish_room_message(unknown) is False
+    assert await collector.publish_room_message(_room_payload("danmaku", user_id="")) is False
+    assert bus.events == []
+
+
 async def test_manager_enable_and_disable_a_collector_at_runtime(manager, monkeypatch: pytest.MonkeyPatch) -> None:
     # console_input 仅作链路载体：屏蔽交互终端检查（pytest 下 stdin 非 TTY 会自禁）
     monkeypatch.setattr(console_mod, "_stdin_interactive", lambda: True)

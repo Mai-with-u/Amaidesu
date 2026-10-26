@@ -19,7 +19,6 @@ from pydantic import Field
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import (
     GiftInfo,
     GuardInfo,
@@ -38,14 +37,6 @@ _ERROR_RETRY_INTERVAL_S = 1
 # 阻塞任务（HTTP 同步调用、文件 IO 等）隔离——共享池线程被占满时，
 # readline 任务会排队延迟调度，用户输入的行要多次回车才被消费。
 _STDIN_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="console-stdin")
-
-# message_type → 事件名（载荷已自带 message_type，本表只负责选事件名）
-_MESSAGE_TYPE_TO_EVENT = {
-    "danmaku": CoreEvents.ROOM_MESSAGE_DANMAKU,
-    "gift": CoreEvents.ROOM_MESSAGE_GIFT,
-    "super_chat": CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
-    "enter": CoreEvents.ROOM_MESSAGE_ENTER,
-}
 
 
 def _read_stdin_line_with_diag() -> str:
@@ -183,7 +174,7 @@ class ConsoleInputCollector(BaseCollector):
                 if text.startswith("/"):
                     message = await self._handle_command(text)
                     if message:
-                        await self._emit_semantic_event(message)
+                        await self.publish_room_message(message)
                 else:
                     message = RoomMessagePayload(
                         message_type="danmaku",
@@ -192,7 +183,7 @@ class ConsoleInputCollector(BaseCollector):
                         content=text,
                         timestamp_ms=now_ms(),
                     )
-                    await self._emit_semantic_event(message)
+                    await self.publish_room_message(message)
 
             except asyncio.CancelledError:
                 self.logger.info("控制台输入循环被取消")
@@ -202,15 +193,6 @@ class ConsoleInputCollector(BaseCollector):
                 await asyncio.sleep(_ERROR_RETRY_INTERVAL_S)
 
         self.logger.info("控制台输入循环结束")
-
-    async def _emit_semantic_event(self, payload: RoomMessagePayload) -> None:
-        """按载荷的 message_type 选事件名并 emit room.message.* 事件。"""
-        event_name = _MESSAGE_TYPE_TO_EVENT.get(payload.message_type)
-        if event_name is None:
-            self.logger.debug(f"未知 message_type '{payload.message_type}'，跳过 emit")
-            return
-        await self.emit_event(event_name, payload)
-        self.logger.info(f"已 emit {event_name} (content='{payload.content[:40]}')")
 
     # ------------------------------------------------------------------
     # 旧 collect() 生成器兼容（外部消费者不存在时保留接口）

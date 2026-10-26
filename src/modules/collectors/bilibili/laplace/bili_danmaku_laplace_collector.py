@@ -22,21 +22,11 @@ from pydantic import Field, field_validator, model_validator
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import get_logger
 
 from .client import LaplaceBridgeClient
 from .events import LaplaceEventMapper
-
-# message_type → 语义事件名（EventBus 会校验事件名末段 == message_type）
-_EVENT_MAP: Dict[str, str] = {
-    "danmaku": CoreEvents.ROOM_MESSAGE_DANMAKU,
-    "gift": CoreEvents.ROOM_MESSAGE_GIFT,
-    "super_chat": CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
-    "guard": CoreEvents.ROOM_MESSAGE_GUARD,
-    "enter": CoreEvents.ROOM_MESSAGE_ENTER,
-}
 
 
 class BiliDanmakuLaplaceCollector(BaseCollector):
@@ -158,24 +148,10 @@ class BiliDanmakuLaplaceCollector(BaseCollector):
                 if payload is None:
                     continue
                 if self._emit_semantic_events:
-                    await self._emit_semantic_event(payload)
+                    await self.publish_room_message(payload)
                 yield payload
         finally:
             self.is_started = False
-
-    async def _emit_semantic_event(self, payload: RoomMessagePayload) -> None:
-        """按 message_type 发对应 ``room.message.*`` 事件。"""
-        event_name = _EVENT_MAP.get(payload.message_type)
-        if event_name is None:
-            self.logger.warning(f"未知 message_type，跳过 emit: {payload.message_type}")
-            return
-        try:
-            await self.emit_event(event_name, payload)
-        except Exception as exc:  # noqa: BLE001 - emit 边界，失败不影响后续采集
-            self.logger.warning(
-                f"emit 语义事件失败: {event_name}（{type(exc).__name__}: {exc}）",
-                exc=exc,
-            )
 
 
 __all__ = ["BiliDanmakuLaplaceCollector"]
