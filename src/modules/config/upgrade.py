@@ -14,14 +14,22 @@
 新钩子取该文件链上界的下一位即可，与主程序发布版本号无关——配置版本
 流与发布版本同自 2.0.0 起步、此后各自独立递进，下方历史钩子的 target
 数字与发布版本号相近只是同起点独立演进的自然结果，两套序列无关。
+
+**钩子的定义面分两档**：
+
+- 大多数钩子是"导航到嵌套段 → 删键/整段删除/按旧默认改写/键改名 → 返回
+  变更路径"的同构体，用本模块的声明式词汇（``drop_section_keys`` /
+  ``drop_section`` / ``rename_key`` / ``swap_default`` / ``chain``）按数据表
+  形态构造，登记处的名字即测试与 grep 的锚点；
+- 真正定制的钩子（跨文件搬迁、带警告的值换算、归一化枚举等）保留为函数。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Callable, Dict, List, Protocol
 
-from src.modules.avatar.platform.warudo.expression_profile import MAIMAI_PROFILE_PATH, read_profile_expression
 from src.modules.config.errors import ConfigValidationError
 from src.modules.logging import get_logger
 
@@ -73,40 +81,6 @@ _FILE_HOOKS: Dict[str, List[_VersionedHook]] = {}
 # 演示样例钩子只存在于测试中（见 tests/config/test_upgrade.py），不注册生效
 
 
-def _upgrade_agents_force_rename(data: Dict[str, Any]) -> List[str]:
-    """agents.toml v2.0.32：force 段字段正名 + 死字段清理。
-
-    ``force_data_types`` 重命名为 ``force_message_types``（与 TimingGate 构造参数
-    名对齐）；``force_importance`` 经核实为零消费者死字段（TimingGate 只收类型
-    列表，无 importance 数值路径），一并删除。对已迁移数据零变更（幂等）。
-    """
-    streamer = (data.get("agents") or {}).get("streamer")
-    force = streamer.get("force") if isinstance(streamer, dict) else None
-    if not isinstance(force, dict):
-        return []
-    changed: List[str] = []
-    if "force_data_types" in force:
-        force["force_message_types"] = force.pop("force_data_types")
-        changed.append("agents.streamer.force.force_data_types -> force_message_types")
-    if "force_importance" in force:
-        del force["force_importance"]
-        changed.append("agents.streamer.force.force_importance")
-    return changed
-
-
-def _upgrade_infra_drop_events_persist(data: Dict[str, Any]) -> List[str]:
-    """infra.toml v2.0.33：删 [events].persist 键。
-
-    event_history 表持久化路径整体移除（表 DROP + 服务纯内存化），
-    persist 开关失去消费者。对已迁移数据零变更（幂等）。
-    """
-    events = data.get("events")
-    if not isinstance(events, dict) or "persist" not in events:
-        return []
-    del events["persist"]
-    return ["events.persist"]
-
-
 def register_file_hook(
     file_name: str, name: str, target_version: str, run: Callable[[Dict[str, Any]], List[str]]
 ) -> None:
@@ -129,98 +103,164 @@ def register_cross_file_hook(
     _FILE_HOOKS.setdefault(host_file, []).append(hook)
 
 
+# ---------------------------------------------------------------------------
+# 声明式钩子词汇：同构迁移体的解释器。每个工厂返回一个满足 FileUpgradeHook
+# 语义的闭包（原地修改、返回变更路径、幂等），供登记处按数据表形态组合。
+# ---------------------------------------------------------------------------
+
+
+def _navigate(data: Dict[str, Any], dotted_path: str) -> Dict[str, Any] | None:
+    """沿点分路径逐层取嵌套表；任一层缺失或不是 dict 时返回 None"""
+    section: Any = data
+    for part in dotted_path.split("."):
+        section = section.get(part) if isinstance(section, dict) else None
+        if section is None:
+            return None
+    return section if isinstance(section, dict) else None
+
+
+def drop_section_keys(section_path: str, keys: tuple[str, ...]) -> Callable[[Dict[str, Any]], List[str]]:
+    """删除指定段内的若干键；段缺失时零变更。
+
+    变更路径记作 ``<section_path>.<key>``。与"按旧默认改写"钩子的区别：
+    这里不看值——退役键无论用户改没改过都失去消费者，一律删除。
+    """
+
+    def run(data: Dict[str, Any]) -> List[str]:
+        section = _navigate(data, section_path)
+        if section is None:
+            return []
+        changed = [f"{section_path}.{key}" for key in keys if key in section]
+        for key in keys:
+            section.pop(key, None)
+        return changed
+
+    return run
+
+
+def drop_section(section_path: str) -> Callable[[Dict[str, Any]], List[str]]:
+    """整段删除（退役段留在文件里即属未知段硬错，原地移除）；段缺失时零变更"""
+
+    def run(data: Dict[str, Any]) -> List[str]:
+        parent = _navigate(data, section_path.rsplit(".", 1)[0])
+        key = section_path.rsplit(".", 1)[1]
+        if parent is None or key not in parent:
+            return []
+        del parent[key]
+        return [section_path]
+
+    return run
+
+
+def rename_key(section_path: str, old_key: str, new_key: str) -> Callable[[Dict[str, Any]], List[str]]:
+    """段内键改名（值原样搬迁）；变更路径记作 ``<section_path>.<old> -> <new>``"""
+
+    def run(data: Dict[str, Any]) -> List[str]:
+        section = _navigate(data, section_path)
+        if section is None or old_key not in section:
+            return []
+        section[new_key] = section.pop(old_key)
+        return [f"{section_path}.{old_key} -> {new_key}"]
+
+    return run
+
+
+def swap_default(
+    path: str, old_default: Any, new_default: Any, *, annotate: bool = True
+) -> Callable[[Dict[str, Any]], List[str]]:
+    """仅当落盘值等于旧默认（用户未显式改过）时改写为新默认，用户显式值不动。
+
+    变更路径默认带值注记（``<path>: <old> -> <new>``）；``annotate=False``
+    时只记路径——旧/新值本身冗长（URL、整句人设指令）时用后者。
+    """
+    parent_path, _, key = path.rpartition(".")
+
+    def run(data: Dict[str, Any]) -> List[str]:
+        parent = _navigate(data, parent_path)
+        if parent is None or parent.get(key) != old_default:
+            return []
+        parent[key] = new_default
+        if annotate:
+            return [f"{path}: {old_default} -> {new_default}"]
+        return [path]
+
+    return run
+
+
+def chain(*runs: Callable[..., List[str]]) -> Callable[..., List[str]]:
+    """按序执行多个钩子体，变更路径列表首尾相接（组合声明式词汇用）"""
+
+    def run(*args: Any) -> List[str]:
+        changed: List[str] = []
+        for one in runs:
+            changed.extend(one(*args))
+        return changed
+
+    return run
+
+
+# ---------------------------------------------------------------------------
+# 生产钩子登记（声明式数据表 + 定制函数）
+# ---------------------------------------------------------------------------
+
+# agents.toml v2.0.32：force 段字段正名 + 死字段清理。
+# ``force_data_types`` 重命名为 ``force_message_types``（与 TimingGate 构造参数
+# 名对齐）；``force_importance`` 经核实为零消费者死字段（TimingGate 只收类型
+# 列表，无 importance 数值路径），一并删除。
+_upgrade_agents_force_rename = chain(
+    rename_key("agents.streamer.force", "force_data_types", "force_message_types"),
+    drop_section_keys("agents.streamer.force", ("force_importance",)),
+)
+
 # 生产钩子登记：agents.toml v2.0.32（force 段字段正名 + 死字段清理）
 register_file_hook("agents.toml", "agents_force_field_rename", "2.0.32", _upgrade_agents_force_rename)
+
+# infra.toml v2.0.33：删 [events].persist 键。event_history 表持久化路径整体
+# 移除（表 DROP + 服务纯内存化），persist 开关失去消费者。
+_upgrade_infra_drop_events_persist = drop_section_keys("events", ("persist",))
 
 # 生产钩子登记：infra.toml v2.0.33（[events].persist 删键，表持久化路径移除）
 register_file_hook("infra.toml", "infra_drop_events_persist", "2.0.33", _upgrade_infra_drop_events_persist)
 
-
-def _drop_simulator_llm_profile(data: Dict[str, Any]) -> List[str]:
-    """删除 ``[simulator].llm_profile``（profile 绑定改由代码显式常量声明）"""
-    simulator = data.get("simulator")
-    if isinstance(simulator, dict) and "llm_profile" in simulator:
-        del simulator["llm_profile"]
-        return ["simulator.llm_profile"]
-    return []
-
+# 删除 ``[simulator].llm_profile``（profile 绑定改由代码显式常量声明）
+_drop_simulator_llm_profile = drop_section_keys("simulator", ("llm_profile",))
 
 register_file_hook("infra.toml", "drop_simulator_llm_profile", "2.0.32", _drop_simulator_llm_profile)
 
-
-def _drop_window_event_threshold(data: Dict[str, Any]) -> List[str]:
-    """删除 ``[agents.streamer.background].window_event_threshold``（窗口压缩未实现，字段无消费者）"""
-    streamer = (data.get("agents") or {}).get("streamer")
-    background = streamer.get("background") if isinstance(streamer, dict) else None
-    if isinstance(background, dict) and "window_event_threshold" in background:
-        del background["window_event_threshold"]
-        return ["agents.streamer.background.window_event_threshold"]
-    return []
-
+# 删除 ``[agents.streamer.background].window_event_threshold``（窗口压缩未实现，字段无消费者）
+_drop_window_event_threshold = drop_section_keys("agents.streamer.background", ("window_event_threshold",))
 
 register_file_hook("agents.toml", "drop_window_event_threshold", "2.0.33", _drop_window_event_threshold)
 
-
-def _drop_text_adv_fake_knobs(data: Dict[str, Any]) -> List[str]:
-    """agents.toml v2.0.34：删 [agents.text_adv] 三个无消费者假旋钮。
-
-    ``engine_kind`` / ``decision_strategy`` / ``enable_event_emission`` 经核实
-    均无有效消费路径（Agent 行为不再由配置切换），一并删除。对已迁移数据
-    零变更（幂等）。
-    """
-    agents = data.get("agents")
-    text_adv = agents.get("text_adv") if isinstance(agents, dict) else None
-    if not isinstance(text_adv, dict):
-        return []
-    changed: List[str] = []
-    for key in ("engine_kind", "decision_strategy", "enable_event_emission"):
-        if key in text_adv:
-            del text_adv[key]
-            changed.append(f"agents.text_adv.{key}")
-    return changed
-
+# agents.toml v2.0.34：删 [agents.text_adv] 三个无消费者假旋钮。
+# ``engine_kind`` / ``decision_strategy`` / ``enable_event_emission`` 经核实
+# 均无有效消费路径（Agent 行为不再由配置切换），一并删除。
+_drop_text_adv_fake_knobs = drop_section_keys(
+    "agents.text_adv", ("engine_kind", "decision_strategy", "enable_event_emission")
+)
 
 # 生产钩子登记：agents.toml v2.0.34（text_adv 假旋钮删字段）
 register_file_hook("agents.toml", "drop_text_adv_fake_knobs", "2.0.34", _drop_text_adv_fake_knobs)
 
-
-def _drop_simulator_sc_probability(data: Dict[str, Any]) -> List[str]:
-    """infra.toml v2.0.41：删 ``[simulator].sc_probability`` 死键。
-
-    SC 触发实际走付费分支的 ``sc_pay_probability``，该键自付费分支引入后
-    再无业务消费（唯一消费方是面板展示），删除。对已迁移数据零变更（幂等）。
-    """
-    simulator = data.get("simulator")
-    if isinstance(simulator, dict) and "sc_probability" in simulator:
-        del simulator["sc_probability"]
-        return ["simulator.sc_probability"]
-    return []
-
+# infra.toml v2.0.41：删 ``[simulator].sc_probability`` 死键。SC 触发实际走
+# 付费分支的 ``sc_pay_probability``，该键自付费分支引入后再无业务消费（唯一
+# 消费方是面板展示），删除。
+_drop_simulator_sc_probability = drop_section_keys("simulator", ("sc_probability",))
 
 register_file_hook("infra.toml", "drop_simulator_sc_probability", "2.0.41", _drop_simulator_sc_probability)
 
-
-def _upgrade_logging_directory_subdir(data: Dict[str, Any]) -> List[str]:
-    """infra.toml v2.0.42：运行日志收进 ``logs/app/`` 子目录。
-
-    ``logs/`` 根改为只放平铺子目录（app / llm_requests / llm_context /
-    events / tts / webui），运行日志落盘目录相应内收。仅改写值等于旧默认
-    ``"logs"`` 的落盘值，用户显式自设的其他目录原样保留。对已迁移数据
-    零变更（幂等）。
-    """
-    logging_section = data.get("logging")
-    if not isinstance(logging_section, dict) or logging_section.get("directory") != "logs":
-        return []
-    logging_section["directory"] = "logs/app"
-    return ["logging.directory: logs -> logs/app"]
-
+# infra.toml v2.0.42：运行日志收进 ``logs/app/`` 子目录。``logs/`` 根改为只放
+# 平铺子目录（app / llm_requests / llm_context / events / tts / webui），运行
+# 日志落盘目录相应内收。仅改写值等于旧默认 ``"logs"`` 的落盘值，用户显式
+# 自设的其他目录原样保留。
+_upgrade_logging_directory_subdir = swap_default("logging.directory", "logs", "logs/app")
 
 # 生产钩子登记：infra.toml v2.0.42（[logging].directory 收进子目录）
 register_file_hook("infra.toml", "logging_directory_subdir", "2.0.42", _upgrade_logging_directory_subdir)
 
 
 def _upgrade_builder_scene_transport(data: Dict[str, Any]) -> List[str]:
-    """设计与施工复用 Mod 受理通道，独立校验入口不再有消费者。"""
+    """设计与施工复用 Mod 受力通道，独立校验入口不再有消费者。"""
     builder = ((data.get("agents") or {}).get("minecraft") or {}).get("builder")
     if not isinstance(builder, dict):
         return []
@@ -241,17 +281,9 @@ def _upgrade_builder_scene_transport(data: Dict[str, Any]) -> List[str]:
 
 register_file_hook("agents.toml", "builder_scene_transport", "2.0.35", _upgrade_builder_scene_transport)
 
-
-def _drop_minecraft_max_steps(data: Dict[str, Any]) -> List[str]:
-    """游戏主任务持续推进到交付或实际阻塞，清理会使长任务中途挂起的旧步数配置。"""
-    agents = data.get("agents")
-    minecraft = agents.get("minecraft") if isinstance(agents, dict) else None
-    if not isinstance(minecraft, dict) or "max_steps" not in minecraft:
-        return []
-    # 父玩家的累计步数不再决定任务终止；建筑设计子任务的独立配置仍归子 Agent 使用。
-    del minecraft["max_steps"]
-    return ["agents.minecraft.max_steps"]
-
+# 游戏主任务持续推进到交付或实际阻塞，清理会使长任务中途挂起的旧步数配置
+# （父玩家的累计步数不再决定任务终止；建筑设计子任务的独立配置仍归子 Agent 使用）
+_drop_minecraft_max_steps = drop_section_keys("agents.minecraft", ("max_steps",))
 
 register_file_hook("agents.toml", "drop_minecraft_max_steps", "2.0.39", _drop_minecraft_max_steps)
 
@@ -289,50 +321,36 @@ def _drop_model_generation_limits(data: Dict[str, Any]) -> List[str]:
     return changed
 
 
-def _drop_agent_input_limits(data: Dict[str, Any]) -> List[str]:
-    """直播历史与建造资料完整读取，任务历史的自动摘要配置继续保留。"""
-    return _drop_config_paths(
-        data,
-        (
-            "agents.streamer.history_limit",
-            "agents.minecraft.builder.max_resource_chars",
-            "agents.minecraft.context.observation_inline_chars",
-            "agents.minecraft.context.archive_max_chars",
-        ),
-    )
+# 直播历史与建造资料完整读取，任务历史的自动摘要配置继续保留
+_drop_agent_input_limits = partial(
+    _drop_config_paths,
+    paths=(
+        "agents.streamer.history_limit",
+        "agents.minecraft.builder.max_resource_chars",
+        "agents.minecraft.context.observation_inline_chars",
+        "agents.minecraft.context.archive_max_chars",
+    ),
+)
 
+# 模拟观众使用完整场次上下文，发言不再按字符数裁短
+_drop_simulator_text_limits = partial(
+    _drop_config_paths, paths=("simulator.context_window_size", "simulator.max_message_chars")
+)
 
-def _drop_simulator_text_limits(data: Dict[str, Any]) -> List[str]:
-    """模拟观众使用完整场次上下文，发言不再按字符数裁短。"""
-    return _drop_config_paths(data, ("simulator.context_window_size", "simulator.max_message_chars"))
+# 网页返回完整正文，视觉识别默认使用原图并等待模型完成
+_drop_tool_input_limits = partial(
+    _drop_config_paths,
+    paths=(
+        "tools.web.search.config.max_fetch_chars",
+        "tools.vision.config.vlm_timeout_ms",
+        "tools.vision.config.default_max_width",
+    ),
+)
 
-
-def _drop_tool_input_limits(data: Dict[str, Any]) -> List[str]:
-    """网页返回完整正文，视觉识别默认使用原图并等待模型完成。"""
-    return _drop_config_paths(
-        data,
-        (
-            "tools.web.search.config.max_fetch_chars",
-            "tools.vision.config.vlm_timeout_ms",
-            "tools.vision.config.default_max_width",
-        ),
-    )
-
-
-def _drop_minecraft_builder_section(data: Dict[str, Any]) -> List[str]:
-    """agents.toml v2.0.40：删 [agents.minecraft.builder] 残段。
-
-    独立校验/预览入口已随场景施工迁移删除（builder_scene_transport 只
-    处理三个协议键），残余键（max_steps 等）亦无消费者，整段退役。
-    对已迁移数据零变更（幂等）。
-    """
-    agents = data.get("agents")
-    minecraft = agents.get("minecraft") if isinstance(agents, dict) else None
-    if not isinstance(minecraft, dict) or "builder" not in minecraft:
-        return []
-    del minecraft["builder"]
-    return ["agents.minecraft.builder"]
-
+# agents.toml v2.0.40：删 [agents.minecraft.builder] 残段。独立校验/预览入口
+# 已随场景施工迁移删除（builder_scene_transport 只处理三个协议键），残余键
+# （max_steps 等）亦无消费者，整段退役。
+_drop_minecraft_builder_section = drop_section("agents.minecraft.builder")
 
 register_file_hook("agents.toml", "drop_minecraft_builder_section", "2.0.40", _drop_minecraft_builder_section)
 
@@ -456,26 +474,12 @@ def _upgrade_vts_lipsync_to_infra(host_data: Dict[str, Any], target_data: Dict[s
 # 目标文件随域迁出改为 avatar.toml）
 register_cross_file_hook("tools.toml", "avatar.toml", "vts_lipsync_to_infra", "2.0.36", _upgrade_vts_lipsync_to_infra)
 
-
-def _drop_warudo_subtitle_keys(data: Dict[str, Any]) -> List[str]:
-    """tools.toml v2.0.37：删 [tools.avatar.warudo].config 三个字幕键。
-
-    Warudo 8766 字幕面整体删除（与 Dashboard /subtitle 页重叠），字幕收敛
-    为"一源 → 三面"；三键失去消费者。对已迁移数据零变更（幂等）。
-    """
-    tools = data.get("tools")
-    avatar = tools.get("avatar") if isinstance(tools, dict) else None
-    warudo = avatar.get("warudo") if isinstance(avatar, dict) else None
-    warudo_config = warudo.get("config") if isinstance(warudo, dict) else None
-    if not isinstance(warudo_config, dict):
-        return []
-    changed: List[str] = []
-    for key in ("subtitle_enabled", "subtitle_port", "subtitle_show_status"):
-        if key in warudo_config:
-            del warudo_config[key]
-            changed.append(f"tools.avatar.warudo.config.{key}")
-    return changed
-
+# tools.toml v2.0.37：删 [tools.avatar.warudo].config 三个字幕键。Warudo 8766
+# 字幕面整体删除（与 Dashboard /subtitle 页重叠），字幕收敛为"一源 → 三面"；
+# 三键失去消费者。
+_drop_warudo_subtitle_keys = drop_section_keys(
+    "tools.avatar.warudo.config", ("subtitle_enabled", "subtitle_port", "subtitle_show_status")
+)
 
 # 生产钩子登记：tools.toml v2.0.37（Warudo 字幕三键删除，8766 面退役）
 register_file_hook("tools.toml", "drop_warudo_subtitle_keys", "2.0.37", _drop_warudo_subtitle_keys)
@@ -570,6 +574,19 @@ register_cross_file_hook(
 )
 
 
+# 麦麦表情档案读取器（组合根注入点）：avatar.toml v2.0.41 的迁移钩子需要读
+# avatar 包的表情档案，而配置层不得反向 import 具体组件——档案数据的获取
+# 由组合根（main.py）在配置加载前经 ``set_expression_profile_reader`` 注入。
+# 未注入时迁移真要写档案即硬错（与旧实现"import 即失败"同为启动期暴露）。
+_expression_profile_reader: Callable[[], Dict[str, Any]] | None = None
+
+
+def set_expression_profile_reader(reader: Callable[[], Dict[str, Any]]) -> None:
+    """注入表情档案读取器（零参调用返回档案 dict，如麦麦档案的 toml dict）"""
+    global _expression_profile_reader
+    _expression_profile_reader = reader
+
+
 def _upgrade_warudo_maimai_expression(data: Dict[str, Any]) -> List[str]:
     """avatar.toml v2.0.41：已启用 Warudo 的配置写入麦麦表情档案。
 
@@ -587,7 +604,13 @@ def _upgrade_warudo_maimai_expression(data: Dict[str, Any]) -> List[str]:
     warudo = platform.setdefault("warudo", {})
     if not isinstance(warudo, dict) or "expression" in warudo:
         return []
-    warudo["expression"] = read_profile_expression(MAIMAI_PROFILE_PATH)
+    if _expression_profile_reader is None:
+        raise ConfigValidationError(
+            "avatar.toml",
+            "platform.warudo.expression",
+            "表情档案读取器未注入（组合根未调用 set_expression_profile_reader），无法写入麦麦表情档案",
+        )
+    warudo["expression"] = _expression_profile_reader()
     return ["platform.warudo.expression（写入麦麦表情档案）"]
 
 
@@ -752,29 +775,15 @@ register_file_hook("tools.toml", "drop_tools_memory_section", "2.0.45", _drop_to
 _WEB_SEARCH_BING_ENTRY_OLD_DEFAULT = "https://cn.bing.com/search"
 _WEB_SEARCH_BING_ENTRY_NEW_DEFAULT = "https://www.bing.com/search"
 
-
-def _upgrade_web_search_bing_entry(data: Dict[str, Any]) -> List[str]:
-    """tools.toml v2.0.46：web 搜索 bing 引擎默认入口更换。
-
-    cn.bing.com 对无 cookie 直连请求改为落地必应首页（不再返回结果页），
-    默认入口换为 www.bing.com/search。仅当落盘值等于旧默认（用户未显式
-    改过）时才改写，自定义入口保持原值。对已迁移数据零变更（幂等）。
-    """
-    tools = data.get("tools")
-    if not isinstance(tools, dict):
-        return []
-    web = tools.get("web")
-    if not isinstance(web, dict):
-        return []
-    search = web.get("search")
-    if not isinstance(search, dict):
-        return []
-    config = search.get("config")
-    if not isinstance(config, dict) or config.get("base_url") != _WEB_SEARCH_BING_ENTRY_OLD_DEFAULT:
-        return []
-    config["base_url"] = _WEB_SEARCH_BING_ENTRY_NEW_DEFAULT
-    return ["tools.web.search.config.base_url"]
-
+# tools.toml v2.0.46：web 搜索 bing 引擎默认入口更换。cn.bing.com 对无 cookie
+# 直连请求改为落地必应首页（不再返回结果页），默认入口换为 www.bing.com/search。
+# 仅当落盘值等于旧默认（用户未显式改过）时才改写，自定义入口保持原值。
+_upgrade_web_search_bing_entry = swap_default(
+    "tools.web.search.config.base_url",
+    _WEB_SEARCH_BING_ENTRY_OLD_DEFAULT,
+    _WEB_SEARCH_BING_ENTRY_NEW_DEFAULT,
+    annotate=False,
+)
 
 # 生产钩子登记：tools.toml v2.0.46（web 搜索 bing 入口默认值 cn→www）
 register_file_hook("tools.toml", "web_search_bing_entry_default_swap", "2.0.46", _upgrade_web_search_bing_entry)
@@ -861,123 +870,57 @@ def advance_file_versions(raw_docs: Dict[str, Dict[str, Any]]) -> Dict[str, List
     return changed
 
 
-#: 历届 style_constraints 默认值（含"适当使用emoji"，与表达侧统一禁 emoji 的模板指令矛盾）
-_STYLE_EMOJI_DEFAULTS = frozenset(
-    {
-        "口语化，使用网络流行语，避免机械式回复，适当使用emoji",
-    }
+# agents.toml v2.0.45：style_constraints 旧默认删除"适当使用emoji"（与表达侧
+# 统一禁 emoji 的模板指令矛盾）。仅值等于旧默认时改写为新默认，用户显式
+# 设置的其他值不动。
+_upgrade_replyer_style_drop_emoji = swap_default(
+    "agents.streamer.persona.style_constraints",
+    "口语化，使用网络流行语，避免机械式回复，适当使用emoji",
+    "口语化，使用网络流行语，避免机械式回复",
+    annotate=False,
 )
-
-
-def _upgrade_replyer_style_drop_emoji(data: Dict[str, Any]) -> List[str]:
-    """agents.toml v2.0.45：style_constraints 旧默认删除"适当使用emoji"。
-
-    表达侧模板已统一禁 emoji，旧默认落盘值与指令自相矛盾；仅值等于旧默认时改写
-    为新默认，用户显式设置的其他值不动（幂等）。
-    """
-    streamer = (data.get("agents") or {}).get("streamer")
-    persona = streamer.get("persona") if isinstance(streamer, dict) else None
-    if not isinstance(persona, dict) or persona.get("style_constraints") not in _STYLE_EMOJI_DEFAULTS:
-        return []
-    persona["style_constraints"] = "口语化，使用网络流行语，避免机械式回复"
-    return ["agents.streamer.persona.style_constraints"]
-
 
 register_file_hook("agents.toml", "replyer_style_drop_emoji", "2.0.45", _upgrade_replyer_style_drop_emoji)
 
-
-def _retire_live_frame_gates(data: Dict[str, Any]) -> List[str]:
-    """agents.toml v2.0.46：``[agents.streamer.live_frame]`` 的两道挂帧节流键退役。
-
-    决策窗改为每窗必挂暂存里的最新帧，``max_age_ms`` / ``min_interval_ms``
-    失去消费者。只处理本段内的这两个键——其他段的 ``min_interval_ms``
-    （如 proactive）是活跃配置，不许误伤。对已迁移数据零变更（幂等）。
-    """
-    streamer = (data.get("agents") or {}).get("streamer")
-    live_frame = streamer.get("live_frame") if isinstance(streamer, dict) else None
-    if not isinstance(live_frame, dict):
-        return []
-    changed: List[str] = []
-    for key in ("max_age_ms", "min_interval_ms"):
-        if key in live_frame:
-            del live_frame[key]
-            changed.append(f"agents.streamer.live_frame.{key}")
-    return changed
-
+# agents.toml v2.0.46：``[agents.streamer.live_frame]`` 的两道挂帧节流键退役。
+# 决策窗改为每窗必挂暂存里的最新帧，``max_age_ms`` / ``min_interval_ms`` 失去
+# 消费者。只处理本段内的这两个键——其他段的 ``min_interval_ms``（如 proactive）
+# 是活跃配置，不许误伤。
+_retire_live_frame_gates = drop_section_keys("agents.streamer.live_frame", ("max_age_ms", "min_interval_ms"))
 
 register_file_hook("agents.toml", "retire_live_frame_gates", "2.0.46", _retire_live_frame_gates)
 
-
-def _widen_recent_intents_window(data: Dict[str, Any]) -> List[str]:
-    """agents.toml v2.0.47：已聊话题回看窗默认 6 → 60 轮。
-
-    6 轮（约 2 分钟）只够看穿两三句内的连读，十几分钟前的同一话题
-    照样被当新角度讲。仅改写等于旧默认 6 的落盘值，用户显式设置的其他值
-    不动。对已迁移数据零变更（幂等）。
-    """
-    streamer = (data.get("agents") or {}).get("streamer")
-    if not isinstance(streamer, dict) or streamer.get("planner_recent_intents_max") != 6:
-        return []
-    streamer["planner_recent_intents_max"] = 60
-    return ["agents.streamer.planner_recent_intents_max: 6 -> 60"]
-
+# agents.toml v2.0.47：已聊话题回看窗默认 6 → 60 轮。6 轮（约 2 分钟）只够看
+# 穿两三句内的连读，十几分钟前的同一话题照样被当新角度讲。仅改写等于旧默认
+# 6 的落盘值，用户显式设置的其他值不动。
+_widen_recent_intents_window = swap_default("agents.streamer.planner_recent_intents_max", 6, 60)
 
 register_file_hook("agents.toml", "widen_recent_intents_window", "2.0.47", _widen_recent_intents_window)
 
-
-def _retire_streamer_narrative(data: Dict[str, Any]) -> List[str]:
-    """agents.toml v2.0.48：删 ``[agents.streamer.narrative]`` 段。
-
-    游戏事件素材改为统一追加式历史：事件在决策窗边界批量写进对话时间线，
-    不再逐窗重放，三个叙事缓冲及其保留期/条数上限/折叠窗配置失去消费者。
-    段留在文件里即属未知段硬错，整段原地删除。对已迁移数据零变更（幂等）。
-    """
-    streamer = (data.get("agents") or {}).get("streamer")
-    if not isinstance(streamer, dict) or "narrative" not in streamer:
-        return []
-    del streamer["narrative"]
-    return ["agents.streamer.narrative"]
-
+# agents.toml v2.0.48：删 ``[agents.streamer.narrative]`` 段。游戏事件素材改为
+# 统一追加式历史：事件在决策窗边界批量写进对话时间线，不再逐窗重放，三个
+# 叙事缓冲及其保留期/条数上限/折叠窗配置失去消费者。段留在文件里即属未知
+# 段硬错，整段原地删除。
+_retire_streamer_narrative = drop_section("agents.streamer.narrative")
 
 register_file_hook("agents.toml", "retire_streamer_narrative", "2.0.48", _retire_streamer_narrative)
 
-
-def _drop_background_cold_timeout(data: Dict[str, Any]) -> List[str]:
-    """agents.toml v2.0.49：删 ``[agents.streamer.background].cold_timeout_ms``。
-
-    该字段读进后台维护器后无任何消费点；冷场判定只认 ``proactive`` 段的
-    ``cold_timeout_ms``——同一概念两处定义且默认值还不一致（60s vs 45s），
-    调参只会被误导。字段退役，存量键原地删除。对已迁移数据零变更（幂等）。
-    """
-    streamer = (data.get("agents") or {}).get("streamer")
-    background = streamer.get("background") if isinstance(streamer, dict) else None
-    if isinstance(background, dict) and "cold_timeout_ms" in background:
-        del background["cold_timeout_ms"]
-        return ["agents.streamer.background.cold_timeout_ms"]
-    return []
-
+# agents.toml v2.0.49：删 ``[agents.streamer.background].cold_timeout_ms``。该字段
+# 读进后台维护器后无任何消费点；冷场判定只认 ``proactive`` 段的 ``cold_timeout_ms``
+# ——同一概念两处定义且默认值还不一致（60s vs 45s），调参只会被误导。字段退役，
+# 存量键原地删除。
+_drop_background_cold_timeout = drop_section_keys("agents.streamer.background", ("cold_timeout_ms",))
 
 register_file_hook("agents.toml", "drop_background_cold_timeout", "2.0.49", _drop_background_cold_timeout)
 
-
-def _upgrade_widget_drop_html_page(data: Dict[str, Any]) -> List[str]:
-    """infra.toml v2.0.43：删三个小部件段的 ``enable_html_page`` 键。
-
-    旧版后端直出透明页（/widget、/widget/2048）整体退役，嵌入页统一为
-    前端 SPA 的 /widget/<name> 路由，该开关失去消费者。对已迁移数据零
-    变更（幂等）。
-    """
-    dashboard = data.get("dashboard")
-    if not isinstance(dashboard, dict):
-        return []
-    changed: List[str] = []
-    for section in ("danmaku_widget", "subtitle_widget", "game2048_widget"):
-        widget = dashboard.get(section)
-        if isinstance(widget, dict) and "enable_html_page" in widget:
-            del widget["enable_html_page"]
-            changed.append(f"dashboard.{section}.enable_html_page")
-    return changed
-
+# infra.toml v2.0.43：删三个小部件段的 ``enable_html_page`` 键。旧版后端直出
+# 透明页（/widget、/widget/2048）整体退役，嵌入页统一为前端 SPA 的
+# /widget/<name> 路由，该开关失去消费者。
+_upgrade_widget_drop_html_page = chain(
+    drop_section_keys("dashboard.danmaku_widget", ("enable_html_page",)),
+    drop_section_keys("dashboard.subtitle_widget", ("enable_html_page",)),
+    drop_section_keys("dashboard.game2048_widget", ("enable_html_page",)),
+)
 
 # 生产钩子登记：infra.toml v2.0.43（小部件段 enable_html_page 删键，旧透明页退役）
 register_file_hook("infra.toml", "widget_drop_html_page", "2.0.43", _upgrade_widget_drop_html_page)
@@ -989,4 +932,5 @@ __all__ = [
     "register_file_hook",
     "register_cross_file_hook",
     "advance_file_versions",
+    "set_expression_profile_reader",
 ]

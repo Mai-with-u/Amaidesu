@@ -23,8 +23,15 @@ from src.modules.config.upgrade import (
     _upgrade_builder_scene_transport,
     _upgrade_minecraft_context_tokens,
     advance_file_versions,
+    set_expression_profile_reader,
 )
 from tests.config.helpers import read_doc, rewind_and_append, tail_version, write_doc
+
+
+@pytest.fixture(autouse=True)
+def _inject_expression_profile():
+    """表情档案读取器按生产口径注入（生产在组合根接线；config 层不反向 import avatar 包）"""
+    set_expression_profile_reader(lambda: read_profile_expression(MAIMAI_PROFILE_PATH))
 
 
 @dataclass

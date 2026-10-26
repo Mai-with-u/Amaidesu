@@ -30,6 +30,7 @@ from src.modules.agents.companions import companion_names, register_companions
 from src.modules.agents.deps import AgentDeps
 from src.modules.agents.factory import instantiate_agent
 from src.modules.agents.manager import AgentManager
+from src.modules.avatar.platform.warudo.expression_profile import MAIMAI_PROFILE_PATH, read_profile_expression
 from src.modules.collectors.factory import instantiate_collector
 from src.modules.collectors.manager import CollectorManager
 from src.modules.config.core_schemas import (
@@ -40,6 +41,7 @@ from src.modules.config.core_schemas import (
 )
 from src.modules.config.service import ConfigService
 from src.modules.config.storage_schemas import ViewerIdentityConfig
+from src.modules.config.upgrade import set_expression_profile_reader
 from src.modules.dashboard.server import DashboardServer
 from src.modules.dashboard.stream_preview import StreamPreviewHub
 from src.modules.diagnostics import DiagnosticsWriter, TtsDiagnosticsRecorder
@@ -187,6 +189,9 @@ def setup_logging(args: argparse.Namespace, logging_config: Optional[Dict[str, A
 
 def load_config() -> Tuple[ConfigService, Dict[str, Any], bool]:
     """加载配置，失败时直接退出进程。返回 (config_service, config, was_created)。"""
+    # 表情档案数据注入配置层（avatar.toml v2.0.41 迁移钩子消费）：
+    # 配置层不得反向 import avatar 包，档案读取在组合根接线
+    set_expression_profile_reader(lambda: read_profile_expression(MAIMAI_PROFILE_PATH))
     config_service = ConfigService(base_dir=_BASE_DIR)
     try:
         config, was_created = config_service.initialize()

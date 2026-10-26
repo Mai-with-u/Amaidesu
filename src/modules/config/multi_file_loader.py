@@ -36,10 +36,9 @@ from __future__ import annotations
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import tomlkit
-from tomlkit.items import AoT
 from pydantic import BaseModel
 
 from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_value
@@ -231,49 +230,50 @@ def _materializable_sections(file_name: str) -> dict[str, dict[str, Any]] | None
     return {name: _default_section_dict(schema_cls) for name, schema_cls in sorted(COLLECTOR_SCHEMAS.items())}
 
 
-def _generate_root_toml(
-    file_name: str,
-    schema_cls: type[BaseConfig],
-    extra_sections: dict[str, dict[str, Any]] | None = None,
+def _render_root_toml(
+    schema_cls: type[BaseModel],
+    instance: BaseModel,
+    *,
+    header_comment: str | None,
+    model_table: Callable[[BaseModel], Any],
+    dict_comment: bool,
+    tail_sections: dict[str, Any] | None,
 ) -> str:
-    """从根 Schema 默认值生成整文件 TOML（七文件共用的生成器）。
+    """根 Schema 实例 → 整文件 TOML 的统一渲染（首启生成与漂移写回共用）。
 
-    顶层字段即顶层表/键值：BaseModel 字段展开为子表，list[BaseModel]
-    字段展开为 array-of-tables（``[[name]]``）。动态键段不在静态字段
-    里，由 ``extra_sections``（物化段全集）追加为顶层表。
+    顶层字段即顶层表/键值：BaseModel 字段展开为子表，list[BaseModel] 字段
+    展开为 array-of-tables（``[[name]]``），dict 展开为 free-form 表，其余
+    为顶层标量。两处调用只剩三个口径差异，都由参数表达：
+
+    - ``header_comment``：生成路径带文件头注释，写回路径不带（写回的注释
+      全部来自字段 description，头部原样保留用户所见布局）
+    - ``model_table``：段级表格渲染器——生成路径带每字段 description 注释
+      （``_populate_fields_table``），写回路径走注册表注释化渲染
+      （``_table_from_model``，含 None 跳过与工具提供者段重建）
+    - ``dict_comment``：free-form dict 字段是否加容器级 description 注释
+      （生成路径对非空 dict 加；写回路径一律不加，文本稳定性优先）
+
+    ``tail_sections`` 追加在静态字段之后（生成路径为物化段全集，按名排序
+    后传入；写回路径为 ``extra="allow"`` 的动态键残留，按原序传入）。
     """
     doc = tomlkit.document()
-    doc.add(tomlkit.comment(_FILE_COMMENTS.get(file_name, f"{file_name} 配置 - Amaidesu")))
-    doc.add(tomlkit.nl())
-
-    instance = schema_cls()
+    if header_comment is not None:
+        doc.add(tomlkit.comment(header_comment))
+        doc.add(tomlkit.nl())
 
     for field_name, field_info in schema_cls.model_fields.items():
         value = getattr(instance, field_name)
 
         if isinstance(value, BaseModel):
-            table = tomlkit.table()
-            _populate_fields_table(table, value)
+            table = model_table(value)
         elif isinstance(value, list) and value and all(isinstance(v, BaseModel) for v in value):
-            tables = []
+            table = tomlkit.aot()
             for item in value:
-                item_table = tomlkit.table()
-                _populate_fields_table(item_table, item)
-                tables.append(item_table)
-            if field_info.description:
-                doc.add(tomlkit.comment(field_info.description))
-            doc[field_name] = AoT(tables)
-            doc.add(tomlkit.nl())
-            continue
+                table.append(model_table(item))
         elif isinstance(value, dict):
             # dict 子段（如 [llm_profiles.<name>]）——值可能是 BaseConfig
             # 模型，交给统一转换器递归展开为表
             table = _dict_to_toml_table(value)
-            if field_info.description and value:
-                doc.add(tomlkit.comment(field_info.description))
-            doc[field_name] = table
-            doc.add(tomlkit.nl())
-            continue
         else:
             if field_info.description:
                 doc.add(tomlkit.comment(field_info.description))
@@ -281,17 +281,42 @@ def _generate_root_toml(
             doc.add(tomlkit.nl())
             continue
 
-        if field_info.description:
+        if field_info.description and (not isinstance(value, dict) or (dict_comment and value)):
             doc.add(tomlkit.comment(field_info.description))
         doc[field_name] = table
         doc.add(tomlkit.nl())
 
-    if extra_sections:
-        for name in sorted(extra_sections):
-            doc[name] = _dict_to_toml_table(extra_sections[name])
+    if tail_sections:
+        for name, value in tail_sections.items():
+            doc[name] = _dict_to_toml_table(value) if isinstance(value, dict) else value
             doc.add(tomlkit.nl())
 
     return tomlkit.dumps(doc)
+
+
+def _generate_root_toml(
+    file_name: str,
+    schema_cls: type[BaseConfig],
+    extra_sections: dict[str, dict[str, Any]] | None = None,
+) -> str:
+    """从根 Schema 默认值生成整文件 TOML（七文件共用的生成器）。
+
+    动态键段不在静态字段里，由 ``extra_sections``（物化段全集）追加为顶层表。
+    """
+
+    def populate_table(item: BaseModel) -> Any:
+        table = tomlkit.table()
+        _populate_fields_table(table, item)
+        return table
+
+    return _render_root_toml(
+        schema_cls,
+        schema_cls(),
+        header_comment=_FILE_COMMENTS.get(file_name, f"{file_name} 配置 - Amaidesu"),
+        model_table=populate_table,
+        dict_comment=True,
+        tail_sections=dict(sorted(extra_sections.items())) if extra_sections else None,
+    )
 
 
 def _table_from_model(instance: BaseModel) -> Any:
@@ -302,8 +327,8 @@ def _table_from_model(instance: BaseModel) -> Any:
     注释由字段级 description 在具体 Schema 序列化路径中提供。
 
     字段值为 ``None`` 时直接跳过：TOML 原生不支持 null，Optional 字段
-    在 dump 时保留 None，须由序列化器兜底（与 ``_generate_root_toml`` 的
-    ``if field_value is None: continue`` 同源惯例）。
+    在 dump 时保留 None，须由序列化器兜底（统一渲染器 ``_render_root_toml``
+    的段级口径由此处承担）。
     """
     table = tomlkit.table()
     # tools 动态分类段（studio）的 dict 值走注册表注释化渲染
@@ -396,42 +421,21 @@ def _tool_provider_sections_table(sections: dict[str, Any], domain: str) -> Any:
 def _serialize_instance_to_toml(schema_cls: type[BaseModel], instance: BaseModel) -> str:
     """把配置实例序列化为多文件格式 TOML（顶层字段即顶层表/键值）。
 
-    禁 None：所有 Schema 字段一律落盘（空值以空容器/空串形态写出）。
+    禁 None：所有 Schema 字段一律落盘（空值以空容器/空串形态写出；段级
+    渲染器 ``_table_from_model`` 对残余 None 直接跳过——TOML 无 null 字面量）。
     ``extra="allow"`` 的 Schema（如 CollectorsRootConfig）携带的动态键
     （``[collectors.<name>]`` 子段）同样输出——只遍历 model_fields 会把
     子段静默丢弃，属于数据丢失缺陷。
     """
-    doc = tomlkit.document()
-    for field_name, field_info in schema_cls.model_fields.items():
-        value = getattr(instance, field_name)
-        if isinstance(value, BaseModel):
-            table = _table_from_model(value)
-        elif isinstance(value, list) and value and all(isinstance(v, BaseModel) for v in value):
-            table = tomlkit.aot()
-            for item in value:
-                table.append(_table_from_model(item))
-        elif isinstance(value, dict):
-            # dict 子段（free-form）不加容器级注释：文本稳定性优先
-            table = _dict_to_toml_table(value)
-        else:
-            if field_info.description:
-                doc.add(tomlkit.comment(field_info.description))
-            doc[field_name] = value
-            doc.add(tomlkit.nl())
-            continue
-        if field_info.description and not isinstance(value, dict):
-            doc.add(tomlkit.comment(field_info.description))
-        doc[field_name] = table
-        doc.add(tomlkit.nl())
-
     extras = getattr(instance, "__pydantic_extra__", None) or {}
-    for key, value in extras.items():
-        if isinstance(value, dict):
-            doc[key] = _dict_to_toml_table(value)
-        else:
-            doc[key] = value
-        doc.add(tomlkit.nl())
-    return tomlkit.dumps(doc)
+    return _render_root_toml(
+        schema_cls,
+        instance,
+        header_comment=None,
+        model_table=_table_from_model,
+        dict_comment=False,
+        tail_sections=extras or None,
+    )
 
 
 def _write_back_schema_file(
