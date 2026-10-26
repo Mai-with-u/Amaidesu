@@ -313,9 +313,9 @@ async def test_planner_passes_duplicate_speech_to_next_window_clean() -> None:
 
     outcome = await planner.plan([], proactive=True, round_id="window-1", history=_history("我在游戏里挖到了石料"))
 
-    assert (outcome["replied"], outcome["silent_reason"], outcome["speech"]) == (False, "natural", None)
-    assert outcome["reply_failures"] == 1
-    assert outcome["speech_gate_bounces"] == 1
+    assert (outcome.replied, outcome.silent_reason, outcome.speech) == (False, "natural", None)
+    assert outcome.reply_failures == 1
+    assert outcome.speech_gate_bounces == 1
     last_messages = llm.generate.call_args_list[-1].args[0]
     tool_texts = [m["content"] for m in last_messages if m.get("role") == "tool"]
     assert len(tool_texts) == 1 and "真内容" in tool_texts[0]
@@ -323,7 +323,7 @@ async def test_planner_passes_duplicate_speech_to_next_window_clean() -> None:
     # 下一窗：round_id 变化使 Provider 清零，重合台词再次拿到完整的首次打回话术
     llm.generate.side_effect = [_reply_call("石料"), _silent_call()]
     outcome = await planner.plan([], proactive=True, round_id="window-2", history=_history("我在游戏里挖到了石料"))
-    assert outcome["speech_gate_bounces"] == 1
+    assert outcome.speech_gate_bounces == 1
     last_messages = llm.generate.call_args_list[-1].args[0]
     tool_texts = [m["content"] for m in last_messages if m.get("role") == "tool"]
     assert "真内容" in tool_texts[0]
@@ -336,8 +336,8 @@ async def test_planner_gate_bounces_accumulate_within_window() -> None:
 
     outcome = await planner.plan([], proactive=True, round_id="window-1", history=_history("我在游戏里挖到了石料"))
 
-    assert outcome["silent_reason"] == "natural"
-    assert outcome["speech_gate_bounces"] == 2
+    assert outcome.silent_reason == "natural"
+    assert outcome.speech_gate_bounces == 2
     last_messages = llm.generate.call_args_list[-1].args[0]
     tool_texts = [m["content"] for m in last_messages if m.get("role") == "tool"]
     assert len(tool_texts) == 2 and "保持沉默" in tool_texts[1]

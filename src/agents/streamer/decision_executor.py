@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -26,7 +26,7 @@ from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import ModuleLogger, get_logger
 from src.modules.utils.time_utils import now_ms
 
-from .planner import Planner
+from .planner import Planner, RoundOutcome
 from .proactive_trigger import ProactiveTrigger
 from .room_state import RoomState
 from .session_scope import WindowMaterials
@@ -192,7 +192,7 @@ class DecisionRoundExecutor:
             round_id=round_id,
             detail=_trigger_reason_text(trigger_reason),
         )
-        result = await self._decide_round(
+        result, outcome = await self._decide_round(
             batch,
             round_id=round_id,
             started_ms=started_ms,
@@ -200,7 +200,7 @@ class DecisionRoundExecutor:
             trigger_reason=trigger_reason,
             proactive=proactive,
         )
-        await self._emit_planner_decision(result, batch)
+        await self._emit_planner_decision(result, outcome, batch)
         closing = "决策轮结束"
         if result.get("speech"):
             closing += "：发言已出"
@@ -225,11 +225,12 @@ class DecisionRoundExecutor:
         forced: bool,
         trigger_reason: str,
         proactive: bool,
-    ) -> Dict[str, Any]:
-        """两阶段决策执行体（被 ``execute`` 外壳驱动）。
+    ) -> Tuple[Dict[str, Any], Optional[RoundOutcome]]:
+        """两阶段决策执行体（被 ``execute`` 外壳驱动），返回（结果视图, Planner 收场）。
 
-        决策过程副产品（原始输出/请求 ID/分段耗时）随 ``result`` 带回，
-        由外壳统一发射决策事件；本方法不直接发事件。
+        决策过程副产品（原始输出/请求指针/分段耗时）随 ``result`` 带回，由外壳
+        统一发射决策事件，本方法不直接发事件。Planner 收场（RoundOutcome）单独
+        带回供决策事件字段直取；Planner 调用异常收场时为 None。
         """
         result: Dict[str, Any] = {
             "round_id": round_id,
@@ -288,44 +289,44 @@ class DecisionRoundExecutor:
         result["planner_duration_ms"] = now_ms() - planner_started_ms
         # 原始输出与请求指针随 outcome 带回（plan() 的返回值契约）；异常收场时没有
         # outcome，保持空值——异常本身已写进 result.error
-        result["planner_raw"] = str(outcome.get("raw_content", "") or "") if outcome is not None else ""
-        result["llm_request_id"] = outcome.get("llm_request_id") if outcome is not None else None
+        result["planner_raw"] = outcome.raw_content if outcome is not None else ""
+        result["llm_request_id"] = outcome.llm_request_id if outcome is not None else None
 
         if outcome is None:
             self._stats.planner_failures += 1
             self._stats.total_no_action += 1
             result["total_duration_ms"] = now_ms() - started_ms
-            return result
+            return result, None
 
         result["plan"] = {
-            "should_reply": outcome.get("replied", False),
-            "target": outcome.get("target"),
-            "reply_to": outcome.get("reply_to"),
-            "topic_summary": outcome.get("topic_summary", ""),
-            "reply_guidance": outcome.get("reply_guidance", ""),
-            "silent_reason": outcome.get("silent_reason"),
+            "should_reply": outcome.replied,
+            "target": outcome.target,
+            "reply_to": outcome.reply_to,
+            "topic_summary": outcome.topic_summary,
+            "reply_guidance": outcome.reply_guidance,
+            "silent_reason": outcome.silent_reason,
         }
-        result["reply_to_message_id"] = outcome.get("reply_to")
-        result["silent_reason"] = outcome.get("silent_reason")
-        result["reply_duration_ms"] = int(outcome.get("reply_duration_ms", 0) or 0)
+        result["reply_to_message_id"] = outcome.reply_to
+        result["silent_reason"] = outcome.silent_reason
+        result["reply_duration_ms"] = outcome.reply_duration_ms
 
         # 未说话（自然终止/超步/LLM 失败/reply 工具失败）——静默收场
-        if not outcome.get("replied"):
+        if not outcome.replied:
             self._stats.total_no_action += 1
-            self._stats.replyer_failures += int(outcome.get("reply_failures", 0) or 0)
-            if outcome.get("error"):
+            self._stats.replyer_failures += outcome.reply_failures
+            if outcome.error:
                 self._stats.planner_failures += 1
-                result["error"] = f"planner_failed: {outcome['error']}"
+                result["error"] = f"planner_failed: {outcome.error}"
             result["total_duration_ms"] = now_ms() - started_ms
-            return result
+            return result, outcome
 
         # reply 已在 Planner ReAct 循环内经 reply 工具完成（Planner 阶段耗时含
         # 表达生成）；此处仅把产出送发言管线（speech → TTS / emotion → VTS）。
         # await 保证 streamer.speech 先于本轮 planner.decision 与 idle 状态发出
         speech_info = await self._speech.dispatch(
-            outcome.get("reply_payload"),
+            outcome.reply_payload,
             target_user_id=self._resolve_reply_target_user(outcome, batch),
-            reply_to_message_id=outcome.get("reply_to"),
+            reply_to_message_id=outcome.reply_to,
             round_id=round_id,
         )
         if speech_info is not None:
@@ -340,24 +341,24 @@ class DecisionRoundExecutor:
             self._proactive_trigger.record_trigger(reason, now_ms())
 
         result["total_duration_ms"] = now_ms() - started_ms
-        return result
+        return result, outcome
 
     def _resolve_reply_target_user(
         self,
-        outcome: Dict[str, Any],
+        outcome: RoundOutcome,
         batch: List[RoomMessagePayload],
     ) -> Optional[str]:
         """从 batch 反查本次回复的观众 user_id。
 
-        优先消费 ``outcome["reply_to"]``（reply 意图指向的弹幕 message_id——按
-        message_id 等值命中即可）；未提供时回退 ``outcome["target"]``（弹幕
+        优先消费 ``outcome.reply_to``（reply 意图指向的弹幕 message_id——按
+        message_id 等值命中即可）；未提供时回退 ``outcome.target``（弹幕
         ``message_id`` 或文本片段）匹配：message_id 等值 → text 包含/相等。
         全未命中时保守兜底为 batch 最后一条消息的 user_id（"回复最后那条"
         通常是意图所指）；batch 为空或 target 为空时返回 None。该方法只做
         反查，不写状态、不发事件；异常吞掉记 warning 不上抛（决策循环必须继续）。
         """
-        reply_to = outcome.get("reply_to")
-        target = reply_to or outcome.get("target")
+        reply_to = outcome.reply_to
+        target = reply_to or outcome.target
         if not isinstance(target, str) or not target:
             return None
         if not batch:
@@ -418,15 +419,23 @@ class DecisionRoundExecutor:
         except Exception as exc:  # noqa: BLE001 - 观测事件不阻断决策循环
             self._logger.warning(f"streamer.stage 发布失败（已忽略）: stage={stage}, err={exc}")
 
-    async def _emit_planner_decision(self, result: Dict[str, Any], batch: List[RoomMessagePayload]) -> None:
+    async def _emit_planner_decision(
+        self,
+        result: Dict[str, Any],
+        outcome: Optional[RoundOutcome],
+        batch: List[RoomMessagePayload],
+    ) -> None:
         """发布 ``planner.decision`` 决策轮记录事件（决策循环内直接 await，保证先于 idle 状态）。
 
-        从 ``_decide_round`` 的结果视图构造决策事件：触发原因、批次摘要、
-        决策结论、回复关联、失败原因、原始输出指针与分段耗时全部入事件，
-        观察者与互动分析不再依赖日志。
+        决策结论字段从 Planner 收场（RoundOutcome）直取；触发原因、批次摘要、
+        发言产出、失败原因与分段耗时取自结果视图，全部入事件，观察者与互动
+        分析不再依赖日志。Planner 调用异常收场（outcome 为 None）时决策结论
+        按未说话处理，失败原因已在 result.error。
         """
         if self._event_bus is None:
             return
+        # Planner 调用异常收场时没有收场对象，决策结论按默认值（未说话）入事件
+        plan_view = outcome if outcome is not None else RoundOutcome()
         # 关联/指针字段统一收口为 str（鸭子类型 mock 响应可能带任意对象属性）
         request_id = result.get("llm_request_id")
         reply_to = result.get("reply_to_message_id")
@@ -445,12 +454,10 @@ class DecisionRoundExecutor:
                 )
                 for msg in batch or []
             ],
-            should_reply=bool((result.get("plan") or {}).get("should_reply", False)),
-            target=(
-                str((result.get("plan") or {}).get("target")) if (result.get("plan") or {}).get("target") else None
-            ),
-            topic_summary=str((result.get("plan") or {}).get("topic_summary", "") or ""),
-            reply_guidance=str((result.get("plan") or {}).get("reply_guidance", "") or ""),
+            should_reply=plan_view.replied,
+            target=(str(plan_view.target) if plan_view.target else None),
+            topic_summary=str(plan_view.topic_summary or ""),
+            reply_guidance=str(plan_view.reply_guidance or ""),
             reply_to_message_id=str(reply_to) if reply_to else None,
             silent_reason=str(silent) if silent else None,
             speech=(str(result["speech"]) if result.get("speech") else None),

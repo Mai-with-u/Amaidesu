@@ -6,26 +6,29 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from dataclasses import replace
+
 from src.agents.streamer.decision_executor import (
     DecisionRoundExecutor,
     _silent_reason_text,
     _trigger_reason_text,
 )
+from src.agents.streamer.planner import RoundOutcome
 from src.agents.streamer.session_scope import WindowMaterials
 from src.agents.streamer.stats import StreamerStats
 from src.agents.streamer.timeline import GameEventBatch
 from src.modules.events.names import CoreEvents
 
-_OKAY_OUTCOME = {
-    "replied": True,
-    "target": "m1",
-    "reply_to": "m1",
-    "topic_summary": "闲聊",
-    "reply_guidance": "热情一点",
-    "silent_reason": None,
-    "reply_duration_ms": 12,
-    "reply_payload": {"speech": "你好呀", "emotion": {"name": "happy", "intensity": 0.5}, "actions": []},
-}
+_OKAY_OUTCOME = RoundOutcome(
+    replied=True,
+    target="m1",
+    reply_to="m1",
+    topic_summary="闲聊",
+    reply_guidance="热情一点",
+    silent_reason=None,
+    reply_duration_ms=12,
+    reply_payload={"speech": "你好呀", "emotion": {"name": "happy", "intensity": 0.5}, "actions": []},
+)
 
 
 def _make_event_bus() -> tuple[MagicMock, list]:
@@ -47,7 +50,7 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
         planner.plan = AsyncMock(side_effect=RuntimeError("boom"))
     else:
         # 原始输出与请求指针随 outcome 带回（plan() 的返回值契约）
-        planner.plan = AsyncMock(return_value={**outcome, "raw_content": "RAW", "llm_request_id": "req_1"})
+        planner.plan = AsyncMock(return_value=replace(outcome, raw_content="RAW", llm_request_id="req_1"))
 
     speech = MagicMock()
     # dispatch 现为 async（发言事件同步发出契约）；返回值三元组不变
@@ -88,7 +91,7 @@ async def test_window_opener_runs_once_per_round():
     window_opener = AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch(), session_recap=""))
 
     planner = MagicMock()
-    planner.plan = AsyncMock(return_value={**_OKAY_OUTCOME, "raw_content": "RAW"})
+    planner.plan = AsyncMock(return_value=replace(_OKAY_OUTCOME, raw_content="RAW"))
     speech = MagicMock()
     speech.dispatch = AsyncMock(return_value=None)
     executor = DecisionRoundExecutor(
@@ -113,7 +116,7 @@ async def test_window_opener_runs_once_per_round():
 
 
 async def test_execute_full_round_emits_stage_and_decision():
-    executor, deps = _make_executor(dict(_OKAY_OUTCOME))
+    executor, deps = _make_executor(_OKAY_OUTCOME)
     batch = [MagicMock(message_id="m1", content="主播好", user=MagicMock(id="u1", name="观众"))]
 
     result = await executor.execute(batch, forced=False, trigger_reason="batch:flush")
@@ -159,8 +162,7 @@ async def test_execute_full_round_emits_stage_and_decision():
 
 
 async def test_execute_proactive_records_trigger_with_reason_body():
-    outcome = dict(_OKAY_OUTCOME)
-    outcome["reply_payload"] = {"speech": "大家好", "emotion": "", "actions": []}
+    outcome = replace(_OKAY_OUTCOME, reply_payload={"speech": "大家好", "emotion": "", "actions": []})
     executor, deps = _make_executor(outcome)
 
     await executor.execute([], forced=False, trigger_reason="proactive:cold_start", proactive=True)
@@ -192,9 +194,9 @@ async def test_planner_exception_short_circuits_with_error_prefix():
 @pytest.mark.parametrize(
     ("outcome", "error", "planner_failures", "replyer_failures"),
     [
-        ({"replied": False, "silent_reason": "max_steps", "reply_failures": 2, "error": None}, None, 0, 2),
+        (RoundOutcome(silent_reason="max_steps", reply_failures=2), None, 0, 2),
         (
-            {"replied": False, "reply_failures": 0, "error": "reply tool exploded"},
+            RoundOutcome(error="reply tool exploded"),
             "planner_failed: reply tool exploded",
             1,
             0,
@@ -207,7 +209,7 @@ async def test_no_reply_outcomes_count_no_action(outcome, error, planner_failure
     result = await executor.execute([], forced=False, trigger_reason="batch:flush")
 
     assert result["plan"]["should_reply"] is False and result["error"] == error
-    assert result["silent_reason"] == outcome.get("silent_reason")
+    assert result["silent_reason"] == outcome.silent_reason
     stats = deps["stats"]
     assert (stats.total_no_action, stats.planner_failures, stats.replyer_failures) == (
         1,
@@ -245,7 +247,7 @@ def test_silent_reason_text_maps_known_codes():
 
 
 async def test_execute_emits_human_readable_stage_detail():
-    executor, deps = _make_executor(dict(_OKAY_OUTCOME))
+    executor, deps = _make_executor(_OKAY_OUTCOME)
 
     await executor.execute([], forced=False, trigger_reason="window_expired")
 

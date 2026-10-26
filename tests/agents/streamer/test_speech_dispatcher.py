@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.agents.streamer.planner import RoundOutcome
 from src.agents.streamer.decision_executor import DecisionRoundExecutor
 from src.agents.streamer.session_scope import WindowMaterials
 from src.agents.streamer.speech_dispatcher import SpeechDispatcher
@@ -254,18 +255,17 @@ async def test_speech_event_precedes_round_end_events() -> None:
     bus = EventBus()
     planner = MagicMock()
     planner.plan = AsyncMock(
-        return_value={
-            "replied": True,
-            "target": "m1",
-            "reply_to": "m1",
-            "topic_summary": "闲聊",
-            "reply_guidance": "热情一点",
-            "silent_reason": None,
-            "reply_duration_ms": 12,
-            "raw_content": "RAW",
-            "llm_request_id": "req_1",
-            "reply_payload": {"speech": "你好呀", "emotion": {"name": "happy", "intensity": 0.5}, "actions": []},
-        }
+        return_value=RoundOutcome(
+            replied=True,
+            target="m1",
+            reply_to="m1",
+            topic_summary="闲聊",
+            reply_guidance="热情一点",
+            reply_duration_ms=12,
+            raw_content="RAW",
+            llm_request_id="req_1",
+            reply_payload={"speech": "你好呀", "emotion": {"name": "happy", "intensity": 0.5}, "actions": []},
+        )
     )
     executor = DecisionRoundExecutor(
         planner=planner,
@@ -303,13 +303,13 @@ async def test_agent_decision_round_completes_with_tts_disabled() -> None:
     agent = make_streamer_agent(tool_registry=ToolRegistry(), speech_config={"enabled": False})
     reply = {"speech": "OK", "emotion": {"name": "happy", "intensity": 0.5}, "actions": [], "metadata": {}}
     agent._planner.plan = AsyncMock(
-        return_value={
-            "replied": True,
-            "target": "u1",
-            "topic_summary": "t",
-            "reply_guidance": "r",
-            "reply_payload": reply,
-        }
+        return_value=RoundOutcome(
+            replied=True,
+            target="u1",
+            topic_summary="t",
+            reply_guidance="r",
+            reply_payload=reply,
+        )
     )
     replyer = MagicMock()
     replyer.generate = AsyncMock(return_value=reply)

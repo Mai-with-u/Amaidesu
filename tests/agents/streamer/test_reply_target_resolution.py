@@ -6,6 +6,7 @@ from typing import Optional
 
 import pytest
 
+from src.agents.streamer.planner import RoundOutcome
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from tests.agents.streamer.helpers import make_streamer_agent
 
@@ -21,15 +22,15 @@ _BATCH = [_msg("今天玩什么？", "alice", "m1"), _msg("你好呀主播", "bo
 @pytest.mark.parametrize(
     ("plan", "batch", "expected"),
     [
-        ({"target": "m1"}, _BATCH, "alice"),  # 命中消息 ID
-        ({"target": "你好呀"}, _BATCH, "bob"),  # 文本子串兜底
-        ({"target": "观众A", "reply_to": "m2"}, _BATCH, "bob"),  # reply_to 优先于 target
-        ({"reply_to": "不存在的id"}, _BATCH, None),  # reply_to 未命中不做文本兜底，防误关联
-        ({"target": "zzz_unmatched"}, _BATCH, "carol"),  # 全未命中：保守兜底最后一条
-        ({"target": None}, _BATCH, None),  # 主动发言/无特定目标
-        ({"target": "m1"}, [], None),
+        (RoundOutcome(target="m1"), _BATCH, "alice"),  # 命中消息 ID
+        (RoundOutcome(target="你好呀"), _BATCH, "bob"),  # 文本子串兜底
+        (RoundOutcome(target="观众A", reply_to="m2"), _BATCH, "bob"),  # reply_to 优先于 target
+        (RoundOutcome(reply_to="不存在的id"), _BATCH, None),  # reply_to 未命中不做文本兜底，防误关联
+        (RoundOutcome(target="zzz_unmatched"), _BATCH, "carol"),  # 全未命中：保守兜底最后一条
+        (RoundOutcome(target=None), _BATCH, None),  # 主动发言/无特定目标
+        (RoundOutcome(target="m1"), [], None),
     ],
 )
-def test_resolve_reply_target_user(plan: dict, batch: list, expected: Optional[str]) -> None:
+def test_resolve_reply_target_user(plan: RoundOutcome, batch: list, expected: Optional[str]) -> None:
     agent = make_streamer_agent()
     assert agent._rounds._resolve_reply_target_user(plan, batch) == expected

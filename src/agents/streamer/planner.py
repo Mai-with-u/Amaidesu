@@ -29,13 +29,14 @@
             canonical 映射）+ 本批消息（user）+ 参考段（user，固定序列尾）
         ──▶ llm_service.generate(messages, tools=工具列表, profile=PLANNER_PROFILE)
         ──▶ 循环：assistant/tool 消息 append-only 追加在参考段之后
-        ──▶ outcome dict（replied / speech / silent_reason / steps / tool_trace）
+        ──▶ RoundOutcome（replied / speech / silent_reason / steps / tool_trace）
 """
 
 from __future__ import annotations
 
 import json
 from collections import deque
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 from pydantic import Field
@@ -77,7 +78,7 @@ from src.modules.vision.image_store import get_image_store
 from .room_state import RoomState
 from .thinking_stream import ThinkingStreamContext
 
-__all__ = ["Planner"]
+__all__ = ["Planner", "RoundOutcome"]
 
 
 #: Planner 绑定的 LLM profile（代码显式声明，配置不承载绑定，无静默兜底）。
@@ -119,6 +120,37 @@ def _as_id_str(value: Any) -> str:
 # 没有观众、运营或游戏侧新输入的主动触发原因；这些窗口不给游戏活补充要求。
 # signoff（收播道别）同样没有任何新输入：场次已结账，不给游戏活递补充要求。
 _NO_INPUT_PROACTIVE_REASONS = frozenset({"rundown", "schedule", "cold", "signoff"})
+
+
+@dataclass(frozen=True)
+class RoundOutcome:
+    """一个决策窗的完整收场（:meth:`Planner.plan` 产物，Agent 内部值对象）。
+
+    ``replied=True`` 时 speech/emotion/target/reply_payload 等字段承载 reply 工具
+    的产出；``replied=False`` 时以 ``silent_reason`` 说明未说话原因
+    （natural=自然终止 / max_steps=超步 / llm_error 等），``error`` 携带降级
+    细节（无异常为 None）。决策执行器据字段直取组装 result 视图与
+    planner.decision 事件——决策事实的键名在此单点定义，不再以 dict 键手抄。
+    """
+
+    replied: bool = False
+    speech: Optional[str] = None
+    emotion: Optional[str] = None
+    emotion_intensity: float = 0.5
+    target: Optional[str] = None
+    reply_to: Optional[str] = None
+    topic_summary: str = ""
+    reply_guidance: str = ""
+    silent_reason: Optional[str] = None
+    steps: int = 0
+    tool_trace: List[str] = field(default_factory=list)
+    error: Optional[str] = None
+    raw_content: str = ""
+    llm_request_id: Optional[str] = None
+    reply_payload: Optional[Dict[str, Any]] = None
+    reply_duration_ms: int = 0
+    reply_failures: int = 0
+    speech_gate_bounces: int = 0
 
 
 class Planner:
@@ -335,8 +367,8 @@ class Planner:
         round_id: str = "",
         trigger_reason: str = "",
         session_recap: str = "",
-    ) -> Dict[str, Any]:
-        """对一个决策窗跑 ReAct 循环，产出 outcome dict。
+    ) -> RoundOutcome:
+        """对一个决策窗跑 ReAct 循环，产出本轮收场（RoundOutcome）。
 
         Args:
             batch: 本批弹幕列表（可为空——proactive 触发时基于房间状态独立判断）。
@@ -357,19 +389,10 @@ class Planner:
             session_recap: 上场回顾文本（开播后固定，整场不变；空串 = 没有上一场或未启用）。
 
         Returns:
-            outcome dict：
-            - replied: 是否完成说话（reply 工具成功）
-            - speech / emotion / emotion_intensity: reply 产出（StreamerAgent 送发言管线）
-            - target / reply_to / topic_summary / reply_guidance: reply 意图
-            - silent_reason: 未说话原因（natural=自然终止 / max_steps=超步 / llm_error 等）
-            - steps / tool_trace: 循环步数与执行过的工具名序列（可观测）
-            - error: 异常原因（无异常为 None）
-            - raw_content: 最后一次成功 LLM 步的原始输出文本（尚无成功步时为空串）
-            - llm_request_id: LLM 请求历史指针（与 raw_content 同步更新）
-            - reply_payload: reply 工具完整结果（发言管线消费）
-            - reply_duration_ms: reply 工具调用累计耗时（毫秒；未调用为 0）
-            - reply_failures: reply 工具失败次数（成功轮为 0）
-            - speech_gate_bounces: 发言闸台词重合度检查打回 reply 的次数（本轮内累计）
+            RoundOutcome：replied / speech / emotion / target / reply_to /
+            topic_summary / reply_guidance / silent_reason / steps / tool_trace /
+            error / raw_content / llm_request_id / reply_payload /
+            reply_duration_ms / reply_failures / speech_gate_bounces——字段语义见类型注释。
         """
         # 上一窗没来得及看的截图属于旧画面，新的决策窗不带
         self._tail_images.drain()
@@ -386,32 +409,11 @@ class Planner:
         # 发言闸打回计数是本窗口径：由 Provider 检测 round_id 变化清零（每窗
         # 首次 reply 调用前生效，时序与本入口等价）
 
-        outcome: Dict[str, Any] = {
-            "replied": False,
-            "speech": None,
-            "emotion": None,
-            "emotion_intensity": 0.5,
-            "target": None,
-            "reply_to": None,
-            "topic_summary": "",
-            "reply_guidance": "",
-            "silent_reason": None,
-            "steps": 0,
-            "tool_trace": [],
-            "error": None,
-            "raw_content": "",
-            "llm_request_id": None,
-            "reply_payload": None,
-            "reply_duration_ms": 0,
-            "reply_failures": 0,
-            "speech_gate_bounces": 0,
-        }
+        outcome = RoundOutcome()
 
         system_prompt, prompt_failure = self._render_system_prompt()
         if system_prompt is None:
-            outcome["error"] = prompt_failure
-            outcome["silent_reason"] = "prompt_render_failed"
-            return outcome
+            return replace(outcome, error=prompt_failure, silent_reason="prompt_render_failed")
 
         # 决策前自动读一次配置的只读参考工具（如游戏现场速览）：结果直接进参考段，
         # 不必先花一步请求去查再决定说什么。
@@ -431,9 +433,7 @@ class Planner:
             trigger_reason=trigger_reason,
         )
         if reference_text is None:
-            outcome["error"] = reference_failure
-            outcome["silent_reason"] = "assembler_failed"
-            return outcome
+            return replace(outcome, error=reference_failure, silent_reason="assembler_failed")
 
         tool_list = self._build_tool_list()
         # 消息序列：[system] + 历史（user/assistant 原生消息）+ 本批（user）+ 参考段（user，序列尾）；
@@ -469,7 +469,7 @@ class Planner:
         steps = 0
         while steps < self.max_steps:
             steps += 1
-            outcome["steps"] = steps
+            outcome = replace(outcome, steps=steps)
 
             # 上一步工具返回的截图只挂在这一次请求尾部、不写回消息序列：下一步请求时它已消失，
             # 前缀与这一次逐字一致；画面内容由模型这一步的思考与决定带下去
@@ -484,18 +484,17 @@ class Planner:
                 )
             except Exception as e:
                 self.logger.warning(f"Planner LLM 调用异常: {e}")
-                outcome["error"] = f"llm_error: {e}"
-                outcome["silent_reason"] = "llm_error"
-                return outcome
+                return replace(outcome, error=f"llm_error: {e}", silent_reason="llm_error")
 
             if not getattr(response, "success", False):
                 error = getattr(response, "error", None) or "unknown"
-                outcome["error"] = f"llm_failed: {error}"
-                outcome["silent_reason"] = "llm_failed"
-                return outcome
+                return replace(outcome, error=f"llm_failed: {error}", silent_reason="llm_failed")
 
-            outcome["raw_content"] = getattr(response, "content", None) or ""
-            outcome["llm_request_id"] = getattr(response, "request_id", None) or None
+            outcome = replace(
+                outcome,
+                raw_content=getattr(response, "content", None) or "",
+                llm_request_id=getattr(response, "request_id", None) or None,
+            )
 
             # engine 返回的中立 ToolCall（扁平对象）收敛为内部扁平 dict，供本模块消费与协议喂回
             tool_calls = [
@@ -528,8 +527,7 @@ class Planner:
 
             # 自然终止：LLM 不再调用任何工具 = 本轮不说话
             if not tool_calls:
-                outcome["silent_reason"] = "natural"
-                return outcome
+                return replace(outcome, silent_reason="natural")
 
             replied = False
             # 同一步里并列的委派/环节切换先执行、说话最后收尾：reply 一成功本轮即结束，
@@ -540,10 +538,10 @@ class Planner:
                 name, args = tool_call_parts(call)
                 if not name:
                     continue
-                outcome["tool_trace"].append(name)
+                outcome = replace(outcome, tool_trace=[*outcome.tool_trace, name])
 
                 if name == "streamer_reply":
-                    observation, replied = await self._invoke_reply(
+                    observation, outcome, replied = await self._invoke_reply(
                         args,
                         outcome,
                         batch=batch,
@@ -571,8 +569,7 @@ class Planner:
                     return outcome
 
         # 超步：未完成说话即收场
-        outcome["silent_reason"] = "max_steps"
-        return outcome
+        return replace(outcome, silent_reason="max_steps")
 
     # ==================== 提示词与上下文 ====================
 
@@ -855,15 +852,15 @@ class Planner:
     async def _invoke_reply(
         self,
         args: Dict[str, Any],
-        outcome: Dict[str, Any],
+        outcome: RoundOutcome,
         *,
         batch: Optional[List[Any]] = None,
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
         game_chat: Optional[List[str]] = None,
         speech_history: Optional[List[str]] = None,
-    ) -> tuple[str, bool]:
-        """执行 reply 工具（经 ToolRegistry 统一调用）；成功时把产出写进 outcome 并返回 (观察, replied=True)。
+    ) -> tuple[str, RoundOutcome, bool]:
+        """执行 reply 工具（经 ToolRegistry 统一调用）；成功时把产出并进 outcome 并返回 (观察, 更新后 outcome, replied=True)。
 
         统一调用路径：reply 与其他工具一样经 ``registry.invoke``（观测/停用/
         熔断复用既有机制，tool.result 事件照发）。本窗交接材料（thinking 回调/
@@ -875,10 +872,11 @@ class Planner:
         环节发言字面重合是常态，闸会系统性误杀道别。
         """
         if self._tool_registry is None:
-            outcome["reply_failures"] += 1
-            return json.dumps(
-                {"ok": False, "error": "reply 工具不可用（tool_registry 未注入）"}, ensure_ascii=False
-            ), False
+            return (
+                json.dumps({"ok": False, "error": "reply 工具不可用（tool_registry 未注入）"}, ensure_ascii=False),
+                replace(outcome, reply_failures=outcome.reply_failures + 1),
+                False,
+            )
         invoke_started_ms = now_ms()
         try:
             attachment = ReplyRoundAttachment(
@@ -907,44 +905,57 @@ class Planner:
             )
         except Exception as e:
             self.logger.warning(f"reply 工具执行异常: {e}", exc=True)
-            outcome["reply_duration_ms"] += now_ms() - invoke_started_ms
-            outcome["reply_failures"] += 1
-            return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False), False
-        outcome["reply_duration_ms"] += now_ms() - invoke_started_ms
+            return (
+                json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False),
+                replace(
+                    outcome,
+                    reply_duration_ms=outcome.reply_duration_ms + now_ms() - invoke_started_ms,
+                    reply_failures=outcome.reply_failures + 1,
+                ),
+                False,
+            )
+        outcome = replace(outcome, reply_duration_ms=outcome.reply_duration_ms + now_ms() - invoke_started_ms)
 
         if not result.success:
-            outcome["reply_failures"] += 1
+            updates: Dict[str, Any] = {"reply_failures": outcome.reply_failures + 1}
             # 发言闸打回也是工具失败的一种：计数随失败结果的 structured_content 回传供观测
             bounce_payload = result.structured_content
             if isinstance(bounce_payload, dict) and isinstance(bounce_payload.get("speech_gate_bounces"), int):
-                outcome["speech_gate_bounces"] = bounce_payload["speech_gate_bounces"]
-            return json.dumps({"ok": False, "error": result.error_message or "reply 失败"}, ensure_ascii=False), False
+                updates["speech_gate_bounces"] = bounce_payload["speech_gate_bounces"]
+            return (
+                json.dumps({"ok": False, "error": result.error_message or "reply 失败"}, ensure_ascii=False),
+                replace(outcome, **updates),
+                False,
+            )
 
         payload = result.structured_content if isinstance(result.structured_content, dict) else {}
         emotion = payload.get("emotion") if isinstance(payload.get("emotion"), dict) else {}
-        outcome["replied"] = True
-        outcome["speech"] = payload.get("speech")
-        outcome["emotion"] = emotion.get("name")
-        outcome["emotion_intensity"] = emotion.get("intensity", 0.5)
-        outcome["reply_payload"] = payload
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-        outcome["target"] = metadata.get("target") or args.get("target")
-        outcome["topic_summary"] = str(args.get("topic_summary", "") or "")
-        outcome["reply_guidance"] = str(args.get("reply_guidance", "") or "")
         reply_to = args.get("target")
-        outcome["reply_to"] = reply_to if isinstance(reply_to, str) and reply_to else None
+        outcome = replace(
+            outcome,
+            replied=True,
+            speech=payload.get("speech"),
+            emotion=emotion.get("name"),
+            emotion_intensity=emotion.get("intensity", 0.5),
+            reply_payload=payload,
+            target=metadata.get("target") or args.get("target"),
+            topic_summary=str(args.get("topic_summary", "") or ""),
+            reply_guidance=str(args.get("reply_guidance", "") or ""),
+            reply_to=reply_to if isinstance(reply_to, str) and reply_to else None,
+        )
         # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到
         self._recent_intents.append(
             Intent(
                 at_ms=now_ms(),
-                topic_summary=outcome["topic_summary"],
-                reply_guidance=outcome["reply_guidance"],
+                topic_summary=outcome.topic_summary,
+                reply_guidance=outcome.reply_guidance,
                 speech=str(payload.get("speech") or ""),
             )
         )
 
-        self.logger.info(f"Planner ReAct 收尾：reply 成功 (target={outcome['target']!r}, steps={outcome['steps']})")
-        return json.dumps({"ok": True, "speech_delivered": True}, ensure_ascii=False), True
+        self.logger.info(f"Planner ReAct 收尾：reply 成功 (target={outcome.target!r}, steps={outcome.steps})")
+        return json.dumps({"ok": True, "speech_delivered": True}, ensure_ascii=False), outcome, True
 
     async def _invoke_registry_tool(
         self,

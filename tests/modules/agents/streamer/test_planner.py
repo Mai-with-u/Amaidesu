@@ -135,13 +135,13 @@ async def test_reply_ends_loop_and_natural_termination_is_silent() -> None:
         [_resp(tool_calls=[_tc("streamer_reply", {"topic_summary": "t", "target": "m1"})])]
     )
     outcome = await planner.plan([_msg()])
-    assert (outcome["replied"], outcome["speech"], outcome["silent_reason"]) == (True, "测试回复", None)
-    assert (outcome["steps"], outcome["tool_trace"]) == (1, ["streamer_reply"])
+    assert (outcome.replied, outcome.speech, outcome.silent_reason) == (True, "测试回复", None)
+    assert (outcome.steps, outcome.tool_trace) == (1, ["streamer_reply"])
     assert llm.generate.await_count == 1  # 说话即收尾
 
     planner, llm, _prompt = _make_planner([_resp("这轮不说话")])
     outcome = await planner.plan([_msg()])
-    assert (outcome["replied"], outcome["silent_reason"], llm.generate.await_count) == (False, "natural", 1)
+    assert (outcome.replied, outcome.silent_reason, llm.generate.await_count) == (False, "natural", 1)
 
 
 async def test_registry_tool_observation_is_fed_back_then_reply_ends() -> None:
@@ -156,7 +156,7 @@ async def test_registry_tool_observation_is_fed_back_then_reply_ends() -> None:
     planner, llm, _prompt = _make_planner(steps, registry=registry)
 
     outcome = await planner.plan([_msg()])
-    assert outcome["replied"] is True and outcome["tool_trace"] == ["minecraft_get_state", "streamer_reply"]
+    assert outcome.replied is True and outcome.tool_trace == ["minecraft_get_state", "streamer_reply"]
     observation = _tool_messages(llm, 1)[0]  # 第二轮 messages 带 tool role + tool_call_id 关联
     assert observation["tool_call_id"] == "c1" and '"todo"' in observation["content"]
 
@@ -167,13 +167,13 @@ async def test_tool_failure_is_fed_back_and_max_steps_goes_silent() -> None:
         [_resp(tool_calls=[_tc("tool_x", {}, "c1")]), _resp()], registry=_registry_mock(_spec("tool_x"), result=failing)
     )
     outcome = await planner.plan([_msg()])
-    assert outcome["replied"] is False and "world not loaded" in _tool_messages(llm, 1)[0]["content"]
+    assert outcome.replied is False and "world not loaded" in _tool_messages(llm, 1)[0]["content"]
 
     ok = ToolExecutionResult(tool_name="tool_x", success=True, structured_content={"ok": True})
     looping = [_resp(tool_calls=[_tc("tool_x", {}, f"c{i}")]) for i in range(20)]
     planner, llm, _prompt = _make_planner(looping, registry=_registry_mock(_spec("tool_x"), result=ok), max_steps=3)
     outcome = await planner.plan([_msg()])
-    assert (outcome["silent_reason"], outcome["steps"], llm.generate.await_count) == ("max_steps", 3, 3)
+    assert (outcome.silent_reason, outcome.steps, llm.generate.await_count) == ("max_steps", 3, 3)
 
 
 async def test_failures_degrade_without_raising() -> None:
@@ -186,19 +186,19 @@ async def test_failures_degrade_without_raising() -> None:
         side_effect=[_resp(tool_calls=[_tc("streamer_reply", {"topic_summary": "t"})]), _resp()]
     )
     outcome = await unbound.plan([_msg()])
-    assert (outcome["replied"], outcome["silent_reason"]) == (False, "natural")
+    assert (outcome.replied, outcome.silent_reason) == (False, "natural")
 
     planner, _llm, prompt = _make_planner([_resp(content="思考中")])
     outcome = await planner.plan([_msg()])
-    assert outcome["raw_content"] == "思考中"  # 原始输出随 outcome 带回
+    assert outcome.raw_content == "思考中"  # 原始输出随 outcome 带回
     planner._llm_service.generate = AsyncMock(side_effect=RuntimeError("boom"))
     outcome = await planner.plan([_msg()])
-    assert (outcome["silent_reason"], outcome["error"] is not None) == ("llm_error", True)
-    assert "boom" in outcome["error"]
+    assert (outcome.silent_reason, outcome.error is not None) == ("llm_error", True)
+    assert "boom" in outcome.error
 
     prompt.render = MagicMock(side_effect=RuntimeError("template missing"))
     outcome = await planner.plan([_msg()])
-    assert outcome["silent_reason"] == "prompt_render_failed" and "template missing" in (outcome["error"] or "")
+    assert outcome.silent_reason == "prompt_render_failed" and "template missing" in (outcome.error or "")
 
 
 async def test_context_assembly_paths() -> None:
@@ -240,7 +240,7 @@ async def test_elapsed_live_duration_line(provider, expected) -> None:
     planner, llm, _prompt = _make_planner([_resp()], elapsed_live_provider=_boom if provider == "boom" else provider)
     outcome = await planner.plan([_msg()])  # provider 异常降级为省略该行，不阻断决策
     reference = _reference_message(llm)["content"]
-    assert outcome["silent_reason"] == "natural"
+    assert outcome.silent_reason == "natural"
     assert (expected in reference) if expected else ("已开播时长" not in reference)
 
 
@@ -294,7 +294,7 @@ async def test_person_profiles_are_injected_without_placeholders_and_failures_do
 
     profile_repo.get_profile_text = AsyncMock(side_effect=RuntimeError("db down"))  # 画像查询异常静默降级
     planner, _llm, _prompt = _make_planner([_resp()], profile_repo=profile_repo, viewer_repo=_viewer_repo())
-    assert (await planner.plan([_msg()]))["silent_reason"] == "natural"
+    assert (await planner.plan([_msg()])).silent_reason == "natural"
 
 
 def test_dialogue_messages_use_native_roles_and_dedup_only_the_tail() -> None:

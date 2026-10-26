@@ -77,7 +77,7 @@ async def test_planner_passes_thinking_callback_to_llm():
 
     sink = _RecordingSink()
     outcome = await planner.plan(batch=[], thinking=ThinkingStreamContext(sink, round_id="round_1"))
-    assert outcome["silent_reason"] == "natural" and callable(captured["on_delta"])
+    assert outcome.silent_reason == "natural" and callable(captured["on_delta"])
     assert any(c["text_delta"] == "决策中思考" and c["phase"] == "planner" for c in sink.calls)
 
 

@@ -7,13 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.agents.streamer.planner import RoundOutcome
 from src.modules.tools.models import ToolExecutionResult
 from tests.agents.streamer.helpers import make_streamer_agent
 
 _REPLY: Dict[str, Any] = {"speech": "欢迎来到直播间！", "emotion": {"name": "happy", "intensity": 0.5}, "actions": []}
 
 
-def _agent(outcome: Optional[Dict[str, Any]], reply: Optional[Dict[str, Any]] = None):
+def _agent(outcome: Optional[RoundOutcome], reply: Optional[Dict[str, Any]] = None):
     """Planner 直接给出本轮结论；reply 工具按 reply 返回成功或失败。"""
     agent = make_streamer_agent()
     if outcome is None:
@@ -41,23 +42,23 @@ def _agent(outcome: Optional[Dict[str, Any]], reply: Optional[Dict[str, Any]] = 
     ],
 )
 async def test_invalid_input_is_rejected_before_deciding(kwargs: dict, error: str) -> None:
-    agent = _agent({"replied": False})
+    agent = _agent(RoundOutcome())
     result = await agent.debug_test_decision(**kwargs)
     assert result["success"] is False and error in result["error"]
     agent._planner.plan.assert_not_awaited()
 
 
 async def test_danmaku_mode_returns_full_view() -> None:
-    outcome = {
-        "replied": True,
-        "target": "debug_测试观众",
-        "reply_to": "debug_测试观众",
-        "topic_summary": "打招呼",
-        "reply_guidance": "友好回应",
-        "speech": "欢迎来到直播间！",
-        "emotion": "happy",
-        "reply_payload": _REPLY,
-    }
+    outcome = RoundOutcome(
+        replied=True,
+        target="debug_测试观众",
+        reply_to="debug_测试观众",
+        topic_summary="打招呼",
+        reply_guidance="友好回应",
+        speech="欢迎来到直播间！",
+        emotion="happy",
+        reply_payload=_REPLY,
+    )
     agent = _agent(outcome, _REPLY)
     result = await agent.debug_test_decision(batch=[{"nickname": "测试观众", "text": "主播好"}], forced=False)
 
@@ -74,7 +75,7 @@ async def test_danmaku_mode_returns_full_view() -> None:
 
 
 async def test_missing_nickname_defaults_to_placeholder() -> None:
-    agent = _agent({"replied": False, "silent_reason": "natural"})
+    agent = _agent(RoundOutcome(silent_reason="natural"))
     await agent.debug_test_decision(batch=[{"text": "你好"}])
     assert agent._planner.plan.await_args.args[0][0].user.name == "测试观众"
 
@@ -82,10 +83,10 @@ async def test_missing_nickname_defaults_to_placeholder() -> None:
 @pytest.mark.parametrize(
     ("outcome", "error_prefix"),
     [
-        ({"replied": False, "silent_reason": "natural", "topic_summary": "闲聊"}, None),
+        (RoundOutcome(silent_reason="natural", topic_summary="闲聊"), None),
         (None, "planner_failed"),  # LLM 异常/脏 JSON 降级
         # reply 失败发生在 Planner ReAct 循环内，经结论里的 error 带出
-        ({"replied": False, "error": "reply_tool_failed: LLM 超时"}, "planner_failed"),
+        (RoundOutcome(error="reply_tool_failed: LLM 超时"), "planner_failed"),
     ],
     ids=["silent", "planner_failed", "reply_tool_failed"],
 )
@@ -100,14 +101,14 @@ async def test_no_speech_outcomes(outcome, error_prefix) -> None:
         agent._reply_provider.invoke.assert_not_awaited()
     else:
         assert result["error"].startswith(error_prefix)
-    if outcome and outcome.get("error"):
+    if outcome is not None and outcome.error:
         assert "reply_tool_failed: LLM 超时" in result["error"]
 
 
 async def test_proactive_mode_runs_without_rate_limit() -> None:
     """主动直跑：空批 + proactive=True 进决策，不经 ProactiveTrigger 限流（主动发言关闭也能跑）。"""
     agent = _agent(
-        {"replied": True, "topic_summary": "主动话题", "speech": _REPLY["speech"], "reply_payload": _REPLY}, _REPLY
+        RoundOutcome(replied=True, topic_summary="主动话题", speech=_REPLY["speech"], reply_payload=_REPLY), _REPLY
     )
     result = await agent.debug_test_decision(proactive=True)
 

@@ -275,7 +275,7 @@ async def test_planner_hands_state_facts_to_reply_tool() -> None:
 
     outcome = await planner.plan([], proactive=True, game_batch=batch)
 
-    assert outcome["replied"] is True
+    assert outcome.replied is True
     assert len(seen) == 1
     assert "交付：蜂蜜胶已做好并收进背包" in seen[0]
     assert "身体：health=12.0" in seen[0]

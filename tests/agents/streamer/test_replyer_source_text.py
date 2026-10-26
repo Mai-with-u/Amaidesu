@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer import canonical
+from src.agents.streamer.planner import RoundOutcome
 from src.agents.streamer.decision_executor import DecisionRoundExecutor
 from src.agents.streamer.session_scope import WindowMaterials
 from src.agents.streamer.timeline import GameEventBatch
@@ -160,7 +161,7 @@ async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
         ),
     )
 
-    assert outcome["replied"] is True
+    assert outcome.replied is True
     assert seen == [["[20:01 minecraft] 玩家 Steve：在吗"]]
     # 游戏聊天原话随调用单一次性传入：Provider 上不再有跨调用槽位
     assert not hasattr(provider, "_round_game_chat")
@@ -169,7 +170,7 @@ async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
 async def test_executor_splits_game_chat_view() -> None:
     """决策执行器把游戏聊天全文交给 Planner 参考段，本窗新到的原话另传。"""
     planner = MagicMock()
-    planner.plan = AsyncMock(return_value={"replied": False, "silent_reason": "natural"})
+    planner.plan = AsyncMock(return_value=RoundOutcome(silent_reason="natural"))
     executor = DecisionRoundExecutor(
         planner=planner,
         speech=MagicMock(),

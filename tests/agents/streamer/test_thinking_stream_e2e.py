@@ -28,9 +28,10 @@ async def _decide(sink: Optional[_RecordingSink], enabled: bool) -> dict:
     llm = MagicMock()
     llm.generate = AsyncMock(side_effect=_generate)
     agent = make_streamer_agent({"thinking_stream": {"enabled": enabled}}, llm=llm, thinking_sink=sink)
-    return await agent._rounds._decide_round(
+    result, _outcome = await agent._rounds._decide_round(
         [], round_id="round_e2e", started_ms=0, forced=False, trigger_reason="test", proactive=False
     )
+    return result
 
 
 async def test_decide_round_delivers_reasoning_to_sink() -> None:

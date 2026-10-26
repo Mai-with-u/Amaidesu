@@ -181,7 +181,7 @@ async def test_reply_runs_last_and_holds_round_batch() -> None:
     )
     outcome = await _planner(registry, provider, [step]).plan([_msg("拉", "m1")])
 
-    assert outcome["replied"] is True
+    assert outcome.replied is True
     assert invoked == ["rundown_control", "streamer_reply"]
     assert seen_batches == [["拉"]]
     # 弹幕批随调用单一次性传入：Provider 上不再有跨调用槽位

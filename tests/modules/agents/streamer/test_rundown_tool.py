@@ -118,7 +118,7 @@ async def test_registry_invoke_and_planner_dispatch_share_one_state_machine() ->
     )
     outcome = await _planner(_registry_with(other), llm).plan([])
 
-    assert (outcome["replied"], outcome["tool_trace"], outcome["silent_reason"]) == (
+    assert (outcome.replied, outcome.tool_trace, outcome.silent_reason) == (
         False,
         ["rundown_control"],
         "natural",
