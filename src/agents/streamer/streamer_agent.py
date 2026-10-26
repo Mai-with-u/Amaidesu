@@ -348,7 +348,7 @@ class StreamerAgent(BaseAgent):
         self._planner.bind_elapsed_live_provider(self._rundown_coord.state.get_elapsed_live_ms)
         self._planner.bind_notebook_provider(self._notebook.read)
         if task_ledger is not None:
-            self._planner.bind_delegation_status_provider(self._delegation_machine_status)
+            self._planner.workbench.bind_delegation_status_provider(self._delegation_machine_status)
 
         # 后台维护器（双任务：轻循环 + 压缩 worker）——读包内权威配置
         bg = config.background
@@ -440,7 +440,7 @@ class StreamerAgent(BaseAgent):
             session_manager=session_manager,
             logger=self._logger,
         )
-        self._planner.bind_action_recorder(self._record_delegation)
+        self._planner.workbench.bind_action_recorder(self._record_delegation)
         # 最新一帧直播画面：查询式取自图像暂存的 latest 槽位（live_frame 采集器
         # 每次采样覆盖写入），每个决策窗第一次请求必挂——走查询不走事件流，
         # 保证决策时拿到的是刚截的画面
@@ -510,7 +510,7 @@ class StreamerAgent(BaseAgent):
                 speech_max_chars=config.speech_max_chars,
                 gate=self._speech_gate,
                 word_filter=self._word_filter,
-                goals_provider=self._planner.current_goals,
+                goals_provider=self._planner.workbench.current_goals,
                 notebook_provider=self._notebook.read,
                 segment_provider=self._current_segment_title,
                 scene_reader=self._read_scene_brief,
@@ -951,7 +951,7 @@ class StreamerAgent(BaseAgent):
             if payload.event_type == "report":
                 self._proactive_signals.set_game()
                 # 游戏里做完或卡住待定夺：【我手头在游戏里做的事】里那件事随之标成已上报
-                self._planner.note_game_report(payload.game, payload.report_kind or "")
+                self._planner.workbench.note_game_report(payload.game, payload.report_kind or "")
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏事件失败: {exc}", exc=True)
 

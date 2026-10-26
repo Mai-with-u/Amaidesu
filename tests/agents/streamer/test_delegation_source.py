@@ -24,7 +24,7 @@ async def test_delegation_keeps_source_without_rewriting_model_history() -> None
     original = "在平台上搭建精密构建生产线，不许用Mek"
     source = [{"role": "user", "content": original}]
     arguments = {"agent": "minecraft", "instruction": "搭一条工业风产线"}
-    result = await planner._invoke_registry_tool("framework_delegate", arguments, source_dialogue=source)
+    result = await planner.workbench.handle("framework_delegate", arguments, source_dialogue=source)
     delivered = registry.invoke.call_args.args[0].arguments["instruction"]
     assert original in delivered and "不构成额外任务" in delivered
     assert delivered.startswith("[本次目标]\n搭一条工业风产线")

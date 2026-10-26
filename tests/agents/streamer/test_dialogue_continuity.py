@@ -23,7 +23,9 @@ from src.modules.events.payloads.live import LiveStartedPayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
-from src.modules.tools.models import ToolExecutionResult, ToolInvocation
+from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.provider import make_provider_from_specs
+from src.modules.tools.registry import ToolRegistry
 from src.modules.utils.time_utils import now_ms
 from tests.agents.streamer.helpers import make_streamer_agent
 
@@ -136,6 +138,19 @@ def _planner(registry: Any = None, reply_provider: Any = None, responses: Option
     )
 
 
+def _delegation_registry(result: ToolExecutionResult) -> ToolRegistry:
+    """真注册表 + framework_delegate 桩：委派状态迁移经工作台公开动词直测，不绕行 mock。"""
+    registry = ToolRegistry()
+
+    async def _invoke(_invocation: ToolInvocation) -> ToolExecutionResult:
+        return result
+
+    # provider 留空（匿名工具）：全名即工具名，与生产里 framework_delegate 的调用名一致
+    spec = ToolSpec(name="framework_delegate", description="", kind="sync", provider="")
+    registry.register_provider(make_provider_from_specs("", [(spec, _invoke)]))
+    return registry
+
+
 def _capture_references(planner: Planner) -> List[str]:
     """把每次推理请求的最后一条消息（参考段）记下来，模型一律不说话。"""
     references: List[str] = []
@@ -222,19 +237,21 @@ async def test_planner_sees_what_it_is_doing_in_game_until_reported() -> None:
     """开始做事后每轮都看得到手上的原话与进展，做完或卡住后随之改变，且全程第一人称。
 
     实测主播看不到自己正在做什么，就把每条弹幕都改派成新目标；写成"交给谁"又会对观众说"活已经派下去了"。
+    状态迁移经工作台公开动词直测：委派受理走 handle，游戏上报走 note_game_report。
     """
-    planner = _planner()
-    planner._tool_registry.invoke = AsyncMock(
-        return_value=ToolExecutionResult(
-            tool_name="framework_delegate",
-            success=True,
-            structured_content={"accepted": True, "task_id": "deleg_1", "executor": "minecraft"},
+    planner = _planner(
+        registry=_delegation_registry(
+            ToolExecutionResult(
+                tool_name="framework_delegate",
+                success=True,
+                structured_content={"accepted": True, "task_id": "deleg_1", "executor": "minecraft"},
+            )
         )
     )
     references = _capture_references(planner)
     instruction = "从 AE 请求一块铁板放到置物台上，用机器做一个蜂蜜胶"
 
-    observation = await planner._invoke_registry_tool(
+    observation = await planner.workbench.handle(
         "framework_delegate",
         {"agent": "minecraft", "instruction": instruction},
         source_dialogue=[{"role": "user", "content": "调试观众: 铁板！放到置物台上！"}],
@@ -248,7 +265,7 @@ async def test_planner_sees_what_it_is_doing_in_game_until_reported() -> None:
     assert not any(word in work for word in ("交给", "身体", "委派"))
 
     for kind, phrase in (("escalation", "卡住了，正等我和观众一起定夺"), ("delivery", "做完，结果见游戏记录")):
-        planner.note_game_report("minecraft", kind)
+        planner.workbench.note_game_report("minecraft", kind)
         await planner.plan([_msg("怎么样了", "m2")])
         assert phrase in references[-1]
 
@@ -579,7 +596,9 @@ def test_delegation_rendering_merges_machine_status_and_stall_age() -> None:
     assert "停着没动静" in stalled and "maicraft:gather" in stalled
 
     # 账本等定夺：渲染停着等主意
-    assert "停着等我和观众拿主意" in render({"status": "waiting_for_decision", "updated_at_ms": now - 60_000, "snapshot": {}})
+    assert "停着等我和观众拿主意" in render(
+        {"status": "waiting_for_decision", "updated_at_ms": now - 60_000, "snapshot": {}}
+    )
 
     # LLM 交付语后到：仍以交付语显示（终态条目已从账本移除，机器账查不到）
     delegations["minecraft"].report_kind = "delivery"

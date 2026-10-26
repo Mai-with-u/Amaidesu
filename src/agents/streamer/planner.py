@@ -35,34 +35,27 @@
 from __future__ import annotations
 
 import json
-from collections import deque
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
+from src.agents.streamer.delegation_workbench import DelegationWorkbench, observation_data
 from src.agents.streamer.plan import ReplyRoundAttachment, assistant_speech_lines
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
 from src.agents.streamer.planner_render import (
-    Delegation,
     Intent,
-    Relay,
-    compose_delegate_instruction,
-    compose_relay_content,
     forced_situation,
-    goal_lines,
     render_delegations,
     render_observation,
     render_recent_intents,
     render_recent_relays,
     render_silence,
     reply_last,
-    same_json_document,
     tool_call_parts,
 )
-from src.agents.streamer.scene_card import GoalLine
 from src.agents.streamer.game_ledger import GameLedger
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import GameEventBatch
@@ -72,7 +65,7 @@ from src.modules.llm.payload import Reasoning
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
-from src.modules.tools.models import ToolInvocation
+from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 from src.modules.vision.image_store import get_image_store
 
 from .room_state import RoomState
@@ -245,33 +238,24 @@ class Planner:
         self._personality: str = personality or ""
         self._reply_provider = reply_provider
         self._elapsed_live_provider = elapsed_live_provider
-        # 委派受理后把"我在哪个游戏里开始做什么"记进时间线（StreamerAgent 绑定）；
-        # 参考段只留每个游戏最近一次委派，时间线里留下整场的先后
-        self._action_recorder: Optional[Callable[[str, str], None]] = None
         # 直播画面（StreamerAgent 在启用时绑定）：返回最新一帧画面快照或 None。
         # 每个决策窗的第一次请求必挂最新帧（查询式取自暂存 latest 槽位），
         # 同窗后续 ReAct 步不重复挂——frame_tail 每窗只算一次、只拼进第一步请求
         self._frame_provider: Optional[Callable[[], Optional[Any]]] = None
         self._frame_stale_warn_ms = 0
         self._last_stale_warn_ms = 0
-        # 每个执行 Agent 最近一次受理的委派：原话、时间、身体是否已上报。实测半小时委派 27 次、
-        # 目标来回反转——主播看不到身体手上正做着什么，就会把每条弹幕都改派成新目标
-        self._delegations: Dict[str, Delegation] = {}
-        # 委派的机器状态查询（StreamerAgent 构造期绑定，读任务账本）：任务号 →
-        # {"status", "updated_at_ms", "snapshot"} 或 None（终态已移除/查不到）
-        self._delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
-        # 最近几轮自己说出口的打算（话题 + 指引）。对话历史里只有最终台词，看不出"我已经连着
-        # 几轮在讲同一件事"——实测主播连续十分钟句句提掉血，每轮都把它当新消息开口
-        self._recent_intents: Deque[Intent] = deque(maxlen=self.typed_config.planner_recent_intents_max)
-        # 最近几次给手上的游戏活补充过的要求（主播自己的原话，不含附带的来源对话）：
-        # 看得到自己刚交代过什么，没有新要求时才不会把同样的话再补一遍
-        self._recent_relays: Deque[Relay] = deque(maxlen=self.typed_config.planner_recent_relays_max)
+        # "手头的事"工作台：委派受理、递话回执、最近打算的状态与拦截规则都在这里
+        # （Agent 内部件，不进工具注册表；本窗工具回执也在此记账）
+        self.workbench = DelegationWorkbench(
+            tool_registry,
+            intents_max=self.typed_config.planner_recent_intents_max,
+            relays_max=self.typed_config.planner_recent_relays_max,
+        )
         # 本决策窗的游戏事件素材：本轮新入账批次（决策窗边界批量追加进时间线的那一批，
         # 每轮 plan() 入口重置）。状态跃迁事实块（planner 参考段与表达侧交接各一份）
         # 随批次由账本产出；回执随本窗 ReAct 循环累积，reply 交接时合成全量
         self._round_facts_text = ""
         self._round_game_events: List[str] = []
-        self._round_tool_receipts: List[Tuple[str, Any]] = []
         # 本窗是否豁免发言闸的台词重合度检查（收播道别窗：道别话题常与收尾环节发言字面重合）
         self._round_bypass_topic_gate: bool = False
         # 本场备忘录全文查询（StreamerAgent 构造期绑定；空串 = 还没写过，段整段省略）
@@ -299,10 +283,6 @@ class Planner:
     def bind_notebook_provider(self, provider: Callable[[], str]) -> None:
         """注入本场备忘录全文查询（StreamerAgent 构造期绑定，同 bind 模式）。"""
         self._notebook_text_provider = provider
-
-    def bind_delegation_status_provider(self, provider: Callable[[str], Optional[Dict[str, Any]]]) -> None:
-        """注入委派的机器状态查询（StreamerAgent 构造期绑定，读任务账本，同 bind 模式）。"""
-        self._delegation_status_provider = provider
 
     def _live_frame_message(self) -> Optional[Dict[str, Any]]:
         """本决策窗第一次请求尾部挂最新直播画面（每窗必看，静止画面重复看是设计内行为）。
@@ -332,24 +312,6 @@ class Planner:
             "游戏里的数值和进展以游戏记录和查询结果为准，画面里看不清的不要猜。"
         )
         return {"role": "user", "content": [{"type": "text", "text": note}, {"type": "image_ref", "ref": ref}]}
-
-    def bind_action_recorder(self, recorder: Callable[[str, str], None]) -> None:
-        """注入委派记录回调（执行者名, 主播自己的原话），同 bind 模式。"""
-        self._action_recorder = recorder
-
-    def note_game_report(self, game: str, report_kind: str) -> None:
-        """游戏侧上报（交付/卡住待定夺）到达：把对应执行 Agent 手头那次委派标成已上报。
-
-        游戏 Agent 以自己的注册名作为上报的 game 字段，按名字对上即可。
-        """
-        delegation = self._delegations.get(game)
-        if delegation is not None and report_kind in {"delivery", "escalation"}:
-            delegation.report_kind = report_kind
-            delegation.reported_ms = now_ms()
-
-    def current_goals(self) -> List[GoalLine]:
-        """手上的事（嘴的现场卡用）：每个游戏最近一次开始做的事、原话（已脱敏）与进展。"""
-        return goal_lines(self._delegations)
 
     # ==================== 主入口 ====================
 
@@ -400,7 +362,7 @@ class Planner:
         resolved_batch = game_batch or GameEventBatch()
         self._round_facts_text = resolved_batch.facts_text
         self._round_game_events = list(resolved_batch.events)
-        self._round_tool_receipts = []
+        self.workbench.begin_round()
         # 游戏聊天原话（非私聊）随本轮说话交给表达侧；私聊行只进本窗参考段
         fresh_game_chat = list(resolved_batch.fresh_chat)
         private_game_chat = list(resolved_batch.private_chat)
@@ -683,16 +645,16 @@ class Planner:
             # 状态跃迁事实块：只收本轮新入账批次里的死亡/重生/任务开始结束/交付类条目，
             # 供客观核对——叙事讲经历，这里只列可核对的状态
             lines.append(f"【当前状态（客观事实）】\n{state_facts}")
-        work = render_delegations(self._delegations, self._delegation_status_provider, current_ms)
+        work = render_delegations(self.workbench.delegations, self.workbench.delegation_status_provider, current_ms)
         if work:
             # 我手头在游戏里做的事：最近一次开始做的原话与进展。看得到自己在忙什么，
             # 观众补充或催促时才会补充要求，而不是每条弹幕都换一个新目标
             lines.append(f"【我手头在游戏里做的事】\n{work}")
-        relays = render_recent_relays(self._recent_relays, current_ms)
+        relays = render_recent_relays(self.workbench.recent_relays, current_ms)
         if relays:
             # 补充过的要求紧跟在手头的事后面：同一件事已经交代过什么一眼可见，没有新要求就不再补
             lines.append(f"【我最近给手上的事补充过的要求】\n{relays}")
-        intents = render_recent_intents(self._recent_intents, self._delegations, current_ms)
+        intents = render_recent_intents(self.workbench.recent_intents, self.workbench.delegations, current_ms)
         if intents:
             # 已聊话题清单 + 硬规则：复盘发现 46% 的决策窗里模型自己写"别复述"却做不到——
             # 把"重叠必须有新角度"写成显式注入规则，而不是靠模型自觉。新角度既认信息上的新，
@@ -887,7 +849,7 @@ class Planner:
                 # 游戏里有人搭话促发的一轮弹幕批是空的，原话同样交给表达侧
                 game_chat=list(game_chat or []),
                 # 状态跃迁事实块：表达侧的客观事实底稿（含本轮观察工具回执要点）
-                state_facts=GameLedger.compose_facts(self._round_facts_text, self._round_tool_receipts),
+                state_facts=GameLedger.compose_facts(self._round_facts_text, self.workbench.round_receipts),
                 # 道别窗豁免台词重合度检查
                 gate_exempt=self._round_bypass_topic_gate,
                 # 闸语料：本窗起点算好的已说台词，重试共用（None = 本窗无历史可查）
@@ -945,7 +907,7 @@ class Planner:
             reply_to=reply_to if isinstance(reply_to, str) and reply_to else None,
         )
         # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到
-        self._recent_intents.append(
+        self.workbench.note_intent(
             Intent(
                 at_ms=now_ms(),
                 topic_summary=outcome.topic_summary,
@@ -967,44 +929,24 @@ class Planner:
     ) -> str:
         """经 ToolRegistry 执行工具调用，返回观察 JSON 文本。
 
-        视觉调用方（本档位主模型声明 visual）且工具结果带图时，图存进
-        VisionImageStore、句柄登记到尾部临时图片，下一步请求时挂在序列最后
+        委派型游戏的两个框架工具名（framework_delegate / framework_prompt）整体
+        委托给"手头的事"工作台受理——状态迁移规则在其拦截规则表里，不在本循环。
+        其余工具走本方法：视觉调用方（本档位主模型声明 visual）且工具结果带图时，
+        图存进 VisionImageStore、句柄登记到尾部临时图片，下一步请求时挂在序列最后
         让模型看一次；观察文本里图位是占位说明。
         """
         if self._tool_registry is None:
             return json.dumps({"ok": False, "error": "tool_registry 未注入"}, ensure_ascii=False)
-        if name == "framework_prompt" and relay_without_input:
-            # 没有新输入的主动窗不补充要求：游戏里的进展以游戏侧回执为准，这一窗只管说话。
-            return json.dumps(
-                {
-                    "ok": False,
-                    "error": "这一窗没有新的观众、运营或游戏聊天输入，手上的游戏活不用补充要求；"
-                    "游戏进展以游戏侧回执为准，直接说话即可。",
-                },
-                ensure_ascii=False,
+        if self.workbench.handles(name):
+            return await self.workbench.handle(
+                name,
+                args,
+                round_id=round_id,
+                caller_profile=PLANNER_PROFILE,
+                source_dialogue=source_dialogue,
+                relay_without_input=relay_without_input,
+                on_result=self._absorb_tool_images,
             )
-        # 记下主播自己补充要求的原话（附来源对话之前），之后每轮都看得到自己刚交代过什么
-        own_relay = str(args.get("content") or "") if name == "framework_prompt" else ""
-        if (
-            name == "framework_prompt"
-            and source_dialogue
-            and isinstance(args.get("content"), str)
-            and args["content"].strip()
-        ):
-            # 补充要求同样附上本窗观众原话，游戏侧能看到逐字说法，不只剩一层转述。
-            args = dict(args)
-            args["content"] = compose_relay_content(args["content"], source_dialogue)
-        # 记下主播自己开始做事时的原话（附来源对话之前），之后每轮都能看到自己在游戏里手上正做着什么
-        own_instruction = str(args.get("instruction") or "") if name == "framework_delegate" else ""
-        if (
-            name == "framework_delegate"
-            and source_dialogue
-            and isinstance(args.get("instruction"), str)
-            and args["instruction"].strip()
-        ):
-            # 做什么由主播拿主意：游戏侧以本次目标为准，原话只补物品名写法和禁用条件（取舍规则见组装函数）
-            args = dict(args)
-            args["instruction"] = compose_delegate_instruction(args["instruction"], source_dialogue)
         try:
             result = await self._tool_registry.invoke(
                 ToolInvocation(
@@ -1018,45 +960,21 @@ class Planner:
         except Exception as e:
             self.logger.warning(f"工具 '{name}' 执行异常: {e}", exc=True)
             return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
-
+        self._absorb_tool_images(name, result)
         if result.success:
-            # 结构化结果优先（reply / rundown 等结构化工具的既有契约）。content
-            # 文本一并透传：信息获取型工具（web_search / web_fetch_url 等）的
-            # 产出就在 content，只回 {"ok": true} 会让 LLM 看不到任何内容。空
-            # content 不带键——动作执行型工具的观察形态维持原样。
-            data = dict(result.structured_content) if isinstance(result.structured_content, dict) else {}
-            data.setdefault("ok", True)
-            # MCP 工具常把同一份结构化结果再序列化成正文返回一遍；完全相同时只给一份，避免上下文翻倍
-            if (
-                result.content
-                and "content" not in data
-                and not same_json_document(result.content, result.structured_content)
-            ):
-                data["content"] = result.content
-            if name == "framework_delegate" and data.get("accepted"):
-                # 新委派替换同一执行者手上的旧目标：只保留最近一次，状态从"还在做"重新开始
-                agent = str(data.get("executor") or args.get("agent") or "")
-                self._delegations[agent] = Delegation(
-                    agent=agent, instruction=own_instruction, task_id=str(data.get("task_id") or ""), at_ms=now_ms()
-                )
-                if self._action_recorder is not None:
-                    try:
-                        self._action_recorder(agent, own_instruction)
-                    except Exception as exc:  # noqa: BLE001 - 记录失败不影响已受理的委派
-                        self.logger.warning(f"委派记录写入时间线失败：{exc}", exc=True)
-            if name == "framework_prompt" and data.get("delivered") and own_relay.strip():
-                # 补充要求送达了才记；被拒收的没交代到，不能当成"已经说过"
-                agent = str(data.get("executor") or args.get("agent") or "")
-                self._recent_relays.append(Relay(at_ms=now_ms(), agent=agent, content=own_relay))
+            data = observation_data(result)
             # 本轮回执进状态素材：reply 交接时的状态跃迁事实块从这里取观察工具的关键字段
-            self._round_tool_receipts.append((name, data))
+            self.workbench.note_receipt(name, data)
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
+        return render_observation(data)
+
+    def _absorb_tool_images(self, name: str, result: ToolExecutionResult) -> None:
+        """工具结果带图且本档位主模型能看图时，把截图登记到尾部临时图片（成败结果都过这里）。"""
         if self._visual_caller():
             image_data_urls = extract_image_data_urls(result)
             if image_data_urls:
                 self._tail_images.add([get_image_store().put(url) for url in image_data_urls], source=name)
-        return render_observation(data)
 
     # ==================== 人物画像注入 ====================
 

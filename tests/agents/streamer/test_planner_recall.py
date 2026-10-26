@@ -159,12 +159,12 @@ async def test_game_report_supersedes_inflight_intents() -> None:
     """
     planner, _registry = _relay_planner(_DELEGATED)
 
-    await planner._invoke_registry_tool("framework_delegate", {"agent": "minecraft", "instruction": "挖石料"})
+    await planner.workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "挖石料"})
     # 委派在途期间说出口的对进展的猜测（此刻与回执说法矛盾）
-    planner._recent_intents.append(
+    planner.workbench.note_intent(
         Intent(at_ms=now_ms(), topic_summary="石料到现在都还没挖进包", reply_guidance="懊恼地汇报白挥了一镐")
     )
-    planner.note_game_report("minecraft", "delivery")
+    planner.workbench.note_game_report("minecraft", "delivery")
     text = await _reference(planner)
 
     assert "已被游戏回执覆盖" in text
@@ -178,15 +178,13 @@ async def test_intent_outside_delegation_window_is_not_superseded() -> None:
 
     base = now_ms()
     # 委派开始前说的一轮
-    planner._recent_intents.append(
-        Intent(at_ms=base - 60_000, topic_summary="和观众打了个招呼", reply_guidance="热情")
-    )
-    await planner._invoke_registry_tool("framework_delegate", {"agent": "minecraft", "instruction": "挖石料"})
-    delegation = planner._delegations["minecraft"]
+    planner.workbench.note_intent(Intent(at_ms=base - 60_000, topic_summary="和观众打了个招呼", reply_guidance="热情"))
+    await planner.workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "挖石料"})
+    delegation = planner.workbench.delegations["minecraft"]
     delegation.at_ms = base
     delegation.reported_ms = base + 30_000
     # 回执之后说的一轮
-    planner._recent_intents.append(
+    planner.workbench.note_intent(
         Intent(at_ms=base + 60_000, topic_summary="包里攒了 19 块圆石", reply_guidance="报喜")
     )
     text = await _reference(planner)
@@ -208,7 +206,7 @@ async def test_delivered_relay_records_own_words_without_source() -> None:
         )
     )
 
-    observation = await planner._invoke_registry_tool(
+    observation = await planner.workbench.handle(
         "framework_prompt",
         {"agent": "minecraft", "content": "机械锯那边别再管了"},
         source_dialogue=[{"role": "user", "content": "观众：锯子修好了吗"}],
@@ -227,8 +225,8 @@ async def test_rejected_or_blocked_relay_is_not_recorded() -> None:
         ToolExecutionResult(tool_name="framework_prompt", success=False, error_message="留言已满")
     )
 
-    await planner._invoke_registry_tool("framework_prompt", {"agent": "minecraft", "content": "先别拆"})
-    await planner._invoke_registry_tool(
+    await planner.workbench.handle("framework_prompt", {"agent": "minecraft", "content": "先别拆"})
+    await planner.workbench.handle(
         "framework_prompt", {"agent": "minecraft", "content": "再说一遍"}, relay_without_input=True
     )
 
@@ -238,4 +236,4 @@ async def test_rejected_or_blocked_relay_is_not_recorded() -> None:
 def test_agent_passes_recall_limits_to_planner() -> None:
     """[agents.streamer] 的回看条数一路传到 Planner。"""
     agent = make_streamer_agent({"planner_recent_intents_max": 3, "planner_recent_relays_max": 1})
-    assert (agent._planner._recent_intents.maxlen, agent._planner._recent_relays.maxlen) == (3, 1)
+    assert (agent._planner.workbench.recent_intents.maxlen, agent._planner.workbench.recent_relays.maxlen) == (3, 1)
