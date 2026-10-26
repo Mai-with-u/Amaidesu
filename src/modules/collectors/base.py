@@ -33,6 +33,7 @@ _MESSAGE_TYPE_TO_EVENT: Dict[str, str] = {
     "gift": CoreEvents.ROOM_MESSAGE_GIFT,
     "super_chat": CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
     "guard": CoreEvents.ROOM_MESSAGE_GUARD,
+    "partner_speech": CoreEvents.ROOM_MESSAGE_PARTNER_SPEECH,
 }
 
 

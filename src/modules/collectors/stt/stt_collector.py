@@ -21,7 +21,6 @@ from src.modules.collectors.stt.xunfei_client import (
     XunfeiIatClient,
 )
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import get_logger
 
@@ -215,7 +214,7 @@ class STTCollector(BaseCollector):
         return None
 
     async def start(self) -> None:
-        """启动：加载 VAD 模型后开后台任务消费 collect()（collect 内直发 room.message.*）。"""
+        """启动：加载 VAD 模型后开后台任务消费 collect()（识别结果经 publish_room_message 扇出）。"""
         if not self.is_started:
             if self.vad_enabled and self.vad_model is None:
                 # 模型下载/加载放启动期而非构造期：构造被下载卡住会拖死整个应用装配
@@ -244,7 +243,7 @@ class STTCollector(BaseCollector):
     # -------------------- 采集循环（按阶段拆分） --------------------
 
     async def collect(self) -> AsyncIterator[RoomMessagePayload]:
-        """采集语音数据并生成事件载荷（直发 room.message.partner_speech）"""
+        """采集语音数据并生成事件载荷（message_type="partner_speech"）"""
         if not self.vad_enabled or self.vad_model is None:
             self.logger.error("VAD 未启用或模型未加载，无法运行")
             return
@@ -477,13 +476,13 @@ class STTCollector(BaseCollector):
         return 0
 
     async def _drain_results(self) -> AsyncIterator[RoomMessagePayload]:
-        """排空识别结果队列：逐条直发联动对象发言事件并交还给消费方。"""
+        """排空识别结果队列：逐条经基类统一扇出口发布并交还给消费方。"""
         try:
             while not self._xunfei.result_queue.empty():
                 payload = await asyncio.wait_for(self._xunfei.result_queue.get(), timeout=0.01)
-                # 直发联动对象发言事件（场次归属由盖章拦截器统一注入；
+                # 联动对象发言走基类扇出（场次归属由盖章拦截器统一注入；
                 # 落库走 sender_role="partner"，不计观众统计）
-                await self.emit_event(CoreEvents.ROOM_MESSAGE_PARTNER_SPEECH, payload)
+                await self.publish_room_message(payload)
                 yield payload
                 self._xunfei.result_queue.task_done()
         except asyncio.TimeoutError:

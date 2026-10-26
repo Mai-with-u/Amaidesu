@@ -94,14 +94,14 @@ def _core_events_references(path: Path) -> List[str]:
     return names
 
 
-# 五类行为流事件的扇出收口名单；PARTNER_SPEECH 由 stt 采集器直发（单一类型
-# 无映射表，不在收口范围），ROOM_MESSAGE_WILDCARD 是订阅标识不是发布事件名
+# 六类行为流事件的扇出收口名单；ROOM_MESSAGE_WILDCARD 是订阅标识不是发布事件名
 _FANOUT_EVENT_ATTRS = {
     "ROOM_MESSAGE_DANMAKU",
     "ROOM_MESSAGE_GIFT",
     "ROOM_MESSAGE_SUPER_CHAT",
     "ROOM_MESSAGE_GUARD",
     "ROOM_MESSAGE_ENTER",
+    "ROOM_MESSAGE_PARTNER_SPEECH",
 }
 
 
