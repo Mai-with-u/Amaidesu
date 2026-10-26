@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
 // useTimelineScroll.ts 时间线滚动跟随的测试：挂载即贴底、贴底跟随新条目、
 // 上滚后未读计数（含锚点缺失视为全新）、回到最新与清零、容器尺寸变化维持
-// 贴底、卸载断开 ResizeObserver。
+// 贴底、向上滚轮宽限期内不拽回、卸载断开 ResizeObserver。
 //
 // 滚动几何用 defineProperty 覆写 scrollHeight/clientHeight 模拟（happy-dom
-// 不做真实布局）；ResizeObserver 用桩替换并保留实例引用供手动触发。
+// 不做真实布局）；ResizeObserver 用桩替换并保留实例引用供手动触发；
+// Date.now 用 spy 接管以推进宽限期时钟。
 
 import { defineComponent, h, nextTick, onMounted, ref, type Component, type Ref } from 'vue';
 import { mount, type VueWrapper } from '@vue/test-utils';
@@ -90,6 +91,7 @@ describe('useTimelineScroll', () => {
     wrapper?.unmount();
     wrapper = null;
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   async function mountHost(): Promise<HTMLElement> {
@@ -137,6 +139,72 @@ describe('useTimelineScroll', () => {
     await nextTick();
     await nextTick();
     expect(out.unseen!.value).toBe(3);
+  });
+
+  it('向上滚轮后的宽限期内，新条目不贴底只计未读', async () => {
+    const clock = { now: 1_000_000 };
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const el = await mountHost();
+    // 模拟竞态现场：位置已上滚，但 scroll 事件尚未分发（atBottom 仍旧值 true）
+    el.scrollTop = 0;
+    el.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 }));
+    entries.value = [...entries.value, entry('2'), entry('3')];
+    await nextTick();
+    await nextTick();
+    expect(el.scrollTop).toBe(0);
+    expect(out.unseen!.value).toBe(2);
+  });
+
+  it('宽限期过后恢复贴底跟随', async () => {
+    const clock = { now: 1_000_000 };
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const el = await mountHost();
+    el.scrollTop = 0;
+    el.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 }));
+    entries.value = [...entries.value, entry('2')];
+    await nextTick();
+    await nextTick();
+    expect(el.scrollTop).toBe(0);
+
+    clock.now += 2001; // 超过 SCROLL_UP_GRACE_MS
+    entries.value = [...entries.value, entry('3')];
+    await nextTick();
+    await nextTick();
+    expect(el.scrollTop).toBe(1000);
+    expect(out.unseen!.value).toBe(0);
+  });
+
+  it('滚轮向下不触发宽限，仍贴底跟随', async () => {
+    vi.spyOn(Date, 'now').mockImplementation(() => 1_000_000);
+    const el = await mountHost();
+    el.scrollTop = 0;
+    el.dispatchEvent(new WheelEvent('wheel', { deltaY: 100 }));
+    entries.value = [...entries.value, entry('2')];
+    await nextTick();
+    await nextTick();
+    expect(el.scrollTop).toBe(1000);
+    expect(out.unseen!.value).toBe(0);
+  });
+
+  it('真实回到底部后宽限解除，恢复贴底跟随', async () => {
+    const clock = { now: 1_000_000 };
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const el = await mountHost();
+    el.scrollTop = 0;
+    el.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 }));
+    entries.value = [...entries.value, entry('2')];
+    await nextTick();
+    await nextTick();
+    expect(el.scrollTop).toBe(0);
+
+    // 用户滚回底部且 scroll 事件已分发：宽限解除，此后新条目照常贴底
+    el.scrollTop = 1000;
+    out.onScroll!();
+    entries.value = [...entries.value, entry('3')];
+    await nextTick();
+    await nextTick();
+    expect(el.scrollTop).toBe(1000);
+    expect(out.unseen!.value).toBe(0);
   });
 
   it('jumpToLatest：清未读并回到最新', async () => {

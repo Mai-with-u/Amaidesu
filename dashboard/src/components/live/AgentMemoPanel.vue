@@ -195,6 +195,10 @@ function toggleExpanded(): void {
   border-radius: 6px;
   background: var(--el-fill-color-extra-light);
   overflow: hidden;
+  /* 纵向 flex：面板被外层压缩时由内容区让位并就地滚动（见 .memo-panel-body
+     的 min-height），而不是裁掉滚动条让下半截内容不可达 */
+  display: flex;
+  flex-direction: column;
 }
 
 .memo-panel-header {
@@ -220,6 +224,7 @@ function toggleExpanded(): void {
   gap: 8px 16px;
   padding: 4px 10px 10px;
   max-height: 240px;
+  min-height: 0;
   overflow-y: auto;
 }
 

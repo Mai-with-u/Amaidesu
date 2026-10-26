@@ -1414,9 +1414,12 @@ onMounted(() => {
   background: var(--bg-card);
 }
 
-/* 备忘录/待办面板：任务卡条下方、干预输入区上方的常驻观测条 */
+/* 备忘录/待办面板：任务卡条下方、干预输入区上方的常驻观测条。
+   允许让位：矮窗口下压缩自身（下限=标题行），内容由面板内部滚动消化；
+   固定不让位会把时间线滚动区挤到 0，时间线整体被裁剪且无法滚动 */
 .memo-panel-dock {
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-height: 28px;
   margin: 6px var(--spacing-md) 0;
 }
 
@@ -1543,7 +1546,9 @@ onMounted(() => {
 .stage-body {
   position: relative;
   flex: 1;
-  min-height: 0;
+  /* 时间线是本列主内容：备忘录面板与输入区把固定高度吃满后仍保底可读高度，
+     不足的差额由可让位的备忘录面板（.memo-panel-dock）承担 */
+  min-height: 120px;
 }
 .stage-body::before {
   content: '';
