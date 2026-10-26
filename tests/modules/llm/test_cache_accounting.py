@@ -113,6 +113,29 @@ async def test_engine_persists_cache_columns(conn_manager, usage: Usage, expecte
     assert _cache_columns(conn_manager) == [expected]
 
 
+class GatewayAliasClient(BaseLLMClient):
+    """网关别名端替身：响应 model 回上游自己的别名，与引用名/标识符都不同。"""
+
+    async def generate(self, request: GenerateRequest, *, model: str, **kwargs: Any) -> Response:
+        return Response(success=True, content="fake 回复", model="gateway-alias-n")
+
+
+async def test_engine_records_reference_name_not_response_alias(conn_manager) -> None:
+    """响应 model 是上游别名（如实测网关回 gemini-3.8-flash-n）：
+    落账键必须仍是引擎的模型引用名，否则计价查表与模型筛选口径被上游名字污染"""
+    with patch.dict(_CLIENT_DISPATCH, {"cacheprobe": GatewayAliasClient}):
+        manager = LLMManager(llm_repo=LLMRepo(conn_manager))
+        await manager.setup(FAKE_CONFIG)
+
+    result = await manager.generate("你好", profile="planner")
+    assert result.success is True
+    # 引擎在返回前把响应对象上的模型名也归一为引用名（Agent 回复卡等下游展示同口径）
+    assert result.model == "m1"
+    with conn_manager.transaction() as conn:
+        names = [r["model_name"] for r in conn.execute("SELECT model_name FROM llm_requests")]
+    assert names == ["m1"]
+
+
 @pytest.mark.parametrize(
     ("cache", "cache_price", "prompt", "hit", "miss", "expected_cost_in"),
     [

@@ -186,7 +186,8 @@ async def test_failover_advances_to_next_model_and_reports_all_failures() -> Non
         return _ok("success from m2", model="id-m2")
 
     response = await (await _setup(config, _backend(first_fails))).generate("Test", profile="planner")
-    assert (response.content, response.model) == ("success from m2", "id-m2")
+    # 引擎把响应 model 归一为引用名（m2），上游自报的标识符（id-m2）不出引擎
+    assert (response.content, response.model) == ("success from m2", "m2")
     assert calls == {"id-m1": 1, "id-m2": 1}
 
     async def always_fail(**kwargs):

@@ -815,11 +815,14 @@ class LLMManager:
             )
 
             if response is not None:
-                # 派生副本回填引擎侧字段（请求历史键 + 思考回传），不改写
-                # Client 返回的响应对象——它可能被客户端复用，改写会污染后续调用
+                # 派生副本回填引擎侧字段（请求历史键 + 模型名归一 + 思考回传），
+                # 不改写 Client 返回的响应对象——它可能被客户端复用，改写会污染后续调用
                 response = response.model_copy(
                     update={
                         "request_id": request_id,
+                        # 响应 model 是上游自报名（网关会回自己的渠道别名），统一
+                        # 归一为引用名，下游落账、展示与计价口径才不随上游漂移
+                        "model": resolved_model.model_name,
                         "reasoning_echo": _echo_reasoning(response, resolved_model),
                     }
                 )
@@ -1018,7 +1021,7 @@ class LLMManager:
             return estimate_breakdown(
                 request_id=request_id,
                 profile_name=profile_name,
-                model_name=result.model or model_name,
+                model_name=model_name,
                 system=sections.system,
                 messages=sections.messages,
                 tools=sections.tools,
@@ -1096,7 +1099,10 @@ class LLMManager:
                     self._llm_repo,
                     request_id=request_id,
                     profile_name=profile_name,
-                    model_name=result.model or model_name or "unknown",
+                    # 落账键必须用引擎自己的模型引用名：上游/网关会在响应的 model
+                    # 字段里回自己的别名（如实测 sheep 网关回 gemini-3.8-flash-n），
+                    # 响应名一旦入库会污染计价查表、模型筛选与费用归因口径
+                    model_name=model_name or "unknown",
                     request_type=request_type,
                     provider_name=provider_name,
                     model_prices=self._model_prices,
@@ -1113,7 +1119,7 @@ class LLMManager:
         self._write_request_payload(
             request_id=request_id,
             profile_name=profile_name,
-            model_name=result.model or model_name or "unknown",
+            model_name=model_name or "unknown",
             request_params=request_params,
             result=result,
             breakdown=breakdown,
