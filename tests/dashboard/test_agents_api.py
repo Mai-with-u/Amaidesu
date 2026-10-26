@@ -177,7 +177,7 @@ def test_delegate_registers_ledger_and_refusal_is_not_recorded(
 
     _agent(manager).accept_delegate = False
     refused = client.post("/api/v1/agents/sample_agent/delegate", json={"instruction": "再去挖矿"})
-    assert refused.status_code == 409 and "拒收" in refused.json()["detail"]
+    assert refused.status_code == 409 and "受理失败" in refused.json()["detail"]
     assert ledger.active_task_ids() == [task_id], "拒收不登记账本"
 
 
