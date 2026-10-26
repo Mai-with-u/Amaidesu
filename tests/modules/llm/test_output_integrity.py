@@ -34,7 +34,7 @@ async def test_unlimited_request_preserves_full_reply_and_does_not_modify_shared
     result = await client.generate(request, model="test-model")
     assert "max_tokens" not in sdk.chat.completions.create.call_args.kwargs
     assert result.content == full_text and result.finish_reason == "tool_calls"
-    await client.chat([{"role": "user", "content": "普通请求"}], model="test-model")
+    await client.generate(GenerateRequest(messages=[Message(role="user", parts=["普通请求"])]), model="test-model")
     assert "max_tokens" not in sdk.chat.completions.create.call_args.kwargs
 
 
@@ -59,7 +59,7 @@ async def test_streaming_preserves_length_reason_and_raw_incomplete_arguments() 
 
 
 async def test_engine_preserves_integrity_metadata_and_output_policy() -> None:
-    """经过真实引擎的新旧响应转换后，结束原因和原始错误参数仍完整保留。"""
+    """经过真实引擎的中立契约直出后，结束原因和原始错误参数仍完整保留。"""
     client, sdk = make_openai_client()
     raw = '{"design":'
     sdk.chat.completions.create.return_value = sdk_tool_reply(raw, "length")

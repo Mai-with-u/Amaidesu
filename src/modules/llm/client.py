@@ -1,13 +1,9 @@
 """LLM 客户端抽象与共享响应模型。
 
 Client 接口（Engine↔Client 契约）采用中立 payload：客户端接受
-``GenerateRequest``、返回 ``payload.Response``。实现类在
-``clients/<vendor>/`` 中注册到 ``clients`` 包的调度表（显式字典），
-本模块不再承载任何注册表机制。
-
-``LLMResponse`` 是 OpenAI 适配端内部 SDK 结果的归拢形态：适配端把各
-协议响应整理成它，再在公开边界转换为 ``payload.Response``；引擎与
-消费方一律只见中立契约。
+``GenerateRequest``、返回 ``payload.Response``，实现体内不再维护
+其他响应形状。实现类在 ``clients/<vendor>/`` 中注册到 ``clients``
+包的调度表（显式字典），本模块不承载任何注册表机制。
 """
 
 from __future__ import annotations
@@ -15,43 +11,10 @@ from __future__ import annotations
 import abc
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
-
-from src.modules.llm.payload import GenerateRequest, Reasoning, ReasoningFormat, Response
+from src.modules.llm.payload import GenerateRequest, Response
 
 OnDeltaCallback = Any
 """流式增量回调：(kind, text_delta)，kind ∈ {"reasoning", "content"}。"""
-
-
-class LLMResponse(BaseModel):
-    """LLM 响应结果（OpenAI 适配端内部形态）
-
-    适配端以它归拢 SDK 响应，公开边界统一转成 ``payload.Response``；
-    引擎与消费方不直接消费此形状。
-    """
-
-    success: bool
-    content: Optional[str] = None
-    model: Optional[str] = None
-    usage: Optional[Dict[str, int]] = None
-    tool_calls: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
-    # 结束原因在新旧响应转换之间保留，避免把容量上限中断误判为正常交付。
-    finish_reason: Optional[str] = None
-    reasoning_content: Optional[str] = None
-    # 思考的承载格式与可回传的思考，语义同 ``payload.Response`` 的同名字段
-    reasoning_format: Optional[ReasoningFormat] = None
-    reasoning_echo: Optional[Reasoning] = None
-    error: Optional[str] = None
-    # 本次调用的请求历史 ID（request_history_manager 落库键）。调用方（如
-    # Planner 决策事件）用它作为"查看完整请求"的指针；失败路径同样回填。
-    request_id: str = ""
-    # 厂商原始 usage dict 的 JSON 序列化字符串：追溯重放唯一兜底，解析即弃
-    # 链路上保留原始字节，存库字段 ``llm_requests.usage_raw_json`` 由此填充
-    usage_raw_json: Optional[str] = None
-    # 音频输出模态（generate_audio 路径）：base64 音频载荷与请求指定的封装
-    # 格式；文本路径恒为 None。语音文本经 transcript 回填 content，不在此重复
-    audio_base64: Optional[str] = None
-    audio_format: Optional[str] = None
 
 
 class BaseLLMClient(abc.ABC):

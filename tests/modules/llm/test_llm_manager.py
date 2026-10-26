@@ -10,7 +10,6 @@ import pytest
 
 from src.modules.llm.bootstrap import KNOWN_PROFILE_NAMES, ProfileNames, validate_profile_binding
 from src.modules.llm.clients import _CLIENT_DISPATCH
-from src.modules.llm.clients.openai.compat import normalize_tool_calls_for_protocol
 from src.modules.llm.engine import LLMManager, RetryConfig
 from src.modules.llm.payload import Response, Usage
 
@@ -51,24 +50,6 @@ async def _setup(config: dict, *backends: MagicMock, retry: RetryConfig | None =
     with patch.dict(_CLIENT_DISPATCH, {"openai": factory}):
         await manager.setup(config)
     return manager
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected_arguments"),
-    [
-        (
-            [{"id": "c1", "function": {"name": "assign", "arguments": {"content": "合成工作台"}}}],
-            '{"content": "合成工作台"}',
-        ),
-        ([{"id": "c1", "function": {"name": "reply", "arguments": '{"a": 1}'}}], '{"a": 1}'),
-        ([{"function": {"name": "x"}}], "{}"),
-    ],
-)
-def test_normalize_tool_calls_for_protocol(raw, expected_arguments) -> None:
-    (call,) = normalize_tool_calls_for_protocol(raw)
-    assert call["function"]["arguments"] == expected_arguments
-    assert call["type"] == "function" and call["id"] == raw[0].get("id", "")
-    assert normalize_tool_calls_for_protocol(None) == normalize_tool_calls_for_protocol([]) == []
 
 
 async def test_setup_builds_one_client_per_provider_and_price_table() -> None:

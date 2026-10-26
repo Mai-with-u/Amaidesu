@@ -1,11 +1,10 @@
-"""OpenAI 协议专属的转换工具：鉴权/URL 配置与 tool_calls 形状规整。"""
+"""OpenAI 协议专属的转换工具：鉴权/URL 配置。"""
 
 # pyright: reportDeprecated=false
 
-import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 
 class OpenAICompatibleAuthType(str, Enum):
@@ -81,27 +80,3 @@ def build_openai_compatible_client_config(
         default_headers=default_headers,
         default_query=default_query,
     )
-
-
-def normalize_tool_calls_for_protocol(tool_calls: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    """把 LLMResponse.tool_calls 规整为可安全喂回的 OpenAI 协议形态。
-
-    client 解析层返回的 ``function.arguments`` 是 dict（消费端友好）；
-    而 assistant 消息喂回时协议要求 ``function.arguments`` 为 JSON 字符串，
-    dict 直接透传会被严格端点拒绝（400 invalid type: map）。本函数是
-    喂回前的最后防线，输出只含协议字段。
-    """
-    normalized: List[Dict[str, Any]] = []
-    for tc in tool_calls or []:
-        func = tc.get("function") or {}
-        args = func.get("arguments")
-        if not isinstance(args, str):
-            args = json.dumps(args or {}, ensure_ascii=False, default=str)
-        normalized.append(
-            {
-                "id": tc.get("id", ""),
-                "type": "function",
-                "function": {"name": func.get("name", ""), "arguments": args},
-            }
-        )
-    return normalized

@@ -60,15 +60,14 @@ def _cache_columns(conn_manager: SQLiteConnectionManager) -> list[tuple[int, int
         (200, _OPENAI_STYLE, {"cache_hit_tokens": 100, "cache_miss_tokens": 100}),
         # DeepSeek 风格同名直取，不走反推
         (64, _DEEPSEEK_STYLE, {"cache_hit_tokens": 50, "cache_miss_tokens": 14}),
-        # 未上报：不含缓存键（下游映射为 None = 未上报）
+        # 未上报：缓存与思考字段保持 None（= 未上报，与"上报了 0"严格区分）
         (10, {}, {}),
     ],
 )
 def test_extract_usage_normalizes_cache_fields(prompt: int, fields: dict, expected: dict) -> None:
-    usage = OpenAIClient._extract_usage(
+    assert OpenAIClient._extract_usage(
         SimpleNamespace(prompt_tokens=prompt, completion_tokens=5, total_tokens=prompt + 5, **fields)
-    )
-    assert usage == {"prompt_tokens": prompt, "completion_tokens": 5, "total_tokens": prompt + 5, **expected}
+    ) == Usage(prompt_tokens=prompt, completion_tokens=5, total_tokens=prompt + 5, **expected)
     assert OpenAIClient._extract_usage(None) is None
 
 
@@ -88,7 +87,7 @@ async def test_record_call_outcome_persists_extracted_cache(conn_manager, prompt
         model_prices={},
         success=True,
         response_content="ok",
-        usage=extracted,
+        usage=extracted.model_dump() if extracted is not None else None,
     )
     assert _cache_columns(conn_manager) == [expected]
 

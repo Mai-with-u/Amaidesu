@@ -5,6 +5,7 @@ from typing import Any, NoReturn
 
 from json_repair import repair_json
 
+from src.modules.llm.payload import ToolCall
 from src.modules.logging import get_logger
 
 logger = get_logger("ToolArguments")
@@ -25,8 +26,8 @@ def _reject_constant(value: str) -> NoReturn:
     raise ValueError(f"JSON 不接受非有限数字：{value}")
 
 
-def decode_tool_call(call_id: str, name: str, raw: Any, *, strict: bool) -> dict[str, Any]:
-    """保留原始失败输出供模型修正，普通调用沿用已有语法修复策略。"""
+def decode_tool_call(call_id: str, name: str, raw: Any, *, strict: bool) -> ToolCall:
+    """SDK 工具调用 → 中立 ToolCall；保留原始失败输出供模型修正，普通调用沿用已有语法修复策略。"""
     error = None
     try:
         arguments = (
@@ -42,7 +43,8 @@ def decode_tool_call(call_id: str, name: str, raw: Any, *, strict: bool) -> dict
             arguments, error = {}, str(exc)
         else:
             arguments = repair_json(raw, return_objects=True)
-    result = {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
+    result = ToolCall(id=call_id, name=name, arguments=arguments)
     if error is not None:
-        result.update(raw_arguments=raw if isinstance(raw, str) else str(raw), arguments_error=error)
+        result.raw_arguments = raw if isinstance(raw, str) else str(raw)
+        result.arguments_error = error
     return result

@@ -11,15 +11,13 @@ import pytest
 from openai import APIStatusError
 
 from src.modules.llm.clients.openai.client import OpenAIClient
-from src.modules.llm.errors import FatalError, RetryableError
-from src.modules.llm.payload import GenerateRequest, ImagePart, Message, ToolCall
+from src.modules.llm.errors import FatalError, LLMInterruptedError, RetryableError
+from src.modules.llm.payload import GenerateRequest, ImagePart, Message, ToolCall, ToolSpec, Usage
 from tests.modules.llm.fakes import FakeStream, SDK_PATH, chunk, make_openai_client, sdk_reply, tool_delta, usage
 
-MESSAGES = [{"role": "user", "content": "hello"}]
 
-
-def _request(*parts: Any) -> GenerateRequest:
-    return GenerateRequest(messages=[Message(role="user", parts=list(parts or ["hi"]))])
+def _request(*parts: Any, **fields: Any) -> GenerateRequest:
+    return GenerateRequest(messages=[Message(role="user", parts=list(parts or ["hi"]))], **fields)
 
 
 def _sent(sdk_client: MagicMock) -> dict:
@@ -41,10 +39,12 @@ class _SdkUsage:
 async def test_chat_basic_and_slow_reply_ignores_legacy_timeout() -> None:
     client, sdk = make_openai_client({"timeout": 0.001})
     sdk.chat.completions.create.return_value = sdk_reply(usage=usage())
-    result = await client.chat(MESSAGES, model="test-model", temperature=0.7)
+    result = await client.generate(_request("hello"), model="test-model", temperature=0.7)
     assert (result.content, result.model) == ("world", "test-model")
-    assert result.usage == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-    sdk.chat.completions.create.assert_awaited_once_with(model="test-model", messages=MESSAGES, temperature=0.7)
+    assert result.usage == Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    sdk.chat.completions.create.assert_awaited_once_with(
+        model="test-model", messages=[{"role": "user", "content": "hello"}], temperature=0.7
+    )
 
     # 较慢的完整回复不会因旧 provider 时限被取消
     async def delayed(**kwargs: Any) -> Any:
@@ -52,10 +52,11 @@ async def test_chat_basic_and_slow_reply_ignores_legacy_timeout() -> None:
         return sdk_reply()
 
     sdk.chat.completions.create.side_effect = delayed
-    assert (await client.chat(MESSAGES, model="test-model")).content == "world"
+    assert (await client.generate(_request("hello"), model="test-model")).content == "world"
 
 
-async def test_chat_interrupt() -> None:
+async def test_chat_interrupt_aborts_with_classified_error() -> None:
+    """主动中断走 guarded_call 的分类异常（Engine 表消费 abort），不再折叠为失败响应。"""
     client, sdk = make_openai_client({"timeout": 5})
     interrupt_flag = asyncio.Event()
 
@@ -65,14 +66,14 @@ async def test_chat_interrupt() -> None:
 
     sdk.chat.completions.create.side_effect = slow_create
     asyncio.get_running_loop().call_later(0.1, interrupt_flag.set)
-    result = await client.chat(MESSAGES, model="test-model", interrupt_flag=interrupt_flag)
-    assert result.success is False and "中断" in result.error
+    with pytest.raises(LLMInterruptedError, match="中断"):
+        await client.generate(_request("hello"), model="test-model", interrupt_flag=interrupt_flag)
 
 
 async def test_vision_builds_image_parts() -> None:
     client, sdk = make_openai_client()
     sdk.chat.completions.create.return_value = sdk_reply(content="an image", reasoning_content="visual reasoning")
-    result = await client.vision(MESSAGES, [b"not-a-real-image"], model="test-model")
+    result = await client.generate_vision(_request("hello"), [b"not-a-real-image"], model="test-model")
 
     assert (result.content, result.reasoning_content) == ("an image", "visual reasoning")
     user_content = _sent(sdk)["messages"][-1]["content"]
@@ -86,10 +87,8 @@ async def test_tool_calls_parse_arguments(arguments: str) -> None:
     call = SimpleNamespace(id="call-1", type="function", function=SimpleNamespace(name="weather", arguments=arguments))
     sdk.chat.completions.create.return_value = sdk_reply(tool_calls=[call])
 
-    result = await client.chat(MESSAGES, model="test-model", tools=[{"type": "function", "function": {"name": "w"}}])
-    assert result.tool_calls == [
-        {"id": "call-1", "type": "function", "function": {"name": "weather", "arguments": {"city": "Tokyo"}}}
-    ]
+    result = await client.generate(_request("hello", tools=[ToolSpec(name="w")]), model="test-model")
+    assert result.tool_calls == [ToolCall(id="call-1", name="weather", arguments={"city": "Tokyo"})]
     assert _sent(sdk)["tool_choice"] == "auto"
 
 
@@ -104,7 +103,7 @@ async def test_tool_calls_parse_arguments(arguments: str) -> None:
 async def test_reasoning_parse_modes(mode: str, content: str, native, expected) -> None:
     client, sdk = make_openai_client({"reasoning_parse_mode": mode})
     sdk.chat.completions.create.return_value = sdk_reply(content=content, reasoning_content=native)
-    result = await client.chat(MESSAGES, model="test-model")
+    result = await client.generate(_request("hello"), model="test-model")
     assert (result.content, result.reasoning_content) == expected
 
 
@@ -157,10 +156,12 @@ async def test_streaming_emits_deltas_and_assembles_text() -> None:
         ]
     )
     received = []
-    result = await client.chat(MESSAGES, model="test-model", on_delta=lambda kind, text: received.append((kind, text)))
+    result = await client.generate(
+        _request("hello"), model="test-model", on_delta=lambda kind, text: received.append((kind, text))
+    )
 
     assert (result.content, result.reasoning_content) == ("你好", "想一想二")
-    assert result.usage == {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+    assert result.usage == Usage(prompt_tokens=7, completion_tokens=3, total_tokens=10)
     assert received == [("reasoning", "想一"), ("reasoning", "想二"), ("content", "你"), ("content", "好")]
 
 
@@ -176,12 +177,12 @@ async def test_streaming_accumulates_tool_call_fragments_without_emitting_them()
         ]
     )
     received = []
-    result = await client.chat(MESSAGES, model="test-model", on_delta=lambda kind, text: received.append((kind, text)))
+    result = await client.generate(
+        _request("hello"), model="test-model", on_delta=lambda kind, text: received.append((kind, text))
+    )
 
     assert received == [("reasoning", "决定回应")]
-    assert result.tool_calls == [
-        {"id": "call_1", "type": "function", "function": {"name": "reply", "arguments": {"speech": "大家好"}}}
-    ]
+    assert result.tool_calls == [ToolCall(id="call_1", name="reply", arguments={"speech": "大家好"})]
 
 
 async def test_streaming_create_error_falls_back_to_non_streaming() -> None:
@@ -189,7 +190,9 @@ async def test_streaming_create_error_falls_back_to_non_streaming() -> None:
     client, sdk = make_openai_client()
     sdk.chat.completions.create.side_effect = [Exception("stream_options is not supported"), sdk_reply(content="fb")]
     received = []
-    result = await client.chat(MESSAGES, model="test-model", on_delta=lambda kind, text: received.append((kind, text)))
+    result = await client.generate(
+        _request("hello"), model="test-model", on_delta=lambda kind, text: received.append((kind, text))
+    )
     assert (result.content, received, sdk.chat.completions.create.await_count) == ("fb", [], 2)
 
 
@@ -248,10 +251,10 @@ async def test_generate_translates_text_parts_and_tool_context() -> None:
     ],
 )
 def test_extract_usage_reasoning_tokens(vendor_fields: dict, expected) -> None:
-    usage = OpenAIClient._extract_usage(
+    extracted = OpenAIClient._extract_usage(
         SimpleNamespace(prompt_tokens=100, completion_tokens=20, total_tokens=120, **vendor_fields)
     )
-    assert usage.get("reasoning_tokens") == expected
+    assert (extracted.reasoning_tokens if extracted else None) == expected
 
 
 @pytest.mark.parametrize("streaming", [False, True])
