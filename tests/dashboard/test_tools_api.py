@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tomllib
 from pathlib import Path
 from typing import Any, Callable
@@ -510,3 +511,103 @@ def test_reconnect_provider_success_returns_report(make_client) -> None:
     resp = make_client(registry).post("/api/v1/tools/providers/vts/reconnect")
     assert resp.status_code == 200 and resp.json() == report
     assert registry.reconnect_calls == ["vts"]
+
+
+# 形状锁：响应模型接入后 JSON 输出（键集、键序、可选键的有无）与接入前逐字节一致
+
+
+def test_tools_listing_shape_lock_matches_pre_model_snapshot(make_client) -> None:
+    """清单端点输出与响应模型接入前固化的期望快照逐字节全等。
+
+    锁定点：同步工具不出现 result_event 键、异步工具出现在 health 之前；
+    参数可选键（description/default/minimum/maximum）仅源声明时出现；
+    health 恒有键（无历史为 null）。
+    """
+    health = {"state": "tripped", "failure_count": 2, "last_error": "boom", "tripped_at_ms": 1700000000000}
+    registry = _HealthRegistry({"vts_trigger_hotkey": health})
+    client = make_client(registry)
+
+    expected = {
+        "tools": [
+            {
+                "name": "vts_trigger_hotkey",
+                "full_name": "vts_vts_trigger_hotkey",
+                "description": "触发 VTS 热键",
+                "parameters": {
+                    "hotkey": {"type": "string", "required": True, "description": "热键名"},
+                    "speed": {"type": "number", "required": False, "default": 1.0, "minimum": 0.5, "maximum": 2.0},
+                },
+                "provider": "vts",
+                "kind": "sync",
+                "category": "avatar",
+                "disabled": False,
+                "owner_agent": "",
+                "supports_reconnect": False,
+                "health": {
+                    "state": "tripped",
+                    "failure_count": 2,
+                    "last_error": "boom",
+                    "tripped_at_ms": 1700000000000,
+                },
+            },
+            {
+                "name": "reply_to_user",
+                "full_name": "streamer_reply_to_user",
+                "description": "回复用户",
+                "parameters": {"text": {"type": "string", "required": True}},
+                "provider": "streamer",
+                "kind": "async",
+                "category": "streamer",
+                "disabled": False,
+                "owner_agent": "",
+                "supports_reconnect": False,
+                "result_event": "tool.result.reply_to_user",
+                "health": None,
+            },
+            {
+                "name": "framework_delegate",
+                "full_name": "framework_framework_delegate",
+                "description": "委派工作",
+                "parameters": {},
+                "provider": "framework",
+                "kind": "sync",
+                "category": "framework",
+                "disabled": False,
+                "owner_agent": "",
+                "supports_reconnect": False,
+                "health": None,
+            },
+        ]
+    }
+    resp = client.get("/api/v1/tools")
+    assert resp.status_code == 200
+    # 字符串全等同时锁键集与键序（json.dumps 保持 dict 字面量的插入序）
+    assert resp.text == json.dumps(expected, ensure_ascii=False, separators=(",", ":"))
+
+
+def test_tools_invoke_and_toggle_shape_lock(make_client) -> None:
+    """调试调用与开关写回端点恒全键，键序与响应模型接入前一致。"""
+    client = make_client()
+
+    resp = client.post("/api/v1/tools/vts_vts_trigger_hotkey/invoke", json={"arguments": {}})
+    assert resp.status_code == 200
+    body = resp.json()
+    # 时间戳随时刻变化，归零后做字节级比较
+    body["timestamp_ms"] = 0
+    assert json.dumps(body, ensure_ascii=False, separators=(",", ":")) == json.dumps(
+        {
+            "success": True,
+            "content": "ok",
+            "blocks": [],
+            "error_message": "",
+            "structured_content": None,
+            "duration_ms": 0,
+            "timestamp_ms": 0,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+    resp = client.post("/api/v1/tools/vts_vts_trigger_hotkey/control", json={"action": "disable"})
+    assert resp.status_code == 200
+    assert list(resp.json().keys()) == ["success", "enabled", "message"]

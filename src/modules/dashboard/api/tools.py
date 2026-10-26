@@ -28,14 +28,20 @@ server 清单变化换血），再对归属该 Provider 的已熔断工具做探
 """
 
 import json
-from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.modules.dashboard.dependencies import get_dashboard_server, server_component
 from src.modules.dashboard.schemas.tool_catalog import ToolCatalogResponse
-from src.modules.dashboard.schemas.tools import ProviderControlRequest, ToolInvokeRequest
+from src.modules.dashboard.schemas.tools import (
+    ProviderControlRequest,
+    ToolInvokeRequest,
+    ToolInvokeResponse,
+    ToolListResponse,
+    ToolToggleResponse,
+)
 from src.modules.dashboard.services.component_runtime import ComponentRuntimeContext
 from src.modules.dashboard.services.config_adapter import ConfigApplyOutcome, apply_config_updates
 from src.modules.dashboard.services.tool_catalog import (
@@ -76,12 +82,20 @@ def _get_tools_config(server: "DashboardServer") -> Dict[str, Any]:
     return tools_cfg if isinstance(tools_cfg, dict) else {}
 
 
-@router.get("/tools", summary="列出所有已注册工具（含 provider/kind/category 元数据）")
+@router.get(
+    "/tools",
+    response_model=ToolListResponse,
+    # exclude_unset：result_event / 参数可选键按"源声明才输出"的原样透出
+    # （同步工具不出现 result_event 键、未声明 default 的参数不出现 default 键）；
+    # health 恒有键（无历史为 null），入参显式携带不受 exclude_unset 影响
+    response_model_exclude_unset=True,
+    summary="列出所有已注册工具（含 provider/kind/category 元数据）",
+)
 async def list_tools(
     provider: Optional[str] = None,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
     registry: RegistryDep = None,  # noqa: B008
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> ToolListResponse:
     """工具注册表只读内省（含停用工具，``disabled`` 字段标记状态）。
 
     Args:
@@ -166,14 +180,18 @@ def _toggle_message(outcome: ConfigApplyOutcome, subject: str, *, enable: bool) 
     return f"{subject} 已{action_text}{where}，{effect}"
 
 
-@router.post("/tools/categories/{category}/{key}/control", summary="提供者开关写回（重启后生效）")
+@router.post(
+    "/tools/categories/{category}/{key}/control",
+    response_model=ToolToggleResponse,
+    summary="提供者开关写回（重启后生效）",
+)
 async def control_tool_provider(
     category: str,
     key: str,
     request: ProviderControlRequest,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
     registry: RegistryDep = None,  # noqa: B008
-) -> Dict[str, Any]:
+) -> ToolToggleResponse:
     """把提供者开关写回其声明配置（配置写路径统一编排）。
 
     写回位置按成员类型区分（点分键，API 键带 scope 前缀）：
@@ -250,13 +268,17 @@ async def control_tool_provider(
     }
 
 
-@router.post("/tools/{full_name}/control", summary="单个工具停用/启用（写 [tools].disabled_tools，重启后生效）")
+@router.post(
+    "/tools/{full_name}/control",
+    response_model=ToolToggleResponse,
+    summary="单个工具停用/启用（写 [tools].disabled_tools，重启后生效）",
+)
 async def control_tool(
     full_name: str,
     request: ProviderControlRequest,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
     registry: RegistryDep = None,  # noqa: B008
-) -> Dict[str, Any]:
+) -> ToolToggleResponse:
     """把工具加入/移出 ``tools.disabled_tools`` 停用列表（统一写回器落盘）。
 
     停用的工具仍保留在注册表中（工具页可见全集），但对 LLM 不可见且调用被
@@ -306,13 +328,17 @@ async def control_tool(
 _MAX_ARGUMENTS_BYTES = 64 * 1024
 
 
-@router.post("/tools/{full_name}/invoke", summary="调试调用工具（与 Agent 同路径经 registry 真实执行）")
+@router.post(
+    "/tools/{full_name}/invoke",
+    response_model=ToolInvokeResponse,
+    summary="调试调用工具（与 Agent 同路径经 registry 真实执行）",
+)
 async def invoke_tool(
     full_name: str,
     request: ToolInvokeRequest,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
     registry: RegistryDep = None,  # noqa: B008
-) -> Dict[str, Any]:
+) -> ToolInvokeResponse:
     """人手调试调用：走 ``registry.invoke``，与 Planner/Agent 完全同路径。
 
     停用/熔断短路、熔断计数、``tool.result`` 事件广播全部真实生效——调试
