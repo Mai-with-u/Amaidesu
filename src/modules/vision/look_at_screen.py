@@ -15,7 +15,7 @@
         → ToolExecutionResult (text content + image block + structured_content)
 
 落地形态：
-- 后端注入即可用：测试用 ``FakeScreenCapture`` + ``FakeTextReader`` 跑通感知-推进闭环
+- 后端注入即可用：测试替身（见 tests/modules/vision/fakes.py）跑通感知-推进闭环
 - 生产环境：注入 ``MssScreenCapture`` + ``LlmVisionTextReader``（组合根 ``main.py``）
 - 零参 ``invoke(arguments={})`` 必须可用（``text_adv`` Agent 的调用形态）
 
@@ -86,7 +86,7 @@ class ScreenCapture(Protocol):
     """屏幕采集后端协议（依赖注入点）。
 
     生产实现为 ``MssScreenCapture``（基于 mss 库，支持多显示器 / 区域相对换算
-    / 越界 clamp / 真缩放）；测试用 ``FakeScreenCapture``。后端缺失或抓取
+    / 越界 clamp / 真缩放）；测试用 Fake 替身（tests/modules/vision/fakes.py）。后端缺失或抓取
     失败时 ``image=None``，由 ``LookAtScreenProvider`` 走降级路径。
     """
 
@@ -508,7 +508,7 @@ class LookAtScreenProvider(BaseToolProvider):
                     text=(
                         "[look_at_screen] 后端 ScreenCapture 未注入；"
                         "返回空快照。请在生产 wiring 处注入 MssScreenCapture；"
-                        "测试场景下注入 FakeScreenCapture 即可。"
+                        "测试场景下注入 Fake 替身（见 tests/modules/vision/fakes.py）即可。"
                     ),
                 ),
             ],
@@ -549,127 +549,6 @@ class LookAtScreenProvider(BaseToolProvider):
             timestamp_ms=finished_ms,
             duration_ms=int(latency_ms),
         )
-
-
-# ---------------------------------------------------------------------------
-# Fake 后端（测试 / 默认无依赖时使用）
-# ---------------------------------------------------------------------------
-
-
-class FakeScreenCapture:
-    """测试用 ScreenCapture，可注入预置的截图结果序列。
-
-    新协议形态：``capture(monitor_index, region=None, max_width=None)``，与
-    生产 ``MssScreenCapture`` 同形（Task 4 收口后协议已统一）。
-
-    Example:
-        >>> cap = FakeScreenCapture()
-        >>> cap.queue_png(b"\\x89PNG...fake bytes...", width=1920, height=1080)
-        >>> provider = LookAtScreenProvider(screen_capture=cap)
-    """
-
-    def __init__(self) -> None:
-        self._queue: List[ScreenCaptureResult] = []
-        self.calls: List[dict[str, Any]] = []
-        self._raise: Optional[BaseException] = None
-
-    def queue(self, result: ScreenCaptureResult) -> None:
-        """入队一个采集结果（下次 capture 调用返回）。"""
-        self._queue.append(result)
-
-    def queue_png(self, image_bytes: bytes, *, width: int = 1920, height: int = 1080) -> None:
-        """便捷方法：入队一个 PNG 图像。"""
-        self.queue(
-            ScreenCaptureResult(
-                image=image_bytes,
-                width=width,
-                height=height,
-                mime_type="image/png",
-                captured_at_ms=int(time.time() * 1000),
-                monitor_index=1,
-            )
-        )
-
-    def queue_empty(self) -> None:
-        """便捷方法：入队一个空 result（image=None），代表无显示/无权限。"""
-        self.queue(ScreenCaptureResult(captured_at_ms=int(time.time() * 1000)))
-
-    def set_raise(self, exc: Optional[BaseException]) -> None:
-        """下一次 capture 调用抛该异常（用于测试 capture 异常降级）。"""
-        self._raise = exc
-
-    def capture(
-        self,
-        monitor_index: int,
-        region: Optional[Tuple[int, int, int, int]] = None,
-        max_width: Optional[int] = None,
-    ) -> ScreenCaptureResult:
-        self.calls.append(
-            {
-                "monitor_index": int(monitor_index),
-                "region": region,
-                "max_width": max_width,
-            }
-        )
-        if self._raise is not None:
-            exc = self._raise
-            self._raise = None
-            raise exc
-        if self._queue:
-            return self._queue.pop(0)
-        # 缺省：返回空 result（代表无显示/无图像）
-        return ScreenCaptureResult(captured_at_ms=int(time.time() * 1000), monitor_index=int(monitor_index))
-
-
-class FakeTextReader:
-    """测试用 TextReader，可注入预置的文本结果序列（异步契约）。"""
-
-    def __init__(self) -> None:
-        self._queue: List[str] = []
-        self.calls: List[dict[str, Any]] = []
-        self._raise: Optional[BaseException] = None
-        self._hang_until: Optional[float] = None  # 运行中事件循环的 monotonic 截止时刻
-
-    def queue_text(self, text: str) -> None:
-        self._queue.append(text)
-
-    def set_raise(self, exc: Optional[BaseException]) -> None:
-        """下一次 read 调用抛该异常（用于测试 reader 异常降级）。"""
-        self._raise = exc
-
-    def set_hang_until_ms(self, deadline_ms_from_now: int) -> None:
-        """挂起到指定时间点后返回空串（用于测试 reader 超时降级）。"""
-        loop_now = asyncio.get_running_loop().time()
-        self._hang_until = loop_now + deadline_ms_from_now / 1000.0
-
-    async def read(
-        self,
-        image_bytes: bytes,
-        *,
-        mime_type: str = "image/png",
-        question: Optional[str] = None,
-    ) -> str:
-        self.calls.append(
-            {
-                "image_bytes_len": len(image_bytes),
-                "mime_type": mime_type,
-                "question": question,
-            }
-        )
-        if self._raise is not None:
-            exc = self._raise
-            self._raise = None
-            raise exc
-        if self._hang_until is not None:
-            now = asyncio.get_running_loop().time()
-            remaining = self._hang_until - now
-            if remaining > 0:
-                await asyncio.sleep(remaining)
-            self._hang_until = None
-            return ""
-        if self._queue:
-            return self._queue.pop(0)
-        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -752,8 +631,6 @@ __all__ = [
     "build_look_at_screen_spec",
     "PROVIDER_NAME",
     "TOOL_NAME",
-    "FakeScreenCapture",
-    "FakeTextReader",
     "LlmVisionTextReader",
     "SCREEN_VLM_PROMPT_KEY",
     "SCREEN_VLM_SYSTEM_KEY",

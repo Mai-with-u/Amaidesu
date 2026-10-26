@@ -22,8 +22,6 @@ registry.register_provider(provider)
 """
 
 from src.modules.vision.look_at_screen import (
-    FakeScreenCapture,
-    FakeTextReader,
     LlmVisionTextReader,
     LookAtScreenProvider,
     ScreenCapture,
@@ -38,8 +36,6 @@ __all__ = [
     "ScreenCapture",
     "ScreenCaptureResult",
     "TextReader",
-    "FakeScreenCapture",
-    "FakeTextReader",
     "LlmVisionTextReader",
     "build_look_at_screen_spec",
     "MonitorInfo",
