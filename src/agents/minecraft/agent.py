@@ -20,7 +20,6 @@ import asyncio
 import json
 import time
 import uuid
-from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
 from copy import deepcopy
@@ -61,8 +60,9 @@ from src.agents.minecraft.notice_router import (
     route_body_event,
 )
 from src.agents.minecraft.skill_support import SkillSupport
-from src.agents.minecraft.state import MinecraftAgentState, MinecraftInstruction, WakeEvenIdle
+from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
 from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
+from src.agents.minecraft.wake_queue import WakeQueue, opens_task
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.context import PrefixGuard, TailImages
 from src.modules.events.event_bus import EventBus
@@ -190,9 +190,9 @@ class MinecraftAgent(BaseAgent):
         # 命令驱动运行骨架：worker 等命令信号，收到命令后持续推进当前游戏任务。
         self._worker_task: Optional[asyncio.Task[None]] = None
         self._wake_event: asyncio.Event = asyncio.Event()
-        # 指令队列：委派与递话是 MinecraftInstruction，宿主的目标通知是 (空任务号, 正文)，
-        # 计时到点与 Mod 挂出的决策是 WakeEvenIdle（闲着也开批）
-        self._message_queue: Deque[tuple] = deque()
+        # 消息队列：队列项协议（谁能开批、谁能被替换、谁能被撤）收在 WakeQueue 一处；
+        # 本 Agent 只做投递、消费与"能否开批"的判断
+        self._wake_queue = WakeQueue()
         # 原始指令跟随逻辑任务，不能因一次后台通知重新开批就丢失。
         self._task_instructions: List[str] = []
         self._task_steps = 0
@@ -245,8 +245,8 @@ class MinecraftAgent(BaseAgent):
             llm_getter=lambda: self._llm,
             emit=lambda message, scene=None: self._emit_game_event("attention_required", message, scene=scene or ""),
         )
-        # 挂在消息队列里、还没被模型读到的那条天色通知：新的天色来了就把它换掉，队列里只留最新一条。
-        self._sky_notice: Optional[tuple] = None
+        # 挂在消息队列里、还没被模型读到的那条天色通知由 WakeQueue 簿记：新的天色来了就把它换掉，
+        # 队列里只留最新一条。
         self._task_reported = False
         self._wait_requested = False
 
@@ -258,6 +258,11 @@ class MinecraftAgent(BaseAgent):
         self._running = False
 
         self._logger.info(f"MinecraftAgent 已构造 (llm={'已注入' if llm_manager else '无'}@{MINECRAFT_PROFILE})")
+
+    @property
+    def _message_queue(self) -> Deque[Any]:
+        """消息队列本体的只读别名（测试与通知去重直接读；写入走 ``self._wake_queue`` 的投递方法）。"""
+        return self._wake_queue.items
 
     # ==================================================================
     # 生命周期
@@ -288,7 +293,7 @@ class MinecraftAgent(BaseAgent):
         del event_name, source
         self._live_active = False
         dropped = len(self._message_queue)
-        self._message_queue.clear()
+        self._wake_queue.clear()
         settled = self._delegations.settle_on_live_end()
         self._logger.info(
             f"场次已结束（id={payload.live_session_id}）：minecraft 收工"
@@ -501,7 +506,7 @@ class MinecraftAgent(BaseAgent):
             self._logger.warning(f"收工态拒收递话（source={source or '未知'}）：{content[:60]}")
             return False
         label = PROMPT_SOURCE_LABELS.get(source, "")
-        self._message_queue.append(MinecraftInstruction("", f"{label}\n{content}" if label else content))
+        self._wake_queue.push_instruction("", f"{label}\n{content}" if label else content)
         self._wake_event.set()
         self._logger.info(f"MinecraftAgent 收到递话（source={source or '未知'}）：{content[:60]}")
         return True
@@ -517,7 +522,7 @@ class MinecraftAgent(BaseAgent):
             # 接了只会拿截屏翻显示器找游戏窗口白耗几分钟。直接拒收，原因原样回给派活的一方，等连上再派。
             self._logger.warning(f"游戏没连上，拒收委派（task_id={task_id}）：{instruction[:60]}")
             return GAME_NOT_CONNECTED
-        self._message_queue.append(MinecraftInstruction(task_id, instruction))
+        self._wake_queue.push_instruction(task_id, instruction)
         self._wake_event.set()
         self._logger.info(f"MinecraftAgent 收到委派（task_id={task_id}）：{instruction[:60]}")
         return None
@@ -528,9 +533,7 @@ class MinecraftAgent(BaseAgent):
         还排在消息队列里、没被任何批次吸收的委派单同样可撤：直接出队并记账，
         不注入停手通知（模型根本没见过这条指令，无需停手）。
         """
-        queued = [item for item in self._message_queue if item[0] == task_id]
-        if queued:
-            self._message_queue = deque(item for item in self._message_queue if item[0] != task_id)
+        if self._wake_queue.drop_task(task_id):
             self._delegations.reject(task_id, summary=f"被取消（source={source or '未知'}）")
             self._logger.info(f"MinecraftAgent 队列中的委派已撤（task_id={task_id}, source={source or '未知'}）")
             return True
@@ -550,11 +553,8 @@ class MinecraftAgent(BaseAgent):
             if not (self._running and self._message_queue) or not self._live_active:
                 continue
             # 任务交付或挂起后等主播新指令，后台通知只补充已知状态，不独立开新任务；
-            # 闲着也叫醒的通知除外：计时到点是模型自己要的叫醒，Mod 挂出的死亡恢复决策没人答角色就一直停在死亡屏幕，
-            # 闲着时不开批它们就永远没人管。
-            if (self._task_finished or self._task_suspended) and not any(
-                isinstance(message, (MinecraftInstruction, WakeEvenIdle)) for message in self._message_queue
-            ):
+            # 闲着也叫醒的通知除外，判定收在 WakeQueue（can_wake）一处
+            if (self._task_finished or self._task_suspended) and not self._wake_queue.can_wake():
                 continue
             try:
                 await self._run_task()
@@ -626,14 +626,12 @@ class MinecraftAgent(BaseAgent):
             if self._message_queue:
                 action_reminded = False
             while self._message_queue:
-                queued = self._message_queue.popleft()
+                queued = self._wake_queue.pop()
                 task_id, content = queued
-                # 闲着也叫醒的通知（计时到点、Mod 挂出的决策）轮到读时才看任务状态：已交付就和一条指令一样开新任务
-                # （计时的备注、要回答的决策就是这次要做的事）；挂起着就接着原任务做，不记成原始指令；
-                # 任务进行中只是一条普通通知。
-                if isinstance(queued, MinecraftInstruction) or (
-                    isinstance(queued, WakeEvenIdle) and self._task_finished
-                ):
+                # 是否开任务收在 WakeQueue.opens_task 一处：闲着也叫醒的通知（计时到点、Mod 挂出的决策）
+                # 轮到读时才看任务状态——已交付就和一条指令一样开新任务（计时的备注、要回答的决策就是
+                # 这次要做的事）；挂起着就接着原任务做，不记成原始指令；任务进行中只是一条普通通知。
+                if opens_task(queued, task_finished=self._task_finished):
                     if self._task_finished:
                         self._start_new_task(messages, system_message)
                         opening_due = True
@@ -1084,23 +1082,20 @@ class MinecraftAgent(BaseAgent):
         if not self._live_active:
             self._logger.info(f"收工态不叫醒：{content[:60]}")
             return
-        self._message_queue.append(WakeEvenIdle("", content))
+        self._wake_queue.push_wake_even_idle(content)
         self._wake_event.set()
 
     def _carry_sky_notice(self, content: str) -> None:
         """挂一条不唤醒模型的通知，队列里只留最新一条（天色用）。
 
         随本批下一步或下一次唤醒（目标结束、提问、暂停、主播新指令）带给模型；
-        任务已交付时不挂：空闲的游戏 Agent 不会处理它，等到下个任务才读到只会是过时的天色。
+        任务已交付时不挂：空闲的游戏 Agent 不会处理它，等到下个任务才读到只会是过时的天色，
+        还没被读到的上一条也一并撤下。替换与只留最新的簿记收在 WakeQueue。
         """
-        # 先撤下还没被读到的上一条，再按任务是否还在进行决定挂不挂这一条。
-        stale, self._sky_notice = self._sky_notice, None
-        if stale is not None and stale in self._message_queue:
-            self._message_queue.remove(stale)
         if not self._batch_active and self._task_finished:
+            self._wake_queue.drop_sky_notice()
             return
-        self._sky_notice = ("", content)
-        self._message_queue.append(self._sky_notice)
+        self._wake_queue.replace_sky_notice(content)
 
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """账本的变化回到这里：目标的成败已经由事件流直接送达，账本只补"长时间没进展"的告警。"""
@@ -1113,7 +1108,7 @@ class MinecraftAgent(BaseAgent):
         )
 
     def _inject_wakeup_message(self, content: str) -> None:
-        self._message_queue.append(("", content))
+        self._wake_queue.push_notice(content)
         self._wake_event.set()
 
     # ==================================================================
