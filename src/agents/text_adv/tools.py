@@ -15,6 +15,8 @@
   ``structured_content["error"]``，不发 ``game.error``——感知失败不污染
   事件流是屏幕线的既有契约；只有观察循环整体死亡才发 ``game.error``
   （由 Agent 承担，工具绝不发事件）
+- 采集语义（窗口护栏/稳定帧/读屏/区域换算）经 ``agent.session`` 的
+  :class:`ScreenSession` 单点承担——会话管采集、本类管处置
 - 观察循环由 Agent 自持（经 ``agent.set_auto`` 翻标志拉起/停止），工具
   绝不自持循环
 
@@ -27,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, ClassVar, Dict, Iterable, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
@@ -40,9 +42,9 @@ from src.modules.tools.provider import BaseToolProvider
 from .agent import TextAdvGameAgent
 from .coords import vlm_xy_to_screen
 from .input import InputBackend
-from .screen import StableFrameResult, text_key, wait_stable
+from .screen import text_key
+from .session import MonitorResolver, query_monitor_geometry
 from .vlm import ScreenReading
-from .window import WindowInfo
 
 logger = get_logger("TextAdvTools")
 
@@ -58,60 +60,6 @@ STREAMER_GUIDE = (
     "想手动逐屏看就 text_adv_set_auto(on=false) 再用 text_adv_advance，随时用 text_adv_get_state 看当前屏。"
     "它没有后台任务：不要对它用 framework_delegate 或 framework_prompt。"
 )
-
-
-# ---------------------------------------------------------------------------
-# 监视器几何（坐标反算的显示器原点来源；可注入替换以便测试）
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class MonitorGeometry:
-    """单台显示器的虚拟桌面几何（物理像素）。
-
-    Attributes:
-        left: 显示器左上角在虚拟桌面坐标系中的绝对 X
-        top: 显示器左上角在虚拟桌面坐标系中的绝对 Y
-        width: 显示器宽度（物理像素）
-        height: 显示器高度（物理像素）
-    """
-
-    left: int
-    top: int
-    width: int
-    height: int
-
-
-MonitorResolver = Callable[[int], Optional[MonitorGeometry]]
-
-
-def _query_monitor_geometry(monitor_index: int) -> Optional[MonitorGeometry]:
-    """按显示器编号查询虚拟桌面几何（mss 的 monitors 表，[0] 为全体桌面）。
-
-    查询失败（库缺失 / 编号越界 / 异常）返回 ``None``，调用方据此判定
-    坐标链路不可用并走拒绝路径。
-    """
-    try:
-        # 可选重型依赖延迟加载：mss 缺失或查询失败都走下方降级路径（返回 None），
-        # 调用方按坐标链路不可用拒绝
-        import mss
-
-        with mss.mss() as sct:
-            monitors = sct.monitors
-            idx = monitor_index + 1
-            if idx >= len(monitors):
-                logger.error(f"监视器原点查询失败：编号 {monitor_index} 越界（共 {len(monitors) - 1} 台）")
-                return None
-            mon = monitors[idx]
-            return MonitorGeometry(
-                left=int(mon["left"]),
-                top=int(mon["top"]),
-                width=int(mon["width"]),
-                height=int(mon["height"]),
-            )
-    except Exception as exc:  # noqa: BLE001 - 坐标链路不可用按拒绝处理，不上抛
-        logger.exception(f"监视器原点查询失败（monitor={monitor_index}）: {type(exc).__name__}: {exc}")
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +195,9 @@ class TextAdvToolProvider(BaseToolProvider):
     """文字冒险 Agent 工具 Provider（provider="text_adv"）
 
     持有 Agent 主体与键鼠注入后端：动作（按键/点击）经 ``input_backend``
-    触达真实游戏，感知与观察循环经 ``agent`` 承担；监视器原点解析经
+    触达真实游戏；感知（窗口护栏/稳定帧/读屏/区域换算）经 ``agent.session``
+    的 :class:`ScreenSession` 承担（会话管采集、本类管处置——护栏失败回执
+    错误、感知失败降级为 capture_failed 回执）；监视器原点解析经
     ``monitor_resolver``（默认查 mss 的 monitors 表，测试可注入假件）。
 
     注入模式（继承 + 构造注入）：
@@ -257,7 +207,7 @@ class TextAdvToolProvider(BaseToolProvider):
 
     agent: TextAdvGameAgent
     input_backend: InputBackend
-    monitor_resolver: MonitorResolver = field(default=_query_monitor_geometry)
+    monitor_resolver: MonitorResolver = field(default=query_monitor_geometry)
 
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
     category: ClassVar[str] = "game"
@@ -305,9 +255,9 @@ class TextAdvToolProvider(BaseToolProvider):
 
     async def _invoke_advance(self, started_ms: int) -> ToolExecutionResult:
         cfg = self.agent.typed_config
-        ok, reason = self._guard_window()
-        if not ok:
-            return self._fail("text_adv_advance", started_ms, reason or "窗口护栏未通过")
+        refusal = self._refuse_without_window("text_adv_advance", started_ms)
+        if refusal is not None:
+            return refusal
 
         key = cfg.keys.get("advance", "space")
         try:
@@ -316,8 +266,8 @@ class TextAdvToolProvider(BaseToolProvider):
             logger.exception(f"推进按键失败（key={key}）: {type(exc).__name__}: {exc}")
             return self._fail("text_adv_advance", started_ms, f"推进按键失败: {type(exc).__name__}: {exc}")
 
-        stable = await self._stable_frame()
-        reading = await self._read_screen()
+        stable = await self.agent.session.stable_frame()
+        reading = await self._read_screen_quietly()
         if stable is None or not stable.image or reading is None or not reading.parse_ok:
             detail = (
                 "画面采集失败"
@@ -342,12 +292,12 @@ class TextAdvToolProvider(BaseToolProvider):
         except ValueError:
             return self._fail("text_adv_choose", started_ms, f"option 必须是整数序号，得到 {raw_option!r}")
 
-        ok, reason = self._guard_window()
-        if not ok:
-            return self._fail("text_adv_choose", started_ms, reason or "窗口护栏未通过")
+        refusal = self._refuse_without_window("text_adv_choose", started_ms)
+        if refusal is not None:
+            return refusal
 
         # 每次调用先重读当前屏：不维护跨屏脏表，所见即所点
-        reading = await self._read_screen()
+        reading = await self._read_screen_quietly()
         if reading is None or not reading.parse_ok:
             detail = reading.parse_error if reading is not None else "读屏调用失败"
             return self._fail("text_adv_choose", started_ms, f"重读当前屏失败，放弃选择：{detail}")
@@ -370,7 +320,7 @@ class TextAdvToolProvider(BaseToolProvider):
         geometry = self.monitor_resolver(self.agent.typed_config.monitor_index)
         if geometry is None:
             return self._fail("text_adv_choose", started_ms, "监视器原点查询失败，坐标链路不可用")
-        coords_region = self._coords_region(geometry)
+        coords_region = self.agent.session.coords_region(geometry)
         if reading.sent_width <= 0:
             return self._fail("text_adv_choose", started_ms, "识别图像宽度未知，坐标链路不可用")
         abs_xy = vlm_xy_to_screen(chosen.vlm_xy, reading.sent_width, coords_region, (geometry.left, geometry.top))
@@ -388,8 +338,8 @@ class TextAdvToolProvider(BaseToolProvider):
             return self._fail("text_adv_choose", started_ms, f"选项点击失败: {type(exc).__name__}: {exc}")
 
         # 点击后验证：等稳定后重读，选项屏应消失或正文文本变化；不过则不二次点击
-        stable = await self._stable_frame()
-        verified = await self._read_screen()
+        stable = await self.agent.session.stable_frame()
+        verified = await self._read_screen_quietly()
         changed = (
             stable is not None
             and stable.image
@@ -422,9 +372,9 @@ class TextAdvToolProvider(BaseToolProvider):
         notice: Optional[str] = None
         button_xy = self.agent.typed_config.auto_button_xy
         if button_xy is not None:
-            ok, reason = self._guard_window()
-            if not ok:
-                return self._fail("text_adv_set_auto", started_ms, reason or "窗口护栏未通过")
+            refusal = self._refuse_without_window("text_adv_set_auto", started_ms)
+            if refusal is not None:
+                return refusal
             geometry = self.monitor_resolver(self.agent.typed_config.monitor_index)
             if geometry is not None:
                 abs_xy = (geometry.left + button_xy[0], geometry.top + button_xy[1])
@@ -448,59 +398,33 @@ class TextAdvToolProvider(BaseToolProvider):
     # 内部辅助
     # ==================================================================
 
-    def _guard_window(self) -> Tuple[bool, Optional[str]]:
-        """窗口护栏：查找游戏窗口并真夺焦（advance 是显式命令，允许夺焦）。
+    def _refuse_without_window(self, tool_name: str, started_ms: int) -> Optional[ToolExecutionResult]:
+        """窗口护栏（工具路径）：查找游戏窗口并真夺焦（advance 是显式命令，允许夺焦）。
+
+        处置归本类：护栏未通过即回执失败结果（观察循环的同一失败则停循环）。
 
         Returns:
-            ``(通过, 失败原因)``；通过时原因为 ``None``。
+            护栏未通过时为失败结果；通过时为 ``None``。
         """
-        window_backend = self.agent._window_backend  # noqa: SLF001 - 同包感知依赖
-        keyword = self.agent.typed_config.game_window_title_keyword
-        win: Optional[WindowInfo] = window_backend.find(keyword)
-        if win is None:
-            return False, f"未找到游戏窗口（标题关键词={keyword!r}）"
-        if not window_backend.focus(win):
-            return False, f"游戏窗口夺焦失败（title={win.title!r}）"
-        return True, None
+        found = self.agent.session.find_window()
+        if not found.ok or found.win is None:
+            return self._fail(tool_name, started_ms, found.reason or "窗口护栏未通过")
+        focus_reason = self.agent.session.focus_window(found.win)
+        if focus_reason is not None:
+            return self._fail(tool_name, started_ms, focus_reason)
+        return None
 
-    async def _stable_frame(self) -> Optional[StableFrameResult]:
-        """等待画面稳定；采集异常按感知失败降级（返回 ``None``，不外抛）。"""
-        cfg = self.agent.typed_config
-        try:
-            return await wait_stable(
-                self.agent._capture,  # noqa: SLF001 - 同包感知依赖
-                self._capture_region(),
-                cfg.monitor_index,
-                sample_ms=cfg.stability_sample_ms,
-                consecutive=cfg.stability_consecutive,
-                timeout_ms=cfg.stability_timeout_ms,
-            )
-        except Exception as exc:  # noqa: BLE001 - 采集异常是感知失败，不是工具异常
-            logger.warning(f"稳定判定期间采集异常: {type(exc).__name__}: {exc}")
-            return None
+    async def _read_screen_quietly(self) -> Optional[ScreenReading]:
+        """读一次当前屏；读屏调用异常按感知失败降级（返回 ``None``，不外抛）。
 
-    async def _read_screen(self) -> Optional[ScreenReading]:
-        """读一次当前屏；读屏调用异常按感知失败降级（返回 ``None``，不外抛）。"""
+        会话的 ``read_screen`` 透传后端异常（观察循环的处置是循环死亡），
+        工具路径在此降级为可回执的感知失败。
+        """
         try:
-            return await self.agent._vision_reader.read_screen(want_options=True)  # noqa: SLF001 - 同包感知依赖
+            return await self.agent.session.read_screen()
         except Exception as exc:  # noqa: BLE001 - 读屏异常是感知失败，不是工具异常
             logger.warning(f"读屏调用异常: {type(exc).__name__}: {exc}")
             return None
-
-    def _capture_region(self) -> Optional[Tuple[int, int, int, int]]:
-        """配置区域 [x, y, w, h] → 采集契约的 (x1, y1, x2, y2)；未配置返回 None。"""
-        raw = self.agent.typed_config.region
-        if raw is None or len(raw) != 4:
-            return None
-        x, y, w, h = raw
-        return (x, y, x + w, y + h)
-
-    def _coords_region(self, geometry: MonitorGeometry) -> Tuple[int, int, int, int]:
-        """坐标反算用的 region (left, top, width, height)；未配置时取整台显示器。"""
-        raw = self.agent.typed_config.region
-        if raw is None or len(raw) != 4:
-            return (0, 0, geometry.width, geometry.height)
-        return (raw[0], raw[1], raw[2], raw[3])
 
     def _snapshot_result(
         self,
@@ -555,7 +479,6 @@ class TextAdvToolProvider(BaseToolProvider):
 __all__ = [
     "PROVIDER_NAME",
     "STREAMER_GUIDE",
-    "MonitorGeometry",
     "TextAdvToolProvider",
     "build_advance_spec",
     "build_choose_spec",

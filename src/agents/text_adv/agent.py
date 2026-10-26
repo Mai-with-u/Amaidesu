@@ -9,14 +9,16 @@ auto 标志，观察循环（``asyncio.Task``）由 Agent 自己拉起/停止；
   （escalation 语义，引导主播调 ``text_adv_choose``）；绝不替主播做选择
 - 感知失败（采集异常 / 空图 / 解析失败）只记日志，不污染事件流；
   循环整体异常退出才发 ``game.error`` 并回落 auto 标志
-- 窗口护栏：循环启动时查找并持有目标窗口，每轮检查前台焦点与几何；
-  未通过则停循环并发一条 ``game.error``（不刷屏）
+- 窗口护栏：循环启动时经会话查找并持有目标窗口，每轮检查前台焦点与
+  几何；未通过则停循环并发一条 ``game.error``（不刷屏）
+- 采集语义（窗口/区域/稳定帧/读屏）收拢在 :class:`ScreenSession`，
+  本 Agent 是"处置方"：护栏失败停循环、读屏异常按循环死亡处理
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional
 
 from src.modules.agents.base import BaseAgent
 from src.modules.events.event_bus import EventBus
@@ -25,11 +27,11 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.logging import get_logger
 from src.modules.tools import ToolSpec
 from src.modules.tools.registry import ToolRegistry
-from src.modules.vision.look_at_screen import ScreenCaptureResult
 
 from .config import TextAdvConfig
 from .input import InputBackend
-from .screen import StableFrameResult, frame_key, text_key, wait_stable
+from .screen import frame_key, text_key
+from .session import FrameCapture, ScreenSession
 from .state import TextAdvGameAgentState
 from .vlm import ScreenReading, VisionReader
 from .window import WindowBackend
@@ -40,20 +42,6 @@ __all__ = [
     "build_text_adv_agent",
 ]
 
-
-class FrameCapture(Protocol):
-    """观察循环所需的帧采集能力（与 screen 模块稳定判定约定的调用面同形）。"""
-
-    def capture(
-        self,
-        monitor_index: int,
-        region: Optional[Tuple[int, int, int, int]] = None,
-        max_width: Optional[int] = None,
-    ) -> ScreenCaptureResult:
-        """截取一次屏幕快照；``image=None`` 表示本次采集失败。"""
-        ...
-
-
 # 上报正文的摘要长度上限（字符），避免 report message 过长
 
 
@@ -62,8 +50,8 @@ class TextAdvGameAgent(BaseAgent):
 
     - auto 标志由本 Agent 持有；观察循环是 Agent 自身生命周期的一部分，
       工具侧只经 ``set_auto`` 翻标志，绝不持有循环
-    - 感知依赖构造注入：``vision_reader``（读屏）、``capture``（帧采集，
-      供稳定判定）、``window_backend``（窗口护栏）
+    - 感知依赖构造注入并收拢进 ``ScreenSession``（读屏/帧采集/窗口后端）；
+      本 Agent 与工具面共享同一会话实例，采集语义只有一份
     - 事件上报走基类 ``emit_event``（event_bus 为 None 时静默跳过）
     """
 
@@ -103,9 +91,10 @@ class TextAdvGameAgent(BaseAgent):
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
-        self._vision_reader = vision_reader
-        self._window_backend = window_backend
-        self._capture = capture
+        # 采集语义单点：观察循环与工具面共享同一会话（各自定处置）
+        self._session = ScreenSession(
+            config, window_backend=window_backend, capture=capture, vision_reader=vision_reader
+        )
         self._tool_registry = tool_registry
         # 函数内 import：tools 模块反向引用本模块的 TextAdvGameAgent（循环 import 规避）
         from .tools import TextAdvToolProvider
@@ -130,6 +119,11 @@ class TextAdvGameAgent(BaseAgent):
     def auto(self) -> bool:
         """当前是否处于自动观察模式（测试与状态导出可读）。"""
         return self._auto
+
+    @property
+    def session(self) -> ScreenSession:
+        """观察会话（工具面经它做采集；与观察循环共享同一实例）。"""
+        return self._session
 
     async def set_auto(self, on: bool) -> None:
         """启停自动观察（幂等命令入口；工具侧只调这里翻标志）。
@@ -172,15 +166,15 @@ class TextAdvGameAgent(BaseAgent):
         - 整体异常退出：记日志（带堆栈）+ 恰好一条 ``game.error`` + auto 回落 False
         """
         try:
-            win = self._window_backend.find(self.typed_config.game_window_title_keyword)
-            if win is None:
-                await self._guard_failure(
-                    f"未找到游戏窗口（标题关键词={self.typed_config.game_window_title_keyword!r}）"
-                )
+            found = self._session.find_window()
+            if not found.ok or found.win is None:
+                await self._guard_failure(found.reason or "未找到游戏窗口")
                 return
-            if not self._window_backend.focus(win):
-                self._logger.warning("游戏窗口夺焦失败，继续以前台检查作为护栏")
-            region = self._capture_region()
+            win = found.win
+            focus_reason = self._session.focus_window(win)
+            if focus_reason is not None:
+                self._logger.warning(f"{focus_reason}，继续以前台检查作为护栏")
+            region = self._session.capture_region()
             sample_s = self.typed_config.stability_sample_ms / 1000
 
             # 双层去重与降频的循环内状态
@@ -191,19 +185,16 @@ class TextAdvGameAgent(BaseAgent):
             pause_still_seen: bool = False
 
             while True:
-                if not self._window_backend.is_foreground(win):
-                    await self._guard_failure("游戏窗口失去前台焦点")
-                    return
-                if self._window_backend.rect(win) is None:
-                    await self._guard_failure("窗口几何不可得（窗口可能已关闭）")
+                guard_reason = self._session.check_watchable(win)
+                if guard_reason is not None:
+                    await self._guard_failure(guard_reason)
                     return
 
                 if vlm_paused:
                     # 降频段：只做廉价帧检查，不消耗 VLM。恢复条件是画面
                     # 先静止（动画播完）再变化——常驻动画期间帧持续变化，
                     # 不构成恢复依据，避免烧 VLM。
-                    snapshot = self._capture.capture(self.typed_config.monitor_index, region)
-                    image = snapshot.image if snapshot is not None else None
+                    image = self._session.sample_frame(region)
                     if image:
                         fingerprint = frame_key(image)
                         if fingerprint == last_frame:
@@ -219,7 +210,7 @@ class TextAdvGameAgent(BaseAgent):
                     await asyncio.sleep(sample_s)
                     continue
 
-                stable = await self._wait_stable_quietly(region)
+                stable = await self._session.stable_frame()
                 if stable is None or not stable.image:
                     await asyncio.sleep(sample_s)
                     continue
@@ -232,7 +223,7 @@ class TextAdvGameAgent(BaseAgent):
                     await asyncio.sleep(sample_s)
                     continue  # 帧未变：零 VLM 消耗
 
-                reading = await self._vision_reader.read_screen(want_options=True)
+                reading = await self._session.read_screen()  # 读屏异常按循环整体死亡处理（下方 except 承接）
                 if not reading.parse_ok:
                     self._logger.warning(f"读屏解析失败（本轮跳过）: {reading.parse_error}")
                     await asyncio.sleep(sample_s)
@@ -266,34 +257,11 @@ class TextAdvGameAgent(BaseAgent):
             except Exception:  # noqa: BLE001 - 错误上报失败不再二次上抛
                 self._logger.exception("观察循环死亡的 game.error 上报也失败")
 
-    async def _wait_stable_quietly(self, region: Optional[Tuple[int, int, int, int]]) -> Optional[StableFrameResult]:
-        """等待画面稳定；采集后端抛异常按感知失败降级（返回 None，不外抛）。"""
-        try:
-            return await wait_stable(
-                self._capture,
-                region,
-                self.typed_config.monitor_index,
-                sample_ms=self.typed_config.stability_sample_ms,
-                consecutive=self.typed_config.stability_consecutive,
-                timeout_ms=self.typed_config.stability_timeout_ms,
-            )
-        except Exception as exc:  # noqa: BLE001 - 采集异常是感知失败，不是循环死亡
-            self._logger.warning(f"稳定判定期间采集异常（本轮跳过）: {type(exc).__name__}: {exc}")
-            return None
-
     async def _guard_failure(self, reason: str) -> None:
         """窗口护栏未通过：停循环 + 恰好一条 game.error + auto 回落 False。"""
         self._logger.error(f"窗口护栏未通过，停止观察循环: {reason}")
         self._auto = False
         await self.emit_error(f"自动观察已停止：{reason}")
-
-    def _capture_region(self) -> Optional[Tuple[int, int, int, int]]:
-        """把配置区域 [x, y, w, h] 换算为采集契约的 (x1, y1, x2, y2)；未配置返回 None。"""
-        raw = self.typed_config.region
-        if raw is None or len(raw) != 4:
-            return None
-        x, y, w, h = raw
-        return (x, y, x + w, y + h)
 
     # ==================================================================
     # 事件上报（game.* 语义域）
