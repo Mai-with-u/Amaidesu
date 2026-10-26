@@ -23,6 +23,7 @@ from src.modules.tts.backends.gptsovits.provider import DTYPE, GPTSoVITSProvider
 from src.modules.tts.backends.omni.provider import OmniTTSProvider
 from src.modules.tts.backends.voicebox.provider import VoiceboxProvider
 from src.modules.tts.protocol import TTSProvider as TTSProviderDirect
+from src.modules.tts.protocol import TtsObservation
 from tests.modules.tts.helpers import (
     FakeLLM,
     audio_response,
@@ -208,6 +209,12 @@ def test_engine_conforms_to_protocol_and_has_no_retired_entrypoints(provider: An
     assert not hasattr(provider, "invoke") and not hasattr(provider, "list_tools")  # 工具化已退役
     assert "output_device_name" not in type(provider).ConfigSchema.model_fields
     assert not hasattr(provider, "output_device_name")
+
+
+@pytest.mark.parametrize("provider", _instances(), ids=lambda p: type(p).__name__)
+def test_engine_conforms_to_observation_protocol(provider: Any) -> None:
+    """观测面契约：四个引擎都满足 TtsObservation（dashboard 只读依赖按它收窄）。"""
+    assert isinstance(provider, TtsObservation)
 
 
 def test_protocol_rejects_incomplete_objects_and_has_one_public_identity() -> None:

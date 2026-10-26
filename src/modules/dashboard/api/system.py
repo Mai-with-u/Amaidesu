@@ -6,11 +6,11 @@
 
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Dict
+from typing import TYPE_CHECKING, Annotated, Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.dashboard.dependencies import get_dashboard_server, server_component
 from src.modules.dashboard.schemas.system import (
     ChangelogResponse,
     DomainHealthItem,
@@ -21,6 +21,7 @@ from src.modules.dashboard.schemas.system import (
 )
 from src.modules.dashboard.utils.component_helper import build_config_view, get_v2_component_list
 from src.modules.logging import get_logger
+from src.modules.tts.protocol import TtsObservation
 from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -45,6 +46,10 @@ _CHANGELOG_PATH = Path(__file__).resolve().parents[4] / "CHANGELOG.md"
 
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
+
+# TTS 引擎观测面契约（只读 get_stats）；健康墙观测缺席不报错，required=False
+# 档按 None 透传，由 _build_tts_items 降级为 unknown 项
+TtsObservationDep = Annotated[Optional[TtsObservation], Depends(server_component("tts_engine", required=False))]
 
 
 @router.get("/status", response_model=SystemStatusResponse)
@@ -125,7 +130,10 @@ def _get_app_version() -> str:
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health_check(server: ServerDep) -> HealthResponse:
+async def health_check(
+    server: ServerDep,  # noqa: B008
+    tts_observation: TtsObservationDep,  # noqa: B008
+) -> HealthResponse:
     """健康检查 + 连接健康墙聚合
 
     ``status``/``timestamp_ms`` 回答"进程活着"；``domains`` 只读探查各域
@@ -138,14 +146,18 @@ async def health_check(server: ServerDep) -> HealthResponse:
         status="ok",
         timestamp_ms=now,
         checked_at_ms=now,
-        domains=_build_health_domains(server),
+        domains=_build_health_domains(server, tts_observation),
     )
 
 
-def _build_health_domains(server: "DashboardServer") -> Dict[str, list[DomainHealthItem]]:
+def _build_health_domains(
+    server: "DashboardServer",
+    tts_observation: Optional[TtsObservation],
+) -> Dict[str, list[DomainHealthItem]]:
     """按域聚合连接态；每域独立兜底，探查异常降级为该域一个 unknown 项。"""
     builders = {
-        "tts": _build_tts_items,
+        # TTS 域只依赖观测面依赖（endpoint 注入），不读 server.tts_engine
+        "tts": lambda s: _build_tts_items(tts_observation),
         "avatar": lambda s: _build_provider_items(s, {"avatar"}),
         "obs": lambda s: _build_provider_items(s, {"studio"}),
         "maibot": _build_maibot_items,
@@ -163,9 +175,12 @@ def _build_health_domains(server: "DashboardServer") -> Dict[str, list[DomainHea
     return domains
 
 
-def _build_tts_items(server: "DashboardServer") -> list[DomainHealthItem]:
-    """TTS 域：透传引擎 ``get_stats()``（与 /debug/tts/status 同数据源）。"""
-    engine = server.tts_engine
+def _build_tts_items(engine: Optional[TtsObservation]) -> list[DomainHealthItem]:
+    """TTS 域：透传引擎 ``get_stats()``（与 /debug/tts/status 同数据源）。
+
+    ``engine`` 按观测面协议 ``TtsObservation`` 收窄；未装配（None，未配
+    置或极简启动）降级为 unknown 项。
+    """
     if engine is None:
         return [
             DomainHealthItem(

@@ -118,4 +118,23 @@ class TTSProvider(Protocol):
         ...
 
 
-__all__ = ["TTSProvider"]
+@runtime_checkable
+class TtsObservation(Protocol):
+    """TTS 引擎观测面协议（结构类型，``@runtime_checkable``）。
+
+    回答"TTS 引擎怎么报告健康"——dashboard 等只读消费方只需引擎暴露
+    ``get_stats()`` 统计摘要，不需要也不应该拿到 ``handle_speech`` 这
+    样的合成入口。四个引擎 Provider 均天然满足本协议（``TTSProvider``
+    的成员集是它的超集），装配缺席时消费方拿到 ``None`` 自行降级。
+
+    与 ``TTSProvider`` 的分工：``TTSProvider`` 是装配边界的完整执行
+    契约（决策循环下游持有）；本协议是只读观测契约（dashboard 声明
+    依赖时按它收窄类型，类型上就杜绝误调合成入口）。
+    """
+
+    def get_stats(self) -> Dict[str, Any]:
+        """返回引擎状态统计 dict（字段约定见 ``TTSProvider.get_stats``）。"""
+        ...
+
+
+__all__ = ["TTSProvider", "TtsObservation"]

@@ -29,6 +29,7 @@ from src.modules.dashboard.schemas.debug import (
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RoomMessagePayload, RoomMessageUser
 from src.modules.logging import get_logger
+from src.modules.tts.protocol import TtsObservation
 from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -132,7 +133,10 @@ async def get_event_bus_stats(
 
 # 组件访问声明：基础设施直测端点必需字幕服务 / TTS 引擎（未装配统一 503）
 SubtitleServiceDep = Annotated[Any, Depends(server_component("subtitle_service", missing_detail="字幕服务未注入"))]
+# TTS 引擎完整执行契约（合成入口 handle_speech / debug_synthesize），装配缺席 503
 TtsEngineDep = Annotated[Any, Depends(server_component("tts_engine", missing_detail="TTS 引擎未装配"))]
+# TTS 引擎观测面契约（只读 get_stats），装配缺席 503（/tts/status 的历史语义）
+TtsObservationDep = Annotated[TtsObservation, Depends(server_component("tts_engine", missing_detail="TTS 引擎未装配"))]
 
 
 @router.post("/subtitle/test", response_model=SubtitleTestResponse)
@@ -270,12 +274,15 @@ async def say_tts(
 
 @router.get("/tts/status", response_model=TtsStatusResponse)
 async def get_tts_status(
-    engine: TtsEngineDep,  # noqa: B008
+    engine: TtsObservationDep,  # noqa: B008
 ) -> TtsStatusResponse:
-    """TTS 引擎状态：透传 ``get_stats()``（name/is_connected/计数等）。"""
+    """TTS 引擎状态：透传 ``get_stats()``（name/is_connected/计数等）。
+
+    ``engine`` 按观测面协议 ``TtsObservation`` 收窄：装配边界已保证在册
+    引擎实现 ``get_stats``，这里只需兜读取异常（统计读失败按空 stats 展示）。
+    """
     try:
-        get_stats = getattr(engine, "get_stats", None)
-        stats = dict(get_stats()) if callable(get_stats) else {}
+        stats = dict(engine.get_stats())
     except Exception as e:
         logger.exception(f"读取 TTS 引擎状态失败: {e}")
         stats = {}
