@@ -21,7 +21,7 @@ tool_registry.register_provider(provider)
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, Iterable, List, Optional
 
 from src.modules.agents.base import BaseAgent
@@ -129,6 +129,160 @@ def _generate_task_id() -> str:
     return f"deleg_{now_ms()}_{_task_id_seq}"
 
 
+# -------------------- 委派受理核心（两条入口共用） --------------------
+
+
+@dataclass(slots=True)
+class _DelegationOutcome:
+    """委派受理结果——受理核心的统一产出，失败形态由各入口适配器自行映射。
+
+    ``error`` 取值：not_found（目标不在名册/无候选）/ refused（自派、拒收、
+    在途、未接入）/ no_ledger（任务基建未装配）；工具面只消费 message，
+    控制面把 error 原样交给 REST 侧映射 404 / 409 / 503。
+    """
+
+    ok: bool
+    error: str = ""
+    message: str = ""
+    task_id: str = ""
+    executor: str = ""
+
+
+class _DelegationCore:
+    """委派受理核心：目标解析 → 在途门 → 目标接收入口 → 账面登记。
+
+    LLM 工具面（``AgentControlProvider``）与控制面直调（``AgentControl.delegate``）
+    两条入口共用同一套受理不变量——目标存在、禁自派、同一目标同时只接一件事
+    （队列深度 = 1）、任务号同序列、账面条目同形（source="agent"、
+    tool="framework_delegate"）；本类只产受理结果，不关心调用方是 LLM 还是运营。
+    指令非空由调用方入口自行校验（provider 校验后给 LLM 可读理由；REST 的
+    请求体契约不在此收紧）。
+    """
+
+    def __init__(self, manager: AgentManager, task_ledger: Optional[TaskLedger]) -> None:
+        self._manager = manager
+        self._task_ledger = task_ledger
+
+    def resolve_target(
+        self, target_name: str, caller: str, roster: Optional[Dict[str, str]]
+    ) -> tuple[Optional[BaseAgent], Optional[_DelegationOutcome]]:
+        """解析目标 Agent（委派/递话共用）：留空兜底 + 禁自派 + 名册校验。
+
+        留空目标按**当前唯一能接收对应入口的 Agent** 解析：候选名单由调用方
+        按 ``roster``（覆写了接收入口的名册）传入，接的是哪个游戏由配置的
+        enabled 名单决定，这里不写死任何游戏名；候选不唯一就拒绝并要求点名，
+        避免把话递错游戏。控制面直调总是显式点名，``roster`` 传 None 即可。
+        解析失败返回 ``(None, failure)``。
+        """
+        if not target_name:
+            candidates = [name for name in (roster or {}) if name != caller]
+            if len(candidates) != 1:
+                detail = (
+                    "当前没有能接收的 Agent（启用的游戏若不走委派，直接用它自己的操作工具）"
+                    if not candidates
+                    else f"当前有多个候选（{'、'.join(candidates)}）"
+                )
+                return None, _DelegationOutcome(
+                    ok=False, error="not_found", message=f"受理失败：未指定目标，且{detail}——请点名目标注册名"
+                )
+            target_name = candidates[0]
+        if target_name == (caller or "unknown"):
+            return None, _DelegationOutcome(ok=False, error="refused", message="受理失败：目标不能是自己（自派被拒）")
+        target = self._manager.get_agent_by_name(target_name)
+        if target is None:
+            return None, _DelegationOutcome(
+                ok=False, error="not_found", message=f"受理失败：目标 Agent '{target_name}' 不在名册"
+            )
+        return target, None
+
+    def _in_flight_delegation(self, executor: str) -> Optional[TaskRecord]:
+        """查目标 Agent 名下未终态的委派单（有就拒新单，队列深度 = 1）。"""
+        if self._task_ledger is None:
+            return None
+        for task_id in self._task_ledger.active_task_ids():
+            record = self._task_ledger.get(task_id)
+            if (
+                record is not None
+                and record.tool == "framework_delegate"
+                and record.executor == executor
+                and record.status not in TERMINAL_TASK_STATES
+            ):
+                return record
+        return None
+
+    @staticmethod
+    def _in_flight_refusal_message(record: TaskRecord) -> str:
+        """构造在途拒受理的失败理由：在途任务号 + 指令原文 + 受理距今时长 + 已知进展。"""
+        waited_ms = max(now_ms() - record.created_at_ms, 0)
+        instruction = str(record.snapshot.get("instruction", "") or "（快照无指令原文）")
+        lines = [
+            f"受理失败：目标 '{record.executor}' 手上已有一件事没做完"
+            f"（任务号 {record.task_id}，已受理 {waited_ms // 1000} 秒），"
+            "同一目标同时只接一件事。",
+            f"在途指令原文：「{instruction}」",
+        ]
+        # 已知进展摘要有就带（批级关联/执行侧写入快照的额外字段），读不到不硬造
+        extras = {k: v for k, v in record.snapshot.items() if k not in ("instruction",)}
+        if extras:
+            lines.append(f"在途任务的已知进展：{extras}")
+        lines.append("等它交付或用 framework_prompt 递话调整，不要重复派同一件事。")
+        return "\n".join(lines)
+
+    async def accept(self, target: BaseAgent, instruction: str, initiator: str) -> _DelegationOutcome:
+        """接单：在途门 → 目标接收入口 → 受理成功登记记录表。
+
+        任务号先生成再交目标接收（拒收则不登记，不留孤儿 accepted 条目）；
+        受理失败（本方法返回的 refusal）与任务失败（执行中写入记录表的 failed
+        终态）严格分开——回执只承诺"目标已接收"，不承诺"能干成"。
+        """
+        executor = target.name
+        # 受理前置检查：目标名下已有未终态委派单即拒（不判语义是否相同——
+        # 必达机制不押 LLM 判断；队列深度 = 1）。framework_prompt 不受此限。
+        in_flight = self._in_flight_delegation(executor)
+        if in_flight is not None:
+            logger.info(f"委派拒受理（目标在途）: {initiator} -> {executor}（在途 task_id={in_flight.task_id}）")
+            return _DelegationOutcome(ok=False, error="refused", message=self._in_flight_refusal_message(in_flight))
+        task_id = _generate_task_id()
+        receive = getattr(target, "receive_delegation", None)
+        if not callable(receive):
+            return _DelegationOutcome(
+                ok=False, error="refused", message=f"受理失败：目标 '{executor}' 未实现接收入口（默认拒收）"
+            )
+        rejected = receive(instruction=instruction, task_id=task_id)
+        if rejected:
+            logger.info(f"delegate: Agent '{executor}' 拒收委派（{rejected}）")
+            return _DelegationOutcome(
+                ok=False, error="refused", message=f"受理失败：目标 '{executor}' 拒收（{rejected}）"
+            )
+        # 受理成功：登记 agent 型任务（执行 Agent 唯一写入；循环不代写）
+        self._task_ledger.register(
+            task_id=task_id,
+            provider="framework",
+            tool="framework_delegate",
+            initiator=initiator,
+            executor=executor,
+            status="accepted",
+            source="agent",
+            snapshot={"instruction": instruction[:200]},
+        )
+        logger.info(f"委派受理: {initiator} -> {executor}（task_id={task_id}）")
+        return _DelegationOutcome(ok=True, task_id=task_id, executor=executor)
+
+    async def delegate(
+        self, *, target_name: str, instruction: str, caller: str, roster: Optional[Dict[str, str]] = None
+    ) -> _DelegationOutcome:
+        """受理一次委派（两条入口的完整前置序列）：基建在位 → 解析目标 → 接单。"""
+        if self._task_ledger is None:
+            return _DelegationOutcome(
+                ok=False, error="no_ledger", message="任务基建未装配（task_ledger 未注入），委派不可用"
+            )
+        target, failure = self.resolve_target(target_name, caller, roster)
+        if failure is not None:
+            return failure
+        assert target is not None  # 解析成功时必有实例（类型收窄）
+        return await self.accept(target, instruction, caller or "unknown")
+
+
 class AgentControl:
     """框架级控制——直接调用接口（不进 ToolRegistry）。"""
 
@@ -141,6 +295,7 @@ class AgentControl:
         self._manager = manager
         self._task_ledger = task_ledger
         self._event_bus = event_bus
+        self._delegation = _DelegationCore(manager, task_ledger)
 
     async def pause(self, name: str) -> bool:
         agent = self._manager.get_agent_by_name(name)
@@ -207,35 +362,20 @@ class AgentControl:
         return {"ok": True, "cancelled": True}
 
     async def delegate(self, name: str, instruction: str, *, initiator: str = "operator") -> dict:
-        """运营直派任务（控制面直调，供 REST）：登记账本 + 目标接收入口。
+        """运营直派任务（控制面直调，供 REST）：委托给受理核心，映射 REST 错误形态。
 
-        与 LLM 工具委派同一张任务记录表（source="agent"），发起方记
-        ``initiator``（REST 侧固定 "operator"）。任务号先生成再交目标
-        接收（与 provider 同序：拒收则不登记，不留孤儿 accepted 条目）。
+        受理前置（目标存在、在途门、接收入口、账面登记）全部在
+        ``_DelegationCore``——与 LLM 工具委派同一套不变量、同一张任务记录表
+        （source="agent"），发起方记 ``initiator``（REST 侧固定 "operator"）。
+        返回 ``{"ok": True, "accepted": True, "task_id": …, "executor": …}`` 或
+        ``{"ok": False, "error": "not_found"|"refused"|"no_ledger", "message": …}``——
+        REST 侧据此映射 404 / 409 / 503；在途拒收复用 refused（409）。
         """
-        agent = self._manager.get_agent_by_name(name)
-        if agent is None:
-            logger.warning(f"delegate: 未找到 Agent '{name}'")
-            return {"ok": False, "error": "not_found", "message": f"Agent 不存在: {name}"}
-        if self._task_ledger is None:
-            return {"ok": False, "error": "no_ledger", "message": "任务基建未装配（task_ledger 未注入），委派不可用"}
-        task_id = _generate_task_id()
-        rejected = agent.receive_delegation(instruction=instruction, task_id=task_id)
-        if rejected:
-            logger.info(f"delegate: Agent '{name}' 拒收委派（{rejected}）")
-            return {"ok": False, "error": "refused", "message": f"目标 '{name}' 拒收（{rejected}）"}
-        self._task_ledger.register(
-            task_id=task_id,
-            provider="framework",
-            tool="framework_delegate",
-            initiator=initiator,
-            executor=name,
-            status="accepted",
-            source="agent",
-            snapshot={"instruction": instruction[:200]},
-        )
-        logger.info(f"运营直派受理: {initiator} -> {name}（task_id={task_id}）")
-        return {"ok": True, "accepted": True, "task_id": task_id, "executor": name}
+        outcome = await self._delegation.delegate(target_name=name, instruction=instruction, caller=initiator)
+        if outcome.ok:
+            return {"ok": True, "accepted": True, "task_id": outcome.task_id, "executor": outcome.executor}
+        logger.info(f"delegate: 运营直派未受理（{outcome.error}）: {initiator} -> {name}")
+        return {"ok": False, "error": outcome.error, "message": outcome.message}
 
     def list_agents(self) -> List[str]:
         return self._manager.list_agents()
@@ -285,9 +425,13 @@ class AgentControlProvider(BaseToolProvider):
     manager: AgentManager
     task_ledger: Optional[TaskLedger] = None
     event_bus: Optional[Any] = None
+    _delegation: _DelegationCore = field(init=False, repr=False)  # 委派受理核心（与控制面直调共用）
 
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
     category: ClassVar[str] = "framework"
+
+    def __post_init__(self) -> None:
+        self._delegation = _DelegationCore(self.manager, self.task_ledger)
 
     @property
     def name(self) -> str:
@@ -311,8 +455,8 @@ class AgentControlProvider(BaseToolProvider):
         能力探测，覆写即声明（单一事实源）：``BaseAgent.receive_delegation`` /
         ``receive_prompt`` 默认拒收，子类覆写才代表真正接入。未覆写的 Agent
         不进名册——委派/递话工具的参数枚举里看不到它，从源头杜绝"选了必被
-        拒收的目标"的无效调用（调用侧 ``_resolve_target`` 的拒收校验保留，
-        防编名直调）。manager 不可达或缺查询接口时按空名册。
+        拒收的目标"的无效调用（调用侧 ``_DelegationCore.resolve_target`` 的
+        拒收校验保留，防编名直调）。manager 不可达或缺查询接口时按空名册。
         """
         roster: Dict[str, str] = {}
         list_agents = getattr(self.manager, "list_agents", None)
@@ -435,90 +579,12 @@ class AgentControlProvider(BaseToolProvider):
 
     # ----- 委派原语（framework_delegate / framework_task_status） -----
 
-    def _next_task_id(self) -> str:
-        """生成委派任务号（deleg_{epoch_ms}_{seq}，全链路关联键）。"""
-        return _generate_task_id()
-
-    def _in_flight_delegation(self, executor: str) -> Optional[TaskRecord]:
-        """查目标 Agent 名下未终态的委派单（有就拒新单，队列深度 = 1）。"""
-        if self.task_ledger is None:
-            return None
-        for task_id in self.task_ledger.active_task_ids():
-            record = self.task_ledger.get(task_id)
-            if (
-                record is not None
-                and record.tool == "framework_delegate"
-                and record.executor == executor
-                and record.status not in TERMINAL_TASK_STATES
-            ):
-                return record
-        return None
-
-    def _in_flight_refusal_message(self, record: TaskRecord) -> str:
-        """构造在途拒受理的失败理由：在途任务号 + 指令原文 + 受理距今时长 + 已知进展。"""
-        waited_ms = max(now_ms() - record.created_at_ms, 0)
-        instruction = str(record.snapshot.get("instruction", "") or "（快照无指令原文）")
-        lines = [
-            f"受理失败：目标 '{record.executor}' 手上已有一件事没做完"
-            f"（任务号 {record.task_id}，已受理 {waited_ms // 1000} 秒），"
-            "同一目标同时只接一件事。",
-            f"在途指令原文：「{instruction}」",
-        ]
-        # 已知进展摘要有就带（批级关联/执行侧写入快照的额外字段），读不到不硬造
-        extras = {k: v for k, v in record.snapshot.items() if k not in ("instruction",)}
-        if extras:
-            lines.append(f"在途任务的已知进展：{extras}")
-        lines.append("等它交付或用 framework_prompt 递话调整，不要重复派同一件事。")
-        return "\n".join(lines)
-
-    def _resolve_target(
-        self, target_name: str, caller: str, tool_name: str, hook: str
-    ) -> tuple[Optional[Any], Optional[ToolExecutionResult]]:
-        """解析目标 Agent（委派/递话共用）：留空兜底 + 名册校验 + 禁自派。
-
-        留空目标按**当前唯一能接收 ``hook`` 入口的 Agent** 解析：接的是哪个游戏
-        由配置的 enabled 名单决定，这里不写死任何游戏名；只在覆写了接收入口的
-        名册里挑——遥控型游戏（按键、选项，不接委派）同时启用也不构成歧义，
-        它们本来就不是委派对象。候选不唯一就拒绝并要求点名，避免把话递错游戏。
-        解析失败返回 ``(None, failure)``。
-        """
-        if not target_name:
-            candidates = [name for name in self._roster(hook) if name != caller]
-            if len(candidates) != 1:
-                detail = (
-                    "当前没有能接收的 Agent（启用的游戏若不走委派，直接用它自己的操作工具）"
-                    if not candidates
-                    else f"当前有多个候选（{'、'.join(candidates)}）"
-                )
-                return None, ToolExecutionResult(
-                    tool_name=tool_name,
-                    success=False,
-                    error_message=f"受理失败：未指定目标，且{detail}——请点名目标注册名",
-                )
-            target_name = candidates[0]
-        initiator = caller or "unknown"
-        if target_name == initiator:
-            return None, ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message="受理失败：目标不能是自己（自派被拒）",
-            )
-        target = self.manager.get_agent_by_name(target_name)
-        if target is None:
-            return None, ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message=f"受理失败：目标 Agent '{target_name}' 不在名册",
-            )
-        return target, None
-
     async def _invoke_delegate(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
-        """受理委派：目标解析 → 目标接收入口 → 登记记录表 → 回执。
+        """受理委派：指令校验后委托受理核心，把统一结果映射成工具失败/回执。
 
-        受理失败（本方法内返回的 failure）与任务失败（执行中写入记录表的
-        failed 终态）严格分开——回执只承诺"目标已接收"，不承诺"能干成"。
+        目标解析、在途门、接收入口、账面登记都在 ``_DelegationCore``——
+        与控制面直调（REST）共用同一套受理不变量。
         """
-        target_name = str(args.get("agent", "") or "")
         instruction = str(args.get("instruction", "") or "")
         if not instruction:
             return ToolExecutionResult(
@@ -526,64 +592,26 @@ class AgentControlProvider(BaseToolProvider):
                 success=False,
                 error_message="delegate 需要 instruction（自然语言指令）",
             )
-        if self.task_ledger is None:
-            return ToolExecutionResult(
-                tool_name="framework_delegate",
-                success=False,
-                error_message="任务基建未装配（task_ledger 未注入），委派不可用",
-            )
-        # 发起方 = 调用方（invocation.source；装配侧可按需要扩展映射）
-        initiator = caller or "unknown"
-        target, failure = self._resolve_target(target_name, caller, "framework_delegate", "receive_delegation")
-        if failure is not None:
-            return failure
-        assert target is not None  # 解析成功时必有实例（类型收窄）
-        target_name = target.name  # 留空目标时由 helper 解析出注册名
-        # 受理前置检查：目标名下已有未终态委派单即拒（不判语义是否相同——
-        # 必达机制不押 LLM 判断；队列深度 = 1）。framework_prompt 不受此限。
-        in_flight = self._in_flight_delegation(target_name)
-        if in_flight is not None:
-            logger.info(f"委派拒受理（目标在途）: {initiator} -> {target_name}（在途 task_id={in_flight.task_id}）")
-            return ToolExecutionResult(
-                tool_name="framework_delegate",
-                success=False,
-                error_message=self._in_flight_refusal_message(in_flight),
-            )
-        task_id = self._next_task_id()
-        receive = getattr(target, "receive_delegation", None)
-        if not callable(receive):
-            return ToolExecutionResult(
-                tool_name="framework_delegate",
-                success=False,
-                error_message=f"受理失败：目标 '{target_name}' 未实现接收入口（默认拒收）",
-            )
-        rejected = receive(instruction=instruction, task_id=task_id)
-        if rejected:
-            return ToolExecutionResult(
-                tool_name="framework_delegate",
-                success=False,
-                error_message=f"受理失败：目标 '{target_name}' 拒收（{rejected}）",
-            )
-        # 受理成功：登记 agent 型任务（执行 Agent 唯一写入；循环不代写）
-        self.task_ledger.register(
-            task_id=task_id,
-            provider="framework",
-            tool="framework_delegate",
-            initiator=initiator,
-            executor=target_name,
-            status="accepted",
-            source="agent",
-            snapshot={"instruction": instruction[:200]},
+        outcome = await self._delegation.delegate(
+            target_name=str(args.get("agent", "") or ""),
+            instruction=instruction,
+            caller=caller,
+            roster=self._roster("receive_delegation"),
         )
-        logger.info(f"委派受理: {initiator} -> {target_name}（task_id={task_id}）")
+        if outcome.ok:
+            return ToolExecutionResult(
+                tool_name="framework_delegate",
+                success=True,
+                structured_content={"accepted": True, "task_id": outcome.task_id, "executor": outcome.executor},
+            )
         return ToolExecutionResult(
             tool_name="framework_delegate",
-            success=True,
-            structured_content={"accepted": True, "task_id": task_id, "executor": target_name},
+            success=False,
+            error_message=outcome.message,
         )
 
     def _invoke_prompt(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
-        """受理递话：目标解析（复用委派逻辑）→ 目标接收入口 → 回执。
+        """受理递话：目标解析（复用受理核心，委派同款不变量）→ 目标接收入口 → 回执。
 
         纯文本留言**不登记任务记录表**——递话与委派传输同路、记账分家。
         """
@@ -595,9 +623,13 @@ class AgentControlProvider(BaseToolProvider):
                 error_message="prompt 需要 content（递话文本）",
             )
         target_name = str(args.get("agent", "") or "")
-        target, failure = self._resolve_target(target_name, caller, "framework_prompt", "receive_prompt")
+        target, failure = self._delegation.resolve_target(target_name, caller, self._roster("receive_prompt"))
         if failure is not None:
-            return failure
+            return ToolExecutionResult(
+                tool_name="framework_prompt",
+                success=False,
+                error_message=failure.message,
+            )
         assert target is not None  # 解析成功时必有实例（类型收窄）
         delivered = target.receive_prompt(content=content, source=caller or "unknown")
         if not delivered:

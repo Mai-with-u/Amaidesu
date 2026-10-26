@@ -16,7 +16,7 @@ import pytest
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.modules.agents.base import BaseAgent
-from src.modules.agents.control import build_agent_control_provider
+from src.modules.agents.control import AgentControl, build_agent_control_provider
 from src.modules.agents.manager import AgentManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -253,6 +253,48 @@ async def test_in_flight_gate_is_per_target(rig: _Rig) -> None:
     await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
     res = await rig.call("framework_delegate", {"agent": "agent_a", "instruction": "闲着照常接"}, source="streamer")
     assert res.success and res.structured_content["executor"] == "agent_a"
+
+
+# 控制面直调（REST）：与 LLM 工具委派共用同一套受理不变量与账面，错误形态映射 404 / 409
+
+
+async def test_rest_delegate_shares_acceptance_gate_and_ledger(rig: _Rig) -> None:
+    """REST 直派过同一道在途门：目标在途拒收（refused，REST 侧映射 409），放行后同账面登记。"""
+    control = AgentControl(rig.manager, rig.ledger, event_bus=rig.bus)
+    first = (
+        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
+    ).structured_content["task_id"]
+
+    res = await control.delegate("agent_b", "再去挖个矿", initiator="operator")
+    assert res["ok"] is False and res["error"] == "refused"
+    assert first in res["message"] and "盖一座房子" in res["message"]
+    assert len(rig.ledger) == 1  # 拒单不登记
+
+    # 目标不存在：not_found（REST 侧映射 404）
+    missing = await control.delegate("ghost", "试试")
+    assert missing["ok"] is False and missing["error"] == "not_found"
+
+    # 在途解除后放行：账面条目与 LLM 工具委派同形（source="agent"、tool="framework_delegate"）
+    _agent(rig, "agent_b").finish(rig.ledger)
+    res = await control.delegate("agent_b", "再来一件", initiator="operator")
+    assert res["ok"] is True and res["accepted"] is True and res["executor"] == "agent_b"
+    record = rig.ledger.get(res["task_id"])
+    assert record is not None
+    assert (record.initiator, record.executor, record.source, record.tool) == (
+        "operator",
+        "agent_b",
+        "agent",
+        "framework_delegate",
+    )
+    assert _agent(rig, "agent_b").received[-1] == (res["task_id"], "再来一件")
+
+
+async def test_rest_delegate_reports_missing_ledger_as_no_ledger(rig: _Rig) -> None:
+    """任务基建未装配：REST 直派报 no_ledger（REST 侧映射 503），不碰接收入口。"""
+    control = AgentControl(rig.manager)
+    res = await control.delegate("agent_b", "试试")
+    assert res["ok"] is False and res["error"] == "no_ledger"
+    assert _agent(rig, "agent_b").received == []
 
 
 # 撤单工具：framework_task_cancel 只收 deleg_ 前缀，转发执行 Agent 的 cancel_task
