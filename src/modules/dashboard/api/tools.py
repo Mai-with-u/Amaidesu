@@ -28,13 +28,14 @@ server 清单变化换血），再对归属该 Provider 的已熔断工具做探
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
 
 from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.dashboard.schemas.tool_catalog import ToolCatalogResponse
+from src.modules.dashboard.schemas.tools import ProviderControlRequest, ToolInvokeRequest
 from src.modules.dashboard.services.component_runtime import ComponentRuntimeContext
 from src.modules.dashboard.services.config_adapter import ConfigApplyOutcome, apply_config_updates
 from src.modules.dashboard.services.tool_catalog import (
@@ -42,14 +43,16 @@ from src.modules.dashboard.services.tool_catalog import (
     CATEGORY_LEVEL_KEYS,
     MCP_CATEGORY,
     PROVIDER_DESCRIPTIONS,
+    build_action_entry,
     build_tool_catalog,
+    format_tool_health,
     safe_list_providers,
+    serialize_execution_result,
 )
-from src.modules.dashboard.schemas.tool_catalog import ToolCatalogResponse
 from src.modules.dashboard.utils.component_helper import config_dir, read_toml_dict
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
-from src.modules.tools.models import ToolExecutionResult, ToolInvocation
+from src.modules.tools.models import ToolInvocation
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -59,113 +62,8 @@ logger = get_logger("DashboardToolsAPI")
 router = APIRouter()
 
 
-# JSON Schema 类型 → 前端 ParameterType 的映射。
-# 标量类型映射为对应控件；array/object/缺失 type 等一律落 "json"
-# （前端渲染 JSON 文本域，提交时解析）——参数不允许被静默丢弃。
-_TYPE_MAP: Dict[str, str] = {
-    "string": "string",
-    "integer": "integer",
-    "number": "number",
-    "boolean": "boolean",
-}
-
-# 目录装配常量（分类词表/提供者描述/开关分类）与卡片拼装在 services/tool_catalog，
-# 本模块只保留路由与 HTTP 语义。
-
-
-class ProviderControlRequest(BaseModel):
-    """提供者/工具开关控制请求体。"""
-
-    action: Literal["enable", "disable"]
-
-
-class ToolInvokeRequest(BaseModel):
-    """工具调试调用请求体（arguments 形状由目标工具的 parameters_schema 约定）。"""
-
-    arguments: Dict[str, Any] = Field(default_factory=dict)
-
-
-def _convert_parameters_schema(schema: Any) -> Dict[str, Dict[str, Any]]:
-    """把 JSON Schema 形态的 parameters_schema 转成前端 ParameterSpec 字典。
-
-    输入形态（ToolSpec.parameters_schema 约定的 JSON Schema 形状）：
-        {"type": "object", "properties": {"k": {"type": "string", "description": "..."}},
-         "required": ["k"]}
-
-    输出形态（前端工具页消费的 ``Record<key, ParameterSpec>``）：
-        {"k": {"type": "string", "required": True, "description": "...",
-               "default": ..., "minimum": ..., "maximum": ...}}
-
-    标量类型按 _TYPE_MAP 映射；array/object/缺失 type 等非标量一律落
-    "json"（MCP 工具的复杂参数经此保留完整形态，前端以 JSON 文本域承载）。
-    非 dict 输入返回空 dict；缺 properties 时返回空 dict。
-    """
-    if not isinstance(schema, dict):
-        return {}
-    properties = schema.get("properties")
-    if not isinstance(properties, dict):
-        return {}
-    required = schema.get("required")
-    required_set: set[str] = set(required) if isinstance(required, list) else set()
-
-    result: Dict[str, Dict[str, Any]] = {}
-    for key, prop in properties.items():
-        if not isinstance(key, str):
-            continue
-        prop_dict = prop if isinstance(prop, dict) else {}
-        json_type = prop_dict.get("type")
-        param_type = _TYPE_MAP.get(json_type) if isinstance(json_type, str) else None
-        if param_type is None:
-            # array/object/缺失 type 等非标量 → json（前端 JSON 文本域承载），
-            # 参数不允许被静默丢弃——MCP 工具普遍带复杂参数
-            param_type = "json"
-        entry: Dict[str, Any] = {"type": param_type, "required": key in required_set}
-        for src_key, dst_key in (
-            ("description", "description"),
-            ("default", "default"),
-            ("minimum", "minimum"),
-            ("maximum", "maximum"),
-        ):
-            if src_key in prop_dict:
-                entry[dst_key] = prop_dict[src_key]
-        result[key] = entry
-    return result
-
-
-def _build_action_entry(
-    spec: Any,
-    category: str,
-    disabled: bool = False,
-    owner_agent: str = "",
-    supports_reconnect: bool = False,
-) -> Dict[str, Any]:
-    """构造单个工具条目（工具清单视图，供前端展示）。
-
-    ``full_name`` 是注册表调用键（``<provider>_<工具名>``），前端调试调用与
-    停用开关都以它为标识——裸名仅作展示。
-
-    ``owner_agent`` 由调用方从 registry 传入（scoped_owner_of）；空串表示无
-    归属限定（通用工具）。前端"归属列展示"留待后续——目前默认返回全部已含。
-
-    ``supports_reconnect`` 由调用方按归属 Provider 判定（registry 提
-    供 ``provider_supports_reconnect(name)``）；用于工具行渲染"手动重连"
-    按钮的可视条件。无连接语 Provider 一律 False。
-    """
-    entry: Dict[str, Any] = {
-        "name": spec.name,
-        "full_name": spec.full_name,
-        "description": getattr(spec, "description", "") or "",
-        "parameters": _convert_parameters_schema(getattr(spec, "parameters_schema", None)),
-        "provider": getattr(spec, "provider", "") or "",
-        "kind": getattr(spec, "kind", "") or "sync",
-        "category": category,
-        "disabled": disabled,
-        "owner_agent": owner_agent,
-        "supports_reconnect": supports_reconnect,
-    }
-    if entry["kind"] == "async":
-        entry["result_event"] = spec.resolve_result_event()
-    return entry
+# 目录装配常量（分类词表/提供者描述/开关分类）、卡片拼装与工具条目/健康
+# 字段/调试调用响应的构造在 services/tool_catalog，本模块只保留路由与 HTTP 语义。
 
 
 def _get_registry(server: "DashboardServer") -> Any:
@@ -190,25 +88,6 @@ def _safe_tool_health_snapshot(registry: Any) -> Dict[str, Dict[str, Any]]:
         logger.warning("tool_health_snapshot 调用失败，按无健康数据处理", exc=True)
         return {}
     return result if isinstance(result, dict) else {}
-
-
-def _format_tool_health(entry: Any) -> Optional[Dict[str, Any]]:
-    """从快照单项构建响应 health 字段；absent / 无效输入返回 None。
-
-    触发条件：工具有过失败历史（即出现在快照里）；不存在则视为"无历史"，
-    响应字段不出现 health。前端按"无徽标"渲染。
-    """
-    if not isinstance(entry, dict):
-        return None
-    state = entry.get("state")
-    if state not in ("tripped", "healthy"):
-        return None
-    return {
-        "state": state,
-        "failure_count": int(entry.get("failure_count", 0) or 0),
-        "last_error": str(entry.get("last_error", "") or ""),
-        "tripped_at_ms": int(entry.get("tripped_at_ms", 0) or 0),
-    }
 
 
 def _supports_reconnect(registry: Any, tool_name: str) -> bool:
@@ -265,7 +144,7 @@ async def list_tools(
 
     health_snapshot = _safe_tool_health_snapshot(registry)
     tools = [
-        _build_action_entry(
+        build_action_entry(
             spec,
             # category_of 按注册表索引键（全名）反查，传短名会落空返回空分类
             category=registry.category_of(spec.full_name),
@@ -277,7 +156,7 @@ async def list_tools(
         for spec in specs
     ]
     for entry in tools:
-        entry["health"] = _format_tool_health(health_snapshot.get(entry["name"]))
+        entry["health"] = format_tool_health(health_snapshot.get(entry["name"]))
     return {"tools": tools}
 
 
@@ -466,38 +345,6 @@ async def control_tool(
 _MAX_ARGUMENTS_BYTES = 64 * 1024
 
 
-def _json_safe(value: Any) -> Any:
-    """把工具返回值收敛为 JSON 可序列化形态（dict/list 递归，其余兜底 str()）。"""
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(v) for v in value]
-    return str(value)
-
-
-def _serialize_execution_result(result: ToolExecutionResult) -> Dict[str, Any]:
-    """ToolExecutionResult（dataclass）→ 调试调用响应 dict（blocks 原样透出）。"""
-    return {
-        "success": result.success,
-        "content": result.content,
-        "blocks": [
-            {
-                "kind": block.kind,
-                "text": block.text,
-                "data": block.data,
-                "mime_type": block.mime_type,
-            }
-            for block in result.blocks
-        ],
-        "error_message": result.error_message,
-        "structured_content": _json_safe(result.structured_content),
-        "duration_ms": result.duration_ms,
-        "timestamp_ms": result.timestamp_ms,
-    }
-
-
 @router.post("/tools/{full_name}/invoke", summary="调试调用工具（与 Agent 同路径经 registry 真实执行）")
 async def invoke_tool(
     full_name: str,
@@ -538,7 +385,7 @@ async def invoke_tool(
     )
     logger.info(f"调试调用工具 '{full_name}'（call_id={invocation.call_id}，arguments {arguments_bytes} 字节）")
     result = await registry.invoke(invocation)
-    return _serialize_execution_result(result)
+    return serialize_execution_result(result)
 
 
 @router.post(

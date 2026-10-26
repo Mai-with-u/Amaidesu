@@ -6,9 +6,10 @@
 HTTP 语义（503 / 400 / 写回映射）留在 api 层。
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.modules.logging import get_logger
+from src.modules.tools.models import ToolExecutionResult
 
 logger = get_logger("ToolCatalog")
 
@@ -253,3 +254,151 @@ def build_tool_catalog(
         providers.sort(key=lambda e: (e["description"] == "", e["key"]))
         categories.append({"category": category, "providers": providers})
     return {"categories": categories}
+
+
+# 工具清单 / 调试调用的条目构造（工具页前端消费的字典形态）
+
+
+# JSON Schema 类型 → 前端 ParameterType 的映射。
+# 标量类型映射为对应控件；array/object/缺失 type 等一律落 "json"
+# （前端渲染 JSON 文本域，提交时解析）——参数不允许被静默丢弃。
+_TYPE_MAP: Dict[str, str] = {
+    "string": "string",
+    "integer": "integer",
+    "number": "number",
+    "boolean": "boolean",
+}
+
+
+def convert_parameters_schema(schema: Any) -> Dict[str, Dict[str, Any]]:
+    """把 JSON Schema 形态的 parameters_schema 转成前端 ParameterSpec 字典。
+
+    输入形态（ToolSpec.parameters_schema 约定的 JSON Schema 形状）：
+        {"type": "object", "properties": {"k": {"type": "string", "description": "..."}},
+         "required": ["k"]}
+
+    输出形态（前端工具页消费的 ``Record<key, ParameterSpec>``）：
+        {"k": {"type": "string", "required": True, "description": "...",
+               "default": ..., "minimum": ..., "maximum": ...}}
+
+    标量类型按 _TYPE_MAP 映射；array/object/缺失 type 等非标量一律落
+    "json"（MCP 工具的复杂参数经此保留完整形态，前端以 JSON 文本域承载）。
+    非 dict 输入返回空 dict；缺 properties 时返回空 dict。
+    """
+    if not isinstance(schema, dict):
+        return {}
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return {}
+    required = schema.get("required")
+    required_set: set[str] = set(required) if isinstance(required, list) else set()
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for key, prop in properties.items():
+        if not isinstance(key, str):
+            continue
+        prop_dict = prop if isinstance(prop, dict) else {}
+        json_type = prop_dict.get("type")
+        param_type = _TYPE_MAP.get(json_type) if isinstance(json_type, str) else None
+        if param_type is None:
+            # array/object/缺失 type 等非标量 → json（前端 JSON 文本域承载），
+            # 参数不允许被静默丢弃——MCP 工具普遍带复杂参数
+            param_type = "json"
+        entry: Dict[str, Any] = {"type": param_type, "required": key in required_set}
+        for src_key, dst_key in (
+            ("description", "description"),
+            ("default", "default"),
+            ("minimum", "minimum"),
+            ("maximum", "maximum"),
+        ):
+            if src_key in prop_dict:
+                entry[dst_key] = prop_dict[src_key]
+        result[key] = entry
+    return result
+
+
+def build_action_entry(
+    spec: Any,
+    category: str,
+    disabled: bool = False,
+    owner_agent: str = "",
+    supports_reconnect: bool = False,
+) -> Dict[str, Any]:
+    """构造单个工具条目（工具清单视图，供前端展示）。
+
+    ``full_name`` 是注册表调用键（``<provider>_<工具名>``），前端调试调用与
+    停用开关都以它为标识——裸名仅作展示。
+
+    ``owner_agent`` 由调用方从 registry 传入（scoped_owner_of）；空串表示无
+    归属限定（通用工具）。前端"归属列展示"留待后续——目前默认返回全部已含。
+
+    ``supports_reconnect`` 由调用方按归属 Provider 判定（registry 提
+    供 ``provider_supports_reconnect(name)``）；用于工具行渲染"手动重连"
+    按钮的可视条件。无连接语 Provider 一律 False。
+    """
+    entry: Dict[str, Any] = {
+        "name": spec.name,
+        "full_name": spec.full_name,
+        "description": getattr(spec, "description", "") or "",
+        "parameters": convert_parameters_schema(getattr(spec, "parameters_schema", None)),
+        "provider": getattr(spec, "provider", "") or "",
+        "kind": getattr(spec, "kind", "") or "sync",
+        "category": category,
+        "disabled": disabled,
+        "owner_agent": owner_agent,
+        "supports_reconnect": supports_reconnect,
+    }
+    if entry["kind"] == "async":
+        entry["result_event"] = spec.resolve_result_event()
+    return entry
+
+
+def format_tool_health(entry: Any) -> Optional[Dict[str, Any]]:
+    """从快照单项构建响应 health 字段；absent / 无效输入返回 None。
+
+    触发条件：工具有过失败历史（即出现在快照里）；不存在则视为"无历史"，
+    响应字段不出现 health。前端按"无徽标"渲染。
+    """
+    if not isinstance(entry, dict):
+        return None
+    state = entry.get("state")
+    if state not in ("tripped", "healthy"):
+        return None
+    return {
+        "state": state,
+        "failure_count": int(entry.get("failure_count", 0) or 0),
+        "last_error": str(entry.get("last_error", "") or ""),
+        "tripped_at_ms": int(entry.get("tripped_at_ms", 0) or 0),
+    }
+
+
+def _json_safe(value: Any) -> Any:
+    """把工具返回值收敛为 JSON 可序列化形态（dict/list 递归，其余兜底 str()）。"""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return str(value)
+
+
+def serialize_execution_result(result: ToolExecutionResult) -> Dict[str, Any]:
+    """ToolExecutionResult（dataclass）→ 调试调用响应 dict（blocks 原样透出）。"""
+    return {
+        "success": result.success,
+        "content": result.content,
+        "blocks": [
+            {
+                "kind": block.kind,
+                "text": block.text,
+                "data": block.data,
+                "mime_type": block.mime_type,
+            }
+            for block in result.blocks
+        ],
+        "error_message": result.error_message,
+        "structured_content": _json_safe(result.structured_content),
+        "duration_ms": result.duration_ms,
+        "timestamp_ms": result.timestamp_ms,
+    }

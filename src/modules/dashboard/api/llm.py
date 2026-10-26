@@ -5,7 +5,6 @@ LLM 管理 API
 """
 
 import asyncio
-import json
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -24,16 +23,19 @@ from src.modules.dashboard.schemas.llm import (
     LLMUsageStatsResponse,
     LLMUsageSummaryResponse,
     LLMUsageTrendsResponse,
-    TokenUsageSchema,
 )
-from src.modules.dashboard.services.llm_stats import build_usage_trends, cache_hit_rate
+from src.modules.dashboard.services.llm_stats import (
+    build_history_list_item,
+    build_usage_trends,
+    cache_hit_rate,
+    convert_record_to_response,
+    merge_payload_from_file,
+)
 from src.modules.diagnostics.readers import (
     read_latest_breakdowns,
-    read_llm_request_payload,
     read_request_breakdown,
 )
 from src.modules.llm.quota import ProviderQuota
-from src.modules.llm.request_history_manager import count_image_parts
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -252,7 +254,7 @@ async def get_history(
 
     items: List[LLMRequestHistoryListItem] = []
     for record in result.get("records", []):
-        items.append(_build_list_item(record))
+        items.append(build_history_list_item(record))
 
     return LLMHistoryListResponse(
         items=items,
@@ -324,8 +326,8 @@ async def get_request_by_id(request_id: str, server: ServerDep) -> Optional[LLMR
 
     # 正文回查线性扫描小时文件（峰值 18.7MB/文件），同步跑在事件循环里会
     # 冻结整个 WebUI；挪线程池（浏览器逐卡展开时触发，低频）
-    merged = await asyncio.to_thread(_merge_payload_from_file, record)
-    return _convert_record_to_response(merged)
+    merged = await asyncio.to_thread(merge_payload_from_file, record)
+    return convert_record_to_response(merged)
 
 
 @router.post("/history/stats", response_model=LLMRequestStatsBatchResponse)
@@ -343,170 +345,4 @@ async def get_request_stats_batch(
     stats = await history_manager.get_request_stats_by_ids(request.request_ids)
     return LLMRequestStatsBatchResponse(
         stats={request_id: LLMRequestStatsItem(**item) for request_id, item in stats.items()}
-    )
-
-
-def _merge_payload_from_file(record: Dict[str, Any]) -> Dict[str, Any]:
-    """正文出库后按 request_id 回查诊断文件补齐详情记录。
-
-    新行库列正文一律 NULL（正文在 ``logs/llm_requests/`` 诊断文件），按库行
-    ``timestamp_ms`` 推导小时文件回查；存量旧行正文仍在库列（判空不触发），
-    文件未命中时原样返回（前端拿到无正文的统计行）。无库模式（内存缓存）
-    记录自带全量正文，同样不触发。
-    """
-    if record.get("request_params") or record.get("reasoning_content") or record.get("tool_calls"):
-        return record
-    payload = read_llm_request_payload(str(record.get("request_id") or ""), int(record.get("timestamp") or 0))
-    if payload is None:
-        return record
-    merged = dict(record)
-    merged["request_params"] = payload.get("request_params") or {}
-    merged["reasoning_content"] = payload.get("reasoning_content")
-    merged["tool_calls"] = payload.get("tool_calls") or []
-    merged["usage_raw_json"] = payload.get("usage_raw_json")
-    return merged
-
-
-def _convert_usage(usage_data: Any) -> Optional[TokenUsageSchema]:
-    """记录内的 usage 字典转 TokenUsage，缺省字段补 0"""
-    if not usage_data:
-        return None
-    return TokenUsageSchema(
-        prompt_tokens=usage_data.get("prompt_tokens", 0),
-        completion_tokens=usage_data.get("completion_tokens", 0),
-        total_tokens=usage_data.get("total_tokens", 0),
-    )
-
-
-def _extract_reasoning_tokens(usage_data: Any) -> Optional[int]:
-    """从已解析的 usage 字典中取 reasoning_tokens；上游未上报则 None。"""
-    if not isinstance(usage_data, dict):
-        return None
-    value = usage_data.get("reasoning_tokens")
-    return int(value) if value is not None else None
-
-
-def _preview(text: Any) -> str:
-    """完整提供列表文本，避免列表接口丢失请求或响应尾部。"""
-    if not isinstance(text, str):
-        return ""
-    return text.strip()
-
-
-def _tool_calls_preview(tool_calls: Any) -> str:
-    """工具调用型响应的列表预览：首个调用的「[调用 函数名] 参数摘要」。
-
-    Planner/Replyer 的响应以 tool_calls 承载（response_content 为空），
-    只看 response_content 会整列显示为空。
-    """
-    if not isinstance(tool_calls, list):
-        return ""
-    for call in tool_calls:
-        if not isinstance(call, dict):
-            continue
-        func = call.get("function")
-        if not isinstance(func, dict):
-            continue
-        name = str(func.get("name") or "").strip()
-        args = func.get("arguments")
-        if isinstance(args, str):
-            args_text = args
-        elif args is None:
-            args_text = ""
-        else:
-            try:
-                args_text = json.dumps(args, ensure_ascii=False)
-            except TypeError:
-                args_text = str(args)
-        combined = f"[调用 {name}] {args_text}".strip()
-        if combined != "[调用]" and combined:
-            return _preview(combined)
-    return ""
-
-
-def _message_text(message: Any) -> str:
-    """中立契约消息（{role, parts, ...}）的正文文本：拼接 parts 片段，图像片段以占位符呈现"""
-    if not isinstance(message, dict) or not isinstance(message.get("parts"), list):
-        return ""
-    lines: List[str] = []
-    for piece in message["parts"]:
-        if isinstance(piece, str):
-            lines.append(piece)
-        elif isinstance(piece, dict):
-            if isinstance(piece.get("text"), str):
-                lines.append(piece["text"])
-            elif piece.get("type") == "image":
-                lines.append("[图片内容已省略]")
-    return "\n".join(lines)
-
-
-def _build_list_item(record: Dict[str, Any]) -> LLMRequestHistoryListItem:
-    """列表行保留所选消息和首个工具调用的完整文本；详情接口提供完整请求。
-
-    ``preview_text`` 列（v14 写侧摘要）优先；存量旧行无摘要，回退从
-    request_params 解析——messages 里最后一条有正文的消息即列表展示的
-    Prompt 预览。
-    """
-    prompt_preview = str(record.get("preview_text") or "")
-    if not prompt_preview:
-        params = record.get("request_params")
-        messages = params.get("messages") if isinstance(params, dict) else None
-        if isinstance(messages, list):
-            for message in reversed(messages):
-                text = _message_text(message).strip()
-                if text:
-                    prompt_preview = _preview(text)
-                    break
-
-    response_preview = _preview(record.get("response_content"))
-    if not response_preview:
-        response_preview = _tool_calls_preview(record.get("tool_calls"))
-    return LLMRequestHistoryListItem(
-        request_id=record.get("request_id", ""),
-        timestamp_ms=record.get("timestamp", 0),
-        profile_name=record.get("profile_name", ""),
-        model_name=record.get("model_name", ""),
-        prompt_preview=prompt_preview,
-        response_preview=response_preview,
-        usage=_convert_usage(record.get("usage")),
-        cost=record.get("cost", 0.0),
-        success=record.get("success", True),
-        error=record.get("error"),
-        latency_ms=record.get("latency_ms", 0),
-        cache_hit_tokens=int(record.get("cache_hit_tokens") or 0),
-        cache_miss_tokens=int(record.get("cache_miss_tokens") or 0),
-        reasoning_tokens=_extract_reasoning_tokens(record.get("usage")),
-        usage_raw_json=record.get("usage_raw_json"),
-        image_count=_extract_image_count(record),
-    )
-
-
-def _extract_image_count(record: Dict[str, Any]) -> int:
-    """注入截图数：优先取写侧落库列；无库模式（内存缓存行自带正文）现场计数。"""
-    stored = int(record.get("image_count") or 0)
-    if stored:
-        return stored
-    return count_image_parts(record.get("request_params"))
-
-
-def _convert_record_to_response(record: Dict[str, Any]) -> LLMRequestHistoryResponse:
-    """将请求记录字典转换为响应模型"""
-    return LLMRequestHistoryResponse(
-        request_id=record.get("request_id", ""),
-        timestamp_ms=record.get("timestamp", 0),
-        profile_name=record.get("profile_name", ""),
-        model_name=record.get("model_name", ""),
-        request_params=record.get("request_params", {}),
-        response_content=record.get("response_content"),
-        reasoning_content=record.get("reasoning_content"),
-        tool_calls=record.get("tool_calls"),
-        usage=_convert_usage(record.get("usage")),
-        cost=record.get("cost", 0.0),
-        success=record.get("success", True),
-        error=record.get("error"),
-        latency_ms=record.get("latency_ms", 0),
-        cache_hit_tokens=int(record.get("cache_hit_tokens") or 0),
-        cache_miss_tokens=int(record.get("cache_miss_tokens") or 0),
-        reasoning_tokens=_extract_reasoning_tokens(record.get("usage")),
-        usage_raw_json=record.get("usage_raw_json"),
     )

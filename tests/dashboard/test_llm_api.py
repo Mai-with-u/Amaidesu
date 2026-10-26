@@ -9,6 +9,7 @@ from typing import Any, Dict
 import pytest
 
 import src.modules.dashboard.api.llm as llm_api
+import src.modules.dashboard.services.llm_stats as llm_stats
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.llm.quota import ProviderQuota, QuotaWindow
 from src.modules.llm.request_history_manager import RequestHistoryManager
@@ -222,7 +223,7 @@ async def test_history_rows_carry_tool_call_preview_and_usage_details(
     )
     payload = {"request_params": {}, "tool_calls": tool_calls, "reasoning_content": None, "usage_raw_json": raw_usage}
     monkeypatch.setattr(
-        llm_api, "read_llm_request_payload", lambda request_id, ts: payload if request_id == "tc1" else None
+        llm_stats, "read_llm_request_payload", lambda request_id, ts: payload if request_id == "tc1" else None
     )
 
     body = (await client.get("/api/v1/llm/history", params={"page": 1, "page_size": 10})).json()
