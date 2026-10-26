@@ -46,8 +46,8 @@
           <h2 class="sessions-title">场次</h2>
           <span class="grow" />
           <template v-if="isFullMode">
-            <el-button type="primary" @click="openSession">开启</el-button>
-            <el-button :disabled="!activeExplicitSession" @click="closeSession">结束</el-button>
+            <el-button type="primary" @click="openStartStream">开播</el-button>
+            <el-button :disabled="!activeExplicitSession" @click="closeSession">下播</el-button>
           </template>
         </header>
         <div class="sessions-filters">
@@ -417,6 +417,13 @@
         </li>
       </ul>
     </el-dialog>
+
+    <!-- 开播引导：配置本次直播要开哪些内容 + 流程单，确认后开场次并组件对齐 -->
+    <StartStreamDialog
+      v-model="startStreamVisible"
+      :active-session-exists="activeExplicitSession"
+      @opened="onStreamOpened"
+    />
   </div>
 </template>
 
@@ -471,6 +478,7 @@ import { Loading, QuestionFilled } from '@element-plus/icons-vue';
 import { useWebSocketStore, useEventsStore } from '@/stores';
 import { EVENT } from '@/types/events';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
+import StartStreamDialog from '@/components/live/StartStreamDialog.vue';
 import { useNowTick } from '@/composables/useNowTick';
 import { useLiveSessions } from '@/composables/live/useLiveSessions';
 import { useThinkingStream } from '@/composables/live/useThinkingStream';
@@ -533,7 +541,9 @@ const {
   elapsedLabel,
   isSelected,
   loadSessions,
-  openSession,
+  startStreamVisible,
+  openStartStream,
+  onStreamOpened,
   closeSession,
   renameSession,
   removeSession,

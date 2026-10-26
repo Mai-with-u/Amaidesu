@@ -10,6 +10,7 @@ from src.agents.streamer.replyer import Replyer
 from src.modules.dashboard.services.component_runtime import (
     ComponentRuntimeContext,
     affected_components,
+    apply_component_plan,
     hot_apply_components,
     read_sub_config,
     restart_component,
@@ -47,6 +48,9 @@ class _FakeCollectorManager:
     def get_collector_by_name(self, name: str) -> Optional[_FakeCollector]:
         return self.collectors.get(name)
 
+    def list_running(self) -> List[str]:
+        return [name for name, collector in self.collectors.items() if collector.started]
+
     def register(self, collector: _FakeCollector) -> bool:
         self.collectors[collector.name] = collector
         return True
@@ -81,9 +85,13 @@ class _FakeAgentManager:
         self.enable_calls: List[dict] = []
         self.disable_calls: List[str] = []
         self.fail_stop = fail_stop
+        self.running: set[str] = set()
 
     def get_agent_by_name(self, name: str) -> Optional[Any]:
         return self.agents.get(name)
+
+    def list_running(self) -> List[str]:
+        return sorted(self.running)
 
     def register(self, name: str, agent: Any) -> None:
         self.agents[name] = agent
@@ -104,6 +112,7 @@ class _FakeAgentManager:
     ) -> bool:
         self.enable_calls.append({"name": name, "config": dict(config or {}), "deps": deps})
         self.register(name, object())
+        self.running.add(name)
         return True
 
     async def disable_agent(self, name: str) -> bool:
@@ -111,12 +120,27 @@ class _FakeAgentManager:
         if self.fail_stop:
             return False
         self.unregister(name)
+        self.running.discard(name)
         return True
 
 
 class _FakeConfigService:
     def __init__(self, main_config: dict) -> None:
         self.main_config = main_config
+
+
+class _FakeEnabledSync:
+    """enabled 名单写回器替身：记录两组期望名单，可注入固定错误。"""
+
+    def __init__(self, error: Optional[str] = None) -> None:
+        self.calls: List[Dict[str, List[str]]] = []
+        self.error = error
+
+    async def __call__(
+        self, config_service: Any, config_dir: Path, desired_by_group: Dict[str, List[str]]
+    ) -> Optional[str]:
+        self.calls.append({group: list(names) for group, names in desired_by_group.items()})
+        return self.error
 
 
 # -------------------- affected_components：变更键 → 受影响组件 --------------------
@@ -259,6 +283,129 @@ def test_read_sub_config_reads_collectors_from_disk_and_agents_from_merged_view(
     assert read_sub_config(config_service, tmp_path, "collectors", "console_input") == {"mode": "disk"}
     assert read_sub_config(config_service, tmp_path, "agents", "streamer") == {"persona": {"bot_name": "视图"}}
     assert read_sub_config(config_service, tmp_path, "agents", "absent") == {}
+
+
+# -------------------- apply_component_plan：开播意图对齐 --------------------
+
+
+def test_plan_starts_desired_stops_absent_and_keeps_matching(tmp_path: Path) -> None:
+    """全量对齐语义：集内未运行的启动、在跑未列出的停止、已在期望态的不动。"""
+    collector_manager = _FakeCollectorManager()
+    running_console = _FakeCollector("console_input")
+    collector_manager.register(running_console)
+    running_console.started = True
+    agent_manager = _FakeAgentManager()
+    agent_manager.register("minecraft", object())
+    agent_manager.running.add("minecraft")
+    ctx = ComponentRuntimeContext(collector_manager=collector_manager, agent_manager=agent_manager)
+    sync = _FakeEnabledSync()
+
+    report = asyncio.run(
+        apply_component_plan(
+            ctx,
+            None,
+            tmp_path,
+            # console_input 在跑但不在期望集 → 停止；stt 在期望集且未运行 → 启动
+            [("collectors", "stt"), ("agents", "minecraft")],
+            sync_enabled=sync,
+        )
+    )
+
+    by_ref = {(i.group, i.name): (i.action, i.result) for i in report.items}
+    assert by_ref[("collectors", "stt")] == ("start", "started")
+    assert by_ref[("collectors", "console_input")] == ("stop", "stopped")
+    assert ("agents", "minecraft") not in by_ref  # 已在期望态：不动、不重复回执
+    assert collector_manager.disable_calls == ["console_input"]
+    assert agent_manager.disable_calls == []
+    assert sync.calls == [{"collectors": ["stt"], "agents": ["minecraft"]}]
+    assert report.config_error == ""
+
+
+def test_plan_never_stops_resident_streamer(tmp_path: Path) -> None:
+    """主播 Agent 常驻：不在期望集也永不停止（服务层兜底，防 UI 缺陷把开场变停主播）。"""
+    agent_manager = _FakeAgentManager()
+    agent_manager.register("streamer", object())
+    agent_manager.running.add("streamer")
+    ctx = ComponentRuntimeContext(agent_manager=agent_manager)
+    sync = _FakeEnabledSync()
+
+    report = asyncio.run(apply_component_plan(ctx, None, tmp_path, [], sync_enabled=sync))
+
+    assert report.items == []  # 无停止动作，也无回执条目
+    assert "streamer" in agent_manager.running
+    assert sync.calls == [{"collectors": [], "agents": []}]  # 空意图也如实写盘
+
+
+def test_plan_skips_companions_and_unknown_groups(tmp_path: Path) -> None:
+    """附属采集器随 Agent 开关不单独处理；未知组件组跳过；两者都不进期望名单。"""
+    ctx = ComponentRuntimeContext(collector_manager=_FakeCollectorManager(), agent_manager=_FakeAgentManager())
+    sync = _FakeEnabledSync()
+
+    report = asyncio.run(
+        apply_component_plan(
+            ctx,
+            None,
+            tmp_path,
+            [("collectors", "maicraft_attention"), ("tools", "obs"), ("agents", "game_2048")],
+            sync_enabled=sync,
+        )
+    )
+
+    by_ref = {(i.group, i.name): (i.action, i.result, i.detail) for i in report.items}
+    assert by_ref[("collectors", "maicraft_attention")][:2] == ("skip", "skipped")
+    assert "minecraft" in by_ref[("collectors", "maicraft_attention")][2]
+    assert by_ref[("tools", "obs")][:2] == ("skip", "skipped")
+    assert by_ref[("agents", "game_2048")][:2] == ("start", "started")
+    assert sync.calls == [{"collectors": [], "agents": ["game_2048"]}]
+
+
+def test_plan_isolated_failures_do_not_block_others(tmp_path: Path) -> None:
+    """单项停止失败只记回执：其余启动与收尾写盘照常完成。"""
+    collector_manager = _FakeCollectorManager()
+    agent_manager = _FakeAgentManager(fail_stop=True)
+    agent_manager.register("minecraft", object())
+    agent_manager.running.add("minecraft")
+    ctx = ComponentRuntimeContext(collector_manager=collector_manager, agent_manager=agent_manager)
+    sync = _FakeEnabledSync()
+
+    report = asyncio.run(
+        apply_component_plan(
+            ctx,
+            None,
+            tmp_path,
+            [("collectors", "stt"), ("agents", "game_2048")],
+            sync_enabled=sync,
+        )
+    )
+
+    by_ref = {(i.group, i.name): (i.action, i.result) for i in report.items}
+    assert by_ref[("agents", "minecraft")] == ("stop", "failed")
+    assert by_ref[("collectors", "stt")] == ("start", "started")
+    assert by_ref[("agents", "game_2048")] == ("start", "started")
+    assert sync.calls == [{"collectors": ["stt"], "agents": ["game_2048"]}]
+
+
+def test_plan_records_config_sync_error_without_rolling_back(tmp_path: Path) -> None:
+    """名单写盘失败如实上报 config_error，已完成的实例层对齐不回滚。"""
+    collector_manager = _FakeCollectorManager()
+    ctx = ComponentRuntimeContext(collector_manager=collector_manager)
+    sync = _FakeEnabledSync(error="写入被校验拒绝")
+
+    report = asyncio.run(apply_component_plan(ctx, None, tmp_path, [("collectors", "stt")], sync_enabled=sync))
+
+    assert report.config_error == "写入被校验拒绝"
+    assert [(i.action, i.result) for i in report.items] == [("start", "started")]
+
+
+def test_plan_without_managers_records_failed_items(tmp_path: Path) -> None:
+    """管理器未装配（极简装配）：逐项如实记失败，不静默假装成功。"""
+    sync = _FakeEnabledSync()
+
+    report = asyncio.run(
+        apply_component_plan(ComponentRuntimeContext(), None, tmp_path, [("collectors", "stt")], sync_enabled=sync)
+    )
+
+    assert [(i.action, i.result, "管理器未装配" in i.detail) for i in report.items] == [("start", "failed", True)]
 
 
 # -------------------- 共享服务盘点证据：重建拿得到新人设 --------------------

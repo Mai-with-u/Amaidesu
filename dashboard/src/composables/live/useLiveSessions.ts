@@ -109,31 +109,16 @@ export function useLiveSessions() {
     }, 250);
   });
 
-  async function openSession(): Promise<void> {
-    const fallbackTitle = defaultSessionTitle();
-    let title: string;
-    try {
-      const { value } = await ElMessageBox.prompt(
-        '场次标题（可直接修改，留空使用默认名）',
-        '开启场次',
-        {
-          confirmButtonText: '开启',
-          cancelButtonText: '取消',
-          inputValue: fallbackTitle,
-        },
-      );
-      title = value?.trim() || fallbackTitle;
-    } catch {
-      return; // 取消输入
-    }
-    try {
-      await liveSessionsApi.open({ title });
-      ElMessage.success('场次已开启');
-    } catch (error) {
-      ElMessage.error(getApiErrorMessage(error, '开启场次失败'));
-      return;
-    }
-    backToLive(); // 开了新场次即回到实时视图，避免停留在旧场次的回看里
+  /** 开播引导弹窗显隐：开场次 + 组件意图对齐的交互在 StartStreamDialog 内 */
+  const startStreamVisible = ref(false);
+
+  function openStartStream(): void {
+    startStreamVisible.value = true;
+  }
+
+  /** 开播干净成功后：回实时视图并刷新侧栏（场次事件也会触发刷新，这里保底） */
+  async function onStreamOpened(): Promise<void> {
+    backToLive();
     await loadSessions();
   }
 
@@ -228,7 +213,9 @@ export function useLiveSessions() {
     elapsedLabel,
     isSelected,
     loadSessions,
-    openSession,
+    startStreamVisible,
+    openStartStream,
+    onStreamOpened,
     closeSession,
     renameSession,
     removeSession,

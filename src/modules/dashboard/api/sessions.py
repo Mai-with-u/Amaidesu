@@ -3,7 +3,7 @@
 提供场次的查询与生命周期控制（``/api/v1/live-sessions/*``；
 与弹幕消息流 live_chat 无关，仅管理场次生命周期）：
 - ``GET  /sessions``           场次列表（倒序 + 消息数，供控制台场次侧边栏）
-- ``POST /sessions/open``      开启新场次（进行中场次先自动结束）
+- ``POST /sessions/open``      开启新场次（进行中场次先自动结束；可带组件期望运行全集做意图对齐）
 - ``POST /sessions/{id}/close`` 结束指定场次（须为当前进行中场次）
 - ``PATCH /sessions/{id}``     重命名场次（title 空=清除标题）
 - ``DELETE /sessions/{id}``    删除场次（级联清除明细）
@@ -12,7 +12,9 @@
 
 场次归属由 ``LiveSessionManager`` 负责（唯一事实源）；本层只做参数校验与
 结果序列化，不含场次语义。无显式场次期间消息不落库，因此列表只含历史
-显式场次。
+显式场次。开启请求带 ``component_plan`` 时，组件意图对齐委托
+``component_runtime.apply_component_plan``（实例层逐项启停 + enabled 名单
+经 ``config_adapter.sync_enabled_lists`` 收尾写盘），逐项结果随响应回传。
 """
 
 import asyncio
@@ -22,6 +24,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.modules.dashboard.dependencies import get_dashboard_server, server_component
 from src.modules.dashboard.schemas.session import (
+    ComponentPlanItem,
+    ComponentPlanReport,
     SessionActionResponse,
     SessionItem,
     SessionListResponse,
@@ -31,10 +35,16 @@ from src.modules.dashboard.schemas.session import (
     SessionRundownExecutionResponse,
     SessionTimelineResponse,
 )
+from src.modules.dashboard.services.component_runtime import (
+    ComponentRuntimeContext,
+    apply_component_plan,
+)
+from src.modules.dashboard.services.config_adapter import sync_enabled_lists
 from src.modules.dashboard.services.event_query import events_dir_of
 from src.modules.dashboard.services.session_events import SessionEventReader
 from src.modules.dashboard.services.session_rundown import build_rundown_execution
 from src.modules.dashboard.services.session_timeline import build_timeline_items
+from src.modules.dashboard.utils.component_helper import config_dir
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -103,14 +113,41 @@ async def open_session(
     server: ServerDep,
     manager: SessionManagerDep,  # noqa: B008
 ) -> SessionOpenResponse:
-    """开启新直播场次（已有机行进行中时先自动结束）。"""
+    """开启新直播场次（已有机行进行中时先自动结束）。
+
+    请求带 ``component_plan`` 时，场次开启后把组件运行态与配置态对齐到该
+    期望运行全集（开播引导弹窗的意图应用）；对齐失败不回滚场次，逐项
+    结果随响应 ``plan_report`` 回传。
+    """
     pk = await manager.open_session(
         title=request.title,
         room_id=request.room_id,
         platform=request.platform,
         source="manual",
     )
-    return SessionOpenResponse(live_session_id=pk)
+    plan_report: Optional[ComponentPlanReport] = None
+    if request.component_plan is not None:
+        service_report = await apply_component_plan(
+            ComponentRuntimeContext.from_server(server),
+            server.config_service,
+            config_dir(server),
+            [(ref.group, ref.name) for ref in request.component_plan],
+            sync_enabled=sync_enabled_lists,
+        )
+        plan_report = ComponentPlanReport(
+            items=[
+                ComponentPlanItem(
+                    group=item.group,
+                    name=item.name,
+                    action=item.action,
+                    result=item.result,
+                    detail=item.detail,
+                )
+                for item in service_report.items
+            ],
+            config_error=service_report.config_error,
+        )
+    return SessionOpenResponse(live_session_id=pk, plan_report=plan_report)
 
 
 @router.post("/{session_id}/close", response_model=SessionActionResponse)

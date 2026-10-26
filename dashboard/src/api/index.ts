@@ -26,6 +26,7 @@ import type {
   ComponentListResponse,
   ComponentControlRequest,
   ComponentControlResponse,
+  ComponentRef,
   InjectMessageRequest,
   InjectMessageResponse,
   EventBusStatsResponse,
@@ -290,10 +291,12 @@ export const simulatorApi = {
 // `DELETE /live-sessions/{id}`：删除场次（级联清明细）。
 // `GET /live-sessions/{id}/timeline`：单场时间线回看（明细行 + 事件侧合并；
 // before_timestamp_ms 游标向前翻页，响应 has_more / events_pruned 指示续翻与降级）。
+// `POST /live-sessions/open`：带 component_plan（期望运行全集）时，开场后把组件
+// 运行态与配置态对齐到该清单（开播引导弹窗），逐项结果随 plan_report 回传。
 export const liveSessionsApi = {
   list: (params?: { source?: string; q?: string; limit?: number }) =>
     api.get<LiveSessionListResponse>('/live-sessions', { params }),
-  open: (payload?: { title?: string }) =>
+  open: (payload?: { title?: string; component_plan?: ComponentRef[] }) =>
     api.post<SessionOpenResponse>('/live-sessions/open', payload ?? {}),
   close: (id: number) => api.post<SessionActionResponse>(`/live-sessions/${id}/close`),
   rename: (id: number, title?: string) =>

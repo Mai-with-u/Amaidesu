@@ -10,7 +10,7 @@ import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 import tomllib
-from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
@@ -811,3 +811,25 @@ async def apply_config_updates(
         applied=normalized,
         hot_apply=hot_report,
     )
+
+
+async def sync_enabled_lists(
+    config_service: "ConfigService",
+    config_dir: Path,
+    desired_by_group: Dict[str, List[str]],
+) -> Optional[str]:
+    """把采集器与 Agent 两组 enabled 名单一次写为期望全集（组件意图对齐的收尾写盘）。
+
+    写入的是意图名单而非实际达成名单：个别实例启动/停止失败时名单照写，
+    重启后按名单对齐——与单组件启停按钮的失败回退语义一致。不注入
+    hot_context：实例层由调用方先行对齐完毕，避免重复重建。
+    返回错误消息（None=成功）。
+    """
+    changes = [
+        ("collectors.enabled", list(desired_by_group.get("collectors", []))),
+        ("agents.agents.enabled", list(desired_by_group.get("agents", []))),
+    ]
+    outcome = await apply_config_updates(config_service, config_dir, changes)
+    if not outcome.success:
+        return outcome.message
+    return None

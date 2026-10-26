@@ -29,18 +29,57 @@ class SessionListResponse(BaseModel):
     active_session_id: Optional[int] = Field(default=None, description="当前进行中的显式场次主键")
 
 
+class ComponentRef(BaseModel):
+    """组件引用（组 + 注册名）：开播意图清单的条目。"""
+
+    group: Literal["collectors", "agents"] = Field(description="组件组：collectors / agents")
+    name: str = Field(min_length=1, description="组件注册名")
+
+
+class ComponentPlanItem(BaseModel):
+    """单个组件一次意图对齐的回执条目。"""
+
+    group: str = Field(description="组件组：collectors / agents")
+    name: str = Field(description="组件注册名")
+    action: Literal["start", "stop", "skip"] = Field(
+        description="动作：start/stop；skip=不单独处理（附属采集器/常驻组件）"
+    )
+    result: Literal["started", "stopped", "failed", "skipped"] = Field(
+        description="结果：started/stopped/failed/skipped"
+    )
+    detail: str = Field(default="", description="失败或跳过原因（中文，空串=无）")
+
+
+class ComponentPlanReport(BaseModel):
+    """一次组件意图对齐的逐项回执。"""
+
+    items: List[ComponentPlanItem] = Field(default_factory=list, description="逐项结果")
+    config_error: str = Field(default="", description="enabled 名单写盘失败原因（空串=写盘成功）")
+
+
 class SessionOpenRequest(BaseModel):
     """开启场次请求"""
 
     title: Optional[str] = Field(default=None, description="场次标题（可选）")
     room_id: Optional[str] = Field(default=None, description="房间/频道标识（可选，缺省用装配默认值）")
     platform: Optional[str] = Field(default=None, description="平台标识（可选，缺省用装配默认值）")
+    component_plan: Optional[List[ComponentRef]] = Field(
+        default=None,
+        description=(
+            "组件期望运行全集（可选）。提供时场次开启后把组件运行态与配置态对齐到该清单："
+            "在集内未运行的启动、运行中未列出的顶层组件停止（常驻组件除外）；"
+            "缺省时完全不碰组件，保持既有行为"
+        ),
+    )
 
 
 class SessionOpenResponse(BaseModel):
     """开启场次响应"""
 
     live_session_id: int = Field(..., description="新场次主键")
+    plan_report: Optional[ComponentPlanReport] = Field(
+        default=None, description="组件意图对齐回执（请求未带 component_plan 时为 None）"
+    )
 
 
 class SessionActionResponse(BaseModel):

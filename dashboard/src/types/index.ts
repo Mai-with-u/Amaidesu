@@ -99,6 +99,8 @@ export interface ComponentSummary {
   description?: string;
   is_started: boolean;
   is_enabled: boolean;
+  /** 附属采集器随哪个 Agent 开关；通用采集器与 Agent 为空 */
+  owner?: string | null;
 }
 
 /** 工具不在组件清单：工具以"域开关单元"管理（见 ToolDomainUnit） */
@@ -116,6 +118,28 @@ export interface ComponentControlRequest {
 export interface ComponentControlResponse {
   success: boolean;
   message: string;
+}
+
+/** 开播意图清单条目：组件组 + 注册名（期望运行全集的一员） */
+export interface ComponentRef {
+  group: 'collectors' | 'agents';
+  name: string;
+}
+
+/** 开播意图对齐的单组件回执 */
+export interface ComponentPlanItem {
+  group: string;
+  name: string;
+  action: 'start' | 'stop' | 'skip';
+  result: 'started' | 'stopped' | 'failed' | 'skipped';
+  detail: string;
+}
+
+/** 开播意图对齐逐项回执（开场请求带 component_plan 时随响应返回） */
+export interface ComponentPlanReport {
+  items: ComponentPlanItem[];
+  /** enabled 名单写盘失败原因（空串=写盘成功） */
+  config_error: string;
 }
 
 // Agent 控制面
@@ -947,6 +971,8 @@ export interface LiveSessionListResponse {
 /** 开启新场次响应（POST /api/v1/live-sessions/open） */
 export interface SessionOpenResponse {
   live_session_id: number;
+  /** 组件意图对齐回执（请求带 component_plan 时返回，否则为 null） */
+  plan_report: ComponentPlanReport | null;
 }
 
 /** 场次动作通用响应（close / rename / remove 共用） */

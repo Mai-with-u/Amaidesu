@@ -1,28 +1,47 @@
 """组件运行时启停服务
 
 采集器 / Agent 的动态启停与"按新配置重建"能力（实例化 → 注册 → 启动，
-经 CollectorManager / AgentManager），供两条调用路径共享：
+经 CollectorManager / AgentManager），供三条调用路径共享：
 
 - 组件管理 API 的 START/STOP/RESTART 按钮；
-- 配置保存管线对 agents / collectors 域变更的热应用（保存即生效）。
+- 配置保存管线对 agents / collectors 域变更的热应用（保存即生效）；
+- 开播引导的意图对齐（``apply_component_plan``：把运行态对齐到期望运行全集）。
 
 本模块不依赖 fastapi、不感知 HTTP 语义；基础设施引用（管理器、事件总线、
 LLM/提示词管理器）由调用方经 :class:`ComponentRuntimeContext` 注入，
 不导入 DashboardServer，避免服务层倒挂。
 
 启用名单（enabled）的配置写回不在此模块——那是"装配意愿"的持久化，
-属调用方职责（按钮路径同步写回，保存路径由写盘管线先行完成）。
+属调用方职责（按钮路径同步写回，保存路径由写盘管线先行完成，意图对齐
+路径经 ``sync_enabled`` 注入写回器）。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Set
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 import tomllib
 
-from src.modules.agents.companions import start_companions, stop_companions
+from src.modules.agents.companions import (
+    COMPANION_COLLECTORS,
+    owner_of,
+    start_companions,
+    stop_companions,
+)
 from src.modules.agents.manager import AgentDeps
 from src.modules.collectors.factory import SUPPORTED_COLLECTORS
 from src.modules.logging import get_logger
@@ -35,6 +54,11 @@ logger = get_logger("ComponentRuntime")
 # 组件组名 → 是否 Agent 组（采集器组之外的组无动态启停语义，统一按未知处理）
 _GROUP_AGENTS = "agents"
 _GROUP_COLLECTORS = "collectors"
+
+# 常驻组件名单：主播 Agent 自我驱动、直播期间持续运行，是架构上唯一常驻的
+# Agent——意图对齐永不停止它（即使它不在期望清单里），UI 侧同样不把它列进
+# 可勾选清单。服务层兜底防 UI 缺陷把开场次变成停主播。
+RESIDENT_AGENTS: frozenset[str] = frozenset({"streamer"})
 
 
 @dataclass
@@ -269,6 +293,135 @@ async def hot_apply_components(
             else:
                 report.failures.append((name, result.detail))
                 logger.error(f"配置保存热应用：{group}/{name} 重建失败：{result.detail}")
+    return report
+
+
+# ---------------------------------------------------------------------------
+# 意图对齐（开播引导）：把运行态对齐到期望运行全集
+# ---------------------------------------------------------------------------
+
+
+#: enabled 名单写回器契约：把两组组件的期望名单一次落盘，返回错误消息（None=成功）。
+#: 实现经配置写路径统一编排（前置校验 → 统一写回器 → 按域热重载），由 api 层注入。
+EnabledListSyncer = Callable[[Optional["ConfigService"], Path, Dict[str, List[str]]], Awaitable[Optional[str]]]
+
+
+@dataclass
+class ComponentPlanOutcome:
+    """单个组件一次意图对齐的回执条目（api 层翻译为响应模型）。"""
+
+    group: str
+    name: str
+    #: start / stop / skip（skip=不单独处理：附属采集器、常驻组件）
+    action: Literal["start", "stop", "skip"]
+    #: started / stopped / failed / skipped
+    result: Literal["started", "stopped", "failed", "skipped"]
+    detail: str = ""
+
+
+@dataclass
+class ComponentPlanApplyReport:
+    """一次意图对齐的汇总回执（api 层翻译为响应模型）。"""
+
+    items: List[ComponentPlanOutcome] = field(default_factory=list)
+    #: enabled 名单写盘失败原因（空串=写盘成功；实例层已完成的对齐不回滚）
+    config_error: str = ""
+
+
+def _running_top_level(ctx: ComponentRuntimeContext, group: str) -> Set[str]:
+    """某组件组当前在运行的顶层组件名（剔除附属采集器——它们随 Agent 开关）。"""
+    manager = ctx.collector_manager if group == _GROUP_COLLECTORS else ctx.agent_manager
+    getter = getattr(manager, "list_running", None)
+    if getter is None:
+        return set()
+    try:
+        running = set(getter())
+    except TypeError:
+        logger.warning(f"读取 {group} 运行名单失败（返回值不可迭代），按空名单处理", exc=True)
+        return set()
+    if group == _GROUP_COLLECTORS:
+        running -= {name for names in COMPANION_COLLECTORS.values() for name in names}
+    return running
+
+
+async def apply_component_plan(
+    ctx: ComponentRuntimeContext,
+    config_service: Optional["ConfigService"],
+    config_dir: Path,
+    desired: Sequence[Tuple[str, str]],
+    *,
+    sync_enabled: EnabledListSyncer,
+) -> ComponentPlanApplyReport:
+    """把组件运行态与配置态对齐到期望运行全集（开播引导弹窗的意图应用）。
+
+    ``desired`` 是期望运行的 (group, name) 全集，语义为全量对齐：
+
+    - 集内未运行的顶层组件 → 启动（Agent 的附属采集器随后自动拉起）；
+    - 运行中但不在集内的顶层组件 → 停止（Agent 停止连带附属采集器）；
+    - 附属采集器条目不单独处理（随所属 Agent 开关），如实记 skipped；
+    - 常驻组件（``RESIDENT_AGENTS``，主播 Agent）即使不在集内也永不停止。
+
+    实例层逐项独立执行、单项失败不阻塞其余；收尾经 ``sync_enabled`` 把两组
+    enabled 名单一次写为意图全集（实例失败也保留意图，重启后对齐——与单
+    组件启停按钮的失败回退语义一致）。写盘失败不回滚实例层结果，原因记入
+    ``config_error`` 如实上报。
+    """
+    report = ComponentPlanApplyReport()
+
+    pending = list(dict.fromkeys(desired))
+    desired_set: Set[Tuple[str, str]] = set()
+    for group, name in pending:
+        if group not in (_GROUP_COLLECTORS, _GROUP_AGENTS):
+            report.items.append(ComponentPlanOutcome(group, name, "skip", "skipped", f"未知组件组: {group}"))
+            continue
+        owner = owner_of(name) if group == _GROUP_COLLECTORS else None
+        if owner is not None:
+            report.items.append(
+                ComponentPlanOutcome(group, name, "skip", "skipped", f"随 Agent {owner} 一同开关，不单独处理")
+            )
+            continue
+        desired_set.add((group, name))
+
+    to_stop: List[Tuple[str, str]] = []
+    to_start: List[Tuple[str, str]] = []
+    for group in (_GROUP_COLLECTORS, _GROUP_AGENTS):
+        desired_names = {name for g, name in desired_set if g == group}
+        resident = RESIDENT_AGENTS if group == _GROUP_AGENTS else frozenset()
+        for name in sorted(_running_top_level(ctx, group) - desired_names - resident):
+            to_stop.append((group, name))
+        for name in sorted(desired_names - _running_top_level(ctx, group)):
+            to_start.append((group, name))
+
+    # 先停后启：腾清意图外的运行项，再拉起期望组件（同类资源不抢位）
+    for group, name in to_stop:
+        stopped = await stop_instance(ctx, group, name)
+        if stopped is None:
+            report.items.append(ComponentPlanOutcome(group, name, "stop", "failed", "管理器未装配，无法动态停止"))
+        elif stopped:
+            report.items.append(ComponentPlanOutcome(group, name, "stop", "stopped"))
+            logger.info(f"意图对齐：{group}/{name} 已停止（不在期望运行全集）")
+        else:
+            report.items.append(ComponentPlanOutcome(group, name, "stop", "failed", "停止失败"))
+
+    for group, name in to_start:
+        sub_config = read_sub_config(config_service, config_dir, group, name)
+        result = await start_instance(ctx, group, name, sub_config)
+        if result is None:
+            report.items.append(ComponentPlanOutcome(group, name, "start", "failed", "管理器未装配，无法动态启动"))
+        elif result.success:
+            report.items.append(ComponentPlanOutcome(group, name, "start", "started"))
+            logger.info(f"意图对齐：{group}/{name} 已启动（期望运行全集内）")
+        else:
+            report.items.append(ComponentPlanOutcome(group, name, "start", "failed", result.detail))
+
+    desired_by_group = {
+        _GROUP_COLLECTORS: sorted(name for g, name in desired_set if g == _GROUP_COLLECTORS),
+        _GROUP_AGENTS: sorted(name for g, name in desired_set if g == _GROUP_AGENTS),
+    }
+    error = await sync_enabled(config_service, config_dir, desired_by_group)
+    if error:
+        report.config_error = error
+        logger.error(f"意图对齐：enabled 名单写盘失败：{error}")
     return report
 
 

@@ -145,43 +145,22 @@ describe('useLiveSessions', () => {
     expect(composable.isSelected(idle)).toBe(true);
   });
 
-  it('openSession：取消输入不调接口；确认后开场次且回实时', async () => {
+  it('openStartStream：只翻弹窗显隐，不直接调开场接口（开场交互迁入开播弹窗）', async () => {
     const composable = mount();
-    promptMock.mockRejectedValueOnce('cancel');
-    await composable.openSession();
+    composable.openStartStream();
+    expect(composable.startStreamVisible.value).toBe(true);
     expect(openMock).not.toHaveBeenCalled();
+  });
 
-    promptMock.mockResolvedValueOnce({ value: ' 周五晚间场 ' } as never);
-    openMock.mockResolvedValue({ data: { live_session_id: 9 } } as never);
+  it('onStreamOpened：回实时并刷新侧栏', async () => {
+    const composable = mount();
     composable.sessionMode.value = 'replay';
-    await composable.openSession();
-    expect(openMock).toHaveBeenCalledWith({ title: '周五晚间场' });
-    expect(ElMessage.success).toHaveBeenCalledWith('场次已开启');
+    composable.selectedSession.value = sessionItem({ live_session_id: 2 });
+    listMock.mockResolvedValue({ data: { items: [], active_session_id: 9 } } as never);
+    await composable.onStreamOpened();
     expect(composable.sessionMode.value).toBe('live');
-  });
-
-  it('openSession：接口失败提示错误且不切换模式', async () => {
-    const composable = mount();
-    promptMock.mockResolvedValueOnce({ value: '' } as never);
-    openMock.mockRejectedValue(new Error('boom'));
-    await composable.openSession();
-    // 留空回落为默认标题（与对话框预填一致）
-    expect(openMock).toHaveBeenCalledWith({ title: defaultSessionTitle() });
-    // 措辞统一：直接展示可读错误消息，不再拼前缀
-    expect(ElMessage.error).toHaveBeenCalledWith('boom');
-    expect(composable.activeExplicitSession.value).toBe(false);
-  });
-
-  it('openSession：对话框预填默认标题（yyyy-MM-dd 周X HH:mm）', async () => {
-    const composable = mount();
-    promptMock.mockRejectedValueOnce('cancel');
-    await composable.openSession();
-    expect(promptMock).toHaveBeenCalledWith(
-      expect.any(String),
-      '开启场次',
-      expect.objectContaining({ inputValue: defaultSessionTitle() }),
-    );
-    expect(openMock).not.toHaveBeenCalled();
+    expect(composable.selectedSession.value).toBeNull();
+    expect(composable.activeSessionId.value).toBe(9);
   });
 
   it('renameSession：确认后调接口并刷新，回看选中引用同步新名', async () => {

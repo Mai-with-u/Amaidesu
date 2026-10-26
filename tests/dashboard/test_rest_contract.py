@@ -232,7 +232,15 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
     (
         "liveSessionsApi.open → POST /live-sessions/open",
         session_schemas.SessionOpenResponse,
-        ("live_session_id",),
+        (
+            "live_session_id",
+            "plan_report.items.group",
+            "plan_report.items.name",
+            "plan_report.items.action",
+            "plan_report.items.result",
+            "plan_report.items.detail",
+            "plan_report.config_error",
+        ),
     ),
     (
         "liveSessionsApi.close → POST /live-sessions/{id}/close",

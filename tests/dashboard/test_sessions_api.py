@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any, Optional
+
 import pytest
+import tomllib
 
 from src.modules.events.event_history import EventHistoryService, EventRecord
 
@@ -166,6 +170,123 @@ async def test_timeline_cursor_pagination(sessions_client, event_history) -> Non
     assert [i["data"]["round_id"] for i in page1["items"]] == ["rnd_2", "rnd_3"] and page1["has_more"] is True
     page2 = (await client.get(url, params={"limit": 2, "before_timestamp_ms": page1["items"][0]["ts_ms"]})).json()
     assert [i["data"]["round_id"] for i in page2["items"]] == ["rnd_1"] and page2["has_more"] is False
+
+
+# -------------------- 开场次带组件意图对齐 --------------------
+
+
+class _PlanStubCollectors:
+    """意图对齐用的最小采集器管理器替身（记录启停调用）。"""
+
+    def __init__(self) -> None:
+        self.running: set[str] = set()
+        self.started: list[str] = []
+        self.stopped: list[str] = []
+
+    def list_running(self) -> list[str]:
+        return sorted(self.running)
+
+    def get_collector_by_name(self, name: str) -> Optional[object]:
+        return object() if name in self.running else None
+
+    def register(self, collector: Any, description: str = "") -> bool:
+        # 注册即视为在运行：附属采集器经 Agent 启动连带登记后应可启动
+        self.running.add(collector.name)
+        return True
+
+    async def enable_collector(self, name: str, config: Optional[dict], event_bus: Any = None) -> bool:
+        self.running.add(name)
+        self.started.append(name)
+        return True
+
+    async def disable_collector(self, name: str) -> bool:
+        self.running.discard(name)
+        self.stopped.append(name)
+        return True
+
+    async def start_collector(self, name: str) -> bool:
+        return name in self.running
+
+
+class _PlanStubAgents:
+    """意图对齐用的最小 Agent 管理器替身（初始运行名单可指定）。"""
+
+    def __init__(self, running: set[str]) -> None:
+        self.running = set(running)
+        self.enabled: list[str] = []
+        self.disabled: list[str] = []
+
+    def list_running(self) -> list[str]:
+        return sorted(self.running)
+
+    def get_agent_by_name(self, name: str) -> Optional[object]:
+        return object() if name in self.running else None
+
+    async def enable_agent(self, name: str, config: Optional[dict] = None, *, deps: Any = None, **_kw: Any) -> bool:
+        self.running.add(name)
+        self.enabled.append(name)
+        return True
+
+    async def disable_agent(self, name: str) -> bool:
+        self.running.discard(name)
+        self.disabled.append(name)
+        return True
+
+    async def start_agent(self, name: str) -> bool:
+        return name in self.running
+
+
+async def test_open_with_component_plan_aligns_components(
+    api, event_bus, session_manager, event_history, initialized_config
+) -> None:
+    """带 component_plan 开场：启动期望组件、跳过附属采集器、常驻主播不受影响、名单写为意图全集。"""
+    collectors = _PlanStubCollectors()
+    agents = _PlanStubAgents({"streamer"})
+    client = await api(
+        event_bus=event_bus,
+        session_manager=session_manager,
+        event_history=event_history,
+        config_service=initialized_config,
+        collector_manager=collectors,
+        agent_manager=agents,
+    )
+
+    body = (
+        await client.post(
+            "/api/v1/live-sessions/open",
+            json={
+                "title": "意图对齐场",
+                "component_plan": [
+                    {"group": "collectors", "name": "console_input"},
+                    {"group": "collectors", "name": "maicraft_attention"},
+                    {"group": "agents", "name": "minecraft"},
+                ],
+            },
+        )
+    ).json()
+
+    assert body["live_session_id"] is not None
+    report = body["plan_report"]
+    assert report is not None and report["config_error"] == ""
+    by_ref = {(i["group"], i["name"]): (i["action"], i["result"]) for i in report["items"]}
+    assert by_ref[("collectors", "console_input")] == ("start", "started")
+    assert by_ref[("collectors", "maicraft_attention")] == ("skip", "skipped")
+    assert by_ref[("agents", "minecraft")] == ("start", "started")
+    # 主播 Agent 常驻：不在意图集也不被停止
+    assert ("agents", "streamer") not in by_ref and agents.disabled == []
+    # enabled 名单落盘为意图全集（重启后按此装配）
+    assert initialized_config.main_config["agents"]["enabled"] == ["minecraft"]
+    collectors_doc = tomllib.loads(
+        (Path(initialized_config.base_dir) / "config" / "collectors.toml").read_text(encoding="utf-8-sig")
+    )
+    assert collectors_doc["enabled"] == ["console_input"]
+
+
+async def test_open_without_plan_keeps_components_untouched(sessions_client) -> None:
+    """不带 component_plan 的开场完全不碰组件（向后兼容，plan_report 为 None）。"""
+    client = sessions_client
+    body = (await client.post("/api/v1/live-sessions/open", json={"title": "无清单场"})).json()
+    assert body["live_session_id"] is not None and body["plan_report"] is None
 
 
 @pytest.fixture
