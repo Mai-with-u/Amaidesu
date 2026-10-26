@@ -7,7 +7,7 @@ from typing import Callable, List, Optional
 import pytest
 
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
-from src.modules.tools.provider import ConnectionToolProvider, wire_connection_tools
+from src.modules.tools.provider import BaseToolProvider, ConnectionToolProvider, wire_connection_tools
 
 
 class _FakeRegistry:
@@ -112,3 +112,36 @@ def test_wire_connection_tools_refreshes_registry() -> None:
     provider.mark_connected()
     provider.mark_disconnected()
     assert registry.refreshed == [provider, provider]
+
+
+def test_connection_summary_reflects_marked_state_without_stats() -> None:
+    """观测面契约：无 get_stats 的子类摘要带连接标志与空 stats。"""
+    provider = _StubProvider()
+    assert provider.connection_summary() == {"is_connected": False, "stats": {}}
+    provider.mark_connected()
+    assert provider.connection_summary() == {"is_connected": True, "stats": {}}
+
+
+def test_connection_summary_passes_through_subclass_get_stats() -> None:
+    """带 get_stats 的子类（VTS/Warudo 形态）摘要透传统计面；读失败按空摘要。"""
+
+    class _WithStats(_StubProvider):
+        def get_stats(self) -> dict:
+            return {"is_connected": True, "render_count": 7}
+
+    provider = _WithStats()
+    provider.mark_connected()
+    assert provider.connection_summary() == {"is_connected": True, "stats": {"is_connected": True, "render_count": 7}}
+
+
+def test_base_provider_connection_summary_defaults_to_unexposed() -> None:
+    """基类默认无连接语义：is_connected=None（"平台未暴露连接态"）。"""
+
+    class _Plain(BaseToolProvider):
+        def list_tools(self) -> List[ToolSpec]:
+            return []
+
+        async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
+            return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
+
+    assert _Plain().connection_summary() == {"is_connected": None, "stats": {}}

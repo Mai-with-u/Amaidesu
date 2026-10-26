@@ -71,11 +71,6 @@ class _RundownApplyCallable(Protocol):
 # ---------------------------------------------------------------------------
 
 
-def _get_repo(server: "DashboardServer") -> Optional[Any]:
-    """取组合根注入的 RundownRepo（未注入返回 None，端点降级）。"""
-    return getattr(server, "rundown_repo", None)
-
-
 def _read_config_rundown_id(server: "DashboardServer") -> str:
     """读 agents.streamer.rundown_id 配置（当前流程单指向；缺字段用空串）。"""
     main_config = server.config_service.main_config if server.config_service else {}
@@ -128,7 +123,7 @@ async def _apply_to_runtime(
 @router.get("", response_model=RundownListResponse)
 async def list_rundowns(server: ServerDep) -> RundownListResponse:
     """流程单库列表（完整定义；每单 3-10 环节，全量返回无分页负担）。"""
-    repo = _get_repo(server)
+    repo = server.rundown_repo
     if repo is None:
         return RundownListResponse(success=False, message="流程单存储未就绪")
     try:
@@ -158,7 +153,7 @@ async def upsert_rundown(definition: RundownDefinition, server: ServerDep) -> Ru
     - body 带 id → 视为"保存这份单"（id 不可变）：该 id 必须已存在，
       根治"改 ID 静默覆盖另一份单"的数据丢失路径。
     """
-    repo = _get_repo(server)
+    repo = server.rundown_repo
     if repo is None:
         return RundownMutateResponse(success=False, message="流程单存储未就绪")
 
@@ -203,7 +198,7 @@ async def upsert_rundown(definition: RundownDefinition, server: ServerDep) -> Ru
 @router.delete("/{rundown_id}", response_model=RundownMutateResponse)
 async def delete_rundown(rundown_id: str, server: ServerDep) -> RundownMutateResponse:
     """删除流程单（运行态不动：Agent 内存副本继续用，重启后按回退语义走默认单）。"""
-    repo = _get_repo(server)
+    repo = server.rundown_repo
     if repo is None:
         return RundownMutateResponse(success=False, message="流程单存储未就绪")
     try:
@@ -222,7 +217,7 @@ async def delete_rundown(rundown_id: str, server: ServerDep) -> RundownMutateRes
 @router.post("/{rundown_id}/duplicate", response_model=RundownMutateResponse)
 async def duplicate_rundown(rundown_id: str, server: ServerDep) -> RundownMutateResponse:
     """复制一份流程单（新 id 自动生成，标题追加"副本"）。"""
-    repo = _get_repo(server)
+    repo = server.rundown_repo
     if repo is None:
         return RundownMutateResponse(success=False, message="流程单存储未就绪")
     try:
@@ -250,7 +245,7 @@ async def activate_rundown(rundown_id: str, server: ServerDep) -> RundownMutateR
     （配置已指向，重启主播 Agent 后生效）。Agent 未启用/无可切换门面时
     维持"只写配置"的降级语义。
     """
-    repo = _get_repo(server)
+    repo = server.rundown_repo
     if repo is None:
         return RundownMutateResponse(success=False, message="流程单存储未就绪")
     try:

@@ -66,6 +66,9 @@ class _FakeToolRegistry:
             return handler(invocation)
         return ToolExecutionResult(tool_name=invocation.tool_name, success=True, content="ok", timestamp_ms=now_ms())
 
+    def tool_health_snapshot(self) -> dict:
+        return {}
+
     def apply_disabled(self, names) -> int:
         self._disabled = {n for n in names if self.has(n)}
         return len(self._disabled)
@@ -78,10 +81,6 @@ class _FakeToolRegistry:
 
     def provider_supports_reconnect(self, name: str) -> bool:
         return self.supports_reconnect.get(name, False)
-
-
-class _NoReconnectQueryRegistry(_FakeToolRegistry):
-    provider_supports_reconnect = None  # type: ignore[assignment]
 
 
 class _HealthRegistry(_FakeToolRegistry):
@@ -255,7 +254,7 @@ def test_tools_non_scalar_params_map_to_json_type(make_client) -> None:
 def test_tools_listing_reflects_disabled_scoped_and_reconnect_state(make_client) -> None:
     registry = _FakeToolRegistry(_default_specs(), _default_categories())
     registry.apply_disabled(["vts_vts_trigger_hotkey"])
-    registry.scoped_owner["vts_trigger_hotkey"] = "minecraft"
+    registry.scoped_owner["vts_vts_trigger_hotkey"] = "minecraft"
     registry.supports_reconnect["vts_trigger_hotkey"] = True
     by_name = _tools_by_name(make_client(registry))
 
@@ -263,11 +262,6 @@ def test_tools_listing_reflects_disabled_scoped_and_reconnect_state(make_client)
     assert by_name["vts_trigger_hotkey"]["owner_agent"] == "minecraft"
     assert by_name["vts_trigger_hotkey"]["supports_reconnect"] is True
     assert (by_name["reply_to_user"]["disabled"], by_name["reply_to_user"]["owner_agent"]) == (False, "")
-
-
-def test_tools_reconnect_flag_false_when_registry_lacks_query(make_client) -> None:
-    client = make_client(_NoReconnectQueryRegistry(_default_specs(), _default_categories()))
-    assert all(entry["supports_reconnect"] is False for entry in _tools_by_name(client).values())
 
 
 def test_tools_provider_query_filter(client: TestClient) -> None:
@@ -516,7 +510,3 @@ def test_reconnect_provider_success_returns_report(make_client) -> None:
     resp = make_client(registry).post("/api/v1/tools/providers/vts/reconnect")
     assert resp.status_code == 200 and resp.json() == report
     assert registry.reconnect_calls == ["vts"]
-
-
-def test_reconnect_provider_registry_without_capability_is_503(client: TestClient) -> None:
-    assert client.post("/api/v1/tools/providers/vts/reconnect").status_code == 503

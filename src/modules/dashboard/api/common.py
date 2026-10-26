@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 def resolve_streamer_agent(server: "DashboardServer") -> Optional[Any]:
     """从 agent_manager 中取出 ``streamer`` 实例；无则返回 None。"""
-    am = getattr(server, "agent_manager", None)
+    am = server.agent_manager
     if am is None:
         return None
     try:

@@ -13,10 +13,10 @@
 
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.dashboard.dependencies import get_dashboard_server, server_component
 from src.modules.events.event_history import DEFAULT_MAX_EVENTS
 from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
@@ -56,12 +56,10 @@ class TaskSnapshotResponse(BaseModel):
     finished: List[TaskCard] = []
 
 
-def _require_task_tracker(server: "DashboardServer") -> Any:
-    """取任务跟踪器，未装配时 503。"""
-    tracker = getattr(server, "task_tracker", None)
-    if tracker is None:
-        raise HTTPException(status_code=503, detail="任务基建未装配，任务卡不可用")
-    return tracker
+# 组件访问声明：任务跟踪器未装配（极简启动/测试）时统一 503
+TaskTrackerDep = Annotated[
+    Any, Depends(server_component("task_tracker", missing_detail="任务基建未装配，任务卡不可用"))
+]
 
 
 def _card_from_record(record: Any) -> TaskCard:
@@ -85,7 +83,7 @@ def _card_from_record(record: Any) -> TaskCard:
 
 def _finished_cards_from_history(server: "DashboardServer") -> List[TaskCard]:
     """从事件环聚合已完结任务卡（按 task_id 取末态 payload；仅本次运行内）。"""
-    history = getattr(server, "event_history", None)
+    history = server.event_history
     if history is None:
         return []
     last_by_task: Dict[str, Any] = {}
@@ -128,14 +126,13 @@ def _finished_cards_from_history(server: "DashboardServer") -> List[TaskCard]:
 
 
 @router.get("", response_model=TaskSnapshotResponse, summary="任务卡全量快照（进行中 + 已完结）")
-async def get_tasks(server: ServerDep) -> TaskSnapshotResponse:
+async def get_tasks(server: ServerDep, tracker: TaskTrackerDep) -> TaskSnapshotResponse:
     """游戏 Agent 委派任务全景。
 
     进行中 = 任务记录表当前账面（含 accepted/running/waiting_for_decision）；
     已完结 = 事件历史环按 task_id 聚合的终态末次 payload——纯内存观察窗，
     仅本次运行内成立。已完结按更新时间倒序。
     """
-    tracker = _require_task_tracker(server)
     ledger = tracker.ledger
     running = [_card_from_record(ledger.get(task_id)) for task_id in ledger.active_task_ids()]
     running = [card for card in running if card is not None]

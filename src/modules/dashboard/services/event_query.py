@@ -33,7 +33,7 @@ _MAX_SCAN_DAYS = 370
 
 def events_dir_of(server: "DashboardServer") -> Optional[Path]:
     """从装配取诊断事件流目录（logs/events）；诊断未装配时返回 None（降级只读环形缓冲）。"""
-    writer = getattr(server, "diagnostics_writer", None)
+    writer = server.diagnostics_writer
     if writer is None:
         return None
     return writer.base_dir / "events"

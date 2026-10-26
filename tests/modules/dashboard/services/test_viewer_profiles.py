@@ -119,9 +119,11 @@ class _FakeIdentityRepo:
 
 
 class _BareServer:
-    """极简启动形态：仓储属性全空（viewer_repo 为 server 声明属性，其余缺失）。"""
+    """极简启动形态：仓储属性全部存在且为 None（与 DashboardServer 声明属性一致）。"""
 
     viewer_repo = None
+    viewer_identity_repo = None
+    chat_repo = None
 
 
 # require_*：仓储不可用

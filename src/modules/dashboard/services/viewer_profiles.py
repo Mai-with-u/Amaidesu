@@ -45,7 +45,7 @@ def require_viewer_repo(server: "DashboardServer") -> Any:
 
 def require_identity_repo(server: "DashboardServer") -> Any:
     """取观众身份人工处理仓储，未装配时抛 :class:`RepoUnavailableError`。"""
-    repo = getattr(server, "viewer_identity_repo", None)
+    repo = server.viewer_identity_repo
     if repo is None:
         raise RepoUnavailableError("观众身份仓储不可用")
     return repo
@@ -53,7 +53,7 @@ def require_identity_repo(server: "DashboardServer") -> Any:
 
 def require_chat_repo(server: "DashboardServer") -> Any:
     """取直播明细仓储，未装配时抛 :class:`RepoUnavailableError`。"""
-    repo = getattr(server, "chat_repo", None)
+    repo = server.chat_repo
     if repo is None:
         raise RepoUnavailableError("直播明细仓储不可用")
     return repo

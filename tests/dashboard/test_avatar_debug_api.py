@@ -30,7 +30,7 @@ class _FakeRegistry:
 
 
 class _ConnectedProvider:
-    """已连接平台 Provider 替身：契约方法 + get_stats 公共面。"""
+    """已连接平台 Provider 替身：契约方法 + 观测面 connection_summary。"""
 
     PROVIDER_NAME = "vts"
 
@@ -41,8 +41,8 @@ class _ConnectedProvider:
     def name(self) -> str:
         return self.PROVIDER_NAME
 
-    def get_stats(self) -> dict[str, Any]:
-        return {"is_connected": True, "render_count": 3}
+    def connection_summary(self) -> dict[str, Any]:
+        return {"is_connected": True, "stats": {"render_count": 3}}
 
     async def set_expression(self, emotion: str, intensity: float) -> _FakeResult:
         self.calls.append(("set_expression", (emotion, intensity)))
@@ -66,18 +66,17 @@ class _ConnectedProvider:
 class _DisconnectedProvider(_ConnectedProvider):
     """未连接平台 Provider 替身（连接态 False）。"""
 
-    def get_stats(self) -> dict[str, Any]:
-        return {"is_connected": False}
+    def connection_summary(self) -> dict[str, Any]:
+        return {"is_connected": False, "stats": {}}
 
 
 class _SheetProvider:
-    """表情差分 Provider 替身：就绪态走 is_ready 属性（无 get_stats）。"""
+    """表情差分 Provider 替身：就绪态走 connection_summary（无外部连接）。"""
 
     PROVIDER_NAME = "expression_sheet"
 
-    @property
-    def is_ready(self) -> bool:
-        return True
+    def connection_summary(self) -> dict[str, Any]:
+        return {"is_connected": True, "stats": {}}
 
     async def set_expression(self, emotion: str, intensity: float) -> _FakeResult:
         self.calls = [("set_expression", (emotion, intensity))]
@@ -121,7 +120,7 @@ def test_status_lists_all_platforms(client: TestClient) -> None:
     assert vrchat["connected"] is False
 
     sheet = platforms["expression_sheet"]
-    assert sheet["connected"] is True  # is_ready 属性路径
+    assert sheet["connected"] is True  # 就绪态经 connection_summary 契约
     assert sheet["actions"] == []
 
     warudo = platforms["warudo"]

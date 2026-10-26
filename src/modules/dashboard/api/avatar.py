@@ -16,8 +16,8 @@
 调试台端点（走三后端同语义跨平台同名的契约工具面，不给单一平台开后门）：
 
 - ``GET /api/v1/avatar/debug/status``  各平台的连接态 / 当前表情 / 目录等
-  摘要。数据全部经 ``AvatarProvider`` 契约方法与 ``get_stats`` 公共面取；
-  平台未暴露的信息（如"当前表情"各平台均无读取通道）返回 null 并在
+  摘要。连接态与统计一律经 provider 观测面契约 ``connection_summary()``
+  取；平台未暴露的信息（如"当前表情"各平台均无读取通道）返回 null 并在
   detail 说明，绝不伪造。
 - ``POST /api/v1/avatar/debug/trigger``  按 contract 方法转发执行：
   kind=expression 走 ``set_expression``（17 情绪 + 强度），kind=parameter
@@ -103,14 +103,10 @@ def _get_expression_sheet_provider(server: "DashboardServer") -> Optional[Any]:
     定位路径：注册表按工具名反查归属 Provider——未就绪的 Provider 降级
     登记 0 工具，此路自然返回 None（与"未配置 → 404"语义一致）。
     """
-    registry = getattr(server, "tool_registry", None)
+    registry = server.tool_registry
     if registry is None:
         return None
-    try:
-        return registry.provider_of_tool("expression_sheet_set_expression")
-    except Exception:  # noqa: BLE001 - 兼容层兜底：查不到按未装配处理
-        logger.warning("按工具名定位表情差分 Provider 失败，按未装配处理", exc=True)
-        return None
+    return registry.provider_of_tool("expression_sheet_set_expression")
 
 
 def _validate_pure_filename(filename: str) -> str:
@@ -145,7 +141,7 @@ async def get_expression_sheet_asset(
     """
     _validate_pure_filename(filename)
     provider = _get_expression_sheet_provider(server)
-    image_dir = getattr(provider, "image_dir", None) if provider is not None else None
+    image_dir = provider.image_dir if provider is not None else None
     if not isinstance(image_dir, Path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -173,38 +169,28 @@ def _get_platform_provider(server: "DashboardServer", platform: str) -> Optional
     与表情差分静态资源端点同一套定位路径（provider_of_tool）；未连接的
     ConnectionToolProvider 降级登记 0 工具，但 Provider 本体仍在册可反查。
     """
-    registry = getattr(server, "tool_registry", None)
+    registry = server.tool_registry
     if registry is None:
         return None
-    try:
-        return registry.provider_of_tool(f"{platform}_set_expression")
-    except Exception:  # noqa: BLE001 - 兼容层兜底：查不到按未装配处理
-        logger.warning(f"按工具名定位平台 Provider 失败（{platform}），按未装配处理", exc=True)
-        return None
+    return registry.provider_of_tool(f"{platform}_set_expression")
 
 
-def _connection_state(provider: Any) -> Tuple[Optional[bool], str]:
-    """读平台连接态，返回 (连接态或 None, 说明文案)。
+def _connection_summary(provider: Any) -> Tuple[Optional[bool], str, Dict[str, Any]]:
+    """读平台连接态观测摘要，返回 (连接态或 None, 说明文案, 统计摘要)。
 
-    三种公共面按可用性取：``get_stats()["is_connected"]``（VTS/VRChat/Warudo）
-    → ``is_ready`` 属性（表情差分）→ ``_connected`` 标志；都没有则返回
-    None（"平台未暴露连接态"）。
+    唯一口径是 provider 观测面契约 ``connection_summary()``；``is_connected``
+    为 None（平台未暴露连接态）时带说明文案，消费方不得再探测私有成员。
     """
-    get_stats = getattr(provider, "get_stats", None)
-    if callable(get_stats):
-        try:
-            stats = get_stats()
-            value = stats.get("is_connected") if isinstance(stats, dict) else None
-            if isinstance(value, bool):
-                return value, ""
-        except Exception:  # noqa: BLE001 - 统计面读取失败按未暴露处理
-            logger.warning("get_stats 读取失败，按平台未暴露连接态处理", exc=True)
-    if isinstance(getattr(provider, "is_ready", None), bool):
-        return bool(provider.is_ready), ""
-    connected = getattr(provider, "_connected", None)
-    if isinstance(connected, bool):
-        return connected, ""
-    return None, "平台未暴露连接态"
+    try:
+        summary = provider.connection_summary()
+    except Exception:  # noqa: BLE001 - 观测面读取失败按未暴露处理
+        logger.warning("connection_summary 读取失败，按平台未暴露连接态处理", exc=True)
+        return None, "平台未暴露连接态", {}
+    connected = summary.get("is_connected") if isinstance(summary, dict) else None
+    stats = summary.get("stats") if isinstance(summary, dict) else {}
+    if connected is None:
+        return None, "平台未暴露连接态", dict(stats) if isinstance(stats, dict) else {}
+    return bool(connected), "", dict(stats) if isinstance(stats, dict) else {}
 
 
 async def _fetch_actions(provider: Any) -> List[Dict[str, Any]]:
@@ -217,19 +203,6 @@ async def _fetch_actions(provider: Any) -> List[Dict[str, Any]]:
     except Exception:  # noqa: BLE001 - 目录读取失败不阻断状态聚合
         logger.warning("list_preset_actions 读取失败，按空目录处理", exc=True)
     return []
-
-
-def _read_stats(provider: Any) -> Dict[str, Any]:
-    """读平台 get_stats 公共面摘要；不可用返回空 dict。"""
-    get_stats = getattr(provider, "get_stats", None)
-    if not callable(get_stats):
-        return {}
-    try:
-        stats = get_stats()
-        return dict(stats) if isinstance(stats, dict) else {}
-    except Exception:  # noqa: BLE001 - 统计面读取失败按空处理
-        logger.warning("get_stats 读取失败，按空摘要处理", exc=True)
-        return {}
 
 
 @router.get("/debug/status", response_model=AvatarDebugStatusResponse, summary="各平台调试状态")
@@ -255,7 +228,7 @@ async def get_avatar_debug_status(
                 )
             )
             continue
-        connected, conn_detail = _connection_state(provider)
+        connected, conn_detail, stats = _connection_summary(provider)
         # 当前表情：各平台均未暴露"上次设置的情绪"读取通道，诚实返回 null
         if conn_detail:
             detail = conn_detail
@@ -271,7 +244,7 @@ async def get_avatar_debug_status(
                 detail=detail,
                 actions=await _fetch_actions(provider),
                 emotions=emotion_values,
-                stats=_read_stats(provider),
+                stats=stats,
             )
         )
     return AvatarDebugStatusResponse(platforms=platforms)
@@ -309,7 +282,7 @@ async def trigger_avatar_debug(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"平台 '{request.platform}' 未装配（未启用或未注册工具）",
         )
-    connected, _ = _connection_state(provider)
+    connected, _, _ = _connection_summary(provider)
     if connected is not True:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

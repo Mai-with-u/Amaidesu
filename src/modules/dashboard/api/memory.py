@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Annotated, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.dashboard.dependencies import get_dashboard_server, server_component
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -31,12 +31,10 @@ router = APIRouter()
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
-def _require_repo(server: "DashboardServer") -> "ViewerProfileRepo":
-    """取观众画像仓储，未装配时 503。"""
-    repo = server.viewer_profile_repo
-    if repo is None:
-        raise HTTPException(status_code=503, detail="观众画像不可用")
-    return repo
+# 组件访问声明：观众画像仓储未装配（极简启动/测试）时统一 503
+ViewerProfileRepoDep = Annotated[
+    "ViewerProfileRepo", Depends(server_component("viewer_profile_repo", missing_detail="观众画像不可用"))
+]
 
 
 class MemoryStatsResponse(BaseModel):
@@ -77,9 +75,8 @@ class MutationResponse(BaseModel):
 
 
 @router.get("/stats", response_model=MemoryStatsResponse)
-async def get_memory_stats(server: ServerDep) -> MemoryStatsResponse:
+async def get_memory_stats(repo: ViewerProfileRepoDep) -> MemoryStatsResponse:
     """画像总量统计（管理页头部概览）。"""
-    repo = _require_repo(server)
     total, rows = await repo.list_profiles(limit=1)
     latest = int(rows[0]["updated_at_ms"]) if rows else 0
     return MemoryStatsResponse(profile_count=total, latest_updated_ms=latest)
@@ -87,13 +84,12 @@ async def get_memory_stats(server: ServerDep) -> MemoryStatsResponse:
 
 @router.get("/profiles", response_model=ViewerProfileListResponse)
 async def list_viewer_profiles(
-    server: ServerDep,
+    repo: ViewerProfileRepoDep,
     search: str = Query(default="", max_length=200, description="子串搜索印象文本 / 观众昵称"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ViewerProfileListResponse:
     """画像列表（搜索 / 分页）。"""
-    repo = _require_repo(server)
     total, rows = await repo.list_profiles(search=search, limit=limit, offset=offset)
     return ViewerProfileListResponse(
         total=total,
@@ -115,10 +111,9 @@ async def list_viewer_profiles(
 async def update_viewer_profile(
     viewer_id: int,
     request: ViewerProfileUpdateRequest,
-    server: ServerDep,
+    repo: ViewerProfileRepoDep,
 ) -> MutationResponse:
     """人工纠正印象文本；空白文本 422，印象不存在 404。"""
-    repo = _require_repo(server)
     if not request.profile_text.strip():
         raise HTTPException(status_code=422, detail="profile_text 不能为空白")
     updated = await repo.update_profile_text(viewer_id=viewer_id, profile_text=request.profile_text)
@@ -128,9 +123,8 @@ async def update_viewer_profile(
 
 
 @router.delete("/profiles/{viewer_id}", response_model=MutationResponse)
-async def delete_viewer_profile(viewer_id: int, server: ServerDep) -> MutationResponse:
+async def delete_viewer_profile(viewer_id: int, repo: ViewerProfileRepoDep) -> MutationResponse:
     """删除印象；不存在时 404。"""
-    repo = _require_repo(server)
     deleted = await repo.delete_profile(viewer_id=viewer_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"印象不存在: 观众 #{viewer_id}")

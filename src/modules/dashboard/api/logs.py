@@ -77,7 +77,7 @@ async def query_logs(
 
 def _persist_dir_of(server: "DashboardServer") -> Optional[Path]:
     """从装配取日志落盘目录；LogStreamer 未装配/未启用落盘时 None（历史降级为空）。"""
-    streamer = getattr(server, "log_streamer", None)
+    streamer = server.log_streamer
     if streamer is None:
         return None
     return streamer.persist_dir

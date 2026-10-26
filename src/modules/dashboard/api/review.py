@@ -63,7 +63,7 @@ def _parse_ids(ids: str) -> List[int]:
 
 async def _resolve_sessions(server: "DashboardServer", ids: List[int]) -> List[Dict[str, Any]]:
     """按 id 列表取场次行（保持调用顺序）；未指定时回退最新已结束场次。"""
-    manager = getattr(server, "session_manager", None)
+    manager = server.session_manager
     if manager is None:
         raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
 
@@ -88,7 +88,7 @@ async def _resolve_sessions(server: "DashboardServer", ids: List[int]) -> List[D
 def _slow_thresholds(server: "DashboardServer") -> Dict[str, int]:
     """从 model.toml 配置取每 profile 慢调用阈值（与运行期告警同源）。"""
     thresholds: Dict[str, int] = {}
-    config_service = getattr(server, "config_service", None)
+    config_service = server.config_service
     if config_service is None:
         return thresholds
     profiles = config_service.get_file_section("model", {}).get("llm_profiles", {})
@@ -102,15 +102,15 @@ def _slow_thresholds(server: "DashboardServer") -> Dict[str, int]:
 def _build_aggregator(server: "DashboardServer") -> SessionReviewAggregator:
     """从装配取齐聚合依赖；缺件按 None 传入由聚合器逐节降级。"""
     reader = SessionEventReader(
-        event_history=getattr(server, "event_history", None),
+        event_history=server.event_history,
         events_dir=events_dir_of(server),
     )
     return SessionReviewAggregator(
-        chat_repo=getattr(server, "chat_repo", None),
-        llm_repo=getattr(server, "llm_repo", None),
-        event_repo=getattr(server, "event_repo", None),
+        chat_repo=server.chat_repo,
+        llm_repo=server.llm_repo,
+        event_repo=server.event_repo,
         event_reader=reader,
-        recap_repo=getattr(server, "recap_repo", None),
+        recap_repo=server.recap_repo,
         slow_thresholds=_slow_thresholds(server),
     )
 
@@ -243,9 +243,9 @@ async def export_session_data(
         for b in review.sessions
     ]
 
-    writer = getattr(server, "diagnostics_writer", None)
+    writer = server.diagnostics_writer
     logs_root = writer.base_dir if writer is not None else Path("logs")
-    db_path = getattr(server, "storage_db_path", None)
+    db_path = server.storage_db_path
 
     fd, tmp_name = tempfile.mkstemp(prefix="amaidesu-review-", suffix=".zip")
     os.close(fd)

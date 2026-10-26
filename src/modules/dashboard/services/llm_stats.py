@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List, Optional
 
 from src.modules.dashboard.schemas.llm import (
+    LLMContextBreakdownResponse,
     LLMRequestHistoryListItem,
     LLMRequestHistoryResponse,
     LLMUsageTrendModelPoint,
@@ -19,6 +20,33 @@ from src.modules.dashboard.schemas.llm import (
 )
 from src.modules.diagnostics.readers import read_llm_request_payload
 from src.modules.llm.request_history_manager import count_image_parts
+
+
+def build_context_breakdown_response(
+    breakdown: Dict[str, Any],
+    *,
+    model_name: str,
+    row: Dict[str, Any],
+    context_windows: Dict[str, int],
+) -> LLMContextBreakdownResponse:
+    """把落库的 breakdown JSON + 仓储行组装成响应模型（两条上下文水位端点共用）。
+
+    ``context_windows`` 是 LLMManager 装配期的每模型窗口索引（未注入/未配置
+    传空 dict，窗口按 0 处理，前端据此隐藏水位）。
+    """
+    window = int(context_windows.get(model_name, 0))
+    used = int(breakdown.get("api_prompt_tokens", 0) or 0)
+    return LLMContextBreakdownResponse(
+        model_name=model_name,
+        profile_name=str(breakdown.get("profile_name") or row.get("profile_name") or ""),
+        request_id=str(breakdown.get("request_id") or row.get("request_id") or ""),
+        timestamp_ms=row.get("timestamp_ms"),
+        context_window=window,
+        api_prompt_tokens=used,
+        calibrated=bool(breakdown.get("calibrated", False)),
+        sections=breakdown.get("sections") or [],
+        free_tokens=max(0, window - used) if window > 0 else None,
+    )
 
 
 def cache_hit_rate(cache_hit_tokens: float, cache_miss_tokens: float) -> Optional[float]:

@@ -100,16 +100,19 @@ class _FakeTtsEngine:
 
 
 class _FakeProvider:
-    """模拟工具提供者：category/连接态形态可调，覆盖注册表里的三种连接态暴露方式"""
+    """模拟工具提供者：category/连接态可调；连接态一律走观测面契约。
+
+    ``contract_connected=False``（缺省 None）时本替身不实现
+    ``connection_summary``——覆盖迁移未完成的非契约 Provider（健康墙按
+    unknown 降级，不再探测私有成员）。
+    """
 
     def __init__(
         self,
         name: str,
         category: str = "",
         *,
-        is_connected: bool | None = None,
-        stats_connected: bool | None = None,
-        private_connected: bool | None = None,
+        contract_connected: bool | None = None,
         last_error: str = "",
         supports_reconnect: bool = False,
     ) -> None:
@@ -117,12 +120,8 @@ class _FakeProvider:
         self.category = category
         self.last_error = last_error
         self.supports_reconnect = supports_reconnect
-        if is_connected is not None:
-            self.is_connected = is_connected
-        if stats_connected is not None:
-            self.get_stats = lambda: {"name": name, "is_connected": stats_connected}
-        if private_connected is not None:
-            self._connected = private_connected
+        if contract_connected is not None:
+            self.connection_summary = lambda: {"is_connected": contract_connected, "stats": {}}
 
 
 class _FakeRegistry:
@@ -131,6 +130,9 @@ class _FakeRegistry:
 
     def __len__(self) -> int:
         return len(self._providers)
+
+    def providers(self) -> list:
+        return list(self._providers)
 
 
 def _health_client(mount, config_service: ConfigService, **components):
@@ -164,13 +166,13 @@ def test_health_wall_shape_and_unknown_placeholder(mount, config_service: Config
 
 
 def test_health_wall_tts_and_provider_states(mount, config_service: ConfigService) -> None:
-    """TTS 走引擎 get_stats；提供者按分类归域（avatar/obs/其余），连接态与重连位透传。"""
+    """TTS 走引擎 get_stats；提供者按分类归域（avatar/obs/其余），连接态走观测面契约。"""
     registry = _FakeRegistry(
         [
-            _FakeProvider("vts", "avatar", private_connected=True, supports_reconnect=True),
-            _FakeProvider("warudo", "avatar", is_connected=False, supports_reconnect=True, last_error="连接超时"),
-            _FakeProvider("obs", "studio", stats_connected=True, last_error="上次抖动"),
-            _FakeProvider("web_search", "web", is_connected=True),
+            _FakeProvider("vts", "avatar", contract_connected=True, supports_reconnect=True),
+            _FakeProvider("warudo", "avatar", contract_connected=False, supports_reconnect=True, last_error="连接超时"),
+            _FakeProvider("obs", "studio", contract_connected=True, last_error="上次抖动"),
+            _FakeProvider("web_search", "web", contract_connected=True),
             _FakeProvider("mystery", "", supports_reconnect=True),
         ]
     )

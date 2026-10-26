@@ -87,27 +87,21 @@ def _build_group_status(summaries: list[Any]) -> GroupStatus:
 
 def _build_tool_status(server: "DashboardServer") -> GroupStatus:
     """工具组状态：工具是被动能力契约，三项计数均等于注册表长度。"""
-    registry = getattr(server, "tool_registry", None)
+    registry = server.tool_registry
     if registry is None:
         return GroupStatus(enabled=0, started=0, total=0)
-    try:
-        total = len(registry)
-    except TypeError:
-        total = 0
+    total = len(registry)
     # 工具无运行/启用语义，三者相等（前端按"available"理解）
     return GroupStatus(enabled=total, started=total, total=total)
 
 
 def _build_event_bus_stats(server: "DashboardServer") -> EventBusStats:
     """聚合 EventBus 总吞吐量（emit_count 求和）。"""
-    event_bus = getattr(server, "event_bus", None)
+    event_bus = server.event_bus
     if event_bus is None:
         return EventBusStats(total_events=0)
-    getter = getattr(event_bus, "get_all_stats", None)
-    if getter is None:
-        return EventBusStats(total_events=0)
     try:
-        stats = getter()
+        stats = event_bus.get_all_stats()
     except Exception:
         logger.warning("读取 EventBus 统计失败，按零吞吐展示", exc=True)
         return EventBusStats(total_events=0)
@@ -171,7 +165,7 @@ def _build_health_domains(server: "DashboardServer") -> Dict[str, list[DomainHea
 
 def _build_tts_items(server: "DashboardServer") -> list[DomainHealthItem]:
     """TTS 域：透传引擎 ``get_stats()``（与 /debug/tts/status 同数据源）。"""
-    engine = getattr(server, "tts_engine", None)
+    engine = server.tts_engine
     if engine is None:
         return [
             DomainHealthItem(
@@ -180,8 +174,7 @@ def _build_tts_items(server: "DashboardServer") -> list[DomainHealthItem]:
                 detail="TTS 引擎未装配（未配置或极简启动）",
             )
         ]
-    get_stats = getattr(engine, "get_stats", None)
-    stats = dict(get_stats()) if callable(get_stats) else {}
+    stats = dict(engine.get_stats())
     connected = stats.get("is_connected")
     if isinstance(connected, bool):
         state = "ok" if connected else "offline"
@@ -205,12 +198,11 @@ def _build_maibot_items(server: "DashboardServer") -> list[DomainHealthItem]:
 def _build_provider_items(server: "DashboardServer", categories: set[str] | None) -> list[DomainHealthItem]:
     """工具提供者域连接态。``categories`` 为 None 时收其余全部提供者。
 
-    连接态读取口径：公开属性优先（``is_connected`` / ``get_stats()``），
-    ConnectionToolProvider 的私有 ``_connected`` 兜底——注册表未提供
-    provider 对象的公开列举，此处只读访问 ``_providers`` 不做任何写入。
+    连接态读取口径：provider 观测面契约 ``connection_summary()``，Provider
+    对象经注册表公开访问器 ``providers()`` 列举，不触碰私有成员。
     """
-    registry = getattr(server, "tool_registry", None)
-    providers = list(getattr(registry, "_providers", None) or []) if registry is not None else []
+    registry = server.tool_registry
+    providers = registry.providers() if registry is not None else []
     items: list[DomainHealthItem] = []
     for provider in providers:
         category = str(getattr(provider, "category", "") or "")
@@ -246,23 +238,19 @@ def _provider_health_item(provider: Any) -> DomainHealthItem:
 
 
 def _provider_connected(provider: Any) -> bool | None:
-    """只读探查 provider 连接态；各形态都查不到时返回 None（unknown）。"""
-    value = getattr(provider, "is_connected", None)
-    if isinstance(value, bool):
-        return value
-    getter = getattr(provider, "get_stats", None)
-    if callable(getter):
-        try:
-            stats = getter()
-        except Exception:
-            logger.warning(f"读取 provider '{getattr(provider, 'name', '?')}' 状态失败", exc=True)
-            stats = {}
-        if isinstance(stats, dict) and isinstance(stats.get("is_connected"), bool):
-            return bool(stats["is_connected"])
-    raw = getattr(provider, "_connected", None)
-    if isinstance(raw, bool):
-        return raw
-    return None
+    """只读探查 provider 连接态：唯一口径是观测面契约 ``connection_summary()``。
+
+    返回三值：True / False / None（None = 平台未暴露连接态或契约读取失败，
+    健康墙按 unknown 渲染）。迁移未完成的非契约 Provider（未继承
+    ``BaseToolProvider``）同样按 unknown 降级，不再探测其私有成员。
+    """
+    try:
+        summary = provider.connection_summary()
+        connected = summary.get("is_connected") if isinstance(summary, dict) else None
+    except Exception:
+        logger.warning(f"读取 provider '{getattr(provider, 'name', '?')}' 连接态失败", exc=True)
+        return None
+    return connected if isinstance(connected, bool) else None
 
 
 def _build_component_items(server: "DashboardServer", group: str) -> list[DomainHealthItem]:

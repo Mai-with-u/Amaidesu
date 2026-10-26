@@ -432,6 +432,29 @@ class ToolRegistry:
             "count": len(specs),
         }
 
+    def providers(self) -> List[ToolProvider]:
+        """已登记 Provider 对象快照（只读观测面；连接健康墙等逐对象诊断消费）。
+
+        与 ``list_providers()``（运营摘要 dict）的分工：这边给对象本体，
+        供消费方调 ``connection_summary()`` 等逐对象观测契约；返回副本，
+        外部不得借此改登记。
+        """
+        return list(self._providers)
+
+    def scoped_owner_of(self, full_name: str) -> str:
+        """按工具全名查归属 Agent（名单机制推导；无单一归属返回空串）。
+
+        归属口径：可见名单恰为**单个**非默认 Agent 时视为"专属归属"（如
+        只对 minecraft 可见的委派工具 → "minecraft"）；默认名单、``["*"]``
+        全员、多 Agent 共享与未声明（落默认名单）都算无专属归属 → 空串。
+        供 Dashboard 工具页标注归属；调用可见性不受影响（名单仍是唯一
+        可见性事实源，本方法只是它的单归属投影）。
+        """
+        entries = self._visible_to.get(full_name)
+        if entries is not None and len(entries) == 1 and entries != DEFAULT_VISIBLE_TO and entries != ["*"]:
+            return entries[0]
+        return ""
+
     def list_providers(self) -> List[Dict[str, Any]]:
         """列出全部已登记 Provider 的运营摘要（工具页提供者卡片数据源）。
 

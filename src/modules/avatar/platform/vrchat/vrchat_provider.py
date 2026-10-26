@@ -306,6 +306,10 @@ class VRChatProvider(BaseToolProvider):
             "vrc_out_port": self.vrc_out_port,
         }
 
+    def connection_summary(self) -> Dict[str, Any]:
+        """连接态观测摘要：OSC 无断线回调，连接态以自身 ``_is_connected`` 标志为准。"""
+        return {"is_connected": self._is_connected, "stats": self.get_stats()}
+
     # ===== 内部辅助 =====
 
     async def _connect(self) -> None:

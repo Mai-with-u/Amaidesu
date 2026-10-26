@@ -8,9 +8,9 @@ import base64
 import uuid
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 
-from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.dashboard.dependencies import get_dashboard_server, server_component
 from src.modules.dashboard.schemas.debug import (
     EventBusStatsResponse,
     InjectMessageRequest,
@@ -130,32 +130,15 @@ async def get_event_bus_stats(
 # ---------------------------------------------------------------------------
 
 
-def _get_subtitle_service(server: "DashboardServer") -> Any:
-    """取字幕服务；未注入（极简启动/测试场景）时抛 503。"""
-    service = getattr(server, "subtitle_service", None)
-    if service is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="字幕服务未注入",
-        )
-    return service
-
-
-def _get_tts_engine(server: "DashboardServer") -> Any:
-    """取 TTS 引擎；未装配（未配置 TTS / 极简启动）时抛 503。"""
-    engine = getattr(server, "tts_engine", None)
-    if engine is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="TTS 引擎未装配",
-        )
-    return engine
+# 组件访问声明：基础设施直测端点必需字幕服务 / TTS 引擎（未装配统一 503）
+SubtitleServiceDep = Annotated[Any, Depends(server_component("subtitle_service", missing_detail="字幕服务未注入"))]
+TtsEngineDep = Annotated[Any, Depends(server_component("tts_engine", missing_detail="TTS 引擎未装配"))]
 
 
 @router.post("/subtitle/test", response_model=SubtitleTestResponse)
 async def test_subtitle(
     request: SubtitleTestRequest,
-    server: ServerDep,
+    service: SubtitleServiceDep,  # noqa: B008
 ) -> SubtitleTestResponse:
     """推送一条测试字幕到全部已注册后端（Tk 悬浮窗 / Dashboard 字幕位同亮）。
 
@@ -163,7 +146,6 @@ async def test_subtitle(
     本端点拿不到逐后端成败——程序性反馈看 ``GET /subtitle/status``，
     视觉验收由用户目视。``utterance_id`` 打 debug-test 前缀便于日志检索。
     """
-    service = _get_subtitle_service(server)
     utterance_id = f"debug-test-{now_ms()}"
     try:
         await service.show(request.text, utterance_id=utterance_id)
@@ -176,14 +158,13 @@ async def test_subtitle(
 
 @router.post("/subtitle/clear", response_model=SubtitleClearResponse)
 async def clear_subtitle(
-    server: ServerDep,
+    service: SubtitleServiceDep,  # noqa: B008
 ) -> SubtitleClearResponse:
     """清空全部已注册后端的字幕显示。
 
     真实链路由 ``tts.utterance.finished`` 事件清空；测试无 finished，
     清空路径本身即测试对象，故独立成端点。
     """
-    service = _get_subtitle_service(server)
     try:
         await service.clear()
     except Exception as e:
@@ -194,10 +175,9 @@ async def clear_subtitle(
 
 @router.get("/subtitle/status", response_model=SubtitleStatusResponse)
 async def get_subtitle_status(
-    server: ServerDep,
+    service: SubtitleServiceDep,  # noqa: B008
 ) -> SubtitleStatusResponse:
     """字幕服务诊断：后端清单（name + enabled），专治后端静默降级。"""
-    service = _get_subtitle_service(server)
     try:
         diagnostics = service.backend_diagnostics
     except Exception as e:
@@ -231,7 +211,7 @@ async def _play_utterance(engine: Any, text: str, id_prefix: str) -> tuple[str, 
 @router.post("/tts/test", response_model=TtsTestResponse)
 async def test_tts(
     request: TtsTestRequest,
-    server: ServerDep,
+    engine: TtsEngineDep,  # noqa: B008
 ) -> TtsTestResponse:
     """驱动 TTS 引擎调试合成。
 
@@ -240,7 +220,6 @@ async def test_tts(
     听音频（配置参数 + 覆盖参数合成，返回 base64 wav，不占声卡、不驱
     动字幕）。同步长请求，前端需放宽超时并做 loading 防连点。
     """
-    engine = _get_tts_engine(server)
     if not request.play_on_device:
         synth = getattr(engine, "debug_synthesize", None)
         if not callable(synth):
@@ -274,7 +253,7 @@ async def test_tts(
 @router.post("/tts/say", response_model=TtsSayResponse)
 async def say_tts(
     request: TtsSayRequest,
-    server: ServerDep,
+    engine: TtsEngineDep,  # noqa: B008
 ) -> TtsSayResponse:
     """台前重播：把给定文本重新合成并在声卡播放（发言卡"重播"按钮数据面）。
 
@@ -283,7 +262,6 @@ async def say_tts(
     ``handle_speech`` 完整生产链路（utterance 事件 + 字幕联动）。同步长
     请求，前端需放宽超时并做 loading 防连点。
     """
-    engine = _get_tts_engine(server)
     utterance_id, error = await _play_utterance(engine, request.text, "debug-say")
     if error is not None:
         return TtsSayResponse(success=False, utterance_id=utterance_id, error=error)
@@ -292,10 +270,9 @@ async def say_tts(
 
 @router.get("/tts/status", response_model=TtsStatusResponse)
 async def get_tts_status(
-    server: ServerDep,
+    engine: TtsEngineDep,  # noqa: B008
 ) -> TtsStatusResponse:
     """TTS 引擎状态：透传 ``get_stats()``（name/is_connected/计数等）。"""
-    engine = _get_tts_engine(server)
     try:
         get_stats = getattr(engine, "get_stats", None)
         stats = dict(get_stats()) if callable(get_stats) else {}

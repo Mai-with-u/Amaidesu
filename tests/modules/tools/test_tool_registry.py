@@ -216,6 +216,27 @@ def test_visible_to_defaults_to_streamer_and_for_agent_filters(registry: ToolReg
     assert {s.full_name for s in registry.list_tools()} == {"mixed_open", "mixed_secret"}  # 不传 for_agent = 运营全集
 
 
+def test_scoped_owner_of_projects_single_non_default_visible_agent(registry: ToolRegistry) -> None:
+    """归属投影：名单恰为单个非默认 Agent 时视为专属归属，其余形态无归属。"""
+    registry.register_provider(
+        _provider("mixed", "open", "scoped", "shared"),
+        visible_to={"mixed_scoped": ["minecraft"], "mixed_shared": ["streamer", "minecraft"]},
+    )
+    assert registry.scoped_owner_of("mixed_scoped") == "minecraft"
+    assert registry.scoped_owner_of("mixed_shared") == ""  # 多 Agent 共享无专属归属
+    assert registry.scoped_owner_of("mixed_open") == ""  # 默认名单不算归属
+    assert registry.scoped_owner_of("ghost_tool") == ""  # 未注册工具
+
+
+def test_providers_returns_snapshot_copy_without_exposing_internal_list(registry: ToolRegistry) -> None:
+    provider = _provider("solo", "only")
+    registry.register_provider(provider)
+    snapshot = registry.providers()
+    assert snapshot == [provider]
+    snapshot.clear()
+    assert registry.providers() == [provider]  # 外部改快照不动登记
+
+
 def test_wildcard_visible_to_is_visible_to_every_agent(registry: ToolRegistry) -> None:
     # vision_look_at_screen 注册处显式 ["*"]：text_adv 的观察循环经它读屏，不吃默认名单
     registry.register_provider(_provider("vision", "look_at_screen"), visible_to={"vision_look_at_screen": ["*"]})

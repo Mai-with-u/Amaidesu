@@ -21,10 +21,10 @@ Agent 404。
 
 from typing import TYPE_CHECKING, Annotated, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
-from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.dashboard.dependencies import get_dashboard_server, server_component
 from src.modules.dashboard.schemas.agent import (
     AgentCancelTaskResponse,
     AgentControlAction,
@@ -58,21 +58,12 @@ ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 # 高风险动作（停机 / 重建）：缺显式确认时拒绝执行。
 _RISKY_ACTIONS = (AgentControlAction.SHUTDOWN, AgentControlAction.RESTART)
 
-
-def _get_agent_control(server: "DashboardServer") -> "AgentControl":
-    """取 AgentControl；未注入（极简启动/测试场景）时抛 503。"""
-    control = getattr(server, "agent_control", None)
-    if control is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AgentManager 未注入，Agent 控制面不可用",
-        )
-    return control
-
-
-def _get_agent_manager(server: "DashboardServer") -> Optional["AgentManager"]:
-    """取 AgentManager（descriptions / rebuild 数据源）；未注入时返回 None。"""
-    return getattr(server, "agent_manager", None)
+# 组件访问声明：控制面必需 AgentControl；AgentManager 仅备忘录/重建需要
+# （descriptions 与 rebuild 数据源），名册列表缺失时按空描述降级
+AgentControlDep = Annotated[
+    "AgentControl", Depends(server_component("agent_control", missing_detail="AgentManager 未注入，Agent 控制面不可用"))
+]
+AgentManagerDep = Annotated[Optional["AgentManager"], Depends(server_component("agent_manager", required=False))]
 
 
 def _read_enabled_names(server: "DashboardServer") -> List[str]:
@@ -89,10 +80,8 @@ def _read_enabled_names(server: "DashboardServer") -> List[str]:
 
 
 @router.get("", response_model=AgentListResponse, summary="列出已注册 Agent（运行态 + enabled 配置态）")
-async def list_agents(server: ServerDep) -> AgentListResponse:
+async def list_agents(server: ServerDep, control: AgentControlDep, manager: AgentManagerDep) -> AgentListResponse:
     """Agent 运行名册全量视图：每项含状态、心跳、存活、重启计数与 enabled 标记。"""
-    control = _get_agent_control(server)
-    manager = _get_agent_manager(server)
     enabled_names = set(_read_enabled_names(server))
     descriptions = manager.descriptions if manager is not None else {}
     items: List[AgentSummary] = []
@@ -115,10 +104,10 @@ async def list_agents(server: ServerDep) -> AgentListResponse:
 
 
 @router.get("/{name}/state", response_model=AgentStateResponse, summary="查询单个 Agent 运行状态")
-async def get_agent_state(name: str, server: ServerDep) -> AgentStateResponse:
+async def get_agent_state(
+    name: str, server: ServerDep, control: AgentControlDep, manager: AgentManagerDep
+) -> AgentStateResponse:
     """单个 Agent 的 state / heartbeat_ms / is_alive / restart_count。"""
-    control = _get_agent_control(server)
-    manager = _get_agent_manager(server)
     info = control.state_of(name)
     if info is None:
         raise HTTPException(status_code=404, detail=f"Agent 不存在: {name}")
@@ -134,7 +123,14 @@ async def get_agent_state(name: str, server: ServerDep) -> AgentStateResponse:
 
 
 @router.get("/{name}/memo", response_model=AgentMemoResponse, summary="查询 Agent 备忘录/待办快照（只读）")
-async def get_agent_memo(name: str, server: ServerDep) -> AgentMemoResponse:
+async def get_agent_memo(
+    name: str,
+    server: ServerDep,
+    manager: Annotated[
+        "AgentManager",
+        Depends(server_component("agent_manager", missing_detail="AgentManager 未注入，备忘录快照不可用")),
+    ],  # noqa: B008
+) -> AgentMemoResponse:
     """Agent 的工作笔记快照（纯观测，无任何写端点）。
 
     - 主播：备忘录全文（``{notebook}``）
@@ -142,9 +138,6 @@ async def get_agent_memo(name: str, server: ServerDep) -> AgentMemoResponse:
 
     AgentManager 未注入 503；Agent 不存在或该 Agent 不提供备忘录快照 404。
     """
-    manager = _get_agent_manager(server)
-    if manager is None:
-        raise HTTPException(status_code=503, detail="AgentManager 未注入，备忘录快照不可用")
     agent = manager.get_agent_by_name(name)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"Agent 不存在: {name}")
@@ -165,7 +158,13 @@ async def get_agent_memo(name: str, server: ServerDep) -> AgentMemoResponse:
 @router.post(
     "/{name}/control", response_model=AgentControlResponse, summary="框架级控制（pause/resume/shutdown/restart）"
 )
-async def control_agent(name: str, request: AgentControlRequest, server: ServerDep) -> AgentControlResponse:
+async def control_agent(
+    name: str,
+    request: AgentControlRequest,
+    server: ServerDep,
+    control: AgentControlDep,
+    manager: AgentManagerDep,
+) -> AgentControlResponse:
     """对指定 Agent 执行框架级控制动作。
 
     - pause / resume：即时生效，不要求 confirm
@@ -176,8 +175,6 @@ async def control_agent(name: str, request: AgentControlRequest, server: ServerD
 
     未知动作 400；Agent 不在名册 404；动作执行失败 500。
     """
-    control = _get_agent_control(server)
-    manager = _get_agent_manager(server)
     try:
         action = AgentControlAction(request.action)
     except ValueError as exc:
@@ -228,14 +225,15 @@ async def control_agent(name: str, request: AgentControlRequest, server: ServerD
 
 
 @router.post("/{name}/prompt", response_model=AgentPromptResponse, summary="向 Agent 递话（运营提醒/插话）")
-async def prompt_agent(name: str, request: AgentPromptRequest, server: ServerDep) -> AgentPromptResponse:
+async def prompt_agent(
+    name: str, request: AgentPromptRequest, server: ServerDep, control: AgentControlDep
+) -> AgentPromptResponse:
     """给指定 Agent 发纯文本留言（不派新任务、不进任务账本）。
 
     source 固定记 "operator"（运营通道）。目标执行中的任务下一步吸收，
     挂起中的被唤醒重新判断。Agent 不在名册 404；目标拒收（未实现消化
     通道或留言队列已满）409。
     """
-    control = _get_agent_control(server)
     result = await control.prompt(name, request.content, source="operator")
     if not result["ok"]:
         code = 404 if result["error"] == "not_found" else 409
@@ -248,13 +246,14 @@ async def prompt_agent(name: str, request: AgentPromptRequest, server: ServerDep
     response_model=AgentCancelTaskResponse,
     summary="硬取消 Agent 的任务（强制清账 + 通知停手）",
 )
-async def cancel_agent_task(name: str, task_id: str, server: ServerDep) -> AgentCancelTaskResponse:
+async def cancel_agent_task(
+    name: str, task_id: str, server: ServerDep, control: AgentControlDep
+) -> AgentCancelTaskResponse:
     """强制取消指定任务：清执行 Agent 的委派追踪 + 账面写 cancelled + 注入停手通知。
 
     取消经执行 Agent 写账（单写者规则），软取消不打断当前工具调用。
     source 固定记 "operator"。Agent 不在名册、任务未知或已终态 → 404。
     """
-    control = _get_agent_control(server)
     result = await control.cancel_task(name, task_id, source="operator")
     if not result["ok"]:
         raise HTTPException(status_code=404, detail=result["message"])
@@ -266,14 +265,15 @@ async def cancel_agent_task(name: str, task_id: str, server: ServerDep) -> Agent
     response_model=AgentDelegateResponse,
     summary="运营直派任务（派新活，登记任务账本）",
 )
-async def delegate_to_agent(name: str, request: AgentDelegateRequest, server: ServerDep) -> AgentDelegateResponse:
+async def delegate_to_agent(
+    name: str, request: AgentDelegateRequest, server: ServerDep, control: AgentControlDep
+) -> AgentDelegateResponse:
     """给指定 Agent 派一项新工作（与 LLM 工具委派同一张任务账本，任务卡可见）。
 
     发起方记 "operator"、source 记 "agent"（执行 Agent 是账面唯一写者）。
     受理回执 200 {accepted, task_id, executor}；Agent 不在名册 404；
     目标拒收 409；任务基建未装配 503。
     """
-    control = _get_agent_control(server)
     result = await control.delegate(name, request.instruction)
     if not result["ok"]:
         code = {"not_found": 404, "refused": 409, "no_ledger": 503}.get(result["error"], 500)

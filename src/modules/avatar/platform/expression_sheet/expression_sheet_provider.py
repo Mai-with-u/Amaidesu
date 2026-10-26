@@ -127,6 +127,10 @@ class ExpressionSheetProvider(BaseToolProvider):
         """平台就绪态：目录已配置且至少扫描到一张差分图。"""
         return self.image_dir is not None and len(self._emotion_images) > 0
 
+    def connection_summary(self) -> Dict[str, Any]:
+        """连接态观测摘要：无外部连接，就绪态（目录已配置且有图）即 connected。"""
+        return {"is_connected": self.is_ready, "stats": {}}
+
     def list_tools(self) -> list[ToolSpec]:
         """声明本 Provider 暴露的工具列表（随就绪态动态）。
 

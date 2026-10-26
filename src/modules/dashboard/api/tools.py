@@ -28,12 +28,12 @@ server 清单变化换血），再对归属该 Provider 的已熔断工具做探
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 
-from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.dashboard.dependencies import get_dashboard_server, server_component
 from src.modules.dashboard.schemas.tool_catalog import ToolCatalogResponse
 from src.modules.dashboard.schemas.tools import ProviderControlRequest, ToolInvokeRequest
 from src.modules.dashboard.services.component_runtime import ComponentRuntimeContext
@@ -65,46 +65,8 @@ router = APIRouter()
 # 目录装配常量（分类词表/提供者描述/开关分类）、卡片拼装与工具条目/健康
 # 字段/调试调用响应的构造在 services/tool_catalog，本模块只保留路由与 HTTP 语义。
 
-
-def _get_registry(server: "DashboardServer") -> Any:
-    """取 ToolRegistry；未注入（极简启动/测试场景）时抛 503。"""
-    registry = getattr(server, "tool_registry", None)
-    if registry is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="ToolRegistry 未注入",
-        )
-    return registry
-
-
-def _safe_tool_health_snapshot(registry: Any) -> Dict[str, Dict[str, Any]]:
-    """取工具健康快照（旧 registry / mock 未实现时返回空 dict）。"""
-    snapshot = getattr(registry, "tool_health_snapshot", None)
-    if snapshot is None:
-        return {}
-    try:
-        result = snapshot()
-    except Exception:
-        logger.warning("tool_health_snapshot 调用失败，按无健康数据处理", exc=True)
-        return {}
-    return result if isinstance(result, dict) else {}
-
-
-def _supports_reconnect(registry: Any, tool_name: str) -> bool:
-    """按工具名查归属 Provider 是否支持手动重连（不可用/未实现方法时返回 False）。
-
-    registry 兼容旧版/missing：未实现 ``provider_supports_reconnect`` 时回
-    退为 False（前端不渲染手动重连按钮）。FastAPI 响应构造里调一次/工具，
-    量级 O(工具数)，单次调用经 ``_tool_owner`` 直查不开销。
-    """
-    fn = getattr(registry, "provider_supports_reconnect", None)
-    if fn is None:
-        return False
-    try:
-        return bool(fn(tool_name))
-    except Exception:  # noqa: BLE001 - 兼容层兜底
-        logger.warning(f"provider_supports_reconnect 查询失败，按不支持重连处理: {tool_name}", exc=True)
-        return False
+# 组件访问声明：ToolRegistry 未注入（极简启动/测试场景）时统一 503
+RegistryDep = Annotated[Any, Depends(server_component("tool_registry", missing_detail="ToolRegistry 未注入"))]
 
 
 def _get_tools_config(server: "DashboardServer") -> Dict[str, Any]:
@@ -118,6 +80,7 @@ def _get_tools_config(server: "DashboardServer") -> Dict[str, Any]:
 async def list_tools(
     provider: Optional[str] = None,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
+    registry: RegistryDep = None,  # noqa: B008
 ) -> Dict[str, List[Dict[str, Any]]]:
     """工具注册表只读内省（含停用工具，``disabled`` 字段标记状态）。
 
@@ -129,8 +92,6 @@ async def list_tools(
                     "category", "disabled", "result_event"(仅异步工具),
                     "health": 可选熔断/历史健康对象；无历史则为 None}, ...]}
     """
-    registry = _get_registry(server)
-
     try:
         specs = registry.list_tools(
             provider=provider,
@@ -142,7 +103,7 @@ async def list_tools(
         logger.warning("list_tools 调用失败，按空工具清单处理", exc=True)
         specs = []
 
-    health_snapshot = _safe_tool_health_snapshot(registry)
+    health_snapshot = registry.tool_health_snapshot()
     tools = [
         build_action_entry(
             spec,
@@ -150,8 +111,8 @@ async def list_tools(
             category=registry.category_of(spec.full_name),
             # 停用集合按注册表索引键（全名）存储，必须用全名判定
             disabled=registry.is_disabled(spec.full_name),
-            owner_agent=getattr(registry, "scoped_owner_of", lambda _n: "")(spec.name),
-            supports_reconnect=_supports_reconnect(registry, spec.name),
+            owner_agent=registry.scoped_owner_of(spec.full_name),
+            supports_reconnect=registry.provider_supports_reconnect(spec.name),
         )
         for spec in specs
     ]
@@ -165,13 +126,13 @@ async def list_tools(
 )
 async def list_tool_categories(
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
+    registry: RegistryDep = None,  # noqa: B008
 ) -> ToolCatalogResponse:
     """工具页侧边栏与提供者分组的数据源。
 
     提供者卡片以**运行时注册表为事实源**，∪ 配置声明态；卡片字段与分类
     排序规则见 ``services.tool_catalog.build_tool_catalog``。
     """
-    registry = _get_registry(server)
     tools_cfg = _get_tools_config(server)
     main_config = server.config_service.main_config if server.config_service else {}
     return ToolCatalogResponse.model_validate(build_tool_catalog(registry, tools_cfg, main_config))
@@ -211,6 +172,7 @@ async def control_tool_provider(
     key: str,
     request: ProviderControlRequest,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
+    registry: RegistryDep = None,  # noqa: B008
 ) -> Dict[str, Any]:
     """把提供者开关写回其声明配置（配置写路径统一编排）。
 
@@ -229,7 +191,6 @@ async def control_tool_provider(
     """
     if category in AGENT_CATEGORIES:
         raise HTTPException(status_code=400, detail="随 Agent 启用的工具分类不可开关（随 agents.enabled）")
-    registry = _get_registry(server)
     enable = request.action == "enable"
     cfg_dir = config_dir(server)
 
@@ -294,6 +255,7 @@ async def control_tool(
     full_name: str,
     request: ProviderControlRequest,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
+    registry: RegistryDep = None,  # noqa: B008
 ) -> Dict[str, Any]:
     """把工具加入/移出 ``tools.disabled_tools`` 停用列表（统一写回器落盘）。
 
@@ -304,7 +266,6 @@ async def control_tool(
     存在（防止拼写错误静默写入无效条目，404）。
     """
     enable = request.action == "enable"
-    registry = _get_registry(server)
     try:
         known = {s.full_name for s in registry.list_tools(include_disabled=True, include_tripped=True)}
     except Exception:
@@ -350,6 +311,7 @@ async def invoke_tool(
     full_name: str,
     request: ToolInvokeRequest,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
+    registry: RegistryDep = None,  # noqa: B008
 ) -> Dict[str, Any]:
     """人手调试调用：走 ``registry.invoke``，与 Planner/Agent 完全同路径。
 
@@ -364,7 +326,6 @@ async def invoke_tool(
     不存在。同步工具响应即最终结果；异步工具响应是受理回执，真实结果经
     ``tool.result`` 事件（WS 直通）异步回传。
     """
-    registry = _get_registry(server)
     if not registry.has(full_name):
         raise HTTPException(status_code=404, detail=f"运行时未注册工具: {full_name}")
     try:
@@ -395,6 +356,7 @@ async def invoke_tool(
 async def reconnect_provider_endpoint(
     provider_id: str,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
+    registry: RegistryDep = None,  # noqa: B008
 ) -> Dict[str, Any]:
     """触发通道级手动重连：仅维护外部连接（VTS/Warudo/OBS/MCP）的 Provider
     可用。失败映射：
@@ -410,14 +372,7 @@ async def reconnect_provider_endpoint(
     降级登记补注册或 server 清单换血的结果；刷新异常时为 null）。详情日志
     走 ``ToolRegistry.reconnect_provider``。
     """
-    registry = _get_registry(server)
-    fn = getattr(registry, "reconnect_provider", None)
-    if fn is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="ToolRegistry 不支持 reconnect_provider（旧版无此能力）",
-        )
-    report = await fn(provider_id)
+    report = await registry.reconnect_provider(provider_id)
     if report.get("ok"):
         return report
     err = report.get("error", "")

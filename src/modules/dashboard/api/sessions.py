@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.dashboard.dependencies import get_dashboard_server, server_component
 from src.modules.dashboard.schemas.session import (
     SessionActionResponse,
     SessionItem,
@@ -48,9 +48,10 @@ logger = get_logger("SessionsAPI")
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
-def _require_session_manager(server: "DashboardServer") -> Optional["LiveSessionManager"]:
-    """取 session_manager，未装配时返回 None。"""
-    return getattr(server, "session_manager", None)
+# 组件访问声明：场次管理器未装配（极简启动/测试）时统一 503
+SessionManagerDep = Annotated[
+    "LiveSessionManager", Depends(server_component("session_manager", missing_detail="LiveSessionManager 未装配"))
+]
 
 
 def _row_to_item(row: Any, active_pk: Optional[int]) -> SessionItem:
@@ -76,14 +77,12 @@ _SESSION_SOURCE_FILTERS = frozenset({"manual", "replay", "legacy"})
 @router.get("", response_model=SessionListResponse)
 async def list_sessions(
     server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
     limit: Annotated[int, Query(ge=1, le=200, description="最多返回条数")] = 50,
     source: Annotated[Optional[str], Query(description="来源筛选：manual / replay / legacy")] = None,
     q: Annotated[Optional[str], Query(description="标题关键字筛选")] = None,
 ) -> SessionListResponse:
     """列出直播场次（按开始时间倒序，附消息数），支持来源与标题筛选。"""
-    manager = _require_session_manager(server)
-    if manager is None:
-        raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
     if source is not None and source != "" and source not in _SESSION_SOURCE_FILTERS:
         raise HTTPException(status_code=400, detail=f"非法来源筛选: {source}")
     rows = await manager.list_sessions(
@@ -99,11 +98,12 @@ async def list_sessions(
 
 
 @router.post("/open", response_model=SessionOpenResponse)
-async def open_session(request: SessionOpenRequest, server: ServerDep) -> SessionOpenResponse:
+async def open_session(
+    request: SessionOpenRequest,
+    server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
+) -> SessionOpenResponse:
     """开启新直播场次（已有机行进行中时先自动结束）。"""
-    manager = _require_session_manager(server)
-    if manager is None:
-        raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
     pk = await manager.open_session(
         title=request.title,
         room_id=request.room_id,
@@ -114,11 +114,12 @@ async def open_session(request: SessionOpenRequest, server: ServerDep) -> Sessio
 
 
 @router.post("/{session_id}/close", response_model=SessionActionResponse)
-async def close_session(session_id: int, server: ServerDep) -> SessionActionResponse:
+async def close_session(
+    session_id: int,
+    server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
+) -> SessionActionResponse:
     """结束当前进行中的场次（指定 id 必须与进行中场次一致）。"""
-    manager = _require_session_manager(server)
-    if manager is None:
-        raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
     if manager.active_pk is None:
         return SessionActionResponse(success=False, detail="无进行中的显式场次")
     if manager.active_pk != session_id:
@@ -131,11 +132,13 @@ async def close_session(session_id: int, server: ServerDep) -> SessionActionResp
 
 
 @router.patch("/{session_id}", response_model=SessionActionResponse)
-async def rename_session(session_id: int, request: SessionRenameRequest, server: ServerDep) -> SessionActionResponse:
+async def rename_session(
+    session_id: int,
+    request: SessionRenameRequest,
+    server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
+) -> SessionActionResponse:
     """重命名场次（进行中/历史场次均可；title 空串规范化为 None=清除标题）。"""
-    manager = _require_session_manager(server)
-    if manager is None:
-        raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
     title = (request.title or "").strip() or None
     renamed = await manager.rename_session(session_id, title)
     if not renamed:
@@ -147,6 +150,7 @@ async def rename_session(session_id: int, request: SessionRenameRequest, server:
 async def session_timeline(
     session_id: int,
     server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
     limit: Annotated[int, Query(ge=1, le=2000, description="最多返回条数")] = 500,
     before_timestamp_ms: Annotated[
         Optional[int], Query(description="游标：只返回严格早于该时刻的条目（加载更早一页）")
@@ -160,16 +164,13 @@ async def session_timeline(
     条目；诊断天目录被清理时 ``events_pruned`` 如实回报，事件侧相应降级。
     条目装配见 ``services.session_timeline``，事件收集见 ``services.session_events``。
     """
-    manager = _require_session_manager(server)
-    if manager is None:
-        raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
     row = await manager.sessions.get_live_session(live_session_id=session_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
 
     detail_rows = await manager.get_session_details(session_id, limit=limit, before_timestamp_ms=before_timestamp_ms)
     reader = SessionEventReader(
-        event_history=getattr(server, "event_history", None),
+        event_history=server.event_history,
         events_dir=events_dir_of(server),
     )
     # 文件扫描是同步 IO，放线程池避免阻塞事件循环（回看是低频操作，无缓存）
@@ -193,14 +194,12 @@ async def session_timeline(
 async def session_rundown_execution(
     session_id: int,
     server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
 ) -> SessionRundownExecutionResponse:
     """单场流程单执行回看：变更事实行重放为"各环节实际停留 vs 预计时长"。"""
-    repo = getattr(server, "rundown_transition_repo", None)
+    repo = server.rundown_transition_repo
     if repo is None:
         raise HTTPException(status_code=503, detail="RundownTransitionRepo 未装配")
-    manager = _require_session_manager(server)
-    if manager is None:
-        raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
     row = await manager.sessions.get_live_session(live_session_id=session_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
@@ -214,11 +213,12 @@ async def session_rundown_execution(
 
 
 @router.delete("/{session_id}", response_model=SessionActionResponse)
-async def delete_session(session_id: int, server: ServerDep) -> SessionActionResponse:
+async def delete_session(
+    session_id: int,
+    server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
+) -> SessionActionResponse:
     """删除场次（级联清除明细数据；进行中场次先自动结束）。"""
-    manager = _require_session_manager(server)
-    if manager is None:
-        raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
     deleted = await manager.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")

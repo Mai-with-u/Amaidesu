@@ -81,3 +81,12 @@ async def test_chatbox_off_or_closed_sends_nothing() -> None:
     await backend.show("不会发出")
     await asyncio.sleep(0.01)
     assert sent == []
+
+
+def test_connection_summary_reflects_connection_flag() -> None:
+    """观测面契约：摘要连接态取自身标志，stats 透传 get_stats。"""
+    provider = VRChatProvider(config={})
+    provider._is_connected = True
+    summary = provider.connection_summary()
+    assert summary["is_connected"] is True
+    assert summary["stats"]["is_connected"] is True

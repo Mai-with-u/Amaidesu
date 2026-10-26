@@ -5,7 +5,7 @@ LLM 管理 API
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Annotated, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
 
@@ -25,6 +25,7 @@ from src.modules.dashboard.schemas.llm import (
     LLMUsageTrendsResponse,
 )
 from src.modules.dashboard.services.llm_stats import (
+    build_context_breakdown_response,
     build_history_list_item,
     build_usage_trends,
     cache_hit_rate,
@@ -62,10 +63,7 @@ async def get_all_models_usage(server: ServerDep) -> Dict[str, LLMUsageStatsResp
     latest_prompt_tokens: Dict[str, int] = await llm_repo.llm_usage_latest_prompt_tokens()
     # 上下文窗口：装配期由 LLMManager 按 model_identifier 建索引；未注入
     # / 未配置时一律取 0，前端据此隐藏水位（不显示 0%）
-    context_windows: Dict[str, int] = {}
-    llm_manager = getattr(server, "llm_manager", None)
-    if llm_manager is not None and hasattr(llm_manager, "get_model_context_windows"):
-        context_windows = llm_manager.get_model_context_windows()
+    context_windows: Dict[str, int] = _context_windows_of(server)
 
     result: Dict[str, LLMUsageStatsResponse] = {}
     for row in rows:
@@ -93,35 +91,10 @@ async def get_all_models_usage(server: ServerDep) -> Dict[str, LLMUsageStatsResp
     return result
 
 
-def _assemble_breakdown_response(
-    breakdown: Dict[str, Any],
-    *,
-    model_name: str,
-    row: Dict[str, Any],
-    context_windows: Dict[str, int],
-) -> LLMContextBreakdownResponse:
-    """把落库的 breakdown JSON + 仓储行组装成响应模型（两处端点共用）。"""
-    window = int(context_windows.get(model_name, 0))
-    used = int(breakdown.get("api_prompt_tokens", 0) or 0)
-    return LLMContextBreakdownResponse(
-        model_name=model_name,
-        profile_name=str(breakdown.get("profile_name") or row.get("profile_name") or ""),
-        request_id=str(breakdown.get("request_id") or row.get("request_id") or ""),
-        timestamp_ms=row.get("timestamp_ms"),
-        context_window=window,
-        api_prompt_tokens=used,
-        calibrated=bool(breakdown.get("calibrated", False)),
-        sections=breakdown.get("sections") or [],
-        free_tokens=max(0, window - used) if window > 0 else None,
-    )
-
-
 def _context_windows_of(server: "DashboardServer") -> Dict[str, int]:
     """取 LLMManager 装配期的每模型窗口索引（未注入/未配置一律空）。"""
-    llm_manager = getattr(server, "llm_manager", None)
-    if llm_manager is not None and hasattr(llm_manager, "get_model_context_windows"):
-        return llm_manager.get_model_context_windows()
-    return {}
+    llm_manager = server.llm_manager
+    return llm_manager.get_model_context_windows() if llm_manager is not None else {}
 
 
 @router.get("/context-breakdown", response_model=Dict[str, LLMContextBreakdownResponse])
@@ -143,7 +116,7 @@ async def get_context_breakdown(server: ServerDep) -> Dict[str, LLMContextBreakd
             "profile_name": breakdown.get("profile_name"),
             "request_id": breakdown.get("request_id"),
         }
-        result[model_name] = _assemble_breakdown_response(
+        result[model_name] = build_context_breakdown_response(
             breakdown, model_name=model_name, row=row, context_windows=context_windows
         )
     return result
@@ -173,7 +146,7 @@ async def get_context_breakdown_by_request(request_id: str, server: ServerDep) -
     if not isinstance(breakdown, dict):
         return None
     model_name = str(row.get("model_name") or "")
-    return _assemble_breakdown_response(
+    return build_context_breakdown_response(
         breakdown, model_name=model_name, row=row, context_windows=_context_windows_of(server)
     )
 

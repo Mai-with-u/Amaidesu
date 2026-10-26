@@ -66,11 +66,6 @@ logger = get_logger("SimulatorAPI")
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 
-def _get_service(server: "DashboardServer") -> Optional["SimulatorService"]:
-    """从 DashboardServer 取 SimulatorService（无注入则 None）。"""
-    return getattr(server, "simulator_service", None)
-
-
 def _config_enabled(server: "DashboardServer") -> bool:
     """读 [simulator].enabled 配置开关（不依赖实例是否存在）。"""
     if not server.config_service:
@@ -91,7 +86,7 @@ def _config_summary(server: "DashboardServer") -> Dict[str, Any]:
     服务尚未 ``setup()`` 时只能从配置 dict 读 key-value；setup 完成后
     优先以 ``SimulatorService.config_snapshot()`` 返回 Pydantic 校验过的字段集。
     """
-    service = _get_service(server)
+    service = server.simulator_service
     if service is not None:
         snapshot = service.config_snapshot()
         if snapshot is not None:
@@ -134,7 +129,7 @@ _CONFIG_SUMMARY_KEYS = (
 
 def _replay_progress_of(service: Optional["SimulatorService"]) -> Optional[SimulatorReplayProgress]:
     """读服务的回放进度并落为响应模型（无进度返回 None）。"""
-    raw = getattr(service, "replay_progress", None) if service is not None else None
+    raw = service.replay_progress if service is not None else None
     if not isinstance(raw, dict):
         return None
     return SimulatorReplayProgress(
@@ -151,10 +146,10 @@ async def get_simulator_status(server: ServerDep) -> SimulatorStatusResponse:
     不会抛 404——enabled=false 时返回 ``is_available=false``，前端可据此渲染空态引导。
     """
     enabled = _config_enabled(server)
-    service = _get_service(server)
+    service = server.simulator_service
     is_available = service is not None
-    is_running = bool(getattr(service, "is_running", False))
-    mode = str(getattr(service, "mode", "off"))
+    is_running = bool(service.is_running)
+    mode = str(service.mode)
 
     if not enabled:
         message = "[simulator].enabled=false；模拟器未启用。请在 config/infra.toml 的 [simulator] 段将 enabled 设为 true 并重启。"
@@ -171,7 +166,7 @@ async def get_simulator_status(server: ServerDep) -> SimulatorStatusResponse:
         is_running=is_running,
         mode=mode,
         replay_progress=_replay_progress_of(service),
-        last_error=getattr(service, "last_error", None) if service is not None else None,
+        last_error=service.last_error if service is not None else None,
         message=message,
         config=_config_summary(server),
     )
@@ -195,12 +190,12 @@ async def start_simulator(
         return SimulatorRunStateResponse(
             success=False, message="[simulator].enabled=false；无法启动。请修改配置后重启应用。"
         )
-    service = _get_service(server)
+    service = server.simulator_service
     if service is None:
         return SimulatorRunStateResponse(
             success=False, message="SimulatorService 未注入（通常因存储仓储/LLMManager 缺失或 --dry 模式）。"
         )
-    if getattr(service, "is_running", False):
+    if service.is_running:
         return SimulatorRunStateResponse(success=True, message="模拟器已在运行", is_running=True)
 
     replay_date = request.replay_date if request is not None else None
@@ -213,10 +208,10 @@ async def start_simulator(
     if rejected is not None:
         return SimulatorRunStateResponse(success=False, message=rejected, is_running=False)
 
-    if not getattr(service, "is_running", False):
+    if not service.is_running:
         # start 未拒绝但已不在运行态：小队列回放在启动返回前就自然放完
-        engine = getattr(service, "replay_engine", None)
-        total = getattr(engine, "total", 0) or 0
+        engine = service.replay_engine
+        total = engine.total if engine is not None else 0
         return SimulatorRunStateResponse(
             success=True,
             message=f"回放已完成（共 {total} 条）",
@@ -227,7 +222,7 @@ async def start_simulator(
         success=True,
         message="模拟器已启动",
         is_running=True,
-        mode=str(getattr(service, "mode", "off")),
+        mode=str(service.mode),
         replay_progress=_replay_progress_of(service),
     )
 
@@ -240,11 +235,11 @@ async def start_simulator(
 )
 async def stop_simulator(server: ServerDep) -> SimulatorRunStateResponse:
     """停止模拟器（幂等：未运行时返回 success=True）。"""
-    service = _get_service(server)
+    service = server.simulator_service
     if service is None:
         # 未注入等价于未运行 —— 幂等返回成功，避免前端反复点停出现误导
         return SimulatorRunStateResponse(success=True, message="SimulatorService 未注入，视为未运行", is_running=False)
-    if not getattr(service, "is_running", False):
+    if not service.is_running:
         return SimulatorRunStateResponse(success=True, message="模拟器未运行", is_running=False)
 
     try:
@@ -253,9 +248,7 @@ async def stop_simulator(server: ServerDep) -> SimulatorRunStateResponse:
         logger.exception(f"模拟器停止失败: {exc}")
         return SimulatorRunStateResponse(success=False, message=f"停止失败: {exc}")
 
-    return SimulatorRunStateResponse(
-        success=True, message="模拟器已停止", is_running=bool(getattr(service, "is_running", False))
-    )
+    return SimulatorRunStateResponse(success=True, message="模拟器已停止", is_running=bool(service.is_running))
 
 
 # ------------------------------------------------------------------ #
@@ -280,17 +273,15 @@ async def list_replay_dates(server: ServerDep) -> ReplayDatesResponse:
 
 
 def _require_pool(server: "DashboardServer") -> Any:
-    service = _get_service(server)
-    if service is None:
-        return None
-    return getattr(service, "persona_pool", None)
+    """常驻人设池（服务未装配 / 未 setup 时 None，端点按未装配降级）。"""
+    service = server.simulator_service
+    return service.persona_pool if service is not None else None
 
 
 def _require_gift_generator(server: "DashboardServer") -> Any:
-    service = _get_service(server)
-    if service is None:
-        return None
-    return getattr(service, "gift_generator", None)
+    """礼物目录（服务未装配 / 未 setup 时 None，端点按未装配降级）。"""
+    service = server.simulator_service
+    return service.gift_generator if service is not None else None
 
 
 def _persona_out(persona: "Persona") -> PersonaOut:

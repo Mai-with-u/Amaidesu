@@ -55,7 +55,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, ClassVar, Iterable, List, Optional, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, List, Optional, Protocol, runtime_checkable
 
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
@@ -240,6 +240,22 @@ class BaseToolProvider(ABC):
         """
         return True
 
+    def connection_summary(self) -> Dict[str, Any]:
+        """连接态观测摘要（观测面公共契约，Dashboard 等运营面只消费此方法）。
+
+        返回 ``{"is_connected": bool | None, "stats": dict}``：
+
+        - ``is_connected`` 三值：True / False / None——None 表示本 Provider
+          不暴露连接态（无连接语义），消费方按 unknown 渲染，不得再自行
+          探测私有成员
+        - ``stats``：平台统计摘要（无则空 dict），供状态面板透传
+
+        基类默认 = 无连接语义（``is_connected=None``、stats 空）；维护外部
+        连接的 Provider 经 ``ConnectionToolProvider`` 中间层取连接标志，其余
+        有自己连接/就绪语义的子类按需覆写。
+        """
+        return {"is_connected": None, "stats": {}}
+
     async def setup(self) -> None:
         """生命周期启动默认实现：no-op（无资源可建）。
 
@@ -371,6 +387,24 @@ class ConnectionToolProvider(BaseToolProvider):
     def _connected_tools(self) -> Iterable[ToolSpec]:
         """连接建立后暴露的全量工具清单——子类必须实现。"""
         raise NotImplementedError("ConnectionToolProvider 子类必须实现 _connected_tools()")
+
+    def connection_summary(self) -> Dict[str, Any]:
+        """连接态观测摘要：is_connected 取本层连接标志，stats 透传子类统计面。
+
+        子类可另带 ``get_stats()`` 统计摘要（VTS / Warudo 有，OBS 无）——同族
+        内按方法存在性读取，读失败按空摘要处理；连接态一律以本层 ``_connected``
+        标志为准（各平台在每个连接跃迁点经 ``mark_*`` 与其自身协议态保持同步）。
+        """
+        stats: Dict[str, Any] = {}
+        stats_fn = getattr(self, "get_stats", None)
+        if callable(stats_fn):
+            try:
+                value = stats_fn()
+                if isinstance(value, dict):
+                    stats = dict(value)
+            except Exception:  # noqa: BLE001 - 统计面失败不反噬连接态报告
+                _logger.warning(f"{type(self).__name__} get_stats 读取失败，按空摘要处理", exc=True)
+        return {"is_connected": self._connected, "stats": stats}
 
 
 def wire_connection_tools(provider: ConnectionToolProvider, registry: Any) -> None:
