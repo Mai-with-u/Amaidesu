@@ -14,12 +14,19 @@ reminder 抢先的 tick 里静默丢失，"信号保留到开播后生效"的注
 
 下播（``live=False``）时读数全 False 且不消费任何信号：信号保留到
 开播后首个 tick 生效。
+
+每 tick 的"读信号 → 折参 → 规则判定 → 确认消费"完整判定序由
+:meth:`ProactiveSignals.evaluate_tick` 单点承担——消费纪律与判定序
+同属信号账本一侧，调用方拿到判定结果只负责执行。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from .proactive_trigger import ProactiveTrigger
 
 __all__ = ["ProactiveSignals", "ProactiveTickSignals"]
 
@@ -95,3 +102,48 @@ class ProactiveSignals:
             self._game = False
         if tick.rundown_pending and reason == "rundown":
             self._rundown = False
+
+    # ----- 每 tick 判定（读信号 → 折参 → 判定 → 确认消费，单点序） -----
+
+    def evaluate_tick(
+        self,
+        *,
+        live: bool,
+        trigger: ProactiveTrigger,
+        room_state: Any,
+        now_ms: int,
+        rundown_overdue: bool,
+        rundown_ready: bool,
+        reminder_pending: bool,
+    ) -> Optional[str]:
+        """执行一个 tick 的完整主动发言判定序列，返回触发原因（None = 不触发）。
+
+        本方法把此前散在调用方的四步序——读信号、下播折参、规则判定、
+        确认消费——收为单一动词，顺序约束由实现结构保证而非注释契约：
+
+        1. ``read_for_tick(live=...)``：读本 tick 信号读数（下播全 False 不消费）；
+        2. 下播时把 ``rundown_overdue`` / ``rundown_ready`` 强制 False（未开播
+           不说开场白/推进环节，流程单协调器的状态在闸外不参与判定）；
+        3. ``trigger.should_trigger(...)``：纯规则判定（reminder > rundown >
+           game > external > ... 的优先级与各自限流豁免都在触发器内）；
+        4. ``confirm(reason, tick)``：无论触发与否都回写确认（每个 tick
+           恰好一次；game / rundown 仅在 reason 命中时消费，被 reminder
+           抢先或总开关关闭时保留待补触发）。
+
+        调用方拿到返回的 reason 后只负责执行：触发则发起一轮主动决策，
+        不触发则本轮结束。"reminder 早退不消费 pending"属于调用方是否
+        进入本判定的前置闸（递话必达优先于开播闸），不在本方法内。
+        """
+        tick = self.read_for_tick(live=live)
+        reason = trigger.should_trigger(
+            room_state,
+            now_ms,
+            external_pending=tick.external_pending,
+            rundown_pending=tick.rundown_pending,
+            rundown_overdue=False if not live else rundown_overdue,
+            rundown_ready=False if not live else rundown_ready,
+            game_pending=tick.game_pending,
+            reminder_pending=reminder_pending,
+        )
+        self.confirm(reason, tick)
+        return reason

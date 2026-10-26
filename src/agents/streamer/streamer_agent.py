@@ -1294,24 +1294,19 @@ class StreamerAgent(BaseAgent):
             if self._buffer.is_empty:
                 if not self._reminder_queue and not self._live_active:
                     return
-                live_gated = not self._live_active
-                tick = self._proactive_signals.read_for_tick(live=self._live_active)
-                reason = self._proactive_trigger.should_trigger(
-                    self._room_state,
-                    now_ms(),
-                    external_pending=tick.external_pending,
-                    rundown_pending=tick.rundown_pending,
-                    rundown_overdue=False if live_gated else self._rundown_coord.is_overdue(),
-                    rundown_ready=False if live_gated else self._rundown_coord.is_active(),
-                    game_pending=tick.game_pending,
+                # 读信号 → 下播折参 → 判定 → 确认消费的完整判定序收在
+                # ProactiveSignals.evaluate_tick 单点；Agent 只按结果执行。
+                reason = self._proactive_signals.evaluate_tick(
+                    live=self._live_active,
+                    trigger=self._proactive_trigger,
+                    room_state=self._room_state,
+                    now_ms=now_ms(),
+                    rundown_overdue=self._rundown_coord.is_overdue(),
+                    rundown_ready=self._rundown_coord.is_active(),
                     # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
                     # （送达在决策执行器取空队列处发生，任何决策窗都会消费）
                     reminder_pending=bool(self._reminder_queue),
                 )
-                # 消费纪律一处声明（见 proactive_signals）：game / rundown 确认
-                # 消费（被 reminder 抢先或总开关关闭时保留，条件满足后补触发）；
-                # external 已在读数时消费（尽力而为的点播推动）
-                self._proactive_signals.confirm(reason, tick)
                 if reason is not None:
                     self._stats.total_proactive += 1
                     self._logger.info(f"主动发言触发: {reason}")
