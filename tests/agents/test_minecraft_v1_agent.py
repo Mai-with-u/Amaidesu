@@ -14,9 +14,12 @@ from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.glance import glance_brief, glance_scene
 from src.agents.minecraft.goal_ledger import pause_notice
-from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of, reply_of
+from src.agents.minecraft.maicraft import GoalRun, MaicraftReply, goal_run_of, ledger_task_id, reply_of
 from src.agents.minecraft.tools import MaicraftMcpProvider
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.llm.engine import _guard_inline_payload, _normalize_generate_input
 from src.modules.llm.errors import UnsendableRequestError
 from src.modules.llm.payload import Response, ToolCall
@@ -1351,3 +1354,84 @@ async def test_summary_failure_falls_back_to_first_sentence() -> None:
     assert "细节" not in emitted.message, "斩尾不带后半长文"
     assert long_text in emitted.scene, "原文留档仍在"
     await agent.stop()
+
+
+def _track_goal(agent: MinecraftAgent, goal_id: int) -> None:
+    """把一个进行中的目标登记进跟踪名单（模拟 execute 已下达、目标还在跑）。"""
+    agent._goals.track(
+        GoalRun(
+            goal_id=goal_id,
+            ability="travel",
+            purpose="回家",
+            state="running",
+            question=None,
+            result=None,
+            doing="",
+            data={},
+        )
+    )
+
+
+async def test_stall_alert_through_task_changed_wakes_tracked_goal() -> None:
+    """停滞告警接缝：真事件总线 emit task.changed 驱动，在跟踪的目标收到注入并置位唤醒。"""
+    bus = EventBus(enable_stats=False)
+    agent = MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=False, url="http://127.0.0.1:8766/mcp"), events_wait_ms=1000),
+        event_bus=bus,
+    )
+    # 只挂订阅、不起 worker（start 尾部的订阅动作；避免 worker 竞争消费队列消息）
+    agent._subscribe_task_wakeup()
+    _track_goal(agent, goal_id=7)
+    try:
+        await bus.emit(
+            CoreEvents.TASK_CHANGED,
+            TaskChangedPayload(
+                task_id=ledger_task_id(7),
+                status="running",
+                initiator="minecraft",
+                summary="很久没挪窝了",
+                alert=True,
+            ),
+            source="TaskLedger",
+        )
+        await _wait_until(lambda: bool(agent._message_queue))
+        injected = list(agent._message_queue)
+        assert len(injected) == 1 and injected[0][0] == ""
+        assert "7 很久没有新进展" in injected[0][1], "注入停滞告警正文并点名目标"
+        assert "maicraft_goal" in injected[0][1], "正文里给出去查目标的出口"
+        assert agent._wake_event.is_set(), "唤醒事件置位"
+    finally:
+        await agent.stop()
+        await bus.cleanup()
+
+
+async def test_task_changed_without_alert_or_from_other_initiator_stays_silent() -> None:
+    """反例：非告警通知与别人的任务变化都不注入、不唤醒。"""
+    bus = EventBus(enable_stats=False)
+    agent = MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=False, url="http://127.0.0.1:8766/mcp"), events_wait_ms=1000),
+        event_bus=bus,
+    )
+    agent._subscribe_task_wakeup()
+    _track_goal(agent, goal_id=7)
+    try:
+        # 自己的目标、但不是告警（普通状态变化走事件流送达，不重复叫醒）
+        await bus.emit(
+            CoreEvents.TASK_CHANGED,
+            TaskChangedPayload(task_id=ledger_task_id(7), status="running", initiator="minecraft", alert=False),
+            source="TaskLedger",
+        )
+        # 告警、但发起方是别人（只唤醒发起方）
+        await bus.emit(
+            CoreEvents.TASK_CHANGED,
+            TaskChangedPayload(
+                task_id=ledger_task_id(7), status="running", initiator="streamer", summary="很久没挪窝了", alert=True
+            ),
+            source="TaskLedger",
+        )
+        await asyncio.sleep(0.05)
+        assert not agent._message_queue, "两种情形都不注入"
+        assert not agent._wake_event.is_set(), "两种情形都不唤醒"
+    finally:
+        await agent.stop()
+        await bus.cleanup()

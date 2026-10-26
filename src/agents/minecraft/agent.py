@@ -1102,7 +1102,6 @@ class MinecraftAgent(BaseAgent):
         self._sky_notice = ("", content)
         self._message_queue.append(self._sky_notice)
 
-    @staticmethod
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """账本的变化回到这里：目标的成败已经由事件流直接送达，账本只补"长时间没进展"的告警。"""
         goal_id = goal_id_of_ledger(payload.task_id)
