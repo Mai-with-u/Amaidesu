@@ -113,6 +113,16 @@ describe('ModelConfigPage 结构性绑定', () => {
   it('叶字段编辑仍经 FieldRenderer（复用同一条控件与校验路径）', () => {
     expect(pageSource.match(/<FieldRenderer/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
   });
+
+  it('连通性测试：模型行只报提供商名 + 模型标识，凭据由后端按名解析', () => {
+    expect(pageSource).toContain('testModelConnectivity(idx)');
+    // 密钥不出前端：请求体只含名字与标识两个非敏感字符串
+    expect(pageSource).toMatch(
+      /llmApi\.testModel\(\{ provider: providerName, model: identifier \}\)/,
+    );
+    expect(pageSource).toContain('class="test-ok mono"');
+    expect(pageSource).toContain('class="test-fail"');
+  });
 });
 
 describe('ModelConfigPage 改名引用守护', () => {

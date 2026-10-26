@@ -271,3 +271,23 @@ export interface LLMRequestStatsItem {
 export interface LLMRequestStatsBatch {
   stats: Record<string, LLMRequestStatsItem>;
 }
+
+/** POST /llm/models/test 请求：前端只报名字，连接参数与密钥由后端按名从已保存配置解析（密钥不出服务端） */
+export interface LLMModelTestRequest {
+  /** 提供商名（llm_models.api_provider 引用的名字） */
+  provider: string;
+  model: string;
+  timeout_ms?: number;
+}
+
+/** POST /llm/models/test 响应：可达性、往返时延与失败原因（业务级失败以 ok=false 返回） */
+export interface LLMModelTestResponse {
+  ok: boolean;
+  /** 请求往返耗时（毫秒）；失败发生在建连前（如端点未配置）时为 null */
+  latency_ms: number | null;
+  /** 服务端回显的实际模型名（中转站改写路由时与请求标识可能不同） */
+  model: string | null;
+  finish_reason: string | null;
+  /** 失败原因（平实中文 + 服务端响应体关键原文）；成功时为 null */
+  error: string | null;
+}

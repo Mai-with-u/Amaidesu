@@ -147,13 +147,41 @@
                 <span v-else class="unused">未投入使用</span>
               </td>
               <td @click.stop>
-                <el-button
-                  type="danger"
-                  size="small"
-                  text
-                  :icon="Delete"
-                  @click="removeModel(idx)"
-                />
+                <div class="row-actions">
+                  <el-button
+                    size="small"
+                    text
+                    :icon="Connection"
+                    :loading="testStates[idx]?.status === 'loading'"
+                    @click="testModelConnectivity(idx)"
+                    >测试</el-button
+                  >
+                  <el-tooltip
+                    v-if="testStates[idx]?.status === 'ok'"
+                    :content="`服务端模型：${testStates[idx]?.model ?? '未知'}${
+                      testStates[idx]?.finishReason
+                        ? ' · finish_reason: ' + testStates[idx]?.finishReason
+                        : ''
+                    }`"
+                    placement="top"
+                  >
+                    <span class="test-ok mono">连通 {{ testStates[idx]?.latencyMs }}ms</span>
+                  </el-tooltip>
+                  <el-tooltip
+                    v-else-if="testStates[idx]?.status === 'error'"
+                    :content="testStates[idx]?.error ?? ''"
+                    placement="top"
+                  >
+                    <span class="test-fail">失败</span>
+                  </el-tooltip>
+                  <el-button
+                    type="danger"
+                    size="small"
+                    text
+                    :icon="Delete"
+                    @click="removeModel(idx)"
+                  />
+                </div>
               </td>
             </tr>
             <tr v-if="modelExpanded[idx] === true" class="model-edit-row">
@@ -318,10 +346,12 @@
  */
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { ArrowDown, ArrowRight, Close, Delete, Plus } from '@element-plus/icons-vue';
+import { ArrowDown, ArrowRight, Close, Connection, Delete, Plus } from '@element-plus/icons-vue';
 import FieldRenderer from './FieldRenderer.vue';
 import SubFieldGroup from './SubFieldGroup.vue';
+import { llmApi } from '@/api';
 import { confirmAction } from '@/utils/confirmAction';
+import { getApiErrorMessage } from '@/utils/apiError';
 import type { ConfigFieldSchema } from '@/types/settings';
 import {
   MODELS_KEY,
@@ -552,6 +582,56 @@ function usageChips(model: ConfigItem | undefined): string[] {
 function isProviderDangling(model: ConfigItem | undefined): boolean {
   const name = str(model?.api_provider);
   return name !== '' && !providerNames.value.includes(name);
+}
+
+// ── 连通性测试（模型行"测试"按钮） ───────────────────────
+/** 单行测试态：loading → ok（往返时延 + 服务端模型名）/ error（失败原因） */
+interface ModelTestState {
+  status: 'loading' | 'ok' | 'error';
+  latencyMs?: number;
+  model?: string;
+  finishReason?: string;
+  error?: string;
+}
+const testStates = ref<Record<number, ModelTestState>>({});
+
+/**
+ * 测试该模型的连通性：前端只报提供商名 + 模型标识，连接参数与密钥由
+ * 服务端按名从已保存配置解析（改完先保存再测试）；结果就地呈现在按钮旁。
+ */
+async function testModelConnectivity(idx: number) {
+  const model = models.value[idx];
+  const identifier = str(model?.model_identifier) || itemDisplayName(model);
+  if (identifier === '') {
+    ElMessage.warning('该模型未填写模型标识，无法测试');
+    return;
+  }
+  const providerName = str(model?.api_provider);
+  if (providerName === '') {
+    ElMessage.warning('该模型未设置所属提供商，无法测试');
+    return;
+  }
+  if (!providers.value.find(p => itemDisplayName(p) === providerName)) {
+    ElMessage.warning(`所属提供商「${providerName}」不存在，请先接入该提供商`);
+    return;
+  }
+  testStates.value[idx] = { status: 'loading' };
+  try {
+    const { data } = await llmApi.testModel({ provider: providerName, model: identifier });
+    testStates.value[idx] = data.ok
+      ? {
+          status: 'ok',
+          latencyMs: data.latency_ms ?? undefined,
+          model: data.model ?? undefined,
+          finishReason: data.finish_reason ?? undefined,
+        }
+      : { status: 'error', error: data.error ?? '测试失败' };
+  } catch (e) {
+    testStates.value[idx] = {
+      status: 'error',
+      error: getApiErrorMessage(e, '测试请求失败，请确认服务端可访问'),
+    };
+  }
 }
 
 // ── 常规字段更新（FieldRenderer 出口统一走整值写回） ────
@@ -936,6 +1016,25 @@ async function removeModel(index: number) {
 .unused {
   font-size: 11px;
   color: var(--text-placeholder);
+}
+
+/* 连通性测试：按钮组右对齐，结果就地呈现，详情走悬停 */
+.row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.test-ok {
+  font-size: 11px;
+  color: var(--color-success);
+}
+
+.test-fail {
+  font-size: 11px;
+  color: var(--color-danger);
 }
 
 /* ── 展开编辑区（模型行 / 提供商抽屉共用） ────────────── */

@@ -180,6 +180,17 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
         ),
     ),
     (
+        "llmApi.testModel → POST /llm/models/test",
+        llm_schemas.LLMModelTestResponse,
+        (
+            "ok",
+            "latency_ms",
+            "model",
+            "finish_reason",
+            "error",
+        ),
+    ),
+    (
         "agentsApi.listAgents → GET /agents",
         agent_schemas.AgentListResponse,
         (

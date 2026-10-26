@@ -15,6 +15,8 @@ from src.modules.dashboard.schemas.llm import (
     LLMHistoryListResponse,
     LLMHistoryStatisticsModelStats,
     LLMHistoryStatisticsResponse,
+    LLMModelTestRequest,
+    LLMModelTestResponse,
     LLMRequestHistoryListItem,
     LLMRequestHistoryResponse,
     LLMRequestStatsBatchRequest,
@@ -32,6 +34,7 @@ from src.modules.dashboard.services.llm_stats import (
     convert_record_to_response,
     merge_payload_from_file,
 )
+from src.modules.dashboard.services.model_test import find_saved_provider, test_model_connectivity
 from src.modules.diagnostics.readers import (
     read_latest_breakdowns,
     read_request_breakdown,
@@ -301,6 +304,21 @@ async def get_request_by_id(request_id: str, server: ServerDep) -> Optional[LLMR
     # 冻结整个 WebUI；挪线程池（浏览器逐卡展开时触发，低频）
     merged = await asyncio.to_thread(merge_payload_from_file, record)
     return convert_record_to_response(merged)
+
+
+@router.post("/models/test", response_model=LLMModelTestResponse)
+async def test_model(request: LLMModelTestRequest, server: ServerDep) -> LLMModelTestResponse:
+    """模型连通性测试（模型注册表"测试"按钮数据面）。
+
+    前端只报提供商名 + 模型标识（非敏感字符串）；连接参数与密钥按名从
+    已保存配置解析（改完先保存再测试），密钥全程不出服务端。提供商未
+    保存属业务级失败，与密钥错误同以 ``ok=False`` + 原因返回。同步长请求
+    （最长 timeout_ms），前端需放宽超时并做 loading 防连点。
+    """
+    provider_cfg = find_saved_provider(server.config_service, request.provider)
+    if provider_cfg is None:
+        return LLMModelTestResponse(ok=False, error=f"提供商「{request.provider}」尚未保存到配置，请先保存后再测试")
+    return await test_model_connectivity(provider_cfg, request.model, request.timeout_ms)
 
 
 @router.post("/history/stats", response_model=LLMRequestStatsBatchResponse)

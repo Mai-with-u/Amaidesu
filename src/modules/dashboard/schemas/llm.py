@@ -238,3 +238,29 @@ class LLMRequestStatsBatchResponse(BaseModel):
     """批量统计响应：id → 统计；未命中的 id 不在映射中"""
 
     stats: Dict[str, LLMRequestStatsItem] = Field(default_factory=dict)
+
+
+class LLMModelTestRequest(BaseModel):
+    """模型连通性测试请求（模型注册表"测试"按钮数据面）
+
+    前端只报名字：provider 名 + 模型标识都是非敏感字符串；连接参数与
+    密钥由服务端按名从已保存配置解析（改完先保存再测试），密钥全程不出
+    服务端。
+    """
+
+    provider: str = Field(..., min_length=1, description="提供商名（llm_models.api_provider 引用的名字）")
+    model: str = Field(..., min_length=1, description="API 模型标识（llm_models.model_identifier）")
+    timeout_ms: int = Field(default=15_000, ge=1_000, le=60_000, description="单次请求超时（毫秒）")
+
+
+class LLMModelTestResponse(BaseModel):
+    """模型连通性测试结果：可达性、时延与失败原因"""
+
+    ok: bool
+    # 请求往返耗时；失败发生在建连前（如端点未配置）时为 None
+    latency_ms: Optional[int] = None
+    # 服务端回显的实际模型名（中转站改写模型路由时与请求标识可能不同）
+    model: Optional[str] = None
+    finish_reason: Optional[str] = None
+    # 失败原因（平实中文 + 服务端响应体关键原文）；成功时为 None
+    error: Optional[str] = None

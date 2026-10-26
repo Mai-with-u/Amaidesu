@@ -47,6 +47,8 @@ import type {
   LLMHistoryQueryParams,
   LLMHistoryResponse,
   LLMHistoryStatistics,
+  LLMModelTestRequest,
+  LLMModelTestResponse,
   LLMRequestHistory,
   LLMRequestStatsBatch,
   ToolsView,
@@ -193,6 +195,10 @@ export const llmApi = {
   /** 批量统计（仅 usage/model 列）：时间线统计胶囊合批懒取专用，避免逐卡取详情回传整段请求正文 */
   getRequestStats: (requestIds: string[]) =>
     api.post<LLMRequestStatsBatch>('/llm/history/stats', { request_ids: requestIds }),
+  // 模型连通性测试（模型注册表"测试"按钮）：发一次最小聊天请求验证端点/密钥/模型，
+  // 业务级失败以 ok=false 携原因返回；同步长请求，放宽 timeout 并由调用方 loading 防连点
+  testModel: (request: LLMModelTestRequest) =>
+    api.post<LLMModelTestResponse>('/llm/models/test', request, { timeout: 60000 }),
 };
 
 // Tools（工具清单 + 提供者分类面板）
