@@ -9,6 +9,7 @@ import pytest
 from src.agents.streamer.game_ledger import GameLedger
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.room_state import RoomState
+from src.agents.streamer.session_scope import SessionScope
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.modules.events.payloads.game import GamePayload
@@ -32,7 +33,7 @@ def test_sanitize_internal_terms(text: str, expected) -> None:
 async def test_game_event_line_sanitized_at_boundary() -> None:
     """game.* 事件行进入待入账队列前脱敏：任务号不进主播上下文。"""
     agent = StreamerAgent.__new__(StreamerAgent)  # 只测事件行组装，不走完整装配
-    agent._game_ledger = GameLedger()
+    agent._scope = SessionScope(ledger=GameLedger(), timeline=MagicMock(), logger=MagicMock())
     agent._planner = MagicMock()
     agent._logger = MagicMock()
 

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.decision_executor import DecisionRoundExecutor
+from src.agents.streamer.session_scope import WindowMaterials
 from src.agents.streamer.speech_dispatcher import SpeechDispatcher
 from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.stats import StreamerStats
@@ -275,9 +276,10 @@ async def test_speech_event_precedes_round_end_events() -> None:
         stats=StreamerStats(),
         thinking_sink=None,
         thinking_enabled=False,
-        history_provider=AsyncMock(return_value=[]),
+        window_opener=AsyncMock(
+            return_value=WindowMaterials(history=[], game_batch=GameEventBatch(), session_recap="")
+        ),
         rundown_text_provider=MagicMock(return_value=None),
-        game_events_provider=MagicMock(return_value=GameEventBatch()),
     )
     order: list[str] = []
 

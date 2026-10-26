@@ -16,7 +16,7 @@ from src.modules.tools.models import ToolExecutionResult
 
 @dataclass(frozen=True)
 class FakeTurn:
-    """live_chat 行的历史视图（同 _LiveChatTurn 全字段）。"""
+    """live_chat 行的历史视图（同 session_scope.LiveChatTurn 全字段）。"""
 
     role: str
     content: str

@@ -11,6 +11,7 @@ from src.agents.streamer.decision_executor import (
     _silent_reason_text,
     _trigger_reason_text,
 )
+from src.agents.streamer.session_scope import WindowMaterials
 from src.agents.streamer.stats import StreamerStats
 from src.agents.streamer.timeline import GameEventBatch
 from src.modules.events.names import CoreEvents
@@ -66,9 +67,10 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
         stats=stats,
         thinking_sink=None,
         thinking_enabled=False,
-        history_provider=AsyncMock(return_value=[]),
+        window_opener=AsyncMock(
+            return_value=WindowMaterials(history=[], game_batch=GameEventBatch(), session_recap="")
+        ),
         rundown_text_provider=MagicMock(return_value=None),
-        game_events_provider=MagicMock(return_value=GameEventBatch()),
     )
     deps = {
         "planner": planner,
@@ -81,16 +83,9 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
     return executor, deps
 
 
-async def test_window_boundary_runs_once_before_history_read():
-    """窗边界收口（出账）每轮恰好一次，且先于历史读取——出账行才能进本轮投影。"""
-    calls: list[str] = []
-
-    def _boundary() -> None:
-        calls.append("boundary")
-
-    async def _history() -> list:
-        calls.append("history")
-        return []
+async def test_window_opener_runs_once_per_round():
+    """开窗器每轮恰好调用一次（出账先于读取的顺序不变量由 SessionScope.open_window 内化，在此只锁 executor 侧调用纪律）。"""
+    window_opener = AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch(), session_recap=""))
 
     planner = MagicMock()
     planner.plan = AsyncMock(return_value={**_OKAY_OUTCOME, "raw_content": "RAW"})
@@ -105,14 +100,13 @@ async def test_window_boundary_runs_once_before_history_read():
         stats=StreamerStats(),
         thinking_sink=None,
         thinking_enabled=False,
-        history_provider=_history,
+        window_opener=window_opener,
         rundown_text_provider=MagicMock(return_value=None),
-        window_boundary=_boundary,
     )
 
     await executor.execute([], forced=False, trigger_reason="batch:flush")
 
-    assert calls == ["boundary", "history"], "收口先于读取，且每轮各恰好一次"
+    window_opener.assert_awaited_once()
 
 
 # happy：一轮决策的完整产出

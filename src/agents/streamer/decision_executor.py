@@ -5,14 +5,15 @@
 生成 round_id → 发射 ``streamer.stage``（planning）→ Planner ReAct 决策
 → 产出送发言管线 → 发射 ``planner.decision`` 与 idle 状态。
 
-依赖全部构造期注入（不持 Agent 引用）；历史/流程单/游戏事件批次经 provider
-回调取用（读数逻辑的事件近邻留在 Agent）。
+依赖全部构造期注入（不持 Agent 引用）；决策窗材料经 ``window_opener``
+一次取齐（出账与读取的顺序不变量内化在 SessionScope.open_window），
+流程单文本与运营提醒这两个非场次作用域项仍经 provider 回调自取。
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -26,9 +27,9 @@ from src.modules.logging import ModuleLogger, get_logger
 from src.modules.utils.time_utils import now_ms
 
 from .planner import Planner
-from .timeline import GameEventBatch
 from .proactive_trigger import ProactiveTrigger
 from .room_state import RoomState
+from .session_scope import WindowMaterials
 from .speech_dispatcher import SpeechDispatcher
 from .stats import StreamerStats
 from .thinking_stream import ThinkingStreamContext
@@ -105,25 +106,22 @@ class DecisionRoundExecutor:
         stats: StreamerStats,
         thinking_sink: Optional[Any],
         thinking_enabled: bool,
-        history_provider: Callable[[], Any],
+        window_opener: Callable[[], Awaitable[WindowMaterials]],
         rundown_text_provider: Callable[[], Optional[str]],
-        game_events_provider: Optional[Callable[[], GameEventBatch]] = None,
         reminders_provider: Optional[Callable[[], str]] = None,
         logger: Optional[ModuleLogger] = None,
-        session_recap_provider: Optional[Callable[[], str]] = None,
-        window_boundary: Optional[Callable[[], Any]] = None,
     ) -> None:
-        """``history_provider`` 等 provider 返回值形态：
+        """决策窗材料的取用契约：
 
-        - window_boundary: 决策窗边界收口（账本整批出账：游戏事件进时间线与
-          本窗批次、私聊清空）——每轮第一步显式执行，先于一切读取；缺省 = 无收口
-        - history: ``Optional[List]``（None/空 = 无历史，鸭子类型对话轮）
-        - rundown_text: ``Optional[str]``（None = 无流程单情境）
-        - game_events: ``GameEventBatch``（本轮新入账的游戏事件批次：时间线新行进
-          事实块与新鲜语料，聊天原话随说话交给表达侧；缺省 = 本窗无游戏事件）
+        - window_opener: 开一个决策窗，一次取齐场次作用域材料（出账先于读取，
+          顺序不变量内化在 ``SessionScope.open_window``）。返回的
+          ``WindowMaterials`` 字段语义见其类型注释——``history`` 的 ``None``
+          与空列表不同义，``game_batch`` 空批次即无事件，``session_recap``
+          空串即不注入。
+        - rundown_text: ``Optional[str]``（None = 无流程单情境；非场次作用域
+          项，经流程单协调器自取）。
         - reminders: ``str``（可为空串；运营递话留言，**读取即取空队列**——
-          送达一次制，缺省 = 不注入）
-        - session_recap: ``str``（可为空串；上场回顾，开播后固定整场不变，缺省 = 不注入）
+          送达一次制，缺省 = 不注入）。
         """
         self._logger = logger or get_logger("StreamerAgent.DecisionRoundExecutor")
         self._planner = planner
@@ -134,12 +132,9 @@ class DecisionRoundExecutor:
         self._stats = stats
         self._thinking_sink = thinking_sink
         self._thinking_enabled = thinking_enabled
-        self._window_boundary = window_boundary
-        self._history_provider = history_provider
+        self._window_opener = window_opener
         self._rundown_text_provider = rundown_text_provider
-        self._game_events_provider = game_events_provider
         self._reminders_provider = reminders_provider
-        self._session_recap_provider = session_recap_provider
         # 决策轮次自增计数器（round_id 生成用；进程内单调）
         self._round_seq: int = 0
 
@@ -255,25 +250,16 @@ class DecisionRoundExecutor:
             "total_duration_ms": now_ms() - started_ms,
         }
 
-        # 决策窗边界收口：账本整批出账、私聊清空（先于一切读取——出账的时间线
-        # 行要进本轮历史投影，本窗批次随 game_events 取用）
-        if self._window_boundary is not None:
-            self._window_boundary()
-
-        # 读历史（live_chat 单一事实源；无显式场次时为空）——纯读，无副作用
-        history = await self._history_provider()
+        # 开决策窗：出账 + 读历史 + 本窗批次 + 上场回顾一次取齐（顺序不变量
+        # 在 SessionScope.open_window 内化——出账的时间线行必先进本轮投影）
+        materials = await self._window_opener()
+        history = materials.history
 
         # 拼装流程单上下文
         rundown_text = self._rundown_text_provider()
 
-        # 本轮新入账的游戏事件批次（决策窗边界批量追加进时间线的那一批；缺省为空批次）
-        game_batch = self._game_events_provider() if self._game_events_provider else GameEventBatch()
-
         # 运营递话留言（读取即取空队列——送达一次制；缺省不注入）
         reminders = self._reminders_provider() if self._reminders_provider else ""
-
-        # 上场回顾（开播后固定整场不变；缺省不注入）
-        session_recap = self._session_recap_provider() if self._session_recap_provider else ""
 
         # Planner ReAct 决策（循环内完成查信息与 reply 调用；失败细节经
         # outcome.error 带出，供决策事件区分降级原因）
@@ -288,12 +274,12 @@ class DecisionRoundExecutor:
                 proactive=proactive,
                 history=history,
                 rundown_text=rundown_text,
-                game_batch=game_batch,
+                game_batch=materials.game_batch,
                 reminders=reminders,
                 thinking=thinking,
                 round_id=round_id,
                 trigger_reason=trigger_reason,
-                session_recap=session_recap,
+                session_recap=materials.session_recap,
             )
         except Exception as exc:
             self._logger.exception(f"Planner 调用异常: {exc}")

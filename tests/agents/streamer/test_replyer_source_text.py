@@ -10,6 +10,7 @@ import pytest
 
 from src.agents.streamer import canonical
 from src.agents.streamer.decision_executor import DecisionRoundExecutor
+from src.agents.streamer.session_scope import WindowMaterials
 from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.plan import DecisionPlan
 from src.agents.streamer.planner import Planner
@@ -178,14 +179,17 @@ async def test_executor_splits_game_chat_view() -> None:
         stats=StreamerStats(),
         thinking_sink=None,
         thinking_enabled=False,
-        history_provider=AsyncMock(return_value=[]),
-        rundown_text_provider=MagicMock(return_value=None),
-        game_events_provider=MagicMock(
-            return_value=GameEventBatch(
-                events=("[20:01 minecraft] 玩家 Steve：在吗",),
-                fresh_chat=("[20:01 minecraft] 玩家 Steve：在吗",),
+        window_opener=AsyncMock(
+            return_value=WindowMaterials(
+                history=[],
+                game_batch=GameEventBatch(
+                    events=("[20:01 minecraft] 玩家 Steve：在吗",),
+                    fresh_chat=("[20:01 minecraft] 玩家 Steve：在吗",),
+                ),
+                session_recap="",
             )
         ),
+        rundown_text_provider=MagicMock(return_value=None),
     )
 
     await executor.execute([], forced=False, trigger_reason="proactive:game", proactive=True)

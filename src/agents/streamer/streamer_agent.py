@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from dataclasses import dataclass
 from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 from src.modules.agents.base import BaseAgent
@@ -58,6 +57,7 @@ from .rundown.rundown_coordinator import RundownCoordinator
 from .tools.rundown_tool import build_rundown_tool_provider
 from .background import SUMMARY_PROFILE, BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
+from .session_scope import SessionScope
 from .memory import (
     RegularsRosterWriter,
     SessionRecapWriter,
@@ -94,9 +94,6 @@ __all__ = ["StreamerAgent", "StreamerConfig"]
 _PROFILE_PLANNER = "planner"
 _PROFILE_REPLYER = "replyer"
 
-# 私聊暂存上限（行）。只进本窗决策参考段，不进时间线
-_PRIVATE_CHAT_LINES_MAX = 10
-
 # 运营递话提醒队列上限（条）。满时拒收递话（receive_prompt 返回 False，
 # REST 侧映射 409）——必达语义不允许静默挤掉旧条目。
 _REMINDER_QUEUE_MAX = 5
@@ -105,30 +102,6 @@ _REMINDER_QUEUE_MAX = 5
 # ---------------------------------------------------------------------------
 # StreamerAgent
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _LiveChatTurn:
-    """live_chat 行的对话历史视图（鸭子类型：仅需 ``role`` / ``content`` 属性）。
-
-    ``role`` 直接承载 live_chat 的 ``sender_role``（viewer / assistant），
-    下游按字符串取值；昵称/类型/消息 ID 供 canonical 映射序列化
-    （content 格式 = ``昵称: 内容 [id:…]``，批与历史同形）。
-    """
-
-    role: str
-    content: str
-    sender_name: str = ""
-    message_type: str = "danmaku"
-    message_id: str = ""
-    # 发生时刻：落库行与内存对话轮按它合并成同一条时间线
-    timestamp_ms: int = 0
-
-
-def _text_field(item: Any, name: str) -> str:
-    """鸭子字段取文本：只接受 str，其余（None/Mock 等）按空串处理。"""
-    value = getattr(item, name, "")
-    return value if isinstance(value, str) else ""
 
 
 class StreamerAgent(BaseAgent):
@@ -251,8 +224,8 @@ class StreamerAgent(BaseAgent):
         # 任务记录表引用：委派渲染的机器状态从这里查询（None 时 planner 降级只看交付语）
         self._task_ledger = task_ledger
         # 仓储注入（组合根按需分发；None 时对应能力降级。流程单三仓储由
-        # RundownCoordinator 直接收取，不在 Agent 身上落字段）
-        self._chat = chat_repo
+        # RundownCoordinator 直接收取，不在 Agent 身上落字段；聊天仓储进
+        # SessionScope 作只读事实源）
         self._session_manager = session_manager
         # 思考流旁路出口（可选；观察面专用，不进 EventBus 不落库）
         self._thinking_sink = thinking_sink
@@ -433,9 +406,6 @@ class StreamerAgent(BaseAgent):
                 batch_max=memory_cfg.roster_batch_max,
                 profile_max_length=memory_cfg.profile_max_length,
             )
-        # 上场回顾段文本：开播（live.started）时从库里读出并固定，整场不变
-        self._recap_section: str = ""
-
         # 后台 flush 循环（Agent 主循环）
         self._flush_task: Optional[asyncio.Task] = None
         self._flush_lock = asyncio.Lock()
@@ -451,22 +421,6 @@ class StreamerAgent(BaseAgent):
         # 统计（决策循环各分支增量；对外经 get_statistics 导出）
         self._stats = StreamerStats()
 
-        # 游戏事件账本（game.* / game.body.* / game.chat.* 三通道统一）：事件到达
-        # 先入账做同摘要折叠，下个决策窗边界（读历史时）整批出账追加进时间线的
-        # game 条目——事件在对话历史里只出现一次、不再逐窗重放，更早的细节查对话
-        # 历史与前情提要，需要数值现场用游戏状态查询工具。相邻窗口的历史前缀逐字一致
-        self._game_ledger = GameLedger()
-        # 私聊的那几行：只进本窗决策参考段，不进时间线——表达侧与历史都看不到，
-        # 私下的话不能被当众说出来
-        self._pending_private_chat: deque[str] = deque(maxlen=_PRIVATE_CHAT_LINES_MAX)
-        # 最近一次决策窗边界入账的批次（决策执行器每窗在历史读取后经 provider 取用；
-        # 状态跃迁事实块与本轮新鲜语料从这批行取，不再从重放全文提取）
-        self._window_game_batch = GameEventBatch()
-
-        # 未落库的对话轮：没开场次时的全部对话、调试面板注入的观众消息都不会写进
-        # live_chat，由这里按时间并入历史——主播问"要不要拉一下"、观众回"拉"时，
-        # 下一轮决策仍看得到自己刚问过什么。场次开始/结束时清空，与 live_chat 同以场次为界。
-        self._unpersisted_turns: List[_LiveChatTurn] = []
         # 本场对话进 LLM 前的只追加投影：Planner 与 Replyer 共用同一份历史，
         # 超预算时后台按章压成前情提要，两次换章之间历史前缀逐字不变
         self._timeline = StreamerTimeline(
@@ -476,10 +430,16 @@ class StreamerAgent(BaseAgent):
             profiles=(_PROFILE_PLANNER, _PROFILE_REPLYER),
             summary_profile=SUMMARY_PROFILE,
         )
-        # 进时间线的游戏记录：游戏事件（game.* / game.body.* / game.chat.*）与我在
-        # 游戏里开始做的事。事件在决策窗边界整批入账，这里留下整场的先后，换章时
-        # 一起写进前情提要。与对话轮同以场次为界
-        self._timeline_notes: List[TimelineTurn] = []
+        # 场次作用域：这一场记得什么（游戏账本、私聊行、未落库轮、时间线 notes、
+        # 本窗批次、上场回顾快照）与决策窗开窗的单一承载。入账动词经 scope.ledger
+        # 直打账本接口；出账/清场/读历史/补记走 scope 自己的动词（见 session_scope.py）
+        self._scope = SessionScope(
+            ledger=GameLedger(),
+            timeline=self._timeline,
+            chat=chat_repo,
+            session_manager=session_manager,
+            logger=self._logger,
+        )
         self._planner.bind_action_recorder(self._record_delegation)
         # 最新一帧直播画面：查询式取自图像暂存的 latest 槽位（live_frame 采集器
         # 每次采样覆盖写入），每个决策窗第一次请求必挂——走查询不走事件流，
@@ -523,12 +483,9 @@ class StreamerAgent(BaseAgent):
             stats=self._stats,
             thinking_sink=thinking_sink,
             thinking_enabled=bool(getattr(config.thinking_stream, "enabled", True)),
-            history_provider=self._read_history,
+            window_opener=self._scope.open_window,
             rundown_text_provider=self._rundown_coord.build_text,
-            game_events_provider=self._current_game_batch,
             reminders_provider=self._drain_reminders,
-            session_recap_provider=self._session_recap_text,
-            window_boundary=self._drain_game_events,
             logger=self._logger,
         )
 
@@ -864,11 +821,7 @@ class StreamerAgent(BaseAgent):
         if reject is not None:
             self._logger.debug(f"开播起算流程单跳过（{reject.reason}）：流程单已在进行中")
         # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
-        self._unpersisted_turns.clear()
-        self._game_ledger.reset()
-        self._pending_private_chat.clear()
-        self._timeline_notes.clear()
-        await self._timeline.reset()
+        await self._scope.begin_session()
         # 上场回顾：开播这一刻从库里读最近几场（排除本场），整场固定不再变
         await self._refresh_recap_section(exclude_session_id=payload.live_session_id)
         self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
@@ -897,11 +850,7 @@ class StreamerAgent(BaseAgent):
             await self._execute_round([], forced=True, trigger_reason="proactive:signoff", proactive=True)
         # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
         # （道别发言不属已结账的场次，留在内存对话里供下播后的调试闲聊接续）
-        self._unpersisted_turns.clear()
-        self._game_ledger.reset()
-        self._pending_private_chat.clear()
-        self._timeline_notes.clear()
-        await self._timeline.reset()
+        await self._scope.end_session()
         # 备忘录生命周期收口：先取全文快照（回顾生成的原料之一，经只读回调递入）
         # 再清空——备忘录是场次作用域，下一场从空白开始
         self._session_notebook_snapshot = self._notebook.read()
@@ -926,7 +875,7 @@ class StreamerAgent(BaseAgent):
 
     def _session_recap_text(self) -> str:
         """上场回顾段（DecisionRoundExecutor 每窗读；开播时固定，整场不变）。"""
-        return self._recap_section
+        return self._scope.session_recap
 
     def _current_session_pk(self) -> Optional[int]:
         """进行中场次主键（无场次管理器或未开播为 None）；回忆往前第 n 场时要排除本场。"""
@@ -938,14 +887,15 @@ class StreamerAgent(BaseAgent):
     async def _refresh_recap_section(self, *, exclude_session_id: Optional[int] = None) -> None:
         """从库里读最近几场回顾渲染成注入段；未启用或没有上一场时为空串（段整段省略）。"""
         if self._recap_writer is None or self._recap_inject_count <= 0:
-            self._recap_section = ""
+            self._scope.set_session_recap("")
             return
         current = exclude_session_id if exclude_session_id is not None else self._current_session_pk()
-        self._recap_section = await self._recap_writer.render_recent(
+        recap_section = await self._recap_writer.render_recent(
             count=self._recap_inject_count, exclude_session_id=current
         )
-        if self._recap_section:
-            self._logger.info(f"上场回顾已装入参考段（{len(self._recap_section)} 字）")
+        self._scope.set_session_recap(recap_section)
+        if recap_section:
+            self._logger.info(f"上场回顾已装入参考段（{len(recap_section)} 字）")
 
     async def _bootstrap_recaps(self) -> None:
         """启动善后：补写上次退出时漏掉的回顾（最多一场）并补跑该场画像更新，再装入上场回顾段。
@@ -1006,31 +956,34 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"收集游戏事件失败: {exc}", exc=True)
 
     def _drain_game_events(self) -> GameEventBatch:
-        """决策窗边界收口：账本整批出账，本批时间线条目落进时间线，批次行交决策链。
+        """决策窗边界出账（兼容转发，既有测试锚点；本体见 ``SessionScope.drain_window``）。"""
+        return self._scope.drain_window()
 
-        由决策执行器的 ``window_boundary`` 每轮第一步显式执行（先于历史读取，
-        出账行才能进本轮投影）——收口只发生在窗边界恰好一处，读历史是纯读。
+    @property
+    def _game_ledger(self) -> GameLedger:
+        """游戏账本入账面（兼容转发，既有测试锚点；持有者见 ``SessionScope.ledger``）。"""
+        return self._scope.ledger
 
-        折叠过多条的行附计数说明（"另 N 次相同"）后再入时间线；时间线条目只追加
-        不改写，相邻窗口的历史前缀逐字一致。私聊行不进时间线，单独随批次交本窗
-        决策参考段。
-        """
-        batch = self._game_ledger.drain(private_chat=self._pending_private_chat)
-        self._pending_private_chat.clear()
-        self._timeline_notes.extend(batch.timeline_turns)
-        self._window_game_batch = batch
-        return batch
+    @property
+    def _timeline_notes(self) -> List[TimelineTurn]:
+        """时间线 notes 活引用（兼容转发，既有测试锚点；写入经 SessionScope）。"""
+        return self._scope.timeline_notes
+
+    @property
+    def _unpersisted_turns(self) -> List[Any]:
+        """未落库对话轮活引用（兼容转发，既有测试锚点；写入经 SessionScope）。"""
+        return self._scope.unpersisted_turns
 
     def _current_game_batch(self) -> GameEventBatch:
-        """本窗新入账的游戏事件批次（决策执行器在历史读取后取用；无新事件为空批次）。"""
-        return self._window_game_batch
+        """本窗游戏事件批次（兼容转发，既有测试锚点）。"""
+        return self._scope.current_window_batch()
 
     def _record_delegation(self, agent: str, instruction: str) -> None:
         """Planner 受理委派后回调：把"我在哪个游戏里开始做什么"按此刻进时间线。
 
         委派行直写时间线，不进决策窗批次（批次只收三类游戏事件通道的条目）。
         """
-        self._timeline_notes.append(self._game_ledger.record_delegation(agent, instruction))
+        self._scope.note_delegation(agent, instruction)
 
     async def _on_body_event(
         self,
@@ -1095,7 +1048,7 @@ class StreamerAgent(BaseAgent):
                 note += f"（之前还有 {payload.suppressed} 条重复或刷屏的没转过来）"
             body = f"{speaker}：{payload.content}{note}"
             if payload.private:
-                self._pending_private_chat.append(f"[{payload.game}] {body}")
+                self._scope.record_private_chat(f"[{payload.game}] {body}")
             else:
                 self._game_ledger.record_chat(payload.game, body, payload.timestamp_ms or now_ms())
                 if self._mouth is not None:
@@ -1400,55 +1353,8 @@ class StreamerAgent(BaseAgent):
         调试注入传 False——即使开着场次，这些消息也不在 live_chat 里。
         """
         result = await self._rounds.execute(batch, forced=forced, trigger_reason=trigger_reason, proactive=proactive)
-        await self._remember_round(batch, result, batch_persisted=batch_persisted)
+        await self._scope.remember_round(batch, speech=result.get("speech"), batch_persisted=batch_persisted)
         return result
-
-    async def _remember_round(
-        self,
-        batch: List[RoomMessagePayload],
-        result: Dict[str, Any],
-        *,
-        batch_persisted: bool,
-    ) -> None:
-        """决策轮结束后补记不会从 live_chat 读回的对话：观众先说、主播后答。"""
-        chat_persisted = await self._chat_persisted()
-        if not (batch_persisted and chat_persisted):
-            for msg in batch:
-                user = getattr(msg, "user", None)
-                nickname = getattr(user, "name", None) or getattr(user, "id", None)
-                timestamp = getattr(msg, "timestamp_ms", None)
-                self._unpersisted_turns.append(
-                    _LiveChatTurn(
-                        role="viewer",
-                        content=_text_field(msg, "content"),
-                        sender_name=nickname if isinstance(nickname, str) else "",
-                        message_type=_text_field(msg, "message_type") or "danmaku",
-                        message_id=_text_field(msg, "message_id"),
-                        timestamp_ms=timestamp if isinstance(timestamp, int) and timestamp > 0 else now_ms(),
-                    )
-                )
-        speech = result.get("speech")
-        # 开着场次时主播发言由 StorageLedger 写进 live_chat，这里只补没有落库的那一份
-        if speech and not chat_persisted:
-            self._unpersisted_turns.append(
-                _LiveChatTurn(
-                    role="assistant",
-                    content=str(speech),
-                    sender_name="主播",
-                    message_type="speak",
-                    timestamp_ms=now_ms(),
-                )
-            )
-
-    async def _chat_persisted(self) -> bool:
-        """当前对话是否会写进 live_chat 并能被历史读回（显式场次进行中且有聊天仓储）。"""
-        if self._chat is None or self._session_manager is None:
-            return False
-        try:
-            return await self._session_manager.resolve_pk() is not None
-        except Exception as exc:
-            self._logger.warning(f"解析当前场次失败（本轮对话按未落库记入内存）: {exc}", exc=exc)
-            return False
 
     def _estimate_avg_interval_ms(self) -> Optional[float]:
         """估算缓冲内消息平均间隔（供 idle 补偿公式使用）。"""
@@ -1523,47 +1429,12 @@ class StreamerAgent(BaseAgent):
         return self._read_history()
 
     async def _read_history(self) -> Optional[List[Any]]:
-        """读取当前对话并经时间线投影：前情提要各章 + 工作层原文，按主播看到的先后排列。
+        """读取当前对话并经时间线投影（兼容转发门面；本体见 ``SessionScope.read_history``）。
 
-        纯读，无副作用——决策窗边界收口（游戏账本出账、私聊清空）由决策
-        执行器的 ``window_boundary`` 在轮首显式执行（见 ``_drain_game_events``），
-        本方法只负责把已入账的时间线行读出来。
-
-        显式场次进行中时，live_chat 是已落库对话的事实源；没开场次时的对话与
-        调试注入的观众消息不会落库，由内存对话轮按发生时刻并入同一条时间线。
-        读库失败返回 None（宁可本轮无历史，也不拿残缺历史冒充完整对话）。
+        reply_tool 的 history_provider 锚在本方法上，既有测试也经它读历史——
+        保留薄转发，读数语义（合并投影/读库失败返回 None）在 SessionScope 单点维护。
         """
-        stored: List[_LiveChatTurn] = []
-        live_pk: Optional[int] = None
-        if self._chat is not None and self._session_manager is not None:
-            try:
-                live_pk = await self._session_manager.resolve_pk()
-                rows = (
-                    await self._chat.list_recent_live_chat(live_session_id=live_pk, limit=None)
-                    if live_pk is not None
-                    else []
-                )
-            except Exception as exc:
-                self._logger.warning(f"读取会话历史失败: {exc}")
-                return None
-            stored = [
-                _LiveChatTurn(
-                    role=row["sender_role"],
-                    content=row["content"],
-                    sender_name=row["sender_name"] or "",
-                    message_type=row["message_type"],
-                    message_id=row["message_id"] or "",
-                    timestamp_ms=int(row["timestamp_ms"] or 0),
-                )
-                for row in rows
-            ]
-        if self._unpersisted_turns or self._timeline_notes:
-            # 对话、未落库的对话轮与游戏记录按发生时刻合并；稳定排序保持同一时刻各自的先后。
-            # 已进时间线的条目不再挪位置，排序只决定同一窗里新条目的先后
-            stored = sorted(
-                [*stored, *self._unpersisted_turns, *self._timeline_notes], key=lambda turn: turn.timestamp_ms
-            )
-        return await self._timeline.project(stored, scope=live_pk)
+        return await self._scope.read_history()
 
     # ==================================================================
     # 统计信息
