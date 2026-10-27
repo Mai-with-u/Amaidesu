@@ -2,7 +2,7 @@
 
 ``llm_requests`` + ``breakdown_json``（TEXT 可空）：一次成功调用的上下文
 分段占用解剖（system / messages / tools 三段 token 估算与明细），监控面板
-"上下文水位"弹出明细的数据源。写入方为 ``LLMManager._post_success``（估算
+"上下文水位"弹出明细的数据源。写入方为 ``CallObserver.record_call``（估算
 失败或上游未回报 usage 时留 NULL，不阻断调用链）；历史行不回填。
 
 新建库 DDL 已含该列，回调以列存在性检查保证对旧库升级与重复执行安全。

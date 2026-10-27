@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.modules.llm.engine import LLMManager
+from src.modules.llm.call_observer import CallObserver
 from src.modules.llm.observation import build_prompt_preview, count_image_parts
 from src.modules.llm.payload import GenerateRequest, ImagePart, Message, TextPart
 from src.modules.llm.request_history_manager import build_prompt_preview as reexported_preview
@@ -62,7 +62,7 @@ def test_build_request_params_produces_single_normalized_shape() -> None:
         ],
         system="你是直播助手",
     )
-    params = LLMManager._build_request_params({"request": request, "temperature": 0.3})
+    params = CallObserver._build_request_params({"request": request, "temperature": 0.3})
     assert params["system"] == "你是直播助手"
     assert params["temperature"] == 0.3
     assert len(params["messages"]) == 2
@@ -76,7 +76,7 @@ def test_build_request_params_produces_single_normalized_shape() -> None:
 
 def test_build_request_params_without_request_is_empty_snapshot() -> None:
     """request 缺失（非 generate 入口的直连调用）返回空快照，观测层按无消息处理。"""
-    assert LLMManager._build_request_params({"messages": [{"role": "user", "content": "hi"}]}) == {}
+    assert CallObserver._build_request_params({"messages": [{"role": "user", "content": "hi"}]}) == {}
 
 
 def test_request_history_manager_reexports_observation_helpers() -> None:

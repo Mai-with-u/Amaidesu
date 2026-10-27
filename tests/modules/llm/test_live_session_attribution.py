@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from src.modules.llm.engine import LLMManager
+from src.modules.llm.call_observer import CallObserver
 from src.modules.llm.payload import Response, Usage
 from src.modules.storage.connection import SQLiteConnectionManager
 from src.modules.storage.repos.llm import LLMRepo
@@ -25,9 +25,14 @@ def _boom() -> int:
 async def test_usage_live_session_attribution(tmp_path, resolver, expected) -> None:
     conn = SQLiteConnectionManager(tmp_path / "t.db")
     conn.connection().executescript(build_schema_sql())
-    kwargs = {} if resolver == "absent" else {"live_session_resolver": resolver}
-    manager = LLMManager(llm_repo=LLMRepo(conn), **kwargs)
-    # 引擎内部契约是中立 payload.Response；usage 走 Usage 模型（provider 未上报项为 None）
+    observer = CallObserver(
+        llm_repo=LLMRepo(conn),
+        live_session_resolver=None if resolver == "absent" else resolver,
+        diagnostics_writer=None,
+        model_index={},
+        model_prices={},
+    )
+    # 观测层契约是中立 payload.Response；usage 走 Usage 模型（provider 未上报项为 None）
     result = Response(
         success=True,
         content="ok",
@@ -35,7 +40,7 @@ async def test_usage_live_session_attribution(tmp_path, resolver, expected) -> N
         request_id="rid-1",
         usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
     )
-    await manager._record_call_outcome(
+    await observer.record_call(
         request_id="r1",
         profile_name="planner",
         model_name="m1",

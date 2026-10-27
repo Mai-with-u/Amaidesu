@@ -37,7 +37,7 @@ def build_prompt_preview(request_params: Any) -> str:
     """从请求参数提取列表页 Prompt 预览摘要。
 
     取 ``messages`` 里最后一条有正文的消息（与触发语境最接近）。输入是
-    :meth:`LLMManager._build_request_params` 产出的归一化快照，消息恒为
+    :meth:`CallObserver._build_request_params` 产出的归一化快照，消息恒为
     中立 payload dump 形状（``parts`` 片段列表，图像片段以占位符呈现），
     无第二种消息形态。截取固定长度——正文已出库到诊断文件，摘要列只
     承担列表页辨识。

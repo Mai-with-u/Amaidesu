@@ -215,7 +215,7 @@ class RequestSections(NamedTuple):
 def extract_request_sections(kwargs: Dict[str, Any]) -> Optional[RequestSections]:
     """从 generate 调用 kwargs 提取计量原值。
 
-    与 ``LLMManager._build_request_params`` 同源的单路径：入站归一化后的
+    与 ``CallObserver._build_request_params`` 同源的单路径：入站归一化后的
     中立 payload 契约以 ``kwargs["request"]`` 承载，消息 / 工具 dump 后即
     计量原值（工具 dump 保留归属标注字段，供分段归属）。``request`` 缺失
     （无法构成一次请求）返回 None。

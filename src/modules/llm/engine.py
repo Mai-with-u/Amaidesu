@@ -40,8 +40,8 @@ from src.modules.llm.bootstrap import (
     resolve_profile_name,
     validate_profile_binding,
 )
+from src.modules.llm.call_observer import CallObserver
 from src.modules.llm.clients import resolve_client_method
-from src.modules.llm.context_meter import ContextBreakdown, estimate_breakdown, extract_request_sections
 from src.modules.llm.errors import (
     FatalError,
     LLMError,
@@ -51,7 +51,6 @@ from src.modules.llm.errors import (
     UnsendableRequestError,
 )
 from src.modules.llm.interrupt import guarded_call
-from src.modules.llm.observation import record_call_outcome
 from src.modules.llm.payload import (
     ContextPart,
     GenerateRequest,
@@ -391,29 +390,6 @@ def _guard_inline_payload(request: GenerateRequest) -> None:
             )
 
 
-def _tool_calls_to_protocol(tool_calls: List[ToolCall]) -> List[Dict[str, Any]]:
-    """中立 ToolCall → OpenAI 嵌套 dict 形态（诊断文件 ``tool_calls`` 字段的落盘形状）。
-
-    诊断正文按 ``request_id`` 与库行关联、由 Dashboard 读侧回查渲染，该文件
-    形态是既有读侧契约（``{"id", "type", "function": {"name", "arguments"}}``，
-    arguments 为对象），与喂回多轮 ReAct 历史的形态一致，不随引擎内部契约
-    归一改变。
-    """
-    return [
-        {
-            "id": tc.id,
-            "type": "function",
-            "function": {"name": tc.name, "arguments": tc.arguments},
-            **(
-                {"raw_arguments": tc.raw_arguments, "arguments_error": tc.arguments_error}
-                if tc.arguments_error is not None
-                else {}
-            ),
-        }
-        for tc in tool_calls
-    ]
-
-
 class LLMManager:
     """LLM 管理器 - profile 驱动的多模型故障切换
 
@@ -423,7 +399,8 @@ class LLMManager:
     - 按 profile.model_list 调度模型选择（sequential / balance / random）
     - 实现故障切换（当前模型失败切下一个）与慢调用告警
     - 内置重试（仅在同一模型上重试，不跨模型）
-    - 费用计算（统一口径 observation.calculate_cost）+ llm_usage 落库
+    - 观测出库（两账落库 / 诊断正文出库 / 上下文水位快照）委托
+      :class:`~src.modules.llm.call_observer.CallObserver`，成功/失败出口各调一次
 
     provider 池/模型索引/profile 解析快照的构建委托给 bootstrap 模块。
 
@@ -466,14 +443,15 @@ class LLMManager:
         # 上下文窗口（{model_identifier: token 总量}）；0 = 未配置（dashboard 隐藏）
         self._model_context_windows: Dict[str, int] = {}
         self._retry_config = RetryConfig()
-        # 注入后每次成功调用旁路写一条 llm_usage（失败降级不阻断调用）；None 时不落库
-        self._llm_repo = llm_repo
-        # 注入后每次落库解析当前直播场次主键写入 llm_usage.live_session_id；
-        # None（未注入或无进行中场次）落 NULL = 场间消耗。解析失败只告警
-        self._live_session_resolver = live_session_resolver
-        # 注入后每次调用（成功/失败）把请求正文出库到诊断文件（logs/llm_requests/
-        # 按小时流）；None 时不写文件。fire-and-forget 旁路，失败不阻断调用链
-        self._diagnostics_writer = diagnostics_writer
+        # 观测出库器（两账落库 / 诊断正文出库 / 上下文水位快照），依赖全部注入；
+        # 模型索引与价格表按引用共享——setup 重建表时原地更新，观测器引用始终有效
+        self._observer = CallObserver(
+            llm_repo=llm_repo,
+            live_session_resolver=live_session_resolver,
+            diagnostics_writer=diagnostics_writer,
+            model_index=self._models,
+            model_prices=self._model_prices,
+        )
         # 随机策略 RNG（lazy 创建，按 seed 决定是否固定）
         self._rng: Optional[random.Random] = None
 
@@ -516,7 +494,8 @@ class LLMManager:
         self._profile_call_counts.clear()
         self._model_call_counts.clear()
         self._rng = None
-        self._model_prices = {}
+        # 原地清空不改引用：观测器按引用持有价格表，重绑会使其拿到永久空表
+        self._model_prices.clear()
         self._model_context_windows = {}
 
         provider_configs = config.get("llm_providers") or []
@@ -525,7 +504,10 @@ class LLMManager:
 
         # provider 客户端注册（每个 provider 一个连接）与模型索引由 bootstrap 承担
         self._providers, self._provider_clients = register_providers(provider_configs, self.logger)
-        self._models = index_models(config.get("llm_models") or [], self._providers)
+        # 模型索引原地更新：观测器按引用持有该表，重建引用会使其拿到陈旧快照
+        models_index = index_models(config.get("llm_models") or [], self._providers)
+        self._models.clear()
+        self._models.update(models_index)
 
         # 解析 llm_profiles 快照（封闭集合校验：未知用途在装配期硬错）
         profile_configs = config.get("llm_profiles") or {}
@@ -536,8 +518,9 @@ class LLMManager:
             self._model_call_counts[pname] = {}
 
         # 价格唯一来源 = model.toml [[llm_models]] 的定价字段
-        # 价格表按 model_identifier 键入（费用计算用的是请求实际的 API 模型标识）
-        self._model_prices = {
+        # 价格表按 model_identifier 键入（费用计算用的是请求实际的 API 模型标识）；
+        # 同模型索引一样原地更新，保持观测器持有的引用有效
+        model_prices = {
             mcfg.get("model_identifier") or mname: {
                 "price_in": mcfg.get("price_in", 0.0),
                 "price_out": mcfg.get("price_out", 0.0),
@@ -547,6 +530,8 @@ class LLMManager:
             for mname, (mcfg, _prov) in self._models.items()
             if mcfg.get("price_in", 0.0) > 0 or mcfg.get("price_out", 0.0) > 0
         }
+        self._model_prices.clear()
+        self._model_prices.update(model_prices)
 
         # 上下文窗口按 model_identifier 键入（与价格表同口径）；0 仍保留，
         # dashboard 据此判定是否渲染水位（>0 才展示，0 = 未配置 = 隐藏）
@@ -848,7 +833,7 @@ class LLMManager:
             error=f"全部模型失败 {attempted_models}: {last_error}",
             request_id=request_id,
         )
-        await self._record_call_outcome(
+        await self._observer.record_call(
             request_id=request_id,
             profile_name=profile_name,
             model_name="",
@@ -938,11 +923,11 @@ class LLMManager:
                         f"耗时 {attempt_elapsed_ms}ms（阈值 {slow_threshold_ms}ms，不切换）"
                     )
                 if response.success:
-                    await self._post_success(
+                    await self._observer.record_call(
                         request_id=request_id,
                         profile_name=profile_name,
                         model_name=model_name,
-                        method=method,
+                        request_type=method,
                         result=response,
                         kwargs=call_kwargs,
                         start_time=start_time,
@@ -972,217 +957,6 @@ class LLMManager:
                     await asyncio.sleep(delay)
 
         return None, last_error or "未知错误"
-
-    async def _post_success(
-        self,
-        *,
-        request_id: str,
-        profile_name: str,
-        model_name: str,
-        method: str,
-        result: Response,
-        kwargs: Dict[str, Any],
-        start_time: float,
-    ) -> None:
-        """成功路径后置动作：上下文分段估算 + 出账落账 + 诊断正文出库 + 水位事件"""
-        breakdown = self._build_context_breakdown(
-            request_id=request_id,
-            profile_name=profile_name,
-            model_name=model_name,
-            result=result,
-            kwargs=kwargs,
-        )
-        await self._record_call_outcome(
-            request_id=request_id,
-            profile_name=profile_name,
-            model_name=model_name,
-            request_type=method,
-            result=result,
-            kwargs=kwargs,
-            start_time=start_time,
-            breakdown=breakdown,
-        )
-
-    def _build_context_breakdown(
-        self,
-        *,
-        request_id: str,
-        profile_name: str,
-        model_name: str,
-        result: Response,
-        kwargs: Dict[str, Any],
-    ) -> Optional[ContextBreakdown]:
-        """估算本次调用的上下文分段占用（监控口径，失败返回 None 不阻断调用链）。"""
-        sections = extract_request_sections(kwargs)
-        if sections is None:
-            return None
-        api_prompt_tokens = result.usage.prompt_tokens if result.usage is not None else 0
-        try:
-            return estimate_breakdown(
-                request_id=request_id,
-                profile_name=profile_name,
-                model_name=model_name,
-                system=sections.system,
-                messages=sections.messages,
-                tools=sections.tools,
-                system_parts=sections.system_parts,
-                api_prompt_tokens=api_prompt_tokens,
-            )
-        except Exception as exc:  # noqa: BLE001 估算属旁路观测，任何异常只降级
-            self.logger.warning(f"上下文分段估算失败（本次跳过）: {exc}")
-            return None
-
-    @staticmethod
-    def _build_request_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
-        """从调用 kwargs 提取请求参数快照（两账落库与请求历史共用）。
-
-        请求参数快照是下游观测（预览摘要 / 图像计数 / 诊断正文）的唯一
-        输入，因此这里产出**唯一归一化形状**：messages 恒为中立 payload
-        dump（文本与图像片段在 ``parts``，不出现 OpenAI ``content`` 键），
-        全部从入站归一化后的 :class:`GenerateRequest` 取值。system 不在
-        messages 里，单独快照，否则提示词预览缺主提示词。
-
-        思考强度档位（reasoning_effort）按白名单语义入快照：None / 缺省 /
-        空串均不进快照（避免把"未配置"误显示为"显式置 None"），单次调用
-        覆盖值优先于请求内档位。``request`` 缺失（非经 generate 入口的
-        直连调用）返回空快照，下游按无消息处理。
-        """
-        request = kwargs.get("request")
-        if request is None:
-            return {}
-        request_params: Dict[str, Any] = {
-            "system": request.system,
-            "messages": [m.model_dump() for m in request.messages],
-            "tools": [t.model_dump() for t in request.tools] or None,
-            "temperature": kwargs.get("temperature"),
-        }
-        reasoning_effort = kwargs.get("reasoning_effort")
-        if not (isinstance(reasoning_effort, str) and reasoning_effort):
-            reasoning_effort = request.reasoning_effort
-        if isinstance(reasoning_effort, str) and reasoning_effort:
-            request_params["reasoning_effort"] = reasoning_effort
-        if request.strict_tool_arguments:
-            request_params["strict_tool_arguments"] = True
-        return {k: v for k, v in request_params.items() if v is not None}
-
-    async def _record_call_outcome(
-        self,
-        *,
-        request_id: str,
-        profile_name: str,
-        model_name: str,
-        request_type: str,
-        result: Response,
-        kwargs: Dict[str, Any],
-        start_time: float,
-        breakdown: Optional[ContextBreakdown] = None,
-    ) -> None:
-        """一次调用（成功或失败）的出账单一入口。
-
-        诊断正文出库（成功/失败都写——失败请求的上下文正是排障的第一手材料）
-        与两账落账（经 observation ``record_call_outcome``：成功且带 usage 时
-        ``llm_usage`` + ``llm_requests`` 同事务，失败行 success=False 与无
-        usage 的成功调用只写请求明细）。任何落账失败只告警，不阻断调用链。
-        """
-        request_params = self._build_request_params(kwargs)
-        if self._llm_repo is not None:
-            try:
-                provider_name = "unknown"
-                if model_name in self._models:
-                    _, provider_name = self._models[model_name]
-                # 场次归属：注入了解析器时取当前显式场次主键；无进行中场次落
-                # NULL = 场间消耗（归因口径与 live_sessions 主键对齐）
-                live_session_id: Optional[int] = None
-                if self._live_session_resolver is not None:
-                    try:
-                        live_session_id = self._live_session_resolver()
-                    except Exception as exc:  # noqa: BLE001 - 归属解析失败不阻断落账
-                        self.logger.warning(f"llm_usage 场次归属解析失败（落 NULL）: {exc}")
-                        live_session_id = None
-                await record_call_outcome(
-                    self._llm_repo,
-                    request_id=request_id,
-                    profile_name=profile_name,
-                    # 落账键必须用引擎自己的模型引用名：上游/网关会在响应的 model
-                    # 字段里回自己的别名（如实测 sheep 网关回 gemini-3.8-flash-n），
-                    # 响应名一旦入库会污染计价查表、模型筛选与费用归因口径
-                    model_name=model_name or "unknown",
-                    request_type=request_type,
-                    provider_name=provider_name,
-                    model_prices=self._model_prices,
-                    success=result.success,
-                    error=result.error,
-                    response_content=result.content,
-                    latency_ms=int((time.time() - start_time) * 1000),
-                    request_params=request_params,
-                    usage=result.usage.model_dump() if result.usage is not None else None,
-                    live_session_id=live_session_id,
-                )
-            except Exception as exc:  # noqa: BLE001 记账旁路：失败不阻断调用链
-                self.logger.warning(f"LLM 调用出账落库失败: {exc}", exc=True)
-        self._write_request_payload(
-            request_id=request_id,
-            profile_name=profile_name,
-            model_name=model_name or "unknown",
-            request_params=request_params,
-            result=result,
-            breakdown=breakdown,
-        )
-
-    def _write_request_payload(
-        self,
-        *,
-        request_id: str,
-        profile_name: str,
-        model_name: str,
-        request_params: Dict[str, Any],
-        result: Response,
-        breakdown: Optional[ContextBreakdown] = None,
-    ) -> None:
-        """请求正文出库：单请求一条诊断记录进 ``logs/llm_requests/`` 小时流。
-
-        与库统计行经 ``request_id`` 关联（读侧按库行 ``timestamp_ms`` 定位
-        小时文件回查）。fire-and-forget：writer 只入队即返回；未注入或失败
-        只告警，不阻断调用链。成功路径同时覆写每模型最新上下文水位快照。
-        """
-        if self._diagnostics_writer is None:
-            return
-        timestamp_ms = int(time.time() * 1000)
-        payload: Dict[str, Any] = {
-            "request_id": request_id,
-            "timestamp_ms": timestamp_ms,
-            "profile_name": profile_name,
-            "model_name": model_name,
-            "success": result.success,
-            "request_params": request_params,
-            "response_content": result.content,
-            "reasoning_content": result.reasoning_content,
-            "tool_calls": _tool_calls_to_protocol(result.tool_calls),
-            "usage_raw_json": result.usage_raw_json,
-            "breakdown": breakdown.model_dump() if breakdown is not None else None,
-        }
-        try:
-            self._diagnostics_writer.append("llm_requests", payload)
-            if breakdown is not None:
-                self._update_context_breakdown_snapshot(breakdown)
-        except Exception as exc:  # noqa: BLE001 出库旁路，失败不阻断调用链
-            self.logger.warning(f"请求正文出库失败: {exc}")
-
-    def _update_context_breakdown_snapshot(self, breakdown: ContextBreakdown) -> None:
-        """覆写每模型最新上下文水位快照（``logs/llm_context/latest.json``）。"""
-        if self._diagnostics_writer is None:
-            return
-        try:
-            snapshot = self._diagnostics_writer.read_snapshot("llm_context", "latest.json")
-            models = snapshot.get("models") if isinstance(snapshot, dict) else None
-            merged = dict(models) if isinstance(models, dict) else {}
-            entry = breakdown.model_dump()
-            # timestamp_ms 供快照消费方（水位悬停接口）组响应行；breakdown 本体无时刻字段
-            entry["timestamp_ms"] = int(time.time() * 1000)
-            merged[breakdown.model_name or "unknown"] = entry
-            self._diagnostics_writer.write_snapshot("llm_context", "latest.json", {"models": merged})
-        except Exception as exc:  # noqa: BLE001 快照旁路，失败不阻断调用链
-            self.logger.warning(f"上下文水位快照写入失败: {exc}")
 
     # === 清理 ===
 
