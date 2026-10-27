@@ -21,7 +21,6 @@ import json
 import time
 import uuid
 from collections.abc import Callable
-from contextlib import suppress
 from copy import deepcopy
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
 
@@ -64,7 +63,7 @@ from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
 from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
 from src.agents.minecraft.wake_queue import WakeQueue, opens_task
 from src.modules.agents.base import AgentState, BaseAgent
-from src.modules.context import PrefixGuard, TransientImages, absorb_result_images
+from src.modules.context import BackgroundCheckpoint, PrefixGuard, TransientImages, absorb_result_images
 from src.modules.llm.capabilities import ProfileVisualCapabilityLookup, validate_llm_capability
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -211,7 +210,7 @@ class MinecraftAgent(BaseAgent):
         self._context_compactor = MinecraftHistoryCompactor(llm_manager, config.context)
         # 最近一次完整进入历史的任务状态；唤醒续做只补交它之后的变化。
         self._shown_context: Dict[str, Any] = {}
-        self._idle_compaction: Optional[asyncio.Task[None]] = None
+        self._idle_prep: BackgroundCheckpoint[None] = BackgroundCheckpoint("minecraft 等待期间历史整理")
         # 工具刚返回的截图：历史里只留文字回执，真图挂在下一次推理请求的尾部，用完即弃
         self._transient_images = TransientImages()
         # 相邻两次推理请求的历史只该在尾部追加；集中整理与开新任务之外的改写记告警
@@ -413,11 +412,7 @@ class MinecraftAgent(BaseAgent):
         """停止钩子：取消命令 worker、目标跟踪与恢复循环，摘除工具并关闭 MCP。"""
         self._running = False
         self._wake_event.set()
-        if self._idle_compaction is not None:
-            self._idle_compaction.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._idle_compaction
-            self._idle_compaction = None
+        await self._idle_prep.cancel()
         await self._goals.stop()
         for task in (self._worker_task, self._mcp_recover_task):
             if task is None:
@@ -1138,13 +1133,13 @@ class MinecraftAgent(BaseAgent):
 
     def _schedule_idle_compaction(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> None:
         """让出等待时若历史已过提前整理线，就在后台整理；身体此刻本来就在等游戏结果。"""
-        if self._idle_compaction is not None and not self._idle_compaction.done():
+        if self._idle_prep.busy:
             return
         trigger = self._context_compactor.watermarks().prepare
         if self._context_compactor.measure(messages, tools) <= trigger:
             return
         facts = self._current_task_context()
-        self._idle_compaction = asyncio.create_task(self._compact_while_waiting(messages, tools, facts, trigger))
+        self._idle_prep.start(self._compact_while_waiting(messages, tools, facts, trigger))
 
     async def _compact_while_waiting(
         self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], facts: Dict[str, Any], trigger: int
@@ -1163,16 +1158,12 @@ class MinecraftAgent(BaseAgent):
 
     async def _settle_idle_compaction(self, tools: List[Dict[str, Any]]) -> None:
         """醒来时结清提前整理：已超预算就等它完成，否则放弃以便立刻处理新事实。"""
-        task, self._idle_compaction = self._idle_compaction, None
-        if task is None:
+        if not self._idle_prep.busy:
             return
-        if not task.done():
-            if self._context_compactor.measure(self._messages, tools) > self._context_compactor.watermarks().budget:
-                await task
-                return
-            task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        if self._context_compactor.measure(self._messages, tools) > self._context_compactor.watermarks().budget:
+            await self._idle_prep.wait()
+            return
+        await self._idle_prep.cancel()
 
     async def _prepare_context(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> bool:
         """历史超预算才整理；失败保留原件并挂起，避免无上下文地继续操作游戏。"""
