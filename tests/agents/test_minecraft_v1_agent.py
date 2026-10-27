@@ -68,6 +68,14 @@ class _Llm:
         self.tools_given.append(list(kwargs.get("tools") or []))
         return self.script(messages)
 
+    def is_profile_visual(self, profile: Optional[str]) -> bool:
+        """能力查询替身：剧本场景一律按非视觉。"""
+        return False
+
+    def get_profile_context_window(self, profile: Optional[str]) -> int:
+        """窗口查询替身：剧本场景按未配置（0），预算走保守窗口。"""
+        return 0
+
 
 async def _start(
     server: FakeMaicraft,
@@ -1299,6 +1307,10 @@ class _SummaryLlm:
     async def generate(self, messages: List[Dict[str, Any]], **kwargs: Any) -> Response:
         self.calls.append({"messages": messages, "profile": kwargs.get("profile")})
         return self.behavior(messages)
+
+    def is_profile_visual(self, profile: Optional[str]) -> bool:
+        """能力查询替身：summary 场景一律按非视觉。"""
+        return False
 
 
 async def test_long_body_event_is_summarized_before_reaching_the_streamer() -> None:

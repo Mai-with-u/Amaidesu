@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from src.agents.streamer import canonical
 from src.modules.context import BackgroundCheckpoint, ContextBudgetConfig, PrefixGuard, TokenCounter, Watermarks
 from src.modules.context import fold_count, resolve_watermarks
+from src.modules.llm.capabilities import ProfileContextWindowLookup, validate_llm_capability
 from src.modules.logging import get_logger
 
 __all__ = [
@@ -140,6 +141,9 @@ class StreamerTimeline:
             summary_profile: 生成前情提要的档位。
         """
         self._budget = budget
+        # llm_service 另需 async generate（前情提要生成用）；窗口查询契约在装配期校验，
+        # 注入了缺方法的对象时启动即报错，而不是运行期静默按窗口 0 换算预算
+        validate_llm_capability(llm_service, ProfileContextWindowLookup, parameter="llm_service")
         self._llm = llm_service
         self._prompt = prompt_service
         self._profiles = tuple(profiles)
@@ -199,16 +203,14 @@ class StreamerTimeline:
     def _watermarks(self) -> Watermarks:
         """按消费档位里最小的已配置窗口换算预算；都没配置时按保守窗口。"""
         windows: List[int] = []
-        getter = getattr(self._llm, "get_profile_context_window", None)
-        if callable(getter):
-            for profile in self._profiles:
-                try:
-                    value = getter(profile)
-                except Exception as exc:  # noqa: BLE001 - 窗口查不到按未配置处理，决策不中断
-                    logger.warning(f"查询 {profile} 上下文窗口失败，按未配置处理：{exc}")
-                    continue
-                if isinstance(value, int) and value > 0:
-                    windows.append(value)
+        for profile in self._profiles:
+            try:
+                value = self._llm.get_profile_context_window(profile)
+            except Exception as exc:  # noqa: BLE001 - 窗口查不到按未配置处理，决策不中断
+                logger.warning(f"查询 {profile} 上下文窗口失败，按未配置处理：{exc}")
+                continue
+            if isinstance(value, int) and value > 0:
+                windows.append(value)
         return resolve_watermarks(self._budget, min(windows) if windows else 0)
 
     def _chapter_tokens(self) -> int:

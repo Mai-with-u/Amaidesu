@@ -65,6 +65,7 @@ from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvide
 from src.agents.minecraft.wake_queue import WakeQueue, opens_task
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.context import PrefixGuard, TransientImages, absorb_result_images
+from src.modules.llm.capabilities import ProfileVisualCapabilityLookup, validate_llm_capability
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentRepliedPayload
@@ -158,6 +159,9 @@ class MinecraftAgent(BaseAgent):
         del clock
         self._skills = skill_library
         self.typed_config = config
+        # llm_manager 另需 async generate（ReAct 推理用）；视觉查询契约在装配期校验，
+        # 注入了缺方法的对象时启动即报错，而不是运行期静默按非视觉处理
+        validate_llm_capability(llm_manager, ProfileVisualCapabilityLookup, parameter="llm_manager")
         self._llm = llm_manager
         self._prompt = prompt_manager
         self._event_bus = event_bus

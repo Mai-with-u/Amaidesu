@@ -16,6 +16,7 @@ from typing import Any
 
 from src.agents.minecraft.config import MinecraftContextConfig
 from src.modules.context import TokenCounter, Watermarks, resolve_watermarks
+from src.modules.llm.capabilities import ProfileContextWindowLookup, validate_llm_capability
 from src.modules.llm.engine import inline_payload_spans
 from src.modules.logging import get_logger
 
@@ -198,6 +199,9 @@ class MinecraftHistoryCompactor:
         profile: str = "minecraft",
         interrupt: asyncio.Event | None = None,
     ) -> None:
+        # llm 另需 async generate（摘要推理用）；窗口查询契约在装配期校验，
+        # 引擎缺方法时启动即报错，而不是运行期静默按窗口 0 换算预算
+        validate_llm_capability(llm, ProfileContextWindowLookup, parameter="llm")
         self._llm = llm
         self._config = config
         self._profile = profile
@@ -209,13 +213,11 @@ class MinecraftHistoryCompactor:
     def watermarks(self) -> Watermarks:
         """按当前模型窗口换算本次生效的预算与水位线（窗口每次现查，换模型即时生效）。"""
         window = 0
-        getter = getattr(self._llm, "get_profile_context_window", None)
-        if callable(getter):
-            try:
-                value = getter(self._profile)
-                window = value if isinstance(value, int) else 0
-            except Exception as exc:  # noqa: BLE001 - 窗口查不到按未配置处理，预算换算不中断任务
-                logger.warning(f"查询模型上下文窗口失败，按未配置处理：{exc}")
+        try:
+            value = self._llm.get_profile_context_window(self._profile)
+            window = value if isinstance(value, int) else 0
+        except Exception as exc:  # noqa: BLE001 - 窗口查不到按未配置处理，预算换算不中断任务
+            logger.warning(f"查询模型上下文窗口失败，按未配置处理：{exc}")
         return resolve_watermarks(self._config, window)
 
     def measure(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> int:

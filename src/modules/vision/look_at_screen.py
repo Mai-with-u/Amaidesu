@@ -37,6 +37,7 @@ from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.llm.bootstrap import ProfileNames
+from src.modules.llm.capabilities import ProfileVisualCapabilityLookup, validate_llm_capability
 from src.modules.logging import get_logger
 from src.modules.prompts.manager import PromptManager
 from src.modules.tools.models import (
@@ -282,7 +283,7 @@ class LookAtScreenProvider(BaseToolProvider):
         *,
         screen_capture: Optional[ScreenCapture] = None,
         text_reader: Optional[TextReader] = None,
-        llm_manager: Optional[Any] = None,
+        llm_manager: Optional[ProfileVisualCapabilityLookup] = None,
     ) -> None:
         # 配置转 typed（config: dict 必填；空 dict = 全部默认；失败 log+raise）
         self._config_raw = dict(config) if config is not None else {}
@@ -299,7 +300,9 @@ class LookAtScreenProvider(BaseToolProvider):
 
         self._capture = screen_capture
         self._reader = text_reader
-        # 能力协商查询用：判定调用方主模型能否看图，能看则跳过 VLM
+        # 能力协商查询用：判定调用方主模型能否看图，能看则跳过 VLM。
+        # 注入了缺方法的依赖时启动即报错，而不是运行期静默按非视觉处理
+        validate_llm_capability(llm_manager, ProfileVisualCapabilityLookup, parameter="llm_manager")
         self._llm_manager = llm_manager
 
         self._call_count = 0
@@ -309,16 +312,14 @@ class LookAtScreenProvider(BaseToolProvider):
 
         管线式调用（``caller_profile`` 空串，如 text_adv 读屏）按非视觉——
         它们消费的是 VLM 的结构化文本输出（选项中心像素坐标），跳过 VLM 会让
-        解析管线断裂。引擎不可查 / 查询异常同样按非视觉：判错方向是多一次
-        VLM 转述，而不是管线拿到一份没有文字答案的图。
+        解析管线断裂。未注入或查询异常同样按非视觉：判错方向是多一次
+        VLM 转述，而不是管线拿到一份没有文字答案的图。注入了但缺方法的依赖
+        在装配期已被校验拦下（见 __init__）。
         """
         if not invocation.caller_profile or self._llm_manager is None:
             return False
-        getter = getattr(self._llm_manager, "is_profile_visual", None)
-        if not callable(getter):
-            return False
         try:
-            return getter(invocation.caller_profile) is True
+            return self._llm_manager.is_profile_visual(invocation.caller_profile) is True
         except Exception as exc:  # noqa: BLE001 - 能力查询失败退化为 VLM 照旧
             logger.warning(f"视觉能力查询失败（{invocation.caller_profile}），VLM 照旧: {exc}", exc=True)
             return False

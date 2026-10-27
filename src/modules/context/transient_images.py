@@ -25,14 +25,15 @@ logger = get_logger("ContextTransient")
 def is_visual_caller(llm: Any, profile: str) -> bool:
     """本档位主模型能否看图（能力协商出口，全仓库唯一一份防御）。
 
-    引擎不可查（测试假件 / 未注入 / ``llm=None``）或查询异常一律按非视觉
-    ——判错方向是多一次 VLM 转述，而不是把图塞给看不懂的模型。
+    未注入（``llm=None``）或查询异常一律按非视觉——判错方向是多一次 VLM
+    转述，而不是把图塞给看不懂的模型。注入了但缺方法的依赖由各调用方
+    构造器装配校验拦下（见 ``llm.capabilities``），这里不做属性探测：
+    引擎契约被破坏时启动即报错，而不是静默按非视觉处理。
     """
-    getter = getattr(llm, "is_profile_visual", None)
-    if not callable(getter):
+    if llm is None:
         return False
     try:
-        return getter(profile) is True
+        return llm.is_profile_visual(profile) is True
     except Exception as e:
         logger.warning(f"视觉能力查询失败，按非视觉处理: {e}", exc=True)
         return False

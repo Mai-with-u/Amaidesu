@@ -61,6 +61,7 @@ from src.agents.streamer.game_ledger import GameLedger
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import GameEventBatch
 from src.modules.context import TransientImages, absorb_result_images, is_visual_caller
+from src.modules.llm.capabilities import ProfileVisualCapabilityLookup, validate_llm_capability
 from src.modules.agents.control import PROVIDER_NAME as FRAMEWORK_PROVIDER
 from src.modules.llm.payload import response_to_assistant_message
 from src.modules.logging import get_logger
@@ -200,7 +201,8 @@ class Planner:
         Args:
             config: 配置字典或已解析对象（planner_max_steps）。
             llm_service: LLM 管理器，需提供
-                ``async generate(messages, *, tools=..., profile=...) -> payload.Response``。
+                ``async generate(messages, *, tools=..., profile=...) -> payload.Response``
+                与 ``is_profile_visual(profile) -> bool``。
             prompt_service: 提示词管理器，需提供 ``render(name, **vars) -> str``。
             room_state: 直播间态势规则层实例。
             tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作类工具）。
@@ -243,6 +245,9 @@ class Planner:
         self.max_steps: int = self.typed_config.planner_max_steps
 
         self._llm_service = llm_service
+        # llm_service 另需 async generate（决策推理用）；视觉查询契约在装配期校验，
+        # 注入了缺方法的对象时启动即报错，而不是运行期静默按非视觉处理
+        validate_llm_capability(llm_service, ProfileVisualCapabilityLookup, parameter="llm_service")
         self._prompt_service = prompt_service
         self._room_state = room_state
         self._cold_silence_ms: int = self.typed_config.cold_silence_ms

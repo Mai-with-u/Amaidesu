@@ -8,11 +8,15 @@
 """
 
 from . import clients
+from .capabilities import ProfileContextWindowLookup, ProfileVisualCapabilityLookup, validate_llm_capability
 from .client import BaseLLMClient
 from .engine import LLMManager
 
 __all__ = [
     "BaseLLMClient",
     "LLMManager",
+    "ProfileContextWindowLookup",
+    "ProfileVisualCapabilityLookup",
     "clients",
+    "validate_llm_capability",
 ]
