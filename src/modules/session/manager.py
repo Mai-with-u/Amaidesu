@@ -34,7 +34,6 @@ from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
 from src.modules.storage.repos import ChatRepo, SessionRepo
-from src.modules.types.currency import to_cny
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -261,94 +260,6 @@ class LiveSessionManager:
     ) -> List:
         """场次列表（显式场次按开始时间倒序 + 消息数），供 Dashboard API / 控制台侧边栏。"""
         return await self._sessions.list_live_sessions(limit=limit, source=source, title_keyword=title_keyword)
-
-    @property
-    def sessions(self) -> SessionRepo:
-        """场次仓储（回看数据面只读访问：单场行查询等）。"""
-        return self._sessions
-
-    @property
-    def chat(self) -> ChatRepo:
-        """明细仓储（回看数据面只读访问：补录/核对明细行等）。"""
-        return self._chat
-
-    async def get_session_details(
-        self, live_session_id: int, *, limit: int = 300, before_timestamp_ms: Optional[int] = None
-    ) -> List[dict]:
-        """单场明细行（live_chat + gifts + super_chats 合并，时间正序）。
-
-        回看时间线的数据面：把三张明细表拉平为带 kind 的条目流，
-        消息行带 message_id / reply_to_message_id 关联键。
-        ``before_timestamp_ms`` 游标只保留严格早于该时刻的行（回看"加载更早"
-        翻页），三张明细表各取游标前最近 ``limit`` 行后合并截断。
-        """
-        rows = await self._chat.list_recent_live_chat(
-            live_session_id=live_session_id,
-            limit=limit,
-            before_timestamp_ms=before_timestamp_ms,
-        )
-        items: List[dict] = []
-        for row in rows:
-            ts = int(row["timestamp_ms"])
-            if row["sender_role"] == "assistant":
-                items.append(
-                    {
-                        "kind": "speech",
-                        "ts_ms": ts,
-                        "text": row["content"],
-                        "reply_to_message_id": row["reply_to_message_id"],
-                        "simulated": False,
-                    }
-                )
-            else:
-                items.append(
-                    {
-                        "kind": str(row["message_type"]),
-                        "ts_ms": ts,
-                        "user_name": row["sender_name"] or "",
-                        "user_id": row["sender_id"] or "",
-                        "content": row["content"],
-                        "message_id": row["message_id"],
-                        "simulated": bool(row["simulated"]),
-                    }
-                )
-        gift_rows = await self._chat.list_session_gifts(
-            live_session_id=live_session_id,
-            limit=limit,
-            before_timestamp_ms=before_timestamp_ms,
-        )
-        for row in gift_rows:
-            items.append(
-                {
-                    "kind": "gift_row",
-                    "ts_ms": int(row["timestamp_ms"]),
-                    "user_name": row["user_name"],
-                    "user_id": row["user_id"],
-                    "gift_name": row["gift_name"],
-                    "gift_count": int(row["quantity"]),
-                    "total_price": int(row["total_price"] or 0),
-                    "simulated": bool(row["simulated"]),
-                }
-            )
-        sc_rows = await self._chat.list_session_super_chats(
-            live_session_id=live_session_id,
-            limit=limit,
-            before_timestamp_ms=before_timestamp_ms,
-        )
-        for row in sc_rows:
-            items.append(
-                {
-                    "kind": "super_chat_row",
-                    "ts_ms": int(row["timestamp_ms"]),
-                    "user_name": row["user_name"],
-                    "user_id": row["user_id"],
-                    "content": row["message"],
-                    "amount": to_cny(int(row["total_price"] or 0), str(row["currency"] or "")) or 0.0,
-                    "simulated": bool(row["simulated"]),
-                }
-            )
-        items.sort(key=lambda item: item["ts_ms"])
-        return items[-limit:]
 
 
 __all__ = ["LiveSessionManager"]

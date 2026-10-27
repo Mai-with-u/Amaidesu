@@ -869,6 +869,7 @@ async def create_app_components(
             simulator_service,
             event_recorder,
             session_manager,
+            session_repo=database.sessions,
             llm_repo=database.llm,
             rundown_repo=database.rundowns,
             # 场次复盘聚合/导出的数据源：game_events 计数与 db 快照副本路径
@@ -1159,6 +1160,7 @@ async def _start_dashboard(
     simulator_service: Optional["SimulatorService"] = None,
     event_recorder: Optional["EventHistoryRecorder"] = None,
     session_manager: Optional["LiveSessionManager"] = None,
+    session_repo=None,
     llm_repo=None,
     rundown_repo=None,
     viewer_repo=None,
@@ -1194,6 +1196,8 @@ async def _start_dashboard(
             log_streamer=log_streamer,
             simulator_service=simulator_service,
             session_manager=session_manager,
+            # 场次行读面：回看端点直查 live_sessions（与场次管理器写面分离）
+            session_repo=session_repo,
             llm_repo=llm_repo,
             # 流程单库仓库：Dashboard 编排页 CRUD 与主播 Agent 共用同一 SQLite 表
             rundown_repo=rundown_repo,

@@ -41,6 +41,7 @@ from src.modules.dashboard.services.component_runtime import (
 )
 from src.modules.dashboard.services.config_adapter import sync_enabled_lists
 from src.modules.dashboard.services.event_query import events_dir_of
+from src.modules.dashboard.services.session_details import list_session_details
 from src.modules.dashboard.services.session_events import SessionEventReader
 from src.modules.dashboard.services.session_rundown import build_rundown_execution
 from src.modules.dashboard.services.session_timeline import build_timeline_items
@@ -62,6 +63,17 @@ ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 SessionManagerDep = Annotated[
     "LiveSessionManager", Depends(server_component("session_manager", missing_detail="LiveSessionManager 未装配"))
 ]
+
+
+async def _fetch_session_row(server: "DashboardServer", session_id: int) -> Any:
+    """直查 live_sessions 行；场次行仓储未装配 503，行不存在 404。"""
+    session_repo = server.session_repo
+    if session_repo is None:
+        raise HTTPException(status_code=503, detail="SessionRepo 未装配")
+    row = await session_repo.get_live_session(live_session_id=session_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
+    return row
 
 
 def _row_to_item(row: Any, active_pk: Optional[int]) -> SessionItem:
@@ -201,11 +213,14 @@ async def session_timeline(
     条目；诊断天目录被清理时 ``events_pruned`` 如实回报，事件侧相应降级。
     条目装配见 ``services.session_timeline``，事件收集见 ``services.session_events``。
     """
-    row = await manager.sessions.get_live_session(live_session_id=session_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
+    row = await _fetch_session_row(server, session_id)
 
-    detail_rows = await manager.get_session_details(session_id, limit=limit, before_timestamp_ms=before_timestamp_ms)
+    chat_repo = server.chat_repo
+    if chat_repo is None:
+        raise HTTPException(status_code=503, detail="ChatRepo 未装配")
+    detail_rows = await list_session_details(
+        chat_repo, session_id, limit=limit, before_timestamp_ms=before_timestamp_ms
+    )
     reader = SessionEventReader(
         event_history=server.event_history,
         events_dir=events_dir_of(server),
@@ -237,9 +252,7 @@ async def session_rundown_execution(
     repo = server.rundown_transition_repo
     if repo is None:
         raise HTTPException(status_code=503, detail="RundownTransitionRepo 未装配")
-    row = await manager.sessions.get_live_session(live_session_id=session_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
+    row = await _fetch_session_row(server, session_id)
     transitions = await repo.list_by_session(session_id)
     ended_raw = row["ended_at_ms"]
     return build_rundown_execution(

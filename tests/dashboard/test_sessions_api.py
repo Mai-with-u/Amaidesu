@@ -19,8 +19,14 @@ def event_history() -> EventHistoryService:
 
 
 @pytest.fixture
-async def sessions_client(api, event_bus, session_manager, event_history):
-    return await api(event_bus=event_bus, session_manager=session_manager, event_history=event_history)
+async def sessions_client(api, event_bus, session_manager, event_history, store):
+    return await api(
+        event_bus=event_bus,
+        session_manager=session_manager,
+        event_history=event_history,
+        session_repo=store.sessions,
+        chat_repo=store.chat,
+    )
 
 
 async def _open(client, title: str = "") -> int:
@@ -90,11 +96,11 @@ async def test_rename_session(sessions_client) -> None:
     assert (await client.patch(f"/api/v1/live-sessions/{pk + 99999}", json={"title": "x"})).status_code == 404
 
 
-async def test_list_filters_by_source_and_title(sessions_client, session_manager) -> None:
+async def test_list_filters_by_source_and_title(sessions_client, session_manager, store) -> None:
     """前两个显式场次都需有明细，否则自动结束时会被整行丢弃。"""
     client = sessions_client
     first = await _open(client, "筛选测试场")
-    await session_manager.chat.insert_live_chat(
+    await store.chat.insert_live_chat(
         live_session_id=first, timestamp_ms=BASE, sender_role="viewer", content="让这场不被丢弃", message_type="danmaku"
     )
     second = await _open(client, "另一个场次")
@@ -108,11 +114,11 @@ async def test_list_filters_by_source_and_title(sessions_client, session_manager
 
 
 async def test_timeline_merges_details_and_events_and_dedupes_speech(
-    sessions_client, session_manager, event_history
+    sessions_client, session_manager, event_history, store
 ) -> None:
     client = sessions_client
     pk = await _open(client, "回看测试")
-    chat = session_manager.chat
+    chat = store.chat
     await chat.insert_live_chat(
         live_session_id=pk, timestamp_ms=BASE, sender_role="viewer", sender_id="u1", sender_name="观众A",
         content="主播玩什么？", message_type="danmaku", message_id="msg_seed_1",
@@ -294,6 +300,7 @@ async def rundown_client(api, event_bus, session_manager, store):
     return await api(
         event_bus=event_bus,
         session_manager=session_manager,
+        session_repo=store.sessions,
         rundown_transition_repo=store.rundown_transitions,
     )
 

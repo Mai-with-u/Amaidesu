@@ -388,6 +388,7 @@ async def review_client(api, event_bus, store, tmp_path: Path) -> AsyncGenerator
     try:
         client = await api(
             session_manager=manager,
+            session_repo=store.sessions,
             chat_repo=store.chat,
             llm_repo=store.llm,
             event_repo=store.events,

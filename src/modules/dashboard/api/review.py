@@ -66,11 +66,14 @@ async def _resolve_sessions(server: "DashboardServer", ids: List[int]) -> List[D
     manager = server.session_manager
     if manager is None:
         raise HTTPException(status_code=503, detail="LiveSessionManager 未装配")
+    session_repo = server.session_repo
+    if session_repo is None:
+        raise HTTPException(status_code=503, detail="SessionRepo 未装配")
 
     if ids:
         rows: List[Dict[str, Any]] = []
         for sid in ids:
-            row = await manager.sessions.get_live_session(live_session_id=sid)
+            row = await session_repo.get_live_session(live_session_id=sid)
             if row is None:
                 raise HTTPException(status_code=404, detail=f"场次不存在: {sid}")
             rows.append(dict(row))

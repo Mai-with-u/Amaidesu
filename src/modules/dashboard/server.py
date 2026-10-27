@@ -77,6 +77,7 @@ class DashboardServer:
         event_history: Optional["EventHistoryService"] = None,
         simulator_service: Optional["SimulatorService"] = None,
         session_manager: Optional[Any] = None,
+        session_repo: Optional[Any] = None,
         viewer_repo: Optional[Any] = None,
         chat_repo: Optional[Any] = None,
         llm_repo: Optional[Any] = None,
@@ -130,6 +131,10 @@ class DashboardServer:
         # 注入 LiveSessionManager 让 `/api/v1/sessions/*` 控制面可用（场次开启/结束/删除）。
         # 未注入时相关端点返回 is_available=false，不影响其余 API。
         self.session_manager = session_manager
+        # 注入 SessionRepo 让回看面（单场时间线 / 流程单执行 / 复盘）直查
+        # live_sessions 行；与场次管理器的写面分离，未注入（极简启动/测试）
+        # 时相关端点返回 503
+        self.session_repo = session_repo
         self.viewer_repo = viewer_repo
         # 注入 ChatRepo 让 `/api/v1/viewers/*` 的观众明细聚合（对话交织 /
         # 贡献 / 参与场次）直查 live_chat 三表；未注入时相关端点返回 503
