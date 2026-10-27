@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from src.modules.diagnostics.readers import read_latest_breakdowns, read_llm_request_payload
 from src.modules.diagnostics.writer import DiagnosticsWriter, _is_date_dir_name
 
 
@@ -29,7 +28,7 @@ def test_append_writes_a_day_and_hour_jsonl_stream_the_reader_can_query_by_reque
 
     stream = tmp_path / "llm_requests" / "2026-10-11" / "14.jsonl"
     assert json.loads(stream.read_text(encoding="utf-8").strip())["request_id"] == "req_a"
-    assert read_llm_request_payload("req_a", ts_ms, base_dir=tmp_path)["request_id"] == "req_a"
+    assert writer.stream_path("llm_requests", ts_ms) == stream
 
 
 def test_record_without_a_timestamp_is_stamped_with_now_instead_of_crashing(tmp_path: Path) -> None:
@@ -48,7 +47,7 @@ def test_snapshot_overwrite_leaves_no_tmp_file_and_the_read_modify_write_merge_f
     first.write_snapshot("llm_context", "latest.json", {"models": {"m1": {"tokens": 1}}})
     first.stop()
     assert not list((tmp_path / "llm_context").glob("*.tmp"))
-    assert read_latest_breakdowns(base_dir=tmp_path)["m1"] == {"tokens": 1}
+    assert first.read_snapshot("llm_context", "latest.json")["models"]["m1"] == {"tokens": 1}
 
     second = _writer(tmp_path)  # 模拟 engine 的合并路径：读旧快照 → 改写 → 覆写
     models = dict(second.read_snapshot("llm_context", "latest.json").get("models", {}))
@@ -56,7 +55,7 @@ def test_snapshot_overwrite_leaves_no_tmp_file_and_the_read_modify_write_merge_f
     second.write_snapshot("llm_context", "latest.json", {"models": models})
     second.stop()
 
-    assert set(read_latest_breakdowns(base_dir=tmp_path)) == {"m1", "m2"}
+    assert set(second.read_snapshot("llm_context", "latest.json")["models"]) == {"m1", "m2"}
 
 
 @pytest.mark.parametrize(("retention_days", "old_kept"), [(14, False), (0, True)])

@@ -61,6 +61,15 @@ class DiagnosticsWriter:
         """落盘根目录（读侧按 ``<base_dir>/<kind>/`` 定位各诊断流）。"""
         return self._base_dir
 
+    def stream_path(self, kind: str, timestamp_ms: int) -> Path:
+        """追加流文件路径的唯一出口：``<base_dir>/<kind>/<YYYY-MM-DD>/<HH>.jsonl``。
+
+        写侧落盘与读侧按行回查共用本方法定位文件，目录版式只在此处定义；
+        ``timestamp_ms`` 为毫秒时刻（记录行携带，决定天/小时目录）。
+        """
+        dt = datetime.fromtimestamp(timestamp_ms / 1000)
+        return self._base_dir / kind / dt.strftime("%Y-%m-%d") / f"{dt.strftime('%H')}.jsonl"
+
     # -------------------- 对外接口（主调用链，零阻塞） --------------------
 
     def append(self, kind: str, record: Mapping[str, Any]) -> None:
@@ -165,13 +174,11 @@ class DiagnosticsWriter:
     def _append_sync(self, kind: str, record: Mapping[str, Any]) -> None:
         ts = record.get("timestamp_ms")
         ts_ms = int(ts) if isinstance(ts, (int, float)) else now_ms()
-        dt = datetime.fromtimestamp(ts_ms / 1000)
-        day_dir = self._base_dir / kind / dt.strftime("%Y-%m-%d")
-        day_dir.mkdir(parents=True, exist_ok=True)
-        path = day_dir / f"{dt.strftime('%H')}.jsonl"
+        path = self.stream_path(kind, ts_ms)
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-        self._cleanup_expired_if_new_day(dt.strftime("%Y-%m-%d"))
+        self._cleanup_expired_if_new_day(path.parent.name)
 
     def _write_snapshot_sync(self, kind: str, envelope: Mapping[str, Any]) -> None:
         kind_dir = self._base_dir / kind

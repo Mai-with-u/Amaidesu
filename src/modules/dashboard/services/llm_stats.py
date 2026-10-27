@@ -7,7 +7,7 @@
 
 import json
 from datetime import date, datetime, time, timedelta
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.modules.dashboard.schemas.llm import (
     LLMContextBreakdownResponse,
@@ -18,8 +18,11 @@ from src.modules.dashboard.schemas.llm import (
     LLMUsageTrendsResponse,
     TokenUsageSchema,
 )
-from src.modules.diagnostics.readers import read_llm_request_payload
+from src.modules.llm.readers import read_llm_request_payload
 from src.modules.llm.request_history_manager import count_image_parts
+
+if TYPE_CHECKING:
+    from src.modules.diagnostics.writer import DiagnosticsWriter
 
 
 def build_context_breakdown_response(
@@ -118,17 +121,18 @@ async def build_usage_trends(llm_repo: Optional[Any], days: int) -> LLMUsageTren
 # 请求历史记录 → 响应模型组装
 
 
-def merge_payload_from_file(record: Dict[str, Any]) -> Dict[str, Any]:
+def merge_payload_from_file(record: Dict[str, Any], writer: Optional["DiagnosticsWriter"]) -> Dict[str, Any]:
     """正文出库后按 request_id 回查诊断文件补齐详情记录。
 
-    新行库列正文一律 NULL（正文在 ``logs/llm_requests/`` 诊断文件），按库行
+    新行库列正文一律 NULL（正文在 ``llm_requests`` 诊断流），按库行
     ``timestamp_ms`` 推导小时文件回查；存量旧行正文仍在库列（判空不触发），
     文件未命中时原样返回（前端拿到无正文的统计行）。无库模式（内存缓存）
-    记录自带全量正文，同样不触发。
+    记录自带全量正文，同样不触发。``writer`` 是诊断落盘器（与写侧同一
+    实例，决定落盘根目录）；未装配时跳过文件回查，原样返回。
     """
     if record.get("request_params") or record.get("reasoning_content") or record.get("tool_calls"):
         return record
-    payload = read_llm_request_payload(str(record.get("request_id") or ""), int(record.get("timestamp") or 0))
+    payload = read_llm_request_payload(str(record.get("request_id") or ""), int(record.get("timestamp") or 0), writer)
     if payload is None:
         return record
     merged = dict(record)

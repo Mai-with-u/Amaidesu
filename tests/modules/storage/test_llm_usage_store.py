@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import pytest
 
-from src.modules.diagnostics.readers import read_latest_breakdowns
+from src.modules.llm.readers import read_latest_breakdowns
 from src.modules.diagnostics.writer import DiagnosticsWriter
 from src.modules.llm.payload import Response, Usage
 from src.modules.storage.database import SQLiteDatabase
@@ -92,7 +92,7 @@ async def test_breakdown_goes_to_diagnostics(store: SQLiteDatabase, tmp_path: Pa
     assert (breakdown["api_prompt_tokens"], breakdown["calibrated"]) == (10, True)
     assert {section["key"] for section in breakdown["sections"]} == _SECTION_KEYS
     assert isinstance(record["timestamp_ms"], int)
-    assert read_latest_breakdowns(base_dir=tmp_path)["glm-4.7"]["request_id"] == result.request_id
+    assert read_latest_breakdowns(writer)["glm-4.7"]["request_id"] == result.request_id
 
 
 async def test_breakdown_not_persisted_diagnostics_is_authoritative(store: SQLiteDatabase, tmp_path: Path) -> None:
@@ -107,4 +107,4 @@ async def test_breakdown_not_persisted_diagnostics_is_authoritative(store: SQLit
     (stream,) = list((tmp_path / "llm_requests").rglob("*.jsonl"))
     record = json.loads(stream.read_text(encoding="utf-8").strip())
     assert record["breakdown"]["request_id"] == result.request_id
-    assert read_latest_breakdowns(base_dir=tmp_path)["glm-4.7"]["request_id"] == result.request_id
+    assert read_latest_breakdowns(writer)["glm-4.7"]["request_id"] == result.request_id

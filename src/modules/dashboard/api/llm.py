@@ -35,7 +35,7 @@ from src.modules.dashboard.services.llm_stats import (
     merge_payload_from_file,
 )
 from src.modules.dashboard.services.model_test import find_saved_provider, test_model_connectivity
-from src.modules.diagnostics.readers import (
+from src.modules.llm.readers import (
     read_latest_breakdowns,
     read_request_breakdown,
 )
@@ -112,7 +112,7 @@ async def get_context_breakdown(server: ServerDep) -> Dict[str, LLMContextBreakd
     context_windows = _context_windows_of(server)
     result: Dict[str, LLMContextBreakdownResponse] = {}
 
-    snapshot_models = read_latest_breakdowns()
+    snapshot_models = read_latest_breakdowns(server.diagnostics_writer)
     for model_name, breakdown in snapshot_models.items():
         row = {
             "timestamp_ms": breakdown.get("timestamp_ms"),
@@ -145,7 +145,9 @@ async def get_context_breakdown_by_request(request_id: str, server: ServerDep) -
         return None
 
     # 文件回查线性扫描小时文件，挪线程池避免冻结事件循环（悬停触发，低频）
-    breakdown = await asyncio.to_thread(read_request_breakdown, request_id, int(row.get("timestamp_ms") or 0))
+    breakdown = await asyncio.to_thread(
+        read_request_breakdown, request_id, int(row.get("timestamp_ms") or 0), server.diagnostics_writer
+    )
     if not isinstance(breakdown, dict):
         return None
     model_name = str(row.get("model_name") or "")
@@ -302,7 +304,7 @@ async def get_request_by_id(request_id: str, server: ServerDep) -> Optional[LLMR
 
     # 正文回查线性扫描小时文件（峰值 18.7MB/文件），同步跑在事件循环里会
     # 冻结整个 WebUI；挪线程池（浏览器逐卡展开时触发，低频）
-    merged = await asyncio.to_thread(merge_payload_from_file, record)
+    merged = await asyncio.to_thread(merge_payload_from_file, record, server.diagnostics_writer)
     return convert_record_to_response(merged)
 
 

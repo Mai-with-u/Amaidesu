@@ -223,7 +223,7 @@ async def test_history_rows_carry_tool_call_preview_and_usage_details(
     )
     payload = {"request_params": {}, "tool_calls": tool_calls, "reasoning_content": None, "usage_raw_json": raw_usage}
     monkeypatch.setattr(
-        llm_stats, "read_llm_request_payload", lambda request_id, ts: payload if request_id == "tc1" else None
+        llm_stats, "read_llm_request_payload", lambda request_id, ts, writer: payload if request_id == "tc1" else None
     )
 
     body = (await client.get("/api/v1/llm/history", params={"page": 1, "page_size": 10})).json()
@@ -289,7 +289,7 @@ async def test_context_breakdown_by_request(llm_client, store, monkeypatch: pyte
     await _seed_breakdown(store, "cbr-1", MODEL_A, 1_000, prompt=2_933)
     await _seed_breakdown(store, "cbr-2", MODEL_A, 2_000)
 
-    def _read_from_file(request_id: str, timestamp_ms: int):
+    def _read_from_file(request_id: str, timestamp_ms: int, writer):
         if request_id == "cbr-1":
             return _breakdown_payload("cbr-1", MODEL_A, 2_933)
         return None
@@ -316,7 +316,9 @@ async def test_context_breakdown_threads_window_from_llm_manager(
     }
     monkeypatch.setattr(llm_api, "read_latest_breakdowns", lambda *args, **kwargs: snapshots)
     monkeypatch.setattr(
-        llm_api, "read_request_breakdown", lambda request_id, ts: snapshots[MODEL_A] if request_id == "cbw-a1" else None
+        llm_api,
+        "read_request_breakdown",
+        lambda request_id, ts, writer: snapshots[MODEL_A] if request_id == "cbw-a1" else None,
     )
 
     body = (await client.get("/api/v1/llm/context-breakdown")).json()
