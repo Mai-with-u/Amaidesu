@@ -242,13 +242,13 @@ class OpenAIClient(BaseLLMClient):
         的 JSON 字符串形态），tool 观察还原 ``tool_call_id``——喂回多轮工具
         循环时这两项是协议合法性前提，缺则服务端拒绝整个消息序列。
 
-        tool 观察携带图像片段时按协议拆分：OpenAI 协议 tool 角色只收文本
-        （图像仅 user 角色可带），tool 消息保留文本、图像提升为 user 消息；
-        提图消息的落位由 ``_request_to_openai_messages`` 统一
-        推迟到整段回执结束之后——紧邻插入会在多工具并发轮里打断回执连续
-        性，被严格端点 400 拒收。能走到这里的带图观察必然来自视觉调用方
-        （组装层已按主模型 visual 位分叉），此处不做能力兜底。
+        OpenAI 协议 tool 角色只收文本，图像仅 user 角色可带。tool 消息携带
+        图像片段即结构性缺陷，就地硬错——图的合法通道是引擎注水后挂在
+        紧随工具回执的 user 消息尾部（ADR-040），不存在"回执自带图"的
+        生产者。
         """
+        if message.role == "tool":
+            cls._ensure_tool_message_has_no_image(message)
         contents = [cls._part_to_openai(p) for p in message.parts]
         result: Dict[str, Any] = {"role": message.role, "content": contents}
         if message.tool_calls:
@@ -267,21 +267,24 @@ class OpenAIClient(BaseLLMClient):
             ]
         if message.tool_call_id:
             result["tool_call_id"] = message.tool_call_id
-        if message.role == "tool":
-            images = [c for c in contents if c["type"] == "image_url"]
-            if images:
-                result["content"] = "".join(c["text"] for c in contents if c["type"] == "text")
-                note_content: List[Dict[str, Any]] = [
-                    {"type": "text", "text": "[系统附图：上方工具回执的截图]"},
-                    *images,
-                ]
-                return [result, {"role": "user", "content": note_content}]
         if contents and all(c["type"] == "text" for c in contents):
             content: Any = "".join(c["text"] for c in contents)
             result["content"] = content
         if message.role == "assistant" and message.reasoning is not None:
             cls._attach_reasoning(result, message.reasoning)
         return [result]
+
+    @staticmethod
+    def _ensure_tool_message_has_no_image(message: Message) -> None:
+        """tool 角色消息携带图像片段即硬错。
+
+        OpenAI 协议 tool 角色只收文本；图的合法通道是引擎注水后挂在紧随
+        工具回执的 user 消息尾部。同时覆盖 typed 与等价 dict 两种片段形态。
+        """
+        for part in message.parts:
+            is_image = isinstance(part, ImagePart) or (isinstance(part, dict) and part.get("type") == "image")
+            if is_image:
+                raise TypeError("tool 消息不允许携带图像；图的合法通道是引擎注水后的 user 消息")
 
     @staticmethod
     def _attach_reasoning(result: Dict[str, Any], reasoning: Reasoning) -> None:
@@ -303,30 +306,12 @@ class OpenAIClient(BaseLLMClient):
 
     @classmethod
     def _request_to_openai_messages(cls, request: GenerateRequest) -> List[Dict[str, Any]]:
-        """GenerateRequest → OpenAI messages 列表（system 置于首条）
-
-        带图 tool 观察提升出的 user 消息统一推迟到整段 tool 回执结束之后
-        落位：协议要求 assistant 带 tool_calls 后连续跟完全部回执，多工具
-        并发轮里提图消息若紧随自己的回执插入，会打断回执连续性被严格端点
-        400 拒收（DeepSeek 实测：insufficient tool messages following
-        tool_calls message）。按来源回执分组挂起，段尾按序落位，配对语义
-        不变。
-        """
+        """GenerateRequest → OpenAI messages 列表（system 置于首条）"""
         messages: List[Dict[str, Any]] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
-        lifted: List[Dict[str, Any]] = []
         for message in request.messages:
-            wire = cls._message_to_openai(message)
-            if message.role == "tool":
-                # 回执段还在继续：回执本体落位，提图 user 消息挂起到段尾
-                messages.append(wire[0])
-                lifted.extend(wire[1:])
-                continue
-            messages.extend(lifted)
-            lifted = []
-            messages.extend(wire)
-        messages.extend(lifted)
+            messages.extend(cls._message_to_openai(message))
         return messages
 
     @staticmethod

@@ -1,4 +1,4 @@
-"""OpenAIClient：请求拼装、认证方式、思考解析、流式增量、usage 捕获、音频模态、tool 带图拆分与错误翻译"""
+"""OpenAIClient：请求拼装、认证方式、思考解析、流式增量、usage 捕获、音频模态、tool 带图守卫与错误翻译"""
 
 import asyncio
 import json
@@ -340,7 +340,7 @@ async def test_generate_audio_without_audio_returns_plain_text() -> None:
     assert (result.success, result.audio_base64, result.content) == (True, None, "plain")
 
 
-# tool 观察带图：OpenAI 协议 tool 角色只收文本，图提升为 user 消息
+# tool 消息带图守卫；user 消息带图为合法通道
 
 
 def _translate(*messages: Message) -> list[dict]:
@@ -352,43 +352,38 @@ def _image(tag: str) -> ImagePart:
     return ImagePart(image=f"data:image/png;base64,{tag}")
 
 
-def _assert_lifted_image(message: dict, tag: str) -> None:
-    assert message["role"] == "user"
-    assert message["content"][0]["type"] == "text" and "[系统附图" in message["content"][0]["text"]
-    assert message["content"][1] == {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{tag}"}}
+@pytest.mark.parametrize(
+    "image_part",
+    [_image("AAAA"), {"type": "image", "image": "data:image/png;base64,AAAA"}],
+    ids=["typed", "dict"],
+)
+def test_tool_message_with_image_raises(image_part: Any) -> None:
+    """tool 角色只收文本：携带图像片段（typed 或 dict 形态）即硬错。"""
+    with pytest.raises(TypeError, match="tool 消息不允许携带图像；图的合法通道是引擎注水后的 user 消息"):
+        _translate(Message(role="tool", parts=['{"ok": true}', image_part], tool_call_id="c1"))
 
 
-def test_single_tool_image_lifts_to_following_user_message() -> None:
-    receipt = '{"ok": true, "image": "[图像 1 KB 已省略]"}'
-    messages = _translate(
-        Message(role="user", parts=["画面里有什么？"]),
-        Message(role="tool", parts=[receipt, _image("AAAA")], tool_call_id="call_1"),
-    )
-    assert len(messages) == 3
-    assert messages[1] == {"role": "tool", "tool_call_id": "call_1", "content": receipt}
-    _assert_lifted_image(messages[2], "AAAA")
-
-    # 无图 tool 观察：单条字符串 content；user 带图：保持 parts 列表
-    assert _translate(Message(role="tool", parts=['{"ok": true}'], tool_call_id="c"))[0]["content"] == '{"ok": true}'
-    (user,) = _translate(Message(role="user", parts=["看这张图", _image("BBBB")]))
-    assert user["content"] == [
-        {"type": "text", "text": "看这张图"},
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,BBBB"}},
-    ]
-
-
-def test_tool_images_in_multi_tool_run_land_after_run_in_order() -> None:
-    """紧邻插入会打断回执连续性，被严格端点 400 拒收（DeepSeek 实测），故推迟到整段回执之后。"""
+def test_tool_message_without_image_stays_single_text() -> None:
+    """无图 tool 观察保持单条文本消息；多工具回执序列原样保序。"""
     calls = [ToolCall(id="c1", name="shot_a", arguments={}), ToolCall(id="c2", name="shot_b", arguments={})]
     messages = _translate(
         Message(role="assistant", parts=[""], tool_calls=calls),
-        Message(role="tool", parts=['{"ok": true}', _image("AAAA")], tool_call_id="c1"),
-        Message(role="tool", parts=['{"ok": true}', _image("BBBB")], tool_call_id="c2"),
+        Message(role="tool", parts=['{"ok": true}'], tool_call_id="c1"),
+        Message(role="tool", parts=['{"ok": true}'], tool_call_id="c2"),
     )
-    assert [m["role"] for m in messages] == ["assistant", "tool", "tool", "user", "user"]
-    assert [m["tool_call_id"] for m in messages[1:3]] == ["c1", "c2"]
-    _assert_lifted_image(messages[3], "AAAA")
-    _assert_lifted_image(messages[4], "BBBB")
+    assert [m["role"] for m in messages] == ["assistant", "tool", "tool"]
+    assert [m["tool_call_id"] for m in messages[1:]] == ["c1", "c2"]
+    assert all(m["content"] == '{"ok": true}' for m in messages[1:])
+
+
+def test_user_message_with_images_converts_in_order() -> None:
+    """user 消息带多图：每个 ImagePart 原位转 image_url，保序不合并。"""
+    (user,) = _translate(Message(role="user", parts=["看这两张图", _image("AAAA"), _image("BBBB")]))
+    assert user["content"] == [
+        {"type": "text", "text": "看这两张图"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,BBBB"}},
+    ]
 
 
 @pytest.mark.parametrize(
