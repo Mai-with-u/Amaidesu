@@ -6,7 +6,7 @@
 HTTP 语义（503 / 400 / 写回映射）留在 api 层。
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult
@@ -49,6 +49,122 @@ AGENT_CATEGORIES: Tuple[str, ...] = ("game", "framework", "memory")
 
 # MCP 分类（提供者 = 注册表 MCP Provider ∪ [tools.mcp.config.servers] 配置键）。
 MCP_CATEGORY = "mcp"
+
+
+# 开关地址解析（control 端点的写回键位与名单增删，HTTP 语义留在 api 层）
+
+
+class ProviderSwitchError(ValueError):
+    """提供者开关地址无法解析（api 层按子类映射 HTTP 状态码）。"""
+
+
+class ProviderNotSwitchableError(ProviderSwitchError):
+    """随 Agent 启用的分类不可开关（开关随 agents.enabled）。"""
+
+
+class UnknownProviderError(ProviderSwitchError):
+    """分类与提供者键不构成可识别的开关成员。"""
+
+
+class SwitchAddressIncompleteError(ProviderSwitchError):
+    """注册表记录透出的开关地址声明缺 file 或 key。"""
+
+
+class ProviderSwitchChange(NamedTuple):
+    """一次提供者开关写回的统一形状：统一写管线的 API 键、目标值与响应话术主语。"""
+
+    api_key: str
+    value: Any
+    subject: str
+
+
+def _update_list_membership(names: List[str], key: str, add: bool) -> List[str]:
+    """名单成员关系增删（add 加入 / 移除，保持既有顺序，去重不重排）。"""
+    if add:
+        if key not in names:
+            names.append(key)
+        return names
+    return [n for n in names if n != key]
+
+
+def build_provider_switch_change(
+    category: str,
+    key: str,
+    enable: bool,
+    provider_records: List[Dict[str, Any]],
+    read_avatar_platform_doc: Callable[[], Dict[str, Any]],
+) -> ProviderSwitchChange:
+    """解析提供者开关的写回地址并算出目标值。
+
+    写回位置按成员类型区分（点分键，带配置文件 scope 前缀，直接可投
+    ``apply_config_updates``）：
+    - 提供者自带开关地址（``switch_config``，如 Agent 私有 MCP）：写声明的
+      文件与键（``agents.minecraft.mcp.enabled`` → agents.toml）
+    - avatar 平台成员：``avatar.platform.enabled`` 启用名单增删（文件根即
+      AvatarRootConfig，无 avatar 前缀）
+    - mcp 全局 server：``tools.mcp.config.servers.<键>.enabled``
+    - 分类级开关（键与分类名相同）：``tools.<分类>.enabled``；其余成员写
+      ``tools.<分类>.<键>.enabled``
+    - game / framework / memory 等随 Agent 分类与未知成员抛
+      ``ProviderSwitchError`` 子类（api 层映射 400 / 500）
+
+    Args:
+        provider_records: 运营面提供者记录清单（``list_providers`` 透出，
+            含 ``switch_config`` 声明）。
+        read_avatar_platform_doc: avatar.toml 文档惰性读取器（仅 avatar
+            分支调用，文件 I/O 留在调用方）。
+    """
+    if category in AGENT_CATEGORIES:
+        raise ProviderNotSwitchableError("随 Agent 启用的工具分类不可开关（随 agents.enabled）")
+
+    switch = next(
+        (
+            record["switch"]
+            for record in provider_records
+            if record.get("name") == key and isinstance(record.get("switch"), dict)
+        ),
+        None,
+    )
+    if switch is not None:
+        file_name = str(switch.get("file") or "")
+        dotted_key = str(switch.get("key") or "")
+        if not file_name or not dotted_key:
+            raise SwitchAddressIncompleteError(f"提供者 {category}/{key} 的开关地址声明不完整")
+        scope = file_name.removesuffix(".toml")
+        return ProviderSwitchChange(f"{scope}.{dotted_key}", enable, f"工具提供者 {category}.{key}")
+
+    if category == MCP_CATEGORY:
+        return ProviderSwitchChange(
+            f"tools.tools.{MCP_CATEGORY}.config.servers.{key}.enabled", enable, f"工具提供者 {category}.{key}"
+        )
+    if category == "avatar":
+        doc = read_avatar_platform_doc()
+        platform = doc.get("platform")
+        platform = platform if isinstance(platform, dict) else {}
+        raw = platform.get("enabled", [])
+        names = [n for n in raw if isinstance(n, str)] if isinstance(raw, list) else []
+        return ProviderSwitchChange(
+            "avatar.platform.enabled", _update_list_membership(names, key, add=enable), f"虚拟形象平台 {category}.{key}"
+        )
+    if (category, key) in PROVIDER_DESCRIPTIONS:
+        # tools.toml 的文件 scope 前缀也是 "tools"（与段名同字），故 API 键呈双 tools
+        in_file_key = f"tools.{category}.enabled" if key in CATEGORY_LEVEL_KEYS else f"tools.{category}.{key}.enabled"
+        return ProviderSwitchChange(f"tools.{in_file_key}", enable, f"工具提供者 {category}.{key}")
+    raise UnknownProviderError(f"未知工具提供者: {category}/{key}")
+
+
+def build_disabled_tools_change(tools_doc: Dict[str, Any], full_name: str, enable: bool) -> List[str]:
+    """算出工具级停用名单 ``tools.disabled_tools`` 的新值（排序去重）。
+
+    Args:
+        tools_doc: tools.toml 文档（调用方读文件，本函数只做名单增删）。
+    """
+    tools_section = tools_doc.get("tools")
+    tools_section = tools_section if isinstance(tools_section, dict) else {}
+    raw = tools_section.get("disabled_tools")
+    disabled = [n for n in raw if isinstance(n, str)] if isinstance(raw, list) else []
+    # 停用名单是排除名单：启用 = 移出名单，停用 = 加入名单（与启用名单方向相反）
+    return sorted(set(_update_list_membership(disabled, full_name, add=not enable)))
 
 
 def runtime_tool_counts(registry: Any) -> Dict[Tuple[str, str], Tuple[int, int]]:

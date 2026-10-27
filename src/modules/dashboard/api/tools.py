@@ -48,11 +48,11 @@ from src.modules.dashboard.schemas.tools import (
 from src.modules.dashboard.services.component_runtime import ComponentRuntimeContext
 from src.modules.dashboard.services.config_adapter import ConfigApplyOutcome, apply_config_updates
 from src.modules.dashboard.services.tool_catalog import (
-    AGENT_CATEGORIES,
-    CATEGORY_LEVEL_KEYS,
-    MCP_CATEGORY,
-    PROVIDER_DESCRIPTIONS,
+    ProviderSwitchError,
+    SwitchAddressIncompleteError,
     build_action_entry,
+    build_disabled_tools_change,
+    build_provider_switch_change,
     build_tool_catalog,
     format_tool_health,
     safe_list_providers,
@@ -202,77 +202,30 @@ async def control_tool_provider(
 ) -> ToolToggleResponse:
     """把提供者开关写回其声明配置（配置写路径统一编排）。
 
-    写回位置按成员类型区分（点分键，API 键带 scope 前缀）：
-    - 提供者自带开关地址（``switch_config``，如 Agent 私有 MCP）：写声明
-      的文件与键（``agents.minecraft.mcp.enabled`` → agents.toml；agents 域
-      在跑组件随写回重建，已即时生效）
-    - avatar 平台成员：``avatar.platform.enabled`` 启用名单增删
-    - studio 成员：``tools.<分类>.<键>.enabled``
-    - vision（键与分类名相同）：``tools.<分类>.enabled``
-    - mcp 全局 server：``tools.mcp.config.servers.<键>.enabled``
-    - game / framework / memory 等随 Agent 分类不可开关（400）
-
-    工具与虚拟形象域的注册发生在组合根装配期（启动时），无动态启停语义
-    ——写盘后重启生效。
+    写回地址解析与名单增删见 ``services.tool_catalog.build_provider_switch_change``
+    （switch_config 声明地址 / avatar 名单 / 分类级与成员级键位 / mcp server）；
+    本 handler 只负责异常到 HTTP 状态码的映射：不可开关与未知成员 400、
+    开关地址声明不完整 500。工具与虚拟形象域的注册发生在组合根装配期
+    （启动时），无动态启停语义——写盘后重启生效。
     """
-    if category in AGENT_CATEGORIES:
-        raise HTTPException(status_code=400, detail="随 Agent 启用的工具分类不可开关（随 agents.enabled）")
     enable = request.action == "enable"
-    cfg_dir = config_dir(server)
 
-    # 提供者自带开关地址优先（绑定处声明，注册表记录透出）
-    switch = next(
-        (
-            record["switch"]
-            for record in safe_list_providers(tool_ops)
-            if record.get("name") == key and isinstance(record.get("switch"), dict)
-        ),
-        None,
-    )
-    if switch is not None:
-        file_name = str(switch.get("file") or "")
-        dotted_key = str(switch.get("key") or "")
-        if not file_name or not dotted_key:
-            raise HTTPException(status_code=500, detail=f"提供者 {category}/{key} 的开关地址声明不完整")
-        scope = file_name.removesuffix(".toml")
-        outcome = await _apply_config_toggle(server, [(f"{scope}.{dotted_key}", enable)])
-        return {
-            "success": True,
-            "enabled": enable,
-            "message": _toggle_message(outcome, f"工具提供者 {category}.{key}", enable=enable),
-        }
+    def _read_avatar_platform_doc() -> Dict[str, Any]:
+        return read_toml_dict(config_dir(server) / "avatar.toml")
 
-    if category == MCP_CATEGORY:
-        dotted_key = f"tools.{MCP_CATEGORY}.config.servers.{key}.enabled"
-    elif category == "avatar":
-        # avatar 平台开合 = avatar.toml 启用名单增删（文件根即 AvatarRootConfig，
-        # 文件内路径为 platform.enabled，无 avatar 前缀）
-        doc = read_toml_dict(cfg_dir / "avatar.toml")
-        platform = doc.get("platform")
-        platform = platform if isinstance(platform, dict) else {}
-        raw = platform.get("enabled", [])
-        names = [n for n in raw if isinstance(n, str)] if isinstance(raw, list) else []
-        if enable:
-            if key not in names:
-                names.append(key)
-        else:
-            names = [n for n in names if n != key]
-        outcome = await _apply_config_toggle(server, [("avatar.platform.enabled", names)])
-        return {
-            "success": True,
-            "enabled": enable,
-            "message": _toggle_message(outcome, f"虚拟形象平台 {category}.{key}", enable=enable),
-        }
-    elif (category, key) in PROVIDER_DESCRIPTIONS:
-        dotted_key = f"tools.{category}.enabled" if key in CATEGORY_LEVEL_KEYS else f"tools.{category}.{key}.enabled"
-    else:
-        raise HTTPException(status_code=400, detail=f"未知工具提供者: {category}/{key}")
+    try:
+        change = build_provider_switch_change(
+            category, key, enable, safe_list_providers(tool_ops), _read_avatar_platform_doc
+        )
+    except ProviderSwitchError as exc:
+        status = 500 if isinstance(exc, SwitchAddressIncompleteError) else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
 
-    outcome = await _apply_config_toggle(server, [(f"tools.{dotted_key}", enable)])
+    outcome = await _apply_config_toggle(server, [(change.api_key, change.value)])
     return {
         "success": True,
         "enabled": enable,
-        "message": _toggle_message(outcome, f"工具提供者 {category}.{key}", enable=enable),
+        "message": _toggle_message(outcome, change.subject, enable=enable),
     }
 
 
@@ -292,8 +245,9 @@ async def control_tool(
     停用的工具仍保留在注册表中（工具页可见全集），但对 LLM 不可见且调用被
     拒绝；写盘后不触发热重载，重启后生效。``full_name`` 是注册表调用键
     （``<provider>_<工具名>``，工具清单接口的 ``full_name`` 字段），与
-    ``registry.apply_disabled`` 的过滤口径一致；工具必须在运行时注册表中
-    存在（防止拼写错误静默写入无效条目，404）。
+    ``registry.apply_disabled`` 的过滤口径一致；名单增删见
+    ``services.tool_catalog.build_disabled_tools_change``，本 handler 只负责
+    工具存在性校验（防拼写错误静默写入无效条目，404）与未知名的告警。
     """
     enable = request.action == "enable"
     try:
@@ -304,18 +258,8 @@ async def control_tool(
     if not enable and full_name not in known:
         raise HTTPException(status_code=404, detail=f"运行时未注册工具: {full_name}")
 
-    cfg_dir = config_dir(server)
-    doc = read_toml_dict(cfg_dir / "tools.toml")
-    tools_section = doc.get("tools")
-    tools_section = tools_section if isinstance(tools_section, dict) else {}
-    raw = tools_section.get("disabled_tools")
-    disabled = [n for n in raw if isinstance(n, str)] if isinstance(raw, list) else []
-
-    if enable:
-        disabled = [n for n in disabled if n != full_name]
-    elif full_name not in disabled:
-        disabled.append(full_name)
-    disabled = sorted(set(disabled))
+    doc = read_toml_dict(config_dir(server) / "tools.toml")
+    disabled = build_disabled_tools_change(doc, full_name, enable)
 
     unknown = [n for n in disabled if n not in known]
     if unknown:
