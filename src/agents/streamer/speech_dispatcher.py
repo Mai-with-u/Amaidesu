@@ -26,7 +26,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import ModuleLogger, get_logger
-from src.modules.subtitle.playback_follower import bind_playback_subtitle
+from src.modules.subtitle.playback_follower import bind_playback_subtitle, unbind_playback_subtitle
 from src.modules.utils.time_utils import now_ms
 
 from .utterance_queue import (
@@ -75,13 +75,17 @@ class SpeechDispatcher:
         )
         self._tts_engine = tts_engine
         self._subtitle_service = subtitle_service
-        # 字幕源择流（装配期事实，构造后不变）：tts_engine 在位 → 字幕跟随
-        # 播放事件，派发直出停用；两种模式互斥，非两套源同时跑。
-        # 已知边界：跟随模式下 TTS 管线 start 失败降级后字幕全哑——运行期
-        # 不回切直出（运行期动态择流属已否决设计），该缺口的取舍待定。
+        # 字幕源择流：初始以构造注入的 ``tts_engine`` 是否在位为判据——有引擎时
+        # 本管线订阅 ``tts.utterance.*`` 让字幕跟随播放、派发直出停用；无引擎时
+        # 保持派发直出。启动结果可修正这一裁决：``start()`` 降级关闭 TTS 后跟随
+        # 源失去事件生产者，此时解绑跟随器、回切直出（两模式仍互斥，任一时刻
+        # 只有一种生效）；启动完成后择流定死，运行期不再变动。裁决在本组件完成，
+        # 组合根不再做参数塑形。
         self._subtitle_follows_playback = tts_engine is not None
+        self._playback_subtitle_handlers: Optional[Any] = None
         if self._subtitle_follows_playback:
             bound = bind_playback_subtitle(event_bus, subtitle_service, self._logger)
+            self._playback_subtitle_handlers = bound
             if bound is not None:
                 self._logger.info("字幕源已择流：跟随 TTS 播放事件（tts.utterance.*）")
             else:
@@ -166,7 +170,9 @@ class SpeechDispatcher:
     async def start(self) -> None:
         """启动发言管线：仅在 TTS 显式启用且引擎注入时构造队列；
         否则保持禁用（决策循环行为与管线关闭时一致：只读 result.success，
-        不消费 result.content）。启动失败降级为关闭（fail-soft）。
+        不消费 result.content）。启动失败降级为关闭（fail-soft），降级时
+        若字幕处于跟随模式则解绑跟随器并回切派发直出——跟随源失去事件
+        生产者，不回切字幕会全哑。
         """
         if not self._tts_enabled:
             return
@@ -183,6 +189,7 @@ class SpeechDispatcher:
 
             self._utterance_queue = UtteranceQueue(
                 speak=_speak,
+                event_bus=self._event_bus,
                 logger_name="StreamerAgent.UtteranceQueue",
                 max_queue=self._speech_max_queue,
                 render_timeout_ms=self._speech_render_timeout_ms,
@@ -192,6 +199,20 @@ class SpeechDispatcher:
             self._logger.warning(f"启动发言管线失败，已降级为关闭: {exc}")
             self._utterance_queue = None
             self._tts_enabled = False
+            self._fallback_subtitle_to_direct()
+
+    def _fallback_subtitle_to_direct(self) -> None:
+        """字幕跟随模式回切派发直出（TTS 管线降级关闭后跟随源失去事件生产者）。
+
+        解绑 ``tts.utterance.*`` 订阅、翻转择流标志使派发直出恢复生效；
+        两模式保持互斥。已在直出模式（未绑定跟随器）时无事可做。
+        """
+        if not self._subtitle_follows_playback:
+            return
+        unbind_playback_subtitle(self._event_bus, self._playback_subtitle_handlers, self._logger)
+        self._playback_subtitle_handlers = None
+        self._subtitle_follows_playback = False
+        self._logger.warning("TTS 管线已降级关闭，字幕从跟随播放回切为派发直出")
 
     async def stop(self) -> None:
         """停止发言管线：先停 TTS 队列，再汇合在飞扇出任务；可重复调用。

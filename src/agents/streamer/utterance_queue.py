@@ -4,8 +4,9 @@
 - 持有播放队列（容量受 `max_queue` 限制）：优先级高的排前面，同级先来先播；
   不传优先级时全部同级，退化为原来的 FIFO
 - 后台 worker 串行调用 speak 可调用对象（``await self._speak(text, utterance_id)``）
-- 与 TTS 引擎解耦：TTS 引擎自行发布 ``tts.utterance.*`` 生命周期事件，
-  本队列不参与事件发布，避免越权。
+- 与 TTS 引擎解耦：引擎正常路径的 ``tts.utterance.started`` / ``finished``
+  由引擎自行发布；队列只在"这句到不了引擎"的两条路径（渲染超时、队列溢出
+  丢弃）代发 ``tts.utterance.failed``，让字幕等消费者逐句降级出字，不哑不悬。
 
 设计原则（StreamerAgent 发言管线约束）：
 - 队列溢出丢"优先级最低里最旧的"一条；新来的比队里所有条目都低时丢新来的
@@ -16,7 +17,8 @@
 - 单 worker 串行保证播放顺序，避免叠加/打断
 - 入队即返回（fire-and-forget），不阻塞上游决策循环的 tick 节奏
 - 单 utterance 超时由 `render_timeout_ms` 看门狗保护（防止合成/播放卡死拖垮队列）
-- 丢弃的 utterance 不进入 TTS 引擎，自然不会触发 ``tts.utterance.*`` 事件
+- 渲染超时与队列溢出丢弃时，队列代发 ``tts.utterance.failed``——这句到不了
+  引擎，引擎不会替它发事件，字幕兜底出字的唯一机会在队列这里
 - ``wait_idle`` 暴露"嘴空"判定（队列空且当前句播完），供发言管线做
   背压等待（发言节奏跟随语音播放）——是否等待由调用方决定，本队列只
   提供状态与阻塞原语
@@ -33,6 +35,9 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Deque, Optional
 
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.utterance import UtteranceFailedPayload
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
@@ -49,6 +54,10 @@ DEFAULT_RENDER_TIMEOUT_MS = 60_000
 # 的最坏排空时间，量级对齐 render_timeout_ms；0 表示不限时（不推荐，
 # 引擎故障时决策循环会被无限拖住——引擎侧 fail 快速排空则不受影响）。
 DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS = 60_000
+
+# 队列代发失败事件时 payload 的 engine 标识：这两条路径发生在队列层，
+# 引擎未参与，填队列自身标识与引擎名（edge/gptsovits 等）区分来源。
+QUEUE_ENGINE_ID = "utterance_queue"
 
 # speak 可调用对象的形态：
 #   await speak(text: str, utterance_id: Optional[str]) -> None
@@ -82,23 +91,28 @@ class UtteranceQueue:
     """发言播放队列（FIFO + 单 worker 串行调度）。
 
     行为契约：
-    - 队列满时入队会先丢弃队首（最旧的 pending），记录 WARN 日志。
-      丢弃的 utterance 不会进入 TTS 引擎，因此也不会触发
-      ``tts.utterance.*`` 事件——丢消息由本队列全权负责。
+    - 队列满时入队会先丢弃队首（最旧的 pending），记录 WARN 日志；
+      被丢弃的 utterance 不会进入 TTS 引擎，由本队列代发
+      ``tts.utterance.failed``（``error_message`` 标注 ``queue_overflow``），
+      字幕等消费者据此兜底出字。
     - 后台 worker 串行处理：一条处理完再取下一条。
     - 单条 utterance 处理使用 `asyncio.wait_for(..., timeout=render_timeout_ms)`
-      包裹，触发 TimeoutError 时取消当前任务、记录 ERROR 并继续下一条。
+      包裹，触发 TimeoutError 时取消当前任务、代发
+      ``tts.utterance.failed``（``error_message`` 标注 ``render_timeout``）、
+      记录 ERROR 并继续下一条。
     - ``start()`` 幂等：重复调用不会重建任务；``stop()`` 后再次 ``start()``
       会重建 worker。
 
-    注意：本类只持有 speak 可调用对象与 ``EventBus``；``tts.utterance.*``
-    事件由 TTS 引擎自身在合成/播放完成时发布。
+    注意：本类持有 speak 可调用对象与可选 ``EventBus``。引擎正常路径的
+    ``tts.utterance.started`` / ``finished`` 仍由引擎发布；队列只在上述
+    两条"到不了引擎"的路径代发 failed 事件（未注入事件总线时只记日志）。
     """
 
     def __init__(
         self,
         *,
         speak: SpeakCallable,
+        event_bus: Optional[EventBus] = None,
         logger_name: str = "UtteranceQueue",
         max_queue: int = DEFAULT_MAX_QUEUE,
         render_timeout_ms: int = DEFAULT_RENDER_TIMEOUT_MS,
@@ -110,6 +124,8 @@ class UtteranceQueue:
             speak: speak 可调用对象；签名 ``async (text, utterance_id) -> None``。
                 编排队列对外引擎无关：传入真实 TTS 引擎 ``handle_speech``
                 适配器或测试 mock 均可。
+            event_bus: 事件总线（可选）；渲染超时与溢出丢弃时代发
+                ``tts.utterance.failed``，缺省 None 时这两条路径只记日志。
             logger_name: 日志记录器名（默认 ``UtteranceQueue``）。
             max_queue: 队列容量上限（必须 ≥ 1）。
             render_timeout_ms: 单 utterance 调用超时（毫秒；必须 ≥ 100）。
@@ -127,6 +143,7 @@ class UtteranceQueue:
             raise ValueError(f"render_timeout_ms 必须 ≥ 100，实际 {render_timeout_ms}")
 
         self._speak = speak
+        self._event_bus = event_bus
         self._logger = get_logger(logger_name)
         self._max_queue = max_queue
         self._render_timeout_ms = render_timeout_ms
@@ -173,7 +190,8 @@ class UtteranceQueue:
 
         按优先级插队（同级排在已有同级之后）。队列已满时丢掉优先级最低里最旧的一条，
         记录 WARN 日志；新来的比队里所有条目都低时丢新来的这条。被丢弃的 utterance
-        不会触发 ``tts.utterance.*`` 事件。
+        不会触发引擎的 ``tts.utterance.started`` / ``finished`` 事件，由本队列
+        代发 ``tts.utterance.failed``。
 
         Args:
             utterance_id: 编排层生成的唯一 ID（关联 reply/TTS/存储）。
@@ -211,6 +229,7 @@ class UtteranceQueue:
                     self._logger.warning(
                         f"队列已满（容量 {self._max_queue}）且都比这条急，丢弃新来的 utterance: utterance_id={utterance_id}"
                     )
+                    await self._emit_failed(utterance_id, text, "queue_overflow: 队列已满且新条目优先级最低")
                     return False
                 victim = min(candidates, key=lambda queued: queued.priority)
                 self._queue.remove(victim)
@@ -218,6 +237,7 @@ class UtteranceQueue:
                 self._logger.warning(
                     f"队列已满（容量 {self._max_queue}），丢弃最旧 utterance: utterance_id={victim.utterance_id}"
                 )
+                await self._emit_failed(victim.utterance_id, victim.text, "queue_overflow: 队列已满，丢弃最旧条目")
             self._insert_by_priority(item)
             self._total_enqueued += 1
 
@@ -405,6 +425,31 @@ class UtteranceQueue:
         except Exception as exc:  # noqa: BLE001 - 旁路回调失败不挡播放
             self._logger.warning(f"开播回调失败（已忽略）: utterance_id={item.utterance_id}, err={exc}", exc=True)
 
+    async def _emit_failed(self, utterance_id: str, text: str, error_message: str) -> None:
+        """这句到不了引擎，代发 ``tts.utterance.failed`` 让字幕兜底出字。
+
+        ``emit`` 为后台扇出（事件总线自行 create_task 分发），不阻塞调用方。
+        未注入事件总线、或发布失败时只记日志，不影响队列继续运转。
+        """
+        if self._event_bus is None:
+            return
+        payload = UtteranceFailedPayload(
+            utterance_id=utterance_id,
+            speech_text=text,
+            engine=QUEUE_ENGINE_ID,
+            error_message=error_message,
+        )
+        try:
+            await self._event_bus.emit(
+                CoreEvents.TTS_UTTERANCE_FAILED,
+                payload,
+                source="streamer_agent.utterance_queue",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 兜底事件不阻断队列
+            self._logger.warning(f"代发 tts.utterance.failed 失败（已忽略）: utterance_id={utterance_id}, err={exc}")
+
     def _pop_fresh(self) -> Optional[_UtteranceItem]:
         """取下一条还没过期的；过期的直接作废（反应过时了再说只会更怪）。"""
         now = self._clock()
@@ -436,6 +481,7 @@ class UtteranceQueue:
                 f"utterance 等待超时（>{self._render_timeout_ms}ms），放弃等待并继续下一条"
                 f"（引擎取消清理后不会发声）: utterance_id={item.utterance_id}"
             )
+            await self._emit_failed(item.utterance_id, item.text, f"render_timeout: 超过 {self._render_timeout_ms}ms")
         except asyncio.CancelledError:
             # worker 被取消时向上抛，让 worker_loop 退出
             raise
@@ -449,6 +495,7 @@ class UtteranceQueue:
 __all__ = [
     "UtteranceQueue",
     "SpeakCallable",
+    "QUEUE_ENGINE_ID",
     "DEFAULT_MAX_QUEUE",
     "DEFAULT_RENDER_TIMEOUT_MS",
     "DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS",

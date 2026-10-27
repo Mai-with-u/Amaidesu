@@ -8,7 +8,15 @@ from typing import List, Optional
 
 import pytest
 
-from src.agents.streamer.utterance_queue import DEFAULT_MAX_QUEUE, DEFAULT_RENDER_TIMEOUT_MS, UtteranceQueue
+from src.agents.streamer.utterance_queue import (
+    DEFAULT_MAX_QUEUE,
+    DEFAULT_RENDER_TIMEOUT_MS,
+    QUEUE_ENGINE_ID,
+    UtteranceQueue,
+)
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.utterance import UtteranceFailedPayload
 
 
 class _Recorder:
@@ -42,8 +50,16 @@ async def _wait_for(predicate, timeout: float = 2.0) -> None:
 async def make_queue():
     queues: list[UtteranceQueue] = []
 
-    async def _make(speak, max_queue: int = 5, render_timeout_ms: int = 2000, start: bool = True) -> UtteranceQueue:
-        queue = UtteranceQueue(speak=speak, max_queue=max_queue, render_timeout_ms=render_timeout_ms)
+    async def _make(
+        speak,
+        max_queue: int = 5,
+        render_timeout_ms: int = 2000,
+        start: bool = True,
+        event_bus: Optional[EventBus] = None,
+    ) -> UtteranceQueue:
+        queue = UtteranceQueue(
+            speak=speak, event_bus=event_bus, max_queue=max_queue, render_timeout_ms=render_timeout_ms
+        )
         if start:
             await queue.start()
         queues.append(queue)
@@ -100,6 +116,72 @@ async def test_per_item_timeout_skips_and_continues(make_queue, loguru_capture) 
         r["level"] == "ERROR" and "等待超时" in r["message"] and "utt_slow" in r["message"]
         for r in loguru_capture.records
     )
+
+
+def _capture_failed(bus: EventBus) -> list[UtteranceFailedPayload]:
+    """收集 tts.utterance.failed 事件（后台扇出，测试用轮询等待）。"""
+    captured: list[UtteranceFailedPayload] = []
+
+    async def _capture(event_name: str, payload: UtteranceFailedPayload, source: str) -> None:
+        captured.append(payload)
+
+    bus.on(CoreEvents.TTS_UTTERANCE_FAILED, _capture, model_class=UtteranceFailedPayload)
+    return captured
+
+
+async def test_render_timeout_emits_failed_event(make_queue) -> None:
+    """引擎僵死触发渲染看门狗超时：队列代发 tts.utterance.failed，字幕得以兜底出字。"""
+    bus = EventBus()
+    failed = _capture_failed(bus)
+
+    async def _hang(text: str, utterance_id: Optional[str]) -> None:
+        await asyncio.sleep(5.0)
+
+    queue = await make_queue(_hang, render_timeout_ms=150, event_bus=bus)
+    await queue.enqueue("utt_hang", "这句卡住了")
+    await _wait_for(lambda: len(failed) == 1)
+
+    payload = failed[0]
+    assert payload.utterance_id == "utt_hang"
+    assert payload.speech_text == "这句卡住了"
+    assert payload.engine == QUEUE_ENGINE_ID
+    assert "render_timeout" in payload.error_message
+
+
+async def test_overflow_drop_emits_failed_event(make_queue) -> None:
+    """队列满丢弃最旧条目：被丢的这句代发 tts.utterance.failed，字幕不哑。"""
+    bus = EventBus()
+    failed = _capture_failed(bus)
+    recorder = _Recorder(delay_s=0.2)
+    queue = await make_queue(recorder, max_queue=1, event_bus=bus)
+    await queue.enqueue("utt_first", "第一句")
+    await queue.enqueue("utt_second", "第二句")
+    await queue.enqueue("utt_third", "第三句")
+    await _wait_for(lambda: len(failed) == 2)
+
+    dropped = {payload.utterance_id for payload in failed}
+    assert dropped == {"utt_first", "utt_second"}
+    assert all(payload.engine == QUEUE_ENGINE_ID for payload in failed)
+    assert all("queue_overflow" in payload.error_message for payload in failed)
+    await _wait_for(lambda: len(recorder.calls) == 1)
+    assert recorder.calls == [("第三句", "utt_third")]
+
+
+async def test_failed_event_skipped_without_event_bus(make_queue) -> None:
+    """未注入事件总线时超时路径只记日志不发布，队列继续运转。"""
+    calls: list[str] = []
+
+    async def _slow_first(text: str, utterance_id: Optional[str]) -> None:
+        calls.append(utterance_id)
+        if len(calls) == 1:
+            await asyncio.sleep(2.0)
+
+    queue = await make_queue(_slow_first, render_timeout_ms=150, event_bus=None)
+    await queue.enqueue("utt_slow", "slow")
+    await queue.enqueue("utt_fast", "fast")
+    await _wait_for(lambda: len(calls) >= 2)
+
+    assert calls == ["utt_slow", "utt_fast"] and queue.get_stats()["timeouts"] == 1
 
 
 async def test_wait_idle_tracks_whole_queue_drain(make_queue) -> None:

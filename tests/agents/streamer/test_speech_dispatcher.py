@@ -196,6 +196,39 @@ async def test_subtitle_modes_are_mutually_exclusive(started) -> None:
     assert direct_subtitle.show.await_args.args[0] == "第二句"
 
 
+async def test_start_failure_falls_back_subtitle_to_direct(monkeypatch) -> None:
+    """TTS 管线启动失败降级后：解绑播放跟随器、回切派发直出，字幕不全哑。"""
+    bus, engine = EventBus(), _Engine()
+    subtitle = MagicMock()
+    subtitle.show = AsyncMock()
+    dispatcher = SpeechDispatcher(event_bus=bus, subtitle_service=subtitle, tts_engine=engine, speech_config=_TTS_ON)
+    assert dispatcher._subtitle_follows_playback is True
+
+    class _BoomQueue:
+        def __init__(self, **kwargs: Any) -> None:
+            raise RuntimeError("队列起不来")
+
+    monkeypatch.setattr("src.agents.streamer.speech_dispatcher.UtteranceQueue", _BoomQueue)
+    await dispatcher.start()
+    assert dispatcher.tts_enabled is False
+    assert dispatcher._subtitle_follows_playback is False
+
+    # 跟随器已退订：播放事件不再驱动字幕
+    await bus.emit(
+        CoreEvents.TTS_UTTERANCE_STARTED,
+        UtteranceStartedPayload(utterance_id="utt_x", speech_text="不该显示", engine="test"),
+        source="test",
+    )
+    await asyncio.sleep(0.05)
+    assert subtitle.show.await_count == 0
+
+    # 派发直出恢复：dispatch 即显示
+    await dispatcher.dispatch({"speech": "直出这句", "emotion": {}})
+    await _until(lambda: subtitle.show.await_count == 1)
+    assert subtitle.show.await_args.args[0] == "直出这句"
+    await dispatcher.stop()
+
+
 async def test_stop_is_idempotent() -> None:
     dispatcher = SpeechDispatcher(event_bus=None, subtitle_service=None, tts_engine=_Engine(), speech_config=_TTS_ON)
     await dispatcher.start()
