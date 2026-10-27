@@ -71,7 +71,7 @@ async def test_missing_or_failing_repo_does_not_break_call(store: SQLiteDatabase
         raise RuntimeError("db locked")
 
     manager = make_llm_manager(_FakeUsageClient(), llm_repo=store.llm)
-    monkeypatch.setattr(manager._llm_repo, "insert_llm_usage", _boom)
+    monkeypatch.setattr(manager._observer._llm_repo, "insert_llm_usage", _boom)
     assert (await manager.generate("你好", profile="planner")).success
 
 
