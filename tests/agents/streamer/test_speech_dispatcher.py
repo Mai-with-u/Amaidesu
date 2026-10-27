@@ -24,6 +24,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
+from src.modules.events.payloads.utterance import UtteranceStartedPayload
 from src.modules.tools.registry import ToolRegistry
 from tests.agents.streamer.helpers import make_streamer_agent
 
@@ -79,10 +80,8 @@ async def started():
 
 async def test_dispatch_fans_out_with_shared_utterance_id(started) -> None:
     bus, engine = EventBus(), _Engine()
-    subtitle = MagicMock()
-    subtitle.show = AsyncMock()
     captured = _capture_speech(bus)
-    dispatcher = await started(bus=bus, subtitle=subtitle, engine=engine, config=_TTS_ON)
+    dispatcher = await started(bus=bus, engine=engine, config=_TTS_ON)
 
     result = await dispatcher.dispatch(
         {"speech": "你好", "emotion": {"name": "happy", "intensity": 0.8}},
@@ -90,7 +89,7 @@ async def test_dispatch_fans_out_with_shared_utterance_id(started) -> None:
         reply_to_message_id="m9",
         round_id="rnd_1",
     )
-    await _until(lambda: captured and engine.calls and subtitle.show.await_count)
+    await _until(lambda: captured and engine.calls)
 
     speech, emotion, utterance_id = result
     assert (speech, emotion) == ("你好", "happy") and utterance_id.startswith("utt_")
@@ -98,7 +97,6 @@ async def test_dispatch_fans_out_with_shared_utterance_id(started) -> None:
     assert (payload.text, payload.utterance_id, payload.round_id) == ("你好", utterance_id, "rnd_1")
     assert (payload.target_user_id, payload.reply_to_message_id) == ("u1", "m9")
     assert (payload.emotion, payload.emotion_intensity) == ("happy", 0.8)
-    assert subtitle.show.await_args.args == ("你好", utterance_id)
     assert engine.calls == [("你好", utterance_id)]
     assert dispatcher.utterance_queue.get_stats()["enqueued"] == 1
 
@@ -150,15 +148,52 @@ async def test_tts_off_still_emits_business_speech(started, config, engine) -> N
     assert dispatcher.utterance_seq == 1
 
 
-async def test_subtitle_failure_does_not_block_tts(started, loguru_capture) -> None:
-    engine = _Engine()
+async def test_subtitle_failure_does_not_block_dispatch(started, loguru_capture) -> None:
+    """直出模式下字幕 show 异常被吞（WARN 记录），派发路径不受影响。"""
     subtitle = MagicMock()
     subtitle.show = AsyncMock(side_effect=RuntimeError("simulated subtitle failure"))
-    dispatcher = await started(bus=EventBus(), subtitle=subtitle, engine=engine, config=_TTS_ON)
+    dispatcher = await started(bus=EventBus(), subtitle=subtitle, config=_TTS_ON)
 
-    await dispatcher.dispatch({"speech": "字幕坏了", "emotion": ""})
-    await _until(lambda: subtitle.show.await_count and engine.calls)
+    result = await dispatcher.dispatch({"speech": "字幕坏了", "emotion": ""})
+    await _until(lambda: subtitle.show.await_count)
+    assert result is not None
     assert any(r["level"] == "WARNING" and "字幕 show 异常" in r["message"] for r in loguru_capture.records)
+
+
+# 字幕源择流：裁决在 dispatcher 构造期，两模式互斥
+
+
+async def test_subtitle_modes_are_mutually_exclusive(started) -> None:
+    """TTS 引擎在位 → 跟随播放事件驱动字幕，派发直出停用；无引擎 → 直出。"""
+    bus, engine = EventBus(), _Engine()
+    follow_subtitle = MagicMock()
+    follow_subtitle.show = AsyncMock()
+    follow_dispatcher = await started(bus=bus, subtitle=follow_subtitle, engine=engine, config=_TTS_ON)
+    assert follow_dispatcher._subtitle_follows_playback is True
+
+    # 派发一句：只走 TTS 队列，不直出字幕
+    await follow_dispatcher.dispatch({"speech": "第一句", "emotion": {}})
+    await _until(lambda: len(engine.calls) == 1)
+    await asyncio.sleep(0.05)
+    assert follow_subtitle.show.await_count == 0
+
+    # 播放事件到达时字幕跟随显示
+    await bus.emit(
+        CoreEvents.TTS_UTTERANCE_STARTED,
+        UtteranceStartedPayload(utterance_id=engine.calls[0][1], speech_text=engine.calls[0][0], engine="test"),
+        source="test",
+    )
+    await _until(lambda: follow_subtitle.show.await_count == 1)
+    assert follow_subtitle.show.await_args.args == ("第一句", engine.calls[0][1])
+
+    # 无引擎：直出模式，派发即显示
+    direct_subtitle = MagicMock()
+    direct_subtitle.show = AsyncMock()
+    direct_dispatcher = await started(bus=bus, subtitle=direct_subtitle, engine=None, config=_TTS_ON)
+    assert direct_dispatcher._subtitle_follows_playback is False
+    await direct_dispatcher.dispatch({"speech": "第二句", "emotion": {}})
+    await _until(lambda: direct_subtitle.show.await_count == 1)
+    assert direct_subtitle.show.await_args.args[0] == "第二句"
 
 
 async def test_stop_is_idempotent() -> None:

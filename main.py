@@ -602,17 +602,9 @@ async def create_app_components(
             tts_section, event_bus=event_bus, audio_sink=lipsync_analyzer, llm_service=llm_service
         )
 
-        # 字幕源择流（装配期取事实，两种模式互斥）：TTS 引擎在位 → 字幕跟随
-        # 播放事件（started/failed 显示、finished 清空），编排层不再派发直出；
-        # 无引擎（禁用或构建失败）→ 保持派发直出（现状路径）。
-        subtitle_follows_playback = tts_engine is not None
-        if subtitle_follows_playback:
-            from src.modules.subtitle.playback_follower import bind_playback_subtitle
-
-            _playback_subtitle_handlers = bind_playback_subtitle(event_bus, subtitle_service, logger)
-            logger.info("字幕源已择流：跟随 TTS 播放事件（tts.utterance.*）")
-        else:
-            logger.info("字幕源已择流：编排层派发直出（无 TTS 引擎）")
+        # 字幕源择流收在 SpeechDispatcher 内部：以注入的
+        # tts_engine 是否在位为判据，跟随播放事件 / 派发直出两模式互斥，
+        # 组合根永远传入 subtitle_service，不做参数塑形。
 
         # 思考流旁路 hub（ADR-008；观察面专用）：Agent 装配先于 dashboard 启动，
         # ws 通道延迟绑定（dashboard 就绪后 attach_ws）；未绑定期间 delta 丢弃。
@@ -663,8 +655,8 @@ async def create_app_components(
                 thinking_sink=thinking_hub,
                 speech_config=_speech_cfg,
                 tts_engine=tts_engine,
-                # 有 TTS 时字幕走播放事件跟随器，编排层不再直出（互斥择流）
-                subtitle_service=None if subtitle_follows_playback else subtitle_service,
+                # 字幕服务永远传入；跟随播放 vs 直出由 SpeechDispatcher 构造期择流
+                subtitle_service=subtitle_service,
                 session_manager=session_manager,
                 # 仓储四件（对话历史/流程单/场次状态/话题快照的读侧面）；
                 # chat_repo 缺失 = StreamerAgent 历史读取整体短路

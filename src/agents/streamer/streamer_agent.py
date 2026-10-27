@@ -71,10 +71,11 @@ from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYP
 from .planner import Planner
 from .proactive_trigger import ProactiveTrigger
 from .proactive_signals import ProactiveSignals
-from .replyer import WordFilter, Replyer
+from .replyer import Replyer
 from .room_state import RoomState
 from .scene_card import brief_of
 from .speech_dispatcher import SpeechDispatcher
+from .speech_guard import WordFilter
 from .game_ledger import GameLedger
 from .stats import StreamerStats
 from .timeline import GameEventBatch, StreamerTimeline, TimelineTurn

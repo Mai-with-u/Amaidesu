@@ -7,7 +7,8 @@
 - ``plan``              - 决策契约（DecisionPlan Pydantic，Planner 产出 / Replyer 消费）
 - ``canonical``         - 对话 canonical 映射（live_chat 行/弹幕批 → 原生消息的单一序列化点）
 - ``planner``           - 决策核心（决策循环，调 Planner profile）
-- ``replyer``           - 表达引擎（调 Replyer profile + WordFilter）
+- ``replyer``           - 表达引擎（调 Replyer profile；出口净化经 speech_guard）
+- ``speech_guard``      - 台词出口守卫（长度预算 / 敏感词 / 重合度三检与词表定义的单点收拢）
 - ``decision_executor`` - 决策轮执行器（两阶段决策执行半：round_id + stage/decision 事件 + 发言派发；调度半留 streamer_agent）
 - ``speech_dispatcher`` - 发言管线编排（streamer.speech 事件 + TTS 队列生命周期 + 字幕/VTS 扇出）
 - ``stats``             - 运行时统计（7 项计数器，Agent 与决策执行器共享）

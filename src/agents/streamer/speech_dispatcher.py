@@ -26,6 +26,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import ModuleLogger, get_logger
+from src.modules.subtitle.playback_follower import bind_playback_subtitle
 from src.modules.utils.time_utils import now_ms
 
 from .utterance_queue import (
@@ -54,7 +55,10 @@ class SpeechDispatcher:
         （enabled / max_queue / render_timeout_ms / wait_playback /
         wait_playback_timeout_ms）；``None`` 或 ``enabled=False`` 时管线
         整体关闭。``subtitle_service`` / ``tts_engine`` 均鸭子消费（仅调
-        公开方法）。
+        公开方法）。字幕源择流守三条规则（单一源、装配期定死、两模式互斥）：
+        以构造注入的 ``tts_engine`` 是否在位为判据——有引擎时本管线订阅
+        ``tts.utterance.*`` 让字幕跟随播放、派发直出停用；无引擎时保持
+        派发直出。裁决在本组件完成，组合根不再做参数塑形。
         """
         self._logger = logger or get_logger("StreamerAgent.SpeechDispatcher")
         self._event_bus = event_bus
@@ -71,6 +75,19 @@ class SpeechDispatcher:
         )
         self._tts_engine = tts_engine
         self._subtitle_service = subtitle_service
+        # 字幕源择流（装配期事实，构造后不变）：tts_engine 在位 → 字幕跟随
+        # 播放事件，派发直出停用；两种模式互斥，非两套源同时跑。
+        # 已知边界：跟随模式下 TTS 管线 start 失败降级后字幕全哑——运行期
+        # 不回切直出（运行期动态择流属已否决设计），该缺口的取舍待定。
+        self._subtitle_follows_playback = tts_engine is not None
+        if self._subtitle_follows_playback:
+            bound = bind_playback_subtitle(event_bus, subtitle_service, self._logger)
+            if bound is not None:
+                self._logger.info("字幕源已择流：跟随 TTS 播放事件（tts.utterance.*）")
+            else:
+                self._logger.warning("字幕跟随播放不可用（缺事件总线或字幕服务），字幕不显示")
+        else:
+            self._logger.info("字幕源已择流：编排层派发直出（无 TTS 引擎）")
         self._utterance_queue: Optional[UtteranceQueue] = None
         # utterance_id 自增计数器（进程内单调；启动时复位为 0，首次自增到 1）
         self._utterance_seq: int = 0
@@ -472,10 +489,12 @@ class SpeechDispatcher:
         调用 ``SubtitleService.show(text, utterance_id)``：服务内部并行
         广播到所有已注册 Backend，单 Backend 故障隔离由服务负责，本方法
         只关心"任务跑出去"。与 ``_emit_streamer_speech`` 同模式——
-        决策循环同步路径绝不 await 异步操作。
+        决策循环同步路径绝不 await 异步操作。字幕跟随播放模式（构造期已
+        择流）下不直出——显示/清空由 ``tts.utterance.*`` 订阅驱动，两模式
+        互斥。
         """
         service = self._subtitle_service
-        if service is None:
+        if service is None or self._subtitle_follows_playback:
             return
 
         async def _do_show() -> None:

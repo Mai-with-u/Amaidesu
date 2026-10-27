@@ -29,8 +29,8 @@ from src.modules.types.emotion_vocab import Emotion
 from src.modules.utils.time_utils import now_ms
 
 from .config import StreamerMouthConfig
-from .replyer import WordFilter, fit_to_budget
 from .scene_card import GoalLine, SceneInputs, build_scene_card
+from .speech_guard import WordFilter, guard
 from .tools.reply_tool import coerce_emotion
 from .topic_gate import SpeechGate
 
@@ -346,17 +346,22 @@ class Mouth:
         return emotion, match.group(2).strip()
 
     def _guard(self, text: str) -> str:
-        """长度截到预算、敏感词过滤、和她最近说过的话比重合度；不过关返回空串（直接丢弃不重试）。"""
-        if self._speech_max_chars > 0:
-            text = fit_to_budget(text, self._speech_max_chars)
-        if self._word_filter is not None:
-            cleaned, matched = self._word_filter.filter(text)
-            if matched and self._word_filter.drop_on_match:
+        """长度截到预算、敏感词过滤、和她最近说过的话比重合度；不过关返回空串（直接丢弃不重试）。
+
+        三检的判定与词汇定义收拢在 speech_guard（与 Replyer 同源），这里只
+        保留嘴自己的丢弃日志。
+        """
+        verdict = guard(
+            text,
+            [record.text for record in self._records if record.kind == "speech"],
+            speech_max_chars=self._speech_max_chars,
+            word_filter=self._word_filter,
+            gate=self._gate,
+        )
+        if verdict.text is None:
+            if verdict.reason == "word_filter":
                 self._logger.info("嘴的台词命中敏感词，整句丢弃")
-                return ""
-            text = cleaned
-        verdict = self._gate.verdict(text, [record.text for record in self._records if record.kind == "speech"])
-        if not verdict.passed:
-            self._logger.info(f"嘴的台词和最近说过的重复（重合度 {verdict.ratio:.2f}），丢弃: {text}")
+            else:
+                self._logger.info(f"嘴的台词和最近说过的重复（重合度 {verdict.ratio:.2f}），丢弃: {text}")
             return ""
-        return text
+        return verdict.text
