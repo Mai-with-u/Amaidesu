@@ -1,7 +1,7 @@
 """人设供应链端到端防回退（配置→提示词）。
 
 人设唯一来源是 agents.toml ``[agents.streamer.persona]``：
-  1. 表达侧：StreamerAgent 构造期把 bot_name/personality/style_constraints/audience_salutation 注入 Replyer，
+  1. 表达侧：StreamerAgent 构造期把 bot_name/personality/style_constraints 注入 Replyer，
      prompt 渲染 kwargs 必须等于配置值（非 _DEFAULT_* 硬编码兜底）。
   2. 决策侧：behavior_style 仅注入 Planner；bot_name/personality 同时注入 Planner（房管据此替她挑话题、
      定态度），style_constraints 不得进 Planner（措辞风格只归表达侧的反向断言）。
@@ -54,8 +54,9 @@ def streamer() -> tuple[Any, MagicMock, MagicMock]:
 
 
 async def test_replyer_renders_config_persona_and_never_the_planner_only_behavior_style(streamer) -> None:
-    """system 稳定段承载全程不变的人设（bot_name/personality/audience_salutation），style_constraints 属本轮表达风格，
-    进本轮输入模板；behavior_style 只进 Planner。"""
+    """system 稳定段承载全程不变的人设（bot_name/personality），style_constraints 属本轮表达风格，
+    进本轮输入模板；behavior_style 只进 Planner。audience_salutation 已随模板硬编码退役，
+    再注入会被渲染期硬错。"""
     agent, llm, prompt = streamer
     llm.generate = AsyncMock(return_value=Response(success=True, content="测试回复"))  # 纯文本契约：正文即台词
     plan = DecisionPlan(should_reply=True, target="all", topic_summary="测试话题", reply_guidance="按配置 persona 回答")
@@ -64,9 +65,10 @@ async def test_replyer_renders_config_persona_and_never_the_planner_only_behavio
 
     by_template = {call.args[0]: call.kwargs for call in prompt.render.call_args_list}
     system_kwargs = by_template["amaidesu_replyer_system"]
-    assert {f: system_kwargs.get(f) for f in ("bot_name", "personality", "audience_salutation")} == {
-        f: _PERSONA[f] for f in ("bot_name", "personality", "audience_salutation")
+    assert {f: system_kwargs.get(f) for f in ("bot_name", "personality")} == {
+        f: _PERSONA[f] for f in ("bot_name", "personality")
     }
+    assert "audience_salutation" not in system_kwargs  # 变量已退役：模板正文硬编码，传参即渲染期硬错
     assert by_template["amaidesu_replyer"].get("style_constraints") == _PERSONA["style_constraints"]
     assert all("behavior_style" not in kwargs for kwargs in by_template.values())  # 决策/表达侧分离契约
 

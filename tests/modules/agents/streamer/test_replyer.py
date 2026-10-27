@@ -81,11 +81,12 @@ async def test_persona_goes_into_system_template_and_turn_data_into_the_turn_tem
 
     by_template = {call.args[0]: call.kwargs for call in prompt.render.call_args_list}
     system = by_template["amaidesu_replyer_system"]  # 全程稳定的人设字段
-    assert (system["personality"], system["bot_name"], system["audience_salutation"]) == (
+    assert (system["personality"], system["bot_name"]) == (
         "活泼开朗，有些调皮",
         "麦麦",
-        "大家",
     )
+    # 模板正文已硬编码对观众的统一称呼，变量退役；再多传会被渲染期硬错
+    assert "audience_salutation" not in system
     assert "plan" not in system and "dialogue_prompt" not in system
 
     turn = by_template["amaidesu_replyer"]  # 每轮变化的决策、弹幕与风格约束

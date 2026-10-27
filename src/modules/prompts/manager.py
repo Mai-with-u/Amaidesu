@@ -79,9 +79,9 @@ class PromptManager:
     职责：
     - 从多个扫描根发现并加载所有 .md 模板文件（多根发现）
     - 解析 YAML frontmatter 元数据
-    - 提供 template 语法 ($variable) 的严格渲染（缺变量抛错）
-    - 加载期校验：frontmatter ``variables`` 声明与正文占位符核对（不一致告警）；
-      frontmatter 解析失败与单文件加载失败均 fail-fast
+    - 提供 template 语法 ($variable) 的严格渲染（缺变量抛错，多余变量抛错）
+    - 加载期校验：frontmatter ``variables`` 声明与正文占位符核对（不一致即
+      启动期抛错）；frontmatter 解析失败与单文件加载失败均 fail-fast
 
     模板键规则（声明式键，与文件位置解耦）：
     - 优先使用 frontmatter 的 ``name`` 字段作为全局唯一键
@@ -284,8 +284,8 @@ class PromptManager:
     def _check_variable_declarations(self) -> None:
         """核对每个模板的 frontmatter variables 声明与正文占位符
 
-        声明与使用不一致只告警不阻断启动：声明漂移本身不影响严格渲染的
-        正确性，但会让维护者对模板变量面产生误判。
+        声明与使用不一致即启动期硬错（fail-fast）：漂移会让维护者对模板
+        变量面产生误判，且在 load_all 时就拦截，不留到运行期。
         """
         for name, template in sorted(self._templates.items()):
             declared = set(template.metadata.variables)
@@ -294,7 +294,7 @@ class PromptManager:
             unused = sorted(declared - used)
             if not undeclared and not unused:
                 continue
-            self.logger.warning(
+            raise ValueError(
                 f"模板 '{name}' 变量声明与正文不一致"
                 f"（未声明: {undeclared or '无'}; 声明未使用: {unused or '无'}）"
                 f"，文件: {template.path}"
@@ -314,9 +314,14 @@ class PromptManager:
             渲染后的字符串
 
         Raises:
-            KeyError: 模板不存在，或缺少必需的变量（报错含模板名与缺失变量清单）
+            KeyError: 模板不存在、缺少必需的变量（报错含模板名与缺失变量清单），
+                或传入了正文用不到的多余变量（报错含模板名与多余变量清单；
+                `$$` 转义处传入的名义参数也按多余处理，因为转义的 `$` 不参与替换）
         """
         template = self._get_template(template_name)
+        extras = sorted(set(kwargs) - set(_extract_placeholders(template.content)))
+        if extras:
+            raise KeyError(f"模板 '{template_name}' 渲染失败，多余变量: {', '.join(extras)}")
         try:
             return template.render(**kwargs)
         except KeyError as e:

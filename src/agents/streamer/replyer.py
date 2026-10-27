@@ -191,16 +191,14 @@ class Replyer:
     def _render_system_prompt(self) -> str:
         """渲染 system 提示词（全程稳定段）。
 
-        人设分离承诺：$personality / $bot_name /
-        $audience_salutation 人设字段均读构造期注入的自身人设（StreamerAgent
-        从 config.persona 单点构建）。稳定段每轮渲染结果逐字一致——请求前缀
-        缓存命中靠它。
+        人设分离承诺：$personality / $bot_name 人设字段均读构造期注入的
+        自身人设（StreamerAgent 从 config.persona 单点构建）。稳定段每轮
+        渲染结果逐字一致——请求前缀缓存命中靠它。
         """
         return self._prompt_service.render(
             _REPLYER_SYSTEM_TEMPLATE,
             bot_name=self._bot_name,
             personality=self._personality,
-            audience_salutation=self._audience_salutation,
         )
 
     def _render_turn_input(
