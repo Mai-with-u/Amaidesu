@@ -26,19 +26,17 @@ minecraft_notebook / minecraft_wait / minecraft_get_work_log / minecraft_glance�
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, List, Optional
 
+from src.modules.agents.game_tools import GameToolProvider, run_dict_tool
 from src.modules.logging import get_logger
 from src.modules.mcp.provider import McpToolProvider
-from src.modules.skills import SKILL_TOOL_NAME, build_skill_spec
+from src.modules.skills import build_skill_spec
 from src.modules.tools.models import (
     ToolExecutionResult,
-    ToolInvocation,
     ToolSpec,
 )
-from src.modules.tools.provider import BaseToolProvider
 
 from .maicraft import GOAL, MaicraftReply, goal_id_of_ledger, goal_run_of, ledger_status_of
 from .state import MinecraftAgentState
@@ -333,17 +331,19 @@ class MaicraftMcpProvider(McpToolProvider):
 
 
 @dataclass(slots=True)
-class MinecraftToolProvider(BaseToolProvider):
+class MinecraftToolProvider(GameToolProvider):
     """MinecraftAgent 局部工具 Provider
 
     持有 :class:`MinecraftAgentState`，把"文档式工具"映射为状态读写；
     ``report_callback`` 由 Agent 注入——minecraft_report 上报经它发射事件并做
     交付门禁校验（返回拒绝原因字符串；None=受理）。
+    分发、计时与异常转结果走共享管道（:class:`GameToolProvider`）：处理器
+    返回结构化 dict，经 ``run_dict_tool`` 包装（``ValueError`` 按业务拒绝降级
+    ——参数写错由玩家纠正，不能把自己的工具熔断摘除）。
     """
 
-    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）：
-    # 本体工具随游戏 Agent 归 game 分组（工具页按此聚卡）
-    category: ClassVar[str] = "game"
+    # 日志前缀（共享管道的异常日志区分用）
+    log_label: ClassVar[str] = "Minecraft"
 
     state: MinecraftAgentState
     report_callback: Optional[ReportCallback] = None
@@ -381,71 +381,62 @@ class MinecraftToolProvider(BaseToolProvider):
         """玩法说明只给别的 Agent（主播）：自己的工具协议写在自己的系统提示词里。"""
         return "" if agent_name == PROVIDER_NAME else STREAMER_GUIDE
 
-    async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        started_ms = int(time.time() * 1000)
-        tool_name = invocation.tool_name
-        args = dict(invocation.arguments or {})
+    def unknown_tool_reason(self, tool_name: str) -> str:
+        """未知工具的回执：点名本 provider 的名册，给调用方出路提示。"""
+        return f"未知工具: '{tool_name}'（MinecraftProvider 只提供 todo/notebook/get_work_log/report）"
 
-        # 调用方使用的就是派生全名（minecraft_todo 等），按 spec 全名等值对照分发
-        local_specs = self.list_tools()
-        matched = next((s for s in local_specs if s.full_name == tool_name), None)
-        if matched is None:
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message=(
-                    f"未知工具: '{tool_name}'（MinecraftProvider 只提供 todo/notebook/get_work_log/report）"
-                ),
-                duration_ms=int(time.time() * 1000) - started_ms,
+    def tool_handlers(self) -> Dict[str, Any]:
+        """对外全名 → 处理器（随 list_tools 的条件清单走，dict 经 run_dict_tool 包装）。"""
+        handlers: Dict[str, Any] = {
+            build_todo_spec().full_name: self._dict_handler(build_todo_spec(), self._invoke_todo),
+            build_notebook_spec().full_name: self._dict_handler(build_notebook_spec(), self._invoke_notebook),
+            build_get_work_log_spec().full_name: self._dict_handler(
+                build_get_work_log_spec(), self._invoke_get_work_log
+            ),
+            build_report_spec().full_name: self._dict_handler(build_report_spec(), self._invoke_report),
+        }
+        if self.wait_callback is not None:
+            wait_spec = build_wait_spec()
+            handlers[wait_spec.full_name] = self._dict_handler(wait_spec, self._invoke_wait)
+        if self.glance_reader is not None:
+            glance_spec = build_glance_spec()
+            handlers[glance_spec.full_name] = self._dict_handler(glance_spec, self._invoke_glance)
+        if self.skill_reader is not None:
+            skill_spec = build_skill_spec(PROVIDER_NAME)
+            handlers[skill_spec.full_name] = self._dict_handler(skill_spec, self._invoke_skill)
+        return handlers
+
+    def _dict_handler(
+        self, spec: ToolSpec, run: Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]
+    ) -> Callable[..., Any]:
+        """把返回 dict 的处理器包装成共享管道签名（异常口径见 ``run_dict_tool``）。
+
+        结果的 ``tool_name`` 回填对外全名，与调用方使用的名字一致。
+        """
+
+        async def handle(args: Dict[str, Any], started_ms: int) -> ToolExecutionResult:
+            return await run_dict_tool(
+                spec.full_name,
+                started_ms,
+                lambda: run(args),
+                log_label=self.log_label,
             )
 
-        try:
-            if matched.name == "todo":
-                result = await self._invoke_todo(args)
-            elif matched.name == "notebook":
-                result = await self._invoke_notebook(args)
-            elif matched.name == "get_work_log":
-                result = await self._invoke_get_work_log(args)
-            elif matched.name == "report":
-                result = await self._invoke_report(args)
-            elif matched.name == "wait" and self.wait_callback is not None:
-                result = self.wait_callback()
-            elif matched.name == "glance" and self.glance_reader is not None:
-                result = await self.glance_reader()
-            elif matched.name == SKILL_TOOL_NAME and self.skill_reader is not None:
-                result = await self.skill_reader(str(args.get("name", "")))
-            else:
-                return ToolExecutionResult(
-                    tool_name=tool_name,
-                    success=False,
-                    error_message=f"未知工具: '{tool_name}'",
-                    duration_ms=int(time.time() * 1000) - started_ms,
-                )
-        except ValueError as exc:
-            # 参数写错时由玩家纠正，不能把自己的工具熔断摘除。
-            logger.warning(f"Minecraft 工具 '{tool_name}' 请求被拒绝: {exc}", exc=True)
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message=f"{type(exc).__name__}: {exc}",
-                failure_kind="business",
-                duration_ms=int(time.time() * 1000) - started_ms,
-            )
-        except Exception as exc:  # noqa: BLE001 - 工具边界兜底
-            logger.exception(f"Minecraft 工具 '{tool_name}' 执行失败: {exc}")
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message=f"{type(exc).__name__}: {exc}",
-                duration_ms=int(time.time() * 1000) - started_ms,
-            )
+        return handle
 
-        return ToolExecutionResult(
-            tool_name=tool_name,
-            success=True,
-            structured_content=result,
-            duration_ms=int(time.time() * 1000) - started_ms,
-        )
+    async def _invoke_wait(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        del args
+        assert self.wait_callback is not None  # 处理器表按回调在册建表
+        return self.wait_callback()
+
+    async def _invoke_glance(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        del args
+        assert self.glance_reader is not None  # 处理器表按读取器在册建表
+        return await self.glance_reader()
+
+    async def _invoke_skill(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        assert self.skill_reader is not None  # 处理器表按读取器在册建表
+        return await self.skill_reader(str(args.get("name", "")))
 
     async def _invoke_todo(self, args: Dict[str, Any]) -> Dict[str, Any]:
         action = str(args.get("action", ""))

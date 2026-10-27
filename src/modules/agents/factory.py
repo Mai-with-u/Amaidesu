@@ -27,6 +27,15 @@ SUPPORTED_AGENTS: tuple[str, ...] = ("streamer", "minecraft", "text_adv", "game_
 _logger = get_logger("AgentFactory")
 
 
+def _parse_game_config(model_cls: type, config: Optional[dict[str, Any]], label: str) -> Any:
+    """解析游戏 Agent 的 Pydantic 配置；解析失败记告警并回落默认配置。"""
+    try:
+        return model_cls(**config) if config else model_cls()
+    except Exception as exc:
+        _logger.warning(f"解析 {label} 失败: {exc}; 使用默认配置")
+        return model_cls()
+
+
 def instantiate_agent(
     name: str,
     config: Optional[dict[str, Any]],
@@ -51,8 +60,8 @@ def instantiate_agent(
       整体关闭），组合根必须传入
     - minecraft：thinking_sink / task_tracker；llm_profile 使用 Agent
       类默认值（``[llm_profiles.minecraft]`` 段）；技能库在工厂内取全局单例注入
-    - text_adv：基础四件套 + 工厂内装配的感知/动作依赖（读屏 reader /
-      窗口后端 / 帧采集后端 / 键鼠后端）；tool_registry 供启动期自注册工具面
+    - text_adv / game_2048：工厂只做"名字 → 包内 build"——配置解析后交给
+      各包的 ``build(config, deps)``，感知/动作后端选型与装配知识收在包内
 
     ``thinking_sink`` 透传给 StreamerAgent 与 MinecraftAgent（鸭子类型：
     任何带 ``on_thinking_delta`` 方法的对象）；None 时两 Agent 的思考流
@@ -126,46 +135,17 @@ def instantiate_agent(
         )
 
     if name == "text_adv":
-        # 函数内 import：text_adv 包（感知/动作后端依赖链）仅在实例化时加载
-        from src.agents.text_adv import TextAdvConfig, TextAdvGameAgent
-        from src.agents.text_adv.input import Win32InputBackend
-        from src.agents.text_adv.vlm import RegistryVisionReader
-        from src.agents.text_adv.window import PyGetWindowBackend
-        from src.modules.vision import MssScreenCapture
+        # 函数内 import：text_adv 包（感知/动作后端依赖链）仅在实例化时加载；
+        # 四后端选型逻辑收在包内 build，工厂只做"名字 → 包内 build"
+        from src.agents.text_adv import TextAdvConfig, build as build_text_adv
 
-        try:
-            text_adv_cfg = TextAdvConfig(**config) if config else TextAdvConfig()
-        except Exception as exc:
-            _logger.warning(f"解析 TextAdvConfig 失败: {exc}; 使用默认配置")
-            text_adv_cfg = TextAdvConfig()
-        # 感知与动作依赖在工厂内装配（组合根认识所有层）：读屏走 ToolRegistry 的
-        # vision_look_at_screen（registry 未装配时调用期按感知失败降级）；
-        # tool_registry 同时传给 Agent 供启动期自注册工具面（与另两 Agent 同通道）
-        return TextAdvGameAgent(
-            config=text_adv_cfg,
-            vision_reader=RegistryVisionReader(deps.tool_registry, source=name),
-            window_backend=PyGetWindowBackend(),
-            capture=MssScreenCapture(),
-            input_backend=Win32InputBackend(),
-            tool_registry=deps.tool_registry,
-            event_bus=deps.event_bus,
-        )
+        return build_text_adv(_parse_game_config(TextAdvConfig, config, "TextAdvConfig"), deps)
 
     if name == "game_2048":
-        # 函数内 import：game_2048 包仅在实例化时加载
-        from src.agents.game_2048 import Game2048Agent, Game2048Config
+        # 函数内 import：game_2048 包仅在实例化时加载；装配知识收在包内 build
+        from src.agents.game_2048 import Game2048Config, build as build_game_2048
 
-        try:
-            game_2048_cfg = Game2048Config(**config) if config else Game2048Config()
-        except Exception as exc:
-            _logger.warning(f"解析 Game2048Config 失败: {exc}; 使用默认配置")
-            game_2048_cfg = Game2048Config()
-        # 棋盘与策略全部进程内，无外部依赖可装配；tool_registry 供启动期自注册工具面
-        return Game2048Agent(
-            config=game_2048_cfg,
-            tool_registry=deps.tool_registry,
-            event_bus=deps.event_bus,
-        )
+        return build_game_2048(_parse_game_config(Game2048Config, config, "Game2048Config"), deps)
 
     return None
 

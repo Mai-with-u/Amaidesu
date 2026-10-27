@@ -21,6 +21,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 from src.modules.agents.base import BaseAgent
+from src.modules.agents.game_tools import emit_game_error
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
@@ -33,7 +34,8 @@ from .input import InputBackend
 from .screen import frame_key, text_key
 from .session import FrameCapture, ScreenSession
 from .state import TextAdvGameAgentState
-from .vlm import ScreenReading, VisionReader
+from .tools import TextAdvToolProvider
+from .vlm import Option, ScreenReading, VisionReader
 from .window import WindowBackend
 
 
@@ -96,9 +98,6 @@ class TextAdvGameAgent(BaseAgent):
             config, window_backend=window_backend, capture=capture, vision_reader=vision_reader
         )
         self._tool_registry = tool_registry
-        # 函数内 import：tools 模块反向引用本模块的 TextAdvGameAgent（循环 import 规避）
-        from .tools import TextAdvToolProvider
-
         self._tool_provider: TextAdvToolProvider = TextAdvToolProvider(agent=self, input_backend=input_backend)
 
         # 内容状态（避免与 BaseAgent.state 属性同名故用 _game_state）
@@ -295,9 +294,8 @@ class TextAdvGameAgent(BaseAgent):
         await self.emit_event(CoreEvents.GAME_REPORT, payload)
 
     async def emit_error(self, message: str) -> None:
-        """emit ``game.error``（供循环死亡/护栏路径与测试使用）。"""
-        payload = GamePayload(game=self.name, event_type="error", message=message)
-        await self.emit_event(CoreEvents.GAME_ERROR, payload)
+        """emit ``game.error``（供循环死亡/护栏路径与测试使用；构造口径见共享层）。"""
+        await emit_game_error(self.emit_event, self.name, message)
 
     # ==================================================================
     # 协议六项：工具提供（工具面由同包 tools 重写任务接入）
@@ -329,6 +327,10 @@ class TextAdvGameAgent(BaseAgent):
     # ==================================================================
     # 状态导出
     # ==================================================================
+
+    def record_screen(self, text: str, options: Optional[List[Option]] = None) -> None:
+        """记录一次识别结果到游戏状态（观察循环与工具面共用的唯一入口）。"""
+        self._game_state.record_screen(text, options)
 
     def get_state_snapshot(self) -> Dict[str, Any]:
         """导出状态快照（形状由 TextAdvGameAgentState.to_dict 唯一定义）。"""

@@ -13,6 +13,7 @@
 
 from src.agents.game_2048.agent import Game2048Agent, build_game_2048_agent
 from src.agents.game_2048.board import Board2048, MoveDirection
+from src.agents.game_2048.build import build
 from src.agents.game_2048.config import Game2048Config
 from src.agents.game_2048.tools import (
     Game2048ToolProvider,
@@ -22,6 +23,8 @@ __all__ = [
     # Agent 主体
     "Game2048Agent",
     "build_game_2048_agent",
+    # 生产装配入口
+    "build",
     # 配置
     "Game2048Config",
     # 规则引擎

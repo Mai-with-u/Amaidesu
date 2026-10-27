@@ -17,19 +17,16 @@
 
 from __future__ import annotations
 
-import time
-from typing import Any, ClassVar, Dict, Iterable, Optional
+from typing import Any, ClassVar, Dict, Iterable, Optional, Protocol
 
+from src.modules.agents.game_tools import GameToolProvider, fail_result, snapshot_result, spec_named_handlers
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
     ToolExecutionResult,
-    ToolInvocation,
     ToolSpec,
 )
-from src.modules.tools.provider import BaseToolProvider
 
-from .agent import Game2048Agent
-from .board import MoveDirection
+from .board import MoveDirection, MoveOutcome
 
 
 logger = get_logger("Game2048Tools")
@@ -124,21 +121,47 @@ def build_get_state_spec() -> ToolSpec:
 # ---------------------------------------------------------------------------
 
 
-class Game2048ToolProvider(BaseToolProvider):
+class Game2048ToolHost(Protocol):
+    """工具面对 Agent 的依赖切片（等价方法值）：落子/重开动作 + 快照与渲染出口。
+
+    工具层只依赖本协议声明的四个方法，不感知 Agent 的其余接口（事件
+    上报、里程碑等仍归 Agent 的落子路径）；Agent 本体结构性满足本协议，
+    两模块互不 import（依赖方向：agent → tools 单向）。
+    """
+
+    async def press(self, direction: MoveDirection) -> MoveOutcome:
+        """按一个方向键（事件发射归 Agent 的落子路径）。"""
+        ...
+
+    async def restart(self) -> None:
+        """重开一局。"""
+        ...
+
+    def get_state_snapshot(self) -> Dict[str, Any]:
+        """导出状态快照（工具 structured_content 的键集唯一来源）。"""
+        ...
+
+    def render_board(self) -> str:
+        """渲染人类/LLM 可读的文本棋盘（工具 content 默认来源）。"""
+        ...
+
+
+class Game2048ToolProvider(GameToolProvider):
     """2048 Agent 工具 Provider（provider="game_2048"）
 
-    持有 Agent 主体：动作（落子/重开）全部转发给 Agent 的公开方法，
-    快照形状由 :meth:`Game2048Agent.get_state_snapshot` 唯一定义。
+    依赖收窄到 :class:`Game2048ToolHost` 切片：动作（落子/重开）经切片
+    方法转发，快照形状由 :meth:`Game2048ToolHost.get_state_snapshot`
+    唯一定义。分发、计时与异常转结果走共享管道（:class:`GameToolProvider`）。
 
     注入模式（构造注入）：
         >>> provider = Game2048ToolProvider(agent=agent)
         >>> registry.register_provider(provider)
     """
 
-    # 工具分类（provider=提供者名、category=分组、agents.toml 段=配置地址，三者正交）
-    category: ClassVar[str] = "game"
+    # 日志前缀（共享管道的异常日志区分用）
+    log_label: ClassVar[str] = "Game2048"
 
-    def __init__(self, agent: Game2048Agent) -> None:
+    def __init__(self, agent: Game2048ToolHost) -> None:
         self._agent = agent
 
     @property
@@ -153,21 +176,14 @@ class Game2048ToolProvider(BaseToolProvider):
         del agent_name
         return STREAMER_GUIDE
 
-    async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        name = invocation.tool_name
-        args: Dict[str, Any] = invocation.arguments or {}
-        started_ms = int(time.time() * 1000)
-
-        try:
-            # 调用方使用的就是派生全名（game_2048_press 等），等值对照分发
-            if name == "game_2048_press":
-                return await self._invoke_press(args, started_ms)
-            if name == "game_2048_get_state":
-                return self._snapshot_result("game_2048_get_state", started_ms)
-            return self._fail(name, started_ms, f"未知 Game2048 工具 '{name}'")
-        except Exception as exc:  # noqa: BLE001 - 工具边界兜底，异常转失败结果
-            logger.exception(f"Game2048 工具 '{name}' 执行异常: {type(exc).__name__}: {exc}")
-            return self._fail(name, started_ms, f"{type(exc).__name__}: {exc}")
+    def tool_handlers(self) -> Dict[str, Any]:
+        """对外全名 → 处理器（键从 spec 派生，不手拼前缀）。"""
+        return spec_named_handlers(
+            [
+                (build_press_spec(), self._invoke_press),
+                (build_get_state_spec(), self._invoke_get_state),
+            ]
+        )
 
     # ==================================================================
     # game_2048_press：方向滑动 / 重开
@@ -197,6 +213,10 @@ class Game2048ToolProvider(BaseToolProvider):
             content=self._agent.render_board(),
         )
 
+    async def _invoke_get_state(self, args: Dict[str, Any], started_ms: int) -> ToolExecutionResult:
+        del args
+        return self._snapshot_result("game_2048_get_state", started_ms)
+
     # ==================================================================
     # 内部辅助
     # ==================================================================
@@ -209,38 +229,25 @@ class Game2048ToolProvider(BaseToolProvider):
         content: Optional[str] = None,
         notice: Optional[str] = None,
     ) -> ToolExecutionResult:
-        """以 Agent 当前状态快照构造成功结果（键集由 get_state_snapshot 唯一定义）。"""
-        snapshot = self._agent.get_state_snapshot()
-        structured: Dict[str, Any] = dict(snapshot)
-        if notice is not None:
-            structured["notice"] = notice
-        finished_ms = int(time.time() * 1000)
-        return ToolExecutionResult(
-            tool_name=tool_name,
-            success=True,
+        """以快照构造成功结果：content 缺省回落文本棋盘渲染。"""
+        return snapshot_result(
+            tool_name,
+            started_ms,
+            self._agent.get_state_snapshot(),
             content=content if content is not None else self._agent.render_board(),
-            structured_content=structured,
-            timestamp_ms=finished_ms,
-            duration_ms=finished_ms - started_ms,
+            notice=notice,
         )
 
     def _fail(self, tool_name: str, started_ms: int, reason: str) -> ToolExecutionResult:
-        """失败结果：原因进 ``error_message`` 与结构化 ``error``，不发事件。"""
-        finished_ms = int(time.time() * 1000)
-        return ToolExecutionResult(
-            tool_name=tool_name,
-            success=False,
-            error_message=reason,
-            structured_content={"error": reason},
-            timestamp_ms=finished_ms,
-            duration_ms=finished_ms - started_ms,
-        )
+        """失败结果（构造细节见共享层 ``fail_result``）。"""
+        return fail_result(tool_name, started_ms, reason)
 
 
 __all__ = [
     "PRESS_KEYS",
     "PROVIDER_NAME",
     "STREAMER_GUIDE",
+    "Game2048ToolHost",
     "Game2048ToolProvider",
     "build_get_state_spec",
     "build_press_spec",

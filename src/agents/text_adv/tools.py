@@ -27,24 +27,28 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Dict, Iterable, Optional
+from typing import Any, Callable, ClassVar, Dict, Iterable, List, Optional, Protocol
 
+from src.modules.agents.game_tools import (
+    GameToolProvider,
+    capture_failed_result,
+    fail_result,
+    snapshot_result,
+    spec_named_handlers,
+)
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
     ToolExecutionResult,
-    ToolInvocation,
     ToolSpec,
 )
-from src.modules.tools.provider import BaseToolProvider
 
-from .agent import TextAdvGameAgent
+from .config import TextAdvConfig
 from .coords import vlm_xy_to_screen
 from .input import InputBackend
 from .screen import text_key
-from .session import MonitorResolver, query_monitor_geometry
-from .vlm import ScreenReading
+from .session import MonitorResolver, ScreenSession, query_monitor_geometry
+from .vlm import Option, ScreenReading
 
 logger = get_logger("TextAdvTools")
 
@@ -186,27 +190,58 @@ def build_get_state_spec() -> ToolSpec:
 # ---------------------------------------------------------------------------
 
 
+class TextAdvToolHost(Protocol):
+    """工具面对 Agent 的依赖切片（领域面）：观察会话 + 运行配置 + auto 命令 + 状态出口。
+
+    工具层只依赖本协议声明的成员（采集经会话、动作出口经键鼠后端、
+    观察循环启停只经 ``set_auto``、快照与识别记录经两个出口方法），不
+    感知 Agent 的其余接口；Agent 本体结构性满足本协议，两模块互不
+    import（依赖方向：agent → tools 单向）。
+    """
+
+    session: ScreenSession
+    typed_config: TextAdvConfig
+
+    @property
+    def auto(self) -> bool:
+        """当前是否处于自动观察模式。"""
+        ...
+
+    async def set_auto(self, on: bool) -> None:
+        """启停自动观察（观察循环由 Agent 自持，工具只翻标志）。"""
+        ...
+
+    def get_state_snapshot(self) -> Dict[str, Any]:
+        """导出状态快照（工具返回的 structured_content 键集来源）。"""
+        ...
+
+    def record_screen(self, text: str, options: Optional[List[Option]] = None) -> None:
+        """记录一次识别结果到游戏状态。"""
+        ...
+
+
 @dataclass(slots=True)
-class TextAdvToolProvider(BaseToolProvider):
+class TextAdvToolProvider(GameToolProvider):
     """文字冒险 Agent 工具 Provider（provider="text_adv"）
 
-    持有 Agent 主体与键鼠注入后端：动作（按键/点击）经 ``input_backend``
-    触达真实游戏；感知（窗口护栏/稳定帧/读屏/区域换算）经 ``agent.session``
-    的 :class:`ScreenSession` 承担（会话管采集、本类管处置——护栏失败回执
-    错误、感知失败降级为 capture_failed 回执）；监视器原点解析经
-    ``monitor_resolver``（默认查 mss 的 monitors 表，测试可注入假件）。
+    依赖收窄到 :class:`TextAdvToolHost` 切片与键鼠注入后端：动作（按键/
+    点击）经 ``input_backend`` 触达真实游戏；感知（窗口护栏/稳定帧/读屏/
+    区域换算）经宿主的 :class:`ScreenSession` 承担（会话管采集、本类管
+    处置——护栏失败回执错误、感知失败降级为 capture_failed 回执）；监视
+    器原点解析经 ``monitor_resolver``（默认查 mss 的 monitors 表，测试可
+    注入假件）。分发、计时与异常转结果走共享管道（:class:`GameToolProvider`）。
 
     注入模式（继承 + 构造注入）：
         >>> provider = TextAdvToolProvider(agent=agent, input_backend=backend)
         >>> registry.register_provider(provider)
     """
 
-    agent: TextAdvGameAgent
+    agent: TextAdvToolHost
     input_backend: InputBackend
     monitor_resolver: MonitorResolver = field(default=query_monitor_geometry)
 
-    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
-    category: ClassVar[str] = "game"
+    # 日志前缀（共享管道的异常日志区分用）
+    log_label: ClassVar[str] = "TextAdv"
 
     @property
     def name(self) -> str:
@@ -220,25 +255,16 @@ class TextAdvToolProvider(BaseToolProvider):
         del agent_name
         return STREAMER_GUIDE
 
-    async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        name = invocation.tool_name
-        args: Dict[str, Any] = invocation.arguments or {}
-        started_ms = int(time.time() * 1000)
-
-        try:
-            # 调用方使用的就是派生全名（text_adv_advance 等），等值对照分发
-            if name == "text_adv_advance":
-                return await self._invoke_advance(started_ms)
-            if name == "text_adv_choose":
-                return await self._invoke_choose(args, started_ms)
-            if name == "text_adv_set_auto":
-                return await self._invoke_set_auto(args, started_ms)
-            if name == "text_adv_get_state":
-                return self._snapshot_result("text_adv_get_state", started_ms)
-            return self._fail(name, started_ms, f"未知 TextAdv 工具 '{name}'")
-        except Exception as exc:  # noqa: BLE001 - 工具边界兜底，异常转失败结果
-            logger.exception(f"TextAdv 工具 '{name}' 执行异常: {type(exc).__name__}: {exc}")
-            return self._fail(name, started_ms, f"{type(exc).__name__}: {exc}")
+    def tool_handlers(self) -> Dict[str, Any]:
+        """对外全名 → 处理器（键从 spec 派生，不手拼前缀）。"""
+        return spec_named_handlers(
+            [
+                (build_advance_spec(), self._invoke_advance),
+                (build_choose_spec(), self._invoke_choose),
+                (build_set_auto_spec(), self._invoke_set_auto),
+                (build_get_state_spec(), self._invoke_get_state),
+            ]
+        )
 
     # ==================================================================
     # text_adv_advance：按键推进 → 等稳定 → 识别 → 快照
@@ -249,7 +275,8 @@ class TextAdvToolProvider(BaseToolProvider):
         事件循环内直接调用会按注入时长冻结整个进程（hold 按住多久停摆多久）。"""
         await asyncio.to_thread(action)
 
-    async def _invoke_advance(self, started_ms: int) -> ToolExecutionResult:
+    async def _invoke_advance(self, args: Dict[str, Any], started_ms: int) -> ToolExecutionResult:
+        del args
         cfg = self.agent.typed_config
         refusal = self._refuse_without_window("text_adv_advance", started_ms)
         if refusal is not None:
@@ -272,7 +299,7 @@ class TextAdvToolProvider(BaseToolProvider):
             )
             return self._capture_failed_result("text_adv_advance", started_ms, detail)
 
-        self.agent._game_state.record_screen(reading.text, reading.options)  # noqa: SLF001 - 同包感知状态
+        self.agent.record_screen(reading.text, reading.options)
         return self._snapshot_result("text_adv_advance", started_ms, content=reading.text)
 
     # ==================================================================
@@ -350,7 +377,7 @@ class TextAdvToolProvider(BaseToolProvider):
                 "点击后画面未变化，选项可能未生效；为避免误触不重试，请重试前先用 text_adv_get_state 确认当前屏",
             )
 
-        self.agent._game_state.record_screen(verified.text, verified.options)  # noqa: SLF001 - 同包感知状态
+        self.agent.record_screen(verified.text, verified.options)
         return self._snapshot_result("text_adv_choose", started_ms, content=verified.text)
 
     # ==================================================================
@@ -389,6 +416,10 @@ class TextAdvToolProvider(BaseToolProvider):
         # 循环由 Agent 自持：工具只翻标志，绝不自己拉起循环
         await self.agent.set_auto(on)
         return self._snapshot_result("text_adv_set_auto", started_ms, notice=notice)
+
+    async def _invoke_get_state(self, args: Dict[str, Any], started_ms: int) -> ToolExecutionResult:
+        del args
+        return self._snapshot_result("text_adv_get_state", started_ms)
 
     # ==================================================================
     # 内部辅助
@@ -430,51 +461,29 @@ class TextAdvToolProvider(BaseToolProvider):
         content: str = "",
         notice: Optional[str] = None,
     ) -> ToolExecutionResult:
-        """以 Agent 当前状态快照构造成功结果（键集由 state.to_dict 唯一定义）。"""
+        """以当前状态快照构造成功结果：content 缺省回落快照正文（构造细节见共享层）。"""
         snapshot = self.agent.get_state_snapshot()
-        structured: Dict[str, Any] = dict(snapshot)
-        if notice is not None:
-            structured["notice"] = notice
-        finished_ms = int(time.time() * 1000)
-        return ToolExecutionResult(
-            tool_name=tool_name,
-            success=True,
+        return snapshot_result(
+            tool_name,
+            started_ms,
+            snapshot,
             content=content if content else str(snapshot.get("text") or ""),
-            structured_content=structured,
-            timestamp_ms=finished_ms,
-            duration_ms=finished_ms - started_ms,
+            notice=notice,
         )
 
     def _capture_failed_result(self, tool_name: str, started_ms: int, detail: Optional[str]) -> ToolExecutionResult:
-        """感知失败的成功形态：``success=True`` + 空 text + 结构化 error，不发事件。"""
-        reason = detail or "未知原因"
-        logger.warning(f"{tool_name} 感知失败: {reason}")
-        finished_ms = int(time.time() * 1000)
-        return ToolExecutionResult(
-            tool_name=tool_name,
-            success=True,
-            content="",
-            structured_content={"error": f"capture_failed: {reason}"},
-            timestamp_ms=finished_ms,
-            duration_ms=finished_ms - started_ms,
-        )
+        """感知失败的成功形态（构造细节见共享层 ``capture_failed_result``）。"""
+        return capture_failed_result(tool_name, started_ms, detail)
 
     def _fail(self, tool_name: str, started_ms: int, reason: str) -> ToolExecutionResult:
-        """失败结果：原因进 ``error_message`` 与结构化 ``error``，不发事件。"""
-        finished_ms = int(time.time() * 1000)
-        return ToolExecutionResult(
-            tool_name=tool_name,
-            success=False,
-            error_message=reason,
-            structured_content={"error": reason},
-            timestamp_ms=finished_ms,
-            duration_ms=finished_ms - started_ms,
-        )
+        """失败结果（构造细节见共享层 ``fail_result``）。"""
+        return fail_result(tool_name, started_ms, reason)
 
 
 __all__ = [
     "PROVIDER_NAME",
     "STREAMER_GUIDE",
+    "TextAdvToolHost",
     "TextAdvToolProvider",
     "build_advance_spec",
     "build_choose_spec",

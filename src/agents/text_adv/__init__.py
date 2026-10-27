@@ -15,6 +15,7 @@
 """
 
 from src.agents.text_adv.agent import TextAdvGameAgent, build_text_adv_agent
+from src.agents.text_adv.build import build
 from src.agents.text_adv.config import TextAdvConfig
 from src.agents.text_adv.session import MonitorGeometry, ScreenSession
 from src.agents.text_adv.state import TextAdvGameAgentState
@@ -31,6 +32,8 @@ __all__ = [
     # Agent 主体
     "TextAdvGameAgent",
     "build_text_adv_agent",
+    # 生产装配入口
+    "build",
     # 配置
     "TextAdvConfig",
     # 状态

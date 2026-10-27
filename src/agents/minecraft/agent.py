@@ -220,7 +220,10 @@ class MinecraftAgent(BaseAgent):
 
         # 后台目标账本：在跟踪的目标此刻的样子、最近结束的目标、被暂停的目标，
         # 以及目标 ↔ 任务账/委派账的记账联动（通知路由留在 Agent）。
-        self._goal_ledger = GoalLedger(task_tracker=task_tracker, agent_name=self.name)
+        # 批任务号供给在此一次注入：联动结算的写方法内部自取，漏穿针不再可能
+        self._goal_ledger = GoalLedger(
+            task_tracker=task_tracker, agent_name=self.name, finished_ids=lambda: self._delegations.finished_ids
+        )
         # 最近一条身体急事收尾的那句话与收到的时刻：紧接着到的暂停通知带上它，说清主任务为什么停在半路。
         self._urgent_before_pause: Optional[tuple[str, float]] = None
 
@@ -878,7 +881,7 @@ class MinecraftAgent(BaseAgent):
             self._goals.untrack(run.goal_id)
             self._goal_ledger.forget(run.goal_id)
             self._goal_ledger.remember_finished(run)
-            self._goal_ledger.update_task_ledger(run, batch_task_ids=self._delegations.finished_ids)
+            self._goal_ledger.update_task_ledger(run)
             return
         if not self._goals.tracking(run.goal_id) and arguments.get("operation") == "resume":
             # 重启或重进世界后恢复的目标：模型明确解除暂停，从此由宿主跟踪。
@@ -886,7 +889,7 @@ class MinecraftAgent(BaseAgent):
             return
         if self._goals.tracking(run.goal_id):
             self._goal_ledger.note(run)
-            self._goal_ledger.update_task_ledger(run, batch_task_ids=self._delegations.finished_ids)
+            self._goal_ledger.update_task_ledger(run)
 
     def _polls_running_goal(self, name: str, arguments: Dict[str, Any]) -> bool:
         """这次调用只是在查询还在跑的目标（没提问、没被暂停），不算推进。
@@ -926,18 +929,18 @@ class MinecraftAgent(BaseAgent):
         """
         before = self._goal_ledger.note_of(run.goal_id)
         if run.finished:
-            self._goal_ledger.settle_finished(run, batch_task_ids=self._delegations.finished_ids)
+            self._goal_ledger.settle_finished(run)
             self._inject_wakeup_message(finish_notice(run, self_brief))
             return
         self._goal_ledger.note(run)
         if stalled:
-            self._goal_ledger.note_stalled(run, batch_task_ids=self._delegations.finished_ids)
+            self._goal_ledger.note_stalled(run)
             await self._emit_game_event(
                 "attention_required",
                 f"有目标停着没动静：目标 {run.goal_id}（{goal_label(run)}）很长时间没有新事件，还没结束。",
             )
             return
-        self._goal_ledger.update_task_ledger(run, batch_task_ids=self._delegations.finished_ids)
+        self._goal_ledger.update_task_ledger(run)
         if run.state == AWAITING_ANSWER and before.get("question") != run.question:
             self._inject_wakeup_message(
                 f"[系统] 目标 {run.goal_id}（{goal_label(run)}）在等你回答：{json_text(run.question)}。"
@@ -963,7 +966,7 @@ class MinecraftAgent(BaseAgent):
 
     async def _on_goal_gone(self, goal_id: int, reason: str) -> None:
         """在跟踪的目标查不到了（多半是换了世界）：如实告诉任务，不让它挂着等不来的结果。"""
-        self._goal_ledger.mark_gone(goal_id, reason, batch_task_ids=self._delegations.finished_ids)
+        self._goal_ledger.mark_gone(goal_id, reason)
         self._inject_wakeup_message(f"[系统] 目标 {goal_id} 不在了：{reason}。按现场重新决定下一步。")
 
     async def _on_body_event(self, event: Dict[str, Any]) -> None:

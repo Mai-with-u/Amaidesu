@@ -9,8 +9,9 @@
 任务账与批级委派账联动：经注入的 ``task_tracker`` 写框架侧账本（受理登记 /
 进度 / 终态 / 停滞标记），目标到终态时本批吸收的委派共享结算（干巴机器摘要
 先到账保底，LLM 交付语后到按终态粘滞写不动）。``task_tracker`` 缺省 None =
-只记内存簿，不写框架账（无任务基建的装配降级）。批级委派的任务号清单由
-Agent 每次调用时传入——批的生命周期归 Agent，账本不持它。
+只记内存簿，不写框架账（无任务基建的装配降级）。批级委派的任务号清单经构造
+注入的 ``finished_ids`` 供给现取（即 :class:`DelegationBook.finished_ids`）：
+批的生命周期归 Agent，账本只读快照、不持它。
 
 通知路由（结束/暂停/提问时唤醒哪个队列）留在 Agent；本模块只出文案：
 ``finish_notice`` / ``pause_notice`` 是纯函数，暂停通知里"暂停前急事"的
@@ -21,7 +22,7 @@ from __future__ import annotations
 
 import re
 from collections import deque
-from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.tools.tasks import TERMINAL_TASK_STATES
@@ -111,12 +112,31 @@ def _dry_goal_summary(run: GoalRun) -> str:
     return f"游戏目标 {run.goal_id}（{run.ability}）{label}：{run.summary}"
 
 
+def _no_batch_task_ids() -> Sequence[str]:
+    """缺省批级任务号供给：无委派基建的装配降级下，批级联动恒空。"""
+    return ()
+
+
 class GoalLedger:
     """目标三簿与目标↔任务账/委派账的记账。非线程安全；仅在 Agent 事件循环内使用。"""
 
-    def __init__(self, *, task_tracker: Optional[Any] = None, agent_name: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        task_tracker: Optional[Any] = None,
+        agent_name: str = "",
+        finished_ids: Optional[Callable[[], Sequence[str]]] = None,
+    ) -> None:
+        """Args:
+        task_tracker: 框架侧任务账（缺省 None = 只记内存簿的装配降级）
+        agent_name: 发起方注册名（任务账登记的 initiator）
+        finished_ids: 本批已入账、待联动结算的委派任务号供给（即
+            :class:`DelegationBook.finished_ids` 的只读快照）；缺省 None =
+            批级联动无任务号（无委派基建的装配降级）
+        """
         self._task_tracker = task_tracker
         self._agent_name = agent_name
+        self._finished_ids = finished_ids if finished_ids is not None else _no_batch_task_ids
         self._notes: Dict[int, Dict[str, Any]] = {}
         self._paused: set[int] = set()
         self._finished: Deque[Dict[str, Any]] = deque(maxlen=_RECENT_FINISHED_GOALS)
@@ -153,13 +173,13 @@ class GoalLedger:
             {"goal_id": run.goal_id, "ability": run.ability, "status": run.result_status, "summary": run.summary}
         )
 
-    def settle_finished(self, run: GoalRun, *, batch_task_ids: Sequence[str] = ()) -> None:
+    def settle_finished(self, run: GoalRun) -> None:
         """目标结束的完整收账：清此刻的样子与暂停标记、进最近结束簿、写任务账终态。"""
         self.forget(run.goal_id)
         self.remember_finished(run)
-        self.update_task_ledger(run, batch_task_ids=batch_task_ids)
+        self.update_task_ledger(run)
 
-    def mark_gone(self, goal_id: int, reason: str, *, batch_task_ids: Sequence[str] = ()) -> Dict[str, Any]:
+    def mark_gone(self, goal_id: int, reason: str) -> Dict[str, Any]:
         """在跟踪的目标查不到了（多半是换了世界）：按失败收账，返回它最后的样子。"""
         note = self._notes.pop(goal_id, {"goal_id": goal_id})
         self._paused.discard(goal_id)
@@ -167,7 +187,7 @@ class GoalLedger:
         ledger = self._framework_ledger()
         if ledger is not None:
             ledger.update(ledger_task_id(goal_id), "failed", summary=reason)
-        self._settle_batch(batch_task_ids, "failed", f"游戏目标 {goal_id} 不在了：{reason}")
+        self._settle_batch("failed", f"游戏目标 {goal_id} 不在了：{reason}")
         return note
 
     def actionable_goal_ids(self) -> List[int]:
@@ -220,7 +240,7 @@ class GoalLedger:
             )
         self.update_task_ledger(run)
 
-    def update_task_ledger(self, run: GoalRun, summary: str = "", *, batch_task_ids: Sequence[str] = ()) -> None:
+    def update_task_ledger(self, run: GoalRun, summary: str = "") -> None:
         """目标进度/终态写任务账；终态时本批吸收的委派共享结算。"""
         ledger = self._framework_ledger()
         if ledger is None:
@@ -228,9 +248,9 @@ class GoalLedger:
         status = ledger_status_of(run)
         ledger.update(ledger_task_id(run.goal_id), status, snapshot=run.data, summary=summary or run.summary)
         if status in TERMINAL_TASK_STATES:
-            self._settle_batch(batch_task_ids, status, _dry_goal_summary(run))
+            self._settle_batch(status, _dry_goal_summary(run))
 
-    def note_stalled(self, run: GoalRun, *, batch_task_ids: Sequence[str] = ()) -> None:
+    def note_stalled(self, run: GoalRun) -> None:
         """Mod 报告目标停着没动静的账面中间态：快照带停滞标记，本批委派账同步打标。"""
         ledger = self._framework_ledger()
         if ledger is not None:
@@ -240,28 +260,29 @@ class GoalLedger:
                 snapshot={**run.data, "stalled": True},
                 summary=f"Mod 报告目标长时间没有新事件，仍未结束：{run.doing or run.ability}",
             )
-        self._flag_batch_stalled(batch_task_ids, run.goal_id, run.ability)
+        self._flag_batch_stalled(run.goal_id, run.ability)
 
     def _framework_ledger(self) -> Optional[Any]:
         return getattr(self._task_tracker, "ledger", None)
 
-    def _settle_batch(self, batch_task_ids: Sequence[str], status: str, summary: str) -> None:
+    def _settle_batch(self, status: str, summary: str) -> None:
         """批级关联：本批吸收的委派共享批内目标的终态，干巴机器摘要先到账保底。
 
-        LLM 的交付/升级后到时按终态粘滞改不动状态（条目已移除，重复写入无效），
-        它的话术经 game.report 走主播侧；这里保证的是"LLM 一句没说也有回音"。
+        任务号经构造注入的 ``finished_ids`` 供给现取。LLM 的交付/升级后到时
+        按终态粘滞改不动状态（条目已移除，重复写入无效），它的话术经
+        game.report 走主播侧；这里保证的是"LLM 一句没说也有回音"。
         粗糙性已知并接受：一批委派共享批内目标终态，批中途某个目标先失败就先写失败。
         """
         ledger = self._framework_ledger()
         if ledger is None:
             return
-        for task_id in batch_task_ids:
+        for task_id in self._finished_ids():
             if ledger.get(task_id) is None:
                 # 已被早到的目标终态或 LLM 交付写过终态：状态粘滞，不回退
                 continue
             ledger.update(task_id, status, summary=summary)
 
-    def _flag_batch_stalled(self, batch_task_ids: Sequence[str], goal_id: int, ability: str) -> None:
+    def _flag_batch_stalled(self, goal_id: int, ability: str) -> None:
         """STALLED 打进本批委派账的快照（中间态）：主播侧渲染看得到"停着没动静"。
 
         目标随后结束（或恢复有动静）时分别由终态直写与常规进度写入覆盖掉这份标记。
@@ -269,7 +290,7 @@ class GoalLedger:
         ledger = self._framework_ledger()
         if ledger is None:
             return
-        for task_id in batch_task_ids:
+        for task_id in self._finished_ids():
             record = ledger.get(task_id)
             if record is None:
                 continue

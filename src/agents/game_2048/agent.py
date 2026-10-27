@@ -22,6 +22,7 @@ from collections import deque
 from typing import Any, Deque, Dict, List, Optional
 
 from src.modules.agents.base import BaseAgent
+from src.modules.agents.game_tools import emit_game_error
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GameBoardStatePayload, GamePayload
@@ -31,6 +32,7 @@ from src.modules.tools.registry import ToolRegistry
 
 from .board import Board2048, MoveDirection, MoveOutcome
 from .config import Game2048Config
+from .tools import Game2048ToolProvider
 
 
 __all__ = [
@@ -83,10 +85,7 @@ class Game2048Agent(BaseAgent):
         super().__init__(event_bus=event_bus)
         self.typed_config = config
         self._tool_registry = tool_registry
-        # 函数内 import：tools 模块反向引用本模块的 Game2048Agent（循环 import 规避）
-        from .tools import Game2048ToolProvider
-
-        self._tool_provider: "Game2048ToolProvider" = Game2048ToolProvider(agent=self)
+        self._tool_provider: Game2048ToolProvider = Game2048ToolProvider(agent=self)
 
         # 内容状态：棋盘即状态（不设独立 state 对象——快照导出直接走棋盘视图）
         self._board = Board2048(rng=rng)
@@ -192,9 +191,8 @@ class Game2048Agent(BaseAgent):
         self._logger.info(message)
 
     async def emit_error(self, message: str) -> None:
-        """emit ``game.error``（供异常路径与测试使用）。"""
-        payload = GamePayload(game=self.name, event_type="error", message=message)
-        await self.emit_event(CoreEvents.GAME_ERROR, payload)
+        """emit ``game.error``（供异常路径与测试使用；构造口径见共享层）。"""
+        await emit_game_error(self.emit_event, self.name, message)
 
     # ==================================================================
     # 协议六项：工具提供

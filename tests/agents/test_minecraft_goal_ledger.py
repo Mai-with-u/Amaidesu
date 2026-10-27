@@ -70,12 +70,12 @@ def test_settle_finished_closes_books_and_settles_batch() -> None:
     book = _FakeLedger()
     book.records["deleg-9"] = MagicMock(snapshot={})
     tracker = _tracker(book)
-    ledger = GoalLedger(task_tracker=tracker, agent_name="minecraft")
+    ledger = GoalLedger(task_tracker=tracker, agent_name="minecraft", finished_ids=lambda: ("deleg-9", "deleg-gone"))
     ledger.track(_run(state="running"))
     ledger.note(_run(goal_id=1, state="running"))
 
     finished = _run(state="finished", result={"status": "done", "summary": "砍了 5 块原木"})
-    ledger.settle_finished(finished, batch_task_ids=["deleg-9", "deleg-gone"])
+    ledger.settle_finished(finished)
 
     assert ledger.note_of(1) == {} and ledger.actionable_goal_ids() == []
     assert ledger.recent_finished()[-1]["status"] == "done"
@@ -99,10 +99,10 @@ def test_mark_gone_records_failure_and_returns_last_note() -> None:
 def test_stalled_note_stamps_task_and_batch_snapshots() -> None:
     book = _FakeLedger()
     book.records["deleg-1"] = MagicMock(snapshot={"progress": 1})
-    ledger = GoalLedger(task_tracker=_tracker(book), agent_name="minecraft")
+    ledger = GoalLedger(task_tracker=_tracker(book), agent_name="minecraft", finished_ids=lambda: ("deleg-1",))
     ledger.track(_run(goal_id=5, state="running"))
 
-    ledger.note_stalled(_run(goal_id=5, state="running", doing="挖石料"), batch_task_ids=["deleg-1"])
+    ledger.note_stalled(_run(goal_id=5, state="running", doing="挖石料"))
 
     goal_update = next(u for u in book.updates if u["task_id"] == "maicraft-goal-5")
     assert goal_update["snapshot"]["stalled"] is True
