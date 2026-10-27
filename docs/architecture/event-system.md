@@ -136,7 +136,7 @@ event_bus.on(
 )
 ```
 
-订阅者契约：并发执行、互不影响。一个订阅者抛异常时，其他订阅者照常执行，异常被计入 `EventStats.error_count` 并写 ERROR 日志。**没有 priority、没有顺序**——有序处理属于拦截器。
+订阅者契约：并发执行、互不影响。一个订阅者抛异常时，其他订阅者照常执行，异常写 ERROR 日志（每个订阅者的 `HandlerWrapper` 上另有 `error_count` / `last_error` 记录）。**没有 priority、没有顺序**——有序处理属于拦截器。
 
 ### 取消订阅（off）
 
@@ -150,8 +150,7 @@ event_bus.off(event_name: str, handler: Callable)
 
 ```python
 await event_bus.cleanup(timeout: float = 5.0, force: bool = False)
-stats = event_bus.get_stats(event_name)      # emit_count / listener_count / error_count /
-                                             # last_emit_time / last_error_time / total_execution_time_ms
+stats = event_bus.get_stats(event_name)      # emit_count / listener_count
 event_bus.reset_stats(event_name=None)
 ```
 
@@ -405,7 +404,7 @@ await event_bus.emit(
 
 ### 通配订阅错误处理
 
-订阅者抛异常不影响其他订阅者；异常被计数（`get_stats(event_name).error_count`）并写 ERROR 日志——出错可见、不传播、不中断广播。
+订阅者抛异常不影响其他订阅者；异常写 ERROR 日志（并记录在该订阅者的 `HandlerWrapper.error_count`）——出错可见、不传播、不中断广播。
 
 ---
 

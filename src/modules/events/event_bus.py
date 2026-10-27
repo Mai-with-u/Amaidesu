@@ -3,7 +3,7 @@
 
 两条通道模型中的"广播"侧：把一条事件并发扇出给所有匹配的订阅者。
 - 并发执行：同一事件的所有订阅者以独立任务并发运行，完成顺序不定
-- 互不影响：一个订阅者抛异常会被计数并写 ERROR 日志，不影响其他订阅者
+- 互不影响：一个订阅者抛异常会写 ERROR 日志，不影响其他订阅者
 - 订阅者无顺序：不提供优先级或排序（有序处理属于拦截器管道，见 interceptors/）
 - 只接受 async handler：同步函数在注册时被拒绝，避免阻塞事件循环
 
@@ -26,7 +26,6 @@ payload 契约：emit 只接受 Pydantic Model 实例。payload 类声明
 
 import asyncio
 import copy
-import time
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
@@ -47,19 +46,11 @@ class EventStats:
 
     Attributes:
         emit_count: 发布次数
-        listener_count: 监听器数量
-        error_count: 错误次数
-        last_emit_time: 最后发布时间(Unix时间戳,秒)
-        last_error_time: 最后错误时间(Unix时间戳,秒)
-        total_execution_time_ms: 总执行时间(毫秒)
+        listener_count: 最近一次 emit 时匹配到的监听器数量
     """
 
     emit_count: int = 0
     listener_count: int = 0
-    error_count: int = 0
-    last_emit_time: float = 0
-    last_error_time: float = 0
-    total_execution_time_ms: float = 0
 
 
 @dataclass
@@ -86,8 +77,8 @@ class EventBus:
 
     核心契约:
     - 发布/订阅模式，精确名 + AMQP topic 风格通配匹配
-    - 订阅者并发执行、互不影响（异常计数 + 日志，不传播、不排序）
-    - 统计功能(跟踪emit、错误、执行时间)
+    - 订阅者并发执行、互不影响（异常写 ERROR 日志，不传播、不排序）
+    - 统计功能(跟踪emit与监听器数量)
     - 生命周期管理(cleanup方法)
     """
 
@@ -267,10 +258,7 @@ class EventBus:
         if self.enable_stats:
             async with self._stats_lock:
                 self._stats[event_name].emit_count += 1
-                self._stats[event_name].last_emit_time = time.time()
                 self._stats[event_name].listener_count = len(handlers)
-
-        start_time = time.time()
 
         # 创建跟踪事件
         complete_event = asyncio.Event()
@@ -288,12 +276,6 @@ class EventBus:
                 ]
                 if tasks:
                     await asyncio.gather(*tasks, return_exceptions=True)
-
-                # 更新统计（使用锁保护）
-                if self.enable_stats:
-                    execution_time = (time.time() - start_time) * 1000
-                    async with self._stats_lock:
-                        self._stats[event_name].total_execution_time_ms += execution_time
             finally:
                 # 标记完成并从活跃列表中移除
                 complete_event.set()
@@ -332,7 +314,7 @@ class EventBus:
 
     async def _call_handler(self, wrapper: HandlerWrapper, event_name: str, data: Any, source: str) -> None:
         """
-        调用事件处理器；异常在此处闭环：计数 + ERROR 日志，不向外传播
+        调用事件处理器；异常在此处闭环：ERROR 日志，不向外传播
 
         Args:
             wrapper: 处理器包装器
@@ -347,11 +329,6 @@ class EventBus:
             wrapper.error_count += 1
             wrapper.last_error = str(e)
             self.logger.exception(f"事件处理器执行错误 (事件: {event_name}, 来源: {source}): {e}")
-            # 事件级统计（使用锁保护）
-            if self.enable_stats:
-                async with self._stats_lock:
-                    self._stats[event_name].error_count += 1
-                    self._stats[event_name].last_error_time = time.time()
 
     def on(self, event_name: str, handler: Callable, model_class: Type[T]) -> None:
         """

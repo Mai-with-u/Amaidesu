@@ -115,7 +115,7 @@ async def test_registered_event_validation_and_discriminant(event_bus: EventBus)
     assert len(gifts) == 1 and len(plain) == 1
 
 
-async def test_handler_failure_is_isolated_and_counted(event_bus: EventBus) -> None:
+async def test_handler_failure_is_isolated_and_logged(event_bus: EventBus) -> None:
     results: list[str] = []
 
     async def failing(event_name, payload: SimpleTestEvent, source: str) -> None:
@@ -132,8 +132,8 @@ async def test_handler_failure_is_isolated_and_counted(event_bus: EventBus) -> N
 
     assert set(results) == {"before_error", "normal"}  # 一个订阅者异常不影响其他
     stats = event_bus.get_stats("test.event")
-    assert stats.error_count == 1 and stats.last_error_time > 0
-    wrapper = event_bus._handlers["test.event"][0]  # 同时记录到 HandlerWrapper
+    assert stats.emit_count == 1 and stats.listener_count == 2  # 统计不受订阅者异常影响
+    wrapper = event_bus._handlers["test.event"][0]  # 异常记录到 HandlerWrapper
     assert wrapper.error_count > 0 and "Test error" in (wrapper.last_error or "")
 
 
