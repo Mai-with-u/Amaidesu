@@ -48,6 +48,7 @@ from src.agents.streamer.plan import ReplyRoundAttachment, assistant_speech_line
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
 from src.agents.streamer.planner_render import (
     Intent,
+    assemble_request_messages,
     forced_situation,
     render_delegations,
     render_observation,
@@ -55,6 +56,7 @@ from src.agents.streamer.planner_render import (
     render_recent_relays,
     render_silence,
     reply_last,
+    step_extra_messages,
     tool_call_parts,
 )
 from src.agents.streamer.game_ledger import GameLedger
@@ -419,8 +421,9 @@ class Planner:
         tool_list = self._build_tool_list()
         # 消息序列：[system] + 历史（user/assistant 原生消息）+ 本批（user）+ 参考段（user，序列尾）；
         # ReAct 循环的 assistant/tool 消息 append-only 追加在参考段之后，绝不插中间。
-        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
-        messages.extend(self._build_dialogue_messages(batch, history))
+        messages = assemble_request_messages(
+            system_prompt, self._build_dialogue_messages(batch, history), reference_text
+        )
         # 游戏委派保留当前来源原句，避免把具体物品名称或禁用条件只剩下一层口头概括。
         source_dialogue = [
             message for message in self._build_dialogue_messages(batch, []) if message.get("role") == "user"
@@ -435,12 +438,6 @@ class Planner:
             and not (reminders or "").strip()
             and not fresh_game_chat
         )
-        if reference_text:
-            messages.append({"role": "user", "content": reference_text})
-        elif len(messages) == 1:
-            # 空窗兜底：对话与参考全空时保底一条 user 消息（部分协议要求非 system 消息存在）
-            messages.append({"role": "user", "content": "（本窗无对话与参考内容）"})
-
         # 发言闸语料：本窗历史里的已说台词，窗起点算一次随单携带（reply 工具
         # 不再为查重单独读历史——读是纯读，无决策窗出账副作用）
         speech_history = assistant_speech_lines(history)
@@ -455,7 +452,7 @@ class Planner:
             # 上一步工具返回的截图只挂在这一次请求尾部、不写回消息序列：下一步请求时它已消失，
             # 前缀与这一次逐字一致；画面内容由模型这一步的思考与决定带下去
             tail = self._transient_images.drain()
-            extra = [item for item in (frame_tail if steps == 1 else None, tail) if item is not None]
+            extra = step_extra_messages(frame_tail, tail, steps)
             try:
                 response = await self._llm_service.generate(
                     [*messages, *extra] if extra else messages,

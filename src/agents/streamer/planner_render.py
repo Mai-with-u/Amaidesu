@@ -27,6 +27,7 @@ __all__ = [
     "DelegationStatusProvider",
     "Intent",
     "Relay",
+    "assemble_request_messages",
     "compose_delegate_instruction",
     "compose_relay_content",
     "forced_situation",
@@ -38,6 +39,7 @@ __all__ = [
     "render_silence",
     "reply_last",
     "same_json_document",
+    "step_extra_messages",
     "superseded_by_game_report",
     "tool_call_parts",
 ]
@@ -134,6 +136,42 @@ def tool_call_parts(call: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
     if not isinstance(args, dict):
         args = {}
     return name, args
+
+
+def assemble_request_messages(
+    system_prompt: str,
+    dialogue_messages: List[Dict[str, Any]],
+    reference_text: str,
+) -> List[Dict[str, Any]]:
+    """拼一次决策请求的初始消息序列。
+
+    序列 = [system] + 对话消息（user/assistant 原生消息，含本批）+ 参考段（user，
+    序列尾）；参考段为空且对话也为空时，保底一条 user 消息（部分协议要求
+    非 system 消息存在）。ReAct 循环的 assistant/tool 消息 append-only 追加
+    在返回序列之后，绝不插中间。
+    """
+    messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    messages.extend(dialogue_messages)
+    if reference_text:
+        messages.append({"role": "user", "content": reference_text})
+    elif len(messages) == 1:
+        # 空窗兜底：对话与参考全空时保底一条 user 消息
+        messages.append({"role": "user", "content": "（本窗无对话与参考内容）"})
+    return messages
+
+
+def step_extra_messages(
+    frame_tail: Optional[Dict[str, Any]],
+    tail: Optional[Dict[str, Any]],
+    step: int,
+) -> List[Dict[str, Any]]:
+    """算一次 ReAct 步请求要附加在消息序列之后的临时消息。
+
+    直播画面只挂在本窗第一次请求的尾部（后续步骤靠模型第一步的判断继续）；
+    上一步工具返回的截图只挂这一次请求尾部、不写回消息序列——下一步请求时
+    它已消失，前缀与这一次逐字一致，画面内容由模型这一步的思考与决定带下去。
+    """
+    return [item for item in (frame_tail if step == 1 else None, tail) if item is not None]
 
 
 def same_json_document(text: str, structured: Any) -> bool:
