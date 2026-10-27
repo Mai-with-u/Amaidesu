@@ -9,8 +9,9 @@ from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.streamer.config import StreamerConfig
-from src.agents.streamer.planner import Planner, PlannerEnv
+from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
+from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from src.modules.llm.payload import Response
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
@@ -31,7 +32,7 @@ def _planner(reference_tools: List[str], invoke: Any) -> tuple[Planner, List[Lis
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="SYSTEM")
     planner = Planner(
-        config={"planner_max_steps": 2, "reference_tools": reference_tools},
+        config=PlannerConfig(planner_max_steps=2, reference_tools=reference_tools),
         llm_service=llm,
         prompt_service=prompt,
         room_state=RoomState(),
@@ -52,7 +53,7 @@ async def test_configured_reference_tools_feed_the_reference_block() -> None:
         )
 
     planner, captured = _planner(["minecraft_glance"], _invoke)
-    await planner.plan([], proactive=True, trigger_reason="proactive:cold")
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.COLD))
     assert [(c.tool_name, c.arguments, c.source) for c in calls] == [("minecraft_glance", {}, "planner-reference")]
     reference = captured[0][-1]["content"]
     assert "【现场速览（本轮决策前自动读取）】" in reference and "蜂房旁" in reference
@@ -65,7 +66,7 @@ async def test_failed_reference_tool_is_reported_without_blocking() -> None:
         return ToolExecutionResult(tool_name=invocation.tool_name, success=False, error_message="游戏未连接")
 
     planner, captured = _planner(["minecraft_glance"], _fail)
-    await planner.plan([], proactive=True, trigger_reason="proactive:cold")
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.COLD))
     assert "minecraft_glance: 读取失败（游戏未连接）" in captured[0][-1]["content"]
 
     calls: List[ToolInvocation] = []
@@ -75,7 +76,7 @@ async def test_failed_reference_tool_is_reported_without_blocking() -> None:
         return ToolExecutionResult(tool_name=invocation.tool_name, success=True, structured_content={})
 
     planner, captured = _planner([], _record)
-    await planner.plan([], proactive=True, trigger_reason="proactive:cold")
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.COLD))
     assert calls == [] and "【现场速览" not in captured[0][-1]["content"]
 
 

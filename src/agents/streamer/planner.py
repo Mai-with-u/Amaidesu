@@ -74,6 +74,7 @@ from src.modules.tools.models import ToolInvocation
 
 from .room_state import RoomState
 from .thinking_stream import ThinkingStreamContext
+from .trigger_cause import NO_INPUT_PROACTIVE_KINDS, TriggerCause, TriggerKind
 
 __all__ = ["Planner", "RoundOutcome"]
 
@@ -89,15 +90,14 @@ _DEFAULT_MAX_STEPS: int = 8
 _STALE_WARN_INTERVAL_MS: int = 5 * 60 * 1000
 
 
-class _PlannerConfig(BaseConfig):
-    """Planner 配置 Schema（StreamerConfig 最小子集）。
+class PlannerConfig(BaseConfig):
+    """Planner 配置 Schema（构造期由装配方从 StreamerConfig 派生注入）。
 
-    仅声明 Planner 直接使用的字段；当从完整 StreamerConfig 加载时，
-    BaseConfig.from_dict() 的漂移检测会自动剥离其余字段。
-
-    planner_max_steps 从 StreamerConfig.planner_max_steps 注入；LLM profile
-    用途名（"planner"/"replyer"/"summary"）由 StreamerAgent 装配期硬编码，
-    不再作为配置字段透传。
+    仅声明 Planner 直接使用的字段；装配方把 StreamerConfig 上的对应值
+    （含从 proactive.cold_timeout_ms 折算的冷场阈值）抄录成构造参数，
+    Planner 不再感知完整 Agent 配置形状。LLM profile 用途名
+    （"planner"/"replyer"/"summary"）由 StreamerAgent 装配期硬编码，
+    不作为配置字段透传。
     """
 
     planner_max_steps: int = Field(default=_DEFAULT_MAX_STEPS, title="决策最大步数")
@@ -112,11 +112,6 @@ class _PlannerConfig(BaseConfig):
 def _as_id_str(value: Any) -> str:
     """消息 ID 字段收敛：仅接受 str，其余（None/Mock 等）按空处理。"""
     return value if isinstance(value, str) else ""
-
-
-# 没有观众、运营或游戏侧新输入的主动触发原因；这些窗口不给游戏活补充要求。
-# signoff（收播道别）同样没有任何新输入：场次已结账，不给游戏活递补充要求。
-_NO_INPUT_PROACTIVE_REASONS = frozenset({"rundown", "schedule", "cold", "signoff"})
 
 
 @dataclass(frozen=True)
@@ -185,7 +180,7 @@ class Planner:
 
     def __init__(
         self,
-        config: Any,
+        config: Optional[PlannerConfig],
         llm_service: Any,
         prompt_service: Any,
         room_state: RoomState,
@@ -201,7 +196,7 @@ class Planner:
         """初始化 Planner。
 
         Args:
-            config: 配置字典或已解析对象（planner_max_steps）。
+            config: Planner 配置（``PlannerConfig``；None 即全默认）。
             llm_service: LLM 管理器，需提供
                 ``async generate(messages, *, tools=..., profile=...) -> payload.Response``
                 与 ``is_profile_visual(profile) -> bool``。
@@ -219,27 +214,8 @@ class Planner:
             env: 运行环境（迟绑定依赖集合，见 :class:`PlannerEnv`）；缺省
                 ``PlannerEnv()`` 即全部可选依赖降级缺席。
         """
-        if config is None:
-            self.typed_config = _PlannerConfig()
-        elif hasattr(config, "planner_max_steps"):
-            defaults = _PlannerConfig()
-            self.typed_config = _PlannerConfig(
-                planner_max_steps=getattr(config, "planner_max_steps", _DEFAULT_MAX_STEPS),
-                planner_recent_intents_max=getattr(
-                    config, "planner_recent_intents_max", defaults.planner_recent_intents_max
-                ),
-                planner_recent_relays_max=getattr(
-                    config, "planner_recent_relays_max", defaults.planner_recent_relays_max
-                ),
-                reference_tools=list(getattr(config, "reference_tools", None) or []),
-                cold_silence_ms=getattr(
-                    getattr(config, "proactive", None), "cold_timeout_ms", defaults.cold_silence_ms
-                ),
-            )
-        elif isinstance(config, dict):
-            self.typed_config = _PlannerConfig.from_dict(config)
-        else:
-            self.typed_config = _PlannerConfig.from_dict(dict(config))
+        # 配置为 typed 子配置对象单轨注入；缺省即全默认（"未配置降级"由字段默认值表达）
+        self.typed_config = config if config is not None else PlannerConfig()
 
         # LLM profile 绑定为代码显式常量（PLANNER_PROFILE），不读配置、无兜底；
         # 本字段保留供内部工具列表与日志输出使用。
@@ -348,7 +324,7 @@ class Planner:
         reminders: str = "",
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
-        trigger_reason: str = "",
+        trigger_cause: Optional[TriggerCause] = None,
         session_recap: str = "",
     ) -> RoundOutcome:
         """对一个决策窗跑 ReAct 循环，产出本轮收场（RoundOutcome）。
@@ -367,8 +343,9 @@ class Planner:
                 增量经旁路通道外发）。
             round_id: 决策轮次 ID（工具调用经 ToolInvocation.round_id 透传到
                 tool.result 事件，供观察器归属；空串表示无轮次关联）。
-            trigger_reason: 本窗触发原因码（如 ``proactive:rundown``）；用于判断这一窗
+            trigger_cause: 本窗触发原因（类型化值对象）；用于判断这一窗
                 有没有新的外部输入，没有时不给手上的游戏活补充要求。
+                缺省（None）按未知批次触发处理——不做任何豁免。
             session_recap: 上场回顾文本（开播后固定，整场不变；空串 = 没有上一场或未启用）。
 
         Returns:
@@ -388,7 +365,7 @@ class Planner:
         fresh_game_chat = list(resolved_batch.fresh_chat)
         private_game_chat = list(resolved_batch.private_chat)
         # 收播道别窗整窗豁免台词重合度检查（见 _round_bypass_topic_gate 声明处）
-        self._round_bypass_topic_gate = trigger_reason == "proactive:signoff"
+        self._round_bypass_topic_gate = trigger_cause is not None and trigger_cause.kind is TriggerKind.SIGNOFF
         # 发言闸打回计数是本窗口径：由 Provider 检测 round_id 变化清零（每窗
         # 首次 reply 调用前生效，时序与本入口等价）
 
@@ -413,7 +390,7 @@ class Planner:
             private_game_chat=private_game_chat,
             overview=overview,
             session_recap=session_recap,
-            trigger_reason=trigger_reason,
+            trigger_cause=trigger_cause,
         )
         if reference_text is None:
             return replace(outcome, error=reference_failure, silent_reason="assembler_failed")
@@ -434,7 +411,8 @@ class Planner:
         # 一句话一直算作"有新输入"，冷场窗照样往游戏里递话
         relay_without_input = (
             proactive
-            and trigger_reason.removeprefix("proactive:") in _NO_INPUT_PROACTIVE_REASONS
+            and trigger_cause is not None
+            and trigger_cause.kind in NO_INPUT_PROACTIVE_KINDS
             and not (reminders or "").strip()
             and not fresh_game_chat
         )
@@ -590,7 +568,7 @@ class Planner:
         private_game_chat: Optional[List[str]] = None,
         overview: str = "",
         session_recap: str = "",
-        trigger_reason: str = "",
+        trigger_cause: Optional[TriggerCause] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """构造参考段，返回（参考段文本, 失败原因）。
 
@@ -599,7 +577,7 @@ class Planner:
         游戏事件不在此处——历史（含 game 条目）与本批走 canonical 映射的原生消息通道。
         组装失败时文本为 None，失败原因随 outcome.error 写进决策事件。
         """
-        signoff_window = trigger_reason == "proactive:signoff"
+        signoff_window = trigger_cause is not None and trigger_cause.kind is TriggerKind.SIGNOFF
         lines: List[str] = []
         if forced and not signoff_window:
             # signoff 的 forced 只是闸门豁免语义（绕过台词重合度检查保住道别），不是

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.background import BackgroundMaintainer
+from src.agents.streamer.config import StreamerBackgroundConfig
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GAME_MESSAGE_TYPE
 from src.modules.events.payloads.game import GamePayload
@@ -102,7 +103,7 @@ async def test_game_reports_and_delegations_enter_timeline_in_time_order(store: 
     await _viewer_turns(store, 5, 1)
 
     # 窗边界出账（决策执行器每轮第一步）先行，读历史是纯读
-    agent._drain_game_events()
+    agent._scope.drain_window()
     view = await agent._read_history()
     assert [getattr(turn, "message_id", "") or "note" for turn in view] == ["m1", "note", "m2", "m5"]
     # 行首是发生时刻的钟点，写入后不再变化
@@ -117,7 +118,7 @@ async def test_game_reports_and_delegations_enter_timeline_in_time_order(store: 
     assert later[: len(view)] == view and later[-1].content.endswith("我在 minecraft 里开始做] 去砍点木头")
 
     await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=2), "test")
-    assert agent._timeline_notes == []
+    assert (await agent._scope.open_window()).timeline_notes == []
 
 
 async def test_read_history_is_pure_read_without_window_boundary(store: SQLiteDatabase) -> None:
@@ -130,16 +131,16 @@ async def test_read_history_is_pure_read_without_window_boundary(store: SQLiteDa
     view = await agent._read_history()
 
     assert [getattr(turn, "message_id", "") or "note" for turn in view] == ["m1"], "未出账的游戏事件不在时间线里"
-    batch_before = agent._current_game_batch()
+    batch_before = agent._scope.current_window_batch()
     assert await agent._read_history() == view
-    assert agent._current_game_batch() is batch_before, "读历史不覆写本窗批次"
+    assert agent._scope.current_window_batch() is batch_before, "读历史不覆写本窗批次"
 
 
 def _maintainer(store: SQLiteDatabase, pk: Optional[int] = 1, prompt_manager=None):
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=Response(success=True, content="观众在聊新版本更新"))
     maintainer = BackgroundMaintainer(
-        {"enabled": True},
+        StreamerBackgroundConfig(enabled=True),
         room_state=RoomState(),
         llm_service=llm,
         session_manager=_FakeSessionManager(pk),

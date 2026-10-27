@@ -12,7 +12,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import PlannerConfig, Planner
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.rundown.rundown_state import RundownState
 from src.agents.streamer.tools.rundown_tool import (
@@ -76,7 +76,7 @@ def _planner(registry: ToolRegistry, llm: Any = None) -> Planner:
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="SYSTEM_PROMPT")
     return Planner(
-        config={"planner_max_steps": 4},
+        config=PlannerConfig(planner_max_steps=4),
         llm_service=llm or MagicMock(),
         prompt_service=prompt,
         room_state=RoomState(),

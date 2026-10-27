@@ -3,7 +3,7 @@
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import PlannerConfig, Planner
 from src.agents.streamer.room_state import RoomState
 from src.modules.tools.models import ToolExecutionResult
 
@@ -20,7 +20,7 @@ async def test_delegation_keeps_source_without_rewriting_model_history() -> None
             tool_name="framework_delegate", success=True, structured_content={"accepted": True}
         )
     )
-    planner = Planner({}, MagicMock(), MagicMock(), RoomState(), tool_registry=registry)
+    planner = Planner(PlannerConfig(), MagicMock(), MagicMock(), RoomState(), tool_registry=registry)
     original = "在平台上搭建精密构建生产线，不许用Mek"
     source = [{"role": "user", "content": original}]
     arguments = {"agent": "minecraft", "instruction": "搭一条工业风产线"}
@@ -38,7 +38,7 @@ async def test_source_does_not_create_an_instruction_or_change_other_tools() -> 
     """没有目标时仍交给原有校验拒绝；普通查询不附带观众对话。"""
     registry = MagicMock()
     registry.invoke = AsyncMock(return_value=ToolExecutionResult(tool_name="test", success=True, structured_content={}))
-    planner = Planner({}, MagicMock(), MagicMock(), RoomState(), tool_registry=registry)
+    planner = Planner(PlannerConfig(), MagicMock(), MagicMock(), RoomState(), tool_registry=registry)
     for tool, arguments in [("framework_delegate", {"instruction": ""}), ("clock_time", {})]:
         await planner._invoke_registry_tool(
             tool, arguments, source_dialogue=[{"role": "user", "content": "另一个请求"}]

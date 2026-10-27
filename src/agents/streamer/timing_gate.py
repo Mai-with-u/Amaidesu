@@ -1,7 +1,8 @@
 """TimingGate - 直播节奏门控（仅保留强制触发判定）
 
-"要不要发言"由 Planner 决定（should_reply），本类只负责强制触发判定：
-``is_forced`` / ``batch_is_forced``（按消息类型判定，如醒目留言）。
+"要不要发言"由 Planner 决定（should_reply），本类只负责单条消息的强制
+触发判定（``is_forced``，按消息类型判定，如醒目留言）；批级"任一强制即
+整批强制"由 MessageBuffer 逐条 add 时累积 force 标志承载。
 
 本类为纯逻辑（无 IO），状态机由 StreamerAgent 单实例持有。
 """
@@ -28,7 +29,3 @@ class TimingGate:
     def is_forced(self, message: RoomMessagePayload) -> bool:
         """判断单条消息是否触发强制响应。"""
         return message.message_type in self._force_message_types
-
-    def batch_is_forced(self, messages: List[RoomMessagePayload]) -> bool:
-        """判断一批消息中是否存在强制触发消息。"""
-        return any(self.is_forced(message) for message in messages)

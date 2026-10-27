@@ -14,11 +14,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer import canonical
-from src.agents.streamer.planner import Planner, PlannerEnv
+from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.planner_render import Delegation, render_delegations
 from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider
+from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind, TriggerSource
 from src.modules.events.payloads.live import LiveStartedPayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
@@ -84,7 +85,7 @@ async def test_unopened_session_keeps_memory_turns_until_live_starts() -> None:
 
     started = LiveStartedPayload(live_session_id=1, source="manual", started_at_ms=1)
     await agent._on_live_started("live.started", started, "test")
-    assert agent._unpersisted_turns == []
+    assert await _history(agent) == [], "开播清场：调试注入的未落库轮不再进历史"
 
 
 async def test_open_session_merges_only_unpersisted_turns_by_time() -> None:
@@ -99,12 +100,22 @@ async def test_open_session_merges_only_unpersisted_turns_by_time() -> None:
     }
     agent = _agent([row], 7, "要不要现场拉一下？")
     debug = [_msg("麦麦会操作这个机器吗", "d1", ts=1000)]
-    await agent._execute_round(debug, forced=True, trigger_reason="dashboard:debug_test", batch_persisted=False)
+    await agent._execute_round(
+        debug,
+        forced=True,
+        trigger_cause=TriggerCause(kind=TriggerKind.DASHBOARD_DEBUG, source=TriggerSource.DASHBOARD),
+        batch_persisted=False,
+    )
     assert await _history(agent) == [("viewer", "麦麦会操作这个机器吗"), ("assistant", "要不要现场拉一下？")]
 
     agent = _agent([], 7, "好嘞")
-    await agent._execute_round([_msg("拉", "m1", ts=1000)], forced=False, trigger_reason="window_expired")
-    assert agent._unpersisted_turns == []
+    await agent._execute_round(
+        [_msg("拉", "m1", ts=1000)],
+        forced=False,
+        trigger_cause=TriggerCause(kind=TriggerKind.WINDOW_EXPIRED),
+    )
+    # 正常弹幕经 room.message 落库链路（批次持久），不重复补记进未落库轮
+    assert await _history(agent) == []
 
 
 def test_trim_batch_echo_drops_only_tail_copy_of_batch() -> None:
@@ -129,7 +140,7 @@ def _planner(registry: Any = None, reply_provider: Any = None, responses: Option
         registry = MagicMock()
         registry.list_tools = MagicMock(return_value=[])
     return Planner(
-        config={"planner_max_steps": 3},
+        config=PlannerConfig(planner_max_steps=3),
         llm_service=llm,
         prompt_service=prompt,
         room_state=RoomState(),

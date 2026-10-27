@@ -129,7 +129,7 @@ async def test_read_history_is_pure_read() -> None:
 
     batch_before = scope.current_window_batch()
     assert batch_before.events == (), "纯读不触发出账"
-    assert scope.timeline_notes == [], "纯读不落时间线"
+    assert await scope.read_history() == [], "纯读不落时间线：待出账的事件行不进投影"
 
 
 # 读历史：合并投影与失败语义
@@ -181,13 +181,13 @@ async def test_begin_and_end_session_reset_all_session_state() -> None:
 
     await scope.begin_session()
     assert timeline.reset_calls == 1
-    assert scope.unpersisted_turns == [] and scope.timeline_notes == []
+    assert await scope.read_history() == [], "未落库轮与时间线 notes 随开播清场归零"
 
     # 下播清场与开播同一份实现
     scope._timeline_notes.append(TimelineTurn(role="user", content="再记一条", message_type="game", timestamp_ms=2000))
     await scope.end_session()
     assert timeline.reset_calls == 2
-    assert scope.timeline_notes == []
+    assert await scope.read_history() == []
     assert scope.current_window_batch().events == ()
 
 
@@ -199,7 +199,8 @@ async def test_remember_round_appends_unpersisted_viewer_and_speech_turns() -> N
 
     await scope.remember_round([_msg("主播好", 100)], speech="你好呀", batch_persisted=False)
 
-    assert [(turn.role, turn.content) for turn in scope.unpersisted_turns] == [
+    history = await scope.read_history()
+    assert [(turn.role, turn.content) for turn in history] == [
         ("viewer", "主播好"),
         ("assistant", "你好呀"),
     ]
@@ -210,7 +211,7 @@ async def test_remember_round_skips_when_batch_and_speech_persisted() -> None:
 
     await scope.remember_round([_msg("已落库", 100)], speech="已落库的回复", batch_persisted=True)
 
-    assert scope.unpersisted_turns == []
+    assert await scope.read_history() == []
 
 
 async def test_remember_round_keeps_viewer_turns_when_batch_not_persisted() -> None:
@@ -219,7 +220,7 @@ async def test_remember_round_keeps_viewer_turns_when_batch_not_persisted() -> N
     # 调试注入：开着场次也不经 room.message 落库链路
     await scope.remember_round([_msg("调试注入", 100)], speech="已落库的回复", batch_persisted=False)
 
-    assert [turn.content for turn in scope.unpersisted_turns] == ["调试注入"]
+    assert [turn.content for turn in await scope.read_history()] == ["调试注入"]
 
 
 # 私聊与回顾槽位
@@ -250,7 +251,8 @@ async def test_note_delegation_writes_timeline_note_without_window_batch() -> No
 
     scope.note_delegation("minecraft", "去挖石头")
 
-    assert len(scope.timeline_notes) == 1
+    materials = await scope.open_window()
+    assert len(materials.timeline_notes) == 1
     batch = scope.drain_window()
     assert batch.events == (), "委派行不进决策窗批次"
     assert ledger is scope.ledger

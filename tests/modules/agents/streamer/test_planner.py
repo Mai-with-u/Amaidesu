@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner, PlannerEnv
+from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GameEventBatch
 from src.modules.llm.payload import Response, ToolCall
@@ -75,7 +75,7 @@ def _make_planner(
         )
 
     planner = Planner(
-        config={"planner_llm": "llm", "planner_max_steps": max_steps},
+        config=PlannerConfig(planner_max_steps=max_steps),
         llm_service=llm,
         prompt_service=prompt,
         room_state=RoomState(),
@@ -123,7 +123,7 @@ def test_tool_list_comes_straight_from_the_registry() -> None:
     assert all(f["context_section"] == "system_tools" for f in tool_list)
 
     bare = Planner(
-        config={}, llm_service=MagicMock(), prompt_service=MagicMock(), room_state=RoomState(), tool_registry=None,
+        config=PlannerConfig(), llm_service=MagicMock(), prompt_service=MagicMock(), room_state=RoomState(), tool_registry=None,
         env=PlannerEnv(reply_provider_factory=MagicMock),
     )  # fmt: skip
     assert bare._build_tool_list() == []
@@ -178,7 +178,7 @@ async def test_tool_failure_is_fed_back_and_max_steps_goes_silent() -> None:
 async def test_failures_degrade_without_raising() -> None:
     # reply Provider 未绑定：观察报错，LLM 可调整或自然终止
     unbound = Planner(
-        config={"planner_max_steps": 3}, llm_service=MagicMock(), prompt_service=MagicMock(), room_state=RoomState(),
+        config=PlannerConfig(planner_max_steps=3), llm_service=MagicMock(), prompt_service=MagicMock(), room_state=RoomState(),
         tool_registry=MagicMock(),
     )  # fmt: skip
     unbound._llm_service.generate = AsyncMock(

@@ -2,9 +2,9 @@
 
 职责边界（重要）
 ----------------
-本组件**只**回答"现在该不该主动开口"以及"为什么"，返回触发原因字符串
-（``"external"`` / ``"rundown"`` / ``"game"`` / ``"schedule"`` / ``"cold"``）
-或 ``None``。
+本组件**只**回答"现在该不该主动开口"以及"为什么"，返回触发原因枚举
+（:class:`TriggerKind` 的 ``EXTERNAL`` / ``RUNDOWN`` / ``GAME`` /
+``SCHEDULE`` / ``COLD`` 等成员）或 ``None``。
 
 **不**负责生成发言内容 —— 话题文本由 ``Planner`` 在收到 ``proactive=True``
 标志后从 ``room_state`` 快照的 ``topic_summary`` 字段（或在流程单触发时从
@@ -55,7 +55,7 @@
 游戏 Agent 主动上报（``game.report``，交付总结/升级决策）往往停在选项处
 等主播定夺——不触发则剧情无限卡住。这与流程单同理：**内容推进**而非救场，
 不应被"防接龙/冷场救场"的低频限流卡死。``game_pending=True`` 仅受总开关
-约束，立即返回 ``"game"``，绕过 ``min_interval_ms`` / ``max_per_hour`` /
+约束，立即返回 ``TriggerKind.GAME``，绕过 ``min_interval_ms`` / ``max_per_hour`` /
 ``topic_required`` 三道前置。一次性信号由调用方（StreamerAgent）消费后复位。
 
 **运营提醒催醒触发源（reminder_pending）的限流独立性**
@@ -76,6 +76,9 @@
 from collections import deque
 from typing import Any
 
+from .config import StreamerProactiveConfig
+from .trigger_cause import TriggerKind
+
 
 __all__ = ["ProactiveTrigger"]
 
@@ -84,42 +87,13 @@ __all__ = ["ProactiveTrigger"]
 # 默认配置
 # ---------------------------------------------------------------------------
 
-_DEFAULT_ENABLED: bool = True
-_DEFAULT_COLD_TIMEOUT_MS: int = 45_000
-_DEFAULT_MIN_INTERVAL_MS: int = 120_000
-_DEFAULT_SCHEDULE_INTERVAL_MS: int = 300_000  # 0 表示关闭定时触发
-_DEFAULT_SCHEDULE_ONLY_COLD: bool = True
-_DEFAULT_MAX_PER_HOUR: int = 6
-_DEFAULT_TOPIC_REQUIRED: bool = True
-# 环节内防抖间隔（毫秒）。当前仅 rundown_overdue 触发源使用——刚发过言不
-# 立即提醒。
-_DEFAULT_RUNDOWN_SPEECH_INTERVAL_MS: int = 3_000
-# 环节内持续发言间隔（毫秒）。rundown_ready 触发源的节奏：环节供能期间按此
-# 间隔给主播产出机会——量由唤醒保证，质由 is_novel 自检与台词重合度闸把关，
-# 唤醒本身不保证发言（闸打回即沉默）。远长于退役前的 3 秒强推形态。
-_DEFAULT_RUNDOWN_READY_INTERVAL_MS: int = 30_000
-# 环节超时提醒冷却（毫秒）。超时后按此间隔反复提醒，直到 Agent 推进环节。
-_DEFAULT_RUNDOWN_OVERDUE_INTERVAL_MS: int = 300_000
-
 # hourly 窗口宽度：3 600 秒 = 3 600 000 毫秒
 _HOURLY_WINDOW_MS: int = 3_600_000
 
 # 内容推进类触发源：在 should_trigger 里本来就绕过 max_per_hour，记录时不占
 # hourly 额度——自己绕过上限的来源不该占别人的额度（否则话痨期几十个流程单
 # 窗把账记满，冷场/定时触发在此后一小时内全被上限扣死）。
-_UNCAPPED_REASONS = frozenset({"rundown", "game", "reminder"})
-
-
-def _cfg(config: Any, key: str, default: Any) -> Any:
-    """从配置对象读取字段值。
-
-    对齐 :mod:`room_state_loop` 的同名辅助：dict 用 ``.get``，其他对象
-    （如 Pydantic 模型）用 ``getattr`` 兜底。便于上层构造一个**精简 sub-dict**
-    传给本组件（避免触发器读全量 AmaidesuConfig 的噪声字段）。
-    """
-    if isinstance(config, dict):
-        return config.get(key, default)
-    return getattr(config, key, default)
+_UNCAPPED_KINDS = frozenset({TriggerKind.RUNDOWN, TriggerKind.GAME, TriggerKind.REMINDER})
 
 
 class ProactiveTrigger:
@@ -130,27 +104,21 @@ class ProactiveTrigger:
     均为进程内内存态，重启即重置。
     """
 
-    def __init__(self, config: Any) -> None:
-        # 配置读取
-        self._enabled: bool = _cfg(config, "enabled", _DEFAULT_ENABLED)
-        self._cold_timeout_ms: int = _cfg(config, "cold_timeout_ms", _DEFAULT_COLD_TIMEOUT_MS)
-        self._min_interval_ms: int = _cfg(config, "min_interval_ms", _DEFAULT_MIN_INTERVAL_MS)
-        self._schedule_interval_ms: int = _cfg(config, "schedule_interval_ms", _DEFAULT_SCHEDULE_INTERVAL_MS)
-        self._schedule_only_cold: bool = _cfg(config, "schedule_only_cold", _DEFAULT_SCHEDULE_ONLY_COLD)
-        self._max_per_hour: int = _cfg(config, "max_per_hour", _DEFAULT_MAX_PER_HOUR)
-        self._topic_required: bool = _cfg(config, "topic_required", _DEFAULT_TOPIC_REQUIRED)
+    def __init__(self, config: StreamerProactiveConfig) -> None:
+        """注入 proactive 子配置（字段默认值即"未配置降级"，在 Schema 一处表达）。"""
+        self._enabled: bool = config.enabled
+        self._cold_timeout_ms: int = config.cold_timeout_ms
+        self._min_interval_ms: int = config.min_interval_ms
+        self._schedule_interval_ms: int = config.schedule_interval_ms
+        self._schedule_only_cold: bool = config.schedule_only_cold
+        self._max_per_hour: int = config.max_per_hour
+        self._topic_required: bool = config.topic_required
         # 环节内防抖间隔（毫秒）。仅 rundown_overdue 触发源使用。
-        self._rundown_speech_interval_ms: int = _cfg(
-            config, "rundown_speech_interval_ms", _DEFAULT_RUNDOWN_SPEECH_INTERVAL_MS
-        )
+        self._rundown_speech_interval_ms: int = config.rundown_speech_interval_ms
         # 环节超时提醒冷却（毫秒）。仅 rundown_overdue 触发源使用。
-        self._rundown_overdue_interval_ms: int = _cfg(
-            config, "rundown_overdue_interval_ms", _DEFAULT_RUNDOWN_OVERDUE_INTERVAL_MS
-        )
+        self._rundown_overdue_interval_ms: int = config.rundown_overdue_interval_ms
         # 环节内持续发言间隔（毫秒）。仅 rundown_ready 触发源使用。
-        self._rundown_ready_interval_ms: int = _cfg(
-            config, "rundown_ready_interval_ms", _DEFAULT_RUNDOWN_READY_INTERVAL_MS
-        )
+        self._rundown_ready_interval_ms: int = config.rundown_ready_interval_ms
 
         # 运行期状态
         # 上次主动触发时刻（None = 尚未触发过）。仅 schedule 判定读取；
@@ -185,7 +153,7 @@ class ProactiveTrigger:
         rundown_ready: bool = False,
         game_pending: bool = False,
         reminder_pending: bool = False,
-    ) -> str | None:
+    ) -> TriggerKind | None:
         """判定当前 tick 是否应触发主动发言。
 
         优先级顺序：``reminder > rundown_pending > game_pending >
@@ -231,23 +199,23 @@ class ProactiveTrigger:
                 **一次性**：调用方消费后应置 ``False``（通常下一 tick 即可，
                 本组件不维护该标志）。
             rundown_pending: 流程单环节切换即时信号（如环节切换回调节点）。
-                ``True`` 时仅受总开关约束，立即返回 ``"rundown"``，
+                ``True`` 时仅受总开关约束，立即返回 ``TriggerKind.RUNDOWN``，
                 不等任何间隔（即使 ``last_speech_ms`` 刚刚刷新）。
             rundown_overdue: 当前环节停留已超预期（超时闹钟信号）。绕过
                 公共三道前置，双重冷却后返回 ``"rundown"``——Agent 醒来
                 自行决定推进或继续。
         game_pending: 游戏 Agent 是否有待定夺上报（``game.report``）。
-            ``True`` 时仅受总开关约束，立即返回 ``"game"``，绕过
+            ``True`` 时仅受总开关约束，立即返回 ``TriggerKind.GAME``，绕过
             ``min_interval_ms`` / ``max_per_hour`` / ``topic_required``
             三道前置（内容推进而非救场，剧情不能无限卡在选项处）。
         reminder_pending: 运营是否有待送达的递话留言。``True`` 时仅查
             ``min_interval_ms`` 防接龙一条约束（总开关/每小时上限/话题
             要求三道闸豁免——必达语义不辖"自主找话说"的规矩），通过即
-            返回 ``"reminder"``。
+            返回 ``TriggerKind.REMINDER``。
 
         Returns:
-            ``"external"`` / ``"reminder"`` / ``"rundown"`` / ``"game"`` /
-            ``"schedule"`` / ``"cold"`` —— 表示应触发并给出原因；
+            ``TriggerKind`` 成员（``EXTERNAL`` / ``REMINDER`` / ``RUNDOWN`` /
+            ``GAME`` / ``SCHEDULE`` / ``COLD``）—— 表示应触发并给出原因；
             ``None`` —— 表示不触发。
         """
         # reminder_pending：运营递话催醒——必达语义，仅受防接龙最小间隔一条
@@ -256,7 +224,7 @@ class ProactiveTrigger:
         if reminder_pending:
             reminder_last_speech = getattr(room_state, "last_speech_ms", None)
             if reminder_last_speech is None or (now_ms - reminder_last_speech) >= self._min_interval_ms:
-                return "reminder"
+                return TriggerKind.REMINDER
 
         # 总开关（reminder 之外的源适用，含 rundown）
         if not self._enabled:
@@ -265,12 +233,12 @@ class ProactiveTrigger:
         # rundown_pending：环节切换即时信号——只受总开关约束，立即触发
         # （新环节开场白必须马上说，不等任何间隔）
         if rundown_pending:
-            return "rundown"
+            return TriggerKind.RUNDOWN
 
         # game_pending：游戏待定夺即时信号——同 rundown_pending，只受总开关
         # 约束，立即触发（游戏停在选项处等主播定夺，不等任何间隔）
         if game_pending:
-            return "game"
+            return TriggerKind.GAME
 
         last_speech_ms = getattr(room_state, "last_speech_ms", None)
 
@@ -283,7 +251,7 @@ class ProactiveTrigger:
                 return None
             if not self._topic_available(room_state, now_ms):
                 return None
-            return "external"
+            return TriggerKind.EXTERNAL
 
         # rundown_overdue：环节超时提醒——内容推进信号，绕过公共三道前置；
         # 双重冷却：overdue_interval_ms（内部状态）+ speech_interval_ms 防抖
@@ -295,7 +263,7 @@ class ProactiveTrigger:
             speech_settled = last_speech_ms is None or (now_ms - last_speech_ms) >= self._rundown_speech_interval_ms
             if overdue_cooled and speech_settled:
                 self._last_overdue_ms = now_ms
-                return "rundown"
+                return TriggerKind.RUNDOWN
 
         # rundown_ready：环节内持续产出机会——内容推进信号，绕过公共三道前置
         # （流程单环节任务描述即话题，不依赖弹幕消化出的话题摘要）。节奏对照
@@ -303,7 +271,7 @@ class ProactiveTrigger:
         # 说什么由模型按本窗新输入自定，is_novel 自检与台词重合度闸把关质量。
         if rundown_ready:
             if last_speech_ms is None or (now_ms - last_speech_ms) >= self._rundown_ready_interval_ms:
-                return "rundown"
+                return TriggerKind.RUNDOWN
 
         # 公共前置（schedule / cold 专用，行为不变）
         if last_speech_ms is not None and (now_ms - last_speech_ms) < self._min_interval_ms:
@@ -319,15 +287,15 @@ class ProactiveTrigger:
             self._last_trigger_ms is None or (now_ms - self._last_trigger_ms) >= self._schedule_interval_ms
         ):
             if not self._schedule_only_cold or room_state.is_cold(self._cold_timeout_ms, now_ms=now_ms):
-                return "schedule"
+                return TriggerKind.SCHEDULE
 
         # cold：房间处于冷场
         if room_state.is_cold(self._cold_timeout_ms, now_ms=now_ms):
-            return "cold"
+            return TriggerKind.COLD
 
         return None
 
-    def record_trigger(self, reason: str, now_ms: int) -> None:
+    def record_trigger(self, kind: TriggerKind, now_ms: int) -> None:
         """记录一次主动触发（由 StreamerAgent 在发布发言成功后调用）。
 
         更新 ``_last_trigger_ms``；受限触发源（``external`` / ``schedule`` /
@@ -338,12 +306,11 @@ class ProactiveTrigger:
         额度，因此只更新时刻、不追加历史。
 
         Args:
-            reason: 触发原因字符串（``"external"`` / ``"rundown"`` /
-                ``"game"`` / ``"reminder"`` / ``"schedule"`` / ``"cold"``）。
+            kind: 触发原因枚举成员。
             now_ms: 触发时刻（Unix 毫秒）。
         """
         self._last_trigger_ms = now_ms
-        if reason not in _UNCAPPED_REASONS:
+        if kind not in _UNCAPPED_KINDS:
             self._trigger_history.append(now_ms)
 
     # ------------------------------------------------------------------

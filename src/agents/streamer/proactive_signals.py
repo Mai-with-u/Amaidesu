@@ -7,7 +7,7 @@ reminder 抢先的 tick 里静默丢失，"信号保留到开播后生效"的注
 纪律收到一处显式声明：
 
 - ``game`` / ``rundown``：确认消费——信号只在真正引发一次主动决策
-  （reason 命中）后清零；被抢先或条件不满足时保留，条件重新满足时
+  （触发原因枚举命中）后清零；被抢先或条件不满足时保留，条件重新满足时
   补触发（游戏待定夺、新环节开场白不能静默丢）。
 - ``external``：读即消费——外部点播是尽力而为的推动，本 tick 条件
   不满足（防接龙/小时限额/话题缺失/被抢先）即弃，不补偿重试。
@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
+
+from .trigger_cause import TriggerKind
 
 if TYPE_CHECKING:
     from .proactive_trigger import ProactiveTrigger
@@ -89,18 +91,18 @@ class ProactiveSignals:
         external, self._external = self._external, False
         return ProactiveTickSignals(external_pending=external, rundown_pending=self._rundown, game_pending=self._game)
 
-    def confirm(self, reason: Optional[str], tick: ProactiveTickSignals) -> None:
-        """决策结果回写：reason 命中的信号确认消费（game / rundown）。
+    def confirm(self, kind: Optional[TriggerKind], tick: ProactiveTickSignals) -> None:
+        """决策结果回写：触发原因命中的信号确认消费（game / rundown）。
 
-        reason 与信号的对应：``game``→"game"、``rundown``→"rundown"。
-        rundown 的 reason 也可能来自超时/就绪分支——仅当本 tick 读到
+        原因与信号的对应：``TriggerKind.GAME``→game、``TriggerKind.RUNDOWN``→rundown。
+        rundown 的原因也可能来自超时/就绪分支——仅当本 tick 读到
         rundown 信号才认是它引发的（优先级保证信号在场时必然走信号
-        分支）。``None``（被公共前置拦下）或别的 reason 什么都不清：
+        分支）。``None``（被公共前置拦下）或别的原因什么都不清：
         信号保留，条件重新满足时补触发。
         """
-        if tick.game_pending and reason == "game":
+        if tick.game_pending and kind is TriggerKind.GAME:
             self._game = False
-        if tick.rundown_pending and reason == "rundown":
+        if tick.rundown_pending and kind is TriggerKind.RUNDOWN:
             self._rundown = False
 
     # ----- 每 tick 判定（读信号 → 折参 → 判定 → 确认消费，单点序） -----
@@ -115,7 +117,7 @@ class ProactiveSignals:
         rundown_overdue: bool,
         rundown_ready: bool,
         reminder_pending: bool,
-    ) -> Optional[str]:
+    ) -> Optional[TriggerKind]:
         """执行一个 tick 的完整主动发言判定序列，返回触发原因（None = 不触发）。
 
         本方法把此前散在调用方的四步序——读信号、下播折参、规则判定、
@@ -126,16 +128,16 @@ class ProactiveSignals:
            不说开场白/推进环节，流程单协调器的状态在闸外不参与判定）；
         3. ``trigger.should_trigger(...)``：纯规则判定（reminder > rundown >
            game > external > ... 的优先级与各自限流豁免都在触发器内）；
-        4. ``confirm(reason, tick)``：无论触发与否都回写确认（每个 tick
-           恰好一次；game / rundown 仅在 reason 命中时消费，被 reminder
+        4. ``confirm(kind, tick)``：无论触发与否都回写确认（每个 tick
+           恰好一次；game / rundown 仅在触发原因命中时消费，被 reminder
            抢先或总开关关闭时保留待补触发）。
 
-        调用方拿到返回的 reason 后只负责执行：触发则发起一轮主动决策，
+        调用方拿到返回的触发原因后只负责执行：触发则发起一轮主动决策，
         不触发则本轮结束。"reminder 早退不消费 pending"属于调用方是否
         进入本判定的前置闸（递话必达优先于开播闸），不在本方法内。
         """
         tick = self.read_for_tick(live=live)
-        reason = trigger.should_trigger(
+        kind = trigger.should_trigger(
             room_state,
             now_ms,
             external_pending=tick.external_pending,
@@ -145,5 +147,5 @@ class ProactiveSignals:
             game_pending=tick.game_pending,
             reminder_pending=reminder_pending,
         )
-        self.confirm(reason, tick)
-        return reason
+        self.confirm(kind, tick)
+        return kind

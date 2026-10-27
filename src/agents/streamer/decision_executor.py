@@ -33,28 +33,27 @@ from .session_scope import WindowMaterials
 from .speech_dispatcher import SpeechDispatcher
 from .stats import StreamerStats
 from .thinking_stream import ThinkingStreamContext
+from .trigger_cause import TriggerCause, TriggerKind
 
 __all__ = ["DecisionRoundExecutor"]
 
 
-#: 批次刷新触发原因（MessageBuffer.should_flush 产出）→ 面板可读文案。
-#: 原始码仍是机器可读字段（planner.decision.trigger_reason 与日志），此处只译展示文本。
-_TRIGGER_REASON_LABEL: Dict[str, str] = {
-    "forced": "付费触发（SC / 礼物 / 上舰）",
-    "batch_full": "弹幕攒满一批",
-    "window_expired": "聚合窗口到期",
-    "idle_compensation": "冷场补足一批",
-}
-
-#: 主动发言触发源（ProactiveTrigger.should_trigger 返回值）→ 面板可读文案。
-_PROACTIVE_REASON_LABEL: Dict[str, str] = {
-    "external": "外部指令唤醒",
-    "schedule": "定时主动开麦",
-    "cold": "冷场主动开麦",
-    "reminder": "递话催醒",
-    "rundown": "流程单推进",
-    "game": "游戏 Agent 待定夺",
-    "signoff": "收播道别",
+#: 触发原因种类（TriggerKind 全集）→ 面板可读文案。
+#: 机器可读形态由 TriggerCause.to_reason_string 派生（planner.decision.trigger_reason
+#: 与日志），此处只译展示文本。
+_TRIGGER_KIND_LABEL: Dict[TriggerKind, str] = {
+    TriggerKind.FORCED: "付费触发（SC / 礼物 / 上舰）",
+    TriggerKind.BATCH_FULL: "弹幕攒满一批",
+    TriggerKind.WINDOW_EXPIRED: "聚合窗口到期",
+    TriggerKind.IDLE_COMPENSATION: "冷场补足一批",
+    TriggerKind.EXTERNAL: "外部指令唤醒",
+    TriggerKind.SCHEDULE: "定时主动开麦",
+    TriggerKind.COLD: "冷场主动开麦",
+    TriggerKind.REMINDER: "递话催醒",
+    TriggerKind.RUNDOWN: "流程单推进",
+    TriggerKind.GAME: "游戏 Agent 待定夺",
+    TriggerKind.SIGNOFF: "收播道别",
+    TriggerKind.DASHBOARD_DEBUG: "控制台决策测试",
 }
 
 #: 静默原因（Planner outcome.silent_reason）→ 面板可读文案。
@@ -68,23 +67,16 @@ _SILENT_REASON_LABEL: Dict[str, str] = {
 }
 
 
-def _trigger_reason_text(trigger_reason: str) -> str:
-    """触发原因码 → 面板可读文案。
+def trigger_cause_text(cause: TriggerCause, *, proactive: bool) -> str:
+    """触发原因 → 面板可读文案。
 
-    未知码原样返回：新增触发源时面板先显示原码，据此补齐映射，不静默丢信息。
+    未知种类原样返回枚举值：新增触发源时面板先显示原值，据此补齐映射，
+    不静默丢信息。控制台调试原因随本轮是否主动发言窗分化文案（主动调试
+    窗是"手动触发一轮主动发言"，普通测试窗是决策测试）。
     """
-    if not trigger_reason:
-        return ""
-    if trigger_reason in _TRIGGER_REASON_LABEL:
-        return _TRIGGER_REASON_LABEL[trigger_reason]
-    if trigger_reason.startswith("proactive:"):
-        reason = trigger_reason[len("proactive:") :]
-        if reason.startswith("dashboard"):
-            return "控制台手动触发"
-        return _PROACTIVE_REASON_LABEL.get(reason, f"主动发言（{reason}）")
-    if trigger_reason.startswith("dashboard"):
-        return "控制台决策测试"
-    return trigger_reason
+    if cause.kind is TriggerKind.DASHBOARD_DEBUG and proactive:
+        return "控制台手动触发"
+    return _TRIGGER_KIND_LABEL.get(cause.kind, cause.kind.value)
 
 
 def _silent_reason_text(silent_reason: str) -> str:
@@ -143,7 +135,7 @@ class DecisionRoundExecutor:
         batch: List[RoomMessagePayload],
         *,
         forced: bool,
-        trigger_reason: str,
+        trigger_cause: TriggerCause,
         proactive: bool = False,
     ) -> Dict[str, Any]:
         """两阶段决策外壳：Planner → 消费 plan 评估 + 触发 reply 工具。
@@ -190,14 +182,14 @@ class DecisionRoundExecutor:
             stage="planning",
             agent_state="running",
             round_id=round_id,
-            detail=_trigger_reason_text(trigger_reason),
+            detail=trigger_cause_text(trigger_cause, proactive=proactive),
         )
         result, outcome = await self._decide_round(
             batch,
             round_id=round_id,
             started_ms=started_ms,
             forced=forced,
-            trigger_reason=trigger_reason,
+            trigger_cause=trigger_cause,
             proactive=proactive,
         )
         await self._emit_planner_decision(result, outcome, batch)
@@ -223,7 +215,7 @@ class DecisionRoundExecutor:
         round_id: str,
         started_ms: int,
         forced: bool,
-        trigger_reason: str,
+        trigger_cause: TriggerCause,
         proactive: bool,
     ) -> Tuple[Dict[str, Any], Optional[RoundOutcome]]:
         """两阶段决策执行体（被 ``execute`` 外壳驱动），返回（结果视图, Planner 收场）。
@@ -234,7 +226,7 @@ class DecisionRoundExecutor:
         """
         result: Dict[str, Any] = {
             "round_id": round_id,
-            "trigger_reason": trigger_reason,
+            "trigger_reason": trigger_cause.to_reason_string(proactive=proactive),
             "proactive": proactive,
             "forced": forced,
             "plan": None,
@@ -279,7 +271,7 @@ class DecisionRoundExecutor:
                 reminders=reminders,
                 thinking=thinking,
                 round_id=round_id,
-                trigger_reason=trigger_reason,
+                trigger_cause=trigger_cause,
                 session_recap=materials.session_recap,
             )
         except Exception as exc:
@@ -336,9 +328,7 @@ class DecisionRoundExecutor:
         self._stats.total_replies += 1
         self._room_state.record_speech(now_ms())
         if proactive:
-            # 决策循环内约定 proactive 原因带 "proactive:" 标记（debug/记账共用），此处取其后正文
-            reason = trigger_reason[len("proactive:") :] if trigger_reason else "unknown"
-            self._proactive_trigger.record_trigger(reason, now_ms())
+            self._proactive_trigger.record_trigger(trigger_cause.kind, now_ms())
 
         result["total_duration_ms"] = now_ms() - started_ms
         return result, outcome

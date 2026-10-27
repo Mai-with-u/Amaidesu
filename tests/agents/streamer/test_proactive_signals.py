@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from src.agents.streamer.config import StreamerProactiveConfig
 from src.agents.streamer.proactive_signals import ProactiveSignals
 from src.agents.streamer.proactive_trigger import ProactiveTrigger
+from src.agents.streamer.trigger_cause import TriggerKind
 
 
 class _Room:
@@ -34,15 +36,15 @@ def test_game_and_rundown_confirm_consumed_only_on_matching_reason() -> None:
     assert signals.game_pending and signals.rundown_pending
 
     tick = signals.read_for_tick(live=True)
-    signals.confirm("reminder", tick)  # 被 reminder 抢先：不清
+    signals.confirm(TriggerKind.REMINDER, tick)  # 被 reminder 抢先：不清
     assert signals.game_pending and signals.rundown_pending
 
     tick = signals.read_for_tick(live=True)
-    signals.confirm("game", tick)  # 只有 game 引发了决策
+    signals.confirm(TriggerKind.GAME, tick)  # 只有 game 引发了决策
     assert not signals.game_pending and signals.rundown_pending
 
     tick = signals.read_for_tick(live=True)
-    signals.confirm("rundown", tick)  # rundown 随后也引发了决策
+    signals.confirm(TriggerKind.RUNDOWN, tick)  # rundown 随后也引发了决策
     assert not signals.rundown_pending
 
 
@@ -82,13 +84,13 @@ def test_rundown_reason_from_timeout_does_not_clear_pending_signal() -> None:
 
     tick = signals.read_for_tick(live=True)
     assert tick.rundown_pending  # 本 tick 有信号，正常确认
-    signals.confirm("rundown", tick)
+    signals.confirm(TriggerKind.RUNDOWN, tick)
     assert not signals.rundown_pending
 
     # 信号不在场的 tick，超时分支返回 "rundown" 也不影响（无事可清）
     tick = signals.read_for_tick(live=True)
     assert not tick.rundown_pending
-    signals.confirm("rundown", tick)
+    signals.confirm(TriggerKind.RUNDOWN, tick)
 
 
 # ---------------------------------------------------------------------------
@@ -99,14 +101,14 @@ def test_rundown_reason_from_timeout_does_not_clear_pending_signal() -> None:
 def _evaluate(signals: ProactiveSignals, room: _Room, now: int, *, live: bool = True, **kwargs):
     """以默认最小配置构造触发器，跑一次完整 tick 判定。"""
     trigger = ProactiveTrigger(
-        {
-            "enabled": True,
-            "schedule_interval_ms": 0,  # 关定时触发，聚焦信号路径
-            "min_interval_ms": 120_000,
-            "rundown_ready_interval_ms": 30_000,
-            "rundown_overdue_interval_ms": 300_000,
-            "rundown_speech_interval_ms": 3_000,
-        }
+        StreamerProactiveConfig(
+            enabled=True,
+            schedule_interval_ms=0,  # 关定时触发，聚焦信号路径
+            min_interval_ms=120_000,
+            rundown_ready_interval_ms=30_000,
+            rundown_overdue_interval_ms=300_000,
+            rundown_speech_interval_ms=3_000,
+        )
     )
     return signals.evaluate_tick(
         live=live,
@@ -139,7 +141,7 @@ def test_evaluate_tick_offline_preserves_pending_until_live() -> None:
 
     assert _evaluate(signals, room, 10_000, live=False) is None
     assert signals.rundown_pending, "下播不消费"
-    assert _evaluate(signals, room, 20_000, live=True) == "rundown"
+    assert _evaluate(signals, room, 20_000, live=True) is TriggerKind.RUNDOWN
     assert not signals.rundown_pending, "开播后确认消费"
 
 
@@ -150,10 +152,10 @@ def test_evaluate_tick_confirms_on_trigger_only_and_keeps_pending_on_preempt() -
     signals.set_game()
     room = _Room(last_speech_ms=None, last_message_ms=9_999_000)  # reminder 通道畅通
 
-    assert _evaluate(signals, room, 10_000, reminder_pending=True) == "reminder"
+    assert _evaluate(signals, room, 10_000, reminder_pending=True) is TriggerKind.REMINDER
     assert signals.game_pending, "被 reminder 抢先的 tick 里 pending 保留"
 
-    assert _evaluate(signals, room, 20_000, reminder_pending=False) == "game"
+    assert _evaluate(signals, room, 20_000, reminder_pending=False) is TriggerKind.GAME
     assert not signals.game_pending
 
 

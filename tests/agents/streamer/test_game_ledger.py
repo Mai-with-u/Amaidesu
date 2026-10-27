@@ -215,7 +215,7 @@ async def test_planner_hands_state_facts_to_reply_tool() -> None:
     """批次 facts_text 与回执合成事实块随 reply 交给表达侧，调用后槽位清空。"""
     from unittest.mock import AsyncMock, MagicMock
 
-    from src.agents.streamer.planner import Planner, PlannerEnv
+    from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
     from src.agents.streamer.room_state import RoomState
     from src.agents.streamer.tools.reply_tool import ReplyToolProvider
     from src.modules.llm.payload import Response, ToolCall
@@ -257,7 +257,7 @@ async def test_planner_hands_state_facts_to_reply_tool() -> None:
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="SYSTEM")
     planner = Planner(
-        config={"planner_max_steps": 2},
+        config=PlannerConfig(planner_max_steps=2),
         llm_service=llm,
         prompt_service=prompt,
         room_state=RoomState(),

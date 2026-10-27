@@ -6,8 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import PlannerConfig, Planner
 from src.agents.streamer.room_state import RoomState
+from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from src.modules.utils.time_utils import now_ms
 from tests.agents.streamer.helpers import make_streamer_agent
 
@@ -45,7 +46,10 @@ async def test_reminder_wakes_proactive_round_when_live(proactive: bool) -> None
     agent._rounds.execute.assert_awaited_once()
     call = agent._rounds.execute.call_args
     assert call.args[0] == []
-    assert (call.kwargs["proactive"], call.kwargs["trigger_reason"]) == (True, "proactive:reminder")
+    assert (
+        call.kwargs["proactive"],
+        call.kwargs["trigger_cause"].kind,
+    ) == (True, TriggerKind.REMINDER)
 
 
 @pytest.mark.parametrize("scenario", ["just_spoke", "not_live"])
@@ -64,13 +68,16 @@ async def test_reminder_gate_by_scenario(scenario: str) -> None:
         return
     agent._rounds.execute.assert_awaited_once()
     call = agent._rounds.execute.call_args
-    assert (call.kwargs["proactive"], call.kwargs["trigger_reason"]) == (True, "proactive:reminder")
+    assert (
+        call.kwargs["proactive"],
+        call.kwargs["trigger_cause"].kind,
+    ) == (True, TriggerKind.REMINDER)
     assert len(agent._reminder_queue) == 1
 
 
 async def test_planner_reference_contains_reminder_section_only_when_present() -> None:
     planner = Planner(
-        config={"planner_max_steps": 2},
+        config=PlannerConfig(planner_max_steps=2),
         llm_service=MagicMock(),
         prompt_service=MagicMock(),
         room_state=RoomState(),

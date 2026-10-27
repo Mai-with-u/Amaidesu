@@ -16,15 +16,6 @@ from typing import List, Optional, Tuple
 from src.agents.streamer import canonical
 from src.modules.events.payloads.room import RoomMessagePayload
 
-# 批渲染的单一映射迁居 canonical（批与历史同形）；此处保留同名转发，
-# 供 Planner 等既有引用点继续以 prompt_template_for 取模板。
-PROMPT_TEMPLATES = canonical.PROMPT_TEMPLATES
-
-
-def prompt_template_for(message_type: str) -> str:
-    """取 message_type 对应的 AI 侧 prompt 模板；未知类型按普通弹幕渲染。"""
-    return canonical.prompt_template_for(message_type)
-
 
 class MessageBuffer:
     """弹幕聚合缓冲。

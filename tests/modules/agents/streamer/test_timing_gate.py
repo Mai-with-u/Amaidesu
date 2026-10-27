@@ -1,6 +1,6 @@
 """TimingGate 强制触发判定单元测试。
 
-TimingGate 当前职责仅为按 message_type 判定强制触发（is_forced / batch_is_forced），
+TimingGate 当前职责仅为按 message_type 判定单条消息的强制触发（is_forced），
 条数阈值与时间窗判定已归属 MessageBuffer（见 test_message_buffer.py）。
 测试使用 RoomMessagePayload 的 Literal 枚举：danmaku / gift / super_chat / guard / enter / partner_speech。
 """
@@ -55,30 +55,3 @@ def test_default_config_types_force() -> None:
     assert gate.is_forced(_msg("gift")) is True
     # "guard" 同为 Literal 合法值，且属于付费强制集合
     assert gate.is_forced(_msg("danmaku")) is False
-
-
-def test_batch_contains_forced() -> None:
-    """批内任一强制消息即整批强制。"""
-    gate = _gate(["super_chat"])
-    batch = [_msg("danmaku", message_id="m1"), _msg("super_chat", message_id="m2")]
-    assert gate.batch_is_forced(batch) is True
-
-
-def test_batch_all_non_forced() -> None:
-    """批内全部为普通弹幕则不强制。"""
-    gate = _gate(["super_chat", "gift"])
-    batch = [_msg("danmaku", message_id="m1"), _msg("enter", message_id="m2")]
-    assert gate.batch_is_forced(batch) is False
-
-
-def test_batch_empty_is_not_forced() -> None:
-    """空批不强制（any 短路语义）。"""
-    gate = _gate(["super_chat"])
-    assert gate.batch_is_forced([]) is False
-
-
-def test_batch_single_forced_type() -> None:
-    """单消息批退化为 is_forced 同一判定。"""
-    gate = _gate(["gift"])
-    assert gate.batch_is_forced([_msg("gift")]) is True
-    assert gate.batch_is_forced([_msg("danmaku")]) is False

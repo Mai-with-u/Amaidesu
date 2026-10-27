@@ -13,6 +13,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_chat import GameChatPayload
+from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from tests.agents.streamer.helpers import make_streamer_agent
 
 
@@ -50,17 +51,21 @@ async def test_game_lines_carry_event_type_and_only_report_sets_pending() -> Non
     await agent._on_game_event(CoreEvents.GAME_MILESTONE, _report("milestone", "挖到钻石了！"), "Test")
     await agent._on_game_event(CoreEvents.GAME_REPORT, _report("report", "迷宫尽头有两个门：左或右？"), "Test")
     assert agent._proactive_signals.game_pending is True
-    assert agent._timeline_notes == []  # 决策窗边界之前不进时间线
+    # 决策窗边界之前不进时间线：纯读历史里看不到事件行
+    assert "游戏·minecraft" not in "\n".join(
+        getattr(turn, "content", "") for turn in (await agent._read_history() or [])
+    )
 
-    batch = agent._drain_game_events()
-    assert [turn.message_type for turn in agent._timeline_notes] == ["game", "game"]
-    assert "游戏·minecraft·milestone" in agent._timeline_notes[0].content
-    assert "游戏·minecraft·report" in agent._timeline_notes[1].content
+    materials = await agent._scope.open_window()
+    batch = materials.game_batch
+    assert [turn.message_type for turn in materials.timeline_notes] == ["game", "game"]
+    assert "游戏·minecraft·milestone" in materials.timeline_notes[0].content
+    assert "游戏·minecraft·report" in materials.timeline_notes[1].content
     assert len(batch.events) == 2 and len(batch.fresh_chat) == 0
 
     # 已入账的条目不再出现在下一窗批次里（追加一次，不逐窗重放）
-    again = agent._drain_game_events()
-    assert again.events == () and len(agent._timeline_notes) == 2
+    again = await agent._scope.open_window()
+    assert again.game_batch.events == () and len(again.timeline_notes) == 2
 
 
 async def test_game_report_pending_is_consumed_only_while_live(live_agent) -> None:
@@ -83,7 +88,10 @@ async def test_game_report_pending_is_consumed_only_while_live(live_agent) -> No
     rounds.execute.assert_awaited_once()
     call = rounds.execute.call_args
     assert call.args[0] == []
-    assert (call.kwargs["proactive"], call.kwargs["trigger_reason"]) == (True, "proactive:game")
+    assert (
+        call.kwargs["proactive"],
+        call.kwargs["trigger_cause"].kind,
+    ) == (True, TriggerKind.GAME)
     assert agent._proactive_signals.game_pending is False
 
 
@@ -101,7 +109,7 @@ async def test_body_events_append_with_own_label_and_only_death_wakes(live_agent
     )
     await _wait_until(lambda: len(agent._game_ledger._pending) == 2)
 
-    batch = agent._drain_game_events()
+    batch = agent._scope.drain_window()
     text = "\n".join(batch.events)
     assert "遭遇·minecraft·attacked" in text and "正在被僵尸攻击（已命中 2 次）" in text
     assert "遭遇·minecraft·attack_ended" in text and "摆脱了僵尸的攻击（共命中 2 次）（已结束）" in text
@@ -110,7 +118,7 @@ async def test_body_events_append_with_own_label_and_only_death_wakes(live_agent
 
     await bus.emit(CoreEvents.GAME_BODY_DIED, _body("died", "角色倒下了：被苦力怕炸死"), source="maicraft_attention")
     await _wait_until(lambda: agent._proactive_signals.game_pending is True)
-    assert "遭遇·minecraft·died" in agent._drain_game_events().events[0]
+    assert "遭遇·minecraft·died" in agent._scope.drain_window().events[0]
 
 
 async def test_identical_lines_within_fold_window_merge_with_count(live_agent) -> None:
@@ -120,9 +128,9 @@ async def test_identical_lines_within_fold_window_merge_with_count(live_agent) -
         await bus.emit(CoreEvents.GAME_BODY_REFLEX_STARTED, _body("reflex_started", "紧急反应接管"), source="t")
     await _wait_until(lambda: len(agent._game_ledger._pending) == 1)
 
-    batch = agent._drain_game_events()
-    assert len(batch.events) == 1 and "另 2 次相同" in batch.events[0]
-    assert len(agent._timeline_notes) == 1
+    materials = await agent._scope.open_window()
+    assert len(materials.game_batch.events) == 1 and "另 2 次相同" in materials.game_batch.events[0]
+    assert len(materials.timeline_notes) == 1
 
 
 async def test_game_chat_appends_and_player_wakes_and_fresh_lines_hand_to_replyer(live_agent) -> None:
@@ -141,7 +149,7 @@ async def test_game_chat_appends_and_player_wakes_and_fresh_lines_hand_to_replye
     # 玩家是在跟游戏里的我说话：像弹幕一样值得及时接住
     assert agent._proactive_signals.game_pending is True
 
-    batch = agent._drain_game_events()
+    batch = agent._scope.drain_window()
     assert "系统消息：Alex 请求传送到你这里" in batch.events[0]
     assert "玩家 Steve：麦麦你在干嘛呀（之前还有 2 条重复或刷屏的没转过来）" in batch.events[1]
     # 聊天原话随本窗说话交给表达侧
@@ -159,9 +167,10 @@ async def test_private_game_chat_reaches_planner_batch_but_never_timeline(live_a
     await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, public, source="maicraft_chat")
     await _wait_until(lambda: agent._proactive_signals.game_pending is True)
 
-    batch = agent._drain_game_events()
+    materials = await agent._scope.open_window()
+    batch = materials.game_batch
     assert batch.private_chat == ("[minecraft] 玩家 Steve（私聊，只发给我）：悄悄跟你说个事",)
-    assert "悄悄跟你说个事" not in "\n".join(turn.content for turn in agent._timeline_notes)
+    assert "悄悄跟你说个事" not in "\n".join(turn.content for turn in materials.timeline_notes)
     assert batch.fresh_chat == (batch.events[0],)  # 私聊不算可交给表达侧的原话
     # 私聊只带一窗：下一窗不再携带
-    assert agent._drain_game_events().private_chat == ()
+    assert agent._scope.drain_window().private_chat == ()

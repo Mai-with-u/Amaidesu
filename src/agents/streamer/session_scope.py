@@ -12,7 +12,7 @@ StreamerAgent，经 :meth:`SessionScope.set_session_recap` 写入槽位。
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from src.modules.events.payloads.room import RoomMessagePayload
@@ -55,11 +55,14 @@ class WindowMaterials:
       空列表 = 真的无历史。
     - ``game_batch``：空批次 = 本窗无新游戏事件（不用 None 表达）。
     - ``session_recap``：空串 = 不注入（未启用或没有上一场）。
+    - ``timeline_notes``：本窗开窗时点的时间线 notes 累积快照（只读观察面，
+      写入仍只经本模块动词）。
     """
 
     history: Optional[List[Any]]
     game_batch: GameEventBatch
     session_recap: str
+    timeline_notes: List[TimelineTurn] = field(default_factory=list)
 
 
 def _text_field(item: Any, name: str) -> str:
@@ -92,24 +95,12 @@ class SessionScope:
         self._session_recap: str = ""
 
     # -- 状态便道 ------------------------------------------------------
-    # 活引用属性是既有测试的私有锚点（本批不改写既有测试）；新断言请穿
-    # open_window / read_history / drain_window 的返回值。
 
     @property
     def ledger(self) -> GameLedger:
         """游戏账本。入账动词（record_event/record_encounter/record_chat）归账本
         接口本身，本模块不复制；出账（drain）与清场（reset）走本模块动词。"""
         return self._ledger
-
-    @property
-    def timeline_notes(self) -> List[TimelineTurn]:
-        """时间线 notes 活引用（写入经 note_delegation / drain_window）。"""
-        return self._timeline_notes
-
-    @property
-    def unpersisted_turns(self) -> List[LiveChatTurn]:
-        """未落库对话轮活引用（写入经 remember_round）。"""
-        return self._unpersisted_turns
 
     @property
     def session_recap(self) -> str:
@@ -176,7 +167,12 @@ class SessionScope:
         """
         game_batch = self.drain_window()
         history = await self.read_history()
-        return WindowMaterials(history=history, game_batch=game_batch, session_recap=self._session_recap)
+        return WindowMaterials(
+            history=history,
+            game_batch=game_batch,
+            session_recap=self._session_recap,
+            timeline_notes=list(self._timeline_notes),
+        )
 
     async def read_history(self) -> Optional[List[Any]]:
         """读取当前对话并经时间线投影：前情提要各章 + 工作层原文，按主播看到的先后排列。

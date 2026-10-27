@@ -12,9 +12,10 @@ from unittest.mock import AsyncMock, MagicMock
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.state import MinecraftInstruction
-from src.agents.streamer.planner import Planner, PlannerEnv
+from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GameEventBatch
+from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
@@ -39,7 +40,7 @@ def _planner(responses: List[Response], invoked: List[ToolInvocation]) -> Planne
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="SYSTEM")
     return Planner(
-        config={"planner_max_steps": 2},
+        config=PlannerConfig(planner_max_steps=2),
         llm_service=llm,
         prompt_service=prompt,
         room_state=RoomState(),
@@ -65,7 +66,7 @@ async def test_rundown_window_without_new_input_does_not_relay() -> None:
     """流程单推进窗没有新输入：递话被拦下，模型收到"直接说话"的观察，游戏侧什么也收不到。"""
     invoked: List[ToolInvocation] = []
     planner = _planner([_relay("拉杆那下被顶掉了，重发一次"), Response(success=True, content="不说")], invoked)
-    await planner.plan([], proactive=True, trigger_reason="proactive:rundown")
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN))
     assert invoked == []
 
 
@@ -73,12 +74,12 @@ async def test_game_request_and_reminder_windows_still_relay() -> None:
     """游戏侧请求定夺、运营提醒到达的主动窗仍可补充要求。"""
     invoked: List[ToolInvocation] = []
     planner = _planner([_relay("换个办法：从 AE 取铁板"), Response(success=True, content="不说")], invoked)
-    await planner.plan([], proactive=True, trigger_reason="proactive:game")
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.GAME))
     assert [call.tool_name for call in invoked] == ["framework_prompt"]
 
     invoked.clear()
     planner = _planner([_relay("运营说先停一下"), Response(success=True, content="不说")], invoked)
-    await planner.plan([], proactive=True, trigger_reason="proactive:rundown", reminders="先停一下")
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN), reminders="先停一下")
     assert [call.tool_name for call in invoked] == ["framework_prompt"]
 
 
@@ -86,14 +87,14 @@ async def test_only_fresh_game_chat_counts_as_new_input() -> None:
     """冷场窗里没有本窗新入账的玩家原话时递话被拦；批次里带来聊天原话才放行。"""
     invoked: List[ToolInvocation] = []
     planner = _planner([_relay("回 Steve 一句"), Response(success=True, content="不说")], invoked)
-    await planner.plan([], proactive=True, trigger_reason="proactive:cold")
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.COLD))
     assert invoked == []
 
     planner = _planner([_relay("回 Steve 一句"), Response(success=True, content="不说")], invoked)
     await planner.plan(
         [],
         proactive=True,
-        trigger_reason="proactive:cold",
+        trigger_cause=TriggerCause(kind=TriggerKind.COLD),
         game_batch=GameEventBatch(
             events=("[20:01 minecraft] 玩家 Steve：你在干嘛",),
             fresh_chat=("[20:01 minecraft] 玩家 Steve：你在干嘛",),

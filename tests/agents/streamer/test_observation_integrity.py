@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner, PlannerEnv
+from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.planner_render import render_observation
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.payload import Reasoning, ToolCall
@@ -37,7 +37,7 @@ def _planner(result: ToolExecutionResult | None = None, *, visual: bool = False)
     llm_service = MagicMock()
     llm_service.is_profile_visual = MagicMock(return_value=visual)
     return Planner(
-        config={"planner_max_steps": 2},
+        config=PlannerConfig(planner_max_steps=2),
         llm_service=llm_service,
         prompt_service=MagicMock(),
         room_state=RoomState(),

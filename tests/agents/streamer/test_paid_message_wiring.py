@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PlannerConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -60,7 +60,7 @@ async def test_normal_danmaku_is_not_forced_nor_flushed_early() -> None:
 
 async def test_planner_reference_marks_priority_only_for_forced_batch() -> None:
     planner = Planner(
-        config={},
+        config=PlannerConfig(),
         llm_service=MagicMock(),
         prompt_service=MagicMock(),
         # 替身声明从没开过口：参考段会读上次开口时刻决定要不要写冷场行

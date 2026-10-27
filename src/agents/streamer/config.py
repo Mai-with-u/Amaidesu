@@ -239,6 +239,13 @@ class StreamerProactiveConfig(BaseConfig):
         ge=1_000,
         description="流程单环节内两次主动发言最小间隔",
     )
+    rundown_overdue_interval_ms: int = Field(
+        title="环节超时提醒冷却",
+        default=300_000,
+        ge=0,
+        description="环节停留超出预期后，超时提醒的重复间隔（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     rundown_ready_interval_ms: int = Field(
         title="环节内持续产出间隔",
         default=30_000,

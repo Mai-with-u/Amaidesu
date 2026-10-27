@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import PlannerConfig, Planner
 from src.agents.streamer.room_state import AUDIENCE_WINDOW_MS, RoomState
 from src.modules.utils.time_utils import now_ms
 from tests.agents.streamer.helpers import make_streamer_agent
@@ -51,7 +51,7 @@ async def test_planner_reference_contains_activity_section() -> None:
     state.set_audience_total(5, now_ms=0)
     state.set_audience_total(7, now_ms=120_000)
     planner = Planner(
-        config={},
+        config=PlannerConfig(),
         llm_service=MagicMock(),
         prompt_service=MagicMock(),
         room_state=state,
@@ -101,7 +101,7 @@ def test_enter_render_is_capped_to_recent_few() -> None:
 
 async def _silence_reference(state: RoomState, cold_silence_ms: int) -> str:
     planner = Planner(
-        config={"cold_silence_ms": cold_silence_ms},
+        config=PlannerConfig(cold_silence_ms=cold_silence_ms),
         llm_service=MagicMock(),
         prompt_service=MagicMock(),
         room_state=state,

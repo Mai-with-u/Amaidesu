@@ -6,14 +6,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.agents.streamer import canonical
-from src.agents.streamer.planner import Planner, PlannerEnv
+from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 
 
 def _make_planner() -> Planner:
     """构造只组装上下文的决策器，测试不访问外部模型。"""
     return Planner(
-        config={"planner_max_steps": 2},
+        config=PlannerConfig(planner_max_steps=2),
         llm_service=MagicMock(),
         prompt_service=MagicMock(),
         room_state=RoomState(),

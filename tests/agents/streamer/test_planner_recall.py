@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner, PlannerEnv
+from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.planner_render import Intent
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.payload import Response, ToolCall
@@ -33,7 +33,7 @@ def _planner(
     responses: List[Response],
     *,
     reply_ok: bool = True,
-    config: Optional[Dict[str, Any]] = None,
+    config: Optional[PlannerConfig] = None,
 ) -> Planner:
     """真注册表 + 可切换成败的 reply；上下文组装器关闭，只看情境段。"""
     registry = ToolRegistry()
@@ -56,7 +56,7 @@ def _planner(
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="SYSTEM")
     return Planner(
-        config=config or {},
+        config=config,
         llm_service=llm,
         prompt_service=prompt,
         room_state=RoomState(),
@@ -102,7 +102,7 @@ async def test_intents_keep_only_configured_count() -> None:
     """只回看配置的轮数，最早的先出列。"""
     planner = _planner(
         [_reply_call(t, "") for t in ("今天天气不错", "水车修好了", "晚饭想吃火锅")],
-        config={"planner_recent_intents_max": 2},
+        config=PlannerConfig(planner_recent_intents_max=2),
     )
     for _ in range(3):
         await planner.plan([], proactive=True)
@@ -112,7 +112,7 @@ async def test_intents_keep_only_configured_count() -> None:
 
 @pytest.mark.parametrize(
     ("reply_ok", "config"),
-    [(False, {"planner_max_steps": 1}), (True, {"planner_recent_intents_max": 0})],
+    [(False, PlannerConfig(planner_max_steps=1)), (True, PlannerConfig(planner_recent_intents_max=0))],
     ids=["reply_failed", "section_disabled"],
 )
 async def test_intent_section_absent(reply_ok: bool, config: dict) -> None:
@@ -129,7 +129,7 @@ async def test_unread_summary_consumed_once() -> None:
     """
     room_state = RoomState()
     room_state.set_topic_summary("观众向主播问好并表达惊喜")
-    planner = Planner({}, MagicMock(), MagicMock(), room_state, context_enabled=True)
+    planner = Planner(PlannerConfig(), MagicMock(), MagicMock(), room_state, context_enabled=True)
 
     first, _ = await planner._assemble_reference([], None, None, False, False, "")
     second, _ = await planner._assemble_reference([], None, None, False, False, "")
@@ -148,7 +148,7 @@ _DELEGATED = ToolExecutionResult(
 def _relay_planner(result: ToolExecutionResult) -> tuple[Planner, MagicMock]:
     registry = MagicMock()
     registry.invoke = AsyncMock(return_value=result)
-    return Planner({}, MagicMock(), MagicMock(), RoomState(), tool_registry=registry, context_enabled=False), registry
+    return Planner(PlannerConfig(), MagicMock(), MagicMock(), RoomState(), tool_registry=registry, context_enabled=False), registry
 
 
 async def test_game_report_supersedes_inflight_intents() -> None:

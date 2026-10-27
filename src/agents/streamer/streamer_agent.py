@@ -69,7 +69,7 @@ from .memory import (
 )
 from .message_buffer import MessageBuffer
 from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
-from .planner import Planner, PlannerEnv
+from .planner import Planner, PlannerConfig, PlannerEnv
 from .proactive_trigger import ProactiveTrigger
 from .proactive_signals import ProactiveSignals
 from .replyer import Replyer
@@ -79,9 +79,10 @@ from .speech_dispatcher import SpeechDispatcher
 from .speech_guard import WordFilter
 from .game_ledger import GameLedger
 from .stats import StreamerStats
-from .timeline import GameEventBatch, StreamerTimeline, TimelineTurn
+from .timeline import StreamerTimeline
 from .timing_gate import TimingGate
 from .topic_gate import SpeechGate
+from .trigger_cause import TriggerCause, TriggerKind, TriggerSource, cause_for_batch_flush
 from .tools.reply_tool import ReplyToolProvider
 from .command.router import CommandRouter
 from .config import StreamerConfig
@@ -294,15 +295,14 @@ class StreamerAgent(BaseAgent):
         # context 组装器路径开关——直接读包内权威
         _context_enabled = config.context.enabled
         self._planner = Planner(
-            config={
-                "profile": _PROFILE_PLANNER,
-                "planner_max_steps": config.planner_max_steps,
-                "planner_recent_intents_max": config.planner_recent_intents_max,
-                "planner_recent_relays_max": config.planner_recent_relays_max,
-                "reference_tools": list(config.reference_tools),
+            config=PlannerConfig(
+                planner_max_steps=config.planner_max_steps,
+                planner_recent_intents_max=config.planner_recent_intents_max,
+                planner_recent_relays_max=config.planner_recent_relays_max,
+                reference_tools=list(config.reference_tools),
                 # 冷场提示复用主动发言的冷场阈值：同一个"多久算冷"只配一处
-                "cold_silence_ms": config.proactive.cold_timeout_ms,
-            },
+                cold_silence_ms=config.proactive.cold_timeout_ms,
+            ),
             llm_service=llm_manager,
             prompt_service=prompt_manager,
             room_state=self._room_state,
@@ -353,31 +353,11 @@ class StreamerAgent(BaseAgent):
         )
 
         # 主动发言触发器（纯规则组件，Agent 内部件）
-        proactive = config.proactive
-        proactive_config = {
-            "enabled": proactive.enabled,
-            "cold_timeout_ms": proactive.cold_timeout_ms,
-            "min_interval_ms": proactive.min_interval_ms,
-            "schedule_interval_ms": proactive.schedule_interval_ms,
-            "schedule_only_cold": proactive.schedule_only_cold,
-            "max_per_hour": proactive.max_per_hour,
-            "topic_required": proactive.topic_required,
-            "rundown_speech_interval_ms": proactive.rundown_speech_interval_ms,
-            "rundown_ready_interval_ms": proactive.rundown_ready_interval_ms,
-        }
-        self._proactive_trigger = ProactiveTrigger(proactive_config)
+        self._proactive_trigger = ProactiveTrigger(config.proactive)
 
         # 后台维护器（双任务：轻循环 + 压缩 worker）——读包内权威配置
-        bg = config.background
-        background_config = {
-            "enabled": bg.enabled,
-            "light_tick_ms": bg.light_tick_ms,
-            "summary_interval_ms": bg.summary_interval_ms,
-            "compressor_concurrency": bg.compressor.concurrency,
-            "compressor_queue_max": bg.compressor.queue_max,
-        }
         self._background = BackgroundMaintainer(
-            background_config,
+            config.background,
             room_state=self._room_state,
             llm_service=llm_manager,
             sessions_repo=sessions_repo,  # live_sessions 实时状态落库（按 session_manager 解析的当前场次）
@@ -857,7 +837,12 @@ class StreamerAgent(BaseAgent):
         # 且保证道别决策窗赶在事件面仍在、发言管线未停的窗口内完整走完
         # （说完再见再做收播整理与记忆清理）。
         if self._running:
-            await self._execute_round([], forced=True, trigger_reason="proactive:signoff", proactive=True)
+            await self._execute_round(
+                [],
+                forced=True,
+                trigger_cause=TriggerCause(kind=TriggerKind.SIGNOFF, source=TriggerSource.LIVE_END),
+                proactive=True,
+            )
         # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
         # （道别发言不属已结账的场次，留在内存对话里供下播后的调试闲聊接续）
         await self._scope.end_session()
@@ -965,28 +950,10 @@ class StreamerAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏事件失败: {exc}", exc=True)
 
-    def _drain_game_events(self) -> GameEventBatch:
-        """决策窗边界出账（兼容转发，既有测试锚点；本体见 ``SessionScope.drain_window``）。"""
-        return self._scope.drain_window()
-
     @property
     def _game_ledger(self) -> GameLedger:
-        """游戏账本入账面（兼容转发，既有测试锚点；持有者见 ``SessionScope.ledger``）。"""
+        """游戏账本入账面（game.* 回调写入口；持有者见 ``SessionScope.ledger``）。"""
         return self._scope.ledger
-
-    @property
-    def _timeline_notes(self) -> List[TimelineTurn]:
-        """时间线 notes 活引用（兼容转发，既有测试锚点；写入经 SessionScope）。"""
-        return self._scope.timeline_notes
-
-    @property
-    def _unpersisted_turns(self) -> List[Any]:
-        """未落库对话轮活引用（兼容转发，既有测试锚点；写入经 SessionScope）。"""
-        return self._scope.unpersisted_turns
-
-    def _current_game_batch(self) -> GameEventBatch:
-        """本窗游戏事件批次（兼容转发，既有测试锚点）。"""
-        return self._scope.current_window_batch()
 
     def _record_delegation(self, agent: str, instruction: str) -> None:
         """Planner 受理委派后回调：把"我在哪个游戏里开始做什么"按此刻进时间线。
@@ -1248,14 +1215,14 @@ class StreamerAgent(BaseAgent):
             )
 
         started_ms = now_ms()
-        trigger_reason = "proactive:dashboard_debug" if proactive else "dashboard:debug_test"
+        trigger_cause = TriggerCause(kind=TriggerKind.DASHBOARD_DEBUG, source=TriggerSource.DASHBOARD)
         try:
             async with self._flush_lock:
                 # 调试注入不经 room.message 事件，观众这句不会落库；记入内存后下一轮仍能接上话
                 result = await self._execute_round(
                     messages,
                     forced=forced,
-                    trigger_reason=trigger_reason,
+                    trigger_cause=trigger_cause,
                     proactive=proactive,
                     batch_persisted=False,
                 )
@@ -1318,11 +1285,11 @@ class StreamerAgent(BaseAgent):
                 )
                 if reason is not None:
                     self._stats.total_proactive += 1
-                    self._logger.info(f"主动发言触发: {reason}")
+                    self._logger.info(f"主动发言触发: {reason.value}")
                     await self._execute_round(
                         [],
                         forced=False,
-                        trigger_reason=f"proactive:{reason}",
+                        trigger_cause=TriggerCause(kind=reason),
                         proactive=True,
                     )
                 return
@@ -1340,14 +1307,14 @@ class StreamerAgent(BaseAgent):
                 return
             self._stats.total_batches += 1
 
-            await self._execute_round(batch, forced=forced, trigger_reason=flush_reason)
+            await self._execute_round(batch, forced=forced, trigger_cause=cause_for_batch_flush(flush_reason))
 
     async def _execute_round(
         self,
         batch: List[RoomMessagePayload],
         *,
         forced: bool,
-        trigger_reason: str,
+        trigger_cause: TriggerCause,
         proactive: bool = False,
         batch_persisted: bool = True,
     ) -> Dict[str, Any]:
@@ -1356,7 +1323,7 @@ class StreamerAgent(BaseAgent):
         ``batch_persisted`` 表示本批消息是否经 room.message 事件进了落库链路；
         调试注入传 False——即使开着场次，这些消息也不在 live_chat 里。
         """
-        result = await self._rounds.execute(batch, forced=forced, trigger_reason=trigger_reason, proactive=proactive)
+        result = await self._rounds.execute(batch, forced=forced, trigger_cause=trigger_cause, proactive=proactive)
         await self._scope.remember_round(batch, speech=result.get("speech"), batch_persisted=batch_persisted)
         return result
 

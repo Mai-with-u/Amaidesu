@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.game_ledger import GameLedger
-from src.agents.streamer.planner import Planner, PlannerEnv
+from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.session_scope import SessionScope
 from src.agents.streamer.streamer_agent import StreamerAgent
@@ -64,7 +64,7 @@ async def test_reference_overview_sanitized() -> None:
     registry.list_tools = MagicMock(return_value=[])
     registry.invoke = AsyncMock(side_effect=_invoke)
     planner = Planner(
-        config={"planner_max_steps": 1, "reference_tools": ["minecraft_glance"]},
+        config=PlannerConfig(planner_max_steps=1, reference_tools=["minecraft_glance"]),
         llm_service=MagicMock(),
         prompt_service=MagicMock(),
         room_state=RoomState(),
@@ -91,7 +91,7 @@ async def test_delegation_render_without_task_id() -> None:
         )
 
     registry.invoke = AsyncMock(side_effect=_invoke)
-    planner = Planner({}, MagicMock(), MagicMock(), RoomState(), tool_registry=registry, context_enabled=False)
+    planner = Planner(PlannerConfig(), MagicMock(), MagicMock(), RoomState(), tool_registry=registry, context_enabled=False)
 
     await planner.workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "挖 deleg_9 石料"})
     text, _ = await planner._assemble_reference([], None, None, False, False, "")

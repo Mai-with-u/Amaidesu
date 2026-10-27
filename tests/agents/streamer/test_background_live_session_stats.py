@@ -14,6 +14,7 @@ import pytest
 
 from src.agents.streamer.background import BackgroundMaintainer
 from src.agents.streamer.room_state import RoomState
+from src.agents.streamer.config import StreamerBackgroundConfig
 
 
 class _FakeSessionManager:
@@ -37,7 +38,7 @@ def _make_maintainer(
     if audience_total:
         room_state.set_audience_total(audience_total, now_ms=1_000)
     return BackgroundMaintainer(
-        {},
+        StreamerBackgroundConfig(),
         room_state=room_state,
         sessions_repo=repo,
         session_manager=session_manager,

@@ -7,7 +7,7 @@ from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.streamer import canonical
-from src.agents.streamer.planner import Planner, PlannerEnv
+from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
@@ -53,7 +53,7 @@ def _make_planner() -> tuple[Planner, MagicMock, List[List[dict]]]:
     registry.list_tools = MagicMock(return_value=[])
 
     planner = Planner(
-        config={"planner_max_steps": 2},
+        config=PlannerConfig(planner_max_steps=2),
         llm_service=llm,
         prompt_service=prompt,
         room_state=RoomState(),
@@ -132,7 +132,7 @@ async def test_react_messages_appended_after_reference() -> None:
         return_value=ToolExecutionResult(tool_name="x_tool", success=True, structured_content={"ok": True})
     )
     planner = Planner(
-        config={"planner_max_steps": 3},
+        config=PlannerConfig(planner_max_steps=3),
         llm_service=llm,
         prompt_service=prompt,
         room_state=RoomState(),

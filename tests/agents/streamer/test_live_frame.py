@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner, PlannerEnv
+from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.payload import ToolCall
 from src.modules.vision.image_store import LatestFrame, VisionImageStore, set_image_store
@@ -50,7 +50,7 @@ class _Harness:
         registry = MagicMock()
         registry.list_tools = MagicMock(return_value=[])
         self.planner = Planner(
-            config={"planner_max_steps": 3},
+            config=PlannerConfig(planner_max_steps=3),
             llm_service=llm,
             prompt_service=MagicMock(),
             room_state=RoomState(),

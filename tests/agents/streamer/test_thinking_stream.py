@@ -6,7 +6,7 @@ from typing import Any, Dict, List, cast
 from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.streamer.plan import ReplyRoundAttachment
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import PlannerConfig, Planner
 from src.agents.streamer.replyer import Replyer
 from src.agents.streamer.thinking_stream import ThinkingStreamContext
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider
@@ -61,7 +61,7 @@ def _make_planner() -> tuple[Planner, Dict[str, Any]]:
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="PROMPT")
     planner = Planner(
-        config={"planner_max_steps": 3},
+        config=PlannerConfig(planner_max_steps=3),
         llm_service=llm,
         prompt_service=prompt,
         # 替身声明从没开过口：参考段会读上次开口时刻决定要不要写冷场行

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 from src.agents.streamer.background import BackgroundMaintainer
 from src.agents.streamer.room_state import RoomState
 from src.modules.storage.database import SQLiteDatabase
+from src.agents.streamer.config import StreamerBackgroundConfig
 
 
 class _FakeSessionManager:
@@ -113,7 +114,7 @@ def _maintainer(store: SQLiteDatabase, session_manager: Any = None) -> Backgroun
     prompt_manager = MagicMock()
     prompt_manager.render = MagicMock(return_value="PROMPT")
     return BackgroundMaintainer(
-        {},
+        StreamerBackgroundConfig(),
         room_state=RoomState(),
         sessions_repo=store.sessions,
         session_manager=session_manager,

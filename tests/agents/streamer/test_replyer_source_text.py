@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer import canonical
-from src.agents.streamer.planner import RoundOutcome
+from src.agents.streamer.planner import PlannerConfig, RoundOutcome
 from src.agents.streamer.decision_executor import DecisionRoundExecutor
 from src.agents.streamer.session_scope import WindowMaterials
 from src.agents.streamer.timeline import GameEventBatch
@@ -19,6 +19,7 @@ from src.agents.streamer.replyer import Replyer
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.stats import StreamerStats
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider
+from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
 
@@ -144,7 +145,7 @@ async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="SYSTEM")
     planner = Planner(
-        config={"planner_max_steps": 2},
+        config=PlannerConfig(planner_max_steps=2),
         llm_service=llm,
         prompt_service=prompt,
         room_state=RoomState(),
@@ -193,7 +194,7 @@ async def test_executor_splits_game_chat_view() -> None:
         rundown_text_provider=MagicMock(return_value=None),
     )
 
-    await executor.execute([], forced=False, trigger_reason="proactive:game", proactive=True)
+    await executor.execute([], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.GAME), proactive=True)
 
     kwargs = planner.plan.await_args.kwargs
     assert kwargs["game_batch"].events == ("[20:01 minecraft] 玩家 Steve：在吗",)

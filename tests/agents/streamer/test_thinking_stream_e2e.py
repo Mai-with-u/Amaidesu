@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.modules.llm.payload import Response
+from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from tests.agents.streamer.helpers import make_streamer_agent
 
 
@@ -29,7 +30,12 @@ async def _decide(sink: Optional[_RecordingSink], enabled: bool) -> dict:
     llm.generate = AsyncMock(side_effect=_generate)
     agent = make_streamer_agent({"thinking_stream": {"enabled": enabled}}, llm=llm, thinking_sink=sink)
     result, _outcome = await agent._rounds._decide_round(
-        [], round_id="round_e2e", started_ms=0, forced=False, trigger_reason="test", proactive=False
+        [],
+        round_id="round_e2e",
+        started_ms=0,
+        forced=False,
+        trigger_cause=TriggerCause(kind=TriggerKind.BATCH_FULL),
+        proactive=False,
     )
     return result
 

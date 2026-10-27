@@ -7,6 +7,7 @@ import pytest
 from src.agents.streamer.background import BackgroundMaintainer
 from src.agents.streamer.room_state import RoomState
 from src.modules.storage.database import SQLiteDatabase
+from src.agents.streamer.config import StreamerBackgroundConfig
 from tests.agents.streamer.helpers import stub_prompt
 
 
@@ -19,7 +20,7 @@ async def test_persist_appends_timeline_and_refreshes_topic_snapshot(store: SQLi
     room_state = RoomState()
     room_state.set_topic_summary("占位", now_ms=1)
     maintainer = BackgroundMaintainer(
-        {"summary_interval_ms": 60_000},
+        StreamerBackgroundConfig(summary_interval_ms=60_000),
         room_state=room_state,
         sessions_repo=store.sessions,
         chat_repo=store.chat,
@@ -42,5 +43,5 @@ async def test_persist_appends_timeline_and_refreshes_topic_snapshot(store: SQLi
 
 
 async def test_persist_skipped_without_topic_repo() -> None:
-    maintainer = BackgroundMaintainer({}, room_state=RoomState(), topic_repo=None, prompt_manager=stub_prompt())
+    maintainer = BackgroundMaintainer(StreamerBackgroundConfig(), room_state=RoomState(), topic_repo=None, prompt_manager=stub_prompt())
     await maintainer._persist_topic_snapshot("摘要", now_ms=1_000, previous_summary_ms=0)

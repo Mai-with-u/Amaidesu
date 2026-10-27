@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.memory import RegularsRosterWriter, SessionRecapWriter
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import PlannerConfig, Planner
 from src.agents.streamer.room_state import RoomState
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -140,9 +140,7 @@ async def test_payment_flow_and_platform_isolation(stack) -> None:
     assert len(guard_chat) == 1
 
     # 平台身份隔离：同 user_id 的 B 站行与 console 行各一行
-    viewers = await store.execute(
-        "SELECT * FROM viewers WHERE account_id='u_bili' ORDER BY platform"
-    )
+    viewers = await store.execute("SELECT * FROM viewers WHERE account_id='u_bili' ORDER BY platform")
     assert len(viewers) == 2
     by_platform = {row["platform"]: row for row in viewers}
     bili = by_platform["bilibili"]
@@ -161,9 +159,7 @@ async def test_payment_flow_and_platform_isolation(stack) -> None:
     assert int(console["message_count"]) == 1
 
     # 平台内付费聚合可直接 SUM（同单位）
-    total = await store.execute(
-        "SELECT SUM(total_price) AS s FROM super_chats WHERE currency='bilibili_gold_coin'"
-    )
+    total = await store.execute("SELECT SUM(total_price) AS s FROM super_chats WHERE currency='bilibili_gold_coin'")
     assert int(total[0]["s"]) == 50_000
 
 
@@ -232,7 +228,7 @@ async def test_session_settle_to_roster_and_recap_to_planner(stack) -> None:
 
     # 下一场：Planner 参考段同时带上场回顾与老王的印象（昵称经 viewers 实时取）
     planner = Planner(
-        config={},
+        config=PlannerConfig(),
         llm_service=_make_llm('{"speech": "ok"}'),
         prompt_service=prompt_manager,
         room_state=RoomState(),
@@ -261,4 +257,3 @@ def _make_llm(response_text: str) -> object:
     response.content = response_text
     llm.generate = AsyncMock(return_value=response)
     return llm
-

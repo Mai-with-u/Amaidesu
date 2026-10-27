@@ -20,6 +20,7 @@ from src.agents.streamer.speech_dispatcher import SpeechDispatcher
 from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.stats import StreamerStats
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider
+from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
@@ -362,7 +363,9 @@ async def test_speech_event_precedes_round_end_events() -> None:
     bus.on(CoreEvents.PLANNER_DECISION, _record("decision"), model_class=PlannerDecisionPayload)
 
     batch = [MagicMock(message_id="m1", content="主播好", user=MagicMock(id="u1", name="观众"))]
-    assert (await executor.execute(batch, forced=False, trigger_reason="batch:flush"))["speech"] == "你好呀"
+    assert (await executor.execute(batch, forced=False, trigger_cause=TriggerCause(kind=TriggerKind.BATCH_FULL)))[
+        "speech"
+    ] == "你好呀"
     await _until(lambda: len(order) >= 4)
     assert order == ["stage", "speech", "decision", "stage"]
 
@@ -383,7 +386,7 @@ async def test_agent_decision_round_completes_with_tts_disabled() -> None:
     replyer.generate = AsyncMock(return_value=reply)
     agent._reply_provider = ReplyToolProvider(replyer=replyer, history_provider=None)
 
-    await agent._rounds.execute(batch=[], forced=False, trigger_reason="test")
+    await agent._rounds.execute(batch=[], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.BATCH_FULL))
     assert agent.get_statistics()["total_replies"] == 1
     assert agent._speech.utterance_queue is None
 

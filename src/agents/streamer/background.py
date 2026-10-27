@@ -36,6 +36,7 @@ from src.modules.prompts import PromptManager
 from src.modules.utils.time_utils import now_ms as _real_now_ms
 
 from .canonical import canonical_content
+from .config import StreamerBackgroundConfig
 from .room_state import RoomState
 
 __all__ = ["BackgroundMaintainer"]
@@ -45,30 +46,15 @@ __all__ = ["BackgroundMaintainer"]
 # 默认配置
 # ---------------------------------------------------------------------------
 
-_DEFAULT_LIGHT_TICK_MS = 5_000
-_DEFAULT_SUMMARY_INTERVAL_MS = 60_000
 # 摘要 LLM 绑定：由代码显式声明（配置不承载绑定；封闭 profile 六成员之一，
 # 与 Planner / Replyer 隔离，对应 model.toml [llm_profiles.summary]）
 SUMMARY_PROFILE = "summary"
-# 压缩队列上限（与 StreamerCompressorConfig.queue_max 默认对齐）
-_DEFAULT_COMPRESSOR_QUEUE_MAX = 100
-# 压缩 worker 并发（与 StreamerCompressorConfig.concurrency 默认对齐）
-_DEFAULT_COMPRESSOR_CONCURRENCY = 1
 
 # 摘要系统提示词模板键（正文见 src/agents/streamer/prompts/summary_system.md，
 # 由包内 prompts/ 目录内聚承载）
 _SUMMARY_SYSTEM_TEMPLATE = "summary_system"
 # 话题摘要句长度上限（字符）：一句话总结，超出按截断处理
 _SUMMARY_MAX_CHARS = 80
-
-
-def _cfg(config: Any, key: str, default: Any) -> Any:
-    """从配置对象读取字段值（dict 用 .get，其他对象用 getattr 兜底）。"""
-    if config is None:
-        return default
-    if isinstance(config, dict):
-        return config.get(key, default)
-    return getattr(config, key, default)
 
 
 class BackgroundMaintainer:
@@ -84,7 +70,7 @@ class BackgroundMaintainer:
 
     def __init__(
         self,
-        config: Any,
+        config: StreamerBackgroundConfig,
         *,
         room_state: RoomState,
         llm_service: Optional[Any] = None,
@@ -98,12 +84,8 @@ class BackgroundMaintainer:
         """初始化。
 
         Args:
-            config: 配置字典或对象；读取
-                - ``enabled``（默认 True）
-                - ``light_tick_ms``（默认 5000）
-                - ``summary_interval_ms``（默认 60000）
-                - ``compressor_concurrency``（默认 1）
-                - ``compressor_queue_max``（默认 100）
+            config: background 子配置（``StreamerBackgroundConfig``；字段默认值
+                即"未配置降级"，在 Schema 一处表达）
             room_state: ``RoomState`` 实例（轻循环读取快照）
             llm_service: LLM 管理器（可选；压缩 worker 调用）
             sessions_repo: ``SessionRepo``（轻循环写场次实时状态）
@@ -120,7 +102,6 @@ class BackgroundMaintainer:
             prompt_manager: ``PromptManager`` 实例（必填；摘要系统提示词经其渲染）。
                 由 StreamerAgent 构造透传，调用方负责装配其扫描根与模板。
         """
-        self._config = config
         self._room_state = room_state
         self._llm_service = llm_service
         self._sessions_repo = sessions_repo
@@ -135,17 +116,15 @@ class BackgroundMaintainer:
         self._summary_system_prompt: Optional[str] = None
         self._logger = get_logger("BackgroundMaintainer")
 
-        self._enabled: bool = bool(_cfg(config, "enabled", True))
-        self._light_tick_ms: int = _cfg(config, "light_tick_ms", _DEFAULT_LIGHT_TICK_MS)
-        self._summary_interval_ms: int = _cfg(config, "summary_interval_ms", _DEFAULT_SUMMARY_INTERVAL_MS)
+        self._enabled: bool = config.enabled
+        self._light_tick_ms: int = config.light_tick_ms
+        self._summary_interval_ms: int = config.summary_interval_ms
 
         self._light_task: Optional[asyncio.Task] = None
         self._compress_task: Optional[asyncio.Task] = None
         self._running = False
         self._last_summary_ms: int = 0
-        self._compress_queue: asyncio.Queue = asyncio.Queue(
-            maxsize=_cfg(config, "compressor_queue_max", _DEFAULT_COMPRESSOR_QUEUE_MAX)
-        )
+        self._compress_queue: asyncio.Queue = asyncio.Queue(maxsize=config.compressor.queue_max)
 
     # ------------------------------------------------------------------
     # 生命周期

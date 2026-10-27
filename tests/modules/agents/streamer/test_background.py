@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.background import BackgroundMaintainer
+from src.agents.streamer.config import StreamerBackgroundConfig
 
 
 def _make_maintainer(*, llm_response: str = "", llm_success: bool = True) -> tuple[BackgroundMaintainer, MagicMock]:
@@ -56,7 +57,7 @@ def _make_maintainer(*, llm_response: str = "", llm_success: bool = True) -> tup
     )
 
     maintainer = BackgroundMaintainer(
-        config={"summary_interval_ms": 1000},
+        config=StreamerBackgroundConfig(summary_interval_ms=1000),
         room_state=room_state,
         llm_service=llm,
         chat_repo=chat_repo,

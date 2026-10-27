@@ -11,12 +11,13 @@ from dataclasses import replace
 from src.agents.streamer.decision_executor import (
     DecisionRoundExecutor,
     _silent_reason_text,
-    _trigger_reason_text,
+    trigger_cause_text,
 )
 from src.agents.streamer.planner import RoundOutcome
 from src.agents.streamer.session_scope import WindowMaterials
 from src.agents.streamer.stats import StreamerStats
 from src.agents.streamer.timeline import GameEventBatch
+from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from src.modules.events.names import CoreEvents
 
 _OKAY_OUTCOME = RoundOutcome(
@@ -107,7 +108,7 @@ async def test_window_opener_runs_once_per_round():
         rundown_text_provider=MagicMock(return_value=None),
     )
 
-    await executor.execute([], forced=False, trigger_reason="batch:flush")
+    await executor.execute([], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.BATCH_FULL))
 
     window_opener.assert_awaited_once()
 
@@ -119,7 +120,7 @@ async def test_execute_full_round_emits_stage_and_decision():
     executor, deps = _make_executor(_OKAY_OUTCOME)
     batch = [MagicMock(message_id="m1", content="主播好", user=MagicMock(id="u1", name="观众"))]
 
-    result = await executor.execute(batch, forced=False, trigger_reason="batch:flush")
+    result = await executor.execute(batch, forced=False, trigger_cause=TriggerCause(kind=TriggerKind.BATCH_FULL))
 
     # 结果视图键完整（外部契约）
     assert set(result.keys()) == {
@@ -165,11 +166,11 @@ async def test_execute_proactive_records_trigger_with_reason_body():
     outcome = replace(_OKAY_OUTCOME, reply_payload={"speech": "大家好", "emotion": "", "actions": []})
     executor, deps = _make_executor(outcome)
 
-    await executor.execute([], forced=False, trigger_reason="proactive:cold_start", proactive=True)
+    await executor.execute([], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.COLD), proactive=True)
 
     deps["proactive_trigger"].record_trigger.assert_called_once()
-    reason = deps["proactive_trigger"].record_trigger.call_args.args[0]
-    assert reason == "cold_start"
+    kind = deps["proactive_trigger"].record_trigger.call_args.args[0]
+    assert kind is TriggerKind.COLD
     assert deps["stats"].total_proactive == 0  # total_proactive 由调度半记，执行半不碰
 
 
@@ -179,7 +180,7 @@ async def test_execute_proactive_records_trigger_with_reason_body():
 async def test_planner_exception_short_circuits_with_error_prefix():
     executor, deps = _make_executor(None, planner_error=True)
 
-    result = await executor.execute([], forced=False, trigger_reason="batch:flush")
+    result = await executor.execute([], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.BATCH_FULL))
 
     assert result["error"].startswith("planner_failed:")
     assert result["plan"] is None and result["speech"] is None
@@ -206,7 +207,7 @@ async def test_planner_exception_short_circuits_with_error_prefix():
 )
 async def test_no_reply_outcomes_count_no_action(outcome, error, planner_failures, replyer_failures):
     executor, deps = _make_executor(outcome)
-    result = await executor.execute([], forced=False, trigger_reason="batch:flush")
+    result = await executor.execute([], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.BATCH_FULL))
 
     assert result["plan"]["should_reply"] is False and result["error"] == error
     assert result["silent_reason"] == outcome.silent_reason
@@ -223,22 +224,20 @@ async def test_no_reply_outcomes_count_no_action(outcome, error, planner_failure
 
 
 @pytest.mark.parametrize(
-    ("reason", "expected"),
+    ("cause", "proactive", "expected"),
     [
-        ("forced", "付费触发（SC / 礼物 / 上舰）"),
-        ("batch_full", "弹幕攒满一批"),
-        ("window_expired", "聚合窗口到期"),
-        ("idle_compensation", "冷场补足一批"),
-        ("proactive:cold", "冷场主动开麦"),
-        ("proactive:rundown", "流程单推进"),
-        ("proactive:dashboard_debug", "控制台手动触发"),
-        ("dashboard:debug_test", "控制台决策测试"),
-        ("mystery_reason", "mystery_reason"),
-        ("", ""),
+        (TriggerCause(kind=TriggerKind.FORCED), False, "付费触发（SC / 礼物 / 上舰）"),
+        (TriggerCause(kind=TriggerKind.BATCH_FULL), False, "弹幕攒满一批"),
+        (TriggerCause(kind=TriggerKind.WINDOW_EXPIRED), False, "聚合窗口到期"),
+        (TriggerCause(kind=TriggerKind.IDLE_COMPENSATION), False, "冷场补足一批"),
+        (TriggerCause(kind=TriggerKind.COLD), True, "冷场主动开麦"),
+        (TriggerCause(kind=TriggerKind.RUNDOWN), True, "流程单推进"),
+        (TriggerCause(kind=TriggerKind.DASHBOARD_DEBUG), True, "控制台手动触发"),
+        (TriggerCause(kind=TriggerKind.DASHBOARD_DEBUG), False, "控制台决策测试"),
     ],
 )
-def test_trigger_reason_text_maps_known_codes(reason: str, expected: str):
-    assert _trigger_reason_text(reason) == expected
+def test_trigger_cause_text_maps_known_kinds(cause: TriggerCause, proactive: bool, expected: str):
+    assert trigger_cause_text(cause, proactive=proactive) == expected
 
 
 def test_silent_reason_text_maps_known_codes():
@@ -249,7 +248,7 @@ def test_silent_reason_text_maps_known_codes():
 async def test_execute_emits_human_readable_stage_detail():
     executor, deps = _make_executor(_OKAY_OUTCOME)
 
-    await executor.execute([], forced=False, trigger_reason="window_expired")
+    await executor.execute([], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.WINDOW_EXPIRED))
 
     stage_details = [p.detail for name, p, _ in deps["emissions"] if name == CoreEvents.STREAMER_STAGE]
     assert stage_details == ["聚合窗口到期", "决策轮结束：发言已出"]

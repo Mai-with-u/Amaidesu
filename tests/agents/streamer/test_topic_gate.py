@@ -249,7 +249,7 @@ class _RepeatReplyer:
 
 
 def _planner_with_real_provider(provider: ReplyToolProvider, responses: List[Any]) -> tuple[Any, AsyncMock]:
-    from src.agents.streamer.planner import Planner, PlannerEnv
+    from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
     from src.agents.streamer.room_state import RoomState
     from src.modules.tools.provider import make_provider_from_specs
     from src.modules.tools.registry import ToolRegistry
@@ -264,7 +264,7 @@ def _planner_with_real_provider(provider: ReplyToolProvider, responses: List[Any
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="SYSTEM")
     planner = Planner(
-        config={},
+        config=PlannerConfig(),
         llm_service=llm,
         prompt_service=prompt,
         room_state=RoomState(),
