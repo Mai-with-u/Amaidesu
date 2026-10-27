@@ -257,6 +257,7 @@ async def test_silent_tool_returns_unknown_outcome_without_replay(loguru_capture
     client._client, client._connected = endpoint, True
     provider = McpToolProvider(client=client, server_name="reference")
     provider._specs = [ToolSpec(name="operate", description="", provider="reference")]
+    provider.mark_connected()  # 连接态语义：登记的 specs 只有在已连接态才对外可见
     registry = ToolRegistry()
     registry.register_provider(provider)
 
@@ -331,6 +332,7 @@ async def test_business_error_keeps_connection_and_transport_error_marks_disconn
         server_name="maicraft",
     )
     provider._specs = [ToolSpec(name="speak", description="", provider="maicraft")]
+    provider.mark_connected()
     result = await provider.invoke(ToolInvocation(tool_name="maicraft_speak", arguments={}))
     assert isinstance(result, ToolExecutionResult) and result.success is False  # 永不外抛，错误文本透传
     assert "MCP 业务错误" in result.error_message and "invalid_arguments" in result.error_message

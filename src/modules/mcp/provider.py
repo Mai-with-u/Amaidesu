@@ -27,13 +27,13 @@ from src.modules.mcp import mapper
 from src.modules.mcp.requests import McpRequestTimeout
 from src.modules.mcp.client import McpClient
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
-from src.modules.tools.provider import MCP_CATEGORY, BaseToolProvider
+from src.modules.tools.provider import MCP_CATEGORY, ConnectionToolProvider
 from src.modules.utils.backoff import ExponentialBackoff
 
 logger = get_logger("McpToolProvider")
 
 
-class McpToolProvider(BaseToolProvider):
+class McpToolProvider(ConnectionToolProvider):
     """MCP server 工具 Provider（缓存 specs + invoke 转发）。
 
     Attributes:
@@ -50,9 +50,10 @@ class McpToolProvider(BaseToolProvider):
             提供后 ``read_attention`` 按游标增量读一页事件
         attention_read_arguments: 可选——读取该工具所需的固定入参
             （绑定处声明，本类只补游标与页大小）
-        on_tools_refreshed: 可选——工具清单（重）同步成功后的回调
-            ``(count) -> None``（构造后由绑定处赋值）；初次装配 / 降级恢复 /
-            手动重连三条路径统一经它触发适配器（重）绑定
+        on_connection_changed: 连接态变化回调槽（继承 ``ConnectionToolProvider``）——
+            工具清单（重）同步成功即 ``mark_connected`` 触发 ``(True)``，断开 /
+            清单拉空触发 ``(False)``；初次装配 / 降级恢复 / 手动重连三条路径
+            统一经它通知绑定处（重）绑定
         switch_config: 可选——提供者开关的配置地址
             （``{"file": "agents.toml", "key": "agents.minecraft.mcp.enabled"}``，
             构造后由绑定处赋值）；Agent 私有 MCP 的开关不在 tools.toml，
@@ -95,10 +96,8 @@ class McpToolProvider(BaseToolProvider):
         self._notification_callbacks: List[Any] = []
         self._notification_unsubscribe: Optional[Any] = None
         self._specs: List[ToolSpec] = []
-        self._synced = False
-        # 与 task_query_tool 同一约定：绑定处要等 setup() 拉到清单（或决定降级
-        # 重试）后才能赋值，只能在构造之后声明，故为公开属性
-        self.on_tools_refreshed: Optional[Callable[[int], None]] = None
+        # switch_config 与回调槽同一约定：绑定处要等 setup() 拉到清单（或决定
+        # 降级重试）后才能赋值，只能在构造之后声明，故为公开属性
         self.switch_config: Optional[Dict[str, str]] = None
         # 降级恢复循环（start_recovery 启动；拉到工具即止，close 时取消）
         self._recover_task: Optional[asyncio.Task[None]] = None
@@ -113,8 +112,8 @@ class McpToolProvider(BaseToolProvider):
 
         Returns:
             缓存的工具数量；连接失败时为 0（list_tools 返回空）。
-            数量 > 0 时经 ``on_tools_refreshed`` 回调绑定处——适配器绑定与
-            降级恢复收尾统一走这一个入口，初次装配与后台重试不分叉。
+            数量 > 0 时经 ``mark_connected`` 回调绑定处——适配器绑定与降级
+            恢复收尾统一走这一个入口，初次装配与后台重试不分叉。
         """
         if not self._client.connected:
             ok = await self._client.connect()
@@ -122,40 +121,25 @@ class McpToolProvider(BaseToolProvider):
                 # 原因已由 McpClient 记过（含同因去重）；此处只补"因此工具列表为空"这一后果
                 logger.debug(f"MCP Provider '{self.server_name}' 连接失败，工具列表为空")
                 self._specs = []
-                self._synced = True
                 self.last_error = self._client.last_connect_error or "连接失败"
                 return 0
         self.last_error = ""
         count = await self._sync_specs()
         if count > 0:
-            self._notify_refreshed(count)
+            self.mark_connected()
         return count
 
     async def _sync_specs(self) -> int:
         """拉取 server 工具清单并刷新本地 specs 缓存。返回缓存数量。"""
         tools = await self._client.list_tools()
         self._specs = [mapper.to_spec(t, provider=self._provider) for t in tools]
-        self._synced = True
         logger.info(
             f"MCP Provider '{self.server_name}' 工具缓存就绪（{len(self._specs)} 个，provider={self._provider}）"
         )
         return len(self._specs)
 
-    def _notify_refreshed(self, count: int) -> None:
-        """通知绑定处工具清单已（重）同步；回调异常只记日志不推翻同步结果。"""
-        callback = self.on_tools_refreshed
-        if callback is None:
-            return
-        try:
-            callback(count)
-        except Exception as exc:  # noqa: BLE001 - 绑定处异常不推翻清单同步
-            logger.error(
-                f"MCP Provider '{self.server_name}' on_tools_refreshed 回调异常: {type(exc).__name__}: {exc}",
-                exc=True,
-            )
-
-    def list_tools(self) -> Iterable[ToolSpec]:
-        """同步返回缓存的 ToolSpec（连接时预拉；未 setup 时为空）。"""
+    def _connected_tools(self) -> Iterable[ToolSpec]:
+        """连接建立（工具清单同步成功）后暴露的全量清单 = 本地 specs 缓存。"""
         return list(self._specs)
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
@@ -215,7 +199,7 @@ class McpToolProvider(BaseToolProvider):
     def start_recovery(self, *, base_delay_ms: int = 5000, cap_delay_ms: int = 60000) -> None:
         """降级登记后的后台恢复：按退避间隔重试 ``setup``，拉到工具即止（幂等）。
 
-        恢复成功沿 ``setup`` 内的 ``on_tools_refreshed`` 回调交给绑定处补注册，
+        恢复成功沿 ``setup`` 内的 ``mark_connected`` 回调绑定处补注册，
         与初次装配、手动重连走同一个出口；``close`` 时随连接一并取消。
         """
         if self._recover_task is not None and not self._recover_task.done():
@@ -418,32 +402,37 @@ class McpToolProvider(BaseToolProvider):
     async def disconnect(self) -> bool:
         """断开 MCP 通道连接（手动重连的"断开"半步）。
 
-        委托 ``McpClient.close``：底层幂等且异常兜底，本层不另捕。返回值保留
-        为 True 以表达"断开动作已发出"语义——即使原本未连接，调用语义仍
-        是"已断开状态"，上层无须据此判定重连成败（看 ``connect`` 返回值）。
+        委托 ``McpClient.close``：底层幂等且异常兜底，本层不另捕。断开即
+        ``mark_disconnected``（清单视为失效，绑定处据此摘除工具），与
+        ConnectionToolProvider 中间层的换血语义一致。返回值保留为 True
+        以表达"断开动作已发出"语义——即使原本未连接，调用语义仍是"已断
+        开状态"，上层无须据此判定重连成败（看 ``connect`` 返回值）。
         """
         logger.info(f"MCP Provider '{self.server_name}' 手动断开连接")
         await self._client.close()
+        self.mark_disconnected()
         return True
 
     async def reconnect(self) -> bool:
         """手动重连：断开通道 → 重建连接 → 重拉工具清单（specs 缓存换血）。
 
         基类默认组合只管通道；MCP 的工具清单是**连接时预拉缓存**——降级
-        登记（0 工具）与 server 侧清单变化都靠本方法重拉，重拉后经
-        ``refresh_provider_tools``（registry 侧）与 ``on_tools_refreshed``
-        （绑定侧适配器重绑定）两侧各就各位。清单拉到但为空视为重连未成
-        （server 在但未暴露工具），返回 False 交上层按失败处理。
+        登记（0 工具）与 server 侧清单变化都靠本方法重拉，重拉成功经
+        ``mark_connected``（registry 侧 refresh 与绑定侧适配器重绑定都由
+        接线回调驱动）；清单拉到但为空视为重连未成（server 在但未暴露工
+        具），置断开态并返回 False 交上层按失败处理。
         """
         await self.disconnect()
         if not await self.connect():
             return False
         count = await self._sync_specs()
         if count == 0:
+            self._specs = []
+            self.mark_disconnected()
             self.last_error = "server 已连接但未暴露任何工具"
             logger.warning(f"MCP Provider '{self.server_name}' 重连成功但 server 未暴露工具")
             return False
-        self._notify_refreshed(count)
+        self.mark_connected()
         return True
 
 

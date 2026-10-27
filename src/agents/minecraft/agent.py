@@ -75,7 +75,6 @@ from src.modules.logging import get_logger
 from src.modules.llm.context_meter import SECTION_SKILLS
 from src.modules.llm.errors import UnsendableRequestError
 from src.modules.llm.payload import response_to_assistant_message
-from src.modules.utils.backoff import ExponentialBackoff
 from src.modules.skills import SkillLibrary
 from src.modules.tools.conversation import to_conversation_view
 from src.modules.tools.llm_defs import function_definition
@@ -228,7 +227,6 @@ class MinecraftAgent(BaseAgent):
         # Agent 私有 MCP（_on_start 装配）
         self._mcp_client: Optional[Any] = None
         self._mcp_provider: Optional[Any] = None
-        self._mcp_recover_task: Optional[asyncio.Task[None]] = None
         self._mcp_ready_once = False
         self._goals = GoalWatch(
             call=self._call_maicraft,
@@ -322,7 +320,7 @@ class MinecraftAgent(BaseAgent):
             client=client, server_name=PROVIDER, provider=PROVIDER, goal_lookup=self._call_maicraft
         )
         self._mcp_provider = prov
-        prov.on_tools_refreshed = self._on_mcp_tools_ready
+        prov.on_connection_changed = self._on_mcp_connection_changed
         prov.switch_config = {"file": "agents.toml", "key": "agents.minecraft.mcp.enabled"}
         try:
             count = await prov.setup()
@@ -338,47 +336,35 @@ class MinecraftAgent(BaseAgent):
         if count > 0:
             return
         self._logger.warning("Agent 私有 MCP 连接失败或 server 未暴露工具，已降级登记（0 工具），后台退避重试装配")
-        self._start_mcp_recover_loop(prov)
+        prov.start_recovery()
 
-    def _on_mcp_tools_ready(self, count: int) -> None:
-        """工具清单（重）同步成功：首次只记日志；恢复时作废按连接缓存的资料，并告诉在做的任务。"""
+    def _on_mcp_connection_changed(self, connected: bool) -> None:
+        """私有 MCP 连接态跃迁：断开摘除工具；连上按首次装配或恢复分流收尾。
+
+        断开也刷新登记：provider 清单在断开路径已置空，refresh 把降级前的
+        工具从注册表整体摘除，避免 Agent 调到必然失败的陈旧条目。
+        """
+        if not connected:
+            try:
+                self._tool_registry.refresh_provider_tools(self._mcp_provider)
+            except Exception as exc:  # noqa: BLE001 - 刷新失败不影响连接态本身
+                self._logger.warning(f"Agent 私有 MCP 断开刷新失败: {type(exc).__name__}: {exc}")
+            return
+        prov = self._mcp_provider
+        count = len(list(prov.list_tools())) if prov is not None else 0
         if not self._mcp_ready_once:
             self._mcp_ready_once = True
             self._logger.info(f"Agent 私有 MCP 已就绪：{count} 个工具")
             return
         self._logger.info(f"Agent 私有 MCP 装配恢复：{count} 个工具")
-        self._on_mcp_recovered()
-
-    def _start_mcp_recover_loop(self, prov: Any) -> None:
-        if self._mcp_recover_task is not None and not self._mcp_recover_task.done():
+        try:
+            report = self._tool_registry.refresh_provider_tools(prov)
+        except Exception as exc:  # noqa: BLE001 - 刷新失败下轮恢复重试再补
+            self._logger.warning(f"Agent 私有 MCP 恢复刷新失败: {type(exc).__name__}: {exc}")
             return
-        self._mcp_recover_task = asyncio.create_task(self._mcp_recover_loop(prov))
-
-    async def _mcp_recover_loop(self, prov: Any) -> None:
-        """私有 MCP 降级恢复循环：退避重试装配（5s 起步 60s 封顶，连上即止）。"""
-        # 恢复成功即整循环退出，助手无需复位
-        backoff = ExponentialBackoff(base_delay_ms=5000, cap_delay_ms=60000)
-        delay_ms = backoff.next_delay_ms()
-        while self._running:
-            await asyncio.sleep(delay_ms / 1000)
-            delay_ms = backoff.next_delay_ms()
-            if not self._running:
-                return
-            try:
-                count = await prov.setup()
-            except Exception as exc:  # noqa: BLE001 - 单轮失败安静重试
-                self._logger.debug(f"Agent 私有 MCP 恢复重试失败: {type(exc).__name__}: {exc}")
-                continue
-            if count == 0:
-                continue
-            try:
-                report = self._tool_registry.refresh_provider_tools(prov)
-            except Exception as exc:  # noqa: BLE001 - 刷新失败下轮再试
-                self._logger.warning(f"Agent 私有 MCP 恢复刷新失败: {type(exc).__name__}: {exc}")
-                continue
-            if report.get("ok"):
-                self._logger.info(f"Agent 私有 MCP 装配恢复：{count} 个工具（新增 {len(report.get('added', []))}）")
-                return
+        if report.get("ok"):
+            self._logger.info(f"Agent 私有 MCP 工具集已换血（新增 {len(report.get('added', []))} 个）")
+            self._on_mcp_recovered()
 
     def _on_mcp_recovered(self) -> None:
         """连接恢复：Mod 可能重启过，能力清单、远端技能与事件流都重新读；在做的任务收到通知后评估现场。"""
@@ -414,7 +400,7 @@ class MinecraftAgent(BaseAgent):
         self._wake_event.set()
         await self._idle_prep.cancel()
         await self._goals.stop()
-        for task in (self._worker_task, self._mcp_recover_task):
+        for task in (self._worker_task,):
             if task is None:
                 continue
             task.cancel()
@@ -425,7 +411,6 @@ class MinecraftAgent(BaseAgent):
             except Exception as exc:  # noqa: BLE001 - 边界兜底
                 self._logger.warning(f"后台协程退出异常: {exc}")
         self._worker_task = None
-        self._mcp_recover_task = None
         self._mcp_provider = None
         self._skill_support.reset_connection_cache()
         removed = self.unregister_tool_providers()

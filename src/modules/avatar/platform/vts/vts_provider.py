@@ -17,8 +17,9 @@ ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动半）：
 连接检测点调 ``mark_connected`` / ``mark_disconnected``，经接线回调驱动
 注册表 ``refresh_provider_tools`` 补注册 / 摘除。
 
-被收敛的历史工具（微旋钮 / 运维件 / 不可发现件）的 Python 方法保留供
-内部机件调用，仅撤 LLM 工具注册。
+被收敛的历史工具（微旋钮 / 运维件 / 不可发现件）只撤 LLM 工具注册；
+Python 方法不默认保留——仍有真实调用点的才留（``set_parameter_value``
+供 Dashboard 调试台参数直调），无调用点的已删除。
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from pydantic import Field
 
-from src.modules.avatar.speech_binding import bind_speech_emotion, bind_speaking_state
+from src.modules.avatar.speech_binding import AvatarBindings
 from src.modules.avatar.tool_common import (
     contract_tool_specs,
     dispatch_tool,
@@ -37,7 +38,6 @@ from src.modules.avatar.tool_common import (
 )
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.utils.backoff import ExponentialBackoff
 from src.modules.utils.task_utils import spawn_background_task
@@ -338,11 +338,8 @@ class VTSProvider(ConnectionToolProvider):
         self._current_model_name: str = ""
         # 说话状态（tts.utterance.started/finished 订阅驱动；idle 据此暂停摇摆）
         self._is_speaking: bool = False
-        # 事件订阅句柄（setup 时绑定，cleanup 时退订）
-        self._speech_emotion_handler: Optional[Any] = None
-        self._speaking_state_handles: Optional[Any] = None
-        # 口型渲染器（setup 时挂到共享分析器，cleanup 时摘除）
-        self._lip_renderer: Optional[VtsLipSyncRenderer] = None
+        # 被动半挂件句柄（setup 时逐项 attach，cleanup 时一次全量退订摘除）
+        self._bindings: Optional[AvatarBindings] = None
 
         self.render_count = 0
         self.error_count = 0
@@ -498,17 +495,19 @@ class VTSProvider(ConnectionToolProvider):
         self._reconnect_task.set_name(f"{self.__class__.__name__}.reconnect_loop")
 
         # 被动半事件订阅：情绪反射（streamer.speech）+ 说话状态（tts.utterance.*，
-        # 驱动 idle"说话时暂停摇摆"）
-        self._speech_emotion_handler = bind_speech_emotion(self.event_bus, self, self.logger)
-        self._speaking_state_handles = bind_speaking_state(self.event_bus, self.logger, on_change=self._set_speaking)
-
-        # 口型渲染：挂到共享分析器（说话时 MouthOpen 跟随信号 + 常驻微笑基线维护）
+        # 驱动 idle"说话时暂停摇摆"）；口型渲染挂到共享分析器（说话时 MouthOpen
+        # 跟随信号 + 常驻微笑基线维护）
+        self._bindings = AvatarBindings(self.event_bus, self.logger)
+        self._bindings.attach_emotion_reflection(self)
+        self._bindings.attach_speaking_state(self._set_speaking)
         if self.lipsync_analyzer is not None:
-            self._lip_renderer = VtsLipSyncRenderer(
-                set_parameter=self._expression_set_param_proxy,
-                base_expressions={self.PARAM_MOUTH_SMILE: float(self.typed_config.base_smile)},
+            self._bindings.attach_lip_renderer(
+                self.lipsync_analyzer,
+                VtsLipSyncRenderer(
+                    set_parameter=self._expression_set_param_proxy,
+                    base_expressions={self.PARAM_MOUTH_SMILE: float(self.typed_config.base_smile)},
+                ),
             )
-            self.lipsync_analyzer.add_renderer(self._lip_renderer)
 
         self._has_started = True
 
@@ -517,25 +516,9 @@ class VTSProvider(ConnectionToolProvider):
         if not self._has_started:
             return
 
-        if self.event_bus is not None:
-            if self._speech_emotion_handler is not None:
-                try:
-                    self.event_bus.off(CoreEvents.STREAMER_SPEECH, self._speech_emotion_handler)
-                except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
-                    self.logger.debug(f"streamer.speech 退订失败（已忽略）: {exc}")
-                self._speech_emotion_handler = None
-            if self._speaking_state_handles is not None:
-                started_handler, finished_handler = self._speaking_state_handles
-                try:
-                    self.event_bus.off(CoreEvents.TTS_UTTERANCE_STARTED, started_handler)
-                    self.event_bus.off(CoreEvents.TTS_UTTERANCE_FINISHED, finished_handler)
-                except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
-                    self.logger.debug(f"tts.utterance.* 退订失败（已忽略）: {exc}")
-                self._speaking_state_handles = None
-
-        if self.lipsync_analyzer is not None and self._lip_renderer is not None:
-            self.lipsync_analyzer.remove_renderer(self._lip_renderer)
-            self._lip_renderer = None
+        if self._bindings is not None:
+            self._bindings.close()
+            self._bindings = None
 
         await self._disconnect()
         self._has_started = False
@@ -547,20 +530,8 @@ class VTSProvider(ConnectionToolProvider):
 
     # ===== 业务方法 =====
 
-    async def smile(self, value: float = 1) -> bool:
-        return await self.expression.smile(value)
-
-    async def close_eyes(self) -> bool:
-        return await self.expression.close_eyes()
-
-    async def open_eyes(self) -> bool:
-        return await self.expression.open_eyes()
-
     async def set_parameter_value(self, parameter_name: str, value: float, weight: float = 1) -> bool:
         return await self.expression.set_parameter(parameter_name, value, weight)
-
-    async def get_parameter_value(self, parameter_name: str) -> Optional[float]:
-        return await self.expression.get_parameter(parameter_name)
 
     # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
 
@@ -573,9 +544,14 @@ class VTSProvider(ConnectionToolProvider):
         """
         resolved = scaled_emotion_weights(emotion, intensity, self._emotion_map)
         if resolved is None:
+            self.error_count += 1
             return tool_result_fail("vts_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
         factor, scaled = resolved
         success = await self.expression.set_multi_parameter(scaled, 1.0)
+        if success:
+            self.render_count += 1
+        else:
+            self.error_count += 1
         return tool_result_ok(
             "vts_set_expression",
             bool(success),
@@ -623,65 +599,6 @@ class VTSProvider(ConnectionToolProvider):
             return await self.hotkey_matcher.trigger_hotkey(hotkey_id)
         self.logger.warning("VTS 触发热键失败：name 与 hotkey_id 均为空")
         return False
-
-    async def load_item(
-        self,
-        file_name: str = "filename.png",
-        position_x: float = 0,
-        position_y: float = 0.5,
-        size: float = 0.33,
-        rotation: float = 90,
-        fade_time: float = 0.5,
-        order: int = 4,
-        fail_if_order_taken: bool = False,
-        smoothing: float = 0,
-        censored: bool = False,
-        flipped: bool = False,
-        locked: bool = False,
-        unload_when_plugin_disconnects: bool = True,
-        custom_data_base64: str = "",
-        custom_data_ask_user_first: bool = False,
-        custom_data_skip_asking_user_if_whitelisted: bool = False,
-        custom_data_ask_timer: int = -1,
-    ) -> Optional[str]:
-        if not self._is_connected:
-            self.logger.warning("VTS 未连接，无法加载道具")
-            return None
-        try:
-            data = {
-                "fileName": file_name,
-                "positionX": position_x,
-                "positionY": position_y,
-                "size": size,
-                "rotation": rotation,
-                "fadeTime": fade_time,
-                "order": order,
-                "failIfOrderTaken": fail_if_order_taken,
-                "smoothing": smoothing,
-                "censored": censored,
-                "flipped": flipped,
-                "locked": locked,
-                "unloadWhenPluginDisconnects": unload_when_plugin_disconnects,
-                "customDataBase64": custom_data_base64,
-                "customDataAskUserFirst": custom_data_ask_user_first,
-                "customDataSkipAskingUserIfWhitelisted": custom_data_skip_asking_user_if_whitelisted,
-                "customDataAskTimer": custom_data_ask_timer,
-            }
-            response = await self._vts.request(
-                self._vts.vts_request.BaseRequest(message_type="ItemLoadRequest", data=data)
-            )
-            if response and response.get("messageType") == "ItemLoadResponse":
-                instance_id = response.get("data", {}).get("instanceID", None)
-                if instance_id:
-                    self.logger.debug(f"道具已加载: {instance_id}")
-                    return instance_id
-                self.logger.warning(f"道具加载失败: {response}")
-                return None
-            self.logger.warning(f"道具加载失败: {response}")
-            return None
-        except Exception as e:
-            self.logger.exception(f"加载道具失败: {e}")
-            return None
 
     def _set_idle_enabled(self, enabled: bool) -> None:
         """启停 idle 拟人动画（不抛异常，重复启停幂等）"""

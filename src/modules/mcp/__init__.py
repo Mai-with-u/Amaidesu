@@ -86,9 +86,9 @@ async def bind_mcp_tools(
                 logger.warning(f"MCP server '{server_name}' 装配异常，按连接失败降级: {type(exc).__name__}: {exc}")
                 count = 0
             new_count = registry.register_provider(prov)
-            # 登记之后才挂补注册回调：初次 setup 时 provider 尚未登记，此刻刷新只会报"未注册"。
-            # 之后无论后台恢复还是 server 侧清单变化，拉到工具都经这里换血。
-            prov.on_tools_refreshed = partial(_refresh_registered_tools, registry, prov)
+            # 登记之后才挂连接态回调：初次 setup 时 provider 尚未登记，此刻刷新只会报
+            # "未注册"。之后无论后台恢复、手动重连还是断开，连接跃迁都经这里换血。
+            prov.on_connection_changed = partial(_on_connection_changed, registry, prov)
             if count == 0:
                 # server 没起来是常态（如 MaiBot 晚于本进程启动）：0 工具占位登记，
                 # 工具页可见、可手动重连；后台退避重试，连上即补注册，无需重启
@@ -109,12 +109,13 @@ async def bind_mcp_tools(
     return report
 
 
-def _refresh_registered_tools(registry: ToolRegistry, prov: McpToolProvider, count: int) -> None:
-    """工具清单（重）同步成功后，按 provider 当前清单换血登记。"""
+def _on_connection_changed(registry: ToolRegistry, prov: McpToolProvider, connected: bool) -> None:
+    """连接态跃迁后按 provider 当前清单换血登记：连上补注册、断开整体摘除。"""
     report = registry.refresh_provider_tools(prov)
+    count = len(list(prov.list_tools()))
     if report.get("ok"):
-        added = len(report.get("added", []))
-        logger.info(f"MCP server '{prov.server_name}' 工具集已刷新（{count} 个，新增 {added} 个）")
+        action = "补注册" if connected else "摘除"
+        logger.info(f"MCP server '{prov.server_name}' 工具集已刷新（{action}，当前 {count} 个）")
     else:
         logger.warning(f"MCP server '{prov.server_name}' 工具集刷新失败: {report.get('error')}")
 

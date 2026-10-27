@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from pydantic import Field
 
-from src.modules.avatar.speech_binding import bind_speech_emotion, bind_speaking_state
+from src.modules.avatar.speech_binding import AvatarBindings
 from src.modules.avatar.tool_common import (
     contract_tool_specs,
     dispatch_tool,
@@ -31,7 +31,6 @@ from src.modules.avatar.tool_common import (
 )
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec, tool_result_fail, tool_result_ok
 from src.modules.tools.provider import ConnectionToolProvider, wire_connection_tools
@@ -227,11 +226,8 @@ class WarudoProvider(ConnectionToolProvider):
         self._has_started = False
         self.render_count = 0
         self.error_count = 0
-        # 事件订阅句柄（setup 时绑定，cleanup 时退订）
-        self._speech_emotion_handler: Optional[Any] = None
-        self._speaking_state_handles: Optional[Any] = None
-        # 口型渲染器（setup 时挂到共享分析器，cleanup 时摘除）
-        self._lip_renderer: Optional[WarudoLipSyncRenderer] = None
+        # 被动半挂件句柄（setup 时逐项 attach，cleanup 时一次全量退订摘除）
+        self._bindings: Optional[AvatarBindings] = None
 
     # ===== ToolProvider 协议 =====
 
@@ -305,12 +301,14 @@ class WarudoProvider(ConnectionToolProvider):
         """
         resolved = scaled_emotion_weights(emotion, intensity, self.expression.emotions)
         if resolved is None:
+            self.error_count += 1
             return tool_result_fail("warudo_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
         factor, applied = resolved
         # 收到情绪 → 表情键整表写入；眨眼键交给眼部状态合并，笑眼等暂停眨眼的键生效时眨眼任务跳过
         self.state_manager.expression_state.set_weights(applied)
         blink_blocked = any(applied.get(key, 0.0) > 0 for key in self.expression.blink_blocking_keys)
         self.state_manager.eye_state.set_expression(applied.get(BLINK_KEY, 0.0), blink_blocked)
+        self.render_count += 1
         return tool_result_ok(
             "warudo_set_expression", True, {"emotion": emotion, "intensity": factor, "applied": applied}
         )
@@ -356,14 +354,15 @@ class WarudoProvider(ConnectionToolProvider):
         await self._connect()
 
         # 被动半事件订阅：情绪反射（streamer.speech）+ 说话状态（tts.utterance.*，
-        # 驱动 talking-head 点头任务）
-        self._speech_emotion_handler = bind_speech_emotion(self.event_bus, self, self.logger)
-        self._speaking_state_handles = bind_speaking_state(self.event_bus, self.logger, on_change=self._set_speaking)
-
-        # 口型渲染：挂到共享分析器（元音成分 → VowelA~O 通道；启用时应关闭 Warudo 原生口型）
+        # 驱动 talking-head 点头任务）；口型渲染挂到共享分析器（元音成分 →
+        # VowelA~O 通道；启用时应关闭 Warudo 原生口型）
+        self._bindings = AvatarBindings(self.event_bus, self.logger)
+        self._bindings.attach_emotion_reflection(self)
+        self._bindings.attach_speaking_state(self._set_speaking)
         if self.lipsync_analyzer is not None:
-            self._lip_renderer = WarudoLipSyncRenderer(set_mouth_channel=self._set_mouth_channel)
-            self.lipsync_analyzer.add_renderer(self._lip_renderer)
+            self._bindings.attach_lip_renderer(
+                self.lipsync_analyzer, WarudoLipSyncRenderer(set_mouth_channel=self._set_mouth_channel)
+            )
 
         self._has_started = True
         self.logger.info(f"{self.__class__.__name__} 已启动")
@@ -387,25 +386,9 @@ class WarudoProvider(ConnectionToolProvider):
         if not self._has_started:
             return
 
-        if self.event_bus is not None:
-            if self._speech_emotion_handler is not None:
-                try:
-                    self.event_bus.off(CoreEvents.STREAMER_SPEECH, self._speech_emotion_handler)
-                except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
-                    self.logger.debug(f"streamer.speech 退订失败（已忽略）: {exc}")
-                self._speech_emotion_handler = None
-            if self._speaking_state_handles is not None:
-                started_handler, finished_handler = self._speaking_state_handles
-                try:
-                    self.event_bus.off(CoreEvents.TTS_UTTERANCE_STARTED, started_handler)
-                    self.event_bus.off(CoreEvents.TTS_UTTERANCE_FINISHED, finished_handler)
-                except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
-                    self.logger.debug(f"tts.utterance.* 退订失败（已忽略）: {exc}")
-                self._speaking_state_handles = None
-
-        if self.lipsync_analyzer is not None and self._lip_renderer is not None:
-            self.lipsync_analyzer.remove_renderer(self._lip_renderer)
-            self._lip_renderer = None
+        if self._bindings is not None:
+            self._bindings.close()
+            self._bindings = None
 
         # 停止后台任务
         try:

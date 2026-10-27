@@ -103,4 +103,61 @@ def bind_speaking_state(
     return (on_started, on_finished)
 
 
-__all__ = ["bind_speech_emotion", "bind_speaking_state"]
+class AvatarBindings:
+    """虚拟形象适配器被动半挂件的全生命周期句柄。
+
+    setup 时逐项 attach（情绪反射 / 说话状态 / 口型渲染器），cleanup 时
+    ``close()`` 一次全量退订与摘除——各适配器不再各写一份逐字重复的
+    订阅/退订 try/except 样板。全部方法幂等，单项失败记日志不阻断清理
+    （装饰性路径的 fail-soft 口径与绑定时一致）。
+    """
+
+    def __init__(self, event_bus: Optional[EventBus], logger: ModuleLogger) -> None:
+        self._event_bus = event_bus
+        self._logger = logger
+        self._speech_emotion_handler: Optional[Any] = None
+        self._speaking_state_handles: Optional[Any] = None
+        self._lipsync_analyzer: Optional[Any] = None
+        self._lip_renderer: Optional[Any] = None
+
+    def attach_emotion_reflection(self, provider: Any) -> None:
+        """订阅 ``streamer.speech``，把发言情绪反射为 ``provider.set_expression``。"""
+        self._speech_emotion_handler = bind_speech_emotion(self._event_bus, provider, self._logger)
+
+    def attach_speaking_state(self, on_change: Any) -> None:
+        """订阅 ``tts.utterance.*`` 维护说话计数，变化时回调 ``on_change(bool)``。"""
+        self._speaking_state_handles = bind_speaking_state(self._event_bus, self._logger, on_change)
+
+    def attach_lip_renderer(self, analyzer: Any, renderer: Any) -> None:
+        """把口型渲染器挂到共享口型分析器；``close()`` 时摘除。"""
+        self._lipsync_analyzer = analyzer
+        self._lip_renderer = renderer
+        analyzer.add_renderer(renderer)
+
+    def close(self) -> None:
+        """全量退订与摘除（幂等）：事件订阅逐项退订，渲染器从分析器摘除。"""
+        if self._event_bus is not None:
+            if self._speech_emotion_handler is not None:
+                try:
+                    self._event_bus.off(CoreEvents.STREAMER_SPEECH, self._speech_emotion_handler)
+                except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
+                    self._logger.debug(f"streamer.speech 退订失败（已忽略）: {exc}")
+                self._speech_emotion_handler = None
+            if self._speaking_state_handles is not None:
+                started_handler, finished_handler = self._speaking_state_handles
+                try:
+                    self._event_bus.off(CoreEvents.TTS_UTTERANCE_STARTED, started_handler)
+                    self._event_bus.off(CoreEvents.TTS_UTTERANCE_FINISHED, finished_handler)
+                except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
+                    self._logger.debug(f"tts.utterance.* 退订失败（已忽略）: {exc}")
+                self._speaking_state_handles = None
+        if self._lipsync_analyzer is not None and self._lip_renderer is not None:
+            try:
+                self._lipsync_analyzer.remove_renderer(self._lip_renderer)
+            except Exception as exc:  # noqa: BLE001 - 摘除失败不阻断清理
+                self._logger.debug(f"口型渲染器摘除失败（已忽略）: {exc}")
+        self._lip_renderer = None
+        self._lipsync_analyzer = None
+
+
+__all__ = ["AvatarBindings", "bind_speech_emotion", "bind_speaking_state"]

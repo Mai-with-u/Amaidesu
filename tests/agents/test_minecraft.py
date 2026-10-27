@@ -535,10 +535,18 @@ class _ZeroToolProvider:
     def __init__(self, *, client: Any, server_name: str, provider: str | None = None) -> None:
         self.client = client
         self.name = provider or server_name
-        self.on_tools_refreshed: Any = None
+        self.on_connection_changed: Any = None
+        self._recovering = False
 
     async def setup(self) -> int:
         return 0
+
+    def start_recovery(self) -> None:
+        self._recovering = True
+
+    @property
+    def recovering(self) -> bool:
+        return self._recovering
 
     def list_tools(self):
         return []
@@ -550,6 +558,7 @@ class _ZeroToolProvider:
         return lambda: None
 
     async def close(self) -> None:
+        self._recovering = False
         await self.client.close()
 
 
@@ -594,9 +603,9 @@ async def test_mcp_setup_failure_registers_degraded_and_retries(
     assert agent._running is True and agent._mcp_client is not None
     assert registry.list_tools(provider="maicraft") == []
     assert {r["name"]: r for r in _ops(registry).list_providers()}["maicraft"]["tool_count"] == 0
-    assert agent._mcp_recover_task is not None
+    assert agent._mcp_provider is not None and agent._mcp_provider.recovering  # 降级恢复循环已由 provider 接管
     await agent.stop()
-    assert agent._mcp_recover_task is None
+    assert agent._mcp_provider is None
     assert all(r["name"] != "maicraft" for r in _ops(registry).list_providers())
 
 

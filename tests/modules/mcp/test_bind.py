@@ -46,7 +46,7 @@ class FakeProvider:
         self.server_name = server_name
         self.provider = provider or server_name
         self._specs: List[ToolSpec] = []
-        self.on_tools_refreshed: Optional[Any] = None
+        self.on_connection_changed: Optional[Any] = None
         self.recovery_started = False
 
     def start_recovery(self) -> None:
@@ -137,7 +137,7 @@ async def test_same_raw_tool_name_on_two_servers_does_not_collide(clients) -> No
 
 
 async def test_late_server_tools_are_registered_without_restart(monkeypatch: pytest.MonkeyPatch) -> None:
-    """server 晚于本进程启动：先 0 工具占位登记，连上后经 on_tools_refreshed 补注册，主播随即可见。"""
+    """server 晚于本进程启动：先 0 工具占位登记，连上后经连接态回调补注册，主播随即可见。"""
     created: Dict[str, FakeMcpClient] = {}
 
     def offline_client(name: str, config: Any) -> FakeMcpClient:

@@ -345,9 +345,9 @@ class ConnectionToolProvider(BaseToolProvider):
     6. 手动重连路径不变：手动 connect 成功同样走 ``mark_connected``
 
     无连接工具的 Provider（reply / rundown / 游戏工具等）不继承本层，
-    ``BaseToolProvider`` 保持干净。MCP 的"占位补注册"语义与本层等价但回调
-    形态不同（``on_tools_refreshed(count)`` vs bool 连接态回调），机制零缺陷
-    暂不迁移；将来收编时以 ``mark_connected`` 换掉 ``on_tools_refreshed``。
+    ``BaseToolProvider`` 保持干净。MCP（``McpToolProvider``）已收编进本层：
+    工具清单同步成功即 ``mark_connected``，断开 / 清单拉空即
+    ``mark_disconnected``，绑定侧经同一个 ``on_connection_changed`` 槽接回调。
     """
 
     # 连接态标志（初始未连接）：子类不再自建同语义标志；仍可另持协议层

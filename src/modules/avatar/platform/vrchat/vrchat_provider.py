@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional
 from pydantic import Field
 
 from src.modules.avatar.platform.vrchat.chatbox import VRChatChatboxBackend
-from src.modules.avatar.speech_binding import bind_speech_emotion
+from src.modules.avatar.speech_binding import AvatarBindings
 from src.modules.avatar.tool_common import (
     clamp_intensity,
     contract_tool_specs,
@@ -30,7 +30,6 @@ from src.modules.avatar.tool_common import (
 )
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
     ToolExecutionResult,
@@ -145,8 +144,8 @@ class VRChatProvider(BaseToolProvider):
         self._has_started = False
         self.render_count = 0
         self.error_count = 0
-        # 事件订阅句柄（setup 时绑定，cleanup 时退订）
-        self._speech_emotion_handler: Optional[Any] = None
+        # 被动半挂件句柄（setup 时逐项 attach，cleanup 时一次全量退订）
+        self._bindings: Optional[AvatarBindings] = None
 
     # ===== ToolProvider 协议 =====
 
@@ -228,7 +227,8 @@ class VRChatProvider(BaseToolProvider):
         await self._connect()
         # 被动半事件订阅：情绪反射（streamer.speech；set_expression 当前不渲染
         # 情绪面，订阅保持契约一致性，未来接入表情通道无需改装配）
-        self._speech_emotion_handler = bind_speech_emotion(self.event_bus, self, self.logger)
+        self._bindings = AvatarBindings(self.event_bus, self.logger)
+        self._bindings.attach_emotion_reflection(self)
         # 重新启动时按配置恢复聊天框（上次清理时已停用）
         self.chatbox.enabled = self.typed_config.chatbox_enabled
         self._has_started = True
@@ -237,12 +237,9 @@ class VRChatProvider(BaseToolProvider):
     async def cleanup(self) -> None:
         if not self._has_started:
             return
-        if self.event_bus is not None and self._speech_emotion_handler is not None:
-            try:
-                self.event_bus.off(CoreEvents.STREAMER_SPEECH, self._speech_emotion_handler)
-            except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
-                self.logger.debug(f"streamer.speech 退订失败（已忽略）: {exc}")
-            self._speech_emotion_handler = None
+        if self._bindings is not None:
+            self._bindings.close()
+            self._bindings = None
         # 先停聊天框与动作归零，再断 OSC：断开后它们的发送都会落空
         await self.chatbox.close()
         await self._cancel_emote_reset()
@@ -256,13 +253,17 @@ class VRChatProvider(BaseToolProvider):
         """写动作参数 → 延迟归零；新动作会取消上一个尚未执行的归零"""
         if not self._is_connected or not self.osc_client:
             self.logger.warning("OSC 客户端未连接，无法触发动作")
+            self.error_count += 1
             return
         address = f"/avatar/parameters/{self.emote_parameter}"
         value = self.emotes[emote_name]
         try:
             self.osc_client.send_message(address, value)
+            # VRChat 无情绪渲染通道（set_expression 不产出画面），渲染计数挂在此处
+            self.render_count += 1
             self.logger.debug(f"触发 VRChat 动作: {emote_name} ({address} = {value})")
         except Exception as e:
+            self.error_count += 1
             self.logger.error(f"触发 VRChat 动作失败: {emote_name}: {e}", exc=True)
             return
         if self.emote_reset_ms > 0:

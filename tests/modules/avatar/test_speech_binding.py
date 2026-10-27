@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
 from src.modules.avatar.platform.vts.vts_provider import VTSProvider
 from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider
-from src.modules.avatar.speech_binding import bind_speaking_state, bind_speech_emotion
+from src.modules.avatar.speech_binding import AvatarBindings, bind_speaking_state, bind_speech_emotion
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
@@ -83,13 +83,13 @@ async def test_cleanup_unbinds_subscriptions() -> None:
     provider._has_started = True  # 阻断真实 pyvts 连接：手工置启动态，直接走订阅绑定段
     bus = EventBus()
     provider.event_bus = bus
-    provider._speech_emotion_handler = bind_speech_emotion(bus, provider, provider.logger)
-    provider._speaking_state_handles = bind_speaking_state(bus, provider.logger, on_change=provider._set_speaking)
+    bindings = AvatarBindings(bus, provider.logger)
+    bindings.attach_emotion_reflection(provider)
+    bindings.attach_speaking_state(provider._set_speaking)
 
     await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech())
     assert provider.expression.set_multi_parameter.await_count == 1
 
-    await provider.cleanup()
-    assert provider._speech_emotion_handler is None and provider._speaking_state_handles is None
+    bindings.close()  # 全量退订（cleanup 内部同款出口）
     await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech("sad", 0.5))
     assert provider.expression.set_multi_parameter.await_count == 1  # 退订后不再反射

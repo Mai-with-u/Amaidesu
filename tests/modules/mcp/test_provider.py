@@ -86,11 +86,12 @@ async def test_reconnect_rebuilds_channel_resyncs_specs_and_notifies() -> None:
     client, prov = _provider()
     client.set_tools([FakeTool("t1"), FakeTool("t2")])
     client.next_connect_result = True
-    refreshed: list[int] = []
-    prov.on_tools_refreshed = refreshed.append
+    fired: List[bool] = []
+    prov.on_connection_changed = fired.append
     assert await prov.reconnect() is True
     assert (client.close_calls, client.connect_calls) == (1, 1)
-    assert [s.name for s in prov.list_tools()] == ["t1", "t2"] and refreshed == [2]  # 重拉清单后统一通知绑定处
+    # 重拉清单后统一通知绑定处：断开半步摘除（False）→ 连上补注册（True）
+    assert [s.name for s in prov.list_tools()] == ["t1", "t2"] and fired == [False, True]
 
     failing_client, failing = _provider()
     failing_client._connected = False
@@ -235,6 +236,7 @@ async def test_business_rejections_keep_tool_available_and_emit_errors(as_except
     client._connected, client._client = True, Endpoint()
     provider = McpToolProvider(client=client, server_name="reference")
     provider._specs = [ToolSpec(name="read", description="", provider="reference")]
+    provider.mark_connected()  # 连接态语义：登记的 specs 只有在已连接态才对外可见
     bus = EventBus(enable_stats=False)
     events: list[ToolResultPayload] = []
     delivered = asyncio.Event()
@@ -268,6 +270,7 @@ async def test_transport_failures_still_trip_the_tool() -> None:
     client = McpClient(name="reference", config=SimpleNamespace())
     provider = McpToolProvider(client=client, server_name="reference")
     provider._specs = [ToolSpec(name="read", description="", provider="reference")]
+    provider.mark_connected()  # 连接态语义：登记的 specs 只有在已连接态才对外可见
     registry = ToolRegistry(failure_threshold=3)
     registry.register_provider(provider)
     for _ in range(3):
@@ -288,18 +291,18 @@ async def test_recovery_retries_until_tools_arrive_then_reports_once() -> None:
     client, prov = _provider()
     client._connected = False
     assert await prov.setup() == 0
-    refreshed: List[int] = []
-    prov.on_tools_refreshed = refreshed.append
+    fired: List[bool] = []
+    prov.on_connection_changed = fired.append
 
     prov.start_recovery(base_delay_ms=1, cap_delay_ms=2)
     prov.start_recovery(base_delay_ms=1, cap_delay_ms=2)  # 幂等：不会起第二个循环
     await _wait_until(lambda: client.connect_calls >= 3)
-    assert prov.recovering and refreshed == []
+    assert prov.recovering and fired == []
 
     client.set_tools([FakeTool("read_group", "读群")])
     client.next_connect_result = True
     await _wait_until(lambda: not prov.recovering)
-    assert refreshed == [1] and [s.full_name for s in prov.list_tools()] == ["serverA_read_group"]
+    assert fired == [True] and [s.full_name for s in prov.list_tools()] == ["serverA_read_group"]
 
 
 async def test_recovery_stops_quietly_when_reconnected_elsewhere() -> None:
