@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from src.modules.events import list_registered_events, register_core_events, register_event
+from src.modules.events import register_core_events, register_event
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import game_chat as _game_chat  # noqa: F401
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -13,9 +13,9 @@ from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.events.registry import (
     DYNAMIC_EVENT_FAMILIES,
     EVENT_REGISTRY,
-    EventRegistry,
     ensure_registry_consistency,
     get_registered_event,
+    list_registered_events,
 )
 
 
@@ -38,17 +38,16 @@ def populated_registry():
 
 def test_registry_queries_and_copies() -> None:
     EVENT_REGISTRY["test.registry.one"] = _Data
-    assert EventRegistry.is_registered("test.registry.one") and EventRegistry.get("test.registry.one") is _Data
-    assert EventRegistry.get("nonexistent.event") is None and not EventRegistry.is_registered("test.unregistered")
+    assert get_registered_event("test.registry.one") is _Data and get_registered_event("nonexistent.event") is None
 
-    # 两个公开列表接口返回的都是副本，改动不回写注册表
-    for events in (EventRegistry.list_all_events(), list_registered_events()):
+    # 公开查询接口返回副本，改动不回写注册表
+    for events in (list_registered_events(), dict(EVENT_REGISTRY)):
         assert "test.registry.one" in events
         events["__dummy__"] = type  # type: ignore[assignment]
-        assert not EventRegistry.is_registered("__dummy__")
+        assert "__dummy__" not in EVENT_REGISTRY
 
     EVENT_REGISTRY.clear()
-    assert EventRegistry.list_all_events() == {} and not EventRegistry.is_registered("room.message.danmaku")
+    assert list_registered_events() == {} and "room.message.danmaku" not in EVENT_REGISTRY
 
 
 def test_decorator_registers_sets_reverse_reference_and_returns_class_unchanged() -> None:
@@ -57,7 +56,7 @@ def test_decorator_registers_sets_reverse_reference_and_returns_class_unchanged(
         value: int = 42
 
     assert EVENT_REGISTRY["test.isolation.registers"] is _Payload
-    assert _Payload._registered_event_name == "test.isolation.registers"
+    assert "test.isolation.registers" in _Payload._all_registered_names
     assert _Payload().value == 42  # 原样返回，不包装
 
     assert register_event("test.isolation.registers")(_Payload) is _Payload  # 同类重复注册幂等
@@ -90,7 +89,7 @@ def test_registered_payloads_are_wellformed_and_startup_hook_is_idempotent() -> 
     for name, cls in EVENT_REGISTRY.items():
         assert "." in name and not name.startswith("plugin."), name
         assert isinstance(cls, type) and issubclass(cls, BaseModel), name
-        assert cls._registered_event_name == name, name  # 反向引用与注册键一致
+        assert name in cls._all_registered_names, name  # 注册名集合与注册键一致
 
 
 def test_registry_consistent_with_core_events_and_reports_drift_by_name() -> None:

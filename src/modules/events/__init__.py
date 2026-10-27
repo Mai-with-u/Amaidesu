@@ -8,7 +8,6 @@ Amaidesu 事件系统模块
 from .event_bus import EventBus
 from .registry import (
     EVENT_REGISTRY,
-    EventRegistry,
     ensure_registry_consistency,
     get_registered_event,
     list_registered_events,
@@ -18,7 +17,6 @@ from .registry import (
 
 __all__ = [
     "EventBus",
-    "EventRegistry",
     "EVENT_REGISTRY",
     "ensure_registry_consistency",
     "register_event",

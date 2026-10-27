@@ -34,7 +34,7 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from src.modules.events.interceptors import EventInterceptor, InterceptorChain
-from src.modules.events.registry import EventRegistry
+from src.modules.events.registry import EVENT_REGISTRY
 from src.modules.logging import get_logger
 
 T = TypeVar("T", bound=BaseModel)
@@ -587,5 +587,5 @@ class EventBus:
         emit 的入参本身就是 Pydantic Model 实例（形状由类保证），此处不再对
         序列化结果做整类重复验证；仅对未注册事件写一条 debug 提示。
         """
-        if EventRegistry.get(event_name) is None:
+        if EVENT_REGISTRY.get(event_name) is None:
             self.logger.debug(f"未注册 Payload 的事件名 emit: {event_name}")

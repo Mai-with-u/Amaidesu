@@ -76,7 +76,11 @@ def test_utterance_payload_required_fields_and_streaming_duration() -> None:
         ),
         UtteranceFinishedPayload(utterance_id="u", engine="edge", duration_ms=3200, timestamp_ms=1700000000000),
         UtteranceFailedPayload(
-            utterance_id="u", speech_text="那句", engine="gptsovits", error_message="timeout", timestamp_ms=1700000000000
+            utterance_id="u",
+            speech_text="那句",
+            engine="gptsovits",
+            error_message="timeout",
+            timestamp_ms=1700000000000,
         ),
     ],
 )
@@ -95,4 +99,4 @@ def test_payload_roundtrip(payload) -> None:
 )
 def test_event_name_registered_and_bound_to_payload_class(constant: str, name: str, payload_cls: type) -> None:
     assert constant == name
-    assert EVENT_REGISTRY[name] is payload_cls and payload_cls._registered_event_name == name
+    assert EVENT_REGISTRY[name] is payload_cls and name in payload_cls._all_registered_names

@@ -63,7 +63,7 @@ flowchart LR
 | 组件 | 文件位置 | 职责 |
 |------|----------|------|
 | **EventBus** | `src/modules/events/event_bus.py` | 事件总线核心：emit / on / off、精确 + 通配匹配、拦截器链、统计 |
-| **EventRegistry** | `src/modules/events/registry.py` | `@register_event` 装饰器 + `EVENT_REGISTRY` + 启动一致性硬检查 |
+| **事件注册表** | `src/modules/events/registry.py` | `@register_event` 装饰器 + `EVENT_REGISTRY` + 启动一致性硬检查 |
 | **CoreEvents** | `src/modules/events/names.py` | 事件名常量（具名 + 通配占位符，全集以该文件为准） |
 | **Payloads** | `src/modules/events/payloads/*.py` | 事件载荷类型（Pydantic，按语义域分包） |
 | **EventInterceptor** | `src/modules/events/interceptors/*.py` | 拦截管道（限流 / 相似过滤 / 场次盖章） |
@@ -244,7 +244,7 @@ Dashboard WebSocket 的 `type` 字段 = **事件名直通**；唯一例外是 `r
 class RoomMessagePayload(BasePayload): ...
 ```
 
-- **反向引用**：被装饰类获得 `_registered_event_name`（多名时为 `_MultiName` 对象，`==` 与任意已注册名相等）与 `_all_registered_names`（`frozenset`）
+- **注册名集合**：被装饰类获得 `_all_registered_names`（`frozenset`，列出该类注册的全部事件名）
 - **冲突检查**：同一事件名被注册为**不同类型**时抛 `ValueError`
 
 ### 启动钩子与硬检查
