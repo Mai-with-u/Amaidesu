@@ -1036,29 +1036,33 @@ class LLMManager:
     def _build_request_params(kwargs: Dict[str, Any]) -> Dict[str, Any]:
         """从调用 kwargs 提取请求参数快照（两账落库与请求历史共用）。
 
-        思考强度档位（reasoning_effort）按白名单语义入快照：None / 缺省 / 空串
-        均不进快照（避免把"未配置"误显示为"显式置 None"）；其他生成参数按
-        既有温度 / 工具白名单路径处理。
+        请求参数快照是下游观测（预览摘要 / 图像计数 / 诊断正文）的唯一
+        输入，因此这里产出**唯一归一化形状**：messages 恒为中立 payload
+        dump（文本与图像片段在 ``parts``，不出现 OpenAI ``content`` 键），
+        全部从入站归一化后的 :class:`GenerateRequest` 取值。system 不在
+        messages 里，单独快照，否则提示词预览缺主提示词。
+
+        思考强度档位（reasoning_effort）按白名单语义入快照：None / 缺省 /
+        空串均不进快照（避免把"未配置"误显示为"显式置 None"），单次调用
+        覆盖值优先于请求内档位。``request`` 缺失（非经 generate 入口的
+        直连调用）返回空快照，下游按无消息处理。
         """
-        request_params = {
-            "messages": kwargs.get("messages"),
+        request = kwargs.get("request")
+        if request is None:
+            return {}
+        request_params: Dict[str, Any] = {
+            "system": request.system,
+            "messages": [m.model_dump() for m in request.messages],
+            "tools": [t.model_dump() for t in request.tools] or None,
             "temperature": kwargs.get("temperature"),
-            "tools": kwargs.get("tools"),
         }
         reasoning_effort = kwargs.get("reasoning_effort")
+        if not (isinstance(reasoning_effort, str) and reasoning_effort):
+            reasoning_effort = request.reasoning_effort
         if isinstance(reasoning_effort, str) and reasoning_effort:
             request_params["reasoning_effort"] = reasoning_effort
-        if request_params["messages"] is None and kwargs.get("request") is not None:
-            # 中立 payload 契约路径：消息以 GenerateRequest 承载
-            # system 不在 messages 里，单独快照，否则提示词预览缺主提示词
-            request_params["system"] = kwargs["request"].system
-            request_params["messages"] = [m.model_dump() for m in kwargs["request"].messages]
-            request_params["tools"] = [t.model_dump() for t in kwargs["request"].tools] or None
-            if kwargs["request"].strict_tool_arguments:
-                request_params["strict_tool_arguments"] = True
-            req_reasoning = getattr(kwargs["request"], "reasoning_effort", None)
-            if isinstance(req_reasoning, str) and req_reasoning and "reasoning_effort" not in request_params:
-                request_params["reasoning_effort"] = req_reasoning
+        if request.strict_tool_arguments:
+            request_params["strict_tool_arguments"] = True
         return {k: v for k, v in request_params.items() if v is not None}
 
     async def _record_call_outcome(

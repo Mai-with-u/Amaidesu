@@ -129,48 +129,24 @@ def _heuristic_tokens(text: str) -> int:
     return max(1, int(cjk * _CJK_TOKEN_RATIO + ascii_chars * _ASCII_TOKEN_RATIO))
 
 
-def _count_content_tokens(content: Any) -> int:
-    """消息 content 计数：字符串走 tokenizer，多模态 part 列表逐段累计。"""
-    if content is None:
-        return 0
-    if isinstance(content, str):
-        return count_text_tokens(content)
-    if isinstance(content, list):
-        total = 0
-        for part in content:
-            if isinstance(part, str):
-                total += count_text_tokens(part)
-            elif isinstance(part, dict):
-                part_type = str(part.get("type") or "")
-                if "image" in part_type:
-                    total += _IMAGE_TOKEN_ESTIMATE
-                elif isinstance(part.get("text"), str):
-                    total += count_text_tokens(part["text"])
-                else:
-                    total += count_text_tokens(json.dumps(part, ensure_ascii=False))
-        return total
-    return count_text_tokens(json.dumps(content, ensure_ascii=False, default=str))
-
-
 def _field(obj: Any, key: str) -> Any:
     """dict 与模型对象统一取字段。"""
     return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
 
 
 def _count_message_tokens(message: Any) -> int:
-    """单条消息 token 计数（content / parts 双形状 + 工具调用 + 协议开销）。
+    """单条消息（中立 dump 形状）token 计数：parts 逐段 + 工具调用 + 协议开销。
 
-    遗留 dict 路径文本在 ``content``；中立 payload dump 路径文本在 ``parts``
-    （TextPart/ImagePart）。图像（含 data URL 的 base64 内嵌）不进 tokenizer，
-    按固定估值计；assistant 既往工具调用按其 JSON 序列化计数；回传给模型的
-    思考（``reasoning.text``）按正文计数，归在 assistant 名下。
+    文本在 ``parts``（TextPart/ImagePart dump），图像（含 data URL 的
+    base64 内嵌）不进 tokenizer，按固定估值计；assistant 既往工具调用按
+    其 JSON 序列化计数；回传给模型的思考（``reasoning.text``）按正文计数，
+    归在 assistant 名下。
     """
-    content = _field(message, "content")
     parts = _field(message, "parts") or []
     tool_calls = _field(message, "tool_calls") or []
     reasoning = _field(message, "reasoning")
 
-    total = _count_content_tokens(content)
+    total = 0
     for part in parts:
         if isinstance(part, str):
             total += count_text_tokens(part)
@@ -239,20 +215,18 @@ class RequestSections(NamedTuple):
 def extract_request_sections(kwargs: Dict[str, Any]) -> Optional[RequestSections]:
     """从 generate 调用 kwargs 提取计量原值。
 
-    与 ``LLMManager._build_request_params`` 同构的双路径：中立 payload 契约
-    路径从 ``kwargs["request"]`` 归一化出 dict 形状，遗留路径直接取 dict 列表。
-    消息列表缺失（无法构成一次请求）返回 None。
+    与 ``LLMManager._build_request_params`` 同源的单路径：入站归一化后的
+    中立 payload 契约以 ``kwargs["request"]`` 承载，消息 / 工具 dump 后即
+    计量原值（工具 dump 保留归属标注字段，供分段归属）。``request`` 缺失
+    （无法构成一次请求）返回 None。
     """
     request = kwargs.get("request")
-    if request is not None:
-        messages = [m.model_dump() for m in getattr(request, "messages", []) or []]
-        tools = [t.model_dump(exclude_none=True) for t in getattr(request, "tools", []) or []]
-        parts = [p.model_dump() for p in getattr(request, "system_parts", []) or []]
-        return RequestSections(getattr(request, "system", None) or "", messages, tools, parts)
-    messages = kwargs.get("messages")
-    if messages is None:
+    if request is None:
         return None
-    return RequestSections(kwargs.get("system") or "", list(messages), list(kwargs.get("tools") or []), [])
+    messages = [m.model_dump() for m in getattr(request, "messages", []) or []]
+    tools = [t.model_dump(exclude_none=True) for t in getattr(request, "tools", []) or []]
+    parts = [p.model_dump() for p in getattr(request, "system_parts", []) or []]
+    return RequestSections(getattr(request, "system", None) or "", messages, tools, parts)
 
 
 def _index_tool_calls(messages: List[Any]) -> Dict[str, Tuple[str, Any]]:

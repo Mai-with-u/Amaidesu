@@ -23,7 +23,7 @@ def _make_breakdown(
         profile_name="replyer",
         model_name="test-model",
         system=system,
-        messages=messages if messages is not None else [{"role": "user", "content": "你好"}],
+        messages=messages if messages is not None else [{"role": "user", "parts": ["你好"]}],
         tools=tools if tools is not None else [{"name": "reply", "description": "回复", "parameters": {}}],
         api_prompt_tokens=api_prompt_tokens,
     )
@@ -69,9 +69,9 @@ class TestEstimateBreakdown:
 
     def test_messages_grouped_by_role(self) -> None:
         messages = [
-            {"role": "user", "content": "第一条"},
-            {"role": "user", "content": "第二条"},
-            {"role": "assistant", "content": "回复"},
+            {"role": "user", "parts": ["第一条"]},
+            {"role": "user", "parts": ["第二条"]},
+            {"role": "assistant", "parts": ["回复"]},
         ]
         breakdown = _make_breakdown(messages=messages)
         items = {item.name: item.tokens for item in _section(breakdown, cm.SECTION_MESSAGES).items}
@@ -99,14 +99,14 @@ class TestEstimateBreakdown:
         assert all(section.tokens == 0 and section.count == 0 for section in empty.sections)
 
     def test_image_part_counted_with_fixed_estimate(self) -> None:
-        text_only = _make_breakdown(messages=[{"role": "user", "content": "看这里"}])
+        text_only = _make_breakdown(messages=[{"role": "user", "parts": ["看这里"]}])
         with_image = _make_breakdown(
             messages=[
                 {
                     "role": "user",
-                    "content": [
+                    "parts": [
                         {"type": "text", "text": "看这里"},
-                        {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
+                        {"type": "image", "image": "https://example.com/x.png"},
                     ],
                 }
             ]
@@ -140,21 +140,17 @@ class TestAttribution:
         system = "你是 AI 玩家。\n\n" + catalog
         tools = [{"name": "minecraft_skill", "description": "读技能", "parameters": {}, "result_section": "skills"}]
         messages = [
-            {"role": "user", "content": "开局"},
+            {"role": "user", "parts": ["开局"]},
             {
                 "role": "assistant",
-                "content": "",
+                "parts": [],
                 "tool_calls": [
-                    {
-                        "id": "c1",
-                        "type": "function",
-                        "function": {"name": "minecraft_skill", "arguments": '{"name": "survival_opening"}'},
-                    },
+                    {"id": "c1", "name": "minecraft_skill", "arguments": {"name": "survival_opening"}},
                     {"id": "c2", "name": "maicraft_perceive", "arguments": {"view": "situation"}},
                 ],
             },
-            {"role": "tool", "tool_call_id": "c1", "content": "先砍树" * 20},
-            {"role": "tool", "tool_call_id": "c2", "content": "附近有树"},
+            {"role": "tool", "tool_call_id": "c1", "parts": ["先砍树" * 20]},
+            {"role": "tool", "tool_call_id": "c2", "parts": ["附近有树"]},
         ]
         common = dict(request_id="r", profile_name="minecraft", model_name="m", system=system, messages=messages)
         without_parts = cm.estimate_breakdown(tools=tools, **common)
@@ -189,9 +185,10 @@ class TestAttribution:
         assert _section(breakdown, cm.SECTION_SKILLS).raw_tokens == 0
 
 
-def test_extract_request_sections_from_payload_and_legacy_kwargs() -> None:
+def test_extract_request_sections_from_payload_request() -> None:
+    """计量原值只从入站归一化后的中立请求提取，request 缺失返回 None。"""
     request = GenerateRequest(
-        messages=[Message(role="user", content="hi")],
+        messages=[Message(role="user", parts=["hi"])],
         system="sys",
         tools=[ToolSpec(name="t", description="d"), ToolSpec(name="m", context_section="mcp_tools")],
         system_parts=[ContextPart(section="skills", name="技能目录", text="sys")],
@@ -204,16 +201,8 @@ def test_extract_request_sections_from_payload_and_legacy_kwargs() -> None:
     assert sections.tools[1]["context_section"] == "mcp_tools"
     assert sections.system_parts == [{"section": "skills", "name": "技能目录", "text": "sys"}]
 
-    legacy = extract_request_sections(
-        {
-            "messages": [{"role": "user", "content": "hi"}],
-            "system": "sys",
-            "tools": [{"type": "function", "function": {"name": "t"}}],
-        }
-    )
-    assert (legacy.system, len(legacy.tools), legacy.system_parts) == ("sys", 1, [])
     assert extract_request_sections({}) is None
-    assert extract_request_sections({"messages": None}) is None
+    assert extract_request_sections({"messages": [{"role": "user", "parts": ["hi"]}]}) is None
 
 
 def test_heuristic_token_counting() -> None:

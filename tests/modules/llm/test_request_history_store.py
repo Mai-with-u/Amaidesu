@@ -48,7 +48,7 @@ async def _record_outcome(
         response_content="回复" if success else None,
         latency_ms=123,
         timestamp_ms=ts_ms,
-        request_params=request_params or {"messages": [{"role": "user", "content": "hi"}]},
+        request_params=request_params or {"messages": [{"role": "user", "parts": ["hi"]}]},
         usage=usage,
     )
 

@@ -36,10 +36,11 @@ _PREVIEW_MAX_CHARS = 50
 def build_prompt_preview(request_params: Any) -> str:
     """从请求参数提取列表页 Prompt 预览摘要。
 
-    取 ``messages`` 里最后一条有正文的消息（与触发语境最接近），兼容两种
-    消息形态：OpenAI 原生（``content`` 字符串或多模态列表）与中立 payload
-    契约（``parts`` 片段列表，图像片段以占位符呈现）。截取固定长度——正文
-    已出库到诊断文件，摘要列只承担列表页辨识。
+    取 ``messages`` 里最后一条有正文的消息（与触发语境最接近）。输入是
+    :meth:`LLMManager._build_request_params` 产出的归一化快照，消息恒为
+    中立 payload dump 形状（``parts`` 片段列表，图像片段以占位符呈现），
+    无第二种消息形态。截取固定长度——正文已出库到诊断文件，摘要列只
+    承担列表页辨识。
     """
     messages = request_params.get("messages") if isinstance(request_params, dict) else None
     if not isinstance(messages, list):
@@ -52,29 +53,18 @@ def build_prompt_preview(request_params: Any) -> str:
 
 
 def _message_body_text(message: Any) -> str:
-    """单条消息的正文文本（OpenAI content 形态与中立 parts 形态通吃）。"""
+    """单条消息的正文文本（中立 dump 形状：``parts`` 片段拼接）。"""
     if not isinstance(message, dict):
         return ""
     lines: List[str] = []
-    content = message.get("content")
-    if isinstance(content, str):
-        lines.append(content)
-    elif isinstance(content, list):
-        for piece in content:
-            if isinstance(piece, str):
-                lines.append(piece)
-            elif isinstance(piece, dict) and piece.get("type") == "text" and isinstance(piece.get("text"), str):
+    for piece in message.get("parts") or []:
+        if isinstance(piece, str):
+            lines.append(piece)
+        elif isinstance(piece, dict):
+            if isinstance(piece.get("text"), str):
                 lines.append(piece["text"])
-    parts = message.get("parts")
-    if isinstance(parts, list):
-        for piece in parts:
-            if isinstance(piece, str):
-                lines.append(piece)
-            elif isinstance(piece, dict):
-                if isinstance(piece.get("text"), str):
-                    lines.append(piece["text"])
-                elif piece.get("type") == "image":
-                    lines.append("[图片内容已省略]")
+            elif piece.get("type") == "image":
+                lines.append("[图片内容已省略]")
     return "\n".join(line for line in lines if line)
 
 
@@ -82,8 +72,8 @@ def count_image_parts(request_params: Any) -> int:
     """统计请求消息里的图像片段数量（中立契约 ``{type:"image"}`` part）。
 
     正文大字段已出库到诊断文件，列表行无消息体可查，计数必须在写侧随行
-    落库（WebUI 历史列表"本次注入 N 张截图"徽标的数据源）。非列表形态的
-    输入一律计 0。
+    落库（WebUI 历史列表"本次注入 N 张截图"徽标的数据源）。输入是引擎
+    产出的归一化快照，非列表形态的一律计 0。
     """
     messages = request_params.get("messages") if isinstance(request_params, dict) else None
     if not isinstance(messages, list):
