@@ -50,6 +50,16 @@ class _BrokenRegistry:
         raise RuntimeError("boom")
 
 
+class _OperationsStub:
+    """运营面桩：与注册表桩同源，list_providers 直接回预置提供者记录。"""
+
+    def __init__(self, providers: list[Any]) -> None:
+        self._providers = providers
+
+    def list_providers(self) -> list[Any]:
+        return self._providers
+
+
 _EMPTY_TOOLS_CFG: dict[str, Any] = {}
 
 
@@ -63,7 +73,7 @@ def _catalog(
     if avatar_platform is not None:
         # avatar.toml 拍平后顶层键为 platform（启用名单 + 各平台成员段）
         main_config["platform"] = avatar_platform
-    return build_tool_catalog(registry, tools_cfg, main_config)
+    return build_tool_catalog(_OperationsStub(registry.list_providers()), registry, tools_cfg, main_config)
 
 
 def _providers_by_category(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
