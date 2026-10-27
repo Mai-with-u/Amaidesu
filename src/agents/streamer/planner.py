@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from pydantic import Field
@@ -59,15 +60,14 @@ from src.agents.streamer.planner_render import (
 from src.agents.streamer.game_ledger import GameLedger
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import GameEventBatch
-from src.modules.context import TailImages
+from src.modules.context import TransientImages, absorb_result_images, is_visual_caller
 from src.modules.agents.control import PROVIDER_NAME as FRAMEWORK_PROVIDER
 from src.modules.llm.payload import response_to_assistant_message
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
-from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
+from src.modules.tools.conversation import to_conversation_view
 from src.modules.tools.llm_defs import function_definition
-from src.modules.tools.models import ToolExecutionResult, ToolInvocation
-from src.modules.vision.image_store import get_image_store
+from src.modules.tools.models import ToolInvocation
 
 from .room_state import RoomState
 from .thinking_stream import ThinkingStreamContext
@@ -283,7 +283,7 @@ class Planner:
 
         self._assembler = PlannerAssembler()
         # 工具刚返回的截图：观察里只留文字，真图挂在下一步请求的尾部让模型看一次
-        self._tail_images = TailImages()
+        self._transient_images = TransientImages()
 
         self.logger = get_logger("Planner")
 
@@ -306,7 +306,7 @@ class Planner:
         返回 user 消息（说明 + 图片句柄），不写进消息序列；画面带来的印象
         由模型这一步的思考与决定带下去。
         """
-        if self._frame_provider is None or not self._visual_caller():
+        if self._frame_provider is None or not is_visual_caller(self._llm_service, PLANNER_PROFILE):
             return None
         try:
             frame = self._frame_provider()
@@ -371,7 +371,7 @@ class Planner:
             reply_duration_ms / reply_failures / speech_gate_bounces——字段语义见类型注释。
         """
         # 上一窗没来得及看的截图属于旧画面，新的决策窗不带
-        self._tail_images.drain()
+        self._transient_images.drain()
         # 本窗游戏事件素材重置（本轮新入账批次；回执随 ReAct 循环逐步累积，reply 交接时取全量）
         resolved_batch = game_batch or GameEventBatch()
         self._round_facts_text = resolved_batch.facts_text
@@ -449,7 +449,7 @@ class Planner:
 
             # 上一步工具返回的截图只挂在这一次请求尾部、不写回消息序列：下一步请求时它已消失，
             # 前缀与这一次逐字一致；画面内容由模型这一步的思考与决定带下去
-            tail = self._tail_images.drain()
+            tail = self._transient_images.drain()
             extra = [item for item in (frame_tail if steps == 1 else None, tail) if item is not None]
             try:
                 response = await self._llm_service.generate(
@@ -733,21 +733,6 @@ class Planner:
         history_messages = [canonical.turn_to_message(turn) for turn in canonical.trim_batch_echo(history, batch)]
         return history_messages + batch_messages
 
-    def _visual_caller(self) -> bool:
-        """本档位主模型能否看图（能力协商出口）。
-
-        引擎不可查（测试假件 / 未注入）或查询异常一律按非视觉——判错方向
-        是多一次 VLM 转述，而不是把图塞给看不懂的模型。
-        """
-        getter = getattr(self._llm_service, "is_profile_visual", None)
-        if not callable(getter):
-            return False
-        try:
-            return getter(PLANNER_PROFILE) is True
-        except Exception as e:
-            self.logger.warning(f"视觉能力查询失败，按非视觉处理: {e}", exc=True)
-            return False
-
     async def _read_reference_tools(self, round_id: str) -> str:
         """逐个调用配置的只读参考工具（无参数），按工具名列出结果；失败照实写出原因，不中断决策。"""
         if self._tool_registry is None or not self.typed_config.reference_tools:
@@ -925,9 +910,9 @@ class Planner:
 
         委派型游戏的两个框架工具名（framework_delegate / framework_prompt）整体
         委托给"手头的事"工作台受理——状态迁移规则在其拦截规则表里，不在本循环。
-        其余工具走本方法：视觉调用方（本档位主模型声明 visual）且工具结果带图时，
-        图存进 VisionImageStore、句柄登记到尾部临时图片，下一步请求时挂在序列最后
-        让模型看一次；观察文本里图位是占位说明。
+        其余工具走本方法：视觉调用方且工具结果带图时，图经 absorb_result_images
+        入库换句柄、登记到易逝图，下一步请求时挂在序列最后让模型看一次；
+        观察文本里图位是占位说明。
         """
         if self._tool_registry is None:
             return json.dumps({"ok": False, "error": "tool_registry 未注入"}, ensure_ascii=False)
@@ -939,7 +924,7 @@ class Planner:
                 caller_profile=PLANNER_PROFILE,
                 source_dialogue=source_dialogue,
                 relay_without_input=relay_without_input,
-                on_result=self._absorb_tool_images,
+                on_result=partial(absorb_result_images, self._transient_images, self._llm_service, PLANNER_PROFILE),
             )
         try:
             result = await self._tool_registry.invoke(
@@ -954,7 +939,7 @@ class Planner:
         except Exception as e:
             self.logger.warning(f"工具 '{name}' 执行异常: {e}", exc=True)
             return json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
-        self._absorb_tool_images(name, result)
+        absorb_result_images(self._transient_images, self._llm_service, PLANNER_PROFILE, name, result)
         if result.success:
             data = observation_data(result)
             # 本轮回执进状态素材：reply 交接时的状态跃迁事实块从这里取观察工具的关键字段
@@ -962,13 +947,6 @@ class Planner:
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
         return render_observation(data)
-
-    def _absorb_tool_images(self, name: str, result: ToolExecutionResult) -> None:
-        """工具结果带图且本档位主模型能看图时，把截图登记到尾部临时图片（成败结果都过这里）。"""
-        if self._visual_caller():
-            image_data_urls = extract_image_data_urls(result)
-            if image_data_urls:
-                self._tail_images.add([get_image_store().put(url) for url in image_data_urls], source=name)
 
     # ==================== 人物画像注入 ====================
 

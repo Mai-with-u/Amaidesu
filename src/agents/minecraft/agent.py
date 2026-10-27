@@ -64,7 +64,7 @@ from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
 from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
 from src.agents.minecraft.wake_queue import WakeQueue, opens_task
 from src.modules.agents.base import AgentState, BaseAgent
-from src.modules.context import PrefixGuard, TailImages
+from src.modules.context import PrefixGuard, TransientImages, absorb_result_images
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentRepliedPayload
@@ -77,11 +77,10 @@ from src.modules.llm.errors import UnsendableRequestError
 from src.modules.llm.payload import response_to_assistant_message
 from src.modules.utils.backoff import ExponentialBackoff
 from src.modules.skills import SkillLibrary
-from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
+from src.modules.tools.conversation import to_conversation_view
 from src.modules.tools.llm_defs import function_definition
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
-from src.modules.vision.image_store import get_image_store
 
 from .config import MinecraftConfig
 
@@ -210,7 +209,7 @@ class MinecraftAgent(BaseAgent):
         self._shown_context: Dict[str, Any] = {}
         self._idle_compaction: Optional[asyncio.Task[None]] = None
         # 工具刚返回的截图：历史里只留文字回执，真图挂在下一次推理请求的尾部，用完即弃
-        self._tail_images = TailImages()
+        self._transient_images = TransientImages()
         # 相邻两次推理请求的历史只该在尾部追加；集中整理与开新任务之外的改写记告警
         self._prefix_guard = PrefixGuard("MinecraftAgent")
         # 委派账：批内追踪（两份任务号清单）与账面写入的单一管辖；批任务号
@@ -663,7 +662,7 @@ class MinecraftAgent(BaseAgent):
             on_delta = self._build_thinking_callback(mc_round, steps, mc_seq_box) if mc_round else None
             # 上一步看过的截图只挂在这一次请求尾部，不写回历史：下一步请求时它已消失，
             # 历史前缀与这一次逐字一致，缓存照常命中；画面内容由模型这一步的说明带下去
-            tail = self._tail_images.drain()
+            tail = self._transient_images.drain()
             request_messages = [*messages, tail] if tail is not None else messages
             self._prefix_guard.observe(messages)
             try:
@@ -788,7 +787,7 @@ class MinecraftAgent(BaseAgent):
         ]
         self._shown_context = deepcopy(facts)
         # 丢掉的那段对话里看过的截图也一并作废
-        self._tail_images.drain()
+        self._transient_images.drain()
         self._prefix_guard.expect_rewrite("对话发不出去，按任务事实重开")
 
     def _start_new_task(self, messages: List[Dict[str, Any]], system_message: Dict[str, Any]) -> None:
@@ -796,7 +795,7 @@ class MinecraftAgent(BaseAgent):
         self._task_instructions.clear()
         messages[:] = [dict(system_message)]
         # 上个任务最后看过还没来得及用的截图属于旧现场，新任务不带
-        self._tail_images.drain()
+        self._transient_images.drain()
         self._prefix_guard.expect_rewrite("开新任务")
         self._context_compactor.checkpoints = 0
         self._shown_context = {}
@@ -846,32 +845,14 @@ class MinecraftAgent(BaseAgent):
     # 工具执行与结果吸收
     # ==================================================================
 
-    def _visual_caller(self) -> bool:
-        """本档位主模型能否看图（能力协商出口）。
-
-        引擎不可查（测试假件 / 未注入）或查询异常一律按非视觉——判错方向
-        是多一次 VLM 转述，而不是把图塞给看不懂的模型。
-        """
-        if self._llm is None:
-            return False
-        getter = getattr(self._llm, "is_profile_visual", None)
-        if not callable(getter):
-            return False
-        try:
-            return getter(MINECRAFT_PROFILE) is True
-        except Exception as e:
-            self.logger.warning(f"视觉能力查询失败，按非视觉处理: {e}", exc=True)
-            return False
-
     async def _execute_tool(self, name: str, arguments: Dict[str, Any], *, round_id: str = "") -> Dict[str, Any]:
         """串行执行单个工具调用：统一经 ToolRegistry（观测/停用/熔断复用既有机制）。
 
         MaiCraft 工具的观察就是它原样的 JSON 回复；连接失败等拿不到回复时写明原因。
         registry 工具的观察走对话安全视图：base64 二进制载荷（截图等）属
         tool.result 事件的 UI 展示通道，在对话里以占位符出现。视觉调用方
-        （本档位主模型声明 visual）且工具结果带图时，图存进 VisionImageStore、
-        句柄登记到尾部临时图片，下一次推理请求时挂在序列最后让模型看一次；
-        历史里始终只有文字观察。
+        且工具结果带图时，图经 absorb_result_images 入库换句柄、登记到易逝图，
+        下一次推理请求时挂在序列最后让模型看一次；历史里始终只有文字观察。
         """
         if self._tool_registry is None:
             return {"ok": False, "error": "工具执行失败：tool_registry 未注入", "tool": name}
@@ -896,10 +877,7 @@ class MinecraftAgent(BaseAgent):
                 }
             )
             observation = to_conversation_view(data)
-            if self._visual_caller():
-                image_data_urls = extract_image_data_urls(result)
-                if image_data_urls:
-                    self._tail_images.add([get_image_store().put(url) for url in image_data_urls], source=name)
+            absorb_result_images(self._transient_images, self._llm, MINECRAFT_PROFILE, name, result)
             return observation
         return {"ok": False, "error": result.error_message or "工具执行失败", "tool": name}
 

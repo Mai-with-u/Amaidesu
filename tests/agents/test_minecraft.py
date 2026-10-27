@@ -755,7 +755,7 @@ async def test_visual_caller_queues_image_as_tail_message() -> None:
         observation = await agent._execute_tool("vision_look_at_screen", {})
 
         assert image not in json.dumps(observation, ensure_ascii=False)
-        tail = agent._tail_images.drain()
+        tail = agent._transient_images.drain()
         refs = [part["ref"] for part in tail["content"] if part["type"] == "image_ref"]
         assert tail["role"] == "user" and len(refs) == 1
         assert store.get(refs[0]) == f"data:image/png;base64,{image}"
@@ -767,7 +767,7 @@ async def test_visual_caller_without_image_keeps_payload() -> None:
     result = ToolExecutionResult(tool_name="minecraft_glance", success=True, structured_content={"ok": True})
     agent = _agent_with_result(result, visual=True)
     assert await agent._execute_tool("minecraft_glance", {}) == {"ok": True}
-    assert agent._tail_images.drain() is None
+    assert agent._transient_images.drain() is None
 
 
 # ---------------------------------------------------------------------------

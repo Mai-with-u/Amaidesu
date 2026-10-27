@@ -135,15 +135,15 @@ async def test_visual_caller_gets_text_observation_and_one_shot_tail_image(image
     observation = await planner._invoke_registry_tool("vision_look_at_screen", {})
 
     assert _IMAGE not in observation and "[图像 1 KB 已省略]" in observation
-    tail = planner._tail_images.drain()
+    tail = planner._transient_images.drain()
     refs = [part["ref"] for part in tail["content"] if part["type"] == "image_ref"]
     assert tail["role"] == "user" and len(refs) == 1
     assert image_store.get(refs[0]) == f"data:image/png;base64,{_IMAGE}"
-    assert planner._tail_images.drain() is None
+    assert planner._transient_images.drain() is None
 
     no_image = _planner(ToolExecutionResult(tool_name="g", success=True, structured_content={"ok": True}), visual=True)
     assert json.loads(await no_image._invoke_registry_tool("minecraft_glance", {})) == {"ok": True}
-    assert no_image._tail_images.drain() is None
+    assert no_image._transient_images.drain() is None
 
 
 async def test_tail_image_rides_only_the_next_request(image_store) -> None:

@@ -1,4 +1,4 @@
-"""上下文原语单测：预算换算、计量缓存、按组切分、后台准备、前缀自检、尾部图片。"""
+"""上下文原语单测：预算换算、计量缓存、按组切分、后台准备、前缀自检、易逝图。"""
 
 from __future__ import annotations
 
@@ -14,12 +14,14 @@ from src.modules.context import (
     BackgroundCheckpoint,
     ContextBudgetConfig,
     PrefixGuard,
-    TailImages,
     TokenCounter,
+    TransientImages,
+    absorb_result_images,
     fold_count,
     group_messages,
     resolve_watermarks,
 )
+from src.modules.tools.models import ResultBlock, ToolExecutionResult
 
 
 def _user(text: str) -> Dict[str, Any]:
@@ -173,12 +175,12 @@ def test_prefix_guard_ignores_internal_markers() -> None:
     assert guard.observe([{"role": "user", "content": "a"}]) is None
 
 
-# 尾部图片
+# 易逝图
 
 
-def test_tail_images_drain_once() -> None:
+def test_transient_images_drain_once() -> None:
     """同一步多个带图回执合并成一条尾部 user 消息，取出即清空。"""
-    tail = TailImages()
+    tail = TransientImages()
     assert tail.drain() is None
     tail.add(["img_1"], source="vision_look_at_screen")
     tail.add(["img_2"], source="vision_look_at_screen")
@@ -214,3 +216,96 @@ def test_prefix_guard_flags_replaced_tool_calls() -> None:
     guard.observe([_user("a"), _call("c1")])
     assert guard.observe([_user("a"), _call("c1"), _user("b")]) is None
     assert guard.observe([_user("a"), _call("c2")]) is not None
+
+
+# absorb_result_images：从工具结果收图进易逝图
+
+
+class _RecordingStore:
+    """记录 put 调用的假图库，返回可预测的句柄。"""
+
+    def __init__(self) -> None:
+        self.put_calls: List[str] = []
+
+    def put(self, data_url: str) -> str:
+        self.put_calls.append(data_url)
+        return f"img_{len(self.put_calls)}"
+
+
+def _visual_llm(visual: bool = True) -> Any:
+    """带 is_profile_visual 的假引擎对象。"""
+
+    class _FakeLLM:
+        def is_profile_visual(self, profile: str) -> bool:
+            return visual
+
+    return _FakeLLM()
+
+
+def _image_result(*, success: bool = True, image_count: int = 1) -> ToolExecutionResult:
+    blocks: List[ResultBlock] = [ResultBlock(kind="text", text="截图如下")]
+    blocks.extend(ResultBlock(kind="image", data="B" * 64, mime_type="image/png") for _ in range(image_count))
+    return ToolExecutionResult(tool_name="vision_look_at_screen", success=success, content="ok", blocks=blocks)
+
+
+def test_absorb_result_images_success_visual_with_images() -> None:
+    """成功回执 + 视觉模型 + 带图：图入库换句柄，drain 产出含工具名的说明与 image_ref。"""
+    images = TransientImages()
+    store = _RecordingStore()
+    absorb_result_images(images, _visual_llm(), "planner", "vision_look_at_screen", _image_result(), store=store)
+    assert len(store.put_calls) == 1
+    message = images.drain()
+    assert message is not None and message["role"] == "user"
+    assert "vision_look_at_screen" in message["content"][0]["text"]
+    refs = [part["ref"] for part in message["content"] if part["type"] == "image_ref"]
+    assert refs == ["img_1"]
+
+
+def test_absorb_result_images_skips_failed_result() -> None:
+    """失败回执不触发看图路径：即便 blocks 带图也不吸收。"""
+    images = TransientImages()
+    store = _RecordingStore()
+    absorb_result_images(images, _visual_llm(), "planner", "shot", _image_result(success=False), store=store)
+    assert store.put_calls == []
+    assert images.drain() is None
+
+
+def test_absorb_result_images_skips_non_visual() -> None:
+    """模型不声明 visual：不吸收。"""
+    images = TransientImages()
+    store = _RecordingStore()
+    absorb_result_images(images, _visual_llm(visual=False), "planner", "shot", _image_result(), store=store)
+    assert store.put_calls == []
+    assert images.drain() is None
+
+
+@pytest.mark.parametrize("llm", [None, object(), "no-method"], ids=["none", "no-attr", "not-callable"])
+def test_absorb_result_images_unqueryable_llm_treated_non_visual(llm: Any) -> None:
+    """引擎不可查（None / 无该方法 / 不可调用）一律按非视觉。"""
+    images = TransientImages()
+    store = _RecordingStore()
+    absorb_result_images(images, llm, "planner", "shot", _image_result(), store=store)
+    assert images.drain() is None
+
+
+def test_absorb_result_images_query_exception_treated_non_visual() -> None:
+    """能力查询抛异常按非视觉处理，不外溢。"""
+
+    class _ExplodingLLM:
+        def is_profile_visual(self, profile: str) -> bool:
+            raise RuntimeError("查询失败")
+
+    images = TransientImages()
+    store = _RecordingStore()
+    absorb_result_images(images, _ExplodingLLM(), "planner", "shot", _image_result(), store=store)
+    assert images.drain() is None
+
+
+def test_absorb_result_images_success_without_image_blocks_is_noop() -> None:
+    """成功 + 视觉但结果无图块：空操作。"""
+    images = TransientImages()
+    store = _RecordingStore()
+    result = _image_result(image_count=0)
+    absorb_result_images(images, _visual_llm(), "planner", "shot", result, store=store)
+    assert store.put_calls == []
+    assert images.drain() is None

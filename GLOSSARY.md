@@ -17,3 +17,7 @@
 ## 决策窗材料（window materials）
 
 一个决策窗需要的一次性材料包：对话历史投影、本窗游戏事件批次、上场回顾段。由 `SessionScope.open_window()` 按"出账先于读取"的顺序一次取齐，返回 `WindowMaterials`；字段语义 None 与空不同义（None = 读库失败宁可无历史、空列表 = 真无历史、空串 = 不注入），见其类型注释。
+
+## 易逝图（transient images）
+
+工具回执带图时的图片生命周期约定：图不进对话历史——历史里只留文字回执；真图入库换句柄后只挂在下一次请求的消息末尾，用完即弃。承载模块为 `src/modules/context/transient_images.py` 的 `TransientImages`（暂存与取走）与 `absorb_result_images`（从工具结果收图）。ADR-040 所称"尾部临时图片/易逝内容"即此物。
