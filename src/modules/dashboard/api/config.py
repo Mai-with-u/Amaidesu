@@ -14,8 +14,8 @@ API 键约定：**scope 前缀 + 文件内点分路径**——``tools.tools.task
 
 校验语义：写路径统一走加载管线的 Schema 校验（``update_config_values``），
 类型/约束违约返回 422 + 中文消息（含文件名与字段路径），无手写字段校验分支。
-业务装配（schema 适配、脱敏契约、写路径编排）在
-``services.config_adapter``，本模块只保留路由声明与 HTTP 语义。
+业务装配（schema 适配、脱敏契约、写管线）在 ``src.modules.config.webui``，
+组件重建编排在 ``services.config_adapter``，本模块只保留路由声明与 HTTP 语义。
 """
 
 from __future__ import annotations
@@ -24,7 +24,9 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from src.modules.config.layout import CONFIG_SCOPES
 from src.modules.config.multi_file_loader import resolve_root_schema
+from src.modules.config.webui import build_frontend_groups, mask_sensitive_values, resolve_scope
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.config import (
     BatchChangeError,
@@ -37,14 +39,7 @@ from src.modules.dashboard.schemas.config import (
     SchemaGroupsResponse,
 )
 from src.modules.dashboard.services.component_runtime import ComponentRuntimeContext
-from src.modules.dashboard.services.config_adapter import (
-    _SCOPES,
-    ConfigApplyOutcome,
-    _build_frontend_groups,
-    _mask_sensitive_values,
-    _resolve_scope,
-    apply_config_updates,
-)
+from src.modules.dashboard.services.config_adapter import ConfigApplyOutcome, apply_config_updates
 from src.modules.dashboard.utils.component_helper import config_dir as get_config_dir
 from src.modules.logging import get_logger
 from src.modules.utils.task_utils import spawn_background_task
@@ -105,7 +100,7 @@ async def get_config(server: ServerDep) -> ConfigResponse:
 
     try:
         raw_config = dict(config_service.main_config or {})
-        masked_config = _mask_sensitive_values(raw_config)
+        masked_config = mask_sensitive_values(raw_config)
         return ConfigResponse(config=masked_config)
     except Exception as e:
         logger.exception(f"获取配置失败: {e}")
@@ -117,7 +112,7 @@ async def get_config_schema(server: ServerDep) -> SchemaGroupsResponse:
     """获取配置 Schema
 
     使用 ``ConfigSchemaGenerator`` 从六个根 Schema 自动推导，
-    经 ``_build_frontend_groups`` 转换为前端 ``{groups, version}`` 格式。
+    经 ``build_frontend_groups`` 转换为前端 ``{groups, version}`` 格式。
     """
     config_service = server.config_service
     if not config_service:
@@ -125,7 +120,7 @@ async def get_config_schema(server: ServerDep) -> SchemaGroupsResponse:
         return SchemaGroupsResponse()
 
     try:
-        result = _build_frontend_groups(config_service)
+        result = build_frontend_groups(config_service)
         return SchemaGroupsResponse(**result)
     except Exception as e:
         logger.exception(f"获取配置 Schema 失败: {e}")
@@ -148,10 +143,10 @@ async def update_config(request: ConfigUpdateRequest, server: ServerDep) -> Conf
     if not config_service:
         raise HTTPException(status_code=503, detail="Config service 不可用")
 
-    scope = _resolve_scope(request.key)
+    scope = resolve_scope(request.key)
     root_cls = resolve_root_schema(scope)
     if root_cls is None:
-        raise HTTPException(status_code=422, detail=f"未知配置域: {scope!r}（合法 scope: {list(_SCOPES)}）")
+        raise HTTPException(status_code=422, detail=f"未知配置域: {scope!r}（合法 scope: {list(CONFIG_SCOPES)}）")
 
     outcome = await apply_config_updates(
         config_service,

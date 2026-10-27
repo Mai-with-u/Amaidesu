@@ -1,4 +1,9 @@
-"""config_adapter 服务层边界：敏感值脱敏、占位回写检测、schema 树行走、前端分组构建、对象数组占位回填"""
+"""WebUI 配置视图边界：敏感值脱敏、占位回写检测、schema 树行走、前端分组构建、对象数组占位回填。
+
+视图与写管线实现于 src.modules.config.webui；保存入口 apply_config_updates 为
+dashboard 侧的组件重建编排层。本文件经公开接口测试，并以形状对拍用例锁定
+HTTP 响应的 JSON 形状（前端按字段消费，形状漂移即前端破坏）。
+"""
 
 from __future__ import annotations
 
@@ -11,14 +16,14 @@ from pydantic import BaseModel, ConfigDict
 from src.modules.config.multi_file_loader import resolve_root_schema
 from src.modules.component_catalog import fill_component_schemas
 from src.modules.config.registry import COMPONENT_SCHEMAS
-from src.modules.dashboard.services.config_adapter import (
-    _build_frontend_groups,
-    _fill_array_placeholders,
-    _find_placeholder_write,
-    _mask_sensitive_values,
-    _walk_schema,
-    apply_config_updates,
+from src.modules.config.webui import (
+    build_frontend_groups,
+    fill_array_placeholders,
+    find_placeholder_write,
+    mask_sensitive_values,
+    walk_schema,
 )
+from src.modules.dashboard.services.config_adapter import apply_config_updates
 
 PLACEHOLDER = "已设置"
 
@@ -64,7 +69,7 @@ class _FakeConfigService:
 
 
 def _group(service: _FakeConfigService, key: str) -> dict:
-    return next(g for g in _build_frontend_groups(service)["groups"] if g["key"] == key)
+    return next(g for g in build_frontend_groups(service)["groups"] if g["key"] == key)
 
 
 def _field(service: _FakeConfigService, group: str, key: str) -> dict:
@@ -86,7 +91,7 @@ def test_masking_hits_nested_and_list_credentials_without_touching_budgets_or_th
         },  # 数字型敏感名键不遮蔽，否则占位文本会撑爆数字输入控件
         "bot_name": "阿妈",
     }
-    masked = _mask_sensitive_values(config)
+    masked = mask_sensitive_values(config)
     assert masked["api_key"] == PLACEHOLDER and masked["max_tokens"] == 1024
     assert masked["model"] == {"api_secret": PLACEHOLDER, "keep": 1}
     assert masked["servers"] == [{"token": PLACEHOLDER}, {"plain": "v"}]
@@ -107,23 +112,21 @@ def test_masking_hits_nested_and_list_credentials_without_touching_budgets_or_th
     ],
 )
 def test_placeholder_write_detection(payload, expected) -> None:
-    assert _find_placeholder_write(payload) == expected
+    assert find_placeholder_write(payload) == expected
 
 
 # schema 树行走
 
 
 def test_walk_schema_locates_leaves_free_dicts_and_unknowns(monkeypatch) -> None:
-    kind, (host_cls, field_info) = _walk_schema(_HostConfig, ["nested", "port"])
+    kind, (host_cls, field_info) = walk_schema(_HostConfig, ["nested", "port"])
     assert (kind, host_cls, field_info.annotation) == ("leaf", _SubConfig, int)
-    kind, payload = _walk_schema(
-        _HostConfig, ["servers", "my-server", "name"]
-    )  # dict[str, 模型] 的动态键跳过后继续下钻
+    kind, payload = walk_schema(_HostConfig, ["servers", "my-server", "name"])  # dict[str, 模型] 的动态键跳过后继续下钻
     assert (kind, payload[0]) == ("leaf", _SubConfig)
-    assert _walk_schema(_HostConfig, ["free", "anything"]) == ("free_dict", None)
+    assert walk_schema(_HostConfig, ["free", "anything"]) == ("free_dict", None)
     for path in (["no_such_field"], []):  # extra=allow 宿主 rest 为空时不下钻注册表，仍视为未知
-        assert _walk_schema(_HostConfig, path) is None
-    assert _walk_schema(_SubConfig, ["no_such_field"]) is None
+        assert walk_schema(_HostConfig, path) is None
+    assert walk_schema(_SubConfig, ["no_such_field"]) is None
 
     class _CompSub(BaseModel):
         inner: str = ""
@@ -131,9 +134,9 @@ def test_walk_schema_locates_leaves_free_dicts_and_unknowns(monkeypatch) -> None
     root = resolve_root_schema("collectors")  # 采集器根是 extra=allow：未知段由注册表提供权威 Schema
     monkeypatch.setitem(COMPONENT_SCHEMAS, "comp", _CompSub)
     assert root.model_fields.get("comp") is None
-    kind, payload = _walk_schema(root, ["comp", "inner"])
+    kind, payload = walk_schema(root, ["comp", "inner"])
     assert (kind, payload[0]) == ("leaf", _CompSub)
-    assert _walk_schema(root, ["totally_unknown", "inner"]) is None  # 注册表也无此段
+    assert walk_schema(root, ["totally_unknown", "inner"]) is None  # 注册表也无此段
 
 
 @pytest.mark.parametrize(
@@ -149,7 +152,7 @@ def test_walk_schema_locates_leaves_free_dicts_and_unknowns(monkeypatch) -> None
 )
 def test_walk_schema_dynamic_provider_sections(scope, path, kind) -> None:
     fill_component_schemas()
-    result = _walk_schema(resolve_root_schema(scope), path)
+    result = walk_schema(resolve_root_schema(scope), path)
     assert (result[0] if result else None) == kind
     if kind == "leaf" and path[-1] in ("port", "vts_port"):
         assert result[1][1].annotation is int
@@ -159,7 +162,7 @@ def test_walk_schema_dynamic_provider_sections(scope, path, kind) -> None:
 
 
 def test_groups_cover_seven_scopes_with_self_described_labels_readonly_and_widget_markers() -> None:
-    result = _build_frontend_groups(_FakeConfigService({"meta": {"version": "9.9.9"}}))
+    result = build_frontend_groups(_FakeConfigService({"meta": {"version": "9.9.9"}}))
     assert [g["key"] for g in result["groups"]] == [
         "agents",
         "collectors",
@@ -190,14 +193,14 @@ def test_groups_cover_seven_scopes_with_self_described_labels_readonly_and_widge
 
     service = _FakeConfigService({})
     service.main_config = None  # None 按空配置处理
-    assert len(_build_frontend_groups(service)["groups"]) == 7
+    assert len(build_frontend_groups(service)["groups"]) == 7
 
 
 def test_object_arrays_are_first_class_fields_and_secrets_are_masked_only_when_strings() -> None:
     service = _FakeConfigService(
         {"llm_providers": [{"name": "deepseek", "api_key": "sk-plain"}], "simulator": {"token_budget_per_hour": 50000}}
     )
-    result = _build_frontend_groups(service)
+    result = build_frontend_groups(service)
     fields = _iter_fields(next(g for g in result["groups"] if g["key"] == "model")["fields"])
     assert not any(f["key"] == "model.llm_providers.api_key" for f in fields)  # 不再降维出伪键
     array_field = next(f for f in fields if f["key"] == "model.llm_providers")
@@ -212,7 +215,7 @@ def test_object_arrays_are_first_class_fields_and_secrets_are_masked_only_when_s
 def test_no_ghost_prefixed_or_duplicate_field_keys() -> None:
     """数组字段不得重复收集出 scope 前缀翻倍的幽灵子树：读路径指向不存在的段，编辑保存必报"未知配置项"。"""
     keys = [
-        f["key"] for g in _build_frontend_groups(_FakeConfigService({}))["groups"] for f in _iter_fields(g["fields"])
+        f["key"] for g in build_frontend_groups(_FakeConfigService({}))["groups"] for f in _iter_fields(g["fields"])
     ]
     for ghost in (
         "tools.tools.tools.disabled_tools",
@@ -275,7 +278,7 @@ def _providers(*pairs: tuple[str, str]) -> dict:
 
 def _fill(new_pairs: list[tuple[str, str]], old: dict) -> list[str]:
     value = [{"name": name, "api_key": key} for name, key in new_pairs]
-    return [item["api_key"] for item in _fill_array_placeholders("model.llm_providers", value, old)]
+    return [item["api_key"] for item in fill_array_placeholders("model.llm_providers", value, old)]
 
 
 def test_placeholder_refill_by_identity_then_position() -> None:
@@ -300,8 +303,8 @@ def test_placeholder_refill_by_identity_then_position() -> None:
     dup = _fill([("dup", PLACEHOLDER), ("dup", PLACEHOLDER)], _providers(("dup", "sk-one"), ("dup", "sk-two")))
     assert sorted(dup) == ["sk-one", "sk-two"]  # 同名重复按顺序确定性配对
 
-    assert _fill_array_placeholders("infra.dashboard.port", 60215, {"port": 60214}) == 60215  # 非列表原样返回
-    assert _fill_array_placeholders("infra.dashboard.port", "x", {}) == "x"
+    assert fill_array_placeholders("infra.dashboard.port", 60215, {"port": 60214}) == 60215  # 非列表原样返回
+    assert fill_array_placeholders("infra.dashboard.port", "x", {}) == "x"
 
 
 def test_whole_list_submission_keeps_the_real_key_and_never_persists_the_placeholder(tmp_path) -> None:
@@ -399,3 +402,77 @@ def test_apply_config_updates_with_hot_context_keeps_restart_for_non_component_d
         )
     )
     assert outcome.success and outcome.requires_restart is True and outcome.hot_apply is None
+
+
+# 响应形状对拍：锁定 /config/schema 响应的 JSON 键集合（前端按字段消费，增删键即协议变更）
+
+
+def test_response_shapes_are_locked() -> None:
+    service = _FakeConfigService({"llm_providers": [{"name": "deepseek", "api_key": "sk-x"}]})
+
+    group = next(g for g in build_frontend_groups(service)["groups"] if g["key"] == "model")
+    assert set(group.keys()) == {
+        "key",
+        "label",
+        "description",
+        "icon",
+        "order",
+        "fields",
+        "file_name",
+        "file_label",
+        "version",
+    }
+
+    fields = {f["key"]: f for f in _iter_fields(group["fields"])}
+    # 普通叶子字段（无任何可选修饰标记）的固定键集合
+    leaf = next(
+        f
+        for f in _iter_fields(group["fields"])
+        if (
+            f["type"] not in ("array", "object")
+            and "children" not in f
+            and not f.get("advanced")
+            and "validation" not in f
+        )
+    )
+    assert set(leaf.keys()) == {
+        "key",
+        "label",
+        "description",
+        "type",
+        "default",
+        "value",
+        "required",
+        "sensitive",
+        "readonly",
+        "advanced",
+    }
+    # 对象数组是一等字段：items.fields 元素子字段的键集合与叶子同构
+    array_field = fields["model.llm_providers"]
+    assert array_field["type"] == "array"
+    assert set(array_field["items"].keys()) == {"type", "fields"}
+    for sub in array_field["items"]["fields"]:
+        assert set(sub.keys()) == set(leaf.keys())  # 子字段键集合与叶子同构
+        break
+
+    # 动态段实例的自由 dict 兜底叶（无 advanced 修饰位）键集合
+    fill_component_schemas()
+    collectors = _FakeConfigService(
+        {"custom_thing": {"x": 1}}, file_sections={"collectors": {"custom_thing": {"x": 1}}}
+    )
+    custom = next(
+        f
+        for f in _iter_fields(build_frontend_groups(collectors)["groups"][1]["fields"])
+        if f["type"] == "object" and f["key"] == "collectors.custom_thing"
+    )
+    assert set(custom.keys()) == {
+        "key",
+        "label",
+        "description",
+        "type",
+        "default",
+        "value",
+        "required",
+        "sensitive",
+        "readonly",
+    }

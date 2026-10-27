@@ -1,0 +1,770 @@
+"""WebUI 配置视图与写入协议。
+
+把七文件根 Schema 适配为前端可消费的形态：Schema 树寻址、前端分组构建、
+敏感值遮蔽、数组占位回填、写前校验，以及"校验 → 写盘 → 触发热重载"的
+统一写管线。HTTP 语义（状态码、响应包装）与组件重建编排留在 dashboard 侧，
+本模块不依赖 dashboard。
+
+API 键约定：**scope 前缀 + 文件内点分路径**（如 ``infra.dashboard.port``），
+与合并视图（``main_config``）的扁平寻址一致。
+"""
+
+from collections import defaultdict
+from dataclasses import dataclass
+import dataclasses
+from pathlib import Path
+import tomllib
+from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple, Union, get_args, get_origin
+
+from pydantic import BaseModel
+
+from src.modules.config.errors import ConfigValidationError
+from src.modules.config.layout import CONFIG_SCOPES
+from src.modules.config.multi_file_loader import (
+    resolve_root_schema,
+    update_config_values,
+    validate_config_updates,
+)
+# 动态分类域清单的单一源在装配目录 component_catalog（registry 只留 Schema 表）；
+# 其加载器延迟拉起组件实现，此处的顶层 import 不付出组件依赖链成本
+from src.modules.component_catalog import TOOL_PROVIDER_DOMAINS
+from src.modules.config.registry import COMPONENT_SCHEMAS, TOOL_PROVIDER_SCHEMAS
+from src.modules.config.schema_generator import ConfigSchemaGenerator, collect_all_fields
+from src.modules.config.tools_schemas import ToolsConfig
+from src.modules.logging import get_logger
+
+if TYPE_CHECKING:
+    from src.modules.config.service import ConfigService
+
+logger = get_logger("ConfigWebUI")
+
+# GET 响应中敏感字段的占位文案：明文不下发，回写同值会被拒绝
+SENSITIVE_PLACEHOLDER = "已设置"
+
+_SENSITIVE_PATTERNS = ["api_key", "api_secret", "token", "password", "secret", "access_key_secret"]
+
+_GEN_TYPE_MAP = {
+    "number": "float",
+    "boolean": "boolean",
+    "integer": "integer",
+    "string": "string",
+    "select": "select",
+    "array": "array",
+    "object": "object",
+}
+
+# 工具提供者枚举：注册表在册成员兜底出卡（缺段 = 首次保存时创建）仅适用于
+# 装配开关真正落在 tools.toml 的分类域。avatar 平台成员的装配态读
+# avatar.toml ``[avatar.platform]`` 名单（bootstrap._avatar_platform_state），
+# ``[tools.avatar.*]`` 不驱动装配——该域只展示磁盘上实际存在的段。
+TOOL_UNION_DOMAINS = tuple(d for d in TOOL_PROVIDER_DOMAINS if d != "avatar")
+
+
+# Schema 树寻址
+
+
+def _unwrap_optional(annotation: Any) -> Any:
+    """剥离 ``Optional[X]`` / ``Union[X, None]`` 包装，保留其它 ``Union`` 结构。"""
+    if get_origin(annotation) is Union:
+        non_none = [a for a in get_args(annotation) if a is not type(None)]
+        if len(non_none) == 1:
+            return non_none[0]
+    return annotation
+
+
+def walk_schema(model_cls: type[BaseModel], parts: list[str]) -> Optional[tuple[str, Any]]:
+    """在根 Schema 字段树中按段行走。
+
+    返回值三态：
+    - ``("leaf", (宿主模型, 字段定义))``：叶子字段定位成功
+    - ``("free_dict", None)``：进入自由字典段，子键形状未知（跳过字段级校验）
+    - ``None``：路径不存在（未知配置项）
+    """
+    if not parts:
+        return None
+    segment, rest = parts[0], parts[1:]
+
+    extra_allow = model_cls.model_config.get("extra") == "allow"
+    if segment not in model_cls.model_fields:
+        # extra="allow" 的宿主（collectors 根）：未知段是采集器子段，
+        # 权威 Schema 在组件注册表中，按注册表继续下钻
+        if extra_allow and rest:
+            sub_cls = COMPONENT_SCHEMAS.get(segment)
+            if sub_cls is not None:
+                return walk_schema(sub_cls, rest)
+        return None
+
+    field_info = model_cls.model_fields[segment]
+    if not rest:
+        return ("leaf", (model_cls, field_info))
+
+    annotation = _unwrap_optional(field_info.annotation)
+    origin = get_origin(annotation)
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return walk_schema(annotation, rest)
+    if origin is dict:
+        elem_args = get_args(annotation)
+        elem = _unwrap_optional(elem_args[-1]) if elem_args else None
+        if isinstance(elem, type) and issubclass(elem, BaseModel):
+            # tools 动态分类域（avatar/studio/web，清单见注册表）：rest[0] 是
+            # 提供者名，其 config 子段的权威 Schema 在工具提供者注册表——
+            # 按注册表下钻做字段级校验
+            if model_cls is ToolsConfig and segment in TOOL_PROVIDER_DOMAINS and len(rest) >= 2 and rest[1] == "config":
+                provider_schema = TOOL_PROVIDER_SCHEMAS.get((segment, rest[0]))
+                if provider_schema is not None:
+                    deeper = rest[2:]
+                    if not deeper:
+                        # config 整对象更新：字段级不拆分，交由加载器整体校验
+                        return ("free_dict", None)
+                    return walk_schema(provider_schema, deeper)
+            # dict[str, 子模型]：rest[0] 是动态键（如 planner / mcp server 名），
+            # 不参与字段校验，跳过后继续走值类型
+            return walk_schema(elem, rest[1:])
+        return ("free_dict", None)
+    return None
+
+
+def _resolve_schema_node(key: str) -> Optional[tuple[str, Any]]:
+    """按 scope 前缀 + 点分路径走 schema 树；结果语义见 ``walk_schema``。"""
+    parts = key.split(".")
+    if len(parts) < 2 or not parts[0]:
+        return None
+    root_cls = resolve_root_schema(parts[0])
+    if root_cls is None:
+        return None
+    return walk_schema(root_cls, parts[1:])
+
+
+def _field_is_readonly(field_info: Any) -> bool:
+    """检查字段是否标记 readonly（来自 ``json_schema_extra={"readonly": True}``）。"""
+    extra = getattr(field_info, "json_schema_extra", None)
+    if isinstance(extra, dict) and extra.get("readonly") is True:
+        return True
+    return False
+
+
+def resolve_scope(key: str) -> str:
+    """从点分 key 解析 scope（首段），例如 ``infra.dashboard.port`` → ``infra``。"""
+    return key.split(".", 1)[0] if key else ""
+
+
+def _find_empty_key(value: Any, path: str = "") -> Optional[str]:
+    """递归查找 value 中嵌套的空 key（空字符串或纯空白），返回其字段路径；无则返回 None。
+
+    TOML 序列化遇到空 key 会抛笼统错误，无法定位具体字段；
+    此检查在写入前提前拦截，返回可定位的路径。
+    """
+    if isinstance(value, dict):
+        for k, v in value.items():
+            key_str = str(k)
+            key_path = f"{path}.{key_str}" if path else key_str
+            if not key_str.strip():
+                return key_path
+            sub = _find_empty_key(v, key_path)
+            if sub is not None:
+                return sub
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            sub = _find_empty_key(v, f"{path}[{i}]" if path else f"[{i}]")
+            if sub is not None:
+                return sub
+    return None
+
+
+# 脱敏与占位契约（读写共用）
+
+
+def _is_sensitive_field(key: str) -> bool:
+    key_lower = key.lower()
+    # *_tokens（复数）是预算类参数（max_tokens 等），不是凭据——
+    # "token" 模式会误伤它们，导致 UI 上显示占位且占位回写被拒
+    if key_lower.endswith("_tokens"):
+        return False
+    return any(p in key_lower for p in _SENSITIVE_PATTERNS)
+
+
+def mask_sensitive_values(config: dict, path_prefix: str = "") -> dict:
+    """递归遍历 config，对敏感字段的标量值替换为"已设置"占位，返回新 dict（不修改原对象）。
+
+    路径语义与 schema 字段的 dotted key 一致：dict 子段拼接到前缀后，
+    list 子项不引入新的路径段（数组元素匿名）。
+    """
+    masked: dict = {}
+    for k, v in config.items():
+        full_key = f"{path_prefix}.{k}" if path_prefix else str(k)
+        if isinstance(v, dict):
+            masked[k] = mask_sensitive_values(v, full_key)
+        elif isinstance(v, list):
+            masked[k] = [mask_sensitive_values(item, full_key) if isinstance(item, dict) else item for item in v]
+        else:
+            # 凭据均为字符串：数字/布尔值（如 token_budget_per_hour 预算参数）无论键名
+            # 都不遮蔽——数字被替换成占位文本既不可读，还会撑爆前端的数字输入控件
+            masked[k] = SENSITIVE_PLACEHOLDER if isinstance(v, str) and _is_sensitive_field(full_key) else v
+    return masked
+
+
+def find_placeholder_write(value: Any, path: str = "") -> Optional[str]:
+    """递归查找回写进 value 的敏感占位符，返回其字段路径；无则返回 None。
+
+    占位符本意是"真实值不下发"的 GET 展示形态；出现在写请求里意味着
+    前端把占位当值回传，落盘会用占位文本覆盖真实凭据，必须拒绝。
+    """
+    if isinstance(value, dict):
+        for k, v in value.items():
+            key_str = str(k)
+            key_path = f"{path}.{key_str}" if path else key_str
+            if not isinstance(v, (dict, list)) and _is_sensitive_field(key_path) and v == SENSITIVE_PLACEHOLDER:
+                return key_path
+            sub = find_placeholder_write(v, key_path)
+            if sub is not None:
+                return sub
+    elif isinstance(value, list):
+        for v in value:
+            sub = find_placeholder_write(v, path)
+            if sub is not None:
+                return sub
+    return None
+
+
+def check_writable(key: str, value: Any) -> Optional[str]:
+    """写路径共用前置校验；通过返回 None，失败返回中文错误消息。
+
+    覆盖：未知配置项（schema 树外）/ 只读字段 / 敏感字段占位回写 / 嵌套空键。
+    值本身的类型与约束校验交给统一管线的 Schema 校验（写盘前硬错）。
+    """
+    empty_key_path = _find_empty_key(value)
+    if empty_key_path is not None:
+        return f"配置值包含空键: '{empty_key_path}'（位于 {key}，请移除空白键后重试）"
+
+    placeholder_path = find_placeholder_write(value)
+    if placeholder_path is not None:
+        return f"{placeholder_path} 的值为占位符（真实值不下发）；请输入新值，显式清空请提交空字符串"
+
+    schema_node = _resolve_schema_node(key)
+    if schema_node is None:
+        return f"未知配置项: {key}"
+    kind, payload = schema_node
+    if kind == "free_dict":
+        return None
+    _containing_cls, leaf_field = payload
+    if leaf_field is not None and _field_is_readonly(leaf_field):
+        return f"{key} 为只读字段，禁止修改"
+    return None
+
+
+# 前端分组视图构建
+
+
+def _get_nested_value(config: dict, dotted_key: str) -> Any:
+    keys = dotted_key.split(".")
+    current = config
+    for k in keys:
+        if isinstance(current, dict) and k in current:
+            current = current[k]
+        else:
+            return None
+    return current
+
+
+def _map_gen_type(gen_type: str) -> str:
+    return _GEN_TYPE_MAP.get(gen_type, "string")
+
+
+def _extract_label(field: dict) -> str:
+    label = field.get("label", "")
+    if isinstance(label, dict):
+        return label.get("zh_CN", label.get("en", "")) or field.get("name", "")
+    if isinstance(label, str):
+        return label
+    return field.get("name", "")
+
+
+def _display_value(key: str, main_config: dict) -> Any:
+    """取字段当前值用于展示：剥 scope 前缀后在扁平化 main_config 中寻址。"""
+    path_in_file = key.split(".", 1)[1] if "." in key else key
+    return _get_nested_value(main_config, path_in_file)
+
+
+def _convert_to_api_field(field: dict, main_config: dict) -> dict:
+    """将 generator schema 的 field dict 转换为前端 API 字段格式。
+
+    集中维护字段规范化规则，供分组构建复用。
+
+    敏感字段：``value`` 一律返回"已设置"占位，避免明文 API key 通过 schema
+    接口泄漏；前端只在用户真正编辑时提交新值（回写占位会被 422 拒绝），
+    显式清空请提交空字符串。
+    """
+    dotted_key = field.get("key", "")
+    raw_value = _display_value(dotted_key, main_config)
+    is_sensitive = _is_sensitive_field(dotted_key)
+    if isinstance(raw_value, list):
+        # 对象数组整值返回：元素内敏感字符串按完整路径递归遮蔽（与 GET /config 同规则）
+        scope, _, path_in_file = dotted_key.partition(".")
+        raw_value = mask_sensitive_values({path_in_file: raw_value}, scope)[path_in_file]
+    gfield: dict = {
+        "key": dotted_key,
+        "label": _extract_label(field),
+        "description": field.get("description", ""),
+        "type": _map_gen_type(field.get("type", "string")),
+        "default": field.get("default"),
+        # 占位只针对字符串凭据：数字预算参数（如 token_budget_per_hour）照实返回，
+        # 占位文本会撑爆前端的数字输入控件
+        "value": SENSITIVE_PLACEHOLDER if is_sensitive and isinstance(raw_value, str) else raw_value,
+        "required": field.get("required", False),
+        "sensitive": is_sensitive,
+        # 透传 schema_generator 从 json_schema_extra 解析出的 readonly 标记，与写接口的拒绝逻辑共用同一信号
+        "readonly": bool(field.get("readonly", False)),
+        # x-ui-advanced 标记的字段（鉴权细节、重试参数等）由前端收进默认折叠的"高级"区
+        "advanced": bool(field.get("x-ui-advanced", False)),
+    }
+    # 控件形态与精度提示：x-ui-widget（如 fixed-tuple 定长元组一行并排数字框）、
+    # x-ui-tuple-length（定长元组长度）、x-ui-precision（浮点小数位；缺省 = 前端不强制舍入）
+    if field.get("x-ui-widget"):
+        gfield["widget"] = field["x-ui-widget"]
+    if isinstance(field.get("x-ui-tuple-length"), int):
+        gfield["tupleLength"] = field["x-ui-tuple-length"]
+    if isinstance(field.get("x-ui-precision"), int):
+        gfield["precision"] = field["x-ui-precision"]
+    # 描述展示形态：icon = 前端标签旁 ⓘ 悬浮提示（缺省 inline = 内联段落）
+    if field.get("x-ui-description-display"):
+        gfield["descriptionDisplay"] = field["x-ui-description-display"]
+    validation: dict = {}
+    for k in ("minValue", "maxValue", "options", "pattern"):
+        if k in field:
+            target = "min" if k == "minValue" else ("max" if k == "maxValue" else k)
+            validation[target] = field[k]
+    if validation:
+        gfield["validation"] = validation
+    if field.get("items"):
+        items_schema = field["items"]
+        if isinstance(items_schema, dict) and items_schema.get("type") == "object":
+            # 元素子字段树同样走规范化（label/validation 等），key 为元素内相对字段名，
+            # 前端据此在数组元素对象内寻址
+            sub_fields = []
+            for sub in items_schema.get("fields", []) or []:
+                sub_name = str(sub.get("name", ""))
+                sub_converted = _convert_to_api_field({**sub, "key": f"{dotted_key}.{sub_name}"}, {})
+                sub_converted["key"] = sub_name
+                sub_fields.append(sub_converted)
+            gfield["items"] = {"type": "object", "fields": sub_fields}
+        else:
+            gfield["items"] = items_schema
+    return gfield
+
+
+def _group_into_children(fields: list[dict], _depth: int = 1) -> list[dict]:
+    """将扁平的点分 key 字段列表构建为层级 children 结构。
+
+    ``_depth`` 标记当前层在 dotted key 中的段索引（初始 1 = scope 后第一位）。
+    递归时 ``_depth + 1``，不需要改动 key 本身。
+
+    注意：同一 key 同时有扁平字段和嵌套子字段时（如 ``message_config`` 既是
+    ``type="object"`` 又是更深层字段的父级），只保留容器（children），丢弃扁平字段，
+    避免前端渲染出空卡片或 ``[object Object]``。
+    """
+    nxt = _depth + 1
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for field in fields:
+        parts = field.get("key", "").split(".")
+        if len(parts) >= nxt + 1:
+            grouped[parts[_depth]].append(field)
+
+    # 先构建所有容器，记录容器 key
+    containers: list[dict] = []
+    for comp_name, comp_fields in sorted(grouped.items()):
+        children = _group_into_children(comp_fields, _depth + 1)
+        # 从上溯链推导容器 key（stable，不依赖组内第一个字段）
+        _prefix_candidates = [f.get("key", "").split(".")[:_depth] for f in comp_fields if f.get("key")]
+        _prefix = _prefix_candidates[0] if _prefix_candidates else [comp_name]
+        container_key = ".".join(_prefix + [comp_name])
+        label = comp_name.replace("_", " ").title()
+        containers.append(
+            {
+                "key": container_key,
+                "label": label,
+                "description": "",
+                "type": "object",
+                "default": None,
+                "value": None,
+                "required": False,
+                "sensitive": False,
+                "children": children,
+            }
+        )
+
+    container_keys = {c["key"] for c in containers}
+
+    # 扁平字段：排除同时是容器的 key（避免重复渲染）
+    result = [f for f in fields if len(f.get("key", "").split(".")) == nxt and f.get("key") not in container_keys]
+
+    result.extend(containers)
+    return result
+
+
+def build_frontend_groups(config_service: "ConfigService") -> dict:
+    """七文件根 Schema → {groups, version} 前端分组视图。
+
+    每个根 Schema 一个分组；分组 label / 文件归属来自根类的自描述协议
+    （``__section_label__`` / ``__file_name__``），无手写映射表。
+    字段 key 在文件内路径前加 scope 前缀，与合并视图寻址一致。
+    静态 Schema 枚举不出的动态段实例（采集器段、工具提供者分类成员）
+    由 ``_dynamic_instance_fields`` 按磁盘现值补齐，读路径与写路径的
+    注册表下钻能力对称。
+    """
+
+    main_config = config_service.main_config or {}
+
+    groups: list[dict] = []
+    for scope in CONFIG_SCOPES:
+        root_cls = resolve_root_schema(scope)
+        if root_cls is None:
+            continue
+        schema = ConfigSchemaGenerator.generate_config_schema(root_cls)
+        collected = collect_all_fields(schema)
+        leaf_fields = [f for f in collected if "." in str(f.get("key", ""))]
+        # 对象数组是一等可编辑字段（元素子字段树在 items.fields），与叶子一起进组。
+        # 只补 key 无点的顶级数组：含点数组已在叶子集合里，重复加入会让同一 dict
+        # 在下方前缀循环中被变异两次（scope 前缀翻倍，产出编辑即保存失败的幽灵子树）
+        leaf_fields.extend(f for f in collected if f.get("type") == "array" and "." not in str(f.get("key", "")))
+        group_fields: list[dict] = []
+        for field in leaf_fields:
+            # 文件内路径 → scope 前缀的 API 键
+            field["key"] = f"{scope}.{field['key']}"
+            group_fields.append(_convert_to_api_field(field, main_config))
+        group_fields.extend(_dynamic_instance_fields(scope, config_service, main_config))
+        group_fields = _group_into_children(group_fields)
+
+        version = read_file_version(Path(config_service.base_dir) / "config", scope)
+
+        groups.append(
+            {
+                "key": scope,
+                "label": root_cls.__section_label__ or scope,
+                "description": "",
+                "icon": None,
+                "order": 99,
+                "fields": group_fields,
+                "file_name": root_cls.__file_name__,
+                "file_label": root_cls.__section_label__ or root_cls.__file_name__,
+                "version": version,
+            }
+        )
+
+    return {"groups": groups, "version": "1.0.0"}
+
+
+# 动态段实例枚举（读路径）
+
+
+def _object_leaf_field(key: str, value: Any, description: str) -> dict:
+    """构造自由 dict 叶字段的 API 形态（无注册 Schema 时的 DictEditor 兜底）。"""
+    return {
+        "key": key,
+        "label": key.rsplit(".", 1)[-1],
+        "description": description,
+        "type": "object",
+        "default": None,
+        "value": value,
+        "required": False,
+        "sensitive": False,
+        "readonly": False,
+    }
+
+
+def _schema_instance_fields(prefix: str, schema_cls: type, main_config: dict) -> list[dict]:
+    """按注册表 Schema 展开 ``<prefix>.<字段路径>`` 的 typed 叶字段列表。"""
+    sub_schema = ConfigSchemaGenerator.generate_config_schema(schema_cls)
+    fields: list[dict] = []
+    for sub_field in collect_all_fields(sub_schema):
+        sub_field["key"] = f"{prefix}.{sub_field['key']}"
+        fields.append(_convert_to_api_field(sub_field, main_config))
+    return fields
+
+
+def _dynamic_instance_fields(scope: str, config_service: "ConfigService", main_config: dict) -> list[dict]:
+    """按磁盘现值 + 注册表清单枚举动态段实例，补齐静态 Schema 枚举不到的字段。
+
+    - collectors 根（extra=allow）的各采集器配置段：候选名单取 enabled 字段
+      的 options（与装配同名），叠加磁盘上实际存在的段；有注册 Schema 的展开
+      typed 子字段树，未注册的回退自由 dict 叶；
+    - tools 分类域（studio/web 等注册表域）的提供者实例：注册表在册成员 ∪
+      磁盘实例，每个实例展开 enabled 开关叶 + config 子段（config 按
+      ``TOOL_PROVIDER_SCHEMAS`` 展开，未注册实例回退自由 dict 叶）。
+      avatar 域例外：装配开关不在 tools.toml，只展示磁盘实例（见
+      ``TOOL_UNION_DOMAINS``）。
+
+    磁盘上不存在的实例同样出卡（值回落 Schema 默认，enabled 默认关——
+    与 bootstrap「缺省不装配」语义一致），首次保存时才写入配置文件——
+    这是"新增提供者/采集器"的入口。注入的叶字段经 ``_group_into_children``
+    归位成容器；与静态 object 叶同 key 的（如空的 studio 分类）由容器的
+    "排除同 key 扁平字段"规则自然合并，无需特判。
+    """
+    file_section = config_service.get_file_section(scope)
+    if not isinstance(file_section, dict):
+        return []
+
+    fields: list[dict] = []
+    if scope == "collectors":
+        disk_names = [k for k in file_section if k not in ("meta", "enabled")]
+        known_names = _collector_candidate_names(scope, config_service)
+        for name in sorted(set(disk_names) | set(known_names)):
+            value = file_section.get(name)
+            if value is not None and not isinstance(value, dict):
+                continue
+            schema_cls = COMPONENT_SCHEMAS.get(name)
+            if schema_cls is None:
+                # 未注册且磁盘无段：无 Schema 可依据，不出卡；磁盘有段则 dict 叶兜底
+                if isinstance(value, dict):
+                    fields.append(
+                        _object_leaf_field(f"collectors.{name}", value, f"{name} 配置（未注册 Schema，键值对编辑）")
+                    )
+                continue
+            fields.extend(_schema_instance_fields(f"collectors.{name}", schema_cls, main_config))
+        return fields
+
+    if scope == "tools":
+        tools_section = file_section.get("tools")
+        if not isinstance(tools_section, dict):
+            return []
+        for domain in TOOL_PROVIDER_DOMAINS:
+            disk_members = tools_section.get(domain)
+            disk_keys = set(disk_members) if isinstance(disk_members, dict) else set()
+            union_keys = {k for d, k in TOOL_PROVIDER_SCHEMAS if d == domain} if domain in TOOL_UNION_DOMAINS else set()
+            for name in sorted(disk_keys | union_keys):
+                value = disk_members.get(name) if isinstance(disk_members, dict) else None
+                if value is not None and not isinstance(value, dict):
+                    continue
+                prefix = f"tools.tools.{domain}.{name}"
+                on_disk = isinstance(value, dict)
+                enabled_field = {
+                    "name": "enabled",
+                    "key": f"{prefix}.enabled",
+                    "label": "启用",
+                    "type": "boolean",
+                    # 落盘实例展示现值；未落盘实例默认关——bootstrap 对缺段按未装配处理
+                    "default": on_disk,
+                    "description": "是否启用该工具提供者（开=其工具全部可见）"
+                    if on_disk
+                    else "尚未写入配置文件，首次保存时创建；开=其工具全部可见",
+                }
+                fields.append(_convert_to_api_field(enabled_field, main_config))
+                provider_schema = TOOL_PROVIDER_SCHEMAS.get((domain, name))
+                if provider_schema is None:
+                    fields.append(
+                        _object_leaf_field(
+                            f"{prefix}.config",
+                            value.get("config") if on_disk else None,
+                            f"{name} 提供者配置（未注册 Schema，键值对编辑）",
+                        )
+                    )
+                else:
+                    fields.extend(_schema_instance_fields(f"{prefix}.config", provider_schema, main_config))
+        return fields
+
+    return []
+
+
+def _collector_candidate_names(scope: str, config_service: "ConfigService") -> list[str]:
+    """采集器候选名单：根 Schema enabled 字段的 options（与装配侧同名清单同源）。"""
+    root_cls = resolve_root_schema(scope)
+    if root_cls is None:
+        return []
+    schema = ConfigSchemaGenerator.generate_config_schema(root_cls)
+    for field in schema.get("fields", []):
+        if field.get("name") == "enabled":
+            options = field.get("options") or []
+            return [str(o) for o in options]
+    return []
+
+
+def read_file_version(config_dir: Path, file_stem: str) -> Optional[str]:
+    """直读配置文件 ``[meta].version``（加载期合并视图已剥离 meta，只能从文件取）。
+
+    Windows 编辑器常落 UTF-8 BOM，tomllib 拒绝带 BOM 字节，读取前剥除。
+    """
+    path = config_dir / f"{file_stem}.toml"
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_bytes()
+        if raw.startswith(b"\xef\xbb\xbf"):
+            raw = raw[3:]
+        data = tomllib.loads(raw.decode("utf-8"))
+    except Exception:
+        logger.warning(f"读取配置文件版本失败: {path}", exc=True)
+        return None
+    meta = data.get("meta")
+    version = meta.get("version") if isinstance(meta, dict) else None
+    return str(version) if version is not None else None
+
+
+# 写路径：校验 → 写盘 → 触发热重载
+
+
+@dataclass
+class ConfigWriteResult:
+    """一次配置写请求经统一管线的结果（组件重建编排由调用方接力）。"""
+
+    success: bool
+    message: str = ""
+    # last-wins 去重 + 占位回填后的实际写入条目（key, value），供响应逐条回执
+    normalized: list[tuple[str, Any]] = dataclasses.field(default_factory=list)
+    # 单文件批次时携带实际写入的 TOML 文件名，供响应透出
+    target_file: Optional[str] = None
+    # 统一管线触发的热重载是否完成（False = 加载失败，保留旧配置）
+    reloaded: bool = False
+    # 写前校验失败的 (key, 错误消息) 列表
+    errors: list[tuple[str, str]] = dataclasses.field(default_factory=list)
+
+
+def _array_item_identity(item: Any) -> Optional[str]:
+    """取数组条目的身份键：name → title → id 的第一个非空字符串（与前端 ArrayEditor.itemTitle 取名偏好一致）。"""
+    if not isinstance(item, dict):
+        return None
+    for key in ("name", "title", "id"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _pair_old_items(new_items: list[Any], old_items: list[Any]) -> list[tuple[int, Optional[Any]]]:
+    """为新列表逐条配对磁盘旧条目（两段式：身份匹配优先，位置兜底其次）。
+
+    返回与 new_items 等长的 (new_index, old_item) 列表，配不上的新条目 old_item 为 None。
+    - 身份匹配：新条目按身份键在旧列表中找同名条目，唯一命中才认领；旧条目一旦认领不再复用。
+    - 位置兜底：身份未命中的新条目按剩余顺序与未认领旧条目依次配对（就地改名场景仍能还原；
+      重排场景身份匹配已正确认领，兜底不会误配）。
+    - 同名重复按顺序确定性认领（第一个新条目认领第一个同名旧条目），不引入随机性。
+    """
+    claimed: set[int] = set()
+    pairs: list[tuple[int, Optional[Any]]] = [(i, None) for i in range(len(new_items))]
+
+    # 第一段：身份匹配
+    identity_to_old: dict[str, list[int]] = {}
+    for old_index, old_item in enumerate(old_items):
+        identity = _array_item_identity(old_item)
+        if identity is not None:
+            identity_to_old.setdefault(identity, []).append(old_index)
+    for new_index, new_item in enumerate(new_items):
+        identity = _array_item_identity(new_item)
+        if identity is None:
+            continue
+        candidates = identity_to_old.get(identity, [])
+        if len(candidates) == 1:
+            old_index = candidates[0]
+            claimed.add(old_index)
+            pairs[new_index] = (new_index, old_items[old_index])
+        # 多个同名旧条目不做身份消歧，留给位置兜底按顺序认领
+
+    # 第二段：位置兜底（未认领的新条目 ↔ 未认领的旧条目，按剩余顺序依次配对）
+    unclaimed_old = iter(i for i in range(len(old_items)) if i not in claimed)
+    for new_index, _new_item in enumerate(new_items):
+        if pairs[new_index][1] is not None:
+            continue
+        for old_index in unclaimed_old:
+            claimed.add(old_index)
+            pairs[new_index] = (new_index, old_items[old_index])
+            break
+    return pairs
+
+
+def fill_array_placeholders(key: str, value: Any, main_config: dict) -> Any:
+    """对象数组整值提交的占位回填。
+
+    前端整列表提交时，元素内未编辑的敏感字段仍是 GET 下发的"已设置"占位
+    （前端不持有真实凭据）。用两段式配对（身份匹配优先、位置兜底其次）对齐
+    磁盘现值回填真实值，删除或重排条目后占位才不会错位回填他人凭据。
+    回填后仍残留占位（如新增条目未填写）交由占位写检查拒绝。
+    """
+    if not isinstance(value, list):
+        return value
+    path_in_file = key.split(".", 1)[1] if "." in key else key
+    current = _get_nested_value(main_config, path_in_file)
+    if not isinstance(current, list):
+        return value
+    filled: list[Any] = []
+    for new_index, old_item in _pair_old_items(value, current):
+        # 配不上的新条目（真正的新增项）占位原样保留：交由占位写检查拒绝，不能静默丢弃元素
+        new_item = value[new_index]
+        filled.append(_restore_masked(new_item, old_item) if isinstance(new_item, dict) else new_item)
+    return filled
+
+
+def _restore_masked(new_item: dict, old_item: Any) -> dict:
+    """递归恢复 new_item 中值为占位符的敏感字段（取 old_item 同名真实值）。"""
+    restored: dict = {}
+    for field_name, field_value in new_item.items():
+        old_value = old_item.get(field_name) if isinstance(old_item, dict) else None
+        if field_value == SENSITIVE_PLACEHOLDER and old_value is not None:
+            restored[field_name] = old_value
+        elif isinstance(field_value, dict):
+            restored[field_name] = _restore_masked(field_value, old_value)
+        else:
+            restored[field_name] = field_value
+    return restored
+
+
+async def write_config_updates(
+    config_service: "ConfigService",
+    config_dir: Path,
+    changes: Sequence[Tuple[str, Any]],
+) -> ConfigWriteResult:
+    """配置写路径统一业务入口（单条与批量共用，重复 key 按 last-wins 去重）。
+
+    编排顺序：逐条前置校验 → 按 scope 分组到目标 TOML 文件 → 统一管线写盘 →
+    触碰 scope 热重载。任一前置校验失败即整体拒绝，磁盘零写入。
+    组件重建热应用（agents / collectors 域）不属于本模块：调用方按
+    ``SCOPE_RELOAD_POLICY`` 推导的组件域清单在写盘成功后接力执行。
+    """
+    if not changes:
+        return ConfigWriteResult(success=False, message="没有可保存的更改")
+
+    deduped: Dict[str, Any] = {}
+    for key, value in changes:
+        deduped[key] = value
+    main_config = config_service.main_config or {}
+    normalized: list[tuple[str, Any]] = [
+        (key, fill_array_placeholders(key, value, main_config)) for key, value in deduped.items()
+    ]
+
+    errors: list[tuple[str, str]] = []
+    for key, value in normalized:
+        check_error = check_writable(key, value)
+        if check_error is not None:
+            errors.append((key, check_error))
+    if errors:
+        first_key, first_message = errors[0]
+        message = first_message if len(errors) == 1 else f"{first_message}（另有 {len(errors) - 1} 项失败）"
+        return ConfigWriteResult(success=False, message=message, errors=list(errors))
+
+    updates_by_file: dict[str, dict[str, Any]] = {}
+    for key, value in normalized:
+        root_cls = resolve_root_schema(resolve_scope(key))
+        if root_cls is None:
+            # 前置校验已覆盖未知 scope，此分支仅防御非法到达的键
+            detail = f"未知配置项: {key}"
+            return ConfigWriteResult(success=False, message=detail, errors=[(key, detail)])
+        path_in_file = key.split(".", 1)[1]
+        updates_by_file.setdefault(root_cls.__file_name__, {})[path_in_file] = value
+
+    target_file = next(iter(updates_by_file)) if len(updates_by_file) == 1 else None
+    scopes = [resolve_scope(k) for k, _ in normalized]
+
+    # 事务前置：全部文件先校验，任一失败即整批拒绝（磁盘零写入）
+    try:
+        for file_name, updates in updates_by_file.items():
+            validate_config_updates(config_dir, file_name, updates)
+    except ConfigValidationError as e:
+        return ConfigWriteResult(success=False, message=str(e))
+
+    for file_name, updates in updates_by_file.items():
+        try:
+            update_config_values(config_dir, file_name, updates)
+        except ConfigValidationError as e:
+            # 前置校验已通过，此处失败属并发修改窗口；忠实上报
+            logger.error(f"写入配置文件失败: {file_name}: {e}")
+            return ConfigWriteResult(success=False, message=f"写入配置文件失败: {e}")
+
+    reloaded = await config_service.reload_config(changed_scopes=scopes)
+    return ConfigWriteResult(success=True, normalized=normalized, target_file=target_file, reloaded=reloaded)

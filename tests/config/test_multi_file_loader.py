@@ -9,7 +9,7 @@ import tomlkit
 import src.modules.config.registry as registry_module
 from src.modules.config.file_meta import CONFIG_BASELINE_VERSION
 from src.modules.config.multi_file_loader import (
-    _CONFIG_FILES,
+    CONFIG_FILE_NAMES,
     _validate_collectors_sections,
     generate_default_configs,
     get_config_version,
@@ -32,8 +32,8 @@ def test_generation_creates_every_file_with_expected_sections_and_baseline_versi
     assert needs_generation(config_dir) is True
     generate_default_configs(config_dir)
     assert needs_generation(config_dir) is False
-    assert sorted(f.name for f in config_dir.glob("*.toml")) == sorted(_CONFIG_FILES)
-    assert all(f'version = "{CONFIG_BASELINE_VERSION}"' in _text(config_dir, name) for name in _CONFIG_FILES)
+    assert sorted(f.name for f in config_dir.glob("*.toml")) == sorted(CONFIG_FILE_NAMES)
+    assert all(f'version = "{CONFIG_BASELINE_VERSION}"' in _text(config_dir, name) for name in CONFIG_FILE_NAMES)
 
     agents = _text(config_dir, "agents.toml")
     for section in (

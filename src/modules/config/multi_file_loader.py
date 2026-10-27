@@ -42,6 +42,7 @@ import tomlkit
 from pydantic import BaseModel
 
 from src.modules.config.schemas.base import BaseConfig, DriftReport, _set_toml_value
+from src.modules.config.layout import CONFIG_FILE_NAMES, CONFIG_FILE_TO_SCOPE
 from src.modules.config.agents_schemas import AgentsRootConfig
 from src.modules.config.avatar_schemas import AvatarPlatformConfig, AvatarRootConfig, PLATFORM_NAMES
 from src.modules.config.collectors_schemas import CollectorsRootConfig
@@ -55,30 +56,8 @@ from src.modules.logging import get_logger
 
 logger = get_logger("MultiFileLoader")
 
-# 配置文件清单（按域划分）：agents / collectors / tools / avatar / model / storage / infra。
-# avatar.toml 排在 tools.toml 之后：avatar 迁出跨文件钩子（tools/infra → avatar）以
-# avatar.toml 为目标文件，目标 dict 在阶段①已就位；宿主文件（tools/infra）
-# 先于 avatar 自身钩子被遍历，"先搬家、后做数据变换"的次序由此保证。
-_CONFIG_FILES = [
-    "agents.toml",
-    "collectors.toml",
-    "tools.toml",
-    "avatar.toml",
-    "model.toml",
-    "storage.toml",
-    "infra.toml",
-]
-
-# 文件 → 合并视图 scope
-_FILE_SCOPES: dict[str, str] = {
-    "agents.toml": "agents",
-    "collectors.toml": "collectors",
-    "tools.toml": "tools",
-    "avatar.toml": "avatar",
-    "model.toml": "model",
-    "storage.toml": "storage",
-    "infra.toml": "infra",
-}
+# 配置文件清单（按域划分）与文件 → scope 映射的单一事实源在 layout 模块，
+# 本模块只保留根 Schema 索引（类属性是权威，本表是加载侧索引）。
 
 # 文件 → 根 Schema（中央树）
 _ROOT_SCHEMAS: dict[str, type[BaseConfig]] = {
@@ -113,7 +92,7 @@ for _fname, _cls in _ROOT_SCHEMAS.items():
 
 def resolve_root_schema(scope: str) -> type[BaseConfig] | None:
     """合并视图 scope（= 文件名去后缀）→ 根 Schema 类；未知 scope 返回 None。"""
-    file_name = next((f for f, s in _FILE_SCOPES.items() if s == scope), None)
+    file_name = next((f for f, s in CONFIG_FILE_TO_SCOPE.items() if s == scope), None)
     return _ROOT_SCHEMAS.get(file_name) if file_name else None
 
 
@@ -479,7 +458,7 @@ def _ensure_required_files(config_dir: Path) -> list[str]:
         本次补齐的文件名列表
     """
     generated: list[str] = []
-    for fname in _CONFIG_FILES:
+    for fname in CONFIG_FILE_NAMES:
         if (config_dir / fname).exists():
             continue
         logger.info(f"缺失配置文件 {fname}，自动生成...")
@@ -494,7 +473,7 @@ def generate_default_configs(config_dir: Path) -> None:
     config_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"生成默认配置到 {config_dir}")
 
-    for fname in _CONFIG_FILES:
+    for fname in CONFIG_FILE_NAMES:
         path = config_dir / fname
         content = _generate_root_toml(fname, _ROOT_SCHEMAS[fname], extra_sections=_materializable_sections(fname))
         path.write_text(content, encoding="utf-8")
@@ -804,8 +783,8 @@ def load_config_dir(
         logger.info(f"[加载管线] 首启生成 {len(generated)} 个缺失文件: {generated}")
 
     # --- 阶段① read_all_raw ---
-    raw_docs: dict[str, dict[str, Any]] = {fname: _read_toml_dict(config_dir / fname) for fname in _CONFIG_FILES}
-    logger.info(f"[加载管线] 阶段① read_all_raw 完成（{len(_CONFIG_FILES)} 文件）")
+    raw_docs: dict[str, dict[str, Any]] = {fname: _read_toml_dict(config_dir / fname) for fname in CONFIG_FILE_NAMES}
+    logger.info(f"[加载管线] 阶段① read_all_raw 完成（{len(CONFIG_FILE_NAMES)} 文件）")
 
     # --- 阶段②③ 版本推进 + 升级钩子（每文件链；跨文件钩子双写 + 双版本同升）---
     # 函数内 import：upgrade 模块的注册表被测试 patch，顶部 import 会使
@@ -822,10 +801,10 @@ def load_config_dir(
     # --- 阶段④ 校验（硬错） + 阶段⑤ 漂移写回 ---
     combined = DriftReport()
     validated: dict[str, tuple[BaseConfig, DriftReport]] = {}
-    for fname in _CONFIG_FILES:
+    for fname in CONFIG_FILE_NAMES:
         instance, report = _validate_file(fname, raw_docs[fname])
         validated[fname] = (instance, report)
-    logger.info(f"[加载管线] 阶段④ Pydantic 校验完成（{len(_CONFIG_FILES)} 文件，硬错语义）")
+    logger.info(f"[加载管线] 阶段④ Pydantic 校验完成（{len(CONFIG_FILE_NAMES)} 文件，硬错语义）")
 
     # --- 字段级冗余全域硬错 ---
     # typed 域的冗余键（拼错的字段名）与动态段未知键同属"文件里程序
@@ -864,7 +843,7 @@ def load_config_dir(
     # --- 阶段⑥ 合并视图（剥 [meta]）---
     result: dict[str, Any] = {}
     for fname, (instance, _report) in validated.items():
-        scope = _FILE_SCOPES[fname]
+        scope = CONFIG_FILE_TO_SCOPE[fname]
         data = instance.model_dump()
         data.pop("meta", None)
         result[scope] = data

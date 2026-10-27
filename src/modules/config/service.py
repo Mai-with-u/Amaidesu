@@ -25,6 +25,7 @@ from typing import (
 )
 
 
+from src.modules.config.layout import CONFIG_FILE_TO_SCOPE, CONFIG_SCOPES
 from src.modules.config.self_write_guard import consume_self_write
 from src.modules.logging import get_logger
 
@@ -37,29 +38,28 @@ ConfigReloadCallback = Union[
     Callable[[], Any],
 ]
 
-_CONFIG_FILE_TO_SCOPE: Dict[str, str] = {
-    "agents.toml": "agents",
-    "collectors.toml": "collectors",
-    "tools.toml": "tools",
-    "avatar.toml": "avatar",
-    "model.toml": "model",
-    "storage.toml": "storage",
-    "infra.toml": "infra",
-}
-
-# reload 策略（scope 级声明）：
-# - "restart"：装配类配置（Agent/采集器实例、provider 连接、端口、
-#   disabled_tools 等）——重载后仅日志"待重启"，已构造实例不热注入
+# reload 策略（scope 级声明，热生效判定的单一事实源——配置写路径的
+# 热生效分类同样从本表推导，不另立清单）：
 # - "hot"：基础设施标量——reload 时调用已注册回调通知下游，内存配置即换即生效
-_SCOPE_RELOAD_POLICY: Dict[str, str] = {
-    "agents": "restart",
-    "collectors": "restart",
+# - "component"：组件域（agents / collectors）——本服务重载只更新合并视图；
+#   WebUI 保存路径注入组件重建上下文时按新配置重建组件实现保存即生效，
+#   未注入（或重建未执行）时照实报"需重启进程"
+# - "restart"：其余装配类配置（provider 连接、端口、disabled_tools 等）——
+#   重载后仅日志"待重启"，已构造实例不热注入
+SCOPE_RELOAD_POLICY: Dict[str, str] = {
+    "agents": "component",
+    "collectors": "component",
     "tools": "restart",
     "avatar": "restart",
     "model": "restart",
     "storage": "restart",
     "infra": "hot",
 }
+
+# 策略表的两种热生效形态（由 SCOPE_RELOAD_POLICY 推导，不单独维护）：
+# 热重载段直接生效；组件域靠"停 → 重新实例化 → 启动"的组件重建生效
+RELOAD_HOT_SCOPES = frozenset(s for s, policy in SCOPE_RELOAD_POLICY.items() if policy == "hot")
+COMPONENT_REBUILD_SCOPES = frozenset(s for s, policy in SCOPE_RELOAD_POLICY.items() if policy == "component")
 
 
 class ConfigService:
@@ -151,7 +151,7 @@ class ConfigService:
                 self.logger.info(f"漂移检测: 补充缺失配置项 '{key}'")
 
         self._main_config = {}
-        for category in ("agents", "collectors", "tools", "avatar", "model", "storage", "infra"):
+        for category in CONFIG_SCOPES:
             section_data = multi_config.get(category, {})
             if isinstance(section_data, dict):
                 for key, value in section_data.items():
@@ -384,7 +384,7 @@ class ConfigService:
         scopes: Optional[Sequence[str]],
     ) -> Tuple[str, ...]:
         """规范化输入 scopes: 去重/小写/过滤未知值。None → 全部 scope。"""
-        all_scopes = tuple(_CONFIG_FILE_TO_SCOPE.values())
+        all_scopes = CONFIG_SCOPES
         if scopes is None:
             return all_scopes
         seen: List[str] = []
@@ -405,7 +405,7 @@ class ConfigService:
         """FileChange 列表 → scope 元组 (基于文件名)。"""
         scopes: List[str] = []
         for change in changes:
-            scope = _CONFIG_FILE_TO_SCOPE.get(change.path.name)
+            scope = CONFIG_FILE_TO_SCOPE.get(change.path.name)
             if scope and scope not in scopes:
                 scopes.append(scope)
         return tuple(scopes)
@@ -439,9 +439,9 @@ class ConfigService:
             self._reload_revision += 1
             self.logger.info(f"配置已重载 (revision={self._reload_revision}, scopes={list(scopes)})")
 
-            # 按策略分流：restart 段仅提示待重启；hot 段调用已注册回调通知下游
-            hot_scopes = tuple(s for s in scopes if _SCOPE_RELOAD_POLICY.get(s) == "hot")
-            restart_scopes = tuple(s for s in scopes if _SCOPE_RELOAD_POLICY.get(s) != "hot")
+            # 按策略分流：非 hot 段仅提示待重启；hot 段调用已注册回调通知下游
+            hot_scopes = tuple(s for s in scopes if SCOPE_RELOAD_POLICY.get(s) == "hot")
+            restart_scopes = tuple(s for s in scopes if SCOPE_RELOAD_POLICY.get(s) != "hot")
             if restart_scopes:
                 self.logger.warning(f"以下配置段含装配类变更，需重启进程后完全生效: {list(restart_scopes)}")
 
@@ -464,7 +464,7 @@ class ConfigService:
         multi_config, _drift = load_config_dir(config_dir)
 
         flattened: Dict[str, Any] = {}
-        for category in ("agents", "collectors", "tools", "avatar", "model", "storage", "infra"):
+        for category in CONFIG_SCOPES:
             section_data = multi_config.get(category, {})
             if isinstance(section_data, dict):
                 for key, value in section_data.items():
@@ -500,7 +500,7 @@ class ConfigService:
         from src.modules.config.file_watcher import FileWatcher
 
         config_dir = Path(self.base_dir) / "config"
-        watched = [config_dir / name for name in _CONFIG_FILE_TO_SCOPE.keys()]
+        watched = [config_dir / name for name in CONFIG_FILE_TO_SCOPE.keys()]
 
         self._file_watcher = FileWatcher(
             paths=watched,
