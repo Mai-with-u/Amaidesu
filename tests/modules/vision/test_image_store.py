@@ -55,7 +55,7 @@ def test_ttl_expiry_visible_window_default_and_singleton_swap() -> None:
 
 
 def test_latest_slot_overwrites_per_sample_and_resolves_body_via_ref() -> None:
-    """latest 槽位覆盖式更新（防内存堆积），本体经 ref 从 LRU 条目取回；clear 一并清空。"""
+    """latest 槽位覆盖式更新（防内存堆积），本体经 ref 从画面帧池取回；clear 一并清空。"""
     store = _store()
     assert store.latest() is None
     first = store.put_latest(DATA_URL, width=64, height=36, change=1.0, timestamp_ms=1_000)
@@ -65,3 +65,40 @@ def test_latest_slot_overwrites_per_sample_and_resolves_body_via_ref() -> None:
     assert store.get(first.ref) == DATA_URL and store.get(second.ref) == DATA_URL
     store.clear()
     assert store.latest() is None
+
+
+def test_frame_flood_does_not_evict_screenshot_refs() -> None:
+    """画面帧高频覆盖写入只走独立帧池，不把已存入、等待组装取用的工具截图挤出 LRU。"""
+    store = _store(capacity=2)
+    shot_a, shot_b = store.put(DATA_URL), store.put(DATA_URL)
+    for i in range(20):  # 帧洪泛量远超截图池容量
+        store.put_latest(DATA_URL, width=16, height=9, change=0.5, timestamp_ms=i)
+    assert store.get(shot_a) == DATA_URL and store.get(shot_b) == DATA_URL
+
+
+def test_latest_pool_holds_independently_and_expires_by_its_own_ttl() -> None:
+    """帧池容量独立于截图池：两池各自按自己的容量逐出，互不占位。"""
+    store = _store(capacity=2, latest_capacity=1)
+    shot_a, shot_b = store.put(DATA_URL), store.put(DATA_URL)
+    frame1 = store.put_latest(DATA_URL, width=16, height=9, change=0.5, timestamp_ms=1)
+    frame2 = store.put_latest(DATA_URL, width=16, height=9, change=0.5, timestamp_ms=2)
+    assert store.get(shot_a) == DATA_URL and store.get(shot_b) == DATA_URL  # 两张截图都在
+    assert store.get(frame1.ref) is None  # 帧池按自身容量 1 逐出旧帧
+    assert store.get(frame2.ref) == DATA_URL
+
+
+def test_pool_ttls_do_not_interfere_with_each_other() -> None:
+    """两池 TTL 各自独立：截图过期不影响帧取回，帧过期不影响截图取回。"""
+    clock = {"now": 1_000_000}
+    store = VisionImageStore(ttl_ms=100_000, latest_ttl_ms=10_000, now_fn=lambda: clock["now"])
+    shot = store.put(DATA_URL)
+    frame = store.put_latest(DATA_URL, width=16, height=9, change=0.5, timestamp_ms=1)
+
+    clock["now"] += 50_000  # 帧已超短 TTL，截图未到长 TTL
+    assert store.get(frame.ref) is None
+    assert store.get(shot) == DATA_URL
+
+    clock["now"] += 60_000  # 截图已越过长 TTL
+    assert store.get(shot) is None
+    frame2 = store.put_latest(DATA_URL, width=16, height=9, change=0.5, timestamp_ms=2)
+    assert store.get(frame2.ref) == DATA_URL  # 新采样帧在自身 TTL 窗口内照常可取

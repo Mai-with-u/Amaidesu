@@ -33,6 +33,12 @@ DEFAULT_VISIBLE_TURNS = 1
 DEFAULT_CAPACITY = 16
 DEFAULT_TTL_MS = 15 * 60 * 1000
 
+# 画面帧独立小池：帧由采集器高频覆盖写入（约每 5 秒一帧），消费只取最近一两帧，
+# 容量 2 足够覆盖"写新帧与读旧帧交错"的窗口；帧只在两次采样间保持意义，
+# 采样间隔的 12 倍（60 秒）内没被消费的帧拿去注水只会注入过期画面
+DEFAULT_LATEST_CAPACITY = 2
+DEFAULT_LATEST_TTL_MS = 60 * 1000
+
 
 @dataclass(frozen=True, slots=True)
 class LatestFrame:
@@ -57,18 +63,24 @@ class VisionImageStore:
         *,
         capacity: int = DEFAULT_CAPACITY,
         ttl_ms: int = DEFAULT_TTL_MS,
+        latest_capacity: int = DEFAULT_LATEST_CAPACITY,
+        latest_ttl_ms: int = DEFAULT_LATEST_TTL_MS,
         visible_turns: int = DEFAULT_VISIBLE_TURNS,
         now_fn: Callable[[], int] = lambda: int(time.time() * 1000),
     ) -> None:
         self._capacity = capacity
         self._ttl_ms = ttl_ms
+        self._latest_capacity = latest_capacity
+        self._latest_ttl_ms = latest_ttl_ms
         self.visible_turns = visible_turns
         self._now_fn = now_fn
         self._lock = threading.Lock()
-        # ref → (data_url, created_ms)；OrderedDict 尾部 = 最近使用
+        # 工具截图池：ref → (data_url, created_ms)；OrderedDict 尾部 = 最近使用
         self._entries: "OrderedDict[str, tuple[str, int]]" = OrderedDict()
-        # 最新一帧直播画面槽位（覆盖式，防内存堆积）：与 LRU 条目相互独立，
-        # 只留元数据，本体经 ref 复用 get() 读取
+        # 画面帧池：与截图池分开的独立小容量容器，帧高频写入不会挤占截图配额
+        self._latest_entries: "OrderedDict[str, tuple[str, int]]" = OrderedDict()
+        # 最新一帧直播画面槽位（覆盖式，防内存堆积）：只留元数据，
+        # 本体在画面帧池，经 ref 复用 get() 读取
         self._latest: Optional[LatestFrame] = None
 
     def put(self, data_url: str) -> str:
@@ -82,29 +94,41 @@ class VisionImageStore:
         ref = f"img_{uuid.uuid4().hex[:12]}"
         now = self._now_fn()
         with self._lock:
-            self._evict_expired(now)
+            self._evict_expired(self._entries, self._ttl_ms, now)
             while len(self._entries) >= self._capacity:
                 self._entries.popitem(last=False)
             self._entries[ref] = (data_url, now)
         return ref
 
     def get(self, ref: str) -> Optional[str]:
-        """取回 data URL；逐出或过期返回 None（装配期降级为过期提示）。"""
+        """取回 data URL；先查画面帧池再查截图池。逐出或过期返回 None（装配期降级为过期提示）。"""
         with self._lock:
-            entry = self._entries.get(ref)
-            if entry is None:
-                return None
-            data_url, created_ms = entry
-            if self._now_fn() - created_ms > self._ttl_ms:
-                del self._entries[ref]
-                return None
-            self._entries.move_to_end(ref)
-            return data_url
+            for entries, ttl_ms in (
+                (self._latest_entries, self._latest_ttl_ms),
+                (self._entries, self._ttl_ms),
+            ):
+                entry = entries.get(ref)
+                if entry is None:
+                    continue
+                data_url, created_ms = entry
+                if self._now_fn() - created_ms > ttl_ms:
+                    del entries[ref]
+                    return None
+                entries.move_to_end(ref)
+                return data_url
+            return None
 
     def put_latest(self, data_url: str, *, width: int, height: int, change: float, timestamp_ms: int) -> LatestFrame:
-        """覆盖写入最新一帧直播画面（图像本体照常入 LRU 暂存），返回槽位快照。"""
-        ref = self.put(data_url)
+        """覆盖写入最新一帧直播画面（本体入独立的画面帧小池，不占截图 LRU 配额），返回槽位快照。"""
+        if not isinstance(data_url, str) or len(data_url) < 32:
+            raise ValueError(f"image_store 只接受 data URL 字符串，收到: {type(data_url).__name__}")
+        ref = f"img_{uuid.uuid4().hex[:12]}"
+        now = self._now_fn()
         with self._lock:
+            self._evict_expired(self._latest_entries, self._latest_ttl_ms, now)
+            while len(self._latest_entries) >= self._latest_capacity:
+                self._latest_entries.popitem(last=False)
+            self._latest_entries[ref] = (data_url, now)
             self._latest = LatestFrame(ref=ref, width=width, height=height, change=change, timestamp_ms=timestamp_ms)
             return self._latest
 
@@ -117,13 +141,14 @@ class VisionImageStore:
         """清空（测试隔离用）。"""
         with self._lock:
             self._entries.clear()
+            self._latest_entries.clear()
             self._latest = None
 
-    def _evict_expired(self, now_ms: int) -> None:
-        """过期逐出（put 前调用；持有锁）。"""
-        expired = [ref for ref, (_, created) in self._entries.items() if now_ms - created > self._ttl_ms]
+    def _evict_expired(self, entries: "OrderedDict[str, tuple[str, int]]", ttl_ms: int, now_ms: int) -> None:
+        """过期逐出（put/put_latest 前调用；持有锁）。"""
+        expired = [ref for ref, (_, created) in entries.items() if now_ms - created > ttl_ms]
         for ref in expired:
-            del self._entries[ref]
+            del entries[ref]
         if expired:
             logger.debug(f"图像暂存过期逐出 {len(expired)} 张")
 
@@ -153,4 +178,6 @@ __all__ = [
     "DEFAULT_VISIBLE_TURNS",
     "DEFAULT_CAPACITY",
     "DEFAULT_TTL_MS",
+    "DEFAULT_LATEST_CAPACITY",
+    "DEFAULT_LATEST_TTL_MS",
 ]
