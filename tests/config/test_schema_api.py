@@ -88,7 +88,8 @@ def test_widget_markers_options_precision_and_bounds_reach_generated_fields() ->
     from src.modules.avatar.lipsync import LipSyncConfig
     from src.modules.config.avatar_schemas import PLATFORM_NAMES, AvatarRootConfig
     from src.modules.config.core_schemas import DashboardConfig
-    from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
+    from src.modules.component_catalog import ensure_component_registry
+    from src.modules.config.registry import COLLECTOR_SCHEMAS
 
     ensure_component_registry()
     assert _field(_generate(CollectorsRootConfig), "enabled").get("options") == sorted(

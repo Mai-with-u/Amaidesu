@@ -10,7 +10,8 @@ import pytest
 import src.modules.dashboard.api.system as system_api
 from src.modules.agents.companions import COMPANION_COLLECTORS
 from src.modules.config.multi_file_loader import generate_default_configs
-from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
+from src.modules.component_catalog import ensure_component_registry
+from src.modules.config.registry import COLLECTOR_SCHEMAS
 from src.modules.config.service import ConfigService
 
 

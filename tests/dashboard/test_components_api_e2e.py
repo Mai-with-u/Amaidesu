@@ -90,7 +90,8 @@ def test_list_components_returns_all_groups_with_disabled(client) -> None:
     # enabled 名单看 is_enabled。conftest 手写的 bili/console_input 两段
     # 之外，物化补齐的 stt / bili_official 同样在列；附属采集器按所属 Agent 是否启用列出并标 owner。
     from src.modules.agents.companions import COMPANION_COLLECTORS
-    from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
+    from src.modules.component_catalog import ensure_component_registry
+    from src.modules.config.registry import COLLECTOR_SCHEMAS
 
     ensure_component_registry()
     companions = {name for names in COMPANION_COLLECTORS.values() for name in names}

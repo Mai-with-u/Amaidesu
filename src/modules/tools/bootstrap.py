@@ -13,8 +13,9 @@
 - **按包隔离**——每个提供者的注册调用都被 ``try/except`` 包裹，
   单包失败（缺配置 / 缺 endpoint / 缺依赖）只记 ERROR 日志 + 报告里
   ``count=0``，不阻断其它包
-- **无目录扫描**——绑定关系全部写死在下方 ``_DOMAIN_MEMBERS`` 中，
-  避免动态 import / 文件系统扫描引入隐式耦合
+- **无目录扫描**——绑定关系全部来自组件目录单一源表
+  ``src.modules.component_catalog.TOOL_PROVIDER_BINDINGS``，本模块按它
+  派生成员表；无动态 import / 文件系统扫描引入的隐式耦合
 - **与 L2 Provider 注册语义对齐**——输出包内已有 ``register_<x>_tools``
   函数，统一调用入口（不改 provider 内部）
 - **不感知 Agent 层**——bootstrap 只调 provider 的 register 函数，
@@ -66,6 +67,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Tuple
 
+from src.modules.component_catalog import TOOL_PROVIDER_BINDINGS, ToolProviderBinding
 from src.modules.logging import get_logger
 from src.modules.tools.registry import ToolRegistry
 
@@ -75,57 +77,25 @@ logger = get_logger("ToolBootstrap")
 # (成员身份, 描述, 注册函数加载器)
 # 成员身份 = (分类段, 提供者键)：分类段开关（avatar.vts 等）驱动装配。
 # 注册函数加载器：返回 ``Callable[[registry, config], provider]``，
-# 延迟 import 避免本模块被加载时拖入整条 avatar/studio 依赖链。
+# 经组件目录条目的延迟加载器取得（目录表在调用时才 import 提供者实现，
+# 避免本模块被加载时拖入整条 avatar/studio 依赖链）。
 _EntrySpec = Tuple[Tuple[str, str], str, Callable[[], Callable[..., Any]]]
 
 
-def _load_vts() -> Callable[..., Any]:
-    from src.modules.avatar.platform.vts.vts_provider import register_vts_tools
+def _register_fn_loader(binding: ToolProviderBinding) -> Callable[[], Callable[..., Any]]:
+    """把组件目录条目的 Provider 加载器适配成 bootstrap 需要的注册函数加载器。"""
 
-    return register_vts_tools
+    def load() -> Callable[..., Any]:
+        return binding.load_provider().register_fn
 
-
-def _load_vrchat() -> Callable[..., Any]:
-    from src.modules.avatar.platform.vrchat.vrchat_provider import register_vrchat_tools
-
-    return register_vrchat_tools
+    return load
 
 
-def _load_warudo() -> Callable[..., Any]:
-    from src.modules.avatar.platform.warudo.warudo_provider import register_warudo_tools
-
-    return register_warudo_tools
-
-
-def _load_expression_sheet() -> Callable[..., Any]:
-    from src.modules.avatar.platform.expression_sheet.expression_sheet_provider import (
-        register_expression_sheet_tools,
-    )
-
-    return register_expression_sheet_tools
-
-
-def _load_obs() -> Callable[..., Any]:
-    from src.modules.studio.obs.obs_provider import register_obs_tools
-
-    return register_obs_tools
-
-
-def _load_web_search() -> Callable[..., Any]:
-    from src.modules.web.search_provider import register_web_search_tools
-
-    return register_web_search_tools
-
-
-# 工具分类成员表：每个提供者绑定其分类段（avatar.vts / avatar.warudo / studio.obs）。
+# 工具分类成员表：从组件目录单一源表派生（条目顺序即装配顺序）。
 # 分类段缺失或 enabled=false 时不装配（开关控制权归属人类：配置 + Web UI）。
 _DOMAIN_MEMBERS: List[_EntrySpec] = [
-    (("avatar", "vts"), "VTubeStudio 控制", _load_vts),
-    (("avatar", "vrchat"), "VRChat OSC 桥接", _load_vrchat),
-    (("avatar", "warudo"), "Warudo 控制", _load_warudo),
-    (("avatar", "expression_sheet"), "表情差分形象控制", _load_expression_sheet),
-    (("studio", "obs"), "OBS Studio 控制", _load_obs),
-    (("web", "search"), "联网搜索", _load_web_search),
+    ((binding.domain, binding.key), binding.description, _register_fn_loader(binding))
+    for binding in TOOL_PROVIDER_BINDINGS
 ]
 
 

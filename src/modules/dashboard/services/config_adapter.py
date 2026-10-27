@@ -14,13 +14,14 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Un
 
 from pydantic import BaseModel
 
+from src.modules.component_catalog import TOOL_PROVIDER_DOMAINS
 from src.modules.config.errors import ConfigValidationError
 from src.modules.config.multi_file_loader import (
     resolve_root_schema,
     update_config_values,
     validate_config_updates,
 )
-from src.modules.config.registry import COMPONENT_SCHEMAS, TOOL_PROVIDER_DOMAINS, TOOL_PROVIDER_SCHEMAS
+from src.modules.config.registry import COMPONENT_SCHEMAS, TOOL_PROVIDER_SCHEMAS
 from src.modules.config.schema_generator import ConfigSchemaGenerator, collect_all_fields
 from src.modules.config.tools_schemas import ToolsConfig
 from src.modules.dashboard.services.component_runtime import (

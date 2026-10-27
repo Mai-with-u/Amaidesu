@@ -9,7 +9,8 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from src.modules.config.multi_file_loader import resolve_root_schema
-from src.modules.config.registry import COMPONENT_SCHEMAS, fill_component_schemas
+from src.modules.component_catalog import fill_component_schemas
+from src.modules.config.registry import COMPONENT_SCHEMAS
 from src.modules.dashboard.services.config_adapter import (
     _build_frontend_groups,
     _fill_array_placeholders,

@@ -11,7 +11,7 @@ import pytest
 import tomlkit
 from pydantic import ConfigDict
 
-from src.modules.config import registry as registry_module
+from src.modules import component_catalog
 from src.modules.config.errors import ConfigValidationError
 from src.modules.config.multi_file_loader import (
     _validate_file,
@@ -191,15 +191,17 @@ class _PseudoSchema(BaseConfig):
 @pytest.fixture
 def pseudo_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     """把伪组件注入注册表：包装 fill 而非 setitem——每次加载前 ensure_component_registry 会清空重灌全局 dict。"""
-    real_fill = registry_module.fill_component_schemas
+    real_fill = component_catalog.fill_component_schemas
 
     def fill_with_pseudo():
         result = real_fill()
-        registry_module.COLLECTOR_SCHEMAS["pseudo"] = _PseudoSchema  # collectors.toml 校验只认 COLLECTOR_SCHEMAS
+        component_catalog.registry.COLLECTOR_SCHEMAS["pseudo"] = (
+            _PseudoSchema  # collectors.toml 校验只认 COLLECTOR_SCHEMAS
+        )
         result["pseudo"] = _PseudoSchema
         return result
 
-    monkeypatch.setattr(registry_module, "fill_component_schemas", fill_with_pseudo)
+    monkeypatch.setattr(component_catalog, "fill_component_schemas", fill_with_pseudo)
 
 
 def _rewrite_pseudo_section(config_dir: Path, body: str) -> None:

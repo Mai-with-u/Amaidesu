@@ -221,10 +221,11 @@ def _materializable_sections(file_name: str) -> dict[str, dict[str, Any]] | None
     """
     if file_name != "collectors.toml":
         return None
-    # 函数内 import 规避循环依赖（同 _validate_collectors_sections）。
-    # 注册表由 fill 惰性填充，生成路径没有"加载开头 ensure"的既定
+    # 函数内 import 规避循环依赖（同 _validate_collectors_sections）：
+    # 注册表由组件目录惰性填充，生成路径没有"加载开头 ensure"的既定
     # 时序兜底，必须先 ensure——否则首启生成时全集为空、静默生成骨架
-    from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
+    from src.modules.component_catalog import ensure_component_registry
+    from src.modules.config.registry import COLLECTOR_SCHEMAS
 
     ensure_component_registry()
     return {name: _default_section_dict(schema_cls) for name, schema_cls in sorted(COLLECTOR_SCHEMAS.items())}
@@ -345,8 +346,8 @@ def _table_from_model(instance: BaseModel) -> Any:
             for item in value:
                 inner.append(_table_from_model(item))
         elif isinstance(value, dict):
-            # 函数内 import 规避循环依赖：注册表会拉起各 provider 包
-            from src.modules.config.registry import TOOL_PROVIDER_DOMAINS
+            # 函数内 import 规避循环依赖：域清单是组件目录的静态派生量（不拉起 provider 包）
+            from src.modules.component_catalog import TOOL_PROVIDER_DOMAINS
 
             if is_tool_sections_host and sub_name in TOOL_PROVIDER_DOMAINS:
                 inner = _tool_provider_sections_table(value, domain=sub_name)
@@ -634,7 +635,8 @@ def _validate_tool_provider_sections(
       从运行期装配失败前移到加载期
     """
     # 函数内 import 规避循环依赖：注册表会拉起各 provider 包
-    from src.modules.config.registry import TOOL_PROVIDER_DOMAINS, TOOL_PROVIDER_SCHEMAS
+    from src.modules.component_catalog import TOOL_PROVIDER_DOMAINS
+    from src.modules.config.registry import TOOL_PROVIDER_SCHEMAS
 
     known = sorted(f"{d}.{k}" for d, k in TOOL_PROVIDER_SCHEMAS)
     tools = root_instance.tools
@@ -793,7 +795,7 @@ def load_config_dir(
             硬错语义，无 raw dict 降级路径。
     """
     # 组合根装配断言：组件 ConfigSchema 注册表必须完整
-    from src.modules.config.registry import ensure_component_registry
+    from src.modules.component_catalog import ensure_component_registry
 
     ensure_component_registry()
 

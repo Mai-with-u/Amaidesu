@@ -369,8 +369,9 @@ def _apply_registry_options(schema: Dict[str, Any], config_class: type) -> None:
     """
     file_name = getattr(config_class, "__file_name__", "")
     if file_name == "collectors.toml":
-        # 函数内 import 规避循环依赖（注册表拉起组件包，组件包引用本包）
-        from src.modules.config.registry import COLLECTOR_SCHEMAS, ensure_component_registry
+        # 函数内 import 规避循环依赖（组件目录拉起组件包，组件包引用本包）
+        from src.modules.component_catalog import ensure_component_registry
+        from src.modules.config.registry import COLLECTOR_SCHEMAS
 
         ensure_component_registry()
         for field in schema.get("fields", []):
