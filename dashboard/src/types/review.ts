@@ -128,5 +128,7 @@ export interface SessionReviewResponse {
   };
   /** 观众侧聚合（单场视图填充；多选合并视图为 null） */
   viewers: ReviewViewers | null;
+  /** 复盘可视化页文件名（单场且已生成；多选合并/未生成为 null） */
+  report_file: string | null;
   degraded: boolean;
 }

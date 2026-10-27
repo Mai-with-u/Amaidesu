@@ -466,3 +466,44 @@ async def test_export_single_session_llm_requests_logs(review_client, store, tmp
     assert resp.status_code == 200
     zf = zipfile.ZipFile(io.BytesIO(resp.content))
     assert any(n.startswith("logs/llm_requests/") for n in zf.namelist())
+
+
+async def test_review_report_file_single_session_with_report(review_client, store, tmp_path: Path) -> None:
+    """单场且报告存在：report_file 填文件名，files 端点可取回页面。"""
+    pk = await _seed_session(store, BASE, BASE + 60_000)
+    reviews_dir = tmp_path / "logs" / "reviews"
+    reviews_dir.mkdir(parents=True)
+    (reviews_dir / f"session-{pk}-2026-10-26.html").write_text("<html>报告</html>", encoding="utf-8")
+    (reviews_dir / "report.css").write_text(":root{}", encoding="utf-8")
+
+    body = (await review_client.get("/api/v1/review", params={"ids": str(pk)})).json()
+    assert body["report_file"] == f"session-{pk}-2026-10-26.html"
+
+    page = await review_client.get(f"/api/v1/review/files/session-{pk}-2026-10-26.html")
+    assert page.status_code == 200
+    assert "报告" in page.text
+    # 相对引用（report.css / report.js）从同一 URL 目录解析：同端点可取
+    css = await review_client.get("/api/v1/review/files/report.css")
+    assert css.status_code == 200
+
+
+async def test_review_report_file_none_when_missing_or_merged(review_client, store, tmp_path: Path) -> None:
+    """报告未生成 → None；多选合并视图 → 恒 None（报告按单场生成）。"""
+    a = await _seed_session(store, BASE, BASE + 60_000)
+    b = await _seed_session(store, BASE + 600_000, BASE + 660_000)
+    reviews_dir = tmp_path / "logs" / "reviews"
+    reviews_dir.mkdir(parents=True)
+    (reviews_dir / f"session-{a}-2026-10-26.html").write_text("<html></html>", encoding="utf-8")
+
+    no_report = (await review_client.get("/api/v1/review", params={"ids": str(b)})).json()
+    assert no_report["report_file"] is None
+
+    merged = (await review_client.get("/api/v1/review", params={"ids": f"{a},{b}"})).json()
+    assert merged["report_file"] is None
+
+
+async def test_review_report_files_endpoint_rejects_unsafe_names(review_client) -> None:
+    """files 端点：非白名单文件名 / 越权路径 / 缺失文件一律 404，不泄漏目录信息。"""
+    for bad in ("..%2F..%2Fsecret.html", "session-1.html%00.css", "notes.txt", "no-such-file.html"):
+        resp = await review_client.get(f"/api/v1/review/files/{bad}")
+        assert resp.status_code == 404

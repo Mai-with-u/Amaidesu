@@ -176,6 +176,12 @@ class SessionReviewResponse(BaseModel):
     game: ReviewGame = Field(default_factory=ReviewGame)
     viewers: Optional[ReviewViewers] = None
     """观众侧聚合（单场视图填充；多选合并视图为 None）。"""
+    report_file: Optional[str] = None
+    """复盘可视化页文件名（logs/reviews 下 session-{id}- 前缀的 .html）。
+
+    单场视图且报告文件存在时填充（经 /api/v1/review/files/ 服务）；
+    多选合并视图或报告未生成时为 None。
+    """
     degraded: bool = False
     """诊断事件天目录存在缺失（被清理或从未落盘）——决策侧指标相应降级。"""
 

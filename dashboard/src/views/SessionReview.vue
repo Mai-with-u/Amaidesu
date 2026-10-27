@@ -76,6 +76,22 @@
         </div>
       </section>
 
+      <!-- 复盘报告（logs/reviews 可视化页，由直播复盘流程离线生成；仅单场次且有报告时渲染） -->
+      <section v-if="reportSrc" class="panel report-panel" aria-label="复盘报告">
+        <div class="panel-title report-panel-title">
+          <span>复盘报告</span>
+          <a class="link report-open" :href="reportSrc" target="_blank" rel="noopener"
+            >新标签页打开</a
+          >
+        </div>
+        <iframe
+          class="report-frame"
+          :src="reportSrc"
+          sandbox="allow-scripts"
+          title="复盘可视化报告"
+        ></iframe>
+      </section>
+
       <!-- 场次信息 chips（互动类零值降饱和） -->
       <section class="chips" aria-label="场次信息">
         <span
@@ -400,6 +416,15 @@ async function loadRundown(): Promise<void> {
 const singleBrief = computed<ReviewSessionBrief | null>(() =>
   review.value && review.value.sessions.length === 1 ? review.value.sessions[0] : null,
 );
+
+/**
+ * 复盘报告 iframe 地址（静态路由 /api/v1/review/files/ 下，相对引用的
+ * report.css / report.js 同目录解析）；多选合并或报告未生成为 null。
+ */
+const reportSrc = computed<string | null>(() => {
+  const file = review.value && review.value.sessions.length === 1 ? review.value.report_file : null;
+  return file ? `/api/v1/review/files/${encodeURIComponent(file)}` : null;
+});
 
 /** 控制台回看深链（本场预过滤；at=时刻锚点） */
 function replayLink(atMs?: number): string {
@@ -764,6 +789,21 @@ function exportPackage(): void {
   font-size: 14px;
   font-weight: 600;
   margin-bottom: 12px;
+}
+
+/* 复盘报告（iframe 沙箱嵌入 + 新标签页兜底） */
+.report-panel-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.report-frame {
+  width: 100%;
+  height: 70vh;
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  background: #fff;
 }
 
 .waterline-chart {

@@ -8,6 +8,7 @@
 import asyncio
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import tempfile
@@ -16,7 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
@@ -41,6 +42,19 @@ ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
 # 数据包内 manifest 文件名
 _MANIFEST_NAME = "manifest.json"
+
+# 复盘可视化页文件名白名单（ASCII 字母数字开头，仅字母数字点横线下划线）
+_REPORT_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# 可视化页本体与其相对引用（report.css / report.js）
+_REPORT_FILE_EXTS = {".html", ".css", ".js"}
+
+
+def _reviews_dir_of(server: "DashboardServer") -> Optional[Path]:
+    """复盘可视化页目录（logs/reviews）；诊断装配缺失时 None。"""
+    writer = server.diagnostics_writer
+    if writer is None:
+        return None
+    return Path(writer.base_dir) / "reviews"
 
 
 def _parse_ids(ids: str) -> List[int]:
@@ -115,6 +129,7 @@ def _build_aggregator(server: "DashboardServer") -> SessionReviewAggregator:
         event_reader=reader,
         recap_repo=server.recap_repo,
         slow_thresholds=_slow_thresholds(server),
+        reviews_dir=_reviews_dir_of(server),
     )
 
 
@@ -272,6 +287,28 @@ async def export_session_data(
         media_type="application/zip",
         background=BackgroundTask(zip_path.unlink),
     )
+
+
+@router.get("/files/{filename}", summary="获取复盘可视化页及其样式脚本")
+async def get_review_report_file(
+    filename: str,
+    server: ServerDep,
+) -> FileResponse:
+    """按文件名服务 logs/reviews 下的复盘页（.html）与其相对引用（.css/.js）。
+
+    页面以相对路径引用同目录 report.css / report.js，因此 HTML 与资产
+    统一从本端点出（URL 目录一致，相对引用自然解析）。
+    文件名白名单 + 扩展名限制；目录未装配 / 文件不存在 → 404。
+    """
+    if not _REPORT_FILENAME_RE.match(filename) or Path(filename).suffix.lower() not in _REPORT_FILE_EXTS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="非法文件名")
+    reviews_dir = _reviews_dir_of(server)
+    if reviews_dir is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="复盘页目录未装配")
+    file_path = reviews_dir / filename
+    if not file_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="复盘页不存在")
+    return FileResponse(file_path)
 
 
 __all__ = ["router"]

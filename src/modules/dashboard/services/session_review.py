@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from src.modules.dashboard.schemas.review import (
@@ -139,6 +140,7 @@ class SessionReviewAggregator:
         event_reader: Optional[SessionEventReader] = None,
         recap_repo: Optional[object] = None,
         slow_thresholds: Optional[Dict[str, int]] = None,
+        reviews_dir: Optional[Path] = None,
     ) -> None:
         self.chat_repo = chat_repo
         self.llm_repo = llm_repo
@@ -148,6 +150,8 @@ class SessionReviewAggregator:
         # 每 profile 慢调用阈值（毫秒；来自 [llm_profiles.<name>].slow_threshold_ms，
         # 与运行期慢调用告警同源同值），未配置的 profile 落全局缺省
         self.slow_thresholds = slow_thresholds or {}
+        # 复盘可视化页目录（logs/reviews）；未装配时报告字段恒为 None
+        self.reviews_dir = reviews_dir
         self.default_slow_threshold_ms = 15_000
 
     # ------------------------------------------------------------------ #
@@ -190,8 +194,23 @@ class SessionReviewAggregator:
             waterline=waterline,
             game=game,
             viewers=viewers,
+            report_file=self._find_report_file(briefs),
             degraded=degraded,
         )
+
+    def _find_report_file(self, briefs: List[ReviewSessionBrief]) -> Optional[str]:
+        """单场视图的复盘可视化页文件名（logs/reviews 下 session-{id}- 前缀）。
+
+        多选合并视图或目录未装配/报告未生成时 None；同前缀多文件按文件名取首个。
+        """
+        if self.reviews_dir is None or len(briefs) != 1:
+            return None
+        pattern = f"session-{briefs[0].live_session_id}-*.html"
+        try:
+            matches = sorted(self.reviews_dir.glob(pattern))
+        except OSError:
+            return None
+        return matches[0].name if matches else None
 
     async def _fill_recaps(self, briefs: List[ReviewSessionBrief]) -> None:
         """把收播总结按场次主键回填到 brief（缺回顾的场次保持 None）。"""
