@@ -291,3 +291,81 @@ describe('buildReplayEntries：通用规则', () => {
     expect(buildReplayEntries([])).toEqual([]);
   });
 });
+
+describe('buildReplayEntries：上舰明细行', () => {
+  it('guard：出上舰卡（badge 上舰、text 取人读描述），不再兜底为弹幕', () => {
+    const entries = buildReplayEntries([
+      item({
+        kind: 'guard',
+        ts_ms: 100,
+        user_name: '舰长哥',
+        content: '开通舰队 1个月',
+        message_id: 'g1',
+      }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      kind: 'guard',
+      actor: '舰长哥',
+      text: '开通舰队 1个月',
+      badge: '上舰',
+      messageId: 'g1',
+    });
+  });
+});
+
+describe('buildReplayEntries：tts 播报态回看呈现', () => {
+  const speechItem = item({
+    kind: 'event',
+    ts_ms: 100,
+    event_type: 'streamer.speech',
+    data: { text: '大家好呀', utterance_id: 'utt_1' },
+  });
+
+  it('utterance 记录存在：started/finished 回填发言卡播报态，不新增行', () => {
+    const entries = buildReplayEntries([
+      speechItem,
+      item({
+        kind: 'event',
+        ts_ms: 150,
+        event_type: 'tts.utterance.started',
+        data: { utterance_id: 'utt_1' },
+      }),
+      item({
+        kind: 'event',
+        ts_ms: 200,
+        event_type: 'tts.utterance.finished',
+        data: { utterance_id: 'utt_1' },
+      }),
+    ]);
+    // 两端点不产生独立条目：仅发言卡一张
+    const speechEntries = entries.filter(e => e.kind === 'speech');
+    expect(speechEntries).toHaveLength(1);
+    // finished 后置最终态为已播完
+    expect(speechEntries[0].ttsState).toBe('done');
+  });
+
+  it('utterance 记录缺失：发言卡播报态为空（诊断流缺 tts 记录时静默降级）', () => {
+    const entries = buildReplayEntries([speechItem]);
+    const speech = entries.find(e => e.kind === 'speech');
+    expect(speech?.ttsState).toBe('');
+  });
+
+  it('failed 记录：渲染为红色合成失败告警行', () => {
+    const entries = buildReplayEntries([
+      item({
+        kind: 'event',
+        ts_ms: 120,
+        event_type: 'tts.utterance.failed',
+        data: { utterance_id: 'utt_2', speech_text: '这句话', error_message: 'TTS 服务未启动' },
+      }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      kind: 'tts',
+      text: '这句话',
+      note: '语音合成失败：TTS 服务未启动',
+      failed: true,
+    });
+  });
+});

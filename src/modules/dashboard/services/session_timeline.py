@@ -12,7 +12,8 @@ from src.modules.dashboard.services.session_events import trim_long_strings
 
 
 # 明细行 kind → 前端卡片 kind 的映射（gift_row/super_chat_row 为仓储层的
-# 行类型标记，出时间线时折叠为卡片语义）
+# 行类型标记，出时间线时折叠为卡片语义；guard 明细行 kind 本身即卡片语义，
+# 直通不改名）
 _KIND_MAP = {"gift_row": "gift", "super_chat_row": "super_chat"}
 
 # 发言双源去重的时刻容差：明细行 ts 即事件载荷 timestamp_ms（同源写两处），

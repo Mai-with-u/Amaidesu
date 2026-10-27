@@ -52,6 +52,8 @@ class UtteranceStartedPayload(BasePayload):
             流式引擎合成未完时为 None（finished 事件才会给出准确值）。
         timestamp_ms: 事件发布时间戳（Unix 毫秒），用于日志/排序，与 started
             时刻解耦（防止事件总线异步分发时与实际发声时刻混用）。
+        live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）。
+            TTS 发声发生在场次进行中，盖章后回看可按场次过滤命中。
     """
 
     utterance_id: str = Field(..., description="一次发声实例的唯一 ID（编排层生成，全链路关联键）")
@@ -60,6 +62,10 @@ class UtteranceStartedPayload(BasePayload):
     duration_ms: Optional[int] = Field(
         default=None,
         description="预计播放时长（Unix 毫秒）。全量引擎=合成后精确值；流式引擎合成未完=None",
+    )
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
     )
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),
@@ -83,12 +89,17 @@ class UtteranceFinishedPayload(BasePayload):
         engine: TTS 引擎标识。
         duration_ms: 实际播放时长（Unix 毫秒）。由 PCM 样本数除以采样率精确计算，
             反映真实播放耗时而非合成耗时。
+        live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）。
         timestamp_ms: 事件发布时间戳（Unix 毫秒），用于日志/排序。
     """
 
     utterance_id: str = Field(..., description="一次发声实例的唯一 ID（与 started 事件对应）")
     engine: str = Field(..., description="TTS 引擎标识")
     duration_ms: int = Field(..., description="实际播放时长（Unix 毫秒，PCM 样本数÷采样率精确计算）")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),
         description="事件发布时间戳（Unix 毫秒）",
@@ -114,6 +125,7 @@ class UtteranceFailedPayload(BasePayload):
         engine: TTS 引擎标识。
         error_message: 失败原因描述（异常 message / 错误码 / 阶段标记），
             供编排层兜底决策与日志对账使用。
+        live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）。
         timestamp_ms: 事件发布时间戳（Unix 毫秒），用于日志/排序。
     """
 
@@ -121,6 +133,10 @@ class UtteranceFailedPayload(BasePayload):
     speech_text: str = Field(..., description="本次发声对应的文本内容（失败也必带原文）")
     engine: str = Field(..., description="TTS 引擎标识")
     error_message: str = Field(..., description="失败原因描述（异常 message / 错误码 / 阶段标记）")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),
         description="事件发布时间戳（Unix 毫秒）",

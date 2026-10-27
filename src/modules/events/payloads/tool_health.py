@@ -38,6 +38,7 @@ class ToolHealthPayload(BasePayload):
         state: 跃迁后状态（open=已熔断摘除 / closed=恢复可用）
         failure_count: 触发跃迁时累计的连续失败次数
         last_error: 最近一次失败的错误信息（closed 跃迁时为空字符串）
+        live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）
         timestamp_ms: 跃迁时刻（Unix 毫秒）
     """
 
@@ -46,6 +47,10 @@ class ToolHealthPayload(BasePayload):
     state: Literal["open", "closed"] = Field(..., description="跃迁后状态（open=熔断摘除 / closed=恢复可用）")
     failure_count: int = Field(default=0, description="触发跃迁时的连续失败计数")
     last_error: str = Field(default="", description="最近一次失败的错误信息（closed 跃迁时为空）")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),
         description="跃迁时刻（Unix 毫秒）",

@@ -19,7 +19,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Optional
 
+from src.modules.dashboard.websocket.broadcaster import ROOM_MESSAGE_EVENTS, ROOM_STATE_EVENTS, EventBroadcaster
 from src.modules.events.event_history import EventRecord
+from src.modules.events.event_type_map import ROOM_MESSAGE_TYPE
+from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
@@ -28,31 +31,66 @@ if TYPE_CHECKING:
 
 logger = get_logger("SessionEventReader")
 
-# 回看时间线收录的事件类型（与实时 WS 卡面对齐）：
+# 回看时间线收录的事件词汇（与实时 WS 订阅词汇对齐）：不再手写名单，从
+# EventBroadcaster 的实时订阅词汇派生——实时能广播到前端的卡面，回看就应能
+# 还原同一卡面；对齐由派生机制保证，新增订阅漂移即自动补齐。派生输出锁定
+# 见 tests/modules/dashboard/services/test_session_events.py。
 # 消息/礼物/SC 由明细行承载，不重复收录；发言是双源特例——事件侧收录以承载
 # 富卡语义（情绪/Replyer 统计/轮次关联），装配处与明细行按同文本同时刻一对
-# 一去重，诊断流缺失时明细行兜底为裸卡；
-# task.changed 非时间线卡面（实时侧由任务账本渲染），不收录
-REPLAY_EVENT_TYPES = frozenset(
+# 一去重，诊断流缺失时明细行兜底为裸卡。
+
+# 通配订阅键 → 回看收录前缀（订阅键是 MQTT 风格通配，不是落盘的具体事件名；
+# 诊断文件里存的是逐事件具体名，按族前缀匹配）
+_WILDCARD_TO_PREFIX = {
+    CoreEvents.GAME_BODY_WILDCARD: "game.body.",
+    CoreEvents.GAME_CHAT_WILDCARD: "game.chat.",
+    CoreEvents.TOOL_RESULT_WILDCARD: "tool.result.",
+    CoreEvents.TOOL_HEALTH_WILDCARD: "tool.health.",
+}
+
+# 对应物表：实时订阅词汇里不属于回看时间线卡面的条目（每族一句理由）。
+# 注意 room.message 先折叠为诊断 record type "room.message" 再比对。
+_REPLAY_EXCLUDED = frozenset(
     {
-        "planner.decision",
-        "planner.verdict",
-        "streamer.speech",
-        "streamer.stage",
-        "live.started",
-        "live.ended",
-        "rundown.changed",
-        "game.report",
-        "game.attention_required",
-        "game.error",
-        "game.milestone",
-        "agent.prompted",
-        "agent.replied",
+        # 消息/礼物/SC/上舰/进场由 live_chat 明细行承载出卡，事件收录会与之重复出卡
+        ROOM_MESSAGE_TYPE,
+        # 顶栏数值快照非时间线卡（回看顶栏走 REST 会话数据）
+        CoreEvents.ROOM_STATE_WATCHED_COUNT,
+        # 任务卡条/Agent 任务板是快照面板非时间线卡（实时亦然，ADR-039 对齐的是卡面）
+        CoreEvents.TASK_CHANGED,
+        # 备忘录面板刷新触发，非时间线卡
+        CoreEvents.STREAMER_NOTEBOOK_CHANGED,
+        # 系统生命线：无场次归属字段，按场次过滤不可达，非时间线卡
+        CoreEvents.CORE_STARTUP,
+        CoreEvents.CORE_SHUTDOWN,
+        CoreEvents.CORE_ERROR,
     }
 )
 
-# 动态族前缀：工具结果按工具名逐事件落盘（tool.result.<tool_name>）
-REPLAY_EVENT_PREFIXES = ("tool.result.",)
+
+def _derive_replay_vocabularies() -> tuple[frozenset[str], tuple[str, ...]]:
+    """从实时订阅词汇派生回看收录名单（精确名集合 + 前缀元组）。
+
+    实时侧 = ``EventBroadcaster._SUBSCRIPTIONS`` 键集 + room.message 五名与
+    room.state 折叠族常量；room.message 五名在诊断文件折叠为单一 record type
+    "room.message"（见 event_recorder.infer_record_type），其余精确名直通。
+    """
+    exact: set[str] = set()
+    prefixes: set[str] = set()
+    all_names = set(EventBroadcaster._SUBSCRIPTIONS) | set(ROOM_MESSAGE_EVENTS) | set(ROOM_STATE_EVENTS)
+    for name in all_names:
+        if name in _REPLAY_EXCLUDED:
+            continue
+        if name in _WILDCARD_TO_PREFIX:
+            prefixes.add(_WILDCARD_TO_PREFIX[name])
+            continue
+        record_type = ROOM_MESSAGE_TYPE if name.startswith("room.message.") else name
+        if record_type not in _REPLAY_EXCLUDED:
+            exact.add(record_type)
+    return frozenset(exact), tuple(sorted(prefixes))
+
+
+REPLAY_EVENT_TYPES, REPLAY_EVENT_PREFIXES = _derive_replay_vocabularies()
 
 # 单条记录 data 内超长字符串的截断上限（工具结果正文可达数百 KB，回看卡片
 # 只展示预览；截断只发生在返回侧，不改动落盘文件）

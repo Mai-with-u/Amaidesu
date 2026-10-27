@@ -81,6 +81,23 @@ export function buildReplayEntries(items: SessionTimelineItem[]): ShowEntry[] {
       );
       return;
     }
+    if (entry.kind === 'guard') {
+      // 上舰明细行（live_chat message_type="guard"，content 即人读描述）；
+      // 层级/金额等结构化字段只存在于实时事件载荷与 guards 表，明细行不重复出
+      detailEntries.push(
+        makeEntry({
+          id,
+          kind: 'guard',
+          tsMs: entry.ts_ms,
+          actor: str(entry.user_name) || '匿名观众',
+          text: str(entry.content),
+          badge: '上舰',
+          messageId: str(entry.message_id),
+          simulated: entry.simulated === true,
+        }),
+      );
+      return;
+    }
     // danmaku / enter
     detailEntries.push(
       makeEntry({

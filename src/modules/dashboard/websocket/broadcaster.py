@@ -70,6 +70,18 @@ if TYPE_CHECKING:
 
 logger = get_logger("EventBroadcaster")
 
+# 折叠族订阅名单（``_SUBSCRIPTIONS`` 之外的两个特判族）：room.message 五名折叠
+# 广播为 "room.message"，room.state.watched_count 折叠为 "room.state"。
+# 提为常量供订阅挂载/卸载与回看名单派生（session_events）共用，避免字面量二次手抄。
+ROOM_MESSAGE_EVENTS: tuple[str, ...] = (
+    CoreEvents.ROOM_MESSAGE_DANMAKU,
+    CoreEvents.ROOM_MESSAGE_GIFT,
+    CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+    CoreEvents.ROOM_MESSAGE_GUARD,
+    CoreEvents.ROOM_MESSAGE_ENTER,
+)
+ROOM_STATE_EVENTS: tuple[str, ...] = (CoreEvents.ROOM_STATE_WATCHED_COUNT,)
+
 
 class EventBroadcaster:
     """EventBus 事件广播器 - 将 EventBus 事件广播到 WebSocket 客户端"""
@@ -120,15 +132,9 @@ class EventBroadcaster:
 
     def _handler_for(self, event_name: str) -> Optional[Callable]:
         """事件名 → 订阅时使用的 handler（与 ``_SUBSCRIPTIONS`` 一致）。"""
-        if event_name in (
-            CoreEvents.ROOM_MESSAGE_DANMAKU,
-            CoreEvents.ROOM_MESSAGE_GIFT,
-            CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
-            CoreEvents.ROOM_MESSAGE_GUARD,
-            CoreEvents.ROOM_MESSAGE_ENTER,
-        ):
+        if event_name in ROOM_MESSAGE_EVENTS:
             return self._on_room_message
-        if event_name == CoreEvents.ROOM_STATE_WATCHED_COUNT:
+        if event_name in ROOM_STATE_EVENTS:
             return self._on_room_state
         entry = self._SUBSCRIPTIONS.get(event_name)
         if entry is None:
@@ -177,16 +183,11 @@ class EventBroadcaster:
         for event_name, (handler, payload_class) in self._SUBSCRIPTIONS.items():
             self._subscribe_event(event_name, handler or self._on_named_event, payload_class)
 
-        for event_name in (
-            CoreEvents.ROOM_MESSAGE_DANMAKU,
-            CoreEvents.ROOM_MESSAGE_GIFT,
-            CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
-            CoreEvents.ROOM_MESSAGE_GUARD,
-            CoreEvents.ROOM_MESSAGE_ENTER,
-        ):
+        for event_name in ROOM_MESSAGE_EVENTS:
             self._subscribe_event(event_name, self._on_room_message, RoomMessagePayload)
 
-        self._subscribe_event(CoreEvents.ROOM_STATE_WATCHED_COUNT, self._on_room_state, RoomStateWatchedPayload)
+        for event_name in ROOM_STATE_EVENTS:
+            self._subscribe_event(event_name, self._on_room_state, RoomStateWatchedPayload)
 
     def _subscribe_event(self, event_name: str, handler: Callable, model_class: type[BaseModel]) -> None:
         try:

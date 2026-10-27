@@ -6,7 +6,12 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from src.modules.dashboard.services.session_events import SessionEventReader, is_replay_event_type
+from src.modules.dashboard.services.session_events import (
+    REPLAY_EVENT_PREFIXES,
+    REPLAY_EVENT_TYPES,
+    SessionEventReader,
+    is_replay_event_type,
+)
 from src.modules.events.event_history import EventHistoryService, EventRecord
 
 # 扫描范围按时间戳落在的本地日期枚举天目录，夹具统一用真实时刻
@@ -48,6 +53,35 @@ def test_replay_whitelist_covers_exact_names_and_dynamic_prefixes() -> None:
         assert is_replay_event_type(name)
     for name in ("room.message.danmaku", "room.state.watched_count", "task.changed", "core.startup"):
         assert not is_replay_event_type(name)
+
+
+def test_replay_vocabulary_is_derived_from_live_subscription_vocabulary() -> None:
+    """锁定派生输出全集：实时订阅词汇 − 对应物表 = 回看名单（ADR-039 对齐口径）。"""
+    expected_types = frozenset(
+        {
+            # 原 13 条精确名
+            "planner.decision",
+            "planner.verdict",
+            "streamer.speech",
+            "streamer.stage",
+            "live.started",
+            "live.ended",
+            "rundown.changed",
+            "game.report",
+            "game.attention_required",
+            "game.error",
+            "game.milestone",
+            "agent.prompted",
+            "agent.replied",
+            # tts 播报态三名（回看按 utterance_id 回填发言卡）
+            "tts.utterance.started",
+            "tts.utterance.finished",
+            "tts.utterance.failed",
+        }
+    )
+    expected_prefixes = ("game.body.", "game.chat.", "tool.health.", "tool.result.")
+    assert REPLAY_EVENT_TYPES == expected_types
+    assert REPLAY_EVENT_PREFIXES == expected_prefixes
 
 
 def test_collect_merges_buffer_and_files_dedupes_by_id_or_type_at_timestamp_and_sorts_ascending(tmp_path) -> None:
