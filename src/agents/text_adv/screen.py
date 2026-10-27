@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Optional, Protocol, Tuple
 
 from src.modules.logging import get_logger
-from src.modules.vision.look_at_screen import ScreenCaptureResult
+from src.modules.vision.capture_types import ScreenCaptureResult
 
 logger = get_logger("TextAdvScreen")
 

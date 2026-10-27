@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import io
 import sys
 import time
 from dataclasses import dataclass
@@ -48,7 +49,7 @@ from typing import Iterator, List, Optional, Tuple
 from PIL import Image
 
 from src.modules.logging import get_logger
-from src.modules.vision.look_at_screen import ScreenCaptureResult
+from src.modules.vision.capture_types import ScreenCaptureResult
 
 logger = get_logger("MssScreenCapture")
 
@@ -353,8 +354,6 @@ class MssScreenCapture:
             out_width, out_height = new_w, new_h
 
         # 编码 PNG bytes
-        import io  # 顶部已有 PIL；io 留给编码分支就近导入（小工具，避免大块提前入）
-
         buf = io.BytesIO()
         try:
             img.save(buf, format="PNG")

@@ -6,7 +6,7 @@ import asyncio
 import time
 from typing import Any, List, Optional, Tuple
 
-from src.modules.vision.look_at_screen import ScreenCaptureResult
+from src.modules.vision.capture_types import ScreenCaptureResult
 
 
 class FakeScreenCapture:

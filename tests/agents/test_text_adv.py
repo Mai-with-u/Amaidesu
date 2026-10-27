@@ -30,7 +30,7 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from src.modules.vision import LookAtScreenProvider
-from src.modules.vision.look_at_screen import ScreenCaptureResult
+from src.modules.vision.capture_types import ScreenCaptureResult
 
 SNAPSHOT_KEYS = {"text", "options", "auto", "updated_at_ms"}
 REPLY_WITH_OPTIONS = "正文：\n（村口）你面前出现两条路。\n选项：\n1. 继续前进 (100, 200)\n2. 回头看看 (300, 200)"

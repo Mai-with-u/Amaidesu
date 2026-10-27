@@ -13,7 +13,7 @@ from src.agents.text_adv.config import TextAdvConfig
 from src.agents.text_adv.session import ScreenSession
 from src.agents.text_adv.vlm import FakeVisionReader
 from src.agents.text_adv.window import FakeWindowBackend
-from src.modules.vision.look_at_screen import ScreenCaptureResult
+from src.modules.vision.capture_types import ScreenCaptureResult
 
 
 class BoomCapture:

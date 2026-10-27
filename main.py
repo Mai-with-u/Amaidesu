@@ -82,7 +82,8 @@ from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools import TaskLedger, TaskTracker, ToolHealthMonitor, ToolOperations, ToolRegistry
 from src.modules.tools.tasks import resolve_tasks_config
 from src.modules.tools.bootstrap import bind_core_tools
-from src.modules.vision.look_at_screen import LookAtScreenProvider, LlmVisionTextReader
+from src.modules.vision.look_at_screen import LookAtScreenProvider
+from src.modules.vision.vlm_reader import LlmVisionTextReader
 from src.modules.vision.mss_capture import MssScreenCapture
 from src.modules.utils.windows_dpi import setup_process_dpi_awareness
 

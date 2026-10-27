@@ -7,7 +7,7 @@ from typing import Any, List, Optional
 
 import pytest
 
-from src.modules.vision.look_at_screen import LlmVisionTextReader
+from src.modules.vision.vlm_reader import LlmVisionTextReader
 from tests.helpers import llm_response
 
 DEFAULT_PROMPT = "描述屏幕上正在显示的内容。"

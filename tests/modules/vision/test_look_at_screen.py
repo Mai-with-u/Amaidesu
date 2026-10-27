@@ -15,13 +15,15 @@ from src.modules.tools.registry import ToolRegistry
 from src.modules.vision.look_at_screen import (
     LOOK_AT_SCREEN_SPEC,
     PROVIDER_NAME,
-    SCREEN_VLM_PROMPT_KEY,
-    SCREEN_VLM_SYSTEM_KEY,
     TOOL_NAME,
-    LlmVisionTextReader,
     LookAtScreenProvider,
 )
 from src.modules.vision.mss_capture import MssScreenCapture
+from src.modules.vision.vlm_reader import (
+    SCREEN_VLM_PROMPT_KEY,
+    SCREEN_VLM_SYSTEM_KEY,
+    LlmVisionTextReader,
+)
 from tests.modules.vision.fakes import FakeScreenCapture, FakeTextReader
 
 FULL_NAME = "vision_look_at_screen"

@@ -15,7 +15,7 @@ from src.agents.text_adv.screen import (
     text_key,
     wait_stable,
 )
-from src.modules.vision.look_at_screen import ScreenCaptureResult
+from src.modules.vision.capture_types import ScreenCaptureResult
 
 
 class FakeCapture:

@@ -21,15 +21,10 @@ registry.register_provider(provider)
 ```
 """
 
-from src.modules.vision.look_at_screen import (
-    LlmVisionTextReader,
-    LookAtScreenProvider,
-    ScreenCapture,
-    ScreenCaptureResult,
-    TextReader,
-    build_look_at_screen_spec,
-)
+from src.modules.vision.capture_types import ScreenCapture, ScreenCaptureResult, TextReader
+from src.modules.vision.look_at_screen import LookAtScreenProvider, build_look_at_screen_spec
 from src.modules.vision.mss_capture import MonitorInfo, MssScreenCapture
+from src.modules.vision.vlm_reader import LlmVisionTextReader
 
 __all__ = [
     "LookAtScreenProvider",

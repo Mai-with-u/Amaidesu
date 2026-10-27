@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.modules.dashboard.api.router import create_app
-from src.modules.vision.look_at_screen import ScreenCaptureResult
+from src.modules.vision.capture_types import ScreenCaptureResult
 from src.modules.vision.mss_capture import MssScreenCapture
 
 
