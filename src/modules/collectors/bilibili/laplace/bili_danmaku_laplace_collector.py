@@ -100,7 +100,6 @@ class BiliDanmakuLaplaceCollector(BaseCollector):
         super().__init__(event_bus=event_bus)
         self.logger = get_logger(self.__class__.__name__)
         self.typed_config = self.ConfigSchema.from_dict(config or {})
-        self.is_started = False
         self._emit_semantic_events = self.typed_config.emit_semantic_events
         # 连接与去重状态都只在 __init__ 构造一次；重连由 client.events() 内部处理，
         # mapper 跨重连保留，避免 bridge 重发历史事件时重复落库
@@ -121,37 +120,29 @@ class BiliDanmakuLaplaceCollector(BaseCollector):
 
     # ===== 生命周期 =====
 
-    async def start(self) -> None:
+    async def _on_start(self) -> None:
         """启动后台采集任务（连接在 collect() 内建立，不阻塞启动）。"""
-        if not self.is_started:
-            self.is_started = True
-            await self._start_collect_task()
+        await self._start_collect_task()
 
-    async def stop(self) -> None:
+    async def _on_stop(self) -> None:
         """停止后台采集任务（无条件取消，兼容任务已异常结束的情形）。"""
-        self.is_started = False
         await self._stop_collect_task()
 
-    async def cleanup(self) -> None:
+    async def _on_cleanup(self) -> None:
         """资源清理兜底：确保后台任务与 WebSocket 连接已关闭。"""
-        self.is_started = False
         await self._stop_collect_task()
 
     # ===== 采集 =====
 
     async def collect(self) -> AsyncIterator[RoomMessagePayload]:
         """连接 bridge 并逐条发布语义事件；由基类后台任务迭代驱动。"""
-        self.is_started = True
-        try:
-            async for raw in self._client.events():
-                payload = self._mapper.to_payload(raw)
-                if payload is None:
-                    continue
-                if self._emit_semantic_events:
-                    await self.publish_room_message(payload)
-                yield payload
-        finally:
-            self.is_started = False
+        async for raw in self._client.events():
+            payload = self._mapper.to_payload(raw)
+            if payload is None:
+                continue
+            if self._emit_semantic_events:
+                await self.publish_room_message(payload)
+            yield payload
 
 
 __all__ = ["BiliDanmakuLaplaceCollector"]

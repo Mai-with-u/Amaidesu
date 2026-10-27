@@ -74,6 +74,11 @@ class BaseCollector:
     # ---------------- 生命周期 ----------------
 
     async def start(self) -> None:
+        """启动采集器（模板方法，子类不得覆写）。
+
+        锁保护下的状态迁移全部留在本方法：子类只覆写 ``_on_start`` 钩子，
+        启动前的耗时准备（如模型加载）也在钩子内阻塞完成，不引入额外状态。
+        """
         async with self._lock:
             if self._state not in (CollectorState.CREATED, CollectorState.STOPPED, CollectorState.ERRORED):
                 logger.warning(f"Collector '{self.name}' start() 状态不正确: {self._state}")
@@ -91,6 +96,7 @@ class BaseCollector:
         logger.info(f"Collector '{self.name}' 已启动")
 
     async def stop(self) -> None:
+        """停止采集器（模板方法，子类不得覆写）；收尾动作放 ``_on_stop`` 钩子。"""
         async with self._lock:
             if self._state == CollectorState.STOPPED:
                 return
@@ -150,6 +156,12 @@ class BaseCollector:
             raise
         except Exception as exc:  # noqa: BLE001 - 边界
             logger.exception(f"Collector '{self.name}' collect() 后台消费循环异常: {exc}")
+        else:
+            # 生成器自然结束（数据源关闭，如 stdin EOF）：运行态随之收束为
+            # STOPPED，避免"循环已退出但采集器仍表现为运行中"
+            async with self._lock:
+                if self._state == CollectorState.RUNNING:
+                    self._state = CollectorState.STOPPED
 
     # ----- 子类可选钩子 -----
 

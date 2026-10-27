@@ -102,14 +102,12 @@ class STTCollector(BaseCollector):
             sample_rate=self.sample_rate,
             vad_eos_ms=self.min_silence_duration_ms,
             message_config=self.message_config,
-            should_run=lambda: self.is_started,
+            should_run=self.is_running,
         )
         self._internal_audio_queue = None
 
         self._is_speaking: bool = False
         self._silence_started_time: Optional[float] = None
-
-        self.is_started = False
 
         self.logger.info(
             f"STTCollector 初始化完成. "
@@ -213,21 +211,17 @@ class STTCollector(BaseCollector):
 
         return None
 
-    async def start(self) -> None:
-        """启动：加载 VAD 模型后开后台任务消费 collect()（识别结果经 publish_room_message 扇出）。"""
-        if not self.is_started:
-            if self.vad_enabled and self.vad_model is None:
-                # 模型下载/加载放启动期而非构造期：构造被下载卡住会拖死整个应用装配
-                # （首次运行从 GitHub 拉取，网络不佳时可达分钟级）
-                await asyncio.to_thread(self._load_vad_model)
-            self.is_started = True
-            await self._start_collect_task()
+    async def _on_start(self) -> None:
+        """加载 VAD 模型后开后台任务消费 collect()（识别结果经 publish_room_message 扇出）。"""
+        if self.vad_enabled and self.vad_model is None:
+            # 模型下载/加载放启动期而非构造期：构造被下载卡住会拖死整个应用装配
+            # （首次运行从 GitHub 拉取，网络不佳时可达分钟级）；阻塞在启动钩子内完成
+            await asyncio.to_thread(self._load_vad_model)
+        await self._start_collect_task()
 
-    async def stop(self) -> None:
-        """停止：取消后台消费任务。"""
-        if self.is_started:
-            self.is_started = False
-            await self._stop_collect_task()
+    async def _on_stop(self) -> None:
+        """取消后台消费任务。"""
+        await self._stop_collect_task()
 
     async def cleanup(self) -> None:
         """清理资源"""
@@ -260,7 +254,8 @@ class STTCollector(BaseCollector):
             speech_chunk_count = 0
             timeout_duration = max(0.1, self.min_silence_duration_ms / 1000.0 * 0.8)
 
-            while self.is_started:
+            # 循环由取消驱动退出（stop 取消后台任务）；取消点在队列等待超时处
+            while True:
                 try:
                     audio_chunk_bytes = await asyncio.wait_for(
                         self._internal_audio_queue.get(), timeout=timeout_duration

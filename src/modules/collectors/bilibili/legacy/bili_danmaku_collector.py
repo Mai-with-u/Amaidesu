@@ -87,21 +87,16 @@ class BiliDanmakuCollector(BaseCollector):
         # 去重水位线：时刻统一毫秒 int（B 站接口返回秒级 ts，比较点在边界换算）
         self._latest_timestamp: int = int(time.time() * 1000)
         self._session: Optional[aiohttp.ClientSession] = None
-        self.is_started: bool = False
         # 缺 uid 的弹幕每轮轮询都可能出现：只有第一次记 warning，之后降为 debug，避免刷屏
         self._uid_missing_warned: bool = False
 
-    async def start(self) -> None:
-        """启动：开后台任务消费 collect()（内部 emit room.message.*）。"""
-        if not self.is_started:
-            self.is_started = True
-            await self._start_collect_task()
+    async def _on_start(self) -> None:
+        """开后台任务消费 collect()（内部 emit room.message.*）。"""
+        await self._start_collect_task()
 
-    async def stop(self) -> None:
-        """停止：取消后台消费任务。"""
-        if self.is_started:
-            self.is_started = False
-            await self._stop_collect_task()
+    async def _on_stop(self) -> None:
+        """取消后台消费任务。"""
+        await self._stop_collect_task()
 
     async def cleanup(self) -> None:
         """清理资源"""
@@ -118,8 +113,6 @@ class BiliDanmakuCollector(BaseCollector):
         Yields:
             RoomMessagePayload: 弹幕事件载荷
         """
-        self.is_started = True
-
         try:
             self.logger.info("开始采集 Bilibili 弹幕数据...")
 
@@ -133,7 +126,8 @@ class BiliDanmakuCollector(BaseCollector):
             async with aiohttp.ClientSession(headers=headers) as session:
                 self._session = session
 
-                while self.is_started:
+                # 循环由取消驱动退出（stop 取消后台任务）；取消点在轮询 sleep
+                while True:
                     try:
                         async for message in self._fetch_and_process():
                             yield message
@@ -151,7 +145,6 @@ class BiliDanmakuCollector(BaseCollector):
         except Exception as e:
             self.logger.exception(f"数据采集出错: {e}")
         finally:
-            self.is_started = False
             self.logger.info("Bilibili 弹幕采集已停止")
 
     async def _fetch_and_process(self) -> AsyncIterator[RoomMessagePayload]:

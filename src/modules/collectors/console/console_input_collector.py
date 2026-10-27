@@ -97,46 +97,23 @@ class ConsoleInputCollector(BaseCollector):
 
         self.logger.info(f"ConsoleInputCollector初始化完成 (user: {self.user_nickname})")
 
-        self.is_started: bool = False
-        # 主动推事件：后台输入循环任务
-        self._input_task: Optional[asyncio.Task] = None
-        self._input_lock = asyncio.Lock()
+    async def _on_start(self) -> None:
+        """环境检查通过后开后台任务循环 stdin → emit room.message.*（主动推）。"""
+        if not _stdin_interactive():
+            self.logger.warning(
+                "stdin 不是交互终端（重定向/后台运行），控制台输入不启动；手动注入弹幕请改用 WebUI 直播控制台的输入条"
+            )
+            raise RuntimeError("stdin 不是交互终端，控制台输入采集器拒绝启动")
+        if os.environ.get("TERM_PROGRAM") == "vscode":
+            self.logger.warning(
+                "检测到 VSCode 集成终端：其 shell integration 会向 stdin 注入命令流，"
+                "干扰控制台输入（丢字符/丢行）。建议改用 Windows Terminal 或独立 PowerShell 窗口运行。"
+            )
+        await self._start_collect_task()
 
-    async def start(self) -> None:
-        """启动：开后台任务循环 stdin → emit room.message.*（主动推）。"""
-        async with self._input_lock:
-            if self.is_started:
-                return
-            if not _stdin_interactive():
-                self.logger.warning(
-                    "stdin 不是交互终端（重定向/后台运行），控制台输入不启动；"
-                    "手动注入弹幕请改用 WebUI 直播控制台的输入条"
-                )
-                return
-            if os.environ.get("TERM_PROGRAM") == "vscode":
-                self.logger.warning(
-                    "检测到 VSCode 集成终端：其 shell integration 会向 stdin 注入命令流，"
-                    "干扰控制台输入（丢字符/丢行）。建议改用 Windows Terminal 或独立 PowerShell 窗口运行。"
-                )
-            self.is_started = True
-            self._input_task = asyncio.create_task(self._run_input_loop())
-            self.logger.info("控制台输入后台循环已启动")
-
-    async def stop(self) -> None:
-        """停止：取消后台循环任务。"""
-        async with self._input_lock:
-            if not self.is_started:
-                return
-            self.is_started = False
-            task = self._input_task
-            self._input_task = None
-        if task and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        self.logger.info("控制台输入循环已停止")
+    async def _on_stop(self) -> None:
+        """取消后台输入循环任务。"""
+        await self._stop_collect_task()
 
     async def cleanup(self) -> None:
         """清理资源"""
@@ -144,63 +121,11 @@ class ConsoleInputCollector(BaseCollector):
         self.logger.info("ConsoleInputCollector cleanup完成")
 
     # ------------------------------------------------------------------
-    # 主动推事件：后台输入循环
-    # ------------------------------------------------------------------
-
-    async def _run_input_loop(self) -> None:
-        """后台任务：实时读 stdin，构造 RoomMessagePayload 并 emit 语义事件。"""
-        loop = asyncio.get_event_loop()
-        self.logger.info("控制台输入已准备就绪。输入 'exit()' 来停止。")
-
-        while self.is_started:
-            try:
-                line = await loop.run_in_executor(_STDIN_EXECUTOR, _read_stdin_line_with_diag)
-                text = line.strip()
-
-                if not text:
-                    if not line:
-                        # readline 返回空串即 EOF（终端关闭/管道结束）：退出而非忙转；
-                        # is_started 一并复位，避免"循环已退出但采集器仍表现为运行中"
-                        self.logger.info("stdin 已关闭（EOF），控制台输入循环退出")
-                        self.is_started = False
-                        break
-                    continue
-
-                if text.lower() == "exit()":
-                    self.logger.info("收到 'exit()' 命令，正在停止...")
-                    self.is_started = False
-                    break
-
-                if text.startswith("/"):
-                    message = await self._handle_command(text)
-                    if message:
-                        await self.publish_room_message(message)
-                else:
-                    message = RoomMessagePayload(
-                        message_type="danmaku",
-                        platform=_PLATFORM,
-                        user=RoomMessageUser(id=self.user_id, name=self.user_nickname),
-                        content=text,
-                        timestamp_ms=now_ms(),
-                    )
-                    await self.publish_room_message(message)
-
-            except asyncio.CancelledError:
-                self.logger.info("控制台输入循环被取消")
-                break
-            except Exception as e:
-                self.logger.exception(f"控制台输入循环出错: {e}")
-                await asyncio.sleep(_ERROR_RETRY_INTERVAL_S)
-
-        self.logger.info("控制台输入循环结束")
-
-    # ------------------------------------------------------------------
-    # 旧 collect() 生成器兼容（外部消费者不存在时保留接口）
+    # 主动推事件：采集循环（基类后台任务驱动唯一的 collect()）
     # ------------------------------------------------------------------
 
     async def collect(self) -> AsyncIterator[RoomMessagePayload]:
-        """
-        启动控制台输入，直接返回 RoomMessagePayload 流（旧兼容出口）
+        """实时读 stdin，构造 RoomMessagePayload 并 emit 语义事件。
 
         支持的命令:
         - exit(): 退出
@@ -211,52 +136,51 @@ class ConsoleInputCollector(BaseCollector):
         Yields:
             RoomMessagePayload: 直播间行为流事件载荷
         """
-        self.is_started = True
+        loop = asyncio.get_event_loop()
+        self.logger.info("控制台输入已准备就绪。输入 'exit()' 来停止。")
 
-        try:
-            loop = asyncio.get_event_loop()
-            self.logger.info("控制台输入已准备就绪。输入 'exit()' 来停止。")
+        # 循环由取消驱动退出（stop 取消后台任务）；stdin EOF 时生成器自然结束，
+        # 基类消费循环随之把运行态收束为 STOPPED
+        while True:
+            try:
+                line = await loop.run_in_executor(_STDIN_EXECUTOR, _read_stdin_line_with_diag)
+                text = line.strip()
 
-            while self.is_started:
-                try:
-                    line = await loop.run_in_executor(_STDIN_EXECUTOR, _read_stdin_line_with_diag)
-                    text = line.strip()
-
-                    if not text:
-                        if not line:
-                            # readline 返回空串即 EOF：退出而非忙转
-                            self.logger.info("stdin 已关闭（EOF），控制台输入循环退出")
-                            break
-                        continue
-
-                    if text.lower() == "exit()":
-                        self.logger.info("收到 'exit()' 命令，正在停止...")
+                if not text:
+                    if not line:
+                        # readline 返回空串即 EOF（终端关闭/管道结束）：退出而非忙转
+                        self.logger.info("stdin 已关闭（EOF），控制台输入循环退出")
                         break
+                    continue
 
-                    if text.startswith("/"):
-                        message = await self._handle_command(text)
-                        if message:
-                            yield message
-                    else:
-                        yield RoomMessagePayload(
-                            message_type="danmaku",
-                            platform=_PLATFORM,
-                            user=RoomMessageUser(id=self.user_id, name=self.user_nickname),
-                            content=text,
-                            timestamp_ms=now_ms(),
-                        )
-
-                except asyncio.CancelledError:
-                    self.logger.info("控制台输入循环被取消")
+                if text.lower() == "exit()":
+                    self.logger.info("收到 'exit()' 命令，正在停止...")
                     break
-                except Exception as e:
-                    self.logger.exception(f"控制台输入循环出错: {e}")
-                    await asyncio.sleep(_ERROR_RETRY_INTERVAL_S)
 
-            self.logger.info("控制台输入循环结束")
+                if text.startswith("/"):
+                    message = await self._handle_command(text)
+                    if message:
+                        await self.publish_room_message(message)
+                        yield message
+                else:
+                    message = RoomMessagePayload(
+                        message_type="danmaku",
+                        platform=_PLATFORM,
+                        user=RoomMessageUser(id=self.user_id, name=self.user_nickname),
+                        content=text,
+                        timestamp_ms=now_ms(),
+                    )
+                    await self.publish_room_message(message)
+                    yield message
 
-        finally:
-            self.is_started = False
+            except asyncio.CancelledError:
+                self.logger.info("控制台输入循环被取消")
+                break
+            except Exception as e:
+                self.logger.exception(f"控制台输入循环出错: {e}")
+                await asyncio.sleep(_ERROR_RETRY_INTERVAL_S)
+
+        self.logger.info("控制台输入循环结束")
 
     async def _handle_command(self, cmd_line: str) -> Optional[RoomMessagePayload]:
         parts = cmd_line[1:].strip().split()

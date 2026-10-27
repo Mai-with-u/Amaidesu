@@ -9,14 +9,22 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+# B 站币种标识（currency 带平台前缀：{platform}_{unit}）；采集器构造金额
+# 载荷与展示层换算共用这一份定义
+CURRENCY_GOLD = "bilibili_gold_coin"
+CURRENCY_SILVER = "bilibili_silver_coin"
+
+# SC 官方单位换算：rmb 字段是人民币元，1 元 = 1000 金瓜子（整数无损）
+RMB_TO_GOLD_COIN = 1000
+
 # 币种 → 人民币换算率(1 金瓜子 = 0.001 元);None = 无金钱价值(不计付费展示)
 CURRENCY_TO_CNY: dict[str, Decimal | None] = {
-    "bilibili_gold_coin": Decimal("0.001"),
-    "bilibili_silver_coin": None,
+    CURRENCY_GOLD: Decimal("0.001"),
+    CURRENCY_SILVER: None,
 }
 
 # 历史数据兜底币种:迁移回填前 B 站是唯一生产平台,空币种行均产自金瓜子链路
-_DEFAULT_BILI_CURRENCY = "bilibili_gold_coin"
+_DEFAULT_BILI_CURRENCY = CURRENCY_GOLD
 
 
 def to_cny(amount: int, currency: str = "") -> float | None:
@@ -32,4 +40,4 @@ def to_cny(amount: int, currency: str = "") -> float | None:
     return float(Decimal(int(amount)) * rate)
 
 
-__all__ = ["CURRENCY_TO_CNY", "to_cny"]
+__all__ = ["CURRENCY_GOLD", "CURRENCY_SILVER", "CURRENCY_TO_CNY", "RMB_TO_GOLD_COIN", "to_cny"]

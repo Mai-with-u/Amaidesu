@@ -82,19 +82,8 @@ class CollectorManager:
         return {name: reg.description for name, reg in self._collectors.items()}
 
     def list_running(self) -> List[str]:
-        """返回运行中的采集器。
-
-        兼容层状态优先：具体 Collectors 可能覆写 start()/stop() 维护自身
-        ``is_started`` 标志而绕过基类状态机，基类 ``state`` 停在 CREATED；故
-        以 ``is_started`` 为准，基类 RUNNING 状态作参考。
-        """
-        running: List[str] = []
-        for name, reg in self._collectors.items():
-            collector = reg.collector
-            is_running = getattr(collector, "is_started", False) or collector.state == CollectorState.RUNNING
-            if is_running:
-                running.append(name)
-        return running
+        """返回运行中的采集器（运行态唯一真相是基类状态机）。"""
+        return [name for name, reg in self._collectors.items() if reg.collector.state == CollectorState.RUNNING]
 
     # -------------------- 动态启停（Dashboard 组件管理调用） --------------------
 
@@ -109,14 +98,14 @@ class CollectorManager:
         if reg is None:
             return False
         collector = reg.collector
-        if getattr(collector, "is_started", False) or collector.state == CollectorState.RUNNING:
+        if collector.state == CollectorState.RUNNING:
             return True
         try:
             await collector.start()
         except Exception as exc:  # noqa: BLE001 - 边界
             logger.exception(f"Collector '{name}' 单实例启动失败: {exc}")
             return False
-        return getattr(collector, "is_started", False) or collector.state == CollectorState.RUNNING
+        return collector.state == CollectorState.RUNNING
 
     async def stop_collector(self, name: str) -> bool:
         """停止单个 Collector：调用 stop()（不 unregister）。"""

@@ -38,12 +38,10 @@ from src.modules.events.payloads.room import (
 )
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
+from src.modules.types.currency import CURRENCY_GOLD, CURRENCY_SILVER, RMB_TO_GOLD_COIN
 from src.modules.types.guard_levels import DEFAULT_GUARD_NAME, GUARD_LEVEL_NAMES
 
 _PLATFORM = "bilibili"
-_CURRENCY_GOLD = "bilibili_gold_coin"
-_CURRENCY_SILVER = "bilibili_silver_coin"
-_RMB_TO_GOLD_COIN = 1000
 
 
 class _FansMedal(BaseModel):
@@ -162,7 +160,7 @@ def _sc_total_gold(price: Any, price_normalized: Any) -> int:
     """
     normalized = _as_float(price_normalized)
     if normalized > 0:
-        return int(round(normalized * _RMB_TO_GOLD_COIN))
+        return int(round(normalized * RMB_TO_GOLD_COIN))
     return max(_as_int(price), 0)
 
 
@@ -327,7 +325,7 @@ class LaplaceEventMapper:
             message_id=message_id,
             sc=SuperChatInfo(
                 total_price=_sc_total_gold(event.price, event.price_normalized),
-                currency=_CURRENCY_GOLD,
+                currency=CURRENCY_GOLD,
                 start_time=start_time,
                 end_time=start_time + duration,
                 guard_level=_as_int(event.guard_type),
@@ -353,7 +351,7 @@ class LaplaceEventMapper:
                 guard_num=max(_as_int(event.toast_amount), 0),
                 guard_unit=event.toast_amount_unit or "",
                 total_price=max(_as_int(event.price), 0),
-                currency=_CURRENCY_GOLD,
+                currency=CURRENCY_GOLD,
                 # toast 事件没有粉丝牌字段，源限制下保持默认；raw_data 保留原始事件
                 fans_medal_level=0,
                 fans_medal_name="",
@@ -383,11 +381,11 @@ class LaplaceEventMapper:
     def _gift_currency(self, event: _GiftEvent, price: int) -> str:
         coin = (event.coin_type or "").strip().lower()
         if coin == "gold":
-            return _CURRENCY_GOLD
+            return CURRENCY_GOLD
         if coin == "silver":
-            return _CURRENCY_SILVER
+            return CURRENCY_SILVER
         if not coin:
-            return _CURRENCY_SILVER if price <= 0 else _CURRENCY_GOLD
+            return CURRENCY_SILVER if price <= 0 else CURRENCY_GOLD
         self.logger.warning(f"未知 gift.coinType={event.coin_type!r}，币种置空（不计入付费统计）")
         return ""
 

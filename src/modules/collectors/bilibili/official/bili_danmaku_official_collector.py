@@ -41,6 +41,7 @@ from src.modules.collectors.bilibili.official.bili_types import (
     SuperChatMessage,
     WatchedChangeMessage,
 )
+from src.modules.types.currency import CURRENCY_GOLD, CURRENCY_SILVER, RMB_TO_GOLD_COIN
 from src.modules.types.guard_levels import DEFAULT_GUARD_NAME, GUARD_LEVEL_NAMES
 
 from .client.websocket_client import BiliWebSocketClient
@@ -48,13 +49,6 @@ from .client.websocket_client import BiliWebSocketClient
 # 本采集器服务的平台标识（身份键组成部分，装配期常量——所有 payload 统一盖章，
 # 不是发布方逐条手填的配置项）
 _PLATFORM = "bilibili"
-
-# B 站币种标识（currency 带平台前缀：{platform}_{unit}）
-_CURRENCY_GOLD = "bilibili_gold_coin"
-_CURRENCY_SILVER = "bilibili_silver_coin"
-
-# SC 官方单位换算：rmb 字段是人民币元，1 元 = 1000 金瓜子（整数无损）
-_RMB_TO_GOLD_COIN = 1000
 
 
 class BiliDanmakuOfficialCollector(BaseCollector):
@@ -151,7 +145,6 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         self.message_type_config = BiliMessageTypeConfig(self.config)
 
         self.websocket_client: Optional[BiliWebSocketClient] = None
-        self.is_started = False  # CollectorManager 以本标志判定运行态
 
         # context_tags 处理
         self.context_tags: Optional[list] = self.typed_config.context_tags
@@ -173,19 +166,15 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                     "BiliDanmakuOfficial 配置启用了 template_info，但在 config/input.toml 中未找到 template_items。"
                 )
 
-    async def start(self) -> None:
-        """启动：开后台任务消费 collect()（内部 emit room.message.*）。"""
-        if not self.is_started:
-            self.is_started = True
-            await self._start_collect_task()
-            self.logger.debug("BiliDanmakuOfficialCollector 后台采集任务已启动")
+    async def _on_start(self) -> None:
+        """开后台任务消费 collect()（内部 emit room.message.*）。"""
+        await self._start_collect_task()
+        self.logger.debug("BiliDanmakuOfficialCollector 后台采集任务已启动")
 
-    async def stop(self) -> None:
-        """停止：取消后台采集任务。"""
-        if self.is_started:
-            self.is_started = False
-            await self._stop_collect_task()
-            self.logger.debug("BiliDanmakuOfficialCollector.is_started 已清空")
+    async def _on_stop(self) -> None:
+        """取消后台采集任务。"""
+        await self._stop_collect_task()
+        self.logger.debug("BiliDanmakuOfficialCollector 后台采集任务已停止")
 
     async def cleanup(self) -> None:
         """清理资源"""
@@ -203,8 +192,6 @@ class BiliDanmakuOfficialCollector(BaseCollector):
 
     async def collect(self) -> AsyncIterator[RoomMessagePayload]:
         """采集弹幕数据（流式）；同时 emit room.message.* 语义域事件"""
-        self.is_started = True
-
         message_queue: asyncio.Queue = asyncio.Queue()
 
         self.websocket_client = BiliWebSocketClient(
@@ -222,7 +209,8 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         ws_task = asyncio.create_task(self._run_websocket(message_queue))
 
         try:
-            while self.is_started:
+            # 循环由取消驱动退出（stop 取消后台任务）或收到队列结束信号
+            while True:
                 try:
                     payload = await asyncio.wait_for(message_queue.get(), timeout=1.0)
                     if payload is None:
@@ -240,7 +228,6 @@ class BiliDanmakuOfficialCollector(BaseCollector):
         except Exception as e:
             self.logger.exception(f"数据采集出错: {e}")
         finally:
-            self.is_started = False
             ws_task.cancel()
             try:
                 await ws_task
@@ -389,7 +376,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
             # 连击归并的去重条件。raw_data 落全量原始消息供实测后修正规则。
             actual_num = max(bili_msg.gift_num, bili_msg.combo_info.combo_count)
             gift_name = bili_msg.gift_name or "礼物"
-            currency = _CURRENCY_GOLD if bili_msg.paid else _CURRENCY_SILVER
+            currency = CURRENCY_GOLD if bili_msg.paid else CURRENCY_SILVER
             self.logger.debug(f"[礼物] {bili_msg.uname} 送出了 {actual_num} 个 {gift_name}")
             return RoomMessagePayload(
                 message_type="gift",
@@ -425,8 +412,8 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                 user=user,
                 content=bili_msg.message,
                 sc=SuperChatInfo(
-                    total_price=bili_msg.rmb * _RMB_TO_GOLD_COIN,
-                    currency=_CURRENCY_GOLD,
+                    total_price=bili_msg.rmb * RMB_TO_GOLD_COIN,
+                    currency=CURRENCY_GOLD,
                     start_time=bili_msg.start_time,
                     end_time=bili_msg.end_time,
                     guard_level=bili_msg.guard_level,
@@ -451,7 +438,7 @@ class BiliDanmakuOfficialCollector(BaseCollector):
                     guard_num=bili_msg.guard_num,
                     guard_unit=bili_msg.guard_unit,
                     total_price=bili_msg.price,
-                    currency=_CURRENCY_GOLD,
+                    currency=CURRENCY_GOLD,
                     fans_medal_level=bili_msg.fans_medal_level,
                     fans_medal_name=bili_msg.fans_medal_name,
                     msg_id=bili_msg.msg_id,

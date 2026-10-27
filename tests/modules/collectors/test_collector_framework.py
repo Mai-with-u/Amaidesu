@@ -113,6 +113,45 @@ def test_errored_collector_counts_as_unhealthy(manager: CollectorManager) -> Non
     assert manager.is_all_healthy() is False and "err" in manager.get_unhealthy()
 
 
+async def test_lifecycle_template_method_drives_hooks_and_state() -> None:
+    """start/stop 是基类模板方法：锁与状态迁移留在基类，子类钩子只做自身准备/收尾。"""
+    collector = _SampleCollector()
+    assert collector.state == CollectorState.CREATED
+
+    await collector.start()
+    assert (collector.state, collector.started) == (CollectorState.RUNNING, 1)
+    await collector.start()  # 重复启动被状态机挡下，钩子不再触发
+    assert (collector.state, collector.started) == (CollectorState.RUNNING, 1)
+
+    await collector.stop()
+    assert (collector.state, collector.stopped) == (CollectorState.STOPPED, 1)
+    await collector.stop()  # 幂等
+    assert (collector.state, collector.stopped) == (CollectorState.STOPPED, 1)
+
+
+async def test_naturally_ending_collect_loop_sets_state_stopped() -> None:
+    """collect() 生成器自然结束（数据源关闭）时，运行态由基类收束为 STOPPED，不再表现为运行中。"""
+
+    class _FiniteCollector(BaseCollector):
+        name = "finite_test"
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._done = asyncio.Event()
+
+        async def _on_start(self) -> None:
+            await self._start_collect_task()
+
+        async def collect(self) -> AsyncIterator[str]:  # type: ignore[override]
+            yield "一条"
+            self._done.set()
+
+    collector = _FiniteCollector()
+    await collector.start()
+    await _until(lambda: collector._collect_task is not None and collector._collect_task.done())
+    assert collector.state == CollectorState.STOPPED and not collector.is_running()
+
+
 def _room_payload(message_type: str, user_id: str = "u1") -> RoomMessagePayload:
     return RoomMessagePayload(message_type=message_type, user=RoomMessageUser(id=user_id, name="测试"), content="内容")
 
@@ -187,16 +226,21 @@ async def test_console_stdin_line_becomes_a_danmaku_event(monkeypatch: pytest.Mo
 async def test_console_loop_stays_off_without_a_terminal_and_exits_on_eof(
     monkeypatch: pytest.MonkeyPatch, interactive: bool
 ) -> None:
-    """stdin 非交互（重定向/后台）时不启动输入循环，防宿主命令文本被当弹幕；交互但 EOF 时循环退出并复位，不忙转。"""
+    """stdin 非交互（重定向/后台）时拒绝启动，防宿主命令文本被当弹幕；交互但 EOF 时循环自然退出、运行态收束为 STOPPED，不忙转。"""
     monkeypatch.setattr(console_mod, "_stdin_interactive", lambda: interactive)
     monkeypatch.setattr(sys.stdin, "readline", lambda: "", raising=False)
     bus = _FakeBus()
     collector = ConsoleInputCollector(config={}, event_bus=bus)
 
-    await collector.start()
-    await _until(lambda: not collector.is_started, timeout=0.5)
+    if not interactive:
+        with pytest.raises(RuntimeError, match="交互终端"):
+            await collector.start()
+        assert collector.state == CollectorState.ERRORED
+    else:
+        await collector.start()
+        await _until(lambda: collector.state == CollectorState.STOPPED, timeout=0.5)
 
-    assert collector.is_started is False and bus.events == []
+    assert collector.state != CollectorState.RUNNING and bus.events == []
 
 
 @pytest.mark.parametrize("name", ["nonexistent_collector_xyz", "screen", ""])

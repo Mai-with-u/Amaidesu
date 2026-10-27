@@ -50,6 +50,7 @@ from src.modules.simulator.seed_data import seed_simulator_data
 from src.modules.simulator.token_budget import TokenBudgetController
 from src.modules.simulator.types import StreamerContextSnapshot
 from src.modules.storage.repos import ChatRepo, SimRepo
+from src.modules.types.currency import CURRENCY_GOLD, RMB_TO_GOLD_COIN
 from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -60,9 +61,6 @@ if TYPE_CHECKING:
 # 与 simulated=True 溯源标记正交——统计过滤假数据靠 simulated，身份隔离靠 platform
 _SIM_PLATFORM = "bilibili"
 
-# B 站币种与单位换算（SC 的 rmb 元 ×1000 = 金瓜子）
-_CURRENCY_GOLD = "bilibili_gold_coin"
-_RMB_TO_GOLD_COIN = 1000
 
 # 上舰模拟消息的固定形态（与 GiftGenerator 的舰长默认形态一致）
 _GUARD_LEVEL_CAPTAIN = 3
@@ -594,13 +592,13 @@ class SimulatorService:
                 unit_price=unit_price,
                 total_price=unit_price,
                 paid_price=unit_price,
-                currency=_CURRENCY_GOLD,
+                currency=CURRENCY_GOLD,
             )
         elif known_type == "super_chat" and gift_event is not None:
             amount_rmb = int(gift_event.sc_amount_rmb or 0)
             sc_payload = SuperChatInfo(
-                total_price=amount_rmb * _RMB_TO_GOLD_COIN,
-                currency=_CURRENCY_GOLD,
+                total_price=amount_rmb * RMB_TO_GOLD_COIN,
+                currency=CURRENCY_GOLD,
             )
         elif known_type == "guard":
             guard_payload = GuardInfo(
@@ -608,7 +606,7 @@ class SimulatorService:
                 guard_num=_GUARD_NUM_MONTHLY,
                 guard_unit=_GUARD_UNIT_MONTH,
                 total_price=_GUARD_CAPTAIN_PRICE_GOLD,
-                currency=_CURRENCY_GOLD,
+                currency=CURRENCY_GOLD,
             )
         payload = RoomMessagePayload(
             message_id=uuid.uuid4().hex,
