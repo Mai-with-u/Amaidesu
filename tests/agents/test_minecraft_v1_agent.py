@@ -415,7 +415,8 @@ async def test_tracker_fallback_verification_uses_the_goal_query_adapter() -> No
     provider = MaicraftMcpProvider(
         client=SimpleNamespace(), server_name="maicraft", goal_lookup=_goal_lookup_of(server)
     )
-    # 未连真 server（setup 没跑）时工具缓存为空；归属映射按注册后的样子补一个 execute 的 spec。
+    # 未连真 server（setup 没跑）时工具缓存为空；归属映射按注册后的样子补一个
+    # execute 的 spec。工具登记发生在连接态（生产侧已连接才有工具清单），故先标记连接。
     provider._specs = [
         ToolSpec(
             name="execute",
@@ -425,6 +426,7 @@ async def test_tracker_fallback_verification_uses_the_goal_query_adapter() -> No
             provider="maicraft",
         )
     ]
+    provider.mark_connected()
     registry = ToolRegistry()
     registry.register_provider(provider)
     ledger = TaskLedger()
