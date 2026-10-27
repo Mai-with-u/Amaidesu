@@ -25,6 +25,7 @@ from src.modules.config.multi_file_loader import (
     update_config_values,
     validate_config_updates,
 )
+
 # 动态分类域清单的单一源在装配目录 component_catalog（registry 只留 Schema 表）；
 # 其加载器延迟拉起组件实现，此处的顶层 import 不付出组件依赖链成本
 from src.modules.component_catalog import TOOL_PROVIDER_DOMAINS
