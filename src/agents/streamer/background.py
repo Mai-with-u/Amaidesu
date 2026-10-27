@@ -323,9 +323,9 @@ class BackgroundMaintainer:
             lines.append(
                 canonical_content(
                     role="user",
-                    nickname=row["sender_name"] or "观众",
-                    text=row["content"],
-                    message_id=str(row["message_id"] or ""),
+                    nickname=row.sender_name or "观众",
+                    text=row.content,
+                    message_id=str(row.message_id or ""),
                 )
             )
 
@@ -336,11 +336,11 @@ class BackgroundMaintainer:
         except Exception as exc:
             self._logger.warning(f"读取时间窗内 SC 失败（摘要输入缺 SC）: {exc}")
             sc_rows = []
-        for row in sc_rows:
-            nickname = row["user_name"] or "观众"
-            text = f"{nickname} 发送 SC：{row['message']}"
+        for sc in sc_rows:
+            nickname = sc.user_name or "观众"
+            text = f"{nickname} 发送 SC：{sc.message}"
             lines.append(
-                canonical_content(role="user", nickname=nickname, text=text, message_id=str(row["message_id"] or ""))
+                canonical_content(role="user", nickname=nickname, text=text, message_id=str(sc.message_id or ""))
             )
 
         history_text = "\n".join(lines)

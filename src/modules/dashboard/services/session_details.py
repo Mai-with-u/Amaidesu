@@ -29,27 +29,27 @@ async def list_session_details(
     )
     items: List[dict] = []
     for row in rows:
-        ts = int(row["timestamp_ms"])
-        if row["sender_role"] == "assistant":
+        ts = row.timestamp_ms
+        if row.sender_role == "assistant":
             items.append(
                 {
                     "kind": "speech",
                     "ts_ms": ts,
-                    "text": row["content"],
-                    "reply_to_message_id": row["reply_to_message_id"],
+                    "text": row.content,
+                    "reply_to_message_id": row.reply_to_message_id,
                     "simulated": False,
                 }
             )
         else:
             items.append(
                 {
-                    "kind": str(row["message_type"]),
+                    "kind": row.message_type,
                     "ts_ms": ts,
-                    "user_name": row["sender_name"] or "",
-                    "user_id": row["sender_id"] or "",
-                    "content": row["content"],
-                    "message_id": row["message_id"],
-                    "simulated": bool(row["simulated"]),
+                    "user_name": row.sender_name or "",
+                    "user_id": row.sender_id or "",
+                    "content": row.content,
+                    "message_id": row.message_id,
+                    "simulated": bool(row.simulated),
                 }
             )
     gift_rows = await chat_repo.list_session_gifts(
@@ -61,13 +61,13 @@ async def list_session_details(
         items.append(
             {
                 "kind": "gift_row",
-                "ts_ms": int(row["timestamp_ms"]),
-                "user_name": row["user_name"],
-                "user_id": row["user_id"],
-                "gift_name": row["gift_name"],
-                "gift_count": int(row["quantity"]),
-                "total_price": int(row["total_price"] or 0),
-                "simulated": bool(row["simulated"]),
+                "ts_ms": row.timestamp_ms,
+                "user_name": row.user_name,
+                "user_id": row.user_id,
+                "gift_name": row.gift_name,
+                "gift_count": row.quantity,
+                "total_price": row.total_price or 0,
+                "simulated": bool(row.simulated),
             }
         )
     sc_rows = await chat_repo.list_session_super_chats(
@@ -79,12 +79,12 @@ async def list_session_details(
         items.append(
             {
                 "kind": "super_chat_row",
-                "ts_ms": int(row["timestamp_ms"]),
-                "user_name": row["user_name"],
-                "user_id": row["user_id"],
-                "content": row["message"],
-                "amount": to_cny(int(row["total_price"] or 0), str(row["currency"] or "")) or 0.0,
-                "simulated": bool(row["simulated"]),
+                "ts_ms": row.timestamp_ms,
+                "user_name": row.user_name,
+                "user_id": row.user_id,
+                "content": row.message,
+                "amount": to_cny(row.total_price or 0, row.currency or "") or 0.0,
+                "simulated": bool(row.simulated),
             }
         )
     items.sort(key=lambda item: item["ts_ms"])

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
-from functools import partial
-
 from src.modules.storage.connection import SQLiteConnectionManager
+from src.modules.storage.run_in_executor import run_in_executor
 from typing import Any, Callable
 
 
@@ -23,15 +21,7 @@ class BaseRepo:
 
     async def _run_in_executor(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
         """统一 ``asyncio.to_thread`` 防漏（仓储内所有同步调用都走这里）。"""
-        if asyncio.iscoroutinefunction(fn):
-            # 不应该到这里（避免失误）；直接 await
-            return await fn(*args, **kwargs)
-        # functools.partial 处理：kwargs 关键字
-        if kwargs:
-            return await asyncio.to_thread(partial(fn, *args, **kwargs))
-        if args:
-            return await asyncio.to_thread(fn, *args)
-        return await asyncio.to_thread(fn)
+        return await run_in_executor(fn, *args, **kwargs)
 
     async def close(self) -> None:
         """关闭共享连接管理器持有的全部连接（幂等，落盘 WAL/事务）。

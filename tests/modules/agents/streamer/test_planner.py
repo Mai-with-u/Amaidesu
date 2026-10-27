@@ -8,6 +8,7 @@ import pytest
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GameEventBatch
+from src.modules.storage.models.memory import Viewer
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
@@ -251,7 +252,17 @@ def _viewer_repo(former: Dict[int, List[str]] | None = None) -> MagicMock:
 
     repo = MagicMock()
     repo.find_viewer_id = AsyncMock(side_effect=find)
-    repo.get_viewer = AsyncMock(return_value={"user_name": "老王"})
+    repo.get_viewer = AsyncMock(
+        return_value=Viewer(
+            id=1,
+            platform="bilibili",
+            user_name="老王",
+            name_seen_ms=0,
+            link_status="confirmed",
+            last_active_ms=0,
+            user_id="u1",
+        )
+    )
     repo.list_former_names = AsyncMock(side_effect=former_names)
     return repo
 

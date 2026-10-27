@@ -59,20 +59,20 @@ def require_chat_repo(server: "DashboardServer") -> Any:
     return repo
 
 
-def _row_to_list_item(row: Any) -> ViewerListItem:
+def _viewer_to_list_item(viewer: Any) -> ViewerListItem:
     return ViewerListItem(
-        viewer_id=int(row["id"]),
-        platform=str(row["platform"] or ""),
-        user_id=str(row["user_id"] or ""),
-        user_name=str(row["user_name"] or ""),
-        link_status=str(row["link_status"] or "confirmed"),
-        message_count=int(row["message_count"] or 0),
-        gift_count=int(row["gift_count"] or 0),
-        replied_count=int(row["replied_count"] or 0),
-        interaction_count=int(row["interaction_count"] or 0),
-        paid_count=int(row["paid_count"] or 0),
-        paid_amount=int(row["paid_amount"] or 0),
-        last_active_ms=int(row["last_active_ms"] or 0),
+        viewer_id=viewer.id,
+        platform=viewer.platform or "",
+        user_id=viewer.user_id or "",
+        user_name=viewer.user_name or "",
+        link_status=viewer.link_status or "confirmed",
+        message_count=viewer.message_count or 0,
+        gift_count=viewer.gift_count or 0,
+        replied_count=viewer.replied_count or 0,
+        interaction_count=viewer.interaction_count or 0,
+        paid_count=viewer.paid_count or 0,
+        paid_amount=viewer.paid_amount or 0,
+        last_active_ms=viewer.last_active_ms or 0,
     )
 
 
@@ -93,7 +93,7 @@ async def list_viewers(
         offset=offset,
         order_by=order_by,
     )
-    return ViewerListResponse(total=total, items=[_row_to_list_item(row) for row in rows])
+    return ViewerListResponse(total=total, items=[_viewer_to_list_item(viewer) for viewer in rows])
 
 
 async def build_insights(viewer_repo: Any, chat_repo: Any, *, days: int) -> ViewerInsightsResponse:
@@ -108,7 +108,7 @@ async def build_insights(viewer_repo: Any, chat_repo: Any, *, days: int) -> View
         active_older=int(buckets.get("active_older", 0)),
         never_replied=int(buckets.get("never_replied", 0)),
         gift_viewers=int(buckets.get("gift_viewers", 0)),
-        daily_danmaku=[DailyDanmakuPoint(day=str(row["day"]), count=int(row["count"])) for row in daily],
+        daily_danmaku=[DailyDanmakuPoint(day=point.day, count=point.count) for point in daily],
     )
 
 
@@ -144,7 +144,7 @@ async def build_pending_viewers(
                 candidate_interaction_count=int(row["candidate_interaction_count"] or 0),
                 candidate_paid_amount=int(row["candidate_paid_amount"] or 0),
                 candidate_last_active_ms=int(row["candidate_last_active_ms"] or 0),
-                candidate_names=[str(name_row["user_name"]) for name_row in names],
+                candidate_names=[name.user_name for name in names],
             )
         )
     return PendingViewersResponse(total=total, items=items)
@@ -160,38 +160,38 @@ async def build_viewer_detail(viewer_repo: Any, chat_repo: Any, viewer_id: int) 
         return None
     names = await viewer_repo.list_names(viewer_id=viewer_id)
     candidate = None
-    if row["link_candidate_id"] is not None:
-        candidate_row = await viewer_repo.get_viewer(viewer_id=int(row["link_candidate_id"]))
-        if candidate_row is not None:
-            candidate = ViewerBrief(viewer_id=int(candidate_row["id"]), user_name=str(candidate_row["user_name"]))
+    if row.link_candidate_id is not None:
+        candidate_viewer = await viewer_repo.get_viewer(viewer_id=row.link_candidate_id)
+        if candidate_viewer is not None:
+            candidate = ViewerBrief(viewer_id=candidate_viewer.id, user_name=candidate_viewer.user_name)
     bounds = await chat_repo.get_viewer_activity_bounds(viewer_id=viewer_id)
     summary = await chat_repo.summarize_viewer_contributions(viewer_id=viewer_id)
     sessions = await chat_repo.list_viewer_sessions(viewer_id=viewer_id)
     return ViewerDetailResponse(
-        viewer_id=int(row["id"]),
-        platform=str(row["platform"] or ""),
-        user_id=str(row["user_id"] or ""),
-        account_id=row["account_id"],
-        open_id=row["open_id"],
-        open_app_id=row["open_app_id"],
-        user_name=str(row["user_name"] or ""),
+        viewer_id=row.id,
+        platform=row.platform or "",
+        user_id=row.user_id or "",
+        account_id=row.account_id,
+        open_id=row.open_id,
+        open_app_id=row.open_app_id,
+        user_name=row.user_name or "",
         names=[
             ViewerNameItem(
-                user_name=str(name_row["user_name"]),
-                first_seen_ms=int(name_row["first_seen_ms"]),
-                last_seen_ms=int(name_row["last_seen_ms"]),
+                user_name=name.user_name,
+                first_seen_ms=name.first_seen_ms,
+                last_seen_ms=name.last_seen_ms,
             )
-            for name_row in names
+            for name in names
         ],
-        link_status=str(row["link_status"] or "confirmed"),
+        link_status=row.link_status or "confirmed",
         link_candidate=candidate,
-        message_count=int(row["message_count"] or 0),
-        gift_count=int(row["gift_count"] or 0),
-        replied_count=int(row["replied_count"] or 0),
-        interaction_count=int(row["interaction_count"] or 0),
-        paid_count=int(row["paid_count"] or 0),
-        paid_amount=int(row["paid_amount"] or 0),
-        last_active_ms=int(row["last_active_ms"] or 0),
+        message_count=row.message_count or 0,
+        gift_count=row.gift_count or 0,
+        replied_count=row.replied_count or 0,
+        interaction_count=row.interaction_count or 0,
+        paid_count=row.paid_count or 0,
+        paid_amount=row.paid_amount or 0,
+        last_active_ms=row.last_active_ms or 0,
         first_seen_ms=bounds[0] if bounds else None,
         gift_total_count=int(summary.get("gift_total_count", 0)),
         gift_total_amount=int(summary.get("gift_total_amount", 0)),
@@ -217,20 +217,20 @@ async def build_dialogue(
     items: List[DialogueItem] = []
     viewer_ts: List[int] = []
     for row in rows:
-        is_reply = str(row["sender_role"]) == "assistant"
+        is_reply = row.sender_role == "assistant"
         if not is_reply:
-            viewer_ts.append(int(row["timestamp_ms"]))
+            viewer_ts.append(row.timestamp_ms)
         items.append(
             DialogueItem(
-                id=int(row["id"]),
+                id=row.id,
                 kind="reply" if is_reply else "viewer",
-                content=str(row["content"] or ""),
-                timestamp_ms=int(row["timestamp_ms"]),
-                live_session_id=int(row["live_session_id"]) if row["live_session_id"] is not None else None,
-                message_type=str(row["message_type"]) if not is_reply else None,
-                message_id=str(row["message_id"]) if row["message_id"] else None,
-                reply_to_message_id=str(row["reply_to_message_id"]) if row["reply_to_message_id"] else None,
-                simulated=bool(row["simulated"]),
+                content=row.content or "",
+                timestamp_ms=row.timestamp_ms,
+                live_session_id=row.live_session_id if row.live_session_id is not None else None,
+                message_type=row.message_type if not is_reply else None,
+                message_id=row.message_id if row.message_id else None,
+                reply_to_message_id=row.reply_to_message_id if row.reply_to_message_id else None,
+                simulated=bool(row.simulated),
             )
         )
     next_before = min(viewer_ts) if len(viewer_ts) >= limit else None
@@ -248,24 +248,24 @@ async def build_contributions(chat_repo: Any, viewer_id: int, *, limit: int) -> 
         sc_total_count=int(summary.get("sc_total_count", 0)),
         gifts=[
             GiftItem(
-                timestamp_ms=int(row["timestamp_ms"]),
-                live_session_id=int(row["live_session_id"]) if row["live_session_id"] is not None else None,
-                gift_name=str(row["gift_name"] or ""),
-                gift_count=int(row["quantity"] or 0),
-                total_price=int(row["total_price"] or 0),
-                simulated=bool(row["simulated"]),
+                timestamp_ms=gift.timestamp_ms,
+                live_session_id=gift.live_session_id if gift.live_session_id is not None else None,
+                gift_name=gift.gift_name or "",
+                gift_count=gift.quantity or 0,
+                total_price=gift.total_price or 0,
+                simulated=bool(gift.simulated),
             )
-            for row in gift_rows
+            for gift in gift_rows
         ],
         super_chats=[
             SuperChatItem(
-                timestamp_ms=int(row["timestamp_ms"]),
-                live_session_id=int(row["live_session_id"]) if row["live_session_id"] is not None else None,
-                amount=int(row["total_price"] or 0) / 1000,
-                message=str(row["message"] or ""),
-                simulated=bool(row["simulated"]),
+                timestamp_ms=sc.timestamp_ms,
+                live_session_id=sc.live_session_id if sc.live_session_id is not None else None,
+                amount=(sc.total_price or 0) / 1000,
+                message=sc.message or "",
+                simulated=bool(sc.simulated),
             )
-            for row in sc_rows
+            for sc in sc_rows
         ],
     )
 
@@ -276,11 +276,11 @@ async def build_viewer_sessions(chat_repo: Any, viewer_id: int) -> ViewerSession
     return ViewerSessionsResponse(
         items=[
             ViewerSessionItem(
-                live_session_id=int(row["live_session_id"]),
-                title=str(row["title"]) if row["title"] else None,
-                message_count=int(row["message_count"] or 0),
-                first_ms=int(row["first_ms"]),
-                last_ms=int(row["last_ms"]),
+                live_session_id=row.live_session_id,
+                title=row.title if row.title else None,
+                message_count=row.message_count or 0,
+                first_ms=row.first_ms,
+                last_ms=row.last_ms,
             )
             for row in rows
         ]

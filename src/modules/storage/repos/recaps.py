@@ -11,9 +11,9 @@
 
 from __future__ import annotations
 
-import sqlite3
 from typing import List, Optional
 
+from src.modules.storage.models.memory import EndedSessionWithoutRecap, SessionRecap
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.utils.time_utils import now_ms
 
@@ -51,38 +51,38 @@ class SessionRecapRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def get_recap(self, *, live_session_id: int) -> Optional[sqlite3.Row]:
+    async def get_recap(self, *, live_session_id: int) -> Optional[SessionRecap]:
         """按场次主键取回顾行；没有返回 None。"""
 
-        def _exec() -> Optional[sqlite3.Row]:
+        def _exec() -> Optional[SessionRecap]:
             with self._manager.transaction() as conn:
-                return conn.execute(
+                row = conn.execute(
                     "SELECT live_session_id, started_at_ms, ended_at_ms, recap_text, created_at_ms"
                     " FROM session_recaps WHERE live_session_id=?",
                     (int(live_session_id),),
                 ).fetchone()
+                return SessionRecap.model_validate(dict(row)) if row else None
 
         return await self._run_in_executor(_exec)
 
-    async def list_recaps_by_session_ids(self, *, live_session_ids: List[int]) -> List[sqlite3.Row]:
+    async def list_recaps_by_session_ids(self, *, live_session_ids: List[int]) -> List[SessionRecap]:
         """按场次主键集合取回顾行（复盘聚合的多场一次读取；顺序不保证）。"""
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[SessionRecap]:
             placeholders = ",".join("?" for _ in live_session_ids)
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT live_session_id, started_at_ms, ended_at_ms, recap_text, created_at_ms"
-                        f" FROM session_recaps WHERE live_session_id IN ({placeholders})",  # noqa: S608 子句为代码内常量
-                        [int(sid) for sid in live_session_ids],
-                    ).fetchall()
-                )
+                rows = conn.execute(
+                    "SELECT live_session_id, started_at_ms, ended_at_ms, recap_text, created_at_ms"
+                    f" FROM session_recaps WHERE live_session_id IN ({placeholders})",  # noqa: S608 子句为代码内常量
+                    [int(sid) for sid in live_session_ids],
+                ).fetchall()
+                return [SessionRecap.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
     async def list_recent_recaps(
         self, *, limit: int = 3, exclude_session_id: Optional[int] = None
-    ) -> List[sqlite3.Row]:
+    ) -> List[SessionRecap]:
         """最近几场的回顾（开播时刻倒序，最近一场在前）。
 
         ``exclude_session_id`` 用来排除正在进行的本场——本场还没收播，
@@ -90,7 +90,7 @@ class SessionRecapRepo(BaseRepo):
         """
         page_limit = max(1, min(int(limit), 20))
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[SessionRecap]:
             clauses: List[str] = []
             params: List[object] = []
             if exclude_session_id is not None:
@@ -98,35 +98,33 @@ class SessionRecapRepo(BaseRepo):
                 params.append(int(exclude_session_id))
             where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT live_session_id, started_at_ms, ended_at_ms, recap_text, created_at_ms"
-                        f" FROM session_recaps{where_sql} ORDER BY started_at_ms DESC, id DESC LIMIT ?",  # noqa: S608
-                        [*params, page_limit],
-                    ).fetchall()
-                )
+                rows = conn.execute(
+                    "SELECT live_session_id, started_at_ms, ended_at_ms, recap_text, created_at_ms"
+                    f" FROM session_recaps{where_sql} ORDER BY started_at_ms DESC, id DESC LIMIT ?",  # noqa: S608
+                    [*params, page_limit],
+                ).fetchall()
+                return [SessionRecap.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
-    async def list_ended_sessions_without_recap(self, *, limit: int = 1) -> List[sqlite3.Row]:
+    async def list_ended_sessions_without_recap(self, *, limit: int = 1) -> List[EndedSessionWithoutRecap]:
         """已结束却没有回顾的场次（结束时刻倒序）——启动补写的待办清单。
 
         只看已结账的场次（``ended_at_ms`` 非空）；进行中的场次由收播钩子负责。
         """
         page_limit = max(1, min(int(limit), 20))
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[EndedSessionWithoutRecap]:
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT s.id AS live_session_id, s.started_at_ms, s.ended_at_ms, s.title"
-                        " FROM live_sessions s"
-                        " LEFT JOIN session_recaps r ON r.live_session_id = s.id"
-                        " WHERE s.ended_at_ms IS NOT NULL AND r.id IS NULL"
-                        " ORDER BY s.ended_at_ms DESC LIMIT ?",
-                        (page_limit,),
-                    ).fetchall()
-                )
+                rows = conn.execute(
+                    "SELECT s.id AS live_session_id, s.started_at_ms, s.ended_at_ms, s.title"
+                    " FROM live_sessions s"
+                    " LEFT JOIN session_recaps r ON r.live_session_id = s.id"
+                    " WHERE s.ended_at_ms IS NOT NULL AND r.id IS NULL"
+                    " ORDER BY s.ended_at_ms DESC LIMIT ?",
+                    (page_limit,),
+                ).fetchall()
+                return [EndedSessionWithoutRecap.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 

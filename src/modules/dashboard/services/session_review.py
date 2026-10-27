@@ -223,13 +223,13 @@ class SessionReviewAggregator:
         except Exception as exc:  # noqa: BLE001 - 回顾缺失不阻断聚合，按无数据降级
             logger.warning(f"读取场次回顾失败，复盘页总结面板降级: {exc}", exc=True)
             return
-        by_id = {int(row["live_session_id"]): row for row in rows}
+        by_id = {recap.live_session_id: recap for recap in rows}
         for brief in briefs:
-            row = by_id.get(brief.live_session_id)
-            if row is None:
+            recap = by_id.get(brief.live_session_id)
+            if recap is None:
                 continue
-            brief.recap_text = str(row["recap_text"] or "")
-            brief.recap_created_at_ms = int(row["created_at_ms"]) if row["created_at_ms"] else None
+            brief.recap_text = recap.recap_text or ""
+            brief.recap_created_at_ms = recap.created_at_ms if recap.created_at_ms else None
 
     # ------------------------------------------------------------------ #
     # 各数据源分节                                                        #
@@ -266,8 +266,8 @@ class SessionReviewAggregator:
         worst_silence_start: Optional[int] = None
         best_rate: Optional[float] = None
         by_session: Dict[int, List[int]] = {}
-        for row in speech_rows:
-            by_session.setdefault(int(row["live_session_id"]), []).append(int(row["timestamp_ms"]))
+        for moment in speech_rows:
+            by_session.setdefault(moment.live_session_id, []).append(moment.timestamp_ms)
         for brief in briefs:
             ts_list = sorted(by_session.get(brief.live_session_id, []))
             total_speech += len(ts_list)
@@ -455,10 +455,10 @@ class SessionReviewAggregator:
             returning_viewers=max(0, active_total - new_viewers),
             top_speakers=[
                 ViewerSpeakerItem(
-                    viewer_id=int(row["viewer_id"]),
-                    platform=str(row["platform"] or ""),
-                    user_name=str(row["user_name"] or ""),
-                    message_count=int(row["message_count"] or 0),
+                    viewer_id=row.viewer_id,
+                    platform=row.platform or "",
+                    user_name=row.user_name or "",
+                    message_count=row.message_count or 0,
                 )
                 for row in speaker_rows
             ],

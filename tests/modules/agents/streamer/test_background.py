@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.background import BackgroundMaintainer
+from src.modules.storage.models.chat import LiveChatMessage, SuperChatRecord
 from src.agents.streamer.config import StreamerBackgroundConfig
 
 
@@ -39,20 +40,35 @@ def _make_maintainer(*, llm_response: str = "", llm_success: bool = True) -> tup
     session_manager.resolve_pk = AsyncMock(return_value=1)
 
     chat_repo = MagicMock()
+    # 读面按真实契约模型返回（消费方取模型字段）
     chat_repo.list_recent_live_chat = AsyncMock(
         return_value=[
-            {
-                "message_id": "m1",
-                "sender_name": "观众甲",
-                "sender_id": "u1",
-                "platform": "bilibili",
-                "content": "下周要考试了",
-            }
+            LiveChatMessage(
+                id=1,
+                live_session_id=1,
+                timestamp_ms=100,
+                sender_role="viewer",
+                message_type="danmaku",
+                message_id="m1",
+                sender_name="观众甲",
+                sender_id="u1",
+                platform="bilibili",
+                content="下周要考试了",
+            )
         ]
     )
     chat_repo.list_super_chats_since = AsyncMock(
         return_value=[
-            {"message_id": "s1", "user_name": "观众乙", "user_id": "u2", "platform": "bilibili", "message": "加油"}
+            SuperChatRecord(
+                id=1,
+                live_session_id=1,
+                timestamp_ms=200,
+                message_id="s1",
+                user_name="观众乙",
+                user_id="u2",
+                platform="bilibili",
+                message="加油",
+            )
         ]
     )
 

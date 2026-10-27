@@ -78,7 +78,7 @@ class MutationResponse(BaseModel):
 async def get_memory_stats(repo: ViewerProfileRepoDep) -> MemoryStatsResponse:
     """画像总量统计（管理页头部概览）。"""
     total, rows = await repo.list_profiles(limit=1)
-    latest = int(rows[0]["updated_at_ms"]) if rows else 0
+    latest = rows[0].updated_at_ms if rows else 0
     return MemoryStatsResponse(profile_count=total, latest_updated_ms=latest)
 
 
@@ -95,12 +95,12 @@ async def list_viewer_profiles(
         total=total,
         items=[
             ViewerProfileItem(
-                viewer_id=int(row["viewer_id"]),
-                platform=str(row["platform"]),
-                user_name=str(row["user_name"]),
-                profile_text=str(row["profile_text"]),
-                last_compressed_at_ms=int(row["last_compressed_at_ms"]),
-                updated_at_ms=int(row["updated_at_ms"]),
+                viewer_id=row.viewer_id,
+                platform=row.platform,
+                user_name=row.user_name,
+                profile_text=row.profile_text,
+                last_compressed_at_ms=row.last_compressed_at_ms,
+                updated_at_ms=row.updated_at_ms,
             )
             for row in rows
         ],

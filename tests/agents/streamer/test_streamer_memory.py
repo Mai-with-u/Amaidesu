@@ -31,6 +31,7 @@ from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.models.chat import GiftRecord, GuardRecord, SuperChatRecord
 from src.modules.tools import ToolInvocation, ToolRegistry
 from tests.modules.storage.viewer_seed import seed_message
 
@@ -162,7 +163,7 @@ async def test_recap_material_from_tables_and_written(store: SQLiteDatabase) -> 
     for marker in ("答应大家下场去挖钻石", "在聊挖钻石", "造好了熔炉", "老王（1 条）"):
         assert marker in prompt
     row = await store.recaps.get_recap(live_session_id=pk)
-    assert row is not None and row["recap_text"] == text
+    assert row is not None and row.recap_text == text
 
 
 @pytest.mark.asyncio
@@ -271,15 +272,51 @@ async def test_payment_material_lines() -> None:
     chat_repo.summarize_viewer_contributions = AsyncMock(
         return_value={"gift_total_amount": 2000, "sc_total_amount": 50_000}
     )
+    # 明细行用真实契约模型构造（required 字段补最小占位）
     medal = {"fans_medal_level": 21, "fans_medal_name": "粉丝团"}
     chat_repo.list_viewer_gifts = AsyncMock(
-        return_value=[{"timestamp_ms": 100, "gift_name": "小星星", "quantity": 3, "guard_level": 3, **medal}]
+        return_value=[
+            GiftRecord(
+                id=1,
+                live_session_id=1,
+                timestamp_ms=100,
+                user_id="u",
+                user_name="观众",
+                gift_name="小星星",
+                quantity=3,
+                guard_level=3,
+                **medal,
+            )
+        ]
     )
     chat_repo.list_viewer_super_chats = AsyncMock(
-        return_value=[{"timestamp_ms": 200, "message": "加油", "guard_level": 0, **medal}]
+        return_value=[
+            SuperChatRecord(
+                id=1,
+                live_session_id=1,
+                timestamp_ms=200,
+                user_id="u",
+                user_name="观众",
+                message="加油",
+                guard_level=0,
+                **medal,
+            )
+        ]
     )
     chat_repo.list_viewer_guards = AsyncMock(
-        return_value=[{"timestamp_ms": 300, "guard_level": 3, "guard_num": 1, "guard_unit": "月", **medal}]
+        return_value=[
+            GuardRecord(
+                id=1,
+                live_session_id=1,
+                timestamp_ms=300,
+                user_id="u",
+                user_name="观众",
+                guard_level=3,
+                guard_num=1,
+                guard_unit="月",
+                **medal,
+            )
+        ]
     )
 
     joined = "\n".join(await collect_payment_material(chat_repo, 1))

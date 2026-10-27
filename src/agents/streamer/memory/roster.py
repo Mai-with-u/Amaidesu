@@ -61,35 +61,35 @@ async def collect_payment_material(chat_repo: Any, viewer_id: int, *, rows: int 
     # 三表明细合并取最近 N 条（时间倒序），并从最近一条取付费时的身份快照
     entries: List[tuple[int, str, int, int, str]] = []  # (ts, 描述, fans_medal_level, guard_level, medal_name)
     try:
-        for row in await chat_repo.list_viewer_gifts(viewer_id=viewer_id, limit=rows):
+        for gift in await chat_repo.list_viewer_gifts(viewer_id=viewer_id, limit=rows):
             entries.append(
                 (
-                    int(row["timestamp_ms"]),
-                    f"送出礼物 {row['gift_name']}×{row['quantity']}",
-                    int(row["fans_medal_level"] or 0),
-                    int(row["guard_level"] or 0),
-                    str(row["fans_medal_name"] or ""),
+                    gift.timestamp_ms,
+                    f"送出礼物 {gift.gift_name}×{gift.quantity}",
+                    gift.fans_medal_level or 0,
+                    gift.guard_level or 0,
+                    gift.fans_medal_name or "",
                 )
             )
-        for row in await chat_repo.list_viewer_super_chats(viewer_id=viewer_id, limit=rows):
+        for sc in await chat_repo.list_viewer_super_chats(viewer_id=viewer_id, limit=rows):
             entries.append(
                 (
-                    int(row["timestamp_ms"]),
-                    f"发送 SC「{(row['message'] or '')[:30]}」",
-                    int(row["fans_medal_level"] or 0),
-                    int(row["guard_level"] or 0),
-                    str(row["fans_medal_name"] or ""),
+                    sc.timestamp_ms,
+                    f"发送 SC「{(sc.message or '')[:30]}」",
+                    sc.fans_medal_level or 0,
+                    sc.guard_level or 0,
+                    sc.fans_medal_name or "",
                 )
             )
-        for row in await chat_repo.list_viewer_guards(viewer_id=viewer_id, limit=rows):
-            guard_name = GUARD_LEVEL_NAMES.get(int(row["guard_level"] or 0), "大航海")
+        for guard in await chat_repo.list_viewer_guards(viewer_id=viewer_id, limit=rows):
+            guard_name = GUARD_LEVEL_NAMES.get(guard.guard_level or 0, "大航海")
             entries.append(
                 (
-                    int(row["timestamp_ms"]),
-                    f"开通{guard_name}（{row['guard_num']}{row['guard_unit']}）",
-                    int(row["fans_medal_level"] or 0),
-                    int(row["guard_level"] or 0),
-                    str(row["fans_medal_name"] or ""),
+                    guard.timestamp_ms,
+                    f"开通{guard_name}（{guard.guard_num}{guard.guard_unit}）",
+                    guard.fans_medal_level or 0,
+                    guard.guard_level or 0,
+                    guard.fans_medal_name or "",
                 )
             )
     except Exception as exc:
@@ -154,11 +154,11 @@ class RegularsRosterWriter:
         for row in speakers:
             if updated >= self._batch_max:
                 break
-            viewer_id = int(row["viewer_id"])
+            viewer_id = row.viewer_id
             if not await self._meets_threshold(viewer_id):
                 continue
             try:
-                if await self._update_one(int(live_session_id), viewer_id, str(row["user_name"] or "")):
+                if await self._update_one(int(live_session_id), viewer_id, row.user_name or ""):
                     updated += 1
             except Exception as exc:
                 logger.warning(f"常客印象更新失败（viewer {viewer_id}，跳过该人）: {exc}")
@@ -175,13 +175,13 @@ class RegularsRosterWriter:
             return False
         if stats is None:
             return False
-        return int(stats["interaction_count"] or 0) >= self._min_interactions
+        return (stats.interaction_count or 0) >= self._min_interactions
 
     async def _update_one(self, live_session_id: int, viewer_id: int, nickname: str) -> bool:
         """单人更新：旧印象 + 上次整理之后的本场原话 + 付费记录 → LLM → 写回并推进已整理时刻。"""
         existing = await self._profiles.get_profile(viewer_id=viewer_id)
-        old_text = str(existing["profile_text"]) if existing is not None else ""
-        watermark = int(existing["last_compressed_at_ms"]) if existing is not None else 0
+        old_text = existing.profile_text if existing is not None else ""
+        watermark = existing.last_compressed_at_ms if existing is not None else 0
 
         messages = await self._chat.list_session_viewer_messages(
             live_session_id=live_session_id,
@@ -196,7 +196,7 @@ class RegularsRosterWriter:
             f"观众：{nickname or f'观众 #{viewer_id}'}",
             f"【旧印象】\n{old_text}" if old_text else "【旧印象】（无，首次建档）",
             "【这场说过的话】",
-            *[f"- {str(row['content'] or '').strip()[:_MESSAGE_LINE_CHARS]}" for row in messages],
+            *[f"- {(message.content or '').strip()[:_MESSAGE_LINE_CHARS]}" for message in messages],
         ]
         structured_lines = await collect_payment_material(self._chat, viewer_id)
         if structured_lines:

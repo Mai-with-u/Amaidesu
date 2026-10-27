@@ -15,6 +15,7 @@ from src.agents.streamer.game_ledger import GameLedger
 from src.agents.streamer.session_scope import LiveChatTurn, SessionScope, WindowMaterials
 from src.agents.streamer.timeline import GameEventBatch, TimelineTurn
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.storage.models.chat import LiveChatMessage
 
 
 class _FakeTimeline:
@@ -39,7 +40,7 @@ class _FakeChat:
         self._rows = rows or []
         self._error = error
 
-    async def list_recent_live_chat(self, *, live_session_id: int, limit: Optional[int]) -> List[Dict[str, Any]]:
+    async def list_recent_live_chat(self, *, live_session_id: int, limit: Optional[int]) -> List[LiveChatMessage]:
         if self._error is not None:
             raise self._error
         return self._rows
@@ -138,14 +139,16 @@ async def test_read_history_is_pure_read() -> None:
 async def test_read_history_merges_stored_and_unpersisted_by_timestamp() -> None:
     chat = _FakeChat(
         rows=[
-            {
-                "sender_role": "viewer",
-                "content": "库里先问",
-                "sender_name": "观众",
-                "message_type": "danmaku",
-                "message_id": "m1",
-                "timestamp_ms": 100,
-            }
+            LiveChatMessage(
+                id=1,
+                live_session_id=7,
+                timestamp_ms=100,
+                sender_role="viewer",
+                content="库里先问",
+                sender_name="观众",
+                message_type="danmaku",
+                message_id="m1",
+            )
         ]
     )
     scope = _scope(chat=chat, session_manager=_FakeSessionManager(pk=7))

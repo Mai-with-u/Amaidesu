@@ -989,7 +989,7 @@ class Planner:
             row = await self._viewer_repo.get_viewer(viewer_id=viewer_id)
             if row is None:
                 return ""
-            name = str(row["user_name"])
+            name = row.user_name
             former = await self._viewer_repo.list_former_names(viewer_id=viewer_id, current_name=name)
         except Exception as exc:
             self.logger.warning(f"观众昵称查询失败（viewer {viewer_id}）: {exc}")

@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, List, Optional
 
 from src.modules.events.names import CoreEvents
+from src.modules.storage.models.memory import SessionRecap
 from src.modules.events.payloads.recap import StreamerRecapWrittenPayload
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
@@ -64,14 +65,14 @@ def _clock(ts_ms: int) -> str:
     return datetime.fromtimestamp(max(0, int(ts_ms)) / 1000).strftime("%H:%M")
 
 
-def format_recap(row: Any) -> str:
-    """把一行回顾渲染成"【日期的直播，时长】正文"——注入段与工具观察共用同一形态。"""
-    started = int(row["started_at_ms"] or 0)
-    ended = int(row["ended_at_ms"] or 0)
+def format_recap(recap: SessionRecap) -> str:
+    """把一场回顾渲染成"【日期的直播，时长】正文"——注入段与工具观察共用同一形态。"""
+    started = int(recap.started_at_ms or 0)
+    ended = int(recap.ended_at_ms or 0)
     date_text = datetime.fromtimestamp(started / 1000).strftime("%Y-%m-%d") if started > 0 else "日期不详"
     duration = _duration_text(ended - started) if started > 0 and ended > started else ""
     head = f"【{date_text} 的直播" + (f"，时长 {duration}" if duration else "") + "】"
-    return f"{head}\n{str(row['recap_text']).strip()}"
+    return f"{head}\n{recap.recap_text.strip()}"
 
 
 class SessionRecapWriter:
@@ -188,7 +189,7 @@ class SessionRecapWriter:
             return []
         written: List[int] = []
         for row in pending:
-            live_session_id = int(row["live_session_id"])
+            live_session_id = row.live_session_id
             try:
                 if await self.write_recap(live_session_id):
                     written.append(live_session_id)
@@ -275,9 +276,9 @@ class SessionRecapWriter:
             return ""
         lines = []
         for row in rows:
-            content = str(row["content"] or "").strip().replace("\n", " ")
+            content = (row.content or "").strip().replace("\n", " ")
             if content:
-                lines.append(f"{_clock(int(row['timestamp_ms']))} 主播: {content[:_SPEECH_LINE_CHARS]}")
+                lines.append(f"{_clock(row.timestamp_ms)} 主播: {content[:_SPEECH_LINE_CHARS]}")
         return "\n".join(lines)
 
     async def _render_topics(self, live_session_id: int) -> str:
@@ -319,26 +320,22 @@ class SessionRecapWriter:
             speakers = await self._chat.list_session_speakers(live_session_id=live_session_id, limit=_SPEAKER_ROWS)
             if speakers:
                 names = "、".join(
-                    f"{row['user_name'] or '观众 #' + str(row['viewer_id'])}（{int(row['message_count'])} 条）"
-                    for row in speakers
+                    f"{speaker.user_name or '观众 #' + str(speaker.viewer_id)}（{speaker.message_count} 条）"
+                    for speaker in speakers
                 )
                 lines.append(f"弹幕最多的观众：{names}")
         except Exception as exc:
             logger.warning(f"读取活跃观众失败（场次 {live_session_id}）: {exc}")
         try:
-            for row in await self._chat.list_session_gifts(live_session_id=live_session_id, limit=_PAYMENT_ROWS):
-                lines.append(
-                    f"{_clock(int(row['timestamp_ms']))} {row['user_name']} 送出 {row['gift_name']}×{int(row['quantity'] or 1)}"
-                )
-            for row in await self._chat.list_session_super_chats(live_session_id=live_session_id, limit=_PAYMENT_ROWS):
-                amount = to_cny(int(row["total_price"] or 0), str(row["currency"] or ""))
+            for gift in await self._chat.list_session_gifts(live_session_id=live_session_id, limit=_PAYMENT_ROWS):
+                lines.append(f"{_clock(gift.timestamp_ms)} {gift.user_name} 送出 {gift.gift_name}×{gift.quantity or 1}")
+            for sc in await self._chat.list_session_super_chats(live_session_id=live_session_id, limit=_PAYMENT_ROWS):
+                amount = to_cny(sc.total_price or 0, sc.currency or "")
                 amount_text = f"（¥{amount:.0f}）" if amount else ""
-                lines.append(
-                    f"{_clock(int(row['timestamp_ms']))} {row['user_name']} SC{amount_text}：{str(row['message'] or '')[:60]}"
-                )
-            for row in await self._chat.list_session_guards(live_session_id=live_session_id, limit=_PAYMENT_ROWS):
-                guard_name = GUARD_LEVEL_NAMES.get(int(row["guard_level"] or 0), "大航海")
-                lines.append(f"{_clock(int(row['timestamp_ms']))} {row['user_name']} 开通{guard_name}")
+                lines.append(f"{_clock(sc.timestamp_ms)} {sc.user_name} SC{amount_text}：{(sc.message or '')[:60]}")
+            for guard in await self._chat.list_session_guards(live_session_id=live_session_id, limit=_PAYMENT_ROWS):
+                guard_name = GUARD_LEVEL_NAMES.get(guard.guard_level or 0, "大航海")
+                lines.append(f"{_clock(guard.timestamp_ms)} {guard.user_name} 开通{guard_name}")
         except Exception as exc:
             logger.warning(f"读取付费记录失败（场次 {live_session_id}）: {exc}")
         return "\n".join(lines)

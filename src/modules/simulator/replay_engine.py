@@ -68,10 +68,10 @@ class ReplayEngine:
                 payload = RoomMessagePayload(
                     # 行序还原：业务列 → payload 字段（写入映射见 storage_ledger）
                     message_type="danmaku",
-                    user=RoomMessageUser(id=row["sender_id"] or "", name=row["sender_name"] or ""),
-                    content=row["content"],
-                    message_id=row["message_id"] or "",
-                    timestamp_ms=row["timestamp_ms"],
+                    user=RoomMessageUser(id=row.sender_id or "", name=row.sender_name or ""),
+                    content=row.content,
+                    message_id=row.message_id or "",
+                    timestamp_ms=row.timestamp_ms,
                     # 回放消息一律标记 simulated=True：回放是重新注入的输入流，
                     # 不继承录制行原值，避免真实历史弹幕再次进入存储污染统计
                     simulated=True,

@@ -22,16 +22,15 @@ SQLiteDatabase —— 存储装配入口（组合根）
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 import time
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 from typing import Any, Callable, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.storage.connection import SQLiteConnectionManager
+from src.modules.storage.run_in_executor import run_in_executor
 from src.modules.storage.migrations import SCHEMA_MIGRATIONS
 from src.modules.storage.repos import (
     ChatRepo,
@@ -276,15 +275,7 @@ class SQLiteDatabase:
 
     async def _run_in_executor(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
         """统一 ``asyncio.to_thread`` 防漏（内部所有同步调用都走这里）。"""
-        if asyncio.iscoroutinefunction(fn):
-            # 不应该到这里（避免失误）；直接 await
-            return await fn(*args, **kwargs)
-        # functools.partial 处理：kwargs 关键字
-        if kwargs:
-            return await asyncio.to_thread(partial(fn, *args, **kwargs))
-        if args:
-            return await asyncio.to_thread(fn, *args)
-        return await asyncio.to_thread(fn)
+        return await run_in_executor(fn, *args, **kwargs)
 
     # -------------------- Schema 应用（同步，仅本类内部） --------------------
 

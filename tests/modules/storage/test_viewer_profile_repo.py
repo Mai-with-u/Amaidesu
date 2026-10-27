@@ -56,14 +56,14 @@ async def test_upsert_and_get(repo: ViewerProfileRepo, vids: Dict[str, int]) -> 
     assert await repo.get_profile_text(viewer_id=vid) == "老粉，爱聊数码"
     row = await repo.get_profile(viewer_id=vid)
     assert row is not None
-    assert (int(row["last_compressed_at_ms"]), row["user_name"], row["platform"]) == (100, "观众u1", "bilibili")
+    assert (row.last_compressed_at_ms, row.user_name, row.platform) == (100, "观众u1", "bilibili")
 
     # 覆盖写：文本与已整理时刻一起推进
     assert await repo.upsert_profile(viewer_id=vid, profile_text="老粉，最近在考试", last_compressed_at_ms=200)
     row = await repo.get_profile(viewer_id=vid)
     assert row is not None
-    assert row["profile_text"] == "老粉，最近在考试"
-    assert int(row["last_compressed_at_ms"]) == 200
+    assert row.profile_text == "老粉，最近在考试"
+    assert row.last_compressed_at_ms == 200
 
 
 @pytest.mark.asyncio
@@ -83,10 +83,10 @@ async def test_list_search_and_pagination(repo: ViewerProfileRepo, vids: Dict[st
     assert total == 5 and len(rows) == 2
     total, rows = await repo.list_profiles(search="Minecraft")
     assert total == 2
-    assert all("Minecraft" in r["profile_text"] for r in rows)
+    assert all("Minecraft" in r.profile_text for r in rows)
     # 也能按观众当前昵称搜
     total, rows = await repo.list_profiles(search="观众u_3")
-    assert total == 1 and rows[0]["viewer_id"] == vids["u_3"]
+    assert total == 1 and rows[0].viewer_id == vids["u_3"]
     assert await repo.count_profiles() == 5
 
 
@@ -97,8 +97,8 @@ async def test_update_text_and_delete(repo: ViewerProfileRepo, vids: Dict[str, i
     assert await repo.update_profile_text(viewer_id=vid, profile_text="人工纠正版")
     row = await repo.get_profile(viewer_id=vid)
     assert row is not None
-    assert row["profile_text"] == "人工纠正版"
-    assert int(row["last_compressed_at_ms"]) == 10  # 纠正不改已整理时刻
+    assert row.profile_text == "人工纠正版"
+    assert row.last_compressed_at_ms == 10  # 纠正不改已整理时刻
 
     assert await repo.update_profile_text(viewer_id=vid, profile_text="  ") is False
     assert await repo.update_profile_text(viewer_id=9999, profile_text="x") is False

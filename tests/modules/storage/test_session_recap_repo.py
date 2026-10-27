@@ -47,8 +47,8 @@ async def test_upsert_get_and_reject_empty(store: SQLiteDatabase) -> None:
     assert await repo.upsert_recap(live_session_id=7, started_at_ms=1_000, ended_at_ms=2_500, recap_text="第二版")
     row = await repo.get_recap(live_session_id=7)
     assert row is not None
-    assert row["recap_text"] == "第二版"
-    assert int(row["ended_at_ms"]) == 2_500
+    assert row.recap_text == "第二版"
+    assert row.ended_at_ms == 2_500
 
 
 @pytest.mark.asyncio
@@ -60,11 +60,11 @@ async def test_list_recent_orders_by_start_and_excludes_current(store: SQLiteDat
         )
 
     rows = await repo.list_recent_recaps(limit=2)
-    assert [int(r["live_session_id"]) for r in rows] == [3, 2]
+    assert [r.live_session_id for r in rows] == [3, 2]
 
     # 本场（id=3）进行中：排除后"上一场"是第 2 场
     rows = await repo.list_recent_recaps(limit=1, exclude_session_id=3)
-    assert [int(r["live_session_id"]) for r in rows] == [2]
+    assert [r.live_session_id for r in rows] == [2]
 
 
 @pytest.mark.asyncio
@@ -77,10 +77,10 @@ async def test_ended_sessions_without_recap(store: SQLiteDatabase) -> None:
     await store.recaps.upsert_recap(live_session_id=recapped, started_at_ms=6_000, ended_at_ms=7_000, recap_text="有了")
 
     rows = await store.recaps.list_ended_sessions_without_recap(limit=5)
-    assert [int(r["live_session_id"]) for r in rows] == [done_new, done_old]
+    assert [r.live_session_id for r in rows] == [done_new, done_old]
 
     rows = await store.recaps.list_ended_sessions_without_recap(limit=1)
-    assert [int(r["live_session_id"]) for r in rows] == [done_new]
+    assert [r.live_session_id for r in rows] == [done_new]
 
 
 @pytest.mark.asyncio

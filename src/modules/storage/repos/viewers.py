@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from datetime import datetime, time as dt_time
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
+from src.modules.storage.models.memory import Viewer, ViewerName
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.utils.time_utils import now_ms
 
@@ -96,34 +97,34 @@ class ViewerRepo(BaseRepo):
 
     # -------------------- 读取 --------------------
 
-    async def get_viewer(self, *, viewer_id: int) -> Optional[sqlite3.Row]:
+    async def get_viewer(self, *, viewer_id: int) -> Optional[Viewer]:
         """按内部观众 ID 取观众行（带 ``user_id`` 代表外部 ID 列）；不存在返回 None。"""
 
-        def _exec() -> Optional[sqlite3.Row]:
+        def _exec() -> Optional[Viewer]:
             with self._manager.transaction() as conn:
-                return conn.execute(f"{_SELECT_VIEWER} WHERE id=?", (int(viewer_id),)).fetchone()  # noqa: S608
+                row = conn.execute(f"{_SELECT_VIEWER} WHERE id=?", (int(viewer_id),)).fetchone()  # noqa: S608
+                return Viewer.model_validate(dict(row)) if row else None
 
         return await self._run_in_executor(_exec)
 
-    async def list_names(self, *, viewer_id: int) -> List[sqlite3.Row]:
+    async def list_names(self, *, viewer_id: int) -> List[ViewerName]:
         """观众用过的昵称（含当前昵称），最近出现的在前。"""
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[ViewerName]:
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT user_name, first_seen_ms, last_seen_ms FROM viewer_names WHERE viewer_id=?"
-                        " ORDER BY last_seen_ms DESC, first_seen_ms DESC",
-                        (int(viewer_id),),
-                    ).fetchall()
-                )
+                rows = conn.execute(
+                    "SELECT user_name, first_seen_ms, last_seen_ms FROM viewer_names WHERE viewer_id=?"
+                    " ORDER BY last_seen_ms DESC, first_seen_ms DESC",
+                    (int(viewer_id),),
+                ).fetchall()
+                return [ViewerName.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
     async def list_former_names(self, *, viewer_id: int, current_name: str) -> List[str]:
         """曾用名（不含当前昵称），最近用过的在前，最多几个——给主播认人用。"""
         rows = await self.list_names(viewer_id=viewer_id)
-        names = [str(row["user_name"]) for row in rows if str(row["user_name"]) != current_name]
+        names = [row.user_name for row in rows if row.user_name != current_name]
         return names[:_FORMER_NAMES_LIMIT]
 
     async def list_viewer_stats(
@@ -134,7 +135,7 @@ class ViewerRepo(BaseRepo):
         limit: int = 20,
         offset: int = 0,
         order_by: str = "message_count",
-    ) -> Tuple[List[sqlite3.Row], int]:
+    ) -> Tuple[List[Viewer], int]:
         """列出观众（支持平台过滤 / 搜索 / 分页），返回 ``(rows, total)``。
 
         ``platform`` 为 None 时返回全部平台；``search`` 对账号 ID / 开放平台 ID /
@@ -160,7 +161,7 @@ class ViewerRepo(BaseRepo):
             params.extend([pattern, pattern, pattern])
         where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
 
-        def _exec() -> Tuple[List[sqlite3.Row], int]:
+        def _exec() -> Tuple[List[Viewer], int]:
             with self._manager.transaction() as conn:
                 total_row = conn.execute("SELECT COUNT(*) AS n FROM viewers" + where_sql, params).fetchone()
                 total = int(total_row["n"]) if total_row else 0
@@ -168,7 +169,7 @@ class ViewerRepo(BaseRepo):
                     f"{_SELECT_VIEWER}{where_sql} ORDER BY {order_by} DESC LIMIT ? OFFSET ?",  # noqa: S608
                     [*params, limit, offset],
                 )
-                return list(cur.fetchall()), total
+                return [Viewer.model_validate(dict(row)) for row in cur.fetchall()], total
 
         return await self._run_in_executor(_exec)
 
@@ -378,12 +379,15 @@ def _name_candidates(
     open_app_id: str,
     user_name: str,
     simulated: bool,
-) -> List[sqlite3.Row]:
+) -> List[Any]:
     """同平台、同真假、当前昵称相同、且对应 ID 列"空着"的老观众。
 
     账号 ID：候选的 ``account_id`` 为空。开放平台 ID：候选的 ``open_id`` 为空，
     或它的 ``open_id`` 来自另一个已知应用（换了开放平台应用）；应用不明的存量
     ``open_id`` 无法判断是不是同一个应用，按"已有另一个值"处理。
+
+    返回行是调用方事务里的原始查询行（仅本模块解析流程内部消费，
+    不出仓储边界），类型标注用 Any 承接。
     """
     rows = conn.execute(
         "SELECT id, name_seen_ms, account_id, open_id, open_app_id FROM viewers"

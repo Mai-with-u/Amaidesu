@@ -444,7 +444,7 @@ class SimulatorService:
         except Exception as exc:
             self.logger.warning(f"世界窗口读取失败（本轮无上下文）: {exc}")
             return []
-        return [f"{row['sender_name'] or row['sender_role']}: {row['content']}" for row in rows if row["content"]]
+        return [f"{row.sender_name or row.sender_role}: {row.content}" for row in rows if row.content]
 
     # ------------------------------------------------------------------
     # replay 模式

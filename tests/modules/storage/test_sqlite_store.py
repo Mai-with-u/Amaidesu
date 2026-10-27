@@ -102,7 +102,7 @@ async def test_recent_live_chat_takes_latest_window_in_chronological_order(store
     await _seed_chat(store, 2, [(2500, "u3")])
 
     def stamps(rows) -> list[int]:
-        return [r["timestamp_ms"] for r in rows]
+        return [r.timestamp_ms for r in rows]
 
     assert stamps(await store.chat.list_recent_live_chat(live_session_id=1, limit=3)) == [3000, 4000, 5000]
     window = await store.chat.list_recent_live_chat(live_session_id=1, limit=10, before_timestamp_ms=4000)
@@ -130,13 +130,13 @@ async def test_viewer_counters_accumulate_by_viewer_id(store: SQLiteDatabase) ->
 
     row = await viewers.get_viewer(viewer_id=vid)
     counters = ("message_count", "gift_count", "replied_count", "interaction_count", "last_active_ms")
-    assert tuple(row[k] for k in counters) == (2, 1, 1, 4, 4000)
-    assert (row["id"], row["user_name"], row["account_id"], row["user_id"]) == (vid, "张三（新昵称）", "u1", "u1")
+    assert tuple(getattr(row, k) for k in counters) == (2, 1, 1, 4, 4000)
+    assert (row.id, row.user_name, row.account_id, row.user_id) == (vid, "张三（新昵称）", "u1", "u1")
 
     # 付费即互动只在第一笔互动时记 1：已发过言的观众付费不重复计互动
     await viewers.record_paid(viewer_id=vid, amount=1000, timestamp_ms=5000)
     row = await viewers.get_viewer(viewer_id=vid)
-    assert (row["paid_count"], row["paid_amount"], row["interaction_count"]) == (1, 1000, 4)
+    assert (row.paid_count, row.paid_amount, row.interaction_count) == (1, 1000, 4)
 
     # 未建档的外部 ID：只查不建
     assert await viewers.find_viewer_id(platform="bilibili", external_id="nobody") is None
@@ -154,9 +154,9 @@ async def test_list_viewer_stats_ordering_paging_and_whitelist(store: SQLiteData
         await seed_replied(viewers, platform="bilibili", user_id="u_repl", timestamp_ms=ts)
 
     rows, total = await viewers.list_viewer_stats()
-    assert (rows[0]["user_id"], len(rows), total) == ("u_msg", 3, 3)  # 默认按 message_count
+    assert (rows[0].user_id, len(rows), total) == ("u_msg", 3, 3)  # 默认按 message_count
     for order_by, top in (("gift_count", "u_gift"), ("last_active_ms", "u_repl"), ("replied_count", "u_repl")):
-        assert (await viewers.list_viewer_stats(order_by=order_by))[0][0]["user_id"] == top
+        assert (await viewers.list_viewer_stats(order_by=order_by))[0][0].user_id == top
 
     rows, total = await viewers.list_viewer_stats(platform="bilibili", limit=2)
     assert (len(rows), total) == (2, 3)  # total 不随分页变化

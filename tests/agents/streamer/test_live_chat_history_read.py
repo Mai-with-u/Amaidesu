@@ -59,7 +59,7 @@ async def test_session_index_and_role_filter(store: SQLiteDatabase) -> None:
     await _chat(store, 100, "viewer", "你好")
     await _chat(store, 200, "assistant", "欢迎")
     rows = await store.chat.list_recent_live_chat(live_session_id=1, sender_role="viewer")
-    assert [r["content"] for r in rows] == ["你好"]
+    assert [r.content for r in rows] == ["你好"]
 
 
 @pytest.mark.parametrize("pk", [None, 1], ids=["no_session", "empty_session"])

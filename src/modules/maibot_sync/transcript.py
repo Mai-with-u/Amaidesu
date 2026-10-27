@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
@@ -39,14 +38,15 @@ _REPLAY_SOURCE = "replay"
 _ROLE_BY_SENDER = {"viewer": "viewer", "partner": "partner", "assistant": "streamer"}
 
 
-def _viewer_user_id(row: sqlite3.Row, external_column: str) -> str:
-    """观众行推给插件的 user_id：有内部观众 ID 用 ``viewer:<编号>``，否则回退原始外部 ID。
+def _viewer_user_id(row: Any, external_attr: str) -> str:
+    """明细行推给插件的 user_id：有内部观众 ID 用 ``viewer:<编号>``，否则回退原始外部 ID。
 
     加前缀是为了不和平台账号 uid 撞号（B 站 uid 也是纯数字）。
+    ``row`` 是明细仓储返回的数据模型（live_chat 弹幕行 / super_chats 醒目留言行）。
     """
-    if row["viewer_id"] is not None:
-        return f"viewer:{int(row['viewer_id'])}"
-    return str(row[external_column] or "")
+    if row.viewer_id is not None:
+        return f"viewer:{row.viewer_id}"
+    return str(getattr(row, external_attr) or "")
 
 
 class StorageTranscriptSource:
@@ -93,12 +93,12 @@ class StorageTranscriptSource:
         }
 
     @staticmethod
-    def _chat_lines(rows: List[sqlite3.Row]) -> List[Dict[str, Any]]:
+    def _chat_lines(rows: List[Any]) -> List[Dict[str, Any]]:
         lines: List[Dict[str, Any]] = []
         for row in rows:
-            role = _ROLE_BY_SENDER.get(str(row["sender_role"] or ""))
-            text = str(row["content"] or "").strip()
-            if role is None or not text or int(row["simulated"] or 0):
+            role = _ROLE_BY_SENDER.get(row.sender_role or "")
+            text = (row.content or "").strip()
+            if role is None or not text or row.simulated:
                 continue
             # 主播不带 ID；观众用内部观众 ID；联动对象沿用原值
             if role == "streamer":
@@ -106,33 +106,33 @@ class StorageTranscriptSource:
             elif role == "viewer":
                 user_id = _viewer_user_id(row, "sender_id")
             else:
-                user_id = str(row["sender_id"] or "")
+                user_id = str(row.sender_id or "")
             lines.append(
                 {
-                    "ts_ms": int(row["timestamp_ms"]),
+                    "ts_ms": row.timestamp_ms,
                     "role": role,
                     "user_id": user_id,
-                    "user_name": "" if role == "streamer" else str(row["sender_name"] or ""),
+                    "user_name": "" if role == "streamer" else str(row.sender_name or ""),
                     "text": text,
                 }
             )
         return lines
 
     @staticmethod
-    def _super_chat_lines(rows: List[sqlite3.Row]) -> List[Dict[str, Any]]:
+    def _super_chat_lines(rows: List[Any]) -> List[Dict[str, Any]]:
         lines: List[Dict[str, Any]] = []
         for row in rows:
-            text = str(row["message"] or "").strip()
-            if not text or int(row["simulated"] or 0):
+            text = (row.message or "").strip()
+            if not text or row.simulated:
                 continue
-            amount = to_cny(int(row["total_price"] or 0), str(row["currency"] or ""))
+            amount = to_cny(row.total_price or 0, row.currency or "")
             label = f"[醒目留言 ¥{amount:.0f}]" if amount else "[醒目留言]"
             lines.append(
                 {
-                    "ts_ms": int(row["timestamp_ms"]),
+                    "ts_ms": row.timestamp_ms,
                     "role": "viewer",
                     "user_id": _viewer_user_id(row, "user_id"),
-                    "user_name": str(row["user_name"] or ""),
+                    "user_name": str(row.user_name or ""),
                     "text": f"{label} {text}",
                 }
             )

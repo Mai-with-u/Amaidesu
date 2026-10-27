@@ -197,12 +197,12 @@ class SessionScope:
                 return None
             stored = [
                 LiveChatTurn(
-                    role=row["sender_role"],
-                    content=row["content"],
-                    sender_name=row["sender_name"] or "",
-                    message_type=row["message_type"],
-                    message_id=row["message_id"] or "",
-                    timestamp_ms=int(row["timestamp_ms"] or 0),
+                    role=row.sender_role,
+                    content=row.content,
+                    sender_name=row.sender_name or "",
+                    message_type=row.message_type,
+                    message_id=row.message_id or "",
+                    timestamp_ms=row.timestamp_ms or 0,
                 )
                 for row in rows
             ]

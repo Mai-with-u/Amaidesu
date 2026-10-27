@@ -10,9 +10,9 @@
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any, List, Optional, Tuple
 
+from src.modules.storage.models.memory import ViewerProfile
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.utils.time_utils import now_ms
 
@@ -40,15 +40,16 @@ class ViewerProfileRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def get_profile(self, *, viewer_id: int) -> Optional[sqlite3.Row]:
-        """取完整印象行（含已整理时刻）；无印象返回 None。"""
+    async def get_profile(self, *, viewer_id: int) -> Optional[ViewerProfile]:
+        """取完整印象行（含已整理时刻与观众昵称）；无印象返回 None。"""
 
-        def _exec() -> Optional[sqlite3.Row]:
+        def _exec() -> Optional[ViewerProfile]:
             with self._manager.transaction() as conn:
-                return conn.execute(
+                row = conn.execute(
                     f"SELECT {_PROFILE_COLUMNS}{_PROFILE_FROM} WHERE p.viewer_id=?",  # noqa: S608 常量片段
                     (int(viewer_id),),
                 ).fetchone()
+                return ViewerProfile.model_validate(dict(row)) if row else None
 
         return await self._run_in_executor(_exec)
 
@@ -85,7 +86,7 @@ class ViewerProfileRepo(BaseRepo):
         search: str = "",
         limit: int = 50,
         offset: int = 0,
-    ) -> Tuple[int, List[sqlite3.Row]]:
+    ) -> Tuple[int, List[ViewerProfile]]:
         """画像列表（WebUI 管理接口）：搜索 + 分页，返回 ``(命中总数, 当页行)``。
 
         ``search`` 非空时对印象文本与观众当前昵称做 LIKE 子串匹配。
@@ -101,7 +102,7 @@ class ViewerProfileRepo(BaseRepo):
         page_limit = max(1, min(int(limit), 200))
         page_offset = max(0, int(offset))
 
-        def _exec() -> Tuple[int, List[sqlite3.Row]]:
+        def _exec() -> Tuple[int, List[ViewerProfile]]:
             with self._manager.transaction() as conn:
                 total_row = conn.execute(
                     f"SELECT COUNT(*) AS n{_PROFILE_FROM}{where_sql}",  # noqa: S608 子句只含占位符
@@ -113,7 +114,7 @@ class ViewerProfileRepo(BaseRepo):
                     [*params, page_limit, page_offset],
                 ).fetchall()
             total = int(total_row["n"]) if total_row else 0
-            return total, list(rows)
+            return total, [ViewerProfile.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 

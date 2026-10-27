@@ -23,6 +23,7 @@ from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind, Trigger
 from src.modules.events.payloads.live import LiveStartedPayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
+from src.modules.storage.models.chat import LiveChatMessage
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
@@ -52,7 +53,9 @@ class _FakeChatRepo:
     def __init__(self, rows: List[Dict[str, Any]]) -> None:
         self.rows = rows
 
-    async def list_recent_live_chat(self, *, live_session_id: int, limit: Optional[int] = None) -> List[Dict]:
+    async def list_recent_live_chat(
+        self, *, live_session_id: int, limit: Optional[int] = None
+    ) -> List[LiveChatMessage]:
         return list(self.rows)
 
 
@@ -63,7 +66,7 @@ def _msg(text: str, mid: str, *, ts: int = 0, **kwargs: Any) -> RoomMessagePaylo
     return RoomMessagePayload(content=text, message_id=mid, **kwargs, **extra)
 
 
-def _agent(rows: List[Dict[str, Any]], pk: Optional[int], speech: str):
+def _agent(rows: List[LiveChatMessage], pk: Optional[int], speech: str):
     agent = make_streamer_agent(chat_repo=_FakeChatRepo(rows), session_manager=_FakeSessionManager(pk))
     agent._rounds.execute = AsyncMock(return_value={"speech": speech})
     return agent
@@ -90,14 +93,16 @@ async def test_unopened_session_keeps_memory_turns_until_live_starts() -> None:
 
 async def test_open_session_merges_only_unpersisted_turns_by_time() -> None:
     """开着场次：调试注入的观众消息按时刻并入 live_chat 行；已落库的发言与正常弹幕不重复记。"""
-    row = {
-        "sender_role": "assistant",
-        "content": "要不要现场拉一下？",
-        "sender_name": "主播",
-        "message_type": "speak",
-        "message_id": None,
-        "timestamp_ms": 2000,
-    }
+    row = LiveChatMessage(
+        id=1,
+        live_session_id=7,
+        timestamp_ms=2000,
+        sender_role="assistant",
+        content="要不要现场拉一下？",
+        sender_name="主播",
+        message_type="speak",
+        message_id=None,
+    )
     agent = _agent([row], 7, "要不要现场拉一下？")
     debug = [_msg("麦麦会操作这个机器吗", "d1", ts=1000)]
     await agent._execute_round(

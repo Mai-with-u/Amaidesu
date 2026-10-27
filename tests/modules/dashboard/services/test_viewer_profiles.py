@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -31,7 +32,7 @@ from src.modules.dashboard.services.viewer_profiles import (
 
 
 class _FakeViewerRepo:
-    """观众统计仓储桩：dict 行原样返回，记录调用。"""
+    """观众统计仓储桩：dict 行转 SimpleNamespace 返回（模拟真实读模型的属性访问），记录调用。"""
 
     def __init__(
         self,
@@ -50,14 +51,15 @@ class _FakeViewerRepo:
     async def list_viewer_stats(self, **kwargs: Any):  # type: ignore[no-untyped-def]
         if kwargs.get("order_by") not in (None, "message_count", "gift_count"):
             raise ValueError(f"非法排序字段: {kwargs.get('order_by')}")
-        return self.stats_rows, len(self.stats_rows)
+        return [SimpleNamespace(**row) for row in self.stats_rows], len(self.stats_rows)
 
-    async def get_viewer(self, viewer_id: int) -> Optional[Dict[str, Any]]:
-        return self.viewers.get(viewer_id)
+    async def get_viewer(self, viewer_id: int) -> Optional[Any]:
+        row = self.viewers.get(viewer_id)
+        return SimpleNamespace(**row) if row is not None else None
 
-    async def list_names(self, viewer_id: int) -> List[Dict[str, Any]]:
+    async def list_names(self, viewer_id: int) -> List[Any]:
         self.list_names_calls.append(viewer_id)
-        return self.names.get(viewer_id, [])
+        return [SimpleNamespace(**row) for row in self.names.get(viewer_id, [])]
 
     async def viewer_insight_buckets(self) -> Dict[str, int]:
         return self.buckets
@@ -85,11 +87,11 @@ class _FakeChatRepo:
         self.super_chats = super_chats or []
         self.sessions = sessions or []
 
-    async def daily_danmaku_counts(self, *, days: int) -> List[Dict[str, Any]]:
-        return self.daily
+    async def daily_danmaku_counts(self, *, days: int) -> List[Any]:
+        return [SimpleNamespace(**row) for row in self.daily]
 
-    async def list_viewer_dialogue(self, **kwargs: Any) -> List[Dict[str, Any]]:  # type: ignore[no-untyped-def]
-        return self.dialogue
+    async def list_viewer_dialogue(self, **kwargs: Any) -> List[Any]:  # type: ignore[no-untyped-def]
+        return [SimpleNamespace(**row) for row in self.dialogue]
 
     async def get_viewer_activity_bounds(self, viewer_id: int) -> Optional[tuple]:
         return self.bounds
@@ -97,14 +99,14 @@ class _FakeChatRepo:
     async def summarize_viewer_contributions(self, viewer_id: int) -> Dict[str, Any]:
         return self.summary
 
-    async def list_viewer_gifts(self, viewer_id: int, *, limit: int) -> List[Dict[str, Any]]:
-        return self.gifts
+    async def list_viewer_gifts(self, viewer_id: int, *, limit: int) -> List[Any]:
+        return [SimpleNamespace(**row) for row in self.gifts]
 
-    async def list_viewer_super_chats(self, viewer_id: int, *, limit: int) -> List[Dict[str, Any]]:
-        return self.super_chats
+    async def list_viewer_super_chats(self, viewer_id: int, *, limit: int) -> List[Any]:
+        return [SimpleNamespace(**row) for row in self.super_chats]
 
-    async def list_viewer_sessions(self, viewer_id: int) -> List[Dict[str, Any]]:
-        return self.sessions
+    async def list_viewer_sessions(self, viewer_id: int) -> List[Any]:
+        return [SimpleNamespace(**row) for row in self.sessions]
 
 
 class _FakeIdentityRepo:

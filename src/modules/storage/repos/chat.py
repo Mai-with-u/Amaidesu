@@ -12,10 +12,20 @@ RoomMessagePayload → 表的写入入口与常见读路径；表结构权威在
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, time as dt_time, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.modules.storage.models.chat import (
+    ChatDateCount,
+    DailyDanmakuCount,
+    GiftRecord,
+    GuardRecord,
+    LiveChatMessage,
+    SessionSpeaker,
+    SessionSpeechMoment,
+    SuperChatRecord,
+    ViewerSessionParticipation,
+)
 from src.modules.storage.repos._base import BaseRepo
 
 
@@ -273,7 +283,7 @@ class ChatRepo(BaseRepo):
         date_str: str,
         *,
         simulated_only: bool = False,
-    ) -> List[sqlite3.Row]:
+    ) -> List[LiveChatMessage]:
         """取指定本地日期的全部弹幕行（``message_type='danmaku'``，时间正序）。
 
         回放引擎的数据源：业务表 ``live_chat`` 是消息流的单一事实源，录制
@@ -281,7 +291,7 @@ class ChatRepo(BaseRepo):
         标记 simulated 的行。
         """
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[LiveChatMessage]:
             clauses = [
                 "message_type='danmaku'",
                 "date(timestamp_ms / 1000, 'unixepoch', 'localtime') = ?",
@@ -294,25 +304,27 @@ class ChatRepo(BaseRepo):
                     "SELECT * FROM live_chat WHERE " + " AND ".join(clauses) + " ORDER BY timestamp_ms ASC",
                     params,
                 )
-                return list(cur.fetchall())
+                return [LiveChatMessage.model_validate(dict(row)) for row in cur.fetchall()]
 
         return await self._run_in_executor(_exec)
 
-    async def list_chat_dates_with_counts(self) -> List[Dict[str, Any]]:
+    async def list_chat_dates_with_counts(self) -> List[ChatDateCount]:
         """列出 live_chat 有弹幕记录的本地日期及各日弹幕条数（``YYYY-MM-DD``，时间正序）。
 
         回放日期选择器的数据源：日期 + 条数一起返回，选择器可预告"这天有多少
         可回放内容"；无场次数据则返回空列表。
         """
 
-        def _exec() -> List[Dict[str, Any]]:
+        def _exec() -> List[ChatDateCount]:
             with self._manager.transaction() as conn:
                 rows = conn.execute(
                     "SELECT date(timestamp_ms / 1000, 'unixepoch', 'localtime') AS d,"
                     " COUNT(*) AS n"
                     " FROM live_chat WHERE message_type='danmaku' GROUP BY d ORDER BY d"
                 ).fetchall()
-            return [{"date": str(row["d"]), "danmaku_count": int(row["n"])} for row in rows if row["d"] is not None]
+            return [
+                ChatDateCount(date=str(row["d"]), danmaku_count=int(row["n"])) for row in rows if row["d"] is not None
+            ]
 
         return await self._run_in_executor(_exec)
 
@@ -323,10 +335,10 @@ class ChatRepo(BaseRepo):
         limit: Optional[int] = 30,
         before_timestamp_ms: Optional[int] = None,
         sender_role: Optional[str] = None,
-    ) -> List[sqlite3.Row]:
+    ) -> List[LiveChatMessage]:
         """按时间正序返回场次消息；limit=None 时完整读取，分页调用可指定条数。"""
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[LiveChatMessage]:
             clauses = ["live_session_id=?"]
             params: List[Any] = [live_session_id]
             if sender_role is not None:
@@ -345,7 +357,7 @@ class ChatRepo(BaseRepo):
                     "SELECT * FROM live_chat WHERE " + " AND ".join(clauses) + " ORDER BY timestamp_ms DESC" + suffix,
                     params,
                 )
-                rows = cur.fetchall()
+                rows = [LiveChatMessage.model_validate(dict(row)) for row in cur.fetchall()]
             # DESC 取到的是 [新→旧]，反转回 [旧→新] 满足调用方约定
             return list(reversed(rows))
 
@@ -357,20 +369,20 @@ class ChatRepo(BaseRepo):
         user_id: str,
         since_timestamp_ms: int,
         limit: int = 50,
-    ) -> List[sqlite3.Row]:
+    ) -> List[LiveChatMessage]:
         """按用户过滤其发言历史（时间正序）。
 
         ``sender_id`` 只匹配 viewer 行；assistant 行的 sender_id 是主播名，
         不会混入该查询。
         """
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[LiveChatMessage]:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "SELECT * FROM live_chat WHERE sender_id=? AND timestamp_ms >= ? ORDER BY timestamp_ms ASC LIMIT ?",
                     (user_id, since_timestamp_ms, limit),
                 )
-                return list(cur.fetchall())
+                return [LiveChatMessage.model_validate(dict(row)) for row in cur.fetchall()]
 
         return await self._run_in_executor(_exec)
 
@@ -441,10 +453,10 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_assistant_speech_by_session(self, *, live_session_ids: List[int]) -> List[sqlite3.Row]:
+    async def list_assistant_speech_by_session(self, *, live_session_ids: List[int]) -> List[SessionSpeechMoment]:
         """取场内主播发言时刻（sender_role='assistant'，时间正序），供节奏/沉默计算。"""
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[SessionSpeechMoment]:
             placeholders = ",".join("?" for _ in live_session_ids)
             with self._manager.transaction() as conn:
                 rows = conn.execute(
@@ -453,7 +465,7 @@ class ChatRepo(BaseRepo):
                     " ORDER BY timestamp_ms",  # noqa: S608 子句为代码内常量
                     [int(sid) for sid in live_session_ids],
                 ).fetchall()
-                return list(rows)
+                return [SessionSpeechMoment.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
@@ -492,14 +504,14 @@ class ChatRepo(BaseRepo):
         live_session_id: int,
         limit: int = 300,
         before_timestamp_ms: Optional[int] = None,
-    ) -> List[sqlite3.Row]:
+    ) -> List[GiftRecord]:
         """取指定场次的礼物明细行（时间正序），供回看时间线合并。
 
         ``before_timestamp_ms`` 游标只保留严格早于该时刻的行（倒序取最近
         ``limit`` 行后反转回正序，与 list_recent_live_chat 同语义）。
         """
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[GiftRecord]:
             clauses = ["live_session_id=?"]
             params: List[Any] = [live_session_id]
             if before_timestamp_ms is not None:
@@ -510,7 +522,7 @@ class ChatRepo(BaseRepo):
                     "SELECT * FROM gifts WHERE " + " AND ".join(clauses) + " ORDER BY timestamp_ms DESC LIMIT ?",
                     params + [limit],
                 )
-                return list(reversed(cur.fetchall()))
+                return list(reversed([GiftRecord.model_validate(dict(row)) for row in cur.fetchall()]))
 
         return await self._run_in_executor(_exec)
 
@@ -520,13 +532,13 @@ class ChatRepo(BaseRepo):
         live_session_id: int,
         limit: int = 300,
         before_timestamp_ms: Optional[int] = None,
-    ) -> List[sqlite3.Row]:
+    ) -> List[SuperChatRecord]:
         """取指定场次的 SC 明细行（时间正序），供回看时间线合并。
 
         ``before_timestamp_ms`` 游标语义同 list_session_gifts。
         """
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[SuperChatRecord]:
             clauses = ["live_session_id=?"]
             params: List[Any] = [live_session_id]
             if before_timestamp_ms is not None:
@@ -537,7 +549,7 @@ class ChatRepo(BaseRepo):
                     "SELECT * FROM super_chats WHERE " + " AND ".join(clauses) + " ORDER BY timestamp_ms DESC LIMIT ?",
                     params + [limit],
                 )
-                return list(reversed(cur.fetchall()))
+                return list(reversed([SuperChatRecord.model_validate(dict(row)) for row in cur.fetchall()]))
 
         return await self._run_in_executor(_exec)
 
@@ -547,7 +559,7 @@ class ChatRepo(BaseRepo):
         viewer_id: int,
         before_timestamp_ms: Optional[int] = None,
         limit: int = 30,
-    ) -> List[sqlite3.Row]:
+    ) -> List[LiveChatMessage]:
         """按观众取"对话批次"：其消息 + 主播对这些消息的回复，时间正序交织。
 
         分页以观众消息为主轴：先取该观众 ``limit`` 条消息（``before_timestamp_ms``
@@ -558,7 +570,7 @@ class ChatRepo(BaseRepo):
         只反查本批消息的关联回复。
         """
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[LiveChatMessage]:
             with self._manager.transaction() as conn:
                 clauses = ["viewer_id=?", "sender_role='viewer'"]
                 params: List[Any] = [int(viewer_id)]
@@ -570,8 +582,8 @@ class ChatRepo(BaseRepo):
                     "SELECT * FROM live_chat WHERE " + " AND ".join(clauses) + " ORDER BY timestamp_ms DESC LIMIT ?",
                     params,
                 )
-                viewer_rows = list(reversed(cur.fetchall()))
-                message_ids = [row["message_id"] for row in viewer_rows if row["message_id"]]
+                viewer_rows = list(reversed([LiveChatMessage.model_validate(dict(row)) for row in cur.fetchall()]))
+                message_ids = [row.message_id for row in viewer_rows if row.message_id]
                 if not message_ids:
                     return viewer_rows
                 placeholders = ",".join("?" * len(message_ids))
@@ -580,8 +592,8 @@ class ChatRepo(BaseRepo):
                     f" AND reply_to_message_id IN ({placeholders}) ORDER BY timestamp_ms ASC",
                     message_ids,
                 ).fetchall()
-                merged = [*viewer_rows, *reply_rows]
-                merged.sort(key=lambda row: (row["timestamp_ms"], row["id"]))
+                merged = [*viewer_rows, *(LiveChatMessage.model_validate(dict(row)) for row in reply_rows)]
+                merged.sort(key=lambda row: (row.timestamp_ms, row.id))
                 return merged
 
         return await self._run_in_executor(_exec)
@@ -609,48 +621,45 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_viewer_gifts(self, *, viewer_id: int, limit: int = 100) -> List[sqlite3.Row]:
+    async def list_viewer_gifts(self, *, viewer_id: int, limit: int = 100) -> List[GiftRecord]:
         """取观众的礼物明细行（时间倒序，最新在前）。"""
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[GiftRecord]:
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT * FROM gifts WHERE viewer_id=? ORDER BY timestamp_ms DESC LIMIT ?",
-                        (int(viewer_id), limit),
-                    ).fetchall()
-                )
+                rows = conn.execute(
+                    "SELECT * FROM gifts WHERE viewer_id=? ORDER BY timestamp_ms DESC LIMIT ?",
+                    (int(viewer_id), limit),
+                ).fetchall()
+                return [GiftRecord.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
-    async def list_viewer_guards(self, *, viewer_id: int, limit: int = 100) -> List[sqlite3.Row]:
+    async def list_viewer_guards(self, *, viewer_id: int, limit: int = 100) -> List[GuardRecord]:
         """取观众的大航海开通/续费明细行（时间倒序，最新在前）。
 
         "当前舰长"的派生消费方按最后记录 + 周期自行判断，本层只供明细。
         """
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[GuardRecord]:
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT * FROM guards WHERE viewer_id=? ORDER BY timestamp_ms DESC LIMIT ?",
-                        (int(viewer_id), limit),
-                    ).fetchall()
-                )
+                rows = conn.execute(
+                    "SELECT * FROM guards WHERE viewer_id=? ORDER BY timestamp_ms DESC LIMIT ?",
+                    (int(viewer_id), limit),
+                ).fetchall()
+                return [GuardRecord.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
-    async def list_viewer_super_chats(self, *, viewer_id: int, limit: int = 100) -> List[sqlite3.Row]:
+    async def list_viewer_super_chats(self, *, viewer_id: int, limit: int = 100) -> List[SuperChatRecord]:
         """取观众的 SC 明细行（时间倒序，最新在前）。"""
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[SuperChatRecord]:
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT * FROM super_chats WHERE viewer_id=? ORDER BY timestamp_ms DESC LIMIT ?",
-                        (int(viewer_id), limit),
-                    ).fetchall()
-                )
+                rows = conn.execute(
+                    "SELECT * FROM super_chats WHERE viewer_id=? ORDER BY timestamp_ms DESC LIMIT ?",
+                    (int(viewer_id), limit),
+                ).fetchall()
+                return [SuperChatRecord.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
@@ -694,50 +703,48 @@ class ChatRepo(BaseRepo):
         live_session_id: int,
         since_ms: int,
         limit: int = 100,
-    ) -> List[sqlite3.Row]:
+    ) -> List[SuperChatRecord]:
         """取指定场次 ``since_ms`` 之后的 SC 明细行（时间正序）。
 
         事实提取的数据源之一：SC 不落 ``live_chat``，但它是观众主动说的
         完整话（最有价值的事实源），提取输入须额外并入时间窗内的 SC。
         """
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[SuperChatRecord]:
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT * FROM super_chats"
-                        " WHERE live_session_id=? AND timestamp_ms>=?"
-                        " ORDER BY timestamp_ms ASC LIMIT ?",
-                        (live_session_id, since_ms, limit),
-                    ).fetchall()
-                )
+                rows = conn.execute(
+                    "SELECT * FROM super_chats"
+                    " WHERE live_session_id=? AND timestamp_ms>=?"
+                    " ORDER BY timestamp_ms ASC LIMIT ?",
+                    (live_session_id, since_ms, limit),
+                ).fetchall()
+                return [SuperChatRecord.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
-    async def list_viewer_sessions(self, *, viewer_id: int) -> List[sqlite3.Row]:
+    async def list_viewer_sessions(self, *, viewer_id: int) -> List[ViewerSessionParticipation]:
         """观众参与过的场次：按场次聚合发言数与时间范围，最近参与在前。
 
         join ``live_sessions`` 取标题；场次行可能已删除（明细级联删除保证
         不会，标题缺省仍以 NULL 容忍历史数据）。
         """
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[ViewerSessionParticipation]:
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT lc.live_session_id, ls.title, COUNT(*) AS message_count,"
-                        " MIN(lc.timestamp_ms) AS first_ms, MAX(lc.timestamp_ms) AS last_ms"
-                        " FROM live_chat lc LEFT JOIN live_sessions ls ON ls.id=lc.live_session_id"
-                        " WHERE lc.viewer_id=? AND lc.sender_role='viewer'"
-                        " GROUP BY lc.live_session_id"
-                        " ORDER BY first_ms DESC",
-                        (int(viewer_id),),
-                    ).fetchall()
-                )
+                rows = conn.execute(
+                    "SELECT lc.live_session_id, ls.title, COUNT(*) AS message_count,"
+                    " MIN(lc.timestamp_ms) AS first_ms, MAX(lc.timestamp_ms) AS last_ms"
+                    " FROM live_chat lc LEFT JOIN live_sessions ls ON ls.id=lc.live_session_id"
+                    " WHERE lc.viewer_id=? AND lc.sender_role='viewer'"
+                    " GROUP BY lc.live_session_id"
+                    " ORDER BY first_ms DESC",
+                    (int(viewer_id),),
+                ).fetchall()
+                return [ViewerSessionParticipation.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
-    async def daily_danmaku_counts(self, *, days: int = 30) -> List[sqlite3.Row]:
+    async def daily_danmaku_counts(self, *, days: int = 30) -> List[DailyDanmakuCount]:
         """按本地日期聚合观众弹幕量（互动分析页折线数据），日期正序。
 
         只看 ``message_type='danmaku'``；``days`` 天前的本地零点起算。
@@ -746,21 +753,20 @@ class ChatRepo(BaseRepo):
         start_dt = datetime.now() - timedelta(days=days)
         start_ms = int(datetime.combine(start_dt.date(), dt_time.min).timestamp() * 1000)
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[DailyDanmakuCount]:
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT date(timestamp_ms / 1000, 'unixepoch', 'localtime') AS day,"
-                        " COUNT(*) AS count"
-                        " FROM live_chat WHERE message_type='danmaku' AND timestamp_ms>=?"
-                        " GROUP BY day ORDER BY day",
-                        (start_ms,),
-                    ).fetchall()
-                )
+                rows = conn.execute(
+                    "SELECT date(timestamp_ms / 1000, 'unixepoch', 'localtime') AS day,"
+                    " COUNT(*) AS count"
+                    " FROM live_chat WHERE message_type='danmaku' AND timestamp_ms>=?"
+                    " GROUP BY day ORDER BY day",
+                    (start_ms,),
+                ).fetchall()
+                return [DailyDanmakuCount(day=str(row["day"]), count=int(row["count"])) for row in rows]
 
         return await self._run_in_executor(_exec)
 
-    async def list_session_speakers(self, *, live_session_id: int, limit: int = 10) -> List[sqlite3.Row]:
+    async def list_session_speakers(self, *, live_session_id: int, limit: int = 10) -> List[SessionSpeaker]:
         """本场发言最多的观众（按弹幕条数倒序），观众画像收播更新的候选来源。
 
         只统计 ``sender_role='viewer'`` 且已归到观众（带 ``viewer_id``）的行；
@@ -768,19 +774,18 @@ class ChatRepo(BaseRepo):
         """
         page_limit = max(1, min(int(limit), 100))
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[SessionSpeaker]:
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT viewer_id, MAX(platform) AS platform, MAX(sender_name) AS user_name,"
-                        " COUNT(*) AS message_count, MAX(timestamp_ms) AS last_ms"
-                        " FROM live_chat"
-                        " WHERE live_session_id=? AND sender_role='viewer' AND viewer_id IS NOT NULL"
-                        " GROUP BY viewer_id"
-                        " ORDER BY message_count DESC, last_ms DESC LIMIT ?",
-                        (int(live_session_id), page_limit),
-                    ).fetchall()
-                )
+                rows = conn.execute(
+                    "SELECT viewer_id, MAX(platform) AS platform, MAX(sender_name) AS user_name,"
+                    " COUNT(*) AS message_count, MAX(timestamp_ms) AS last_ms"
+                    " FROM live_chat"
+                    " WHERE live_session_id=? AND sender_role='viewer' AND viewer_id IS NOT NULL"
+                    " GROUP BY viewer_id"
+                    " ORDER BY message_count DESC, last_ms DESC LIMIT ?",
+                    (int(live_session_id), page_limit),
+                ).fetchall()
+                return [SessionSpeaker.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
@@ -791,7 +796,7 @@ class ChatRepo(BaseRepo):
         viewer_id: int,
         since_ms: int = 0,
         limit: int = 30,
-    ) -> List[sqlite3.Row]:
+    ) -> List[LiveChatMessage]:
         """某观众在本场、某时刻之后的弹幕（时间正序，最多 ``limit`` 条最近的）。
 
         常客印象的原料窗口：``since_ms`` 传该观众画像已整理到的时间点，只喂这之后的新话。
@@ -799,7 +804,7 @@ class ChatRepo(BaseRepo):
         """
         page_limit = max(1, min(int(limit), 200))
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[LiveChatMessage]:
             with self._manager.transaction() as conn:
                 rows = conn.execute(
                     "SELECT * FROM live_chat"
@@ -808,21 +813,21 @@ class ChatRepo(BaseRepo):
                     " ORDER BY timestamp_ms DESC LIMIT ?",
                     (int(live_session_id), int(viewer_id), int(since_ms), page_limit),
                 ).fetchall()
-                return list(reversed(rows))
+                return list(reversed([LiveChatMessage.model_validate(dict(row)) for row in rows]))
 
         return await self._run_in_executor(_exec)
 
-    async def list_session_guards(self, *, live_session_id: int, limit: int = 100) -> List[sqlite3.Row]:
+    async def list_session_guards(self, *, live_session_id: int, limit: int = 100) -> List[GuardRecord]:
         """取指定场次的上舰明细行（时间正序），场次回顾的付费原料。"""
         page_limit = max(1, min(int(limit), 500))
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[GuardRecord]:
             with self._manager.transaction() as conn:
                 rows = conn.execute(
                     "SELECT * FROM guards WHERE live_session_id=? ORDER BY timestamp_ms DESC LIMIT ?",
                     (int(live_session_id), page_limit),
                 ).fetchall()
-                return list(reversed(rows))
+                return list(reversed([GuardRecord.model_validate(dict(row)) for row in rows]))
 
         return await self._run_in_executor(_exec)
 

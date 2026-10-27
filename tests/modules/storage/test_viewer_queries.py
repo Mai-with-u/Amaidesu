@@ -66,7 +66,7 @@ async def test_list_search_and_pagination(store: SQLiteDatabase) -> None:
 
     async def ids(**kwargs) -> tuple[list[str], int]:
         rows, total = await store.viewers.list_viewer_stats(**kwargs)
-        return sorted(r["user_id"] for r in rows), total
+        return sorted(r.user_id for r in rows), total
 
     assert await ids(search="贵宾2") == (["vip2"], 1)
     assert await ids(search="vip3") == (["vip3"], 1)
@@ -110,7 +110,7 @@ async def test_dialogue_interleaves_own_replies_with_cursor(store: SQLiteDatabas
     await _chat(store, BASE + 200, None, sender_role="assistant", message_type="speech", reply_to_message_id="others")
 
     rows = await store.chat.list_viewer_dialogue(viewer_id=VIEWER_IDS["u_d"], limit=10)
-    assert [(r["sender_role"], r["timestamp_ms"]) for r in rows] == [
+    assert [(r.sender_role, r.timestamp_ms) for r in rows] == [
         ("viewer", BASE),
         ("viewer", BASE + 1000),
         ("assistant", BASE + 1500),
@@ -118,10 +118,10 @@ async def test_dialogue_interleaves_own_replies_with_cursor(store: SQLiteDatabas
     ]
     # 首批取最近 2 条观众消息并交织回复；游标翻更早只剩 m1
     batch = await store.chat.list_viewer_dialogue(viewer_id=VIEWER_IDS["u_d"], limit=2)
-    assert [r["message_id"] for r in batch if r["sender_role"] == "viewer"] == ["m2", "m3"]
-    assert any(r["sender_role"] == "assistant" for r in batch)
+    assert [r.message_id for r in batch if r.sender_role == "viewer"] == ["m2", "m3"]
+    assert any(r.sender_role == "assistant" for r in batch)
     batch = await store.chat.list_viewer_dialogue(viewer_id=VIEWER_IDS["u_d"], limit=2, before_timestamp_ms=BASE + 1000)
-    assert [r["message_id"] for r in batch] == ["m1"]
+    assert [r.message_id for r in batch] == ["m1"]
 
 
 async def test_activity_bounds_span_chat_gifts_and_super_chats(store: SQLiteDatabase) -> None:
@@ -145,7 +145,7 @@ async def test_user_contributions_detail_and_summary(store: SQLiteDatabase) -> N
     await _gift(store, BASE + 1_000, "u_c", 3, 300)
     await _sc(store, BASE + 2_000, "u_c", 50_000)
 
-    assert [r["quantity"] for r in await store.chat.list_viewer_gifts(viewer_id=VIEWER_IDS["u_c"])] == [3, 2]  # 时间倒序
+    assert [r.quantity for r in await store.chat.list_viewer_gifts(viewer_id=VIEWER_IDS["u_c"])] == [3, 2]  # 时间倒序
     assert len(await store.chat.list_viewer_super_chats(viewer_id=VIEWER_IDS["u_c"])) == 1
     summary = await store.chat.summarize_viewer_contributions(viewer_id=VIEWER_IDS["u_c"])
     assert (summary["gift_total_count"], summary["sc_total_amount"], summary["sc_total_count"]) == (5, 50_000, 1)
@@ -158,7 +158,7 @@ async def test_user_sessions_grouped_with_optional_title(store: SQLiteDatabase) 
     await _chat(store, BASE + DAY, "u_s", live_session_id=pk)
 
     rows = await store.chat.list_viewer_sessions(viewer_id=VIEWER_IDS["u_s"])
-    assert [(r["live_session_id"], r["title"], r["message_count"]) for r in rows] == [(pk, "周六场", 1), (101, None, 1)]
+    assert [(r.live_session_id, r.title, r.message_count) for r in rows] == [(pk, "周六场", 1), (101, None, 1)]
 
 
 async def test_daily_danmaku_counts_only_danmaku_type(store: SQLiteDatabase) -> None:
@@ -169,4 +169,4 @@ async def test_daily_danmaku_counts_only_danmaku_type(store: SQLiteDatabase) -> 
 
     for days in (7, 1):
         rows = await store.chat.daily_danmaku_counts(days=days)
-        assert [r["count"] for r in rows] == [2]
+        assert [r.count for r in rows] == [2]

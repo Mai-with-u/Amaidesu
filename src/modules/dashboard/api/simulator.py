@@ -264,7 +264,9 @@ async def list_replay_dates(server: ServerDep) -> ReplayDatesResponse:
     实例无关），经默认数据库工厂取明细仓储；enabled=false 也可用。
     """
     entries = await get_default_db().chat.list_chat_dates_with_counts()
-    return ReplayDatesResponse(dates=[ReplayDateEntry(**e) for e in entries])
+    return ReplayDatesResponse(
+        dates=[ReplayDateEntry(date=entry.date, danmaku_count=entry.danmaku_count) for entry in entries]
+    )
 
 
 # ------------------------------------------------------------------ #
