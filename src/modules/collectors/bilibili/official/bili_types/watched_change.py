@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from pydantic import Field
 
-from src.modules.types.bili.base import BiliBaseMessage
+from src.modules.collectors.bilibili.official.bili_types.base import BiliBaseMessage
 
 
 class WatchedChangeMessage(BiliBaseMessage):

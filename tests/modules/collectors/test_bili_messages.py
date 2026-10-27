@@ -1,8 +1,8 @@
-"""B 站消息类型：命令名枚举、各消息 ``from_dict`` 解析与缺字段默认值、消息类型过滤配置（``src.modules.types.bili``）"""
+"""B 站消息类型：命令名枚举、各消息 ``from_dict`` 解析与缺字段默认值、消息类型过滤配置（``src.modules.collectors.bilibili.official.bili_types``）"""
 
 import pytest
 
-from src.modules.types.bili import (
+from src.modules.collectors.bilibili.official.bili_types import (
     BiliMessageType,
     DanmakuMessage,
     EnterMessage,
@@ -11,7 +11,7 @@ from src.modules.types.bili import (
     SuperChatMessage,
     WatchedChangeMessage,
 )
-from src.modules.types.bili.config import BiliMessageTypeConfig
+from src.modules.collectors.bilibili.official.bili_types.config import BiliMessageTypeConfig
 
 OFFICIAL_COMMANDS = {
     "DANMAKU": "LIVE_OPEN_PLATFORM_DM",

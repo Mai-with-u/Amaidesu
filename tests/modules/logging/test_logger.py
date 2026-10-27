@@ -10,6 +10,7 @@ from loguru import logger
 
 from src.modules.logging import configure_from_config, get_logger
 from src.modules.logging import logger as logger_module
+from src.modules.logging.logger import on_reconfigure
 
 
 @pytest.fixture(autouse=True)
@@ -18,11 +19,14 @@ def reset_logger_state():
     configured = logger_module._CONFIGURED
     handler_ids = logger_module._HANDLER_IDS.copy()
     default_handler_id = logger_module._DEFAULT_HANDLER_ID
+    callbacks = logger_module._RECONFIGURE_CALLBACKS.copy()
     yield
     logger_module._CONFIGURED = configured
     logger_module._HANDLER_IDS.clear()
     logger_module._HANDLER_IDS.extend(handler_ids)
     logger_module._DEFAULT_HANDLER_ID = default_handler_id
+    logger_module._RECONFIGURE_CALLBACKS.clear()
+    logger_module._RECONFIGURE_CALLBACKS.extend(callbacks)
     for handler_id in list(logger._core.handlers.keys()):
         logger.remove(handler_id)
 
@@ -73,6 +77,32 @@ def test_console_only_mode_creates_no_files(log_dir: Path) -> None:
     configure_from_config({"enabled": False, "directory": str(log_dir)})
     get_logger("console_test").info("Console only message")
     assert list(log_dir.glob("*")) == []
+
+
+def test_reconfigure_fires_registered_callbacks_and_unsubscribe_stops_them(log_dir: Path) -> None:
+    calls: list[str] = []
+    unsubscribe = on_reconfigure(lambda: calls.append("first"))
+
+    _configure(log_dir)
+    assert calls == ["first"]  # 每次重配置后回调依次执行
+
+    unsubscribe()
+    _configure(log_dir)
+    assert calls == ["first"]  # 注销后不再触发
+
+
+def test_reconfigure_skips_a_failing_callback_and_runs_the_rest(log_dir: Path, capsys) -> None:
+    calls: list[str] = []
+
+    def _broken() -> None:
+        raise RuntimeError("callback boom")
+
+    on_reconfigure(_broken)
+    on_reconfigure(lambda: calls.append("after"))
+    _configure(log_dir)
+
+    assert calls == ["after"]  # 单个回调异常被记录并跳过，不阻断其余回调
+    assert "日志重配置回调执行失败" in capsys.readouterr().err
 
 
 def test_missing_directory_is_created_and_uncreatable_one_falls_back_to_console(tmp_path) -> None:

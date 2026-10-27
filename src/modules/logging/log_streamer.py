@@ -10,10 +10,11 @@ import traceback
 import weakref
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Callable, TYPE_CHECKING, Any, Optional
 
 from loguru import logger as loguru_logger
 
+from src.modules.logging.logger import on_reconfigure
 from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -59,6 +60,7 @@ class LogStreamer:
         self.persist_retention_days = max(0, persist_retention_days)
         self._handler_id: Optional[int] = None
         self._is_running = False
+        self._unsubscribe_reconfigure: Optional[Callable[[], None]] = None
         self._log_buffer: list[dict[str, Any]] = []  # 历史日志缓冲区
         self._buffer_lock = asyncio.Lock()
 
@@ -205,14 +207,24 @@ class LogStreamer:
             return
         self._is_running = True
         self._install_sink()
+        # 全局日志重配置会摘掉外部 sink，注册回调在重建完成后恢复自己的 sink
+        self._unsubscribe_reconfigure = on_reconfigure(self._restore_sink_after_reconfigure)
 
     async def stop(self) -> None:
         """停止日志流"""
         if not self._is_running:
             return
         self._is_running = False
+        if self._unsubscribe_reconfigure is not None:
+            self._unsubscribe_reconfigure()
+            self._unsubscribe_reconfigure = None
         self._remove_sink()
         _LIVE_STREAMERS.discard(self)
+
+    def _restore_sink_after_reconfigure(self) -> None:
+        """日志全局重配置后重建 sink（经 on_reconfigure 注册的回调触发）。"""
+        if self._is_running:
+            self._install_sink()
 
     def _install_sink(self) -> None:
         """挂载 loguru sink 并记录 handler_id；已挂载的旧 sink 先摘除（幂等，供重建复用）。"""
@@ -228,7 +240,7 @@ class LogStreamer:
     def _remove_sink(self) -> None:
         """摘除已挂载的 sink。
 
-        handler 可能已被外部摘除（如 configure_from_config 的全局 remove()），
+        handler 可能已被全局重配置（configure_from_config 的 remove()）摘除，
         此时 loguru 抛 ValueError，静默归位即可——目标状态（sink 不在）已达成。
         """
         if self._handler_id is None:
@@ -328,20 +340,6 @@ class LogStreamer:
 
 
 # 存活 LogStreamer 弱引用注册表：实例 stop 或被回收后自动清出。
-# 承担两件事——persist 实例的单例防线（构造期告警），以及全局日志重配置
-# 摘掉 sink 后的存活实例重建（rebind_live_streamers）。
+# 用于 persist 实例的单例防线（构造期告警）；sink 的重配置重建已改由
+# on_reconfigure 回调按实例注册承担。
 _LIVE_STREAMERS: "weakref.WeakSet[LogStreamer]" = weakref.WeakSet()
-
-
-def rebind_live_streamers() -> int:
-    """为所有仍标记运行中的 LogStreamer 重建 sink，返回重建数。
-
-    configure_from_config() 的全局 remove() 会把本模块挂载的 sink 一并摘掉，
-    实例却仍处于运行态（孤儿化）。全局重配置完成后调用本函数恢复日志流。
-    """
-    count = 0
-    for streamer in list(_LIVE_STREAMERS):
-        if streamer._is_running:
-            streamer._install_sink()
-            count += 1
-    return count

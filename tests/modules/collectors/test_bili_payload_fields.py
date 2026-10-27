@@ -14,7 +14,12 @@ from src.modules.collectors.base import BaseCollector
 from src.modules.collectors.bilibili import BiliDanmakuCollector, BiliDanmakuOfficialCollector
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload
-from src.modules.types.bili import DanmakuMessage, GiftMessage, GuardMessage, SuperChatMessage
+from src.modules.collectors.bilibili.official.bili_types import (
+    DanmakuMessage,
+    GiftMessage,
+    GuardMessage,
+    SuperChatMessage,
+)
 
 GUARD_CMD = "LIVE_OPEN_PLATFORM_GUARD"
 WATCHED_CMD = "LIVE_OPEN_PLATFORM_WATCHED_CHANGE"

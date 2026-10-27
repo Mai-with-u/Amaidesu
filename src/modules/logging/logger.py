@@ -14,7 +14,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
 from loguru import logger as loguru_logger
 
@@ -25,6 +25,26 @@ if TYPE_CHECKING:
 _CONFIGURED = False  # 追踪 configure_from_config() 是否已被调用
 _HANDLER_IDS: list[int] = []  # 追踪处理器 ID 以便清理
 _DEFAULT_HANDLER_ID: int | None = None  # 追踪默认处理器
+# 重配置回调注册表：configure_from_config() 重建 sink 后依次调用
+_RECONFIGURE_CALLBACKS: list[Callable[[], None]] = []
+
+
+def on_reconfigure(callback: Callable[[], None]) -> Callable[[], None]:
+    """注册日志重配置回调，返回注销函数。
+
+    configure_from_config() 会先全局移除全部 loguru sink 再重建自己的处理器，
+    外部组件挂载的 sink 会被一并摘掉。注册在此的回调在重建完成后依次调用，
+    供组件恢复各自的 sink；单个回调异常被记录并跳过，不影响其余回调。
+    """
+    _RECONFIGURE_CALLBACKS.append(callback)
+
+    def _unsubscribe() -> None:
+        try:
+            _RECONFIGURE_CALLBACKS.remove(callback)
+        except ValueError:
+            pass
+
+    return _unsubscribe
 
 
 def _ensure_default_handler() -> None:
@@ -192,12 +212,14 @@ def configure_from_config(config_dict: dict | None = None) -> None:
             )
             _HANDLER_IDS.append(file_handler_id)
 
-    # 前面的全局 remove() 会把 LogStreamer 等外部组件挂载的 sink 一并摘掉，
-    # 其实例仍处于运行态（孤儿化）。重配置完成后通知存活实例重建 sink。
-    # 函数体内 import：循环 import 规避（log_streamer 可能反向依赖本模块门面）。
-    from src.modules.logging.log_streamer import rebind_live_streamers
-
-    rebind_live_streamers()
+    # 前面的全局 remove() 会把外部组件（如 LogStreamer）挂载的 sink 一并摘掉，
+    # 其实例仍处于运行态（孤儿化）。重建完成后通知注册方恢复各自的 sink，
+    # 组件经 on_reconfigure() 注册回调，本模块不知道任何具体组件。
+    for callback in list(_RECONFIGURE_CALLBACKS):
+        try:
+            callback()
+        except Exception:
+            loguru_logger.bind(module="logging").exception("日志重配置回调执行失败")
 
 
 class ModuleLogger:
@@ -277,4 +299,4 @@ def silence_third_party_logger(name: str) -> None:
 
 
 # 导出配置好的 logger 获取函数
-__all__ = ["get_logger", "configure_from_config", "silence_third_party_logger"]
+__all__ = ["get_logger", "configure_from_config", "on_reconfigure", "silence_third_party_logger"]

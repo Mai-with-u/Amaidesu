@@ -7,7 +7,7 @@ B站消息类型过滤配置
 from typing import Any, Dict, Set
 
 from src.modules.logging import get_logger
-from src.modules.types.bili.base import BiliMessageType
+from src.modules.collectors.bilibili.official.bili_types.base import BiliMessageType
 
 
 class BiliMessageTypeConfig:
