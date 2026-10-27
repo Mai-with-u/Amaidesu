@@ -269,7 +269,7 @@ ensure_registry_consistency()   # 启动硬检查：EVENT_REGISTRY 与 CoreEvent
 |--------|----------|--------|------|
 | `RateLimitInterceptor` | 100 | `room.message.*` | 全局 / 单用户滑动窗口限流（防刷屏）；用户标识经共用 `lookup.extract_user_id` 提取（嵌套 `user.id` 优先，顶层键兜底） |
 | `SimilarFilterInterceptor` | 100 | `room.message.*` | 相似文本合并（滑动窗口内相似度超阈值丢弃） |
-| `SessionStampInterceptor` | 200 | room.message. / streamer. / planner. / tool.result. / game. / rundown. / task. / agent. | 场次盖章：`live_session_id=0` 的业务事件统一注入当前场次主键（单点注入、全链一致；归属解析失败放行原 payload 不阻断） |
+| `SessionStampInterceptor` | 200 | 不限域（字段驱动：payload 声明 `live_session_id` 字段即盖章） | 场次盖章：`live_session_id=0` 的业务事件统一注入当前场次主键（单点注入、全链一致；归属解析失败放行原 payload 不阻断） |
 
 **执行顺序 = `priority` 升序**（数值小者先行，同值按注册顺序），与 `add_interceptor` 的注册顺序解耦：净化类（限流 / 相似过滤）先于加工类（场次盖章），被净化丢弃的消息不消耗归属解析。
 

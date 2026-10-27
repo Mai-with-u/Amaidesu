@@ -1,4 +1,4 @@
-"""内置拦截器：限流（全局/用户滑窗）、相似过滤（跨用户/来源隔离/短文本）、场次盖章（作用域与异常放行）"""
+"""内置拦截器：限流（全局/用户滑窗）、相似过滤（跨用户/来源隔离/短文本）、场次盖章（字段驱动、异常放行）"""
 
 from __future__ import annotations
 
@@ -95,18 +95,16 @@ class _FakeSessionManager:
 
 @pytest.mark.parametrize(
     "event_name",
+    # 全部取不在历史盖章域名单内的名字：实证盖章由字段声明驱动、不限事件域
     [
+        "example.thing.happened",
+        "somegame.tick",
+        "whatever.domain.event",
         "room.message.danmaku",
-        "game.milestone",
         "planner.verdict",
-        "rundown.changed",
-        "task.changed",
-        "agent.replied",
-        "agent.prompted",
-        "streamer.stage",
     ],
 )
-async def test_stamps_every_domain_inside_scope(event_name: str) -> None:
+async def test_stamps_any_domain_when_field_declared(event_name: str) -> None:
     sm = _FakeSessionManager(42)
     chain = InterceptorChain()
     chain.register(SessionStampInterceptor(sm))
@@ -126,19 +124,16 @@ async def test_stamps_real_payload_shapes() -> None:
         assert (await chain.apply(event_name, data, "test"))["live_session_id"] == 42
 
 
-async def test_stamp_skips_already_stamped_out_of_scope_and_fieldless_payloads() -> None:
+async def test_stamp_skips_nonzero_fieldless_and_live_lifecycle_payloads() -> None:
     sm = _FakeSessionManager(42)
     ic = SessionStampInterceptor(sm)
-    assert (await ic.intercept("streamer.speech", {"live_session_id": 7}, "t"))["live_session_id"] == 7
-    assert sm.calls == 0  # 已盖章不再解析
+    # 非 0 主键（含 live.* 生命周期事件自带主键的形态）不被覆盖
+    assert (await ic.intercept("example.thing.happened", {"live_session_id": 7}, "t"))["live_session_id"] == 7
+    assert (await ic.intercept("live.session.started", {"live_session_id": 9}, "t"))["live_session_id"] == 9
+    assert sm.calls == 0  # 已带主键不再解析
 
-    assert "live_session_id" not in await ic.intercept(
-        "planner.decision", {"timeline_summary": "x"}, "t"
-    )  # 不注入未知键
-
-    chain = InterceptorChain()
-    chain.register(ic)
-    assert await chain.apply("core.startup", {"live_session_id": 0}, "t") == {"live_session_id": 0}  # 作用域外
+    # 未声明 live_session_id 字段 → 原样放行、不注入未知键
+    assert "live_session_id" not in await ic.intercept("example.thing.happened", {"timeline_summary": "x"}, "t")
     assert sm.calls == 0
 
 
