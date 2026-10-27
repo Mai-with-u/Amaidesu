@@ -1,12 +1,15 @@
 """rundown_tool - 流程单控制工具（Planner ReAct 循环的推进出口）
 
-**注册形态**：provider="rundown"、声明名 control → 全名 ``rundown_control``，
+**注册形态**：provider="rundown"、声明名 control → 全名 ``rundown_control``,
 经 ``build_rundown_tool_provider`` 组装后由 StreamerAgent 注册进 ToolRegistry
 （可见名单 ``["streamer"]``）。Planner 与其他工具同路径经 ``registry.invoke``
 调用；可见性随 Provider 注册/摘除进出名单。推进权归 Agent：何时切换环节是
 决策脑自己的决定，本工具只提供能力通道，并把 ``RundownState`` 的结构化拒绝
 （未知环节 id / 未达最少停留）原样重新写入——Agent 读到拒绝原因后自纠，
 不走异常通道。
+
+动作分发、参数校验与结构化拒绝在 ``../rundown/dispatch.py``（与 Dashboard
+手动控制共享同一份事实源），本模块只做 agent 通道的形状翻译：出 JSON 观察。
 
 工具契约：
 - OpenAI function 形态（``_CONTROL_SPEC`` 经 ToolSpec → function def 转换）
@@ -25,18 +28,13 @@ from src.modules.tools import ToolInvocation
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
 
-from src.modules.storage.models.rundown import RundownSegment
-
+from ..rundown.dispatch import APPEND_MIN_EXPECTED_MS, dispatch_rundown_control
 from ..rundown.rundown_state import RundownState
 
 __all__ = [
     "build_rundown_tool_provider",
     "RundownControlProvider",
 ]
-
-# append 动作的预期时长下界：追加环节至少值 1 分钟的直播时间，
-# 挡掉"随口起意 30 秒"这类碎片动作（超短内容不值得占用环节位）
-_APPEND_MIN_EXPECTED_MS: int = 60_000
 
 _PARAMETERS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -131,69 +129,57 @@ class RundownControlProvider:
         """执行控制动作，返回观察 JSON 文本（成功与结构化拒绝都重新写入给 LLM）。"""
         action = str(args.get("action", "") or "")
         try:
-            if action == "next":
-                reject = self._state.next(by="agent")
-            elif action == "goto":
-                segment_id = str(args.get("segment_id", "") or "")
-                if not segment_id:
-                    return json.dumps(
-                        {"ok": False, "error": "goto 需要 segment_id（可从情境注入的后续环节列表取得）"},
-                        ensure_ascii=False,
-                    )
-                reject = self._state.goto(segment_id, by="agent")
-            elif action == "pause":
-                reject = self._state.pause(by="agent")
-            elif action == "resume":
-                reject = self._state.resume(by="agent")
-            elif action == "renew":
-                reject = self._state.renew(by="agent")
-            elif action == "append":
-                # append 的参数整形与下界校验在工具层完成（先挡 LLM 传参错误，
-                # 再交给模型层校验与状态机结构化拒绝），成功路径复用统一收口
-                raw = args.get("segment")
-                if not isinstance(raw, dict):
-                    return json.dumps(
-                        {
-                            "ok": False,
-                            "error": "append 需要 segment 参数（对象，含 seg_id/title/task_description/expected_ms）",
-                        },
-                        ensure_ascii=False,
-                    )
-                expected_ms = raw.get("expected_ms")
-                if (
-                    not isinstance(expected_ms, int)
-                    or isinstance(expected_ms, bool)
-                    or expected_ms < _APPEND_MIN_EXPECTED_MS
-                ):
-                    return json.dumps(
-                        {
-                            "ok": False,
-                            "error": f"追加环节预期时长至少 1 分钟（expected_ms >= {_APPEND_MIN_EXPECTED_MS}，当前 {expected_ms!r}）",
-                        },
-                        ensure_ascii=False,
-                    )
-                seg_dict = dict(raw)
-                seg_dict["id"] = seg_dict.pop("seg_id", "")
-                try:
-                    segment = RundownSegment.model_validate(seg_dict)
-                except Exception as exc:
-                    return json.dumps(
-                        {"ok": False, "error": f"segment 参数校验失败: {exc}"},
-                        ensure_ascii=False,
-                    )
-                reject = self._state.append_segment(segment, by="agent")
-            else:
-                return json.dumps({"ok": False, "error": f"未知 action={action!r}"}, ensure_ascii=False)
+            outcome = dispatch_rundown_control(
+                self._state,
+                action,
+                by="agent",
+                segment_id=str(args.get("segment_id", "") or "") or None,
+                payload=args.get("segment"),
+            )
         except Exception as exc:
             self._logger.warning(f"rundown_control 执行异常: {exc}", exc=True)
             return json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, ensure_ascii=False)
 
-        if reject is not None:
-            data: Dict[str, Any] = {"ok": False, "reason": reject.reason}
-            if reject.available_ids:
-                data["available_segment_ids"] = reject.available_ids
-            if reject.remaining_ms:
-                data["remaining_ms"] = reject.remaining_ms
-            return json.dumps(data, ensure_ascii=False)
+        if outcome.success:
+            return json.dumps({"ok": True, "rundown": self._state.get_snapshot()}, ensure_ascii=False)
 
-        return json.dumps({"ok": True, "rundown": self._state.get_snapshot()}, ensure_ascii=False)
+        # 参数问题的原因码 → 面向 LLM 的纠错提示（状态机拒绝走结构化通道）
+        if outcome.error_code != "":
+            if outcome.error_code == "unknown_action":
+                return json.dumps({"ok": False, "error": f"未知 action={outcome.error_detail!r}"}, ensure_ascii=False)
+            if outcome.error_code == "missing_segment_id":
+                return json.dumps(
+                    {"ok": False, "error": "goto 需要 segment_id（可从情境注入的后续环节列表取得）"},
+                    ensure_ascii=False,
+                )
+            if outcome.error_code == "append_segment_not_object":
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "error": "append 需要 segment 参数（对象，含 seg_id/title/task_description/expected_ms）",
+                    },
+                    ensure_ascii=False,
+                )
+            if outcome.error_code == "append_expected_ms_below_min":
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "error": f"追加环节预期时长至少 1 分钟（expected_ms >= {APPEND_MIN_EXPECTED_MS}，"
+                        f"当前 {outcome.error_detail}）",
+                    },
+                    ensure_ascii=False,
+                )
+            if outcome.error_code == "append_segment_invalid":
+                return json.dumps(
+                    {"ok": False, "error": f"segment 参数校验失败: {outcome.error_detail}"},
+                    ensure_ascii=False,
+                )
+            return json.dumps({"ok": False, "error": outcome.error_code}, ensure_ascii=False)
+
+        reject = outcome.reject
+        data: Dict[str, Any] = {"ok": False, "reason": reject.reason}
+        if reject.available_ids:
+            data["available_segment_ids"] = reject.available_ids
+        if reject.remaining_ms:
+            data["remaining_ms"] = reject.remaining_ms
+        return json.dumps(data, ensure_ascii=False)

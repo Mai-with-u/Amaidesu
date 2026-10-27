@@ -6,5 +6,6 @@
 Dashboard API 共同消费；控制工具提供者在 ``../tools/rundown_tool.py``。
 
 - ``rundown_state`` - 流程单运行时状态机（唯一变更边界，``rundown.changed`` 事件源）
-- ``presentation``  - 控制动作执行与流程单情境视图构建（供 Planner / 提示词消费）
+- ``dispatch``      - 控制动作统一分发器（human / agent 两条通道共享的分发与参数校验）
+- ``presentation``  - human 通道形状翻译（出三元组）与流程单情境视图构建
 """
