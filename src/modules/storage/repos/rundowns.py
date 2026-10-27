@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.modules.storage.models.rundown import Rundown, RundownSegment
 from src.modules.storage.repos._base import BaseRepo
@@ -35,8 +35,8 @@ class RundownRepo(BaseRepo):
         )
 
     @classmethod
-    def _assemble_rundown(cls, header: sqlite3.Row, segment_rows: List[sqlite3.Row]) -> Rundown:
-        """元信息行 + 按 seq 有序的环节行 → :class:`Rundown`。"""
+    def _assemble_rundown(cls, header: Dict[str, Any], segment_rows: List[Dict[str, Any]]) -> Rundown:
+        """元信息行 + 按 seq 有序的环节行 → :class:`Rundown`（行以 dict 形态传入，按列名取值）。"""
         segments = [
             RundownSegment(
                 id=str(row["seg_id"]),
@@ -51,7 +51,7 @@ class RundownRepo(BaseRepo):
         return Rundown(rundown_id=str(header["id"]), title=str(header["title"]), segments=segments)
 
     @staticmethod
-    def _load_segment_rows(conn: sqlite3.Connection, rundown_ids: List[str]) -> Dict[str, List[sqlite3.Row]]:
+    def _load_segment_rows(conn: sqlite3.Connection, rundown_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
         """一次取多个流程单的环节行，按 ``(rundown_id, seq)`` 分组（组内 seq 升序）。"""
         placeholders = ",".join("?" for _ in rundown_ids)
         rows = conn.execute(
@@ -59,9 +59,9 @@ class RundownRepo(BaseRepo):
             f" FROM rundown_segments WHERE rundown_id IN ({placeholders}) ORDER BY rundown_id ASC, seq ASC",
             rundown_ids,
         ).fetchall()
-        grouped: Dict[str, List[sqlite3.Row]] = {rid: [] for rid in rundown_ids}
+        grouped: Dict[str, List[Dict[str, Any]]] = {rid: [] for rid in rundown_ids}
         for row in rows:
-            grouped[str(row["rundown_id"])].append(row)
+            grouped[str(row["rundown_id"])].append(dict(row))
         return grouped
 
     async def upsert_rundown(self, rundown: Rundown) -> None:
@@ -108,7 +108,7 @@ class RundownRepo(BaseRepo):
                     " FROM rundown_segments WHERE rundown_id=? ORDER BY seq ASC",
                     (rundown_id,),
                 ).fetchall()
-                return self._assemble_rundown(header, segment_rows)
+                return self._assemble_rundown(dict(header), [dict(row) for row in segment_rows])
 
         return await self._run_in_executor(_exec)
 
@@ -121,7 +121,10 @@ class RundownRepo(BaseRepo):
                 if not headers:
                     return []
                 grouped = self._load_segment_rows(conn, [str(row["id"]) for row in headers])
-                return [self._assemble_rundown(header, grouped[str(header["id"])]) for header in headers]
+                return [
+                    self._assemble_rundown(dict(header), grouped[str(header["id"])])
+                    for header in (dict(row) for row in headers)
+                ]
 
         return await self._run_in_executor(_exec)
 

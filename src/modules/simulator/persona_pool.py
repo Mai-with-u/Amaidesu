@@ -43,15 +43,15 @@ class PersonaPool:
         rows = await self._sim.list_sim_personas(include_inactive=True)
         self._all_residents = [
             Persona(
-                user_id=row["user_id"],
-                user_nickname=row["user_nickname"],
-                role=PersonaRole(row["role"]),
-                personality=row["personality"],
-                speaking_style=row["speaking_style"],
-                fans_medal_level=row["fans_medal_level"],
-                guard_level=row["guard_level"],
-                is_active=bool(row["is_active"]),
-                messages_generated=row["messages_generated"],
+                user_id=row.user_id,
+                user_nickname=row.user_nickname,
+                role=PersonaRole(row.role),
+                personality=row.personality,
+                speaking_style=row.speaking_style,
+                fans_medal_level=row.fans_medal_level,
+                guard_level=row.guard_level,
+                is_active=row.is_active,
+                messages_generated=row.messages_generated,
             )
             for row in rows
         ]

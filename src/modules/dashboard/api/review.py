@@ -90,11 +90,11 @@ async def _resolve_sessions(server: "DashboardServer", ids: List[int]) -> List[D
             row = await session_repo.get_live_session(live_session_id=sid)
             if row is None:
                 raise HTTPException(status_code=404, detail=f"场次不存在: {sid}")
-            rows.append(dict(row))
+            rows.append(row.model_dump())
         return rows
 
     listed = await manager.list_sessions(limit=200)
-    rows = [dict(row) for row in listed]
+    rows = [row.model_dump() for row in listed]
     ended = [row for row in rows if row["ended_at_ms"] is not None]
     chosen = ended[0] if ended else (rows[0] if rows else None)
     if chosen is None:

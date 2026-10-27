@@ -97,7 +97,7 @@ async def test_aggregator_ongoing_session_window_extends_to_now(store) -> None:
     await _seed_chat(store, pk, started + 60_000, "assistant", "还在播", mtype="speak")
 
     agg = SessionReviewAggregator(chat_repo=store.chat)
-    body = await agg.build([dict(await store.sessions.get_live_session(live_session_id=pk))])
+    body = await agg.build([((await store.sessions.get_live_session(live_session_id=pk)).model_dump())])
 
     brief = body.sessions[0]
     assert brief.ended_at_ms is None
@@ -168,7 +168,7 @@ async def test_aggregator_counts_and_silence(store) -> None:
         live_session_id=pk, game="minecraft", event_type="died", message="摔死", timestamp_ms=BASE + 7_000
     )
 
-    row = dict(await store.sessions.get_live_session(live_session_id=pk))
+    row = (await store.sessions.get_live_session(live_session_id=pk)).model_dump()
     agg = SessionReviewAggregator(chat_repo=store.chat, llm_repo=store.llm, event_repo=store.events)
     body = await agg.build([row])
 
@@ -211,7 +211,7 @@ async def test_aggregator_llm_window_and_waterline(store) -> None:
         llm_repo=store.llm,
         slow_thresholds={"planner": 15_000, "minecraft": 15_000},
     )
-    rows = [dict(await store.sessions.get_live_session(live_session_id=sid)) for sid in (pk, other)]
+    rows = [((await store.sessions.get_live_session(live_session_id=sid)).model_dump()) for sid in (pk, other)]
     body = await agg.build(rows)
 
     assert body.llm.overall.calls == 3  # 场外 r3 被排除
@@ -275,7 +275,7 @@ async def test_aggregator_decisions_from_events_jsonl(store, tmp_path: Path) -> 
     reader_dep = SimpleNamespace(base_dir=tmp_path / "logs")
     reader = SessionEventReader(event_history=None, events_dir=reader_dep.base_dir / "events")
     agg = SessionReviewAggregator(event_reader=reader)
-    body = await agg.build([dict(await store.sessions.get_live_session(live_session_id=pk))])
+    body = await agg.build([((await store.sessions.get_live_session(live_session_id=pk)).model_dump())])
 
     assert body.decisions.total == 4
     assert body.decisions.distribution == {"game": 3, "rundown": 1}
@@ -304,7 +304,7 @@ async def test_aggregator_fills_recaps_and_tolerates_missing(store) -> None:
     )
 
     agg = SessionReviewAggregator(recap_repo=store.recaps)
-    rows = [dict(await store.sessions.get_live_session(live_session_id=pk)) for pk in (a, b)]
+    rows = [((await store.sessions.get_live_session(live_session_id=pk)).model_dump()) for pk in (a, b)]
     body = await agg.build(rows)
 
     filled = {s.live_session_id: s for s in body.sessions}
@@ -338,7 +338,7 @@ async def test_aggregator_viewer_cohorts_single_session_only(store) -> None:
             sender_id="u_chatty", sender_name="话痨王", platform="bilibili",
         )  # fmt: skip
 
-    row = dict(await store.sessions.get_live_session(live_session_id=pk))
+    row = (await store.sessions.get_live_session(live_session_id=pk)).model_dump()
     agg = SessionReviewAggregator(chat_repo=store.chat)
     single = await agg.build([row])
     assert single.viewers is not None
@@ -348,7 +348,7 @@ async def test_aggregator_viewer_cohorts_single_session_only(store) -> None:
     assert single.viewers.top_speakers[0].user_name == "话痨王"
 
     # 多选合并视图不产出观众构成（单场语义）
-    other = dict(await store.sessions.get_live_session(live_session_id=old))
+    other = (await store.sessions.get_live_session(live_session_id=old)).model_dump()
     merged = await agg.build([row, other])
     assert merged.viewers is None
 
@@ -362,7 +362,7 @@ async def test_aggregator_game_items_single_session_only(store) -> None:
         live_session_id=pk, game="minecraft", event_type="milestone", message="拿到钻石", timestamp_ms=BASE + 8_000
     )
 
-    row = dict(await store.sessions.get_live_session(live_session_id=pk))
+    row = (await store.sessions.get_live_session(live_session_id=pk)).model_dump()
     agg = SessionReviewAggregator(event_repo=store.events)
     single = await agg.build([row])
     assert single.game.total == 2
@@ -370,7 +370,7 @@ async def test_aggregator_game_items_single_session_only(store) -> None:
     assert single.game.truncated is False
 
     other = await _seed_session(store, BASE + 3_600_000, BASE + 3_900_000)
-    merged = await agg.build([row, dict(await store.sessions.get_live_session(live_session_id=other))])
+    merged = await agg.build([row, ((await store.sessions.get_live_session(live_session_id=other)).model_dump())])
     assert merged.game.total == 2 and merged.game.items == []
 
 

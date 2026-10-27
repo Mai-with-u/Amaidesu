@@ -7,9 +7,9 @@
 
 from __future__ import annotations
 
-import sqlite3
 from typing import List
 
+from src.modules.storage.models.topics import TimelineSummaryEntry
 from src.modules.storage.repos._base import BaseRepo
 
 
@@ -70,18 +70,18 @@ class TopicRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_session_summaries(self, *, live_session_id: int, limit: int = 120) -> List[sqlite3.Row]:
+    async def list_session_summaries(self, *, live_session_id: int, limit: int = 120) -> List[TimelineSummaryEntry]:
         """取指定场次的话题摘要轨迹（时间正序，最多 ``limit`` 条最近的）——场次回顾的话题原料。"""
         page_limit = max(1, min(int(limit), 1000))
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[TimelineSummaryEntry]:
             with self._manager.transaction() as conn:
                 rows = conn.execute(
                     "SELECT start_ms, end_ms, summary FROM timeline_summary"
                     " WHERE live_session_id=? ORDER BY end_ms DESC, id DESC LIMIT ?",
                     (int(live_session_id), page_limit),
                 ).fetchall()
-                return list(reversed(rows))
+                return [TimelineSummaryEntry.model_validate(dict(row)) for row in reversed(rows)]
 
         return await self._run_in_executor(_exec)
 

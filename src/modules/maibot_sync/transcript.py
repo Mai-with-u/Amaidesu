@@ -63,7 +63,7 @@ class StorageTranscriptSource:
         if session_row is None:
             logger.debug(f"场次 {live_session_id} 不存在，不推整场记录")
             return None
-        if str(session_row["source"] or "") == _REPLAY_SOURCE or not session_row["ended_at_ms"]:
+        if (session_row.source or "") == _REPLAY_SOURCE or not session_row.ended_at_ms:
             return None
 
         lines = self._chat_lines(
@@ -79,16 +79,16 @@ class StorageTranscriptSource:
             logger.warning(f"场次 {live_session_id} 有 {len(lines)} 行对话，只推最后 {MAX_TRANSCRIPT_LINES} 行")
             lines = lines[-MAX_TRANSCRIPT_LINES:]
 
-        platform = str(session_row["platform"] or "")
+        platform = session_row.platform or ""
         return {
             "type": "transcript",
             "live_session_id": int(live_session_id),
             # 场次平台未知时留空，由插件用它配置的默认平台
             "platform": "" if platform == "unknown" else platform,
-            "room_id": str(session_row["stream_id"] or ""),
-            "title": str(session_row["title"] or ""),
-            "started_at_ms": int(session_row["started_at_ms"] or 0),
-            "ended_at_ms": int(session_row["ended_at_ms"] or 0),
+            "room_id": session_row.stream_id or "",
+            "title": session_row.title or "",
+            "started_at_ms": int(session_row.started_at_ms or 0),
+            "ended_at_ms": int(session_row.ended_at_ms or 0),
             "lines": lines,
         }
 

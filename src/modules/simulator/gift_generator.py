@@ -21,10 +21,25 @@ from src.modules.simulator.types import (
     PersonaRole,
     StreamerContextSnapshot,
 )
+from src.modules.storage.models.sim import SimGift
 from src.modules.storage.repos import SimRepo
 
 # sim_gifts 允许通过 update_gift 更新的字段（与 DB 白名单一致的运行时防线）
 _GIFT_UPDATABLE_FIELDS = frozenset({"gift_name", "category", "weight", "data_type", "sc_amount_rmb", "unit_price"})
+
+
+def _gift_item(row: SimGift) -> GiftItem:
+    """礼物目录行 → 运行时礼物条目（字段一一对应，无变换）。"""
+    return GiftItem(
+        gift_id=row.gift_id,
+        gift_name=row.gift_name,
+        category=row.category,
+        weight=row.weight,
+        data_type=row.data_type,
+        sc_amount_rmb=row.sc_amount_rmb,
+        unit_price=row.unit_price,
+    )
+
 
 # 上舰事件的默认形态：舰长 / 1 个月 / 138000 金瓜子（138 元，官方价）
 _GUARD_LEVEL_CAPTAIN = 3
@@ -66,18 +81,7 @@ class GiftGenerator:
     async def load(self) -> None:
         """从 DB 加载礼物目录到内存缓存。"""
         rows = await self._sim.list_sim_gifts()
-        self._gifts = [
-            GiftItem(
-                gift_id=row["gift_id"],
-                gift_name=row["gift_name"],
-                category=row["category"],
-                weight=row["weight"],
-                data_type=row["data_type"],
-                sc_amount_rmb=row["sc_amount_rmb"],
-                unit_price=row["unit_price"],
-            )
-            for row in rows
-        ]
+        self._gifts = [_gift_item(row) for row in rows]
         self._weights = [gift.weight for gift in self._gifts]
         self._logger.info(f"已加载 {len(self._gifts)} 个礼物")
 
@@ -116,19 +120,10 @@ class GiftGenerator:
         updated = await self._sim.update_sim_gift(gift_id=gift_id, fields=fields)
         if not updated:
             return False
-        row = next((r for r in await self._sim.list_sim_gifts() if r["gift_id"] == gift_id), None)
+        row = next((r for r in await self._sim.list_sim_gifts() if r.gift_id == gift_id), None)
         target = next((g for g in self._gifts if g.gift_id == gift_id), None)
         if row is not None and target is not None:
-            refreshed = GiftItem(
-                gift_id=row["gift_id"],
-                gift_name=row["gift_name"],
-                category=row["category"],
-                weight=row["weight"],
-                data_type=row["data_type"],
-                sc_amount_rmb=row["sc_amount_rmb"],
-                unit_price=row["unit_price"],
-            )
-            self._gifts[self._gifts.index(target)] = refreshed
+            self._gifts[self._gifts.index(target)] = _gift_item(row)
             self._weights = [g.weight for g in self._gifts]
         return True
 

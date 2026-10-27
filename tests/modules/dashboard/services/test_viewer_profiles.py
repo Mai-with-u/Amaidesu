@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
+
+from src.modules.storage.models.viewer_identity import PendingViewerSummary
 
 from src.modules.dashboard.schemas.viewers import (
     ViewerBrief,
@@ -116,8 +118,9 @@ class _FakeIdentityRepo:
         self.rows = rows
         self.total = total
 
-    async def list_pending(self, *, limit: int, offset: int):  # type: ignore[no-untyped-def]
-        return self.total, self.rows
+    async def list_pending(self, *, limit: int, offset: int) -> Tuple[int, List[Any]]:  # type: ignore[no-untyped-def]
+        # 待确认行以仓储契约模型返回（与 ViewerIdentityRepo.list_pending 一致）
+        return self.total, [PendingViewerSummary.model_validate(row) for row in self.rows]
 
 
 class _BareServer:

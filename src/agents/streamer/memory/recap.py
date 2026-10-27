@@ -17,12 +17,12 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, List, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.storage.models.memory import SessionRecap
+from src.modules.storage.models.sessions import LiveSession
 from src.modules.events.payloads.recap import StreamerRecapWrittenPayload
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
@@ -123,8 +123,8 @@ class SessionRecapWriter:
         if session_row is None:
             logger.debug(f"场次 {live_session_id} 不存在，跳过回顾")
             return None
-        started_at = int(session_row["started_at_ms"] or 0)
-        ended_at = int(session_row["ended_at_ms"] or 0)
+        started_at = int(session_row.started_at_ms or 0)
+        ended_at = int(session_row.ended_at_ms or 0)
         if ended_at <= 0:
             logger.debug(f"场次 {live_session_id} 尚未结账，跳过回顾")
             return None
@@ -216,7 +216,7 @@ class SessionRecapWriter:
     # 原料
     # ------------------------------------------------------------------
 
-    async def _collect_material(self, live_session_id: int, session_row: sqlite3.Row) -> str:
+    async def _collect_material(self, live_session_id: int, session_row: LiveSession) -> str:
         """按场次主键把各表记录渲染成原料文本；每类各自封顶，整体超限时从尾部截断。"""
         sections: List[str] = []
         head = self._render_head(session_row)
@@ -253,15 +253,15 @@ class SessionRecapWriter:
             logger.warning(f"读取备忘录快照失败，回顾原料省略该类: {exc}")
             return ""
 
-    def _render_head(self, session_row: sqlite3.Row) -> str:
-        started = int(session_row["started_at_ms"] or 0)
-        ended = int(session_row["ended_at_ms"] or 0)
+    def _render_head(self, session_row: LiveSession) -> str:
+        started = int(session_row.started_at_ms or 0)
+        ended = int(session_row.ended_at_ms or 0)
         parts: List[str] = []
         if started > 0:
             parts.append("日期 " + datetime.fromtimestamp(started / 1000).strftime("%Y-%m-%d %H:%M"))
         if started > 0 and ended > started:
             parts.append("时长 " + _duration_text(ended - started))
-        title = session_row["title"] if "title" in session_row.keys() else None
+        title = session_row.title
         if title:
             parts.append(f"标题「{title}」")
         return ("【场次】" + "，".join(parts)) if parts else ""
@@ -292,10 +292,10 @@ class SessionRecapWriter:
         lines = []
         last = ""
         for row in rows:
-            summary = str(row["summary"] or "").strip()
+            summary = (row.summary or "").strip()
             # 相邻重复的摘要句只留一条（弹幕没变时后台会原样再摘一次）
             if summary and summary != last:
-                lines.append(f"{_clock(int(row['end_ms']))} {summary}")
+                lines.append(f"{_clock(row.end_ms)} {summary}")
                 last = summary
         return "\n".join(lines)
 
@@ -309,9 +309,9 @@ class SessionRecapWriter:
             return ""
         lines = []
         for row in rows:
-            message = str(row["message"] or "").strip().replace("\n", " ")
+            message = (row.message or "").strip().replace("\n", " ")
             if message:
-                lines.append(f"{_clock(int(row['timestamp_ms']))} [{row['game']}] {message[:_SPEECH_LINE_CHARS]}")
+                lines.append(f"{_clock(row.timestamp_ms)} [{row.game}] {message[:_SPEECH_LINE_CHARS]}")
         return "\n".join(lines)
 
     async def _render_audience(self, live_session_id: int) -> str:

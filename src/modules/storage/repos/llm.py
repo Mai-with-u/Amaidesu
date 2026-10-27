@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -610,13 +609,13 @@ class LLMRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def _execute(self, sql: str, params: Any = ()) -> List[sqlite3.Row]:
-        """仓储内单条 SQL 执行（SELECT 为主），返回 Row 列表。"""
+    async def _execute(self, sql: str, params: Any = ()) -> List[Dict[str, Any]]:
+        """仓储内单条 SQL 执行（SELECT 为主），返回行 dict 列表（按列名取值）。"""
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[Dict[str, Any]]:
             with self._manager.transaction() as conn:
                 cursor = conn.execute(sql, params if params is not None else ())
-                return list(cursor.fetchall())
+                return [dict(row) for row in cursor.fetchall()]
 
         return await self._run_in_executor(_exec)
 

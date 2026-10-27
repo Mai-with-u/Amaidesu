@@ -33,6 +33,7 @@ from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayloa
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
+from src.modules.storage.models.sessions import LiveSessionListItem
 from src.modules.storage.repos import ChatRepo, SessionRepo
 
 if TYPE_CHECKING:
@@ -80,11 +81,10 @@ class LiveSessionManager:
         # 时刻封闭（没有可重建的真实结束边界）。本次进程不会自动开新场次；
         # 无显式场次期间，``resolve_pk()`` 返回 None，下游落库路径据此跳过。
         for row in await self._sessions.list_dangling_live_sessions():
-            ended = int(row["updated_at_ms"] or row["started_at_ms"])
-            await self._sessions.close_live_session(live_session_id=int(row["id"]), ended_at_ms=ended)
+            ended = int(row.updated_at_ms or row.started_at_ms)
+            await self._sessions.close_live_session(live_session_id=row.id, ended_at_ms=ended)
             logger.warning(
-                f"收口上次残留的进行中场次: id={row['id']} title={row['title']!r} "
-                f"（ended_at_ms 补为最后活动时刻 {ended}）"
+                f"收口上次残留的进行中场次: id={row.id} title={row.title!r} （ended_at_ms 补为最后活动时刻 {ended}）"
             )
 
         self._started = True
@@ -158,11 +158,11 @@ class LiveSessionManager:
         source = self._active_source or "manual"
 
         row = await self._sessions.get_live_session(live_session_id=pk)
-        if row is None or row["ended_at_ms"] is not None:
+        if row is None or row.ended_at_ms is not None:
             self._active_pk = None
             self._active_source = ""
             return False
-        started_at = int(row["started_at_ms"])
+        started_at = int(row.started_at_ms)
         await self._sessions.close_live_session(live_session_id=pk, ended_at_ms=ended_at_ms)
 
         details = await self._chat.count_session_details(live_session_id=pk)
@@ -257,7 +257,7 @@ class LiveSessionManager:
         limit: int = 50,
         source: Optional[str] = None,
         title_keyword: Optional[str] = None,
-    ) -> List:
+    ) -> List[LiveSessionListItem]:
         """场次列表（显式场次按开始时间倒序 + 消息数），供 Dashboard API / 控制台侧边栏。"""
         return await self._sessions.list_live_sessions(limit=limit, source=source, title_keyword=title_keyword)
 

@@ -18,8 +18,9 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
+from src.modules.storage.models.viewer_identity import PendingViewerSummary
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.utils.time_utils import now_ms
 
@@ -45,12 +46,12 @@ class ViewerIdentityError(ValueError):
 class ViewerIdentityRepo(BaseRepo):
     """观众身份的人工处理（WebUI 待确认页与观众档案页的写操作）。"""
 
-    async def list_pending(self, *, limit: int = 50, offset: int = 0) -> Tuple[int, List[sqlite3.Row]]:
+    async def list_pending(self, *, limit: int = 50, offset: int = 0) -> Tuple[int, List[PendingViewerSummary]]:
         """待确认观众（最近活跃在前）及其建议并入的老观众摘要，返回 ``(总数, 当页行)``。"""
         page_limit = max(1, min(int(limit), 200))
         page_offset = max(0, int(offset))
 
-        def _exec() -> Tuple[int, List[sqlite3.Row]]:
+        def _exec() -> Tuple[int, List[PendingViewerSummary]]:
             with self._manager.transaction() as conn:
                 total_row = conn.execute("SELECT COUNT(*) AS n FROM viewers WHERE link_status='pending'").fetchone()
                 rows = conn.execute(
@@ -64,7 +65,9 @@ class ViewerIdentityRepo(BaseRepo):
                     " WHERE v.link_status='pending' ORDER BY v.last_active_ms DESC LIMIT ? OFFSET ?",
                     (page_limit, page_offset),
                 ).fetchall()
-            return (int(total_row["n"]) if total_row else 0), list(rows)
+            return (int(total_row["n"]) if total_row else 0), [
+                PendingViewerSummary.model_validate(dict(row)) for row in rows
+            ]
 
         return await self._run_in_executor(_exec)
 
@@ -124,11 +127,12 @@ class ViewerIdentityRepo(BaseRepo):
 # -------------------- 事务内的同步步骤 --------------------
 
 
-def _load(conn: sqlite3.Connection, viewer_id: int) -> Optional[sqlite3.Row]:
-    return conn.execute("SELECT * FROM viewers WHERE id=?", (int(viewer_id),)).fetchone()
+def _load(conn: sqlite3.Connection, viewer_id: int) -> Optional[Dict[str, Any]]:
+    row = conn.execute("SELECT * FROM viewers WHERE id=?", (int(viewer_id),)).fetchone()
+    return dict(row) if row else None
 
 
-def _merge_rows(conn: sqlite3.Connection, src: sqlite3.Row, dst: sqlite3.Row) -> None:
+def _merge_rows(conn: sqlite3.Connection, src: Dict[str, Any], dst: Dict[str, Any]) -> None:
     """合并的落库步骤：外部 ID、计数与昵称、昵称记录、明细、画像、其他观众的并入建议。"""
     src_id, dst_id = int(src["id"]), int(dst["id"])
     # 先清空来源行的外部 ID，再写到目标行，避免两行同时持有同一 ID 撞唯一约束
@@ -177,7 +181,7 @@ def _merge_rows(conn: sqlite3.Connection, src: sqlite3.Row, dst: sqlite3.Row) ->
     conn.execute("DELETE FROM viewers WHERE id=?", (src_id,))
 
 
-def _split_id(conn: sqlite3.Connection, row: sqlite3.Row, id_kind: IdKind, column: str) -> int:
+def _split_id(conn: sqlite3.Connection, row: Dict[str, Any], id_kind: IdKind, column: str) -> int:
     """取消关联的落库步骤，返回新观众 ID。"""
     orig_id = int(row["id"])
     external_id = str(row[column])
@@ -273,7 +277,7 @@ def _detail_names(conn: sqlite3.Connection, viewer_id: int) -> List[Tuple[str, i
     return [(str(r["name"]), int(r["first_ms"]), int(r["last_ms"])) for r in rows]
 
 
-def _move_names(conn: sqlite3.Connection, orig_id: int, new_id: int, orig: sqlite3.Row) -> None:
+def _move_names(conn: sqlite3.Connection, orig_id: int, new_id: int, orig: Dict[str, Any]) -> None:
     """拆分后的昵称：新观众取改指明细里的昵称；原观众去掉只在那些明细里出现过的昵称。"""
     moved = _detail_names(conn, new_id)
     remaining = {name for name, _, _ in _detail_names(conn, orig_id)}

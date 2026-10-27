@@ -92,8 +92,8 @@ async def test_open_session_emits_started_and_switches_resolution(store: SQLiteD
 
     row = await store.sessions.get_live_session(live_session_id=pk)
     assert row is not None
-    assert row["source"] == "manual"
-    assert row["ended_at_ms"] is None
+    assert row.source == "manual"
+    assert row.ended_at_ms is None
 
 
 async def test_open_twice_auto_closes_previous(store: SQLiteDatabase, bus: EventBus) -> None:
@@ -144,7 +144,7 @@ async def test_close_session_with_details_keeps_row(store: SQLiteDatabase, bus: 
     assert closed is True
     row = await store.sessions.get_live_session(live_session_id=pk)
     assert row is not None
-    assert row["ended_at_ms"] is not None
+    assert row.ended_at_ms is not None
 
 
 async def test_close_without_active_returns_false(store: SQLiteDatabase, bus: EventBus) -> None:
@@ -198,7 +198,7 @@ async def test_startup_closes_dangling_sessions(store: SQLiteDatabase, bus: Even
 
     row = await store.sessions.get_live_session(live_session_id=dangling)
     assert row is not None
-    assert row["ended_at_ms"] == 9_000
+    assert row.ended_at_ms == 9_000
     assert manager.active_pk is None
 
 

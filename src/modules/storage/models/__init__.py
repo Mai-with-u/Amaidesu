@@ -16,6 +16,7 @@ from src.modules.storage.models.chat import (
     SuperChatRecord,
     ViewerSessionParticipation,
 )
+from src.modules.storage.models.events import GameEventRecord, GameEventTypeCount
 from src.modules.storage.models.memory import (
     EndedSessionWithoutRecap,
     SessionRecap,
@@ -31,6 +32,10 @@ from src.modules.storage.models.rundown import (
     RundownSegment,
     RundownTransition,
 )
+from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
+from src.modules.storage.models.sim import SimGift, SimPersona
+from src.modules.storage.models.topics import TimelineSummaryEntry
+from src.modules.storage.models.viewer_identity import PendingViewerSummary
 
 __all__ = [
     # chat 域
@@ -43,6 +48,9 @@ __all__ = [
     "SessionSpeechMoment",
     "SuperChatRecord",
     "ViewerSessionParticipation",
+    # events 域
+    "GameEventRecord",
+    "GameEventTypeCount",
     # memory 域
     "EndedSessionWithoutRecap",
     "SessionRecap",
@@ -56,4 +64,14 @@ __all__ = [
     "RundownInstanceSegment",
     "RundownSegment",
     "RundownTransition",
+    # sessions 域
+    "LiveSession",
+    "LiveSessionListItem",
+    # sim 域
+    "SimGift",
+    "SimPersona",
+    # topics 域
+    "TimelineSummaryEntry",
+    # viewer_identity 域
+    "PendingViewerSummary",
 ]

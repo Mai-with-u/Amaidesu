@@ -14,7 +14,9 @@ WINDOW = 90 * DAY
 OPEN_ID = "39b8fedb-60a5-4e29-ac75-b16955f7e632"
 
 
-async def _says(store: SQLiteDatabase, external_id: str, name: str, ts: int, *, kind: str = "account", **kw: Any) -> int:
+async def _says(
+    store: SQLiteDatabase, external_id: str, name: str, ts: int, *, kind: str = "account", **kw: Any
+) -> int:
     """模拟记账器收到一条弹幕：解析观众 → 落带观众 ID 的明细 → 计数，返回观众 ID。"""
     result = await store.viewers.resolve_viewer(
         platform="bilibili",
@@ -60,7 +62,7 @@ async def test_list_pending_and_keep_separate(store: SQLiteDatabase) -> None:
     old, pending = await _pending_pair(store)
     total, rows = await identity.list_pending()
     assert total == 1
-    assert (rows[0]["viewer_id"], rows[0]["candidate_id"], rows[0]["candidate_account_id"]) == (pending, old, "1001")
+    assert (rows[0].viewer_id, rows[0].candidate_id, rows[0].candidate_account_id) == (pending, old, "1001")
 
     assert await identity.keep_separate(viewer_id=pending) is True
     assert (await _row(store, pending))["link_status"] == "confirmed"

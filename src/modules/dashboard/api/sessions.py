@@ -18,7 +18,7 @@
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Annotated, Any, Optional
+from typing import TYPE_CHECKING, Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -47,6 +47,7 @@ from src.modules.dashboard.services.session_rundown import build_rundown_executi
 from src.modules.dashboard.services.session_timeline import build_timeline_items
 from src.modules.dashboard.utils.component_helper import config_dir
 from src.modules.logging import get_logger
+from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
 
 if TYPE_CHECKING:
     from src.modules.session.manager import LiveSessionManager
@@ -65,7 +66,7 @@ SessionManagerDep = Annotated[
 ]
 
 
-async def _fetch_session_row(server: "DashboardServer", session_id: int) -> Any:
+async def _fetch_session_row(server: "DashboardServer", session_id: int) -> LiveSession:
     """直查 live_sessions 行；场次行仓储未装配 503，行不存在 404。"""
     session_repo = server.session_repo
     if session_repo is None:
@@ -76,19 +77,19 @@ async def _fetch_session_row(server: "DashboardServer", session_id: int) -> Any:
     return row
 
 
-def _row_to_item(row: Any, active_pk: Optional[int]) -> SessionItem:
-    """live_sessions 行 → 列表条目。"""
-    ended = row["ended_at_ms"]
+def _row_to_item(row: LiveSessionListItem, active_pk: Optional[int]) -> SessionItem:
+    """live_sessions 列表行 → 列表条目。"""
+    ended = row.ended_at_ms
     return SessionItem(
-        live_session_id=int(row["id"]),
-        source=str(row["source"] or "manual"),
-        title=row["title"],
-        room_id=str(row["stream_id"] or ""),
-        platform=str(row["platform"] or ""),
-        started_at_ms=int(row["started_at_ms"]),
+        live_session_id=row.id,
+        source=row.source or "manual",
+        title=row.title,
+        room_id=row.stream_id or "",
+        platform=row.platform or "",
+        started_at_ms=int(row.started_at_ms),
         ended_at_ms=int(ended) if ended is not None else None,
-        message_count=int(row["message_count"] or 0) if "message_count" in row.keys() else 0,
-        is_active=active_pk is not None and int(row["id"]) == active_pk,
+        message_count=int(row.message_count or 0),
+        is_active=active_pk is not None and row.id == active_pk,
     )
 
 
@@ -229,8 +230,8 @@ async def session_timeline(
     window = await asyncio.to_thread(
         reader.collect,
         live_session_id=session_id,
-        started_at_ms=int(row["started_at_ms"]),
-        ended_at_ms=row["ended_at_ms"],
+        started_at_ms=int(row.started_at_ms),
+        ended_at_ms=row.ended_at_ms,
         before_timestamp_ms=before_timestamp_ms,
     )
     items, has_more = build_timeline_items(detail_rows, window.records, limit, before_timestamp_ms=before_timestamp_ms)
@@ -254,12 +255,7 @@ async def session_rundown_execution(
         raise HTTPException(status_code=503, detail="RundownTransitionRepo 未装配")
     row = await _fetch_session_row(server, session_id)
     transitions = await repo.list_by_session(session_id)
-    ended_raw = row["ended_at_ms"]
-    return build_rundown_execution(
-        session_id,
-        transitions,
-        ended_at_ms=int(ended_raw) if ended_raw is not None else None,
-    )
+    return build_rundown_execution(session_id, transitions, ended_at_ms=row.ended_at_ms)
 
 
 @router.delete("/{session_id}", response_model=SessionActionResponse)

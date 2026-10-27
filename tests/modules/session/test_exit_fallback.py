@@ -90,7 +90,7 @@ async def test_exit_fallback_settles_active_session(store: SQLiteDatabase, bus: 
 
     row = await store.sessions.get_live_session(live_session_id=pk)
     assert row is not None
-    assert row["ended_at_ms"] is not None, "兜底收工必须补写 ended_at_ms"
+    assert row.ended_at_ms is not None, "兜底收工必须补写 ended_at_ms"
     assert collector.ended and collector.ended[0].reason == FALLBACK_REASON
     assert collector.ended[0].live_session_id == pk
 
@@ -103,7 +103,7 @@ async def test_repeated_exit_does_not_settle_twice(store: SQLiteDatabase, bus: E
 
     pk = await _open_session_with_detail(store, manager)
     assert await manager.close_session(reason="进程退出") is True
-    first_ended = (await store.sessions.get_live_session(live_session_id=pk))["ended_at_ms"]
+    first_ended = (await store.sessions.get_live_session(live_session_id=pk)).ended_at_ms
     await asyncio.sleep(0.02)
     assert len(collector.ended) == 1
 
@@ -111,7 +111,7 @@ async def test_repeated_exit_does_not_settle_twice(store: SQLiteDatabase, bus: E
     assert await manager.close_session(reason=FALLBACK_REASON) is False
     await asyncio.sleep(0.02)
     row = await store.sessions.get_live_session(live_session_id=pk)
-    assert row is not None and row["ended_at_ms"] == first_ended
+    assert row is not None and row.ended_at_ms == first_ended
     assert len(collector.ended) == 1, "重复退出不得产生第二条 live.ended"
 
 
@@ -136,16 +136,16 @@ async def test_close_session_idempotent_when_row_already_settled(store: SQLiteDa
 
     pk = await _open_session_with_detail(store, manager)
     # 绕过 manager 直接在仓储层结账：模拟上次收尾在事件广播前被打断
-    started = (await store.sessions.get_live_session(live_session_id=pk))["started_at_ms"]
+    started = (await store.sessions.get_live_session(live_session_id=pk)).started_at_ms
     await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=int(started) + 5_000)
     settled = await store.sessions.get_live_session(live_session_id=pk)
-    assert settled is not None and settled["ended_at_ms"] == int(started) + 5_000
+    assert settled is not None and settled.ended_at_ms == int(started) + 5_000
 
     assert await manager.close_session(reason=FALLBACK_REASON) is False
     await asyncio.sleep(0.02)
     row = await store.sessions.get_live_session(live_session_id=pk)
     assert row is not None, "已结账行不得被兜底路径误删"
-    assert row["ended_at_ms"] == int(started) + 5_000, "已结账行不得被兜底路径改写"
+    assert row.ended_at_ms == int(started) + 5_000, "已结账行不得被兜底路径改写"
     assert collector.ended == [], "已结账行不得再次广播 live.ended"
     assert manager.active_pk is None, "内存态应被复位"
 
@@ -183,7 +183,7 @@ async def test_fallback_helper_settles_via_real_manager(store: SQLiteDatabase, b
 
     row = await store.sessions.get_live_session(live_session_id=pk)
     assert row is not None
-    assert row["ended_at_ms"] is not None
+    assert row.ended_at_ms is not None
 
 
 class _StubRecorder:
@@ -201,9 +201,7 @@ class _StubRecorder:
         self.ended_seen_at_stop = bool(self._collector.ended)
 
 
-async def test_shutdown_settles_session_before_event_telemetry_goes_down(
-    store: SQLiteDatabase, bus: EventBus
-) -> None:
+async def test_shutdown_settles_session_before_event_telemetry_goes_down(store: SQLiteDatabase, bus: EventBus) -> None:
     """收尾链顺序：场次结账的 live.ended 必须在事件历史记录器停止之前发出。
 
     结账若排在记录器/总线拆除之后（如兜底挂在 main() finally 位而常规

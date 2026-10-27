@@ -7,9 +7,9 @@
 
 from __future__ import annotations
 
-import sqlite3
 from typing import List, Optional
 
+from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
 from src.modules.storage.repos._base import BaseRepo
 
 
@@ -92,24 +92,26 @@ class SessionRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def get_live_session(self, *, live_session_id: int) -> Optional[sqlite3.Row]:
+    async def get_live_session(self, *, live_session_id: int) -> Optional[LiveSession]:
         """按场次主键查单行；未命中返回 None。"""
 
-        def _exec() -> Optional[sqlite3.Row]:
+        def _exec() -> Optional[LiveSession]:
             with self._manager.transaction() as conn:
-                return conn.execute("SELECT * FROM live_sessions WHERE id=?", (live_session_id,)).fetchone()
+                row = conn.execute("SELECT * FROM live_sessions WHERE id=?", (live_session_id,)).fetchone()
+                return LiveSession.model_validate(dict(row)) if row else None
 
         return await self._run_in_executor(_exec)
 
-    async def list_dangling_live_sessions(self) -> List[sqlite3.Row]:
+    async def list_dangling_live_sessions(self) -> List[LiveSession]:
         """列出未结账的显式场次（ended_at_ms IS NULL）。
 
         用于启动期收口：上次进程未正常退出的残留"进行中"场次。
         """
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[LiveSession]:
             with self._manager.transaction() as conn:
-                return list(conn.execute("SELECT * FROM live_sessions WHERE ended_at_ms IS NULL").fetchall())
+                rows = conn.execute("SELECT * FROM live_sessions WHERE ended_at_ms IS NULL").fetchall()
+                return [LiveSession.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
@@ -144,7 +146,7 @@ class SessionRepo(BaseRepo):
         limit: int = 50,
         source: Optional[str] = None,
         title_keyword: Optional[str] = None,
-    ) -> List[sqlite3.Row]:
+    ) -> List[LiveSessionListItem]:
         """列出场次（附消息数），供场次列表/回看选择。
 
         排序：按开始时间倒序。无显式场次期间不创建兜底行；列表只含历史
@@ -168,18 +170,17 @@ class SessionRepo(BaseRepo):
         where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         params.append(limit)
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[LiveSessionListItem]:
             with self._manager.transaction() as conn:
-                return list(
-                    conn.execute(
-                        "SELECT s.*, ("
-                        "SELECT COUNT(*) FROM live_chat c WHERE c.live_session_id = s.id"
-                        ") AS message_count "
-                        f"FROM live_sessions s {where_clause} "
-                        "ORDER BY s.started_at_ms DESC LIMIT ?",
-                        params,
-                    ).fetchall()
-                )
+                rows = conn.execute(
+                    "SELECT s.*, ("
+                    "SELECT COUNT(*) FROM live_chat c WHERE c.live_session_id = s.id"
+                    ") AS message_count "
+                    f"FROM live_sessions s {where_clause} "
+                    "ORDER BY s.started_at_ms DESC LIMIT ?",
+                    params,
+                ).fetchall()
+                return [LiveSessionListItem.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 

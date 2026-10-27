@@ -63,9 +63,7 @@ def test_notebook_clear_resets_for_next_session() -> None:
 @pytest.mark.asyncio
 async def test_tool_read_returns_placeholder_when_empty() -> None:
     provider = build_notebook_tool_provider(StreamerNotebook())
-    result = await provider.invoke(
-        ToolInvocation(tool_name="streamer_notebook", arguments={})
-    )
+    result = await provider.invoke(ToolInvocation(tool_name="streamer_notebook", arguments={}))
     assert "备忘录还是空的" in result.content
 
 
@@ -73,9 +71,7 @@ async def test_tool_read_returns_placeholder_when_empty() -> None:
 async def test_tool_write_overwrites_then_read_returns_full_text() -> None:
     notebook = StreamerNotebook()
     provider = build_notebook_tool_provider(notebook)
-    write = await provider.invoke(
-        ToolInvocation(tool_name="streamer_notebook", arguments={"content": "第一版结论"})
-    )
+    write = await provider.invoke(ToolInvocation(tool_name="streamer_notebook", arguments={"content": "第一版结论"}))
     assert write.content == "第一版结论"
     overwrite = await provider.invoke(
         ToolInvocation(tool_name="streamer_notebook", arguments={"content": "第二版结论"})
@@ -171,6 +167,7 @@ def test_recap_material_includes_notebook_snapshot() -> None:
 
 def test_recap_collect_material_carries_notebook_section() -> None:
     from src.agents.streamer.memory.recap import SessionRecapWriter
+    from src.modules.storage.models.sessions import LiveSession
 
     writer = SessionRecapWriter(
         sessions_repo=MagicMock(),
@@ -182,9 +179,8 @@ def test_recap_collect_material_carries_notebook_section() -> None:
     )
     # 场次头有内容（非空场次）才会走到原料拼接；各仓储 MagicMock 的 async 方法
     # 调用失败只降级省段，不影响备忘录段
-    material = asyncio.run(
-        writer._collect_material(1, {"started_at_ms": 1_760_000_000_000, "ended_at_ms": 1_760_003_600_000})
-    )
+    session_row = LiveSession(id=1, started_at_ms=1_760_000_000_000, ended_at_ms=1_760_003_600_000, updated_at_ms=1)
+    material = asyncio.run(writer._collect_material(1, session_row))
     assert "【主播备忘录（本场结束时的工作笔记全文）】" in material
     assert "翻篇：床名梗已退役" in material
 

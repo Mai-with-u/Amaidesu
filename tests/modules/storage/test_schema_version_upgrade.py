@@ -287,4 +287,4 @@ async def test_v11_drops_sim_window_column_keeping_personas(db_path: Path) -> No
             columns = await reopened.execute("PRAGMA table_info(sim_personas)")
             assert "context_window_size" not in {row["name"] for row in columns}
             rows = await reopened.sim.list_sim_personas()
-            assert [(r["user_nickname"], r["messages_generated"]) for r in rows] == [("老观众", 23)]
+            assert [(r.user_nickname, r.messages_generated) for r in rows] == [("老观众", 23)]

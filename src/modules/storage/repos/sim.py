@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from typing import Dict, List, Optional
 
+from src.modules.storage.models.sim import SimGift, SimPersona
 from src.modules.storage.repos._base import BaseRepo
 
 
@@ -47,16 +47,16 @@ class SimRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_sim_personas(self, *, include_inactive: bool = False) -> List[sqlite3.Row]:
+    async def list_sim_personas(self, *, include_inactive: bool = False) -> List[SimPersona]:
         """列出常驻人设（按昵称排序）；默认排除停用行。"""
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[SimPersona]:
             sql = "SELECT * FROM sim_personas"
             if not include_inactive:
                 sql += " WHERE is_active=1"
             sql += " ORDER BY user_nickname ASC"
             with self._manager.transaction() as conn:
-                return list(conn.execute(sql).fetchall())
+                return [SimPersona.model_validate(dict(row)) for row in conn.execute(sql).fetchall()]
 
         return await self._run_in_executor(_exec)
 
@@ -150,12 +150,15 @@ class SimRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_sim_gifts(self) -> List[sqlite3.Row]:
+    async def list_sim_gifts(self) -> List[SimGift]:
         """列出礼物目录（按 id 排序，保持插入顺序）。"""
 
-        def _exec() -> List[sqlite3.Row]:
+        def _exec() -> List[SimGift]:
             with self._manager.transaction() as conn:
-                return list(conn.execute("SELECT * FROM sim_gifts ORDER BY id ASC").fetchall())
+                return [
+                    SimGift.model_validate(dict(row))
+                    for row in conn.execute("SELECT * FROM sim_gifts ORDER BY id ASC").fetchall()
+                ]
 
         return await self._run_in_executor(_exec)
 

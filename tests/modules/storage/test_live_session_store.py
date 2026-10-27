@@ -31,26 +31,27 @@ async def test_session_row_lifecycle(store: SQLiteDatabase) -> None:
         stream_id="room-1", platform="bilibili", started_at_ms=1_000, title="晚间场", source="manual"
     )
     row = await sessions.get_live_session(live_session_id=pk)
-    assert (row["stream_id"], row["platform"], row["title"], row["source"]) == (
+    assert (row.stream_id, row.platform, row.title, row.source) == (
         "room-1",
         "bilibili",
         "晚间场",
         "manual",
     )
-    assert (row["started_at_ms"], row["ended_at_ms"]) == (1_000, None)  # NULL = 进行中
+    assert (row.started_at_ms, row.ended_at_ms) == (1_000, None)  # NULL = 进行中
 
     # 心跳只更新已存在行，不覆盖开行字段；行不存在返回 False 且不建行
     stats = {"heat": 3, "viewer_count": 42, "audience_total": 500, "updated_at_ms": 6_000}
     assert await sessions.update_live_session_stats(live_session_id=pk, **stats) is True
     row = await sessions.get_live_session(live_session_id=pk)
-    assert {k: row[k] for k in stats} == stats and row["started_at_ms"] == 1_000
+    assert (row.heat, row.viewer_count, row.audience_total, row.updated_at_ms) == (3, 42, 500, 6_000)
+    assert row.started_at_ms == 1_000
     assert await sessions.update_live_session_stats(live_session_id=999_999, **stats) is False
     assert len(await store.execute("SELECT * FROM live_sessions")) == 1
 
     # 结账幂等：重复结账不覆盖首次结束时间
     assert await sessions.close_live_session(live_session_id=pk, ended_at_ms=9_000) is True
     assert await sessions.close_live_session(live_session_id=pk, ended_at_ms=12_000) is False
-    assert (await sessions.get_live_session(live_session_id=pk))["ended_at_ms"] == 9_000
+    assert (await sessions.get_live_session(live_session_id=pk)).ended_at_ms == 9_000
     assert await sessions.close_live_session(live_session_id=424_242, ended_at_ms=9_000) is False
 
 
@@ -59,11 +60,11 @@ async def test_rename_session_title(store: SQLiteDatabase) -> None:
     pk = await sessions.insert_live_session(started_at_ms=1_000, title="旧标题")
     assert await sessions.update_live_session_title(live_session_id=pk, title="新标题", updated_at_ms=2_000) is True
     row = await sessions.get_live_session(live_session_id=pk)
-    assert (row["title"], row["updated_at_ms"]) == ("新标题", 2_000)
+    assert (row.title, row.updated_at_ms) == ("新标题", 2_000)
 
     # None 清除标题；行不存在返回 False 且不建行
     assert await sessions.update_live_session_title(live_session_id=pk, title=None, updated_at_ms=3_000) is True
-    assert (await sessions.get_live_session(live_session_id=pk))["title"] is None
+    assert (await sessions.get_live_session(live_session_id=pk)).title is None
     assert await sessions.update_live_session_title(live_session_id=999_999, title="x", updated_at_ms=4_000) is False
     assert len(await store.execute("SELECT * FROM live_sessions")) == 1
 
@@ -87,7 +88,7 @@ async def test_list_dangling_live_sessions_returns_unclosed(store: SQLiteDatabas
     await store.sessions.insert_live_session(started_at_ms=1_000, source="manual")
     ended = await store.sessions.insert_live_session(started_at_ms=2_000, source="legacy")
     await store.sessions.close_live_session(live_session_id=ended, ended_at_ms=3_000)
-    assert [r["source"] for r in await store.sessions.list_dangling_live_sessions()] == ["manual"]
+    assert [r.source for r in await store.sessions.list_dangling_live_sessions()] == ["manual"]
 
 
 async def test_list_sessions_order_counts_and_filters(store: SQLiteDatabase) -> None:
@@ -98,11 +99,11 @@ async def test_list_sessions_order_counts_and_filters(store: SQLiteDatabase) -> 
     await _chat(store, latest, 3_100)
 
     rows = await sessions.list_live_sessions()
-    assert rows[0]["id"] == latest and rows[-1]["id"] == early  # 开始时间倒序
-    assert {r["id"]: r["message_count"] for r in rows}[latest] == 1
+    assert rows[0].id == latest and rows[-1].id == early  # 开始时间倒序
+    assert {r.id: r.message_count for r in rows}[latest] == 1
 
     def titles(rows) -> list[str]:
-        return [r["title"] for r in rows]
+        return [r.title for r in rows]
 
     assert titles(await sessions.list_live_sessions(source="manual")) == ["周末午间场", "周五晚间场"]
     assert titles(await sessions.list_live_sessions(title_keyword="晚间")) == ["周五晚间场"]
@@ -129,7 +130,7 @@ async def test_background_light_tick_persists_stats_via_session_manager(store: S
     await maintainer._light_tick(now_ms=10_000)
 
     row = await store.sessions.get_live_session(live_session_id=pk)
-    assert (row["updated_at_ms"], row["heat"]) == (10_000, 1)  # 冷场默认热度 low → 1
+    assert (row.updated_at_ms, row.heat) == (10_000, 1)  # 冷场默认热度 low → 1
 
 
 async def test_background_tick_without_session_manager_creates_nothing(store: SQLiteDatabase) -> None:

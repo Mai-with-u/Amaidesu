@@ -414,7 +414,7 @@ class SessionReviewAggregator:
         if self.event_repo is None or not session_ids:
             return ReviewGame()
         rows = await self.event_repo.count_game_events_by_type(live_session_ids=session_ids)  # type: ignore[attr-defined]
-        by_type = {str(row["event_type"]): int(row["n"]) for row in rows}
+        by_type = {row.event_type: row.n for row in rows}
         game = ReviewGame(total=sum(by_type.values()), by_type=by_type)
         # 明细列表只服务单场视图（逐条锚定跳转回看）；合并视图保持空
         if len(session_ids) == 1:
@@ -423,10 +423,10 @@ class SessionReviewAggregator:
             )
             game.items = [
                 GameEventItem(
-                    game=str(row["game"]),
-                    event_type=str(row["event_type"]),
-                    message=str(row["message"] or ""),
-                    timestamp_ms=int(row["timestamp_ms"]),
+                    game=row.game,
+                    event_type=row.event_type,
+                    message=row.message or "",
+                    timestamp_ms=int(row.timestamp_ms),
                 )
                 for row in detail_rows
             ]

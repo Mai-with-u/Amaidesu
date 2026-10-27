@@ -7,8 +7,7 @@
 
 from __future__ import annotations
 
-import sqlite3
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.modules.storage.models.rundown import RundownInstance, RundownInstanceSegment
 from src.modules.storage.repos._base import BaseRepo
@@ -19,8 +18,8 @@ class RundownInstanceRepo(BaseRepo):
     """rundown_instances / rundown_instance_segments 两张表的读写。"""
 
     @staticmethod
-    def _assemble(header: sqlite3.Row, segment_rows: List[sqlite3.Row]) -> RundownInstance:
-        """头行 + 按 seq 有序的环节行 → :class:`RundownInstance`。"""
+    def _assemble(header: Dict[str, Any], segment_rows: List[Dict[str, Any]]) -> RundownInstance:
+        """头行 + 按 seq 有序的环节行 → :class:`RundownInstance`（行以 dict 形态传入，按列名取值）。"""
         return RundownInstance(
             live_session_id=int(header["live_session_id"]),
             template_id=str(header["template_id"]),
@@ -61,7 +60,7 @@ class RundownInstanceRepo(BaseRepo):
                     " FROM rundown_instance_segments WHERE live_session_id=? ORDER BY seq ASC",
                     (live_session_id,),
                 ).fetchall()
-                return self._assemble(header, segment_rows)
+                return self._assemble(dict(header), [dict(row) for row in segment_rows])
 
         return await self._run_in_executor(_exec)
 

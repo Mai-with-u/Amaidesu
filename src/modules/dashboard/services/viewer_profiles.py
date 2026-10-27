@@ -119,31 +119,31 @@ async def build_pending_viewers(
     total, rows = await identity_repo.list_pending(limit=limit, offset=offset)
     items: List[PendingViewerItem] = []
     for row in rows:
-        candidate_id = row["candidate_id"]
+        candidate_id = row.candidate_id
         names = await viewer_repo.list_names(viewer_id=int(candidate_id)) if candidate_id is not None else []
         items.append(
             PendingViewerItem(
-                viewer_id=int(row["viewer_id"]),
-                platform=str(row["platform"] or ""),
-                user_name=str(row["user_name"] or ""),
-                account_id=row["account_id"],
-                open_id=row["open_id"],
-                message_count=int(row["message_count"] or 0),
-                interaction_count=int(row["interaction_count"] or 0),
-                paid_amount=int(row["paid_amount"] or 0),
-                last_active_ms=int(row["last_active_ms"] or 0),
+                viewer_id=int(row.viewer_id),
+                platform=row.platform or "",
+                user_name=row.user_name or "",
+                account_id=row.account_id,
+                open_id=row.open_id,
+                message_count=int(row.message_count or 0),
+                interaction_count=int(row.interaction_count or 0),
+                paid_amount=int(row.paid_amount or 0),
+                last_active_ms=int(row.last_active_ms or 0),
                 candidate=(
-                    ViewerBrief(viewer_id=int(candidate_id), user_name=str(row["candidate_name"] or ""))
+                    ViewerBrief(viewer_id=int(candidate_id), user_name=row.candidate_name or "")
                     if candidate_id is not None
                     else None
                 ),
-                candidate_account_id=row["candidate_account_id"],
-                candidate_open_id=row["candidate_open_id"],
-                candidate_name_seen_ms=int(row["candidate_name_seen_ms"] or 0),
-                candidate_message_count=int(row["candidate_message_count"] or 0),
-                candidate_interaction_count=int(row["candidate_interaction_count"] or 0),
-                candidate_paid_amount=int(row["candidate_paid_amount"] or 0),
-                candidate_last_active_ms=int(row["candidate_last_active_ms"] or 0),
+                candidate_account_id=row.candidate_account_id,
+                candidate_open_id=row.candidate_open_id,
+                candidate_name_seen_ms=int(row.candidate_name_seen_ms or 0),
+                candidate_message_count=int(row.candidate_message_count or 0),
+                candidate_interaction_count=int(row.candidate_interaction_count or 0),
+                candidate_paid_amount=int(row.candidate_paid_amount or 0),
+                candidate_last_active_ms=int(row.candidate_last_active_ms or 0),
                 candidate_names=[name.user_name for name in names],
             )
         )
