@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>场次N 直播复盘 · YYYY-MM-DD</title>
+<!--
+  ═══════════════════════════════════════════════════════════════
+  直播复盘可视化页模板（综艺海报主题）——纯 HTML，样式与脚本外置
+  ═══════════════════════════════════════════════════════════════
+  产出流程（AI 按此执行）：
+  1. 样式与脚本不写进 HTML：页面以相对路径引用同目录 report.css 与 report.js。
+     写页面前先看目标目录（logs/reviews/）里有没有这两个文件——
+     缺则从本 skill 的 assets/ 原样拷贝过去；已存在则直接引用，不覆盖、不改动。
+  2. 目标路径：logs/reviews/session-{场次id}-{YYYY-MM-DD}.html
+     （场次 id = data/amaidesu.db 的 live_sessions.id；
+       WebUI 场次复盘页按 session-{id}- 前缀查找展示，勿改文件名约定。）
+  3. 复制本文件到目标路径，逐节把占位内容替换为本场数据；
+     每个章节前的 ══ 槽位 ══ 注释写明填法，填完可留可删。
+  4. 填完自查：占位词（场次N / YYYY-MM-DD / HH:MM:SS / N / …）零残留；
+     缺数据的章节整节删除，不留空壳。
+  已填实例：logs/reviews/session-45-2026-10-26.html
+-->
+<link rel="stylesheet" href="report.css">
+</head>
+<body>
+<div class="wrap">
+
+<!-- ══ 槽位1：场次头版（编号 / 起止 / 时长 / 平台与开播方式 / 版本锚点） ══ -->
+<header class="masthead">
+  <div class="sess">场次N<small>直播复盘</small></div>
+  <div class="when">YYYY-MM-DD 周X HH:MM:SS – HH:MM:SS（N 分钟）平台+开播方式</div>
+  <div class="meta">
+    <span>观众 <b>N</b></span><span>弹幕 <b>N</b></span><span>礼物/SC <b>N</b></span>
+    <span>本仓库 <b>分支@短hash</b></span><span>对端仓库（如涉游戏） <b>分支@短hash</b></span>
+  </div>
+</header>
+
+<nav class="jump" aria-label="章节导航">
+  <a href="#track">本场形状</a><a href="#stats">指标</a><a href="#tldr">结论</a><a href="#issues">问题</a>
+  <a href="#timeline">时间线</a><a href="#gametable">游戏表现</a><a href="#accept">修复验收</a><a href="#todo">待拍板</a>
+</nav>
+
+<!-- ══ 槽位2：本场形状条（.seg 数量按实际阶段增减；--w = 阶段分钟÷总分钟×100%；第3段样式=事故红条纹） ══ -->
+<h2 id="track">本场形状 <small>N 分钟去哪了</small></h2>
+<div class="track" role="img" aria-label="一句话概述各阶段时长分布与发言刻度">
+  <div class="seg" style="--w:25%" data-tooltip="阶段名 时长"><span class="in">N.N′</span></div>
+  <div class="seg" style="--w:25%" data-tooltip="阶段名 时长"><span class="in">N.N′</span></div>
+  <div class="seg" style="--w:25%" data-tooltip="事故/停摆段（红条纹）"><span class="in">停摆 N.N′</span></div>
+  <div class="seg" style="--w:25%" data-tooltip="阶段名 时长"><span class="in">N.N′</span></div>
+  <!-- 发言刻度：left = (发言时刻−开播时刻)秒 ÷ 场次总秒数 ×100%；场后发言不进条，在图注里说明 -->
+  <span class="tick" style="left:12%" data-tooltip="HH:MM:SS 发言摘要"></span>
+  <span class="tick" style="left:48%" data-tooltip="HH:MM:SS 发言摘要"></span>
+  <span class="tick" style="left:85%" data-tooltip="HH:MM:SS 发言摘要"></span>
+</div>
+<div class="track-legend">
+  <span><i class="sw" style="background:var(--track1)"></i>阶段一名称</span>
+  <span><i class="sw" style="background:var(--track2)"></i>阶段二名称</span>
+  <span><i class="sw" style="background:var(--bad)"></i>事故段名称</span>
+  <span><i class="sw" style="background:var(--track4)"></i>阶段四名称</span>
+  <span><i class="sw" style="background:var(--speech)"></i>发言刻度（N 条在场内，另 N 条说明）</span>
+</div>
+<p class="track-note">一句话读数：时间分布里最值得注意的形态（如空窗占比、前后密度差）。</p>
+
+<!-- ══ 槽位3：指标牌（4-8 块；异常 .bad/.warn，健康亮点 .good） ══ -->
+<h2 id="stats">指标牌</h2>
+<div class="stats">
+  <div class="stat"><div class="v">N 条</div><div class="l">发言（≈N 条/分钟）</div></div>
+  <div class="stat bad"><div class="v">N / N</div><div class="l">异常指标一句话说明</div></div>
+  <div class="stat warn"><div class="v">N 秒</div><div class="l">警戒指标一句话说明</div></div>
+  <div class="stat good"><div class="v">N</div><div class="l">健康亮点一句话说明</div></div>
+</div>
+
+<!-- ══ 槽位4：一句话结论（3-5 条；严重度着色 v-bad/v-warn/v-good） ══ -->
+<h2 id="tldr">一句话结论</h2>
+<ul class="verdicts">
+  <li class="v-good">健康面总评一两句（对照近期场次）。</li>
+  <li class="v-bad"><b>P1</b>　最重问题一句话结论。</li>
+  <li class="v-warn"><b>P2</b>　次重问题一句话结论。</li>
+</ul>
+
+<!-- ══ 槽位5：问题条目（与 markdown 复盘文档同源同序；三段式 现象/说明/修复或移交） ══ -->
+<h2 id="issues">问题条目</h2>
+
+<div class="issue p1">
+  <span class="lvl">P1-A</span><h3>问题标题：现象与根因一句话</h3>
+  <div class="blk"><span class="k">现象</span>带时间戳的证据序列，每条可回查。</div>
+  <div class="blk"><span class="k">说明</span>机制归因：读过的代码位置、设计意图核对结论。</div>
+  <div class="fix"><b>修复方向（待拍板）</b>：方案选项或唯一方案。</div>
+</div>
+
+<div class="issue p2">
+  <span class="lvl">P2-A</span><h3>次级问题标题</h3>
+  <div class="blk"><span class="k">现象</span>…</div>
+  <div class="blk"><span class="k">说明</span>…</div>
+  <div class="handoff"><b>归属</b>：外部仓库（分支@短hash），移交处置，本仓库不派工。</div>
+</div>
+
+<!-- ══ 槽位6：内容时间线（阶段划分；矛盾行必须 .conflict 且在 .tag 里编号 矛盾①②…） ══ -->
+<h2 id="timeline">内容时间线 <small>游戏 ⊕ 发言，矛盾逐条标注</small></h2>
+<div class="tl-bar">
+  <button class="on" data-f="all">全部</button>
+  <button data-f="game">游戏</button>
+  <button data-f="speech">发言</button>
+  <button data-f="conflict">矛盾</button>
+  <button data-f="key">关键点</button>
+  <span class="hint">点击阶段标题可折叠；金框 = 关键事件</span>
+</div>
+
+<div class="phase">
+  <div class="ph-head"><span class="no">一</span><h3>阶段名</h3><span class="rng">HH:MM:SS – HH:MM:SS</span><span class="arr">▼</span></div>
+  <div class="ph-body">
+    <div class="ev sys"><span class="t">HH:MM:SS</span><span class="tag">系统</span>生命周期/流程单/进程事件。</div>
+    <div class="ev game"><span class="t">HH:MM:SS</span><span class="tag">游戏</span>游戏侧事件（目标/战斗/天色/死亡）。</div>
+    <div class="ev speech"><span class="t">HH:MM:SS</span><span class="tag">发言</span><span class="say">"发言原文摘引"</span>（触发来源/事件支撑说明）</div>
+    <div class="ev conflict"><span class="t">HH:MM:SS</span><span class="tag">矛盾N</span><span class="say">"发言断言 X"</span>vs 游戏记录为 Y（证据指针）。定性。</div>
+    <div class="ev game key"><span class="t">HH:MM:SS</span><span class="ktag">关键</span><span class="tag">游戏</span>全场转折点事件。</div>
+  </div>
+</div>
+<!-- 更多阶段：复制上面 .phase 结构；全程确无矛盾时，在最后一个阶段后加一行文字说明"全程未发现矛盾" -->
+
+<!-- ══ 槽位7：游戏表现速读表（涉游戏场次；结果列 .ok/.bad/.warn） ══ -->
+<h2 id="gametable">游戏表现速读 <small>Mod 侧</small></h2>
+<table>
+  <tr><th>目标</th><th>内容</th><th>结果</th><th>备注</th></tr>
+  <tr><td>N</td><td>任务内容</td><td class="ok">成功</td><td>备注</td></tr>
+  <tr><td>N</td><td>任务内容</td><td class="bad">失败</td><td>失败原因一句话</td></tr>
+</table>
+<div class="goodbox"><b>健康面</b>：游戏行为里做对了的部分；走偏部分连同归属一并注明移交去处。</div>
+
+<!-- ══ 槽位8：既往修复验收（对照上一场复盘清单逐行给状态） ══ -->
+<h2 id="accept">既往修复验收</h2>
+<table>
+  <tr><th>既往问题</th><th>本场状态</th><th>备注</th></tr>
+  <tr><td>问题名（修复提交标识）</td><td class="ok">未复发/验收通过</td><td>证据一句话</td></tr>
+  <tr><td>问题名</td><td class="warn">部分生效</td><td>残缺形态与去向</td></tr>
+</table>
+
+<!-- ══ 槽位9：待拍板 + 好样本 ══ -->
+<h2 id="todo">待拍板</h2>
+<div class="issue" style="border-left-color:var(--good)">
+  <ul class="chk">
+    <li><b>编号</b>　事项一句话（归属/建议时点）</li>
+  </ul>
+  <div class="goodbox"><b>好样本（修复时勿改没）</b>：本场叙事/行为里值得保留的亮点。</div>
+</div>
+
+<footer class="foot">
+  数据源：<code>各日志与库路径列举</code>。<br>
+  完整文字版：<code>文字版复盘路径</code>。本页为复盘内部产物，不入版本管理。
+</footer>
+
+</div>
+<script src="report.js"></script>
+</body>
+</html>
