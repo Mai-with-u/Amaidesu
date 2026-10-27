@@ -22,13 +22,18 @@ class _SampleProvider(BaseToolProvider):
     def __init__(self, name: str = "sample", tool_names: List[str] | None = None) -> None:
         self._name = name
         self.tool_names: List[str] = tool_names if tool_names is not None else ["a", "b"]
+        # 声明名 → 可见名单（随 spec 声明；空条目 = 不声明落默认）
+        self.tool_visible: dict[str, list[str]] = {}
 
     @property
     def name(self) -> str:
         return self._name
 
     def list_tools(self):
-        return [ToolSpec(name=n, description=n, kind="sync", provider=self._name) for n in self.tool_names]
+        return [
+            ToolSpec(name=n, description=n, kind="sync", provider=self._name, visible_to=self.tool_visible.get(n))
+            for n in self.tool_names
+        ]
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         return await _ok(invocation)
@@ -63,7 +68,9 @@ def test_list_providers_keeps_degraded_zero_tool_provider_visible(registry: Tool
 def test_health_snapshot_and_annotations_delegate(registry: ToolRegistry) -> None:
     ops = _ops(registry)
     assert ops.tool_health_snapshot() == {}  # 无失败历史 → 空快照
-    registry.register_provider(_SampleProvider(), visible_to={"sample_a": ["minecraft"]})
+    provider = _SampleProvider()
+    provider.tool_visible = {"a": ["minecraft"]}
+    registry.register_provider(provider)
     assert ops.scoped_owner_of("sample_a") == "minecraft"  # 单个非默认 Agent = 专属归属
     assert ops.scoped_owner_of("sample_b") == ""  # 未声明落默认名单，无归属
     assert ops.scoped_owner_of("ghost") == ""  # 未注册工具
@@ -71,8 +78,13 @@ def test_health_snapshot_and_annotations_delegate(registry: ToolRegistry) -> Non
 
 
 async def test_reconnect_provider_error_reports(registry: ToolRegistry) -> None:
+    """失败报告携带机器可读 reason 枚举，中文文案保留在 error。"""
     ops = _ops(registry)
-    assert await ops.reconnect_provider("ghost") == {"ok": False, "error": "未注册 Provider: ghost"}
+    assert await ops.reconnect_provider("ghost") == {
+        "ok": False,
+        "reason": "not_registered",
+        "error": "未注册 Provider: ghost",
+    }
     registry.register_provider(_SampleProvider())
     report = await ops.reconnect_provider("sample")
-    assert report["ok"] is False and "不支持手动重连" in report["error"]
+    assert report["ok"] is False and report["reason"] == "not_supported" and "不支持手动重连" in report["error"]

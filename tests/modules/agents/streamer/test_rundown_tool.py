@@ -68,7 +68,7 @@ def _call(provider: RundownControlProvider, **arguments: Any) -> Dict[str, Any]:
 
 def _registry_with(provider: RundownControlProvider) -> ToolRegistry:
     registry = ToolRegistry()
-    registry.register_provider(build_rundown_tool_provider(provider), visible_to={"rundown_control": ["streamer"]})
+    registry.register_provider(build_rundown_tool_provider(provider))
     return registry
 
 

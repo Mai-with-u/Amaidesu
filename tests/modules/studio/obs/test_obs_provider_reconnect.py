@@ -74,18 +74,18 @@ async def test_obs_connect_does_not_reset_has_started(monkeypatch: pytest.Monkey
 
 
 async def test_obs_disconnect_closes_connection_and_keeps_has_started(monkeypatch: pytest.MonkeyPatch) -> None:
-    """disconnect 关闭 obs_connection + 置 is_connected=False，**不重置** _has_started。"""
+    """disconnect 关闭 obs_connection + 清连接标志（_connected=False），**不重置** _has_started。"""
     provider = _make_obs_provider(monkeypatch)
     conn = MagicMock()
     conn.disconnect = MagicMock()
     provider.obs_connection = conn
-    provider.is_connected = True
+    provider.mark_connected()
     provider._has_started = True
 
     assert await provider.disconnect() is True
     conn.disconnect.assert_called_once()
     assert provider.obs_connection is None
-    assert provider.is_connected is False
+    assert provider._connected is False
     assert provider._has_started is True  # 关键：不重置
 
 
@@ -102,11 +102,11 @@ async def test_obs_disconnect_swallows_close_exception(monkeypatch: pytest.Monke
     conn = MagicMock()
     conn.disconnect = MagicMock(side_effect=RuntimeError("boom"))
     provider.obs_connection = conn
-    provider.is_connected = True
+    provider.mark_connected()
 
     assert await provider.disconnect() is True
     assert provider.obs_connection is None
-    assert provider.is_connected is False
+    assert provider._connected is False
 
 
 # reconnect 默认组合
@@ -119,7 +119,7 @@ async def test_obs_reconnect_default_compose(monkeypatch: pytest.MonkeyPatch) ->
     conn = MagicMock()
     conn.disconnect = MagicMock()
     provider.obs_connection = conn
-    provider.is_connected = True
+    provider.mark_connected()
 
     assert await provider.reconnect() is True
     conn.disconnect.assert_called_once()

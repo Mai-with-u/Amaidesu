@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -48,9 +48,7 @@ def _planner(
         return reply_result
 
     spec = ToolSpec(name="reply", description="主播发言出口", kind="sync", provider="streamer")
-    registry.register_provider(
-        make_provider_from_specs("streamer", [(spec, _reply)]), visible_to={"streamer_reply": ["streamer"]}
-    )
+    registry.register_provider(make_provider_from_specs("streamer", [(spec, _reply)]))
     llm = MagicMock()
     llm.generate = AsyncMock(side_effect=list(responses))
     prompt = MagicMock()
@@ -148,7 +146,9 @@ _DELEGATED = ToolExecutionResult(
 def _relay_planner(result: ToolExecutionResult) -> tuple[Planner, MagicMock]:
     registry = MagicMock()
     registry.invoke = AsyncMock(return_value=result)
-    return Planner(PlannerConfig(), MagicMock(), MagicMock(), RoomState(), tool_registry=registry, context_enabled=False), registry
+    return Planner(
+        PlannerConfig(), MagicMock(), MagicMock(), RoomState(), tool_registry=registry, context_enabled=False
+    ), registry
 
 
 async def test_game_report_supersedes_inflight_intents() -> None:

@@ -137,7 +137,7 @@ async def test_connect_refused_reports_how_to_enable_websocket(
     provider = _provider()
 
     assert await provider.connect() is False
-    assert provider.obs_connection is None and provider.is_connected is False
+    assert provider.obs_connection is None and provider._connected is False
     assert any("启用 WebSocket 服务器" in message for message in _errors(loguru_capture))
 
 
@@ -161,7 +161,7 @@ async def test_failed_test_message_disconnects_half_open_client(
 
     assert await provider.connect() is False
     assert fake_obs.instances[0].disconnected is True
-    assert provider.obs_connection is None and provider.is_connected is False
+    assert provider.obs_connection is None and provider._connected is False
     assert any("找不到文本源「字幕」" in message for message in _errors(loguru_capture))
 
 

@@ -7,7 +7,8 @@ Dashboard 工具页与运维动作消费的"运营面"摘到本类：
 - 提供者目录视图（``list_providers``，工具页提供者卡片数据源）
 - 健康快照（``tool_health_snapshot``，熔断器状态的 dashboard 形状）
 - Dashboard 标注投影（``scoped_owner_of`` / ``provider_supports_reconnect``）
-- 手动重连编排（``reconnect_provider``：重连 → 工具集刷新 → 探活复位熔断）
+- 手动重连编排（``reconnect_provider``：重连 → 工具集刷新 → 探活复位熔断；
+  失败报告携带机器可读的 ``reason`` 枚举，供 HTTP 层映射状态码）
 
 只读依赖：构造注入 ``ToolRegistry``，不持有登记账目。依赖协议是**同包
 内部协议**——本类与 ``ToolRegistry`` 同包，允许读其私有登记账目
@@ -120,11 +121,15 @@ class ToolOperations:
         - ``provider_id`` = Provider.name（按登记列表线性查找）。
           provider.name 与 spec.provider 同值同源（注册期校验保证），外部
           （Dashboard 等）传提供者短名即可命中。
-        - 未找到 → ``{"ok": False, "error": "未注册 Provider: <id>"}``
+        - 失败报告携带机器可读的 ``reason`` 字段（``not_registered`` /
+          ``not_supported`` / ``reconnect_failed``），中文文案保留在
+          ``error``——HTTP 层按 reason 映射状态码，不做文案子串匹配。
+        - 未找到 → ``{"ok": False, "reason": "not_registered", "error": ...}``
         - 找到但不支持重连（非 BaseToolProvider 或 ``supports_reconnect``
-          为 False）→ ``{"ok": False, "error": "Provider ... 不支持手动重连"}``
+          为 False）→ ``{"ok": False, "reason": "not_supported", "error": ...}``
         - 找到且支持 → ``await provider.reconnect()``：
-          - 失败 → ``{"ok": False, "error": "重连失败...", "provider_id": <id>}``
+          - 失败 → ``{"ok": False, "reason": "reconnect_failed", "error": ...,
+            "provider_id": <id>}``
           - 成功 → 经 registry 刷新工具集（降级登记补注册 / 清单换血），
             再反查归属工具逐个 ``probe_tool``，通过且 ``is_tripped`` 即
             ``recover_tool``；返回 ``{"ok": True, "provider_id": ...,
@@ -136,7 +141,7 @@ class ToolOperations:
         provider = next((p for p in registry._providers if p.name == provider_id), None)
         if provider is None:
             logger.warning(f"手动重连失败：未注册 Provider '{provider_id}'")
-            return {"ok": False, "error": f"未注册 Provider: {provider_id}"}
+            return {"ok": False, "reason": "not_registered", "error": f"未注册 Provider: {provider_id}"}
         if not isinstance(provider, BaseToolProvider) or not provider.supports_reconnect:
             logger.warning(
                 f"手动重连失败：Provider '{provider_id}'（class={type(provider).__name__}）"
@@ -144,6 +149,7 @@ class ToolOperations:
             )
             return {
                 "ok": False,
+                "reason": "not_supported",
                 "error": f"Provider '{provider_id}' 不支持手动重连",
             }
 
@@ -157,6 +163,7 @@ class ToolOperations:
             )
             return {
                 "ok": False,
+                "reason": "reconnect_failed",
                 "error": f"重连失败: {type(exc).__name__}: {exc}",
                 "provider_id": provider_id,
             }
@@ -164,6 +171,7 @@ class ToolOperations:
             logger.warning(f"Provider '{provider_id}' 手动重连失败（provider.reconnect 返回 False）")
             return {
                 "ok": False,
+                "reason": "reconnect_failed",
                 "error": "重连失败: provider.reconnect 返回 False",
                 "provider_id": provider_id,
             }

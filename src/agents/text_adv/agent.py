@@ -313,13 +313,9 @@ class TextAdvGameAgent(BaseAgent):
 
     async def _on_start(self) -> None:
         """启动钩子：注册工具面并置位运行标记；观察循环由 set_auto 命令拉起（空闲零消耗）。"""
-        # 函数内 import：tools 模块反向引用本模块（循环 import 规避）
-        from .tools import build_text_adv_visible_to
-
         count = self.register_tool_provider(
             self._tool_provider,
             registry=self._tool_registry,
-            visible_to=build_text_adv_visible_to(),
         )
         self._logger.info(f"TextAdvGameAgent 已启动（工具面注册 {count} 个；等待 set_auto 命令）")
 

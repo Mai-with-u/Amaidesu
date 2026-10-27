@@ -9,7 +9,7 @@ from typing import List
 import pytest
 
 from src.agents.game_2048 import Board2048, Game2048Agent, Game2048Config, MoveDirection
-from src.agents.game_2048.tools import Game2048ToolProvider, build_game_2048_visible_to
+from src.agents.game_2048.tools import Game2048ToolProvider
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GameBoardStatePayload, GamePayload
@@ -144,10 +144,12 @@ async def test_get_state_tool_returns_the_snapshot_shape(provider) -> None:
 
 
 def test_both_tools_are_visible_to_the_streamer_only() -> None:
-    visible_to = build_game_2048_visible_to()
+    """名单随 spec 声明：两个工具的 visible_to 都显式仅主播。"""
+    agent = Game2048Agent(Game2048Config(), rng=random.Random(1))
+    specs = list(Game2048ToolProvider(agent=agent).list_tools())
 
-    assert set(visible_to) == {"game_2048_press", "game_2048_get_state"}
-    assert all(agents == ["streamer"] for agents in visible_to.values())
+    assert {s.full_name for s in specs} == {"game_2048_press", "game_2048_get_state"}
+    assert all(spec.visible_to == ["streamer"] for spec in specs)
 
 
 def test_board_new_game_spawns_two_tiles() -> None:
@@ -171,6 +173,6 @@ def test_tool_guide_declares_remote_control_shape() -> None:
     assert "framework_delegate" in guide and "没有后台任务" in guide
 
     registry = ToolRegistry()
-    registry.register_provider(provider, visible_to=build_game_2048_visible_to())
+    registry.register_provider(provider)
     assert registry.guides(for_agent="streamer") == [("game_2048", guide)]
     assert registry.guides(for_agent="minecraft") == []

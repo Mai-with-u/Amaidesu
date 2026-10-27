@@ -9,7 +9,6 @@
 - :class:`Game2048Config` — Agent 配置 Schema（Pydantic；包内单一权威）
 - :class:`Board2048` — 2048 规则引擎（纯逻辑，随机源构造注入）
 - :class:`Game2048ToolProvider` — 工具面 Provider（press/get_state）
-- :func:`build_game_2048_visible_to` — 两工具的可见名单映射（全部仅主播）
 """
 
 from src.agents.game_2048.agent import Game2048Agent, build_game_2048_agent
@@ -17,7 +16,6 @@ from src.agents.game_2048.board import Board2048, MoveDirection
 from src.agents.game_2048.config import Game2048Config
 from src.agents.game_2048.tools import (
     Game2048ToolProvider,
-    build_game_2048_visible_to,
 )
 
 __all__ = [
@@ -31,5 +29,4 @@ __all__ = [
     "MoveDirection",
     # 工具面
     "Game2048ToolProvider",
-    "build_game_2048_visible_to",
 ]

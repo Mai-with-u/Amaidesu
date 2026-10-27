@@ -312,14 +312,25 @@ async def test_tool_round_trip_keeps_openai_format_and_ids(start_agent) -> None:
     assert agent.get_state_snapshot()["notebook"] == "坐标 (10,20)"
 
 
-def _single_tool_provider(tool: str, result: ToolExecutionResult) -> BaseToolProvider:
+def _single_tool_provider(
+    tool: str, result: ToolExecutionResult, visible_to: list[str] | None = None
+) -> BaseToolProvider:
     class _Provider(BaseToolProvider):
         category = "game"
         name = "maicraft"
 
         def list_tools(self):
             schema = {"type": "object"}
-            return [ToolSpec(name=tool, description=tool, parameters_schema=schema, kind="sync", provider="maicraft")]
+            return [
+                ToolSpec(
+                    name=tool,
+                    description=tool,
+                    parameters_schema=schema,
+                    kind="sync",
+                    provider="maicraft",
+                    visible_to=visible_to,
+                )
+            ]
 
         async def invoke(self, invocation: ToolInvocation):
             return replace(result, tool_name=invocation.tool_name)
@@ -330,8 +341,8 @@ def _single_tool_provider(tool: str, result: ToolExecutionResult) -> BaseToolPro
 async def test_mcp_tool_is_listed_and_invoked_via_registry(start_agent) -> None:
     registry = ToolRegistry()
     ok = ToolExecutionResult(tool_name="", success=True, structured_content={"ok": True, "view": "situation"})
-    # MCP 透传工具默认只对主播可见，minecraft 需显式授权
-    registry.register_provider(_single_tool_provider("perceive", ok), visible_to={"maicraft_perceive": ["minecraft"]})
+    # MCP 透传工具默认只对主播可见（fail-closed），minecraft 可见需 spec 显式声明
+    registry.register_provider(_single_tool_provider("perceive", ok, visible_to=["minecraft"]))
     calls = 0
 
     async def fake(messages, **kwargs):

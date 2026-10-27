@@ -58,7 +58,10 @@ async def test_minecraft_stop_removes_its_provider_and_closes_the_mcp_client_exa
     client = MagicMock(close=AsyncMock())
     provider = MagicMock(setup=AsyncMock(return_value=1))
     provider.name = "maicraft"
-    provider.list_tools = lambda: [ToolSpec(name="greet", description="g", provider="maicraft")]
+    # 替身 spec 自带 minecraft 名单（真实 MaicraftMcpProvider.list_tools 的盖章语义）
+    provider.list_tools = lambda: [
+        ToolSpec(name="greet", description="g", provider="maicraft", visible_to=["minecraft"])
+    ]
 
     with (
         patch("src.modules.mcp.client.McpClient", return_value=client),

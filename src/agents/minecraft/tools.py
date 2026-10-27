@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, Optional
+from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.mcp.provider import McpToolProvider
@@ -61,6 +61,18 @@ STREAMER_GUIDE = (
 # 上报回调形态：kind/content/scene 入参 → 拒绝原因（None=受理）。
 # 拒绝语义（交付门禁）由 Agent 侧判定——工具层只透传结果。
 ReportCallback = Callable[[str, str, str], Awaitable[Optional[str]]]
+
+# 局部工具可见名单（按声明名）：本地件只有 minecraft 自己可见；get_work_log
+# 与 glance 是主播的读服务。list_tools 逐 spec 盖到 ``visible_to`` 字段。
+_LOCAL_VISIBLE_TO: Dict[str, List[str]] = {
+    "todo": ["minecraft"],
+    "notebook": ["minecraft"],
+    "report": ["minecraft"],
+    "wait": ["minecraft"],
+    "get_work_log": ["streamer"],
+    "glance": ["streamer"],
+    "skill": ["minecraft"],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +295,18 @@ class MaicraftMcpProvider(McpToolProvider):
     + ``task_status_map``）声明；MaiCraft v1 没有那种工具，任务快照经
     ``goal(get)`` 读、账本编号要先还原成目标编号——形态对不上，所以在绑定处
     用子类就地适配：``goal_lookup`` 由 Agent 注入（即宿主自己的 MaiCraft 读取通道）。
+
+    可见名单：全部工具只给 minecraft 自己（主播看游戏走 minecraft_glance 精简
+    视图），在 ``list_tools`` 逐 spec 盖 ``visible_to``——server 侧清单刷新
+    （重连换血）后新工具同样经此路径携带名单。
     """
+
+    def list_tools(self) -> Iterable[ToolSpec]:
+        """缓存清单 + 逐 spec 盖 minecraft 名单（server 侧声明不携带名单）。"""
+        specs = list(super().list_tools())
+        for spec in specs:
+            spec.visible_to = ["minecraft"]
+        return specs
 
     def __init__(
         self, *, goal_lookup: Callable[[str, Dict[str, Any]], Awaitable[MaicraftReply]], **kwargs: Any
@@ -349,6 +372,9 @@ class MinecraftToolProvider(BaseToolProvider):
             specs.append(build_glance_spec())
         if self.skill_reader is not None:
             specs.append(build_skill_spec(PROVIDER_NAME))
+        # 逐 spec 盖可见名单（技能工具未注入读取器时本就不提供，名单映射无残留键）
+        for spec in specs:
+            spec.visible_to = list(_LOCAL_VISIBLE_TO[spec.name])
         return specs
 
     def guide_for(self, agent_name: str) -> str:

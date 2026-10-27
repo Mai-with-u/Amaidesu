@@ -672,20 +672,16 @@ class StreamerAgent(BaseAgent):
         # 注册：reply 与 rundown_control（可见名单 ["streamer"]）；经基类入口
         # 登记归属，stop 路径逐一摘除（disable/重建不留残留工具）
         if self._tool_registry is not None:
-            self.register_tool_provider(
-                self._reply_provider, registry=self._tool_registry, visible_to={"streamer_reply": ["streamer"]}
-            )
+            self.register_tool_provider(self._reply_provider, registry=self._tool_registry)
             self.register_tool_provider(
                 build_rundown_tool_provider(self._rundown_coord.tool_provider),
                 registry=self._tool_registry,
-                visible_to={"rundown_control": ["streamer"]},
             )
             registered = "streamer_reply / rundown_control"
             # 备忘录工具：随主播 Agent 无条件注册（会话内状态，不依赖任何仓储）
             self.register_tool_provider(
                 build_notebook_tool_provider(self._notebook, event_bus=self._event_bus),
                 registry=self._tool_registry,
-                visible_to={"streamer_notebook": ["streamer"]},
             )
             registered += " / streamer_notebook"
             if self._recap_repo is not None and self._profile_repo is not None:
@@ -697,7 +693,6 @@ class StreamerAgent(BaseAgent):
                         current_session_provider=self._current_session_pk,
                     ),
                     registry=self._tool_registry,
-                    visible_to={"memory_recall_session": ["streamer"], "memory_recall_viewer": ["streamer"]},
                 )
                 registered += " / memory_recall_session / memory_recall_viewer"
             self._logger.info(f"StreamerAgent 工具已注册：{registered}（名单 [streamer]）")

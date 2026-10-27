@@ -40,6 +40,10 @@ class ToolSpec:
         output_schema: 可选的 JSON Schema 形态的输出描述
         result_section: 调用结果在上下文计量中另记的分段（如技能读取记入
                         ``skills``）；空串 = 计入对话消息
+        visible_to: 可见的 Agent 注册名列表或 ``["*"]``（全员）；None =
+                    落注册表默认名单 ``DEFAULT_VISIBLE_TO``（仅主播，
+                    fail-closed）。名单随 spec 声明，工具集刷新时天然
+                    对新工具生效；注册表据此现算可见性账目。
     """
 
     name: str
@@ -50,6 +54,7 @@ class ToolSpec:
     provider: str = ""
     output_schema: Optional[Dict[str, Any]] = None
     result_section: str = ""
+    visible_to: Optional[List[str]] = None
 
     @property
     def full_name(self) -> str:

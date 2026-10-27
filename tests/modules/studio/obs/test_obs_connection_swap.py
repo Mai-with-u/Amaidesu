@@ -69,7 +69,7 @@ async def test_disconnect_and_cleanup_drop_tools(monkeypatch: pytest.MonkeyPatch
 
     provider.obs_connection = MagicMock(disconnect=MagicMock())
     assert await provider.disconnect() is True
-    assert provider.is_connected is False
+    assert provider._connected is False
     assert provider.list_tools() == []  # 断连后工具不再暴露可调（缺陷修复点）
 
     provider.mark_connected()

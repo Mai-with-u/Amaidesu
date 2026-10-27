@@ -256,9 +256,7 @@ def _planner_with_real_provider(provider: ReplyToolProvider, responses: List[Any
 
     registry = ToolRegistry()
     spec = ToolSpec(name="reply", description="主播发言出口", kind="sync", provider="streamer")
-    registry.register_provider(
-        make_provider_from_specs("streamer", [(spec, provider.invoke)]), visible_to={"streamer_reply": ["streamer"]}
-    )
+    registry.register_provider(make_provider_from_specs("streamer", [(spec, provider.invoke)]))
     llm = MagicMock()
     llm.generate = AsyncMock(side_effect=list(responses))
     prompt = MagicMock()

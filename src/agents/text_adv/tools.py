@@ -1,7 +1,7 @@
 """文字冒险 Agent 工具面（text_adv_advance / choose / set_auto / get_state）
 
-主播与游戏之间的全部接口，名单全部 ``["streamer"]``（名单映射由
-:func:`build_text_adv_visible_to` 提供，注册处声明）。
+主播与游戏之间的全部接口，名单全部 ``["streamer"]``（各 spec 的
+``visible_to`` 字段声明）。
 
 工具语义要点：
 - ``choose`` 与 ``set_auto`` 的动作出口是**鼠标点击**（目标作品实测：选项
@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Dict, Iterable, List, Optional
+from typing import Any, Callable, ClassVar, Dict, Iterable, Optional
 
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
@@ -103,6 +103,7 @@ def build_advance_spec() -> ToolSpec:
         parameters_schema={"type": "object", "properties": {}, "required": []},
         kind="sync",
         provider=PROVIDER_NAME,
+        visible_to=["streamer"],
         output_schema=_SNAPSHOT_OUTPUT_SCHEMA,
     )
 
@@ -131,6 +132,7 @@ def build_choose_spec() -> ToolSpec:
         },
         kind="sync",
         provider=PROVIDER_NAME,
+        visible_to=["streamer"],
         output_schema=_SNAPSHOT_OUTPUT_SCHEMA,
     )
 
@@ -155,6 +157,7 @@ def build_set_auto_spec() -> ToolSpec:
         },
         kind="sync",
         provider=PROVIDER_NAME,
+        visible_to=["streamer"],
         output_schema=_SNAPSHOT_OUTPUT_SCHEMA,
     )
 
@@ -173,16 +176,9 @@ def build_get_state_spec() -> ToolSpec:
         parameters_schema={"type": "object", "properties": {}, "required": []},
         kind="sync",
         provider=PROVIDER_NAME,
+        visible_to=["streamer"],
         output_schema=_SNAPSHOT_OUTPUT_SCHEMA,
     )
-
-
-def build_text_adv_visible_to() -> Dict[str, List[str]]:
-    """四个工具的可见名单映射（注册处声明）：全部仅主播可见。"""
-    return {
-        spec.full_name: ["streamer"]
-        for spec in (build_advance_spec(), build_choose_spec(), build_set_auto_spec(), build_get_state_spec())
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +198,7 @@ class TextAdvToolProvider(BaseToolProvider):
 
     注入模式（继承 + 构造注入）：
         >>> provider = TextAdvToolProvider(agent=agent, input_backend=backend)
-        >>> registry.register_provider(provider, visible_to=build_text_adv_visible_to())
+        >>> registry.register_provider(provider)
     """
 
     agent: TextAdvGameAgent
@@ -484,5 +480,4 @@ __all__ = [
     "build_choose_spec",
     "build_set_auto_spec",
     "build_get_state_spec",
-    "build_text_adv_visible_to",
 ]

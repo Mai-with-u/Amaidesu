@@ -22,13 +22,18 @@ class _Minimal(BaseToolProvider):
     def __init__(self, name: str = "minimal") -> None:
         self._name = name
         self.tool_names: List[str] = ["x"]
+        # 声明名 → 可见名单（随 spec 声明；空条目 = 不声明落默认）
+        self.tool_visible: dict[str, list[str]] = {}
 
     @property
     def name(self) -> str:
         return self._name
 
     def list_tools(self):
-        return [ToolSpec(name=n, description=n, kind="sync", provider=self._name) for n in self.tool_names]
+        return [
+            ToolSpec(name=n, description=n, kind="sync", provider=self._name, visible_to=self.tool_visible.get(n))
+            for n in self.tool_names
+        ]
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
@@ -231,30 +236,29 @@ def test_zero_tool_provider_keeps_record_and_refresh_resyncs_specs(registry: Too
 
 
 def test_refresh_rederives_visibility_and_keeps_persisting_tripped_state(registry: ToolRegistry) -> None:
+    """名单随 spec 声明：换血后新工具携带自身名单（不落默认），存续工具保留熔断待探活。"""
     provider = _Connectable("mprov")
     provider.tool_names = ["a", "gone"]
-    calls: List[int] = []
-
-    def policy(specs):
-        calls.append(len(specs))
-        return {s.full_name: ["minecraft"] for s in specs}
-
-    registry.register_provider(provider, visible_to=policy)
+    registry.register_provider(provider)
+    assert registry.visible_to_of("mprov_a") == ["streamer"]  # spec 未声明 = 默认名单
     for _name in ("mprov_a", "mprov_gone"):
         _force_tripped(registry, _name)
 
     provider.tool_names = ["a", "new_tool"]
+    # 换血后 provider 的 spec 缓存整体重建：每个 spec 自带名单声明（新工具给 minecraft）
+    provider.tool_visible = {"new_tool": ["minecraft"]}
     report = registry.refresh_provider_tools(provider)
     assert report["ok"] is True and report["removed"] == ["mprov_gone"]
-    assert registry.visible_to_of("mprov_new_tool") == ["minecraft"] and len(calls) == 2  # 新工具按策略重派，不落默认
+    assert registry.visible_to_of("mprov_new_tool") == ["minecraft"]  # 新工具按自身 spec 名单，不落默认
+    assert registry.visible_to_of("mprov_a") == ["streamer"]
     assert registry.is_tripped("mprov_a")  # 存续工具保留熔断待探活状态
     assert not registry.has("mprov_gone") and "mprov_gone" not in registry._health  # 消失工具连带清除
 
     static = _Connectable("sprov")
     static.tool_names = ["a", "gone"]
-    registry.register_provider(static, visible_to={"sprov_a": ["streamer"], "sprov_gone": ["streamer"]})
+    registry.register_provider(static)
     static.tool_names = ["a"]
-    assert registry.refresh_provider_tools(static)["ok"] is True  # 静态名单过滤已消失的键，不抛错
+    assert registry.refresh_provider_tools(static)["ok"] is True  # 换血不因名单残留报错（名单随 spec 走）
     assert registry.visible_to_of("sprov_a") == ["streamer"]
 
 
@@ -286,7 +290,8 @@ def test_unregister_removes_every_internal_map_idempotently_and_keeps_others(reg
     provider.tool_names = ["alpha", "beta"]
     provider.category = "test"
     other = _Minimal("other")
-    registry.register_provider(provider, visible_to={"echo_alpha": ["minecraft"]})
+    provider.tool_visible = {"alpha": ["minecraft"]}
+    registry.register_provider(provider)
     registry.register_provider(other)
 
     assert registry.unregister_provider(provider) == 2

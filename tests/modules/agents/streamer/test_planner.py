@@ -69,10 +69,7 @@ def _make_planner(
         prov.invoke = AsyncMock(return_value=_REPLY_RESULT)
     if isinstance(reg, ToolRegistry) and not reg.has("streamer_reply"):
         spec = ToolSpec(name="reply", description="主播发言出口", kind="sync", provider="streamer")
-        reg.register_provider(
-            make_provider_from_specs("streamer", [(spec, lambda inv: prov.invoke(inv))]),
-            visible_to={"streamer_reply": ["streamer"]},
-        )
+        reg.register_provider(make_provider_from_specs("streamer", [(spec, lambda inv: prov.invoke(inv))]))
 
     planner = Planner(
         config=PlannerConfig(planner_max_steps=max_steps),
@@ -349,16 +346,17 @@ class _GuideProvider:
 
     category = "game"
 
-    def __init__(self, name: str, guide: str) -> None:
+    def __init__(self, name: str, guide: str, visible_to: list[str] | None = None) -> None:
         self._name = name
         self._guide = guide
+        self._visible_to = visible_to
 
     @property
     def name(self) -> str:
         return self._name
 
     def list_tools(self):
-        return [ToolSpec(name="act", description="动作", kind="sync", provider=self._name)]
+        return [ToolSpec(name="act", description="动作", kind="sync", provider=self._name, visible_to=self._visible_to)]
 
     async def invoke(self, invocation):  # type: ignore[no-untyped-def]
         return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
@@ -377,9 +375,7 @@ def test_game_rules_without_guides_says_no_game() -> None:
 def test_game_rules_lists_remote_game_guide_without_delegate_rules() -> None:
     """只有遥控型游戏：玩法段就是它的说明，不追加委派守则（prompt 只渲染主模板）。"""
     reg = ToolRegistry()
-    reg.register_provider(
-        _GuideProvider("game_x", "X 是遥控型游戏：用 game_x_act 按一下"), visible_to={"game_x_act": ["streamer"]}
-    )
+    reg.register_provider(_GuideProvider("game_x", "X 是遥控型游戏：用 game_x_act 按一下"))
     planner, _llm, prompt = _make_planner(registry=reg)
 
     rules = planner._render_game_rules()
@@ -391,8 +387,8 @@ def test_game_rules_lists_remote_game_guide_without_delegate_rules() -> None:
 def test_game_rules_appends_delegate_rules_when_framework_guide_present() -> None:
     """framework 工具面给出说明（有能接收委派的 Agent）：玩法段追加委派守则子模板。"""
     reg = ToolRegistry()
-    reg.register_provider(_GuideProvider("framework", "委派型游戏：mc=..."), visible_to={"framework_act": ["*"]})
-    reg.register_provider(_GuideProvider("mc", "Minecraft 走委派"), visible_to={"mc_act": ["streamer"]})
+    reg.register_provider(_GuideProvider("framework", "委派型游戏：mc=...", visible_to=["*"]))
+    reg.register_provider(_GuideProvider("mc", "Minecraft 走委派"))
     planner, _llm, prompt = _make_planner(registry=reg)
     prompt.render = MagicMock(return_value="【委派守则】")
 
@@ -406,7 +402,7 @@ def test_game_rules_appends_delegate_rules_when_framework_guide_present() -> Non
 async def test_system_prompt_render_receives_game_rules() -> None:
     """plan() 渲染系统提示词时把拼好的玩法段作为 game_rules 变量传给模板。"""
     reg = ToolRegistry()
-    reg.register_provider(_GuideProvider("game_x", "X 的玩法"), visible_to={"game_x_act": ["streamer"]})
+    reg.register_provider(_GuideProvider("game_x", "X 的玩法"))
     planner, _llm, prompt = _make_planner(chat_responses=[_resp()], registry=reg)
 
     await planner.plan([_msg("主播好")])

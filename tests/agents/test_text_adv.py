@@ -17,7 +17,6 @@ from src.agents.text_adv import (
     TextAdvGameAgent,
     TextAdvToolProvider,
     build_text_adv_agent,
-    build_text_adv_visible_to,
 )
 from src.agents.text_adv.input import FakeInputBackend
 from src.agents.text_adv.vlm import FakeVisionReader, ScreenReading
@@ -270,7 +269,7 @@ async def test_tools_are_streamer_only_and_get_state_neither_captures_nor_reads(
     reader, capture = FakeVisionReader(REPLY_PLAIN), StaticCapture()
     _, provider, _, _ = make_tools(reader=reader, capture=capture)
     registry = ToolRegistry()
-    registry.register_provider(provider, visible_to=build_text_adv_visible_to())
+    registry.register_provider(provider)
     assert {s.full_name for s in registry.list_tools(for_agent="streamer")} == {
         "text_adv_advance",
         "text_adv_choose",
@@ -387,5 +386,5 @@ def test_tool_guide_declares_remote_control_shape() -> None:
     assert "遥控型" in guide and "framework_delegate" in guide
 
     registry = ToolRegistry()
-    registry.register_provider(provider, visible_to=build_text_adv_visible_to())
+    registry.register_provider(provider)
     assert registry.guides(for_agent="streamer") == [("text_adv", guide)]

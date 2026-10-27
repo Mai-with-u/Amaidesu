@@ -409,9 +409,8 @@ async def reconnect_provider_endpoint(
     report = await tool_ops.reconnect_provider(provider_id)
     if report.get("ok"):
         return report
+    # reason 是机器可读的失败枚举（ToolOperations.reconnect_provider 报告契约），
+    # 状态码映射按它判定；中文 error 文案只作展示，不做子串匹配
+    status_by_reason = {"not_registered": 404, "not_supported": 409, "reconnect_failed": 500}
     err = report.get("error", "")
-    if "未注册 Provider" in err:
-        raise HTTPException(status_code=404, detail=err)
-    if "不支持手动重连" in err:
-        raise HTTPException(status_code=409, detail=err)
-    raise HTTPException(status_code=500, detail=err)
+    raise HTTPException(status_code=status_by_reason.get(report.get("reason"), 500), detail=err)

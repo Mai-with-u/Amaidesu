@@ -328,7 +328,7 @@ class MinecraftAgent(BaseAgent):
             self._logger.warning(f"Agent 私有 MCP 装配异常: {type(exc).__name__}: {exc}")
             count = 0
         try:
-            self.register_tool_provider(prov, registry=self._tool_registry, visible_to=self._maicraft_visible_to)
+            self.register_tool_provider(prov, registry=self._tool_registry)
         except Exception as exc:  # noqa: BLE001 - 注册异常兜底
             self._logger.warning(f"Agent 私有 MCP 注册失败: {type(exc).__name__}: {exc}")
             return
@@ -375,11 +375,6 @@ class MinecraftAgent(BaseAgent):
         )
         self._task_suspended = False
         self._wake_event.set()
-
-    @staticmethod
-    def _maicraft_visible_to(specs: Iterable[ToolSpec]) -> Dict[str, List[str]]:
-        """MaiCraft 工具全部只给 minecraft 自己：主播看游戏走 minecraft_glance 精简视图。"""
-        return {spec.full_name: ["minecraft"] for spec in specs}
 
     def _maicraft_ready(self) -> bool:
         client = self._mcp_client
@@ -446,25 +441,12 @@ class MinecraftAgent(BaseAgent):
         """声明 Agent 专属工具（provider="minecraft"）。"""
         return list(self._tool_provider.list_tools())
 
-    # 局部工具可见名单：本地件只有 minecraft 自己可见；get_work_log 与 glance 是主播的读服务。
-    _LOCAL_VISIBLE_TO = {
-        "minecraft_todo": ["minecraft"],
-        "minecraft_notebook": ["minecraft"],
-        "minecraft_report": ["minecraft"],
-        "minecraft_wait": ["minecraft"],
-        "minecraft_get_work_log": ["streamer"],
-        "minecraft_glance": ["streamer"],
-        "minecraft_skill": ["minecraft"],
-    }
-
     def _register_tools(self) -> None:
         if self._tool_registry is None:
             return
-        visible_to = dict(self._LOCAL_VISIBLE_TO)
-        if self._skills is None:
-            # 没有技能库就不提供读技能的工具，可见名单里也不留它。
-            visible_to.pop("minecraft_skill")
-        self.register_tool_provider(self._tool_provider, registry=self._tool_registry, visible_to=visible_to)
+        # 可见名单随各 spec 声明（MinecraftToolProvider.list_tools 逐 spec 盖）；
+        # 没有技能库时技能工具本就不提供，名单不残留。
+        self.register_tool_provider(self._tool_provider, registry=self._tool_registry)
         self._logger.info(
             "MinecraftAgent 工具已注册：minecraft_todo / notebook / report / wait / get_work_log / glance"
         )

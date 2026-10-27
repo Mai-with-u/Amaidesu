@@ -12,7 +12,7 @@ OBSProvider - OBS 控制工具集
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Dict, Optional
 
 from pydantic import Field
 
@@ -109,19 +109,10 @@ class OBSProvider(ConnectionToolProvider):
             self.logger.error(f"配置验证失败: {e}")
             raise
 
-        self.host = self.typed_config.host
-        self.port = self.typed_config.port
-        self.password = self.typed_config.password
-        self.text_source_name = self.typed_config.text_source_name
-        self.typewriter_enabled = self.typed_config.typewriter_enabled
-        self.typewriter_speed = self.typed_config.typewriter_speed
-        self.typewriter_delay = self.typed_config.typewriter_delay
-        self.test_on_connect = self.typed_config.test_on_connect
-
         self.obs_connection: Any = None
         self._has_started = False
 
-        if not self.password:
+        if not self.typed_config.password:
             self.logger.warning("OBS WebSocket 密码未配置，如果 OBS 设置了密码则无法连接")
 
     # ===== ToolProvider 协议 =====
@@ -129,19 +120,6 @@ class OBSProvider(ConnectionToolProvider):
     @property
     def name(self) -> str:
         return self.PROVIDER_NAME
-
-    @property
-    def is_connected(self) -> bool:
-        """连接态只读视图（基类标志的原名兼容）：既有读点与外部观察沿用。"""
-        return self._connected
-
-    @is_connected.setter
-    def is_connected(self, value: bool) -> None:
-        """写入口收敛到 mark_*：置标志的同时触发连接态回调（换血工具表）。"""
-        if value:
-            self.mark_connected()
-        else:
-            self.mark_disconnected()
 
     def _connected_tools(self) -> list[ToolSpec]:
         """连接建立后暴露的全量工具清单（未连接时基类 list_tools 降级返回空）。"""
@@ -175,34 +153,38 @@ class OBSProvider(ConnectionToolProvider):
             ),
         ]
 
+    # 分发表：键 = ToolSpec 声明名（与 _connected_tools 的 spec.name 同源，无第二套词汇）
+    def _send_text_handler(self, args: Dict[str, Any]) -> ToolExecutionResult:
+        text = str(args.get("text", ""))
+        if not text:
+            return _fail("send_text", "缺少 text 字段")
+        typewriter = args.get("typewriter")
+        return _wait(self._send_text_to_obs(text, typewriter if isinstance(typewriter, bool) else None), "send_text")
+
+    def _switch_scene_handler(self, args: Dict[str, Any]) -> ToolExecutionResult:
+        scene_name = str(args.get("scene_name", ""))
+        if not scene_name:
+            return _fail("switch_scene", "缺少 scene_name 字段")
+        return _wait(self.switch_scene(scene_name), "switch_scene")
+
+    def _set_visibility_handler(self, args: Dict[str, Any]) -> ToolExecutionResult:
+        source_name = str(args.get("source_name", ""))
+        if not source_name:
+            return _fail("set_source_visibility", "缺少 source_name 字段")
+        return _wait(self.set_source_visibility(source_name, bool(args.get("visible", True))), "set_source_visibility")
+
+    def _send_test_handler(self, args: Dict[str, Any]) -> ToolExecutionResult:
+        return _wait(self._send_test_message(), "send_test", success_value=True)
+
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        args = invocation.arguments or {}
+        args = dict(invocation.arguments or {})
         try:
-            n = invocation.tool_name
-            if n == "obs_send_text":
-                text = str(args.get("text", ""))
-                if not text:
-                    return _fail(n, "缺少 text 字段")
-                typewriter = args.get("typewriter")
-                success = await self._send_text_to_obs(text, typewriter if isinstance(typewriter, bool) else None)
-                return _ok(n, success)
-            if n == "obs_switch_scene":
-                scene_name = str(args.get("scene_name", ""))
-                if not scene_name:
-                    return _fail(n, "缺少 scene_name 字段")
-                success = await self.switch_scene(scene_name)
-                return _ok(n, success)
-            if n == "obs_set_source_visibility":
-                source_name = str(args.get("source_name", ""))
-                visible = bool(args.get("visible", True))
-                if not source_name:
-                    return _fail(n, "缺少 source_name 字段")
-                success = await self.set_source_visibility(source_name, visible)
-                return _ok(n, success)
-            if n == "obs_send_test":
-                await self._send_test_message()
-                return _ok(n, True)
-            return _fail(n, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'")
+            handler = _TOOL_HANDLERS.get(invocation.tool_name)
+            if handler is None:
+                return _fail(
+                    invocation.tool_name, f"工具 '{invocation.tool_name}' 不属于 Provider '{self.PROVIDER_NAME}'"
+                )
+            return await handler(self, args)
         except Exception as exc:  # noqa: BLE001
             self.logger.exception(f"OBS 工具 {invocation.tool_name} 调用异常: {exc}")
             # 连接类异常（连接被关闭 / 请求超时 / 管道断裂）：首次失败即摘除工具，
@@ -256,7 +238,7 @@ class OBSProvider(ConnectionToolProvider):
         """手动断开 OBS 连接（手动重连的"断开"半步）。
 
         与 ``cleanup`` 不同：仅关闭 ``obs_connection`` 并清空本地句柄 + 置
-        ``is_connected=False``，**不重置** ``_has_started``——保持 setup 语
+        清空本地连接标志（``_connected=False``），**不重置** ``_has_started``——保持 setup 语
         义（仍可再 connect）。obs-websocket-py 的 ``disconnect`` 同步调用，做
         try/except 兜底（断连中或重复断连不阻断）。返回 True 表达"断开动
         作已完成"。
@@ -277,7 +259,7 @@ class OBSProvider(ConnectionToolProvider):
     # ===== 业务方法 =====
 
     async def switch_scene(self, scene_name: str) -> bool:
-        if not self.is_connected or not self.obs_connection:
+        if not self._connected or not self.obs_connection:
             self.logger.warning("OBS 未连接，无法切换场景")
             return False
         try:
@@ -291,7 +273,7 @@ class OBSProvider(ConnectionToolProvider):
             return False
 
     async def set_source_visibility(self, source_name: str, visible: bool) -> bool:
-        if not self.is_connected or not self.obs_connection:
+        if not self._connected or not self.obs_connection:
             self.logger.warning("OBS 未连接，无法设置源可见性")
             return False
         scene_name = ""
@@ -321,11 +303,11 @@ class OBSProvider(ConnectionToolProvider):
             return False
 
     async def _send_text_to_obs(self, text: str, typewriter: Optional[bool] = None) -> bool:
-        if not self.is_connected or not self.obs_connection:
+        if not self._connected or not self.obs_connection:
             self.logger.warning("OBS 未连接，无法发送文本")
             return False
         try:
-            use_typewriter = self.typewriter_enabled if typewriter is None else typewriter
+            use_typewriter = self.typed_config.typewriter_enabled if typewriter is None else typewriter
             if use_typewriter:
                 await self._send_typewriter_effect(text)
             else:
@@ -341,7 +323,7 @@ class OBSProvider(ConnectionToolProvider):
             raise RuntimeError("OBS 未连接")
         self.obs_connection.call(
             obs_client.obs_requests.SetInputSettings(
-                inputName=self.text_source_name,
+                inputName=self.typed_config.text_source_name,
                 inputSettings={"text": text},
                 overlay=True,
             )
@@ -356,8 +338,8 @@ class OBSProvider(ConnectionToolProvider):
             for char in text:
                 current_text += char
                 await self._set_text_source(current_text)
-                await asyncio.sleep(self.typewriter_speed)
-            await asyncio.sleep(self.typewriter_delay)
+                await asyncio.sleep(self.typed_config.typewriter_speed)
+            await asyncio.sleep(self.typed_config.typewriter_delay)
             self.logger.debug(f"已逐字显示文本: {text[:50]}{'...' if len(text) > 50 else ''}")
         except Exception as e:
             # 逐字写入中途失败：记下原因后直接写全文；全文也写不进去时异常交给调用方记录
@@ -368,12 +350,12 @@ class OBSProvider(ConnectionToolProvider):
     async def _send_test_message(self) -> None:
         test_message = "OBS 控制 Provider 已成功连接"
         try:
-            if self.typewriter_enabled:
+            if self.typed_config.typewriter_enabled:
                 await self._send_typewriter_effect(test_message)
                 self.logger.info("已使用逐字效果发送测试消息")
             else:
                 await self._set_text_source(test_message)
-                self.logger.info(f"已发送测试消息到 OBS 文本源 '{self.text_source_name}'")
+                self.logger.info(f"已发送测试消息到 OBS 文本源 '{self.typed_config.text_source_name}'")
         except Exception as e:
             self.logger.error(f"发送测试消息失败：{self._describe(e, not_found=self._text_source_missing())}")
             raise
@@ -386,7 +368,12 @@ class OBSProvider(ConnectionToolProvider):
         # 且经标准库兜底处理器直出控制台；先压住，失败原因由本类翻译后经项目日志记录
         silence_third_party_logger("obswebsocket")
         try:
-            client = obs_client.ObsClient(host=self.host, port=self.port, password=self.password, timeout=10)
+            client = obs_client.ObsClient(
+                host=self.typed_config.host,
+                port=self.typed_config.port,
+                password=self.typed_config.password,
+                timeout=10,
+            )
             client.connect()
         except Exception as e:
             # 握手阶段失败（OBS 没开、没启用 WebSocket 服务器、密码不对等）：翻译原因后报连接失败
@@ -396,7 +383,7 @@ class OBSProvider(ConnectionToolProvider):
                 self.mark_disconnected()
             return False
         self.obs_connection = client
-        if self.test_on_connect:
+        if self.typed_config.test_on_connect:
             try:
                 await self._send_test_message()
             except Exception:
@@ -409,7 +396,7 @@ class OBSProvider(ConnectionToolProvider):
                     self.mark_disconnected()
                 return False
         self.mark_connected()
-        self.logger.info(f"成功连接到 OBS WebSocket: {self.host}:{self.port}")
+        self.logger.info(f"成功连接到 OBS WebSocket: {self.typed_config.host}:{self.typed_config.port}")
         return True
 
     def _close_client(self, client: Any) -> None:
@@ -422,7 +409,7 @@ class OBSProvider(ConnectionToolProvider):
     def _text_source_missing(self) -> str:
         """文本源不存在时的原因：在 OBS 建同名文本源，或改配置指向已有的文本源。"""
         return (
-            f"OBS 里找不到文本源「{self.text_source_name}」：在 OBS 里新建同名的文本源，"
+            f"OBS 里找不到文本源「{self.typed_config.text_source_name}」：在 OBS 里新建同名的文本源，"
             "或把 tools.toml 的 [tools.studio.obs.config].text_source_name 改成已有文本源的名字（区分大小写）"
         )
 
@@ -430,8 +417,8 @@ class OBSProvider(ConnectionToolProvider):
         """把 OBS 失败翻译成能照着改的原因；默认按请求阶段（连接已建立）理解连接被关闭。"""
         return describe_obs_error(
             error,
-            host=self.host,
-            port=self.port,
+            host=self.typed_config.host,
+            port=self.typed_config.port,
             password_setting=_PASSWORD_SETTING,
             not_found=not_found,
             connected=connected,
@@ -464,6 +451,25 @@ def _fail(tool_name: str, error_message: str) -> ToolExecutionResult:
         success=False,
         error_message=error_message,
     )
+
+
+async def _wait(coro: Awaitable[Any], tool_name: str, *, success_value: Any = None) -> ToolExecutionResult:
+    """等齐业务协程并按其 bool 返回包装成功结果（send_test 固定报成功）。"""
+    return _ok(tool_name, success_value if success_value is not None else bool(await coro))
+
+
+def _tool_full_name(declared_name: str) -> str:
+    """按 ToolSpec.full_name 的唯一派生实现求调用全名（与 _connected_tools 的 spec 同源）。"""
+    return ToolSpec(name=declared_name, description="", provider=OBSProvider.PROVIDER_NAME).full_name
+
+
+# 分发表：键 = 工具调用全名（由 ToolSpec 声明名派生，与 _connected_tools 的 spec 一一对应）
+_TOOL_HANDLERS = {
+    _tool_full_name("send_text"): OBSProvider._send_text_handler,
+    _tool_full_name("switch_scene"): OBSProvider._switch_scene_handler,
+    _tool_full_name("set_source_visibility"): OBSProvider._set_visibility_handler,
+    _tool_full_name("send_test"): OBSProvider._send_test_handler,
+}
 
 
 def create_obs_provider(

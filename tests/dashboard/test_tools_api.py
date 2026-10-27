@@ -101,7 +101,15 @@ class _ReconnectRegistry(_FakeToolRegistry):
 
     async def reconnect_provider(self, provider_id: str) -> dict:
         self.reconnect_calls.append(provider_id)
-        return dict(self._result) if self._result else {"ok": False, "error": f"未注册 Provider: {provider_id}"}
+        return (
+            dict(self._result)
+            if self._result
+            else {
+                "ok": False,
+                "reason": "not_registered",
+                "error": f"未注册 Provider: {provider_id}",
+            }
+        )
 
 
 def _default_specs() -> list[ToolSpec]:
@@ -496,8 +504,8 @@ def test_invoke_serializes_structured_content_and_blocks(client: TestClient) -> 
     ("result", "status", "detail"),
     [
         (None, 404, "未注册 Provider: vts"),
-        ({"ok": False, "error": "Provider 'vts' 不支持手动重连"}, 409, "不支持手动重连"),
-        ({"ok": False, "error": "重连失败: 通道超时"}, 500, "通道超时"),
+        ({"ok": False, "reason": "not_supported", "error": "Provider 'vts' 不支持手动重连"}, 409, "不支持手动重连"),
+        ({"ok": False, "reason": "reconnect_failed", "error": "重连失败: 通道超时"}, 500, "通道超时"),
     ],
     ids=["unknown", "unsupported", "failed"],
 )

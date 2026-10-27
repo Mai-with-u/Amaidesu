@@ -86,7 +86,10 @@ async def _start(
 ) -> tuple[MinecraftAgent, _Llm, MagicMock]:
     """启动一个接上 MaiCraft 替身的玩家：私有 MCP 不连真端口，provider 直接换成替身。"""
     registry = ToolRegistry()
-    registry.register_provider(server, visible_to={spec.full_name: ["minecraft"] for spec in server.list_tools()})
+    # 替身 server 的 spec 自带 minecraft 名单（与 MaicraftMcpProvider.list_tools 盖名单同语义）
+    for spec in server.list_tools():
+        spec.visible_to = ["minecraft"]
+    registry.register_provider(server)
     llm = _Llm(script)
     bus = MagicMock()
     bus.emit = AsyncMock()

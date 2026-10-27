@@ -1,7 +1,7 @@
 """2048 Agent 工具面（game_2048_press / get_state）
 
-主播与游戏之间的全部接口，名单全部 ``["streamer"]``（名单映射由
-:func:`build_game_2048_visible_to` 提供，注册处声明）。
+主播与游戏之间的全部接口，名单全部 ``["streamer"]``（各 spec 的
+``visible_to`` 字段声明）。
 
 工具语义要点：
 - ``press`` 是五个按键的单一入口：``key`` 取 up/down/left/right（滑动）
@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, ClassVar, Dict, Iterable, List, Optional
+from typing import Any, ClassVar, Dict, Iterable, Optional
 
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
@@ -97,6 +97,7 @@ def build_press_spec() -> ToolSpec:
         },
         kind="sync",
         provider=PROVIDER_NAME,
+        visible_to=["streamer"],
         output_schema=_SNAPSHOT_OUTPUT_SCHEMA,
     )
 
@@ -113,13 +114,9 @@ def build_get_state_spec() -> ToolSpec:
         parameters_schema={"type": "object", "properties": {}, "required": []},
         kind="sync",
         provider=PROVIDER_NAME,
+        visible_to=["streamer"],
         output_schema=_SNAPSHOT_OUTPUT_SCHEMA,
     )
-
-
-def build_game_2048_visible_to() -> Dict[str, List[str]]:
-    """两个工具的可见名单映射（注册处声明）：全部仅主播可见。"""
-    return {spec.full_name: ["streamer"] for spec in (build_press_spec(), build_get_state_spec())}
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +132,7 @@ class Game2048ToolProvider(BaseToolProvider):
 
     注入模式（构造注入）：
         >>> provider = Game2048ToolProvider(agent=agent)
-        >>> registry.register_provider(provider, visible_to=build_game_2048_visible_to())
+        >>> registry.register_provider(provider)
     """
 
     # 工具分类（provider=提供者名、category=分组、agents.toml 段=配置地址，三者正交）
@@ -245,7 +242,6 @@ __all__ = [
     "PROVIDER_NAME",
     "STREAMER_GUIDE",
     "Game2048ToolProvider",
-    "build_game_2048_visible_to",
     "build_get_state_spec",
     "build_press_spec",
 ]

@@ -211,12 +211,10 @@ class Game2048Agent(BaseAgent):
     async def _on_start(self) -> None:
         """启动钩子：注册工具面（按键驱动，无后台循环）。"""
         # 函数内 import：tools 模块反向引用本模块（循环 import 规避）
-        from .tools import build_game_2048_visible_to
 
         count = self.register_tool_provider(
             self._tool_provider,
             registry=self._tool_registry,
-            visible_to=build_game_2048_visible_to(),
         )
         self._logger.info(f"Game2048Agent 已启动（工具面注册 {count} 个；等待主播按键）")
 

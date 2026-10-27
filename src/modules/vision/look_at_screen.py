@@ -107,6 +107,8 @@ LOOK_AT_SCREEN_SPEC = ToolSpec(
     },
     kind="sync",
     provider=PROVIDER_NAME,
+    # 公共观测工具：任何 Agent 都可调用（否则落默认名单会收窄为仅主播）
+    visible_to=["*"],
     output_schema={
         "type": "object",
         "properties": {

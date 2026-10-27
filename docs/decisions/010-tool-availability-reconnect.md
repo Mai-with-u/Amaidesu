@@ -60,11 +60,15 @@ VRChat OSC 无连接语义，明确不接入。
 
 `reconnect_provider(provider_id)`：
 1. 按 provider_id（= provider.name，全局唯一）定位 Provider
-2. 未找到 → 错误报告；不支持重连 → 错误报告
-3. `await provider.reconnect()` 失败 → 错误报告
+2. 未找到 → 错误报告（`reason="not_registered"`）；不支持重连 → 错误报告
+   （`reason="not_supported"`）
+3. `await provider.reconnect()` 失败 → 错误报告（`reason="reconnect_failed"`）
 4. 成功 → 反查归属该 provider 的全部已注册工具名，逐个 `probe_tool` 探活，
    通过者 `recover_tool` 复位熔断（发 `tool.health.*` closed 事件）
-5. 返回 `{ok, provider_id, recovered, still_tripped}` 报告
+5. 返回报告：失败为 `{ok, reason, error[, provider_id]}`，`reason` 是机器可读
+   枚举（`not_registered` / `not_supported` / `reconnect_failed`），HTTP 层按它
+   映射状态码、不做中文文案子串匹配；成功为
+   `{ok, provider_id, recovered, still_tripped, refreshed}`
 
 即：**手动重连是"即时探活"的多工具批量版**——重连本身恢复通道，probe+recover
 恢复熔断状态，UI 一步到位。
@@ -72,7 +76,7 @@ VRChat OSC 无连接语义，明确不接入。
 ### 4. 入口
 
 - REST：`POST /api/v1/tools/providers/{provider_id}/reconnect`
-  （404 未注册 / 409 不支持重连）
+  （404 未注册 / 409 不支持重连 / 500 重连失败，按报告 `reason` 映射）
 - `GET /api/v1/tools` 条目新增 `supports_reconnect` 字段（经
   `registry.provider_supports_reconnect(tool_name)` 判定，归属经 `_tool_owner`
   解析——与探活的所有权映射同一来源）

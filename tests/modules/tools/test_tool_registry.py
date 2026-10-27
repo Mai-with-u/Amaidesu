@@ -14,12 +14,12 @@ from src.modules.tools import ToolInvocation, ToolProvider, ToolRegistry, ToolSp
 from src.modules.tools.models import ToolExecutionResult
 from src.modules.tools.llm_defs import to_llm_definitions
 from src.modules.tools.operations import ToolOperations
+from src.modules.tools.registry import default_tool_registry, set_default_registry
 from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
 
 
 def _ops(registry: ToolRegistry) -> ToolOperations:
     return ToolOperations(registry)
-from src.modules.tools.registry import default_tool_registry, set_default_registry
 
 
 @pytest.fixture
@@ -214,7 +214,18 @@ def _face(registry: ToolRegistry, agent: str) -> set[str]:
 
 
 def test_visible_to_defaults_to_streamer_and_for_agent_filters(registry: ToolRegistry) -> None:
-    registry.register_provider(_provider("mixed", "open", "secret"), visible_to={"mixed_secret": ["minecraft"]})
+    # 名单随 spec 声明：secret 显式给 minecraft，open 未声明落默认（fail-closed 仅主播）
+    provider = make_provider_from_specs(
+        "mixed",
+        [
+            (ToolSpec(name="open", description="open", kind="sync", provider="mixed"), _ok),
+            (
+                ToolSpec(name="secret", description="secret", kind="sync", provider="mixed", visible_to=["minecraft"]),
+                _ok,
+            ),
+        ],
+    )
+    registry.register_provider(provider)
     assert registry.visible_to_of("mixed_open") == ["streamer"]  # 未声明 = 默认仅主播（fail-closed）
     assert registry.visible_to_of("mixed_secret") == ["minecraft"]
     assert _face(registry, "streamer") == {"mixed_open"}
@@ -225,8 +236,28 @@ def test_visible_to_defaults_to_streamer_and_for_agent_filters(registry: ToolReg
 def test_scoped_owner_of_projects_single_non_default_visible_agent(registry: ToolRegistry) -> None:
     """归属投影：名单恰为单个非默认 Agent 时视为专属归属，其余形态无归属。"""
     registry.register_provider(
-        _provider("mixed", "open", "scoped", "shared"),
-        visible_to={"mixed_scoped": ["minecraft"], "mixed_shared": ["streamer", "minecraft"]},
+        make_provider_from_specs(
+            "mixed",
+            [
+                (ToolSpec(name="open", description="open", kind="sync", provider="mixed"), _ok),
+                (
+                    ToolSpec(
+                        name="scoped", description="scoped", kind="sync", provider="mixed", visible_to=["minecraft"]
+                    ),
+                    _ok,
+                ),
+                (
+                    ToolSpec(
+                        name="shared",
+                        description="shared",
+                        kind="sync",
+                        provider="mixed",
+                        visible_to=["streamer", "minecraft"],
+                    ),
+                    _ok,
+                ),
+            ],
+        )
     )
     assert _ops(registry).scoped_owner_of("mixed_scoped") == "minecraft"
     assert _ops(registry).scoped_owner_of("mixed_shared") == ""  # 多 Agent 共享无专属归属
@@ -244,8 +275,13 @@ def test_providers_returns_snapshot_copy_without_exposing_internal_list(registry
 
 
 def test_wildcard_visible_to_is_visible_to_every_agent(registry: ToolRegistry) -> None:
-    # vision_look_at_screen 注册处显式 ["*"]：text_adv 的观察循环经它读屏，不吃默认名单
-    registry.register_provider(_provider("vision", "look_at_screen"), visible_to={"vision_look_at_screen": ["*"]})
+    # vision_look_at_screen 的 spec 显式 ["*"]：text_adv 的观察循环经它读屏，不吃默认名单
+    registry.register_provider(
+        make_provider_from_specs(
+            "vision",
+            [(ToolSpec(name="look_at_screen", description="d", kind="sync", provider="vision", visible_to=["*"]), _ok)],
+        )
+    )
     assert registry.visible_to_of("vision_look_at_screen") == ["*"]
     for agent in ("streamer", "minecraft", "text_adv", "anyone"):
         assert "vision_look_at_screen" in _face(registry, agent)
@@ -254,18 +290,27 @@ def test_wildcard_visible_to_is_visible_to_every_agent(registry: ToolRegistry) -
 @pytest.mark.parametrize(
     ("visible_to", "match"),
     [
-        ({"game_p_a": []}, "非空列表"),
-        ({"game_p_a": ["*", "streamer"]}, "单独出现"),  # '*' 只能单独出现
-        ({"game_pa_typo": ["streamer"]}, "未命中"),  # 键拼错即报错
+        ([], "非空列表"),
+        (["*", "streamer"], "单独出现"),  # '*' 只能单独出现
+        ([42], "非空字符串"),  # 元素必须是非空字符串
     ],
 )
-def test_invalid_visible_to_is_rejected(registry: ToolRegistry, visible_to: dict, match: str) -> None:
+def test_invalid_visible_to_is_rejected(registry: ToolRegistry, visible_to: list, match: str) -> None:
+    spec = ToolSpec(name="p_a", description="a", kind="sync", provider="game", visible_to=list(visible_to))
     with pytest.raises(ValueError, match=match):
-        registry.register_provider(_SampleProvider(), visible_to=visible_to)
+        registry.register_provider(make_provider_from_specs("game", [(spec, _ok)]))
 
 
 async def test_visible_list_is_not_enforced_by_invoke_and_clear_resets_it(registry: ToolRegistry) -> None:
-    registry.register_provider(_SampleProvider(), visible_to={"game_p_a": ["minecraft"]})
+    async def _from_a(inv: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(tool_name=inv.tool_name, success=True, content="from_a")
+
+    registry.register_provider(
+        make_provider_from_specs(
+            "game",
+            [(ToolSpec(name="p_a", description="a", kind="sync", provider="game", visible_to=["minecraft"]), _from_a)],
+        )
+    )
     # 名单只管可见性：LLM 编名直调仍按已知工具执行（受众治理在注册期收敛，已知边界）
     assert "game_p_a" not in _face(registry, "streamer")
     res = await registry.invoke(ToolInvocation(tool_name="game_p_a"))
@@ -309,17 +354,20 @@ class _GuidedProvider(BaseToolProvider):
 
     category = "game"
 
-    def __init__(self, name: str, guide: str, *, raise_on_guide: bool = False) -> None:
+    def __init__(
+        self, name: str, guide: str, *, raise_on_guide: bool = False, visible_to: List[str] | None = None
+    ) -> None:
         self._name = name
         self._guide = guide
         self._raise = raise_on_guide
+        self._visible_to = visible_to
 
     @property
     def name(self) -> str:
         return self._name
 
     def list_tools(self):
-        return [ToolSpec(name="act", description="动作", kind="sync", provider=self._name)]
+        return [ToolSpec(name="act", description="动作", kind="sync", provider=self._name, visible_to=self._visible_to)]
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
@@ -332,10 +380,10 @@ class _GuidedProvider(BaseToolProvider):
 
 def test_guides_collects_visible_providers_in_registration_order(registry: ToolRegistry) -> None:
     """只收对该 Agent 可见且说明非空的提供者，按注册顺序返回 (提供者名, 说明)。"""
-    registry.register_provider(_GuidedProvider("alpha", "甲的玩法"), visible_to={"alpha_act": ["streamer"]})
-    registry.register_provider(_GuidedProvider("beta", ""), visible_to={"beta_act": ["streamer"]})
-    registry.register_provider(_GuidedProvider("gamma", "丙的玩法"), visible_to={"gamma_act": ["other"]})
-    registry.register_provider(_GuidedProvider("delta", "丁的玩法"), visible_to={"delta_act": ["*"]})
+    registry.register_provider(_GuidedProvider("alpha", "甲的玩法"))
+    registry.register_provider(_GuidedProvider("beta", ""))
+    registry.register_provider(_GuidedProvider("gamma", "丙的玩法", visible_to=["other"]))
+    registry.register_provider(_GuidedProvider("delta", "丁的玩法", visible_to=["*"]))
 
     guides = registry.guides(for_agent="streamer")
 
@@ -348,11 +396,11 @@ def test_guides_collects_visible_providers_in_registration_order(registry: ToolR
 
 def test_guides_skips_disabled_tools_and_broken_guides(registry: ToolRegistry) -> None:
     """工具全部停用的提供者不算可见；说明抛异常的提供者跳过，不影响其余说明。"""
-    registry.register_provider(_GuidedProvider("alpha", "甲的玩法"), visible_to={"alpha_act": ["streamer"]})
+    registry.register_provider(_GuidedProvider("alpha", "甲的玩法"))
     registry.register_provider(
-        _GuidedProvider("broken", "坏的", raise_on_guide=True), visible_to={"broken_act": ["streamer"]}
+        _GuidedProvider("broken", "坏的", raise_on_guide=True),
     )
-    registry.register_provider(_GuidedProvider("muted", "静音的"), visible_to={"muted_act": ["streamer"]})
+    registry.register_provider(_GuidedProvider("muted", "静音的"))
     registry.apply_disabled(["muted_act"])
 
     assert registry.guides(for_agent="streamer") == [("alpha", "甲的玩法（读者 streamer）")]
@@ -365,6 +413,7 @@ def test_guides_default_empty_for_plain_provider(registry: ToolRegistry) -> None
         return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
 
     spec = ToolSpec(name="echo", description="回显", kind="sync", provider="plain")
-    registry.register_provider(make_provider_from_specs("plain", [(spec, _impl)]), visible_to={"plain_echo": ["*"]})
+    spec = ToolSpec(name="echo", description="回显", kind="sync", provider="plain", visible_to=["*"])
+    registry.register_provider(make_provider_from_specs("plain", [(spec, _impl)]))
 
     assert registry.guides(for_agent="streamer") == []
