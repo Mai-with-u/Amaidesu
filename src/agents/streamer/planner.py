@@ -61,7 +61,7 @@ from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import GameEventBatch
 from src.modules.context import TailImages
 from src.modules.agents.control import PROVIDER_NAME as FRAMEWORK_PROVIDER
-from src.modules.llm.payload import Reasoning
+from src.modules.llm.payload import response_to_assistant_message
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
@@ -472,34 +472,13 @@ class Planner:
                 llm_request_id=getattr(response, "request_id", None) or None,
             )
 
-            # engine 返回的中立 ToolCall（扁平对象）收敛为内部扁平 dict，供本模块消费与协议喂回
+            # engine 返回的中立 ToolCall（扁平对象）收敛为内部扁平 dict，供本模块消费
             tool_calls = [
                 {"id": tc.id, "name": tc.name, "arguments": dict(tc.arguments)} for tc in (response.tool_calls or [])
             ]
-            assistant_content = getattr(response, "content", None)
-            if assistant_content is not None and not isinstance(assistant_content, str):
-                # OpenAI 协议要求 content 为 string/null，部分 client 返回结构化内容
-                assistant_content = json.dumps(assistant_content, ensure_ascii=False, default=str)
-            assistant_msg: Dict[str, Any] = {"role": "assistant", "content": assistant_content}
-            if tool_calls:
-                # 喂回协议要求 arguments 为 JSON 字符串（中立 ToolCall 已解析为对象）
-                assistant_msg["tool_calls"] = [
-                    {
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
-                        },
-                    }
-                    for tc in tool_calls
-                ]
-            # 模型开着回传开关时，这一步的思考随本轮历史带回给它，下一步接着这段推理决策；
+            # 响应转回 assistant 消息（含线协议转换与思考回传）由 LLM 模块统一承载；
             # 下一轮从聊天记录重建历史，思考不跨轮保留
-            echo = getattr(response, "reasoning_echo", None)
-            if isinstance(echo, Reasoning):
-                assistant_msg["reasoning"] = echo.model_dump()
-            messages.append(assistant_msg)
+            messages.append(response_to_assistant_message(response))
 
             # 自然终止：LLM 不再调用任何工具 = 本轮不说话
             if not tool_calls:

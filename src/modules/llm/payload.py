@@ -11,6 +11,7 @@ Engine 与 Client 之间的厂商无关数据模型：请求侧（``Message`` /
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
@@ -169,7 +170,9 @@ class Response(BaseModel):
     """一次调用的完整响应（Engine 的统一返回类型）"""
 
     success: bool
-    content: Optional[str] = None
+    # 理想形态是 string 或 null，但部分厂商 client 会透传结构化内容（如分段列表）；
+    # 协议归一在 to_assistant_message 里完成（非 str 序列化为 JSON 字符串），这里不做截断
+    content: Any = None
     tool_calls: List[ToolCall] = Field(default_factory=list)
     usage: Optional[Usage] = None
     finish_reason: Optional[str] = None
@@ -193,6 +196,44 @@ class Response(BaseModel):
     audio_format: Optional[str] = None
 
 
+def response_to_assistant_message(response: Any) -> Dict[str, Any]:
+    """把一次模型响应转回工具循环可继续喂养的 assistant 消息（对话补全线协议形状 dict）
+
+    工具循环调用方收到响应后，要把它作为一条 assistant 消息追加进自己的
+    消息历史，再作为下一轮 ``generate`` 的输入。这段转换承载三条线协议规则：
+    content 非 str 时序列化为 JSON 字符串（协议要求 content 为 string 或
+    null）；工具调用的参数必须回传 JSON 字符串而非对象（``ensure_ascii=False``
+    保原文可读、``default=str`` 对不可序列化参数值兜底而非让整轮请求崩）；
+    模型开着思考回传开关时，思考原样写进 ``reasoning`` 键带给同一个模型。
+    该知识属于 LLM 模块——散在调用方则每个新工具循环都要重抄一遍，抄错
+    一处即服务端 400。做成模块级函数而非 ``Response`` 方法：调用方（含既有
+    测试替身）以鸭子类型持有响应对象，属性宽容读取让任何满足 ``Response``
+    字段形状的对象都能转换。消息以 dict 形态返回，与调用方既有消息历史
+    （含 system 等本契约之外的 role）的承载形态保持一致，调用方一行完成追加。
+    """
+    content: Any = getattr(response, "content", None)
+    if content is not None and not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False, default=str)
+    message: Dict[str, Any] = {"role": "assistant", "content": content}
+    tool_calls: List[ToolCall] = getattr(response, "tool_calls", None) or []
+    if tool_calls:
+        message["tool_calls"] = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {
+                    "name": call.name,
+                    "arguments": json.dumps(call.arguments, ensure_ascii=False, default=str),
+                },
+            }
+            for call in tool_calls
+        ]
+    reasoning_echo: Optional[Reasoning] = getattr(response, "reasoning_echo", None)
+    if reasoning_echo is not None:
+        message["reasoning"] = reasoning_echo.model_dump()
+    return message
+
+
 __all__ = [
     "TextPart",
     "ImagePart",
@@ -207,4 +248,5 @@ __all__ = [
     "Usage",
     "GenerateRequest",
     "Response",
+    "response_to_assistant_message",
 ]

@@ -74,6 +74,7 @@ from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
 from src.modules.llm.context_meter import SECTION_SKILLS
 from src.modules.llm.errors import UnsendableRequestError
+from src.modules.llm.payload import response_to_assistant_message
 from src.modules.utils.backoff import ExponentialBackoff
 from src.modules.skills import SkillLibrary
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
@@ -705,27 +706,9 @@ class MinecraftAgent(BaseAgent):
             stripped = restarted = False
 
             tool_calls = response.tool_calls or []
-            content_text = response.content
-            if content_text is not None and not isinstance(content_text, str):
-                content_text = json.dumps(content_text, ensure_ascii=False, default=str)
-            assistant_msg: Dict[str, Any] = {"role": "assistant", "content": content_text}
-            if tool_calls:
-                assistant_msg["tool_calls"] = [
-                    {
-                        "id": call.id,
-                        "type": "function",
-                        "function": {
-                            "name": call.name,
-                            "arguments": json.dumps(call.arguments, ensure_ascii=False, default=str),
-                        },
-                    }
-                    for call in tool_calls
-                ]
-            # 模型开着回传开关时，这一步的思考随历史带回给它，下一步接着这段推理决策；
-            # 换到备用模型时由引擎丢弃，这里只管原样存
-            if response.reasoning_echo is not None:
-                assistant_msg["reasoning"] = response.reasoning_echo.model_dump()
-            messages.append(assistant_msg)
+            # 响应转回 assistant 消息（含线协议转换与思考回传）由 LLM 模块统一承载；
+            # 换到备用模型时思考由引擎丢弃，这里只管原样存
+            messages.append(response_to_assistant_message(response))
 
             # 中间工具调用步骤的正文进观察面响应卡；自然终止轮的正文由交付卡承载，不重复发。
             if tool_calls and (response.content or "").strip() and self._event_bus is not None:
