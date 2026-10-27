@@ -14,13 +14,16 @@ ToolRegistry —— 工具注册中心
   可见给哪些 Agent（默认 ``DEFAULT_VISIBLE_TO``，仅主播）；``list_tools(for_agent=...)`` 按
   Agent 计算工具列表。名单只约束可见性，``invoke()`` 不校验。
 
-接口约定：register（去重保留先注册）/ register_provider（注册键 = 派生全名 +
-提供者单名校验 + 记录 provider 声明的分类 + 可选可见名单）
+接口约定（窄面）：register（去重保留先注册）/ register_provider（注册键 = 派生
+全名 + 提供者单名校验 + 记录 provider 声明的分类 + 可选可见名单）
 / list_tools（for_agent 按名单计算工具列表；provider / category 过滤；运营全集
 = 不传 for_agent） / list_categories / invoke（异常→error result 兜底）/
-to_llm_definitions（内部→LLM 转换层，解耦协议）/ recover_tool（探活通过后复位熔断）/
-probe_tool（按名定位 provider 并调用其 ``health_check`` 拿回 bool）/
-visible_to_of（按名查可见名单）。
+recover_tool（探活通过后复位熔断）/ probe_tool（按名定位 provider 并调用其
+``health_check`` 拿回 bool）/ visible_to_of（按名查可见名单）。
+
+运营面（提供者目录视图 / 健康快照 / Dashboard 标注投影 / 手动重连编排）不在
+本类：见 ``ToolOperations``（``src/modules/tools/operations.py``，只读依赖本
+类）；工具 → LLM 定义转换见 ``src/modules/tools/llm_defs.py``。
 """
 
 from __future__ import annotations
@@ -31,15 +34,14 @@ import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Iterable, List, Optional, Union
 
 from src.modules.events.payloads.tool_result import ToolResultPayload
-from src.modules.llm.context_meter import SECTION_MCP_TOOLS, SECTION_SYSTEM_TOOLS
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
     ToolExecutionResult,
     ToolInvocation,
     ToolSpec,
 )
-from src.modules.tools.provider import MCP_CATEGORY, BaseToolProvider, ToolProvider
-from src.modules.tools.tool_health_monitor import ToolCircuitBreaker
+from src.modules.tools.provider import BaseToolProvider, ToolProvider
+from src.modules.tools.tool_health_monitor import ToolCircuitBreaker, ToolHealthState
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -433,58 +435,13 @@ class ToolRegistry:
         }
 
     def providers(self) -> List[ToolProvider]:
-        """已登记 Provider 对象快照（只读观测面；连接健康墙等逐对象诊断消费）。
+        """已登记 Provider 对象快照（窄接口上的只读访问器；连接健康墙等逐对象诊断消费）。
 
-        与 ``list_providers()``（运营摘要 dict）的分工：这边给对象本体，
-        供消费方调 ``connection_summary()`` 等逐对象观测契约；返回副本，
-        外部不得借此改登记。
+        与提供者目录视图（``ToolOperations.list_providers``，运营摘要 dict）
+        的分工：这边给对象本体，供消费方调 ``connection_summary()`` 等逐对象
+        观测契约；返回副本，外部不得借此改登记。
         """
         return list(self._providers)
-
-    def scoped_owner_of(self, full_name: str) -> str:
-        """按工具全名查归属 Agent（名单机制推导；无单一归属返回空串）。
-
-        归属口径：可见名单恰为**单个**非默认 Agent 时视为"专属归属"（如
-        只对 minecraft 可见的委派工具 → "minecraft"）；默认名单、``["*"]``
-        全员、多 Agent 共享与未声明（落默认名单）都算无专属归属 → 空串。
-        供 Dashboard 工具页标注归属；调用可见性不受影响（名单仍是唯一
-        可见性事实源，本方法只是它的单归属投影）。
-        """
-        entries = self._visible_to.get(full_name)
-        if entries is not None and len(entries) == 1 and entries != DEFAULT_VISIBLE_TO and entries != ["*"]:
-            return entries[0]
-        return ""
-
-    def list_providers(self) -> List[Dict[str, Any]]:
-        """列出全部已登记 Provider 的运营摘要（工具页提供者卡片数据源）。
-
-        每项：``name`` / ``category``（自声明，未声明空串）/ ``tool_count``
-        （当前登记工具数，含停用与熔断）/ ``disabled_count`` /
-        ``supports_reconnect`` / ``last_error``（Provider 侧最近一次连接失败
-        摘要，无则空串）/ ``switch``（提供者开关地址声明，如 Agent 私有
-        MCP 的 ``{"file", "key"}``，未声明为 None）。**0 工具的 Provider
-        也在列**——降级登记（连接失败）的 Provider 靠这条在工具页保持
-        可见、可手动重连。
-        """
-        result: List[Dict[str, Any]] = []
-        for p in self._providers:
-            owned = [name for name, owner in self._tool_owner.items() if owner is p]
-            if not owned:
-                # 非 BaseToolProvider 注册无归属记录：按 spec.provider 名兜底
-                owned = [name for name, (spec, _) in self._tools.items() if spec.provider == p.name]
-            switch = getattr(p, "switch_config", None)
-            result.append(
-                {
-                    "name": p.name,
-                    "category": self._categories.get(p.name, ""),
-                    "tool_count": len(owned),
-                    "disabled_count": sum(1 for n in owned if n in self._disabled),
-                    "supports_reconnect": isinstance(p, BaseToolProvider) and bool(p.supports_reconnect),
-                    "last_error": str(getattr(p, "last_error", "") or ""),
-                    "switch": dict(switch) if isinstance(switch, dict) else None,
-                }
-            )
-        return result
 
     @staticmethod
     def _validate_visible_to(
@@ -553,7 +510,7 @@ class ToolRegistry:
             category: 可选过滤（提供者自声明的分类，如 "avatar" /
                 "studio" / "game"）；None 不按分类过滤。
             include_disabled: True 时包含已停用工具（工具页展示全集用）；
-                LLM 可见性（Planner / Replyer / to_llm_definitions）走默认
+                LLM 可见性（Planner / Replyer / llm_defs.to_llm_definitions）走默认
                 排除路径。
             include_tripped: True 时包含熔断中的工具（Dashboard 工具页展示全集用）。
                 默认排除以避免 LLM 看见已被摘除的工具。
@@ -777,9 +734,14 @@ class ToolRegistry:
         """当前熔断中的工具名（排序快照，供 ToolHealthMonitor 遍历）。"""
         return self._health.tripped_tools
 
-    def tool_health_snapshot(self) -> Dict[str, Dict[str, Any]]:
-        """返回对 Dashboard 有意义的工具健康快照（熔断器状态委托）。"""
-        return self._health.tool_health_snapshot()
+    def health_state_of(self, name: str) -> Optional[ToolHealthState]:
+        """取单工具熔断器状态本体（只读；不存在返回 None，不懒初始化）。
+
+        给 ``ToolHealthMonitor`` 等内部消费方一条**类型化**状态通道——探活
+        循环据此读 ``tripped_at_ms`` 等字段，不经过 ``tool_health_snapshot``
+        的 dashboard dict 形状（那是渲染协议，不是内部协议）。
+        """
+        return self._health.state_of(name)
 
     def recover_tool(self, name: str) -> bool:
         """手动/探活通过时复位熔断器；返回是否真做了恢复动作（委托熔断器）。"""
@@ -818,7 +780,8 @@ class ToolRegistry:
 
         复用 ``_tool_owner`` 反向索引：O(N) 单次扫描，未额外维护反向表——
         注册表量级（数百）下单次扫描成本可忽略，避免给热路径加状态。
-        用于 ``reconnect_provider`` 在重连成功后遍历归属工具做探活 + 熔断复位。
+        用于 ``ToolOperations.reconnect_provider`` 在重连成功后遍历归属工具
+        做探活 + 熔断复位（同包内部协议，非公开查询面）。
         """
         return [name for name, owner in self._tool_owner.items() if owner is provider]
 
@@ -830,111 +793,6 @@ class ToolRegistry:
         """
         return self._tool_owner.get(full_name)
 
-    def provider_supports_reconnect(self, tool_name: str) -> bool:
-        """按工具名查归属 Provider 是否支持手动重连（供 Dashboard 工具页渲染按钮用）。
-
-        无归属 Provider / 归属对象非 ``BaseToolProvider`` / Provider 的
-        ``supports_reconnect`` 为 False 任一条件触发即返回 False。未知工具名
-        同样 False）。不解名/字符串猜测，按 ``_tool_owner`` 直查——与
-        ``probe_tool`` 的归属解析口径一致。
-        """
-        owner = self._tool_owner.get(tool_name)
-        if not isinstance(owner, BaseToolProvider):
-            return False
-        return bool(owner.supports_reconnect)
-
-    async def reconnect_provider(self, provider_id: str) -> Dict[str, Any]:
-        """手动重连指定 Provider；成功后对归属其工具的熔断器联动探活复位。
-
-        行为：
-        - ``provider_id`` = Provider.name（按 ``_providers`` 线性查找）。
-          provider.name 与 spec.provider 同值同源（注册期校验保证），外部
-          （Dashboard 等）传提供者短名即可命中。
-        - 未找到 → ``{"ok": False, "error": "未注册 Provider: <id>"}``
-        - 找到但不支持重连（非 BaseToolProvider 或 ``supports_reconnect``
-          为 False）→ ``{"ok": False, "error": "Provider ... 不支持手动重连"}``
-        - 找到且支持 → ``await provider.reconnect()``：
-          - 失败 → ``{"ok": False, "error": "重连失败...", "provider_id": <id>}``
-          - 成功 → 反查归属工具，逐个 ``probe_tool``，通过且 ``is_tripped`` 即
-            ``recover_tool``；返回 ``{"ok": True, "provider_id": ..., "recovered":
-            [<已复位工具名>], "still_tripped": [<探活未通过的熔断工具名>]}``。
-            未熔断的工具不纳入报告（运营只需关心"恢复 + 仍未恢复"两个集合）。
-        """
-        provider = next((p for p in self._providers if p.name == provider_id), None)
-        if provider is None:
-            logger.warning(f"手动重连失败：未注册 Provider '{provider_id}'")
-            return {"ok": False, "error": f"未注册 Provider: {provider_id}"}
-        if not isinstance(provider, BaseToolProvider) or not provider.supports_reconnect:
-            logger.warning(
-                f"手动重连失败：Provider '{provider_id}'（class={type(provider).__name__}）"
-                "不支持手动重连（无覆写 connect 或非 BaseToolProvider）"
-            )
-            return {
-                "ok": False,
-                "error": f"Provider '{provider_id}' 不支持手动重连",
-            }
-
-        logger.info(f"手动触发 Provider '{provider_id}' 重连")
-        try:
-            ok = bool(await provider.reconnect())
-        except Exception as exc:  # noqa: BLE001 - 重连边界兜底，不上抛
-            logger.error(
-                f"Provider '{provider_id}' 重连异常: {type(exc).__name__}: {exc}",
-                exc=True,
-            )
-            return {
-                "ok": False,
-                "error": f"重连失败: {type(exc).__name__}: {exc}",
-                "provider_id": provider_id,
-            }
-        if not ok:
-            logger.warning(f"Provider '{provider_id}' 手动重连失败（provider.reconnect 返回 False）")
-            return {
-                "ok": False,
-                "error": "重连失败: provider.reconnect 返回 False",
-                "provider_id": provider_id,
-            }
-
-        # 重连成功先刷新工具集（MCP 降级登记 0 工具 → 重连后补注册；server
-        # 侧清单变化 → 换血），再对归属工具做熔断探活复位
-        try:
-            refresh = self.refresh_provider_tools(provider)
-        except Exception as exc:  # noqa: BLE001 - 刷新异常不推翻重连成果，报告携带原因
-            logger.error(
-                f"Provider '{provider_id}' 重连后工具集刷新异常: {type(exc).__name__}: {exc}",
-                exc=True,
-            )
-            refresh = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-
-        recovered: List[str] = []
-        still_tripped: List[str] = []
-        for tool_name in self._tools_owned_by(provider):
-            if not self.is_tripped(tool_name):
-                continue
-            healthy = await self.probe_tool(tool_name)
-            if healthy and self.recover_tool(tool_name):
-                recovered.append(tool_name)
-            else:
-                still_tripped.append(tool_name)
-        logger.info(
-            f"Provider '{provider_id}' 重连成功，恢复 {len(recovered)} 个熔断工具"
-            + (f"，仍有 {len(still_tripped)} 个未通过探活" if still_tripped else "")
-            + (f"，工具集新增 {len(refresh.get('added', []))} 个" if refresh.get("ok") else "")
-        )
-        return {
-            "ok": True,
-            "provider_id": provider_id,
-            "recovered": recovered,
-            "still_tripped": still_tripped,
-            "refreshed": {
-                "added": refresh.get("added", []),
-                "removed": refresh.get("removed", []),
-                "count": refresh.get("count", 0),
-            }
-            if refresh.get("ok")
-            else None,
-        }
-
     async def invoke_many(
         self,
         invocations: Iterable[ToolInvocation],
@@ -944,40 +802,6 @@ class ToolRegistry:
         if not invs:
             return []
         return await asyncio.gather(*[self.invoke(inv) for inv in invs])
-
-    # -------------------- LLM 透传 --------------------
-
-    def to_llm_definitions(
-        self,
-        *,
-        provider: Optional[str] = None,
-        category: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """返回 LLM 视角的工具定义列表（OpenAI 风格 function calling 形状）。
-
-        这是与 LLM 协议层之间的转换点（解耦 ToolSpec 与具体 LLM 协议）。
-        """
-        return [self.function_definition(spec) for spec in self.list_tools(provider=provider, category=category)]
-
-    def function_definition(self, spec: ToolSpec) -> Dict[str, Any]:
-        """单个工具的 LLM 定义（name 用派生全名），附上下文计量归属标注。
-
-        ``context_section`` 按提供者自声明的分类区分 MCP 工具与内置工具，
-        ``result_section`` 取工具声明的结果归属；两者只供上下文分段统计，
-        LLM 层规整请求时收下、不发给模型。
-        """
-        entry: Dict[str, Any] = {
-            "name": spec.full_name,
-            "description": spec.description,
-            "context_section": (
-                SECTION_MCP_TOOLS if self._categories.get(spec.provider) == MCP_CATEGORY else SECTION_SYSTEM_TOOLS
-            ),
-        }
-        if spec.parameters_schema is not None:
-            entry["parameters"] = spec.parameters_schema
-        if spec.result_section:
-            entry["result_section"] = spec.result_section
-        return entry
 
     # -------------------- 元信息 --------------------
 

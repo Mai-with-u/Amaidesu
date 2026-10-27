@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.modules.avatar.platform.vts.vts_provider import VTSProvider, create_vts_provider, register_vts_tools
 from src.modules.tools.models import ToolInvocation
+from src.modules.tools.operations import ToolOperations
 from src.modules.tools.registry import ToolRegistry
 from src.modules.types.emotion_vocab import Emotion
 
@@ -241,7 +242,7 @@ async def test_health_check_delegates_to_real_probe() -> None:
 def test_register_vts_tools_registers_degraded_then_follows_connection_state() -> None:
     registry = ToolRegistry()
     provider = register_vts_tools(registry, config={"vts_host": "localhost", "vts_port": 8001})
-    card = next(p for p in registry.list_providers() if p["name"] == "vts")
+    card = next(p for p in ToolOperations(registry).list_providers() if p["name"] == "vts")
     assert card["tool_count"] == 0 and registry.list_tools(provider="vts") == []  # 装配期降级登记 0 工具
 
     provider.mark_connected()

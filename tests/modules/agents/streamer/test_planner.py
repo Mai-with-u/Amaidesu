@@ -116,7 +116,7 @@ def _tool_messages(llm: Any, call_index: int) -> list:
 def test_tool_list_comes_straight_from_the_registry() -> None:
     """for_agent("streamer") 注册表结果，全名直出，无二次筛选；registry 缺失时为空。"""
     registry = _registry_mock(_spec("get_work_log", "minecraft"), _spec("reply", "streamer", None))
-    registry.function_definition.side_effect = ToolRegistry().function_definition  # 定义形状由注册表统一生成
+    # 定义形状由工具域 llm_defs 统一生成（planner 直调模块函数，不经 registry 方法）
     planner, _llm, _prompt = _make_planner(registry=registry)
     tool_list = planner._build_tool_list()
     assert [f["name"] for f in tool_list] == ["minecraft_get_work_log", "streamer_reply"]

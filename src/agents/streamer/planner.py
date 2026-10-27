@@ -65,6 +65,7 @@ from src.modules.llm.payload import Reasoning
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
+from src.modules.tools.llm_defs import function_definition
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 from src.modules.vision.image_store import get_image_store
 
@@ -821,8 +822,9 @@ class Planner:
         except Exception as e:
             self.logger.warning(f"Planner 拉取工具列表失败（本轮无工具）: {e}")
             return []
-        # 定义附上下文计量归属（MCP / 内置工具），上下文面板据此分段
-        return [self._tool_registry.function_definition(spec) for spec in specs]
+        # 定义附上下文计量归属（MCP / 内置工具），上下文面板据此分段；
+        # 定义形状由工具域的 LLM 转换层统一生成（llm_defs）
+        return [function_definition(spec, self._tool_registry.category_of(spec.full_name)) for spec in specs]
 
     async def _invoke_reply(
         self,

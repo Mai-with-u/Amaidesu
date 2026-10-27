@@ -7,8 +7,13 @@ from typing import List
 import pytest
 
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.operations import ToolOperations
 from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
+
+
+def _ops(registry: ToolRegistry) -> ToolOperations:
+    return ToolOperations(registry)
 
 
 class _Minimal(BaseToolProvider):
@@ -123,26 +128,26 @@ def test_registry_provider_supports_reconnect(registry: ToolRegistry) -> None:
     registry.register_provider(_Connectable())
     registry.register_provider(_Minimal())
     registry.register_provider(_NonBase())  # type: ignore[arg-type]
-    assert registry.provider_supports_reconnect("conn_a") is True
-    assert [registry.provider_supports_reconnect(n) for n in ("minimal_x", "legacy_t", "ghost")] == [False] * 3
+    assert _ops(registry).provider_supports_reconnect("conn_a") is True
+    assert [_ops(registry).provider_supports_reconnect(n) for n in ("minimal_x", "legacy_t", "ghost")] == [False] * 3
 
 
 # reconnect_provider
 
 
 async def test_reconnect_provider_error_reports(registry: ToolRegistry) -> None:
-    report = await registry.reconnect_provider("nonexistent")
+    report = await _ops(registry).reconnect_provider("nonexistent")
     assert report["ok"] is False and "未注册 Provider" in report["error"] and "nonexistent" in report["error"]
 
     registry.register_provider(_Minimal())
     registry.register_provider(_NonBase())  # type: ignore[arg-type]
     for provider_id in ("minimal", "legacy"):  # 不支持重连时不触发任何重连动作
-        report = await registry.reconnect_provider(provider_id)
+        report = await _ops(registry).reconnect_provider(provider_id)
         assert report["ok"] is False and "不支持手动重连" in report["error"]
 
     failing = _Connectable("failing", connect_ok=False)
     registry.register_provider(failing)
-    report = await registry.reconnect_provider("failing")
+    report = await _ops(registry).reconnect_provider("failing")
     assert (report["ok"], report["provider_id"], failing.connect_calls) == (False, "failing", 1)
     assert "重连失败" in report["error"]
 
@@ -151,7 +156,7 @@ async def test_reconnect_provider_error_reports(registry: ToolRegistry) -> None:
             raise RuntimeError("kaboom")
 
     registry.register_provider(_Boom("boom"))
-    report = await registry.reconnect_provider("boom")  # 重连抛异常兜底为 ok=False，不上抛
+    report = await _ops(registry).reconnect_provider("boom")  # 重连抛异常兜底为 ok=False，不上抛
     assert report["ok"] is False and "kaboom" in report["error"] and report["provider_id"] == "boom"
 
 
@@ -167,14 +172,14 @@ async def test_reconnect_success_classifies_tripped_tools_by_probe(registry: Too
         return next(results)
 
     provider.health_check = probe  # type: ignore[method-assign]
-    report = await registry.reconnect_provider("conn")
+    report = await _ops(registry).reconnect_provider("conn")
     assert (report["ok"], report["provider_id"]) == (True, "conn")
     assert (report["recovered"], report["still_tripped"]) == (["conn_a"], ["conn_a_fail"])
     assert not registry.is_tripped("conn_a") and registry.is_tripped("conn_a_fail")
 
     calm = ToolRegistry()
     calm.register_provider(_Connectable())
-    report = await calm.reconnect_provider("conn")
+    report = await _ops(calm).reconnect_provider("conn")
     assert (report["ok"], report["recovered"], report["still_tripped"]) == (True, [], [])
 
 
@@ -184,7 +189,7 @@ async def test_reconnect_refreshes_degraded_toolset_and_survives_refresh_failure
     registry.register_provider(provider)  # 0 工具降级登记
     assert registry.list_tools(provider="conn") == []
     provider.tool_names = ["a", "b"]
-    report = await registry.reconnect_provider("conn")
+    report = await _ops(registry).reconnect_provider("conn")
     assert report["ok"] is True and sorted(report["refreshed"]["added"]) == ["conn_a", "conn_b"]
     assert {s.full_name for s in registry.list_tools(provider="conn")} == {"conn_a", "conn_b"}
 
@@ -199,7 +204,7 @@ async def test_reconnect_refreshes_degraded_toolset_and_survives_refresh_failure
     fragile = _BoomOnRefresh("fragile")
     registry.register_provider(fragile)
     fragile.boom = True
-    report = await registry.reconnect_provider("fragile")  # 刷新抛异常不推翻重连成果
+    report = await _ops(registry).reconnect_provider("fragile")  # 刷新抛异常不推翻重连成果
     assert report["ok"] is True and report["refreshed"] is None
 
 
@@ -210,7 +215,7 @@ def test_zero_tool_provider_keeps_record_and_refresh_resyncs_specs(registry: Too
     empty = _Connectable("empty")
     empty.tool_names = []
     assert registry.register_provider(empty) == 0
-    record = {r["name"]: r for r in registry.list_providers()}["empty"]
+    record = {r["name"]: r for r in _ops(registry).list_providers()}["empty"]
     assert (record["tool_count"], record["category"]) == (0, "mcp")  # 降级登记：工具页可见但无工具条目
 
     provider = _Connectable("mprov")
@@ -293,4 +298,4 @@ def test_unregister_removes_every_internal_map_idempotently_and_keeps_others(reg
 
     assert registry.has("other_x") and other in registry._providers  # 其余 Provider 不受影响
     assert registry.provider_of_tool("other_x") is other
-    assert all(r["name"] != "echo" for r in registry.list_providers())
+    assert all(r["name"] != "echo" for r in _ops(registry).list_providers())

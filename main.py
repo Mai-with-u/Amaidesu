@@ -79,7 +79,7 @@ from src.modules.subtitle import build_subtitle_infrastructure
 from src.modules.subtitle.backends import DashboardBackend
 from src.modules.tts import TTSProvider, build_tts_infrastructure
 from src.modules.storage.storage_ledger import StorageLedger
-from src.modules.tools import TaskLedger, TaskTracker, ToolHealthMonitor, ToolRegistry
+from src.modules.tools import TaskLedger, TaskTracker, ToolHealthMonitor, ToolOperations, ToolRegistry
 from src.modules.tools.tasks import resolve_tasks_config
 from src.modules.tools.bootstrap import bind_core_tools
 from src.modules.vision.look_at_screen import LookAtScreenProvider, LlmVisionTextReader
@@ -540,6 +540,7 @@ async def create_app_components(
     agent_manager: Optional["AgentManager"] = None
     # 无 [agents] 段时不进装配分支，但后续 provider 启动段仍会引用，须预置
     tool_registry: Optional[ToolRegistry] = None
+    tool_operations: Optional[ToolOperations] = None
     thinking_hub: Optional[StreamPreviewHub] = None
     # Dashboard 装配段同样引用任务跟踪器与 TTS 引擎：无 [agents] 段时两者都不构造，以 None 交给 Dashboard
     task_tracker: Optional[TaskTracker] = None
@@ -555,6 +556,8 @@ async def create_app_components(
         # 注意不可用 `or 3` 兜底：会把用户显式配置的 0（关闭熔断）吞成 3
         failure_threshold = int(tools_health_cfg.get("failure_threshold", 3))
         tool_registry = ToolRegistry(event_bus=event_bus, failure_threshold=failure_threshold)
+        # 工具运营面（提供者目录视图 / 健康快照 / 重连编排）：只读伴生对象，随 registry 一并交给 Dashboard
+        tool_operations = ToolOperations(tool_registry)
         # Agent 守护（心跳巡检 + 自动重建）：配置来自 [agent_supervisor] 段（infra.toml）
         supervisor_section = config.get("agent_supervisor", {}) if isinstance(config, dict) else {}
         if not isinstance(supervisor_section, dict):
@@ -859,6 +862,7 @@ async def create_app_components(
             config_service,
             collector_manager,
             agent_manager,
+            tool_operations,
             llm_service,
             log_streamer,
             simulator_service,
@@ -1148,6 +1152,7 @@ async def _start_dashboard(
     config_service: ConfigService,
     collector_manager: Optional["CollectorManager"] = None,
     agent_manager: Optional["AgentManager"] = None,
+    tool_operations: Optional["ToolOperations"] = None,
     llm_service=None,
     log_streamer=None,
     simulator_service: Optional["SimulatorService"] = None,
@@ -1181,6 +1186,7 @@ async def _start_dashboard(
             collector_manager=collector_manager,
             agent_manager=agent_manager,
             tool_registry=(agent_manager.tool_registry if agent_manager else None),
+            tool_operations=tool_operations,
             llm_manager=llm_service,
             request_history_manager=request_history_manager,
             prompt_manager=get_prompt_manager(),

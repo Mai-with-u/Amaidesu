@@ -22,8 +22,13 @@ from src.modules.llm.payload import Reasoning, Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
 from src.modules.tools.models import ResultBlock, ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
+from src.modules.tools.operations import ToolOperations
 from src.modules.tools.registry import ToolRegistry
 from src.modules.vision.image_store import VisionImageStore, set_image_store
+
+
+def _ops(registry: ToolRegistry) -> ToolOperations:
+    return ToolOperations(registry)
 
 
 def _offline_config() -> MinecraftConfig:
@@ -588,11 +593,11 @@ async def test_mcp_setup_failure_registers_degraded_and_retries(
     await agent.start()
     assert agent._running is True and agent._mcp_client is not None
     assert registry.list_tools(provider="maicraft") == []
-    assert {r["name"]: r for r in registry.list_providers()}["maicraft"]["tool_count"] == 0
+    assert {r["name"]: r for r in _ops(registry).list_providers()}["maicraft"]["tool_count"] == 0
     assert agent._mcp_recover_task is not None
     await agent.stop()
     assert agent._mcp_recover_task is None
-    assert all(r["name"] != "maicraft" for r in registry.list_providers())
+    assert all(r["name"] != "maicraft" for r in _ops(registry).list_providers())
 
 
 # 思考流 sink / 响应事实

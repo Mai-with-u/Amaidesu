@@ -1,7 +1,7 @@
 """工具提供者分类目录装配
 
 工具页侧边栏与提供者分组的数据源装配：以运行时注册表为事实源
-（``registry.list_providers()``，含连接失败降级登记的 0 工具 Provider），
+（``ToolOperations.list_providers()``，含连接失败降级登记的 0 工具 Provider），
 ∪ 配置声明态（``[tools.*]`` 段键：enabled=false 未装配的提供者也展示）。
 HTTP 语义（503 / 400 / 写回映射）留在 api 层。
 """
@@ -72,9 +72,9 @@ def runtime_tool_counts(registry: Any) -> Dict[Tuple[str, str], Tuple[int, int]]
     return counts
 
 
-def safe_list_providers(registry: Any) -> List[Dict[str, Any]]:
-    """取 Provider 运营摘要清单（旧 registry / mock 未实现时返回空列表）。"""
-    fn = getattr(registry, "list_providers", None)
+def safe_list_providers(operations: Any) -> List[Dict[str, Any]]:
+    """取 Provider 运营摘要清单（``ToolOperations.list_providers``；mock 未实现时返回空列表）。"""
+    fn = getattr(operations, "list_providers", None)
     if fn is None:
         return []
     try:
@@ -119,9 +119,17 @@ def _config_only_card(category: str, key: str, counts: Dict[Tuple[str, str], Tup
 
 
 def build_tool_catalog(
-    registry: Any, tools_cfg: Dict[str, Any], main_config: Dict[str, Any]
+    operations: Any, registry: Any, tools_cfg: Dict[str, Any], main_config: Dict[str, Any]
 ) -> Dict[str, List[Dict[str, Any]]]:
     """装配工具提供者分类目录（注册表运行态 ∪ 配置声明态）。
+
+    Args:
+        operations: 工具运营面（``ToolOperations``）——提供者卡片记录来源
+            （``list_providers``，含连接失败降级登记的 0 工具 Provider）。
+        registry: 工具注册表——运行态工具计数来源（``list_tools`` /
+            ``category_of`` / ``is_disabled``）。
+        tools_cfg: 主配置 ``[tools]`` 段（声明态）。
+        main_config: 主配置全集（agents 启用名单 / avatar 平台名单）。
 
     每个提供者卡片携带：配置态（``enabled`` / ``in_config`` / ``switchable``）、
     运行态（``tool_count`` / ``disabled_count`` / ``registered`` / ``degraded`` /
@@ -137,7 +145,7 @@ def build_tool_catalog(
 
     # 卡片收集：注册表记录建卡（provider 自声明分类）∪ 配置段键补卡
     entries: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    for record in safe_list_providers(registry):
+    for record in safe_list_providers(operations):
         key = str(record.get("name") or "")
         category = str(record.get("category") or "")
         if not key or not category:

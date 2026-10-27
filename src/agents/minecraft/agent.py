@@ -77,6 +77,7 @@ from src.modules.llm.errors import UnsendableRequestError
 from src.modules.utils.backoff import ExponentialBackoff
 from src.modules.skills import SkillLibrary
 from src.modules.tools.conversation import extract_image_data_urls, to_conversation_view
+from src.modules.tools.llm_defs import function_definition
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.vision.image_store import get_image_store
@@ -494,7 +495,11 @@ class MinecraftAgent(BaseAgent):
             for spec in self._tool_registry.list_tools(for_agent=self.name)
             if spec.full_name not in HOST_ONLY_TOOLS
         ]
-        return [self._tool_registry.function_definition(spec) for spec in sorted(specs, key=lambda s: s.full_name)]
+        # 定义形状由工具域的 LLM 转换层统一生成（llm_defs），附上下文计量归属
+        return [
+            function_definition(spec, self._tool_registry.category_of(spec.full_name))
+            for spec in sorted(specs, key=lambda s: s.full_name)
+        ]
 
     # ==================================================================
     # 命令驱动 ReAct（命令 → 消息队列 → 持续推进任务 → 回空闲）

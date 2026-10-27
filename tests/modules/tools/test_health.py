@@ -12,7 +12,13 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.tool_health import ToolHealthPayload
 from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.tools import ToolExecutionResult, ToolHealthMonitor, ToolInvocation, ToolRegistry, ToolSpec
+from src.modules.tools.llm_defs import to_llm_definitions
+from src.modules.tools.operations import ToolOperations
 from src.modules.tools.provider import BaseToolProvider
+
+
+def _ops(registry: ToolRegistry) -> ToolOperations:
+    return ToolOperations(registry)
 
 
 async def _ok(inv: ToolInvocation) -> ToolExecutionResult:
@@ -89,7 +95,7 @@ async def test_failures_trip_at_threshold_and_hide_tool_from_default_views() -> 
     # 熔断工具默认从工具列表与 LLM 定义摘除（planner 看不见），include_tripped 时可见
     assert "p_flaky" not in {s.full_name for s in registry.list_tools()}
     assert "p_flaky" in {s.full_name for s in registry.list_tools(include_tripped=True)}
-    assert all(d["name"] != "p_flaky" for d in registry.to_llm_definitions())
+    assert all(d["name"] != "p_flaky" for d in to_llm_definitions(registry))
 
 
 async def test_tripped_invoke_short_circuits_without_tool_result_event() -> None:
@@ -124,7 +130,7 @@ async def test_success_and_business_rejection_break_the_failure_streak() -> None
     registry.register(ToolSpec(name="flip", description="d", provider="p"), flip)
     for _ in range(3):
         await registry.invoke(ToolInvocation(tool_name="p_flip"))
-    entry = registry.tool_health_snapshot()["p_flip"]
+    entry = _ops(registry).tool_health_snapshot()["p_flip"]
     assert not registry.is_tripped("p_flip") and (entry["state"], entry["failure_count"]) == ("healthy", 1)
 
     # 业务拒绝确认服务可应答：前后的传输故障不能拼成一次连续故障
@@ -144,7 +150,7 @@ async def test_success_and_business_rejection_break_the_failure_streak() -> None
     registry.register(ToolSpec(name="read", description="", provider="p"), respond)
     for _ in range(3):
         assert not (await registry.invoke(ToolInvocation(tool_name="p_read"))).success
-    assert not registry.is_tripped("p_read") and registry.tool_health_snapshot()["p_read"]["failure_count"] == 1
+    assert not registry.is_tripped("p_read") and _ops(registry).tool_health_snapshot()["p_read"]["failure_count"] == 1
 
 
 async def test_trip_and_recover_emit_open_and_closed_health_events() -> None:
@@ -171,16 +177,16 @@ async def test_threshold_zero_never_trips_but_records_failures_and_snapshot_list
     registry = _registry_with("never", failure_threshold=0)
     registry.register(ToolSpec(name="clean", description="d", provider="p"), _ok)
     await registry.invoke(ToolInvocation(tool_name="p_clean"))
-    assert registry.tool_health_snapshot() == {}  # 快照只含熔断中或有过失败的工具
+    assert _ops(registry).tool_health_snapshot() == {}  # 快照只含熔断中或有过失败的工具
 
     for _ in range(10):
         await registry.invoke(ToolInvocation(tool_name="p_never"))
-    snap = registry.tool_health_snapshot()
+    snap = _ops(registry).tool_health_snapshot()
     assert not registry.is_tripped("p_never") and set(snap) == {"p_never"}
     assert (snap["p_never"]["state"], snap["p_never"]["failure_count"]) == ("healthy", 10)
 
     await registry.invoke(ToolInvocation(tool_name="ghost"))  # 未知工具短路不触达健康状态
-    assert "ghost" not in registry.tool_health_snapshot()
+    assert "ghost" not in _ops(registry).tool_health_snapshot()
 
 
 # 探活入口 probe_tool

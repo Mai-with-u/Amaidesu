@@ -26,7 +26,7 @@ ToolProvider Protocol 与 BaseToolProvider 基类
 需要额外打标。``reconnect`` 默认组合为 ``disconnect`` + ``connect``；维护特殊语
 义（如 MCP 关闭整条 stream 后重新建立）的 Provider 可整体覆写。
 
-手动重连的语义在 ``ToolRegistry.reconnect_provider``：重连成功后对归属该 Provider
+手动重连的语义在 ``ToolOperations.reconnect_provider``：重连成功后对归属该 Provider
 的全部已熔断工具调用 ``probe_tool`` 探活，通过者即刻 ``recover_tool`` 复位熔断，
 联动熔断器恢复路径。手动重连与各 Provider 自身后台重连循环（如 VTS 的
 ``_reconnect_loop``、Warudo 的 ``_connection_loop``）属低频可接受并发场景，

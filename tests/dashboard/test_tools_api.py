@@ -170,6 +170,7 @@ def make_client(config_dir: Path):
             config_service=svc,
             dashboard_config=DashboardConfig(host="127.0.0.1", port=60214),
             tool_registry=registry,  # type: ignore[arg-type]
+            tool_operations=registry,  # type: ignore[arg-type]
         )
         set_dashboard_server(server)
         return TestClient(create_app())

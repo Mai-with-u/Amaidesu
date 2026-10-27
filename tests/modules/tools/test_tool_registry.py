@@ -12,7 +12,13 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.tools import ToolInvocation, ToolProvider, ToolRegistry, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
+from src.modules.tools.llm_defs import to_llm_definitions
+from src.modules.tools.operations import ToolOperations
 from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
+
+
+def _ops(registry: ToolRegistry) -> ToolOperations:
+    return ToolOperations(registry)
 from src.modules.tools.registry import default_tool_registry, set_default_registry
 
 
@@ -127,7 +133,7 @@ def test_result_event_naming_and_full_name_derivation() -> None:
 def test_to_llm_definitions_shape(registry: ToolRegistry) -> None:
     schema = {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}
     registry.register(ToolSpec(name="t", description="D", kind="sync", parameters_schema=schema), _ok)
-    (definition,) = registry.to_llm_definitions()
+    (definition,) = to_llm_definitions(registry)
     assert (definition["name"], definition["description"]) == ("t", "D") and "parameters" in definition
 
 
@@ -222,10 +228,10 @@ def test_scoped_owner_of_projects_single_non_default_visible_agent(registry: Too
         _provider("mixed", "open", "scoped", "shared"),
         visible_to={"mixed_scoped": ["minecraft"], "mixed_shared": ["streamer", "minecraft"]},
     )
-    assert registry.scoped_owner_of("mixed_scoped") == "minecraft"
-    assert registry.scoped_owner_of("mixed_shared") == ""  # 多 Agent 共享无专属归属
-    assert registry.scoped_owner_of("mixed_open") == ""  # 默认名单不算归属
-    assert registry.scoped_owner_of("ghost_tool") == ""  # 未注册工具
+    assert _ops(registry).scoped_owner_of("mixed_scoped") == "minecraft"
+    assert _ops(registry).scoped_owner_of("mixed_shared") == ""  # 多 Agent 共享无专属归属
+    assert _ops(registry).scoped_owner_of("mixed_open") == ""  # 默认名单不算归属
+    assert _ops(registry).scoped_owner_of("ghost_tool") == ""  # 未注册工具
 
 
 def test_providers_returns_snapshot_copy_without_exposing_internal_list(registry: ToolRegistry) -> None:

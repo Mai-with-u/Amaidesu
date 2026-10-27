@@ -50,7 +50,8 @@ class ToolHealthState:
     """单工具熔断器状态（``ToolCircuitBreaker`` 内部使用）。
 
     字段全部为零值起步；invocation 完成后由 ``record`` 维护；外部仅通过
-    ``tool_health_snapshot`` / ``is_tripped`` / ``recover`` 触达。``provider``
+    ``state_of``（只读本体）/ ``tool_health_snapshot`` / ``is_tripped`` /
+    ``recover`` 触达。``provider``
     在首次记账时落账（结果总是携带 spec），快照与恢复事件由此取归属提供者，
     不回查注册表。
     """
@@ -94,6 +95,16 @@ class ToolCircuitBreaker:
             health = ToolHealthState()
             self._health[name] = health
         return health
+
+    def state_of(self, name: str) -> Optional[ToolHealthState]:
+        """取单工具健康状态本体（只读；不存在返回 None，不懒初始化）。
+
+        与 ``state`` 的分工：``state`` 是记账路径的懒初始化取用，本方法给
+        ``ToolHealthMonitor`` 等消费方一条只读通道——探活循环据此读
+        ``tripped_at_ms`` 等类型化字段，不经过 ``tool_health_snapshot`` 的
+        dashboard dict 形状（那是渲染协议，不是内部协议）。
+        """
+        return self._health.get(name)
 
     async def record(self, spec: ToolSpec, result: ToolExecutionResult) -> None:
         """在 ``invoke`` 主路径上更新单工具熔断器状态。
@@ -303,14 +314,12 @@ class ToolHealthMonitor:
         3. True → ``recover_tool(name)``；False → 维持熔断（记日志）
         """
         registry = self._registry
-        snapshot = registry.tool_health_snapshot()
         for name in registry.tripped_tools:
-            entry = snapshot.get(name)
-            if entry is None:
+            health = registry.health_state_of(name)
+            if health is None or not health.tripped:
                 # 熔断刚清掉（理论并发）；跳过
                 continue
-            tripped_at_ms = int(entry.get("tripped_at_ms", 0) or 0)
-            dwell_ms = now_ms() - tripped_at_ms
+            dwell_ms = now_ms() - health.tripped_at_ms
             if dwell_ms < self._probe_interval_ms:
                 logger.debug(
                     f"工具 '{name}' 熔断后驻留 {dwell_ms}ms，小于节拍 {self._probe_interval_ms}ms，跳过本轮探活"

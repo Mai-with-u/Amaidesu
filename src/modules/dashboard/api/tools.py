@@ -14,6 +14,9 @@ Tools API（工具内省与提供者开关端点）
 数据源：**运行时注册表为事实源**（``DashboardServer.tool_registry``，含连接
 失败降级登记的 0 工具 Provider），∪ 配置声明态（``ConfigService.main_config``
 的 ``[tools]`` / ``[agents]`` 段：enabled=false 未装配的提供者也展示）。
+运营观测与重连动作（提供者目录 / 健康快照 / 标注投影 / 手动重连）经
+``DashboardServer.tool_operations``（``ToolOperations``）触达，注册表窄接口
+不承载运营视图。
 
 提供者开关语义：一个提供者 = 一个 enabled 开关，控制权归属人类（配置 +
 Web UI），AI 主播不可决策；写回后需重启应用让组合根按新开关重新装配
@@ -73,6 +76,9 @@ router = APIRouter()
 
 # 组件访问声明：ToolRegistry 未注入（极简启动/测试场景）时统一 503
 RegistryDep = Annotated[Any, Depends(server_component("tool_registry", missing_detail="ToolRegistry 未注入"))]
+# 工具运营面（提供者目录视图 / 健康快照 / 标注投影 / 重连编排）：与 registry
+# 分离的只读伴生对象（ToolOperations），组合根随 registry 一并注入
+ToolOpsDep = Annotated[Any, Depends(server_component("tool_operations", missing_detail="ToolOperations 未注入"))]
 
 
 def _get_tools_config(server: "DashboardServer") -> Dict[str, Any]:
@@ -95,6 +101,7 @@ async def list_tools(
     provider: Optional[str] = None,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
     registry: RegistryDep = None,  # noqa: B008
+    tool_ops: ToolOpsDep = None,  # noqa: B008
 ) -> ToolListResponse:
     """工具注册表只读内省（含停用工具，``disabled`` 字段标记状态）。
 
@@ -117,7 +124,7 @@ async def list_tools(
         logger.warning("list_tools 调用失败，按空工具清单处理", exc=True)
         specs = []
 
-    health_snapshot = registry.tool_health_snapshot()
+    health_snapshot = tool_ops.tool_health_snapshot()
     tools = [
         build_action_entry(
             spec,
@@ -125,8 +132,8 @@ async def list_tools(
             category=registry.category_of(spec.full_name),
             # 停用集合按注册表索引键（全名）存储，必须用全名判定
             disabled=registry.is_disabled(spec.full_name),
-            owner_agent=registry.scoped_owner_of(spec.full_name),
-            supports_reconnect=registry.provider_supports_reconnect(spec.name),
+            owner_agent=tool_ops.scoped_owner_of(spec.full_name),
+            supports_reconnect=tool_ops.provider_supports_reconnect(spec.name),
         )
         for spec in specs
     ]
@@ -141,6 +148,7 @@ async def list_tools(
 async def list_tool_categories(
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
     registry: RegistryDep = None,  # noqa: B008
+    tool_ops: ToolOpsDep = None,  # noqa: B008
 ) -> ToolCatalogResponse:
     """工具页侧边栏与提供者分组的数据源。
 
@@ -149,7 +157,7 @@ async def list_tool_categories(
     """
     tools_cfg = _get_tools_config(server)
     main_config = server.config_service.main_config if server.config_service else {}
-    return ToolCatalogResponse.model_validate(build_tool_catalog(registry, tools_cfg, main_config))
+    return ToolCatalogResponse.model_validate(build_tool_catalog(tool_ops, registry, tools_cfg, main_config))
 
 
 async def _apply_config_toggle(server: "DashboardServer", changes: list[tuple[str, Any]]) -> ConfigApplyOutcome:
@@ -190,7 +198,7 @@ async def control_tool_provider(
     key: str,
     request: ProviderControlRequest,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
-    registry: RegistryDep = None,  # noqa: B008
+    tool_ops: ToolOpsDep = None,  # noqa: B008
 ) -> ToolToggleResponse:
     """把提供者开关写回其声明配置（配置写路径统一编排）。
 
@@ -216,7 +224,7 @@ async def control_tool_provider(
     switch = next(
         (
             record["switch"]
-            for record in safe_list_providers(registry)
+            for record in safe_list_providers(tool_ops)
             if record.get("name") == key and isinstance(record.get("switch"), dict)
         ),
         None,
@@ -382,13 +390,13 @@ async def invoke_tool(
 async def reconnect_provider_endpoint(
     provider_id: str,
     server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008
-    registry: RegistryDep = None,  # noqa: B008
+    tool_ops: ToolOpsDep = None,  # noqa: B008
 ) -> Dict[str, Any]:
     """触发通道级手动重连：仅维护外部连接（VTS/Warudo/OBS/MCP）的 Provider
     可用。失败映射：
 
-    - 404 → registry 中无此 provider_id（未注册 / 拼写错误）
-    - 409 → registry 已注册但 Provider 不支持重连（非 BaseToolProvider /
+    - 404 → 运营面中无此 provider_id（未注册 / 拼写错误）
+    - 409 → 已注册但 Provider 不支持重连（非 BaseToolProvider /
       ``supports_reconnect`` 为 False，例如无连接语 Provider 与内置 spec 工厂
       生成的 Provider）
 
@@ -396,9 +404,9 @@ async def reconnect_provider_endpoint(
     具名列表）、``still_tripped``（探活未通过的熔断工具名列表）、
     ``refreshed``（工具集刷新报告：``added`` / ``removed`` / ``count``，
     降级登记补注册或 server 清单换血的结果；刷新异常时为 null）。详情日志
-    走 ``ToolRegistry.reconnect_provider``。
+    走 ``ToolOperations.reconnect_provider``。
     """
-    report = await registry.reconnect_provider(provider_id)
+    report = await tool_ops.reconnect_provider(provider_id)
     if report.get("ok"):
         return report
     err = report.get("error", "")

@@ -70,6 +70,7 @@ class DashboardServer:
         collector_manager: Optional[Any] = None,
         agent_manager: Optional[Any] = None,
         tool_registry: Optional[Any] = None,
+        tool_operations: Optional[Any] = None,
         llm_manager: Optional[Any] = None,
         prompt_manager: Optional[Any] = None,
         log_streamer: Optional[LogStreamer] = None,
@@ -111,6 +112,10 @@ class DashboardServer:
             else None
         )
         self.tool_registry = tool_registry
+        # 工具运营面（提供者目录视图 / 健康快照 / Dashboard 标注投影 / 手动
+        # 重连编排）：组合根随 tool_registry 一并注入（ToolOperations 实例）；
+        # 未注入（极简启动/测试）时工具运营端点返回 503。
+        self.tool_operations = tool_operations
         self.llm_manager = llm_manager
         # 平台额度查询（上下文面板 Usage 区）按模型反查 provider 配置，依附 LLMManager；
         # 未注入（极简启动/测试）时 /llm/quota 恒返回 null

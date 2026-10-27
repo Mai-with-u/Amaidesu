@@ -40,6 +40,7 @@ bind_core_tools(registry, config=...)  # L2 Provider 注入
 """
 
 from src.modules.tools.bootstrap import bind_core_tools
+from src.modules.tools.operations import ToolOperations
 from src.modules.tools.tool_health_monitor import ToolHealthMonitor
 from src.modules.tools.tasks import TaskLedger, TaskTracker, resolve_tasks_config
 from src.modules.tools.models import (
@@ -64,6 +65,8 @@ __all__ = [
     "as_tool_impl",
     # 注册中心
     "ToolRegistry",
+    # 运营面（目录视图/健康快照/重连编排）
+    "ToolOperations",
     # 熔断器探活服务
     "ToolHealthMonitor",
     # 异步任务基建（记录表 / 跟踪循环 / 配置兜底读取）
