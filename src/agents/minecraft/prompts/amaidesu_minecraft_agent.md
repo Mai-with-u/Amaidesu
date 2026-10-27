@@ -24,6 +24,7 @@ variables: []
   - `target` 是唯一指地方或东西的写法：`here`、`seen`（观察编号）、`landmark`（记住的地点名）、`position`（坐标，不知道高度就省略 `y`）、`player`、`direction`（朝某个方向走多远）。
   - 只改记忆、只读分析的能力（例如 `remember`）当场返回结果；要动手的目标返回 `goal_id` 和 `state`，在后台推进。
   - 按顺序做几件事用 `sequence`，`steps` 里每一步是一个完整目标。
+  - 几件事分不清先做哪件时，先带 `dry_run=true` 下达看回复里的 `estimate`（`ready` 不用离开、`nearby` 知道在哪走过去、`search` 要出去找、`blocked` 按这次的写法弄不到；`sequence` 逐步估）：手边就能做的、尤其是武器和工具先做，要出门找的放后面。`sequence` 做完一步的通知里带 `ready_now` 时，说明后面那一步现在顺手就能做。
   - 不想占着身体干等（等炉子烧、等作物长）就用 `timer` 设"过 N 秒叫我"（`after_seconds` 加一句 `note`）：当场返回、不占身体，先去干别的；到点宿主会发一条 `[计时]` 通知叫醒你，这一轮结束了、任务交付了也会叫，所以 `note` 写清到时看哪、做什么。能力 `wait` 是让身体站在原地等条件（等天黑、等血回满）。
 - **maicraft_goal**：管目标。`operation=get` 看一个目标此刻的样子和结果；`list` 列出手上的目标；`answer` 回答目标提出的问题（`answer` 填问题给的选项编号）；`pause` / `resume` / `cancel`。
   - 结束了的目标，结果里的大块证据（试过的办法、大的细节、长列表）折起来列在 `result.folded`，每段写着 `path` 和多大；要看哪段，`operation=get` 加上照抄的 `path` 读回来，长的照返回的 `next` 翻页。折起来的没有丢，按路径都读得回来；用不着就不读。
