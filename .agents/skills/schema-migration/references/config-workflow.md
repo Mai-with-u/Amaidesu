@@ -55,7 +55,7 @@ register_file_hook("agents.toml", "<hook 名>", "X.Y.Z", _upgrade_<file>_<语义
 - **原地修改**传入的 config dict，返回值不是数据载体，而是变更路径列表（点分）；无变更返回 `[]`。
 - **幂等**：对已迁移数据重复执行零变更——用"键存在性""值等于旧默认"做守卫。
 - **改默认值只改写等于旧默认的落盘值**，用户显式设置的其他值原样保留（范例：`_widen_recent_intents_window`、`_upgrade_replyer_style_drop_emoji`）。
-- **跨文件搬移**用 `register_cross_file_hook(host_file, target_file, name, target_version, run)`，钩子签名 `(host_data, target_data)`，宿主与目标双写、双版本同升。target_file 必须与配置实际所在文件一致（写错文件会被校验当未知段剥离成数据丢失）。范例：`_upgrade_vts_lipsync_to_infra`（tools.toml → avatar.toml）。
+- **跨文件搬移**用 `register_cross_file_hook(host_file, target_file, name, target_version, run)`，钩子签名 `(host_data, target_data)`，宿主与目标双写、双版本同升。target_file 必须与配置实际所在文件一致（写错文件会被校验当未知段剥离成数据丢失）。范例：`_upgrade_vts_lipsync_to_avatar`（tools.toml → avatar.toml）。
 - 钩子内发现无法自动迁移的自定义值时**抛错带指引**（范例：`_upgrade_builder_scene_transport` 对非默认旧协议 raise），不要猜测映射或静默丢弃。
 - 退役配置的新去向用户无从知晓时，钩子里 `logger.warning` 写明今后在哪配置（范例：`_drop_minecraft_companion_collectors`）。
 

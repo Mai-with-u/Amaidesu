@@ -50,6 +50,17 @@ SCOPE_RELOAD_POLICY: Dict[str, str] = {
 COMPONENT_REBUILD_SCOPES = frozenset(s for s, policy in SCOPE_RELOAD_POLICY.items() if policy == "component")
 
 
+def _flatten_multi_config(multi_config: Dict[str, Any]) -> Dict[str, Any]:
+    """把按 scope 的多文件配置拍平为顶层键视图（按七域固定顺序遍历合并）。"""
+    flattened: Dict[str, Any] = {}
+    for scope in CONFIG_SCOPES:
+        section_data = multi_config.get(scope, {})
+        if isinstance(section_data, dict):
+            for key, value in section_data.items():
+                flattened[key] = value
+    return flattened
+
+
 class ConfigService:
     """
     统一的配置管理服务
@@ -134,12 +145,7 @@ class ConfigService:
             for key in drift.missing:
                 self.logger.info(f"漂移检测: 补充缺失配置项 '{key}'")
 
-        self._main_config = {}
-        for category in CONFIG_SCOPES:
-            section_data = multi_config.get(category, {})
-            if isinstance(section_data, dict):
-                for key, value in section_data.items():
-                    self._main_config[key] = value
+        self._main_config = _flatten_multi_config(multi_config)
         # 拍平会丢掉"哪个键属于哪个文件"，而部分消费方需要的正是**按文件**的视图：
         # collectors.toml 的根键就是 enabled + 各采集器同名表（没有 [collectors] 包裹表），
         # 拍平后顶层只剩 enabled 与各采集器名，取不到"这一个文件的这一段"。
@@ -385,13 +391,7 @@ class ConfigService:
         config_dir = Path(self.base_dir) / "config"
         multi_config, _drift = load_config_dir(config_dir)
 
-        flattened: Dict[str, Any] = {}
-        for category in CONFIG_SCOPES:
-            section_data = multi_config.get(category, {})
-            if isinstance(section_data, dict):
-                for key, value in section_data.items():
-                    flattened[key] = value
-        return flattened
+        return _flatten_multi_config(multi_config)
 
     async def _handle_reload(
         self,

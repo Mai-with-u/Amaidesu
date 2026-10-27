@@ -434,7 +434,7 @@ _LIPSYNC_KEYS = (
 )
 
 
-def _upgrade_vts_lipsync_to_infra(host_data: Dict[str, Any], target_data: Dict[str, Any]) -> List[str]:
+def _upgrade_vts_lipsync_to_avatar(host_data: Dict[str, Any], target_data: Dict[str, Any]) -> List[str]:
     """tools.toml v2.0.36：VTS lip-sync 调参键跨文件搬至 [avatar.lipsync]。
 
     用户显式设置值原样搬迁（不改名、不改值）；仅值等于旧默认的键同样搬迁
@@ -472,7 +472,7 @@ def _upgrade_vts_lipsync_to_infra(host_data: Dict[str, Any], target_data: Dict[s
 
 # 生产钩子登记：tools.toml v2.0.36（VTS lip-sync 键跨文件迁 [avatar.lipsync]，
 # 目标文件随域迁出改为 avatar.toml）
-register_cross_file_hook("tools.toml", "avatar.toml", "vts_lipsync_to_infra", "2.0.36", _upgrade_vts_lipsync_to_infra)
+register_cross_file_hook("tools.toml", "avatar.toml", "vts_lipsync_to_avatar", "2.0.36", _upgrade_vts_lipsync_to_avatar)
 
 # tools.toml v2.0.37：删 [tools.avatar.warudo].config 三个字幕键。Warudo 8766
 # 字幕面整体删除（与 Dashboard /subtitle 页重叠），字幕收敛为"一源 → 三面"；

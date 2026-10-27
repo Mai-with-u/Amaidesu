@@ -24,9 +24,10 @@
   剥离；版本按文件独立读取（``get_config_version``）。
 - **动态键子段的权威在组件包**——采集器/Agent 子段经组件注册表
   （``COMPONENT_SCHEMAS``）、工具提供者 ``config`` 子段经工具提供者注册表
-  （``TOOL_PROVIDER_SCHEMAS``）分发校验与默认值补全（见
-  ``_validate_collectors_sections`` / ``_validate_tool_provider_sections``）；
-  静态命名段直接 typed 引用包内 Schema（如 ``VisionProviderConfig.config``）。
+  （``TOOL_PROVIDER_SCHEMAS``）分发校验与默认值补全；静态命名段直接 typed
+  引用包内 Schema（如 ``VisionProviderConfig.config``）。各域动态内容的
+  校验机制统一为"每域校验声明"参数化的单一分支（``_FILE_VALIDATION_SPECS``
+  / ``_apply_file_validation``），新增动态键域只需加一条声明。
   TTS 引擎/字幕后端子段为 free-form dict，其编辑链路由 WebUI 侧的
   provider Schema 承担，加载管线不做补全。
 """
@@ -34,6 +35,7 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -48,7 +50,7 @@ from src.modules.config.avatar_schemas import AvatarPlatformConfig, AvatarRootCo
 from src.modules.config.collectors_schemas import CollectorsRootConfig
 from src.modules.config.tools_schemas import ToolsConfig, ToolsRootConfig
 from src.modules.config.errors import ConfigValidationError
-from src.modules.config.model_schemas import LLMProfilesConfig, ModelConfig, ModelRootConfig
+from src.modules.config.model_schemas import LLMProfilesConfig, ModelConfig
 from src.modules.config.storage_schemas import StorageRootConfig
 from src.modules.config.infra_schemas import InfraRootConfig
 from src.modules.config.self_write_guard import mark_self_write
@@ -182,32 +184,40 @@ def _populate_fields_table(table: Any, item: BaseModel) -> None:
         _set_toml_value(table, sub_name, value)
 
 
-def _default_section_dict(schema_cls: type[BaseConfig]) -> dict[str, Any]:
-    """单段默认值 dict（物化器与生成路径共用）。
+def _dump_without_none(instance: BaseModel) -> dict[str, Any]:
+    """模型 → dict 并递归剥除 None（本文件唯一的 None 剥离点）。
 
-    exclude_none 递归剥除：model_dump 会展开嵌套子模型，TOML 无
-    null 字面量，任意层级的 None 都会炸序列化。
+    TOML 无 null 字面量，任意层级的 None 都会炸序列化；model_dump 会展开
+    嵌套子模型，浅层剥不够，段内部的 Optional None 同样要剥。在册段回填
+    dict 与默认值 dict 共用本出口。
     """
-    return schema_cls().model_dump(exclude_none=True)
+    return instance.model_dump(exclude_none=True)
+
+
+def _default_section_dict(schema_cls: type[BaseConfig]) -> dict[str, Any]:
+    """单段默认值 dict（物化器与生成路径共用）。"""
+    return _dump_without_none(schema_cls())
 
 
 def _materializable_sections(file_name: str) -> dict[str, dict[str, Any]] | None:
-    """按域协议构造配置文件的物化段全集（无可物化域返回 None）。
+    """按域声明构造配置文件的物化段全集（无可物化域返回 None）。
 
-    生成路径与加载管线共用同一物化语义：首次生成/单缺重建的
-    文件直接是"可配置全集"的物化快照，用户打开即见全部段模板。
-    二期扩展 tools/avatar 域时在此登记。
+    生成路径与加载管线共用同一物化语义：首次生成/单缺重建的文件直接是
+    "可配置全集"的物化快照，用户打开即见全部段模板。哪些域的缺失段会被
+    物化补默认由每域校验声明的 ``materialize_registry`` 表达（当前仅
+    collectors），扩展物化范围即在该域声明上登记。
     """
-    if file_name != "collectors.toml":
+    spec = _FILE_VALIDATION_SPECS.get(file_name)
+    if spec is None or spec.materialize_registry is None:
         return None
-    # 函数内 import 规避循环依赖（同 _validate_collectors_sections）：
+    registry_of = spec.materialize_registry
+    # 函数内 import 规避循环依赖（同 _collector_registry）：
     # 注册表由组件目录惰性填充，生成路径没有"加载开头 ensure"的既定
     # 时序兜底，必须先 ensure——否则首启生成时全集为空、静默生成骨架
     from src.modules.component_catalog import ensure_component_registry
-    from src.modules.config.registry import COLLECTOR_SCHEMAS
 
     ensure_component_registry()
-    return {name: _default_section_dict(schema_cls) for name, schema_cls in sorted(COLLECTOR_SCHEMAS.items())}
+    return {name: _default_section_dict(schema_cls) for name, schema_cls in sorted(registry_of().items())}
 
 
 def _render_root_toml(
@@ -509,203 +519,397 @@ def _read_toml_dict(file_path: Path) -> dict[str, Any]:
         return tomlkit.load(f).unwrap()
 
 
-def _materialize_collector_sections(
-    root_instance: CollectorsRootConfig,
-    report: DriftReport,
-) -> None:
-    """按采集器注册表为文件缺的段补默认值（物化器，加载管线与生成路径共用）。
+# ---------------------------------------------------------------------------
+# 阶段④ 每域校验声明与统一分支
+#
+# 各域动态内容的校验机制同构：enabled 名单封闭集 → 未知段封闭集 → 物化
+# 补缺 → 在册段按注册表 Schema 校验 + 干净 dict 回填。机制只实现一遍
+# （``_apply_file_validation``），域间既有差异（名单来源、合法清单、错误
+# 文案、段枚举与回填形态、是否物化补缺）全部落在本表声明——新增一个
+# 动态键域只需常规 Schema 注册 + 这里加一条声明。
+# 名单与注册表经命名取值函数延迟求值：注册表由组件目录惰性填充，模块
+# 导入期尚无内容；函数内 import 同时规避 config 包对组件实现包的依赖
+# （先例：组件目录的延迟加载器模式）。
+# ---------------------------------------------------------------------------
 
-    只补在册缺段，不触碰未知段（未知段的处置由调用方校验分支负责）；
-    补出的段计入漂移报告随阶段⑤写回落盘——文件由此成为"可配置全集"
-    的物化快照：在册段必在文件，未启用的采集器也可先配后启。
+
+def _expect_table_error(value: Any) -> str:
+    """ "段期望是 TOML 表"的统一错误文案。"""
+    return f"期望 TOML 表（dict），实际 {type(value).__name__}"
+
+
+@dataclass(frozen=True)
+class _ClosedSetCheck:
+    """封闭名单校验声明：名单来源 + 合法清单 + 硬错定位与文案。
+
+    ``detail`` 是硬错文案的单一源：占位符 ``{unknown}``（未知名列表）、
+    ``{known}``（合法名单）、``{identity}``（首个未知名）由统一校验分支
+    参数化拼接；各域措辞差异（名词、出路提示、有无提示）由声明值表达。
     """
-    # 函数内 import 规避循环依赖：组件注册表会拉起各组件包，
-    # 而部分组件包（如采集器）转而引用本模块的加载能力
+
+    names: Callable[[BaseConfig, dict[str, Any]], list[str]]  # 文件中出现的名字
+    known: Callable[[], list[str]]  # 合法清单（延迟求值，保持排序）
+    error_path: Callable[[str], str]  # 硬错定位 dotted path（入参为首个未知名）
+    detail: str  # 硬错文案模板
+
+
+@dataclass(frozen=True)
+class _SectionEntry:
+    """单个动态段在当前实例上的校验视图（输入、错误定位与回填点）。"""
+
+    identity: str  # 段身份（注册表键的字符串形态）
+    raw: Any  # 待校验的段数据
+    unknown_error_path: str  # 未注册 / 非表硬错定位
+    validate_error_path: str  # 段 Schema 校验失败硬错定位
+    drift_prefix: str  # 子段漂移路径并入宿主报告的前缀
+    backfill: Callable[[dict[str, Any]], None]  # 干净 dict 回填点
+    extra_redundant_keys: tuple[str, ...] = ()  # 段本体未注册残留键（计入冗余报告）
+
+
+@dataclass(frozen=True)
+class _SectionCheck:
+    """注册表驱动动态键域的逐段校验声明。"""
+
+    schema_of: Callable[[str], type[BaseConfig] | None]  # 段身份 → ConfigSchema（未注册为 None）
+    known_identities: Callable[[], list[str]]  # 合法段身份清单（延迟求值，保持排序）
+    sections: Callable[[BaseConfig], list[_SectionEntry]]  # 当前文件里的段视图枚举
+    unknown_detail: str  # 未注册段硬错文案模板（{identity} / {known}）
+    validate_fail_label: str  # 段 Schema 校验失败的文案前缀（统一拼接 ": {异常}"）
+
+
+@dataclass(frozen=True)
+class _FileValidationSpec:
+    """单个配置文件的动态内容校验声明（无声明的域不做动态内容校验）。"""
+
+    file_name: str
+    enabled: _ClosedSetCheck | None = None
+    unknown_sections: _ClosedSetCheck | None = None
+    sections: _SectionCheck | None = None
+    # 缺段物化：返回"注册名 → ConfigSchema"（延迟求值）；None = 本域缺失段不物化补默认
+    materialize_registry: Callable[[], dict[str, type[BaseConfig]]] | None = None
+
+
+# -- collectors.toml 域声明 ---------------------------------------------------
+
+
+def _collector_enabled_names(instance: BaseConfig, _raw: dict[str, Any]) -> list[str]:
+    return list(instance.enabled)
+
+
+def _collector_known_names() -> list[str]:
+    # 函数内 import 规避循环依赖：注册表由组件目录惰性填充
     from src.modules.config.registry import COLLECTOR_SCHEMAS
 
-    extras = root_instance.__pydantic_extra__
+    return sorted(COLLECTOR_SCHEMAS)
+
+
+def _collector_section_identities(instance: BaseConfig, _raw: dict[str, Any]) -> list[str]:
+    """文件里的动态段名（根 Schema ``extra="allow"`` 保留下来的 extras 键）。"""
+    extras = getattr(instance, "__pydantic_extra__", None) or {}
+    return sorted(extras)
+
+
+def _collector_registry() -> dict[str, type[BaseConfig]]:
+    # 函数内 import 规避循环依赖：注册表由组件目录惰性填充
+    from src.modules.config.registry import COLLECTOR_SCHEMAS
+
+    return COLLECTOR_SCHEMAS
+
+
+def _collector_schema_of(identity: str) -> type[BaseConfig] | None:
+    from src.modules.config.registry import COLLECTOR_SCHEMAS
+
+    return COLLECTOR_SCHEMAS.get(identity)
+
+
+def _extras_backfill(extras: dict[str, Any], name: str) -> Callable[[dict[str, Any]], None]:
+    """原位回填闭包：干净 dict 写回实例 extras 的同名键。"""
+
+    def _apply(clean: dict[str, Any]) -> None:
+        extras[name] = clean
+
+    return _apply
+
+
+def _collector_section_entries(instance: BaseConfig) -> list[_SectionEntry]:
+    """collectors.toml 的段视图：extras 里的段 dict，校验后原位回填。"""
+    extras = getattr(instance, "__pydantic_extra__", None) or {}
+    return [
+        _SectionEntry(
+            identity=name,
+            raw=extras[name],
+            unknown_error_path=f"collectors.{name}",
+            validate_error_path=f"collectors.{name}",
+            drift_prefix=name,
+            backfill=_extras_backfill(extras, name),
+        )
+        for name in sorted(extras)
+    ]
+
+
+# -- tools.toml 域声明 --------------------------------------------------------
+
+
+def _tool_provider_known_identities() -> list[str]:
+    # 函数内 import 规避循环依赖：注册表由组件目录惰性填充
+    from src.modules.config.registry import TOOL_PROVIDER_SCHEMAS
+
+    return sorted(f"{d}.{k}" for d, k in TOOL_PROVIDER_SCHEMAS)
+
+
+def _tool_provider_schema_of(identity: str) -> type[BaseConfig] | None:
+    # 函数内 import 规避循环依赖：注册表由组件目录惰性填充
+    from src.modules.config.registry import TOOL_PROVIDER_SCHEMAS
+
+    domain, _, key = identity.partition(".")
+    return TOOL_PROVIDER_SCHEMAS.get((domain, key))
+
+
+def _provider_config_backfill(provider_cfg: Any) -> Callable[[dict[str, Any]], None]:
+    """回填闭包：干净 dict 写回提供者段本体的 ``config`` 字段。"""
+
+    def _apply(clean: dict[str, Any]) -> None:
+        provider_cfg.config = clean
+
+    return _apply
+
+
+def _tool_section_entries(instance: BaseConfig) -> list[_SectionEntry]:
+    """tools.toml 的段视图：各分类段下的提供者段（``[tools.<domain>.<key>]``）。
+
+    avatar 域的成员段已迁出为独立文件 avatar.toml（ToolsConfig 无 avatar
+    字段），该域在此枚举自然空转。段本体未注册残留键（enabled/config 之外
+    的拼写错误等）计入冗余报告。
+    """
+    # 函数内 import 规避循环依赖：域清单是组件目录的静态派生量（不拉起 provider 包）
+    from src.modules.component_catalog import TOOL_PROVIDER_DOMAINS
+
+    tools = instance.tools
+    entries: list[_SectionEntry] = []
+    for domain in TOOL_PROVIDER_DOMAINS:
+        sections = getattr(tools, domain, None) or {}
+        for key in sorted(sections):
+            provider_cfg = sections[key]
+            entries.append(
+                _SectionEntry(
+                    identity=f"{domain}.{key}",
+                    raw=provider_cfg.config,
+                    unknown_error_path=f"tools.{domain}.{key}",
+                    validate_error_path=f"tools.{domain}.{key}.config",
+                    drift_prefix=f"tools.{domain}.{key}.config",
+                    extra_redundant_keys=tuple(sorted(getattr(provider_cfg, "__pydantic_extra__", None) or {})),
+                    backfill=_provider_config_backfill(provider_cfg),
+                )
+            )
+    return entries
+
+
+# -- avatar.toml 域声明 -------------------------------------------------------
+
+
+def _avatar_enabled_names(instance: BaseConfig, _raw: dict[str, Any]) -> list[str]:
+    return list(instance.platform.enabled)
+
+
+def _avatar_platform_known_names() -> list[str]:
+    return sorted(PLATFORM_NAMES)
+
+
+def _avatar_section_identities(instance: BaseConfig, _raw: dict[str, Any]) -> list[str]:
+    """文件里的未注册成员段（``extra="allow"`` 保留下来的 platform extras 键）。"""
+    extras = instance.platform.__pydantic_extra__ or {}
+    return sorted(extras)
+
+
+# -- model.toml 域声明 --------------------------------------------------------
+
+
+def _llm_profile_identities(_instance: BaseConfig, raw_data: dict[str, Any]) -> list[str]:
+    """原始数据里的 ``[llm_profiles]`` 键（缺段为空；非表即硬错）。
+
+    在漂移剥离之前先于原始数据上检查，保证未知键硬错且点名。
+    """
+    raw_profiles = raw_data.get("llm_profiles")
+    if raw_profiles is None:
+        return []
+    if not isinstance(raw_profiles, dict):
+        raise ConfigValidationError("model.toml", "llm_profiles", _expect_table_error(raw_profiles))
+    return sorted(raw_profiles)
+
+
+def _llm_profile_known_names() -> list[str]:
+    """``[llm_profiles]`` 封闭集合的权威源：LLMProfilesConfig 的显式字段集合。
+
+    "缺"由字段缺省种子保证（漂移写回自动补齐），无需显式必填清单。
+    """
+    return sorted(LLMProfilesConfig.model_fields)
+
+
+# -- 声明登记表（新增动态键域 = 常规 Schema 注册 + 这里加一条声明）---------------
+
+_FILE_VALIDATION_SPECS: dict[str, _FileValidationSpec] = {
+    "collectors.toml": _FileValidationSpec(
+        file_name="collectors.toml",
+        enabled=_ClosedSetCheck(
+            names=_collector_enabled_names,
+            known=_collector_known_names,
+            error_path=lambda _first: "collectors.enabled",
+            detail=(
+                "未注册采集器名 {unknown}（合法名单：{known}）。"
+                "若因程序升级导致，请为该采集器的退役/改名补迁移钩子；若为手写残留，请从 enabled 移除"
+            ),
+        ),
+        unknown_sections=_ClosedSetCheck(
+            names=_collector_section_identities,
+            known=_collector_known_names,
+            error_path=lambda first: f"collectors.{first}",
+            detail=(
+                "未注册采集器段 {unknown}（合法名单：{known}）。"
+                "若因程序升级导致，请补迁移钩子搬移旧结构；若为手写残留，请删除该段"
+            ),
+        ),
+        sections=_SectionCheck(
+            schema_of=_collector_schema_of,
+            known_identities=_collector_known_names,
+            sections=_collector_section_entries,
+            unknown_detail=(
+                "未注册采集器段 [{identity}]（合法名单：{known}）。"
+                "若因程序升级导致，请补迁移钩子搬移旧结构；若为手写残留，请删除该段"
+            ),
+            validate_fail_label="子段校验失败",
+        ),
+        materialize_registry=_collector_registry,
+    ),
+    "tools.toml": _FileValidationSpec(
+        file_name="tools.toml",
+        sections=_SectionCheck(
+            schema_of=_tool_provider_schema_of,
+            known_identities=_tool_provider_known_identities,
+            sections=_tool_section_entries,
+            unknown_detail=(
+                "未注册提供者段 [tools.{identity}]（合法名单：{known}）。"
+                "若因程序升级导致，请补迁移钩子搬移旧结构；若为手写残留，请删除该段"
+            ),
+            validate_fail_label="提供者 config 子段校验失败",
+        ),
+    ),
+    "avatar.toml": _FileValidationSpec(
+        file_name="avatar.toml",
+        enabled=_ClosedSetCheck(
+            names=_avatar_enabled_names,
+            known=_avatar_platform_known_names,
+            error_path=lambda _first: "avatar.platform.enabled",
+            detail="未注册平台名 {unknown}（合法名单：{known}）",
+        ),
+        unknown_sections=_ClosedSetCheck(
+            names=_avatar_section_identities,
+            known=_avatar_platform_known_names,
+            error_path=lambda first: f"avatar.platform.{first}",
+            detail="未注册平台段 {unknown}（合法名单：{known}）。若为手写残留，请删除该段",
+        ),
+    ),
+    "model.toml": _FileValidationSpec(
+        file_name="model.toml",
+        unknown_sections=_ClosedSetCheck(
+            names=_llm_profile_identities,
+            known=_llm_profile_known_names,
+            error_path=lambda _first: "llm_profiles",
+            detail="未知用途 profile：{unknown}（封闭集合：{known}）",
+        ),
+    ),
+}
+
+
+def _check_closed_set(
+    file_name: str,
+    check: _ClosedSetCheck,
+    instance: BaseConfig,
+    raw_data: dict[str, Any],
+) -> None:
+    """封闭名单校验：名单出现合法清单外的条目 → 硬错（点名 + 合法名单 + 出路提示）。"""
+    known = check.known()
+    unknown = sorted(name for name in check.names(instance, raw_data) if name not in set(known))
+    if unknown:
+        raise ConfigValidationError(
+            file_name,
+            check.error_path(unknown[0]),
+            check.detail.format(unknown=unknown, known=known, identity=unknown[0]),
+        )
+
+
+def _materialize_missing_sections(
+    spec: _FileValidationSpec,
+    instance: BaseConfig,
+    report: DriftReport,
+) -> None:
+    """按域注册表为文件缺的段补默认值（物化器，加载管线与生成路径共用）。
+
+    只补在册缺段，不触碰未知段（未知段的处置由封闭集校验负责）；补出的段
+    计入漂移报告随阶段⑤写回落盘——文件由此成为"可配置全集"的物化快照：
+    在册段必在文件，未启用的组件也可先配后启。
+    """
+    registry = spec.materialize_registry()
+    extras = getattr(instance, "__pydantic_extra__", None)
     if extras is None:
         extras = {}
-        root_instance.__pydantic_extra__ = extras
-    for name, schema_cls in sorted(COLLECTOR_SCHEMAS.items()):
+        instance.__pydantic_extra__ = extras
+    for name, schema_cls in sorted(registry.items()):
         if name in extras:
             continue
         extras[name] = _default_section_dict(schema_cls)
         report.missing.append(name)
 
 
-def _validate_collectors_sections(
-    root_instance: CollectorsRootConfig,
+def _validate_registry_sections(
+    file_name: str,
+    check: _SectionCheck,
+    instance: BaseConfig,
     report: DriftReport,
 ) -> None:
-    """按采集器注册表校验采集器子段与 enabled 名单（阶段④ 的 collectors 分支）。
+    """在册段逐段校验 + 干净 dict 回填（机制统一分支）。
 
-    - enabled 名单出现注册表外名字、或文件存在注册表外子段 → 硬错
-      （ConfigValidationError，点名 + 合法名单 + 处置指引）。collectors.toml
-      是用户唯一契约面，未知条目留任即欺骗读者；改名/退役场景由迁移
-      钩子在阶段②③先行搬走旧结构，走到此处的未知条目只可能是钩子
-      欠账或手写笔误，两者都该当面拦下而非静默容忍
-    - 在册子段缺失 → 物化器按注册表补默认值（计入漂移报告随阶段⑤写回）
-    - 在册子段 → 包内 ConfigSchema 校验 + 漂移检测；漂移路径以
-      ``<采集器名>.<字段>`` 前缀并入宿主文件报告
-    - 校验后的干净子段 dict 回填 root 实例的 extras，供阶段⑤ 全量写回
+    - 未注册段 → 硬错（文案见各域声明的模板）
+    - 段数据非表 → 硬错
+    - 段本体未注册残留键 → 计入冗余报告（随全域冗余硬错聚合拦截）
+    - 段 Schema 校验 → 漂移并入宿主报告；干净 dict（剥 None）经段声明
+      的回填点写回，供阶段⑤全量写回与运行时装配消费
     """
-    # 函数内 import 规避循环依赖：组件注册表会拉起各组件包，
-    # 而部分组件包（如采集器）转而引用本模块的加载能力
-    from src.modules.config.registry import COLLECTOR_SCHEMAS
-
-    known = sorted(COLLECTOR_SCHEMAS)
-    unknown_enabled = sorted(n for n in root_instance.enabled if n not in COLLECTOR_SCHEMAS)
-    if unknown_enabled:
-        raise ConfigValidationError(
-            "collectors.toml",
-            "collectors.enabled",
-            f"未注册采集器名 {unknown_enabled}（合法名单：{known}）。"
-            f"若因程序升级导致，请为该采集器的退役/改名补迁移钩子；若为手写残留，请从 enabled 移除",
-        )
-    extras = root_instance.__pydantic_extra__ or {}
-    unknown_sections = sorted(name for name in extras if name not in COLLECTOR_SCHEMAS)
-    if unknown_sections:
-        raise ConfigValidationError(
-            "collectors.toml",
-            f"collectors.{unknown_sections[0]}",
-            f"未注册采集器段 {unknown_sections}（合法名单：{known}）。"
-            f"若因程序升级导致，请补迁移钩子搬移旧结构；若为手写残留，请删除该段",
-        )
-    _materialize_collector_sections(root_instance, report)
-    for name in sorted(extras):
-        schema_cls = COLLECTOR_SCHEMAS[name]
-        sub_raw = extras[name]
-        if not isinstance(sub_raw, dict):
+    for view in check.sections(instance):
+        schema_cls = check.schema_of(view.identity)
+        if schema_cls is None:
             raise ConfigValidationError(
-                "collectors.toml",
-                f"collectors.{name}",
-                f"期望 TOML 表（dict），实际 {type(sub_raw).__name__}",
+                file_name,
+                view.unknown_error_path,
+                check.unknown_detail.format(identity=view.identity, known=check.known_identities()),
             )
+        if not isinstance(view.raw, dict):
+            raise ConfigValidationError(file_name, view.unknown_error_path, _expect_table_error(view.raw))
+        report.redundant.extend(f"{view.unknown_error_path}.{k}" for k in view.extra_redundant_keys)
         try:
-            sub_instance, sub_report = schema_cls.from_dict_with_drift_check(sub_raw)
+            sub_instance, sub_report = schema_cls.from_dict_with_drift_check(view.raw)
         except Exception as exc:
-            raise ConfigValidationError("collectors.toml", f"collectors.{name}", f"子段校验失败: {exc}") from exc
-        report.missing.extend(f"{name}.{m}" for m in sub_report.missing)
-        report.redundant.extend(f"{name}.{r}" for r in sub_report.redundant)
-        # exclude_none 递归剥除（浅层剥不够）：model_dump 展开嵌套子模型，
-        # 子段内部的 Optional None（如 audio.stt_input_device_name）同样
-        # 炸 TOML 序列化——文件读入无 null，None 只来自"补默认"路径
-        root_instance.__pydantic_extra__[name] = sub_instance.model_dump(exclude_none=True)
+            raise ConfigValidationError(
+                file_name, view.validate_error_path, f"{check.validate_fail_label}: {exc}"
+            ) from exc
+        report.merge(view.drift_prefix, sub_report)
+        view.backfill(_dump_without_none(sub_instance))
 
 
-def _validate_tool_provider_sections(
-    root_instance: ToolsRootConfig,
+def _apply_file_validation(
+    spec: _FileValidationSpec,
+    instance: BaseConfig,
+    raw_data: dict[str, Any],
     report: DriftReport,
 ) -> None:
-    """按工具提供者注册表校验 ``[tools.<domain>.<key>].config`` 子段（阶段④ 的 tools 分支）。
-
-    与采集器分支同构（``_validate_collectors_sections``）：
-
-    - 在册提供者段 → 包内 ConfigSchema 校验 + 漂移检测（缺键补默认、
-      未知键剥离），漂移路径以 ``tools.<domain>.<key>.config.<字段>``
-      前缀并入宿主文件报告；补全后的干净 dict 回填 ``.config`` 字段，
-      供阶段⑤ 全量写回与运行时装配消费
-    - 未注册段（退役/改名遗留或手写残留）→ 硬错：tools.toml 同为
-      用户契约面，未知段留任即欺骗读者；改名/退役场景由迁移钩子在
-      阶段②③先行搬走旧结构，走到此处的未知段只可能是钩子欠账或
-      手写笔误，两者都该当面拦下
-    - 类型违约 → ConfigValidationError（携带完整 dotted path），错误
-      从运行期装配失败前移到加载期
-    """
-    # 函数内 import 规避循环依赖：注册表会拉起各 provider 包
-    from src.modules.component_catalog import TOOL_PROVIDER_DOMAINS
-    from src.modules.config.registry import TOOL_PROVIDER_SCHEMAS
-
-    known = sorted(f"{d}.{k}" for d, k in TOOL_PROVIDER_SCHEMAS)
-    tools = root_instance.tools
-    # avatar 域的成员段已迁出为独立文件 avatar.toml（ToolsConfig 无 avatar
-    # 字段），该域在此循环自然空转
-    for domain in TOOL_PROVIDER_DOMAINS:
-        sections = getattr(tools, domain, None) or {}
-        for key in sorted(sections):
-            provider_cfg = sections[key]
-            schema_cls = TOOL_PROVIDER_SCHEMAS.get((domain, key))
-            if schema_cls is None:
-                raise ConfigValidationError(
-                    "tools.toml",
-                    f"tools.{domain}.{key}",
-                    f"未注册提供者段 [tools.{domain}.{key}]（合法名单：{known}）。"
-                    f"若因程序升级导致，请补迁移钩子搬移旧结构；若为手写残留，请删除该段",
-                )
-            # 段本体未知键（enabled/config 之外的拼写错误等）：extra="allow" 保留、
-            # 序列化时丢弃——计入报告让这次清理在日志与写回中可见
-            section_extras = getattr(provider_cfg, "__pydantic_extra__", None) or {}
-            report.redundant.extend(f"tools.{domain}.{key}.{k}" for k in sorted(section_extras))
-            try:
-                sub_instance, sub_report = schema_cls.from_dict_with_drift_check(provider_cfg.config)
-            except Exception as exc:
-                raise ConfigValidationError(
-                    "tools.toml",
-                    f"tools.{domain}.{key}.config",
-                    f"提供者 config 子段校验失败: {exc}",
-                ) from exc
-            report.merge(f"tools.{domain}.{key}.config", sub_report)
-            # 剥 None 再回填：Optional 字段的 None 不落盘（TOML 无 null 字面量），
-            # 序列化侧的裸 dict 渲染路径不做 None 兜底
-            provider_cfg.config = {k: v for k, v in sub_instance.model_dump().items() if v is not None}
-
-
-def _validate_avatar_platform_sections(root_instance: AvatarRootConfig, report: DriftReport) -> None:
-    """校验 ``[avatar.platform]`` 启用名单与残留段（阶段④ 的 avatar 分支）。
-
-    成员段的漂移检测（缺键补默认、未知键剥离）由根 Schema 的递归
-    ``from_dict_with_drift_check`` 经 typed 引用自动完成，本分支只补两类：
-
-    - ``enabled`` 名单出现合法清单外的平台名 → 硬错。平台名封闭三值且
-      无退役史，表外名字装配期必然查不到 provider，错误前移到加载期
-      并给出合法名单。
-    - ``extra="allow"`` 保留下来的未注册成员段 → 硬错。avatar.toml 同为
-      用户契约面，残留段留任即欺骗读者；平台名封闭三值无退役史，此处
-      的表外段只可能是手写笔误，当面拦下并给出合法名单。
-    """
-    platform = root_instance.platform
-    unknown = sorted(n for n in platform.enabled if n not in PLATFORM_NAMES)
-    if unknown:
-        raise ConfigValidationError(
-            "avatar.toml",
-            "avatar.platform.enabled",
-            f"未注册平台名 {unknown}（合法名单：{sorted(PLATFORM_NAMES)}）",
-        )
-    extras = platform.__pydantic_extra__ or {}
-    if extras:
-        unknown_sections = sorted(extras)
-        raise ConfigValidationError(
-            "avatar.toml",
-            f"avatar.platform.{unknown_sections[0]}",
-            f"未注册平台段 {unknown_sections}（合法名单：{sorted(PLATFORM_NAMES)}）。若为手写残留，请删除该段",
-        )
-
-
-def _validate_llm_profiles_closed_set(raw_data: dict[str, Any]) -> None:
-    """``[llm_profiles]`` 封闭集合校验（加载期，未知用途即硬错）。
-
-    成员清单的权威源是 ``LLMProfilesConfig`` 的显式字段集合；"缺"由字段
-    缺省种子保证（漂移写回自动补齐），无需显式必填清单。未知键在漂移
-    剥离之前先于原始数据上检查，保证硬错并指出未知键。
-    """
-    raw_profiles = raw_data.get("llm_profiles")
-    if raw_profiles is None:
-        return
-    if not isinstance(raw_profiles, dict):
-        raise ConfigValidationError(
-            "model.toml",
-            "llm_profiles",
-            f"期望 TOML 表（dict），实际 {type(raw_profiles).__name__}",
-        )
-    known = set(LLMProfilesConfig.model_fields)
-    unknown = sorted(set(raw_profiles) - known)
-    if unknown:
-        raise ConfigValidationError(
-            "model.toml",
-            "llm_profiles",
-            f"未知用途 profile：{unknown}（封闭集合：{sorted(known)}）",
-        )
+    """统一校验分支：按域声明依次执行封闭集校验 → 物化补缺 → 在册段校验回填。"""
+    if spec.enabled is not None:
+        _check_closed_set(spec.file_name, spec.enabled, instance, raw_data)
+    if spec.unknown_sections is not None:
+        _check_closed_set(spec.file_name, spec.unknown_sections, instance, raw_data)
+    if spec.materialize_registry is not None:
+        _materialize_missing_sections(spec, instance, report)
+    if spec.sections is not None:
+        _validate_registry_sections(spec.file_name, spec.sections, instance, report)
 
 
 def _validate_file(file_name: str, raw_data: dict[str, Any]) -> tuple[BaseConfig, DriftReport]:
@@ -726,14 +930,9 @@ def _validate_file(file_name: str, raw_data: dict[str, Any]) -> tuple[BaseConfig
     except Exception as exc:
         raise ConfigValidationError(file_name, "", f"Schema 校验失败: {exc}") from exc
     _filter_optional_container_missing(report, schema_cls)
-    if isinstance(instance, CollectorsRootConfig):
-        _validate_collectors_sections(instance, report)
-    if isinstance(instance, ToolsRootConfig):
-        _validate_tool_provider_sections(instance, report)
-    if isinstance(instance, AvatarRootConfig):
-        _validate_avatar_platform_sections(instance, report)
-    if isinstance(instance, ModelRootConfig):
-        _validate_llm_profiles_closed_set(raw_data)
+    spec = _FILE_VALIDATION_SPECS.get(file_name)
+    if spec is not None:
+        _apply_file_validation(spec, instance, raw_data, report)
     return instance, report
 
 

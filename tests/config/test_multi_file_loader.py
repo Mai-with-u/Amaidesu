@@ -10,7 +10,8 @@ import src.modules.config.registry as registry_module
 from src.modules.config.file_meta import CONFIG_BASELINE_VERSION
 from src.modules.config.multi_file_loader import (
     CONFIG_FILE_NAMES,
-    _validate_collectors_sections,
+    _FILE_VALIDATION_SPECS,
+    _apply_file_validation,
     generate_default_configs,
     get_config_version,
     load_config_dir,
@@ -115,5 +116,5 @@ def test_collector_section_backfill_strips_none_values(monkeypatch) -> None:
     monkeypatch.setattr(registry_module, "COLLECTOR_SCHEMAS", {"fake_collector": _FakeCollectorSchema})
     root = SimpleNamespace(enabled=[], __pydantic_extra__={"fake_collector": {"name": "x", "maybe": None}})
     report = DriftReport()
-    _validate_collectors_sections(root, report)
+    _apply_file_validation(_FILE_VALIDATION_SPECS["collectors.toml"], root, {}, report)
     assert root.__pydantic_extra__["fake_collector"] == {"name": "x"} and not report.has_drift
