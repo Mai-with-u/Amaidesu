@@ -27,7 +27,7 @@ class _Data(BaseModel):
 def populated_registry():
     """确保注册表已填充，测试内的临时增删在结束后恢复进入时快照。
 
-    game_chat 载荷由 Agent 包导入时才登记，register_core_events 不覆盖它，这里显式导入以便单独跑本文件。
+    register_core_events 触发 payloads 包全量导入，覆盖全部 payload 注册。
     """
     register_core_events()
     saved = dict(EVENT_REGISTRY)

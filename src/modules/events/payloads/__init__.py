@@ -30,10 +30,15 @@ RoomMessagePayload 保留 ConnectedPayload / DisconnectedPayload 同构字段，
         source="bilibili_danmaku",
     )
 
-    # 订阅事件（类型提示）
-    @event_bus.on(CoreEvents.ROOM_MESSAGE_DANMAKU)
-    async def handle_danmaku(payload: RoomMessagePayload):
+    # 订阅事件（类型化订阅：事件名 + handler + Payload 类型）
+    async def handle_danmaku(event_name: str, payload: RoomMessagePayload, source: str) -> None:
         logger.debug(f"收到弹幕: {payload.content}")
+
+    event_bus.on(
+        CoreEvents.ROOM_MESSAGE_DANMAKU,
+        handle_danmaku,
+        model_class=RoomMessagePayload,
+    )
 """
 
 from src.modules.logging import get_logger

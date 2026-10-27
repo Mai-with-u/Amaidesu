@@ -147,32 +147,16 @@ def list_registered_events() -> Dict[str, Type[BaseModel]]:
 
 def register_core_events() -> None:
     """
-    触发所有 Payload 模块导入以执行 ``@register_event`` 装饰器
+    触发全部 Payload 模块导入以执行 ``@register_event`` 装饰器
 
-    该函数本身不维护任何事件→Payload 映射。Payload 模块一旦被 import，
-    其内部的 ``@register_event`` 装饰器即把对应类登记到 :data:`EVENT_REGISTRY`。
-
-    触发各语义域 Payload 模块（live/room/game/rundown/planner 等）
-    的导入，让 ``@register_event`` 装饰器执行；同时登记动态事件族
-    （``tool.result.*`` / ``tool.health.*``）。
+    Payload 模块全集的唯一事实源是 ``payloads/__init__.py``：它顶层全量
+    import 每个子模块，而 ``from 包 import 子模块`` 必先完整执行包的
+    ``__init__``，故 import 该包任意入口即触发全部 ``@register_event``
+    装饰器——本函数只做这一件事，不维护手写模块清单。同时登记动态
+    事件族（``tool.result.*`` / ``tool.health.*``）。
     """
-    # noqa: F401 —— 仅为触发模块级 @register_event 执行
-    from src.modules.events.payloads import (  # noqa: F401
-        body as _body_payloads,  # noqa: F401
-        core as _core_payloads,  # noqa: F401
-        game as _game_payloads,  # noqa: F401
-        live as _live_payloads,  # noqa: F401
-        planner as _planner_payloads,  # noqa: F401
-        room as _room_payloads,  # noqa: F401
-        room_state as _room_state_payloads,  # noqa: F401
-        rundown as _rundown_payloads,  # noqa: F401
-        notebook as _notebook_payloads,  # noqa: F401
-        speech as _speech_payloads,
-        tasks as _tasks_payloads,  # noqa: F401
-        tool_health as _tool_health_payloads,  # noqa: F401
-        tool_result as _tool_result_payloads,  # noqa: F401
-        utterance as _utterance_payloads,  # noqa: F401
-    )
+    # 仅为触发模块级 @register_event 执行；F401：导入本身即目的
+    import src.modules.events.payloads as _payloads  # noqa: F401
 
     # 动态事件族登记（函数内 import 规避循环：payloads 子模块依赖本模块的
     # register_event 装饰器）
