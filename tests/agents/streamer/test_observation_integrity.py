@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.planner_render import render_observation
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.payload import Reasoning
@@ -42,7 +42,7 @@ def _planner(result: ToolExecutionResult | None = None, *, visual: bool = False)
         prompt_service=MagicMock(),
         room_state=RoomState(),
         tool_registry=registry,
-        reply_provider=MagicMock(),
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock()),
     )
 
 

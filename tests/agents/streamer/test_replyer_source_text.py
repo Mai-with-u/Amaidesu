@@ -14,7 +14,7 @@ from src.agents.streamer.decision_executor import DecisionRoundExecutor
 from src.agents.streamer.session_scope import WindowMaterials
 from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.plan import DecisionPlan
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.replyer import Replyer
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.stats import StreamerStats
@@ -149,7 +149,7 @@ async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
         prompt_service=prompt,
         room_state=RoomState(),
         tool_registry=registry,
-        reply_provider=provider,
+        env=PlannerEnv(reply_provider_factory=lambda: provider),
     )
 
     outcome = await planner.plan(

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.game_ledger import GameLedger
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.session_scope import SessionScope
 from src.agents.streamer.streamer_agent import StreamerAgent
@@ -70,7 +70,7 @@ async def test_reference_overview_sanitized() -> None:
         room_state=RoomState(),
         tool_registry=registry,
         context_enabled=False,
-        reply_provider=MagicMock(),
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock()),
     )
 
     overview = await planner._read_reference_tools("r1")

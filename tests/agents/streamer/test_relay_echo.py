@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.state import MinecraftInstruction
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GameEventBatch
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -44,7 +44,7 @@ def _planner(responses: List[Response], invoked: List[ToolInvocation]) -> Planne
         prompt_service=prompt,
         room_state=RoomState(),
         tool_registry=registry,
-        reply_provider=MagicMock(),
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock()),
     )
 
 

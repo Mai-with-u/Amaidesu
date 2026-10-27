@@ -33,6 +33,7 @@ await agent.cleanup()
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections import deque
 from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING
 
@@ -68,7 +69,7 @@ from .memory import (
 )
 from .message_buffer import MessageBuffer
 from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
-from .planner import Planner
+from .planner import Planner, PlannerEnv
 from .proactive_trigger import ProactiveTrigger
 from .proactive_signals import ProactiveSignals
 from .replyer import Replyer
@@ -253,6 +254,40 @@ class StreamerAgent(BaseAgent):
         # 房间态势（纯规则滑动窗口）
         self._room_state = RoomState()
 
+        # 本场备忘录（进程内会话状态，不入库；收播取快照折叠进回顾后清空）
+        self._notebook = StreamerNotebook(max_chars=config.memory.notebook_max_chars)
+
+        # 流程单（Rundown）子系统：备忘录 + 闹钟（推进权归 Agent）。
+        # 状态机与仓储/总线/场次解析的粘合收拢在协调器内（依赖全构造注入，
+        # 环节变更经回调置位宿主的 proactive pending）
+        self._rundown_coord = RundownCoordinator(
+            config=config,
+            rundown_repo=rundown_repo,
+            rundown_instance_repo=rundown_instance_repo,
+            rundown_transition_repo=rundown_transition_repo,
+            session_manager=session_manager,
+            event_bus=event_bus,
+            logger=self._logger,
+            bg_tasks=self._bg_tasks,
+            notify_proactive=self._on_rundown_changed_proactive,
+        )
+
+        # Planner 运行环境：迟绑定依赖在构造期一次性注入（reply Provider 依赖
+        # start 期才构造，经工厂化解生命周期错位）；live_frame 关闭时画面依赖缺席
+        planner_env = PlannerEnv(
+            reply_provider_factory=lambda: self._reply_provider,
+            elapsed_live_provider=self._rundown_coord.get_elapsed_live_ms,
+            notebook_text_provider=self._notebook.read,
+            action_recorder=self._record_delegation,
+            delegation_status_provider=self._delegation_machine_status if task_ledger is not None else None,
+        )
+        if config.live_frame.enabled:
+            planner_env = dataclasses.replace(
+                planner_env,
+                frame_provider=self._latest_live_frame,
+                frame_stale_warn_ms=config.live_frame.stale_warn_ms,
+            )
+
         # Planner（决策核心，Agent 内部件——非工具）
         # 行为准则（behavior_style）只读包内配置权威 config.persona（决策侧通道）
         _behavior_style = config.persona.behavior_style or ""
@@ -279,6 +314,7 @@ class StreamerAgent(BaseAgent):
             # 房管也要知道她是谁：挑话题、在回复指引里定她的态度都以人设为准；措辞风格仍只给表达侧
             bot_name=config.persona.bot_name,
             personality=config.persona.personality,
+            env=planner_env,
         )
 
         # 敏感词过滤器（输出净化；None 表示不启用）
@@ -330,26 +366,6 @@ class StreamerAgent(BaseAgent):
             "rundown_ready_interval_ms": proactive.rundown_ready_interval_ms,
         }
         self._proactive_trigger = ProactiveTrigger(proactive_config)
-
-        # 流程单（Rundown）子系统：备忘录 + 闹钟（推进权归 Agent）。
-        # 状态机与仓储/总线/场次解析的粘合收拢在协调器内（依赖全构造注入，
-        # 环节变更经回调置位宿主的 proactive pending）；开播时长锚点沿用
-        # bind 注入（同 bind_reply_provider）
-        self._rundown_coord = RundownCoordinator(
-            config=config,
-            rundown_repo=rundown_repo,
-            rundown_instance_repo=rundown_instance_repo,
-            rundown_transition_repo=rundown_transition_repo,
-            session_manager=session_manager,
-            event_bus=event_bus,
-            logger=self._logger,
-            bg_tasks=self._bg_tasks,
-            notify_proactive=self._on_rundown_changed_proactive,
-        )
-        self._planner.bind_elapsed_live_provider(self._rundown_coord.state.get_elapsed_live_ms)
-        self._planner.bind_notebook_provider(self._notebook.read)
-        if task_ledger is not None:
-            self._planner.workbench.bind_delegation_status_provider(self._delegation_machine_status)
 
         # 后台维护器（双任务：轻循环 + 压缩 worker）——读包内权威配置
         bg = config.background
@@ -441,13 +457,6 @@ class StreamerAgent(BaseAgent):
             session_manager=session_manager,
             logger=self._logger,
         )
-        self._planner.workbench.bind_action_recorder(self._record_delegation)
-        # 最新一帧直播画面：查询式取自图像暂存的 latest 槽位（live_frame 采集器
-        # 每次采样覆盖写入），每个决策窗第一次请求必挂——走查询不走事件流，
-        # 保证决策时拿到的是刚截的画面
-        if config.live_frame.enabled:
-            self._planner.bind_frame_provider(self._latest_live_frame, stale_warn_ms=config.live_frame.stale_warn_ms)
-
         # 运营递话提醒队列（receive_prompt 入队；下个决策窗以【运营提醒】段
         # 注入参考块，读取即取空——送达一次制）。满时拒收，必达不允许静默挤旧。
         self._reminder_queue: deque[str] = deque(maxlen=_REMINDER_QUEUE_MAX)
@@ -676,8 +685,8 @@ class StreamerAgent(BaseAgent):
             event_bus=self._event_bus,
             gate=self._speech_gate,
         )
-        # Planner 的 reply 调用经 registry；绑定 Provider 仅供引用/诊断（材料走 attachment）
-        self._planner.bind_reply_provider(self._reply_provider)
+        # Planner 的 reply 调用经 registry；Provider 经 PlannerEnv 工厂迟解析，
+        # 仅供引用/诊断（材料走 attachment）
 
         # proactive tool
         # 注册：reply 与 rundown_control（可见名单 ["streamer"]）；经基类入口
@@ -818,7 +827,7 @@ class StreamerAgent(BaseAgent):
         # 流程单开播起算：armed（已装载待开播）→ running，双锚点 = 开播时刻。
         # 已起算的场（崩溃恢复的进行中/已完成）被结构化拒绝，保持现态静默忽略；
         # begin 经 on_changed 置位 proactive pending——开场白信号在开播时刻才置
-        reject = self._rundown_coord.state.begin(by="system")
+        reject = self._rundown_coord.begin(by="system")
         if reject is not None:
             self._logger.debug(f"开播起算流程单跳过（{reject.reason}）：流程单已在进行中")
         # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
@@ -1061,8 +1070,7 @@ class StreamerAgent(BaseAgent):
 
     def _current_segment_title(self) -> str:
         """当前流程单环节的标题（嘴的现场卡用）；没有流程单为空。"""
-        segment = self._rundown_coord.state.current_segment
-        return segment.title if segment is not None else ""
+        return self._rundown_coord.current_segment_title()
 
     async def _read_scene_brief(self) -> str:
         """读一句话现场：逐个调配置的参考工具，取第一个结果里的 ``brief``；都没有返回空串。"""

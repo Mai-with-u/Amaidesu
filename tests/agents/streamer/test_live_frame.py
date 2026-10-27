@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.modules.vision.image_store import LatestFrame, VisionImageStore, set_image_store
 from tests.agents.streamer.helpers import make_streamer_agent
@@ -54,9 +54,9 @@ class _Harness:
             prompt_service=MagicMock(),
             room_state=RoomState(),
             tool_registry=registry,
+            env=PlannerEnv(frame_provider=lambda: self.frame, frame_stale_warn_ms=stale_warn_ms),
         )
         self.planner.logger.warning = lambda text, **_: self.warnings.append(str(text))
-        self.planner.bind_frame_provider(lambda: self.frame, stale_warn_ms=stale_warn_ms)
 
     async def window(self) -> List[List[dict]]:
         start = len(self.sent)

@@ -7,7 +7,7 @@ from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.streamer import canonical
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
@@ -59,7 +59,7 @@ def _make_planner() -> tuple[Planner, MagicMock, List[List[dict]]]:
         room_state=RoomState(),
         tool_registry=registry,
         context_enabled=True,
-        reply_provider=MagicMock(),
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock()),
     )
     return planner, llm, captured
 
@@ -137,7 +137,7 @@ async def test_react_messages_appended_after_reference() -> None:
         prompt_service=prompt,
         room_state=RoomState(),
         tool_registry=registry,
-        reply_provider=MagicMock(),
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock()),
     )
 
     await planner.plan(

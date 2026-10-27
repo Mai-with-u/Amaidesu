@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.planner_render import Intent
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.payload import Response, ToolCall
@@ -62,7 +62,7 @@ def _planner(
         room_state=RoomState(),
         tool_registry=registry,
         context_enabled=False,
-        reply_provider=MagicMock(),
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock()),
     )
 
 

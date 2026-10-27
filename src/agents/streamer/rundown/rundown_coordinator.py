@@ -31,7 +31,7 @@ from src.modules.utils.task_utils import spawn_background_task
 from src.modules.utils.time_utils import now_ms
 
 from .presentation import apply_rundown_control, build_rundown_view
-from .rundown_state import RundownState
+from .rundown_state import RundownReject, RundownState
 from ..tools.rundown_tool import RundownControlProvider
 
 if TYPE_CHECKING:
@@ -49,9 +49,10 @@ class RundownCoordinator:
     - 情境供给：环节超时 / 供能判定、Planner/Replyer 的 ``$rundown`` 文本
     - 对外控制：Dashboard 的视图读取、手动控制、热切换、定义应用
 
-    宿主消费的三个入口：``state``（开播起算 ``begin`` 等）、``tool_provider``
-    （注册进 ToolRegistry）、``build_text`` / ``is_overdue`` / ``is_active``
-    （决策执行器 provider 闭包）。
+    宿主消费的三个入口：宿主动词（``begin`` / ``current_segment_title`` /
+    ``get_elapsed_live_ms`` 等领域方法，状态机 ``RundownState`` 是私有实现
+    细节不外露）、``tool_provider``（注册进 ToolRegistry）、``build_text`` /
+    ``is_overdue`` / ``is_active``（决策执行器 provider 闭包）。
     """
 
     def __init__(
@@ -92,11 +93,33 @@ class RundownCoordinator:
         self._logger = logger
         self._bg_tasks = bg_tasks
         self._notify_proactive = notify_proactive
-        self.state = RundownState(
+        self._state = RundownState(
             emit=self._emit_rundown_changed,
             on_changed=self._on_rundown_changed,
         )
-        self.tool_provider = RundownControlProvider(self.state)
+        self.tool_provider = RundownControlProvider(self._state)
+
+    # ==================================================================
+    # 宿主动词（推进权归宿主；状态机细节不外露）
+    # ==================================================================
+
+    def begin(self, *, by: str) -> Optional["RundownReject"]:
+        """流程单开播起算（armed → running，双锚点 = 开播时刻）。
+
+        已起算的场（崩溃恢复的进行中/已完成）被状态机结构化拒绝，宿主据
+        返回值保持现态静默忽略。``by`` 白名单语义由 ``RundownState.begin``
+        单点维护，本方法只转发。
+        """
+        return self._state.begin(by=by)
+
+    def current_segment_title(self) -> str:
+        """当前环节标题（嘴的现场卡用）；没有流程单为空串。"""
+        segment = self._state.current_segment
+        return segment.title if segment is not None else ""
+
+    def get_elapsed_live_ms(self, *, now_ms: Optional[int] = None) -> Optional[int]:
+        """整场已播时长（未加载/未起算为 ``None``；口径见 ``RundownState``）。"""
+        return self._state.get_elapsed_live_ms(now_ms=now_ms)
 
     # ==================================================================
     # 情境供给（决策执行器 / reply_tool 的 provider 闭包）
@@ -104,7 +127,7 @@ class RundownCoordinator:
 
     def is_overdue(self) -> bool:
         """当前环节停留是否已超预期（供 ProactiveTrigger rundown_overdue 闹钟）。"""
-        return self.state.is_current_segment_overdue()
+        return self._state.is_current_segment_overdue()
 
     def is_active(self) -> bool:
         """判定流程单是否在供能（供 ProactiveTrigger rundown_ready 持续产出信号）。
@@ -113,11 +136,11 @@ class RundownCoordinator:
         获得开口机会，凭情境（完成文案 + 弹幕）自由互动。paused 不供能（导演
         明确叫停）。供能不等于发言：is_novel 自检与台词重合度闸把关质量。
         """
-        return self.state.status in ("running", "done")
+        return self._state.status in ("running", "done")
 
     def build_text(self) -> Optional[str]:
         """拼装流程单情境文本（注入 Planner/Replyer $rundown 变量）。"""
-        return self.state.build_context_text()
+        return self._state.build_context_text()
 
     def build_text_sync(self) -> Optional[str]:
         """同步包装（reply_tool 的 rundown_text_provider 鸭子接口）。"""
@@ -147,7 +170,7 @@ class RundownCoordinator:
             rundown = DEFAULT_RUNDOWN
         if await self._try_restore(rundown):
             return
-        self.state.load(rundown)
+        self._state.load(rundown)
         self._logger.info(f"流程单已加载: id={rundown.rundown_id!r}, segments={len(rundown.segments)}")
 
     async def _try_restore(self, template: Rundown) -> bool:
@@ -195,7 +218,7 @@ class RundownCoordinator:
                 ]
             }
         )
-        reject = self.state.restore(rundown, snapshot)
+        reject = self._state.restore(rundown, snapshot)
         if reject is not None:
             self._logger.warning(f"实例快照损坏（{reject.reason}），回退常规加载")
             return False
@@ -247,11 +270,11 @@ class RundownCoordinator:
             # 变更事实行（append-only）
             if self._transition_repo is not None:
                 try:
-                    current = self.state.current_segment
+                    current = self._state.current_segment
                     task_desc: Optional[str] = None
-                    if payload.action in ("append", "insert") and self.state.rundown is not None:
+                    if payload.action in ("append", "insert") and self._state.rundown is not None:
                         appended = next(
-                            (s for s in self.state.rundown.segments if s.id == payload.segment_id),
+                            (s for s in self._state.rundown.segments if s.id == payload.segment_id),
                             None,
                         )
                         task_desc = appended.task_description if appended is not None else None
@@ -276,8 +299,8 @@ class RundownCoordinator:
             # 实例快照写穿（头 + 环节行全量替换）
             if self._instance_repo is not None:
                 try:
-                    progress = self.state.export_progress()
-                    state_rundown = self.state.rundown
+                    progress = self._state.export_progress()
+                    state_rundown = self._state.rundown
                     if progress and state_rundown is not None:
                         await self._instance_repo.upsert(
                             RundownInstance(
@@ -317,11 +340,11 @@ class RundownCoordinator:
 
         - 返回 ``False`` 表示 Dashboard 编排页应降级为不可用视图。
         """
-        return self.state.rundown is not None
+        return self._state.rundown is not None
 
     def get_rundown_view(self, *, now_ms: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """聚合 Dashboard 编排页所需的流程单视图数据（视图拼装见 rundown 子包）。"""
-        return build_rundown_view(self.state, now_ms=now_ms)
+        return build_rundown_view(self._state, now_ms=now_ms)
 
     async def control(
         self,
@@ -332,7 +355,7 @@ class RundownCoordinator:
         now_ms: Optional[int] = None,
     ) -> tuple[bool, str, Optional[Dict[str, Any]]]:
         """执行 Dashboard 手动控制动作（动作翻译见 rundown 子包；insert 的 payload 为 ``{title, content?}``）。"""
-        return apply_rundown_control(self.state, action, segment_id=segment_id, payload=payload, now_ms=now_ms)
+        return apply_rundown_control(self._state, action, segment_id=segment_id, payload=payload, now_ms=now_ms)
 
     async def switch(self, rundown_id: str) -> tuple[bool, str, Optional[Dict[str, Any]]]:
         """直播中热切换流程单（Dashboard activate 的运行态写穿）。
@@ -342,7 +365,7 @@ class RundownCoordinator:
         进度对齐（换单是新内容开始）。读取失败/目标不存在不改动运行态，
         返回 ``(False, 原因, 当前快照)`` 供调用方渲染。
         """
-        snapshot = self.state.get_snapshot()
+        snapshot = self._state.get_snapshot()
         if self._rundowns is None:
             return False, "流程单存储未就绪", snapshot
         try:
@@ -352,9 +375,9 @@ class RundownCoordinator:
             return False, f"读取流程单失败: {exc}", snapshot
         if rundown is None:
             return False, f"流程单 '{rundown_id}' 不存在", snapshot
-        self.state.load(rundown)
+        self._state.load(rundown)
         self._logger.info(f"已热切流程单: id={rundown.rundown_id!r}, segments={len(rundown.segments)}")
-        return True, f"已切换至流程单「{rundown.title}」", self.state.get_snapshot()
+        return True, f"已切换至流程单「{rundown.title}」", self._state.get_snapshot()
 
     async def apply_definition(self, definition: Dict[str, Any]) -> tuple[bool, str, Optional[Dict[str, Any]]]:
         """应用编辑后的流程单定义（Dashboard 保存时的运行态写穿）。
@@ -371,13 +394,13 @@ class RundownCoordinator:
         except Exception as exc:
             return False, f"流程单定义校验失败: {exc}", None
 
-        current = self.state.rundown
+        current = self._state.rundown
         if current is None:
             return True, "流程单已保存（运行时未加载流程单，启动后生效）", None
         if current.rundown_id != rundown.rundown_id:
-            return True, "流程单已保存（当前直播运行的是其他流程单，不受影响）", self.state.get_snapshot()
+            return True, "流程单已保存（当前直播运行的是其他流程单，不受影响）", self._state.get_snapshot()
 
-        reject = self.state.replace_definition(rundown)
+        reject = self._state.replace_definition(rundown)
         if reject is not None:
-            return False, f"运行态更新被拒绝: {reject.reason}", self.state.get_snapshot()
-        return True, "流程单已保存并即时生效", self.state.get_snapshot()
+            return False, f"运行态更新被拒绝: {reject.reason}", self._state.get_snapshot()
+        return True, "流程单已保存并即时生效", self._state.get_snapshot()

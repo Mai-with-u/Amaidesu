@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GameEventBatch
 from src.modules.llm.payload import Response, ToolCall
@@ -83,8 +83,7 @@ def _make_planner(
         profile_repo=profile_repo,
         viewer_repo=viewer_repo,
         context_enabled=context_enabled,
-        reply_provider=prov,
-        elapsed_live_provider=elapsed_live_provider,
+        env=PlannerEnv(reply_provider_factory=lambda: prov, elapsed_live_provider=elapsed_live_provider),
     )
     return planner, llm, prompt
 
@@ -125,7 +124,7 @@ def test_tool_list_comes_straight_from_the_registry() -> None:
 
     bare = Planner(
         config={}, llm_service=MagicMock(), prompt_service=MagicMock(), room_state=RoomState(), tool_registry=None,
-        reply_provider=MagicMock(),
+        env=PlannerEnv(reply_provider_factory=MagicMock),
     )  # fmt: skip
     assert bare._build_tool_list() == []
 
@@ -180,7 +179,7 @@ async def test_failures_degrade_without_raising() -> None:
     # reply Provider 未绑定：观察报错，LLM 可调整或自然终止
     unbound = Planner(
         config={"planner_max_steps": 3}, llm_service=MagicMock(), prompt_service=MagicMock(), room_state=RoomState(),
-        tool_registry=MagicMock(), reply_provider=None,
+        tool_registry=MagicMock(),
     )  # fmt: skip
     unbound._llm_service.generate = AsyncMock(
         side_effect=[_resp(tool_calls=[_tc("streamer_reply", {"topic_summary": "t"})]), _resp()]

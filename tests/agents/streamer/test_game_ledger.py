@@ -218,7 +218,7 @@ async def test_planner_hands_state_facts_to_reply_tool() -> None:
     """批次 facts_text 与回执合成事实块随 reply 交给表达侧，调用后槽位清空。"""
     from unittest.mock import AsyncMock, MagicMock
 
-    from src.agents.streamer.planner import Planner
+    from src.agents.streamer.planner import Planner, PlannerEnv
     from src.agents.streamer.room_state import RoomState
     from src.agents.streamer.tools.reply_tool import ReplyToolProvider
     from src.modules.llm.payload import Response, ToolCall
@@ -265,7 +265,7 @@ async def test_planner_hands_state_facts_to_reply_tool() -> None:
         prompt_service=prompt,
         room_state=RoomState(),
         tool_registry=registry,
-        reply_provider=provider,
+        env=PlannerEnv(reply_provider_factory=lambda: provider),
     )
 
     # 批次由账本真实出账：事实文本随批次携带，planner 不再自己从行提取

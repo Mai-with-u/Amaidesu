@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer import canonical
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.planner_render import Delegation, render_delegations
 from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.room_state import RoomState
@@ -134,7 +134,7 @@ def _planner(registry: Any = None, reply_provider: Any = None, responses: Option
         prompt_service=prompt,
         room_state=RoomState(),
         tool_registry=registry,
-        reply_provider=reply_provider or MagicMock(),
+        env=PlannerEnv(reply_provider_factory=lambda: reply_provider or MagicMock()),
     )
 
 

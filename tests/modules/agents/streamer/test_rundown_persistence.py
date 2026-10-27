@@ -106,7 +106,7 @@ def test_persist_skipped_without_repos_or_session() -> None:
     session = _StubSessionManager(None)
     agent = _make_agent(session_manager=session)
     # 两仓储都未注入：桥不做任何事（也不解析场次）
-    agent._rundown_coord.state.load(DEFAULT_RUNDOWN, now_ms=1_000_000)
+    agent._rundown_coord._state.load(DEFAULT_RUNDOWN, now_ms=1_000_000)
     agent._rundown_coord._emit_rundown_changed("rundown.changed", _payload("load", seg_id="opening"))
     assert session.calls == 0
 
@@ -116,7 +116,7 @@ async def test_persist_skipped_without_active_session() -> None:
     instance_repo = _StubInstanceRepo()
     transition_repo = _StubTransitionRepo()
     agent = _make_agent(session_manager=session, instance_repo=instance_repo, transition_repo=transition_repo)
-    agent._rundown_coord.state.load(DEFAULT_RUNDOWN, now_ms=1_000_000)
+    agent._rundown_coord._state.load(DEFAULT_RUNDOWN, now_ms=1_000_000)
     await _drain(agent)
     before = (len(instance_repo.snapshots), len(transition_repo.rows))
 
@@ -131,7 +131,7 @@ async def test_persist_inserts_transition_and_upserts_instance() -> None:
     instance_repo = _StubInstanceRepo()
     transition_repo = _StubTransitionRepo()
     agent = _make_agent(session_manager=session, instance_repo=instance_repo, transition_repo=transition_repo)
-    state = agent._rundown_coord.state
+    state = agent._rundown_coord._state
     state.load(DEFAULT_RUNDOWN, now_ms=1_000_000)
     await _drain(agent)
     # armed 态（load 只装载不起算）不写实例快照：锚点未起算无从落列
@@ -166,7 +166,7 @@ async def test_persist_append_row_carries_task_description() -> None:
     session = _StubSessionManager(42)
     transition_repo = _StubTransitionRepo()
     agent = _make_agent(session_manager=session, transition_repo=transition_repo)
-    state = agent._rundown_coord.state
+    state = agent._rundown_coord._state
     state.load(DEFAULT_RUNDOWN, now_ms=1_000_000)
     await _drain(agent)
 
@@ -190,7 +190,7 @@ async def test_persist_failures_are_isolated_and_soft() -> None:
     transition_repo = _StubTransitionRepo()
     transition_repo.fail = True
     agent = _make_agent(session_manager=session, instance_repo=instance_repo, transition_repo=transition_repo)
-    agent._rundown_coord.state.load(DEFAULT_RUNDOWN, now_ms=1_000_000)
+    agent._rundown_coord._state.load(DEFAULT_RUNDOWN, now_ms=1_000_000)
     await _drain(agent)
     # 落行失败不影响写穿（各自独立 try/except）；armed 态不写实例快照
     assert len(transition_repo.rows) == 0
@@ -238,7 +238,7 @@ async def test_restore_recovers_cursor_from_snapshot() -> None:
     agent = _make_agent(session_manager=session, instance_repo=instance_repo)
     await _start(agent, _StubRundownRepo(DEFAULT_RUNDOWN))
 
-    state = agent._rundown_coord.state
+    state = agent._rundown_coord._state
     assert (state.status, state.index, state.current_segment_id) == ("running", 2, "chat")
     # 恢复清单来自实例快照（防模板漂移），模板标题保留
     assert state.rundown.title == DEFAULT_RUNDOWN.title
@@ -272,7 +272,7 @@ async def test_restore_uses_snapshot_segments_including_appended() -> None:
     agent = _make_agent(session_manager=session, instance_repo=instance_repo)
     await _start(agent, _StubRundownRepo(DEFAULT_RUNDOWN))
 
-    state = agent._rundown_coord.state
+    state = agent._rundown_coord._state
     # 快照含 Agent 追加环节且 seg_index 指向它 → 续命态还原
     assert (state.status, state.index, state.current_segment_id) == ("running", 4, "bonus")
 
@@ -282,7 +282,7 @@ async def test_no_snapshot_falls_back_to_load() -> None:
     instance_repo = _StubInstanceRepo()  # 无快照
     agent = _make_agent(session_manager=session, instance_repo=instance_repo)
     await _start(agent, _StubRundownRepo(DEFAULT_RUNDOWN))
-    assert (agent._rundown_coord.state.status, agent._rundown_coord.state.index) == ("armed", 0)
+    assert (agent._rundown_coord._state.status, agent._rundown_coord._state.index) == ("armed", 0)
 
 
 async def test_template_mismatch_and_corruption_fall_back_to_load() -> None:
@@ -292,14 +292,14 @@ async def test_template_mismatch_and_corruption_fall_back_to_load() -> None:
     instance_repo.snapshots.append(_snapshot("other_rd", 2))
     agent = _make_agent(session_manager=session, instance_repo=instance_repo)
     await _start(agent, _StubRundownRepo(DEFAULT_RUNDOWN))
-    assert (agent._rundown_coord.state.status, agent._rundown_coord.state.index) == ("armed", 0)
+    assert (agent._rundown_coord._state.status, agent._rundown_coord._state.index) == ("armed", 0)
 
     # 快照损坏：游标越界
     corrupt_repo = _StubInstanceRepo()
     corrupt_repo.snapshots.append(_snapshot("default_first_stream", 99))
     agent2 = _make_agent(session_manager=session, instance_repo=corrupt_repo)
     await _start(agent2, _StubRundownRepo(DEFAULT_RUNDOWN))
-    assert (agent2._rundown_coord.state.status, agent2._rundown_coord.state.index) == ("armed", 0)
+    assert (agent2._rundown_coord._state.status, agent2._rundown_coord._state.index) == ("armed", 0)
 
 
 async def test_no_active_session_falls_back_to_load() -> None:
@@ -308,4 +308,4 @@ async def test_no_active_session_falls_back_to_load() -> None:
     instance_repo.snapshots.append(_snapshot("default_first_stream", 2))
     agent = _make_agent(session_manager=session, instance_repo=instance_repo)
     await _start(agent, _StubRundownRepo(DEFAULT_RUNDOWN))
-    assert (agent._rundown_coord.state.status, agent._rundown_coord.state.index) == ("armed", 0)
+    assert (agent._rundown_coord._state.status, agent._rundown_coord._state.index) == ("armed", 0)

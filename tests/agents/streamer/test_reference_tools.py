@@ -9,7 +9,7 @@ from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.streamer.config import StreamerConfig
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.payload import Response
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
@@ -36,7 +36,7 @@ def _planner(reference_tools: List[str], invoke: Any) -> tuple[Planner, List[Lis
         prompt_service=prompt,
         room_state=RoomState(),
         tool_registry=registry,
-        reply_provider=MagicMock(),
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock()),
     )
     return planner, captured
 

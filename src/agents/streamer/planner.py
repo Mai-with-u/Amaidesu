@@ -146,6 +146,25 @@ class RoundOutcome:
     speech_gate_bounces: int = 0
 
 
+@dataclass(frozen=True)
+class PlannerEnv:
+    """Planner 运行环境：构造期一次性注入的迟绑定依赖集合。
+
+    Provider 类字段全部可选，``None`` 即对应能力降级（参考段缺段等降级
+    语义与原先逐项 bind 缺席时一致）。``reply_provider_factory`` 持工厂
+    而非实例——ReplyToolProvider 依赖 Agent start 期才构造的实例，工厂
+    化解生命周期错位，Planner 在首次取用时才解析。
+    """
+
+    reply_provider_factory: Optional[Callable[[], Any]] = None
+    elapsed_live_provider: Optional[Callable[[], Optional[int]]] = None
+    frame_provider: Optional[Callable[[], Optional[Any]]] = None
+    frame_stale_warn_ms: int = 0
+    notebook_text_provider: Optional[Callable[[], str]] = None
+    action_recorder: Optional[Callable[[str, str], None]] = None
+    delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
+
+
 class Planner:
     """主播 Agent 决策核心：ReAct 循环（查→想→说）。
 
@@ -173,8 +192,7 @@ class Planner:
         behavior_style: str = "",
         bot_name: str = "麦麦",
         personality: str = "",
-        reply_provider: Any = None,
-        elapsed_live_provider: Optional[Callable[[], Optional[int]]] = None,
+        env: Optional[PlannerEnv] = None,
     ) -> None:
         """初始化 Planner。
 
@@ -193,10 +211,8 @@ class Planner:
             behavior_style: 人设行为准则（决策侧）。
             bot_name: 主播名字（她是谁）。
             personality: 主播性格描述——替她挑话题、定态度的依据。
-            reply_provider: reply 局部工具的 Provider（ReplyToolProvider）；
-                start 前由 StreamerAgent 经 ``bind_reply_provider`` 注入也可。
-            elapsed_live_provider: 整场开播时长查询（``RundownState.get_elapsed_live_ms``，
-                返回 Unix 毫秒或 None=未开播）；None 时快照不含开播时长行。
+            env: 运行环境（迟绑定依赖集合，见 :class:`PlannerEnv`）；缺省
+                ``PlannerEnv()`` 即全部可选依赖降级缺席。
         """
         if config is None:
             self.typed_config = _PlannerConfig()
@@ -236,13 +252,14 @@ class Planner:
         self._behavior_style: str = behavior_style or ""
         self._bot_name: str = bot_name or "麦麦"
         self._personality: str = personality or ""
-        self._reply_provider = reply_provider
-        self._elapsed_live_provider = elapsed_live_provider
-        # 直播画面（StreamerAgent 在启用时绑定）：返回最新一帧画面快照或 None。
+        self._reply_provider: Any = None
+        self._reply_provider_factory: Optional[Callable[[], Any]] = env.reply_provider_factory if env else None
+        self._elapsed_live_provider = env.elapsed_live_provider if env else None
+        # 直播画面：返回最新一帧画面快照或 None（经环境注入，live_frame 关闭时缺席）。
         # 每个决策窗的第一次请求必挂最新帧（查询式取自暂存 latest 槽位），
         # 同窗后续 ReAct 步不重复挂——frame_tail 每窗只算一次、只拼进第一步请求
-        self._frame_provider: Optional[Callable[[], Optional[Any]]] = None
-        self._frame_stale_warn_ms = 0
+        self._frame_provider = env.frame_provider if env else None
+        self._frame_stale_warn_ms = env.frame_stale_warn_ms if env else 0
         self._last_stale_warn_ms = 0
         # "手头的事"工作台：委派受理、递话回执、最近打算的状态与拦截规则都在这里
         # （Agent 内部件，不进工具注册表；本窗工具回执也在此记账）
@@ -250,6 +267,8 @@ class Planner:
             tool_registry,
             intents_max=self.typed_config.planner_recent_intents_max,
             relays_max=self.typed_config.planner_recent_relays_max,
+            action_recorder=env.action_recorder if env else None,
+            delegation_status_provider=env.delegation_status_provider if env else None,
         )
         # 本决策窗的游戏事件素材：本轮新入账批次（决策窗边界批量追加进时间线的那一批，
         # 每轮 plan() 入口重置）。状态跃迁事实块（planner 参考段与表达侧交接各一份）
@@ -258,8 +277,8 @@ class Planner:
         self._round_game_events: List[str] = []
         # 本窗是否豁免发言闸的台词重合度检查（收播道别窗：道别话题常与收尾环节发言字面重合）
         self._round_bypass_topic_gate: bool = False
-        # 本场备忘录全文查询（StreamerAgent 构造期绑定；空串 = 还没写过，段整段省略）
-        self._notebook_text_provider: Optional[Callable[[], str]] = None
+        # 本场备忘录全文查询（经环境注入；空串 = 还没写过，段整段省略）
+        self._notebook_text_provider = env.notebook_text_provider if env else None
 
         self._assembler = PlannerAssembler()
         # 工具刚返回的截图：观察里只留文字，真图挂在下一步请求的尾部让模型看一次
@@ -267,22 +286,16 @@ class Planner:
 
         self.logger = get_logger("Planner")
 
-    def bind_reply_provider(self, provider: Any) -> None:
-        """注入 reply 局部工具 Provider（StreamerAgent start 时绑定）。"""
-        self._reply_provider = provider
+    @property
+    def reply_provider(self) -> Any:
+        """reply 局部工具 Provider（经工厂迟解析并缓存；工厂未配置为 None）。
 
-    def bind_elapsed_live_provider(self, provider: Callable[[], Optional[int]]) -> None:
-        """注入开播时长查询（StreamerAgent 构造 RundownState 后绑定，同 bind 模式）。"""
-        self._elapsed_live_provider = provider
-
-    def bind_frame_provider(self, provider: Callable[[], Optional[Any]], *, stale_warn_ms: int) -> None:
-        """注入直播画面来源与帧龄告警阈值（StreamerAgent 在 live_frame 启用时绑定）。"""
-        self._frame_provider = provider
-        self._frame_stale_warn_ms = stale_warn_ms
-
-    def bind_notebook_provider(self, provider: Callable[[], str]) -> None:
-        """注入本场备忘录全文查询（StreamerAgent 构造期绑定，同 bind 模式）。"""
-        self._notebook_text_provider = provider
+        ReplyToolProvider 依赖 Agent start 期才构造的实例，PlannerEnv 持工厂
+        化解生命周期错位；本属性只作引用/诊断，reply 调用本体走 ToolRegistry。
+        """
+        if self._reply_provider is None and self._reply_provider_factory is not None:
+            self._reply_provider = self._reply_provider_factory()
+        return self._reply_provider
 
     def _live_frame_message(self) -> Optional[Dict[str, Any]]:
         """本决策窗第一次请求尾部挂最新直播画面（每窗必看，静止画面重复看是设计内行为）。

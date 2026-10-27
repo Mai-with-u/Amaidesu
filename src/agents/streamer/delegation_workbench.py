@@ -78,6 +78,8 @@ class DelegationWorkbench:
         *,
         intents_max: int,
         relays_max: int,
+        action_recorder: Optional[Callable[[str, str], None]] = None,
+        delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
     ) -> None:
         self._tool_registry = tool_registry
         # 每个执行 Agent 最近一次受理的委派：原话、时间、身体是否已上报。实测半小时委派
@@ -92,12 +94,12 @@ class DelegationWorkbench:
         # 本决策窗的工具回执（名字, 观察数据）：reply 交接时的状态跃迁事实块从这里取
         # 观察工具的关键字段，随 ReAct 循环逐步累积，begin_round() 在窗入口清空
         self._round_receipts: List[Tuple[str, Any]] = []
-        # 委派受理后把"我在哪个游戏里开始做什么"记进时间线（StreamerAgent 绑定）；
+        # 委派受理后把"我在哪个游戏里开始做什么"记进时间线（经 PlannerEnv 构造期注入）；
         # 参考段只留每个游戏最近一次委派，时间线里留下整场的先后
-        self._action_recorder: Optional[Callable[[str, str], None]] = None
+        self._action_recorder = action_recorder
         # 委派的机器状态查询（读任务账本）：任务号 → {"status", "updated_at_ms",
         # "snapshot"} 或 None（终态已移除/查不到）
-        self._delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
+        self._delegation_status_provider = delegation_status_provider
 
         # 拦截规则表：工具名 → 受理规则。新拦截名在此登记，handle/settle 不加分支
         self._rules: Dict[str, _InterceptRule] = {
@@ -138,15 +140,7 @@ class DelegationWorkbench:
         """该工具名是否由工作台拦截受理（Planner 据此分派）。"""
         return name in self._rules
 
-    # ==================== 绑定与记账动词 ====================
-
-    def bind_action_recorder(self, recorder: Callable[[str, str], None]) -> None:
-        """注入委派记录回调（执行者名, 主播自己的原话），同 bind 模式。"""
-        self._action_recorder = recorder
-
-    def bind_delegation_status_provider(self, provider: Callable[[str], Optional[Dict[str, Any]]]) -> None:
-        """注入委派的机器状态查询（读任务账本，同 bind 模式）。"""
-        self._delegation_status_provider = provider
+    # ==================== 记账动词 ====================
 
     def begin_round(self) -> None:
         """决策窗入口：清空本窗回执（委派/递话/打算是跨窗记忆，不清）。"""

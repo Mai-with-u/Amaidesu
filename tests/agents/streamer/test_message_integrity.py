@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.agents.streamer import canonical
-from src.agents.streamer.planner import Planner
+from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 
 
@@ -18,7 +18,7 @@ def _make_planner() -> Planner:
         prompt_service=MagicMock(),
         room_state=RoomState(),
         tool_registry=MagicMock(),
-        reply_provider=MagicMock(),
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock()),
     )
 
 

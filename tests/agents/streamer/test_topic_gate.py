@@ -249,7 +249,7 @@ class _RepeatReplyer:
 
 
 def _planner_with_real_provider(provider: ReplyToolProvider, responses: List[Any]) -> tuple[Any, AsyncMock]:
-    from src.agents.streamer.planner import Planner
+    from src.agents.streamer.planner import Planner, PlannerEnv
     from src.agents.streamer.room_state import RoomState
     from src.modules.tools.provider import make_provider_from_specs
     from src.modules.tools.registry import ToolRegistry
@@ -270,7 +270,7 @@ def _planner_with_real_provider(provider: ReplyToolProvider, responses: List[Any
         room_state=RoomState(),
         tool_registry=registry,
         context_enabled=False,
-        reply_provider=provider,
+        env=PlannerEnv(reply_provider_factory=lambda: provider),
     )
     return planner, llm
 
