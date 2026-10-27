@@ -280,7 +280,7 @@ class StreamerTimeline:
             profile=self._summary_profile,
             system=self._prompt.render(_CHAPTER_TEMPLATE),
         )
-        content: Optional[str] = getattr(response, "content", None)
-        if not getattr(response, "success", False) or not isinstance(content, str) or not content.strip():
-            raise ValueError(f"前情提要生成失败：{getattr(response, 'error', None) or '返回为空'}")
+        content: Optional[str] = response.content
+        if not response.ok or not isinstance(content, str) or not content.strip():
+            raise ValueError(f"前情提要生成失败：{response.error or '返回为空'}")
         return content

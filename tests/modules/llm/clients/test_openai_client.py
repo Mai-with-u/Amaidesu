@@ -39,7 +39,7 @@ class _SdkUsage:
 async def test_chat_basic_and_slow_reply_ignores_legacy_timeout() -> None:
     client, sdk = make_openai_client({"timeout": 0.001})
     sdk.chat.completions.create.return_value = sdk_reply(usage=usage())
-    result = await client.generate(_request("hello"), model="test-model", temperature=0.7)
+    result = await client.generate(_request("hello", temperature=0.7), model="test-model")
     assert (result.content, result.model) == ("world", "test-model")
     assert result.usage == Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
     sdk.chat.completions.create.assert_awaited_once_with(
@@ -295,16 +295,16 @@ async def test_response_carries_raw_usage_json(streaming: bool) -> None:
 )
 async def test_reasoning_effort_and_extra_body_sent_only_when_set(path: str, extra_body, effort, expected) -> None:
     client, sdk = make_openai_client({"extra_body": extra_body} if extra_body is not None else None)
-    kwargs: dict[str, Any] = {"model": "test-model"}
+    request_fields: dict[str, Any] = {}
     if effort is not None:
-        kwargs["reasoning_effort"] = effort
+        request_fields["reasoning_effort"] = effort
     if path == "stream":
         sdk.chat.completions.create.return_value = FakeStream([chunk(content="ok"), chunk(usage=usage(1, 1))])
-        await client.generate(_request(), on_delta=lambda kind, text: None, **kwargs)
+        await client.generate(_request(**request_fields), model="test-model", on_delta=lambda kind, text: None)
     elif path == "vision":
-        await client.generate_vision(_request("描述这张图"), [b"img"], **kwargs)
+        await client.generate_vision(_request("描述这张图", **request_fields), [b"img"], model="test-model")
     else:
-        await client.generate(_request(), **kwargs)
+        await client.generate(_request(**request_fields), model="test-model")
 
     sent = _sent(sdk)
     assert {k: sent[k] for k in ("reasoning_effort", "extra_body") if k in sent} == expected

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
@@ -12,7 +11,8 @@ import pytest
 from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.planner_render import render_observation
 from src.agents.streamer.room_state import RoomState
-from src.modules.llm.payload import Reasoning
+from src.modules.llm.payload import Reasoning, ToolCall
+from tests.helpers import llm_response
 from src.modules.tools.models import ResultBlock, ToolExecutionResult
 from src.modules.vision.image_store import VisionImageStore, set_image_store
 
@@ -151,11 +151,11 @@ async def test_tail_image_rides_only_the_next_request(image_store) -> None:
     planner = _planner(_image_result(), visual=True)
     planner.max_steps = 3
     sent: list = []
-    look = SimpleNamespace(id="c1", name="vision_look_at_screen", arguments={})
+    look = ToolCall(id="c1", name="vision_look_at_screen")
     responses = [
-        SimpleNamespace(success=True, content="看一眼", tool_calls=[look], request_id="r1"),
-        SimpleNamespace(success=True, content="画面里在下雨", tool_calls=[look], request_id="r2"),
-        SimpleNamespace(success=True, content="不说了", tool_calls=[], request_id="r3"),
+        llm_response(success=True, content="看一眼", tool_calls=[look], request_id="r1"),
+        llm_response(success=True, content="画面里在下雨", tool_calls=[look], request_id="r2"),
+        llm_response(success=True, content="不说了", tool_calls=[], request_id="r3"),
     ]
 
     async def generate(messages: list, **_: Any) -> Any:
@@ -181,10 +181,10 @@ async def test_echoed_reasoning_rides_along_within_the_round() -> None:
     planner = _planner(ToolExecutionResult(tool_name="memory_query", success=True, structured_content={"hit": 1}))
     sent: list = []
     echo = Reasoning(text="先查记忆再决定说不说", model="m")
-    query = SimpleNamespace(id="c1", name="memory_query", arguments={})
+    query = ToolCall(id="c1", name="memory_query")
     responses = [
-        SimpleNamespace(success=True, content="", tool_calls=[query], request_id="r1", reasoning_echo=echo),
-        SimpleNamespace(success=True, content="不说了", tool_calls=[], request_id="r2"),
+        llm_response(success=True, content="", tool_calls=[query], request_id="r1", reasoning_echo=echo),
+        llm_response(success=True, content="不说了", tool_calls=[], request_id="r2"),
     ]
 
     async def generate(messages: list, **_: Any) -> Any:

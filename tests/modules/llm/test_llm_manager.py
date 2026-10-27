@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.modules.config.model_schemas import LLMProfilesConfig
 from src.modules.llm.bootstrap import KNOWN_PROFILE_NAMES, ProfileNames, validate_profile_binding
 from src.modules.llm.clients import _CLIENT_DISPATCH
 from src.modules.llm.engine import LLMManager, RetryConfig
@@ -233,6 +234,19 @@ def test_profile_names_closed_set() -> None:
     assert validate_profile_binding("planner") is None
     with pytest.raises(ValueError, match="unknown"):
         validate_profile_binding("unknown")
+
+
+def test_profile_names_constants_match_config_schema_fields() -> None:
+    """ProfileNames 常量与配置 schema 字段双向钉死。
+
+    常量类是手抄字面量：schema 改名/增删字段而常量没跟上，或常量抄错，
+    任一方向漂移都会在此暴露（封闭集合的成员权威是 ``LLMProfilesConfig``）。
+    """
+    constants = {
+        value for key, value in vars(ProfileNames).items() if not key.startswith("_") and isinstance(value, str)
+    }
+    assert constants == set(LLMProfilesConfig.model_fields)
+    assert constants == KNOWN_PROFILE_NAMES
 
 
 async def test_generate_audio_dispatches_with_voice_and_format() -> None:

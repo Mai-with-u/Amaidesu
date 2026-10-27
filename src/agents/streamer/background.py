@@ -379,7 +379,7 @@ class BackgroundMaintainer:
             self._logger.warning(f"话题摘要 LLM 调用异常: {exc}")
             return
 
-        if not (getattr(response, "success", False) and getattr(response, "content", None)):
+        if not (response.ok and response.content):
             self._logger.warning("话题摘要 LLM 返回失败")
             return
 

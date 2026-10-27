@@ -139,7 +139,7 @@ class SessionRecapWriter:
         except Exception as exc:
             logger.warning(f"场次回顾 LLM 调用异常（场次 {live_session_id}）: {exc}")
             return None
-        if not (getattr(response, "success", False) and getattr(response, "content", None)):
+        if not (response.ok and response.content):
             logger.warning(f"场次回顾 LLM 返回失败（场次 {live_session_id}）")
             return None
         text = str(response.content).strip()[: self._max_length]

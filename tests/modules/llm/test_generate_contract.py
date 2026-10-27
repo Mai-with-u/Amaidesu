@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from unittest.mock import patch
 
 import pytest
@@ -41,21 +41,17 @@ class FakeVendorClient(BaseLLMClient):
         self.requests: List[GenerateRequest] = []
         self.vision_images: List[Any] = []
         self.models: List[str] = []
-        self.temperatures: List[Optional[float]] = []
 
     async def generate(
         self,
         request: GenerateRequest,
         *,
         model: str,
-        temperature: Optional[float] = None,
-        reasoning_effort: Optional[str] = None,
         on_delta: Any = None,
         interrupt_flag: Any = None,
     ) -> Response:
         self.requests.append(request)
         self.models.append(model)
-        self.temperatures.append(temperature)
         return Response(
             success=True,
             content=f"fake 回复: {request.messages[-1].parts[0]}",
@@ -69,8 +65,6 @@ class FakeVendorClient(BaseLLMClient):
         images: List[Any],
         *,
         model: str,
-        temperature: Optional[float] = None,
-        reasoning_effort: Optional[str] = None,
         interrupt_flag: Any = None,
     ) -> Response:
         self.requests.append(request)
@@ -103,7 +97,7 @@ async def test_plain_string_reaches_the_vendor_and_returns_a_neutral_response(fa
     assert (response.success, response.content, response.usage.total_tokens) == (True, "fake 回复: 你好", 8)
     assert response.request_id != ""
     assert fake.models == ["fake-mini"]
-    assert fake.temperatures == [0.7]  # temperature 缺省回退 profile 档位
+    assert fake.requests[0].temperature == 0.7  # temperature 缺省回退 profile 档位（引擎已写进请求对象）
 
 
 async def test_openai_style_dicts_are_normalized_with_system_folded_into_its_own_field(fake_vendor) -> None:

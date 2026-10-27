@@ -38,20 +38,16 @@ class BaseLLMClient(abc.ABC):
         request: GenerateRequest,
         *,
         model: str,
-        temperature: Optional[float] = None,
-        reasoning_effort: Optional[str] = None,
         on_delta: Optional[OnDeltaCallback] = None,
         interrupt_flag: Optional[Any] = None,
     ) -> Response:
         """执行一次聊天请求（中立契约）。
 
         ``model`` 必填：客户端不持有默认模型，由 Engine 按 profile 选定后传入。
-        ``temperature`` 为 Engine 按 profile 档位填充的生成参数，
-        请求内同名字段缺省时生效。
-        ``reasoning_effort`` 为 Engine 按 profile 档位填充的思考强度档位，
-        请求内同名字段缺省时生效；None = 不控制 = 适配端不向请求体注入该键。
-        ``on_delta`` 非 None 时实现方应走流式传输并逐帧回调增量，
-        最终仍返回完整 Response（传输层流式、语义层整段）。
+        生成参数（温度/思考强度档位）只从 ``request`` 同名字段取——Engine 已在
+        单点完成"显式参数 > 请求字段 > profile 档默认值"的定序并写进请求对象，
+        实现方不再自己做兜底合并。``on_delta`` 非 None 时实现方应走流式传输并
+        逐帧回调增量，最终仍返回完整 Response（传输层流式、语义层整段）。
         实现方需要遵守 request 的输出额度省略与严格参数解析策略，
         并保留结束原因；未完成的工具参数必须交回错误，不能猜测补齐后执行。
         """
@@ -63,8 +59,6 @@ class BaseLLMClient(abc.ABC):
         images: List[Any],
         *,
         model: str,
-        temperature: Optional[float] = None,
-        reasoning_effort: Optional[str] = None,
         interrupt_flag: Optional[Any] = None,
     ) -> Response:
         """执行视觉请求（中立契约）；不支持时由默认实现明确报告。model 必填。"""
@@ -77,7 +71,6 @@ class BaseLLMClient(abc.ABC):
         model: str,
         voice: str,
         audio_format: str = "wav",
-        temperature: Optional[float] = None,
         interrupt_flag: Optional[Any] = None,
     ) -> Response:
         """执行音频输出请求（中立契约）；不支持时由默认实现明确报告。model 必填。

@@ -185,6 +185,7 @@ async def _capture_turn_input(state_facts: str) -> str:
 
     from src.agents.streamer.plan import DecisionPlan
     from src.agents.streamer.replyer import Replyer
+    from tests.helpers import llm_response
 
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="TURN")
@@ -192,11 +193,7 @@ async def _capture_turn_input(state_facts: str) -> str:
     llm.generate = MagicMock()
 
     async def _generate(*args: Any, **kwargs: Any) -> Any:
-        class _R:
-            success = True
-            content = "好的"
-
-        return _R()
+        return llm_response(success=True, content="好的")
 
     llm.generate = _generate
     replyer = Replyer({}, llm, prompt)

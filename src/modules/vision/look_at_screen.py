@@ -614,12 +614,11 @@ class LlmVisionTextReader:
             logger.warning(f"LlmVisionTextReader VLM 调用异常: {exc}", exc=True)
             return ""
 
-        if not getattr(response, "success", False):
-            err = getattr(response, "error", None)
-            logger.warning(f"LlmVisionTextReader VLM 返回失败 (error={err!r}); 降级为空文本")
+        if not response.ok:
+            logger.warning(f"LlmVisionTextReader VLM 返回失败 (error={response.error!r}); 降级为空文本")
             return ""
 
-        content = getattr(response, "content", None) or ""
+        content = response.content or ""
         return content.strip()
 
 

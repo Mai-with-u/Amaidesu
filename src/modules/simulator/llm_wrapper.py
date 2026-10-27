@@ -351,7 +351,7 @@ class SimulatorLLMWrapper:
         raw_content = response.content or ""
         cleaned = self._clean_response(raw_content)
 
-        reasoning = getattr(response, "reasoning_content", None)
+        reasoning = response.reasoning_content
         if not cleaned and reasoning:
             self._logger.warning(f"_call_llm: content 为空但 thinking 存在 (len={len(reasoning)})，重试一次")
             response = await self._chat_once(prompt)

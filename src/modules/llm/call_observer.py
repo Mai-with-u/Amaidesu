@@ -206,13 +206,12 @@ class CallObserver:
             "system": request.system,
             "messages": [m.model_dump() for m in request.messages],
             "tools": [t.model_dump() for t in request.tools] or None,
-            "temperature": kwargs.get("temperature"),
+            # 生成参数只从请求对象取：Engine 已在单点定序（显式参数 > 请求字段 >
+            # profile 档默认值）并写进请求对象
+            "temperature": request.temperature,
         }
-        reasoning_effort = kwargs.get("reasoning_effort")
-        if not (isinstance(reasoning_effort, str) and reasoning_effort):
-            reasoning_effort = request.reasoning_effort
-        if isinstance(reasoning_effort, str) and reasoning_effort:
-            request_params["reasoning_effort"] = reasoning_effort
+        if isinstance(request.reasoning_effort, str) and request.reasoning_effort:
+            request_params["reasoning_effort"] = request.reasoning_effort
         if request.strict_tool_arguments:
             request_params["strict_tool_arguments"] = True
         return {k: v for k, v in request_params.items() if v is not None}

@@ -864,14 +864,20 @@ class LLMManager:
         # 完整等待模型生成；只让单次温度/思考强度覆盖用途默认值，主动中断仍立即回收连接。
         profile = self._get_profile(profile_name)
         request = call_kwargs.get("request")
-        if call_kwargs.get("temperature") is None:
-            explicit = getattr(request, "temperature", None)
-            call_kwargs["temperature"] = explicit if explicit is not None else profile.temperature
-        if call_kwargs.get("reasoning_effort") is None:
-            explicit = getattr(request, "reasoning_effort", None)
-            call_kwargs["reasoning_effort"] = (
-                explicit if isinstance(explicit, str) and explicit else profile.reasoning_effort
+        if isinstance(request, GenerateRequest):
+            # 最终生成参数在引擎单点定序后写进请求对象：调用方显式参数（generate 入口
+            # 归一进 request.temperature）> 请求字段 > profile 档默认值。Client 只信
+            # 请求对象字段，不再各自兜底——优先级只写一处，改序不会两边漂移。
+            final_temperature = request.temperature if request.temperature is not None else profile.temperature
+            final_effort = (
+                request.reasoning_effort
+                if isinstance(request.reasoning_effort, str) and request.reasoning_effort
+                else profile.reasoning_effort
             )
+            if final_temperature != request.temperature or final_effort != request.reasoning_effort:
+                call_kwargs["request"] = request.model_copy(
+                    update={"temperature": final_temperature, "reasoning_effort": final_effort}
+                )
         return await guarded_call(
             lambda: self._retry_loop(
                 method=method,

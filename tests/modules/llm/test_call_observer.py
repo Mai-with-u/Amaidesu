@@ -79,7 +79,7 @@ async def test_success_call_writes_usage_row_diagnostics_payload_and_snapshot(tm
         model_name="m1",
         request_type="generate",
         result=result,
-        kwargs={"request": request, "temperature": 0.5},
+        kwargs={"request": request},
         start_time=time.time(),
     )
 

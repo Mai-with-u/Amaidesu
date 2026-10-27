@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any, List, Optional
 from unittest.mock import MagicMock
 
@@ -10,7 +9,9 @@ import pytest
 
 from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.room_state import RoomState
+from src.modules.llm.payload import ToolCall
 from src.modules.vision.image_store import LatestFrame, VisionImageStore, set_image_store
+from tests.helpers import llm_response
 from tests.agents.streamer.helpers import make_streamer_agent
 
 
@@ -43,7 +44,7 @@ class _Harness:
             self.sent.append(list(messages))
             if self.replies:
                 return self.replies.pop(0)
-            return SimpleNamespace(success=True, content="不说", tool_calls=[], request_id="r")
+            return llm_response(success=True, content="不说", tool_calls=[], request_id="r")
 
         llm.generate = generate
         registry = MagicMock()
@@ -68,10 +69,10 @@ async def test_frame_rides_first_request_only(monkeypatch: pytest.MonkeyPatch) -
     """画面挂在本窗第一次请求尾部；同窗后续步骤不再带。"""
     harness = _Harness(monkeypatch)
     harness.frame = _slot("img_a", harness.now - 2_000)
-    call = SimpleNamespace(id="c1", name="memory_recall_session", arguments={})
+    call = ToolCall(id="c1", name="memory_recall_session")
     harness.replies = [
-        SimpleNamespace(success=True, content="查一下", tool_calls=[call], request_id="r1"),
-        SimpleNamespace(success=True, content="不说", tool_calls=[], request_id="r2"),
+        llm_response(success=True, content="查一下", tool_calls=[call], request_id="r1"),
+        llm_response(success=True, content="不说", tool_calls=[], request_id="r2"),
     ]
     requests = await harness.window()
     assert [_has_frame(messages) for messages in requests] == [True, False]

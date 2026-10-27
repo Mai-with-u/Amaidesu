@@ -127,15 +127,15 @@ class Replyer:
             self.logger.exception(f"Replyer LLM 调用异常: {e}")
             return None
 
-        if not getattr(response, "success", False):
-            self.logger.warning(f"Replyer LLM 返回失败: {getattr(response, 'error', 'unknown')}, silent 降级")
+        if not response.ok:
+            self.logger.warning(f"Replyer LLM 返回失败: {response.error or 'unknown'}, silent 降级")
             return None
 
-        speech = _plain_text_speech(getattr(response, "content", None))
+        speech = _plain_text_speech(response.content)
         if not speech:
             self.logger.warning("Replyer 返回空台词，本轮不发声")
             return None
-        request_id = getattr(response, "request_id", None) or None
+        request_id = response.request_id or None
 
         # 超出长度预算：先让模型重说成一句，仍超就截到预算内最后一个完整句子
         if self._speech_max_chars > 0 and len(speech) > self._speech_max_chars:
@@ -172,11 +172,11 @@ class Replyer:
             response = await self._llm_service.generate(
                 [{"role": "user", "content": instruction}], system=system_prompt, profile=self.profile
             )
-            if getattr(response, "success", False):
-                shortened = _plain_text_speech(getattr(response, "content", None))
-                request_id = getattr(response, "request_id", None) or request_id
+            if response.ok:
+                shortened = _plain_text_speech(response.content)
+                request_id = response.request_id or request_id
             else:
-                self.logger.warning(f"台词重说失败，改为直接截短: {getattr(response, 'error', 'unknown')}")
+                self.logger.warning(f"台词重说失败，改为直接截短: {response.error or 'unknown'}")
         except Exception as exc:
             self.logger.warning(f"台词重说异常，改为直接截短: {exc}", exc=True)
         candidate = shortened or speech

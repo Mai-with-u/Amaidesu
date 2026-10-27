@@ -205,7 +205,7 @@ class RegularsRosterWriter:
         prompt = "\n".join(prompt_parts)
 
         response = await self._llm.generate(prompt, profile=SUMMARY_PROFILE, system=self._get_system_prompt())
-        if not (getattr(response, "success", False) and getattr(response, "content", None)):
+        if not (response.ok and response.content):
             logger.warning(f"常客印象 LLM 返回失败（viewer {viewer_id}）")
             return False
         profile_text = str(response.content).strip()[: self._profile_max_length]

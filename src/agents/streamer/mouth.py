@@ -214,10 +214,10 @@ class Mouth:
         started = self._clock()
         response = await self._llm.generate(self._messages(fresh), system=self._system_prompt(), profile=self._profile)
         generated = self._clock()
-        if not getattr(response, "success", False):
-            self._logger.warning(f"嘴生成失败: {getattr(response, 'error', 'unknown')}")
+        if not response.ok:
+            self._logger.warning(f"嘴生成失败: {response.error or 'unknown'}")
             return None
-        emotion, text = self._parse(getattr(response, "content", "") or "")
+        emotion, text = self._parse(response.content or "")
         if not text:
             self._logger.info(f"嘴选择不说：由头={self._trigger_text(fresh)}")
             return None
@@ -240,7 +240,7 @@ class Mouth:
             gap_ms=self._config.min_gap_ms,
             priority=_PRIORITY,
             round_id=f"mouth_{started}",
-            llm_request_id=getattr(response, "request_id", None) or None,
+            llm_request_id=response.request_id or None,
             on_started=on_started,
         )
         if utterance_id is None:

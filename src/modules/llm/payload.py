@@ -195,6 +195,12 @@ class Response(BaseModel):
     audio_base64: Optional[str] = None
     audio_format: Optional[str] = None
 
+    @property
+    def ok(self) -> bool:
+        """调用是否成功（``success`` 的直取别名）。Response 是字段齐全的
+        Pydantic 模型，调用方按契约直取字段，不需要 getattr 防御。"""
+        return self.success
+
 
 def response_to_assistant_message(response: Any) -> Dict[str, Any]:
     """把一次模型响应转回工具循环可继续喂养的 assistant 消息（对话补全线协议形状 dict）

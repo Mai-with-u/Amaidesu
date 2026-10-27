@@ -49,3 +49,39 @@ async def test_provider_extra_body_reaches_sdk_only_when_set(extra_body: dict) -
         request = GenerateRequest(messages=[Message(role="user", parts=["hi"])])
         await manager._call_with_failover("minecraft", method="generate", request=request)
     assert sdk.chat.completions.create.call_args.kwargs.get("extra_body") == (extra_body or None)
+
+
+@pytest.mark.parametrize(
+    ("request_temperature", "expected"),
+    [
+        (0.4, 0.4),  # 请求对象显式字段 → 覆盖 profile 档默认
+        (None, 0.3),  # 请求未给 → profile 档默认兜底
+    ],
+)
+async def test_engine_fills_profile_default_into_request_for_temperature(
+    request_temperature: float, expected: float
+) -> None:
+    """引擎单点定序：最终温度写进传给 client 的请求对象，client 不再自己兜底。"""
+    client, sdk = _client_with_text_reply()
+    profile = {"temperature": 0.3, "reasoning_effort": "high"}
+    async with engine_with(client, {"minecraft": profile}) as manager:
+        request = GenerateRequest(messages=[Message(role="user", parts=["总结"])], temperature=request_temperature)
+        await manager._call_with_failover("minecraft", method="generate", request=request)
+    assert sdk.chat.completions.create.call_args.kwargs["temperature"] == expected
+
+
+async def test_explicit_temperature_beats_profile_and_reaches_sdk() -> None:
+    """显式参数（generate 入口归一进请求字段）> profile 档默认。"""
+    client, sdk = _client_with_text_reply()
+    async with engine_with(client, {"minecraft": {"temperature": 0.3}}) as manager:
+        await manager.generate("总结", profile="minecraft", temperature=0.9)
+    assert sdk.chat.completions.create.call_args.kwargs["temperature"] == 0.9
+
+
+async def test_engine_writes_final_effort_into_request_for_client() -> None:
+    """请求对象未给思考档位时，profile 档值由引擎写进请求对象（client 收到的即最终值）。"""
+    client, sdk = _client_with_text_reply()
+    async with engine_with(client, {"minecraft": {"temperature": 0.7, "reasoning_effort": "high"}}) as manager:
+        request = GenerateRequest(messages=[Message(role="user", parts=["总结"])])
+        await manager._call_with_failover("minecraft", method="generate", request=request)
+    assert sdk.chat.completions.create.call_args.kwargs["reasoning_effort"] == "high"

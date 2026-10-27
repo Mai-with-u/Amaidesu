@@ -448,21 +448,20 @@ class OpenAIClient(BaseLLMClient):
         request: GenerateRequest,
         *,
         model: str,
-        temperature: Optional[float] = None,
-        reasoning_effort: Optional[str] = None,
         on_delta: Optional[Callable[[str, str], None]] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
     ) -> Response:
         """中立契约聊天请求：payload → OpenAI 协议翻译后执行。
 
-        生成参数以 Engine 传入的 profile 档位优先，请求内字段兜底。
+        生成参数只信请求对象字段——Engine 已在单点把显式参数与 profile 档
+        默认值定序写进 ``request``，这里不再有自己的兜底分支。
         """
         tools = [self._tool_spec_to_openai(t) for t in request.tools] or None
         return await self._chat_impl(
             self._request_to_openai_messages(request),
             model=model,
-            temperature=temperature if temperature is not None else request.temperature,
-            reasoning_effort=reasoning_effort if reasoning_effort is not None else request.reasoning_effort,
+            temperature=request.temperature,
+            reasoning_effort=request.reasoning_effort,
             tools=tools,
             interrupt_flag=interrupt_flag,
             on_delta=on_delta,
@@ -475,20 +474,19 @@ class OpenAIClient(BaseLLMClient):
         images: List[Union[str, bytes]],
         *,
         model: str,
-        temperature: Optional[float] = None,
-        reasoning_effort: Optional[str] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
     ) -> Response:
         """中立契约视觉请求：payload → OpenAI 协议翻译后执行。
 
-        走抛分类异常的实现（``_vision_impl``），错误分类由 Engine 表驱动消费。
+        走抛分类异常的实现（``_vision_impl``），错误分类由 Engine 表驱动消费；
+        生成参数只信请求对象字段（定序在 Engine 单点完成）。
         """
         return await self._vision_impl(
             self._request_to_openai_messages(request),
             images,
             model=model,
-            temperature=temperature if temperature is not None else request.temperature,
-            reasoning_effort=reasoning_effort if reasoning_effort is not None else request.reasoning_effort,
+            temperature=request.temperature,
+            reasoning_effort=request.reasoning_effort,
         )
 
     async def generate_audio(
@@ -498,7 +496,6 @@ class OpenAIClient(BaseLLMClient):
         model: str,
         voice: str,
         audio_format: str = "wav",
-        temperature: Optional[float] = None,
         interrupt_flag: Optional[asyncio.Event] = None,
     ) -> Response:
         """中立契约音频输出请求：payload → OpenAI 协议 modalities=audio 形态翻译。
@@ -509,7 +506,7 @@ class OpenAIClient(BaseLLMClient):
         result = await self._chat_impl(
             self._request_to_openai_messages(request),
             model=model,
-            temperature=temperature if temperature is not None else request.temperature,
+            temperature=request.temperature,
             interrupt_flag=interrupt_flag,
             request_extra={
                 "modalities": ["text", "audio"],

@@ -62,7 +62,8 @@ def test_build_request_params_produces_single_normalized_shape() -> None:
         ],
         system="你是直播助手",
     )
-    params = CallObserver._build_request_params({"request": request, "temperature": 0.3})
+    request.temperature = 0.3
+    params = CallObserver._build_request_params({"request": request})
     assert params["system"] == "你是直播助手"
     assert params["temperature"] == 0.3
     assert len(params["messages"]) == 2

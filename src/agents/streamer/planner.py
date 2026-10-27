@@ -467,14 +467,14 @@ class Planner:
                 self.logger.warning(f"Planner LLM 调用异常: {e}")
                 return replace(outcome, error=f"llm_error: {e}", silent_reason="llm_error")
 
-            if not getattr(response, "success", False):
-                error = getattr(response, "error", None) or "unknown"
+            if not response.ok:
+                error = response.error or "unknown"
                 return replace(outcome, error=f"llm_failed: {error}", silent_reason="llm_failed")
 
             outcome = replace(
                 outcome,
-                raw_content=getattr(response, "content", None) or "",
-                llm_request_id=getattr(response, "request_id", None) or None,
+                raw_content=response.content or "",
+                llm_request_id=response.request_id or None,
             )
 
             # engine 返回的中立 ToolCall（扁平对象）收敛为内部扁平 dict，供本模块消费

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any, List, Optional
 
 import pytest
 
 from src.modules.vision.look_at_screen import LlmVisionTextReader
+from tests.helpers import llm_response
 
 DEFAULT_PROMPT = "描述屏幕上正在显示的内容。"
 
@@ -50,12 +50,12 @@ class FakeLlmManager:
         if self._hang:
             await asyncio.Event().wait()  # 模拟持续生成，由调用方主动取消结束
         if not self._responses:
-            return SimpleNamespace(success=False, content=None, error="no_response_queued")
+            return llm_response(success=False, content=None, error="no_response_queued")
         return self._responses.pop(0)
 
 
-def _ok(content: str) -> SimpleNamespace:
-    return SimpleNamespace(success=True, content=content, error=None)
+def _ok(content: str) -> Any:
+    return llm_response(success=True, content=content)
 
 
 async def test_long_question_and_answer_survive_the_round_trip() -> None:
@@ -90,7 +90,7 @@ async def test_prompt_comes_from_question_then_template_then_builtin_default() -
 @pytest.mark.parametrize(
     "llm",
     [
-        FakeLlmManager(responses=[SimpleNamespace(success=False, content=None, error="rate_limit")]),
+        FakeLlmManager(responses=[llm_response(success=False, content=None, error="rate_limit")]),
         FakeLlmManager(raise_exc=RuntimeError("vlm transport broken")),
     ],
     ids=["success-false", "exception"],
