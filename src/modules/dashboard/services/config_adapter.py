@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
-from src.modules.config.service import COMPONENT_REBUILD_SCOPES, RELOAD_HOT_SCOPES
+from src.modules.config.service import COMPONENT_REBUILD_SCOPES
 from src.modules.config.webui import resolve_scope, write_config_updates
 from src.modules.dashboard.services.component_runtime import (
     ComponentRuntimeContext,
@@ -63,12 +63,9 @@ async def apply_config_updates(
     if hot_context is not None and any(s in COMPONENT_REBUILD_SCOPES for s in scopes):
         keys = [k for k, _ in result.normalized]
         hot_report = await hot_apply_components(hot_context, config_service, config_dir, keys)
-    # 热生效判真：热重载段（infra）靠重载本身；组件域（agents / collectors）
-    # 必须组件重建真的跑过（hot_report 在场）才算——没传热应用上下文时这些域
-    # 照实报"需重启"，不虚报已生效
-    hot_applied = result.reloaded and all(
-        s in RELOAD_HOT_SCOPES or (s in COMPONENT_REBUILD_SCOPES and hot_report is not None) for s in scopes
-    )
+    # 热生效判真：组件域（agents / collectors）必须组件重建真的跑过（hot_report
+    # 在场）才算——没传热应用上下文时照实报"需重启"，不虚报已生效
+    hot_applied = result.reloaded and all(s in COMPONENT_REBUILD_SCOPES and hot_report is not None for s in scopes)
     return ConfigApplyOutcome(
         success=True,
         requires_restart=not hot_applied,

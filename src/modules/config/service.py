@@ -5,23 +5,19 @@ ConfigService - 统一的配置管理服务
 - 提供统一的配置加载接口（多文件模式：按文件视图 + 拍平合并视图）
 - 集中管理所有配置加载逻辑
 - 拦截器配置读取
-- 配置热重载：FileWatcher + 回调机制
+- 配置重载：FileWatcher 监听文件变更，重载进内存合并视图
 """
 
 import asyncio
-import inspect
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Dict,
     List,
     Optional,
     Sequence,
     Tuple,
-    Union,
-    cast,
 )
 
 
@@ -32,19 +28,12 @@ from src.modules.logging import get_logger
 if TYPE_CHECKING:
     from src.modules.config.file_watcher import FileChange, FileWatcher
 
-# 热重载回调签名: 支持 (scopes) 或 () 两种调用形态
-ConfigReloadCallback = Union[
-    Callable[[Sequence[str]], Any],
-    Callable[[], Any],
-]
-
 # reload 策略（scope 级声明，热生效判定的单一事实源——配置写路径的
 # 热生效分类同样从本表推导，不另立清单）：
-# - "hot"：基础设施标量——reload 时调用已注册回调通知下游，内存配置即换即生效
 # - "component"：组件域（agents / collectors）——本服务重载只更新合并视图；
 #   WebUI 保存路径注入组件重建上下文时按新配置重建组件实现保存即生效，
 #   未注入（或重建未执行）时照实报"需重启进程"
-# - "restart"：其余装配类配置（provider 连接、端口、disabled_tools 等）——
+# - "restart"：装配类配置（provider 连接、端口、disabled_tools、infra 标量等）——
 #   重载后仅日志"待重启"，已构造实例不热注入
 SCOPE_RELOAD_POLICY: Dict[str, str] = {
     "agents": "component",
@@ -53,12 +42,11 @@ SCOPE_RELOAD_POLICY: Dict[str, str] = {
     "avatar": "restart",
     "model": "restart",
     "storage": "restart",
-    "infra": "hot",
+    "infra": "restart",
 }
 
-# 策略表的两种热生效形态（由 SCOPE_RELOAD_POLICY 推导，不单独维护）：
-# 热重载段直接生效；组件域靠"停 → 重新实例化 → 启动"的组件重建生效
-RELOAD_HOT_SCOPES = frozenset(s for s, policy in SCOPE_RELOAD_POLICY.items() if policy == "hot")
+# 组件域集合（由 SCOPE_RELOAD_POLICY 推导）："停 → 重新实例化 → 启动"的
+# 组件重建是唯一的热生效形态
 COMPONENT_REBUILD_SCOPES = frozenset(s for s, policy in SCOPE_RELOAD_POLICY.items() if policy == "component")
 
 
@@ -75,8 +63,6 @@ class ConfigService:
         general_config = config_service.get_section("general")
         interceptor_config = config_service.get_interceptor_config("rate_limit")
 
-        # 热重载
-        config_service.register_reload_callback(my_callback)
         await config_service.start_file_watcher()
     """
 
@@ -88,8 +74,6 @@ class ConfigService:
         # 按文件的原始视图（拍平前）：多文件模式下由 _try_multi_file_init 填充；
         # 单文件/未初始化路径保持空 dict，get_file_section 才有确定行为
         self._file_sections: Dict[str, Any] = {}
-        # 热重载状态
-        self._reload_callbacks: List[ConfigReloadCallback] = []
         self._file_watcher: Optional["FileWatcher"] = None
         self._file_watcher_subscription_id: Optional[str] = None
         self._reload_lock: asyncio.Lock = asyncio.Lock()
@@ -326,58 +310,7 @@ class ConfigService:
 
         return bool(interceptor_config.get("enabled", True))
 
-    # ========== 热重载 + Schema API ==========
-
-    def register_reload_callback(self, callback: ConfigReloadCallback) -> None:
-        """注册配置热重载回调。
-
-        Args:
-            callback: 配置热重载回调。允许无参回调 ``()``，也允许
-                ``(scopes: Sequence[str]) -> Any`` 接收变更范围列表的回调。
-                async 回调会被自动 await。
-        """
-        self._reload_callbacks.append(callback)
-
-    def unregister_reload_callback(self, callback: ConfigReloadCallback) -> None:
-        """注销已注册的回调。未注册的回调静默忽略。"""
-        try:
-            self._reload_callbacks.remove(callback)
-        except ValueError:
-            return
-
-    @staticmethod
-    def _callback_accepts_scopes(callback: ConfigReloadCallback) -> bool:
-        """通过 inspect 检查回调是否接受位置参数 (scopes)。"""
-        try:
-            params = inspect.signature(callback).parameters.values()
-        except (TypeError, ValueError):
-            return False
-
-        positional_kinds = {
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        }
-        for param in params:
-            if param.kind == inspect.Parameter.VAR_POSITIONAL:
-                return True
-            if param.kind in positional_kinds:
-                return True
-        return False
-
-    async def _invoke_reload_callback(
-        self,
-        callback: ConfigReloadCallback,
-        changed_scopes: Sequence[str],
-    ) -> None:
-        """调用单个回调，根据签名决定是否传 scopes；async 回调自动 await。"""
-        if self._callback_accepts_scopes(callback):
-            cb_with_scopes = cast(Callable[[Sequence[str]], Any], callback)
-            result = cb_with_scopes(changed_scopes)
-        else:
-            cb_no_scopes = cast(Callable[[], Any], callback)
-            result = cb_no_scopes()
-        if inspect.isawaitable(result):
-            await result
+    # ========== 配置重载 ==========
 
     @staticmethod
     def _normalize_changed_scopes(
@@ -414,14 +347,14 @@ class ConfigService:
         self,
         changed_scopes: Optional[Sequence[str]] = None,
     ) -> bool:
-        """重载配置文件并调用所有已注册回调。
+        """重载配置文件进内存合并视图。
 
         Args:
             changed_scopes: 要重载的 scope 列表（agents/collectors/tools/avatar/
                 model/storage/infra 的子集）。None 表示重载全部。
 
         Returns:
-            True 表示重载流程完成 (即使个别回调失败)，False 表示加载失败。
+            True 表示重载流程完成，False 表示加载失败。
         """
         scopes = self._normalize_changed_scopes(changed_scopes)
         if not scopes:
@@ -439,20 +372,9 @@ class ConfigService:
             self._reload_revision += 1
             self.logger.info(f"配置已重载 (revision={self._reload_revision}, scopes={list(scopes)})")
 
-            # 按策略分流：非 hot 段仅提示待重启；hot 段调用已注册回调通知下游
-            hot_scopes = tuple(s for s in scopes if SCOPE_RELOAD_POLICY.get(s) == "hot")
-            restart_scopes = tuple(s for s in scopes if SCOPE_RELOAD_POLICY.get(s) != "hot")
-            if restart_scopes:
-                self.logger.warning(f"以下配置段含装配类变更，需重启进程后完全生效: {list(restart_scopes)}")
-
-            if hot_scopes:
-                for callback in list(self._reload_callbacks):
-                    try:
-                        await self._invoke_reload_callback(callback, hot_scopes)
-                    except Exception as exc:
-                        self.logger.warning(f"reload 回调执行失败: {exc}")
-            else:
-                self.logger.debug("reload_config: 无 hot 段变更，跳过回调分发")
+            # 内存合并视图已换新，但组件都是构造期快照，要吃到新值须重启进程；
+            # 组件域的保存即生效由 WebUI 保存路径的组件重建负责（见 COMPONENT_REBUILD_SCOPES）
+            self.logger.warning(f"以下配置段含装配类变更，需重启进程后完全生效: {list(scopes)}")
         return True
 
     def _load_main_config_from_disk(self) -> Dict[str, Any]:

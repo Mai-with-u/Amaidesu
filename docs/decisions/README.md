@@ -71,3 +71,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-046：直播内容进 MaiBot 长期记忆（草案，暂定：整场记录回放进固定的直播间会话 / 主播的话以麦麦身份发出以触发聊天摘要）](046-live-transcript-to-maibot-memory.md)
 - [ADR-047：观众身份映射（取代 ADR-029 身份键一节：账号 ID 与开放平台 ID 同行 / 同平台按昵称关联 / 超出时限转人工确认）](047-viewer-identity-mapping.md)
 - [ADR-048：组件身份单一源——装配层目录表（登记点四处并两处 / registry 降纯 Schema 容器 / 漏登记失败形态改变）](048-component-identity-catalog.md)
+- [ADR-049：热重载回调接缝退役（infra 归入重启段 / 零订阅者的静默假生效 / 组件重建是唯一热生效形态）](049-hot-reload-seam-retirement.md)
