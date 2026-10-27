@@ -50,7 +50,7 @@ _CONFIG_FILE_TO_SCOPE: Dict[str, str] = {
 # reload 策略（scope 级声明）：
 # - "restart"：装配类配置（Agent/采集器实例、provider 连接、端口、
 #   disabled_tools 等）——重载后仅日志"待重启"，已构造实例不热注入
-# - "hot"：基础设施标量——经 ConfigProxy 实时拉取 _main_config 即时生效
+# - "hot"：基础设施标量——reload 时调用已注册回调通知下游，内存配置即换即生效
 _SCOPE_RELOAD_POLICY: Dict[str, str] = {
     "agents": "restart",
     "collectors": "restart",
@@ -94,7 +94,6 @@ class ConfigService:
         self._file_watcher_subscription_id: Optional[str] = None
         self._reload_lock: asyncio.Lock = asyncio.Lock()
         self._reload_revision: int = 0
-        self._last_coverage_result: Optional[Any] = None
         self.logger = get_logger("ConfigService")
         self.logger.debug("ConfigService 初始化完成")
 
@@ -194,10 +193,6 @@ class ConfigService:
         self.logger.info("配置服务初始化完成")
 
         return self._main_config, was_created
-
-    def _check_schema_registry_coverage(self) -> None:
-        """空实现，兼容旧调用方。"""
-        self._last_coverage_result = None
 
     def get_file_section(self, file_stem: str, default: Any = None) -> Dict[str, Any]:
         """按**文件**取配置段（多文件模式下的原始命名空间）。
@@ -444,7 +439,7 @@ class ConfigService:
             self._reload_revision += 1
             self.logger.info(f"配置已重载 (revision={self._reload_revision}, scopes={list(scopes)})")
 
-            # 按策略分流：restart 段仅提示待重启；hot 段经 ConfigProxy 即时生效
+            # 按策略分流：restart 段仅提示待重启；hot 段调用已注册回调通知下游
             hot_scopes = tuple(s for s in scopes if _SCOPE_RELOAD_POLICY.get(s) == "hot")
             restart_scopes = tuple(s for s in scopes if _SCOPE_RELOAD_POLICY.get(s) != "hot")
             if restart_scopes:

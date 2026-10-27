@@ -36,15 +36,24 @@ import sqlite3
 import struct
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.modules.config.toml_utils import load_toml_with_comments
 from src.modules.storage._default_path import DEFAULT_DB_PATH
 from src.modules.tts.backends.gptsovits.provider import GPTSoVITSProvider
 from src.modules.tts.common import normalize_tts_text
+
+
+def load_gptsovits_config(path: Path) -> dict[str, object]:
+    """从 infra.toml 读取 [tts.gptsovits] 段（utf-8-sig 兼容带 BOM 的文件）。"""
+    raw = path.read_bytes()
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    data = tomllib.loads(raw.decode("utf-8"))
+    return dict(data["tts"]["gptsovits"])
 
 
 def wav_duration(data: bytes) -> float | None:
@@ -180,7 +189,7 @@ async def main() -> None:
     if not utterances:
         raise SystemExit(f"场次 {session_id} 没有主播台词（live_chat 无 assistant/speak 记录）")
 
-    tts_cfg = dict(dict(load_toml_with_comments(ROOT / "config" / "infra.toml")["tts"])["gptsovits"])
+    tts_cfg = load_gptsovits_config(ROOT / "config" / "infra.toml")
     sink = _CollectingSink() if args.play else None
     engine = GPTSoVITSProvider(config=tts_cfg, audio_sink=sink)
     await engine.setup()

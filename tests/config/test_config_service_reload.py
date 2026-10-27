@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 from watchfiles import Change
 
-from src.modules.config.config_proxy import ConfigProxy
 from src.modules.config.file_watcher import FileChange
 from src.modules.config.multi_file_loader import generate_default_configs, load_config_dir
 from src.modules.config.self_write_guard import consume_self_write
@@ -131,17 +130,16 @@ async def test_file_watcher_lifecycle_and_monitored_files(service: ConfigService
     assert service._file_watcher is None
 
 
-async def test_modifying_agents_toml_is_visible_through_config_proxy(watching: ConfigService, config_dir: Path) -> None:
-    proxy = ConfigProxy(getter=lambda: watching._main_config)
+async def test_modifying_agents_toml_becomes_visible_after_reload(watching: ConfigService, config_dir: Path) -> None:
     _rename_bot(config_dir, "热重载后的名字")
 
     deadline = asyncio.get_running_loop().time() + 10.0  # watcher 防抖约 600ms + reload
     while asyncio.get_running_loop().time() < deadline:
-        streamer = proxy.get("agents", {}).get("streamer", {})
+        streamer = watching.get_section("agents", {}).get("streamer", {})
         if isinstance(streamer, dict) and streamer.get("persona", {}).get("bot_name") == "热重载后的名字":
             return
         await asyncio.sleep(0.2)
-    pytest.fail("ConfigProxy 未反映热重载新值")
+    pytest.fail("热重载后 service 读取的仍是旧值")
 
 
 async def test_hot_scope_change_fires_callback(watching: ConfigService, config_dir: Path) -> None:

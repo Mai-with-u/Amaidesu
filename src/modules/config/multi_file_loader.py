@@ -336,7 +336,7 @@ def _table_from_model(instance: BaseModel) -> Any:
     for sub_name, sub_info in type(instance).model_fields.items():
         value = getattr(instance, sub_name)
         if value is None:
-            # None = 未设置 / Optional 默认；不落盘，与 generate_toml_string 兜底一致
+            # None = 未设置 / Optional 默认；TOML 不支持 null，直接跳过不落盘
             continue
         if isinstance(value, BaseModel):
             inner = _table_from_model(value)

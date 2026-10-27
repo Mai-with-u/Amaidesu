@@ -1,11 +1,10 @@
 """组件配置基类定义
 
 定义所有组件配置的基类，
-提供漂移检测和 TOML 生成功能。
+提供漂移检测功能。
 """
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, ClassVar, Union, get_args, get_origin
 
 import tomlkit
@@ -214,94 +213,6 @@ class BaseConfig(BaseModel):
 
         instance = cls(**clean_data)
         return instance, report
-
-    @classmethod
-    def generate_toml_string(
-        cls,
-        name: str | None = None,
-        include_comments: bool = True,
-    ) -> str:
-        """从 Schema 生成 TOML 配置字符串
-
-        生成包含所有可配置字段及其默认值的 TOML 字符串。
-        字段的 description 会作为注释写入。
-
-        Args:
-            name: 组件名称（用于生成 TOML 中的表名），默认为类名的小写形式
-            include_comments: 是否包含字段注释（从 Field description 生成）
-
-        Returns:
-            TOML 格式的配置字符串
-        """
-        table_name = name if name else cls.__name__.lower()
-
-        doc = tomlkit.document()
-
-        # 添加类文档字符串作为文件头注释
-        if include_comments and cls.__doc__:
-            docstring = cls.__doc__.strip()
-            for line in docstring.split("\n"):
-                doc.add(tomlkit.comment(line.strip()))
-            doc.add(tomlkit.nl())
-
-        # 创建配置表
-        table = tomlkit.table()
-
-        # 获取默认值
-        schema_instance = cls()
-        config_dict = schema_instance.model_dump()
-
-        for field_name, field_info in cls.model_fields.items():
-            field_value = config_dict.get(field_name)
-
-            # TOML 不支持 null，跳过 None 值
-            if field_value is None:
-                continue
-
-            # 添加字段注释
-            if include_comments and field_info.description:
-                table.add(tomlkit.comment(field_info.description))
-
-            # 添加字段值
-            _set_toml_value(table, field_name, field_value)
-
-        doc[table_name] = table
-
-        return tomlkit.dumps(doc)
-
-    @classmethod
-    def generate_toml(
-        cls,
-        output_path: str | Path,
-        name: str | None = None,
-        include_comments: bool = True,
-    ) -> None:
-        """从 Schema 生成 TOML 配置文件
-
-        生成包含所有可配置字段及其默认值的 TOML 文件，用作配置模板。
-        包含字段的 description 作为注释。
-
-        Args:
-            output_path: 输出文件路径
-            name: 组件名称（用于生成 TOML 中的表名），默认为类名的小写形式
-            include_comments: 是否包含字段注释（从 Field description 生成）
-
-        Example:
-            >>> ConsoleInputConfig.generate_toml("config.toml", "console_input")
-        """
-        output_path = Path(output_path)
-        toml_content = cls.generate_toml_string(name, include_comments)
-        output_path.write_text(toml_content, encoding="utf-8")
-
-    @classmethod
-    def get_default_dict(cls) -> dict[str, Any]:
-        """获取默认配置字典
-
-        Returns:
-            包含所有字段默认值的字典
-        """
-        schema_instance = cls()
-        return schema_instance.model_dump(exclude_unset=False)
 
 
 def _set_toml_value(table: tomlkit.items.Table, key: str, value: Any) -> None:

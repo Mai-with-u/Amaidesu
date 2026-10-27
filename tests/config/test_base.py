@@ -1,4 +1,4 @@
-"""BaseConfig 漂移检测（冗余/缺失/嵌套路径）、from_dict 剥离未知字段、TOML 生成"""
+"""BaseConfig 漂移检测（冗余/缺失/嵌套路径）与 from_dict 剥离未知字段"""
 
 import pytest
 from pydantic import Field
@@ -54,10 +54,3 @@ def test_unknown_fields_are_forbidden_on_init_but_stripped_by_from_dict() -> Non
         _Sample(type="sample", name="ok", unknown="ignored")
     instance = _Sample.from_dict({"type": "sample", "name": "ok", "unknown": "ignored"})
     assert instance.name == "ok" and not hasattr(instance, "unknown")
-
-
-def test_toml_generation_includes_fields_comments_and_default_dict() -> None:
-    text = _Sample.generate_toml_string(name="sample_config")
-    assert "[sample_config]" in text and "name" in text and "port" in text and "#" in text  # 描述渲染为注释
-    defaults = _Sample.get_default_dict()
-    assert (defaults["name"], defaults["port"]) == ("default", 8080)
