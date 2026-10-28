@@ -114,7 +114,7 @@
 | 版本与发布 | `docs/guides/release.md` |
 | 游戏 Agent 范式 | `docs/architecture/minecraft-agent.md` |
 
-**ADR 编写规范**：决策记录位于 `docs/decisions/`，文件名 `NNN-短横线描述.md`，编号按创建时间递增、全局连续、不得跳号或重复；失效 ADR 直接删除（git 历史保留）。每篇标题下必须含三行元数据——状态（已采纳/已废弃/草案）、日期（YYYY-MM-DD）、实现提交（完整 40 位 hash 加 `git show <hash>` 可追溯的提交信息；实现与 ADR 同笔交付、或原 hash 已被 rebase 重写失效时，可用可检索的定位描述代替，如 `git log -- <本 ADR 路径>`）。正文采用 Nygard 四段式：**背景 / 决策 / 替代方案 / 后果**。新增 ADR 后同步更新 `docs/decisions/README.md` 清单。
+**ADR 编写规范**：决策记录位于 `docs/decisions/`，文件名 `NNN-短横线描述.md`，编号按创建时间递增、全局连续、不得跳号或重复；失效 ADR 直接删除，不留墓碑——留在树里的过时全文会被检索式阅读误当现行决策；决策演变链由接棒篇自足承载：取代既有决策（整篇或部分）的新 ADR，状态行写明被取代对象及范围（如"取代 ADR-029 的'身份键'一节"），旧决策的实质与更替理由写入本篇背景段，编号空缺与删除去向在 `docs/decisions/README.md` 索引留一行说明。同一篇被部分取代明显累积时，合并出覆盖全域的新篇整篇取代。每篇标题下必须含三行元数据——状态（已采纳/草案）、日期（YYYY-MM-DD）、实现提交（完整 40 位 hash 加 `git show <hash>` 可追溯的提交信息；实现与 ADR 同笔交付、或原 hash 已被 rebase 重写失效时，可用可检索的定位描述代替，如 `git log -- <本 ADR 路径>`）。正文采用 Nygard 四段式：**背景 / 决策 / 替代方案 / 后果**。新增 ADR 后同步更新 `docs/decisions/README.md` 清单。
 
 **链接规范**：文档间引用一律相对路径，目录层级需正确换算（`docs/architecture/` 引用 `docs/guides/` 加 `../`）；图片统一以 `![描述](../images/xxx.png)` 引用；锚点基于标题生成，标题编号会保留在锚点中。
 
