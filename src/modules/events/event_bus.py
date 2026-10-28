@@ -60,14 +60,10 @@ class HandlerWrapper:
 
     包含处理器函数和元数据:
     - handler: 处理器函数
-    - error_count: 错误次数
-    - last_error: 最后错误信息
     - original_handler: 原始处理器函数（用于取消订阅）
     """
 
     handler: Callable
-    error_count: int = 0
-    last_error: Optional[str] = None
     original_handler: Optional[Callable] = None  # 存储用户提供的原始处理器
 
 
@@ -341,9 +337,6 @@ class EventBus:
         try:
             await wrapper.handler(event_name, data, source)
         except Exception as e:
-            # 处理器级别的错误记录（每个 handler 独立，无需锁）
-            wrapper.error_count += 1
-            wrapper.last_error = str(e)
             self.logger.exception(f"事件处理器执行错误 (事件: {event_name}, 来源: {source}): {e}")
 
     def on(self, event_name: str, handler: Callable, model_class: Type[T]) -> None:
