@@ -1,86 +1,58 @@
-"""McpClient：资源订阅与重订阅、连接/关闭期限、请求期限（静默不回包）、调用异常分诊、探活、连接失败日志去重"""
+"""McpClient：资源订阅与重订阅、连接/关闭期限、请求期限（静默不回包）、调用异常分诊、探活、连接失败日志去重
+
+全部经由构造器注入接缝（``client_factory`` / ``transport_factory``）替换
+传输与 SDK 客户端，不 patch 私有方法、不手撕内部状态。
+"""
 
 from __future__ import annotations
 
 import asyncio
-import sys
-import types
 from types import SimpleNamespace
-from typing import Any, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 
 from src.modules.mcp.client import McpClient
 from src.modules.mcp.config import McpServerConfig
+from tests.modules.mcp.fakes import AnyConfig, Endpoint, FakeFastmcpClient, FakeTool, Updated, recording_client_factory
 from src.modules.mcp.provider import McpToolProvider
-from src.modules.tools import ToolInvocation, ToolRegistry, ToolSpec
+from src.modules.tools import ToolInvocation, ToolRegistry
 from src.modules.tools.models import ToolExecutionResult
-from tests.modules.mcp.fakes import AnyConfig
 
 
-class FakeSession:
-    """记录订阅/退订请求的 session 替身。"""
-
-    def __init__(self) -> None:
-        self.subscribed: List[str] = []
-        self.unsubscribed: List[str] = []
-        self.fail_on_subscribe = False
-
-    async def subscribe_resource(self, uri: Any) -> None:
-        if self.fail_on_subscribe:
-            raise ConnectionError("subscribe refused")
-        self.subscribed.append(str(uri))
-
-    async def unsubscribe_resource(self, uri: Any) -> None:
-        self.unsubscribed.append(str(uri))
-
-
-class FakeFastmcpClient:
-    """fastmcp.Client 替身：接住 message_handler、暴露 session。"""
-
-    def __init__(self, transport: Any, message_handler: Any = None, init_timeout: float | None = None) -> None:
-        self.message_handler = message_handler
-        self.session = FakeSession()
-        self.read_results: List[Any] = [("content",)]
-        self.list_results: List[Any] = []
-
-    async def __aenter__(self) -> "FakeFastmcpClient":
-        return self
-
-    async def __aexit__(self, *exc: Any) -> None:
-        return None
-
-    async def read_resource(self, uri: str) -> Any:
-        return self.read_results
-
-    async def list_resources(self) -> List[Any]:
-        return self.list_results
-
-
-class Updated:
-    """ResourceUpdatedNotification 形状替身：handler 只用 params.uri。"""
-
-    def __init__(self, uri: str) -> None:
-        self.params = SimpleNamespace(uri=uri)
-
-
-@pytest.fixture
-def fastmcp_patched(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("fastmcp.Client", FakeFastmcpClient)  # 生产代码 connect 内延迟 import 的目标
-
-
-async def _connected_client() -> McpClient:
-    client = McpClient(name="maicraft", config=AnyConfig())
+async def _connected_client() -> tuple:
+    """经注入接缝建立连接的客户端；返回 (client, made)，made 收集会话替身实例。"""
+    made: List[FakeFastmcpClient] = []
+    client = McpClient(
+        name="maicraft",
+        config=AnyConfig(),
+        transport_factory=lambda: object(),
+        client_factory=recording_client_factory(made),
+    )
     assert await client.connect() is True
-    return client
+    return client, made
+
+
+def _injected_client(
+    client_factory: Any,
+    config: Any = None,
+    transport_factory: Any = None,
+    name: str = "reference",
+) -> McpClient:
+    """带接缝注入的客户端快捷构造；缺省给最简配置与哑传输。"""
+    if config is None:
+        config = SimpleNamespace(timeout_seconds=1, request_timeout_ms=1000, transport="http")
+    if transport_factory is None:
+        transport_factory = lambda: object()  # noqa: E731 - 哑传输：注入路径不使用传输对象本身
+    return McpClient(name=name, config=config, transport_factory=transport_factory, client_factory=client_factory)
 
 
 # 资源订阅
 
 
-@pytest.mark.usefixtures("fastmcp_patched")
 async def test_subscription_dispatches_by_uri_isolates_callback_errors_and_stops_after_unsubscribe() -> None:
-    client = await _connected_client()
+    client, made = await _connected_client()
+    fake = made[0]
     received: List[str] = []
 
     def boom(uri: str) -> None:
@@ -88,9 +60,9 @@ async def test_subscription_dispatches_by_uri_isolates_callback_errors_and_stops
 
     unsubscribe = await client.subscribe_resource("maicraft://attention", received.append)
     await client.subscribe_resource("maicraft://a", boom)
-    assert client._client.session.subscribed == ["maicraft://attention", "maicraft://a"]
+    assert fake.session.subscribed == ["maicraft://attention", "maicraft://a"]
 
-    handler = client._client.message_handler
+    handler = fake.message_handler
     await handler.on_resource_updated(Updated("maicraft://attention"))
     await handler.on_resource_updated(Updated("other://resource"))  # 未登记的 URI 静默忽略
     await handler.on_resource_updated(Updated("maicraft://a"))  # 回调抛错被兜底，不影响后续分发
@@ -99,54 +71,70 @@ async def test_subscription_dispatches_by_uri_isolates_callback_errors_and_stops
 
     await unsubscribe()
     await handler.on_resource_updated(Updated("maicraft://attention"))
-    assert received == ["maicraft://attention"] * 2 and client._client.session.unsubscribed == ["maicraft://attention"]
+    assert received == ["maicraft://attention"] * 2 and fake.session.unsubscribed == ["maicraft://attention"]
 
 
-@pytest.mark.usefixtures("fastmcp_patched")
 async def test_subscribe_needs_connection_and_disconnected_unsubscribe_only_removes_locally() -> None:
-    client = McpClient(name="maicraft", config=AnyConfig())
+    made: List[FakeFastmcpClient] = []
+    client = McpClient(
+        name="maicraft",
+        config=AnyConfig(),
+        transport_factory=lambda: object(),
+        client_factory=recording_client_factory(made),
+    )
     with pytest.raises(RuntimeError):  # 未连接时显式失败，消费方可降级周期兜底
         await client.subscribe_resource("maicraft://attention", lambda uri: None)
     assert await client.read_resource("maicraft://attention") is None and await client.list_resources() == []
 
     await client.connect()
-    client._client.list_results = ["res1"]
+    made[0].list_results = ["res1"]
     assert await client.read_resource("maicraft://attention") == [("content",)]
     assert await client.list_resources() == ["res1"]
 
     unsubscribe = await client.subscribe_resource("maicraft://attention", lambda uri: None)
-    client._connected = False
-    await unsubscribe()  # 断连后退订：本地除名，不发网络请求
-    assert client._subscriptions == {} and client._client.session.unsubscribed == []
+    await client.close()  # 断连后退订：本地除名，不发网络请求
+    await unsubscribe()
+    assert made[0].session.unsubscribed == []
 
 
-@pytest.mark.usefixtures("fastmcp_patched")
 async def test_reconnect_resubscribes_active_subscriptions_best_effort() -> None:
-    client = await _connected_client()
+    # 会话替身的订阅行为由标志位在调用时刻决定：同一工厂贯穿全程，无需中途替换
+    fail_on_subscribe = {"on": False}
+    made: List[FakeFastmcpClient] = []
+
+    def factory(transport: Any, message_handler: Any = None, init_timeout: float | None = None) -> FakeFastmcpClient:
+        fake = FakeFastmcpClient(transport, message_handler=message_handler, init_timeout=init_timeout)
+        fake.session.fail_on_subscribe = fail_on_subscribe["on"]
+        made.append(fake)
+        return fake
+
+    client = McpClient(
+        name="maicraft",
+        config=AnyConfig(),
+        transport_factory=lambda: object(),
+        client_factory=factory,
+    )
+    assert await client.connect() is True
     received: List[str] = []
     await client.subscribe_resource("maicraft://attention", received.append)
-    first_session = client._client.session
+    first_session = made[0].session
 
-    client._connected, client._client = False, None  # 传输故障后重连
+    # 传输故障后重连：经公开 call_tool 路径触发断连标记（替身 call_tool 恒抛传输错误）
+    assert await client.call_tool("any", {}) is None and client.connected is False
     assert await client.connect() is True
-    assert client._client.session is not first_session
-    assert client._client.session.subscribed == ["maicraft://attention"]  # 重发订阅
-    await client._client.message_handler.on_resource_updated(Updated("maicraft://attention"))
+    assert made[1].session is not first_session
+    assert made[1].session.subscribed == ["maicraft://attention"]  # 重发订阅
+    await made[1].message_handler.on_resource_updated(Updated("maicraft://attention"))
     assert received == ["maicraft://attention"]  # 新连接的通知分发照常
 
-    client._connected, client._client = False, None
-    original = FakeFastmcpClient.__init__
+    fail_on_subscribe["on"] = True
+    assert await client.call_tool("any", {}) is None and client.connected is False
+    assert await client.connect() is True  # 重订阅失败不阻断连接
 
-    def failing_init(self, *args: Any, **kwargs: Any) -> None:
-        original(self, *args, **kwargs)
-        self.session.fail_on_subscribe = True
-
-    FakeFastmcpClient.__init__ = failing_init  # type: ignore[method-assign]
-    try:
-        assert await client.connect() is True  # 重订阅失败不阻断连接
-    finally:
-        FakeFastmcpClient.__init__ = original  # type: ignore[method-assign]
-    assert "maicraft://attention" in client._subscriptions  # 登记保留，下次重连再试
+    fail_on_subscribe["on"] = False
+    assert await client.call_tool("any", {}) is None and client.connected is False
+    assert await client.connect() is True
+    assert "maicraft://attention" in made[-1].session.subscribed  # 失败的登记保留，下次重连再试
 
 
 # 连接与关闭期限
@@ -169,35 +157,36 @@ class Session:
             await asyncio.Event().wait()
 
 
-def _deadline_client(monkeypatch: pytest.MonkeyPatch, factory: Any) -> McpClient:
-    monkeypatch.setattr("fastmcp.Client", factory)
-    client = McpClient("reference", SimpleNamespace(timeout_seconds=0.025, request_timeout_ms=100, transport="http"))
-    monkeypatch.setattr(client, "_build_transport", lambda: object())
-    monkeypatch.setattr(client, "_build_message_handler", lambda subscriptions: None)
-    return client
+def _deadline_client(factory: Any) -> McpClient:
+    return McpClient(
+        "reference",
+        SimpleNamespace(timeout_seconds=0.025, request_timeout_ms=100, transport="http"),
+        transport_factory=lambda: object(),
+        client_factory=factory,
+    )
 
 
-async def test_handshake_and_close_honor_connection_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    stuck = _deadline_client(monkeypatch, lambda *args, **kwargs: Session(stuck_enter=True))
+async def test_handshake_and_close_honor_connection_timeout() -> None:
+    stuck = _deadline_client(lambda *args, **kwargs: Session(stuck_enter=True))
     assert await asyncio.wait_for(stuck.connect(), timeout=1) is False  # 握手不返回时不能拖住首次工具调用
     assert not stuck.connected
     await stuck.close()
 
-    client = _deadline_client(monkeypatch, lambda *args, **kwargs: Session())
     old = Session(stuck_exit=True)
-    client._client, client._connected = old, True
+    client = _deadline_client(lambda *args, **kwargs: old)
+    assert await client.connect() is True
     await asyncio.wait_for(client.close(), timeout=1)  # 旧会话退出卡住时也要释放本地引用
-    assert not client.connected and client._client is None and old.exits == 1
+    assert not client.connected and old.exits == 1
 
 
-async def test_concurrent_connects_share_one_session(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_concurrent_connects_share_one_session() -> None:
     made: list[Session] = []
 
     def create(*args: Any, **kwargs: Any) -> Session:
         made.append(Session())
         return made[-1]
 
-    client = _deadline_client(monkeypatch, create)
+    client = _deadline_client(create)
     try:
         assert await asyncio.gather(client.connect(), client.connect()) == [True, True]  # 避免相互关闭刚建立的连接
         assert len(made) == 1 and made[0].exits == 0
@@ -205,7 +194,7 @@ async def test_concurrent_connects_share_one_session(monkeypatch: pytest.MonkeyP
         await client.close()
 
 
-async def test_real_sdk_recovers_after_a_timed_out_call(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_real_sdk_recovers_after_a_timed_out_call() -> None:
     from fastmcp import FastMCP  # 可选 SDK，服务在进程内运行，不连接游戏或调用模型
 
     service = FastMCP("deadline-test")
@@ -218,17 +207,20 @@ async def test_real_sdk_recovers_after_a_timed_out_call(monkeypatch: pytest.Monk
             await asyncio.Event().wait()
         return "available"
 
-    client = McpClient("reference", SimpleNamespace(timeout_seconds=1, request_timeout_ms=1000, transport="http"))
-    monkeypatch.setattr(client, "_build_transport", lambda: service)
+    client = McpClient(
+        "reference",
+        SimpleNamespace(timeout_seconds=1, request_timeout_ms=1000, transport="http"),
+        transport_factory=lambda: service,  # fastmcp 直接接受进程内 server 对象作为传输
+    )
     try:
         assert await client.connect()
         with pytest.raises(TimeoutError, match="远端结果未知"):
             await asyncio.wait_for(client.call_tool("inspect", {"wait": True}), timeout=4)
         result = await asyncio.wait_for(client.call_tool("inspect", {"wait": False}), timeout=4)
         assert result.content[0].text == "available" and client.connected
-        # 全量套件高负载下，首次调用可能在请求期限内尚未送达进程内服务端，calls 因此缺少
-        # True 也属合法；本测试的保护点是超时不毒化会话，不是请求送达时序
-        assert calls in ([True, False], [False])
+        # 恢复调用已确认送达（其结果被完整拿到），证明超时没有毒化会话；
+        # 被取消的首次调用是否曾送达服务端取决于取消时机，不做时序断言
+        assert False in calls
     finally:
         await client.close()
 
@@ -236,12 +228,16 @@ async def test_real_sdk_recovers_after_a_timed_out_call(monkeypatch: pytest.Monk
 # 请求期限
 
 
-class SilentEndpoint:
+class SilentEndpoint(Endpoint):
     """记录请求已收到后永不回包，复现通道静默而进程仍活着的情况。"""
 
     def __init__(self) -> None:
+        super().__init__()
         self.calls = 0
         self.cancelled = False
+
+    async def list_tools(self) -> List[Any]:
+        return [FakeTool("operate")]
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         self.calls += 1
@@ -253,11 +249,13 @@ class SilentEndpoint:
 
 async def test_silent_tool_returns_unknown_outcome_without_replay(loguru_capture: Any) -> None:
     endpoint = SilentEndpoint()
-    client = McpClient("reference", SimpleNamespace(request_timeout_ms=25, timeout_seconds=1))
-    client._client, client._connected = endpoint, True
+    client = _injected_client(
+        lambda *args, **kwargs: endpoint,
+        config=SimpleNamespace(request_timeout_ms=25, timeout_seconds=1, transport="http"),
+    )
+    assert await client.connect() is True
     provider = McpToolProvider(client=client, server_name="reference")
-    provider._specs = [ToolSpec(name="operate", description="", provider="reference")]
-    provider.mark_connected()  # 连接态语义：登记的 specs 只有在已连接态才对外可见
+    assert await provider.setup() == 1  # 经公开 setup 拉到工具清单，不再手工对齐内部 specs
     registry = ToolRegistry()
     registry.register_provider(provider)
 
@@ -270,19 +268,24 @@ async def test_silent_tool_returns_unknown_outcome_without_replay(loguru_capture
     messages = [e["message"] for e in loguru_capture.records if error["request_id"] in e["message"]]
     assert any("开始" in m for m in messages) and any("结束 status=timeout" in m for m in messages)
     assert endpoint.calls == 1 and endpoint.cancelled and not client.connected
-    assert client._client is endpoint  # 下次重连仍需释放旧会话，不能丢掉清理入口
+    await client.close()
+    assert endpoint.exits == 1  # 下次重连仍需释放旧会话，不能丢掉清理入口
 
 
 async def test_caller_cancellation_remains_cancellation() -> None:
     endpoint = SilentEndpoint()
-    client = McpClient("reference", SimpleNamespace(request_timeout_ms=1000, timeout_seconds=1))
-    client._client, client._connected = endpoint, True
+    client = _injected_client(
+        lambda *args, **kwargs: endpoint,
+        config=SimpleNamespace(request_timeout_ms=1000, timeout_seconds=1, transport="http"),
+    )
+    assert await client.connect() is True
     call = asyncio.create_task(client.call_tool("read", {}))
     await asyncio.sleep(0)
     call.cancel()
     with pytest.raises(asyncio.CancelledError):  # 用户主动中断不能变成可重试超时
         await call
     assert endpoint.calls == 1 and endpoint.cancelled
+    await client.close()
 
 
 @pytest.mark.parametrize(
@@ -293,64 +296,89 @@ async def test_discovery_and_resource_reads_are_bounded(method: str, arguments: 
     async def silent(*args: Any) -> Any:
         await asyncio.Event().wait()
 
-    client = McpClient("reference", SimpleNamespace(request_timeout_ms=25, timeout_seconds=1))
-    client._client, client._connected = SimpleNamespace(**{method: silent}), True
+    endpoint = Endpoint()
+    setattr(endpoint, method, silent)  # 会话替身上挂载被测方法（公开名，非生产私有成员）
+    client = _injected_client(
+        lambda *args, **kwargs: endpoint,
+        config=SimpleNamespace(request_timeout_ms=25, timeout_seconds=1, transport="http"),
+    )
+    assert await client.connect() is True
     assert await asyncio.wait_for(getattr(client, method)(*arguments), timeout=1) == expected and not client.connected
+    await client.close()
 
 
 # 调用异常分诊
 
 
-class _Raiser:
+class RaiserEndpoint(Endpoint):
+    """call_tool 恒抛指定异常的会话替身；暴露一个工具供 Provider 公开拉取 specs。"""
+
     def __init__(self, exc: Exception) -> None:
+        super().__init__()
         self._exc = exc
+
+    async def list_tools(self) -> List[Any]:
+        return [FakeTool("speak")]
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
         raise self._exc
 
 
-def _failing_client(exc: Exception) -> McpClient:
-    client = McpClient(name="triage", config=SimpleNamespace())
-    client._connected, client._client = True, _Raiser(exc)
-    return client
+async def _failing_client(exc: Exception) -> tuple:
+    """返回 (client, endpoint)：endpoint 供断言释放路径（exits 计数）。"""
+    endpoint = RaiserEndpoint(exc)
+    client = _injected_client(lambda *args, **kwargs: endpoint, config=SimpleNamespace(transport="http"), name="triage")
+    assert await client.connect() is True
+    return client, endpoint
 
 
 async def test_business_error_keeps_connection_and_transport_error_marks_disconnected() -> None:
     from fastmcp.exceptions import ToolError
 
-    business = _failing_client(ToolError('{"code":"invalid_arguments","message":"need label"}'))
+    business, _ = await _failing_client(ToolError('{"code":"invalid_arguments","message":"need label"}'))
     with pytest.raises(ToolError):  # server 正常应答的业务错误：round-trip 完整，连接无恙，异常上抛由 Provider 转述
         await business.call_tool("t", {})
-    assert business._connected is True and business._client is not None
+    assert business.connected is True and await business.probe() is True  # 连接与会话实例都健在
 
-    transport = _failing_client(ConnectionError("connection reset"))
+    transport, transport_endpoint = await _failing_client(ConnectionError("connection reset"))
     assert await transport.call_tool("t", {}) is None  # 传输故障：标记断连，维持惰性重连语义
-    assert transport._connected is False and transport._client is not None  # 断开实例仍要由重连/关闭路径释放
+    assert transport.connected is False
+    await transport.close()
+    assert transport_endpoint.exits == 1  # 断开实例仍由关闭路径释放会话，清理入口不丢
 
-    provider = McpToolProvider(
-        client=_failing_client(ToolError('{"error":{"code":"invalid_arguments","message":"need label"}}')),
-        server_name="maicraft",
+    endpoint = RaiserEndpoint(ToolError('{"error":{"code":"invalid_arguments","message":"need label"}}'))
+    client = _injected_client(
+        lambda *args, **kwargs: endpoint, config=SimpleNamespace(transport="http"), name="maicraft"
     )
-    provider._specs = [ToolSpec(name="speak", description="", provider="maicraft")]
-    provider.mark_connected()
+    assert await client.connect() is True
+    provider = McpToolProvider(client=client, server_name="maicraft")
+    assert await provider.setup() == 1  # 经公开 setup 拉到工具清单
     result = await provider.invoke(ToolInvocation(tool_name="maicraft_speak", arguments={}))
     assert isinstance(result, ToolExecutionResult) and result.success is False  # 永不外抛，错误文本透传
     assert "MCP 业务错误" in result.error_message and "invalid_arguments" in result.error_message
-    assert provider._client._connected is True
+    assert await provider.health_check() is True  # 业务错误后连接仍健康
+    await client.close()
 
 
 # 探活与连接失败日志
 
 
 class ProbeClient(McpClient):
+    """connect 结果可编程的探活测试替身；连接态经 prime 按用例枚举预置。"""
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._connected, self._client = True, object()  # 默认已连接，_client 设为非 None 占位
         self.connect_calls = 0
-        self.next_connect_result = True
+        self.next_connect_result: Optional[bool] = None
 
-    async def connect(self, timeout_seconds: float | None = None) -> bool:
+    def prime(self, *, connected: bool, has_client: bool) -> None:
+        """预置探活分支所需的连接态（替身自身状态，等价于真实连接后的取值域）。"""
+        self._connected = connected
+        self._client = object() if has_client else None
+
+    async def connect(self, timeout_seconds: Optional[float] = None) -> bool:
         self.connect_calls += 1
+        assert self.next_connect_result is not None
         return self.next_connect_result
 
 
@@ -358,7 +386,7 @@ class ProbeClient(McpClient):
     ("connected", "has_client", "connect_result", "probe", "connect_calls"),
     [
         (True, True, False, True, 0),  # 本地连接判据通过：不重连（若走了重连，结果会被 False 污染）
-        (True, False, True, True, 1),  # _client 偶发 None 时走重连，防漏报
+        (True, False, True, True, 1),  # 会话实例偶发丢失时走重连，防漏报
         (False, True, True, True, 1),
         (False, True, False, False, 1),
     ],
@@ -366,21 +394,9 @@ class ProbeClient(McpClient):
 )
 async def test_probe_uses_local_state_before_reconnecting(connected, has_client, connect_result, probe, connect_calls):
     client = ProbeClient(name="serverA", config=AnyConfig())
-    client._connected = connected
-    client._client = object() if has_client else None
+    client.prime(connected=connected, has_client=has_client)
     client.next_connect_result = connect_result
     assert await client.probe() is probe and client.connect_calls == connect_calls
-
-
-class _OkFastmcp:
-    def __init__(self, transport: Any, message_handler: Any = None, init_timeout: float | None = None) -> None:
-        self.session = None
-
-    async def __aenter__(self) -> "_OkFastmcp":
-        return self
-
-    async def __aexit__(self, *exc_info: Any) -> None:
-        return None
 
 
 def _raise_with(message: str):
@@ -390,71 +406,58 @@ def _raise_with(message: str):
     return _raise
 
 
-@pytest.fixture
-def _reset_shared_connect_failures() -> Any:
-    """连接失败特征串按 server 名跨实例共享：测前测后清空，防同名 server 的测试间串扰。"""
-    from src.modules.mcp import client as mcp_client_module
-
-    mcp_client_module._last_connect_failures.clear()
-    yield
-    mcp_client_module._last_connect_failures.clear()
-
-
-async def test_same_connect_failure_warns_once_until_reason_changes_or_a_success_resets(
-    monkeypatch, loguru_capture, _reset_shared_connect_failures
-) -> None:
+async def test_same_connect_failure_warns_once_until_reason_changes_or_a_success_resets(loguru_capture) -> None:
     """常驻调用方周期性重连，"服务没开"是常态：同因只 warning 一次，理由变了或连上过再失败才重新报。"""
+    state: Dict[str, Optional[str]] = {"message": "boom"}
+
+    def transport_factory() -> Any:
+        message = state["message"]
+        if message is None:
+            return object()
+        raise RuntimeError(message)
+
     client = McpClient(
-        name="probe", config=McpServerConfig(enabled=True, transport="http", url="http://127.0.0.1:9/mcp")
+        name="probe",
+        config=McpServerConfig(enabled=True, transport="http", url="http://127.0.0.1:9/mcp"),
+        transport_factory=transport_factory,
+        client_factory=lambda *args, **kwargs: Endpoint(),
     )
 
     def failures() -> int:
         return len([r for r in loguru_capture.records if r["level"] == "WARNING" and "连接失败" in r["message"]])
 
-    monkeypatch.setattr(client, "_build_transport", _raise_with("boom"))
     assert await client.connect() is False and await client.connect() is False
     assert failures() == 1
     assert any(
         r["level"] == "DEBUG" and "同因" in r["message"] for r in loguru_capture.records
     )  # 重复失败降 debug 留痕
 
-    monkeypatch.setattr(client, "_build_transport", _raise_with("another"))
+    state["message"] = "another"
     assert await client.connect() is False and failures() == 2
 
-    monkeypatch.setattr(McpClient, "_build_message_handler", staticmethod(lambda subscriptions: None))
-    monkeypatch.setitem(sys.modules, "fastmcp", types.SimpleNamespace(Client=_OkFastmcp))
-    monkeypatch.setattr(client, "_build_transport", lambda: object())
+    state["message"] = None
     assert await client.connect() is True  # 连上一次，失败特征串复位
 
-    monkeypatch.setattr(client, "_build_transport", _raise_with("boom"))
-    client._connected = False  # 已连接的服务再次断开才进入重连分支
+    state["message"] = "boom"
+    await client.close()  # 已连接的服务再次断开才进入重连分支
     assert await client.connect() is False and failures() == 3
 
 
-async def test_connect_failure_dedup_survives_instance_recreation(
-    monkeypatch, loguru_capture, _reset_shared_connect_failures
-) -> None:
+async def test_connect_failure_dedup_survives_instance_recreation(loguru_capture) -> None:
     """事件流采集器每轮重试都新建客户端实例：去重状态按 server 名共享，换实例不算"首次失败"。"""
 
-    def make_client() -> McpClient:
+    def make_client(message: str) -> McpClient:
         return McpClient(
-            name="recreated", config=McpServerConfig(enabled=True, transport="http", url="http://127.0.0.1:9/mcp")
+            name="recreated",
+            config=McpServerConfig(enabled=True, transport="http", url="http://127.0.0.1:9/mcp"),
+            transport_factory=_raise_with(message),
         )
 
     def failures() -> int:
         return len([r for r in loguru_capture.records if r["level"] == "WARNING" and "连接失败" in r["message"]])
 
-    # 挂在类上（覆盖换出来的每个新实例）时是绑定方法，替身要接住 self
-    def raise_boom(self: Any) -> Any:
-        raise RuntimeError("boom")
-
-    def raise_changed(self: Any) -> Any:
-        raise RuntimeError("changed")
-
-    monkeypatch.setattr(McpClient, "_build_transport", raise_boom)
-    assert await make_client().connect() is False
-    assert await make_client().connect() is False and failures() == 1  # 新实例 + 同因：不再 warning
+    assert await make_client("boom").connect() is False
+    assert await make_client("boom").connect() is False and failures() == 1  # 新实例 + 同因：不再 warning
     assert any(r["level"] == "DEBUG" and "同因" in r["message"] for r in loguru_capture.records)
 
-    monkeypatch.setattr(McpClient, "_build_transport", raise_changed)
-    assert await make_client().connect() is False and failures() == 2  # 原因变了，重新 warning
+    assert await make_client("changed").connect() is False and failures() == 2  # 原因变了，重新 warning

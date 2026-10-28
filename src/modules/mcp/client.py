@@ -38,6 +38,12 @@ logger = get_logger("McpClient")
 ResourceUpdateCallback = Callable[[str], None]
 
 
+# 传输对象 / fastmcp.Client 的构造函数签名：测试注入进程内替身、或换用
+# 其他传输实现时经构造参数传入；缺省 None 时走本类的默认构造路径。
+TransportFactory = Callable[[], Any]
+ClientFactory = Callable[..., Any]
+
+
 # 最近一次连接失败特征串（server 名 → 特征串）：按 server 名跨实例共享。
 # 长驻调用方（如事件流采集器）每轮重试会新建客户端实例，去重状态若挂在实例上，
 # 实例一换就被当成"首次失败"，同因告警会持续刷屏；挂在 server 名上才贴合
@@ -53,11 +59,21 @@ class McpClient:
         config: 该 server 的配置（McpServerConfig）
     """
 
-    def __init__(self, name: str, config: McpServerConfig) -> None:
+    def __init__(
+        self,
+        name: str,
+        config: McpServerConfig,
+        *,
+        transport_factory: Optional[TransportFactory] = None,
+        client_factory: Optional[ClientFactory] = None,
+    ) -> None:
         self.name = name
         self.config = config
         self._client: Any = None  # fastmcp.Client（延迟构造）
         self._connected = False
+        # 构造注入的传输/客户端工厂：缺省 None 保持默认行为不变
+        self._transport_factory = transport_factory
+        self._client_factory = client_factory
         # 活跃资源订阅（uri → 举旗回调）：持久于实例，重连成功后据此重发订阅请求
         self._subscriptions: Dict[str, ResourceUpdateCallback] = {}
         # 只使用通道配置设置期限，不读取工具参数来猜测游戏动作需要等待多久。
@@ -202,8 +218,10 @@ class McpClient:
                     await old.__aexit__(None, None, None)
                 except Exception as exc:  # noqa: BLE001 - 旧会话失败不能阻止尝试恢复
                     logger.debug(f"旧 MCP 实例释放失败（继续重连）: {exc}", exc=exc)
-            self._client = Client(
-                self._build_transport(),
+            transport = self._transport_factory() if self._transport_factory is not None else self._build_transport()
+            client_ctor = self._client_factory if self._client_factory is not None else Client
+            self._client = client_ctor(
+                transport,
                 message_handler=self._build_message_handler(self._subscriptions),
                 init_timeout=timeout_ms / 1000,
             )
@@ -384,4 +402,4 @@ class McpClient:
         logger.info(f"MCP server '{self.name}' 已关闭")
 
 
-__all__ = ["McpClient", "ResourceUpdateCallback"]
+__all__ = ["ClientFactory", "McpClient", "ResourceUpdateCallback", "TransportFactory"]

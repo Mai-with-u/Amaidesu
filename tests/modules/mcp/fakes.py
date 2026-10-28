@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, List, Optional
 
 from src.modules.mcp.client import McpClient
 
@@ -44,6 +45,87 @@ class AnyConfig:
     enabled = True
     reconnect = True
     timeout_seconds = 30.0
+
+
+class FakeSession:
+    """记录订阅/退订请求的 session 替身。"""
+
+    def __init__(self) -> None:
+        self.subscribed: List[str] = []
+        self.unsubscribed: List[str] = []
+        self.fail_on_subscribe = False
+
+    async def subscribe_resource(self, uri: Any) -> None:
+        if self.fail_on_subscribe:
+            raise ConnectionError("subscribe refused")
+        self.subscribed.append(str(uri))
+
+    async def unsubscribe_resource(self, uri: Any) -> None:
+        self.unsubscribed.append(str(uri))
+
+
+class FakeFastmcpClient:
+    """fastmcp.Client 替身：接住 message_handler、暴露 session。
+
+    call_tool 恒抛传输错误：供测试经公开的 ``call_tool`` 路径触发
+    McpClient 的断连标记与重连，不再手撕内部连接状态。
+    """
+
+    def __init__(self, transport: Any, message_handler: Any = None, init_timeout: float | None = None) -> None:
+        self.message_handler = message_handler
+        self.session = FakeSession()
+        self.read_results: List[Any] = [("content",)]
+        self.list_results: List[Any] = []
+
+    async def __aenter__(self) -> "FakeFastmcpClient":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
+        raise ConnectionError("transport broken")
+
+    async def read_resource(self, uri: str) -> Any:
+        return self.read_results
+
+    async def list_resources(self) -> List[Any]:
+        return self.list_results
+
+
+class Updated:
+    """ResourceUpdatedNotification 形状替身：handler 只用 params.uri。"""
+
+    def __init__(self, uri: str) -> None:
+        self.params = SimpleNamespace(uri=uri)
+
+
+class Endpoint:
+    """会话替身骨架：空进/出实现；需要的行为由测试按需挂载方法。"""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.exits = 0
+
+    async def __aenter__(self) -> "Endpoint":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        self.exits += 1
+
+
+def recording_client_factory(record: List[Any]) -> Callable[..., Any]:
+    """构造 McpClient 的 client_factory：把创建的替身实例收进 record 供断言。
+
+    测试据此从接缝侧拿到会话替身（session/message_handler 等），
+    不再读取 McpClient 的私有属性。
+    """
+
+    def factory(transport: Any, message_handler: Any = None, init_timeout: float | None = None) -> Any:
+        fake = FakeFastmcpClient(transport, message_handler=message_handler, init_timeout=init_timeout)
+        record.append(fake)
+        return fake
+
+    return factory
 
 
 class FakeMcpClient(McpClient):
