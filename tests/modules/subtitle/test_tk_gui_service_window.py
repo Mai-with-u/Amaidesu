@@ -401,3 +401,35 @@ def test_clear_enqueues_none_sentinel_and_queue_dispatch_runs_in_consumer_thread
     svc._check_queue()
 
     assert shown == ["一条字幕"] and cleared == [True] and svc.text_queue.empty()
+
+
+# 缩放系数回退
+
+
+class NoScalingRoot(FakeCtkRoot):
+    """CTk 私有缩放接口不可用（属性名跨版本变化）且 geometry 回读失败/无尺寸段的窗口桩。"""
+
+    def _get_window_scaling(self) -> float:
+        raise AttributeError("模拟 CTk 私有缩放接口不可用")
+
+    def geometry(self, spec: str | None = None) -> str:  # type: ignore[override]
+        if spec is None:
+            raise RuntimeError("geometry 回读失败")
+        return super().geometry(spec)
+
+
+def test_size_scale_falls_back_to_one_when_private_api_and_geometry_unreadable() -> None:
+    """私有缩放接口不可用、geometry 回读又解析不出尺寸时，退回 1.0 而不是抛未定义变量炸掉高度收敛循环。"""
+    svc = _service(NoScalingRoot(800, 100, 624, 1080, 1.0))
+    svc._last_requested_height_px = 50
+    assert svc._size_scale() == 1.0  # 回读抛异常的路径
+
+    class SizelessGeometryRoot(NoScalingRoot):
+        def geometry(self, spec: str | None = None) -> str:  # type: ignore[override]
+            if spec is None:
+                return "+624+1080"  # 只有位置没有尺寸段，解析结果为假值
+            return super().geometry(spec)
+
+    svc2 = _service(SizelessGeometryRoot(800, 100, 624, 1080, 1.0))
+    svc2._last_requested_height_px = 50
+    assert svc2._size_scale() == 1.0  # 解析结果为假值的路径

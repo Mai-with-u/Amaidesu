@@ -735,6 +735,7 @@ class SubtitleGuiService:
         if isinstance(scale, (int, float)) and scale > 0:
             return float(scale)
         if self._last_requested_height_px > 1:
+            measured = 0.0
             try:
                 requested = parse_requested_size(self.root.geometry())[1]
             except Exception:
