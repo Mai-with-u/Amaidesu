@@ -8,10 +8,12 @@ from src.agents.streamer.rundown.presentation import apply_rundown_control, buil
 from src.agents.streamer.rundown.rundown_state import RundownState
 from src.modules.storage.models.rundown import DEFAULT_RUNDOWN
 
+_TEST_NOW_MS = 1_791_000_000_000  # 固定时钟读数：begin 与判读零流逝，精确边界断言不随满载漂移
+
 
 def _loaded_state() -> RundownState:
     """已起算（running）的状态：load 只装载结构，控制用例需计时语义故显式 begin。"""
-    state = RundownState()
+    state = RundownState(clock=lambda: _TEST_NOW_MS)
     state.load(DEFAULT_RUNDOWN)
     state.begin(by="system")
     return state
