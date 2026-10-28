@@ -56,7 +56,7 @@ _REPLAY_EXCLUDED = frozenset(
         ROOM_MESSAGE_TYPE,
         # 顶栏数值快照非时间线卡（回看顶栏走 REST 会话数据）
         CoreEvents.ROOM_STATE_WATCHED_COUNT,
-        # 任务卡条/Agent 任务板是快照面板非时间线卡（实时亦然，ADR-039 对齐的是卡面）
+        # 任务卡条/Agent 任务板是快照面板非时间线卡（实时亦然，对齐的是卡面）
         CoreEvents.TASK_CHANGED,
         # 备忘录面板刷新触发，非时间线卡
         CoreEvents.STREAMER_NOTEBOOK_CHANGED,

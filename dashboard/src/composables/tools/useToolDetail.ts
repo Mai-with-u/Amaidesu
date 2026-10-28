@@ -3,6 +3,8 @@
  * 真实执行（与 Agent 同路径经 registry）、async 工具的 WS 结果回传覆盖、
  * 结果区视图合成、描述折叠展开。页面私有状态。
  * async 回传的 WS 订阅清理走 onScopeDispose（setup 中等价于组件卸载）。
+ * keep-alive 生命周期语义：不随激活态启停——仅监听用户主动发起的调试调用
+ * 回传（waitingAsyncResult 为真才有实际动作），隐藏期间无定时器与轮询。
  */
 
 import { computed, nextTick, onScopeDispose, ref, watch } from 'vue';

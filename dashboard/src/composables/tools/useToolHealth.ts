@@ -2,6 +2,8 @@
  * 工具熔断状态（WS tool.health.*）：实时接收熔断事件并就地更新工具条目，
  * 供行内徽标与 tooltip 展示。工具清单由 useToolCatalog 持有、参数注入。
  * WS 订阅清理走 onScopeDispose（setup 中等价于组件卸载）。
+ * keep-alive 生命周期语义：不随激活态启停——健康事件是幂等的就地覆盖更新，
+ * 隐藏页保持订阅只做字段写入，无定时器与网络请求，无停摆数据风险。
  */
 
 import { onScopeDispose, type Ref } from 'vue';
