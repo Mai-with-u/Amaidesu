@@ -36,7 +36,7 @@
 
 - `sim_personas` / `sim_gifts`：模拟观众人设与礼物目录（开发基础设施，见 [模拟器是开发基础设施](../decisions/006-simulator-is-dev-infrastructure.md)）。
 
-`live_chat` / `gifts` / `super_chats` / `guards` 四表带 `simulated` 贯穿列，统计查询一律 `WHERE simulated = 0`——模拟观众不是观众。
+`live_sessions.kind` 标记场次类型：正式（面向真实观众）或彩排（模拟、回放、调试），开场时声明。主播记忆按类型分两条线，对外同步只认正式场（见 [场次分正式与彩排](../decisions/050-session-kind-live-and-rehearsal.md)）。`live_chat` / `gifts` / `super_chats` / `guards` 四表另带 `simulated` 贯穿列，标记单条消息是不是造出来的。
 
 ## 迁移机制
 

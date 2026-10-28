@@ -11,7 +11,7 @@
 
 - **默认关闭**：`[simulator].enabled = false`（生产零沾染）；
 - **按需装配**：组合根 `main.create_app_components` 第 ① 段（构造+接线）实例化 `SimulatorService` 并挂入生命周期，注入存储仓储；启动（setup/auto_start）在第 ② 段——Agent 订阅生效之后（两段装配纪律见[数据流规则 - 装配纪律](../architecture/data-flow.md#7-装配纪律两段装配)）；
-- **数据二等**：模拟器产生的事件 payload `simulated=True` 溯源标记贯穿，统计与入库一律排除（详见「simulated 溯源定案」一节）。
+- **只进彩排场**：模拟观众只出现在彩排场次里，主播记忆与对外同步按场次类型把它和正式直播分开（详见「场次」一节）；单条消息另带 `simulated=True` 溯源标记（详见「simulated 溯源定案」一节）。
 
 **主体性判据检验**（AGENTS.md 红线）：模拟器不采集任何东西（不是采集器），不被调才干活（不是工具）；四态节奏与人设池自我驱动——按判据是 Agent 形态，但服务于开发者而非观众，故归入**开发工具分类**以可选装配的开发服务形态存在。
 
@@ -99,7 +99,21 @@ replay 模式的录制日期可在启动时通过配置 `replay_date` 指定，�
 
 模拟观众读取当前场次的完整公共对话，角色人设决定回应风格。
 
-## 4. 观众上下文：场次对话
+## 4. 场次
+
+模拟器只在**彩排场**里运行（场次类型见 [场次分正式与彩排](../decisions/050-session-kind-live-and-rehearsal.md)）：
+
+| 情形 | 行为 |
+|------|------|
+| 回放启动 | 开一场新的彩排（来源 `replay`），回放结束或停止时收口 |
+| 生成启动、当前没有场次 | 自开一场彩排（来源 `generate`）：消息要落库，模拟观众才读得到上下文；停止或因错误停下时收口 |
+| 生成启动、已有彩排场 | 沿用这一场，停止时不替人收口 |
+| 正式场进行中 | 拒绝启动，WebUI 显示原因 |
+| 运行中有人开了正式场 | 自动停止；只收口自己开的场次，不会把刚开的正式场结束 |
+
+彩排场的回顾照写，只在下一场彩排时被读到；不推给 MaiBot。
+
+## 5. 观众上下文：场次对话
 
 观众生成消息前读取"这个观众眼中的直播间"——**SQLite `live_chat` 公共流完整历史**（观众弹幕 + 主播发言同表，场次隔离）：
 
@@ -108,22 +122,22 @@ replay 模式的录制日期可在启动时通过配置 `replay_date` 指定，�
 - 重启不丢：世界状态唯一事实源在 SQLite，模拟器不维护第二份内存状态；
 - **token 预算**：窗口注入按"每字符 2 token"粗估计入 `TokenBudgetController`，与生成消耗共享同一硬上限。
 
-## 5. simulated 溯源定案
+## 6. simulated 溯源定案
 
 模拟世界（generate 生成 + replay 回放）产出的事件 payload 全部携带 `simulated=True` 溯源标记（`RoomMessagePayload.simulated: bool`）。
 
-- **存储层**：`StorageLedger` 订阅 `room.message.#` 落库时写 `live_chat` / `gifts` / `super_chats` 的 `simulated` 贯穿列；统计查询 `WHERE simulated = 0` 排除模拟数据；
-- **语义**：`simulated=True` = "非真实观众数据"，消费方无需区分生成或回放来源；
+- **存储层**：`StorageLedger` 订阅 `room.message.#` 落库时写 `live_chat` / `gifts` / `super_chats` / `guards` 的 `simulated` 贯穿列，模拟观众在 `viewers` 里是独立的行（`simulated=1`）；
+- **语义**：`simulated=True` = "这一条消息是造出来的"，消费方无需区分生成或回放来源。按行过滤的消费方：推给 MaiBot 的整场记录跳过模拟消息、回放可只放模拟消息；整场的真假分流看场次类型，不靠逐行过滤（主播对模拟观众说的话本身不带模拟标记）；
 - **回放的特殊点**：回放消息落库时间戳刷新为当前时刻（进入"最近窗口"查询语义），原始时刻保留在 `live_chat` 录制行与日志中；`live_session_id` 替换为当前场次（回放内容作为"现在的输入流"注入）。
 
-## 6. 录制与回放
+## 7. 录制与回放
 
 - **录制源**：SQLite `live_chat` 业务表（消息流单一事实源，真实直播与模拟数据同表、以 `simulated` 列区分）——录制即落库，无需第二种录制格式；
 - **读回 API**：`ChatRepo.list_chat_dates_with_counts()` / `list_danmaku_by_date(date, simulated_only=...)`（按本地日期过滤，时间正序）；
 - **回放队列**：`ReplayEngine` 过滤 `room.message.danmaku` 事件、还原 payload、按相邻毫秒时间戳差值调度；
 - **典型用法**：真实直播一晚 → 次日用 replay 模式重放给主播 Agent 锻炼（`replay_simulated_only=false` 回放全部真实弹幕）。
 
-## 7. 停止语义
+## 8. 停止语义
 
 `stop()` 由用户主动发起时吞掉 `self._task` 的 `CancelledError`（正常返回）；`stop()` 协程自身被外层 `cancel()` 时（`cancelling() > 0`）必须重新 `raise` 传播取消状态。关闭链中 `SimulatorService.stop` 位于 CollectorManager.stop_all 之后、AgentManager.stop_all 之前（EventBus.cleanup 之前解绑订阅，顺序安全）。
 

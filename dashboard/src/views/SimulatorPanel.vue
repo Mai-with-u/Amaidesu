@@ -301,7 +301,8 @@
                 <div class="explain-block">
                   <p>
                     模拟消息以 <code>room.message.*</code> 事件进入 EventBus，payload 携带
-                    <code>simulated: true</code> 溯源标记；统计查询会主动排除模拟数据。
+                    <code>simulated: true</code> 溯源标记。模拟器只在彩排场里运行：彩排场的回顾只在
+                    下一场彩排时被读到，不推给 MaiBot；正式场进行中无法启动。
                   </p>
                   <p>
                     观众上下文从 SQLite <code>live_chat</code>

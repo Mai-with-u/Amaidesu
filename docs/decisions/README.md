@@ -72,3 +72,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-047：观众身份映射（取代 ADR-029 身份键一节：账号 ID 与开放平台 ID 同行 / 同平台按昵称关联 / 超出时限转人工确认）](047-viewer-identity-mapping.md)
 - [ADR-048：组件身份单一源——装配层目录表（登记点四处并两处 / registry 降纯 Schema 容器 / 漏登记失败形态改变）](048-component-identity-catalog.md)
 - [ADR-049：热重载回调接缝退役（infra 归入重启段 / 零订阅者的静默假生效 / 组件重建是唯一热生效形态）](049-hot-reload-seam-retirement.md)
+- [ADR-050：场次分正式与彩排（取代 ADR-006 数据治理一条的落地方式：真假按场分流 / 记忆两条线 / 模拟观众只进彩排场）](050-session-kind-live-and-rehearsal.md)
