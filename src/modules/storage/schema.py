@@ -13,7 +13,10 @@
 - ``live_sessions`` 一行 = 一场直播（有开始/结束边界）；房间/状态
   静态属性（``stream_id`` 普通属性列，**不参与主键语义**，一房多场）
 - ``live_sessions.source`` 标记场次来源（manual=手动 / replay=模拟器回放 /
-  legacy=历史遗留行）
+  generate=模拟器生成 / legacy=历史遗留行）
+- ``live_sessions.kind`` 标记场次类型（live=正式，面向真实观众 / rehearsal=
+  彩排，模拟、回放与调试）；与来源正交，开场时声明。主播记忆按类型分两条线，
+  对外同步与统计只认正式场
 - ``live_chat.message_id`` 与 ``live_chat.reply_to_message_id`` 构成"主播发言
   回复了哪条观众弹幕"的关联键（互动分析数据面）
 - ``live_chat.sender_role`` 取值：``viewer``（观众弹幕）/ ``assistant``（主播
@@ -54,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 18
+SCHEMA_VERSION: int = 19
 
 
 # =============================================================================
@@ -198,6 +201,7 @@ CREATE TABLE IF NOT EXISTS live_sessions (
     ended_at_ms     INTEGER,
     title           TEXT,
     source          TEXT NOT NULL DEFAULT 'manual',
+    kind            TEXT NOT NULL DEFAULT 'live' CHECK (kind IN ('live', 'rehearsal')),
     heat            INTEGER NOT NULL DEFAULT 0,
     viewer_count    INTEGER NOT NULL DEFAULT 0,
     audience_total  INTEGER NOT NULL DEFAULT 0,

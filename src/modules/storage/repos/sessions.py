@@ -11,6 +11,7 @@ from typing import List, Optional
 
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
 from src.modules.storage.repos._base import BaseRepo
+from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
 
 class SessionRepo(BaseRepo):
@@ -24,6 +25,7 @@ class SessionRepo(BaseRepo):
         started_at_ms: int,
         title: Optional[str] = None,
         source: str = "manual",
+        kind: SessionKind = SESSION_KIND_LIVE,
     ) -> int:
         """插入一场新场次（``ended_at_ms`` 为 NULL 即进行中），返回场次主键。"""
 
@@ -31,9 +33,9 @@ class SessionRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "INSERT INTO live_sessions ("
-                    "stream_id, platform, started_at_ms, title, source, updated_at_ms"
-                    ") VALUES (?, ?, ?, ?, ?, ?)",
-                    (stream_id, platform, started_at_ms, title, source, started_at_ms),
+                    "stream_id, platform, started_at_ms, title, source, kind, updated_at_ms"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (stream_id, platform, started_at_ms, title, source, kind, started_at_ms),
                 )
                 return int(cur.lastrowid or 0)
 
@@ -92,6 +94,28 @@ class SessionRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def update_live_session_kind(
+        self,
+        *,
+        live_session_id: int,
+        kind: SessionKind,
+        updated_at_ms: int,
+    ) -> bool:
+        """更正已结账场次的类型（存量回填判错时由人手改）。进行中或不存在的场次返回 False。
+
+        进行中的场次不改：类型在开场时声明，主播记忆与对外同步已按它分流。
+        """
+
+        def _exec() -> bool:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "UPDATE live_sessions SET kind=?, updated_at_ms=? WHERE id=? AND ended_at_ms IS NOT NULL",
+                    (kind, updated_at_ms, live_session_id),
+                )
+                return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
     async def get_live_session(self, *, live_session_id: int) -> Optional[LiveSession]:
         """按场次主键查单行；未命中返回 None。"""
 
@@ -145,17 +169,20 @@ class SessionRepo(BaseRepo):
         *,
         limit: int = 50,
         source: Optional[str] = None,
+        kind: Optional[SessionKind] = None,
         title_keyword: Optional[str] = None,
     ) -> List[LiveSessionListItem]:
         """列出场次（附消息数），供场次列表/回看选择。
 
         排序：按开始时间倒序。无显式场次期间不创建兜底行；列表只含历史
         显式场次。
-        筛选：``source`` 精确匹配来源；``title_keyword`` 对 title 做包含匹配。
+        筛选：``source`` 精确匹配来源；``kind`` 精确匹配类型；``title_keyword``
+        对 title 做包含匹配。
 
         Args:
             limit: 最多返回条数
-            source: 来源过滤（manual / replay / legacy）；None 不过滤
+            source: 来源过滤（manual / replay / generate / legacy）；None 不过滤
+            kind: 类型过滤（live / rehearsal）；None 不过滤
             title_keyword: 标题关键字；None 或空串不过滤
         """
 
@@ -164,6 +191,9 @@ class SessionRepo(BaseRepo):
         if source:
             conditions.append("s.source=?")
             params.append(source)
+        if kind:
+            conditions.append("s.kind=?")
+            params.append(kind)
         if title_keyword:
             conditions.append("s.title LIKE ?")
             params.append(f"%{title_keyword}%")

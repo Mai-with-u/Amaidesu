@@ -14,7 +14,10 @@
 字段约束：
 - ``live_session_id`` 为 ``live_sessions`` 表 INTEGER 主键，事件即事实：
   订阅方无需再向存储反查。
-- ``source`` 标记场次来源（manual=手动 / replay=模拟器回放 / legacy=历史遗留）。
+- ``source`` 标记场次来源（manual=手动 / replay=模拟器回放 / generate=模拟器生成 /
+  legacy=历史遗留）。
+- ``kind`` 标记场次类型（live=正式，面向真实观众 / rehearsal=彩排，模拟、回放与
+  调试）。订阅方按它分流：主播记忆只读同类场次的回顾，对外同步只认正式场。
 - 时间字段统一毫秒（``timestamp_ms`` / ``started_at_ms`` / ``ended_at_ms``）。
 """
 
@@ -25,6 +28,7 @@ from pydantic import Field
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
+from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 from src.modules.utils.time_utils import now_ms
 
 
@@ -39,7 +43,8 @@ class LiveStartedPayload(BasePayload):
 
     Attributes:
         live_session_id: 场次主键（live_sessions.id）
-        source: 场次来源（manual / replay / legacy）
+        source: 场次来源（manual / replay / generate / legacy）
+        kind: 场次类型（live=正式 / rehearsal=彩排）
         title: 场次标题（可选，手动开启时可指定）
         room_id: 房间/频道标识（普通属性，可为空）
         platform: 平台标识（可为空）
@@ -48,7 +53,8 @@ class LiveStartedPayload(BasePayload):
     """
 
     live_session_id: int = Field(..., description="场次主键（live_sessions.id）")
-    source: str = Field(default="manual", description="场次来源：manual / replay / legacy")
+    source: str = Field(default="manual", description="场次来源：manual / replay / generate / legacy")
+    kind: SessionKind = Field(default=SESSION_KIND_LIVE, description="场次类型：live=正式 / rehearsal=彩排")
     title: Optional[str] = Field(default=None, description="场次标题（可选）")
     room_id: str = Field(default="", description="房间/频道标识（普通属性，可为空）")
     platform: str = Field(default="", description="平台标识（可为空）")
@@ -73,7 +79,8 @@ class LiveEndedPayload(BasePayload):
 
     Attributes:
         live_session_id: 场次主键（live_sessions.id）
-        source: 场次来源（manual / replay / legacy）
+        source: 场次来源（manual / replay / generate / legacy）
+        kind: 场次类型（live=正式 / rehearsal=彩排）
         reason: 结束原因说明（手动结束 / 进程退出 / 回放结束等，人类可读）
         duration_ms: 场次时长（毫秒；无法确定时为 None）
         empty_discarded: 空场次是否被丢弃（结束时无任何明细行的场次不保留，
@@ -83,7 +90,8 @@ class LiveEndedPayload(BasePayload):
     """
 
     live_session_id: int = Field(..., description="场次主键（live_sessions.id）")
-    source: str = Field(default="manual", description="场次来源：manual / replay / legacy")
+    source: str = Field(default="manual", description="场次来源：manual / replay / generate / legacy")
+    kind: SessionKind = Field(default=SESSION_KIND_LIVE, description="场次类型：live=正式 / rehearsal=彩排")
     reason: str = Field(default="", description="结束原因说明（人类可读）")
     duration_ms: Optional[int] = Field(default=None, ge=0, description="场次时长（毫秒）")
     empty_discarded: bool = Field(

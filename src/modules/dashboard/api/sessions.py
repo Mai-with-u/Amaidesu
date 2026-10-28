@@ -48,6 +48,7 @@ from src.modules.dashboard.services.session_timeline import build_timeline_items
 from src.modules.dashboard.utils.component_helper import config_dir
 from src.modules.logging import get_logger
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
+from src.modules.types.session_kind import SESSION_KIND_LIVE
 
 if TYPE_CHECKING:
     from src.modules.session.manager import LiveSessionManager
@@ -133,6 +134,7 @@ async def open_session(
     结果随响应 ``plan_report`` 回传。
     """
     pk = await manager.open_session(
+        kind=SESSION_KIND_LIVE,
         title=request.title,
         room_id=request.room_id,
         platform=request.platform,

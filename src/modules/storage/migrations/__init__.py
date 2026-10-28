@@ -37,6 +37,7 @@ from src.modules.storage.migrations import (
     v16_llm_request_image_count,
     v17_rundown_rows_and_column_cleanup,
     v18_viewer_identity_mapping,
+    v19_live_session_kind,
 )
 
 SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
@@ -58,6 +59,7 @@ SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     16: v16_llm_request_image_count.migrate,
     17: v17_rundown_rows_and_column_cleanup.migrate,
     18: v18_viewer_identity_mapping.migrate,
+    19: v19_live_session_kind.migrate,
 }
 
 __all__ = ["SCHEMA_MIGRATIONS"]

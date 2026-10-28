@@ -82,16 +82,19 @@ async def test_open_session_emits_started_and_switches_resolution(store: SQLiteD
     collector = _Collector(bus)
     await manager.start()
 
-    pk = await manager.open_session(title="晚间场")
+    pk = await manager.open_session(kind="live", title="晚间场")
     await bus.wait_until_drained()  # emit 默认后台分发，等事件落地
     assert collector.started and collector.started[0].live_session_id == pk
     assert collector.started[0].source == "manual"
+    assert collector.started[0].kind == "live"
     assert collector.started[0].room_id == "room-1"
     assert await manager.resolve_pk() == pk
+    assert manager.active_kind == "live"
 
     row = await store.sessions.get_live_session(live_session_id=pk)
     assert row is not None
     assert row.source == "manual"
+    assert row.kind == "live"
     assert row.ended_at_ms is None
 
 
@@ -100,8 +103,8 @@ async def test_open_twice_auto_closes_previous(store: SQLiteDatabase, bus: Event
     collector = _Collector(bus)
     await manager.start()
 
-    first = await manager.open_session()
-    second = await manager.open_session()
+    first = await manager.open_session(kind="live")
+    second = await manager.open_session(kind="live")
     await bus.wait_until_drained()
     assert first != second
     assert manager.active_pk == second
@@ -112,13 +115,53 @@ async def test_open_twice_auto_closes_previous(store: SQLiteDatabase, bus: Event
     assert len(rows) == 1
 
 
+async def test_rehearsal_kind_rides_both_lifecycle_events(store: SQLiteDatabase, bus: EventBus) -> None:
+    """彩排场：类型落库，并随 live.started / live.ended 一起广播；结账后内存态清空。"""
+    manager = _make_manager(store, bus)
+    collector = _Collector(bus)
+    await manager.start()
+
+    pk = await manager.open_session(kind="rehearsal", title="彩排")
+    await store.chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=1_000, sender_role="viewer", content="hi", message_type="danmaku"
+    )
+    assert manager.active_kind == "rehearsal"
+    await manager.close_session()
+    await bus.wait_until_drained()
+
+    assert [p.kind for p in collector.started] == ["rehearsal"]
+    assert [p.kind for p in collector.ended] == ["rehearsal"]
+    row = await store.sessions.get_live_session(live_session_id=pk)
+    assert row is not None and row.kind == "rehearsal"
+    assert manager.active_kind is None
+
+
+async def test_set_session_kind_only_corrects_ended_sessions(store: SQLiteDatabase, bus: EventBus) -> None:
+    """更正类型：进行中的场次拒绝（开播时已按类型分流），已结账的场次可改。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+
+    pk = await manager.open_session(kind="live")
+    await store.chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=1_000, sender_role="viewer", content="hi", message_type="danmaku"
+    )
+    assert await manager.set_session_kind(pk, "rehearsal") is False
+    await manager.close_session()
+    assert await manager.set_session_kind(pk, "rehearsal") is True
+    row = await store.sessions.get_live_session(live_session_id=pk)
+    assert row is not None and row.kind == "rehearsal"
+    assert await manager.set_session_kind(pk + 999, "live") is False
+    assert [r.id for r in await manager.list_sessions(kind="rehearsal")] == [pk]
+    assert await manager.list_sessions(kind="live") == []
+
+
 async def test_close_empty_session_discards_row(store: SQLiteDatabase, bus: EventBus) -> None:
     """空场次不留行：开启后无任何明细就结束 → 整行丢弃，事件带 empty_discarded 标记。"""
     manager = _make_manager(store, bus)
     collector = _Collector(bus)
     await manager.start()
 
-    pk = await manager.open_session()
+    pk = await manager.open_session(kind="live")
     closed = await manager.close_session()
     assert closed is True
     await bus.wait_until_drained()
@@ -131,7 +174,7 @@ async def test_close_session_with_details_keeps_row(store: SQLiteDatabase, bus: 
     manager = _make_manager(store, bus)
     await manager.start()
 
-    pk = await manager.open_session()
+    pk = await manager.open_session(kind="live")
     await store.chat.insert_live_chat(
         live_session_id=pk,
         timestamp_ms=1_100,
@@ -157,7 +200,7 @@ async def test_delete_active_session_closes_first(store: SQLiteDatabase, bus: Ev
     collector = _Collector(bus)
     await manager.start()
 
-    pk = await manager.open_session()
+    pk = await manager.open_session(kind="live")
     await manager.delete_session(pk)
     await bus.wait_until_drained()
     assert manager.active_pk is None
@@ -169,7 +212,7 @@ async def test_delete_session_cascades_detail_rows(store: SQLiteDatabase, bus: E
     manager = _make_manager(store, bus)
     await manager.start()
 
-    pk = await manager.open_session()
+    pk = await manager.open_session(kind="live")
     await store.chat.insert_live_chat(
         live_session_id=pk,
         timestamp_ms=1_000,
@@ -206,7 +249,7 @@ async def test_resolve_pk_after_close_returns_none(store: SQLiteDatabase, bus: E
     manager = _make_manager(store, bus)
     await manager.start()
 
-    pk = await manager.open_session()
+    pk = await manager.open_session(kind="live")
     assert await manager.resolve_pk() == pk
     await manager.close_session()
     assert await manager.resolve_pk() is None

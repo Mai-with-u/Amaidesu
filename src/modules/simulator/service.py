@@ -51,6 +51,7 @@ from src.modules.simulator.token_budget import TokenBudgetController
 from src.modules.simulator.types import StreamerContextSnapshot
 from src.modules.storage.repos import ChatRepo, SimRepo
 from src.modules.types.currency import CURRENCY_GOLD, RMB_TO_GOLD_COIN
+from src.modules.types.session_kind import SESSION_KIND_REHEARSAL
 from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -248,13 +249,15 @@ class SimulatorService:
         self._subscribe_streamer_speech()
         self._active_mode = mode
 
-        # 回放自动开/关场次：一场回放天然是一场直播——启动即开（source=replay），
+        # 回放自动开/关场次：一场回放天然是一场彩排——启动即开（source=replay，
+        # kind=rehearsal，主播记忆只把它串进彩排线），
         # stop/自然收场时收口。必须先开场次再起回放循环：小队列的回放会在任务
         # 首个调度片内跑完，循环后置会导致首条消息因场次未开被丢弃、收场时
         # 场次指针尚未赋值而悬挂开启。
         self._opened_session_pk = None
         if mode == "replay" and self._session_manager is not None:
             self._opened_session_pk = await self._session_manager.open_session(
+                kind=SESSION_KIND_REHEARSAL,
                 title=f"回放 {date_str}",
                 source="replay",
             )

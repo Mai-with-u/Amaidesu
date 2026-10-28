@@ -44,8 +44,8 @@ class _FakeSessionManager:
         self.calls: List[str] = []
         self.opened_pk: Optional[int] = None
 
-    async def open_session(self, *, title: str, source: str) -> int:
-        self.calls.append(f"open:{source}")
+    async def open_session(self, *, kind: str, title: str, source: str) -> int:
+        self.calls.append(f"open:{source}:{kind}")
         self.opened_pk = 42
         return 42
 

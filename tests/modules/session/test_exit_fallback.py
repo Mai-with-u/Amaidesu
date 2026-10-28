@@ -65,7 +65,7 @@ class _EndedCollector:
 
 async def _open_session_with_detail(store: SQLiteDatabase, manager: LiveSessionManager) -> int:
     """开启一个带明细行的活跃场次（避免空场次丢弃语义干扰落账断言）。"""
-    pk = await manager.open_session(title="兜底收工测试场")
+    pk = await manager.open_session(kind="live", title="兜底收工测试场")
     await store.chat.insert_live_chat(
         live_session_id=pk,
         timestamp_ms=1_000,

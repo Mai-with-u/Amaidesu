@@ -16,9 +16,16 @@
 - 无显式场次期间 ``resolve_pk()`` 返回 ``None``——下游 StorageLedger 等落库
   路径据此跳过；事件总线分发、WebUI 显示、Agent 决策链路照常工作（消息仅
   在内存流转，不写入 live_chat / gifts / super_chats）；
-- 显式场次由手动开关或模拟器回放开启；结束时若无任何明细行则整行丢弃
+- 显式场次由手动开关或模拟器开启；结束时若无任何明细行则整行丢弃
   （空场次不留行）；
 - 场次可删除（级联清明细），调试产生的场次随手清理。
+
+## 场次类型在开场时声明
+
+每场开启时必须声明类型：正式（面向真实观众）或彩排（模拟、回放、调试）。
+类型随 ``live.started`` / ``live.ended`` 广播，订阅方据此分流——主播记忆
+只读同类场次的回顾，对外同步只认正式场。进行中的场次不改类型；已结账的
+场次可经 ``set_session_kind`` 更正（存量回填判错时人手改）。
 
 跨场次记忆由主播 Agent 的场次回顾 / 观众画像承载（收播时整理），本模块不参与启动期补写。
 """
@@ -35,6 +42,7 @@ from src.modules.utils.time_utils import now_ms
 
 from src.modules.storage.models.sessions import LiveSessionListItem
 from src.modules.storage.repos import ChatRepo, SessionRepo
+from src.modules.types.session_kind import SessionKind
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -47,6 +55,7 @@ class LiveSessionManager:
 
     不变量：
     - 至多一个显式进行中场次（开启新场次前自动结束旧场次）；
+    - 场次类型开场时声明，进行中不改；
     - 空显式场次在结账时整行丢弃；
     - 无显式场次期间 ``resolve_pk()`` 返回 ``None``，不创建任何兜底行。
     """
@@ -67,6 +76,7 @@ class LiveSessionManager:
         self._room_id = room_id
         self._active_pk: Optional[int] = None
         self._active_source: str = ""
+        self._active_kind: Optional[SessionKind] = None
         self._lock = asyncio.Lock()
         self._started = False
 
@@ -99,6 +109,7 @@ class LiveSessionManager:
     async def open_session(
         self,
         *,
+        kind: SessionKind,
         title: Optional[str] = None,
         room_id: Optional[str] = None,
         platform: Optional[str] = None,
@@ -106,6 +117,8 @@ class LiveSessionManager:
     ) -> int:
         """开启一场新直播场次，返回场次主键。
 
+        ``kind`` 没有默认值：每个开场入口都要说清这场是正式还是彩排，
+        漏写就是类型错误，不会悄悄落成正式场串进主播记忆。
         已有进行中场次时先自动结束（不变量：至多一个显式进行中场次），
         随后 ``live.started`` 事件广播。
         """
@@ -119,14 +132,17 @@ class LiveSessionManager:
                 started_at_ms=started,
                 title=title,
                 source=source,
+                kind=kind,
             )
             self._active_pk = pk
             self._active_source = source
+            self._active_kind = kind
             await self._event_bus.emit(
                 CoreEvents.LIVE_STARTED,
                 LiveStartedPayload(
                     live_session_id=pk,
                     source=source,
+                    kind=kind,
                     title=title,
                     room_id=room_id if room_id is not None else self._room_id,
                     platform=platform or self._platform,
@@ -134,7 +150,7 @@ class LiveSessionManager:
                 ),
                 source="LiveSessionManager",
             )
-            logger.info(f"场次已开启: id={pk} source={source} title={title!r}")
+            logger.info(f"场次已开启: id={pk} kind={kind} source={source} title={title!r}")
             return pk
 
     async def close_session(self, *, reason: str = "手动结束") -> bool:
@@ -159,9 +175,9 @@ class LiveSessionManager:
 
         row = await self._sessions.get_live_session(live_session_id=pk)
         if row is None or row.ended_at_ms is not None:
-            self._active_pk = None
-            self._active_source = ""
+            self._reset_active()
             return False
+        kind = row.kind
         started_at = int(row.started_at_ms)
         await self._sessions.close_live_session(live_session_id=pk, ended_at_ms=ended_at_ms)
 
@@ -173,13 +189,13 @@ class LiveSessionManager:
             empty_discarded = True
             logger.info(f"空场次已丢弃: id={pk}（无任何明细行，不保留）")
 
-        self._active_pk = None
-        self._active_source = ""
+        self._reset_active()
         await self._event_bus.emit(
             CoreEvents.LIVE_ENDED,
             LiveEndedPayload(
                 live_session_id=pk,
                 source=source,
+                kind=kind,
                 reason=reason,
                 duration_ms=max(ended_at_ms - started_at, 0),
                 empty_discarded=empty_discarded,
@@ -189,6 +205,12 @@ class LiveSessionManager:
         )
         logger.info(f"场次已结束: id={pk} reason={reason!r} 明细行={details} 空场次丢弃={empty_discarded}")
         return True
+
+    def _reset_active(self) -> None:
+        """清空进行中场次的内存态（结账、收口与幂等重入路径共用）。"""
+        self._active_pk = None
+        self._active_source = ""
+        self._active_kind = None
 
     # -------------------- 删除 --------------------
 
@@ -220,6 +242,24 @@ class LiveSessionManager:
             logger.info(f"场次已重命名: id={live_session_id} title={title!r}")
         return renamed
 
+    # -------------------- 类型更正 --------------------
+
+    async def set_session_kind(self, live_session_id: int, kind: SessionKind) -> bool:
+        """更正已结账场次的类型。进行中或不存在的场次返回 False。
+
+        进行中的场次不改：开播时主播已按类型读了对应的上场回顾、对外同步
+        也已按类型决定推不推，中途改类型会让这一场前后两半分到两条记忆线。
+        """
+        if live_session_id == self._active_pk:
+            logger.info(f"场次 {live_session_id} 进行中，不更正类型")
+            return False
+        changed = await self._sessions.update_live_session_kind(
+            live_session_id=live_session_id, kind=kind, updated_at_ms=now_ms()
+        )
+        if changed:
+            logger.info(f"场次类型已更正: id={live_session_id} kind={kind}")
+        return changed
+
     # -------------------- 场次归属解析 --------------------
 
     async def resolve_pk(self) -> Optional[int]:
@@ -239,8 +279,13 @@ class LiveSessionManager:
         return self._active_pk
 
     @property
+    def active_kind(self) -> Optional[SessionKind]:
+        """当前显式进行中场次的类型（live / rehearsal）；无进行中场次为 None。"""
+        return self._active_kind
+
+    @property
     def active_source(self) -> str:
-        """当前显式场次的来源（manual / replay）；无显式场次为空串。"""
+        """当前显式场次的来源（manual / replay / generate）；无显式场次为空串。"""
         return self._active_source
 
     @property
@@ -256,10 +301,13 @@ class LiveSessionManager:
         *,
         limit: int = 50,
         source: Optional[str] = None,
+        kind: Optional[SessionKind] = None,
         title_keyword: Optional[str] = None,
     ) -> List[LiveSessionListItem]:
         """场次列表（显式场次按开始时间倒序 + 消息数），供 Dashboard API / 控制台侧边栏。"""
-        return await self._sessions.list_live_sessions(limit=limit, source=source, title_keyword=title_keyword)
+        return await self._sessions.list_live_sessions(
+            limit=limit, source=source, kind=kind, title_keyword=title_keyword
+        )
 
 
 __all__ = ["LiveSessionManager"]
