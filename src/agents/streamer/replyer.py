@@ -334,8 +334,3 @@ def _render_plan_text(plan: DecisionPlan, *, target_text: str = "") -> str:
         f"topic_summary: {plan.topic_summary or '（无特定话题）'}\n"
         f"reply_guidance: {plan.reply_guidance or '（无额外指引）'}\n"
     )
-
-
-# WordFilter / fit_to_budget 现居 speech_guard（台词出口守卫模块）；此处
-# 再导出维持既有 import 路径（历史调用方与测试按 replyer 引用）。
-__all__ = ["Replyer", "WordFilter", "fit_to_budget"]

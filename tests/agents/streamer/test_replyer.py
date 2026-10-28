@@ -12,7 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.plan import DecisionPlan
-from src.agents.streamer.replyer import Replyer, WordFilter
+from src.agents.streamer.replyer import Replyer
+from src.agents.streamer.speech_guard import WordFilter
 from src.modules.llm.payload import Response
 
 
