@@ -18,6 +18,10 @@ from src.modules.storage.models.rundown import (
 )
 from tests.agents.streamer.helpers import make_streamer_agent
 
+# 登记（只读/驱动穿透，合并时进底账）：断言读取流程单状态机的内部态
+# （agent._rundown_coord._state / _bg_tasks），并直接驱动协调器的内部发布
+# 例程（_emit_rundown_changed）以编排变更事实；协调器尚无对应公开观测面。
+
 
 class _StubSessionManager:
     """resolve_pk 可编排的场次管理器桩。"""
@@ -85,12 +89,21 @@ def _make_agent(
     session_manager: Any,
     instance_repo: Any = None,
     transition_repo: Any = None,
+    rundown_repo: Any = None,
 ) -> Any:
     return make_streamer_agent(
         session_manager=session_manager,
         rundown_instance_repo=instance_repo,
         rundown_transition_repo=transition_repo,
+        rundown_repo=rundown_repo,
     )
+
+
+async def _make_restored_agent(**kwargs: Any) -> Any:
+    """带流程单模板仓储构造并启动协调器（崩溃恢复路径，仓储经构造注入）。"""
+    agent = _make_agent(rundown_repo=_StubRundownRepo(DEFAULT_RUNDOWN), **kwargs)
+    await agent._rundown_coord.start()
+    return agent
 
 
 async def _drain(agent: Any) -> None:
@@ -226,17 +239,11 @@ def _snapshot(
     )
 
 
-async def _start(agent: Any, rundown_repo: Any) -> None:
-    agent._rundown_coord._rundowns = rundown_repo
-    await agent._rundown_coord.start()
-
-
 async def test_restore_recovers_cursor_from_snapshot() -> None:
     session = _StubSessionManager(42)
     instance_repo = _StubInstanceRepo()
     instance_repo.snapshots.append(_snapshot("default_first_stream", 2))
-    agent = _make_agent(session_manager=session, instance_repo=instance_repo)
-    await _start(agent, _StubRundownRepo(DEFAULT_RUNDOWN))
+    agent = await _make_restored_agent(session_manager=session, instance_repo=instance_repo)
 
     state = agent._rundown_coord._state
     assert (state.status, state.index, state.current_segment_id) == ("running", 2, "chat")
@@ -269,8 +276,7 @@ async def test_restore_uses_snapshot_segments_including_appended() -> None:
             ],
         )
     )
-    agent = _make_agent(session_manager=session, instance_repo=instance_repo)
-    await _start(agent, _StubRundownRepo(DEFAULT_RUNDOWN))
+    agent = await _make_restored_agent(session_manager=session, instance_repo=instance_repo)
 
     state = agent._rundown_coord._state
     # 快照含 Agent 追加环节且 seg_index 指向它 → 续命态还原
@@ -280,8 +286,7 @@ async def test_restore_uses_snapshot_segments_including_appended() -> None:
 async def test_no_snapshot_falls_back_to_load() -> None:
     session = _StubSessionManager(42)
     instance_repo = _StubInstanceRepo()  # 无快照
-    agent = _make_agent(session_manager=session, instance_repo=instance_repo)
-    await _start(agent, _StubRundownRepo(DEFAULT_RUNDOWN))
+    agent = await _make_restored_agent(session_manager=session, instance_repo=instance_repo)
     assert (agent._rundown_coord._state.status, agent._rundown_coord._state.index) == ("armed", 0)
 
 
@@ -290,15 +295,13 @@ async def test_template_mismatch_and_corruption_fall_back_to_load() -> None:
     # 模板不匹配：导演开播前换了单
     instance_repo = _StubInstanceRepo()
     instance_repo.snapshots.append(_snapshot("other_rd", 2))
-    agent = _make_agent(session_manager=session, instance_repo=instance_repo)
-    await _start(agent, _StubRundownRepo(DEFAULT_RUNDOWN))
+    agent = await _make_restored_agent(session_manager=session, instance_repo=instance_repo)
     assert (agent._rundown_coord._state.status, agent._rundown_coord._state.index) == ("armed", 0)
 
     # 快照损坏：游标越界
     corrupt_repo = _StubInstanceRepo()
     corrupt_repo.snapshots.append(_snapshot("default_first_stream", 99))
-    agent2 = _make_agent(session_manager=session, instance_repo=corrupt_repo)
-    await _start(agent2, _StubRundownRepo(DEFAULT_RUNDOWN))
+    agent2 = await _make_restored_agent(session_manager=session, instance_repo=corrupt_repo)
     assert (agent2._rundown_coord._state.status, agent2._rundown_coord._state.index) == ("armed", 0)
 
 
@@ -306,6 +309,5 @@ async def test_no_active_session_falls_back_to_load() -> None:
     session = _StubSessionManager(None)
     instance_repo = _StubInstanceRepo()
     instance_repo.snapshots.append(_snapshot("default_first_stream", 2))
-    agent = _make_agent(session_manager=session, instance_repo=instance_repo)
-    await _start(agent, _StubRundownRepo(DEFAULT_RUNDOWN))
+    agent = await _make_restored_agent(session_manager=session, instance_repo=instance_repo)
     assert (agent._rundown_coord._state.status, agent._rundown_coord._state.index) == ("armed", 0)

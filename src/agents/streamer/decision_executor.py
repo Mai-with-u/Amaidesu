@@ -35,7 +35,10 @@ from .stats import StreamerStats
 from .thinking_stream import ThinkingStreamContext
 from .trigger_cause import TriggerCause, TriggerKind
 
-__all__ = ["DecisionRoundExecutor"]
+__all__ = ["DecisionRoundExecutor", "resolve_reply_target_user"]
+
+# 模块级 logger：反查 reply target 的异常路径记 warning 用（组件实例可带注入 logger）
+_MODULE_LOGGER = get_logger("StreamerAgent.DecisionRoundExecutor")
 
 
 #: 触发原因种类（TriggerKind 全集）→ 面板可读文案。
@@ -317,7 +320,7 @@ class DecisionRoundExecutor:
         # await 保证 streamer.speech 先于本轮 planner.decision 与 idle 状态发出
         speech_info = await self._speech.dispatch(
             outcome.reply_payload,
-            target_user_id=self._resolve_reply_target_user(outcome, batch),
+            target_user_id=resolve_reply_target_user(outcome, batch),
             reply_to_message_id=outcome.reply_to,
             round_id=round_id,
         )
@@ -332,45 +335,6 @@ class DecisionRoundExecutor:
 
         result["total_duration_ms"] = now_ms() - started_ms
         return result, outcome
-
-    def _resolve_reply_target_user(
-        self,
-        outcome: RoundOutcome,
-        batch: List[RoomMessagePayload],
-    ) -> Optional[str]:
-        """从 batch 反查本次回复的观众 user_id。
-
-        优先消费 ``outcome.reply_to``（reply 意图指向的弹幕 message_id——按
-        message_id 等值命中即可）；未提供时回退 ``outcome.target``（弹幕
-        ``message_id`` 或文本片段）匹配：message_id 等值 → text 包含/相等。
-        全未命中时保守兜底为 batch 最后一条消息的 user_id（"回复最后那条"
-        通常是意图所指）；batch 为空或 target 为空时返回 None。该方法只做
-        反查，不写状态、不发事件；异常吞掉记 warning 不上抛（决策循环必须继续）。
-        """
-        reply_to = outcome.reply_to
-        target = reply_to or outcome.target
-        if not isinstance(target, str) or not target:
-            return None
-        if not batch:
-            return None
-
-        try:
-            # reply_to 是精确 message_id，等值命中即返回
-            if reply_to:
-                for msg in batch:
-                    if getattr(msg, "message_id", None) == reply_to:
-                        return getattr(msg.user, "id", None)
-                return None
-            for msg in batch:
-                if getattr(msg, "message_id", None) == target:
-                    return getattr(msg.user, "id", None)
-                msg_text = getattr(msg, "content", None)
-                if isinstance(msg_text, str) and msg_text and (target in msg_text or msg_text == target):
-                    return getattr(msg.user, "id", None)
-            return getattr(batch[-1].user, "id", None)
-        except Exception as exc:
-            self._logger.warning(f"反查 reply target user 异常: {exc}")
-            return None
 
     def _next_round_id(self) -> str:
         """生成下一个决策轮次 ID（格式 ``rnd_{epoch_ms}_{seq}``）。
@@ -470,3 +434,42 @@ class DecisionRoundExecutor:
             raise
         except Exception as exc:  # noqa: BLE001 - 观测事件不阻断决策循环
             self._logger.warning(f"planner.decision 发布失败（已忽略）: round_id={result.get('round_id')}, err={exc}")
+
+
+def resolve_reply_target_user(
+    outcome: RoundOutcome,
+    batch: List[RoomMessagePayload],
+) -> Optional[str]:
+    """从 batch 反查本次回复的观众 user_id。
+
+    优先消费 ``outcome.reply_to``（reply 意图指向的弹幕 message_id——按
+    message_id 等值命中即可）；未提供时回退 ``outcome.target``（弹幕
+    ``message_id`` 或文本片段）匹配：message_id 等值 → text 包含/相等。
+    全未命中时保守兜底为 batch 最后一条消息的 user_id（"回复最后那条"
+    通常是意图所指）；batch 为空或 target 为空时返回 None。只做反查，
+    不写状态、不发事件；异常吞掉记 warning 不上抛（决策循环必须继续）。
+    """
+    reply_to = outcome.reply_to
+    target = reply_to or outcome.target
+    if not isinstance(target, str) or not target:
+        return None
+    if not batch:
+        return None
+
+    try:
+        # reply_to 是精确 message_id，等值命中即返回
+        if reply_to:
+            for msg in batch:
+                if getattr(msg, "message_id", None) == reply_to:
+                    return getattr(msg.user, "id", None)
+            return None
+        for msg in batch:
+            if getattr(msg, "message_id", None) == target:
+                return getattr(msg.user, "id", None)
+            msg_text = getattr(msg, "content", None)
+            if isinstance(msg_text, str) and msg_text and (target in msg_text or msg_text == target):
+                return getattr(msg.user, "id", None)
+        return getattr(batch[-1].user, "id", None)
+    except Exception as exc:
+        _MODULE_LOGGER.warning(f"反查 reply target user 异常: {exc}")
+        return None

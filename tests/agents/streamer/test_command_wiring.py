@@ -14,6 +14,10 @@ from src.modules.tools.models import ToolExecutionResult
 from src.modules.tools.registry import ToolRegistry
 from tests.agents.streamer.helpers import make_streamer_agent
 
+
+# 登记（驱动/只读穿透，合并时进底账）：直接驱动工具注册例程（agent._register_tools）
+# 与读取缓冲状态（agent._buffer.size）；两者尚无公开观测面。
+
 _MAPPINGS = {"come": "到主播身边来", "sleep": "回床睡觉"}
 
 

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 
 import pytest
 
+from src.agents.streamer.decision_executor import resolve_reply_target_user
 from src.agents.streamer.planner import RoundOutcome
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
-from tests.agents.streamer.helpers import make_streamer_agent
 
 
 def _msg(text: str, user_id: str, message_id: str) -> RoomMessagePayload:
@@ -16,7 +16,11 @@ def _msg(text: str, user_id: str, message_id: str) -> RoomMessagePayload:
     return RoomMessagePayload(message_type="danmaku", user=user, content=text, message_id=message_id)
 
 
-_BATCH = [_msg("今天玩什么？", "alice", "m1"), _msg("你好呀主播", "bob", "m2"), _msg("ccc", "carol", "m3")]
+_BATCH: List[RoomMessagePayload] = [
+    _msg("今天玩什么？", "alice", "m1"),
+    _msg("你好呀主播", "bob", "m2"),
+    _msg("ccc", "carol", "m3"),
+]
 
 
 @pytest.mark.parametrize(
@@ -32,5 +36,4 @@ _BATCH = [_msg("今天玩什么？", "alice", "m1"), _msg("你好呀主播", "bo
     ],
 )
 def test_resolve_reply_target_user(plan: RoundOutcome, batch: list, expected: Optional[str]) -> None:
-    agent = make_streamer_agent()
-    assert agent._rounds._resolve_reply_target_user(plan, batch) == expected
+    assert resolve_reply_target_user(plan, batch) == expected

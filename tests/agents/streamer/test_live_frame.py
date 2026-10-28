@@ -15,6 +15,10 @@ from tests.helpers import llm_response
 from tests.agents.streamer.helpers import make_streamer_agent
 
 
+# 登记（只读穿透，合并时进底账）：接线断言读取 Agent 内建 Planner 的画面依赖槽位
+# （agent._planner._frame_provider）；接线正确性暂无公开观测面可查。
+
+
 def _slot(ref: str, at_ms: int) -> LatestFrame:
     """图像暂存 latest 槽位的替身快照。"""
     return LatestFrame(ref=ref, width=768, height=432, change=0.0, timestamp_ms=at_ms)

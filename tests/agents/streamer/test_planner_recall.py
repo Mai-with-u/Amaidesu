@@ -13,6 +13,10 @@ from src.agents.streamer.planner_render import Intent
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.utils.time_utils import now_ms
+
+
+# 登记（只读穿透，合并时进底账）：接线断言读取内建 Planner 工作台的回看队列容量
+# （agent._planner.workbench.recent_intents/relays.maxlen）；容量接线暂无公开观测面。
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry

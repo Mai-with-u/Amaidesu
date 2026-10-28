@@ -79,6 +79,10 @@ class GameLedger:
         """清空待入账队列（场次开关边界：上一场的未出账条目不带入下一场）。"""
         self._pending.clear()
 
+    def pending_lines(self) -> List[str]:
+        """待入账事件行的只读快照（已脱敏的行原文；出账经 ``drain``，本方法只看不取）。"""
+        return [entry.base for entry in self._pending]
+
     # ==================== 标签构造（账本外零手写标签字面量） ====================
 
     @staticmethod

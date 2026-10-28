@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -237,9 +238,12 @@ async def test_latency_is_logged_when_the_line_actually_starts_playing(prompts: 
 
 # ---------------- 接线 ----------------
 
+# 登记（只读穿透，合并时进底账）：断言读取嘴的最近记录（agent._mouth._records）与
+# 发声分发器槽位（agent._speech.dispatch）；嘴的最近记录暂无公开只读面。
+
 
 def test_mouth_is_off_by_default() -> None:
-    """开关默认关闭：不构造嘴，一切照旧。"""
+    """开关默认关闭且未注入替身：不构造嘴，一切照旧。"""
     assert make_streamer_agent()._mouth is None
 
 
@@ -247,9 +251,10 @@ async def test_with_mouth_on_death_goes_to_the_mouth_not_the_planner() -> None:
     """嘴开着：死亡交给嘴当场反应，不再专门唤醒 Planner；关着时照旧唤醒。"""
     payload = BodyEventPayload(game="minecraft", kind="died", summary="死了：被蜘蛛杀死了")
 
-    agent = make_streamer_agent({"mouth": {"enabled": True}})
+    mouth = MagicMock()
     reactions: List[tuple] = []
-    agent._mouth.react = lambda key, text, **kw: reactions.append((key, text, kw))  # type: ignore[union-attr,method-assign]
+    mouth.react.side_effect = lambda key, text, **kw: reactions.append((key, text, kw))
+    agent = make_streamer_agent({"mouth": {"enabled": True}}, mouth=mouth)
     await agent._on_body_event("game.body.died", payload, "maicraft_attention")
     assert agent._proactive_signals.game_pending is False
     assert reactions == [("body:died", "死了：被蜘蛛杀死了", {"urgent": True, "refresh_scene": True})]
@@ -262,9 +267,10 @@ async def test_with_mouth_on_death_goes_to_the_mouth_not_the_planner() -> None:
 async def test_with_mouth_on_progress_reacts_but_attention_alerts_do_not() -> None:
     """游戏进展、交付卡住当场反应（Planner 照样被交付唤醒去定夺）；急事提醒与遭遇是同一件事，不另触发；
     游戏 Agent 自己的报错不是游戏里发生的事，既不触发也不进嘴的最近记录。"""
-    agent = make_streamer_agent({"mouth": {"enabled": True}})
+    mouth = MagicMock()
     reactions: List[str] = []
-    agent._mouth.react = lambda key, text, **kw: reactions.append(key)  # type: ignore[union-attr,method-assign]
+    mouth.react.side_effect = lambda key, text, **kw: reactions.append(key)
+    agent = make_streamer_agent({"mouth": {"enabled": True}}, mouth=mouth)
 
     report = GamePayload(game="minecraft", event_type="report", message="床做好了，放在屋里", report_kind="delivery")
     await agent._on_game_event("game.report", report, "minecraft")
@@ -274,7 +280,7 @@ async def test_with_mouth_on_progress_reacts_but_attention_alerts_do_not() -> No
     await agent._on_game_event("game.error", error, "minecraft")
 
     assert reactions == ["game:report"] and agent._proactive_signals.game_pending is True
-    assert all("LLM 推理异常" not in record.text for record in agent._mouth._records)  # type: ignore[union-attr]
+    assert all("LLM 推理异常" not in call.args[0] for call in mouth.note_game.call_args_list)
 
 
 async def test_viewer_messages_go_into_the_mouth_records() -> None:

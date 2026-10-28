@@ -13,6 +13,10 @@ from src.modules.utils.time_utils import now_ms
 from tests.agents.streamer.helpers import make_streamer_agent
 
 
+# 登记（只读穿透，合并时进底账）：接线断言读取内建 Planner 的冷场阈值
+# （agent._planner._cold_silence_ms）；"配置确实传到了 Planner"暂无公开观测面。
+
+
 class _Danmaku:
     """update() 只需 content 字段（duck-typed）。"""
 

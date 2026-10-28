@@ -19,6 +19,12 @@ from src.modules.storage.database import SQLiteDatabase
 from tests.agents.streamer.helpers import make_streamer_agent, stub_prompt
 
 
+# 登记（驱动/只读穿透，合并时进底账）：历史读取走既有薄转发门面（agent._read_history，
+# docstring 明示测试经它读数），场次作用域动词（agent._scope.drain_window /
+# current_window_batch）与事件处理器直调（_on_game_event / _on_live_started /
+# _record_delegation）为驱动编排用；均无公开观测面。
+
+
 class _FakeSessionManager:
     def __init__(self, pk: Optional[int]) -> None:
         self.pk = pk

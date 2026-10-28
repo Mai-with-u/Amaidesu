@@ -153,6 +153,11 @@ class StreamerAgent(BaseAgent):
         session_manager: Optional[Any] = None,
         thinking_sink: Optional[Any] = None,
         task_ledger: Optional[Any] = None,
+        planner: Optional[Planner] = None,
+        round_executor: Optional[DecisionRoundExecutor] = None,
+        reply_provider: Optional[ReplyToolProvider] = None,
+        session_scope: Optional[SessionScope] = None,
+        mouth: Optional[Mouth] = None,
     ) -> None:
         """初始化主播 Agent。
 
@@ -217,6 +222,18 @@ class StreamerAgent(BaseAgent):
                 整体短路——决策循环行为与无旁路完全一致。
             task_ledger: 可选任务记录表（``TaskLedger``，异步任务基建）。
                 ``None`` 时委派渲染不带机器账状态（planner 只显示 LLM 交付语）。
+            planner: 可选 ``Planner`` 替身（决策核心）。``None`` 时按配置内建；
+                注入时决策轮执行器与 Agent 共用同一实例（测试替 LLM/规划器
+                写测试的注入面，不必穿透内部组装链）。
+            round_executor: 可选 ``DecisionRoundExecutor`` 替身（决策执行半）。
+                ``None`` 时按内建依赖装配；注入时整只替换（``execute`` 即
+                测试可见的全部契约）。
+            reply_provider: 可选 ``ReplyToolProvider`` 替身（reply 工具提供者）。
+                ``None`` 时启动期照常构造；注入时启动注册复用同一实例不重建。
+            session_scope: 可选 ``SessionScope`` 替身（场次作用域）。``None`` 时
+                按内建依赖装配；注入时账本/时间线等以替身自带为准。
+            mouth: 可选 ``Mouth`` 替身（嘴）。``None`` 且配置关闭时不构造；
+                注入时忽略配置直接使用替身。
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
@@ -273,49 +290,51 @@ class StreamerAgent(BaseAgent):
             notify_proactive=self._on_rundown_changed_proactive,
         )
 
-        # Planner 运行环境：迟绑定依赖在构造期一次性注入（reply Provider 依赖
-        # start 期才构造，经工厂化解生命周期错位）；live_frame 关闭时画面依赖缺席
-        planner_env = PlannerEnv(
-            reply_provider_factory=lambda: self._reply_provider,
-            elapsed_live_provider=self._rundown_coord.get_elapsed_live_ms,
-            notebook_text_provider=self._notebook.read,
-            action_recorder=self._record_delegation,
-            delegation_status_provider=self._delegation_machine_status if task_ledger is not None else None,
-        )
-        if config.live_frame.enabled:
-            planner_env = dataclasses.replace(
-                planner_env,
-                frame_provider=self._latest_live_frame,
-                frame_stale_warn_ms=config.live_frame.stale_warn_ms,
+        # Planner（决策核心，Agent 内部件——非工具）；测试可注入替身
+        if planner is not None:
+            self._planner = planner
+        else:
+            # Planner 运行环境：迟绑定依赖在构造期一次性注入（reply Provider 依赖
+            # start 期才构造，经工厂化解生命周期错位）；live_frame 关闭时画面依赖缺席
+            planner_env = PlannerEnv(
+                reply_provider_factory=lambda: self._reply_provider,
+                elapsed_live_provider=self._rundown_coord.get_elapsed_live_ms,
+                notebook_text_provider=self._notebook.read,
+                action_recorder=self._record_delegation,
+                delegation_status_provider=self._delegation_machine_status if task_ledger is not None else None,
             )
-
-        # Planner（决策核心，Agent 内部件——非工具）
-        # 行为准则（behavior_style）只读包内配置权威 config.persona（决策侧通道）
-        _behavior_style = config.persona.behavior_style or ""
-        # context 组装器路径开关——直接读包内权威
-        _context_enabled = config.context.enabled
-        self._planner = Planner(
-            config=PlannerConfig(
-                planner_max_steps=config.planner_max_steps,
-                planner_recent_intents_max=config.planner_recent_intents_max,
-                planner_recent_relays_max=config.planner_recent_relays_max,
-                reference_tools=list(config.reference_tools),
-                # 冷场提示复用主动发言的冷场阈值：同一个"多久算冷"只配一处
-                cold_silence_ms=config.proactive.cold_timeout_ms,
-            ),
-            llm_service=llm_manager,
-            prompt_service=prompt_manager,
-            room_state=self._room_state,
-            tool_registry=tool_registry,
-            profile_repo=viewer_profile_repo,
-            viewer_repo=viewer_repo,
-            context_enabled=bool(_context_enabled),
-            behavior_style=_behavior_style,
-            # 房管也要知道她是谁：挑话题、在回复指引里定她的态度都以人设为准；措辞风格仍只给表达侧
-            bot_name=config.persona.bot_name,
-            personality=config.persona.personality,
-            env=planner_env,
-        )
+            if config.live_frame.enabled:
+                planner_env = dataclasses.replace(
+                    planner_env,
+                    frame_provider=self._latest_live_frame,
+                    frame_stale_warn_ms=config.live_frame.stale_warn_ms,
+                )
+            # 行为准则（behavior_style）只读包内配置权威 config.persona（决策侧通道）
+            _behavior_style = config.persona.behavior_style or ""
+            # context 组装器路径开关——直接读包内权威
+            _context_enabled = config.context.enabled
+            self._planner = Planner(
+                config=PlannerConfig(
+                    planner_max_steps=config.planner_max_steps,
+                    planner_recent_intents_max=config.planner_recent_intents_max,
+                    planner_recent_relays_max=config.planner_recent_relays_max,
+                    reference_tools=list(config.reference_tools),
+                    # 冷场提示复用主动发言的冷场阈值：同一个"多久算冷"只配一处
+                    cold_silence_ms=config.proactive.cold_timeout_ms,
+                ),
+                llm_service=llm_manager,
+                prompt_service=prompt_manager,
+                room_state=self._room_state,
+                tool_registry=tool_registry,
+                profile_repo=viewer_profile_repo,
+                viewer_repo=viewer_repo,
+                context_enabled=bool(_context_enabled),
+                behavior_style=_behavior_style,
+                # 房管也要知道她是谁：挑话题、在回复指引里定她的态度都以人设为准；措辞风格仍只给表达侧
+                bot_name=config.persona.bot_name,
+                personality=config.persona.personality,
+                env=planner_env,
+            )
 
         # 敏感词过滤器（输出净化；None 表示不启用）
         wf = config.word_filter
@@ -429,8 +448,9 @@ class StreamerAgent(BaseAgent):
         )
         # 场次作用域：这一场记得什么（游戏账本、私聊行、未落库轮、时间线 notes、
         # 本窗批次、上场回顾快照）与决策窗开窗的单一承载。入账动词经 scope.ledger
-        # 直打账本接口；出账/清场/读历史/补记走 scope 自己的动词（见 session_scope.py）
-        self._scope = SessionScope(
+        # 直打账本接口；出账/清场/读历史/补记走 scope 自己的动词（见 session_scope.py）。
+        # 测试可注入替身（替身自带账本/时间线时以替身为准）
+        self._scope = session_scope or SessionScope(
             ledger=GameLedger(),
             timeline=self._timeline,
             chat=chat_repo,
@@ -449,8 +469,8 @@ class StreamerAgent(BaseAgent):
         if cmd_cfg.enabled and (cmd_cfg.mappings or cmd_cfg.tool_mappings):
             self._command_router = CommandRouter(cmd_cfg, tool_registry, logger=self._logger)
 
-        # 工具 Provider 实例（用于 invoke）
-        self._reply_provider: Optional[ReplyToolProvider] = None
+        # 工具 Provider 实例（用于 invoke）；测试可注入替身，启动注册期复用不重建
+        self._reply_provider: Optional[ReplyToolProvider] = reply_provider
 
         # ===== 发言管线（speech → TTS / 字幕）=====
         # 队列生命周期由 dispatcher 自持（start/stop）；未启用时决策循环
@@ -463,8 +483,12 @@ class StreamerAgent(BaseAgent):
             speech_config=speech_config,
             logger=self._logger,
         )
-        # 决策执行器（两阶段决策的执行半；调度半留 Agent）
-        self._rounds = DecisionRoundExecutor(
+        # 决策执行器（两阶段决策的执行半；调度半留 Agent）。测试可注入替身，
+        # 契约 = ``execute(batch, *, forced, trigger_cause, proactive)``；替身若声明
+        # ``reminders_provider`` 槽位，这里接上递话取空动词（真实执行器经构造参数收取）
+        if round_executor is not None:
+            round_executor.reminders_provider = self._drain_reminders
+        self._rounds = round_executor or DecisionRoundExecutor(
             planner=self._planner,
             speech=self._speech,
             event_bus=event_bus,
@@ -483,9 +507,11 @@ class StreamerAgent(BaseAgent):
         self._speech_gate = SpeechGate(window=config.speech_gate_window, ratio=config.speech_gate_ratio)
 
         # 嘴（Agent 内部件，代码直连）：游戏里出事时不经 Planner 当场出一句短反应。
-        # 开关关闭时不构造，所有路径与原来一致
+        # 注入替身优先；否则开关关闭时不构造，所有路径与原来一致
         self._mouth: Optional[Mouth] = None
-        if config.mouth.enabled:
+        if mouth is not None:
+            self._mouth = mouth
+        elif config.mouth.enabled:
             self._mouth = Mouth(
                 config.mouth,
                 llm_service=llm_manager,
@@ -507,6 +533,7 @@ class StreamerAgent(BaseAgent):
                 is_live=lambda: self._live_active,
                 profile=_PROFILE_REPLYER,
             )
+        if self._mouth is not None:
             # 她说过的每句话（Planner 的与嘴自己的）经发声分发器直连记进嘴的最近记录，嘴才不会重复自己
             self._speech.bind_spoken_listener(self._mouth.note_speech)
 
@@ -656,15 +683,16 @@ class StreamerAgent(BaseAgent):
           会话内状态不依赖仓储，随注册无条件注册。
         """
 
-        # reply tool（无条件构造——注册与 Planner 侧引用共用同一实例）
-        self._reply_provider = ReplyToolProvider(
-            replyer=self._replyer,
-            # 没有聊天仓储时历史仍由内存对话轮承载，表达侧照样知道上一句说了什么
-            history_provider=self._read_history_sync,
-            rundown_text_provider=self._rundown_coord.build_text_sync,
-            event_bus=self._event_bus,
-            gate=self._speech_gate,
-        )
+        # reply tool（构造注入的替身复用不重建；缺省时构造——注册与 Planner 侧引用共用同一实例）
+        if self._reply_provider is None:
+            self._reply_provider = ReplyToolProvider(
+                replyer=self._replyer,
+                # 没有聊天仓储时历史仍由内存对话轮承载，表达侧照样知道上一句说了什么
+                history_provider=self._read_history_sync,
+                rundown_text_provider=self._rundown_coord.build_text_sync,
+                event_bus=self._event_bus,
+                gate=self._speech_gate,
+            )
         # Planner 的 reply 调用经 registry；Provider 经 PlannerEnv 工厂迟解析，
         # 仅供引用/诊断（材料走 attachment）
 
@@ -1339,6 +1367,10 @@ class StreamerAgent(BaseAgent):
     def is_proactive_enabled(self) -> bool:
         """主动发言总开关当前状态（运行时实际值，供动态开关展示）。"""
         return self._proactive_trigger.is_enabled()
+
+    def is_live_active(self) -> bool:
+        """场次进行位当前状态（live.started 置位 / live.ended 复位；只读观测面）。"""
+        return self._live_active
 
     def set_proactive_enabled(self, enabled: bool) -> None:
         """切换主动发言总开关（运行时立即生效；落盘由调用方负责）。"""

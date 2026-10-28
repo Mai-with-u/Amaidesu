@@ -370,10 +370,14 @@ async def test_speech_event_precedes_round_end_events() -> None:
     assert order == ["stage", "speech", "decision", "stage"]
 
 
+# 登记（只读穿透，合并时进底账）：Agent 侧接线断言读取发言管线槽位
+# （agent._speech 及其内部依赖句柄）；发言管线尚无公开观测面。
+
+
 async def test_agent_decision_round_completes_with_tts_disabled() -> None:
-    agent = make_streamer_agent(tool_registry=ToolRegistry(), speech_config={"enabled": False})
     reply = {"speech": "OK", "emotion": {"name": "happy", "intensity": 0.5}, "actions": [], "metadata": {}}
-    agent._planner.plan = AsyncMock(
+    planner = MagicMock()
+    planner.plan = AsyncMock(
         return_value=RoundOutcome(
             replied=True,
             target="u1",
@@ -384,9 +388,16 @@ async def test_agent_decision_round_completes_with_tts_disabled() -> None:
     )
     replyer = MagicMock()
     replyer.generate = AsyncMock(return_value=reply)
-    agent._reply_provider = ReplyToolProvider(replyer=replyer, history_provider=None)
+    provider = ReplyToolProvider(replyer=replyer, history_provider=None)
+    agent = make_streamer_agent(
+        tool_registry=ToolRegistry(),
+        speech_config={"enabled": False},
+        planner=planner,
+        reply_provider=provider,
+    )
 
-    await agent._rounds.execute(batch=[], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.BATCH_FULL))
+    result = await agent.debug_test_decision(batch=[{"nickname": "观众", "text": "你好"}])
+    assert result["speech"] == "OK"
     assert agent.get_statistics()["total_replies"] == 1
     assert agent._speech.utterance_queue is None
 

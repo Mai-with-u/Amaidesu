@@ -7,7 +7,6 @@ replyer 响应正文即台词（纯文本契约）。
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -20,7 +19,11 @@ from src.modules.events.payloads.planner import PlannerDecisionPayload, Streamer
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.tools import ToolRegistry
-from tests.agents.streamer.helpers import make_streamer_agent
+from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
+
+# 登记（只读/种子穿透，合并时进底账）：主动发言 pending 信号（agent._proactive_signals
+# 的 set_* / *_pending）尚无 Agent 级公开种子/观测面——external 有 trigger_external_proactive
+# 可用，rundown/game 只能直打组件；信号状态断言同理。接缝补齐后清除。
 
 
 def _danmaku(text: str = "主播好可爱") -> RoomMessagePayload:
@@ -39,14 +42,21 @@ def _reply_call(target: str = "u1", topic: str = "主播好可爱", call_id: str
 class _Rig:
     """装配好的 Agent + 总线 + 分流 LLM；planner 响应从队列取，replyer 返回固定响应或失败。"""
 
-    def __init__(self, planner_steps: list | Exception | None = None, replyer: Response | None = None, **sections: Any):
+    def __init__(
+        self,
+        planner_steps: list | Exception | None = None,
+        replyer: Response | None = None,
+        agent_kwargs: dict | None = None,
+        **sections: Any,
+    ):
         self.planner_steps = [_planner_step(_reply_call())] if planner_steps is None else planner_steps
         self.replyer = replyer or Response(success=True, content="谢谢支持！")
         self.llm = MagicMock()
         self.llm.generate = AsyncMock(side_effect=self._dispatch)
         self.bus = EventBus()
+        self.registry = ToolRegistry()
         self.agent = make_streamer_agent(
-            sections or None, llm=self.llm, event_bus=self.bus, tool_registry=ToolRegistry()
+            sections or None, llm=self.llm, event_bus=self.bus, tool_registry=self.registry, **(agent_kwargs or {})
         )
         self.decisions: list[PlannerDecisionPayload] = []
         self.stages: list[StreamerStagePayload] = []
@@ -99,7 +109,7 @@ async def rig_factory():
 async def test_danmaku_flows_through_planner_reply_and_replyer(rig_factory) -> None:
     rig = await rig_factory()
     spec_names = {spec.name for spec in rig.agent.list_tools()}
-    registered = {spec.full_name for spec in rig.agent._tool_registry.list_tools()}
+    registered = {spec.full_name for spec in rig.registry.list_tools()}
     # 只有真工具进声明；proactive/command 是代码直连的内部件，不注册
     assert spec_names == {"reply"} and "streamer_reply" in registered
     assert not {"should_speak_proactively", "parse_command"} & registered
@@ -157,12 +167,12 @@ async def test_proactive_is_gated_by_live_session_not_by_danmaku(rig_factory) ->
         CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1, source="manual", title="测试场"), source="test"
     )
     await asyncio.sleep(0.2)
-    assert agent._live_active is True and agent.get_statistics()["total_proactive"] >= 1
+    assert agent.is_live_active() is True and agent.get_statistics()["total_proactive"] >= 1
     assert agent._proactive_signals.rundown_pending is False
 
     await rig.bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=1, reason="手动结束"), source="test")
     await asyncio.sleep(0.1)
-    assert agent._live_active is False
+    assert agent.is_live_active() is False
     agent._proactive_signals.set_rundown()
     baseline = agent.get_statistics()["total_proactive"]
     await asyncio.sleep(0.3)
@@ -181,7 +191,7 @@ async def test_rundown_pending_survives_disabled_switch_and_fires_after_reenable
     # 开关关闭期间信号不被静默消费
     assert agent.get_statistics()["total_proactive"] == 0 and agent._proactive_signals.rundown_pending is True
 
-    agent._proactive_trigger.set_enabled(True)
+    agent.set_proactive_enabled(True)
     await asyncio.sleep(0.2)
     assert agent._proactive_signals.rundown_pending is False
     assert agent.get_statistics()["total_proactive"] >= 1
@@ -190,24 +200,25 @@ async def test_rundown_pending_survives_disabled_switch_and_fires_after_reenable
 async def test_rundown_pending_survives_reminder_preemption(rig_factory) -> None:
     """同一 tick 被更高优先级的运营递话抢占时环节切换信号保留，队列清空后下一 tick 触发。
 
-    决策执行器替换为空转桩，使递话不被送达消费（真实送达在任何决策窗取空队列），
-    借此把"被抢占的 tick"稳定放大成可观察窗口。
+    决策执行器换为不消费递话队列的替身（经构造注入面注入），递话不被送达消费
+    （真实送达在任何决策窗取空队列），借此把"被抢占的 tick"稳定放大成可观察窗口；
+    替身切回"照常取空队列"后恢复正常送达。
     """
-    rig = await rig_factory([_planner_step()] * 8, proactive={"enabled": True})
+    executor = FakeRoundExecutor()
+    rig = await rig_factory(
+        [_planner_step()] * 8, proactive={"enabled": True}, agent_kwargs={"round_executor": executor}
+    )
     agent = rig.agent
     await rig.bus.emit(
         CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1, source="manual", title="测试场"), source="test"
     )
     agent._proactive_signals.set_rundown()
-    agent._reminder_queue.append("后台留言")
-    real_execute = agent._execute_round
-    agent._execute_round = AsyncMock()  # 递话滞留队列，reminder 每 tick 都抢先
+    assert agent.receive_prompt(content="后台留言", source="test") is True
     await asyncio.sleep(0.15)
     # reminder 抢占每个 tick，rundown 信号保留待送达窗口让位之后
     assert agent.get_statistics()["total_proactive"] >= 1 and agent._proactive_signals.rundown_pending is True
 
-    agent._execute_round = real_execute
-    agent._reminder_queue.clear()
+    executor.drain_reminders = True  # 恢复正常送达：决策窗照常取空递话队列
     await asyncio.sleep(0.15)
     assert agent._proactive_signals.rundown_pending is False
     assert agent.get_statistics()["total_proactive"] >= 2
@@ -215,7 +226,7 @@ async def test_rundown_pending_survives_reminder_preemption(rig_factory) -> None
 
 async def test_danmaku_reply_is_not_gated_by_live_session(rig_factory) -> None:
     rig = await rig_factory()
-    assert rig.agent._live_active is False
+    assert rig.agent.is_live_active() is False
     await rig.emit()
     await rig.wait_decision()
     assert len(rig.calls("planner")) >= 1
@@ -264,7 +275,7 @@ async def test_signoff_not_fired_on_stopped_agent(rig_factory) -> None:
     baseline = len(rig.calls("planner"))
     await rig.bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=1, reason="进程退出"), source="test")
     await asyncio.sleep(0.2)
-    assert rig.agent._live_active is False
+    assert rig.agent.is_live_active() is False
     assert len(rig.calls("planner")) == baseline and rig.decisions == []
 
 
@@ -272,11 +283,11 @@ async def test_reminder_reaches_planner_after_live_end(rig_factory) -> None:
     """下播后运营递话仍送达：豁免开播闸触发决策窗并取空队列（递话必达）。"""
     rig = await rig_factory([_planner_step(_reply_call())], proactive={"enabled": True})
     agent = rig.agent
-    assert agent._live_active is False
-    agent._reminder_queue.append("准备下播，和观众说再见")
+    assert agent.is_live_active() is False
+    assert agent.receive_prompt(content="准备下播，和观众说再见", source="test") is True
     await asyncio.sleep(0.3)
 
-    assert agent._reminder_queue == deque(), "递话队列必须在决策窗内被取空"
+    # 递话送达（读取即取空队列）由触发原因表达：本轮 trigger_reason = proactive:reminder
     decisions = await _wait_decisions(rig, 1)
     assert decisions[0].trigger_reason == "proactive:reminder"
     # 递话文本进入 planner 参考段（【运营提醒】块）

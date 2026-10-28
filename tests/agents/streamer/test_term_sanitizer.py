@@ -10,10 +10,14 @@ from src.agents.streamer.game_ledger import GameLedger
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.session_scope import SessionScope
-from src.agents.streamer.streamer_agent import StreamerAgent
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.modules.events.payloads.game import GamePayload
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
+from tests.agents.streamer.helpers import make_streamer_agent
+
+# 登记（驱动穿透，合并时进底账）：agent._on_game_event 是事件订阅绑定的处理器，
+# 测试以直接调用驱动；planner._read_reference_tools / planner._assemble_reference
+# 为既存穿透（范围外测试同以私有名依赖，本线不单方改名）。
 
 
 @pytest.mark.parametrize(
@@ -32,10 +36,11 @@ def test_sanitize_internal_terms(text: str, expected) -> None:
 
 async def test_game_event_line_sanitized_at_boundary() -> None:
     """game.* 事件行进入待入账队列前脱敏：任务号不进主播上下文。"""
-    agent = StreamerAgent.__new__(StreamerAgent)  # 只测事件行组装，不走完整装配
-    agent._scope = SessionScope(ledger=GameLedger(), timeline=MagicMock(), logger=MagicMock())
-    agent._planner = MagicMock()
-    agent._logger = MagicMock()
+    # 场次作用域注入替身：账本用真件（被测对象），时间线/日志用哑件
+    agent = make_streamer_agent(
+        session_scope=SessionScope(ledger=GameLedger(), timeline=MagicMock(), logger=MagicMock()),
+        planner=MagicMock(),
+    )
 
     payload = GamePayload(
         game="minecraft",
@@ -45,7 +50,7 @@ async def test_game_event_line_sanitized_at_boundary() -> None:
     )
     await agent._on_game_event("game.report", payload, "test")
 
-    line = agent._game_ledger._pending[0].base
+    line = agent._scope.ledger.pending_lines()[0]
     assert "deleg_" not in line and "simulated:" not in line
     assert "一个游戏任务" in line and "chest" in line
 
@@ -91,7 +96,9 @@ async def test_delegation_render_without_task_id() -> None:
         )
 
     registry.invoke = AsyncMock(side_effect=_invoke)
-    planner = Planner(PlannerConfig(), MagicMock(), MagicMock(), RoomState(), tool_registry=registry, context_enabled=False)
+    planner = Planner(
+        PlannerConfig(), MagicMock(), MagicMock(), RoomState(), tool_registry=registry, context_enabled=False
+    )
 
     await planner.workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "挖 deleg_9 石料"})
     text, _ = await planner._assemble_reference([], None, None, False, False, "")

@@ -36,6 +36,12 @@ from src.modules.tools import ToolInvocation, ToolRegistry
 from tests.modules.storage.viewer_seed import seed_message
 
 
+# 登记（驱动/只读穿透，合并时进底账）：直接驱动生命周期处理器与后台善后
+# （agent._register_tools / _on_live_started / _on_live_ended / _bootstrap_recaps），
+# 读取上场回顾段（agent._session_recap_text）与后台任务集合（agent._bg_tasks）；
+# 均无公开观测面。
+
+
 # ---------------------------------------------------------------------------
 # 夹具与造数
 # ---------------------------------------------------------------------------

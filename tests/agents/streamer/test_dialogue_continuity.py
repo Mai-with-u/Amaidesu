@@ -29,7 +29,11 @@ from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSp
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
 from src.modules.utils.time_utils import now_ms
-from tests.agents.streamer.helpers import make_streamer_agent
+from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
+
+# 登记（只读/驱动穿透，合并时进底账）：planner 段的替身是测试自建的真实 Planner
+# 实例，个别用例直接驱动其内部组装件（planner._invoke_registry_tool）；公开接缝
+# 补齐后清除。
 
 
 @dataclass(frozen=True)
@@ -67,9 +71,10 @@ def _msg(text: str, mid: str, *, ts: int = 0, **kwargs: Any) -> RoomMessagePaylo
 
 
 def _agent(rows: List[LiveChatMessage], pk: Optional[int], speech: str):
-    agent = make_streamer_agent(chat_repo=_FakeChatRepo(rows), session_manager=_FakeSessionManager(pk))
-    agent._rounds.execute = AsyncMock(return_value={"speech": speech})
-    return agent
+    rounds = FakeRoundExecutor({"speech": speech})
+    return make_streamer_agent(
+        chat_repo=_FakeChatRepo(rows), session_manager=_FakeSessionManager(pk), round_executor=rounds
+    )
 
 
 async def _history(agent) -> list[tuple[str, str]]:
@@ -136,8 +141,10 @@ def test_trim_batch_echo_drops_only_tail_copy_of_batch() -> None:
 # Planner
 
 
-def _planner(registry: Any = None, reply_provider: Any = None, responses: Optional[List[Response]] = None) -> Planner:
-    llm = MagicMock()
+def _planner(
+    registry: Any = None, reply_provider: Any = None, responses: Optional[List[Response]] = None, llm: Any = None
+) -> Planner:
+    llm = llm or MagicMock()
     llm.generate = AsyncMock(side_effect=responses or [])
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="SYSTEM")
@@ -167,7 +174,7 @@ def _delegation_registry(result: ToolExecutionResult) -> ToolRegistry:
     return registry
 
 
-def _capture_references(planner: Planner) -> List[str]:
+def _capture_references(planner: Planner, llm: Any) -> List[str]:
     """把每次推理请求的最后一条消息（参考段）记下来，模型一律不说话。"""
     references: List[str] = []
 
@@ -175,7 +182,7 @@ def _capture_references(planner: Planner) -> List[str]:
         references.append(messages[-1]["content"])
         return Response(success=True, content="不说")
 
-    planner._llm_service.generate = AsyncMock(side_effect=_generate)
+    llm.generate = AsyncMock(side_effect=_generate)
     return references
 
 
@@ -221,8 +228,9 @@ async def test_reply_runs_last_and_holds_round_batch() -> None:
 
 async def test_forced_debug_batch_is_not_labeled_as_paid() -> None:
     """控制台点名必答但没人付费：情境不说 SC，也不能写成"运营"（否则会被降级成仅供参考的建议）。"""
-    planner = _planner()
-    references = _capture_references(planner)
+    llm = MagicMock()
+    planner = _planner(llm=llm)
+    references = _capture_references(planner, llm)
     await planner.plan([_msg("拉", "m1")], forced=True)
     await planner.plan([_msg("冲", "m2", message_type="super_chat")], forced=True)
 
@@ -233,11 +241,15 @@ async def test_forced_debug_batch_is_not_labeled_as_paid() -> None:
 
 
 async def test_registry_observation_keeps_one_copy_of_duplicated_json_body() -> None:
+    # 登记（驱动穿透）：registry 替身由测试持有并直接改写 invoke 行为；
+    # _invoke_registry_tool 是 Planner 的内部组装件，公开接缝补齐后清除。
     structured = {"health": 20.0, "position": {"x": -86, "y": 105, "z": 27}}
-    planner = _planner()
+    registry = MagicMock()
+    registry.list_tools = MagicMock(return_value=[])
+    planner = _planner(registry=registry)
 
     async def _observe(content: str) -> dict:
-        planner._tool_registry.invoke = AsyncMock(
+        registry.invoke = AsyncMock(
             return_value=ToolExecutionResult(
                 tool_name="x", success=True, structured_content=structured, content=content
             )
@@ -255,6 +267,7 @@ async def test_planner_sees_what_it_is_doing_in_game_until_reported() -> None:
     实测主播看不到自己正在做什么，就把每条弹幕都改派成新目标；写成"交给谁"又会对观众说"活已经派下去了"。
     状态迁移经工作台公开动词直测：委派受理走 handle，游戏上报走 note_game_report。
     """
+    llm = MagicMock()
     planner = _planner(
         registry=_delegation_registry(
             ToolExecutionResult(
@@ -262,9 +275,10 @@ async def test_planner_sees_what_it_is_doing_in_game_until_reported() -> None:
                 success=True,
                 structured_content={"accepted": True, "task_id": "deleg_1", "executor": "minecraft"},
             )
-        )
+        ),
+        llm=llm,
     )
-    references = _capture_references(planner)
+    references = _capture_references(planner, llm)
     instruction = "从 AE 请求一块铁板放到置物台上，用机器做一个蜂蜜胶"
 
     observation = await planner.workbench.handle(
@@ -414,8 +428,9 @@ def test_planner_prompt_treats_game_chat_as_players_not_viewers() -> None:
 @pytest.mark.asyncio
 async def test_planner_reference_shows_private_game_chat_block() -> None:
     """私聊随本窗批次单独成段进参考块（不进对话历史），主动窗情境说明不再只写冷场/定时。"""
-    planner = _planner()
-    references = _capture_references(planner)
+    llm = MagicMock()
+    planner = _planner(llm=llm)
+    references = _capture_references(planner, llm)
     await planner.plan(
         [],
         proactive=True,
