@@ -167,15 +167,17 @@ def _deadline_client(factory: Any) -> McpClient:
 
 
 async def test_handshake_and_close_honor_connection_timeout() -> None:
+    # wait_for 是防挂死的兜底上限：内部期限只有 25ms，上限按满载并行估算留足余量，
+    # 只断言"不拖住调用方"，不断言墙钟数字。
     stuck = _deadline_client(lambda *args, **kwargs: Session(stuck_enter=True))
-    assert await asyncio.wait_for(stuck.connect(), timeout=1) is False  # 握手不返回时不能拖住首次工具调用
+    assert await asyncio.wait_for(stuck.connect(), timeout=10) is False  # 握手不返回时不能拖住首次工具调用
     assert not stuck.connected
     await stuck.close()
 
     old = Session(stuck_exit=True)
     client = _deadline_client(lambda *args, **kwargs: old)
     assert await client.connect() is True
-    await asyncio.wait_for(client.close(), timeout=1)  # 旧会话退出卡住时也要释放本地引用
+    await asyncio.wait_for(client.close(), timeout=10)  # 旧会话退出卡住时也要释放本地引用
     assert not client.connected and old.exits == 1
 
 

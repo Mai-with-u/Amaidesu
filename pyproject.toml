@@ -137,6 +137,7 @@ dev = [
     "pytest-cov>=5.0.0",
     "setuptools>=68.0.0",
     "pytest-github-actions-annotate-failures>=0.4.2",
+    "pytest-xdist>=3.6",
 ]
 
 [tool.hatch.build.targets.wheel]

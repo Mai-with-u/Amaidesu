@@ -320,6 +320,9 @@ class _FailingCollector(_SampleCollector):
 # 运行所有测试
 uv run pytest tests/
 
+# 并行运行所有测试（pytest-xdist；本机 32 worker 约 1 分钟）
+uv run pytest tests/ -n auto
+
 # 运行特定测试文件
 uv run pytest tests/modules/events/test_event_bus.py
 

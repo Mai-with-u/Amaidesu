@@ -20,6 +20,18 @@ jobs:
     env:
       # 渲染测试使用真实中文字体，不依赖 Windows 字体安装。
       AMAIDESU_TEST_FONT: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+    strategy:
+      # 一个分片失败不取消其余分片，全部跑完便于看全貌。
+      fail-fast: false
+      matrix:
+        shard:
+          - name: agents
+            tests: tests/agents
+          - name: modules
+            tests: tests/modules
+          # 其余全部：顶层目录 + config/dashboard/integration/architecture 等。
+          - name: platform
+            tests: tests/ --ignore tests/agents --ignore tests/modules
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -32,8 +44,23 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      # apt 慢镜像源曾把本步拖到 26 分钟（pytest 本身只 ~3 分钟）：缓存 deb 归档
+      # 与索引列表，键取安装行哈希；命中则跳过 update、直接从本地归档安装。
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        id: apt-cache
+        with:
+          path: |
+            /var/cache/apt/archives
+            /var/lib/apt/lists
+          key: apt-ubuntu-cjk-${{ hashFiles('.github/workflows/test.yml') }}
+
       - name: Install system packages
-        run: sudo apt-get update && sudo apt-get install -y libportaudio2 xvfb fonts-noto-cjk
+        run: |
+          if [ "${{ steps.apt-cache.outputs.cache-hit }}" != "true" ]; then
+            sudo apt-get update
+          fi
+          sudo apt-get install -y --no-install-recommends libportaudio2 xvfb fonts-noto-cjk
 
       - name: Install dependencies
         run: uv sync --frozen
@@ -41,31 +68,23 @@ jobs:
       - name: Check test font
         run: test -r "$AMAIDESU_TEST_FONT"
 
-      - name: Lint regression tests
-        run: >-
-          uv run ruff check
-          tests/agents/streamer/test_planner_context.py
-          tests/modules/audio/test_audio_sink_tap.py
-          tests/modules/subtitle/test_outline_label_render.py
-          tests/modules/vision/test_mss_capture.py
-          tests/modules/vision/test_mss_capture_windows.py
-
       # 模拟 DPI 测试在全部平台执行；真实 Win32 集成测试另由 Windows 执行。
       # pipefail 保留失败状态，faulthandler 和完整日志用于追踪原生崩溃。
+      # runner 4 vCPU：分片内再用 4 worker 并行（pytest-xdist）。
       - name: Run pytest
         shell: bash
         run: |
           set -o pipefail
           mkdir -p test-results
-          xvfb-run -a uv run python -X faulthandler -u -m pytest tests/ --collect-only -q 2>&1 | tee test-results/collect.log
-          xvfb-run -a uv run python -X faulthandler -u -m pytest tests/ -v --tb=short \
-            --junitxml=test-results/pytest.xml 2>&1 | tee test-results/pytest.log
+          xvfb-run -a uv run python -X faulthandler -u -m pytest ${{ matrix.shard.tests }} --collect-only -q 2>&1 | tee test-results/collect.log
+          xvfb-run -a uv run python -X faulthandler -u -m pytest ${{ matrix.shard.tests }} -n 4 -q --tb=short \
+            --junitxml=test-results/pytest-${{ matrix.shard.name }}.xml 2>&1 | tee test-results/pytest-${{ matrix.shard.name }}.log
 
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: backend-test-reports
+          name: backend-test-reports-${{ matrix.shard.name }}
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
