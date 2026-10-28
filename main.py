@@ -731,7 +731,8 @@ async def create_app_components(
         vision_cfg = tools_section.get("vision", {}) if isinstance(tools_section, dict) else {}
         if isinstance(vision_cfg, dict) and vision_cfg.get("enabled", False):
             vision_config = vision_cfg.get("config", {}) if isinstance(vision_cfg.get("config"), dict) else {}
-            # 显式 ["*"]：读屏是公共工具（text_adv 的观察循环经 RegistryVisionReader 调用），
+            # 读屏是公共工具（text_adv 的观察循环经 RegistryVisionReader 调用），
+            # 可见名单 ["*"] 由 ToolSpec 自行声明（见 look_at_screen 模块），
             # 不吃"默认仅主播"的 fail-closed 名单
             tool_registry.register_provider(
                 LookAtScreenProvider(
@@ -743,7 +744,6 @@ async def create_app_components(
                     ),
                     llm_manager=llm_service,
                 ),
-                visible_to={"vision_look_at_screen": ["*"]},
             )
             logger.info("look_at_screen 已注册（mss 截屏后端 + VLM reader，视觉调用方按需跳过 VLM）")
 
