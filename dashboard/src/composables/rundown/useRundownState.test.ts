@@ -7,7 +7,7 @@
 // nowTick 用受控 ref 替换真实共享时钟；WS 经 wsClient.onMessage 捕获的
 // 回调触发，防抖计时走 fake timers。
 
-import { defineComponent, h, nextTick, ref, type Component } from 'vue';
+import { defineComponent, h, KeepAlive, nextTick, ref, type Component } from 'vue';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -440,5 +440,54 @@ describe('useRundownState', () => {
     wsHandler!({ type: 'rundown.changed', timestamp_ms: 2, data: {} });
     await vi.advanceTimersByTimeAsync(1_000);
     expect(rundownApi.getState).toHaveBeenCalledTimes(1);
+  });
+
+  it('keep-alive 首次挂载激活不重复拉取', async () => {
+    mockState(stateResponse());
+    const show = ref(true);
+    wrapper = mount(
+      defineComponent({
+        setup() {
+          const host = makeHost();
+          return () => h(KeepAlive, () => (show.value ? h(host) : null));
+        },
+      }),
+    );
+    await nextTick();
+    await vi.runOnlyPendingTimersAsync();
+    expect(rundownApi.getState).toHaveBeenCalledTimes(1);
+  });
+
+  it('keep-alive 隐藏丢弃在途防抖并停订阅；恢复激活静默重拉并恢复订阅', async () => {
+    mockState(stateResponse());
+    const show = ref(true);
+    wrapper = mount(
+      defineComponent({
+        setup() {
+          const host = makeHost();
+          return () => h(KeepAlive, () => (show.value ? h(host) : null));
+        },
+      }),
+    );
+    await nextTick();
+    await vi.runOnlyPendingTimersAsync();
+    expect(rundownApi.getState).toHaveBeenCalledTimes(1);
+
+    // 隐藏前防抖在途：deactivated 放弃计时，期间到达的事件不触发拉取
+    wsHandler!({ type: 'rundown.changed', timestamp_ms: 2, data: {} });
+    show.value = false;
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(rundownApi.getState).toHaveBeenCalledTimes(1);
+
+    // 恢复激活：静默重拉一次快照，并恢复 WS 订阅（防抖重拉再次生效）
+    show.value = true;
+    await nextTick();
+    await vi.runOnlyPendingTimersAsync();
+    expect(rundownApi.getState).toHaveBeenCalledTimes(2);
+
+    wsHandler!({ type: 'rundown.changed', timestamp_ms: 3, data: {} });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(rundownApi.getState).toHaveBeenCalledTimes(3);
   });
 });

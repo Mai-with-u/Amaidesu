@@ -5,10 +5,14 @@
  * GET /api/v1/rundown/state（手动刷新 + rundown.changed 触发的 300ms
  * 防抖重拉）+ 本地 1s tick 重算当前环节 elapsed/remaining（快照是时刻值，
  * 本地 tick 从基线起算已播时长吸收取数耗时漂移）。
- * WS 订阅与防抖计时器的清理走 onScopeDispose（setup 中等价于组件卸载）。
+ * keep-alive 生命周期语义：消费页（OutlineWorkbench）在 App.vue 全路由
+ * keep-alive 内，页面隐藏不触发卸载——WS 订阅与在途防抖随 deactivated 停止，
+ * activated 重启订阅并静默重拉一次快照（隐藏期间错过的变更不可知，本地 tick
+ * 需从新基线重算 elapsed/remaining，不得拿停摆期旧数据续算）；本地 1s tick
+ * 由 useNowTick 自身按激活态启停。onScopeDispose 兜底清理订阅。
  */
 
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { computed, onActivated, onDeactivated, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { rundownApi } from '@/api';
 import { wsClient } from '@/api/websocket';
@@ -215,6 +219,20 @@ export function useRundownState() {
     startWs();
     void fetchState();
   });
+
+  // keep-alive 激活态启停：首次激活在 onMounted 之后到达，数据拉取由
+  // onMounted 负责，不重复；再激活时重启订阅并重拉快照
+  let hasActivatedOnce = false;
+  onActivated(() => {
+    if (!hasActivatedOnce) {
+      hasActivatedOnce = true;
+      return;
+    }
+    startWs();
+    void fetchState({ silent: true });
+  });
+
+  onDeactivated(stopWs);
 
   onScopeDispose(stopWs);
 
