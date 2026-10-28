@@ -108,6 +108,8 @@ class STTCollector(BaseCollector):
 
         self._is_speaking: bool = False
         self._silence_started_time: Optional[float] = None
+        # 音频回调队列满丢帧的低频告警计数（热路径防刷屏：首次 + 每 N 次各记一条）
+        self._dropped_frames_total = 0
 
         self.logger.info(
             f"STTCollector 初始化完成. "
@@ -360,7 +362,11 @@ class STTCollector(BaseCollector):
                 loop.call_soon_threadsafe(self._internal_audio_queue.put_nowait, audio_bytes)
 
             except asyncio.QueueFull:
-                pass
+                # 队列满即消费侧跟不上：音频帧只能丢弃，否则语音识别内容缺失。
+                # 回调热路径，逐帧记日志会刷屏，改低频告警（首次 + 每告警间隔 50 次）
+                self._dropped_frames_total += 1
+                if self._dropped_frames_total == 1 or self._dropped_frames_total % 50 == 0:
+                    self.logger.warning(f"音频入队队列满，已丢弃 {self._dropped_frames_total} 帧（识别内容将缺失）")
             except Exception as e:
                 self.logger.exception(f"音频回调出错: {e}")
 
