@@ -15,7 +15,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
-from src.modules.llm.payload import Response
+from src.modules.events.payloads.game import GamePayload
+from src.modules.llm.payload import Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
 from src.modules.skills import SkillLibrary
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
@@ -53,6 +54,45 @@ def ok(data: Dict[str, Any]) -> Dict[str, Any]:
 
 def error(code: str, message: str) -> Dict[str, Any]:
     return {"ok": False, "error": {"code": code, "message": message}}
+
+
+def _resp(content: str = "", calls: Optional[List[ToolCall]] = None) -> Response:
+    return Response(success=True, content=content, tool_calls=calls or [])
+
+
+def _call(name: str, arguments: Dict[str, Any], call_id: str = "c1") -> ToolCall:
+    return ToolCall(id=call_id, name=name, arguments=arguments)
+
+
+def _texts(messages: List[Dict[str, Any]]) -> str:
+    return "\n".join(str(message.get("content") or "") for message in messages)
+
+
+def _called(messages: List[Dict[str, Any]], tool: str) -> bool:
+    """模型在这段历史里调用过这个工具没有（开局资料是宿主消息，不含工具调用）。"""
+    return any(
+        call["function"]["name"] == tool
+        for message in messages
+        if message.get("role") == "assistant"
+        for call in message.get("tool_calls") or []
+    )
+
+
+async def _wait_until(condition: Callable[[], bool], timeout: float = 10.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if condition():
+            return
+        await asyncio.sleep(0.02)
+    raise TimeoutError("条件在时限内未成立")
+
+
+def _reports(bus: MagicMock) -> List[GamePayload]:
+    return [
+        call.args[1]
+        for call in bus.emit.await_args_list
+        if isinstance(call.args[1], GamePayload) and call.args[1].event_type == "report"
+    ]
 
 
 class FakeMaicraft(BaseToolProvider):
