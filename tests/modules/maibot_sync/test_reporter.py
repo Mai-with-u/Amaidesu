@@ -101,16 +101,36 @@ async def test_heartbeat_resends_snapshot_while_live() -> None:
         await reporter.stop()
 
 
-async def test_replay_sessions_are_not_synced() -> None:
+async def test_rehearsal_sessions_are_not_synced() -> None:
     sender = FakeSender()
     bus, reporter = _reporter(sender)
     try:
-        await bus.emit(CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=3, source="replay"), source="test")
+        await bus.emit(CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=3, kind="rehearsal"), source="test")
         await bus.emit(CoreEvents.RUNDOWN_CHANGED, _rundown(1), source="test")
-        await bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=3, source="replay"), source="test")
+        await bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=3, kind="rehearsal"), source="test")
         await bus.emit(
             CoreEvents.STREAMER_RECAP_WRITTEN,
-            StreamerRecapWrittenPayload(live_session_id=3, started_at_ms=1, ended_at_ms=2, recap_text="回放"),
+            StreamerRecapWrittenPayload(
+                live_session_id=3, kind="rehearsal", started_at_ms=1, ended_at_ms=2, recap_text="彩排"
+            ),
+            source="test",
+        )
+        await bus.wait_until_drained()
+        assert sender.attempts == 0
+    finally:
+        await reporter.stop()
+
+
+async def test_rehearsal_recap_backfilled_after_restart_is_not_synced() -> None:
+    """进程重启后补写的彩排回顾：新上报器没见过这场的开播事件，仍按事件里的类型跳过。"""
+    sender = FakeSender()
+    bus, reporter = _reporter(sender)
+    try:
+        await bus.emit(
+            CoreEvents.STREAMER_RECAP_WRITTEN,
+            StreamerRecapWrittenPayload(
+                live_session_id=4, kind="rehearsal", started_at_ms=1, ended_at_ms=2, recap_text="补写的彩排"
+            ),
             source="test",
         )
         await bus.wait_until_drained()

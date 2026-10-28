@@ -11,6 +11,8 @@
 字段约束：
 - ``live_session_id``：回顾所属场次主键（发布方显式填写；补写的是过去的场次，
   不能交给场次盖章拦截器按"当前场次"注入）。
+- ``kind``：回顾所属场次的类型（live=正式 / rehearsal=彩排），取自场次行；
+  对外同步只推正式场。
 - 时间字段统一毫秒。
 """
 
@@ -19,6 +21,7 @@ from pydantic import Field
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
+from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 from src.modules.utils.time_utils import now_ms
 
 
@@ -33,6 +36,7 @@ class StreamerRecapWrittenPayload(BasePayload):
 
     Attributes:
         live_session_id: 回顾所属场次主键（live_sessions.id）
+        kind: 回顾所属场次的类型（live=正式 / rehearsal=彩排）
         started_at_ms: 场次开始时刻（Unix 毫秒）
         ended_at_ms: 场次结束时刻（Unix 毫秒）
         recap_text: 回顾正文（已按上限截断）
@@ -40,6 +44,7 @@ class StreamerRecapWrittenPayload(BasePayload):
     """
 
     live_session_id: int = Field(..., gt=0, description="回顾所属场次主键（live_sessions.id）")
+    kind: SessionKind = Field(default=SESSION_KIND_LIVE, description="回顾所属场次的类型：live=正式 / rehearsal=彩排")
     started_at_ms: int = Field(..., description="场次开始时刻（Unix 毫秒）")
     ended_at_ms: int = Field(..., description="场次结束时刻（Unix 毫秒）")
     recap_text: str = Field(..., min_length=1, description="回顾正文（已按上限截断）")

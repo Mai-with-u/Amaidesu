@@ -30,9 +30,16 @@ async def store(temp_db_path: Path) -> AsyncGenerator[SQLiteDatabase, None]:
     await s.close()
 
 
-async def _ended_session(store: SQLiteDatabase, *, source: str = "manual", platform: str = "bilibili") -> int:
+async def _ended_session(
+    store: SQLiteDatabase, *, source: str = "manual", kind: str = "live", platform: str = "bilibili"
+) -> int:
     pk = await store.sessions.insert_live_session(
-        stream_id="778899", platform=platform, started_at_ms=BASE_MS, title="周五 MC 建房", source=source
+        stream_id="778899",
+        platform=platform,
+        started_at_ms=BASE_MS,
+        title="周五 MC 建房",
+        source=source,
+        kind=kind,
     )
     await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=BASE_MS + 3_600_000)
     return pk
@@ -89,11 +96,15 @@ async def test_transcript_merges_chat_and_super_chats_in_time_order(store: SQLit
 
 
 @pytest.mark.asyncio
-async def test_no_transcript_for_replay_unended_empty_or_unknown_sessions(store: SQLiteDatabase) -> None:
+async def test_no_transcript_for_rehearsal_unended_empty_or_unknown_sessions(store: SQLiteDatabase) -> None:
     source = StorageTranscriptSource(sessions=store.sessions, chat=store.chat)
-    replay = await _ended_session(store, source="replay")
+    rehearsal = await _ended_session(store, source="manual", kind="rehearsal")
     await store.chat.insert_live_chat(
-        live_session_id=replay, timestamp_ms=BASE_MS, sender_role="viewer", content="回放弹幕", message_type="danmaku"
+        live_session_id=rehearsal,
+        timestamp_ms=BASE_MS,
+        sender_role="viewer",
+        content="调试弹幕",
+        message_type="danmaku",
     )
     ongoing = await store.sessions.insert_live_session(stream_id="778899", platform="bilibili", started_at_ms=BASE_MS)
     await store.chat.insert_live_chat(
@@ -101,7 +112,7 @@ async def test_no_transcript_for_replay_unended_empty_or_unknown_sessions(store:
     )
     empty = await _ended_session(store)
 
-    assert await source.load(replay) is None
+    assert await source.load(rehearsal) is None
     assert await source.load(ongoing) is None
     assert await source.load(empty) is None
     assert await source.load(99_999) is None

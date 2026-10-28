@@ -8,7 +8,7 @@
 - ``super_chats`` 的醒目留言（带金额，写成"[醒目留言 ¥30] 正文"）。
 礼物不收：连击礼物量大而信息少，谁撑了场已经写在场次回顾里。
 
-模拟器回放出来的场次（``source="replay"``）、还没结账的场次不出记录。
+彩排场次（``kind="rehearsal"``：模拟、回放、调试）、还没结账的场次不出记录。
 
 观众行的 ``user_id`` 用内部观众 ID（``viewer:<编号>``），不用收到时的外部 ID：
 同一位观众换了数据源（账号 uid / 开放平台 open_id）在 MaiBot 里仍是同一个人。
@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.types.currency import to_cny
+from src.modules.types.session_kind import SESSION_KIND_REHEARSAL
 
 if TYPE_CHECKING:
     from src.modules.storage.repos.chat import ChatRepo
@@ -32,8 +33,6 @@ logger = get_logger("StorageTranscriptSource")
 MAX_TRANSCRIPT_LINES = 20_000
 # 读醒目留言的条数上限（一场里付费留言不会到这个量级）
 _SUPER_CHAT_ROWS = 2_000
-# 模拟器回放场次的来源标记
-_REPLAY_SOURCE = "replay"
 # live_chat.sender_role → 契约里的说话人角色
 _ROLE_BY_SENDER = {"viewer": "viewer", "partner": "partner", "assistant": "streamer"}
 
@@ -57,13 +56,13 @@ class StorageTranscriptSource:
         self._chat = chat
 
     async def load(self, live_session_id: int) -> Optional[Dict[str, Any]]:
-        """返回推给插件的整场记录；场次不存在、未结账、是回放场次或没有任何对话时返回 None。"""
+        """返回推给插件的整场记录；场次不存在、未结账、是彩排场次或没有任何对话时返回 None。"""
 
         session_row = await self._sessions.get_live_session(live_session_id=int(live_session_id))
         if session_row is None:
             logger.debug(f"场次 {live_session_id} 不存在，不推整场记录")
             return None
-        if (session_row.source or "") == _REPLAY_SOURCE or not session_row.ended_at_ms:
+        if session_row.kind == SESSION_KIND_REHEARSAL or not session_row.ended_at_ms:
             return None
 
         lines = self._chat_lines(

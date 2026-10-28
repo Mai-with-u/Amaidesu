@@ -14,7 +14,8 @@ MaiBot 7×24 常驻，Amaidesu 开播时才启动；QQ 那边的麦麦要知道"
   回放进 MaiBot 的直播间会话、由聊天摘要吸收进长期记忆。挂在回顾事件上而不是收播事件
   上：进程退出时收播来不及推，回顾则会在下次启动时补写，整场记录随之补推。
 
-模拟器回放出来的场次（``source="replay"``）是开发设施，不对外同步。
+彩排场次（``kind="rehearsal"``：模拟、回放、调试）不对外同步：开播、收播、回顾都按
+事件里带的场次类型判断，进程重启后补写的回顾也一样。
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayloa
 from src.modules.events.payloads.recap import StreamerRecapWrittenPayload
 from src.modules.events.payloads.rundown import RundownChangedPayload
 from src.modules.logging import get_logger
+from src.modules.types.session_kind import SESSION_KIND_REHEARSAL
 from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -37,8 +39,6 @@ if TYPE_CHECKING:
 
 logger = get_logger("LiveStatusReporter")
 
-# 模拟器回放场次的来源标记：回放是开发设施，不对外同步
-_REPLAY_SOURCE = "replay"
 # 回顾与整场记录推送失败后的重试间隔（毫秒）
 _RETRY_DELAYS_MS = (5_000, 30_000, 120_000)
 
@@ -52,7 +52,7 @@ class StatusSender(Protocol):
 
 
 class TranscriptSource(Protocol):
-    """按场次主键给出推给插件的整场记录；没有可推的（空场次、回放场次等）返回 None。"""
+    """按场次主键给出推给插件的整场记录；没有可推的（空场次、彩排场次等）返回 None。"""
 
     async def load(self, live_session_id: int) -> Optional[Dict[str, Any]]: ...
 
@@ -116,7 +116,6 @@ class LiveStatusReporter:
         self._transcript_source = transcript_source
         self._clock_ms = clock_ms
         self._live: Optional[_LiveState] = None
-        self._replay_session_ids: Set[int] = set()
         self._heartbeat_task: Optional[asyncio.Task[None]] = None
         self._push_tasks: Set[asyncio.Task[None]] = set()
         self._last_failure = ""
@@ -154,8 +153,7 @@ class LiveStatusReporter:
 
     async def _on_live_started(self, event_name: str, payload: LiveStartedPayload, source: str) -> None:
         """开播：记下场次信息，推一份"正在直播"快照，并开始心跳。"""
-        if payload.source == _REPLAY_SOURCE:
-            self._replay_session_ids.add(payload.live_session_id)
+        if payload.kind == SESSION_KIND_REHEARSAL:
             return
         self._live = _LiveState(
             live_session_id=payload.live_session_id,
@@ -192,7 +190,7 @@ class LiveStatusReporter:
 
     async def _on_live_ended(self, event_name: str, payload: LiveEndedPayload, source: str) -> None:
         """收播：停心跳，推一份"已下播"快照（空场次被丢弃时一并告知，插件不再提这场）。"""
-        if payload.source == _REPLAY_SOURCE or payload.live_session_id in self._replay_session_ids:
+        if payload.kind == SESSION_KIND_REHEARSAL:
             return
         live = self._live
         if live is None or live.live_session_id != payload.live_session_id:
@@ -206,7 +204,7 @@ class LiveStatusReporter:
 
     async def _on_recap_written(self, event_name: str, payload: StreamerRecapWrittenPayload, source: str) -> None:
         """回顾写好：后台推回顾与整场记录，失败按退避重试，不阻塞事件分发。"""
-        if payload.live_session_id in self._replay_session_ids:
+        if payload.kind == SESSION_KIND_REHEARSAL:
             return
         body = {
             "type": "recap",

@@ -154,10 +154,12 @@ class SessionRecapWriter:
             recap_text=text,
         )
         logger.info(f"场次回顾已写入（场次 {live_session_id}）: {text[:60]}")
-        await self._announce_written(int(live_session_id), started_at, ended_at, text)
+        await self._announce_written(int(live_session_id), session_row.kind, started_at, ended_at, text)
         return text
 
-    async def _announce_written(self, live_session_id: int, started_at_ms: int, ended_at_ms: int, text: str) -> None:
+    async def _announce_written(
+        self, live_session_id: int, kind: SessionKind, started_at_ms: int, ended_at_ms: int, text: str
+    ) -> None:
         """回顾落库后发事实通知；收播整理与启动补写都经 ``write_recap``，两条路径都会发。
 
         通知失败只告警：回顾已经在库里，开播注入与回忆工具不受影响。
@@ -169,6 +171,7 @@ class SessionRecapWriter:
                 CoreEvents.STREAMER_RECAP_WRITTEN,
                 StreamerRecapWrittenPayload(
                     live_session_id=live_session_id,
+                    kind=kind,
                     started_at_ms=started_at_ms,
                     ended_at_ms=ended_at_ms,
                     recap_text=text,

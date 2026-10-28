@@ -211,6 +211,13 @@ async def test_recap_written_event_on_settle_and_backfill_only_when_stored(store
     assert event_name == CoreEvents.STREAMER_RECAP_WRITTEN
     assert (payload.live_session_id, payload.started_at_ms, payload.ended_at_ms) == (pk, 1_000, 9_000)
     assert payload.recap_text == text
+    assert payload.kind == "live"
+
+    # 彩排场的回顾照写（彩排线自己要用），事件带上类型让对外同步据此跳过
+    rehearsal_pk = await _ended_session(store, kind="rehearsal")
+    await _streamer_says(store, rehearsal_pk, "调试时说的话", 2_000)
+    assert await _recap_writer(store, _llm("彩排回顾"), bus).write_recap(rehearsal_pk)
+    assert bus.emit.await_args.args[1].kind == "rehearsal"
 
     bus.emit.reset_mock()
     failed_pk = await _ended_session(store)
