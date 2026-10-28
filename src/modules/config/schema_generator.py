@@ -237,8 +237,8 @@ class ConfigSchemaGenerator:
             except Exception:
                 # default_factory 是任意可调用对象，可能依赖尚未就绪的外部状态、
                 # 或接受本模型实例为参数而在此处调用签名不兼容；无法产出默认值
-                # 时放弃填充，前端回退为空值
-                pass
+                # 时放弃填充（debug 留痕），前端回退为空值
+                logger.debug("default_factory 调用失败，跳过 Schema 默认值填充", exc=True)
 
         # array items
         unwrapped_annotation = _unwrap_optional(annotation)

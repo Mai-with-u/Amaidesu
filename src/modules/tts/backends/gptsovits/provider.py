@@ -270,8 +270,8 @@ class GPTSoVITSProvider:
             if write_task is not None and not write_task.done():
                 try:
                     await asyncio.wait_for(asyncio.shield(write_task), timeout=1.0)
-                except Exception:  # noqa: BLE001 — 流已关闭的写失败属预期，仅需等待收敛
-                    pass
+                except Exception as exc:  # noqa: BLE001 — 流已关闭的写失败属预期，仅需等待收敛
+                    self.logger.debug(f"取消路径在途写收敛等待失败（流已关闭，属预期）: {exc}", exc=True)
             self.audio_manager.stop_stream(discard_pending=True)
             self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
