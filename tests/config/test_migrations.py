@@ -18,6 +18,7 @@ from src.modules.avatar.platform.warudo.expression_profile import MAIMAI_PROFILE
 from src.modules.config.model_schemas import LLMModelConfig
 from src.modules.config.multi_file_loader import generate_default_configs, get_config_version, load_config_dir
 from src.modules.config.upgrade import (
+    _FILE_HOOKS,
     _drop_minecraft_max_steps,
     _drop_simulator_llm_profile,
     _upgrade_builder_scene_transport,
@@ -401,6 +402,114 @@ CASES = [
     ),
     Case("widget-html-page", ("infra.toml",), _seed_widget_html_page, _check_widget_html_page),
 ]
+
+
+# 钩子 → 用例对账表：升级注册表里每个钩子必须被 CASES 中的用例或某个具名测试函数覆盖，
+# 否则该钩子的迁移行为（含幂等与写回）没有任何验证兜底。覆盖定位分两类：
+#   ("case", <Case.id>)     —— 覆盖体是本文件 CASES 用例表中的用例；
+#   ("test", "<文件名>#<测试函数名>") —— 覆盖体是 tests/config 下的具名测试函数。
+HOOK_COVERAGE: dict[str, tuple[str, str]] = {
+    # CASES 用例表覆盖
+    "agents_force_field_rename": ("case", "force-field-rename"),
+    "infra_drop_events_persist": ("case", "events-persist"),
+    "drop_simulator_llm_profile": ("case", "simulator-llm-profile"),
+    "drop_window_event_threshold": ("case", "window-event-threshold"),
+    "drop_text_adv_fake_knobs": ("case", "text-adv-fake-knobs"),
+    "drop_simulator_sc_probability": ("case", "sc-probability"),
+    "logging_directory_subdir": ("case", "logging-directory-old-default"),
+    "vts_lipsync_to_avatar": ("case", "vts-lipsync-to-avatar"),
+    "drop_warudo_subtitle_keys": ("case", "warudo-subtitle-keys"),
+    "avatar_platform_to_avatar_file": ("case", "avatar-platform-graduation"),
+    "avatar_lipsync_to_avatar_file": ("case", "avatar-lipsync-and-idle-bindings"),
+    "warudo_maimai_expression": ("case", "warudo-enabled-gets-maimai-profile"),
+    "drop_minecraft_companion_collectors": ("case", "minecraft-companion-collectors"),
+    "drop_bili_danmaku_message_config": ("case", "bili-danmaku-message-config"),
+    "drop_profile_history_budget": ("case", "profile-history-budget"),
+    "widget_drop_html_page": ("case", "widget-html-page"),
+    # 具名测试函数覆盖
+    "builder_scene_transport": ("test", "test_migrations.py#test_builder_scene_transport_hook_and_writeback"),
+    "drop_minecraft_builder_section": ("test", "test_migrations.py#test_builder_scene_transport_hook_and_writeback"),
+    "drop_minecraft_max_steps": (
+        "test",
+        "test_minecraft_step_limit_migration.py#test_step_limit_removal_is_written_back_only_to_agents",
+    ),
+    "normalize_llm_model_cache_mode": ("test", "test_migrations.py#test_llm_model_cache_switch_normalized_to_enum"),
+    "minecraft_context_tokens": (
+        "test",
+        "test_minecraft_context_tokens_migration.py#test_char_budget_converted_and_written_back",
+    ),
+    "drop_generation_limits": (
+        "test",
+        "test_remove_llm_limits.py#test_legacy_limits_removed_from_disk_only_for_affected_file",
+    ),
+    "drop_input_limits": (
+        "test",
+        "test_remove_llm_limits.py#test_legacy_limits_removed_from_disk_only_for_affected_file",
+    ),
+    "drop_simulator_text_limits": (
+        "test",
+        "test_remove_llm_limits.py#test_legacy_limits_removed_from_disk_only_for_affected_file",
+    ),
+    "drop_tool_input_limits": (
+        "test",
+        "test_remove_llm_limits.py#test_legacy_limits_removed_from_disk_only_for_affected_file",
+    ),
+    "drop_memory_injection_limit": (
+        "test",
+        "test_remove_llm_limits.py#test_legacy_limits_removed_from_disk_only_for_affected_file",
+    ),
+    "drop_tools_memory_section": (
+        "test",
+        "test_tools_memory_section_migration.py#test_tools_memory_section_dropped_and_written_back",
+    ),
+    "web_search_bing_entry_default_swap": (
+        "test",
+        "test_web_search_bing_entry_migration.py#test_old_default_entry_rewritten_and_version_advanced",
+    ),
+    "replyer_style_drop_emoji": (
+        "test",
+        "test_replyer_style_emoji_migration.py#test_old_default_rewritten_and_version_advanced",
+    ),
+    "retire_live_frame_gates": (
+        "test",
+        "test_live_frame_gates_retire_migration.py#test_live_frame_gates_removed_and_written_back",
+    ),
+    "widen_recent_intents_window": (
+        "test",
+        "test_recent_intents_window_migration.py#test_old_default_rewritten_and_written_back",
+    ),
+    "retire_streamer_narrative": (
+        "test",
+        "test_streamer_narrative_retire_migration.py#test_narrative_section_removed_and_written_back",
+    ),
+    "drop_background_cold_timeout": (
+        "test",
+        "test_background_cold_timeout_migration.py#test_background_cold_timeout_dropped_and_written_back",
+    ),
+}
+
+
+def test_every_registered_upgrade_hook_is_covered_by_a_case_or_named_test() -> None:
+    """注册表每个钩子都在对账表里，对账表每项都指向真实存在的用例或测试函数。
+
+    新登记钩子而漏写对账 → 本测试红；删除钩子而漏清对账 → 同样红（防对账表腐烂）。
+    """
+    registered = {hook.name for hooks in _FILE_HOOKS.values() for hook in hooks}
+    assert registered == set(HOOK_COVERAGE), (
+        "升级钩子注册表与用例对账表不一致：\n"
+        f"  注册了但无覆盖记录（新钩子须补对账或补用例）: {sorted(registered - set(HOOK_COVERAGE))}\n"
+        f"  对账表里有但注册表已无（须清理陈旧条目）: {sorted(set(HOOK_COVERAGE) - registered)}"
+    )
+    case_ids = {case.id for case in CASES}
+    for name, (kind, locator) in HOOK_COVERAGE.items():
+        if kind == "case":
+            assert locator in case_ids, f"钩子 {name} 对账指向不存在的用例 {locator!r}"
+        else:
+            file_name, test_name = locator.split("#")
+            path = Path(__file__).parent / file_name
+            assert path.exists() and f"def {test_name}" in path.read_text(encoding="utf-8"), (
+                f"钩子 {name} 对账指向不存在的测试 {locator!r}"
+            )
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.id)

@@ -140,3 +140,41 @@ def test_agent_domain_subscribes_only_to_input_and_infrastructure_events() -> No
 def test_boundary_event_names_still_exist_in_core_events(name: str) -> None:
     """清单里手抄的事件名必须仍是 CoreEvents 的真实常量值，否则边界检查会静默失效。"""
     assert name in set(CORE_EVENT_VALUES.values())
+
+
+_EVENT_CALL_ATTRS = ("emit", "publish", "subscribe", "on")
+
+
+def test_all_src_event_call_sites_use_core_event_names() -> None:
+    """src/ 全域扫描：emit/publish/subscribe/on 的点分字符串字面量事件名必须是 CoreEvents 常量值。
+
+    手抄事件名与 CoreEvents 漂移（改名、拼写错误）会让订阅静默落空，本守护强制
+    事件名以字面量出现时必须与常量值逐一相等（直接引用 ``CoreEvents.X`` 不受限）。
+    不含点号的纯字符串（如通配符 ``*`` 或非事件的首参）不在本守护范围内。
+    """
+    violations: List[Dict] = []
+    core_values = set(CORE_EVENT_VALUES.values())
+    for path in sorted(SRC.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            is_event_call = (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in _EVENT_CALL_ATTRS
+            )
+            if not is_event_call or not node.args:
+                continue
+            arg = node.args[0]
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and "." in arg.value:
+                if arg.value not in core_values:
+                    violations.append(
+                        {"where": f"{path.relative_to(SRC.parent)}:{node.lineno}", "event": arg.value}
+                    )
+    assert not violations, (
+        "事件名字面量不等于任何 CoreEvents 常量值（手抄漂移会让订阅静默落空，"
+        "请改为引用 CoreEvents 常量）：\n"
+        + "\n".join(f"  - {v['where']} {v['event']!r}" for v in violations)
+    )
