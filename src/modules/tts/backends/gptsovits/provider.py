@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from typing import Any, AsyncIterator, Dict, Optional, TYPE_CHECKING, cast
+from typing import Any, AsyncIterator, Dict, Optional, cast
 
 import numpy as np
 
@@ -28,9 +28,6 @@ from ...common import (
     emit_utterance_started,
 )
 from .client import GPTSoVITSClient, GPTSoVITSServiceError
-
-if TYPE_CHECKING:
-    pass
 
 
 # 音频流参数
@@ -177,6 +174,33 @@ class GPTSoVITSProvider:
 
     # ===== 业务方法 =====
 
+    def _synthesis_params(self, text: str, *, streaming: bool) -> Dict[str, Any]:
+        """引擎配置 → 服务端合成参数的统一映射（三条合成路径共用，逐键单一事实源）。
+
+        Args:
+            text: 已规范化的待合成文本。
+            streaming: True 走流式档位（``tts_stream``，档位取配置
+                ``streaming_mode``）；False 取 0（完整返回，``client.tts``
+                的 int 形参语义，与调试/整段合成路径原值一致）。
+        """
+        return {
+            "text": text,
+            "text_lang": self.text_language,
+            "prompt_lang": self.prompt_language,
+            "top_k": self.top_k,
+            "top_p": self.top_p,
+            "temperature": self.temperature,
+            "speed_factor": self.speed_factor,
+            "text_split_method": self.text_split_method,
+            "batch_size": self.batch_size,
+            "batch_threshold": self.batch_threshold,
+            "repetition_penalty": self.repetition_penalty,
+            "sample_steps": self.sample_steps,
+            "super_sampling": self.super_sampling,
+            "media_type": self.media_type,
+            "streaming_mode": self.streaming_mode if streaming else 0,
+        }
+
     async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
         """合成并播放语音。
 
@@ -217,21 +241,7 @@ class GPTSoVITSProvider:
                 # 推理慢时在事件循环线程内等待会冻结整个循环（WebUI 同循环全卡）
                 audio_stream = await asyncio.to_thread(
                     lambda: self.tts_client.tts_stream(  # type: ignore[union-attr]
-                        text=final_text,
-                        text_lang=self.text_language,
-                        prompt_lang=self.prompt_language,
-                        top_k=self.top_k,
-                        top_p=self.top_p,
-                        temperature=self.temperature,
-                        speed_factor=self.speed_factor,
-                        text_split_method=self.text_split_method,
-                        batch_size=self.batch_size,
-                        batch_threshold=self.batch_threshold,
-                        repetition_penalty=self.repetition_penalty,
-                        sample_steps=self.sample_steps,
-                        super_sampling=self.super_sampling,
-                        media_type=self.media_type,
-                        streaming_mode=self.streaming_mode,
+                        **self._synthesis_params(final_text, streaming=True)
                     )
                 )
 
@@ -317,23 +327,7 @@ class GPTSoVITSProvider:
         final_text = normalize_tts_text(text)
         if not final_text.strip():
             return b""
-        return self.tts_client.tts(
-            text=final_text,
-            text_lang=self.text_language,
-            prompt_lang=self.prompt_language,
-            top_k=self.top_k,
-            top_p=self.top_p,
-            temperature=self.temperature,
-            speed_factor=self.speed_factor,
-            text_split_method=self.text_split_method,
-            batch_size=self.batch_size,
-            batch_threshold=self.batch_threshold,
-            repetition_penalty=self.repetition_penalty,
-            sample_steps=self.sample_steps,
-            super_sampling=self.super_sampling,
-            media_type=self.media_type,
-            streaming_mode=False,
-        )
+        return self.tts_client.tts(**self._synthesis_params(final_text, streaming=False))  # type: ignore[union-attr]
 
     async def _process_audio_stream(self, audio_stream: Any) -> AsyncIterator[np.ndarray]:
         """处理音频流（同步/异步迭代器）"""
@@ -383,19 +377,8 @@ class GPTSoVITSProvider:
         if not clean.strip():
             raise ValueError("文本规范化后为空，无可合成内容")
 
-        params: Dict[str, Any] = {
-            "text": clean,
-            "text_lang": self.text_language,
-            "prompt_lang": self.prompt_language,
-            "temperature": self.temperature,
-            "speed_factor": self.speed_factor,
-            "sample_steps": self.sample_steps,
-            "top_k": self.top_k,
-            "top_p": self.top_p,
-            # 调试合成取完整 wav：固定非流式，忽略外部 streaming_mode
-            "streaming_mode": 0,
-            "media_type": self.media_type,
-        }
+        # 调试合成取完整 wav：固定非流式，忽略外部 streaming_mode
+        params = self._synthesis_params(clean, streaming=False)
         for key, value in (overrides or {}).items():
             if value is not None and key in params:
                 params[key] = value
