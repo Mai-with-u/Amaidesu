@@ -54,7 +54,13 @@ def test_get_config_merged_view_masks_secrets_and_hides_retired_limits(client) -
 @pytest.mark.parametrize(
     ("key", "value", "file", "restart", "read"),
     [
-        ("infra.dashboard.port", 60299, "infra.toml", True, lambda d: d["dashboard"]["port"]),  # infra 归入 restart（ADR-049）
+        (
+            "infra.dashboard.port",
+            60299,
+            "infra.toml",
+            True,
+            lambda d: d["dashboard"]["port"],
+        ),  # infra 归入 restart（ADR-049）
         (
             "tools.tools.tasks.poll_interval_ms",
             3000,

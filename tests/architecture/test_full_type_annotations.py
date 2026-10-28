@@ -38,7 +38,6 @@ def test_all_src_functions_are_fully_annotated() -> None:
                 missing.append("<return>")
             if missing:
                 violations.append(f"{path.relative_to(SRC.parent)}:{node.lineno} {node.name} 缺注解: {missing}")
-    assert not violations, (
-        "src/ 下存在缺类型注解的函数/方法（参数与返回值必须完整注解）：\n"
-        + "\n".join(f"  - {item}" for item in violations)
+    assert not violations, "src/ 下存在缺类型注解的函数/方法（参数与返回值必须完整注解）：\n" + "\n".join(
+        f"  - {item}" for item in violations
     )

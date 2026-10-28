@@ -170,11 +170,8 @@ def test_all_src_event_call_sites_use_core_event_names() -> None:
             arg = node.args[0]
             if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and "." in arg.value:
                 if arg.value not in core_values:
-                    violations.append(
-                        {"where": f"{path.relative_to(SRC.parent)}:{node.lineno}", "event": arg.value}
-                    )
+                    violations.append({"where": f"{path.relative_to(SRC.parent)}:{node.lineno}", "event": arg.value})
     assert not violations, (
         "事件名字面量不等于任何 CoreEvents 常量值（手抄漂移会让订阅静默落空，"
-        "请改为引用 CoreEvents 常量）：\n"
-        + "\n".join(f"  - {v['where']} {v['event']!r}" for v in violations)
+        "请改为引用 CoreEvents 常量）：\n" + "\n".join(f"  - {v['where']} {v['event']!r}" for v in violations)
     )

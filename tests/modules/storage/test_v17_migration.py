@@ -135,9 +135,7 @@ def _make_v16_db(db_path: Path) -> None:
     conn.execute(
         "INSERT INTO live_chat (live_session_id, timestamp_ms, content, message_type) VALUES (1, 1, '弹幕', 'danmaku')"
     )
-    conn.execute(
-        "INSERT INTO timeline_summary (live_session_id, start_ms, end_ms, summary) VALUES (1, 1, 2, '摘要')"
-    )
+    conn.execute("INSERT INTO timeline_summary (live_session_id, start_ms, end_ms, summary) VALUES (1, 1, 2, '摘要')")
     conn.commit()
 
 

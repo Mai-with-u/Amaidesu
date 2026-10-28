@@ -87,9 +87,7 @@ async def test_segment_rows_roundtrip_with_optional_fields(store: SQLiteDatabase
         assert await store.rundowns.get_rundown(rundown.rundown_id) == rundown
 
     # 环节按 seq 定序落行；重跑 upsert 全量替换不残留旧行
-    rows = await store.execute(
-        "SELECT seq, seg_id FROM rundown_segments WHERE rundown_id='rd_complex' ORDER BY seq"
-    )
+    rows = await store.execute("SELECT seq, seg_id FROM rundown_segments WHERE rundown_id='rd_complex' ORDER BY seq")
     assert [(r["seq"], r["seg_id"]) for r in rows] == [(0, "s1"), (1, "s2")]
     complex_rundown.segments[0].title = "改名后的开场"
     await store.rundowns.upsert_rundown(complex_rundown)

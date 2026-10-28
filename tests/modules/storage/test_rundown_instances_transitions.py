@@ -19,12 +19,22 @@ def _snapshot(live_session_id: int = 1, *, seg_index: int = 1, paused: bool = Fa
         updated_at_ms=9_999,
         segments=[
             RundownInstanceSegment(
-                seq=0, seg_id="opening", title="开场", task_description="打招呼",
-                expected_ms=60_000, min_duration_ms=30_000, notes="备注",
+                seq=0,
+                seg_id="opening",
+                title="开场",
+                task_description="打招呼",
+                expected_ms=60_000,
+                min_duration_ms=30_000,
+                notes="备注",
             ),
             RundownInstanceSegment(
-                seq=1, seg_id="chat", title="闲聊", task_description="互动",
-                expected_ms=300_000, min_duration_ms=None, notes=None,
+                seq=1,
+                seg_id="chat",
+                title="闲聊",
+                task_description="互动",
+                expected_ms=300_000,
+                min_duration_ms=None,
+                notes=None,
             ),
         ],
     )
@@ -58,9 +68,7 @@ async def test_instance_upsert_replaces_segment_rows_atomically(store: SQLiteDat
     snapshot.paused_at_ms = None
     await store.rundown_instances.upsert(snapshot)
 
-    rows = await store.execute(
-        "SELECT seq, seg_id FROM rundown_instance_segments WHERE live_session_id=1 ORDER BY seq"
-    )
+    rows = await store.execute("SELECT seq, seg_id FROM rundown_instance_segments WHERE live_session_id=1 ORDER BY seq")
     assert [(r["seq"], r["seg_id"]) for r in rows] == [(0, "opening"), (1, "chat"), (2, "extra")]
     fetched = await store.rundown_instances.get_by_session(1)
     assert fetched.seg_index == 2 and fetched.paused_at_ms is None

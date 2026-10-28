@@ -191,9 +191,7 @@ async def test_bad_calls_become_failed_results_instead_of_raising(monkeypatch, p
 
 
 async def test_deepseek_search_404_is_soft_empty_and_401_is_failure(monkeypatch) -> None:
-    provider = WebSearchProvider(
-        config=WebSearchProvider.ConfigSchema(search_engine="deepseek", api_key="sk-test")
-    )
+    provider = WebSearchProvider(config=WebSearchProvider.ConfigSchema(search_engine="deepseek", api_key="sk-test"))
 
     async def not_found(
         method: str,

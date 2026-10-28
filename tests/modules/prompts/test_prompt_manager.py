@@ -97,14 +97,17 @@ def test_declaration_mismatch_fails_fast_but_bad_frontmatter_and_duplicate_keys_
 
 def test_frontmatter_name_overrides_the_path_key_and_extra_scan_roots_are_discovered(tmp_path: Path) -> None:
     manager = _manager(
-        tmp_path / "named", {"decision/intent.md": "---\nname: my_custom_key\ndescription: 测试\nvariables:\n  - var\n---\n内容 $var"}
+        tmp_path / "named",
+        {"decision/intent.md": "---\nname: my_custom_key\ndescription: 测试\nvariables:\n  - var\n---\n内容 $var"},
     )
     assert "my_custom_key" in manager.list_templates() and "decision/intent" not in manager.list_templates()
 
     (tmp_path / "central").mkdir()
     component = tmp_path / "component" / "prompts"
     component.mkdir(parents=True)
-    (component / "tool_action.md").write_text("---\nname: tool_action\nvariables:\n  - action\n---\n动作 $action", encoding="utf-8")
+    (component / "tool_action.md").write_text(
+        "---\nname: tool_action\nvariables:\n  - action\n---\n动作 $action", encoding="utf-8"
+    )
     scanning = PromptManager(templates_dir=str(tmp_path / "central"))
     scanning.register_scan_root(component)
     scanning.load_all()

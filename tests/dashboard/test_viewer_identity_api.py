@@ -41,7 +41,11 @@ async def test_pending_list_and_agree_merge(client, store) -> None:
     body = (await client.get("/api/v1/viewers/pending")).json()
     assert body["total"] == 1
     item = body["items"][0]
-    assert (item["viewer_id"], item["open_id"], item["candidate"]) == (pending, OPEN_ID, {"viewer_id": old, "user_name": "甲"})
+    assert (item["viewer_id"], item["open_id"], item["candidate"]) == (
+        pending,
+        OPEN_ID,
+        {"viewer_id": old, "user_name": "甲"},
+    )
     assert (item["candidate_account_id"], item["candidate_names"]) == ("1001", ["甲"])
     detail = (await client.get(f"/api/v1/viewers/{pending}")).json()
     assert (detail["link_status"], detail["link_candidate"]) == ("pending", {"viewer_id": old, "user_name": "甲"})

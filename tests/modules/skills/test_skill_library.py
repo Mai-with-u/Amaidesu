@@ -205,8 +205,15 @@ class TestRender:
         library = SkillLibrary()
         library.replace_remote(
             "MaiCraft",
-            [RemoteSkill(name="survival-opening", description="生存开局", category="survival",
-                         uri="skill://survival/survival-opening/SKILL.md", agents=("minecraft",))],
+            [
+                RemoteSkill(
+                    name="survival-opening",
+                    description="生存开局",
+                    category="survival",
+                    uri="skill://survival/survival-opening/SKILL.md",
+                    agents=("minecraft",),
+                )
+            ],
         )
 
         assert render_catalog(library.catalog("minecraft")).splitlines() == [
@@ -221,10 +228,20 @@ class TestRemote:
         library.replace_remote(
             "MaiCraft",
             [
-                RemoteSkill(name="survival-opening", description="生存开局", category="survival",
-                            uri="skill://survival/survival-opening/SKILL.md", agents=("minecraft",)),
-                RemoteSkill(name="create-power-network", description="动力网", category="create",
-                            uri="skill://create/create-power-network/SKILL.md", agents=("minecraft",)),
+                RemoteSkill(
+                    name="survival-opening",
+                    description="生存开局",
+                    category="survival",
+                    uri="skill://survival/survival-opening/SKILL.md",
+                    agents=("minecraft",),
+                ),
+                RemoteSkill(
+                    name="create-power-network",
+                    description="动力网",
+                    category="create",
+                    uri="skill://create/create-power-network/SKILL.md",
+                    agents=("minecraft",),
+                ),
             ],
         )
 
@@ -243,8 +260,15 @@ class TestRemote:
 
         library.replace_remote(
             "MaiCraft",
-            [RemoteSkill(name="streaming_policy", description="远端同名", category="streaming",
-                         uri="skill://streaming/streaming_policy/SKILL.md", agents=("minecraft",))],
+            [
+                RemoteSkill(
+                    name="streaming_policy",
+                    description="远端同名",
+                    category="streaming",
+                    uri="skill://streaming/streaming_policy/SKILL.md",
+                    agents=("minecraft",),
+                )
+            ],
         )
 
         assert library.remote("streaming_policy", "minecraft") is None
@@ -255,8 +279,15 @@ class TestRemote:
         library = _library(tmp_path)
         library.replace_remote(
             "MaiCraft",
-            [RemoteSkill(name="survival-opening", description="生存开局", category="survival",
-                         uri="skill://survival/survival-opening/SKILL.md", agents=("minecraft",))],
+            [
+                RemoteSkill(
+                    name="survival-opening",
+                    description="生存开局",
+                    category="survival",
+                    uri="skill://survival/survival-opening/SKILL.md",
+                    agents=("minecraft",),
+                )
+            ],
         )
 
         library.clear_remote("MaiCraft")

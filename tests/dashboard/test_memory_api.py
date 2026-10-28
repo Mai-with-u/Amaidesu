@@ -20,7 +20,9 @@ async def _seed_profiles(store: SQLiteDatabase, count: int) -> list[int]:
     """观众递增，文本含可搜索关键词；画像只挂在已建档的观众上，先建档。返回观众 ID。"""
     vids = []
     for i in range(count):
-        vid = await seed_viewer(store.viewers, platform="bilibili", user_id=f"u_{i}", user_name=f"观众{i}", timestamp_ms=1)
+        vid = await seed_viewer(
+            store.viewers, platform="bilibili", user_id=f"u_{i}", user_name=f"观众{i}", timestamp_ms=1
+        )
         text = f"印象{i}：喜欢Minecraft" if i % 2 else f"印象{i}：喜欢恐怖游戏"
         await store.viewer_profiles.upsert_profile(viewer_id=vid, profile_text=text, last_compressed_at_ms=1_000 + i)
         vids.append(vid)

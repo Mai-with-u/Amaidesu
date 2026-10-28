@@ -77,7 +77,13 @@ async def test_transcript_merges_chat_and_super_chats_in_time_order(store: SQLit
     assert body["lines"] == [
         # 归到观众的行用内部观众 ID（换了数据源在 MaiBot 里也是同一个人）；没归到观众的旧行回退原始外部 ID
         {"ts_ms": BASE_MS + 1_000, "role": "viewer", "user_id": "viewer:7", "user_name": "小明", "text": "来了来了"},
-        {"ts_ms": BASE_MS + 1_500, "role": "viewer", "user_id": "1002", "user_name": "阿花", "text": "[醒目留言 ¥30] 加油"},
+        {
+            "ts_ms": BASE_MS + 1_500,
+            "role": "viewer",
+            "user_id": "1002",
+            "user_name": "阿花",
+            "text": "[醒目留言 ¥30] 加油",
+        },
         {"ts_ms": BASE_MS + 2_000, "role": "streamer", "user_id": "", "user_name": "", "text": "欢迎小明！"},
     ]
 

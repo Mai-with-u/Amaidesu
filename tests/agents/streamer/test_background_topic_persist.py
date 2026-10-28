@@ -43,5 +43,7 @@ async def test_persist_appends_timeline_and_refreshes_topic_snapshot(store: SQLi
 
 
 async def test_persist_skipped_without_topic_repo() -> None:
-    maintainer = BackgroundMaintainer(StreamerBackgroundConfig(), room_state=RoomState(), topic_repo=None, prompt_manager=stub_prompt())
+    maintainer = BackgroundMaintainer(
+        StreamerBackgroundConfig(), room_state=RoomState(), topic_repo=None, prompt_manager=stub_prompt()
+    )
     await maintainer._persist_topic_snapshot("摘要", now_ms=1_000, previous_summary_ms=0)
