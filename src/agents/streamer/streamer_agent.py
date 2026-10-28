@@ -480,10 +480,11 @@ class StreamerAgent(BaseAgent):
             logger=self._logger,
         )
         # 决策执行器（两阶段决策的执行半；调度半留 Agent）。测试可注入替身，
-        # 契约 = ``execute(batch, *, forced, trigger_cause, proactive)``；替身若声明
-        # ``reminders_provider`` 槽位，这里接上递话取空动词（真实执行器经构造参数收取）
+        # 契约 = ``execute(batch, *, forced, trigger_cause, proactive)``；
+        # 注入方经 ``set_reminders_provider`` 接上递话取空动词（内建构造路径
+        # 走构造参数收取，两者写同一处状态）
         if round_executor is not None:
-            round_executor.reminders_provider = self._drain_reminders
+            round_executor.set_reminders_provider(self._drain_reminders)
         self._rounds = round_executor or DecisionRoundExecutor(
             planner=self._planner,
             speech=self._speech,

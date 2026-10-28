@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from unittest.mock import MagicMock
 
 from src.agents.streamer.config import StreamerConfig
@@ -42,14 +42,19 @@ class FakeRoundExecutor:
     """决策轮执行器替身：``execute`` 记录调用并返回固定结果，供测试替换决策执行半。
 
     缺省不消费运营递话提醒队列（真实执行器在任何决策窗入口取空队列）；
-    ``drain_reminders = True`` 后经 ``reminders_provider`` 取空，模拟正常送达。
+    ``drain_reminders = True`` 后经 ``set_reminders_provider`` 接线注入的
+    取空动词取空，模拟正常送达。
     """
 
     def __init__(self, result: Optional[Dict[str, Any]] = None) -> None:
         self.result: Dict[str, Any] = result if result is not None else {}
         self.calls: List[Dict[str, Any]] = []
         self.drain_reminders: bool = False
-        self.reminders_provider: Any = None
+        self._reminders_provider: Optional[Any] = None
+
+    def set_reminders_provider(self, fn: Callable[[], str]) -> None:
+        """与真实 DecisionRoundExecutor 同签名的递话来源接线入口。"""
+        self._reminders_provider = fn
 
     async def execute(
         self,
@@ -63,8 +68,8 @@ class FakeRoundExecutor:
         self.calls.append(
             {"batch": list(batch), "forced": forced, "trigger_cause": trigger_cause, "proactive": proactive, **kwargs}
         )
-        if self.drain_reminders and self.reminders_provider is not None:
-            self.reminders_provider()
+        if self.drain_reminders and self._reminders_provider is not None:
+            self._reminders_provider()
         return dict(self.result)
 
 

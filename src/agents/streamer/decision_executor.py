@@ -133,6 +133,10 @@ class DecisionRoundExecutor:
         # 决策轮次自增计数器（round_id 生成用；进程内单调）
         self._round_seq: int = 0
 
+    def set_reminders_provider(self, fn: Callable[[], str]) -> None:
+        """接线运营递话来源：注入方经此方法提供取空动词，与构造参数通道同写一处。"""
+        self._reminders_provider = fn
+
     async def execute(
         self,
         batch: List[RoomMessagePayload],
