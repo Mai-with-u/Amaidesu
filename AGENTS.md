@@ -55,7 +55,7 @@
 - 事件名一律引用 `CoreEvents` 常量，拼写正确性与全局可检索性都靠它保证
 - 每个异常路径都记录日志并携带原因上下文，空 catch 块按缺陷处理
 - 测试失败即缺陷暴露：转绿的途径是修复代码或修复测试本身，删除/跳过测试达成的绿灯不构成验证
-- 测试按被测源码包镜像归属（`tests/agents/` 镜像 `src/agents/`，`tests/modules/` 镜像 `src/modules/`），归属与编写细则见 `tests/AGENTS.md`
+- 测试按被测源码包镜像归属（`tests/agents/` 镜像 `src/agents/`，`tests/modules/` 镜像 `src/modules/`），归属与编写细则见 `tests/AGENTS.md`；写或改测试先加载 `testing-conventions` skill（操作检查单与基建地图）
 - 等事件派发落地用 EventBus 的 `wait_until_drained()`，不写真实 sleep；时间的流逝用注入时钟，攒批窗口、重试退避、超时判定不依赖真实时间流逝
 - 需要 patch 私有成员（前导下划线）才能搭的测试，视为生产模块缺接缝的缺陷：上报并修接缝，不在测试里绕过
 - bug 修复保持最小改动面，重构意图另开任务

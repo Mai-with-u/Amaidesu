@@ -1,6 +1,6 @@
 # tests/ 目录规则
 
-本文件约束在 tests/ 目录下工作的编码代理；仓库级硬约束见根目录 AGENTS.md，机器本地约定见 AGENTS.local.md。
+本文件约束在 tests/ 目录下工作的编码代理；仓库级硬约束见根目录 AGENTS.md，机器本地约定见 AGENTS.local.md。写或改测试先加载 `testing-conventions` skill——它是本文件的操作化重述（检查单与基建地图），两者不一致以本文件为准。
 
 ## 测试树归属（新测试放哪边）
 
