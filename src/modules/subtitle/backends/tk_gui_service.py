@@ -16,7 +16,7 @@ import contextlib
 import queue
 import threading
 import tkinter as tk
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from src.modules.config.core_schemas import SubtitleGuiParams
 from src.modules.logging import get_logger
@@ -101,38 +101,13 @@ class SubtitleGuiService(WindowPlacer):
         # 正在更新字幕文本：更新过程中会跑一次事件循环，自动隐藏巡检不得在此期间
         # 清空文本/缩回窗口
         self._updating_text = False
-        # 窗口尺寸自持：geometry 的宽高参数按窗口缩放放大后交给 Tk，位置不
-        # 缩放；winfo 系列返回物理像素，而 geometry 回读返回逻辑单位。位置
-        # 锚定底边——字幕窗贴底展示，内容变高只向上扩展，底边必须钉在屏幕
-        # 底部；顶边由"底边减目标高度"算出，但目标高度与实际高度不等时（窗口
-        # 不缩、校正未收敛）回读高度里含未收敛的放大残差，直接拿它反推会让
-        # 窗口每次调整都向下爬一截，所以只在高度确实被改到位时才挪顶边。
-        self._target_width_px = 0
-        self._window_bottom_px = 0
-        self._default_window_height_px = 0
-        # 底边距屏幕底部的偏移（物理像素），窗口映射后据此校正摆放位置
-        self._bottom_offset_px = 0
-        # 上一步期望的窗口高度（物理像素），供未到位时的延迟重试用
-        self._last_target_height_px = 0
-        # 已经为哪个目标高度重试过，避免"重试仍不到位→再重试"的自我重排
-        self._height_retry_target = 0
-        # 屏幕可用范围缓存 (left, top, right, bottom)，位置夹取与摆放都用它
-        self._screen_bounds: Optional[Tuple[int, int, int, int]] = None
-        # 显示器矩形缓存（物理像素）；None 表示尚未枚举，空列表在 _monitor_rects
-        # 里统一按"枚举不到"处理
-        self._monitors: Optional[List[Tuple[int, int, int, int]]] = None
-        # 当前指针位置：拖动夹取按指针所在显示器选边界，窗口才不会在相邻显示器
-        # 之间跳来跳去。非拖动期间等于窗口左上角，夹取退回按窗口位置判定
-        self._pointer_pos: Tuple[int, int] = (0, 0)
-        # 用户是否亲手挪过窗口：启动后的自动定位会重摆窗口，一旦用户动过就不再
-        # 插手，否则拖动刚落下就被定位回调按旧锚点搬回去（看起来像被甩飞）
-        self._user_moved_window = False
-        # 拖动中的指针位置与窗口目标位置，见 _start_move/_on_move
-        self._move_pointer: Tuple[int, int] = (0, 0)
-        self._move_target: Tuple[int, int] = (0, 0)
-        # 最近一次请求的高度（逻辑单位，0 表示无未收敛请求），用于在没有窗口
-        # 缩放口径时按"请求 → 回读"实测换算出缩放系数
-        self._last_requested_height_px = 0
+        # 摆位域状态字段（窗口尺寸收敛、显示器夹取、拖动增量等）归 WindowPlacer
+        # 所有，由其 _init_placement_state() 声明
+        self._init_placement_state()
+
+    def _gui_alive(self) -> bool:
+        """WindowPlacer 的生命期询问钩子：GUI 线程仍在运行即摆位回调可执行。"""
+        return self._gui_running
 
     @property
     def enabled(self) -> bool:

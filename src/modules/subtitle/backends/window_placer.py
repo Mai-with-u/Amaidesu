@@ -1,9 +1,13 @@
 """WindowPlacer - 字幕窗口摆位状态机（混入 SubtitleGuiService）
 
-DPI 缩放收敛、底边锚定、多显示器夹取与拖动增量的全部方法与口径注释集中
-在此。混入而非组合：方法直接读写服务的窗口状态（``self.root``、
-``self._window_bottom_px`` 等），拆成独立对象需要为这些状态造一层窄接口，
-属行为外的额外抽象；纯代码搬移用混入保持行为与测试不变。
+DPI 缩放收敛、底边锚定、多显示器夹取与拖动增量的全部方法、状态字段与口径
+注释集中在此。混入而非组合：方法直接读写 ``self.root``/``self.logger`` 等
+窗口与日志依赖，拆成独立对象需要为这些依赖造一层窄接口，属行为外的额外
+抽象；用混入保持行为与测试不变。
+
+摆位状态字段由 ``_init_placement_state()`` 声明，由宿主构造链调用；宿主的
+GUI 线程生命期不在此管辖——摆位方法经 ``_gui_alive()`` 钩子询问"GUI 还活着
+吗"，宿主覆写为回报其线程运行标志。
 """
 
 from __future__ import annotations
@@ -25,7 +29,51 @@ from src.modules.subtitle.backends.window_geometry import (
 
 
 class WindowPlacer:
-    """窗口摆位方法集：供 ``SubtitleGuiService`` 混入，依赖其 ``root``/``logger`` 与摆位状态属性。"""
+    """窗口摆位方法集：供 ``SubtitleGuiService`` 混入，依赖 ``root``/``logger``
+    等窗口与日志面（由宿主构造），摆位状态字段归本类所有。"""
+
+    def _init_placement_state(self) -> None:
+        """声明摆位域的全部状态字段；由宿主构造链调用（本类无 ``__init__``）。"""
+        # 窗口尺寸自持：geometry 的宽高参数按窗口缩放放大后交给 Tk，位置不
+        # 缩放；winfo 系列返回物理像素，而 geometry 回读返回逻辑单位。位置
+        # 锚定底边——字幕窗贴底展示，内容变高只向上扩展，底边必须钉在屏幕
+        # 底部；顶边由"底边减目标高度"算出，但目标高度与实际高度不等时（窗口
+        # 不缩、校正未收敛）回读高度里含未收敛的放大残差，直接拿它反推会让
+        # 窗口每次调整都向下爬一截，所以只在高度确实被改到位时才挪顶边。
+        self._target_width_px = 0
+        self._window_bottom_px = 0
+        self._default_window_height_px = 0
+        # 底边距屏幕底部的偏移（物理像素），窗口映射后据此校正摆放位置
+        self._bottom_offset_px = 0
+        # 上一步期望的窗口高度（物理像素），供未到位时的延迟重试用
+        self._last_target_height_px = 0
+        # 已经为哪个目标高度重试过，避免"重试仍不到位→再重试"的自我重排
+        self._height_retry_target = 0
+        # 屏幕可用范围缓存 (left, top, right, bottom)，位置夹取与摆放都用它
+        self._screen_bounds: Optional[Tuple[int, int, int, int]] = None
+        # 显示器矩形缓存（物理像素）；None 表示尚未枚举，空列表在 _monitor_rects
+        # 里统一按"枚举不到"处理
+        self._monitors: Optional[List[Tuple[int, int, int, int]]] = None
+        # 当前指针位置：拖动夹取按指针所在显示器选边界，窗口才不会在相邻显示器
+        # 之间跳来跳去。非拖动期间等于窗口左上角，夹取退回按窗口位置判定
+        self._pointer_pos: Tuple[int, int] = (0, 0)
+        # 用户是否亲手挪过窗口：启动后的自动定位会重摆窗口，一旦用户动过就不再
+        # 插手，否则拖动刚落下就被定位回调按旧锚点搬回去（看起来像被甩飞）
+        self._user_moved_window = False
+        # 拖动中的指针位置与窗口目标位置，见 _start_move/_on_move
+        self._move_pointer: Tuple[int, int] = (0, 0)
+        self._move_target: Tuple[int, int] = (0, 0)
+        # 最近一次请求的高度（逻辑单位，0 表示无未收敛请求），用于在没有窗口
+        # 缩放口径时按"请求 → 回读"实测换算出缩放系数
+        self._last_requested_height_px = 0
+
+    def _gui_alive(self) -> bool:
+        """GUI 是否仍在运行：摆位回调（after 定时器）在窗口销毁后仍可能触发。
+
+        单独跑摆位逻辑（如测试直接构造本类）默认视为存活；宿主覆写为回报
+        其 GUI 线程运行标志。
+        """
+        return True
 
     def _logical_size(self, size_px: int) -> int:
         """把物理像素尺寸折算成 geometry 期望的逻辑单位。"""
@@ -113,7 +161,7 @@ class WindowPlacer:
         把底边算错，所以没把握时留一次重试机会。用户已经亲手挪过窗口时只记
         高度下限，不再重摆位置——用户的位置优先。
         """
-        if not self.root or not self._gui_running:
+        if not self.root or not self._gui_alive():
             return
         measured = self.root.winfo_height()
         if measured <= 1:
@@ -160,7 +208,7 @@ class WindowPlacer:
         优先。夹取只用显示器边界与目标高度这类绝对量，不与上一轮回读位置叠加，
         因此不会像"按回读高度反推"那样逐次漂移。
         """
-        if not self.root or not self._gui_running:
+        if not self.root or not self._gui_alive():
             return
         if self._default_window_height_px <= 0:
             # 窗口映射前（或 _measure_default_window_height 未及执行）先按配置
@@ -222,7 +270,7 @@ class WindowPlacer:
         于是"夹取时按旧尺寸算出的位置"配上"新尺寸"就探出显示器外。回读一次实际
         尺寸再夹，越界时补发位置请求；已经是目标位置时什么都不做，不引入漂移。
         """
-        if not self.root or not self._gui_running:
+        if not self.root or not self._gui_alive():
             return
         rect = self._monitor_under_window()
         if rect is None:
@@ -237,7 +285,7 @@ class WindowPlacer:
 
     def _retry_window_height(self) -> None:
         """校正上一步没到位的窗口高度（延迟一拍重试一次）。"""
-        if not self.root or not self._gui_running:
+        if not self.root or not self._gui_alive():
             return
         if abs(self.root.winfo_height() - self._last_target_height_px) <= 2:
             return
