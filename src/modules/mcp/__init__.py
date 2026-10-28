@@ -28,7 +28,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from src.modules.logging import get_logger
 from src.modules.mcp.client import McpClient
@@ -42,12 +42,21 @@ logger = get_logger("McpTools")
 # 装配报告结构：{server_name: {"ok": bool, "tools": int, "error": str}}
 BindReport = Dict[str, Dict[str, Any]]
 
+# 按 (server 名, 配置) 构造客户端的工厂：装配入口的构造接缝，
+# 测试注入进程内替身时经此传入，不替换公开类属性。
+McpClientFactory = Callable[[str, McpServerConfig], McpClient]
+
+
+def _default_client_factory(name: str, config: McpServerConfig) -> McpClient:
+    return McpClient(name=name, config=config)
+
 
 async def bind_mcp_tools(
     registry: ToolRegistry,
     raw_config: Optional[Dict[str, Any]] = None,
     *,
     provider: str = "",
+    client_factory: Optional[McpClientFactory] = None,
 ) -> BindReport:
     """装配 MCP 外部工具源：连接所有配置的 server 并注册其工具。
 
@@ -57,6 +66,8 @@ async def bind_mcp_tools(
             （键 ``servers`` → {别名: McpServerConfig}）
         provider: 注册来源标记（默认 "" = 用 **server 名** 作为 provider 标识，
             如 maicraft → "maicraft"；也可显式传值覆盖，如 "game"）
+        client_factory: 可选——客户端构造接缝（缺省构造真实 ``McpClient``；
+            测试注入进程内替身用，不替换模块属性）
 
     Returns:
         ``{server_name: {"ok", "tools", "error", "degraded"}}`` 报告。
@@ -69,12 +80,13 @@ async def bind_mcp_tools(
     """
     cfg = McpExternalConfig.parse_extra(raw_config)
     report: BindReport = {}
+    make_client = client_factory or _default_client_factory
 
     for server_name in cfg.enabled_servers():
         server_cfg: McpServerConfig = cfg.servers[server_name]
         entry: Dict[str, Any] = {"ok": False, "tools": 0, "error": "", "degraded": False}
         try:
-            client = McpClient(name=server_name, config=server_cfg)
+            client = make_client(server_name, server_cfg)
             prov = McpToolProvider(
                 client=client,
                 server_name=server_name,

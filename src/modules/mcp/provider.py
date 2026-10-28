@@ -78,6 +78,7 @@ class McpToolProvider(ConnectionToolProvider):
         attention_uri: Optional[str] = None,
         attention_read_tool: Optional[str] = None,
         attention_read_arguments: Optional[dict] = None,
+        specs: Optional[List[ToolSpec]] = None,
     ) -> None:
         self._client = client
         self.server_name = server_name
@@ -95,7 +96,9 @@ class McpToolProvider(ConnectionToolProvider):
         # 资源订阅只建一次，最后一个订阅方退订时才真正断开。
         self._notification_callbacks: List[Any] = []
         self._notification_unsubscribe: Optional[Any] = None
-        self._specs: List[ToolSpec] = []
+        # specs 缓存的构造注入点（缺省空列表，正常路径由 setup 拉取填充；
+        # 预置缓存的调用方自行负责连接态，通常配合 mark_connected 使用）
+        self._specs: List[ToolSpec] = list(specs) if specs else []
         # switch_config 与回调槽同一约定：绑定处要等 setup() 拉到清单（或决定
         # 降级重试）后才能赋值，只能在构造之后声明，故为公开属性
         self.switch_config: Optional[Dict[str, str]] = None

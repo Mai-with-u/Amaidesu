@@ -13,7 +13,14 @@ from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.mcp.client import McpClient
 from src.modules.mcp.provider import McpToolProvider
 from src.modules.tools import ToolInvocation, ToolRegistry, ToolSpec
-from tests.modules.mcp.fakes import AnyConfig, FakeMcpClient, FakeResult, FakeTool
+from tests.modules.mcp.fakes import (
+    AnyConfig,
+    FakeMcpClient,
+    FakeResult,
+    FakeTool,
+    recording_client_factory,
+    scripted_client_factory,
+)
 
 
 def _provider(server: str = "serverA", provider: Optional[str] = None) -> tuple[FakeMcpClient, McpToolProvider]:
@@ -31,9 +38,8 @@ async def test_setup_caches_specs_with_raw_names_and_derived_full_names() -> Non
     assert specs[0].provider == "serverA" and specs[1].parameters_schema == {"type": "object"}
     assert prov.name == "serverA"
 
-    client._connected = False
     broken_client, broken = _provider()
-    broken_client._connected = False
+    broken_client.set_connected(False)
     assert await broken.setup() == 0 and list(broken.list_tools()) == []  # 连不上：降级为 0 工具
 
     overridden_client, overridden = _provider(provider="game")
@@ -61,7 +67,7 @@ async def test_invoke_calls_server_with_raw_name_and_fails_softly() -> None:
     unknown = await prov.invoke(ToolInvocation(tool_name="serverA_nonexistent"))
     assert unknown.success is False and "不属于" in unknown.error_message and len(client.called) == 2
 
-    client._connected = False  # 模拟断连 → call_tool 返回 None
+    client.set_connected(False)  # 模拟断连 → call_tool 返回 None
     dropped = await prov.invoke(ToolInvocation(tool_name="serverA_perceive"))
     assert dropped.success is False and "失败" in dropped.error_message
 
@@ -71,10 +77,10 @@ async def test_connect_disconnect_and_reconnect_delegate_to_client() -> None:
     assert prov.supports_reconnect is True
     assert await prov.connect() is True and client.connect_calls == 0  # 已连接短路，不穿透
 
-    client._connected = False
+    client.set_connected(False)
     client.next_connect_result = True
     assert await prov.connect() is True and client.connect_calls == 1
-    client._connected = False
+    client.set_connected(False)
     client.next_connect_result = False
     assert await prov.connect() is False  # 底层失败透传
 
@@ -94,12 +100,12 @@ async def test_reconnect_rebuilds_channel_resyncs_specs_and_notifies() -> None:
     assert [s.name for s in prov.list_tools()] == ["t1", "t2"] and fired == [False, True]
 
     failing_client, failing = _provider()
-    failing_client._connected = False
+    failing_client.set_connected(False)
     failing_client.next_connect_result = False
     assert await failing.reconnect() is False  # 连不上：不拉清单
 
     empty_client, empty = _provider()
-    empty_client._connected = False
+    empty_client.set_connected(False)
     empty_client.next_connect_result = True
     assert await empty.reconnect() is False and empty.list_tools() == []  # 连上但无工具：视为重连未成
 
@@ -220,22 +226,29 @@ async def test_read_attention_without_declaration_never_guesses_a_tool() -> None
 async def test_business_rejections_keep_tool_available_and_emit_errors(as_exception: bool) -> None:
     from fastmcp.exceptions import ToolError  # 可选依赖，只在需要模拟业务异常时加载
 
-    class Endpoint:
-        async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
-            if arguments.get("valid"):
-                return SimpleNamespace(is_error=False, content=[], structured_content={"value": 1})
-            if as_exception:
-                raise ToolError('{"error":{"code":"invalid_arguments","message":"choose a valid field"}}')
-            return SimpleNamespace(
-                is_error=True,
-                content=[{"type": "text", "text": "choose a valid field"}],
-                structured_content={"error": {"code": "invalid_arguments"}},
-            )
+    async def call_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
+        if arguments.get("valid"):
+            return SimpleNamespace(is_error=False, content=[], structured_content={"value": 1})
+        if as_exception:
+            raise ToolError('{"error":{"code":"invalid_arguments","message":"choose a valid field"}}')
+        return SimpleNamespace(
+            is_error=True,
+            content=[{"type": "text", "text": "choose a valid field"}],
+            structured_content={"error": {"code": "invalid_arguments"}},
+        )
 
-    client = McpClient(name="reference", config=SimpleNamespace())
-    client._connected, client._client = True, Endpoint()
-    provider = McpToolProvider(client=client, server_name="reference")
-    provider._specs = [ToolSpec(name="read", description="", provider="reference")]
+    client = McpClient(
+        name="reference",
+        config=AnyConfig(),
+        transport_factory=lambda: None,  # 替身不读 transport
+        client_factory=scripted_client_factory(call_tool),
+    )
+    assert await client.connect() is True  # 经公开路径建立连接，不手撕内部状态
+    provider = McpToolProvider(
+        client=client,
+        server_name="reference",
+        specs=[ToolSpec(name="read", description="", provider="reference")],  # 构造接缝注入缓存清单
+    )
     provider.mark_connected()  # 连接态语义：登记的 specs 只有在已连接态才对外可见
     bus = EventBus(enable_stats=False)
     events: list[ToolResultPayload] = []
@@ -263,18 +276,22 @@ async def test_business_rejections_keep_tool_available_and_emit_errors(as_except
 
 
 async def test_transport_failures_still_trip_the_tool() -> None:
-    class Endpoint:
-        async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
-            raise ConnectionError("connection reset")
-
-    client = McpClient(name="reference", config=SimpleNamespace())
-    provider = McpToolProvider(client=client, server_name="reference")
-    provider._specs = [ToolSpec(name="read", description="", provider="reference")]
+    client = McpClient(
+        name="reference",
+        config=AnyConfig(),
+        transport_factory=lambda: None,  # 替身不读 transport
+        client_factory=recording_client_factory([]),  # 替身 call_tool 恒抛传输错误
+    )
+    provider = McpToolProvider(
+        client=client,
+        server_name="reference",
+        specs=[ToolSpec(name="read", description="", provider="reference")],  # 构造接缝注入缓存清单
+    )
     provider.mark_connected()  # 连接态语义：登记的 specs 只有在已连接态才对外可见
     registry = ToolRegistry(failure_threshold=3)
     registry.register_provider(provider)
     for _ in range(3):
-        client._connected, client._client = True, Endpoint()  # 每次恢复连接后仍传输故障，避免混入重连实现
+        assert await client.connect() is True  # 每次恢复连接后仍传输故障，避免混入重连实现
         result = await registry.invoke(ToolInvocation(tool_name="reference_read"))
         assert not result.success and not client.connected
     assert registry.is_tripped("reference_read")
@@ -289,7 +306,7 @@ async def _wait_until(predicate: Any, timeout_s: float = 2.0) -> None:
 
 async def test_recovery_retries_until_tools_arrive_then_reports_once() -> None:
     client, prov = _provider()
-    client._connected = False
+    client.set_connected(False)
     assert await prov.setup() == 0
     fired: List[bool] = []
     prov.on_connection_changed = fired.append
@@ -307,7 +324,7 @@ async def test_recovery_retries_until_tools_arrive_then_reports_once() -> None:
 
 async def test_recovery_stops_quietly_when_reconnected_elsewhere() -> None:
     client, prov = _provider()
-    client._connected = False
+    client.set_connected(False)
     await prov.setup()
     prov.start_recovery(base_delay_ms=20, cap_delay_ms=20)
     client.set_tools([FakeTool("read_group", "读群")])
@@ -320,7 +337,7 @@ async def test_recovery_stops_quietly_when_reconnected_elsewhere() -> None:
 
 async def test_close_cancels_recovery_loop() -> None:
     client, prov = _provider()
-    client._connected = False
+    client.set_connected(False)
     await prov.setup()
     prov.start_recovery(base_delay_ms=1, cap_delay_ms=2)
     await _wait_until(lambda: client.connect_calls >= 2)

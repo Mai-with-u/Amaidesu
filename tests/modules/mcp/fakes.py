@@ -93,6 +93,31 @@ class FakeFastmcpClient:
         return self.list_results
 
 
+class ScriptedFastmcpClient(FakeFastmcpClient):
+    """call_tool 行为由测试挂载的客户端替身（经 McpClient 的 client_factory 接缝注入）。
+
+    未挂载行为时与 FakeFastmcpClient 同：call_tool 恒抛传输错误。
+    """
+
+    def __init__(self, *args: Any, call_tool_handler: Any = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._call_tool_handler = call_tool_handler
+
+    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
+        if self._call_tool_handler is None:
+            raise ConnectionError("transport broken")
+        return await self._call_tool_handler(name, arguments)
+
+
+def scripted_client_factory(call_tool_handler: Any) -> Callable[..., Any]:
+    """构造 McpClient 的 client_factory：call_tool 行为按测试需要挂载。"""
+
+    def factory(transport: Any, message_handler: Any = None, init_timeout: float | None = None) -> Any:
+        return ScriptedFastmcpClient(transport, call_tool_handler=call_tool_handler)
+
+    return factory
+
+
 class Updated:
     """ResourceUpdatedNotification 形状替身：handler 只用 params.uri。"""
 
@@ -145,6 +170,10 @@ class FakeMcpClient(McpClient):
 
     def set_tools(self, tools: List[FakeTool]) -> None:
         self._tools = tools
+
+    def set_connected(self, value: bool) -> None:
+        """直接置连接态（模拟断线/上线），不经 connect() 的结果协议。"""
+        self._connected = value
 
     async def connect(self, timeout_seconds: Optional[float] = None) -> bool:
         self.connect_calls += 1
