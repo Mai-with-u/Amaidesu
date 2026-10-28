@@ -574,12 +574,6 @@ class SubtitleGuiService:
             return
         try:
             self.text_queue.put(text)
-            # 文本一到就刷新空闲计时器：自动隐藏按"最后一条字幕"计时，而不是按
-            # 上一次语音输入——TTS 引擎在位时字幕由播放事件直接推进来
-            # （SubtitleService.show → 本方法），不经过任何语音时间戳，计时器会
-            # 一直停留在很久以前，巡检就会在文本还显示着的时候判超时、把多行
-            # 窗口缩回默认高度，字幕于是被裁成中间一行
-            self.last_voice_time_ms = now_ms()
         except Exception as e:
             self.logger.exception(f"放入字幕队列时出错: {e}")
 
