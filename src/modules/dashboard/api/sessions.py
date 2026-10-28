@@ -6,6 +6,7 @@
 - ``POST /sessions/open``      开启新场次（进行中场次先自动结束；可带组件期望运行全集做意图对齐）
 - ``POST /sessions/{id}/close`` 结束指定场次（须为当前进行中场次）
 - ``PATCH /sessions/{id}``     重命名场次（title 空=清除标题）
+- ``PATCH /sessions/{id}/kind`` 更正已结束场次的类型（正式 / 彩排；进行中的场次 409）
 - ``DELETE /sessions/{id}``    删除场次（级联清除明细）
 - ``GET  /sessions/{id}/timeline``          单场时间线回看（明细行 + 事件侧）
 - ``GET  /sessions/{id}/rundown-execution``  单场流程单执行回看（实际 vs 预计）
@@ -28,6 +29,7 @@ from src.modules.dashboard.schemas.session import (
     ComponentPlanReport,
     SessionActionResponse,
     SessionItem,
+    SessionKindRequest,
     SessionListResponse,
     SessionOpenRequest,
     SessionOpenResponse,
@@ -48,7 +50,7 @@ from src.modules.dashboard.services.session_timeline import build_timeline_items
 from src.modules.dashboard.utils.component_helper import config_dir
 from src.modules.logging import get_logger
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
-from src.modules.types.session_kind import SESSION_KIND_LIVE
+from src.modules.types.session_kind import SessionKind
 
 if TYPE_CHECKING:
     from src.modules.session.manager import LiveSessionManager
@@ -84,6 +86,7 @@ def _row_to_item(row: LiveSessionListItem, active_pk: Optional[int]) -> SessionI
     return SessionItem(
         live_session_id=row.id,
         source=row.source or "manual",
+        kind=row.kind,
         title=row.title,
         room_id=row.stream_id or "",
         platform=row.platform or "",
@@ -95,7 +98,7 @@ def _row_to_item(row: LiveSessionListItem, active_pk: Optional[int]) -> SessionI
 
 
 # 来源筛选白名单（防脏值进 SQL 语义层）
-_SESSION_SOURCE_FILTERS = frozenset({"manual", "replay", "legacy"})
+_SESSION_SOURCE_FILTERS = frozenset({"manual", "replay", "generate", "legacy"})
 
 
 @router.get("", response_model=SessionListResponse)
@@ -103,15 +106,17 @@ async def list_sessions(
     server: ServerDep,
     manager: SessionManagerDep,  # noqa: B008
     limit: Annotated[int, Query(ge=1, le=200, description="最多返回条数")] = 50,
-    source: Annotated[Optional[str], Query(description="来源筛选：manual / replay / legacy")] = None,
+    source: Annotated[Optional[str], Query(description="来源筛选：manual / replay / generate / legacy")] = None,
+    kind: Annotated[Optional[SessionKind], Query(description="类型筛选：live=正式 / rehearsal=彩排")] = None,
     q: Annotated[Optional[str], Query(description="标题关键字筛选")] = None,
 ) -> SessionListResponse:
-    """列出直播场次（按开始时间倒序，附消息数），支持来源与标题筛选。"""
+    """列出直播场次（按开始时间倒序，附消息数），支持来源、类型与标题筛选。"""
     if source is not None and source != "" and source not in _SESSION_SOURCE_FILTERS:
         raise HTTPException(status_code=400, detail=f"非法来源筛选: {source}")
     rows = await manager.list_sessions(
         limit=limit,
         source=source or None,
+        kind=kind,
         title_keyword=(q or "").strip() or None,
     )
     active_pk = manager.active_pk
@@ -127,14 +132,16 @@ async def open_session(
     server: ServerDep,
     manager: SessionManagerDep,  # noqa: B008
 ) -> SessionOpenResponse:
-    """开启新直播场次（已有机行进行中时先自动结束）。
+    """开启新直播场次（已有场次进行中时先自动结束）。
 
+    请求必须声明场次类型（正式 / 彩排）：主播记忆按类型分两条线，对外同步
+    只认正式场。
     请求带 ``component_plan`` 时，场次开启后把组件运行态与配置态对齐到该
     期望运行全集（开播引导弹窗的意图应用）；对齐失败不回滚场次，逐项
     结果随响应 ``plan_report`` 回传。
     """
     pk = await manager.open_session(
-        kind=SESSION_KIND_LIVE,
+        kind=request.kind,
         title=request.title,
         room_id=request.room_id,
         platform=request.platform,
@@ -196,6 +203,28 @@ async def rename_session(
     if not renamed:
         raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
     return SessionActionResponse(success=True, detail="场次已重命名" if title else "场次标题已清除")
+
+
+@router.patch("/{session_id}/kind", response_model=SessionActionResponse)
+async def set_session_kind(
+    session_id: int,
+    request: SessionKindRequest,
+    server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
+) -> SessionActionResponse:
+    """更正已结束场次的类型（存量回填判错时人手改）。
+
+    进行中的场次 409：开播时主播已按类型读了上场回顾、对外同步也已按类型
+    决定推不推，中途改会让一场前后分到两条记忆线。
+    """
+    await _fetch_session_row(server, session_id)
+    if manager.active_pk == session_id:
+        raise HTTPException(status_code=409, detail="进行中的场次不能改类型，下播后再改")
+    changed = await manager.set_session_kind(session_id, request.kind)
+    if not changed:
+        raise HTTPException(status_code=409, detail=f"场次 {session_id} 尚未结束，不能改类型")
+    label = "正式" if request.kind == "live" else "彩排"
+    return SessionActionResponse(success=True, detail=f"场次已改为{label}")
 
 
 @router.get("/{session_id}/timeline", response_model=SessionTimelineResponse)

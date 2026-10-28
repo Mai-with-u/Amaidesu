@@ -44,6 +44,7 @@ function sessionItem(): LiveSessionItem {
   return {
     live_session_id: 7,
     source: 'manual',
+    kind: 'live',
     title: '测试场次',
     room_id: 'r1',
     platform: 'test',

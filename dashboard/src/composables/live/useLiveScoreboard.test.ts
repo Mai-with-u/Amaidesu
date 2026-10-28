@@ -120,6 +120,7 @@ describe('useLiveScoreboard（store 接线）', () => {
   const activeSession: LiveSessionItem = {
     live_session_id: 1,
     source: 'manual',
+    kind: 'live',
     title: null,
     room_id: 'r',
     platform: 'bilibili',

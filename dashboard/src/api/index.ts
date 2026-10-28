@@ -88,6 +88,7 @@ import type {
   TriggerProactiveRequest,
   TriggerProactiveResponse,
   LiveSessionListResponse,
+  SessionKind,
   SessionRundownExecutionResponse,
   SessionTimelineResponse,
   SessionReviewResponse,
@@ -288,19 +289,23 @@ export const simulatorApi = {
 // `POST /live-sessions/open`：开启新场次（进行中场次自动结束）。
 // `POST /live-sessions/{id}/close`：结束场次（空场次整行丢弃）。
 // `PATCH /live-sessions/{id}`：重命名场次（title 空=清除标题，列表回落"场次 #id"）。
+// `PATCH /live-sessions/{id}/kind`：更正已结束场次的类型（正式 / 彩排；进行中 409）。
 // `DELETE /live-sessions/{id}`：删除场次（级联清明细）。
 // `GET /live-sessions/{id}/timeline`：单场时间线回看（明细行 + 事件侧合并；
 // before_timestamp_ms 游标向前翻页，响应 has_more / events_pruned 指示续翻与降级）。
 // `POST /live-sessions/open`：带 component_plan（期望运行全集）时，开场后把组件
 // 运行态与配置态对齐到该清单（开播引导弹窗），逐项结果随 plan_report 回传。
 export const liveSessionsApi = {
-  list: (params?: { source?: string; q?: string; limit?: number }) =>
+  list: (params?: { source?: string; kind?: SessionKind; q?: string; limit?: number }) =>
     api.get<LiveSessionListResponse>('/live-sessions', { params }),
-  open: (payload?: { title?: string; component_plan?: ComponentRef[] }) =>
-    api.post<SessionOpenResponse>('/live-sessions/open', payload ?? {}),
+  // 开场必须声明类型（正式 / 彩排）
+  open: (payload: { kind: SessionKind; title?: string; component_plan?: ComponentRef[] }) =>
+    api.post<SessionOpenResponse>('/live-sessions/open', payload),
   close: (id: number) => api.post<SessionActionResponse>(`/live-sessions/${id}/close`),
   rename: (id: number, title?: string) =>
     api.patch<SessionActionResponse>(`/live-sessions/${id}`, { title }),
+  setKind: (id: number, kind: SessionKind) =>
+    api.patch<SessionActionResponse>(`/live-sessions/${id}/kind`, { kind }),
   remove: (id: number) => api.delete<SessionActionResponse>(`/live-sessions/${id}`),
   timeline: (id: number, params?: { limit?: number; before_timestamp_ms?: number }) =>
     api.get<SessionTimelineResponse>(`/live-sessions/${id}/timeline`, { params }),

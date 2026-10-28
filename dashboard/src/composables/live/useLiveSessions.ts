@@ -3,8 +3,8 @@
  *
  * 页面私有状态（仅直播控制台消费），走 composable 而非 Pinia——场次列表与
  * 筛选词离开页面即失效，没有跨页共享语义。场次生命周期本身归后端
- * LiveSessionManager，这里只是控制面：开启 / 结束 / 重命名 / 删除 + 生命周期
- * 事件驱动侧边栏刷新。
+ * LiveSessionManager，这里只是控制面：开启 / 结束 / 重命名 / 更正类型 / 删除 +
+ * 生命周期事件驱动侧边栏刷新。
  */
 
 import { computed, ref, watch } from 'vue';
@@ -15,12 +15,18 @@ import { useNowTick } from '@/composables/useNowTick';
 import { liveSessionsApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { formatDateMD, formatTimeHM, formatElapsedMs } from '@/utils/format';
-import type { LiveSessionItem } from '@/types';
+import type { LiveSessionItem, SessionKind } from '@/types';
 
 const SOURCE_LABEL: Record<string, string> = {
   manual: '手动',
   replay: '回放',
+  generate: '模拟',
   legacy: '历史',
+};
+
+const KIND_LABEL: Record<SessionKind, string> = {
+  live: '正式',
+  rehearsal: '彩排',
 };
 
 /** 场次默认标题（yyyy-MM-dd 周X HH:mm，按给定时刻）：开场次预填与未命名场次重命名预填共用 */
@@ -48,9 +54,10 @@ export function useLiveSessions() {
   const showTestModeNotice = computed(
     () => sessionMode.value === 'live' && !activeExplicitSession.value,
   );
-  /** 场次筛选：标题关键字 + 来源（服务端筛选） */
+  /** 场次筛选：标题关键字 + 来源 + 类型（服务端筛选） */
   const sessionQuery = ref('');
   const sessionSourceFilter = ref('');
+  const sessionKindFilter = ref<SessionKind | ''>('');
   const sessionMode = ref<'live' | 'replay'>('live');
   const selectedSession = ref<LiveSessionItem | null>(null);
 
@@ -62,6 +69,10 @@ export function useLiveSessions() {
 
   function sourceLabel(source: string): string {
     return SOURCE_LABEL[source] ?? source;
+  }
+
+  function kindLabel(kind: SessionKind): string {
+    return KIND_LABEL[kind] ?? kind;
   }
 
   function sessionTimeLabel(item: LiveSessionItem): string {
@@ -92,6 +103,7 @@ export function useLiveSessions() {
     try {
       const response = await liveSessionsApi.list({
         source: sessionSourceFilter.value || undefined,
+        kind: sessionKindFilter.value || undefined,
         q: sessionQuery.value.trim() || undefined,
       });
       sessions.value = response.data.items;
@@ -102,7 +114,7 @@ export function useLiveSessions() {
   }
 
   let sessionFilterTimer: ReturnType<typeof setTimeout> | null = null;
-  watch([sessionQuery, sessionSourceFilter], () => {
+  watch([sessionQuery, sessionSourceFilter, sessionKindFilter], () => {
     if (sessionFilterTimer) clearTimeout(sessionFilterTimer);
     sessionFilterTimer = setTimeout(() => {
       void loadSessions();
@@ -172,6 +184,34 @@ export function useLiveSessions() {
     }
   }
 
+  /**
+   * 更正已结束场次的类型（正式 ↔ 彩排）：存量回填判错时人手改。类型决定这场的
+   * 回顾进哪条记忆线、要不要对外同步，改前确认一次。
+   */
+  async function toggleSessionKind(item: LiveSessionItem): Promise<void> {
+    const next: SessionKind = item.kind === 'live' ? 'rehearsal' : 'live';
+    const hint =
+      next === 'live'
+        ? '改为正式后，这场的回顾会进正式直播的记忆线（下次正式开播可能被当成上一场）。'
+        : '改为彩排后，这场的回顾只在彩排时被读到，正式开播不再把它当成上一场。';
+    try {
+      await ElMessageBox.confirm(hint, `改为${KIND_LABEL[next]}`, {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+      });
+    } catch {
+      return; // 取消
+    }
+    try {
+      await liveSessionsApi.setKind(item.live_session_id, next);
+      ElMessage.success(`场次已改为${KIND_LABEL[next]}`);
+    } catch (error) {
+      ElMessage.error(getApiErrorMessage(error, '修改类型失败'));
+      return;
+    }
+    await loadSessions();
+  }
+
   /** 历史场次 → 回看模式；进行中场次 → 实时模式 */
   function selectSession(item: LiveSessionItem): void {
     if (item.is_active) {
@@ -205,10 +245,12 @@ export function useLiveSessions() {
     showTestModeNotice,
     sessionQuery,
     sessionSourceFilter,
+    sessionKindFilter,
     sessionMode,
     selectedSession,
     sessionTitle,
     sourceLabel,
+    kindLabel,
     sessionTimeLabel,
     elapsedLabel,
     isSelected,
@@ -218,6 +260,7 @@ export function useLiveSessions() {
     onStreamOpened,
     closeSession,
     renameSession,
+    toggleSessionKind,
     removeSession,
     selectSession,
     backToLive,

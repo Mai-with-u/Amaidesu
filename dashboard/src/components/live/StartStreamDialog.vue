@@ -18,6 +18,21 @@
         <el-input id="start-stream-title" v-model="title" placeholder="留空使用默认名" clearable />
       </div>
 
+      <div class="ss-field">
+        <span class="ss-field-label">场次类型</span>
+        <el-radio-group v-model="kind" size="small" aria-label="场次类型">
+          <el-radio-button value="live">正式直播</el-radio-button>
+          <el-radio-button value="rehearsal">彩排（模拟 / 回放 / 调试）</el-radio-button>
+        </el-radio-group>
+        <p class="ss-section-hint">
+          {{
+            kind === 'live'
+              ? '面向真实观众：回顾进正式记忆线，近况同步给 MaiBot。'
+              : '观众是假的或只有自己：回顾只在彩排时被读到，不对外同步；模拟器只能在彩排里开。'
+          }}
+        </p>
+      </div>
+
       <div class="ss-section-title">本次直播内容</div>
       <p class="ss-section-hint">
         勾选的开播时运行；正在运行但未勾选的会被关闭——调试残留看这里清掉。
@@ -111,7 +126,9 @@
         </span>
         <span class="ss-footer-actions">
           <el-button :disabled="submitting" @click="onVisibleChange(false)">取消</el-button>
-          <el-button type="primary" :loading="submitting" @click="onSubmit">开播</el-button>
+          <el-button type="primary" :loading="submitting" @click="onSubmit">{{
+            kind === 'live' ? '开播' : '开始彩排'
+          }}</el-button>
         </span>
       </div>
     </template>
@@ -120,7 +137,8 @@
 
 <script setup lang="ts">
 /**
- * 开播引导弹窗：配置本次直播要开哪些内容（组件意图清单）+ 流程单选择，
+ * 开播引导弹窗：声明场次类型（正式 / 彩排）、配置本次直播要开哪些内容（组件
+ * 意图清单）+ 流程单选择，
  * 单请求完成开场次与组件对齐。清单数据与提交逻辑在 useStartStream；
  * 本组件只负责展示与交互编排。干净成功即关弹窗并上抛 opened（父级刷新
  * 侧栏、回实时视图）；部分失败保留弹窗展示回执，允许改单重试。
@@ -152,6 +170,7 @@ const {
   hasFailures,
   failedItems,
   title,
+  kind,
   planGroups,
   companionNotes,
   rundowns,

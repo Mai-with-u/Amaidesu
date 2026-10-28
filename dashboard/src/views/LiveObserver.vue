@@ -56,7 +56,13 @@
             <el-option label="全部来源" value="" />
             <el-option label="手动" value="manual" />
             <el-option label="回放" value="replay" />
+            <el-option label="模拟" value="generate" />
             <el-option label="历史" value="legacy" />
+          </el-select>
+          <el-select v-model="sessionKindFilter" size="small" class="sessions-kind">
+            <el-option label="全部类型" value="" />
+            <el-option label="正式" value="live" />
+            <el-option label="彩排" value="rehearsal" />
           </el-select>
         </div>
         <ul class="session-list">
@@ -73,6 +79,13 @@
           >
             <div class="session-top">
               <span class="session-name" :title="sessionTitle(item)">{{ sessionTitle(item) }}</span>
+              <!-- 彩排场（模拟 / 回放 / 调试）单独标出；不标即正式场 -->
+              <span
+                v-if="item.kind === 'rehearsal'"
+                class="session-badge is-rehearsal"
+                title="彩排场：回顾只进彩排记忆线，不对外同步"
+                >{{ kindLabel(item.kind) }}</span
+              >
               <span class="session-badge" :class="`is-${item.source}`">{{
                 sourceLabel(item.source)
               }}</span>
@@ -87,6 +100,14 @@
               <span class="session-actions">
                 <el-button class="session-ren" link size="small" @click.stop="renameSession(item)"
                   >改名</el-button
+                >
+                <el-button
+                  v-if="!item.is_active"
+                  class="session-ren"
+                  link
+                  size="small"
+                  @click.stop="toggleSessionKind(item)"
+                  >{{ item.kind === 'live' ? '改彩排' : '改正式' }}</el-button
                 >
                 <el-popconfirm
                   v-if="!item.is_active && item.source !== 'legacy'"
@@ -533,10 +554,12 @@ const {
   showTestModeNotice,
   sessionQuery,
   sessionSourceFilter,
+  sessionKindFilter,
   sessionMode,
   selectedSession,
   sessionTitle,
   sourceLabel,
+  kindLabel,
   sessionTimeLabel,
   elapsedLabel,
   isSelected,
@@ -546,6 +569,7 @@ const {
   onStreamOpened,
   closeSession,
   renameSession,
+  toggleSessionKind,
   removeSession,
   selectSession,
   backToLive,
@@ -1079,6 +1103,10 @@ onMounted(() => {
   width: 96px;
   flex-shrink: 0;
 }
+.sessions-kind {
+  width: 92px;
+  flex-shrink: 0;
+}
 
 .session-list {
   flex: 1;
@@ -1149,6 +1177,10 @@ onMounted(() => {
 .session-badge.is-replay {
   color: var(--color-rundown);
   border-color: var(--color-rundown);
+}
+.session-badge.is-rehearsal {
+  color: var(--text-placeholder);
+  border-style: dashed;
 }
 
 .session-meta {

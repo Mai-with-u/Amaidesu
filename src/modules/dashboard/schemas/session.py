@@ -7,12 +7,15 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
+
 
 class SessionItem(BaseModel):
     """场次列表条目"""
 
     live_session_id: int = Field(..., description="场次主键（live_sessions.id）")
-    source: str = Field(default="manual", description="场次来源：manual / replay / legacy")
+    source: str = Field(default="manual", description="场次来源：manual / replay / generate / legacy")
+    kind: SessionKind = Field(default=SESSION_KIND_LIVE, description="场次类型：live=正式 / rehearsal=彩排")
     title: Optional[str] = Field(default=None, description="场次标题")
     room_id: str = Field(default="", description="房间/频道标识（普通属性）")
     platform: str = Field(default="", description="平台标识")
@@ -60,6 +63,12 @@ class ComponentPlanReport(BaseModel):
 class SessionOpenRequest(BaseModel):
     """开启场次请求"""
 
+    kind: SessionKind = Field(
+        description=(
+            "场次类型（必填）：live=正式，面向真实观众；rehearsal=彩排，模拟、回放与调试。"
+            "主播记忆按类型分两条线，对外同步与统计只认正式场"
+        )
+    )
     title: Optional[str] = Field(default=None, description="场次标题（可选）")
     room_id: Optional[str] = Field(default=None, description="房间/频道标识（可选，缺省用装配默认值）")
     platform: Optional[str] = Field(default=None, description="平台标识（可选，缺省用装配默认值）")
@@ -93,6 +102,12 @@ class SessionRenameRequest(BaseModel):
     """场次重命名请求"""
 
     title: Optional[str] = Field(default=None, description="新标题；None/空串=清除标题")
+
+
+class SessionKindRequest(BaseModel):
+    """更正已结束场次的类型（存量回填判错时人手改；进行中的场次不改）"""
+
+    kind: SessionKind = Field(description="新类型：live=正式 / rehearsal=彩排")
 
 
 class SessionTimelineResponse(BaseModel):

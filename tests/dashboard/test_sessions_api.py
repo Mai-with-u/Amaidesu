@@ -29,10 +29,9 @@ async def sessions_client(api, event_bus, session_manager, event_history, store)
     )
 
 
-async def _open(client, title: str = "") -> int:
-    return (await client.post("/api/v1/live-sessions/open", json={"title": title} if title else {})).json()[
-        "live_session_id"
-    ]
+async def _open(client, title: str = "", kind: str = "live") -> int:
+    body = {"kind": kind, **({"title": title} if title else {})}
+    return (await client.post("/api/v1/live-sessions/open", json=body)).json()["live_session_id"]
 
 
 def _decision(pk: int, seq: int, ts: int, **data) -> EventRecord:
@@ -57,7 +56,7 @@ async def test_open_list_close_flow(sessions_client) -> None:
     body = (await client.get("/api/v1/live-sessions")).json()
     assert body["active_session_id"] == pk
     (active,) = [item for item in body["items"] if item["is_active"]]
-    assert (active["title"], active["ended_at_ms"]) == ("晚间场", None)
+    assert (active["title"], active["ended_at_ms"], active["kind"]) == ("晚间场", None, "live")
 
     # 空场次结束 → 整行丢弃（防膨胀）
     assert (await client.post(f"/api/v1/live-sessions/{pk}/close")).json()["success"] is True
@@ -111,6 +110,31 @@ async def test_list_filters_by_source_and_title(sessions_client, session_manager
     keyword = (await client.get("/api/v1/live-sessions", params={"q": "筛选测试"})).json()
     assert [i["title"] for i in keyword["items"]] == ["筛选测试场"]
     assert (await client.get("/api/v1/live-sessions", params={"source": "hacker"})).status_code == 400
+
+
+async def test_open_requires_kind_and_kind_filter_and_correction(sessions_client, store) -> None:
+    """开场必须声明类型；列表可按类型筛；进行中的场次不能改类型，下播后可改。"""
+    client = sessions_client
+    missing = await client.post("/api/v1/live-sessions/open", json={"title": "没说类型"})
+    assert missing.status_code == 422
+
+    pk = await _open(client, "彩排场", kind="rehearsal")
+    await store.chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=BASE, sender_role="viewer", content="留住这场", message_type="danmaku"
+    )
+    rehearsals = (await client.get("/api/v1/live-sessions", params={"kind": "rehearsal"})).json()
+    assert [(i["live_session_id"], i["kind"]) for i in rehearsals["items"]] == [(pk, "rehearsal")]
+    assert (await client.get("/api/v1/live-sessions", params={"kind": "live"})).json()["items"] == []
+    assert (await client.get("/api/v1/live-sessions", params={"kind": "fake"})).status_code == 422
+
+    busy = await client.patch(f"/api/v1/live-sessions/{pk}/kind", json={"kind": "live"})
+    assert busy.status_code == 409
+    await client.post(f"/api/v1/live-sessions/{pk}/close")
+    fixed = await client.patch(f"/api/v1/live-sessions/{pk}/kind", json={"kind": "live"})
+    assert (fixed.status_code, fixed.json()["detail"]) == (200, "场次已改为正式")
+    assert (await store.sessions.get_live_session(live_session_id=pk)).kind == "live"
+    missing_row = await client.patch(f"/api/v1/live-sessions/{pk + 999}/kind", json={"kind": "live"})
+    assert missing_row.status_code == 404
 
 
 async def test_timeline_merges_details_and_events_and_dedupes_speech(
@@ -261,6 +285,7 @@ async def test_open_with_component_plan_aligns_components(
         await client.post(
             "/api/v1/live-sessions/open",
             json={
+                "kind": "live",
                 "title": "意图对齐场",
                 "component_plan": [
                     {"group": "collectors", "name": "console_input"},
@@ -291,7 +316,7 @@ async def test_open_with_component_plan_aligns_components(
 async def test_open_without_plan_keeps_components_untouched(sessions_client) -> None:
     """不带 component_plan 的开场完全不碰组件（向后兼容，plan_report 为 None）。"""
     client = sessions_client
-    body = (await client.post("/api/v1/live-sessions/open", json={"title": "无清单场"})).json()
+    body = (await client.post("/api/v1/live-sessions/open", json={"kind": "live", "title": "无清单场"})).json()
     assert body["live_session_id"] is not None and body["plan_report"] is None
 
 

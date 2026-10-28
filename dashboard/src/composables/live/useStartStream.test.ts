@@ -3,7 +3,8 @@
 // 覆盖：清单加载与可选集过滤（主播/附属/弹幕变体不进勾选清单）、附属标注
 // 组装、首次默认回落（现状运行∪启用、唯一在用弹幕变体）、上次意图恢复
 // （失效键过滤、失效流程单回落当前指向）、期望全集组装（勾选+弹幕单选）、
-// 提交编排（切单→开场→保存意图；activate 短路；失败回执；接口异常）。
+// 提交编排（切单→开场→保存意图；activate 短路；失败回执；接口异常）、
+// 场次类型（默认跟随弹幕接入、手动选择优先、每次打开重置、随开场提交）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -182,6 +183,7 @@ describe('useStartStream', () => {
     expect(clean).toBe(true);
     expect(activateMock).toHaveBeenCalledWith('rd-game');
     expect(openMock).toHaveBeenCalledWith({
+      kind: 'live',
       title: stream.title.value.trim() || undefined,
       component_plan: stream.planRefs.value,
     });
@@ -242,5 +244,29 @@ describe('useStartStream', () => {
 
     expect(clean).toBe(false);
     expect(stream.submitError.value).toBe('boom');
+  });
+
+  it('场次类型：默认跟随弹幕接入，手动选择优先且不存进上次意图，重新打开时重置', async () => {
+    storageStub();
+    const stream = await mounted();
+    expect(stream.danmaku.value).toBe('bili_danmaku_laplace');
+    expect(stream.kind.value).toBe('live'); // 接了 B 站弹幕默认正式
+    stream.danmaku.value = '';
+    expect(stream.kind.value).toBe('rehearsal'); // 没接弹幕默认彩排
+
+    stream.kind.value = 'live'; // 手动选过就不再跟随弹幕
+    stream.danmaku.value = '';
+    expect(stream.kind.value).toBe('live');
+
+    openMock.mockResolvedValue({
+      data: { live_session_id: 2, plan_report: { items: [], config_error: '' } },
+    } as never);
+    stream.kind.value = 'rehearsal';
+    await stream.submit();
+    expect(openMock).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'rehearsal' }));
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).not.toHaveProperty('kind');
+
+    await stream.load(false); // 重新打开：手动选择清空，回到跟随推断
+    expect(stream.kind.value).toBe(stream.danmaku.value ? 'live' : 'rehearsal');
   });
 });

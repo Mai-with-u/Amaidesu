@@ -947,11 +947,18 @@ export * from './review';
 
 // 直播场次（直播控制台）
 
+/**
+ * 场次类型：live=正式（面向真实观众）/ rehearsal=彩排（模拟、回放、调试）。
+ * 主播记忆按类型分两条线，对外同步与统计只认正式场；开场时必须声明。
+ */
+export type SessionKind = 'live' | 'rehearsal';
+
 /** 场次列表条目（GET /api/v1/live-sessions） */
 export interface LiveSessionItem {
   live_session_id: number;
-  /** 场次来源：manual=手动 / replay=模拟器回放 / legacy=历史遗留 */
+  /** 场次来源：manual=手动 / replay=模拟器回放 / generate=模拟器生成 / legacy=历史遗留 */
   source: string;
+  kind: SessionKind;
   title: string | null;
   room_id: string;
   platform: string;

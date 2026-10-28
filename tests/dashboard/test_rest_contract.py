@@ -219,6 +219,7 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
         (
             "items.live_session_id",
             "items.source",
+            "items.kind",
             "items.title",
             "items.room_id",
             "items.platform",
@@ -244,6 +245,11 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
     ),
     (
         "liveSessionsApi.close → POST /live-sessions/{id}/close",
+        session_schemas.SessionActionResponse,
+        ("success", "detail"),
+    ),
+    (
+        "liveSessionsApi.setKind → PATCH /live-sessions/{id}/kind",
         session_schemas.SessionActionResponse,
         ("success", "detail"),
     ),

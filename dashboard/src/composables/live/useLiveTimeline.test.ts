@@ -191,6 +191,7 @@ describe('useLiveTimeline', () => {
     const replayItem: LiveSessionItem = {
       live_session_id: 5,
       source: 'manual',
+      kind: 'live',
       title: '回看场',
       room_id: 'room',
       platform: 'simulator',

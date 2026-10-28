@@ -35,6 +35,7 @@ vi.mock('@/api', async importOriginal => ({
     open: vi.fn(),
     close: vi.fn(),
     rename: vi.fn(),
+    setKind: vi.fn(),
     remove: vi.fn(),
     timeline: vi.fn(),
   },
@@ -42,13 +43,14 @@ vi.mock('@/api', async importOriginal => ({
 
 vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
-  ElMessageBox: { prompt: vi.fn() },
+  ElMessageBox: { prompt: vi.fn(), confirm: vi.fn() },
 }));
 
 function sessionItem(partial: Partial<LiveSessionItem>): LiveSessionItem {
   return {
     live_session_id: 1,
     source: 'manual',
+    kind: 'live',
     title: null,
     room_id: 'room',
     platform: 'simulator',
@@ -64,6 +66,8 @@ const listMock = vi.mocked(liveSessionsApi.list);
 const openMock = vi.mocked(liveSessionsApi.open);
 const closeMock = vi.mocked(liveSessionsApi.close);
 const renameMock = vi.mocked(liveSessionsApi.rename);
+const setKindMock = vi.mocked(liveSessionsApi.setKind);
+const confirmMock = vi.mocked(ElMessageBox.confirm);
 const removeMock = vi.mocked(liveSessionsApi.remove);
 const promptMock = vi.mocked(ElMessageBox.prompt);
 
@@ -96,8 +100,9 @@ describe('useLiveSessions', () => {
     } as never);
     composable.sessionQuery.value = '周五';
     composable.sessionSourceFilter.value = 'replay';
+    composable.sessionKindFilter.value = 'rehearsal';
     await composable.loadSessions();
-    expect(listMock).toHaveBeenCalledWith({ source: 'replay', q: '周五' });
+    expect(listMock).toHaveBeenCalledWith({ source: 'replay', kind: 'rehearsal', q: '周五' });
     expect(composable.sessions.value).toHaveLength(1);
     expect(composable.activeSessionId.value).toBe(7);
     expect(composable.activeExplicitSession.value).toBe(true);
@@ -225,6 +230,23 @@ describe('useLiveSessions', () => {
     expect(listMock).toHaveBeenCalled();
   });
 
+  it('toggleSessionKind：确认后改为另一类型并刷新列表；取消则不调接口', async () => {
+    const composable = mount();
+    listMock.mockResolvedValue({ data: { items: [], active_session_id: null } } as never);
+    const ended = sessionItem({ live_session_id: 5, kind: 'live', ended_at_ms: 9_500_000 });
+
+    confirmMock.mockRejectedValueOnce('cancel');
+    await composable.toggleSessionKind(ended);
+    expect(setKindMock).not.toHaveBeenCalled();
+
+    confirmMock.mockResolvedValueOnce('confirm' as never);
+    setKindMock.mockResolvedValueOnce({ data: { success: true, detail: '' } } as never);
+    await composable.toggleSessionKind(ended);
+    expect(setKindMock).toHaveBeenCalledWith(5, 'rehearsal');
+    expect(ElMessage.success).toHaveBeenCalledWith('场次已改为彩排');
+    expect(listMock).toHaveBeenCalled();
+  });
+
   it('sessionTitle / sourceLabel / sessionTimeLabel 取值规则', () => {
     const composable = mount();
     expect(composable.sessionTitle(null)).toBe('');
@@ -233,6 +255,9 @@ describe('useLiveSessions', () => {
     );
     expect(composable.sourceLabel('replay')).toBe('回放');
     expect(composable.sourceLabel('other')).toBe('other');
+    expect(composable.sourceLabel('generate')).toBe('模拟');
+    expect(composable.kindLabel('live')).toBe('正式');
+    expect(composable.kindLabel('rehearsal')).toBe('彩排');
     // 时间标签带日期：同日终点只显时刻，跨天终点带日期
     const ended = sessionItem({ started_at_ms: 9_000_000, ended_at_ms: 9_060_000 });
     const label = composable.sessionTimeLabel(ended);
