@@ -19,6 +19,9 @@ from src.agents.streamer.rundown.dispatch import (
 from src.agents.streamer.rundown.rundown_state import RundownState
 from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown, RundownSegment
 
+# 固定时钟：remaining_ms 等派生量按起算零流逝计算，断言不随机器速度漂移
+_TEST_NOW_MS = 1_700_000_000_000
+
 
 def _loaded_state() -> RundownState:
     """已起算（running）的状态：load 只装载结构，分发用例需计时语义故显式 begin。"""
@@ -140,7 +143,7 @@ def test_min_duration_guard_only_binds_agent_through_the_shared_dispatch() -> No
             RundownSegment(id="chat", title="闲聊", task_description="目标", expected_ms=600_000),
         ],
     )
-    state = RundownState()
+    state = RundownState(clock=lambda: _TEST_NOW_MS)
     state.load(rundown)
     state.begin(by="system")
 
