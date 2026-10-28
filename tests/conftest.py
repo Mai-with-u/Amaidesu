@@ -12,6 +12,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.storage._default_path import DEFAULT_DB_PATH
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.subtitle.backends.tk_gui_service import SubtitleGuiService
+from tests.helpers import FakeClock
 
 
 def _sqlite_file(database: Any) -> Optional[Path]:
@@ -99,6 +100,27 @@ async def event_bus() -> AsyncGenerator[EventBus, None]:
     bus = EventBus()
     yield bus
     await bus.cleanup()
+
+
+@pytest.fixture
+def fake_clock() -> FakeClock:
+    """可推进的假时钟（``tick(ms)`` 推进时刻）。
+
+    适用：被测代码把时间入口做成可注入的（``now_ms`` 或等形毫秒时刻函数），
+    测试注入 ``fake_clock.now_ms`` 后用 tick 显式走时。真实 ``asyncio.sleep`` /
+    ``time.monotonic`` 路径不受它控制，等异步条件成立请用条件轮询
+    （tests/config/helpers.py 的 ``wait_until``）。
+    """
+    return FakeClock()
+
+
+@pytest.fixture
+def chars_as_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """把 token 计数替换为字符数，预算断言与是否装了 tiktoken 词表无关。
+
+    同一 patch 字符串曾复制在多个测试文件；统一从这里取用。
+    """
+    monkeypatch.setattr("src.modules.context.tokens.count_text_tokens", len)
 
 
 @pytest.fixture

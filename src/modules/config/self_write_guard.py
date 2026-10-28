@@ -28,10 +28,14 @@ def mark_self_write(path: Path | str, ttl_s: float = _MARK_TTL_S) -> None:
         _marks[key] = time.monotonic() + ttl_s
 
 
-def consume_self_write(path: Path | str) -> bool:
-    """查询并清除标记。命中且未过期返回 True（调用方跳过该事件）。"""
+def consume_self_write(path: Path | str, *, now_s: float | None = None) -> bool:
+    """查询并清除标记。命中且未过期返回 True（调用方跳过该事件）。
+
+    ``now_s`` 是测试注入口：显式传入时按该时刻判定过期（免真实等待），
+    缺省 None 走真实单调时钟，生产行为不变。
+    """
     key = _normalize(path)
-    now = time.monotonic()
+    now = time.monotonic() if now_s is None else now_s
     with _lock:
         deadline = _marks.pop(key, None)
     return deadline is not None and deadline >= now

@@ -14,6 +14,7 @@ from typing import Sequence
 import pytest
 
 from src.modules.config.file_watcher import FileChange, FileWatcher, FileWatcherStats
+from tests.config.helpers import wait_until
 
 
 @pytest.fixture
@@ -119,12 +120,16 @@ async def test_subscription_filters_by_paths_and_nonexistent_file_is_safe(make_w
     file_a.write_text("# a\n", encoding="utf-8")
     file_b.write_text("# b\n", encoding="utf-8")
     received: list[Sequence[FileChange]] = []
+    sentinel: list[Sequence[FileChange]] = []
     watcher = await make_watcher([file_a, file_b], debounce_ms=100, start=False)
     watcher.subscribe(_collector(received), paths=[file_a])
+    # 哨兵订阅只匹配 file_b、注册在 file_a 订阅之后：它收到事件即证明同一批次
+    # 已分发过 file_a 订阅的过滤判断，"未收到"从猜时长变成有确定性前提
+    watcher.subscribe(_collector(sentinel), paths=[file_b])
     await watcher.start()
 
     await _write(file_b)
-    await asyncio.sleep(1.0)
+    await wait_until(lambda: len(sentinel) >= 1, what="file_b 批次分发到哨兵订阅")
     assert received == []
     await _write(file_a)
     assert await _wait_count(received, 1)
@@ -182,8 +187,7 @@ async def test_callback_timeout_does_not_break_watcher(make_watcher, toml_file) 
     await watcher.start()
 
     await _write(toml_file, "# slow\n")
-    await asyncio.sleep(1.5)
-    assert watcher.stats.callbacks_timed_out >= 1
+    await wait_until(lambda: watcher.stats.callbacks_timed_out >= 1, what="回调超时被记录", timeout_s=5.0)
 
     watcher.unsubscribe(sub_id)
     watcher.subscribe(_collector(recovered), paths=[toml_file])
@@ -206,9 +210,9 @@ async def test_failures_enter_cooldown_that_skips_callbacks(make_watcher, toml_f
     sub_id = watcher.subscribe(always_fails, paths=[toml_file])
     await watcher.start()
 
-    for note in ("# fail1\n", "# fail2\n"):
+    for i, note in enumerate(("# fail1\n", "# fail2\n"), start=1):
         await _write(toml_file, note)
-        await asyncio.sleep(1.5)
+        await wait_until(lambda i=i: watcher.stats.callbacks_failed >= i, what=f"第 {i} 次失败被记录")
     assert watcher.stats.callbacks_failed >= 2
     state = watcher._subscription_states[sub_id]
     assert state.consecutive_failures == 0  # 触发冷却后计数清零
@@ -216,7 +220,7 @@ async def test_failures_enter_cooldown_that_skips_callbacks(make_watcher, toml_f
 
     fired = calls
     await _write(toml_file, "# during_cooldown\n")
-    await asyncio.sleep(1.0)
+    await wait_until(lambda: watcher.stats.callbacks_skipped_cooldown >= 1, what="冷却跳过被记录")
     assert calls == fired and watcher.stats.callbacks_skipped_cooldown >= 1
 
 
@@ -238,10 +242,9 @@ async def test_success_resets_consecutive_failures(make_watcher, toml_file) -> N
     state = watcher._subscription_states[sub_id]
 
     await _write(toml_file, "# fail\n")
-    await asyncio.sleep(1.5)
-    assert state.consecutive_failures == 1
+    await wait_until(lambda: state.consecutive_failures == 1, what="首次失败计入订阅状态")
     await _write(toml_file, "# success\n")
-    await asyncio.sleep(1.5)
+    await wait_until(lambda: watcher.stats.callbacks_succeeded >= 1, what="成功回调被记录")
     assert state.consecutive_failures == 0
 
 
@@ -262,6 +265,6 @@ async def test_stats_start_at_zero_return_snapshots_and_count_successes(make_wat
     await watcher.start()
     await _write(toml_file)
     assert await _wait_count(received, 1)
-    await asyncio.sleep(0.2)  # 让 stats 完成更新
+    await wait_until(lambda: watcher.stats.batches_seen >= 1, what="统计快照更新")
     assert watcher.stats.batches_seen >= 1 and watcher.stats.changes_seen >= 1
     assert watcher.stats.callbacks_succeeded >= 1

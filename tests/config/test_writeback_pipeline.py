@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
-import time
 from pathlib import Path
 
 import pytest
@@ -64,8 +64,11 @@ def test_unchanged_load_never_writes_and_drift_write_backs_up_once(config_dir) -
     generate_default_configs(config_dir)
     _settle(config_dir)
     agents_path = config_dir / "agents.toml"
+    # mtime 定格到远 past：后续任何写盘得到的时间必然不同，判定"未写盘"不再
+    # 依赖文件系统 mtime 分辨率与真实等待
+    _FROZEN_MTIME_S = 1_000_000_000.0
+    os.utime(agents_path, (_FROZEN_MTIME_S, _FROZEN_MTIME_S))
     mtime = agents_path.stat().st_mtime_ns
-    time.sleep(0.01)  # 同目录其他文件刚生成，mtime 分辨率内可能相同，先推开
 
     _, report = load_config_dir(config_dir)
     assert not report.has_drift and agents_path.stat().st_mtime_ns == mtime
@@ -88,9 +91,11 @@ def test_self_write_marks_are_one_shot_expire_and_only_cover_the_written_file(co
     assert consume_self_write(target) is True
     assert consume_self_write(target) is False  # 一次性消费
     assert consume_self_write(tmp_path / "never_marked.toml") is False
-    mark_self_write(target, ttl_s=0.01)
-    time.sleep(0.05)
-    assert consume_self_write(target) is False  # TTL 过期
+    mark_self_write(target, ttl_s=10.0)
+    assert consume_self_write(target, now_s=0.0) is True  # 时刻 0 远未到失效点：命中
+    mark_self_write(target, ttl_s=10.0)
+    # 1e12 秒（约三万年后）必然越过任何单调时钟读数 + TTL 的失效点
+    assert consume_self_write(target, now_s=1e12) is False  # TTL 过期（now_s 注入免去真实等待）
 
     generate_default_configs(config_dir)
     _settle(config_dir)

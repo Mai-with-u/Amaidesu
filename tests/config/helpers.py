@@ -1,14 +1,31 @@
-"""配置测试共享助手：迁移钩子链尾版本（避免各测试硬编码版本串）与 tomlkit 读写。"""
+"""配置测试共享助手：迁移钩子链尾版本（避免各测试硬编码版本串）、tomlkit 读写与条件轮询。"""
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
+from typing import Callable
 
+import pytest
 import tomlkit
 
 from src.modules.config.file_meta import CONFIG_BASELINE_VERSION
 from src.modules.config.upgrade import _FILE_HOOKS, _version_tuple
+
+
+async def wait_until(predicate: Callable[[], bool], *, what: str, timeout_s: float = 5.0) -> None:
+    """轮询等待异步条件成立，超时 fail 并点名等的是什么。
+
+    替代固定 sleep 等待文件监视器/热重载落地：条件一成立立即放行，超时上限
+    按满载耗时估算留宽裕（正常耗时的几十倍），不贴正常耗时。
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while not predicate():
+        if loop.time() >= deadline:
+            pytest.fail(f"等待超时（{timeout_s}s）：{what}")
+        await asyncio.sleep(0.02)
 
 
 def tail_version(file_name: str) -> str:

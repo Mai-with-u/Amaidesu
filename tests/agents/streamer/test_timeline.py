@@ -13,14 +13,16 @@ from src.agents.streamer.plan import DecisionPlan
 from src.agents.streamer.planner import Planner
 from src.agents.streamer.replyer import Replyer
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE, StreamerTimeline, TimelineTurn, note_turn
+from src.agents.streamer.timeline import (
+    CHAPTER_MESSAGE_TYPE,
+    GAME_MESSAGE_TYPE,
+    StreamerTimeline,
+    TimelineTurn,
+    note_turn,
+)
 from src.modules.llm.payload import Response
 
-
-@pytest.fixture(autouse=True)
-def _chars_as_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
-    """按字符数计 token，预算断言与是否装了 tiktoken 词表无关。"""
-    monkeypatch.setattr("src.modules.context.tokens.count_text_tokens", len)
+pytestmark = pytest.mark.usefixtures("chars_as_tokens")  # conftest 共享 fixture：按字符数计 token
 
 
 def _turns(count: int, start: int = 1) -> List[TimelineTurn]:

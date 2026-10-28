@@ -12,6 +12,7 @@ from src.modules.config.file_watcher import FileChange
 from src.modules.config.multi_file_loader import generate_default_configs, load_config_dir
 from src.modules.config.self_write_guard import consume_self_write
 from src.modules.config.service import SCOPE_RELOAD_POLICY, ConfigService
+from tests.config.helpers import wait_until
 
 _ALL_TOML = ("agents.toml", "collectors.toml", "tools.toml", "model.toml", "storage.toml", "infra.toml")
 
@@ -36,10 +37,23 @@ def service(config_dir: Path) -> ConfigService:
 
 
 @pytest.fixture
-async def watching(service: ConfigService):
-    """启动 FileWatcher（等一会让 watcher 稳定），结束时停止。"""
+async def watching(service: ConfigService, config_dir: Path):
+    """启动 FileWatcher，用探针写确认监视已生效，结束时停止。
+
+    watchfiles 建立监视句柄前发生的写入不会产生事件；反复写同一内容直到
+    首批变更被观察到（内容不变，重载是无漂移的 no-op），替代固定 sleep 猜启动时长。
+    """
     await service.start_file_watcher()
-    await asyncio.sleep(0.3)
+    watcher = service._file_watcher
+    assert watcher is not None
+    probe = config_dir / "infra.toml"
+    original = probe.read_text(encoding="utf-8-sig")
+    deadline = asyncio.get_running_loop().time() + 10.0
+    while watcher.stats.batches_seen == 0:
+        if asyncio.get_running_loop().time() >= deadline:
+            pytest.fail("探针写未被 FileWatcher 观察：监视未建立")
+        probe.write_text(original, encoding="utf-8-sig")
+        await asyncio.sleep(0.1)
     yield service
     await service.stop_file_watcher()
 
@@ -110,7 +124,12 @@ async def test_modifying_agents_toml_becomes_visible_after_reload(watching: Conf
 async def test_invalid_restart_scope_change_keeps_old_config(watching: ConfigService, config_dir: Path) -> None:
     """写入缺 [meta].version 的非法内容：校验硬错被 reload 捕获，内存配置保持旧值继续运行。"""
     old_agents = watching.get_section("agents", {})
+    watcher = watching._file_watcher
+    assert watcher is not None
+    seen_before = watcher.stats.batches_seen
 
     (config_dir / "agents.toml").write_text("# broken\n", encoding="utf-8")
-    await asyncio.sleep(1.5)
+    # 轮询到该批次已被分发（校验失败不影响批次计数），再断言配置未变，
+    # "保持旧值"从猜时长变成有确定性前提
+    await wait_until(lambda: watcher.stats.batches_seen >= seen_before + 1, what="非法变更批次被分发", timeout_s=10.0)
     assert watching.get_section("agents", {}) == old_agents
