@@ -16,7 +16,7 @@ MaiCraft v1 的 ``events`` 按 ``topic`` 分两条流：``self`` 是角色身上
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncIterator, ClassVar, Dict, Optional
+from typing import Any, AsyncIterator, Callable, ClassVar, Dict, Optional
 
 from pydantic import Field
 
@@ -72,11 +72,15 @@ class MaicraftEventsCollector(BaseCollector):
         self,
         config: Optional[Dict[str, Any]] = None,
         event_bus: Optional[EventBus] = None,
+        client_factory: Optional[Callable[..., Any]] = None,
     ) -> None:
         super().__init__(event_bus=event_bus)
         self.config = config or {}
         self.logger = get_logger(self.__class__.__name__)
         self.typed_config = self.ConfigSchema.from_dict(self.config)
+        # MCP 客户端构造工厂（形态与 ``McpClient(name, config)`` 一致）：测试注入进程内替身；
+        # 缺省 None 走本类的默认构造路径
+        self._client_factory = client_factory
 
         self._client: Optional[Any] = None
         self._provider: Optional[Any] = None
@@ -147,7 +151,11 @@ class MaicraftEventsCollector(BaseCollector):
 
         # 只有 Agent 的 MCP 开着才会装上本采集器；这里照抄一份并确保是开着的，独立连接不改动 Agent 那份
         server = self.typed_config.mcp.model_copy(update={"enabled": True})
-        client = McpClient(name="maicraft", config=server)
+        client = (
+            self._client_factory("maicraft", server)
+            if self._client_factory is not None
+            else McpClient(name="maicraft", config=server)
+        )
         provider = McpToolProvider(client=client, server_name="maicraft", provider="maicraft")
         try:
             count = await provider.setup()

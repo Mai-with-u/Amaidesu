@@ -9,8 +9,6 @@ from __future__ import annotations
 from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock
 
-from src.agents.minecraft.agent import MinecraftAgent
-from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.state import MinecraftInstruction
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
@@ -21,6 +19,8 @@ from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 from src.modules.tools.registry import ToolRegistry
+
+from tests.agents.minecraft_v1_fakes import assemble_minecraft_agent
 
 
 def _planner(responses: List[Response], invoked: List[ToolInvocation]) -> Planner:
@@ -115,9 +115,7 @@ async def test_relay_with_viewer_words_carries_them_verbatim() -> None:
 
 def test_game_agent_labels_relay_sources() -> None:
     """运营原话与主播补充分开标注，冲突时游戏侧知道该听谁。"""
-    agent = MinecraftAgent(
-        MinecraftConfig(), llm_manager=MagicMock(), event_bus=MagicMock(), tool_registry=ToolRegistry()
-    )
+    agent = assemble_minecraft_agent(registry=ToolRegistry())
     agent.receive_prompt(content="拉下停机开关", source="operator")
     agent.receive_prompt(content="停机开关别碰", source="planner-react")
     agent.receive_prompt(content="继续", source="test")

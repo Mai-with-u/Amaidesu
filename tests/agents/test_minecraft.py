@@ -3,6 +3,7 @@
 import asyncio
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
 
@@ -26,14 +27,11 @@ from src.modules.tools.operations import ToolOperations
 from src.modules.tools.registry import ToolRegistry
 from src.modules.vision.image_store import VisionImageStore, set_image_store
 
+from .minecraft_v1_fakes import assemble_minecraft_agent, fake_bus, make_minecraft_agent, offline_config
+
 
 def _ops(registry: ToolRegistry) -> ToolOperations:
     return ToolOperations(registry)
-
-
-def _offline_config() -> MinecraftConfig:
-    """不连私有 MCP 的配置：本机正开着 MaiCraft 时，测试也不能连上真实的 8766 端口。"""
-    return MinecraftConfig(mcp=McpServerConfig(enabled=False, url="http://127.0.0.1:8766/mcp"))
 
 
 def _invocation(name: str, arguments: dict) -> ToolInvocation:
@@ -46,12 +44,6 @@ def _tool_call(name: str, arguments: dict, call_id: str = "call_1") -> ToolCall:
 
 def _resp(content: str = "", tool_calls: list | None = None) -> Response:
     return Response(success=True, content=content, tool_calls=tool_calls or [])
-
-
-def _bus() -> MagicMock:
-    bus = MagicMock()
-    bus.emit = AsyncMock()
-    return bus
 
 
 def _llm(generate: Any) -> MagicMock:
@@ -94,11 +86,9 @@ async def start_agent():
     started: list[MinecraftAgent] = []
 
     async def _start(llm: Any, *, bus: Any = None, registry: ToolRegistry | None = None, **kwargs: Any):
-        agent = MinecraftAgent(
-            _offline_config(), llm_manager=llm, event_bus=bus or _bus(), tool_registry=registry, **kwargs
+        agent, _llm, _agent_bus = await make_minecraft_agent(
+            llm=llm, bus=bus or fake_bus(), registry=registry, **kwargs
         )
-        await agent.start()
-        agent._live_active = True
         started.append(agent)
         return agent
 
@@ -180,8 +170,8 @@ async def test_report_gate_rejection_reason_reaches_llm() -> None:
 
 
 async def test_emit_report_payload_and_snapshot() -> None:
-    bus = _bus()
-    agent = MinecraftAgent(_offline_config(), event_bus=bus)
+    bus = fake_bus()
+    agent = assemble_minecraft_agent(config=offline_config(), bus=bus)
     await agent._emit_report("delivery", "挖到钻石了，交付！", scene="y=-12")
 
     payload = bus.emit.await_args[0][1]
@@ -199,7 +189,7 @@ async def test_natural_termination_falls_back_to_single_delivery_without_milesto
             return _resp(tool_calls=[_tool_call("minecraft_todo", done)])
         return _resp("钻石挖完了，共 5 颗。")
 
-    bus = _bus()
+    bus = fake_bus()
     agent = await start_agent(_llm(fake), bus=bus, registry=ToolRegistry())
     agent.receive_prompt(content="挖 3 个钻石", source="test")
     await _wait_until(lambda: agent._task_finished and _game_events(bus, "report"))
@@ -245,7 +235,7 @@ async def test_report_delivery_stops_batch_after_same_round_tools(start_agent) -
             )
         return _resp("不该再推理")
 
-    bus = _bus()
+    bus = fake_bus()
     agent = await start_agent(_llm(fake), bus=bus, registry=ToolRegistry())
     agent.receive_prompt(content="干活", source="test")
     await _wait_until(lambda: calls == 1)
@@ -259,7 +249,7 @@ async def test_report_delivery_stops_batch_after_same_round_tools(start_agent) -
 async def test_report_escalation_stops_and_waits_for_next_prompt(start_agent) -> None:
     escalate = _tool_call("minecraft_report", {"kind": "escalation", "content": "需要授权"})
     llm = _llm(AsyncMock(return_value=_resp(tool_calls=[escalate])))
-    bus = _bus()
+    bus = fake_bus()
     agent = await start_agent(llm, bus=bus, registry=ToolRegistry())
     agent.receive_prompt(content="遇到困难的任务", source="test")
     await _wait_until(lambda: llm.generate.await_count == 1)
@@ -280,7 +270,7 @@ async def test_continues_past_fifty_steps_until_delivery(start_agent) -> None:
         for step in range(1, 61)
     ]
     llm = _llm(AsyncMock(side_effect=steps + [_resp("施工验收完成")]))
-    bus = _bus()
+    bus = fake_bus()
     agent = await start_agent(llm, bus=bus, registry=ToolRegistry())
     agent.receive_prompt(content="完成施工并验收", source="test")
     await _wait_until(lambda: llm.generate.await_count == 61 and agent._task_finished)
@@ -387,12 +377,14 @@ async def test_pause_freezes_loop_and_resume_continues(start_agent) -> None:
         await asyncio.sleep(0.005)  # 让暂停命令能在下一次游戏行动前到达
         return _resp(tool_calls=[_tool_call("maicraft_perceive", {"view": "situation"})])
 
-    async def observe(name: str, arguments: Dict[str, Any], **kwargs: Any) -> Dict[str, Any]:
-        # 建材数量持续变化，任务保持推进而不是空转
-        return {"inventory": {"minecraft:stone": call_count}}
-
-    agent = await start_agent(_llm(fake))
-    agent._execute_tool = AsyncMock(side_effect=observe)
+    # 工具执行走真实 registry（感知替身）：不再替换私有 _execute_tool
+    registry = ToolRegistry()
+    registry.register_provider(
+        _single_tool_provider(
+            "perceive", ToolExecutionResult(tool_name="", success=True, structured_content={"view": "situation"})
+        )
+    )
+    agent = await start_agent(_llm(fake), registry=registry)
     agent.receive_prompt(content="暂停任务", source="test")
 
     await _wait_until(lambda: call_count >= 1)
@@ -423,7 +415,7 @@ async def test_agent_reusable_after_goal_completes(start_agent) -> None:
 @pytest.mark.parametrize("error", [None, "rate limit"], ids=["no_llm", "llm_failure"])
 async def test_unusable_llm_emits_single_error(start_agent, error: str | None) -> None:
     llm = None if error is None else _llm(AsyncMock(return_value=Response(success=False, error=error)))
-    bus = _bus()
+    bus = fake_bus()
     agent = await start_agent(llm, bus=bus)
     agent.receive_prompt(content="挖钻石", source="test")
     await _wait_until(lambda: bool(_game_events(bus, "error")))
@@ -441,7 +433,7 @@ async def test_idle_costs_nothing(start_agent) -> None:
 
 async def test_small_history_keeps_old_observations() -> None:
     """超过十条观察仍保留已发送消息，只有体积超预算才集中整理。"""
-    agent = MinecraftAgent(_offline_config(), event_bus=MagicMock())
+    agent = assemble_minecraft_agent(config=offline_config(), bus=fake_bus())
     messages: list[dict] = [{"role": "system", "content": "玩家任务"}]
     for i in range(12):
         call = {"id": f"c{i}", "type": "function", "function": {"name": "observe", "arguments": "{}"}}
@@ -543,7 +535,7 @@ class _ZeroToolProvider:
 
     category = "mcp"
 
-    def __init__(self, *, client: Any, server_name: str, provider: str | None = None) -> None:
+    def __init__(self, *, client: Any, server_name: str, provider: str | None = None, **_extra: Any) -> None:
         self.client = client
         self.name = provider or server_name
         self.on_connection_changed: Any = None
@@ -578,21 +570,26 @@ class _RaisingProvider(_ZeroToolProvider):
         raise ConnectionError("mock connect failure")
 
 
-def _patch_mcp(monkeypatch: pytest.MonkeyPatch, provider_cls: type) -> None:
+def _mcp_agent(
+    enabled: bool,
+    registry: ToolRegistry,
+    *,
+    client_factory: Any = None,
+    provider_factory: Any = None,
+) -> MinecraftAgent:
+    """私有 MCP 经构造工厂注入的 Agent（不再 monkeypatch 模块属性）。"""
+    return MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=enabled)),
+        llm_manager=MagicMock(),
+        event_bus=fake_bus(),
+        tool_registry=registry,
+        mcp_client_factory=client_factory,
+        mcp_provider_factory=provider_factory,
+    )
+
+
+async def test_disabled_mcp_skips_binding() -> None:
     _FakeMcpClient.constructed = []
-    monkeypatch.setattr("src.modules.mcp.McpClient", _FakeMcpClient)
-    monkeypatch.setattr("src.modules.mcp.McpToolProvider", provider_cls)
-    monkeypatch.setattr("src.modules.mcp.client.McpClient", _FakeMcpClient)
-    monkeypatch.setattr("src.modules.mcp.provider.McpToolProvider", provider_cls)
-
-
-def _mcp_agent(enabled: bool, registry: ToolRegistry) -> MinecraftAgent:
-    config = MinecraftConfig(mcp=McpServerConfig(enabled=enabled))
-    return MinecraftAgent(config, llm_manager=MagicMock(), event_bus=_bus(), tool_registry=registry)
-
-
-async def test_disabled_mcp_skips_binding(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_mcp(monkeypatch, _ZeroToolProvider)
     registry = ToolRegistry()
     agent = _mcp_agent(False, registry)
     await agent.start()
@@ -602,13 +599,16 @@ async def test_disabled_mcp_skips_binding(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 @pytest.mark.parametrize("provider_cls", [_RaisingProvider, _ZeroToolProvider], ids=["setup_raises", "zero_tools"])
-async def test_mcp_setup_failure_registers_degraded_and_retries(
-    monkeypatch: pytest.MonkeyPatch, provider_cls: type
-) -> None:
+async def test_mcp_setup_failure_registers_degraded_and_retries(provider_cls: type) -> None:
     """连接失败不阻断启动：provider 以 0 工具降级登记（工具页可见），后台恢复循环重试；stop 摘除。"""
-    _patch_mcp(monkeypatch, provider_cls)
+    _FakeMcpClient.constructed = []
     registry = ToolRegistry()
-    agent = _mcp_agent(True, registry)
+    agent = _mcp_agent(
+        True,
+        registry,
+        client_factory=_FakeMcpClient,
+        provider_factory=lambda **kwargs: provider_cls(**kwargs),
+    )
 
     await agent.start()
     assert agent._running is True and agent._mcp_client is not None
@@ -705,7 +705,7 @@ async def test_agent_replied_only_for_intermediate_steps(start_agent) -> None:
             return _resp("目标解释：用切石机把石头加工成石砖", tool_calls=[_tool_call("minecraft_capture", {"v": 1})])
         return _resp("任务完成，石砖已交付")
 
-    bus = _bus()
+    bus = fake_bus()
     await _run_capture_task(start_agent, fake, _RecordingSink(), bus=bus)
 
     replied = [c.args[1] for c in bus.emit.await_args_list if isinstance(c.args[1], AgentRepliedPayload)]
@@ -728,7 +728,7 @@ async def test_own_tool_invoke_emits_tool_result_event() -> None:
     bus.on("tool.result.#", _on_result, ToolResultPayload)
     registry = ToolRegistry(event_bus=bus)
     registry.register_provider(MinecraftToolProvider(state=MinecraftAgentState()))
-    agent = MinecraftAgent(_offline_config(), llm_manager=MagicMock(), event_bus=MagicMock(), tool_registry=registry)
+    agent = assemble_minecraft_agent(config=offline_config(), llm=MagicMock(), registry=registry)
     try:
         obs = await agent._execute_tool("minecraft_todo", {"action": "read"})
         assert obs.get("tool") == "todo"
@@ -740,9 +740,9 @@ async def test_own_tool_invoke_emits_tool_result_event() -> None:
 def _agent_with_result(result: ToolExecutionResult, *, visual: bool = False) -> MinecraftAgent:
     llm = MagicMock()
     llm.is_profile_visual = MagicMock(return_value=visual)
-    agent = MinecraftAgent(_offline_config(), llm_manager=llm, event_bus=MagicMock(), tool_registry=MagicMock())
-    agent._tool_registry.invoke = AsyncMock(return_value=result)
-    return agent
+    llm.get_profile_context_window = MagicMock(return_value=0)
+    stub_registry = SimpleNamespace(invoke=AsyncMock(return_value=result))
+    return assemble_minecraft_agent(config=offline_config(), llm=llm, registry=stub_registry)
 
 
 async def test_execute_tool_forwards_caller_profile_and_hides_base64() -> None:

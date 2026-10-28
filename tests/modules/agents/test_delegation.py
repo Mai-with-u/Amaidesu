@@ -345,16 +345,16 @@ class _McRig(_Rig):
         ledger = TaskLedger(event_bus=bus)
         llm = MagicMock()
         llm.chat_messages = AsyncMock(side_effect=[])
+        # 游戏连上了：maicraft 有工具才接委派（没连上时直接拒收，另有测试）。这里的工具只用来过这道门，
+        # 没有连接，宿主不会经它读 MaiCraft——私有 MCP 面经构造注入。
         self.minecraft = MinecraftAgent(
             MinecraftConfig(mcp=McpServerConfig(enabled=False)),
             llm_manager=llm,
             event_bus=bus,
             tool_registry=registry,
             task_tracker=TaskTracker(registry, ledger, poll_interval_ms=20),
+            mcp_provider=SimpleNamespace(list_tools=lambda: ["maicraft_observe"]),
         )
-        # 游戏连上了：maicraft 有工具才接委派（没连上时直接拒收，另有测试）。这里的工具只用来过这道门，
-        # 没有连接，宿主不会经它读 MaiCraft。
-        self.minecraft._mcp_provider = SimpleNamespace(list_tools=lambda: ["maicraft_observe"])
         super().__init__(self.minecraft)
         # 复用上面 _Rig 构造出的 bus/registry/ledger 会与 Agent 持有的不一致，这里改为沿用 Agent 的那一套
         self.bus, self.registry, self.ledger = bus, registry, ledger

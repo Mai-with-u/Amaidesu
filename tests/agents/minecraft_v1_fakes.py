@@ -1,16 +1,50 @@
-"""测试用的 MaiCraft v1 替身：五个工具的统一回复、目标运行与事件流，行为照真实接口写。"""
+"""测试用的 MaiCraft v1 替身：五个工具的统一回复、目标运行与事件流，行为照真实接口写。
+
+本模块同时是 MinecraftAgent 测试的场景工厂单入口：``assemble_minecraft_agent`` 构造
+未启动的 Agent（离线缺省装配），``make_minecraft_agent`` 在其上装配 MaiCraft 替身并启动
+（直播中），全部 MinecraftAgent 测试经这两处拿实例，不各自手工装配。
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, List, Optional, Tuple
+from unittest.mock import AsyncMock, MagicMock
 
+from src.agents.minecraft.agent import MinecraftAgent
+from src.agents.minecraft.config import MinecraftConfig
+from src.modules.llm.payload import Response
+from src.modules.mcp.config import McpServerConfig
+from src.modules.skills import SkillLibrary
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
+from src.modules.tools.registry import ToolRegistry
 
 # 只改记忆、只读分析的能力当场完成，其余在后台推进。
 _ASIDE_ABILITIES = frozenset({"maicraft:remember"})
+
+# make_minecraft_agent 的 llm 参数哨兵：显式传 None（不注入模型）与未传（按剧本建替身）要区分开
+_LLM_UNSET = object()
+
+# 离线私有 MCP 配置：不连真端口（本机正开着 MaiCraft 时，测试也不能连上真实的 8766）。
+OFFLINE_MCP_CONFIG = McpServerConfig(enabled=False, url="http://127.0.0.1:8766/mcp")
+
+
+def offline_config(events_wait_ms: Optional[int] = None) -> MinecraftConfig:
+    """不连私有 MCP 的 Agent 配置；长轮询等待时长可调（事件流替身按它等）。"""
+    kwargs: Dict[str, Any] = {"mcp": OFFLINE_MCP_CONFIG}
+    if events_wait_ms is not None:
+        kwargs["events_wait_ms"] = events_wait_ms
+    return MinecraftConfig(**kwargs)
+
+
+def fake_bus() -> MagicMock:
+    """捕获 emit 的桩总线（emit 是 AsyncMock，断言读 await_args_list）。"""
+    bus = MagicMock()
+    bus.emit = AsyncMock()
+    return bus
 
 
 def ok(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -276,3 +310,122 @@ class FakeMaicraft(BaseToolProvider):
         # 每个世界的目标编号各自从 1 数起，可能撞上上一个世界的编号。
         self._next_id = 1
         self._new_event.set()
+
+
+# ---------------------------------------------------------------------------
+# 场景工厂：MinecraftAgent 测试的装配单入口
+# ---------------------------------------------------------------------------
+
+# 按剧本回复的模型剧本：每次推理把当时的消息交给剧本，剧本返回模型响应
+LlmScript = Callable[[List[Dict[str, Any]]], Response]
+
+
+class ScriptLlm:
+    """按剧本回复的模型替身：记下推理次数与每次看到的消息、拿到的工具清单。"""
+
+    def __init__(self, script: LlmScript) -> None:
+        self.script = script
+        self.seen: List[List[Dict[str, Any]]] = []
+        self.tools_given: List[List[Dict[str, Any]]] = []
+
+    async def generate(self, messages: List[Dict[str, Any]], **kwargs: Any) -> Response:
+        self.seen.append([dict(message) for message in messages])
+        self.tools_given.append(list(kwargs.get("tools") or []))
+        return self.script(messages)
+
+    def is_profile_visual(self, profile: Optional[str]) -> bool:
+        """能力查询替身：剧本场景一律按非视觉。"""
+        del profile
+        return False
+
+    def get_profile_context_window(self, profile: Optional[str]) -> int:
+        """窗口查询替身：剧本场景按未配置（0），预算走保守窗口。"""
+        del profile
+        return 0
+
+
+def assemble_minecraft_agent(
+    *,
+    config: Optional[MinecraftConfig] = None,
+    llm: Optional[Any] = None,
+    bus: Optional[Any] = None,
+    registry: Optional[ToolRegistry] = None,
+    tracker: Optional[Any] = None,
+    skills: Optional[SkillLibrary] = None,
+    prompt_manager: Optional[Any] = None,
+    thinking_sink: Optional[Any] = None,
+    live: Optional[bool] = None,
+    mcp_client: Optional[Any] = None,
+    mcp_provider: Optional[Any] = None,
+    mcp_client_factory: Optional[Callable[..., Any]] = None,
+    mcp_provider_factory: Optional[Callable[..., Any]] = None,
+) -> MinecraftAgent:
+    """构造未启动的 MinecraftAgent（装配单入口）。
+
+    缺省装配一律离线：不连私有 MCP、总线是捕获 emit 的桩、无 LLM。要调任务循环的
+    测试自行传 ``llm``；``live`` 是直播闸初始态（None = 生产默认，启动落收工态）。
+    """
+    return MinecraftAgent(
+        config if config is not None else offline_config(),
+        llm_manager=llm,
+        prompt_manager=prompt_manager,
+        event_bus=bus if bus is not None else fake_bus(),
+        tool_registry=registry,
+        thinking_sink=thinking_sink,
+        task_tracker=tracker,
+        skill_library=skills,
+        live_active=live,
+        mcp_client=mcp_client,
+        mcp_provider=mcp_provider,
+        mcp_client_factory=mcp_client_factory,
+        mcp_provider_factory=mcp_provider_factory,
+    )
+
+
+async def make_minecraft_agent(
+    server: Optional[FakeMaicraft] = None,
+    script: Optional[LlmScript] = None,
+    *,
+    tracker: Optional[Any] = None,
+    skills: Optional[SkillLibrary] = None,
+    registry: Optional[ToolRegistry] = None,
+    live: bool = True,
+    llm: Any = _LLM_UNSET,
+    bus: Optional[Any] = None,
+    thinking_sink: Optional[Any] = None,
+    config: Optional[MinecraftConfig] = None,
+    mcp_client: Optional[Any] = None,
+) -> Tuple[MinecraftAgent, Any, Any]:
+    """装配并启动一个接上 MaiCraft 替身的玩家（直播中），返回 ``(agent, llm, bus)``。
+
+    替身 ``server`` 的 spec 自带 minecraft 名单（与 MaicraftMcpProvider.list_tools
+    盖名单同语义）；私有 MCP 不连真端口——客户端给已连接替身，provider 用替身 server
+    本身。模型用剧本 ``script`` 回复（或直接注入 ``llm`` 替身；显式传 ``llm=None`` =
+    不注入模型，任务失败 fast-fail）。
+    """
+    if registry is None:
+        registry = ToolRegistry()
+    if server is not None:
+        for spec in server.list_tools():
+            spec.visible_to = ["minecraft"]
+        registry.register_provider(server)
+    if llm is _LLM_UNSET:
+        llm = ScriptLlm(script if script is not None else (lambda messages: Response(success=True, content="好")))
+    bus = bus if bus is not None else fake_bus()
+    agent = assemble_minecraft_agent(
+        config=config if config is not None else offline_config(events_wait_ms=1000),
+        llm=llm,
+        bus=bus,
+        registry=registry,
+        tracker=tracker,
+        skills=skills,
+        thinking_sink=thinking_sink,
+        live=live,
+        # 有 MaiCraft 替身才给已连接的客户端替身；否则与旧装配一致（游戏未连）
+        mcp_client=(mcp_client if mcp_client is not None else SimpleNamespace(connected=True))
+        if server is not None or mcp_client is not None
+        else None,
+        mcp_provider=server,
+    )
+    await agent.start()
+    return agent, llm, bus

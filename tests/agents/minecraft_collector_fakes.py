@@ -5,9 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-
-import pytest
+from typing import Any, Callable, Dict, List, Optional
 
 
 class FakeEventBus:
@@ -80,11 +78,12 @@ def events_page(
     return {"stream_id": stream_id, "cursor": cursor, "has_more": has_more, "cursor_status": status, "events": events}
 
 
-def patch_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
-    """把采集器用到的 MCP 客户端换成替身（采集器在 _ensure_ready 内函数级 import）；provider 保持真实实现。"""
-    import src.modules.mcp.client as client_module
-    import src.modules.mcp.provider as provider_module
+def fake_client_factory() -> Callable[..., FakeMcpClient]:
+    """替身 MCP 客户端的构造工厂（形态与 ``McpClient(name, config)`` 一致）。
 
+    采集器经构造参数 ``client_factory`` 注入它（不再 monkeypatch 模块属性）；
+    provider 保持真实实现——工具清单与 events 调用都打在替身客户端上。
+    每次取工厂先清空实例登记，测试按最近实例取当前客户端。
+    """
     FakeMcpClient.instances = []
-    monkeypatch.setattr(client_module, "McpClient", FakeMcpClient)
-    monkeypatch.setattr(provider_module, "McpClient", FakeMcpClient)
+    return FakeMcpClient

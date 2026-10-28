@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig, MinecraftContextConfig
 from src.agents.minecraft.context import (
     SUMMARY_KEY,
@@ -18,6 +17,8 @@ from src.agents.minecraft.context import (
 from src.modules.config.agents_schemas import AgentsConfig
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
+
+from .minecraft_v1_fakes import assemble_minecraft_agent
 
 
 @pytest.fixture(autouse=True)
@@ -309,7 +310,7 @@ async def test_game_loop_summarizes_and_continues_past_fifty_steps(used_steps: i
             Response(success=True, content="施工已核验，目标完成", finish_reason="stop"),
         ]
     )
-    agent = MinecraftAgent(MinecraftConfig(context=MinecraftContextConfig(max_tokens=24000)), llm_manager=llm)
+    agent = assemble_minecraft_agent(config=MinecraftConfig(context=MinecraftContextConfig(max_tokens=24000)), llm=llm)
     agent._task_instructions = ["建好，保留原有约束"]
     agent._task_finished = False
     agent._task_steps = used_steps
@@ -437,7 +438,7 @@ def test_template_states_how_to_play_with_maicraft_v1() -> None:
     """系统提示词写明 v1 的玩法：五个工具各管什么、一次一个动手目标、等待靠宿主通知、完成标准与底线。"""
     reset_prompt_manager()
     try:
-        prompt = MinecraftAgent(MinecraftConfig(), prompt_manager=get_prompt_manager())._system_prompt()
+        prompt = assemble_minecraft_agent(prompt_manager=get_prompt_manager())._system_prompt()
     finally:
         reset_prompt_manager()
     for tool in ("maicraft_observe", "maicraft_lookup", "maicraft_execute", "maicraft_goal", "minecraft_wait"):
@@ -455,7 +456,7 @@ def test_fallback_prompt_keeps_the_bottom_lines() -> None:
     """模板渲染不了时，内建提示词仍守住交付标准、卡住时的做法和不走捷径。"""
     manager = MagicMock()
     manager.render.side_effect = RuntimeError("模板坏了")
-    prompt = MinecraftAgent(MinecraftConfig(), prompt_manager=manager)._system_prompt()
+    prompt = assemble_minecraft_agent(prompt_manager=manager)._system_prompt()
     assert "本次目标要的结果真的达成才交付" in prompt and "听本次目标" in prompt
     assert "至少试过两种办法再用" in prompt and "身体同一时间只做一件事" in prompt
     assert "像生存玩家一样玩" in prompt and "/tp" in prompt and "/give" in prompt and "创造模式" in prompt

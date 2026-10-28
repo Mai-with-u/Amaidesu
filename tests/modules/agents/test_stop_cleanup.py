@@ -54,7 +54,6 @@ class _SelfRegisteringAgent(BaseAgent):
 
 async def test_minecraft_stop_removes_its_provider_and_closes_the_mcp_client_exactly_once() -> None:
     registry = ToolRegistry()
-    agent = MinecraftAgent(MinecraftConfig(mcp=McpServerConfig(enabled=True)), tool_registry=registry)
     client = MagicMock(close=AsyncMock())
     provider = MagicMock(setup=AsyncMock(return_value=1))
     provider.name = "maicraft"
@@ -62,12 +61,14 @@ async def test_minecraft_stop_removes_its_provider_and_closes_the_mcp_client_exa
     provider.list_tools = lambda: [
         ToolSpec(name="greet", description="g", provider="maicraft", visible_to=["minecraft"])
     ]
-
-    with (
-        patch("src.modules.mcp.client.McpClient", return_value=client),
-        patch("src.agents.minecraft.agent.MaicraftMcpProvider", return_value=provider),
-    ):
-        await agent.start()
+    # 私有 MCP 客户端与 provider 经构造工厂注入（不再 monkeypatch 模块属性）
+    agent = MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=True)),
+        tool_registry=registry,
+        mcp_client_factory=lambda name, config: client,
+        mcp_provider_factory=lambda **kwargs: provider,
+    )
+    await agent.start()
     assert registry.has("maicraft_greet") and registry.visible_to_of("maicraft_greet") == ["minecraft"]
     assert client.close.await_count == 0
 

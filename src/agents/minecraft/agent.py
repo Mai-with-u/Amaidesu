@@ -22,7 +22,7 @@ import time
 import uuid
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Deque, Dict, Iterable, List, Literal, Optional
+from typing import Any, Deque, Dict, Iterable, List, Literal, Optional, Tuple
 
 from src.agents.minecraft.attention_material import AttentionMaterialPublisher
 from src.agents.minecraft.context import (
@@ -135,6 +135,11 @@ class MinecraftAgent(BaseAgent):
         task_tracker: Optional[Any] = None,
         skill_library: Optional[SkillLibrary] = None,
         clock: Optional[Callable[[], int]] = None,
+        live_active: Optional[bool] = None,
+        mcp_client: Optional[Any] = None,
+        mcp_provider: Optional[Any] = None,
+        mcp_client_factory: Optional[Callable[..., Any]] = None,
+        mcp_provider_factory: Optional[Callable[..., Any]] = None,
     ) -> None:
         """初始化 Minecraft Agent。
 
@@ -152,6 +157,13 @@ class MinecraftAgent(BaseAgent):
                 ``minecraft_skill`` 按名读正文；本地是直播策略，玩法技能从 MaiCraft 的
                 ``resources/list`` 合并进来，正文按 ``skill://`` 地址读。
             clock: 保留给测试注入假时钟的构造参数（统一构造签名）。
+            live_active: 直播闸初始态。None = 生产默认（构造期按直播中，启动钩子落收工态，
+                等 live.started 恢复）；显式给值（测试用）则启动钩子不再改写。
+            mcp_client / mcp_provider: 预装配好的 Agent 私有 MCP 客户端与 provider 实例。
+                注入了任一实例即视为私有 MCP 已装配，启动钩子跳过真实连接（测试替身自管注册）。
+            mcp_client_factory / mcp_provider_factory: 私有 MCP 客户端 / provider 的构造工厂，
+                形态分别与 ``McpClient(name, config)`` 和 ``MaicraftMcpProvider(client=…,
+                server_name=…, provider=…, goal_lookup=…)`` 一致；缺省 None 走本类的默认构造。
         """
         super().__init__(event_bus=event_bus)
         del clock
@@ -227,9 +239,11 @@ class MinecraftAgent(BaseAgent):
         # 最近一条身体急事收尾的那句话与收到的时刻：紧接着到的暂停通知带上它，说清主任务为什么停在半路。
         self._urgent_before_pause: Optional[tuple[str, float]] = None
 
-        # Agent 私有 MCP（_on_start 装配）
-        self._mcp_client: Optional[Any] = None
-        self._mcp_provider: Optional[Any] = None
+        # Agent 私有 MCP（_on_start 装配；构造注入实例或工厂时按注入装配）
+        self._mcp_client: Optional[Any] = mcp_client
+        self._mcp_provider: Optional[Any] = mcp_provider
+        self._mcp_client_factory = mcp_client_factory
+        self._mcp_provider_factory = mcp_provider_factory
         self._mcp_ready_once = False
         self._goals = GoalWatch(
             call=self._call_maicraft,
@@ -258,8 +272,10 @@ class MinecraftAgent(BaseAgent):
         # 平台暂停支持（AgentControl pause/resume 经 _on_pause/_on_resume 进入）
         self._paused = asyncio.Event()
         self._paused.set()
-        # 直播生命周期闸：启动期按"无活跃场次"落收工态，live.started 才恢复接受委派
-        self._live_active = True
+        # 直播生命周期闸：启动期按"无活跃场次"落收工态，live.started 才恢复接受委派；
+        # 构造时显式注入 live_active 的（测试装配）以注入值为准，启动钩子不改写
+        self._live_active = True if live_active is None else live_active
+        self._live_active_injected = live_active is not None
         self._running = False
 
         self._logger.info(f"MinecraftAgent 已构造 (llm={'已注入' if llm_manager else '无'}@{MINECRAFT_PROFILE})")
@@ -279,7 +295,8 @@ class MinecraftAgent(BaseAgent):
             self._register_tools()
             await self._bind_agent_owned_mcp()
         self._running = True
-        self._live_active = False
+        if not self._live_active_injected:
+            self._live_active = False
         self._worker_task = asyncio.create_task(self._worker())
         self._goals.start()
         if self._event_bus is not None:
@@ -314,14 +331,28 @@ class MinecraftAgent(BaseAgent):
         """
         if self._tool_registry is None or not self.typed_config.mcp.enabled:
             return
+        if self._mcp_client is not None or self._mcp_provider is not None:
+            # 构造注入了私有 MCP 实例：装配已完成（测试替身自管注册），不再真实连接
+            return
         # 函数内 import：mcp 模块涉及 fastmcp 重型依赖，按"可选重型依赖延迟加载"只在启动期导入一次。
         from src.modules.mcp.client import McpClient
 
-        client = McpClient(name=PROVIDER, config=self.typed_config.mcp)
-        self._mcp_client = client
-        prov = MaicraftMcpProvider(
-            client=client, server_name=PROVIDER, provider=PROVIDER, goal_lookup=self._call_maicraft
+        client = (
+            self._mcp_client_factory(PROVIDER, self.typed_config.mcp)
+            if self._mcp_client_factory is not None
+            else McpClient(name=PROVIDER, config=self.typed_config.mcp)
         )
+        self._mcp_client = client
+        prov: MaicraftMcpProvider = (
+            self._mcp_provider_factory(
+                client=client, server_name=PROVIDER, provider=PROVIDER, goal_lookup=self._call_maicraft
+            )
+            if self._mcp_provider_factory is not None
+            else MaicraftMcpProvider(
+                client=client, server_name=PROVIDER, provider=PROVIDER, goal_lookup=self._call_maicraft
+            )
+        )
+        self._mcp_provider = prov
         self._mcp_provider = prov
         prov.on_connection_changed = self._on_mcp_connection_changed
         prov.switch_config = {"file": "agents.toml", "key": "agents.minecraft.mcp.enabled"}
@@ -1321,6 +1352,32 @@ class MinecraftAgent(BaseAgent):
     def get_state_snapshot(self) -> Dict[str, Any]:
         """导出状态快照（minecraft_get_work_log 同构；测试可断言）。"""
         return self._mc_state.to_dict()
+
+    @property
+    def tracked_goal_ids(self) -> List[int]:
+        """在跟踪的后台目标编号（只读观测面：仪表盘与测试读，不提供写入口）。"""
+        return self._goals.tracked_ids()
+
+    @property
+    def queued_messages(self) -> List[Tuple[str, Any]]:
+        """还没被模型读到的消息队列快照（只读观测面）。"""
+        return list(self._message_queue)
+
+    @property
+    def batch_active(self) -> bool:
+        """本批 ReAct 是否正在跑（只读观测面）。"""
+        return self._batch_active
+
+    def observation(self) -> Dict[str, Any]:
+        """任务推进状态快照（只读观测面）：批状态、任务状态、身体故障说法与本批身体事件。"""
+        return {
+            "batch_active": self._batch_active,
+            "task_finished": self._task_finished,
+            "task_suspended": self._task_suspended,
+            "task_instructions": list(self._task_instructions),
+            "body_fault": self._body_fault,
+            "batch_body_events": [dict(record) for record in self._batch_body_events],
+        }
 
     @property
     def paused(self) -> bool:

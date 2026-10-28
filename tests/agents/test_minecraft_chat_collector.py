@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
-import pytest
-
 from src.agents.minecraft.chat_collector import MaicraftChatCollector
 from src.modules.collectors.base import BaseCollector
 from src.modules.agents.companions import build_companion_collectors, owner_of
@@ -21,14 +19,9 @@ from src.modules.collectors.factory import SUPPORTED_COLLECTORS
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game_chat import GameChatPayload
 
-from .minecraft_collector_fakes import FakeEventBus, FakeMcpClient, events_page, patch_mcp
+from .minecraft_collector_fakes import FakeEventBus, FakeMcpClient, events_page, fake_client_factory
 
 _STEVE_ID = "8667ba71-b85a-4004-af54-457a9734eed7"
-
-
-@pytest.fixture(autouse=True)
-def _patch_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
-    patch_mcp(monkeypatch)
 
 
 def _chat(
@@ -50,7 +43,9 @@ async def _primed(
 ) -> Tuple[MaicraftChatCollector, FakeMcpClient, FakeEventBus]:
     """接上替身并完成首次读取：流里已有一条接手前的聊天，游标停在 3。"""
     bus = FakeEventBus()
-    collector = MaicraftChatCollector(config=config or {}, event_bus=bus)  # type: ignore[arg-type]
+    collector = MaicraftChatCollector(  # type: ignore[arg-type]
+        config=config or {}, event_bus=bus, client_factory=fake_client_factory()
+    )
     assert await collector._ensure_ready() is True
     client = FakeMcpClient.instances[-1]
     client.pages.append(events_page([_chat(3, "接手前说的话")], cursor=3))

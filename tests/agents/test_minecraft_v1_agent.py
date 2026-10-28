@@ -7,11 +7,12 @@ import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.minecraft.agent import MinecraftAgent
-from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.glance import glance_brief, glance_scene
 from src.agents.minecraft.goal_ledger import pause_notice
 from src.agents.minecraft.maicraft import GoalRun, MaicraftReply, goal_run_of, ledger_task_id, reply_of
@@ -23,13 +24,12 @@ from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.llm.engine import _guard_inline_payload, _normalize_generate_input
 from src.modules.llm.errors import UnsendableRequestError
 from src.modules.llm.payload import Response, ToolCall
-from src.modules.mcp.config import McpServerConfig
 from src.modules.skills import SkillLibrary
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger, TaskTracker
 
-from .minecraft_v1_fakes import FakeMaicraft
+from .minecraft_v1_fakes import FakeMaicraft, assemble_minecraft_agent, make_minecraft_agent
 
 LlmScript = Callable[[List[Dict[str, Any]]], Response]
 
@@ -53,59 +53,6 @@ async def _wait_until(condition: Callable[[], bool], timeout: float = 10.0) -> N
             return
         await asyncio.sleep(0.02)
     raise TimeoutError("条件在时限内未成立")
-
-
-class _Llm:
-    """按剧本回复的模型替身：每次推理把当时的消息交给剧本，记下推理次数与看到的消息。"""
-
-    def __init__(self, script: LlmScript) -> None:
-        self.script = script
-        self.seen: List[List[Dict[str, Any]]] = []
-        self.tools_given: List[List[Dict[str, Any]]] = []
-
-    async def generate(self, messages: List[Dict[str, Any]], **kwargs: Any) -> Response:
-        self.seen.append([dict(message) for message in messages])
-        self.tools_given.append(list(kwargs.get("tools") or []))
-        return self.script(messages)
-
-    def is_profile_visual(self, profile: Optional[str]) -> bool:
-        """能力查询替身：剧本场景一律按非视觉。"""
-        return False
-
-    def get_profile_context_window(self, profile: Optional[str]) -> int:
-        """窗口查询替身：剧本场景按未配置（0），预算走保守窗口。"""
-        return 0
-
-
-async def _start(
-    server: FakeMaicraft,
-    script: LlmScript,
-    *,
-    tracker: Optional[TaskTracker] = None,
-    skills: Optional[SkillLibrary] = None,
-) -> tuple[MinecraftAgent, _Llm, MagicMock]:
-    """启动一个接上 MaiCraft 替身的玩家：私有 MCP 不连真端口，provider 直接换成替身。"""
-    registry = ToolRegistry()
-    # 替身 server 的 spec 自带 minecraft 名单（与 MaicraftMcpProvider.list_tools 盖名单同语义）
-    for spec in server.list_tools():
-        spec.visible_to = ["minecraft"]
-    registry.register_provider(server)
-    llm = _Llm(script)
-    bus = MagicMock()
-    bus.emit = AsyncMock()
-    agent = MinecraftAgent(
-        MinecraftConfig(mcp=McpServerConfig(enabled=False, url="http://127.0.0.1:8766/mcp"), events_wait_ms=1000),
-        llm_manager=llm,
-        event_bus=bus,
-        tool_registry=registry,
-        task_tracker=tracker,
-        skill_library=skills,
-    )
-    agent._mcp_provider = server
-    agent._mcp_client = SimpleNamespace(connected=True)
-    await agent.start()
-    agent._live_active = True  # 测试模拟直播中
-    return agent, llm, bus
 
 
 def _reports(bus: MagicMock) -> List[GamePayload]:
@@ -138,7 +85,7 @@ async def test_look_around_and_remember_a_place_end_to_end() -> None:
             )
         return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了，这里记成了家"})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="看一眼周围并记住一个地点", task_id="d-1")
     await _wait_until(lambda: len(_reports(bus)) == 1)
 
@@ -155,7 +102,7 @@ async def test_look_around_and_remember_a_place_end_to_end() -> None:
     assert "minecraft:cow" in _texts(first) and "maicraft:remember" in _texts(first)
     assert all(tool["name"] != "maicraft_events" for tool in llm.tools_given[0]), "事件流不给模型"
     assert _reports(bus)[0].report_kind == "delivery"
-    assert agent._goals.tracked_ids() == [], "当场完成的目标不跟踪"
+    assert agent.tracked_goal_ids == [], "当场完成的目标不跟踪"
     await agent.stop()
 
 
@@ -176,10 +123,10 @@ async def test_a_background_goal_wakes_the_task_with_its_result() -> None:
             return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
-    await _wait_until(lambda: agent._goals.tracked_ids() == [1])
-    await _wait_until(lambda: agent._batch_active is False and len(llm.seen) == 2)
+    await _wait_until(lambda: agent.tracked_goal_ids == [1])
+    await _wait_until(lambda: agent.batch_active is False and len(llm.seen) == 2)
     calls_while_waiting = len(llm.seen)
     await asyncio.sleep(0.2)
     assert len(llm.seen) == calls_while_waiting, "等待期间不调用模型"
@@ -191,7 +138,7 @@ async def test_a_background_goal_wakes_the_task_with_its_result() -> None:
     assert "目标 1" in woken and "done" in woken and "minecraft:oak_log" in woken
     # 结束事件没带自身摘要、结果也没折：通知里不凭空多出这两句。
     assert "结束时：" not in woken and "result.folded" not in woken
-    assert agent._goals.tracked_ids() == []
+    assert agent.tracked_goal_ids == []
     await agent.stop()
 
 
@@ -211,10 +158,10 @@ async def test_the_finish_notice_carries_the_self_brief_and_how_to_read_folded_e
             return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
-    await _wait_until(lambda: agent._goals.tracked_ids() == [1])
-    await _wait_until(lambda: agent._batch_active is False and len(llm.seen) == 2)
+    await _wait_until(lambda: agent.tracked_goal_ids == [1])
+    await _wait_until(lambda: agent.batch_active is False and len(llm.seen) == 2)
 
     server.finish(1, self_brief=brief, attempts=[{"tried": "从北边靠近树", "result": "被河挡住"}])
     await _wait_until(lambda: len(_reports(bus)) == 1)
@@ -235,7 +182,7 @@ async def test_the_finish_notice_carries_the_self_brief_and_how_to_read_folded_e
 async def test_reading_folded_evidence_by_path_is_never_taken_for_polling() -> None:
     """带 path 的 get 读的是结束了的目标里折起来的证据：哪怕名单里还挂着这个编号，也不当成轮询并入等待。"""
     server = FakeMaicraft()
-    agent, llm, bus = await _start(server, lambda messages: _resp("好"))
+    agent, llm, bus = await make_minecraft_agent(server, lambda messages: _resp("好"))
     run = goal_run_of({"goal_id": 4, "ability": "maicraft:gather", "state": "running"})
     assert run is not None
     agent._track_goal(run)
@@ -255,7 +202,7 @@ async def test_delivery_is_refused_while_a_goal_is_still_running() -> None:
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "做完了"})])
         return _resp(calls=[_call("minecraft_wait", {"reason": "等目标"})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
     await _wait_until(lambda: len(llm.seen) >= 3)
 
@@ -283,13 +230,13 @@ async def test_a_question_wakes_the_task_and_waiting_is_refused_until_answered()
             return _resp(calls=[_call("minecraft_wait", {"reason": "等存东西"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "deposit"}})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="把东西存起来", task_id="d-1")
-    await _wait_until(lambda: agent._goals.tracked_ids() == [1])
-    await _wait_until(lambda: agent._batch_active is False)
+    await _wait_until(lambda: agent.tracked_goal_ids == [1])
+    await _wait_until(lambda: agent.batch_active is False)
     server.ask(1)
     await _wait_until(lambda: bool(answered))
-    await _wait_until(lambda: agent._batch_active is False)
+    await _wait_until(lambda: agent.batch_active is False)
     server.finish(1, summary="存进了屋里的箱子")
     await _wait_until(lambda: len(_reports(bus)) == 1)
 
@@ -309,9 +256,9 @@ async def test_polling_a_running_goal_is_folded_into_waiting() -> None:
             return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
         return _resp(calls=[_call("maicraft_goal", {"operation": "get", "goal_id": 1})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
-    await _wait_until(lambda: len(llm.seen) == 3 and agent._batch_active is False)
+    await _wait_until(lambda: len(llm.seen) == 3 and agent.batch_active is False)
     await asyncio.sleep(0.2)
 
     assert len(llm.seen) == 3, "第二次轮询后并入等待"
@@ -333,7 +280,7 @@ async def test_goals_are_mirrored_into_the_shared_task_ledger() -> None:
             return _resp(calls=[_call("minecraft_wait", {"reason": "等"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
 
-    agent, llm, bus = await _start(server, script, tracker=tracker)
+    agent, llm, bus = await make_minecraft_agent(server, script, tracker=tracker)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
     await _wait_until(lambda: "maicraft-goal-1" in ledger)
     assert ledger.get("maicraft-goal-1").initiator == "minecraft"
@@ -361,7 +308,7 @@ async def test_execute_finishing_inline_still_lands_in_the_ledger() -> None:
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "记好了"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "remember", "parameters": {"name": "家"}}})])
 
-    agent, llm, bus = await _start(server, script, tracker=tracker)
+    agent, llm, bus = await make_minecraft_agent(server, script, tracker=tracker)
     agent.receive_delegation(instruction="记一下家", task_id="d-1")
     await _wait_until(lambda: len(_reports(bus)) == 1)
     assert "maicraft-goal-1" not in ledger, "终态条目已按约定移除"
@@ -372,7 +319,7 @@ async def test_execute_finishing_inline_still_lands_in_the_ledger() -> None:
         if call.args and getattr(call.args[1], "task_id", "") == "maicraft-goal-1"
     ]
     assert changed and changed[0].status == "succeeded", "当场完成的终态广播 task.changed"
-    assert agent._goals.tracked_ids() == [], "当场完成的目标不进跟踪名单"
+    assert agent.tracked_goal_ids == [], "当场完成的目标不进跟踪名单"
     await agent.stop()
 
 
@@ -453,7 +400,7 @@ async def test_tracker_fallback_verification_uses_the_goal_query_adapter() -> No
 
 async def test_glance_shows_body_nearby_things_and_running_goals() -> None:
     server = FakeMaicraft()
-    agent, llm, bus = await _start(server, lambda messages: _resp("好"))
+    agent, llm, bus = await make_minecraft_agent(server, lambda messages: _resp("好"))
     run = goal_run_of(
         {"goal_id": 4, "ability": "maicraft:gather", "purpose": "砍树", "state": "running", "doing": "走向树"}
     )
@@ -534,10 +481,10 @@ async def test_character_death_tells_the_running_task_and_the_streamer() -> None
             return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
-    await _wait_until(lambda: agent._goals.tracked_ids() == [1])
-    await _wait_until(lambda: agent._batch_active is False and len(llm.seen) == 2)
+    await _wait_until(lambda: agent.tracked_goal_ids == [1])
+    await _wait_until(lambda: agent.batch_active is False and len(llm.seen) == 2)
 
     server.body_event("character_died", "角色死了，等重生；主任务停在原地，重生后接着做")
     await _wait_until(lambda: len(llm.seen) == 3)
@@ -551,7 +498,7 @@ async def test_character_death_tells_the_running_task_and_the_streamer() -> None
     ]
     # 上报主播的是 Mod 原话（死亡属短事件直通；长排查文由素材调度器压缩）
     assert any("角色死了" in alert.message and "主任务停在原地" in alert.message for alert in alerts)
-    assert agent._goals.tracked_ids() == [1], "死亡不结束目标"
+    assert agent.tracked_goal_ids == [1], "死亡不结束目标"
     await agent.stop()
 
 
@@ -567,17 +514,17 @@ async def test_sky_changes_ride_along_with_the_next_wakeup_instead_of_waking_the
             return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
-    await _wait_until(lambda: agent._goals.tracked_ids() == [1])
-    await _wait_until(lambda: agent._batch_active is False and len(llm.seen) == 2)
+    await _wait_until(lambda: agent.tracked_goal_ids == [1])
+    await _wait_until(lambda: agent.batch_active is False and len(llm.seen) == 2)
 
     server.body_event("sky_changed", "天黑了，到了能睡的时间（夜晚，距天亮约 8 分钟；晴）")
     server.body_event("sky_changed", "开始下雨了（夜晚；雨）")
-    await _wait_until(lambda: any("开始下雨了" in str(content) for _, content in agent._message_queue))
+    await _wait_until(lambda: any("开始下雨了" in str(content) for _, content in agent.queued_messages))
     await asyncio.sleep(0.2)
     assert len(llm.seen) == 2, "天色变了不唤醒等着目标的模型"
-    assert len(agent._message_queue) == 1, "队列里只留最新一条天色"
+    assert len(agent.queued_messages) == 1, "队列里只留最新一条天色"
 
     server.finish(1, summary="砍了 5 块原木")
     await _wait_until(lambda: len(_reports(bus)) == 1)
@@ -586,8 +533,8 @@ async def test_sky_changes_ride_along_with_the_next_wakeup_instead_of_waking_the
     assert "[天色] 天黑了" not in woken, "被新天色换掉的那条不再带给模型"
 
     server.body_event("sky_changed", "天亮了，过了能睡的时间（白天；雨）")
-    await _wait_until(lambda: any("天亮了" in record["message"] for record in agent._batch_body_events))
-    assert not agent._message_queue, "任务交付后不挂天色，等到下个任务只会是过时的"
+    await _wait_until(lambda: any("天亮了" in record["message"] for record in agent.observation()["batch_body_events"]))
+    assert not agent.queued_messages, "任务交付后不挂天色，等到下个任务只会是过时的"
     alerts = [
         call.args[1]
         for call in bus.emit.await_args_list
@@ -618,10 +565,10 @@ async def test_a_due_timer_wakes_an_idle_agent_as_a_new_task() -> None:
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "炉子烧好了"})])
         return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="看一眼周围", task_id="d-1")
-    await _wait_until(lambda: len(_reports(bus)) == 1 and agent._batch_active is False)
-    assert agent._task_finished
+    await _wait_until(lambda: len(_reports(bus)) == 1 and agent.batch_active is False)
+    assert agent.observation()["task_finished"]
 
     server.body_event("timer_due", _TIMER_DUE)
     await _wait_until(lambda: len(_reports(bus)) == 2)
@@ -646,17 +593,17 @@ async def test_a_due_timer_during_a_running_task_is_a_plain_notice() -> None:
             return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
-    await _wait_until(lambda: agent._goals.tracked_ids() == [1])
-    await _wait_until(lambda: agent._batch_active is False and len(llm.seen) == 2)
+    await _wait_until(lambda: agent.tracked_goal_ids == [1])
+    await _wait_until(lambda: agent.batch_active is False and len(llm.seen) == 2)
 
     server.body_event("timer_due", _TIMER_DUE)
-    await _wait_until(lambda: len(llm.seen) == 3 and agent._batch_active is False)
+    await _wait_until(lambda: len(llm.seen) == 3 and agent.batch_active is False)
     woken = _texts(llm.seen[-1])
     assert f"[计时] {_TIMER_DUE}" in woken and "去砍点木头" in woken, "在原任务的历史里读到"
-    assert agent._task_instructions == ["去砍点木头"], "到点不记成原始指令"
-    assert agent._goals.tracked_ids() == [1]
+    assert agent.observation()["task_instructions"] == ["去砍点木头"], "到点不记成原始指令"
+    assert agent.tracked_goal_ids == [1]
 
     server.finish(1, summary="砍了 5 块原木")
     await _wait_until(lambda: len(_reports(bus)) == 1)
@@ -672,15 +619,15 @@ async def test_a_due_timer_resumes_a_task_suspended_for_the_streamer() -> None:
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "铁锭拿到了"})])
         return _resp(calls=[_call("minecraft_report", {"kind": "escalation", "content": "缺燃料，要不要去砍树"})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="烧点铁锭", task_id="d-1")
-    await _wait_until(lambda: agent._task_suspended and agent._batch_active is False)
+    await _wait_until(lambda: agent.observation()["task_suspended"] and agent.batch_active is False)
 
     server.body_event("timer_due", _TIMER_DUE)
     await _wait_until(lambda: len(_reports(bus)) == 2)
     woken = _texts(llm.seen[-1])
     assert "烧点铁锭" in woken and f"[计时] {_TIMER_DUE}" in woken
-    assert agent._task_instructions == ["烧点铁锭"]
+    assert agent.observation()["task_instructions"] == ["烧点铁锭"]
     await agent.stop()
 
 
@@ -699,21 +646,20 @@ async def test_a_timer_due_while_the_task_is_being_delivered_still_wakes() -> No
         )
         return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     holder["agent"] = agent
     agent.receive_delegation(instruction="看一眼周围", task_id="d-1")
     await _wait_until(lambda: len(_reports(bus)) == 2)
     assert f"[计时] {_TIMER_DUE}" in _texts(llm.seen[-1])
-    assert not agent._message_queue
+    assert not agent.queued_messages
     await agent.stop()
 
 
 async def test_a_due_timer_is_dropped_while_off_air() -> None:
     """收工态到点不排叫醒：下一场开播时冒出上一场的提醒只会让模型去看过时的东西。"""
-    agent, llm, _bus = await _start(FakeMaicraft(), lambda messages: _resp("好"))
-    agent._live_active = False
+    agent, llm, _bus = await make_minecraft_agent(FakeMaicraft(), lambda messages: _resp("好"), live=False)
     await agent._on_body_event({"kind": "timer_due", "message": _TIMER_DUE, "cursor": 1})
-    assert not agent._message_queue and llm.seen == []
+    assert not agent.queued_messages and llm.seen == []
     await agent.stop()
 
 
@@ -724,12 +670,23 @@ _HUNGRY_FAILURE = (
 )
 
 
-def _capture_injections(agent: MinecraftAgent) -> List[str]:
-    """记下交给模型的通知正文，不真的叫醒模型；任务置为进行中，通知才会注入。"""
+def _capture_injections(agent: MinecraftAgent) -> Callable[[], List[str]]:
+    """返回"收通知"函数：把此刻还在队列里没被模型读到的通知出队收走，累计返回。
+
+    通知交给模型的公开出口就是消息队列：出队即视为模型已读，之后去重判定看到的
+    历史/队列状态由测试显式摆放（写进历史或放回队列）。任务置为进行中通知才会注入
+    （开批判定收在 Agent 内，无公开入口——这处私有写保留，理由见测试报告登记）。
+    """
     captured: List[str] = []
-    agent._inject_wakeup_message = captured.append  # type: ignore[method-assign]
     agent._task_finished = False
-    return captured
+
+    def collect() -> List[str]:
+        while agent.queued_messages:
+            _, content = agent._wake_queue.pop()
+            captured.append(content)
+        return captured
+
+    return collect
 
 
 def _need_unhandled(message: str, cursor: int) -> Dict[str, Any]:
@@ -738,15 +695,17 @@ def _need_unhandled(message: str, cursor: int) -> Dict[str, Any]:
 
 async def test_a_repeated_need_unhandled_points_back_while_the_first_copy_is_in_history() -> None:
     """同样的没吃上说明再来一遍，前面那份还在历史里：只留一句指回去，不再整段抄。"""
-    agent, _llm, _bus = await _start(FakeMaicraft(), lambda messages: _resp("好"))
-    captured = _capture_injections(agent)
+    agent, _llm, _bus = await make_minecraft_agent(FakeMaicraft(), lambda messages: _resp("好"), live=False)
+    collect = _capture_injections(agent)
 
     await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 1))
+    captured = collect()
     assert len(captured) == 1 and "箱子：附近没有" in captured[0], "第一次完整展示"
 
     # 第一份已经交给模型读过：它在历史里
     agent._messages.append({"role": "user", "content": captured[0]})
     await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 2))
+    captured = collect()
 
     assert len(captured) == 2
     assert "箱子：附近没有" not in captured[1], captured[1]
@@ -756,48 +715,57 @@ async def test_a_repeated_need_unhandled_points_back_while_the_first_copy_is_in_
 
 async def test_a_repeated_need_unhandled_points_back_while_the_first_copy_is_still_queued() -> None:
     """前面那份还在排队、模型没读到：一样不重抄，两条一起读到时第二条指回第一条。"""
-    agent, _llm, _bus = await _start(FakeMaicraft(), lambda messages: _resp("好"))
-    captured = _capture_injections(agent)
+    agent, _llm, _bus = await make_minecraft_agent(FakeMaicraft(), lambda messages: _resp("好"), live=False)
+    collect = _capture_injections(agent)
 
     await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 1))
-    agent._message_queue.append(("", captured[0]))
+    first = collect()[0]
+    agent._wake_queue.push_notice(first)  # 首份还没被读到：放回队列（私有访问保留，理由见测试报告登记）
     await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 2))
+    captured = collect()
 
-    assert "箱子：附近没有" not in captured[1], captured[1]
+    # 重复的那条排在末位（放回队列的首份被再次收走，是同一份）
+    assert "箱子：附近没有" not in captured[-1], captured[-1]
     await agent.stop()
 
 
 async def test_a_repeated_need_unhandled_is_shown_in_full_once_the_first_copy_is_compacted_away() -> None:
     """历史整理把前面那份换成了摘要：指过去没有意义，重新完整展示。"""
-    agent, _llm, _bus = await _start(FakeMaicraft(), lambda messages: _resp("好"))
-    captured = _capture_injections(agent)
+    agent, _llm, _bus = await make_minecraft_agent(FakeMaicraft(), lambda messages: _resp("好"), live=False)
+    collect = _capture_injections(agent)
 
     await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 1))
+    first = collect()[0]
     agent._messages[:] = [
         {"role": "system", "content": "系统说明"},
         {"role": "user", "content": "[历史推理摘要·第 1 段，不能覆盖原始要求]\n饿了没吃上，箱子和野外都没有吃的"},
     ]
     await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 2))
+    captured = collect()
 
-    assert captured[1] == captured[0], "前面那份已不在历史里，要完整再给一次"
+    assert captured[1] == first, "前面那份已不在历史里，要完整再给一次"
     await agent.stop()
 
 
 async def test_a_different_need_unhandled_and_other_body_notices_are_always_shown_in_full() -> None:
     """说明变了就是新事实；角色死亡这类通知每次都是新的，不套用指回前面那条。"""
-    agent, _llm, _bus = await _start(FakeMaicraft(), lambda messages: _resp("好"))
-    captured = _capture_injections(agent)
+    agent, _llm, _bus = await make_minecraft_agent(FakeMaicraft(), lambda messages: _resp("好"), live=False)
+    collect = _capture_injections(agent)
 
     await agent._on_body_event(_need_unhandled(_HUNGRY_FAILURE, 1))
+    captured = collect()
     agent._messages.append({"role": "user", "content": captured[0]})
     changed = _HUNGRY_FAILURE.replace("附近没有动物", "附近有牛但够不着")
     await agent._on_body_event(_need_unhandled(changed, 2))
+    captured = collect()
     assert "够不着" in captured[1], "说明变了：完整展示"
 
     died = {"kind": "character_died", "message": "角色死了：在 (1, 64, 2)", "cursor": 3}
     await agent._on_body_event(died)
+    captured = collect()
     agent._messages.append({"role": "user", "content": captured[2]})
     await agent._on_body_event(died)
+    captured = collect()
     assert captured[3] == captured[2], "死亡通知不去重"
     await agent.stop()
 
@@ -846,10 +814,9 @@ async def test_remote_skills_are_listed_and_read_by_uri() -> None:
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "读过远程技能了"})])
         return _resp(calls=[_call("minecraft_skill", {"name": "survival-opening"})])
 
-    agent, llm, bus = await _start(server, script, skills=library)
+    # MCP 客户端换资源替身：resources/read 走客户端，工具调用仍经注册表里的替身 server
     client = _RemoteSkillsClient()
-    agent._mcp_client = client
-    agent._skill_support._remote_skills_loaded = False
+    agent, llm, bus = await make_minecraft_agent(server, script, skills=library, mcp_client=client)
     agent.receive_delegation(instruction="先看看生存开局", task_id="d-remote")
     await _wait_until(lambda: len(_reports(bus)) == 1)
 
@@ -885,7 +852,7 @@ async def test_skill_catalog_follows_the_abilities_the_mod_has(tmp_path: Path) -
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "读过砍树的打法了"})])
         return _resp(calls=[_call("minecraft_skill", {"name": "chop_trees"})])
 
-    agent, llm, bus = await _start(server, script, skills=library)
+    agent, llm, bus = await make_minecraft_agent(server, script, skills=library)
     agent.receive_delegation(instruction="先看看怎么砍树", task_id="d-1")
     await _wait_until(lambda: len(_reports(bus)) == 1)
 
@@ -914,10 +881,10 @@ async def test_a_death_recovery_question_wakes_the_task_to_answer_it() -> None:
             return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
-    await _wait_until(lambda: agent._goals.tracked_ids() == [1])
-    await _wait_until(lambda: agent._batch_active is False and len(llm.seen) == 2)
+    await _wait_until(lambda: agent.tracked_goal_ids == [1])
+    await _wait_until(lambda: agent.batch_active is False and len(llm.seen) == 2)
 
     server.die()
     await _wait_until(lambda: server.calls_to("goal") and server.calls_to("goal")[-1].get("operation") == "answer")
@@ -925,7 +892,7 @@ async def test_a_death_recovery_question_wakes_the_task_to_answer_it() -> None:
     woken = _texts(llm.seen[-1])
     assert "死亡恢复决策等你回答" in woken and "goal_id=-1" in woken and "respawn" in woken
     assert server.calls_to("goal")[-1] == {"operation": "answer", "goal_id": -1, "answer": "respawn"}
-    assert agent._goals.tracked_ids() == [1], "决策不进跟踪名单，原来的目标还在跟"
+    assert agent.tracked_goal_ids == [1], "决策不进跟踪名单，原来的目标还在跟"
     await agent.stop()
 
 
@@ -944,10 +911,10 @@ async def test_a_death_decision_wakes_an_idle_agent_as_a_new_task() -> None:
             return _resp(calls=[_call("maicraft_goal", dict(_ANSWER_RESPAWN))])
         return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="看一眼周围", task_id="d-1")
-    await _wait_until(lambda: len(_reports(bus)) == 1 and agent._batch_active is False)
-    assert agent._task_finished
+    await _wait_until(lambda: len(_reports(bus)) == 1 and agent.batch_active is False)
+    assert agent.observation()["task_finished"]
 
     server.die()
     await _wait_until(lambda: len(_reports(bus)) == 2)
@@ -971,17 +938,17 @@ async def test_a_death_decision_wakes_a_task_suspended_for_the_streamer() -> Non
             return _resp(calls=[_call("maicraft_goal", dict(_ANSWER_RESPAWN))])
         return _resp(calls=[_call("minecraft_report", {"kind": "escalation", "content": "缺燃料，要不要去砍树"})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="烧点铁锭", task_id="d-1")
-    await _wait_until(lambda: agent._task_suspended and agent._batch_active is False)
+    await _wait_until(lambda: agent.observation()["task_suspended"] and agent.batch_active is False)
 
     server.die()
     await _wait_until(lambda: len(_reports(bus)) == 2)
     woken = _texts(llm.seen[-1])
     assert "烧点铁锭" in woken and "死亡恢复决策等你回答" in woken and "Mod 挂出的决策" in woken
     assert server.calls_to("goal")[-1] == _ANSWER_RESPAWN
-    assert agent._task_instructions == ["烧点铁锭"], "决策不记成原始指令"
-    assert agent._task_suspended, "答完再上报就接着等主播"
+    assert agent.observation()["task_instructions"] == ["烧点铁锭"], "决策不记成原始指令"
+    assert agent.observation()["task_suspended"], "答完再上报就接着等主播"
     await agent.stop()
 
 
@@ -999,7 +966,7 @@ async def test_a_death_while_the_task_is_being_delivered_still_gets_answered() -
             server.die()
         return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     # 目标跟踪第一次读事件流只建游标、不补发之前的事件：等它读过一次（发出第二次读取）再派活，
     # 不然第一步就死的事件会被当成接手前的旧事件跳过。
     await _wait_until(lambda: len(server.calls_to("events")) >= 2)
@@ -1007,20 +974,19 @@ async def test_a_death_while_the_task_is_being_delivered_still_gets_answered() -
     await _wait_until(lambda: len(_reports(bus)) == 2)
     assert "Mod 挂出的决策" in _texts(llm.seen[-1])
     assert server.calls_to("goal")[-1] == _ANSWER_RESPAWN
-    assert not agent._message_queue
+    assert not agent.queued_messages
     await agent.stop()
 
 
 async def test_a_death_decision_is_not_queued_while_off_air() -> None:
     """收工态不排决策叫醒：下一场开播时冒出上一场的死亡决策只会让模型去答过时的问题。"""
-    agent, llm, _bus = await _start(FakeMaicraft(), lambda messages: _resp("好"))
-    agent._live_active = False
+    agent, llm, _bus = await make_minecraft_agent(FakeMaicraft(), lambda messages: _resp("好"), live=False)
     decision = goal_run_of(
         {"goal_id": -1, "ability": "death_recovery", "state": "awaiting_answer", "question": {"text": "角色死了"}}
     )
     assert decision is not None
     await agent._on_decision_asked(decision)
-    assert not agent._message_queue and llm.seen == []
+    assert not agent.queued_messages and llm.seen == []
     await agent.stop()
 
 
@@ -1038,10 +1004,10 @@ def _pause_script(messages: List[Dict[str, Any]]) -> Response:
 
 async def _paused_after(server: FakeMaicraft, doing: str) -> str:
     """砍树途中撤离：Mod 先发急事收尾，再把主任务挂成暂停；返回游戏 Agent 收到的暂停通知所在的那次推理。"""
-    agent, llm, _bus = await _start(server, _pause_script)
+    agent, llm, _bus = await make_minecraft_agent(server, _pause_script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
-    await _wait_until(lambda: agent._goals.tracked_ids() == [1])
-    await _wait_until(lambda: agent._batch_active is False and len(llm.seen) == 2)
+    await _wait_until(lambda: agent.tracked_goal_ids == [1])
+    await _wait_until(lambda: agent.batch_active is False and len(llm.seen) == 2)
 
     server.body_event("temporary_task_finished", _ESCAPED)
     server.goals[1]["doing"] = doing
@@ -1070,48 +1036,43 @@ async def test_a_pause_reason_written_by_the_mod_comes_first() -> None:
     assert "暂停前身体刚处理完" not in woken
 
 
-async def test_only_a_changed_event_stream_is_called_reentering_the_world() -> None:
-    """事件流换了编号后查到的暂停才说重进世界；隔久了的急事不拿来解释这次暂停，也只用一次。"""
-    agent = MinecraftAgent(
-        MinecraftConfig(mcp=McpServerConfig(enabled=False, url="http://127.0.0.1:8766/mcp")),
-        llm_manager=MagicMock(),
-    )
+def test_only_a_changed_event_stream_is_called_reentering_the_world() -> None:
+    """事件流换了编号后查到的暂停才说重进世界；隔久了的急事不拿来解释这次暂停。
+
+    暂停通知是纯函数：急事收尾那条话由调用方（Agent 的暂停回调）取用一次即弃，
+    用过即清是调用方的取值形态，这里只验通知文案对"新急事/隔久了的急事"的分流。
+    """
     run = goal_run_of(
         {"goal_id": 3, "ability": "maicraft:build", "state": "paused", "doing": "目标 maicraft:build 已暂停（第 2 步）"}
     )
     assert run is not None
 
-    agent._urgent_before_pause = (_ESCAPED, time.monotonic())
-    urgent, agent._urgent_before_pause = agent._urgent_before_pause, None
-    reentered = pause_notice(run, True, urgent, time.monotonic())
+    reentered = pause_notice(run, True, (_ESCAPED, time.monotonic()), time.monotonic())
     assert "游戏重进了世界或重启过" in reentered and "已撤离" not in reentered
     # 恢复结论前先核对工作笔记：东西可能已放置或已消耗，"背包里没有"不等于丢了。
     assert "minecraft_get_work_log" in reentered and "背包里没有不等于丢了" in reentered
-    assert agent._urgent_before_pause is None, "急事用过一次就清掉"
 
     stale = pause_notice(run, False, (_ESCAPED, time.monotonic() - 120), time.monotonic())
     assert "Mod 没写暂停原因" in stale and "已撤离" not in stale and "重进" not in stale
 
 
-async def test_a_delegation_is_refused_when_the_game_is_not_connected() -> None:
+@pytest.mark.parametrize(
+    "provider",
+    [SimpleNamespace(list_tools=lambda: []), None, FakeMaicraft()],
+    ids=["connected_but_no_tools", "no_provider", "connected_with_tools"],
+)
+async def test_a_delegation_is_refused_when_the_game_is_not_connected(provider: Any) -> None:
     """10-15 15:30 那场 maicraft 一个工具都没有，游戏 Agent 照样接了委派，拿截屏翻四块显示器找游戏窗口。
-    现在直接拒收，原因原样回给派活的一方；连上（有工具）后照常接。"""
-    agent = MinecraftAgent(
-        MinecraftConfig(mcp=McpServerConfig(enabled=False, url="http://127.0.0.1:8766/mcp")),
-        llm_manager=MagicMock(),
-    )
-    agent._live_active = True
+    现在直接拒收，原因原样回给派活的一方；连上（有工具）后照常接。私有 MCP 面经构造注入。"""
+    agent = assemble_minecraft_agent(llm=MagicMock(), live=True, mcp_provider=provider)
 
-    agent._mcp_provider = SimpleNamespace(list_tools=lambda: [])
     refused = agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
-    assert refused is not None and refused.startswith("游戏没连上")
-    agent._mcp_provider = None
-    assert (agent.receive_delegation(instruction="去砍点木头", task_id="d-2") or "").startswith("游戏没连上")
-    assert len(agent._message_queue) == 0
-
-    agent._mcp_provider = FakeMaicraft()
-    assert agent.receive_delegation(instruction="去砍点木头", task_id="d-3") is None
-    assert len(agent._message_queue) == 1
+    if provider is not None and len(list(provider.list_tools())):
+        assert refused is None
+        assert len(agent.queued_messages) == 1
+    else:
+        assert refused is not None and refused.startswith("游戏没连上")
+        assert len(agent.queued_messages) == 0
 
 
 # ---------------- 请求发不出去时的补救 ----------------
@@ -1134,14 +1095,14 @@ async def test_binary_in_a_receipt_is_swapped_for_a_note_and_the_task_goes_on() 
         _guard_inline_payload(_normalize_generate_input(messages, system=None, tools=None, temperature=None))
         return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="看一眼周围", task_id="d-1")
     await _wait_until(lambda: len(_reports(bus)) == 1)
 
     sent = _texts(llm.seen[-1]) + json.dumps(llm.seen[-1], ensure_ascii=False)
     assert "Qk" * 1000 not in sent and "220000 字连续 base64" in sent
     assert "minecraft:cow" in sent, "回执其余内容原样留着"
-    assert _reports(bus)[0].report_kind == "delivery" and not agent._body_fault
+    assert _reports(bus)[0].report_kind == "delivery" and not agent.observation()["body_fault"]
     await agent.stop()
 
 
@@ -1157,7 +1118,7 @@ async def test_history_that_still_cannot_be_sent_is_restarted_from_the_task_fact
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "重新看过，做完了"})])
         return _resp(calls=[_call("maicraft_observe", {"what": "scene"})])
 
-    agent, llm, bus = await _start(server, script)
+    agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="看看周围有什么", task_id="d-1")
     await _wait_until(lambda: len(_reports(bus)) == 1)
 
@@ -1165,7 +1126,7 @@ async def test_history_that_still_cannot_be_sent_is_restarted_from_the_task_fact
     assert restarted[1]["content"].startswith("[原任务事实与已有证据]") and "看看周围有什么" in restarted[1]["content"]
     assert "[开局资料]" in _texts(restarted), "重开后补读现场"
     assert not any(message.get("role") in {"assistant", "tool"} for message in restarted)
-    assert _errors(bus) == [] and not agent._body_fault
+    assert _errors(bus) == [] and not agent.observation()["body_fault"]
     await agent.stop()
 
 
@@ -1179,26 +1140,26 @@ async def test_a_body_that_cannot_send_anything_says_it_is_broken_instead_of_wai
         attempts.append(1)
         raise UnsendableRequestError("装配守卫：拒绝发送")
 
-    agent, llm, bus = await _start(server, broken)
+    agent, llm, bus = await make_minecraft_agent(server, broken)
     agent.receive_delegation(instruction="去砍树", task_id="d-1")
-    await _wait_until(lambda: len(_errors(bus)) == 1 and agent._batch_active is False)
+    await _wait_until(lambda: len(_errors(bus)) == 1 and agent.batch_active is False)
 
     assert len(attempts) == 2, "原对话一次、重开后一次"
     assert "重新派活也不会好" in _errors(bus)[0]
-    assert agent._task_suspended and agent._glance_work()["state"].startswith("身体出故障了，动不了")
+    assert agent.observation()["task_suspended"] and agent._glance_work()["state"].startswith("身体出故障了，动不了")
     agent.receive_delegation(instruction="再试试砍树", task_id="d-2")
-    await _wait_until(lambda: len(_errors(bus)) == 2 and agent._batch_active is False)
+    await _wait_until(lambda: len(_errors(bus)) == 2 and agent.batch_active is False)
     assert len(attempts) == 4
 
     llm.script = lambda messages: Response(success=False, error="网络断了")
     agent.receive_delegation(instruction="还是去砍树", task_id="d-3")
-    await _wait_until(lambda: len(_errors(bus)) == 3 and agent._batch_active is False)
+    await _wait_until(lambda: len(_errors(bus)) == 3 and agent.batch_active is False)
     assert agent._glance_work()["state"] == "身体出故障了，暂时动不了；再派一次活它会重新试"
 
     llm.script = lambda messages: _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "砍完了"})])
     agent.receive_delegation(instruction="最后去砍一次树", task_id="d-4")
     await _wait_until(lambda: len(_reports(bus)) == 1)
-    assert not agent._body_fault and agent._glance_work()["state"] != "卡住了，正等我拿主意"
+    assert not agent.observation()["body_fault"] and agent._glance_work()["state"] != "卡住了，正等我拿主意"
     await agent.stop()
 
 
@@ -1217,7 +1178,7 @@ async def test_a_failed_goal_settles_the_batch_delegations_with_a_dry_summary() 
             return _resp(calls=[_call("minecraft_wait", {"reason": "等"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
 
-    agent, llm, bus = await _start(server, script, tracker=tracker)
+    agent, llm, bus = await make_minecraft_agent(server, script, tracker=tracker)
     # 委派单由框架受理时登记（framework provider 的职责），这里按生产形态预登记
     ledger.register(
         task_id="d-1",
@@ -1259,7 +1220,7 @@ async def test_a_stalled_goal_lands_in_ledgers_and_reaches_the_streamer() -> Non
             return _resp(calls=[_call("minecraft_wait", {"reason": "等"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
 
-    agent, llm, bus = await _start(server, script, tracker=tracker)
+    agent, llm, bus = await make_minecraft_agent(server, script, tracker=tracker)
     ledger.register(
         task_id="d-1",
         provider="framework",
@@ -1289,7 +1250,7 @@ async def test_a_stalled_goal_lands_in_ledgers_and_reaches_the_streamer() -> Non
     assert goal_record is not None and goal_record.status == "running", "停滞是中间态不是终态"
     assert goal_record.snapshot.get("stalled") is True
     assert ledger.get("d-1").snapshot.get("stalled_goals", {}).get("1") == "maicraft:gather", "批级委派账同步打标"
-    queued = "".join(str(item[-1]) for item in agent._message_queue)
+    queued = "".join(str(item[-1]) for item in agent.queued_messages)
     assert "停着没动静" not in queued and "结束了" not in queued, "停滞不唤醒模型（模型侧由账本停滞告警兜底）"
     await agent.stop()
 
@@ -1317,13 +1278,17 @@ class _SummaryLlm:
         """能力查询替身：summary 场景一律按非视觉。"""
         return False
 
+    def get_profile_context_window(self, profile: Optional[str]) -> int:
+        """窗口查询替身：summary 场景按未配置（0），预算走保守窗口。"""
+        del profile
+        return 0
+
 
 async def test_long_body_event_is_summarized_before_reaching_the_streamer() -> None:
     """长文概述器：超过阈值的长文经 summary 档压缩后两栏发出，短文直通不调 LLM。"""
     server = FakeMaicraft()
     llm = _SummaryLlm(lambda messages: _resp("饿了：翻过箱子没有、合成缺干海带块、烧炼缺原料"))
-    agent, _llm, bus = await _start(server, lambda messages: _resp("好"))
-    agent._llm = llm
+    agent, _llm, bus = await make_minecraft_agent(server, llm=llm, live=False)
 
     short = "吃了一个苹果"
     await agent._on_body_event({"kind": "need_unhandled", "message": short})
@@ -1358,8 +1323,7 @@ async def test_summary_failure_falls_back_to_first_sentence() -> None:
         raise RuntimeError("summary 引擎不可用")
 
     llm = _SummaryLlm(boom)
-    agent, _llm, bus = await _start(server, lambda messages: _resp("好"))
-    agent._llm = llm
+    agent, _llm, bus = await make_minecraft_agent(server, llm=llm, live=False)
 
     long_text = "饿了没吃上。翻过箱子没有面包，合成台缺干海带块，烧炼炉缺原料。" + "细节" * 200
     # 直呼素材发布器（白话速览异常超长时的兜底路径）
@@ -1392,10 +1356,7 @@ def _track_goal(agent: MinecraftAgent, goal_id: int) -> None:
 async def test_stall_alert_through_task_changed_wakes_tracked_goal() -> None:
     """停滞告警接缝：真事件总线 emit task.changed 驱动，在跟踪的目标收到注入并置位唤醒。"""
     bus = EventBus(enable_stats=False)
-    agent = MinecraftAgent(
-        MinecraftConfig(mcp=McpServerConfig(enabled=False, url="http://127.0.0.1:8766/mcp"), events_wait_ms=1000),
-        event_bus=bus,
-    )
+    agent = assemble_minecraft_agent(bus=bus, live=False)
     # 只挂订阅、不起 worker（start 尾部的订阅动作；避免 worker 竞争消费队列消息）
     agent._subscribe_task_wakeup()
     _track_goal(agent, goal_id=7)
@@ -1411,8 +1372,8 @@ async def test_stall_alert_through_task_changed_wakes_tracked_goal() -> None:
             ),
             source="TaskLedger",
         )
-        await _wait_until(lambda: bool(agent._message_queue))
-        injected = list(agent._message_queue)
+        await _wait_until(lambda: bool(agent.queued_messages))
+        injected = list(agent.queued_messages)
         assert len(injected) == 1 and injected[0][0] == ""
         assert "7 很久没有新进展" in injected[0][1], "注入停滞告警正文并点名目标"
         assert "maicraft_goal" in injected[0][1], "正文里给出去查目标的出口"
@@ -1425,10 +1386,7 @@ async def test_stall_alert_through_task_changed_wakes_tracked_goal() -> None:
 async def test_task_changed_without_alert_or_from_other_initiator_stays_silent() -> None:
     """反例：非告警通知与别人的任务变化都不注入、不唤醒。"""
     bus = EventBus(enable_stats=False)
-    agent = MinecraftAgent(
-        MinecraftConfig(mcp=McpServerConfig(enabled=False, url="http://127.0.0.1:8766/mcp"), events_wait_ms=1000),
-        event_bus=bus,
-    )
+    agent = assemble_minecraft_agent(bus=bus, live=False)
     agent._subscribe_task_wakeup()
     _track_goal(agent, goal_id=7)
     try:
@@ -1447,7 +1405,7 @@ async def test_task_changed_without_alert_or_from_other_initiator_stays_silent()
             source="TaskLedger",
         )
         await bus.wait_until_drained()
-        assert not agent._message_queue, "两种情形都不注入"
+        assert not agent.queued_messages, "两种情形都不注入"
         assert not agent._wake_event.is_set(), "两种情形都不唤醒"
     finally:
         await agent.stop()

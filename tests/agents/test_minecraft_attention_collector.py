@@ -32,20 +32,16 @@ from src.modules.events.payloads.body import BodyEventPayload
 from .minecraft_collector_fakes import FakeEventBus as _FakeEventBus
 from .minecraft_collector_fakes import FakeMcpClient as _FakeClient
 from .minecraft_collector_fakes import events_page as _page
-from .minecraft_collector_fakes import patch_mcp
+from .minecraft_collector_fakes import fake_client_factory
 
 
 def _event(cursor: int, kind: str, message: str = "", goal_id: int = -1) -> Dict[str, Any]:
     return {"cursor": cursor, "kind": kind, "goal_id": goal_id, "message": message}
 
 
-@pytest.fixture(autouse=True)
-def _patch_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
-    patch_mcp(monkeypatch)
-
-
 def _collector(bus: _FakeEventBus) -> MaicraftAttentionCollector:
-    return MaicraftAttentionCollector(config={}, event_bus=bus)  # type: ignore[arg-type]
+    """接替身客户端的采集器（MCP 客户端经构造工厂注入）。"""
+    return MaicraftAttentionCollector(config={}, event_bus=bus, client_factory=fake_client_factory())  # type: ignore[arg-type]
 
 
 async def _primed(bus: _FakeEventBus, cursor: int = 5) -> tuple[MaicraftAttentionCollector, _FakeClient]:
@@ -369,10 +365,10 @@ async def test_mod_without_events_tool_is_not_ready(monkeypatch: pytest.MonkeyPa
     class _OldModClient(_FakeClient):
         tool_names = ("perceive", "execute")
 
-    import src.modules.mcp.client as client_module
-
-    monkeypatch.setattr(client_module, "McpClient", _OldModClient)
-    collector = _collector(_FakeEventBus())
+    fake_client_factory()
+    collector = MaicraftAttentionCollector(  # type: ignore[arg-type]
+        config={}, event_bus=_FakeEventBus(), client_factory=_OldModClient
+    )
 
     assert await collector._ensure_ready() is False
     assert any("events" in record["message"] for record in _unavailable_warnings(loguru_capture))
@@ -385,19 +381,21 @@ async def test_collect_loop_survives_unavailable_game(monkeypatch: pytest.Monkey
         async def connect(self) -> bool:
             return False
 
-    import src.modules.mcp.client as client_module
-
-    monkeypatch.setattr(client_module, "McpClient", _OfflineClient)
-
+    # 工厂读闭包格子：游戏上线后换客户端类，循环自愈（不再 monkeypatch 模块属性）
+    holder: Dict[str, Any] = {"client_cls": _OfflineClient}
     bus = _FakeEventBus()
-    collector = MaicraftAttentionCollector(config={"retry_interval_ms": 200, "wait_ms": 1000}, event_bus=bus)  # type: ignore[arg-type]
+    collector = MaicraftAttentionCollector(  # type: ignore[arg-type]
+        config={"retry_interval_ms": 200, "wait_ms": 1000},
+        event_bus=bus,
+        client_factory=lambda name, config: holder["client_cls"](name, config),
+    )
     await collector.start()
     assert collector.state == CollectorState.RUNNING
     await asyncio.sleep(0.05)
     assert bus.events == []
 
     # 游戏上线后（换成可用客户端）循环自愈
-    monkeypatch.setattr(client_module, "McpClient", _FakeClient)
+    holder["client_cls"] = _FakeClient
     await asyncio.sleep(0.35)
     assert _FakeClient.instances, "应重试建立连接"
     await collector.stop()
