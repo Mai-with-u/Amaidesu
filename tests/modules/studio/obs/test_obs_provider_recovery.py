@@ -147,7 +147,7 @@ async def test_cleanup_cancels_recovery(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 async def test_recovery_yields_when_manually_reconnected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """恢复循环发现连接已由手动路径恢复（_connected=True）即退出，不再重连。"""
+    """恢复循环发现连接已由手动路径恢复（_connected=True）即退出，退出后不再重试。"""
     provider = _make_obs_provider(monkeypatch)
     _fast_recovery(provider)
     provider.mark_connected()
@@ -159,7 +159,12 @@ async def test_recovery_yields_when_manually_reconnected(monkeypatch: pytest.Mon
     await _wait_until(lambda: calls[0] >= 1)
     provider.mark_connected()  # 模拟面板手动重连先一步恢复
     await _wait_until(lambda: not provider.recovering)
-    assert calls[0] == 1  # 循环发现已恢复就退出，不再重连
+    # 退出前的尝试次数是时序窗口（退避 1–2ms 快于观察粒度，满载下 mark_connected
+    # 晚一拍循环就多跑一拍），不绑定具体值；契约是退出后静止——让位退出由
+    # recovering 转 False 承载（重连后端恒失败时这是唯一退出路径）。
+    attempts_at_exit = calls[0]
+    await asyncio.sleep(0.05)  # 数个退避周期：循环若未真正退出，计数必然增长
+    assert calls[0] == attempts_at_exit  # 让位退出后不再重连
 
 
 # 重复 start_recovery 幂等
