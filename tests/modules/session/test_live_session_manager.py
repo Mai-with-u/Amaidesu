@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import shutil
 import tempfile
 from pathlib import Path
@@ -84,7 +83,7 @@ async def test_open_session_emits_started_and_switches_resolution(store: SQLiteD
     await manager.start()
 
     pk = await manager.open_session(title="晚间场")
-    await asyncio.sleep(0.02)  # emit 默认后台分发，等事件落地
+    await bus.wait_until_drained()  # emit 默认后台分发，等事件落地
     assert collector.started and collector.started[0].live_session_id == pk
     assert collector.started[0].source == "manual"
     assert collector.started[0].room_id == "room-1"
@@ -103,7 +102,7 @@ async def test_open_twice_auto_closes_previous(store: SQLiteDatabase, bus: Event
 
     first = await manager.open_session()
     second = await manager.open_session()
-    await asyncio.sleep(0.02)
+    await bus.wait_until_drained()
     assert first != second
     assert manager.active_pk == second
     # 不变量：至多一个显式进行中场次
@@ -122,7 +121,7 @@ async def test_close_empty_session_discards_row(store: SQLiteDatabase, bus: Even
     pk = await manager.open_session()
     closed = await manager.close_session()
     assert closed is True
-    await asyncio.sleep(0.02)
+    await bus.wait_until_drained()
     assert await store.sessions.get_live_session(live_session_id=pk) is None
     assert collector.ended and collector.ended[0].empty_discarded is True
     assert collector.ended[0].duration_ms is not None
@@ -160,7 +159,7 @@ async def test_delete_active_session_closes_first(store: SQLiteDatabase, bus: Ev
 
     pk = await manager.open_session()
     await manager.delete_session(pk)
-    await asyncio.sleep(0.02)
+    await bus.wait_until_drained()
     assert manager.active_pk is None
     assert collector.ended and collector.ended[0].live_session_id == pk
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -37,7 +36,7 @@ async def test_paid_event_is_buffered_forced_and_flushed_immediately(message_typ
     agent._rounds._planner.plan = plan
     try:
         await bus.emit(event_name, _message(message_type), source="test")
-        await asyncio.sleep(0.05)
+        await bus.wait_until_drained()
         assert agent._buffer.size == 1 and agent._buffer.force is True
 
         await agent._maybe_flush()

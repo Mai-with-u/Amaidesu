@@ -3,8 +3,6 @@
 订阅者并发执行、无顺序语义（本文件的列表断言只在单订阅者下按到达序）。
 """
 
-import asyncio
-
 import pytest
 from pydantic import BaseModel
 
@@ -43,7 +41,7 @@ def bus() -> EventBus:
 async def _emit_all(bus: EventBus, names: list[str], payload=None) -> None:
     for name in names:
         await bus.emit(name, payload or SimpleTestEvent(), source="test")
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
 
 
 async def test_exact_subscription_and_wildcard_fire_independently(bus: EventBus) -> None:
@@ -58,7 +56,7 @@ async def test_exact_subscription_and_wildcard_fire_independently(bus: EventBus)
     await bus.emit("test.event", SimpleTestEvent(message="hi"), source="src")
     await bus.emit("room.message.danmaku", _danmaku())
     await bus.emit("room.state.heat", SimpleTestEvent())  # 不同子层不触发 room.message.#
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
 
     assert got == [("test.event", "hi", "src")]
     assert exact == wild == ["room.message.danmaku"]  # 精确 + 通配订阅同一事件都触发
@@ -115,13 +113,13 @@ async def test_typed_subscription_over_wildcard_validates_payload(bus: EventBus)
     gift = RoomMessagePayload(message_type="gift", user=RoomMessageUser(id="u1", name="tester"))
     await bus.emit("room.message.danmaku", _danmaku("hello"))
     await bus.emit("room.message.gift", gift)
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
     assert [(p.message_type, p.content) for p in received] == [("danmaku", "hello"), ("gift", "")]
 
     # 形状不符：emit 不拒绝，但类型化订阅校验失败，handler 不被调用
     strict = _subscribe(bus, "tool.result.#", ToolResultPayload)
     await bus.emit("tool.result.bad", SimpleTestEvent(message="oops"))
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
     assert strict == []
 
     # 同族 payload 挂错事件名（末段 != 判别字段值）在 emit 期直接报错

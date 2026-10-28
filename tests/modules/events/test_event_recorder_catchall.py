@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 
@@ -60,7 +59,7 @@ async def test_catch_all_records_long_tail_events(recorder_setup) -> None:
         ToolResultPayload(tool_name="speak", status="success", result={"ok": True}),
         source="ToolRegistry",
     )
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
 
     types = {r.event_name for r in service.get_recent(50)}
     assert CoreEvents.TTS_UTTERANCE_STARTED in types
@@ -72,7 +71,7 @@ async def test_core_event_type_is_exact_name(recorder_setup) -> None:
     bus, service = recorder_setup
 
     await bus.emit(CoreEvents.CORE_ERROR, CoreErrorPayload(message="炸了"), source="qa")
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
 
     record = next(r for r in service.get_recent(50) if r.event_name == CoreEvents.CORE_ERROR)
     assert record.type == "core.error"
@@ -84,7 +83,7 @@ async def test_room_message_type_folded(recorder_setup) -> None:
     bus, service = recorder_setup
 
     await bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, _danmaku("测试弹幕"), source="bilibili")
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
 
     record = next(r for r in service.get_recent(50) if r.event_name == CoreEvents.ROOM_MESSAGE_DANMAKU)
     assert record.type == "room.message"

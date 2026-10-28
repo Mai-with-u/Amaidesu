@@ -9,8 +9,7 @@ LLM 不在链内（mock），存储与事件总线走真实组件（SQLite 临�
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -64,7 +63,7 @@ def temp_db_path(tmp_path):
 
 async def _emit(bus: EventBus, event_name: str, payload: RoomMessagePayload) -> None:
     await bus.emit(event_name, payload, source="e2e")
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -30,7 +29,7 @@ def _service() -> AsyncMock:
 
 async def _emit(bus: EventBus, event_name: str, payload) -> None:
     await bus.emit(event_name, payload, source="test")
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
 
 
 async def test_started_and_failed_show_the_sentence_and_finished_clears() -> None:

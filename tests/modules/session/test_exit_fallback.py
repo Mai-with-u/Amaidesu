@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import shutil
 import tempfile
 from pathlib import Path
@@ -86,7 +85,7 @@ async def test_exit_fallback_settles_active_session(store: SQLiteDatabase, bus: 
     pk = await _open_session_with_detail(store, manager)
     closed = await manager.close_session(reason=FALLBACK_REASON)
     assert closed is True
-    await asyncio.sleep(0.02)
+    await bus.wait_until_drained()
 
     row = await store.sessions.get_live_session(live_session_id=pk)
     assert row is not None
@@ -104,12 +103,12 @@ async def test_repeated_exit_does_not_settle_twice(store: SQLiteDatabase, bus: E
     pk = await _open_session_with_detail(store, manager)
     assert await manager.close_session(reason="进程退出") is True
     first_ended = (await store.sessions.get_live_session(live_session_id=pk)).ended_at_ms
-    await asyncio.sleep(0.02)
+    await bus.wait_until_drained()
     assert len(collector.ended) == 1
 
     # 兜底再调一次：内存态已复位 → False 静默，账目不动
     assert await manager.close_session(reason=FALLBACK_REASON) is False
-    await asyncio.sleep(0.02)
+    await bus.wait_until_drained()
     row = await store.sessions.get_live_session(live_session_id=pk)
     assert row is not None and row.ended_at_ms == first_ended
     assert len(collector.ended) == 1, "重复退出不得产生第二条 live.ended"
@@ -142,7 +141,7 @@ async def test_close_session_idempotent_when_row_already_settled(store: SQLiteDa
     assert settled is not None and settled.ended_at_ms == int(started) + 5_000
 
     assert await manager.close_session(reason=FALLBACK_REASON) is False
-    await asyncio.sleep(0.02)
+    await bus.wait_until_drained()
     row = await store.sessions.get_live_session(live_session_id=pk)
     assert row is not None, "已结账行不得被兜底路径误删"
     assert row.ended_at_ms == int(started) + 5_000, "已结账行不得被兜底路径改写"
@@ -189,15 +188,16 @@ async def test_fallback_helper_settles_via_real_manager(store: SQLiteDatabase, b
 class _StubRecorder:
     """最小事件历史记录器替身：只在 stop 时快照 live.ended 是否已到达。"""
 
-    def __init__(self, collector: _EndedCollector) -> None:
+    def __init__(self, collector: _EndedCollector, bus: EventBus) -> None:
         self._collector = collector
+        self._bus = bus
         self.event_history = None
         self.diagnostics_writer = None
         self.ended_seen_at_stop = False
 
     async def stop(self) -> None:
-        # emit 是并发扇出、不等订阅者完成的：让出循环，pending 的 handler 跑完再快照
-        await asyncio.sleep(0.05)
+        # emit 是并发扇出、不等订阅者完成的：等在途 handler 全部落地再快照
+        await self._bus.wait_until_drained()
         self.ended_seen_at_stop = bool(self._collector.ended)
 
 
@@ -208,7 +208,7 @@ async def test_shutdown_settles_session_before_event_telemetry_goes_down(store: 
     结账在总线 cleanup 之后），事件流里就缺下播标记，回看时间线断档。
     """
     collector = _EndedCollector(bus)
-    recorder = _StubRecorder(collector)
+    recorder = _StubRecorder(collector, bus)
     manager = _make_manager(store, bus)
     await manager.start()
     pk = await _open_session_with_detail(store, manager)
@@ -230,5 +230,5 @@ async def test_shutdown_settles_session_before_event_telemetry_goes_down(store: 
 
     # 兜底幂等守卫仍在：常规结账后再触发兜底不重复广播
     await app_main.fallback_close_active_session(manager)
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
     assert len(collector.ended) == 1, "兜底不得产生第二条 live.ended"

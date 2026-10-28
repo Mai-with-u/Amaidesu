@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Optional
 
 import pytest
@@ -60,7 +59,7 @@ async def ledger(make_ledger) -> StorageLedger:
 
 async def _emit(bus: EventBus, event: str, payload: Any) -> None:
     await bus.emit(event, payload, source="test")
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
 
 
 def _speech(text: str, **kwargs: Any) -> StreamerSpeechPayload:

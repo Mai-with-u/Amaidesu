@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import List
 
 import pytest
@@ -154,7 +153,7 @@ async def test_make_provider_from_specs_registers_by_full_name_without_touching_
 # tool.result.<name> 结果事件广播
 
 
-async def _registry_with_bus() -> tuple[ToolRegistry, list[tuple[str, ToolResultPayload]]]:
+async def _registry_with_bus() -> tuple[EventBus, ToolRegistry, list[tuple[str, ToolResultPayload]]]:
     bus = EventBus(enable_stats=False)
     received: list[tuple[str, ToolResultPayload]] = []
 
@@ -162,11 +161,11 @@ async def _registry_with_bus() -> tuple[ToolRegistry, list[tuple[str, ToolResult
         received.append((event_name, payload))
 
     bus.on("tool.result.#", on_result, ToolResultPayload)
-    return ToolRegistry(event_bus=bus), received
+    return bus, ToolRegistry(event_bus=bus), received
 
 
 async def test_invoke_emits_tool_result_event_with_arguments_and_image_intact() -> None:
-    registry, received = await _registry_with_bus()
+    bus, registry, received = await _registry_with_bus()
     registry.register(ToolSpec(name="my_tool", description="d", kind="sync"), _ok)
     await registry.invoke(ToolInvocation(tool_name="my_tool", source="test", arguments={"city": "上海", "n": 3}))
     await registry.invoke(ToolInvocation(tool_name="my_tool", source="test"))
@@ -180,7 +179,7 @@ async def test_invoke_emits_tool_result_event_with_arguments_and_image_intact() 
 
     registry.register(ToolSpec(name="look_at_screen", description="d", kind="sync", provider="vision"), screen)
     await registry.invoke(ToolInvocation(tool_name="vision_look_at_screen", source="test"))
-    await asyncio.sleep(0.01)  # emit 为 fire-and-forget，让派发任务跑完
+    await bus.wait_until_drained()  # emit 为 fire-and-forget，等派发任务落地
 
     assert [name for name, _ in received] == ["tool.result.my_tool"] * 2 + ["tool.result.vision_look_at_screen"]
     first, second, shot = (p for _, p in received)
@@ -190,14 +189,14 @@ async def test_invoke_emits_tool_result_event_with_arguments_and_image_intact() 
 
 
 async def test_invoke_failure_is_broadcast_as_error_and_no_bus_is_silent() -> None:
-    registry, received = await _registry_with_bus()
+    bus, registry, received = await _registry_with_bus()
 
     async def bad(inv: ToolInvocation) -> ToolExecutionResult:
         raise RuntimeError("boom!")
 
     registry.register(ToolSpec(name="bad_tool", description="d", kind="sync"), bad)
     assert (await registry.invoke(ToolInvocation(tool_name="bad_tool"))).success is False
-    await asyncio.sleep(0.01)
+    await bus.wait_until_drained()
     ((_, payload),) = received
     assert payload.status == "error" and "boom!" in payload.error_message
 

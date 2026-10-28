@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import random
 from typing import List
 
@@ -23,6 +22,7 @@ class EventCollector:
     """订阅若干事件名收集 payload。EventBus.emit 把回调调度为后续 tick 的 Task，断言前先 ``await settle()``。"""
 
     def __init__(self, bus: EventBus, spec: dict[str, type]) -> None:
+        self._bus = bus
         self.items: List[tuple[str, object]] = []
         for event_name, model_class in spec.items():
             bus.on(event_name, self._collect, model_class=model_class)
@@ -31,8 +31,7 @@ class EventCollector:
         self.items.append((event_name, payload))
 
     async def settle(self) -> None:
-        for _ in range(3):
-            await asyncio.sleep(0.02)
+        await self._bus.wait_until_drained()
 
     def of(self, event_name: str) -> List[object]:
         return [payload for name, payload in self.items if name == event_name]

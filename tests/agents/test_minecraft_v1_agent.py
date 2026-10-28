@@ -1446,7 +1446,7 @@ async def test_task_changed_without_alert_or_from_other_initiator_stays_silent()
             ),
             source="TaskLedger",
         )
-        await asyncio.sleep(0.05)
+        await bus.wait_until_drained()
         assert not agent._message_queue, "两种情形都不注入"
         assert not agent._wake_event.is_set(), "两种情形都不唤醒"
     finally:

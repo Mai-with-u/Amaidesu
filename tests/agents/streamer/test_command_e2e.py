@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import List, Optional
 
 import pytest
@@ -100,7 +99,7 @@ class _Harness:
             timestamp_ms=now_ms(),
         )
         await self.bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, payload, source="E2ETest")
-        await asyncio.sleep(0.05)
+        await self.bus.wait_until_drained()
 
     async def teardown(self) -> None:
         await self.manager.stop_all()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 
 import pytest
 
@@ -42,7 +41,7 @@ async def test_speech_event_wakes_idle_cadence_without_touching_llm(event_bus: E
     calls_before = llm.chat_calls
 
     await event_bus.emit(CoreEvents.STREAMER_SPEECH, _speech(), source="test")
-    await asyncio.sleep(0.05)
+    await event_bus.wait_until_drained()
 
     assert cadence.get_state() == CadenceGenerator.NORMAL  # notify_streamer_activity 把 IDLE 唤醒到 NORMAL
     assert llm.chat_calls == calls_before  # 防环：handler 只同步 notify，不触发 LLM 与决策出口

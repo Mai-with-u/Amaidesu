@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
@@ -21,7 +20,7 @@ def _speech(emotion: str = "happy", intensity: float = 0.8) -> StreamerSpeechPay
 
 async def _emit(bus: EventBus, event_name: str, payload) -> None:
     await bus.emit(event_name, payload, source="test")
-    await asyncio.sleep(0.05)  # 让 handler 跑完
+    await bus.wait_until_drained()  # 让 handler 跑完
 
 
 def _vts_with_expression() -> VTSProvider:

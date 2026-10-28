@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import AsyncGenerator, Iterable, Optional
 
 import pytest
@@ -226,7 +225,12 @@ async def test_agent_control_provider_exposes_roster_only_for_receiving_agents(s
         for n in ("pause_agent", "resume_agent", "shutdown_agent", "restart_agent", "list_agents", "agent_state")
     }
     names = {spec.full_name for spec in reg.list_tools(for_agent="streamer")}
-    assert {"framework_delegate", "framework_prompt", "framework_task_status", "framework_task_cancel"} <= names and removed.isdisjoint(names)
+    assert {
+        "framework_delegate",
+        "framework_prompt",
+        "framework_task_status",
+        "framework_task_cancel",
+    } <= names and removed.isdisjoint(names)
     for tool in ("delegate", "prompt"):
         spec = next(s for s in provider.list_tools() if s.name == tool)
         assert spec.parameters_schema["properties"]["agent"]["enum"] == ["receiving_agent"]
@@ -269,12 +273,12 @@ async def test_task_changed_wakes_only_the_initiator_and_stop_unsubscribes() -> 
     try:
         await fire("sample_agent", "t-mine")
         await fire("other_agent", "t-other")  # 发起方是别人 → 过滤
-        await asyncio.sleep(0.05)
+        await bus.wait_until_drained()
         assert agent.notified == ["t-mine"]
     finally:
         await agent.stop()
 
     await fire("sample_agent", "t-after")  # stop 后退订，不再派发
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
     assert agent.notified == ["t-mine"]
     await bus.cleanup()

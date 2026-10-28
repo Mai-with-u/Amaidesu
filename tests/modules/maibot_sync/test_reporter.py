@@ -80,9 +80,7 @@ async def test_live_lifecycle_pushes_full_snapshots() -> None:
         await _wait_until(lambda: len(sender.bodies) == 3)
         assert sender.bodies[2]["segment"]["finished"] is True
 
-        await bus.emit(
-            CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=7, ended_at_ms=9_000), source="test"
-        )
+        await bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=7, ended_at_ms=9_000), source="test")
         await _wait_until(lambda: len(sender.bodies) == 4)
         ended = sender.bodies[3]
         assert ended["live"] is False and ended["ended_at_ms"] == 9_000 and ended["discarded"] is False
@@ -107,19 +105,15 @@ async def test_replay_sessions_are_not_synced() -> None:
     sender = FakeSender()
     bus, reporter = _reporter(sender)
     try:
-        await bus.emit(
-            CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=3, source="replay"), source="test"
-        )
+        await bus.emit(CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=3, source="replay"), source="test")
         await bus.emit(CoreEvents.RUNDOWN_CHANGED, _rundown(1), source="test")
-        await bus.emit(
-            CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=3, source="replay"), source="test"
-        )
+        await bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=3, source="replay"), source="test")
         await bus.emit(
             CoreEvents.STREAMER_RECAP_WRITTEN,
             StreamerRecapWrittenPayload(live_session_id=3, started_at_ms=1, ended_at_ms=2, recap_text="回放"),
             source="test",
         )
-        await asyncio.sleep(0.05)
+        await bus.wait_until_drained()
         assert sender.attempts == 0
     finally:
         await reporter.stop()
@@ -128,7 +122,9 @@ async def test_replay_sessions_are_not_synced() -> None:
 async def test_recap_retries_until_delivered_and_gives_up_after_budget() -> None:
     sender = FakeSender(failures=2)
     bus, reporter = _reporter(sender, retry_delays_ms=(1, 1, 1))
-    recap = StreamerRecapWrittenPayload(live_session_id=5, started_at_ms=1_000, ended_at_ms=2_000, recap_text="挖了钻石")
+    recap = StreamerRecapWrittenPayload(
+        live_session_id=5, started_at_ms=1_000, ended_at_ms=2_000, recap_text="挖了钻石"
+    )
     try:
         await bus.emit(CoreEvents.STREAMER_RECAP_WRITTEN, recap, source="test")
         await _wait_until(lambda: len(sender.bodies) == 1)
@@ -199,9 +195,7 @@ async def test_discarded_empty_session_is_flagged() -> None:
     bus, reporter = _reporter(sender)
     try:
         await bus.emit(CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=9), source="test")
-        await bus.emit(
-            CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=9, empty_discarded=True), source="test"
-        )
+        await bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=9, empty_discarded=True), source="test")
         await _wait_until(lambda: len(sender.bodies) == 2)
         assert sender.bodies[1]["discarded"] is True and sender.bodies[1]["live"] is False
     finally:
@@ -227,7 +221,7 @@ async def test_stop_unsubscribes_cancels_and_closes() -> None:
     assert failing.closed and reporter._heartbeat_task is None and not reporter._push_tasks
     attempts = failing.attempts
     await bus.emit(CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=2), source="test")
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
     assert failing.attempts == attempts  # 已退订：不再推送
 
 
@@ -262,7 +256,10 @@ async def test_http_sender_posts_json_with_bearer_token_and_raises_on_rejection(
 def test_composition_root_builds_reporter_only_when_fully_configured() -> None:
     bus = EventBus()
     assert app_main._build_maibot_sync_reporter(bus, {}) is None
-    assert app_main._build_maibot_sync_reporter(bus, {"maibot_sync": {"enabled": True, "url": "http://x/live-status"}}) is None
+    assert (
+        app_main._build_maibot_sync_reporter(bus, {"maibot_sync": {"enabled": True, "url": "http://x/live-status"}})
+        is None
+    )
     reporter = app_main._build_maibot_sync_reporter(
         bus, {"maibot_sync": {"enabled": True, "url": "http://127.0.0.1:8767/live-status", "token": "t"}}
     )

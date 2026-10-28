@@ -286,6 +286,22 @@ class EventBus:
         self._background_tasks.add(task)
         task.add_done_callback(lambda t: self._background_tasks.discard(t))
 
+    async def wait_until_drained(self) -> None:
+        """
+        等待当前所有在途的 emit 派发任务结束（含级联）
+
+        emit 对订阅者是后台任务派发、立即返回；需要观察"事件已被所有
+        订阅者处理完"的调用方（典型是测试断言前）用此方法等待落地。
+
+        语义：等待此刻及此后新出现的所有后台派发任务完成——handler 内部
+        再 emit 的级联事件同样被传递性等完（新派发任务进入
+        ``_background_tasks``，循环持续收集直到集合清空）。
+        """
+        while self._background_tasks:
+            # 复制快照后等待；done_callback（从集合移除）先于 gather 的
+            # 唤醒回调注册，因此 gather 返回时已完成任务必已出集合
+            await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
+
     def _collect_handlers(self, event_name: str) -> List[HandlerWrapper]:
         """
         收集事件的所有匹配 handler（精确键 + 通配 pattern 键并集）

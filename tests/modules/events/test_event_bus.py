@@ -31,8 +31,8 @@ def _recorder(model):
     return handler, received
 
 
-async def _settle() -> None:
-    await asyncio.sleep(0.1)  # emit 对 handler 是后台派发，等其落地
+async def _settle(bus: EventBus) -> None:
+    await bus.wait_until_drained()  # emit 对 handler 是后台派发，等其在途任务全部落地
 
 
 @pytest.fixture
@@ -53,14 +53,14 @@ async def test_subscribe_unsubscribe_and_introspection(event_bus: EventBus) -> N
     }
 
     await event_bus.emit("test.event", SimpleTestEvent(message="hello"), source="test")
-    await _settle()
+    await _settle(event_bus)
     assert [p.message for _, p in got1] == [p.message for _, p in got2] == ["hello"]
 
     event_bus.off("test.event", _noop)  # 移除未注册的处理器不报错、不影响已有
     assert event_bus.get_listeners_count("test.event") == 2
     event_bus.off("test.event", handler1)
     await event_bus.emit("test.event", SimpleTestEvent(message="again"), source="test")
-    await _settle()
+    await _settle(event_bus)
     assert (len(got1), len(got2)) == (1, 2)
 
     event_bus.off("test.event", handler2)
@@ -82,7 +82,7 @@ async def test_emit_edge_cases(event_bus: EventBus) -> None:
     handler, got = _recorder(SimpleTestEvent)
     event_bus.on("", handler, SimpleTestEvent)  # 空事件名
     await event_bus.emit("", SimpleTestEvent(message="x"), source="test")
-    await _settle()
+    await _settle(event_bus)
     assert len(got) == 1
 
 
@@ -95,7 +95,7 @@ async def test_registered_event_validation_and_discriminant(event_bus: EventBus)
             message_type="danmaku", user=RoomMessageUser(id="test_source", name="测试观众"), content="test content"
         )
         await event_bus.emit("core.test.validation.danmaku", danmaku, source="test")
-        await _settle()
+        await _settle(event_bus)
         assert [p.content for _, p in got] == ["test content"]
     finally:
         EVENT_REGISTRY.pop("core.test.validation.danmaku", None)
@@ -111,7 +111,7 @@ async def test_registered_event_validation_and_discriminant(event_bus: EventBus)
     plain_handler, plain = _recorder(SimpleTestEvent)
     event_bus.on("anything.goes", plain_handler, SimpleTestEvent)
     await event_bus.emit("anything.goes", SimpleTestEvent(message="ok"), source="test")
-    await _settle()
+    await _settle(event_bus)
     assert len(gifts) == 1 and len(plain) == 1
 
 
@@ -128,7 +128,7 @@ async def test_handler_failure_is_isolated_and_logged(event_bus: EventBus) -> No
     event_bus.on("test.event", failing, SimpleTestEvent)
     event_bus.on("test.event", normal, SimpleTestEvent)
     await event_bus.emit("test.event", SimpleTestEvent(), source="test")
-    await _settle()
+    await _settle(event_bus)
 
     assert set(results) == {"before_error", "normal"}  # 一个订阅者异常不影响其他
     stats = event_bus.get_stats("test.event")
@@ -150,7 +150,7 @@ async def test_concurrent_emits_and_handlers(event_bus: EventBus) -> None:
     for label, delay in (("h1", 0.05), ("h2", 0.02), ("h3", 0.01)):
         event_bus.on("test.event", slow_handler(label, delay), SimpleTestEvent)
     await asyncio.gather(*[event_bus.emit("test.event", SimpleTestEvent(id=i), source="test") for i in range(10)])
-    await asyncio.sleep(0.3)
+    await event_bus.wait_until_drained()
     assert len(finished) == 30 and set(finished) == {"h1", "h2", "h3"}
 
 
@@ -161,6 +161,6 @@ async def test_tool_health_wildcard_matches_concrete_emit(event_bus: EventBus) -
         tool_name="maicraft_speak", provider="maicraft", state="open", failure_count=3, last_error="连接失败"
     )
     await event_bus.emit("tool.health.maicraft_speak", payload, source="ToolRegistry")
-    await _settle()
+    await _settle(event_bus)
     ((name, received),) = seen
     assert (name, received.tool_name, received.state) == ("tool.health.maicraft_speak", "maicraft_speak", "open")

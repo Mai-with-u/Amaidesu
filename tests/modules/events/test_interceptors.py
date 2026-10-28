@@ -1,6 +1,5 @@
 """EventInterceptor / InterceptorChain 与 EventBus 的集成：优先级、丢弃、异常隔离、改写 payload、作用域过滤"""
 
-import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
@@ -80,7 +79,7 @@ async def _emit_and_collect(bus: EventBus, message: str = "x") -> list[str]:
 
     bus.on("evt", handler, SimpleTestEvent)
     await bus.emit("evt", SimpleTestEvent(message=message), source="s")
-    await asyncio.sleep(0.05)
+    await bus.wait_until_drained()
     return received
 
 
