@@ -13,7 +13,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_chat import GameChatPayload
-from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
+from src.agents.streamer.trigger_cause import TriggerKind
 from tests.agents.streamer.helpers import make_streamer_agent
 
 

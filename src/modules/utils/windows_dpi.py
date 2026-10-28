@@ -30,14 +30,14 @@ _DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
 _PROCESS_PER_MONITOR_DPI_AWARE = 1
 
 
-def _user32() -> Optional[ctypes.CDLL]:
+def load_user32() -> Optional[ctypes.CDLL]:
     """user32 句柄；非 Windows 平台返回 None。"""
     if sys.platform != "win32":
         return None
     return ctypes.windll.user32  # type: ignore[attr-defined]
 
 
-def _shcore() -> Optional[ctypes.CDLL]:
+def load_shcore() -> Optional[ctypes.CDLL]:
     """shcore 句柄；平台不符或库缺失时返回 None。"""
     if sys.platform != "win32":
         return None
@@ -55,7 +55,7 @@ def setup_process_dpi_awareness() -> bool:
     Win8.1+ 的进程感知枚举。感知已由其他机制确定（清单声明等）时接口会
     失败——此时进程口径已固定，不视为错误，按失败记录 debug 供排查。
     """
-    user32 = _user32()
+    user32 = load_user32()
     if user32 is not None:
         set_context = getattr(user32, "SetProcessDpiAwarenessContext", None)
         if set_context is not None:
@@ -65,7 +65,7 @@ def setup_process_dpi_awareness() -> bool:
                 logger.info("进程 DPI 感知：已设为 per-monitor-v2")
                 return True
 
-    shcore = _shcore()
+    shcore = load_shcore()
     set_awareness = getattr(shcore, "SetProcessDpiAwareness", None) if shcore is not None else None
     if set_awareness is not None:
         try:

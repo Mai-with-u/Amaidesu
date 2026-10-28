@@ -36,7 +36,7 @@ def _section(breakdown: ContextBreakdown, key: str) -> cm.ContextSection:
 @pytest.fixture(autouse=True)
 def _force_heuristic(monkeypatch: pytest.MonkeyPatch) -> None:
     """强制启发式路径：单测不触碰 tiktoken 词表（可能未拉取）。"""
-    monkeypatch.setattr(cm, "_get_encoding", lambda: None)
+    monkeypatch.setattr(cm, "get_encoding", lambda: None)
 
 
 class TestEstimateBreakdown:

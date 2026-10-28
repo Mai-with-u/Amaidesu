@@ -1,8 +1,8 @@
 """键鼠注入后端测试——只测假件、键名映射与注入封装接线，不真点键鼠。
 
-真实后端为 ctypes 直调 Win32 API（Windows 专属）：非 Windows 平台构造
-即抛错，故真实接线断言仅在有显示的 Windows 上执行且全部走 monkeypatch
-的薄封装，不触碰真实键鼠；Fake 件测试不受平台影响。
+真实后端为 ctypes 直调 Win32 API（Windows 专属）：接线断言经构造器注入
+记录型按键发送器替身，任何平台都可跑且不触碰真实键鼠；非 Windows 构造
+护栏单独验证；Fake 件测试不受平台影响。
 """
 
 from __future__ import annotations
@@ -82,68 +82,72 @@ class TestKeyNameMapping:
         assert _key_to_vk("winleft") == _key_to_vk("win")
 
 
-@pytest.mark.skipif(
-    sys.platform != "win32",
-    reason="Win32InputBackend 为 Windows 专属，非 Windows 构造即抛错",
-)
+class _RecordingSender:
+    """测试用按键发送器替身：只记录调用，不触碰真实键鼠。"""
+
+    def __init__(self) -> None:
+        self.keys: list[tuple[int, int, bool]] = []
+        self.chars: list[str] = []
+        self.moves: list[tuple[int, int]] = []
+        self.buttons: list[tuple[str, bool]] = []
+
+    def map_vk_to_scan(self, vk: int) -> int:
+        return vk * 2  # 可辨识的假扫描码，验证传递
+
+    def send_key(self, vk: int, scan: int, key_up: bool) -> None:
+        self.keys.append((vk, scan, key_up))
+
+    def send_unicode_char(self, ch: str) -> None:
+        self.chars.append(ch)
+
+    def move_cursor(self, x: int, y: int) -> None:
+        self.moves.append((x, y))
+
+    def send_mouse_button(self, button: str, key_up: bool) -> None:
+        self.buttons.append((button, key_up))
+
+
 class TestWin32InputBackend:
-    """真实接线断言：user32 薄封装全部 monkeypatch，不触碰真实键鼠。"""
+    """真实接线断言：底层注入通道注入替身，不触碰真实键鼠。"""
 
-    def _make_backend(self) -> Win32InputBackend:
-        return Win32InputBackend()
+    def _make_backend(self) -> tuple[Win32InputBackend, _RecordingSender]:
+        sender = _RecordingSender()
+        return Win32InputBackend(sender=sender), sender
 
-    def test_press_named_key_sends_down_then_up(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        sent: list[tuple[int, int, bool]] = []
-        monkeypatch.setattr(input_mod, "_send_key", lambda vk, scan, key_up: sent.append((vk, scan, key_up)))
-        backend = self._make_backend()
+    def test_press_named_key_sends_down_then_up(self) -> None:
+        backend, sender = self._make_backend()
         backend.press("space")
-        assert sent == [(0x20, sent[0][1], False), (0x20, sent[0][1], True)]
+        assert sender.keys == [(0x20, 0x40, False), (0x20, 0x40, True)]
 
-    def test_press_single_char_uses_unicode_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        chars: list[str] = []
-        monkeypatch.setattr(input_mod, "_send_unicode_char", lambda ch: chars.append(ch))
-        backend = self._make_backend()
+    def test_press_single_char_uses_unicode_path(self) -> None:
+        backend, sender = self._make_backend()
         backend.press("你")
-        assert chars == ["你"]
+        assert sender.chars == ["你"]
 
-    def test_press_unknown_multi_char_name_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        backend = self._make_backend()
+    def test_press_unknown_multi_char_name_raises(self) -> None:
+        backend, _ = self._make_backend()
         with pytest.raises(ValueError, match="不支持的键名"):
             backend.press("notakey")
 
     def test_hold_releases_in_finally(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        events: list[tuple[int, bool]] = []
-        monkeypatch.setattr(
-            input_mod,
-            "_send_key",
-            lambda vk, scan, key_up: events.append((vk, key_up)),
-        )
+        backend, sender = self._make_backend()
 
         def boom(_duration_ms: float) -> None:
             raise TimeoutError("模拟睡眠被打断")
 
         monkeypatch.setattr(input_mod.time, "sleep", boom)
-        backend = self._make_backend()
         with pytest.raises(TimeoutError):
             backend.hold("ctrl", 100)
-        assert events == [(0x11, False), (0x11, True)]
+        assert sender.keys == [(0x11, 0x22, False), (0x11, 0x22, True)]
 
-    def test_click_moves_cursor_then_clicks(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        moves: list[tuple[int, int]] = []
-        clicks: list[tuple[str, bool]] = []
-        monkeypatch.setattr(input_mod, "_move_cursor", lambda x, y: moves.append((x, y)))
-        monkeypatch.setattr(
-            input_mod,
-            "_send_mouse_button",
-            lambda button, key_up: clicks.append((button, key_up)),
-        )
-        backend = self._make_backend()
+    def test_click_moves_cursor_then_clicks(self) -> None:
+        backend, sender = self._make_backend()
         backend.click(10, 20, button="right")
-        assert moves == [(10, 20)]
-        assert clicks == [("right", False), ("right", True)]
+        assert sender.moves == [(10, 20)]
+        assert sender.buttons == [("right", False), ("right", True)]
 
-    def test_click_unknown_button_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        backend = self._make_backend()
+    def test_click_unknown_button_raises(self) -> None:
+        backend, _ = self._make_backend()
         with pytest.raises(ValueError, match="不支持的鼠标按钮"):
             backend.click(1, 2, button="side")
 

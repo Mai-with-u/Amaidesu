@@ -61,8 +61,8 @@ def _patch_dlls(
     user32: Optional[_FakeUser32],
     shcore: Optional[_FakeShcore],
 ) -> None:
-    monkeypatch.setattr(windows_dpi, "_user32", lambda: user32)
-    monkeypatch.setattr(windows_dpi, "_shcore", lambda: shcore)
+    monkeypatch.setattr(windows_dpi, "load_user32", lambda: user32)
+    monkeypatch.setattr(windows_dpi, "load_shcore", lambda: shcore)
 
 
 def test_uses_context_api_first(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,7 +117,7 @@ def test_legacy_call_error_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None
         def SetProcessDpiAwareness(_awareness: int) -> int:
             raise OSError("shcore 不可用")
 
-    monkeypatch.setattr(windows_dpi, "_user32", lambda: user32)
-    monkeypatch.setattr(windows_dpi, "_shcore", lambda: _ExplodingShcore())
+    monkeypatch.setattr(windows_dpi, "load_user32", lambda: user32)
+    monkeypatch.setattr(windows_dpi, "load_shcore", lambda: _ExplodingShcore())
 
     assert windows_dpi.setup_process_dpi_awareness() is False

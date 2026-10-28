@@ -267,7 +267,7 @@ class OutlineLabel:
         line_h = self._line_height()
         total_h = len(lines) * line_h
         y = (height - total_h) // 2
-        emoji_font = self._load_emoji_font()
+        emoji_font = self.load_emoji_font()
         main_ascent = font.getmetrics()[0]
         emoji_ascent = emoji_font.getmetrics()[0] if emoji_font else main_ascent
         for line in lines:
@@ -340,7 +340,7 @@ class OutlineLabel:
                 continue
         return None
 
-    def _load_emoji_font(self) -> Optional[ImageFont.FreeTypeFont]:
+    def load_emoji_font(self) -> Optional[ImageFont.FreeTypeFont]:
         """加载 Windows 内置的 Segoe UI Emoji 作为 emoji 兜底字体。
 
         不开 embedded_color：COLR 字体按普通轮廓渲染，得到的 1-bit 掩码
@@ -403,7 +403,7 @@ class OutlineLabel:
         text = (self.display_text or "").strip()
         if not text:
             return []
-        emoji_font = self._load_emoji_font()
+        emoji_font = self.load_emoji_font()
         lines: List[str] = []
         current = ""
         current_w = 0.0

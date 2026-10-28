@@ -66,7 +66,7 @@ class _Edge(_Engine):
     def synth_patches(self, provider, stack, fail):
         synth = AsyncMock(side_effect=RuntimeError("boom") if fail else None)
         synth.return_value = (np.zeros(48000, dtype=np.float32), 48000)
-        stack.enter_context(patch.object(provider, "_edge_tts_synthesize", new=synth))
+        stack.enter_context(patch.object(provider, "synthesize", new=synth))
         self.sent_text = lambda: synth.call_args.args[0]
 
 
@@ -246,7 +246,7 @@ async def test_edge_skips_blank_text_and_lazily_sets_up(event_bus: EventBus) -> 
     await provider.handle_speech("")  # 空文本跳过渲染，不增计数
     assert provider.render_count == 0
     synth = AsyncMock(return_value=(np.zeros(48000, dtype=np.float32), 48000))
-    with patch.object(provider, "_edge_tts_synthesize", new=synth):
+    with patch.object(provider, "synthesize", new=synth):
         await provider.handle_speech("你好")
     assert provider.render_count == 1 and mgr.play_audio.await_count == 1
 
@@ -254,7 +254,7 @@ async def test_edge_skips_blank_text_and_lazily_sets_up(event_bus: EventBus) -> 
 async def test_edge_synthesize_failure_propagates_instead_of_silent_audio(event_bus: EventBus) -> None:
     """真路径失败上抛：直压 edge_tts.Communicate，穿过真实方法体。
 
-    上面参数化的失败契约用整方法替身换掉 ``_edge_tts_synthesize``，守不住
+    上面参数化的失败契约用整方法替身换掉 ``synthesize``，守不住
     方法体内部的吞错——引擎曾把合成异常吃掉并返回静音假音频（错误计数与
     failed 事件全被绕过），只有真路径红灯能拦住这类回归。
     """
@@ -262,7 +262,7 @@ async def test_edge_synthesize_failure_propagates_instead_of_silent_audio(event_
     fake_edge = MagicMock(Communicate=MagicMock(side_effect=RuntimeError("boom")))
     with patch("src.modules.tts.backends.edge.provider.edge_tts", fake_edge, create=True):
         with pytest.raises(RuntimeError, match="boom"):
-            await provider._edge_tts_synthesize("你好")
+            await provider.synthesize("你好")
 
 
 async def test_voicebox_without_profile_id_fails_before_synthesis(event_bus: EventBus) -> None:

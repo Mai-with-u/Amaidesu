@@ -93,7 +93,7 @@ class ContextBreakdown(BaseModel):
     sections: List[ContextSection] = Field(default_factory=list)
 
 
-def _get_encoding() -> Any:
+def get_encoding() -> Any:
     """惰性取 tiktoken 编码器；不可用返回 None（进程内只尝试一次）。"""
     global _encoding, _encoding_failed
     if _encoding is not None or _encoding_failed:
@@ -113,7 +113,7 @@ def count_text_tokens(text: str) -> int:
     """估算一段文本的 token 数（tiktoken 优先，启发式兜底）。"""
     if not text:
         return 0
-    encoding = _get_encoding()
+    encoding = get_encoding()
     if encoding is not None:
         try:
             return len(encoding.encode(text))

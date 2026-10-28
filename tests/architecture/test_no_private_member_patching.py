@@ -33,47 +33,23 @@ TESTS = Path(__file__).resolve().parents[1]
 ALLOWED_PRIVATE_PATCHES: dict[str, str] = {
     # agents/test_minecraft_attention_collector.py：采集器内部就绪检查，无公有接缝
     "agents/test_minecraft_attention_collector.py:448": "collector._ensure_ready",
-    # agents/text_adv/test_input.py：键鼠输入原语为 ctypes 私有函数，公有入口难以逐键注入
-    "agents/text_adv/test_input.py:97": "input_mod._send_key",
-    "agents/text_adv/test_input.py:104": "input_mod._send_unicode_char",
-    "agents/text_adv/test_input.py:116": "input_mod._send_key",
-    "agents/text_adv/test_input.py:134": "input_mod._move_cursor",
-    "agents/text_adv/test_input.py:135": "input_mod._send_mouse_button",
     # dashboard/test_system_api_v2.py：系统信息装配的内部聚合项与 changelog 路径常量
     "dashboard/test_system_api_v2.py:213": "system_api._build_component_items",
     "dashboard/test_system_api_v2.py:232": "system_api._CHANGELOG_PATH",
     # integration/*_wiring.py：入口模块的模块级路径常量，接线测试需重定向工作目录
+    # （main 域另有会话占用，待协调后修接缝）
     "integration/test_dashboard_wiring.py:48": "main._BASE_DIR",
     "integration/test_simulator_wiring.py:69": "main._BASE_DIR",
     # modules/collectors/test_collector_framework.py：stdin 交互检测私有判定
+    # （collectors 域另有会话占用，待协调后修接缝）
     "modules/collectors/test_collector_framework.py:191": "console_mod._stdin_interactive",
     "modules/collectors/test_collector_framework.py:211": "console_mod._stdin_interactive",
     "modules/collectors/test_collector_framework.py:230": "console_mod._stdin_interactive",
-    # modules/dashboard/test_avatar_assets_route.py：字符串路径形式 patch 服务器单例持有者
-    "modules/dashboard/test_avatar_assets_route.py:48": "src.modules.dashboard.dependencies._dashboard_server",
-    "modules/dashboard/test_avatar_assets_route.py:108": "src.modules.dashboard.dependencies._dashboard_server",
-    # modules/llm/test_context_meter.py：tiktoken 编码器懒加载缓存
-    "modules/llm/test_context_meter.py:39": "cm._get_encoding",
-    # modules/subtitle/test_outline_label_render.py：emoji 字体懒加载
-    "modules/subtitle/test_outline_label_render.py:161": "controlled._load_emoji_font",
-    # modules/test_windows_dpi.py：ctypes DLL 句柄，DPI 检测无法真实调用系统 API
-    "modules/test_windows_dpi.py:64": "windows_dpi._user32",
-    "modules/test_windows_dpi.py:65": "windows_dpi._shcore",
-    "modules/test_windows_dpi.py:120": "windows_dpi._user32",
-    "modules/test_windows_dpi.py:121": "windows_dpi._shcore",
-    # modules/tts/test_engine_contract.py：edge-tts 私有四步生成流程
-    "modules/tts/test_engine_contract.py:69": "provider._edge_tts_synthesize",
+    # modules/tts/test_engine_contract.py：voicebox 私有四步生成流程
+    # （voicebox 生产包未获清理授权，edge 侧已改公有 synthesize 接缝）
     "modules/tts/test_engine_contract.py:84": "provider._create_generation",
     "modules/tts/test_engine_contract.py:86": "provider._wait_for_completion",
     "modules/tts/test_engine_contract.py:87": "provider._download_audio",
-    "modules/tts/test_engine_contract.py:249": "provider._edge_tts_synthesize",
-    # modules/vision/test_mss_capture.py：mss 依赖与导入错误占位的注入点
-    "modules/vision/test_mss_capture.py:49": "mss_capture_module._mss",
-    "modules/vision/test_mss_capture.py:72": "mss_capture_module._mss",
-    "modules/vision/test_mss_capture.py:78": "mss_capture_module._mss",
-    "modules/vision/test_mss_capture.py:145": "mss_capture_module._mss",
-    "modules/vision/test_mss_capture.py:146": "mss_capture_module._MSS_IMPORT_ERROR",
-    "modules/vision/test_mss_capture.py:218": "mss_capture_module._per_monitor_dpi_thread",
 }
 
 

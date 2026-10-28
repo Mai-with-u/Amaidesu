@@ -8,7 +8,7 @@ import pytest
 
 from src.agents.streamer.planner import PlannerConfig, Planner
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
+from src.agents.streamer.trigger_cause import TriggerKind
 from src.modules.utils.time_utils import now_ms
 from tests.agents.streamer.helpers import make_streamer_agent
 

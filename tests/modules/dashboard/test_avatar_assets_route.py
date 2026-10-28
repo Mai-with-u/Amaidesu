@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -9,11 +10,19 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.modules.dashboard.api.avatar import router
+from src.modules.dashboard.dependencies import set_dashboard_server
 from src.modules.avatar.platform.expression_sheet.expression_sheet_provider import (
     ExpressionSheetProvider,
 )
 
 _PNG_BYTES = b"\x89PNG\r\n\x1a\n"
+
+
+@pytest.fixture(autouse=True)
+def _reset_dashboard_server() -> Iterator[None]:
+    """服务器单例是模块级全局，测完复位避免泄漏到其他测试。"""
+    yield
+    set_dashboard_server(None)
 
 
 class _StubRegistry:
@@ -45,7 +54,7 @@ def _client(provider: object | None, monkeypatch: pytest.MonkeyPatch) -> TestCli
     app = FastAPI()
     app.include_router(router, prefix="/api/v1/avatar")
     server = _StubServer(_StubRegistry(provider))
-    monkeypatch.setattr("src.modules.dashboard.dependencies._dashboard_server", server)
+    set_dashboard_server(server)
     return TestClient(app)
 
 
@@ -105,8 +114,5 @@ def test_missing_registry_or_provider_returns_404(monkeypatch: pytest.MonkeyPatc
 
     app = FastAPI()
     app.include_router(router, prefix="/api/v1/avatar")
-    monkeypatch.setattr(
-        "src.modules.dashboard.dependencies._dashboard_server",
-        _StubServer(None),  # type: ignore[arg-type]
-    )
+    set_dashboard_server(_StubServer(None))  # type: ignore[arg-type]
     assert TestClient(app).get("/api/v1/avatar/expression_sheet/assets/neutral.png").status_code == 404

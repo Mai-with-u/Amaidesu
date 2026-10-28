@@ -150,51 +150,79 @@ def _key_to_vk(key: str) -> int | None:
 
 
 # ======================================================================
-# user32 薄封装（模块级引用，测试可 monkeypatch，headless 不真调注入 API）
+# 按键发送器：ctypes 直调 user32 的最底层通道（Windows 专属，测试注入替身）
 # ======================================================================
 
-_user32: ctypes.WinDLL | None = None
+
+class KeyMouseSender(Protocol):
+    """键鼠注入最底层通道协议（依赖注入点）。
+
+    生产实现为 :class:`Win32KeyMouseSender`（ctypes 直调 user32）；
+    测试用只记录调用的替身，不触碰真实键鼠。
+    """
+
+    def map_vk_to_scan(self, vk: int) -> int:
+        """虚拟键码 → 扫描码。"""
+        ...
+
+    def send_key(self, vk: int, scan: int, key_up: bool) -> None:
+        """发送一次键盘事件（虚拟键码 + 扫描码，与 keybd_event 行为对齐）。"""
+        ...
+
+    def send_unicode_char(self, ch: str) -> None:
+        """以 KEYEVENTF_UNICODE 发送单个字符。"""
+        ...
+
+    def move_cursor(self, x: int, y: int) -> None:
+        """移动光标到主显示器物理像素坐标。"""
+        ...
+
+    def send_mouse_button(self, button: str, key_up: bool) -> None:
+        """发送一次鼠标按键事件。"""
+        ...
 
 
-def _get_user32() -> ctypes.WinDLL:
-    """懒加载 user32：Windows 专属，非 Windows 访问 ctypes.windll 即失败。"""
-    global _user32
-    if _user32 is None:
-        _user32 = ctypes.windll.user32
-    return _user32
+class Win32KeyMouseSender:
+    """ctypes 直调 Win32 user32 的按键发送器（KeyMouseSender 的生产实现）。
 
+    构造即调 ``SetProcessDPIAware()``：坐标语义依赖进程 DPI 感知——
+    未感知时 GetCursorPos/SetCursorPos 的坐标系会被虚拟化缩放，与读屏
+    截图得到物理像素坐标不一致；进程已被设置过时该调用失败属正常，忽略。
+    """
 
-def _send_key(vk: int, scan: int, key_up: bool) -> None:
-    """发送一次键盘事件（扫描码由 MapVirtualKeyW 求得，与 keybd_event 行为对齐）。"""
-    flags = _KEYEVENTF_KEYUP if key_up else 0
-    event = _INPUT(type=_INPUT_KEYBOARD)
-    event.ki = _KEYBDINPUT(wVk=vk, wScan=scan, dwFlags=flags, time=0, dwExtraInfo=0)
-    _get_user32().SendInput(1, ctypes.byref(event), ctypes.sizeof(event))
+    def __init__(self) -> None:
+        self._user32 = ctypes.windll.user32
+        # 返回值刻意忽略：进程 DPI 感知已被其他组件设置过时调用失败属正常
+        self._user32.SetProcessDPIAware()
 
+    def map_vk_to_scan(self, vk: int) -> int:
+        return self._user32.MapVirtualKeyW(vk, 0)  # MAPVK_VK_TO_VSC
 
-def _send_unicode_char(ch: str) -> None:
-    """以 KEYEVENTF_UNICODE 发送单个字符（wScan 携带 UTF-16 码元）。"""
-    code = ord(ch)
-    for key_up in (False, True):
-        flags = _KEYEVENTF_UNICODE
-        if key_up:
-            flags |= _KEYEVENTF_KEYUP
+    def send_key(self, vk: int, scan: int, key_up: bool) -> None:
+        flags = _KEYEVENTF_KEYUP if key_up else 0
         event = _INPUT(type=_INPUT_KEYBOARD)
-        event.ki = _KEYBDINPUT(wVk=_VK_PACKET, wScan=code, dwFlags=flags, time=0, dwExtraInfo=0)
-        _get_user32().SendInput(1, ctypes.byref(event), ctypes.sizeof(event))
+        event.ki = _KEYBDINPUT(wVk=vk, wScan=scan, dwFlags=flags, time=0, dwExtraInfo=0)
+        self._user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(event))
 
+    def send_unicode_char(self, ch: str) -> None:
+        """以 KEYEVENTF_UNICODE 发送单个字符（wScan 携带 UTF-16 码元）。"""
+        code = ord(ch)
+        for key_up in (False, True):
+            flags = _KEYEVENTF_UNICODE
+            if key_up:
+                flags |= _KEYEVENTF_KEYUP
+            event = _INPUT(type=_INPUT_KEYBOARD)
+            event.ki = _KEYBDINPUT(wVk=_VK_PACKET, wScan=code, dwFlags=flags, time=0, dwExtraInfo=0)
+            self._user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(event))
 
-def _move_cursor(x: int, y: int) -> None:
-    """移动光标到主显示器物理像素坐标。"""
-    _get_user32().SetCursorPos(x, y)
+    def move_cursor(self, x: int, y: int) -> None:
+        self._user32.SetCursorPos(x, y)
 
-
-def _send_mouse_button(button: str, key_up: bool) -> None:
-    """发送一次鼠标按键事件。"""
-    flags = _MOUSE_BUTTON_FLAGS[button][1 if key_up else 0]
-    event = _INPUT(type=_INPUT_MOUSE)
-    event.mi = _MOUSEINPUT(dx=0, dy=0, mouseData=0, dwFlags=flags, time=0, dwExtraInfo=0)
-    _get_user32().SendInput(1, ctypes.byref(event), ctypes.sizeof(event))
+    def send_mouse_button(self, button: str, key_up: bool) -> None:
+        flags = _MOUSE_BUTTON_FLAGS[button][1 if key_up else 0]
+        event = _INPUT(type=_INPUT_MOUSE)
+        event.mi = _MOUSEINPUT(dx=0, dy=0, mouseData=0, dwFlags=flags, time=0, dwExtraInfo=0)
+        self._user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(event))
 
 
 class InputBackend(Protocol):
@@ -223,31 +251,30 @@ class Win32InputBackend:
     按键走 SendInput（虚拟键码 + 扫描码，与 keybd_event 行为一致），
     点击走 SetCursorPos + SendInput 鼠标事件；坐标为主显示器物理像素。
 
-    构造即调 ``SetProcessDPIAware()``：坐标语义依赖进程 DPI 感知——
-    未感知时 GetCursorPos/SetCursorPos 的坐标系会被虚拟化缩放，与读屏
-    截图得到物理像素坐标不一致；进程已被设置过时该调用失败属正常，忽略。
+    底层注入通道经构造器注入（:class:`KeyMouseSender`），缺省用
+    :class:`Win32KeyMouseSender`；测试注入只记录调用的替身，不触碰真实键鼠。
 
-    非 Windows 环境（CI、headless 机器）构造即抛错，不让模块级 import
-    承担平台差异；生产（Windows 直播机）实例化时环境必然齐备。
+    非 Windows 环境（CI、headless 机器）走缺省通道构造即抛错，不让模块级
+    import 承担平台差异；生产（Windows 直播机）实例化时环境必然齐备。
     """
 
-    def __init__(self) -> None:
-        if sys.platform != "win32":
-            raise RuntimeError(
-                "Win32InputBackend 仅支持 Windows（依赖 user32 键鼠注入 API），非 Windows 环境请改用 FakeInputBackend"
-            )
-        self._user32 = _get_user32()
-        # 返回值刻意忽略：进程 DPI 感知已被其他组件设置过时调用失败属正常
-        self._user32.SetProcessDPIAware()
+    def __init__(self, sender: KeyMouseSender | None = None) -> None:
+        if sender is None:
+            if sys.platform != "win32":
+                raise RuntimeError(
+                    "Win32InputBackend 仅支持 Windows（依赖 user32 键鼠注入 API），非 Windows 环境请改用 FakeInputBackend"
+                )
+            sender = Win32KeyMouseSender()
+        self._sender = sender
 
     def press(self, key: str) -> None:
         vk = _key_to_vk(key)
         if vk is not None:
-            scan = self._user32.MapVirtualKeyW(vk, 0)  # MAPVK_VK_TO_VSC
-            _send_key(vk, scan, key_up=False)
-            _send_key(vk, scan, key_up=True)
+            scan = self._sender.map_vk_to_scan(vk)
+            self._sender.send_key(vk, scan, key_up=False)
+            self._sender.send_key(vk, scan, key_up=True)
         elif len(key) == 1:
-            _send_unicode_char(key)
+            self._sender.send_unicode_char(key)
         else:
             raise ValueError(
                 f"不支持的键名 {key!r}：映射表外的多字符键名无法注入，"
@@ -258,19 +285,19 @@ class Win32InputBackend:
         vk = _key_to_vk(key)
         if vk is None:
             raise ValueError(f"不支持的键名 {key!r}：按住仅支持映射表内的标准键名（如 'ctrl'、'shift'、'space'）")
-        scan = self._user32.MapVirtualKeyW(vk, 0)  # MAPVK_VK_TO_VSC
-        _send_key(vk, scan, key_up=False)
+        scan = self._sender.map_vk_to_scan(vk)
+        self._sender.send_key(vk, scan, key_up=False)
         try:
             time.sleep(duration_ms / 1000.0)
         finally:
-            _send_key(vk, scan, key_up=True)
+            self._sender.send_key(vk, scan, key_up=True)
 
     def click(self, x: int, y: int, button: str = "left") -> None:
         if button not in _MOUSE_BUTTON_FLAGS:
             raise ValueError(f"不支持的鼠标按钮 {button!r}，可选：left / right / middle")
-        _move_cursor(x, y)
-        _send_mouse_button(button, key_up=False)
-        _send_mouse_button(button, key_up=True)
+        self._sender.move_cursor(x, y)
+        self._sender.send_mouse_button(button, key_up=False)
+        self._sender.send_mouse_button(button, key_up=True)
 
 
 class FakeInputBackend:

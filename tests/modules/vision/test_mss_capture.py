@@ -12,7 +12,7 @@ import pytest
 
 import src.modules.vision.mss_capture as mss_capture_module
 from src.modules.vision import MonitorInfo, MssScreenCapture
-from src.modules.vision.mss_capture import _derive_is_primary, _per_monitor_dpi_thread
+from src.modules.vision.mss_capture import _derive_is_primary, per_monitor_dpi_thread
 
 # 三屏布局：monitors[0] 是虚拟合屏；index=1 右侧副屏，index=2 主屏（含原点），index=3 左侧副屏
 VIRTUAL = {"left": -1920, "top": 0, "width": 6400, "height": 1600}
@@ -46,7 +46,7 @@ class FakeSct:
 
 def _fake_mss(monkeypatch, monitors, **kwargs) -> FakeSct:
     sct = FakeSct(monitors, **kwargs)
-    monkeypatch.setattr(mss_capture_module, "_mss", SimpleNamespace(mss=lambda: sct), raising=False)
+    monkeypatch.setattr(mss_capture_module, "load_mss", lambda: (SimpleNamespace(mss=lambda: sct), None))
     return sct
 
 
@@ -69,13 +69,13 @@ def test_list_monitors_enumerates_with_primary_and_degrades_without_mss(monkeypa
     assert [m.index for m in monitors] == [0, 1, 2, 3]
     assert [m.is_primary for m in monitors] == [False, False, True, False]
 
-    monkeypatch.setattr(mss_capture_module, "_mss", None, raising=False)  # import mss 失败
+    monkeypatch.setattr(mss_capture_module, "load_mss", lambda: (None, ImportError("no mss")))  # import mss 失败
     assert MssScreenCapture().list_monitors() == []
 
     def boom():
         raise RuntimeError("no display")
 
-    monkeypatch.setattr(mss_capture_module, "_mss", SimpleNamespace(mss=boom), raising=False)
+    monkeypatch.setattr(mss_capture_module, "load_mss", lambda: (SimpleNamespace(mss=boom), None))
     assert MssScreenCapture().list_monitors() == []
 
 
@@ -142,8 +142,7 @@ def test_capture_failures_return_empty_result_without_raising(monkeypatch) -> No
     grab_failed = MssScreenCapture().capture(monitor_index=0)
     assert grab_failed.image is None and isinstance(grab_failed.captured_at_ms, int) and grab_failed.captured_at_ms > 0
 
-    monkeypatch.setattr(mss_capture_module, "_mss", None, raising=False)
-    monkeypatch.setattr(mss_capture_module, "_MSS_IMPORT_ERROR", ImportError("no mss"), raising=False)
+    monkeypatch.setattr(mss_capture_module, "load_mss", lambda: (None, ImportError("no mss")))
     unavailable = MssScreenCapture().capture(monitor_index=1)
     assert unavailable.image is None and unavailable.captured_at_ms > 0
 
@@ -190,9 +189,9 @@ def dpi_api(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 def test_dpi_context_switches_to_per_monitor_and_restores_even_when_nested(dpi_api: MagicMock) -> None:
     per_monitor_v2 = ctypes.c_void_p(-4).value
     before = dpi_api.GetThreadDpiAwarenessContext()
-    with _per_monitor_dpi_thread():
+    with per_monitor_dpi_thread():
         assert dpi_api.GetThreadDpiAwarenessContext() == per_monitor_v2
-        with _per_monitor_dpi_thread():  # capture 内 list_monitors + grab 两处嵌套包裹
+        with per_monitor_dpi_thread():  # capture 内 list_monitors + grab 两处嵌套包裹
             assert dpi_api.GetThreadDpiAwarenessContext() == per_monitor_v2
         assert dpi_api.GetThreadDpiAwarenessContext() == per_monitor_v2  # 内层退出不能提前还原外层
     assert dpi_api.GetThreadDpiAwarenessContext() == before and dpi_api.SetThreadDpiAwarenessContext.call_count == 4
@@ -201,21 +200,21 @@ def test_dpi_context_switches_to_per_monitor_and_restores_even_when_nested(dpi_a
 def test_dpi_context_is_a_passthrough_off_windows(monkeypatch) -> None:
     monkeypatch.setattr(mss_capture_module.sys, "platform", "linux")
     entered = False
-    with _per_monitor_dpi_thread():
+    with per_monitor_dpi_thread():
         entered = True
     assert entered
 
 
 def test_enumeration_and_grab_both_run_inside_the_dpi_context(monkeypatch) -> None:
     _fake_mss(monkeypatch, [{"left": 0, "top": 0, "width": 800, "height": 600}])
-    real = _per_monitor_dpi_thread
+    real = per_monitor_dpi_thread
     entered = {"n": 0}
 
     def counting():
         entered["n"] += 1
         return real()
 
-    monkeypatch.setattr(mss_capture_module, "_per_monitor_dpi_thread", counting)
+    monkeypatch.setattr(mss_capture_module, "per_monitor_dpi_thread", counting)
     cap = MssScreenCapture()
     cap.list_monitors()  # 1 次
     cap.capture(monitor_index=1)  # 内部再调 list_monitors + grab，共 2 次

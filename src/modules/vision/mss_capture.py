@@ -29,7 +29,7 @@ mss 库以"**虚拟桌面绝对坐标**"表达显示器位置：
 - 单屏降级：``monitor_index`` 不存在 → 回退到 ``1``（首个物理显示器）+
   warning；**不得**回退到 ``0=合屏``。
 - 混合 DPI 自洽：枚举与抓图均在线程级 per-monitor DPI 上下文内执行
-  （``_per_monitor_dpi_thread``），使 mss 枚举坐标与 BitBlt 抓图恒为同一
+  （``per_monitor_dpi_thread``），使 mss 枚举坐标与 BitBlt 抓图恒为同一
   物理像素空间——进程级感知被其他组件（如 tkinter）设为 system-aware 时
   副屏不发生坐标虚拟化错位。
 - 真缩放：``max_width`` 非 None 且图像宽 > ``max_width`` 时用 PIL 等比
@@ -44,7 +44,7 @@ import io
 import sys
 import time
 from dataclasses import dataclass
-from typing import Iterator, List, Optional, Tuple
+from typing import Any, Iterator, List, Optional, Tuple
 
 from PIL import Image
 
@@ -62,12 +62,18 @@ except Exception as exc:  # noqa: BLE001 - 后端边界：缺包/系统层不可
 else:
     _MSS_IMPORT_ERROR = None
 
+
+def load_mss() -> Tuple[Optional[Any], Optional[BaseException]]:
+    """返回（mss 模块, 导入失败原因）；公开懒加载入口，测试经此注入替身。"""
+    return _mss, _MSS_IMPORT_ERROR
+
+
 # Win10 1607+ 的线程级 DPI 上下文句柄（-4 = PER_MONITOR_AWARE_V2 伪句柄）
 _DPI_CONTEXT_PER_MONITOR_V2 = -4
 
 
 @contextlib.contextmanager
-def _per_monitor_dpi_thread() -> Iterator[None]:
+def per_monitor_dpi_thread() -> Iterator[None]:
     """线程级切换到 per-monitor DPI 感知，保证枚举坐标与 BitBlt 抓图同为物理像素。
 
     mss 的显示器枚举坐标跟随调用线程的 DPI 感知上下文做虚拟化，而 BitBlt
@@ -141,14 +147,15 @@ class MssScreenCapture:
     """
 
     def __init__(self) -> None:
-        self._import_error: Optional[BaseException] = _MSS_IMPORT_ERROR
+        self._import_error: Optional[BaseException] = load_mss()[1]
 
     def _ensure_mss(self) -> bool:
         """确认 mss 可用。失败 → log + 返回 False（让 ``capture`` 走降级）。"""
-        if _mss is None:
+        mss_mod, import_error = load_mss()
+        if mss_mod is None:
             logger.warning(
-                f"mss 不可用（import 失败: {type(self._import_error).__name__ if self._import_error else 'unknown'}: "
-                f"{self._import_error}）；返回空快照"
+                f"mss 不可用（import 失败: {type(import_error).__name__ if import_error else 'unknown'}: "
+                f"{import_error}）；返回空快照"
             )
             return False
         return True
@@ -163,7 +170,7 @@ class MssScreenCapture:
         if not self._ensure_mss():
             return []
         try:
-            with _per_monitor_dpi_thread(), _mss.mss() as sct:  # type: ignore[misc]
+            with per_monitor_dpi_thread(), load_mss()[0].mss() as sct:
                 raw_monitors = sct.monitors
         except Exception as exc:  # noqa: BLE001 - 后端边界：枚举失败走降级
             logger.warning(f"mss 枚举显示器失败: {type(exc).__name__}: {exc}")
@@ -327,7 +334,7 @@ class MssScreenCapture:
             grab_dict["height"] = resolved[3]
 
         try:
-            with _per_monitor_dpi_thread(), _mss.mss() as sct:  # type: ignore[misc]
+            with per_monitor_dpi_thread(), load_mss()[0].mss() as sct:
                 sct_img = sct.grab(grab_dict)
                 img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
         except Exception as exc:  # noqa: BLE001 - 后端边界：抓取失败走降级

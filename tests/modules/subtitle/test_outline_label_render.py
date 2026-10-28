@@ -116,7 +116,7 @@ def test_chinese_font_has_real_glyphs_not_missing_glyph_boxes() -> None:
 
 
 def test_emoji_font_renders_monochrome_ink() -> None:
-    emoji_font = _make_label(text="✅")._load_emoji_font()
+    emoji_font = _make_label(text="✅").load_emoji_font()
     if emoji_font is None:
         if sys.platform == "win32":
             pytest.fail("Windows 未加载到 Segoe UI Emoji 字体")
@@ -142,7 +142,7 @@ def test_wrap_lines_respects_width_including_emoji_width_and_font_dispatch(monke
     assert len(lines) >= 2 and all(font.getlength(line) <= 780 for line in lines)
 
     mixed = _make_label(text="好嘞✅🔥⛏️稍等看成品✅" * 5)
-    emoji_font = mixed._load_emoji_font()
+    emoji_font = mixed.load_emoji_font()
     mixed_lines = mixed._wrap_lines(font, 800)
     assert len(mixed_lines) >= 2
     for line in mixed_lines:
@@ -158,7 +158,7 @@ def test_wrap_lines_respects_width_including_emoji_width_and_font_dispatch(monke
     main_font.getlength.side_effect = lambda text: 10 * len(text)
     fake_emoji = MagicMock()
     fake_emoji.getlength.side_effect = lambda text: 60 * len(text)
-    monkeypatch.setattr(controlled, "_load_emoji_font", lambda: fake_emoji)
+    monkeypatch.setattr(controlled, "load_emoji_font", lambda: fake_emoji)
     assert controlled._wrap_lines(main_font, 100) == ["A✅B", "✅C"]
     assert (main_font.getlength.call_count, fake_emoji.getlength.call_count) == (3, 2)
 

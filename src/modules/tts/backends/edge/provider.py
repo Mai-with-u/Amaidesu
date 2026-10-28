@@ -119,9 +119,9 @@ class EdgeTTSProvider:
             utterance_id: 一次发声实例的唯一 ID；非 None 时按
                 ``tts.utterance.*`` 生命周期发布事件。
         """
-        await run_full_engine_speech(self, text=text, utterance_id=utterance_id, synthesize=self._edge_tts_synthesize)
+        await run_full_engine_speech(self, text=text, utterance_id=utterance_id, synthesize=self.synthesize)
 
-    async def _edge_tts_synthesize(self, text: str) -> Tuple[np.ndarray, int]:
+    async def synthesize(self, text: str) -> Tuple[np.ndarray, int]:
         """调用 Edge TTS 合成（失败直接抛出）。
 
         异常不在此处理：由公共骨架统一计错误数、发 ``tts.utterance.failed``

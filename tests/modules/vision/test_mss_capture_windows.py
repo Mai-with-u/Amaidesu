@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from src.modules.vision.mss_capture import _per_monitor_dpi_thread
+from src.modules.vision.mss_capture import per_monitor_dpi_thread
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="真实 Win32 API 由 Windows CI 验证")
 
@@ -32,7 +32,7 @@ def test_native_context_restored_after_exit() -> None:
     """进入时实际切到 per-monitor v2，退出后还原调用线程。"""
     before = _current_thread_dpi_context()
     assert before is not None
-    with _per_monitor_dpi_thread():
+    with per_monitor_dpi_thread():
         _assert_per_monitor_v2()
     assert _current_thread_dpi_context() == before
 
@@ -41,9 +41,9 @@ def test_native_nested_context_restore() -> None:
     """内层退出不能提前恢复外层的原始 DPI 上下文。"""
     before = _current_thread_dpi_context()
     assert before is not None
-    with _per_monitor_dpi_thread():
+    with per_monitor_dpi_thread():
         _assert_per_monitor_v2()
-        with _per_monitor_dpi_thread():
+        with per_monitor_dpi_thread():
             _assert_per_monitor_v2()
         _assert_per_monitor_v2()
     assert _current_thread_dpi_context() == before
