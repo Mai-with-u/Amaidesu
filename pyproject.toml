@@ -61,7 +61,6 @@ amaidesu = "main:main"
 
 [tool.ruff]
 include = ["*.py"]
-exclude = ["tests/*"]
 
 # 行长度设置
 line-length = 120
@@ -78,13 +77,29 @@ select = [
     "E", # pycodestyle 错误
     "F", # pyflakes
     "B", # flake8-bugbear
+    "ASYNC", # async 函数内的阻塞调用（time.sleep / httpx 同步客户端等）
 ]
 
-ignore = ["E711", "E501"]
+# E501 由 line-length 兜底判定差异，暂关；ASYNC109（async 函数带 timeout 参数）是
+# 主流写法（httpx/asyncio 官方 API 同形），按噪声处理不启用
+ignore = ["E711", "E501", "ASYNC109"]
 
 [tool.ruff.lint.per-file-ignores]
 # scripts/ 下的独立脚本需先注入 sys.path 再 import src 包，import 前有语句属预期
 "scripts/*" = ["E402"]
+
+# ---- 以下为 tests/ 首次纳入 lint 的存量承接，均待第三批清理 ----
+# async 轮询循环里 await asyncio.sleep 属真实问题（项目纪律要求用事件等待），待改为 asyncio.Event
+"tests/agents/streamer/test_decision_loop.py" = ["ASYNC110"]
+"tests/agents/streamer/test_speech_dispatcher.py" = ["ASYNC110"]
+"tests/config/test_file_watcher.py" = ["ASYNC110"]
+"tests/modules/simulator/test_integration.py" = ["ASYNC110"]
+# 未使用的 import，待第三批清理
+"tests/agents/streamer/test_game_decision_trigger.py" = ["F401"]
+"tests/agents/streamer/test_reminder_queue.py" = ["F401"]
+# async 函数内用阻塞方式创建子进程 / 打开文件，待改异步 API 或移出事件循环
+"src/modules/dashboard/server.py" = ["ASYNC220"]
+"src/modules/dashboard/vite_dev.py" = ["ASYNC230"]
 
 [tool.ruff.format]
 docstring-code-format = true
