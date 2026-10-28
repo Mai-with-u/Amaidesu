@@ -38,8 +38,8 @@ ALLOWED_PRIVATE_PATCHES: dict[str, str] = {
     "dashboard/test_system_api_v2.py:232": "system_api._CHANGELOG_PATH",
     # integration/*_wiring.py：入口模块的模块级路径常量，接线测试需重定向工作目录
     # （main 域另有会话占用，待协调后修接缝）
-    "integration/test_dashboard_wiring.py:48": "main._BASE_DIR",
-    "integration/test_simulator_wiring.py:69": "main._BASE_DIR",
+    "integration/test_dashboard_wiring.py:45": "main._BASE_DIR",
+    "integration/test_simulator_wiring.py:66": "main._BASE_DIR",
     # modules/collectors/test_collector_framework.py：stdin 交互检测私有判定
     # （collectors 域另有会话占用，待协调后修接缝）
     "modules/collectors/test_collector_framework.py:191": "console_mod._stdin_interactive",

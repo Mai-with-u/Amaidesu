@@ -214,14 +214,23 @@ async def test_shutdown_settles_session_before_event_telemetry_goes_down(store: 
     pk = await _open_session_with_detail(store, manager)
 
     await app_main.run_shutdown(
-        bus,
-        None,
-        None,
-        recorder,
-        None,
-        None,
-        None,
-        session_manager=manager,
+        app_main.AppComponents(
+            event_bus=bus,
+            llm_service=None,
+            dashboard_server=None,
+            event_recorder=recorder,
+            collector_manager=None,
+            agent_manager=None,
+            simulator_service=None,
+            database=store,
+            storage_ledger=None,
+            session_manager=manager,
+            tool_registry=None,
+            health_monitor=None,
+            task_tracker=None,
+            tts_diagnostics_recorder=None,
+            maibot_sync_reporter=None,
+        ),
     )
 
     assert collector.ended and collector.ended[0].reason == "进程退出", "退出收尾必须广播 live.ended"

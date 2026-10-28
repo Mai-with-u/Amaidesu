@@ -22,6 +22,7 @@ import os
 import signal
 import sys
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger as loguru_logger
@@ -321,6 +322,32 @@ def register_event_interceptors(event_bus: EventBus, config: Dict[str, Any], ses
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class AppComponents:
+    """组合根装配产物：``create_app_components`` 构造并连接的全部核心组件。
+
+    字段类型中的字符串前向引用与原返回元组保持一致——``DashboardServer`` /
+    ``SQLiteDatabase`` 等类型在本文件 import 期即可解析，字符串形式仅是延续
+    既有写法；``from __future__ import annotations`` 下注解按需求值，无运行期影响。
+    """
+
+    event_bus: EventBus
+    llm_service: LLMManager
+    dashboard_server: Optional["DashboardServer"]
+    event_recorder: Optional["EventHistoryRecorder"]
+    collector_manager: Optional["CollectorManager"]
+    agent_manager: Optional["AgentManager"]
+    simulator_service: Optional["SimulatorService"]
+    database: "SQLiteDatabase"
+    storage_ledger: Optional["StorageLedger"]
+    session_manager: "LiveSessionManager"
+    tool_registry: Optional[ToolRegistry]
+    health_monitor: Optional[ToolHealthMonitor]
+    task_tracker: Optional[TaskTracker]
+    tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder]
+    maibot_sync_reporter: Optional[LiveStatusReporter]
+
+
 async def create_app_components(
     config: Dict[str, Any],
     config_service: ConfigService,
@@ -332,23 +359,7 @@ async def create_app_components(
     providers_auto_start: bool = True,
     log_streamer_persist: bool = True,
     log_streamer_persist_dir: Optional[str] = None,
-) -> Tuple[
-    EventBus,
-    LLMManager,
-    Optional["DashboardServer"],
-    Optional["EventHistoryRecorder"],
-    Optional["CollectorManager"],
-    Optional["AgentManager"],
-    Optional["SimulatorService"],
-    "SQLiteDatabase",
-    Optional["StorageLedger"],
-    "LiveSessionManager",
-    Optional[ToolRegistry],
-    Optional[ToolHealthMonitor],
-    Optional[TaskTracker],
-    Optional[TtsDiagnosticsRecorder],
-    Optional[LiveStatusReporter],
-]:
+) -> AppComponents:
     """组合根：构造并连接所有核心组件。
 
     装配分两段（契约）：
@@ -378,11 +389,11 @@ async def create_app_components(
             集成测试需要验证持久化时指向临时目录，实现与真实数据隔离。
 
     Returns:
-        (event_bus, llm_service, dashboard_server,
-         event_recorder, collector_manager, agent_manager,
-         simulator_service, database, storage_ledger, session_manager,
-         tool_registry, health_monitor, task_tracker, tts_diagnostics_recorder,
-         maibot_sync_reporter)
+        AppComponents：字段依次为 event_bus / llm_service / dashboard_server /
+        event_recorder / collector_manager / agent_manager / simulator_service /
+        database / storage_ledger / session_manager / tool_registry /
+        health_monitor / task_tracker / tts_diagnostics_recorder /
+        maibot_sync_reporter
     """
     # --- 存储（SQLiteDatabase：建表 + 迁移 + 自检）---
     # 必须先于 LLMManager 构造：LLMManager 需要注入 store 做 llm_usage 落库
@@ -915,22 +926,22 @@ async def create_app_components(
         logger.info("StreamPreviewHub 已绑定 dashboard WS 通道")
 
     # --- 组件装配完成 ---
-    return (
-        event_bus,
-        llm_service,
-        dashboard_server,
-        event_recorder,
-        collector_manager,
-        agent_manager,
-        simulator_service,
-        database,
-        storage_ledger,
-        session_manager,
-        tool_registry if agents_config else None,
-        health_monitor if agents_config else None,
-        task_tracker if agents_config else None,
-        tts_diagnostics_recorder,
-        maibot_sync_reporter,
+    return AppComponents(
+        event_bus=event_bus,
+        llm_service=llm_service,
+        dashboard_server=dashboard_server,
+        event_recorder=event_recorder,
+        collector_manager=collector_manager,
+        agent_manager=agent_manager,
+        simulator_service=simulator_service,
+        database=database,
+        storage_ledger=storage_ledger,
+        session_manager=session_manager,
+        tool_registry=tool_registry if agents_config else None,
+        health_monitor=health_monitor if agents_config else None,
+        task_tracker=task_tracker if agents_config else None,
+        tts_diagnostics_recorder=tts_diagnostics_recorder,
+        maibot_sync_reporter=maibot_sync_reporter,
     )
 
 
@@ -1317,25 +1328,27 @@ async def fallback_close_active_session(session_manager: Optional["LiveSessionMa
 
 
 async def run_shutdown(
-    event_bus: EventBus,
-    llm_service: LLMManager,
-    dashboard_server: Optional["DashboardServer"],
-    event_recorder: Optional["EventHistoryRecorder"],
-    collector_manager: Optional["CollectorManager"],
-    agent_manager: Optional["AgentManager"],
-    simulator_service: Optional["SimulatorService"],
+    components: AppComponents,
     *,
-    database: Optional["SQLiteDatabase"] = None,
-    storage_ledger: Optional["StorageLedger"] = None,
-    session_manager: Optional["LiveSessionManager"] = None,
-    tool_registry: Optional[ToolRegistry] = None,
-    health_monitor: Optional[ToolHealthMonitor] = None,
-    task_tracker: Optional[TaskTracker] = None,
-    tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder] = None,
     diagnostics_writer: Optional[DiagnosticsWriter] = None,
-    maibot_sync_reporter: Optional[LiveStatusReporter] = None,
 ) -> None:
     """按依赖关系反向关闭：先停数据生产者 CollectorManager，再停 SimulatorService 与 AgentManager，然后 Dashboard；场次结账在事件历史/总线拆除之前（live.ended 要被记录）；随后事件历史/StorageLedger（必须在 EventBus.cleanup 之前 off，否则 listener 解绑失败），再依次停 ToolHealthMonitor、关闭 MCP stdio 子进程（修停机泄漏），诊断落盘线程冲刷收尾，最后 EventBus/LLMManager 清理，SQLiteDatabase.close 收尾落盘。"""
+    event_bus = components.event_bus
+    llm_service = components.llm_service
+    dashboard_server = components.dashboard_server
+    event_recorder = components.event_recorder
+    collector_manager = components.collector_manager
+    agent_manager = components.agent_manager
+    simulator_service = components.simulator_service
+    database: Optional["SQLiteDatabase"] = components.database
+    storage_ledger: Optional["StorageLedger"] = components.storage_ledger
+    session_manager: Optional["LiveSessionManager"] = components.session_manager
+    tool_registry: Optional[ToolRegistry] = components.tool_registry
+    health_monitor: Optional[ToolHealthMonitor] = components.health_monitor
+    task_tracker: Optional[TaskTracker] = components.task_tracker
+    tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder] = components.tts_diagnostics_recorder
+    maibot_sync_reporter: Optional[LiveStatusReporter] = components.maibot_sync_reporter
+
     _saw_cancelled = False
 
     async def safe_log(coro, name: str):
@@ -1497,23 +1510,7 @@ async def main() -> None:
     ensure_registry_consistency()
     logger.info(f"核心事件注册完成，共 {len(list_registered_events())} 个事件")
 
-    (
-        event_bus,
-        llm_service,
-        dashboard_server,
-        event_recorder,
-        collector_manager,
-        agent_manager,
-        simulator_service,
-        database,
-        storage_ledger,
-        session_manager,
-        tool_registry,
-        health_monitor,
-        task_tracker,
-        tts_diagnostics_recorder,
-        maibot_sync_reporter,
-    ) = await create_app_components(
+    components = await create_app_components(
         config,
         config_service,
         dev_webui=args.dev_webui,
@@ -1523,6 +1520,8 @@ async def main() -> None:
         providers_auto_start=not args.dry,
         log_streamer_persist=not args.dry,
     )
+    event_bus = components.event_bus
+    session_manager = components.session_manager
 
     # 兜底位：以下任一路径异常退出（含关闭链中途被 KeyboardInterrupt 打断）
     # 都要在 finally 里补一次场次结账；正常退出时 run_shutdown 已结账，兜底幂等静默通过
@@ -1537,23 +1536,7 @@ async def main() -> None:
         if args.dry:
             logger.info("--dry 模式：仅验证组合根构造，组件已构造但不进入主循环")
             logger.info("（此模式用于快速检查 wiring 是否完整，关闭后退出）")
-            await run_shutdown(
-                event_bus,
-                llm_service,
-                dashboard_server,
-                event_recorder,
-                collector_manager,
-                agent_manager,
-                simulator_service,
-                database=database,
-                storage_ledger=storage_ledger,
-                session_manager=session_manager,
-                tool_registry=tool_registry,
-                health_monitor=health_monitor,
-                task_tracker=task_tracker,
-                tts_diagnostics_recorder=tts_diagnostics_recorder,
-                maibot_sync_reporter=maibot_sync_reporter,
-            )
+            await run_shutdown(components)
             return
 
         stop_event = asyncio.Event()
@@ -1586,23 +1569,7 @@ async def main() -> None:
                 await heartbeat_task
 
         restore_signal_handlers(orig_sigint, orig_sigterm)
-        await run_shutdown(
-            event_bus,
-            llm_service,
-            dashboard_server,
-            event_recorder,
-            collector_manager,
-            agent_manager,
-            simulator_service,
-            database=database,
-            storage_ledger=storage_ledger,
-            session_manager=session_manager,
-            tool_registry=tool_registry,
-            health_monitor=health_monitor,
-            task_tracker=task_tracker,
-            tts_diagnostics_recorder=tts_diagnostics_recorder,
-            maibot_sync_reporter=maibot_sync_reporter,
-        )
+        await run_shutdown(components)
     finally:
         await fallback_close_active_session(session_manager)
 

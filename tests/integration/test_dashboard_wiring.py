@@ -16,9 +16,6 @@ import pytest
 import main as app_main
 from src.modules.config.service import ConfigService
 
-# create_app_components 返回元组的下标
-EVENT_BUS, LLM, AGENT_MANAGER, DATABASE, LEDGER, SESSION_MANAGER, HEALTH, TASKS = 0, 1, 5, 7, 8, 9, 11, 12
-
 
 class _FakeDashboardServer:
     """记录构造参数的替身：不监听端口，只提供组合根启动后会碰到的属性与方法。"""
@@ -96,13 +93,13 @@ async def test_dashboard_receives_viewer_repos(tmp_path: Path, agents: Dict[str,
             if server.kwargs.get("log_streamer") is not None:
                 await server.kwargs["log_streamer"].stop()
         # 组合根启动的后台循环逐个停掉，避免测试结束后还在写日志
-        for index in (TASKS, HEALTH, SESSION_MANAGER, LEDGER):
-            if result[index] is not None:
-                await result[index].stop()
-        if result[AGENT_MANAGER] is not None:
-            await result[AGENT_MANAGER].stop_supervisor()
-            await result[AGENT_MANAGER].stop_all()
-        await result[EVENT_BUS].cleanup()
-        if result[LLM] is not None:
-            await result[LLM].cleanup()
-        await result[DATABASE].close()
+        for component in (result.task_tracker, result.health_monitor, result.session_manager, result.storage_ledger):
+            if component is not None:
+                await component.stop()
+        if result.agent_manager is not None:
+            await result.agent_manager.stop_supervisor()
+            await result.agent_manager.stop_all()
+        await result.event_bus.cleanup()
+        if result.llm_service is not None:
+            await result.llm_service.cleanup()
+        await result.database.close()

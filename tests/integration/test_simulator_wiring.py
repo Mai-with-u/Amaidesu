@@ -1,6 +1,6 @@
 """SimulatorService 组合根装配：main.create_app_components 的装配契约。
 
-① [simulator].enabled=false → 零装配（simulator_service 元组项为 None）
+① [simulator].enabled=false → 零装配（simulator_service 字段为 None）
 ② enabled=true + auto_start=True → 装配且 is_running=True
 ③ enabled=true + auto_start=False（--dry 场景）→ 装配但 is_running=False，run_shutdown 照常关闭
 
@@ -23,9 +23,6 @@ from src.modules.agents.manager import AgentManager
 from src.modules.config.service import ConfigService
 from src.modules.logging.log_streamer import _LIVE_STREAMERS
 from src.modules.simulator.service import SimulatorService
-
-# create_app_components 返回元组的下标（共 15 项）
-EVENT_BUS, LLM, AGENT_MANAGER, SIMULATOR, DATABASE, SESSION_MANAGER, MAIBOT_SYNC = 0, 1, 5, 6, 7, 9, 14
 
 
 def _minimal_config(simulator_enabled: bool, db_path: Path) -> Dict[str, Any]:
@@ -83,17 +80,17 @@ async def _assemble(tmp_path: Path, *, simulator_enabled: bool, auto_start: bool
     )
 
 
-async def _cleanup(result: tuple) -> None:
-    if result[AGENT_MANAGER] is not None:
-        await result[AGENT_MANAGER].stop_supervisor()
-        await result[AGENT_MANAGER].stop_all()
-    if result[SIMULATOR] is not None:
-        await result[SIMULATOR].cleanup()
-    await result[EVENT_BUS].cleanup()
-    if result[LLM] is not None:
-        await result[LLM].cleanup()
+async def _cleanup(result: app_main.AppComponents) -> None:
+    if result.agent_manager is not None:
+        await result.agent_manager.stop_supervisor()
+        await result.agent_manager.stop_all()
+    if result.simulator_service is not None:
+        await result.simulator_service.cleanup()
+    await result.event_bus.cleanup()
+    if result.llm_service is not None:
+        await result.llm_service.cleanup()
     # 关掉临时库的连接，临时目录才能被清理
-    await result[DATABASE].close()
+    await result.database.close()
 
 
 async def test_log_streamer_persist_dir_is_passed_through_as_is(tmp_path: Path) -> None:
@@ -108,10 +105,9 @@ async def test_log_streamer_persist_dir_is_passed_through_as_is(tmp_path: Path) 
 async def test_disabled_simulator_is_not_wired_at_all(tmp_path: Path) -> None:
     result = await _assemble(tmp_path, simulator_enabled=False)
     try:
-        assert len(result) == 15
-        assert result[SIMULATOR] is None
-        assert result[SESSION_MANAGER] is not None  # 会话管理器始终装配
-        assert result[MAIBOT_SYNC] is None  # 未配置 [maibot_sync] 时不同步直播近况
+        assert result.simulator_service is None
+        assert result.session_manager is not None  # 会话管理器始终装配
+        assert result.maibot_sync_reporter is None  # 未配置 [maibot_sync] 时不同步直播近况
     finally:
         await _cleanup(result)
     assert not [s for s in _LIVE_STREAMERS if s.persist]  # 测试装配不得留下 persist LogStreamer（会写真实 data/logs/）
@@ -122,11 +118,11 @@ async def test_enabled_simulator_runs_only_when_auto_started(tmp_path: Path, aut
     """--dry 模式装配但不启动主循环，因而不产生 LLM 调用。"""
     result = await _assemble(tmp_path, simulator_enabled=True, auto_start=auto_start)
     try:
-        assert result[SIMULATOR] is not None
-        assert result[SIMULATOR].is_running is auto_start
+        assert result.simulator_service is not None
+        assert result.simulator_service.is_running is auto_start
     finally:
         await _cleanup(result)
-    assert result[SIMULATOR].is_running is False
+    assert result.simulator_service.is_running is False
 
 
 async def test_simulator_setup_runs_after_agents_started(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,16 +152,7 @@ async def test_simulator_setup_runs_after_agents_started(tmp_path: Path, monkeyp
 
 async def test_dry_mode_shutdown_completes_without_starting_the_simulator(tmp_path: Path) -> None:
     result = await _assemble(tmp_path, simulator_enabled=True, auto_start=False)
-    assert result[SIMULATOR].is_running is False
+    assert result.simulator_service is not None
+    assert result.simulator_service.is_running is False
 
-    await app_main.run_shutdown(
-        event_bus=result[0],
-        llm_service=result[1],
-        dashboard_server=result[2],
-        event_recorder=result[3],
-        collector_manager=result[4],
-        agent_manager=result[5],
-        simulator_service=result[SIMULATOR],
-        database=result[7],
-        storage_ledger=result[8],
-    )  # 不抛错即关闭正常
+    await app_main.run_shutdown(result)  # 不抛错即关闭正常
