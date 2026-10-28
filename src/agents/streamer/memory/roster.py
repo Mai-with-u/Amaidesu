@@ -12,6 +12,9 @@
    时间点推进到当下。
 
 单场最多更新 ``batch_max`` 人，失败逐人降级（该人印象不动、已整理时刻不推，下场再来）。
+
+画像不跨场次类型更新：正式场只更新真实观众，彩排场只更新模拟观众。开发者
+在彩排里接真实房间、或用控制台调试，都不会改写真实观众的印象。
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from src.modules.prompts import PromptManager
 from src.modules.utils.time_utils import now_ms
 from src.modules.types.currency import to_cny
 from src.modules.types.guard_levels import GUARD_LEVEL_NAMES
+from src.modules.types.session_kind import SESSION_KIND_REHEARSAL
 
 from ..background import SUMMARY_PROFILE
 
@@ -118,6 +122,7 @@ class RegularsRosterWriter:
     def __init__(
         self,
         *,
+        sessions_repo: Any,
         chat_repo: Any,
         viewer_repo: Any,
         profile_repo: Any,
@@ -127,6 +132,8 @@ class RegularsRosterWriter:
         batch_max: int = 5,
         profile_max_length: int = 400,
     ) -> None:
+        """``sessions_repo`` 用来读场次类型（以场次行为准，人手更正后立即生效）。"""
+        self._sessions = sessions_repo
         self._chat = chat_repo
         self._viewers = viewer_repo
         self._profiles = profile_repo
@@ -141,8 +148,18 @@ class RegularsRosterWriter:
         """为本场达门槛的最活跃常客更新印象，返回更新人数。
 
         候选按本场弹幕数倒序扫描，扫描条数是批次上限的几倍——不够格的
-        被门槛筛掉后仍能凑满一批；凑满 ``batch_max`` 即停。
+        被门槛筛掉后仍能凑满一批；凑满 ``batch_max`` 即停。场次行不存在
+        （已删除）时不更新；彩排场只看模拟观众，正式场只看真实观众。
         """
+        try:
+            session_row = await self._sessions.get_live_session(live_session_id=int(live_session_id))
+        except Exception as exc:
+            logger.warning(f"读取场次类型失败（场次 {live_session_id}），不更新画像: {exc}")
+            return 0
+        if session_row is None:
+            logger.debug(f"场次 {live_session_id} 不存在，跳过画像更新")
+            return 0
+        want_simulated = session_row.kind == SESSION_KIND_REHEARSAL
         try:
             speakers = await self._chat.list_session_speakers(
                 live_session_id=int(live_session_id), limit=self._batch_max * _CANDIDATE_SCAN_FACTOR
@@ -155,7 +172,7 @@ class RegularsRosterWriter:
             if updated >= self._batch_max:
                 break
             viewer_id = row.viewer_id
-            if not await self._meets_threshold(viewer_id):
+            if not await self._meets_threshold(viewer_id, want_simulated=want_simulated):
                 continue
             try:
                 if await self._update_one(int(live_session_id), viewer_id, row.user_name or ""):
@@ -166,14 +183,14 @@ class RegularsRosterWriter:
             logger.info(f"观众画像已更新 {updated} 人（场次 {live_session_id}）")
         return updated
 
-    async def _meets_threshold(self, viewer_id: int) -> bool:
-        """``viewers`` 累计互动量达门槛才建档；统计行缺失视为不达标。"""
+    async def _meets_threshold(self, viewer_id: int, *, want_simulated: bool) -> bool:
+        """``viewers`` 累计互动量达门槛、且真假与场次类型相符才建档；统计行缺失视为不达标。"""
         try:
             stats = await self._viewers.get_viewer(viewer_id=viewer_id)
         except Exception as exc:
             logger.warning(f"读取观众统计失败（viewer {viewer_id}）: {exc}")
             return False
-        if stats is None:
+        if stats is None or bool(stats.simulated) != want_simulated:
             return False
         return (stats.interaction_count or 0) >= self._min_interactions
 

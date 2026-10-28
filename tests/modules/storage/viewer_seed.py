@@ -8,8 +8,16 @@ from src.modules.storage.repos import ViewerRepo
 _WINDOW_MS = 90 * 86_400_000
 
 
-async def seed_viewer(viewers: ViewerRepo, *, platform: str, user_id: str, user_name: str, timestamp_ms: int) -> int:
-    """按账号 ID 解析（必要时新建）观众，返回内部观众 ID。"""
+async def seed_viewer(
+    viewers: ViewerRepo,
+    *,
+    platform: str,
+    user_id: str,
+    user_name: str,
+    timestamp_ms: int,
+    simulated: bool = False,
+) -> int:
+    """按账号 ID 解析（必要时新建）观众，返回内部观众 ID；``simulated`` 造模拟观众。"""
     result = await viewers.resolve_viewer(
         platform=platform,
         id_kind="account",
@@ -17,14 +25,28 @@ async def seed_viewer(viewers: ViewerRepo, *, platform: str, user_id: str, user_
         user_name=user_name,
         timestamp_ms=timestamp_ms,
         name_match_window_ms=_WINDOW_MS,
+        simulated=simulated,
     )
     return result.viewer_id
 
 
-async def seed_message(viewers: ViewerRepo, *, platform: str, user_id: str, user_name: str, timestamp_ms: int) -> int:
+async def seed_message(
+    viewers: ViewerRepo,
+    *,
+    platform: str,
+    user_id: str,
+    user_name: str,
+    timestamp_ms: int,
+    simulated: bool = False,
+) -> int:
     """观众发言一次。"""
     viewer_id = await seed_viewer(
-        viewers, platform=platform, user_id=user_id, user_name=user_name, timestamp_ms=timestamp_ms
+        viewers,
+        platform=platform,
+        user_id=user_id,
+        user_name=user_name,
+        timestamp_ms=timestamp_ms,
+        simulated=simulated,
     )
     await viewers.record_message(viewer_id=viewer_id, timestamp_ms=timestamp_ms)
     return viewer_id

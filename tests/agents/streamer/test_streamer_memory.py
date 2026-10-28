@@ -2,11 +2,11 @@
 
 真库（临时 SQLite）+ mock LLM：
 - ``SessionRecapWriter``：原料来自库表；空场次与未结账不写；LLM 失败不写；
-  启动补写只补已结束且缺回顾的；注入渲染排除本场
+  启动补写只补已结束且缺回顾的；注入渲染排除本场、只取同类型场次
 - ``RegularsRosterWriter``：互动门槛、每场人数上限、只取上次整理后的新话（同场重复
-  收尾不空转）、LLM 失败逐人降级；付费明细原料行
-- ``build_memory_tool_provider``：往前第 n 场、排除本场、按昵称查印象
-- ``StreamerAgent``：两仓储齐全才注册记忆工具；开播装入上场回顾；收播写回顾并更新观众画像
+  收尾不空转）、LLM 失败逐人降级、观众真假与场次类型相符；付费明细原料行
+- ``build_memory_tool_provider``：往前第 n 场、排除本场、只数同类型场次、按昵称查印象
+- ``StreamerAgent``：两仓储齐全才注册记忆工具；开播按场次类型装入上场回顾；收播写回顾并更新观众画像
 """
 
 from __future__ import annotations
@@ -77,9 +77,13 @@ def _prompts() -> MagicMock:
     return prompt_manager
 
 
-async def _viewer_says(store: SQLiteDatabase, pk: int, user_id: str, name: str, text: str, ts: int) -> int:
+async def _viewer_says(
+    store: SQLiteDatabase, pk: int, user_id: str, name: str, text: str, ts: int, *, simulated: bool = False
+) -> int:
     """造一条观众弹幕：先归到观众并计数，再落带观众 ID 的 live_chat 行（与记账器同效果），返回观众 ID。"""
-    viewer_id = await seed_message(store.viewers, platform="bilibili", user_id=user_id, user_name=name, timestamp_ms=ts)
+    viewer_id = await seed_message(
+        store.viewers, platform="bilibili", user_id=user_id, user_name=name, timestamp_ms=ts, simulated=simulated
+    )
     await store.chat.insert_live_chat(
         live_session_id=pk,
         timestamp_ms=ts,
@@ -92,6 +96,7 @@ async def _viewer_says(store: SQLiteDatabase, pk: int, user_id: str, name: str, 
         message_id=f"{user_id}-{ts}",
         viewer_id=viewer_id,
         id_kind="account",
+        simulated=simulated,
     )
     return viewer_id
 
@@ -114,8 +119,10 @@ async def _streamer_says(store: SQLiteDatabase, pk: int, text: str, ts: int) -> 
     )
 
 
-async def _ended_session(store: SQLiteDatabase, *, started: int = 1_000, ended: int = 9_000) -> int:
-    pk = await store.sessions.insert_live_session(stream_id="room", platform="bilibili", started_at_ms=started)
+async def _ended_session(store: SQLiteDatabase, *, started: int = 1_000, ended: int = 9_000, kind: str = "live") -> int:
+    pk = await store.sessions.insert_live_session(
+        stream_id="room", platform="bilibili", started_at_ms=started, kind=kind
+    )
     await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=ended)
     return pk
 
@@ -136,6 +143,7 @@ def _recap_writer(store: SQLiteDatabase, llm: MagicMock, event_bus: Any = None) 
 
 def _roster_writer(store: SQLiteDatabase, llm: MagicMock, **kwargs: Any) -> RegularsRosterWriter:
     return RegularsRosterWriter(
+        sessions_repo=store.sessions,
         chat_repo=store.chat,
         viewer_repo=store.viewers,
         profile_repo=store.viewer_profiles,
@@ -231,10 +239,29 @@ async def test_recap_backfill_and_render_recent(store: SQLiteDatabase) -> None:
     assert await store.recaps.get_recap(live_session_id=new_pk) is not None
     assert await store.recaps.get_recap(live_session_id=old_pk) is None
 
-    rendered = await writer.render_recent(count=1)
+    rendered = await writer.render_recent(count=1, kind="live")
     assert rendered.startswith("【") and "补写的回顾" in rendered
-    assert await writer.render_recent(count=1, exclude_session_id=new_pk) == ""
-    assert await writer.render_recent(count=0) == ""
+    assert await writer.render_recent(count=1, kind="live", exclude_session_id=new_pk) == ""
+    assert await writer.render_recent(count=0, kind="live") == ""
+
+
+@pytest.mark.asyncio
+async def test_render_recent_reads_same_kind_only(store: SQLiteDatabase) -> None:
+    """正式场只接正式场的回顾，彩排场只接彩排场的：昨晚的调试场不是今晚正式直播的上一场。"""
+    live_pk = await _ended_session(store, started=1_000, ended=2_000)
+    rehearsal_pk = await _ended_session(store, started=3_000, ended=4_000, kind="rehearsal")
+    await store.recaps.upsert_recap(
+        live_session_id=live_pk, started_at_ms=1_000, ended_at_ms=2_000, recap_text="正式场"
+    )
+    await store.recaps.upsert_recap(
+        live_session_id=rehearsal_pk, started_at_ms=3_000, ended_at_ms=4_000, recap_text="调试场"
+    )
+    writer = _recap_writer(store, _llm("不会调用"))
+
+    live_text = await writer.render_recent(count=3, kind="live")
+    assert "正式场" in live_text and "调试场" not in live_text
+    rehearsal_text = await writer.render_recent(count=3, kind="rehearsal")
+    assert "调试场" in rehearsal_text and "正式场" not in rehearsal_text
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +287,27 @@ async def test_roster_threshold_watermark_and_batch(store: SQLiteDatabase) -> No
     assert await writer.update_for_session(pk) == 0  # 同场重复收尾不空转
     assert llm.generate.await_count == 2
     assert await store.viewer_profiles.count_profiles() == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("kind", "updated_user"), [("live", "u_real"), ("rehearsal", "u_sim")])
+async def test_roster_only_updates_viewers_matching_session_kind(
+    store: SQLiteDatabase, kind: str, updated_user: str
+) -> None:
+    """正式场只更新真实观众，彩排场只更新模拟观众；场次删掉了就不更新。"""
+    pk = await _ended_session(store, kind=kind)
+    for i in range(3):
+        await _viewer_says(store, pk, "u_real", "真观众", f"真的第{i}句", 1_000 + i)
+        await _viewer_says(store, pk, "u_sim", "模拟观众", f"假的第{i}句", 2_000 + i, simulated=True)
+    writer = _roster_writer(store, _llm("印象"), min_interactions=3)
+
+    assert await writer.update_for_session(pk) == 1
+    skipped_user = "u_sim" if updated_user == "u_real" else "u_real"
+    assert await _profile_text(store, updated_user) == "印象"
+    assert await _profile_text(store, skipped_user) is None
+
+    await store.sessions.delete_live_session(live_session_id=pk)
+    assert await writer.update_for_session(pk) == 0
 
 
 @pytest.mark.asyncio
@@ -346,15 +394,24 @@ async def _invoke(provider: Any, name: str, **arguments: Any) -> str:
 
 @pytest.mark.asyncio
 async def test_recall_session_tool(store: SQLiteDatabase) -> None:
-    for sid, started in ((1, 1_000), (2, 5_000), (3, 9_000)):
+    pks = []
+    for started in (1_000, 5_000, 9_000):
+        sid = await _ended_session(store, started=started, ended=started + 60_000)
         await store.recaps.upsert_recap(
             live_session_id=sid, started_at_ms=started, ended_at_ms=started + 60_000, recap_text=f"第{sid}场回顾"
         )
-    current = {"pk": 3}
+        pks.append(sid)
+    assert pks == [1, 2, 3]
+    rehearsal_pk = await _ended_session(store, started=20_000, ended=30_000, kind="rehearsal")
+    await store.recaps.upsert_recap(
+        live_session_id=rehearsal_pk, started_at_ms=20_000, ended_at_ms=30_000, recap_text="彩排回顾"
+    )
+    current = {"pk": 3, "kind": "live"}
     provider = build_memory_tool_provider(
         recap_repo=store.recaps,
         profile_repo=store.viewer_profiles,
         current_session_provider=lambda: current["pk"],
+        current_kind_provider=lambda: current["kind"],
     )
     assert {spec.full_name for spec in provider.list_tools()} == {"memory_recall_session", "memory_recall_viewer"}
 
@@ -362,8 +419,12 @@ async def test_recall_session_tool(store: SQLiteDatabase) -> None:
     assert "第1场回顾" in await _invoke(provider, "memory_recall_session", n_back=2)
     assert "没有那么早" in await _invoke(provider, "memory_recall_session", n_back=5)
 
-    current["pk"] = None  # 未开播：上一场就是最近一场
+    current["pk"] = None  # 未开播：上一场就是最近一场正式场（更晚的彩排场不算）
     assert "第3场回顾" in await _invoke(provider, "memory_recall_session")
+
+    current["kind"] = "rehearsal"  # 彩排里往前数只数彩排场
+    assert "彩排回顾" in await _invoke(provider, "memory_recall_session")
+    assert "没有那么早" in await _invoke(provider, "memory_recall_session", n_back=2)
 
 
 @pytest.mark.asyncio
@@ -430,13 +491,24 @@ async def test_agent_registers_memory_tools_only_with_repos(store: SQLiteDatabas
 
 @pytest.mark.asyncio
 async def test_live_started_loads_previous_recap(store: SQLiteDatabase) -> None:
-    """开播：读出最近一场回顾（排除本场）装进参考段；关注入时为空。"""
+    """开播：读出最近一场同类型回顾（排除本场）装进参考段；关注入时为空。"""
+    live_pk = await _ended_session(store, started=1_000, ended=2_000)
+    rehearsal_pk = await _ended_session(store, started=3_000, ended=4_000, kind="rehearsal")
     await store.recaps.upsert_recap(
-        live_session_id=1, started_at_ms=1_000, ended_at_ms=2_000, recap_text="上场挖到钻石"
+        live_session_id=live_pk, started_at_ms=1_000, ended_at_ms=2_000, recap_text="上场挖到钻石"
+    )
+    await store.recaps.upsert_recap(
+        live_session_id=rehearsal_pk, started_at_ms=3_000, ended_at_ms=4_000, recap_text="调试时乱说的"
     )
     agent = _build_agent(store, _llm())
-    await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=2), "test")
+    await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=9), "test")
     assert "上场挖到钻石" in agent._session_recap_text()
+    assert "调试时乱说的" not in agent._session_recap_text()
+
+    rehearsal = _build_agent(store, _llm())
+    await rehearsal._on_live_started("live.started", LiveStartedPayload(live_session_id=9, kind="rehearsal"), "test")
+    assert "调试时乱说的" in rehearsal._session_recap_text()
+    assert "上场挖到钻石" not in rehearsal._session_recap_text()
 
     muted = _build_agent(store, _llm(), recap_inject_count=0)
     await muted._on_live_started("live.started", LiveStartedPayload(live_session_id=2), "test")

@@ -198,6 +198,7 @@ async def test_session_settle_to_roster_and_recap_to_planner(stack) -> None:
     prompt_manager.render = MagicMock(return_value="PROMPT")
     roster_llm = _make_llm("老王：常来，想看主播挖钻石。")
     roster = RegularsRosterWriter(
+        sessions_repo=store.sessions,
         chat_repo=store.chat,
         viewer_repo=store.viewers,
         profile_repo=store.viewer_profiles,
@@ -242,7 +243,7 @@ async def test_session_settle_to_roster_and_recap_to_planner(stack) -> None:
     assert "- 老王: 老王：常来，想看主播挖钻石。" in section
     assert "新人" not in section and "u_new" not in section
 
-    recap_section = await recap.render_recent(count=1, exclude_session_id=None)
+    recap_section = await recap.render_recent(count=1, kind="live", exclude_session_id=None)
     assert "这场我答应老王下次开播去挖钻石。" in recap_section
 
 

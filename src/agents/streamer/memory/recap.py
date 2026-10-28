@@ -28,6 +28,7 @@ from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
 from src.modules.types.currency import to_cny
 from src.modules.types.guard_levels import GUARD_LEVEL_NAMES
+from src.modules.types.session_kind import SessionKind
 
 from ..background import SUMMARY_PROFILE
 
@@ -201,12 +202,16 @@ class SessionRecapWriter:
     # 读取（注入段）
     # ------------------------------------------------------------------
 
-    async def render_recent(self, *, count: int, exclude_session_id: Optional[int] = None) -> str:
-        """渲染最近 ``count`` 场的回顾（最近一场在前），供开播后注入"上场回顾"段；没有返回空串。"""
+    async def render_recent(self, *, count: int, kind: SessionKind, exclude_session_id: Optional[int] = None) -> str:
+        """渲染最近 ``count`` 场同类型场次的回顾（最近一场在前），供开播后注入"上场回顾"段；没有返回空串。
+
+        ``kind`` 是本场的类型：正式场只接正式场的回顾，彩排场只接彩排场的——
+        昨晚的调试场不会被当成今晚正式直播的"上一场"。
+        """
         if count <= 0:
             return ""
         try:
-            rows = await self._recaps.list_recent_recaps(limit=count, exclude_session_id=exclude_session_id)
+            rows = await self._recaps.list_recent_recaps(limit=count, exclude_session_id=exclude_session_id, kind=kind)
         except Exception as exc:
             logger.warning(f"读取最近场次回顾失败: {exc}")
             return ""

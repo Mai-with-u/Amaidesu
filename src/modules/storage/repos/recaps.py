@@ -7,6 +7,8 @@
   （进程异常退出时收播钩子没跑到）；
 - 开播后按"最近几场"读出注入"上场回顾"段；
 - ``memory_recall_session`` 工具按"往前第 n 场"取单场回顾。
+
+两处读取都按场次类型过滤：正式场与彩排场各自一条回顾线。
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from typing import List, Optional
 
 from src.modules.storage.models.memory import EndedSessionWithoutRecap, SessionRecap
 from src.modules.storage.repos._base import BaseRepo
+from src.modules.types.session_kind import SessionKind
 from src.modules.utils.time_utils import now_ms
 
 
@@ -81,12 +84,18 @@ class SessionRecapRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def list_recent_recaps(
-        self, *, limit: int = 3, exclude_session_id: Optional[int] = None
+        self,
+        *,
+        limit: int = 3,
+        exclude_session_id: Optional[int] = None,
+        kind: Optional[SessionKind] = None,
     ) -> List[SessionRecap]:
         """最近几场的回顾（开播时刻倒序，最近一场在前）。
 
         ``exclude_session_id`` 用来排除正在进行的本场——本场还没收播，
-        即使有残留回顾行也不算"上一场"。
+        即使有残留回顾行也不算"上一场"。``kind`` 只取该类型场次的回顾：
+        正式场只接正式场的回顾，彩排场只接彩排场的，两条记忆线互不串；
+        类型以场次行为准（人手更正后立即生效），None 不过滤。
         """
         page_limit = max(1, min(int(limit), 20))
 
@@ -96,6 +105,9 @@ class SessionRecapRepo(BaseRepo):
             if exclude_session_id is not None:
                 clauses.append("live_session_id<>?")
                 params.append(int(exclude_session_id))
+            if kind is not None:
+                clauses.append("live_session_id IN (SELECT id FROM live_sessions WHERE kind=?)")
+                params.append(kind)
             where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
             with self._manager.transaction() as conn:
                 rows = conn.execute(

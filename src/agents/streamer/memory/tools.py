@@ -23,6 +23,7 @@ from src.modules.events.payloads.notebook import StreamerNotebookChangedPayload
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
+from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
 from .notebook import StreamerNotebook
 from .recap import format_recap
@@ -172,6 +173,7 @@ def build_memory_tool_provider(
     profile_repo: Any,
     viewer_repo: Any = None,
     current_session_provider: Optional[Callable[[], Optional[int]]] = None,
+    current_kind_provider: Optional[Callable[[], SessionKind]] = None,
 ) -> ToolProvider:
     """组装记忆工具 Provider（provider="memory"，两个工具）。
 
@@ -181,6 +183,8 @@ def build_memory_tool_provider(
         viewer_repo: ``ViewerRepo``——昵称反查与展示名（可选；缺失时只能按 viewer_id 查）
         current_session_provider: 返回进行中场次主键的回调（``None`` = 未开播）；
             本场还没收播，往前数时要把它排除掉
+        current_kind_provider: 返回本场类型的回调（未开播时按正式场算）；往前数只数
+            同类型场次——彩排里问"上一场"不会翻到正式直播，反之亦然。``None`` 按正式场
     """
 
     async def _recall_session(invocation: ToolInvocation) -> str:
@@ -191,7 +195,8 @@ def build_memory_tool_provider(
             n_back = 1
         n_back = max(1, min(n_back, 20))
         current = current_session_provider() if current_session_provider is not None else None
-        rows = await recap_repo.list_recent_recaps(limit=n_back, exclude_session_id=current)
+        kind = current_kind_provider() if current_kind_provider is not None else SESSION_KIND_LIVE
+        rows = await recap_repo.list_recent_recaps(limit=n_back, exclude_session_id=current, kind=kind)
         if len(rows) < n_back:
             return (
                 "（没有那么早的场次回顾）" if rows else "（还没有任何场次回顾——这是第一场，或者之前的场次没留下记录）"

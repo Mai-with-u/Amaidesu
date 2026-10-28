@@ -49,6 +49,7 @@ from src.modules.utils.task_utils import spawn_background_task
 from src.modules.tools import ToolSpec
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
+from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KINDS, SessionKind
 from src.modules.utils.time_utils import now_ms
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.room_state import RoomStateWatchedPayload
@@ -405,10 +406,12 @@ class StreamerAgent(BaseAgent):
         if (
             memory_cfg.roster_enabled
             and viewer_profile_repo is not None
+            and sessions_repo is not None
             and chat_repo is not None
             and viewer_repo is not None
         ):
             self._roster_writer = RegularsRosterWriter(
+                sessions_repo=sessions_repo,
                 chat_repo=chat_repo,
                 viewer_repo=viewer_repo,
                 profile_repo=viewer_profile_repo,
@@ -716,6 +719,7 @@ class StreamerAgent(BaseAgent):
                         profile_repo=self._profile_repo,
                         viewer_repo=self._viewer_repo,
                         current_session_provider=self._current_session_pk,
+                        current_kind_provider=self._current_session_kind,
                     ),
                     registry=self._tool_registry,
                 )
@@ -832,8 +836,9 @@ class StreamerAgent(BaseAgent):
             self._logger.debug(f"开播起算流程单跳过（{reject.reason}）：流程单已在进行中")
         # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
         await self._scope.begin_session()
-        # 上场回顾：开播这一刻从库里读最近几场（排除本场），整场固定不再变
-        await self._refresh_recap_section(exclude_session_id=payload.live_session_id)
+        # 上场回顾：开播这一刻从库里读最近几场同类型场次（排除本场），整场固定不再变；
+        # 正式场接正式场、彩排场接彩排场，调试场不会被当成正式直播的上一场
+        await self._refresh_recap_section(exclude_session_id=payload.live_session_id, kind=payload.kind)
         self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
 
     async def _on_live_ended(
@@ -899,14 +904,26 @@ class StreamerAgent(BaseAgent):
         pk = getattr(self._session_manager, "active_pk", None)
         return int(pk) if isinstance(pk, int) else None
 
-    async def _refresh_recap_section(self, *, exclude_session_id: Optional[int] = None) -> None:
-        """从库里读最近几场回顾渲染成注入段；未启用或没有上一场时为空串（段整段省略）。"""
+    def _current_session_kind(self) -> SessionKind:
+        """进行中场次的类型；未开播按正式场算（开播前的闲聊读的是正式直播的上一场）。"""
+        kind = getattr(self._session_manager, "active_kind", None) if self._session_manager is not None else None
+        return kind if kind in SESSION_KINDS else SESSION_KIND_LIVE
+
+    async def _refresh_recap_section(
+        self, *, exclude_session_id: Optional[int] = None, kind: Optional[SessionKind] = None
+    ) -> None:
+        """从库里读最近几场同类型场次的回顾渲染成注入段；未启用或没有上一场时为空串（段整段省略）。
+
+        ``kind`` 缺省取进行中场次的类型（未开播按正式场）。
+        """
         if self._recap_writer is None or self._recap_inject_count <= 0:
             self._scope.set_session_recap("")
             return
         current = exclude_session_id if exclude_session_id is not None else self._current_session_pk()
         recap_section = await self._recap_writer.render_recent(
-            count=self._recap_inject_count, exclude_session_id=current
+            count=self._recap_inject_count,
+            exclude_session_id=current,
+            kind=kind if kind is not None else self._current_session_kind(),
         )
         self._scope.set_session_recap(recap_section)
         if recap_section:
