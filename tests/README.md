@@ -4,16 +4,7 @@
 
 ## 测试树归属规则（新测试放哪边）
 
-测试树按**被测源码包镜像**归属：
-
-- `tests/agents/` 镜像 `src/agents/`——测业务 Agent（streamer / minecraft / text_adv / game_2048 等）的测试全部放这里，无论单组件逻辑还是跨模块接线。
-- `tests/modules/` 镜像 `src/modules/`——只放测 `src/modules/` 组件的测试；其中 `tests/modules/agents/` 只放 Agent 框架（base / manager / supervisor / delegation / factory / companions）的测试。
-
-**新测试归位判据**（按序判断，命中即停）：
-
-1. 看被测逻辑的主包：主包在 `src/agents/` 下 → `tests/agents/` 镜像路径；主包在 `src/modules/` 下 → `tests/modules/` 镜像路径。
-2. 分层依赖 / 事件流约束 → `tests/architecture/`。
-3. 仍拿不准 → 沿 import 链找主包再按第 1 条归位；同一被测对象在两棵树都放会形成重复覆盖，禁止。
+归属规则与测试编写纪律是 AI 编码代理的执行约束，统一落在 [AGENTS.md](AGENTS.md)（同目录），不在本文件重复维护。
 
 ## 目录结构
 

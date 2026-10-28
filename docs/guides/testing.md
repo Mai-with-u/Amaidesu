@@ -21,18 +21,17 @@ test = [
 
 ## 2. 测试目录结构
 
-测试按 v2 布局组织（`modules/` 框架模块 + `agents/` 业务 Agent），目录结构与 `src/` 对应。**权威且完整的目录结构见 [tests/README.md](../../tests/README.md#目录结构)**（位于测试目录内，随代码演进维护）：
+测试按 v2 布局组织（`modules/` 框架模块 + `agents/` 业务 Agent），目录结构与 `src/` 镜像对应。**归属规则与测试编写纪律见 [tests/AGENTS.md](../../tests/AGENTS.md)**（AI 编码代理的执行约束）；**权威且完整的目录结构见 [tests/README.md](../../tests/README.md#目录结构)**（位于测试目录内，随代码演进维护）：
 
 ```
 tests/
 ├── architecture/           # 架构约束测试（分层依赖 / 事件流约束）
-├── agents/                 # 跨模块接线测试（Agent 与模块协作链路）
+├── agents/                 # 业务 Agent 测试（镜像 src/agents/：streamer / minecraft / text_adv / game_2048）
 ├── config/                 # 配置系统测试
 ├── dashboard/              # Dashboard API 与服务
 ├── integration/            # 集成测试
-└── modules/                # 模块层测试（对应 src/modules/ 与 src/agents/）
-    ├── agents/             # Agent 框架 + StreamerAgent 组件
-    │   └── streamer/       # planner / replyer / rundown / 决策循环
+└── modules/                # 模块层测试（镜像 src/modules/）
+    ├── agents/             # Agent 框架（base / manager / supervisor / delegation / factory / companions）
     ├── collectors/         # bilibili / console / stt
     ├── config/             # 配置加载 / 回归修复
     ├── events/             # EventBus / 拦截器 / Payload 注册表（含 test_interceptors.py）
@@ -105,7 +104,7 @@ async def test_event_bus_publish(event_bus, sample_message):
 
     # 发布事件
     await event_bus.emit("test.event", sample_message, source="test")
-    await asyncio.sleep(0.1)  # 等待异步处理
+    await event_bus.wait_until_drained()  # 等派发落地（含级联），确定性等待
 
     # 验证结果
     assert len(received) == 1
@@ -130,7 +129,7 @@ async def test_event_bus_error_isolation(event_bus):
     await event_bus.emit("test.event", RoomMessagePayload(
         message_type="danmaku", user=RoomMessageUser(id="u1", name="观众A"), content="test"
     ), source="test")
-    await asyncio.sleep(0.1)
+    await event_bus.wait_until_drained()
 
     # 验证一个处理器抛异常没有影响另一个
     assert "before_error" in results
@@ -419,7 +418,10 @@ async def test_async_operation():
     assert result is not None
 ```
 
-异步 / 事件驱动的结果断言**等条件成立，不用固定睡眠猜进度**：fire-and-forget 派发在满载运行时固定 sleep 可能赶不上，是偶发红的主要来源（真实先例：`tests/modules/tools/test_health.py` 的 `_until`）：
+异步 / 事件驱动的结果断言**等确定性信号，不用固定睡眠猜进度**：fire-and-forget 派发在满载运行时固定 sleep 可能赶不上，是偶发红的主要来源。
+
+- 等 EventBus 派发落地：`await bus.wait_until_drained()`（src/modules/events；传递性等待在途与级联派发全部完成）；bus 藏在被测对象内部拿不到时优先给测试接出 bus，而不是退化回 sleep；
+- 等其他条件（不经过 bus 的后台动作）：轮询到条件成立，带超时上限：
 
 ```python
 # ✅ 正确：轮询到条件成立，带超时上限
@@ -516,7 +518,7 @@ def test_rate_limit_interceptor_creation():
 
 `tests/integration/` 验证 Amaidesu 与外部宿主（如 MaiBot）的集成边界。当前主用例：`test_simulator_wiring.py`（组合根装配契约——`[simulator]` 启用/自启三种组合下的 SimulatorService 装配路径）与 `test_persona_pipeline.py`（人设供应链端到端防回退——配置→提示词的注入与决策/表达分离契约）。
 
-跨组件协作的 EventBus / 拦截器 / 采集器链路测试已下沉到 `tests/modules/events/test_interceptors.py` 与 `tests/modules/agents/`，不属于本目录。
+跨组件协作的 EventBus / 拦截器 / 采集器链路测试已下沉到 `tests/modules/events/test_interceptors.py` 与 `tests/agents/`，不属于本目录。
 
 ### 6.3 架构测试
 
@@ -601,7 +603,7 @@ uv run pytest tests/test_file.py::test_debug -v -s
 
 ### 9.1 异步测试偶发超时
 
-异步测试偶发超时先分清两类：**结果没等到**（fire-and-forget 派发慢于固定睡眠）改用 §5.3 的"等条件成立"轮询；**操作真的慢**则放宽该用例自己的等待上限（按全量回归满载估算余量），不要为迁就测试去压缩生产路径的时序参数。
+异步测试偶发超时先分清两类：**结果没等到**（fire-and-forget 派发慢于固定睡眠）改用 §5.3 的确定性等待（EventBus 派发用 `wait_until_drained()`，其余条件用带超时轮询）；**操作真的慢**则放宽该用例自己的等待上限（按全量回归满载估算余量），不要为迁就测试去压缩生产路径的时序参数。
 
 ### 9.2 Fixture 循环依赖
 
