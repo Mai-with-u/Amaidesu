@@ -206,7 +206,7 @@ class StreamerForceConfig(BaseConfig):
     force_message_types: List[str] = Field(
         title="强制响应消息类型",
         default_factory=lambda: ["super_chat", "guard", "gift"],
-        description="强制响应的消息类型（与 TimingGate 构造参数一致）",
+        description="强制响应的消息类型（消息类型落在名单内即触发强制响应）",
     )
 
 

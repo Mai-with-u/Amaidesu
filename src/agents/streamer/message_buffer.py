@@ -57,7 +57,7 @@ class MessageBuffer:
         Args:
             message: 直播间行为流事件载荷
             arrival_ms: 消息到达时间（Unix 毫秒），用于时间窗口判定
-            forced: 该消息是否触发强制响应（由 TimingGate 判定后传入）
+            forced: 该消息是否触发强制响应（调用方按消息类型判定后传入）
         """
         if not self._messages:
             self._first_arrival_ms = arrival_ms

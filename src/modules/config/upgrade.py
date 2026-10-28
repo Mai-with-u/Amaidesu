@@ -204,9 +204,9 @@ def chain(*runs: Callable[..., List[str]]) -> Callable[..., List[str]]:
 # ---------------------------------------------------------------------------
 
 # agents.toml v2.0.32：force 段字段正名 + 死字段清理。
-# ``force_data_types`` 重命名为 ``force_message_types``（与 TimingGate 构造参数
-# 名对齐）；``force_importance`` 经核实为零消费者死字段（TimingGate 只收类型
-# 列表，无 importance 数值路径），一并删除。
+# ``force_data_types`` 重命名为 ``force_message_types``（与 Agent 侧读的强制
+# 名单字段名对齐）；``force_importance`` 经核实为零消费者死字段（强制触发
+# 只看消息类型集合归属，无 importance 数值路径），一并删除。
 _upgrade_agents_force_rename = chain(
     rename_key("agents.streamer.force", "force_data_types", "force_message_types"),
     drop_section_keys("agents.streamer.force", ("force_importance",)),

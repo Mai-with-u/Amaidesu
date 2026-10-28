@@ -15,7 +15,6 @@
 - ``proactive_trigger`` - 主动发言纯规则触发器（主循环直接驱动）
 - ``room_state``        - 直播间态势规则层（纯规则，60s 滑动窗口）
 - ``message_buffer``    - 弹幕聚合缓冲（idle 补偿公式保留）
-- ``timing_gate``       - 强制触发判定（is_forced）
 - ``background``        - 后台双任务（轻循环记账 + 压缩 worker）
 - ``streamer_agent``    - BaseAgent 子类（装配根：生命周期 + 工具注册 + 事件订阅 + 输入 + 调度半）
 

@@ -80,7 +80,6 @@ from .speech_guard import WordFilter
 from .game_ledger import GameLedger
 from .stats import StreamerStats
 from .timeline import StreamerTimeline
-from .timing_gate import TimingGate
 from .topic_gate import SpeechGate
 from .trigger_cause import TriggerCause, TriggerKind, TriggerSource, cause_for_batch_flush
 from .tools.reply_tool import ReplyToolProvider
@@ -266,9 +265,9 @@ class StreamerAgent(BaseAgent):
             batch_max_size=config.batch.batch_max_size,
             enable_idle_compensation=config.batch.enable_idle_compensation,
         )
-        self._timing_gate = TimingGate(
-            force_message_types=config.force.force_message_types,
-        )
+        # 强制触发判定就是一次集合归属判定（消息类型 ∈ 强制名单），直接持有
+        # 名单内联判定，不再为它单设类
+        self._force_message_types = frozenset(config.force.force_message_types)
         # 房间态势（纯规则滑动窗口）
         self._room_state = RoomState()
 
@@ -732,7 +731,7 @@ class StreamerAgent(BaseAgent):
             return
         # room.message 全族（danmaku/gift/super_chat/guard）共用同一回调：
         # 按载荷自身 message_type 走 handle_message 统一入口，付费类型由
-        # TimingGate 强制判定（类型驱动，非 importance 数值）
+        # 强制触发判定（类型集合归属，非 importance 数值）
         for event_name in (
             CoreEvents.ROOM_MESSAGE_DANMAKU,
             CoreEvents.ROOM_MESSAGE_GIFT,
@@ -1117,7 +1116,7 @@ class StreamerAgent(BaseAgent):
         """room.message.* 回调：推进 RoomState + 入缓冲（载荷即事件载荷，零映射）。
 
         danmaku / gift / super_chat / guard 全部进入决策链；强制响应与否由
-        handle_message 内的 TimingGate 按 message_type 判定，本回调不做过滤。
+        handle_message 内的强制名单按 message_type 判定，本回调不做过滤。
         """
         del event_name, source
         await self.handle_message(payload)
@@ -1135,8 +1134,8 @@ class StreamerAgent(BaseAgent):
         self._stats.total_messages += 1
         # RoomState 热度信号
         self._room_state.update(msg, now_ms=now_ms())
-        # TimingGate 强制判定
-        forced = self._timing_gate.is_forced(msg)
+        # 强制触发判定：消息类型在强制名单内即强制
+        forced = msg.message_type in self._force_message_types
         # 入缓冲
         self._buffer.add(msg, arrival_ms=now_ms(), forced=forced)
         if self._mouth is not None:
