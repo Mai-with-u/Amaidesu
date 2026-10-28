@@ -8,6 +8,7 @@
 - streamer   → StreamerAgent
 - minecraft  → MinecraftAgent
 - text_adv   → TextAdvGameAgent
+- game_2048  → Game2048Agent
 
 Agent 间无分类层；每个 Agent 是一等公民。
 """
@@ -21,8 +22,18 @@ from src.modules.agents.deps import AgentDeps
 from src.modules.logging import get_logger
 from src.modules.skills import get_skill_library
 
-# 已实现的 Agent 注册名
-SUPPORTED_AGENTS: tuple[str, ...] = ("streamer", "minecraft", "text_adv", "game_2048")
+# Agent 登记表：注册名 → 中文职责描述。
+# 组合根注册 Agent 时从这里取描述，spec_provider 恒等于注册名（取值域是
+# 封闭枚举："framework" / Agent 名 / "mcp" 预留），不在登记表逐条复述。
+AGENT_BINDINGS: dict[str, str] = {
+    "streamer": "直播主播决策主体：聚合弹幕 → Planner 决策 → Replyer 表达",
+    "minecraft": "游戏 AI 玩家代理（Minecraft / MaiCraftMod）",
+    "text_adv": "文字冒险游戏 Agent（视觉小说观察与上报）",
+    "game_2048": "2048 游戏 Agent（棋局宿主，主播按键驱动，无自动走子）",
+}
+
+# 已实现的 Agent 注册名（从登记表派生，保持既有引用方兼容）
+SUPPORTED_AGENTS: tuple[str, ...] = tuple(AGENT_BINDINGS)
 
 _logger = get_logger("AgentFactory")
 
@@ -149,4 +160,4 @@ def instantiate_agent(
     return None
 
 
-__all__ = ["SUPPORTED_AGENTS", "instantiate_agent"]
+__all__ = ["AGENT_BINDINGS", "SUPPORTED_AGENTS", "instantiate_agent"]
