@@ -17,6 +17,10 @@
 - **回放消息刷新时间戳**：StorageLedger 按 ``payload.timestamp_ms`` 落库，
   回放 emit 时把录制时的时间戳刷成当前时间，保证回放内容进入"最近窗口"
   查询语义；原始时刻保留在录制文件与日志中。
+- **只在彩排场里造观众**：正式场次进行中拒绝启动，正式场开播时自动停下——
+  真实观众会听到主播回应根本不存在的弹幕，主播对假观众说的话也会混进正式
+  场的回顾。没有场次时自己开一场彩排（回放与生成都是），停止时只收口自己
+  开的那一场。
 - **独立生命周期**：模拟器的启停与 ``collectors.enabled`` 列表无关，
   由 ``[simulator].enabled`` 控制自动启动（``setup()`` 内部判 ``enabled``）。
 - **安装顺序**：在 main.py 中应于 CollectorManager 之后、DashboardServer 之前创建。
@@ -38,6 +42,7 @@ from src.modules.events.payloads.room import (
     RoomMessageUser,
     SuperChatInfo,
 )
+from src.modules.events.payloads.live import LiveStartedPayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import get_logger
 from src.modules.simulator.cadence import CadenceGenerator
@@ -51,7 +56,7 @@ from src.modules.simulator.token_budget import TokenBudgetController
 from src.modules.simulator.types import StreamerContextSnapshot
 from src.modules.storage.repos import ChatRepo, SimRepo
 from src.modules.types.currency import CURRENCY_GOLD, RMB_TO_GOLD_COIN
-from src.modules.types.session_kind import SESSION_KIND_REHEARSAL
+from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KIND_REHEARSAL
 from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -93,7 +98,7 @@ class SimulatorService:
         self.event_bus = event_bus
         self._sim = sim_repo
         self._chat = chat_repo
-        # 场次管理器：世界窗口读取按其解析当前场次；回放启停自动开/关场次
+        # 场次管理器：世界窗口读取按其解析当前场次；启停时自动开/关自己的彩排场次
         self._session_manager = session_manager
         self._opened_session_pk: Optional[int] = None
         self._services_by_type = services_by_type or {}
@@ -113,6 +118,8 @@ class SimulatorService:
         self._replay_engine: Optional[ReplayEngine] = None
         # 防重复订阅：start 多次调用只挂一次（与 background._subscribed 模式一致）
         self._subscribed_streamer_speech: bool = False
+        # 正式场开播即停：运行期间订阅 live.started（同样防重复订阅）
+        self._subscribed_live_started: bool = False
         # 生成循环的最后一次致命故障描述（FatalError 等，启动时清零；Dashboard 状态面展示）
         self._last_error: Optional[str] = None
 
@@ -216,7 +223,7 @@ class SimulatorService:
 
         Returns:
             None 表示已进入运行态；字符串为拒绝启动的原因（未 setup / mode=off /
-            缺回放日期 / 队列为空 / 缺 LLM 包装器）。小队列回放可能在启动返回前
+            正式场次进行中 / 缺回放日期 / 队列为空 / 缺 LLM 包装器）。小队列回放可能在启动返回前
             就自然放完，那不算拒绝——调用方以 :attr:`is_running` 区分。
         """
         if self._is_started:
@@ -230,6 +237,11 @@ class SimulatorService:
         if mode == "off":
             self.logger.info("模拟器 mode=off，不启动世界循环")
             return "配置 mode=off，启动被拒绝"
+        # 场次类型守门：模拟观众只进彩排场。正式场进行中时拒绝——回放会顶掉正式场，
+        # 生成会把假弹幕灌进真直播
+        if getattr(self._session_manager, "active_kind", None) == SESSION_KIND_LIVE:
+            self.logger.warning("正式场次进行中，模拟器拒绝启动（模拟观众只进彩排场）")
+            return "正式场次进行中，模拟器只在彩排场里运行"
         if mode == "replay":
             date_str = replay_date or self._config_obj.replay_date
             if not date_str:
@@ -247,6 +259,7 @@ class SimulatorService:
             return "generate 模式缺 LLM 包装器（LLMManager 未注入）"
 
         self._subscribe_streamer_speech()
+        self._subscribe_live_started()
         self._active_mode = mode
 
         # 回放自动开/关场次：一场回放天然是一场彩排——启动即开（source=replay，
@@ -260,6 +273,14 @@ class SimulatorService:
                 kind=SESSION_KIND_REHEARSAL,
                 title=f"回放 {date_str}",
                 source="replay",
+            )
+        elif self._session_manager is not None and await self._session_manager.resolve_pk() is None:
+            # 生成模式没有场次时自己开一场彩排：消息要落库，模拟观众才读得到
+            # 直播间上下文；已有彩排场（人手开的）就沿用，停止时也不替人收口
+            self._opened_session_pk = await self._session_manager.open_session(
+                kind=SESSION_KIND_REHEARSAL,
+                title="模拟观众彩排",
+                source="generate",
             )
 
         self._stop_event.clear()
@@ -290,6 +311,36 @@ class SimulatorService:
         )
         self._subscribed_streamer_speech = True
         self.logger.debug("已订阅 streamer.speech → cadence.notify_streamer_activity")
+
+    def _subscribe_live_started(self) -> None:
+        """订阅 ``live.started``：正式场开播时停下模拟器（防重复订阅）。"""
+        if self._subscribed_live_started:
+            return
+        self.event_bus.on(CoreEvents.LIVE_STARTED, self._on_live_started, model_class=LiveStartedPayload)
+        self._subscribed_live_started = True
+
+    def _unsubscribe_live_started(self) -> None:
+        """解绑 ``live.started`` 订阅（各停止路径调用）。"""
+        if not self._subscribed_live_started:
+            return
+        try:
+            self.event_bus.off(CoreEvents.LIVE_STARTED, self._on_live_started)
+        except Exception as exc:
+            self.logger.debug(f"live.started 解绑失败（已忽略）: {exc}")
+        self._subscribed_live_started = False
+
+    async def _on_live_started(self, event_name: str, payload: LiveStartedPayload, source: str) -> None:
+        """正式场开播 → 停下模拟器：开播是人的明确意图，模拟观众让路。
+
+        开正式场时场次管理器已经顺手结束了模拟器自己开的彩排场，这里先丢掉
+        对它的记录，停止时就不会误把刚开的正式场收掉。
+        """
+        del event_name, source
+        if payload.kind != SESSION_KIND_LIVE or not self._is_started:
+            return
+        self.logger.warning(f"正式场次 {payload.live_session_id} 开播，模拟器自动停止（模拟观众只进彩排场）")
+        self._opened_session_pk = None
+        await self.stop()
 
     def _unsubscribe_streamer_speech(self) -> None:
         """解绑 ``streamer.speech`` 订阅（stop 时调用）。"""
@@ -497,7 +548,9 @@ class SimulatorService:
         self._is_started = False
         self._stop_event.set()
         self._unsubscribe_streamer_speech()
+        self._unsubscribe_live_started()
         self._task = None
+        await self._close_owned_session(reason="模拟器因错误停止")
         self._active_mode = "off"
         self.logger.error(f"模拟器 generate 循环因 LLM 不可恢复错误停止: {fatal}")
 
@@ -510,20 +563,28 @@ class SimulatorService:
         self._is_started = False
         self._stop_event.set()
         self._unsubscribe_streamer_speech()
+        self._unsubscribe_live_started()
         self._task = None
-        await self._close_replay_session()
+        await self._close_owned_session(reason="回放结束")
         self._active_mode = "off"
         self.logger.info("模拟器服务已停止（回放自然完成）")
 
-    async def _close_replay_session(self) -> None:
-        """收口回放启动时自动开启的场次（幂等；失败不阻断收场）。"""
-        if self._opened_session_pk is None or self._session_manager is None:
+    async def _close_owned_session(self, *, reason: str) -> None:
+        """收口启动时自己开的彩排场次（幂等；失败不阻断收场）。
+
+        只在进行中的场次仍是自己开的那一场时才收：中途有人开了新场次（旧场
+        已被场次管理器顺手结束），不能把别人的场次一起结束。
+        """
+        owned = self._opened_session_pk
+        self._opened_session_pk = None
+        if owned is None or self._session_manager is None:
             return
         try:
-            await self._session_manager.close_session(reason="回放结束")
+            if await self._session_manager.resolve_pk() != owned:
+                return
+            await self._session_manager.close_session(reason=reason)
         except Exception as exc:  # noqa: BLE001 收口失败不阻断停止
-            self.logger.warning(f"回放场次收口失败（已忽略）: {exc}")
-        self._opened_session_pk = None
+            self.logger.warning(f"彩排场次收口失败（已忽略）: {exc}")
 
     # message_type → room.message.* 事件名映射；未知类型回退弹幕事件
     _MESSAGE_TYPE_EVENT: Dict[str, str] = {
@@ -646,8 +707,9 @@ class SimulatorService:
         self._is_started = False
         self._stop_event.set()
 
-        # 解绑 streamer.speech 订阅（防 stop 后旧 handler 残留触发 cadence）
+        # 解绑 streamer.speech / live.started 订阅（防 stop 后旧 handler 残留触发）
         self._unsubscribe_streamer_speech()
+        self._unsubscribe_live_started()
 
         if self._task is not None:
             self._task.cancel()
@@ -664,8 +726,8 @@ class SimulatorService:
                 self.logger.debug("模拟器 task 取消完成（stop 主动发起）")
             self._task = None
 
-        # 回放场次收口（自动开启的场次随回放结束自动结束）
-        await self._close_replay_session()
+        # 彩排场次收口（自己开的场次随模拟器停止一起结束）
+        await self._close_owned_session(reason="模拟器停止")
 
         self._active_mode = "off"
         self._last_error = None
