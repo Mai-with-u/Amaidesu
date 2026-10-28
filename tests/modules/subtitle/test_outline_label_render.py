@@ -8,12 +8,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import ImageColor
 
-from src.modules.subtitle.backends.tk_gui_service import OutlineLabel
+from src.modules.subtitle.backends.outline_label import OutlineLabel
 
 BG = "#00FF00"
 TEXT = "#FFFFFF"
 OUTLINE = "#000000"
-PHOTO = "src.modules.subtitle.backends.tk_gui_service.ImageTk.PhotoImage"
+PHOTO = "src.modules.subtitle.backends.outline_label.ImageTk.PhotoImage"
 THREE_COLORS = {ImageColor.getrgb(c) for c in (BG, TEXT, OUTLINE)}
 
 
