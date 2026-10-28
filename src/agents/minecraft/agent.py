@@ -134,7 +134,7 @@ class MinecraftAgent(BaseAgent):
         thinking_sink: Optional[Any] = None,
         task_tracker: Optional[Any] = None,
         skill_library: Optional[SkillLibrary] = None,
-        clock: Optional[Callable[[], int]] = None,
+        clock: Optional[Callable[[], float]] = None,
         live_active: Optional[bool] = None,
         mcp_client: Optional[Any] = None,
         mcp_provider: Optional[Any] = None,
@@ -166,7 +166,8 @@ class MinecraftAgent(BaseAgent):
                 server_name=…, provider=…, goal_lookup=…)`` 一致；缺省 None 走本类的默认构造。
         """
         super().__init__(event_bus=event_bus)
-        del clock
+        # 时间流逝统一经此时钟：缺省用系统单调时钟，测试注入假时钟冻结或推进时间
+        self._clock = clock or time.monotonic
         self._skills = skill_library
         self.typed_config = config
         # llm_manager 另需 async generate（ReAct 推理用）；视觉查询契约在装配期校验，
@@ -980,7 +981,7 @@ class MinecraftAgent(BaseAgent):
         elif run.state == PAUSED and before.get("state") != PAUSED:
             # 急事用一次就清掉，不拿去解释之后别的暂停；是否新鲜由通知函数按当下时刻判定
             urgent, self._urgent_before_pause = self._urgent_before_pause, None
-            self._inject_wakeup_message(pause_notice(run, after_world_change, urgent, time.monotonic()))
+            self._inject_wakeup_message(pause_notice(run, after_world_change, urgent, self._clock()))
 
     async def _on_decision_asked(self, run: GoalRun) -> None:
         """Mod 自己挂出的决策（死亡恢复）在等回答：带着问题与选项叫醒模型，让它按问题里给的选项选。
@@ -1016,7 +1017,7 @@ class MinecraftAgent(BaseAgent):
         if route.urgent_marker:
             # 急事收尾：撤离甩开追兵后人已不在原地，Mod 写"主任务停在半路等下一步指示"，紧接着把主任务挂成暂停。
             # 记下这句交给随后的暂停通知，游戏 Agent 才知道是撤离把角色带离了原地，不会猜成游戏重连。
-            self._urgent_before_pause = (message, time.monotonic())
+            self._urgent_before_pause = (message, self._clock())
         if route.channel == "carry_sky":
             self._carry_sky_notice(route.template.format(message=message))
         elif route.channel == "wake_even_idle":

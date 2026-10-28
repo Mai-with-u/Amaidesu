@@ -399,11 +399,13 @@ def assemble_minecraft_agent(
     mcp_provider: Optional[Any] = None,
     mcp_client_factory: Optional[Callable[..., Any]] = None,
     mcp_provider_factory: Optional[Callable[..., Any]] = None,
+    clock: Optional[Callable[[], float]] = None,
 ) -> MinecraftAgent:
     """构造未启动的 MinecraftAgent（装配单入口）。
 
     缺省装配一律离线：不连私有 MCP、总线是捕获 emit 的桩、无 LLM。要调任务循环的
-    测试自行传 ``llm``；``live`` 是直播闸初始态（None = 生产默认，启动落收工态）。
+    测试自行传 ``llm``；``live`` 是直播闸初始态（None = 生产默认，启动落收工态）；
+    ``clock`` 是注入假时钟（返回单调时刻），不传用系统单调时钟。
     """
     return MinecraftAgent(
         config if config is not None else offline_config(),
@@ -414,6 +416,7 @@ def assemble_minecraft_agent(
         thinking_sink=thinking_sink,
         task_tracker=tracker,
         skill_library=skills,
+        clock=clock,
         live_active=live,
         mcp_client=mcp_client,
         mcp_provider=mcp_provider,
@@ -435,13 +438,14 @@ async def make_minecraft_agent(
     thinking_sink: Optional[Any] = None,
     config: Optional[MinecraftConfig] = None,
     mcp_client: Optional[Any] = None,
+    clock: Optional[Callable[[], float]] = None,
 ) -> Tuple[MinecraftAgent, Any, Any]:
     """装配并启动一个接上 MaiCraft 替身的玩家（直播中），返回 ``(agent, llm, bus)``。
 
     替身 ``server`` 的 spec 自带 minecraft 名单（与 MaicraftMcpProvider.list_tools
     盖名单同语义）；私有 MCP 不连真端口——客户端给已连接替身，provider 用替身 server
     本身。模型用剧本 ``script`` 回复（或直接注入 ``llm`` 替身；显式传 ``llm=None`` =
-    不注入模型，任务失败 fast-fail）。
+    不注入模型，任务失败 fast-fail）。``clock`` 是注入假时钟，透传给装配入口。
     """
     if registry is None:
         registry = ToolRegistry()
@@ -461,6 +465,7 @@ async def make_minecraft_agent(
         skills=skills,
         thinking_sink=thinking_sink,
         live=live,
+        clock=clock,
         # 有 MaiCraft 替身才给已连接的客户端替身；否则与旧装配一致（游戏未连）
         mcp_client=(mcp_client if mcp_client is not None else SimpleNamespace(connected=True))
         if server is not None or mcp_client is not None
