@@ -1,13 +1,21 @@
-name: Test
+name: Backend Test
 on:
   push:
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'main.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/backend-test.yml'
   pull_request:
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'main.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/backend-test.yml'
 
 # 同分支连续推送时取消未跑完的旧 run，只保留最新一次
 concurrency:
@@ -44,8 +52,6 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
-      # apt 慢镜像源曾把本步拖到 26 分钟（pytest 本身只 ~3 分钟）：缓存 deb 归档
-      # 与索引列表，键取安装行哈希；命中则跳过 update、直接从本地归档安装。
       - name: Cache apt packages
         uses: actions/cache@v4
         id: apt-cache
@@ -53,7 +59,7 @@ jobs:
           path: |
             /var/cache/apt/archives
             /var/lib/apt/lists
-          key: apt-ubuntu-cjk-${{ hashFiles('.github/workflows/test.yml') }}
+          key: apt-ubuntu-cjk-${{ hashFiles('.github/workflows/backend-test.yml') }}
 
       - name: Install system packages
         run: |
@@ -61,12 +67,6 @@ jobs:
             sudo apt-get update
           fi
           sudo apt-get install -y --no-install-recommends libportaudio2 xvfb fonts-noto-cjk
-
-      - name: Install dependencies
-        run: uv sync --frozen
-
-      - name: Check test font
-        run: test -r "$AMAIDESU_TEST_FONT"
 
       # 模拟 DPI 测试在全部平台执行；真实 Win32 集成测试另由 Windows 执行。
       # pipefail 保留失败状态，faulthandler 和完整日志用于追踪原生崩溃。
@@ -122,31 +122,3 @@ jobs:
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
-
-  frontend-test:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: dashboard
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # packageManager 声明在 dashboard/package.json，显式指定版本。
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.12.4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: dashboard/pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run vitest
-        run: pnpm test
