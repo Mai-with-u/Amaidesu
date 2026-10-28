@@ -27,11 +27,12 @@ from typing import List, Literal, Optional, get_args
 
 from pydantic import ConfigDict, Field
 
+from src.agents.game_2048.config import Game2048Config
+from src.agents.minecraft.config import MinecraftConfig
+from src.agents.streamer.config import StreamerConfig
+from src.agents.text_adv.config import TextAdvConfig
 from src.modules.config.file_meta import FileMetaConfig
 from src.modules.config.schemas.base import BaseConfig
-
-# 包内权威 Schema 的延迟 import 与 model_rebuild 在文件末尾执行
-# （避免顶部 import 触发过重的依赖链）
 
 
 # ---------------------------------------------------------------------------
@@ -79,32 +80,27 @@ class AgentsConfig(BaseConfig):
         },
     )
 
-    # 各 Agent 的子配置（包内权威）
-    # 类型用字符串前向引用（避免顶部循环 import）；model_rebuild() 在模块末尾解析
-    # 为真实类。default_factory 用 __import__ 延迟加载，确保字段类型在
-    # AgentsConfig.model_rebuild() 之前可用且不触发重型依赖链。
-    streamer: Optional["StreamerConfig"] = Field(  # type: ignore[name-defined]  # noqa: F821
-        default_factory=lambda: __import__("src.agents.streamer.config", fromlist=["StreamerConfig"]).StreamerConfig(),
+    # 各 Agent 的子配置（包内权威，类型直接引用顶部 import 的包内 Schema）
+    streamer: Optional[StreamerConfig] = Field(
+        default_factory=StreamerConfig,
         title="主播 Agent",
         description="主播 Agent（Planner+Replyer）配置",
         json_schema_extra={"x-ui-type": "object"},
     )
-    minecraft: Optional["MinecraftConfig"] = Field(  # type: ignore[name-defined]  # noqa: F821
-        default_factory=lambda: __import__(
-            "src.agents.minecraft.config", fromlist=["MinecraftConfig"]
-        ).MinecraftConfig(),
+    minecraft: Optional[MinecraftConfig] = Field(
+        default_factory=MinecraftConfig,
         title="Minecraft 游戏 Agent",
         description="Minecraft 游戏 Agent 配置",
         json_schema_extra={"x-ui-type": "object"},
     )
-    text_adv: Optional["TextAdvConfig"] = Field(  # type: ignore[name-defined]  # noqa: F821
-        default_factory=lambda: __import__("src.agents.text_adv.config", fromlist=["TextAdvConfig"]).TextAdvConfig(),
+    text_adv: Optional[TextAdvConfig] = Field(
+        default_factory=TextAdvConfig,
         title="文字冒险 Agent",
         description="文字冒险游戏 Agent 配置",
         json_schema_extra={"x-ui-type": "object"},
     )
-    game_2048: Optional["Game2048Config"] = Field(  # type: ignore[name-defined]  # noqa: F821
-        default_factory=lambda: __import__("src.agents.game_2048.config", fromlist=["Game2048Config"]).Game2048Config(),
+    game_2048: Optional[Game2048Config] = Field(
+        default_factory=Game2048Config,
         title="2048 游戏 Agent",
         description="2048 游戏 Agent 配置",
         json_schema_extra={"x-ui-type": "object"},
@@ -133,16 +129,6 @@ class AgentsRootConfig(BaseConfig):
         title="Agent 配置",
         description="[agents] 段聚合（启用列表 + 各 Agent 子配置）",
     )
-
-
-# 延迟 import：各 Agent 包内权威 Schema；通过 model_rebuild() 完成前向引用解析。
-from src.agents.game_2048.config import Game2048Config  # noqa: E402, F401
-from src.agents.minecraft.config import MinecraftConfig  # noqa: E402, F401
-from src.agents.streamer.config import StreamerConfig  # noqa: E402, F401
-from src.agents.text_adv.config import TextAdvConfig  # noqa: E402, F401
-
-# 重新解析 forward refs
-AgentsConfig.model_rebuild()
 
 
 __all__ = [
