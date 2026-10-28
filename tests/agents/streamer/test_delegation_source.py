@@ -26,10 +26,10 @@ async def test_delegation_keeps_source_without_rewriting_model_history() -> None
     arguments = {"agent": "minecraft", "instruction": "搭一条工业风产线"}
     result = await planner.workbench.handle("framework_delegate", arguments, source_dialogue=source)
     delivered = registry.invoke.call_args.args[0].arguments["instruction"]
-    assert original in delivered and "不构成额外任务" in delivered
-    assert delivered.startswith("[本次目标]\n搭一条工业风产线")
-    assert "两者冲突时听本次目标" in delivered and "只有本次目标采纳了才做" in delivered
-    assert "以对应来源原话为准" not in delivered
+    assert "[本次目标]" in delivered  # 目标抬头标记是双方契约，措辞可调、存在性不可失
+    assert delivered.index("搭一条工业风产线") > delivered.index("[本次目标]")  # 目标原文在抬头之后逐字呈现
+    assert original in delivered and "不构成额外任务" in delivered  # 来源原话逐字附带且不构成行动授权
+    assert "以对应来源原话为准" not in delivered  # 旧措辞"以原话为准"退役后不得回流
     assert arguments["instruction"] == "搭一条工业风产线"
     assert json.loads(result)["accepted"] is True
 
