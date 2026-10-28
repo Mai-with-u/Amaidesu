@@ -22,9 +22,8 @@ from .minecraft_v1_fakes import assemble_minecraft_agent
 
 
 @pytest.fixture(autouse=True)
-def _chars_as_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
-    """按字符数计 token：预算断言与是否装了 tiktoken 词表无关，数值也直观。"""
-    monkeypatch.setattr("src.modules.context.tokens.count_text_tokens", len)
+def _chars_as_tokens(chars_as_tokens: None) -> None:
+    """整个文件按字符数计 token：转用 tests/conftest.py 的共享夹具。"""
 
 
 def tokens(messages: list[dict]) -> int:
