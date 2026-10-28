@@ -911,7 +911,15 @@ register_file_hook("agents.toml", "retire_streamer_narrative", "2.0.48", _retire
 # 存量键原地删除。
 _drop_background_cold_timeout = drop_section_keys("agents.streamer.background", ("cold_timeout_ms",))
 
+# 生产钩子登记：agents.toml v2.0.49（background.cold_timeout_ms 死配置清除）
 register_file_hook("agents.toml", "drop_background_cold_timeout", "2.0.49", _drop_background_cold_timeout)
+
+# agents.toml v2.0.50：删 ``[agents.streamer.persona].audience_salutation``。
+# Replyer 的称呼模板变量已退役（模板正文硬编码统一称呼），该键读入后无任何
+# 消费点；留在文件里即属未知字段硬错，原地删除。
+_drop_persona_audience_salutation = drop_section_keys("agents.streamer.persona", ("audience_salutation",))
+
+register_file_hook("agents.toml", "drop_persona_audience_salutation", "2.0.50", _drop_persona_audience_salutation)
 
 # infra.toml v2.0.43：删三个小部件段的 ``enable_html_page`` 键。旧版后端直出
 # 透明页（/widget、/widget/2048）整体退役，嵌入页统一为前端 SPA 的

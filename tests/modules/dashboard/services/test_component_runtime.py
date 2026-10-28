@@ -425,13 +425,13 @@ def test_agent_rebuild_with_same_prompt_manager_renders_new_persona() -> None:
     old_llm, new_llm = object(), object()
 
     old_replyer = Replyer(
-        config={"bot_name": "旧名字", "personality": "旧人设", "audience_salutation": "各位"},
+        config={"bot_name": "旧名字", "personality": "旧人设"},
         llm_service=old_llm,
         prompt_service=prompts,
     )
     # 模拟保存热应用的重建：共享 prompt_manager 不变，仅换新配置重新实例化
     new_replyer = Replyer(
-        config={"bot_name": "新名字", "personality": "新人设", "audience_salutation": "朋友们"},
+        config={"bot_name": "新名字", "personality": "新人设"},
         llm_service=new_llm,
         prompt_service=prompts,
     )

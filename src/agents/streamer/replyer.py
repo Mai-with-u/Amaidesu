@@ -30,7 +30,6 @@ from .timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE
 _DEFAULT_BOT_NAME = "麦麦"
 _DEFAULT_PERSONALITY = "活泼开朗，有些调皮，喜欢和观众互动"
 _DEFAULT_STYLE_CONSTRAINTS = "口语化，短句为主，偶尔玩个梗，不堆网络流行语"
-_DEFAULT_AUDIENCE_SALUTATION = "大家"
 # 一句台词的长度上限（与 StreamerConfig.speech_max_chars 默认值对齐）；0 = 不限制
 _DEFAULT_SPEECH_MAX_CHARS = 40
 
@@ -51,7 +50,6 @@ class Replyer:
         config: Dict[str, Any],
         llm_service: Any,
         prompt_service: Any,
-        tool_registry: Optional[Any] = None,
         word_filter: Optional["WordFilter"] = None,
         notebook_text_provider: Optional[Callable[[], str]] = None,
     ) -> None:
@@ -59,13 +57,12 @@ class Replyer:
 
         Args:
             config: 配置字典（兼容 StreamerConfig 的子集字段），
-                    读取 bot_name / personality / style_constraints /
-                    audience_salutation（人设四件套由 StreamerAgent 构造期注入；
+                    读取 bot_name / personality / style_constraints
+                    （人设三件套由 StreamerAgent 构造期注入；
                     LLM profile 绑定不读配置，固定 REPLYER_PROFILE 常量）。
             llm_service: LLM 管理器（使用 profile 指定的高质量客户端）。
             prompt_service: 提示词管理器（渲染 amaidesu_replyer_system /
                     amaidesu_replyer 两个模板，分别承载 system 稳定段与本轮变化段）。
-            tool_registry: 工具注册表（仅作占位注入，表达引擎自身不消费工具列表）。
             word_filter: 敏感词过滤器（输出端净化入口；None 表示不净化）。
             notebook_text_provider: 本场备忘录全文查询（None 或空串 = 无备忘录段）。
         """
@@ -76,12 +73,10 @@ class Replyer:
         self._bot_name: str = self._config.get("bot_name", _DEFAULT_BOT_NAME)
         self._personality: str = self._config.get("personality", _DEFAULT_PERSONALITY)
         self._style_constraints: str = self._config.get("style_constraints", _DEFAULT_STYLE_CONSTRAINTS)
-        self._audience_salutation: str = self._config.get("audience_salutation", _DEFAULT_AUDIENCE_SALUTATION)
         self._speech_max_chars: int = int(self._config.get("speech_max_chars", _DEFAULT_SPEECH_MAX_CHARS))
 
         self._llm_service = llm_service
         self._prompt_service = prompt_service
-        self._tool_registry = tool_registry
         self._word_filter = word_filter
         self._notebook_text_provider = notebook_text_provider
         self.logger = get_logger("Replyer")

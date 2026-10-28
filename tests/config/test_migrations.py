@@ -486,6 +486,10 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
         "test",
         "test_background_cold_timeout_migration.py#test_background_cold_timeout_dropped_and_written_back",
     ),
+    "drop_persona_audience_salutation": (
+        "test",
+        "test_audience_salutation_retire_migration.py#test_persona_audience_salutation_dropped_and_written_back",
+    ),
 }
 
 

@@ -14,7 +14,6 @@ import pytest
 from src.agents.streamer.plan import DecisionPlan
 from src.agents.streamer.replyer import Replyer, WordFilter
 from src.modules.llm.payload import Response
-from src.modules.tools.models import ToolSpec
 
 
 @dataclass(frozen=True)
@@ -60,17 +59,6 @@ async def test_generate_returns_speech_with_request_id_and_binds_the_replyer_pro
     assert kwargs["profile"] == "replyer"  # 代码显式常量，与 Planner 的 planner 分离
     assert kwargs["system"] == "PROMPT" and "tools" not in kwargs  # 稳定段走 system，表达引擎不发工具面
     assert kwargs["on_delta"] is on_delta  # 流式回调透传
-
-
-async def test_registry_tools_are_neither_sent_nor_queried() -> None:
-    registry = MagicMock()
-    registry.list_tools.return_value = [
-        ToolSpec(name="warudo.wave", description="挥手", parameters_schema=None, provider="warudo")
-    ]
-    replyer, llm, _ = _replyer(tool_registry=registry)
-    await replyer.generate(_plan(), [])
-    assert "tools" not in llm.generate.await_args.kwargs
-    registry.list_tools.assert_not_called()
 
 
 async def test_persona_goes_into_system_template_and_turn_data_into_the_turn_template() -> None:

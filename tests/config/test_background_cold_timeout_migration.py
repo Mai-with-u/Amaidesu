@@ -41,7 +41,7 @@ def test_background_cold_timeout_dropped_and_written_back(tmp_path: Path):
     assert "cold_timeout_ms" not in background
     proactive = doc["agents"]["streamer"]["proactive"]
     assert "cold_timeout_ms" in proactive, "proactive 段的同名字段是冷场判定的唯一所在，不受影响"
-    assert get_config_version(tmp_path, "agents.toml") == "2.0.49"
+    assert get_config_version(tmp_path, "agents.toml") == "2.0.50"
 
 
 def test_migration_is_idempotent(tmp_path: Path):
@@ -56,4 +56,4 @@ def test_migration_is_idempotent(tmp_path: Path):
     load_config_dir(tmp_path)
 
     assert (tmp_path / "agents.toml").stat().st_mtime_ns == first_mtime, "二次加载不应再写盘"
-    assert get_config_version(tmp_path, "agents.toml") == "2.0.49"
+    assert get_config_version(tmp_path, "agents.toml") == "2.0.50"

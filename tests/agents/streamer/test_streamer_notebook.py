@@ -118,7 +118,7 @@ def _replyer_with_prompt_capture(notebook: StreamerNotebook) -> tuple[Replyer, M
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="PROMPT")
     replyer = Replyer(
-        config={"bot_name": "麦麦", "personality": "", "style_constraints": "", "audience_salutation": "大家"},
+        config={"bot_name": "麦麦", "personality": "", "style_constraints": ""},
         llm_service=MagicMock(),
         prompt_service=prompt,
         notebook_text_provider=notebook.read,

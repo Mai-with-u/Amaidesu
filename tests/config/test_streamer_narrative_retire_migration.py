@@ -35,7 +35,7 @@ def test_narrative_section_removed_and_written_back(tmp_path: Path) -> None:
 
     doc = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
     assert "narrative" not in doc["agents"]["streamer"]
-    assert doc["meta"]["version"] == "2.0.49"
+    assert doc["meta"]["version"] == "2.0.50"
 
     first = path.read_text(encoding="utf-8-sig")
     load_config_dir(tmp_path)

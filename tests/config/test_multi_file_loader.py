@@ -74,11 +74,9 @@ def test_load_returns_every_scope_without_drift_and_keeps_values_and_hides_meta(
     assert not report.redundant and not report.missing
     assert all(scope in config for scope in ("agents", "collectors", "tools", "model", "storage", "infra"))
     persona = config["agents"]["agents"]["streamer"]["persona"]
-    assert (persona["bot_name"], persona["audience_salutation"], config["infra"]["dashboard"]["port"]) == (
-        "麦麦",
-        "大家",
-        60214,
-    )
+    assert persona["bot_name"] == "麦麦"
+    assert "audience_salutation" not in persona  # 称呼键已退役，由迁移钩子负责删除
+    assert config["infra"]["dashboard"]["port"] == 60214
     assert all("meta" not in scope_data for scope_data in config.values())  # [meta] 是文件私有元数据，不进合并命名空间
 
 

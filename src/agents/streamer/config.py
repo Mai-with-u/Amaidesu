@@ -14,7 +14,7 @@
     speech_gate_window, speech_gate_ratio, speech_max_chars
 
     [agents.streamer.persona]
-    bot_name, personality, style_constraints, behavior_style, audience_salutation
+    bot_name, personality, style_constraints, behavior_style
 
     [agents.streamer.context]
     enabled, memory_recall_long_term
@@ -88,9 +88,8 @@ from src.modules.context import ContextBudgetConfig
 class StreamerPersonaConfig(BaseConfig):
     """[agents.streamer.persona] 段
 
-    主播人设与对观众的称呼。bot_name/personality/style_constraints 注入 Replyer
-    表达侧，behavior_style 注入 Planner 决策侧，audience_salutation 用于称呼观众
-    （Replyer 模板 ``$audience_salutation`` 变量）。
+    主播人设。bot_name/personality/style_constraints 注入 Replyer 表达侧，
+    behavior_style 注入 Planner 决策侧。
     """
 
     bot_name: str = Field(title="VTuber 名字", default="麦麦", description="VTuber 名字（注入 Replyer 表达侧）")
@@ -108,11 +107,6 @@ class StreamerPersonaConfig(BaseConfig):
         title="行动准则",
         default="积极与观众互动，收到礼物和SC及时致谢，冷场时主动开新话题，遇到争议保持风度不纠缠",
         description="Planner 行动准则（注入 Planner 决策侧）",
-    )
-    audience_salutation: str = Field(
-        title="观众称呼",
-        default="大家",
-        description="对观众的称呼（注入 Replyer 模板 ``$audience_salutation`` 变量）",
     )
 
 
@@ -584,7 +578,7 @@ class StreamerConfig(BaseConfig):
     persona: StreamerPersonaConfig = Field(
         title="人设配置",
         default_factory=StreamerPersonaConfig,
-        description="人设配置（bot_name/personality/style_constraints/behavior_style/audience_salutation）",
+        description="人设配置（bot_name/personality/style_constraints/behavior_style）",
     )
     context: StreamerContextConfig = Field(
         title="上下文组装器配置",

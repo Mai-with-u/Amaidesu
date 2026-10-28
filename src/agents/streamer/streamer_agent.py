@@ -352,21 +352,18 @@ class StreamerAgent(BaseAgent):
         self._session_notebook_snapshot: str = ""
 
         # Replyer（表达引擎，Agent 内部件——非工具）
-        # 人设四件套从包内配置权威 config.persona 单点构建、构造期注入
+        # 人设三件套从包内配置权威 config.persona 单点构建、构造期注入
         # （behavior_style 不进表达侧——只走 Planner 决策通道）
         self._replyer = Replyer(
             config={
-                "profile": _PROFILE_REPLYER,
                 "bot_name": config.persona.bot_name,
                 "personality": config.persona.personality,
                 "style_constraints": config.persona.style_constraints,
-                "audience_salutation": config.persona.audience_salutation,
                 # 表达出口的台词长度预算：超出先重说成一句，仍超按完整句子截短
                 "speech_max_chars": config.speech_max_chars,
             },
             llm_service=llm_manager,
             prompt_service=prompt_manager,
-            tool_registry=tool_registry,
             word_filter=self._word_filter,
             notebook_text_provider=self._notebook.read,
         )

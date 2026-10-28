@@ -34,7 +34,6 @@ _PERSONA = {
     "personality": "毒舌测试人格",
     "style_constraints": "简短犀利测试风格",
     "behavior_style": "沉默寡言测试准则",
-    "audience_salutation": "各位测试观众",
 }
 
 
@@ -55,8 +54,10 @@ def streamer() -> tuple[Any, MagicMock, MagicMock]:
 
 async def test_replyer_renders_config_persona_and_never_the_planner_only_behavior_style(streamer) -> None:
     """system 稳定段承载全程不变的人设（bot_name/personality），style_constraints 属本轮表达风格，
-    进本轮输入模板；behavior_style 只进 Planner。audience_salutation 已随模板硬编码退役，
-    再注入会被渲染期硬错。"""
+    进本轮输入模板；behavior_style 只进 Planner。audience_salutation 已随模板硬编码退役：
+    Schema 不再承载，配置传入即加载期未知字段硬错。"""
+    # Schema 已无此字段：字段在即视为回退（配置契约面不应再出现该键）
+    assert "audience_salutation" not in StreamerPersonaConfig.model_fields
     agent, llm, prompt = streamer
     llm.generate = AsyncMock(return_value=Response(success=True, content="测试回复"))  # 纯文本契约：正文即台词
     plan = DecisionPlan(should_reply=True, target="all", topic_summary="测试话题", reply_guidance="按配置 persona 回答")

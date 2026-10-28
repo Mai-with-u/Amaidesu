@@ -83,7 +83,6 @@ def instantiate_agent(
         _logger.info(
             f"StreamerAgent 配置就绪: "
             f"bot_name={cfg_obj.persona.bot_name!r}, "
-            f"audience_salutation={cfg_obj.persona.audience_salutation!r}, "
             f"behavior_style={'<已注入>' if cfg_obj.persona.behavior_style else '<缺失>'}, "
             f"background.enabled={cfg_obj.background.enabled}, "
             f"background.light_tick_ms={cfg_obj.background.light_tick_ms}"

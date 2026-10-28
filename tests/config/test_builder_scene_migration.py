@@ -48,6 +48,6 @@ def test_scene_transport_written_back_with_independent_file_migrations(tmp_path:
     # 旧建筑设计子 Agent 随 v1 玩家停用：迁移照常执行，写回时整段按多余字段清理。
     assert "builder" not in agents["agents"]["minecraft"]
     # 两文件版本流独立推进，各自推进到最后一个适用钩子（都到 v2.0.44）
-    assert agents["meta"]["version"] == "2.0.49" and model["meta"]["version"] == "2.0.44"
+    assert agents["meta"]["version"] == "2.0.50" and model["meta"]["version"] == "2.0.44"
     _, report = load_config_dir(tmp_path)
     assert not report.missing
