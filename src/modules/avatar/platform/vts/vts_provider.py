@@ -1,7 +1,7 @@
 """
 VTSProvider - VTS 虚拟形象工具集
 
-ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动半）：
+ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动调用的工具侧）：
 
 - 引擎子件（``ExpressionController`` / ``HotkeyMatcher`` / ``IdleMotionController``）
   经 callback 解耦，可独立复用；口型渲染（``VtsLipSyncRenderer``）挂在共享
@@ -17,9 +17,8 @@ ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动半）：
 连接检测点调 ``mark_connected`` / ``mark_disconnected``，经接线回调驱动
 注册表 ``refresh_provider_tools`` 补注册 / 摘除。
 
-被收敛的历史工具（微旋钮 / 运维件 / 不可发现件）只撤 LLM 工具注册；
-Python 方法不默认保留——仍有真实调用点的才留（``set_parameter_value``
-供 Dashboard 调试台参数直调），无调用点的已删除。
+不注册为工具的 Python 方法只保留仍有真实调用点的（``set_parameter_value``
+供 Dashboard 调试台参数直调），其余一概不设。
 """
 
 from __future__ import annotations
@@ -338,7 +337,7 @@ class VTSProvider(ConnectionToolProvider):
         self._current_model_name: str = ""
         # 说话状态（tts.utterance.started/finished 订阅驱动；idle 据此暂停摇摆）
         self._is_speaking: bool = False
-        # 被动半挂件句柄（setup 时逐项 attach，cleanup 时一次全量退订摘除）
+        # 事件订阅挂载项句柄（setup 时逐项 attach，cleanup 时一次全量退订摘除）
         self._bindings: Optional[AvatarBindings] = None
 
         self.render_count = 0
@@ -494,7 +493,7 @@ class VTSProvider(ConnectionToolProvider):
         self._reconnect_task = asyncio.create_task(self._reconnect_loop())
         self._reconnect_task.set_name(f"{self.__class__.__name__}.reconnect_loop")
 
-        # 被动半事件订阅：情绪反射（streamer.speech）+ 说话状态（tts.utterance.*，
+        # 事件订阅（被动响应业务事件）：情绪反射（streamer.speech）+ 说话状态（tts.utterance.*，
         # 驱动 idle"说话时暂停摇摆"）；口型渲染挂到共享分析器（说话时 MouthOpen
         # 跟随信号 + 常驻微笑基线维护）
         self._bindings = AvatarBindings(self.event_bus, self.logger)

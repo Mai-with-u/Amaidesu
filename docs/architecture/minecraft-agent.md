@@ -6,7 +6,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 - 只有主播 Agent 自我驱动；游戏 Agent 命令驱动（类 Code Agent）——收到命令启动任务循环，完成即停、空闲零消耗
 - 因有自身状态与任务内自主决策，游戏 Agent 仍是 Agent 而非工具（三分判据见 [v2-architecture.md](v2-architecture.md)）
-- 游戏 Agent 与主播有两种交互形态：**委派型**（本文——主播交代目标，游戏侧自带 LLM 拆解）与**遥控型**（主播直接按键、选项，游戏侧零 LLM，如 text_adv、game_2048）。主播按各工具面的使用说明拼装【当前游戏的玩法】，两种形态的定案见 [ADR-043](../decisions/043-game-agent-interaction-shapes.md)
+- 游戏 Agent 与主播有两种交互形态：**委派型**（本文——主播交代目标，游戏侧自带 LLM 拆解）与**遥控型**（主播直接按键、选项，游戏侧零 LLM，如 text_adv、game_2048）。主播按各工具面的使用说明拼装【当前游戏的玩法】，两种形态的定案见 [游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)
 
 ## 核心意象
 
@@ -44,7 +44,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 | # | 情形 | 行为 |
 |---|------|------|
 | 1 | LLM 调 `minecraft_report(kind=delivery)` | 还有目标在跑或待办没完成时拒绝交付，返回错误观察；通过门禁后停止 |
-| 2 | LLM 调 `minecraft_report(kind=escalation)` | 停止；委派账面写 `waiting_for_decision`，等递话唤醒 / 恢复续跑 / 硬取消清账 |
+| 2 | LLM 调 `minecraft_report(kind=escalation)` | 停止；委派状态置为 `waiting_for_decision`，等递话唤醒 / 恢复续跑 / 硬取消时清除 |
 | 3 | 自然终止，无 report、无在跑的目标且待办完成 | 系统兜底交付，并结算原委派任务 |
 | 4 | 自然终止或 `minecraft_wait`，仅剩在跑的目标 | 静默让出回合，等目标事件唤醒 |
 | 5 | 有目标在等回答、被暂停或待办没推进，提醒后仍不行动 | 挂起并上报 escalation，保留原任务等继续指令 |
@@ -59,15 +59,15 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 - **唤醒**：结束 → 注入"目标 N 结束了"、结束时的自身摘要与结果；Mod 把大块证据折进 `result.folded` 时，通知里说明照抄 `path` 用 `maicraft_goal(get, goal_id, path)` 读回；提问 → 注入问题、选项与回答方式；被暂停 → 注入"身体没在做它"。只有这些需要模型处理的变化才唤醒，恢复推进静默记账
 - **换世界**：事件流编号变了（换世界、重进世界、Mod 重启）时旧游标作废，逐个重新查在跟踪的目标；查不到或编号已是别的能力的目标，按"不在了"注入通知，不让任务挂着等不来的结果
 - **身体事件**：与目标无关的事件（生存需求的临时任务开始与结束、处理不了的需求、角色死亡）进本批身体上下文；处理不了的需求与角色死亡同时注入任务并发 `game.attention_required`；处理不了的需求的说明（饿了没吃上会逐个列出各来源的原因，常有几千字）与对话历史或待读队列里一字不差的那条重复时，只注入一句指回前面那条，前面那条已被历史整理换成摘要时才完整再给
-- **Mod 挂出的决策**：死亡恢复这类决策不是谁下达的目标（`goal_id` 是负数）。它提问时读一次、带着问题与选项唤醒任务（空闲时也唤醒，没人回答角色就停在死亡屏幕），模型按问题里给的选项用 `maicraft_goal(answer)` 回答；不进跟踪名单、不记账本，执行结果事件 `death_recovery_applied` 不转给主播
-- **账本镜像**：目标同时记进通用任务账本（`maicraft-goal-<id>`，发起方 minecraft），主播的任务查询看得到；账本的长时间无进展告警回到 Agent 注入提醒，成败本身以事件流为准
+- **Mod 挂出的决策**：死亡恢复这类决策不是谁下达的目标（`goal_id` 是负数）。它提问时读一次、带着问题与选项唤醒任务（空闲时也唤醒，没人回答角色就停在死亡屏幕），模型按问题里给的选项用 `maicraft_goal(answer)` 回答；不进跟踪名单、不记任务登记，执行结果事件 `death_recovery_applied` 不转给主播
+- **任务登记镜像**：目标同时记进通用任务登记（`maicraft-goal-<id>`，发起方 minecraft），主播的任务查询看得到；任务登记的长时间无进展告警回到 Agent 注入提醒，成败本身以事件流为准
 
 ### 运营干预入口（递话 / 硬取消 / 断连恢复）
 
-委派之外，minecraft 另有两个干预入口与一条自愈路径（原语定案见 ADR-034，账面语义见 ADR-035）：
+委派之外，minecraft 另有两个干预入口与一条自愈路径（入口设计见 [Agent 干预原语](../decisions/034-agent-intervention-primitives.md)，escalation 上报的状态语义见 [escalation 状态语义与断连恢复](../decisions/035-escalation-ledger-semantics.md)）：
 
-- **递话 `receive_prompt`**：纯文本留言（主播经 `framework_prompt` 工具、运营经 REST），不派新任务、不进账本——文本入消息队列 + 唤醒；入队时按来源加 `[运营原话]` / `[主播补充]` 标签，冲突时原话与游戏结果优先于转述。
-- **硬取消 `cancel_task`**：任务在委派追踪清单 → 清清单 + 账面写 cancelled + 注入"任务已被取消"通知，LLM 下一步自行停手（还在跑的游戏目标由它用 `maicraft_goal(cancel)` 取消）。软取消：不打断当前工具调用。
+- **递话 `receive_prompt`**：纯文本留言（主播经 `framework_prompt` 工具、运营经 REST），不派新任务、不进任务登记——文本入消息队列 + 唤醒；入队时按来源加 `[运营原话]` / `[主播补充]` 标签，冲突时原话与游戏结果优先于转述。
+- **硬取消 `cancel_task`**：任务在委派追踪清单 → 清清单 + 状态记录写 `cancelled` + 注入"任务已被取消"通知，LLM 下一步自行停手（还在跑的游戏目标由它用 `maicraft_goal(cancel)` 取消）。软取消：不打断当前工具调用。
 - **MCP 断连恢复续跑**：私有 MCP 恢复循环装配成功后注入"连接已恢复"通知 + 解锁挂起态 + 唤醒；能力清单与事件游标按新连接重新读取。
 
 ## 工具契约
@@ -126,7 +126,7 @@ enabled = true
 url = "http://127.0.0.1:8766/mcp"
 ```
 
-配版本同步规则：配置结构变更升该文件 `[meta].version` 并保证漂移写回（见 ADR-014）。
+配版本同步规则：配置结构变更升该文件 `[meta].version` 并保证漂移写回（见 [配置文件按领域拆分](../decisions/014-config-six-file-refactor.md)）。
 
 ## 解耦边界
 
@@ -141,5 +141,5 @@ url = "http://127.0.0.1:8766/mcp"
 - [事件系统](event-system.md) — game.* 事件语义单一事实源
 - [数据流规则](data-flow.md) — 事件流约束
 - [组件开发指南](../guides/component.md) — 游戏 Agent 范式
-- [ADR-034](../decisions/034-agent-intervention-primitives.md) — 递话/硬取消/运营直派原语定案
-- [ADR-035](../decisions/035-escalation-ledger-semantics.md) — escalation 账面语义与断连恢复续跑
+- [Agent 干预原语（递话/硬取消/运营直派）](../decisions/034-agent-intervention-primitives.md)
+- [escalation 状态语义与断连恢复续跑](../decisions/035-escalation-ledger-semantics.md)

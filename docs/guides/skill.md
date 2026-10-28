@@ -1,8 +1,8 @@
 # Skill 编写与接入
 
-Skill 是写给模型的玩法/操作经验文档：回答"一类目标该怎么做成"。它与能力契约（某个能力怎么调）、外部知识库（世界里的事实是什么）分工，定位与取舍见 [ADR-036](../decisions/036-skill-system.md) 与 [ADR-044](../decisions/044-skills-over-mcp.md)。
+Skill 是写给模型的玩法/操作经验文档：回答"一类目标该怎么做成"。它与能力契约（某个能力怎么调）、外部知识库（世界里的事实是什么）分工，定位与取舍见 [Skill 系统](../decisions/036-skill-system.md) 与 [玩法技能随 Mod 发布，直播策略留宿主](../decisions/044-skills-over-mcp.md)。
 
-从 ADR-044 起，技能分两处：
+技能分两处：
 
 | 内容 | 放哪 | 怎么读 |
 | --- | --- | --- |
@@ -92,6 +92,6 @@ Minecraft 的接入实现见 [`MinecraftAgent`](../../src/agents/minecraft/agent
 
 ## 相关文档
 
-- [ADR-036](../decisions/036-skill-system.md) - Skill 系统与目录/正文机制
-- [ADR-044](../decisions/044-skills-over-mcp.md) - 玩法技能随 Mod 发布，直播策略留宿主
+- [Skill 系统](../decisions/036-skill-system.md) - Skill 系统与目录/正文机制
+- [玩法技能随 Mod 发布，直播策略留宿主](../decisions/044-skills-over-mcp.md) - 玩法技能与宿主策略的分工
 - [Minecraft Agent](../architecture/minecraft-agent.md) - 游戏 Agent 工具契约

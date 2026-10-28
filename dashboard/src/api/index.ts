@@ -224,7 +224,7 @@ export const toolsApi = {
 
 // Agent 控制面（运行态观测 + 框架级控制）
 //
-// `GET /agents`：已注册 Agent 名册（state / heartbeat_ms / is_alive /
+// `GET /agents`：已注册 Agent 的运行状态列表（state / heartbeat_ms / is_alive /
 // restart_count / enabled）。`POST /agents/{name}/control`：pause / resume
 // 即时生效；shutdown / restart 属高风险动作，须携带 confirm: true，
 // 受理后返回 202（响应体与 200 同形）。
@@ -233,20 +233,20 @@ export const agentsApi = {
   getAgentState: (name: string) => api.get<AgentState>(`/agents/${name}/state`),
   controlAgent: (name: string, action: AgentControlActionType, confirm?: boolean) =>
     api.post<AgentControlResponse>(`/agents/${name}/control`, { action, confirm }),
-  /** 递话：纯文本留言（不派新任务；目标拒收 409，不在名册 404） */
+  /** 递话：纯文本留言（不派新任务；目标拒收 409，Agent 不存在 404） */
   promptAgent: (name: string, content: string) =>
     api.post<AgentPromptResponse>(`/agents/${name}/prompt`, { content }),
-  /** 直派：派新任务登记账本（任务卡可见；目标拒收 409） */
+  /** 直派：派新任务并登记到任务列表（任务卡可见；目标拒收 409） */
   delegateAgent: (name: string, instruction: string) =>
     api.post<AgentDelegateResponse>(`/agents/${name}/delegate`, { instruction }),
-  /** 硬取消：清追踪 + 账面 cancelled + 通知停手（任务未知/已终态 404） */
+  /** 硬取消：清除任务追踪、状态置为 cancelled、并通知 Agent 停止执行（任务未知/已终态 404） */
   cancelAgentTask: (name: string, taskId: string) =>
     api.post<AgentCancelTaskResponse>(`/agents/${name}/tasks/${taskId}/cancel`),
   /** 备忘录/待办快照（只读观测：主播 = notebook；minecraft = notebook/todos/reports 三元组） */
   getAgentMemo: (name: string) => api.get<AgentMemoResponse>(`/agents/${name}/memo`),
 };
 
-// 任务卡快照（进行中账本 + 已完结事件聚合）
+// 任务卡快照（进行中任务列表 + 已完结事件聚合）
 export const tasksApi = {
   listTasks: () => api.get<TaskSnapshotResponse>('/tasks'),
 };
@@ -309,7 +309,7 @@ export const liveSessionsApi = {
     api.get<SessionRundownExecutionResponse>(`/live-sessions/${id}/rundown-execution`),
 };
 
-// 事件历史（游标续传 + 落盘扩容）
+// 事件历史（游标续传；历史范围由内存缓冲扩展到落盘文件）
 //
 // `GET /events?since_id=`：返回游标之后的事件缺口（断线/刷新后由 store 调用补齐，
 // 只读内存环形缓冲）。

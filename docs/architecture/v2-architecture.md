@@ -50,13 +50,13 @@
 
 ### 为什么需要铁闸
 
-三代换皮史证明：没有结构性约束，重构会在惯性下退回原形。git 历史调研同时挖出了当年插件系统被废的五大理由（过度插件化、服务注册复杂度、插件间依赖成石山、消息流不清晰、配置分散）——本架构对每一条都有明确的规避设计：
+三代换皮史证明：没有结构性约束，重构会在惯性下退回原形。git 历史调研同时挖出了当年插件系统被废的五大理由（过度插件化、服务注册复杂度、插件间依赖关系纠缠不清、消息流不清晰、配置分散）——本架构对每一条都有明确的规避设计：
 
 | 插件的错 | 规避设计 |
 |---|---|
 | 核心功能也做成插件，必需与可选混杂 | 工具/存储/事件/LLM 全部是框架基础设施（`src/modules/`）；只有"主体"（含主体自己的记忆）住在 Agent 包里 |
 | 服务注册机制，依赖运行时才暴露问题 | 无服务注册；构造器注入 + 事件/工具契约 |
-| 24 个插件互相依赖成石山 | 游戏 Agent 之间零依赖，经事件（`game.*`）/状态（工具，如 text_adv_get_state）/指令（framework_delegate 委派原语）三通道松耦合 |
+| 24 个插件互相依赖、纠缠不清 | 游戏 Agent 之间零依赖，经事件（`game.*`）/状态（工具，如 text_adv_get_state）/指令（framework_delegate 委派原语）三通道松耦合 |
 | 消息流经中心中转，链路不清 | Agent → 工具/事件/存储直达，单向清晰 |
 | 全局/插件级配置混乱 | 七文件按领域拆分 + Pydantic Schema 校验 |
 
@@ -170,7 +170,7 @@ sequenceDiagram
     注册表-->>主播: 工作文档（想看细节时再查）
 ```
 
-文字冒险和 2048 走另一条通道：不接委派，主播直接调它们的专属工具驱动——启停观察循环、推进剧情、在选项间做选择、对局落子；文字冒险的观察循环遇到选项屏会上报，等主播来选。两种交互形态的定案见 [ADR-043](../decisions/043-game-agent-interaction-shapes.md)。
+文字冒险和 2048 走另一条通道：不接委派，主播直接调它们的专属工具驱动——启停观察循环、推进剧情、在选项间做选择、对局落子；文字冒险的观察循环遇到选项屏会上报，等主播来选。两种交互形态的定案见 [游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)。
 
 按设计，加一类游戏只需新增一个独立的 Agent 包和一份配置，不需要改框架。
 
@@ -188,7 +188,7 @@ sequenceDiagram
 
 ### 配置：七文件 + 每文件版本 + 包内权威 + 单一管线
 
-`agents / collectors / tools / avatar / model / storage / infra` 七文件按领域拆分（`config/` 目录）；每文件自带 `[meta].version` 结构版本，经升级钩子注册表按区间独立推进（缺失硬错）。avatar 配置从 tools 分类迁出为独立域文件、域文件数边界由 [ADR-028](../decisions/028-avatar-domain-config-graduation.md) 修订（迁出判据：域内多 provider 实例 + 自有协议/模块目录 + 配置已跨文件分散）。组件配置权威在各组件包内的 `ConfigSchema`（中央树只留槽位与聚合段），加载走单一管线（read → 版本推进 → Pydantic 校验硬错 → 漂移写回（备份 + 自写压标）→ 合并视图）。启用开关收敛为两处：`[agents].enabled` 与 `collectors.toml` 顶层 `enabled`；全局工具停用名单为 `[tools].disabled_tools`（重启生效）。设计决策见 [ADR-014](../decisions/014-config-six-file-refactor.md)。
+`agents / collectors / tools / avatar / model / storage / infra` 七文件按领域拆分（`config/` 目录）；每文件自带 `[meta].version` 结构版本，经升级钩子注册表按区间独立推进（缺失硬错）。avatar 配置独立为域文件，域文件数量边界见 [虚拟形象配置文件](../decisions/028-avatar-domain-config-graduation.md)（独立判据：域内多 provider 实例 + 自有协议/模块目录 + 配置已跨文件分散）。组件配置权威在各组件包内的 `ConfigSchema`（中央树只留槽位与聚合段），加载走单一管线（read → 版本推进 → Pydantic 校验硬错 → 漂移写回（备份 + 自写压标）→ 合并视图）。启用开关收敛为两处：`[agents].enabled` 与 `collectors.toml` 顶层 `enabled`；全局工具停用名单为 `[tools].disabled_tools`（重启生效）。设计决策见 [配置文件按领域拆分](../decisions/014-config-six-file-refactor.md)。
 
 ### 错误隔离：让边界守边界，不让一处失败扩散成全局停摆
 
@@ -232,4 +232,4 @@ sequenceDiagram
 - [数据流与边界规则](data-flow.md) - 三条约束层面的精确表述
 - [事件系统](event-system.md) - 事件全表、通配语义、拦截器开发
 - [组件开发指南](../guides/component.md) - 采集器/工具/Agent 三范式实操
-- [ADR-005](../decisions/005-v2-agent-tool-architecture.md) - 本决策的正式决策记录
+- [Agent + 工具架构总决策](../decisions/005-v2-agent-tool-architecture.md) - 本决策的正式决策记录

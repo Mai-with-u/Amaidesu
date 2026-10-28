@@ -2,15 +2,16 @@
 
 本模块是 StreamerAgent 的发言下游编排器：
 - 持有播放队列（容量受 `max_queue` 限制）：优先级高的排前面，同级先来先播；
-  不传优先级时全部同级，退化为原来的 FIFO
+  不传优先级时全部同级，等价于普通 FIFO 队列
 - 后台 worker 串行调用 speak 可调用对象（``await self._speak(text, utterance_id)``）
 - 与 TTS 引擎解耦：引擎正常路径的 ``tts.utterance.started`` / ``finished``
   由引擎自行发布；队列只在"这句到不了引擎"的两条路径（渲染超时、队列溢出
-  丢弃）代发 ``tts.utterance.failed``，让字幕等消费者逐句降级出字，不哑不悬。
+  丢弃）代发 ``tts.utterance.failed``，让字幕等消费者逐句降级出字，
+  不会无声卡住也不会悬空等待。
 
 设计原则（StreamerAgent 发言管线约束）：
 - 队列溢出丢"优先级最低里最旧的"一条；新来的比队里所有条目都低时丢新来的
-  （全部同级时就是丢最旧，与原来一致）
+  （全部同级时就是丢最旧的队首，即普通 FIFO 行为）
 - 反应类台词带过期时刻：轮到它时已经过时就跳过，过时的"哇什么东西"比不说还怪
 - 长段话的几句标同一个段落号：正在播的段落被更高优先级的台词插进来时，剩下没播的句子
   直接丢掉，不在突发反应之后接着讲
@@ -196,7 +197,7 @@ class UtteranceQueue:
         Args:
             utterance_id: 编排层生成的唯一 ID（关联 reply/TTS/存储）。
             text: 待合成文本。
-            priority: 优先级，越大越先播（默认 0：全部同级即原来的 FIFO）。
+            priority: 优先级，越大越先播（默认 0：全部同级，行为等同普通 FIFO 队列）。
             ttl_ms: 多久之内没轮到就作废（0 = 不过期）。突发反应用：过时了不该再说。
             segment: 段落号：长段话拆成的几句共用一个。
             on_start: 轮到这句、交给 TTS 的那一刻调用一次（流式引擎此刻发
@@ -222,7 +223,7 @@ class UtteranceQueue:
         async with self._lock:
             self._drop_interrupted_segment(item)
             if len(self._queue) >= self._max_queue:
-                # 丢优先级最低里最旧的；全部同级时就是丢最旧（队首），与原来一致
+                # 丢优先级最低里最旧的；全部同级时就是丢最旧（队首），即普通 FIFO 行为
                 candidates = [queued for queued in self._queue if queued.priority <= item.priority]
                 if not candidates:
                     self._total_dropped += 1

@@ -26,8 +26,8 @@ class LogStreamer:
 
     # 日志持久化默认参数
     DEFAULT_PERSIST_DIR = "logs/webui"
-    # 旧落盘目录（历史版本值）：启动搬移到 DEFAULT_PERSIST_DIR，日志类数据
-    # 统一归 logs/ 心智（data/ 只放业务事实），非业务数据不放 data/
+    # 旧落盘目录（历史版本值）：启动搬移到 DEFAULT_PERSIST_DIR。日志类数据
+    # 统一放 logs/ 目录（data/ 只放业务事实），非业务数据不放 data/
     LEGACY_PERSIST_DIR = "data/logs"
 
     def __init__(

@@ -139,6 +139,6 @@ ADR 中"delta 走 EventBus 迫使每个存储订阅方记得跳过"同源的失�
 **遗留（如实记录，不掩盖）**：
 
 - LLM 幻觉编名直调保留工具：invoke 无身份校验，封死需调用方身份治理（未来化）
-- Dashboard 前端归属列展示留白（后端 `owner_agent` 字段已就位，前端未动）
+- Dashboard 前端归属列展示暂未实现（后端 `owner_agent` 字段已就位，前端未动）
 - provider 级可见性粒度（同 provider 部分工具归属不同 Agent）未支持——当前无需求，
   归属即 provider 归属

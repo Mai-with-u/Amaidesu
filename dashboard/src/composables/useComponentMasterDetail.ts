@@ -36,7 +36,7 @@ interface Options<TItem extends ComponentStreamItem> {
   events: Ref<ComponentEvent[]>;
   /** 单条事件 → 流条目；返回 null 表示不入选。ctx.selectedName 为当前选中项 */
   mapEvent: (event: ComponentEvent, ctx: { selectedName: string | null }) => TItem | null;
-  /** 单组件控制完成后的回调（如 Agents 页刷新运行状态名册） */
+  /** 单组件控制完成后的回调（如 Agents 页刷新运行状态列表） */
   afterControl?: () => void;
 }
 

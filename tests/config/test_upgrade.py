@@ -121,7 +121,7 @@ def test_cross_file_hook_writes_both_files(target_version: str, expected_version
     assert changed["tools.toml"] == target_changed
 
 
-# 加载管线闭环（真实文件）
+# 加载管线全流程（真实文件）
 
 
 def test_generated_files_start_at_baseline_and_missing_version_fails_load(tmp_path: Path) -> None:

@@ -13,10 +13,10 @@
   或 ``..`` 的一律 404，杜绝路径穿越读到目录外文件。
 - 无鉴权、无缓存语义、绝不 500 裸崩（异常路径 404/日志）。
 
-调试台端点（走三后端同语义跨平台同名的契约工具面，不给单一平台开后门）：
+调试台端点（走三后端同语义跨平台同名的契约工具，不给单一平台开专用通道）：
 
 - ``GET /api/v1/avatar/debug/status``  各平台的连接态 / 当前表情 / 目录等
-  摘要。连接态与统计一律经 provider 观测面契约 ``connection_summary()``
+  摘要。连接态与统计一律经 provider 观测接口 ``connection_summary()``
   取；平台未暴露的信息（如"当前表情"各平台均无读取通道）返回 null 并在
   detail 说明，绝不伪造。
 - ``POST /api/v1/avatar/debug/trigger``  按 contract 方法转发执行：
@@ -50,8 +50,8 @@ router = APIRouter()
 # 调试台覆盖的平台名单（与 avatar.toml [avatar.platform] 成员一致）
 DEBUG_PLATFORMS: Tuple[str, ...] = ("vts", "vrchat", "warudo", "expression_sheet")
 
-# 平台参数直调支持面：设备微旋钮已从 LLM 工具面撤出，仅 VTS 保留了参数写入
-# 方法实体，其余平台无安全的参数写入口
+# 支持参数直调的平台：参数级写入不注册为 LLM 工具（设备微调不适合模型
+# 决策调用），仅 VTS 保留参数写入方法，其余平台无安全的参数写入口
 PARAMETER_CAPABLE_PLATFORMS: Tuple[str, ...] = ("vts",)
 
 
@@ -178,12 +178,12 @@ def _get_platform_provider(server: "DashboardServer", platform: str) -> Optional
 def _connection_summary(provider: Any) -> Tuple[Optional[bool], str, Dict[str, Any]]:
     """读平台连接态观测摘要，返回 (连接态或 None, 说明文案, 统计摘要)。
 
-    唯一口径是 provider 观测面契约 ``connection_summary()``；``is_connected``
+    唯一口径是 provider 观测接口契约 ``connection_summary()``；``is_connected``
     为 None（平台未暴露连接态）时带说明文案，消费方不得再探测私有成员。
     """
     try:
         summary = provider.connection_summary()
-    except Exception:  # noqa: BLE001 - 观测面读取失败按未暴露处理
+    except Exception:  # noqa: BLE001 - 观测接口读取失败按未暴露处理
         logger.warning("connection_summary 读取失败，按平台未暴露连接态处理", exc=True)
         return None, "平台未暴露连接态", {}
     connected = summary.get("is_connected") if isinstance(summary, dict) else None

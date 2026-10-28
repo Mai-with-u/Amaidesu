@@ -2,11 +2,11 @@
 Amaidesu Agent 模块
 
 提供：
-- ``BaseAgent`` —— 框架对 Agent 的唯一最小契约（协议六面）
+- ``BaseAgent`` —— 框架对 Agent 的唯一最小契约（六个方面）
 - ``AgentManager`` —— 统一注册 / 启动 / 监控 / 重启所有 Agent
 - ``AgentControl`` —— 框架级 pause/resume/shutdown/restart 工具（provider=framework）
 
-## 协议六面（最小契约）
+## 最小契约的六个方面
 
 - 生命周期：start/stop/cleanup + 可重建性
 - 工具提供：list_tools() → 暴露工具

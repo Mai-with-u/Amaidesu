@@ -326,7 +326,7 @@ class EventBus:
 
     async def _call_handler(self, wrapper: HandlerWrapper, event_name: str, data: Any, source: str) -> None:
         """
-        调用事件处理器；异常在此处闭环：ERROR 日志，不向外传播
+        调用事件处理器；异常在此处就地处理：记 ERROR 日志，不向外传播
 
         Args:
             wrapper: 处理器包装器
@@ -367,7 +367,7 @@ class EventBus:
                 f"同步处理会阻塞事件循环，请改为 async def"
             )
 
-        # 创建包装器，自动反序列化。payload 验证失败在此处闭环（数据问题，
+        # 创建包装器，自动反序列化。payload 验证失败在此处就地处理（数据问题，
         # 记日志后放弃本条）；处理器执行异常原样冒泡，由 _call_handler 统一
         # 计数并写日志
         async def typed_wrapper(event_name: str, dict_data: Dict[str, Any], source: str) -> None:

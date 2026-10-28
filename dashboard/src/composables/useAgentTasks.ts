@@ -1,11 +1,11 @@
 /**
- * 目标 Agent 的任务账本视图（进行中 + 已完结）：Agent 页任务板与直播控制台
+ * 目标 Agent 的任务列表视图（进行中 + 已完结）：Agent 页任务板与直播控制台
  * 任务卡条共用的单一事实源。
  *
  * 数据通道：目标就绪/切换时拉一次快照；此后 task.changed 事件计数变化触发
  * 静默刷新（WS 全量订阅已入事件 store，这里只数增量）——但该事件只在任务
  * 状态跃迁时发射，稳态执行期一条都没有，漏接一次（页面开在委派前、WS 断连
- * 且回填失败）账面就会停在旧快照，故另有轻量轮询兜底追平。硬取消走 agents
+ * 且回填失败）快照就会停在旧数据，故另有轻量轮询兜底追平。硬取消走 agents
  * REST，取消前的确认微流程（确认框文案两处消费页同源）也收在本组合式内。
  */
 import { computed, ref, watch, type Ref } from 'vue';
@@ -17,7 +17,7 @@ import { confirmAction } from '@/utils/confirmAction';
 import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
 import type { TaskCard, TaskSnapshotResponse } from '@/types';
 
-/** 静默轮询周期：快照接口是内存账本读取，代价极小 */
+/** 静默轮询周期：快照接口只读后端内存中的任务列表，代价极小 */
 const POLL_INTERVAL_MS = 15000;
 
 /** 任务状态 → 面板可读文案（未知状态原样展示） */
@@ -69,7 +69,7 @@ export function useAgentTasks(target: Ref<string | null>) {
     () => void refresh(true),
   );
 
-  // 目标就绪/切换即拉快照：后开的页面与切换目标的场景都能立刻看到当前账面
+  // 目标就绪/切换即拉快照：后开的页面与切换目标的场景都能立刻看到当前任务列表
   watch(
     target,
     name => {
@@ -86,7 +86,7 @@ export function useAgentTasks(target: Ref<string | null>) {
     stopOnDispose: true,
   });
 
-  /** 硬取消：清追踪 + 账面 cancelled + 通知停手；成败都刷新账面 */
+  /** 硬取消：清除任务追踪、状态置为 cancelled、并通知 Agent 停止执行；成败都刷新列表 */
   async function cancelTask(taskId: string): Promise<void> {
     const name = target.value;
     if (!name) return;

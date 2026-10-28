@@ -56,7 +56,8 @@ def test_replay_whitelist_covers_exact_names_and_dynamic_prefixes() -> None:
 
 
 def test_replay_vocabulary_is_derived_from_live_subscription_vocabulary() -> None:
-    """锁定派生输出全集：实时订阅词汇 − 对应物表 = 回看名单（ADR-039 对齐口径）。"""
+    """锁定派生输出全集：回看事件类型 = 实时订阅词汇 − 已落物表的事件类型
+    （回看名单由实时订阅词汇自动派生，不手工维护，两者保持口径一致）。"""
     expected_types = frozenset(
         {
             # 原 13 条精确名

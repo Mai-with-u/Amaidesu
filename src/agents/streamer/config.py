@@ -66,8 +66,8 @@
 
 设计原则：
 - 组件包内单一权威：所有字段以嵌套子模型承载；中央树仅引用本类。
-- LLM profile 用途名硬编码为 ``planner`` / ``replyer`` / ``summary``，与 model 块
-  重构前的现行 LLMManager 解耦；T12 任务接手后再对齐 profile 池。
+- LLM profile 用途名硬编码为 ``planner`` / ``replyer`` / ``summary``，
+  不随 model 块 LLMManager 的 profile 池结构联动；两者对齐是待办事项。
 """
 
 from __future__ import annotations
@@ -516,7 +516,7 @@ class StreamerConfig(BaseConfig):
     """主播 Agent 完整配置（[agents.streamer] 段及子段）
 
     组件包内单一权威：所有子段都集中在本类下，中央树仅引用本类（agents_schemas
-    不再持有镜像定义）。
+    不重复定义子段）。
     """
 
     # 根段：流程单与决策循环控制

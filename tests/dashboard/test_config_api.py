@@ -60,7 +60,7 @@ def test_get_config_merged_view_masks_secrets_and_hides_retired_limits(client) -
             "infra.toml",
             True,
             lambda d: d["dashboard"]["port"],
-        ),  # infra 归入 restart（ADR-049）
+        ),  # infra 段改动归入 restart（配置目录无热重载通道，infra 改动须重启生效）
         (
             "tools.tools.tasks.poll_interval_ms",
             3000,

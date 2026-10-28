@@ -1,9 +1,9 @@
 # 世界模拟器开发基础设施
 
-> **世界发射器统一（ADR-006 修订版）**：`SimulatorService` 是唯一的模拟消息发射器，三模式切换——
-> `generate`（LLM 生成）/ `replay`（录制回放）/ `off`。旧 `MockCollector`（确定性 JSONL 回放采集器）
-> 已删除，其回放职责由 `mode=replay` 承载。详见 [ADR-006](../decisions/006-simulator-is-dev-infrastructure.md)
-> 及其修订记录。
+> **世界发射器统一**：`SimulatorService` 是唯一的模拟消息发射器，三模式切换——
+> `generate`（LLM 生成）/ `replay`（录制回放）/ `off`；录制回放（原 `MockCollector`
+> 的确定性 JSONL 回放能力）由 `mode=replay` 承载。详见
+> [LLM 模拟器是官方开发基础设施](../decisions/006-simulator-is-dev-infrastructure.md)。
 
 ## 1. 定位与架构位置
 
@@ -129,6 +129,6 @@ replay 模式的录制日期可在启动时通过配置 `replay_date` 指定，�
 
 ## 相关文档
 
-- [ADR-006：LLM 模拟器是官方开发基础设施](../decisions/006-simulator-is-dev-infrastructure.md) — 定位与修订记录
+- [LLM 模拟器是官方开发基础设施](../decisions/006-simulator-is-dev-infrastructure.md) — 定位与修订记录
 - [事件系统](../architecture/event-system.md) — `room.message.*` / `streamer.speech` 事件表
 - [数据流规则](../architecture/data-flow.md) — 模拟数据在数据面的二等地位

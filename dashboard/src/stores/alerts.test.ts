@@ -1,6 +1,6 @@
 // alerts store 告警收件箱的测试
 //
-// 覆盖：入账（core.error / tts.utterance.failed / game.attention_required /
+// 覆盖：收录（core.error / tts.utterance.failed / game.attention_required /
 // 无关事件过滤）、相同 title+source 60 秒窗口去重合并（累加计数、刷新时刻、
 // 重新置未读）、窗口外不再合并、滚动上限 200 条裁最旧、未读数派生、
 // 单条已读与全部已读。

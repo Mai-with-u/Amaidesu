@@ -55,7 +55,7 @@ tests/
 ### 文件组织与共享替身
 
 - **按域合并，不开微文件**：同域内主题相近的用例合并到少数文件（如事件域按总线 / 注册表 / 载荷 / 拦截器各一文件），不"一个类一个测试文件"；新增用例先找现有文件并入，主题确实独立才新建。
-- **共享替身与构造器进 `helpers.py` / `fakes.py`**：跨测试文件复用的替身（fake）、工厂构造器收拢到该域的 `helpers.py` 或 `fakes.py`，写测试前先查该域现有文件复用，勿复制装配样板；pytest fixture 仍按作用域放 `conftest.py`（见 §7.2）。
+- **共享替身与构造器进 `helpers.py` / `fakes.py`**：跨测试文件复用的替身（fake）、工厂构造器收拢到该域的 `helpers.py` 或 `fakes.py`，写测试前先查该域现有文件复用，勿复制装配样板；pytest fixture 仍按作用域放 `conftest.py`（见"Fixtures 共享"一节的"子域共享"）。
 - **合并 / 移动测试文件后同步文档**：本文档与其他指南点名的测试路径随之更新，不留指向不存在文件的引用。
 
 ## 3. 测试示例
@@ -125,7 +125,7 @@ async def test_event_bus_error_isolation(event_bus):
     event_bus.on("test.event", failing_handler, RoomMessagePayload)
     event_bus.on("test.event", normal_handler, RoomMessagePayload)
 
-    # 处理器异常在 EventBus 内部闭环（计数 + ERROR 日志），不向外传播
+    # 处理器异常由 EventBus 内部处理（计数 + ERROR 日志），不向外传播
     await event_bus.emit("test.event", RoomMessagePayload(
         message_type="danmaku", user=RoomMessageUser(id="u1", name="观众A"), content="test"
     ), source="test")
@@ -138,7 +138,7 @@ async def test_event_bus_error_isolation(event_bus):
 ### 3.2 采集器测试
 
 ```python
-"""测试 BaseCollector / CollectorManager（v2 采集器框架）
+"""测试 BaseCollector / CollectorManager（采集器框架）
 
 运行: uv run pytest tests/modules/collectors/ -v
 """
@@ -193,7 +193,7 @@ def test_register_dedup(manager, sample_collector):
 
 
 async def test_collector_emit_room_message(sample_collector):
-    """v2：Collector 主动推语义域事件（room.message.danmaku 等）"""
+    """Collector 主动推语义域事件（room.message.danmaku 等）"""
     bus = _FakeEventBus()
     sample_collector.set_event_bus(bus)
 
@@ -269,7 +269,7 @@ async def test_intercept_rate_limited(interceptor):
 ```
 ### 3.4 Mock 对象与桩
 
-v2 测试通常在测试文件内定义小型桩，避免跨文件 Mock 依赖。常见两类：
+测试通常在测试文件内定义小型桩，避免跨文件 Mock 依赖。常见两类：
 
 ```python
 # 在你的测试文件中定义（贴近 tests/modules/collectors/ 现有风格）
@@ -525,7 +525,7 @@ def test_rate_limit_interceptor_creation():
 
 ### 6.3 架构测试
 
-验证架构约束（v2 四层依赖方向 + 事件流约束）。`tests/architecture/` 下两组：
+验证架构约束（四层依赖方向 + 事件流约束）。`tests/architecture/` 下两组：
 
 ```python
 # tests/architecture/test_dependency_direction.py
@@ -549,7 +549,7 @@ def test_tool_does_not_subscribe_to_input_events(self):
 - 在 `src/modules/config/upgrade.py` 注册新钩子时，必须在 `CASES` 表补对应 Case（迁移测试是配置数据变换硬约束的落地形态，见 [AGENTS.md](../../AGENTS.md) 配置与存储变更节）；
 - 复杂钩子的额外场景（多步、跨文件、边界值）在该文件内以独立测试补充。
 
-不再为每个钩子新建独立迁移测试文件；新增 Case 以文件内现有 Case 为模板。
+迁移测试统一收在该文件内，不为每个钩子新建独立测试文件；新增 Case 以文件内现有 Case 为模板。
 
 ## 7. Fixtures 共享
 
@@ -571,7 +571,7 @@ async def event_bus() -> EventBus:
 
 pytest fixture 按作用域放 `conftest.py`：全局在 `tests/conftest.py`，子域共享时在该域新建（现有如 `tests/dashboard/conftest.py`、`tests/modules/llm/conftest.py`）。
 
-非 fixture 的共享替身（fake）与工厂构造器**不放 conftest**，放该域 `helpers.py` / `fakes.py` 供同域各测试文件 import 复用（示例：`tests/modules/llm/fakes.py`、`tests/modules/mcp/fakes.py`、`tests/config/helpers.py`），规范见 §2"文件组织与共享替身"。
+非 fixture 的共享替身（fake）与工厂构造器**不放 conftest**，放该域 `helpers.py` / `fakes.py` 供同域各测试文件 import 复用（示例：`tests/modules/llm/fakes.py`、`tests/modules/mcp/fakes.py`、`tests/config/helpers.py`），规范见"测试目录结构"一节的"文件组织与共享替身"。
 
 ## 8. 调试测试
 
@@ -606,7 +606,7 @@ uv run pytest tests/test_file.py::test_debug -v -s
 
 ### 9.1 异步测试偶发超时
 
-异步测试偶发超时先分清两类：**结果没等到**（fire-and-forget 派发慢于固定睡眠）改用 §5.3 的确定性等待（EventBus 派发用 `wait_until_drained()`，其余条件用带超时轮询）；**操作真的慢**则放宽该用例自己的等待上限（按全量回归满载估算余量），不要为迁就测试去压缩生产路径的时序参数。
+异步测试偶发超时先分清两类：**结果没等到**（fire-and-forget 派发慢于固定睡眠）改用"测试最佳实践"一节"异步测试与结果断言"中的确定性等待（EventBus 派发用 `wait_until_drained()`，其余条件用带超时轮询）；**操作真的慢**则放宽该用例自己的等待上限（按全量回归满载估算余量），不要为迁就测试去压缩生产路径的时序参数。
 
 ### 9.2 Fixture 循环依赖
 

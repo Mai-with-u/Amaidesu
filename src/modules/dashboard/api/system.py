@@ -47,7 +47,7 @@ _CHANGELOG_PATH = Path(__file__).resolve().parents[4] / "CHANGELOG.md"
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
 
-# TTS 引擎观测面契约（只读 get_stats）；健康墙观测缺席不报错，required=False
+# TTS 引擎观测接口契约（只读 get_stats）；健康墙观测缺席不报错，required=False
 # 档按 None 透传，由 _build_tts_items 降级为 unknown 项
 TtsObservationDep = Annotated[Optional[TtsObservation], Depends(server_component("tts_engine", required=False))]
 
@@ -138,7 +138,7 @@ async def health_check(
 
     ``status``/``timestamp_ms`` 回答"进程活着"；``domains`` 只读探查各域
     既有管理器/注册表汇总连接态（TTS 引擎、工具提供者、采集器、Agent）。
-    单域探查失败只降级为 unknown 项，不影响整体响应——健康墙是观测面，
+    单域探查失败只降级为 unknown 项，不影响整体响应——健康墙是只读观测，
     不能因观测本身故障而 500。
     """
     now = now_ms()
@@ -156,7 +156,7 @@ def _build_health_domains(
 ) -> Dict[str, list[DomainHealthItem]]:
     """按域聚合连接态；每域独立兜底，探查异常降级为该域一个 unknown 项。"""
     builders = {
-        # TTS 域只依赖观测面依赖（endpoint 注入），不读 server.tts_engine
+        # TTS 域只依赖观测接口依赖（endpoint 注入），不读 server.tts_engine
         "tts": lambda s: _build_tts_items(tts_observation),
         "avatar": lambda s: _build_provider_items(s, {"avatar"}),
         "obs": lambda s: _build_provider_items(s, {"studio"}),
@@ -213,7 +213,7 @@ def _build_maibot_items(server: "DashboardServer") -> list[DomainHealthItem]:
 def _build_provider_items(server: "DashboardServer", categories: set[str] | None) -> list[DomainHealthItem]:
     """工具提供者域连接态。``categories`` 为 None 时收其余全部提供者。
 
-    连接态读取口径：provider 观测面契约 ``connection_summary()``，Provider
+    连接态读取口径：provider 观测接口契约 ``connection_summary()``，Provider
     对象经注册表公开访问器 ``providers()`` 列举，不触碰私有成员。
     """
     registry = server.tool_registry
@@ -253,7 +253,7 @@ def _provider_health_item(provider: Any) -> DomainHealthItem:
 
 
 def _provider_connected(provider: Any) -> bool | None:
-    """只读探查 provider 连接态：唯一口径是观测面契约 ``connection_summary()``。
+    """只读探查 provider 连接态：唯一口径是观测接口契约 ``connection_summary()``。
 
     返回三值：True / False / None（None = 平台未暴露连接态或契约读取失败，
     健康墙按 unknown 渲染）。迁移未完成的非契约 Provider（未继承

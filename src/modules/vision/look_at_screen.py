@@ -14,8 +14,8 @@
         → TextReader.read(image_bytes, question=...)     (async; str 或空)
         → ToolExecutionResult (text content + image block + structured_content)
 
-落地形态：
-- 后端注入即可用：测试替身（见 tests/modules/vision/fakes.py）跑通感知-推进闭环
+装配形态：
+- 后端注入即可用：测试以替身后端（见 tests/modules/vision/fakes.py）跑通完整的采集-识别流程
 - 生产环境：注入 ``MssScreenCapture`` + ``LlmVisionTextReader``（组合根 ``main.py``）
 - 零参 ``invoke(arguments={})`` 必须可用（``text_adv`` Agent 的调用形态）
 

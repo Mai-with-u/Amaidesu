@@ -135,7 +135,7 @@ async def get_event_bus_stats(
 SubtitleServiceDep = Annotated[Any, Depends(server_component("subtitle_service", missing_detail="字幕服务未注入"))]
 # TTS 引擎完整执行契约（合成入口 handle_speech / debug_synthesize），装配缺席 503
 TtsEngineDep = Annotated[Any, Depends(server_component("tts_engine", missing_detail="TTS 引擎未装配"))]
-# TTS 引擎观测面契约（只读 get_stats），装配缺席 503（/tts/status 的历史语义）
+# TTS 引擎观测接口契约（只读 get_stats），装配缺席 503（/tts/status 的历史语义）
 TtsObservationDep = Annotated[TtsObservation, Depends(server_component("tts_engine", missing_detail="TTS 引擎未装配"))]
 
 
@@ -278,7 +278,7 @@ async def get_tts_status(
 ) -> TtsStatusResponse:
     """TTS 引擎状态：透传 ``get_stats()``（name/is_connected/计数等）。
 
-    ``engine`` 按观测面协议 ``TtsObservation`` 收窄：装配边界已保证在册
+    ``engine`` 按观测接口协议 ``TtsObservation`` 收窄：装配边界已保证在册
     引擎实现 ``get_stats``，这里只需兜读取异常（统计读失败按空 stats 展示）。
     """
     try:

@@ -219,11 +219,11 @@ class BaseToolProvider(ABC):
         return None
 
     def guide_for(self, agent_name: str) -> str:
-        """工具面使用说明（可选，默认无）：这组工具合起来该怎么用。
+        """工具组使用说明（可选，默认无）：这组工具合起来该怎么用。
 
         粒度粗于单个工具的 ``description``：单个说明讲"这个工具做什么"，
-        工具面说明讲"这组工具之间的协议"。调用方 Agent 拼装自己的系统提示词时
-        经 ``ToolRegistry.guides(for_agent=...)`` 收集对它可见的各工具面说明。
+        工具组说明讲"这组工具之间的协议"。调用方 Agent 拼装自己的系统提示词时
+        经 ``ToolRegistry.guides(for_agent=...)`` 收集对它可见的各工具组说明。
         典型用途是游戏 Agent 告诉主播这款游戏怎么玩：是先委派再等上报，还是
         直接按键遥控、没有后台任务。``agent_name`` 是读说明的 Agent 注册名，
         说明可按读者不同而不同；返回空串表示没有说明。
@@ -241,7 +241,7 @@ class BaseToolProvider(ABC):
         return True
 
     def connection_summary(self) -> Dict[str, Any]:
-        """连接态观测摘要（观测面公共契约，Dashboard 等运营面只消费此方法）。
+        """连接态观测摘要（观测接口公共契约，Dashboard 等运营端只消费此方法）。
 
         返回 ``{"is_connected": bool | None, "stats": dict}``：
 
@@ -326,7 +326,7 @@ class ConnectionToolProvider(BaseToolProvider):
     """维护外部连接的 Provider 中间层：承载"连接态 → 工具表换血"公共行为。
 
     适用于工具只在连接建立后才可用、断开即整体摘除的 Provider（如 VTS /
-    Warudo / OBS 的 avatar/studio 工具面）。子类只负责两件事：
+    Warudo / OBS 的 avatar/studio 工具组）。子类只负责两件事：
 
     - 在自身连接检测点（连接成功 / 断开检测 / 手动 connect-disconnect /
       invoke 捕获连接类异常）调用 ``mark_connected`` / ``mark_disconnected``

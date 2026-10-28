@@ -24,7 +24,7 @@
 
 ## 架构与设计
 
-- [v2 架构叙事](architecture/v2-architecture.md)（先读这篇）
+- [架构总览](architecture/v2-architecture.md)（先读这篇）
 - [数据流边界规则](architecture/data-flow.md)
 - [事件系统](architecture/event-system.md)
 - [事件命名](architecture/event-naming.md)

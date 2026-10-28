@@ -2,7 +2,7 @@
 
 > 本文档是主播跨场次记忆的权威设计说明。
 > 主播必须自己记住、现场又推不出来的东西只有两样：**自己做过什么**（场次回顾）与**常客是谁**（观众画像）。两样都在收播时整理，开播与决策时按场次序号或观众身份直接取用。
-> 决策依据见 [ADR-042（场次回顾 + 观众画像）](../decisions/042-streamer-memory-recap-and-roster.md) 与 [ADR-029（身份复合键与货币口径）](../decisions/029-viewer-identity-key-and-currency-unit.md)。当场的工作记忆（时间线、前情提要）见 [主播上下文构成](streamer-context.md)。
+> 决策依据见 [场次回顾 + 观众画像](../decisions/042-streamer-memory-recap-and-roster.md) 与 [身份复合键与货币口径](../decisions/029-viewer-identity-key-and-currency-unit.md)。当场的工作记忆（时间线、前情提要）见 [主播上下文构成](streamer-context.md)。
 
 ## 设计公理
 
@@ -79,4 +79,4 @@ flowchart LR
 
 - 不做自由文本或语义检索；不做 embedding。
 - 不在直播进行中更新印象：本场新形成的认识靠对话上下文本身，下场才进注入段。
-- 不跨平台聚合：不同平台的观众始终是不同的人；同一平台内的账号 ID 与开放平台 ID 由观众表关联到同一人（ADR-047）。
+- 不跨平台聚合：不同平台的观众始终是不同的人；同一平台内的账号 ID 与开放平台 ID 由观众表关联到同一人（见 [观众身份映射](../decisions/047-viewer-identity-mapping.md)）。

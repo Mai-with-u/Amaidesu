@@ -1,11 +1,11 @@
 """流程单控制动作的统一分发器（human / agent 两条通道共享）。
 
-Dashboard 手动控制与主播 Agent 的 LLM 工具此前各自维护一份"动作名 + by +
-参数 → 状态机方法"的分发表与参数校验，且校验已分叉（insert 的 payload 校验
-只在 human 侧、append 的 expected_ms 下界只在 agent 侧）。本模块把动作分发、
-参数校验与结构化拒绝下沉为一份事实源：各动作的参数要求与状态机白名单契约
-对齐（``append`` 仅 Agent、``insert`` / ``restart`` 仅 human/system），任何
-通道对同一动作得到同一强度的校验。
+Dashboard 手动控制与主播 Agent 的 LLM 工具两条通道共用本模块的
+"动作名 + by + 参数 → 状态机方法"分发表与参数校验，任何通道对同一动作
+得到同一强度的校验（``insert`` 的 payload 校验、``append`` 的 ``expected_ms``
+下界对两侧一致生效）。动作分发、参数校验与结构化拒绝集中在这一份
+事实源：各动作的参数要求与状态机白名单契约
+对齐（``append`` 仅 Agent、``insert`` / ``restart`` 仅 human/system）。
 
 通道适配器（``presentation.apply_rundown_control`` 出三元组、
 ``tools/rundown_tool`` 出 JSON 观察）只做结果形状翻译，不再各自分发。
@@ -105,7 +105,7 @@ def _build_append_segment(payload: Any) -> RundownSegment:
     """把 append 的 ``segment`` dict 装成环节对象；参数形态不合法抛 ``AppendParamError``。
 
     ``seg_id`` 是 LLM 工具契约的字段名，模型层字段叫 ``id``，在此换装；
-    ``expected_ms`` 下界在此统一拦（此前只在 agent 工具侧校验）。
+    ``expected_ms`` 下界在此统一拦（human / agent 两侧通道同强度生效）。
     """
     if not isinstance(payload, dict):
         raise AppendParamError("segment_not_object")

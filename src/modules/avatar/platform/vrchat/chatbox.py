@@ -89,7 +89,7 @@ class VRChatChatboxBackend:
             return
         try:
             self._send_text(text)
-        except Exception as exc:  # noqa: BLE001 - 聊天框失败不影响其他字幕面
+        except Exception as exc:  # noqa: BLE001 - 聊天框失败不影响其他字幕后端
             self.logger.error(f"发送聊天框失败: {type(exc).__name__}: {exc}", exc=True)
         self._last_sent_at = time.monotonic()
 

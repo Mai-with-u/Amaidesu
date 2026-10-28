@@ -464,13 +464,13 @@ const highlightedRoundId = ref('');
 
 // Agent 控制面（/api/v1/agents）：运行状态 + pause/resume/shutdown
 
-// 运行状态名册：name → AgentInfo（进页面拉一次，此后轮询 + 操作后刷新）
+// 运行状态表：name → AgentInfo（进页面拉一次，此后轮询 + 操作后刷新）
 const agentStates = ref<Record<string, AgentInfo>>({});
 const stateRefreshing = ref(false);
 
 // 后台轮询静默失败（不打扰用户），手动刷新失败才弹错。
 // 8s 状态轮询随激活态启停（useKeepAlivePolling），轮询走静默形态、
-// 首屏名册由 onMounted 的显式拉取负责
+// 首屏列表由 onMounted 的显式拉取负责
 const STATE_POLL_INTERVAL_MS = 8000;
 useKeepAlivePolling(refreshAgentStates, STATE_POLL_INTERVAL_MS, { args: [true] });
 
@@ -638,7 +638,7 @@ function relativeTime(timestampMs: number): string {
   return relativeTimeLabel(nowMs.value, timestampMs);
 }
 
-// 任务区：委派任务卡（进行中账本快照 + 已完结事件聚合，按执行 Agent 过滤）。
+// 任务区：委派任务卡（进行中任务列表快照 + 已完结事件聚合，按执行 Agent 过滤）。
 // 数据流在 useAgentTasks 共享组合式（直播控制台任务卡条同源）；确认框留本页
 const {
   runningTasks,

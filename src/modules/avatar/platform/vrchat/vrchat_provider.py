@@ -144,7 +144,7 @@ class VRChatProvider(BaseToolProvider):
         self._has_started = False
         self.render_count = 0
         self.error_count = 0
-        # 被动半挂件句柄（setup 时逐项 attach，cleanup 时一次全量退订）
+        # 事件订阅挂载项句柄（setup 时逐项 attach，cleanup 时一次全量退订）
         self._bindings: Optional[AvatarBindings] = None
 
     # ===== ToolProvider 协议 =====
@@ -225,7 +225,7 @@ class VRChatProvider(BaseToolProvider):
         if self._has_started:
             return
         await self._connect()
-        # 被动半事件订阅：情绪反射（streamer.speech；set_expression 当前不渲染
+        # 事件订阅（被动响应业务事件）：情绪反射（streamer.speech；set_expression 当前不渲染
         # 情绪面，订阅保持契约一致性，未来接入表情通道无需改装配）
         self._bindings = AvatarBindings(self.event_bus, self.logger)
         self._bindings.attach_emotion_reflection(self)

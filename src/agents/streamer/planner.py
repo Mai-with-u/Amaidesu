@@ -150,7 +150,7 @@ class PlannerEnv:
     """Planner 运行环境：构造期一次性注入的迟绑定依赖集合。
 
     Provider 类字段全部可选，``None`` 即对应能力降级（参考段缺段等降级
-    语义与原先逐项 bind 缺席时一致）。``reply_provider_factory`` 持工厂
+    语义等同于逐项注入时该依赖缺席）。``reply_provider_factory`` 持工厂
     而非实例——ReplyToolProvider 依赖 Agent start 期才构造的实例，工厂
     化解生命周期错位，Planner 在首次取用时才解析。
     """

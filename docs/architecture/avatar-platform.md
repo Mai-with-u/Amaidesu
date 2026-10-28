@@ -57,7 +57,7 @@ TTS 播放器把正在播放的音频实时递给共享口型分析器；分析�
 
 ## 换平台不用改主播代码
 
-主播 Agent 的代码里搜不到任何平台名——这是有验收标准的硬约束：`grep src/agents/streamer/` 必须零命中 `vts` / `warudo` / `vrchat`。主播只发布"我说了一句话，情绪是 X"这样的事件；怎么把它变成具体平台的动作，是适配器自己的事。情绪到平台参数的翻译知识全部住在适配器里（见 [ADR-023](../decisions/023-avatar-platform-agnostic-boundary.md)）。
+主播 Agent 的代码里搜不到任何平台名——这是有验收标准的硬约束：`grep src/agents/streamer/` 必须零命中 `vts` / `warudo` / `vrchat`。主播只发布"我说了一句话，情绪是 X"这样的事件；怎么把它变成具体平台的动作，是适配器自己的事。情绪到平台参数的翻译知识全部住在适配器里（见 [平台无关边界](../decisions/023-avatar-platform-agnostic-boundary.md)）。
 
 新增一个平台的验收清单：
 
@@ -78,7 +78,7 @@ TTS 播放器把正在播放的音频实时递给共享口型分析器；分析�
 | 自动小动作 | idle 微动 | 眨眼 / 移眼 / 点头等 | 无 |
 | 字幕显示面 | 无 | 无 | 头顶聊天框（可关） |
 
-平台不自建字幕源：字幕由独立的字幕模块统一选源（来龙去脉见 [ADR-025](../decisions/025-subtitle-single-source.md)）。平台自带的显示面（目前只有 VRChat 头顶聊天框）登记为字幕服务的又一个后端，跟随同一个字幕源；聊天框单条最多 144 字，两条之间至少隔 `chatbox_min_interval_ms`（VRChat 发得太快会冷却），间隔内只发最新一条。
+平台不自建字幕源：字幕由独立的字幕模块统一选源（来龙去脉见 [字幕单一来源](../decisions/025-subtitle-single-source.md)）。平台自带的显示面（目前只有 VRChat 头顶聊天框）登记为字幕服务的又一个后端，跟随同一个字幕源；聊天框单条最多 144 字，两条之间至少隔 `chatbox_min_interval_ms`（VRChat 发得太快会冷却），间隔内只发最新一条。
 
 VRChat 的 OSC 接口里，能写的只有形象作者自定义的参数（`/avatar/parameters/<名字>`）和与形象无关的聊天框（`/chatbox/*`）、移动输入（`/input/*`）；口型、手势等内置参数全部只读。接入步骤见[虚拟形象接入指南](../guides/avatar.md#vrchat)。
 
@@ -102,7 +102,7 @@ Warudo 侧由场景里的蓝图接住 Amaidesu 发来的 WebSocket 动作（`{"a
 
 不需要。默认配置用的是 VTS 内置参数（控制头部角度、张嘴、眉毛等的通用参数），任何模型都接受这些参数，换模型零操作。在 VTS 界面里换模型后，程序检测到模型变化，会自动重新读取新模型的热键清单、参数范围等数据。
 
-需要注意："参数写入成功"和"模型上看得出效果"是两回事。模型作者制作模型时把哪些参数绑到了哪个部位，VTS 的接口查不到。默认参数按 17 个真实模型的实测数据选取（绝大多数模型都绑定了这些参数），但个别模型上某个表情可能看不出来——遇到这种情况，改配置里的参数名即可（实测依据与配置结构见 [ADR-028](../decisions/028-avatar-domain-config-graduation.md)）。
+需要注意："参数写入成功"和"模型上看得出效果"是两回事。模型作者制作模型时把哪些参数绑到了哪个部位，VTS 的接口查不到。默认参数按 17 个真实模型的实测数据选取（绝大多数模型都绑定了这些参数），但个别模型上某个表情可能看不出来——遇到这种情况，改配置里的参数名即可（实测依据与配置结构见 [虚拟形象配置文件](../decisions/028-avatar-domain-config-graduation.md)）。
 
 ## VTS 连接管理
 
@@ -110,7 +110,7 @@ Warudo 侧由场景里的蓝图接住 Amaidesu 发来的 WebSocket 动作（`{"a
 - **后台检查**：每 5 秒一次——连接断了就重连；连着就检查健康状况、是否换了模型
 - **请求排队**：所有对 VTS 的请求串行发送（底层库的限制：并发请求会互相抢响应）
 
-工具设计的原则与取舍见 [ADR-026](../decisions/026-avatar-tool-surface-contract.md)；口型通道的设计见 [ADR-024](../decisions/024-lipsync-frame-channel.md)。
+工具设计的原则与取舍见 [虚拟形象工具约定](../decisions/026-avatar-tool-surface-contract.md)；口型通道的设计见 [口型帧级通道](../decisions/024-lipsync-frame-channel.md)。
 
 ## 配置与装配
 
@@ -132,7 +132,7 @@ enabled = ["vts"]        # 启用哪些平台，合法值：vts / warudo / vrcha
 
 ## 相关文档
 
-- 架构决策：[ADR-023 平台无关边界](../decisions/023-avatar-platform-agnostic-boundary.md) / [ADR-024 口型帧级通道](../decisions/024-lipsync-frame-channel.md) / [ADR-025 字幕单一源](../decisions/025-subtitle-single-source.md) / [ADR-026 虚拟形象工具约定](../decisions/026-avatar-tool-surface-contract.md) / [ADR-028 虚拟形象配置文件](../decisions/028-avatar-domain-config-graduation.md)
+- 架构决策：[平台无关边界](../decisions/023-avatar-platform-agnostic-boundary.md) / [口型帧级通道](../decisions/024-lipsync-frame-channel.md) / [字幕单一来源](../decisions/025-subtitle-single-source.md) / [虚拟形象工具约定](../decisions/026-avatar-tool-surface-contract.md) / [虚拟形象配置文件](../decisions/028-avatar-domain-config-graduation.md)
 - [事件系统](event-system.md) — 主播发言、TTS 播放事件的语义
 - [数据流与边界规则](data-flow.md) — 情绪如何到达虚拟形象、口型音频从哪里来
 - [v2 架构叙事](v2-architecture.md) — 工具类组件的判据

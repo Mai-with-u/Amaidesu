@@ -217,7 +217,7 @@ const tagPlaceholder = computed(() =>
 );
 
 // 每项的稳定标识：进入列表时分配自增 id，此后删除/重排不变——展开态、错误态
-// 等「项的本地状态」按 id 记账，删除中间项后其余项的状态自然保持原位，无需平移
+// 等「项的本地状态」都按项 id 记录，删除中间项后其余项的状态自然保持原位，无需平移
 const itemIds = ref<number[]>([]);
 let nextItemId = 0;
 function allocateItemId(): number {
@@ -225,10 +225,10 @@ function allocateItemId(): number {
   return nextItemId;
 }
 
-// 展开状态（按项 id 记账；重建列表时默认展开第一项）
+// 展开状态（按项 id 记录；重建列表时默认展开第一项）
 const expandedIds = ref<Set<number>>(new Set());
 
-/** 高级参数折叠状态（按项 id 记账；x-ui-advanced 字段收进此处，默认收起） */
+/** 高级参数折叠状态（按项 id 记录；x-ui-advanced 字段收进此处，默认收起） */
 const advancedIds = ref<Set<number>>(new Set());
 
 function toggleAdvanced(id: number): void {
@@ -287,7 +287,7 @@ const originalItems = computed<unknown[]>(() => {
   return Array.isArray(props.originalValue) ? props.originalValue : [];
 });
 
-/** 对象/数组项的 JSON 展示串和错误标记：展示串与 items 索引对齐，错误标记按项 id 记账。 */
+/** 对象/数组项的 JSON 展示串和错误标记：展示串与 items 索引对齐，错误标记按项 id 记录。 */
 const jsonDisplays = ref<string[]>([]);
 const jsonErrors = ref<Record<number, boolean>>({});
 
@@ -368,7 +368,7 @@ function addItem() {
   handleUpdate();
 }
 
-// 移除项：本地状态按 id 记账，删掉对应条目即可，其余项状态不受影响
+// 移除项：本地状态按项 id 记录，删掉对应条目即可，其余项状态不受影响
 function removeItem(id: number) {
   const index = itemIds.value.indexOf(id);
   if (index === -1) return;
@@ -391,7 +391,7 @@ function handleUpdate() {
   emit('change');
 }
 
-/** JSON 项编辑：解析失败时保留上一次合法值，仅展示错误提示（错误标记按项 id 记账）。 */
+/** JSON 项编辑：解析失败时保留上一次合法值，仅展示错误提示（错误标记按项 id 记录）。 */
 function handleJsonEdit(index: number) {
   const text = jsonDisplays.value[index] ?? '';
   const id = itemIds.value[index];

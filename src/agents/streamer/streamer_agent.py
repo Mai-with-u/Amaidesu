@@ -503,7 +503,7 @@ class StreamerAgent(BaseAgent):
         self._speech_gate = SpeechGate(window=config.speech_gate_window, ratio=config.speech_gate_ratio)
 
         # 嘴（Agent 内部件，代码直连）：游戏里出事时不经 Planner 当场出一句短反应。
-        # 注入替身优先；否则开关关闭时不构造，所有路径与原来一致
+        # 注入替身优先；开关关闭时不构造，关闭与替身缺席路径行为一致（不说话）
         self._mouth: Optional[Mouth] = None
         if mouth is not None:
             self._mouth = mouth
@@ -1101,8 +1101,8 @@ class StreamerAgent(BaseAgent):
     ) -> None:
         """``room.message.enter`` 回调：记 RoomState 进房名单（限频去重在 RoomState 内）。
 
-        主播原先完全看不到观众进房（观众数协议无源恒 0，做不了人数门槛），
-        名单经【房间活跃度】行进决策上下文，供欢迎话术顺口点名。
+        观众进房名单经【房间活跃度】行进决策上下文，供欢迎话术顺口点名。
+        （观众数协议无源恒 0，人数门槛做不了；进房名单是唯一的观众到场景来源。）
         """
         del event_name, source
         self._room_state.record_enter(payload.user.id, payload.user.name, now_ms=payload.timestamp_ms)

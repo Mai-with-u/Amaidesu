@@ -610,7 +610,8 @@ async def create_app_components(
         # tts_engine 是否在位为判据，跟随播放事件 / 派发直出两模式互斥，
         # 组合根永远传入 subtitle_service，不做参数塑形。
 
-        # 思考流旁路 hub（ADR-008；观察面专用）：Agent 装配先于 dashboard 启动，
+        # 思考流旁路 hub（观察面专用：只读通道，把 Agent 思考流增量推给 dashboard
+        # 展示，不参与决策回路）：Agent 装配先于 dashboard 启动，
         # ws 通道延迟绑定（dashboard 就绪后 attach_ws）；未绑定期间 delta 丢弃。
         # 配置从 [agents.streamer.thinking_stream] 子段读取（嵌套结构）。
         _streamer_sub = agents_config.get("streamer", {}) if isinstance(agents_config, dict) else {}
@@ -620,7 +621,7 @@ async def create_app_components(
             buffer_max=int(_thinking_sub.get("buffer_max", 400) or 400),
         )
 
-        # --- 通用任务基建（[tools.tasks] 段读取，缺省用默认节拍；ADR-013）---
+        # --- 通用任务基建（[tools.tasks] 段读取，缺省用默认节拍；支撑跨轮委托的异步任务跟踪）---
         # 记录表挂事件总线（task.changed 广播）；跟踪循环与 Agent 生命周期同步启停。
         _tools_cfg_tmp = (config.get("tools") or {}) if isinstance(config, dict) else {}
         task_ledger = TaskLedger(event_bus=event_bus)
@@ -1425,8 +1426,8 @@ async def run_shutdown(
         logger.info("StorageLedger 已停止")
 
     # 工具熔断器探活：先停 monitor 循环（不再触发新的 recover_tool），
-    # 再关闭 MCP stdio 子进程（修停机泄漏——``close_mcp_providers`` 此前
-    # 仅导出未被调用，MCP server 子进程会随 Python 进程一起被强杀）。
+    # 再关闭 MCP stdio 子进程（停机收尾：``close_mcp_providers`` 负责关闭
+    # MCP server 子进程，跳过它会随 Python 进程一起被强杀）。
     if task_tracker is not None:
         await safe_log(task_tracker.stop(), "TaskTracker.stop")
 

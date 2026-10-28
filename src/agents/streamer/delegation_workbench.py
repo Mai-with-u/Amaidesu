@@ -9,7 +9,7 @@
 - 状态迁移："accepted 才替换同一执行者的旧目标""delivered 才记补充要求"
   等规则长在这里，不再散在工具调用流的名字特判分支里
 
-Planner 收缩为薄 ReAct 循环：名字命中 :meth:`handles` 的调用整体委托给
+Planner 只保留薄 ReAct 循环：名字命中 :meth:`handles` 的调用整体委托给
 :meth:`handle`，其余工具仍走 Planner 的通用调用路径。
 """
 

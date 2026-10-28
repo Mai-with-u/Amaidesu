@@ -120,7 +120,7 @@ class TTSProvider(Protocol):
 
 @runtime_checkable
 class TtsObservation(Protocol):
-    """TTS 引擎观测面协议（结构类型，``@runtime_checkable``）。
+    """TTS 引擎观测接口协议（结构类型，``@runtime_checkable``）。
 
     回答"TTS 引擎怎么报告健康"——dashboard 等只读消费方只需引擎暴露
     ``get_stats()`` 统计摘要，不需要也不应该拿到 ``handle_speech`` 这

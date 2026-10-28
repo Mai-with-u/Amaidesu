@@ -83,7 +83,7 @@ enabled = true
 
 ### 4. 观众命令与委派
 
-text_adv 是**遥控型**游戏 Agent：不接收 `framework_delegate` 委派，主播直接调它的四个工具；主播提示词里的【当前游戏的玩法】由它的工具面说明自动拼出，换游戏不用改提示词（两种形态的定案见 [ADR-043](../decisions/043-game-agent-interaction-shapes.md)）。观众命令要直接驱动它时，在 `[agents.streamer.command]` 的 `tool_mappings` 里把命令映射为一次固定的工具调用：
+text_adv 是**遥控型**游戏 Agent：不接收 `framework_delegate` 委派，主播直接调它的四个工具；主播提示词里的【当前游戏的玩法】由它的工具面说明自动拼出，换游戏不用改提示词（两种形态的定案见 [游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)）。观众命令要直接驱动它时，在 `[agents.streamer.command]` 的 `tool_mappings` 里把命令映射为一次固定的工具调用：
 
 ```toml
 [[agents.streamer.command.tool_mappings]]

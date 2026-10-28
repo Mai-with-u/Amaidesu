@@ -82,7 +82,7 @@ subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
     StreamerAgent -.->|emotion 直接 invoke| Other
 ```
 
-> 图例说明：实线箭头是当前主链路；虚线箭头是辅助通道（reply 产出的发言入队、TTS 生命周期事件广播、emotion 直调）。Planner 的全部工具调用（含收尾的 streamer_reply）都经 `registry.invoke`——ReAct 循环内同步持有返回值；`tool.result.<name>` 事件是终点广播，供 Dashboard 溯源，Planner 不订阅。reply 结果的 speech 字段由 StreamerAgent 解析后经 UtteranceQueue 串行送入装配期注入的 `tts_engine` 实例（`build_tts_infrastructure` 按 `infra.toml [tts].provider` 单选构造后直接注入 StreamerAgent），由其 `handle_speech(text, utterance_id)` 完成合成 + 播放——不再经 ToolRegistry；emotion 字段由 StreamerAgent 解析后**直接 invoke** `vts_set_expression` 工具，不经事件；TTS 引擎自身（基础模块）播放生命周期发布 `tts.utterance.*` 三事件。虚拟形象口型同步不走数据流通道（见文末"通信机制选型"末段）。
+> 图例说明：实线箭头是当前主链路；虚线箭头是辅助通道（reply 产出的发言入队、TTS 生命周期事件广播、emotion 直调）。Planner 的全部工具调用（含收尾的 streamer_reply）都经 `registry.invoke`——ReAct 循环内同步持有返回值；`tool.result.<name>` 事件是终点广播，供 Dashboard 溯源，Planner 不订阅。reply 结果的 speech 字段由 StreamerAgent 解析后经 UtteranceQueue 串行送入装配期注入的 `tts_engine` 实例（`build_tts_infrastructure` 按 `infra.toml [tts].provider` 单选构造后直接注入 StreamerAgent），由其 `handle_speech(text, utterance_id)` 完成合成 + 播放——不经 ToolRegistry；emotion 字段由 StreamerAgent 解析后**直接 invoke** `vts_set_expression` 工具，不经事件；TTS 引擎自身（基础模块）播放生命周期发布 `tts.utterance.*` 三事件。虚拟形象口型同步不走数据流通道（见文末"通信机制选型"末段）。
 
 ---
 
@@ -202,7 +202,7 @@ v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框�
       ├─ speech 非空 → 生成 `utt_{epoch_ms}_{seq}` → UtteranceQueue.enqueue（fire-and-forget）→ 后台 worker 串行 `await speak(text, utterance_id)`（`speak` 是构造期注入的适配器，绑定 `tts_engine.handle_speech`）
       │  └─ `tts_engine` 是装配期由 `build_tts_infrastructure(infra.toml [tts], event_bus)` 按 `[tts].provider` 选中的唯一引擎实例（edge_tts / gptsovits / voicebox / omni_tts），构造期直接注入 StreamerAgent
       │     └─ 引擎播放时按 `tts.utterance.*` 三事件发布生命周期（started / finished / failed）；事件是终点广播，消费者不得触发新决策
-      └─ emotion 非空 → **直接 invoke** `vts_set_expression`（不经事件，不入 UtteranceQueue；VTS 仍是 ToolRegistry 中的工具，TTS 不再是）
+      └─ emotion 非空 → **直接 invoke** `vts_set_expression`（不经事件，不入 UtteranceQueue；VTS 仍是 ToolRegistry 中的工具，TTS 不是）
       └─ actions 列表：逐条经 registry.invoke fire-and-forget 执行（Replyer 输出的动作类工具调用，失败仅记日志不影响决策循环）
 ```
 
@@ -210,7 +210,7 @@ v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框�
 
 - **每一步都是单向流动**。控制台输入 → EventBus → StreamerAgent → 工具调用 → 返回值，全程无环。Planner→Replyer 是同 Agent 内 await（经 registry 调用而非事件中转）。
 - **拦截器层是全局单点**。RateLimit/SimilarFilter 作用于 `room.message.*`，所有订阅者共享净化后的结果；场次盖章（session_stamp）字段驱动、不限域——payload 声明 `live_session_id` 字段即盖章（`live.*` 自带非 0 主键，过盖章拦截器但不被覆写）。`core.*` / `tts.utterance.*` 未声明该字段，盖章拦截器对它们零触碰。
-- **TTS 是基础模块而非工具**。每句 reply 落库即发声——reply 结构化结果的 `speech` 字段由 StreamerAgent 主动入 UtteranceQueue，不依赖 LLM 决策调用 TTS 工具；装配期 `build_tts_infrastructure(infra.toml [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent，运行时由 UtteranceQueue 通过注入的 `speak` 适配器调 `engine.handle_speech`——零 Facade 路由层、零 ToolRegistry 条目。`infra.toml [tts]` 自包含（行为参数 + 四引擎子段），`tools.toml` 无任何 TTS 段，详见 ADR-007。
+- **TTS 是基础模块而非工具**。每句 reply 落库即发声——reply 结构化结果的 `speech` 字段由 StreamerAgent 主动入 UtteranceQueue，不依赖 LLM 决策调用 TTS 工具；装配期 `build_tts_infrastructure(infra.toml [tts], event_bus)` 按 `[tts].provider` 单选构造引擎实例并直接注入 StreamerAgent，运行时由 UtteranceQueue 通过注入的 `speak` 适配器调 `engine.handle_speech`——零 Facade 路由层、零 ToolRegistry 条目。`infra.toml [tts]` 自包含（行为参数 + 四引擎子段），`tools.toml` 无任何 TTS 段，详见 [TTS 作为配置驱动基础设施](../decisions/007-tts-infrastructure-pipeline.md)。
 - **空转提醒不经事件**。空闲提醒职责归 ProactiveTrigger 自身（流程单超时提醒是其触发源之一）。
 
 ---
@@ -224,7 +224,7 @@ v2 中不同数据走不同通道，不要混用：
 | **EventBus** | 元数据事件（房间消息、状态变更、工具结果、流程单变更、TTS 生命周期） | 小型 JSON/Pydantic 对象 | `room.message.danmaku` / `tool.result.choose_option` / `rundown.changed` / `tts.utterance.started` |
 | **ToolRegistry.invoke** | 同步/异步工具调用 | 调用方持有 `ToolExecutionResult` | `await registry.invoke("streamer_reply", args)` / `await registry.invoke("vts_set_expression", args)` |
 | **基础模块直调** | TTS 引擎由装配期注入，运行时绕过 ToolRegistry | 调用方持有引擎实例 | `await tts_engine.handle_speech(text, utterance_id)`（StreamerAgent 内部 speak 适配器；TTS 不在工具池中） |
-| **REST 控制面直调** | 运营干预（递话/直派/硬取消；ADR-034） | 同步请求-响应、语义化错误码；意图递给归属组件，不代写账面 | `POST /api/v1/agents/{name}/prompt|delegate|tasks/{id}/cancel` → `AgentControl` |
+| **REST 控制面直调** | 运营干预（递话/直派/硬取消，见 [Agent 干预原语](../decisions/034-agent-intervention-primitives.md)） | 同步请求-响应、语义化错误码；意图递给归属组件，不代写其内部状态 | `POST /api/v1/agents/{name}/prompt|delegate|tasks/{id}/cancel` → `AgentControl` |
 
 **EventBus 与 ToolRegistry 的边界**：事件总线是"发生了什么事"的广播；ToolRegistry 是"我要做什么事"的直接调用。同一工具调用既可以同步等结果，也可以 fire-and-forget 后让工具异步 emit `tool.result.<name>` 由订阅者回收——这两种语义都允许，工具实现侧在 `invoke()` 内自行决定。
 
@@ -232,13 +232,13 @@ v2 中不同数据走不同通道，不要混用：
 
 | 耦合度 | 通道 | 典型消费方 | 数据形态 |
 |--------|------|-----------|---------|
-| **帧级**（需要逐块 PCM 同步） | **播放器分接（AudioSink 协议）**——已建，详见 ADR-024 | 虚拟形象口型分析（共享分析器） | 原始音频块 |
+| **帧级**（需要逐块 PCM 同步） | **播放器分接（AudioSink 协议）**——已建，详见 [口型帧级通道](../decisions/024-lipsync-frame-channel.md) | 虚拟形象口型分析（共享分析器） | 原始音频块 |
 | **起止对齐**（与播放区间对齐） | **订阅 `tts.utterance.started` / `finished`** | （预留）字幕写入器、播放耗时记账器 | `UtteranceStartedPayload` / `UtteranceFinishedPayload` |
 | **无耦合**（独立于播放时机） | **直接 invoke 工具**（不经 TTS 队列、不经事件） | emotion → `vts_set_expression`、action → （暂未接线） | 工具自身契约 |
 
 设计要点：
 
-- **帧级通道已建**：口型同步经播放器分接（AudioSink 协议）承接——播放器把音频复制递入共享口型分析器，各平台渲染器把口型信号翻译为本平台参数（ADR-024，ADR-007 决策 5 的留白已兑现）。
+- **帧级通道已建**：口型同步经播放器分接（AudioSink 协议）承接——播放器把音频复制递入共享口型分析器，各平台渲染器把口型信号翻译为本平台参数（通道设计见 [口型帧级通道](../decisions/024-lipsync-frame-channel.md)，它承接了 [TTS 作为配置驱动基础设施](../decisions/007-tts-infrastructure-pipeline.md) 为帧级消费预留的出口）。
 - **事件通道是终点广播**：消费者不得基于 `tts.utterance.*` 触发新一轮决策（"TTS→决策→TTS"会成环）；可做的记账 / 释放锁 / 字幕对齐不构成新决策。
 - **直接 invoke 由 Agent 包内完成**：StreamerAgent 解析 `reply.result.content` 后，speech 走 UtteranceQueue → 注入的 `tts_engine.handle_speech`（装配期直连，零 ToolRegistry）；emotion 走直接 `vts_set_expression`（仍在 ToolRegistry 中）；action 当前范围明确不接入决策（独立议题）。
 
@@ -253,7 +253,7 @@ v2 中不同数据走不同通道，不要混用：
 | **第 ① 段 构造 + 接线** | 存储/LLM/EventBus/拦截器/场次管理/事件历史/StorageLedger/Collector、AgentManager 与全部工具 Provider 的 `event_bus.on` 订阅就位 | **不得改变业务运行态**——不发 `live.started` 等边界事件，不触发任何决策循环 |
 | **第 ② 段 启动/触发** | `agent_manager.start_all()`（Agent 订阅生效）→ `simulator_service.setup()`（条件装配，末步 auto_start 可开播）→ DashboardServer | 触发类组件只能在本段启动 |
 
-守护的问题：**边界事件不得漏订阅**。回放模式 `simulator.start()` 经 `open_session` 发 `live.started`——若它发生在 Agent 订阅之前，主播 Agent 的场次进行位（`_live_active`）不会置位，主动发言闸状态即错。因此触发源（simulator 开播、Dashboard 手动开播之外的任何启动期触发）必须排在 `start_all()` 之后；组合根内不允许出现"先触发后订阅"的装配顺序，也不允许组件用"启动时补读全局状态"来兜这类顺序窟窿。
+守护的问题：**边界事件不得漏订阅**。回放模式 `simulator.start()` 经 `open_session` 发 `live.started`——若它发生在 Agent 订阅之前，主播 Agent 的场次进行位（`_live_active`）不会置位，主动发言的放行判定即错。因此触发源（simulator 开播、Dashboard 手动开播之外的任何启动期触发）必须排在 `start_all()` 之后；组合根内不允许出现"先触发后订阅"的装配顺序，也不允许组件用"启动时补读全局状态"来兜这类顺序窟窿。
 
 ---
 

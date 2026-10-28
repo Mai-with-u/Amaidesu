@@ -1,8 +1,8 @@
 """rundown_coordinator - 流程单运行时协调器（RundownState 与持久化设施的粘合层）
 
 ``RundownState`` 被刻意设计为纯内存状态机（依赖全回调、无 IO，保可测性）；
-它与仓储、EventBus、场次解析的粘合必然存在于某处——本类把这段粘合从
-``StreamerAgent`` 身上收拢成一个具名单元，让 Agent 专注决策循环主体，
+它与仓储、EventBus、场次解析的粘合由本类承载（具名单元，不内联在
+``StreamerAgent`` 里），让 Agent 专注决策循环主体，
 流程单域的演进（装载、崩溃恢复、变更持久化、热切换）在单文件内完成。
 
 依赖全部构造器注入（不持有宿主引用，与 ``Planner`` / ``RundownState``

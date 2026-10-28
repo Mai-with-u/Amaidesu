@@ -212,7 +212,7 @@ enabled = true                # vision_look_at_screen（mss 抓屏 + VLM 转文�
 
 合并发生在加载管线内：Schema 默认值先落底，配置文件的显式值覆盖，漂移写回把缺失字段按 Schema 补齐落盘（`multi_file_loader`）。组件运行期读自身配置段即得完整形态，无须二次合并。
 
-> Schema 权威定义在 `src/modules/config/{core,model,agents,collectors,tools,storage,infra}_schemas.py`（Pydantic），组件嵌套配置类随所属域定义，由 `multi_file_loader` 的漂移写回闭环自动补齐用户文件缺失字段。
+> Schema 权威定义在 `src/modules/config/{core,model,agents,collectors,tools,storage,infra}_schemas.py`（Pydantic），组件嵌套配置类随所属域定义，由 `multi_file_loader` 的漂移写回自动补齐用户文件缺失字段。
 
 ### 配置 API
 
@@ -253,7 +253,7 @@ uv run python main.py
 - [主播上下文构成](../architecture/streamer-context.md) - 主播 Agent 决策窗的消息形态、参考段与输入预算
 - [事件拦截器](../architecture/event-system.md#事件拦截器interceptor) - 如何开发自定义拦截器
 - [开发规范](../../AGENTS.md#代码约定) - 代码风格和约定
-- [架构叙事](../architecture/v2-architecture.md) - 架构设计总览
+- [架构总览](../architecture/v2-architecture.md) - 架构设计总览
 - [事件系统](../architecture/event-system.md) - EventBus 使用指南
 
 ---

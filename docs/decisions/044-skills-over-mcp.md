@@ -6,11 +6,11 @@
 
 ## 背景（Context）
 
-ADR-036 把技能放在消费 Agent 一侧：玩法经验由 Amaidesu 的 `src/agents/minecraft/skills/` 沉淀，按能力清单筛进目录，正文由 `minecraft_skill` 按需读。当时的前提是 MaiCraft 只作为 Amaidesu 的游戏后端，打法是宿主自己的经验。
+ADR-036 把技能放在消费 Agent 一侧：玩法经验由 Amaidesu 的 `src/agents/minecraft/skills/` 沉淀，按能力清单筛进目录，正文由 `minecraft_skill` 按需读。当时的前提是 MaiCraft 只作为 Amaidesu 的游戏后端，经验沉淀在宿主一侧。
 
 现在这个前提变了：MaiCraft v1 是一个独立的 MCP 服务器，任何支持 MCP 的客户端都可以连上来操作角色。同时，MCP 官方已经把 Skills extension（`io.modelcontextprotocol/skills`，SEP-2640）定稿：服务器可以把玩法技能作为资源发布，地址用 `skill://<路径>/SKILL.md`，客户端用 `resources/read` 读。玩法技能回答的正是"用这个服务器的能力把一类事做成"，与"能力怎么调"（能力说明）、"世界里的事实是什么"（知识库）并列。
 
-原来的放法有三个问题：
+原先的存放方式有三个问题：
 
 - 技能与能力分在两个仓库：能力名、参数、知识地址改了，技能不会跟着改，只能靠人记得核对。ADR-036 自己也把"正文引用的能力名与知识 URI 随 Mod 演进可能过期"列进了代价。
 - 宿主得先读回能力清单和模组清单，再自己决定哪些技能进目录；判断散在宿主，两个仓库各有一半。

@@ -1,6 +1,6 @@
 # Minecraft Agent（minecraft）使用指南
 
-`minecraft` 是一个**委派型**游戏 Agent（AI 玩家）：主播用自然语言交代目标（"先建个庇护所"），它自己拆解步骤、调 Mod 工具执行、做完上报总结。它有自带的决策 LLM，空闲时零消耗。与遥控型游戏 Agent（文字冒险 / 2048，主播直接调工具操作）的分工见 [ADR-043](../decisions/043-game-agent-interaction-shapes.md)；任务生命周期与终止语义的设计细节见 [MinecraftAgent 设计](../architecture/minecraft-agent.md)。
+`minecraft` 是一个**委派型**游戏 Agent（AI 玩家）：主播用自然语言交代目标（"先建个庇护所"），它自己拆解步骤、调 Mod 工具执行、做完上报总结。它有自带的决策 LLM，空闲时零消耗。与遥控型游戏 Agent（文字冒险 / 2048，主播直接调工具操作）的分工见 [游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)；任务生命周期与终止语义的设计细节见 [MinecraftAgent 设计](../architecture/minecraft-agent.md)。
 
 ## 前置清单
 
@@ -65,7 +65,7 @@ mc = "看看周围，继续手头的活"
 | 启用后完全没动静 | 正常——命令驱动，等委派或递话唤醒，空闲零消耗 |
 | MCP 连接失败告警 | Mod 未启动或端口不对；同因告警已去重不刷屏，连接恢复后挂起的任务自动续跑 |
 | 委派后长时间无上报 | 用 `minecraft_get_work_log` 看待办与在跑目标——后台目标要等 Mod 侧事件回来才唤醒下一批 |
-| 账面出现 `waiting_for_decision` | AI 玩家上报升级等决策：递话给指令、或恢复/硬取消清账（语义见 ADR-035） |
+| 账面出现 `waiting_for_decision` | AI 玩家上报升级等决策：递话给指令、或恢复/硬取消清账（语义见 [上报升级的账面语义](../decisions/035-escalation-ledger-semantics.md)） |
 | 角色停在死亡屏幕 | 死亡恢复决策在等回答，主播侧会看到 `game.attention_required`；按选项回答后自动恢复 |
 | 重启 Mod / 换世界后目标无响应 | 事件流编号变化属预期，旧目标按"不在了"处理，重新委派即可 |
 

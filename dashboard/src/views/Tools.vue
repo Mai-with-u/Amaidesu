@@ -676,7 +676,7 @@ onMounted(() => {
   overflow: hidden;
 }
 
-/* ----- 1. 分类头 ----- */
+/* 分类头 */
 .detail-header {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);
@@ -777,7 +777,7 @@ onMounted(() => {
   opacity: 0.45;
 }
 
-/* ----- 2. 元信息条 ----- */
+/* 元信息条 */
 .details-strip {
   display: flex;
   align-items: center;
@@ -823,7 +823,7 @@ onMounted(() => {
   margin: 0 2px;
 }
 
-/* ----- 3. 提供者分组：主角 ----- */
+/* 提供者分组：主面板 */
 .provider-panel {
   background: var(--bg-card);
   border: 1px solid var(--border-color-light);

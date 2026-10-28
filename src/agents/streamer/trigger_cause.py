@@ -1,13 +1,13 @@
 """触发原因值对象：一次决策轮"为什么被触发"的类型化描述。
 
-触发原因贯穿 Agent → 决策执行器 → Planner → 主动信号对账这条接缝。此前以
-自由字符串传递（``"proactive:rundown"`` / ``"window_expired"`` 等），同一份
-词表在多个组件里各抄一份，靠约定保持一致。本模块把词表收成封闭枚举：
-生产方（Agent）构造 :class:`TriggerCause`，消费方（文案翻译、豁免判断、
+触发原因贯穿 Agent → 决策执行器 → Planner → 主动信号对账这条接缝。
+词表由本模块的封闭枚举单点定义；若以自由字符串传递（``"proactive:rundown"``
+/ ``"window_expired"`` 等），同一份词表要在多个组件里各抄一份、靠约定保持
+一致。生产方（Agent）构造 :class:`TriggerCause`，消费方（文案翻译、豁免判断、
 信号确认）按 :class:`TriggerKind` 判定。
 
 对外可观测形态不变：``planner.decision.trigger_reason`` 等事件/结果视图里
-的字符串由 :meth:`TriggerCause.to_reason_string` 派生，格式与类型化之前
+的字符串由 :meth:`TriggerCause.to_reason_string` 派生，格式与既有字符串
 逐字一致，Dashboard 与时间线消费方零改动。
 """
 

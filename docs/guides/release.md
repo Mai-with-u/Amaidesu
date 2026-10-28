@@ -1,6 +1,6 @@
 # 发布指南
 
-本文档定义 Amaidesu 的发布操作流程：版本号规则、CHANGELOG 写法与发布步骤。决策依据（为什么这样设计）见 [ADR-016](../decisions/016-versioning-and-release-model.md)。
+本文档定义 Amaidesu 的发布操作流程：版本号规则、CHANGELOG 写法与发布步骤。决策依据（为什么这样设计）见 [版本号与发布模型](../decisions/016-versioning-and-release-model.md)。
 
 ## 角色分配
 

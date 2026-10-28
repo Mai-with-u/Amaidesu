@@ -139,7 +139,7 @@ Pydantic BaseModel，`extra="forbid"`。
 |------|------|
 | `StreamerAgent` | 装配者：setup 时 `rundown_id` → repo 加载（空/缺失回退 `DEFAULT_RUNDOWN`，fail-soft）→ `state.load`；cleanup 无需停任何循环 |
 | `Planner` / `Replyer` | 每轮获得情境注入：当前环节 n/N、目标、要点、notes、剩余时间、整场进度、后续环节列表 |
-| `ProactiveTrigger` | 承载超时闹钟触发源；`rundown_pending` 信号（原 agenda_pending）由 rundown.changed 回调置位（工具/仪表盘等变更来源），闹钟另置 `rundown_overdue` 超时信号 |
+| `ProactiveTrigger` | 承载超时闹钟触发源；`rundown_pending` 信号由 rundown.changed 回调置位（工具/仪表盘等变更来源），闹钟另置 `rundown_overdue` 超时信号 |
 | `Dashboard` | 编排页：流程单库（列表/复制/删除）+ 编辑器（环节卡片排序+表单）+ 直播控制台（当前环节/进度/手动切换/插入环节）；直播中编辑写穿 DB |
 | 存储 | `rundowns` 表 CRUD（`src/modules/storage/`） |
 

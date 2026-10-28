@@ -114,8 +114,6 @@ class WarudoProvider(ConnectionToolProvider):
         """Warudo 配置（WebSocket + 后台任务 + 动作目录）
 
         TOML 段位：[avatar.platform.warudo]（成员段直接铺键）
-        （历史 subtitle_enabled/subtitle_port/subtitle_show_status 三键随
-        8766 字幕面删除而移除，字幕收敛为 Dashboard /subtitle 一面。）
         """
 
         type: str = Field(default="warudo", title="段位标识")
@@ -226,7 +224,7 @@ class WarudoProvider(ConnectionToolProvider):
         self._has_started = False
         self.render_count = 0
         self.error_count = 0
-        # 被动半挂件句柄（setup 时逐项 attach，cleanup 时一次全量退订摘除）
+        # 事件订阅挂载项句柄（setup 时逐项 attach，cleanup 时一次全量退订摘除）
         self._bindings: Optional[AvatarBindings] = None
 
     # ===== ToolProvider 协议 =====
@@ -353,7 +351,7 @@ class WarudoProvider(ConnectionToolProvider):
 
         await self._connect()
 
-        # 被动半事件订阅：情绪反射（streamer.speech）+ 说话状态（tts.utterance.*，
+        # 事件订阅（被动响应业务事件）：情绪反射（streamer.speech）+ 说话状态（tts.utterance.*，
         # 驱动 talking-head 点头任务）；口型渲染挂到共享分析器（元音成分 →
         # VowelA~O 通道；启用时应关闭 Warudo 原生口型）
         self._bindings = AvatarBindings(self.event_bus, self.logger)

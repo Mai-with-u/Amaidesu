@@ -67,7 +67,7 @@ def _read_streamer_config(server: "DashboardServer") -> Dict[str, Any]:
 
     字段从嵌套子段读取：[agents.streamer.proactive].enabled、
     [agents.streamer.batch].batch_window_ms 等。planner/replyer LLM profile
-    现已是消费端硬编码用途名（"planner"/"replyer"/"summary"），不再透出。
+    是消费端硬编码用途名（"planner"/"replyer"/"summary"），不对外透出。
     """
     main_config = server.config_service.main_config if server.config_service else {}
     streamer_cfg = ((main_config or {}).get("agents") or {}).get("streamer") or {}

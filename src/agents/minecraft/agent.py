@@ -232,7 +232,7 @@ class MinecraftAgent(BaseAgent):
 
         # 后台目标账本：在跟踪的目标此刻的样子、最近结束的目标、被暂停的目标，
         # 以及目标 ↔ 任务账/委派账的记账联动（通知路由留在 Agent）。
-        # 批任务号供给在此一次注入：联动结算的写方法内部自取，漏穿针不再可能
+        # 批任务号供给在此一次注入：联动结算的写方法内部自取，不会出现漏传
         self._goal_ledger = GoalLedger(
             task_tracker=task_tracker, agent_name=self.name, finished_ids=lambda: self._delegations.finished_ids
         )

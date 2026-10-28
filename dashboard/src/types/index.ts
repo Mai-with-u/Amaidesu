@@ -145,7 +145,7 @@ export interface ComponentPlanReport {
 // Agent 控制面
 
 /**
- * Agent 运行名册条目（`GET /api/v1/agents`）。
+ * Agent 运行状态列表条目（`GET /api/v1/agents`）。
  *
  * - `state`：Agent 决策循环状态（如 running / paused），由后端派生
  * - `heartbeat_ms`：最近心跳距当前的毫秒数
@@ -191,7 +191,7 @@ export interface AgentCancelTaskResponse {
   cancelled: boolean;
 }
 
-/** Agent 直派受理回执（派新任务，登记账本） */
+/** Agent 直派受理回执（派新任务，登记到任务列表） */
 export interface AgentDelegateResponse {
   accepted: boolean;
   task_id: string;
@@ -213,7 +213,7 @@ export interface AgentMemoResponse {
   reports?: Array<Record<string, string>> | null;
 }
 
-/** 任务卡（进行中 = 账本快照；已完结 = 事件环聚合的终态末次载荷） */
+/** 任务卡（进行中 = 任务列表快照；已完结 = 事件环聚合的终态末次载荷） */
 export interface TaskCard {
   task_id: string;
   instruction: string;

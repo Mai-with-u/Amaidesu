@@ -474,14 +474,14 @@ def _upgrade_vts_lipsync_to_avatar(host_data: Dict[str, Any], target_data: Dict[
 # 目标文件随域迁出改为 avatar.toml）
 register_cross_file_hook("tools.toml", "avatar.toml", "vts_lipsync_to_avatar", "2.0.36", _upgrade_vts_lipsync_to_avatar)
 
-# tools.toml v2.0.37：删 [tools.avatar.warudo].config 三个字幕键。Warudo 8766
-# 字幕面整体删除（与 Dashboard /subtitle 页重叠），字幕收敛为"一源 → 三面"；
-# 三键失去消费者。
+# tools.toml v2.0.37：删 [tools.avatar.warudo].config 三个字幕键。Warudo 内置
+# 的 8766 端口字幕推送服务整体删除（与 Dashboard /subtitle 页重叠），字幕收敛
+# 为单一广播源（SubtitleService）分发给各展示页；三键失去消费者。
 _drop_warudo_subtitle_keys = drop_section_keys(
     "tools.avatar.warudo.config", ("subtitle_enabled", "subtitle_port", "subtitle_show_status")
 )
 
-# 生产钩子登记：tools.toml v2.0.37（Warudo 字幕三键删除，8766 面退役）
+# 生产钩子登记：tools.toml v2.0.37（Warudo 字幕三键删除，8766 端口的内置字幕推送随之退役）
 register_file_hook("tools.toml", "drop_warudo_subtitle_keys", "2.0.37", _drop_warudo_subtitle_keys)
 
 
@@ -577,7 +577,7 @@ register_cross_file_hook(
 # 麦麦表情档案读取器（组合根注入点）：avatar.toml v2.0.41 的迁移钩子需要读
 # avatar 包的表情档案，而配置层不得反向 import 具体组件——档案数据的获取
 # 由组合根（main.py）在配置加载前经 ``set_expression_profile_reader`` 注入。
-# 未注入时迁移真要写档案即硬错（与旧实现"import 即失败"同为启动期暴露）。
+# 未注入时迁移真要写档案即硬错，同样在启动期暴露，不留运行期隐患。
 _expression_profile_reader: Callable[[], Dict[str, Any]] | None = None
 
 
@@ -870,7 +870,7 @@ def advance_file_versions(raw_docs: Dict[str, Dict[str, Any]]) -> Dict[str, List
     return changed
 
 
-# agents.toml v2.0.45：style_constraints 旧默认删除"适当使用emoji"（与表达侧
+# agents.toml v2.0.45：style_constraints 默认值去掉"适当使用emoji"尾缀（与表达侧
 # 统一禁 emoji 的模板指令矛盾）。仅值等于旧默认时改写为新默认，用户显式
 # 设置的其他值不动。
 _upgrade_replyer_style_drop_emoji = swap_default(

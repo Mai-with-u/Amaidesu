@@ -1,19 +1,19 @@
 /**
- * 告警收件箱 store：把"需要人看一眼"的异常持久记账，错过不丢。
+ * 告警收件箱 store：把"需要人看一眼"的异常持久保存，错过不丢。
  *
- * 与 useSystemNotifications 分工：弹窗通知约 8 秒自动消失（即时触达面），
- * 本 store 是持久账本——所有入账条目保留到滚动上限，供顶栏铃铛随时翻查。
+ * 与 useSystemNotifications 分工：弹窗通知约 8 秒自动消失（只能即时提醒），
+ * 本 store 持久保存条目——所有条目保留到滚动上限，供顶栏铃铛随时翻查。
  * 两者各自订阅 WebSocket，互不依赖；本 store 在 store 初始化时订阅，
  * 与 Pinia 生命周期同寿（连接与重连由 websocket store 承担）。
  *
- * 入账来源（订阅面刻意收窄，避免把日志流水搬进收件箱）：
+ * 收录来源（订阅范围刻意收窄，避免把日志流水搬进收件箱）：
  * - core.error：系统级错误（组件启动失败等），error 级
  * - tts.utterance.failed：播报失败，观众侧可感知，error 级
  * - game.attention_required：游戏侧需要人接手，warning 级
  * 不收 log.entry：模块级 WARNING/ERROR 日志噪声大、常与上述事件重复报障，
  * 且无对应跳转页面，混入会稀释收件箱的信噪比。
  *
- * 去重合并口径：相同 title + source_page 在 60 秒窗口内重复入账，
+ * 去重合并口径：相同 title + source_page 在 60 秒窗口内重复到达，
  * 只累加 count 并刷新时刻，不新增条目；滚动上限 200 条，超出裁掉最旧。
  */
 
@@ -31,7 +31,7 @@ const MAX_ALERTS = 200;
 /** 告警级别：error=故障需处理，warning=需留意 */
 export type AlertLevel = 'error' | 'warning';
 
-/** 告警账本条目 */
+/** 收件箱条目 */
 export interface AlertItem {
   id: string;
   level: AlertLevel;
@@ -49,7 +49,7 @@ export interface AlertItem {
   count: number;
 }
 
-/** 入账参数（id/read/count 由 store 生成与维护，调用方不传） */
+/** 新增条目的入参（id/read/count 由 store 生成与维护，调用方不传） */
 export interface AlertInput {
   level: AlertLevel;
   title: string;
@@ -67,7 +67,7 @@ function payloadText(data: Record<string, unknown>): string {
   return '';
 }
 
-/** 逐条消息 → 零或一条入账（返回 null 表示不入账）；集中维护事件到页面的映射 */
+/** 逐条消息 → 零或一条告警条目（返回 null 表示不收录）；集中维护事件到页面的映射 */
 function toAlertInput(message: WebSocketMessage): AlertInput | null {
   if (message.kind !== 'event') return null;
   const text = payloadText(message.data);
@@ -108,7 +108,7 @@ export const useAlertsStore = defineStore('alerts', () => {
   const unreadCount = computed(() => alerts.value.filter(item => !item.read).length);
 
   /**
-   * 入账一条告警：60 秒窗口内相同 title + source_page 合并为既有条目
+   * 收录一条告警：60 秒窗口内相同 title + source_page 合并为既有条目
    * （累加计数、刷新时刻、重新置为未读）；否则新增条目并按上限裁掉最旧。
    */
   function recordAlert(input: AlertInput): void {
@@ -157,7 +157,7 @@ export const useAlertsStore = defineStore('alerts', () => {
     alerts.value = alerts.value.map(item => (item.read ? item : { ...item, read: true }));
   }
 
-  // 订阅 WebSocket 事件流入账；store 与应用同寿，连接/重连由 websocket store 承担
+  // 订阅 WebSocket 事件流并收录为条目；store 与应用同寿，连接/重连由 websocket store 承担
   useWebSocketStore().subscribe(message => {
     const input = toAlertInput(message);
     if (input !== null) recordAlert(input);

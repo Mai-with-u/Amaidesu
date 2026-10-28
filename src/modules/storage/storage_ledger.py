@@ -1,5 +1,5 @@
 """
-StorageLedger —— 直播间消息流落库记账器
+StorageLedger —— 直播间消息流落库器
 
 与 EventHistoryRecorder 同类（订阅事件→处理），但写目标不同：
 - EventHistoryRecorder → 事件历史服务（dashboard 用）
@@ -18,11 +18,11 @@ StorageLedger —— 直播间消息流落库记账器
     （message_type="guard"；content 即人读描述，不计观众发言统计）
   - ``partner_speech`` → live_chat（sender_role="partner"，**不**计观众统计）
   - ``enter``     → 当前 schema 无 enter 明细表 → debug 日志后丢弃（场次状态归 LiveSessionManager，不在本层职责）
-- viewers 写穿伴随：选在主表落库同点 upsert，避免后台 tick 的重复扫描与时序问题
+- viewers 同步写穿（write-through）：选在主表落库同点 upsert，避免后台 tick 的重复扫描与时序问题
 - 订阅 ``streamer.speech`` 业务事件（主播发言），写入 live_chat（sender_role="assistant"，message_type="speak"）。
   场次归属取 payload.live_session_id（场次盖章拦截器已注入；0 时回退 LiveSessionManager 解析）。
   若 payload.target_user_id 非空，按外部 ID 找到该观众，把 replied_count /
-  interaction_count +1，形成"主播回复 → 观众被回复计数"闭环（找不到就跳过）。
+  interaction_count +1（找不到就跳过）。
   payload.reply_to_message_id 落 live_chat.reply_to_message_id 列——"主播回应了
   哪条弹幕"是可查询事实（观众行 message_id ↔ 主播行 reply_to_message_id）。
 - 订阅 ``game.*``（milestone / attention_required / error，按 payload.event_type 判别），写入 game_events 表。
@@ -30,10 +30,10 @@ StorageLedger —— 直播间消息流落库记账器
 - 端到端贯通 ``simulated`` 字段：payload.simulated → 表列 simulated INTEGER（主播发言/游戏事件天然非模拟，记 False）
 - 平台归属：payload.platform（采集器装配期常量注入）落明细行 platform 列；
   主播发言行经 LiveSessionManager.platform 取值。
-- 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环（即使记账器挂了，直播流也跑）
+- 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环（即使落库器挂了，直播流也跑）
 
 ## 不做什么
-- 不主动建 live_sessions 行（场次行归 LiveSessionManager 创建/结账），这里只
+- 不主动建 live_sessions 行（场次行归 LiveSessionManager 创建与收尾），这里只
   消费已归属的场次主键写明细。
 - 不做统计查询（消费者层 ``WHERE simulated=0``）
 - 不改 schema（表结构权威在 schema.py）
@@ -75,7 +75,7 @@ _DAY_MS = 86_400_000
 
 
 class StorageLedger:
-    """直播间行为流落库记账器。
+    """直播间行为流落库器。
 
     独立的 EventBus 订阅者；写目标为明细三表（ChatRepo）、观众统计
     （ViewerRepo）与 game_events（EventRepo）。与 EventHistoryRecorder
@@ -177,7 +177,7 @@ class StorageLedger:
     ) -> None:
         """room.message.* 通配回调：分发到对应明细表写入。
 
-        异常隔离：单条失败仅记 error 日志，不抛出（即使记账器挂了，主直播流仍跑）。
+        异常隔离：单条失败仅记 error 日志，不抛出（即使落库器挂了，主直播流仍跑）。
         无显式场次期间 ``live_pk`` 为 None，所有消息仅在内存流转、不落库。
         """
         try:
@@ -370,9 +370,9 @@ class StorageLedger:
 
         若 ``payload.target_user_id`` 非空，在主表 insert 之后顺路调用
         ``upsert_viewer_replied``，把对应观众的 ``replied_count`` /
-        ``interaction_count`` +1，形成"主播回复 → 观众被回复计数"的闭环。
+        ``interaction_count`` +1，即主播回复时同步累计该观众的被回复计数。
 
-        异常隔离：单条失败仅记 error 日志，不抛出（即使记账器挂了，主直播流仍跑）。
+        异常隔离：单条失败仅记 error 日志，不抛出（即使落库器挂了，主直播流仍跑）。
         """
         try:
             live_pk = await self._resolve_live_pk(payload.live_session_id)

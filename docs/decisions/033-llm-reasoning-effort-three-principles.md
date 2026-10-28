@@ -6,7 +6,7 @@
 
 ## 背景（Context）
 
-用户需要按用途控制模型思考深度（planner 深想、replyer/simulator 快出）。行业现状：各家 API 的思考强度参数名、取值集合、语义机制三重分裂（OpenAI `reasoning_effort` 七档模型相关、Anthropic `output_config.effort`、Gemini `thinking_level`/`thinkingBudget`、Qwen `enable_thinking`+整数预算、GLM/DeepSeek `thinking.type` 开关），且档位词汇随模型代际漂移（`minimal`/`xhigh`/`none` 增删频繁）；同名档位在不同厂商有五种物理行为（直传/译成预算/逐 token 兑现/收下忽略照常计费/直接 400）。本项目只接 OpenAI 兼容端点。ADR-032 曾裁决思考强度控制面"暂不归一，将来按需单开议题"——真实需求现已出现，本篇即该留白的兑现。
+用户需要按用途控制模型思考深度（planner 深想、replyer/simulator 快出）。行业现状：各家 API 的思考强度参数名、取值集合、语义机制三重分裂（OpenAI `reasoning_effort` 七档模型相关、Anthropic `output_config.effort`、Gemini `thinking_level`/`thinkingBudget`、Qwen `enable_thinking`+整数预算、GLM/DeepSeek `thinking.type` 开关），且档位词汇随模型代际漂移（`minimal`/`xhigh`/`none` 增删频繁）；同名档位在不同厂商有五种物理行为（直传/译成预算/逐 token 兑现/收下忽略照常计费/直接 400）。本项目只接 OpenAI 兼容端点。ADR-032 曾裁决思考强度控制面"暂不归一，将来按需单开议题"——真实需求现已出现，本篇兑现该搁置项。
 
 ## 决策（Decision）
 
@@ -27,10 +27,10 @@
 
 - 未配置行为与历史完全一致（设了才发）；不支持的端点收到不支持值会报错并走既有故障切换，损害有界
 - 语义漂移（如 DeepSeek 将 `medium` 映射为 `high`、Kimi 收下忽略）框架不可控——观测面以 `usage` 原文落库兜底（解析即弃环节必须留 raw），用户可据实际思考 token 数校准配置
-- 请求历史白名单入账 `reasoning_effort`；`llm_requests` 增 `reasoning_tokens` / `usage_raw_json` 列与 `client_type`→`profile_name` 正名随同一批迁移（详见草稿 §2）
+- 请求历史白名单纳入 `reasoning_effort`；`llm_requests` 增 `reasoning_tokens` / `usage_raw_json` 列，`client_type` 列改名 `profile_name`，随同一次存储结构升级迁移。观测落库遵循既有原则：结构化列供聚合查询，原始 JSON 列供追溯——LLM 调用花钱且不可复刻（重发即不同回答），解析后即丢弃的环节必须保留 usage 原文兜底
 - 配置新增字段经漂移写回自动出现在已有配置文件，description 自动生成为字段上方注释——用户可见可懂，零额外机制
 
 ## 关联
 
-- ADR-032"归一化分治"：本篇兑现其"控制面将来按需单开议题"的留白
+- ADR-032"归一化分治"：本篇兑现其"控制面将来按需单开议题"的搁置约定
 - 参考对照：MaiBot `ModelInfo.extra_params` 路线（`E:\01_Projects\Code\AI\MaiBot\MaiBot-v1.0.0`，本机）

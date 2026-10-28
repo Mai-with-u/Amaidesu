@@ -149,14 +149,14 @@ sequenceDiagram
     注册表-->>主播: 工作文档（想看细节时再查）
 ```
 
-这套分层为什么长这样、一场直播怎么一轮轮运转、游戏 Agent 怎么接活、工具契约怎么约定——完整叙事见 [v2 架构叙事](docs/architecture/v2-architecture.md)（理解本项目先读这篇），数据如何流过每个组件见[数据流与边界规则](docs/architecture/data-flow.md)，想自己动手加组件见[组件开发指南](docs/guides/component.md)。
+这套分层为什么长这样、一场直播怎么一轮轮运转、游戏 Agent 怎么接活、工具契约怎么约定——见 [架构总览](docs/architecture/v2-architecture.md)（理解本项目先读这篇），数据如何流过每个组件见[数据流与边界规则](docs/architecture/data-flow.md)，想自己动手加组件见[组件开发指南](docs/guides/component.md)。
 
 ## 文档导航
 
 - [文档索引](docs/README.md)（全部文档）
 - [快速开始](docs/getting-started.md)
 - [直播运行手册](docs/guides/runbook.md)（开播清单、自检与排错）
-- [v2 架构叙事](docs/architecture/v2-architecture.md)
+- [架构总览](docs/architecture/v2-architecture.md)
 - [组件开发指南](docs/guides/component.md)
 - [开发规范](AGENTS.md)
 

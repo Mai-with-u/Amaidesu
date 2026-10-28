@@ -94,7 +94,7 @@ async function runRundownControl(action: 'pause' | 'resume' | 'next'): Promise<v
   }
 }
 
-/** 按任务编号或说明关键词在"进行中"账本里找唯一任务；找不到/多个命中时提示并返回 null */
+/** 按任务编号或说明关键词在"进行中"任务列表里找唯一任务；找不到/多个命中时提示并返回 null */
 async function findRunningTask(keyword: string): Promise<{
   task_id: string;
   instruction: string;

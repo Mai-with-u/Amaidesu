@@ -80,7 +80,7 @@
 
 <script setup lang="ts">
 /**
- * 决策轮决定卡（纯展示）：一轮"为什么这么做 / 说了什么"的完整账面。
+ * 决策轮决定卡（纯展示）：一轮"为什么这么做 / 说了什么"的完整信息。
  * 数据面是 groupDecisionRounds 产出的 DecisionRoundCard，本组件不做任何
  * 取数与业务判断；高亮态与轮次锚点属性（data-round-id / data-highlighted）
  * 供深链定位使用。

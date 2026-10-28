@@ -40,12 +40,12 @@ v2 主体性架构确立后，Amaidesu 已形成 Agent + 工具 + 存储 + 编�
    - `tools.toml` **零 TTS 段**——TTS 引擎作为基础模块后连接/合成参数不再外泄到工具配置；迁移由 `CROSS_FILE_MIGRATIONS`（`multi_file_loader.py`）从 `tools.toml [tools.output.config.<engine>]` 整体搬运到 `infra.toml [tts.<engine>]`，源段被切除
    - 配置版本由各文件 `[meta].version` 独立推进（TTS 段随 `infra.toml`）
 5. **消费者通道三分法**（与语音的时间耦合度匹配）：
-   - **帧级耦合**（未来）虚拟形象口型精准同步 → 工具 invoke 参数流式接口（**留白**，YAGNI 暂不建，待真需求；后经 ADR-024 以播放器分接形态兑现）
-   - **起止对齐**（字幕、记账）→ 订阅 `tts.utterance.{started,finished,failed}` 三事件
+   - **帧级耦合**（未来）虚拟形象口型精准同步 → 工具 invoke 参数流式接口（**暂不实现**，YAGNI，待真需求；后经 ADR-024 以播放器分接形态兑现）
+   - **起止对齐**（字幕、耗时统计）→ 订阅 `tts.utterance.{started,finished,failed}` 三事件
    - **无耦合**（emotion 表情）→ StreamerAgent 直接 invoke `vts_set_expression`，不经事件、不入队列
    三分法依据详见 [数据流规则 - 通信机制选型](../architecture/data-flow.md) 节中的"TTS 消费者的通道三分法"。
 6. **`UtteranceQueue` 位于主播 Agent 包内**（`src/agents/streamer/utterance_queue.py`），不抽到框架层。这条决策引用 ADR-005 的『主体性判据为最高约束』决策——UtteranceQueue 是 StreamerAgent 的内部器官（"谁的发言谁管播放节奏"），不是跨 Agent 的基础设施；抽到 `src/modules/` 会引入 `agents/` 反向依赖（违反 [数据流规则 - 三条约束层面 / 分层规则](../architecture/data-flow.md)）。队列对外只持有 `SpeakCallable` 与可选的 EventBus 引用，**完全不知道底层是 EdgeTTS 还是 GPTSoVITS**——引擎切换 / 测试 mock 均不需要改队列代码。
-7. **`tts.utterance.*` 三事件是终点广播**。消费者不得基于这些事件触发新一轮决策（防环约束）；可做的记账 / 释放锁 / 字幕对齐不构成新决策。三事件 Payload 类（`UtteranceStartedPayload` / `UtteranceFinishedPayload` / `UtteranceFailedPayload`）分开定义（形状不同：`started` 含 `speech_text` + `duration_ms` Optional；`finished` 强调播放时长 int；`failed` 强调 `error_message`）——分开定义比统一形状加判别字段更不易误填。**发布者**：TTS 引擎自身（基础模块，非工具）；仅在收到非空 `utterance_id` 入参时发布；流式引擎 = 首块 PCM 写声卡时发 started；全量引擎 = `play_audio` 调用时发 started。
+7. **`tts.utterance.*` 三事件是终点广播**。消费者不得基于这些事件触发新一轮决策（防环约束）；可做的耗时统计 / 释放锁 / 字幕对齐不构成新决策。三事件 Payload 类（`UtteranceStartedPayload` / `UtteranceFinishedPayload` / `UtteranceFailedPayload`）分开定义（形状不同：`started` 含 `speech_text` + `duration_ms` Optional；`finished` 强调播放时长 int；`failed` 强调 `error_message`）——分开定义比统一形状加判别字段更不易误填。**发布者**：TTS 引擎自身（基础模块，非工具）；仅在收到非空 `utterance_id` 入参时发布；流式引擎 = 首块 PCM 写声卡时发 started；全量引擎 = `play_audio` 调用时发 started。
 8. **队列策略：FIFO 串行 + 丢最旧**。单 worker 保证播放顺序（避免叠加/打断），队列满时丢最旧（保证新鲜度，丢弃项不进入 TTS 引擎，自然不触发 utterance 事件——丢消息由队列全权负责）；单 utterance 由 `render_timeout_ms` 看门狗保护（防合成/播放卡死拖垮队列）。默认 `max_queue=3` / `render_timeout_ms=60000`（60s 覆盖合成+播放全周期）。
 9. **TTS 引擎是 publish-only 角色**：只发 utterance 事件、不订阅任何事件；事件总线单向数据流约束（[数据流规则 - 事件流向图](../architecture/data-flow.md)）不破。
 10. **OmniTTS 修复**。原 HTTP 流式响应解码后从未 `play_audio`（`AudioDeviceManager.start_stream` / `write_chunk` / `stop_stream` 流式三步漏调）；本次同步补齐，流式与全量两类引擎共用 `common.py` 函数级共享（不放基类——`ToolProvider` 协议鸭子类型已不适用，强抽基类会抽象泄漏；现以引擎类各自实现 `handle_speech` 即可）。
@@ -68,13 +68,13 @@ v2 主体性架构确立后，Amaidesu 已形成 Agent + 工具 + 存储 + 编�
 
 恢复 AudioStreamChannel（pub-sub 推 PCM 流给多个订阅者）。
 
-**拒绝**。理由见 [数据流规则 - 通信机制选型](../architecture/data-flow.md)：v2 是 pull-style 工具编排，音频数据走 ToolRegistry 调用的返回值（`ToolExecutionResult`）即可；push 通道无人是消费者。`tts.utterance.*` 三事件已足够覆盖帧级以外的元数据订阅需求（字幕 / 记账）。
+**拒绝**。理由见 [数据流规则 - 通信机制选型](../architecture/data-flow.md)：v2 是 pull-style 工具编排，音频数据走 ToolRegistry 调用的返回值（`ToolExecutionResult`）即可；push 通道无人是消费者。`tts.utterance.*` 三事件已足够覆盖帧级以外的元数据订阅需求（字幕 / 耗时统计）。
 
 ### 立刻为流式 PCM 建立 AudioSink 抽象
 
 为 OmniTTS / GPTSoVITS 的流式音频设计 `AudioSink` 接口，下游可以订阅 PCM 块（如虚拟形象口型同步）。
 
-**拒绝**。YAGNI——**当前没有任何真实消费者**承接逐块 PCM。虚拟形象口型同步短期由虚拟形象软件自取本地音频流（系统声音 / WASAPI loopback）兜底，留白待真需求。当第一个真实消费者出现时，再设计接口（参见决策 5 三分法的"帧级"留白）。
+**拒绝**。YAGNI——**当前没有任何真实消费者**承接逐块 PCM。虚拟形象口型同步短期由虚拟形象软件自取本地音频流（系统声音 / WASAPI loopback）兜底，接口暂不实现、待真需求。当第一个真实消费者出现时，再设计接口（参见决策 5 三分法的"帧级"暂缓项）。
 
 ### Facade 作为 ToolProvider 路由层
 
@@ -93,15 +93,15 @@ v2 主体性架构确立后，Amaidesu 已形成 Agent + 工具 + 存储 + 编�
   - **TTS 引擎彻底基础模块化**（与决策 1 一体）。`src/modules/tts/` 包内自治，`handle_speech` / `setup` / `cleanup` / `get_stats` / `ConfigSchema` 五件套直白可用；ToolRegistry 中零 TTS 条目——审计/注册语义回归"Agent-callable 能力"而不是"渲染调用包装"，与 ADR-005 主体性判据自洽。
   - **装配入口单一**。`build_tts_infrastructure(tts_config, event_bus)` 一处返回 Provider 实例或 None；StreamerAgent 构造期注入，无运行时路由层、无 Facade 间接；未知 provider 回退 `edge_tts` 装配兜底，与历史 bootstrap 语义一致。
   - **配置自包含**。`infra.toml [tts]` 一段全管（行为参数 + 四个引擎子段），`tools.toml` 不再有任何 TTS 配置；迁移钩子自动搬运用户原值。
-  - **事件契约可扩展消费者**。`tts.utterance.*` 终点点播，字幕对齐、reply 耗时记账、失败重试等都是终点广播的安全订阅者。
+  - **事件契约可扩展消费者**。`tts.utterance.*` 终点点播，字幕对齐、reply 耗时统计、失败重试等都是终点广播的安全订阅者。
   - **OmniTTS 修复**。原 HTTP 流式响应解码后从未 `play_audio`，修复后 OmniTTS 端到端可用，与其他三引擎平起平坐。
   - **架构总览已知缺口第 1 条闭环**。TTS 族由 `infra.toml [tts]` 驱动装配（基础模块自治）；非 TTS 工具族由 `bind_core_tools` 按 `[tools.avatar.*]` / `[tools.studio.*]` 段的 `enabled` 开关驱动自注册。
 - **代价**：
   - **队列串行等待**。丢最旧意味着如果决策循环节奏超过队列容量 + 渲染吞吐之和，新发言会覆盖旧发言；这是为简单性付出的可控代价（FIFO 串行 + 容量上限 + 看门狗）。
-  - **`tts.utterance.*` 事件精度百毫秒级**（不是 DAC 采样点精度）。声卡硬件缓冲残余**不在**信号内——事件是引擎回调信号而非播放端物理信号；记账消费者应明确这点（百毫秒级足够会计时）。
+  - **`tts.utterance.*` 事件精度百毫秒级**（不是 DAC 采样点精度）。声卡硬件缓冲残余**不在**信号内——事件是引擎回调信号而非播放端物理信号；统计耗时的消费者应明确这点（百毫秒级足够会计时）。
   - **配置层级多一段**。`infra.toml` 新增 `[tts]` 段是必要的（独立基础设施级调度字段 + 引擎子段），但增加了配置面；与 `tools.toml` 的边界需在文档中明确（详见 [v2 架构叙事 - 配置：六文件 + 每文件版本 + 包内权威 + 单一管线](../architecture/v2-architecture.md)）。
 - **遗留**：
-  - **帧级 PCM 流接口留白**（已兑现，见下）。虚拟形象口型精准同步的帧级消费者接口未建，待真需求；当前由虚拟形象软件自取本地音频流兜底。
+  - **帧级 PCM 流接口暂缓建设**（已兑现，见下）。虚拟形象口型精准同步的帧级消费者接口未建，待真需求；当前由虚拟形象软件自取本地音频流兜底。
     > 兑现记录（ADR-024）：消费者出现后接口已建——播放器分接（AudioSink 协议）+ 共享口型分析器 + 平台渲染器。
   - **`action` 字段仍未消费**。本次范围明确不接入决策调用（独立议题——"是否需要 LLM 决策驱动具体动作执行"是更大讨论），StreamerAgent 解析但 `_ = action` 显式标注未使用。
   - **`tts.utterance.*` 订阅接线待实现**（已统一，见下）。当前生产代码**暂无订阅者**——字幕 Provider 由 StreamerAgent 通过 `speech` 文本直接 fire-and-forget，不订阅 utterance 事件（事件与字幕存在双轨，待字幕子系统接入事件总线后可统一）；详见[架构叙事](../architecture/v2-architecture.md)。接入后的事件契约本身已就绪，不需要再次改动 ADR-007。

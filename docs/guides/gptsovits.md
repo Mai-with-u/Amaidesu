@@ -2,7 +2,7 @@
 
 Amaidesu 的 `gptsovits` TTS 引擎对接本机运行的 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 服务：Amaidesu 把待合成文本通过 HTTP 发给它，收回流式音频播出。本文说明如何下载、启动该服务，以及 Amaidesu 侧的对应配置。
 
-> 阅读前提：项目已完成[快速开始](../getting-started.md)的安装步骤。TTS 基础设施的整体位置见 [ADR-007](../decisions/007-tts-infrastructure-pipeline.md)。
+> 阅读前提：项目已完成[快速开始](../getting-started.md)的安装步骤。TTS 基础设施的整体位置见 [TTS 基础设施管线](../decisions/007-tts-infrastructure-pipeline.md)。
 
 ## 一、下载服务
 

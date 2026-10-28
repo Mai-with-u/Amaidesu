@@ -1,13 +1,13 @@
-# 组件开发指南（v2 三范式）
+# 组件开发指南（三范式）
 
 本指南介绍如何在 Amaidesu 项目中扩展三类核心组件：**采集器（Collector）**、**工具（Tool）**、**Agent**。
 
-> **v2 范式说明**：项目已从旧版"Input / Decision / Output 三阶段 + Decider / OutputHandler 装饰器"重构为"**采集器 + Agent + 工具**"三件套：
+> **范式说明**：项目的组件只有三类——**采集器 + Agent + 工具**：
 > - **采集器** = 流型感知者（外部 → 系统入口，主动推 `room.message.*` 事件）
 > - **Agent** = 决策主体（订阅事件 → 内部编排 Planner/Replyer → 调工具 → 出回复）
 > - **工具** = 单一能力契约（被 Agent 调，可被任意 Agent 复用）
 >
-> 旧 `InputCollector / Decider / OutputHandler / Intent / @pipeline` 等概念在本范式下**全部废弃**——新代码不应再使用旧阶段类名。
+> 组件不使用"Input / Decision / Output 三阶段 + Decider / OutputHandler 装饰器"式的写法，不存在 `InputCollector / Decider / OutputHandler / Intent / @pipeline` 这些类。
 
 ## 目录
 
@@ -43,7 +43,7 @@ Q3（数据源型并行判据）
     持续采数据并推送、无目标无起止、生命周期挂装配期 ──▶ 采集器
 ```
 
-**关键**：Q2 的「自主决定」**不要求是 LLM**，代码决定也算。本次讨论反复摇摆（工具↔Agent↔采集器）的根源就是**误用「有无 LLM 循环」当尺子**。
+**关键**：Q2 的「自主决定」**不要求是 LLM**，代码决定也算——判定只看过程推进权，不用「有无 LLM 循环」当尺子。
 
 **本仓组件验证表**（用真实组件回放三问，防止判据被抽象化误读）：
 
@@ -160,10 +160,10 @@ class MyCollector(BaseCollector):
     async def cleanup(self) -> None:
         await self.stop()
 
-    # ---------- 子类实现 collect()（外部消费者为空时仅作 v2 兼容口保留）----------
+    # ---------- 子类实现 collect()（外部消费者为空时仅作兼容口保留）----------
 
     async def collect(self) -> AsyncIterator[Any]:
-        """v2 主动推事件模式下，外部消费者可为空；保留此方法只为兼容旧接口。"""
+        """主动推事件模式下，外部消费者可为空；保留此方法只为兼容旧接口。"""
         while self.is_started:
             await asyncio.sleep(self.typed_config.poll_interval_s)
             # 真实采集逻辑在外层 _my_loop 里完成
@@ -299,7 +299,7 @@ async def asyncio_sleep_ms(ms: int) -> None:
 
 ### Agent 附属采集器
 
-读某个 Agent 所接外部世界的持续流（例如 Minecraft 的身体事件流、游戏聊天流）的采集器，离开那个 Agent 就没有意义——Agent 没开时只会对着连不上的游戏一直重试。它们是该 Agent 的**附属采集器**（ADR-038）：
+读某个 Agent 所接外部世界的持续流（例如 Minecraft 的身体事件流、游戏聊天流）的采集器，离开那个 Agent 就没有意义——Agent 没开时只会对着连不上的游戏一直重试。它们是该 Agent 的**附属采集器**：
 
 - **代码**放在 Agent 包内（`src/agents/<Agent 名>/`），仍是 `BaseCollector` 子类，事件照样自产自发；
 - **构造**由 Agent 包提供一个函数（例如 `src/agents/minecraft/companions.py` 的 `build_companion_collectors`），配置从 Agent 自己的配置段换算——连接复用 Agent 的 MCP 配置，不在别处另抄一份；
@@ -332,7 +332,7 @@ async def asyncio_sleep_ms(ms: int) -> None:
 
 ### 工具管控三维模型（术语纪律）
 
-工具的任何"开/关/通"话题，先分清说的是三个正交维度中的哪一个——跨维度混用词是历史事故源：
+工具的任何"开/关/通"话题，先分清说的是三个正交维度中的哪一个——跨维度混用词会造成沟通歧义：
 
 | 维度 | 回答的问题 | 生效期 |
 |------|-----------|--------|
@@ -367,7 +367,7 @@ LLM 工具面 = 全部注册工具 − 名单停用 − 熔断中 − 归属限�
 | `ResultBlock` | `src/modules/tools/models.py` | `kind` (`"text"`/`"image"`), `text`, `data` (base64), `mime_type` |
 | `ToolProvider`（Protocol） | `src/modules/tools/provider.py` | `name` 属性（与全部 spec 的 `provider` 同值同源，注册期校验）、`list_tools()`、`async invoke(invocation) -> ToolExecutionResult`（**永不抛异常**）；可选钩子 `query_task` / `subscribe_task_notifications`（任务适配器，默认不支持） |
 | `BaseToolProvider`（ABC） | `src/modules/tools/provider.py` | 所有经 `register_provider` 装配的 Provider 的继承基类；带 `category` ClassVar 与 `health_check` 探活钩子默认实现 |
-| `ToolRegistry` | `src/modules/tools/registry.py` | `register(spec, impl)` / `register_provider(provider, *, visible_to=...)`（可见名单，ADR-012）/ `invoke(invocation)` / `invoke_many(invocations)` / `to_llm_definitions()` / `has(name)` / `list_tools(for_agent=...)`（按名单计算工具列表）/ `visible_to_of(name)` / `probe_tool(name)`（熔断器探活入口） |
+| `ToolRegistry` | `src/modules/tools/registry.py` | `register(spec, impl)` / `register_provider(provider, *, visible_to=...)`（可见名单）/ `invoke(invocation)` / `invoke_many(invocations)` / `to_llm_definitions()` / `has(name)` / `list_tools(for_agent=...)`（按名单计算工具列表）/ `visible_to_of(name)` / `probe_tool(name)`（熔断器探活入口） |
 | `as_tool_impl` / `make_provider_from_specs` | `src/modules/tools/provider.py` | 简单工具正典路径：普通 async 函数 + spec 组装标准 Provider（样板 `src/agents/streamer/memory/tools.py`） |
 
 ### Provider 探活契约（与熔断器配套）
@@ -440,7 +440,7 @@ def build_my_tool() -> ToolProvider:
 ```python
 registry.register_provider(
     build_my_tool(),
-    # 名单（ADR-012）：默认仅主播（DEFAULT_VISIBLE_TO，fail-closed）；
+    # 名单：默认仅主播（DEFAULT_VISIBLE_TO，fail-closed）；
     # 共享工具显式 ["*"]，其他 Agent 专属工具填 ["<Agent 注册名>"]
     visible_to={"my_my_tool": ["streamer"]},
 )
@@ -451,7 +451,7 @@ registry.register_provider(
 | 步骤 | 位置 | 操作 |
 |------|------|------|
 | ① 放代码 | `src/modules/<domain>/…`（avatar/studio/vision 等公用域工具）或 `src/agents/<name>/tools.py`（Agent 专属） | Provider 类 `XxxToolProvider` + `build_xxx_spec()` |
-| ② 注册（带名单） | Agent 专属：在该 Agent 的 `_register_tools` 中 `self._tool_registry.register_provider(provider, visible_to=...)`；公用：在装配根 `main.py` 注册（默认全员） | 名单是注册处代码事实（ADR-012）：值 = Agent 注册名列表或 `["*"]`；未列工具默认仅主播（fail-closed） |
+| ② 注册（带名单） | Agent 专属：在该 Agent 的 `_register_tools` 中 `self._tool_registry.register_provider(provider, visible_to=...)`；公用：在装配根 `main.py` 注册（默认全员） | 名单是注册处代码事实：值 = Agent 注册名列表或 `["*"]`；未列工具默认仅主播（fail-closed） |
 | ③ 配置（可选） | Agent 专属工具一般无独立配置段（行为由 Agent 配置决定）；公用工具按分类开关（`[tools.<domain>.<key>].enabled`） | |
 | ④ 列出与转换 | `ToolRegistry.to_llm_definitions()` 自动从 `ToolSpec.parameters_schema` 派生 OpenAI 风格 function calling 定义供 LLM 看 | |
 | ⑤ 调用 | `ToolRegistry.invoke(ToolInvocation(tool_name, arguments, call_id, source))`；**永不抛异常**——失败返回 `ToolExecutionResult(success=False, error_message=...)` | |
@@ -484,10 +484,9 @@ registry.register_provider(
 | `rundown_control`（动态工具，条件追加例外） | `src/agents/streamer/tools/rundown_tool.py` | 正典路径包装直连执行器 |
 | `framework_delegate` / `framework_task_status`（委派原语） | `src/modules/agents/control.py` | 手写 Provider（`provider="framework"`） |
 
-### 三个反直觉点（先读这里，防止按旧红线重新推错）
+### 三个反直觉点（先读这里，防止推错）
 
-1. **为何全部工具都注册？** 旧红线"Agent 内部件不注册"写于"注册=全局可见"的旧世界；
-   现在可见性由名单隔离（ADR-012）——注册带来统一观测（`tool.result` 事件）、
+1. **为何全部工具都注册？** 可见性由名单隔离——注册带来统一观测（`tool.result` 事件）、
    停用/熔断治理、工具页管理，全部复用注册表既有机制，不做第二路径。
    注册的判据 = **"是不是工具"**（LLM/调用方会去调的能力）。
 2. **为何名单在生产侧（注册处代码声明）而不是消费侧（每 Agent 配清单）？**
@@ -512,7 +511,7 @@ Agent 内部件处置轴（AGENTS.md 同款表述）；组件顶层定类见[判
 | Planner / Replyer 类本体 | **留在 Agent 内部，不进表**（Agent 的决策/表达部件，代码直连） | Planner、Replyer |
 | 代码直连的内部件 | **不是工具、不进表**（无 ToolSpec，被调才干活的纯代码部件） | ProactiveTrigger、命令解析原语 |
 
-### 可见名单机制（ADR-012）
+### 可见名单机制
 
 名单是**注册处的代码事实**（生产侧逐工具声明）：
 
@@ -556,7 +555,7 @@ registry.register_provider(
 reply 走注册表后三事件都发——观测冗余是**有意接受**的（统一规则优先，
 三事件各答一个不同的问题）。
 
-### 异步任务基建与委派（ADR-013）
+### 异步任务基建与委派
 
 回执型工具（调用拿任务号而非结果，如 `maicraft_execute`）与跨 Agent 委派
 共用一套基建（`src/modules/tools/tasks.py`）：
@@ -610,12 +609,12 @@ reply 走注册表后三事件都发——观测冗余是**有意接受**的（�
 
 ### 适用场景
 
-需要**订阅事件 → 内部编排 → 调工具 → 出可执行回复**时，新增一个 Agent。Agent 是 v2 范式的**决策主体**——可以拥有私有状态（`state` 字段）、私有工具（`list_tools`）、后台循环和持久化。
+需要**订阅事件 → 内部编排 → 调工具 → 出可执行回复**时，新增一个 Agent。Agent 是三范式中的**决策主体**——可以拥有私有状态（`state` 字段）、私有工具（`list_tools`）、后台循环和持久化。
 
 典型用例：
 
 - **业务 Agent**（如 `streamer`）——主播决策核心
-- **游戏 Agent**（如 `text_adv` / `minecraft`）——感知游戏画面 → 推进剧情/操作。与主播的交互分两种形态：委派型（主播交代目标，覆写 `receive_delegation`）与遥控型（主播直接调它的工具，不接委派）；形态由它的工具面说明（`guide_for`）告诉主播，见 [ADR-043](../decisions/043-game-agent-interaction-shapes.md)
+- **游戏 Agent**（如 `text_adv` / `minecraft`）——感知游戏画面 → 推进剧情/操作。与主播的交互分两种形态：委派型（主播交代目标，覆写 `receive_delegation`）与遥控型（主播直接调它的工具，不接委派）；形态由它的工具面说明（`guide_for`）告诉主播，见 [游戏 Agent 交互形态](../decisions/043-game-agent-interaction-shapes.md)
 - **自定义 Agent**（如 `custom`）——任何不归属业务/游戏的特殊决策体
 
 ### 协议六项（最小契约）
@@ -694,7 +693,7 @@ class MyAgentConfig(BaseConfig):
 class MyAgent(BaseAgent):
     # ----- 协议 6：元数据（必填）-----
     name = "my_agent"
-    description = "示例 Agent —— 演示 v2 Agent 范式"
+    description = "示例 Agent —— 演示 Agent 三范式"
 
     # ----- 协议 3：事件族声明（可选；仅文档作用）-----
     emits_events = (
@@ -711,7 +710,7 @@ class MyAgent(BaseAgent):
         prompt_manager: Optional[Any] = None,      # 按需注入
         **extra: Any,
     ) -> None:
-        """所有依赖通过构造器注入（基类不再兜底 name——务必显式声明）。"""
+        """所有依赖通过构造器注入（基类不兜底 name——务必显式声明）。"""
         super().__init__(event_bus=event_bus)
         self.typed_config = config
         self._event_bus = event_bus
@@ -853,7 +852,7 @@ class MyToolProvider(ToolProvider):
 |------|------|------|
 | StreamerAgent（业务 Agent） | `src/agents/streamer/streamer_agent.py` | 完整范例：订阅事件 + 后台双任务 + 流程单 + 三工具 Provider |
 | StreamerAgent 工具 | `src/agents/streamer/tools/{reply_tool,rundown_tool}.py` | reply 为 `provider="streamer"`、rundown_control 为 `provider="rundown"`；StreamerAgent 内部用 |
-| TextAdvGameAgent（游戏 Agent） | `src/agents/text_adv/agent.py` | 自包含包；`provider="text_adv"`（分类 game）；感知-推进闭环 |
+| TextAdvGameAgent（游戏 Agent） | `src/agents/text_adv/agent.py` | 自包含包；`provider="text_adv"`（分类 game）；感知游戏画面并推进游戏 |
 | TextAdvGameAgent 工具 | `src/agents/text_adv/tools.py` | `provider="text_adv"`（分类 game）；Agent 专属推进工具 |
 
 ---
@@ -888,13 +887,13 @@ class MyToolProvider(ToolProvider):
          ↓
 12. Planner 循环收到 reply 成功即收尾 → outcome{replied/speech/...} → Agent 解析 speech 生成 utterance_id 入 UtteranceQueue（fire-and-forget，不阻塞决策循环）；
     emotion → 随 streamer.speech 业务事件发布；虚拟形象适配器订阅后自行反射
-   （自动情绪路径，主播域零平台知识——见 ADR-023）
+   （自动情绪路径，主播域零平台知识——见 [虚拟形象平台无关边界](../decisions/023-avatar-platform-agnostic-boundary.md)）
          ↓
 13. 队列 worker 串行 await speak(text, utterance_id)（speak 是构造期注入的适配器，绑定装配期由 build_tts_infrastructure 选中的 tts_engine.handle_speech）→ 引擎合成 + 播放
     （TTS 引擎自身——基础模块，非工具——发布 tts.utterance.started/finished/failed 事件供字幕等消费者订阅；ToolRegistry 中零 TTS 条目）
          ↓
 14. 音频经 AudioDeviceManager（src/modules/audio/）输出到扬声器；播放器分接（AudioSink
-    协议）把音频复制递入口型分析器（共享件，[avatar.lipsync]）——见 ADR-024
+    协议）把音频复制递入口型分析器（共享件，[avatar.lipsync]）——见 [口型分析帧通道](../decisions/024-lipsync-frame-channel.md)
 ```
 
 **关键要点**：
@@ -909,11 +908,11 @@ class MyToolProvider(ToolProvider):
 | Reply 工具 | `src/agents/streamer/tools/reply_tool.py` | 局部工具（不进 ToolRegistry）；Planner 循环内直连 invoke |
 | Replyer 表达 | `src/agents/streamer/replyer.py` | 调 `replyer` profile + WordFilter；复古提示词生成纯文本，不发送工具；情绪由 Planner 提供 |
 | 发声队列 | `src/agents/streamer/utterance_queue.py` | FIFO 串行；满时丢最旧；单条 render_timeout_ms 看门狗；构造期注入 `speak` 适配器（绑定 `tts_engine.handle_speech`） |
-| TTS 播出 | `src/modules/tts/` 基础模块（4 引擎 Provider）+ `build_tts_infrastructure` 装配入口 | 引擎（`handle_speech`）发 `tts.utterance.*` 事件；详见 ADR-007 |
+| TTS 播出 | `src/modules/tts/` 基础模块（4 引擎 Provider）+ `build_tts_infrastructure` 装配入口 | 引擎（`handle_speech`）发 `tts.utterance.*` 事件；详见 [TTS 基础设施管线](../decisions/007-tts-infrastructure-pipeline.md) |
 
-### 已知缺口
+### 设计边界说明
 
-- **TTS 已基础模块化（原缺口已闭环）**：`infra.toml [tts].enabled = true` 后，`build_tts_infrastructure` 装配期按 `[tts].provider` 单选构造引擎实例，StreamerAgent 构造期接收并把 `engine.handle_speech` 注入 UtteranceQueue；reply 产出的 speech 经 UtteranceQueue → 引擎 `handle_speech` 播出（不走 ToolRegistry，零 TTS 工具条目）。设计决策见 [ADR-007](../decisions/007-tts-infrastructure-pipeline.md)。
+- **TTS 是基础模块而非工具**：`infra.toml [tts].enabled = true` 后，`build_tts_infrastructure` 装配期按 `[tts].provider` 单选构造引擎实例，StreamerAgent 构造期接收并把 `engine.handle_speech` 注入 UtteranceQueue；reply 产出的 speech 经 UtteranceQueue → 引擎 `handle_speech` 播出（不走 ToolRegistry，零 TTS 工具条目）。设计决策见 [TTS 基础设施管线](../decisions/007-tts-infrastructure-pipeline.md)。
 - **工具注册路径唯一**：`AgentManager` 不聚合工具注册——真实注册只走两条：① Agent 子类 `_register_tools()` 中自己 `registry.register_provider(provider, visible_to=...)`；② 分类工具在 `main.py` 由 `bind_core_tools(registry, tools_cfg)` 按域开关装配。装配结束后 `AgentManager.audit_tools(registry)` 按派生全名对账（缺失即 warning），不写任何工具实现。
 
 ---
@@ -944,7 +943,7 @@ class MyToolProvider(ToolProvider):
 
 - [开发规范](../../AGENTS.md#代码约定) — 代码风格与命名约定
 - [测试指南](testing.md) — 测试规范与技巧
-- [v2 架构叙事](../architecture/v2-architecture.md) — 顶层架构
+- [架构总览](../architecture/v2-architecture.md) — 顶层架构
 - [事件系统](../architecture/event-system.md) — EventBus 与事件拦截器
 - [事件命名](../architecture/event-naming.md) — 事件名动词链
 - [数据流规则](../architecture/data-flow.md) — 单向数据流约束

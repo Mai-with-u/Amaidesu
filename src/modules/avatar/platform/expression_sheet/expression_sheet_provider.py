@@ -221,7 +221,7 @@ class ExpressionSheetProvider(BaseToolProvider):
             return
         if not self.is_ready:
             self.logger.warning(self._not_ready_hint())
-        # 被动半事件订阅：情绪反射（streamer.speech）。未就绪时订阅保持——
+        # 事件订阅（被动响应业务事件）：情绪反射（streamer.speech）。未就绪时订阅保持——
         # 反射路径调用 set_expression 会拿到失败结果，配置就绪重启后无需改装配
         self._speech_emotion_handler = bind_speech_emotion(self.event_bus, self, self.logger)
         self._has_started = True

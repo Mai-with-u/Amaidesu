@@ -323,7 +323,7 @@
           </div>
 
           <!-- minecraft 目标的进行中任务卡条：发话→看任务→取消就地闭环。
-               主播无任务账本、无进行中任务时整条隐藏，不占控制台空间 -->
+               Agent 无任务记录、无进行中任务时整条隐藏，不占控制台空间 -->
           <div
             v-if="
               isFullMode && interventionTarget === MINECRAFT_AGENT_NAME && runningTasks.length > 0
@@ -467,8 +467,8 @@
  *
  * 页面私有逻辑按块拆在 composables/live/：场次侧边栏（useLiveSessions）、
  * 思考流（useThinkingStream）、时间线内容合成（useLiveTimeline）、顶栏/环节
- * 徽章（useLiveStatus）、干预输入条（useInterventionBar）、滚动跟随接线
- * （useTimelineScroll）。全局共享态（events 流、WS 连接）仍在 Pinia store。
+ * 徽章（useLiveStatus）、干预输入条（useInterventionBar）、滚动跟随的页面侧
+ * 组装（useTimelineScroll）。全局共享态（events 流、WS 连接）仍在 Pinia store。
  * 本组件只做装配与跨块的少量编排（清空时间线联动未读计数）。
  */
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue';
@@ -716,7 +716,7 @@ watch(interventionTarget, target => {
 });
 
 // minecraft 目标的进行中任务（紧循环：发话→看任务→取消）。
-// 数据流与 Agent 页任务板同源（useAgentTasks）；主播无任务账本不展示
+// 数据流与 Agent 页任务板同源（useAgentTasks）；主播 Agent 无任务记录不展示
 // 取消前的确认微流程与 Agent 任务板同源（useAgentTasks 收口）
 const { runningTasks, cancelTaskWithConfirm: cancelTask } = useAgentTasks(interventionTarget);
 

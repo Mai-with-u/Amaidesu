@@ -1,6 +1,6 @@
 /* eslint-disable vue/one-component-per-file -- 测试需要宿主+消费两个内联组件 */
 // @vitest-environment happy-dom
-// useAgentTasks.ts 任务账本共享组合式的测试
+// useAgentTasks.ts 任务列表共享组合式的测试
 //
 // 覆盖：executor 过滤、目标切换重过滤与就绪拉快照、task.changed 计数变化
 // 触发静默刷新、cancelTask 的 API 调用与刷新、失败路径的静默/提示语义。
@@ -41,7 +41,7 @@ const confirmActionMock = vi.mocked(confirmAction);
 const listTasksMock = vi.mocked(tasksApi.listTasks);
 const cancelAgentTaskMock = vi.mocked(agentsApi.cancelAgentTask);
 
-/** 任务账本条目最小形状（字段与后端 TaskCard 对齐）。
+/** 任务列表条目最小形状（字段与后端 TaskCard 对齐）。
  *  owner = 归属 Agent（后端推导：agent 型 = 执行 Agent；provider 型 = 发起 Agent） */
 function task(executor: string, taskId = 'task_1', status = 'running', owner = executor) {
   return {

@@ -110,7 +110,7 @@ watch(
   },
 );
 
-// 轮询兜底：事件只在写入时刻发射，漏接一次账面就停在旧快照。
+// 轮询兜底：事件只在写入时刻发射，漏接一次快照就停在旧数据。
 // 面板多在全局 keep-alive 内——setup 即启动 + 激活态启停 + 销毁兜底
 useKeepAlivePolling(() => refreshMemo(), MEMO_POLL_INTERVAL_MS, {
   startOnSetup: true,

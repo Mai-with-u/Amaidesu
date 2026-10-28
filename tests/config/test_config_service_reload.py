@@ -71,8 +71,8 @@ def _bot_name(service: ConfigService) -> str | None:
 
 
 def test_no_scope_declares_hot_anymore() -> None:
-    """热重载回调接缝已退役：任何 scope 都不得声明 hot——hot 的唯一历史效果是
-    吞掉"需重启"警告，形成静默假生效（ADR-049）。"""
+    """任何 scope 都不得声明 hot：配置目录没有热重载回调通道，改动一律重启生效；
+    声明 hot 的效果是吞掉"需重启"警告，让改动看似已生效实则未加载（静默假生效）。"""
     assert "hot" not in set(SCOPE_RELOAD_POLICY.values())
 
 
