@@ -14,7 +14,7 @@ llm_profiles）解析为运行期数据结构：
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -109,12 +109,16 @@ class _ResolvedProfile(BaseModel):
 def register_providers(
     provider_configs: List[Dict[str, Any]],
     logger: Any = None,
+    client_factory: Optional[Callable[[Dict[str, Any]], Any]] = None,
 ) -> Tuple[Dict[str, Tuple[Dict[str, Any], Any]], Dict[str, Any]]:
-    """构造 provider 连接池：每个 provider 配置经调度表实例化一个共享客户端。
+    """构造 provider 连接池：每个 provider 配置实例化一个共享客户端。
 
     Args:
         provider_configs: ``[[llm_providers]]`` 配置列表
         logger: 装配日志载体（引擎把自己的 logger 传入，保持日志名一致）
+        client_factory: 客户端构造工厂；缺省 None 走 clients 调度表按
+            ``client_type`` 构造，注入时每个 provider 配置都交给它实例化
+            （测试注入替身客户端用，装配解析路径与其余步骤完全一致）
 
     Returns:
         (providers, provider_clients)：
@@ -129,8 +133,11 @@ def register_providers(
         if name in providers:
             raise ValueError(f"llm_providers 中存在重复的 provider name: {name!r}")
         client_type = pcfg.get("client_type", "openai")
-        impl = get_client_impl(client_type)
-        client_instance = impl(pcfg)
+        if client_factory is not None:
+            client_instance = client_factory(pcfg)
+        else:
+            impl = get_client_impl(client_type)
+            client_instance = impl(pcfg)
         providers[name] = (pcfg, client_instance)
         provider_clients[name] = client_instance
         log.info(f"已注册 provider '{name}' (客户端: {client_type}, 端点: {pcfg.get('base_url', 'N/A')})")

@@ -15,17 +15,10 @@ from src.modules.llm.quota import ProviderQuota, QuotaWindow
 from src.modules.llm.request_history_manager import RequestHistoryManager
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.repos.llm import LLMRequestInsert, LLMUsageInsert
+from tests.modules.llm.fakes import FakeLLMManager
 
 MODEL_A = "test-model-a"
 MODEL_B = "test-model-b"
-
-
-class _FakeLLMManager:
-    def __init__(self, windows: Dict[str, int]) -> None:
-        self._windows = windows
-
-    def get_model_context_windows(self) -> Dict[str, int]:
-        return dict(self._windows)
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +34,7 @@ async def llm_client(api, store: SQLiteDatabase, event_bus):
     async def _make(windows: Dict[str, int] | None = None):
         extra: Dict[str, Any] = {"request_history_manager": RequestHistoryManager(llm_repo=store.llm)}
         if windows:
-            extra["llm_manager"] = _FakeLLMManager(windows)
+            extra["llm_manager"] = FakeLLMManager(context_windows=windows)
         return await api(event_bus=event_bus, llm_repo=store.llm, **extra)
 
     yield _make

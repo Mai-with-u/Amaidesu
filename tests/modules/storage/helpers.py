@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from src.modules.llm.bootstrap import _ResolvedModel, _ResolvedProfile
 from src.modules.llm.engine import LLMManager
 from src.modules.events.payloads.room import (
     GiftInfo,
@@ -84,21 +83,29 @@ def make_room_message(
     return RoomMessagePayload(**common)
 
 
-def make_llm_manager(client: Any, *, llm_repo: Any = None, **kwargs: Any) -> LLMManager:
-    """绕过 setup() 的真实 provider 装配：planner 档位单模型 glm-4.7，走注入的客户端替身。"""
-    manager = LLMManager(llm_repo=llm_repo, **kwargs)
-    manager._provider_clients["fake"] = client
-    manager._providers["fake"] = ({"name": "fake", "client_type": "openai"}, client)
-    manager._models["glm-4.7"] = ({"name": "glm-4.7", "model_identifier": "glm-4.7", "api_provider": "fake"}, "fake")
-    manager._profiles["planner"] = _ResolvedProfile(
-        profile_name="planner",
-        slow_threshold_ms=15_000,
-        selection_strategy="sequential",
-        seed=0,
-        temperature=0.3,
-        models=[_ResolvedModel(model_name="glm-4.7", model_identifier="glm-4.7", provider_name="fake")],
-    )
-    manager._model_call_counts["planner"] = {}
+async def make_llm_manager(client: Any, *, llm_repo: Any = None, **kwargs: Any) -> LLMManager:
+    """走 setup() 公共装配路径的 LLMManager：planner 档位单模型 glm-4.7，
+    provider 客户端经 ``client_factory`` 注入入口替换为传入的替身，不触碰任何私有成员。
+    """
+    config: dict = {
+        "llm_providers": [
+            {
+                "name": "fake",
+                "client_type": "openai",
+                "base_url": "https://fake.example.com/v1",
+                "api_key": "test",
+            }
+        ],
+        "llm_models": [{"name": "glm-4.7", "model_identifier": "glm-4.7", "api_provider": "fake"}],
+        "llm_profiles": {
+            "planner": {
+                "model_list": ["glm-4.7"],
+                "selection_strategy": {"name": "sequential"},
+            }
+        },
+    }
+    manager = LLMManager(llm_repo=llm_repo, client_factory=lambda _provider_config: client, **kwargs)
+    await manager.setup(config)
     return manager
 
 

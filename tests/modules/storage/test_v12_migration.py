@@ -81,10 +81,12 @@ async def test_fresh_db_has_v12_columns_and_profile_index(store: SQLiteDatabase)
             return {row[1] for row in conn.execute("PRAGMA index_list(llm_requests)").fetchall()}
 
     assert "idx_llm_requests_profile" in await store._run_in_executor(_check)
+
     # usage_raw_json 曾随 v12 落地，全链升到 v17 后作为出库死列退役
     def _check_gone() -> set:
         with store.manager.transaction() as conn:
             return _column_names(conn, "llm_requests")
+
     assert "usage_raw_json" not in await store._run_in_executor(_check_gone)
 
 
@@ -111,9 +113,7 @@ async def test_v11_db_upgrade_renames_column_and_keeps_legacy_values(db_path: Pa
         await db.initialize()
         try:
             assert await db.get_schema_version() == SCHEMA_VERSION
-            rows = await db.execute(
-                "SELECT profile_name, reasoning_tokens FROM llm_requests ORDER BY timestamp_ms"
-            )
+            rows = await db.execute("SELECT profile_name, reasoning_tokens FROM llm_requests ORDER BY timestamp_ms")
             assert [(r["profile_name"], r["reasoning_tokens"]) for r in rows] == [
                 ("llm", 0),
                 ("llm_fast", 0),
@@ -143,7 +143,7 @@ class _FakeReasoningClient:
 
 async def test_engine_persists_reasoning_tokens_without_raw_usage_body(store: SQLiteDatabase) -> None:
     """engine 成功调用 → 两表 reasoning_tokens 落库；usage_raw_json 正文出库到诊断文件，库列为 NULL。"""
-    manager = make_llm_manager(_FakeReasoningClient({"name": "fake"}), llm_repo=store.llm)
+    manager = await make_llm_manager(_FakeReasoningClient({"name": "fake"}), llm_repo=store.llm)
 
     assert (await manager.generate("你好", profile="planner")).success
     assert [r["reasoning_tokens"] for r in await store.execute("SELECT reasoning_tokens FROM llm_usage")] == [7]

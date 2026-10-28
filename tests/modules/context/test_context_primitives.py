@@ -22,6 +22,7 @@ from src.modules.context import (
     resolve_watermarks,
 )
 from src.modules.tools.models import ResultBlock, ToolExecutionResult
+from tests.modules.llm.fakes import FakeLLMManager
 
 
 def _user(text: str) -> Dict[str, Any]:
@@ -233,13 +234,8 @@ class _RecordingStore:
 
 
 def _visual_llm(visual: bool = True) -> Any:
-    """带 is_profile_visual 的假引擎对象。"""
-
-    class _FakeLLM:
-        def is_profile_visual(self, profile: str) -> bool:
-            return visual
-
-    return _FakeLLM()
+    """带 is_profile_visual 出口的统一假引擎（FakeLLMManager 的能力查询态）。"""
+    return FakeLLMManager(visual=visual)
 
 
 def _image_result(*, success: bool = True, image_count: int = 1) -> ToolExecutionResult:

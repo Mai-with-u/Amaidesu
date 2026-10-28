@@ -5,23 +5,19 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from src.modules.llm.payload import Response, Usage
+from tests.modules.llm.fakes import FakeLLMManager
 
 
-class FakeLLMService:
+class FakeLLMService(FakeLLMManager):
+    """SimulatorService 形状的假 LLM 服务（统一假件的薄封装，保留 setup/cleanup 探测属性与调用计数）。"""
+
     def __init__(self, reply: str = "模拟观众弹幕", tokens: int = 10) -> None:
-        self._reply = reply
-        self._tokens = tokens
-        self.chat_calls = 0
+        super().__init__(Response(success=True, content=reply, usage=Usage(total_tokens=tokens)))
 
-    async def generate(self, prompt: str, **kwargs: Any) -> Any:
-        self.chat_calls += 1
-        return Response(success=True, content=self._reply, usage=Usage(total_tokens=self._tokens))
-
-    async def setup(self, config: Any) -> None:
-        pass
-
-    async def cleanup(self) -> None:
-        pass
+    @property
+    def chat_calls(self) -> int:
+        """generate 被调用的次数。"""
+        return len(self.calls)
 
 
 class FakeConfigService:

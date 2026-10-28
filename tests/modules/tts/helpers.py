@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import base64
 import struct
-from typing import Any, Optional
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.llm.payload import Response
 from src.modules.events.payloads.utterance import (
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
     UtteranceStartedPayload,
 )
+from src.modules.llm.payload import Response
+from tests.modules.llm.fakes import FakeLLMManager
 
 LIFECYCLE_EVENTS = (
     (CoreEvents.TTS_UTTERANCE_STARTED, UtteranceStartedPayload),
@@ -90,20 +91,11 @@ def audio_response(
     )
 
 
-class FakeLLM:
-    """AudioLLMInvoker 形状的记录替身。"""
+class FakeLLM(FakeLLMManager):
+    """AudioLLMInvoker 形状的记录替身（统一假件 :class:`FakeLLMManager` 的薄封装）。"""
 
     def __init__(self, response: Optional[Response] = None, error: Optional[Exception] = None) -> None:
-        self.response = response
-        self.error = error
-        self.calls: list[dict[str, Any]] = []
-
-    async def generate_audio(self, input: Any, **kwargs: Any) -> Response:
-        self.calls.append({"input": input, **kwargs})
-        if self.error is not None:
-            raise self.error
-        assert self.response is not None
-        return self.response
+        super().__init__(response, error=error)
 
 
 def fake_http_session():

@@ -31,7 +31,8 @@ class _FatalLLMService(FakeLLMService):
     """恒返不可恢复错误（HTTP 402）。"""
 
     async def generate(self, prompt: str, **kwargs: Any) -> Any:
-        self.chat_calls += 1
+        # 统一假件的计数走 calls 列表（chat_calls 为只读视图），这里手动登记本次调用
+        self.calls.append({"method": "generate", "input": prompt})
         error = "全部模型失败 ['deepseek-flash']: FatalError: 请求被服务端拒绝（HTTP 402）"
         return Response(success=False, content="", error=error, usage=Usage(total_tokens=0))
 

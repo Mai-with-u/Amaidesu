@@ -56,7 +56,7 @@ async def test_insert_llm_usage_roundtrip(store: SQLiteDatabase) -> None:
 
 
 async def test_successful_call_persists_llm_usage(store: SQLiteDatabase) -> None:
-    manager = make_llm_manager(_FakeUsageClient(), llm_repo=store.llm)
+    manager = await make_llm_manager(_FakeUsageClient(), llm_repo=store.llm)
     assert (await manager.generate("你好", profile="planner")).success
 
     (row,) = await store.execute("SELECT * FROM llm_usage")
@@ -65,12 +65,13 @@ async def test_successful_call_persists_llm_usage(store: SQLiteDatabase) -> None
 
 
 async def test_missing_or_failing_repo_does_not_break_call(store: SQLiteDatabase, monkeypatch) -> None:
-    assert (await make_llm_manager(_FakeUsageClient()).generate("你好", profile="planner")).success
+    manager = await make_llm_manager(_FakeUsageClient())
+    assert (await manager.generate("你好", profile="planner")).success
 
     async def _boom(**kwargs):
         raise RuntimeError("db locked")
 
-    manager = make_llm_manager(_FakeUsageClient(), llm_repo=store.llm)
+    manager = await make_llm_manager(_FakeUsageClient(), llm_repo=store.llm)
     monkeypatch.setattr(manager._observer._llm_repo, "insert_llm_usage", _boom)
     assert (await manager.generate("你好", profile="planner")).success
 
@@ -78,7 +79,7 @@ async def test_missing_or_failing_repo_does_not_break_call(store: SQLiteDatabase
 async def test_breakdown_goes_to_diagnostics(store: SQLiteDatabase, tmp_path: Path) -> None:
     """breakdown 不落库（列为 NULL），正文与分段占用走诊断小时流与 latest 快照。"""
     writer = DiagnosticsWriter(base_dir=tmp_path, retention_days=0)
-    manager = make_llm_manager(_FakeUsageClient(), llm_repo=store.llm, diagnostics_writer=writer)
+    manager = await make_llm_manager(_FakeUsageClient(), llm_repo=store.llm, diagnostics_writer=writer)
     result = await manager.generate("你好", profile="planner")
     assert result.success
     writer.stop()
@@ -98,7 +99,7 @@ async def test_breakdown_goes_to_diagnostics(store: SQLiteDatabase, tmp_path: Pa
 async def test_breakdown_not_persisted_diagnostics_is_authoritative(store: SQLiteDatabase, tmp_path: Path) -> None:
     """分段占用不落库（列已随 v17 退役）：诊断小时流与 latest 快照是唯一数据源。"""
     writer = DiagnosticsWriter(base_dir=tmp_path, retention_days=0)
-    manager = make_llm_manager(_FakeUsageClient(), llm_repo=store.llm, diagnostics_writer=writer)
+    manager = await make_llm_manager(_FakeUsageClient(), llm_repo=store.llm, diagnostics_writer=writer)
     result = await manager.generate("你好", profile="planner")
     writer.stop()
 

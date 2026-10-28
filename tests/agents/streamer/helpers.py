@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.streamer_agent import StreamerAgent
-from src.modules.llm.payload import Response
+from tests.modules.llm.fakes import FakeLLMManager
 
 
 def streamer_config(sections: Optional[Dict[str, Any]] = None) -> StreamerConfig:
@@ -25,11 +25,9 @@ def streamer_config(sections: Optional[Dict[str, Any]] = None) -> StreamerConfig
     return StreamerConfig.from_dict(merged)
 
 
-def stub_llm() -> MagicMock:
-    """不应被真正调用的 LLM：调用即得到失败响应，而不是悬挂。"""
-    llm = MagicMock()
-    llm.generate = AsyncMock(return_value=Response(success=False, error="not used"))
-    return llm
+def stub_llm() -> FakeLLMManager:
+    """不应被真正调用的 LLM：调用即得到失败响应，而不是悬挂（统一假件 fail 态）。"""
+    return FakeLLMManager(fail=True, fail_error="not used")
 
 
 def stub_prompt() -> MagicMock:

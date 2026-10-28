@@ -67,7 +67,11 @@ from src.modules.logging import get_logger
 from src.modules.storage.repos import LLMRepo
 from src.modules.vision.image_store import get_image_store
 
-__all__ = ["LLMManager", "RetryConfig", "inline_payload_spans"]
+__all__ = ["ClientFactory", "LLMManager", "RetryConfig", "inline_payload_spans"]
+
+# provider 客户端构造工厂：接收 provider 配置 dict，返回客户端实例。
+# 缺省路径走 clients 调度表按 client_type 构造；测试注入替身客户端用。
+ClientFactory = Callable[[Dict[str, Any]], Any]
 
 
 class RetryConfig(BaseModel):
@@ -423,8 +427,11 @@ class LLMManager:
         llm_repo: Optional[LLMRepo] = None,
         live_session_resolver: Optional[Callable[[], Optional[int]]] = None,
         diagnostics_writer: Optional[DiagnosticsWriter] = None,
+        client_factory: Optional[ClientFactory] = None,
     ) -> None:
         self.logger = get_logger("LLMManager")
+        # provider 客户端构造工厂：缺省 None 走 clients 调度表，行为与未注入时一致
+        self._client_factory = client_factory
         # provider_name -> provider 配置 + 客户端实例（共享连接）
         self._providers: Dict[str, Tuple[Dict[str, Any], Any]] = {}
         # provider_name -> 客户端实例（仅客户端引用，便于快速查找）
@@ -502,8 +509,11 @@ class LLMManager:
         if not provider_configs:
             raise ValueError("LLMManager.setup 收到空 llm_providers（至少需要 1 个 provider）")
 
-        # provider 客户端注册（每个 provider 一个连接）与模型索引由 bootstrap 承担
-        self._providers, self._provider_clients = register_providers(provider_configs, self.logger)
+        # provider 客户端注册（每个 provider 一个连接）与模型索引由 bootstrap 承担；
+        # 注入了 client_factory 时客户端构造走注入工厂，装配解析路径不变
+        self._providers, self._provider_clients = register_providers(
+            provider_configs, self.logger, client_factory=self._client_factory
+        )
         # 模型索引原地更新：观测器按引用持有该表，重建引用会使其拿到陈旧快照
         models_index = index_models(config.get("llm_models") or [], self._providers)
         self._models.clear()
