@@ -244,8 +244,7 @@ class OpenAIClient(BaseLLMClient):
 
         OpenAI 协议 tool 角色只收文本，图像仅 user 角色可带。tool 消息携带
         图像片段即结构性缺陷，就地硬错——图的合法通道是引擎注水后挂在
-        紧随工具回执的 user 消息尾部（ADR-040），不存在"回执自带图"的
-        生产者。
+        紧随工具回执的 user 消息尾部，不存在"回执自带图"的生产者。
         """
         if message.role == "tool":
             cls._ensure_tool_message_has_no_image(message)

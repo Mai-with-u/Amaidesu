@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
-from typing import Any, Dict, Optional, TYPE_CHECKING, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -21,9 +21,6 @@ from src.modules.config.core_schemas import EdgeTTSParams
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from ...common import build_stats_dict, run_full_engine_speech
-
-if TYPE_CHECKING:
-    pass
 
 
 DEPENDENCIES_OK = True

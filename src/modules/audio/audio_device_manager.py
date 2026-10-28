@@ -24,8 +24,8 @@ try:
     import sounddevice as sd
 
     DEPENDENCIES_OK = True
-except ImportError:
-    pass
+except ImportError as exc:
+    get_logger("AudioDeviceManager").debug(f"sounddevice 未安装，设备枚举与播放 API 走降级路径: {exc}")
 except Exception as exc:  # noqa: BLE001 - 降级路径本身：记录后按依赖不可用处理
     get_logger("AudioDeviceManager").debug(
         f"sounddevice 导入期初始化失败，音频 API 走降级路径: {type(exc).__name__}: {exc}"
