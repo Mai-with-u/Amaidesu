@@ -1315,6 +1315,16 @@ export interface MemoryMutationResponse {
   success: boolean;
 }
 
+/** 一份长期记忆（GET / PUT /api/v1/memory/long-term/{kind}） */
+export interface LongMemoryResponse {
+  kind: SessionKind;
+  text: string;
+  /** 文件绝对路径（可直接用编辑器打开） */
+  path: string;
+  /** 文件最近修改时刻；文件还没生成为 0 */
+  updated_at_ms: number;
+}
+
 export interface MemoryStatsResponse {
   profile_count: number;
   /** 最近一次印象更新时刻，空库为 0 */

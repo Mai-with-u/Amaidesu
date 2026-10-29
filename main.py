@@ -891,6 +891,8 @@ async def create_app_components(
             storage_db_path=database.db_path,
             # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
             recap_repo=database.recaps,
+            # 主播记忆页查看与编辑长期记忆文件（MEMORY.md）
+            long_memory_store=database.long_memory,
             rundown_transition_repo=database.rundown_transitions,
             # 观众域查询接口：列表 / 档案 / 对话 / 贡献聚合直查存储层
             viewer_repo=database.viewers,
@@ -1183,6 +1185,7 @@ async def _start_dashboard(
     viewer_identity_repo=None,
     event_repo=None,
     recap_repo=None,
+    long_memory_store=None,
     rundown_transition_repo=None,
     storage_db_path=None,
     task_tracker=None,
@@ -1226,6 +1229,8 @@ async def _start_dashboard(
             event_repo=event_repo,
             # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
             recap_repo=recap_repo,
+            # 主播记忆页查看与编辑长期记忆文件（MEMORY.md）
+            long_memory_store=long_memory_store,
             rundown_transition_repo=rundown_transition_repo,
             storage_db_path=storage_db_path,
             # 任务跟踪器：任务卡快照（GET /api/v1/tasks）与运营委派的数据源

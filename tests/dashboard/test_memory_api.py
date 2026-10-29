@@ -81,3 +81,23 @@ async def test_endpoints_503_when_the_roster_is_not_wired(api, event_bus) -> Non
 
     assert (await client.get("/api/v1/memory/profiles")).status_code == 503
     assert (await client.get("/api/v1/memory/stats")).status_code == 503
+
+
+async def test_long_memory_read_edit_per_kind_and_503_without_store(api, store: SQLiteDatabase, event_bus) -> None:
+    """长期记忆：文件没生成时读回空正文；整份覆盖写后正式与彩排互不影响；未装配时 503。"""
+    client = await api(event_bus=event_bus, long_memory_store=store.long_memory)
+    empty = (await client.get("/api/v1/memory/long-term/live")).json()
+    assert (empty["text"], empty["updated_at_ms"]) == ("", 0)
+    assert empty["path"].endswith("MEMORY.md")
+
+    saved = await client.put(
+        "/api/v1/memory/long-term/live", json={"text": "## 答应过的事\n- 我答应老王挖钻石（未兑现）\n"}
+    )
+    assert saved.status_code == 200
+    assert saved.json()["text"] == "## 答应过的事\n- 我答应老王挖钻石（未兑现）" and saved.json()["updated_at_ms"] > 0
+    assert await store.long_memory.read("live") == "## 答应过的事\n- 我答应老王挖钻石（未兑现）"
+    assert (await client.get("/api/v1/memory/long-term/rehearsal")).json()["text"] == ""
+    assert (await client.get("/api/v1/memory/long-term/fake")).status_code == 422
+
+    bare = await api(event_bus=event_bus)
+    assert (await bare.get("/api/v1/memory/long-term/live")).status_code == 503

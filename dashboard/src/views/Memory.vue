@@ -3,9 +3,9 @@
     <!-- 页面头：身份 + 总量 + 刷新                                               -->
     <header class="page-header">
       <div class="header-left">
-        <h1 class="page-title">观众画像</h1>
+        <h1 class="page-title">主播记忆</h1>
         <p class="page-subtitle">
-          主播对常客的印象 · 查看 / 纠正 / 清理
+          长期记忆与对常客的印象 · 查看 / 纠正 / 清理
           <template v-if="stats && stats.profile_count > 0">
             （常客 {{ stats.profile_count }} 位）</template
           >
@@ -15,6 +15,9 @@
         <el-button :loading="loading" @click="reload">刷新</el-button>
       </div>
     </header>
+
+    <!-- 长期记忆（MEMORY.md）：正式 / 彩排各一份，整份编辑                        -->
+    <LongMemoryPanel />
 
     <!-- 工具条：搜索（防抖）                                                     -->
     <div class="toolbar">
@@ -122,7 +125,7 @@
 
 <script setup lang="ts">
 /**
- * 观众画像管理 —— viewer_profiles 的查看 / 纠正 / 清理入口
+ * 主播记忆管理 —— 长期记忆（MEMORY.md）与 viewer_profiles 的查看 / 纠正 / 清理入口
  *
  * 数据接口：/api/v1/memory/*（画像列表 / 纠正 / 删除 / 统计）。印象由主播在每场
  * 收播时为本场活跃的常客整理，这里只提供人工查看与纠正。
@@ -136,6 +139,7 @@ import { memoryApi } from '@/api';
 import type { ViewerProfileItem, MemoryStatsResponse } from '@/types';
 import { formatDateTimeCn as formatTime, relativeAge } from '@/utils/format';
 import { confirmAction } from '@/utils/confirmAction';
+import LongMemoryPanel from '@/components/viewers/LongMemoryPanel.vue';
 
 const pageSize = 20;
 

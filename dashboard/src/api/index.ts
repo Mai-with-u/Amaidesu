@@ -88,6 +88,7 @@ import type {
   TriggerProactiveRequest,
   TriggerProactiveResponse,
   LiveSessionListResponse,
+  LongMemoryResponse,
   SessionKind,
   SessionRundownExecutionResponse,
   SessionTimelineResponse,
@@ -450,12 +451,13 @@ export const rundownApi = {
     api.post<RundownMutateResponse>(`/rundowns/${rundownId}/activate`),
 };
 
-// 观众画像管理（viewer_profiles 的查看与纠正接口）
+// 主播记忆管理（viewer_profiles 的查看与纠正 + 长期记忆 MEMORY.md 的查看与编辑）
 //
 // 读写全部经后端 ViewerProfileRepo（常客印象读写）。
 // `GET /memory/profiles`：画像列表（搜索 / 分页）。
 // `PATCH / DELETE /memory/profiles/{viewerId}`：人工纠正 / 删除印象（按内部观众 ID）。
 // `GET /memory/stats`：总量统计（常客数 / 最近更新）。
+// `GET / PUT /memory/long-term/{kind}`：长期记忆全文读取 / 整份覆盖写（正式 / 彩排各一份）。
 export const memoryApi = {
   listProfiles: (params?: { search?: string; limit?: number; offset?: number }) =>
     api.get<ViewerProfileListResponse>('/memory/profiles', { params }),
@@ -464,6 +466,9 @@ export const memoryApi = {
   deleteProfile: (viewerId: number) =>
     api.delete<MemoryMutationResponse>(`/memory/profiles/${viewerId}`),
   getStats: () => api.get<MemoryStatsResponse>('/memory/stats'),
+  getLongMemory: (kind: SessionKind) => api.get<LongMemoryResponse>(`/memory/long-term/${kind}`),
+  saveLongMemory: (kind: SessionKind, text: string) =>
+    api.put<LongMemoryResponse>(`/memory/long-term/${kind}`, { text }),
 };
 
 // 场次复盘（只读聚合 + 数据包导出）

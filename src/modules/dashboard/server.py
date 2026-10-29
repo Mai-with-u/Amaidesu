@@ -86,6 +86,7 @@ class DashboardServer:
         viewer_identity_repo: Optional[Any] = None,
         event_repo: Optional[Any] = None,
         recap_repo: Optional[Any] = None,
+        long_memory_store: Optional[Any] = None,
         rundown_transition_repo: Optional[Any] = None,
         storage_db_path: Optional[Path] = None,
         task_tracker: Optional[Any] = None,
@@ -163,6 +164,9 @@ class DashboardServer:
         # 注入 SessionRecapRepo 让 /api/v1/review 的总结面板读 session_recaps；
         # 未注入（极简启动/测试）时复盘聚合的回顾字段按缺数据降级为空
         self.recap_repo = recap_repo
+        # 注入长期记忆文件存储让 /api/v1/memory/long-term 查看与编辑 MEMORY.md；
+        # 未注入（极简启动/测试）时该端点返回 503
+        self.long_memory_store = long_memory_store
         # 注入 RundownTransitionRepo 让 /live-sessions/{id}/rundown-execution
         # 读流程单变更事实行；未注入（极简启动/测试）时该端点返回 503
         self.rundown_transition_repo = rundown_transition_repo

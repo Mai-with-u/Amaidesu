@@ -249,6 +249,11 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
         ("success", "detail"),
     ),
     (
+        "memoryApi.getLongMemory → GET /memory/long-term/{kind}",
+        memory_api.LongMemoryResponse,
+        ("kind", "text", "path", "updated_at_ms"),
+    ),
+    (
         "liveSessionsApi.setKind → PATCH /live-sessions/{id}/kind",
         session_schemas.SessionActionResponse,
         ("success", "detail"),
