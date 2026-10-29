@@ -4,7 +4,7 @@ ExpressionController - VTS 表情/参数控制器
 负责 VTS 表情参数读写（微笑、眨眼、参数设置/获取）。
 """
 
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from src.modules.logging import get_logger
 
@@ -27,11 +27,12 @@ class ExpressionController:
         *,
         logger_name: str,
         is_connected: Callable[[], bool],
-        vts_request: Callable[..., Coroutine[Any, Any, Any]],
+        request: Callable[[str, Optional[Dict[str, Any]]], Awaitable[Dict[str, Any]]],
     ) -> None:
         self.logger = get_logger(logger_name)
         self._is_connected = is_connected
-        self._vts_request = vts_request
+        # VTS 请求入口：(消息类型, 数据) → 回复的 data；VTS 报错时抛异常
+        self._request = request
 
     async def smile(self, value: float = 1) -> bool:
         if not self._is_connected():
@@ -74,18 +75,17 @@ class ExpressionController:
                 self.logger.warning(f"VTS未连接，无法设置参数: {parameter_name} = {value}")
             return False
         try:
-            response = await self._vts_request(
-                self._vts_request.vts_request.requestSetParameterValue(
-                    parameter_name, value, weight, face_found=FACE_FOUND
-                )
+            await self._request(
+                "InjectParameterDataRequest",
+                {
+                    "faceFound": FACE_FOUND,
+                    "mode": "set",
+                    "parameterValues": [{"id": parameter_name, "value": value, "weight": weight}],
+                },
             )
-            if response and response.get("messageType") == "InjectParameterDataResponse":
-                if not silent:
-                    self.logger.debug(f"VTS参数 {parameter_name} 已设置为: {value}")
-                return True
             if not silent:
-                self.logger.warning(f"设置VTS参数失败: {parameter_name}: {response}")
-            return False
+                self.logger.debug(f"VTS参数 {parameter_name} 已设置为: {value}")
+            return True
         except Exception as e:
             if not silent:
                 self.logger.error(f"设置VTS参数异常: {parameter_name}: {e}")
@@ -95,11 +95,8 @@ class ExpressionController:
         if not self._is_connected():
             return None
         try:
-            response = await self._vts_request(self._vts_request.vts_request.requestParameterValue(parameter_name))
-            if response and response.get("messageType") == "ParameterValueResponse":
-                return response.get("data", {}).get("value", 0.0)
-            self.logger.warning(f"获取VTS参数失败: {parameter_name}: {response}")
-            return None
+            data = await self._request("ParameterValueRequest", {"name": parameter_name})
+            return data.get("value", 0.0)
         except Exception as e:
             self.logger.error(f"获取VTS参数异常: {parameter_name}: {e}")
             return None
@@ -114,21 +111,9 @@ class ExpressionController:
         if not self._is_connected():
             return []
         try:
-            response = await self._vts_request(self._vts_request.vts_request.requestTrackingParameterList())
-            if response and response.get("messageType") in (
-                "InputParameterListResponse",
-                "TrackingParameterListResponse",
-            ):
-                data = response.get("data", {})
-                # 兼容不同响应形态：defaultParameters + customParameters 或 model_parameters
-                params = (
-                    data.get("defaultParameters", [])
-                    + data.get("customParameters", [])
-                    + data.get("model_parameters", [])
-                )
-                return [str(p.get("name")) for p in params if p.get("name")]
-            self.logger.warning(f"获取VTS参数列表失败: {response}")
-            return []
+            data = await self._request("InputParameterListRequest", None)
+            params = data.get("defaultParameters", []) + data.get("customParameters", [])
+            return [str(p.get("name")) for p in params if p.get("name")]
         except Exception as e:
             self.logger.error(f"获取VTS参数列表异常: {e}")
             return []
@@ -143,14 +128,8 @@ class ExpressionController:
         if not self._is_connected():
             return []
         try:
-            response = await self._vts_request(
-                self._vts_request.vts_request.BaseRequest(message_type="Live2DParameterListRequest")
-            )
-            if response and response.get("messageType") == "Live2DParameterListResponse":
-                params = response.get("data", {}).get("parameters", [])
-                return [str(p.get("name")) for p in params if p.get("name")]
-            self.logger.debug(f"获取 Live2D 参数清单失败: {response}")
-            return []
+            data = await self._request("Live2DParameterListRequest", None)
+            return [str(p.get("name")) for p in data.get("parameters", []) if p.get("name")]
         except Exception as e:
             self.logger.debug(f"获取 Live2D 参数清单异常: {e}")
             return []
@@ -166,27 +145,15 @@ class ExpressionController:
         if not self._is_connected():
             return {}
         try:
-            response = await self._vts_request(self._vts_request.vts_request.requestTrackingParameterList())
-            if response and response.get("messageType") in (
-                "InputParameterListResponse",
-                "TrackingParameterListResponse",
-            ):
-                data = response.get("data", {})
-                params = (
-                    data.get("defaultParameters", [])
-                    + data.get("customParameters", [])
-                    + data.get("model_parameters", [])
-                )
-                ranges: Dict[str, tuple[float, float]] = {}
-                for p in params:
-                    name = str(p.get("name") or "")
-                    try:
-                        ranges[name] = (float(p["min"]), float(p["max"]))
-                    except (KeyError, TypeError, ValueError):
-                        continue
-                return ranges
-            self.logger.warning(f"获取VTS参数范围失败: {response}")
-            return {}
+            data = await self._request("InputParameterListRequest", None)
+            ranges: Dict[str, tuple[float, float]] = {}
+            for p in data.get("defaultParameters", []) + data.get("customParameters", []):
+                name = str(p.get("name") or "")
+                try:
+                    ranges[name] = (float(p["min"]), float(p["max"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            return ranges
         except Exception as e:
             self.logger.error(f"获取VTS参数范围异常: {e}")
             return {}
@@ -217,17 +184,18 @@ class ExpressionController:
         names = list(parameter_values.keys())
         values = list(parameter_values.values())
         try:
-            response = await self._vts_request(
-                self._vts_request.vts_request.requestSetMultiParameterValue(
-                    names, values, weight, face_found=FACE_FOUND
-                )
+            await self._request(
+                "InjectParameterDataRequest",
+                {
+                    "faceFound": FACE_FOUND,
+                    "mode": "set",
+                    "parameterValues": [
+                        {"id": n, "value": v, "weight": weight} for n, v in zip(names, values, strict=True)
+                    ],
+                },
             )
-            if response and response.get("messageType") == "InjectParameterDataResponse":
-                self.logger.debug(f"VTS 多参数已设置: {names}")
-                return True
-            if not silent:
-                self.logger.warning(f"批量设置VTS参数失败: {names}: {response}")
-            return False
+            self.logger.debug(f"VTS 多参数已设置: {names}")
+            return True
         except Exception as e:
             if not silent:
                 self.logger.error(f"批量设置VTS参数异常: {names}: {e}")

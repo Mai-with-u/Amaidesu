@@ -3,8 +3,9 @@ VTSProvider - VTS 虚拟形象工具集
 
 ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动调用的工具侧）：
 
+- 连接走自带的插件接口客户端（``VtsClient``：请求按编号对回复，注入发完就走）；
 - 引擎子件（``ExpressionController`` / ``HotkeyMatcher``）
-  经 callback 解耦，可独立复用；口型渲染（``VtsLipSyncRenderer``）挂在共享
+  经同一个客户端收发，可独立复用；口型渲染（``VtsLipSyncRenderer``）挂在共享
   分析器（``avatar.lipsync``）上。
 - 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
   - ``vts_set_expression``        - 设置情绪（17 枚举值 + 强度）
@@ -24,7 +25,8 @@ ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动调用的�
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from pydantic import Field
 
@@ -51,6 +53,7 @@ from src.modules.tools.provider import ConnectionToolProvider, wire_connection_t
 from .expression_controller import ExpressionController
 from .hotkey_matcher import HotkeyMatcher
 from .lip_sync_renderer import VtsLipSyncRenderer
+from .vts_client import VtsClient
 
 if TYPE_CHECKING:
     pass
@@ -67,6 +70,11 @@ _VTS_SET_IDLE_SCHEMA: Dict[str, Any] = {
     },
     "required": ["enabled"],
 }
+
+# 插件身份：令牌与身份绑定，改名会让 VTS 重新弹授权窗；令牌与其他运行时数据统一落 data/
+_PLUGIN_NAME = "Amaidesu_VTS_ToolProvider"
+_PLUGIN_DEVELOPER = "Wave 4 Implementation"
+_TOKEN_PATH = Path("data/vts_token.txt")
 
 
 # =============================================================================
@@ -115,7 +123,13 @@ class VTSProvider(ConnectionToolProvider):
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
         lipsync_analyzer: Optional[Any] = None,
+        client_factory: Optional[Callable[..., Any]] = None,
+        reconnect_interval_s: Optional[float] = None,
     ) -> None:
+        """Args:
+        client_factory: VTS 客户端工厂（关键字参数同 :class:`VtsClient`；测试注入假连接）。
+        reconnect_interval_s: 断线巡检节拍（秒；None = 默认 5 秒，测试调短）。
+        """
         # 配置
         self.config = config
         self.event_bus = event_bus
@@ -207,8 +221,16 @@ class VTSProvider(ConnectionToolProvider):
             },
         }
 
-        self._vts: Any = None
-        self._vts_api_lock = asyncio.Lock()
+        factory = client_factory or VtsClient
+        self._client = factory(
+            host=self.vts_host,
+            port=self.vts_port,
+            plugin_name=_PLUGIN_NAME,
+            plugin_developer=_PLUGIN_DEVELOPER,
+            token_path=_TOKEN_PATH,
+            logger_name=f"{self.__class__.__name__}.Client",
+        )
+        self._reconnect_interval_s = reconnect_interval_s or self._RECONNECT_INTERVAL_S
         self._is_connecting = False
         self._reconnect_task: Optional[asyncio.Task] = None
         # 重连尝试退避：连续失败时按指数间隔跳过巡检整点（节拍保持 5s，
@@ -230,12 +252,12 @@ class VTSProvider(ConnectionToolProvider):
         self.hotkey_matcher = HotkeyMatcher(
             logger_name=f"{self.__class__.__name__}.Hotkey",
             is_connected=lambda: self._is_connected,
-            vts_request=self._make_vts_request_proxy(),
+            request=self._client.request,
         )
         self.expression = ExpressionController(
             logger_name=f"{self.__class__.__name__}.Expression",
             is_connected=lambda: self._is_connected,
-            vts_request=self._make_vts_request_proxy(),
+            request=self._client.request,
         )
 
     # ===== ToolProvider 协议 =====
@@ -315,35 +337,6 @@ class VTSProvider(ConnectionToolProvider):
         if self._has_started:
             self.logger.warning("VTSProvider 已启动，跳过重复 setup")
             return
-
-        try:
-            # 可选重型依赖延迟加载：pyvts 仅在 VTS 平台实际建立连接时导入，
-            # 缺失按平台不可用降级，不阻断其他 avatar 平台
-            import pyvts  # noqa: F401
-            from pyvts import vts
-
-            plugin_info = {
-                "plugin_name": "Amaidesu_VTS_ToolProvider",
-                "developer": "Wave 4 Implementation",
-                # token 与其他运行时数据统一落 data/（该目录已整目录不入库）
-                "authentication_token_path": "data/vts_token.txt",
-                "vts_host": self.vts_host,
-                "vts_port": self.vts_port,
-            }
-            vts_api_info = {
-                "host": self.vts_host,
-                "port": self.vts_port,
-                "name": "VTubeStudioPublicAPI",
-                "version": "1.0",
-            }
-            # 形参名必须是 plugin_info：pyvts 以 **kwargs 吞掉拼错的键并静默退回
-            # 库默认（曾致插件身份显示为 pyvts/genteki、token 落盘根目录）
-            self._vts = vts(plugin_info=plugin_info, vts_api_info=vts_api_info)
-            self.logger.info("pyvts 实例创建成功")
-        except ImportError:
-            self.logger.error("pyvts 库不可用，VTSProvider 将被禁用")
-            self._vts = None
-            raise ImportError("pyvts library not available") from None
 
         await self._connect()
 
@@ -466,45 +459,13 @@ class VTSProvider(ConnectionToolProvider):
     async def _expression_set_param_proxy(self, parameter_name: str, value: float, weight: float = 1) -> bool:
         return await self.expression.set_parameter(parameter_name, value, weight)
 
-    def _make_vts_request_proxy(self) -> Any:
-        """创建可调用代理，所有 VTS API 调用都经过同一把 asyncio.Lock 串行化"""
-        # 可选重型依赖延迟加载：pyvts 仅在真正构造请求对象时导入（见 setup 处同款说明）
-        import pyvts
-
-        handler = self
-        vts_request_builder = pyvts.VTSRequest()
-
-        class VTSRequestProxy:
-            async def __call__(self, request: Dict[str, Any]) -> Dict[str, Any]:
-                async with handler._vts_api_lock:
-                    return await handler._vts.request(request)
-
-            @property
-            def vts_request(self) -> Any:
-                return vts_request_builder
-
-            def requestHotKeyList(self) -> Dict[str, Any]:
-                return vts_request_builder.requestHotKeyList()
-
-            def requestTriggerHotKey(self, **kwargs: Any) -> Dict[str, Any]:
-                return vts_request_builder.requestTriggerHotKey(**kwargs)
-
-        return VTSRequestProxy()
-
     async def _connect(self) -> None:
         if self._is_connecting or self._is_connected:
             return
         self._is_connecting = True
         try:
-            if not self._vts:
-                self.last_error = "pyvts 未初始化"
-                self.logger.error("pyvts 未初始化")
-                return
-
             self.logger.info(f"开始连接 VTS: {self.vts_host}:{self.vts_port}")
-            await self._vts.connect()
-            await self._vts.request_authenticate_token()
-            await self._vts.request_authenticate()
+            await self._client.connect()
             self._is_connected = True
             self.last_error = ""
             self.logger.info("VTS 连接成功")
@@ -532,25 +493,19 @@ class VTSProvider(ConnectionToolProvider):
             self.logger.debug(f"拉取 Live2D 参数清单失败（忽略）: {e}")
 
     async def _query_current_model_name(self) -> str:
-        """查询 VTS 当前加载的模型名（AvailableModelsRequest 一次含清单与加载态）。"""
+        """查询 VTS 当前加载的模型名（没加载模型或查询失败时为空串）。"""
         try:
-            proxy = self._make_vts_request_proxy()
-            response = await proxy(proxy.vts_request.BaseRequest(message_type="AvailableModelsRequest"))
-            if response and response.get("messageType") == "AvailableModelsResponse":
-                for model in response.get("data", {}).get("availableModels", []):
-                    if model.get("modelLoaded"):
-                        return str(model.get("modelName") or "")
+            data = await self._client.request("CurrentModelRequest", None)
+            return str(data.get("modelName") or "") if data.get("modelLoaded") else ""
         except Exception as e:
             self.logger.debug(f"查询当前模型名失败: {e}")
-        return ""
+            return ""
 
     async def _follow_model_switch(self) -> None:
         """换模跟随：检测到模型切换后重跑解析链（热键/绑定/缩放/基线全部刷新）。
 
-        触发用健康心跳内的模型名轮询而非 ModelLoadedEvent 订阅：pyvts 的
-        request 是"单次 send+recv"形态、无常驻接收循环，并行接收任务会与
-        请求路径抢包。轮询复用既有心跳节拍，AvailableModelsRequest 单请求
-        同时返回清单与加载态；换模是 VTS/人侧的低频操作，5 秒级跟随足够。
+        触发用健康心跳内的模型名轮询而非订阅 VTS 的换模事件：轮询复用既有心跳
+        节拍、不多开一路订阅；换模是 VTS/人侧的低频操作，5 秒级跟随足够。
         """
         current = await self._query_current_model_name()
         if not current or current == self._current_model_name:
@@ -563,13 +518,11 @@ class VTSProvider(ConnectionToolProvider):
             self.logger.exception("换模后解析链重跑失败")
 
     async def _vts_health_check(self) -> bool:
+        if not self._client.is_open:
+            return False
         try:
-            proxy = self._make_vts_request_proxy()
-            response = await asyncio.wait_for(
-                proxy(proxy.vts_request.requestParameterValue("FaceAngleX")),
-                timeout=3.0,
-            )
-            return bool(response and response.get("messageType") == "ParameterValueResponse")
+            await self._client.request("APIStateRequest", None, timeout_s=3.0)
+            return True
         except Exception:
             return False
 
@@ -589,12 +542,12 @@ class VTSProvider(ConnectionToolProvider):
             self._reconnect_skip_polls = 0
         else:
             delay_ms = self._reconnect_backoff.next_delay_ms()
-            self._reconnect_skip_polls = max(1, round(delay_ms / (self._RECONNECT_INTERVAL_S * 1000)))
+            self._reconnect_skip_polls = max(1, round(delay_ms / (self._reconnect_interval_s * 1000)))
 
     async def _reconnect_loop(self) -> None:
         try:
             while True:
-                await asyncio.sleep(self._RECONNECT_INTERVAL_S)
+                await asyncio.sleep(self._reconnect_interval_s)
                 if self._is_connecting:
                     continue
                 if not self._is_connected:
@@ -609,10 +562,7 @@ class VTSProvider(ConnectionToolProvider):
                     self._is_connected = False
                     # 连接态换血：摘除断连工具（Agent 工具表不再包含 vts_*）
                     self.mark_disconnected()
-                    try:
-                        await self._vts.close()
-                    except Exception as e:
-                        self.logger.debug(f"关闭旧 VTS 连接异常（忽略）: {e}")
+                    await self._client.close()
                     continue
                 # 连接健康时的换模跟随（与断线检测同一节拍）
                 await self._follow_model_switch()
@@ -630,10 +580,10 @@ class VTSProvider(ConnectionToolProvider):
                 pass
         self._reconnect_task = None
 
-        if not self._is_connected or not self._vts:
+        if not self._is_connected:
             return
         try:
-            await self._vts.close()
+            await self._client.close()
             self.logger.info("VTS 连接已关闭")
         except Exception as e:
             self.logger.warning(f"关闭 VTS 连接异常: {e}")
@@ -686,12 +636,14 @@ def create_vts_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
+    client_factory: Optional[Callable[..., Any]] = None,
 ) -> VTSProvider:
     """构造 VTSProvider 实例（不启动，由调用方 setup）"""
     return VTSProvider(
         config=config,
         event_bus=event_bus,
         lipsync_analyzer=lipsync_analyzer,
+        client_factory=client_factory,
     )
 
 
