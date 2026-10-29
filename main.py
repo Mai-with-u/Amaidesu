@@ -29,7 +29,7 @@ from loguru import logger as loguru_logger
 
 from src.modules.agents.companions import companion_names, register_companions
 from src.modules.agents.deps import AgentDeps
-from src.modules.agents.factory import instantiate_agent
+from src.modules.agents.factory import AGENT_BINDINGS, instantiate_agent
 from src.modules.agents.manager import AgentManager
 from src.modules.avatar.platform.warudo.expression_profile import MAIMAI_PROFILE_PATH, read_profile_expression
 from src.modules.avatar.tracking import TrackingConfig, TrackingRuntime
@@ -91,18 +91,6 @@ from src.modules.utils.windows_dpi import setup_process_dpi_awareness
 
 logger = get_logger("Main")
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-# Agent 注册元数据：spec_provider（工具来源溯源）与描述，键 = 注册名。
-_AGENT_REGISTRATION_META: Dict[str, Tuple[str, str]] = {
-    "streamer": (
-        "streamer",
-        "直播主播决策主体：聚合弹幕 → Planner 决策 → Replyer 表达",
-    ),
-    "minecraft": ("minecraft", "游戏 AI 玩家代理（Minecraft / MaiCraftMod）"),
-    "text_adv": ("text_adv", "文字冒险游戏 Agent（视觉小说观察与上报）"),
-    "game_2048": ("game_2048", "2048 游戏 Agent（棋局宿主，主播按键驱动，无自动走子）"),
-}
 
 
 # ---------------------------------------------------------------------------
@@ -1175,16 +1163,20 @@ async def _register_agents_from_config(
         sub_cfg = config_section.get(agent_name, {})
         if not isinstance(sub_cfg, dict):
             sub_cfg = {}
-        meta = _AGENT_REGISTRATION_META.get(agent_name)
-        if meta is None:
+        if agent_name not in AGENT_BINDINGS:
             logger.warning(f"未知的 Agent 类型: {agent_name}（升级 hook 应已过滤 maibot 等）")
             continue
         agent = instantiate_agent(agent_name, sub_cfg, deps=deps)
         if agent is None:
             logger.warning(f"Agent '{agent_name}' 实例化失败（工厂未返回实例）")
             continue
-        spec_provider, description = meta
-        manager.register(agent, spec_provider=spec_provider, description=description)
+        # spec_provider 取值域是封闭枚举："framework" / Agent 名 / "mcp" 预留；
+        # Agent 注册场景恒等于注册名
+        manager.register(
+            agent,
+            spec_provider=agent_name,
+            description=AGENT_BINDINGS[agent_name],
+        )
 
 
 async def _start_dashboard(

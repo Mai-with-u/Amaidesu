@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.streamer.config import StreamerConfig
 from src.agents.text_adv.config import TextAdvConfig
-from src.modules.agents.factory import SUPPORTED_AGENTS
+from src.modules.agents.factory import AGENT_BINDINGS
 from src.modules.config.agents_schemas import AgentsConfig, AgentsRootConfig, AgentType
 
 
@@ -30,8 +30,8 @@ def test_enabled_options_and_agent_type_stay_aligned_with_the_factory() -> None:
     extra = AgentsConfig.model_fields["enabled"].json_schema_extra or {}
     assert extra.get("x-options") == list(get_args(AgentType)) and "x-ui-type" not in extra  # 候选名单供下拉/多选渲染
     assert (
-        set(get_args(AgentType)) == set(SUPPORTED_AGENTS) == {"streamer", "minecraft", "text_adv", "game_2048"}
-    )  # 双源对齐，无分类层
+        set(get_args(AgentType)) == set(AGENT_BINDINGS) == {"streamer", "minecraft", "text_adv", "game_2048"}
+    )  # factory 登记表键集与配置 Schema 的 Literal 双源对齐，无分类层
 
 
 def test_streamer_defaults_are_the_full_package_config() -> None:

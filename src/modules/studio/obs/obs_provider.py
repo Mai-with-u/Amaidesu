@@ -23,6 +23,7 @@ from src.modules.studio.obs import obs_client
 from src.modules.studio.obs.obs_errors import describe_obs_error
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import ConnectionToolProvider, wire_connection_tools
+from src.modules.utils.backoff import ExponentialBackoff
 
 if TYPE_CHECKING:
     pass
@@ -111,6 +112,8 @@ class OBSProvider(ConnectionToolProvider):
 
         self.obs_connection: Any = None
         self._has_started = False
+        # 断连自动恢复循环（start_recovery 启动；手动断开 / cleanup 时取消）
+        self._recover_task: Optional[asyncio.Task[None]] = None
 
         if not self.typed_config.password:
             self.logger.warning("OBS WebSocket 密码未配置，如果 OBS 设置了密码则无法连接")
@@ -192,21 +195,69 @@ class OBSProvider(ConnectionToolProvider):
             if self._connected and _is_connection_error(exc):
                 self.logger.warning("OBS 工具调用遇连接类异常，摘除断连工具")
                 self.mark_disconnected()
+                self.start_recovery()
             return _fail(invocation.tool_name, f"{type(exc).__name__}: {exc}")
 
     # ===== 生命周期 =====
+
+    def start_recovery(self, *, base_delay_ms: int = 5000, cap_delay_ms: int = 60000) -> None:
+        """断连后的后台自动重连：按退避间隔重试 ``_connect_obs``，连上即止（幂等）。
+
+        连接成功后的工具表补注册由既有连接换血中间层（``mark_connected`` →
+        ``on_connection_changed``）处理，本循环不额外管。
+        """
+        if self._recover_task is not None and not self._recover_task.done():
+            return
+        backoff = ExponentialBackoff(base_delay_ms=base_delay_ms, cap_delay_ms=cap_delay_ms)
+        self._recover_task = asyncio.create_task(self._recover_loop(backoff), name="obs-recover")
+
+    @property
+    def recovering(self) -> bool:
+        """断连自动恢复循环是否仍在重试。"""
+        return self._recover_task is not None and not self._recover_task.done()
+
+    async def _recover_loop(self, backoff: ExponentialBackoff) -> None:
+        while True:
+            await asyncio.sleep(backoff.next_delay_ms() / 1000)
+            if self._connected:
+                # 期间已被手动重连恢复，本循环无事可做
+                self.logger.debug("OBS 断连恢复：连接已由其他路径恢复，退出重连循环")
+                return
+            try:
+                ok = await self._connect_obs()
+            except Exception as exc:  # noqa: BLE001 - 单轮失败安静重试，原因留给下一轮
+                self.logger.debug(f"OBS 断连恢复重试异常: {type(exc).__name__}: {exc}")
+                continue
+            if ok:
+                self.logger.info("OBS 断连恢复：已重新连接")
+                return
+
+    async def _cancel_recovery(self) -> None:
+        """取消断连自动恢复循环（手动断开不是故障，不得让循环再拉连接）。"""
+        task = self._recover_task
+        self._recover_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def setup(self) -> None:
         if self._has_started:
             return
         if not obs_client.AVAILABLE:
             raise RuntimeError("obs-websocket-py库未安装，请运行: uv sync")
-        await self._connect_obs()
+        ok = await self._connect_obs()
+        if not ok:
+            # 装配期连接失败（如开机时 OBS 还没开）：进后台恢复循环，不等人工重连
+            self.start_recovery()
         self._has_started = True
 
     async def cleanup(self) -> None:
         if not self._has_started:
             return
+        await self._cancel_recovery()
         if self.obs_connection:
             was_connected = self._connected
             try:
@@ -244,6 +295,8 @@ class OBSProvider(ConnectionToolProvider):
         作已完成"。
         """
         self.logger.info("手动断开 OBS 连接")
+        # 手动断开不是故障：先取消自动恢复循环，防止它把刚断开的连接又拉回去
+        await self._cancel_recovery()
         if self.obs_connection:
             was_connected = self._connected
             try:
