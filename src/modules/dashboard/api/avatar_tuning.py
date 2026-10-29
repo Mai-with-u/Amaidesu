@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, ValidationError
 
 from src.modules.avatar.tracking import TrackingConfig, TrackingRuntime
-from src.modules.avatar.tracking.channels import CHANNEL_LIMITS, CHANNELS
+from src.modules.avatar.tracking.channels import CHANNEL_LIMITS, CHANNELS, EYE_LOOK
 from src.modules.avatar.tracking.expression import (
     MOTION_KEY,
     MOTION_RANGE,
@@ -198,8 +198,11 @@ async def get_tuning_profile(
         "recipes": _recipe_view(runtime),
         "recipe_keys": [{"key": key, "span": recipe_key_span(key)} for key in RECIPE_KEYS],
         "motion_range": list(MOTION_RANGE),
+        # 眼球朝向系数由视线换算，不单独列（手动摆姿写了也会被视线盖掉）
         "channels": [
-            {"name": name, "min": CHANNEL_LIMITS[name][0], "max": CHANNEL_LIMITS[name][1]} for name in CHANNELS
+            {"name": name, "min": CHANNEL_LIMITS[name][0], "max": CHANNEL_LIMITS[name][1]}
+            for name in CHANNELS
+            if name not in EYE_LOOK
         ],
         "calibrations": _calibration_view(runtime),
         "actions": runtime.action_catalog(),

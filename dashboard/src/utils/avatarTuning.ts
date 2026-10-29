@@ -86,29 +86,112 @@ export function groupTuningFields(fields: AvatarTuningField[]): TuningFieldGroup
   return groups;
 }
 
-/** 通用通道与配方键的中文名（括号里注明单位或方向，读者不用懂内部约定） */
-export const CHANNEL_LABELS: Readonly<Record<string, string>> = {
+/** 姿态通道与单个（不分左右）表情系数的中文名（括号里注明单位或方向） */
+const DIRECT_LABELS: Readonly<Record<string, string>> = {
   head_yaw: '头左右转（度）',
   head_pitch: '头上下点（度）',
   head_roll: '歪头（度）',
-  eye_open: '双眼开合',
-  eye_open_l: '左眼开合',
-  eye_open_r: '右眼开合',
-  eye_wide: '睁大',
+  body_yaw: '身体左右转（度）',
+  body_pitch: '身体前后倾（度）',
+  body_roll: '身体左右歪（度）',
+  body_x: '身体左右位置',
+  body_y: '身体上下位置',
+  body_z: '身体前后（正数前倾）',
   gaze_x: '视线左右',
   gaze_y: '视线上下',
-  brow: '双眉高低',
-  brow_l: '左眉高低',
-  brow_r: '右眉高低',
-  mouth_smile: '嘴角（笑 / 撇）',
-  mouth_open: '张嘴',
-  mouth_x: '嘴歪',
-  cheek_puff: '鼓腮',
-  angry: '生气',
+  browInnerUp: '眉心上提',
+  cheekPuff: '鼓腮',
+  jawOpen: '下巴张开',
+  jawForward: '下巴前伸',
+  jawLeft: '下巴往她的左边',
+  jawRight: '下巴往她的右边',
+  mouthClose: '嘴唇合拢（下巴张着时）',
+  mouthFunnel: '撮唇（O 型）',
+  mouthPucker: '撅嘴',
+  mouthLeft: '嘴往她的左边',
+  mouthRight: '嘴往她的右边',
+  mouthRollLower: '下唇内卷',
+  mouthRollUpper: '上唇内卷',
+  mouthShrugLower: '下唇上嘟',
+  mouthShrugUpper: '上唇上嘟',
+  tongueOut: '吐舌',
+  aa: '口型 a',
+  ih: '口型 i',
+  ou: '口型 u',
+  ee: '口型 e',
+  oh: '口型 o',
 };
 
+/** 分左右的表情系数：去掉 Left / Right 后的名字（也是配方里的双侧简写）→ 中文名 */
+const SIDED_LABELS: Readonly<Record<string, string>> = {
+  eyeBlink: '闭眼',
+  eyeSquint: '下眼睑上推（笑眼）',
+  eyeWide: '睁大',
+  browDown: '压眉',
+  browOuterUp: '眉外侧上提',
+  cheekSquint: '脸颊上提',
+  noseSneer: '皱鼻',
+  mouthSmile: '嘴角上扬',
+  mouthFrown: '嘴角下垂',
+  mouthDimple: '嘴角后收（酒窝）',
+  mouthStretch: '嘴角往两边咧',
+  mouthPress: '抿嘴',
+  mouthLowerDown: '下唇下拉',
+  mouthUpperUp: '上唇上提',
+};
+
+/**
+ * 通道与配方键的中文名。表情系数用 ARKit 原名，左右指形象自己的左右；
+ * 去掉左右的名字是配方里的双侧简写。
+ */
 export function channelLabel(key: string): string {
-  return CHANNEL_LABELS[key] ?? key;
+  if (key in DIRECT_LABELS) return DIRECT_LABELS[key];
+  if (key in SIDED_LABELS) return `${SIDED_LABELS[key]}（双侧）`;
+  const sided = /^(.*)(Left|Right)$/.exec(key);
+  if (sided && sided[1] in SIDED_LABELS) {
+    return `${SIDED_LABELS[sided[1]]}（${sided[2] === 'Left' ? '左' : '右'}）`;
+  }
+  return key;
+}
+
+/** 通道按部位分组的组名与顺序（实时通道、配方编辑共用） */
+export const CHANNEL_GROUPS = [
+  '头部',
+  '身体',
+  '视线',
+  '眉',
+  '眼',
+  '脸颊与鼻',
+  '嘴',
+  '下巴',
+  '舌',
+  '口型',
+] as const;
+
+const VISEME_NAMES = new Set(['aa', 'ih', 'ou', 'ee', 'oh']);
+
+export function channelGroup(name: string): (typeof CHANNEL_GROUPS)[number] {
+  if (name.startsWith('head_')) return '头部';
+  if (name.startsWith('body_')) return '身体';
+  if (name.startsWith('gaze_')) return '视线';
+  if (name.startsWith('brow')) return '眉';
+  if (name.startsWith('eye')) return '眼';
+  if (name.startsWith('cheek') || name.startsWith('nose')) return '脸颊与鼻';
+  if (name.startsWith('jaw')) return '下巴';
+  if (name.startsWith('tongue')) return '舌';
+  if (VISEME_NAMES.has(name)) return '口型';
+  return '嘴';
+}
+
+/** 把一串通道名按部位分组（组按 CHANNEL_GROUPS 排序，组内保持原顺序，空组不列） */
+export function groupChannels<T>(
+  items: T[],
+  nameOf: (item: T) => string,
+): { group: string; items: T[] }[] {
+  return CHANNEL_GROUPS.map(group => ({
+    group,
+    items: items.filter(item => channelGroup(nameOf(item)) === group),
+  })).filter(entry => entry.items.length > 0);
 }
 
 /** 情绪名的中文说明（配方列表显示用） */

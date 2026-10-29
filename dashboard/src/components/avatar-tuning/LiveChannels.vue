@@ -14,36 +14,45 @@
       {{
         manualOn
           ? '拖滑条直接指定通道的值，形象马上照做；关掉开关或离开页面后几秒内交还给自动行为。'
-          : '面捕合成器此刻发给平台的值。打开"手动摆姿"可以逐个通道试效果。'
+          : '面捕合成器此刻发给平台的值（表情系数用 ARKit 规范名，左右指形象自己的左右）。打开"手动摆姿"可以逐个通道试效果。'
       }}
     </p>
 
-    <div v-for="channel in channels" :key="channel.name" class="channel-row">
-      <span class="channel-name">{{ channelLabel(channel.name) }}</span>
-      <el-slider
-        v-if="manualOn"
-        v-model="manualValues[channel.name]"
-        :min="channel.min"
-        :max="channel.max"
-        :step="channel.max - channel.min >= 10 ? 1 : 0.01"
-        size="small"
-        class="channel-slider"
-        @input="sendManual"
-      />
-      <div v-else class="channel-bar">
-        <div class="bar-fill" :style="barStyle(channel)" />
-        <div v-if="channel.min < 0" class="bar-zero" />
-      </div>
-      <span class="channel-value">{{ formatValue(frame[channel.name]) }}</span>
-    </div>
+    <el-collapse v-model="openGroups">
+      <el-collapse-item
+        v-for="entry in grouped"
+        :key="entry.group"
+        :name="entry.group"
+        :title="entry.group"
+      >
+        <div v-for="channel in entry.items" :key="channel.name" class="channel-row">
+          <span class="channel-name" :title="channel.name">{{ channelLabel(channel.name) }}</span>
+          <el-slider
+            v-if="manualOn"
+            v-model="manualValues[channel.name]"
+            :min="channel.min"
+            :max="channel.max"
+            :step="channel.max - channel.min >= 10 ? 1 : 0.01"
+            size="small"
+            class="channel-slider"
+            @input="sendManual"
+          />
+          <div v-else class="channel-bar">
+            <div class="bar-fill" :style="barStyle(channel)" />
+            <div v-if="channel.min < 0" class="bar-zero" />
+          </div>
+          <span class="channel-value">{{ formatValue(frame[channel.name]) }}</span>
+        </div>
+      </el-collapse-item>
+    </el-collapse>
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { onDeactivated, reactive, ref } from 'vue';
+import { computed, onDeactivated, reactive, ref } from 'vue';
 import { avatarTuningApi } from '@/api';
 import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
-import { channelLabel, throttleLatest } from '@/utils/avatarTuning';
+import { channelLabel, groupChannels, throttleLatest } from '@/utils/avatarTuning';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { ElMessage } from 'element-plus';
 
@@ -70,6 +79,9 @@ const RENEW_MS = 2000;
 
 const manualOn = ref(false);
 const manualValues = reactive<Record<string, number>>({});
+// 通道有六十来个，按部位折叠；默认展开最常调的几组
+const openGroups = ref<string[]>(['头部', '视线', '眉', '眼', '嘴']);
+const grouped = computed(() => groupChannels(props.channels, channel => channel.name));
 
 function formatValue(value: number | undefined): string {
   return value === undefined ? '—' : value.toFixed(2);
@@ -161,7 +173,7 @@ onDeactivated(() => {
 }
 
 .channel-name {
-  width: 120px;
+  width: 150px;
   flex-shrink: 0;
   font-size: 13px;
 }

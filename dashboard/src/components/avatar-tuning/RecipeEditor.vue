@@ -70,7 +70,14 @@
             filterable
             @change="addKey"
           >
-            <el-option v-for="key in addable" :key="key" :label="channelLabel(key)" :value="key" />
+            <el-option-group v-for="entry in addableGroups" :key="entry.group" :label="entry.group">
+              <el-option
+                v-for="key in entry.items"
+                :key="key"
+                :label="channelLabel(key)"
+                :value="key"
+              />
+            </el-option-group>
           </el-select>
           <el-button size="small" :disabled="!current.overridden" @click="reset"
             >恢复默认</el-button
@@ -92,6 +99,7 @@ import {
   addableRecipeKeys,
   channelLabel,
   emotionLabel,
+  groupChannels,
   recipeSliderStep,
   throttleLatest,
 } from '@/utils/avatarTuning';
@@ -127,10 +135,14 @@ const livePreview = ref(true);
 const keyToAdd = ref('');
 
 const spans = computed(() => new Map(props.recipeKeys.map(k => [k.key, k.span])));
-const addable = computed(() =>
-  addableRecipeKeys(
-    props.recipeKeys.map(k => k.key),
-    draft.value,
+// 还能加的键按部位分组（规范系数有五十多个，平铺一长串找不到）
+const addableGroups = computed(() =>
+  groupChannels(
+    addableRecipeKeys(
+      props.recipeKeys.map(k => k.key),
+      draft.value,
+    ),
+    key => key,
   ),
 );
 
@@ -285,7 +297,7 @@ async function reset(): Promise<void> {
 }
 
 .row-label {
-  width: 110px;
+  width: 150px;
   flex-shrink: 0;
   font-size: 13px;
 }

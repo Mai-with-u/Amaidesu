@@ -9,8 +9,10 @@ import type { AvatarTuningField } from '@/types';
 
 import {
   addableRecipeKeys,
+  channelGroup,
   channelLabel,
   gazeToPercent,
+  groupChannels,
   groupTuningFields,
   pointerToGaze,
   recipeSliderStep,
@@ -70,7 +72,9 @@ describe('配方编辑', () => {
   it('角度类给整数步长，未知键名原样显示', () => {
     expect(recipeSliderStep(40)).toBe(1);
     expect(recipeSliderStep(2)).toBe(0.05);
-    expect(channelLabel('mouth_smile')).toBe('嘴角（笑 / 撇）');
+    expect(channelLabel('mouthSmileLeft')).toBe('嘴角上扬（左）');
+    expect(channelLabel('eyeSquint')).toBe('下眼睑上推（笑眼）（双侧）');
+    expect(channelLabel('jawOpen')).toBe('下巴张开');
     expect(channelLabel('nose')).toBe('nose');
   });
 });
@@ -90,5 +94,20 @@ describe('throttleLatest', () => {
     send(4);
     expect(sent).toEqual([1, 3, 4]);
     vi.useRealTimers();
+  });
+});
+
+describe('通道按部位分组', () => {
+  it('ARKit 名按前缀归到部位，组按固定顺序，空组不列', () => {
+    expect(channelGroup('browInnerUp')).toBe('眉');
+    expect(channelGroup('eyeBlinkLeft')).toBe('眼');
+    expect(channelGroup('noseSneerRight')).toBe('脸颊与鼻');
+    expect(channelGroup('mouthPucker')).toBe('嘴');
+    expect(channelGroup('ou')).toBe('口型');
+    const groups = groupChannels(
+      ['jawOpen', 'head_yaw', 'mouthFunnel', 'browDownLeft'],
+      name => name,
+    );
+    expect(groups.map(g => g.group)).toEqual(['头部', '眉', '嘴', '下巴']);
   });
 });
