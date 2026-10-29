@@ -588,10 +588,11 @@ async def create_app_components(
             sessions_repo=database.sessions,
             topic_repo=database.topics,
             viewer_repo=database.viewers,
-            # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）
+            # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）+ 长期记忆文件
             viewer_profile_repo=database.viewer_profiles,
             recap_repo=database.recaps,
             event_repo=database.events,
+            long_memory_store=database.long_memory,
             supervisor_config=supervisor_config,
         )
 
@@ -683,10 +684,11 @@ async def create_app_components(
                 sessions_repo=database.sessions,
                 topic_repo=database.topics,
                 viewer_repo=database.viewers,
-                # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）
+                # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）+ 长期记忆文件
                 viewer_profile_repo=database.viewer_profiles,
                 recap_repo=database.recaps,
                 event_repo=database.events,
+                long_memory_store=database.long_memory,
                 # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
                 context_assembler_config=None,
                 task_tracker=task_tracker,

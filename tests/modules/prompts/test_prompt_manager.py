@@ -146,6 +146,7 @@ def test_singleton_is_shared_resettable_auto_scans_and_loads_exactly_the_declare
             "chapter_system",
             "profile_system",
             "session_recap_system",
+            "long_memory_system",
             "screen_vlm_system",
             "screen_vlm_prompt",
             "text_adv_vlm_question",

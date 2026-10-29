@@ -33,6 +33,7 @@ class AssemblerInputs:
     消息通道；本集合只收参考性质的元数据。
     """
 
+    long_memory_section: str = ""  # 长期记忆段（开播时读出、整场不变；主播自己整理的跨场次笔记）
     session_recap_section: str = ""  # 上场回顾段（开播后固定，整场不变；由场次回顾读出）
     stage_descriptions: str = ""  # 环节描述
     environment: Optional[EnvironmentBlock] = None
@@ -43,8 +44,8 @@ class AssemblerInputs:
 class PlannerAssembler:
     """Planner 参考段组装器
 
-    组装顺序：上场回顾 → 环节描述 → 直播间快照 → 人物画像。顺序由测试锁定
-    （test_planner_context.py）；上场回顾放最前——它是整场不变的背景，
+    组装顺序：长期记忆 → 上场回顾 → 环节描述 → 直播间快照 → 人物画像。顺序由测试锁定
+    （test_planner_context.py）；长期记忆与上场回顾放最前——它们是整场不变的背景，
     其后才是随环节与本批变化的段；整段作为一条 user 消息固定在消息序列尾部，
     ReAct 循环的 assistant/tool 消息追加在其后（append-only，服务端 LLM
     前缀缓存可命中既有前缀）。
@@ -54,6 +55,9 @@ class PlannerAssembler:
 
     def assemble(self, inputs: AssemblerInputs) -> str:
         sections: List[Tuple[str, str]] = []
+
+        if inputs.long_memory_section:
+            sections.append(("长期记忆-内部参考", inputs.long_memory_section))
 
         if inputs.session_recap_section:
             sections.append(("上场回顾-内部参考", inputs.session_recap_section))

@@ -93,6 +93,7 @@ class SessionScope:
         self._timeline_notes: List[TimelineTurn] = []
         self._window_game_batch = GameEventBatch()
         self._session_recap: str = ""
+        self._long_memory: str = ""
 
     # -- 状态便道 ------------------------------------------------------
 
@@ -110,6 +111,15 @@ class SessionScope:
     def set_session_recap(self, text: str) -> None:
         """回顾槽位写入（记忆域刷新完成时调；本模块不背仓储依赖）。"""
         self._session_recap = text
+
+    @property
+    def long_memory(self) -> str:
+        """长期记忆全文（开播时装入，整场不变；空串 = 不注入）。"""
+        return self._long_memory
+
+    def set_long_memory(self, text: str) -> None:
+        """长期记忆槽位写入（开播或启动善后时由主播 Agent 读文件后调）。"""
+        self._long_memory = text
 
     # -- 入账便道 ------------------------------------------------------
 

@@ -385,11 +385,12 @@ class StreamerLiveFrameConfig(BaseConfig):
 
 
 class StreamerMemoryConfig(BaseConfig):
-    """[agents.streamer.memory] —— 主播自己的记忆：场次回顾 + 观众画像
+    """[agents.streamer.memory] —— 主播自己的记忆：场次回顾 + 观众画像 + 长期记忆
 
     场次回顾在收播时写（启动时补写上一场缺失的），开播后注入最近几场；
-    观众画像在收播时为本场最活跃、互动量达门槛的几位常客更新印象。
-    两样都用 summary 档位的模型，失败只降级不阻断直播主链路。
+    观众画像在收播时为本场最活跃、互动量达门槛的几位常客更新印象；
+    长期记忆（MEMORY.md）在收播时把本场回顾与备忘录合并进去，开播时整份注入。
+    都用 summary 档位的模型，失败只降级不阻断直播主链路。
     """
 
     recap_enabled: bool = Field(
@@ -445,6 +446,23 @@ class StreamerMemoryConfig(BaseConfig):
         description="本场备忘录（工作笔记）的字符上限，超出截断；备忘录每轮全量注入决策与表达两层，"
         "覆盖写的结论集量级天然小，默认值按注入成本与结论体量折中",
         json_schema_extra={"x-ui-advanced": True},
+    )
+    long_memory_enabled: bool = Field(
+        title="是否启用长期记忆",
+        default=True,
+        description=(
+            "收播时把本场回顾与备忘录合并进长期记忆（数据目录 memory/MEMORY.md，彩排场另存一份），"
+            "开播时整份注入；关闭后既不更新也不注入，已有文件保留"
+        ),
+    )
+    long_memory_max_chars: int = Field(
+        title="长期记忆长度上限",
+        default=2000,
+        ge=300,
+        le=8000,
+        description=(
+            "长期记忆全文的字符上限：每次开播整份注入决策与表达两层；整理时超出会让模型压缩一次，仍超出就保留旧版本不写"
+        ),
     )
 
 

@@ -30,6 +30,7 @@ from typing import Any, Callable, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.storage.connection import SQLiteConnectionManager
+from src.modules.storage.long_memory import LongMemoryStore
 from src.modules.storage.run_in_executor import run_in_executor
 from src.modules.storage.migrations import SCHEMA_MIGRATIONS
 from src.modules.storage.repos import (
@@ -124,6 +125,8 @@ class SQLiteDatabase:
         # 主播记忆的两张表：观众画像 + 场次回顾（写入归主播 Agent，读取给 Planner/工具/WebUI）
         self.viewer_profiles = ViewerProfileRepo(self._manager)
         self.recaps = SessionRecapRepo(self._manager)
+        # 主播长期记忆（MEMORY.md 纯文本文件，放在数据库同目录的 memory/ 下，人可直接改）
+        self.long_memory = LongMemoryStore(self._db_path.parent / "memory")
 
     # -------------------- 属性 --------------------
 

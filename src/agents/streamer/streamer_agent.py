@@ -61,6 +61,7 @@ from .background import SUMMARY_PROFILE, BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
 from .session_scope import SessionScope
 from .memory import (
+    LongMemoryWriter,
     RegularsRosterWriter,
     SessionRecapWriter,
     StreamerNotebook,
@@ -146,6 +147,7 @@ class StreamerAgent(BaseAgent):
         viewer_profile_repo: Optional[Any] = None,
         recap_repo: Optional[Any] = None,
         event_repo: Optional[Any] = None,
+        long_memory_store: Optional[Any] = None,
         context_assembler_config: Optional[Any] = None,
         speech_config: Optional[Dict[str, Any]] = None,
         tts_engine: Optional["TTSProvider"] = None,
@@ -187,6 +189,8 @@ class StreamerAgent(BaseAgent):
                 回顾、开播不注入上场回顾、``memory_recall_session`` 工具不注册
             event_repo: 可选 ``EventRepo``（游戏事件）——场次回顾的游戏进展原料；
                 None 时回顾少这一类原料
+            long_memory_store: 可选 ``LongMemoryStore``（长期记忆文件 MEMORY.md）。
+                ``None`` 时收播不整理长期记忆、开播不注入（需同时有场次回顾仓储）
             context_assembler_config: 可选上下文组装器配置（[agents.streamer.context] 子段；
                 控制 Planner 组装路径开关；None 时 Planner 走内置默认）
             speech_config: 可选发言管线配置（来自核心 ``[tts]`` 段）。
@@ -300,6 +304,7 @@ class StreamerAgent(BaseAgent):
                 reply_provider_factory=lambda: self._reply_provider,
                 elapsed_live_provider=self._rundown_coord.get_elapsed_live_ms,
                 notebook_text_provider=self._notebook.read,
+                long_memory_provider=lambda: self._scope.long_memory,
                 action_recorder=self._record_delegation,
                 delegation_status_provider=self._delegation_machine_status if task_ledger is not None else None,
             )
@@ -401,6 +406,24 @@ class StreamerAgent(BaseAgent):
                 notebook_text_provider=lambda: self._session_notebook_snapshot,
                 max_length=memory_cfg.recap_max_length,
                 event_bus=event_bus,
+            )
+        # 长期记忆（MEMORY.md）：收播时把本场回顾与备忘录合并进去，开播时整份注入；
+        # 原料以本场回顾为主，没有回顾仓储就不启用
+        self._long_memory_writer: Optional[LongMemoryWriter] = None
+        if (
+            memory_cfg.long_memory_enabled
+            and long_memory_store is not None
+            and recap_repo is not None
+            and sessions_repo is not None
+        ):
+            self._long_memory_writer = LongMemoryWriter(
+                store=long_memory_store,
+                sessions_repo=sessions_repo,
+                recap_repo=recap_repo,
+                llm_service=llm_manager,
+                prompt_manager=prompt_manager,
+                notebook_text_provider=lambda: self._session_notebook_snapshot,
+                max_chars=memory_cfg.long_memory_max_chars,
             )
         self._roster_writer: Optional[RegularsRosterWriter] = None
         if (
@@ -531,6 +554,7 @@ class StreamerAgent(BaseAgent):
                 segment_provider=self._current_segment_title,
                 scene_reader=self._read_scene_brief,
                 is_live=lambda: self._live_active,
+                long_memory_provider=lambda: self._scope.long_memory,
                 profile=_PROFILE_REPLYER,
             )
         if self._mouth is not None:
@@ -839,6 +863,8 @@ class StreamerAgent(BaseAgent):
         # 上场回顾：开播这一刻从库里读最近几场同类型场次（排除本场），整场固定不再变；
         # 正式场接正式场、彩排场接彩排场，调试场不会被当成正式直播的上一场
         await self._refresh_recap_section(exclude_session_id=payload.live_session_id, kind=payload.kind)
+        # 长期记忆：同样在开播这一刻按场次类型读出整份，整场固定（彩排读彩排那份）
+        await self._refresh_long_memory_section(kind=payload.kind)
         self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
 
     async def _on_live_ended(
@@ -884,7 +910,9 @@ class StreamerAgent(BaseAgent):
         self._notebook.clear()
         # 收播整理：先写这一场的回顾，再给本场活跃的常客更新印象（两次 LLM 调用，
         # 放后台不阻塞事件回调）。空场次（无任何明细行，行已删）没东西可整理
-        if not payload.empty_discarded and (self._recap_writer is not None or self._roster_writer is not None):
+        if not payload.empty_discarded and (
+            self._recap_writer is not None or self._long_memory_writer is not None or self._roster_writer is not None
+        ):
             spawn_background_task(
                 self._settle_session(payload.live_session_id),
                 logger=self._logger,
@@ -932,8 +960,22 @@ class StreamerAgent(BaseAgent):
         if recap_section:
             self._logger.info(f"上场回顾已装入参考段（{len(recap_section)} 字）")
 
+    async def _refresh_long_memory_section(self, *, kind: Optional[SessionKind] = None) -> None:
+        """按场次类型读出长期记忆装进槽位；未启用或文件不存在时为空串（段整段省略）。
+
+        ``kind`` 缺省取进行中场次的类型（未开播按正式场）。
+        """
+        if self._long_memory_writer is None:
+            self._scope.set_long_memory("")
+            return
+        text = await self._long_memory_writer.read(kind if kind is not None else self._current_session_kind())
+        self._scope.set_long_memory(text)
+        if text:
+            self._logger.info(f"长期记忆已装入（{len(text)} 字）")
+
     async def _bootstrap_recaps(self) -> None:
-        """启动善后：补写上次退出时漏掉的回顾（最多一场）并补跑该场画像更新，再装入上场回顾段。
+        """启动善后：补写上次退出时漏掉的回顾（最多一场）并补跑该场长期记忆整理与画像更新，
+        再装入长期记忆与上场回顾段。
 
         画像只取上次整理之后的新话，即使上次其实已经更新过也不会重复调用模型。
         """
@@ -941,21 +983,34 @@ class StreamerAgent(BaseAgent):
         written = await self._recap_writer.backfill_missing(limit=1)
         if written:
             self._logger.info(f"启动补写了场次回顾：{written}")
+        if self._long_memory_writer is not None:
+            for live_session_id in written:
+                try:
+                    await self._long_memory_writer.consolidate(live_session_id)
+                except Exception as exc:
+                    self._logger.warning(f"启动补跑长期记忆整理失败（场次 {live_session_id}）: {exc}")
         if self._roster_writer is not None:
             for live_session_id in written:
                 try:
                     await self._roster_writer.update_for_session(live_session_id)
                 except Exception as exc:
                     self._logger.warning(f"启动补跑观众画像失败（场次 {live_session_id}）: {exc}")
+        await self._refresh_long_memory_section()
         await self._refresh_recap_section()
 
     async def _settle_session(self, live_session_id: int) -> None:
-        """收播整理：回顾 → 观众画像。逐项降级，一项失败不影响另一项。"""
+        """收播整理：回顾 → 长期记忆 → 观众画像。逐项降级，一项失败不影响其余；
+        长期记忆以本场回顾为原料，必须排在回顾之后。"""
         if self._recap_writer is not None:
             try:
                 await self._recap_writer.write_recap(live_session_id)
             except Exception as exc:
                 self._logger.warning(f"收播写回顾失败（场次 {live_session_id}）: {exc}")
+        if self._long_memory_writer is not None:
+            try:
+                await self._long_memory_writer.consolidate(live_session_id)
+            except Exception as exc:
+                self._logger.warning(f"收播整理长期记忆失败（场次 {live_session_id}）: {exc}")
         if self._roster_writer is not None:
             try:
                 await self._roster_writer.update_for_session(live_session_id)

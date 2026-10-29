@@ -5,8 +5,11 @@
   启动补写只补已结束且缺回顾的；注入渲染排除本场、只取同类型场次
 - ``RegularsRosterWriter``：互动门槛、每场人数上限、只取上次整理后的新话（同场重复
   收尾不空转）、LLM 失败逐人降级、观众真假与场次类型相符；付费明细原料行
+- ``LongMemoryWriter``：旧笔记 + 本场回顾 + 备忘录合并、按场次类型选文件、没有回顾不动、
+  超上限压缩一次仍超就保留旧版本、模型失败保留旧版本
 - ``build_memory_tool_provider``：往前第 n 场、排除本场、只数同类型场次、按昵称查印象
-- ``StreamerAgent``：两仓储齐全才注册记忆工具；开播按场次类型装入上场回顾；收播写回顾并更新观众画像
+- ``StreamerAgent``：两仓储齐全才注册记忆工具；开播按场次类型装入上场回顾与长期记忆；
+  收播写回顾、整理长期记忆并更新观众画像
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import pytest
 
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.memory import (
+    LongMemoryWriter,
     RegularsRosterWriter,
     SessionRecapWriter,
     build_memory_tool_provider,
@@ -38,7 +42,8 @@ from tests.modules.storage.viewer_seed import seed_message
 
 # 登记（驱动/只读穿透，合并时进底账）：直接驱动生命周期处理器与后台善后
 # （agent._register_tools / _on_live_started / _on_live_ended / _bootstrap_recaps），
-# 读取上场回顾段（agent._session_recap_text）与后台任务集合（agent._bg_tasks）；
+# 读取上场回顾段（agent._session_recap_text）、长期记忆槽位（agent._scope.long_memory）
+# 与后台任务集合（agent._bg_tasks）；
 # 均无公开观测面。
 
 
@@ -139,6 +144,38 @@ def _recap_writer(store: SQLiteDatabase, llm: MagicMock, event_bus: Any = None) 
         max_length=200,
         event_bus=event_bus,
     )
+
+
+def _responses(*texts: str) -> MagicMock:
+    """按顺序回放多条成功回复的 LLM 替身（长期记忆压缩重试要两次调用）。"""
+    llm = MagicMock()
+    replies = []
+    for text in texts:
+        response = MagicMock()
+        response.ok, response.content = True, text
+        replies.append(response)
+    llm.generate = AsyncMock(side_effect=replies)
+    return llm
+
+
+def _long_writer(
+    store: SQLiteDatabase, llm: MagicMock, *, notebook: str = "", max_chars: int = 300
+) -> LongMemoryWriter:
+    return LongMemoryWriter(
+        store=store.long_memory,
+        sessions_repo=store.sessions,
+        recap_repo=store.recaps,
+        llm_service=llm,
+        prompt_manager=_prompts(),
+        notebook_text_provider=lambda: notebook,
+        max_chars=max_chars,
+    )
+
+
+async def _recapped_session(store: SQLiteDatabase, recap: str, *, kind: str = "live") -> int:
+    pk = await _ended_session(store, kind=kind)
+    await store.recaps.upsert_recap(live_session_id=pk, started_at_ms=1_000, ended_at_ms=9_000, recap_text=recap)
+    return pk
 
 
 def _roster_writer(store: SQLiteDatabase, llm: MagicMock, **kwargs: Any) -> RegularsRosterWriter:
@@ -269,6 +306,63 @@ async def test_render_recent_reads_same_kind_only(store: SQLiteDatabase) -> None
     assert "正式场" in live_text and "调试场" not in live_text
     rehearsal_text = await writer.render_recent(count=3, kind="rehearsal")
     assert "调试场" in rehearsal_text and "正式场" not in rehearsal_text
+
+
+# ---------------------------------------------------------------------------
+# 长期记忆
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_long_memory_merges_recap_and_notebook_into_same_kind_file(store: SQLiteDatabase) -> None:
+    """原料 = 旧笔记 + 本场回顾 + 备忘录；正式场写正式那份，彩排场写彩排那份，互不改写。"""
+    await store.long_memory.write("live", "## 老梗与口头禅\n- 床名一直没定")
+    live_pk = await _recapped_session(store, "这场我答应老王下场去挖钻石")
+    llm = _responses("## 答应过的事\n- 我答应老王挖钻石（未兑现）")
+
+    text = await _long_writer(store, llm, notebook="床名定成咕咕床").consolidate(live_pk)
+
+    assert text == "## 答应过的事\n- 我答应老王挖钻石（未兑现）"
+    assert await store.long_memory.read("live") == text
+    prompt = llm.generate.await_args.args[0]
+    for marker in ("床名一直没定", "这场我答应老王下场去挖钻石", "床名定成咕咕床"):
+        assert marker in prompt
+    assert await store.long_memory.read("rehearsal") == ""
+
+    rehearsal_pk = await _recapped_session(store, "调试时说要挖钻石", kind="rehearsal")
+    await _long_writer(store, _responses("彩排里记的")).consolidate(rehearsal_pk)
+    assert await store.long_memory.read("rehearsal") == "彩排里记的"
+    assert await store.long_memory.read("live") == text
+
+
+@pytest.mark.asyncio
+async def test_long_memory_untouched_without_recap_or_on_llm_failure(store: SQLiteDatabase) -> None:
+    await store.long_memory.write("live", "旧笔记")
+    no_recap_pk = await _ended_session(store)
+    llm = _responses("不该写")
+    assert await _long_writer(store, llm).consolidate(no_recap_pk) is None
+    llm.generate.assert_not_awaited()
+
+    pk = await _recapped_session(store, "这场挖了矿")
+    assert await _long_writer(store, _llm(success=False)).consolidate(pk) is None
+    assert await _long_writer(store, _llm(success=False)).consolidate(pk + 999) is None  # 场次不存在
+    assert await store.long_memory.read("live") == "旧笔记"
+
+
+@pytest.mark.asyncio
+async def test_long_memory_over_limit_compresses_once_then_keeps_old(store: SQLiteDatabase) -> None:
+    """超上限让模型压缩一次；压缩后合规就写，仍超出就保留旧版本，不截成半句。"""
+    await store.long_memory.write("live", "旧笔记")
+    pk = await _recapped_session(store, "这场聊了很多")
+
+    llm = _responses("长" * 400, "压缩后的笔记")
+    assert await _long_writer(store, llm, max_chars=300).consolidate(pk) == "压缩后的笔记"
+    assert llm.generate.await_count == 2
+    assert "超过了 300 字的上限" in llm.generate.await_args_list[1].args[0]
+
+    stubborn = _responses("长" * 400, "还是" * 200)
+    assert await _long_writer(store, stubborn, max_chars=300).consolidate(pk) is None
+    assert await store.long_memory.read("live") == "压缩后的笔记"
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +572,7 @@ def _build_agent(
             "viewer_profile_repo": store.viewer_profiles,
             "recap_repo": store.recaps,
             "event_repo": store.events,
+            "long_memory_store": store.long_memory,
         }
     return StreamerAgent(config=config, llm_manager=llm, prompt_manager=_prompts(), tool_registry=registry, **repos)
 
@@ -523,6 +618,23 @@ async def test_live_started_loads_previous_recap(store: SQLiteDatabase) -> None:
 
 
 @pytest.mark.asyncio
+async def test_live_started_loads_long_memory_of_same_kind(store: SQLiteDatabase) -> None:
+    """开播按场次类型读出整份长期记忆装进槽位（决策与快嘴两层都读它）；关掉开关就不装。"""
+    await store.long_memory.write("live", "正式线的笔记")
+    await store.long_memory.write("rehearsal", "彩排线的笔记")
+
+    agent = _build_agent(store, _llm())
+    await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=9), "test")
+    assert agent._scope.long_memory == "正式线的笔记"
+    await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=10, kind="rehearsal"), "test")
+    assert agent._scope.long_memory == "彩排线的笔记"
+
+    disabled = _build_agent(store, _llm(), long_memory_enabled=False)
+    await disabled._on_live_started("live.started", LiveStartedPayload(live_session_id=9), "test")
+    assert disabled._scope.long_memory == ""
+
+
+@pytest.mark.asyncio
 async def test_bootstrap_backfills_recap_roster_and_section(store: SQLiteDatabase) -> None:
     """启动善后：补写漏掉的回顾、补跑该场画像更新，并把回顾装进上场回顾段。"""
     pk = await _ended_session(store)
@@ -536,6 +648,8 @@ async def test_bootstrap_backfills_recap_roster_and_section(store: SQLiteDatabas
     assert await store.recaps.get_recap(live_session_id=pk) is not None
     assert await _profile_text(store, "u1") == "补写结果"
     assert "补写结果" in agent._session_recap_text()
+    assert await store.long_memory.read("live") == "补写结果"  # 补写的场次也合并进长期记忆
+    assert agent._scope.long_memory == "补写结果"
 
 
 @pytest.mark.asyncio
@@ -552,11 +666,12 @@ async def test_live_ended_settles_recap_and_roster(store: SQLiteDatabase) -> Non
 
     assert await store.recaps.get_recap(live_session_id=pk) is not None
     assert await _profile_text(store, "u1") == "整理结果"
+    assert await store.long_memory.read("live") == "整理结果"  # 回顾之后合并进长期记忆
 
     other_pk = await _ended_session(store)
     await _streamer_says(store, other_pk, "又一场", 2_000)
     llm = _llm("不该写")
-    disabled = _build_agent(store, llm, recap_enabled=False, roster_enabled=False)
+    disabled = _build_agent(store, llm, recap_enabled=False, roster_enabled=False, long_memory_enabled=False)
     await disabled._on_live_ended("live.ended", LiveEndedPayload(live_session_id=other_pk), "test")
     await disabled._on_live_ended(
         "live.ended", LiveEndedPayload(live_session_id=other_pk, empty_discarded=True), "test"

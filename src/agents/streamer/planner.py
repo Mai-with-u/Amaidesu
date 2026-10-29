@@ -160,6 +160,8 @@ class PlannerEnv:
     frame_provider: Optional[Callable[[], Optional[Any]]] = None
     frame_stale_warn_ms: int = 0
     notebook_text_provider: Optional[Callable[[], str]] = None
+    # 长期记忆全文（开播时读出、整场不变；空串 = 没有或未启用）
+    long_memory_provider: Optional[Callable[[], str]] = None
     action_recorder: Optional[Callable[[str, str], None]] = None
     delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
 
@@ -263,6 +265,7 @@ class Planner:
         self._round_bypass_topic_gate: bool = False
         # 本场备忘录全文查询（经环境注入；空串 = 还没写过，段整段省略）
         self._notebook_text_provider = env.notebook_text_provider if env else None
+        self._long_memory_provider = env.long_memory_provider if env else None
 
         self._assembler = PlannerAssembler()
         # 工具刚返回的截图：观察里只留文字，真图挂在下一步请求的尾部让模型看一次
@@ -573,7 +576,7 @@ class Planner:
         """构造参考段，返回（参考段文本, 失败原因）。
 
         内容 = 情境标注（强制/主动，按触发原因取条件子句）+ 私密游戏聊天 + 运营提醒 +
-        组装器元数据段（上场回顾 / 环节描述 / 直播间快照 / 人物画像）。对话内容与
+        组装器元数据段（长期记忆 / 上场回顾 / 环节描述 / 直播间快照 / 人物画像）。对话内容与
         游戏事件不在此处——历史（含 game 条目）与本批走 canonical 映射的原生消息通道。
         组装失败时文本为 None，失败原因随 outcome.error 写进决策事件。
         """
@@ -678,8 +681,17 @@ class Planner:
                 # 备忘录读不到只省段，不挡决策
                 self.logger.warning(f"读取备忘录失败，本轮参考段省略备忘录段: {exc}", exc=True)
 
+        long_memory_text = ""
+        if self._long_memory_provider is not None:
+            try:
+                long_memory_text = self._long_memory_provider() or ""
+            except Exception as exc:
+                # 长期记忆读不到只省段，不挡决策
+                self.logger.warning(f"读取长期记忆失败，本轮参考段省略长期记忆段: {exc}", exc=True)
+
         try:
             assembler_inputs = AssemblerInputs(
+                long_memory_section=long_memory_text,
                 session_recap_section=session_recap or "",
                 stage_descriptions=rundown_text or "",
                 environment=env_block,

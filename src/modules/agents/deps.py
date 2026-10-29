@@ -52,6 +52,7 @@ class AgentDeps:
     viewer_profile_repo: Optional[Any] = None
     recap_repo: Optional[Any] = None
     event_repo: Optional[Any] = None
+    long_memory_store: Optional[Any] = None
     context_assembler_config: Optional[Any] = None
     task_tracker: Optional[Any] = None
     task_ledger: Optional[Any] = None

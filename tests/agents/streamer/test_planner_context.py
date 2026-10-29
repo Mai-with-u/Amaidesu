@@ -1,4 +1,4 @@
-"""Planner 参考段组装器：有数据才渲染段、无占位文本、段序固定（上场回顾 → 环节描述 → 直播间快照 → 人物画像），时刻按本地时区"""
+"""Planner 参考段组装器：有数据才渲染段、无占位文本、段序固定（长期记忆 → 上场回顾 → 环节描述 → 直播间快照 → 人物画像），时刻按本地时区"""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBloc
 def _production_inputs() -> AssemblerInputs:
     """生产型输入——模拟 planner 生产路径实际传递的数据形态。"""
     return AssemblerInputs(
+        long_memory_section="## 答应过的事\n- 我答应 alice 画新皮肤（未兑现）",
         session_recap_section="【2026-10-13 的直播，时长 2 小时】这场我答应 alice 下次画新皮肤",
         stage_descriptions="## 开场聊天\n自由闲聊，观察弹幕节奏。",
         environment=EnvironmentBlock(
@@ -27,7 +28,13 @@ def _production_inputs() -> AssemblerInputs:
 
 def test_sections_render_in_fixed_order() -> None:
     text = PlannerAssembler().assemble(_production_inputs())
-    sections = ("## 上场回顾-内部参考", "## 环节描述", "## 直播间快照", "## 人物画像-内部参考")
+    sections = (
+        "## 长期记忆-内部参考",
+        "## 上场回顾-内部参考",
+        "## 环节描述",
+        "## 直播间快照",
+        "## 人物画像-内部参考",
+    )
     assert [text.index(section) for section in sections] == sorted(text.index(section) for section in sections)
     # 空输入整段省略，连段标题也不出现
     assert PlannerAssembler().assemble(AssemblerInputs()) == ""

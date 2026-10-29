@@ -64,7 +64,14 @@ def prompts():
 
 
 def _mouth(
-    llm: _LLM, speech: _Speech, prompts: Any, *, live: bool = True, clock: Optional[_Clock] = None, **config: Any
+    llm: _LLM,
+    speech: _Speech,
+    prompts: Any,
+    *,
+    live: bool = True,
+    clock: Optional[_Clock] = None,
+    long_memory: str = "",
+    **config: Any,
 ) -> Mouth:
     clock = clock or _Clock()
     scene_reads: List[int] = []
@@ -88,6 +95,7 @@ def _mouth(
         segment_provider=lambda: "互动闲聊",
         scene_reader=_scene,
         is_live=lambda: live,
+        long_memory_provider=lambda: long_memory,
         clock=clock,
     )
     mouth.scene_reads = scene_reads  # type: ignore[attr-defined]
@@ -118,6 +126,18 @@ async def test_urgent_encounter_gets_one_short_reaction_with_scene_card(prompts:
     assert "（这是打算，不一定已经做到" in last and "【你刚说过】（别再说一遍）\n- 走走走，回家！" in last
     assert llm.calls[0]["messages"][0] == {"role": "assistant", "content": "走走走，回家！"}
     assert mouth._room_state.last_speech_ms == NOW
+
+
+async def test_long_memory_rides_in_system_prompt_only_when_present(prompts: Any) -> None:
+    """长期记忆有内容才进系统提示词（老梗、答应过的事拿来接话）；没有时不留空段。"""
+    llm = _LLM("happy：好家伙", "happy：好家伙")
+    remembering = _mouth(llm, _Speech(), prompts, long_memory="## 老梗与口头禅\n- 床名一直没定")
+    await remembering.react_once([_trigger()])
+    assert "你一直记着的事" in llm.calls[0]["system"] and "床名一直没定" in llm.calls[0]["system"]
+
+    forgetful = _mouth(llm, _Speech(), prompts)
+    await forgetful.react_once([_trigger()])
+    assert "你一直记着的事" not in llm.calls[1]["system"]
 
 
 async def test_silence_and_cooldown_keep_the_mouth_from_chattering(prompts: Any) -> None:

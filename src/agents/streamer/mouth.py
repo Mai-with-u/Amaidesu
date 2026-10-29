@@ -97,6 +97,7 @@ class Mouth:
         segment_provider: Callable[[], str],
         scene_reader: Callable[[], Awaitable[str]],
         is_live: Callable[[], bool],
+        long_memory_provider: Callable[[], str] = lambda: "",
         profile: str = "replyer",
         clock: Callable[[], int] = now_ms,
     ) -> None:
@@ -116,6 +117,7 @@ class Mouth:
         self._segment_provider = segment_provider
         self._scene_reader = scene_reader
         self._is_live = is_live
+        self._long_memory_provider = long_memory_provider
         self._profile = profile
         self._clock = clock
         self._logger = get_logger("StreamerAgent.Mouth")
@@ -266,6 +268,21 @@ class Mouth:
             style_constraints=self._persona.get("style_constraints", ""),
             max_chars=str(self._speech_max_chars or 40),
             emotions="、".join(emotion.value for emotion in Emotion),
+            long_memory=self._long_memory_block(),
+        )
+
+    def _long_memory_block(self) -> str:
+        """长期记忆进系统提示词的那一段；没有就是空串。开播时读出、整场不变，系统提示词前缀稳定。"""
+        try:
+            text = (self._long_memory_provider() or "").strip()
+        except Exception as exc:  # noqa: BLE001 - 读不到就不带，照常说话
+            self._logger.warning(f"读长期记忆失败: {exc}", exc=True)
+            return ""
+        if not text:
+            return ""
+        return (
+            "\n\n你一直记着的事（你自己整理的长期笔记：可以拿来接老梗、提起答应过的事；"
+            f"现场的事仍以【现场】为准）：\n{text}\n"
         )
 
     @staticmethod
