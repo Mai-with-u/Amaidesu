@@ -202,7 +202,7 @@ v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框�
       ├─ speech 非空 → 生成 `utt_{epoch_ms}_{seq}` → UtteranceQueue.enqueue（fire-and-forget）→ 后台 worker 串行 `await speak(text, utterance_id)`（`speak` 是构造期注入的适配器，绑定 `tts_engine.handle_speech`）
       │  └─ `tts_engine` 是装配期由 `build_tts_infrastructure(infra.toml [tts], event_bus)` 按 `[tts].provider` 选中的唯一引擎实例（edge_tts / gptsovits / voicebox / omni_tts），构造期直接注入 StreamerAgent
       │     └─ 引擎播放时按 `tts.utterance.*` 三事件发布生命周期（started / finished / failed）；事件是终点广播，消费者不得触发新决策
-      └─ emotion 非空 → **直接 invoke** `vts_set_expression`（不经事件，不入 UtteranceQueue；VTS 仍是 ToolRegistry 中的工具，TTS 不是）
+      └─ emotion 随 `streamer.speech` 业务事件发出（不入 UtteranceQueue）：虚拟形象侧订阅它——面捕合成器（VTS）等这句话 `tts.utterance.started` 才让表情浮现，尚未移植的平台适配器收到即写
       └─ actions 列表：逐条经 registry.invoke fire-and-forget 执行（Replyer 输出的动作类工具调用，失败仅记日志不影响决策循环）
 ```
 
@@ -233,14 +233,14 @@ v2 中不同数据走不同通道，不要混用：
 | 耦合度 | 通道 | 典型消费方 | 数据形态 |
 |--------|------|-----------|---------|
 | **帧级**（需要逐块 PCM 同步） | **播放器分接（AudioSink 协议）**——已建，详见 [口型帧级通道](../decisions/024-lipsync-frame-channel.md) | 虚拟形象口型分析（共享分析器） | 原始音频块 |
-| **起止对齐**（与播放区间对齐） | **订阅 `tts.utterance.started` / `finished`** | （预留）字幕写入器、播放耗时记账器 | `UtteranceStartedPayload` / `UtteranceFinishedPayload` |
-| **无耦合**（独立于播放时机） | **直接 invoke 工具**（不经 TTS 队列、不经事件） | emotion → `vts_set_expression`、action → （暂未接线） | 工具自身契约 |
+| **起止对齐**（与播放区间对齐） | **订阅 `tts.utterance.started` / `finished`** | 字幕跟随播放、面捕合成器（表情在开始播放时浮现、播完回落） | `UtteranceStartedPayload` / `UtteranceFinishedPayload` |
+| **无耦合**（独立于播放时机） | **直接 invoke 工具**（不经 TTS 队列、不经事件） | action → （暂未接线） | 工具自身契约 |
 
 设计要点：
 
 - **帧级通道已建**：口型同步经播放器分接（AudioSink 协议）承接——播放器把音频复制递入共享口型分析器，各平台渲染器把口型信号翻译为本平台参数（通道设计见 [口型帧级通道](../decisions/024-lipsync-frame-channel.md)，它承接了 [TTS 作为配置驱动基础设施](../decisions/007-tts-infrastructure-pipeline.md) 为帧级消费预留的出口）。
 - **事件通道是终点广播**：消费者不得基于 `tts.utterance.*` 触发新一轮决策（"TTS→决策→TTS"会成环）；可做的记账 / 释放锁 / 字幕对齐不构成新决策。
-- **直接 invoke 由 Agent 包内完成**：StreamerAgent 解析 `reply.result.content` 后，speech 走 UtteranceQueue → 注入的 `tts_engine.handle_speech`（装配期直连，零 ToolRegistry）；emotion 走直接 `vts_set_expression`（仍在 ToolRegistry 中）；action 当前范围明确不接入决策（独立议题）。
+- **直接 invoke 由 Agent 包内完成**：StreamerAgent 解析 `reply.result.content` 后，speech 走 UtteranceQueue → 注入的 `tts_engine.handle_speech`（装配期直连，零 ToolRegistry）；emotion 随 `streamer.speech` 发布、由虚拟形象侧订阅（主播包对平台零感知）；action 当前范围明确不接入决策（独立议题）。
 
 ---
 

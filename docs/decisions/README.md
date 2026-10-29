@@ -74,3 +74,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-049：热重载回调接缝退役（infra 归入重启段 / 零订阅者的静默假生效 / 组件重建是唯一热生效形态）](049-hot-reload-seam-retirement.md)
 - [ADR-050：场次分正式与彩排（取代 ADR-006 数据治理一条的落地方式：真假按场分流 / 记忆两条线 / 模拟观众只进彩排场）](050-session-kind-live-and-rehearsal.md)
 - [ADR-051：主播长期记忆 MEMORY.md（扩展 ADR-042：纯文本 / 收播合并 / 开播冻结注入 / 正式彩排各一份）](051-streamer-long-term-memory-file.md)
+- [ADR-052：虚拟形象由面捕合成器逐帧驱动（部分取代 ADR-023 / ADR-026：平台适配器缩成驱动 / 表情跟着播放起落 / VTS 先行）](052-avatar-tracking-synthesizer.md)
