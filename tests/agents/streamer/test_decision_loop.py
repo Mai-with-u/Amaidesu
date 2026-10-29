@@ -268,6 +268,26 @@ async def test_signoff_fires_on_manual_live_end(rig_factory) -> None:
     assert decisions[0].forced is True
 
 
+async def test_signoff_skipped_when_superseded_by_next_session(rig_factory) -> None:
+    """彩排直接转正式：旧场被新场顶掉不是真下播，不道别；新场照常开播放行。"""
+    rig = await rig_factory([_planner_step(_reply_call())], proactive={"enabled": False})
+    await rig.bus.emit(CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=1, kind="rehearsal"), source="test")
+    await rig.bus.wait_until_drained()
+    baseline = len(rig.calls("planner"))
+
+    await rig.bus.emit(
+        CoreEvents.LIVE_ENDED,
+        LiveEndedPayload(live_session_id=1, kind="rehearsal", reason="开启新场次前自动结束", superseded=True),
+        source="test",
+    )
+    await rig.bus.emit(CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=2, kind="live"), source="test")
+    # 限时等派发落地：若误触发道别，道别窗会一直等发言播完，这里以超时失败而不是挂住
+    await asyncio.wait_for(rig.bus.wait_until_drained(), timeout=5.0)
+
+    assert rig.decisions == [] and len(rig.calls("planner")) == baseline
+    assert rig.agent.is_live_active() is True
+
+
 async def test_signoff_not_fired_on_stopped_agent(rig_factory) -> None:
     """应用停机路径的收播（Agent 已停）不触发道别：进程退出时道别无意义。"""
     rig = await rig_factory([_planner_step(_reply_call())])

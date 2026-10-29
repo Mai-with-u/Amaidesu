@@ -108,9 +108,10 @@ async def test_open_twice_auto_closes_previous(store: SQLiteDatabase, bus: Event
     await bus.wait_until_drained()
     assert first != second
     assert manager.active_pk == second
-    # 不变量：至多一个显式进行中场次
+    # 不变量：至多一个显式进行中场次；被顶掉的旧场带 superseded 标记
     assert len(collector.ended) == 1
     assert collector.ended[0].live_session_id == first
+    assert collector.ended[0].superseded is True
     rows = await store.execute("SELECT * FROM live_sessions WHERE source='manual' AND ended_at_ms IS NULL")
     assert len(rows) == 1
 
@@ -167,6 +168,7 @@ async def test_close_empty_session_discards_row(store: SQLiteDatabase, bus: Even
     await bus.wait_until_drained()
     assert await store.sessions.get_live_session(live_session_id=pk) is None
     assert collector.ended and collector.ended[0].empty_discarded is True
+    assert collector.ended[0].superseded is False  # 手动下播是真下播
     assert collector.ended[0].duration_ms is not None
 
 

@@ -861,7 +861,10 @@ class StreamerAgent(BaseAgent):
         # await 形态：本回调由事件总线的后台任务驱动，await 不阻塞发布方，
         # 且保证道别决策窗赶在事件面仍在、发言管线未停的窗口内完整走完
         # （说完再见再做收播整理与记忆清理）。
-        if self._running:
+        # 被新开的场次顶掉（如彩排直接转正式开播）不是真下播：紧接着就是下一场
+        # 的开播，道别要好几秒才生成完，会落进新场次、在正式直播开头说"今天就到
+        # 这儿"，所以不道别，直接收拾本场
+        if self._running and not payload.superseded:
             await self._execute_round(
                 [],
                 forced=True,

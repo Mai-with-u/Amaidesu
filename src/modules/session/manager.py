@@ -124,7 +124,8 @@ class LiveSessionManager:
         """
         async with self._lock:
             if self._active_pk is not None:
-                await self._close_active(reason="开启新场次前自动结束", ended_at_ms=now_ms())
+                # 顶替旧场次：标记 superseded，订阅方据此不把它当真下播（主播不道别）
+                await self._close_active(reason="开启新场次前自动结束", ended_at_ms=now_ms(), superseded=True)
             started = now_ms()
             pk = await self._sessions.insert_live_session(
                 stream_id=room_id if room_id is not None else self._room_id,
@@ -161,7 +162,7 @@ class LiveSessionManager:
                 return False
             return await self._close_active(reason=reason, ended_at_ms=now_ms())
 
-    async def _close_active(self, *, reason: str, ended_at_ms: int) -> bool:
+    async def _close_active(self, *, reason: str, ended_at_ms: int, superseded: bool = False) -> bool:
         """结束当前显式场次（调用方持锁）。空场次（无任何明细行）整行丢弃。
 
         幂等：目标行不存在或已结账（``ended_at_ms`` 非空）时只复位内存态
@@ -199,6 +200,7 @@ class LiveSessionManager:
                 reason=reason,
                 duration_ms=max(ended_at_ms - started_at, 0),
                 empty_discarded=empty_discarded,
+                superseded=superseded,
                 ended_at_ms=ended_at_ms,
             ),
             source="LiveSessionManager",

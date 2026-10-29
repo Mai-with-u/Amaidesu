@@ -85,6 +85,9 @@ class LiveEndedPayload(BasePayload):
         duration_ms: 场次时长（毫秒；无法确定时为 None）
         empty_discarded: 空场次是否被丢弃（结束时无任何明细行的场次不保留，
             该标记为 True 时本场次行已被删除，live_session_id 不再有效）
+        superseded: 是否被新开的场次顶掉（开新场次前自动结束旧场次时为 True）。
+            紧接着就是下一场的 ``live.started``，订阅方据此跳过只属于
+            "真下播"的动作（如主播道别）
         ended_at_ms: 场次结束时刻（Unix 毫秒）
         timestamp_ms: 事件发布时间戳（Unix 毫秒）
     """
@@ -97,6 +100,10 @@ class LiveEndedPayload(BasePayload):
     empty_discarded: bool = Field(
         default=False,
         description="空场次丢弃标记：True 时场次行已删除，live_session_id 不再有效",
+    )
+    superseded: bool = Field(
+        default=False,
+        description="被新开的场次顶掉：True 时紧接着就是下一场的 live.started，不是真下播",
     )
     ended_at_ms: int = Field(
         default_factory=lambda: now_ms(),
