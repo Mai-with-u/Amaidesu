@@ -128,6 +128,13 @@ class TestStreamPrebuffer:
         big_manager.write_chunk(chunk)  # 之后的块直接写声卡
         assert stream.write.call_count == 4
 
+    def test_stream_that_fails_to_open_leaves_the_sentence_silent(self, sd, big_manager) -> None:
+        sd.OutputStream.side_effect = RuntimeError("声卡被占用")
+        assert big_manager.open_output_stream() is None  # 记日志返回 None，不把异常抛进播放流程
+        big_manager.start_prepared_stream(None, utterance_id="t2")
+        big_manager.write_chunk(np.zeros(1600, dtype=np.int16))
+        assert big_manager._stream is None and big_manager.is_playing is False
+
     @pytest.mark.parametrize("discard", [False, True])
     def test_stop_stream_flushes_the_residual_unless_discarded(self, sd, big_manager, discard) -> None:
         """正常收尾把不足阈值的残余冲播（短句兜底）；取消/截断则丢弃未播预缓冲，不发声"""

@@ -104,6 +104,17 @@ class GPTSoVITSProvider:
 
     # ===== 生命周期 =====
 
+    def _build_audio_manager(self) -> Any:
+        # 函数内 import：src.modules.audio 顶层即拉起 numpy（重型数值依赖）并初始化声卡库，仅在需要音频设备管理时加载
+        from src.modules.audio import AudioDeviceManager
+
+        return AudioDeviceManager(
+            sample_rate=self.sample_rate,
+            channels=CHANNELS,
+            dtype=DTYPE,
+            sink=self.audio_sink,
+        )
+
     async def setup(self) -> None:
         """初始化引擎（幂等）。"""
         if self._has_started:
@@ -119,16 +130,9 @@ class GPTSoVITSProvider:
                 "ref_audio_path（相对 GPT-SoVITS 根目录）与 prompt_text（参考音频转写），否则合成将失败"
             )
 
-        # 函数内 import：src.modules.audio 顶层即拉起 numpy（重型数值依赖），仅在需要音频设备管理时加载
-        from src.modules.audio import AudioDeviceManager
-
-        manager = AudioDeviceManager(
-            sample_rate=self.sample_rate,
-            channels=CHANNELS,
-            dtype=DTYPE,
-            sink=self.audio_sink,
-        )
-        self.audio_manager = manager
+        # 首次导入声卡库会初始化 PortAudio（实测约半秒），setup 多在第一句话时懒触发，放工作线程，
+        # 免得第一句开口时整个事件循环（形象逐帧驱动、弹幕、控制台）一起顿住
+        self.audio_manager = await asyncio.to_thread(self._build_audio_manager)
 
         self.tts_client.load_preset("default")
         self._has_started = True
@@ -245,7 +249,10 @@ class GPTSoVITSProvider:
                     )
                 )
 
-                self.audio_manager.start_stream(utterance_id=utterance_id)
+                # 打开声卡输出流放工作线程（在事件循环里同步打开，每句开口形象都顿一两百毫秒）；
+                # 开始这一句仍在事件循环上做：口型分析器要在循环里起后台任务
+                stream = await asyncio.to_thread(self.audio_manager.open_output_stream)
+                self.audio_manager.start_prepared_stream(stream, utterance_id=utterance_id)
 
                 chunk_index = 0
                 write_task: asyncio.Task | None = None

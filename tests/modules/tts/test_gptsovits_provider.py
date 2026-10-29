@@ -55,7 +55,8 @@ async def test_stream_lifecycle_start_then_writes_then_stop() -> None:
     provider = GPTSoVITSProvider(config=dict(CONFIGURED))
     mgr = make_audio_manager()
     log: list[str] = []
-    mgr.start_stream.side_effect = lambda utterance_id="": log.append(f"start:{utterance_id}")
+    mgr.open_output_stream.side_effect = lambda: log.append("open") or "声卡流"
+    mgr.start_prepared_stream.side_effect = lambda stream, utterance_id="": log.append(f"start:{stream}:{utterance_id}")
     mgr.write_chunk.side_effect = lambda chunk: log.append(f"write:{len(chunk)}")
     mgr.stop_stream.side_effect = lambda: log.append("stop")
     await _started(provider, _stream_client(b"c1", b"c2", b"c3"), mgr)
@@ -66,7 +67,8 @@ async def test_stream_lifecycle_start_then_writes_then_stop() -> None:
     with patch("src.modules.tts.wav_decoder.decode_wav_chunk", new=decode):
         await provider.handle_speech("x", utterance_id="utt_order")
 
-    assert log == ["start:utt_order", "write:2048", "write:2048", "write:2048", "stop"]
+    # 先打开声卡（工作线程里），再用打开的流开始这一句，然后逐块写、收尾
+    assert log == ["open", "start:声卡流:utt_order", "write:2048", "write:2048", "write:2048", "stop"]
 
 
 async def test_missing_reference_audio_fails_before_synthesis(event_bus: EventBus) -> None:

@@ -262,22 +262,48 @@ class AudioDeviceManager:
             self._sink_stop()
             raise
 
-    def start_stream(self, utterance_id: str = "") -> None:
-        """启动流式播放：创建声卡流但暂不开播，等预缓冲攒够再启动。
+    def open_output_stream(self) -> Optional[Any]:
+        """打开一个声卡输出流（不开播、不碰分接）；打不开时记日志返回 None。
 
-        上游块先入 pending；攒满 ``prebuffer_seconds`` 后由 ``write_chunk``
-        统一冲入声卡。短句（总量不足预缓冲）在 ``stop_stream`` 收尾冲播。
+        打开声卡在 Windows 上要几十到上百毫秒，在事件循环线程里调用会让同一
+        循环上的一切顿一下（形象每句开口都卡一帧），事件循环里的调用方应放到
+        工作线程，再用 :meth:`start_prepared_stream` 开始这一句。
         """
         if not DEPENDENCIES_OK:
             self.logger.error("sounddevice 库不可用")
-            return
+            return None
         try:
-            self._stream = sd.OutputStream(
+            return sd.OutputStream(
                 samplerate=self.sample_rate,
                 channels=self.channels,
                 dtype=self.dtype,
                 device=self.output_device_index,
             )
+        except Exception as e:
+            self.logger.error(f"打开声卡输出流失败: {e}")
+            return None
+
+    def start_stream(self, utterance_id: str = "") -> None:
+        """启动流式播放：创建声卡流但暂不开播，等预缓冲攒够再启动（同步打开声卡，见 open_output_stream）。
+
+        上游块先入 pending；攒满 ``prebuffer_seconds`` 后由 ``write_chunk``
+        统一冲入声卡。短句（总量不足预缓冲）在 ``stop_stream`` 收尾冲播。
+        """
+        self.start_prepared_stream(self.open_output_stream(), utterance_id)
+
+    def start_prepared_stream(self, stream: Optional[Any], utterance_id: str = "") -> None:
+        """用已打开的声卡流开始一句（``stream`` 为 None 时这一句不出声）。
+
+        分接会话在这里同步开启：口型分析器要在事件循环里起后台任务，所以本方法
+        要在事件循环线程调用（慢的打开声卡已经在 open_output_stream 里做完）。
+        """
+        if stream is None:
+            # 声卡没打开：清理分接，不把失败路径当作成功播放
+            self._stream = None
+            self._sink_stop()
+            return
+        try:
+            self._stream = stream
             self._pending_chunks = []
             self._pending_samples = 0
             self._stream_started = False
