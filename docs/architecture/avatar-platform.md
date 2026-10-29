@@ -18,7 +18,7 @@
 
 | 方式 | 什么时候发生 | 效果 |
 |------|------------|------|
-| LLM 调工具 | AI 主播在决策中主动调用 | 设置表情、查询/触发预设动作等 |
+| LLM 调工具 | AI 主播在决策中主动调用 | 做有意的动作（点头、摇头、看弹幕、模型做好的动画）、保持表情等 |
 | 说话自动变表情 | 主播每发布一句发言 | 按发言携带的情绪和强度自动设置表情（VTS：这句话开始播放时浮现，播完后回落） |
 | 口型同步 | TTS 播放语音期间 | 嘴巴跟着声音开合 |
 | 自动小动作 | 后台循环持续运行 | 没人互动时也有眨眼、眼神、头部的轻微动作，形象不僵硬 |
@@ -28,14 +28,20 @@
 
 ### LLM 调用的工具
 
-工具名带平台前缀（如 `vts_set_expression`）；配置里启用了哪个平台，LLM 就能看到哪个平台的工具。所有工具参数都是语义化的——LLM 说"开心、强度 0.8"，不需要知道具体模型参数名。
+平时的表情、眨眼、眼神、说话时的点头都由形象自己完成，`reply` 的情绪就决定这句话的表情；主播只在想做一个有意的动作时调工具。已移植到面捕合成器的平台（VTS）只用下面这一组，工具名不带平台前缀（决策见 [形象动作工具](../decisions/053-avatar-act-tool.md)）：
+
+| 工具 | 作用 |
+|------|------|
+| `avatar_list_actions` | 列出能做的动作：有意的动作（点头、摇头、歪头、眼睛一亮、吓一跳、皱眉、抬眉、看弹幕）、保持表情、各平台登记的动作片段（如 VTS 热键） |
+| `avatar_act(action, emotion?, intensity?, seconds?)` | 做一个动作；`action="保持表情"` 时给出 emotion 与 seconds，演"假装生气一会儿"这类梗；名字写错时把目录随失败结果一起返回，LLM 据此自我纠正 |
+
+VTS 适配器连上后不再向 LLM 暴露工具，热键作为动作片段登记到面捕合成器，由 `avatar_act` 按名字转回触发。还没移植的平台仍按平台前缀暴露各自的工具，参数都是语义化的：
 
 | 工具 | 平台 | 作用 |
 |------|------|------|
-| `*_set_expression(emotion, intensity)` | 三个平台都有 | 设置情绪（17 种枚举值）和强度（0~1） |
-| `*_list_preset_actions` | 三个平台都有 | 列出可用的预设动作目录 |
-| `*_trigger_preset_action(action)` | 三个平台都有 | 触发一个预设动作；名字写错时会把可用目录随失败结果一起返回，LLM 据此自我纠正 |
-| `vts_set_idle_enabled` | 仅 VTS | 开关头部微动（面捕合成器的头部漫步） |
+| `*_set_expression(emotion, intensity)` | Warudo / VRChat / 表情差分图 | 设置情绪（17 种枚举值）和强度（0~1） |
+| `*_list_preset_actions` | 同上 | 列出可用的预设动作目录 |
+| `*_trigger_preset_action(action)` | 同上 | 触发一个预设动作；名字写错时把可用目录随失败结果返回 |
 | `warudo_set_sight(target)` | 仅 Warudo | 设置视线看向哪里（摄像头 / 弹幕 / 手机） |
 
 ### 说话自动变表情
@@ -44,6 +50,8 @@
 
 - **VTS（面捕合成器）**：每个情绪展开成一份配方，同时作用在脸、眼神、头部上，带浮现、保持、回落的时间曲线。开着 TTS 时，发言事件只把情绪记下，等这句话真正开始播放才浮现，播完再停留一会儿回落到人设静止姿态；没开 TTS 时按字数估算说多久。调度规则防止切换太频繁：同族相近只延长；换别的表情要等当前表情停留够最短时长；惊、怕这类强情绪可以打断。
 - **其他平台**：适配器订阅发言事件，把情绪翻译成本平台的参数，一次性写入。
+
+VTS 上表情还会慢慢累积成心情（愉快度与兴奋度两个慢变维度，没有新刺激时约 90 秒回落一半）。心情作用在所有表情之下：连着几句开心的话后，句间的静止脸也带着笑；兴奋时眼睛略睁大、多动；打累了眼皮略沉、动作变慢。调参在 `[tracking]` 的 `mood_*`。
 
 一次反应里情绪转了时（先吓一跳、再发现虚惊一场），快嘴会把它拆成两三句、每句带自己的情绪，排在同一段落里逐句播放。面捕合成器本来就是每句等开始播放才上脸，相近的情绪由调度规则合并、不会来回切；尚未移植的平台适配器靠后几句发言事件上的"等播放再切"标记：先记下，等 `tts.utterance.started` 轮到那一句时才切，播放失败就不切。没开语音时几句合成一句发出，情绪取第一句。
 
@@ -159,7 +167,7 @@ enabled = ["vts"]        # 启用哪些平台，合法值：vts / warudo / vrcha
 
 ## 相关文档
 
-- 架构决策：[面捕合成器](../decisions/052-avatar-tracking-synthesizer.md) / [平台无关边界](../decisions/023-avatar-platform-agnostic-boundary.md) / [口型帧级通道](../decisions/024-lipsync-frame-channel.md) / [字幕单一来源](../decisions/025-subtitle-single-source.md) / [虚拟形象工具约定](../decisions/026-avatar-tool-surface-contract.md) / [虚拟形象配置文件](../decisions/028-avatar-domain-config-graduation.md)
+- 架构决策：[面捕合成器](../decisions/052-avatar-tracking-synthesizer.md) / [形象动作工具](../decisions/053-avatar-act-tool.md) / [平台无关边界](../decisions/023-avatar-platform-agnostic-boundary.md) / [口型帧级通道](../decisions/024-lipsync-frame-channel.md) / [字幕单一来源](../decisions/025-subtitle-single-source.md) / [虚拟形象工具约定](../decisions/026-avatar-tool-surface-contract.md) / [虚拟形象配置文件](../decisions/028-avatar-domain-config-graduation.md)
 - [事件系统](event-system.md) — 主播发言、TTS 播放事件的语义
 - [数据流与边界规则](data-flow.md) — 情绪如何到达虚拟形象、口型音频从哪里来
 - [v2 架构叙事](v2-architecture.md) — 工具类组件的判据

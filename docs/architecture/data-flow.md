@@ -82,7 +82,7 @@ subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
     StreamerAgent -.->|emotion 直接 invoke| Other
 ```
 
-> 图例说明：实线箭头是当前主链路；虚线箭头是辅助通道（reply 产出的发言入队、TTS 生命周期事件广播、emotion 直调）。Planner 的全部工具调用（含收尾的 streamer_reply）都经 `registry.invoke`——ReAct 循环内同步持有返回值；`tool.result.<name>` 事件是终点广播，供 Dashboard 溯源，Planner 不订阅。reply 结果的 speech 字段由 StreamerAgent 解析后经 UtteranceQueue 串行送入装配期注入的 `tts_engine` 实例（`build_tts_infrastructure` 按 `infra.toml [tts].provider` 单选构造后直接注入 StreamerAgent），由其 `handle_speech(text, utterance_id)` 完成合成 + 播放——不经 ToolRegistry；emotion 字段由 StreamerAgent 解析后**直接 invoke** `vts_set_expression` 工具，不经事件；TTS 引擎自身（基础模块）播放生命周期发布 `tts.utterance.*` 三事件。虚拟形象口型同步不走数据流通道（见文末"通信机制选型"末段）。
+> 图例说明：实线箭头是当前主链路；虚线箭头是辅助通道（reply 产出的发言入队、TTS 生命周期事件广播、发言事件带出 emotion）。Planner 的全部工具调用（含收尾的 streamer_reply）都经 `registry.invoke`——ReAct 循环内同步持有返回值；`tool.result.<name>` 事件是终点广播，供 Dashboard 溯源，Planner 不订阅。reply 结果的 speech 字段由 StreamerAgent 解析后经 UtteranceQueue 串行送入装配期注入的 `tts_engine` 实例（`build_tts_infrastructure` 按 `infra.toml [tts].provider` 单选构造后直接注入 StreamerAgent），由其 `handle_speech(text, utterance_id)` 完成合成 + 播放——不经 ToolRegistry；emotion 字段随 `streamer.speech` 业务事件发出，由虚拟形象侧订阅（面捕合成器等这句话开始播放才让表情浮现）；TTS 引擎自身（基础模块）播放生命周期发布 `tts.utterance.*` 三事件。虚拟形象口型同步不走数据流通道（见文末"通信机制选型"末段）。
 
 ---
 
@@ -222,7 +222,7 @@ v2 中不同数据走不同通道，不要混用：
 | 通道 | 用途 | 数据特征 | 典型事件/调用 |
 |------|------|---------|--------------|
 | **EventBus** | 元数据事件（房间消息、状态变更、工具结果、流程单变更、TTS 生命周期） | 小型 JSON/Pydantic 对象 | `room.message.danmaku` / `tool.result.choose_option` / `rundown.changed` / `tts.utterance.started` |
-| **ToolRegistry.invoke** | 同步/异步工具调用 | 调用方持有 `ToolExecutionResult` | `await registry.invoke("streamer_reply", args)` / `await registry.invoke("vts_set_expression", args)` |
+| **ToolRegistry.invoke** | 同步/异步工具调用 | 调用方持有 `ToolExecutionResult` | `await registry.invoke("streamer_reply", args)` / `await registry.invoke("avatar_act", args)` |
 | **基础模块直调** | TTS 引擎由装配期注入，运行时绕过 ToolRegistry | 调用方持有引擎实例 | `await tts_engine.handle_speech(text, utterance_id)`（StreamerAgent 内部 speak 适配器；TTS 不在工具池中） |
 | **REST 控制面直调** | 运营干预（递话/直派/硬取消，见 [Agent 干预原语](../decisions/034-agent-intervention-primitives.md)） | 同步请求-响应、语义化错误码；意图递给归属组件，不代写其内部状态 | `POST /api/v1/agents/{name}/prompt|delegate|tasks/{id}/cancel` → `AgentControl` |
 
