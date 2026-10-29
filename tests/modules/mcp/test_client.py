@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from src.modules.mcp.client import McpClient
+from src.modules.mcp.client import McpClient, shared_ssl_context
 from src.modules.mcp.config import McpServerConfig
 from tests.modules.mcp.fakes import AnyConfig, Endpoint, FakeFastmcpClient, FakeTool, Updated, recording_client_factory
 from src.modules.mcp.provider import McpToolProvider
@@ -164,6 +164,16 @@ def _deadline_client(factory: Any) -> McpClient:
         transport_factory=lambda: object(),
         client_factory=factory,
     )
+
+
+async def test_http_transports_reuse_one_ssl_context() -> None:
+    # 连不上的 server 会反复重连：每次都新建 SSL 上下文要在事件循环里重新加载证书
+    created: List[Any] = []
+    for name in ("qq", "maicraft"):
+        config = McpServerConfig(transport="http", url=f"http://127.0.0.1:8767/{name}")
+        await McpClient(name=name, config=config, client_factory=recording_client_factory(created)).connect()
+    context = await shared_ssl_context()
+    assert [fake.transport.verify for fake in created] == [context, context]
 
 
 async def test_handshake_and_close_honor_connection_timeout() -> None:

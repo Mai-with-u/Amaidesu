@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 from functools import partial
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -41,6 +42,9 @@ ResourceUpdateCallback = Callable[[str], None]
 # 传输对象 / fastmcp.Client 的构造函数签名：测试注入进程内替身、或换用
 # 其他传输实现时经构造参数传入；缺省 None 时走本类的默认构造路径。
 TransportFactory = Callable[[], Any]
+
+# 共用的 SSL 上下文（见 shared_ssl_context）；进程内只建一次
+_shared_ssl: Optional[ssl.SSLContext] = None
 ClientFactory = Callable[..., Any]
 
 
@@ -152,8 +156,11 @@ class McpClient:
                 self._connected = False
             raise
 
-    def _build_transport(self) -> Any:
+    def _build_transport(self, verify: Optional[ssl.SSLContext] = None) -> Any:
         """构造 FastMCP transport 对象（按配置的传输方式）。
+
+        Args:
+            verify: HTTP 传输用的 SSL 上下文（传入共用的那份，免得每次重连重新加载证书）
 
         Returns:
             fastmcp.client.transports 的 transport 实例
@@ -168,6 +175,7 @@ class McpClient:
             return StreamableHttpTransport(
                 url=cfg.url,
                 headers=cfg.headers or None,
+                verify=verify,
             )
         # stdio
         if not cfg.command:
@@ -218,7 +226,11 @@ class McpClient:
                     await old.__aexit__(None, None, None)
                 except Exception as exc:  # noqa: BLE001 - 旧会话失败不能阻止尝试恢复
                     logger.debug(f"旧 MCP 实例释放失败（继续重连）: {exc}", exc=exc)
-            transport = self._transport_factory() if self._transport_factory is not None else self._build_transport()
+            if self._transport_factory is not None:
+                transport = self._transport_factory()
+            else:
+                verify = await shared_ssl_context() if self.config.transport == "http" else None
+                transport = self._build_transport(verify)
             client_ctor = self._client_factory if self._client_factory is not None else Client
             self._client = client_ctor(
                 transport,
@@ -402,4 +414,19 @@ class McpClient:
         logger.info(f"MCP server '{self.name}' 已关闭")
 
 
-__all__ = ["ClientFactory", "McpClient", "ResourceUpdateCallback", "TransportFactory"]
+async def shared_ssl_context() -> ssl.SSLContext:
+    """所有 MCP HTTP 连接共用的 SSL 上下文（第一次在工作线程里建，之后复用）。
+
+    httpx 每建一个客户端都会在当前线程里重新加载一遍证书（实测 60~100 毫秒），而建客户端发生在
+    事件循环线程里：连不上的 server 按退避重连时，每次都让同一循环上的形象逐帧驱动、弹幕处理顿一下。
+    """
+    global _shared_ssl
+    if _shared_ssl is None:
+        # httpx 随 FastMCP 这个可选依赖安装，只在真要连 HTTP 服务时加载
+        import httpx
+
+        _shared_ssl = await asyncio.to_thread(httpx.create_ssl_context)
+    return _shared_ssl
+
+
+__all__ = ["ClientFactory", "McpClient", "ResourceUpdateCallback", "TransportFactory", "shared_ssl_context"]

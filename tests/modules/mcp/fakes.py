@@ -72,6 +72,7 @@ class FakeFastmcpClient:
     """
 
     def __init__(self, transport: Any, message_handler: Any = None, init_timeout: float | None = None) -> None:
+        self.transport = transport
         self.message_handler = message_handler
         self.session = FakeSession()
         self.read_results: List[Any] = [("content",)]
