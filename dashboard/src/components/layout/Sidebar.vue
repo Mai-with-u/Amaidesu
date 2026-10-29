@@ -65,6 +65,10 @@
           <el-icon><PictureRounded /></el-icon>
           <span>形象调试</span>
         </el-menu-item>
+        <el-menu-item index="/avatar-tuning">
+          <el-icon><Operation /></el-icon>
+          <span>形象调校</span>
+        </el-menu-item>
         <el-menu-item index="/llm/usage">
           <el-icon><TrendCharts /></el-icon>
           <span>LLM 用量</span>
@@ -110,6 +114,7 @@ import {
   List,
   MagicStick,
   Odometer,
+  Operation,
   PictureRounded,
   User,
   Avatar,
