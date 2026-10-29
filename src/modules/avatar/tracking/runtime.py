@@ -25,7 +25,7 @@ import asyncio
 import random
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple, runtime_checkable
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Set, Tuple, runtime_checkable
 
 from src.modules.avatar.lipsync import LipSyncRenderer, MouthSignal
 from src.modules.events.event_bus import EventBus
@@ -44,6 +44,7 @@ from src.modules.utils.time_utils import now_ms as wall_now_ms
 
 from .channels import Frame
 from .config import TrackingConfig
+from .gestures import GESTURES, HOLD_EXPRESSION, LOOK_AT_CHAT, LOOK_AT_CHAT_MS
 from .synthesizer import TrackingSynthesizer
 
 
@@ -130,6 +131,8 @@ class TrackingRuntime:
         self._playing: Set[str] = set()
         self._tool_seq = 0
         self._last_chat_ms = -(10**12)
+        # 平台登记的动作片段（模型作者做好的动画、贴纸等）：来源 → (列名字, 按名字触发)
+        self._clips: Dict[str, Tuple[Callable[[], List[str]], Callable[[str], Awaitable[bool]]]] = {}
         self._loop_task: Optional[asyncio.Task] = None
         self._started = False
 
@@ -262,6 +265,63 @@ class TrackingRuntime:
             self.logger.exception(f"驱动 {driver.name} 发送静止姿态失败")
 
     # ===== 主动调用（工具、调试台） =====
+
+    def hold_expression(self, emotion: str, intensity: float, seconds: float) -> str:
+        """主播有意摆一个表情并保持 ``seconds`` 秒（演"假装生气一会儿"这类梗）。"""
+        self._tool_seq += 1
+        now = self._clock()
+        return self.synthesizer.express(
+            emotion, intensity, now, key=f"hold-{self._tool_seq}", release_at_ms=now + int(seconds * 1000)
+        )
+
+    def register_clips(
+        self, source: str, names: Callable[[], List[str]], trigger: Callable[[str], Awaitable[bool]]
+    ) -> None:
+        """平台登记自己的动作片段（同一来源重复登记即覆盖）；名字现取，换模型后自动更新。"""
+        self._clips[source] = (names, trigger)
+
+    def unregister_clips(self, source: str) -> None:
+        self._clips.pop(source, None)
+
+    def action_catalog(self) -> List[Dict[str, str]]:
+        """主播可以主动发起的动作目录：有意的动作、保持表情、各平台登记的片段。"""
+        catalog = [{"name": name, "kind": "动作", "description": g.description} for name, g in GESTURES.items()]
+        catalog.append(
+            {
+                "name": HOLD_EXPRESSION,
+                "kind": "表情",
+                "description": "摆一个表情并保持一会儿（同时给 emotion 与 seconds）",
+            }
+        )
+        for source, (names, _) in self._clips.items():
+            try:
+                clip_names = names()
+            except Exception:  # noqa: BLE001 - 单个来源列目录失败不影响其他来源
+                self.logger.exception(f"列 {source} 动作片段失败（已跳过）")
+                continue
+            catalog.extend(
+                {"name": n, "kind": f"{source} 片段", "description": "模型作者做好的动作"} for n in clip_names
+            )
+        return catalog
+
+    async def act(self, action: str) -> Optional[bool]:
+        """执行一个动作：有意的动作优先，其次按名字找平台片段。未知名字返回 None。"""
+        gesture = GESTURES.get(action)
+        if gesture is not None:
+            now = self._clock()
+            if action == LOOK_AT_CHAT:
+                return self.synthesizer.glance_at_chat(now, duration_ms=LOOK_AT_CHAT_MS, min_gap_ms=0)
+            for offset_ms, kind, scale in gesture.steps:
+                self.synthesizer.pulse(kind, now + offset_ms, scale)
+            return True
+        for source, (names, trigger) in self._clips.items():
+            try:
+                if action in names():
+                    return bool(await trigger(action))
+            except Exception:  # noqa: BLE001 - 片段触发失败按未成功返回
+                self.logger.exception(f"触发 {source} 动作片段失败: {action}")
+                return False
+        return None
 
     def express(self, emotion: str, intensity: float) -> str:
         """主播调工具设表情：立刻上脸，保持配置的时长后回落。返回调度结果。"""

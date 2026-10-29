@@ -31,6 +31,7 @@ from src.modules.agents.companions import companion_names, register_companions
 from src.modules.agents.deps import AgentDeps
 from src.modules.agents.factory import AGENT_BINDINGS, instantiate_agent
 from src.modules.agents.manager import AgentManager
+from src.modules.avatar.act_tool import AvatarActProvider
 from src.modules.avatar.platform.warudo.expression_profile import MAIMAI_PROFILE_PATH, read_profile_expression
 from src.modules.avatar.tracking import TrackingConfig, TrackingRuntime
 from src.modules.collectors.factory import instantiate_collector
@@ -738,6 +739,11 @@ async def create_app_components(
             f"核心工具包已绑定: 成功 {core_succeeded}/{len(core_report)}（尝试装配数）"
             f"{skipped_note}，合计新增 {sum(core_report.values())} 个工具" + failed_note
         )
+
+        # --- 形象动作工具（avatar_act：主播有意发起身体动作的唯一入口，委托面捕合成器）---
+        # 组合根直接注册（无配置段、无外部连接）；平台把自己的动作片段登记到面捕合成器上
+        if avatar_tracking is not None:
+            tool_registry.register_provider(AvatarActProvider(avatar_tracking))
 
         # --- 视觉基础模块工具 look_at_screen（L2 DI：组合根注入 mss 截屏后端）---
         # bootstrap 明文不接管 DI 工具（见 bootstrap.py 注释），由组合根按 [tools.vision] 开关装配
