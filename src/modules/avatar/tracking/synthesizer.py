@@ -55,14 +55,15 @@ class TrackingSynthesizer:
 
     # 口型信号多久没更新就视为过期（分析器约 30~40 毫秒一帧）
     MOUTH_SIGNAL_FRESH_MS = 250
-    # 视线偏到边上时头部跟着转的角度，以及跟随的迟滞（头比眼睛慢半拍）
-    HEAD_FOLLOW_DEG = 8.0
+    # 头部跟随视线的迟滞（头比眼睛慢半拍）；跟着转多少度是调参
     HEAD_FOLLOW_TAU_MS = 350
     # 视线大幅跳动时顺带眨眼的概率
     GAZE_BLINK_CHANCE = 0.5
     # 思考神情的浮现与消退速度；思考时望向别处的落点隔几秒换一换
     THINKING_TAU_MS = 400
     AWAY_SHIFT_MS = (3000, 6000)
+    # 思考时视线落点在配置的位置附近浮动多少
+    AWAY_JITTER = 0.1
 
     def __init__(self, config: TrackingConfig, *, rng: Optional[random.Random] = None) -> None:
         self._config = config
@@ -92,6 +93,7 @@ class TrackingSynthesizer:
         self._thinking = False
         self._read_until: Optional[int] = None
         self._away_point: Tuple[float, float] = (0.0, 0.0)
+        self._away_camera = True
         self._away_next: Optional[int] = None
         self._glance_point: Tuple[float, float] = (0.0, 0.0)
         self._glance_until: Optional[int] = None
@@ -189,9 +191,13 @@ class TrackingSynthesizer:
         if now_ms - self._last_glance_ms < min_gap_ms:
             return False
         self._last_glance_ms = now_ms
-        self._glance_point = (self._config.chat_gaze_x, self._config.chat_gaze_y)
-        self._glance_until = now_ms + duration_ms
+        self.look_at((self._config.chat_gaze_x, self._config.chat_gaze_y), now_ms, duration_ms=duration_ms)
         return True
+
+    def look_at(self, point: Tuple[float, float], now_ms: int, *, duration_ms: int) -> None:
+        """看向某一点（-1~1）一会儿再回到原来的注意力（调校页拖眼神目标时预览用）。"""
+        self._glance_point = point
+        self._glance_until = now_ms + duration_ms
 
     def pulse(self, kind: str, now_ms: int, scale: float = 1.0) -> bool:
         """触发一个脉冲反应（点头、眼睛一亮、受惊一缩……；见 ``reactions.PULSES``），并轻推心情。"""
@@ -244,27 +250,35 @@ class TrackingSynthesizer:
             if now_ms < self._glance_until:
                 return GazeGenerator.FIXATE, self._glance_point
             self._glance_until = None
+        camera = (cfg.camera_gaze_x, cfg.camera_gaze_y)
         if self._speaking or not self._thinking or not cfg.thinking_gaze_enabled:
-            return GazeGenerator.CAMERA, (0.0, 0.0)
+            return GazeGenerator.CAMERA, camera
         if self._read_until is not None and now_ms < self._read_until:
             return GazeGenerator.READING, (cfg.chat_gaze_x, cfg.chat_gaze_y)
         if self._away_next is None or now_ms >= self._away_next:
             rng = self._rng
             if self._away_next is not None and rng.random() < 0.2:
                 # 想得久了偶尔看回镜头一下，再接着想
-                self._away_point = (0.0, 0.0)
+                self._away_camera = True
                 self._away_next = now_ms + int(rng.uniform(900, 1600))
             else:
-                # 思考时望向侧上方（真人思考时会避开视觉刺激）；隔几秒挪一挪，大多留在同一侧
-                if self._away_next is None or self._away_point == (0.0, 0.0):
+                # 思考时望向配置的落点（默认侧上方：真人思考时会避开视觉刺激）；隔几秒挪一挪，
+                # 允许两侧都看时左右随机换，但大多留在同一侧
+                if self._away_next is None or self._away_camera:
                     side = rng.choice((-1.0, 1.0))
                 else:
-                    side = 1.0 if self._away_point[0] >= 0 else -1.0
+                    side = 1.0 if self._away_point[0] * cfg.thinking_gaze_x >= 0 else -1.0
                 if rng.random() < 0.25:
                     side = -side
-                self._away_point = (side * rng.uniform(0.3, 0.5), rng.uniform(0.15, 0.35))
+                if not cfg.thinking_gaze_mirror:
+                    side = 1.0
+                jitter = self.AWAY_JITTER
+                x = side * rng.uniform(cfg.thinking_gaze_x - jitter, cfg.thinking_gaze_x + jitter)
+                y = rng.uniform(cfg.thinking_gaze_y - jitter, cfg.thinking_gaze_y + jitter)
+                self._away_point = (x, y)
+                self._away_camera = False
                 self._away_next = now_ms + int(rng.uniform(*self.AWAY_SHIFT_MS))
-        return GazeGenerator.FIXATE, self._away_point
+        return GazeGenerator.FIXATE, camera if self._away_camera else self._away_point
 
     def step(self, now_ms: int) -> Frame:
         """推进到 ``now_ms`` 并返回这一帧。"""
@@ -307,8 +321,8 @@ class TrackingSynthesizer:
         else:
             yaw = pitch = roll = 0.0
         alpha = 1.0 - math.exp(-dt_ms / self.HEAD_FOLLOW_TAU_MS) if dt_ms else 0.0
-        self._follow_yaw += (gaze_x * self.HEAD_FOLLOW_DEG - self._follow_yaw) * alpha
-        self._follow_pitch += (gaze_y * self.HEAD_FOLLOW_DEG * 0.6 - self._follow_pitch) * alpha
+        self._follow_yaw += (gaze_x * cfg.head_follow_deg - self._follow_yaw) * alpha
+        self._follow_pitch += (gaze_y * cfg.head_follow_deg * 0.6 - self._follow_pitch) * alpha
         target[HEAD_YAW] = yaw + self._follow_yaw + offsets.get(HEAD_YAW, 0.0)
         target[HEAD_PITCH] = pitch + self._follow_pitch + offsets.get(HEAD_PITCH, 0.0)
         target[HEAD_ROLL] = roll + offsets.get(HEAD_ROLL, 0.0)

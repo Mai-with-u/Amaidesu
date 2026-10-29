@@ -1,4 +1,4 @@
-"""形象调校：配方覆盖、实时改参不打断表情、手动摆姿到期交还、状态快照、驱动校准"""
+"""形象调校：配方覆盖、实时改参不打断表情、手动摆姿到期交还、状态快照、驱动校准、眼神目标可配置"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Dict, Mapping
 import pytest
 from pydantic import ValidationError
 
-from src.modules.avatar.tracking.channels import EYE_OPEN, EYE_OPEN_L, HEAD_YAW, MOUTH_SMILE
+from src.modules.avatar.tracking.channels import EYE_OPEN, EYE_OPEN_L, GAZE_X, GAZE_Y, HEAD_YAW, MOUTH_SMILE
 from src.modules.avatar.tracking.config import TrackingConfig
 from src.modules.avatar.tracking.expression import POSITIVE, RECIPES, ExpressionScheduler, build_recipes
 from src.modules.avatar.tracking.runtime import TrackingRuntime
@@ -120,3 +120,37 @@ async def test_runtime_snapshot_reconfigure_and_calibration(fake_clock: FakeCloc
     with pytest.raises(ValueError):
         runtime.calibrate("calibrated", {"nose": 1.0})
     await runtime.stop()
+
+
+def test_camera_direction_and_head_follow_are_configurable() -> None:
+    synth = TrackingSynthesizer(_config(camera_gaze_x=0.3, camera_gaze_y=-0.2, head_follow_deg=10.0))
+    frame = _settle(synth, 0, 3000)
+    assert (frame[GAZE_X], frame[GAZE_Y]) == (pytest.approx(0.3), pytest.approx(-0.2))  # 看镜头 = 看配置的方向
+    assert frame[HEAD_YAW] == pytest.approx(3.0, abs=0.05)  # 头跟着转 0.3 × 10°
+
+    still = TrackingSynthesizer(_config(camera_gaze_x=0.3, head_follow_deg=0.0))
+    assert _settle(still, 0, 3000)[HEAD_YAW] == pytest.approx(0.0)
+
+
+def test_thinking_gaze_stays_on_the_configured_side_when_not_mirrored() -> None:
+    synth = TrackingSynthesizer(
+        _config(thinking_gaze_x=-0.6, thinking_gaze_y=0.1, thinking_gaze_mirror=False), rng=random.Random(3)
+    )
+    synth.begin_thinking(0)
+    points = []
+    for t in range(0, 60_000, FRAME_MS):
+        frame = synth.step(t)
+        if t > 1000:
+            points.append((frame[GAZE_X], frame[GAZE_Y]))
+    xs = [x for x, _ in points]
+    assert min(xs) < -0.5  # 望向配置的那一侧
+    assert max(xs) <= 1e-6  # 从不看向镜像的另一侧（最多看回镜头）
+
+
+def test_look_at_previews_a_point_then_returns() -> None:
+    synth = TrackingSynthesizer(_config())
+    synth.look_at((-0.8, 0.5), 0, duration_ms=1500)
+    frame = _settle(synth, 0, 1400)
+    assert (frame[GAZE_X], frame[GAZE_Y]) == (pytest.approx(-0.8), pytest.approx(0.5))
+    assert frame[HEAD_YAW] < -4.0  # 头也跟着转过去，和真的看过去一样
+    assert _settle(synth, 1400, 3000)[GAZE_X] == pytest.approx(0.0)

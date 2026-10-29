@@ -81,6 +81,20 @@ class TrackingConfig(BaseConfig):
         description="读弹幕时的平均眨眼频率（真人阅读时约 4.5 次/分，明显少于平时）",
         json_schema_extra={"x-ui-advanced": True},
     )
+    camera_gaze_x: float = Field(
+        title="镜头方向（左右）",
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description="看镜头时视线的左右位置（-1~1，正方向与头部左右转同号）；镜头或观众视线不在形象正前方时调",
+    )
+    camera_gaze_y: float = Field(
+        title="镜头方向（上下）",
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description="看镜头时视线的上下位置（-1~1，正数向上）",
+    )
     chat_gaze_x: float = Field(
         title="弹幕区方向（左右）",
         default=0.45,
@@ -99,6 +113,33 @@ class TrackingConfig(BaseConfig):
         title="思考时是否移开视线",
         default=True,
         description="主播在想下一句时视线移开、眉心微紧（真人思考时会避开视觉刺激）；刚来过弹幕就先读弹幕再想",
+    )
+    thinking_gaze_x: float = Field(
+        title="思考时望向（左右）",
+        default=0.4,
+        ge=-1.0,
+        le=1.0,
+        description="思考时视线落点的左右位置（-1~1）；落点在它附近 ±0.1 内隔几秒挪一挪",
+    )
+    thinking_gaze_y: float = Field(
+        title="思考时望向（上下）",
+        default=0.25,
+        ge=-1.0,
+        le=1.0,
+        description="思考时视线落点的上下位置（-1~1，正数向上；真人思考时多望向侧上方）",
+    )
+    thinking_gaze_mirror: bool = Field(
+        title="思考时两侧都会看",
+        default=True,
+        description="开着时左右两侧随机换着看（大多留在同一侧）；关掉就只看上面设的那一侧，比如另一侧是游戏画面",
+    )
+    head_follow_deg: float = Field(
+        title="头跟着视线转多少",
+        default=8.0,
+        ge=0.0,
+        le=20.0,
+        description="视线偏到边上（±1）时头部跟着转的角度（度）；头比眼睛慢半拍跟过去",
+        json_schema_extra={"x-ui-advanced": True},
     )
     reading_ms: int = Field(
         title="回应前读弹幕多久",

@@ -408,6 +408,10 @@ class TrackingRuntime:
     def clear_manual(self) -> None:
         self.synthesizer.clear_manual()
 
+    def look_at(self, x: float, y: float, duration_ms: int) -> None:
+        """看向某一点一会儿（调校页拖眼神目标时预览：头会跟着转，和真的看过去一样）。"""
+        self.synthesizer.look_at((x, y), self._clock(), duration_ms=duration_ms)
+
     def snapshot(self) -> Dict[str, Any]:
         """此刻的身体状态（调校页实时显示）：最近一帧、主表情、心情、在想 / 在说、手动摆姿与驱动。"""
         now = self._clock()
