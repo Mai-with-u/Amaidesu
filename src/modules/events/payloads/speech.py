@@ -59,6 +59,9 @@ class StreamerSpeechPayload(BasePayload):
         emotion: 关联情绪标签（``Emotion`` 17 枚举值之一，小写；非法/缺失
             由回复器降级为 ``neutral``，生产者保证必有值）。
         emotion_intensity: 情绪强度（0.0–1.0；缺省 0.5，生产者已 clamp）。
+        emotion_at_playback: 表情是否等这句开始播放（``tts.utterance.started``）再切。
+            一次反应拆成几句、每句带自己的情绪时，后面几句发出时前一句还在播，
+            立刻切表情会抢在声音前面；置 True 让形象按播放时刻对齐。
         target_user_id: 这条发言回复的观众 user_id（可选；主动发言/无特定
             对象时为 ``None``）。下游落库组件可据此维护 viewers 的
             ``replied_count`` 写穿。
@@ -86,6 +89,10 @@ class StreamerSpeechPayload(BasePayload):
         ge=0.0,
         le=1.0,
         description="情绪强度（0.0–1.0；生产者保证必有值，缺省 0.5）",
+    )
+    emotion_at_playback: bool = Field(
+        default=False,
+        description="表情等这句开始播放再切（同一段里排在后面的句子）；False 时发言即切",
     )
     target_user_id: Optional[str] = Field(
         default=None,

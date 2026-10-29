@@ -8,9 +8,11 @@
   下一句合并成一个由头；同一类遭遇冷却一段时间；小事（急事开始结束、天色）只在她安静了一阵时才开口。
 - 依据：系统提示词只有人设和几条规矩，事实全在每次附上的现场卡里（现在的状态、手上的目标、刚发生的事、
   她刚说过的话）——实验里没有这张卡的瘦嘴会理直气壮地编现场。
-- 兜底：输出"情绪：台词"或"[沉默]"；台词按完整句子截到长度预算、过敏感词过滤、和她最近说过的话比
-  重合度，重复的直接丢弃不重试。出声走发声分发器的反应通道：前一句没播完最多等一会儿，等不到整句作废；
-  每句真轮到播放时记一条日志，写明生成、等前一句、从事件到开始播各用了多久。
+- 兜底：输出一到三行"情绪：台词"或"[沉默]"——情绪在一次反应里转了（先吓一跳再松口气）就拆成
+  几行，每行一个情绪；没写情绪的行沿用上一行的。台词按句累计截到长度预算、过敏感词过滤、几行拼起来
+  和她最近说过的话比重合度，重复的直接丢弃不重试。出声走发声分发器的反应通道：前一句没播完最多等一会
+  儿，等不到整段作废；后面几行排在第一行后面，形象等轮到那句播放时再切表情。第一句真轮到播放时记一条
+  日志，写明生成、等前一句、从事件到开始播各用了多久。
 
 嘴只说话，不做事：委派、流程单、查询仍归 Planner。
 """
@@ -22,7 +24,7 @@ import re
 from collections import deque
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.types.emotion_vocab import Emotion
@@ -30,7 +32,7 @@ from src.modules.utils.time_utils import now_ms
 
 from .config import StreamerMouthConfig
 from .scene_card import GoalLine, SceneInputs, build_scene_card
-from .speech_guard import WordFilter, guard
+from .speech_guard import WordFilter, apply_word_filter, fit_to_budget, guard
 from .tools.reply_tool import coerce_emotion
 from .topic_gate import SpeechGate
 
@@ -54,6 +56,10 @@ _MAX_REACTION_AGE_MS = 20_000
 _PRIORITY = 5
 _SILENCE = "[沉默]"
 _EMOTION_LINE = re.compile(r"^\s*([A-Za-z_]+)\s*[：:]\s*(.+)$")
+#: 一次反应最多拆成几行（每行一个情绪）：再多就成了讲一段，那是 Planner 的活
+_MAX_LINES = 3
+#: 整行都包在括号里的是旁白或动作说明（"（挠头）"），不是要念出来的话
+_STAGE_DIRECTION = re.compile(r"^[（(【\[].*[）)】\]]$")
 
 
 @dataclass(frozen=True)
@@ -219,13 +225,15 @@ class Mouth:
         if not response.ok:
             self._logger.warning(f"嘴生成失败: {response.error or 'unknown'}")
             return None
-        emotion, text = self._parse(response.content or "")
-        if not text:
+        segments = self._parse(response.content or "")
+        if not segments:
             self._logger.info(f"嘴选择不说：由头={self._trigger_text(fresh)}")
             return None
-        text = self._guard(text)
-        if not text:
+        segments = self._guard(segments)
+        if not segments:
             return None
+        text = "".join(line for _, line in segments)
+        (first_emotion, first_text), rest = segments[0], segments[1:]
         event_at = min(trigger.at_ms for trigger in fresh)
         if self._clock() - event_at > _MAX_REACTION_AGE_MS:
             self._logger.info(f"反应生成太慢，已过时效，不说了: {text}")
@@ -235,8 +243,8 @@ class Mouth:
             self._log_started, text, self._trigger_text(fresh), generated - started, event_at, self._clock()
         )
         utterance_id = await self._speech.dispatch_reaction(
-            text,
-            emotion=emotion.value,
+            first_text,
+            emotion=first_emotion.value,
             emotion_intensity=0.7 if urgent else 0.5,
             wait_ms=self._config.reaction_ttl_ms,
             gap_ms=self._config.min_gap_ms,
@@ -244,6 +252,7 @@ class Mouth:
             round_id=f"mouth_{started}",
             llm_request_id=response.request_id or None,
             on_started=on_started,
+            follow_ups=[(line, emotion.value) for emotion, line in rest],
         )
         if utterance_id is None:
             return None
@@ -351,34 +360,58 @@ class Mouth:
 
     # ---------------- 输出 ----------------
 
-    def _parse(self, content: str) -> tuple[Emotion, str]:
-        """取第一行非空输出，拆成（情绪, 台词）；"[沉默]"或空返回空台词；拆不出情绪按 neutral。"""
-        line = next((part.strip() for part in content.splitlines() if part.strip()), "")
-        if not line or _SILENCE in line or "【沉默】" in line:
-            return Emotion.NEUTRAL, ""
-        match = _EMOTION_LINE.match(line)
-        if not match:
-            return Emotion.NEUTRAL, line
-        emotion, _note = coerce_emotion(match.group(1))
-        return emotion, match.group(2).strip()
+    def _parse(self, content: str) -> List[Tuple[Emotion, str]]:
+        """取前几行非空输出，逐行拆成（情绪, 台词）；首行是"[沉默]"或没有输出时返回空列表。
 
-    def _guard(self, text: str) -> str:
-        """长度截到预算、敏感词过滤、和她最近说过的话比重合度；不过关返回空串（直接丢弃不重试）。
-
-        三检的判定与词汇定义收拢在 speech_guard（与 Replyer 同源），这里只
-        保留嘴自己的丢弃日志。
+        拆不出情绪的行沿用上一行的情绪（第一行按 neutral）——标签漏写只让表情少切一次，
+        不丢台词；中途出现"[沉默]"就到此为止；整行包在括号里的旁白不念。
         """
+        lines = [part.strip() for part in content.splitlines() if part.strip()]
+        segments: List[Tuple[Emotion, str]] = []
+        current = Emotion.NEUTRAL
+        for line in lines:
+            if len(segments) >= _MAX_LINES or _SILENCE in line or "【沉默】" in line:
+                break
+            match = _EMOTION_LINE.match(line)
+            if match:
+                current, _note = coerce_emotion(match.group(1))
+                line = match.group(2).strip()
+            if line and not _STAGE_DIRECTION.match(line):
+                segments.append((current, line))
+        return segments
+
+    def _guard(self, segments: List[Tuple[Emotion, str]]) -> List[Tuple[Emotion, str]]:
+        """长度按句累计到预算、敏感词过滤、整段和她最近说过的话比重合度；不过关返回空列表（直接丢弃不重试）。
+
+        长度：第一句照常按预算截（截不出完整句时整句保留）；后面的句子放得下才要，放不下整句
+        不要，不截成半句。敏感词逐句净化，命中"整条丢弃"就整段丢。重合度按几句拼起来比——拆成
+        几行不该让复读漏网。判定与词汇定义收拢在 speech_guard（与 Replyer 同源），这里只保留嘴
+        自己的丢弃日志。
+        """
+        budget = self._speech_max_chars
+        kept: List[Tuple[Emotion, str]] = []
+        used = 0
+        for index, (emotion, line) in enumerate(segments):
+            if budget > 0:
+                if index == 0:
+                    line = fit_to_budget(line, budget)
+                elif used + len(line) > budget:
+                    break
+            filtered = apply_word_filter(line, self._word_filter)
+            if filtered is None:
+                self._logger.info("嘴的台词命中敏感词，整段丢弃")
+                return []
+            kept.append((emotion, filtered))
+            used += len(filtered)
+        joined = "".join(line for _, line in kept)
         verdict = guard(
-            text,
+            joined,
             [record.text for record in self._records if record.kind == "speech"],
-            speech_max_chars=self._speech_max_chars,
-            word_filter=self._word_filter,
+            speech_max_chars=0,
+            word_filter=None,
             gate=self._gate,
         )
         if verdict.text is None:
-            if verdict.reason == "word_filter":
-                self._logger.info("嘴的台词命中敏感词，整句丢弃")
-            else:
-                self._logger.info(f"嘴的台词和最近说过的重复（重合度 {verdict.ratio:.2f}），丢弃: {text}")
-            return ""
-        return verdict.text
+            self._logger.info(f"嘴的台词和最近说过的重复（重合度 {verdict.ratio:.2f}），丢弃: {joined}")
+            return []
+        return kept

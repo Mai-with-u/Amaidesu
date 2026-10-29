@@ -28,11 +28,10 @@ from typing import Any, Dict, Optional
 
 from pydantic import Field
 
-from src.modules.avatar.speech_binding import bind_speech_emotion
+from src.modules.avatar.speech_binding import AvatarBindings
 from src.modules.avatar.tool_common import contract_tool_specs, dispatch_tool
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
-from src.modules.events.names import CoreEvents
 from src.modules.logging import get_logger
 from src.modules.tools.models import (
     ToolExecutionResult,
@@ -112,7 +111,8 @@ class ExpressionSheetProvider(BaseToolProvider):
 
         # 可变实例状态在 __init__ 初始化
         self._has_started = False
-        self._speech_emotion_handler: Optional[Any] = None
+        # 事件订阅挂载项（情绪反射）的全生命周期句柄：setup 时创建并挂、cleanup 全量退订
+        self._bindings: Optional[AvatarBindings] = None
         self.render_count = 0
         self.error_count = 0
 
@@ -223,7 +223,8 @@ class ExpressionSheetProvider(BaseToolProvider):
             self.logger.warning(self._not_ready_hint())
         # 事件订阅（被动响应业务事件）：情绪反射（streamer.speech）。未就绪时订阅保持——
         # 反射路径调用 set_expression 会拿到失败结果，配置就绪重启后无需改装配
-        self._speech_emotion_handler = bind_speech_emotion(self.event_bus, self, self.logger)
+        self._bindings = AvatarBindings(self.event_bus, self.logger)
+        self._bindings.attach_emotion_reflection(self)
         self._has_started = True
         self.logger.info(
             f"{self.__class__.__name__} 已启动"
@@ -233,12 +234,9 @@ class ExpressionSheetProvider(BaseToolProvider):
     async def cleanup(self) -> None:
         if not self._has_started:
             return
-        if self.event_bus is not None and self._speech_emotion_handler is not None:
-            try:
-                self.event_bus.off(CoreEvents.STREAMER_SPEECH, self._speech_emotion_handler)
-            except Exception as exc:  # noqa: BLE001 - 退订失败不阻断清理
-                self.logger.debug(f"streamer.speech 退订失败（已忽略）: {exc}")
-            self._speech_emotion_handler = None
+        if self._bindings is not None:
+            self._bindings.close()
+            self._bindings = None
         self._has_started = False
         self.logger.info(f"{self.__class__.__name__} 已停止")
 

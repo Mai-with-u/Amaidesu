@@ -320,3 +320,28 @@ async def test_every_spoken_line_reaches_the_mouth_records_without_subscribing_t
     await agent._speech.dispatch({"speech": "走走走，回家！", "emotion": {"name": "happy", "intensity": 0.5}})
     records = list(agent._mouth._records)  # type: ignore[union-attr]
     assert [(record.kind, record.text) for record in records] == [("speech", "走走走，回家！")]
+
+
+async def test_emotion_turn_splits_into_lines_dispatched_as_follow_ups(prompts: Any) -> None:
+    """情绪转了就拆几行：第一行照常出声，后面几行带各自情绪跟在后面；漏写情绪的行沿用上一行，旁白不念。"""
+    llm = _LLM("scared：哇！什么东西？！\n……原来是只鸡。\n（松了口气）\nhappy：吓我一跳\nangry：第四行不要")
+    speech = _Speech()
+    mouth = _mouth(llm, speech, prompts)
+
+    assert await mouth.react_once([_trigger()]) == "哇！什么东西？！……原来是只鸡。吓我一跳"
+
+    call = speech.calls[0]
+    assert (call["speech"], call["emotion"]) == ("哇！什么东西？！", "scared")
+    # 最多三行台词（旁白不占名额），第四行起不要
+    assert call["follow_ups"] == [("……原来是只鸡。", "scared"), ("吓我一跳", "happy")]
+    assert "这句话里情绪转了" in llm.calls[0]["system"]
+
+
+async def test_follow_up_lines_that_overflow_the_budget_are_dropped_whole(prompts: Any) -> None:
+    """几行加起来超预算：后面放不下的整行不要，不截成半句；第一行照常保留。"""
+    llm = _LLM("scared：哇！什么东西？！\nspeechless：" + "原来" * 30 + "是只鸡。")
+    speech = _Speech()
+    mouth = _mouth(llm, speech, prompts)
+
+    assert await mouth.react_once([_trigger()]) == "哇！什么东西？！"
+    assert speech.calls[0]["follow_ups"] == []

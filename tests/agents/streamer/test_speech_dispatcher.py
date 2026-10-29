@@ -546,3 +546,30 @@ async def test_reaction_reports_the_moment_it_starts_playing(started, tts_on: bo
         assert marks == [1]
     else:
         assert marks == [0]
+
+
+@pytest.mark.parametrize("tts_on", [True, False])
+async def test_reaction_follow_ups_play_as_one_segment_with_their_own_emotions(started, tts_on: bool) -> None:
+    """拆成几句的反应：TTS 开着时逐句发事件、排在同一段落里，后面几句标"等播放再切表情"；
+    关着时没有播放时刻可对齐，合成一句发出，情绪取第一句。"""
+    bus, engine = EventBus(), _Engine()
+    captured = _capture_speech(bus)
+    dispatcher = await started(bus=bus, engine=engine, config=_TTS_ON if tts_on else {"enabled": False})
+
+    utterance_id = await dispatcher.dispatch_reaction(
+        "哇！什么东西？！",
+        emotion="scared",
+        emotion_intensity=0.7,
+        wait_ms=2000,
+        follow_ups=[("……原来是只鸡。", "speechless"), ("  ", "happy")],
+    )
+    await bus.wait_until_drained()
+
+    speeches = [(payload.text, payload.emotion, payload.emotion_at_playback) for _, payload in captured]
+    if tts_on:
+        assert speeches == [("哇！什么东西？！", "scared", False), ("……原来是只鸡。", "speechless", True)]
+        await _until(lambda: len(engine.calls) == 2)
+        assert [text for text, _ in engine.calls] == ["哇！什么东西？！", "……原来是只鸡。"]
+        assert engine.calls[0][1] == utterance_id
+    else:
+        assert speeches == [("哇！什么东西？！……原来是只鸡。", "scared", False)]

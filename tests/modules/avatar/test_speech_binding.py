@@ -1,4 +1,4 @@
-"""虚拟形象适配器的被动事件订阅（尚未移植到面捕合成器的平台）：streamer.speech 反射为表情、tts.utterance.* 驱动说话状态、订阅生命周期"""
+"""虚拟形象适配器的被动事件订阅（尚未移植到面捕合成器的平台）：streamer.speech 反射为表情（后续句等开播再切）、tts.utterance.* 驱动说话状态、订阅生命周期"""
 
 from __future__ import annotations
 
@@ -12,7 +12,11 @@ from src.modules.avatar.speech_binding import AvatarBindings, bind_speaking_stat
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
-from src.modules.events.payloads.utterance import UtteranceFinishedPayload, UtteranceStartedPayload
+from src.modules.events.payloads.utterance import (
+    UtteranceFailedPayload,
+    UtteranceFinishedPayload,
+    UtteranceStartedPayload,
+)
 
 
 def _speech(emotion: str = "happy", intensity: float = 0.8) -> StreamerSpeechPayload:
@@ -86,3 +90,35 @@ async def test_cleanup_unbinds_subscriptions() -> None:
     bindings.close()  # 全量退订（cleanup 内部同款出口）
     await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech("sad", 0.5))
     assert _weights(warudo) == {"happy": pytest.approx(0.8)}  # 退订后不再反射
+
+
+async def test_follow_up_sentence_switches_expression_when_it_starts_playing() -> None:
+    """标了"等播放再切"的句子：发出时不切，轮到它开始播放才切；播放失败的不再切。"""
+    provider = MagicMock(set_expression=AsyncMock(return_value=MagicMock(success=True)))
+    bus = EventBus()
+    bind_speech_emotion(bus, provider, MagicMock())
+
+    def _line(utterance_id: str, emotion: str, *, deferred: bool) -> StreamerSpeechPayload:
+        return StreamerSpeechPayload(
+            utterance_id=utterance_id, text="台词", emotion=emotion, emotion_intensity=0.7, emotion_at_playback=deferred
+        )
+
+    def _started(utterance_id: str) -> UtteranceStartedPayload:
+        return UtteranceStartedPayload(utterance_id=utterance_id, speech_text="台词", engine="edge", duration_ms=100)
+
+    def _expressions() -> list[str]:
+        return [call.args[0] for call in provider.set_expression.await_args_list]
+
+    await _emit(bus, CoreEvents.STREAMER_SPEECH, _line("utt_1", "scared", deferred=False))
+    await _emit(bus, CoreEvents.STREAMER_SPEECH, _line("utt_2", "speechless", deferred=True))
+    await _emit(bus, CoreEvents.STREAMER_SPEECH, _line("utt_3", "happy", deferred=True))
+    assert _expressions() == ["scared"]
+
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_STARTED, _started("utt_1"))  # 已经切过的句子开播不重复切
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_STARTED, _started("utt_2"))
+    assert _expressions() == ["scared", "speechless"]
+
+    failed = UtteranceFailedPayload(utterance_id="utt_3", speech_text="台词", engine="edge", error_message="超时")
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_FAILED, failed)
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_STARTED, _started("utt_3"))
+    assert _expressions() == ["scared", "speechless"]

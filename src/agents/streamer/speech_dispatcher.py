@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Coroutine, Dict, Optional
+from typing import Any, Callable, Coroutine, Dict, Optional, Sequence, Tuple
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -351,6 +351,7 @@ class SpeechDispatcher:
         round_id: str = "",
         llm_request_id: Optional[str] = None,
         on_started: Optional[Callable[[], None]] = None,
+        follow_ups: Sequence[Tuple[str, str]] = (),
     ) -> Optional[str]:
         """嘴的发声方式：前面还有话没播完时最多等 ``wait_ms``，等不到整句作废；能出声的插到其他待播台词前面。
 
@@ -362,6 +363,12 @@ class SpeechDispatcher:
         ``on_started`` 在这句轮到播放、交给 TTS 的那一刻调用（TTS 关着时就是发出的那一刻），
         嘴用它按实际开始播的时刻记延迟。
 
+        ``follow_ups`` 是紧跟在后面的几句 ``(台词, 情绪)``：情绪在一次反应里转了，就拆成几句、
+        每句带自己的情绪。它们和第一句同一个段落号排在后面，各发一条发言事件并标
+        ``emotion_at_playback``，形象等轮到那句播放时再切表情；被更急的台词插断时剩下的
+        句子随段落作废。没有语音播放时没有"轮到那句"的时刻可对齐，几句合成一句发出，
+        情绪取第一句的。
+
         Returns:
             本句的 utterance_id；空台词或作废时返回 None。
         """
@@ -369,6 +376,11 @@ class SpeechDispatcher:
         if not text:
             return None
         queue = self._utterance_queue
+        playing = self._tts_enabled and queue is not None
+        follow = [(line.strip(), mood) for line, mood in follow_ups if line and line.strip()]
+        if follow and not playing:
+            text += "".join(line for line, _ in follow)
+            follow = []
         claimed = False
         if self._tts_enabled and queue is not None:
             claimed = await self._claim_slot(timeout_ms=max(1, wait_ms), gap_ms=gap_ms)
@@ -385,11 +397,27 @@ class SpeechDispatcher:
                 round_id=round_id,
                 llm_request_id=llm_request_id,
             )
-            self._schedule_subtitle_show(text, utterance_id)
+            # 字幕直出模式下整段一次显示（跟随播放模式由 tts 事件逐句驱动，这里不出字）
+            self._schedule_subtitle_show(text + "".join(line for line, _ in follow), utterance_id)
             self._notify_spoken(text)
-            if self._tts_enabled and queue is not None:
+            if playing:
+                assert queue is not None  # noqa: S101 playing 已判定
                 # 已经发出业务事件，就不再设过期：记录里有的台词一定要出声
-                await queue.enqueue(utterance_id, text, priority=priority, on_start=on_started)
+                segment = utterance_id if follow else ""
+                await queue.enqueue(utterance_id, text, priority=priority, segment=segment, on_start=on_started)
+                for line, mood in follow:
+                    follow_id = self._next_utterance_id()
+                    await self._emit_streamer_speech(
+                        follow_id,
+                        line,
+                        mood,
+                        emotion_intensity,
+                        round_id=round_id,
+                        llm_request_id=llm_request_id,
+                        emotion_at_playback=True,
+                    )
+                    self._notify_spoken(line)
+                    await queue.enqueue(follow_id, line, priority=priority, segment=segment)
             elif on_started is not None:
                 on_started()
         finally:
@@ -477,6 +505,7 @@ class SpeechDispatcher:
         reply_to_message_id: Optional[str] = None,
         round_id: str = "",
         llm_request_id: Optional[str] = None,
+        emotion_at_playback: bool = False,
     ) -> None:
         """发布 ``streamer.speech`` 业务事件（同步 await 发出，保证先于轮末决策记录与空闲状态；失败不反噬决策循环）。"""
         event_bus = self._event_bus
@@ -491,6 +520,7 @@ class SpeechDispatcher:
             target_user_id=target_user_id,
             reply_to_message_id=reply_to_message_id,
             llm_request_id=llm_request_id,
+            emotion_at_playback=emotion_at_playback,
         )
 
         try:
