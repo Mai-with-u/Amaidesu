@@ -69,6 +69,56 @@ class TrackingConfig(BaseConfig):
         default=True,
         description="盯着镜头时眼球有细小跳动，偶尔瞥向别处再看回来",
     )
+    blink_per_min_reading: float = Field(
+        title="读弹幕时每分钟眨眼次数",
+        default=6.0,
+        ge=1.0,
+        le=60.0,
+        description="读弹幕时的平均眨眼频率（真人阅读时约 4.5 次/分，明显少于平时）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    chat_gaze_x: float = Field(
+        title="弹幕区方向（左右）",
+        default=0.45,
+        ge=-1.0,
+        le=1.0,
+        description="看弹幕时视线的左右位置（-1~1，正方向与头部左右转同号）；按直播画面里弹幕区相对形象的位置调",
+    )
+    chat_gaze_y: float = Field(
+        title="弹幕区方向（上下）",
+        default=-0.35,
+        ge=-1.0,
+        le=1.0,
+        description="看弹幕时视线的上下位置（-1~1，正数向上）",
+    )
+    thinking_gaze_enabled: bool = Field(
+        title="思考时是否移开视线",
+        default=True,
+        description="主播在想下一句时视线移开、眉心微紧（真人思考时会避开视觉刺激）；刚来过弹幕就先读弹幕再想",
+    )
+    reading_ms: int = Field(
+        title="回应前读弹幕多久",
+        default=2000,
+        ge=0,
+        le=10_000,
+        description="开始思考前几秒内来过弹幕时，先看着弹幕区读这么久再移开视线（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    room_reactions_enabled: bool = Field(
+        title="是否对直播间消息做反应",
+        default=True,
+        description="弹幕到达时瞥一眼弹幕区；礼物、SC、上舰时再眼睛一亮",
+    )
+    game_reactions_enabled: bool = Field(
+        title="是否对游戏事件做反应",
+        default=True,
+        description='游戏里有重大进展时眼睛一亮，需要关注时"诶？"一下，出错时皱眉一缩（比开口说话先到）',
+    )
+    speech_nods_enabled: bool = Field(
+        title="说话时是否随韵律点头",
+        default=True,
+        description="说话时在音节起点轻点头、短语开头偶尔挑眉，说完有时点一下头",
+    )
     expression_linger_ms: int = Field(
         title="表情句末停留",
         default=1500,

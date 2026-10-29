@@ -18,10 +18,11 @@ def smootherstep(x: float) -> float:
 
 
 class BlinkGenerator:
-    """自动眨眼：频率随说话与否变化，眼皮闭合快、睁开慢，偶尔连眨两下。
+    """自动眨眼：频率由调用方按状态给（空闲、说话、读弹幕各不同），眼皮闭合快、睁开慢，偶尔连眨两下。
 
     一次眨眼：约 80 毫秒闭上 → 停 40 毫秒 → 约 160 毫秒睁开。两次眨眼至少隔
-    1.2 秒（不应期），间隔在不应期之后按指数分布抽取，平均值由每分钟次数决定。
+    1.2 秒（不应期），间隔在不应期之后按指数分布抽取，平均值由每分钟次数决定；
+    频率变化在下一次排期时生效。
     大幅转移视线时调用 :meth:`nudge`，按概率顺带眨一次（真人换注视点时常眨眼）。
     """
 
@@ -32,10 +33,8 @@ class BlinkGenerator:
     DOUBLE_CHANCE = 0.1
     DOUBLE_GAP_MS = 150
 
-    def __init__(self, rng: random.Random, *, idle_per_min: float, speaking_per_min: float) -> None:
+    def __init__(self, rng: random.Random) -> None:
         self._rng = rng
-        self._idle_per_min = idle_per_min
-        self._speaking_per_min = speaking_per_min
         self._blink_start: Optional[int] = None
         self._next_at: Optional[int] = None
         self._last_end = -(10**12)
@@ -44,9 +43,8 @@ class BlinkGenerator:
     def duration_ms(self) -> int:
         return self.CLOSE_MS + self.HOLD_MS + self.OPEN_MS
 
-    def _interval_ms(self, speaking: bool) -> int:
-        per_min = self._speaking_per_min if speaking else self._idle_per_min
-        mean = max(60_000.0 / per_min, self.REFRACTORY_MS + 100.0)
+    def _interval_ms(self, per_min: float) -> int:
+        mean = max(60_000.0 / max(per_min, 0.1), self.REFRACTORY_MS + 100.0)
         return int(self.REFRACTORY_MS + self._rng.expovariate(1.0 / (mean - self.REFRACTORY_MS)))
 
     def nudge(self, now_ms: int, chance: float) -> None:
@@ -56,11 +54,11 @@ class BlinkGenerator:
         if self._rng.random() < chance:
             self._next_at = now_ms
 
-    def closure(self, now_ms: int, *, speaking: bool) -> float:
-        """当前眼皮闭合量（0 = 睁开，1 = 闭上）。"""
+    def closure(self, now_ms: int, *, per_min: float) -> float:
+        """当前眼皮闭合量（0 = 睁开，1 = 闭上）；``per_min`` 是当前状态的平均每分钟次数。"""
         if self._next_at is None:
             # 第一次取值时随机错开起点，避免每次启动都在同一时刻眨眼
-            self._next_at = now_ms + int(self._rng.uniform(0.3, 1.0) * self._interval_ms(speaking))
+            self._next_at = now_ms + int(self._rng.uniform(0.3, 1.0) * self._interval_ms(per_min))
         if self._blink_start is None and now_ms >= self._next_at:
             # 从排定时刻起算闭合进度（帧间隔再粗也不丢相位）；排定时刻已过去一整次眨眼
             # 那么久（比如进程卡住）就从现在起眨，不吞掉这一次
@@ -76,7 +74,7 @@ class BlinkGenerator:
             if self._rng.random() < self.DOUBLE_CHANCE:
                 self._next_at = now_ms + self.DOUBLE_GAP_MS
             else:
-                self._next_at = now_ms + self._interval_ms(speaking)
+                self._next_at = now_ms + self._interval_ms(per_min)
             return 0.0
         if dt < self.CLOSE_MS:
             return dt / self.CLOSE_MS
@@ -86,51 +84,107 @@ class BlinkGenerator:
 
 
 class GazeGenerator:
-    """眼神：盯着注视中心时有细小的跳动，隔一阵瞥向别处，停一会儿再看回来。
+    """眼神：围绕一个注视中心活动，三种模式。
 
-    细小跳动每 0.6~2.5 秒一次，落点在中心附近；瞥视每 7~15 秒一次，幅度 0.3~0.55，
-    停 0.4~1.2 秒后回到中心。跳动本身是瞬时的，由合成器的速度上限把它走成几十毫秒
-    的眼跳。返回值第三项标记"这一帧发生了大幅跳动"，合成器据此顺带眨眼。
+    - **看镜头**（``CAMERA``）：中心附近每 0.6~2.5 秒细跳一次；每 7~15 秒瞥向别处
+      （幅度 0.3~0.55），停 0.4~1.2 秒再看回来；
+    - **盯住某处**（``FIXATE``）：只有细跳，不主动瞥视（思考时望着别处、瞥一眼弹幕区）；
+    - **读弹幕**（``READING``）：一行行读——每 0.22~0.42 秒往右挪一小步，读完一行
+      回到行首、下移一行，读三行再从头。
+
+    跳动本身是瞬时的，由合成器的速度上限把它走成几十毫秒的眼跳。返回值是绝对注视点
+    （中心 + 偏移），第三项标记"这一帧发生了大幅跳动"，合成器据此顺带眨眼。
     """
 
+    CAMERA = "camera"
+    FIXATE = "fixate"
+    READING = "reading"
     BIG_JUMP = 0.25
 
     def __init__(self, rng: random.Random) -> None:
         self._rng = rng
+        self._mode = self.CAMERA
+        self._center: Tuple[float, float] = (0.0, 0.0)
         self._point: Tuple[float, float] = (0.0, 0.0)
         self._next_saccade: Optional[int] = None
         self._next_glance: Optional[int] = None
         self._glance_until: Optional[int] = None
+        self._read_step = 0
+        self._read_line = 0
+        self._pending_jump = False
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    def _absolute(self) -> Tuple[float, float]:
+        return self._center[0] + self._point[0], self._center[1] + self._point[1]
+
+    def set_target(self, mode: str, center: Tuple[float, float], now_ms: int) -> None:
+        """换注视模式或中心（相同则不动）；换得远时下一帧标记为大幅跳动。"""
+        if mode == self._mode and center == self._center:
+            return
+        before = self._absolute()
+        self._mode = mode
+        self._center = center
+        self._point = (-0.12, 0.04) if mode == self.READING else (0.0, 0.0)
+        self._read_step = 0
+        self._read_line = 0
+        self._glance_until = None
+        self._next_saccade = now_ms + int(
+            self._rng.uniform(220, 420) if mode == self.READING else self._rng.uniform(600, 2500)
+        )
+        self._next_glance = now_ms + int(self._rng.uniform(7000, 15000))
+        after = self._absolute()
+        self._pending_jump = math.hypot(after[0] - before[0], after[1] - before[1]) > self.BIG_JUMP
 
     def _move_to(self, point: Tuple[float, float]) -> bool:
         jumped = math.hypot(point[0] - self._point[0], point[1] - self._point[1]) > self.BIG_JUMP
         self._point = point
         return jumped
 
+    def _sample_reading(self, now_ms: int) -> bool:
+        if now_ms < self._next_saccade:
+            return False
+        self._next_saccade = now_ms + int(self._rng.uniform(220, 420))
+        self._read_step += 1
+        if self._read_step >= self._rng.randint(3, 5):
+            # 读完一行：回到行首、下移一行；读完三行从头再来
+            self._read_step = 0
+            self._read_line = (self._read_line + 1) % 3
+            return self._move_to((-0.12, 0.04 - 0.05 * self._read_line))
+        return self._move_to((self._point[0] + self._rng.uniform(0.05, 0.09), self._point[1]))
+
     def sample(self, now_ms: int) -> Tuple[float, float, bool]:
-        """当前注视点（相对注视中心）与这一帧是否发生了大幅跳动。"""
+        """当前绝对注视点与这一帧是否发生了大幅跳动。"""
         rng = self._rng
         if self._next_saccade is None:
             self._next_saccade = now_ms + int(rng.uniform(600, 2500))
             self._next_glance = now_ms + int(rng.uniform(7000, 15000))
-        jumped = False
+        jumped, self._pending_jump = self._pending_jump, False
+        if self._mode == self.READING:
+            jumped = self._sample_reading(now_ms) or jumped
+            x, y = self._absolute()
+            return x, y, jumped
         if self._glance_until is not None:
             if now_ms >= self._glance_until:
                 # 瞥完看回中心，重新排下一次瞥视
                 self._glance_until = None
                 self._next_glance = now_ms + int(rng.uniform(7000, 15000))
                 self._next_saccade = now_ms + int(rng.uniform(600, 2500))
-                jumped = self._move_to((rng.gauss(0.0, 0.05), rng.gauss(0.0, 0.03)))
-            return self._point[0], self._point[1], jumped
-        if self._next_glance is not None and now_ms >= self._next_glance:
+                jumped = self._move_to((rng.gauss(0.0, 0.05), rng.gauss(0.0, 0.03))) or jumped
+            x, y = self._absolute()
+            return x, y, jumped
+        if self._mode == self.CAMERA and self._next_glance is not None and now_ms >= self._next_glance:
             angle = rng.uniform(0.0, 2.0 * math.pi)
             magnitude = rng.uniform(0.3, 0.55)
             self._glance_until = now_ms + int(rng.uniform(400, 1200))
-            jumped = self._move_to((magnitude * math.cos(angle), 0.6 * magnitude * math.sin(angle)))
+            jumped = self._move_to((magnitude * math.cos(angle), 0.6 * magnitude * math.sin(angle))) or jumped
         elif now_ms >= self._next_saccade:
             self._next_saccade = now_ms + int(rng.uniform(600, 2500))
-            jumped = self._move_to((rng.gauss(0.0, 0.06), rng.gauss(0.0, 0.04)))
-        return self._point[0], self._point[1], jumped
+            jumped = self._move_to((rng.gauss(0.0, 0.06), rng.gauss(0.0, 0.04))) or jumped
+        x, y = self._absolute()
+        return x, y, jumped
 
 
 class AxisWander:

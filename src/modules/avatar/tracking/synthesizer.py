@@ -3,15 +3,19 @@
 纯逻辑、不碰事件和网络：时刻由调用方传入，随机源可注入（同种子同输入 = 同输出），
 方便离线回放与测试。每帧按固定顺序合成，各层只管自己负责的部位：
 
-人设静止姿态 → 表情偏移 → 头部漫步 + 头部跟随视线 → 眼神 → 眨眼（对眼皮做乘法，
-能叠在眯眼上）→ 口型（说话时下巴开合归口型，嘴角的笑与撇仍归表情）→ 钳制 → 限速。
+人设静止姿态 → 表情偏移 + 脉冲反应 + 思考神情 → 注意力（看哪里）与眼神 → 头部漫步 +
+头部跟随视线 → 眨眼（对眼皮做乘法，能叠在眯眼上）→ 口型（说话时下巴开合归口型，嘴角
+的笑与撇仍归表情）→ 钳制 → 限速。
+
+注意力按优先级决定看哪里：临时瞥一眼（弹幕、礼物）> 说话时看镜头 > 思考（刚来过
+弹幕就先读弹幕，再把视线移开望向别处）> 空闲时看镜头。
 """
 
 from __future__ import annotations
 
 import math
 import random
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 from .behaviors import BlinkGenerator, GazeGenerator, HeadWander
 from .channels import (
@@ -39,6 +43,10 @@ from .channels import (
 )
 from .config import TrackingConfig
 from .expression import ExpressionScheduler
+from .reactions import PulseLayer, SpeechProsody
+
+# 思考时的神情：眉心微紧、眼睛略眯、嘴角稍收（按浮现权重叠加）
+_THINKING_OFFSETS: Dict[str, float] = {BROW: -0.15, EYE_OPEN: -0.06, MOUTH_SMILE: -0.05}
 
 
 class TrackingSynthesizer:
@@ -51,13 +59,15 @@ class TrackingSynthesizer:
     HEAD_FOLLOW_TAU_MS = 350
     # 视线大幅跳动时顺带眨眼的概率
     GAZE_BLINK_CHANCE = 0.5
+    # 思考神情的浮现与消退速度；思考时望向别处的落点隔几秒换一换
+    THINKING_TAU_MS = 400
+    AWAY_SHIFT_MS = (3000, 6000)
 
     def __init__(self, config: TrackingConfig, *, rng: Optional[random.Random] = None) -> None:
         self._config = config
         rng = rng or random.Random()
-        self._blink = BlinkGenerator(
-            rng, idle_per_min=config.blink_per_min_idle, speaking_per_min=config.blink_per_min_speaking
-        )
+        self._rng = rng
+        self._blink = BlinkGenerator(rng)
         self._gaze = GazeGenerator(rng)
         self._wander = HeadWander(rng)
         self._expressions = ExpressionScheduler(
@@ -74,6 +84,17 @@ class TrackingSynthesizer:
         self._follow_pitch = 0.0
         self._last: Optional[Frame] = None
         self._last_ms: Optional[int] = None
+        self._pulses = PulseLayer()
+        self._prosody = SpeechProsody(rng)
+        # 注意力：思考中与否、先读弹幕到何时、望向别处的落点、临时瞥一眼的去处与截止
+        self._thinking = False
+        self._read_until: Optional[int] = None
+        self._away_point: Tuple[float, float] = (0.0, 0.0)
+        self._away_next: Optional[int] = None
+        self._glance_point: Tuple[float, float] = (0.0, 0.0)
+        self._glance_until: Optional[int] = None
+        self._last_glance_ms = -(10**12)
+        self._think_weight = 0.0
 
     # ===== 输入 =====
 
@@ -82,14 +103,50 @@ class TrackingSynthesizer:
         self._speaking = speaking
 
     def on_mouth(self, mouth_open: float, now_ms: int) -> None:
-        """一帧口型信号（嘴张开量 0~1）。"""
+        """一帧口型信号（嘴张开量 0~1）；同时从中找音节起点，触发韵律点头与挑眉。"""
         self._mouth_open = min(1.0, max(0.0, mouth_open))
         self._mouth_at_ms = now_ms
+        if self._config.speech_nods_enabled:
+            for kind, scale in self._prosody.on_mouth(self._mouth_open, now_ms):
+                self._pulses.trigger(kind, now_ms, scale)
 
     def on_mouth_end(self, now_ms: int) -> None:
-        """一次发声的口型结束：嘴收回。"""
+        """一次发声的口型结束：嘴收回，偶尔收尾点一下头。"""
         self._mouth_open = 0.0
         self._mouth_at_ms = now_ms
+        if self._config.speech_nods_enabled:
+            for kind, scale in self._prosody.on_end(now_ms):
+                self._pulses.trigger(kind, now_ms, scale)
+
+    def begin_thinking(self, now_ms: int, *, read_first_ms: int = 0) -> None:
+        """开始想下一句（已在想则不动）：``read_first_ms`` > 0 时先读弹幕这么久再移开视线。"""
+        if self._thinking:
+            return
+        self._thinking = True
+        self._read_until = now_ms + read_first_ms if read_first_ms > 0 else None
+        self._away_next = None
+
+    def end_thinking(self, now_ms: int) -> None:
+        """想完了（开口或回到空闲）：视线回到镜头。"""
+        self._thinking = False
+        self._read_until = None
+
+    @property
+    def thinking(self) -> bool:
+        return self._thinking
+
+    def glance_at_chat(self, now_ms: int, *, duration_ms: int, min_gap_ms: int) -> bool:
+        """瞥一眼弹幕区再回来；距上次瞥视不到 ``min_gap_ms`` 时不瞥（返回 False）。"""
+        if now_ms - self._last_glance_ms < min_gap_ms:
+            return False
+        self._last_glance_ms = now_ms
+        self._glance_point = (self._config.chat_gaze_x, self._config.chat_gaze_y)
+        self._glance_until = now_ms + duration_ms
+        return True
+
+    def pulse(self, kind: str, now_ms: int, scale: float = 1.0) -> bool:
+        """触发一个脉冲反应（点头、眼睛一亮、受惊一缩……；见 ``reactions.PULSES``）。"""
+        return self._pulses.trigger(kind, now_ms, scale)
 
     def express(
         self, emotion: str, intensity: float, now_ms: int, *, key: str, release_at_ms: Optional[int] = None
@@ -117,15 +174,53 @@ class TrackingSynthesizer:
 
     # ===== 推进 =====
 
+    def _attention(self, now_ms: int) -> Tuple[str, Tuple[float, float]]:
+        """此刻看哪里：(眼神模式, 注视中心)。"""
+        cfg = self._config
+        if self._glance_until is not None:
+            if now_ms < self._glance_until:
+                return GazeGenerator.FIXATE, self._glance_point
+            self._glance_until = None
+        if self._speaking or not self._thinking or not cfg.thinking_gaze_enabled:
+            return GazeGenerator.CAMERA, (0.0, 0.0)
+        if self._read_until is not None and now_ms < self._read_until:
+            return GazeGenerator.READING, (cfg.chat_gaze_x, cfg.chat_gaze_y)
+        if self._away_next is None or now_ms >= self._away_next:
+            # 思考时望向侧上方（真人思考时会避开视觉刺激）；隔几秒挪一挪，大多留在同一侧
+            rng = self._rng
+            side = (
+                (1.0 if self._away_point[0] >= 0 else -1.0) if self._away_next is not None else rng.choice((-1.0, 1.0))
+            )
+            if rng.random() < 0.25:
+                side = -side
+            self._away_point = (side * rng.uniform(0.3, 0.5), rng.uniform(0.15, 0.35))
+            self._away_next = now_ms + int(rng.uniform(*self.AWAY_SHIFT_MS))
+        return GazeGenerator.FIXATE, self._away_point
+
     def step(self, now_ms: int) -> Frame:
         """推进到 ``now_ms`` 并返回这一帧。"""
         cfg = self._config
         dt_ms = 0 if self._last_ms is None else max(0, now_ms - self._last_ms)
         offsets, motion = self._expressions.sample(now_ms)
+        for channel, value in self._pulses.sample(now_ms).items():
+            offsets[channel] = offsets.get(channel, 0.0) + value
         target: Frame = dict(self._rest)
 
+        # 注意力：决定眼神模式与注视中心；思考神情按浮现权重叠加，动作随之放慢
+        mode, center = self._attention(now_ms)
+        self._gaze.set_target(mode, center, now_ms)
+        thinking_face = 1.0 if (mode == GazeGenerator.FIXATE and self._thinking and self._glance_until is None) else 0.0
+        think_alpha = 1.0 - math.exp(-dt_ms / self.THINKING_TAU_MS) if dt_ms else 0.0
+        self._think_weight += (thinking_face - self._think_weight) * think_alpha
+        for channel, value in _THINKING_OFFSETS.items():
+            offsets[channel] = offsets.get(channel, 0.0) + value * self._think_weight
+        motion *= 1.0 - 0.3 * self._think_weight
+
         # 眼神：注视中心附近的微动 + 表情带来的视线偏移（害羞往下躲、尴尬往旁边看）
-        gaze_x, gaze_y, jumped = self._gaze.sample(now_ms) if cfg.gaze_enabled else (0.0, 0.0, False)
+        if cfg.gaze_enabled:
+            gaze_x, gaze_y, jumped = self._gaze.sample(now_ms)
+        else:
+            (gaze_x, gaze_y), jumped = center, False
         gaze_x += offsets.get(GAZE_X, 0.0)
         gaze_y += offsets.get(GAZE_Y, 0.0)
         target[GAZE_X] = gaze_x
@@ -146,7 +241,13 @@ class TrackingSynthesizer:
         # 眼皮：表情决定睁多开（眯眼、半闭），眨眼在此基础上按比例闭合
         if jumped and cfg.blink_enabled:
             self._blink.nudge(now_ms, self.GAZE_BLINK_CHANCE)
-        closure = self._blink.closure(now_ms, speaking=self._speaking) if cfg.blink_enabled else 0.0
+        if self._speaking:
+            per_min = cfg.blink_per_min_speaking
+        elif mode == GazeGenerator.READING:
+            per_min = cfg.blink_per_min_reading
+        else:
+            per_min = cfg.blink_per_min_idle
+        closure = self._blink.closure(now_ms, per_min=per_min) if cfg.blink_enabled else 0.0
         both = offsets.get(EYE_OPEN, 0.0)
         for channel in (EYE_OPEN_L, EYE_OPEN_R):
             openness = min(1.0, max(0.0, 1.0 + both + offsets.get(channel, 0.0)))

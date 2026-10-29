@@ -1,4 +1,4 @@
-"""面捕合成器核心：静止姿态、表情缓起、口型归属、眨眼叠加、头部漫步开关"""
+"""面捕合成器核心：静止姿态、表情缓起、口型归属、眨眼叠加、头部漫步开关、思考与读弹幕、瞥视、脉冲与韵律点头"""
 
 from __future__ import annotations
 
@@ -6,7 +6,17 @@ import random
 
 import pytest
 
-from src.modules.avatar.tracking.channels import EYE_OPEN_L, HEAD_YAW, MOUTH_OPEN, MOUTH_SMILE
+from src.modules.avatar.tracking.channels import (
+    BROW_L,
+    EYE_OPEN_L,
+    EYE_WIDE,
+    GAZE_X,
+    GAZE_Y,
+    HEAD_PITCH,
+    HEAD_YAW,
+    MOUTH_OPEN,
+    MOUTH_SMILE,
+)
 from src.modules.avatar.tracking.config import TrackingConfig
 from src.modules.avatar.tracking.synthesizer import TrackingSynthesizer
 
@@ -68,3 +78,60 @@ def test_head_wander_toggle(enabled: bool, moves: bool) -> None:
     synth.set_head_wander(enabled)
     yaws = [frame[HEAD_YAW] for frame in _run(synth, 0, 20_000)]
     assert (max(abs(y) for y in yaws) > 0.5) is moves
+
+
+def test_thinking_reads_chat_first_then_looks_away_and_back_when_speaking() -> None:
+    synth = _quiet(chat_gaze_x=0.45, chat_gaze_y=-0.35, speech_nods_enabled=False)
+    synth.step(0)
+    synth.begin_thinking(0, read_first_ms=2000)
+    reading = _run(synth, FRAME_MS, 1900)[-1]
+    assert (reading[GAZE_X], reading[GAZE_Y]) == (pytest.approx(0.45), pytest.approx(-0.35))  # 先看着弹幕区读
+    assert reading[HEAD_YAW] > 2.0  # 头跟着转过去一点
+    away = _run(synth, 2000, 3500)[-1]
+    assert abs(away[GAZE_X]) >= 0.3 and away[GAZE_Y] > 0.1  # 读完望向侧上方
+    assert away[BROW_L] < -0.1  # 眉心微紧
+    synth.set_speaking(True)
+    speaking = _run(synth, 3500, 4500)[-1]
+    assert abs(speaking[GAZE_X]) < 0.05 and abs(speaking[GAZE_Y]) < 0.05  # 一开口就看回镜头
+    synth.set_speaking(False)
+    synth.end_thinking(4500)
+    assert _run(synth, 4500, 6000)[-1][BROW_L] == pytest.approx(0.0, abs=0.02)  # 想完神情散去
+
+
+def test_proactive_thinking_skips_reading_and_glances_are_rate_limited() -> None:
+    synth = _quiet(chat_gaze_x=0.45, chat_gaze_y=-0.35)
+    synth.step(0)
+    synth.begin_thinking(0)
+    assert _run(synth, FRAME_MS, 600)[-1][GAZE_Y] > 0.1  # 没有弹幕可读：直接望向别处
+    synth.end_thinking(600)
+
+    assert synth.glance_at_chat(1000, duration_ms=900, min_gap_ms=5000) is True
+    assert _run(synth, 1000, 1500)[-1][GAZE_X] == pytest.approx(0.45)  # 瞥一眼弹幕区
+    assert abs(_run(synth, 1500, 2500)[-1][GAZE_X]) < 0.05  # 瞥完回来
+    assert synth.glance_at_chat(3000, duration_ms=900, min_gap_ms=5000) is False  # 太密不瞥
+
+
+def test_pulse_reactions_stack_on_top_of_expressions() -> None:
+    synth = _quiet()
+    synth.step(0)
+    synth.express("happy", 0.8, 0, key="u1")
+    synth.pulse("startle", 300)
+    peak = max(frame[EYE_WIDE] for frame in _run(synth, FRAME_MS, 1500))
+    assert peak > 0.5  # 受惊的睁大眼叠在开心之上
+    assert synth.current_emotion(1500) == "happy"  # 脉冲不进表情调度，不打断当前表情
+
+
+@pytest.mark.parametrize(("nods", "dips"), [(True, True), (False, False)])
+def test_speech_rhythm_nods_follow_lipsync_onsets(nods: bool, dips: bool) -> None:
+    synth = TrackingSynthesizer(
+        TrackingConfig(blink_enabled=False, gaze_enabled=False, head_wander_enabled=False, speech_nods_enabled=nods),
+        rng=random.Random(3),
+    )
+    synth.set_speaking(True)
+    pitches = []
+    for t in range(0, 8000, FRAME_MS):
+        # 每 300 毫秒一个音节，每 2.4 秒停顿一次
+        phase = t % 2400
+        synth.on_mouth(0.5 if phase < 1950 and (t % 300) < 150 else 0.0, t)
+        pitches.append(synth.step(t)[HEAD_PITCH])
+    assert (min(pitches) < -0.8) is dips
