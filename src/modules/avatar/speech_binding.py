@@ -1,13 +1,14 @@
 """虚拟形象适配器的事件订阅绑定（被动响应业务事件的一侧）
 
-适配器的事件订阅入口，函数级共享（纯逻辑，不引入基类）：
+还没移植到面捕合成器的平台（Warudo、VRChat、表情差分图）用的事件订阅入口；
+已移植的平台（VTS）由面捕合成器统一订阅这些事件。函数级共享（纯逻辑，不引入基类）：
 
 - ``bind_speech_emotion``：订阅 ``streamer.speech``，把发言携带的
   情绪事实（17 枚举值 + 强度）反射为 ``provider.set_expression`` 调用。
   每具身体各自对发言事实作反射，天然支持多形象（非广播路由）。
 - ``bind_speaking_state``：订阅 ``tts.utterance.started/finished``，
   维护"是否在说话"状态（计数器，started++ / finished--），回调由
-  各适配器自接（VTS 暂停 idle 摇摆、Warudo 点头）。
+  各适配器自接（如 Warudo 说话时点头）。
 
 情绪路径与 TTS 启用正交（``streamer.speech`` 是业务事实，无 TTS 也发布）；
 说话状态依赖 TTS 在位——无引擎时 ``tts.utterance.*`` 无发布者，说话反应
