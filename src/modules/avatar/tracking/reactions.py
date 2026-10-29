@@ -48,8 +48,9 @@ PULSES: Dict[str, PulseRecipe] = {
     "wince": PulseRecipe({EYE_OPEN: -0.35, BROW: -0.4, MOUTH_SMILE: -0.3, HEAD_PITCH: -2.0}, 100, 300, 700),
     # 以下供主播主动发起的动作使用（幅度比说话时的自然点头大得多）
     "nod_deep": PulseRecipe({HEAD_PITCH: -8.0}, 140, 60, 300),
-    "shake_left": PulseRecipe({HEAD_YAW: -8.0}, 120, 20, 140),
-    "shake_right": PulseRecipe({HEAD_YAW: 8.0}, 120, 20, 140),
+    # 摇头幅度给足：模型映射常带平滑，来回太快会被抹掉一大半（桃濑日和实测 ±8° 只剩 ±4°）
+    "shake_left": PulseRecipe({HEAD_YAW: -12.0}, 140, 30, 170),
+    "shake_right": PulseRecipe({HEAD_YAW: 12.0}, 140, 30, 170),
     "tilt": PulseRecipe({HEAD_ROLL: 10.0, HEAD_PITCH: -1.0}, 300, 1200, 500),
 }
 

@@ -29,7 +29,7 @@ GESTURES: Dict[str, Gesture] = {
     "点头": Gesture("同意、回应对方", ((0, "nod_deep", 1.0), (450, "nod_deep", 0.8))),
     "摇头": Gesture(
         "否定、不行",
-        ((0, "shake_left", 1.0), (260, "shake_right", 1.0), (520, "shake_left", 0.8), (780, "shake_right", 0.6)),
+        ((0, "shake_left", 1.0), (300, "shake_right", 1.0), (600, "shake_left", 0.8), (900, "shake_right", 0.6)),
     ),
     "歪头": Gesture("疑惑、好奇", ((0, "tilt", 1.0),)),
     "眼睛一亮": Gesture("看到好东西、有了主意", ((0, "brighten", 1.0),)),
