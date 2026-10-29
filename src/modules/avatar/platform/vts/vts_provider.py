@@ -39,7 +39,7 @@ from src.modules.tools.provider import ConnectionToolProvider, wire_connection_t
 from src.modules.types.emotion_vocab import Emotion
 
 from .hotkey_matcher import HotkeyMatcher
-from .tracking_driver import VtsTrackingDriver
+from .tracking_driver import VBRIDGER_INPUTS, VtsTrackingDriver
 from .vts_client import VtsClient
 
 if TYPE_CHECKING:
@@ -364,13 +364,35 @@ class VTSProvider(ConnectionToolProvider):
             self._is_connecting = False
 
     async def _reload_model_state(self) -> None:
-        """模型相关状态：热键重拉 + 输入范围刷新（连接建立与换模跟随共用）。"""
+        """模型相关状态：热键重拉 + 补建规范自建输入 + 输入范围刷新（连接建立与换模跟随共用）。"""
         await self.hotkey_matcher.load_hotkeys()
+        try:
+            await self._ensure_standard_inputs()
+        except Exception as e:
+            # 补建失败只少了按 VBridger 规范接的那些部位，自带输入照常驱动
+            self.logger.warning(f"补建 VBridger 规范输入失败，只写 VTS 自带输入: {e}")
         try:
             self._driver.set_input_ranges(await self._query_input_ranges())
         except Exception as e:
             self.logger.warning(f"拉取 VTS 输入范围失败，面捕驱动暂不钳制: {e}")
             self._driver.set_input_ranges({})
+
+    async def _ensure_standard_inputs(self) -> None:
+        """VBridger 规范的自建输入 VTS 里没有的，按同样的名字与范围补建。
+
+        按规范接好的模型（"支持 VBridger"）在 VTS 里认的是这些名字；装过 VBridger 的 VTS
+        里已经有了（建它的是 VBridger，照样能注入），没有的才建，别的插件建的一个不动。
+        """
+        data = await self._client.request("InputParameterListRequest", None)
+        existing = {str(p.get("name")) for p in [*data.get("defaultParameters", []), *data.get("customParameters", [])]}
+        for name, (low, default, high, explanation) in VBRIDGER_INPUTS.items():
+            if name in existing:
+                continue
+            await self._client.request(
+                "ParameterCreationRequest",
+                {"parameterName": name, "explanation": explanation, "min": low, "max": high, "defaultValue": default},
+            )
+            self.logger.info(f"已在 VTS 补建规范输入 {name}（{low} ~ {high}）")
 
     async def _query_input_ranges(self) -> Dict[str, Tuple[float, float]]:
         """VTS 可注入输入的原生范围 ``{名: (min, max)}``（驱动按它钳制、只发认识的输入）。"""

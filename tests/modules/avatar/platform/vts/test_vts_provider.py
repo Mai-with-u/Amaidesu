@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from src.modules.avatar.platform.vts.tracking_driver import VBRIDGER_INPUTS
 from src.modules.avatar.platform.vts.vts_client import VtsClient
 from src.modules.avatar.platform.vts.vts_provider import VTSProvider, create_vts_provider, register_vts_tools
 from src.modules.avatar.tracking import TrackingConfig, TrackingRuntime
@@ -87,6 +88,22 @@ async def test_connect_loads_hotkeys_but_exposes_no_llm_tools(tmp_path: Path) ->
     await provider.disconnect()
     await provider.disconnect()  # 已断开再断开不重复触发
     assert fired == [True, False] and provider.list_tools() == []
+
+
+async def test_connect_creates_missing_vbridger_inputs_but_leaves_existing_ones(tmp_path: Path) -> None:
+    socket = _socket()
+    listing = dict(socket.replies["InputParameterListRequest"])
+    listing["customParameters"] = [{"name": "JawOpen", "min": 0, "max": 1, "addedBy": "VBridger"}]  # 装过 VBridger
+    socket.replies["InputParameterListRequest"] = listing
+    socket.replies["ParameterCreationRequest"] = lambda data: {"parameterName": data["parameterName"]}
+    provider = _provider(tmp_path, socket)
+    await provider.connect()
+    created = {
+        m["data"]["parameterName"]: m["data"] for m in socket.sent if m["messageType"] == "ParameterCreationRequest"
+    }
+    assert set(created) == set(VBRIDGER_INPUTS) - {"JawOpen"}  # 别的插件建的不动，缺的按同名同范围补
+    assert (created["MouthPucker"]["min"], created["MouthPucker"]["max"]) == (-1.0, 1.0)
+    await provider.disconnect()
 
 
 async def test_failed_connect_records_last_error(tmp_path: Path) -> None:
