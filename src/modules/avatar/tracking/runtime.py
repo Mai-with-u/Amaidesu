@@ -91,14 +91,14 @@ class CalibratableDriver(Protocol):
 
 
 class _MouthTap(LipSyncRenderer):
-    """接在口型分析器上的"渲染器"：只把嘴张开量交给合成器，不写任何平台参数。"""
+    """接在口型分析器上的"渲染器"：只把嘴张开量与元音成分交给合成器，不写任何平台参数。"""
 
     def __init__(self, synthesizer: TrackingSynthesizer, clock: Callable[[], int]) -> None:
         self._synthesizer = synthesizer
         self._clock = clock
 
     async def on_mouth_signal(self, signal: MouthSignal) -> None:
-        self._synthesizer.on_mouth(signal.mouth_open, self._clock())
+        self._synthesizer.on_mouth(signal.mouth_open, self._clock(), signal.vowels)
 
     async def on_session_end(self) -> None:
         self._synthesizer.on_mouth_end(self._clock())

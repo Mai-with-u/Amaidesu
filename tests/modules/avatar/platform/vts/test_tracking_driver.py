@@ -1,20 +1,11 @@
-"""VTS 面捕驱动：通用通道换算成 VTS 输入、按范围钳制、调试覆盖、就绪判定、校准项实时调"""
+"""VTS 面捕驱动：ARKit 系数按 VBridger 规范换算成 VTS 输入、按范围钳制、调试覆盖、就绪判定、校准项实时调"""
 
 from __future__ import annotations
 
 import pytest
 
-from src.modules.avatar.platform.vts.tracking_driver import OVERRIDE_HOLD_MS, VtsTrackingDriver
-from src.modules.avatar.tracking.channels import (
-    BROW_L,
-    EYE_OPEN_L,
-    EYE_WIDE,
-    GAZE_X,
-    GAZE_Y,
-    HEAD_YAW,
-    MOUTH_SMILE,
-    rest_frame,
-)
+from src.modules.avatar.platform.vts.tracking_driver import OVERRIDE_HOLD_MS, VBRIDGER_INPUTS, VtsTrackingDriver
+from src.modules.avatar.tracking.channels import BODY_YAW, BODY_Z, GAZE_X, GAZE_Y, HEAD_YAW, expand, rest_frame
 from tests.helpers import FakeClock
 from tests.modules.avatar.platform.vts.fakes import RecordingVtsClient
 
@@ -35,26 +26,48 @@ def test_rest_pose_maps_to_calibrated_neutral_inputs(fake_clock: FakeClock) -> N
 
 
 @pytest.mark.parametrize(
-    ("channel", "value", "vts_input", "expected"),
+    ("coefficients", "vts_input", "expected"),
     [
-        (BROW_L, 1.0, "BrowLeftY", 1.0),
-        (BROW_L, -1.0, "BrowLeftY", 0.0),
-        (MOUTH_SMILE, -1.0, "MouthSmile", 0.0),
-        (MOUTH_SMILE, 0.5, "MouthSmile", 0.75),
-        (EYE_OPEN_L, 0.0, "EyeOpenLeft", 0.0),
-        (HEAD_YAW, -12.0, "FaceAngleX", -12.0),
+        ({"browOuterUpLeft": 1.0, "browInnerUp": 1.0}, "BrowLeftY", 1.0),
+        ({"browDownLeft": 1.0}, "BrowLeftY", 0.0),
+        ({"mouthFrown": 1.0}, "MouthSmile", 0.0),
+        ({"mouthSmile": 0.5}, "MouthSmile", 0.75),
+        ({"eyeBlinkLeft": 1.0}, "EyeOpenLeft", 0.0),
+        ({"eyeWideRight": 1.0}, "EyeOpenRight", 1.0),
+        ({HEAD_YAW: -12.0}, "FaceAngleX", -12.0),
+        ({"jawOpen": 0.6, "mouthClose": 0.2}, "MouthOpen", 0.4),  # 下巴张开但嘴唇合着的那部分不算张嘴
+        ({"browDown": 1.0, "noseSneer": 1.0}, "FaceAngry", 1.0),
+        ({"aa": 0.7}, "VoiceA", 0.7),
     ],
 )
-def test_channel_extremes_map_to_input_range(
-    fake_clock: FakeClock, channel: str, value: float, vts_input: str, expected: float
+def test_coefficients_map_to_vts_inputs(
+    fake_clock: FakeClock, coefficients: dict, vts_input: str, expected: float
 ) -> None:
-    frame = dict(rest_frame(), **{channel: value})
+    frame = {**rest_frame(), **expand(coefficients)}
     assert _driver(RecordingVtsClient(), fake_clock).to_inputs(frame)[vts_input] == pytest.approx(expected)
 
 
-def test_wide_eyes_reach_full_input(fake_clock: FakeClock) -> None:
-    frame = dict(rest_frame(), **{EYE_WIDE: 1.0})
-    assert _driver(RecordingVtsClient(), fake_clock).to_inputs(frame)["EyeOpenRight"] == pytest.approx(1.0)
+@pytest.mark.parametrize(
+    ("coefficients", "vts_input", "expected"),
+    [
+        ({"jawOpen": 0.6}, "JawOpen", 0.6),
+        ({"mouthFunnel": 0.8}, "MouthFunnel", 0.8),
+        ({"mouthPucker": 0.9}, "MouthPucker", -0.9),  # 撅嘴在负半轴
+        ({"mouthStretch": 0.5, "mouthDimple": 0.3}, "MouthPucker", 0.8),  # 咧开在正半轴
+        ({"mouthUpperUp": 0.6, "mouthLowerDown": 0.4}, "MouthPressLipOpen", 1.0),  # 露牙
+        ({"mouthPress": 0.5, "mouthRollLower": 0.4}, "MouthPressLipOpen", -0.7),  # 抿唇
+        ({"mouthShrugUpper": 0.6, "mouthShrugLower": 0.2}, "MouthShrug", 0.4),
+        ({"browInnerUp": 0.7}, "BrowInnerUp", 0.7),
+        ({"eyeSquintLeft": 0.8}, "EyeSquintL", 0.8),
+        ({BODY_YAW: 5.0}, "BodyAngleX", 5.0),
+        ({BODY_Z: 1.0}, "BodyPositionZ", 5.0),
+    ],
+)
+def test_vbridger_standard_inputs(fake_clock: FakeClock, coefficients: dict, vts_input: str, expected: float) -> None:
+    frame = {**rest_frame(), **expand(coefficients)}
+    inputs = _driver(RecordingVtsClient(), fake_clock).to_inputs(frame)
+    assert set(VBRIDGER_INPUTS) <= set(inputs)  # VBridger 那组自建输入每帧都写
+    assert inputs[vts_input] == pytest.approx(expected)
 
 
 async def test_apply_injects_one_clamped_frame_of_known_inputs(fake_clock: FakeClock) -> None:

@@ -1,4 +1,4 @@
-"""面捕合成器的通道工具与反射类行为：钳制、限速、眨眼、眼神、头部漫步"""
+"""面捕合成器的通道工具与反射类行为：规范词表、钳制、限速、眨眼、眼神、头部漫步"""
 
 from __future__ import annotations
 
@@ -8,27 +8,45 @@ import pytest
 
 from src.modules.avatar.tracking.behaviors import BlinkGenerator, GazeGenerator, HeadWander
 from src.modules.avatar.tracking.channels import (
+    ARKIT_BLENDSHAPES,
+    BILATERAL,
     CHANNELS,
-    EYE_OPEN_L,
     HEAD_YAW,
-    MOUTH_SMILE,
     clamp_frame,
+    expand,
+    eye_look_from_gaze,
     limit_slew,
     rest_frame,
+    smile,
 )
+
+
+def test_vocabulary_is_arkit_and_shorthand_expands_both_sides() -> None:
+    assert len(set(ARKIT_BLENDSHAPES)) == 52  # 苹果 ARKit 的 52 个表情系数，一个不多一个不少
+    assert expand({"mouthSmile": 0.5, "jawOpen": 0.2}) == {
+        "mouthSmileLeft": 0.5,
+        "mouthSmileRight": 0.5,
+        "jawOpen": 0.2,
+    }
+    assert "mouth" not in BILATERAL and "jaw" not in BILATERAL  # 嘴、下巴的左右平移是方向，不是两侧
+    looks = eye_look_from_gaze(0.6, -0.4)  # 看向画面右下 = 角色自己的左下
+    assert looks["eyeLookOutLeft"] == looks["eyeLookInRight"] == 0.6 and looks["eyeLookDownLeft"] == 0.4
+    assert looks["eyeLookInLeft"] == looks["eyeLookUpRight"] == 0.0
+    assert smile({"mouthSmileLeft": 0.8, "mouthFrownRight": 0.4}) == pytest.approx(0.2)
 
 
 def test_rest_frame_covers_every_channel_and_clamps_rest_smile() -> None:
     frame = rest_frame(rest_smile=3.0)
     assert set(frame) == set(CHANNELS)
-    assert frame[EYE_OPEN_L] == 1.0 and frame[MOUTH_SMILE] == 1.0  # 人设基线超界也被钳回范围
+    assert frame["eyeBlinkLeft"] == 0.0 and frame["mouthSmileLeft"] == 1.0  # 人设基线超界也被钳回范围
+    assert rest_frame(rest_smile=-0.2)["mouthFrownRight"] == pytest.approx(0.2)  # 负数是撇嘴
 
 
 def test_clamp_keeps_unknown_channels_and_limit_slew_caps_per_frame_change() -> None:
     assert clamp_frame({HEAD_YAW: 99.0, "unknown": 5.0}) == {HEAD_YAW: 30.0, "unknown": 5.0}
 
-    stepped = limit_slew({HEAD_YAW: 0.0, MOUTH_SMILE: 0.0}, {HEAD_YAW: 30.0, MOUTH_SMILE: -1.0}, dt_ms=100)
-    assert stepped == {HEAD_YAW: pytest.approx(9.0), MOUTH_SMILE: pytest.approx(-0.3)}  # 头 90°/s、嘴角 3/s
+    stepped = limit_slew({HEAD_YAW: 0.0, "mouthSmileLeft": 0.0}, {HEAD_YAW: 30.0, "mouthSmileLeft": 1.0}, dt_ms=100)
+    assert stepped == {HEAD_YAW: pytest.approx(9.0), "mouthSmileLeft": pytest.approx(0.3)}  # 头 90°/s、嘴角 3/s
     stalled = limit_slew({HEAD_YAW: 0.0}, {HEAD_YAW: 30.0}, dt_ms=5000)
     assert stalled[HEAD_YAW] == pytest.approx(18.0)  # 卡顿 5 秒也只按 200 毫秒走，不瞬移
 

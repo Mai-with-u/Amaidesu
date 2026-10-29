@@ -36,7 +36,7 @@ from src.modules.events.payloads.utterance import (
     UtteranceStartedPayload,
 )
 
-from .channels import EYE_OPEN_L, GAZE_X, GAZE_Y, HEAD_PITCH, HEAD_ROLL, HEAD_YAW, Frame
+from .channels import GAZE_X, GAZE_Y, HEAD_PITCH, HEAD_ROLL, HEAD_YAW, Frame
 from .config import TrackingConfig
 from .runtime import TrackingRuntime
 
@@ -58,9 +58,19 @@ _PAYLOADS: Dict[str, type[BaseModel]] = {
 }
 
 # 曲线图里画哪些通道（画全部太挤）
-PLOT_CHANNELS = ("head_yaw", "head_pitch", "gaze_x", "gaze_y", "eye_open_l", "brow_l", "mouth_smile", "mouth_open")
+PLOT_CHANNELS = (
+    "head_yaw",
+    "head_pitch",
+    "gaze_x",
+    "gaze_y",
+    "eyeBlinkLeft",
+    "browInnerUp",
+    "browDownLeft",
+    "mouthSmileLeft",
+    "jawOpen",
+)
 # "头和眼睛完全不动"的判定：这几个通道每帧变化都小于阈值（真正冻住，不是慢速漫步的首尾）
-_STILL_CHANNELS = (HEAD_YAW, HEAD_PITCH, HEAD_ROLL, EYE_OPEN_L, GAZE_X)
+_STILL_CHANNELS = (HEAD_YAW, HEAD_PITCH, HEAD_ROLL, "eyeBlinkLeft", GAZE_X)
 _STILL_EPSILON = 0.001
 
 
@@ -221,7 +231,7 @@ def compute_metrics(result: ReplayResult) -> Dict[str, Any]:
 
     blinks = {"speaking": 0, "idle": 0}
     for a, b in zip(frames, frames[1:], strict=False):
-        if a[1].get(EYE_OPEN_L, 1.0) >= 0.3 > b[1].get(EYE_OPEN_L, 1.0):
+        if a[1].get("eyeBlinkLeft", 0.0) <= 0.7 < b[1].get("eyeBlinkLeft", 0.0):
             blinks["speaking" if speaking(b[0]) else "idle"] += 1
     speaking_ms = sum(min(end, frames[-1][0]) - start for start, end in intervals) if frames else 0
     idle_ms = max(duration_ms - speaking_ms, 0)

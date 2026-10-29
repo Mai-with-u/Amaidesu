@@ -1,8 +1,11 @@
 """VTS 面捕驱动：把面捕合成器的一帧换算成 VTS 捕捉输入，每帧一次注入、发完就走
 
-VTS 把注入的捕捉输入（FaceAngleX、EyeOpenLeft、MouthSmile……）按模型作者自己调好的
-映射曲线换成模型参数，效果等于"被一个摄像头面捕着"。这里只做两件事：通用通道 →
-VTS 输入的换算，以及按 VTS 报告的输入范围钳制。
+VTS 把注入的捕捉输入按模型作者自己调好的映射曲线换成模型参数，效果等于"被一个摄像头
+面捕着"。换算照 VBridger 的做法：VBridger 把 iPhone 面捕的 ARKit 系数按公式算成一组
+VTS 输入，其中 VTS 自带的（头部角度、睁眼、眼球、眉、嘴角、张嘴等）直接写，VTS 没有的
+（下巴、撮唇、撅嘴到咧嘴、抿唇到露牙、眉心、下眼睑、身体角度与位置）作为自建输入，名字
+和范围已成为 Live2D 约稿里"支持 VBridger"的通行规范。面捕合成器给出的正是 ARKit 系数，
+这里就是一个内置的 VBridger：按规范把两组都写全，模型接了哪些就动哪些。
 
 同一个输入值在不同模型上的含义不一样（实测桃濑日和的"眼睛开合"输入 1.0 已是瞪到
 最大、正常睁眼约 0.53），所以"正常睁眼""中性嘴角""中性眉"对应的输入值是校准项，
@@ -14,27 +17,50 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from src.modules.avatar.tracking.channels import (
-    ANGRY,
-    BROW_L,
-    BROW_R,
-    CHEEK_PUFF,
-    EYE_OPEN_L,
-    EYE_OPEN_R,
-    EYE_WIDE,
+    BODY_PITCH,
+    BODY_ROLL,
+    BODY_X,
+    BODY_Y,
+    BODY_YAW,
+    BODY_Z,
     GAZE_X,
     GAZE_Y,
     HEAD_PITCH,
     HEAD_ROLL,
     HEAD_YAW,
-    MOUTH_OPEN,
-    MOUTH_SMILE,
-    MOUTH_X,
     Frame,
+    brow_height,
+    eye_openness,
+    smile,
 )
 from src.modules.utils.time_utils import now_ms as wall_now_ms
 
 # 调试台手动写参数时，覆盖保持多久（之后交还面捕合成器）
 OVERRIDE_HOLD_MS = 3000
+
+# VBridger 规范里 VTS 没有自带、要作为自建输入存在的那组：名字 → (最小, 默认, 最大, 说明)。
+# 名字与范围照 VBridger 在 VTS 里建的原样（装过 VBridger 的 VTS 里已有，没有就由适配器补建）
+VBRIDGER_INPUTS: Dict[str, Tuple[float, float, float, str]] = {
+    "JawOpen": (0.0, 0.0, 1.0, "下巴张开"),
+    "MouthFunnel": (0.0, 0.0, 1.0, "嘴唇撮成 O 型"),
+    "MouthPucker": (-1.0, 0.0, 1.0, "撅嘴（-1）到咧开（+1）"),
+    "MouthPressLipOpen": (-1.3, 0.0, 1.3, "抿唇（负）到露牙（正）"),
+    "MouthShrug": (0.0, 0.0, 1.0, "嘴唇往上嘟"),
+    "BrowInnerUp": (0.0, 0.0, 1.0, "眉心上提"),
+    "EyeSquintL": (0.0, 0.0, 1.0, "左下眼睑上推（笑眼）"),
+    "EyeSquintR": (0.0, 0.0, 1.0, "右下眼睑上推（笑眼）"),
+    "BodyAngleX": (-50.0, 0.0, 50.0, "身体左右转"),
+    "BodyAngleY": (-50.0, 0.0, 50.0, "身体前后倾"),
+    "BodyAngleZ": (-50.0, 0.0, 50.0, "身体左右歪"),
+    "BodyPositionX": (-15.0, 0.0, 15.0, "身体左右位置"),
+    "BodyPositionY": (-5.0, 0.0, 5.0, "身体上下位置"),
+    "BodyPositionZ": (-10.0, 0.0, 10.0, "身体前后位置"),
+    "VBridgerFaceFound": (0.0, 0.0, 1.0, "是否检测到脸"),
+}
+
+# 身体位置 ±1 对应的 VTS 输入量：取各输入范围的一半，前倾后仰都留有余量
+_FACE_POSITION_SCALE = (7.5, 7.5, 5.0)
+_BODY_POSITION_SCALE = (7.5, 2.5, 5.0)
 
 
 def _centered(value: float, neutral: float) -> float:
@@ -42,6 +68,10 @@ def _centered(value: float, neutral: float) -> float:
     if value >= 0:
         return neutral + value * (1.0 - neutral)
     return neutral + value * neutral
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return min(high, max(low, value))
 
 
 class VtsTrackingDriver:
@@ -110,24 +140,33 @@ class VtsTrackingDriver:
         self._brow_neutral = float(values.get("brow_neutral", self._brow_neutral))
 
     def to_inputs(self, frame: Frame) -> Dict[str, float]:
-        """一帧通用通道 → VTS 输入值（未钳制）。"""
+        """一帧规范通道 → VTS 输入值（未钳制）：先是 VTS 自带的，再是 VBridger 的那组自建输入。"""
+        f = frame.get
         rest = self._eye_open_rest
 
-        def eye(open_channel: str) -> float:
-            # 正常睁开对应校准值，睁大从校准值往 1 拉；眨眼与眯眼已经乘进了开合量
-            return frame.get(open_channel, 1.0) * rest + frame.get(EYE_WIDE, 0.0) * (1.0 - rest)
+        def eye(side: str) -> float:
+            # 正常睁开对应校准值，睁大从校准值往 1 拉；眨眼与眯眼已经算进了闭眼系数
+            return eye_openness(frame, side) * rest + f(f"eyeWide{side}", 0.0) * (1.0 - rest)
 
-        brow_left = _centered(frame.get(BROW_L, 0.0), self._brow_neutral)
-        brow_right = _centered(frame.get(BROW_R, 0.0), self._brow_neutral)
+        def both(name: str) -> float:
+            return (f(f"{name}Left", 0.0) + f(f"{name}Right", 0.0)) / 2.0
+
+        brow_left = _centered(brow_height(frame, "Left"), self._brow_neutral)
+        brow_right = _centered(brow_height(frame, "Right"), self._brow_neutral)
         # VTS 的眼球左右输入与头部左右转输入方向相反（实测两者同为正时，模型头转向一边、
         # 眼球转向另一边），左右取反后"看向某处"时头和眼才朝同一边；上下两者同向，不用取反
-        gaze_x, gaze_y = -frame.get(GAZE_X, 0.0), frame.get(GAZE_Y, 0.0)
+        gaze_x, gaze_y = -f(GAZE_X, 0.0), f(GAZE_Y, 0.0)
+        jaw = f("jawOpen", 0.0)
+        body_x, body_y, body_z = f(BODY_X, 0.0), f(BODY_Y, 0.0), f(BODY_Z, 0.0)
         return {
-            "FaceAngleX": frame.get(HEAD_YAW, 0.0),
-            "FaceAngleY": frame.get(HEAD_PITCH, 0.0),
-            "FaceAngleZ": frame.get(HEAD_ROLL, 0.0),
-            "EyeOpenLeft": eye(EYE_OPEN_L),
-            "EyeOpenRight": eye(EYE_OPEN_R),
+            "FaceAngleX": f(HEAD_YAW, 0.0),
+            "FaceAngleY": f(HEAD_PITCH, 0.0),
+            "FaceAngleZ": f(HEAD_ROLL, 0.0),
+            "FacePositionX": body_x * _FACE_POSITION_SCALE[0],
+            "FacePositionY": body_y * _FACE_POSITION_SCALE[1],
+            "FacePositionZ": body_z * _FACE_POSITION_SCALE[2],
+            "EyeOpenLeft": eye("Left"),
+            "EyeOpenRight": eye("Right"),
             "EyeLeftX": gaze_x,
             "EyeLeftY": gaze_y,
             "EyeRightX": gaze_x,
@@ -135,11 +174,43 @@ class VtsTrackingDriver:
             "BrowLeftY": brow_left,
             "BrowRightY": brow_right,
             "Brows": (brow_left + brow_right) / 2.0,
-            "MouthSmile": _centered(frame.get(MOUTH_SMILE, 0.0), self._mouth_smile_neutral),
-            "MouthOpen": frame.get(MOUTH_OPEN, 0.0),
-            "MouthX": frame.get(MOUTH_X, 0.0),
-            "CheekPuff": frame.get(CHEEK_PUFF, 0.0),
-            "FaceAngry": frame.get(ANGRY, 0.0),
+            "MouthSmile": _centered(smile(frame), self._mouth_smile_neutral),
+            # 嘴唇分开的程度：下巴张开但嘴唇合着（mouthClose）时不算张嘴
+            "MouthOpen": max(0.0, jaw - f("mouthClose", 0.0)),
+            "MouthX": f("mouthLeft", 0.0) - f("mouthRight", 0.0),
+            "CheekPuff": f("cheekPuff", 0.0),
+            "TongueOut": f("tongueOut", 0.0),
+            "FaceAngry": _clamp(both("browDown") * 0.7 + both("noseSneer") * 0.6, 0.0, 1.0),
+            "VoiceA": f("aa", 0.0),
+            "VoiceI": f("ih", 0.0),
+            "VoiceU": f("ou", 0.0),
+            "VoiceE": f("ee", 0.0),
+            "VoiceO": f("oh", 0.0),
+            # 以下是 VBridger 的自建输入
+            "JawOpen": jaw,
+            "MouthFunnel": f("mouthFunnel", 0.0),
+            # 撅嘴与咧开是同一根轴的两头：酒窝与咧嘴往外拉，撅嘴往里收
+            "MouthPucker": _clamp(both("mouthDimple") + both("mouthStretch") - f("mouthPucker", 0.0), -1.0, 1.0),
+            # 抿唇与露牙也是同一根轴：上唇上提、下唇下拉露出牙，抿嘴、卷唇把嘴唇收进去
+            "MouthPressLipOpen": _clamp(
+                both("mouthUpperUp")
+                + both("mouthLowerDown")
+                - both("mouthPress")
+                - (f("mouthRollUpper", 0.0) + f("mouthRollLower", 0.0)) / 2.0,
+                -1.3,
+                1.3,
+            ),
+            "MouthShrug": (f("mouthShrugUpper", 0.0) + f("mouthShrugLower", 0.0)) / 2.0,
+            "BrowInnerUp": f("browInnerUp", 0.0),
+            "EyeSquintL": f("eyeSquintLeft", 0.0),
+            "EyeSquintR": f("eyeSquintRight", 0.0),
+            "BodyAngleX": f(BODY_YAW, 0.0),
+            "BodyAngleY": f(BODY_PITCH, 0.0),
+            "BodyAngleZ": f(BODY_ROLL, 0.0),
+            "BodyPositionX": body_x * _BODY_POSITION_SCALE[0],
+            "BodyPositionY": body_y * _BODY_POSITION_SCALE[1],
+            "BodyPositionZ": body_z * _BODY_POSITION_SCALE[2],
+            "VBridgerFaceFound": 1.0,
         }
 
     def _finalize(self, inputs: Dict[str, float]) -> Dict[str, float]:
@@ -173,4 +244,4 @@ class VtsTrackingDriver:
         )
 
 
-__all__ = ["OVERRIDE_HOLD_MS", "VtsTrackingDriver"]
+__all__ = ["OVERRIDE_HOLD_MS", "VBRIDGER_INPUTS", "VtsTrackingDriver"]

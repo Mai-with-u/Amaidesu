@@ -15,24 +15,14 @@ from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Tuple
 
 from .behaviors import smootherstep
-from .channels import (
-    BROW,
-    EYE_OPEN,
-    EYE_OPEN_L,
-    EYE_WIDE,
-    HEAD_PITCH,
-    HEAD_ROLL,
-    HEAD_YAW,
-    MOUTH_OPEN,
-    MOUTH_SMILE,
-)
+from .channels import BODY_Z, HEAD_PITCH, HEAD_ROLL, HEAD_YAW, expand
 
 
 @dataclass(frozen=True)
 class PulseRecipe:
     """一个脉冲：满幅时的通道偏移与起、持、落时长（毫秒）。"""
 
-    offsets: Mapping[str, float]
+    offsets: Mapping[str, float]  # 键用 ARKit 表情系数名（可用双侧简写）与姿态通道
     attack_ms: int
     hold_ms: int
     release_ms: int
@@ -47,15 +37,24 @@ PULSES: Dict[str, PulseRecipe] = {
     # 说话重音处轻点一下头
     "nod": PulseRecipe({HEAD_PITCH: -2.5}, 110, 40, 260),
     # 短语开头、强调时挑一下眉
-    "brow_flash": PulseRecipe({BROW: 0.35}, 100, 150, 300),
+    "brow_flash": PulseRecipe({"browOuterUp": 0.35, "browInnerUp": 0.2}, 100, 150, 300),
     # 收到礼物、游戏里有进展：眼睛一亮、嘴角上扬
-    "brighten": PulseRecipe({MOUTH_SMILE: 0.35, BROW: 0.25, EYE_WIDE: 0.15}, 200, 700, 900),
-    # 吓一跳：眼睛睁大、眉毛高抬、头往后一仰、嘴微张
-    "startle": PulseRecipe({EYE_WIDE: 0.8, BROW: 0.6, HEAD_PITCH: 3.0, MOUTH_OPEN: 0.25}, 80, 250, 700),
+    "brighten": PulseRecipe(
+        {"mouthSmile": 0.35, "cheekSquint": 0.15, "browOuterUp": 0.25, "eyeWide": 0.15}, 200, 700, 900
+    ),
+    # 吓一跳：眼睛睁大、眉毛高抬、头往后一仰、身体一缩、嘴微张
+    "startle": PulseRecipe(
+        {"eyeWide": 0.8, "browInnerUp": 0.6, "browOuterUp": 0.6, "jawOpen": 0.25, HEAD_PITCH: 3.0, BODY_Z: -0.3},
+        80,
+        250,
+        700,
+    ),
     # "诶？"：游戏需要关注时眉毛抬起、眼睛睁大一点
-    "alert": PulseRecipe({BROW: 0.4, EYE_WIDE: 0.35}, 120, 500, 700),
+    "alert": PulseRecipe({"browOuterUp": 0.4, "browInnerUp": 0.3, "eyeWide": 0.35}, 120, 500, 700),
     # 出错了：皱眉眯眼、嘴角往下、头一低
-    "wince": PulseRecipe({EYE_OPEN: -0.35, BROW: -0.4, MOUTH_SMILE: -0.3, HEAD_PITCH: -2.0}, 100, 300, 700),
+    "wince": PulseRecipe(
+        {"eyeSquint": 0.35, "eyeBlink": 0.2, "browDown": 0.4, "mouthFrown": 0.3, HEAD_PITCH: -2.0}, 100, 300, 700
+    ),
     # 以下供主播主动发起的动作使用（幅度比说话时的自然点头大得多）
     "nod_deep": PulseRecipe({HEAD_PITCH: -8.0}, 140, 60, 300),
     # 摇头幅度给足：模型映射常带平滑，来回太快会被抹掉一大半（桃濑日和实测 ±8° 只剩 ±4°）
@@ -63,7 +62,7 @@ PULSES: Dict[str, PulseRecipe] = {
     "shake_right": PulseRecipe({HEAD_YAW: 12.0}, 140, 30, 170),
     "tilt": PulseRecipe({HEAD_ROLL: 10.0, HEAD_PITCH: -1.0}, 300, 1200, 500),
     # 眨一只眼：一只眼闭上停一会儿，同时嘴角上扬、头往闭眼那侧轻歪（俏皮卖萌）
-    "wink": PulseRecipe({EYE_OPEN_L: -1.0, MOUTH_SMILE: 0.4, HEAD_ROLL: 4.0}, 90, 350, 200),
+    "wink": PulseRecipe({"eyeBlinkLeft": 1.0, "cheekSquintLeft": 0.3, "mouthSmile": 0.4, HEAD_ROLL: 4.0}, 90, 350, 200),
 }
 
 
@@ -101,7 +100,7 @@ class PulseLayer:
                 weight = 1.0
             else:
                 weight = 1.0 - smootherstep((dt - recipe.attack_ms - recipe.hold_ms) / max(recipe.release_ms, 1))
-            for channel, value in recipe.offsets.items():
+            for channel, value in expand(recipe.offsets).items():
                 offsets[channel] = offsets.get(channel, 0.0) + value * weight * scale
         return offsets
 

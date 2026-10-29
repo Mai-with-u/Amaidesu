@@ -71,7 +71,7 @@ async def test_config_patch_applies_live_and_rejects_bad_values(tuning) -> None:
     client, runtime, _, _ = tuning
     resp = await client.patch(f"{BASE}/config", json={"changes": {"rest_smile": 0.3, "thinking_gaze_mirror": False}})
     assert resp.status_code == 200 and runtime.config.rest_smile == 0.3
-    assert runtime.rest_frame()["mouth_smile"] == pytest.approx(0.3)  # 静止姿态立刻换上
+    assert runtime.rest_frame()["mouthSmileLeft"] == pytest.approx(0.3)  # 静止姿态立刻换上
     for changes in ({"rest_smile": 5}, {"enabled": False}, {"nose": 1}):
         assert (await client.patch(f"{BASE}/config", json={"changes": changes})).status_code == 422
     assert runtime.config.rest_smile == 0.3 and runtime.config.enabled is True  # 失败时原样不动
@@ -79,9 +79,9 @@ async def test_config_patch_applies_live_and_rejects_bad_values(tuning) -> None:
 
 async def test_recipe_override_and_reset(tuning) -> None:
     client, runtime, _, _ = tuning
-    resp = await client.put(f"{BASE}/recipes/happy", json={"offsets": {"eye_open": -0.85, "mouth_smile": 1.0}})
+    resp = await client.put(f"{BASE}/recipes/happy", json={"offsets": {"eyeSquint": 0.85, "mouthSmile": 1.0}})
     assert resp.status_code == 200 and resp.json()["overridden"] is True
-    assert dict(runtime.recipes()["happy"].offsets) == {"eye_open": -0.85, "mouth_smile": 1.0}
+    assert dict(runtime.recipes()["happy"].offsets) == {"eyeSquint": 0.85, "mouthSmile": 1.0}
     bad = await client.put(f"{BASE}/recipes/happy", json={"offsets": {"nose": 1.0}})
     assert bad.status_code == 422
     assert (await client.put(f"{BASE}/recipes/sleepy", json={"offsets": {}})).status_code == 422
@@ -123,7 +123,7 @@ async def test_calibration_patch_validates_against_platform_schema(tuning) -> No
 async def test_save_writes_tuning_back_to_avatar_toml(tuning) -> None:
     client, _, _, avatar_toml = tuning
     await client.patch(f"{BASE}/config", json={"changes": {"rest_smile": 0.3, "camera_gaze_x": 0.2}})
-    await client.put(f"{BASE}/recipes/happy", json={"offsets": {"eye_open": -0.85}, "motion": 1.2})
+    await client.put(f"{BASE}/recipes/happy", json={"offsets": {"eyeSquint": 0.85}, "motion": 1.2})
     await client.patch(f"{BASE}/calibration/vts", json={"values": {"eye_open_rest": 0.6}})
     assert (await client.get(BASE)).json()["unsaved"] is True  # 刷新页面也知道有没保存的修改
     resp = await client.post(f"{BASE}/save")
@@ -132,7 +132,7 @@ async def test_save_writes_tuning_back_to_avatar_toml(tuning) -> None:
 
     saved = tomllib.loads(avatar_toml.read_text(encoding="utf-8"))
     assert saved["tracking"]["rest_smile"] == 0.3 and saved["tracking"]["camera_gaze_x"] == 0.2
-    assert saved["tracking"]["recipes"] == {"happy": {"eye_open": -0.85, "motion": 1.2}}
+    assert saved["tracking"]["recipes"] == {"happy": {"eyeSquint": 0.85, "motion": 1.2}}
     assert saved["platform"]["vts"]["eye_open_rest"] == 0.6
 
     await client.delete(f"{BASE}/recipes/happy")

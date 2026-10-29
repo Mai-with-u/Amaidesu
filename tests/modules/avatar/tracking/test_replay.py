@@ -41,7 +41,7 @@ async def test_replay_reports_playback_lead_expression_and_draws_channels() -> N
     assert metrics["utterances"] == 1 and metrics["expression_changes_per_min"] > 0
 
     page = render_html(result)
-    assert "<svg" in page and "mouth_smile" in page and "happy" in page
+    assert "<svg" in page and "mouthSmileLeft" in page and "happy" in page
 
 
 async def test_replay_of_nothing_is_empty_but_renders() -> None:

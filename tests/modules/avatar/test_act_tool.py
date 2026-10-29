@@ -9,7 +9,7 @@ import pytest
 
 from src.modules.avatar.act_tool import GUIDE, AvatarActProvider
 from src.modules.avatar.tracking import TrackingConfig, TrackingRuntime
-from src.modules.avatar.tracking.channels import EYE_OPEN_L, EYE_OPEN_R, GAZE_X, HEAD_PITCH, HEAD_YAW
+from src.modules.avatar.tracking.channels import GAZE_X, HEAD_PITCH, HEAD_YAW, eye_openness
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from tests.helpers import FakeClock
@@ -71,9 +71,9 @@ async def test_wink_closes_only_one_eye(fake_clock: FakeClock) -> None:
     await runtime.tick_once()
     assert (await _call(AvatarActProvider(runtime), "avatar_act", action="眨一只眼")).success is True
     frames = await _frames(runtime, fake_clock, 900)
-    assert min(frame[EYE_OPEN_L] for frame in frames) < 0.1  # 一只眼闭上
-    assert min(frame[EYE_OPEN_R] for frame in frames) == pytest.approx(1.0)  # 另一只照常睁着
-    assert frames[-1][EYE_OPEN_L] > 0.9  # 眨完睁回来
+    assert min(eye_openness(frame, "Left") for frame in frames) < 0.1  # 一只眼闭上
+    assert min(eye_openness(frame, "Right") for frame in frames) == pytest.approx(1.0)  # 另一只照常睁着
+    assert eye_openness(frames[-1], "Left") > 0.9  # 眨完睁回来
 
 
 async def test_look_at_chat_and_hold_expression(fake_clock: FakeClock) -> None:

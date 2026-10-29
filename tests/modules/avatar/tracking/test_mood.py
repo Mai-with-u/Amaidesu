@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.modules.avatar.tracking.channels import EYE_OPEN, EYE_WIDE, MOUTH_SMILE
+from src.modules.avatar.tracking.channels import BODY_Z
 from src.modules.avatar.tracking.expression import RECIPES
 from src.modules.avatar.tracking.mood import MOOD_PUSH, Mood
 
@@ -32,10 +32,13 @@ def test_mood_tints_body_and_motion(emotion: str, smile_sign: int, motion_above_
     mood = Mood(half_life_ms=60_000, gain=1.0)
     mood.push_emotion(emotion, 1.0, 0)
     offsets = mood.offsets()
-    assert offsets[MOUTH_SMILE] * smile_sign > 0
+    assert offsets["mouthSmileLeft"] * smile_sign > 0  # 负数在合成时和静止的浅笑相抵
     assert (mood.motion_scale() > 1.0) is motion_above_one
     if emotion == "tired":
-        assert offsets[EYE_OPEN] < 0 and offsets[EYE_WIDE] == 0.0 and mood.blink_scale() < 1.0  # 累了眼皮沉、少动
+        assert (
+            offsets["eyeBlinkLeft"] > 0 and offsets["eyeWideLeft"] == 0.0 and mood.blink_scale() < 1.0
+        )  # 累了眼皮沉、少动
+        assert offsets[BODY_Z] < 0  # 身体往后靠一点
 
 
 def test_pulses_nudge_mood_lightly() -> None:

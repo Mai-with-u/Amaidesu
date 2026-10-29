@@ -6,23 +6,22 @@ import random
 
 import pytest
 
-from src.modules.avatar.tracking.channels import EYE_WIDE, MOUTH_SMILE
 from src.modules.avatar.tracking.reactions import PULSES, PulseLayer, SpeechProsody
 
 
 def test_pulse_rises_holds_falls_and_disappears() -> None:
     layer = PulseLayer()
     assert layer.trigger("brighten", 0, scale=1.0) and not layer.trigger("不存在", 0)
-    assert layer.sample(0).get(MOUTH_SMILE, 0.0) == pytest.approx(0.0)
-    assert layer.sample(300)[MOUTH_SMILE] == pytest.approx(0.35)  # 浮现后保持
-    assert 0 < layer.sample(1300)[MOUTH_SMILE] < 0.35  # 回落中
+    assert layer.sample(0).get("mouthSmileLeft", 0.0) == pytest.approx(0.0)
+    assert layer.sample(300)["mouthSmileLeft"] == pytest.approx(0.35)  # 浮现后保持（双侧简写已展开）
+    assert 0 < layer.sample(1300)["mouthSmileLeft"] < 0.35  # 回落中
     assert layer.sample(PULSES["brighten"].duration_ms) == {}  # 结束后消失
 
 
 def test_pulse_scale_and_active_limit() -> None:
     layer = PulseLayer()
     layer.trigger("startle", 0, scale=0.5)
-    assert layer.sample(100)[EYE_WIDE] == pytest.approx(0.4)
+    assert layer.sample(100)["eyeWideLeft"] == pytest.approx(0.4)
     for _ in range(PulseLayer.MAX_ACTIVE + 3):
         layer.trigger("nod", 0)
     assert layer.active_count == PulseLayer.MAX_ACTIVE  # 多出的丢最早的

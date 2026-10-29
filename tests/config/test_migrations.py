@@ -337,6 +337,31 @@ def _check_vts_idle(head_wander: bool) -> Callable[[Path], None]:
     return check
 
 
+def _seed_old_recipes(d: Path) -> None:
+    doc = _rewound(d, "avatar.toml", "2.0.42")
+    doc["tracking"]["recipes"] = {
+        "happy": {"eye_open": -1.0, "mouth_smile": 1.0, "mouth_open": 0.3, "brow": 0.3, "head_pitch": 2.0},
+        "angry": {"brow": -0.7, "angry": 0.6, "mouth_smile": -0.3, "motion": 1.2},
+        "shy": {"mouthSmile": 0.4},  # 已是规范名：原样保留
+    }
+    write_doc(d, "avatar.toml", doc)
+
+
+def _check_arkit_recipes(d: Path) -> None:
+    recipes = read_doc(d, "avatar.toml")["tracking"]["recipes"]
+    assert dict(recipes["happy"]) == {
+        "eyeBlink": 1.0,
+        "mouthSmile": 1.0,
+        "jawOpen": 0.3,
+        "browInnerUp": 0.3,
+        "browOuterUp": 0.3,
+        "head_pitch": 2.0,
+    }
+    # 压眉由旧的"眉往下"和"生气"累加；motion 名字没变
+    assert dict(recipes["angry"]) == {"browDown": 1.0, "noseSneer": 0.24, "mouthFrown": 0.3, "motion": 1.2}
+    assert dict(recipes["shy"]) == {"mouthSmile": 0.4}
+
+
 # collectors.toml
 
 
@@ -414,6 +439,7 @@ CASES = [
         _seed_vts_idle(idle_enabled=False, explicit_wander=True),
         _check_vts_idle(True),  # 新段里用户显式写的值优先，旧开关不覆盖
     ),
+    Case("tracking-recipes-to-arkit", ("avatar.toml",), _seed_old_recipes, _check_arkit_recipes),
     Case(
         "warudo-enabled-gets-maimai-profile",
         ("avatar.toml",),
@@ -464,6 +490,7 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "avatar_lipsync_to_avatar_file": ("case", "avatar-lipsync-and-idle-bindings"),
     "warudo_maimai_expression": ("case", "warudo-enabled-gets-maimai-profile"),
     "vts_idle_to_tracking": ("case", "vts-idle-retired-to-tracking"),
+    "tracking_recipes_to_arkit": ("case", "tracking-recipes-to-arkit"),
     "drop_minecraft_companion_collectors": ("case", "minecraft-companion-collectors"),
     "drop_bili_danmaku_message_config": ("case", "bili-danmaku-message-config"),
     "drop_profile_history_budget": ("case", "profile-history-budget"),

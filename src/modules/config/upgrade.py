@@ -672,6 +672,60 @@ def _upgrade_vts_idle_to_tracking(data: Dict[str, Any]) -> List[str]:
 register_file_hook("avatar.toml", "vts_idle_to_tracking", "2.0.42", _upgrade_vts_idle_to_tracking)
 
 
+# 旧的自造通道 → ARKit 规范系数：(正值写到哪些键, 负值写到哪些键)，值按原绝对值写入。
+# 旧通道"带正负"（嘴角 -1 撇 ~ 1 笑），规范系数都是 0~1，正负两头各对应一个系数
+_OLD_RECIPE_TERMS: Dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "eye_open": (("eyeWide",), ("eyeBlink",)),
+    "eye_open_l": (("eyeWideLeft",), ("eyeBlinkLeft",)),
+    "eye_open_r": (("eyeWideRight",), ("eyeBlinkRight",)),
+    "eye_wide": (("eyeWide",), ()),
+    "brow": (("browInnerUp", "browOuterUp"), ("browDown",)),
+    "brow_l": (("browOuterUpLeft",), ("browDownLeft",)),
+    "brow_r": (("browOuterUpRight",), ("browDownRight",)),
+    "mouth_smile": (("mouthSmile",), ("mouthFrown",)),
+    "mouth_open": (("jawOpen",), ()),
+    "mouth_x": (("mouthLeft",), ("mouthRight",)),
+    "cheek_puff": (("cheekPuff",), ()),
+}
+# 旧的"生气"没有对应的单个系数，换成面部动作上的生气：压眉 + 皱鼻
+_OLD_ANGRY_TERMS = (("browDown", 0.5), ("noseSneer", 0.4))
+
+
+def _upgrade_tracking_recipes_to_arkit(data: Dict[str, Any]) -> List[str]:
+    """avatar.toml v2.0.43：面捕合成器的通道改用 ARKit 规范词表，配方覆盖里的旧通道名随之换算。
+
+    头部、视线与 ``motion`` 名字没变，原样保留；同一规范键被几个旧键写到时累加，再钳到
+    ±1。只改写含旧键的情绪，已是新名字的不动（幂等）。
+    """
+    tracking = data.get("tracking")
+    recipes = tracking.get("recipes") if isinstance(tracking, dict) else None
+    if not isinstance(recipes, dict):
+        return []
+    changed: List[str] = []
+    for emotion, values in recipes.items():
+        if not isinstance(values, dict) or not any(k in _OLD_RECIPE_TERMS or k == "angry" for k in values):
+            continue
+        converted: Dict[str, float] = {}
+        for key, value in values.items():
+            if key == "angry":
+                terms = [(name, float(value) * weight) for name, weight in _OLD_ANGRY_TERMS]
+            elif key in _OLD_RECIPE_TERMS:
+                positive, negative = _OLD_RECIPE_TERMS[key]
+                terms = [(name, abs(float(value))) for name in (positive if value >= 0 else negative)]
+            else:
+                converted[key] = value
+                continue
+            for name, amount in terms:
+                converted[name] = round(max(-1.0, min(1.0, converted.get(name, 0.0) + amount)), 4)
+        recipes[emotion] = converted
+        changed.append(f"tracking.recipes.{emotion}（通道名换成 ARKit 规范名）")
+    return changed
+
+
+# 生产钩子登记：avatar.toml v2.0.43（配方覆盖的通道名换成 ARKit 规范名）
+register_file_hook("avatar.toml", "tracking_recipes_to_arkit", "2.0.43", _upgrade_tracking_recipes_to_arkit)
+
+
 # Minecraft 的两个事件流采集器改为随 Minecraft Agent 开关的附属采集器（见 src.modules.agents.companions）
 _MINECRAFT_COMPANION_SECTIONS = ("maicraft_attention", "maicraft_chat")
 _COMPANION_OLD_DEFAULTS = {"url": "http://127.0.0.1:8766/mcp", "retry_interval_ms": 5000}

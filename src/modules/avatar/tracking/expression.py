@@ -22,23 +22,18 @@ from typing import Dict, List, Mapping, Optional, Tuple
 
 from .behaviors import smootherstep
 from .channels import (
-    ANGRY,
-    BROW,
-    BROW_L,
-    BROW_R,
+    ARKIT_BLENDSHAPES,
+    BILATERAL,
+    BODY_Z,
     CHANNEL_LIMITS,
-    CHANNELS,
-    EYE_OPEN,
-    EYE_OPEN_L,
-    EYE_WIDE,
+    EYE_LOOK,
     GAZE_X,
     GAZE_Y,
     HEAD_PITCH,
     HEAD_ROLL,
     HEAD_YAW,
-    MOUTH_OPEN,
-    MOUTH_SMILE,
-    MOUTH_X,
+    POSE_CHANNELS,
+    expand,
 )
 
 NEUTRAL = "neutral"
@@ -78,44 +73,154 @@ class Recipe:
     motion: float = 1.0
 
 
-# 偏移是"满强度"的量；实际叠加量 = 偏移 × 压缩后的强度 × 当前时间曲线值。
-# 眼睛开合用负数表示眯眼 / 半闭（1 是正常睁眼），睁大另走 eye_wide。
+# 偏移是"满强度"的量；实际叠加量 = 偏移 × 压缩后的强度 × 当前时间曲线值。键用 ARKit 表情系数名
+# （去掉 Left / Right 的是双侧简写），加上头部、身体、视线这些姿态通道。真笑带动脸颊和下眼睑
+# （cheekSquint、eyeSquint），难过时眉心上提（browInnerUp），这些都照面部动作的常识写。
 RECIPES: Dict[str, Recipe] = {
-    "happy": Recipe(POSITIVE, {MOUTH_SMILE: 0.8, BROW: 0.3, EYE_OPEN: -0.1, HEAD_PITCH: 2.0}),
-    "excited": Recipe(POSITIVE, {MOUTH_SMILE: 1.0, BROW: 0.6, EYE_WIDE: 0.5, MOUTH_OPEN: 0.2, HEAD_PITCH: 3.0}, 1.3),
-    "love": Recipe(POSITIVE, {MOUTH_SMILE: 0.8, BROW: 0.2, EYE_OPEN: -0.35, HEAD_ROLL: 5.0}),
-    "sad": Recipe(NEGATIVE, {MOUTH_SMILE: -0.6, BROW: -0.4, EYE_OPEN: -0.3, HEAD_PITCH: -4.0, GAZE_Y: -0.3}, 0.7),
-    "crying": Recipe(NEGATIVE, {MOUTH_SMILE: -0.8, BROW: -0.5, EYE_OPEN: -0.6, MOUTH_OPEN: 0.3, HEAD_PITCH: -6.0}),
-    "angry": Recipe(NEGATIVE, {MOUTH_SMILE: -0.6, BROW: -0.8, ANGRY: 0.9, EYE_OPEN: -0.1, HEAD_PITCH: -2.0}),
-    "disgusted": Recipe(
-        NEGATIVE, {MOUTH_SMILE: -0.4, MOUTH_X: -0.4, BROW: -0.5, ANGRY: 0.4, EYE_OPEN: -0.3, HEAD_YAW: -6.0}
+    "happy": Recipe(
+        POSITIVE, {"mouthSmile": 0.8, "cheekSquint": 0.4, "eyeSquint": 0.35, "browOuterUp": 0.2, HEAD_PITCH: 2.0}
     ),
-    "surprised": Recipe(STARTLE, {BROW: 1.0, EYE_WIDE: 1.0, MOUTH_OPEN: 0.5, HEAD_PITCH: 4.0}),
-    "scared": Recipe(STARTLE, {BROW: 0.8, EYE_WIDE: 0.8, MOUTH_SMILE: -0.3, MOUTH_OPEN: 0.3, HEAD_PITCH: -3.0}),
-    "confused": Recipe(COGNITIVE, {BROW_L: 0.6, BROW_R: -0.3, MOUTH_X: 0.3, MOUTH_SMILE: -0.1, HEAD_ROLL: 8.0}, 0.6),
-    "serious": Recipe(COGNITIVE, {MOUTH_SMILE: -0.15, BROW: -0.3, ANGRY: 0.2, EYE_OPEN: -0.05}, 0.6),
+    "excited": Recipe(
+        POSITIVE,
+        {
+            "mouthSmile": 1.0,
+            "cheekSquint": 0.4,
+            "eyeWide": 0.5,
+            "browInnerUp": 0.4,
+            "browOuterUp": 0.6,
+            "jawOpen": 0.2,
+            HEAD_PITCH: 3.0,
+            BODY_Z: 0.2,
+        },
+        1.3,
+    ),
+    "love": Recipe(
+        POSITIVE,
+        {"mouthSmile": 0.8, "eyeSquint": 0.4, "eyeBlink": 0.2, "cheekSquint": 0.3, "browInnerUp": 0.2, HEAD_ROLL: 5.0},
+    ),
+    "sad": Recipe(
+        NEGATIVE,
+        {"mouthFrown": 0.6, "browInnerUp": 0.6, "eyeBlink": 0.3, "mouthPress": 0.2, HEAD_PITCH: -4.0, GAZE_Y: -0.3},
+        0.7,
+    ),
+    "crying": Recipe(
+        NEGATIVE,
+        {
+            "mouthFrown": 0.8,
+            "browInnerUp": 0.8,
+            "eyeBlink": 0.5,
+            "eyeSquint": 0.4,
+            "jawOpen": 0.3,
+            "mouthStretch": 0.3,
+            HEAD_PITCH: -6.0,
+        },
+    ),
+    "angry": Recipe(
+        NEGATIVE,
+        {
+            "browDown": 0.8,
+            "noseSneer": 0.4,
+            "mouthFrown": 0.4,
+            "mouthPress": 0.4,
+            "eyeSquint": 0.2,
+            HEAD_PITCH: -2.0,
+        },
+    ),
+    "disgusted": Recipe(
+        NEGATIVE,
+        {
+            "noseSneer": 0.7,
+            "mouthUpperUp": 0.4,
+            "mouthFrown": 0.3,
+            "mouthRight": 0.4,
+            "browDown": 0.5,
+            "eyeSquint": 0.4,
+            HEAD_YAW: -6.0,
+        },
+    ),
+    "surprised": Recipe(
+        STARTLE,
+        {"browInnerUp": 1.0, "browOuterUp": 1.0, "eyeWide": 1.0, "jawOpen": 0.5, HEAD_PITCH: 4.0, BODY_Z: -0.1},
+    ),
+    "scared": Recipe(
+        STARTLE,
+        {
+            "browInnerUp": 0.9,
+            "browOuterUp": 0.5,
+            "eyeWide": 0.8,
+            "mouthStretch": 0.5,
+            "jawOpen": 0.3,
+            HEAD_PITCH: -3.0,
+            BODY_Z: -0.2,
+        },
+    ),
+    "confused": Recipe(
+        COGNITIVE,
+        {"browOuterUpLeft": 0.6, "browDownRight": 0.3, "mouthLeft": 0.3, "mouthPucker": 0.2, HEAD_ROLL: 8.0},
+        0.6,
+    ),
+    "serious": Recipe(COGNITIVE, {"mouthPress": 0.3, "browDown": 0.3, "mouthFrown": 0.1, "eyeSquint": 0.15}, 0.6),
     "shy": Recipe(
-        SOCIAL, {MOUTH_SMILE: 0.35, EYE_OPEN: -0.3, GAZE_X: 0.4, GAZE_Y: -0.6, HEAD_PITCH: -5.0, HEAD_ROLL: 4.0}, 0.7
+        SOCIAL,
+        {
+            "mouthSmile": 0.35,
+            "mouthPress": 0.2,
+            "eyeBlink": 0.3,
+            GAZE_X: 0.4,
+            GAZE_Y: -0.6,
+            HEAD_PITCH: -5.0,
+            HEAD_ROLL: 4.0,
+            BODY_Z: -0.1,
+        },
+        0.7,
     ),
     "embarrassed": Recipe(
-        SOCIAL, {MOUTH_SMILE: 0.2, MOUTH_X: 0.3, BROW: 0.2, EYE_OPEN: -0.25, GAZE_X: -0.5, GAZE_Y: -0.3}
+        SOCIAL,
+        {
+            "mouthSmile": 0.2,
+            "mouthStretch": 0.2,
+            "mouthLeft": 0.3,
+            "browInnerUp": 0.3,
+            "eyeBlink": 0.25,
+            GAZE_X: -0.5,
+            GAZE_Y: -0.3,
+        },
     ),
     "smug": Recipe(
-        SOCIAL, {MOUTH_SMILE: 0.5, MOUTH_X: 0.35, EYE_OPEN: -0.4, BROW_L: 0.5, HEAD_PITCH: 5.0, HEAD_ROLL: -3.0}, 0.6
+        SOCIAL,
+        {
+            "mouthSmileLeft": 0.6,
+            "mouthSmileRight": 0.15,
+            "mouthLeft": 0.3,
+            "eyeSquint": 0.4,
+            "browOuterUpLeft": 0.5,
+            HEAD_PITCH: 5.0,
+            HEAD_ROLL: -3.0,
+        },
+        0.6,
     ),
-    "speechless": Recipe(SOCIAL, {MOUTH_SMILE: -0.1, MOUTH_OPEN: 0.05, EYE_OPEN: -0.35, BROW: -0.1}, 0.3),
-    "tired": Recipe(STATE, {EYE_OPEN: -0.45, EYE_OPEN_L: -0.05, BROW: -0.3, MOUTH_OPEN: 0.08, HEAD_PITCH: -4.0}, 0.6),
+    "speechless": Recipe(SOCIAL, {"mouthPress": 0.3, "mouthFrown": 0.1, "eyeBlink": 0.35, "browDown": 0.1}, 0.3),
+    "tired": Recipe(
+        STATE,
+        {"eyeBlink": 0.45, "eyeBlinkLeft": 0.05, "browDown": 0.2, "jawOpen": 0.08, HEAD_PITCH: -4.0, BODY_Z: -0.1},
+        0.6,
+    ),
 }
 
-# 配方里能写的键：全部通用通道 + 两个双侧简写；覆盖里另可写头部微动幅度倍数
-RECIPE_KEYS: Tuple[str, ...] = (*CHANNELS, EYE_OPEN, BROW)
+# 配方里能写的键：姿态通道、ARKit 表情系数（眼球朝向由视线换算，不在其中）与双侧简写；
+# 口型只在说话时由口型分析器给出，表情不写。覆盖里另可写头部微动幅度倍数
+RECIPE_KEYS: Tuple[str, ...] = (
+    *POSE_CHANNELS,
+    *(name for name in ARKIT_BLENDSHAPES if name not in EYE_LOOK),
+    *BILATERAL,
+)
 MOTION_KEY = "motion"
 MOTION_RANGE: Tuple[float, float] = (0.0, 3.0)
 
 
 def recipe_key_span(key: str) -> float:
     """配方里某个键允许的最大偏移量（该通道取值范围的跨度；简写按左侧通道算）。"""
-    channel = {EYE_OPEN: EYE_OPEN_L, BROW: BROW_L}.get(key, key)
+    channel = BILATERAL[key][0] if key in BILATERAL else key
     low, high = CHANNEL_LIMITS[channel]
     return high - low
 
@@ -304,7 +409,7 @@ class ExpressionScheduler:
         motion = 1.0
         for layer in self._layers:
             weight = layer.envelope(now_ms) * layer.level
-            for channel, value in layer.recipe.offsets.items():
+            for channel, value in expand(layer.recipe.offsets).items():
                 offsets[channel] = offsets.get(channel, 0.0) + weight * value
             motion += weight * (layer.recipe.motion - 1.0)
         return offsets, max(0.0, motion)

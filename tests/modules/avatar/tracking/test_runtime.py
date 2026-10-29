@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import random
+from typing import Callable
 
 import pytest
 
 from src.modules.avatar.lipsync import MouthSignal
-from src.modules.avatar.tracking.channels import BROW_L, EYE_OPEN_L, GAZE_X, GAZE_Y, MOUTH_OPEN, MOUTH_SMILE
+from src.modules.avatar.tracking.channels import GAZE_X, GAZE_Y, brow_height, eye_openness, smile
 from src.modules.avatar.tracking.config import TrackingConfig
 from src.modules.avatar.tracking.runtime import TrackingDriver, TrackingRuntime
 from src.modules.events.event_bus import EventBus
@@ -126,13 +127,13 @@ async def test_frames_go_to_ready_drivers_and_rest_pose_is_sent_on_detach_and_st
         fake_clock.tick(33)
         await runtime.tick_once()
     assert len(ok.frames) >= 30 and offline.frames == []  # 未就绪的跳过；写失败的不拖累别人
-    assert ok.frames[-1][EYE_OPEN_L] < 0.9
+    assert eye_openness(ok.frames[-1], "Left") < 0.9
 
     await runtime.detach(ok)
-    assert ok.frames[-1][EYE_OPEN_L] == 1.0  # 摘下前发静止姿态，形象不会停在半闭眼上
+    assert eye_openness(ok.frames[-1], "Left") == 1.0  # 摘下前发静止姿态，形象不会停在半闭眼上
     offline.is_ready = True
     await runtime.stop()
-    assert offline.frames[-1][EYE_OPEN_L] == 1.0 and runtime.driver_names == []
+    assert eye_openness(offline.frames[-1], "Left") == 1.0 and runtime.driver_names == []
 
 
 @pytest.mark.parametrize("attach_first", [True, False])
@@ -163,7 +164,7 @@ async def test_lipsync_signal_reaches_mouth_while_speaking(event_bus: EventBus, 
         fake_clock.tick(33)
         await analyzer.renderers[0].on_mouth_signal(MouthSignal(mouth_open=0.5))
         frame = await runtime.tick_once()
-    assert frame[MOUTH_OPEN] == pytest.approx(0.5)
+    assert frame["jawOpen"] == pytest.approx(0.5)
     await runtime.stop()
     assert analyzer.renderers == []
 
@@ -223,16 +224,20 @@ async def test_gift_glances_and_brightens_even_while_speaking_but_danmaku_does_n
     assert abs((await _advance(runtime, fake_clock, 300))[GAZE_X]) < 0.05  # 说话时弹幕不让她左顾右盼
     await _emit(event_bus, CoreEvents.ROOM_MESSAGE_GIFT, make_room_message(message_type="gift"))
     frame = await _advance(runtime, fake_clock, 400)
-    assert frame[GAZE_X] == pytest.approx(0.45) and frame[MOUTH_SMILE] > rest[MOUTH_SMILE] + 0.1  # 看一眼礼物、眼睛一亮
+    assert frame[GAZE_X] == pytest.approx(0.45) and smile(frame) > smile(rest) + 0.1  # 看一眼礼物、眼睛一亮
     await runtime.stop()
 
 
 @pytest.mark.parametrize(
-    ("event_type", "channel", "direction"),
-    [("milestone", MOUTH_SMILE, 1), ("attention_required", BROW_L, 1), ("error", BROW_L, -1)],
+    ("event_type", "read", "direction"),
+    [
+        ("milestone", smile, 1),
+        ("attention_required", lambda f: brow_height(f, "Left"), 1),
+        ("error", lambda f: brow_height(f, "Left"), -1),
+    ],
 )
 async def test_game_events_trigger_wordless_reactions(
-    event_bus: EventBus, fake_clock: FakeClock, event_type: str, channel: str, direction: int
+    event_bus: EventBus, fake_clock: FakeClock, event_type: str, read: Callable[[dict], float], direction: int
 ) -> None:
     runtime = _runtime(event_bus, fake_clock)
     await runtime.start()
@@ -240,5 +245,5 @@ async def test_game_events_trigger_wordless_reactions(
     payload = GamePayload(game="minecraft", event_type=event_type, message="游戏里发生了事")
     await _emit(event_bus, f"game.{event_type}", payload)
     frame = await _advance(runtime, fake_clock, 350)
-    assert (frame[channel] - rest[channel]) * direction > 0.1
+    assert (read(frame) - read(rest)) * direction > 0.1
     await runtime.stop()

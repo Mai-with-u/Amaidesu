@@ -5,8 +5,9 @@
 受惊这类脉冲也轻推一下；没有新刺激时按半衰期慢慢回到人设基线（0, 0）。
 
 心情反过来给身体一个底色，作用在所有表情之下：
-- 愉快度 → 静止时嘴角高一点或低一点、眉略抬或略压；
-- 兴奋度 → 兴奋时眼睛略睁大、头部微动更多、眨眼更勤；平静或疲惫时眼皮略沉、动作变少。
+- 愉快度 → 静止时嘴角高一点或低一点；愉快时眉略抬，不快时眉心略提（带点愁）；
+- 兴奋度 → 兴奋时眼睛略睁大、身体略前倾、头部微动更多、眨眼更勤；平静或疲惫时眼皮略沉、
+  身体往后靠一点、动作变少。
 这样连着几句开心的话之后，句间的静止脸也带着笑；打了一整局累了，形象会慢下来。
 """
 
@@ -14,7 +15,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional, Tuple
 
-from .channels import BROW, EYE_OPEN, EYE_WIDE, MOUTH_SMILE
+from .channels import BODY_Z, expand
 
 # 情绪 → 对心情的推动（愉快度, 兴奋度），按满强度计
 MOOD_PUSH: Dict[str, Tuple[float, float]] = {
@@ -93,13 +94,18 @@ class Mood:
 
     def offsets(self) -> Dict[str, float]:
         """心情给身体的底色（叠在表情之下的通道偏移）。"""
-        arousal = self.arousal
-        return {
-            MOUTH_SMILE: 0.15 * self.valence,
-            BROW: 0.06 * self.valence,
-            EYE_WIDE: 0.15 * max(arousal, 0.0),
-            EYE_OPEN: 0.12 * min(arousal, 0.0),
-        }
+        valence, arousal = self.valence, self.arousal
+        # 嘴角给带正负的偏移：负数会在合成时和静止的浅笑相抵，再不够就成了撇嘴
+        return expand(
+            {
+                "mouthSmile": 0.15 * valence,
+                "browOuterUp": 0.06 * max(valence, 0.0),
+                "browInnerUp": 0.08 * max(-valence, 0.0),
+                "eyeWide": 0.15 * max(arousal, 0.0),
+                "eyeBlink": 0.12 * max(-arousal, 0.0),
+                BODY_Z: 0.08 * arousal,
+            }
+        )
 
     def motion_scale(self) -> float:
         """头部微动幅度倍数：兴奋时多动，平静疲惫时少动。"""

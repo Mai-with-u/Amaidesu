@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.modules.avatar.tracking.channels import BROW, CHANNELS, EYE_OPEN, MOUTH_SMILE
-from src.modules.avatar.tracking.expression import FAMILY_TIMING, NEUTRAL, RECIPES, ExpressionScheduler
+from src.modules.avatar.tracking.expression import FAMILY_TIMING, NEUTRAL, RECIPE_KEYS, RECIPES, ExpressionScheduler
 from src.modules.types.emotion_vocab import Emotion
 
 
@@ -14,12 +13,12 @@ def _scheduler() -> ExpressionScheduler:
 
 
 def _smile(scheduler: ExpressionScheduler, now_ms: int) -> float:
-    return scheduler.sample(now_ms)[0].get(MOUTH_SMILE, 0.0)
+    return scheduler.sample(now_ms)[0].get("mouthSmileLeft", 0.0)  # 双侧简写在采样时已展开
 
 
 def test_recipes_cover_every_emotion_with_known_channels_and_families() -> None:
     assert set(RECIPES) | {NEUTRAL} == {e.value for e in Emotion}
-    allowed = set(CHANNELS) | {EYE_OPEN, BROW}
+    allowed = set(RECIPE_KEYS)
     for recipe in RECIPES.values():
         assert recipe.family in FAMILY_TIMING
         assert set(recipe.offsets) <= allowed

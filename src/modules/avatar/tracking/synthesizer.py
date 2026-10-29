@@ -4,8 +4,10 @@
 方便离线回放与测试。每帧按固定顺序合成，各层只管自己负责的部位：
 
 人设静止姿态 → 心情底色 + 表情偏移 + 脉冲反应 + 思考神情 → 注意力（看哪里）与眼神 → 头部漫步 +
-头部跟随视线 → 眨眼（对眼皮做乘法，能叠在眯眼上）→ 口型（说话时下巴开合归口型，嘴角
-的笑与撇仍归表情）→ 手动摆姿（调校时直接指定的通道值，盖过前面所有层）→ 钳制 → 限速。
+头部跟随视线 → 身体跟着头慢半拍转一点 → 表情系数逐个叠加（同侧的笑与撇相抵）→ 眨眼（乘在
+表情的闭眼程度上，能叠在眯眼上）→ 说话时的嘴（下巴开合与元音口型归口型分析器，嘴角仍归
+表情）→ 手动摆姿（调校时直接指定的通道值，盖过前面所有层）→ 钳制 → 限速 → 由视线换算眼球
+朝向系数。
 
 注意力按优先级决定看哪里：临时瞥一眼（弹幕、礼物）> 说话时看镜头 > 思考（刚来过
 弹幕就先读弹幕，再把视线移开望向别处）> 空闲时看镜头。
@@ -15,29 +17,28 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Dict, Optional, Tuple
+from typing import Dict, Mapping, Optional, Tuple
 
 from .behaviors import BlinkGenerator, GazeGenerator, HeadWander
 from .channels import (
-    ANGRY,
-    BROW,
-    BROW_L,
-    BROW_R,
-    CHEEK_PUFF,
-    EYE_OPEN,
-    EYE_OPEN_L,
-    EYE_OPEN_R,
-    EYE_WIDE,
+    ARKIT_BLENDSHAPES,
+    BODY_PITCH,
+    BODY_ROLL,
+    BODY_X,
+    BODY_Y,
+    BODY_YAW,
+    BODY_Z,
+    EYE_LOOK,
     GAZE_X,
     GAZE_Y,
     HEAD_PITCH,
     HEAD_ROLL,
     HEAD_YAW,
-    MOUTH_OPEN,
-    MOUTH_SMILE,
-    MOUTH_X,
+    VISEMES,
     Frame,
     clamp_frame,
+    expand,
+    eye_look_from_gaze,
     limit_slew,
     rest_frame,
 )
@@ -46,8 +47,22 @@ from .expression import ExpressionScheduler, Recipe, build_recipes
 from .mood import Mood
 from .reactions import PulseLayer, SpeechProsody
 
-# 思考时的神情：眉心微紧、眼睛略眯、嘴角稍收（按浮现权重叠加）
-_THINKING_OFFSETS: Dict[str, float] = {BROW: -0.15, EYE_OPEN: -0.06, MOUTH_SMILE: -0.05}
+# 思考时的神情：眉心微紧、眼睛略眯、嘴角稍收、抿一下嘴（按浮现权重叠加）
+_THINKING_OFFSETS: Dict[str, float] = expand(
+    {"browDown": 0.15, "eyeSquint": 0.1, "mouthSmile": -0.05, "mouthPress": 0.1}
+)
+# 除眼皮、眼球朝向外，表情系数都是"静止姿态 + 各层偏移"
+_PLAIN_BLENDSHAPES = tuple(
+    name for name in ARKIT_BLENDSHAPES if name not in EYE_LOOK and not name.startswith(("eyeBlink", "eyeWide"))
+)
+# 口型分析器的元音 → VRM 口型；说话的面孔在面捕里还会带出嘴唇形状（u、o 撮唇，i、e 咧开）
+_VOWEL_VISEMES = dict(zip("AIUEO", VISEMES, strict=True))
+_VOWEL_LIPS: Dict[str, Dict[str, float]] = {
+    "U": expand({"mouthFunnel": 0.5, "mouthPucker": 0.3}),
+    "O": expand({"mouthFunnel": 0.3}),
+    "I": expand({"mouthStretch": 0.25}),
+    "E": expand({"mouthStretch": 0.2}),
+}
 
 
 class TrackingSynthesizer:
@@ -57,6 +72,9 @@ class TrackingSynthesizer:
     MOUTH_SIGNAL_FRESH_MS = 250
     # 头部跟随视线的迟滞（头比眼睛慢半拍）；跟着转多少度是调参
     HEAD_FOLLOW_TAU_MS = 350
+    # 身体跟着头转的比例与迟滞（真人转头时肩背也带一点，比头更慢）
+    BODY_FOLLOW = 0.3
+    BODY_FOLLOW_TAU_MS = 600
     # 视线大幅跳动时顺带眨眼的概率
     GAZE_BLINK_CHANCE = 0.5
     # 思考神情的浮现与消退速度；思考时望向别处的落点隔几秒换一换
@@ -82,9 +100,11 @@ class TrackingSynthesizer:
         self._head_wander_enabled = config.head_wander_enabled
         self._speaking = False
         self._mouth_open = 0.0
+        self._vowels: Dict[str, float] = {}
         self._mouth_at_ms: Optional[int] = None
         self._follow_yaw = 0.0
         self._follow_pitch = 0.0
+        self._body = [0.0, 0.0, 0.0]
         self._last: Optional[Frame] = None
         self._last_ms: Optional[int] = None
         self._pulses = PulseLayer()
@@ -153,9 +173,10 @@ class TrackingSynthesizer:
         """正在播放语音与否（影响眨眼频率与嘴部归属）。"""
         self._speaking = speaking
 
-    def on_mouth(self, mouth_open: float, now_ms: int) -> None:
-        """一帧口型信号（嘴张开量 0~1）；同时从中找音节起点，触发韵律点头与挑眉。"""
+    def on_mouth(self, mouth_open: float, now_ms: int, vowels: Optional[Mapping[str, float]] = None) -> None:
+        """一帧口型信号（嘴张开量 0~1、元音成分 A/I/U/E/O）；同时从中找音节起点，触发韵律点头与挑眉。"""
         self._mouth_open = min(1.0, max(0.0, mouth_open))
+        self._vowels = {k: min(1.0, max(0.0, v)) for k, v in (vowels or {}).items() if k in _VOWEL_VISEMES}
         self._mouth_at_ms = now_ms
         if self._config.speech_nods_enabled:
             for kind, scale in self._prosody.on_mouth(self._mouth_open, now_ms):
@@ -164,6 +185,7 @@ class TrackingSynthesizer:
     def on_mouth_end(self, now_ms: int) -> None:
         """一次发声的口型结束：嘴收回，偶尔收尾点一下头。"""
         self._mouth_open = 0.0
+        self._vowels = {}
         self._mouth_at_ms = now_ms
         if self._config.speech_nods_enabled:
             for kind, scale in self._prosody.on_end(now_ms):
@@ -327,7 +349,23 @@ class TrackingSynthesizer:
         target[HEAD_PITCH] = pitch + self._follow_pitch + offsets.get(HEAD_PITCH, 0.0)
         target[HEAD_ROLL] = roll + offsets.get(HEAD_ROLL, 0.0)
 
-        # 眼皮：表情决定睁多开（眯眼、半闭），眨眼在此基础上按比例闭合
+        # 身体：跟着头慢半拍转一点，再加表情里的前倾、后缩
+        body_alpha = 1.0 - math.exp(-dt_ms / self.BODY_FOLLOW_TAU_MS) if dt_ms else 0.0
+        for index, (head, body) in enumerate(((HEAD_YAW, BODY_YAW), (HEAD_PITCH, BODY_PITCH), (HEAD_ROLL, BODY_ROLL))):
+            self._body[index] += (target[head] * self.BODY_FOLLOW - self._body[index]) * body_alpha
+            target[body] = self._body[index] + offsets.get(body, 0.0)
+        for channel in (BODY_X, BODY_Y, BODY_Z):
+            target[channel] = offsets.get(channel, 0.0)
+
+        # 表情系数：静止姿态 + 各层偏移；同侧的笑与撇相抵只留净值（静止的浅笑碰上难过的撇嘴，
+        # 结果是撇嘴，而不是笑和撇同时挂在脸上）
+        for name in _PLAIN_BLENDSHAPES:
+            target[name] = self._rest[name] + offsets.get(name, 0.0)
+        for side in ("Left", "Right"):
+            net = target[f"mouthSmile{side}"] - target[f"mouthFrown{side}"]
+            target[f"mouthSmile{side}"], target[f"mouthFrown{side}"] = max(net, 0.0), max(-net, 0.0)
+
+        # 眼皮：表情决定闭多少（眯眼、半闭），眨眼在此基础上按比例再闭；睁大随眨眼收起
         if jumped and cfg.blink_enabled:
             self._blink.nudge(now_ms, self.GAZE_BLINK_CHANCE)
         if self._speaking:
@@ -339,25 +377,22 @@ class TrackingSynthesizer:
         if cfg.mood_enabled:
             per_min *= self._mood.blink_scale()
         closure = self._blink.closure(now_ms, per_min=per_min) if cfg.blink_enabled else 0.0
-        both = offsets.get(EYE_OPEN, 0.0)
-        for channel in (EYE_OPEN_L, EYE_OPEN_R):
-            openness = min(1.0, max(0.0, 1.0 + both + offsets.get(channel, 0.0)))
-            target[channel] = openness * (1.0 - closure)
-        target[EYE_WIDE] = min(1.0, max(0.0, offsets.get(EYE_WIDE, 0.0))) * (1.0 - closure)
+        for side in ("Left", "Right"):
+            shut = min(1.0, max(0.0, offsets.get(f"eyeBlink{side}", 0.0)))
+            target[f"eyeBlink{side}"] = 1.0 - (1.0 - shut) * (1.0 - closure)
+            target[f"eyeWide{side}"] = min(1.0, max(0.0, offsets.get(f"eyeWide{side}", 0.0))) * (1.0 - closure)
 
-        brow = offsets.get(BROW, 0.0)
-        target[BROW_L] = brow + offsets.get(BROW_L, 0.0)
-        target[BROW_R] = brow + offsets.get(BROW_R, 0.0)
-        target[MOUTH_SMILE] = self._rest[MOUTH_SMILE] + offsets.get(MOUTH_SMILE, 0.0)
-        for channel in (MOUTH_X, CHEEK_PUFF, ANGRY):
-            target[channel] = offsets.get(channel, 0.0)
-
-        # 嘴：说话期间下巴开合只听口型（信号过期就闭着）；不说话时才轮到表情里的张嘴（惊讶）
+        # 嘴：说话期间下巴开合与元音口型只听口型分析器（信号过期就闭着），元音顺带出嘴唇形状；
+        # 不说话时才轮到表情里的张嘴（惊讶）
         lip_fresh = self._mouth_at_ms is not None and now_ms - self._mouth_at_ms <= self.MOUTH_SIGNAL_FRESH_MS
         if self._speaking or (lip_fresh and self._mouth_open > 0.02):
-            target[MOUTH_OPEN] = self._mouth_open if lip_fresh else 0.0
-        else:
-            target[MOUTH_OPEN] = offsets.get(MOUTH_OPEN, 0.0)
+            target["jawOpen"] = self._mouth_open if lip_fresh else 0.0
+            vowels = self._vowels if lip_fresh and self._mouth_open > 0.02 else {}
+            for vowel, viseme in _VOWEL_VISEMES.items():
+                weight = vowels.get(vowel, 0.0)
+                target[viseme] = weight
+                for name, value in _VOWEL_LIPS.get(vowel, {}).items():
+                    target[name] += value * weight
 
         # 手动摆姿盖过所有自动层（到期即作废，之后按限速平滑回到自动）
         if self._manual_until is not None:
@@ -368,6 +403,7 @@ class TrackingSynthesizer:
 
         target = clamp_frame(target)
         frame = target if self._last is None else limit_slew(self._last, target, dt_ms)
+        frame.update(eye_look_from_gaze(frame[GAZE_X], frame[GAZE_Y]))
         self._last = frame
         self._last_ms = now_ms
         return frame
