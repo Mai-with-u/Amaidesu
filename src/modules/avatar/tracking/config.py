@@ -24,7 +24,7 @@ class TrackingConfig(BaseConfig):
         default=30,
         ge=5,
         le=60,
-        description="每秒算几帧并发给平台；超过平台自身的渲染帧率没有意义（VTS 本机实测约 28 帧/秒）",
+        description="每秒算几帧并发给平台；超过平台自身的渲染帧率没有意义（VTS 每渲染一帧才处理一次注入，常见约 30 帧/秒）",
         json_schema_extra={"x-ui-advanced": True},
     )
     rest_smile: float = Field(
