@@ -76,3 +76,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-051：主播长期记忆 MEMORY.md（扩展 ADR-042：纯文本 / 收播合并 / 开播冻结注入 / 正式彩排各一份）](051-streamer-long-term-memory-file.md)
 - [ADR-052：虚拟形象由面捕合成器逐帧驱动（部分取代 ADR-023 / ADR-026：平台适配器缩成驱动 / 表情跟着播放起落 / VTS 先行）](052-avatar-tracking-synthesizer.md)
 - [ADR-053：主播的形象工具收成一个 avatar_act（部分取代 ADR-026 / ADR-052：平台只登记片段 / 心情慢变 / 按句情绪落地）](053-avatar-act-tool.md)
+- [ADR-054：面捕合成器改用面捕规范词表（取代 ADR-052 的通用通道一条：ARKit 52 系数 + VRM 口型 / VTS 驱动照 VBridger 规范输出）](054-avatar-standard-face-vocabulary.md)
