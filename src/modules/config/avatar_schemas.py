@@ -71,7 +71,7 @@ class AvatarPlatformConfig(BaseConfig):
     vts: VTSProvider.ConfigSchema = Field(
         default_factory=VTSProvider.ConfigSchema,
         title="VTS 配置",
-        description="VTubeStudio 平台配置（连接）",
+        description="VTubeStudio 平台配置（连接 / 面捕驱动的模型校准）",
     )
     warudo: WarudoProvider.ConfigSchema = Field(
         default_factory=WarudoProvider.ConfigSchema,

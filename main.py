@@ -32,6 +32,7 @@ from src.modules.agents.deps import AgentDeps
 from src.modules.agents.factory import instantiate_agent
 from src.modules.agents.manager import AgentManager
 from src.modules.avatar.platform.warudo.expression_profile import MAIMAI_PROFILE_PATH, read_profile_expression
+from src.modules.avatar.tracking import TrackingConfig, TrackingRuntime
 from src.modules.collectors.factory import instantiate_collector
 from src.modules.collectors.manager import CollectorManager
 from src.modules.config.core_schemas import (
@@ -346,6 +347,8 @@ class AppComponents:
     task_tracker: Optional[TaskTracker]
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder]
     maibot_sync_reporter: Optional[LiveStatusReporter]
+    # 面捕合成器（形象逐帧驱动；关停时在工具 Provider 收尾之后、事件总线清理之前停）
+    avatar_tracking: Optional[TrackingRuntime] = None
 
 
 async def create_app_components(
@@ -557,6 +560,7 @@ async def create_app_components(
     # Dashboard 装配段同样引用任务跟踪器与 TTS 引擎：无 [agents] 段时两者都不构造，以 None 交给 Dashboard
     task_tracker: Optional[TaskTracker] = None
     tts_engine: Optional[TTSProvider] = None
+    avatar_tracking: Optional[TrackingRuntime] = None
     agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
     if agents_config:
         logger.info("初始化 AgentManager（src/agents/）...")
@@ -617,6 +621,24 @@ async def create_app_components(
         tts_engine = build_tts_infrastructure(
             tts_section, event_bus=event_bus, audio_sink=lipsync_analyzer, llm_service=llm_service
         )
+
+        # 面捕合成器（avatar 共享件，调参 [avatar.tracking]；拍平后顶层键 tracking）：
+        # 订阅发言与播放事件、接上口型信号，逐帧算出形象姿态；各平台在 avatar 装配时
+        # 把自己的面捕驱动挂上来。是否装配了 TTS 决定表情等"开始播放"还是发言即上脸。
+        tracking_cfg = config.get("tracking", {}) if isinstance(config, dict) else {}
+        tracking_cfg = tracking_cfg if isinstance(tracking_cfg, dict) else {}
+        if tracking_cfg.get("enabled", True):
+            try:
+                avatar_tracking = TrackingRuntime(
+                    TrackingConfig.from_dict(dict(tracking_cfg)),
+                    event_bus=event_bus,
+                    lipsync_analyzer=lipsync_analyzer,
+                    tts_enabled=tts_engine is not None,
+                )
+                await avatar_tracking.start()
+            except Exception as exc:
+                logger.warning(f"面捕合成器构造失败（形象不被逐帧驱动）: {type(exc).__name__}: {exc}")
+                avatar_tracking = None
 
         # 字幕源择流收在 SpeechDispatcher 内部：以注入的
         # tts_engine 是否在位为判据，跟随播放事件 / 派发直出两模式互斥，
@@ -715,6 +737,7 @@ async def create_app_components(
             avatar_platform=avatar_platform,
             # 平台自带的字幕显示面（VRChat 头顶聊天框）登记为同一个字幕服务的后端，跟随已选定的字幕源
             subtitle_service=subtitle_service,
+            avatar_tracking=avatar_tracking,
         )
         from src.modules.tools.bootstrap import CORE_MEMBER_COUNT
 
@@ -946,6 +969,7 @@ async def create_app_components(
         task_tracker=task_tracker if agents_config else None,
         tts_diagnostics_recorder=tts_diagnostics_recorder,
         maibot_sync_reporter=maibot_sync_reporter,
+        avatar_tracking=avatar_tracking,
     )
 
 
@@ -1466,6 +1490,11 @@ async def run_shutdown(
         from src.modules.mcp import close_mcp_providers
 
         await safe_log(close_mcp_providers(tool_registry), "close_mcp_providers")
+
+    # 面捕合成器放在工具 Provider 收尾之后停：平台驱动已在各自 cleanup 里发过静止
+    # 姿态并摘下；这里退订发言与播放事件（必须早于 EventBus.cleanup）
+    if components.avatar_tracking is not None:
+        await safe_log(components.avatar_tracking.stop(), "TrackingRuntime.stop")
 
     logger.info("等待待处理事件完成并清理 EventBus...")
     if event_bus is not None:

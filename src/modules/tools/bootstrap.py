@@ -156,6 +156,7 @@ def bind_core_tools(
     lipsync_analyzer: Any | None = None,
     avatar_platform: Dict[str, Any] | None = None,
     subtitle_service: Any | None = None,
+    avatar_tracking: Any | None = None,
 ) -> Dict[str, int]:
     """绑定 Amaidesu 核心分类工具包到 ``registry``。
 
@@ -179,6 +180,8 @@ def bind_core_tools(
             None = 不渲染口型；统一装配签名，studio 域忽略）
         subtitle_service: 字幕服务（平台自带的字幕显示面登记为它的后端，如 VRChat
             头顶聊天框；组合根透传，None = 不接；统一装配签名，其余成员忽略）
+        avatar_tracking: 面捕合成器运行时（avatar 域共享件，只传给 avatar 平台成员，
+            由平台把自己的面捕驱动挂上去；None = 形象不被逐帧驱动）
 
     Returns:
         ``{member_key: new_tool_count}`` 报告，只含**实际尝试装配**的成员
@@ -216,6 +219,8 @@ def bind_core_tools(
             report[key] = 0
             continue
 
+        # 面捕合成器只有 avatar 平台用得上，其他分类的注册函数不必认这个参数
+        extra: Dict[str, Any] = {"tracking": avatar_tracking} if domain == "avatar" else {}
         try:
             register_fn(
                 registry=registry,
@@ -223,6 +228,7 @@ def bind_core_tools(
                 event_bus=event_bus,
                 lipsync_analyzer=lipsync_analyzer,
                 subtitle_service=subtitle_service,
+                **extra,
             )
         except Exception as exc:  # noqa: BLE001 - 单成员隔离边界
             logger.error(

@@ -3,15 +3,15 @@ VTSProvider - VTS 虚拟形象工具集
 
 ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动调用的工具侧）：
 
+- 形象的逐帧驱动由面捕合成器（``avatar.tracking``）负责：本适配器把一个 VTS 面捕
+  驱动（``VtsTrackingDriver``）挂上去，合成器每帧算出通用通道，驱动换算成 VTS
+  捕捉输入整组注入；本适配器管连接、授权、断线重连、换模跟随与热键；
 - 连接走自带的插件接口客户端（``VtsClient``：请求按编号对回复，注入发完就走）；
-- 引擎子件（``ExpressionController`` / ``HotkeyMatcher``）
-  经同一个客户端收发，可独立复用；口型渲染（``VtsLipSyncRenderer``）挂在共享
-  分析器（``avatar.lipsync``）上。
 - 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
-  - ``vts_set_expression``        - 设置情绪（17 枚举值 + 强度）
+  - ``vts_set_expression``        - 设置情绪（交给面捕合成器，保持一段时间后回落）
   - ``vts_list_preset_actions``   - 列出可演预设（VTS 热键目录）
   - ``vts_trigger_preset_action`` - 触发预设动作（未知名随结果返回目录）
-  - ``vts_set_idle_enabled``      - 启停头部微动（待机微动已退役，面捕合成器接入后由它负责）
+  - ``vts_set_idle_enabled``      - 启停头部微动（面捕合成器的头部漫步）
 
 工具表随连接态动态变化（继承 ``ConnectionToolProvider`` 中间层）：未连接
 时 ``list_tools`` 返回空（装配期降级登记 0 工具，Agent 不可见不可调）；
@@ -19,22 +19,20 @@ ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动调用的�
 注册表 ``refresh_provider_tools`` 补注册 / 摘除。
 
 不注册为工具的 Python 方法只保留仍有真实调用点的（``set_parameter_value``
-供 Dashboard 调试台参数直调），其余一概不设。
+供 Dashboard 调试台临时覆盖某个 VTS 输入），其余一概不设。
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from pydantic import Field
 
-from src.modules.avatar.speech_binding import AvatarBindings
 from src.modules.avatar.tool_common import (
     contract_tool_specs,
     dispatch_tool,
-    scaled_emotion_weights,
     unknown_action_fail,
 )
 from src.modules.config.schemas.base import BaseConfig
@@ -49,10 +47,10 @@ from src.modules.tools.models import (
     tool_result_ok,
 )
 from src.modules.tools.provider import ConnectionToolProvider, wire_connection_tools
+from src.modules.types.emotion_vocab import Emotion
 
-from .expression_controller import ExpressionController
 from .hotkey_matcher import HotkeyMatcher
-from .lip_sync_renderer import VtsLipSyncRenderer
+from .tracking_driver import VtsTrackingDriver
 from .vts_client import VtsClient
 
 if TYPE_CHECKING:
@@ -66,7 +64,7 @@ if TYPE_CHECKING:
 _VTS_SET_IDLE_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
-        "enabled": {"type": "boolean", "description": "是否启用 idle 拟人动画"},
+        "enabled": {"type": "boolean", "description": "是否启用头部微动"},
     },
     "required": ["enabled"],
 }
@@ -75,6 +73,8 @@ _VTS_SET_IDLE_SCHEMA: Dict[str, Any] = {
 _PLUGIN_NAME = "Amaidesu_VTS_ToolProvider"
 _PLUGIN_DEVELOPER = "Wave 4 Implementation"
 _TOKEN_PATH = Path("data/vts_token.txt")
+
+_EMOTIONS = frozenset(e.value for e in Emotion)
 
 
 # =============================================================================
@@ -95,11 +95,6 @@ class VTSProvider(ConnectionToolProvider):
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
     category = "avatar"
 
-    PARAM_MOUTH_SMILE = "MouthSmile"
-    PARAM_MOUTH_OPEN = "MouthOpen"
-    PARAM_EYE_OPEN_LEFT = "EyeOpenLeft"
-    PARAM_EYE_OPEN_RIGHT = "EyeOpenRight"
-
     # VTS 断线自动重连的巡检节拍（秒）：覆盖 Amaidesu 先于 VTS 启动、VTS 中途
     # 重启两种场景；探活与换模跟随也吃这个节拍，长关时重连尝试另按退避压频
     _RECONNECT_INTERVAL_S = 5.0
@@ -108,33 +103,61 @@ class VTSProvider(ConnectionToolProvider):
     _RECONNECT_BACKOFF_CAP_MS = 60_000
 
     class ConfigSchema(BaseConfig):
-        """VTS 配置（连接；口型分析调参在 ``[avatar.lipsync]`` 共享件段）
+        """VTS 配置：连接 + 面捕驱动的模型校准（逐帧驱动的调参在 ``[avatar.tracking]``）
 
-        TOML 段位：[avatar.platform.vts]（成员段直接铺键）。待机微动与常驻微笑基线已
-        退役：形象的逐帧驱动由面捕合成器（``[avatar.tracking]``）负责。
+        TOML 段位：[avatar.platform.vts]（成员段直接铺键）。校准项回答"这个模型上，
+        正常睁眼 / 中性嘴角 / 中性眉对应多大的 VTS 输入值"——同一个输入值在不同
+        模型上的含义不同（实测桃濑日和的眼睛开合输入 1.0 已是瞪到最大），换模型时
+        按观感调。
         """
 
         type: str = Field(default="vts", title="段位标识")
         vts_host: str = Field(title="VTS 主机地址", default="localhost", description="VTS WebSocket 主机地址")
         vts_port: int = Field(title="VTS 端口", default=8001, ge=1, le=65535, description="VTS WebSocket 端口")
+        eye_open_rest: float = Field(
+            title="正常睁眼的输入值",
+            default=0.55,
+            ge=0.05,
+            le=1.0,
+            description="模型上正常睁眼对应的 EyeOpen 输入（1.0 是睁到最大；眼睛显得瞪着就调小，显得困就调大）",
+        )
+        mouth_smile_neutral: float = Field(
+            title="中性嘴角的输入值",
+            default=0.5,
+            ge=0.0,
+            le=1.0,
+            description="模型上嘴角不笑也不撇时对应的 MouthSmile 输入",
+            json_schema_extra={"x-ui-advanced": True},
+        )
+        brow_neutral: float = Field(
+            title="中性眉的输入值",
+            default=0.5,
+            ge=0.0,
+            le=1.0,
+            description="模型上眉毛不抬也不压时对应的眉高输入",
+            json_schema_extra={"x-ui-advanced": True},
+        )
 
     def __init__(
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
         lipsync_analyzer: Optional[Any] = None,
+        tracking: Optional[Any] = None,
         client_factory: Optional[Callable[..., Any]] = None,
         reconnect_interval_s: Optional[float] = None,
     ) -> None:
         """Args:
+        tracking: 面捕合成器运行时（组合根共享一个）；None = 只剩热键与连接，不驱动形象。
         client_factory: VTS 客户端工厂（关键字参数同 :class:`VtsClient`；测试注入假连接）。
         reconnect_interval_s: 断线巡检节拍（秒；None = 默认 5 秒，测试调短）。
         """
         # 配置
         self.config = config
         self.event_bus = event_bus
-        # 共享口型分析器（装配注入；setup 时挂 VTS 渲染器，None = 不渲染口型）
+        # 统一装配签名的占位：口型信号由面捕合成器自己接，本适配器不再挂渲染器
         self.lipsync_analyzer = lipsync_analyzer
+        self._tracking = tracking
         self.logger = get_logger(self.__class__.__name__)
 
         # 配置（typed；空 dict = 全默认；失败 log+raise）
@@ -147,80 +170,6 @@ class VTSProvider(ConnectionToolProvider):
         self.vts_host: str = self.typed_config.vts_host
         self.vts_port: int = self.typed_config.vts_port
 
-        # 情绪 → VTS 参数映射（词表 17 值全覆盖；键取 Emotion.value 小写）。
-        # 眉部统一写 Brows（一个参数同时控制双眉，实测 17 个模型里 11 个
-        # 绑定了它）：分侧参数 BrowLeftY/BrowRightY 在真实模型上几乎没人
-        # 绑定，写入成功但看不到效果；scared/confused/smug 三个情绪原来
-        # 左右眉幅度不同，改用 Brows 后取较大值（左右眉不同的细节效果
-        # 留待将来做情绪参数自定义时再补）。FaceAngry 保留（语义独特、
-        # 写了不亏）；强度在 set_expression 中按线性缩放施加。
-        self._emotion_map: Dict[str, Dict[str, float]] = {
-            "neutral": {},
-            "happy": {"MouthSmile": 0.8, "Brows": 0.6},
-            "sad": {"MouthSmile": -0.4, "Brows": 0.15, "EyeOpenLeft": 0.6, "EyeOpenRight": 0.6},
-            "angry": {"MouthSmile": -0.6, "FaceAngry": 0.9, "Brows": 0.2, "MouthOpen": 0.1},
-            "surprised": {
-                "EyeOpenLeft": 1.0,
-                "EyeOpenRight": 1.0,
-                "MouthOpen": 0.5,
-                "Brows": 1.0,
-            },
-            "scared": {
-                "EyeOpenLeft": 0.7,
-                "EyeOpenRight": 0.7,
-                "MouthOpen": 0.4,
-                "Brows": 0.9,
-                "FaceAngry": -0.4,
-            },
-            "disgusted": {
-                "MouthX": -0.3,
-                "TongueOut": 0.2,
-                "FaceAngry": 0.4,
-                "EyeOpenLeft": 0.5,
-                "EyeOpenRight": 0.5,
-                "CheekPuff": 0.2,
-            },
-            "shy": {"MouthSmile": 0.35, "EyeOpenLeft": 0.55, "EyeOpenRight": 0.55, "CheekPuff": 0.15},
-            "embarrassed": {"MouthSmile": 0.2, "MouthX": 0.25, "EyeOpenLeft": 0.5, "EyeOpenRight": 0.65},
-            "confused": {
-                "EyeOpenLeft": 0.75,
-                "EyeOpenRight": 0.95,
-                "Brows": 0.95,
-                "MouthX": 0.15,
-            },
-            "love": {"MouthSmile": 0.9, "EyeOpenLeft": 0.35, "EyeOpenRight": 0.35, "CheekPuff": 0.2},
-            "excited": {
-                "MouthSmile": 1.0,
-                "EyeOpenLeft": 1.0,
-                "EyeOpenRight": 1.0,
-                "MouthOpen": 0.4,
-                "Brows": 0.85,
-            },
-            "smug": {"MouthSmile": 0.5, "EyeOpenLeft": 0.3, "EyeOpenRight": 0.45, "Brows": 0.7},
-            "serious": {
-                "MouthSmile": -0.1,
-                "Brows": 0.15,
-                "EyeOpenLeft": 0.85,
-                "EyeOpenRight": 0.85,
-                "FaceAngry": 0.25,
-            },
-            "tired": {"EyeOpenLeft": 0.3, "EyeOpenRight": 0.25, "MouthOpen": 0.12, "Brows": 0.1},
-            "crying": {
-                "EyeOpenLeft": 0.2,
-                "EyeOpenRight": 0.2,
-                "MouthOpen": 0.35,
-                "MouthSmile": -0.5,
-                "Brows": 0.1,
-            },
-            "speechless": {
-                "MouthSmile": 0.0,
-                "MouthOpen": 0.06,
-                "EyeOpenLeft": 0.8,
-                "EyeOpenRight": 0.8,
-                "Brows": 0.3,
-            },
-        }
-
         factory = client_factory or VtsClient
         self._client = factory(
             host=self.vts_host,
@@ -229,6 +178,13 @@ class VTSProvider(ConnectionToolProvider):
             plugin_developer=_PLUGIN_DEVELOPER,
             token_path=_TOKEN_PATH,
             logger_name=f"{self.__class__.__name__}.Client",
+        )
+        # 面捕驱动：连接授权成功后打开，断开时关闭；挂在面捕合成器上逐帧注入
+        self._driver = VtsTrackingDriver(
+            self._client,
+            eye_open_rest=self.typed_config.eye_open_rest,
+            mouth_smile_neutral=self.typed_config.mouth_smile_neutral,
+            brow_neutral=self.typed_config.brow_neutral,
         )
         self._reconnect_interval_s = reconnect_interval_s or self._RECONNECT_INTERVAL_S
         self._is_connecting = False
@@ -243,19 +199,12 @@ class VTSProvider(ConnectionToolProvider):
         self._has_started = False
         # 换模跟随基线：上次解析链对应的模型名（空 = 未知，连接后记录）
         self._current_model_name: str = ""
-        # 事件订阅挂载项句柄（setup 时逐项 attach，cleanup 时一次全量退订摘除）
-        self._bindings: Optional[AvatarBindings] = None
 
         self.render_count = 0
         self.error_count = 0
 
         self.hotkey_matcher = HotkeyMatcher(
             logger_name=f"{self.__class__.__name__}.Hotkey",
-            is_connected=lambda: self._is_connected,
-            request=self._client.request,
-        )
-        self.expression = ExpressionController(
-            logger_name=f"{self.__class__.__name__}.Expression",
             is_connected=lambda: self._is_connected,
             request=self._client.request,
         )
@@ -275,7 +224,7 @@ class VTSProvider(ConnectionToolProvider):
         """
         specs = contract_tool_specs(
             self.PROVIDER_NAME,
-            set_expression="VTS 设置主播当前情绪（17 枚举值 + 强度，持续生效直至下次设置）",
+            set_expression="VTS 设置主播当前情绪（17 枚举值 + 强度；浮现后保持一段时间再自然回落）",
             list_preset_actions="列出 VTS 可演的预设动作目录（连接后的热键清单；贴纸/道具已绑成热键的也在列）",
             trigger_preset_action="触发一个预设动作（动作名取自 vts_list_preset_actions 返回的目录）",
         )
@@ -344,15 +293,11 @@ class VTSProvider(ConnectionToolProvider):
         self._reconnect_task = asyncio.create_task(self._reconnect_loop())
         self._reconnect_task.set_name(f"{self.__class__.__name__}.reconnect_loop")
 
-        # 事件订阅（被动响应业务事件）：情绪反射（streamer.speech）；口型渲染挂到共享
-        # 分析器（说话时 MouthOpen 跟随信号）
-        self._bindings = AvatarBindings(self.event_bus, self.logger)
-        self._bindings.attach_emotion_reflection(self)
-        if self.lipsync_analyzer is not None:
-            self._bindings.attach_lip_renderer(
-                self.lipsync_analyzer,
-                VtsLipSyncRenderer(set_parameter=self._expression_set_param_proxy),
-            )
+        # 面捕驱动挂到面捕合成器上：发言、播放、口型都由合成器订阅，这里不再订阅事件
+        if self._tracking is not None:
+            await self._tracking.attach(self._driver)
+        else:
+            self.logger.warning("面捕合成器未装配：VTS 只剩热键与连接，形象不会被逐帧驱动")
 
         self._has_started = True
 
@@ -361,9 +306,9 @@ class VTSProvider(ConnectionToolProvider):
         if not self._has_started:
             return
 
-        if self._bindings is not None:
-            self._bindings.close()
-            self._bindings = None
+        # 先摘下面捕驱动（摘下前发一帧静止姿态），再断开连接
+        if self._tracking is not None:
+            await self._tracking.detach(self._driver)
 
         await self._disconnect()
         self._has_started = False
@@ -372,32 +317,29 @@ class VTSProvider(ConnectionToolProvider):
     # ===== 业务方法 =====
 
     async def set_parameter_value(self, parameter_name: str, value: float, weight: float = 1) -> bool:
-        return await self.expression.set_parameter(parameter_name, value, weight)
+        """调试台手动写一个 VTS 输入：临时盖过面捕合成器 3 秒（weight 为历史签名，忽略）。"""
+        if not self._is_connected:
+            return False
+        self._driver.set_override(parameter_name, value)
+        return True
 
     # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
 
     async def set_expression(self, emotion: str, intensity: float) -> ToolExecutionResult:
-        """设置当前情绪：查映射表 → 按强度线性缩放 → 批量写入 VTS 参数。
+        """设置当前情绪：交给面捕合成器，浮现后保持配置的时长再回落。
 
-        强度语义：0.0 收回全部表情参数，1.0 为映射表完整幅度，线性内插；
-        ``neutral`` 映射为空参数表（表情交回 idle/基线渲染）。映射表外的
-        情绪名按失败结果返回（词表编译期已知，出现未知名即调用方契约破坏）。
+        合成器按调度规则处理：同族相近只延长、最短停留内排队、强惊吓可打断。
+        映射表外的情绪名按失败结果返回（词表编译期已知，出现未知名即调用方契约破坏）。
         """
-        resolved = scaled_emotion_weights(emotion, intensity, self._emotion_map)
-        if resolved is None:
+        if emotion not in _EMOTIONS:
             self.error_count += 1
             return tool_result_fail("vts_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
-        factor, scaled = resolved
-        success = await self.expression.set_multi_parameter(scaled, 1.0)
-        if success:
-            self.render_count += 1
-        else:
-            self.error_count += 1
-        return tool_result_ok(
-            "vts_set_expression",
-            bool(success),
-            {"emotion": emotion, "intensity": factor, "parameters": scaled},
-        )
+        if self._tracking is None:
+            return tool_result_fail("vts_set_expression", "面捕合成器未启用（avatar.toml [tracking].enabled）")
+        factor = min(1.0, max(0.0, float(intensity)))
+        outcome = self._tracking.express(emotion, factor)
+        self.render_count += 1
+        return tool_result_ok("vts_set_expression", True, {"emotion": emotion, "intensity": factor, "outcome": outcome})
 
     async def list_preset_actions(self) -> ToolExecutionResult:
         """列出可演预设目录（VTS 热键清单；未连接/未加载时为空列表）。
@@ -442,8 +384,9 @@ class VTSProvider(ConnectionToolProvider):
         return False
 
     def _set_idle_enabled(self, enabled: bool) -> None:
-        """头部微动开关：待机微动已退役，面捕合成器接入前这里没有可开关的动作。"""
-        self.logger.info(f"头部微动开关（{enabled}）暂无效果：待机微动已退役，面捕合成器接入后生效")
+        """启停头部微动（面捕合成器的头部漫步；未装配合成器时无事可做）。"""
+        if self._tracking is not None:
+            self._tracking.set_head_wander(enabled)
 
     def get_stats(self) -> Dict[str, Any]:
         return {
@@ -452,12 +395,12 @@ class VTSProvider(ConnectionToolProvider):
             "render_count": self.render_count,
             "error_count": self.error_count,
             "hotkey_count": len(self.hotkey_matcher.hotkey_list),
+            "model": self._current_model_name,
+            "tracking": self._tracking is not None,
+            "emotion": self._tracking.current_emotion() if self._tracking is not None else "",
         }
 
     # ===== 内部辅助 =====
-
-    async def _expression_set_param_proxy(self, parameter_name: str, value: float, weight: float = 1) -> bool:
-        return await self.expression.set_parameter(parameter_name, value, weight)
 
     async def _connect(self) -> None:
         if self._is_connecting or self._is_connected:
@@ -474,6 +417,7 @@ class VTSProvider(ConnectionToolProvider):
 
             await self._reload_model_state()
             self._current_model_name = await self._query_current_model_name()
+            self._driver.set_active(True)
         except Exception as e:
             self.last_error = f"VTS 连接失败: {e}"
             self.logger.error(f"VTS 连接失败: {e}")
@@ -482,15 +426,24 @@ class VTSProvider(ConnectionToolProvider):
             self._is_connecting = False
 
     async def _reload_model_state(self) -> None:
-        """模型相关状态：热键重拉 + Live2D 参数清单记 debug 日志（连接建立与换模跟随共用）。"""
+        """模型相关状态：热键重拉 + 输入范围刷新（连接建立与换模跟随共用）。"""
         await self.hotkey_matcher.load_hotkeys()
-
         try:
-            live2d_names = await self.expression.list_live2d_parameters()
-            if live2d_names:
-                self.logger.debug(f"当前模型 Live2D 参数清单（{len(live2d_names)} 项）: {sorted(live2d_names)}")
+            self._driver.set_input_ranges(await self._query_input_ranges())
         except Exception as e:
-            self.logger.debug(f"拉取 Live2D 参数清单失败（忽略）: {e}")
+            self.logger.warning(f"拉取 VTS 输入范围失败，面捕驱动暂不钳制: {e}")
+            self._driver.set_input_ranges({})
+
+    async def _query_input_ranges(self) -> Dict[str, Tuple[float, float]]:
+        """VTS 可注入输入的原生范围 ``{名: (min, max)}``（驱动按它钳制、只发认识的输入）。"""
+        data = await self._client.request("InputParameterListRequest", None)
+        ranges: Dict[str, Tuple[float, float]] = {}
+        for param in [*data.get("defaultParameters", []), *data.get("customParameters", [])]:
+            try:
+                ranges[str(param["name"])] = (float(param["min"]), float(param["max"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return ranges
 
     async def _query_current_model_name(self) -> str:
         """查询 VTS 当前加载的模型名（没加载模型或查询失败时为空串）。"""
@@ -526,6 +479,15 @@ class VTSProvider(ConnectionToolProvider):
         except Exception:
             return False
 
+    async def _send_rest_pose(self) -> None:
+        """断开前发一帧静止姿态：VTS 停止注入后会一直保持最后的值（实测 10 秒不回落）。"""
+        if self._tracking is None or not self._driver.ready():
+            return
+        try:
+            await self._driver.apply(self._tracking.rest_frame())
+        except Exception as e:
+            self.logger.debug(f"断开前发送静止姿态失败（已忽略）: {e}")
+
     async def _attempt_reconnect(self) -> None:
         """未连接时的整点重连尝试：连上复位退避，失败按指数间隔排后续节拍。
 
@@ -560,6 +522,7 @@ class VTSProvider(ConnectionToolProvider):
                 if not await self._vts_health_check():
                     self.logger.warning("VTS 连接已断开（VTS 可能已重启），准备自动重连")
                     self._is_connected = False
+                    self._driver.set_active(False)
                     # 连接态换血：摘除断连工具（Agent 工具表不再包含 vts_*）
                     self.mark_disconnected()
                     await self._client.close()
@@ -582,6 +545,8 @@ class VTSProvider(ConnectionToolProvider):
 
         if not self._is_connected:
             return
+        await self._send_rest_pose()
+        self._driver.set_active(False)
         try:
             await self._client.close()
             self.logger.info("VTS 连接已关闭")
@@ -636,6 +601,7 @@ def create_vts_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
+    tracking: Optional[Any] = None,
     client_factory: Optional[Callable[..., Any]] = None,
 ) -> VTSProvider:
     """构造 VTSProvider 实例（不启动，由调用方 setup）"""
@@ -643,6 +609,7 @@ def create_vts_provider(
         config=config,
         event_bus=event_bus,
         lipsync_analyzer=lipsync_analyzer,
+        tracking=tracking,
         client_factory=client_factory,
     )
 
@@ -653,6 +620,7 @@ def register_vts_tools(
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
     subtitle_service: Optional[Any] = None,
+    tracking: Optional[Any] = None,
 ) -> VTSProvider:
     """构造 VTSProvider 并注册到 registry。返回 Provider 实例供调用方管理生命周期。
 
@@ -664,6 +632,7 @@ def register_vts_tools(
         config=config,
         event_bus=event_bus,
         lipsync_analyzer=lipsync_analyzer,
+        tracking=tracking,
     )
     registry.register_provider(provider)
     wire_connection_tools(provider, registry)

@@ -352,6 +352,7 @@ def register_vrchat_tools(
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
     subtitle_service: Optional[Any] = None,
+    tracking: Optional[Any] = None,  # 面捕合成器：本平台驱动尚未移植，仍走旧的情绪订阅，暂不使用
 ) -> VRChatProvider:
     """构造 VRChatProvider 并注册到 registry；给了字幕服务且开了聊天框时，
     把聊天框登记为字幕后端（跟随字幕服务已选定的字幕源）。"""

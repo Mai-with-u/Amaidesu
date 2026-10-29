@@ -631,6 +631,7 @@ def register_warudo_tools(
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
     subtitle_service: Optional[Any] = None,
+    tracking: Optional[Any] = None,  # 面捕合成器：本平台驱动尚未移植，仍走旧的情绪订阅，暂不使用
 ) -> WarudoProvider:
     """构造 WarudoProvider 并注册到 registry。返回 Provider 实例供调用方管理生命周期。
 

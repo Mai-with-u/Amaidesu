@@ -1,20 +1,22 @@
-"""VTSProvider：热键与预设目录、情绪表情、连接/断开/重连、换模跟随与注册表换血（假连接，不连真实 VTS）"""
+"""VTSProvider：热键与预设目录、表情交给面捕合成器、面捕驱动挂载与收尾、连接/断开/重连与注册表换血（假连接，不连真实 VTS）"""
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from unittest.mock import AsyncMock, MagicMock
+import pytest
 
 from src.modules.avatar.platform.vts.vts_client import VtsClient
 from src.modules.avatar.platform.vts.vts_provider import VTSProvider, create_vts_provider, register_vts_tools
+from src.modules.avatar.tracking import TrackingConfig, TrackingRuntime
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.operations import ToolOperations
 from src.modules.tools.registry import ToolRegistry
-from src.modules.types.emotion_vocab import Emotion
 from src.modules.utils.backoff import ExponentialBackoff
 from tests.config.helpers import wait_until
+from tests.helpers import FakeClock
 from tests.modules.avatar.platform.vts.fakes import FakeVtsSocket, socket_connector
 
 VTS_TOOLS = {"vts_set_expression", "vts_list_preset_actions", "vts_trigger_preset_action", "vts_set_idle_enabled"}
@@ -49,13 +51,32 @@ def _factory(tmp_path: Path, connector: Any) -> Any:
     return factory
 
 
-def _provider(tmp_path: Path, socket: Optional[FakeVtsSocket] = None, *, connector=None) -> VTSProvider:
+def _provider(
+    tmp_path: Path,
+    socket: Optional[FakeVtsSocket] = None,
+    *,
+    tracking: Optional[TrackingRuntime] = None,
+    connector=None,
+) -> VTSProvider:
     connect = connector or socket_connector(socket or _socket())
-    return create_vts_provider(config={}, client_factory=_factory(tmp_path, connect))
+    return create_vts_provider(config={}, tracking=tracking, client_factory=_factory(tmp_path, connect))
+
+
+def _tracking(clock: FakeClock) -> TrackingRuntime:
+    config = TrackingConfig(blink_enabled=False, gaze_enabled=False, head_wander_enabled=False)
+    return TrackingRuntime(config, clock=clock.now_ms, rng=random.Random(0), run_loop=False)
 
 
 async def _invoke(provider: VTSProvider, tool: str, **arguments: Any):
     return await provider.invoke(ToolInvocation(tool_name=tool, arguments=arguments, source="test"))
+
+
+def _injected(socket: FakeVtsSocket) -> List[Dict[str, float]]:
+    return [
+        {p["id"]: p["value"] for p in message["data"]["parameterValues"]}
+        for message in socket.sent
+        if message["messageType"] == "InjectParameterDataRequest"
+    ]
 
 
 async def test_connect_loads_hotkeys_and_tools_follow_connection(tmp_path: Path) -> None:
@@ -98,15 +119,45 @@ async def test_trigger_preset_action_known_unknown_and_missing(tmp_path: Path) -
     await provider.disconnect()
 
 
-async def test_set_expression_scales_by_intensity_and_rejects_unknown_emotion(tmp_path: Path) -> None:
-    provider = _provider(tmp_path)
-    provider.expression = MagicMock()
-    provider.expression.set_multi_parameter = AsyncMock(return_value=True)
-
-    assert (await _invoke(provider, "vts_set_expression", emotion="happy", intensity=0.5)).success is True
-    assert provider.expression.set_multi_parameter.await_args.args[0] == {"MouthSmile": 0.4, "Brows": 0.3}
+async def test_set_expression_and_idle_toggle_go_to_tracking(tmp_path: Path, fake_clock: FakeClock) -> None:
+    tracking = _tracking(fake_clock)
+    provider = _provider(tmp_path, tracking=tracking)
+    result = await _invoke(provider, "vts_set_expression", emotion="happy", intensity=0.7)
+    assert result.success is True and result.structured_content["outcome"] == "started"
+    assert tracking.current_emotion() == "happy"
     assert (await _invoke(provider, "vts_set_expression", emotion="这不是情绪")).success is False
-    assert set(provider._emotion_map) == {e.value for e in Emotion}  # 映射表覆盖词表全部 17 值
+
+    await _invoke(provider, "vts_set_idle_enabled", enabled=False)
+    assert tracking.head_wander_enabled is False
+
+    no_tracking = _provider(tmp_path)
+    assert (await no_tracking.set_expression("happy", 0.5)).success is False  # 合成器未装配：如实失败
+
+
+async def test_setup_attaches_driver_and_cleanup_leaves_rest_pose(tmp_path: Path, fake_clock: FakeClock) -> None:
+    socket = _socket()
+    tracking = _tracking(fake_clock)
+    await tracking.start()
+    provider = _provider(tmp_path, socket, tracking=tracking)
+    await provider.setup()
+    assert tracking.driver_names == ["vts"]
+
+    tracking.express("tired", 1.0)
+    for _ in range(30):
+        fake_clock.tick(33)
+        await tracking.tick_once()
+    frames = _injected(socket)
+    assert frames and set(frames[-1]) == {"FaceAngleX", "EyeOpenLeft", "MouthOpen"}  # 只发 VTS 认识的输入
+    assert frames[-1]["EyeOpenLeft"] < 0.4  # 困倦半闭眼
+
+    assert await provider.set_parameter_value("MouthOpen", 0.9) is True  # 调试台临时覆盖
+    await tracking.tick_once()
+    assert _injected(socket)[-1]["MouthOpen"] == 0.9
+
+    await provider.cleanup()
+    assert _injected(socket)[-1]["EyeOpenLeft"] == pytest.approx(0.55)  # 断开前复原到静止姿态
+    assert socket.closed and tracking.driver_names == []
+    await tracking.stop()
 
 
 async def test_dead_connection_is_detected_and_tools_removed(tmp_path: Path) -> None:

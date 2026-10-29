@@ -247,6 +247,7 @@ def _check_avatar_platform(d: Path) -> None:
         platform["warudo"]["ws_port"] == 19190 and "warudo" not in platform["enabled"]
     )  # false 成员配置保留但不进名单
     assert "idle_extra_params" not in vts and "base_smile" not in vts  # 待机键随后由面捕合成器接管而退役（2.0.42）
+    assert vts["eye_open_rest"] == 0.55  # 缺省键由 Schema 补默认
     assert "avatar" not in read_doc(d, "tools.toml")["tools"]
 
 
