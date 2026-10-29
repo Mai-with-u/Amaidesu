@@ -24,11 +24,12 @@ from __future__ import annotations
 import asyncio
 import random
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from typing import (
     Any,
     Awaitable,
     Callable,
+    Deque,
     Dict,
     List,
     Mapping,
@@ -109,6 +110,8 @@ class TrackingRuntime:
 
     # 记下但还没开始播放的发言情绪最多留多少条、留多久（播放失败没有回音的兜底）
     PENDING_LIMIT = 32
+    # 帧率与卡顿统计看最近多少帧（30 帧/秒下约 10 秒）
+    TICK_HISTORY = 300
     PENDING_TTL_MS = 120_000
     # 收到"开始播放"后先按预计时长 + 余量排一个回落时刻，"播完"事件到了再以它为准；
     # 万一播完事件丢了，表情也不会一直停在脸上
@@ -162,6 +165,8 @@ class TrackingRuntime:
         self._clips: Dict[str, Tuple[Callable[[], List[str]], Callable[[str], Awaitable[bool]]]] = {}
         self._loop_task: Optional[asyncio.Task] = None
         self._started = False
+        # 最近若干帧的推进时刻：算实际帧率与卡顿（和决策循环抢同一个事件循环时，形象会顿一下）
+        self._tick_times: Deque[int] = deque(maxlen=self.TICK_HISTORY)
 
     def _subscriptions(self) -> List[Tuple[str, Callable[..., Any], type]]:
         """订阅清单：(事件名, 处理函数, 载荷类)，订阅与退订共用。"""
@@ -246,7 +251,9 @@ class TrackingRuntime:
 
     async def tick_once(self) -> Frame:
         """推进一帧并发给所有就绪的驱动（帧循环每拍调一次；测试可直接调）。"""
-        frame = self.synthesizer.step(self._clock())
+        now = self._clock()
+        self._tick_times.append(now)
+        frame = self.synthesizer.step(now)
         for driver in list(self._drivers):
             if not driver.ready():
                 continue
@@ -412,6 +419,20 @@ class TrackingRuntime:
         """看向某一点一会儿（调校页拖眼神目标时预览：头会跟着转，和真的看过去一样）。"""
         self.synthesizer.look_at((x, y), self._clock(), duration_ms=duration_ms)
 
+    def loop_stats(self) -> Dict[str, float]:
+        """最近若干帧的实际帧率、最长帧间隔，以及间隔超过两倍帧周期的次数（卡顿）。"""
+        times = list(self._tick_times)
+        if len(times) < 2:
+            return {"fps": 0.0, "max_gap_ms": 0.0, "stalls": 0}
+        gaps = [b - a for a, b in zip(times, times[1:], strict=False)]
+        period_ms = 1000.0 / self._config.tick_hz
+        span = times[-1] - times[0]
+        return {
+            "fps": round(len(gaps) * 1000.0 / span, 1) if span > 0 else 0.0,
+            "max_gap_ms": float(max(gaps)),
+            "stalls": sum(1 for gap in gaps if gap > 2 * period_ms),
+        }
+
     def snapshot(self) -> Dict[str, Any]:
         """此刻的身体状态（调校页实时显示）：最近一帧、主表情、心情、在想 / 在说、手动摆姿与驱动。"""
         now = self._clock()
@@ -426,6 +447,7 @@ class TrackingRuntime:
             "manual": synthesizer.manual_active(now),
             "drivers": self.driver_names,
             "running": self._loop_task is not None,
+            "loop": self.loop_stats(),
         }
 
     def calibrations(self) -> Dict[str, Dict[str, float]]:

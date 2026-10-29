@@ -1150,6 +1150,8 @@ export interface AvatarTuningState {
   drivers: string[];
   /** 帧循环是否在跑（没有驱动挂着时不跑，形象不会动） */
   running: boolean;
+  /** 最近约 10 秒的实际帧率、最长帧间隔、超过两倍帧周期的次数（卡顿） */
+  loop: { fps: number; max_gap_ms: number; stalls: number };
 }
 
 /** 观众身份确认状态：confirmed=已确认 / pending=与老观众同名、待人工确认是不是同一个人 */

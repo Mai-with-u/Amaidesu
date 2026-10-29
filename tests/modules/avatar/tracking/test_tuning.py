@@ -119,6 +119,11 @@ async def test_runtime_snapshot_reconfigure_and_calibration(fake_clock: FakeCloc
     runtime.clear_manual()
     assert runtime.snapshot()["manual"] is False
 
+    fake_clock.tick(200)  # 一次 200 毫秒的卡顿
+    await runtime.tick_once()
+    loop = runtime.snapshot()["loop"]
+    assert loop["max_gap_ms"] == 200.0 and loop["stalls"] == 1 and 0 < loop["fps"] < 30
+
     assert runtime.calibrations() == {"calibrated": {"eye_open_rest": 0.55}}  # 没有校准项的驱动不列
     assert runtime.calibrate("calibrated", {"eye_open_rest": 0.6}) is True
     assert calibrated.values["eye_open_rest"] == 0.6

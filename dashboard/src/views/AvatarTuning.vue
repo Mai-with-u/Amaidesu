@@ -18,6 +18,15 @@
           <el-tag v-if="state.thinking" size="small" type="warning">在想</el-tag>
           <el-tag v-if="state.speaking" size="small" type="warning">在说</el-tag>
           <el-tag v-if="state.manual" size="small" type="danger">手动摆姿中</el-tag>
+          <el-tag
+            v-if="state.running"
+            size="small"
+            :type="state.loop.stalls ? 'warning' : 'info'"
+            title="最近约 10 秒：实际帧率 / 最长帧间隔 / 超过两倍帧周期的卡顿次数"
+          >
+            {{ state.loop.fps.toFixed(1) }} 帧/秒 · 最长 {{ Math.round(state.loop.max_gap_ms) }} 毫秒 · 卡顿
+            {{ state.loop.stalls }} 次
+          </el-tag>
         </div>
       </div>
       <div class="header-actions">
