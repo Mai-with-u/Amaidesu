@@ -119,7 +119,9 @@ class VtsTrackingDriver:
 
         brow_left = _centered(frame.get(BROW_L, 0.0), self._brow_neutral)
         brow_right = _centered(frame.get(BROW_R, 0.0), self._brow_neutral)
-        gaze_x, gaze_y = frame.get(GAZE_X, 0.0), frame.get(GAZE_Y, 0.0)
+        # VTS 的眼球左右输入与头部左右转输入方向相反（实测两者同为正时，模型头转向一边、
+        # 眼球转向另一边），左右取反后"看向某处"时头和眼才朝同一边；上下两者同向，不用取反
+        gaze_x, gaze_y = -frame.get(GAZE_X, 0.0), frame.get(GAZE_Y, 0.0)
         return {
             "FaceAngleX": frame.get(HEAD_YAW, 0.0),
             "FaceAngleY": frame.get(HEAD_PITCH, 0.0),

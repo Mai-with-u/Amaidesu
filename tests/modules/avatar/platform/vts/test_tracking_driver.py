@@ -5,7 +5,16 @@ from __future__ import annotations
 import pytest
 
 from src.modules.avatar.platform.vts.tracking_driver import OVERRIDE_HOLD_MS, VtsTrackingDriver
-from src.modules.avatar.tracking.channels import BROW_L, EYE_OPEN_L, EYE_WIDE, HEAD_YAW, MOUTH_SMILE, rest_frame
+from src.modules.avatar.tracking.channels import (
+    BROW_L,
+    EYE_OPEN_L,
+    EYE_WIDE,
+    GAZE_X,
+    GAZE_Y,
+    HEAD_YAW,
+    MOUTH_SMILE,
+    rest_frame,
+)
 from tests.helpers import FakeClock
 from tests.modules.avatar.platform.vts.fakes import RecordingVtsClient
 
@@ -77,6 +86,14 @@ def test_ready_needs_active_driver_and_open_client(fake_clock: FakeClock) -> Non
     assert driver.ready()
     driver.set_active(False)
     assert not driver.ready()
+
+
+def test_eyes_turn_the_same_way_as_the_head(fake_clock: FakeClock) -> None:
+    # VTS 的眼球左右输入与头部转向输入方向相反：看向右边时两者要异号，模型上才朝同一边
+    frame = {**rest_frame(), HEAD_YAW: 8.0, GAZE_X: 0.8, GAZE_Y: -0.4}
+    inputs = _driver(RecordingVtsClient(), fake_clock).to_inputs(frame)
+    assert inputs["FaceAngleX"] == 8.0 and inputs["EyeLeftX"] == inputs["EyeRightX"] == -0.8
+    assert inputs["EyeLeftY"] == inputs["EyeRightY"] == -0.4  # 上下同向，不取反
 
 
 def test_calibration_changes_neutral_mapping_live(fake_clock: FakeClock) -> None:
