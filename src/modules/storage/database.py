@@ -162,7 +162,7 @@ class SQLiteDatabase:
         logger.info(f"SQLiteDatabase 初始化完成: {self._db_path}")
 
     async def close(self) -> None:
-        """关闭全部线程持有的连接。"""
+        """关闭全部线程持有的连接（正在事务中的连接由其线程在事务收尾后关闭）。"""
         await self._run_in_executor(self._manager.close_all)
         self._initialized = False
         logger.info(f"SQLiteDatabase 已关闭: {self._db_path}")

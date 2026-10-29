@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
+import threading
 from pathlib import Path
+from typing import Any, Dict
 
 import pytest
 
@@ -37,6 +40,65 @@ def test_connection_manager_enables_wal_and_foreign_keys(db_path: Path) -> None:
         assert int(conn.execute("PRAGMA foreign_keys").fetchone()[0]) == 1
     finally:
         manager.close_all()
+
+
+def test_close_all_leaves_in_flight_transaction_to_finish_on_its_own_thread(db_path: Path) -> None:
+    """关库请求撞上别的线程正在进行的事务：该连接不被关库方关掉，由持有线程收尾后自行关闭。
+
+    复现的是停机时后台写入（流程单快照写穿）还在线程池里执行、关库线程同时关掉全部连接
+    导致的进程级访问违例。用两个事件把时序钉死：工作线程写完第一句后停在事务中间，
+    关库请求发出后再放行，继续写第二句（含嵌套事务）——关库方若直接关掉它的连接，
+    第二句就会撞上已关闭的连接。
+    """
+    manager = SQLiteConnectionManager(db_path)
+    with manager.transaction() as conn:
+        conn.execute("CREATE TABLE t (v INTEGER)")
+
+    in_flight = threading.Event()
+    close_requested = threading.Event()
+    outcome: Dict[str, Any] = {}
+
+    def write_across_close() -> None:
+        # 写一句 -> 停在事务中间等关库请求 -> 嵌套事务里再写一句 -> 提交
+        try:
+            with manager.transaction() as conn:
+                outcome["conn"] = conn
+                conn.execute("INSERT INTO t VALUES (1)")
+                in_flight.set()
+                close_requested.wait()
+                with manager.transaction() as nested:
+                    nested.execute("INSERT INTO t VALUES (2)")
+            outcome["finished"] = True
+        except Exception as exc:  # noqa: BLE001 失败原因交给主线程断言
+            outcome["error"] = exc
+        finally:
+            in_flight.set()
+
+    worker = threading.Thread(target=write_across_close)
+    worker.start()
+    try:
+        # 超时只防挂死：正常路径工作线程写完第一句就会置位
+        assert in_flight.wait(timeout=10)
+        manager.close_all()
+    finally:
+        close_requested.set()
+        worker.join()
+
+    assert outcome.get("error") is None
+    assert outcome.get("finished") is True
+    # 事务收尾后连接已由工作线程自己关闭，管理器不再持有任何连接，新事务一律拒绝
+    with pytest.raises(sqlite3.ProgrammingError):
+        outcome["conn"].execute("SELECT 1")
+    assert manager.connection_count == 0
+    with pytest.raises(RuntimeError):
+        with manager.transaction():
+            pass
+    # 关库前已开始的事务完整落盘
+    probe = sqlite3.connect(str(db_path))
+    try:
+        assert probe.execute("SELECT v FROM t ORDER BY v").fetchall() == [(1,), (2,)]
+    finally:
+        probe.close()
 
 
 async def test_insert_methods_write_rows_and_simulated_flag(store: SQLiteDatabase) -> None:
