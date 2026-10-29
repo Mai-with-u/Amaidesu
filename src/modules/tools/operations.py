@@ -20,7 +20,7 @@ registry，重连编排内的工具集刷新与探活复位也经 registry 的�
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.tools.provider import BaseToolProvider
@@ -52,7 +52,8 @@ class ToolOperations:
         （当前登记工具数，含停用与熔断）/ ``disabled_count`` /
         ``supports_reconnect`` / ``last_error``（Provider 侧最近一次连接失败
         摘要，无则空串）/ ``switch``（提供者开关地址声明，如 Agent 私有
-        MCP 的 ``{"file", "key"}``，未声明为 None）。**0 工具的 Provider
+        MCP 的 ``{"file", "key"}``，未声明为 None）/ ``connected``（维护外部连接的
+        Provider 的连接态，无连接概念为 None）。**0 工具的 Provider
         也在列**——降级登记（连接失败）的 Provider 靠这条在工具页保持
         可见、可手动重连。
         """
@@ -64,6 +65,15 @@ class ToolOperations:
                 # 非 BaseToolProvider 注册无归属记录：按 spec.provider 名兜底
                 owned = [name for name, (spec, _) in registry._tools.items() if spec.provider == p.name]
             switch = getattr(p, "switch_config", None)
+            # 维护外部连接的 Provider 报告连接态（None = 没有连接概念）：工具页据此区分
+            # "连着但不向 LLM 暴露工具"（如 VTS）与"没连上所以 0 工具"
+            summary_fn = getattr(p, "connection_summary", None)
+            connected: Optional[bool] = None
+            if callable(summary_fn):
+                try:
+                    connected = bool(summary_fn().get("is_connected"))
+                except Exception:  # noqa: BLE001 - 连接摘要读失败按未知处理
+                    connected = None
             result.append(
                 {
                     "name": p.name,
@@ -73,6 +83,7 @@ class ToolOperations:
                     "supports_reconnect": isinstance(p, BaseToolProvider) and bool(p.supports_reconnect),
                     "last_error": str(getattr(p, "last_error", "") or ""),
                     "switch": dict(switch) if isinstance(switch, dict) else None,
+                    "connected": connected,
                 }
             )
         return result

@@ -1,4 +1,4 @@
-"""VTSProvider：热键与预设目录、表情交给面捕合成器、面捕驱动挂载与收尾、连接/断开/重连与注册表换血（假连接，不连真实 VTS）"""
+"""VTSProvider：热键目录与片段登记、表情交给面捕合成器、面捕驱动挂载与收尾、不向 LLM 暴露工具、连接/断开/重连（假连接，不连真实 VTS）"""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from tests.config.helpers import wait_until
 from tests.helpers import FakeClock
 from tests.modules.avatar.platform.vts.fakes import FakeVtsSocket, socket_connector
 
-VTS_TOOLS = {"vts_set_expression", "vts_list_preset_actions", "vts_trigger_preset_action", "vts_set_idle_enabled"}
 HOTKEYS = [{"name": "Wave", "hotkeyID": "u1", "type": "TriggerAnimation"}, {"name": "Nod", "hotkeyID": "u2"}]
 
 
@@ -67,10 +66,6 @@ def _tracking(clock: FakeClock) -> TrackingRuntime:
     return TrackingRuntime(config, clock=clock.now_ms, rng=random.Random(0), run_loop=False)
 
 
-async def _invoke(provider: VTSProvider, tool: str, **arguments: Any):
-    return await provider.invoke(ToolInvocation(tool_name=tool, arguments=arguments, source="test"))
-
-
 def _injected(socket: FakeVtsSocket) -> List[Dict[str, float]]:
     return [
         {p["id"]: p["value"] for p in message["data"]["parameterValues"]}
@@ -79,17 +74,16 @@ def _injected(socket: FakeVtsSocket) -> List[Dict[str, float]]:
     ]
 
 
-async def test_connect_loads_hotkeys_and_tools_follow_connection(tmp_path: Path) -> None:
+async def test_connect_loads_hotkeys_but_exposes_no_llm_tools(tmp_path: Path) -> None:
     provider = _provider(tmp_path)
-    assert provider.list_tools() == []  # 装配期未连接：降级登记 0 工具
     fired: list[bool] = []
     provider.on_connection_changed = fired.append
     assert await provider.connect() is True
-    assert fired == [True] and {s.full_name for s in provider.list_tools()} == VTS_TOOLS
+    assert fired == [True] and provider.list_tools() == []  # 形象动作统一走 avatar_act
     result = await provider.list_preset_actions()
     assert [a["name"] for a in result.structured_content["actions"]] == ["Wave", "Nod"]
-    expression = next(s for s in provider.list_tools() if s.full_name == "vts_set_expression")
-    assert "Wave" not in expression.description  # 描述不承载目录，目录现取
+    invoked = await provider.invoke(ToolInvocation(tool_name="vts_set_expression", arguments={}, source="test"))
+    assert invoked.success is False  # 旧工具名已经不属于本适配器
     await provider.disconnect()
     await provider.disconnect()  # 已断开再断开不重复触发
     assert fired == [True, False] and provider.list_tools() == []
@@ -108,27 +102,24 @@ async def test_trigger_preset_action_known_unknown_and_missing(tmp_path: Path) -
     socket = _socket()
     provider = _provider(tmp_path, socket)
     await provider.connect()
-    assert (await _invoke(provider, "vts_trigger_preset_action", action="Wave")).success is True
+    assert (await provider.trigger_preset_action("Wave")).success is True  # 调试台直调
     assert socket.sent[-1]["data"] == {"hotkeyID": "u1"}
-    unknown = await _invoke(provider, "vts_trigger_preset_action", action="不存在")
+    unknown = await provider.trigger_preset_action("不存在")
     assert unknown.success is False and "Wave" in unknown.structured_content["available_actions"]
-    assert (await _invoke(provider, "vts_trigger_preset_action")).success is False
+    assert (await provider.trigger_preset_action("")).success is False
     assert await provider.trigger_hotkey(name="不存在", hotkey_id="u9") is True  # 名未命中时按 id 兜底
     assert socket.sent[-1]["data"] == {"hotkeyID": "u9"}
     assert await provider.trigger_hotkey() is False
     await provider.disconnect()
 
 
-async def test_set_expression_and_idle_toggle_go_to_tracking(tmp_path: Path, fake_clock: FakeClock) -> None:
+async def test_debug_set_expression_goes_to_tracking(tmp_path: Path, fake_clock: FakeClock) -> None:
     tracking = _tracking(fake_clock)
     provider = _provider(tmp_path, tracking=tracking)
-    result = await _invoke(provider, "vts_set_expression", emotion="happy", intensity=0.7)
+    result = await provider.set_expression("happy", 0.7)
     assert result.success is True and result.structured_content["outcome"] == "started"
     assert tracking.current_emotion() == "happy"
-    assert (await _invoke(provider, "vts_set_expression", emotion="这不是情绪")).success is False
-
-    await _invoke(provider, "vts_set_idle_enabled", enabled=False)
-    assert tracking.head_wander_enabled is False
+    assert (await provider.set_expression("这不是情绪", 0.5)).success is False
 
     no_tracking = _provider(tmp_path)
     assert (await no_tracking.set_expression("happy", 0.5)).success is False  # 合成器未装配：如实失败
@@ -141,6 +132,9 @@ async def test_setup_attaches_driver_and_cleanup_leaves_rest_pose(tmp_path: Path
     provider = _provider(tmp_path, socket, tracking=tracking)
     await provider.setup()
     assert tracking.driver_names == ["vts"]
+    clips = [a["name"] for a in tracking.action_catalog() if a["kind"] == "vts 片段"]
+    assert clips == ["Wave", "Nod"]  # 热键登记为动作片段
+    assert await tracking.act("Nod") is True and socket.sent[-1]["data"] == {"hotkeyID": "u2"}
 
     tracking.express("tired", 1.0)
     for _ in range(30):
@@ -157,6 +151,7 @@ async def test_setup_attaches_driver_and_cleanup_leaves_rest_pose(tmp_path: Path
     await provider.cleanup()
     assert _injected(socket)[-1]["EyeOpenLeft"] == pytest.approx(0.55)  # 断开前复原到静止姿态
     assert socket.closed and tracking.driver_names == []
+    assert not [a for a in tracking.action_catalog() if a["kind"] == "vts 片段"]  # 片段随之摘下
     await tracking.stop()
 
 
@@ -187,15 +182,18 @@ async def test_model_switch_reloads_hotkeys_only_on_real_change(tmp_path: Path) 
     await provider.disconnect()
 
 
-def test_register_vts_tools_registers_degraded_then_follows_connection_state() -> None:
+def test_register_vts_tools_reports_connection_state_without_tools() -> None:
     registry = ToolRegistry()
     provider = register_vts_tools(registry, config={"vts_host": "localhost", "vts_port": 8001})
-    card = next(p for p in ToolOperations(registry).list_providers() if p["name"] == "vts")
-    assert card["tool_count"] == 0 and registry.list_tools(provider="vts") == []
+
+    def card() -> dict:
+        return next(p for p in ToolOperations(registry).list_providers() if p["name"] == "vts")
+
+    assert card()["tool_count"] == 0 and card()["connected"] is False  # 装配期未连接
     provider.mark_connected()
-    assert {s.full_name for s in registry.list_tools(provider="vts")} == VTS_TOOLS
+    assert registry.list_tools(provider="vts") == [] and card()["connected"] is True  # 连上也没有 LLM 工具
     provider.mark_disconnected()
-    assert registry.list_tools(provider="vts") == []
+    assert card()["connected"] is False
 
 
 async def test_reconnect_attempts_back_off_and_reset_on_success(tmp_path: Path) -> None:

@@ -1,25 +1,18 @@
 """
 VTSProvider - VTS 虚拟形象工具集
 
-ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动调用的工具侧）：
+VTS 平台适配器：
 
 - 形象的逐帧驱动由面捕合成器（``avatar.tracking``）负责：本适配器把一个 VTS 面捕
   驱动（``VtsTrackingDriver``）挂上去，合成器每帧算出通用通道，驱动换算成 VTS
   捕捉输入整组注入；本适配器管连接、授权、断线重连、换模跟随与热键；
 - 连接走自带的插件接口客户端（``VtsClient``：请求按编号对回复，注入发完就走）；
-- 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
-  - ``vts_set_expression``        - 设置情绪（交给面捕合成器，保持一段时间后回落）
-  - ``vts_list_preset_actions``   - 列出可演预设（VTS 热键目录）
-  - ``vts_trigger_preset_action`` - 触发预设动作（未知名随结果返回目录）
-  - ``vts_set_idle_enabled``      - 启停头部微动（面捕合成器的头部漫步）
+- 不向 LLM 暴露工具：主播的形象动作统一走 ``avatar_act``（``avatar.act_tool``），
+  VTS 的热键作为动作片段登记到面捕合成器上，由它按名字转回本适配器触发。
 
-工具表随连接态动态变化（继承 ``ConnectionToolProvider`` 中间层）：未连接
-时 ``list_tools`` 返回空（装配期降级登记 0 工具，Agent 不可见不可调）；
-连接检测点调 ``mark_connected`` / ``mark_disconnected``，经接线回调驱动
-注册表 ``refresh_provider_tools`` 补注册 / 摘除。
-
-不注册为工具的 Python 方法只保留仍有真实调用点的（``set_parameter_value``
-供 Dashboard 调试台临时覆盖某个 VTS 输入），其余一概不设。
+契约方法（``set_expression`` / ``list_preset_actions`` / ``trigger_preset_action``，
+见 ``avatar.protocol``）与 ``set_parameter_value`` 保留给 Dashboard 调试台直接调用。
+连接态仍经 ``ConnectionToolProvider`` 中间层维护（工具页的连接状态与手动重连）。
 """
 
 from __future__ import annotations
@@ -30,11 +23,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from pydantic import Field
 
-from src.modules.avatar.tool_common import (
-    contract_tool_specs,
-    dispatch_tool,
-    unknown_action_fail,
-)
+from src.modules.avatar.tool_common import dispatch_tool, unknown_action_fail
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
@@ -56,18 +45,6 @@ from .vts_client import VtsClient
 if TYPE_CHECKING:
     pass
 
-
-# =============================================================================
-# 工具的 JSON Schema 描述
-# =============================================================================
-
-_VTS_SET_IDLE_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "enabled": {"type": "boolean", "description": "是否启用头部微动"},
-    },
-    "required": ["enabled"],
-}
 
 # 插件身份：令牌与身份绑定，改名会让 VTS 重新弹授权窗；令牌与其他运行时数据统一落 data/
 _PLUGIN_NAME = "Amaidesu_VTS_ToolProvider"
@@ -216,58 +193,12 @@ class VTSProvider(ConnectionToolProvider):
         return self.PROVIDER_NAME
 
     def _connected_tools(self) -> List[ToolSpec]:
-        """连接建立后暴露的工具列表（预设目录走 list_preset_actions 结果，不进描述）。
-
-        未连接时清单为空（基类 ``list_tools`` 降级返回空，Agent 工具表不含
-        vts_*）；此处只负责连接后的全量声明，清单变化经连接态回调驱动注册
-        表刷新补注册。
-        """
-        specs = contract_tool_specs(
-            self.PROVIDER_NAME,
-            set_expression="VTS 设置主播当前情绪（17 枚举值 + 强度；浮现后保持一段时间再自然回落）",
-            list_preset_actions="列出 VTS 可演的预设动作目录（连接后的热键清单；贴纸/道具已绑成热键的也在列）",
-            trigger_preset_action="触发一个预设动作（动作名取自 vts_list_preset_actions 返回的目录）",
-        )
-        # set_idle_enabled 是 VTS 平台特有工具（非三平台契约面），声明就地追加
-        specs.append(
-            ToolSpec(
-                name="set_idle_enabled",
-                description="VTS 启停头部微动（没有动作时头部的轻微晃动）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_VTS_SET_IDLE_SCHEMA,
-            )
-        )
-        return specs
+        """连上以后也不向 LLM 暴露工具：形象动作统一走 ``avatar_act``，热键作为片段登记给面捕合成器。"""
+        return []
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        """ToolProvider.invoke：分发到对应的 handler 方法。
-
-        handlers 为零参闭包字典，每次 invoke 现构造（捕获本次参数解析结果）。
-        """
-        args = invocation.arguments or {}
-
-        async def _set_idle_enabled_tool() -> ToolExecutionResult:
-            # set_idle_enabled 是"同步动作 + 固定 ok 返回"的本地操作，包一层异步
-            # 闭包适配 dispatch_tool 的统一 handler 形态（其余三个契约工具本体
-            # 即异步方法，无需包装；不对称是有意的）
-            self._set_idle_enabled(bool(args["enabled"]))
-            return tool_result_ok("vts_set_idle_enabled", True)
-
-        return await dispatch_tool(
-            invocation,
-            self.PROVIDER_NAME,
-            {
-                "vts_set_expression": lambda: self.set_expression(
-                    str(args.get("emotion", "")),
-                    float(args.get("intensity", 0.5)),
-                ),
-                "vts_list_preset_actions": self.list_preset_actions,
-                "vts_trigger_preset_action": lambda: self.trigger_preset_action(str(args.get("action", ""))),
-                "vts_set_idle_enabled": _set_idle_enabled_tool,
-            },
-            self.logger,
-        )
+        """本适配器没有 LLM 工具：任何调用都按"工具不属于本 Provider"失败返回。"""
+        return await dispatch_tool(invocation, self.PROVIDER_NAME, {}, self.logger)
 
     async def health_check(self) -> bool:
         """探活钩子（BaseToolProvider 契约：维护外部连接者必须真实检查）。
@@ -296,6 +227,8 @@ class VTSProvider(ConnectionToolProvider):
         # 面捕驱动挂到面捕合成器上：发言、播放、口型都由合成器订阅，这里不再订阅事件
         if self._tracking is not None:
             await self._tracking.attach(self._driver)
+            # 热键作为动作片段登记：主播经 avatar_act 按名字触发，名字现取，换模型后自动更新
+            self._tracking.register_clips(self.PROVIDER_NAME, self._clip_names, self._trigger_clip)
         else:
             self.logger.warning("面捕合成器未装配：VTS 只剩热键与连接，形象不会被逐帧驱动")
 
@@ -308,6 +241,7 @@ class VTSProvider(ConnectionToolProvider):
 
         # 先摘下面捕驱动（摘下前发一帧静止姿态），再断开连接
         if self._tracking is not None:
+            self._tracking.unregister_clips(self.PROVIDER_NAME)
             await self._tracking.detach(self._driver)
 
         await self._disconnect()
@@ -323,7 +257,7 @@ class VTSProvider(ConnectionToolProvider):
         self._driver.set_override(parameter_name, value)
         return True
 
-    # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
+    # ===== 契约方法（Dashboard 调试台直接调用）=====
 
     async def set_expression(self, emotion: str, intensity: float) -> ToolExecutionResult:
         """设置当前情绪：交给面捕合成器，浮现后保持配置的时长再回落。
@@ -383,10 +317,13 @@ class VTSProvider(ConnectionToolProvider):
         self.logger.warning("VTS 触发热键失败：name 与 hotkey_id 均为空")
         return False
 
-    def _set_idle_enabled(self, enabled: bool) -> None:
-        """启停头部微动（面捕合成器的头部漫步；未装配合成器时无事可做）。"""
-        if self._tracking is not None:
-            self._tracking.set_head_wander(enabled)
+    def _clip_names(self) -> List[str]:
+        """登记给面捕合成器的片段目录：当前模型的热键名。"""
+        return [str(hotkey.get("name")) for hotkey in self.hotkey_matcher.hotkey_list if hotkey.get("name")]
+
+    async def _trigger_clip(self, name: str) -> bool:
+        """面捕合成器按片段名转回来的触发请求。"""
+        return await self.trigger_hotkey(name=name)
 
     def get_stats(self) -> Dict[str, Any]:
         return {
@@ -398,6 +335,7 @@ class VTSProvider(ConnectionToolProvider):
             "model": self._current_model_name,
             "tracking": self._tracking is not None,
             "emotion": self._tracking.current_emotion() if self._tracking is not None else "",
+            "mood": self._tracking.mood() if self._tracking is not None else None,
         }
 
     # ===== 内部辅助 =====

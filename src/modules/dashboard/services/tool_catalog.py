@@ -275,7 +275,8 @@ def build_tool_catalog(
             "tool_count": tool_count,
             "disabled_count": int(record.get("disabled_count", 0) or 0),
             "registered": True,
-            "degraded": tool_count == 0,
+            # 0 工具才可能是降级；报告了"已连接"的（如不向 LLM 暴露工具的 VTS）不算
+            "degraded": tool_count == 0 and record.get("connected") is not True,
             "supports_reconnect": bool(record.get("supports_reconnect", False)),
             "last_error": str(record.get("last_error", "") or ""),
             "switch": switch,

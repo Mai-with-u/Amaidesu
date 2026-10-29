@@ -161,6 +161,11 @@ class TestBuildToolCatalog:
         assert card["registered"] is True
         assert card["degraded"] is True
 
+    def test_已连接但不暴露工具的提供者不算降级(self) -> None:
+        registry = _FakeRegistry(providers=[{"name": "vts", "category": "avatar", "tool_count": 0, "connected": True}])
+        card = _providers_by_category(_catalog(registry, {}))["vts"]
+        assert card["degraded"] is False
+
     def test_配置声明态补卡_enabled_false也展示(self) -> None:
         """名单外的平台段仍补卡展示（段存在 = 声明；名单外 = 未启用可开启）。"""
         registry = _FakeRegistry()
