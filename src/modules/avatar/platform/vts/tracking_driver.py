@@ -6,12 +6,12 @@ VTS 输入的换算，以及按 VTS 报告的输入范围钳制。
 
 同一个输入值在不同模型上的含义不一样（实测桃濑日和的"眼睛开合"输入 1.0 已是瞪到
 最大、正常睁眼约 0.53），所以"正常睁眼""中性嘴角""中性眉"对应的输入值是校准项，
-从配置传入，换模型时按观感调。
+从配置传入，换模型时按观感调（形象调校页可以实时调）。
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from src.modules.avatar.tracking.channels import (
     ANGRY,
@@ -91,6 +91,23 @@ class VtsTrackingDriver:
         self._overrides[name] = (float(value), self._clock() + hold_ms)
 
     # ===== 换算 =====
+
+    def calibration(self) -> Dict[str, float]:
+        """换算校准项当前值（键与 VTS 配置段里的同名字段对应，调校页保存时原样写回）。"""
+        return {
+            "eye_open_rest": self._eye_open_rest,
+            "mouth_smile_neutral": self._mouth_smile_neutral,
+            "brow_neutral": self._brow_neutral,
+        }
+
+    def calibrate(self, values: Mapping[str, float]) -> None:
+        """改校准项，下一帧起按新值换算；不认识的键整批拒绝（抛 ValueError，一项都不改）。"""
+        unknown = sorted(set(values) - set(self.calibration()))
+        if unknown:
+            raise ValueError(f"未知校准项 {unknown}（合法名：{', '.join(self.calibration())}）")
+        self._eye_open_rest = float(values.get("eye_open_rest", self._eye_open_rest))
+        self._mouth_smile_neutral = float(values.get("mouth_smile_neutral", self._mouth_smile_neutral))
+        self._brow_neutral = float(values.get("brow_neutral", self._brow_neutral))
 
     def to_inputs(self, frame: Frame) -> Dict[str, float]:
         """一帧通用通道 → VTS 输入值（未钳制）。"""

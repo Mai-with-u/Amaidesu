@@ -25,7 +25,19 @@ import asyncio
 import random
 import time
 from collections import OrderedDict
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Set, Tuple, runtime_checkable
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Set,
+    Tuple,
+    runtime_checkable,
+)
 
 from src.modules.avatar.lipsync import LipSyncRenderer, MouthSignal
 from src.modules.events.event_bus import EventBus
@@ -44,6 +56,7 @@ from src.modules.utils.time_utils import now_ms as wall_now_ms
 
 from .channels import Frame
 from .config import TrackingConfig
+from .expression import Recipe
 from .gestures import GESTURES, HOLD_EXPRESSION, LOOK_AT_CHAT, LOOK_AT_CHAT_MS
 from .synthesizer import TrackingSynthesizer
 
@@ -61,6 +74,20 @@ class TrackingDriver(Protocol):
     def ready(self) -> bool: ...
 
     async def apply(self, frame: Frame) -> None: ...
+
+
+@runtime_checkable
+class CalibratableDriver(Protocol):
+    """带换算校准项的驱动（比如 VTS 上"正常睁眼"对应哪个输入值）：调校页实时调。
+
+    校准项的键与该平台配置段里的同名字段一一对应，保存时原样写回。
+    """
+
+    name: str
+
+    def calibration(self) -> Dict[str, float]: ...
+
+    def calibrate(self, values: Mapping[str, float]) -> None: ...
 
 
 class _MouthTap(LipSyncRenderer):
@@ -233,9 +260,10 @@ class TrackingRuntime:
         return frame
 
     async def _run_loop(self) -> None:
-        period = 1.0 / self._config.tick_hz
         try:
             while True:
+                # 每拍现读帧率：调校时改了帧率不用重启循环
+                period = 1.0 / self._config.tick_hz
                 started = time.perf_counter()
                 await self.tick_once()
                 await asyncio.sleep(max(0.0, period - (time.perf_counter() - started)))
@@ -356,6 +384,64 @@ class TrackingRuntime:
     @property
     def driver_names(self) -> List[str]:
         return [driver.name for driver in self._drivers]
+
+    # ===== 调校（形象调校页） =====
+
+    @property
+    def config(self) -> TrackingConfig:
+        """当前生效的调参（调校页改过就是改后的值，未必和配置文件一致）。"""
+        return self._config
+
+    def reconfigure(self, config: TrackingConfig) -> None:
+        """换一份调参并立刻生效，不重启、不打断正在进行的表情与心情。"""
+        self._config = config
+        self.synthesizer.reconfigure(config)
+
+    def recipes(self) -> Dict[str, Recipe]:
+        """生效的表情配方（默认 + 人设覆盖）。"""
+        return self.synthesizer.recipes()
+
+    def set_manual(self, values: Frame, hold_ms: int) -> None:
+        """手动摆姿：指定的通道保持这些值 ``hold_ms`` 毫秒（页面在调时不断续期）。"""
+        self.synthesizer.set_manual(values, self._clock() + hold_ms)
+
+    def clear_manual(self) -> None:
+        self.synthesizer.clear_manual()
+
+    def snapshot(self) -> Dict[str, Any]:
+        """此刻的身体状态（调校页实时显示）：最近一帧、主表情、心情、在想 / 在说、手动摆姿与驱动。"""
+        now = self._clock()
+        synthesizer = self.synthesizer
+        valence, arousal = synthesizer.mood(now)
+        return {
+            "frame": synthesizer.last_frame or synthesizer.rest_frame(),
+            "emotion": synthesizer.current_emotion(now),
+            "mood": {"valence": valence, "arousal": arousal},
+            "thinking": synthesizer.thinking,
+            "speaking": synthesizer.speaking,
+            "manual": synthesizer.manual_active(now),
+            "drivers": self.driver_names,
+            "running": self._loop_task is not None,
+        }
+
+    def calibrations(self) -> Dict[str, Dict[str, float]]:
+        """各驱动的换算校准项当前值（驱动名 → 校准项 → 值）；没有校准项的驱动不列。"""
+        return {
+            driver.name: dict(driver.calibration())
+            for driver in self._drivers
+            if isinstance(driver, CalibratableDriver)
+        }
+
+    def calibrate(self, driver_name: str, values: Mapping[str, float]) -> bool:
+        """改某个驱动的校准项并立刻生效；没有这个驱动或它不支持校准时返回 False。
+
+        校准项名字不认识时由驱动抛 ValueError（调用方据此报错）。
+        """
+        for driver in self._drivers:
+            if driver.name == driver_name and isinstance(driver, CalibratableDriver):
+                driver.calibrate(values)
+                return True
+        return False
 
     # ===== 事件 =====
 

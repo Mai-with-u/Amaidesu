@@ -7,11 +7,12 @@ AI 主播背后没有真人做面捕，这里合成一个：每秒若干帧算�
 
 from .channels import CHANNELS, Frame, rest_frame
 from .config import TrackingConfig
-from .runtime import TrackingDriver, TrackingRuntime
+from .runtime import CalibratableDriver, TrackingDriver, TrackingRuntime
 from .synthesizer import TrackingSynthesizer
 
 __all__ = [
     "CHANNELS",
+    "CalibratableDriver",
     "Frame",
     "TrackingConfig",
     "TrackingDriver",

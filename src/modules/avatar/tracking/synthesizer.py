@@ -5,7 +5,7 @@
 
 人设静止姿态 → 心情底色 + 表情偏移 + 脉冲反应 + 思考神情 → 注意力（看哪里）与眼神 → 头部漫步 +
 头部跟随视线 → 眨眼（对眼皮做乘法，能叠在眯眼上）→ 口型（说话时下巴开合归口型，嘴角
-的笑与撇仍归表情）→ 钳制 → 限速。
+的笑与撇仍归表情）→ 手动摆姿（调校时直接指定的通道值，盖过前面所有层）→ 钳制 → 限速。
 
 注意力按优先级决定看哪里：临时瞥一眼（弹幕、礼物）> 说话时看镜头 > 思考（刚来过
 弹幕就先读弹幕，再把视线移开望向别处）> 空闲时看镜头。
@@ -42,7 +42,7 @@ from .channels import (
     rest_frame,
 )
 from .config import TrackingConfig
-from .expression import ExpressionScheduler
+from .expression import ExpressionScheduler, Recipe, build_recipes
 from .mood import Mood
 from .reactions import PulseLayer, SpeechProsody
 
@@ -75,6 +75,7 @@ class TrackingSynthesizer:
             min_dwell_ms=config.expression_min_dwell_ms,
             intensity_floor=config.intensity_floor,
             intensity_gain=config.intensity_gain,
+            recipes=build_recipes(config.recipes),
         )
         self._rest = rest_frame(config.rest_smile)
         self._head_wander_enabled = config.head_wander_enabled
@@ -97,6 +98,52 @@ class TrackingSynthesizer:
         self._last_glance_ms = -(10**12)
         self._think_weight = 0.0
         self._mood = Mood(half_life_ms=config.mood_half_life_ms, gain=config.mood_gain)
+        # 手动摆姿：调校时直接指定的通道值，到期自动失效（页面关了形象也不会卡在某个姿势）
+        self._manual: Frame = {}
+        self._manual_until: Optional[int] = None
+
+    # ===== 调校 =====
+
+    def reconfigure(self, config: TrackingConfig) -> None:
+        """换一份调参并立刻生效（调校页拖滑条）：静止姿态、表情配方与调度、心情、头部微动。
+
+        正在进行的表情、心情值、眼神与眨眼节奏都保留，只是之后按新参数算。
+        """
+        self._config = config
+        self._rest = rest_frame(config.rest_smile)
+        expressions = self._expressions
+        expressions.min_dwell_ms = config.expression_min_dwell_ms
+        expressions.intensity_floor = config.intensity_floor
+        expressions.intensity_gain = config.intensity_gain
+        expressions.set_recipes(build_recipes(config.recipes))
+        self._mood.configure(half_life_ms=config.mood_half_life_ms, gain=config.mood_gain)
+        self._head_wander_enabled = config.head_wander_enabled
+
+    def recipes(self) -> Dict[str, Recipe]:
+        """生效的表情配方（默认 + 人设覆盖）。"""
+        return self._expressions.recipes
+
+    def set_manual(self, values: Frame, until_ms: int) -> None:
+        """手动指定若干通道的值并保持到 ``until_ms``（再次调用即续期；未知通道忽略）。"""
+        self._manual = {name: float(value) for name, value in values.items() if name in self._rest}
+        self._manual_until = until_ms
+
+    def clear_manual(self) -> None:
+        """结束手动摆姿，交还给自动行为（限速让形象平滑地回去）。"""
+        self._manual = {}
+        self._manual_until = None
+
+    def manual_active(self, now_ms: int) -> bool:
+        return self._manual_until is not None and now_ms < self._manual_until
+
+    @property
+    def speaking(self) -> bool:
+        return self._speaking
+
+    @property
+    def last_frame(self) -> Optional[Frame]:
+        """最近一次推进算出的帧（还没推进过时为 None）。"""
+        return dict(self._last) if self._last is not None else None
 
     # ===== 输入 =====
 
@@ -297,6 +344,13 @@ class TrackingSynthesizer:
             target[MOUTH_OPEN] = self._mouth_open if lip_fresh else 0.0
         else:
             target[MOUTH_OPEN] = offsets.get(MOUTH_OPEN, 0.0)
+
+        # 手动摆姿盖过所有自动层（到期即作废，之后按限速平滑回到自动）
+        if self._manual_until is not None:
+            if now_ms < self._manual_until:
+                target.update(self._manual)
+            else:
+                self.clear_manual()
 
         target = clamp_frame(target)
         frame = target if self._last is None else limit_slew(self._last, target, dt_ms)

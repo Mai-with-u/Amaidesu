@@ -10,6 +10,9 @@
 - 换成别的表情前，当前表情至少要停留够最短时长，不够就排队等着；
 - 惊、怕这类强情绪（强度 ≥ 0.6）可以打断；
 - 给定强度先压缩：说话时的表情大多是淡的，满幅留给真正的高潮。
+
+默认配方是通用的；按人设改某个情绪（比如开心时眯成 ^^ 眼）走配置里的配方覆盖，
+由 :func:`build_recipes` 合成生效配方，调校页改完可以不重启直接换上。
 """
 
 from __future__ import annotations
@@ -23,6 +26,8 @@ from .channels import (
     BROW,
     BROW_L,
     BROW_R,
+    CHANNEL_LIMITS,
+    CHANNELS,
     EYE_OPEN,
     EYE_OPEN_L,
     EYE_WIDE,
@@ -102,6 +107,49 @@ RECIPES: Dict[str, Recipe] = {
     "tired": Recipe(STATE, {EYE_OPEN: -0.45, EYE_OPEN_L: -0.05, BROW: -0.3, MOUTH_OPEN: 0.08, HEAD_PITCH: -4.0}, 0.6),
 }
 
+# 配方里能写的键：全部通用通道 + 两个双侧简写；覆盖里另可写头部微动幅度倍数
+RECIPE_KEYS: Tuple[str, ...] = (*CHANNELS, EYE_OPEN, BROW)
+MOTION_KEY = "motion"
+MOTION_RANGE: Tuple[float, float] = (0.0, 3.0)
+
+
+def recipe_key_span(key: str) -> float:
+    """配方里某个键允许的最大偏移量（该通道取值范围的跨度；简写按左侧通道算）。"""
+    channel = {EYE_OPEN: EYE_OPEN_L, BROW: BROW_L}.get(key, key)
+    low, high = CHANNEL_LIMITS[channel]
+    return high - low
+
+
+def check_recipe_overrides(overrides: Mapping[str, Mapping[str, float]]) -> None:
+    """校验配方覆盖：情绪名、键名、取值都要认识，否则抛 ValueError（带合法名单）。"""
+    for emotion, values in overrides.items():
+        if emotion not in RECIPES:
+            raise ValueError(f"未知情绪 '{emotion}'（合法名：{', '.join(RECIPES)}）")
+        for key, value in values.items():
+            if key == MOTION_KEY:
+                if not MOTION_RANGE[0] <= value <= MOTION_RANGE[1]:
+                    raise ValueError(f"{emotion}.{key} = {value} 超出 {MOTION_RANGE[0]}~{MOTION_RANGE[1]}")
+                continue
+            if key not in RECIPE_KEYS:
+                raise ValueError(f"{emotion} 里有未知通道 '{key}'（合法名：{', '.join(RECIPE_KEYS)}、{MOTION_KEY}）")
+            span = recipe_key_span(key)
+            if abs(value) > span:
+                raise ValueError(f"{emotion}.{key} = {value} 超出 ±{span:g}")
+
+
+def build_recipes(overrides: Mapping[str, Mapping[str, float]]) -> Dict[str, Recipe]:
+    """默认配方 + 人设覆盖 → 生效配方。
+
+    写了覆盖的情绪整份替换通道偏移（族与浮现快慢不变，免得改个嘴角连调度都变了）；
+    写了 motion 就换掉头部微动倍数，没写沿用默认。
+    """
+    recipes = dict(RECIPES)
+    for emotion, values in overrides.items():
+        base = RECIPES[emotion]
+        offsets = {key: float(value) for key, value in values.items() if key != MOTION_KEY}
+        recipes[emotion] = Recipe(base.family, offsets, float(values.get(MOTION_KEY, base.motion)))
+    return recipes
+
 
 @dataclass
 class _Layer:
@@ -148,12 +196,31 @@ class ExpressionScheduler:
 
     MAX_LAYERS = 3
 
-    def __init__(self, *, min_dwell_ms: int, intensity_floor: float, intensity_gain: float) -> None:
+    def __init__(
+        self,
+        *,
+        min_dwell_ms: int,
+        intensity_floor: float,
+        intensity_gain: float,
+        recipes: Optional[Mapping[str, Recipe]] = None,
+    ) -> None:
         self.min_dwell_ms = min_dwell_ms
         self.intensity_floor = intensity_floor
         self.intensity_gain = intensity_gain
+        self._recipes: Dict[str, Recipe] = dict(RECIPES if recipes is None else recipes)
         self._layers: List[_Layer] = []
         self._pending: Optional[_Pending] = None
+
+    @property
+    def recipes(self) -> Dict[str, Recipe]:
+        """生效配方（默认 + 人设覆盖）的副本。"""
+        return dict(self._recipes)
+
+    def set_recipes(self, recipes: Mapping[str, Recipe]) -> None:
+        """换一套配方；正在脸上的表情也立刻按新配方算（调校时拖滑条马上看到效果）。"""
+        self._recipes = dict(recipes)
+        for layer in self._layers:
+            layer.recipe = self._recipes.get(layer.emotion, layer.recipe)
 
     def compress(self, intensity: float) -> float:
         """给定强度 → 实际幅度：下限 + 系数 × 强度，封顶 1。"""
@@ -172,7 +239,7 @@ class ExpressionScheduler:
         if top is not None:
             top.release_at_ms = now_ms
             top.release_ms = min(top.release_ms, CROSSFADE_RELEASE_MS)
-        recipe = RECIPES[emotion]
+        recipe = self._recipes[emotion]
         attack_ms, release_ms = FAMILY_TIMING[recipe.family]
         self._layers.append(_Layer(emotion, recipe, level, key, now_ms, attack_ms, release_ms, release_at_ms))
         del self._layers[: max(0, len(self._layers) - self.MAX_LAYERS)]
@@ -192,7 +259,7 @@ class ExpressionScheduler:
                 top.release_at_ms = now_ms
             self._pending = None
             return "released"
-        recipe = RECIPES.get(emotion)
+        recipe = self._recipes.get(emotion)
         if recipe is None:
             return "unknown"
         level = self.compress(intensity)
@@ -251,8 +318,14 @@ class ExpressionScheduler:
 __all__ = [
     "BREAKTHROUGH_INTENSITY",
     "FAMILY_TIMING",
+    "MOTION_KEY",
+    "MOTION_RANGE",
     "NEUTRAL",
     "RECIPES",
+    "RECIPE_KEYS",
     "ExpressionScheduler",
     "Recipe",
+    "build_recipes",
+    "check_recipe_overrides",
+    "recipe_key_span",
 ]

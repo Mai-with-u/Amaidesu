@@ -59,6 +59,11 @@ class Mood:
         self.arousal = 0.0
         self._at_ms: Optional[int] = None
 
+    def configure(self, *, half_life_ms: int, gain: float) -> None:
+        """换回落半衰期与累积系数（调校时实时改），已有的心情值保留。"""
+        self._half_life_ms = max(1, half_life_ms)
+        self._gain = gain
+
     def decay_to(self, now_ms: int) -> None:
         """按半衰期把心情往基线回收到 ``now_ms`` 时刻。"""
         if self._at_ms is not None and now_ms > self._at_ms:

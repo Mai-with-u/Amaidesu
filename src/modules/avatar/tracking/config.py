@@ -6,9 +6,13 @@
 
 from __future__ import annotations
 
-from pydantic import Field
+from typing import Dict
+
+from pydantic import Field, field_validator
 
 from src.modules.config.schemas.base import BaseConfig
+
+from .expression import check_recipe_overrides
 
 
 class TrackingConfig(BaseConfig):
@@ -188,6 +192,22 @@ class TrackingConfig(BaseConfig):
         description="没开 TTS 时按字数估算一句话说多久（毫秒/字），表情据此保持",
         json_schema_extra={"x-ui-advanced": True},
     )
+    recipes: Dict[str, Dict[str, float]] = Field(
+        title="表情配方覆盖",
+        default_factory=dict,
+        description=(
+            "按人设改某个情绪的表演配方：写了哪个情绪，就整份替换它满强度时各通道的偏移"
+            "（浮现快慢不变），motion 是头部微动幅度倍数；没写的情绪用默认配方。"
+            "一般在形象调校页里看着效果调好再保存，不用手写"
+        ),
+        json_schema_extra={"x-ui-type": "object", "x-ui-advanced": True},
+    )
+
+    @field_validator("recipes")
+    @classmethod
+    def _check_recipes(cls, value: Dict[str, Dict[str, float]]) -> Dict[str, Dict[str, float]]:
+        check_recipe_overrides(value)
+        return value
 
 
 __all__ = ["TrackingConfig"]

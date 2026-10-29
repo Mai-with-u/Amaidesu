@@ -1,4 +1,4 @@
-"""VTS 面捕驱动：通用通道换算成 VTS 输入、按范围钳制、调试覆盖、就绪判定"""
+"""VTS 面捕驱动：通用通道换算成 VTS 输入、按范围钳制、调试覆盖、就绪判定、校准项实时调"""
 
 from __future__ import annotations
 
@@ -77,3 +77,14 @@ def test_ready_needs_active_driver_and_open_client(fake_clock: FakeClock) -> Non
     assert driver.ready()
     driver.set_active(False)
     assert not driver.ready()
+
+
+def test_calibration_changes_neutral_mapping_live(fake_clock: FakeClock) -> None:
+    driver = _driver(RecordingVtsClient(), fake_clock)
+    assert driver.calibration() == {"eye_open_rest": 0.55, "mouth_smile_neutral": 0.5, "brow_neutral": 0.5}
+    driver.calibrate({"eye_open_rest": 0.7, "mouth_smile_neutral": 0.6})
+    inputs = driver.to_inputs(rest_frame())
+    assert inputs["EyeOpenLeft"] == pytest.approx(0.7) and inputs["MouthSmile"] == pytest.approx(0.6)
+    with pytest.raises(ValueError):
+        driver.calibrate({"eye_open_rest": 0.5, "nose": 1.0})
+    assert driver.calibration()["eye_open_rest"] == 0.7  # 有不认识的键时整批不改
