@@ -1,6 +1,6 @@
 """SessionRecapRepo（场次回顾仓储）单元测试
 
-覆盖：upsert / get / 空文本拒写 / 最近几场倒序与排除本场 / 已结束无回顾的场次清单 / 删除。
+覆盖：upsert / get / 空文本拒写 / 最近几场倒序与排除本场 / 没整理完的场次清单与整理进度标记 / 删除。
 """
 
 from __future__ import annotations
@@ -68,19 +68,40 @@ async def test_list_recent_orders_by_start_and_excludes_current(store: SQLiteDat
 
 
 @pytest.mark.asyncio
-async def test_ended_sessions_without_recap(store: SQLiteDatabase) -> None:
-    """已结账且无回顾的场次按结束时刻倒序列出；进行中与已有回顾的不列。"""
-    done_old = await _session(store, started=1_000, ended=2_000)
-    done_new = await _session(store, started=3_000, ended=4_000)
+async def test_unsettled_sessions_cover_missing_recap_and_interrupted_settle(store: SQLiteDatabase) -> None:
+    """没整理完 = 没有回顾，或有回顾但没记完成；按结束时刻倒序、限量，进行中与已整理完的不列。"""
+    repo = store.recaps
+    no_recap = await _session(store, started=1_000, ended=2_000)
+    interrupted = await _session(store, started=3_000, ended=4_000)
     await _session(store, started=5_000, ended=None)  # 进行中
-    recapped = await _session(store, started=6_000, ended=7_000)
-    await store.recaps.upsert_recap(live_session_id=recapped, started_at_ms=6_000, ended_at_ms=7_000, recap_text="有了")
+    settled = await _session(store, started=6_000, ended=7_000)
+    for pk in (interrupted, settled):
+        await repo.upsert_recap(live_session_id=pk, started_at_ms=1, ended_at_ms=2, recap_text="有了")
+    assert await repo.mark_settled(live_session_id=settled)
 
-    rows = await store.recaps.list_ended_sessions_without_recap(limit=5)
-    assert [r.live_session_id for r in rows] == [done_new, done_old]
+    rows = await repo.list_unsettled_sessions(limit=5)
+    assert [r.live_session_id for r in rows] == [interrupted, no_recap]
+    rows = await repo.list_unsettled_sessions(limit=1)
+    assert [r.live_session_id for r in rows] == [interrupted]
 
-    rows = await store.recaps.list_ended_sessions_without_recap(limit=1)
-    assert [r.live_session_id for r in rows] == [done_new]
+
+@pytest.mark.asyncio
+async def test_progress_marks_need_recap_row_and_survive_rewrite(store: SQLiteDatabase) -> None:
+    """进度标记只记在回顾行上（没回顾记不上）；回顾覆盖写不清掉已记的进度。"""
+    repo = store.recaps
+    assert await repo.mark_long_memory_merged(live_session_id=5) is False
+    assert await repo.mark_settled(live_session_id=5) is False
+
+    await repo.upsert_recap(live_session_id=5, started_at_ms=1, ended_at_ms=2, recap_text="第一版")
+    fresh = await repo.get_recap(live_session_id=5)
+    assert fresh is not None and fresh.long_memory_merged_at_ms is None and fresh.settled_at_ms is None
+
+    assert await repo.mark_long_memory_merged(live_session_id=5)
+    assert await repo.mark_settled(live_session_id=5)
+    await repo.upsert_recap(live_session_id=5, started_at_ms=1, ended_at_ms=3, recap_text="第二版")
+    row = await repo.get_recap(live_session_id=5)
+    assert row is not None and row.recap_text == "第二版"
+    assert row.long_memory_merged_at_ms is not None and row.settled_at_ms is not None
 
 
 @pytest.mark.asyncio

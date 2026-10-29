@@ -13,10 +13,10 @@
 --------
 
 ``SessionRecap`` —— ``session_recaps`` 一行：每场直播一份收播总结，
-以 ``live_session_id`` 唯一定位。
+以 ``live_session_id`` 唯一定位；顺带记收播整理进度（长期记忆合并、整理完成）。
 
-``EndedSessionWithoutRecap`` —— 已结束却没有回顾的场次（启动补写的待办行），
-来自 ``live_sessions`` LEFT JOIN ``session_recaps`` 的缺席侧，无回顾内容。
+``UnsettledSession`` —— 已结束却没整理完的场次（启动补写的待办行）：没有回顾，
+或有回顾但整理进度未记完成；来自 ``live_sessions`` LEFT JOIN ``session_recaps``。
 
 ``ViewerProfile`` —— ``viewer_profiles`` JOIN ``viewers`` 的画像行：印象文本
 （``viewer_profiles``）带上观众的平台与当前昵称（``viewers``，昵称随改名
@@ -38,7 +38,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "SessionRecap",
-    "EndedSessionWithoutRecap",
+    "UnsettledSession",
     "ViewerProfile",
     "ViewerName",
     "Viewer",
@@ -55,10 +55,16 @@ class SessionRecap(BaseModel):
     ended_at_ms: int = Field(..., description="该场收播时刻（Unix epoch 毫秒）")
     recap_text: str = Field(..., description="收播总结正文（LLM 生成）")
     created_at_ms: int = Field(..., description="总结写入时刻（Unix epoch 毫秒，覆盖写时刷新）")
+    long_memory_merged_at_ms: Optional[int] = Field(
+        default=None, description="本场合并进长期记忆的时刻（Unix epoch 毫秒；空 = 还没并）"
+    )
+    settled_at_ms: Optional[int] = Field(
+        default=None, description="收播整理三步都走完的时刻（Unix epoch 毫秒；空 = 整理没做完）"
+    )
 
 
-class EndedSessionWithoutRecap(BaseModel):
-    """已结束却没有回顾的场次（启动补写待办行；无回顾内容）。"""
+class UnsettledSession(BaseModel):
+    """已结束却没整理完的场次（启动补写待办行；回顾可能已有也可能没有）。"""
 
     model_config = ConfigDict(extra="forbid")
 

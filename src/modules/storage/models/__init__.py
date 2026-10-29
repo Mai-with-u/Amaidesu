@@ -18,8 +18,8 @@ from src.modules.storage.models.chat import (
 )
 from src.modules.storage.models.events import GameEventRecord, GameEventTypeCount
 from src.modules.storage.models.memory import (
-    EndedSessionWithoutRecap,
     SessionRecap,
+    UnsettledSession,
     Viewer,
     ViewerName,
     ViewerProfile,
@@ -52,8 +52,8 @@ __all__ = [
     "GameEventRecord",
     "GameEventTypeCount",
     # memory 域
-    "EndedSessionWithoutRecap",
     "SessionRecap",
+    "UnsettledSession",
     "Viewer",
     "ViewerName",
     "ViewerProfile",

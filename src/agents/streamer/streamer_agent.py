@@ -261,8 +261,8 @@ class StreamerAgent(BaseAgent):
         self._event_repo = event_repo
         self._logger = get_logger("StreamerAgent")
         # 主播记忆整理的后台任务（启动补写回顾、收播整理），强引用防 GC 中途回收。
-        # 每个都含好几次 LLM 调用、可能跑几十秒，停止时直接取消不等：没写成的
-        # 回顾由下次启动的补写善后（流程单落库这类短写入归协调器，停止时等它做完）
+        # 每个都含好几次 LLM 调用、可能跑几十秒，停止时直接取消不等：没做完的
+        # 整理由下次启动的补写补完（流程单落库这类短写入归协调器，停止时等它做完）
         self._memory_tasks: set[asyncio.Task[Any]] = set()
 
         # ===== 内部子组件 =====
@@ -594,8 +594,8 @@ class StreamerAgent(BaseAgent):
         if self.typed_config.background.enabled:
             await self._background.start()
 
-        # 收播整理善后：上次进程退出时没来得及写的回顾，启动后在后台补写一场、
-        # 顺带补跑该场的观众画像更新，补完再把"上场回顾"段读出来（开播前就能用）
+        # 收播整理善后：上次退出时没整理完的场次（没写回顾，或回顾写完后整理被打断），
+        # 启动后在后台补完一场，补完再把长期记忆与"上场回顾"段读出来（开播前就能用）
         if self._recap_writer is not None:
             spawn_background_task(
                 self._bootstrap_recaps(),
@@ -659,7 +659,7 @@ class StreamerAgent(BaseAgent):
     async def _cancel_memory_tasks(self) -> None:
         """取消在跑的记忆整理任务并等它们退出。
 
-        取消落在 LLM 调用上时这一场还没写回顾，下次启动的补写会补上；
+        被取消的整理没记完成，下次启动的补写从头再走一遍，已做完的步骤各自跳过；
         已交给线程池的单条写库无法中途打断，由它在自己的线程里写完。
         """
         cancelled = 0
@@ -671,7 +671,7 @@ class StreamerAgent(BaseAgent):
             # 任务完成先经回调移出集合，gather 返回时已退出的任务必已出集合
             await asyncio.gather(*tasks, return_exceptions=True)
         if cancelled:
-            self._logger.info(f"停止时取消了 {cancelled} 个记忆整理任务（没写成的回顾下次启动补写）")
+            self._logger.info(f"停止时取消了 {cancelled} 个记忆整理任务（没做完的整理下次启动补完）")
 
     def _delegation_machine_status(self, task_id: str) -> Optional[Dict[str, Any]]:
         """委派任务在任务账本里的机器状态（planner 委派渲染的保底事实源，只读查询）。
@@ -1006,36 +1006,29 @@ class StreamerAgent(BaseAgent):
             self._logger.info(f"长期记忆已装入（{len(text)} 字）")
 
     async def _bootstrap_recaps(self) -> None:
-        """启动善后：补写上次退出时漏掉的回顾（最多一场）并补跑该场长期记忆整理与画像更新，
-        再装入长期记忆与上场回顾段。
+        """启动善后：补完上次退出时没整理完的场次（最多一场），再装入长期记忆与上场回顾段。
 
-        画像只取上次整理之后的新话，即使上次其实已经更新过也不会重复调用模型。
+        没整理完 = 收播钩子没跑到（没有回顾），或回顾写完后整理被停止打断。补完走与收播
+        同一条整理，已做完的步骤各自跳过，不会重复调用模型。
         """
         assert self._recap_writer is not None  # noqa: S101 调用方已 guard
-        written = await self._recap_writer.backfill_missing(limit=1)
-        if written:
-            self._logger.info(f"启动补写了场次回顾：{written}")
-        if self._long_memory_writer is not None:
-            for live_session_id in written:
-                try:
-                    await self._long_memory_writer.consolidate(live_session_id)
-                except Exception as exc:
-                    self._logger.warning(f"启动补跑长期记忆整理失败（场次 {live_session_id}）: {exc}")
-        if self._roster_writer is not None:
-            for live_session_id in written:
-                try:
-                    await self._roster_writer.update_for_session(live_session_id)
-                except Exception as exc:
-                    self._logger.warning(f"启动补跑观众画像失败（场次 {live_session_id}）: {exc}")
+        for live_session_id in await self._recap_writer.list_unsettled(limit=1):
+            self._logger.info(f"启动补完场次 {live_session_id} 的收播整理")
+            await self._settle_session(live_session_id)
         await self._refresh_long_memory_section()
         await self._refresh_recap_section()
 
     async def _settle_session(self, live_session_id: int) -> None:
-        """收播整理：回顾 → 长期记忆 → 观众画像。逐项降级，一项失败不影响其余；
-        长期记忆以本场回顾为原料，必须排在回顾之后。"""
+        """收播整理：回顾 → 长期记忆 → 观众画像 → 记整理完成；收播钩子与启动补写共用。
+
+        逐项降级，一项失败不影响其余；长期记忆以本场回顾为原料，必须排在回顾之后。
+        三步都走完才记完成，中途被停止取消的场次留在待办里，下次启动再走一遍：
+        回顾已有不重写，长期记忆已合并不再并，画像只取上次整理之后的新话。
+        本场没写成回顾时完成记不上，下次启动再试回顾。
+        """
         if self._recap_writer is not None:
             try:
-                await self._recap_writer.write_recap(live_session_id)
+                await self._recap_writer.ensure_recap(live_session_id)
             except Exception as exc:
                 self._logger.warning(f"收播写回顾失败（场次 {live_session_id}）: {exc}")
         if self._long_memory_writer is not None:
@@ -1048,6 +1041,11 @@ class StreamerAgent(BaseAgent):
                 await self._roster_writer.update_for_session(live_session_id)
             except Exception as exc:
                 self._logger.warning(f"收播更新观众画像失败（场次 {live_session_id}）: {exc}")
+        if self._recap_writer is not None:
+            try:
+                await self._recap_writer.mark_settled(live_session_id)
+            except Exception as exc:
+                self._logger.warning(f"记收播整理完成失败（场次 {live_session_id}，下次启动重走）: {exc}", exc=True)
 
     async def _on_game_event(
         self,

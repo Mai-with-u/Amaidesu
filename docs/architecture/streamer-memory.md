@@ -37,13 +37,13 @@ flowchart LR
     SR & VP --> TOOLS[memory_recall_session<br/>memory_recall_viewer]
 ```
 
-生成、注入与工具逻辑在 `src/agents/streamer/memory/`；两张表的仓储 `SessionRecapRepo` / `ViewerProfileRepo` 在 `src/modules/storage/repos/`，长期记忆文件存储 `LongMemoryStore` 在 `src/modules/storage/long_memory.py`。收播整理的顺序是回顾 → 长期记忆 → 画像。
+生成、注入与工具逻辑在 `src/agents/streamer/memory/`；两张表的仓储 `SessionRecapRepo` / `ViewerProfileRepo` 在 `src/modules/storage/repos/`，长期记忆文件存储 `LongMemoryStore` 在 `src/modules/storage/long_memory.py`。收播整理的顺序是回顾 → 长期记忆 → 画像，三步都走完才在回顾行记整理完成（`settled_at_ms`）。停止 Agent 或进程退出打断的整理，下次启动从断点补完：回顾已有不重写，长期记忆按回顾行的合并时刻（`long_memory_merged_at_ms`）每场只并一次，画像只取上次整理之后的新话。
 
 ## 场次回顾
 
 | 环节 | 规则 |
 |---|---|
-| 写入时机 | `live.ended` 后后台写本场；空场次（无明细行、场次行已删）不写。启动时补写最近一场"已结账却无回顾"的场次，并顺带补跑该场的观众画像更新（进程退出时收播整理没跑完的善后） |
+| 写入时机 | `live.ended` 后后台写本场；空场次（无明细行、场次行已删）不写。启动时补完最近一场"已结账却没整理完"的场次（没有回顾，或回顾写完后整理被打断），缺的回顾、长期记忆合并、观众画像更新一并补上 |
 | 原料 | 按场次主键取：主播自己说过的话（`live_chat` 的 assistant 行）、话题摘要轨迹（`timeline_summary`，相邻重复去重）、游戏里程碑（`game_events`）、本场弹幕最多的观众与付费三表。各类各自封顶，整体超限从尾部截断 |
 | 生成 | summary 档位，提示词 `session_recap_system`；以主播第一人称写这场做了什么、答应过谁什么、聊过的梗、谁来得多；超长按 `recap_max_length` 截断 |
 | 注入 | `live.started` 时读出最近 `recap_inject_count` 场**同类型**场次（排除本场；类型取开播事件里的场次类型），渲染为"【日期 的直播，时长】正文"，作为参考段**最前面**的"上场回顾-内部参考"整场固定 |
@@ -54,7 +54,7 @@ flowchart LR
 | 环节 | 规则 |
 |---|---|
 | 文件 | 数据库同目录 `memory/MEMORY.md`（正式）、`memory/MEMORY.rehearsal.md`（彩排）；纯文本 UTF-8，人可直接用编辑器改 |
-| 写入时机 | 收播整理里排在场次回顾之后；本场没写成回顾就不动；启动补写回顾的场次同样补一次。直播进行中不写，现场的结论记在本场备忘录 |
+| 写入时机 | 收播整理里排在场次回顾之后；本场没写成回顾就不动；启动补完整理的场次同样补一次，已合并过的场次不再合并。直播进行中不写，现场的结论记在本场备忘录 |
 | 原料 | 旧笔记 + 本场回顾 + 本场备忘录全文快照 |
 | 生成 | summary 档位，提示词 `long_memory_system`；按节组织：答应过的事（标兑现状态）/ 老梗与口头禅 / 长线目标 / 关于我自己 |
 | 上限 | `long_memory_max_chars`；超出让模型压缩一次，仍超出保留旧版本不写，不截断 |

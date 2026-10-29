@@ -1,8 +1,9 @@
 """场次回顾：收播时把一场直播总结成主播下次开播还记得的一段话。
 
-触发：``live.ended``（主播 Agent 收播钩子）；进程异常退出没跑到钩子的场次，
-下次启动时经 ``backfill_missing`` 补写（只看已结账且无回顾的场次）。
-两条路径共用同一份原料与同一次 LLM 调用，原料全部来自库表，不依赖进程内状态。
+触发：``live.ended``（主播 Agent 收播钩子）；进程异常退出没跑到钩子、或停止
+Agent 时整理被打断的场次，下次启动时按 ``list_unsettled`` 的待办补完（回顾已在库里
+就不重写，经 ``ensure_recap``）。两条路径共用同一份原料与同一次 LLM 调用，原料全部
+来自库表，不依赖进程内状态。
 
 原料（全部按场次主键取，各自封顶控制 prompt 体量；备忘录是唯一例外——
 进程内会话状态，收播时由主播 Agent 先取走全文快照再清空，经只读回调递入）：
@@ -181,25 +182,31 @@ class SessionRecapWriter:
         except Exception as exc:  # noqa: BLE001 - 通知失败不推翻已落库的回顾
             logger.warning(f"streamer.recap.written 发布失败（场次 {live_session_id}，已忽略）: {exc}")
 
-    async def backfill_missing(self, *, limit: int = 1) -> List[int]:
-        """补写最近 ``limit`` 场"已结束却没有回顾"的场次（进程异常退出的善后），返回补写成功的场次主键。
+    async def ensure_recap(self, live_session_id: int) -> bool:
+        """保证这一场有回顾：库里已有就直接用（不调模型、不再发通知），没有才写；返回本场是否有回顾。
 
-        调用方拿到主键后可顺带补跑观众画像——收播整理没跑到回顾，画像多半也没跑到。
+        启动补写的场次可能在回顾写完后才被打断，重写既浪费一次调用，也会让下游再收一次通知。
+        """
+        if await self._recaps.get_recap(live_session_id=int(live_session_id)) is not None:
+            logger.debug(f"场次 {live_session_id} 已有回顾，不重写")
+            return True
+        return await self.write_recap(live_session_id) is not None
+
+    async def list_unsettled(self, *, limit: int = 1) -> List[int]:
+        """最近 ``limit`` 场"已结束却没整理完"的场次主键（结束时刻倒序），启动补写按它补完收播整理。
+
+        没整理完包括没有回顾的，和回顾写完后整理被打断的；查询失败按没有待办处理。
         """
         try:
-            pending = await self._recaps.list_ended_sessions_without_recap(limit=limit)
+            pending = await self._recaps.list_unsettled_sessions(limit=limit)
         except Exception as exc:
-            logger.warning(f"查询待补写场次失败: {exc}")
+            logger.warning(f"查询待补完整理的场次失败: {exc}", exc=True)
             return []
-        written: List[int] = []
-        for row in pending:
-            live_session_id = row.live_session_id
-            try:
-                if await self.write_recap(live_session_id):
-                    written.append(live_session_id)
-            except Exception as exc:
-                logger.warning(f"补写场次回顾失败（场次 {live_session_id}）: {exc}")
-        return written
+        return [row.live_session_id for row in pending]
+
+    async def mark_settled(self, live_session_id: int) -> bool:
+        """记下这一场的收播整理已走完；本场没有回顾时记不上（返回 False），留给下次启动再试回顾。"""
+        return await self._recaps.mark_settled(live_session_id=int(live_session_id))
 
     # ------------------------------------------------------------------
     # 读取（注入段）

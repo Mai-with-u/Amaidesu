@@ -8,7 +8,9 @@
 时机与原料：
 
 - 收播整理里排在场次回顾之后——原料是旧笔记 + 本场回顾 + 本场备忘录全文快照；
-  本场没写成回顾（空场次、模型失败）就不动长期记忆。启动补写回顾的场次同样补一次。
+  本场没写成回顾（空场次、模型失败）就不动长期记忆。启动补写的场次同样补一次。
+- 每场只合并一次：合并成功后在回顾行记下合并时刻，已记的场次不再合并。整理被
+  打断后由启动补写重跑时，同一份回顾不会在长期笔记里并两遍。
 - 直播进行中不写：现场要记的结论由本场备忘录承担，收播时再沉淀进来。
 
 上限的处理：模型输出超过上限时让它压缩一次；仍超出就保留旧版本不写——宁可这一场
@@ -74,8 +76,8 @@ class LongMemoryWriter:
     async def consolidate(self, live_session_id: int) -> Optional[str]:
         """把一场已写好回顾的直播合并进同类型的长期记忆，返回新全文；没有可合并的或失败时返回 None。
 
-        流程：读场次行（取类型）→ 读本场回顾（没有就不动）→ 读旧笔记与备忘录快照 →
-        LLM 合并 → 超上限压缩一次 → 写回。
+        流程：读场次行（取类型）→ 读本场回顾（没有或已合并过就不动）→ 读旧笔记与备忘录快照 →
+        LLM 合并 → 超上限压缩一次 → 写回 → 记合并时刻。
         """
         session_row = await self._sessions.get_live_session(live_session_id=int(live_session_id))
         if session_row is None:
@@ -84,6 +86,9 @@ class LongMemoryWriter:
         recap = await self._recaps.get_recap(live_session_id=int(live_session_id))
         if recap is None or not recap.recap_text.strip():
             logger.info(f"场次 {live_session_id} 没有回顾，长期记忆不动")
+            return None
+        if recap.long_memory_merged_at_ms is not None:
+            logger.info(f"场次 {live_session_id} 已合并进长期记忆，不重复合并")
             return None
         kind: SessionKind = session_row.kind
         old_text = await self.read(kind)
@@ -104,10 +109,13 @@ class LongMemoryWriter:
                 return None
         if text == old_text:
             logger.info(f"长期记忆无变化（场次 {live_session_id}）")
-            return text
-        saved = await self._store.write(kind, text)
-        logger.info(f"长期记忆已合并场次 {live_session_id}（{kind}，{len(saved)} 字）")
-        return saved
+        else:
+            text = await self._store.write(kind, text)
+            logger.info(f"长期记忆已合并场次 {live_session_id}（{kind}，{len(text)} 字）")
+        # 文件写完紧接着记合并时刻。停止时的取消若恰好落在这两步之间（文件已替换、
+        # 标记未落库），下次启动会把这场再并一次：重复的是同一份回顾，比漏并代价小
+        await self._recaps.mark_long_memory_merged(live_session_id=int(live_session_id))
+        return text
 
     # ------------------------------------------------------------------
     # 内部

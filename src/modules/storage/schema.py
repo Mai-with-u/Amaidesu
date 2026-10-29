@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 19
+SCHEMA_VERSION: int = 20
 
 
 # =============================================================================
@@ -389,15 +389,21 @@ CREATE TABLE IF NOT EXISTS viewer_profiles (
 # --- session_recaps —— 场次回顾 ---
 # 每场直播一份收播总结（主播做了什么、答应过什么、聊了什么梗、谁来得多）。
 # 下一场开播时注入"上场回顾"，主播才不会每次开播都失忆。
+# 收播整理按 回顾 → 长期记忆 → 观众画像 顺序跑，回顾行顺带记整理进度：
+# ``long_memory_merged_at_ms`` 非空 = 本场已并进长期记忆（每场只并一次）；
+# ``settled_at_ms`` 非空 = 三步都走完了。停止或崩溃打断的整理两列留空，
+# 下次启动据此补完后续步骤。
 
 _SESSION_RECAPS_SQL = """
 CREATE TABLE IF NOT EXISTS session_recaps (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id  INTEGER NOT NULL UNIQUE,
-    started_at_ms    INTEGER NOT NULL,
-    ended_at_ms      INTEGER NOT NULL,
-    recap_text       TEXT NOT NULL,
-    created_at_ms    INTEGER NOT NULL
+    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id           INTEGER NOT NULL UNIQUE,
+    started_at_ms             INTEGER NOT NULL,
+    ended_at_ms               INTEGER NOT NULL,
+    recap_text                TEXT NOT NULL,
+    created_at_ms             INTEGER NOT NULL,
+    long_memory_merged_at_ms  INTEGER,
+    settled_at_ms             INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_session_recaps_started ON session_recaps(started_at_ms);
 """.strip()
