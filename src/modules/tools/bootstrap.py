@@ -91,6 +91,9 @@ def _register_fn_loader(binding: ToolProviderBinding) -> Callable[[], Callable[.
     return load
 
 
+# 装配报告里表示"装配失败"的值（与"装配成功但 0 个工具"区分开）
+FAILED = -1
+
 # 工具分类成员表：从组件目录单一源表派生（条目顺序即装配顺序）。
 # 分类段缺失或 enabled=false 时不装配（开关控制权归属人类：配置 + Web UI）。
 _DOMAIN_MEMBERS: List[_EntrySpec] = [
@@ -185,8 +188,9 @@ def bind_core_tools(
 
     Returns:
         ``{member_key: new_tool_count}`` 报告，只含**实际尝试装配**的成员
-        （未启用的成员不进报告，由 INFO 日志记"跳过"）；报告内 ``count=0``
-        即尝试装配但失败。
+        （未启用的成员不进报告，由 INFO 日志记"跳过"）；``-1`` 是装配失败
+        （加载或注册抛了异常），``0`` 是装配成功但此刻没有工具（连接型提供者
+        连上后才补登记，已移植到面捕合成器的形象平台则不向 LLM 暴露工具）。
     """
     if not isinstance(registry, ToolRegistry):
         raise TypeError(f"bind_core_tools: registry 必须是 ToolRegistry 实例，得到 {type(registry).__name__}")
@@ -216,7 +220,7 @@ def bind_core_tools(
                 f"bind_core_tools: 加载 '{key}' 的 register 函数失败（{description}）",
                 exc=True,
             )
-            report[key] = 0
+            report[key] = FAILED
             continue
 
         # 面捕合成器只有 avatar 平台用得上，其他分类的注册函数不必认这个参数
@@ -235,13 +239,17 @@ def bind_core_tools(
                 f"bind_core_tools: 绑定 '{key}' 失败（{description}）: {type(exc).__name__}: {exc}",
                 exc=True,
             )
-            report[key] = 0
+            report[key] = FAILED
             continue
 
         new_count = len(registry) - before_count
         report[key] = new_count
         if new_count > 0:
             logger.info(f"bind_core_tools: '{key}' 已绑定，新增 {new_count} 个工具（{description}）")
+        elif domain == "avatar":
+            # 形象平台都是连接型：连上后才登记工具；已移植到面捕合成器的（VTS）按设计不向 LLM 暴露工具，
+            # 形象动作统一走 avatar_act。0 工具是正常状态，不报警
+            logger.info(f"bind_core_tools: '{key}' 已装配，当前 0 个工具（{description}）")
         else:
             # 连接型 Provider（VTS 等）装配期未连接 → 降级登记 0 工具属预期；
             # 静态 Provider 0 工具仍是异常信号，保留 warning 提示排查
@@ -257,6 +265,7 @@ CORE_MEMBER_COUNT = len(_DOMAIN_MEMBERS)
 
 __all__ = [
     "CORE_MEMBER_COUNT",
+    "FAILED",
     "bind_core_tools",
     "_DOMAIN_MEMBERS",
 ]

@@ -7,7 +7,7 @@ import inspect
 import pytest
 
 from src.modules.tools import ToolRegistry
-from src.modules.tools.bootstrap import bind_core_tools
+from src.modules.tools.bootstrap import FAILED, bind_core_tools
 from src.modules.tools.operations import ToolOperations
 
 
@@ -37,6 +37,13 @@ def test_avatar_vts_is_registered_degraded_only_when_enabled() -> None:
     registry = ToolRegistry()
     bind_core_tools(registry, config={}, avatar_platform={"enabled": [], "vts": {"vts_port": 8001}})
     assert not [c for c in _ops(registry).list_providers() if c["name"] == "vts"]  # 不在启用名单不装配
+
+
+def test_failed_member_is_reported_apart_from_zero_tools() -> None:
+    registry = ToolRegistry()
+    # 端口不是数字：VTS 配置校验在注册时就失败
+    report = bind_core_tools(registry, config={}, avatar_platform={"enabled": ["vts"], "vts": {"vts_port": "abc"}})
+    assert report == {"vts": FAILED}
 
 
 def test_studio_obs_enabled_registers_obs_tools() -> None:

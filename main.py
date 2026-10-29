@@ -728,16 +728,17 @@ async def create_app_components(
             subtitle_service=subtitle_service,
             avatar_tracking=avatar_tracking,
         )
-        from src.modules.tools.bootstrap import CORE_MEMBER_COUNT
+        from src.modules.tools.bootstrap import CORE_MEMBER_COUNT, FAILED
 
-        core_succeeded = sum(1 for c in core_report.values() if c > 0)
-        core_failed = [name for name, count in core_report.items() if count == 0]
+        # 装配成功不看工具数：连接型提供者装配期 0 工具、VTS 按设计不暴露工具，都算成功
+        core_succeeded = sum(1 for c in core_report.values() if c != FAILED)
+        core_failed = [name for name, count in core_report.items() if count == FAILED]
         core_skipped = CORE_MEMBER_COUNT - len(core_report)
         skipped_note = f"，跳过（未配置）{core_skipped} 个" if core_skipped else ""
         failed_note = f"，失败包: {core_failed}" if core_failed else ""
         logger.info(
             f"核心工具包已绑定: 成功 {core_succeeded}/{len(core_report)}（尝试装配数）"
-            f"{skipped_note}，合计新增 {sum(core_report.values())} 个工具" + failed_note
+            f"{skipped_note}，合计新增 {sum(max(c, 0) for c in core_report.values())} 个工具" + failed_note
         )
 
         # --- 形象动作工具（avatar_act：主播有意发起身体动作的唯一入口，委托面捕合成器）---
