@@ -208,18 +208,21 @@ def test_console_collector_metadata_and_defaults() -> None:
 
 
 async def test_console_stdin_line_becomes_a_danmaku_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    """普通输入与不是控制台调试命令的 /xxx 都当弹幕发出（后者交给主播的观众命令接线）。"""
     monkeypatch.setattr(console_mod, "_stdin_interactive", lambda: True)
-    lines = iter(["你好测试", ""])
+    lines = iter(["你好测试", "/come", ""])
     monkeypatch.setattr(sys.stdin, "readline", lambda: next(lines), raising=False)
     bus = _FakeBus()
     collector = ConsoleInputCollector(config={}, event_bus=bus)
 
     await collector.start()
-    await _until(lambda: bus.events)
+    await _until(lambda: len(bus.events) == 2)
     await collector.stop()
 
-    event_name, payload = bus.events[0]
-    assert (event_name, payload.content, payload.user.name) == ("room.message.danmaku", "你好测试", "控制台")
+    assert [(name, payload.content, payload.user.name) for name, payload in bus.events] == [
+        ("room.message.danmaku", "你好测试", "控制台"),
+        ("room.message.danmaku", "/come", "控制台"),
+    ]
 
 
 @pytest.mark.parametrize("interactive", [False, True])

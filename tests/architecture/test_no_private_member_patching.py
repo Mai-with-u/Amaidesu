@@ -43,8 +43,8 @@ ALLOWED_PRIVATE_PATCHES: dict[str, str] = {
     # modules/collectors/test_collector_framework.py：stdin 交互检测私有判定
     # （collectors 域另有会话占用，待协调后修接缝）
     "modules/collectors/test_collector_framework.py:191": "console_mod._stdin_interactive",
-    "modules/collectors/test_collector_framework.py:211": "console_mod._stdin_interactive",
-    "modules/collectors/test_collector_framework.py:230": "console_mod._stdin_interactive",
+    "modules/collectors/test_collector_framework.py:212": "console_mod._stdin_interactive",
+    "modules/collectors/test_collector_framework.py:233": "console_mod._stdin_interactive",
     # modules/tts/test_engine_contract.py：voicebox 私有四步生成流程
     # （voicebox 生产包未获清理授权，edge 侧已改公有 synthesize 接缝）
     "modules/tts/test_engine_contract.py:84": "provider._create_generation",

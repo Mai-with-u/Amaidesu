@@ -132,6 +132,7 @@ class ConsoleInputCollector(BaseCollector):
         - /gift [用户名] [礼物名] [数量]: 发送礼物消息
         - /sc [用户名] [内容]: 发送醒目留言
         - /guard [用户名] [等级]: 发送大航海消息
+        - 其他 /xxx：当作一条观众弹幕原样发出，交给主播的观众命令接线判断
 
         Yields:
             RoomMessagePayload: 直播间行为流事件载荷
@@ -163,13 +164,7 @@ class ConsoleInputCollector(BaseCollector):
                         await self.publish_room_message(message)
                         yield message
                 else:
-                    message = RoomMessagePayload(
-                        message_type="danmaku",
-                        platform=_PLATFORM,
-                        user=RoomMessageUser(id=self.user_id, name=self.user_nickname),
-                        content=text,
-                        timestamp_ms=now_ms(),
-                    )
+                    message = self._danmaku(text)
                     await self.publish_room_message(message)
                     yield message
 
@@ -181,6 +176,16 @@ class ConsoleInputCollector(BaseCollector):
                 await asyncio.sleep(_ERROR_RETRY_INTERVAL_S)
 
         self.logger.info("控制台输入循环结束")
+
+    def _danmaku(self, text: str) -> RoomMessagePayload:
+        """控制台用户发的一条普通弹幕。"""
+        return RoomMessagePayload(
+            message_type="danmaku",
+            platform=_PLATFORM,
+            user=RoomMessageUser(id=self.user_id, name=self.user_nickname),
+            content=text,
+            timestamp_ms=now_ms(),
+        )
 
     async def _handle_command(self, cmd_line: str) -> Optional[RoomMessagePayload]:
         parts = cmd_line[1:].strip().split()
@@ -197,6 +202,7 @@ class ConsoleInputCollector(BaseCollector):
 /gift [用户名] [礼物名] [数量] - 发送虚假礼物消息
 /sc [用户名] [内容...] - 发送虚假醒目留言
 /guard [用户名] [等级] - 发送虚假大航海开通消息
+其他 /xxx - 当作观众弹幕发出（测观众命令用；生效与否看 [agents.streamer.command] 的映射）
             """
             print(help_text)
             return None
@@ -210,8 +216,9 @@ class ConsoleInputCollector(BaseCollector):
         if cmd_name == "guard":
             return await self._create_guard_message(args)
 
-        print(f"未知命令: {cmd_name}。输入 '/help' 查看可用命令。")
-        return None
+        # 不是控制台自己的调试命令：当作一条观众弹幕原样发出，交给主播的观众命令接线判断
+        # （映射里有就执行，没有就静默丢弃）——在控制台里就能实测 /come、/切歌 这类观众命令
+        return self._danmaku(cmd_line)
 
     async def _create_gift_message(self, args: List[str]) -> Optional[RoomMessagePayload]:
         """创建礼物事件载荷（调试数据无真实金额，金额记 0、币种留空——不进付费统计）"""
