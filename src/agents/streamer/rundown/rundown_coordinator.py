@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable, Dict, Optional, Set, TYPE_CHECKING
 
 from src.modules.events.event_bus import EventBus
@@ -45,7 +46,8 @@ class RundownCoordinator:
 
     职责（全部原属 ``StreamerAgent`` 的流程单接线族）：
     - 装载与启动：配置 ``rundown_id`` 读取、崩溃恢复（实例快照还原进度）
-    - 变更旁路：``rundown.changed`` 事件发射 + transitions 落行 + 实例快照写穿
+    - 变更旁路：``rundown.changed`` 事件发射 + transitions 落行 + 实例快照写穿；
+      宿主停止时等在途的广播与落库做完，此后不再落库
     - 情境供给：环节超时 / 供能判定、Planner/Replyer 的 ``$rundown`` 文本
     - 对外控制：Dashboard 的视图读取、手动控制、热切换、定义应用
 
@@ -65,7 +67,6 @@ class RundownCoordinator:
         session_manager: Optional[Any],
         event_bus: Optional[EventBus],
         logger: ModuleLogger,
-        bg_tasks: Set[Any],
         notify_proactive: Callable[[], None],
     ) -> None:
         """构造协调器并完成状态机与控制工具的装配。
@@ -81,7 +82,6 @@ class RundownCoordinator:
                 时持久化无锚点、整体跳过）
             event_bus: 可选 ``EventBus``（``rundown.changed`` 发射通道）
             logger: 宿主持有的模块 logger（共享同一过滤名）
-            bg_tasks: 宿主的 fire-and-forget 后台任务强引用集合（共享写入）
             notify_proactive: 环节变更通知回调（宿主置位主动发言信号）
         """
         self._config = config
@@ -91,7 +91,12 @@ class RundownCoordinator:
         self._session_manager = session_manager
         self._event_bus = event_bus
         self._logger = logger
-        self._bg_tasks = bg_tasks
+        # 变更广播与落库的后台任务（强引用防 GC 中途回收）：每次环节变更派一个，
+        # 都是单次发事件或写库，停止时等它们做完，最后一次变更才进得了库
+        self._bg_tasks: Set[asyncio.Task[Any]] = set()
+        # 停止后为 True：宿主停了还晚到的变更（停机途中的开播事件、Dashboard 控制）
+        # 不再广播和落库，免得在关库前后抢写；start 时复位
+        self._stopped = False
         self._notify_proactive = notify_proactive
         self._state = RundownState(
             emit=self._emit_rundown_changed,
@@ -156,6 +161,8 @@ class RundownCoordinator:
         加载顺序：配置 ``rundown_id`` → 存储读取；未配置 / 不存在 / 读取失败
         → 回退内置默认流程单（初次直播·自我介绍）。
         """
+        # 宿主停了又重新启动：变更恢复广播与落库
+        self._stopped = False
         rundown_id = (self._config.rundown_id or "").strip()
         rundown: Optional[Rundown] = None
         if rundown_id and self._rundowns is not None:
@@ -172,6 +179,19 @@ class RundownCoordinator:
             return
         self._state.load(rundown)
         self._logger.info(f"流程单已加载: id={rundown.rundown_id!r}, segments={len(rundown.segments)}")
+
+    async def stop(self) -> None:
+        """宿主停止时收尾：先关闭变更旁路，再等已派出的广播与落库全部做完。
+
+        先关后等：关闭之后新到的变更不再派任务，等待集合清空就一定能结束；
+        已派出的写库是短写入，等它做完，宿主停止前的最后一次环节变更（含停止
+        途中嘴、发言管线、决策轮收尾时引起的变更）才落得了库，崩溃恢复读到的
+        进度才是最新的。
+        """
+        self._stopped = True
+        while self._bg_tasks:
+            # 任务完成先经回调移出集合，gather 返回时已完成的任务必已出集合
+            await asyncio.gather(*list(self._bg_tasks), return_exceptions=True)
 
     async def _try_restore(self, template: Rundown) -> bool:
         """崩溃恢复：有活跃场次且实例快照与本单模板匹配时还原进度。
@@ -238,7 +258,15 @@ class RundownCoordinator:
         self._logger.info(f"流程单变更: segment={segment_id!r}, by={by!r}")
 
     def _emit_rundown_changed(self, event_name: str, payload: Any) -> None:
-        """桥接 RundownState 的事件回调：EventBus 异步 emit + 场次持久化（落行/写穿）。"""
+        """桥接 RundownState 的事件回调：EventBus 异步 emit + 场次持久化（落行/写穿）。
+
+        协调器已停止时两样都不做：宿主停了，此时数据库与总线随时可能关闭。
+        """
+        if self._stopped:
+            self._logger.warning(
+                f"流程单协调器已停止，变更不再广播与落库: action={payload.action!r}, segment={payload.segment_id!r}"
+            )
+            return
         if self._event_bus is not None:
             spawn_background_task(
                 self._event_bus.emit(event_name, payload, source="RundownState"),

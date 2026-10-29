@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -114,6 +115,9 @@ class FakeLLMManager:
       ``AssertionError``（未预期调用即红）；未给时反复返回 ``response``
       （缺省一个成功空应答）
 
+    给 ``gate`` 时每次调用先停在闸门前，测试放行才应答（编排"调用在飞"的时序），
+    有调用停到闸门前即置位 ``gate_reached``；停在闸门前被取消的调用不记录。
+
     每次调用记录在 ``calls``（``{"method", "input", **kwargs}``）。另带
     ``is_profile_visual`` / ``get_model_context_windows`` 等装配查询出口，
     供能力协商与 dashboard 只读消费方使用。
@@ -129,6 +133,7 @@ class FakeLLMManager:
         responses: Optional[List[Response]] = None,
         visual: bool = False,
         context_windows: Optional[Dict[str, int]] = None,
+        gate: Optional[asyncio.Event] = None,
     ) -> None:
         if sum([error is not None, fail, responses is not None]) > 1:
             raise ValueError("FakeLLMManager 的 error / fail / responses 三态互斥，至多设一个")
@@ -140,17 +145,22 @@ class FakeLLMManager:
         self._visual = visual
         self._context_windows = dict(context_windows or {})
         self.calls: List[Dict[str, Any]] = []
+        self._gate = gate
+        self.gate_reached = asyncio.Event()
 
     # === 三个调用入口（与 LLMManager 对外契约同名同返回）===
 
     async def generate(self, input: Any, **kwargs: Any) -> Response:
+        await self._pass_gate()
         return self._next_reply("generate", input, kwargs)
 
     async def generate_vision(self, prompt: Any, images: Any = None, **kwargs: Any) -> Response:
         kwargs.pop("images", None)
+        await self._pass_gate()
         return self._next_reply("generate_vision", prompt, kwargs)
 
     async def generate_audio(self, input: Any, **kwargs: Any) -> Response:
+        await self._pass_gate()
         return self._next_reply("generate_audio", input, kwargs)
 
     # === 装配查询出口（duck-type 消费方按需使用）===
@@ -176,7 +186,13 @@ class FakeLLMManager:
     async def cleanup(self) -> None:
         return None
 
-    # === 内部：按三态产出应答 ===
+    # === 内部：闸门与按三态产出应答 ===
+
+    async def _pass_gate(self) -> None:
+        if self._gate is None:
+            return
+        self.gate_reached.set()
+        await self._gate.wait()
 
     def _next_reply(self, method: str, input: Any, kwargs: Dict[str, Any]) -> Response:
         self.calls.append({"method": method, "input": input, **kwargs})

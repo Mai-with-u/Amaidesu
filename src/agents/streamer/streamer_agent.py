@@ -37,7 +37,7 @@ import dataclasses
 from collections import deque
 from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING
 
-from src.modules.agents.base import BaseAgent
+from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
@@ -260,8 +260,10 @@ class StreamerAgent(BaseAgent):
         self._recap_repo = recap_repo
         self._event_repo = event_repo
         self._logger = get_logger("StreamerAgent")
-        # fire-and-forget 后台任务强引用（防 GC 中途回收 + 异常可见化）
-        self._bg_tasks: set = set()
+        # 主播记忆整理的后台任务（启动补写回顾、收播整理），强引用防 GC 中途回收。
+        # 每个都含好几次 LLM 调用、可能跑几十秒，停止时直接取消不等：没写成的
+        # 回顾由下次启动的补写善后（流程单落库这类短写入归协调器，停止时等它做完）
+        self._memory_tasks: set[asyncio.Task[Any]] = set()
 
         # ===== 内部子组件 =====
         # 弹幕聚合缓冲 + 强制触发判定
@@ -290,7 +292,6 @@ class StreamerAgent(BaseAgent):
             session_manager=session_manager,
             event_bus=event_bus,
             logger=self._logger,
-            bg_tasks=self._bg_tasks,
             notify_proactive=self._on_rundown_changed_proactive,
         )
 
@@ -599,7 +600,7 @@ class StreamerAgent(BaseAgent):
             spawn_background_task(
                 self._bootstrap_recaps(),
                 logger=self._logger,
-                tasks=self._bg_tasks,
+                tasks=self._memory_tasks,
                 label="StreamerAgent.recap_bootstrap",
             )
 
@@ -642,10 +643,35 @@ class StreamerAgent(BaseAgent):
         # 时间线在跑的后台整理随 Agent 停止作废
         await self._timeline.reset()
 
+        # 收拢本 Agent 派出的后台任务，保证停止返回后不再有它发起的写库或 LLM 调用
+        # （停机随后就关 LLM、关库）。排在嘴、发言管线、决策循环都停下之后：停止途中
+        # 它们收尾时引起的流程单变更也已派出落库任务，一并等到。
+        # 流程单落库与广播是短写入：等它做完，最后一次环节变更才进得了库
+        await self._rundown_coord.stop()
+        # 记忆整理含多次 LLM 调用：直接取消，不拖住停机
+        await self._cancel_memory_tasks()
+
         # 资源清理契约：摘除本 Agent 注册的 provider（reply / rundown / memory）
         removed = self.unregister_tool_providers()
 
         self._logger.info(f"StreamerAgent 已停止（摘除 {removed} 个工具）")
+
+    async def _cancel_memory_tasks(self) -> None:
+        """取消在跑的记忆整理任务并等它们退出。
+
+        取消落在 LLM 调用上时这一场还没写回顾，下次启动的补写会补上；
+        已交给线程池的单条写库无法中途打断，由它在自己的线程里写完。
+        """
+        cancelled = 0
+        while self._memory_tasks:
+            tasks = list(self._memory_tasks)
+            for task in tasks:
+                if task.cancel():
+                    cancelled += 1
+            # 任务完成先经回调移出集合，gather 返回时已退出的任务必已出集合
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if cancelled:
+            self._logger.info(f"停止时取消了 {cancelled} 个记忆整理任务（没写成的回顾下次启动补写）")
 
     def _delegation_machine_status(self, task_id: str) -> Optional[Dict[str, Any]]:
         """委派任务在任务账本里的机器状态（planner 委派渲染的保底事实源，只读查询）。
@@ -913,12 +939,18 @@ class StreamerAgent(BaseAgent):
         if not payload.empty_discarded and (
             self._recap_writer is not None or self._long_memory_writer is not None or self._roster_writer is not None
         ):
-            spawn_background_task(
-                self._settle_session(payload.live_session_id),
-                logger=self._logger,
-                tasks=self._bg_tasks,
-                label="StreamerAgent.settle_session",
-            )
+            if self.state in (AgentState.STOPPING, AgentState.STOPPED):
+                # 应用停机路径：Agent 先停、live.ended 后到，LLM 与数据库紧接着就关，
+                # 整理跑不完还白调一次模型，干脆不起；这场没有回顾，下次启动的补写会把
+                # 回顾、长期记忆、观众画像一并补上
+                self._logger.info(f"Agent 已停止，场次 {payload.live_session_id} 的收播整理留给下次启动补写")
+            else:
+                spawn_background_task(
+                    self._settle_session(payload.live_session_id),
+                    logger=self._logger,
+                    tasks=self._memory_tasks,
+                    label="StreamerAgent.settle_session",
+                )
 
     # ==================================================================
     # 主播记忆：场次回顾 / 观众画像

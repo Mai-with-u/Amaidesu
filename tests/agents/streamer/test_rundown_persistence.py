@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, List, Optional
+from unittest.mock import AsyncMock, MagicMock
 
 from src.modules.events.payloads.rundown import RundownChangedPayload
 from src.modules.storage.models.rundown import (
@@ -54,10 +55,16 @@ class _StubTransitionRepo:
     def __init__(self) -> None:
         self.rows: List[RundownTransition] = []
         self.fail = False
+        # 设了闸门时落行停在半路，等测试放行（编排"停止时还有落库在飞"）
+        self.gate: Optional[asyncio.Event] = None
+        self.gate_reached = asyncio.Event()
 
     async def insert(self, transition: RundownTransition) -> None:
         if self.fail:
             raise RuntimeError("db down")
+        if self.gate is not None:
+            self.gate_reached.set()
+            await self.gate.wait()
         self.rows.append(transition)
 
 
@@ -109,7 +116,7 @@ async def _make_restored_agent(**kwargs: Any) -> Any:
 async def _drain(agent: Any) -> None:
     """等待 fire-and-forget 后台任务全部落定。"""
     for _ in range(20):
-        pending = [t for t in agent._bg_tasks if not t.done()]
+        pending = [t for t in agent._rundown_coord._bg_tasks if not t.done()]
         if not pending:
             return
         await asyncio.gather(*pending)
@@ -208,6 +215,46 @@ async def test_persist_failures_are_isolated_and_soft() -> None:
     # 落行失败不影响写穿（各自独立 try/except）；armed 态不写实例快照
     assert len(transition_repo.rows) == 0
     assert len(instance_repo.snapshots) == 0
+
+
+async def test_stop_waits_inflight_persist_then_drops_later_changes() -> None:
+    """停止等在途落库做完（含停止途中引起的变更），停止之后再来的变更不广播不落库。"""
+    session = _StubSessionManager(42)
+    transition_repo = _StubTransitionRepo()
+    mouth = MagicMock()
+    agent = make_streamer_agent(
+        {"mouth": {"enabled": True}}, mouth=mouth, session_manager=session, rundown_transition_repo=transition_repo
+    )
+    # 嘴停下时引起一次流程单变更：代表停止途中还在收尾的决策轮改了流程单
+    mouth.stop = AsyncMock(
+        side_effect=lambda: agent._rundown_coord._emit_rundown_changed(
+            "rundown.changed", _payload("next", seg_id="self_intro", index=1)
+        )
+    )
+    agent._rundown_coord._state.load(DEFAULT_RUNDOWN, now_ms=1_000_000)
+    await _drain(agent)
+
+    # 一次变更正在落库，写到一半停住
+    transition_repo.gate = asyncio.Event()
+    agent._rundown_coord._emit_rundown_changed("rundown.changed", _payload("pause", seg_id="opening"))
+    await transition_repo.gate_reached.wait()
+
+    stop = asyncio.create_task(agent.stop())
+    # 让停止流程把不依赖落库的步骤都走完（只让出事件循环，不等真实时间）；
+    # 落库没放行，停止必须还停在等它这一步
+    for _ in range(100):
+        await asyncio.sleep(0)
+    assert not stop.done()
+
+    transition_repo.gate.set()
+    await stop
+    assert [row.action for row in transition_repo.rows] == ["load", "pause", "next"]
+
+    # 停止之后再来的变更：不派任务、不解析场次、不落行
+    resolved = session.calls
+    agent._rundown_coord._emit_rundown_changed("rundown.changed", _payload("resume", seg_id="opening"))
+    assert not agent._rundown_coord._bg_tasks
+    assert session.calls == resolved and len(transition_repo.rows) == 3
 
 
 # ---------------------------------------------------------------------------

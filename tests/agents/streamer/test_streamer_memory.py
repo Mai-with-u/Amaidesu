@@ -37,13 +37,14 @@ from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayloa
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.chat import GiftRecord, GuardRecord, SuperChatRecord
 from src.modules.tools import ToolInvocation, ToolRegistry
+from tests.modules.llm.fakes import FakeLLMManager
 from tests.modules.storage.viewer_seed import seed_message
 
 
 # 登记（驱动/只读穿透，合并时进底账）：直接驱动生命周期处理器与后台善后
 # （agent._register_tools / _on_live_started / _on_live_ended / _bootstrap_recaps），
 # 读取上场回顾段（agent._session_recap_text）、长期记忆槽位（agent._scope.long_memory）
-# 与后台任务集合（agent._bg_tasks）；
+# 与记忆整理任务集合（agent._memory_tasks）；
 # 均无公开观测面。
 
 
@@ -552,7 +553,7 @@ async def test_recall_viewer_tool(store: SQLiteDatabase) -> None:
 
 
 def _build_agent(
-    store: SQLiteDatabase | None, llm: MagicMock, registry: ToolRegistry | None = None, **memory: Any
+    store: SQLiteDatabase | None, llm: Any, registry: ToolRegistry | None = None, **memory: Any
 ) -> StreamerAgent:
     config = StreamerConfig.from_dict(
         {
@@ -662,7 +663,7 @@ async def test_live_ended_settles_recap_and_roster(store: SQLiteDatabase) -> Non
     agent = _build_agent(store, _llm("整理结果"))
 
     await agent._on_live_ended("live.ended", LiveEndedPayload(live_session_id=pk), "test")
-    await asyncio.gather(*agent._bg_tasks)
+    await asyncio.gather(*agent._memory_tasks)
 
     assert await store.recaps.get_recap(live_session_id=pk) is not None
     assert await _profile_text(store, "u1") == "整理结果"
@@ -676,5 +677,46 @@ async def test_live_ended_settles_recap_and_roster(store: SQLiteDatabase) -> Non
     await disabled._on_live_ended(
         "live.ended", LiveEndedPayload(live_session_id=other_pk, empty_discarded=True), "test"
     )
-    assert not disabled._bg_tasks
+    assert not disabled._memory_tasks
     llm.generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_memory_task_stuck_on_llm(store: SQLiteDatabase) -> None:
+    """停止时记忆整理正停在 LLM 调用上：直接取消，停止返回后不再调模型、回顾不落库。"""
+    pk = await _ended_session(store)
+    await _streamer_says(store, pk, "下场继续挖", 2_000)
+    gate = asyncio.Event()
+    llm = FakeLLMManager(gate=gate)
+    agent = _build_agent(store, llm)
+    # 启动善后补写这场漏掉的回顾，补写停在 LLM 调用上
+    await agent.start()
+    await llm.gate_reached.wait()
+    [backfill] = agent._memory_tasks
+
+    await agent.stop()
+
+    assert backfill.cancelled() and not agent._memory_tasks
+    assert llm.calls == []
+    assert await store.recaps.get_recap(live_session_id=pk) is None
+
+
+@pytest.mark.asyncio
+async def test_live_ended_after_stop_leaves_settle_to_next_boot(store: SQLiteDatabase) -> None:
+    """应用停机路径（Agent 先停、live.ended 后到）不起收播整理，下次启动的补写把这场补上。"""
+    llm = FakeLLMManager()
+    agent = _build_agent(store, llm)
+    await agent.start()
+    await asyncio.gather(*agent._memory_tasks)  # 启动善后无场次可补，空跑结束
+    await agent.stop()
+
+    pk = await _ended_session(store)
+    await _streamer_says(store, pk, "下场继续挖", 2_000)
+    await agent._on_live_ended("live.ended", LiveEndedPayload(live_session_id=pk, reason="进程退出"), "test")
+
+    assert not agent._memory_tasks and llm.calls == []
+    assert await store.recaps.get_recap(live_session_id=pk) is None
+
+    rebooted = _build_agent(store, FakeLLMManager())
+    await rebooted._bootstrap_recaps()
+    assert await store.recaps.get_recap(live_session_id=pk) is not None
