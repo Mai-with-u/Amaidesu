@@ -925,6 +925,7 @@ async def create_app_components(
             # 基础设施直测面：/api/v1/debug/subtitle|tts 端点的数据源
             subtitle_service=subtitle_service,
             tts_engine=tts_engine,
+            avatar_tracking=avatar_tracking,
         )
 
     # Dashboard 字幕后端注册：StreamerAgent 与 Dashboard 共享同一
@@ -1214,6 +1215,7 @@ async def _start_dashboard(
     subtitle_service=None,
     tts_engine=None,
     request_history_manager=None,
+    avatar_tracking: Optional[TrackingRuntime] = None,
 ):
     """启动 DashboardServer（仅作为 WebUI observer，不参与决策数据流）。"""
     try:
@@ -1260,6 +1262,8 @@ async def _start_dashboard(
             # 字幕服务与 TTS 引擎：/api/v1/debug 直测端点经此驱动真实基础设施
             subtitle_service=subtitle_service,
             tts_engine=tts_engine,
+            # 形象调校页的数据源：实时调面捕合成器并写回 avatar.toml
+            avatar_tracking=avatar_tracking,
             # 诊断落盘器：场次回看事件侧读 logs/events 诊断流的目录来源
             # （所有权在 EventHistoryRecorder，这里共享引用）
             diagnostics_writer=(event_recorder.diagnostics_writer if event_recorder else None),

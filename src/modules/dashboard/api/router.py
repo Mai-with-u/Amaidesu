@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.modules.dashboard.api import (
     agents,
     avatar,
+    avatar_tuning,
     components,
     config,
     debug,
@@ -86,6 +87,8 @@ def create_app() -> FastAPI:
 
     # 表情差分图静态资源（小部件页取图；路由形如 /api/v1/avatar/expression_sheet/assets/<文件名>）
     app.include_router(avatar.router, prefix="/api/v1/avatar", tags=["Avatar"])
+    # 形象调校：看着形象实时调面捕合成器（表情配方、眼神目标、平台校准），调好再写回 avatar.toml
+    app.include_router(avatar_tuning.router, prefix="/api/v1/avatar/tuning", tags=["Avatar"])
 
     return app
 

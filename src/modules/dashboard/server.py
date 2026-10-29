@@ -94,6 +94,7 @@ class DashboardServer:
         tts_engine: Optional[Any] = None,
         diagnostics_writer: Optional["DiagnosticsWriter"] = None,
         request_history_manager: Optional[RequestHistoryManager] = None,
+        avatar_tracking: Optional[Any] = None,
     ) -> None:
         self.event_bus = event_bus
         self.collector_manager = collector_manager
@@ -174,6 +175,9 @@ class DashboardServer:
         # 可用；未注入（极简启动/测试）时相关端点返回 503
         self.subtitle_service = subtitle_service
         self.tts_engine = tts_engine
+        # 注入面捕合成器让形象调校页（/api/v1/avatar/tuning）实时调表情配方、
+        # 眼神目标与平台校准；未装配（[tracking] 关着、极简启动/测试）时该组端点返回 503
+        self.avatar_tracking = avatar_tracking
         # 注入诊断落盘器让场次回看事件侧能读到 logs/events 诊断流；
         # 未注入（极简启动/测试）时回看事件侧只有内存环形缓冲
         self.diagnostics_writer = diagnostics_writer
