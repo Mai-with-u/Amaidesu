@@ -8,13 +8,13 @@ from typing import Callable
 import pytest
 
 from src.modules.avatar.lipsync import MouthSignal
-from src.modules.avatar.tracking.channels import GAZE_X, GAZE_Y, brow_height, eye_openness, smile
+from src.modules.avatar.tracking.channels import GAZE_X, GAZE_Y, HEAD_PITCH, brow_height, eye_openness, smile
 from src.modules.avatar.tracking.config import TrackingConfig
 from src.modules.avatar.tracking.runtime import TrackingDriver, TrackingRuntime
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
-from src.modules.events.payloads.planner import StreamerStagePayload
+from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import (
     UtteranceFailedPayload,
@@ -246,4 +246,57 @@ async def test_game_events_trigger_wordless_reactions(
     await _emit(event_bus, f"game.{event_type}", payload)
     frame = await _advance(runtime, fake_clock, 350)
     assert (read(frame) - read(rest)) * direction > 0.1
+    await runtime.stop()
+
+
+async def _max_nod(runtime: TrackingRuntime, clock: FakeClock, ms: int) -> float:
+    """这段时间里头最低点到多少度（主动点头 -8°，远大于说话时随节奏的轻点）。"""
+    lowest = 0.0
+    for _ in range(ms // 33):
+        clock.tick(33)
+        lowest = min(lowest, (await runtime.tick_once())[HEAD_PITCH])
+    return lowest
+
+
+async def test_gesture_sent_while_thinking_waits_for_its_sentence_to_start(
+    event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    runtime = _runtime(event_bus, fake_clock)
+    await runtime.start()
+    await runtime.tick_once()
+    await _emit(event_bus, CoreEvents.STREAMER_STAGE, _stage("planning"))
+    assert await runtime.act("点头", with_next_utterance=True) is True  # 和 reply 同一步发来：先记下
+    await _emit(
+        event_bus,
+        CoreEvents.PLANNER_DECISION,
+        PlannerDecisionPayload(round_id="r1", should_reply=True, utterance_id="u1"),
+    )
+    assert await _max_nod(runtime, fake_clock, 3000) > -3.0  # 语音还在合成：不抢拍
+    started = UtteranceStartedPayload(utterance_id="u1", speech_text="对呀", engine="fake", duration_ms=1500)
+    await _emit(event_bus, CoreEvents.TTS_UTTERANCE_STARTED, started)
+    assert await _max_nod(runtime, fake_clock, 1200) < -3.0  # 开口时点头
+    await runtime.stop()
+
+
+async def test_gesture_without_speech_or_waiting_too_long_is_done_right_away(
+    event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    runtime = _runtime(event_bus, fake_clock)
+    await runtime.start()
+    await runtime.tick_once()
+    await _emit(event_bus, CoreEvents.STREAMER_STAGE, _stage("planning"))
+    await runtime.act("点头", with_next_utterance=True)
+    await _emit(event_bus, CoreEvents.PLANNER_DECISION, PlannerDecisionPayload(round_id="r1", should_reply=False))
+    assert await _max_nod(runtime, fake_clock, 1200) < -3.0  # 这一轮不说话：立刻做
+
+    await _emit(event_bus, CoreEvents.STREAMER_STAGE, _stage("planning"))
+    await runtime.act("点头", with_next_utterance=True)
+    await _emit(
+        event_bus,
+        CoreEvents.PLANNER_DECISION,
+        PlannerDecisionPayload(round_id="r2", should_reply=True, utterance_id="u9"),
+    )
+    fake_clock.tick(TrackingRuntime.DEFERRED_ACT_MAX_WAIT_MS)
+    assert await _max_nod(runtime, fake_clock, 1200) < -3.0  # 那句迟迟不开口：等太久就直接做
+    assert await runtime.act("后空翻", with_next_utterance=True) is None  # 未知动作照样当场报错
     await runtime.stop()

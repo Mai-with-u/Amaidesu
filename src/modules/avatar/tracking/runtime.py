@@ -15,6 +15,11 @@
 - ``game.*``：重大进展眼睛一亮、需要关注"诶？"一下、出错皱眉一缩——比主播开口说这件事
   早好几秒，正好是人"先一惊、再开口"的顺序。
 
+主播有意发起的动作（点头、眨一只眼……）多半和一句话同一步发出，而那句话要先合成几秒语音
+才开口；动作若立刻做就抢了拍。所以主播在想的时候发来的动作先记下，``planner.decision``
+说这一轮要说话，就绑到那句话上、等它开始播放再做；这一轮不说话、那句没播出来、或等太久，
+就立刻做。
+
 口型分析器的信号经一个只记数值的渲染器接进来，帧循环每帧取最新值。没有驱动挂着
 时帧循环不跑，零开销。所有路径 fail-soft：驱动写失败、事件处理异常只记日志。
 """
@@ -44,7 +49,7 @@ from src.modules.avatar.lipsync import LipSyncRenderer, MouthSignal
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
-from src.modules.events.payloads.planner import StreamerStagePayload
+from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import (
@@ -112,6 +117,8 @@ class TrackingRuntime:
     PENDING_LIMIT = 32
     # 帧率与卡顿统计看最近多少帧（30 帧/秒下约 10 秒）
     TICK_HISTORY = 300
+    # 跟着下一句做的动作最多等多久（语音合成常见几秒，冷启动更久），过了就直接做
+    DEFERRED_ACT_MAX_WAIT_MS = 20_000
     PENDING_TTL_MS = 120_000
     # 收到"开始播放"后先按预计时长 + 余量排一个回落时刻，"播完"事件到了再以它为准；
     # 万一播完事件丢了，表情也不会一直停在脸上
@@ -167,6 +174,8 @@ class TrackingRuntime:
         self._started = False
         # 最近若干帧的推进时刻：算实际帧率与卡顿（和决策循环抢同一个事件循环时，形象会顿一下）
         self._tick_times: Deque[int] = deque(maxlen=self.TICK_HISTORY)
+        # 跟着下一句做的动作：[动作名, 记下的时刻, 绑定的句子（还没定是哪句时为 None）]
+        self._deferred: List[List[Any]] = []
 
     def _subscriptions(self) -> List[Tuple[str, Callable[..., Any], type]]:
         """订阅清单：(事件名, 处理函数, 载荷类)，订阅与退订共用。"""
@@ -189,6 +198,7 @@ class TrackingRuntime:
             (CoreEvents.TTS_UTTERANCE_FINISHED, self._on_finished, UtteranceFinishedPayload),
             (CoreEvents.TTS_UTTERANCE_FAILED, self._on_failed, UtteranceFailedPayload),
             (CoreEvents.STREAMER_STAGE, self._on_stage, StreamerStagePayload),
+            (CoreEvents.PLANNER_DECISION, self._on_decision, PlannerDecisionPayload),
             *room,
             *game,
         ]
@@ -227,6 +237,7 @@ class TrackingRuntime:
             except Exception as exc:  # noqa: BLE001 - 摘除失败不阻断关停
                 self.logger.debug(f"口型信号摘除失败（已忽略）: {exc}")
         await self._stop_loop()
+        self._deferred.clear()
         for driver in list(self._drivers):
             await self._send_rest(driver)
         self._drivers.clear()
@@ -253,6 +264,8 @@ class TrackingRuntime:
         """推进一帧并发给所有就绪的驱动（帧循环每拍调一次；测试可直接调）。"""
         now = self._clock()
         self._tick_times.append(now)
+        if self._deferred:
+            await self._perform_deferred(lambda entry: now - entry[1] >= self.DEFERRED_ACT_MAX_WAIT_MS)
         frame = self.synthesizer.step(now)
         for driver in list(self._drivers):
             if not driver.ready():
@@ -339,8 +352,40 @@ class TrackingRuntime:
             )
         return catalog
 
-    async def act(self, action: str) -> Optional[bool]:
-        """执行一个动作：有意的动作优先，其次按名字找平台片段。未知名字返回 None。"""
+    async def act(self, action: str, *, with_next_utterance: bool = False) -> Optional[bool]:
+        """执行一个动作：有意的动作优先，其次按名字找平台片段。未知名字返回 None。
+
+        ``with_next_utterance``：主播在想下一句时发来的动作先记下，等那句开口再做（见模块说明）；
+        不在想、没开语音时照常立刻做。记下即返回 True。
+        """
+        if with_next_utterance and self._tts_enabled and self.synthesizer.thinking:
+            if not self._known_action(action):
+                return None
+            self._deferred.append([action, self._clock(), None])
+            return True
+        return await self._perform(action)
+
+    def _known_action(self, action: str) -> bool:
+        if action in GESTURES:
+            return True
+        for source, (names, _) in self._clips.items():
+            try:
+                if action in names():
+                    return True
+            except Exception:  # noqa: BLE001 - 单个来源列目录失败不影响其他来源
+                self.logger.exception(f"列 {source} 动作片段失败（已跳过）")
+        return False
+
+    async def _perform_deferred(self, due: Callable[[List[Any]], bool]) -> None:
+        """把记下的动作里到点的做出来（按记下的先后）。"""
+        ready = [entry for entry in self._deferred if due(entry)]
+        if not ready:
+            return
+        self._deferred = [entry for entry in self._deferred if not due(entry)]
+        for action, _, _ in ready:
+            await self._perform(action)
+
+    async def _perform(self, action: str) -> Optional[bool]:
         gesture = GESTURES.get(action)
         if gesture is not None:
             now = self._clock()
@@ -501,14 +546,18 @@ class TrackingRuntime:
             # 开口即想完了：思考神情散去、视线回到镜头（阶段事件可能稍晚才到）
             self.synthesizer.end_thinking(now)
             entry = self._pending.pop(payload.utterance_id, None)
-            if entry is None:
-                return
-            emotion, intensity, _ = entry
-            expected = payload.duration_ms or self._estimate_ms(payload.speech_text)
-            release_at = now + expected + self._config.expression_linger_ms + self.SAFETY_MARGIN_MS
-            self.synthesizer.express(emotion, intensity, now, key=payload.utterance_id, release_at_ms=release_at)
+            if entry is not None:
+                emotion, intensity, _ = entry
+                expected = payload.duration_ms or self._estimate_ms(payload.speech_text)
+                release_at = now + expected + self._config.expression_linger_ms + self.SAFETY_MARGIN_MS
+                self.synthesizer.express(emotion, intensity, now, key=payload.utterance_id, release_at_ms=release_at)
         except Exception:  # noqa: BLE001 - 装饰性路径边界
             self.logger.exception(f"开播表情处理异常（已忽略）: utterance_id={getattr(payload, 'utterance_id', '?')}")
+        try:
+            # 绑在这句话上的动作，开口时做（这句有没有带情绪都一样）
+            await self._perform_deferred(lambda entry: entry[2] == payload.utterance_id)
+        except Exception:  # noqa: BLE001 - 装饰性路径边界
+            self.logger.exception(f"开口时补做动作异常（已忽略）: utterance_id={getattr(payload, 'utterance_id', '?')}")
 
     async def _on_finished(self, event_name: str, payload: UtteranceFinishedPayload, source: str) -> None:
         self._end_utterance(payload.utterance_id, linger=True)
@@ -516,6 +565,21 @@ class TrackingRuntime:
     async def _on_failed(self, event_name: str, payload: UtteranceFailedPayload, source: str) -> None:
         self._pending.pop(payload.utterance_id, None)
         self._end_utterance(payload.utterance_id, linger=False)
+        try:
+            # 这句没播出来，绑在它上面的动作不再等
+            await self._perform_deferred(lambda entry: entry[2] == payload.utterance_id)
+        except Exception:  # noqa: BLE001 - 装饰性路径边界
+            self.logger.exception(f"播放失败后补做动作异常（已忽略）: utterance_id={payload.utterance_id}")
+
+    async def _on_decision(self, event_name: str, payload: PlannerDecisionPayload, source: str) -> None:
+        """一轮决策结束：要说话就把还没着落的动作绑到这句话上，不说话就立刻做。"""
+        try:
+            for entry in self._deferred:
+                if entry[2] is None and payload.should_reply and payload.utterance_id:
+                    entry[2] = payload.utterance_id
+            await self._perform_deferred(lambda entry: entry[2] is None)
+        except Exception:  # noqa: BLE001 - 装饰性路径边界
+            self.logger.exception(f"决策结束后处理动作异常（已忽略）: round_id={getattr(payload, 'round_id', '?')}")
 
     async def _on_stage(self, event_name: str, payload: StreamerStagePayload, source: str) -> None:
         try:

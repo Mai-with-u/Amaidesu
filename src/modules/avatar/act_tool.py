@@ -31,10 +31,12 @@ ACT_TOOL = "act"
 HOLD_DEFAULT_S = 8.0
 
 GUIDE = (
-    "形象（虚拟形象）的表情、眨眼、眼神和说话时的点头都由形象自己完成：reply 的 emotion 就决定这句话的表情，"
-    "不需要另外调用工具。只在想做一个有意的动作时用 avatar_act——点头同意、摇头否定、歪头疑惑、看一眼弹幕，"
-    "或触发模型做好的动作（目录用 avatar_list_actions 查）；要演“假装生气一会儿”这类梗时，"
-    "用 avatar_act 的“保持表情”并给出 emotion 与 seconds。不要每句话都调用。"
+    "形象（虚拟形象）的表情、眨眼、眼神和说话时随节奏的轻点头都由形象自己完成：reply 的 emotion 决定这句话的"
+    "表情，不需要另外调用工具。想让身体语言更生动时用 avatar_act，和 reply 放在同一步里一起调用，动作会在"
+    "这句话开口时做出来：同意、回应时点头，否定、拒绝时摇头，疑惑、好奇时歪头，被夸、卖萌、开玩笑时眨一只眼，"
+    "看到好东西或有了主意时眼睛一亮，被吓到时吓一跳，提到弹幕时看一眼弹幕；模型做好的动作用 "
+    "avatar_list_actions 查。要演“假装生气一会儿”这类梗，用 avatar_act 的“保持表情”并给出 emotion 与 seconds。"
+    "觉得合适就做，一般隔几句话做一次，不必每句都做。"
 )
 
 _ACT_SCHEMA: Dict[str, Any] = {
@@ -141,7 +143,8 @@ class AvatarActProvider(BaseToolProvider):
             return tool_result_ok(
                 tool, True, {"action": action, "emotion": emotion, "seconds": seconds, "outcome": outcome}
             )
-        done = await self._tracking.act(action) if action else None
+        # 主播多半和 reply 同一步调用：动作等那句话开口再做，不抢拍
+        done = await self._tracking.act(action, with_next_utterance=True) if action else None
         if done is None:
             return unknown_action_fail(tool, action, self._catalog_names())
         return tool_result_ok(tool, bool(done), {"action": action})
