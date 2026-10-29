@@ -159,6 +159,27 @@ class TrackingConfig(BaseConfig):
         description="表情强度压缩的系数（下限 + 系数 = 满强度时的实际幅度）",
         json_schema_extra={"x-ui-advanced": True},
     )
+    mood_enabled: bool = Field(
+        title="是否启用心情",
+        default=True,
+        description="连着几句开心的话后静止时也带着笑、打累了动作会慢下来：表情会慢慢累积成心情，心情给身体一个底色",
+    )
+    mood_half_life_ms: int = Field(
+        title="心情回落半衰期",
+        default=90_000,
+        ge=5_000,
+        le=1_800_000,
+        description="没有新刺激时心情回到人设基线的快慢：过这么久回落一半（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    mood_gain: float = Field(
+        title="心情累积系数",
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description="每个表情推动心情的幅度（越大越容易被一两句话带动）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
     speech_ms_per_char: int = Field(
         title="无语音时每字时长",
         default=220,

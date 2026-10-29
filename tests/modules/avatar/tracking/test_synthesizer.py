@@ -24,8 +24,14 @@ FRAME_MS = 33
 
 
 def _quiet(**overrides: object) -> TrackingSynthesizer:
-    """关掉眨眼、眼神、头部漫步的合成器：只剩表情与口型，输出可精确断言。"""
-    config = TrackingConfig(blink_enabled=False, gaze_enabled=False, head_wander_enabled=False, **overrides)
+    """关掉眨眼、眼神、头部漫步与心情的合成器：只剩表情与口型，输出可精确断言。"""
+    settings: dict = {
+        "blink_enabled": False,
+        "gaze_enabled": False,
+        "head_wander_enabled": False,
+        "mood_enabled": False,
+    }
+    config = TrackingConfig(**{**settings, **overrides})
     return TrackingSynthesizer(config, rng=random.Random(0))
 
 
@@ -135,3 +141,18 @@ def test_speech_rhythm_nods_follow_lipsync_onsets(nods: bool, dips: bool) -> Non
         synth.on_mouth(0.5 if phase < 1950 and (t % 300) < 150 else 0.0, t)
         pitches.append(synth.step(t)[HEAD_PITCH])
     assert (min(pitches) < -0.8) is dips
+
+
+def test_mood_accumulates_into_the_resting_face_and_fades() -> None:
+    synth = _quiet(mood_enabled=True, mood_half_life_ms=60_000)
+    synth.step(0)
+    rest_smile = synth.step(FRAME_MS)[MOUTH_SMILE]
+    for i in range(4):  # 连着四句开心的话，每句说完都回落
+        t = 1000 + i * 6000
+        synth.express("happy", 0.8, t, key=f"u{i}", release_at_ms=t + 2000)
+    _run(synth, 2 * FRAME_MS, 26_000)
+    valence, _ = synth.mood(26_000)
+    assert valence > 0.3
+    assert synth.current_emotion(26_000) == "neutral"
+    assert synth.step(26_000 + FRAME_MS)[MOUTH_SMILE] > rest_smile + 0.04  # 表情已经回落，静止脸还带着笑
+    assert synth.mood(26_000 + 120_000)[0] < valence / 3  # 两个半衰期后基本回到基线

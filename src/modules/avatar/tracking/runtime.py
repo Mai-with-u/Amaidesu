@@ -285,6 +285,10 @@ class TrackingRuntime:
     def current_emotion(self) -> str:
         return self.synthesizer.current_emotion(self._clock())
 
+    def mood(self) -> tuple[float, float]:
+        """此刻的心情（愉快度, 兴奋度）。"""
+        return self.synthesizer.mood(self._clock())
+
     def rest_frame(self) -> Frame:
         """人设静止姿态（驱动在断开前自行发送，形象不停在半闭眼之类的姿势上）。"""
         return self.synthesizer.rest_frame()

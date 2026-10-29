@@ -3,7 +3,7 @@
 纯逻辑、不碰事件和网络：时刻由调用方传入，随机源可注入（同种子同输入 = 同输出），
 方便离线回放与测试。每帧按固定顺序合成，各层只管自己负责的部位：
 
-人设静止姿态 → 表情偏移 + 脉冲反应 + 思考神情 → 注意力（看哪里）与眼神 → 头部漫步 +
+人设静止姿态 → 心情底色 + 表情偏移 + 脉冲反应 + 思考神情 → 注意力（看哪里）与眼神 → 头部漫步 +
 头部跟随视线 → 眨眼（对眼皮做乘法，能叠在眯眼上）→ 口型（说话时下巴开合归口型，嘴角
 的笑与撇仍归表情）→ 钳制 → 限速。
 
@@ -43,6 +43,7 @@ from .channels import (
 )
 from .config import TrackingConfig
 from .expression import ExpressionScheduler
+from .mood import Mood
 from .reactions import PulseLayer, SpeechProsody
 
 # 思考时的神情：眉心微紧、眼睛略眯、嘴角稍收（按浮现权重叠加）
@@ -95,6 +96,7 @@ class TrackingSynthesizer:
         self._glance_until: Optional[int] = None
         self._last_glance_ms = -(10**12)
         self._think_weight = 0.0
+        self._mood = Mood(half_life_ms=config.mood_half_life_ms, gain=config.mood_gain)
 
     # ===== 输入 =====
 
@@ -145,14 +147,28 @@ class TrackingSynthesizer:
         return True
 
     def pulse(self, kind: str, now_ms: int, scale: float = 1.0) -> bool:
-        """触发一个脉冲反应（点头、眼睛一亮、受惊一缩……；见 ``reactions.PULSES``）。"""
-        return self._pulses.trigger(kind, now_ms, scale)
+        """触发一个脉冲反应（点头、眼睛一亮、受惊一缩……；见 ``reactions.PULSES``），并轻推心情。"""
+        triggered = self._pulses.trigger(kind, now_ms, scale)
+        if triggered and self._config.mood_enabled:
+            self._mood.push_pulse(kind, scale, now_ms)
+        return triggered
+
+    def mood(self, now_ms: int) -> tuple[float, float]:
+        """此刻的心情（愉快度, 兴奋度），观察与日志用。"""
+        self._mood.decay_to(now_ms)
+        return round(self._mood.valence, 3), round(self._mood.arousal, 3)
 
     def express(
         self, emotion: str, intensity: float, now_ms: int, *, key: str, release_at_ms: Optional[int] = None
     ) -> str:
-        """收到一个表情（转交调度器；返回 started / extended / deferred / released / unknown）。"""
-        return self._expressions.push(emotion, intensity, now_ms, key=key, release_at_ms=release_at_ms)
+        """收到一个表情（转交调度器；返回 started / extended / deferred / released / unknown）。
+
+        表情不论是马上上脸、延长还是排队，都算"有过这个情绪"，一并推动心情。
+        """
+        outcome = self._expressions.push(emotion, intensity, now_ms, key=key, release_at_ms=release_at_ms)
+        if outcome in ("started", "extended", "deferred") and self._config.mood_enabled:
+            self._mood.push_emotion(emotion, self._expressions.compress(intensity), now_ms)
+        return outcome
 
     def release(self, key: str, at_ms: int) -> None:
         """把属于 ``key`` 的表情定在 ``at_ms`` 开始回落。"""
@@ -210,6 +226,12 @@ class TrackingSynthesizer:
         offsets, motion = self._expressions.sample(now_ms)
         for channel, value in self._pulses.sample(now_ms).items():
             offsets[channel] = offsets.get(channel, 0.0) + value
+        if cfg.mood_enabled:
+            # 心情底色叠在所有表情之下；兴奋时多动、平静疲惫时少动
+            self._mood.decay_to(now_ms)
+            for channel, value in self._mood.offsets().items():
+                offsets[channel] = offsets.get(channel, 0.0) + value
+            motion *= self._mood.motion_scale()
         target: Frame = dict(self._rest)
 
         # 注意力：决定眼神模式与注视中心；思考神情按浮现权重叠加，动作随之放慢
@@ -253,6 +275,8 @@ class TrackingSynthesizer:
             per_min = cfg.blink_per_min_reading
         else:
             per_min = cfg.blink_per_min_idle
+        if cfg.mood_enabled:
+            per_min *= self._mood.blink_scale()
         closure = self._blink.closure(now_ms, per_min=per_min) if cfg.blink_enabled else 0.0
         both = offsets.get(EYE_OPEN, 0.0)
         for channel in (EYE_OPEN_L, EYE_OPEN_R):
