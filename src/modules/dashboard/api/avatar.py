@@ -164,15 +164,15 @@ def _validate_platform(platform: str) -> str:
 
 
 def _get_platform_provider(server: "DashboardServer", platform: str) -> Optional[Any]:
-    """经注册表按契约工具全名反查平台 Provider；未装配返回 None。
+    """在注册表的已登记 Provider 里按名字找平台 Provider；未装配返回 None。
 
-    与表情差分静态资源端点同一套定位路径（provider_of_tool）；未连接的
-    ConnectionToolProvider 降级登记 0 工具，但 Provider 本体仍在册可反查。
+    按名字找而不是按工具名反查：已移植到面捕合成器的平台（VTS）不向 LLM 暴露
+    任何工具，未连接的平台也只登记 0 个工具，但 Provider 本体都在册。
     """
     registry = server.tool_registry
     if registry is None:
         return None
-    return registry.provider_of_tool(f"{platform}_set_expression")
+    return next((p for p in registry.providers() if getattr(p, "name", None) == platform), None)
 
 
 def _connection_summary(provider: Any) -> Tuple[Optional[bool], str, Dict[str, Any]]:

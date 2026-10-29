@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, List
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,13 +20,13 @@ class _FakeResult:
 
 
 class _FakeRegistry:
-    """按工具全名反查 Provider 的最小注册表替身。"""
+    """只提供已登记 Provider 快照的最小注册表替身（与真注册表一样，0 工具的 Provider 也在册）。"""
 
-    def __init__(self, providers: dict[str, Any]) -> None:
+    def __init__(self, providers: List[Any]) -> None:
         self._providers = providers
 
-    def provider_of_tool(self, full_name: str) -> Optional[Any]:
-        return self._providers.get(full_name)
+    def providers(self) -> List[Any]:
+        return list(self._providers)
 
 
 class _ConnectedProvider:
@@ -66,6 +66,8 @@ class _ConnectedProvider:
 class _DisconnectedProvider(_ConnectedProvider):
     """未连接平台 Provider 替身（连接态 False）。"""
 
+    PROVIDER_NAME = "vrchat"
+
     def connection_summary(self) -> dict[str, Any]:
         return {"is_connected": False, "stats": {}}
 
@@ -74,6 +76,10 @@ class _SheetProvider:
     """表情差分 Provider 替身：就绪态走 connection_summary（无外部连接）。"""
 
     PROVIDER_NAME = "expression_sheet"
+
+    @property
+    def name(self) -> str:
+        return self.PROVIDER_NAME
 
     def connection_summary(self) -> dict[str, Any]:
         return {"is_connected": True, "stats": {}}
@@ -92,13 +98,8 @@ class _SheetProvider:
 @pytest.fixture
 def client(mount) -> TestClient:
     """挂载带平台 Provider 替身注册表的 TestClient（未装配平台留空）。"""
-    registry = _FakeRegistry(
-        {
-            "vts_set_expression": _ConnectedProvider(),
-            "vrchat_set_expression": _DisconnectedProvider(),
-            "expression_sheet_set_expression": _SheetProvider(),
-        }
-    )
+    # VTS 不向 LLM 暴露工具、未连接的平台登记 0 工具：调试台都要按名字找得到
+    registry = _FakeRegistry([_ConnectedProvider(), _DisconnectedProvider(), _SheetProvider()])
     return mount(tool_registry=registry)
 
 
