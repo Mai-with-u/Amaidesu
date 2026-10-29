@@ -16,6 +16,10 @@
     enabled = true
     # ...（口型分析共享件调参）
 
+    [avatar.tracking]
+    enabled = true
+    # ...（面捕合成器调参：帧率、眨眼、头部微动、表情起落）
+
 结构规则：
 - ``platform`` 组段放 ``enabled`` 启用名单（对齐 agents/collectors 域根
   名单约定）；成员段直接铺参数键——没有 tools.toml 动态键机制的
@@ -23,8 +27,8 @@
 - 成员段 typed 引用各平台包内 ConfigSchema（静态命名段，平台名封闭
   四值：vts / warudo / vrchat / expression_sheet，与代码目录
   ``src/modules/avatar/platform/`` 镜像）；包内 Schema 是字段与默认值的唯一权威；
-- ``lipsync`` 与 ``platform`` 平级（口型分析共享件，非平台成员）；
-  将来 avatar 新部件 = 新的第二段，以部件本名命名。
+- ``lipsync``、``tracking`` 与 ``platform`` 平级（口型分析、面捕合成器两个共享件，
+  非平台成员）；将来 avatar 新部件 = 新的同级段，以部件本名命名。
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ from src.modules.avatar.platform.expression_sheet.expression_sheet_provider impo
 from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
 from src.modules.avatar.platform.vts.vts_provider import VTSProvider
 from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider
+from src.modules.avatar.tracking import TrackingConfig
 from src.modules.config.file_meta import FileMetaConfig
 from src.modules.config.schemas.base import BaseConfig
 
@@ -66,7 +71,7 @@ class AvatarPlatformConfig(BaseConfig):
     vts: VTSProvider.ConfigSchema = Field(
         default_factory=VTSProvider.ConfigSchema,
         title="VTS 配置",
-        description="VTubeStudio 平台配置（连接 / 表情基线 / idle 绑定）",
+        description="VTubeStudio 平台配置（连接）",
     )
     warudo: WarudoProvider.ConfigSchema = Field(
         default_factory=WarudoProvider.ConfigSchema,
@@ -101,6 +106,11 @@ class AvatarRootConfig(BaseConfig):
         default_factory=LipSyncConfig,
         title="口型同步配置",
         description="口型分析共享件调参（平台无关，分接 TTS 播放音频）",
+    )
+    tracking: TrackingConfig = Field(
+        default_factory=TrackingConfig,
+        title="面捕合成器",
+        description="逐帧驱动形象的共享件调参（帧率 / 眨眼 / 头部微动 / 表情起落；平台无关）",
     )
 
 

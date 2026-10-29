@@ -1,11 +1,12 @@
-"""虚拟形象适配器的被动事件订阅：streamer.speech 反射为表情、tts.utterance.* 驱动说话状态、provider 自持订阅生命周期"""
+"""虚拟形象适配器的被动事件订阅（尚未移植到面捕合成器的平台）：streamer.speech 反射为表情、tts.utterance.* 驱动说话状态、订阅生命周期"""
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
-from src.modules.avatar.platform.vts.vts_provider import VTSProvider
 from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider
 from src.modules.avatar.speech_binding import AvatarBindings, bind_speaking_state, bind_speech_emotion
 from src.modules.events.event_bus import EventBus
@@ -23,23 +24,19 @@ async def _emit(bus: EventBus, event_name: str, payload) -> None:
     await bus.wait_until_drained()  # 让 handler 跑完
 
 
-def _vts_with_expression() -> VTSProvider:
-    provider = VTSProvider(config={})
-    provider.expression = MagicMock()
-    provider.expression.set_multi_parameter = AsyncMock(return_value=True)
-    return provider
+def _weights(warudo: WarudoProvider) -> dict[str, float]:
+    return {k: v for k, v in warudo.state_manager.expression_state.weights.items() if v}
 
 
-async def test_speech_is_reflected_to_vts_parameters_and_tolerated_by_vrchat() -> None:
+async def test_speech_is_reflected_to_warudo_expression_and_tolerated_by_vrchat() -> None:
     bus = EventBus()
-    vts = _vts_with_expression()
-    assert bind_speech_emotion(bus, vts, vts.logger) is not None
+    warudo = WarudoProvider(config={})
+    assert bind_speech_emotion(bus, warudo, warudo.logger) is not None
     vrchat = VRChatProvider(config={})
     bind_speech_emotion(bus, vrchat, vrchat.logger)  # VRChat 无情绪通道：诚实返回未应用，不抛
 
     await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech("happy", 0.8))
-    # 缩放统一走 scaled_emotion_weights：4 位小数收敛，不带浮点尾差进平台参数
-    assert vts.expression.set_multi_parameter.await_args.args[0] == {"MouthSmile": 0.64, "Brows": 0.48}
+    assert _weights(warudo) == {"happy": pytest.approx(0.8)}  # 默认档案：happy 槽满幅 × 强度
 
 
 async def test_provider_error_in_reflection_does_not_break_the_bus() -> None:
@@ -57,38 +54,35 @@ async def test_provider_error_in_reflection_does_not_break_the_bus() -> None:
 
 
 def test_binding_without_event_bus_is_skipped() -> None:
-    provider = VTSProvider(config={})
+    provider = WarudoProvider(config={})
     assert bind_speech_emotion(None, provider, provider.logger) is None  # 工具面-only 形态
     assert bind_speaking_state(None, provider.logger, on_change=lambda s: None) is None
 
 
-async def test_utterance_events_flip_vts_speaking_flag_and_warudo_talking_head() -> None:
-    vts, warudo = VTSProvider(config={}), WarudoProvider(config={})
+async def test_utterance_events_flip_warudo_talking_head() -> None:
+    warudo = WarudoProvider(config={})
     assert warudo.talking_head_task is not None
     bus = EventBus()
-    for provider in (vts, warudo):
-        assert bind_speaking_state(bus, provider.logger, on_change=provider._set_speaking) is not None
+    assert bind_speaking_state(bus, warudo.logger, on_change=warudo._set_speaking) is not None
 
     started = UtteranceStartedPayload(utterance_id="utt_s", speech_text="hi", engine="edge", duration_ms=100)
     finished = UtteranceFinishedPayload(utterance_id="utt_s", engine="edge", duration_ms=100)
     await _emit(bus, CoreEvents.TTS_UTTERANCE_STARTED, started)
-    assert vts._is_speaking is True and warudo.talking_head_task.is_talking is True
+    assert warudo.talking_head_task.is_talking is True
     await _emit(bus, CoreEvents.TTS_UTTERANCE_FINISHED, finished)
-    assert vts._is_speaking is False and warudo.talking_head_task.is_talking is False
+    assert warudo.talking_head_task.is_talking is False
 
 
 async def test_cleanup_unbinds_subscriptions() -> None:
-    provider = _vts_with_expression()
-    provider._has_started = True  # 阻断真实 pyvts 连接：手工置启动态，直接走订阅绑定段
+    warudo = WarudoProvider(config={})
     bus = EventBus()
-    provider.event_bus = bus
-    bindings = AvatarBindings(bus, provider.logger)
-    bindings.attach_emotion_reflection(provider)
-    bindings.attach_speaking_state(provider._set_speaking)
+    bindings = AvatarBindings(bus, warudo.logger)
+    bindings.attach_emotion_reflection(warudo)
+    bindings.attach_speaking_state(warudo._set_speaking)
 
     await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech())
-    assert provider.expression.set_multi_parameter.await_count == 1
+    assert _weights(warudo) == {"happy": pytest.approx(0.8)}
 
     bindings.close()  # 全量退订（cleanup 内部同款出口）
     await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech("sad", 0.5))
-    assert provider.expression.set_multi_parameter.await_count == 1  # 退订后不再反射
+    assert _weights(warudo) == {"happy": pytest.approx(0.8)}  # 退订后不再反射

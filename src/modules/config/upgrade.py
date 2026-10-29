@@ -620,6 +620,58 @@ def _upgrade_warudo_maimai_expression(data: Dict[str, Any]) -> List[str]:
 register_file_hook("avatar.toml", "warudo_maimai_expression", "2.0.41", _upgrade_warudo_maimai_expression)
 
 
+# VTS 段退役的键：待机微动与常驻微笑基线改由面捕合成器（[tracking]）统一负责
+_VTS_RETIRED_KEYS = (
+    "base_smile",
+    "idle_enabled",
+    "idle_param_head_x",
+    "idle_param_head_y",
+    "idle_param_head_z",
+    "idle_param_body_x",
+    "idle_param_body_y",
+    "idle_param_body_z",
+    "idle_head_amplitude",
+    "idle_body_amplitude",
+    "idle_speed",
+    "idle_update_interval_ms",
+    "idle_fade_speed",
+    "idle_head_enabled",
+    "idle_body_enabled",
+    "idle_pause_while_speaking",
+    "idle_extra_params",
+    "idle_extra_speed",
+)
+
+
+def _upgrade_vts_idle_to_tracking(data: Dict[str, Any]) -> List[str]:
+    """avatar.toml v2.0.42：VTS 的待机微动与常驻微笑基线退役，由面捕合成器接管。
+
+    旧键全部删除（新的头部微动、静止嘴角在 ``[tracking]``，量纲与语义都变了，不做数值换算）；
+    唯一保留的用户意图是"关掉了待机微动"：``idle_enabled = false`` 转成
+    ``[tracking].head_wander_enabled = false``（``[tracking]`` 里已显式写了该键则不动）。
+    对已迁移数据零变更（幂等）。
+    """
+    platform = data.get("platform")
+    vts = platform.get("vts") if isinstance(platform, dict) else None
+    if not isinstance(vts, dict):
+        return []
+    changed: List[str] = []
+    if vts.get("idle_enabled") is False:
+        tracking = data.setdefault("tracking", {})
+        if isinstance(tracking, dict) and "head_wander_enabled" not in tracking:
+            tracking["head_wander_enabled"] = False
+            changed.append("platform.vts.idle_enabled=false -> tracking.head_wander_enabled=false")
+    for key in _VTS_RETIRED_KEYS:
+        if key in vts:
+            del vts[key]
+            changed.append(f"platform.vts.{key}（退役）")
+    return changed
+
+
+# 生产钩子登记：avatar.toml v2.0.42（VTS 待机微动与基线微笑退役，由面捕合成器接管）
+register_file_hook("avatar.toml", "vts_idle_to_tracking", "2.0.42", _upgrade_vts_idle_to_tracking)
+
+
 # Minecraft 的两个事件流采集器改为随 Minecraft Agent 开关的附属采集器（见 src.modules.agents.companions）
 _MINECRAFT_COMPANION_SECTIONS = ("maicraft_attention", "maicraft_chat")
 _COMPANION_OLD_DEFAULTS = {"url": "http://127.0.0.1:8766/mcp", "retry_interval_ms": 5000}

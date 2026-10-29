@@ -1,4 +1,4 @@
-"""VTSProvider：热键触发、预设动作目录、情绪表情、待机参数解析、换模跟随、连接/断开/重连与注册表降级换血（不连真实 VTS）"""
+"""VTSProvider：热键触发、预设动作目录、情绪表情、换模跟随、连接/断开/重连与注册表降级换血（不连真实 VTS）"""
 
 from __future__ import annotations
 
@@ -97,25 +97,6 @@ async def test_set_expression_scales_by_intensity_and_rejects_unknown_emotion() 
     assert set(provider._emotion_map) == {e.value for e in Emotion}  # 映射表覆盖词表全部 17 值
 
 
-async def test_idle_binding_resolution_is_config_only() -> None:
-    tracking = ["FaceAngleX", "FaceAngleY", "FaceAngleZ", "MouthOpen"]
-
-    provider = _build_provider()
-    provider.expression.list_tracking_parameters = AsyncMock(return_value=tracking)
-    resolved, unavailable = await provider._resolve_idle_parameter_names()
-    assert resolved["head_x"] == "FaceAngleX" and unavailable == []
-
-    disabled = _build_provider(config={"idle_param_body_x": "", "idle_param_head_x": ""})
-    disabled.expression.list_tracking_parameters = AsyncMock(return_value=tracking)
-    resolved, unavailable = await disabled._resolve_idle_parameter_names()
-    assert (resolved["head_x"], resolved["body_x"], unavailable) == ("", "", [])  # 空名 = 该轴停用，不告警
-
-    missing = _build_provider(config={"idle_param_body_x": "TorsoX"})
-    missing.expression.list_tracking_parameters = AsyncMock(return_value=tracking)
-    _, unavailable = await missing._resolve_idle_parameter_names()
-    assert unavailable == ["TorsoX"]  # 不在 VTS 参数清单：进不可用清单，由调用方预置停写
-
-
 async def test_follow_model_switch_reruns_reload_chain_only_on_real_change() -> None:
     for queried, reloads in (("ModelB", 1), ("ModelA", 0), ("", 0)):  # 换模、同模、查询不到
         provider = _build_provider()
@@ -179,7 +160,6 @@ def _stub_successful_connect(provider: VTSProvider) -> None:
     )
     provider._reload_model_state = AsyncMock()  # type: ignore[method-assign]
     provider._query_current_model_name = AsyncMock(return_value="hiyori")  # type: ignore[method-assign]
-    provider.idle_motion = MagicMock()
 
 
 async def test_connection_transitions_fire_callback_and_maintain_last_error() -> None:
@@ -224,7 +204,6 @@ async def test_dead_probe_and_manual_disconnect_fire_false_callback_once() -> No
     other = _build_provider()
     other._is_connected = True
     other._vts = MagicMock(close=AsyncMock())
-    other.idle_motion = MagicMock(stop=AsyncMock())
     fired = []
     other.on_connection_changed = fired.append
     await other._disconnect()

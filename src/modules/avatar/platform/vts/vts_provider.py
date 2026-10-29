@@ -3,14 +3,14 @@ VTSProvider - VTS 虚拟形象工具集
 
 ToolProvider 协议实现，把 VTS 能力封装为工具（LLM 主动调用的工具侧）：
 
-- 引擎子件（``ExpressionController`` / ``HotkeyMatcher`` / ``IdleMotionController``）
+- 引擎子件（``ExpressionController`` / ``HotkeyMatcher``）
   经 callback 解耦，可独立复用；口型渲染（``VtsLipSyncRenderer``）挂在共享
   分析器（``avatar.lipsync``）上。
 - 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
   - ``vts_set_expression``        - 设置情绪（17 枚举值 + 强度）
   - ``vts_list_preset_actions``   - 列出可演预设（VTS 热键目录）
   - ``vts_trigger_preset_action`` - 触发预设动作（未知名随结果返回目录）
-  - ``vts_set_idle_enabled``      - 启停 idle 拟人动画
+  - ``vts_set_idle_enabled``      - 启停头部微动（待机微动已退役，面捕合成器接入后由它负责）
 
 工具表随连接态动态变化（继承 ``ConnectionToolProvider`` 中间层）：未连接
 时 ``list_tools`` 返回空（装配期降级登记 0 工具，Agent 不可见不可调）；
@@ -39,7 +39,6 @@ from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.utils.backoff import ExponentialBackoff
-from src.modules.utils.task_utils import spawn_background_task
 from src.modules.tools.models import (
     ToolExecutionResult,
     ToolInvocation,
@@ -51,7 +50,6 @@ from src.modules.tools.provider import ConnectionToolProvider, wire_connection_t
 
 from .expression_controller import ExpressionController
 from .hotkey_matcher import HotkeyMatcher
-from .idle_motion_controller import IdleMotionController
 from .lip_sync_renderer import VtsLipSyncRenderer
 
 if TYPE_CHECKING:
@@ -102,123 +100,15 @@ class VTSProvider(ConnectionToolProvider):
     _RECONNECT_BACKOFF_CAP_MS = 60_000
 
     class ConfigSchema(BaseConfig):
-        """VTS 配置（连接 + Idle 两段；口型分析调参在 ``[avatar.lipsync]`` 共享件段）
+        """VTS 配置（连接；口型分析调参在 ``[avatar.lipsync]`` 共享件段）
 
-        TOML 段位：[avatar.platform.vts]（成员段直接铺键）
-
-        说明：vts 字段多沿用历史命名（如 ``*_ms`` 实际单位是 float 秒）；
-        本批保持行为保真（默认值 + 类型逐一等价），不顺手改单位/命名。
-        idle 六轴绑定完全由配置决定（不做候选猜测）：头部默认
-        FaceAngleX/Y/Z（VTS 内置参数，实测 17 个模型里 16 个绑定了它）；
-        身体默认空串停用——VTS 没有通用的躯干输入参数，任何非空默认
-        都是猜测；空名 = 该轴零写入零警告，非空名缺失 = 一次性警告 +
-        停写。
+        TOML 段位：[avatar.platform.vts]（成员段直接铺键）。待机微动与常驻微笑基线已
+        退役：形象的逐帧驱动由面捕合成器（``[avatar.tracking]``）负责。
         """
 
         type: str = Field(default="vts", title="段位标识")
-        # 连接
         vts_host: str = Field(title="VTS 主机地址", default="localhost", description="VTS WebSocket 主机地址")
         vts_port: int = Field(title="VTS 端口", default=8001, ge=1, le=65535, description="VTS WebSocket 端口")
-        base_smile: float = Field(
-            title="微笑基线值",
-            default=0.3,
-            ge=-1.0,
-            le=1.0,
-            description="MouthSmile 静止基线值",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        # Idle 运动
-        idle_enabled: bool = Field(title="是否启用 Idle 动画", default=True, description="是否启用 Idle 拟人动画")
-        idle_param_head_x: str = Field(
-            title="Idle 头部 X 参数名",
-            default="FaceAngleX",
-            description="Idle 头部 X 参数名（空串停用该轴）",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        idle_param_head_y: str = Field(
-            title="Idle 头部 Y 参数名",
-            default="FaceAngleY",
-            description="Idle 头部 Y 参数名（空串停用该轴）",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        idle_param_head_z: str = Field(
-            title="Idle 头部 Z 参数名",
-            default="FaceAngleZ",
-            description="Idle 头部 Z 参数名（空串停用该轴）",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        idle_param_body_x: str = Field(
-            title="Idle 身体 X 参数名",
-            default="",
-            description="Idle 身体 X 参数名（空串停用；按模型配置躯干输入）",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        idle_param_body_y: str = Field(
-            title="Idle 身体 Y 参数名",
-            default="",
-            description="Idle 身体 Y 参数名（空串停用；按模型配置躯干输入）",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        idle_param_body_z: str = Field(
-            title="Idle 身体 Z 参数名",
-            default="",
-            description="Idle 身体 Z 参数名（空串停用；按模型配置躯干输入）",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        idle_head_amplitude: float = Field(
-            title="Idle 头部摆动幅度",
-            default=0.05,
-            ge=0.0,
-            description="Idle 头部摆动幅度",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        idle_body_amplitude: float = Field(
-            title="Idle 身体摆动幅度",
-            default=0.02,
-            ge=0.0,
-            description="Idle 身体摆动幅度",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        idle_speed: float = Field(
-            title="Idle 摆动速度",
-            default=1.0,
-            ge=0.0,
-            description="Idle 摆动速度系数",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        idle_update_interval_ms: float = Field(
-            title="Idle 更新间隔",
-            default=40.0,
-            ge=0.0,
-            description="Idle 更新间隔（秒；命名沿用）",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        idle_fade_speed: float = Field(
-            title="Idle 渐变速度",
-            default=0.15,
-            ge=0.0,
-            description="Idle 渐变速度",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        idle_head_enabled: bool = Field(title="是否启用 Idle 头部摆动", default=True, description="Idle 头部摆动开关")
-        idle_body_enabled: bool = Field(title="是否启用 Idle 身体摆动", default=True, description="Idle 身体摆动开关")
-        idle_pause_while_speaking: bool = Field(
-            title="说话时是否暂停 Idle", default=False, description="Idle 说话时是否暂停摆动"
-        )
-        # 动态键：Idle 额外参数集（人类登记的额外参数名+速度；类似 MCP servers 动态键例外）
-        idle_extra_params: Dict[str, float] = Field(
-            title="Idle 额外参数",
-            default_factory=dict,
-            description="Idle 额外参数 {参数名: 目标值}，人类配置预声明",
-            json_schema_extra={"x-ui-advanced": True},
-        )
-        # Optional[float] 历史兼容 →；空值不可用空串表达，保留字段类型 Optional 但默认 None
-        idle_extra_speed: Optional[float] = Field(
-            title="Idle 额外参数速度",
-            default=None,
-            description="Idle 额外参数速度（None=不额外调整）",
-            json_schema_extra={"x-ui-advanced": True},
-        )
 
     def __init__(
         self,
@@ -232,8 +122,6 @@ class VTSProvider(ConnectionToolProvider):
         # 共享口型分析器（装配注入；setup 时挂 VTS 渲染器，None = 不渲染口型）
         self.lipsync_analyzer = lipsync_analyzer
         self.logger = get_logger(self.__class__.__name__)
-        # fire-and-forget 后台任务强引用（防 GC 中途回收 + 异常可见化）
-        self._bg_tasks: set = set()
 
         # 配置（typed；空 dict = 全默认；失败 log+raise）
         try:
@@ -331,12 +219,8 @@ class VTSProvider(ConnectionToolProvider):
         self._reconnect_skip_polls = 0
         self._is_connected = False
         self._has_started = False
-        # idle 归一化值 → 参数原生量纲的缩放表（连接后按 VTS 实际范围构建；未知 = 1.0）
-        self._idle_param_scale: Dict[str, float] = {}
         # 换模跟随基线：上次解析链对应的模型名（空 = 未知，连接后记录）
         self._current_model_name: str = ""
-        # 说话状态（tts.utterance.started/finished 订阅驱动；idle 据此暂停摇摆）
-        self._is_speaking: bool = False
         # 事件订阅挂载项句柄（setup 时逐项 attach，cleanup 时一次全量退订摘除）
         self._bindings: Optional[AvatarBindings] = None
 
@@ -353,32 +237,6 @@ class VTSProvider(ConnectionToolProvider):
             is_connected=lambda: self._is_connected,
             vts_request=self._make_vts_request_proxy(),
         )
-        self.idle_motion = IdleMotionController(
-            logger_name=f"{self.__class__.__name__}.IdleMotion",
-            is_connected=lambda: self._is_connected,
-            # 说话状态由 tts.utterance.* 订阅驱动（setup 时绑定），不在口型件里兼任
-            is_speaking=lambda: self._is_speaking,
-            set_parameter=self._idle_set_param_proxy,
-            param_head_x=self.typed_config.idle_param_head_x,
-            param_head_y=self.typed_config.idle_param_head_y,
-            param_head_z=self.typed_config.idle_param_head_z,
-            param_body_x=self.typed_config.idle_param_body_x,
-            param_body_y=self.typed_config.idle_param_body_y,
-            param_body_z=self.typed_config.idle_param_body_z,
-            head_amplitude=self.typed_config.idle_head_amplitude,
-            body_amplitude=self.typed_config.idle_body_amplitude,
-            speed=self.typed_config.idle_speed,
-            update_interval_ms=self.typed_config.idle_update_interval_ms,
-            fade_speed=self.typed_config.idle_fade_speed,
-            head_enabled=self.typed_config.idle_head_enabled,
-            body_enabled=self.typed_config.idle_body_enabled,
-            speech_pause_enabled=self.typed_config.idle_pause_while_speaking,
-            extra_params=dict(self.typed_config.idle_extra_params),
-            extra_speed=self.typed_config.idle_extra_speed,
-        )
-        self.idle_motion.set_baseline_params({self.PARAM_MOUTH_SMILE: self.typed_config.base_smile})
-
-        self.idle_enabled_cfg = self.typed_config.idle_enabled
 
     # ===== ToolProvider 协议 =====
 
@@ -403,7 +261,7 @@ class VTSProvider(ConnectionToolProvider):
         specs.append(
             ToolSpec(
                 name="set_idle_enabled",
-                description="VTS 启停 idle 拟人动画（呼吸/摆头/身体摇摆）",
+                description="VTS 启停头部微动（没有动作时头部的轻微晃动）",
                 kind="sync",
                 provider=self.PROVIDER_NAME,
                 parameters_schema=_VTS_SET_IDLE_SCHEMA,
@@ -493,19 +351,14 @@ class VTSProvider(ConnectionToolProvider):
         self._reconnect_task = asyncio.create_task(self._reconnect_loop())
         self._reconnect_task.set_name(f"{self.__class__.__name__}.reconnect_loop")
 
-        # 事件订阅（被动响应业务事件）：情绪反射（streamer.speech）+ 说话状态（tts.utterance.*，
-        # 驱动 idle"说话时暂停摇摆"）；口型渲染挂到共享分析器（说话时 MouthOpen
-        # 跟随信号 + 常驻微笑基线维护）
+        # 事件订阅（被动响应业务事件）：情绪反射（streamer.speech）；口型渲染挂到共享
+        # 分析器（说话时 MouthOpen 跟随信号）
         self._bindings = AvatarBindings(self.event_bus, self.logger)
         self._bindings.attach_emotion_reflection(self)
-        self._bindings.attach_speaking_state(self._set_speaking)
         if self.lipsync_analyzer is not None:
             self._bindings.attach_lip_renderer(
                 self.lipsync_analyzer,
-                VtsLipSyncRenderer(
-                    set_parameter=self._expression_set_param_proxy,
-                    base_expressions={self.PARAM_MOUTH_SMILE: float(self.typed_config.base_smile)},
-                ),
+                VtsLipSyncRenderer(set_parameter=self._expression_set_param_proxy),
             )
 
         self._has_started = True
@@ -522,10 +375,6 @@ class VTSProvider(ConnectionToolProvider):
         await self._disconnect()
         self._has_started = False
         self.logger.info(f"{self.__class__.__name__} 已停止")
-
-    def _set_speaking(self, speaking: bool) -> None:
-        """说话状态回调（bind_speaking_state 驱动；idle 据此暂停摇摆）。"""
-        self._is_speaking = speaking
 
     # ===== 业务方法 =====
 
@@ -600,20 +449,8 @@ class VTSProvider(ConnectionToolProvider):
         return False
 
     def _set_idle_enabled(self, enabled: bool) -> None:
-        """启停 idle 拟人动画（不抛异常，重复启停幂等）"""
-        if enabled and not self.idle_motion._running:
-            try:
-                self.idle_motion.start()
-            except Exception as e:
-                self.logger.error(f"启动 idle 动画失败: {e}")
-        elif not enabled and self.idle_motion._running:
-            # 异步停止转后台任务，不阻塞调用方
-            spawn_background_task(
-                self.idle_motion.stop(),
-                logger=self.logger,
-                tasks=self._bg_tasks,
-                label=f"{self.__class__.__name__}.idle_motion_stop",
-            )
+        """头部微动开关：待机微动已退役，面捕合成器接入前这里没有可开关的动作。"""
+        self.logger.info(f"头部微动开关（{enabled}）暂无效果：待机微动已退役，面捕合成器接入后生效")
 
     def get_stats(self) -> Dict[str, Any]:
         return {
@@ -625,57 +462,6 @@ class VTSProvider(ConnectionToolProvider):
         }
 
     # ===== 内部辅助 =====
-
-    async def _idle_set_param_proxy(self, parameter_name: str, value: float) -> bool:
-        if not parameter_name:
-            return False
-        scaled = value * self._idle_param_scale.get(parameter_name, 1.0)
-        return await self.expression.set_parameter(parameter_name, scaled, weight=1, silent=True)
-
-    @staticmethod
-    def _idle_scale_for(ranges: Dict[str, tuple[float, float]], names: List[str]) -> Dict[str, float]:
-        """按参数原生范围计算 idle 归一化值的缩放系数（范围未知 = 原值 1.0）。
-
-        idle 控制器产出零中心归一化值（约 ±1 × 幅度配置），注入须落在参数
-        原生量纲内：取 ``max(|min|, |max|)`` 为半幅放大（FaceAngleX ±30 →
-        ±0.05 变 ±1.5°）；[0,1]/[-1,1] 类参数半幅 ≤ 1，行为不变。
-        """
-        scales: Dict[str, float] = {}
-        for name in names:
-            if not name:
-                continue
-            bounds = ranges.get(name)
-            if bounds is None:
-                continue
-            half_span = max(abs(bounds[0]), abs(bounds[1]))
-            scales[name] = half_span if half_span > 0 else 1.0
-        return scales
-
-    async def _refresh_idle_param_scale(self, resolved: Dict[str, str]) -> None:
-        """拉取 VTS 参数原生范围并构建 idle 写入缩放表（失败降级为全原值）。"""
-        try:
-            ranges = await self.expression.list_parameter_ranges()
-        except Exception as e:
-            self.logger.warning(f"拉取 VTS 参数范围失败，idle 按原值写入: {e}")
-            self._idle_param_scale = {}
-            return
-        if not ranges:
-            self.logger.warning("VTS 未返回参数范围，idle 按原值写入")
-            self._idle_param_scale = {}
-            return
-        names = [
-            resolved.get("head_x"),
-            resolved.get("head_y"),
-            resolved.get("head_z"),
-            resolved.get("body_x"),
-            resolved.get("body_y"),
-            resolved.get("body_z"),
-            self.PARAM_MOUTH_SMILE,
-            *self.typed_config.idle_extra_params.keys(),
-        ]
-        self._idle_param_scale = self._idle_scale_for(ranges, [n for n in names if n])
-        scaled = {n: s for n, s in self._idle_param_scale.items() if s != 1.0}
-        self.logger.info(f"idle 参数量纲缩放表: {scaled or '全部 1.0（无角度类参数）'}")
 
     async def _expression_set_param_proxy(self, parameter_name: str, value: float, weight: float = 1) -> bool:
         return await self.expression.set_parameter(parameter_name, value, weight)
@@ -705,37 +491,6 @@ class VTSProvider(ConnectionToolProvider):
 
         return VTSRequestProxy()
 
-    async def _resolve_idle_parameter_names(self) -> tuple[Dict[str, str], List[str]]:
-        """解析 idle 六轴绑定名（纯配置，无候选猜测）。
-
-        - 空配置名 = 该轴停用（零写入零警告）；
-        - 非空名不在 VTS 可注入参数清单 → 记入返回的不可用清单（调用方在
-          ``set_parameter_names`` 之后预置 failed_params 实现一次性警告 +
-          停写；哪个输入参数被模型绑定到哪个部位没有 API 可查，写入是否
-          有可见效果只能靠用户观察后自行改配置）。
-
-        Returns:
-            (轴名 → 绑定名（空串 = 停用）, 不可用绑定名清单)
-        """
-        available = set(await self.expression.list_tracking_parameters())
-        config_names = {
-            "head_x": str(self.typed_config.idle_param_head_x or ""),
-            "head_y": str(self.typed_config.idle_param_head_y or ""),
-            "head_z": str(self.typed_config.idle_param_head_z or ""),
-            "body_x": str(self.typed_config.idle_param_body_x or ""),
-            "body_y": str(self.typed_config.idle_param_body_y or ""),
-            "body_z": str(self.typed_config.idle_param_body_z or ""),
-        }
-        resolved = {axis: name for axis, name in config_names.items()}
-        unavailable = sorted({name for name in config_names.values() if name and available and name not in available})
-        if unavailable:
-            self.logger.warning(
-                f"idle 绑定 {unavailable} 不在 VTS 可注入参数清单（模型未绑定该输入或名字有误），"
-                f"对应轴将停写。当前可注入参数示例：{sorted(available)[:30]}；"
-                f"模型自身参数清单见 debug 日志，可从中选取绑定名改配置。"
-            )
-        return resolved, unavailable
-
     async def _connect(self) -> None:
         if self._is_connecting or self._is_connected:
             return
@@ -758,13 +513,6 @@ class VTSProvider(ConnectionToolProvider):
 
             await self._reload_model_state()
             self._current_model_name = await self._query_current_model_name()
-
-            if self.idle_enabled_cfg:
-                try:
-                    self.idle_motion.start()
-                    self.logger.info("VTS idle 动画已启动")
-                except Exception as e:
-                    self.logger.error(f"启动 idle 动画失败: {e}")
         except Exception as e:
             self.last_error = f"VTS 连接失败: {e}"
             self.logger.error(f"VTS 连接失败: {e}")
@@ -773,12 +521,7 @@ class VTSProvider(ConnectionToolProvider):
             self._is_connecting = False
 
     async def _reload_model_state(self) -> None:
-        """模型相关状态解析链：热键重拉 → idle 绑定解析 → 量纲缩放重建 → 基线重写。
-
-        连接建立与换模跟随共用；idle 循环在跑时更新绑定名即时生效，新模型
-        上写不进的参数经 failed_params 停写并警告。模型选择权在 VTS/人侧，
-        本链只做适配。
-        """
+        """模型相关状态：热键重拉 + Live2D 参数清单记 debug 日志（连接建立与换模跟随共用）。"""
         await self.hotkey_matcher.load_hotkeys()
 
         try:
@@ -787,31 +530,6 @@ class VTSProvider(ConnectionToolProvider):
                 self.logger.debug(f"当前模型 Live2D 参数清单（{len(live2d_names)} 项）: {sorted(live2d_names)}")
         except Exception as e:
             self.logger.debug(f"拉取 Live2D 参数清单失败（忽略）: {e}")
-
-        resolved, unavailable = await self._resolve_idle_parameter_names()
-        self.idle_motion.set_parameter_names(
-            param_head_x=resolved.get("head_x"),
-            param_head_y=resolved.get("head_y"),
-            param_head_z=resolved.get("head_z"),
-            param_body_x=resolved.get("body_x"),
-            param_body_y=resolved.get("body_y"),
-            param_body_z=resolved.get("body_z"),
-        )
-        if unavailable:
-            # 复用 idle 循环的失败停写集：预置后不写入、不逐 tick 刷屏
-            self.idle_motion.mark_failed_params(unavailable)
-
-        await self._refresh_idle_param_scale(resolved)
-
-        try:
-            await self.expression.set_parameter(
-                self.PARAM_MOUTH_SMILE,
-                float(self.typed_config.base_smile),
-                weight=1,
-                silent=True,
-            )
-        except Exception as e:
-            self.logger.warning(f"应用常驻微笑基线失败: {e}")
 
     async def _query_current_model_name(self) -> str:
         """查询 VTS 当前加载的模型名（AvailableModelsRequest 一次含清单与加载态）。"""
@@ -912,11 +630,6 @@ class VTSProvider(ConnectionToolProvider):
                 pass
         self._reconnect_task = None
 
-        try:
-            await self.idle_motion.stop()
-        except Exception as e:
-            self.logger.warning(f"停止 idle 动画失败: {e}")
-
         if not self._is_connected or not self._vts:
             return
         try:
@@ -953,7 +666,7 @@ class VTSProvider(ConnectionToolProvider):
     async def disconnect(self) -> bool:
         """手动断开 VTS 连接（手动重连的"断开"半步）。
 
-        复用 ``_disconnect`` 的关闭逻辑：停 idle → 取消后台重连循环 →
+        复用 ``_disconnect`` 的关闭逻辑：取消后台重连循环 →
         关 VTS WebSocket → 置 ``_is_connected=False``。区别于 ``cleanup``
         的是**不重置** ``_has_started``——手动断开不破坏 setup 语义，后续
         仍可再 connect；重连循环的恢复由 ``connect`` 负责（拉回循环），

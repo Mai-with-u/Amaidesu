@@ -242,11 +242,11 @@ def _check_avatar_platform(d: Path) -> None:
     platform = read_doc(d, "avatar.toml")["platform"]
     assert list(platform["enabled"]) == ["vts"]  # enabled 布尔换算为启用名单，仅 true 成员进名单
     vts = platform["vts"]  # 成员段去 .config 层直接铺键，用户显式值保真
-    assert (vts["vts_host"], vts["vts_port"], vts["idle_extra_params"]["SleeveL"]) == ("127.0.0.1", 8001, 0.3)
+    assert (vts["vts_host"], vts["vts_port"]) == ("127.0.0.1", 8001)
     assert (
         platform["warudo"]["ws_port"] == 19190 and "warudo" not in platform["enabled"]
     )  # false 成员配置保留但不进名单
-    assert vts["base_smile"] == 0.3  # 缺省键由 Schema 补默认
+    assert "idle_extra_params" not in vts and "base_smile" not in vts  # 待机键随后由面捕合成器接管而退役（2.0.42）
     assert "avatar" not in read_doc(d, "tools.toml")["tools"]
 
 
@@ -275,10 +275,9 @@ def _check_avatar_lipsync_and_idle(d: Path) -> None:
         True,
     )  # infra 的 lipsync 整段搬迁
     assert "avatar" not in read_doc(d, "infra.toml")
-    vts = avatar["platform"]["vts"]  # idle 绑定旧默认落盘值改写为新默认（2.0.39），非旧默认的键不受影响
-    assert [vts[f"idle_param_head_{axis}"] for axis in "xyz"] == ["FaceAngleX", "FaceAngleY", "FaceAngleZ"]
-    assert [vts[f"idle_param_body_{axis}"] for axis in "xyz"] == ["", "", ""]  # body 旧默认 → 空串停用
-    assert vts["vts_host"] == "127.0.0.1" and vts["idle_extra_params"]["SleeveL"] == 0.3
+    vts = avatar["platform"]["vts"]  # idle 绑定先在 2.0.39 改写为新默认，再随 2.0.42 整组退役
+    assert not [key for key in vts if key.startswith("idle_")]
+    assert vts["vts_host"] == "127.0.0.1"
 
 
 def _seed_warudo_expression(enabled: list[str], keep_profile: bool = False) -> Callable[[Path], None]:
@@ -305,6 +304,34 @@ def _check_warudo_expression(expected: str) -> Callable[[Path], None]:
             assert dict(emotions["happy"]) == {"happy": 1.0} and len(emotions) == 17
         else:  # 已有档案原样保留
             assert emotions.unwrap() == {"happy": {"smile": 1.0}}
+
+    return check
+
+
+def _seed_vts_idle(idle_enabled: bool, explicit_wander: bool = False) -> Callable[[Path], None]:
+    def seed(d: Path) -> None:
+        doc = _rewound(d, "avatar.toml", "2.0.41")
+        vts = doc["platform"]["vts"]
+        vts["base_smile"] = 0.4
+        vts["idle_enabled"] = idle_enabled
+        vts["idle_param_head_x"] = "FaceAngleX"
+        vts["idle_head_amplitude"] = 0.08
+        vts["idle_extra_params"] = {"SleeveL": 0.3}
+        if explicit_wander:  # 用户已在新段里显式写过头部微动开关
+            doc["tracking"]["head_wander_enabled"] = True
+        else:  # 拨回旧布局：还没有面捕合成器段
+            del doc["tracking"]
+        write_doc(d, "avatar.toml", doc)
+
+    return seed
+
+
+def _check_vts_idle(head_wander: bool) -> Callable[[Path], None]:
+    def check(d: Path) -> None:
+        avatar = read_doc(d, "avatar.toml")
+        vts = avatar["platform"]["vts"]
+        assert "base_smile" not in vts and not [key for key in vts if key.startswith("idle_")]
+        assert avatar["tracking"]["head_wander_enabled"] is head_wander
 
     return check
 
@@ -374,6 +401,19 @@ CASES = [
         _check_avatar_lipsync_and_idle,
     ),
     Case(
+        "vts-idle-retired-to-tracking",
+        ("avatar.toml",),
+        _seed_vts_idle(idle_enabled=False),
+        _check_vts_idle(head_wander=False),  # 关过待机微动：转成面捕合成器的头部微动开关
+    ),
+    Case("vts-idle-on-retired", ("avatar.toml",), _seed_vts_idle(idle_enabled=True), _check_vts_idle(True)),
+    Case(
+        "vts-idle-explicit-tracking-kept",
+        ("avatar.toml",),
+        _seed_vts_idle(idle_enabled=False, explicit_wander=True),
+        _check_vts_idle(True),  # 新段里用户显式写的值优先，旧开关不覆盖
+    ),
+    Case(
         "warudo-enabled-gets-maimai-profile",
         ("avatar.toml",),
         _seed_warudo_expression(["vts", "warudo"]),
@@ -422,6 +462,7 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "avatar_platform_to_avatar_file": ("case", "avatar-platform-graduation"),
     "avatar_lipsync_to_avatar_file": ("case", "avatar-lipsync-and-idle-bindings"),
     "warudo_maimai_expression": ("case", "warudo-enabled-gets-maimai-profile"),
+    "vts_idle_to_tracking": ("case", "vts-idle-retired-to-tracking"),
     "drop_minecraft_companion_collectors": ("case", "minecraft-companion-collectors"),
     "drop_bili_danmaku_message_config": ("case", "bili-danmaku-message-config"),
     "drop_profile_history_budget": ("case", "profile-history-budget"),
