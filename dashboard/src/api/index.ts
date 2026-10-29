@@ -111,6 +111,9 @@ import type {
   AvatarDebugStatusResponse,
   AvatarDebugTriggerRequest,
   AvatarDebugTriggerResponse,
+  AvatarTuningProfile,
+  AvatarTuningRecipe,
+  AvatarTuningState,
 } from '@/types';
 
 const api = axios.create({
@@ -421,6 +424,42 @@ export const avatarApi = {
   getDebugStatus: () => api.get<AvatarDebugStatusResponse>('/avatar/debug/status'),
   triggerDebug: (request: AvatarDebugTriggerRequest) =>
     api.post<AvatarDebugTriggerResponse>('/avatar/debug/trigger', request),
+};
+
+// 形象调校（看着形象实时调面捕合成器）
+//
+// 除 `save` 外的改动都只在运行中生效、不写文件：调的时候可以放心乱拖，重启即回到
+// avatar.toml 里的值；`save` 把当前生效的调参、配方覆盖与平台校准项一次写回。
+// 面捕合成器没装配时所有端点 503。
+export const avatarTuningApi = {
+  getProfile: () => api.get<AvatarTuningProfile>('/avatar/tuning'),
+  getState: () => api.get<AvatarTuningState>('/avatar/tuning/state'),
+  patchConfig: (changes: Record<string, unknown>) =>
+    api.patch<{ config: Record<string, unknown> }>('/avatar/tuning/config', { changes }),
+  putRecipe: (emotion: string, offsets: Record<string, number>, motion: number | null) =>
+    api.put<AvatarTuningRecipe>(`/avatar/tuning/recipes/${encodeURIComponent(emotion)}`, {
+      offsets,
+      motion,
+    }),
+  resetRecipe: (emotion: string) =>
+    api.delete<AvatarTuningRecipe>(`/avatar/tuning/recipes/${encodeURIComponent(emotion)}`),
+  preview: (emotion: string, intensity: number, seconds: number) =>
+    api.post<{ outcome: string }>('/avatar/tuning/preview', { emotion, intensity, seconds }),
+  look: (x: number, y: number, durationMs = 1500) =>
+    api.post('/avatar/tuning/look', { x, y, duration_ms: durationMs }),
+  act: (action: string) => api.post<{ success: boolean }>('/avatar/tuning/act', { action }),
+  setManual: (values: Record<string, number>, holdMs: number) =>
+    api.put('/avatar/tuning/manual', { values, hold_ms: holdMs }),
+  clearManual: () => api.delete('/avatar/tuning/manual'),
+  calibrate: (driver: string, values: Record<string, number>) =>
+    api.patch<{ values: Record<string, number> }>(
+      `/avatar/tuning/calibration/${encodeURIComponent(driver)}`,
+      { values },
+    ),
+  save: () =>
+    api.post<{ success: boolean; saved: number; target_file: string | null }>(
+      '/avatar/tuning/save',
+    ),
 };
 
 // Rundown（流程单编排页）

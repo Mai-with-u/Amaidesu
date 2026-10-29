@@ -1099,6 +1099,59 @@ export interface AvatarDebugTriggerResponse {
   structured_content: Record<string, unknown> | null;
 }
 
+/** 形象调校页的一个可调字段（标题、说明、范围取自后端配置 Schema） */
+export interface AvatarTuningField {
+  key: string;
+  value: unknown;
+  title: string;
+  description: string;
+  /** JSON Schema 类型：boolean / integer / number */
+  type: string;
+  min: number | null;
+  max: number | null;
+  /** 配置页里归为"高级"的字段（调校页照样显示，只是排在组内靠后也无妨） */
+  advanced: boolean;
+}
+
+/** 一个情绪的表情配方：默认、生效（含人设覆盖）与是否改过 */
+export interface AvatarTuningRecipe {
+  family: string;
+  offsets: Record<string, number>;
+  motion: number;
+  default_offsets: Record<string, number>;
+  default_motion: number;
+  overridden: boolean;
+}
+
+/** `GET /avatar/tuning`：调校页需要的全部静态信息 */
+export interface AvatarTuningProfile {
+  fields: AvatarTuningField[];
+  recipes: Record<string, AvatarTuningRecipe>;
+  /** 配方里能写的键与允许的最大偏移量 */
+  recipe_keys: { key: string; span: number }[];
+  motion_range: [number, number];
+  channels: { name: string; min: number; max: number }[];
+  /** 各驱动的换算校准项（如 VTS 上"正常睁眼"对应的输入值） */
+  calibrations: { driver: string; items: AvatarTuningField[] }[];
+  actions: { name: string; kind: string; description: string }[];
+  /** 运行中的调参 / 配方 / 校准项和 avatar.toml 不一致（有没保存的修改） */
+  unsaved: boolean;
+}
+
+/** `GET /avatar/tuning/state`：此刻的身体状态 */
+export interface AvatarTuningState {
+  frame: Record<string, number>;
+  emotion: string;
+  mood: { valence: number; arousal: number };
+  thinking: boolean;
+  speaking: boolean;
+  /** 手动摆姿是否生效中 */
+  manual: boolean;
+  drivers: string[];
+  /** 帧循环是否在跑（没有驱动挂着时不跑，形象不会动） */
+  running: boolean;
+}
+
 /** 观众身份确认状态：confirmed=已确认 / pending=与老观众同名、待人工确认是不是同一个人 */
 export type ViewerLinkStatus = 'confirmed' | 'pending';
 
