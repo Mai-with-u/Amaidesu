@@ -36,6 +36,7 @@ GESTURES: Dict[str, Gesture] = {
     "吓一跳": Gesture("被吓到", ((0, "startle", 1.0),)),
     "皱眉": Gesture("不满、吃痛", ((0, "wince", 1.0),)),
     "抬眉": Gesture("诶？意外、追问", ((0, "alert", 1.0),)),
+    "眨一只眼": Gesture("俏皮、卖萌、心照不宣", ((0, "wink", 1.0),)),
     LOOK_AT_CHAT: Gesture("看一眼弹幕区"),
 }
 

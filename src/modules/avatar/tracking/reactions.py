@@ -15,7 +15,17 @@ from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Tuple
 
 from .behaviors import smootherstep
-from .channels import BROW, EYE_OPEN, EYE_WIDE, HEAD_PITCH, HEAD_ROLL, HEAD_YAW, MOUTH_OPEN, MOUTH_SMILE
+from .channels import (
+    BROW,
+    EYE_OPEN,
+    EYE_OPEN_L,
+    EYE_WIDE,
+    HEAD_PITCH,
+    HEAD_ROLL,
+    HEAD_YAW,
+    MOUTH_OPEN,
+    MOUTH_SMILE,
+)
 
 
 @dataclass(frozen=True)
@@ -52,6 +62,8 @@ PULSES: Dict[str, PulseRecipe] = {
     "shake_left": PulseRecipe({HEAD_YAW: -12.0}, 140, 30, 170),
     "shake_right": PulseRecipe({HEAD_YAW: 12.0}, 140, 30, 170),
     "tilt": PulseRecipe({HEAD_ROLL: 10.0, HEAD_PITCH: -1.0}, 300, 1200, 500),
+    # 眨一只眼：一只眼闭上停一会儿，同时嘴角上扬、头往闭眼那侧轻歪（俏皮卖萌）
+    "wink": PulseRecipe({EYE_OPEN_L: -1.0, MOUTH_SMILE: 0.4, HEAD_ROLL: 4.0}, 90, 350, 200),
 }
 
 

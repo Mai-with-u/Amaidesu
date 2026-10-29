@@ -42,6 +42,7 @@ PULSE_PUSH: Dict[str, Tuple[float, float]] = {
     "startle": (0.0, 0.15),
     "alert": (0.0, 0.08),
     "wince": (-0.08, 0.05),
+    "wink": (0.05, 0.03),
 }
 
 
