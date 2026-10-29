@@ -7,6 +7,14 @@
 - ``tts.utterance.finished``：播完，表情再停留一会儿后回落；
 - ``tts.utterance.failed``：没播出来，记下的情绪作废，已上脸的立刻回落。
 
+非说话时间（都是现成的事实事件，主播包不为形象多发任何东西）：
+- ``streamer.stage``：Planner 开始想（planning）就进入思考——前几秒来过弹幕就先读弹幕，
+  再把视线移开；回到空闲（idle）思考结束；
+- ``room.message.*``：弹幕到达时瞥一眼弹幕区（正在想或正在说时不瞥，避免左顾右盼）；
+  礼物、SC、上舰再眼睛一亮；
+- ``game.*``：重大进展眼睛一亮、需要关注"诶？"一下、出错皱眉一缩——比主播开口说这件事
+  早好几秒，正好是人"先一惊、再开口"的顺序。
+
 口型分析器的信号经一个只记数值的渲染器接进来，帧循环每帧取最新值。没有驱动挂着
 时帧循环不跑，零开销。所有路径 fail-soft：驱动写失败、事件处理异常只记日志。
 """
@@ -17,11 +25,14 @@ import asyncio
 import random
 import time
 from collections import OrderedDict
-from typing import Any, Callable, List, Optional, Protocol, Set, Tuple, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple, runtime_checkable
 
 from src.modules.avatar.lipsync import LipSyncRenderer, MouthSignal
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.planner import StreamerStagePayload
+from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import (
     UtteranceFailedPayload,
@@ -74,6 +85,18 @@ class TrackingRuntime:
     # 收到"开始播放"后先按预计时长 + 余量排一个回落时刻，"播完"事件到了再以它为准；
     # 万一播完事件丢了，表情也不会一直停在脸上
     SAFETY_MARGIN_MS = 2000
+    # 开始思考前这么久之内来过弹幕，就先读弹幕再想
+    READ_WINDOW_MS = 8000
+    # 瞥一眼弹幕区：弹幕看得短、两次至少隔 5 秒；礼物类看得久一点、间隔也短
+    DANMAKU_GLANCE = (900, 5000)
+    PAID_GLANCE = (1200, 1500)
+    # 付费消息眼睛一亮的幅度；游戏事件 → 脉冲（名字, 幅度）
+    PAID_BRIGHTEN: Dict[str, float] = {"gift": 0.6, "super_chat": 0.9, "guard": 1.0}
+    GAME_PULSES: Dict[str, Tuple[str, float]] = {
+        "milestone": ("brighten", 0.8),
+        "attention_required": ("alert", 1.0),
+        "error": ("wince", 0.8),
+    }
 
     def __init__(
         self,
@@ -106,8 +129,34 @@ class TrackingRuntime:
         self._pending: "OrderedDict[str, Tuple[str, float, int]]" = OrderedDict()
         self._playing: Set[str] = set()
         self._tool_seq = 0
+        self._last_chat_ms = -(10**12)
         self._loop_task: Optional[asyncio.Task] = None
         self._started = False
+
+    def _subscriptions(self) -> List[Tuple[str, Callable[..., Any], type]]:
+        """订阅清单：(事件名, 处理函数, 载荷类)，订阅与退订共用。"""
+        room = [
+            (name, self._on_room_message, RoomMessagePayload)
+            for name in (
+                CoreEvents.ROOM_MESSAGE_DANMAKU,
+                CoreEvents.ROOM_MESSAGE_GIFT,
+                CoreEvents.ROOM_MESSAGE_SUPER_CHAT,
+                CoreEvents.ROOM_MESSAGE_GUARD,
+            )
+        ]
+        game = [
+            (name, self._on_game, GamePayload)
+            for name in (CoreEvents.GAME_MILESTONE, CoreEvents.GAME_ATTENTION_REQUIRED, CoreEvents.GAME_ERROR)
+        ]
+        return [
+            (CoreEvents.STREAMER_SPEECH, self._on_speech, StreamerSpeechPayload),
+            (CoreEvents.TTS_UTTERANCE_STARTED, self._on_started, UtteranceStartedPayload),
+            (CoreEvents.TTS_UTTERANCE_FINISHED, self._on_finished, UtteranceFinishedPayload),
+            (CoreEvents.TTS_UTTERANCE_FAILED, self._on_failed, UtteranceFailedPayload),
+            (CoreEvents.STREAMER_STAGE, self._on_stage, StreamerStagePayload),
+            *room,
+            *game,
+        ]
 
     # ===== 生命周期 =====
 
@@ -118,10 +167,8 @@ class TrackingRuntime:
         self._started = True
         bus = self._event_bus
         if bus is not None:
-            bus.on(CoreEvents.STREAMER_SPEECH, self._on_speech, model_class=StreamerSpeechPayload)
-            bus.on(CoreEvents.TTS_UTTERANCE_STARTED, self._on_started, model_class=UtteranceStartedPayload)
-            bus.on(CoreEvents.TTS_UTTERANCE_FINISHED, self._on_finished, model_class=UtteranceFinishedPayload)
-            bus.on(CoreEvents.TTS_UTTERANCE_FAILED, self._on_failed, model_class=UtteranceFailedPayload)
+            for name, handler, model in self._subscriptions():
+                bus.on(name, handler, model_class=model)
         if self._lipsync_analyzer is not None:
             self._lipsync_analyzer.add_renderer(self._mouth_tap)
         self.logger.info(f"面捕合成器已启动（{self._config.tick_hz} 帧/秒，TTS {'开' if self._tts_enabled else '关'}）")
@@ -134,12 +181,7 @@ class TrackingRuntime:
         self._started = False
         bus = self._event_bus
         if bus is not None:
-            for name, handler in (
-                (CoreEvents.STREAMER_SPEECH, self._on_speech),
-                (CoreEvents.TTS_UTTERANCE_STARTED, self._on_started),
-                (CoreEvents.TTS_UTTERANCE_FINISHED, self._on_finished),
-                (CoreEvents.TTS_UTTERANCE_FAILED, self._on_failed),
-            ):
+            for name, handler, _ in self._subscriptions():
                 try:
                     bus.off(name, handler)
                 except Exception as exc:  # noqa: BLE001 - 退订失败不阻断关停
@@ -280,6 +322,8 @@ class TrackingRuntime:
             now = self._clock()
             self._playing.add(payload.utterance_id)
             self.synthesizer.set_speaking(True)
+            # 开口即想完了：思考神情散去、视线回到镜头（阶段事件可能稍晚才到）
+            self.synthesizer.end_thinking(now)
             entry = self._pending.pop(payload.utterance_id, None)
             if entry is None:
                 return
@@ -296,6 +340,45 @@ class TrackingRuntime:
     async def _on_failed(self, event_name: str, payload: UtteranceFailedPayload, source: str) -> None:
         self._pending.pop(payload.utterance_id, None)
         self._end_utterance(payload.utterance_id, linger=False)
+
+    async def _on_stage(self, event_name: str, payload: StreamerStagePayload, source: str) -> None:
+        try:
+            now = self._clock()
+            if payload.stage == "planning":
+                recent_chat = now - self._last_chat_ms <= self.READ_WINDOW_MS
+                self.synthesizer.begin_thinking(now, read_first_ms=self._config.reading_ms if recent_chat else 0)
+            elif payload.stage == "idle":
+                self.synthesizer.end_thinking(now)
+        except Exception:  # noqa: BLE001 - 装饰性路径边界
+            self.logger.exception(f"阶段事件处理异常（已忽略）: stage={getattr(payload, 'stage', '?')}")
+
+    async def _on_room_message(self, event_name: str, payload: RoomMessagePayload, source: str) -> None:
+        try:
+            now = self._clock()
+            self._last_chat_ms = now
+            if not self._config.room_reactions_enabled:
+                return
+            kind = payload.message_type
+            if kind == "danmaku":
+                if not self.synthesizer.thinking and not self._playing:
+                    duration, gap = self.DANMAKU_GLANCE
+                    self.synthesizer.glance_at_chat(now, duration_ms=duration, min_gap_ms=gap)
+            elif kind in self.PAID_BRIGHTEN:
+                duration, gap = self.PAID_GLANCE
+                self.synthesizer.glance_at_chat(now, duration_ms=duration, min_gap_ms=gap)
+                self.synthesizer.pulse("brighten", now, self.PAID_BRIGHTEN[kind])
+        except Exception:  # noqa: BLE001 - 装饰性路径边界
+            self.logger.exception(f"直播间消息反应异常（已忽略）: {event_name}")
+
+    async def _on_game(self, event_name: str, payload: GamePayload, source: str) -> None:
+        try:
+            if not self._config.game_reactions_enabled:
+                return
+            reaction = self.GAME_PULSES.get(payload.event_type)
+            if reaction is not None:
+                self.synthesizer.pulse(reaction[0], self._clock(), reaction[1])
+        except Exception:  # noqa: BLE001 - 装饰性路径边界
+            self.logger.exception(f"游戏事件反应异常（已忽略）: {event_name}")
 
     def _end_utterance(self, utterance_id: str, *, linger: bool) -> None:
         try:

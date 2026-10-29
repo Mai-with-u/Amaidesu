@@ -1,4 +1,4 @@
-"""面捕合成器运行时：表情跟着播放时刻走、播放失败作废、无语音即时上脸、驱动挂载与收尾、口型接线"""
+"""面捕合成器运行时：表情跟着播放时刻走、播放失败作废、无语音即时上脸、驱动挂载与收尾、口型接线、思考与读弹幕、直播间与游戏反应"""
 
 from __future__ import annotations
 
@@ -7,11 +7,13 @@ import random
 import pytest
 
 from src.modules.avatar.lipsync import MouthSignal
-from src.modules.avatar.tracking.channels import EYE_OPEN_L, MOUTH_OPEN
+from src.modules.avatar.tracking.channels import BROW_L, EYE_OPEN_L, GAZE_X, GAZE_Y, MOUTH_OPEN, MOUTH_SMILE
 from src.modules.avatar.tracking.config import TrackingConfig
 from src.modules.avatar.tracking.runtime import TrackingDriver, TrackingRuntime
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.planner import StreamerStagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import (
     UtteranceFailedPayload,
@@ -21,6 +23,7 @@ from src.modules.events.payloads.utterance import (
 from tests.config.helpers import wait_until
 from tests.helpers import FakeClock
 from tests.modules.avatar.tracking.fakes import FakeLipsyncAnalyzer, RecordingDriver
+from tests.modules.storage.helpers import make_room_message
 
 LINGER_MS = 1500
 
@@ -163,3 +166,79 @@ async def test_lipsync_signal_reaches_mouth_while_speaking(event_bus: EventBus, 
     assert frame[MOUTH_OPEN] == pytest.approx(0.5)
     await runtime.stop()
     assert analyzer.renderers == []
+
+
+async def _advance(runtime: TrackingRuntime, clock: FakeClock, ms: int) -> dict[str, float]:
+    frame: dict[str, float] = {}
+    for _ in range(max(1, ms // 33)):
+        clock.tick(33)
+        frame = await runtime.tick_once()
+    return frame
+
+
+def _stage(stage: str) -> StreamerStagePayload:
+    return StreamerStagePayload(stage=stage)
+
+
+async def test_danmaku_glance_then_thinking_reads_it_and_idle_looks_back(
+    event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    runtime = _runtime(event_bus, fake_clock)
+    await runtime.start()
+    await runtime.tick_once()
+    await _emit(event_bus, CoreEvents.ROOM_MESSAGE_DANMAKU, make_room_message(content="主播好"))
+    assert (await _advance(runtime, fake_clock, 400))[GAZE_X] == pytest.approx(0.45)  # 有弹幕来：瞥一眼弹幕区
+    assert abs((await _advance(runtime, fake_clock, 1200))[GAZE_X]) < 0.05  # 瞥完回来
+
+    await _emit(event_bus, CoreEvents.STREAMER_STAGE, _stage("planning"))  # 弹幕后不久开始想
+    reading = await _advance(runtime, fake_clock, 1500)
+    assert (reading[GAZE_X], reading[GAZE_Y]) == (pytest.approx(0.45), pytest.approx(-0.35))  # 先读弹幕
+    away = await _advance(runtime, fake_clock, 1500)
+    assert away[GAZE_Y] > 0.1  # 读完望向别处想
+    await _emit(event_bus, CoreEvents.STREAMER_STAGE, _stage("idle"))
+    assert abs((await _advance(runtime, fake_clock, 800))[GAZE_Y]) < 0.05
+    await runtime.stop()
+
+
+async def test_proactive_thinking_looks_away_and_playback_ends_it(event_bus: EventBus, fake_clock: FakeClock) -> None:
+    runtime = _runtime(event_bus, fake_clock)
+    await runtime.start()
+    await _emit(event_bus, CoreEvents.STREAMER_STAGE, _stage("planning"))  # 没有弹幕：主动开口前的思考
+    assert (await _advance(runtime, fake_clock, 600))[GAZE_Y] > 0.1
+    started = UtteranceStartedPayload(utterance_id="u1", speech_text="嗯", engine="fake")
+    await _emit(event_bus, CoreEvents.TTS_UTTERANCE_STARTED, started)
+    assert abs((await _advance(runtime, fake_clock, 800))[GAZE_Y]) < 0.05  # 开口即看回镜头
+    await runtime.stop()
+
+
+async def test_gift_glances_and_brightens_even_while_speaking_but_danmaku_does_not(
+    event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    runtime = _runtime(event_bus, fake_clock)
+    await runtime.start()
+    started = UtteranceStartedPayload(utterance_id="u1", speech_text="说着话", engine="fake")
+    await _emit(event_bus, CoreEvents.TTS_UTTERANCE_STARTED, started)
+    rest = await _advance(runtime, fake_clock, 300)
+    await _emit(event_bus, CoreEvents.ROOM_MESSAGE_DANMAKU, make_room_message(content="hi"))
+    assert abs((await _advance(runtime, fake_clock, 300))[GAZE_X]) < 0.05  # 说话时弹幕不让她左顾右盼
+    await _emit(event_bus, CoreEvents.ROOM_MESSAGE_GIFT, make_room_message(message_type="gift"))
+    frame = await _advance(runtime, fake_clock, 400)
+    assert frame[GAZE_X] == pytest.approx(0.45) and frame[MOUTH_SMILE] > rest[MOUTH_SMILE] + 0.1  # 看一眼礼物、眼睛一亮
+    await runtime.stop()
+
+
+@pytest.mark.parametrize(
+    ("event_type", "channel", "direction"),
+    [("milestone", MOUTH_SMILE, 1), ("attention_required", BROW_L, 1), ("error", BROW_L, -1)],
+)
+async def test_game_events_trigger_wordless_reactions(
+    event_bus: EventBus, fake_clock: FakeClock, event_type: str, channel: str, direction: int
+) -> None:
+    runtime = _runtime(event_bus, fake_clock)
+    await runtime.start()
+    rest = await runtime.tick_once()
+    payload = GamePayload(game="minecraft", event_type=event_type, message="游戏里发生了事")
+    await _emit(event_bus, f"game.{event_type}", payload)
+    frame = await _advance(runtime, fake_clock, 350)
+    assert (frame[channel] - rest[channel]) * direction > 0.1
+    await runtime.stop()

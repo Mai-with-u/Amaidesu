@@ -186,15 +186,21 @@ class TrackingSynthesizer:
         if self._read_until is not None and now_ms < self._read_until:
             return GazeGenerator.READING, (cfg.chat_gaze_x, cfg.chat_gaze_y)
         if self._away_next is None or now_ms >= self._away_next:
-            # 思考时望向侧上方（真人思考时会避开视觉刺激）；隔几秒挪一挪，大多留在同一侧
             rng = self._rng
-            side = (
-                (1.0 if self._away_point[0] >= 0 else -1.0) if self._away_next is not None else rng.choice((-1.0, 1.0))
-            )
-            if rng.random() < 0.25:
-                side = -side
-            self._away_point = (side * rng.uniform(0.3, 0.5), rng.uniform(0.15, 0.35))
-            self._away_next = now_ms + int(rng.uniform(*self.AWAY_SHIFT_MS))
+            if self._away_next is not None and rng.random() < 0.2:
+                # 想得久了偶尔看回镜头一下，再接着想
+                self._away_point = (0.0, 0.0)
+                self._away_next = now_ms + int(rng.uniform(900, 1600))
+            else:
+                # 思考时望向侧上方（真人思考时会避开视觉刺激）；隔几秒挪一挪，大多留在同一侧
+                if self._away_next is None or self._away_point == (0.0, 0.0):
+                    side = rng.choice((-1.0, 1.0))
+                else:
+                    side = 1.0 if self._away_point[0] >= 0 else -1.0
+                if rng.random() < 0.25:
+                    side = -side
+                self._away_point = (side * rng.uniform(0.3, 0.5), rng.uniform(0.15, 0.35))
+                self._away_next = now_ms + int(rng.uniform(*self.AWAY_SHIFT_MS))
         return GazeGenerator.FIXATE, self._away_point
 
     def step(self, now_ms: int) -> Frame:

@@ -6,10 +6,11 @@
 - 旧链路下表情比声音早多少（发言事件到开始播放的间隔）；
 - 表情每分钟出现 / 切换几次；
 - 说话与不说话时每分钟眨几次；
-- 头和眼睛最长有多久完全不动。
+- 头和眼睛最长有多久完全不动；
+- 主播在想下一句的时候，视线有多少时间离开了镜头。
 
-事件来源是事件历史记录器落盘的 JSONL（每行含 ``event_name`` 与 ``data``）；合成器
-只关心发言与 TTS 播放四种事件，其余事件跳过。
+事件来源是事件历史记录器落盘的 JSONL（每行含 ``event_name`` 与 ``data``）；只挑运行时
+订阅的事件（发言、TTS 播放、主播阶段、直播间消息、游戏事件），其余跳过。
 """
 
 from __future__ import annotations
@@ -25,6 +26,9 @@ from pydantic import BaseModel, ValidationError
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.planner import StreamerStagePayload
+from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import (
     UtteranceFailedPayload,
@@ -32,7 +36,7 @@ from src.modules.events.payloads.utterance import (
     UtteranceStartedPayload,
 )
 
-from .channels import EYE_OPEN_L, GAZE_X, HEAD_PITCH, HEAD_ROLL, HEAD_YAW, Frame
+from .channels import EYE_OPEN_L, GAZE_X, GAZE_Y, HEAD_PITCH, HEAD_ROLL, HEAD_YAW, Frame
 from .config import TrackingConfig
 from .runtime import TrackingRuntime
 
@@ -43,10 +47,18 @@ _PAYLOADS: Dict[str, type[BaseModel]] = {
     CoreEvents.TTS_UTTERANCE_STARTED: UtteranceStartedPayload,
     CoreEvents.TTS_UTTERANCE_FINISHED: UtteranceFinishedPayload,
     CoreEvents.TTS_UTTERANCE_FAILED: UtteranceFailedPayload,
+    CoreEvents.STREAMER_STAGE: StreamerStagePayload,
+    CoreEvents.ROOM_MESSAGE_DANMAKU: RoomMessagePayload,
+    CoreEvents.ROOM_MESSAGE_GIFT: RoomMessagePayload,
+    CoreEvents.ROOM_MESSAGE_SUPER_CHAT: RoomMessagePayload,
+    CoreEvents.ROOM_MESSAGE_GUARD: RoomMessagePayload,
+    CoreEvents.GAME_MILESTONE: GamePayload,
+    CoreEvents.GAME_ATTENTION_REQUIRED: GamePayload,
+    CoreEvents.GAME_ERROR: GamePayload,
 }
 
 # 曲线图里画哪些通道（画全部太挤）
-PLOT_CHANNELS = ("head_yaw", "head_pitch", "gaze_x", "eye_open_l", "brow_l", "mouth_smile", "mouth_open")
+PLOT_CHANNELS = ("head_yaw", "head_pitch", "gaze_x", "gaze_y", "eye_open_l", "brow_l", "mouth_smile", "mouth_open")
 # "头和眼睛完全不动"的判定：这几个通道每帧变化都小于阈值（真正冻住，不是慢速漫步的首尾）
 _STILL_CHANNELS = (HEAD_YAW, HEAD_PITCH, HEAD_ROLL, EYE_OPEN_L, GAZE_X)
 _STILL_EPSILON = 0.001
@@ -162,6 +174,24 @@ def _speaking_intervals(events: List[ReplayEvent]) -> List[Tuple[int, int]]:
     return intervals
 
 
+def _thinking_intervals(events: List[ReplayEvent]) -> List[Tuple[int, int]]:
+    """Planner 每次从开始想（planning）到回到空闲（idle）或开口的时间段。"""
+    intervals: List[Tuple[int, int]] = []
+    since: Optional[int] = None
+    for event in events:
+        if event.name == CoreEvents.STREAMER_STAGE:
+            stage = getattr(event.payload, "stage", "")
+            if stage == "planning" and since is None:
+                since = event.t_ms
+            elif stage == "idle" and since is not None:
+                intervals.append((since, event.t_ms))
+                since = None
+        elif event.name == CoreEvents.TTS_UTTERANCE_STARTED and since is not None:
+            intervals.append((since, event.t_ms))
+            since = None
+    return intervals
+
+
 def _percentile(values: List[int], q: float) -> Optional[int]:
     if not values:
         return None
@@ -196,6 +226,10 @@ def compute_metrics(result: ReplayResult) -> Dict[str, Any]:
     speaking_ms = sum(min(end, frames[-1][0]) - start for start, end in intervals) if frames else 0
     idle_ms = max(duration_ms - speaking_ms, 0)
 
+    thinking = _thinking_intervals(result.events)
+    thinking_frames = [f for f in frames if any(start <= f[0] < end for start, end in thinking)]
+    away = sum(1 for f in thinking_frames if abs(f[1].get(GAZE_X, 0.0)) > 0.2 or abs(f[1].get(GAZE_Y, 0.0)) > 0.2)
+
     still_run = still_max = 0
     for a, b in zip(frames, frames[1:], strict=False):
         moved = any(abs(b[1].get(ch, 0.0) - a[1].get(ch, 0.0)) >= _STILL_EPSILON for ch in _STILL_CHANNELS)
@@ -216,6 +250,8 @@ def compute_metrics(result: ReplayResult) -> Dict[str, Any]:
         else None,
         "blinks_per_min_idle": round(blinks["idle"] / max(idle_ms / 60_000, 1e-9), 1) if idle_ms else None,
         "longest_still_ms": still_max,
+        "thinking_s": round(len(thinking_frames) * FRAME_MS / 1000, 1),
+        "thinking_gaze_away_ratio": round(away / len(thinking_frames), 2) if thinking_frames else None,
     }
 
 
