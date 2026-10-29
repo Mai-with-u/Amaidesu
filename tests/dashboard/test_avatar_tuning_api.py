@@ -36,8 +36,8 @@ class VtsLikeDriver(RecordingDriver):
 
 @pytest.fixture
 async def tuning(api, fake_clock: FakeClock, initialized_config: ConfigService):
-    config = TrackingConfig(blink_enabled=False, gaze_enabled=False, head_wander_enabled=False)
-    runtime = TrackingRuntime(config, clock=fake_clock.now_ms, rng=random.Random(0), run_loop=False)
+    # 调参用默认值：和首启生成的 avatar.toml 一致，"有没有未保存的修改"才从干净状态起算
+    runtime = TrackingRuntime(TrackingConfig(), clock=fake_clock.now_ms, rng=random.Random(0), run_loop=False)
     await runtime.start()
     driver = VtsLikeDriver()
     await runtime.attach(driver)
@@ -64,6 +64,7 @@ async def test_profile_reads_titles_and_ranges_from_schema(tuning) -> None:
     assert vts["driver"] == "vts" and items["eye_open_rest"]["title"] == "正常睁眼的输入值"
     assert items["eye_open_rest"]["min"] == 0.05 and items["eye_open_rest"]["value"] == 0.55
     assert any(action["name"] == "点头" for action in body["actions"])
+    assert body["unsaved"] is False  # 刚启动：运行中的值就是文件里的值
 
 
 async def test_config_patch_applies_live_and_rejects_bad_values(tuning) -> None:
@@ -124,8 +125,10 @@ async def test_save_writes_tuning_back_to_avatar_toml(tuning) -> None:
     await client.patch(f"{BASE}/config", json={"changes": {"rest_smile": 0.3, "camera_gaze_x": 0.2}})
     await client.put(f"{BASE}/recipes/happy", json={"offsets": {"eye_open": -0.85}, "motion": 1.2})
     await client.patch(f"{BASE}/calibration/vts", json={"values": {"eye_open_rest": 0.6}})
+    assert (await client.get(BASE)).json()["unsaved"] is True  # 刷新页面也知道有没保存的修改
     resp = await client.post(f"{BASE}/save")
     assert resp.status_code == 200 and resp.json()["success"] is True
+    assert (await client.get(BASE)).json()["unsaved"] is False
 
     saved = tomllib.loads(avatar_toml.read_text(encoding="utf-8"))
     assert saved["tracking"]["rest_smile"] == 0.3 and saved["tracking"]["camera_gaze_x"] == 0.2

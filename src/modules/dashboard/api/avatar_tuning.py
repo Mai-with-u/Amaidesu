@@ -3,7 +3,8 @@
 端点（前缀 ``/api/v1/avatar/tuning``）：
 
 - ``GET ""``：调校页需要的全部静态信息——当前生效的调参与各字段说明、表情配方
-  （默认 / 覆盖 / 生效）、配方可写的键、通用通道、各驱动的校准项、动作目录；
+  （默认 / 覆盖 / 生效）、配方可写的键、通用通道、各驱动的校准项、动作目录，以及
+  运行中的值和 avatar.toml 是否不一致（刷新页面后仍能提示"有未保存的修改"）；
 - ``GET /state``：此刻的身体状态（最近一帧、主表情、心情、在想 / 在说、手动摆姿）；
 - ``PATCH /config``：改若干调参，校验通过立刻生效（不写文件）；
 - ``PUT / DELETE /recipes/{emotion}``：改某个情绪的配方 / 恢复默认（立刻生效，不写文件）；
@@ -39,6 +40,7 @@ from src.modules.config.avatar_schemas import AvatarPlatformConfig
 from src.modules.dashboard.dependencies import get_dashboard_server, server_component
 from src.modules.dashboard.services.config_adapter import apply_config_updates
 from src.modules.dashboard.utils.component_helper import config_dir as get_config_dir
+from src.modules.dashboard.utils.component_helper import read_toml_dict
 from src.modules.logging import get_logger
 
 if TYPE_CHECKING:
@@ -156,6 +158,24 @@ def _calibration_view(runtime: TrackingRuntime) -> List[Dict[str, Any]]:
     return views
 
 
+def _unsaved(server: "DashboardServer", runtime: TrackingRuntime) -> bool:
+    """运行中的调参、配方与校准项是否和 avatar.toml 里的不一致（读不到文件时按一致处理）。"""
+    if server.config_service is None:
+        return False
+    saved = read_toml_dict(get_config_dir(server) / "avatar.toml")
+    if not saved:
+        return False
+    tracking = saved.get("tracking", {})
+    if TrackingConfig.from_dict(tracking if isinstance(tracking, dict) else {}) != runtime.config:
+        return True
+    platforms = saved.get("platform", {})
+    for driver, values in runtime.calibrations().items():
+        section = platforms.get(driver, {}) if isinstance(platforms, dict) else {}
+        if any(section.get(key) != value for key, value in values.items()):
+            return True
+    return False
+
+
 def _apply_config(runtime: TrackingRuntime, changes: Dict[str, Any]) -> TrackingConfig:
     """在当前生效调参上改若干字段，校验通过才换上（失败 422，原样不动）。"""
     try:
@@ -167,7 +187,10 @@ def _apply_config(runtime: TrackingRuntime, changes: Dict[str, Any]) -> Tracking
 
 
 @router.get("", summary="调校页静态信息")
-async def get_tuning_profile(runtime: Tracking) -> Dict[str, Any]:
+async def get_tuning_profile(
+    runtime: Tracking,
+    server: "DashboardServer" = Depends(get_dashboard_server),  # noqa: B008 - FastAPI 依赖注入模式
+) -> Dict[str, Any]:
     config = runtime.config.model_dump()
     tunable = [name for name in TrackingConfig.model_fields if name not in _NOT_TUNABLE]
     return {
@@ -180,6 +203,7 @@ async def get_tuning_profile(runtime: Tracking) -> Dict[str, Any]:
         ],
         "calibrations": _calibration_view(runtime),
         "actions": runtime.action_catalog(),
+        "unsaved": _unsaved(server, runtime),
     }
 
 
