@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,9 +12,11 @@ from src.agents.streamer.memory import (
     StreamerNotebook,
     build_notebook_tool_provider,
 )
+from src.agents.streamer.memory.recap import SessionRecapWriter
 from src.agents.streamer.memory.tools import NOTEBOOK_SPEC
 from src.agents.streamer.planner_context import AssemblerInputs, PlannerAssembler
 from src.agents.streamer.replyer import Replyer
+from src.modules.storage.models.sessions import LiveSession
 from src.modules.tools import ToolRegistry
 from src.modules.tools.models import ToolInvocation
 from tests.agents.streamer.helpers import make_streamer_agent
@@ -166,57 +168,38 @@ def test_replyer_turn_input_omits_notebook_when_empty() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_recap_material_includes_notebook_snapshot() -> None:
-    from src.agents.streamer.memory.recap import SessionRecapWriter
-
-    writer = SessionRecapWriter(
+def _recap_writer(notebook_text_provider: Any = None) -> SessionRecapWriter:
+    return SessionRecapWriter(
         sessions_repo=MagicMock(),
         chat_repo=MagicMock(),
         recap_repo=MagicMock(),
         llm_service=MagicMock(),
         prompt_manager=MagicMock(),
-        notebook_text_provider=lambda: "翻篇：床名梗已退役",
+        notebook_text_provider=notebook_text_provider,
     )
-    assert writer._render_notebook() == "翻篇：床名梗已退役"
 
 
-def test_recap_collect_material_carries_notebook_section() -> None:
-    from src.agents.streamer.memory.recap import SessionRecapWriter
-    from src.modules.storage.models.sessions import LiveSession
+async def test_recap_material_carries_notebook_of_that_session() -> None:
+    """回顾原料按场次主键读回这场落盘的备忘录。"""
+    asked: list[int] = []
 
-    writer = SessionRecapWriter(
-        sessions_repo=MagicMock(),
-        chat_repo=MagicMock(),
-        recap_repo=MagicMock(),
-        llm_service=MagicMock(),
-        prompt_manager=MagicMock(),
-        notebook_text_provider=lambda: "翻篇：床名梗已退役",
-    )
+    async def notebook_of(live_session_id: int) -> str:
+        asked.append(live_session_id)
+        return "翻篇：床名梗已退役"
+
+    writer = _recap_writer(notebook_of)
     # 场次头有内容（非空场次）才会走到原料拼接；各仓储 MagicMock 的 async 方法
     # 调用失败只降级省段，不影响备忘录段
-    session_row = LiveSession(id=1, started_at_ms=1_760_000_000_000, ended_at_ms=1_760_003_600_000, updated_at_ms=1)
-    material = asyncio.run(writer._collect_material(1, session_row))
+    session_row = LiveSession(id=7, started_at_ms=1_760_000_000_000, ended_at_ms=1_760_003_600_000, updated_at_ms=1)
+    material = await writer._collect_material(7, session_row)
     assert "【主播备忘录（本场结束时的工作笔记全文）】" in material
     assert "翻篇：床名梗已退役" in material
+    assert asked == [7]
 
 
-def test_recap_material_omits_notebook_without_provider_or_text() -> None:
-    from src.agents.streamer.memory.recap import SessionRecapWriter
+async def test_recap_material_omits_notebook_without_provider_or_text() -> None:
+    async def empty(_live_session_id: int) -> str:
+        return ""
 
-    no_provider = SessionRecapWriter(
-        sessions_repo=MagicMock(),
-        chat_repo=MagicMock(),
-        recap_repo=MagicMock(),
-        llm_service=MagicMock(),
-        prompt_manager=MagicMock(),
-    )
-    assert no_provider._render_notebook() == ""
-    empty = SessionRecapWriter(
-        sessions_repo=MagicMock(),
-        chat_repo=MagicMock(),
-        recap_repo=MagicMock(),
-        llm_service=MagicMock(),
-        prompt_manager=MagicMock(),
-        notebook_text_provider=lambda: "",
-    )
-    assert empty._render_notebook() == ""
+    assert await _recap_writer()._render_notebook(1) == ""
+    assert await _recap_writer(empty)._render_notebook(1) == ""

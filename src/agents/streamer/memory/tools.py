@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.notebook import StreamerNotebookChangedPayload
@@ -142,13 +142,19 @@ async def emit_notebook_changed(event_bus: Any, notebook_text: str) -> None:
         logger.warning(f"streamer.notebook.changed 发布失败（已忽略）: {exc}")
 
 
-def build_notebook_tool_provider(notebook: StreamerNotebook, event_bus: Any = None) -> ToolProvider:
+def build_notebook_tool_provider(
+    notebook: StreamerNotebook,
+    event_bus: Any = None,
+    on_saved: Optional[Callable[[str], Awaitable[None]]] = None,
+) -> ToolProvider:
     """组装备忘录工具 Provider（provider="streamer"，全名 ``streamer_notebook``）。
 
     与 ``streamer_reply`` 共用提供者短名 "streamer"——注册表按派生全名索引，
     全名唯一即可；备忘录是主播自己的工作笔记，随主播 Agent 一并注册。
     ``event_bus`` 用于写入成功后发 ``streamer.notebook.changed`` 观测事件
     （读回不发——读不改变备忘录状态）；未注入（极简场景）时只写不发。
+    ``on_saved`` 在每次写入后收到实际保存的全文，主播 Agent 用它把备忘录落进
+    本场的场次行；落盘失败只告警，模型照常拿到写回执。
     """
 
     async def _notebook(invocation: ToolInvocation) -> str:
@@ -157,6 +163,11 @@ def build_notebook_tool_provider(notebook: StreamerNotebook, event_bus: Any = No
             text = notebook.read()
             return text if text else "（备忘录还是空的）"
         saved = notebook.set(str(args.get("content", "")))
+        if on_saved is not None:
+            try:
+                await on_saved(saved)
+            except Exception as exc:  # noqa: BLE001 - 落盘失败不推翻内存里已写好的备忘录
+                logger.warning(f"备忘录落盘失败（本场整理时可能缺这一版）: {exc}", exc=True)
         await emit_notebook_changed(event_bus, saved)
         return saved
 

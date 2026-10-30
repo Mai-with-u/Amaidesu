@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
@@ -52,10 +52,10 @@ class LongMemoryWriter:
         recap_repo: Any,
         llm_service: Any,
         prompt_manager: PromptManager,
-        notebook_text_provider: Optional[Callable[[], str]] = None,
+        notebook_text_provider: Optional[Callable[[int], Awaitable[str]]] = None,
         max_chars: int = 2000,
     ) -> None:
-        """``notebook_text_provider`` 返回收播时刻的备忘录全文快照（与回顾共用同一份）；None 或空串 = 本场没写。"""
+        """``notebook_text_provider`` 按场次主键返回这场落盘的备忘录全文（与回顾读同一份）；None 或空串 = 本场没写。"""
         self._store = store
         self._sessions = sessions_repo
         self._recaps = recap_repo
@@ -92,7 +92,7 @@ class LongMemoryWriter:
             return None
         kind: SessionKind = session_row.kind
         old_text = await self.read(kind)
-        notebook = self._notebook_text() if self._notebook_text_provider is not None else ""
+        notebook = await self._notebook_text(int(live_session_id)) if self._notebook_text_provider is not None else ""
 
         prompt = self._material(old_text, recap.recap_text, notebook)
         text = await self._generate(prompt, live_session_id)
@@ -121,10 +121,10 @@ class LongMemoryWriter:
     # 内部
     # ------------------------------------------------------------------
 
-    def _notebook_text(self) -> str:
+    async def _notebook_text(self, live_session_id: int) -> str:
         assert self._notebook_text_provider is not None  # noqa: S101 调用方已 guard
         try:
-            return (self._notebook_text_provider() or "").strip()
+            return (await self._notebook_text_provider(live_session_id) or "").strip()
         except Exception as exc:  # noqa: BLE001 备忘录读不到只少一类原料
             logger.warning(f"读取备忘录快照失败，长期记忆整理不带备忘录: {exc}", exc=True)
             return ""

@@ -40,6 +40,7 @@ class LiveSession(BaseModel):
     viewer_count: int = Field(default=0, description="最近一次心跳的观众数")
     audience_total: int = Field(default=0, description="累计观众数")
     updated_at_ms: int = Field(..., description="行最近更新时刻（Unix epoch 毫秒）")
+    notebook_text: str = Field(default="", description="本场备忘录全文（主播经工具写下的本场结论）；空串即没写")
 
 
 class LiveSessionListItem(LiveSession):

@@ -69,6 +69,25 @@ async def test_rename_session_title(store: SQLiteDatabase) -> None:
     assert len(await store.execute("SELECT * FROM live_sessions")) == 1
 
 
+async def test_session_notebook_written_only_while_in_progress(store: SQLiteDatabase) -> None:
+    """备忘录整份写进进行中的场次行；结账后迟到的写入不改，也不动心跳更新时刻。"""
+    sessions = store.sessions
+    pk = await sessions.insert_live_session(started_at_ms=1_000)
+    assert (await sessions.get_live_session(live_session_id=pk)).notebook_text == ""
+
+    assert await sessions.set_session_notebook(live_session_id=pk, notebook_text="答应老王挖钻石") is True
+    assert await sessions.set_session_notebook(live_session_id=pk, notebook_text="答应老王挖钻石；床名定了") is True
+    row = await sessions.get_live_session(live_session_id=pk)
+    assert row.notebook_text == "答应老王挖钻石；床名定了"
+
+    await sessions.close_live_session(live_session_id=pk, ended_at_ms=9_000)
+    updated_at = (await sessions.get_live_session(live_session_id=pk)).updated_at_ms
+    assert await sessions.set_session_notebook(live_session_id=pk, notebook_text="收播后才到") is False
+    row = await sessions.get_live_session(live_session_id=pk)
+    assert (row.notebook_text, row.updated_at_ms) == ("答应老王挖钻石；床名定了", updated_at)
+    assert await sessions.set_session_notebook(live_session_id=999_999, notebook_text="x") is False
+
+
 async def test_count_details_and_cascade_delete(store: SQLiteDatabase) -> None:
     pk = await store.sessions.insert_live_session(started_at_ms=1_000)
     await _chat(store, pk, 1_100)

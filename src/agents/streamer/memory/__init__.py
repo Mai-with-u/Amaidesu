@@ -8,15 +8,15 @@
   老梗、长线目标、对自己的认识），收播时把本场回顾与备忘录合并进去，开播时整份
   注入；正式场与彩排场各一份
 - ``notebook`` 本场备忘录——模型经 ``streamer_notebook`` 工具主动写的会话内
-  工作笔记（单条自由文本、全量覆盖写、收播清空不入库），每轮注入决策与表达
-  两层上下文，收播时全文折叠进场次回顾与长期记忆的原料
+  工作笔记（单条自由文本、全量覆盖写），每轮注入决策与表达两层上下文；每次
+  写入同步落进本场的场次行，收播时从场次行读回、折叠进场次回顾与长期记忆的原料
 - ``tools``   LLM 可调的真工具（``memory_recall_session`` / ``memory_recall_viewer``
   / ``streamer_notebook``），随主播 Agent 注册、名单只对主播可见
 
 当场的工作记忆（对话时间线、前情提要）不在这里——那是上下文分层的事。
 存储表（``session_recaps`` / ``viewer_profiles``）、仓储与长期记忆文件存储在
-``src/modules/storage/``，本包只放生成、注入与工具逻辑（备忘录是唯一不落盘的成员：
-会话作用域，进程内存活）。
+``src/modules/storage/``，本包只放生成、注入与工具逻辑（备忘录的全文落在场次行
+``live_sessions.notebook_text``，决策与表达读进程内那份）。
 """
 
 from src.agents.streamer.memory.long_memory import LongMemoryWriter, format_long_memory

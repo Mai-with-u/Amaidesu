@@ -257,6 +257,8 @@ class StreamerAgent(BaseAgent):
         self._viewer_repo = viewer_repo
         # 主播记忆的两张表（可选；None 时对应记忆功能整体降级）
         self._profile_repo = viewer_profile_repo
+        # 场次表：备忘录每次写入都落进本场的场次行，收播整理按场次主键读回
+        self._sessions_repo = sessions_repo
         self._recap_repo = recap_repo
         self._event_repo = event_repo
         self._logger = get_logger("StreamerAgent")
@@ -278,7 +280,8 @@ class StreamerAgent(BaseAgent):
         # 房间态势（纯规则滑动窗口）
         self._room_state = RoomState()
 
-        # 本场备忘录（进程内会话状态，不入库；收播取快照折叠进回顾后清空）
+        # 本场备忘录：决策与表达每轮读内存里这份；每次写入同步落进本场的场次行，
+        # 收播整理从场次行读回（直播中途关掉应用也不丢），收播后内存里这份清空
         self._notebook = StreamerNotebook(max_chars=config.memory.notebook_max_chars)
 
         # 流程单（Rundown）子系统：备忘录 + 闹钟（推进权归 Agent）。
@@ -352,9 +355,6 @@ class StreamerAgent(BaseAgent):
             enabled=wf.enabled,
         )
 
-        # 收播时刻的备忘录全文快照：清空备忘录前取走，供回顾生成原料读取
-        self._session_notebook_snapshot: str = ""
-
         # Replyer（表达引擎，Agent 内部件——非工具）
         # 人设三件套从包内配置权威 config.persona 单点构建、构造期注入
         # （behavior_style 不进表达侧——只走 Planner 决策通道）
@@ -402,7 +402,7 @@ class StreamerAgent(BaseAgent):
                 event_repo=event_repo,
                 llm_service=llm_manager,
                 prompt_manager=prompt_manager,
-                notebook_text_provider=lambda: self._session_notebook_snapshot,
+                notebook_text_provider=self._session_notebook_text,
                 max_length=memory_cfg.recap_max_length,
                 event_bus=event_bus,
             )
@@ -421,7 +421,7 @@ class StreamerAgent(BaseAgent):
                 recap_repo=recap_repo,
                 llm_service=llm_manager,
                 prompt_manager=prompt_manager,
-                notebook_text_provider=lambda: self._session_notebook_snapshot,
+                notebook_text_provider=self._session_notebook_text,
                 max_chars=memory_cfg.long_memory_max_chars,
             )
         self._roster_writer: Optional[RegularsRosterWriter] = None
@@ -756,7 +756,9 @@ class StreamerAgent(BaseAgent):
             registered = "streamer_reply / rundown_control"
             # 备忘录工具：随主播 Agent 无条件注册（会话内状态，不依赖任何仓储）
             self.register_tool_provider(
-                build_notebook_tool_provider(self._notebook, event_bus=self._event_bus),
+                build_notebook_tool_provider(
+                    self._notebook, event_bus=self._event_bus, on_saved=self._persist_notebook
+                ),
                 registry=self._tool_registry,
             )
             registered += " / streamer_notebook"
@@ -889,6 +891,9 @@ class StreamerAgent(BaseAgent):
         await self._refresh_recap_section(exclude_session_id=payload.live_session_id, kind=payload.kind)
         # 长期记忆：同样在开播这一刻按场次类型读出整份，整场固定（彩排读彩排那份）
         await self._refresh_long_memory_section(kind=payload.kind)
+        # 开播前写下的备忘录会带进这一场（决策照常读得到），先落进新场次行，收播整理才对得上
+        if self._notebook.read():
+            await self._persist_notebook(self._notebook.read())
         self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
 
     async def _on_live_ended(
@@ -924,11 +929,11 @@ class StreamerAgent(BaseAgent):
         # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
         # （道别发言不属已结账的场次，留在内存对话里供下播后的调试闲聊接续）
         await self._scope.end_session()
-        # 备忘录生命周期收口：先取全文快照（回顾生成的原料之一，经只读回调递入）
-        # 再清空——备忘录是场次作用域，下一场从空白开始
-        self._session_notebook_snapshot = self._notebook.read()
-        if self._session_notebook_snapshot:
-            self._logger.info(f"本场备忘录已归档待回顾折叠（{len(self._session_notebook_snapshot)} 字），备忘录清空")
+        # 备忘录生命周期收口：全文已随每次写入落进场次行（整理从那里读），
+        # 这里只清空内存里这份——备忘录是场次作用域，下一场从空白开始
+        notebook_text = self._notebook.read()
+        if notebook_text:
+            self._logger.info(f"本场备忘录已随场次落盘（{len(notebook_text)} 字），内存里这份清空")
             # 清空也是备忘录状态变化：发观测事件（快照非空才发——空备忘录清空无状态变化）
             await emit_notebook_changed(self._event_bus, "")
         self._notebook.clear()
@@ -964,6 +969,21 @@ class StreamerAgent(BaseAgent):
             return None
         pk = getattr(self._session_manager, "active_pk", None)
         return int(pk) if isinstance(pk, int) else None
+
+    async def _persist_notebook(self, text: str) -> None:
+        """把备忘录全文落进进行中场次的场次行；未开播（调试闲聊）或没有场次表时不落盘。"""
+        pk = self._current_session_pk()
+        if pk is None or self._sessions_repo is None:
+            return
+        if not await self._sessions_repo.set_session_notebook(live_session_id=pk, notebook_text=text):
+            self._logger.warning(f"备忘录没落进场次 {pk}（场次已结账或不存在）")
+
+    async def _session_notebook_text(self, live_session_id: int) -> str:
+        """某场落盘的备忘录全文（收播整理与启动补整理共用）；场次行不在时为空。"""
+        if self._sessions_repo is None:
+            return ""
+        row = await self._sessions_repo.get_live_session(live_session_id=int(live_session_id))
+        return row.notebook_text if row is not None else ""
 
     def _current_session_kind(self) -> SessionKind:
         """进行中场次的类型；未开播按正式场算（开播前的闲聊读的是正式直播的上一场）。"""

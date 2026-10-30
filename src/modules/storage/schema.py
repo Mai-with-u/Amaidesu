@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 20
+SCHEMA_VERSION: int = 21
 
 
 # =============================================================================
@@ -206,6 +206,7 @@ CREATE TABLE IF NOT EXISTS live_sessions (
     viewer_count    INTEGER NOT NULL DEFAULT 0,
     audience_total  INTEGER NOT NULL DEFAULT 0,
     updated_at_ms   INTEGER NOT NULL,
+    notebook_text   TEXT NOT NULL DEFAULT '',
     CHECK (ended_at_ms IS NULL OR ended_at_ms >= started_at_ms)
 );
 """.strip()

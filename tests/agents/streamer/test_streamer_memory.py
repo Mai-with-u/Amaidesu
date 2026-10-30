@@ -38,6 +38,7 @@ from src.modules.llm.payload import Response
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.chat import GiftRecord, GuardRecord, SuperChatRecord
 from src.modules.tools import ToolInvocation, ToolRegistry
+from tests.agents.streamer.helpers import ActiveSessionStub
 from tests.modules.llm.fakes import FakeLLMManager
 from tests.modules.storage.viewer_seed import seed_message
 
@@ -163,13 +164,16 @@ def _responses(*texts: str) -> MagicMock:
 def _long_writer(
     store: SQLiteDatabase, llm: MagicMock, *, notebook: str = "", max_chars: int = 300
 ) -> LongMemoryWriter:
+    async def notebook_of(_live_session_id: int) -> str:
+        return notebook
+
     return LongMemoryWriter(
         store=store.long_memory,
         sessions_repo=store.sessions,
         recap_repo=store.recaps,
         llm_service=llm,
         prompt_manager=_prompts(),
-        notebook_text_provider=lambda: notebook,
+        notebook_text_provider=notebook_of,
         max_chars=max_chars,
     )
 
@@ -590,7 +594,12 @@ async def test_recall_viewer_tool(store: SQLiteDatabase) -> None:
 
 
 def _build_agent(
-    store: SQLiteDatabase | None, llm: Any, registry: ToolRegistry | None = None, **memory: Any
+    store: SQLiteDatabase | None,
+    llm: Any,
+    registry: ToolRegistry | None = None,
+    *,
+    session_manager: Any = None,
+    **memory: Any,
 ) -> StreamerAgent:
     config = StreamerConfig.from_dict(
         {
@@ -612,7 +621,14 @@ def _build_agent(
             "event_repo": store.events,
             "long_memory_store": store.long_memory,
         }
-    return StreamerAgent(config=config, llm_manager=llm, prompt_manager=_prompts(), tool_registry=registry, **repos)
+    return StreamerAgent(
+        config=config,
+        llm_manager=llm,
+        prompt_manager=_prompts(),
+        tool_registry=registry,
+        session_manager=session_manager,
+        **repos,
+    )
 
 
 @pytest.mark.asyncio
@@ -718,6 +734,29 @@ async def test_live_ended_settles_recap_and_roster(store: SQLiteDatabase) -> Non
     )
     assert not disabled._memory_tasks
     llm.generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_notebook_written_live_feeds_settle_after_app_stop(store: SQLiteDatabase) -> None:
+    """直播中写的备忘录随写入落进场次行：应用停机后下次启动补整理，回顾原料里仍有它。"""
+    pk = await store.sessions.insert_live_session(stream_id="room", platform="bilibili", started_at_ms=1_000)
+    await _streamer_says(store, pk, "下场继续挖", 2_000)
+    pointer = ActiveSessionStub(pk)
+    registry = ToolRegistry()
+    agent = _build_agent(store, _llm(), registry, session_manager=pointer)
+    agent._register_tools()
+    await registry.invoke(ToolInvocation(tool_name="streamer_notebook", arguments={"content": "答应老王挖钻石"}))
+
+    # 应用停机：场次结账，Agent 已停、收播整理留给下次启动
+    await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=9_000)
+    pointer.active_pk = None
+    llm = _llm("补写的回顾")
+    await _build_agent(store, llm)._bootstrap_recaps()
+
+    recap_prompt = next(
+        call.args[0] for call in llm.generate.await_args_list if call.args[0].startswith("以下是这一场直播留下的记录")
+    )
+    assert "答应老王挖钻石" in recap_prompt
 
 
 @pytest.mark.asyncio

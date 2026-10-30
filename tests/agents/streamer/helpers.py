@@ -102,3 +102,18 @@ def make_streamer_agent(
         mouth=mouth,
         **kwargs,
     )
+
+
+class ActiveSessionStub:
+    """场次管理器的最小替身：只给出进行中场次的主键与类型（``active_pk=None`` 即未开播）。
+
+    主播 Agent 用 ``active_pk`` 把备忘录落进本场、回忆时排除本场；历史读取与后台心跳
+    走 ``resolve_pk``。测试直接改 ``active_pk`` 模拟开播与结账。
+    """
+
+    def __init__(self, active_pk: Optional[int] = None, active_kind: str = "live") -> None:
+        self.active_pk = active_pk
+        self.active_kind = active_kind
+
+    async def resolve_pk(self) -> Optional[int]:
+        return self.active_pk

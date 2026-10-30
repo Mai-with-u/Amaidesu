@@ -116,6 +116,23 @@ class SessionRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def set_session_notebook(self, *, live_session_id: int, notebook_text: str) -> bool:
+        """把进行中场次的备忘录全文写进场次行（每次写备忘录都整份覆盖）；已结账或不存在返回 False。
+
+        已结账的场次不再改：收播后备忘录已清空，迟到的写入不该覆盖这场留下的结论。
+        不动 ``updated_at_ms``——它记的是心跳统计的更新时刻。
+        """
+
+        def _exec() -> bool:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "UPDATE live_sessions SET notebook_text=? WHERE id=? AND ended_at_ms IS NULL",
+                    (notebook_text, live_session_id),
+                )
+                return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
     async def get_live_session(self, *, live_session_id: int) -> Optional[LiveSession]:
         """按场次主键查单行；未命中返回 None。"""
 

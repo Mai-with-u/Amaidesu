@@ -5,13 +5,13 @@ Agent 时整理被打断的场次，下次启动时按 ``list_unsettled`` 的待
 就不重写，经 ``ensure_recap``）。两条路径共用同一份原料与同一次 LLM 调用，原料全部
 来自库表，不依赖进程内状态。
 
-原料（全部按场次主键取，各自封顶控制 prompt 体量；备忘录是唯一例外——
-进程内会话状态，收播时由主播 Agent 先取走全文快照再清空，经只读回调递入）：
+原料（全部按场次主键取，各自封顶控制 prompt 体量；备忘录由主播 Agent 每次写入时
+落进场次行，经按场次主键读取的回调递入）：
 - 主播自己说过的话（``live_chat`` 的 assistant 行）——承诺、梗、进展都在嘴里
 - 话题摘要轨迹（``timeline_summary``）——观众这场聊了什么
 - 游戏里程碑（``game_events``）——游戏里做到哪
 - 本场最活跃的观众与付费（``live_chat`` 聚合 + 付费三表）——谁来得多、谁撑场
-- 主播备忘录全文（``streamer_notebook`` 的会话内状态）——已翻篇/已兑现的结论账
+- 主播备忘录全文（``live_sessions.notebook_text``）——已翻篇/已兑现的结论账
 
 产出写 ``session_recaps``；开播注入与 ``memory_recall_session`` 工具都从那张表读。
 """
@@ -19,7 +19,7 @@ Agent 时整理被打断的场次，下次启动时按 ``list_unsettled`` 的待
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, List, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.storage.models.memory import SessionRecap
@@ -90,14 +90,14 @@ class SessionRecapWriter:
         prompt_manager: PromptManager,
         topic_repo: Any = None,
         event_repo: Any = None,
-        notebook_text_provider: Optional[Callable[[], str]] = None,
+        notebook_text_provider: Optional[Callable[[int], Awaitable[str]]] = None,
         max_length: int = 500,
         event_bus: Optional["EventBus"] = None,
     ) -> None:
         """全部仓储与服务由主播 Agent 构造时注入；topic/event 仓储缺失只让原料少一类。
 
-        ``notebook_text_provider`` 返回收播时刻的备忘录全文快照（主播 Agent 在
-        清空备忘录前取走）；None 或空串 = 本场没写过备忘录，原料少这一类。
+        ``notebook_text_provider`` 按场次主键返回这场落盘的备忘录全文（直播中途
+        关掉应用、下次启动补整理时同样读得到）；None 或空串 = 本场没写过备忘录，原料少这一类。
         ``event_bus`` 用于回顾落库后发 ``streamer.recap.written``；None 时只写库不通知。
         """
         self._sessions = sessions_repo
@@ -249,7 +249,7 @@ class SessionRecapWriter:
         audience = await self._render_audience(live_session_id)
         if audience:
             sections.append("【活跃观众与付费】\n" + audience)
-        notebook = self._render_notebook()
+        notebook = await self._render_notebook(live_session_id)
         if notebook:
             sections.append("【主播备忘录（本场结束时的工作笔记全文）】\n" + notebook)
         # 只有场次头没有任何内容 = 空场次，不值得写回顾
@@ -258,12 +258,12 @@ class SessionRecapWriter:
         text = "\n\n".join(sections)
         return text[:_MATERIAL_MAX_CHARS]
 
-    def _render_notebook(self) -> str:
-        """收播时刻的备忘录全文快照（空/回调缺失 = 本场没写，整段省略）。"""
+    async def _render_notebook(self, live_session_id: int) -> str:
+        """这场落盘的备忘录全文（空/回调缺失 = 本场没写，整段省略）。"""
         if self._notebook_text_provider is None:
             return ""
         try:
-            return (self._notebook_text_provider() or "").strip()
+            return (await self._notebook_text_provider(live_session_id) or "").strip()
         except Exception as exc:
             logger.warning(f"读取备忘录快照失败，回顾原料省略该类: {exc}")
             return ""
