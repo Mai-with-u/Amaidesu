@@ -114,6 +114,7 @@ import type {
   AvatarTuningProfile,
   AvatarTuningRecipe,
   AvatarTuningState,
+  ExpressionSheetState,
 } from '@/types';
 
 const api = axios.create({
@@ -424,6 +425,8 @@ export const avatarApi = {
   getDebugStatus: () => api.get<AvatarDebugStatusResponse>('/avatar/debug/status'),
   triggerDebug: (request: AvatarDebugTriggerRequest) =>
     api.post<AvatarDebugTriggerResponse>('/avatar/debug/trigger', request),
+  // 表情差分小部件页轮询：未启用 / 未配置目录时 404
+  getExpressionSheetState: () => api.get<ExpressionSheetState>('/avatar/expression_sheet/state'),
 };
 
 // 形象调校（看着形象实时调面捕合成器）

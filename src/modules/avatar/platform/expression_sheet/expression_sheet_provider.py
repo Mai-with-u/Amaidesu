@@ -1,24 +1,21 @@
 """
-ExpressionSheetProvider - 表情差分图虚拟形象工具集
+ExpressionSheetProvider - 表情差分图形象
 
-基于"表情差分图切换"的静态立绘虚拟形象：17 个情绪各对应一张差分图，
-文件名 = 情绪枚举值（如 ``happy.png`` / ``speechless.png``），图片目录由
-配置 ``[avatar.platform.expression_sheet] image_dir`` 指定。设置情绪 =
-切换到对应差分图，由小部件页（``/widget/expression_sheet``）取
-``image_url`` 展示；无连接语义、无外部依赖。
+静态立绘形象：17 个情绪各对应一张差分图，文件名 = 情绪枚举值（如 ``happy.png`` /
+``speechless.png``），目录由 ``[avatar.platform.expression_sheet] image_dir`` 指定，
+小部件页（``/widget/expression_sheet``）负责显示。无连接语义、无外部依赖。
 
-- 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
-  - ``expression_sheet_set_expression``        - 设置情绪（切换差分图）
-  - ``expression_sheet_list_preset_actions``   - 列出可演预设（当前为空目录，动作面后补）
-  - ``expression_sheet_trigger_preset_action`` - 触发预设动作（当前无动作可触发）
-
+- 显示哪张图跟着面捕合成器走：合成器此刻的主表情就是要显示的情绪——它已经处理好
+  "语音开始播放才上脸、播完停一会儿再回落、同类只延长、强情绪才打断"，主播用
+  ``avatar_act`` 的"保持表情"也直接生效。小部件页按 :meth:`ExpressionSheetProvider.current_image`
+  取图。差分图只有一张张整图，表情的强弱、眨眼、口型都画不出来，所以不挂逐帧驱动。
+- 不向 LLM 暴露工具：形象动作统一走 ``avatar_act``；``set_expression`` 等契约方法
+  只给调试台用（设表情交给面捕合成器）。
 - 降级可见性：``image_dir`` 未配置 / 目录无图时属"已登记未就绪"，
-  ``list_tools`` 返回空（装配期降级登记 0 工具，Agent 工具表不可见，
-  WebUI 工具页显示"连接失败"标签而非"正常"），``last_error`` 携带出路
-  提示。配置修改需重启生效（配置加载期读定，无运行期热更）。
-
-- 情绪词汇唯一来源是 ``Emotion`` 枚举；情绪 → 图文件的解析只认扫描
-  结果（png/jpg/jpeg/webp），对应图缺失时回退 ``neutral`` 差分图。
+  ``connection_summary`` 报未连接（工具页显示"连接失败"而非"正常"），``last_error``
+  携带出路提示。配置修改需重启生效（配置加载期读定，无运行期热更）。
+- 情绪词汇唯一来源是 ``Emotion`` 枚举；情绪 → 图文件的解析只认扫描结果
+  （png/jpg/jpeg/webp），对应图缺失时回退 ``neutral`` 差分图。
 """
 
 from __future__ import annotations
@@ -28,8 +25,7 @@ from typing import Any, Dict, Optional
 
 from pydantic import Field
 
-from src.modules.avatar.speech_binding import AvatarBindings
-from src.modules.avatar.tool_common import contract_tool_specs, dispatch_tool
+from src.modules.avatar.tool_common import dispatch_tool
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
@@ -54,7 +50,7 @@ ASSET_URL_PREFIX = "/api/v1/avatar/expression_sheet/assets"
 
 
 class ExpressionSheetProvider(BaseToolProvider):
-    """表情差分图虚拟形象 ToolProvider（静态立绘）"""
+    """表情差分图形象 ToolProvider（静态立绘，表情跟着面捕合成器）"""
 
     PROVIDER_NAME = "expression_sheet"
 
@@ -87,11 +83,16 @@ class ExpressionSheetProvider(BaseToolProvider):
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
         lipsync_analyzer: Optional[Any] = None,
+        tracking: Optional[Any] = None,
     ) -> None:
-        # lipsync_analyzer：统一装配签名；静态立绘无口型渲染，不接口型
+        """``tracking``：面捕合成器运行时（组合根共享一个）；None = 一直显示 neutral 差分图。
+
+        event_bus / lipsync_analyzer 是统一装配签名：情绪由面捕合成器订阅，静态立绘也没有口型。
+        """
         self.config = config
         self.event_bus = event_bus
         self.lipsync_analyzer = lipsync_analyzer
+        self._tracking = tracking
         self.logger = get_logger(self.__class__.__name__)
 
         # Provider 侧最近一次未就绪原因摘要（工具页 last_error 数据源；就绪为空串）
@@ -111,8 +112,6 @@ class ExpressionSheetProvider(BaseToolProvider):
 
         # 可变实例状态在 __init__ 初始化
         self._has_started = False
-        # 事件订阅挂载项（情绪反射）的全生命周期句柄：setup 时创建并挂、cleanup 全量退订
-        self._bindings: Optional[AvatarBindings] = None
         self.render_count = 0
         self.error_count = 0
 
@@ -132,63 +131,54 @@ class ExpressionSheetProvider(BaseToolProvider):
         return {"is_connected": self.is_ready, "stats": {}}
 
     def list_tools(self) -> list[ToolSpec]:
-        """声明本 Provider 暴露的工具列表（随就绪态动态）。
-
-        未就绪（目录未配置 / 无图）返回空（降级登记，Agent 工具表不含
-        expression_sheet_*，WebUI 工具页按 0 工具降级展示，不误显"正常"）。
-        """
-        if not self.is_ready:
-            return []
-        # 三个契约工具的声明样板走公共件；description 是平台文案，关键字传入
-        return contract_tool_specs(
-            self.PROVIDER_NAME,
-            set_expression="表情差分形象切换主播当前情绪差分图（17 枚举值 + 强度，持续生效直至下次设置）",
-            list_preset_actions="列出表情差分形象可演的预设动作目录（当前为空目录，动作面后补）",
-            trigger_preset_action="触发一个预设动作（动作名取自 expression_sheet_list_preset_actions 返回的目录）",
-        )
+        """不向 LLM 暴露工具：形象动作统一走 ``avatar_act``，表情由面捕合成器决定。"""
+        return []
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        """分发到对应的 handler 方法（handlers 每次现构造，捕获本次参数）。"""
-        args = invocation.arguments or {}
-        return await dispatch_tool(
-            invocation,
-            self.PROVIDER_NAME,
-            {
-                "expression_sheet_set_expression": lambda: self.set_expression(
-                    str(args.get("emotion", "")), float(args.get("intensity", 0.5))
-                ),
-                "expression_sheet_list_preset_actions": self.list_preset_actions,
-                "expression_sheet_trigger_preset_action": lambda: self.trigger_preset_action(
-                    str(args.get("action", ""))
-                ),
-            },
-            self.logger,
-        )
+        """本适配器没有 LLM 工具：任何调用都按"工具不属于本 Provider"失败返回。"""
+        return await dispatch_tool(invocation, self.PROVIDER_NAME, {}, self.logger)
 
-    # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
+    # ===== 小部件页取图 =====
+
+    def current_image(self) -> Dict[str, Any]:
+        """此刻该显示的差分图：``{emotion, image_url}``。
+
+        情绪取面捕合成器此刻的主表情（没装配合成器时一直是 neutral）；缺这张图回退 neutral 差分图，
+        neutral 也没有时 ``image_url`` 为 None（小部件页按未配置处理）。
+        """
+        emotion = self._tracking.current_emotion() if self._tracking is not None else FALLBACK_EMOTION
+        filename = self._image_for(emotion)
+        return {"emotion": emotion, "image_url": f"{ASSET_URL_PREFIX}/{filename}" if filename else None}
+
+    def _image_for(self, emotion: str) -> Optional[str]:
+        """情绪对应的差分图文件名；缺图回退 neutral，都没有为 None。"""
+        return self._emotion_images.get(emotion) or self._emotion_images.get(FALLBACK_EMOTION)
+
+    # ===== 契约方法（调试台直接调用）=====
 
     async def set_expression(self, emotion: str, intensity: float) -> ToolExecutionResult:
-        """切换到情绪对应的差分图。
+        """设置当前情绪：交给面捕合成器（浮现后保持配置的时长再回落），小部件页随之换图。
 
-        校验顺序：情绪名合法性 → 目录就绪态 → 图文件存在（缺图回退
-        ``neutral`` 差分图）。成功返回 ``{emotion, intensity, image_url}``，
-        小部件页按 ``image_url`` 取图展示。
+        校验顺序：情绪名合法性 → 目录就绪态 → 有图可显示（缺图回退 ``neutral``）→ 合成器已装配。
+        成功返回 ``{emotion, intensity, image_url, outcome}``。
         """
         if emotion not in {e.value for e in Emotion}:
             return tool_result_fail("expression_sheet_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
         if not self.is_ready:
             return tool_result_fail("expression_sheet_set_expression", self._not_ready_hint())
-        factor = min(1.0, max(0.0, float(intensity)))
-        filename = self._emotion_images.get(emotion)
+        filename = self._image_for(emotion)
         if filename is None:
-            filename = self._emotion_images.get(FALLBACK_EMOTION)
-            if filename is None:
-                return tool_result_fail(
-                    "expression_sheet_set_expression",
-                    f"目录中缺少 {emotion} 的差分图，且无 {FALLBACK_EMOTION}.png 兜底"
-                    f"（目录：{self.image_dir}，已扫描到：{sorted(self._emotion_images.values())}）",
-                )
-            self.logger.debug(f"情绪 '{emotion}' 缺差分图，回退 {filename}")
+            return tool_result_fail(
+                "expression_sheet_set_expression",
+                f"目录中缺少 {emotion} 的差分图，且无 {FALLBACK_EMOTION}.png 兜底"
+                f"（目录：{self.image_dir}，已扫描到：{sorted(self._emotion_images.values())}）",
+            )
+        if self._tracking is None:
+            return tool_result_fail(
+                "expression_sheet_set_expression", "面捕合成器未启用（avatar.toml [tracking].enabled）"
+            )
+        factor = min(1.0, max(0.0, float(intensity)))
+        outcome = self._tracking.express(emotion, factor)
         self.render_count += 1
         return tool_result_ok(
             "expression_sheet_set_expression",
@@ -197,15 +187,16 @@ class ExpressionSheetProvider(BaseToolProvider):
                 "emotion": emotion,
                 "intensity": factor,
                 "image_url": f"{ASSET_URL_PREFIX}/{filename}",
+                "outcome": outcome,
             },
         )
 
     async def list_preset_actions(self) -> ToolExecutionResult:
-        """列出可演预设目录（当前为空目录：静态立绘无动作面，后补）。"""
+        """列出可演预设目录（静态立绘没有做好的动作，恒为空目录）。"""
         return tool_result_ok("expression_sheet_list_preset_actions", True, {"actions": []})
 
     async def trigger_preset_action(self, action: str) -> ToolExecutionResult:
-        """触发一个预设动作；当前无动作可触发，未知名随空目录一并返回（失败即发现）。"""
+        """触发一个预设动作；本平台没有动作可触发，未知名随空目录一并返回（失败即发现）。"""
         return ToolExecutionResult(
             tool_name="expression_sheet_trigger_preset_action",
             success=False,
@@ -221,10 +212,8 @@ class ExpressionSheetProvider(BaseToolProvider):
             return
         if not self.is_ready:
             self.logger.warning(self._not_ready_hint())
-        # 事件订阅（被动响应业务事件）：情绪反射（streamer.speech）。未就绪时订阅保持——
-        # 反射路径调用 set_expression 会拿到失败结果，配置就绪重启后无需改装配
-        self._bindings = AvatarBindings(self.event_bus, self.logger)
-        self._bindings.attach_emotion_reflection(self)
+        if self._tracking is None:
+            self.logger.warning("面捕合成器未装配：差分图会一直停在 neutral")
         self._has_started = True
         self.logger.info(
             f"{self.__class__.__name__} 已启动"
@@ -234,9 +223,6 @@ class ExpressionSheetProvider(BaseToolProvider):
     async def cleanup(self) -> None:
         if not self._has_started:
             return
-        if self._bindings is not None:
-            self._bindings.close()
-            self._bindings = None
         self._has_started = False
         self.logger.info(f"{self.__class__.__name__} 已停止")
 
@@ -302,12 +288,14 @@ def create_expression_sheet_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
+    tracking: Optional[Any] = None,
 ) -> ExpressionSheetProvider:
     """构造 ExpressionSheetProvider 实例（不启动，由调用方 setup）"""
     return ExpressionSheetProvider(
         config=config,
         event_bus=event_bus,
         lipsync_analyzer=lipsync_analyzer,
+        tracking=tracking,
     )
 
 
@@ -317,16 +305,17 @@ def register_expression_sheet_tools(
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
     subtitle_service: Optional[Any] = None,
-    tracking: Optional[Any] = None,  # 面捕合成器：本平台驱动尚未移植，仍走旧的情绪订阅，暂不使用
+    tracking: Optional[Any] = None,
 ) -> ExpressionSheetProvider:
     """构造 ExpressionSheetProvider 并注册到 registry。返回 Provider 实例供调用方管理生命周期。
 
-    目录未配置时降级登记 0 工具（工具页按降级展示），配置就绪需重启装配。
+    不登记 LLM 工具；目录未配置时工具页按未连接展示，配置就绪需重启装配。
     """
     provider = create_expression_sheet_provider(
         config=config,
         event_bus=event_bus,
         lipsync_analyzer=lipsync_analyzer,
+        tracking=tracking,
     )
     registry.register_provider(provider)
     return provider

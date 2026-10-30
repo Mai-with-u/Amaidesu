@@ -6,10 +6,10 @@
         :key="layer.id"
         class="sheet-image"
         :class="{ visible: layer.visible }"
-        :src="layer.src"
+        :src="layer.src || undefined"
         alt="主播差分立绘"
         @load="onLayerLoad(layer)"
-        @error="onImageError"
+        @error="onImageError(layer)"
       />
     </div>
     <div v-else-if="isPreview" class="sheet-placeholder">
@@ -20,70 +20,67 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onScopeDispose, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 
-import { useWebSocketStore } from '@/stores/websocket';
-import type { WebSocketMessage } from '@/types';
+import { avatarApi } from '@/api';
+import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
 
 /**
  * 表情差分嵌入页（给 OBS/直播姬浏览器源嵌的全屏透明页，形态参照 Subtitle.vue）。
  *
- * 纯展示页：只跟随 streamer.speech 事件切换差分图，不渲染任何控制台 UI。
- * 展示回退链：对应情绪差分图 404 → neutral 差分图；neutral 也 404 →
- * "未配置"占位。差分图由后端 GET /api/v1/avatar/expression_sheet/assets/<文件名>
- * 服务（emotion 文件名 = 情绪枚举值 + .png）。
+ * 纯展示页：显示哪张图由后端决定——情绪取面捕合成器此刻的主表情（语音开始播放才换、
+ * 播完停一会儿再回落、主播"保持表情"也生效），图按差分图目录解析好（缺图已回退
+ * neutral）。本页每 250 毫秒问一次 GET /api/v1/avatar/expression_sheet/state，图变了
+ * 才换；404（未启用或未配置目录）显示"未配置"，网络抖动时保持当前图不动。
  *
  * 两态语义：嵌入态（直播软件里的裸网址）任何提示都不上屏——未配置时就是
  * 纯透明；预览态（管理页打开，带 ?preview=1）才显示占位文字供排查。
  * 展示层用双图交叉淡入（新图加载完成才切换可见层），换图不闪白。
  *
- * 事件消费边界（v1 范围）：LLM 直调 expression_sheet_set_expression 工具的
- * 场景不经 streamer.speech 事件流，不反射到本页。
+ * 生命周期语义：本页是给浏览器源嵌的全屏展示页，不在 keep-alive 容器里——setup 即开始
+ * 轮询、作用域销毁时停止；若以后挂进 keep-alive，轮询随激活态启停（组合式已处理）。
  */
 
 const route = useRoute();
 /** 预览态（管理页"打开"按钮带 ?preview=1）才允许占位提示渲染 */
 const isPreview = computed(() => route.query.preview === '1');
 
-// 小部件事件订阅：
-// 订阅主事件 WS 流（订阅句柄由 useWebSocketStore → api/websocket 的共享连接
-// 注入，不自绘重连循环），过滤 streamer.speech 事件，取 payload 的 emotion
-// 字段驱动差分图切换。streamer.speech 的 emotion 由生产者保证为 17 枚举值
-// 之一，非法值兜底回 neutral。事件消费边界（v1 范围）：LLM 直调
-// expression_sheet_set_expression 工具的场景不经事件流，不反射到本页。
-//
-// 生命周期语义：本页是给 OBS/直播姬浏览器源嵌的全屏展示页——非 keep-alive
-// 容器，setup 订阅 + 连接，作用域销毁（onScopeDispose）退订；若未来挂进
-// keep-alive，须改为 activated/deactivated 启停订阅，避免隐藏页白耗。
+/** 轮询间隔：换图有 0.35 秒淡入，再快观众也看不出来 */
+const POLL_INTERVAL_MS = 250;
 
-/** 兜底差分图的情绪名（对应后端 Emotion.NEUTRAL 枚举值） */
-const NEUTRAL_EMOTION = 'neutral';
+/** 展示态：normal=显示后端给的差分图；unconfigured=未配置占位 */
+const displayState = ref<'normal' | 'unconfigured'>('normal');
+/** 后端解析好的当前差分图地址（空串 = 还没拿到） */
+const currentSrc = ref('');
 
-/** streamer.speech 事件名（WS 广播 type 沿用事件名） */
-const STREAMER_SPEECH_TYPE = 'streamer.speech';
+let inFlight = false;
+/** 加载失败过的图地址（文件被删、目录换了没重启）：后端还给这张时不再反复加载、反复闪 */
+let brokenSrc = '';
 
-const wsStore = useWebSocketStore();
-const emotion = ref<string>(NEUTRAL_EMOTION);
+async function refresh(): Promise<void> {
+  // 上一次还没回来就跳过这一拍，慢网络下请求不堆积
+  if (inFlight) return;
+  inFlight = true;
+  try {
+    const { data } = await avatarApi.getExpressionSheetState();
+    if (data.image_url && data.image_url !== brokenSrc) {
+      currentSrc.value = data.image_url;
+      displayState.value = 'normal';
+    } else {
+      displayState.value = 'unconfigured';
+    }
+  } catch (error) {
+    const status = (error as { response?: { status?: number } }).response?.status;
+    // 404 = 未启用或未配置目录；其他错误（主程序重启、网络抖动）保持当前图
+    if (status === 404) displayState.value = 'unconfigured';
+  } finally {
+    inFlight = false;
+  }
+}
 
-const onSpeechMessage = (msg: WebSocketMessage): void => {
-  if (msg.type !== STREAMER_SPEECH_TYPE) return;
-  const raw = msg.data?.emotion;
-  emotion.value = typeof raw === 'string' && raw ? raw : NEUTRAL_EMOTION;
-};
-
-wsStore.connect();
-wsStore.subscribe(onSpeechMessage);
-onScopeDispose(() => wsStore.unsubscribe(onSpeechMessage));
-
-/** 展示态：normal=情绪差分图；fallback=neutral 兜底图；unconfigured=未配置占位 */
-const displayState = ref<'normal' | 'fallback' | 'unconfigured'>('normal');
-
-const assetUrl = (name: string): string => `/api/v1/avatar/expression_sheet/assets/${name}.png`;
-
-const currentSrc = computed(() =>
-  displayState.value === 'fallback' ? assetUrl(NEUTRAL_EMOTION) : assetUrl(emotion.value),
-);
+void refresh();
+useKeepAlivePolling(refresh, POLL_INTERVAL_MS, { startOnSetup: true, stopOnDispose: true });
 
 /** 双层图交叉淡入：新图加载完成后才切换可见层，换图不再闪白 */
 interface ImageLayer {
@@ -95,11 +92,12 @@ interface ImageLayer {
 }
 
 const layers = ref<ImageLayer[]>([
-  { id: 0, src: currentSrc.value, visible: true, loaded: true },
+  { id: 0, src: '', visible: false, loaded: false },
   { id: 1, src: '', visible: false, loaded: false },
 ]);
 
 watch(currentSrc, src => {
+  if (!src) return;
   const hidden = layers.value.find(layer => !layer.visible);
   if (!hidden) return;
   if (hidden.src === src) {
@@ -121,19 +119,12 @@ function onLayerLoad(layer: ImageLayer): void {
   }
 }
 
-/** 图片加载失败：情绪图 → neutral 兜底；neutral 也失败 → 未配置占位 */
-const onImageError = (): void => {
-  if (displayState.value === 'normal') {
-    displayState.value = 'fallback';
-    return;
-  }
+/** 图片加载失败：记下这张、按未配置处理；后端给出别的图时恢复 */
+function onImageError(layer: ImageLayer): void {
+  if (!layer.src) return;
+  brokenSrc = layer.src;
   displayState.value = 'unconfigured';
-};
-
-// 情绪变化即回到正常展示链（上一次的 404 回退态不跨情绪沿用）
-watch(emotion, () => {
-  if (displayState.value !== 'unconfigured') displayState.value = 'normal';
-});
+}
 </script>
 
 <style>

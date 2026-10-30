@@ -1099,6 +1099,13 @@ export interface AvatarDebugTriggerResponse {
   structured_content: Record<string, unknown> | null;
 }
 
+/** `GET /avatar/expression_sheet/state`：此刻该显示的差分图（情绪取面捕合成器的主表情） */
+export interface ExpressionSheetState {
+  emotion: string;
+  /** 已按目录扫描结果解析（缺图回退 neutral）；null = 没有可显示的图 */
+  image_url: string | null;
+}
+
 /** 形象调校页的一个可调字段（标题、说明、范围取自后端配置 Schema） */
 export interface AvatarTuningField {
   key: string;

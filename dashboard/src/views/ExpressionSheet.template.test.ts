@@ -1,10 +1,9 @@
-// ExpressionSheet.vue 事件订阅语义的源码结构守护测试
+// ExpressionSheet.vue 取图语义的源码结构守护测试
 //
-// 消费的事件订阅逻辑原为 useExpressionSheetWidget 组合式（有行为级测试），
-// 因单消费者就地内联进本页，而项目无组件挂载测试环境（无 jsdom 环境下的
-// vue 插件，无法编译 .vue 单文件组件），按既有惯例降级为源码结构断言，
-// 守护订阅语义的关键不变量：事件类型过滤、非法 emotion 兜底 neutral、
-// setup 订阅 + 作用域销毁退订。
+// 项目无组件挂载测试环境（无 jsdom 环境下的 vue 插件，无法编译 .vue 单文件组件），
+// 按既有惯例降级为源码结构断言，守护取图语义的关键不变量：显示哪张图由后端
+// 决定（跟着面捕合成器的主表情）、404 才算未配置、网络抖动保持当前图、
+// 轮询随作用域启停、加载失败的图不反复重试。
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -15,25 +14,26 @@ const sfcSource = readFileSync(
   'utf-8',
 );
 
-describe('ExpressionSheet 事件订阅语义', () => {
-  it('只消费 streamer.speech 事件（类型不过滤会把无关事件误当情绪信号）', () => {
-    expect(sfcSource).toContain('msg.type !== STREAMER_SPEECH_TYPE) return;');
-    expect(sfcSource).toContain("const STREAMER_SPEECH_TYPE = 'streamer.speech';");
+describe('ExpressionSheet 取图语义', () => {
+  it('图地址取后端解析好的结果（缺图回退与扩展名由后端按目录扫描决定）', () => {
+    expect(sfcSource).toContain('await avatarApi.getExpressionSheetState();');
+    expect(sfcSource).toContain('currentSrc.value = data.image_url;');
+    expect(sfcSource).not.toContain('streamer.speech');
   });
 
-  it('非法/缺失 emotion 兜底 neutral（生产者契约之外的数据不得直接上屏）', () => {
+  it('只有 404 算未配置：主程序重启、网络抖动时保持当前图，不闪成透明', () => {
+    expect(sfcSource).toContain("if (status === 404) displayState.value = 'unconfigured';");
+  });
+
+  it('setup 即轮询、作用域销毁时停止（嵌入页不在 keep-alive 里，泄漏定时器会随重挂载累积）', () => {
     expect(sfcSource).toContain(
-      "emotion.value = typeof raw === 'string' && raw ? raw : NEUTRAL_EMOTION;",
+      'useKeepAlivePolling(refresh, POLL_INTERVAL_MS, { startOnSetup: true, stopOnDispose: true });',
     );
+    expect(sfcSource).toContain('if (inFlight) return;');
   });
 
-  it('setup 订阅 + 作用域销毁退订（嵌入页长驻，泄漏订阅会随重挂载累积）', () => {
-    expect(sfcSource).toContain('wsStore.subscribe(onSpeechMessage);');
-    expect(sfcSource).toContain('onScopeDispose(() => wsStore.unsubscribe(onSpeechMessage));');
-    expect(sfcSource).toContain('wsStore.connect();');
-  });
-
-  it('兜底情绪名对应后端 NEUTRAL 枚举值', () => {
-    expect(sfcSource).toContain("const NEUTRAL_EMOTION = 'neutral';");
+  it('加载失败过的图不再反复加载（否则每拍闪一次）', () => {
+    expect(sfcSource).toContain('data.image_url !== brokenSrc');
+    expect(sfcSource).toContain('brokenSrc = layer.src;');
   });
 });

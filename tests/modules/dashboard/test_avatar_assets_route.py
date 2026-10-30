@@ -1,4 +1,4 @@
-"""表情差分图静态资源路由：纯文件名校验（防路径穿越）、未配置 404、正常取图"""
+"""表情差分图小部件路由：纯文件名校验（防路径穿越）、未配置 404、正常取图、此刻该显示哪张"""
 
 from __future__ import annotations
 
@@ -26,15 +26,21 @@ def _reset_dashboard_server() -> Iterator[None]:
 
 
 class _StubRegistry:
-    """按工具名返回预置 Provider 的最小注册表桩。"""
+    """只登记了一个预置 Provider（或什么都没登记）的最小注册表桩。"""
 
     def __init__(self, provider: object | None) -> None:
         self._provider = provider
 
-    def provider_of_tool(self, tool_name: str) -> object | None:
-        if tool_name == "expression_sheet_set_expression":
-            return self._provider
-        return None
+    def providers(self) -> list[object]:
+        return [self._provider] if self._provider is not None else []
+
+
+class _StubTracking:
+    def __init__(self, emotion: str) -> None:
+        self.emotion = emotion
+
+    def current_emotion(self) -> str:
+        return self.emotion
 
 
 class _StubServer:
@@ -116,3 +122,22 @@ def test_missing_registry_or_provider_returns_404(monkeypatch: pytest.MonkeyPatc
     app.include_router(router, prefix="/api/v1/avatar")
     set_dashboard_server(_StubServer(None))  # type: ignore[arg-type]
     assert TestClient(app).get("/api/v1/avatar/expression_sheet/assets/neutral.png").status_code == 404
+
+
+def test_state_follows_tracking_emotion_with_neutral_fallback(sheet_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tracking = _StubTracking("happy")
+    provider = ExpressionSheetProvider(config={"image_dir": str(sheet_dir)}, tracking=tracking)
+    client = _client(provider, monkeypatch)
+    assert client.get("/api/v1/avatar/expression_sheet/state").json() == {
+        "emotion": "happy",
+        "image_url": "/api/v1/avatar/expression_sheet/assets/happy.png",
+    }
+    tracking.emotion = "angry"  # 目录里没有 angry.png
+    body = client.get("/api/v1/avatar/expression_sheet/state").json()
+    assert body["image_url"] == "/api/v1/avatar/expression_sheet/assets/neutral.png"
+
+
+def test_state_is_404_when_not_enabled_or_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _client(None, monkeypatch).get("/api/v1/avatar/expression_sheet/state").status_code == 404
+    unconfigured = ExpressionSheetProvider(config={})
+    assert _client(unconfigured, monkeypatch).get("/api/v1/avatar/expression_sheet/state").status_code == 404
