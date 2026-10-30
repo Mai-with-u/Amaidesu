@@ -108,3 +108,20 @@ async def test_history_keeps_only_recent_entries_and_skips_broken_lines(tmp_path
     changes = history_dir / "changes.jsonl"
     changes.write_bytes(changes.read_bytes() + "这一行不是 JSON\n".encode("utf-8"))
     assert len(await store.list_history("live")) == 2
+
+
+async def test_merge_writes_and_restores_update_baseline(tmp_path: Path) -> None:
+    """收播合并写下的全文另存为基线（内容没变也更新）；人手保存不动基线；恢复旧版本也更新基线。"""
+    store = LongMemoryStore(tmp_path / "memory", clock=_ticking_clock())
+    assert await store.read_baseline("live") is None
+    await store.write("live", "合并版", as_baseline=True)
+    await store.write("live", "人手改过", reason="WebUI 保存")
+    assert await store.read_baseline("live") == "合并版"
+
+    await store.write("live", "人手改过", as_baseline=True)  # 合并没改出新内容
+    assert await store.read_baseline("live") == "人手改过"
+    assert len(await store.list_history("live")) == 2  # 内容没变不留底
+
+    entry = (await store.list_history("live"))[0]
+    await store.restore("live", entry.id)
+    assert await store.read_baseline("live") == "合并版" == await store.read("live")

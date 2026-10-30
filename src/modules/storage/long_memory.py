@@ -18,6 +18,10 @@
 写入的来由和改动清单追加到同目录的 ``changes.jsonl``（一行一条）。合并改错了、
 人手改坏了，都能按编号把旧版本恢复回来；只保留最近 ``history_keep`` 条。
 
+收播合并写下的那一版另存为基线（``history/<类型>/baseline.md``，恢复旧版本时也更新）。
+下一次合并拿当前文件和基线比，就知道哪些行是人后来改的——无论是在 WebUI 里改的，
+还是直接用编辑器改的。
+
 收播合并要先读、再调模型、最后写，中间隔着几十秒。为了不覆盖这期间人在 WebUI
 里保存的改动，写入可以带上读到时的版本号（全文摘要），版本对不上就抛
 ``LongMemoryConflict``，由调用方在新版本上重做。WebUI 与主播 Agent 共用同一个
@@ -50,6 +54,7 @@ _FILE_NAMES = {
 }
 _HISTORY_DIR = "history"
 _CHANGES_FILE = "changes.jsonl"
+_BASELINE_FILE = "baseline.md"
 _DEFAULT_HISTORY_KEEP = 50
 
 
@@ -118,15 +123,21 @@ class LongMemoryStore:
         reason: str = "",
         changes: Sequence[str] = (),
         session_id: Optional[int] = None,
+        as_baseline: bool = False,
     ) -> str:
         """整份覆盖写并留底，返回实际保存的全文；空文本会把文件写成空（相当于清空记忆）。
 
         ``expected_version`` 给了且与当前文件不符时抛 ``LongMemoryConflict``，文件不动。
-        内容与当前完全相同时不写、不留底。
+        内容与当前完全相同时不写、不留底。``as_baseline`` 为收播合并的写入：写下的全文另存为
+        基线，下次合并据此认出人后来改过的行。
         """
         return await asyncio.to_thread(
-            self._write_blocking, kind, text, expected_version, reason, list(changes), session_id
+            self._write_blocking, kind, text, expected_version, reason, list(changes), session_id, as_baseline
         )
+
+    async def read_baseline(self, kind: SessionKind) -> Optional[str]:
+        """上一次收播合并写下的全文；还没合并过（或基线丢了）返回 None。"""
+        return await asyncio.to_thread(self._read_baseline_blocking, kind)
 
     async def list_history(
         self, kind: SessionKind, *, limit: int = _DEFAULT_HISTORY_KEEP
@@ -144,7 +155,8 @@ class LongMemoryStore:
         snapshot = await self.read_snapshot(kind, entry_id)
         if snapshot is None:
             return None
-        return await self.write(kind, snapshot, reason=f"恢复到记录 {entry_id} 之前的版本")
+        # 恢复的版本当作新的基线：恢复回来的条目仍按原来的人工 / 模型身份对待
+        return await self.write(kind, snapshot, reason=f"恢复到记录 {entry_id} 之前的版本", as_baseline=True)
 
     # ------------------------------------------------------------------
     # 阻塞实现（在线程里跑）
@@ -165,6 +177,7 @@ class LongMemoryStore:
         reason: str,
         changes: List[str],
         session_id: Optional[int],
+        as_baseline: bool = False,
     ) -> str:
         content = (text or "").strip()
         path = self.path_of(kind)
@@ -172,6 +185,9 @@ class LongMemoryStore:
             current, version = self._read_blocking(kind)
             if expected_version is not None and expected_version != version:
                 raise LongMemoryConflict(f"长期记忆（{kind}）在读出之后被改过")
+            if as_baseline:
+                self._history_dir(kind).mkdir(parents=True, exist_ok=True)
+                self._replace(self._history_dir(kind) / _BASELINE_FILE, content + "\n" if content else "")
             if content == current and path.exists():
                 return content
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -242,6 +258,12 @@ class LongMemoryStore:
             except Exception as exc:  # noqa: BLE001 坏掉的一行跳过，不影响其他记录
                 logger.warning(f"长期记忆留底记录第 {number} 行读不懂，已跳过（{kind}）: {exc}", exc=True)
         return entries
+
+    def _read_baseline_blocking(self, kind: SessionKind) -> Optional[str]:
+        path = self._history_dir(kind) / _BASELINE_FILE
+        if not path.exists():
+            return None
+        return path.read_bytes().decode("utf-8-sig").strip()
 
     def _read_snapshot_blocking(self, kind: SessionKind, entry_id: str) -> Optional[str]:
         entry = next((item for item in self._load_entries(kind) if item.id == entry_id), None)

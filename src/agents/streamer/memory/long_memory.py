@@ -12,8 +12,11 @@
 2. 一次 summary 档位调用，模型只给出对编号条目的操作（不重写整份）；
 3. 逐条执行操作，再跑一遍生命周期：没人再提的淡出到搁置、超篇幅先搁置最久没被
    提起的（见 ``note_merge``）；
-4. 带版本号写回并留底（来由、场次、逐条改动）。写回前文件被人在 WebUI 改过，就在
-   新版本上把同一批操作重做一次。
+4. 带版本号写回并留底（来由、场次、逐条改动），写下的全文另存为基线。写回前文件被
+   人在 WebUI 改过，就在新版本上把同一批操作重做一次。
+
+读笔记时先对照上一次合并的基线：人后来新增或改过正文的行（WebUI 或编辑器里改的都算）
+记成人工条目，此后模型只读不改、也不会淡出。
 
 本场没写成回顾（空场次、模型失败）就不动长期记忆；每场只合并一次（合并成功后
 在回顾行记合并时刻）。模型输出读不懂时保留旧版本不写，也不记合并时刻。直播进行中
@@ -32,7 +35,7 @@ from src.modules.types.session_kind import SessionKind
 
 from ..background import SUMMARY_PROFILE
 from .note_merge import NoteOp, apply_lifecycle, apply_ops, parse_ops, resolve_ops
-from .notes import parse_notes, render_for_injection, render_for_merge, render_notes
+from .notes import mark_manual_edits, parse_notes, render_for_injection, render_for_merge, render_notes
 
 __all__ = ["LongMemoryWriter", "format_long_memory"]
 
@@ -93,6 +96,8 @@ class LongMemoryWriter:
         self._max_chars = max(300, int(max_chars))
         self._stale_sessions = max(1, int(stale_sessions))
         self._system_prompt: str = ""
+        # 本次合并里因人改过而记成人工的条目（进改动清单留给人看）
+        self._marked_notes: List[str] = []
 
     async def read(self, kind: SessionKind) -> str:
         """读出某类场次的长期笔记全文（开播注入用，注入前再按需渲染）；读失败按没有处理。"""
@@ -117,7 +122,7 @@ class LongMemoryWriter:
             logger.info(f"场次 {sid} 已合并进长期记忆，不重复合并")
             return None
         kind: SessionKind = session_row.kind
-        old_text, version = await self._store.read_versioned(kind)
+        old_text, version = await self._read_marked(kind)
         viewers = await self._session_viewers(sid)
         games = self._games()
 
@@ -132,14 +137,18 @@ class LongMemoryWriter:
         text: Optional[str] = None
         for attempt in range(2):
             new_text, changes = self._merge(old_text, ops, rejected, sid, viewers, games, settled_ids)
-            if new_text == old_text:
-                text = old_text
-                logger.info(f"长期记忆无变化（场次 {sid}）")
+            changes = self._marked_notes + changes
+            if not new_text and not old_text:
+                # 还没有笔记、这场也没记下东西：不建空文件
+                text = ""
                 break
+            if new_text == old_text and not self._marked_notes:
+                logger.info(f"长期记忆无变化（场次 {sid}）")
+            # 内容没变时存储不改文件、不留底，只把这一版记为基线
             try:
                 text = await self._store.write(
                     kind, new_text, expected_version=version, reason=f"收播整理（场次 #{sid}）",
-                    changes=changes, session_id=sid,
+                    changes=changes, session_id=sid, as_baseline=True,
                 )  # fmt: skip
                 break
             except LongMemoryConflict:
@@ -147,7 +156,7 @@ class LongMemoryWriter:
                     logger.warning(f"长期记忆连续两次在合并期间被改过（场次 {sid}），这场先不合并")
                     return None
                 logger.info(f"长期记忆在合并期间被人改过（场次 {sid}），在新版本上重做同一批操作")
-                old_text, version = await self._store.read_versioned(kind)
+                old_text, version = await self._read_marked(kind)
         if text is None:
             return None
         logger.info(f"长期记忆已合并场次 {sid}（{kind}，{len(ops)} 个操作）")
@@ -159,6 +168,20 @@ class LongMemoryWriter:
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
+
+    async def _read_marked(self, kind: SessionKind) -> tuple[str, str]:
+        """读当前笔记与版本号，并对照上一次合并写下的基线，把人后来新增或改过正文的行记成人工。
+
+        还没有基线（第一次合并、旧格式笔记）时不标记：那时的条目都当模型写的。
+        """
+        text, version = await self._store.read_versioned(kind)
+        self._marked_notes = []
+        baseline = await self._store.read_baseline(kind)
+        if baseline is None:
+            return text, version
+        marked_text, marked = mark_manual_edits(baseline, text)
+        self._marked_notes = [f"人改过的行记为人工：{item}" for item in marked]
+        return (marked_text if marked else text), version
 
     def _merge(
         self,

@@ -476,6 +476,26 @@ async def test_long_memory_redoes_ops_on_version_saved_during_merge(store: SQLit
 
 
 @pytest.mark.asyncio
+async def test_long_memory_marks_lines_edited_by_hand_since_last_merge(store: SQLiteDatabase) -> None:
+    """上次合并之后人改过正文的行（WebUI 或编辑器）在下次合并时记成人工：模型再动它不执行，改动清单里写明。"""
+    first_pk = await _recapped_session(store, "第一场")
+    add = _ops({"op": "add", "section": "老梗与口头禅", "text": "嘴硬"})
+    await _long_writer(store, _responses(add)).consolidate(first_pk)
+    edited = (await store.long_memory.read("live")).replace("- 嘴硬〔", "- 嘴硬但心软〔")
+    await store.long_memory.write("live", edited, reason="WebUI 保存")
+
+    second_pk = await _recapped_session(store, "第二场")
+    text = await _long_writer(store, _responses(_ops({"op": "remove", "id": 1, "reason": "过时"}))).consolidate(
+        second_pk
+    )
+
+    assert text is not None and "- 嘴硬但心软〔人工 · " in text
+    changes = (await store.long_memory.list_history("live"))[0].changes
+    assert changes[0] == "人改过的行记为人工：嘴硬但心软"
+    assert any(change.startswith("没采纳（人工条目只读）") for change in changes)
+
+
+@pytest.mark.asyncio
 async def test_long_memory_merges_each_session_once(store: SQLiteDatabase) -> None:
     """合并成功（含内容无变化）就在回顾行记合并时刻，再整理同一场不调模型、不改笔记；失败不记。"""
     pk = await _recapped_session(store, "这场答应老王挖钻石")

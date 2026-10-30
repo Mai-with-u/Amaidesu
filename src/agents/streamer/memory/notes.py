@@ -301,12 +301,17 @@ def render_for_merge(doc: NoteDocument) -> Tuple[str, List[NoteItem]]:
     return "\n".join(lines), numbered
 
 
-def mark_manual_edits(old_text: str, new_text: str) -> str:
-    """人在 WebUI 里保存时：新增或改过正文的行一律记成人工条目，没动过的行保持原样。"""
+def mark_manual_edits(old_text: str, new_text: str) -> Tuple[str, List[str]]:
+    """对照上一次模型写下的版本：人新增或改过正文的行一律记成人工条目，返回新全文与被记成人工的正文。
+
+    没动过的行保持原样；本来就是人工的行不重复报告。
+    """
     old_doc = parse_notes(old_text)
     new_doc = parse_notes(new_text, legacy=_is_legacy(old_text) and _is_legacy(new_text))
     old_keys = {item.key for item in old_doc.items}
+    marked: List[str] = []
     for item in new_doc.items:
-        if item.key not in old_keys:
+        if item.key not in old_keys and not item.manual:
             item.manual = True
-    return render_notes(new_doc)
+            marked.append(item.text)
+    return render_notes(new_doc), marked

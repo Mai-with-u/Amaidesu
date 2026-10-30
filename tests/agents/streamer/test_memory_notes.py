@@ -91,11 +91,14 @@ def test_merge_listing_numbers_every_item_and_marks_manual() -> None:
 
 
 def test_manual_edit_marking_keeps_untouched_lines() -> None:
-    """WebUI 保存：改过正文或新加的行记成人工，没动的行保持模型条目。"""
+    """对照上一次合并写下的版本：改过正文或新加的行记成人工，没动的行保持模型条目。"""
     old = "## 老梗与口头禅\n- 嘴硬〔始于 #1 · 最近 #1〕\n- 怕黑〔始于 #1 · 最近 #1〕"
     new = "## 老梗与口头禅\n- 嘴硬〔始于 #1 · 最近 #1〕\n- 其实不怕黑〔始于 #1 · 最近 #1〕\n- 新加一条"
-    doc = parse_notes(mark_manual_edits(old, new))
+    text, marked = mark_manual_edits(old, new)
+    doc = parse_notes(text)
     assert not _find(doc, "嘴硬").manual
     assert _find(doc, "其实不怕黑").manual and _find(doc, "新加一条").manual
-    legacy = parse_notes(mark_manual_edits("## 老梗与口头禅\n- 嘴硬", "## 老梗与口头禅\n- 嘴硬\n- 手加的"))
+    assert marked == ["其实不怕黑"]  # 没带标签的新行本来就算人工，不重复报告
+    legacy_text, _marked = mark_manual_edits("## 老梗与口头禅\n- 嘴硬", "## 老梗与口头禅\n- 嘴硬\n- 手加的")
+    legacy = parse_notes(legacy_text)
     assert not _find(legacy, "嘴硬").manual and _find(legacy, "手加的").manual
