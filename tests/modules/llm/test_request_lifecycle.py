@@ -1,4 +1,4 @@
-"""生成完整等待服务端完成，主动取消仍能回收请求与重试任务。"""
+"""生成完整等待服务端完成，主动取消仍能回收请求与重试任务；设了放弃等待时长的用途到点收回、切下一个模型。"""
 
 import asyncio
 from collections.abc import Callable, Coroutine
@@ -13,6 +13,7 @@ from src.modules.llm.clients.openai.client import OpenAIClient
 from src.modules.llm.engine import LLMManager
 from src.modules.llm.errors import LLMInterruptedError, RetryableError
 from src.modules.llm.payload import GenerateRequest, Response
+from tests.config.helpers import wait_until
 
 
 async def _manager(behavior: Callable[..., Coroutine[Any, Any, None]]) -> LLMManager:
@@ -135,3 +136,84 @@ def test_sdk_does_not_apply_a_request_deadline() -> None:
     with patch("src.modules.llm.clients.openai.client.AsyncOpenAI") as sdk:
         OpenAIClient({"api_key": "test", "base_url": "https://example.test/v1", "timeout": 1})
     assert sdk.call_args.kwargs["timeout"] is None
+
+
+class _ManualTimer:
+    """放弃等待的计时替身：记下每次开始计时的时长，测试说"到点"才到点。"""
+
+    def __init__(self) -> None:
+        self.started: list[int] = []
+        self.fire = asyncio.Event()
+
+    async def __call__(self, ms: int) -> None:
+        self.started.append(ms)
+        await self.fire.wait()
+
+
+async def _give_up_manager(hang: set[str], timer: _ManualTimer, *, give_up_ms: int) -> tuple[LLMManager, dict]:
+    """两个模型的 replyer：``hang`` 里的模型一直不返回（直到被收回）；返回管理器与调用记录。"""
+    record: dict = {"calls": [], "reaped": []}
+
+    class HangingClient(BaseLLMClient):
+        async def generate(
+            self,
+            request: GenerateRequest,
+            *,
+            model: str,
+            temperature: float | None = None,
+            reasoning_effort: Optional[str] = None,
+            on_delta: Any = None,
+            interrupt_flag: Any = None,
+        ) -> Response:
+            record["calls"].append(model)
+            if model in hang:
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    record["reaped"].append(model)
+            return Response(success=True, content=f"{model} 的台词", model=model)
+
+    manager = LLMManager(give_up_timer=timer)
+    with patch.dict(_CLIENT_DISPATCH, {"hangingfake": HangingClient}):
+        await manager.setup(
+            {
+                "llm_providers": [{"name": "p", "client_type": "hangingfake", "max_retries": 1, "retry_delay": 0}],
+                "llm_models": [
+                    {"name": "m1", "model_identifier": "m1", "api_provider": "p"},
+                    {"name": "m2", "model_identifier": "m2", "api_provider": "p"},
+                ],
+                "llm_profiles": {"replyer": {"model_list": ["m1", "m2"], "give_up_ms": give_up_ms}},
+            }
+        )
+    return manager, record
+
+
+async def test_stuck_model_is_given_up_and_next_model_answers() -> None:
+    """直播台词这类晚了就没用的调用：卡住的模型到点就收回请求，切名单里的下一个。"""
+    timer = _ManualTimer()
+    manager, record = await _give_up_manager({"m1"}, timer, give_up_ms=60_000)
+    task = asyncio.create_task(manager.generate("说句话", profile="replyer"))
+    await wait_until(lambda: record["calls"] == ["m1"], what="第一个模型开始生成")
+    timer.fire.set()
+    response = await asyncio.wait_for(task, 1)
+    assert response.success and response.content == "m2 的台词"
+    assert record["reaped"] == ["m1"]  # 卡住的请求被收回，连接不留着
+    assert timer.started == [60_000, 60_000]  # 每个模型各自计时
+
+
+async def test_all_stuck_models_given_up_returns_failure() -> None:
+    timer = _ManualTimer()
+    timer.fire.set()
+    manager, record = await _give_up_manager({"m1", "m2"}, timer, give_up_ms=60_000)
+    response = await asyncio.wait_for(manager.generate("说句话", profile="replyer"), 1)
+    assert not response.success and "已放弃" in (response.error or "")
+    assert record["reaped"] == ["m1", "m2"]
+
+
+async def test_zero_give_up_waits_without_a_timer() -> None:
+    """默认一直等：不设放弃时长的用途不计时，长回复不会被从中间掐断。"""
+    timer = _ManualTimer()
+    timer.fire.set()
+    manager, record = await _give_up_manager(set(), timer, give_up_ms=0)
+    response = await asyncio.wait_for(manager.generate("说句话", profile="replyer"), 1)
+    assert response.content == "m1 的台词" and timer.started == []

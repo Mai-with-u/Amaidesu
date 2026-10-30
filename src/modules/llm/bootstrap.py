@@ -97,6 +97,7 @@ class _ResolvedProfile(BaseModel):
 
     profile_name: str
     slow_threshold_ms: int
+    give_up_ms: int = 0  # 一个模型这么久没返回就放弃、切下一个；0 = 一直等
     selection_strategy: str  # sequential / balance / random
     seed: int  # random 策略用；0 表示不固定
     temperature: float = 0.3
@@ -207,6 +208,7 @@ def build_resolved_profile(
     return _ResolvedProfile(
         profile_name=pname,
         slow_threshold_ms=int(pcfg.get("slow_threshold_ms", 15_000) or 15_000),
+        give_up_ms=max(0, int(pcfg.get("give_up_ms", 0) or 0)),
         selection_strategy=strategy_name,
         seed=seed,
         temperature=pcfg.get("temperature", 0.3),

@@ -77,3 +77,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-052：虚拟形象由面捕合成器逐帧驱动（部分取代 ADR-023 / ADR-026：平台适配器缩成驱动 / 表情跟着播放起落 / VTS 先行）](052-avatar-tracking-synthesizer.md)
 - [ADR-053：主播的形象工具收成一个 avatar_act（部分取代 ADR-026 / ADR-052：平台只登记片段 / 心情慢变 / 按句情绪落地）](053-avatar-act-tool.md)
 - [ADR-054：面捕合成器改用面捕规范词表（取代 ADR-052 的通用通道一条：ARKit 52 系数 + VRM 口型 / VTS 驱动照 VBridger 规范输出）](054-avatar-standard-face-vocabulary.md)
+- [ADR-055：LLM 调用默认一直等，晚了就没用的用途设放弃等待时长（取代 ADR-032 运行时韧性一节的硬超时一条：按用途 give_up_ms / 到点收回切下一个模型 / 只给台词与决策设）](055-llm-give-up-wait.md)

@@ -271,6 +271,7 @@ class LLMProfileConfig(BaseConfig):
         model_list: 引用的模型名列表（对应 llm_models[].name）
         selection_strategy: 选择策略
         slow_threshold_ms: 慢调用阈值（毫秒）；超阈值仅告警，不切换
+        give_up_ms: 放弃等待时长（毫秒）；一个模型这么久没返回就放弃、切下一个；0 = 一直等
         temperature: 生成温度（0.0-2.0）
         reasoning_effort: 思考强度档位（自由字符串，如 low/medium/high；取值看模型支持；空串=不控制=请求不含该字段）
     """
@@ -290,6 +291,18 @@ class LLMProfileConfig(BaseConfig):
         ge=100,
         title="慢调用阈值",
         description="调用超过该时长记一次慢调用告警（毫秒）；只告警不切换",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    # 默认一直等：长回复不该被宿主设的时限从中间掐断。只有"晚了就没用"的用途（直播里的
+    # 台词、主播的决策）才设上限——卡住的请求等到天荒地老，直播间就冷场多久
+    give_up_ms: int = Field(
+        default=0,
+        ge=0,
+        title="放弃等待时长",
+        description=(
+            "一个模型这么久还没返回就放弃这次调用，切到名单里的下一个模型（毫秒）；"
+            "0 = 一直等到返回。只给晚了就没用的用途设，比如直播台词"
+        ),
         json_schema_extra={"x-ui-advanced": True},
     )
     temperature: float = Field(
@@ -314,9 +327,11 @@ class LLMProfileConfig(BaseConfig):
         return value
 
 
+#: 放弃等待时长只给直播里"晚了就没用"的两个用途设：台词正常十几秒内出，决策正常半分钟内出
+#: （实测最长约 36 秒），上限各留几倍余量，只拦真正卡住的请求
 _PROFILE_PRESETS: dict[str, dict[str, Any]] = {
-    "planner": {"slow_threshold_ms": 15_000, "temperature": 0.7},
-    "replyer": {"slow_threshold_ms": 8_000, "temperature": 0.2},
+    "planner": {"slow_threshold_ms": 15_000, "give_up_ms": 120_000, "temperature": 0.7},
+    "replyer": {"slow_threshold_ms": 8_000, "give_up_ms": 60_000, "temperature": 0.2},
     "summary": {"slow_threshold_ms": 30_000, "temperature": 0.3},
     "minecraft": {"slow_threshold_ms": 15_000, "temperature": 0.2},
     "minecraft_builder": {

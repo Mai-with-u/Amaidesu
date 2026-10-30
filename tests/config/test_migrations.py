@@ -177,6 +177,21 @@ def _seed_profile_history_budget(d: Path) -> None:
     write_doc(d, "model.toml", doc)
 
 
+def _seed_profile_give_up(d: Path) -> None:
+    doc = _rewound(d, "model.toml", "2.0.44")
+    for profile in doc["llm_profiles"].values():
+        profile.pop("give_up_ms", None)
+    doc["llm_profiles"]["planner"]["give_up_ms"] = 0  # 用户显式写过的值（包括一直等）不动
+    write_doc(d, "model.toml", doc)
+
+
+def _check_profile_give_up(d: Path) -> None:
+    profiles = read_doc(d, "model.toml")["llm_profiles"]
+    assert profiles["replyer"]["give_up_ms"] == 60_000  # 直播台词卡住不再冷场
+    assert profiles["planner"]["give_up_ms"] == 0
+    assert profiles["summary"]["give_up_ms"] == 0  # 其余用途由漂移写回补通用默认：一直等
+
+
 def _check_profile_history_budget(d: Path) -> None:
     profiles = read_doc(d, "model.toml")["llm_profiles"]
     assert all(
@@ -417,6 +432,7 @@ CASES = [
         _check_logging_directory("E:/my-logs"),  # hook 仅改写旧默认落盘值，用户显式自设的目录原样保留
     ),
     Case("profile-history-budget", ("model.toml",), _seed_profile_history_budget, _check_profile_history_budget),
+    Case("profile-give-up", ("model.toml",), _seed_profile_give_up, _check_profile_give_up),
     Case("warudo-subtitle-keys", ("tools.toml", "avatar.toml"), _seed_warudo_subtitle, _check_warudo_subtitle),
     Case("vts-lipsync-to-avatar", ("tools.toml", "infra.toml"), _seed_vts_lipsync, _check_vts_lipsync),
     Case("avatar-platform-graduation", ("tools.toml",), _seed_avatar_platform, _check_avatar_platform),
@@ -494,6 +510,7 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "drop_minecraft_companion_collectors": ("case", "minecraft-companion-collectors"),
     "drop_bili_danmaku_message_config": ("case", "bili-danmaku-message-config"),
     "drop_profile_history_budget": ("case", "profile-history-budget"),
+    "profile_give_up": ("case", "profile-give-up"),
     "widget_drop_html_page": ("case", "widget-html-page"),
     # 具名测试函数覆盖
     "builder_scene_transport": ("test", "test_migrations.py#test_builder_scene_transport_hook_and_writeback"),

@@ -11,6 +11,9 @@
     - ``random``：随机选一个
 - **故障切换**：当前模型失败切下一个；超 ``slow_threshold_ms`` 仅告警（不切）。
   成功后立即返回，不再尝试。
+- **放弃等待**：默认一直等模型返回（长回复不被宿主时限掐断）；profile 设了 ``give_up_ms``
+  时，一个模型（连同它的重试）这么久没返回就收回请求、按失败切下一个——只给直播里
+  "晚了就没用"的用途设，卡住的请求才不会让直播间冷场。
 - **厂商无关**：本模块不 import 任何厂商适配端（``clients/<vendor>/``），
   provider 客户端构造与能力解析一律经 ``clients`` 包的调度表完成。
 
@@ -25,7 +28,7 @@ import random
 import re
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
@@ -394,6 +397,10 @@ def _guard_inline_payload(request: GenerateRequest) -> None:
             )
 
 
+async def _sleep_ms(ms: int) -> None:
+    await asyncio.sleep(ms / 1000)
+
+
 class LLMManager:
     """LLM 管理器 - profile 驱动的多模型故障切换
 
@@ -428,8 +435,11 @@ class LLMManager:
         live_session_resolver: Optional[Callable[[], Optional[int]]] = None,
         diagnostics_writer: Optional[DiagnosticsWriter] = None,
         client_factory: Optional[ClientFactory] = None,
+        give_up_timer: Optional[Callable[[int], Awaitable[None]]] = None,
     ) -> None:
+        """``give_up_timer``：按毫秒等一段时间的协程函数（放弃等待计时用；测试注入可控的计时）。"""
         self.logger = get_logger("LLMManager")
+        self._give_up_timer = give_up_timer or _sleep_ms
         # provider 客户端构造工厂：缺省 None 走 clients 调度表，行为与未注入时一致
         self._client_factory = client_factory
         # provider_name -> provider 配置 + 客户端实例（共享连接）
@@ -888,7 +898,7 @@ class LLMManager:
                 call_kwargs["request"] = request.model_copy(
                     update={"temperature": final_temperature, "reasoning_effort": final_effort}
                 )
-        return await guarded_call(
+        call = guarded_call(
             lambda: self._retry_loop(
                 method=method,
                 client=client,
@@ -903,6 +913,38 @@ class LLMManager:
             ),
             interrupt_flag=call_kwargs.get("interrupt_flag"),
         )
+        if profile.give_up_ms <= 0:
+            return await call
+        return await self._give_up_after(call, profile.give_up_ms, profile_name=profile_name, model_name=model_name)
+
+    async def _give_up_after(
+        self,
+        call: Awaitable[Tuple[Optional[Response], Optional[str]]],
+        give_up_ms: int,
+        *,
+        profile_name: str,
+        model_name: str,
+    ) -> Tuple[Optional[Response], Optional[str]]:
+        """等一个模型（连同它的重试）至多 ``give_up_ms``：到点还没返回就收回请求、按失败交回切换循环。
+
+        收回走取消：guarded_call 收到取消会关掉底层连接与重试任务；调用方自己的取消照常向上传。
+        """
+        task = asyncio.ensure_future(call)
+        timer = asyncio.ensure_future(self._give_up_timer(give_up_ms))
+        try:
+            done, _pending = await asyncio.wait({task, timer}, return_when=asyncio.FIRST_COMPLETED)
+            if task in done:
+                return task.result()
+            self.logger.warning(
+                f"[LLM 放弃等待] profile={profile_name} model={model_name} 等了 {give_up_ms}ms 没返回，"
+                "收回请求并按失败处理"
+            )
+            return None, f"等了 {give_up_ms}ms 没返回，已放弃"
+        finally:
+            for pending in (task, timer):
+                if not pending.done():
+                    pending.cancel()
+            await asyncio.gather(task, timer, return_exceptions=True)
 
     async def _retry_loop(
         self,

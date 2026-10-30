@@ -858,6 +858,30 @@ def _drop_profile_history_budget(data: Dict[str, Any]) -> List[str]:
 
 register_file_hook("model.toml", "drop_profile_history_budget", "2.0.44", _drop_profile_history_budget)
 
+# 直播里"晚了就没用"的两个用途的放弃等待时长（写进钩子的是当时的取值，之后改默认不影响本钩子）
+_PROFILE_GIVE_UP_MS = {"planner": 120_000, "replyer": 60_000}
+
+
+def _upgrade_profile_give_up(data: Dict[str, Any]) -> List[str]:
+    """model.toml v2.0.45：给 planner / replyer 补上放弃等待时长。
+
+    新字段 ``give_up_ms`` 的通用默认是 0（一直等），漂移写回只会给存量文件补 0；
+    而这两个用途卡住时直播间就冷场多久，所以存量文件也要跟上新生成文件的取值。
+    只补缺的键，用户已经写过的值（包括 0）原样保留。
+    """
+    changed: List[str] = []
+    profiles = data.get("llm_profiles")
+    if isinstance(profiles, dict):
+        for name, give_up_ms in _PROFILE_GIVE_UP_MS.items():
+            profile = profiles.get(name)
+            if isinstance(profile, dict) and "give_up_ms" not in profile:
+                profile["give_up_ms"] = give_up_ms
+                changed.append(f"llm_profiles.{name}.give_up_ms")
+    return changed
+
+
+register_file_hook("model.toml", "profile_give_up", "2.0.45", _upgrade_profile_give_up)
+
 
 def _drop_tools_memory_section(data: Dict[str, Any]) -> List[str]:
     """tools.toml v2.0.45：删 ``[tools.memory]`` 段。
