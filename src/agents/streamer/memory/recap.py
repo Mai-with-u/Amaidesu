@@ -5,13 +5,19 @@ Agent 时整理被打断的场次，下次启动时按 ``list_unsettled`` 的待
 就不重写，经 ``ensure_recap``）。两条路径共用同一份原料与同一次 LLM 调用，原料全部
 来自库表，不依赖进程内状态。
 
-原料（全部按场次主键取，各自封顶控制 prompt 体量；备忘录由主播 Agent 每次写入时
-落进场次行，经按场次主键读取的回调递入）：
+原料（全部按场次主键取；备忘录由主播 Agent 每次写入时落进场次行，经按场次主键
+读取的回调递入）：
+- 主播备忘录全文（``live_sessions.notebook_text``）——模型自己沉淀的结论账，排在
+  最前、不参与截断
 - 主播自己说过的话（``live_chat`` 的 assistant 行）——承诺、梗、进展都在嘴里
 - 话题摘要轨迹（``timeline_summary``）——观众这场聊了什么
 - 游戏里程碑（``game_events``）——游戏里做到哪
 - 本场最活跃的观众与付费（``live_chat`` 聚合 + 付费三表）——谁来得多、谁撑场
-- 主播备忘录全文（``live_sessions.notebook_text``）——已翻篇/已兑现的结论账
+- 观众指出主播说错、记错的弹幕（连同主播前一句）——长期笔记据此改正
+
+发言、话题、游戏三类按全场时间均匀取样（首尾都在），不是只取结尾：一场几小时的
+直播，开头答应的事和结尾一样要进回顾。整体超长时再把发言隔行抽稀，仍超才从尾部
+截断；备忘录不受影响。
 
 产出写 ``session_recaps``；开播注入与 ``memory_recall_session`` 工具都从那张表读。
 """
@@ -36,21 +42,66 @@ from ..background import SUMMARY_PROFILE
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
 
-__all__ = ["SessionRecapWriter", "format_recap"]
+__all__ = ["SessionRecapWriter", "clip_whole_sentences", "format_recap"]
 
 logger = get_logger("SessionRecapWriter")
 
 # 系统提示词模板键（正文见 prompts/session_recap_system.md）
 _RECAP_SYSTEM_TEMPLATE = "session_recap_system"
 
-# 原料封顶：条数与单行长度（整场几小时的记录只取最近的一批，控 prompt 体量）
+# 原料封顶：取样条数与单行长度（整场按时间均匀取样，控 prompt 体量）
 _SPEECH_ROWS = 80
 _SPEECH_LINE_CHARS = 120
 _SUMMARY_ROWS = 60
+_SUMMARY_SCAN_ROWS = 1000
 _GAME_EVENT_ROWS = 40
+_GAME_EVENT_SCAN_ROWS = 500
 _SPEAKER_ROWS = 8
 _PAYMENT_ROWS = 15
 _MATERIAL_MAX_CHARS = 12_000
+# 发言抽稀的下限：再少就看不出这场的脉络了，宁可从尾部截断
+_SPEECH_MIN_ROWS = 10
+# 观众纠错：命中这些说法的弹幕算"指出主播说错/记错"，最多收几条
+_CORRECTION_MARKERS = ("记错", "说错", "不对", "错了", "说反", "不是这样", "没答应", "瞎说", "乱说")
+_CORRECTION_FALSE_MARKERS = ("不对劲",)
+_CORRECTION_ROWS = 8
+# 截短时句末标点之后才下刀；最后一个完整句子太靠前（不到上限一半）就直接按字截
+_SENTENCE_ENDS = "。！？!?\n"
+
+
+def clip_whole_sentences(text: str, limit: int) -> str:
+    """把文本截到 ``limit`` 字以内，尽量停在完整句子之后，不把一句话截成半截。
+
+    上限内最后一个句末标点不到上限一半时直接按字截（整段只有一两句很长的话）。
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    cut = max(head.rfind(mark) for mark in _SENTENCE_ENDS)
+    if cut + 1 >= limit // 2:
+        return head[: cut + 1].rstrip()
+    return head
+
+
+def _sample_evenly(rows: List[Any], count: int) -> List[Any]:
+    """从时间正序的行里均匀取 ``count`` 条（首尾都保留）；不够就全给。"""
+    if count <= 0:
+        return []
+    if len(rows) <= count:
+        return list(rows)
+    if count == 1:
+        return [rows[-1]]
+    step = (len(rows) - 1) / (count - 1)
+    return [rows[round(i * step)] for i in range(count)]
+
+
+def _is_correction(text: str) -> bool:
+    """这条弹幕是不是在指出主播说错、记错（"不对劲"这类不算）。"""
+    cleaned = text
+    for false_marker in _CORRECTION_FALSE_MARKERS:
+        cleaned = cleaned.replace(false_marker, "")
+    return any(marker in cleaned for marker in _CORRECTION_MARKERS)
 
 
 def _duration_text(ms: int) -> str:
@@ -145,7 +196,7 @@ class SessionRecapWriter:
         if not (response.ok and response.content):
             logger.warning(f"场次回顾 LLM 返回失败（场次 {live_session_id}）")
             return None
-        text = str(response.content).strip()[: self._max_length]
+        text = clip_whole_sentences(str(response.content), self._max_length)
         if not text:
             return None
         await self._recaps.upsert_recap(
@@ -231,32 +282,54 @@ class SessionRecapWriter:
     # 原料
     # ------------------------------------------------------------------
 
+    async def collect_material(self, live_session_id: int) -> str:
+        """这场的整理原料（回顾与长期笔记共用同一份）；场次不存在或空场次时为空串。"""
+        session_row = await self._sessions.get_live_session(live_session_id=int(live_session_id))
+        if session_row is None:
+            return ""
+        return await self._collect_material(int(live_session_id), session_row)
+
     async def _collect_material(self, live_session_id: int, session_row: LiveSession) -> str:
-        """按场次主键把各表记录渲染成原料文本；每类各自封顶，整体超限时从尾部截断。"""
-        sections: List[str] = []
+        """按场次主键把各表记录渲染成原料文本。
+
+        顺序：场次头 → 备忘录 → 发言 → 话题 → 游戏 → 观众与付费 → 观众纠错。整体超过上限时
+        先把发言隔行抽稀（仍覆盖全场），抽到下限还超才从尾部截断；场次头与备忘录不动。
+        """
         head = self._render_head(session_row)
-        if head:
-            sections.append(head)
-        speech = await self._render_speech(live_session_id)
-        if speech:
-            sections.append("【主播自己说过的话（时间正序，节选）】\n" + speech)
+        notebook = await self._render_notebook(live_session_id)
+        speech_rows = await self._speech_rows(live_session_id)
+        speech_lines = [self._speech_line(row) for row in _sample_evenly(speech_rows, _SPEECH_ROWS)]
+        rest: List[str] = []
         topics = await self._render_topics(live_session_id)
         if topics:
-            sections.append("【观众话题轨迹】\n" + topics)
+            rest.append("【观众话题轨迹】\n" + topics)
         games = await self._render_game_events(live_session_id)
         if games:
-            sections.append("【游戏里的进展】\n" + games)
+            rest.append("【游戏里的进展】\n" + games)
         audience = await self._render_audience(live_session_id)
         if audience:
-            sections.append("【活跃观众与付费】\n" + audience)
-        notebook = await self._render_notebook(live_session_id)
+            rest.append("【活跃观众与付费】\n" + audience)
+        corrections = await self._render_corrections(live_session_id, speech_rows)
+        if corrections:
+            rest.append("【观众指出主播说错、记错的地方（连同主播前一句）】\n" + corrections)
+
+        fixed = [head] if head else []
         if notebook:
-            sections.append("【主播备忘录（本场结束时的工作笔记全文）】\n" + notebook)
+            fixed.append("【主播备忘录（本场结束时的工作笔记全文）】\n" + notebook)
         # 只有场次头没有任何内容 = 空场次，不值得写回顾
-        if len(sections) <= 1:
+        if not (notebook or speech_lines or rest):
             return ""
-        text = "\n\n".join(sections)
-        return text[:_MATERIAL_MAX_CHARS]
+        budget = max(0, _MATERIAL_MAX_CHARS - len("\n\n".join(fixed)))
+
+        def _body(lines: List[str]) -> str:
+            sections = (["【主播自己说过的话（全场按时间取样）】\n" + "\n".join(lines)] if lines else []) + rest
+            return "\n\n".join(sections)
+
+        body = _body(speech_lines)
+        while len(body) > budget and len(speech_lines) > _SPEECH_MIN_ROWS:
+            speech_lines = speech_lines[::2]
+            body = _body(speech_lines)
+        return "\n\n".join([*fixed, body[:budget]] if body else fixed)
 
     async def _render_notebook(self, live_session_id: int) -> str:
         """这场落盘的备忘录全文（空/回调缺失 = 本场没写，整段省略）。"""
@@ -281,26 +354,48 @@ class SessionRecapWriter:
             parts.append(f"标题「{title}」")
         return ("【场次】" + "，".join(parts)) if parts else ""
 
-    async def _render_speech(self, live_session_id: int) -> str:
+    async def _speech_rows(self, live_session_id: int) -> List[Any]:
+        """这场主播说过的全部话（时间正序，去掉空行）；取样与纠错素材都从这里取。"""
         try:
             rows = await self._chat.list_recent_live_chat(
-                live_session_id=live_session_id, limit=_SPEECH_ROWS, sender_role="assistant"
+                live_session_id=live_session_id, limit=None, sender_role="assistant"
             )
         except Exception as exc:
             logger.warning(f"读取主播发言失败（场次 {live_session_id}）: {exc}")
+            return []
+        return [row for row in rows if (row.content or "").strip()]
+
+    @staticmethod
+    def _speech_line(row: Any) -> str:
+        content = (row.content or "").strip().replace("\n", " ")
+        return f"{_clock(row.timestamp_ms)} 主播: {content[:_SPEECH_LINE_CHARS]}"
+
+    async def _render_corrections(self, live_session_id: int, speech_rows: List[Any]) -> str:
+        """观众指出主播说错、记错的弹幕，每条带上主播在那之前说的最后一句（对照着看错在哪）。"""
+        try:
+            rows = await self._chat.list_recent_live_chat(
+                live_session_id=live_session_id, limit=None, sender_role="viewer"
+            )
+        except Exception as exc:
+            logger.warning(f"读取观众弹幕失败（场次 {live_session_id}），原料省略观众纠错: {exc}")
             return ""
-        lines = []
+        lines: List[str] = []
         for row in rows:
             content = (row.content or "").strip().replace("\n", " ")
-            if content:
-                lines.append(f"{_clock(row.timestamp_ms)} 主播: {content[:_SPEECH_LINE_CHARS]}")
-        return "\n".join(lines)
+            if not content or not _is_correction(content):
+                continue
+            before = [speech for speech in speech_rows if speech.timestamp_ms <= row.timestamp_ms]
+            line = f"{_clock(row.timestamp_ms)} {row.sender_name or '观众'}: {content[:_SPEECH_LINE_CHARS]}"
+            if before:
+                line += f"（前一句主播说：{(before[-1].content or '').strip()[:_SPEECH_LINE_CHARS]}）"
+            lines.append(line)
+        return "\n".join(_sample_evenly(lines, _CORRECTION_ROWS))
 
     async def _render_topics(self, live_session_id: int) -> str:
         if self._topics is None:
             return ""
         try:
-            rows = await self._topics.list_session_summaries(live_session_id=live_session_id, limit=_SUMMARY_ROWS)
+            rows = await self._topics.list_session_summaries(live_session_id=live_session_id, limit=_SUMMARY_SCAN_ROWS)
         except Exception as exc:
             logger.warning(f"读取话题轨迹失败（场次 {live_session_id}）: {exc}")
             return ""
@@ -312,13 +407,15 @@ class SessionRecapWriter:
             if summary and summary != last:
                 lines.append(f"{_clock(row.end_ms)} {summary}")
                 last = summary
-        return "\n".join(lines)
+        return "\n".join(_sample_evenly(lines, _SUMMARY_ROWS))
 
     async def _render_game_events(self, live_session_id: int) -> str:
         if self._events is None:
             return ""
         try:
-            rows = await self._events.list_session_game_events(live_session_id=live_session_id, limit=_GAME_EVENT_ROWS)
+            rows = await self._events.list_session_game_events(
+                live_session_id=live_session_id, limit=_GAME_EVENT_SCAN_ROWS
+            )
         except Exception as exc:
             logger.warning(f"读取游戏事件失败（场次 {live_session_id}）: {exc}")
             return ""
@@ -327,7 +424,7 @@ class SessionRecapWriter:
             message = (row.message or "").strip().replace("\n", " ")
             if message:
                 lines.append(f"{_clock(row.timestamp_ms)} [{row.game}] {message[:_SPEECH_LINE_CHARS]}")
-        return "\n".join(lines)
+        return "\n".join(_sample_evenly(lines, _GAME_EVENT_ROWS))
 
     async def _render_audience(self, live_session_id: int) -> str:
         lines: List[str] = []

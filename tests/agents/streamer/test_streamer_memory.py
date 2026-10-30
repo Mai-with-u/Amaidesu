@@ -31,6 +31,7 @@ from src.agents.streamer.memory import (
     build_memory_tool_provider,
     collect_payment_material,
 )
+from src.agents.streamer.memory.recap import clip_whole_sentences
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
@@ -221,6 +222,65 @@ async def test_recap_material_from_tables_and_written(store: SQLiteDatabase) -> 
         assert marker in prompt
     row = await store.recaps.get_recap(live_session_id=pk)
     assert row is not None and row.recap_text == text
+
+
+@pytest.mark.asyncio
+async def test_recap_material_samples_whole_session_and_keeps_notebook(store: SQLiteDatabase) -> None:
+    """长场次的发言按全场均匀取样（开头答应的事也在）；整体超长时抽稀发言，备忘录排最前、一字不少。"""
+    pk = await _ended_session(store, started=0, ended=3 * 3_600_000)
+    await _streamer_says(store, pk, "开场就答应老王下场挖钻石", 1_000)
+    for i in range(1, 300):
+        await _streamer_says(store, pk, f"第{i}句闲聊" + "嗯" * 110, 1_000 + i * 30_000)
+    await _streamer_says(store, pk, "最后一句：下播啦", 9_000_000)
+
+    async def notebook_of(_live_session_id: int) -> str:
+        return "答应老王挖钻石；床名定成咕咕床"
+
+    writer = SessionRecapWriter(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        recap_repo=store.recaps,
+        llm_service=_llm(),
+        prompt_manager=_prompts(),
+        notebook_text_provider=notebook_of,
+    )
+    material = await writer.collect_material(pk)
+
+    assert material.index("【主播备忘录") < material.index("【主播自己说过的话")
+    assert "答应老王挖钻石；床名定成咕咕床" in material
+    assert "开场就答应老王下场挖钻石" in material and "最后一句：下播啦" in material
+    assert len(material) <= 12_000
+    assert material.count(" 主播: ") <= 80
+
+
+@pytest.mark.asyncio
+async def test_recap_material_lists_viewer_corrections_with_prior_line(store: SQLiteDatabase) -> None:
+    """观众指出主播记错时，原料里单列这条弹幕和主播前一句；"不对劲"这类不算纠错。"""
+    pk = await _ended_session(store)
+    await _streamer_says(store, pk, "上次是老王送的舰长", 2_000)
+    await _viewer_says(store, pk, "u1", "老李", "你记错了，舰长是我送的", 2_500)
+    await _viewer_says(store, pk, "u2", "路人", "这地形有点不对劲", 3_000)
+
+    material = await _recap_writer(store, _llm()).collect_material(pk)
+
+    section = material.split("【观众指出主播说错、记错的地方（连同主播前一句）】\n", 1)[1]
+    assert "老李: 你记错了，舰长是我送的（前一句主播说：上次是老王送的舰长）" in section
+    assert "不对劲" not in section
+
+
+@pytest.mark.parametrize(
+    ("text", "limit", "expected"),
+    [
+        ("短句。", 10, "短句。"),
+        ("第一句话。第二句话很长很长。第三句", 14, "第一句话。第二句话很长很长。"),
+        ("一句没有标点的很长很长的话", 8, "一句没有标点的很"),
+        ("短。" + "长" * 30, 20, "短。" + "长" * 18),
+    ],
+    ids=["fits", "cut_after_sentence", "no_sentence_end", "sentence_end_too_early"],
+)
+def test_clip_whole_sentences(text: str, limit: int, expected: str) -> None:
+    """截短停在完整句子之后；最后一个句末标点不到上限一半时按字截。"""
+    assert clip_whole_sentences(text, limit) == expected
 
 
 @pytest.mark.asyncio

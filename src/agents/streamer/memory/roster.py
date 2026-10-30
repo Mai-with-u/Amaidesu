@@ -29,6 +29,7 @@ from src.modules.types.guard_levels import GUARD_LEVEL_NAMES
 from src.modules.types.session_kind import SESSION_KIND_REHEARSAL
 
 from ..background import SUMMARY_PROFILE
+from .recap import clip_whole_sentences
 
 __all__ = ["RegularsRosterWriter", "collect_payment_material"]
 
@@ -225,7 +226,7 @@ class RegularsRosterWriter:
         if not (response.ok and response.content):
             logger.warning(f"常客印象 LLM 返回失败（viewer {viewer_id}）")
             return False
-        profile_text = str(response.content).strip()[: self._profile_max_length]
+        profile_text = clip_whole_sentences(str(response.content), self._profile_max_length)
         if not profile_text:
             return False
         await self._profiles.upsert_profile(
