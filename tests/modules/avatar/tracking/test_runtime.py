@@ -136,6 +136,62 @@ async def test_frames_go_to_ready_drivers_and_rest_pose_is_sent_on_detach_and_st
     assert eye_openness(offline.frames[-1], "Left") == 1.0 and runtime.driver_names == []
 
 
+async def test_synthesizer_error_sends_rest_pose_and_continues_with_a_fresh_one(
+    event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    # 平台停止注入后保持最后的值：合成器出错若就此停住，脸会定在半截表情上直到下播
+    runtime = _runtime(event_bus, fake_clock)
+    await runtime.start()
+    driver = RecordingDriver()
+    await runtime.attach(driver)
+    await _emit(event_bus, CoreEvents.STREAMER_SPEECH, _speech("u1", "tired"))
+    started = UtteranceStartedPayload(utterance_id="u1", speech_text="今天也很开心", engine="fake", duration_ms=5000)
+    await _emit(event_bus, CoreEvents.TTS_UTTERANCE_STARTED, started)
+    for _ in range(20):
+        fake_clock.tick(33)
+        await runtime.tick_once()
+    assert eye_openness(driver.frames[-1], "Left") < 0.9
+    broken = runtime.synthesizer
+
+    def boom(now_ms: int) -> dict:
+        raise RuntimeError("合成器内部状态坏了")
+
+    broken.step = boom
+    fake_clock.tick(33)
+    await runtime.tick_once()
+    assert eye_openness(driver.frames[-1], "Left") == 1.0  # 这一帧发静止姿态
+    assert runtime.synthesizer is not broken and runtime.synthesizer.speaking  # 那句话还在播
+
+    fake_clock.tick(33)
+    await runtime.tick_once()  # 新的一台照常推进
+    assert len(driver.frames) == 22
+    await runtime.stop()
+
+
+class _FlakyReadyDriver(RecordingDriver):
+    """问"就绪了吗"的前几次直接抛异常：模拟帧循环里合成器以外的环节出错。"""
+
+    def __init__(self, failures: int) -> None:
+        super().__init__("flaky")
+        self.failures = failures
+
+    def ready(self) -> bool:
+        if self.failures > 0:
+            self.failures -= 1
+            raise RuntimeError("驱动状态查询出错（测试注入）")
+        return True
+
+
+async def test_frame_loop_skips_a_failing_tick_instead_of_stopping(event_bus: EventBus, fake_clock: FakeClock) -> None:
+    runtime = _runtime(event_bus, fake_clock, run_loop=True)
+    driver = _FlakyReadyDriver(failures=3)
+    await runtime.attach(driver)
+    await runtime.start()
+    await wait_until(lambda: len(driver.frames) >= 3, what="出错三拍后帧循环仍在推帧")
+    assert driver.failures == 0 and runtime.snapshot()["running"]
+    await runtime.stop()
+
+
 @pytest.mark.parametrize("attach_first", [True, False])
 async def test_frame_loop_runs_once_started_with_a_driver_regardless_of_order(
     event_bus: EventBus, fake_clock: FakeClock, attach_first: bool

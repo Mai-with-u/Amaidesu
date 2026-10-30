@@ -21,7 +21,8 @@
 就立刻做。
 
 口型分析器的信号经一个只记数值的渲染器接进来，帧循环每帧取最新值。没有驱动挂着
-时帧循环不跑，零开销。所有路径 fail-soft：驱动写失败、事件处理异常只记日志。
+时帧循环不跑，零开销。所有路径 fail-soft：驱动写失败、事件处理异常只记日志；合成器推进
+出错就换一台新的从静止姿态重来，帧循环某一拍出错只跳过那一拍。
 """
 
 from __future__ import annotations
@@ -97,17 +98,20 @@ class CalibratableDriver(Protocol):
 
 
 class _MouthTap(LipSyncRenderer):
-    """接在口型分析器上的"渲染器"：只把嘴张开量与元音成分交给合成器，不写任何平台参数。"""
+    """接在口型分析器上的"渲染器"：只把嘴张开量与元音成分交给合成器，不写任何平台参数。
 
-    def __init__(self, synthesizer: TrackingSynthesizer, clock: Callable[[], int]) -> None:
+    合成器出错后会被换成一台新的，所以每次现取当前那台，不在构造时记死。
+    """
+
+    def __init__(self, synthesizer: Callable[[], TrackingSynthesizer], clock: Callable[[], int]) -> None:
         self._synthesizer = synthesizer
         self._clock = clock
 
     async def on_mouth_signal(self, signal: MouthSignal) -> None:
-        self._synthesizer.on_mouth(signal.mouth_open, self._clock(), signal.vowels)
+        self._synthesizer().on_mouth(signal.mouth_open, self._clock(), signal.vowels)
 
     async def on_session_end(self) -> None:
-        self._synthesizer.on_mouth_end(self._clock())
+        self._synthesizer().on_mouth_end(self._clock())
 
 
 class TrackingRuntime:
@@ -160,10 +164,15 @@ class TrackingRuntime:
         self._lipsync_analyzer = lipsync_analyzer
         self._tts_enabled = tts_enabled
         self._clock = clock
+        self._rng = rng
         self.synthesizer = TrackingSynthesizer(config, rng=rng)
-        self._mouth_tap = _MouthTap(self.synthesizer, clock)
+        self._mouth_tap = _MouthTap(lambda: self.synthesizer, clock)
         self._drivers: List[TrackingDriver] = []
         self._driver_errors: dict[str, int] = {}
+        # 合成器推进一帧出错的累计次数（每次出错都换一台新的，见 tick_once）
+        self._step_errors = 0
+        # 帧循环里合成器以外的环节出错的累计次数（出错不退出循环，只按次数稀疏记日志）
+        self._loop_errors = 0
         self._pending: "OrderedDict[str, Tuple[str, float, int]]" = OrderedDict()
         self._playing: Set[str] = set()
         self._tool_seq = 0
@@ -266,7 +275,10 @@ class TrackingRuntime:
         self._tick_times.append(now)
         if self._deferred:
             await self._perform_deferred(lambda entry: now - entry[1] >= self.DEFERRED_ACT_MAX_WAIT_MS)
-        frame = self.synthesizer.step(now)
+        try:
+            frame = self.synthesizer.step(now)
+        except Exception:  # noqa: BLE001 - 合成器出错不能让形象停在半截表情上
+            frame = self._restart_synthesizer()
         for driver in list(self._drivers):
             if not driver.ready():
                 continue
@@ -279,18 +291,39 @@ class TrackingRuntime:
                     self.logger.exception(f"驱动 {driver.name} 写入失败（累计 {count} 次，之后每 300 次记一条）")
         return frame
 
+    def _restart_synthesizer(self) -> Frame:
+        """合成器推进一帧出错：换一台全新的（同一份调参），这一帧发静止姿态。
+
+        平台在停止注入后会一直保持最后的值，合成器要是就此停住，脸会定在出错那一刻的半截表情上，
+        直到下播。所以出错就从静止姿态重新长出来：正在播的那句照样算"在说话"，正在做的表情、
+        心情和在想的状态丢掉，等下一个事件再接上。每次出错都换，日志按次数稀疏记。
+        """
+        self._step_errors += 1
+        if self._step_errors == 1 or self._step_errors % 300 == 0:
+            self.logger.exception(f"面捕合成器推进一帧出错，已换一台新的从静止姿态重来（累计 {self._step_errors} 次）")
+        wander = self.synthesizer.head_wander_enabled
+        self.synthesizer = TrackingSynthesizer(self._config, rng=self._rng)
+        self.synthesizer.set_head_wander(wander)
+        self.synthesizer.set_speaking(bool(self._playing))
+        return self.synthesizer.rest_frame()
+
     async def _run_loop(self) -> None:
-        try:
-            while True:
-                # 每拍现读帧率：调校时改了帧率不用重启循环
-                period = 1.0 / self._config.tick_hz
-                started = time.perf_counter()
+        while True:
+            # 每拍现读帧率：调校时改了帧率不用重启循环
+            period = 1.0 / self._config.tick_hz
+            started = time.perf_counter()
+            try:
                 await self.tick_once()
+            except asyncio.CancelledError:
+                return
+            except Exception:  # noqa: BLE001 - 某一拍出错只跳过这一拍，循环一退出形象就停住了
+                self._loop_errors += 1
+                if self._loop_errors == 1 or self._loop_errors % 300 == 0:
+                    self.logger.exception(f"面捕合成器帧循环这一拍出错，已跳过（累计 {self._loop_errors} 次）")
+            try:
                 await asyncio.sleep(max(0.0, period - (time.perf_counter() - started)))
-        except asyncio.CancelledError:
-            pass
-        except Exception:  # noqa: BLE001 - 帧循环意外退出要留痕，不让形象悄悄停住
-            self.logger.exception("面捕合成器帧循环异常退出")
+            except asyncio.CancelledError:
+                return
 
     def _ensure_loop(self) -> None:
         """已启动、有驱动、允许自跑时拉起帧循环（不论驱动先挂还是运行时先启动）。"""
