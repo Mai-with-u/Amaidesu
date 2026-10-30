@@ -48,6 +48,8 @@ const isPreview = computed(() => route.query.preview === '1');
 
 /** 轮询间隔：换图有 0.35 秒淡入，再快观众也看不出来 */
 const POLL_INTERVAL_MS = 250;
+/** 新图设好后最多等这么久的 load 事件，过了就直接切换（见 watch 里的兜底） */
+const LOAD_FALLBACK_MS = 500;
 
 /** 展示态：normal=显示后端给的差分图；unconfigured=未配置占位 */
 const displayState = ref<'normal' | 'unconfigured'>('normal');
@@ -108,6 +110,12 @@ watch(currentSrc, src => {
   }
   hidden.loaded = false;
   hidden.src = src;
+  // 兜底：页面不在绘制时（窗口最小化、被遮住）load 事件可能迟迟不到，图其实已经加载完，
+  // 切换却卡在隐藏层；过一会儿还没切过去就直接切（本机取图，这时早已加载好）
+  setTimeout(() => {
+    if (hidden.src === src && !hidden.visible && displayState.value === 'normal')
+      onLayerLoad(hidden);
+  }, LOAD_FALLBACK_MS);
 });
 
 function onLayerLoad(layer: ImageLayer): void {

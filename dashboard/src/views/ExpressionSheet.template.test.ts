@@ -37,3 +37,12 @@ describe('ExpressionSheet 取图语义', () => {
     expect(sfcSource).toContain('brokenSrc = layer.src;');
   });
 });
+
+describe('ExpressionSheet 换图兜底', () => {
+  it('load 事件迟迟不到时（窗口不在绘制）过一会儿直接切换，不卡在隐藏层', () => {
+    expect(sfcSource).toContain(
+      "if (hidden.src === src && !hidden.visible && displayState.value === 'normal')",
+    );
+    expect(sfcSource).toContain('}, LOAD_FALLBACK_MS);');
+  });
+});
