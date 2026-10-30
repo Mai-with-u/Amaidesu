@@ -8,7 +8,7 @@
 
 **场次与消息**
 
-- `live_sessions`：一场直播一行，开播/下播边界与人数、热度实时状态。
+- `live_sessions`：一场直播一行，开播/下播边界与人数、热度实时状态，以及本场备忘录全文（主播每次写备忘录同步落进来，收播整理从这里读）。
 - `live_chat`：全量消息流，观众/主播/搭档同表（`sender_role` 区分）；`message_id` ↔ `reply_to_message_id` 构成"主播回复了哪条弹幕"的关联键。
 - `gifts` / `super_chats` / `guards`：付费明细三表，按平台原始单位入库（口径见 [观众身份复合键与货币口径](../decisions/029-viewer-identity-key-and-currency-unit.md)）。
 - `timeline_summary`：一场内的分段摘要轨迹（后台维护者写入）。
