@@ -99,9 +99,10 @@ uv run python scripts/warudo_blueprints.py --probe ws://localhost:19190
 
 VRChat 通过 OSC（一种基于 UDP 的消息协议）接收外部程序的消息：Amaidesu 发到本机 9000 端口。VRChat 的 OSC 能写的东西有限：
 
-- **形象作者自定义的参数**：每个形象各不相同，Amaidesu 用它触发动作；
+- **官方眼动输入**：任何形象都认，Amaidesu 用它让形象眨眼、看来看去；
+- **形象作者自定义的参数**：每个形象各不相同，Amaidesu 用它写面捕参数（做了面捕的形象）、风格化标记和动作；
 - **头顶聊天框**：与形象无关，Amaidesu 用它显示主播说的话；
-- 口型、手势这类内置参数都是只读的，外部程序改不了。
+- 口型、手势、头部转动这类内置部分都是只读的，外部程序改不了。
 
 ### 一、打开 VRChat 的 OSC
 
@@ -139,6 +140,10 @@ VRChat 会按麦克风收到的声音自己算口型，任何形象都适用，A
 3. VRChat 的麦克风选虚拟声卡的输出端；
 4. 自己还想听到声音的话，在系统声音设置里对虚拟声卡开启"侦听此设备"。
 
-### 六、表情
+### 六、眼睛与表情
 
-VRChat 的表情参数每个形象都不一样，目前 Amaidesu 不驱动 VRChat 的表情；AI 调用设置表情时会如实返回"未应用"。
+- **眼睛**：任何形象都会跟着 Amaidesu 眨眼、看镜头、瞥弹幕区。VRChat 超过 10 秒收不到眼动数据会交还自带的自动眨眼，Amaidesu 关掉后形象照常。
+- **表情**：只有做了面捕参数的形象会动。VRChat 圈里给形象接面捕的通行做法是 VRCFaceTracking，参数名形如 `FT/v2/JawOpen`、`FT/v2/MouthSmileLeft`；用这类模板做的形象，主播说话时表情跟着情绪变、嘴角和眉毛都会动。参数名前缀不是 `FT/` 的，在 `[platform.vrchat]` 里改 `face_tracking_prefix`；不想写脸就设 `face_tracking_enabled = false`。
+- **风格化标记**：形象作者另做了脸红、眼泪这类参数的，在 `[platform.vrchat.markers]` 登记，比如 `tears = "Tears"`（标记名 = 参数名，参数类型用浮点）。
+
+想核对形象有哪些参数，看第四步说的参数清单文件。
