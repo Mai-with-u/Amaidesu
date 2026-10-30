@@ -15,7 +15,9 @@ from src.agents.streamer.memory import (
 from src.agents.streamer.memory.tools import NOTEBOOK_SPEC
 from src.agents.streamer.planner_context import AssemblerInputs, PlannerAssembler
 from src.agents.streamer.replyer import Replyer
+from src.modules.tools import ToolRegistry
 from src.modules.tools.models import ToolInvocation
+from tests.agents.streamer.helpers import make_streamer_agent
 
 # ---------------------------------------------------------------------------
 # 工具名锁定（防拼写类事故：游戏侧曾有 maicraft_notebook 前缀拼错实锤）
@@ -101,6 +103,19 @@ def test_assembler_appends_notebook_section_last() -> None:
     )
     assert "## 备忘录-内部参考\n备忘录正文" in text
     assert text.index("## 上场回顾-内部参考") < text.index("## 备忘录-内部参考")
+
+
+async def test_planner_reads_the_notebook_the_tool_writes() -> None:
+    """决策层读的备忘录与工具写的是同一份：写进去下一轮就能读到。
+
+    只读穿透 agent._planner._notebook_text_provider（Planner 每轮装参考段时读它，无公开观测面）。
+    """
+    registry = ToolRegistry()
+    agent = make_streamer_agent(tool_registry=registry)
+    agent._register_tools()
+    await registry.invoke(ToolInvocation(tool_name="streamer_notebook", arguments={"content": "答应老王挖钻石"}))
+
+    assert agent._planner._notebook_text_provider() == "答应老王挖钻石"
 
 
 def test_assembler_omits_notebook_section_when_empty() -> None:

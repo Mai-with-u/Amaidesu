@@ -352,8 +352,6 @@ class StreamerAgent(BaseAgent):
             enabled=wf.enabled,
         )
 
-        # 本场备忘录（进程内会话状态，不入库；收播取快照折叠进回顾后清空）
-        self._notebook = StreamerNotebook(max_chars=config.memory.notebook_max_chars)
         # 收播时刻的备忘录全文快照：清空备忘录前取走，供回顾生成原料读取
         self._session_notebook_snapshot: str = ""
 
