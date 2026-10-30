@@ -1,53 +1,39 @@
 """
-WarudoProvider - Warudo 虚拟形象工具集
+WarudoProvider - Warudo 虚拟形象适配器
 
-ToolProvider 协议实现，编排各引擎子件（``WarudoStateManager`` / 后台任务 /
-``WarudoSubtitleManager`` / ``ActionSender``）：
+形象的逐帧驱动由面捕合成器负责：本适配器把一个 Warudo 面捕驱动挂到合成器上，驱动按
+iFacialMocap 协议把每一帧发给 Warudo 的面捕接收器（UDP，默认 127.0.0.1:49983），脸、眼、
+头由 Warudo 自己的面捕流程落到模型上。另有一条 WebSocket 蓝图通道（默认 19190）：
 
-- 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
-  - ``warudo_set_expression``        - 设置情绪（17 枚举值 + 强度）
-  - ``warudo_list_preset_actions``   - 列出可演预设（动作目录 + 内置条目）
-  - ``warudo_trigger_preset_action`` - 触发预设动作（未知名随结果返回目录）
-  - ``warudo_set_sight``             - 设置视线（看镜头/看弹幕/看手机）
+- 动作片段：内置的头部动作与站姿（播放 Warudo 自带动画）、抛鱼（带冷却）、配置登记的蓝图
+  动作，登记给面捕合成器，主播经 ``avatar_act`` 按名字触发；
+- 风格化标记：脸红、眼泪这类面捕数据里没有的东西，按 ``markers`` 登记经蓝图写到模型形状上。
 
-表情 / 眼 / 瞳孔 / 口型等状态件是情绪映射与氛围任务的内部通道，不对
-LLM 暴露。情绪用哪些表情键由表情档案配置（``expression_profile``），
-代码不认任何具体模型的形状名。
+不向 LLM 暴露工具；``set_expression`` 等契约方法只给调试台用（设表情交给面捕合成器）。
+蓝图由 ``scripts/warudo_blueprints.py`` 按同一份配置生成。
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
-from src.modules.avatar.speech_binding import AvatarBindings
-from src.modules.avatar.tool_common import (
-    contract_tool_specs,
-    dispatch_tool,
-    scaled_emotion_weights,
-    unknown_action_fail,
-)
+from src.modules.avatar.tool_common import dispatch_tool, unknown_action_fail
+from src.modules.avatar.tracking.channels import MARKERS
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec, tool_result_fail, tool_result_ok
 from src.modules.tools.provider import ConnectionToolProvider, wire_connection_tools
+from src.modules.types.emotion_vocab import Emotion
 from src.modules.utils.backoff import ExponentialBackoff
+from src.modules.utils.time_utils import now_ms
 
-from .expression_profile import BLINK_KEY, WarudoExpressionConfig
-from .lip_sync_renderer import WarudoLipSyncRenderer
-from .state.warudo_state_manager import WarudoStateManager
-from .tasks.blink_task import BlinkTask
-from .tasks.shift_task import ShiftTask
-from .tasks.talking_head_task import TalkingHeadTask
-from .tasks.throw_fish_task import ThrowFishTask
+from .ifacialmocap import DEFAULT_PORT
+from .tracking_driver import WarudoTrackingDriver
 from .warudo_sender import ActionSender
-
-if TYPE_CHECKING:
-    pass
-
 
 # 软降级:websockets 库可能未安装
 try:
@@ -59,29 +45,11 @@ except ImportError:
     WEBSOCKETS_AVAILABLE = False
 
 
-# =============================================================================
-# 工具参数 Schema（契约工具三件套的 schema 走 avatar.tool_common 单一定义源；
-# 此处只留 Warudo 特有工具）
-# =============================================================================
-
-_WARUDO_SET_SIGHT_SCHEMA: Dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "target": {
-            "type": "string",
-            "enum": ["camera", "danmu", "phone"],
-            "description": "视线目标：camera=看镜头 / danmu=看弹幕 / phone=看手机",
-        },
-    },
-    "required": ["target"],
-}
-
-
 # 内置预设动作（除配置 action_catalog 外固定可演的条目）
 _THROW_FISH_ACTION = "throw_fish"
 
 # 内置头部动作与站姿：动作名直发蓝图（数据 1），蓝图播放 Warudo 自带动画，
-# 与具体模型无关；仓库的模板蓝图按这些名字接收
+# 与具体模型无关；生成的蓝图按这些名字接收
 BUILTIN_MOTIONS: Dict[str, str] = {
     "nod_once": "点头一次",
     "nod_twice": "点头两次",
@@ -93,17 +61,27 @@ BUILTIN_MOTIONS: Dict[str, str] = {
     "pose_default": "恢复默认站姿",
 }
 
+_EMOTIONS = frozenset(e.value for e in Emotion)
 
-# =============================================================================
-# WarudoProvider
-# =============================================================================
+# 打开面捕数据发送端：(主机, 端口) → 发送端（需有 sendto / is_closing / close）
+DatagramFactory = Callable[[str, int], Awaitable[Any]]
+
+
+class _QuietProtocol(asyncio.DatagramProtocol):
+    """面捕数据只发不收：Warudo 没开时本机会回"端口不可达"，第一次记一条调试日志，之后不再记。"""
+
+    def __init__(self, logger: Any) -> None:
+        self._logger = logger
+        self._reported = False
+
+    def error_received(self, exc: Exception) -> None:
+        if not self._reported:
+            self._reported = True
+            self._logger.debug(f"面捕数据暂时没人接（Warudo 未开或接收器未启用）: {exc}")
 
 
 class WarudoProvider(ConnectionToolProvider):
-    """Warudo 虚拟形象 ToolProvider
-
-    实现 ToolProvider 协议，编排各引擎子件。
-    """
+    """Warudo 虚拟形象适配器：面捕驱动 + 蓝图通道上的动作片段与风格化标记。"""
 
     PROVIDER_NAME = "warudo"
 
@@ -111,12 +89,24 @@ class WarudoProvider(ConnectionToolProvider):
     category = "avatar"
 
     class ConfigSchema(BaseConfig):
-        """Warudo 配置（WebSocket + 后台任务 + 动作目录）
+        """Warudo 配置：面捕数据的接收地址 + 蓝图通道 + 动作目录 + 风格化标记
 
         TOML 段位：[avatar.platform.warudo]（成员段直接铺键）
         """
 
         type: str = Field(default="warudo", title="段位标识")
+        tracking_host: str = Field(
+            title="面捕接收器地址",
+            default="127.0.0.1",
+            description="Warudo 的 iFacialMocap 接收器所在主机（Warudo 和 Amaidesu 在同一台电脑时不用改）",
+        )
+        tracking_port: int = Field(
+            title="面捕接收器端口",
+            default=DEFAULT_PORT,
+            ge=1,
+            le=65535,
+            description="Warudo 的 iFacialMocap 接收器端口（接收器配置页里的输入端口）",
+        )
         ws_host: str = Field(title="Warudo 主机地址", default="localhost", description="Warudo WebSocket 主机地址")
         ws_port: int = Field(title="Warudo 端口", default=19190, ge=1, le=65535, description="Warudo WebSocket 端口")
         reconnect_delay_seconds: float = Field(
@@ -126,41 +116,54 @@ class WarudoProvider(ConnectionToolProvider):
             description="断线重连间隔秒数",
             json_schema_extra={"x-ui-advanced": True},
         )
-        talking_head_enabled: bool = Field(
-            title="是否启用 TalkingHead", default=True, description="是否启用 TalkingHead 后台任务"
-        )
-        talking_head_interval: float = Field(
-            title="TalkingHead 间隔",
-            default=0.1,
-            ge=0.01,
-            description="TalkingHead 最小间隔秒数",
-            json_schema_extra={"x-ui-advanced": True},
-        )
         throw_fish_cooldown: float = Field(title="抛鱼冷却时间", default=5.0, ge=0.0, description="抛鱼动画冷却秒数")
         # 动作目录（人类登记的可用动作名+说明；类似 MCP servers 的动态键例外，
         # 键=动作名、值=说明；typed 形态 Dict[str, str] 为有界键值映射，不算自由 dict）
         action_catalog: Dict[str, str] = Field(
             title="动作目录",
             default_factory=dict,
-            description="可用蓝图动作目录 {动作名: 说明}，人类配置预声明；用于拼入工具描述供 LLM 选择",
+            description="场景里自己做的蓝图动作 {动作名: 说明}；登记后主播可以经 avatar_act 触发",
         )
-        # 表情档案：情绪 → 表情键映射（默认 VRM 标准表情名；自定义形状名的模型换档案）
-        expression: WarudoExpressionConfig = Field(
-            default_factory=WarudoExpressionConfig,
-            title="表情档案",
-            description="情绪用哪些表情键、各占多少；换模型时改这里，蓝图按同一份档案生成",
+        markers: Dict[str, str] = Field(
+            title="风格化标记",
+            default_factory=dict,
+            description=(
+                "标记名 → 模型上的形状名（或 VRM 自定义表情名，取决于生成蓝图时选的写法）；"
+                "蓝图按同一份生成。标记名：" + "、".join(f"{name}（{label}）" for name, label in MARKERS.items())
+            ),
         )
+
+        @field_validator("markers")
+        @classmethod
+        def _known_markers(cls, value: Dict[str, str]) -> Dict[str, str]:
+            unknown = sorted(set(value) - set(MARKERS))
+            if unknown:
+                raise ValueError(f"未知的风格化标记 {unknown}（合法名：{', '.join(MARKERS)}）")
+            empty = sorted(name for name, target in value.items() if not str(target).strip())
+            if empty:
+                raise ValueError(f"风格化标记 {empty} 没写对应的形状名")
+            return {name: str(target).strip() for name, target in value.items()}
 
     def __init__(
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
         lipsync_analyzer: Optional[Any] = None,
+        tracking: Optional[Any] = None,
+        datagram_factory: Optional[DatagramFactory] = None,
+        clock: Callable[[], int] = now_ms,
     ) -> None:
+        """Args:
+        tracking: 面捕合成器运行时（组合根共享一个）；None = 只剩蓝图通道上的动作，不驱动形象。
+        datagram_factory: 打开面捕数据发送端（测试注入；缺省开一个 UDP 端点）。
+        clock: 毫秒时刻来源（抛鱼冷却、标记发送间隔；测试注入假时钟）。
+
+        event_bus / lipsync_analyzer 是统一装配签名：发言、播放、口型都由面捕合成器订阅。
+        """
         self.config = config
         self.event_bus = event_bus
-        # 共享口型分析器（装配注入；setup 时挂 Warudo 渲染器，None = 不渲染口型）
         self.lipsync_analyzer = lipsync_analyzer
+        self._tracking = tracking
         self.logger = get_logger(self.__class__.__name__)
 
         # 配置（typed；空 dict = 全默认；失败 log+raise）
@@ -177,55 +180,29 @@ class WarudoProvider(ConnectionToolProvider):
         self._reconnect_backoff = ExponentialBackoff(
             base_delay_ms=max(1, int(self.reconnect_delay_seconds * 1000)), cap_delay_ms=60_000
         )
-        self.talking_head_enabled: bool = self.typed_config.talking_head_enabled
-        self.talking_head_interval: float = self.typed_config.talking_head_interval
         self.throw_fish_cooldown: float = self.typed_config.throw_fish_cooldown
         self.action_catalog: Dict[str, str] = dict(self.typed_config.action_catalog)
-        self.expression: WarudoExpressionConfig = self.typed_config.expression
+        self._datagram_factory = datagram_factory or self._open_datagram
 
         # WebSocket 状态
         self.websocket: Any = None
         self._connection_task: Optional[asyncio.Task] = None
         self._should_stop: bool = False
-        self._first_connection: bool = True
 
         # 单实例 ActionSender
         self._action_sender = ActionSender()
+        self._clock = clock
+        self._last_throw_ms: Optional[int] = None
 
-        async def send_action_callback(action: str, data: Any) -> bool:
-            await self._send_action_internal(action, data)
-            return True
-
-        # 状态件的表情键全集取自档案：换情绪时这些键整表重发，旧表情不残留
-        self.state_manager = WarudoStateManager(
-            self.logger,
-            send_action_callback,
-            expression_keys=self.expression.expression_keys(),
-            mouth_keys=self.expression.mouth_keys,
+        self._driver = WarudoTrackingDriver(
+            markers=self.typed_config.markers, send_marker=self._send_marker, clock=clock
         )
-        self.blink_task = BlinkTask(self.state_manager, self.logger)
-        self.shift_task = ShiftTask(self.state_manager, self.logger)
-
-        self.talking_head_task: Optional[TalkingHeadTask] = None
-        if self.talking_head_enabled:
-            self.talking_head_task = TalkingHeadTask(
-                send_action_callback=send_action_callback,
-                logger=self.logger,
-                min_interval=self.talking_head_interval,
-            )
-
-        self.throw_fish_task = ThrowFishTask(
-            send_action_callback=send_action_callback,
-            logger=self.logger,
-            cooldown_seconds=self.throw_fish_cooldown,
-        )
+        self._datagram: Any = None
 
         self._is_connected = False
         self._has_started = False
         self.render_count = 0
         self.error_count = 0
-        # 事件订阅挂载项句柄（setup 时逐项 attach，cleanup 时一次全量退订摘除）
-        self._bindings: Optional[AvatarBindings] = None
 
     # ===== ToolProvider 协议 =====
 
@@ -233,7 +210,7 @@ class WarudoProvider(ConnectionToolProvider):
     def name(self) -> str:
         return self.PROVIDER_NAME
 
-    def _preset_action_catalog(self) -> list:
+    def _preset_action_catalog(self) -> List[Dict[str, str]]:
         """预设动作目录：配置 ``action_catalog`` 条目 + 内置头部动作与站姿 + 抛鱼（带冷却）。
 
         配置条目与内置条目同名时以配置的说明为准（用户自己的蓝图可能另有含义）。
@@ -248,67 +225,27 @@ class WarudoProvider(ConnectionToolProvider):
         return catalog
 
     def _connected_tools(self) -> list[ToolSpec]:
-        """连接建立后暴露的工具列表（预设目录走 list_preset_actions 结果，不进描述）。
-
-        未连接时清单为空（基类 ``list_tools`` 降级返回空，Agent 工具表不含
-        warudo_*）；此处只负责连接后的全量声明，清单变化经连接态回调驱动
-        注册表刷新补注册。
-        """
-        specs = contract_tool_specs(
-            self.PROVIDER_NAME,
-            set_expression="Warudo 设置主播当前情绪（17 枚举值 + 强度，持续生效直至下次设置）",
-            list_preset_actions="列出 Warudo 可演的预设动作目录（配置登记的蓝图动作 + 内置条目）",
-            trigger_preset_action="触发一个预设动作（动作名取自 warudo_list_preset_actions 返回的目录）",
-        )
-        # set_sight 是 Warudo 平台特有工具（非三平台契约面），声明就地追加
-        specs.append(
-            ToolSpec(
-                name="set_sight",
-                description="Warudo 设置视线目标（看镜头/看弹幕/看手机）",
-                kind="sync",
-                provider=self.PROVIDER_NAME,
-                parameters_schema=_WARUDO_SET_SIGHT_SCHEMA,
-            )
-        )
-        return specs
+        """连上以后也不向 LLM 暴露工具：形象动作统一走 ``avatar_act``，蓝图动作作为片段登记给面捕合成器。"""
+        return []
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        """分发到对应的 handler 方法（handlers 每次现构造，捕获本次参数）。"""
-        args = invocation.arguments or {}
-        return await dispatch_tool(
-            invocation,
-            self.PROVIDER_NAME,
-            {
-                "warudo_set_expression": lambda: self.set_expression(
-                    str(args.get("emotion", "")), float(args.get("intensity", 0.5))
-                ),
-                "warudo_list_preset_actions": self.list_preset_actions,
-                "warudo_trigger_preset_action": lambda: self.trigger_preset_action(str(args.get("action", ""))),
-                "warudo_set_sight": lambda: self.set_sight(str(args.get("target", ""))),
-            },
-            self.logger,
-        )
+        """本适配器没有 LLM 工具：任何调用都按"工具不属于本 Provider"失败返回。"""
+        return await dispatch_tool(invocation, self.PROVIDER_NAME, {}, self.logger)
 
-    # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
+    # ===== 契约方法（调试台直接调用）=====
 
     async def set_expression(self, emotion: str, intensity: float) -> ToolExecutionResult:
-        """设置当前情绪：查表情档案 → 按强度缩放 → 写表情与眼部状态件。
-
-        状态件的写入经监控循环推送到 Warudo（``changed`` 标志驱动）；
-        换情绪时表情键整表替换，旧表情不残留。档案未列出的合法情绪按中性处理。
-        """
-        resolved = scaled_emotion_weights(emotion, intensity, self.expression.emotions)
-        if resolved is None:
+        """设置当前情绪：交给面捕合成器，浮现后保持配置的时长再回落。"""
+        if emotion not in _EMOTIONS:
             self.error_count += 1
             return tool_result_fail("warudo_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
-        factor, applied = resolved
-        # 收到情绪 → 表情键整表写入；眨眼键交给眼部状态合并，笑眼等暂停眨眼的键生效时眨眼任务跳过
-        self.state_manager.expression_state.set_weights(applied)
-        blink_blocked = any(applied.get(key, 0.0) > 0 for key in self.expression.blink_blocking_keys)
-        self.state_manager.eye_state.set_expression(applied.get(BLINK_KEY, 0.0), blink_blocked)
+        if self._tracking is None:
+            return tool_result_fail("warudo_set_expression", "面捕合成器未启用（avatar.toml [tracking].enabled）")
+        factor = min(1.0, max(0.0, float(intensity)))
+        outcome = self._tracking.express(emotion, factor)
         self.render_count += 1
         return tool_result_ok(
-            "warudo_set_expression", True, {"emotion": emotion, "intensity": factor, "applied": applied}
+            "warudo_set_expression", True, {"emotion": emotion, "intensity": factor, "outcome": outcome}
         )
 
     async def list_preset_actions(self) -> ToolExecutionResult:
@@ -318,29 +255,42 @@ class WarudoProvider(ConnectionToolProvider):
     async def trigger_preset_action(self, action: str) -> ToolExecutionResult:
         """触发一个预设动作；未知名把目录随失败结果返回（失败即发现）。
 
-        内置条目 ``throw_fish`` 走冷却任务（冷却中经结果载荷告知）；头部动作、
-        站姿与配置登记的条目都按动作名直发蓝图。
+        内置条目 ``throw_fish`` 带冷却（冷却中经结果载荷告知）；头部动作、站姿与配置登记的
+        条目都按动作名直发蓝图。
         """
         action = action.strip()
         if action == _THROW_FISH_ACTION:
-            fired = await self.throw_fish_task.throw_fish()
+            fired = await self._throw_fish()
             return tool_result_ok(
                 "warudo_trigger_preset_action",
                 True,
-                {"action": action, "fired": bool(fired), "cooldown_seconds": self.throw_fish_cooldown},
+                {"action": action, "fired": fired, "cooldown_seconds": self.throw_fish_cooldown},
             )
         if action in self.action_catalog or action in BUILTIN_MOTIONS:
-            await self._send_action_internal(action, 1)
-            return tool_result_ok("warudo_trigger_preset_action", True, {"action": action})
+            sent = await self._send_action_internal(action, 1)
+            return tool_result_ok("warudo_trigger_preset_action", sent, {"action": action})
         catalog = [entry["name"] for entry in self._preset_action_catalog()]
         return unknown_action_fail("warudo_trigger_preset_action", action, catalog)
 
-    async def set_sight(self, target: str) -> ToolExecutionResult:
-        """设置视线目标（camera/danmu/phone）；程度由适配器定（满幅）。"""
-        if target not in ("camera", "danmu", "phone"):
-            return tool_result_fail("warudo_set_sight", f"未知视线目标 '{target}'（应为 camera/danmu/phone）")
-        self.state_manager.sight_state.set_state(target, 1.0)
-        return tool_result_ok("warudo_set_sight", True, {"target": target})
+    async def _throw_fish(self) -> bool:
+        """抛鱼：距上次触发不到冷却时间就不发；发出去了才开始计冷却。"""
+        now = self._clock()
+        if self._last_throw_ms is not None and now - self._last_throw_ms < self.throw_fish_cooldown * 1000:
+            return False
+        if await self._send_action_internal(_THROW_FISH_ACTION, 1):
+            self._last_throw_ms = now
+            return True
+        return False
+
+    def _clip_names(self) -> List[str]:
+        """登记给面捕合成器的片段目录：内置动作、抛鱼与配置登记的蓝图动作。"""
+        return [entry["name"] for entry in self._preset_action_catalog()]
+
+    async def _trigger_clip(self, name: str) -> bool:
+        """面捕合成器按片段名转回来的触发请求。"""
+        result = await self.trigger_preset_action(name)
+        content = result.structured_content or {}
+        return bool(result.success) and content.get("fired", True) is not False
 
     # ===== 生命周期 =====
 
@@ -351,64 +301,40 @@ class WarudoProvider(ConnectionToolProvider):
 
         await self._connect()
 
-        # 事件订阅（被动响应业务事件）：情绪反射（streamer.speech）+ 说话状态（tts.utterance.*，
-        # 驱动 talking-head 点头任务）；口型渲染挂到共享分析器（元音成分 →
-        # VowelA~O 通道；启用时应关闭 Warudo 原生口型）
-        self._bindings = AvatarBindings(self.event_bus, self.logger)
-        self._bindings.attach_emotion_reflection(self)
-        self._bindings.attach_speaking_state(self._set_speaking)
-        if self.lipsync_analyzer is not None:
-            self._bindings.attach_lip_renderer(
-                self.lipsync_analyzer, WarudoLipSyncRenderer(set_mouth_channel=self._set_mouth_channel)
-            )
+        # 面捕驱动挂到面捕合成器上：发言、播放、口型都由合成器订阅，这里不再订阅事件
+        if self._tracking is not None:
+            try:
+                self._datagram = await self._datagram_factory(
+                    self.typed_config.tracking_host, self.typed_config.tracking_port
+                )
+                self._driver.attach_transport(self._datagram)
+                await self._tracking.attach(self._driver)
+                self.logger.info(
+                    f"面捕数据发往 {self.typed_config.tracking_host}:{self.typed_config.tracking_port}"
+                    "（Warudo 里启用 iFacialMocap 接收器）"
+                )
+            except Exception as e:
+                self.logger.error(f"打开面捕数据发送端失败，形象不会被逐帧驱动: {e}")
+            # 蓝图动作作为片段登记：主播经 avatar_act 按名字触发
+            self._tracking.register_clips(self.PROVIDER_NAME, self._clip_names, self._trigger_clip)
+        else:
+            self.logger.warning("面捕合成器未装配：Warudo 只剩蓝图通道上的动作，形象不会被逐帧驱动")
 
         self._has_started = True
         self.logger.info(f"{self.__class__.__name__} 已启动")
-
-    def _set_mouth_channel(self, key: str, weight: float) -> None:
-        """元音单键写入（渲染器回调）：空键 = 停嘴，清空全部元音。
-
-        口型只写元音状态件，不碰情绪表情；张嘴期间档案里的嘴部表情键暂时
-        让位（按 0 下发），停嘴后恢复，说完一句话嘴形表情不会丢。
-        """
-        vowel_state = self.state_manager.vowel_state
-        vowel_state.set_vowel(key, weight)
-        self.state_manager.expression_state.set_speaking(vowel_state.active)
-
-    def _set_speaking(self, speaking: bool) -> None:
-        """说话状态回调：说话时点头（talking-head 任务），停说即恢复。"""
-        if self.talking_head_task is not None:
-            self.talking_head_task.is_talking = speaking
 
     async def cleanup(self) -> None:
         if not self._has_started:
             return
 
-        if self._bindings is not None:
-            self._bindings.close()
-            self._bindings = None
-
-        # 停止后台任务
-        try:
-            await self.blink_task.stop()
-        except Exception as e:
-            self.logger.error(f"停止眨眼任务失败: {e}")
-
-        try:
-            await self.shift_task.stop()
-        except Exception as e:
-            self.logger.error(f"停止眼球移动任务失败: {e}")
-
-        if self.talking_head_task is not None:
-            try:
-                await self.talking_head_task.stop()
-            except Exception as e:
-                self.logger.error(f"停止 talking_head 任务失败: {e}")
-
-        try:
-            self.state_manager.stop_monitoring()
-        except Exception as e:
-            self.logger.error(f"停止状态监控失败: {e}")
+        # 先摘下面捕驱动（摘下前发一帧静止姿态），再关发送端与蓝图通道
+        if self._tracking is not None:
+            self._tracking.unregister_clips(self.PROVIDER_NAME)
+            await self._tracking.detach(self._driver)
+        self._driver.attach_transport(None)
+        if self._datagram is not None:
+            self._datagram.close()
+            self._datagram = None
 
         # 取消 WebSocket 重连循环
         self._should_stop = True
@@ -447,10 +373,20 @@ class WarudoProvider(ConnectionToolProvider):
             "is_connected": self._is_connected,
             "render_count": self.render_count,
             "error_count": self.error_count,
-            "talking_head_running": self.talking_head_task.running if self.talking_head_task else False,
+            "tracking": self._tracking is not None,
+            "tracking_sending": self._driver.ready(),
+            "emotion": self._tracking.current_emotion() if self._tracking is not None else "",
         }
 
     # ===== 内部辅助 =====
+
+    async def _open_datagram(self, host: str, port: int) -> Any:
+        """开一个只发不收的 UDP 端点，对准 Warudo 的面捕接收器。"""
+        loop = asyncio.get_running_loop()
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda: _QuietProtocol(self.logger), remote_addr=(host, port)
+        )
+        return transport
 
     @property
     def _ws_closed(self) -> bool:
@@ -461,24 +397,33 @@ class WarudoProvider(ConnectionToolProvider):
             return True
         return getattr(self.websocket, "closed", False)
 
-    async def _send_action_internal(self, action: str, data: Any) -> None:
-        if not self._is_connected or self.websocket is None or self._ws_closed:
-            self.logger.warning(f"Warudo 未连接，无法发送动作: {action}")
-            return
-        try:
-            self._action_sender.set_websocket(self.websocket)
-            await self._action_sender.send_action(action, data)
-        except Exception as e:
-            self.logger.error(f"发送动作失败: {action}: {e}")
-
     def _is_ready_to_send(self) -> bool:
         if not self._is_connected or self.websocket is None:
             return False
         return not self._ws_closed
 
+    async def _send_action_internal(self, action: str, data: Any) -> bool:
+        """经蓝图通道发一个动作；没连上时记一条警告并返回 False。"""
+        if not self._is_ready_to_send():
+            self.logger.warning(f"Warudo 蓝图通道未连接，无法发送动作: {action}")
+            return False
+        try:
+            self._action_sender.set_websocket(self.websocket)
+            return await self._action_sender.send_action(action, data)
+        except Exception as e:
+            self.logger.error(f"发送动作失败: {action}: {e}")
+            return False
+
+    async def _send_marker(self, action: str, value: float) -> bool:
+        """风格化标记逐帧变化：蓝图通道没连上时静默跳过（驱动下一帧再试），不刷警告。"""
+        if not self._is_ready_to_send():
+            return False
+        self._action_sender.set_websocket(self.websocket)
+        return await self._action_sender.send_action(action, value)
+
     async def _connect(self) -> None:
         if not WEBSOCKETS_AVAILABLE:
-            self.logger.error("websockets 库未安装，无法连接 Warudo")
+            self.logger.error("websockets 库未安装，无法连接 Warudo 蓝图通道")
             return
 
         self._should_stop = False
@@ -489,9 +434,9 @@ class WarudoProvider(ConnectionToolProvider):
             self._is_connected = True
             # 连接态换血：装配期降级登记的 0 工具在此补注册（回调由注册接线方提供）
             self.mark_connected()
-            self.logger.info(f"已连接到 Warudo: {uri}")
+            self.logger.info(f"已连接到 Warudo 蓝图通道: {uri}")
         except Exception as e:
-            self.logger.warning(f"首次连接 Warudo 失败({e})，将由后台重连循环处理")
+            self.logger.warning(f"首次连接 Warudo 蓝图通道失败({e})，将由后台重连循环处理")
             self._is_connected = False
 
         if not self._connection_task or self._connection_task.done():
@@ -551,10 +496,6 @@ class WarudoProvider(ConnectionToolProvider):
                     # 连上即复位：下一次断开的等待从配置的间隔重新起算
                     self._reconnect_backoff.reset()
 
-                    if self._first_connection:
-                        self._first_connection = False
-                        await self._on_first_connection_setup()
-
                 if self.websocket and not self._ws_closed:
                     await self.websocket.wait_closed()
 
@@ -570,7 +511,7 @@ class WarudoProvider(ConnectionToolProvider):
                     self.websocket = None
                     self._action_sender.set_websocket(None)
                     if was_connected:
-                        # 连接态换血：摘除断连工具（Agent 工具表不再包含 warudo_*）
+                        # 连接态换血：断连后工具页显示未连接
                         self.mark_disconnected()
                     delay_s = self._reconnect_backoff.next_delay_ms() / 1000
                     self.logger.debug(f"WebSocket 断开，{delay_s:.0f}秒后重连...")
@@ -580,32 +521,6 @@ class WarudoProvider(ConnectionToolProvider):
                         break
 
         self.logger.info("Warudo WebSocket 重连循环已退出")
-
-    async def _on_first_connection_setup(self) -> None:
-        try:
-            self.state_manager.start_monitoring()
-            self.logger.info("状态管理器监控已启动")
-        except Exception as e:
-            self.logger.error(f"启动状态监控失败: {e}")
-
-        try:
-            await self.blink_task.start()
-            self.logger.info("眨眼任务已启动")
-        except Exception as e:
-            self.logger.error(f"启动眨眼任务失败: {e}")
-
-        try:
-            await self.shift_task.start()
-            self.logger.info("眼球移动任务已启动")
-        except Exception as e:
-            self.logger.error(f"启动眼球移动任务失败: {e}")
-
-        if self.talking_head_task is not None:
-            try:
-                await self.talking_head_task.start()
-                self.logger.info("TalkingHead 任务已启动")
-            except Exception as e:
-                self.logger.error(f"启动 TalkingHead 任务失败: {e}")
 
 
 # =============================================================================
@@ -617,11 +532,17 @@ def create_warudo_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
+    tracking: Optional[Any] = None,
+    datagram_factory: Optional[DatagramFactory] = None,
+    clock: Callable[[], int] = now_ms,
 ) -> WarudoProvider:
     return WarudoProvider(
         config=config,
         event_bus=event_bus,
         lipsync_analyzer=lipsync_analyzer,
+        tracking=tracking,
+        datagram_factory=datagram_factory,
+        clock=clock,
     )
 
 
@@ -631,19 +552,21 @@ def register_warudo_tools(
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
     subtitle_service: Optional[Any] = None,
-    tracking: Optional[Any] = None,  # 面捕合成器：本平台驱动尚未移植，仍走旧的情绪订阅，暂不使用
+    tracking: Optional[Any] = None,
 ) -> WarudoProvider:
     """构造 WarudoProvider 并注册到 registry。返回 Provider 实例供调用方管理生命周期。
 
-    注册接线：装配期未连接 → 降级登记 0 工具（中间层标准语义）；连接态
-    回调经 ``wire_connection_tools`` 接入，驱动 ``registry.refresh_provider_tools``
-    补注册 / 摘除，工具表始终与真实连接态一致。
+    不登记 LLM 工具；连接态回调经 ``wire_connection_tools`` 接入，工具页的连接态与蓝图通道一致。
     """
     provider = create_warudo_provider(
         config=config,
         event_bus=event_bus,
         lipsync_analyzer=lipsync_analyzer,
+        tracking=tracking,
     )
     registry.register_provider(provider)
     wire_connection_tools(provider, registry)
     return provider
+
+
+__all__ = ["BUILTIN_MOTIONS", "WarudoProvider", "create_warudo_provider", "register_warudo_tools"]

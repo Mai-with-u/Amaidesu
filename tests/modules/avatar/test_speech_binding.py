@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider
-from src.modules.avatar.platform.warudo.warudo_provider import WarudoProvider
 from src.modules.avatar.speech_binding import AvatarBindings, bind_speaking_state, bind_speech_emotion
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -28,19 +27,27 @@ async def _emit(bus: EventBus, event_name: str, payload) -> None:
     await bus.wait_until_drained()  # 让 handler 跑完
 
 
-def _weights(warudo: WarudoProvider) -> dict[str, float]:
-    return {k: v for k, v in warudo.state_manager.expression_state.weights.items() if v}
+class RecordingProvider:
+    """只记下 set_expression 调用的适配器替身。"""
+
+    def __init__(self) -> None:
+        self.expressions: list[tuple[str, float]] = []
+        self.speaking: list[bool] = []
+
+    async def set_expression(self, emotion: str, intensity: float) -> MagicMock:
+        self.expressions.append((emotion, intensity))
+        return MagicMock(success=True)
 
 
-async def test_speech_is_reflected_to_warudo_expression_and_tolerated_by_vrchat() -> None:
+async def test_speech_is_reflected_to_expression_and_tolerated_by_vrchat() -> None:
     bus = EventBus()
-    warudo = WarudoProvider(config={})
-    assert bind_speech_emotion(bus, warudo, warudo.logger) is not None
+    provider = RecordingProvider()
+    assert bind_speech_emotion(bus, provider, MagicMock()) is not None
     vrchat = VRChatProvider(config={})
     bind_speech_emotion(bus, vrchat, vrchat.logger)  # VRChat 无情绪通道：诚实返回未应用，不抛
 
     await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech("happy", 0.8))
-    assert _weights(warudo) == {"happy": pytest.approx(0.8)}  # 默认档案：happy 槽满幅 × 强度
+    assert provider.expressions == [("happy", pytest.approx(0.8))]
 
 
 async def test_provider_error_in_reflection_does_not_break_the_bus() -> None:
@@ -58,38 +65,36 @@ async def test_provider_error_in_reflection_does_not_break_the_bus() -> None:
 
 
 def test_binding_without_event_bus_is_skipped() -> None:
-    provider = WarudoProvider(config={})
-    assert bind_speech_emotion(None, provider, provider.logger) is None  # 工具面-only 形态
-    assert bind_speaking_state(None, provider.logger, on_change=lambda s: None) is None
+    provider = RecordingProvider()
+    assert bind_speech_emotion(None, provider, MagicMock()) is None  # 工具面-only 形态
+    assert bind_speaking_state(None, MagicMock(), on_change=lambda s: None) is None
 
 
-async def test_utterance_events_flip_warudo_talking_head() -> None:
-    warudo = WarudoProvider(config={})
-    assert warudo.talking_head_task is not None
+async def test_utterance_events_flip_speaking_state() -> None:
+    provider = RecordingProvider()
     bus = EventBus()
-    assert bind_speaking_state(bus, warudo.logger, on_change=warudo._set_speaking) is not None
+    assert bind_speaking_state(bus, MagicMock(), on_change=provider.speaking.append) is not None
 
     started = UtteranceStartedPayload(utterance_id="utt_s", speech_text="hi", engine="edge", duration_ms=100)
     finished = UtteranceFinishedPayload(utterance_id="utt_s", engine="edge", duration_ms=100)
     await _emit(bus, CoreEvents.TTS_UTTERANCE_STARTED, started)
-    assert warudo.talking_head_task.is_talking is True
     await _emit(bus, CoreEvents.TTS_UTTERANCE_FINISHED, finished)
-    assert warudo.talking_head_task.is_talking is False
+    assert provider.speaking == [True, False]
 
 
 async def test_cleanup_unbinds_subscriptions() -> None:
-    warudo = WarudoProvider(config={})
+    provider = RecordingProvider()
     bus = EventBus()
-    bindings = AvatarBindings(bus, warudo.logger)
-    bindings.attach_emotion_reflection(warudo)
-    bindings.attach_speaking_state(warudo._set_speaking)
+    bindings = AvatarBindings(bus, MagicMock())
+    bindings.attach_emotion_reflection(provider)
+    bindings.attach_speaking_state(provider.speaking.append)
 
     await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech())
-    assert _weights(warudo) == {"happy": pytest.approx(0.8)}
+    assert provider.expressions == [("happy", pytest.approx(0.8))]
 
     bindings.close()  # 全量退订（cleanup 内部同款出口）
     await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech("sad", 0.5))
-    assert _weights(warudo) == {"happy": pytest.approx(0.8)}  # 退订后不再反射
+    assert len(provider.expressions) == 1  # 退订后不再反射
 
 
 async def test_follow_up_sentence_switches_expression_when_it_starts_playing() -> None:

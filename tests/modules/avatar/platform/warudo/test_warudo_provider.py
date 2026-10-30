@@ -1,20 +1,26 @@
-"""WarudoProvider：动作目录与工具面、表情/视线调用、未连接不抛、连接/断开/重连语义（不连真实 Warudo）"""
+"""WarudoProvider：面捕驱动挂载与收尾、动作片段登记与蓝图通道、抛鱼冷却、表情交给面捕合成器、不向 LLM 暴露工具、连接/断开/重连语义（不连真实 Warudo）"""
 
 from __future__ import annotations
 
+import asyncio
+import json
+import random
+from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.modules.avatar.platform.warudo.expression_profile import MAIMAI_PROFILE_PATH, read_profile_expression
+from src.modules.avatar.platform.warudo.ifacialmocap import encode_frame
 from src.modules.avatar.platform.warudo.warudo_provider import (
     BUILTIN_MOTIONS,
     WarudoProvider,
     create_warudo_provider,
     register_warudo_tools,
 )
+from src.modules.avatar.tracking import TrackingConfig, TrackingRuntime
 from src.modules.tools import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
+from tests.helpers import FakeClock
 
 
 def _provider(**config) -> WarudoProvider:
@@ -23,6 +29,69 @@ def _provider(**config) -> WarudoProvider:
 
 async def _invoke(provider: WarudoProvider, tool: str, **arguments):
     return await provider.invoke(ToolInvocation(tool_name=tool, arguments=arguments))
+
+
+class FakeWebSocket:
+    """Warudo 蓝图通道替身：记下发出的每个动作，直到被关上。"""
+
+    def __init__(self) -> None:
+        self.actions: List[tuple] = []
+        self.close_code = None
+        self._closed = asyncio.Event()
+
+    async def send(self, raw: str) -> None:
+        message = json.loads(raw)
+        self.actions.append((message["action"], message["data"]))
+
+    async def close(self) -> None:
+        self.close_code = 1000
+        self._closed.set()
+
+    async def wait_closed(self) -> None:
+        await self._closed.wait()
+
+
+class FakeDatagram:
+    """面捕数据发送端替身：记下每个包。"""
+
+    def __init__(self) -> None:
+        self.packets: List[bytes] = []
+        self.closed = False
+        self.target: tuple = ()
+
+    def sendto(self, data: bytes) -> None:
+        self.packets.append(data)
+
+    def is_closing(self) -> bool:
+        return self.closed
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _tracking(clock: FakeClock) -> TrackingRuntime:
+    config = TrackingConfig(blink_enabled=False, gaze_enabled=False, head_wander_enabled=False)
+    return TrackingRuntime(config, clock=clock.now_ms, rng=random.Random(0), run_loop=False)
+
+
+async def _connected(
+    monkeypatch: pytest.MonkeyPatch, **kwargs: Any
+) -> tuple[WarudoProvider, FakeWebSocket, FakeDatagram]:
+    """建一个 Warudo 适配器：蓝图通道接假连接，面捕数据发到假发送端，然后 setup。"""
+    ws, datagram = FakeWebSocket(), FakeDatagram()
+
+    async def connect(uri: str) -> FakeWebSocket:
+        return ws
+
+    async def open_datagram(host: str, port: int) -> FakeDatagram:
+        datagram.target = (host, port)
+        return datagram
+
+    monkeypatch.setattr("src.modules.avatar.platform.warudo.warudo_provider.websockets.connect", connect)
+    config = kwargs.pop("config", {})
+    provider = create_warudo_provider(config=config, datagram_factory=open_datagram, **kwargs)
+    await provider.setup()
+    return provider, ws, datagram
 
 
 def test_action_catalog_defaults_to_builtin_and_merges_config() -> None:
@@ -41,93 +110,85 @@ def test_action_catalog_defaults_to_builtin_and_merges_config() -> None:
         _provider(action_catalog="invalid")
 
 
-async def test_builtin_motions_and_catalog_entries_send_the_action_name_to_the_blueprint() -> None:
-    provider = _provider(action_catalog={"wave": "招手"})
-    provider._send_action_internal = AsyncMock()
+def test_markers_config_rejects_unknown_names_and_empty_shapes() -> None:
+    assert _provider(markers={"tears": " Tears "}).typed_config.markers == {"tears": "Tears"}
+    with pytest.raises(ValueError, match="未知的风格化标记"):
+        _provider(markers={"rainbow": "Rainbow"})
+    with pytest.raises(ValueError, match="没写对应"):
+        _provider(markers={"tears": ""})
+
+
+async def test_setup_attaches_face_driver_and_cleanup_leaves_rest_pose(
+    monkeypatch: pytest.MonkeyPatch, fake_clock: FakeClock
+) -> None:
+    tracking = _tracking(fake_clock)
+    await tracking.start()
+    provider, _, datagram = await _connected(monkeypatch, tracking=tracking)
+    assert datagram.target == ("127.0.0.1", 49983) and tracking.driver_names == ["warudo"]
+    tracking.express("happy", 1.0)
+    for _ in range(20):
+        fake_clock.tick(33)
+        await tracking.tick_once()
+    assert b"mouthSmile_L-" in datagram.packets[-1] and b"=head#" in datagram.packets[-1]
+    smiling = int(datagram.packets[-1].split(b"mouthSmile_L-")[1].split(b"|")[0])
+    assert smiling > 30
+
+    await provider.cleanup()
+    # 摘下前发一帧静止姿态：Warudo 收不到新数据时会停在最后一帧
+    assert datagram.packets[-1] == encode_frame(tracking.rest_frame())
+    assert datagram.closed and tracking.driver_names == []
+    await tracking.stop()
+
+
+async def test_builtin_motions_and_catalog_entries_are_clips_sent_over_the_blueprint_channel(
+    monkeypatch: pytest.MonkeyPatch, fake_clock: FakeClock
+) -> None:
+    tracking = _tracking(fake_clock)
+    await tracking.start()
+    provider, ws, _ = await _connected(monkeypatch, tracking=tracking, config={"action_catalog": {"wave": "招手"}})
+    clips = {e["name"] for e in tracking.action_catalog() if e["kind"] == "warudo 片段"}
+    assert {"nod_once", "pose_think", "wave", "throw_fish"} <= clips
     for action in ("nod_once", "pose_think", "wave"):
-        assert (await provider.trigger_preset_action(action)).success is True
-    assert [c.args for c in provider._send_action_internal.call_args_list] == [
-        ("nod_once", 1),
-        ("pose_think", 1),
-        ("wave", 1),
-    ]
+        assert await tracking.act(action) is True
+    assert ws.actions == [("nod_once", 1), ("pose_think", 1), ("wave", 1)]
     unknown = await provider.trigger_preset_action("dance")
     assert unknown.success is False and "nod_once" in unknown.structured_content["available_actions"]
+    await provider.cleanup()
+    await tracking.stop()
 
 
-def test_tool_face_is_the_four_agreed_tools_without_catalog_in_descriptions() -> None:
-    provider = _provider(action_catalog={"wave": "招手"})
-    provider.mark_connected()  # 工具表仅连接态非空
-    specs = provider.list_tools()
-    assert {s.full_name for s in specs} == {
-        "warudo_set_expression",
-        "warudo_list_preset_actions",
-        "warudo_trigger_preset_action",
-        "warudo_set_sight",
-    }
-    assert all(s.provider == "warudo" for s in specs)
-    expression = next(s for s in specs if s.full_name == "warudo_set_expression")
-    assert "招手" not in expression.description  # 描述不承载目录
+async def test_throw_fish_has_a_cooldown(monkeypatch: pytest.MonkeyPatch, fake_clock: FakeClock) -> None:
+    provider, ws, _ = await _connected(monkeypatch, clock=fake_clock.now_ms, config={"throw_fish_cooldown": 5.0})
+    first = await provider.trigger_preset_action("throw_fish")
+    fake_clock.tick(4000)
+    second = await provider.trigger_preset_action("throw_fish")
+    fake_clock.tick(1000)
+    third = await provider.trigger_preset_action("throw_fish")
+    assert [r.structured_content["fired"] for r in (first, second, third)] == [True, False, True]
+    assert ws.actions == [("throw_fish", 1), ("throw_fish", 1)]
+    await provider.cleanup()
 
 
-def test_tools_degraded_to_empty_when_not_connected_and_registry_follows_connection() -> None:
-    provider = _provider()
-    provider.mark_disconnected()
-    assert provider.list_tools() == []  # 未连接（含装配期）工具表为空：降级登记，Agent 不可见不可调
+async def test_no_llm_tools_and_debug_expression_goes_to_tracking(
+    monkeypatch: pytest.MonkeyPatch, fake_clock: FakeClock
+) -> None:
+    tracking = _tracking(fake_clock)
+    provider, _, _ = await _connected(monkeypatch, tracking=tracking)
+    assert provider.list_tools() == []  # 形象动作统一走 avatar_act
+    assert (await _invoke(provider, "warudo_set_expression", emotion="happy")).success is False
+    result = await provider.set_expression("happy", 0.8)
+    assert result.success and tracking.current_emotion() == "happy"
+    assert (await provider.set_expression("ecstatic", 0.5)).success is False
+    await provider.cleanup()
 
+
+def test_tools_stay_empty_and_registry_follows_connection() -> None:
     registry = ToolRegistry()
-    registered = register_warudo_tools(registry, config={"ws_host": "localhost", "ws_port": 19190})
-    assert registry.list_tools(provider="warudo") == []  # 装配期降级登记 0 工具
-
-    registered.mark_connected()
-    assert len(registry.list_tools(provider="warudo")) == 4  # 连上后补注册
-
-    registered.mark_disconnected()
-    assert registry.list_tools(provider="warudo") == []  # 断连摘除
-
-
-async def test_set_expression_uses_vrm_standard_names_by_default_and_validates_emotion() -> None:
-    provider = _provider()
-    result = await _invoke(provider, "warudo_set_expression", emotion="tired", intensity=0.5)
-    # 情绪写入状态件（监控循环推送），不直连 WebSocket；默认档案用 VRM 标准表情名
-    assert result.success is True and result.structured_content["applied"] == {"relaxed": 0.3, "eye_close": 0.2}
-    state = provider.state_manager
-    assert state.expression_state.weights["relaxed"] == 0.3 and state.eye_state.get_eye_state()["eye_close"] == 0.2
-
-    assert (await _invoke(provider, "warudo_set_expression", emotion="joyful")).success is False  # 词表外情绪
-    happy = await _invoke(provider, "warudo_set_expression", emotion="happy", intensity=1.0)
-    assert happy.structured_content["applied"] == {"happy": 1.0}
-    assert (await _invoke(provider, "warudo_set_expression", emotion="neutral")).structured_content["applied"] == {}
-    assert state.expression_state.weights["happy"] == 0.0  # 中性 = 清空表情
-
-
-async def test_maimai_profile_keeps_its_shapes_blink_rule_and_mouth_handoff() -> None:
-    provider = _provider(expression=read_profile_expression(MAIMAI_PROFILE_PATH))
-    state = provider.state_manager
-
-    await provider.set_expression("love", 1.0)
-    assert state.expression_state.weights["eye_happy_strong"] == 1.0
-    assert state.eye_state.can_blink() is False  # 笑眼生效时眨眼任务跳过
-
-    await provider.set_expression("happy", 1.0)
-    provider._set_mouth_channel("VowelA", 0.7)  # 口型开始：嘴形让位，眉形保留
-    assert state.expression_state.get_state()["mouth_happy_strong"] == 0.0
-    assert state.expression_state.get_state()["eyebrow_happy_weak"] == 0.8
-    assert state.vowel_state.weights["VowelA"] == 0.7
-    provider._set_mouth_channel("", 0.0)  # 停嘴：嘴形恢复，不等下一句
-    assert state.expression_state.get_state()["mouth_happy_strong"] == 1.0 and not state.vowel_state.active
-
-
-async def test_set_sight_validates_target() -> None:
-    provider = _provider()
-    assert (await _invoke(provider, "warudo_set_sight", target="camera")).success is True
-    assert (await _invoke(provider, "warudo_set_sight", target="wall")).success is False  # target 只有三个合法值
-
-
-async def test_invoke_when_not_connected_returns_a_result_instead_of_raising() -> None:
-    provider = _provider()
-    provider._is_connected = False
-    assert await _invoke(provider, "warudo_trigger_preset_action", action="wave") is not None
+    provider = register_warudo_tools(registry, {"ws_host": "localhost", "ws_port": 19190})
+    assert provider in registry.providers() and len(registry) == 0
+    provider.mark_connected()
+    assert len(registry) == 0
+    assert provider.connection_summary()["is_connected"] is True
 
 
 # 连接 / 断开 / 重连

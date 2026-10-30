@@ -574,52 +574,6 @@ register_cross_file_hook(
 )
 
 
-# 麦麦表情档案读取器（组合根注入点）：avatar.toml v2.0.41 的迁移钩子需要读
-# avatar 包的表情档案，而配置层不得反向 import 具体组件——档案数据的获取
-# 由组合根（main.py）在配置加载前经 ``set_expression_profile_reader`` 注入。
-# 未注入时迁移真要写档案即硬错，同样在启动期暴露，不留运行期隐患。
-_expression_profile_reader: Callable[[], Dict[str, Any]] | None = None
-
-
-def set_expression_profile_reader(reader: Callable[[], Dict[str, Any]]) -> None:
-    """注入表情档案读取器（零参调用返回档案 dict，如麦麦档案的 toml dict）"""
-    global _expression_profile_reader
-    _expression_profile_reader = reader
-
-
-def _upgrade_warudo_maimai_expression(data: Dict[str, Any]) -> List[str]:
-    """avatar.toml v2.0.41：已启用 Warudo 的配置写入麦麦表情档案。
-
-    情绪 → 表情键映射改由 ``[platform.warudo.expression]`` 配置、默认取 VRM
-    标准表情名；此前适配器内置的是麦麦模型的自定义形状名。启用名单里已有
-    Warudo 的部署一直按麦麦映射运行，写入麦麦档案保持表现不变；未启用的
-    部署拿默认档案。已有档案段视为用户显式配置，不动。对已迁移数据零变更（幂等）。
-    """
-    platform = data.get("platform")
-    if not isinstance(platform, dict):
-        return []
-    enabled = platform.get("enabled")
-    if not isinstance(enabled, list) or "warudo" not in enabled:
-        return []
-    warudo = platform.setdefault("warudo", {})
-    if not isinstance(warudo, dict) or "expression" in warudo:
-        return []
-    if _expression_profile_reader is None:
-        raise ConfigValidationError(
-            "avatar.toml",
-            "platform.warudo.expression",
-            "表情档案读取器未注入（组合根未调用 set_expression_profile_reader），无法写入麦麦表情档案",
-        )
-    warudo["expression"] = _expression_profile_reader()
-    return ["platform.warudo.expression（写入麦麦表情档案）"]
-
-
-# 生产钩子登记：avatar.toml v2.0.41（已启用 Warudo 的配置写入麦麦表情档案）。
-# target 取 2.0.41：存量 avatar.toml 停在 2.0.38（迁出钩子）或新生成基线
-# 2.0.40，两者都要跑到；新生成文件未启用 Warudo，钩子零变更只推进版本
-register_file_hook("avatar.toml", "warudo_maimai_expression", "2.0.41", _upgrade_warudo_maimai_expression)
-
-
 # VTS 段退役的键：待机微动与常驻微笑基线改由面捕合成器（[tracking]）统一负责
 _VTS_RETIRED_KEYS = (
     "base_smile",
@@ -724,6 +678,32 @@ def _upgrade_tracking_recipes_to_arkit(data: Dict[str, Any]) -> List[str]:
 
 # 生产钩子登记：avatar.toml v2.0.43（配方覆盖的通道名换成 ARKit 规范名）
 register_file_hook("avatar.toml", "tracking_recipes_to_arkit", "2.0.43", _upgrade_tracking_recipes_to_arkit)
+
+# Warudo 段退役的键：脸改由面捕合成器经 iFacialMocap 协议驱动，表情档案（情绪 → 表情键）与说话点头任务没有了消费者
+_WARUDO_RETIRED_KEYS = ("expression", "talking_head_enabled", "talking_head_interval")
+
+
+def _retire_warudo_face_keys(data: Dict[str, Any]) -> List[str]:
+    """avatar.toml v2.0.44：删 ``[platform.warudo]`` 里驱动脸的旧键。
+
+    Warudo 的脸、眼、头改为面捕合成器按 iFacialMocap 协议发给 Warudo 的面捕接收器，模型怎么
+    映射在 Warudo 的面捕设置里调；按情绪写表情键的档案、说话时固定节奏点头的任务都退役了。
+    旧值不搬迁：档案里的"情绪 → 形状"对应不了逐帧的面捕系数。对已迁移数据零变更（幂等）。
+    """
+    platform = data.get("platform")
+    warudo = platform.get("warudo") if isinstance(platform, dict) else None
+    if not isinstance(warudo, dict):
+        return []
+    changed: List[str] = []
+    for key in _WARUDO_RETIRED_KEYS:
+        if key in warudo:
+            del warudo[key]
+            changed.append(f"platform.warudo.{key}")
+    return changed
+
+
+# 生产钩子登记：avatar.toml v2.0.44（Warudo 驱动脸的旧键退役）
+register_file_hook("avatar.toml", "retire_warudo_face_keys", "2.0.44", _retire_warudo_face_keys)
 
 
 # Minecraft 的两个事件流采集器改为随 Minecraft Agent 开关的附属采集器（见 src.modules.agents.companions）
@@ -1070,5 +1050,4 @@ __all__ = [
     "register_file_hook",
     "register_cross_file_hook",
     "advance_file_versions",
-    "set_expression_profile_reader",
 ]

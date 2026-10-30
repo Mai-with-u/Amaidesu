@@ -14,7 +14,6 @@ import pytest
 import tomlkit
 from pydantic import ValidationError
 
-from src.modules.avatar.platform.warudo.expression_profile import MAIMAI_PROFILE_PATH, read_profile_expression
 from src.modules.config.model_schemas import LLMModelConfig
 from src.modules.config.multi_file_loader import generate_default_configs, get_config_version, load_config_dir
 from src.modules.config.upgrade import (
@@ -24,15 +23,8 @@ from src.modules.config.upgrade import (
     _upgrade_builder_scene_transport,
     _upgrade_minecraft_context_tokens,
     advance_file_versions,
-    set_expression_profile_reader,
 )
 from tests.config.helpers import read_doc, rewind_and_append, tail_version, write_doc
-
-
-@pytest.fixture(autouse=True)
-def _inject_expression_profile():
-    """表情档案读取器按生产口径注入（生产在组合根接线；config 层不反向 import avatar 包）"""
-    set_expression_profile_reader(lambda: read_profile_expression(MAIMAI_PROFILE_PATH))
 
 
 @dataclass
@@ -296,32 +288,21 @@ def _check_avatar_lipsync_and_idle(d: Path) -> None:
     assert vts["vts_host"] == "127.0.0.1"
 
 
-def _seed_warudo_expression(enabled: list[str], keep_profile: bool = False) -> Callable[[Path], None]:
-    def seed(d: Path) -> None:
-        doc = _rewound(d, "avatar.toml", "2.0.38")
-        platform = doc["platform"]
-        platform["enabled"] = enabled
-        if keep_profile:  # 用户已显式写过档案：只留一个情绪做标记
-            platform["warudo"]["expression"]["emotions"] = {"happy": {"smile": 1.0}}
-        else:  # 拨回旧布局：情绪映射还在代码里，文件没有档案段
-            del platform["warudo"]["expression"]
-        write_doc(d, "avatar.toml", doc)
-
-    return seed
+def _seed_warudo_face_keys(d: Path) -> None:
+    doc = _rewound(d, "avatar.toml", "2.0.43")
+    warudo = doc["platform"]["warudo"]
+    warudo["ws_port"] = 19191
+    warudo["talking_head_enabled"] = False
+    warudo["talking_head_interval"] = 0.2
+    warudo["expression"] = {"emotions": {"happy": {"smile": 1.0}}, "mouth_keys": ["smile"]}
+    write_doc(d, "avatar.toml", doc)
 
 
-def _check_warudo_expression(expected: str) -> Callable[[Path], None]:
-    def check(d: Path) -> None:
-        expression = read_doc(d, "avatar.toml")["platform"]["warudo"]["expression"]
-        emotions = expression["emotions"]
-        if expected == "maimai":  # 已启用 Warudo：写入麦麦档案，保持原表现
-            assert expression.unwrap() == read_profile_expression(MAIMAI_PROFILE_PATH)
-        elif expected == "vrm":  # 未启用：按默认 VRM 标准档案补出
-            assert dict(emotions["happy"]) == {"happy": 1.0} and len(emotions) == 17
-        else:  # 已有档案原样保留
-            assert emotions.unwrap() == {"happy": {"smile": 1.0}}
-
-    return check
+def _check_warudo_face_keys(d: Path) -> None:
+    warudo = read_doc(d, "avatar.toml")["platform"]["warudo"]
+    # 脸改由面捕合成器经 iFacialMocap 驱动：表情档案与说话点头的键退役，其余照旧
+    assert not {"expression", "talking_head_enabled", "talking_head_interval"} & set(warudo)
+    assert warudo["ws_port"] == 19191 and warudo["tracking_port"] == 49983
 
 
 def _seed_vts_idle(idle_enabled: bool, explicit_wander: bool = False) -> Callable[[Path], None]:
@@ -456,24 +437,7 @@ CASES = [
         _check_vts_idle(True),  # 新段里用户显式写的值优先，旧开关不覆盖
     ),
     Case("tracking-recipes-to-arkit", ("avatar.toml",), _seed_old_recipes, _check_arkit_recipes),
-    Case(
-        "warudo-enabled-gets-maimai-profile",
-        ("avatar.toml",),
-        _seed_warudo_expression(["vts", "warudo"]),
-        _check_warudo_expression("maimai"),
-    ),
-    Case(
-        "warudo-disabled-gets-vrm-default",
-        ("avatar.toml",),
-        _seed_warudo_expression(["vts"]),
-        _check_warudo_expression("vrm"),
-    ),
-    Case(
-        "warudo-explicit-profile-kept",
-        ("avatar.toml",),
-        _seed_warudo_expression(["warudo"], keep_profile=True),
-        _check_warudo_expression("kept"),
-    ),
+    Case("warudo-face-keys-retired", ("avatar.toml",), _seed_warudo_face_keys, _check_warudo_face_keys),
     Case(
         "minecraft-companion-collectors", ("collectors.toml",), _seed_minecraft_companions, _check_minecraft_companions
     ),
@@ -504,7 +468,7 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "drop_warudo_subtitle_keys": ("case", "warudo-subtitle-keys"),
     "avatar_platform_to_avatar_file": ("case", "avatar-platform-graduation"),
     "avatar_lipsync_to_avatar_file": ("case", "avatar-lipsync-and-idle-bindings"),
-    "warudo_maimai_expression": ("case", "warudo-enabled-gets-maimai-profile"),
+    "retire_warudo_face_keys": ("case", "warudo-face-keys-retired"),
     "vts_idle_to_tracking": ("case", "vts-idle-retired-to-tracking"),
     "tracking_recipes_to_arkit": ("case", "tracking-recipes-to-arkit"),
     "drop_minecraft_companion_collectors": ("case", "minecraft-companion-collectors"),
