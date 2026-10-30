@@ -160,8 +160,10 @@ class PlannerEnv:
     frame_provider: Optional[Callable[[], Optional[Any]]] = None
     frame_stale_warn_ms: int = 0
     notebook_text_provider: Optional[Callable[[], str]] = None
-    # 长期记忆全文（开播时读出、整场不变；空串 = 没有或未启用）
+    # 长期笔记注入正文（开播时读出、整场不变；空串 = 没有或未启用）
     long_memory_provider: Optional[Callable[[], str]] = None
+    # 长期笔记里只对某位观众的条目（按观众编号取；这位观众发言时进人物画像段）
+    person_notes_provider: Optional[Callable[[int], List[str]]] = None
     action_recorder: Optional[Callable[[str, str], None]] = None
     delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
 
@@ -266,6 +268,7 @@ class Planner:
         # 本场备忘录全文查询（经环境注入；空串 = 还没写过，段整段省略）
         self._notebook_text_provider = env.notebook_text_provider if env else None
         self._long_memory_provider = env.long_memory_provider if env else None
+        self._person_notes_provider = env.person_notes_provider if env else None
 
         self._assembler = PlannerAssembler()
         # 工具刚返回的截图：观察里只留文字，真图挂在下一步请求的尾部让模型看一次
@@ -961,12 +964,15 @@ class Planner:
         self,
         batch: List[Any],
     ) -> str:
-        """按本批发言时间倒序注入全部已有印象（观众画像），完整保留人物经历与偏好。
+        """按本批发言时间倒序注入全部已有印象（观众画像）与长期笔记里对这位观众的条目。
 
         消息只带外部 ID：先换算成观众（同一个人换了数据源也是同一份画像），按观众去重；
-        还没建档的（记账器尚未落库的新观众）没有画像，跳过。
+        还没建档的（记账器尚未落库的新观众）没有画像，跳过。答应某位观众的事只在这里出现：
+        这位观众在场时主播才看得到，不对着全场念叨。
         """
-        if self._profile_repo is None or self._viewer_repo is None or not batch:
+        if self._viewer_repo is None or not batch:
+            return ""
+        if self._profile_repo is None and self._person_notes_provider is None:
             return ""
 
         # 候选收集：发言时间倒序去重（最新发言优先；batch 本身按时间正序）
@@ -992,20 +998,39 @@ class Planner:
                 if viewer_id is None or viewer_id in injected:
                     continue
                 injected.add(viewer_id)
-                profile_text = await self._profile_repo.get_profile_text(viewer_id=viewer_id)
+                profile_text = (
+                    await self._profile_repo.get_profile_text(viewer_id=viewer_id)
+                    if self._profile_repo is not None
+                    else ""
+                )
             except Exception as exc:
                 self.logger.warning(f"画像查询失败（{platform}/{user_id}，跳过该人）: {exc}")
                 continue
-            if not profile_text:
-                continue  # 无画像不注入、不占位
-            text = profile_text.replace("\n", " ").strip()
+            notes = self._person_notes(viewer_id)
+            if not profile_text and not notes:
+                continue  # 无画像也没有笔记不注入、不占位
+            text = (profile_text or "").replace("\n", " ").strip() or "（还没形成印象）"
             display = await self._viewer_display(viewer_id) or f"{platform}/{user_id}"
             lines.append(f"- {display}: {text}")
+            lines.extend(f"  （笔记）{note}" for note in notes)
 
         if not lines:
             return ""
-        header = "（内部参考，帮助识别老观众；不要逐字复述，与当前对话冲突时以当前对话为准）"
+        header = (
+            "（内部参考，帮助识别老观众；不要逐字复述，与当前对话冲突时以当前对话为准。"
+            "（笔记）是对这位观众的约定和老梗：话题对得上时再提，做不到的就跟 ta 说明）"
+        )
         return "\n".join([header, *lines])
+
+    def _person_notes(self, viewer_id: int) -> List[str]:
+        """长期笔记里对这位观众的条目；没有或读失败为空。"""
+        if self._person_notes_provider is None:
+            return []
+        try:
+            return list(self._person_notes_provider(viewer_id))
+        except Exception as exc:
+            self.logger.warning(f"读取对观众 {viewer_id} 的笔记失败（只注入画像）: {exc}", exc=True)
+            return []
 
     async def _viewer_display(self, viewer_id: int) -> str:
         """观众的展示名：当前昵称，改过名的带上曾用名（"乙（以前叫甲）"）。

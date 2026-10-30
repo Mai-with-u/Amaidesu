@@ -45,12 +45,15 @@ _VIEWER_ROWS = 30
 _PAYER_ROWS = 50
 
 
-def format_long_memory(text: str, *, games: Optional[Collection[str]] = None) -> str:
+def format_long_memory(
+    text: str, *, games: Optional[Collection[str]] = None, include_viewer_items: bool = False
+) -> str:
     """注入正文：解析笔记后只给注入的四节，去掉标签；``games`` 给了时按开着的游戏筛。
 
-    对某位观众的条目一并列出（标明对象）；按人点名注入接入后改由那条路给。
+    对某位观众的条目默认不放（那位观众发言时由人物画像段另给），``include_viewer_items``
+    打开时一并列出并标明对象。
     """
-    return render_for_injection(parse_notes(text or ""), games=games, include_viewer_items=True)
+    return render_for_injection(parse_notes(text or ""), games=games, include_viewer_items=include_viewer_items)
 
 
 class LongMemoryWriter:

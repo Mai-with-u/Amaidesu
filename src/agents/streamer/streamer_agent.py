@@ -69,8 +69,8 @@ from .memory import (
     build_memory_tool_provider,
     build_notebook_tool_provider,
     emit_notebook_changed,
-    format_long_memory,
 )
+from .memory.notes import NoteDocument, parse_notes, person_lines, render_for_injection
 from .message_buffer import MessageBuffer
 from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
 from .planner import Planner, PlannerConfig, PlannerEnv
@@ -285,6 +285,9 @@ class StreamerAgent(BaseAgent):
         # 本场备忘录：决策与表达每轮读内存里这份；每次写入同步落进本场的场次行，
         # 收播整理从场次行读回（直播中途关掉应用也不丢），收播后内存里这份清空
         self._notebook = StreamerNotebook(max_chars=config.memory.notebook_max_chars)
+        # 开播时读出的长期笔记（解析后的条目）：决策层按开着的游戏取全场条目、按发言观众取
+        # 对 ta 的条目，快嘴取全场条目；整场不变，开播或启动善后时刷新
+        self._notes_doc = NoteDocument()
 
         # 流程单（Rundown）子系统：备忘录 + 闹钟（推进权归 Agent）。
         # 状态机与仓储/总线/场次解析的粘合收拢在协调器内（依赖全构造注入，
@@ -310,7 +313,8 @@ class StreamerAgent(BaseAgent):
                 reply_provider_factory=lambda: self._reply_provider,
                 elapsed_live_provider=self._rundown_coord.get_elapsed_live_ms,
                 notebook_text_provider=self._notebook.read,
-                long_memory_provider=lambda: format_long_memory(self._scope.long_memory),
+                long_memory_provider=lambda: render_for_injection(self._notes_doc, games=self._game_names()),
+                person_notes_provider=lambda viewer_id: person_lines(self._notes_doc, viewer_id),
                 action_recorder=self._record_delegation,
                 delegation_status_provider=self._delegation_machine_status if task_ledger is not None else None,
             )
@@ -560,7 +564,7 @@ class StreamerAgent(BaseAgent):
                 segment_provider=self._current_segment_title,
                 scene_reader=self._read_scene_brief,
                 is_live=lambda: self._live_active,
-                long_memory_provider=lambda: format_long_memory(self._scope.long_memory),
+                long_memory_provider=lambda: render_for_injection(self._notes_doc),
                 profile=_PROFILE_REPLYER,
             )
         if self._mouth is not None:
@@ -1034,9 +1038,11 @@ class StreamerAgent(BaseAgent):
         """
         if self._long_memory_writer is None:
             self._scope.set_long_memory("")
+            self._notes_doc = NoteDocument()
             return
         text = await self._long_memory_writer.read(kind if kind is not None else self._current_session_kind())
         self._scope.set_long_memory(text)
+        self._notes_doc = parse_notes(text)
         if text:
             self._logger.info(f"长期记忆已装入（{len(text)} 字）")
 

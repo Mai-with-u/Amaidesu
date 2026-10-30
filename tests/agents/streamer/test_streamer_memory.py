@@ -693,6 +693,7 @@ def _build_agent(
     registry: ToolRegistry | None = None,
     *,
     session_manager: Any = None,
+    mouth_enabled: bool = False,
     **memory: Any,
 ) -> StreamerAgent:
     config = StreamerConfig.from_dict(
@@ -700,6 +701,7 @@ def _build_agent(
             "proactive": {"enabled": False},
             "word_filter": {"enabled": False},
             "background": {"enabled": False},
+            "mouth": {"enabled": mouth_enabled},
             "memory": memory,
         }
     )
@@ -780,6 +782,31 @@ async def test_live_started_loads_long_memory_of_same_kind(store: SQLiteDatabase
     disabled = _build_agent(store, _llm(), long_memory_enabled=False)
     await disabled._on_live_started("live.started", LiveStartedPayload(live_session_id=9), "test")
     assert disabled._scope.long_memory == ""
+
+
+@pytest.mark.asyncio
+async def test_long_memory_is_routed_by_viewer_and_game(store: SQLiteDatabase) -> None:
+    """决策层的系统提示词只拿全场条目、且只拿开着的游戏的；对某位观众的约定在 ta 发言时另给；
+    快嘴拿全场条目、不拿对某位观众的。
+
+    只读穿透 agent._planner 的两个笔记回调与 agent._mouth 的笔记回调（无公开观测面）。
+    """
+    await store.long_memory.write(
+        "live",
+        "## 答应过的事\n- 答应老王下次玩恐怖游戏〔未兑现 · 对 老王#12 · 最近 #1〕\n"
+        "- 答应全场周末更新视频〔未兑现 · 最近 #1〕\n"
+        "## 长线目标\n- 给苦力怕盖海景房〔游戏 minecraft · 最近 #1〕",
+    )
+    agent = _build_agent(store, _llm(), ToolRegistry(), mouth_enabled=True)
+    await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=9), "test")
+
+    planner_view = agent._planner._long_memory_provider()
+    assert "答应全场周末更新视频（还没兑现）" in planner_view
+    assert "老王" not in planner_view and "海景房" not in planner_view  # minecraft 没接入
+    assert agent._planner._person_notes_provider(12) == ["答应过的事：答应老王下次玩恐怖游戏（还没兑现）"]
+    assert agent._planner._person_notes_provider(13) == []
+    mouth_view = agent._mouth._long_memory_provider()
+    assert "海景房" in mouth_view and "老王" not in mouth_view
 
 
 @pytest.mark.asyncio

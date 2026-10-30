@@ -129,15 +129,15 @@ async def test_urgent_encounter_gets_one_short_reaction_with_scene_card(prompts:
 
 
 async def test_long_memory_rides_in_system_prompt_only_when_present(prompts: Any) -> None:
-    """长期记忆有内容才进系统提示词（老梗、答应过的事拿来接话）；没有时不留空段。"""
+    """长期笔记有内容才进系统提示词（用得上时拿来接话，不催她主动提）；没有时不留空段。"""
     llm = _LLM("happy：好家伙", "happy：好家伙")
     remembering = _mouth(llm, _Speech(), prompts, long_memory="## 老梗与口头禅\n- 床名一直没定")
     await remembering.react_once([_trigger()])
-    assert "你一直记着的事" in llm.calls[0]["system"] and "床名一直没定" in llm.calls[0]["system"]
+    assert "你自己整理的长期笔记" in llm.calls[0]["system"] and "床名一直没定" in llm.calls[0]["system"]
 
     forgetful = _mouth(llm, _Speech(), prompts)
     await forgetful.react_once([_trigger()])
-    assert "你一直记着的事" not in llm.calls[1]["system"]
+    assert "你自己整理的长期笔记" not in llm.calls[1]["system"]
 
 
 async def test_silence_and_cooldown_keep_the_mouth_from_chattering(prompts: Any) -> None:

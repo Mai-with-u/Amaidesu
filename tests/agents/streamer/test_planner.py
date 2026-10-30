@@ -57,6 +57,7 @@ def _make_planner(
     max_steps: int = 8,
     elapsed_live_provider: Any | None = None,
     long_memory_provider: Any | None = None,
+    person_notes_provider: Any | None = None,
 ) -> tuple[Planner, MagicMock, MagicMock]:
     """mock LLM（generate）+ mock prompt_service；缺省真注册表 + 注册成功的 reply（reply 经 registry.invoke）。"""
     llm = MagicMock()
@@ -86,6 +87,7 @@ def _make_planner(
             reply_provider_factory=lambda: prov,
             elapsed_live_provider=elapsed_live_provider,
             long_memory_provider=long_memory_provider,
+            person_notes_provider=person_notes_provider,
         ),
     )
     return planner, llm, prompt
@@ -307,6 +309,21 @@ async def test_person_profiles_are_injected_without_placeholders_and_failures_do
     profile_repo.get_profile_text = AsyncMock(side_effect=RuntimeError("db down"))  # 画像查询异常静默降级
     planner, _llm, _prompt = _make_planner([_resp()], profile_repo=profile_repo, viewer_repo=_viewer_repo())
     assert (await planner.plan([_msg()])).silent_reason == "natural"
+
+
+async def test_notes_for_a_viewer_ride_with_that_viewer_only() -> None:
+    """答应某位观众的事跟着 ta 的画像行走：ta 发言才出现，没画像也给；别人发言时不出现。"""
+    notes = {1: ["答应过的事：答应老王下次玩恐怖游戏（还没兑现）"]}
+    planner, llm, _prompt = _make_planner(
+        [_resp(), _resp()], viewer_repo=_viewer_repo(), person_notes_provider=lambda vid: notes.get(vid, [])
+    )
+    await planner.plan([_msg("老王来了")])
+    reference = _reference_message(llm)["content"]
+    assert "- 老王: （还没形成印象）\n  （笔记）答应过的事：答应老王下次玩恐怖游戏（还没兑现）" in reference
+
+    notes.clear()
+    await planner.plan([_msg("老王又来了", mid="m2")])
+    assert "（笔记）" not in _reference_message(llm)["content"]
 
 
 def test_dialogue_messages_use_native_roles_and_dedup_only_the_tail() -> None:
