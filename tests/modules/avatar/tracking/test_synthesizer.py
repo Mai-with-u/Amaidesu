@@ -186,3 +186,12 @@ def test_mood_accumulates_into_the_resting_face_and_fades() -> None:
     assert synth.current_emotion(26_000) == "neutral"
     assert smile(synth.step(26_000 + FRAME_MS)) > rest_smile + 0.04  # 表情已经回落，静止脸还带着笑
     assert synth.mood(26_000 + 120_000)[0] < valence / 3  # 两个半衰期后基本回到基线
+
+
+def test_style_markers_come_only_from_recipes_and_fade_with_them() -> None:
+    synth = _quiet()
+    assert synth.step(0)["marker_tears"] == 0.0  # 静止时没有任何漫符
+    synth.express("crying", 1.0, 0, key="u1", release_at_ms=2000)
+    peak = _run(synth, FRAME_MS, 1500)[-1]
+    assert peak["marker_tears"] > 0.5 and peak["marker_blush"] == 0.0
+    assert _run(synth, 1500, 6000)[-1]["marker_tears"] == 0.0  # 跟着表情一起落回

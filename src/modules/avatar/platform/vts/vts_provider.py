@@ -21,9 +21,10 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from src.modules.avatar.tool_common import dispatch_tool, unknown_action_fail
+from src.modules.avatar.tracking.channels import MARKERS
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
@@ -114,6 +115,26 @@ class VTSProvider(ConnectionToolProvider):
             description="模型上眉毛不抬也不压时对应的眉高输入",
             json_schema_extra={"x-ui-advanced": True},
         )
+        markers: Dict[str, str] = Field(
+            title="风格化标记",
+            default_factory=dict,
+            description=(
+                "标记名 → 本模型上的资源。以 .exp3.json 结尾的是模型的表情文件，情绪够强时整体淡入淡出；"
+                "其余按 VTS 输入名逐帧写 0~1（VTS 里没有的由程序补建，再在 VTS 里接到模型参数上）。"
+                "标记名：" + "、".join(f"{name}（{label}）" for name, label in MARKERS.items())
+            ),
+        )
+
+        @field_validator("markers")
+        @classmethod
+        def _known_markers(cls, value: Dict[str, str]) -> Dict[str, str]:
+            unknown = sorted(set(value) - set(MARKERS))
+            if unknown:
+                raise ValueError(f"未知的风格化标记 {unknown}（合法名：{', '.join(MARKERS)}）")
+            empty = sorted(name for name, target in value.items() if not str(target).strip())
+            if empty:
+                raise ValueError(f"风格化标记 {empty} 没写对应的表情文件或输入名")
+            return {name: str(target).strip() for name, target in value.items()}
 
     def __init__(
         self,
@@ -162,6 +183,7 @@ class VTSProvider(ConnectionToolProvider):
             eye_open_rest=self.typed_config.eye_open_rest,
             mouth_smile_neutral=self.typed_config.mouth_smile_neutral,
             brow_neutral=self.typed_config.brow_neutral,
+            markers=self.typed_config.markers,
         )
         self._reconnect_interval_s = reconnect_interval_s or self._RECONNECT_INTERVAL_S
         self._is_connecting = False
@@ -364,8 +386,16 @@ class VTSProvider(ConnectionToolProvider):
             self._is_connecting = False
 
     async def _reload_model_state(self) -> None:
-        """模型相关状态：热键重拉 + 补建规范自建输入 + 输入范围刷新（连接建立与换模跟随共用）。"""
+        """模型相关状态：热键重拉 + 表情文件清单 + 补建规范自建输入 + 输入范围（连接建立与换模跟随共用）。"""
         await self.hotkey_matcher.load_hotkeys()
+        try:
+            self._driver.set_available_expressions(await self._query_expression_files())
+            missing = self._driver.missing_marker_files()
+            if missing:
+                self.logger.warning(f"当前模型没有这些风格化标记登记的表情文件，已跳过: {missing}")
+        except Exception as e:
+            self.logger.warning(f"拉取模型表情文件清单失败，风格化标记按登记照发: {e}")
+            self._driver.set_available_expressions(None)
         try:
             await self._ensure_standard_inputs()
         except Exception as e:
@@ -385,14 +415,24 @@ class VTSProvider(ConnectionToolProvider):
         """
         data = await self._client.request("InputParameterListRequest", None)
         existing = {str(p.get("name")) for p in [*data.get("defaultParameters", []), *data.get("customParameters", [])]}
-        for name, (low, default, high, explanation) in VBRIDGER_INPUTS.items():
+        # 登记成输入的风格化标记也一并补建（0~1），用户在 VTS 里把它接到模型作者做的参数上
+        wanted = {
+            **VBRIDGER_INPUTS,
+            **{name: (0.0, 0.0, 1.0, explanation) for name, explanation in self._driver.marker_inputs().items()},
+        }
+        for name, (low, default, high, explanation) in wanted.items():
             if name in existing:
                 continue
             await self._client.request(
                 "ParameterCreationRequest",
                 {"parameterName": name, "explanation": explanation, "min": low, "max": high, "defaultValue": default},
             )
-            self.logger.info(f"已在 VTS 补建规范输入 {name}（{low} ~ {high}）")
+            self.logger.info(f"已在 VTS 补建输入 {name}（{low} ~ {high}）")
+
+    async def _query_expression_files(self) -> List[str]:
+        """当前模型的表情文件名清单（风格化标记登记的表情文件按它过滤）。"""
+        data = await self._client.request("ExpressionStateRequest", {"details": False})
+        return [str(item.get("file")) for item in data.get("expressions", []) if item.get("file")]
 
     async def _query_input_ranges(self) -> Dict[str, Tuple[float, float]]:
         """VTS 可注入输入的原生范围 ``{名: (min, max)}``（驱动按它钳制、只发认识的输入）。"""

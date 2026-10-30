@@ -239,3 +239,29 @@ async def test_reconnect_attempts_back_off_and_reset_on_success(tmp_path: Path) 
     assert attempts["n"] == 3 and provider._reconnect_skip_polls == 0
     assert provider._reconnect_backoff.next_delay_ms() == 10_000, "下一次失败从起点重新起算"
     await provider.disconnect()
+
+
+def test_markers_config_rejects_unknown_names_and_empty_targets() -> None:
+    schema = VTSProvider.ConfigSchema
+    assert schema(markers={"tears": " EyesCry.exp3.json "}).markers == {"tears": "EyesCry.exp3.json"}
+    with pytest.raises(ValueError, match="未知的风格化标记"):
+        schema(markers={"rainbow": "x.exp3.json"})
+    with pytest.raises(ValueError, match="没写对应"):
+        schema(markers={"tears": ""})
+
+
+async def test_connect_creates_marker_inputs_and_reads_model_expressions(tmp_path: Path) -> None:
+    socket = _socket()
+    socket.replies["ParameterCreationRequest"] = lambda data: {"parameterName": data["parameterName"]}
+    socket.replies["ExpressionStateRequest"] = {"expressions": [{"file": "EyesCry.exp3.json", "active": False}]}
+    connect = socket_connector(socket)
+    provider = create_vts_provider(
+        config={"markers": {"blush": "Blush", "tears": "EyesCry.exp3.json", "anger": "SignAngry.exp3.json"}},
+        client_factory=_factory(tmp_path, connect),
+    )
+    await provider.connect()
+    created = {
+        m["data"]["parameterName"]: m["data"] for m in socket.sent if m["messageType"] == "ParameterCreationRequest"
+    }
+    assert (created["Blush"]["min"], created["Blush"]["max"]) == (0.0, 1.0)  # 登记成输入的标记补建成 0~1
+    await provider.disconnect()

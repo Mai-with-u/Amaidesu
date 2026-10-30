@@ -7,7 +7,10 @@
   VTS 的 iPhone 输入、VBridger、Warudo 与 VSeeFace 的"完美同步"、VRChat 面捕都用它
   或它的扩展，模型按规范接好这些，换平台时不用重新约定；
 - **口型**：VRM 的 5 个元音口型 aa / ih / ou / ee / oh（0~1），说话时由口型分析器给出；
-- **姿态**：头部与身体的三轴角度（度）、身体位置（-1~1）、视线（-1~1）。
+- **姿态**：头部与身体的三轴角度（度）、身体位置（-1~1）、视线（-1~1）；
+- **风格化标记**：动漫模型上画好的漫符——脸红、眼泪、汗滴、黑线、生气符号……（0~1）。
+  面捕捕捉不到这些，ARKit 没有、各平台也没有统一的名字，所以这一小组词表由我们定，
+  模型有哪些、对应模型上的什么，由各平台配置登记；没登记的写了也没效果。
 
 方向约定：头部三轴沿用 VTS 面捕输入（FaceAngleX/Y/Z）的正负；视线与头部左右转同号，
 正方向是画面右边、上边，"看向某处"时头和眼朝同一边；ARKit 名字里的 Left / Right 指
@@ -112,7 +115,22 @@ ARKIT_BLENDSHAPES: Tuple[str, ...] = (
 # VRM 的元音口型
 VISEMES: Tuple[str, ...] = ("aa", "ih", "ou", "ee", "oh")
 
-CHANNELS: Tuple[str, ...] = (*POSE_CHANNELS, *ARKIT_BLENDSHAPES, *VISEMES)
+# 风格化标记：名字 → 说明。通道名带 marker_ 前缀（如 marker_blush），平台配置里写不带前缀的名字
+MARKERS: Dict[str, str] = {
+    "blush": "脸红",
+    "tears": "眼泪",
+    "sweat": "汗滴",
+    "gloom": "黑线（无语、沮丧时脸上的竖线）",
+    "anger": "生气符号（青筋）",
+    "shock": "惊吓符号",
+    "heart_eyes": "爱心眼",
+    "star_eyes": "星星眼",
+    "shadow": "阴影脸",
+}
+MARKER_PREFIX = "marker_"
+MARKER_CHANNELS: Tuple[str, ...] = tuple(MARKER_PREFIX + name for name in MARKERS)
+
+CHANNELS: Tuple[str, ...] = (*POSE_CHANNELS, *ARKIT_BLENDSHAPES, *VISEMES, *MARKER_CHANNELS)
 
 # 眼球朝向的 8 个系数由视线换算（合成器最后一步写入），配方与动作不直接写
 EYE_LOOK: Tuple[str, ...] = tuple(name for name in ARKIT_BLENDSHAPES if name.startswith("eyeLook"))
@@ -141,7 +159,7 @@ _POSE_LIMITS: Dict[str, Tuple[float, float]] = {
 }
 CHANNEL_LIMITS: Dict[str, Tuple[float, float]] = {
     **_POSE_LIMITS,
-    **{name: (0.0, 1.0) for name in (*ARKIT_BLENDSHAPES, *VISEMES)},
+    **{name: (0.0, 1.0) for name in (*ARKIT_BLENDSHAPES, *VISEMES, *MARKER_CHANNELS)},
 }
 
 
@@ -158,6 +176,9 @@ def _slew(name: str) -> Optional[float]:
         return 10.0
     if name in EYE_LOOK:
         return None
+    if name in MARKER_CHANNELS:
+        # 漫符淡入淡出：约 0.3 秒从无到有
+        return 3.5
     if name.startswith("eyeBlink"):
         return 15.0
     if name in VISEMES or name in ("jawOpen", "mouthClose"):
@@ -270,6 +291,9 @@ __all__ = [
     "HEAD_PITCH",
     "HEAD_ROLL",
     "HEAD_YAW",
+    "MARKERS",
+    "MARKER_CHANNELS",
+    "MARKER_PREFIX",
     "POSE_CHANNELS",
     "SLEW_PER_S",
     "VISEMES",

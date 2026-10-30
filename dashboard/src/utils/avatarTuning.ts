@@ -120,6 +120,15 @@ const DIRECT_LABELS: Readonly<Record<string, string>> = {
   ou: '口型 u',
   ee: '口型 e',
   oh: '口型 o',
+  marker_blush: '脸红',
+  marker_tears: '眼泪',
+  marker_sweat: '汗滴',
+  marker_gloom: '黑线',
+  marker_anger: '生气符号',
+  marker_shock: '惊吓符号',
+  marker_heart_eyes: '爱心眼',
+  marker_star_eyes: '星星眼',
+  marker_shadow: '阴影脸',
 };
 
 /** 分左右的表情系数：去掉 Left / Right 后的名字（也是配方里的双侧简写）→ 中文名 */
@@ -166,6 +175,7 @@ export const CHANNEL_GROUPS = [
   '下巴',
   '舌',
   '口型',
+  '风格化标记',
 ] as const;
 
 const VISEME_NAMES = new Set(['aa', 'ih', 'ou', 'ee', 'oh']);
@@ -180,6 +190,8 @@ export function channelGroup(name: string): (typeof CHANNEL_GROUPS)[number] {
   if (name.startsWith('jaw')) return '下巴';
   if (name.startsWith('tongue')) return '舌';
   if (VISEME_NAMES.has(name)) return '口型';
+  // 漫符（脸红、眼泪……）：模型上画好的，平台配置里登记了才看得到
+  if (name.startsWith('marker_')) return '风格化标记';
   return '嘴';
 }
 

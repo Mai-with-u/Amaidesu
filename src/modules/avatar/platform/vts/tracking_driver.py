@@ -10,11 +10,15 @@ VTS 输入，其中 VTS 自带的（头部角度、睁眼、眼球、眉、嘴�
 同一个输入值在不同模型上的含义不一样（实测桃濑日和的"眼睛开合"输入 1.0 已是瞪到
 最大、正常睁眼约 0.53），所以"正常睁眼""中性嘴角""中性眉"对应的输入值是校准项，
 从配置传入，换模型时按观感调（形象调校页可以实时调）。
+
+风格化标记（脸红、眼泪……）按配置登记的对应关系写：登记成 VTS 表情文件（``.exp3.json``）的，
+值越过阈值时整体淡入、落回时淡出（带回差，在阈值附近抖动不会反复开关）；登记成输入名的，
+每帧按 0~1 照写，在 VTS 里接到模型作者做的参数上。
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Set, Tuple
 
 from src.modules.avatar.tracking.channels import (
     BODY_PITCH,
@@ -28,6 +32,8 @@ from src.modules.avatar.tracking.channels import (
     HEAD_PITCH,
     HEAD_ROLL,
     HEAD_YAW,
+    MARKER_PREFIX,
+    MARKERS,
     Frame,
     brow_height,
     eye_openness,
@@ -58,6 +64,13 @@ VBRIDGER_INPUTS: Dict[str, Tuple[float, float, float, str]] = {
     "VBridgerFaceFound": (0.0, 0.0, 1.0, "是否检测到脸"),
 }
 
+# 风格化标记登记成这个后缀的是 VTS 表情文件，其余按输入名写
+EXPRESSION_FILE_SUFFIX = ".exp3.json"
+# 表情文件型标记：值到这么大才打开、落到这么小才关上（回差防抖）；VTS 自带淡入淡出的秒数
+MARKER_ON = 0.35
+MARKER_OFF = 0.2
+MARKER_FADE_S = 0.3
+
 # 身体位置 ±1 对应的 VTS 输入量：取各输入范围的一半，前倾后仰都留有余量
 _FACE_POSITION_SCALE = (7.5, 7.5, 5.0)
 _BODY_POSITION_SCALE = (7.5, 2.5, 5.0)
@@ -86,6 +99,7 @@ class VtsTrackingDriver:
         eye_open_rest: float,
         mouth_smile_neutral: float,
         brow_neutral: float,
+        markers: Optional[Mapping[str, str]] = None,
         clock: Callable[[], int] = wall_now_ms,
     ) -> None:
         """Args:
@@ -93,6 +107,7 @@ class VtsTrackingDriver:
         eye_open_rest: 模型上"正常睁眼"对应的 EyeOpen 输入值。
         mouth_smile_neutral: 中性嘴角对应的 MouthSmile 输入值。
         brow_neutral: 中性眉对应的眉高输入值。
+        markers: 风格化标记名 → 本模型上的表情文件名（``.exp3.json``）或 VTS 输入名。
         """
         self._client = client
         self._eye_open_rest = eye_open_rest
@@ -102,12 +117,35 @@ class VtsTrackingDriver:
         self._ranges: Dict[str, Tuple[float, float]] = {}
         self._overrides: Dict[str, Tuple[float, int]] = {}
         self._active = False
+        markers = dict(markers or {})
+        self._marker_files = {m: t for m, t in markers.items() if t.endswith(EXPRESSION_FILE_SUFFIX)}
+        self._marker_inputs = {m: t for m, t in markers.items() if not t.endswith(EXPRESSION_FILE_SUFFIX)}
+        # 表情文件此刻开着没有（不在表里 = 不知道，下一帧按目标状态发一次对齐）
+        self._file_on: Dict[str, bool] = {}
+        # 当前模型有哪些表情文件（None = 不知道，按都有处理）
+        self._available_files: Optional[Set[str]] = None
 
     # ===== 状态 =====
 
     def set_active(self, active: bool) -> None:
-        """适配器在连接授权成功后打开、断开时关闭。"""
+        """适配器在连接授权成功后打开、断开时关闭（重连后表情文件的开关状态重新对齐）。"""
         self._active = active
+        self._file_on.clear()
+
+    def set_available_expressions(self, files: Optional[Iterable[str]]) -> None:
+        """当前模型的表情文件清单（连接与换模型时刷新）；None = 查不到，按都有处理。"""
+        self._available_files = set(files) if files is not None else None
+        self._file_on.clear()
+
+    def marker_inputs(self) -> Dict[str, str]:
+        """登记成 VTS 输入的风格化标记：输入名 → 说明（适配器据此补建 VTS 里没有的）。"""
+        return {name: f"风格化标记：{MARKERS[marker]}" for marker, name in self._marker_inputs.items()}
+
+    def missing_marker_files(self) -> Dict[str, str]:
+        """登记了但当前模型上没有的表情文件：标记名 → 文件名（查不到清单时为空）。"""
+        if self._available_files is None:
+            return {}
+        return {m: f for m, f in self._marker_files.items() if f not in self._available_files}
 
     def set_input_ranges(self, ranges: Dict[str, Tuple[float, float]]) -> None:
         """VTS 报告的各输入范围（连接与换模型时刷新）；空 = 不钳制、全部输入都发。"""
@@ -211,6 +249,8 @@ class VtsTrackingDriver:
             "BodyPositionY": body_y * _BODY_POSITION_SCALE[1],
             "BodyPositionZ": body_z * _BODY_POSITION_SCALE[2],
             "VBridgerFaceFound": 1.0,
+            # 登记成输入的风格化标记照写 0~1
+            **{name: f(MARKER_PREFIX + marker, 0.0) for marker, name in self._marker_inputs.items()},
         }
 
     def _finalize(self, inputs: Dict[str, float]) -> Dict[str, float]:
@@ -230,8 +270,21 @@ class VtsTrackingDriver:
                 out[name] = min(bounds[1], max(bounds[0], value))
         return out
 
+    def marker_file_changes(self, frame: Frame) -> Dict[str, bool]:
+        """这一帧要切换开关的表情文件：文件名 → 开 / 关（只列和当前状态不同的，不改状态）。"""
+        changes: Dict[str, bool] = {}
+        for marker, file in self._marker_files.items():
+            if self._available_files is not None and file not in self._available_files:
+                continue
+            value = frame.get(MARKER_PREFIX + marker, 0.0)
+            on = self._file_on.get(file)
+            want = value >= (MARKER_OFF if on else MARKER_ON)
+            if on is None or want != on:
+                changes[file] = want
+        return changes
+
     async def apply(self, frame: Frame) -> None:
-        """这一帧换算后整组注入一次（发完就走）。"""
+        """这一帧换算后整组注入一次，表情文件型标记只在开关变化时发一次（都是发完就走）。"""
         inputs = self._finalize(self.to_inputs(frame))
         await self._client.send(
             "InjectParameterDataRequest",
@@ -242,6 +295,19 @@ class VtsTrackingDriver:
                 "parameterValues": [{"id": name, "value": round(value, 4)} for name, value in inputs.items()],
             },
         )
+        for file, on in self.marker_file_changes(frame).items():
+            await self._client.send(
+                "ExpressionActivationRequest", {"expressionFile": file, "fadeTime": MARKER_FADE_S, "active": on}
+            )
+            self._file_on[file] = on
 
 
-__all__ = ["OVERRIDE_HOLD_MS", "VBRIDGER_INPUTS", "VtsTrackingDriver"]
+__all__ = [
+    "EXPRESSION_FILE_SUFFIX",
+    "MARKER_FADE_S",
+    "MARKER_OFF",
+    "MARKER_ON",
+    "OVERRIDE_HOLD_MS",
+    "VBRIDGER_INPUTS",
+    "VtsTrackingDriver",
+]

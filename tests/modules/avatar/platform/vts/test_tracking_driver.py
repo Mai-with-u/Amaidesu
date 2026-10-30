@@ -118,3 +118,61 @@ def test_calibration_changes_neutral_mapping_live(fake_clock: FakeClock) -> None
     with pytest.raises(ValueError):
         driver.calibrate({"eye_open_rest": 0.5, "nose": 1.0})
     assert driver.calibration()["eye_open_rest"] == 0.7  # 有不认识的键时整批不改
+
+
+def _marker_driver(client: RecordingVtsClient, clock: FakeClock) -> VtsTrackingDriver:
+    driver = VtsTrackingDriver(
+        client,
+        eye_open_rest=0.55,
+        mouth_smile_neutral=0.5,
+        brow_neutral=0.5,
+        markers={"tears": "EyesCry.exp3.json", "blush": "Blush", "anger": "SignAngry.exp3.json"},
+        clock=clock.now_ms,
+    )
+    driver.set_active(True)
+    return driver
+
+
+def _activations(client: RecordingVtsClient) -> list:
+    return [(d["expressionFile"], d["active"]) for t, d in client.sent if t == "ExpressionActivationRequest"]
+
+
+def test_input_markers_are_written_every_frame(fake_clock: FakeClock) -> None:
+    driver = _marker_driver(RecordingVtsClient(), fake_clock)
+    assert driver.to_inputs({**rest_frame(), "marker_blush": 0.6})["Blush"] == pytest.approx(0.6)
+    assert driver.marker_inputs() == {"Blush": "风格化标记：脸红"}  # 适配器据此在 VTS 里补建
+
+
+async def test_expression_file_markers_switch_with_hysteresis(fake_clock: FakeClock) -> None:
+    client = RecordingVtsClient()
+    driver = _marker_driver(client, fake_clock)
+    for tears in (0.0, 0.3, 0.4, 0.3, 0.25, 0.1, 0.1):
+        await driver.apply({**rest_frame(), "marker_tears": tears})
+    # 第一帧把开关状态对齐一次（关）；到 0.35 才开，回落到 0.2 以下才关，中间抖动不反复开关
+    assert _activations(client) == [
+        ("EyesCry.exp3.json", False),
+        ("SignAngry.exp3.json", False),
+        ("EyesCry.exp3.json", True),
+        ("EyesCry.exp3.json", False),
+    ]
+
+
+async def test_expression_files_missing_on_the_model_are_skipped(fake_clock: FakeClock) -> None:
+    client = RecordingVtsClient()
+    driver = _marker_driver(client, fake_clock)
+    driver.set_available_expressions(["EyesCry.exp3.json"])
+    assert driver.missing_marker_files() == {"anger": "SignAngry.exp3.json"}
+    await driver.apply({**rest_frame(), "marker_anger": 1.0, "marker_tears": 1.0})
+    assert _activations(client) == [("EyesCry.exp3.json", True)]
+
+
+async def test_reconnect_realigns_expression_file_state(fake_clock: FakeClock) -> None:
+    client = RecordingVtsClient()
+    driver = _marker_driver(client, fake_clock)
+    driver.set_available_expressions(["EyesCry.exp3.json"])
+    await driver.apply({**rest_frame(), "marker_tears": 1.0})
+    await driver.apply({**rest_frame(), "marker_tears": 1.0})
+    driver.set_active(False)
+    driver.set_active(True)  # 断线期间 VTS 那边的状态不可知：重连后按目标状态再发一次
+    await driver.apply({**rest_frame(), "marker_tears": 1.0})
+    assert _activations(client) == [("EyesCry.exp3.json", True), ("EyesCry.exp3.json", True)]

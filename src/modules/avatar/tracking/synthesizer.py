@@ -34,6 +34,7 @@ from .channels import (
     HEAD_PITCH,
     HEAD_ROLL,
     HEAD_YAW,
+    MARKER_CHANNELS,
     VISEMES,
     Frame,
     clamp_frame,
@@ -364,6 +365,9 @@ class TrackingSynthesizer:
         for side in ("Left", "Right"):
             net = target[f"mouthSmile{side}"] - target[f"mouthFrown{side}"]
             target[f"mouthSmile{side}"], target[f"mouthFrown{side}"] = max(net, 0.0), max(-net, 0.0)
+        # 风格化标记（脸红、眼泪……）只来自表情配方，静止时都没有
+        for name in MARKER_CHANNELS:
+            target[name] = offsets.get(name, 0.0)
 
         # 眼皮：表情决定闭多少（眯眼、半闭），眨眼在此基础上按比例再闭；睁大随眨眼收起
         if jumped and cfg.blink_enabled:

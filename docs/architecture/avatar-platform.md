@@ -148,6 +148,22 @@ VTS 的眼球左右输入与头部左右转输入方向相反（两者同为正�
 
 另外，"输入写入成功"和"模型上看得出效果"是两回事：模型作者把哪些输入接到了哪个部位，VTS 的接口查不到，没接的输入写了也没效果。
 
+### 风格化标记
+
+动漫模型常画好一些漫符：脸红、眼泪、汗滴、黑线、生气符号、惊吓符号、爱心眼、星星眼、阴影脸。面捕捕捉不到它们，ARKit 里也没有，所以这一小组由面捕合成器自己定名（通道名 `marker_blush` 这样带前缀），默认配方照动漫惯例挂上：害羞脸红、哭有泪、生气冒青筋、无语出黑线，值同样乘情绪强度。模型上有哪些、对应什么，在 `[platform.vts.markers]` 登记，没登记的不发：
+
+```toml
+[platform.vts.markers]
+tears = "EyesCry.exp3.json"   # 以 .exp3.json 结尾：模型的表情文件
+anger = "SignAngry.exp3.json"
+blush = "Blush"               # 其余是 VTS 输入名：逐帧写 0~1
+```
+
+- 表情文件型：值到 0.35 才打开、落到 0.2 以下才关上（回差防抖），VTS 自己淡入淡出 0.3 秒。所以淡淡的难过不会掉泪，哭才会。连上和换模型时程序读一遍当前模型的表情文件清单，登记了但模型上没有的会在日志里点名并跳过；
+- 输入型：适合模型作者把漫符做成 0~1 参数的情况（约稿时建议这么做，能随表情渐入渐出）。VTS 里没有这个输入时程序按名字补建（0~1），再在 VTS 的模型设置里把它接到对应参数上。
+
+VTS 自带的 akari 模型就带着眼泪（`EyesCry`）、爱心眼（`EyesLove`）、生气符号（`SignAngry`）、惊吓符号（`SignShock`）四个表情文件，可以照上面的写法试。
+
 ## VTS 连接管理
 
 - **授权**：首次连接时在 VTS 里弹窗确认授权，token 保存在 `data/vts_token.txt`
@@ -163,7 +179,7 @@ VTS 的眼球左右输入与头部左右转输入方向相反（两者同为正�
 
 - **实时通道**：显示面捕合成器此刻发给平台的各通道值；打开"手动摆姿"后每个通道变成滑条，直接指定值试效果，关掉或离开页面后几秒内交还给自动行为；
 - **眼神目标**：在方框里拖镜头、弹幕区、思考三个点，形象边拖边看过去；
-- **表情配方**：选一个情绪，按通道改它满强度时的偏移，可以边调边预览。键用 ARKit 系数名（去掉 Left / Right 是双侧简写，如 `mouthSmile`）和姿态通道名。改过的情绪写成 `[tracking.recipes.<情绪>]`，整份替换默认配方（浮现快慢不变），没写的情绪用默认配方；
+- **表情配方**：选一个情绪，按通道改它满强度时的偏移，可以边调边预览。键用 ARKit 系数名（去掉 Left / Right 是双侧简写，如 `mouthSmile`）、姿态通道名和风格化标记（`marker_tears` 等）。改过的情绪写成 `[tracking.recipes.<情绪>]`，整份替换默认配方（浮现快慢不变），没写的情绪用默认配方；
 - **人设与行为**：静止时的嘴角、眨眼频率、心情、表情停留等调参，以及挂着的平台驱动的校准项；
 - **动作**：点头、摇头、VTS 热键等，和主播调 `avatar_act` 走同一个目录。
 
@@ -195,7 +211,7 @@ enabled = ["vts"]        # 启用哪些平台，合法值：vts / warudo / vrcha
 
 ## 相关文档
 
-- 架构决策：[面捕合成器](../decisions/052-avatar-tracking-synthesizer.md) / [形象动作工具](../decisions/053-avatar-act-tool.md) / [平台无关边界](../decisions/023-avatar-platform-agnostic-boundary.md) / [口型帧级通道](../decisions/024-lipsync-frame-channel.md) / [字幕单一来源](../decisions/025-subtitle-single-source.md) / [虚拟形象工具约定](../decisions/026-avatar-tool-surface-contract.md) / [虚拟形象配置文件](../decisions/028-avatar-domain-config-graduation.md)
+- 架构决策：[面捕合成器](../decisions/052-avatar-tracking-synthesizer.md) / [面捕规范词表](../decisions/054-avatar-standard-face-vocabulary.md) / [风格化标记](../decisions/056-avatar-style-markers.md) / [形象动作工具](../decisions/053-avatar-act-tool.md) / [平台无关边界](../decisions/023-avatar-platform-agnostic-boundary.md) / [口型帧级通道](../decisions/024-lipsync-frame-channel.md) / [字幕单一来源](../decisions/025-subtitle-single-source.md) / [虚拟形象工具约定](../decisions/026-avatar-tool-surface-contract.md) / [虚拟形象配置文件](../decisions/028-avatar-domain-config-graduation.md)
 - [事件系统](event-system.md) — 主播发言、TTS 播放事件的语义
 - [数据流与边界规则](data-flow.md) — 情绪如何到达虚拟形象、口型音频从哪里来
 - [v2 架构叙事](v2-architecture.md) — 工具类组件的判据

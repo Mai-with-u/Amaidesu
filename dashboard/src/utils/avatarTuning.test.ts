@@ -75,6 +75,7 @@ describe('配方编辑', () => {
     expect(channelLabel('mouthSmileLeft')).toBe('嘴角上扬（左）');
     expect(channelLabel('eyeSquint')).toBe('下眼睑上推（笑眼）（双侧）');
     expect(channelLabel('jawOpen')).toBe('下巴张开');
+    expect(channelLabel('marker_tears')).toBe('眼泪');
     expect(channelLabel('nose')).toBe('nose');
   });
 });
@@ -103,6 +104,7 @@ describe('通道按部位分组', () => {
     expect(channelGroup('eyeBlinkLeft')).toBe('眼');
     expect(channelGroup('noseSneerRight')).toBe('脸颊与鼻');
     expect(channelGroup('mouthPucker')).toBe('嘴');
+    expect(channelGroup('marker_blush')).toBe('风格化标记');
     expect(channelGroup('ou')).toBe('口型');
     const groups = groupChannels(
       ['jawOpen', 'head_yaw', 'mouthFunnel', 'browDownLeft'],

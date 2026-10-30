@@ -32,6 +32,7 @@ from .channels import (
     HEAD_PITCH,
     HEAD_ROLL,
     HEAD_YAW,
+    MARKER_CHANNELS,
     POSE_CHANNELS,
     expand,
 )
@@ -76,6 +77,8 @@ class Recipe:
 # 偏移是"满强度"的量；实际叠加量 = 偏移 × 压缩后的强度 × 当前时间曲线值。键用 ARKit 表情系数名
 # （去掉 Left / Right 的是双侧简写），加上头部、身体、视线这些姿态通道。真笑带动脸颊和下眼睑
 # （cheekSquint、eyeSquint），难过时眉心上提（browInnerUp），这些都照面部动作的常识写。
+# 风格化标记照动漫的惯例挂：害羞脸红、哭有泪、生气冒青筋、无语出黑线；偏移同样乘强度，
+# 淡淡的难过只有一点泪光，平台按阈值整体切换的标记（VTS 表情文件）要情绪够强才出现。
 RECIPES: Dict[str, Recipe] = {
     "happy": Recipe(
         POSITIVE, {"mouthSmile": 0.8, "cheekSquint": 0.4, "eyeSquint": 0.35, "browOuterUp": 0.2, HEAD_PITCH: 2.0}
@@ -91,16 +94,34 @@ RECIPES: Dict[str, Recipe] = {
             "jawOpen": 0.2,
             HEAD_PITCH: 3.0,
             BODY_Z: 0.2,
+            "marker_star_eyes": 0.7,
         },
         1.3,
     ),
     "love": Recipe(
         POSITIVE,
-        {"mouthSmile": 0.8, "eyeSquint": 0.4, "eyeBlink": 0.2, "cheekSquint": 0.3, "browInnerUp": 0.2, HEAD_ROLL: 5.0},
+        {
+            "mouthSmile": 0.8,
+            "eyeSquint": 0.4,
+            "eyeBlink": 0.2,
+            "cheekSquint": 0.3,
+            "browInnerUp": 0.2,
+            HEAD_ROLL: 5.0,
+            "marker_blush": 0.5,
+            "marker_heart_eyes": 0.8,
+        },
     ),
     "sad": Recipe(
         NEGATIVE,
-        {"mouthFrown": 0.6, "browInnerUp": 0.6, "eyeBlink": 0.3, "mouthPress": 0.2, HEAD_PITCH: -4.0, GAZE_Y: -0.3},
+        {
+            "mouthFrown": 0.6,
+            "browInnerUp": 0.6,
+            "eyeBlink": 0.3,
+            "mouthPress": 0.2,
+            HEAD_PITCH: -4.0,
+            GAZE_Y: -0.3,
+            "marker_tears": 0.3,
+        },
         0.7,
     ),
     "crying": Recipe(
@@ -113,6 +134,7 @@ RECIPES: Dict[str, Recipe] = {
             "jawOpen": 0.3,
             "mouthStretch": 0.3,
             HEAD_PITCH: -6.0,
+            "marker_tears": 1.0,
         },
     ),
     "angry": Recipe(
@@ -124,6 +146,7 @@ RECIPES: Dict[str, Recipe] = {
             "mouthPress": 0.4,
             "eyeSquint": 0.2,
             HEAD_PITCH: -2.0,
+            "marker_anger": 0.8,
         },
     ),
     "disgusted": Recipe(
@@ -136,11 +159,20 @@ RECIPES: Dict[str, Recipe] = {
             "browDown": 0.5,
             "eyeSquint": 0.4,
             HEAD_YAW: -6.0,
+            "marker_shadow": 0.4,
         },
     ),
     "surprised": Recipe(
         STARTLE,
-        {"browInnerUp": 1.0, "browOuterUp": 1.0, "eyeWide": 1.0, "jawOpen": 0.5, HEAD_PITCH: 4.0, BODY_Z: -0.1},
+        {
+            "browInnerUp": 1.0,
+            "browOuterUp": 1.0,
+            "eyeWide": 1.0,
+            "jawOpen": 0.5,
+            HEAD_PITCH: 4.0,
+            BODY_Z: -0.1,
+            "marker_shock": 0.7,
+        },
     ),
     "scared": Recipe(
         STARTLE,
@@ -152,6 +184,8 @@ RECIPES: Dict[str, Recipe] = {
             "jawOpen": 0.3,
             HEAD_PITCH: -3.0,
             BODY_Z: -0.2,
+            "marker_shock": 0.6,
+            "marker_sweat": 0.4,
         },
     ),
     "confused": Recipe(
@@ -171,6 +205,7 @@ RECIPES: Dict[str, Recipe] = {
             HEAD_PITCH: -5.0,
             HEAD_ROLL: 4.0,
             BODY_Z: -0.1,
+            "marker_blush": 0.8,
         },
         0.7,
     ),
@@ -184,6 +219,8 @@ RECIPES: Dict[str, Recipe] = {
             "eyeBlink": 0.25,
             GAZE_X: -0.5,
             GAZE_Y: -0.3,
+            "marker_blush": 0.6,
+            "marker_sweat": 0.6,
         },
     ),
     "smug": Recipe(
@@ -199,7 +236,18 @@ RECIPES: Dict[str, Recipe] = {
         },
         0.6,
     ),
-    "speechless": Recipe(SOCIAL, {"mouthPress": 0.3, "mouthFrown": 0.1, "eyeBlink": 0.35, "browDown": 0.1}, 0.3),
+    "speechless": Recipe(
+        SOCIAL,
+        {
+            "mouthPress": 0.3,
+            "mouthFrown": 0.1,
+            "eyeBlink": 0.35,
+            "browDown": 0.1,
+            "marker_gloom": 0.8,
+            "marker_sweat": 0.4,
+        },
+        0.3,
+    ),
     "tired": Recipe(
         STATE,
         {"eyeBlink": 0.45, "eyeBlinkLeft": 0.05, "browDown": 0.2, "jawOpen": 0.08, HEAD_PITCH: -4.0, BODY_Z: -0.1},
@@ -207,12 +255,13 @@ RECIPES: Dict[str, Recipe] = {
     ),
 }
 
-# 配方里能写的键：姿态通道、ARKit 表情系数（眼球朝向由视线换算，不在其中）与双侧简写；
-# 口型只在说话时由口型分析器给出，表情不写。覆盖里另可写头部微动幅度倍数
+# 配方里能写的键：姿态通道、ARKit 表情系数（眼球朝向由视线换算，不在其中）与双侧简写、
+# 风格化标记；口型只在说话时由口型分析器给出，表情不写。覆盖里另可写头部微动幅度倍数
 RECIPE_KEYS: Tuple[str, ...] = (
     *POSE_CHANNELS,
     *(name for name in ARKIT_BLENDSHAPES if name not in EYE_LOOK),
     *BILATERAL,
+    *MARKER_CHANNELS,
 )
 MOTION_KEY = "motion"
 MOTION_RANGE: Tuple[float, float] = (0.0, 3.0)
