@@ -1,6 +1,6 @@
 # 虚拟形象接入：Warudo 与 VRChat
 
-本文说明怎样让 Amaidesu 驱动 Warudo 或 VRChat 里的虚拟形象：主播说话时表情跟着情绪变、嘴跟着声音动，AI 还能自己点头、换站姿、做动作。VTube Studio 接上就能用，不在本文范围；三个平台各自能做什么，见[虚拟形象架构](../architecture/avatar-platform.md)。
+本文说明怎样让 Amaidesu 驱动 Warudo 或 VRChat 里的虚拟形象：形象自己眨眼、看来看去，主播说话时表情跟着情绪变、嘴跟着声音动，AI 还能自己点头、换站姿、做动作。VTube Studio 接上就能用，不在本文范围；三个平台各自能做什么，见[虚拟形象架构](../architecture/avatar-platform.md)。
 
 > 阅读前提：项目已完成[快速开始](../getting-started.md)的安装步骤，`config/` 下的配置文件已经生成。下文的 `config/avatar.toml` 指项目里的虚拟形象配置文件。
 
@@ -8,12 +8,12 @@
 
 ### 它是怎么连起来的
 
-Amaidesu 通过 WebSocket（默认端口 19190）给 Warudo 发一条条"动作名 + 数值"，比如 `happy = 0.8`、`VowelA = 1.0`、`nod_once = 1`。Warudo 这边靠**蓝图**接收：蓝图是 Warudo 场景里的节点图，一个节点收到某个动作名，就去改角色的表情、播一段动画。
+两条通道：
 
-所以两边要对上两件事：
+- **面捕数据**（UDP，默认本机 49983 端口）：Amaidesu 的面捕合成器每秒 30 帧，按 iPhone 面捕 App **iFacialMocap** 的格式发出 ARKit 的 52 个表情系数和头部、眼球转角。Warudo 自带 iFacialMocap 接收器，把 Amaidesu 当成一部正在抓脸的 iPhone，表情、眨眼、眼神、点头、口型都从这里来。
+- **蓝图通道**（WebSocket，默认 19190 端口）：Amaidesu 发一条条"动作名 + 数值"，比如 `nod_once = 1`、`marker_tears = 0.8`。Warudo 这边靠**蓝图**接收：蓝图是 Warudo 场景里的节点图，一个节点收到某个动作名，就去播一段动画或改一个形状。只用来做头部动作、站姿、抛鱼和风格化标记（脸红、眼泪这类漫符）。
 
-- **Amaidesu 发什么名字**：情绪用哪些名字、各占多少，写在 `config/avatar.toml` 的 `[platform.warudo.expression]` 段，下文叫**表情档案**；口型、眨眼、移眼、头部动作、站姿用的是固定名字。
-- **蓝图收什么名字、收到后改模型上的哪个形状**：蓝图不用手画，用项目自带的脚本按同一份表情档案生成，名字自然一致。
+模型怎么把 ARKit 系数落到自己的形状上，在 Warudo 的面捕设置里调，和真人用 iPhone 面捕时一样。
 
 ### 一、在 Warudo 里准备角色
 
@@ -21,37 +21,14 @@ Amaidesu 通过 WebSocket（默认端口 19190）给 Warudo 发一条条"动作�
 2. 在场景里选中角色，"来源"选刚放进去的模型；第一次打开 Warudo 时也可以跟着新手引导完成这一步。
 3. **保存场景**。后面生成蓝图要从场景文件里读出这个角色，场景文件在数据目录的 `Scenes` 文件夹里，默认叫 `DefaultScene.json`。
 
-### 二、确定用哪种表情档案
+### 二、在 Warudo 里接上面捕
 
-先弄清楚模型的表情做在哪里，再选对应的档案和蓝图写法：
+1. 在角色的动作捕捉设置里，面部捕捉选 **iFacialMocap**，Warudo 会在场景里加一个 iFacialMocap Receiver（接收器）。接收器配置页里的输入端口默认是 49983，与 Amaidesu 一致。
+2. 面部捕捉设置里的形状映射（Configure BlendShapes Mapping）按模型选：模型带 ARKit 的 52 个形状（"完美同步"）选 ARKit；只有 VRM 标准表情的选 VRM。表情做在自定义形状上的模型（例如麦麦），给模型补上 ARKit 形状最省事，或者在这里逐项把 ARKit 系数接到模型的形状上。
+3. 关掉 Warudo 自带的音频口型（用麦克风声音驱动嘴的功能）：嘴的开合已经在面捕数据里，两边会抢着控制嘴。
+4. Amaidesu 启动后（见第五步）在接收器上点一次校准（Calibrate），校准时形象正看镜头。
 
-| 模型情况 | 表情档案 | 蓝图写法 |
-|---|---|---|
-| VRM 1.0 模型，标准表情槽（happy、angry、aa、blink 等）都绑好了，VRoid 等工具导出的模型大多如此 | 默认档案，不用改 | `vrm` |
-| VRM 0.x 模型 | 默认档案，不用改 | `vrm0` |
-| 表情做在模型自定义的形状上，标准表情槽是空的（例如麦麦） | 按模型写一份档案（见下） | `shape` |
-
-拿不准的话，先按 `vrm` 走完后面的步骤，用第五步的试发检查：脸上没变化，再换写法或改写档案。
-
-**写一份自己的档案**：档案说明每种情绪用模型上的哪几个形状、各用多少（0~1）。以麦麦为例，档案在 `src/modules/avatar/platform/warudo/profiles/maimai.toml`，可以整段粘贴进 `config/avatar.toml`，替换原来的 `[platform.warudo.expression]` 段，再照着改成自己模型的形状名：
-
-```toml
-[platform.warudo.expression]
-# 这些形状生效时暂停自动眨眼（如笑眼，眨眼会把它盖掉）
-blink_blocking_keys = ["eye_happy_strong"]
-# 说话时这些嘴形先让给口型，说完再恢复
-mouth_keys = ["mouth_happy_strong", "mouth_sad_weak"]
-
-[platform.warudo.expression.emotions]
-neutral = {}
-happy = { mouth_happy_strong = 1.0, eyebrow_happy_weak = 0.8 }
-sad = { mouth_sad_weak = 1.0, eyebrow_sad_weak = 0.9 }
-# ……其余情绪照此填写
-```
-
-- 情绪名只能用项目规定的 17 种（neutral、happy、sad、angry、surprised 等），写错名字启动时会直接报错并列出合法名单；没写的情绪按"无表情"处理。
-- 眨眼用固定名 `eye_close`，情绪也可以用它（比如困倦时半闭眼）。
-- 口型元音（`VowelA` 等）和移眼（`eye_shift_left` 等）是固定名，不能写进情绪里。
+头和眼的左右如果反了（Amaidesu 让她往弹幕区看，她看向另一边），勾上接收器的镜像（Mirrored Tracking）。
 
 ### 三、在 Amaidesu 里启用 Warudo
 
@@ -62,62 +39,61 @@ sad = { mouth_sad_weak = 1.0, eyebrow_sad_weak = 0.9 }
 enabled = ["warudo"]          # 同时用 VTS 就写 ["vts", "warudo"]
 ```
 
-Warudo 的地址端口默认是本机 19190，与 Warudo 默认设置一致，一般不用改。
+面捕数据默认发往本机 49983 端口（`tracking_host` / `tracking_port`），蓝图通道默认本机 19190 端口，都与 Warudo 默认设置一致，一般不用改。
+
+模型上画了漫符（脸红、眼泪、汗滴……）的，在 `[platform.warudo.markers]` 登记对应的形状名，哭、害羞、生气时会自动出现：
+
+```toml
+[platform.warudo.markers]
+tears = "Tears"           # 标记名 = 模型上的形状名
+blush = "cheek_red"
+```
+
+标记名只能用规定的几种（blush、tears、sweat、gloom、anger、shock、heart_eyes、star_eyes、shadow），写错时启动会报错并列出合法名单。
 
 ### 四、生成并导入蓝图
 
-在项目根目录运行（`--mode` 按第二步选，`--scene` 指向第一步保存的场景文件）：
+在项目根目录运行（`--scene` 指向第一步保存的场景文件）：
 
 ```
-uv run python scripts/warudo_blueprints.py --mode shape --scene "<Warudo 数据目录>/Scenes/DefaultScene.json"
+uv run python scripts/warudo_blueprints.py --scene "<Warudo 数据目录>/Scenes/DefaultScene.json"
 ```
 
-脚本读取 `config/avatar.toml` 的表情档案，在 `data/warudo_blueprints/` 下生成四个蓝图：
+脚本在 `data/warudo_blueprints/` 下生成：
 
 | 蓝图 | 作用 |
 |---|---|
-| Amaidesu 表情 | 档案里的每个表情名一个入口 |
-| Amaidesu 口型 | 元音 A/I/U/E/O |
-| Amaidesu 眨眼与移眼 | 眨眼，左右上下移眼 |
 | Amaidesu 头部动作与站姿 | 点头一次、点头两次、摇头、歪头、低头看向一边，放松站姿、思考站姿、恢复默认站姿；用 Warudo 自带动画，任何人形模型都能用 |
+| Amaidesu 风格化标记 | 登记了风格化标记才生成：每个标记一个入口，把收到的值写到对应形状上。标记做成 VRM 自定义表情的，加 `--mode vrm` |
 
-打开 Warudo 的蓝图页，用"导入蓝图"逐个导入这四个文件。导入成功后，蓝图列表里会出现以"Amaidesu"开头的四个蓝图。
-
-注意：
+打开 Warudo 的蓝图页，用"导入蓝图"逐个导入。注意：
 
 - **蓝图是按角色的内部编号找角色的。** 删过或重新添加过角色，编号就会变，旧蓝图会找不到角色、什么都不动。换了角色或换了场景，都要先保存场景，再带 `--scene` 重新生成、删掉旧的 Amaidesu 蓝图再导入。
-- 改了表情档案、换了模型，也要重新生成并导入。
-- 场景里如果还留着别的蓝图在接收同样的名字（比如以前手画的表情蓝图），先删掉，不然两边会一起动。
+- 改了风格化标记的登记，也要重新生成并导入。
+- 以前版本生成过"Amaidesu 表情""Amaidesu 口型""Amaidesu 眨眼与移眼"三个蓝图的，删掉它们：脸已经改由面捕数据驱动。
 
-### 五、试发检查
+### 五、试发检查与启动
 
-先不启动 Amaidesu，保持 Warudo 打开，运行：
+保持 Warudo 打开，先不启动 Amaidesu，运行：
 
 ```
 uv run python scripts/warudo_blueprints.py --probe ws://localhost:19190
 ```
 
-脚本会按顺序把所有情绪、口型、眨眼移眼、头部动作、站姿各发一遍，每项停 1.5 秒（`--hold 3` 可以放慢），终端里会打印正在发哪一项，对着画面看就行。模型上本来就没有的表情槽（比如某些模型没做移眼）不动是正常的。
+脚本把头部动作、站姿、风格化标记各发一遍，每项停 1.5 秒（`--hold 3` 可以放慢），终端里会打印正在发哪一项，对着画面看就行。
 
-### 六、启动 Amaidesu
-
-启动后 Amaidesu 会自动连上 Warudo（Warudo 后开也没关系，它会每隔几秒重连）。连上后：
-
-- 主播每说一句话，表情按这句话的情绪自动切换；
-- 说话时嘴跟着语音动。这时要关掉 Warudo 自带的音频口型（用麦克风声音驱动嘴的功能），不然两边会抢着控制嘴；
-- AI 能调用 `warudo_set_expression`（设置表情）、`warudo_trigger_preset_action`（点头、换站姿等）等工具；WebUI 的工具页能看到 `warudo_*` 工具就说明已经连上。
-
-想让 AI 用自己做的蓝图动作，在 `config/avatar.toml` 的 `[platform.warudo.action_catalog]` 里登记"动作名 = 说明"，蓝图里用"收到 WebSocket 动作"节点按这个名字接收（数据类型选整数）。
+然后启动 Amaidesu：面捕数据一发出，形象就开始眨眼、看来看去，说话时嘴跟着语音动、表情跟着情绪变；蓝图通道 Warudo 后开也没关系，Amaidesu 每隔几秒重连。主播用 `avatar_act` 做的动作里会多出 Warudo 的头部动作、站姿和抛鱼；想让她用自己做的蓝图动作，在 `[platform.warudo.action_catalog]` 里登记"动作名 = 说明"，蓝图里用"收到 WebSocket 动作"节点按这个名字接收（数据类型选整数）。
 
 ### 常见问题
 
 | 现象 | 原因与处理 |
 |---|---|
-| 导入后什么都不动 | 多半是蓝图里的角色编号和场景对不上：保存场景，带 `--scene` 重新生成，删掉旧的 Amaidesu 蓝图后再导入 |
-| 头部动作会动，表情不动 | 档案或写法不对：标准表情槽是空的模型要用 `shape` 写法和自己的档案；VRM 0.x 模型要用 `vrm0` |
-| 不确定模型认哪些表情名 | Warudo 日志（`%USERPROFILE%\AppData\LocalLow\HakuyaLabs\Warudo\Player.log`）里出现"Available VRM blendshape clips"这一行时，后面列的就是模型能用的表情名 |
+| 形象一动不动 | 角色的面部捕捉没选 iFacialMocap，或接收器端口不是 49983；Warudo 和 Amaidesu 不在同一台电脑时，`tracking_host` 改成 Warudo 那台的地址 |
+| 头会动，表情不动 | 形状映射没对上：模型没有 ARKit 形状却选了 ARKit，改选 VRM 或补形状 |
+| 嘴一直微张 | 对没有 ARKit 形状的模型套用了 ARKit 映射；在形状映射里把 `jawOpen` 等的阈值调高，或给模型补 ARKit 形状 |
+| 头部动作、站姿不动 | 蓝图里的角色编号和场景对不上：保存场景，带 `--scene` 重新生成，删掉旧的 Amaidesu 蓝图后再导入 |
 | 嘴的动作很乱 | Warudo 自带的音频口型没关，两边在同时控制嘴 |
-| AI 设置视线没反应 | 视线需要场景里另外摆"看镜头 / 看弹幕 / 看手机"的目标物和对应蓝图，脚本不生成；抛鱼同理，还依赖一个第三方插件 |
+| 抛鱼没反应 | 抛鱼依赖场景里另外做的蓝图和一个第三方插件，脚本不生成 |
 
 ## VRChat
 

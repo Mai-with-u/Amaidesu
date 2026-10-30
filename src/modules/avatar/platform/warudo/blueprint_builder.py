@@ -1,17 +1,16 @@
-"""Warudo 蓝图生成：按表情档案生成可直接导入 Warudo 的蓝图 JSON
+"""Warudo 蓝图生成：按配置生成可直接导入 Warudo 的蓝图 JSON
 
 蓝图是 Warudo 场景里的节点图。适配器经 WebSocket 发 ``{"action": 名字, "data": 值}``，
-蓝图里的"收到 WebSocket 动作"节点按名字接住，再驱动角色。手画的蓝图把形状名、
-场景资源写死在节点里，换模型就得重画；这里改为按档案生成：
+蓝图里的"收到 WebSocket 动作"节点按名字接住，再驱动角色。脸、眼、头走面捕数据
+（iFacialMocap 接收器），不经蓝图；蓝图只管两样：
 
-- 表情：档案里的每个表情键一个入口，写同名表情（VRM 方式走 VRM 表情代理，任何
-  VRM 模型通用，0.x 与 1.0 的预设名不同需分开选；形状名方式直接写模型网格上的
-  形状，用于麦麦这类自定义模型）；
-- 口型、眨眼、移眼：固定协议键，按方式映射到 VRM 预设名或同名形状；
-- 头部动作与站姿：播放 Warudo 自带动画，与模型无关。
+- 头部动作与站姿：播放 Warudo 自带动画，与模型无关；
+- 风格化标记：配置里登记的每个标记一个入口（``marker_<名字>``），把收到的 0~1 写到模型
+  上对应的形状（或走 VRM 表情代理写同名的自定义表情）。
 
-角色引用默认取 Warudo 新建场景里固定的"角色 1"资源 ID；传入场景文件时改取场景
-里第一个角色。视线、抛鱼这类依赖场景道具或第三方插件的蓝图不在生成范围。
+手画的蓝图把形状名、场景资源写死在节点里，换模型就得重画，所以按配置生成。角色引用
+默认取 Warudo 新建场景里固定的"角色 1"资源 ID；传入场景文件时改取场景里第一个角色。
+视线、抛鱼这类依赖场景道具或第三方插件的蓝图不在生成范围。
 """
 
 from __future__ import annotations
@@ -19,9 +18,9 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
-from .expression_profile import BLINK_KEY, EYE_SHIFT_KEYS, VOWEL_KEYS, WarudoExpressionConfig
+from .tracking_driver import marker_action
 
 # Warudo 新建场景里"角色 1"的固定资源 ID（不同安装的默认场景一致）
 DEFAULT_CHARACTER_ID = "29399e49-1c26-41bb-b40f-294dc0590f68"
@@ -36,47 +35,8 @@ _PLAY_IDLE_ANIMATION = "ca6ade7e-27b5-4344-b04a-b373c8b9c50e"
 # WebSocket 动作数据类型（Warudo 枚举值）
 _DATA_TYPES = {"Integer": 2, "Float": 3}
 
-# 固定协议键 → VRM 1.0 标准表情名（VRM 方式用；形状名方式按同名形状写）
-_VRM_FIXED_NAMES = {
-    "VowelA": "aa",
-    "VowelI": "ih",
-    "VowelU": "ou",
-    "VowelE": "ee",
-    "VowelO": "oh",
-    BLINK_KEY: "blink",
-    "eye_shift_left": "lookLeft",
-    "eye_shift_right": "lookRight",
-    "eye_shift_up": "lookUp",
-    "eye_shift_down": "lookDown",
-}
-# 形状名方式下口型元音对应的形状（VRM 模型网格上的口型形状通常同名）
-_SHAPE_VOWEL_NAMES = {"VowelA": "aa", "VowelI": "ih", "VowelU": "ou", "VowelE": "ee", "VowelO": "oh"}
-
-# VRM 0.x 模型在 Warudo 表情代理里用旧版预设名（Warudo 日志列出的可用表情实测如此）：
-# VRM 1.0 标准名 → VRM 0.x 预设名。0.x 没有"惊讶"预设，取 VRoid 导出常见的自定义名 Surprised
-_VRM0_NAMES = {
-    "neutral": "Neutral",
-    "happy": "Joy",
-    "angry": "Angry",
-    "sad": "Sorrow",
-    "relaxed": "Fun",
-    "surprised": "Surprised",
-    "aa": "A",
-    "ih": "I",
-    "ou": "U",
-    "ee": "E",
-    "oh": "O",
-    "blink": "Blink",
-    "blinkLeft": "Blink_L",
-    "blinkRight": "Blink_R",
-    "lookUp": "LookUp",
-    "lookDown": "LookDown",
-    "lookLeft": "LookLeft",
-    "lookRight": "LookRight",
-}
-
-# 生成方式：vrm = VRM 1.0 表情代理；vrm0 = VRM 0.x 表情代理；shape = 直接写同名形状
-MODES = ("vrm", "vrm0", "shape")
+# 风格化标记的写法：shape = 直接写模型网格上的形状；vrm = 走 VRM 表情代理写同名的自定义表情
+MODES = ("shape", "vrm")
 
 _ANIMATION_ROOT = "character-animation://resources/Animations/AGIA"
 _IDLE_DEFAULT = f"{_ANIMATION_ROOT}/01_Idles/AGIA_Idle_generic_01"
@@ -176,10 +136,10 @@ class _Graph:
 
 
 def _blendshape_graph(name: str, character: Dict[str, str], targets: Iterable[Tuple[str, str]], vrm: bool) -> _Graph:
-    """每个 (动作名, 表情/形状名) 一个入口：收到权重 → 写入（直接写形状时 0.2 秒过渡）"""
+    """每个 (动作名, 表情/形状名) 一个入口：收到 0~1 → 写入（直接写形状时 0.2 秒过渡）"""
     graph = _Graph(name, character)
-    # 走 VRM 表情代理时 Warudo 起不了过渡补间（实测值能写上，但每次写都在日志里报一次补间失败，
-    # 说话口型每秒写十来次会刷屏），代理方式改为不过渡、直接写
+    # 走 VRM 表情代理时 Warudo 起不了过渡补间（实测值能写上，但每次写都在日志里报一次补间失败），
+    # 代理方式改为不过渡、直接写
     transition = 0.0 if vrm else 0.2
     for row, (action, target) in enumerate(targets):
         entry = graph.on_action(action, "Float", row)
@@ -199,7 +159,7 @@ def _blendshape_graph(name: str, character: Dict[str, str], targets: Iterable[Tu
             420.0,
             row * 260.0,
         )
-        # 收到动作 → 用动作携带的权重写表情
+        # 收到动作 → 用动作携带的值写形状
         graph.flow(entry, setter)
         graph.data(entry, "FloatData", setter, "Value")
     return graph
@@ -265,43 +225,26 @@ def find_scene_character(scene_path: Path) -> Optional[Dict[str, str]]:
     return None
 
 
-def _target_name(key: str, mode: str) -> str:
-    """动作名 → 蓝图里要写的表情/形状名"""
-    if mode == "shape":
-        # 形状名方式：元音写 aa/ih/ou/ee/oh 形状，其余键与形状同名
-        return _SHAPE_VOWEL_NAMES.get(key, key)
-    name = _VRM_FIXED_NAMES.get(key, key)
-    # VRM 0.x：标准名换成旧版预设名，非标准键（模型自定义表情）原样保留
-    return _VRM0_NAMES.get(name, name) if mode == "vrm0" else name
-
-
 def build_blueprints(
-    expression: WarudoExpressionConfig,
+    markers: Mapping[str, str],
     *,
-    mode: str = "vrm",
+    mode: str = "shape",
     character: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """按档案生成四个蓝图：{文件名: 蓝图 dict}
+    """生成蓝图：{文件名: 蓝图 dict}。头部动作与站姿总有；登记了风格化标记才有标记蓝图。
 
     Args:
-        expression: 表情档案（与适配器读的是同一份配置，键名天然对齐）
-        mode: vrm = 走 VRM 1.0 表情代理；vrm0 = 走 VRM 0.x 表情代理；shape = 直接写同名形状
+        markers: 风格化标记名 → 模型上的形状名（与适配器读的是同一份配置，动作名天然对齐）
+        mode: 标记的写法，shape = 直接写同名形状；vrm = 走 VRM 表情代理写同名的自定义表情
         character: 角色资源引用 {id, name}；缺省用新建场景的"角色 1"
     """
     if mode not in MODES:
-        raise ValueError(f"未知生成方式 {mode!r}，可选 {MODES}")
+        raise ValueError(f"未知写法 {mode!r}，可选 {MODES}")
     ref = character or {"id": DEFAULT_CHARACTER_ID, "name": "角色 1"}
-    proxy = mode != "shape"
-
-    def targets(keys: Iterable[str]) -> List[Tuple[str, str]]:
-        return [(key, _target_name(key, mode)) for key in keys]
-
-    graphs = [
-        _blendshape_graph("Amaidesu 表情", ref, targets(expression.expression_keys()), proxy),
-        _blendshape_graph("Amaidesu 口型", ref, targets(VOWEL_KEYS), proxy),
-        _blendshape_graph("Amaidesu 眨眼与移眼", ref, targets((BLINK_KEY, *EYE_SHIFT_KEYS)), proxy),
-        _motion_graph(ref),
-    ]
+    graphs: List[_Graph] = [_motion_graph(ref)]
+    if markers:
+        targets: Iterable[Tuple[str, str]] = [(marker_action(name), shape) for name, shape in markers.items()]
+        graphs.append(_blendshape_graph("Amaidesu 风格化标记", ref, targets, vrm=mode == "vrm"))
     return {f"{graph.name}.json": graph.to_dict() for graph in graphs}
 
 
