@@ -377,6 +377,11 @@ class Planner:
         system_prompt, prompt_failure = self._render_system_prompt()
         if system_prompt is None:
             return replace(outcome, error=prompt_failure, silent_reason="prompt_render_failed")
+        # 长期笔记与上场回顾开播时读出、整场不变：接在系统提示词末尾，和人设一起吃前缀缓存
+        # （参考段在不断增长的对话历史之后，放那里每个决策窗都要重新计费）
+        memory_block = self._memory_block(session_recap)
+        if memory_block:
+            system_prompt = f"{system_prompt}\n\n{memory_block}"
 
         # 决策前自动读一次配置的只读参考工具（如游戏现场速览）：结果直接进参考段，
         # 不必先花一步请求去查再决定说什么。
@@ -392,7 +397,6 @@ class Planner:
             fresh_game_chat=fresh_game_chat,
             private_game_chat=private_game_chat,
             overview=overview,
-            session_recap=session_recap,
             trigger_cause=trigger_cause,
         )
         if reference_text is None:
@@ -535,6 +539,27 @@ class Planner:
             self.logger.exception(f"渲染 Planner 系统提示词失败: {e}")
             return None, f"prompt_render_failed: {e}"
 
+    def _memory_block(self, session_recap: str) -> str:
+        """系统提示词末尾的记忆段：长期笔记 + 上场回顾（开播时读出、整场不变）；都没有时为空串。"""
+        long_memory_text = ""
+        if self._long_memory_provider is not None:
+            try:
+                long_memory_text = (self._long_memory_provider() or "").strip()
+            except Exception as exc:
+                # 长期笔记读不到只省这一段，不挡决策
+                self.logger.warning(f"读取长期笔记失败，本场系统提示词省略长期笔记: {exc}", exc=True)
+        parts: List[str] = []
+        if long_memory_text:
+            parts.append(
+                "# 她的长期笔记（内部参考）\n\n"
+                "这是她自己整理的、过了好几场还记得的事。用得上时再用，不必主动提起；"
+                "和眼前的对话或游戏记录冲突时以眼前为准。\n\n" + long_memory_text
+            )
+        recap = (session_recap or "").strip()
+        if recap:
+            parts.append("# 上场回顾（内部参考）\n\n" + recap)
+        return "\n\n".join(parts)
+
     def _render_game_rules(self) -> str:
         """拼装【当前游戏的玩法】：各工具面的使用说明 + 委派型游戏的守则。
 
@@ -570,14 +595,14 @@ class Planner:
         fresh_game_chat: Optional[List[str]] = None,
         private_game_chat: Optional[List[str]] = None,
         overview: str = "",
-        session_recap: str = "",
         trigger_cause: Optional[TriggerCause] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """构造参考段，返回（参考段文本, 失败原因）。
 
         内容 = 情境标注（强制/主动，按触发原因取条件子句）+ 私密游戏聊天 + 运营提醒 +
-        组装器元数据段（长期记忆 / 上场回顾 / 环节描述 / 直播间快照 / 人物画像）。对话内容与
-        游戏事件不在此处——历史（含 game 条目）与本批走 canonical 映射的原生消息通道。
+        组装器元数据段（环节描述 / 直播间快照 / 人物画像 / 备忘录）。对话内容与游戏事件
+        不在此处——历史（含 game 条目）与本批走 canonical 映射的原生消息通道；整场不变的
+        长期笔记与上场回顾在系统提示词末尾（见 ``_memory_block``）。
         组装失败时文本为 None，失败原因随 outcome.error 写进决策事件。
         """
         signoff_window = trigger_cause is not None and trigger_cause.kind is TriggerKind.SIGNOFF
@@ -681,18 +706,8 @@ class Planner:
                 # 备忘录读不到只省段，不挡决策
                 self.logger.warning(f"读取备忘录失败，本轮参考段省略备忘录段: {exc}", exc=True)
 
-        long_memory_text = ""
-        if self._long_memory_provider is not None:
-            try:
-                long_memory_text = self._long_memory_provider() or ""
-            except Exception as exc:
-                # 长期记忆读不到只省段，不挡决策
-                self.logger.warning(f"读取长期记忆失败，本轮参考段省略长期记忆段: {exc}", exc=True)
-
         try:
             assembler_inputs = AssemblerInputs(
-                long_memory_section=long_memory_text,
-                session_recap_section=session_recap or "",
                 stage_descriptions=rundown_text or "",
                 environment=env_block,
                 person_profile_section=person_profile_section,

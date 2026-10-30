@@ -56,6 +56,7 @@ def _make_planner(
     context_enabled: bool = True,
     max_steps: int = 8,
     elapsed_live_provider: Any | None = None,
+    long_memory_provider: Any | None = None,
 ) -> tuple[Planner, MagicMock, MagicMock]:
     """mock LLM（generate）+ mock prompt_service；缺省真注册表 + 注册成功的 reply（reply 经 registry.invoke）。"""
     llm = MagicMock()
@@ -81,7 +82,11 @@ def _make_planner(
         profile_repo=profile_repo,
         viewer_repo=viewer_repo,
         context_enabled=context_enabled,
-        env=PlannerEnv(reply_provider_factory=lambda: prov, elapsed_live_provider=elapsed_live_provider),
+        env=PlannerEnv(
+            reply_provider_factory=lambda: prov,
+            elapsed_live_provider=elapsed_live_provider,
+            long_memory_provider=long_memory_provider,
+        ),
     )
     return planner, llm, prompt
 
@@ -334,17 +339,40 @@ async def test_batch_is_not_duplicated_from_history_tail_in_the_sent_messages() 
     assert joined.count("来个落地水") == 1 and "大家好呀" in joined
 
 
-async def test_session_recap_goes_first_in_the_reference_and_is_omitted_when_absent() -> None:
-    """上场回顾进参考段，排在环节描述与直播间快照之前（整场不变的背景放最前）；没有回顾则整段省略。"""
-    planner, llm, _prompt = _make_planner([_resp(), _resp()])
+def _system_message(llm: Any, call_index: int = -1) -> str:
+    return llm.generate.await_args_list[call_index].args[0][0]["content"]
 
-    await planner.plan([_msg()], rundown_text="## 开场", session_recap="【2026-10-13 的直播】这场我挖到了钻石")
+
+async def test_long_memory_and_recap_ride_at_system_prompt_tail_not_in_reference() -> None:
+    """长期笔记与上场回顾接在系统提示词末尾（整场不变，跨决策窗逐字一致可吃前缀缓存），参考段里不再出现。"""
+    planner, llm, _prompt = _make_planner(
+        [_resp(), _resp()], long_memory_provider=lambda: "## 老梗与口头禅\n- 床名一直没定"
+    )
+    recap = "【2026-10-13 的直播】这场我挖到了钻石"
+
+    await planner.plan([_msg("第一窗")], rundown_text="## 开场", session_recap=recap)
+    await planner.plan([_msg("第二窗", mid="m2")], rundown_text="## 开场", session_recap=recap)
+
+    system = _system_message(llm)
+    assert system.startswith("SYSTEM_PROMPT\n\n# 她的长期笔记（内部参考）")
+    assert system.index("床名一直没定") < system.index("# 上场回顾（内部参考）") < system.index("这场我挖到了钻石")
+    assert _system_message(llm, 0) == system
     reference = _reference_message(llm)["content"]
-    assert "这场我挖到了钻石" in reference
-    assert reference.index("## 上场回顾-内部参考") < reference.index("## 环节描述")
+    assert "床名一直没定" not in reference and "挖到了钻石" not in reference
 
+
+async def test_memory_block_omitted_when_absent_or_unreadable() -> None:
+    """没有笔记也没有回顾时系统提示词保持原样；笔记读失败只省笔记段，回顾照放。"""
+    planner, llm, _prompt = _make_planner([_resp(), _resp()])
     await planner.plan([_msg()])
-    assert "上场回顾" not in _reference_message(llm)["content"]
+    assert _system_message(llm) == "SYSTEM_PROMPT"
+
+    def broken() -> str:
+        raise RuntimeError("文件坏了")
+
+    planner, llm, _prompt = _make_planner([_resp()], long_memory_provider=broken)
+    await planner.plan([_msg()], session_recap="上一场的回顾")
+    assert _system_message(llm) == "SYSTEM_PROMPT\n\n# 上场回顾（内部参考）\n\n上一场的回顾"
 
 
 # ---------------------------------------------------------------------------

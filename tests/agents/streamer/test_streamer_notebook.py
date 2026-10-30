@@ -100,11 +100,9 @@ async def test_tool_empty_content_clears_notebook() -> None:
 
 
 def test_assembler_appends_notebook_section_last() -> None:
-    text = PlannerAssembler().assemble(
-        AssemblerInputs(session_recap_section="上场回顾正文", notebook_section="备忘录正文")
-    )
+    text = PlannerAssembler().assemble(AssemblerInputs(stage_descriptions="环节正文", notebook_section="备忘录正文"))
     assert "## 备忘录-内部参考\n备忘录正文" in text
-    assert text.index("## 上场回顾-内部参考") < text.index("## 备忘录-内部参考")
+    assert text.index("## 环节描述") < text.index("## 备忘录-内部参考")
 
 
 async def test_planner_reads_the_notebook_the_tool_writes() -> None:
@@ -121,7 +119,7 @@ async def test_planner_reads_the_notebook_the_tool_writes() -> None:
 
 
 def test_assembler_omits_notebook_section_when_empty() -> None:
-    text = PlannerAssembler().assemble(AssemblerInputs(session_recap_section="回顾"))
+    text = PlannerAssembler().assemble(AssemblerInputs(stage_descriptions="环节"))
     assert "备忘录" not in text
     assert PlannerAssembler().assemble(AssemblerInputs(notebook_section="")) == ""
 
