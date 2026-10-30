@@ -1,33 +1,28 @@
 """
-VRChatProvider - VRChat OSC 虚拟形象工具集
+VRChatProvider - VRChat 虚拟形象适配器（OSC 协议）
 
-- 引擎：OSC 客户端初始化、动作参数写入、头顶聊天框发送
-- ToolProvider 协议由本类自身实现
-- 暴露的工具（同语义跨平台同名同参数形状，契约见 ``avatar.protocol``）：
-  - ``vrchat_set_expression``        - 设置情绪（VRChat 无标准表情参数体系，返回未应用结果）
-  - ``vrchat_list_preset_actions``   - 列出可演预设（动作表）
-  - ``vrchat_trigger_preset_action`` - 触发预设动作（未知名随结果返回目录）
+形象的逐帧驱动由面捕合成器负责：本适配器把一个 VRChat 面捕驱动挂到合成器上——眼睛走
+VRChat 官方的 OSC 眼动输入（任何形象都认），脸走 VRCFaceTracking 的通行参数名（做了面捕
+参数的形象才动），风格化标记写形象作者另做的参数。头部转动 VRChat 不开放写入。
 
-预设动作写形象参数 ``/avatar/parameters/<动作参数>``。VRChat 的内置参数（口型、
-手势等）全部只读，能写的只有形象作者自定义的参数；默认动作表对应 VRChat SDK
-默认模板里的 ``VRCEmote``，自定义形象可在配置里换参数名和动作表。
+- 动作片段：动作表里的动作（默认对应 VRChat SDK 默认模板的 ``VRCEmote``）登记给面捕合成器，
+  主播经 ``avatar_act`` 按名字触发；触发 = 把动作值写进动作参数，过一会儿写回 0。
+- 头顶聊天框：登记为字幕服务的一个后端，跟随字幕源。
+- 不向 LLM 暴露工具；``set_expression`` 等契约方法只给调试台用（设表情交给面捕合成器）。
+
+VRChat 的内置参数（口型、手势等）全部只读；口型由 VRChat 按麦克风声音自己算。
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from src.modules.avatar.platform.vrchat.chatbox import VRChatChatboxBackend
-from src.modules.avatar.speech_binding import AvatarBindings
-from src.modules.avatar.tool_common import (
-    clamp_intensity,
-    contract_tool_specs,
-    dispatch_tool,
-    unknown_action_fail,
-)
+from src.modules.avatar.tool_common import dispatch_tool, unknown_action_fail
+from src.modules.avatar.tracking.channels import MARKERS
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.logging import get_logger
@@ -41,6 +36,8 @@ from src.modules.tools.models import (
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.types.emotion_vocab import Emotion
 
+from .tracking_driver import VrchatTrackingDriver
+
 # python-osc 软降级
 try:
     from pythonosc.udp_client import SimpleUDPClient
@@ -50,9 +47,11 @@ except ImportError:
     PYTHON_OSC_AVAILABLE = False
     SimpleUDPClient = None  # type: ignore
 
+_EMOTIONS = frozenset(e.value for e in Emotion)
+
 
 class VRChatProvider(BaseToolProvider):
-    """VRChat 虚拟形象 ToolProvider（OSC 协议）"""
+    """VRChat 虚拟形象适配器：面捕驱动 + 动作片段 + 头顶聊天框。"""
 
     PROVIDER_NAME = "vrchat"
 
@@ -60,12 +59,26 @@ class VRChatProvider(BaseToolProvider):
     category = "avatar"
 
     class ConfigSchema(BaseConfig):
-        """VRChat OSC 配置（地址端口 + 动作表 + 聊天框）"""
+        """VRChat OSC 配置（地址端口 + 面捕参数 + 动作表 + 风格化标记 + 聊天框）"""
 
         # 常量型字段：值恒等于段名，仅作段位标识，WebUI 只读呈现（改了也会被忽略）
         type: str = Field(title="段位标识", default="vrchat", json_schema_extra={"readonly": True})
         vrc_host: str = Field(title="OSC 主机地址", default="127.0.0.1", description="VRChat OSC 主机地址")
         vrc_out_port: int = Field(title="OSC 输出端口", default=9000, ge=1, le=65535, description="VRChat OSC 输出端口")
+        face_tracking_enabled: bool = Field(
+            title="写面捕参数",
+            default=True,
+            description=(
+                "按 VRCFaceTracking 的通行参数名写脸（下巴、嘴角、眉、眯眼等）；只有做了面捕参数的形象会动，"
+                "其余形象 VRChat 直接忽略。眼睛走官方眼动输入，任何形象都会动，不受这一项影响"
+            ),
+        )
+        face_tracking_prefix: str = Field(
+            title="面捕参数前缀",
+            default="FT/",
+            description="形象上面捕参数名的前缀（/avatar/parameters/<前缀>v2/JawOpen）；常见模板用 FT/，没有前缀填空串",
+            json_schema_extra={"x-ui-advanced": True},
+        )
         emote_parameter: str = Field(
             title="动作参数名",
             default="VRCEmote",
@@ -92,6 +105,14 @@ class VRChatProvider(BaseToolProvider):
             ge=0,
             description="触发后多久把动作参数写回 0（鼓掌、跳舞这类循环动作靠归零停下）；0 = 不归零",
         )
+        markers: Dict[str, str] = Field(
+            title="风格化标记",
+            default_factory=dict,
+            description=(
+                "标记名 → 形象上的参数名（形象作者另做的 0~1 浮点参数）。"
+                "标记名：" + "、".join(f"{name}（{label}）" for name, label in MARKERS.items())
+            ),
+        )
         chatbox_enabled: bool = Field(
             title="头顶聊天框",
             default=True,
@@ -105,13 +126,27 @@ class VRChatProvider(BaseToolProvider):
             json_schema_extra={"x-ui-advanced": True},
         )
 
+        @field_validator("markers")
+        @classmethod
+        def _known_markers(cls, value: Dict[str, str]) -> Dict[str, str]:
+            unknown = sorted(set(value) - set(MARKERS))
+            if unknown:
+                raise ValueError(f"未知的风格化标记 {unknown}（合法名：{', '.join(MARKERS)}）")
+            empty = sorted(name for name, target in value.items() if not str(target).strip())
+            if empty:
+                raise ValueError(f"风格化标记 {empty} 没写对应的形象参数名")
+            return {name: str(target).strip() for name, target in value.items()}
+
     def __init__(
         self,
         config: Dict[str, Any],
         event_bus: Optional[EventBus] = None,
+        tracking: Optional[Any] = None,
     ) -> None:
+        """``tracking``：面捕合成器运行时（组合根共享一个）；None = 只剩动作与聊天框，不驱动形象。"""
         self.config = config
         self.event_bus = event_bus
+        self._tracking = tracking
         self.logger = get_logger(self.__class__.__name__)
 
         # 配置（typed；空 dict = 全默认；失败 log+raise）
@@ -133,6 +168,12 @@ class VRChatProvider(BaseToolProvider):
             min_interval_ms=self.typed_config.chatbox_min_interval_ms,
             enabled=self.typed_config.chatbox_enabled,
         )
+        self._driver = VrchatTrackingDriver(
+            self._send_osc,
+            lambda: self._is_connected and self.osc_client is not None,
+            face_prefix=self.typed_config.face_tracking_prefix if self.typed_config.face_tracking_enabled else None,
+            markers=self.typed_config.markers,
+        )
 
         # OSC 客户端
         self.osc_client: Any = None
@@ -144,8 +185,6 @@ class VRChatProvider(BaseToolProvider):
         self._has_started = False
         self.render_count = 0
         self.error_count = 0
-        # 事件订阅挂载项句柄（setup 时逐项 attach，cleanup 时一次全量退订）
-        self._bindings: Optional[AvatarBindings] = None
 
     # ===== ToolProvider 协议 =====
 
@@ -154,55 +193,25 @@ class VRChatProvider(BaseToolProvider):
         return self.PROVIDER_NAME
 
     def list_tools(self) -> list[ToolSpec]:
-        # 三个契约工具的声明样板走公共件；description 是平台文案，关键字传入
-        return contract_tool_specs(
-            self.PROVIDER_NAME,
-            set_expression=(
-                "VRChat 设置主播当前情绪（17 枚举值 + 强度）。"
-                "VRChat OSC 参数每 avatar 自定义、无标准表情通道，当前不渲染情绪面，"
-                "动作类表达走 vrchat_trigger_preset_action"
-            ),
-            list_preset_actions="列出 VRChat 可演的预设动作目录（挥手、鼓掌、跳舞等）",
-            trigger_preset_action="触发一个预设动作（动作名取自 vrchat_list_preset_actions 返回的目录）",
-        )
+        """不向 LLM 暴露工具：形象动作统一走 ``avatar_act``，动作表作为片段登记给面捕合成器。"""
+        return []
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
-        """分发到对应的 handler 方法（handlers 每次现构造，捕获本次参数）。"""
-        args = invocation.arguments or {}
-        return await dispatch_tool(
-            invocation,
-            self.PROVIDER_NAME,
-            {
-                "vrchat_set_expression": lambda: self.set_expression(
-                    str(args.get("emotion", "")), float(args.get("intensity", 0.5))
-                ),
-                "vrchat_list_preset_actions": self.list_preset_actions,
-                "vrchat_trigger_preset_action": lambda: self.trigger_preset_action(str(args.get("action", ""))),
-            },
-            self.logger,
-        )
+        """本适配器没有 LLM 工具：任何调用都按"工具不属于本 Provider"失败返回。"""
+        return await dispatch_tool(invocation, self.PROVIDER_NAME, {}, self.logger)
 
-    # ===== 契约方法（LLM 工具与自动情绪路径共用的渲染入口）=====
+    # ===== 契约方法（调试台直接调用）=====
 
     async def set_expression(self, emotion: str, intensity: float) -> ToolExecutionResult:
-        """设置当前情绪（能力差异的优雅降级面）。
-
-        VRChat OSC 参数体系每 avatar 自定义、无标准表情通道，本平台不渲染
-        情绪面：合法情绪名返回成功但 ``applied=False``（诚实告知未应用），
-        映射表外的情绪名按失败结果返回。动作类表达走 trigger_preset_action。
-        """
-        if emotion not in {e.value for e in Emotion}:
+        """设置当前情绪：交给面捕合成器，浮现后保持配置的时长再回落。"""
+        if emotion not in _EMOTIONS:
             return tool_result_fail("vrchat_set_expression", f"未知情绪 '{emotion}'（应为 17 枚举值之一）")
-        factor = clamp_intensity(intensity)
+        if self._tracking is None:
+            return tool_result_fail("vrchat_set_expression", "面捕合成器未启用（avatar.toml [tracking].enabled）")
+        factor = min(1.0, max(0.0, float(intensity)))
+        outcome = self._tracking.express(emotion, factor)
         return tool_result_ok(
-            "vrchat_set_expression",
-            True,
-            {
-                "emotion": emotion,
-                "intensity": factor,
-                "applied": False,
-                "reason": "VRChat OSC 无标准表情参数通道，情绪面不渲染",
-            },
+            "vrchat_set_expression", True, {"emotion": emotion, "intensity": factor, "outcome": outcome}
         )
 
     async def list_preset_actions(self) -> ToolExecutionResult:
@@ -214,10 +223,17 @@ class VRChatProvider(BaseToolProvider):
         """触发一个预设动作；未知名把目录随失败结果返回（失败即发现）。"""
         action = action.strip()
         if action in self.emotes:
-            self._trigger_emote(action)
-            return tool_result_ok("vrchat_trigger_preset_action", True, {"action": action})
-        catalog = [name for name in self.emotes]
-        return unknown_action_fail("vrchat_trigger_preset_action", action, catalog)
+            fired = self._trigger_emote(action)
+            return tool_result_ok("vrchat_trigger_preset_action", fired, {"action": action})
+        return unknown_action_fail("vrchat_trigger_preset_action", action, list(self.emotes))
+
+    def _clip_names(self) -> List[str]:
+        """登记给面捕合成器的片段目录：动作表里的动作。"""
+        return list(self.emotes)
+
+    async def _trigger_clip(self, name: str) -> bool:
+        """面捕合成器按片段名转回来的触发请求。"""
+        return bool((await self.trigger_preset_action(name)).success)
 
     # ===== 生命周期 =====
 
@@ -225,10 +241,12 @@ class VRChatProvider(BaseToolProvider):
         if self._has_started:
             return
         await self._connect()
-        # 事件订阅（被动响应业务事件）：情绪反射（streamer.speech；set_expression 当前不渲染
-        # 情绪面，订阅保持契约一致性，未来接入表情通道无需改装配）
-        self._bindings = AvatarBindings(self.event_bus, self.logger)
-        self._bindings.attach_emotion_reflection(self)
+        # 面捕驱动挂到面捕合成器上：发言、播放都由合成器订阅，这里不再订阅事件
+        if self._tracking is not None:
+            await self._tracking.attach(self._driver)
+            self._tracking.register_clips(self.PROVIDER_NAME, self._clip_names, self._trigger_clip)
+        else:
+            self.logger.warning("面捕合成器未装配：VRChat 只剩动作与聊天框，形象不会被逐帧驱动")
         # 重新启动时按配置恢复聊天框（上次清理时已停用）
         self.chatbox.enabled = self.typed_config.chatbox_enabled
         self._has_started = True
@@ -237,10 +255,10 @@ class VRChatProvider(BaseToolProvider):
     async def cleanup(self) -> None:
         if not self._has_started:
             return
-        if self._bindings is not None:
-            self._bindings.close()
-            self._bindings = None
-        # 先停聊天框与动作归零，再断 OSC：断开后它们的发送都会落空
+        # 先摘下面捕驱动（摘下前发一帧静止姿态），再停聊天框与动作归零，最后断 OSC
+        if self._tracking is not None:
+            self._tracking.unregister_clips(self.PROVIDER_NAME)
+            await self._tracking.detach(self._driver)
         await self.chatbox.close()
         await self._cancel_emote_reset()
         await self._disconnect()
@@ -249,27 +267,27 @@ class VRChatProvider(BaseToolProvider):
 
     # ===== 业务方法 =====
 
-    def _trigger_emote(self, emote_name: str) -> None:
-        """写动作参数 → 延迟归零；新动作会取消上一个尚未执行的归零"""
+    def _trigger_emote(self, emote_name: str) -> bool:
+        """写动作参数 → 延迟归零；新动作会取消上一个尚未执行的归零。返回是否写出去了。"""
         if not self._is_connected or not self.osc_client:
             self.logger.warning("OSC 客户端未连接，无法触发动作")
             self.error_count += 1
-            return
+            return False
         address = f"/avatar/parameters/{self.emote_parameter}"
         value = self.emotes[emote_name]
         try:
             self.osc_client.send_message(address, value)
-            # VRChat 无情绪渲染通道（set_expression 不产出画面），渲染计数挂在此处
             self.render_count += 1
             self.logger.debug(f"触发 VRChat 动作: {emote_name} ({address} = {value})")
         except Exception as e:
             self.error_count += 1
             self.logger.error(f"触发 VRChat 动作失败: {emote_name}: {e}", exc=True)
-            return
+            return False
         if self.emote_reset_ms > 0:
             if self._emote_reset_task is not None and not self._emote_reset_task.done():
                 self._emote_reset_task.cancel()
             self._emote_reset_task = asyncio.create_task(self._reset_emote(address), name="VRChat_EmoteReset")
+        return True
 
     async def _reset_emote(self, address: str) -> None:
         # 鼓掌、跳舞这类循环动作只在参数回到 0 时停下；单次动作归零也无副作用
@@ -290,6 +308,17 @@ class VRChatProvider(BaseToolProvider):
             except asyncio.CancelledError:
                 self.logger.debug("动作归零任务已取消")
 
+    def _send_osc(self, address: str, value: Any) -> None:
+        """面捕驱动发一条 OSC 消息（未连接时跳过；UDP 发完就走）。"""
+        if not self._is_connected or not self.osc_client:
+            return
+        try:
+            self.osc_client.send_message(address, value)
+        except Exception as e:
+            self.error_count += 1
+            if self.error_count == 1 or self.error_count % 300 == 0:
+                self.logger.warning(f"VRChat OSC 发送失败（累计 {self.error_count} 次）: {address}: {e}")
+
     def _send_chatbox(self, text: str) -> None:
         """发一条头顶聊天框：立即显示、不弹键盘、不播提示音；空串 = 清空"""
         if not self._is_connected or not self.osc_client:
@@ -305,6 +334,8 @@ class VRChatProvider(BaseToolProvider):
             "error_count": self.error_count,
             "vrc_host": self.vrc_host,
             "vrc_out_port": self.vrc_out_port,
+            "tracking": self._tracking is not None,
+            "emotion": self._tracking.current_emotion() if self._tracking is not None else "",
         }
 
     def connection_summary(self) -> Dict[str, Any]:
@@ -321,6 +352,7 @@ class VRChatProvider(BaseToolProvider):
             self.logger.info(f"正在连接到 VRChat OSC... (Host: {self.vrc_host}, Port: {self.vrc_out_port})")
             self.osc_client = SimpleUDPClient(self.vrc_host, self.vrc_out_port)  # type: ignore[misc]
             self._is_connected = True
+            self._driver.reset()
             self.logger.info(f"VRChat OSC 客户端已创建: {self.vrc_host}:{self.vrc_out_port}")
         except Exception as e:
             self.logger.exception(f"创建 VRChat OSC 客户端失败: {e}")
@@ -338,12 +370,10 @@ def create_vrchat_provider(
     config: Dict[str, Any],
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
+    tracking: Optional[Any] = None,
 ) -> VRChatProvider:
-    # lipsync_analyzer：统一装配签名；VRChat 无标准 viseme 通道，不接口型渲染
-    return VRChatProvider(
-        config=config,
-        event_bus=event_bus,
-    )
+    # lipsync_analyzer：统一装配签名；VRChat 的口型由它按麦克风声音自己算，不接口型分析器
+    return VRChatProvider(config=config, event_bus=event_bus, tracking=tracking)
 
 
 def register_vrchat_tools(
@@ -352,14 +382,11 @@ def register_vrchat_tools(
     event_bus: Optional[EventBus] = None,
     lipsync_analyzer: Optional[Any] = None,
     subtitle_service: Optional[Any] = None,
-    tracking: Optional[Any] = None,  # 面捕合成器：本平台驱动尚未移植，仍走旧的情绪订阅，暂不使用
+    tracking: Optional[Any] = None,
 ) -> VRChatProvider:
     """构造 VRChatProvider 并注册到 registry；给了字幕服务且开了聊天框时，
     把聊天框登记为字幕后端（跟随字幕服务已选定的字幕源）。"""
-    provider = create_vrchat_provider(
-        config=config,
-        event_bus=event_bus,
-    )
+    provider = create_vrchat_provider(config=config, event_bus=event_bus, tracking=tracking)
     registry.register_provider(provider)
     if subtitle_service is not None and provider.chatbox.enabled:
         subtitle_service.register_backend(provider.chatbox)

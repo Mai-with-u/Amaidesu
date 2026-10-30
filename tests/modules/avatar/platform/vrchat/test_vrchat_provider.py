@@ -1,14 +1,19 @@
-"""VRChatProvider：默认动作表对应 SDK 默认 VRCEmote、动作写参数后延迟归零、聊天框随字幕服务显示（不连真实 VRChat）"""
+"""VRChatProvider：默认动作表对应 SDK 默认 VRCEmote、动作写参数后延迟归零、聊天框随字幕服务显示、面捕驱动挂载与动作片段登记（不连真实 VRChat）"""
 
 from __future__ import annotations
 
 import asyncio
+import random
 from unittest.mock import MagicMock
+
+import pytest
 
 from src.modules.avatar.platform.vrchat.chatbox import CHATBOX_MAX_CHARS, VRChatChatboxBackend, fit_chatbox_text
 from src.modules.avatar.platform.vrchat.vrchat_provider import VRChatProvider, register_vrchat_tools
+from src.modules.avatar.tracking import TrackingConfig, TrackingRuntime
 from src.modules.subtitle.service import SubtitleService
 from src.modules.tools.registry import ToolRegistry
+from tests.helpers import FakeClock
 
 
 def _connected(**config) -> VRChatProvider:
@@ -90,3 +95,31 @@ def test_connection_summary_reflects_connection_flag() -> None:
     summary = provider.connection_summary()
     assert summary["is_connected"] is True
     assert summary["stats"]["is_connected"] is True
+
+
+def _tracking(clock: FakeClock) -> TrackingRuntime:
+    config = TrackingConfig(blink_enabled=False, gaze_enabled=False, head_wander_enabled=False)
+    return TrackingRuntime(config, clock=clock.now_ms, rng=random.Random(0), run_loop=False)
+
+
+async def test_setup_attaches_the_face_driver_and_registers_emotes_as_clips(fake_clock: FakeClock) -> None:
+    tracking = _tracking(fake_clock)
+    provider = VRChatProvider(config={"emote_reset_ms": 0}, tracking=tracking)
+    await provider.setup()
+    provider.osc_client = MagicMock()  # 换成记录用的假客户端（setup 已建好真实客户端，不实际发送）
+    assert tracking.driver_names == ["vrchat"] and provider.list_tools() == []
+    clips = {e["name"] for e in tracking.action_catalog() if e["kind"] == "vrchat 片段"}
+    assert clips == set(provider.emotes)
+    assert await tracking.act("Wave") is True
+    await tracking.tick_once()
+    addresses = [c.args[0] for c in provider.osc_client.send_message.call_args_list]
+    assert "/avatar/parameters/VRCEmote" in addresses and "/tracking/eye/EyesClosedAmount" in addresses
+
+    assert (await provider.set_expression("happy", 0.8)).success and tracking.current_emotion() == "happy"
+    await provider.cleanup()
+    assert tracking.driver_names == []
+
+
+def test_markers_config_rejects_unknown_names() -> None:
+    with pytest.raises(ValueError, match="未知的风格化标记"):
+        VRChatProvider(config={"markers": {"rainbow": "Rainbow"}})
