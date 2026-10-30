@@ -4,7 +4,8 @@
 - ``SessionRecapWriter``：原料来自库表；空场次与未结账不写；LLM 失败不写；
   已有回顾不重写；启动补写待办只列已结束且没整理完的；注入渲染排除本场、只取同类型场次
 - ``RegularsRosterWriter``：互动门槛、每场人数上限、只取上次整理后的新话（同场重复
-  收尾不空转）、LLM 失败逐人降级、观众真假与场次类型相符；付费明细原料行
+  收尾不空转）、没建档的与印象最久没更新的先来、只付费不说话的也建档、LLM 失败逐人
+  降级、观众真假与场次类型相符；付费明细原料行
 - ``LongMemoryWriter``：模型只给条目操作、按场次类型选文件、写回留底、没有回顾不动、
   输出读不出或模型失败保留旧版本、合并期间被人改过就在新版本上重做、每场只合并一次
 - ``build_memory_tool_provider``：往前第 n 场、排除本场、只数同类型场次、按昵称查印象
@@ -42,7 +43,7 @@ from src.modules.storage.models.chat import GiftRecord, GuardRecord, SuperChatRe
 from src.modules.tools import ToolInvocation, ToolRegistry
 from tests.agents.streamer.helpers import ActiveSessionStub
 from tests.modules.llm.fakes import FakeLLMManager
-from tests.modules.storage.viewer_seed import seed_message
+from tests.modules.storage.viewer_seed import seed_gift, seed_message
 
 
 # 登记（驱动/只读穿透，合并时进底账）：直接驱动生命周期处理器与后台善后
@@ -565,6 +566,55 @@ async def test_roster_only_updates_viewers_matching_session_kind(
 
     await store.sessions.delete_live_session(live_session_id=pk)
     assert await writer.update_for_session(pk) == 0
+
+
+@pytest.mark.asyncio
+async def test_roster_rotates_to_viewers_without_or_with_oldest_profile(store: SQLiteDatabase) -> None:
+    """每场只更新几位时轮着来：没建档的先于话更多、刚更新过的常客；这场只说了一句的不算候选。"""
+    pk = await _ended_session(store)
+    for i in range(6):
+        talker = await _viewer_says(store, pk, "u_talk", "话痨", f"话痨第{i}句", 1_000 + i)
+    for i in range(3):
+        await _viewer_says(store, pk, "u_quiet", "老观众", f"老观众第{i}句", 2_000 + i)
+    for i in range(3):
+        await seed_message(store.viewers, platform="bilibili", user_id="u_once", user_name="路过", timestamp_ms=i)
+    await _viewer_says(store, pk, "u_once", "路过", "就说一句", 3_000)
+    await store.viewer_profiles.upsert_profile(viewer_id=talker, profile_text="旧印象", last_compressed_at_ms=500)
+    llm = _llm("轮到的印象")
+
+    assert await _roster_writer(store, llm, min_interactions=3, batch_max=1).update_for_session(pk) == 1
+    assert await _profile_text(store, "u_quiet") == "轮到的印象"
+    assert await _profile_text(store, "u_talk") == "旧印象"
+    assert await _profile_text(store, "u_once") is None
+
+
+@pytest.mark.asyncio
+async def test_roster_builds_profile_for_paying_viewer_who_never_chats(store: SQLiteDatabase) -> None:
+    """只送礼不说话的观众也是候选：原料里写明这场没说话、只有付费。"""
+    pk = await _ended_session(store)
+    for i in range(3):
+        viewer_id = await seed_gift(
+            store.viewers, platform="bilibili", user_id="u_gift", user_name="大佬", timestamp_ms=i
+        )
+    await store.chat.insert_gift(
+        live_session_id=pk,
+        timestamp_ms=2_000,
+        platform="bilibili",
+        user_id="u_gift",
+        user_name="大佬",
+        gift_name="小电视",
+        quantity=1,
+        total_price=1_245_000,
+        currency="gold",
+        viewer_id=viewer_id,
+        id_kind="account",
+    )
+    llm = _llm("送礼大佬，不爱说话")
+
+    assert await _roster_writer(store, llm, min_interactions=3).update_for_session(pk) == 1
+    assert await _profile_text(store, "u_gift") == "送礼大佬，不爱说话"
+    prompt = llm.generate.await_args.args[0]
+    assert "（这场没说话，只有付费）" in prompt and "小电视" in prompt
 
 
 @pytest.mark.asyncio

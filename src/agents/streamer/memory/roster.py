@@ -1,17 +1,20 @@
-"""观众画像：收播时为本场最活跃的几位常客更新一句印象。
+"""观众画像：收播时为本场来过的常客轮流更新一句印象。
 
 直播是一对多广播，绝大多数弹幕是"666""来了"，真正能让主播认出一个人的
 信号集中在少数常客身上，而且大半是结构化的（付费、牌子、来了多少场）。
 所以画像不做逐条弹幕解析，而是在收播时批量整理：
 
-1. 候选 = 本场弹幕最多的观众（``live_chat`` 按人聚合），且 ``viewers`` 累计
-   互动量达门槛——不够格的不建档，自然也不会被注入；
-2. 每位候选的原料 = 旧印象 + 该观众本场在上次整理之后说过的话（原话）
+1. 候选 = 本场发过弹幕的观众（按条数取前一批）加上本场付过费的观众，且
+   ``viewers`` 累计互动量达门槛——不够格的不建档，自然也不会被注入；上次整理
+   之后这场没说上几句、也没付费的跳过；
+2. 排序轮换：还没建档的先来，其次是印象最久没更新的——每场只整理
+   ``batch_max`` 人，若总按弹幕数排，永远是那几位话最多的，排在后面的常客和
+   只送礼不说话的观众一直建不了档；
+3. 每位候选的原料 = 旧印象 + 该观众本场在上次整理之后说过的话（原话）
    + 付费与身份记录（累计付费、最近明细、付费时的牌子/舰队快照，直接查表取得）；
-3. 一次 LLM 调用融合成新印象，写回 ``viewer_profiles``，并把已整理到的
-   时间点推进到当下。
+   一次 LLM 调用融合成新印象，写回 ``viewer_profiles``，并把已整理到的时间点推进到当下。
 
-单场最多更新 ``batch_max`` 人，失败逐人降级（该人印象不动、已整理时刻不推，下场再来）。
+失败逐人降级（该人印象不动、已整理时刻不推，下场再来）。
 
 画像不跨场次类型更新：正式场只更新真实观众，彩排场只更新模拟观众。开发者
 在彩排里接真实房间、或用控制台调试，都不会改写真实观众的印象。
@@ -19,7 +22,8 @@
 
 from __future__ import annotations
 
-from typing import Any, List
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
@@ -38,8 +42,11 @@ logger = get_logger("RegularsRosterWriter")
 # 印象系统提示词模板键（正文见 prompts/profile_system.md）
 _PROFILE_SYSTEM_TEMPLATE = "profile_system"
 
-# 原料上限：候选扫描倍数、每人本场原话条数、单条长度、付费明细条数
-_CANDIDATE_SCAN_FACTOR = 3
+# 候选与原料上限：扫描的发言人数、每类付费明细行数、上次整理后至少说了几句才值得更新、
+# 每人本场原话条数、单条长度、付费明细条数
+_SPEAKER_SCAN_ROWS = 50
+_PAYER_SCAN_ROWS = 200
+_MIN_NEW_MESSAGES = 2
 _MESSAGE_ROWS = 30
 _MESSAGE_LINE_CHARS = 80
 _PAYMENT_MATERIAL_ROWS = 3
@@ -117,6 +124,18 @@ async def collect_payment_material(chat_repo: Any, viewer_id: int, *, rows: int 
     return lines
 
 
+@dataclass
+class _Candidate:
+    """一位可更新画像的观众：旧印象、上次整理之后的本场原话、上次整理之后这场有没有付费。"""
+
+    viewer_id: int
+    nickname: str
+    old_text: str
+    watermark: int
+    messages: List[Any]
+    paid: bool
+
+
 class RegularsRosterWriter:
     """观众画像的收播更新器：挑候选 → 逐人取原料 → LLM 融合 → 写回印象。"""
 
@@ -146,43 +165,90 @@ class RegularsRosterWriter:
         self._system_prompt: str = ""
 
     async def update_for_session(self, live_session_id: int) -> int:
-        """为本场达门槛的最活跃常客更新印象，返回更新人数。
+        """为本场来过、达门槛的常客轮流更新印象，返回更新人数。
 
-        候选按本场弹幕数倒序扫描，扫描条数是批次上限的几倍——不够格的
-        被门槛筛掉后仍能凑满一批；凑满 ``batch_max`` 即停。场次行不存在
-        （已删除）时不更新；彩排场只看模拟观众，正式场只看真实观众。
+        候选 = 本场发言人（按弹幕数取前一批）+ 本场付过费的；按"没建档的先来、其次印象最久
+        没更新的"排序，取 ``batch_max`` 人。场次行不存在（已删除）时不更新；彩排场只看
+        模拟观众，正式场只看真实观众。
         """
+        sid = int(live_session_id)
         try:
-            session_row = await self._sessions.get_live_session(live_session_id=int(live_session_id))
+            session_row = await self._sessions.get_live_session(live_session_id=sid)
         except Exception as exc:
-            logger.warning(f"读取场次类型失败（场次 {live_session_id}），不更新画像: {exc}")
+            logger.warning(f"读取场次类型失败（场次 {sid}），不更新画像: {exc}")
             return 0
         if session_row is None:
-            logger.debug(f"场次 {live_session_id} 不存在，跳过画像更新")
+            logger.debug(f"场次 {sid} 不存在，跳过画像更新")
             return 0
         want_simulated = session_row.kind == SESSION_KIND_REHEARSAL
         try:
-            speakers = await self._chat.list_session_speakers(
-                live_session_id=int(live_session_id), limit=self._batch_max * _CANDIDATE_SCAN_FACTOR
-            )
+            names, payments = await self._session_people(sid)
         except Exception as exc:
-            logger.warning(f"读取本场发言人失败（场次 {live_session_id}）: {exc}")
+            logger.warning(f"读取本场发言人与付费观众失败（场次 {sid}）: {exc}")
             return 0
-        updated = 0
-        for row in speakers:
-            if updated >= self._batch_max:
-                break
-            viewer_id = row.viewer_id
+        candidates: List[_Candidate] = []
+        for viewer_id, nickname in names.items():
             if not await self._meets_threshold(viewer_id, want_simulated=want_simulated):
                 continue
             try:
-                if await self._update_one(int(live_session_id), viewer_id, row.user_name or ""):
+                candidate = await self._candidate(sid, viewer_id, nickname, payments.get(viewer_id))
+            except Exception as exc:
+                logger.warning(f"读取常客原料失败（viewer {viewer_id}，跳过该人）: {exc}")
+                continue
+            if candidate is not None:
+                candidates.append(candidate)
+        # 没建档的先来（已整理时刻为 0），其次印象最久没更新的；同样旧的话多的先来
+        candidates.sort(key=lambda item: (item.watermark, -len(item.messages)))
+        updated = 0
+        for candidate in candidates[: self._batch_max]:
+            try:
+                if await self._update_one(candidate):
                     updated += 1
             except Exception as exc:
-                logger.warning(f"常客印象更新失败（viewer {viewer_id}，跳过该人）: {exc}")
+                logger.warning(f"常客印象更新失败（viewer {candidate.viewer_id}，跳过该人）: {exc}")
         if updated:
-            logger.info(f"观众画像已更新 {updated} 人（场次 {live_session_id}）")
+            logger.info(f"观众画像已更新 {updated} 人（场次 {sid}，候选 {len(candidates)} 人）")
         return updated
+
+    async def _session_people(self, sid: int) -> Tuple[Dict[int, str], Dict[int, int]]:
+        """本场发言人与付费观众（观众编号 → 昵称），以及每位付费观众本场最后一次付费的时刻。"""
+        names: Dict[int, str] = {}
+        for speaker in await self._chat.list_session_speakers(live_session_id=sid, limit=_SPEAKER_SCAN_ROWS):
+            names[int(speaker.viewer_id)] = speaker.user_name or ""
+        payments: Dict[int, int] = {}
+        for loader in (
+            self._chat.list_session_gifts,
+            self._chat.list_session_super_chats,
+            self._chat.list_session_guards,
+        ):
+            for row in await loader(live_session_id=sid, limit=_PAYER_SCAN_ROWS):
+                if row.viewer_id is None:
+                    continue
+                viewer_id = int(row.viewer_id)
+                names.setdefault(viewer_id, row.user_name or "")
+                payments[viewer_id] = max(payments.get(viewer_id, 0), int(row.timestamp_ms or 0))
+        return names, payments
+
+    async def _candidate(
+        self, sid: int, viewer_id: int, nickname: str, last_paid_ms: Optional[int]
+    ) -> Optional[_Candidate]:
+        """上次整理之后这场说了够多的话、或付过费，才算本场候选；否则返回 None（不空转）。"""
+        existing = await self._profiles.get_profile(viewer_id=viewer_id)
+        watermark = existing.last_compressed_at_ms if existing is not None else 0
+        messages = await self._chat.list_session_viewer_messages(
+            live_session_id=sid, viewer_id=viewer_id, since_ms=watermark, limit=_MESSAGE_ROWS
+        )
+        paid = last_paid_ms is not None and last_paid_ms > watermark
+        if len(messages) < _MIN_NEW_MESSAGES and not paid:
+            return None
+        return _Candidate(
+            viewer_id=viewer_id,
+            nickname=nickname,
+            old_text=existing.profile_text if existing is not None else "",
+            watermark=watermark,
+            messages=list(messages),
+            paid=paid,
+        )
 
     async def _meets_threshold(self, viewer_id: int, *, want_simulated: bool) -> bool:
         """``viewers`` 累计互动量达门槛、且真假与场次类型相符才建档；统计行缺失视为不达标。"""
@@ -195,27 +261,17 @@ class RegularsRosterWriter:
             return False
         return (stats.interaction_count or 0) >= self._min_interactions
 
-    async def _update_one(self, live_session_id: int, viewer_id: int, nickname: str) -> bool:
+    async def _update_one(self, candidate: _Candidate) -> bool:
         """单人更新：旧印象 + 上次整理之后的本场原话 + 付费记录 → LLM → 写回并推进已整理时刻。"""
-        existing = await self._profiles.get_profile(viewer_id=viewer_id)
-        old_text = existing.profile_text if existing is not None else ""
-        watermark = existing.last_compressed_at_ms if existing is not None else 0
-
-        messages = await self._chat.list_session_viewer_messages(
-            live_session_id=live_session_id,
-            viewer_id=viewer_id,
-            since_ms=watermark,
-            limit=_MESSAGE_ROWS,
-        )
-        if not messages:
-            return False  # 上次整理之后没新话（同一场重复收尾），不空转
-
+        viewer_id = candidate.viewer_id
         prompt_parts = [
-            f"观众：{nickname or f'观众 #{viewer_id}'}",
-            f"【旧印象】\n{old_text}" if old_text else "【旧印象】（无，首次建档）",
+            f"观众：{candidate.nickname or f'观众 #{viewer_id}'}",
+            f"【旧印象】\n{candidate.old_text}" if candidate.old_text else "【旧印象】（无，首次建档）",
             "【这场说过的话】",
-            *[f"- {(message.content or '').strip()[:_MESSAGE_LINE_CHARS]}" for message in messages],
+            *[f"- {(message.content or '').strip()[:_MESSAGE_LINE_CHARS]}" for message in candidate.messages],
         ]
+        if not candidate.messages:
+            prompt_parts.append("（这场没说话，只有付费）")
         structured_lines = await collect_payment_material(self._chat, viewer_id)
         if structured_lines:
             prompt_parts.append("【付费与身份】")
