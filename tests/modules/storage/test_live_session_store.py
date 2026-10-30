@@ -156,3 +156,19 @@ async def test_background_tick_without_session_manager_creates_nothing(store: SQ
     """心跳不建行：场次行归 LiveSessionManager 管。"""
     await _maintainer(store)._light_tick(now_ms=5_000)
     assert await store.execute("SELECT * FROM live_sessions") == []
+
+
+async def test_recapped_session_ids_count_only_same_kind_with_recap(store: SQLiteDatabase) -> None:
+    """长期笔记数"隔了几场"只认同类型、写过回顾的场次（升序）。"""
+    sessions = store.sessions
+    ids = []
+    for kind, recap in (("live", True), ("live", False), ("rehearsal", True), ("live", True)):
+        pk = await sessions.insert_live_session(started_at_ms=1_000, kind=kind)
+        await sessions.close_live_session(live_session_id=pk, ended_at_ms=2_000)
+        if recap:
+            await store.recaps.upsert_recap(
+                live_session_id=pk, started_at_ms=1_000, ended_at_ms=2_000, recap_text="回顾"
+            )
+        ids.append(pk)
+    assert await sessions.list_recapped_session_ids(kind="live") == [ids[0], ids[3]]
+    assert await sessions.list_recapped_session_ids(kind="rehearsal") == [ids[2]]

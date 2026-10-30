@@ -133,6 +133,23 @@ class SessionRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def list_recapped_session_ids(self, *, kind: SessionKind) -> List[int]:
+        """某类场次里写过回顾的场次主键（升序）；长期笔记按它数"隔了几场"。
+
+        没写成回顾的场次（空场次、整理失败）不算一场：主播在那几场里没留下可回忆的东西。
+        """
+
+        def _exec() -> List[int]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT s.id FROM live_sessions s JOIN session_recaps r ON r.live_session_id = s.id"
+                    " WHERE s.kind=? ORDER BY s.id ASC",
+                    (kind,),
+                ).fetchall()
+                return [int(row[0]) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
     async def get_live_session(self, *, live_session_id: int) -> Optional[LiveSession]:
         """按场次主键查单行；未命中返回 None。"""
 

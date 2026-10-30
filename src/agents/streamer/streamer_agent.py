@@ -38,6 +38,7 @@ from collections import deque
 from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 from src.modules.agents.base import AgentState, BaseAgent
+from src.modules.agents.control import PROVIDER_NAME as FRAMEWORK_PROVIDER
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
@@ -68,6 +69,7 @@ from .memory import (
     build_memory_tool_provider,
     build_notebook_tool_provider,
     emit_notebook_changed,
+    format_long_memory,
 )
 from .message_buffer import MessageBuffer
 from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
@@ -308,7 +310,7 @@ class StreamerAgent(BaseAgent):
                 reply_provider_factory=lambda: self._reply_provider,
                 elapsed_live_provider=self._rundown_coord.get_elapsed_live_ms,
                 notebook_text_provider=self._notebook.read,
-                long_memory_provider=lambda: self._scope.long_memory,
+                long_memory_provider=lambda: format_long_memory(self._scope.long_memory),
                 action_recorder=self._record_delegation,
                 delegation_status_provider=self._delegation_machine_status if task_ledger is not None else None,
             )
@@ -406,8 +408,8 @@ class StreamerAgent(BaseAgent):
                 max_length=memory_cfg.recap_max_length,
                 event_bus=event_bus,
             )
-        # 长期记忆（MEMORY.md）：收播时把本场回顾与备忘录合并进去，开播时整份注入；
-        # 原料以本场回顾为主，没有回顾仓储就不启用
+        # 长期记忆（MEMORY.md）：收播时按条目合并本场的新东西（原料与回顾同一份）、让没人再提的
+        # 条目淡出，开播时去掉标签注入；原料以本场回顾为主，没有回顾仓储就不启用
         self._long_memory_writer: Optional[LongMemoryWriter] = None
         if (
             memory_cfg.long_memory_enabled
@@ -421,8 +423,13 @@ class StreamerAgent(BaseAgent):
                 recap_repo=recap_repo,
                 llm_service=llm_manager,
                 prompt_manager=prompt_manager,
+                chat_repo=chat_repo,
+                material_provider=self._recap_writer.collect_material if self._recap_writer is not None else None,
                 notebook_text_provider=self._session_notebook_text,
+                persona_text=f"名字：{config.persona.bot_name}；性格：{config.persona.personality}",
+                games_provider=self._game_names,
                 max_chars=memory_cfg.long_memory_max_chars,
+                stale_sessions=memory_cfg.long_memory_stale_sessions,
             )
         self._roster_writer: Optional[RegularsRosterWriter] = None
         if (
@@ -553,7 +560,7 @@ class StreamerAgent(BaseAgent):
                 segment_provider=self._current_segment_title,
                 scene_reader=self._read_scene_brief,
                 is_live=lambda: self._live_active,
-                long_memory_provider=lambda: self._scope.long_memory,
+                long_memory_provider=lambda: format_long_memory(self._scope.long_memory),
                 profile=_PROFILE_REPLYER,
             )
         if self._mouth is not None:
@@ -969,6 +976,16 @@ class StreamerAgent(BaseAgent):
             return None
         pk = getattr(self._session_manager, "active_pk", None)
         return int(pk) if isinstance(pk, int) else None
+
+    def _game_names(self) -> List[str]:
+        """当前对主播可见的游戏工具面名（框架的委派工具面不算游戏）；没有注册表时为空。"""
+        if self._tool_registry is None:
+            return []
+        return [
+            provider
+            for provider, _guide in self._tool_registry.guides(for_agent="streamer")
+            if provider != FRAMEWORK_PROVIDER
+        ]
 
     async def _persist_notebook(self, text: str) -> None:
         """把备忘录全文落进进行中场次的场次行；未开播（调试闲聊）或没有场次表时不落盘。"""

@@ -5,8 +5,8 @@
   已有回顾不重写；启动补写待办只列已结束且没整理完的；注入渲染排除本场、只取同类型场次
 - ``RegularsRosterWriter``：互动门槛、每场人数上限、只取上次整理后的新话（同场重复
   收尾不空转）、LLM 失败逐人降级、观众真假与场次类型相符；付费明细原料行
-- ``LongMemoryWriter``：旧笔记 + 本场回顾 + 备忘录合并、按场次类型选文件、没有回顾不动、
-  超上限压缩一次仍超就保留旧版本、模型失败保留旧版本、每场只合并一次
+- ``LongMemoryWriter``：模型只给条目操作、按场次类型选文件、写回留底、没有回顾不动、
+  输出读不出或模型失败保留旧版本、合并期间被人改过就在新版本上重做、每场只合并一次
 - ``build_memory_tool_provider``：往前第 n 场、排除本场、只数同类型场次、按昵称查印象
 - ``StreamerAgent``：两仓储齐全才注册记忆工具；开播按场次类型装入上场回顾与长期记忆；
   收播写回顾、整理长期记忆并更新观众画像后记整理完成；停止打断的整理下次启动从断点补完
@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -172,6 +173,7 @@ def _long_writer(
         store=store.long_memory,
         sessions_repo=store.sessions,
         recap_repo=store.recaps,
+        chat_repo=store.chat,
         llm_service=llm,
         prompt_manager=_prompts(),
         notebook_text_provider=notebook_of,
@@ -392,25 +394,39 @@ async def test_render_recent_reads_same_kind_only(store: SQLiteDatabase) -> None
 # ---------------------------------------------------------------------------
 
 
+def _ops(*ops: dict) -> str:
+    """长期记忆整理的模型回复：操作 JSON。"""
+    return json.dumps({"ops": list(ops)}, ensure_ascii=False)
+
+
 @pytest.mark.asyncio
-async def test_long_memory_merges_recap_and_notebook_into_same_kind_file(store: SQLiteDatabase) -> None:
-    """原料 = 旧笔记 + 本场回顾 + 备忘录；正式场写正式那份，彩排场写彩排那份，互不改写。"""
-    await store.long_memory.write("live", "## 老梗与口头禅\n- 床名一直没定")
+async def test_long_memory_applies_item_ops_with_material_and_history(store: SQLiteDatabase) -> None:
+    """模型只给条目操作：原料含编号清单、人设、观众名单、回顾与整理原料；约定挂到名单里的观众；
+    没动到的行原样保留；写回留底（来由、场次、改动）；正式与彩排各一份。"""
+    await store.long_memory.write("live", "## 老梗与口头禅\n- 床名一直没定〔始于 #1 · 最近 #1〕")
     live_pk = await _recapped_session(store, "这场我答应老王下场去挖钻石")
-    llm = _responses("## 答应过的事\n- 我答应老王挖钻石（未兑现）")
+    viewer_id = await _viewer_says(store, live_pk, "u1", "老王", "下场挖钻石！", 2_000)
+    llm = _responses(
+        _ops({"op": "add", "section": "答应过的事", "text": "我答应老王下场挖钻石", "viewer_id": viewer_id})
+    )
 
     text = await _long_writer(store, llm, notebook="床名定成咕咕床").consolidate(live_pk)
 
-    assert text == "## 答应过的事\n- 我答应老王挖钻石（未兑现）"
-    assert await store.long_memory.read("live") == text
+    assert text is not None and "- 床名一直没定〔始于 #1 · 最近 #1〕" in text
+    assert f"- 我答应老王下场挖钻石〔未兑现 · 对 老王#{viewer_id} · 始于 #{live_pk} · 最近 #{live_pk}〕" in text
     prompt = llm.generate.await_args.args[0]
-    for marker in ("床名一直没定", "这场我答应老王下场去挖钻石", "床名定成咕咕床"):
+    for marker in ("[1] 〔老梗与口头禅〕床名一直没定", "这场我答应老王下场去挖钻石", "床名定成咕咕床",
+                   f"#{viewer_id} 老王", "【主播的人设】"):  # fmt: skip
         assert marker in prompt
-    assert await store.long_memory.read("rehearsal") == ""
+    entry = (await store.long_memory.list_history("live"))[0]  # 最新一条是这次合并
+    assert (entry.session_id, entry.reason) == (live_pk, f"收播整理（场次 #{live_pk}）")
+    assert entry.changes == [f"新增〔答应过的事〕我答应老王下场挖钻石（对 老王#{viewer_id}）"]
 
     rehearsal_pk = await _recapped_session(store, "调试时说要挖钻石", kind="rehearsal")
-    await _long_writer(store, _responses("彩排里记的")).consolidate(rehearsal_pk)
-    assert await store.long_memory.read("rehearsal") == "彩排里记的"
+    await _long_writer(store, _responses(_ops({"op": "add", "section": "长线目标", "text": "彩排里记的"}))).consolidate(
+        rehearsal_pk
+    )
+    assert "彩排里记的" in await store.long_memory.read("rehearsal")
     assert await store.long_memory.read("live") == text
 
 
@@ -429,19 +445,34 @@ async def test_long_memory_untouched_without_recap_or_on_llm_failure(store: SQLi
 
 
 @pytest.mark.asyncio
-async def test_long_memory_over_limit_compresses_once_then_keeps_old(store: SQLiteDatabase) -> None:
-    """超上限让模型压缩一次；压缩后合规就写，仍超出就保留旧版本，不截成半句。"""
-    await store.long_memory.write("live", "旧笔记")
+async def test_long_memory_keeps_old_version_when_output_unreadable(store: SQLiteDatabase) -> None:
+    """模型没给出操作（写成了散文）：保留旧版本、不记合并时刻，下次还能再并。"""
+    await store.long_memory.write("live", "## 老梗与口头禅\n- 嘴硬〔最近 #1〕")
     pk = await _recapped_session(store, "这场聊了很多")
 
-    llm = _responses("长" * 400, "压缩后的笔记")
-    assert await _long_writer(store, llm, max_chars=300).consolidate(pk) == "压缩后的笔记"
-    assert llm.generate.await_count == 2
-    assert "超过了 300 字的上限" in llm.generate.await_args_list[1].args[0]
+    assert await _long_writer(store, _responses("这场没什么要记的，笔记照旧。")).consolidate(pk) is None
+    assert await store.long_memory.read("live") == "## 老梗与口头禅\n- 嘴硬〔最近 #1〕"
+    recap = await store.recaps.get_recap(live_session_id=pk)
+    assert recap is not None and recap.long_memory_merged_at_ms is None
 
-    stubborn = _responses("长" * 400, "还是" * 200)
-    assert await _long_writer(store, stubborn, max_chars=300).consolidate(pk) is None
-    assert await store.long_memory.read("live") == "压缩后的笔记"
+
+@pytest.mark.asyncio
+async def test_long_memory_redoes_ops_on_version_saved_during_merge(store: SQLiteDatabase) -> None:
+    """模型思考期间有人在 WebUI 保存了笔记：在新版本上重做同一批操作，人的改动不被覆盖。"""
+    await store.long_memory.write("live", "## 老梗与口头禅\n- 嘴硬〔最近 #1〕")
+    pk = await _recapped_session(store, "这场又嘴硬了")
+    reply = MagicMock()
+    reply.ok, reply.content = True, _ops({"op": "add", "section": "长线目标", "text": "盖海景房"})
+
+    async def human_saves_meanwhile(*_args: Any, **_kwargs: Any) -> Any:
+        await store.long_memory.write("live", "## 老梗与口头禅\n- 嘴硬〔最近 #1〕\n- 人刚加的〔人工〕")
+        return reply
+
+    llm = MagicMock()
+    llm.generate = AsyncMock(side_effect=human_saves_meanwhile)
+    text = await _long_writer(store, llm).consolidate(pk)
+
+    assert text is not None and "- 人刚加的〔人工〕" in text and "- 盖海景房〔" in text
 
 
 @pytest.mark.asyncio
@@ -452,17 +483,20 @@ async def test_long_memory_merges_each_session_once(store: SQLiteDatabase) -> No
     recap = await store.recaps.get_recap(live_session_id=pk)
     assert recap is not None and recap.long_memory_merged_at_ms is None  # 失败不记，留给下次
 
-    assert await _long_writer(store, _responses("第一次合并")).consolidate(pk) == "第一次合并"
+    first = await _long_writer(
+        store, _responses(_ops({"op": "add", "section": "长线目标", "text": "挖钻石"}))
+    ).consolidate(pk)
+    assert first is not None and "挖钻石" in first
     recap = await store.recaps.get_recap(live_session_id=pk)
     assert recap is not None and recap.long_memory_merged_at_ms is not None
 
     again = _responses("不该再并")
     assert await _long_writer(store, again).consolidate(pk) is None
     again.generate.assert_not_awaited()
-    assert await store.long_memory.read("live") == "第一次合并"
+    assert await store.long_memory.read("live") == first
 
     unchanged_pk = await _recapped_session(store, "这场没新东西")
-    assert await _long_writer(store, _responses("第一次合并")).consolidate(unchanged_pk) == "第一次合并"
+    assert await _long_writer(store, _responses(_ops())).consolidate(unchanged_pk) == first
     unchanged = await store.recaps.get_recap(live_session_id=unchanged_pk)
     assert unchanged is not None and unchanged.long_memory_merged_at_ms is not None
 
@@ -755,15 +789,16 @@ async def test_bootstrap_backfills_recap_roster_and_section(store: SQLiteDatabas
     await _streamer_says(store, pk, "下场继续挖", 2_000)
     for i in range(3):
         await _viewer_says(store, pk, "u1", "老王", f"第{i}句", 3_000 + i)
-    agent = _build_agent(store, _llm("补写结果"))
+    reply = _ops({"op": "add", "section": "长线目标", "text": "补写结果"})
+    agent = _build_agent(store, _llm(reply))
 
     await agent._bootstrap_recaps()
 
     assert await store.recaps.get_recap(live_session_id=pk) is not None
-    assert await _profile_text(store, "u1") == "补写结果"
+    assert await _profile_text(store, "u1") == reply
     assert "补写结果" in agent._session_recap_text()
-    assert await store.long_memory.read("live") == "补写结果"  # 补写的场次也合并进长期记忆
-    assert agent._scope.long_memory == "补写结果"
+    assert "- 补写结果〔" in await store.long_memory.read("live")  # 补写的场次也合并进长期记忆
+    assert "- 补写结果〔" in agent._scope.long_memory
     assert await store.recaps.list_unsettled_sessions(limit=5) == []  # 补完记整理完成
 
 
@@ -774,15 +809,16 @@ async def test_live_ended_settles_recap_and_roster(store: SQLiteDatabase) -> Non
     await _streamer_says(store, pk, "下场继续挖", 2_000)
     for i in range(3):
         await _viewer_says(store, pk, "u1", "老王", f"第{i}句", 3_000 + i)
-    agent = _build_agent(store, _llm("整理结果"))
+    reply = _ops({"op": "add", "section": "长线目标", "text": "整理结果"})
+    agent = _build_agent(store, _llm(reply))
 
     await agent._on_live_ended("live.ended", LiveEndedPayload(live_session_id=pk), "test")
     await asyncio.gather(*agent._memory_tasks)
 
     recap = await store.recaps.get_recap(live_session_id=pk)
     assert recap is not None and recap.settled_at_ms is not None  # 三步走完记整理完成
-    assert await _profile_text(store, "u1") == "整理结果"
-    assert await store.long_memory.read("live") == "整理结果"  # 回顾之后合并进长期记忆
+    assert await _profile_text(store, "u1") == reply
+    assert "- 整理结果〔" in await store.long_memory.read("live")  # 回顾之后合并进长期记忆
 
     other_pk = await _ended_session(store)
     await _streamer_says(store, other_pk, "又一场", 2_000)
@@ -865,7 +901,7 @@ def _settle_step(call: dict[str, Any]) -> str:
     prompt = str(call["input"])
     if prompt.startswith("以下是这一场直播留下的记录"):
         return "回顾"
-    if prompt.startswith("【现在的长期笔记】"):
+    if prompt.startswith("【现在的笔记】"):
         return "长期记忆"
     if prompt.startswith("观众："):
         return "画像"
@@ -895,7 +931,9 @@ async def test_stop_mid_settle_resumes_remaining_steps_on_next_boot(
     for i in range(3):
         await _viewer_says(store, pk, "u1", "老王", f"第{i}句", 3_000 + i)
     gate = asyncio.Event()
-    llm = FakeLLMManager(Response(success=True, content="停机前写的"), gate=gate)
+    llm = FakeLLMManager(
+        Response(success=True, content=_ops({"op": "add", "section": "长线目标", "text": "停机前写的"})), gate=gate
+    )
     agent = _build_agent(store, llm)
     # 启动善后补写这场：放行前几步，停在下一步的 LLM 调用上
     await agent.start()
@@ -906,20 +944,22 @@ async def test_stop_mid_settle_resumes_remaining_steps_on_next_boot(
     await agent.stop()
 
     recap = await store.recaps.get_recap(live_session_id=pk)
-    assert recap is not None and recap.recap_text == "停机前写的" and recap.settled_at_ms is None
+    assert recap is not None and "停机前写的" in recap.recap_text and recap.settled_at_ms is None
     assert (recap.long_memory_merged_at_ms is not None) == (finished_steps >= 2)
     assert [row.live_session_id for row in await store.recaps.list_unsettled_sessions(limit=5)] == [pk]
 
-    rebooted_llm = FakeLLMManager(Response(success=True, content="重启后补的"))
+    rebooted_llm = FakeLLMManager(
+        Response(success=True, content=_ops({"op": "add", "section": "长线目标", "text": "重启后补的"}))
+    )
     rebooted = _build_agent(store, rebooted_llm)
     await rebooted._bootstrap_recaps()
 
     assert [_settle_step(call) for call in rebooted_llm.calls] == resumed_steps
     recap = await store.recaps.get_recap(live_session_id=pk)
-    assert recap is not None and recap.recap_text == "停机前写的" and recap.settled_at_ms is not None
+    assert recap is not None and "停机前写的" in recap.recap_text and recap.settled_at_ms is not None
     expected_memory = "停机前写的" if finished_steps >= 2 else "重启后补的"
-    assert await store.long_memory.read("live") == expected_memory
-    assert await _profile_text(store, "u1") == "重启后补的"
+    assert f"- {expected_memory}〔" in await store.long_memory.read("live")
+    assert "重启后补的" in await _profile_text(store, "u1")
 
     # 整理已记完成：再启动一次没有待办，不调模型
     rebooted_llm.calls.clear()
