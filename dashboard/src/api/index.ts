@@ -88,7 +88,9 @@ import type {
   TriggerProactiveRequest,
   TriggerProactiveResponse,
   LiveSessionListResponse,
+  LongMemoryHistoryResponse,
   LongMemoryResponse,
+  LongMemorySnapshotResponse,
   SessionKind,
   SessionRundownExecutionResponse,
   SessionTimelineResponse,
@@ -500,6 +502,8 @@ export const rundownApi = {
 // `PATCH / DELETE /memory/profiles/{viewerId}`：人工纠正 / 删除印象（按内部观众 ID）。
 // `GET /memory/stats`：总量统计（常客数 / 最近更新）。
 // `GET / PUT /memory/long-term/{kind}`：长期记忆全文读取 / 整份覆盖写（正式 / 彩排各一份）。
+// `GET /memory/long-term/{kind}/history[/{id}]`：留底记录 / 某次写之前的全文；
+// `POST .../history/{id}/restore`：恢复到某次写之前的版本（恢复本身也留底）。
 export const memoryApi = {
   listProfiles: (params?: { search?: string; limit?: number; offset?: number }) =>
     api.get<ViewerProfileListResponse>('/memory/profiles', { params }),
@@ -511,6 +515,12 @@ export const memoryApi = {
   getLongMemory: (kind: SessionKind) => api.get<LongMemoryResponse>(`/memory/long-term/${kind}`),
   saveLongMemory: (kind: SessionKind, text: string) =>
     api.put<LongMemoryResponse>(`/memory/long-term/${kind}`, { text }),
+  listLongMemoryHistory: (kind: SessionKind) =>
+    api.get<LongMemoryHistoryResponse>(`/memory/long-term/${kind}/history`),
+  getLongMemorySnapshot: (kind: SessionKind, entryId: string) =>
+    api.get<LongMemorySnapshotResponse>(`/memory/long-term/${kind}/history/${entryId}`),
+  restoreLongMemory: (kind: SessionKind, entryId: string) =>
+    api.post<LongMemoryResponse>(`/memory/long-term/${kind}/history/${entryId}/restore`),
 };
 
 // 场次复盘（只读聚合 + 数据包导出）

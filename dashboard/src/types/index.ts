@@ -1387,6 +1387,32 @@ export interface LongMemoryResponse {
   updated_at_ms: number;
 }
 
+/** 长期记忆的一条留底记录（GET /api/v1/memory/long-term/{kind}/history） */
+export interface LongMemoryHistoryItem {
+  id: string;
+  at_ms: number;
+  /** 来由：收播整理（场次 #N）/ WebUI 保存 / 恢复到记录 X 之前的版本 */
+  reason: string;
+  /** 收播整理时的场次主键；其余为 null */
+  session_id: number | null;
+  /** 逐条改动说明（收播整理才有） */
+  changes: string[];
+  /** 是否能恢复到这次之前（第一次写入之前没有文件） */
+  has_snapshot: boolean;
+}
+
+export interface LongMemoryHistoryResponse {
+  kind: SessionKind;
+  items: LongMemoryHistoryItem[];
+}
+
+/** 某条留底记录写之前的全文 */
+export interface LongMemorySnapshotResponse {
+  kind: SessionKind;
+  entry_id: string;
+  text: string;
+}
+
 export interface MemoryStatsResponse {
   profile_count: number;
   /** 最近一次印象更新时刻，空库为 0 */

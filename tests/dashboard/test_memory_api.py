@@ -101,3 +101,27 @@ async def test_long_memory_read_edit_per_kind_and_503_without_store(api, store: 
 
     bare = await api(event_bus=event_bus)
     assert (await bare.get("/api/v1/memory/long-term/live")).status_code == 503
+
+
+async def test_long_memory_history_snapshot_and_restore(api, store: SQLiteDatabase, event_bus) -> None:
+    """页面保存留底；历史新的在前、带来由；能看某次之前的全文并恢复；没有的记录 404。"""
+    client = await api(event_bus=event_bus, long_memory_store=store.long_memory)
+    await store.long_memory.write(
+        "live", "合并写的", reason="收播整理（场次 #3）", changes=["新增：合并写的"], session_id=3
+    )
+    await client.put("/api/v1/memory/long-term/live", json={"text": "页面改的"})
+
+    history = (await client.get("/api/v1/memory/long-term/live/history")).json()
+    assert [(item["reason"], item["session_id"]) for item in history["items"]] == [
+        ("WebUI 保存", None),
+        ("收播整理（场次 #3）", 3),
+    ]
+    assert history["items"][1]["changes"] == ["新增：合并写的"]
+    saved_id = history["items"][0]["id"]
+    snapshot = (await client.get(f"/api/v1/memory/long-term/live/history/{saved_id}")).json()
+    assert snapshot["text"] == "合并写的"
+
+    restored = (await client.post(f"/api/v1/memory/long-term/live/history/{saved_id}/restore")).json()
+    assert restored["text"] == "合并写的" and await store.long_memory.read("live") == "合并写的"
+    assert (await client.get("/api/v1/memory/long-term/live/history/nope")).status_code == 404
+    assert (await client.post("/api/v1/memory/long-term/live/history/nope/restore")).status_code == 404

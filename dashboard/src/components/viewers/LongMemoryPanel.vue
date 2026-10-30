@@ -4,8 +4,10 @@
       <div class="lm-title-block">
         <h2 class="lm-title">长期记忆</h2>
         <p class="lm-subtitle">
-          主播跨场次一直记着的事（答应过的事、老梗、长线目标）。每场收播自动整理，开播时整份带上；
-          这里改完保存，下一次开播起生效。
+          主播跨场次一直记着的事（答应过的事、老梗、长线目标、关于自己）。每场收播自动整理：只改动有新情况的条目，
+          连续几场没人再提的挪进"搁置"；开播时带上，对某位观众的约定只在 ta
+          发言时给。行尾〔〕里是状态标签；
+          你新加或改过的行会记为"人工"，之后整理只读不改。这里改完保存，下一次开播起生效。
         </p>
       </div>
       <span class="grow" />
@@ -46,6 +48,45 @@
         >保存</el-button
       >
     </footer>
+
+    <el-collapse class="lm-history" aria-label="长期记忆改动记录">
+      <el-collapse-item :title="`改动记录（${history.length}）`" name="history">
+        <div v-loading="historyLoading">
+          <p v-if="history.length === 0" class="lm-meta">还没有改动记录</p>
+          <div v-for="item in history" :key="item.id" class="lm-entry">
+            <div class="lm-entry-head">
+              <span class="mono lm-meta">{{ formatTime(item.at_ms) }}</span>
+              <span class="lm-entry-reason">{{ item.reason || '未注明来由' }}</span>
+              <span class="grow" />
+              <template v-if="item.has_snapshot">
+                <el-button size="small" link @click="onPeek(item.id)">看改之前</el-button>
+                <el-button
+                  size="small"
+                  link
+                  type="warning"
+                  :disabled="saving"
+                  @click="onRestore(item.id)"
+                  >撤回这次改动</el-button
+                >
+              </template>
+            </div>
+            <ul v-if="item.changes.length" class="lm-entry-changes">
+              <li v-for="(change, index) in item.changes" :key="index">{{ change }}</li>
+            </ul>
+          </div>
+        </div>
+      </el-collapse-item>
+    </el-collapse>
+
+    <el-dialog v-model="peekVisible" title="这次改动之前的长期记忆" width="640px">
+      <el-input
+        :model-value="peekText"
+        type="textarea"
+        readonly
+        :autosize="{ minRows: 6, maxRows: 24 }"
+        aria-label="改动之前的全文"
+      />
+    </el-dialog>
   </section>
 </template>
 
@@ -54,9 +95,10 @@
  * 长期记忆面板：查看与整份编辑 MEMORY.md（正式 / 彩排各一份）。
  *
  * 读写逻辑在 useLongMemory；本组件只负责展示与交互编排。切换类型时有未保存
- * 改动先确认，避免一键丢掉手写的内容。
+ * 改动先确认，避免一键丢掉手写的内容；撤回某次改动会覆盖编辑区，同样先确认。
+ * 改动记录列出每次写入的来由与逐条改动，可只读查看改之前的全文。
  */
-import { onMounted } from 'vue';
+import { onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useLongMemory } from '@/composables/useLongMemory';
 import { confirmAction } from '@/utils/confirmAction';
@@ -64,7 +106,10 @@ import { formatDateTimeCn as formatTime } from '@/utils/format';
 import type { SessionKind } from '@/types';
 
 const memory = useLongMemory();
-const { kind, draft, path, updatedAtMs, loading, saving, error, dirty } = memory;
+const { kind, draft, path, updatedAtMs, loading, saving, error, dirty, history, historyLoading } =
+  memory;
+const peekVisible = ref(false);
+const peekText = ref('');
 
 async function onSwitch(next: string | number | boolean | undefined): Promise<void> {
   if (next !== 'live' && next !== 'rehearsal') return;
@@ -79,6 +124,26 @@ async function onSwitch(next: string | number | boolean | undefined): Promise<vo
 
 async function onSave(): Promise<void> {
   if (await memory.save()) ElMessage.success('长期记忆已保存，下一次开播起生效');
+}
+
+async function onPeek(entryId: string): Promise<void> {
+  const text = await memory.loadSnapshot(entryId);
+  if (text === null) return;
+  peekText.value = text;
+  peekVisible.value = true;
+}
+
+async function onRestore(entryId: string): Promise<void> {
+  const warning = dirty.value ? '编辑区有未保存的改动，撤回会丢掉它们。' : '';
+  if (
+    !(await confirmAction(
+      `${warning}恢复到这次改动之前的版本？撤回本身也会记一条，可以再撤回。`,
+      '撤回改动',
+    ))
+  ) {
+    return;
+  }
+  if (await memory.restore(entryId)) ElMessage.success('已撤回，下一次开播起生效');
 }
 
 onMounted(() => {
@@ -131,5 +196,27 @@ onMounted(() => {
 }
 .grow {
   flex: 1;
+}
+.lm-history {
+  margin-top: 8px;
+  border: none;
+}
+.lm-entry {
+  padding: 6px 0;
+  border-top: 1px dashed var(--border-color-light);
+}
+.lm-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lm-entry-reason {
+  font-size: 12px;
+}
+.lm-entry-changes {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 </style>

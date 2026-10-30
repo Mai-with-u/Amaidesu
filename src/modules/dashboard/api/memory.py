@@ -11,15 +11,21 @@
 - ``DELETE /memory/profiles/{viewer_id}``              删除印象（删除后该观众回到无印象态）
 - ``GET  /memory/long-term/{kind}``                   读长期记忆全文（kind = live / rehearsal）
 - ``PUT  /memory/long-term/{kind}``                   整份覆盖写长期记忆（空文本 = 清空）
+- ``GET  /memory/long-term/{kind}/history``           留底记录（新的在前：来由、场次、逐条改动）
+- ``GET  /memory/long-term/{kind}/history/{entry_id}`` 某条记录写之前的全文
+- ``POST /memory/long-term/{kind}/history/{entry_id}/restore`` 恢复到这条记录写之前的版本
 
 画像以内部观众 ID 为键；列表行带观众的平台与当前昵称，供页面直接展示。
 
-长期记忆的编辑从下一次开播起生效：开播时整份读出、整场不变。
+长期记忆的编辑从下一次开播起生效：开播时整份读出、整场不变。每次写入（收播整理、
+页面保存、恢复旧版本）都由存储留底，页面可以查看改了什么、把任意一次改动撤回。
+页面保存不需要懂笔记格式：下一次收播整理会对照上一次整理写下的版本，把人改过的
+行记成人工条目。
 
 未注入仓储（极简启动 / 部分测试装配）时端点返回 503。
 """
 
-from typing import TYPE_CHECKING, Annotated, List
+from typing import TYPE_CHECKING, Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -64,6 +70,32 @@ class LongMemoryUpdateRequest(BaseModel):
     """整份覆盖写：人工编辑后的全文；空串 = 清空这份记忆。"""
 
     text: str = Field(default="", max_length=20_000, description="新全文")
+
+
+class LongMemoryHistoryItem(BaseModel):
+    """一条留底记录：这次为什么写、改了什么；``has_snapshot`` 为能否恢复到这次之前。"""
+
+    id: str = Field(description="记录编号")
+    at_ms: int = Field(description="写入时刻（Unix 毫秒）")
+    reason: str = Field(description="来由：收播整理 / WebUI 保存 / 恢复旧版本")
+    session_id: Optional[int] = Field(description="收播整理时的场次主键；其余为空")
+    changes: List[str] = Field(description="逐条改动说明（收播整理才有）")
+    has_snapshot: bool = Field(description="是否留了写之前的全文（第一次写入之前没有文件）")
+
+
+class LongMemoryHistoryResponse(BaseModel):
+    """一份长期记忆的留底记录（新的在前）。"""
+
+    kind: SessionKind = Field(description="场次类型：live=正式 / rehearsal=彩排")
+    items: List[LongMemoryHistoryItem] = Field(description="留底记录")
+
+
+class LongMemorySnapshotResponse(BaseModel):
+    """某条留底记录写之前的全文。"""
+
+    kind: SessionKind = Field(description="场次类型")
+    entry_id: str = Field(description="记录编号")
+    text: str = Field(description="这条记录写之前的全文")
 
 
 class MemoryStatsResponse(BaseModel):
@@ -177,6 +209,36 @@ async def get_long_memory(kind: SessionKind, store: LongMemoryStoreDep) -> LongM
 async def put_long_memory(
     kind: SessionKind, request: LongMemoryUpdateRequest, store: LongMemoryStoreDep
 ) -> LongMemoryResponse:
-    """整份覆盖写一份长期记忆；下一次开播起生效（开播时整份读出、整场不变）。"""
-    await store.write(kind, request.text)
+    """整份覆盖写一份长期记忆并留底；下一次开播起生效（开播时整份读出、整场不变）。"""
+    await store.write(kind, request.text, reason="WebUI 保存")
+    return await _long_memory_response(store, kind)
+
+
+@router.get("/long-term/{kind}/history", response_model=LongMemoryHistoryResponse)
+async def list_long_memory_history(
+    kind: SessionKind, store: LongMemoryStoreDep, limit: int = Query(50, ge=1, le=200)
+) -> LongMemoryHistoryResponse:
+    """一份长期记忆的留底记录（新的在前）。"""
+    entries = await store.list_history(kind, limit=limit)
+    return LongMemoryHistoryResponse(
+        kind=kind, items=[LongMemoryHistoryItem.model_validate(entry.model_dump()) for entry in entries]
+    )
+
+
+@router.get("/long-term/{kind}/history/{entry_id}", response_model=LongMemorySnapshotResponse)
+async def get_long_memory_snapshot(
+    kind: SessionKind, entry_id: str, store: LongMemoryStoreDep
+) -> LongMemorySnapshotResponse:
+    """某条记录写之前的全文；记录不存在或没有快照时 404。"""
+    text = await store.read_snapshot(kind, entry_id)
+    if text is None:
+        raise HTTPException(status_code=404, detail=f"没有记录 {entry_id} 之前的版本")
+    return LongMemorySnapshotResponse(kind=kind, entry_id=entry_id, text=text)
+
+
+@router.post("/long-term/{kind}/history/{entry_id}/restore", response_model=LongMemoryResponse)
+async def restore_long_memory(kind: SessionKind, entry_id: str, store: LongMemoryStoreDep) -> LongMemoryResponse:
+    """把长期记忆恢复到某条记录写之前的版本（恢复本身也留底，可再撤回）；没有快照时 404。"""
+    if await store.restore(kind, entry_id) is None:
+        raise HTTPException(status_code=404, detail=f"没有记录 {entry_id} 之前的版本")
     return await _long_memory_response(store, kind)
