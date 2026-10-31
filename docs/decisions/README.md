@@ -81,3 +81,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-056：面捕合成器加一组风格化标记（扩展 ADR-054 的词表：漫符自定名 / 配方照惯例挂 / 平台配置登记对应资源）](056-avatar-style-markers.md)
 - [ADR-057：Warudo、VRChat、表情差分图也改由面捕合成器驱动（收尾 ADR-052 / ADR-053 的过渡安排：Warudo 伪装成 iFacialMocap / VRChat 走官方眼动与 VRCFaceTracking 参数 / 删掉旧的情绪订阅与前缀工具）](057-avatar-platform-drivers.md)
 - [ADR-058：主播记忆条目化、会淡出、按对象注入（部分取代 ADR-051 / ADR-042：模型只给条目操作 / 没人再提按场次搁置 / 对某位观众的约定只在 ta 发言时出现 / 写入留底可撤回）](058-streamer-memory-items-and-fading.md)
+- [ADR-059：与 MaiBot 共用长期笔记（部分取代 ADR-046 / ADR-045：两边都用时正本放插件、本地当缓存 / 按条目三方合并 / QQ 里的约定带来源标签 / 只注入白名单群 / 整场回放降为可选）](059-shared-notes-with-maibot.md)
