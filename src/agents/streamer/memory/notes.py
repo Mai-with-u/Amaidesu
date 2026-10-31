@@ -7,6 +7,8 @@
 - 约定的结局：``未兑现`` / ``已兑现`` / ``放弃``（只有"答应过的事"一节用）；
 - ``对 昵称#观众编号``：答应某位观众的事，只在这位观众发言时才给主播看；
 - ``游戏 名字``：只跟某个游戏有关，这个游戏开着时才给主播看；
+- ``来自 来源``：不是收播整理记下的，而是别的程序经同步接口写进来的（如在 QQ 群里
+  答应的事）。它和模型条目一样会被整理、会淡出，只是不会被当成人手写的行；
 - ``始于 #场次`` / ``最近 #场次``：哪一场记下的、最近一次有新证据是哪一场；
 - ``人工``：人写的条目，模型只能读不能改，也不会过期；``整理``：模型写的、
   暂时没有别的标签（写回时保证模型条目总带标签）；
@@ -16,6 +18,9 @@
 写的，行尾的"（未兑现）/（已兑现）"读成约定状态。有标签的文件里没带标签的行，
 是人后来手写的，算人工条目。
 
+两份从同一版本各自改过的笔记，用 ``merge_three_way`` 按条目合并（笔记的正本放在别处、
+本地离线期间也写过时用到）。
+
 合并操作与按场次的淡出规则在 ``note_merge``。
 """
 
@@ -23,7 +28,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Collection, List, Optional, Tuple
+from typing import Collection, Dict, List, Optional, Tuple
 
 __all__ = [
     "ACTIVE_SECTIONS",
@@ -40,6 +45,7 @@ __all__ = [
     "STATUS_DROPPED",
     "STATUS_OPEN",
     "mark_manual_edits",
+    "merge_three_way",
     "parse_notes",
     "person_lines",
     "render_for_injection",
@@ -85,6 +91,7 @@ class NoteItem:
     viewer_id: Optional[int] = None
     viewer_name: str = ""
     game: str = ""
+    source: str = ""
     manual: bool = False
     since: Optional[int] = None
     seen: Optional[int] = None
@@ -106,6 +113,8 @@ class NoteItem:
             parts.append(f"对 {self.viewer_name}#{self.viewer_id}")
         if self.game:
             parts.append(f"游戏 {self.game}")
+        if self.source:
+            parts.append(f"来自 {self.source}")
         if self.manual:
             parts.append(_MANUAL_TAG)
         if self.since is not None:
@@ -165,6 +174,8 @@ def _parse_tags(item: NoteItem, raw: str) -> None:
             item.viewer_name, item.viewer_id = match.group(1).strip(), int(match.group(2))
         elif token.startswith("游戏 "):
             item.game = token[3:].strip()
+        elif token.startswith("来自 "):
+            item.source = token[3:].strip()
         elif match := _SESSION_TAG.match(token):
             if match.group(1) == "始于":
                 item.since = int(match.group(2))
@@ -236,6 +247,9 @@ def _injection_line(item: NoteItem, *, with_viewer: bool) -> str:
         notes.append(f"对 {item.viewer_name}")
     if item.game:
         notes.append(item.game)
+    # 在别处记下的（如 QQ 群里答应的）注明来处，主播提起时知道是哪边的事
+    if item.source:
+        notes.append(f"来自 {item.source}")
     return f"- {item.text}" + (f"（{'，'.join(notes)}）" if notes else "")
 
 
@@ -292,6 +306,8 @@ def render_for_merge(doc: NoteDocument) -> Tuple[str, List[NoteItem]]:
                 notes.append(f"对 {item.viewer_name}（观众 #{item.viewer_id}）")
             if item.game:
                 notes.append(f"游戏 {item.game}")
+            if item.source:
+                notes.append(f"来自 {item.source}")
             if item.origin:
                 notes.append(f"原在 {item.origin}")
             if item.manual:
@@ -304,14 +320,68 @@ def render_for_merge(doc: NoteDocument) -> Tuple[str, List[NoteItem]]:
 def mark_manual_edits(old_text: str, new_text: str) -> Tuple[str, List[str]]:
     """对照上一次模型写下的版本：人新增或改过正文的行一律记成人工条目，返回新全文与被记成人工的正文。
 
-    没动过的行保持原样；本来就是人工的行不重复报告。
+    没动过的行保持原样；本来就是人工的行不重复报告。带 ``来自`` 标签的行是别的程序经同步
+    接口写进来的（如 QQ 群里记下的约定），不算人改的。
     """
     old_doc = parse_notes(old_text)
     new_doc = parse_notes(new_text, legacy=_is_legacy(old_text) and _is_legacy(new_text))
     old_keys = {item.key for item in old_doc.items}
     marked: List[str] = []
     for item in new_doc.items:
-        if item.key not in old_keys and not item.manual:
+        if item.key not in old_keys and not item.manual and not item.source:
             item.manual = True
             marked.append(item.text)
     return render_notes(new_doc), marked
+
+
+def merge_three_way(base: str, local: str, remote: str) -> Tuple[str, List[str]]:
+    """两份从 ``base`` 各自改过的笔记按条目合并，返回合并后的全文与采纳、舍弃了对方哪些改动的说明。
+
+    条目以"所在节 + 正文"认身份（改正文、挪节在这里看作删一条再加一条），逐条比较整行：
+    只有一边动过的取那一边，两边都动过且不一样的以本地为准——本地这边是收播整理与人在
+    WebUI 里的改动，比对方（只追加约定）更完整。对方新加的条目排到所在节末尾。
+    """
+    base_doc, local_doc, remote_doc = parse_notes(base), parse_notes(local), parse_notes(remote)
+    base_lines = _lines_by_key(base_doc)
+    local_lines = _lines_by_key(local_doc)
+    remote_items = {item.key: item for item in reversed(remote_doc.items)}
+    changes: List[str] = []
+
+    merged = NoteDocument(
+        preamble=list(remote_doc.preamble if local_doc.preamble == base_doc.preamble else local_doc.preamble),
+        extra_sections=list(dict.fromkeys([*local_doc.extra_sections, *remote_doc.extra_sections])),
+    )
+    for item in local_doc.items:
+        b, r = base_lines.get(item.key), remote_items.get(item.key)
+        local_line = item.render()
+        if local_line != b:
+            # 本地动过（新增或改了标签）：保留本地；对方也改成别的样子时记下舍弃
+            if r is not None and r.render() not in (b, local_line):
+                changes.append(f"两边都改过，按本地：{item.text}")
+            merged.items.append(item)
+        elif r is None:
+            changes.append(f"采纳对方删除：{item.text}")
+        else:
+            if r.render() != local_line:
+                changes.append(f"采纳对方改动：{item.text}")
+            merged.items.append(r)
+    seen = set(local_lines)
+    for item in remote_doc.items:
+        if item.key in seen:
+            continue
+        seen.add(item.key)
+        b = base_lines.get(item.key)
+        if b is None:
+            changes.append(f"采纳对方新增：〔{item.section}〕{item.text}")
+            merged.items.append(item)
+        elif item.render() != b:
+            changes.append(f"两边都改过，按本地（本地已删）：{item.text}")
+    return render_notes(merged), changes
+
+
+def _lines_by_key(doc: NoteDocument) -> Dict[Tuple[str, str], str]:
+    """条目身份 → 整行渲染（同一身份出现多次时取第一次）。"""
+    lines: Dict[Tuple[str, str], str] = {}
+    for item in doc.items:
+        lines.setdefault(item.key, item.render())
+    return lines
