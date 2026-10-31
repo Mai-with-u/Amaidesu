@@ -26,7 +26,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Collection, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Collection, Dict, List, Optional, Set
 
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
@@ -71,6 +71,7 @@ class LongMemoryWriter:
         llm_service: Any,
         prompt_manager: PromptManager,
         chat_repo: Any = None,
+        event_repo: Any = None,
         material_provider: Optional[Callable[[int], Awaitable[str]]] = None,
         notebook_text_provider: Optional[Callable[[int], Awaitable[str]]] = None,
         persona_text: str = "",
@@ -81,12 +82,14 @@ class LongMemoryWriter:
         """``material_provider`` 按场次主键返回整理原料（与回顾同一份）；缺省时只用回顾与备忘录。
 
         ``notebook_text_provider`` 只在没有整理原料时补上备忘录；``games_provider`` 返回当前
-        接入的游戏名（新增条目只认这些游戏）；``chat_repo`` 用来列本场观众名单。
+        接入的游戏名（新增条目只认这些游戏）；``chat_repo`` 用来列本场观众名单；``event_repo``
+        用来查各场玩过哪些游戏（游戏条目只在玩过那个游戏的场次里算"隔了一场"，不给时每场都算）。
         """
         self._store = store
         self._sessions = sessions_repo
         self._recaps = recap_repo
         self._chat = chat_repo
+        self._events = event_repo
         self._llm = llm_service
         self._prompt_manager = prompt_manager
         self._material_provider = material_provider
@@ -133,10 +136,11 @@ class LongMemoryWriter:
             return None
         ops, rejected = resolve_ops(raw_ops, numbered)
         settled_ids = await self._sessions.list_recapped_session_ids(kind=kind)
+        session_games = await self._session_games(settled_ids, sid)
 
         text: Optional[str] = None
         for attempt in range(2):
-            new_text, changes = self._merge(old_text, ops, rejected, sid, viewers, games, settled_ids)
+            new_text, changes = self._merge(old_text, ops, rejected, sid, viewers, games, settled_ids, session_games)
             changes = self._marked_notes + changes
             if not new_text and not old_text:
                 # 还没有笔记、这场也没记下东西：不建空文件
@@ -192,14 +196,26 @@ class LongMemoryWriter:
         viewers: Dict[int, str],
         games: List[str],
         settled_ids: List[int],
+        session_games: Optional[Dict[int, Set[str]]],
     ) -> tuple[str, List[str]]:
         """在一份笔记全文上执行同一批操作与生命周期，返回新全文与改动说明。"""
         doc = parse_notes(old_text)
         changes = rejected + apply_ops(doc, ops, current=sid, viewers=viewers, games=games)
         changes += apply_lifecycle(
-            doc, current=sid, settled_ids=settled_ids, stale_sessions=self._stale_sessions, max_chars=self._max_chars
-        )
+            doc, current=sid, settled_ids=settled_ids, stale_sessions=self._stale_sessions,
+            max_chars=self._max_chars, session_games=session_games,
+        )  # fmt: skip
         return render_notes(doc), changes
+
+    async def _session_games(self, settled_ids: List[int], sid: int) -> Optional[Dict[int, Set[str]]]:
+        """到本场为止每场玩过的游戏（淡出时游戏条目只数玩过那个游戏的场次）；查不到返回 None，按每场都数。"""
+        if self._events is None:
+            return None
+        try:
+            return await self._events.list_games_by_session(live_session_ids=[i for i in settled_ids if i <= sid])
+        except Exception as exc:  # noqa: BLE001 查不到只让游戏条目按每场都数
+            logger.warning(f"读取各场玩过的游戏失败（场次 {sid}），游戏条目按每场都数: {exc}", exc=True)
+            return None
 
     def _games(self) -> List[str]:
         if self._games_provider is None:

@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional, Sequence, Set
 
 from src.modules.storage.models.events import GameEventRecord, GameEventTypeCount
 from src.modules.storage.repos._base import BaseRepo
@@ -66,6 +66,29 @@ class EventRepo(BaseRepo):
                     [int(sid) for sid in live_session_ids],
                 ).fetchall()
                 return [GameEventTypeCount.model_validate(dict(row)) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def list_games_by_session(self, *, live_session_ids: Sequence[int]) -> Dict[int, Set[str]]:
+        """每场留下过游戏事件的游戏名（多场 IN 合并）；没有游戏事件的场次不在结果里。
+
+        长期笔记按"隔了几场没人提"淡出时，只跟某个游戏有关的条目只数真玩过那个游戏的场次。
+        """
+        ids = [int(sid) for sid in live_session_ids]
+        if not ids:
+            return {}
+
+        def _exec() -> Dict[int, Set[str]]:
+            placeholders = ",".join("?" for _ in ids)
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    f"SELECT DISTINCT live_session_id, game FROM game_events WHERE live_session_id IN ({placeholders})",  # noqa: S608 子句为代码内常量
+                    ids,
+                ).fetchall()
+            games: Dict[int, Set[str]] = {}
+            for row in rows:
+                games.setdefault(int(row["live_session_id"]), set()).add(str(row["game"]))
+            return games
 
         return await self._run_in_executor(_exec)
 

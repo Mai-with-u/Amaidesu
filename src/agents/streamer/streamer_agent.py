@@ -428,6 +428,7 @@ class StreamerAgent(BaseAgent):
                 llm_service=llm_manager,
                 prompt_manager=prompt_manager,
                 chat_repo=chat_repo,
+                event_repo=event_repo,
                 material_provider=self._recap_writer.collect_material if self._recap_writer is not None else None,
                 notebook_text_provider=self._session_notebook_text,
                 persona_text=f"名字：{config.persona.bot_name}；性格：{config.persona.personality}",

@@ -176,6 +176,7 @@ def _long_writer(
     notebook: str = "",
     max_chars: int = 300,
     backend: LongMemoryBackend | None = None,
+    event_repo: Any = None,
 ) -> LongMemoryWriter:
     """``backend`` 缺省用库里的本地笔记文件；共享笔记的用例传入共享存储。"""
 
@@ -187,6 +188,7 @@ def _long_writer(
         sessions_repo=store.sessions,
         recap_repo=store.recaps,
         chat_repo=store.chat,
+        event_repo=event_repo,
         llm_service=llm,
         prompt_manager=_prompts(),
         notebook_text_provider=notebook_of,
@@ -568,6 +570,26 @@ async def test_long_memory_merges_each_session_once(store: SQLiteDatabase) -> No
     assert await _long_writer(store, _responses(_ops())).consolidate(unchanged_pk) == first
     unchanged = await store.recaps.get_recap(live_session_id=unchanged_pk)
     assert unchanged is not None and unchanged.long_memory_merged_at_ms is not None
+
+
+@pytest.mark.asyncio
+async def test_long_memory_game_items_age_only_in_sessions_that_played_it(store: SQLiteDatabase) -> None:
+    """游戏条目只在玩过那个游戏的场次里算"隔了一场"：连播几场杂谈，游戏里的目标留着，别的照常淡出。"""
+    game_pk = await _recapped_session(store, "这场在 MC 里开始搭水车")
+    await store.events.insert_game_event(
+        live_session_id=game_pk, game="minecraft", event_type="milestone", message="开工", timestamp_ms=2_000
+    )
+    await store.long_memory.write(
+        "live", f"## 长线目标\n- 搭水车〔游戏 minecraft · 最近 #{game_pk}〕\n- 攒钱买新麦〔最近 #{game_pk}〕"
+    )
+    text = None
+    for _ in range(3):
+        chat_pk = await _recapped_session(store, "这场纯杂谈")
+        text = await _long_writer(store, _responses(_ops()), event_repo=store.events).consolidate(chat_pk)
+
+    assert text is not None
+    active, shelved = text.split("## 搁置")
+    assert "搭水车" in active and "攒钱买新麦" in shelved
 
 
 # ---------------------------------------------------------------------------

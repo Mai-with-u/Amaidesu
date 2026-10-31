@@ -6,7 +6,8 @@
 
 记下来的东西默认会淡出：一条笔记只有在观众或游戏里再次出现时才算"续上"
 （主播自己又提了一遍不算——否则她越念叨记得越牢），连续若干场没有新证据就
-挪进"搁置"一节，不再注入，以后有人再提还能挪回来。已兑现或放弃的约定留一场
+挪进"搁置"一节，不再注入，以后有人再提还能挪回来。只跟某个游戏有关的条目
+只数玩过那个游戏的场次，关于她自己的条目不按场次淡出。已兑现或放弃的约定留一场
 让主播知道结果，之后也搁置。笔记总长超过上限时，先搁置最久没被提起的条目；
 人写的条目从不被搁置。
 
@@ -25,6 +26,7 @@ from .notes import (
     ACTIVE_SECTIONS,
     ADDABLE_SECTIONS,
     SECTION_PROMISES,
+    SECTION_SELF,
     SECTION_SHELVED,
     SECTION_UNCERTAIN,
     STATUS_DONE,
@@ -230,25 +232,38 @@ def apply_lifecycle(
     stale_sessions: int,
     max_chars: int,
     shelved_keep: int = 30,
+    session_games: Optional[Mapping[int, Collection[str]]] = None,
 ) -> List[str]:
     """收播合并之后跑一遍：该淡出的挪进搁置、超篇幅的按最久没提起的先搁置，返回改动说明。
 
     "隔了几场"只数同类型、写过回顾的场次（``settled_ids``），且只数到本场为止：补合并
     一场旧场次时，之后那几场还没合并、不知道有没有人再提，算进去会把没过期的条目误搁置。
     旧格式读进来、还没有"最近"标签的条目从本场起算。人工条目不参与。
+
+    各节的淡出口径不同：
+    - 只跟某个游戏有关的目标与老梗，只数玩过那个游戏的场次（``session_games``：场次 →
+      这场留下过事件的游戏；不知道时按每场都数）——连播几场杂谈，游戏里的目标不该跟着过期；
+    - 约定不管玩没玩照常数：做不成的约定宁可早点放下，也不要一直挂在提示词里；
+    - 关于自己的条目不按场次淡出：她是谁不靠观众复述，主播自己再提又不算证据，按场次
+      数只会把人设慢慢磨掉；超篇幅时也排在最后搁置。
     """
     changes: List[str] = []
     settled = sorted(int(sid) for sid in settled_ids)
 
     def gap(item: NoteItem) -> int:
         seen = item.seen if item.seen is not None else current
-        return sum(1 for sid in settled if seen < sid <= current)
+        counted = [sid for sid in settled if seen < sid <= current]
+        if item.game and item.section != SECTION_PROMISES and session_games is not None:
+            counted = [sid for sid in counted if item.game in session_games.get(sid, ())]
+        return len(counted)
 
     for item in list(doc.items):
         if item.manual or item.section == SECTION_SHELVED:
             continue
         if item.seen is None:
             item.seen = current
+        if item.section == SECTION_SELF:
+            continue
         if item.section == SECTION_PROMISES and item.status in (STATUS_DONE, STATUS_DROPPED):
             if gap(item) >= 1:
                 changes.append(_shelve(doc, item, current, SHELVE_CLOSED))
@@ -260,7 +275,10 @@ def apply_lifecycle(
         if not candidates:
             changes.append("注意：人工条目本身已超出篇幅上限，没有可搁置的条目")
             break
-        oldest = min(candidates, key=lambda item: item.seen if item.seen is not None else current)
+        oldest = min(
+            candidates,
+            key=lambda item: (item.section == SECTION_SELF, item.seen if item.seen is not None else current),
+        )
         changes.append(_shelve(doc, oldest, current, SHELVE_BUDGET))
 
     shelved = doc.section_items(SECTION_SHELVED)

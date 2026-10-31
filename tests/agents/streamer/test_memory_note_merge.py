@@ -14,6 +14,7 @@ import pytest
 
 from src.agents.streamer.memory.note_merge import apply_lifecycle, apply_ops, parse_ops, resolve_ops
 from src.agents.streamer.memory.notes import (
+    SECTION_GOALS,
     SECTION_JOKES,
     SECTION_PROMISES,
     SECTION_SELF,
@@ -166,6 +167,35 @@ def test_late_merge_counts_only_sessions_up_to_the_merged_one() -> None:
     changes = apply_lifecycle(doc, current=5, settled_ids=[4, 5, 6, 7, 8], stale_sessions=3, max_chars=2000)
     assert changes == []
     assert _find(doc, "老梗").section == SECTION_JOKES and _find(doc, "本场改过的梗").section == SECTION_JOKES
+
+
+def test_game_items_age_only_in_sessions_that_played_the_game() -> None:
+    """只跟某个游戏有关的目标与老梗只数玩过那个游戏的场次；约定不管玩没玩照常数，宁可早点放下。"""
+    doc = parse_notes(
+        "## 长线目标\n- 搭水车〔游戏 minecraft · 最近 #5〕\n- 攒钱买新麦〔最近 #5〕\n"
+        "## 答应过的事\n- 下次继续炸TNT〔未兑现 · 游戏 minecraft · 最近 #5〕"
+    )
+    changes = apply_lifecycle(
+        doc, current=9, settled_ids=[5, 6, 7, 8, 9], stale_sessions=3, max_chars=2000,
+        session_games={5: {"minecraft"}, 9: {"minecraft"}},
+    )  # fmt: skip
+    # #6～#8 是杂谈场：水车目标只隔了一场 minecraft，留着；不挂游戏的目标与约定都隔满了
+    assert _find(doc, "搭水车").section == SECTION_GOALS
+    assert sorted(changes) == ["搁置（过期）：〔答应过的事〕下次继续炸TNT", "搁置（过期）：〔长线目标〕攒钱买新麦"]
+
+
+def test_game_items_count_every_session_when_play_history_unknown() -> None:
+    doc = parse_notes("## 长线目标\n- 搭水车〔游戏 minecraft · 最近 #5〕")
+    apply_lifecycle(doc, current=9, settled_ids=[5, 6, 7, 8, 9], stale_sessions=3, max_chars=2000)
+    assert _find(doc, "搭水车").section == SECTION_SHELVED
+
+
+def test_self_items_never_go_stale_and_go_last_under_budget() -> None:
+    """关于自己的条目没人再提也不淡出（她是谁不靠观众复述）；超篇幅时也排在最后搁置。"""
+    doc = parse_notes(f"## 关于我自己\n- {'我' * 30}〔最近 #1〕\n## 老梗与口头禅\n- {'梗' * 30}〔最近 #8〕")
+    changes = apply_lifecycle(doc, current=8, settled_ids=list(range(1, 9)), stale_sessions=3, max_chars=60)
+    assert changes == [f"搁置（篇幅）：〔老梗与口头禅〕{'梗' * 30}"]
+    assert _find(doc, "我" * 30).section == SECTION_SELF
 
 
 def test_legacy_items_start_counting_from_this_session() -> None:
