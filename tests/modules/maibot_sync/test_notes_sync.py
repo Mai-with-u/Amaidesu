@@ -6,6 +6,7 @@
 - MaiBot 没开时读写都落本地、照常可用，后台按退避补推；两边都改过时三方合并
 - 不带版本号的写入（WebUI 保存、恢复旧版本）把正本这期间的改动合并进来
 - HTTP 正本：读写契约、版本冲突、两边名字对不上告警一次
+- 组合根只在开了共享笔记时换成共享存储
 
 三方合并由组合根注入主播记忆的条目合并；这里用按行取并集的简单合并，只验证存储
 把"上次同步的版本 / 本地 / 正本"三份交给它、并把结果推上去。
@@ -21,7 +22,9 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
+import main as app_main
 from src.modules.maibot_sync import HttpNotesRemote, NotesConflict, SharedNotesStore
+from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.long_memory import LongMemoryConflict, LongMemoryStore, content_version
 from tests.config.helpers import wait_until
 from tests.modules.maibot_sync.fakes import FakeNotesRemote
@@ -278,3 +281,15 @@ async def test_http_remote_contract_conflict_and_name_check(loguru_capture: Any)
         await wrong.close()
     finally:
         await server.close()
+
+
+async def test_composition_root_shares_notes_only_when_enabled(store: SQLiteDatabase) -> None:
+    sync = {"enabled": True, "url": "http://127.0.0.1:8767/live-status", "token": "t"}
+    assert app_main._build_long_memory_store({}, store) == (store.long_memory, None)
+    assert app_main._build_long_memory_store({"maibot_sync": {**sync, "share_notes": False}}, store)[1] is None
+
+    config = {"maibot_sync": sync, "agents": {"streamer": {"persona": {"bot_name": "麦麦"}}}}
+    backend, shared = app_main._build_long_memory_store(config, store)
+    assert isinstance(shared, SharedNotesStore) and backend is shared
+    assert backend.path_of("live") == store.long_memory.path_of("live")
+    await shared.close()

@@ -1,5 +1,7 @@
 """直播近况同步的配置 Schema（infra.toml ``[maibot_sync]``）。"""
 
+from urllib.parse import urljoin
+
 from pydantic import Field, field_validator
 
 from src.modules.config.schemas.base import BaseConfig
@@ -9,7 +11,8 @@ class MaiBotSyncConfigSchema(BaseConfig):
     """把直播近况推给 MaiBot 适配器插件（MaiBot-Amaidesu-Adapter）的配置。
 
     地址与令牌对应插件 ``[server]`` 段：与 MCP 服务同一端口、同一令牌，路径为
-    ``/live-status``。默认关闭；空串表示未配置，开启后地址或令牌缺失时不装配。
+    ``/live-status``；共享笔记走同一服务的 ``/notes``（由近况地址推出）。默认关闭；
+    空串表示未配置，开启后地址或令牌缺失时不装配。
     """
 
     enabled: bool = Field(
@@ -26,6 +29,15 @@ class MaiBotSyncConfigSchema(BaseConfig):
         default="",
         title="访问令牌",
         description="与适配器插件 server.auth_token 相同的令牌；空串 = 未设置",
+    )
+    share_notes: bool = Field(
+        default=True,
+        title="共享长期笔记",
+        description=(
+            "是否与 MaiBot 共用主播的长期笔记（答应过的事、老梗、长线目标、关于我自己）："
+            "正本放在插件里，QQ 那边的麦麦也看得到、QQ 里答应的事也会记进来；本地 MEMORY.md 当缓存，"
+            "MaiBot 不在线时照常开播、之后自动补推。只同步正式场的笔记"
+        ),
     )
     send_transcript: bool = Field(
         default=True,
@@ -49,6 +61,11 @@ class MaiBotSyncConfigSchema(BaseConfig):
         description="单次上报的超时（毫秒）",
         json_schema_extra={"x-ui-advanced": True},
     )
+
+    @property
+    def notes_url(self) -> str:
+        """共享笔记的接口地址：与近况接口同一服务，路径末段换成 ``notes``。"""
+        return urljoin(self.url, "notes") if self.url else ""
 
     @field_validator("url")
     @classmethod

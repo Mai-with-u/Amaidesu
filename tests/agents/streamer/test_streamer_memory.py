@@ -7,7 +7,8 @@
   收尾不空转）、没建档的与印象最久没更新的先来、只付费不说话的也建档、LLM 失败逐人
   降级、观众真假与场次类型相符；付费明细原料行
 - ``LongMemoryWriter``：模型只给条目操作、按场次类型选文件、写回留底、没有回顾不动、
-  输出读不出或模型失败保留旧版本、合并期间被人改过就在新版本上重做、每场只合并一次
+  输出读不出或模型失败保留旧版本、合并期间被人改过就在新版本上重做、每场只合并一次；
+  笔记与 MaiBot 共享时，合并期间 QQ 里记下的约定保留下来、之后也不当成人改的行
 - ``build_memory_tool_provider``：往前第 n 场、排除本场、只数同类型场次、按昵称查印象
 - ``StreamerAgent``：两仓储齐全才注册记忆工具；开播按场次类型装入上场回顾与长期记忆；
   收播写回顾、整理长期记忆并更新观众画像后记整理完成；停止打断的整理下次启动从断点补完
@@ -33,15 +34,19 @@ from src.agents.streamer.memory import (
     build_memory_tool_provider,
     collect_payment_material,
 )
+from src.agents.streamer.memory.notes import merge_three_way
 from src.agents.streamer.memory.recap import clip_whole_sentences
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.llm.payload import Response
+from src.modules.maibot_sync import SharedNotesStore
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.long_memory import LongMemoryBackend
 from src.modules.storage.models.chat import GiftRecord, GuardRecord, SuperChatRecord
 from src.modules.tools import ToolInvocation, ToolRegistry
 from tests.agents.streamer.helpers import ActiveSessionStub
+from tests.modules.maibot_sync.fakes import FakeNotesRemote
 from tests.modules.llm.fakes import FakeLLMManager
 from tests.modules.storage.viewer_seed import seed_gift, seed_message
 
@@ -165,13 +170,20 @@ def _responses(*texts: str) -> MagicMock:
 
 
 def _long_writer(
-    store: SQLiteDatabase, llm: MagicMock, *, notebook: str = "", max_chars: int = 300
+    store: SQLiteDatabase,
+    llm: MagicMock,
+    *,
+    notebook: str = "",
+    max_chars: int = 300,
+    backend: LongMemoryBackend | None = None,
 ) -> LongMemoryWriter:
+    """``backend`` 缺省用库里的本地笔记文件；共享笔记的用例传入共享存储。"""
+
     async def notebook_of(_live_session_id: int) -> str:
         return notebook
 
     return LongMemoryWriter(
-        store=store.long_memory,
+        store=backend or store.long_memory,
         sessions_repo=store.sessions,
         recap_repo=store.recaps,
         chat_repo=store.chat,
@@ -494,6 +506,42 @@ async def test_long_memory_marks_lines_edited_by_hand_since_last_merge(store: SQ
     changes = (await store.long_memory.list_history("live"))[0].changes
     assert changes[0] == "人改过的行记为人工：嘴硬但心软"
     assert any(change.startswith("没采纳（人工条目只读）") for change in changes)
+
+
+@pytest.mark.asyncio
+async def test_long_memory_shared_with_maibot_keeps_qq_promises(store: SQLiteDatabase, tmp_path: Path) -> None:
+    """笔记正本在 MaiBot：模型思考期间 QQ 里记下的约定在新版本上保留；合并之后才记下的那条
+    下一场不当成人改的行，模型能把它标成已兑现。合并结果两边一致。"""
+    remote = FakeNotesRemote("## 老梗与口头禅\n- 嘴硬〔始于 #1 · 最近 #1〕")
+    shared = SharedNotesStore(
+        local=store.long_memory, remote=remote, reconcile=merge_three_way, state_path=tmp_path / "synced.md"
+    )
+    first_pk = await _recapped_session(store, "这场又嘴硬了")
+    reply = MagicMock()
+    reply.ok, reply.content = True, _ops({"op": "add", "section": "长线目标", "text": "盖海景房"})
+
+    async def qq_records_meanwhile(*_args: Any, **_kwargs: Any) -> Any:
+        remote.append("- 答应群友小明下次直播唱歌〔未兑现 · 来自 QQ群〕")
+        return reply
+
+    llm = MagicMock()
+    llm.generate = AsyncMock(side_effect=qq_records_meanwhile)
+    text = await _long_writer(store, llm, backend=shared).consolidate(first_pk)
+
+    assert text is not None and "- 盖海景房〔" in text
+    assert f"- 答应群友小明下次直播唱歌〔未兑现 · 来自 QQ群 · 最近 #{first_pk}〕" in text
+    assert remote.text == text == await store.long_memory.read("live")
+
+    remote.append("- 答应群友小红一起画画〔未兑现 · 来自 QQ群〕")
+    second_pk = await _recapped_session(store, "第二场和小红画了画")
+    done = _ops({"op": "done", "id": 2, "reason": "画完了"})
+    text = await _long_writer(store, _responses(done), backend=shared).consolidate(second_pk)
+
+    assert text is not None and f"- 答应群友小红一起画画〔已兑现 · 来自 QQ群 · 最近 #{second_pk}〕" in text
+    changes = (await store.long_memory.list_history("live"))[0].changes
+    assert not any(change.startswith("人改过的行") for change in changes)
+    assert remote.text == text
+    await shared.close()
 
 
 @pytest.mark.asyncio

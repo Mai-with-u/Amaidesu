@@ -66,9 +66,11 @@ from src.modules.llm.request_history_manager import RequestHistoryManager
 from src.modules.logging import configure_from_config, get_logger
 from src.modules.logging.log_streamer import LogStreamer
 from src.modules.maibot_sync import (
+    HttpNotesRemote,
     HttpStatusSender,
     LiveStatusReporter,
     MaiBotSyncConfigSchema,
+    SharedNotesStore,
     StorageTranscriptSource,
 )
 from src.modules.storage.bootstrap import build_database
@@ -76,6 +78,7 @@ from src.modules.prompts import get_prompt_manager
 from src.modules.session import LiveSessionManager
 from src.modules.simulator import SimulatorService
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.long_memory import LongMemoryBackend
 from src.modules.subtitle import build_subtitle_infrastructure
 from src.modules.subtitle.backends import DashboardBackend
 from src.modules.tts import TTSProvider, build_tts_infrastructure
@@ -331,6 +334,8 @@ class AppComponents:
     task_tracker: Optional[TaskTracker]
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder]
     maibot_sync_reporter: Optional[LiveStatusReporter]
+    # 与 MaiBot 共享的长期笔记（开了 [maibot_sync] 共享笔记才有；关停时停后台补推、关连接）
+    shared_notes_store: Optional[SharedNotesStore] = None
     # 面捕合成器（形象逐帧驱动；关停时在工具 Provider 收尾之后、事件总线清理之前停）
     avatar_tracking: Optional[TrackingRuntime] = None
 
@@ -462,6 +467,8 @@ async def create_app_components(
     # 第 ① 段只接线订阅：心跳随 live.started 才起，第 ② 段 Agent 启动补写回顾发出的
     # streamer.recap.written 也能接住（整场记录随回顾一起补推）
     maibot_sync_reporter = _build_maibot_sync_reporter(event_bus, config, database=database)
+    # 长期笔记的读写面：共享时正本在 MaiBot 插件、本地文件当缓存，主播 Agent 与 WebUI 共用同一个
+    long_memory_store, shared_notes_store = _build_long_memory_store(config, database)
 
     # --- CollectorManager ---
     # 采集器配置位于 collectors.toml：根键 = enabled 名单 + 各采集器同名子段
@@ -580,7 +587,7 @@ async def create_app_components(
             viewer_profile_repo=database.viewer_profiles,
             recap_repo=database.recaps,
             event_repo=database.events,
-            long_memory_store=database.long_memory,
+            long_memory_store=long_memory_store,
             supervisor_config=supervisor_config,
         )
 
@@ -694,7 +701,7 @@ async def create_app_components(
                 viewer_profile_repo=database.viewer_profiles,
                 recap_repo=database.recaps,
                 event_repo=database.events,
-                long_memory_store=database.long_memory,
+                long_memory_store=long_memory_store,
                 # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
                 context_assembler_config=None,
                 task_tracker=task_tracker,
@@ -905,7 +912,7 @@ async def create_app_components(
             # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
             recap_repo=database.recaps,
             # 主播记忆页查看与编辑长期记忆文件（MEMORY.md）
-            long_memory_store=database.long_memory,
+            long_memory_store=long_memory_store,
             rundown_transition_repo=database.rundown_transitions,
             # 观众域查询接口：列表 / 档案 / 对话 / 贡献聚合直查存储层
             viewer_repo=database.viewers,
@@ -960,6 +967,7 @@ async def create_app_components(
         task_tracker=task_tracker if agents_config else None,
         tts_diagnostics_recorder=tts_diagnostics_recorder,
         maibot_sync_reporter=maibot_sync_reporter,
+        shared_notes_store=shared_notes_store,
         avatar_tracking=avatar_tracking,
     )
 
@@ -1062,6 +1070,45 @@ def _build_maibot_sync_reporter(
     pushed = "开播 / 换环节 / 收播 / 场次回顾" + (" / 整场记录" if transcript_source is not None else "")
     logger.info(f"直播近况同步已接线：{pushed} → {sync_config.url}")
     return reporter
+
+
+def _build_long_memory_store(
+    config: Dict[str, Any], database: SQLiteDatabase
+) -> Tuple[LongMemoryBackend, Optional[SharedNotesStore]]:
+    """长期笔记的读写面：开了 ``[maibot_sync]`` 共享笔记时正本放在 MaiBot 插件、本地文件当缓存。
+
+    没开同步、没开共享或缺地址 / 令牌时就是本地文件，行为与只用 Amaidesu 时完全一样。
+    返回（读写面, 共享存储）——后者只在共享时有，供关停时收尾。
+    """
+    raw = config.get("maibot_sync", {}) if isinstance(config, dict) else {}
+    sync_config = MaiBotSyncConfigSchema(**raw) if isinstance(raw, dict) else MaiBotSyncConfigSchema()
+    if not (sync_config.enabled and sync_config.share_notes and sync_config.url and sync_config.token):
+        return database.long_memory, None
+    # 延迟加载：笔记的三方合并属于主播记忆的条目格式，导入它会带起整个主播 Agent 包，
+    # 与工厂按需加载 Agent 的做法一致，只在开了共享笔记时才加载
+    from src.agents.streamer.memory.notes import merge_three_way
+
+    store = SharedNotesStore(
+        local=database.long_memory,
+        remote=HttpNotesRemote(
+            url=sync_config.notes_url,
+            token=sync_config.token,
+            timeout_ms=sync_config.request_timeout_ms,
+            persona_name=_streamer_name(config),
+        ),
+        reconcile=merge_three_way,
+        state_path=database.long_memory.root / "maibot" / "synced.md",
+    )
+    logger.info(f"长期笔记与 MaiBot 共享：正本在 {sync_config.notes_url}，本地 MEMORY.md 当缓存")
+    return store, store
+
+
+def _streamer_name(config: Dict[str, Any]) -> str:
+    """主播人设里的名字（共享笔记连上时与 MaiBot 的昵称核对）；没配时为空串。"""
+    agents = config.get("agents", {}) if isinstance(config, dict) else {}
+    streamer = agents.get("streamer", {}) if isinstance(agents, dict) else {}
+    persona = streamer.get("persona", {}) if isinstance(streamer, dict) else {}
+    return str(persona.get("bot_name", "") or "") if isinstance(persona, dict) else ""
 
 
 async def _start_log_streamer(
@@ -1377,6 +1424,7 @@ async def run_shutdown(
     task_tracker: Optional[TaskTracker] = components.task_tracker
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder] = components.tts_diagnostics_recorder
     maibot_sync_reporter: Optional[LiveStatusReporter] = components.maibot_sync_reporter
+    shared_notes_store: Optional[SharedNotesStore] = components.shared_notes_store
 
     _saw_cancelled = False
 
@@ -1503,6 +1551,9 @@ async def run_shutdown(
     # 等到处理完，"已下播"近况才推得出去；之后再退订、停心跳、关连接
     if maibot_sync_reporter is not None:
         await safe_log(maibot_sync_reporter.stop(), "LiveStatusReporter.stop")
+    # 共享笔记同理放在总线清理之后：退出结账的收播整理写完笔记，再停后台补推、关连接
+    if shared_notes_store is not None:
+        await safe_log(shared_notes_store.close(), "SharedNotesStore.close")
 
     logger.info("正在清理 LLMManager...")
     if llm_service is not None:
