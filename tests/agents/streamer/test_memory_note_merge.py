@@ -160,6 +160,14 @@ def test_over_budget_shelves_least_recently_seen_first_and_trims_shelf() -> None
     assert changes[-1] == "清出搁置区：很早搁置的"
 
 
+def test_late_merge_counts_only_sessions_up_to_the_merged_one() -> None:
+    """补合并一场旧场次时，之后已写好回顾的场次不算"隔了几场"：那几场还没合并，不知道有没有人提。"""
+    doc = parse_notes("## 老梗与口头禅\n- 老梗〔最近 #4〕\n- 本场改过的梗")
+    changes = apply_lifecycle(doc, current=5, settled_ids=[4, 5, 6, 7, 8], stale_sessions=3, max_chars=2000)
+    assert changes == []
+    assert _find(doc, "老梗").section == SECTION_JOKES and _find(doc, "本场改过的梗").section == SECTION_JOKES
+
+
 def test_legacy_items_start_counting_from_this_session() -> None:
     doc = parse_notes("## 不确定\n- 好像怕黑")
     assert apply_lifecycle(doc, current=9, settled_ids=[3, 5, 9], stale_sessions=1, max_chars=2000) == []

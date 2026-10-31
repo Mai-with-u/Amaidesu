@@ -233,15 +233,16 @@ def apply_lifecycle(
 ) -> List[str]:
     """收播合并之后跑一遍：该淡出的挪进搁置、超篇幅的按最久没提起的先搁置，返回改动说明。
 
-    "隔了几场"只数同类型、写过回顾的场次（``settled_ids``，含本场）。旧格式读进来、
-    还没有"最近"标签的条目从本场起算。人工条目不参与。
+    "隔了几场"只数同类型、写过回顾的场次（``settled_ids``），且只数到本场为止：补合并
+    一场旧场次时，之后那几场还没合并、不知道有没有人再提，算进去会把没过期的条目误搁置。
+    旧格式读进来、还没有"最近"标签的条目从本场起算。人工条目不参与。
     """
     changes: List[str] = []
-    later = sorted(int(sid) for sid in settled_ids)
+    settled = sorted(int(sid) for sid in settled_ids)
 
     def gap(item: NoteItem) -> int:
         seen = item.seen if item.seen is not None else current
-        return sum(1 for sid in later if sid > seen)
+        return sum(1 for sid in settled if seen < sid <= current)
 
     for item in list(doc.items):
         if item.manual or item.section == SECTION_SHELVED:
