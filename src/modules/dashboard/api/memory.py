@@ -36,7 +36,7 @@ from src.modules.types.session_kind import SessionKind
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
-    from src.modules.storage.long_memory import LongMemoryStore
+    from src.modules.storage.long_memory import LongMemoryBackend
     from src.modules.storage.repos import ViewerProfileRepo
 
 router = APIRouter()
@@ -53,7 +53,7 @@ ViewerProfileRepoDep = Annotated[
 
 # 长期记忆文件存储未装配（极简启动/测试）时统一 503
 LongMemoryStoreDep = Annotated[
-    "LongMemoryStore", Depends(server_component("long_memory_store", missing_detail="长期记忆不可用"))
+    "LongMemoryBackend", Depends(server_component("long_memory_store", missing_detail="长期记忆不可用"))
 ]
 
 
@@ -192,7 +192,7 @@ async def delete_viewer_profile(viewer_id: int, repo: ViewerProfileRepoDep) -> M
     return MutationResponse(success=True)
 
 
-async def _long_memory_response(store: "LongMemoryStore", kind: SessionKind) -> LongMemoryResponse:
+async def _long_memory_response(store: "LongMemoryBackend", kind: SessionKind) -> LongMemoryResponse:
     path = store.path_of(kind)
     text = await store.read(kind)
     updated_at_ms = int(path.stat().st_mtime * 1000) if path.exists() else 0

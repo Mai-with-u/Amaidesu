@@ -36,7 +36,7 @@ import json
 import os
 import threading
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Protocol, Sequence, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -44,7 +44,7 @@ from src.modules.logging import get_logger
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 from src.modules.utils.time_utils import now_ms
 
-__all__ = ["LongMemoryConflict", "LongMemoryHistoryEntry", "LongMemoryStore"]
+__all__ = ["LongMemoryBackend", "LongMemoryConflict", "LongMemoryHistoryEntry", "LongMemoryStore", "content_version"]
 
 logger = get_logger("LongMemoryStore")
 
@@ -73,8 +73,46 @@ class LongMemoryHistoryEntry(BaseModel):
     has_snapshot: bool = Field(default=False, description="写之前的全文是否留了快照（之前没有文件时为 False）")
 
 
-def _version_of(content: str) -> str:
-    return hashlib.sha1(content.encode("utf-8")).hexdigest()
+def content_version(text: str) -> str:
+    """全文的版本号：去掉首尾空白后按 UTF-8 取 SHA-1（十六进制）。
+
+    同一份笔记存在两处（本地缓存与别处的正本）时，两边用同一种算法，版本号才对得上。
+    """
+    return hashlib.sha1((text or "").strip().encode("utf-8")).hexdigest()
+
+
+class LongMemoryBackend(Protocol):
+    """长期记忆的读写面：收播整理与 WebUI 都只认这一组方法。
+
+    默认实现是本地文件（``LongMemoryStore``）；笔记的正本放在别处、本地文件只当缓存时，
+    换成同样提供这组方法的实现即可，调用方不用知道正本在哪。
+    """
+
+    def path_of(self, kind: SessionKind) -> Path: ...
+
+    async def read(self, kind: SessionKind) -> str: ...
+
+    async def read_versioned(self, kind: SessionKind) -> Tuple[str, str]: ...
+
+    async def write(
+        self,
+        kind: SessionKind,
+        text: str,
+        *,
+        expected_version: Optional[str] = None,
+        reason: str = "",
+        changes: Sequence[str] = (),
+        session_id: Optional[int] = None,
+        as_baseline: bool = False,
+    ) -> str: ...
+
+    async def read_baseline(self, kind: SessionKind) -> Optional[str]: ...
+
+    async def list_history(self, kind: SessionKind, *, limit: int = ...) -> List["LongMemoryHistoryEntry"]: ...
+
+    async def read_snapshot(self, kind: SessionKind, entry_id: str) -> Optional[str]: ...
+
+    async def restore(self, kind: SessionKind, entry_id: str) -> Optional[str]: ...
 
 
 class LongMemoryStore:
@@ -165,9 +203,9 @@ class LongMemoryStore:
     def _read_blocking(self, kind: SessionKind) -> Tuple[str, str]:
         path = self.path_of(kind)
         if not path.exists():
-            return "", _version_of("")
+            return "", content_version("")
         content = path.read_bytes().decode("utf-8-sig").strip()
-        return content, _version_of(content)
+        return content, content_version(content)
 
     def _write_blocking(
         self,

@@ -30,7 +30,7 @@ from typing import Any, Awaitable, Callable, Collection, Dict, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
-from src.modules.storage.long_memory import LongMemoryConflict, LongMemoryStore
+from src.modules.storage.long_memory import LongMemoryBackend, LongMemoryConflict
 from src.modules.types.session_kind import SessionKind
 
 from ..background import SUMMARY_PROFILE
@@ -65,7 +65,7 @@ class LongMemoryWriter:
     def __init__(
         self,
         *,
-        store: LongMemoryStore,
+        store: LongMemoryBackend,
         sessions_repo: Any,
         recap_repo: Any,
         llm_service: Any,
