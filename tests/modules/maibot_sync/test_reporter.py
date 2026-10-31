@@ -1,4 +1,4 @@
-"""直播近况上报器：开播 / 换环节 / 收播快照、心跳、回顾重试、回放场次跳过、收尾与 HTTP 推送。"""
+"""直播近况上报器：开播 / 换环节 / 收播快照、心跳、回顾重试（插件拒收不重试）、回放场次跳过、收尾与 HTTP 推送。"""
 
 from __future__ import annotations
 
@@ -15,22 +15,23 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.recap import StreamerRecapWrittenPayload
 from src.modules.events.payloads.rundown import RundownChangedPayload
-from src.modules.maibot_sync import HttpStatusSender, LiveStatusReporter
+from src.modules.maibot_sync import HttpStatusSender, LiveStatusReporter, StatusRejected
 
 
 class FakeSender:
-    """记录推送内容；``failures`` 次之前的推送抛错，模拟 MaiBot 暂时不可达。"""
+    """记录推送内容；``failures`` 次之前的推送抛 ``error``（缺省模拟 MaiBot 暂时不可达）。"""
 
-    def __init__(self, failures: int = 0) -> None:
+    def __init__(self, failures: int = 0, error: Exception | None = None) -> None:
         self.bodies: List[Dict[str, Any]] = []
         self.attempts = 0
         self.failures = failures
+        self.error = error or ConnectionError("MaiBot 未启动")
         self.closed = False
 
     async def send(self, body: Dict[str, Any]) -> None:
         self.attempts += 1
         if self.attempts <= self.failures:
-            raise ConnectionError("MaiBot 未启动")
+            raise self.error
         self.bodies.append(body)
 
     async def close(self) -> None:
@@ -161,6 +162,22 @@ async def test_recap_retries_until_delivered_and_gives_up_after_budget() -> None
         await reporter.stop()
 
 
+async def test_rejected_push_is_not_retried() -> None:
+    """插件明确拒收（如没开整场记录回放，回 403）：重试也没用，只推一次。"""
+    sender = FakeSender(failures=100, error=StatusRejected("HTTP 403: live_memory.enabled=false"))
+    bus, reporter = _reporter(sender, retry_delays_ms=(1, 1, 1))
+    try:
+        await bus.emit(
+            CoreEvents.STREAMER_RECAP_WRITTEN,
+            StreamerRecapWrittenPayload(live_session_id=5, started_at_ms=1, ended_at_ms=2, recap_text="x"),
+            source="test",
+        )
+        await _wait_until(lambda: sender.attempts == 1 and not reporter._push_tasks)
+        assert sender.attempts == 1
+    finally:
+        await reporter.stop()
+
+
 class FakeTranscriptSource:
     """按场次给出整场记录；``broken`` 时模拟读库失败。"""
 
@@ -265,7 +282,7 @@ async def test_http_sender_posts_json_with_bearer_token_and_raises_on_rejection(
         assert received == [{"type": "snapshot", "live": True}]
 
         wrong = HttpStatusSender(url=url, token="nope", timeout_ms=2_000)
-        with pytest.raises(RuntimeError, match="HTTP 401"):
+        with pytest.raises(StatusRejected, match="HTTP 401"):
             await wrong.send({"type": "snapshot"})
         await sender.close()
         await wrong.close()

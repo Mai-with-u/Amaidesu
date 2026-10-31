@@ -40,11 +40,12 @@ class MaiBotSyncConfigSchema(BaseConfig):
         ),
     )
     send_transcript: bool = Field(
-        default=True,
+        default=False,
         title="推送整场记录",
         description=(
             "回顾写好后，是否把这场的全部对话（弹幕、醒目留言、主播发言）一并推给插件，"
-            "由插件回放进 MaiBot 的直播间会话、进长期记忆；插件侧还要打开 live_memory.enabled"
+            "由插件回放进 MaiBot 的直播间会话、进长期记忆；插件侧还要打开 live_memory.enabled。"
+            "可选：不开时 QQ 麦麦仍能经插件存下的各场回顾查直播内容"
         ),
     )
     heartbeat_interval_ms: int = Field(

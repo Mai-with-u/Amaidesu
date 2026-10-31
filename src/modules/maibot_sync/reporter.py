@@ -9,7 +9,8 @@ MaiBot 7×24 常驻，Amaidesu 开播时才启动；QQ 那边的麦麦要知道"
 - **近况快照**：每次都发完整状态（是否在播、标题、开播时刻、当前环节），而非增量。
   直播期间按心跳间隔重发，插件错过任何一次都能被下一次补齐，也据此判断直播是否
   仍在进行。
-- **场次回顾**：回顾写好后单独发一次，失败按 5s / 30s / 2min 重试三次。
+- **场次回顾**：回顾写好后单独发一次，失败按 5s / 30s / 2min 重试三次；插件明确拒收
+  （4xx：对应开关没开、格式不对）时不再重试。
 - **整场记录**：回顾写好时一并从库里读出这场的全部对话推过去（重试同上），插件把它
   回放进 MaiBot 的直播间会话、由聊天摘要吸收进长期记忆。挂在回顾事件上而不是收播事件
   上：进程退出时收播来不及推，回顾则会在下次启动时补写，整场记录随之补推。
@@ -41,6 +42,8 @@ logger = get_logger("LiveStatusReporter")
 
 # 回顾与整场记录推送失败后的重试间隔（毫秒）
 _RETRY_DELAYS_MS = (5_000, 30_000, 120_000)
+# 一次推送的结果：送到 / 暂时失败（可重试）/ 被插件拒收（重试也没用）
+_DELIVERED, _FAILED, _REJECTED = "delivered", "failed", "rejected"
 
 
 class StatusSender(Protocol):
@@ -49,6 +52,10 @@ class StatusSender(Protocol):
     async def send(self, body: Dict[str, Any]) -> None: ...
 
     async def close(self) -> None: ...
+
+
+class StatusRejected(RuntimeError):
+    """插件明确拒收（HTTP 4xx：对应开关没开、令牌或格式不对）：原样重试也不会成功。"""
 
 
 class TranscriptSource(Protocol):
@@ -72,7 +79,8 @@ class HttpStatusSender:
         async with self._session.post(self._url, json=body, headers=self._headers) as response:
             if response.status >= 300:
                 detail = (await response.text())[:200]
-                raise RuntimeError(f"HTTP {response.status}: {detail}")
+                error = StatusRejected if 400 <= response.status < 500 else RuntimeError
+                raise error(f"HTTP {response.status}: {detail}")
 
     async def close(self) -> None:
         if self._session is not None and not self._session.closed:
@@ -239,7 +247,11 @@ class LiveStatusReporter:
         }
 
     async def _send(self, body: Dict[str, Any], what: str) -> bool:
-        """推送一份近况；同一原因的失败只告警一次，恢复后再失败重新告警。"""
+        """推送一份近况，送到返回 True。"""
+        return await self._deliver(body, what) == _DELIVERED
+
+    async def _deliver(self, body: Dict[str, Any], what: str) -> str:
+        """推送一份近况，返回送到 / 失败 / 被拒收；同一原因的失败只告警一次，恢复后再失败重新告警。"""
         body = {**body, "sent_at_ms": self._clock_ms()}
         try:
             await self._sender.send(body)
@@ -250,11 +262,11 @@ class LiveStatusReporter:
                 logger.warning(f"{what}推送给 MaiBot 失败（后续同因失败降为 debug）: {failure}")
             else:
                 logger.debug(f"{what}推送给 MaiBot 仍然失败（同因）: {failure}")
-            return False
+            return _REJECTED if isinstance(exc, StatusRejected) else _FAILED
         if self._last_failure:
             logger.info("直播近况推送已恢复")
         self._last_failure = ""
-        return True
+        return _DELIVERED
 
     def _spawn(self, coro: Coroutine[Any, Any, None], name: str) -> None:
         task = asyncio.create_task(coro, name=name)
@@ -274,11 +286,15 @@ class LiveStatusReporter:
         await self._send_with_retry(body, "整场记录")
 
     async def _send_with_retry(self, body: Dict[str, Any], what: str) -> None:
-        if await self._send(body, what):
-            return
-        for delay_ms in self._retry_delays_ms:
-            await asyncio.sleep(delay_ms / 1000)
-            if await self._send(body, what):
+        """推送并按退避重试；插件拒收（如没开整场记录回放）时不再重试。"""
+        for delay_ms in (0, *self._retry_delays_ms):
+            if delay_ms:
+                await asyncio.sleep(delay_ms / 1000)
+            outcome = await self._deliver(body, what)
+            if outcome == _DELIVERED:
+                return
+            if outcome == _REJECTED:
+                logger.info(f"{what}（场次 {body['live_session_id']}）被插件拒收，不再重试")
                 return
         logger.warning(f"{what}（场次 {body['live_session_id']}）多次推送失败，已放弃")
 

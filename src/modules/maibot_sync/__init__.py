@@ -17,6 +17,7 @@ from src.modules.maibot_sync.notes_sync import (
 from src.modules.maibot_sync.reporter import (
     HttpStatusSender,
     LiveStatusReporter,
+    StatusRejected,
     StatusSender,
     TranscriptSource,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "NotesRemote",
     "RemoteNotes",
     "SharedNotesStore",
+    "StatusRejected",
     "StatusSender",
     "StorageTranscriptSource",
     "TranscriptSource",

@@ -125,6 +125,18 @@ def _check_widget_html_page(d: Path) -> None:
     assert dashboard["danmaku_widget"]["enabled"] is True  # 段内其余字段原样保留
 
 
+def _seed_maibot_sync_transcript(d: Path) -> None:
+    doc = _rewound(d, "infra.toml", "2.0.43")
+    doc["maibot_sync"]["send_transcript"] = True
+    write_doc(d, "infra.toml", doc)
+
+
+def _check_maibot_sync_transcript(d: Path) -> None:
+    section = read_doc(d, "infra.toml")["maibot_sync"]
+    assert section["send_transcript"] is False  # 整场记录推送降为可选：旧默认改写为关
+    assert section["share_notes"] is True  # 新增的共享笔记开关按默认补齐
+
+
 def _check_sc_probability(d: Path) -> None:
     simulator = read_doc(d, "infra.toml")["simulator"]
     assert "sc_probability" not in simulator and "sc_pay_probability" in simulator  # 实际生效的付费 SC 概率不受影响
@@ -448,6 +460,12 @@ CASES = [
         _check_bili_danmaku_message_config,
     ),
     Case("widget-html-page", ("infra.toml",), _seed_widget_html_page, _check_widget_html_page),
+    Case(
+        "maibot-sync-transcript-optional",
+        ("infra.toml",),
+        _seed_maibot_sync_transcript,
+        _check_maibot_sync_transcript,
+    ),
 ]
 
 
@@ -476,6 +494,7 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "drop_profile_history_budget": ("case", "profile-history-budget"),
     "profile_give_up": ("case", "profile-give-up"),
     "widget_drop_html_page": ("case", "widget-html-page"),
+    "maibot_sync_transcript_optional": ("case", "maibot-sync-transcript-optional"),
     # 具名测试函数覆盖
     "builder_scene_transport": ("test", "test_migrations.py#test_builder_scene_transport_hook_and_writeback"),
     "drop_minecraft_builder_section": ("test", "test_migrations.py#test_builder_scene_transport_hook_and_writeback"),

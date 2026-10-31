@@ -1043,6 +1043,14 @@ _upgrade_widget_drop_html_page = chain(
 # 生产钩子登记：infra.toml v2.0.43（小部件段 enable_html_page 删键，旧透明页退役）
 register_file_hook("infra.toml", "widget_drop_html_page", "2.0.43", _upgrade_widget_drop_html_page)
 
+# infra.toml v2.0.44：整场记录回放降为可选——QQ 麦麦经插件存下的各场回顾就能查直播
+# 内容，回放进直播间会话只在需要进 MaiBot 长期记忆时才开。``send_transcript`` 默认
+# 由 true 改为 false，仅改写仍是旧默认的落盘值。
+_upgrade_maibot_sync_transcript_optional = swap_default("maibot_sync.send_transcript", True, False)
+
+# 生产钩子登记：infra.toml v2.0.44（[maibot_sync].send_transcript 默认改为关）
+register_file_hook("infra.toml", "maibot_sync_transcript_optional", "2.0.44", _upgrade_maibot_sync_transcript_optional)
+
 
 __all__ = [
     "FileUpgradeHook",
