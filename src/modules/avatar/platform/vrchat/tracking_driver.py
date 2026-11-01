@@ -11,13 +11,15 @@ VRChat 的 OSC 能写的只有两类：官方的眼动输入（任何形象都�
   换算过去，只发变化了的值；形象上没有的参数 VRChat 直接忽略。
 - **风格化标记**：形象作者另做的参数（如 ``Tears``），按登记的名字写 0~1，变化了才发。
 
-头部转动 VRChat 不开放写入，跟着玩家自己的头（桌面模式下是视角）。
+头部转动 VRChat 不开放写入，跟着玩家自己的头（桌面模式下是视角）。身体动作只有手势能做：
+按登记的对照触发动作菜单里的动作（挥手、指一下……），站姿与叠加动作 VRChat 没有对应，跳过。
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
+from src.modules.avatar.tracking.body import GESTURE, BodyCue
 from src.modules.avatar.tracking.channels import GAZE_X, GAZE_Y, MARKER_PREFIX, Frame, smile
 
 # 视线 ±1 对应的眼球转角（度），与其他平台一致
@@ -83,17 +85,23 @@ class VrchatTrackingDriver:
         *,
         face_prefix: Optional[str] = "FT/",
         markers: Optional[Mapping[str, str]] = None,
+        gestures: Optional[Mapping[str, str]] = None,
+        trigger_emote: Optional[Callable[[str], bool]] = None,
     ) -> None:
         """Args:
         send: 发一条 OSC 消息（地址, 参数）。
         is_open: OSC 客户端是否在用。
         face_prefix: 面捕参数名前缀（``/avatar/parameters/<前缀>v2/<名字>``）；None = 不发脸部参数。
         markers: 风格化标记名 → 形象上的参数名。
+        gestures: 手势名 → 动作表里的动作名。
+        trigger_emote: 按动作名触发动作菜单里的动作。
         """
         self._send = send
         self._is_open = is_open
         self._face_prefix = face_prefix
         self._markers = dict(markers or {})
+        self._gestures = dict(gestures or {}) if trigger_emote is not None else {}
+        self._trigger_emote = trigger_emote
         # 每个形象参数最近一次发出去的值：只发变化了的
         self._sent: Dict[str, float] = {}
 
@@ -129,6 +137,14 @@ class VrchatTrackingDriver:
             self._send(address, value)
             if address.startswith("/avatar/parameters/"):
                 self._sent[address[len("/avatar/parameters/") :]] = value
+
+    def body_supports(self, cue: BodyCue) -> bool:
+        return cue.kind == GESTURE and cue.name in self._gestures
+
+    async def perform_body(self, cue: BodyCue) -> None:
+        """手势 → 触发动作菜单里对应的动作。"""
+        if self._trigger_emote is not None:
+            self._trigger_emote(self._gestures[cue.name])
 
 
 __all__ = ["EYES_CLOSED", "EYE_PITCH_YAW", "GAZE_PITCH_DEG", "GAZE_YAW_DEG", "VrchatTrackingDriver", "face_parameters"]

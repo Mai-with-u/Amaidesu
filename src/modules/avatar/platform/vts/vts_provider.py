@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 from pydantic import Field, field_validator
 
 from src.modules.avatar.tool_common import dispatch_tool, unknown_action_fail
+from src.modules.avatar.tracking.body import BODY_GESTURES, OVERLAYS, STANCES, check_action_map
 from src.modules.avatar.tracking.channels import MARKERS
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
@@ -125,6 +126,26 @@ class VTSProvider(ConnectionToolProvider):
             ),
         )
 
+        body_hotkeys: Dict[str, str] = Field(
+            title="身体动作对应的热键",
+            default_factory=dict,
+            description=(
+                '身体动作名 → 本模型上的热键名：站姿绑"换待机动画"的热键，叠加动作和手势绑"播动画"的热键；'
+                "没登记的身体动作在 VTS 上跳过。动作名：站姿 "
+                + "、".join(f"{name}（{label}）" for name, label in STANCES.items())
+                + "；叠加动作 "
+                + "、".join(f"{name}（{label}）" for name, label in OVERLAYS.items())
+                + "；手势 "
+                + "、".join(f"{name}（{label}）" for name, label in BODY_GESTURES.items())
+            ),
+            json_schema_extra={"x-ui-advanced": True},
+        )
+
+        @field_validator("body_hotkeys")
+        @classmethod
+        def _known_body(cls, value: Dict[str, str]) -> Dict[str, str]:
+            return check_action_map(value, what="热键名")
+
         @field_validator("markers")
         @classmethod
         def _known_markers(cls, value: Dict[str, str]) -> Dict[str, str]:
@@ -184,6 +205,8 @@ class VTSProvider(ConnectionToolProvider):
             mouth_smile_neutral=self.typed_config.mouth_smile_neutral,
             brow_neutral=self.typed_config.brow_neutral,
             markers=self.typed_config.markers,
+            body_hotkeys=self.typed_config.body_hotkeys,
+            trigger_hotkey=self._trigger_body_hotkey,
         )
         self._reconnect_interval_s = reconnect_interval_s or self._RECONNECT_INTERVAL_S
         self._is_connecting = False
@@ -319,6 +342,10 @@ class VTSProvider(ConnectionToolProvider):
             return unknown_action_fail("vts_trigger_preset_action", action, catalog)
         success = await self.hotkey_matcher.trigger_hotkey(resolved)
         return tool_result_ok("vts_trigger_preset_action", bool(success), {"action": action})
+
+    async def _trigger_body_hotkey(self, name: str) -> bool:
+        """身体动作：按登记的热键名触发。"""
+        return await self.trigger_hotkey(name=name)
 
     async def trigger_hotkey(self, name: str = "", hotkey_id: str = "") -> bool:
         """触发热键：按热键名解析（``find_by_name``）优先，``hotkey_id`` 兜底。

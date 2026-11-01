@@ -14,12 +14,16 @@ VTS 输入，其中 VTS 自带的（头部角度、睁眼、眼球、眉、嘴�
 风格化标记（脸红、眼泪……）按配置登记的对应关系写：登记成 VTS 表情文件（``.exp3.json``）的，
 值越过阈值时整体淡入、落回时淡出（带回差，在阈值附近抖动不会反复开关）；登记成输入名的，
 每帧按 0~1 照写，在 VTS 里接到模型作者做的参数上。
+
+身体动作（换站姿、叠动作、做手势）按配置登记的热键触发：画师做的动作文件在 VTS 里绑成热键，
+站姿用"换待机动画"的热键、手势用"播动画"的热键；没登记的动作跳过。
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, Iterable, Mapping, Optional, Set, Tuple
 
+from src.modules.avatar.tracking.body import BodyCue
 from src.modules.avatar.tracking.channels import (
     BODY_PITCH,
     BODY_ROLL,
@@ -103,6 +107,8 @@ class VtsTrackingDriver:
         mouth_smile_neutral: float,
         brow_neutral: float,
         markers: Optional[Mapping[str, str]] = None,
+        body_hotkeys: Optional[Mapping[str, str]] = None,
+        trigger_hotkey: Optional[Callable[[str], Awaitable[bool]]] = None,
         clock: Callable[[], int] = wall_now_ms,
     ) -> None:
         """Args:
@@ -111,8 +117,12 @@ class VtsTrackingDriver:
         mouth_smile_neutral: 中性嘴角对应的 MouthSmile 输入值。
         brow_neutral: 中性眉对应的眉高输入值。
         markers: 风格化标记名 → 本模型上的表情文件名（``.exp3.json``）或 VTS 输入名。
+        body_hotkeys: 身体动作名 → 本模型上的热键名（站姿用换待机动画的热键，手势用播动画的热键）。
+        trigger_hotkey: 按热键名触发。
         """
         self._client = client
+        self._body_hotkeys = dict(body_hotkeys or {}) if trigger_hotkey is not None else {}
+        self._trigger_hotkey = trigger_hotkey
         self._eye_open_rest = eye_open_rest
         self._mouth_smile_neutral = mouth_smile_neutral
         self._brow_neutral = brow_neutral
@@ -303,6 +313,14 @@ class VtsTrackingDriver:
                 "ExpressionActivationRequest", {"expressionFile": file, "fadeTime": MARKER_FADE_S, "active": on}
             )
             self._file_on[file] = on
+
+    def body_supports(self, cue: BodyCue) -> bool:
+        return cue.name in self._body_hotkeys
+
+    async def perform_body(self, cue: BodyCue) -> None:
+        """按登记的热键名触发（热键在当前模型上找不到时适配器会记警告）。"""
+        if self._trigger_hotkey is not None:
+            await self._trigger_hotkey(self._body_hotkeys[cue.name])
 
 
 __all__ = [

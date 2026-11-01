@@ -7,6 +7,7 @@ VRChat 官方的 OSC 眼动输入（任何形象都认），脸走 VRCFaceTracki
 
 - 动作片段：动作表里的动作（默认对应 VRChat SDK 默认模板的 ``VRCEmote``）登记给面捕合成器，
   主播经 ``avatar_act`` 按名字触发；触发 = 把动作值写进动作参数，过一会儿写回 0。
+- 身体动作：面捕合成器的手势（送礼挥手、主播点名指一下……）按 ``body_emotes`` 对到动作表里的动作。
 - 头顶聊天框：登记为字幕服务的一个后端，跟随字幕源。
 - 不向 LLM 暴露工具；``set_expression`` 等契约方法只给调试台用（设表情交给面捕合成器）。
 
@@ -22,6 +23,7 @@ from pydantic import Field, field_validator
 
 from src.modules.avatar.platform.vrchat.chatbox import VRChatChatboxBackend
 from src.modules.avatar.tool_common import dispatch_tool, unknown_action_fail
+from src.modules.avatar.tracking.body import BODY_GESTURES, GESTURE, check_action_map
 from src.modules.avatar.tracking.channels import MARKERS
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
@@ -105,6 +107,14 @@ class VRChatProvider(BaseToolProvider):
             ge=0,
             description="触发后多久把动作参数写回 0（鼓掌、跳舞这类循环动作靠归零停下）；0 = 不归零",
         )
+        body_emotes: Dict[str, str] = Field(
+            title="手势对应的动作",
+            default_factory=lambda: {"wave": "Wave", "wave_both": "Wave", "point": "Point", "cheer": "Cheer"},
+            description=(
+                "面捕合成器的手势 → 动作表里的动作名（送礼挥手、主播点名的手势都走这里）。手势名："
+                + "、".join(f"{name}（{label}）" for name, label in BODY_GESTURES.items())
+            ),
+        )
         markers: Dict[str, str] = Field(
             title="风格化标记",
             default_factory=dict,
@@ -136,6 +146,11 @@ class VRChatProvider(BaseToolProvider):
             if empty:
                 raise ValueError(f"风格化标记 {empty} 没写对应的形象参数名")
             return {name: str(target).strip() for name, target in value.items()}
+
+        @field_validator("body_emotes")
+        @classmethod
+        def _known_gestures(cls, value: Dict[str, str]) -> Dict[str, str]:
+            return check_action_map(value, what="动作名", kinds=(GESTURE,))
 
     def __init__(
         self,
@@ -173,6 +188,8 @@ class VRChatProvider(BaseToolProvider):
             lambda: self._is_connected and self.osc_client is not None,
             face_prefix=self.typed_config.face_tracking_prefix if self.typed_config.face_tracking_enabled else None,
             markers=self.typed_config.markers,
+            gestures=self._body_gestures(),
+            trigger_emote=self._trigger_emote,
         )
 
         # OSC 客户端
@@ -266,6 +283,16 @@ class VRChatProvider(BaseToolProvider):
         self.logger.info(f"{self.__class__.__name__} 已停止")
 
     # ===== 业务方法 =====
+
+    def _body_gestures(self) -> Dict[str, str]:
+        """能做的手势：对应的动作在动作表里的（自定义了动作表时，对不上的手势跳过并告警）。"""
+        gestures: Dict[str, str] = {}
+        for gesture, emote in self.typed_config.body_emotes.items():
+            if emote in self.emotes:
+                gestures[gesture] = emote
+            else:
+                self.logger.warning(f"手势 {gesture} 对应的动作 {emote} 不在动作表里，这个手势在 VRChat 上跳过")
+        return gestures
 
     def _trigger_emote(self, emote_name: str) -> bool:
         """写动作参数 → 延迟归零；新动作会取消上一个尚未执行的归零。返回是否写出去了。"""

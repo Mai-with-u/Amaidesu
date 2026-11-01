@@ -265,3 +265,24 @@ async def test_connect_creates_marker_inputs_and_reads_model_expressions(tmp_pat
     }
     assert (created["Blush"]["min"], created["Blush"]["max"]) == (0.0, 1.0)  # 登记成输入的标记补建成 0~1
     await provider.disconnect()
+
+
+async def test_body_actions_trigger_their_registered_hotkeys(tmp_path: Path, fake_clock: FakeClock) -> None:
+    socket = _socket()
+    tracking = _tracking(fake_clock)
+    await tracking.start()
+    provider = create_vts_provider(
+        config={"body_hotkeys": {"wave": "Wave"}},
+        tracking=tracking,
+        client_factory=_factory(tmp_path, socket_connector(socket)),
+    )
+    await provider.setup()
+    names = {e["name"] for e in tracking.action_catalog() if e["kind"] == "身体动作"}
+    assert names == {"挥手"}  # 只有登记了热键的身体动作
+    assert await tracking.act("挥手") is True
+    await tracking.tick_once()
+    assert socket.sent[-1]["messageType"] == "HotkeyTriggerRequest" and socket.sent[-1]["data"] == {"hotkeyID": "u1"}
+    await provider.cleanup()
+    await tracking.stop()
+    with pytest.raises(ValueError, match="未知的身体动作"):
+        create_vts_provider(config={"body_hotkeys": {"backflip": "Flip"}})

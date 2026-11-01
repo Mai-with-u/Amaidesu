@@ -123,3 +123,25 @@ async def test_setup_attaches_the_face_driver_and_registers_emotes_as_clips(fake
 def test_markers_config_rejects_unknown_names() -> None:
     with pytest.raises(ValueError, match="未知的风格化标记"):
         VRChatProvider(config={"markers": {"rainbow": "Rainbow"}})
+
+
+async def test_body_gestures_trigger_menu_emotes_and_unmatched_ones_are_skipped(fake_clock: FakeClock) -> None:
+    tracking = _tracking(fake_clock)
+    provider = VRChatProvider(config={"emote_reset_ms": 0}, tracking=tracking)
+    await provider.setup()
+    provider.osc_client = MagicMock()
+    names = {e["name"] for e in tracking.action_catalog() if e["kind"] == "身体动作"}
+    assert names == {"挥手", "双手挥", "指一下", "举拳庆祝"}  # 默认对到 SDK 默认动作菜单
+    assert await tracking.act("指一下") is True
+    await tracking.tick_once()
+    assert ("/avatar/parameters/VRCEmote", 3) in _sent(provider)
+    await provider.cleanup()
+
+    # 自定义了动作表、对不上的手势跳过（不让启动失败）
+    custom_tracking = _tracking(fake_clock)
+    custom = VRChatProvider(config={"emotes": {"Wave": 1}}, tracking=custom_tracking)
+    await custom.setup()
+    assert {e["name"] for e in custom_tracking.action_catalog() if e["kind"] == "身体动作"} == {"挥手", "双手挥"}
+    await custom.cleanup()
+    with pytest.raises(ValueError, match="不能登记"):
+        VRChatProvider(config={"body_emotes": {"crying": "Sadness"}})  # 站姿在 VRChat 上没有对应
