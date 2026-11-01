@@ -1,56 +1,73 @@
-"""maibot_sync 域的替身：MaiBot 插件上的共享笔记正本。"""
+"""maibot_sync 域的替身：MaiBot 适配器插件上的共享笔记接口，以及组合根注入的笔记格式函数。"""
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
-from src.modules.maibot_sync import NotesConflict, RemoteNotes
-from src.modules.storage.long_memory import content_version
+from src.modules.maibot_sync import PendingPromise
 
 
 class FakeNotesRemote:
-    """正本的替身：存一份全文，按版本号核对写入；``down`` 时模拟 MaiBot 没开。
+    """插件那头的替身：记下发布的文字、存待收的约定、按编号删掉已收的；``down`` 时模拟 MaiBot 没开。
 
-    ``before_push`` 在下一次推送核对版本之前执行一次，模拟"推的那一刻 QQ 里刚记下一件约定"。
+    ``fail_publish`` 为真时只有发布失败（取约定照常），模拟"刚取完约定插件就断了"。
     """
 
-    def __init__(self, text: str = "") -> None:
-        self.text = text.strip()
+    def __init__(self) -> None:
+        self.published: Optional[str] = None
+        self.publishes: List[str] = []
+        self.inbox: List[PendingPromise] = []
+        self.acks: List[List[str]] = []
+        self.calls = 0
         self.down = False
-        self.fetches = 0
-        self.pushes: List[Dict[str, Any]] = []
-        self.before_push: Optional[Callable[[], None]] = None
+        self.fail_publish = False
         self.closed = False
+        self._next_id = 0
 
-    def append(self, line: str, section: str = "答应过的事") -> None:
-        """像插件的记约定工具那样，在某节末尾追加一行（没有这一节就新开）。"""
-        header = f"## {section}"
-        lines = self.text.splitlines()
-        if header not in lines:
-            self.text = (self.text + f"\n\n{header}\n{line}").strip()
-            return
-        end = lines.index(header) + 1
-        while end < len(lines) and not lines[end].startswith("## "):
-            end += 1
-        self.text = "\n".join([*lines[:end], line, *lines[end:]]).strip()
+    def record(self, text: str, source: str = "QQ群") -> str:
+        """像插件的记约定工具那样记下一件，返回它的编号。"""
+        self._next_id += 1
+        promise = PendingPromise(id=f"p{self._next_id}", text=text, source=source)
+        self.inbox.append(promise)
+        return promise.id
 
-    async def fetch(self) -> RemoteNotes:
-        if self.down:
-            raise ConnectionError("MaiBot 没开")
-        self.fetches += 1
-        return RemoteNotes(text=self.text, version=content_version(self.text))
+    async def publish(self, text: str) -> None:
+        self._reach()
+        if self.fail_publish:
+            raise ConnectionError("插件刚断了")
+        self.published = text
+        self.publishes.append(text)
 
-    async def push(self, text: str, *, expected_version: str, reason: str, changes: Sequence[str]) -> RemoteNotes:
-        if self.down:
-            raise ConnectionError("MaiBot 没开")
-        if self.before_push is not None:
-            hook, self.before_push = self.before_push, None
-            hook()
-        if expected_version != content_version(self.text):
-            raise NotesConflict("版本对不上")
-        self.text = text.strip()
-        self.pushes.append({"text": self.text, "reason": reason, "changes": list(changes)})
-        return RemoteNotes(text=self.text, version=content_version(self.text))
+    async def promises(self) -> List[PendingPromise]:
+        self._reach()
+        return list(self.inbox)
+
+    async def acknowledge(self, ids: Sequence[str]) -> None:
+        self._reach()
+        self.acks.append(list(ids))
+        self.inbox = [item for item in self.inbox if item.id not in set(ids)]
 
     async def close(self) -> None:
         self.closed = True
+
+    def _reach(self) -> None:
+        if self.down:
+            raise ConnectionError("MaiBot 没开")
+        self.calls += 1
+
+
+def render_view(text: str) -> str:
+    """发布渲染的替身：给全文加个记号，验证发布出去的是渲染后的那份。"""
+    return f"给 QQ 看：{text}" if text else ""
+
+
+def append_promises(text: str, promises: Sequence[Tuple[str, str]]) -> Tuple[str, List[str]]:
+    """收约定的替身：全文里没出现过的正文按行追加到末尾，标未兑现与来处。"""
+    lines = text.splitlines()
+    changes: List[str] = []
+    for body, source in promises:
+        if any(body in line for line in lines):
+            continue
+        lines.append(f"- {body}〔未兑现 · 来自 {source}〕")
+        changes.append(f"收下：{body}")
+    return "\n".join(lines).strip(), changes

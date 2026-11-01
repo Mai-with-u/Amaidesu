@@ -9,9 +9,8 @@
 from src.modules.maibot_sync.config_schema import MaiBotSyncConfigSchema
 from src.modules.maibot_sync.notes_sync import (
     HttpNotesRemote,
-    NotesConflict,
     NotesRemote,
-    RemoteNotes,
+    PendingPromise,
     SharedNotesStore,
 )
 from src.modules.maibot_sync.reporter import (
@@ -28,9 +27,8 @@ __all__ = [
     "HttpStatusSender",
     "LiveStatusReporter",
     "MaiBotSyncConfigSchema",
-    "NotesConflict",
     "NotesRemote",
-    "RemoteNotes",
+    "PendingPromise",
     "SharedNotesStore",
     "StatusRejected",
     "StatusSender",

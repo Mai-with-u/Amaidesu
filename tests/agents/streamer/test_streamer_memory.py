@@ -34,7 +34,8 @@ from src.agents.streamer.memory import (
     build_memory_tool_provider,
     collect_payment_material,
 )
-from src.agents.streamer.memory.notes import merge_three_way
+from src.agents.streamer.memory.long_memory import format_long_memory
+from src.agents.streamer.memory.notes import absorb_promises
 from src.agents.streamer.memory.recap import clip_whole_sentences
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.names import CoreEvents
@@ -511,30 +512,32 @@ async def test_long_memory_marks_lines_edited_by_hand_since_last_merge(store: SQ
 
 
 @pytest.mark.asyncio
-async def test_long_memory_shared_with_maibot_keeps_qq_promises(store: SQLiteDatabase, tmp_path: Path) -> None:
-    """笔记正本在 MaiBot：模型思考期间 QQ 里记下的约定在新版本上保留；合并之后才记下的那条
-    下一场不当成人改的行，模型能把它标成已兑现。合并结果两边一致。"""
-    remote = FakeNotesRemote("## 老梗与口头禅\n- 嘴硬〔始于 #1 · 最近 #1〕")
-    shared = SharedNotesStore(
-        local=store.long_memory, remote=remote, reconcile=merge_three_way, state_path=tmp_path / "synced.md"
-    )
+async def test_long_memory_shared_with_maibot_absorbs_qq_promises(store: SQLiteDatabase) -> None:
+    """与 MaiBot 共享笔记：QQ 里记下的约定在整理读笔记时并进来，模型思考期间才记下的那条
+    留到下一次读时再收；并进来的行不当成人改的，模型能把它标成已兑现。每次写完发布的就是
+    开播注入的那份视图，发布之后约定才回报已收。"""
+    remote = FakeNotesRemote()
+    shared = SharedNotesStore(local=store.long_memory, remote=remote, render=format_long_memory, absorb=absorb_promises)
+    await store.long_memory.write("live", "## 老梗与口头禅\n- 嘴硬〔始于 #1 · 最近 #1〕")
+    first = remote.record("答应群友小明下次直播唱歌")
     first_pk = await _recapped_session(store, "这场又嘴硬了")
     reply = MagicMock()
     reply.ok, reply.content = True, _ops({"op": "add", "section": "长线目标", "text": "盖海景房"})
 
     async def qq_records_meanwhile(*_args: Any, **_kwargs: Any) -> Any:
-        remote.append("- 答应群友小明下次直播唱歌〔未兑现 · 来自 QQ群〕")
+        remote.record("答应群友小红一起画画")
         return reply
 
     llm = MagicMock()
     llm.generate = AsyncMock(side_effect=qq_records_meanwhile)
     text = await _long_writer(store, llm, backend=shared).consolidate(first_pk)
 
-    assert text is not None and "- 盖海景房〔" in text
+    assert text is not None and "- 盖海景房〔" in text and "小红" not in text
     assert f"- 答应群友小明下次直播唱歌〔未兑现 · 来自 QQ群 · 最近 #{first_pk}〕" in text
-    assert remote.text == text == await store.long_memory.read("live")
+    published = format_long_memory(text)
+    assert remote.published == published and "- 答应群友小明下次直播唱歌（还没兑现，来自 QQ群）" in published
+    assert remote.acks == [[first]] and [item.text for item in remote.inbox] == ["答应群友小红一起画画"]
 
-    remote.append("- 答应群友小红一起画画〔未兑现 · 来自 QQ群〕")
     second_pk = await _recapped_session(store, "第二场和小红画了画")
     done = _ops({"op": "done", "id": 2, "reason": "画完了"})
     text = await _long_writer(store, _responses(done), backend=shared).consolidate(second_pk)
@@ -542,7 +545,7 @@ async def test_long_memory_shared_with_maibot_keeps_qq_promises(store: SQLiteDat
     assert text is not None and f"- 答应群友小红一起画画〔已兑现 · 来自 QQ群 · 最近 #{second_pk}〕" in text
     changes = (await store.long_memory.list_history("live"))[0].changes
     assert not any(change.startswith("人改过的行") for change in changes)
-    assert remote.text == text
+    assert remote.published == format_long_memory(text) and remote.inbox == []
     await shared.close()
 
 

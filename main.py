@@ -1067,18 +1067,20 @@ def _build_maibot_sync_reporter(
 def _build_long_memory_store(
     config: Dict[str, Any], database: SQLiteDatabase
 ) -> Tuple[LongMemoryBackend, Optional[SharedNotesStore]]:
-    """长期笔记的读写面：开了 ``[maibot_sync]`` 共享笔记时正本放在 MaiBot 插件、本地文件当缓存。
+    """长期笔记的读写面：开了 ``[maibot_sync]`` 共享笔记时，在本地文件外包一层发布与收约定。
 
-    没开同步、没开共享或缺地址 / 令牌时就是本地文件，行为与只用 Amaidesu 时完全一样。
-    返回（读写面, 共享存储）——后者只在共享时有，供关停时收尾。
+    正本始终是本地 MEMORY.md；共享时正式场写完把"给 QQ 麦麦看的笔记"发布给插件，读之前
+    收下 QQ 里记下的约定。没开同步、没开共享或缺地址 / 令牌时就是本地文件，行为与只用
+    Amaidesu 时完全一样。返回（读写面, 共享存储）——后者只在共享时有，供关停时收尾。
     """
     raw = config.get("maibot_sync", {}) if isinstance(config, dict) else {}
     sync_config = MaiBotSyncConfigSchema(**raw) if isinstance(raw, dict) else MaiBotSyncConfigSchema()
     if not (sync_config.enabled and sync_config.share_notes and sync_config.url and sync_config.token):
         return database.long_memory, None
-    # 延迟加载：笔记的三方合并属于主播记忆的条目格式，导入它会带起整个主播 Agent 包，
+    # 延迟加载：发布的渲染与收约定属于主播记忆的条目格式，导入它们会带起整个主播 Agent 包，
     # 与工厂按需加载 Agent 的做法一致，只在开了共享笔记时才加载
-    from src.agents.streamer.memory.notes import merge_three_way
+    from src.agents.streamer.memory.long_memory import format_long_memory
+    from src.agents.streamer.memory.notes import absorb_promises
 
     store = SharedNotesStore(
         local=database.long_memory,
@@ -1088,10 +1090,11 @@ def _build_long_memory_store(
             timeout_ms=sync_config.request_timeout_ms,
             persona_name=_streamer_name(config),
         ),
-        reconcile=merge_three_way,
-        state_path=database.long_memory.root / "maibot" / "synced.md",
+        # 发布给 QQ 麦麦的就是开播注入的那份视图：四个注入节、去掉标签、不含答应某位观众的条目
+        render=format_long_memory,
+        absorb=absorb_promises,
     )
-    logger.info(f"长期笔记与 MaiBot 共享：正本在 {sync_config.notes_url}，本地 MEMORY.md 当缓存")
+    logger.info(f"长期笔记与 MaiBot 共享：正本在本地，写完发布到 {sync_config.notes_url}，读前收下 QQ 里记下的约定")
     return store, store
 
 
