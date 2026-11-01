@@ -18,9 +18,6 @@
 写的，行尾的"（未兑现）/（已兑现）"读成约定状态。有标签的文件里没带标签的行，
 是人后来手写的，算人工条目。
 
-两份从同一版本各自改过的笔记，用 ``merge_three_way`` 按条目合并（笔记的正本放在别处、
-本地离线期间也写过时用到）。
-
 别处记下的约定（如 QQ 麦麦在群里答应的事）用 ``absorb_promises`` 并进"答应过的事"。
 
 合并操作与按场次的淡出规则在 ``note_merge``。
@@ -30,7 +27,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Collection, Dict, List, Optional, Sequence, Tuple
+from typing import Collection, List, Optional, Sequence, Tuple
 
 __all__ = [
     "ACTIVE_SECTIONS",
@@ -48,7 +45,6 @@ __all__ = [
     "STATUS_OPEN",
     "absorb_promises",
     "mark_manual_edits",
-    "merge_three_way",
     "parse_notes",
     "person_lines",
     "render_for_injection",
@@ -335,59 +331,6 @@ def mark_manual_edits(old_text: str, new_text: str) -> Tuple[str, List[str]]:
             item.manual = True
             marked.append(item.text)
     return render_notes(new_doc), marked
-
-
-def merge_three_way(base: str, local: str, remote: str) -> Tuple[str, List[str]]:
-    """两份从 ``base`` 各自改过的笔记按条目合并，返回合并后的全文与采纳、舍弃了对方哪些改动的说明。
-
-    条目以"所在节 + 正文"认身份（改正文、挪节在这里看作删一条再加一条），逐条比较整行：
-    只有一边动过的取那一边，两边都动过且不一样的以本地为准——本地这边是收播整理与人在
-    WebUI 里的改动，比对方（只追加约定）更完整。对方新加的条目排到所在节末尾。
-    """
-    base_doc, local_doc, remote_doc = parse_notes(base), parse_notes(local), parse_notes(remote)
-    base_lines = _lines_by_key(base_doc)
-    local_lines = _lines_by_key(local_doc)
-    remote_items = {item.key: item for item in reversed(remote_doc.items)}
-    changes: List[str] = []
-
-    merged = NoteDocument(
-        preamble=list(remote_doc.preamble if local_doc.preamble == base_doc.preamble else local_doc.preamble),
-        extra_sections=list(dict.fromkeys([*local_doc.extra_sections, *remote_doc.extra_sections])),
-    )
-    for item in local_doc.items:
-        b, r = base_lines.get(item.key), remote_items.get(item.key)
-        local_line = item.render()
-        if local_line != b:
-            # 本地动过（新增或改了标签）：保留本地；对方也改成别的样子时记下舍弃
-            if r is not None and r.render() not in (b, local_line):
-                changes.append(f"两边都改过，按本地：{item.text}")
-            merged.items.append(item)
-        elif r is None:
-            changes.append(f"采纳对方删除：{item.text}")
-        else:
-            if r.render() != local_line:
-                changes.append(f"采纳对方改动：{item.text}")
-            merged.items.append(r)
-    seen = set(local_lines)
-    for item in remote_doc.items:
-        if item.key in seen:
-            continue
-        seen.add(item.key)
-        b = base_lines.get(item.key)
-        if b is None:
-            changes.append(f"采纳对方新增：〔{item.section}〕{item.text}")
-            merged.items.append(item)
-        elif item.render() != b:
-            changes.append(f"两边都改过，按本地（本地已删）：{item.text}")
-    return render_notes(merged), changes
-
-
-def _lines_by_key(doc: NoteDocument) -> Dict[Tuple[str, str], str]:
-    """条目身份 → 整行渲染（同一身份出现多次时取第一次）。"""
-    lines: Dict[Tuple[str, str], str] = {}
-    for item in doc.items:
-        lines.setdefault(item.key, item.render())
-    return lines
 
 
 def absorb_promises(text: str, promises: Sequence[Tuple[str, str]]) -> Tuple[str, List[str]]:

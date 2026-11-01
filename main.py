@@ -334,7 +334,7 @@ class AppComponents:
     task_tracker: Optional[TaskTracker]
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder]
     maibot_sync_reporter: Optional[LiveStatusReporter]
-    # 与 MaiBot 共享的长期笔记（开了 [maibot_sync] 共享笔记才有；关停时停后台补推、关连接）
+    # 与 MaiBot 共享的长期笔记（开了 [maibot_sync] 共享笔记才有；关停时停后台补发、关连接）
     shared_notes_store: Optional[SharedNotesStore] = None
     # 面捕合成器（形象逐帧驱动；关停时在工具 Provider 收尾之后、事件总线清理之前停）
     avatar_tracking: Optional[TrackingRuntime] = None
@@ -463,7 +463,7 @@ async def create_app_components(
     # 第 ① 段只接线订阅：心跳随 live.started 才起，第 ② 段 Agent 启动补写回顾发出的
     # streamer.recap.written 也能接住（整场记录随回顾一起补推）
     maibot_sync_reporter = _build_maibot_sync_reporter(event_bus, config, database=database)
-    # 长期笔记的读写面：共享时正本在 MaiBot 插件、本地文件当缓存，主播 Agent 与 WebUI 共用同一个
+    # 长期笔记的读写面：共享时在本地文件外包一层发布与收约定，主播 Agent 与 WebUI 共用同一个
     long_memory_store, shared_notes_store = _build_long_memory_store(config, database)
 
     # --- CollectorManager ---
@@ -1563,7 +1563,7 @@ async def run_shutdown(
     # 等到处理完，"已下播"近况才推得出去；之后再退订、停心跳、关连接
     if maibot_sync_reporter is not None:
         await safe_log(maibot_sync_reporter.stop(), "LiveStatusReporter.stop")
-    # 共享笔记同理放在总线清理之后：退出结账的收播整理写完笔记，再停后台补推、关连接
+    # 共享笔记同理放在总线清理之后：退出结账的收播整理写完笔记并发布，再停后台补发、关连接
     if shared_notes_store is not None:
         await safe_log(shared_notes_store.close(), "SharedNotesStore.close")
 

@@ -35,8 +35,8 @@ class MaiBotSyncConfigSchema(BaseConfig):
         title="共享长期笔记",
         description=(
             "是否与 MaiBot 共用主播的长期笔记（答应过的事、老梗、长线目标、关于我自己）："
-            "正本放在插件里，QQ 那边的麦麦也看得到、QQ 里答应的事也会记进来；本地 MEMORY.md 当缓存，"
-            "MaiBot 不在线时照常开播、之后自动补推。只同步正式场的笔记"
+            "正本始终是本地 MEMORY.md，写完把给 QQ 麦麦看的那份发布给插件，读之前收下 QQ 里答应的事；"
+            "MaiBot 不在线时照常开播、之后自动补发。只同步正式场的笔记"
         ),
     )
     send_transcript: bool = Field(

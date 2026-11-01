@@ -76,7 +76,7 @@ class LongMemoryHistoryEntry(BaseModel):
 def content_version(text: str) -> str:
     """全文的版本号：去掉首尾空白后按 UTF-8 取 SHA-1（十六进制）。
 
-    同一份笔记存在两处（本地缓存与别处的正本）时，两边用同一种算法，版本号才对得上。
+    读出时记下、写回时核对：对不上说明这期间文件被别人改过。
     """
     return hashlib.sha1((text or "").strip().encode("utf-8")).hexdigest()
 
@@ -84,8 +84,8 @@ def content_version(text: str) -> str:
 class LongMemoryBackend(Protocol):
     """长期记忆的读写面：收播整理与 WebUI 都只认这一组方法。
 
-    默认实现是本地文件（``LongMemoryStore``）；笔记的正本放在别处、本地文件只当缓存时，
-    换成同样提供这组方法的实现即可，调用方不用知道正本在哪。
+    默认实现是本地文件（``LongMemoryStore``）；读写前后要捎带别的事时（如与 MaiBot 共享笔记：
+    写完发布、读前收约定），在外面包一层同样提供这组方法的实现即可，调用方不用知道。
     """
 
     def path_of(self, kind: SessionKind) -> Path: ...

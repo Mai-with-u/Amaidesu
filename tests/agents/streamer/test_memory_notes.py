@@ -6,7 +6,6 @@
 - 注入只给四个注入节，去标签；对某位观众的条目只在点名时给；按开着的游戏筛
 - 别处并进来的条目（``来自`` 标签）不算人改的，注入与清单里注明来处
 - 并进别处记下的约定：排到"答应过的事"末尾，同一正文只收一次，别的条目不动
-- 三方合并：只有一边动过的取那一边，两边都动过以本地为准，对方新加的排到节末
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from src.agents.streamer.memory.notes import (
     NoteDocument,
     absorb_promises,
     mark_manual_edits,
-    merge_three_way,
     parse_notes,
     person_lines,
     render_for_injection,
@@ -162,54 +160,3 @@ def test_absorb_without_new_promises_keeps_text_and_converts_legacy() -> None:
     legacy, _changes = absorb_promises("## 答应过的事\n- 我答应老王挖钻石（未兑现）", [("答应唱歌", "QQ群")])
     promise = _find(parse_notes(legacy), "我答应老王挖钻石")
     assert (promise.status, promise.manual) == (STATUS_OPEN, False)
-
-
-def test_three_way_takes_each_side_once_and_local_wins_conflicts() -> None:
-    base = (
-        "## 答应过的事\n"
-        "- 答应挖钻石〔未兑现 · 始于 #1 · 最近 #1〕\n"
-        "- 答应唱歌〔未兑现 · 始于 #1 · 最近 #1〕\n"
-        "## 老梗与口头禅\n"
-        "- 嘴硬〔始于 #1 · 最近 #1〕\n"
-        "- 怕黑〔始于 #1 · 最近 #1〕"
-    )
-    # 本地：收播整理把挖钻石标成已兑现、删了怕黑
-    local = base.replace("答应挖钻石〔未兑现", "答应挖钻石〔已兑现").replace("\n- 怕黑〔始于 #1 · 最近 #1〕", "")
-    # 对方：也改了挖钻石（冲突）、删了唱歌、改了嘴硬的标签、改了怕黑（本地已删）、新加一条约定
-    remote = (
-        base.replace("答应挖钻石〔未兑现 · 始于 #1", "答应挖钻石〔放弃 · 始于 #1")
-        .replace("\n- 答应唱歌〔未兑现 · 始于 #1 · 最近 #1〕", "")
-        .replace("- 嘴硬〔始于 #1 · 最近 #1〕", "- 嘴硬〔游戏 minecraft · 始于 #1 · 最近 #1〕")
-        .replace("- 怕黑〔始于 #1 · 最近 #1〕", "- 怕黑〔始于 #1 · 最近 #2〕")
-        + "\n## 答应过的事\n" + _QQ_LINE
-    )  # fmt: skip
-
-    text, changes = merge_three_way(base, local, remote)
-    doc = parse_notes(text)
-    assert _find(doc, "答应挖钻石").status == "已兑现"  # 两边都改：按本地
-    assert "答应唱歌" not in text  # 只有对方删：采纳
-    assert _find(doc, "嘴硬").game == "minecraft"  # 只有对方改：采纳
-    assert "怕黑" not in text  # 本地删、对方改：按本地
-    assert text.splitlines()[:3] == [
-        "## 答应过的事",
-        "- 答应挖钻石〔已兑现 · 始于 #1 · 最近 #1〕",
-        _QQ_LINE,  # 对方新加的排到所在节末尾
-    ]
-    assert changes == [
-        "两边都改过，按本地：答应挖钻石",
-        "采纳对方删除：答应唱歌",
-        "采纳对方改动：嘴硬",
-        "两边都改过，按本地（本地已删）：怕黑",
-        "采纳对方新增：〔答应过的事〕答应群友小明下次直播唱歌",
-    ]
-
-
-def test_three_way_with_only_one_side_changed_is_that_side() -> None:
-    base = "说明\n\n## 老梗与口头禅\n- 嘴硬〔始于 #1 · 最近 #1〕"
-    local = base + "\n- 床名叫咕咕床〔人工〕"
-    assert merge_three_way(base, local, base) == (local, [])
-    remote = "新的说明\n\n## 老梗与口头禅\n- 嘴硬〔始于 #1 · 最近 #1〕"
-    assert merge_three_way(base, base, remote)[0] == remote  # 说明文字只有对方改：采纳
-    # 还没同步过（没有共同版本）：两边各自的条目都留下
-    text, _changes = merge_three_way("", local, "## 答应过的事\n" + _QQ_LINE)
-    assert "床名叫咕咕床" in text and "答应群友小明下次直播唱歌" in text
