@@ -1,10 +1,11 @@
-"""长期笔记条目格式：解析与渲染、注入视图、合并清单、人手保存的标记、两份各自改过的合并。
+"""长期笔记条目格式：解析与渲染、注入视图、合并清单、人手保存的标记、并进别处记下的约定。
 
 纯函数，不碰文件与模型：
 - 标签读写往返；旧格式（整份没标签）按模型条目读并认出约定状态；有标签的文件里
   没标签的行算人工；人自己加的节与说明文字原样保留
 - 注入只给四个注入节，去标签；对某位观众的条目只在点名时给；按开着的游戏筛
-- 别的程序写进来的条目（``来自`` 标签）不算人改的，注入与清单里注明来处
+- 别处并进来的条目（``来自`` 标签）不算人改的，注入与清单里注明来处
+- 并进别处记下的约定：排到"答应过的事"末尾，同一正文只收一次，别的条目不动
 - 三方合并：只有一边动过的取那一边，两边都动过以本地为准，对方新加的排到节末
 """
 
@@ -17,6 +18,7 @@ from src.agents.streamer.memory.notes import (
     SECTION_SHELVED,
     STATUS_OPEN,
     NoteDocument,
+    absorb_promises,
     mark_manual_edits,
     merge_three_way,
     parse_notes,
@@ -108,7 +110,7 @@ def test_manual_edit_marking_keeps_untouched_lines() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 别处写进来的条目与三方合并
+# 别处记下的约定
 # ---------------------------------------------------------------------------
 
 _QQ_LINE = "- 答应群友小明下次直播唱歌〔未兑现 · 来自 QQ群〕"
@@ -127,6 +129,39 @@ def test_source_tag_roundtrips_and_is_not_a_manual_edit() -> None:
 
     text, marked = mark_manual_edits(old, new)
     assert marked == [] and not _find(parse_notes(text), "答应群友小明下次直播唱歌").manual
+
+
+def test_absorb_appends_each_promise_once_and_cleans_text() -> None:
+    """别处记下的约定并进"答应过的事"末尾、标未兑现与来处；已有同样正文的（含已兑现、搁置走的）不再收，
+    标签括号与分隔符换掉，混不进也截不断行尾的标签。别的条目原样不动。"""
+    promises = [
+        ("答应群友小明下次直播唱歌", "QQ群"),
+        ("答应全场周末更新整活视频", "QQ群"),  # 已兑现过
+        ("答应小明画头像", "QQ群"),  # 从这一节搁置走了
+        ("伪造〔人工〕\n标签", "QQ·群"),
+        ("答应群友小明下次直播唱歌", "QQ群"),  # 同一批里重复
+    ]
+
+    text, changes = absorb_promises(SAMPLE_NOTES, promises)
+
+    doc = parse_notes(text)
+    assert [item.render() for item in doc.section_items(SECTION_PROMISES)][-2:] == [
+        _QQ_LINE,
+        "- 伪造（人工） 标签〔未兑现 · 来自 QQ 群〕",
+    ]
+    assert changes == ["收下QQ群记下的约定：答应群友小明下次直播唱歌", "收下QQ 群记下的约定：伪造（人工） 标签"]
+    new_texts = ("答应群友小明下次直播唱歌", "伪造（人工） 标签")
+    assert [item for item in doc.items if item.text not in new_texts] == _doc().items
+
+
+def test_absorb_without_new_promises_keeps_text_and_converts_legacy() -> None:
+    assert absorb_promises(SAMPLE_NOTES, [("答应老王下次玩恐怖游戏", "QQ群")]) == (SAMPLE_NOTES, [])
+    text, _changes = absorb_promises("", [("答应唱歌", "QQ群")])
+    assert text == "## 答应过的事\n- 答应唱歌〔未兑现 · 来自 QQ群〕"
+    # 旧格式（整份没标签）的笔记并进约定后带上了标签，原有的行仍是模型条目
+    legacy, _changes = absorb_promises("## 答应过的事\n- 我答应老王挖钻石（未兑现）", [("答应唱歌", "QQ群")])
+    promise = _find(parse_notes(legacy), "我答应老王挖钻石")
+    assert (promise.status, promise.manual) == (STATUS_OPEN, False)
 
 
 def test_three_way_takes_each_side_once_and_local_wins_conflicts() -> None:

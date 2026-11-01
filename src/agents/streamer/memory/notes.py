@@ -7,7 +7,7 @@
 - 约定的结局：``未兑现`` / ``已兑现`` / ``放弃``（只有"答应过的事"一节用）；
 - ``对 昵称#观众编号``：答应某位观众的事，只在这位观众发言时才给主播看；
 - ``游戏 名字``：只跟某个游戏有关，这个游戏开着时才给主播看；
-- ``来自 来源``：不是收播整理记下的，而是别的程序经同步接口写进来的（如在 QQ 群里
+- ``来自 来源``：不是收播整理记下的，而是别处记下、经同步模块并进来的（如在 QQ 群里
   答应的事）。它和模型条目一样会被整理、会淡出，只是不会被当成人手写的行；
 - ``始于 #场次`` / ``最近 #场次``：哪一场记下的、最近一次有新证据是哪一场；
 - ``人工``：人写的条目，模型只能读不能改，也不会过期；``整理``：模型写的、
@@ -21,6 +21,8 @@
 两份从同一版本各自改过的笔记，用 ``merge_three_way`` 按条目合并（笔记的正本放在别处、
 本地离线期间也写过时用到）。
 
+别处记下的约定（如 QQ 麦麦在群里答应的事）用 ``absorb_promises`` 并进"答应过的事"。
+
 合并操作与按场次的淡出规则在 ``note_merge``。
 """
 
@@ -28,7 +30,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Collection, Dict, List, Optional, Tuple
+from typing import Collection, Dict, List, Optional, Sequence, Tuple
 
 __all__ = [
     "ACTIVE_SECTIONS",
@@ -44,6 +46,7 @@ __all__ = [
     "STATUS_DONE",
     "STATUS_DROPPED",
     "STATUS_OPEN",
+    "absorb_promises",
     "mark_manual_edits",
     "merge_three_way",
     "parse_notes",
@@ -320,8 +323,8 @@ def render_for_merge(doc: NoteDocument) -> Tuple[str, List[NoteItem]]:
 def mark_manual_edits(old_text: str, new_text: str) -> Tuple[str, List[str]]:
     """对照上一次模型写下的版本：人新增或改过正文的行一律记成人工条目，返回新全文与被记成人工的正文。
 
-    没动过的行保持原样；本来就是人工的行不重复报告。带 ``来自`` 标签的行是别的程序经同步
-    接口写进来的（如 QQ 群里记下的约定），不算人改的。
+    没动过的行保持原样；本来就是人工的行不重复报告。带 ``来自`` 标签的行是同步模块在两次
+    整理之间并进来的（如 QQ 群里记下的约定），不在上一次模型写下的版本里，但不算人改的。
     """
     old_doc = parse_notes(old_text)
     new_doc = parse_notes(new_text, legacy=_is_legacy(old_text) and _is_legacy(new_text))
@@ -385,3 +388,31 @@ def _lines_by_key(doc: NoteDocument) -> Dict[Tuple[str, str], str]:
     for item in doc.items:
         lines.setdefault(item.key, item.render())
     return lines
+
+
+def absorb_promises(text: str, promises: Sequence[Tuple[str, str]]) -> Tuple[str, List[str]]:
+    """把别处记下的约定（正文, 来处）并进"答应过的事"末尾，返回新全文与收下了哪些的说明。
+
+    QQ 麦麦在群里答应的事由同步模块交来：每件记成未兑现、标上 ``来自 来处``，之后和收播
+    整理记下的约定一样被整理、标兑现、淡出。"答应过的事"里（含从这一节搁置走的）已有同样
+    正文的就不再收——没回报成功的约定下次还会交来，同一件只并一次。一件都没收时原文不动。
+    """
+    doc = parse_notes(text)
+    known = {item.text for item in doc.items if SECTION_PROMISES in (item.section, item.origin)}
+    changes: List[str] = []
+    for raw_text, raw_source in promises:
+        body = _clean_field(raw_text)
+        if not body or body in known:
+            continue
+        known.add(body)
+        source = _clean_field(raw_source).replace("·", " ")
+        doc.items.append(NoteItem(text=body, section=SECTION_PROMISES, status=STATUS_OPEN, source=source))
+        changes.append(f"收下{source or '别处'}记下的约定：{body}")
+    if not changes:
+        return text, []
+    return render_notes(doc), changes
+
+
+def _clean_field(value: str) -> str:
+    """别处交来的文字压成一行，标签括号换成普通括号（免得混进或截断行尾的标签）。"""
+    return re.sub(r"\s+", " ", str(value or "")).replace("〔", "（").replace("〕", "）").strip()
