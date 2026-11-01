@@ -80,7 +80,6 @@ async def test_dashboard_receives_viewer_repos(tmp_path: Path, agents: Dict[str,
         config=config_service.main_config,
         config_service=config_service,
         dev_webui=False,
-        simulator_auto_start=False,
         log_streamer_persist=False,
     )
     try:

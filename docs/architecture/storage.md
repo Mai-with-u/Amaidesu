@@ -32,7 +32,7 @@
 - `topics`：当前话题快照投影（每场清旧插新）。
 - `llm_usage` / `llm_requests`：LLM 用量统计与请求历史，同事务写入两表。
 
-**模拟器**
+**观众模拟器**
 
 - `sim_personas` / `sim_gifts`：模拟观众人设与礼物目录（开发基础设施，见 [模拟器是开发基础设施](../decisions/006-simulator-is-dev-infrastructure.md)）。
 

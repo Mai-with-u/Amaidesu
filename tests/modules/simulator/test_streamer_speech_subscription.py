@@ -11,7 +11,12 @@ from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.simulator import SimulatorService
 from src.modules.simulator.cadence import CadenceGenerator
 from src.modules.storage.database import SQLiteDatabase
-from tests.modules.simulator.helpers import FakeConfigService, FakeLLMService, enabled_config
+from tests.modules.simulator.helpers import (
+    FakeConfigService,
+    FakeLLMService,
+    FakeSessionManager,
+    enabled_config,
+)
 
 
 def _speech(utterance_id: str = "utt_1") -> StreamerSpeechPayload:
@@ -20,13 +25,18 @@ def _speech(utterance_id: str = "utt_1") -> StreamerSpeechPayload:
 
 @pytest.fixture
 async def started(event_bus: EventBus, store: SQLiteDatabase):
-    """已 setup 的服务（fixed 节奏、关礼物）与其假 LLM。"""
+    """已 setup 的服务（fixed 节奏、关礼物）与其假 LLM；挂假场次管理器供启动检查通过。"""
     llm = FakeLLMService()
     service = SimulatorService(
-        event_bus=event_bus, sim_repo=store.sim, chat_repo=store.chat, services_by_type={type(llm): llm}
+        event_bus=event_bus,
+        sim_repo=store.sim,
+        chat_repo=store.chat,
+        services_by_type={type(llm): llm},
+        session_manager=FakeSessionManager(),
     )
     await service.setup(
-        enabled_config(cadence_mode="fixed", fixed_interval_s=1.0, gift_probability=0.0, warmup_duration_s=0.0)
+        enabled_config(cadence_mode="fixed", fixed_interval_s=1.0, gift_probability=0.0, warmup_duration_s=0.0),
+        auto_start=True,
     )
     yield service, llm
     await service.cleanup()

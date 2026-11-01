@@ -345,7 +345,6 @@ async def create_app_components(
     config_service: ConfigService,
     dev_webui: bool = False,
     *,
-    simulator_auto_start: bool = True,
     storage_ledger_auto_start: bool = True,
     session_manager_auto_start: bool = True,
     providers_auto_start: bool = True,
@@ -360,16 +359,13 @@ async def create_app_components(
       ToolRegistry L2/L1 接线与审计——所有 ``event_bus.on`` 在此段就位；
       本段不触发业务运行态（不得发 live.started 之类的边界事件）。
     - 第 ② 段 启动/触发：``agent_manager.start_all()``（Agent 订阅生效）先行，
-      之后才允许触发类组件启动（SimulatorService.setup：replay 模式开播经
-      open_session 发 live.started），保证边界事件不漏订阅；最后挂
-      DashboardServer 作为 WebUI observer。
+      之后才装配 SimulatorService（setup 只装配不启动，生成循环由用户在
+      WebUI 显式发起），最后挂 DashboardServer 作为 WebUI observer。
 
     Args:
         config: 完整配置字典
         config_service: 配置服务实例
         dev_webui: 是否启用 WebUI 开发模式
-        simulator_auto_start: 是否允许 SimulatorService 自动启动主循环。
-            ``--dry`` 模式传 False，避免产生 LLM 调用。
         storage_ledger_auto_start: 是否启动 StorageLedger 订阅。
             ``--dry`` 模式传 False，避免组合根冒烟时事件被处理（写入数据库）。
             关闭链（``run_shutdown``）无论如何都会 ``stop()`` 一次，幂等安全。
@@ -849,17 +845,11 @@ async def create_app_components(
     # --- 装配第 ② 段：启动/触发（进入本段前所有 event_bus.on 已就位）---
     # 契约：第 ① 段只构造与接线，不改变业务运行态；触发类组件在此段启动，
     # 保证边界事件（live.started 等）发出时订阅方已就位。
-    # SimulatorService.setup 最后一步是 auto_start：replay 模式开播经
-    # open_session 发 live.started，必须晚于上面 start_all() 的订阅生效。
+    # SimulatorService 只装配不启动（启用与生成分离，生成循环由
+    # 用户在 WebUI 显式发起，重启后不自动恢复）。
     if simulator_service is not None:
-        await simulator_service.setup(
-            config_service,
-            auto_start=simulator_auto_start,
-        )
-        if simulator_service.is_running:
-            logger.info("SimulatorService 已启动（[simulator].enabled=true）")
-        else:
-            logger.info("SimulatorService 已装配（enabled=true 但未启动，见 auto_start）")
+        await simulator_service.setup(config_service)
+        logger.info("SimulatorService 已装配待命（[simulator].enabled=true；生成循环由 WebUI 显式启动）")
 
     # --- ToolRegistry 工具审计：所有 Agent 声明的工具是否都已注册实现 ---
     if agent_manager is not None and agent_manager.tool_registry is not None:
@@ -917,6 +907,8 @@ async def create_app_components(
             # 观众域查询接口：列表 / 档案 / 对话 / 贡献聚合直查存储层
             viewer_repo=database.viewers,
             chat_repo=database.chat,
+            # 模拟域仓储：模拟器页"启用"按钮运行期装配 SimulatorService 的数据源
+            sim_repo=database.sim,
             # 观众画像仓储：/api/v1/memory/* 管理接口与主播 Agent 共用同一张表
             viewer_profile_repo=database.viewer_profiles,
             # 观众身份人工处理：待确认页、合并与取消关联
@@ -1259,12 +1251,28 @@ async def _start_dashboard(
     tts_engine=None,
     request_history_manager=None,
     avatar_tracking: Optional[TrackingRuntime] = None,
+    sim_repo=None,
 ):
     """启动 DashboardServer（仅作为 WebUI observer，不参与决策数据流）。"""
     try:
         dashboard_config = dict(dashboard_config)
         dashboard_config["dev_mode"] = dev_webui
         typed_dashboard_config = DashboardConfig(**dashboard_config)
+
+        # 运行期装配工厂：模拟器页"启用"按钮在 enabled=false 零装配时经此
+        # 免重启构造 + setup SimulatorService（依赖与启动期装配同源，见第①段）；
+        # 只装配不启动——启动由 /simulator/enable 按配置 mode 显式发起并
+        # 上报拒绝原因。
+        async def _assemble_simulator() -> "SimulatorService":
+            service = SimulatorService(
+                event_bus=event_bus,
+                sim_repo=sim_repo,
+                chat_repo=chat_repo,
+                services_by_type={type(llm_service): llm_service} if llm_service is not None else {},
+                session_manager=session_manager,
+            )
+            await service.setup(config_service, auto_start=False)
+            return service
 
         dashboard_server = DashboardServer(
             event_bus=event_bus,
@@ -1279,6 +1287,7 @@ async def _start_dashboard(
             prompt_manager=get_prompt_manager(),
             log_streamer=log_streamer,
             simulator_service=simulator_service,
+            simulator_factory=_assemble_simulator,
             session_manager=session_manager,
             # 场次行读面：回看端点直查 live_sessions（与场次管理器写面分离）
             session_repo=session_repo,
@@ -1599,7 +1608,6 @@ async def main() -> None:
         config,
         config_service,
         dev_webui=args.dev_webui,
-        simulator_auto_start=not args.dry,
         storage_ledger_auto_start=not args.dry,
         session_manager_auto_start=not args.dry,
         providers_auto_start=not args.dry,

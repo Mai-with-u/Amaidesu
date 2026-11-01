@@ -1,7 +1,7 @@
 // useLiveStatus.ts 顶栏与环节横幅派生徽章的测试
 //
 // 覆盖：rundown.changed → 环节横幅（序号/标签/切换方/时刻回退）、
-// streamer.stage → 阶段 chip、模拟器状态拉的标签与点亮矩阵、接口失败静默。
+// streamer.stage → 阶段 chip、观众模拟器状态拉的标签与点亮矩阵、接口失败静默。
 
 import { effectScope, type EffectScope } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
@@ -115,22 +115,22 @@ describe('useLiveStatus', () => {
     expect(stageChip.value).toMatchObject({ label: 'mystery', running: true, detail: '思考中' });
   });
 
-  it('模拟器徽章：生成中/回放待启/未启用的标签与点亮矩阵', async () => {
+  it('观众观众模拟器徽章：生成中/回放待启/未启用的标签与点亮矩阵', async () => {
     const { simulatorChip, loadSimulatorStatus } = mount();
     getStatusMock.mockResolvedValue({ data: { mode: 'generate', is_running: true } } as never);
     await loadSimulatorStatus();
-    expect(simulatorChip.value).toEqual({ label: '模拟器 · 生成中', on: true });
+    expect(simulatorChip.value).toEqual({ label: '观众观众模拟器 · 生成中', on: true });
 
     getStatusMock.mockResolvedValue({ data: { mode: 'replay', is_running: false } } as never);
     await loadSimulatorStatus();
-    expect(simulatorChip.value).toEqual({ label: '模拟器 · 回放待启', on: false });
+    expect(simulatorChip.value).toEqual({ label: '观众观众模拟器 · 回放待启', on: false });
 
     getStatusMock.mockResolvedValue({ data: { mode: 'off', is_running: false } } as never);
     await loadSimulatorStatus();
-    expect(simulatorChip.value).toEqual({ label: '模拟器未启用', on: false });
+    expect(simulatorChip.value).toEqual({ label: '观众观众模拟器未启用', on: false });
   });
 
-  it('模拟器接口失败时徽章置空不抛错', async () => {
+  it('观众观众模拟器接口失败时徽章置空不抛错', async () => {
     const { simulatorChip, loadSimulatorStatus } = mount();
     getStatusMock.mockRejectedValue(new Error('down'));
     await loadSimulatorStatus();

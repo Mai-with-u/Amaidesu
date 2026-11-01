@@ -55,7 +55,7 @@
 
         <el-menu-item index="/simulator">
           <el-icon><MagicStick /></el-icon>
-          <span>模拟器</span>
+          <span>观众模拟器</span>
         </el-menu-item>
         <el-menu-item index="/debug">
           <el-icon><Odometer /></el-icon>

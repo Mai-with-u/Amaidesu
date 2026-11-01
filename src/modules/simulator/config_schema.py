@@ -1,4 +1,4 @@
-"""模拟直播间的配置 Schema。"""
+"""观众模拟器的配置 Schema。"""
 
 from pydantic import Field
 
@@ -11,7 +11,7 @@ class SimulatorConfigSchema(BaseConfig):
     enabled: bool = Field(
         default=False,
         title="是否启用",
-        description="是否启用模拟器（装配开关；false 时零装配）",
+        description="启动时是否自动装配观众模拟器（false 时零装配）；也可在观众模拟器页运行期启用，免重启",
     )
     mode: str = Field(
         default="generate",

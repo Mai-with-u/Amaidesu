@@ -1,8 +1,10 @@
 """
-Simulator API（世界模拟器三模式控制面）
+Simulator API（观众模拟器控制面）
 
-暴露 ``SimulatorService`` 的状态查询、启停控制与运行时数据 CRUD：
+暴露 ``SimulatorService`` 的状态查询、启停控制、运行期装配与运行时数据 CRUD：
 - ``GET    /api/v1/simulator/status``       —— enabled / running / mode + 回放进度 + 配置摘要
+- ``POST   /api/v1/simulator/enable``       —— 运行期装配服务（免重启，写盘持久化；不自动开始生成）
+- ``POST   /api/v1/simulator/disable``      —— 停止循环并拆卸服务（免重启，写盘持久化）
 - ``POST   /api/v1/simulator/start``        —— 按当前 mode 启动世界循环（可带回放日期）
 - ``POST   /api/v1/simulator/stop``         —— 停止世界循环（幂等）
 - ``GET    /api/v1/simulator/replay/dates`` —— 可回放的录制日期列表
@@ -18,7 +20,9 @@ Simulator API（世界模拟器三模式控制面）
 设计取舍（与本仓库其它 API 端点对齐）：
 - 仅在 ``[simulator].enabled=true`` 时组合根会装配 ``SimulatorService``；此处允许
   注入为 None（如默认生产模式），端点返回 ``{enabled: false, is_available: false}``
-  而不是 404 —— 控制面要与"未启用"区分清楚。
+  而不是 404 —— 控制面要与"未启用"区分清楚。运行期启用走 ``/enable``：经组合根
+  注入的 ``simulator_factory`` 闭包现场装配（依赖与启动期装配同源），enabled 写盘
+  持久化，免重启。
 - 人设/礼物 CRUD 走 ``SimulatorService`` 持有的 ``PersonaPool`` / ``GiftGenerator``
   （DB 写穿 + 内存缓存刷新），Dashboard 不直接持有存储连接。
 - 请求/响应契约定义在 ``schemas.simulator``，本模块只留路由与依赖注入。
@@ -45,12 +49,15 @@ from src.modules.dashboard.schemas.simulator import (
     PersonaUpdateRequest,
     ReplayDateEntry,
     ReplayDatesResponse,
+    SimulatorAssemblyResponse,
     SimulatorOperationResponse,
     SimulatorReplayProgress,
     SimulatorRunStateResponse,
     SimulatorStartRequest,
     SimulatorStatusResponse,
 )
+from src.modules.dashboard.services.config_adapter import apply_config_updates
+from src.modules.dashboard.utils.component_helper import config_dir as get_config_dir
 from src.modules.logging import get_logger
 from src.modules.storage.database import sqlite_database as get_default_db
 
@@ -85,12 +92,16 @@ def _config_summary(server: "DashboardServer") -> Dict[str, Any]:
 
     服务尚未 ``setup()`` 时只能从配置 dict 读 key-value；setup 完成后
     优先以 ``SimulatorService.config_snapshot()`` 返回 Pydantic 校验过的字段集。
+    ``enabled`` 恒以配置文件现值为准——运行期启用后服务的 setup 期快照
+    仍是装配那一刻的旧值。
     """
     service = server.simulator_service
     if service is not None:
         snapshot = service.config_snapshot()
         if snapshot is not None:
-            return {k: snapshot.get(k) for k in _CONFIG_SUMMARY_KEYS if k in snapshot}
+            summary = {k: snapshot.get(k) for k in _CONFIG_SUMMARY_KEYS if k in snapshot}
+            summary["enabled"] = _config_enabled(server)
+            return summary
 
     if not server.config_service:
         return {}
@@ -139,12 +150,8 @@ def _replay_progress_of(service: Optional["SimulatorService"]) -> Optional[Simul
     )
 
 
-@router.get("/status", summary="模拟器状态（enabled / is_available / is_running / mode + 回放进度 + 配置摘要）")
-async def get_simulator_status(server: ServerDep) -> SimulatorStatusResponse:
-    """读取模拟器当前状态。
-
-    不会抛 404——enabled=false 时返回 ``is_available=false``，前端可据此渲染空态引导。
-    """
+def _status_response(server: "DashboardServer") -> SimulatorStatusResponse:
+    """从 server 现状构建状态响应（status 端点与 enable/disable 端点共用）。"""
     enabled = _config_enabled(server)
     service = server.simulator_service
     is_available = service is not None
@@ -152,13 +159,13 @@ async def get_simulator_status(server: ServerDep) -> SimulatorStatusResponse:
     mode = str(service.mode) if service is not None else "off"
 
     if not enabled:
-        message = "[simulator].enabled=false；模拟器未启用。请在 config/infra.toml 的 [simulator] 段将 enabled 设为 true 并重启。"
+        message = "[simulator].enabled=false；观众模拟器未启用。可在本页直接启用（免重启），或修改配置后重启。"
     elif not is_available:
         message = "配置启用但 SimulatorService 未注入（存储仓储/LLMManager 缺失或 --dry 模式）。"
     elif is_running:
-        message = f"模拟器正在运行（mode={mode}）。"
+        message = f"观众模拟器正在运行（mode={mode}）。"
     else:
-        message = "模拟器已装配但未运行。"
+        message = "观众模拟器已装配但未运行。"
 
     return SimulatorStatusResponse(
         enabled=enabled,
@@ -172,6 +179,107 @@ async def get_simulator_status(server: ServerDep) -> SimulatorStatusResponse:
     )
 
 
+@router.get("/status", summary="观众模拟器状态（enabled / is_available / is_running / mode + 回放进度 + 配置摘要）")
+async def get_simulator_status(server: ServerDep) -> SimulatorStatusResponse:
+    """读取观众模拟器当前状态。
+
+    不会抛 404——enabled=false 时返回 ``is_available=false``，前端可据此渲染空态引导。
+    """
+    return _status_response(server)
+
+
+async def _persist_enabled_flag(server: "DashboardServer", value: bool) -> Optional[str]:
+    """把 [simulator].enabled 写入 infra.toml 持久化（返回错误消息，None=成功）。
+
+    走统一配置写管线（校验 → 写盘 → 内存视图重载）；不注入热应用上下文
+    ——运行期生效由 enable/disable 端点自己负责，与热应用机制无关。
+    """
+    if not server.config_service:
+        return "配置服务不可用"
+    try:
+        outcome = await apply_config_updates(
+            server.config_service,
+            get_config_dir(server),
+            [("infra.simulator.enabled", value)],
+        )
+    except Exception as exc:  # noqa: BLE001 - 写盘失败不阻断运行期动作，原因进消息
+        logger.exception(f"[simulator].enabled 写盘失败（目标值 {value}）: {exc}")
+        return f"配置写盘失败: {exc}"
+    if not outcome.success:
+        return outcome.message or "配置写盘失败"
+    return None
+
+
+@router.post(
+    "/enable",
+    response_model=SimulatorAssemblyResponse,
+    response_model_exclude_none=True,
+    summary="启用观众模拟器：运行期装配服务（免重启，写盘持久化；不自动开始生成）",
+)
+async def enable_simulator(server: ServerDep) -> SimulatorAssemblyResponse:
+    """启用观众模拟器（免重启），镜像"重启后 enabled=true"的效果。
+
+    服务未装配时经组合根注入的 ``simulator_factory`` 现场装配（构造 +
+    setup），``[simulator].enabled`` 写入 infra.toml 使下次启动保持启用。
+    启用与生成分离（ADR-050 决策 3 机制修订）：装配后待命，生成循环由
+    ``/start`` 显式发起。
+    """
+    service = server.simulator_service
+    if service is None:
+        factory = server.simulator_factory
+        if factory is None:
+            return SimulatorAssemblyResponse(
+                success=False,
+                message="无法启用：运行期装配工厂未注入（极简启动或测试装配）。请将 [simulator].enabled 设为 true 后重启应用。",
+                status=_status_response(server),
+            )
+        try:
+            service = await factory()
+        except Exception as exc:  # noqa: BLE001 - 边界
+            logger.exception(f"模拟器运行期装配失败: {exc}")
+            return SimulatorAssemblyResponse(success=False, message=f"启用失败: {exc}", status=_status_response(server))
+        server.simulator_service = service
+
+    persist_error = await _persist_enabled_flag(server, True)
+
+    if service.is_running:
+        message = "观众模拟器已启用，生成循环运行中"
+    else:
+        message = "观众模拟器已启用（装配完成），点上方启动开始生成循环"
+    if persist_error is not None:
+        message += f"；本次运行保持启用，但配置写盘失败，重启后回到未启用（{persist_error}）"
+    return SimulatorAssemblyResponse(success=True, message=message, status=_status_response(server))
+
+
+@router.post(
+    "/disable",
+    response_model=SimulatorAssemblyResponse,
+    response_model_exclude_none=True,
+    summary="停用观众模拟器：停止循环并拆卸服务（免重启，写盘持久化）",
+)
+async def disable_simulator(server: ServerDep) -> SimulatorAssemblyResponse:
+    """停用观众模拟器（免重启），镜像"重启后 enabled=false"的效果。
+
+    有服务则先停循环再清理实现对象（``cleanup()`` 内含未停先停），
+    并从 DashboardServer 摘除引用；``[simulator].enabled`` 写为 false
+    使下次启动回到零装配。未装配时幂等成功。
+    """
+    service = server.simulator_service
+    if service is not None:
+        try:
+            await service.cleanup()
+        except Exception as exc:  # noqa: BLE001 - 边界
+            logger.exception(f"模拟器停用失败: {exc}")
+            return SimulatorAssemblyResponse(success=False, message=f"停用失败: {exc}", status=_status_response(server))
+        server.simulator_service = None
+
+    persist_error = await _persist_enabled_flag(server, False)
+    message = "观众模拟器已停用"
+    if persist_error is not None:
+        message += f"；本次运行保持停用，但配置写盘失败，重启后仍会装配（{persist_error}）"
+    return SimulatorAssemblyResponse(success=True, message=message, status=_status_response(server))
+
+
 @router.post(
     "/start",
     response_model=SimulatorRunStateResponse,
@@ -181,14 +289,14 @@ async def get_simulator_status(server: ServerDep) -> SimulatorStatusResponse:
 async def start_simulator(
     server: ServerDep, request: Optional[SimulatorStartRequest] = None
 ) -> SimulatorRunStateResponse:
-    """启动模拟器（需 enabled；幂等：已在运行时返回 success=True）。
+    """启动观众模拟器（需 enabled；幂等：已在运行时返回 success=True）。
 
     replay 模式可传 ``replay_date`` 覆盖配置中的默认录制日期。
     """
     enabled = _config_enabled(server)
     if not enabled:
         return SimulatorRunStateResponse(
-            success=False, message="[simulator].enabled=false；无法启动。请修改配置后重启应用。"
+            success=False, message="[simulator].enabled=false；无法启动。可先在本页启用观众模拟器（免重启）。"
         )
     service = server.simulator_service
     if service is None:
@@ -196,7 +304,7 @@ async def start_simulator(
             success=False, message="SimulatorService 未注入（通常因存储仓储/LLMManager 缺失或 --dry 模式）。"
         )
     if service.is_running:
-        return SimulatorRunStateResponse(success=True, message="模拟器已在运行", is_running=True)
+        return SimulatorRunStateResponse(success=True, message="观众模拟器已在运行", is_running=True)
 
     replay_date = request.replay_date if request is not None else None
     try:
@@ -220,7 +328,7 @@ async def start_simulator(
 
     return SimulatorRunStateResponse(
         success=True,
-        message="模拟器已启动",
+        message="观众模拟器已启动",
         is_running=True,
         mode=str(service.mode),
         replay_progress=_replay_progress_of(service),
@@ -231,16 +339,16 @@ async def start_simulator(
     "/stop",
     response_model=SimulatorRunStateResponse,
     response_model_exclude_none=True,
-    summary="停止模拟器生成循环（幂等）",
+    summary="停止观众模拟器生成循环（幂等）",
 )
 async def stop_simulator(server: ServerDep) -> SimulatorRunStateResponse:
-    """停止模拟器（幂等：未运行时返回 success=True）。"""
+    """停止观众模拟器（幂等：未运行时返回 success=True）。"""
     service = server.simulator_service
     if service is None:
         # 未注入等价于未运行 —— 幂等返回成功，避免前端反复点停出现误导
         return SimulatorRunStateResponse(success=True, message="SimulatorService 未注入，视为未运行", is_running=False)
     if not service.is_running:
-        return SimulatorRunStateResponse(success=True, message="模拟器未运行", is_running=False)
+        return SimulatorRunStateResponse(success=True, message="观众模拟器未运行", is_running=False)
 
     try:
         await service.stop()
@@ -248,7 +356,7 @@ async def stop_simulator(server: ServerDep) -> SimulatorRunStateResponse:
         logger.exception(f"模拟器停止失败: {exc}")
         return SimulatorRunStateResponse(success=False, message=f"停止失败: {exc}")
 
-    return SimulatorRunStateResponse(success=True, message="模拟器已停止", is_running=bool(service.is_running))
+    return SimulatorRunStateResponse(success=True, message="观众模拟器已停止", is_running=bool(service.is_running))
 
 
 # ------------------------------------------------------------------ #

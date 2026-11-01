@@ -1,9 +1,10 @@
-"""SimulatorService 与场次类型：模拟观众只进彩排场。
+"""SimulatorService 与场次：采集器形态注入，正式场是唯一禁区（ADR-050 决策 3 机制修订）。
 
 用真实的 LiveSessionManager（临时库）驱动：
-- 生成模式没有场次时自开一场彩排，停止时收口；已有彩排场就沿用、停止时不替人收口
-- 正式场进行中拒绝启动，不动正式场
-- 正式场开播时模拟器自动停下，且不会把刚开的正式场收掉
+- 无场次时照常启动（调试注入，消息不落库）
+- 彩排场进行中附着注入，停止时不替人收口
+- 正式场进行中拒绝启动；运行中遇正式场开播自动停下
+- 彩排场中途结束（无后继）不停——回到无场次的调试注入
 """
 
 from __future__ import annotations
@@ -41,21 +42,18 @@ async def rig(store: SQLiteDatabase) -> AsyncGenerator[Tuple[SimulatorService, L
     await bus.cleanup()
 
 
-async def test_generate_opens_and_closes_own_rehearsal_session(
-    rig: Tuple[SimulatorService, LiveSessionManager, EventBus], store: SQLiteDatabase
+async def test_start_succeeds_without_any_session(
+    rig: Tuple[SimulatorService, LiveSessionManager, EventBus],
 ) -> None:
+    """采集器形态：无场次时照常启动（调试注入，消息不落库），不代开场次。"""
     service, manager, _ = rig
 
     assert await service.start() is None
-    pk = manager.active_pk
-    assert pk is not None and manager.active_kind == "rehearsal"
-    assert manager.active_source == "generate"
-
-    await service.stop()
-    assert manager.active_pk is None  # 自己开的彩排场随停止收口
+    assert service.is_running is True
+    assert manager.active_pk is None  # 模拟器不代开场次
 
 
-async def test_generate_reuses_existing_rehearsal_without_closing_it(
+async def test_generate_attaches_to_manual_rehearsal_without_closing_it(
     rig: Tuple[SimulatorService, LiveSessionManager, EventBus],
 ) -> None:
     service, manager, _ = rig
@@ -83,8 +81,8 @@ async def test_opening_live_session_stops_simulator_and_keeps_live_open(
     rig: Tuple[SimulatorService, LiveSessionManager, EventBus],
 ) -> None:
     service, manager, bus = rig
+    rehearsal_pk = await manager.open_session(kind="rehearsal", title="人手开的彩排")
     assert await service.start() is None
-    rehearsal_pk = manager.active_pk
 
     live_pk = await manager.open_session(kind="live", title="正式开播")
     await bus.wait_until_drained()
@@ -92,3 +90,17 @@ async def test_opening_live_session_stops_simulator_and_keeps_live_open(
     assert service.is_running is False
     assert live_pk != rehearsal_pk
     assert (manager.active_pk, manager.active_kind) == (live_pk, "live")  # 正式场没被模拟器收掉
+
+
+async def test_rehearsal_closed_midrun_keeps_injecting_without_session(
+    rig: Tuple[SimulatorService, LiveSessionManager, EventBus],
+) -> None:
+    """彩排场中途结束且无后继 → 回到无场次的调试注入，模拟器不停。"""
+    service, manager, _ = rig
+    await manager.open_session(kind="rehearsal", title="人手开的彩排")
+    assert await service.start() is None
+
+    await manager.close_session()
+
+    assert manager.active_pk is None
+    assert service.is_running is True  # 采集器形态：无场次不停，只是不再落库

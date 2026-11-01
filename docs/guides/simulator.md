@@ -1,148 +1,121 @@
-# 世界模拟器开发基础设施
+# 观众模拟器使用指南
 
-> **世界发射器统一**：`SimulatorService` 是唯一的模拟消息发射器，三模式切换——
-> `generate`（LLM 生成）/ `replay`（录制回放）/ `off`；录制回放（原 `MockCollector`
-> 的确定性 JSONL 回放能力）由 `mode=replay` 承载。详见
-> [LLM 模拟器是官方开发基础设施](../decisions/006-simulator-is-dev-infrastructure.md)。
+观众模拟器能**造假观众**：自动发弹幕、送礼、刷 SC，让主播有话可接。用途有三个——平时练主播、直播前过一遍效果、把某天直播间的真实弹幕拿来重放。
 
-## 1. 定位与架构位置
+## 三个开关，各管各的
 
-**模拟器 = 开发基础设施**（与 Dashboard / `--dry` / 日志系统同类），不属于生产直播组件：
+| 开关 | 在哪 | 管什么 | 重启后 |
+|------|------|--------|--------|
+| 启用 / 禁用 | 观众模拟器页 | 观众模拟器装没装。启用 = 现在能用，以后每次开机也自动就绪 | 记住 |
+| 启动 / 停止 | 观众模拟器页 | 现在跑不跑。想跑点启动，想停点停止，就这一次的事 | 不跑，要点一次启动 |
+| 场次 | 直播控制台 | 消息存不存进数据库。开不开、开正式还是彩排，都是你的事 | 看你 |
 
-- **默认关闭**：`[simulator].enabled = false`（生产零沾染）；
-- **按需装配**：组合根 `main.create_app_components` 第 ① 段（构造+接线）实例化 `SimulatorService` 并挂入生命周期，注入存储仓储；启动（setup/auto_start）在第 ② 段——Agent 订阅生效之后（两段装配纪律见[数据流规则 - 装配纪律](../architecture/data-flow.md#7-装配纪律两段装配)）；
-- **只进彩排场**：模拟观众只出现在彩排场次里，主播记忆与对外同步按场次类型把它和正式直播分开（详见「场次」一节）；单条消息另带 `simulated=True` 溯源标记（详见「simulated 溯源定案」一节）。
+这三个开关互不牵连：启用不等于开始跑，停止不用去动配置，开不开场次随你。
 
-**主体性判据检验**（AGENTS.md 红线）：模拟器不采集任何东西（不是采集器），不被调才干活（不是工具）；四态节奏与人设池自我驱动——按判据是 Agent 形态，但服务于开发者而非观众，故归入**开发工具分类**以可选装配的开发服务形态存在。
+## 第一次跑起来
 
-## 2. 快速上手
+1. 打开观众模拟器页，点 **启用模拟器**。
+2. 点 **启动生成**。
 
-### 2.1 启用方式
+到这一步模拟观众就已经在说话了——右侧事件流能看到。没开场次时这些消息**只在页面上过一眼，不存数据库**，适合随手试试。
 
-在 `config/infra.toml` 的 `[simulator]` 段设 `enabled = true`：
+想让它有头有尾、事后能回看：先去直播控制台**开一场彩排**，再点启动。彩排场里的模拟消息会存进数据库，但只归彩排线——不会混进正式直播的记忆，也不会推给 MaiBot。
 
-```toml
-# config/infra.toml
-[simulator]
-enabled = true                                  # 启用模拟器（开发期临时开启）
-mode = "generate"                               # generate=LLM 生成 / replay=录制回放 / off
-llm_temperature = 0.9                           # 创造性稍高
-token_budget_per_hour = 50000                   # 1 小时滑动窗口 token 硬上限
-```
+想回放某天的真实弹幕：把配置 `mode` 设为 `replay`（或页面里选录制日期），点启动。
 
-启动 `uv run python main.py`，观察到以下日志即装配成功：
+## 消息存不存？
 
-```
-INFO | SimulatorService - 模拟器配置已启用（mode=generate），自动启动中...
-INFO | SimulatorService - 模拟器服务已启动（mode=generate）
-```
+观众模拟器跑着的时候，消息的去向只看一件事：**当时有没有进行中的场次**。
 
-`--dry` 模式下 `simulator_auto_start = False`，组合根**不**调用 `start()`，**不**产生任何 LLM 调用，验证 wiring 后立即退出。
+| 当时的状态 | 消息去向 |
+|------------|----------|
+| 没开场次 | 只在事件流里显示，**不存库**。调试用 |
+| 开着彩排场 | 存进这场彩排。下次彩排能接上这次的话；主播对它说的回顾只进彩排线；不推 MaiBot |
+| 开着正式场 | 观众模拟器**自动停**——正式场永远不会有假观众。想再开，等正式场结束 |
 
-### 2.2 三模式说明
+补充两点：
 
-| 模式 | 行为 | 适用场景 |
-|------|------|---------|
-| `generate` | 四态节奏驱动：选人设 → 读世界窗口 → LLM 生成弹幕/概率礼物/SC | 开放性行为锻炼，暴露 Agent 真实表现 |
-| `replay` | 读 SQLite `live_chat` 表录制，按原节奏重放（可调速度） | 确定性回归测试、bug 复现 |
-| `off` | 装配但不运行世界 | 只用人设/礼物 CRUD 与观测，不产生消息 |
+- 开着彩排场时，模拟观众**读得到这场里说过的话**，前后接得上；没开场次就各说各的。想要连贯效果就开彩排场。
+- 场次的开和关都是你的动作，观众模拟器不会替你开，也不会替你关。
 
-replay 模式的录制日期可在启动时通过配置 `replay_date` 指定，或在 Dashboard「世界模拟器」页运行期选择；`replay_speed` 倍率加速，`replay_gap_cap_s` 截断超长冷场。
+## 人设和礼物
 
-### 2.3 配置字段
+- 观众模拟器自带一批常驻人设和礼物，装好就能用；页面里直接增删改，立即生效。
+- 人设决定观众的性格和说话方式（粉丝、老观众、爱调侃的、黑粉……黑粉默认关）。
+- 除了常驻人设，还有一部分"临时路人"——随机出现、说完就走、不留档，比例由配置控制。
+- 这些数据存在数据库里，重启不丢；观众模拟器没启用时也能在页面里先编辑好。
+
+## 花钱与限额
+
+生成模式每条消息都要调一次 LLM，**真花钱**。两道保险：
+
+- `token_budget_per_hour`：每小时 token 硬上限（默认 5 万），超了自动歇着；
+- 页面上随时能停。
+
+注意：**没开场次时钱照花，只是消息不留痕**。挂着忘关会白烧，用完随手停。
+
+## 回放
+
+回放 = 把数据库里存过的某天弹幕，按当时的节奏重新播一遍给主播听。
+
+- 录制源就是普通消息库，不用额外录制；
+- 页面里选日期（能看到每天多少条）→ 启动回放；
+- `replay_speed` 加速，`replay_gap_cap_s` 跳过冷场长间隔；
+- 回放的消息标记为"模拟"，时间戳刷新为现在。
+
+典型用法：真实直播一晚，第二天回放给主播练手。
+
+## 配置字段速查
+
+都在 `config/infra.toml` 的 `[simulator]` 段（设置页里也能改）。改完重启生效。
 
 | 字段 | 默认 | 说明 |
 |------|------|------|
-| `enabled` | `false` | 总开关；生产保持 `false` |
-| `mode` | `"generate"` | 世界模式：`generate` / `replay` / `off` |
-| `replay_date` | `""` | replay 默认回放的录制日期（`YYYY-MM-DD`；空串 = 不指定） |
-| `replay_speed` | `1.0` | 回放速度倍率（`ge=0.1, le=100`） |
-| `replay_gap_cap_s` | `60.0` | 回放相邻消息间隔上限（秒），截断超长冷场 |
-| `replay_simulated_only` | `false` | 回放时是否仅回放录制中已标记 simulated 的消息 |
-| `base_rate_per_minute` | `6.0` | 基础消息率（条/分钟），`ge=0.1, le=60` |
-| `burst_multiplier` | `3.0` | BURST 态倍率（`ge=1.0, le=10`） |
-| `burst_min_interval_s` | `30.0` | 两次突发最小间隔（秒） |
-| `burst_cooldown_s` | `60.0` | 突发态持续时间（秒） |
-| `temp_passerby_ratio` | `0.3` | 路人比例（`ge=0.0, le=1.0`） |
+| `enabled` | `false` | 启动时是否装配观众模拟器（页面启用会自动写它） |
+| `mode` | `"generate"` | `generate` 生成 / `replay` 回放 / `off` 只管理不生成 |
+| `base_rate_per_minute` | `6.0` | 每分钟几条消息 |
+| `cadence_mode` | `"uniform"` | 节奏模式：uniform 匀速 / fixed 固定间隔 / auto 四态（冷场降频、突发加速） |
+| `fixed_interval_s` | `10.0` | fixed 模式的固定间隔（秒） |
+| `idle_threshold_s` | `300.0` | 主播多久没说话算冷场（秒） |
+| `idle_rate_multiplier` | `0.2` | 冷场时消息率打几折 |
+| `warmup_duration_s` | `300.0` | 启动暖场时长（秒），暖场期发得慢 |
+| `burst_multiplier` | `3.0` | 突发期消息率倍数 |
+| `burst_min_interval_s` | `30.0` | 两次突发最少隔多久 |
+| `burst_cooldown_s` | `60.0` | 一次突发持续多久 |
 | `gift_probability` | `0.05` | 每条消息是礼物的概率 |
-| `sc_probability` | `0.01` | 每条消息是 SC 的概率 |
-| `idle_threshold_s` | `300.0` | 主播无活动进入 IDLE 的阈值 |
-| `idle_rate_multiplier` | `0.2` | IDLE 态生成率倍率 |
-| `warmup_duration_s` | `300.0` | 启动暖场期时长 |
-| `llm_temperature` | `0.9` | LLM 采样温度 |
-| `token_budget_per_hour` | `50000` | 1 小时滑动窗口 token 硬上限 |
-| `max_concurrent_llm` | `8` | 最大并发 LLM 请求数 |
-| `enable_hater` | `false` | 是否启用黑粉人设（仅 dev） |
-| `language` | `"zh"` | 生成消息语言 |
-| `cadence_mode` | `"uniform"` | 节奏模式：uniform / fixed / auto |
-| `fixed_interval_s` | `10.0` | fixed 模式固定间隔（秒） |
+| `guard_probability` | `0.05` | 礼物里上舰（-guard）的概率 |
+| `sc_pay_probability` | `0.20` | 礼物里升级成 SC 的概率 |
+| `temp_passerby_ratio` | `0.3` | 临时路人占比 |
+| `enable_hater` | `false` | 是否启用黑粉人设 |
+| `language` | `"zh"` | 生成消息的语言 |
+| `llm_temperature` | `0.9` | LLM 采样温度，高一点更放飞 |
+| `token_budget_per_hour` | `50000` | 每小时 token 硬上限 |
+| `max_concurrent_llm` | `8` | 最多同时几个 LLM 请求 |
+| `replay_date` | `""` | 回放模式默认日期（`YYYY-MM-DD`，空=页面里选） |
+| `replay_speed` | `1.0` | 回放倍速（0.1~100） |
+| `replay_gap_cap_s` | `60.0` | 回放相邻消息间隔上限（秒），截断冷场 |
+| `replay_simulated_only` | `false` | 回放时是否只放模拟消息 |
 
-### 2.4 运行期控制（Dashboard）
+## 常见问题
 
-侧边栏「世界模拟器」（`/simulator`）工作台：
+**点了启动没反应？** 看页面消息提示。最常见是正式场进行中——观众模拟器会让路，正式场结束后再启动。
 
-- **世界控制**：启停世界循环、选择录制日期启动回放、查看回放进度（`total/remaining`）；
-- **常驻人设**：表格 CRUD（写穿 SQLite `sim_personas`）；
-- **礼物目录**：表格 CRUD（写穿 SQLite `sim_gifts`）；
-- **配置与说明**：只读配置摘要。
+**消息怎么没存进数据库？** 没开场次。开一场彩排再启动。
 
-对应 API 挂在 `/api/v1/simulator/*`（status / start / stop / replay/dates / personas CRUD / gifts CRUD）。
+**主播怎么不理模拟观众？** 主播有自己的节奏和决策，模拟观众只是进直播间的人之一；冷场时它自己也会少说话（`idle_rate_multiplier`）。
 
-## 3. 运行时数据：人设与礼物（SQLite）
+**烧 token 太快？** 调低 `base_rate_per_minute`、关暖场（`warmup_duration_s = 0`）、用 `cadence_mode = fixed` 定节奏，或直接调小预算。
 
-常驻人设与礼物目录是**存储层运行时数据**，不使用配置文件：
+## 给开发者的细节
 
-- 表：`sim_personas`（`user_id` 唯一）/ `sim_gifts`（`gift_id` 唯一），随存储 `SCHEMA_VERSION` 演进（见 `src/modules/storage/schema.py`）；
-- **内置种子**：启动期 `seed_simulator_data` 检测空表时导入内置默认值（`src/modules/simulator/seed_data.py`），非空表一律不动（幂等）；全新安装无需任何手工配置；
-- **写穿**：`PersonaPool` / `GiftGenerator` 持内存缓存，Dashboard CRUD 即时落库并刷新缓存；
-- **临时路人**（`temp_passerby_ratio` 控制比例，池上限 50）是瞬时对象，仅存内存、不持久化——身份生命周期分层：常驻=持久实体，路人=瞬时对象。
-
-模拟观众读取当前场次的完整公共对话，角色人设决定回应风格。
-
-## 4. 场次
-
-模拟器只在**彩排场**里运行（场次类型见 [场次分正式与彩排](../decisions/050-session-kind-live-and-rehearsal.md)）：
-
-| 情形 | 行为 |
-|------|------|
-| 回放启动 | 开一场新的彩排（来源 `replay`），回放结束或停止时收口 |
-| 生成启动、当前没有场次 | 自开一场彩排（来源 `generate`）：消息要落库，模拟观众才读得到上下文；停止或因错误停下时收口 |
-| 生成启动、已有彩排场 | 沿用这一场，停止时不替人收口 |
-| 正式场进行中 | 拒绝启动，WebUI 显示原因 |
-| 运行中有人开了正式场 | 自动停止；只收口自己开的场次，不会把刚开的正式场结束 |
-
-彩排场的回顾照写，只在下一场彩排时被读到；不推给 MaiBot。
-
-## 5. 观众上下文：场次对话
-
-观众生成消息前读取"这个观众眼中的直播间"——**SQLite `live_chat` 公共流完整历史**（观众弹幕 + 主播发言同表，场次隔离）：
-
-- 窗口读取：`ChatRepo.list_recent_live_chat(live_session_id, limit=None)`，`live_session_id` 为盖章注入的场次 int 主键；
-- 一致性语义：弱一致——emit 与落库之间有毫秒级时序差，秒级生成节奏下可忽略；
-- 重启不丢：世界状态唯一事实源在 SQLite，模拟器不维护第二份内存状态；
-- **token 预算**：窗口注入按"每字符 2 token"粗估计入 `TokenBudgetController`，与生成消耗共享同一硬上限。
-
-## 6. simulated 溯源定案
-
-模拟世界（generate 生成 + replay 回放）产出的事件 payload 全部携带 `simulated=True` 溯源标记（`RoomMessagePayload.simulated: bool`）。
-
-- **存储层**：`StorageLedger` 订阅 `room.message.#` 落库时写 `live_chat` / `gifts` / `super_chats` / `guards` 的 `simulated` 贯穿列，模拟观众在 `viewers` 里是独立的行（`simulated=1`）；
-- **语义**：`simulated=True` = "这一条消息是造出来的"，消费方无需区分生成或回放来源。按行过滤的消费方：推给 MaiBot 的整场记录跳过模拟消息、回放可只放模拟消息；整场的真假分流看场次类型，不靠逐行过滤（主播对模拟观众说的话本身不带模拟标记）；
-- **回放的特殊点**：回放消息落库时间戳刷新为当前时刻（进入"最近窗口"查询语义），原始时刻保留在 `live_chat` 录制行与日志中；`live_session_id` 替换为当前场次（回放内容作为"现在的输入流"注入）。
-
-## 7. 录制与回放
-
-- **录制源**：SQLite `live_chat` 业务表（消息流单一事实源，真实直播与模拟数据同表、以 `simulated` 列区分）——录制即落库，无需第二种录制格式；
-- **读回 API**：`ChatRepo.list_chat_dates_with_counts()` / `list_danmaku_by_date(date, simulated_only=...)`（按本地日期过滤，时间正序）；
-- **回放队列**：`ReplayEngine` 过滤 `room.message.danmaku` 事件、还原 payload、按相邻毫秒时间戳差值调度；
-- **典型用法**：真实直播一晚 → 次日用 replay 模式重放给主播 Agent 锻炼（`replay_simulated_only=false` 回放全部真实弹幕）。
-
-## 8. 停止语义
-
-`stop()` 由用户主动发起时吞掉 `self._task` 的 `CancelledError`（正常返回）；`stop()` 协程自身被外层 `cancel()` 时（`cancelling() > 0`）必须重新 `raise` 传播取消状态。关闭链中 `SimulatorService.stop` 位于 CollectorManager.stop_all 之后、AgentManager.stop_all 之前（EventBus.cleanup 之前解绑订阅，顺序安全）。
+- 装配走组合根两段纪律（构造接线 → Agent 订阅生效后 setup 待命），见[数据流规则](../architecture/data-flow.md#7-装配纪律两段装配)；
+- 模拟消息与真实消息同表存储（`live_chat` 等），逐行带 `simulated` 标记；推给 MaiBot 的整场记录按行跳过模拟消息，场次类型决定整场分流；
+- 回放把录制时间戳刷新为当前时刻再落库，原始时刻留在录制行与日志；
+- `stop()` 的取消传播语义：用户发起的正常返回，外层取消原样上抛；关闭链中观众模拟器先于 Agent 停；
+- WebUI 入口 `/simulator`，API 在 `/api/v1/simulator/*`。
 
 ## 相关文档
 
-- [LLM 模拟器是官方开发基础设施](../decisions/006-simulator-is-dev-infrastructure.md) — 定位与修订记录
+- [场次分正式与彩排](../decisions/050-session-kind-live-and-rehearsal.md) — 场次类型与真假分流
+- [LLM 模拟器是官方开发基础设施](../decisions/006-simulator-is-dev-infrastructure.md) — 定位
 - [事件系统](../architecture/event-system.md) — `room.message.*` / `streamer.speech` 事件表
-- [数据流规则](../architecture/data-flow.md) — 模拟数据在数据面的二等地位

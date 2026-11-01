@@ -91,6 +91,14 @@ class SimulatorOperationResponse(BaseModel):
     message: str
 
 
+class SimulatorAssemblyResponse(BaseModel):
+    """启用/停用装配的响应包络（携带动作后的最新状态供前端直接替换）。"""
+
+    success: bool
+    message: str
+    status: Optional[SimulatorStatusResponse] = Field(default=None, description="动作后的最新状态")
+
+
 class SimulatorRunStateResponse(BaseModel):
     """启停控制响应包络（携带运行态快照；未触发的附加字段以 None 占位）。"""
 

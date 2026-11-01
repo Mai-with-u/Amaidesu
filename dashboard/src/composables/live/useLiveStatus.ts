@@ -1,8 +1,8 @@
 /**
- * 顶栏与环节横幅的派生徽章：决策管线阶段 chip、模拟器模式 chip、当前环节横幅。
+ * 顶栏与环节横幅的派生徽章：决策管线阶段 chip、观众模拟器模式 chip、当前环节横幅。
  *
- * 前两者从 events store 只读投影（取最近一条对应事件）；模拟器模式不走事件流，
- * 挂载时拉一次状态接口（模拟器启停在别页操作，控制台只观测）。
+ * 前两者从 events store 只读投影（取最近一条对应事件）；观众模拟器模式不走事件流，
+ * 挂载时拉一次状态接口（观众模拟器启停在别页操作，控制台只观测）。
  */
 
 import { computed, ref } from 'vue';
@@ -49,7 +49,7 @@ export function useLiveStatus() {
     return null;
   });
 
-  // 顶栏徽章：决策管线阶段 + 模拟器模式
+  // 顶栏徽章：决策管线阶段 + 观众模拟器模式
 
   const stageChip = computed<{ label: string; running: boolean; detail: string } | null>(() => {
     const list = events.value;
@@ -78,13 +78,13 @@ export function useLiveStatus() {
       const label =
         mode === 'generate'
           ? running
-            ? '模拟器 · 生成中'
-            : '模拟器 · 生成待启'
+            ? '观众观众模拟器 · 生成中'
+            : '观众观众模拟器 · 生成待启'
           : mode === 'replay'
             ? running
-              ? '模拟器 · 回放中'
-              : '模拟器 · 回放待启'
-            : '模拟器未启用';
+              ? '观众观众模拟器 · 回放中'
+              : '观众观众模拟器 · 回放待启'
+            : '观众观众模拟器未启用';
       simulatorChip.value = { label, on: mode !== 'off' && running };
     } catch {
       simulatorChip.value = null;

@@ -1,4 +1,4 @@
-"""Simulator API 测试：状态 / 回放日期 / 人设与礼物 CRUD。
+"""Simulator API 测试：状态 / 运行期装配 / 回放日期 / 人设与礼物 CRUD。
 
 注：使用真实 SimulatorService（tmp SQLiteDatabase + setup），不触发真实 LLM
 （mode=generate 且无 LLMManager 注入时 setup 只落数据平面，CRUD 均可用）。
@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +16,8 @@ from src.modules.events.event_bus import EventBus
 from src.modules.simulator import SimulatorService
 from src.modules.simulator.seed_data import seed_simulator_data
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.types.session_kind import SESSION_KIND_REHEARSAL
+from tests.modules.simulator.helpers import FakeLLMService
 
 
 class _FakeConfigService:
@@ -75,6 +77,109 @@ def test_status_enabled_but_service_not_injected(mount) -> None:
     assert body["is_available"] is False
     assert body["is_running"] is False
     assert "未注入" in body["message"]
+
+
+def _make_factory(
+    store: SQLiteDatabase, config_service: Any, llm: Optional[FakeLLMService] = None, session_manager: Any = None
+) -> Callable[[], Any]:
+    """造启用端点用的运行期装配工厂（形状镜像 main.py 的组合根闭包）。"""
+
+    async def factory() -> SimulatorService:
+        service = SimulatorService(
+            event_bus=EventBus(),
+            sim_repo=store.sim,
+            chat_repo=store.chat,
+            services_by_type={type(llm): llm} if llm is not None else {},
+            session_manager=session_manager,
+        )
+        await service.setup(config_service, auto_start=False)
+        return service
+
+    return factory
+
+
+async def test_enable_assembles_service_and_persists_config(mount, initialized_config, store, session_manager) -> None:
+    """启用 = 运行期装配 + enabled 写盘（不自动生成）；生成由 /start 显式发起；重复启用幂等。"""
+    factory = _make_factory(store, initialized_config, llm=FakeLLMService(), session_manager=session_manager)
+    client = mount(config_service=initialized_config, simulator_factory=factory)
+    await session_manager.open_session(kind=SESSION_KIND_REHEARSAL, title="彩排")
+    try:
+        body = client.post("/api/v1/simulator/enable").json()
+        assert body["success"] is True
+        assert body["status"]["enabled"] is True
+        assert body["status"]["is_available"] is True
+        assert body["status"]["is_running"] is False  # 启用与生成分离：装配待命
+        assert initialized_config.get_section("simulator")["enabled"] is True
+        # 配置摘要的 enabled 以配置文件现值为准（服务 setup 期快照仍是装配前的旧值）
+        assert body["status"]["config"]["enabled"] is True
+
+        # 生成循环由启动按钮显式发起
+        started = client.post("/api/v1/simulator/start").json()
+        assert started["success"] is True and started["is_running"] is True
+
+        # 幂等：已装配时再次启用仍成功，且不打断运行
+        again = client.post("/api/v1/simulator/enable").json()
+        assert again["success"] is True
+        assert again["status"]["is_running"] is True
+    finally:
+        client.post("/api/v1/simulator/disable")
+
+
+async def test_enable_without_session_then_start_runs_debug(mount, initialized_config, store, session_manager) -> None:
+    """采集器形态：无场次时启用后照样能启动（调试注入，不落库），不要求先开场次。"""
+    factory = _make_factory(store, initialized_config, llm=FakeLLMService(), session_manager=session_manager)
+    client = mount(config_service=initialized_config, simulator_factory=factory)
+    try:
+        assert client.post("/api/v1/simulator/enable").json()["success"] is True
+        assert session_manager.active_pk is None
+        started = client.post("/api/v1/simulator/start").json()
+        assert started["success"] is True and started["is_running"] is True
+        assert session_manager.active_pk is None  # 模拟器不代开场次
+    finally:
+        client.post("/api/v1/simulator/disable")
+
+
+async def test_enable_without_llm_assembles_but_start_rejected(mount, initialized_config, store) -> None:
+    """无 LLM 时启用装配成功；生成循环被拒，拒绝原因由 /start 返回。"""
+    factory = _make_factory(store, initialized_config)
+    client = mount(config_service=initialized_config, simulator_factory=factory)
+    body = client.post("/api/v1/simulator/enable").json()
+    assert body["success"] is True
+    assert body["status"]["is_available"] is True
+    assert body["status"]["is_running"] is False
+
+    started = client.post("/api/v1/simulator/start").json()
+    assert started["success"] is False
+    assert "LLM" in started["message"]
+
+
+def test_enable_without_factory_fails_with_guidance(mount) -> None:
+    """工厂未注入（极简启动/测试装配）→ success=false 带重启指引，状态不变。"""
+    client = mount(config_service=_FakeConfigService())
+    body = client.post("/api/v1/simulator/enable").json()
+    assert body["success"] is False
+    assert "工厂未注入" in body["message"]
+    assert body["status"]["is_available"] is False
+
+
+async def test_disable_stops_service_and_persists_config(mount, initialized_config, store, session_manager) -> None:
+    """停用 = 停循环 + 拆卸服务 + enabled 写回 false；人手开的场次不替人收口；未装配时幂等。"""
+    factory = _make_factory(store, initialized_config, llm=FakeLLMService(), session_manager=session_manager)
+    client = mount(config_service=initialized_config, simulator_factory=factory)
+    rehearsal_pk = await session_manager.open_session(kind=SESSION_KIND_REHEARSAL, title="彩排")
+    assert client.post("/api/v1/simulator/enable").json()["success"] is True
+    assert client.post("/api/v1/simulator/start").json()["is_running"] is True
+    body = client.post("/api/v1/simulator/disable").json()
+    assert body["success"] is True
+    assert body["status"]["is_available"] is False
+    assert body["status"]["is_running"] is False
+    assert body["status"]["enabled"] is False
+    assert initialized_config.get_section("simulator")["enabled"] is False
+    assert session_manager.active_pk == rehearsal_pk  # 场次是用户开的，停用不代关
+
+    # 幂等：未装配时再停用仍成功
+    again = client.post("/api/v1/simulator/disable").json()
+    assert again["success"] is True
 
 
 # replay dates

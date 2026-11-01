@@ -1,8 +1,8 @@
 """SimulatorService 组合根装配：main.create_app_components 的装配契约。
 
 ① [simulator].enabled=false → 零装配（simulator_service 字段为 None）
-② enabled=true + auto_start=True → 装配且 is_running=True
-③ enabled=true + auto_start=False（--dry 场景）→ 装配但 is_running=False，run_shutdown 照常关闭
+② enabled=true → 只装配待命，is_running=False（生成循环由 WebUI 显式发起，组合根不自动启动），
+   run_shutdown 照常关闭
 
 组合根内部依赖 EventBus/LLMManager/ConfigService 等组件：用最小 config 让 CollectorManager/AgentManager/
 DashboardServer 走零装配路径，并 monkey-patch LLMManager.setup 跳过真实 provider 池校验（测试目标不是 LLM）。
@@ -66,7 +66,7 @@ def _stub_llm_and_base_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("main._BASE_DIR", str(Path.cwd()))
 
 
-async def _assemble(tmp_path: Path, *, simulator_enabled: bool, auto_start: bool = True, **config_patch: Any):
+async def _assemble(tmp_path: Path, *, simulator_enabled: bool, **config_patch: Any):
     config_service = ConfigService(base_dir=str(tmp_path))
     # 绕开真实 TOML 加载；库文件放进本用例的临时目录
     config_service._main_config = _minimal_config(simulator_enabled, tmp_path / "wiring.db") | config_patch
@@ -75,7 +75,6 @@ async def _assemble(tmp_path: Path, *, simulator_enabled: bool, auto_start: bool
         config=config_service.main_config,
         config_service=config_service,
         dev_webui=False,
-        simulator_auto_start=auto_start,
         log_streamer_persist=False,
     )
 
@@ -113,13 +112,12 @@ async def test_disabled_simulator_is_not_wired_at_all(tmp_path: Path) -> None:
     assert not [s for s in _LIVE_STREAMERS if s.persist]  # 测试装配不得留下 persist LogStreamer（会写真实 data/logs/）
 
 
-@pytest.mark.parametrize("auto_start", [True, False], ids=["auto_start", "dry_mode"])
-async def test_enabled_simulator_runs_only_when_auto_started(tmp_path: Path, auto_start: bool) -> None:
-    """--dry 模式装配但不启动主循环，因而不产生 LLM 调用。"""
-    result = await _assemble(tmp_path, simulator_enabled=True, auto_start=auto_start)
+async def test_enabled_simulator_assembles_but_does_not_run(tmp_path: Path) -> None:
+    """启用与生成分离：enabled=true 只装配待命，组合根不自动启动生成循环。"""
+    result = await _assemble(tmp_path, simulator_enabled=True)
     try:
         assert result.simulator_service is not None
-        assert result.simulator_service.is_running is auto_start
+        assert result.simulator_service.is_running is False
     finally:
         await _cleanup(result)
     assert result.simulator_service.is_running is False
@@ -151,7 +149,7 @@ async def test_simulator_setup_runs_after_agents_started(tmp_path: Path, monkeyp
 
 
 async def test_dry_mode_shutdown_completes_without_starting_the_simulator(tmp_path: Path) -> None:
-    result = await _assemble(tmp_path, simulator_enabled=True, auto_start=False)
+    result = await _assemble(tmp_path, simulator_enabled=True)
     assert result.simulator_service is not None
     assert result.simulator_service.is_running is False
 

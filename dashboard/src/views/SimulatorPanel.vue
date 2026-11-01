@@ -2,15 +2,22 @@
   <div class="simulator-page">
     <header class="page-header">
       <div class="header-left">
-        <h1 class="page-title">模拟器（开发基础设施）</h1>
+        <h1 class="page-title">观众模拟器</h1>
         <p class="page-subtitle">
           向直播事件流注入模拟观众消息（弹幕 / 礼物 / SC）：
           <strong>generate</strong>（LLM 实时生成）或 <strong>replay</strong>
-          （按录制节奏回放历史弹幕）。装配开关与模式见
-          <code>config/infra.toml</code> 的 <code>[simulator]</code> 段，修改需重启。
+          （按录制节奏回放历史弹幕）。未启用时可在本页直接启用，无需重启。
         </p>
       </div>
       <div class="header-actions">
+        <el-button
+          v-if="status.is_available && !status.is_running"
+          :disabled="toggling !== null"
+          :loading="toggling === 'disable'"
+          @click="disableSimulator"
+        >
+          禁用
+        </el-button>
         <el-tooltip
           v-if="status.enabled && status.is_available && !status.is_running && configMode === 'off'"
           content="配置 [simulator].mode = off，启动会被拒绝；改为 generate/replay 并重启后再试"
@@ -21,7 +28,7 @@
         <el-button
           v-else-if="status.enabled && status.is_available"
           :type="status.is_running ? 'danger' : 'success'"
-          :loading="toggling !== null"
+          :loading="toggling === 'start' || toggling === 'stop'"
           @click="toggleSimulator"
         >
           {{ headerActionLabel }}
@@ -38,23 +45,30 @@
     </header>
 
     <div class="content">
-      <el-alert
-        v-if="!status.enabled"
-        type="info"
-        title="模拟器当前未启用"
-        description="请在 config/infra.toml 的 [simulator] 段将 enabled 设为 true 并重启应用。mode 字段决定启动时走生成还是回放。"
-        show-icon
-        :closable="false"
-      />
+      <el-empty v-if="!status.enabled" description="观众模拟器未启用" :image-size="80">
+        <div class="empty-actions">
+          <el-button type="primary" :loading="toggling === 'enable'" @click="enableSimulator">
+            启用观众模拟器
+          </el-button>
+          <p class="hint">
+            启用 = 装配可用（立即生效、写入 config/infra.toml
+            保持下次启动）；生成是独立开关——点上方「启动」 才开始注入，重启后不会自动恢复。
+          </p>
+        </div>
+      </el-empty>
 
-      <el-alert
-        v-else-if="!status.is_available"
-        type="warning"
-        title="配置启用但服务未注入"
-        description="通常因为 SQLiteStore / LLMManager 缺失（如 --dry 模式），或组合根跳过 [simulator] 装配。请检查 config/infra.toml 的 [simulator] 段。"
-        show-icon
-        :closable="false"
-      />
+      <div v-else-if="!status.is_available" class="unavailable-block">
+        <el-alert
+          type="warning"
+          title="配置已启用但服务未装配"
+          description="通常因为存储仓储或 LLMManager 缺失（如 --dry 模式）。可尝试重新装配，或检查 config/infra.toml 的 [simulator] 段。"
+          show-icon
+          :closable="false"
+        />
+        <el-button type="primary" :loading="toggling === 'enable'" @click="enableSimulator">
+          启用观众模拟器
+        </el-button>
+      </div>
 
       <el-tabs v-else v-model="activeTab" class="workbench-tabs">
         <!-- Tab 1：运行控制（模式 + 回放）                                -->
@@ -288,8 +302,8 @@
                   </el-descriptions-item>
                 </el-descriptions>
                 <p class="hint">
-                  修改任一字段请编辑 <code>config/infra.toml</code> 的
-                  <code>[simulator]</code> 段并重启应用（运行时不支持热改）。
+                  运行参数（消息率 / 概率 / 预算等）在设置页修改，保存后重启生效；本页的启用 /
+                  停用即时生效并写入配置。
                 </p>
               </el-card>
             </el-col>
@@ -301,8 +315,11 @@
                 <div class="explain-block">
                   <p>
                     模拟消息以 <code>room.message.*</code> 事件进入 EventBus，payload 携带
-                    <code>simulated: true</code> 溯源标记。模拟器只在彩排场里运行：彩排场的回顾只在
-                    下一场彩排时被读到，不推给 MaiBot；正式场进行中无法启动。
+                    <code>simulated: true</code>
+                    溯源标记。观众模拟器像采集器一样注入，跟场次的关系只有三态：
+                    未开播时照常注入但不落库（调试）；彩排场进行中落库进彩排线（回顾只在下一场彩排被读到，
+                    不推
+                    MaiBot）；正式场进行中自动停止让路。场次的开与关都是你的动作，观众模拟器不代劳。
                   </p>
                   <p>
                     观众上下文从 SQLite <code>live_chat</code>
@@ -310,7 +327,7 @@
                     人设覆盖"两级裁剪。
                   </p>
                   <p>
-                    generate 模式预算耗尽（<code>token_budget_per_hour</code>）时，模拟器进入 5s
+                    generate 模式预算耗尽（<code>token_budget_per_hour</code>）时，观众模拟器进入 5s
                     等待恢复，期间不产生新消息但仍响应启停信号。
                   </p>
                 </div>
@@ -427,17 +444,19 @@
 
 <script setup lang="ts">
 /**
- * SimulatorPanel —— 弹幕模拟器工作台
+ * SimulatorPanel —— 观众模拟器工作台
  *
  * 数据源：`/api/v1/simulator/*`（详见 src/modules/dashboard/api/simulator.py）。
  * 形态：Tabs 工作台（运行控制 / 常驻人设 / 礼物目录 / 配置说明）。
  * 人设与礼物 CRUD 写穿 SQLite；回放日期来自事件历史录制目录。
+ * 未启用时提供一键启用（运行期装配，免重启）。
  */
 import { onMounted, reactive, ref, computed } from 'vue';
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus';
 import { useCrudDialog } from '@/composables/useCrudDialog';
 import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
 import { getApiErrorMessage } from '@/utils/apiError';
+import { confirmAction } from '@/utils/confirmAction';
 import { simulatorApi } from '@/api';
 import type { SimulatorReplayProgress, SimPersona, SimGift, ReplayDateEntry } from '@/types';
 
@@ -464,7 +483,7 @@ const status = reactive<SimulatorStatusState>({
 });
 
 const activeTab = ref('control');
-const toggling = ref<'start' | 'stop' | null>(null);
+const toggling = ref<'enable' | 'disable' | 'start' | 'stop' | null>(null);
 const lastError = ref('');
 
 // 5s 状态轮询随激活态启停（useKeepAlivePolling），捕捉按钮外的状态变化
@@ -825,6 +844,61 @@ async function stopSimulator() {
   }
 }
 
+// 应用启用/停用响应携带的最新状态（省一次轮询）；无状态体时回落显式拉取
+async function applyAssemblyResult(
+  res: { data: { success: boolean; message: string; status?: SimulatorStatusState } },
+  fallbackError: string,
+): Promise<boolean> {
+  if (res.data.success) {
+    lastError.value = '';
+    if (res.data.status) Object.assign(status, res.data.status);
+    else await fetchStatus();
+    ElMessage.success(res.data.message || '操作成功');
+    return true;
+  }
+  lastError.value = res.data.message || fallbackError;
+  ElMessage.warning(res.data.message || fallbackError);
+  return false;
+}
+
+async function enableSimulator() {
+  toggling.value = 'enable';
+  try {
+    const res = await simulatorApi.enable();
+    const ok = await applyAssemblyResult(res, '启用被拒绝');
+    if (ok) {
+      // 服务从无到有：人设/礼物/回放日期三路数据源首次可用，补拉一次
+      await Promise.all([fetchReplayDates(), fetchPersonas(), fetchGifts()]);
+    }
+  } catch (err) {
+    const detail = getApiErrorMessage(err, '');
+    lastError.value = detail ? `启用失败：${detail}` : '启用失败';
+    ElMessage.error(lastError.value);
+  } finally {
+    toggling.value = null;
+  }
+}
+
+async function disableSimulator() {
+  const confirmed = await confirmAction(
+    '停用后模拟循环停止、人设与礼物数据保留在库中，配置将写入 enabled=false（下次启动不自动装配）。确定停用吗？',
+    '停用观众模拟器',
+    { confirmButtonText: '停用' },
+  );
+  if (!confirmed) return;
+  toggling.value = 'disable';
+  try {
+    const res = await simulatorApi.disable();
+    await applyAssemblyResult(res, '停用失败');
+  } catch (err) {
+    const detail = getApiErrorMessage(err, '');
+    lastError.value = detail ? `停用失败：${detail}` : '停用失败';
+    ElMessage.error(lastError.value);
+  } finally {
+    toggling.value = null;
+  }
+}
+
 onMounted(async () => {
   await fetchStatus();
   await Promise.all([fetchReplayDates(), fetchPersonas(), fetchGifts()]);
@@ -930,6 +1004,25 @@ onMounted(async () => {
 
 .error-alert {
   margin-top: var(--spacing-sm);
+}
+
+.empty-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.empty-actions .hint {
+  max-width: 420px;
+  margin-top: 0;
+}
+
+.unavailable-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
 }
 
 code {

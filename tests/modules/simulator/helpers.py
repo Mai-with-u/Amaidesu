@@ -27,3 +27,13 @@ class FakeConfigService:
 
 def enabled_config(**overrides: Any) -> FakeConfigService:
     return FakeConfigService({"enabled": True, **overrides})
+
+
+class FakeSessionManager:
+    """最小场次管理器替身：恒有进行中场次（resolve_pk 固定返回），供 start 的场次前置检查通过。"""
+
+    def __init__(self, pk: int = 1) -> None:
+        self.pk = pk
+
+    async def resolve_pk(self) -> int:
+        return self.pk

@@ -1,6 +1,7 @@
-"""SimulatorService 集成：setup 读配置与启停、模拟标记、取消透传、回放收场与启动顺序、LLM 致命错误收场、付费概率路径
+"""SimulatorService 集成：setup 读配置与启停、模拟标记、取消透传、回放收场与重启、LLM 致命错误收场、付费概率路径
 
 LLM 经 services_by_type 用 duck-type 假服务注入（SimulatorService._find_llm_service 按 generate/setup 属性检测）。
+场次前置：start 要求有进行中的场次，跑真实循环的用例统一挂 FakeSessionManager。
 """
 
 from __future__ import annotations
@@ -17,7 +18,12 @@ from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.llm.payload import Response, Usage
 from src.modules.simulator import SimulatorService
 from src.modules.storage.database import SQLiteDatabase
-from tests.modules.simulator.helpers import FakeConfigService, FakeLLMService, enabled_config
+from tests.modules.simulator.helpers import (
+    FakeConfigService,
+    FakeLLMService,
+    FakeSessionManager,
+    enabled_config,
+)
 
 DANMAKU_FAMILY = (
     CoreEvents.ROOM_MESSAGE_DANMAKU,
@@ -35,25 +41,6 @@ class _FatalLLMService(FakeLLMService):
         self.calls.append({"method": "generate", "input": prompt})
         error = "全部模型失败 ['deepseek-flash']: FatalError: 请求被服务端拒绝（HTTP 402）"
         return Response(success=False, content="", error=error, usage=Usage(total_tokens=0))
-
-
-class _FakeSessionManager:
-    """记录调用顺序的场次管理器，供启动顺序断言。"""
-
-    def __init__(self) -> None:
-        self.calls: List[str] = []
-        self.opened_pk: Optional[int] = None
-
-    async def open_session(self, *, kind: str, title: str, source: str) -> int:
-        self.calls.append(f"open:{source}:{kind}")
-        self.opened_pk = 42
-        return 42
-
-    async def close_session(self, *, reason: str) -> None:
-        self.calls.append("close")
-
-    async def resolve_pk(self) -> int:
-        return 42
 
 
 FIXED = {"cadence_mode": "fixed", "fixed_interval_s": 1.0}  # 节奏字段约束 ge=1.0
@@ -76,13 +63,13 @@ def _service(
     return service, llm
 
 
-def _record_messages(bus: EventBus, session_manager: Any = None) -> list:
-    """订阅弹幕族事件；有场次管理器时同时记录 emit 瞬间场次是否已开启。"""
+def _record_messages(bus: EventBus) -> list:
+    """订阅弹幕族事件，收到的 room.message 载荷按序记录。"""
     received: list = []
 
     async def capture(event_name: str, payload: Any, source: Optional[str] = None) -> None:
         if isinstance(payload, RoomMessagePayload):
-            received.append((payload, session_manager is None or session_manager.opened_pk is not None))
+            received.append(payload)
 
     for event in DANMAKU_FAMILY:
         bus.on(event, capture, model_class=RoomMessagePayload)
@@ -126,12 +113,14 @@ async def test_setup_starts_only_when_enabled_and_auto_start(store: SQLiteDataba
 async def test_enabled_emits_danmaku_marked_as_simulated(store: SQLiteDatabase) -> None:
     bus = EventBus()
     received = _record_messages(bus)
-    service, _ = _service(store, bus, FakeLLMService(reply="测试弹幕", tokens=5))
-    await service.setup(enabled_config(**FIXED, gift_probability=0.0, warmup_duration_s=0.0))  # 关礼物，只走弹幕
+    service, _ = _service(store, bus, FakeLLMService(reply="测试弹幕", tokens=5), session_manager=FakeSessionManager())
+    await service.setup(
+        enabled_config(**FIXED, gift_probability=0.0, warmup_duration_s=0.0), auto_start=True
+    )  # 关礼物，只走弹幕
     try:
         await _wait_until(lambda: bool(received), 3.0)
         assert service.is_running is True and received
-        payload = received[0][0]
+        payload = received[0]
         assert payload.simulated is True and payload.message_type == "danmaku" and payload.content
     finally:
         await service.cleanup()  # 必须清理，否则任务残留
@@ -144,8 +133,8 @@ async def test_stop_and_cleanup_are_idempotent(store: SQLiteDatabase) -> None:
     await idle.cleanup()
     assert idle.is_running is False
 
-    service, _ = _service(store)
-    await service.setup(enabled_config(**FIXED))
+    service, _ = _service(store, session_manager=FakeSessionManager())
+    await service.setup(enabled_config(**FIXED), auto_start=True)
     assert service.is_running is True
     await service.stop()
     assert service.is_running is False
@@ -155,8 +144,8 @@ async def test_stop_and_cleanup_are_idempotent(store: SQLiteDatabase) -> None:
 
 
 async def test_stop_propagates_outer_cancellation(store: SQLiteDatabase) -> None:
-    service, _ = _service(store)
-    await service.setup(enabled_config(**FIXED))
+    service, _ = _service(store, session_manager=FakeSessionManager())
+    await service.setup(enabled_config(**FIXED), auto_start=True)
     current = asyncio.current_task()
     assert current is not None
     current.cancel()  # 模拟 stop() 期间外层被取消
@@ -165,8 +154,8 @@ async def test_stop_propagates_outer_cancellation(store: SQLiteDatabase) -> None
 
 
 async def test_run_loop_reraises_cancellation(store: SQLiteDatabase) -> None:
-    service, _ = _service(store)
-    await service.setup(enabled_config(**FIXED))
+    service, _ = _service(store, session_manager=FakeSessionManager())
+    await service.setup(enabled_config(**FIXED), auto_start=True)
     assert service._task is not None
     service._task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -174,22 +163,22 @@ async def test_run_loop_reraises_cancellation(store: SQLiteDatabase) -> None:
     await service.cleanup()
 
 
-async def test_replay_finishes_naturally_opens_session_first_and_is_restartable(store: SQLiteDatabase) -> None:
+async def test_replay_finishes_naturally_and_is_restartable(store: SQLiteDatabase) -> None:
     bus = EventBus()
-    sessions = _FakeSessionManager()
-    received = _record_messages(bus, sessions)
+    received = _record_messages(bus)
     await _seed_chat(store, "2026-09-01", rows=2)
-    service, _ = _service(store, bus, session_manager=sessions)
-    await service.setup(enabled_config(mode="replay", replay_date="2026-09-01", replay_speed=100.0))  # 近似全速回放
+    service, _ = _service(store, bus, session_manager=FakeSessionManager())
+    await service.setup(
+        enabled_config(mode="replay", replay_date="2026-09-01", replay_speed=100.0), auto_start=True
+    )  # 近似全速回放
     try:
         assert service.is_running is True  # 默认日期就绪，setup 自动启动回放
         await _wait_until(lambda: not service.is_running)
 
-        assert len(received) == 2 and all(session_open for _, session_open in received)  # 场次先于首条消息开启
-        assert "close" in sessions.calls  # 自然收场关闭回放场次
+        assert len(received) == 2
         assert (service.is_running, service._active_mode, service._task) == (False, "off", None)
 
-        await service.start()  # 落场后可立即再启动（重建回放队列）
+        await service.start()  # 收场后可立即再启动（重建回放队列）
         assert service.is_running is True
     finally:
         await service.cleanup()
@@ -198,7 +187,7 @@ async def test_replay_finishes_naturally_opens_session_first_and_is_restartable(
 async def test_start_reports_rejection_reason_and_single_message_replay_finishes_instantly(
     store: SQLiteDatabase,
 ) -> None:
-    service, _ = _service(store)
+    service, _ = _service(store, session_manager=FakeSessionManager())
     await service.setup(enabled_config(mode="replay"))
     try:
         no_date = await service.start()
@@ -217,8 +206,8 @@ async def test_start_reports_rejection_reason_and_single_message_replay_finishes
 
 
 async def test_fatal_llm_error_stops_loop_and_records_last_error(store: SQLiteDatabase) -> None:
-    service, fatal = _service(store, llm=_FatalLLMService())
-    await service.setup(enabled_config(**FIXED, gift_probability=0.0, warmup_duration_s=0.0))
+    service, fatal = _service(store, llm=_FatalLLMService(), session_manager=FakeSessionManager())
+    await service.setup(enabled_config(**FIXED, gift_probability=0.0, warmup_duration_s=0.0), auto_start=True)
     try:
         await _wait_until(lambda: not service.is_running, 8.0)
         assert service.is_running is False and service.mode == "off"  # 不得无限重试
@@ -249,15 +238,17 @@ async def test_pay_branch_probabilities_come_fromenabled_config(
     monkeypatch.setattr("src.modules.simulator.service.random.random", lambda: next(scripted, 0.99))
     bus = EventBus()
     received = _record_messages(bus)
-    service, _ = _service(store, bus, FakeLLMService(reply="普通弹幕", tokens=5))
+    service, _ = _service(store, bus, FakeLLMService(reply="普通弹幕", tokens=5), session_manager=FakeSessionManager())
     # gift_probability 拉满上限 0.5，配合脚本 gift_roll 必进付费分支
-    await service.setup(enabled_config(**FIXED, warmup_duration_s=0.0, gift_probability=0.5, **overrides))
+    await service.setup(
+        enabled_config(**FIXED, warmup_duration_s=0.0, gift_probability=0.5, **overrides), auto_start=True
+    )
     try:
         await _wait_until(lambda: bool(received), 3.0)
     finally:
         await service.stop()
         await service.cleanup()
 
-    assert received and received[0][0].message_type == message_type
+    assert received and received[0].message_type == message_type
     if payload_field:
-        assert getattr(received[0][0], payload_field) is not None
+        assert getattr(received[0], payload_field) is not None

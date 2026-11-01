@@ -713,7 +713,7 @@ export interface ReplayDateEntry {
   danmaku_count: number;
 }
 
-/** 模拟器常驻人设（sim_personas 表的运行时视图） */
+/** 观众模拟器常驻人设（sim_personas 表的运行时视图） */
 export interface SimPersona {
   user_id: string;
   user_nickname: string;
@@ -745,6 +745,13 @@ export interface SimulatorControlResponse {
   success: boolean;
   message: string;
   is_running?: boolean;
+}
+
+/** 模拟器启用/停用响应（`/simulator/enable` 与 `…/disable` 共用；status 为动作后的最新状态） */
+export interface SimulatorAssemblyResponse {
+  success: boolean;
+  message: string;
+  status?: SimulatorStatus;
 }
 
 /** 可回放录制日期列表响应（GET /api/v1/simulator/replay/dates） */

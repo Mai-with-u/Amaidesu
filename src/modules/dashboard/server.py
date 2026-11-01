@@ -11,7 +11,7 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, Dict, Optional, TYPE_CHECKING
 
 from fastapi import WebSocket
 from fastapi.responses import FileResponse
@@ -52,6 +52,10 @@ if TYPE_CHECKING:
     from src.modules.events.event_history import EventHistoryService
     from src.modules.simulator.service import SimulatorService
 
+    # 运行期装配模拟器的异步工厂：组合根提供的闭包，调用一次返回装配
+    # （构造 + setup）完成的 SimulatorService
+    SimulatorFactory = Callable[[], Awaitable["SimulatorService"]]
+
 from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
 from src.modules.dashboard.websocket.handler import WebSocketHandler
 
@@ -76,6 +80,7 @@ class DashboardServer:
         log_streamer: Optional[LogStreamer] = None,
         event_history: Optional["EventHistoryService"] = None,
         simulator_service: Optional["SimulatorService"] = None,
+        simulator_factory: Optional["SimulatorFactory"] = None,
         session_manager: Optional[Any] = None,
         session_repo: Optional[Any] = None,
         viewer_repo: Optional[Any] = None,
@@ -130,6 +135,10 @@ class DashboardServer:
         # 注入 SimulatorService 让 `/api/v1/simulator/*` 控制面可用。
         # 未注入（如默认生产配置 enabled=false）时相关端点仍可调用（返回 is_available=false）。
         self.simulator_service = simulator_service
+        # 运行期装配工厂：`/simulator/enable` 经此在免重启前提下构造 + setup
+        # SimulatorService（组合根闭包，依赖与启动期装配同源）；未注入时
+        # enable 端点返回失败指引。
+        self.simulator_factory = simulator_factory
         # 注入 LiveSessionManager 让 `/api/v1/sessions/*` 控制面可用（场次开启/结束/删除）。
         # 未注入时相关端点返回 is_available=false，不影响其余 API。
         self.session_manager = session_manager

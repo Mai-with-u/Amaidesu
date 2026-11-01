@@ -73,6 +73,7 @@ import type {
   SessionActionResponse,
   TaskSnapshotResponse,
   SimulatorControlResponse,
+  SimulatorAssemblyResponse,
   RundownStateResponse,
   RundownControlRequest,
   RundownControlResponse,
@@ -259,13 +260,15 @@ export const tasksApi = {
   listTasks: () => api.get<TaskSnapshotResponse>('/tasks'),
 };
 
-// Simulator 控制面（模拟器：generate 生成 / replay 回放）
+// Simulator 控制面（观众模拟器：generate 生成 / replay 回放）
 //
-// 控制 SimulatorService 的启停与状态查询，以及运行时数据（常驻人设 /
+// 控制 SimulatorService 的装配/启停与状态查询，以及运行时数据（常驻人设 /
 // 礼物目录 CRUD、回放日期选择）。enabled=false 时 status 仍返回（不抛
-// 404）；start 会拒绝并提示需要修改配置后重启。
+// 404）；enable/disable 运行期装配与拆卸（免重启，配置写盘持久化）。
 export const simulatorApi = {
   getStatus: () => api.get<SimulatorStatus>('/simulator/status'),
+  enable: () => api.post<SimulatorAssemblyResponse>('/simulator/enable'),
+  disable: () => api.post<SimulatorAssemblyResponse>('/simulator/disable'),
   start: (replayDate?: string) =>
     api.post<SimulatorControlResponse>(
       '/simulator/start',
