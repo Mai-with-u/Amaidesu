@@ -4,7 +4,8 @@
 蓝图里的"收到 WebSocket 动作"节点按名字接住，再驱动角色。脸、眼、头走面捕数据
 （iFacialMocap 接收器），不经蓝图；蓝图只管两样：
 
-- 头部动作与站姿：播放 Warudo 自带动画，与模型无关；
+- 身体动作：面捕合成器的站姿、叠加动作、手势各一个入口（``body_<类别>_<名字>``），播放
+  Warudo 自带的人形动画，与模型无关；
 - 风格化标记：配置里登记的每个标记一个入口（``marker_<名字>``），把收到的 0~1 写到模型
   上对应的形状（或走 VRM 表情代理写同名的自定义表情）。
 
@@ -20,6 +21,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
+from src.modules.avatar.tracking.body import GESTURE, OVERLAY, STANCE, BodyCue
+
+from . import body_animations
 from .tracking_driver import marker_action
 
 # Warudo 新建场景里"角色 1"的固定资源 ID（不同安装的默认场景一致）
@@ -38,23 +42,9 @@ _DATA_TYPES = {"Integer": 2, "Float": 3}
 # 风格化标记的写法：shape = 直接写模型网格上的形状；vrm = 走 VRM 表情代理写同名的自定义表情
 MODES = ("shape", "vrm")
 
-_ANIMATION_ROOT = "character-animation://resources/Animations/AGIA"
-_IDLE_DEFAULT = f"{_ANIMATION_ROOT}/01_Idles/AGIA_Idle_generic_01"
-
-# 头部动作：动作名 → (动画, 权重, 速度)；歪头沿用原蓝图调过的轻幅慢速
-HEAD_MOTIONS: Dict[str, Tuple[str, float, float]] = {
-    "nod_once": (f"{_ANIMATION_ROOT}/02_Layers/AGIA_Layer_nod_once_01", 1.0, 1.0),
-    "nod_twice": (f"{_ANIMATION_ROOT}/02_Layers/AGIA_Layer_nod_twice_01", 1.0, 1.0),
-    "shake_head": (f"{_ANIMATION_ROOT}/02_Layers/AGIA_Layer_shake_head_01", 1.0, 1.0),
-    "tilt_head": (f"{_ANIMATION_ROOT}/02_Layers/AGIA_Layer_tilt_neck_01", 0.1, 0.27),
-    "look_away": (f"{_ANIMATION_ROOT}/02_Layers/AGIA_Layer_look_away_01", 1.0, 1.0),
-}
-# 站姿：动作名 → 待机动画（切换后一直保持，直到下一个站姿）
-POSES: Dict[str, str] = {
-    "pose_calm": f"{_ANIMATION_ROOT}/01_Idles/AGIA_Idle_calm_01_hands_on_back",
-    "pose_think": f"{_ANIMATION_ROOT}/01_Idles/AGIA_Idle_think_01",
-    "pose_default": _IDLE_DEFAULT,
-}
+# 站姿切换、手势起落的过渡秒数：站姿全身都动，过渡慢一点才不突兀
+_STANCE_TRANSITION_S = 1.0
+_ONE_SHOT_TRANSITION_S = 0.4
 
 _EASE_OUT_CUBIC = {"label": "OutCubic", "value": 9, "description": None, "icon": None}
 
@@ -165,53 +155,60 @@ def _blendshape_graph(name: str, character: Dict[str, str], targets: Iterable[Tu
     return graph
 
 
-def _motion_graph(character: Dict[str, str]) -> _Graph:
-    """头部动作（叠加播放一次）与站姿（切换待机动画）"""
-    graph = _Graph("Amaidesu 头部动作与站姿", character)
-    row = 0
-    for action, (animation, weight, speed) in HEAD_MOTIONS.items():
-        entry = graph.on_action(action, "Integer", row)
-        player = graph.node(
-            _PLAY_ONE_SHOT_ANIMATION,
-            "PLAY_CHARACTER_ONE_SHOT_ANIMATION",
-            {
-                "Character": graph.character_input(),
-                "Animation": _value("string", animation),
-                "TransitionTime": _value("float", 1.2),
-                "Weight": _value("float", weight),
-                "Speed": _value("float", speed),
-                "Masked": _value("bool", True),
-                "MaskedBodyParts": {
-                    "type": "Warudo.Plugins.Core.Assets.Character.CharacterAsset+AnimationMaskedBodyPart[]",
-                    "value": json.dumps([{"label": "头", "value": 2, "description": None, "icon": None}]),
-                },
-                "Additive": _value("bool", True),
+def _play_idle(graph: _Graph, animation: str, row: int) -> str:
+    """切换待机动画（站姿）：换上后一直保持，直到下一个站姿。"""
+    return graph.node(
+        _PLAY_IDLE_ANIMATION,
+        "PLAY_CHARACTER_IDLE_ANIMATION",
+        {
+            "Character": graph.character_input(),
+            "Animation": _value("string", animation),
+            "TransitionTime": _value("float", _STANCE_TRANSITION_S),
+            "TransitionEasing": _value("DG.Tweening.Ease", _EASE_OUT_CUBIC),
+            "RestartIfPlaying": _value("bool", False),
+            "ResetIfPlaying": _value("bool", False),
+            "ResetToAnimation": _value("string", body_animations.DEFAULT_IDLE),
+            "ResetRootMotion": _value("bool", True),
+        },
+        420.0,
+        row * 260.0,
+    )
+
+
+def _play_once(graph: _Graph, animation: str, row: int, *, additive: bool) -> str:
+    """播一次：叠加动作叠在当前站姿上（additive），手势整段播完回到站姿。"""
+    return graph.node(
+        _PLAY_ONE_SHOT_ANIMATION,
+        "PLAY_CHARACTER_ONE_SHOT_ANIMATION",
+        {
+            "Character": graph.character_input(),
+            "Animation": _value("string", animation),
+            "TransitionTime": _value("float", _ONE_SHOT_TRANSITION_S),
+            "Weight": _value("float", 1.0),
+            "Speed": _value("float", 1.0),
+            "Masked": _value("bool", False),
+            "MaskedBodyParts": {
+                "type": "Warudo.Plugins.Core.Assets.Character.CharacterAsset+AnimationMaskedBodyPart[]",
+                "value": "[]",
             },
-            420.0,
-            row * 260.0,
-        )
+            "Additive": _value("bool", additive),
+        },
+        420.0,
+        row * 260.0,
+    )
+
+
+def _body_graph(character: Dict[str, str], animations: Mapping[BodyCue, str]) -> _Graph:
+    """身体动作：站姿、叠加动作、手势各一个入口（按类别排，同类按名字排）。"""
+    graph = _Graph("Amaidesu 身体动作", character)
+    order = {STANCE: 0, OVERLAY: 1, GESTURE: 2}
+    for row, (cue, animation) in enumerate(sorted(animations.items(), key=lambda i: (order[i[0].kind], i[0].name))):
+        entry = graph.on_action(body_animations.body_action(cue), "Integer", row)
+        if cue.kind == STANCE:
+            player = _play_idle(graph, animation, row)
+        else:
+            player = _play_once(graph, animation, row, additive=cue.kind == OVERLAY)
         graph.flow(entry, player)
-        row += 1
-    for action, animation in POSES.items():
-        entry = graph.on_action(action, "Integer", row)
-        player = graph.node(
-            _PLAY_IDLE_ANIMATION,
-            "PLAY_CHARACTER_IDLE_ANIMATION",
-            {
-                "Character": graph.character_input(),
-                "Animation": _value("string", animation),
-                "TransitionTime": _value("float", 1.2),
-                "TransitionEasing": _value("DG.Tweening.Ease", _EASE_OUT_CUBIC),
-                "RestartIfPlaying": _value("bool", False),
-                "ResetIfPlaying": _value("bool", False),
-                "ResetToAnimation": _value("string", _IDLE_DEFAULT),
-                "ResetRootMotion": _value("bool", True),
-            },
-            420.0,
-            row * 260.0,
-        )
-        graph.flow(entry, player)
-        row += 1
     return graph
 
 
@@ -230,22 +227,24 @@ def build_blueprints(
     *,
     mode: str = "shape",
     character: Optional[Dict[str, str]] = None,
+    body: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """生成蓝图：{文件名: 蓝图 dict}。头部动作与站姿总有；登记了风格化标记才有标记蓝图。
+    """生成蓝图：{文件名: 蓝图 dict}。身体动作总有；登记了风格化标记才有标记蓝图。
 
     Args:
         markers: 风格化标记名 → 模型上的形状名（与适配器读的是同一份配置，动作名天然对齐）
         mode: 标记的写法，shape = 直接写同名形状；vrm = 走 VRM 表情代理写同名的自定义表情
         character: 角色资源引用 {id, name}；缺省用新建场景的"角色 1"
+        body: 身体动作的动画替换（动作名 → 动画），与适配器读的是同一份配置
     """
     if mode not in MODES:
         raise ValueError(f"未知写法 {mode!r}，可选 {MODES}")
     ref = character or {"id": DEFAULT_CHARACTER_ID, "name": "角色 1"}
-    graphs: List[_Graph] = [_motion_graph(ref)]
+    graphs: List[_Graph] = [_body_graph(ref, body_animations.resolve(body or {}))]
     if markers:
         targets: Iterable[Tuple[str, str]] = [(marker_action(name), shape) for name, shape in markers.items()]
         graphs.append(_blendshape_graph("Amaidesu 风格化标记", ref, targets, vrm=mode == "vrm"))
     return {f"{graph.name}.json": graph.to_dict() for graph in graphs}
 
 
-__all__ = ["DEFAULT_CHARACTER_ID", "HEAD_MOTIONS", "MODES", "POSES", "build_blueprints", "find_scene_character"]
+__all__ = ["DEFAULT_CHARACTER_ID", "MODES", "build_blueprints", "find_scene_character"]

@@ -1,4 +1,5 @@
-"""WarudoProvider：面捕驱动挂载与收尾、动作片段登记与蓝图通道、抛鱼冷却、表情交给面捕合成器、不向 LLM 暴露工具、连接/断开/重连语义（不连真实 Warudo）"""
+"""WarudoProvider：面捕驱动挂载与收尾、身体动作与动作片段走蓝图通道、抛鱼冷却、表情交给面捕合成器、不向 LLM 暴露工具、
+连接/断开/重连语义（不连真实 Warudo）"""
 
 from __future__ import annotations
 
@@ -12,7 +13,6 @@ import pytest
 
 from src.modules.avatar.platform.warudo.ifacialmocap import encode_frame
 from src.modules.avatar.platform.warudo.warudo_provider import (
-    BUILTIN_MOTIONS,
     WarudoProvider,
     create_warudo_provider,
     register_warudo_tools,
@@ -94,20 +94,25 @@ async def _connected(
     return provider, ws, datagram
 
 
-def test_action_catalog_defaults_to_builtin_and_merges_config() -> None:
+def test_action_catalog_is_throw_fish_plus_config() -> None:
     assert _provider().action_catalog == {}
-    names = [e["name"] for e in _provider()._preset_action_catalog()]
-    assert names == [*BUILTIN_MOTIONS, "throw_fish"]  # 内置头部动作、站姿与抛鱼始终在
-
-    entries = {
-        e["name"]: e["description"]
-        for e in _provider(action_catalog={"wave": "招手", "nod_once": "用力点头"})._preset_action_catalog()
-    }
-    assert (entries["wave"], entries["nod_once"]) == ("招手", "用力点头")  # 同名以配置说明为准
-    assert list(entries).count("nod_once") == 1 and entries["throw_fish"]
+    # 站姿、手势由面捕合成器调度，不再作为片段重复列
+    assert [e["name"] for e in _provider()._preset_action_catalog()] == ["throw_fish"]
+    entries = {e["name"]: e["description"] for e in _provider(action_catalog={"wave": "招手"})._preset_action_catalog()}
+    assert entries == {"wave": "招手", "throw_fish": "抛鱼动画（内置，带冷却）"}
 
     with pytest.raises(ValueError):  # action_catalog 必须是 Dict[str, str]，非 dict 严格报错
         _provider(action_catalog="invalid")
+
+
+def test_body_animation_overrides_reject_unknown_actions_and_empty_animations() -> None:
+    assert _provider(body_animations={"wave": " 03_Others/AGIA_Other_wave_arm_01 "}).typed_config.body_animations == {
+        "wave": "03_Others/AGIA_Other_wave_arm_01"
+    }
+    with pytest.raises(ValueError, match="未知的身体动作"):
+        _provider(body_animations={"backflip": "x"})
+    with pytest.raises(ValueError, match="没写对应的动画"):
+        _provider(body_animations={"wave": ""})
 
 
 def test_markers_config_rejects_unknown_names_and_empty_shapes() -> None:
@@ -123,7 +128,7 @@ async def test_setup_attaches_face_driver_and_cleanup_leaves_rest_pose(
 ) -> None:
     tracking = _tracking(fake_clock)
     await tracking.start()
-    provider, _, datagram = await _connected(monkeypatch, tracking=tracking)
+    provider, ws, datagram = await _connected(monkeypatch, tracking=tracking)
     assert datagram.target == ("127.0.0.1", 49983) and tracking.driver_names == ["warudo"]
     tracking.express("happy", 1.0)
     for _ in range(20):
@@ -136,23 +141,25 @@ async def test_setup_attaches_face_driver_and_cleanup_leaves_rest_pose(
     await provider.cleanup()
     # 摘下前发一帧静止姿态：Warudo 收不到新数据时会停在最后一帧
     assert datagram.packets[-1] == encode_frame(tracking.rest_frame())
+    assert ws.actions[-1] == ("body_stance_standing", 1)  # 站姿也回普通站姿
     assert datagram.closed and tracking.driver_names == []
     await tracking.stop()
 
 
-async def test_builtin_motions_and_catalog_entries_are_clips_sent_over_the_blueprint_channel(
+async def test_body_actions_and_catalog_clips_go_over_the_blueprint_channel(
     monkeypatch: pytest.MonkeyPatch, fake_clock: FakeClock
 ) -> None:
     tracking = _tracking(fake_clock)
     await tracking.start()
-    provider, ws, _ = await _connected(monkeypatch, tracking=tracking, config={"action_catalog": {"wave": "招手"}})
-    clips = {e["name"] for e in tracking.action_catalog() if e["kind"] == "warudo 片段"}
-    assert {"nod_once", "pose_think", "wave", "throw_fish"} <= clips
-    for action in ("nod_once", "pose_think", "wave"):
-        assert await tracking.act(action) is True
-    assert ws.actions == [("nod_once", 1), ("pose_think", 1), ("wave", 1)]
-    unknown = await provider.trigger_preset_action("dance")
-    assert unknown.success is False and "nod_once" in unknown.structured_content["available_actions"]
+    provider, ws, _ = await _connected(monkeypatch, tracking=tracking, config={"action_catalog": {"dance": "跳舞"}})
+    catalog = {e["name"]: e["kind"] for e in tracking.action_catalog()}
+    assert catalog["dance"] == catalog["throw_fish"] == "warudo 片段"
+    assert {catalog[name] for name in ("挥手", "双手挥", "指一下", "举拳庆祝")} == {"身体动作"}
+    assert await tracking.act("dance") is True and await tracking.act("挥手") is True
+    await tracking.tick_once()
+    assert ws.actions == [("dance", 1), ("body_gesture_wave", 1)]
+    unknown = await provider.trigger_preset_action("backflip")
+    assert unknown.success is False and "dance" in unknown.structured_content["available_actions"]
     await provider.cleanup()
     await tracking.stop()
 

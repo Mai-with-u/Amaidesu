@@ -5,8 +5,10 @@ WarudoProvider - Warudo 虚拟形象适配器
 iFacialMocap 协议把每一帧发给 Warudo 的面捕接收器（UDP，默认 127.0.0.1:49983），脸、眼、
 头由 Warudo 自己的面捕流程落到模型上。另有一条 WebSocket 蓝图通道（默认 19190）：
 
-- 动作片段：内置的头部动作与站姿（播放 Warudo 自带动画）、抛鱼（带冷却）、配置登记的蓝图
-  动作，登记给面捕合成器，主播经 ``avatar_act`` 按名字触发；
+- 身体动作：面捕合成器决定换站姿、叠动作、做手势，驱动按动作名发给蓝图，蓝图播放
+  Warudo 自带的人形动画（``body_animations`` 可按动作名换动画）；
+- 动作片段：抛鱼（带冷却）与配置登记的蓝图动作，登记给面捕合成器，主播经 ``avatar_act``
+  按名字触发；
 - 风格化标记：脸红、眼泪这类面捕数据里没有的东西，按 ``markers`` 登记经蓝图写到模型形状上。
 
 不向 LLM 暴露工具；``set_expression`` 等契约方法只给调试台用（设表情交给面捕合成器）。
@@ -31,6 +33,7 @@ from src.modules.types.emotion_vocab import Emotion
 from src.modules.utils.backoff import ExponentialBackoff
 from src.modules.utils.time_utils import now_ms
 
+from . import body_animations
 from .ifacialmocap import DEFAULT_PORT
 from .tracking_driver import WarudoTrackingDriver
 from .warudo_sender import ActionSender
@@ -47,19 +50,6 @@ except ImportError:
 
 # 内置预设动作（除配置 action_catalog 外固定可演的条目）
 _THROW_FISH_ACTION = "throw_fish"
-
-# 内置头部动作与站姿：动作名直发蓝图（数据 1），蓝图播放 Warudo 自带动画，
-# 与具体模型无关；生成的蓝图按这些名字接收
-BUILTIN_MOTIONS: Dict[str, str] = {
-    "nod_once": "点头一次",
-    "nod_twice": "点头两次",
-    "shake_head": "摇头",
-    "tilt_head": "歪头",
-    "look_away": "低头看向一边",
-    "pose_calm": "双手背到身后的放松站姿",
-    "pose_think": "思考站姿",
-    "pose_default": "恢复默认站姿",
-}
 
 _EMOTIONS = frozenset(e.value for e in Emotion)
 
@@ -133,6 +123,21 @@ class WarudoProvider(ConnectionToolProvider):
             ),
         )
 
+        body_animations: Dict[str, str] = Field(
+            title="身体动作换动画",
+            default_factory=dict,
+            description=(
+                "身体动作名 → 换用的 Warudo 动画（可以只写 AGIA 下的相对路径，如 "
+                "01_Idles/AGIA_Idle_energetic_02_right_hand_piece）；没写的用默认对照，改完重新生成并导入蓝图"
+            ),
+            json_schema_extra={"x-ui-advanced": True},
+        )
+
+        @field_validator("body_animations")
+        @classmethod
+        def _known_body(cls, value: Dict[str, str]) -> Dict[str, str]:
+            return body_animations.check_overrides(value)
+
         @field_validator("markers")
         @classmethod
         def _known_markers(cls, value: Dict[str, str]) -> Dict[str, str]:
@@ -195,7 +200,11 @@ class WarudoProvider(ConnectionToolProvider):
         self._last_throw_ms: Optional[int] = None
 
         self._driver = WarudoTrackingDriver(
-            markers=self.typed_config.markers, send_marker=self._send_marker, clock=clock
+            markers=self.typed_config.markers,
+            send_marker=self._send_marker,
+            body=body_animations.resolve(self.typed_config.body_animations),
+            send_body=self._send_body,
+            clock=clock,
         )
         self._datagram: Any = None
 
@@ -211,16 +220,11 @@ class WarudoProvider(ConnectionToolProvider):
         return self.PROVIDER_NAME
 
     def _preset_action_catalog(self) -> List[Dict[str, str]]:
-        """预设动作目录：配置 ``action_catalog`` 条目 + 内置头部动作与站姿 + 抛鱼（带冷却）。
+        """预设动作目录：配置 ``action_catalog`` 条目 + 抛鱼（带冷却）。
 
-        配置条目与内置条目同名时以配置的说明为准（用户自己的蓝图可能另有含义）。
+        身体动作由面捕合成器统一调度（站姿跟着情绪换、手势经 ``avatar_act`` 点名），不在这里重复列。
         """
         catalog = [{"name": name, "description": desc} for name, desc in self.action_catalog.items()]
-        catalog.extend(
-            {"name": name, "description": desc}
-            for name, desc in BUILTIN_MOTIONS.items()
-            if name not in self.action_catalog
-        )
         catalog.append({"name": _THROW_FISH_ACTION, "description": "抛鱼动画（内置，带冷却）"})
         return catalog
 
@@ -255,8 +259,7 @@ class WarudoProvider(ConnectionToolProvider):
     async def trigger_preset_action(self, action: str) -> ToolExecutionResult:
         """触发一个预设动作；未知名把目录随失败结果返回（失败即发现）。
 
-        内置条目 ``throw_fish`` 带冷却（冷却中经结果载荷告知）；头部动作、站姿与配置登记的
-        条目都按动作名直发蓝图。
+        内置条目 ``throw_fish`` 带冷却（冷却中经结果载荷告知）；配置登记的条目按动作名直发蓝图。
         """
         action = action.strip()
         if action == _THROW_FISH_ACTION:
@@ -266,7 +269,7 @@ class WarudoProvider(ConnectionToolProvider):
                 True,
                 {"action": action, "fired": fired, "cooldown_seconds": self.throw_fish_cooldown},
             )
-        if action in self.action_catalog or action in BUILTIN_MOTIONS:
+        if action in self.action_catalog:
             sent = await self._send_action_internal(action, 1)
             return tool_result_ok("warudo_trigger_preset_action", sent, {"action": action})
         catalog = [entry["name"] for entry in self._preset_action_catalog()]
@@ -413,6 +416,10 @@ class WarudoProvider(ConnectionToolProvider):
         except Exception as e:
             self.logger.error(f"发送动作失败: {action}: {e}")
             return False
+
+    async def _send_body(self, action: str) -> bool:
+        """身体动作：经蓝图通道发一次（数据 1）。"""
+        return await self._send_action_internal(action, 1)
 
     async def _send_marker(self, action: str, value: float) -> bool:
         """风格化标记逐帧变化：蓝图通道没连上时静默跳过（驱动下一帧再试），不刷警告。"""
@@ -569,4 +576,4 @@ def register_warudo_tools(
     return provider
 
 
-__all__ = ["BUILTIN_MOTIONS", "WarudoProvider", "create_warudo_provider", "register_warudo_tools"]
+__all__ = ["WarudoProvider", "create_warudo_provider", "register_warudo_tools"]

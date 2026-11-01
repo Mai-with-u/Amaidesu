@@ -1,4 +1,5 @@
-"""Warudo 蓝图生成：动作入口与适配器内置条目同名、风格化标记入口与驱动发的动作名对齐、两种写法、角色引用取场景"""
+"""Warudo 蓝图生成：身体动作入口覆盖合成器的全部动作且按类别播放、可换动画，风格化标记入口与驱动发的动作名对齐、
+两种写法、角色引用取场景"""
 
 import json
 
@@ -6,13 +7,14 @@ import pytest
 
 from src.modules.avatar.platform.warudo.blueprint_builder import (
     DEFAULT_CHARACTER_ID,
-    HEAD_MOTIONS,
-    POSES,
     build_blueprints,
     find_scene_character,
 )
+from src.modules.avatar.platform.warudo.body_animations import ANIMATION_ROOT, body_action
 from src.modules.avatar.platform.warudo.tracking_driver import marker_action
-from src.modules.avatar.platform.warudo.warudo_provider import BUILTIN_MOTIONS
+from src.modules.avatar.tracking.body import KINDS, BodyCue
+
+BODY = "Amaidesu 身体动作.json"
 
 
 def _value(node: dict, key: str):
@@ -26,11 +28,31 @@ def _entries(blueprint: dict) -> dict:
     return {_value(n, "Action"): targets[nid] for nid, n in nodes.items() if n["name"] == "ON_WEBSOCKET_ACTION"}
 
 
-def test_motions_always_and_markers_only_when_registered() -> None:
-    assert set(build_blueprints({})) == {"Amaidesu 头部动作与站姿.json"}
-    motions = _entries(build_blueprints({})["Amaidesu 头部动作与站姿.json"])
-    assert set(motions) == set(BUILTIN_MOTIONS) == set(HEAD_MOTIONS) | set(POSES)  # 与适配器内置条目同一批名字
-    assert _value(motions["pose_think"], "Character")["id"] == DEFAULT_CHARACTER_ID
+def test_body_entries_always_cover_every_body_action_and_markers_only_when_registered() -> None:
+    assert set(build_blueprints({})) == {BODY}
+    entries = _entries(build_blueprints({})[BODY])
+    every = {body_action(BodyCue(kind, name)) for kind, names in KINDS.items() for name in names}
+    assert set(entries) == every  # 合成器的每个身体动作都有入口，名字与驱动发的一致
+    stance, overlay, gesture = (
+        entries["body_stance_hands_on_hips"],
+        entries["body_overlay_sway"],
+        entries["body_gesture_wave"],
+    )
+    assert stance["name"] == "PLAY_CHARACTER_IDLE_ANIMATION"  # 站姿：换待机动画，一直保持
+    assert _value(stance, "Animation") == f"{ANIMATION_ROOT}/01_Idles/AGIA_Idle_angry_01_hands_on_waist"
+    assert _value(overlay, "Additive") is True and _value(gesture, "Additive") is False  # 叠加 / 整段播一次
+    assert _value(stance, "Character")["id"] == DEFAULT_CHARACTER_ID
+
+
+def test_body_animation_overrides_accept_relative_or_full_paths() -> None:
+    body = {"fist_up": "01_Idles/AGIA_Idle_energetic_02_right_hand_piece", "wave": "character-animation://x/y"}
+    entries = _entries(build_blueprints({}, body=body)[BODY])
+    assert _value(entries["body_stance_fist_up"], "Animation") == (
+        f"{ANIMATION_ROOT}/01_Idles/AGIA_Idle_energetic_02_right_hand_piece"
+    )
+    assert _value(entries["body_gesture_wave"], "Animation") == "character-animation://x/y"
+    with pytest.raises(ValueError, match="未知的身体动作"):
+        build_blueprints({}, body={"backflip": "x"})
 
 
 def test_marker_entries_write_the_registered_shapes_with_the_driver_action_names() -> None:

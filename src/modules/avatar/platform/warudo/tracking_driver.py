@@ -7,15 +7,20 @@ ARKit 形状（完美同步）就照名字写，没有就按 Warudo 面捕设置
 面捕数据里没有风格化标记（脸红、眼泪……）。登记了对应形状的标记，值变化时经 WebSocket
 蓝图通道发 ``marker_<名字>``（0~1，按 0.05 取整、同一个标记至少隔 100 毫秒才再发，归零和
 满值立刻发），由生成的蓝图写到模型形状上。
+
+身体动作（换站姿、叠动作、做手势）也走蓝图通道：发 ``body_<类别>_<名字>``，生成的蓝图播放
+Warudo 自带的人形动画。
 """
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Tuple
+from typing import Any, Awaitable, Callable, Collection, Dict, Mapping, Optional, Tuple
 
+from src.modules.avatar.tracking.body import BodyCue
 from src.modules.avatar.tracking.channels import MARKER_PREFIX, Frame
 from src.modules.utils.time_utils import now_ms as wall_now_ms
 
+from .body_animations import body_action
 from .ifacialmocap import encode_frame
 
 # 风格化标记经蓝图通道发送：取整步长与同一标记的最短发送间隔
@@ -38,14 +43,20 @@ class WarudoTrackingDriver:
         *,
         markers: Optional[Mapping[str, str]] = None,
         send_marker: Optional[Callable[[str, float], Awaitable[bool]]] = None,
+        body: Collection[BodyCue] = (),
+        send_body: Optional[Callable[[str], Awaitable[bool]]] = None,
         clock: Callable[[], int] = wall_now_ms,
     ) -> None:
         """Args:
         markers: 登记了模型形状的风格化标记（标记名 → 形状名；这里只用到标记名）。
         send_marker: 经蓝图通道发一个标记值，返回是否发出去了（蓝图通道没连上时为 False，下一帧再试）。
+        body: 蓝图里有入口的身体动作（生成蓝图时按同一份配置）。
+        send_body: 经蓝图通道发一个身体动作。
         """
         self._markers = tuple(markers or ())
         self._send_marker = send_marker
+        self._body = frozenset(body) if send_body is not None else frozenset()
+        self._send_body = send_body
         self._clock = clock
         self._transport: Any = None
         # 每个标记最近一次发出去的值与时刻
@@ -85,6 +96,14 @@ class WarudoTrackingDriver:
         for marker, value in self.marker_updates(frame).items():
             if await self._send_marker(marker_action(marker), value):
                 self._sent[marker] = (value, self._clock())
+
+    def body_supports(self, cue: BodyCue) -> bool:
+        return cue in self._body
+
+    async def perform_body(self, cue: BodyCue) -> None:
+        """经蓝图通道发一个身体动作（蓝图通道没连上时这次动作就落空，站姿等下一次切换）。"""
+        if self._send_body is not None:
+            await self._send_body(body_action(cue))
 
 
 __all__ = ["MARKER_MIN_GAP_MS", "MARKER_STEP", "WarudoTrackingDriver", "marker_action"]
