@@ -1,8 +1,8 @@
 # ADR-062：拟人与账号运营归 MaiBot，Amaidesu 只管直播（按谁常驻划分 / 直播记忆留在 Amaidesu / 粉丝群消息由 QQ 麦麦挑了递给直播 / 开播提示延迟确认）
 
-- 状态：已采纳
+- 状态：已采纳；第 5–7 条（粉丝群消息怎么到直播）已由 [ADR-063](063-maibot-interop-published-views.md) 搁置
 - 日期：2026-11-01
-- 实现提交：开播提示在 MaiBot-Amaidesu-Adapter 仓库 `b38e0e0f5bdd0e75bd7c13c4c8c8b564a02cab01`（feat: 开播提示改由插件延迟确认后喊人），Amaidesu 侧不用改；粉丝群消息提示尚未实现，落地后在此补记
+- 实现提交：开播提示在 MaiBot-Amaidesu-Adapter 仓库 `b38e0e0f5bdd0e75bd7c13c4c8c8b564a02cab01`（feat: 开播提示改由插件延迟确认后喊人），Amaidesu 侧不用改；粉丝群消息提示已搁置，没有实现
 
 ## 背景（Context）
 
@@ -26,10 +26,10 @@ Amaidesu 与 MaiBot 是同一个麦麦的两个身体：MaiBot 7×24 常驻 QQ�
 
 ### 留在 Amaidesu 的事
 
-3. **直播记忆保留。** 场次回顾、观众画像、长期笔记管的是"直播这个身体"前后连得上：上一场做了什么、常来的观众是谁、答应过直播观众什么事。它们用的是直播专属的数据（弹幕、付费、游戏事件），不算拟人模块。只用 Amaidesu、不接 MaiBot 时照常单独运行；两边都用时长期笔记的正本仍在插件里（[ADR-059](059-shared-notes-with-maibot.md)）。
+3. **直播记忆保留。** 场次回顾、观众画像、长期笔记管的是"直播这个身体"前后连得上：上一场做了什么、常来的观众是谁、答应过直播观众什么事。它们用的是直播专属的数据（弹幕、付费、游戏事件），不算拟人模块。只用 Amaidesu、不接 MaiBot 时照常单独运行；两边都用时长期笔记的正本也在 Amaidesu 本地，只把给 QQ 麦麦看的那份发布过去（[ADR-063](063-maibot-interop-published-views.md)）。
 4. **Amaidesu 不新增拟人能力。** 只用 Amaidesu 的部署有直播记忆，没有拟人和账号运营，这是接受的代价。
 
-### 粉丝群消息怎么到直播
+### 粉丝群消息怎么到直播（已搁置，见 ADR-063）
 
 5. **由 QQ 麦麦挑，Amaidesu 去取。** 插件给 QQ 麦麦一个只在直播期间、只在白名单群里可用的工具，它看到值得在直播里提的群消息，就把要递的话放进插件里的待取队列；Amaidesu 侧加一个采集器，开播期间定时向插件取这些提示，作为数据事件交给主播。挑选需要了解这个群和群友，这些都在 MaiBot。
 6. **连接方向保持 Amaidesu 主动连 MaiBot。** Amaidesu 随开随关，经 SSH 本地转发这类隧道接入时也只有这个方向连得通。
@@ -57,7 +57,7 @@ Amaidesu 与 MaiBot 是同一个麦麦的两个身体：MaiBot 7×24 常驻 QQ�
 - Amaidesu 的范围收窄为"直播这个身体"。有新需求时先问：它是否只在直播期间发生、只关乎直播？不是就归 MaiBot。
 - 只用 Amaidesu 的部署：有直播记忆，没有拟人与账号运营。
 - 开播提示已在插件里实现（插件配置 `[go_live]`），Amaidesu 不用改：它本来就把正式场的开播、心跳、收播推给插件。
-- 待实现：粉丝群消息提示（插件：QQ 麦麦递话的工具、待取队列与取用接口；Amaidesu：取提示的采集器与对应事件）。
+- 粉丝群消息提示（插件：QQ 麦麦递话的工具、待取队列与取用接口；Amaidesu：取提示的采集器与对应事件）已搁置，不再是待实现事项。
 - 开播通知会晚几分钟到粉丝群。
 - 递什么给直播取决于 QQ 麦麦的判断，质量看 MaiBot 的规划模型；挑选标准写在那个工具的说明里。
 - 账号运营插件的开发与 Amaidesu 无关，进度不在本仓库跟踪。
@@ -66,5 +66,5 @@ Amaidesu 与 MaiBot 是同一个麦麦的两个身体：MaiBot 7×24 常驻 QQ�
 
 - [ADR-045：直播近况推给 MaiBot](045-live-status-sync-to-maibot.md)
 - [ADR-050：场次分正式与彩排](050-session-kind-live-and-rehearsal.md)
-- [ADR-059：与 MaiBot 共用长期笔记](059-shared-notes-with-maibot.md)
 - [ADR-061：QQ 群里只留 QQ 麦麦一张嘴](061-qq-group-single-voice.md)
+- [ADR-063：两个身体之间只交换发布出来的东西](063-maibot-interop-published-views.md)

@@ -26,7 +26,7 @@ ADR 记录已经作出的决定，不替代实现文档，也不用于记录迁�
 
 ## 现有 ADR
 
-ADR 编号按创建时间递增，不因条目删除而重排——001~004 因对应系统（管道 / 三阶段输出）已移除而不再列出，从 005 起保留编号语义（被删除条目的编号空缺以避免交叉引用失锚）；030（观众画像系统）因被 [ADR-042](042-streamer-memory-recap-and-roster.md)（场次回顾 + 观众画像）取代而删除，编号空缺同理保留。
+ADR 编号按创建时间递增，不因条目删除而重排——001~004 因对应系统（管道 / 三阶段输出）已移除而不再列出，从 005 起保留编号语义（被删除条目的编号空缺以避免交叉引用失锚）；030（观众画像系统）因被 [ADR-042](042-streamer-memory-recap-and-roster.md)（场次回顾 + 观众画像）取代而删除，编号空缺同理保留；059（与 MaiBot 共用长期笔记、正本放插件）因被 [ADR-063](063-maibot-interop-published-views.md) 整篇取代而删除，编号空缺同理保留。
 
 - [ADR-005：v2.0.0 采用 Agent + 工具 + 存储 + 编排架构](005-v2-agent-tool-architecture.md)
 - [ADR-006：LLM 模拟器是官方开发基础设施，mock 采集器仅承担确定性回放](006-simulator-is-dev-infrastructure.md)
@@ -81,7 +81,7 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-056：面捕合成器加一组风格化标记（扩展 ADR-054 的词表：漫符自定名 / 配方照惯例挂 / 平台配置登记对应资源）](056-avatar-style-markers.md)
 - [ADR-057：Warudo、VRChat、表情差分图也改由面捕合成器驱动（收尾 ADR-052 / ADR-053 的过渡安排：Warudo 伪装成 iFacialMocap / VRChat 走官方眼动与 VRCFaceTracking 参数 / 删掉旧的情绪订阅与前缀工具）](057-avatar-platform-drivers.md)
 - [ADR-058：主播记忆条目化、会淡出、按对象注入（部分取代 ADR-051 / ADR-042：模型只给条目操作 / 没人再提按场次搁置 / 对某位观众的约定只在 ta 发言时出现 / 写入留底可撤回）](058-streamer-memory-items-and-fading.md)
-- [ADR-059：与 MaiBot 共用长期笔记（部分取代 ADR-046 / ADR-045：两边都用时正本放插件、本地当缓存 / 按条目三方合并 / QQ 里的约定带来源标签 / 只注入白名单群 / 整场回放降为可选）](059-shared-notes-with-maibot.md)
 - [ADR-060：面捕合成器加一层身体动作（部分取代 ADR-057 的 Warudo 动作片段：站姿跟着持续的情绪自动换 / 说话时偶尔叠一个身体动作 / 手势由事件与主播点名触发 / 各平台各自翻译、做不到的跳过）](060-avatar-body-layer.md)
 - [ADR-061：QQ 群里只留 QQ 麦麦一张嘴（主播托话代替直接发群：主播给要点、QQ 麦麦决定怎么说 / 直接发群与水群接管改为可选、默认关）](061-qq-group-single-voice.md)
-- [ADR-062：拟人与账号运营归 MaiBot，Amaidesu 只管直播（按谁常驻划分 / 直播记忆留在 Amaidesu / 粉丝群消息由 QQ 麦麦挑了递给直播 / 开播提示延迟确认）](062-persona-and-ops-belong-to-maibot.md)
+- [ADR-062：拟人与账号运营归 MaiBot，Amaidesu 只管直播（按谁常驻划分 / 直播记忆留在 Amaidesu / 粉丝群消息由 QQ 麦麦挑了递给直播（已由 ADR-063 搁置） / 开播提示延迟确认）](062-persona-and-ops-belong-to-maibot.md)
+- [ADR-063：两个身体之间只交换发布出来的东西（取代 ADR-059：笔记正本留在 Amaidesu 本地 / 发布给 QQ 麦麦看的那份 / QQ 里的约定先进插件的待收清单 / 搁置 ADR-062 的粉丝群消息递给直播）](063-maibot-interop-published-views.md)
