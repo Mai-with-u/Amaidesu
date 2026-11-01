@@ -95,6 +95,8 @@ uv run python scripts/warudo_blueprints.py --probe ws://localhost:19190
 | 嘴一直微张 | 对没有 ARKit 形状的模型套用了 ARKit 映射；在形状映射里把 `jawOpen` 等的阈值调高，或给模型补 ARKit 形状 |
 | 头部动作、站姿不动 | 蓝图里的角色编号和场景对不上：保存场景，带 `--scene` 重新生成，删掉旧的 Amaidesu 蓝图后再导入 |
 | 嘴的动作很乱 | Warudo 自带的音频口型没关，两边在同时控制嘴 |
+| 眼珠几乎不动 | 有的模型眼球骨骼转动范围小，在接收器里调大 Eye Movement Intensity |
+| 身体前倾后缩太明显或看不出来 | 接收器里调 Head Movement Intensity（头部平移倍数）和 Body Movement Intensity（身体跟随程度） |
 | 抛鱼没反应 | 抛鱼依赖场景里另外做的蓝图和一个第三方插件，脚本不生成 |
 
 ## VRChat
