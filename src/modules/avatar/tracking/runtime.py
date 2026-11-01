@@ -20,6 +20,9 @@
 说这一轮要说话，就绑到那句话上、等它开始播放再做；这一轮不说话、那句没播出来、或等太久，
 就立刻做。
 
+身体动作（换站姿、叠动作、做手势）由合成器的身体动作层决定，帧循环每帧取走动作提示，
+转给能做身体动作的驱动；礼物、上舰、醒目留言与游戏进展另外转成手势。
+
 口型分析器的信号经一个只记数值的渲染器接进来，帧循环每帧取最新值。没有驱动挂着
 时帧循环不跑，零开销。所有路径 fail-soft：驱动写失败、事件处理异常只记日志；合成器推进
 出错就换一台新的从静止姿态重来，帧循环某一拍出错只跳过那一拍。
@@ -61,6 +64,7 @@ from src.modules.events.payloads.utterance import (
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms as wall_now_ms
 
+from .body import BODY_GESTURES, GESTURE, GESTURE_ACTIONS, BodyCue
 from .channels import Frame
 from .config import TrackingConfig
 from .expression import Recipe
@@ -95,6 +99,20 @@ class CalibratableDriver(Protocol):
     def calibration(self) -> Dict[str, float]: ...
 
     def calibrate(self, values: Mapping[str, float]) -> None: ...
+
+
+@runtime_checkable
+class BodyDriver(Protocol):
+    """能做身体动作的驱动（换站姿、叠动作、做手势）：按动作名翻译成本平台的做法。
+
+    ``body_supports`` 为假的动作不会发给它；``perform_body`` 同样要尽快返回。
+    """
+
+    name: str
+
+    def body_supports(self, cue: BodyCue) -> bool: ...
+
+    async def perform_body(self, cue: BodyCue) -> None: ...
 
 
 class _MouthTap(LipSyncRenderer):
@@ -139,6 +157,9 @@ class TrackingRuntime:
         "attention_required": ("alert", 1.0),
         "error": ("wince", 0.8),
     }
+    # 事件 → 手势：送礼挥手，上舰、醒目留言双手挥，游戏有进展举拳庆祝
+    PAID_GESTURES: Dict[str, str] = {"gift": "wave", "super_chat": "wave_both", "guard": "wave_both"}
+    GAME_GESTURES: Dict[str, str] = {"milestone": "cheer"}
 
     def __init__(
         self,
@@ -279,17 +300,26 @@ class TrackingRuntime:
             frame = self.synthesizer.step(now)
         except Exception:  # noqa: BLE001 - 合成器出错不能让形象停在半截表情上
             frame = self._restart_synthesizer()
+        cues = self.synthesizer.take_body_cues()
         for driver in list(self._drivers):
             if not driver.ready():
                 continue
             try:
                 await driver.apply(frame)
+                for cue in cues:
+                    await self._send_body(driver, cue)
             except Exception:  # noqa: BLE001 - 单个驱动失败不影响其他驱动与下一帧
                 count = self._driver_errors.get(driver.name, 0) + 1
                 self._driver_errors[driver.name] = count
                 if count == 1 or count % 300 == 0:
                     self.logger.exception(f"驱动 {driver.name} 写入失败（累计 {count} 次，之后每 300 次记一条）")
         return frame
+
+    @staticmethod
+    async def _send_body(driver: TrackingDriver, cue: BodyCue) -> None:
+        """把一个身体动作提示交给驱动（不能做身体动作、或做不了这个动作的跳过）。"""
+        if isinstance(driver, BodyDriver) and driver.body_supports(cue):
+            await driver.perform_body(cue)
 
     def _restart_synthesizer(self) -> Frame:
         """合成器推进一帧出错：换一台全新的（同一份调参），这一帧发静止姿态。
@@ -338,10 +368,12 @@ class TrackingRuntime:
             await asyncio.gather(task, return_exceptions=True)
 
     async def _send_rest(self, driver: TrackingDriver) -> None:
+        """发一帧静止姿态，能做身体动作的再回到普通站姿（不停在哭、抱头这类站姿上）。"""
         if not driver.ready():
             return
         try:
             await driver.apply(self.synthesizer.rest_frame())
+            await self._send_body(driver, self.synthesizer.body_rest_cue())
         except Exception:  # noqa: BLE001 - 收尾失败只记日志
             self.logger.exception(f"驱动 {driver.name} 发送静止姿态失败")
 
@@ -367,6 +399,11 @@ class TrackingRuntime:
     def action_catalog(self) -> List[Dict[str, str]]:
         """主播可以主动发起的动作目录：有意的动作、保持表情、各平台登记的片段。"""
         catalog = [{"name": name, "kind": "动作", "description": g.description} for name, g in GESTURES.items()]
+        catalog.extend(
+            {"name": action, "kind": "身体动作", "description": f"{BODY_GESTURES[name]}（全身动作）"}
+            for action, name in GESTURE_ACTIONS.items()
+            if self._body_gesture_supported(name)
+        )
         catalog.append(
             {
                 "name": HOLD_EXPRESSION,
@@ -398,9 +435,16 @@ class TrackingRuntime:
             return True
         return await self._perform(action)
 
+    def _body_gesture_supported(self, name: str) -> bool:
+        """挂着的驱动里有没有能做这个手势的（没有就不进目录、点名也按未知动作处理）。"""
+        cue = BodyCue(GESTURE, name)
+        return any(isinstance(d, BodyDriver) and d.body_supports(cue) for d in self._drivers)
+
     def _known_action(self, action: str) -> bool:
         if action in GESTURES:
             return True
+        if action in GESTURE_ACTIONS:
+            return self._body_gesture_supported(GESTURE_ACTIONS[action])
         for source, (names, _) in self._clips.items():
             try:
                 if action in names():
@@ -419,6 +463,9 @@ class TrackingRuntime:
             await self._perform(action)
 
     async def _perform(self, action: str) -> Optional[bool]:
+        body_gesture = GESTURE_ACTIONS.get(action)
+        if body_gesture is not None and self._body_gesture_supported(body_gesture):
+            return self.synthesizer.body_gesture(body_gesture, self._clock(), force=True)
         gesture = GESTURES.get(action)
         if gesture is not None:
             now = self._clock()
@@ -512,13 +559,14 @@ class TrackingRuntime:
         }
 
     def snapshot(self) -> Dict[str, Any]:
-        """此刻的身体状态（调校页实时显示）：最近一帧、主表情、心情、在想 / 在说、手动摆姿与驱动。"""
+        """此刻的身体状态（调校页实时显示）：最近一帧、主表情、站姿、心情、在想 / 在说、手动摆姿与驱动。"""
         now = self._clock()
         synthesizer = self.synthesizer
         valence, arousal = synthesizer.mood(now)
         return {
             "frame": synthesizer.last_frame or synthesizer.rest_frame(),
             "emotion": synthesizer.current_emotion(now),
+            "stance": synthesizer.body_stance,
             "mood": {"valence": valence, "arousal": arousal},
             "thinking": synthesizer.thinking,
             "speaking": synthesizer.speaking,
@@ -640,6 +688,7 @@ class TrackingRuntime:
                 duration, gap = self.PAID_GLANCE
                 self.synthesizer.glance_at_chat(now, duration_ms=duration, min_gap_ms=gap)
                 self.synthesizer.pulse("brighten", now, self.PAID_BRIGHTEN[kind])
+                self.synthesizer.body_gesture(self.PAID_GESTURES[kind], now)
         except Exception:  # noqa: BLE001 - 装饰性路径边界
             self.logger.exception(f"直播间消息反应异常（已忽略）: {event_name}")
 
@@ -647,9 +696,13 @@ class TrackingRuntime:
         try:
             if not self._config.game_reactions_enabled:
                 return
+            now = self._clock()
             reaction = self.GAME_PULSES.get(payload.event_type)
             if reaction is not None:
-                self.synthesizer.pulse(reaction[0], self._clock(), reaction[1])
+                self.synthesizer.pulse(reaction[0], now, reaction[1])
+            gesture = self.GAME_GESTURES.get(payload.event_type)
+            if gesture is not None:
+                self.synthesizer.body_gesture(gesture, now)
         except Exception:  # noqa: BLE001 - 装饰性路径边界
             self.logger.exception(f"游戏事件反应异常（已忽略）: {event_name}")
 
@@ -664,4 +717,4 @@ class TrackingRuntime:
             self.logger.exception(f"发声收尾处理异常（已忽略）: utterance_id={utterance_id}")
 
 
-__all__ = ["TrackingDriver", "TrackingRuntime"]
+__all__ = ["BodyDriver", "TrackingDriver", "TrackingRuntime"]

@@ -8,9 +8,10 @@ from typing import Callable
 import pytest
 
 from src.modules.avatar.lipsync import MouthSignal
+from src.modules.avatar.tracking.body import GESTURE, STANCE, BodyCue
 from src.modules.avatar.tracking.channels import GAZE_X, GAZE_Y, HEAD_PITCH, brow_height, eye_openness, smile
 from src.modules.avatar.tracking.config import TrackingConfig
-from src.modules.avatar.tracking.runtime import TrackingDriver, TrackingRuntime
+from src.modules.avatar.tracking.runtime import BodyDriver, TrackingDriver, TrackingRuntime
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
@@ -23,7 +24,7 @@ from src.modules.events.payloads.utterance import (
 )
 from tests.config.helpers import wait_until
 from tests.helpers import FakeClock
-from tests.modules.avatar.tracking.fakes import FakeLipsyncAnalyzer, RecordingDriver
+from tests.modules.avatar.tracking.fakes import FakeLipsyncAnalyzer, RecordingBodyDriver, RecordingDriver
 from tests.modules.storage.helpers import make_room_message
 
 LINGER_MS = 1500
@@ -355,4 +356,44 @@ async def test_gesture_without_speech_or_waiting_too_long_is_done_right_away(
     fake_clock.tick(TrackingRuntime.DEFERRED_ACT_MAX_WAIT_MS)
     assert await _max_nod(runtime, fake_clock, 1200) < -3.0  # 那句迟迟不开口：等太久就直接做
     assert await runtime.act("后空翻", with_next_utterance=True) is None  # 未知动作照样当场报错
+    await runtime.stop()
+
+
+async def test_body_cues_reach_only_drivers_that_can_do_them_and_stop_returns_to_standing(
+    event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    runtime = _runtime(event_bus, fake_clock)
+    await runtime.start()
+    body = RecordingBodyDriver(supported={"gesture:wave", "gesture:cheer", "stance:standing"})
+    plain = RecordingDriver("plain")
+    assert isinstance(body, BodyDriver) and not isinstance(plain, BodyDriver)
+    await runtime.attach(body)
+    await runtime.attach(plain)
+    await _emit(event_bus, CoreEvents.ROOM_MESSAGE_GIFT, make_room_message(message_type="gift"))
+    await _emit(event_bus, CoreEvents.ROOM_MESSAGE_GUARD, make_room_message(message_type="guard"))
+    milestone = GamePayload(game="minecraft", event_type="milestone", message="造好了房子")
+    await _emit(event_bus, CoreEvents.GAME_MILESTONE, milestone)
+    await runtime.tick_once()
+    # 送礼挥手、游戏进展举拳；上舰的双手挥这个平台做不了，跳过
+    assert body.cues == [BodyCue(GESTURE, "wave"), BodyCue(GESTURE, "cheer")]
+    await runtime.stop()
+    assert body.cues[-1] == BodyCue(STANCE, "standing")  # 退出前回普通站姿，不停在哭、抱头上
+
+
+async def test_streamer_can_request_body_gestures_only_where_a_platform_can_do_them(
+    event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    runtime = _runtime(event_bus, fake_clock)
+    await runtime.start()
+    await runtime.attach(RecordingDriver("plain"))
+    assert "挥手" not in {entry["name"] for entry in runtime.action_catalog()}
+    assert await runtime.act("挥手") is None  # 没有平台能做：按未知动作处理
+
+    body = RecordingBodyDriver(supported={"gesture:wave"})
+    await runtime.attach(body)
+    names = {entry["name"] for entry in runtime.action_catalog()}
+    assert "挥手" in names and "双手挥" not in names
+    assert await runtime.act("挥手") and await runtime.act("挥手")  # 主播点名不受最短间隔限制
+    await runtime.tick_once()
+    assert body.cues == [BodyCue(GESTURE, "wave"), BodyCue(GESTURE, "wave")]
     await runtime.stop()

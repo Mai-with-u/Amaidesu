@@ -9,6 +9,9 @@
 表情）→ 手动摆姿（调校时直接指定的通道值，盖过前面所有层）→ 钳制 → 限速 → 由视线换算眼球
 朝向系数。
 
+手臂与整体的身体语言不在帧里：身体动作层按同一份情绪、思考、说话状态决定换站姿、叠动作、
+做手势，攒成动作提示由运行时取走转给平台。
+
 注意力按优先级决定看哪里：临时瞥一眼（弹幕、礼物）> 说话时看镜头 > 思考（刚来过
 弹幕就先读弹幕，再把视线移开望向别处）> 空闲时看镜头。
 """
@@ -17,9 +20,10 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 from .behaviors import BlinkGenerator, GazeGenerator, HeadWander
+from .body import BodyCue, BodyDirector
 from .channels import (
     ARKIT_BLENDSHAPES,
     BODY_PITCH,
@@ -124,6 +128,7 @@ class TrackingSynthesizer:
         # 手动摆姿：调校时直接指定的通道值，到期自动失效（页面关了形象也不会卡在某个姿势）
         self._manual: Frame = {}
         self._manual_until: Optional[int] = None
+        self._body_director = BodyDirector(config)
 
     # ===== 调校 =====
 
@@ -141,6 +146,7 @@ class TrackingSynthesizer:
         expressions.set_recipes(build_recipes(config.recipes))
         self._mood.configure(half_life_ms=config.mood_half_life_ms, gain=config.mood_gain)
         self._head_wander_enabled = config.head_wander_enabled
+        self._body_director.configure(config)
 
     def recipes(self) -> Dict[str, Recipe]:
         """生效的表情配方（默认 + 人设覆盖）。"""
@@ -182,6 +188,7 @@ class TrackingSynthesizer:
         if self._config.speech_nods_enabled:
             for kind, scale in self._prosody.on_mouth(self._mouth_open, now_ms):
                 self._pulses.trigger(kind, now_ms, scale)
+        self._body_director.on_mouth(self._mouth_open, now_ms)
 
     def on_mouth_end(self, now_ms: int) -> None:
         """一次发声的口型结束：嘴收回，偶尔收尾点一下头。"""
@@ -191,6 +198,7 @@ class TrackingSynthesizer:
         if self._config.speech_nods_enabled:
             for kind, scale in self._prosody.on_end(now_ms):
                 self._pulses.trigger(kind, now_ms, scale)
+        self._body_director.on_mouth_end(now_ms)
 
     def begin_thinking(self, now_ms: int, *, read_first_ms: int = 0) -> None:
         """开始想下一句（已在想则不动）：``read_first_ms`` > 0 时先读弹幕这么久再移开视线。"""
@@ -264,6 +272,25 @@ class TrackingSynthesizer:
         """人设静止姿态（驱动断开、程序退出前发这一帧，形象不会停在半闭眼之类的姿势上）。"""
         return dict(self._rest)
 
+    # ===== 身体动作 =====
+
+    def body_gesture(self, name: str, now_ms: int, *, force: bool = False) -> bool:
+        """做一个手势（挥手、指一下……）；同一手势间隔太短不做，``force`` = 主播点名不受限。"""
+        return self._body_director.gesture(name, now_ms, force=force)
+
+    def take_body_cues(self) -> List[BodyCue]:
+        """取走攒下的身体动作提示（运行时每帧取一次）。"""
+        return self._body_director.take_cues()
+
+    def body_rest_cue(self) -> BodyCue:
+        """回到普通站姿的提示（驱动断开、程序退出前发）。"""
+        return self._body_director.rest_cue()
+
+    @property
+    def body_stance(self) -> str:
+        """此刻的站姿名。"""
+        return self._body_director.stance
+
     # ===== 推进 =====
 
     def _attention(self, now_ms: int) -> Tuple[str, Tuple[float, float]]:
@@ -308,6 +335,12 @@ class TrackingSynthesizer:
         cfg = self._config
         dt_ms = 0 if self._last_ms is None else max(0, now_ms - self._last_ms)
         offsets, motion = self._expressions.sample(now_ms)
+        self._body_director.step(
+            now_ms,
+            emotion=self._expressions.current_emotion(now_ms),
+            thinking=self._thinking,
+            speaking=self._speaking,
+        )
         for channel, value in self._pulses.sample(now_ms).items():
             offsets[channel] = offsets.get(channel, 0.0) + value
         if cfg.mood_enabled:

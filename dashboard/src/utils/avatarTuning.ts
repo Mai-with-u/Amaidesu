@@ -50,6 +50,19 @@ const GROUP_LAYOUT: ReadonlyArray<{ title: string; keys: readonly string[] }> = 
     title: '反应',
     keys: ['room_reactions_enabled', 'game_reactions_enabled', 'speech_nods_enabled'],
   },
+  {
+    title: '身体',
+    keys: [
+      'body_enabled',
+      'body_stance_settle_ms',
+      'body_stance_hold_ms',
+      'body_stance_return_ms',
+      'body_think_after_ms',
+      'body_sway_gap_ms',
+      'body_laugh_gap_ms',
+      'body_gesture_gap_ms',
+    ],
+  },
 ];
 
 /** 眼神方框里拖动编辑的目标点：名字、对应的两个字段、点的颜色 */

@@ -60,8 +60,9 @@ Tracking = Annotated[
     ),
 ]
 
-# 调参里不在调校页上改的字段：总开关（关了页面自己也没了）、配方（走专门的端点）
-_NOT_TUNABLE = ("enabled", "recipes")
+# 调参里不在调校页上改的字段：总开关（关了页面自己也没了）、配方（走专门的端点）、
+# 情绪对应的站姿（一张对照表，在配置文件里改）
+_NOT_TUNABLE = ("enabled", "recipes", "body_stances")
 # 手动摆姿最长保持多久（页面在调时不断续期，关掉页面后很快交还给自动行为）
 MANUAL_HOLD_MAX_MS = 10_000
 

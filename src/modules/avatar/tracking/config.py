@@ -12,6 +12,7 @@ from pydantic import Field, field_validator
 
 from src.modules.config.schemas.base import BaseConfig
 
+from .body import DEFAULT_STANCES, STANCES, check_stance_map
 from .expression import check_recipe_overrides
 
 
@@ -244,10 +245,88 @@ class TrackingConfig(BaseConfig):
         json_schema_extra={"x-ui-type": "object", "x-ui-advanced": True},
     )
 
+    body_enabled: bool = Field(
+        title="是否启用身体动作",
+        default=True,
+        description="站姿跟着情绪换、说话时偶尔摇身体或仰头笑、收到礼物挥手；平台没有对应动作的自动跳过",
+    )
+    body_stance_settle_ms: int = Field(
+        title="换站姿前情绪要持续多久",
+        default=2500,
+        ge=0,
+        le=30_000,
+        description="主表情保持这么久才换对应站姿，一句话里一闪而过的情绪不换（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    body_stance_hold_ms: int = Field(
+        title="站姿最短停留",
+        default=8000,
+        ge=0,
+        le=60_000,
+        description="换上一个站姿后至少保持多久才换下一个（毫秒；想完开口放下思考站姿不受限）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    body_stance_return_ms: int = Field(
+        title="回普通站姿前等多久",
+        default=6000,
+        ge=0,
+        le=60_000,
+        description="情绪回到平静后再过这么久回普通站姿（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    body_think_after_ms: int = Field(
+        title="想多久摆思考站姿",
+        default=3000,
+        ge=0,
+        le=60_000,
+        description="Planner 想下一步超过这么久才摆思考站姿（毫秒）；想得快时身体不动",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    body_sway_gap_ms: int = Field(
+        title="说话时摇身体的间隔",
+        default=8000,
+        ge=1000,
+        le=120_000,
+        description="说话时在短语开头左右摇一下身体，两次至少隔这么久（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    body_laugh_gap_ms: int = Field(
+        title="开心时仰头笑的间隔",
+        default=12000,
+        ge=1000,
+        le=120_000,
+        description="开心、兴奋地说话时在短语开头仰头笑一下，两次至少隔这么久（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    body_gesture_gap_ms: int = Field(
+        title="同一手势的最短间隔",
+        default=10_000,
+        ge=0,
+        le=120_000,
+        description="礼物挥手这类由事件触发的手势，同一种至少隔这么久（毫秒；主播点名的不受限）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    body_stances: Dict[str, str] = Field(
+        title="情绪对应的站姿",
+        default_factory=lambda: dict(DEFAULT_STANCES),
+        description=(
+            "每个情绪换成哪个站姿；thinking 是 Planner 想得久时的站姿。站姿名："
+            + "、".join(f"{name}（{desc}）" for name, desc in STANCES.items())
+            + "。删掉某个情绪就是这个情绪不换站姿"
+        ),
+        json_schema_extra={"x-ui-type": "object", "x-ui-advanced": True},
+    )
+
     @field_validator("recipes")
     @classmethod
     def _check_recipes(cls, value: Dict[str, Dict[str, float]]) -> Dict[str, Dict[str, float]]:
         check_recipe_overrides(value)
+        return value
+
+    @field_validator("body_stances")
+    @classmethod
+    def _check_body_stances(cls, value: Dict[str, str]) -> Dict[str, str]:
+        check_stance_map(value)
         return value
 
 
