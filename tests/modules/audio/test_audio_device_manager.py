@@ -8,6 +8,7 @@ import pytest
 
 from src.modules.audio import audio_device_manager as adm
 from src.modules.audio.audio_device_manager import AudioDeviceManager
+from tests.modules.audio.fakes import RecordingSink
 
 # 无音频子系统的环境（如无头 CI）下依赖降级，本文件的 sd 假件挂载点不存在
 pytestmark = pytest.mark.skipif(
@@ -176,3 +177,64 @@ def test_supply_gap_alert_subtracts_write_backpressure(
 
     warned = any("供给断流" in str(call) for call in manager.logger.warning.call_args_list)
     assert warned is alerts
+
+
+class TestSinkFeedAtSoundcardWrite:
+    """分接递入紧贴写声卡：到达（含整段突发）不递，写声卡才递且顺序一致
+
+    背景：随"到达"递入会让口型分析器的缓冲直接跳到句尾，短句句身整段
+    被消费方跳过（口型不动的根因）。
+    """
+
+    @pytest.fixture
+    def tapped(self, sd) -> SimpleNamespace:
+        sink = RecordingSink()
+        manager = AudioDeviceManager(sample_rate=32000, sink=sink, prebuffer_seconds=0.05)
+        return SimpleNamespace(sink=sink, manager=manager, stream=sd.OutputStream.return_value)
+
+    @staticmethod
+    def _fed_total(sink: RecordingSink) -> int:
+        return sum(len(chunk) for chunk in sink.fed_chunks())
+
+    def test_arrival_does_not_feed_write_does(self, tapped) -> None:
+        """预缓冲期到达不递入；收尾冲播写声卡时才按序整段递出"""
+        tapped.manager.prebuffer_seconds = 100.0  # 测试内不会触达阈值
+        chunks = [np.full(1600, i, dtype=np.int16) for i in (1, 2, 3)]
+        tapped.manager.start_stream(utterance_id="tap")
+        for c in chunks:
+            tapped.manager.write_chunk(c)  # 全部进 pending：到达不递入
+        assert self._fed_total(tapped.sink) == 0
+
+        tapped.manager.stop_stream()  # 收尾冲播：写声卡时按序递出
+
+        assert self._fed_total(tapped.sink) == 4800
+        np.testing.assert_array_equal(np.concatenate(tapped.sink.fed_chunks()), np.concatenate(chunks))
+        assert tapped.stream.write.call_count == len(tapped.sink.fed_chunks())
+        tapped.stream.stop.assert_called_once()
+
+    def test_stream_writes_carry_their_audio_to_the_sink(self, tapped) -> None:
+        """开播后每块写声卡都伴随一次同块分接递入，总量守恒且不重复"""
+        chunk = np.arange(1600, dtype=np.int16)
+        tapped.manager.start_stream(utterance_id="tap")
+        for i in range(3):
+            tapped.manager.write_chunk(chunk + i)  # 首块达阈值冲播，后两块直写
+
+        assert self._fed_total(tapped.sink) == 4800
+        np.testing.assert_array_equal(
+            np.concatenate(tapped.sink.fed_chunks()), np.concatenate([chunk + i for i in range(3)])
+        )
+        assert tapped.stream.write.call_count == len(tapped.sink.fed_chunks())
+
+        tapped.manager.stop_stream()
+        assert self._fed_total(tapped.sink) == 4800  # 收尾不重复递入
+
+    def test_discard_leaves_sink_untouched(self, tapped) -> None:
+        """取消/截断：未播的预缓冲被丢弃，不发声也不递分接"""
+        tapped.manager.prebuffer_seconds = 100.0
+        tapped.manager.start_stream(utterance_id="drop")
+        tapped.manager.write_chunk(np.full(1600, 9, dtype=np.int16))
+
+        tapped.manager.stop_stream(discard_pending=True)
+
+        assert self._fed_total(tapped.sink) == 0
+        tapped.stream.stop.assert_called_once()

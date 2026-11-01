@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import inspect
 from types import SimpleNamespace
-from typing import List, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -15,6 +14,7 @@ import pytest
 
 import src.modules.audio.audio_device_manager as audio_device_module
 from src.modules.audio.audio_device_manager import AudioDeviceManager
+from tests.modules.audio.fakes import RecordingSink
 
 # 无音频子系统的环境（如无头 CI）下依赖降级，本文件的 sd 假件挂载点不存在
 pytestmark = pytest.mark.skipif(
@@ -35,36 +35,15 @@ def fake_sounddevice(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return backend
 
 
-class _StubSink:
-    """记录 start/feed/stop 调用的桩。"""
-
-    def __init__(self, boom: bool = False) -> None:
-        self.calls: List[Tuple[str, object]] = []
-        self.boom = boom
-
-    def start(self, utterance_id: str = "") -> None:
-        if self.boom:
-            raise RuntimeError("sink boom")
-        self.calls.append(("start", utterance_id))
-
-    def feed(self, chunk: np.ndarray, sample_rate: int) -> None:
-        if self.boom:
-            raise RuntimeError("sink boom")
-        self.calls.append(("feed", (chunk, sample_rate)))
-
-    def stop(self) -> None:
-        if self.boom:
-            raise RuntimeError("sink boom")
-        self.calls.append(("stop", None))
-
-
 def test_write_chunk_feeds_sink() -> None:
-    """流式写块使 sink 收到同一块音频与采样率。"""
-    sink = _StubSink()
-    mgr = AudioDeviceManager(sample_rate=32000, sink=sink)
+    """流式写块使 sink 收到同一块音频与采样率（分接按播放进度递入，收尾排空兑现）。"""
+    sink = RecordingSink()
+    mgr = AudioDeviceManager(sample_rate=32000, sink=sink, prebuffer_seconds=0.0)
     chunk = np.zeros(64, dtype=np.int16)
 
+    mgr.start_stream(utterance_id="feed_once")
     mgr.write_chunk(chunk)
+    mgr.stop_stream()
 
     feeds = [c for c in sink.calls if c[0] == "feed"]
     assert len(feeds) == 1
@@ -75,7 +54,7 @@ def test_write_chunk_feeds_sink() -> None:
 
 def test_stream_lifecycle_drives_sink_session(fake_sounddevice: MagicMock) -> None:
     """播放和分接会话同步开关，不依赖真实声卡。"""
-    sink = _StubSink()
+    sink = RecordingSink()
     mgr = AudioDeviceManager(sample_rate=32000, sink=sink)
     chunk = np.zeros(16, dtype=np.int16)
 
@@ -96,7 +75,7 @@ def test_stream_lifecycle_drives_sink_session(fake_sounddevice: MagicMock) -> No
 
 def test_sink_exception_is_fail_soft(fake_sounddevice: MagicMock) -> None:
     """sink 全链路抛异常时，播放生命周期仍能完成。"""
-    sink = _StubSink(boom=True)
+    sink = RecordingSink(boom=True)
     mgr = AudioDeviceManager(sample_rate=32000, sink=sink)
 
     mgr.start_stream(utterance_id="u")
@@ -116,8 +95,8 @@ def test_no_sink_is_passthrough() -> None:
 
 
 async def test_full_playback_taps_sink(fake_sounddevice: MagicMock) -> None:
-    """完整验证全量播放分接，不吞掉播放路径上的意外异常。"""
-    sink = _StubSink()
+    """全量播法分接：按播放节奏逐片递入（256 样本 < 一片 800，单块整体递入）。"""
+    sink = RecordingSink()
     mgr = AudioDeviceManager(sample_rate=16000, sink=sink)
     audio = np.zeros(256, dtype=np.int16)
 
@@ -125,17 +104,18 @@ async def test_full_playback_taps_sink(fake_sounddevice: MagicMock) -> None:
 
     assert [c[0] for c in sink.calls] == ["start", "feed", "stop"]
     fed_chunk, fed_rate = sink.calls[1][1]
-    assert fed_chunk is audio
+    np.testing.assert_array_equal(fed_chunk, audio)
     assert fed_rate == 16000
     fake_sounddevice.play.assert_called_once_with(audio, samplerate=16000, device=None)
-    audio_device_module.asyncio.sleep.assert_awaited_once_with(len(audio) / 16000 + 0.3)
+    awaited = [call.args[0] for call in audio_device_module.asyncio.sleep.await_args_list]
+    assert awaited == [0.05, 0.3]  # 一片 0.05s + 收尾余量 0.3s
     assert not mgr.is_playing
 
 
 def test_failed_stream_creation_does_not_start_sink(fake_sounddevice: MagicMock) -> None:
     """设备初始化失败时清理分接，不把失败路径当作成功播放。"""
     fake_sounddevice.OutputStream.side_effect = RuntimeError("no output device")
-    sink = _StubSink()
+    sink = RecordingSink()
     mgr = AudioDeviceManager(sample_rate=32000, sink=sink)
 
     mgr.start_stream(utterance_id="failed")

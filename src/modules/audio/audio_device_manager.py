@@ -38,7 +38,9 @@ class AudioDeviceManager:
 
     管理音频输出设备和音频播放。可挂载一个 ``AudioSink`` 分接（全量与
     流式两种播法都会把音频复制递入；分接是装饰性路径，任何 sink 异常
-    只记日志，不影响播放）。
+    只记日志，不影响播放）。分接按**播放进度**递入而非按到达递入——
+    到达节奏受合成停顿/整段突发影响，与听感脱节，消费方（口型分析）
+    的"分析当前播放位置"假设依赖两者一致。
     """
 
     def __init__(
@@ -86,6 +88,11 @@ class AudioDeviceManager:
         # 误报成断流（turbo 吞吐大于实时时背压为常态，实测每场 80+ 次假阳性）
         self._last_feed_monotonic: float | None = None
         self._last_write_block_sec: float = 0.0
+        # 分接递入时机 = 写声卡时刻：write 在声卡缓冲满时按实时阻塞（背压），
+        # 紧贴 write 的递入因此跟随播放节奏。随"到达"递入则与听感脱节——
+        # 合成停顿、整段突发都会让 sink 跳到句尾，短句句身整段被消费方
+        # 跳过（口型不动的根因）
+        self._PLAYBACK_FEED_PIECE_S = 0.05
 
         if not DEPENDENCIES_OK:
             self.logger.error("音频依赖缺失，请安装: pip install sounddevice soundfile")
@@ -229,9 +236,8 @@ class AudioDeviceManager:
 
         self.logger.debug(f"开始播放音频 (设备索引: {device_index}, 采样率: {samplerate})...")
 
-        # 分接：开播同步开 session，整段音频一次递入（全量播法）
+        # 分接：开播同步开 session（全量播法按播放节奏逐片递入）
         self._sink_start()
-        self._sink_feed(audio_array, samplerate)
 
         try:
             # 停止现有播放
@@ -241,12 +247,13 @@ class AudioDeviceManager:
             sd.play(audio_array, samplerate=samplerate, device=device_index)
             self.is_playing = True
 
-            # 计算播放时长并等待
-            duration = len(audio_array) / samplerate
-            wait_time = duration + 0.3  # 额外等待 0.3 秒
-            self.logger.debug(f"等待音频播放: {wait_time:.3f} 秒")
-
-            await asyncio.sleep(wait_time)
+            # 分接按播放节奏逐片递入：整段一次递入会让分接缓冲直接跳到
+            # 句尾，句身整段被消费方跳过（口型不动的根因）
+            piece_samples = max(1, int(self._PLAYBACK_FEED_PIECE_S * samplerate))
+            for start in range(0, len(audio_array), piece_samples):
+                self._sink_feed(audio_array[start : start + piece_samples], samplerate)
+                await asyncio.sleep(piece_samples / samplerate)
+            await asyncio.sleep(0.3)  # 收尾余量（原 wait_time 的 0.3 秒尾）
 
             # 确保播放停止
             sd.stop()
@@ -310,7 +317,7 @@ class AudioDeviceManager:
             self._last_feed_monotonic = None
             self._last_write_block_sec = 0.0
             self.is_playing = True
-            # 分接：开播同步开 session（流式播法逐块 feed）
+            # 分接：开播同步开 session（流式播法在写声卡时逐块递入）
             self._sink_start(utterance_id)
             self.logger.debug("流式播放已就绪（等待预缓冲）")
         except Exception as e:
@@ -328,6 +335,9 @@ class AudioDeviceManager:
             self.logger.debug(f"预缓冲达阈值（{self.prebuffer_seconds:.1f}s），声卡流开播")
         t0 = time.perf_counter()
         for chunk in self._pending_chunks:
+            # 分接紧贴写声卡：冲播批次写入时按实时阻塞（缓冲满后），递入
+            # 因此与听感同步——短句兜底冲播的整段也在这里逐块递给分接
+            self._sink_feed(chunk, self.sample_rate)
             self._stream.write(chunk)
         self._last_write_block_sec = time.perf_counter() - t0
         self._pending_chunks = []
@@ -342,8 +352,8 @@ class AudioDeviceManager:
         Args:
             chunk: 音频数据块 (1D 或 2D ndarray)
         """
-        # 分接：逐块复制递入（同步、非阻塞，fail-soft）
-        self._sink_feed(chunk, self.sample_rate)
+        # 分接紧贴写声卡（见 _flush_pending 内注释）；预缓冲期的块未进声卡、
+        # 不递——随到达递入会让 sink 跳到句尾，短句句身整段被消费方跳过
         if not DEPENDENCIES_OK:
             return
         if self._stream is None:
@@ -364,6 +374,7 @@ class AudioDeviceManager:
                 if self._pending_samples >= int(self.prebuffer_seconds * self.sample_rate):
                     self._flush_pending()
             else:
+                self._sink_feed(chunk, self.sample_rate)
                 t0 = time.perf_counter()
                 self._stream.write(chunk)
                 self._last_write_block_sec = time.perf_counter() - t0
