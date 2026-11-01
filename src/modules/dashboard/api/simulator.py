@@ -148,8 +148,8 @@ async def get_simulator_status(server: ServerDep) -> SimulatorStatusResponse:
     enabled = _config_enabled(server)
     service = server.simulator_service
     is_available = service is not None
-    is_running = bool(service.is_running)
-    mode = str(service.mode)
+    is_running = bool(service.is_running) if service is not None else False
+    mode = str(service.mode) if service is not None else "off"
 
     if not enabled:
         message = "[simulator].enabled=false；模拟器未启用。请在 config/infra.toml 的 [simulator] 段将 enabled 设为 true 并重启。"

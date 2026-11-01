@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Dict
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,10 +19,13 @@ from src.modules.storage.database import SQLiteDatabase
 
 
 class _FakeConfigService:
-    """仅暴露 main_config 的最小 ConfigService 替身"""
+    """仅暴露 main_config 的最小 ConfigService 替身；get_section 供 dashboard API 读 [simulator] 开关。"""
 
-    def __init__(self) -> None:
-        self.main_config = {"simulator": {"enabled": False}}
+    def __init__(self, main_config: Dict[str, Any] | None = None) -> None:
+        self.main_config: Dict[str, Any] = main_config or {"simulator": {"enabled": False}}
+
+    def get_section(self, section: str, default: Any = None) -> Any:
+        return self.main_config.get(section, default)
 
 
 @pytest.fixture
@@ -47,6 +52,29 @@ def test_status_reports_mode_and_availability(client: TestClient) -> None:
     assert body["is_running"] is False
     assert body["mode"] == "off"
     assert body["replay_progress"] is None
+
+
+def test_status_without_service_returns_disabled_empty_state(mount) -> None:
+    """未启用零装配（simulator_service=None，生产默认形态）返回 200 空态而非 500。"""
+    client = mount(config_service=_FakeConfigService())
+    body = client.get("/api/v1/simulator/status").json()
+    assert body["enabled"] is False
+    assert body["is_available"] is False
+    assert body["is_running"] is False
+    assert body["mode"] == "off"
+    assert body["replay_progress"] is None
+    assert body["last_error"] is None
+    assert "未启用" in body["message"]
+
+
+def test_status_enabled_but_service_not_injected(mount) -> None:
+    """配置启用但服务未注入（存储仓储/LLMManager 缺失或 --dry 模式）→ 200 且消息点名装配缺失。"""
+    client = mount(config_service=_FakeConfigService({"simulator": {"enabled": True}}))
+    body = client.get("/api/v1/simulator/status").json()
+    assert body["enabled"] is True
+    assert body["is_available"] is False
+    assert body["is_running"] is False
+    assert "未注入" in body["message"]
 
 
 # replay dates
