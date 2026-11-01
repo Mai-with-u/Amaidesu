@@ -60,7 +60,8 @@ def test_coefficients_map_to_vts_inputs(
         ({"browInnerUp": 0.7}, "BrowInnerUp", 0.7),
         ({"eyeSquintLeft": 0.8}, "EyeSquintL", 0.8),
         ({BODY_YAW: 5.0}, "BodyAngleX", 5.0),
-        ({BODY_Z: 1.0}, "BodyPositionZ", 5.0),
+        ({BODY_Z: 1.0}, "BodyPositionZ", 5.0),  # Live2D 推荐参数：往前为正
+        ({BODY_Z: 1.0}, "FacePositionZ", -5.0),  # VTS 的脸部 Z 是离镜头的距离：前倾是变近
     ],
 )
 def test_vbridger_standard_inputs(fake_clock: FakeClock, coefficients: dict, vts_input: str, expected: float) -> None:

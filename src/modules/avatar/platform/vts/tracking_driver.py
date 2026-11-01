@@ -71,8 +71,11 @@ MARKER_ON = 0.35
 MARKER_OFF = 0.2
 MARKER_FADE_S = 0.3
 
-# 身体位置 ±1 对应的 VTS 输入量：取各输入范围的一半，前倾后仰都留有余量
-_FACE_POSITION_SCALE = (7.5, 7.5, 5.0)
+# 身体位置 ±1 对应的 VTS 输入量：取各输入范围的一半，前倾后仰都留有余量。
+# VTS 自带的 FacePositionZ 是"脸离镜头多远"，正数是远离（实测正数让模型变小），和面捕
+# 合成器"z 正数靠近镜头"相反，所以 z 取负；VBridger 的 BodyPositionZ 按 Live2D 推荐
+# 参数的约定是"往前为正"，和面捕合成器同号，不取反
+_FACE_POSITION_SCALE = (7.5, 7.5, -5.0)
 _BODY_POSITION_SCALE = (7.5, 2.5, 5.0)
 
 
