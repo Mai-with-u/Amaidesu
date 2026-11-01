@@ -1,6 +1,6 @@
 # 虚拟形象接入：Warudo 与 VRChat
 
-本文说明怎样让 Amaidesu 驱动 Warudo 或 VRChat 里的虚拟形象：形象自己眨眼、看来看去，主播说话时表情跟着情绪变、嘴跟着声音动，AI 还能自己点头、换站姿、做动作。VTube Studio 接上就能用，不在本文范围；三个平台各自能做什么，见[虚拟形象架构](../architecture/avatar-platform.md)。
+本文说明怎样让 Amaidesu 驱动 Warudo 或 VRChat 里的虚拟形象：形象自己眨眼、看来看去，主播说话时表情跟着情绪变、嘴跟着声音动，身体跟着情绪换站姿，来礼物时挥手，AI 还能点名做动作。VTube Studio 接上就能用，不在本文范围；三个平台各自能做什么，见[虚拟形象架构](../architecture/avatar-platform.md)。
 
 > 阅读前提：项目已完成[快速开始](../getting-started.md)的安装步骤，`config/` 下的配置文件已经生成。下文的 `config/avatar.toml` 指项目里的虚拟形象配置文件。
 
@@ -11,7 +11,7 @@
 两条通道：
 
 - **面捕数据**（UDP，默认本机 49983 端口）：Amaidesu 的面捕合成器每秒 30 帧，按 iPhone 面捕 App **iFacialMocap** 的格式发出 ARKit 的 52 个表情系数、头部转角与位置、眼球转角。Warudo 自带 iFacialMocap 接收器，把 Amaidesu 当成一部正在抓脸的 iPhone，表情、眨眼、眼神、点头、口型都从这里来；身体前倾、后缩（开心时往前凑、受惊时往后缩）写在头部位置里，和真人身子一动头就跟着平移一样，Warudo 按头部动作自己带动身体。
-- **蓝图通道**（WebSocket，默认 19190 端口）：Amaidesu 发一条条"动作名 + 数值"，比如 `nod_once = 1`、`marker_tears = 0.8`。Warudo 这边靠**蓝图**接收：蓝图是 Warudo 场景里的节点图，一个节点收到某个动作名，就去播一段动画或改一个形状。只用来做头部动作、站姿、抛鱼和风格化标记（脸红、眼泪这类漫符）。
+- **蓝图通道**（WebSocket，默认 19190 端口）：Amaidesu 发一条条"动作名 + 数值"，比如 `body_stance_hands_front = 1`、`marker_tears = 0.8`。Warudo 这边靠**蓝图**接收：蓝图是 Warudo 场景里的节点图，一个节点收到某个动作名，就去播一段动画或改一个形状。只用来做身体动作（换站姿、摇一下身体、挥手这类面捕数据装不下的全身动作）、抛鱼和风格化标记（脸红、眼泪这类漫符）。
 
 模型怎么把 ARKit 系数落到自己的形状上，在 Warudo 的面捕设置里调，和真人用 iPhone 面捕时一样。
 
@@ -27,7 +27,7 @@
 2. 面部捕捉设置里的形状映射（Configure BlendShapes Mapping）按模型选：模型带 ARKit 的 52 个形状（"完美同步"）选 ARKit；只有 VRM 标准表情的选 VRM。表情做在自定义形状上的模型（例如麦麦），给模型补上 ARKit 形状最省事，或者在这里逐项把 ARKit 系数接到模型的形状上。
 3. 关掉 Warudo 自带的音频口型（用麦克风声音驱动嘴的功能）：嘴的开合已经在面捕数据里，两边会抢着控制嘴。
 4. 面部捕捉设置里的"启用头部和身体运动"（Enable Head and Body Movements）选是；自动眨眼、自动眼动、自动头部动作（Idle Head Animation）关掉——这些 Amaidesu 已经在做，两边叠在一起会乱。
-5. 姿态捕捉（身体追踪）选无：Amaidesu 不发身体追踪数据。身体跟着头转、前倾后缩由 Warudo 按头部动作带出，幅度在接收器的 Body Movement Intensity、Body Rotation Type 里调；呼吸和站着时的轻晃交给角色的待机动画。
+5. 姿态捕捉（身体追踪）选无：Amaidesu 不发身体追踪数据。身体跟着头转、前倾后缩由 Warudo 按头部动作带出，幅度在接收器的 Body Movement Intensity、Body Rotation Type 里调；手臂和整体的姿势由身体动作蓝图播 Warudo 自带的动画（见第四步），呼吸和站着时的轻晃也在这些待机动画里。
 6. Amaidesu 启动后（见第五步）在接收器上点一次校准（Calibrate），校准时形象正看镜头。
 
 头和眼的左右如果反了（Amaidesu 让她往弹幕区看，她看向另一边），勾上接收器的镜像（Mirrored Tracking）。
@@ -65,7 +65,7 @@ uv run python scripts/warudo_blueprints.py --scene "<Warudo 数据目录>/Scenes
 
 | 蓝图 | 作用 |
 |---|---|
-| Amaidesu 头部动作与站姿 | 点头一次、点头两次、摇头、歪头、低头看向一边，放松站姿、思考站姿、恢复默认站姿；用 Warudo 自带动画，任何人形模型都能用 |
+| Amaidesu 身体动作 | 站姿（双手放在身前、单手叉腰、挠后脑勺、思考……）、叠加动作（左右摇一下身体、仰头笑）、手势（挥手、双手挥、指一下、举拳庆祝）；用 Warudo 自带的 AGIA 动画库，任何人形模型都能用 |
 | Amaidesu 风格化标记 | 登记了风格化标记才生成：每个标记一个入口，把收到的值写到对应形状上。标记做成 VRM 自定义表情的，加 `--mode vrm` |
 
 打开 Warudo 的蓝图页，用"导入蓝图"逐个导入。注意：
@@ -73,6 +73,7 @@ uv run python scripts/warudo_blueprints.py --scene "<Warudo 数据目录>/Scenes
 - **蓝图是按角色的内部编号找角色的。** 删过或重新添加过角色，编号就会变，旧蓝图会找不到角色、什么都不动。换了角色或换了场景，都要先保存场景，再带 `--scene` 重新生成、删掉旧的 Amaidesu 蓝图再导入。
 - 改了风格化标记的登记，也要重新生成并导入。
 - 以前版本生成过"Amaidesu 表情""Amaidesu 口型""Amaidesu 眨眼与移眼"三个蓝图的，删掉它们：脸已经改由面捕数据驱动。
+- 以前版本生成过"Amaidesu 头部动作与站姿"的，也删掉：点头、摇头已由面捕数据做，站姿改由"Amaidesu 身体动作"自动换。
 
 ### 五、试发检查与启动
 
@@ -82,9 +83,9 @@ uv run python scripts/warudo_blueprints.py --scene "<Warudo 数据目录>/Scenes
 uv run python scripts/warudo_blueprints.py --probe ws://localhost:19190
 ```
 
-脚本把头部动作、站姿、风格化标记各发一遍，每项停 1.5 秒（`--hold 3` 可以放慢），终端里会打印正在发哪一项，对着画面看就行。
+脚本把站姿、叠加动作、手势、风格化标记各发一遍，身体动作每项停 3 秒、标记每项停 1.5 秒（`--hold 3` 整体放慢一倍），最后回到普通站姿；终端里会打印正在发哪一项、播的是哪段动画，对着画面看就行。
 
-然后启动 Amaidesu：面捕数据一发出，形象就开始眨眼、看来看去，说话时嘴跟着语音动、表情跟着情绪变；蓝图通道 Warudo 后开也没关系，Amaidesu 每隔几秒重连。主播用 `avatar_act` 做的动作里会多出 Warudo 的头部动作、站姿和抛鱼；想让她用自己做的蓝图动作，在 `[platform.warudo.action_catalog]` 里登记"动作名 = 说明"，蓝图里用"收到 WebSocket 动作"节点按这个名字接收（数据类型选整数）。
+然后启动 Amaidesu：面捕数据一发出，形象就开始眨眼、看来看去，说话时嘴跟着语音动、表情跟着情绪变；蓝图通道 Warudo 后开也没关系，Amaidesu 每隔几秒重连。站姿跟着情绪自己换，说话时偶尔摇一下身体或仰头笑，来礼物时挥手；主播用 `avatar_act` 做的动作里会多出挥手、指一下这类手势和抛鱼。觉得某个动作和模型不搭，在 `[platform.warudo.body_animations]` 里换成 Warudo 自带的别的动画（写 AGIA 下的相对路径即可，如 `hands_front = "01_Idles/AGIA_Idle_energetic_02_right_hand_piece"`），改完重新生成并导入蓝图；想换的是"哪个情绪摆哪个站姿"，改 `[tracking].body_stances`，不用重新生成。想让她用自己做的蓝图动作，在 `[platform.warudo.action_catalog]` 里登记"动作名 = 说明"，蓝图里用"收到 WebSocket 动作"节点按这个名字接收（数据类型选整数）。
 
 ### 常见问题
 
@@ -93,7 +94,8 @@ uv run python scripts/warudo_blueprints.py --probe ws://localhost:19190
 | 形象一动不动 | 角色的面部捕捉没选 iFacialMocap，或接收器端口不是 49983；Warudo 和 Amaidesu 不在同一台电脑时，`tracking_host` 改成 Warudo 那台的地址 |
 | 头会动，表情不动 | 形状映射没对上：模型没有 ARKit 形状却选了 ARKit，改选 VRM 或补形状 |
 | 嘴一直微张 | 对没有 ARKit 形状的模型套用了 ARKit 映射；在形状映射里把 `jawOpen` 等的阈值调高，或给模型补 ARKit 形状 |
-| 头部动作、站姿不动 | 蓝图里的角色编号和场景对不上：保存场景，带 `--scene` 重新生成，删掉旧的 Amaidesu 蓝图后再导入 |
+| 站姿、手势不动 | 蓝图里的角色编号和场景对不上：保存场景，带 `--scene` 重新生成，删掉旧的 Amaidesu 蓝图后再导入 |
+| 站姿换得太勤或太少 | 形象调校页"身体"一组：调持续多久才换（`body_stance_settle_ms`）、换上后至少停多久（`body_stance_hold_ms`）；全关用 `body_enabled` |
 | 嘴的动作很乱 | Warudo 自带的音频口型没关，两边在同时控制嘴 |
 | 眼珠几乎不动 | 有的模型眼球骨骼转动范围小，在接收器里调大 Eye Movement Intensity |
 | 身体前倾后缩太明显或看不出来 | 接收器里调 Head Movement Intensity（头部平移倍数）和 Body Movement Intensity（身体跟随程度） |
@@ -128,6 +130,8 @@ enabled = ["vrchat"]
 ### 四、动作
 
 默认动作表对应 VRChat SDK 默认模板里的 `VRCEmote` 参数：挥手、鼓掌、指向、欢呼、跳舞、后空翻、悲伤、倒地。其中第 7、8 项（悲伤、倒地）的取值是按菜单顺序推定的，用的时候请对照一下。触发后默认 3 秒把参数写回 0，鼓掌、跳舞这类会循环的动作靠这一步停下。
+
+来礼物挥手、主播点名"指一下"这类手势也走动作表：`body_emotes` 默认把挥手、双手挥对到 Wave，指一下对到 Point，举拳庆祝对到 Cheer。改了动作表的，对不上的手势在 VRChat 上跳过（启动日志里有警告），按需改 `body_emotes`。换站姿 VRChat 没有对应的做法，不做。
 
 如果你的形象没有 `VRCEmote`，或者动作做在别的参数上：
 
