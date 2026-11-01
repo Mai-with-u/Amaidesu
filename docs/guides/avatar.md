@@ -10,7 +10,7 @@
 
 两条通道：
 
-- **面捕数据**（UDP，默认本机 49983 端口）：Amaidesu 的面捕合成器每秒 30 帧，按 iPhone 面捕 App **iFacialMocap** 的格式发出 ARKit 的 52 个表情系数和头部、眼球转角。Warudo 自带 iFacialMocap 接收器，把 Amaidesu 当成一部正在抓脸的 iPhone，表情、眨眼、眼神、点头、口型都从这里来。
+- **面捕数据**（UDP，默认本机 49983 端口）：Amaidesu 的面捕合成器每秒 30 帧，按 iPhone 面捕 App **iFacialMocap** 的格式发出 ARKit 的 52 个表情系数、头部转角与位置、眼球转角。Warudo 自带 iFacialMocap 接收器，把 Amaidesu 当成一部正在抓脸的 iPhone，表情、眨眼、眼神、点头、口型都从这里来；身体前倾、后缩（开心时往前凑、受惊时往后缩）写在头部位置里，和真人身子一动头就跟着平移一样，Warudo 按头部动作自己带动身体。
 - **蓝图通道**（WebSocket，默认 19190 端口）：Amaidesu 发一条条"动作名 + 数值"，比如 `nod_once = 1`、`marker_tears = 0.8`。Warudo 这边靠**蓝图**接收：蓝图是 Warudo 场景里的节点图，一个节点收到某个动作名，就去播一段动画或改一个形状。只用来做头部动作、站姿、抛鱼和风格化标记（脸红、眼泪这类漫符）。
 
 模型怎么把 ARKit 系数落到自己的形状上，在 Warudo 的面捕设置里调，和真人用 iPhone 面捕时一样。
@@ -26,7 +26,9 @@
 1. 在角色的动作捕捉设置里，面部捕捉选 **iFacialMocap**，Warudo 会在场景里加一个 iFacialMocap Receiver（接收器）。接收器配置页里的输入端口默认是 49983，与 Amaidesu 一致。
 2. 面部捕捉设置里的形状映射（Configure BlendShapes Mapping）按模型选：模型带 ARKit 的 52 个形状（"完美同步"）选 ARKit；只有 VRM 标准表情的选 VRM。表情做在自定义形状上的模型（例如麦麦），给模型补上 ARKit 形状最省事，或者在这里逐项把 ARKit 系数接到模型的形状上。
 3. 关掉 Warudo 自带的音频口型（用麦克风声音驱动嘴的功能）：嘴的开合已经在面捕数据里，两边会抢着控制嘴。
-4. Amaidesu 启动后（见第五步）在接收器上点一次校准（Calibrate），校准时形象正看镜头。
+4. 面部捕捉设置里的"启用头部和身体运动"（Enable Head and Body Movements）选是；自动眨眼、自动眼动、自动头部动作（Idle Head Animation）关掉——这些 Amaidesu 已经在做，两边叠在一起会乱。
+5. 姿态捕捉（身体追踪）选无：Amaidesu 不发身体追踪数据。身体跟着头转、前倾后缩由 Warudo 按头部动作带出，幅度在接收器的 Body Movement Intensity、Body Rotation Type 里调；呼吸和站着时的轻晃交给角色的待机动画。
+6. Amaidesu 启动后（见第五步）在接收器上点一次校准（Calibrate），校准时形象正看镜头。
 
 头和眼的左右如果反了（Amaidesu 让她往弹幕区看，她看向另一边），勾上接收器的镜像（Mirrored Tracking）。
 

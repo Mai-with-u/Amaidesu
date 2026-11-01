@@ -6,10 +6,13 @@ from typing import Dict, List, Tuple
 
 import pytest
 
-from src.modules.avatar.platform.warudo.ifacialmocap import GAZE_YAW_DEG, encode_frame, wire_name
+from src.modules.avatar.platform.warudo.ifacialmocap import BODY_POSITION_M, GAZE_YAW_DEG, encode_frame, wire_name
 from src.modules.avatar.platform.warudo.tracking_driver import MARKER_MIN_GAP_MS, WarudoTrackingDriver
 from src.modules.avatar.tracking.channels import (
     ARKIT_BLENDSHAPES,
+    BODY_X,
+    BODY_YAW,
+    BODY_Z,
     GAZE_X,
     HEAD_PITCH,
     HEAD_YAW,
@@ -54,6 +57,19 @@ def test_packet_carries_all_52_coefficients_in_percent_plus_head_and_eyes() -> N
     assert (pitch, yaw, roll) == (-5.0, 10.0, 0.0)  # ARKit 俯仰正数是低头：抬头取反
     assert poses["rightEye"][1] == pytest.approx(0.5 * GAZE_YAW_DEG) and poses["leftEye"] == poses["rightEye"]
     assert "-0.000" not in encode_frame(rest_frame()).decode("ascii")
+
+
+def test_body_lean_rides_on_head_position_in_meters() -> None:
+    # 表情带出的前倾（z 正数靠近镜头）和左右挪动写进头部位置，Warudo 按头部位移带动身体；
+    # 身体转角不发，Warudo 按头部转角自己转身体
+    frame = {**rest_frame(), BODY_Z: 0.2, BODY_X: -0.5, BODY_YAW: 6.0}
+    _, poses = _parse(encode_frame(frame))
+    x, y, z = poses["=head"][3:]
+    assert (x, y, z) == pytest.approx((-0.5 * BODY_POSITION_M[0], 0.0, 0.2 * BODY_POSITION_M[2]), abs=1e-3)
+    assert poses["=head"][:3] == [0.0, 0.0, 0.0]
+    # 静止时位置为 0：Warudo 校准时取到的中性位置就是坐正
+    _, rest = _parse(encode_frame(rest_frame()))
+    assert rest["=head"][3:] == [0.0, 0.0, 0.0]
 
 
 class FakeTransport:
