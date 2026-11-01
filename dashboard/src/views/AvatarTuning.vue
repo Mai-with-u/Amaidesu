@@ -24,8 +24,8 @@
             :type="state.loop.stalls ? 'warning' : 'info'"
             title="最近约 10 秒：实际帧率 / 最长帧间隔 / 超过两倍帧周期的卡顿次数"
           >
-            {{ state.loop.fps.toFixed(1) }} 帧/秒 · 最长 {{ Math.round(state.loop.max_gap_ms) }} 毫秒 · 卡顿
-            {{ state.loop.stalls }} 次
+            {{ state.loop.fps.toFixed(1) }} 帧/秒 · 最长
+            {{ Math.round(state.loop.max_gap_ms) }} 毫秒 · 卡顿 {{ state.loop.stalls }} 次
           </el-tag>
         </div>
       </div>
@@ -70,6 +70,7 @@
             <span v-if="action.kind !== '动作'" class="action-kind">{{ action.kind }}</span>
           </el-button>
         </el-card>
+        <SpeakTest :manual="state?.manual ?? false" class="block" />
       </el-col>
       <el-col :span="24" :lg="10" class="tuning-column">
         <LiveChannels :channels="profile.channels" :frame="frame" />
@@ -92,6 +93,7 @@ import { avatarTuningApi } from '@/api';
 import GazeTargets from '@/components/avatar-tuning/GazeTargets.vue';
 import LiveChannels from '@/components/avatar-tuning/LiveChannels.vue';
 import RecipeEditor from '@/components/avatar-tuning/RecipeEditor.vue';
+import SpeakTest from '@/components/avatar-tuning/SpeakTest.vue';
 import TuningFields from '@/components/avatar-tuning/TuningFields.vue';
 import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
 import type { AvatarTuningProfile, AvatarTuningRecipe, AvatarTuningState } from '@/types';

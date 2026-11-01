@@ -103,6 +103,7 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     ScoreboardStrip: typeof import('./src/components/live/ScoreboardStrip.vue')['default']
     Sidebar: typeof import('./src/components/layout/Sidebar.vue')['default']
+    SpeakTest: typeof import('./src/components/avatar-tuning/SpeakTest.vue')['default']
     SpeechCard: typeof import('./src/components/live/cards/SpeechCard.vue')['default']
     StartStreamDialog: typeof import('./src/components/live/StartStreamDialog.vue')['default']
     SubFieldGroup: typeof import('./src/components/settings/SubFieldGroup.vue')['default']
