@@ -53,7 +53,7 @@ def test_long_thinking_takes_thinking_pose_and_speaking_drops_it_at_once() -> No
     assert _run(director, THINK - 100, THINK, emotion="neutral", thinking=True) == [BodyCue(STANCE, "thinking")]
     # 开口：不等最短停留，也不等情绪持续，直接换到这句话情绪的站姿
     cues = _run(director, THINK + 100, THINK + 100, emotion="sad", speaking=True)
-    assert cues == [BodyCue(STANCE, "worried")]
+    assert cues == [BodyCue(STANCE, "hand_on_chest")]
     # 之后按普通规则：刚换上的站姿要停够最短时长
     assert _run(director, THINK + 200, THINK + 4000, emotion="angry", speaking=True) == []
 

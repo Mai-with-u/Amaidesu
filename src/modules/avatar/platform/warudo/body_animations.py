@@ -21,6 +21,9 @@ ANIMATION_ROOT = "character-animation://resources/Animations/AGIA"
 _DEFAULTS: Dict[Tuple[str, str], str] = {
     (STANCE, "standing"): "01_Idles/AGIA_Idle_generic_01",
     (STANCE, "hands_front"): "01_Idles/AGIA_Idle_cute_01_hands_on_front",
+    (STANCE, "hands_out"): "01_Idles/AGIA_Idle_cute_02_hands_stick_out",
+    (STANCE, "fists_front"): "01_Idles/AGIA_Idle_angry_02_fists_front",
+    (STANCE, "hand_on_chest"): "01_Idles/AGIA_Idle_brave_01_hand_on_chest",
     (STANCE, "fist_up"): "01_Idles/AGIA_Idle_energetic_01_right_fist_up",
     (STANCE, "lean_in"): "01_Idles/AGIA_Idle_cute_03_leaning_forward",
     (STANCE, "hand_on_hip"): "01_Idles/AGIA_Idle_classy_01_left_hand_on_waist",

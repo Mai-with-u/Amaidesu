@@ -35,6 +35,9 @@ GESTURE = "gesture"
 STANCES: Dict[str, str] = {
     "standing": "普通站姿",
     "hands_front": "双手放在身前",
+    "hands_out": "双手伸向前",
+    "fists_front": "双拳握在身前",
+    "hand_on_chest": "手按胸口",
     "fist_up": "右手举拳",
     "lean_in": "身体前倾",
     "hand_on_hip": "单手叉腰",
@@ -63,24 +66,26 @@ GESTURE_ACTIONS: Dict[str, str] = {desc: name for name, desc in BODY_GESTURES.it
 THINKING = "thinking"
 NEUTRAL = "neutral"
 
-# 情绪（和"在想"）→ 站姿的默认对照
+# 情绪（和"在想"）→ 站姿的默认对照。站姿一换上至少停好几秒，脸是表情的主要载体，所以默认只选
+# 手停在下巴以下的站姿；哭（捂眼）和思考（托腮）本身就是这个动作，保留。举拳、抱头、捂脸这类
+# 会挡脸的站姿留在词表里，按需在配置里对
 DEFAULT_STANCES: Dict[str, str] = {
     "neutral": "standing",
     "happy": "hands_front",
-    "excited": "fist_up",
+    "excited": "fists_front",
     "love": "lean_in",
     "smug": "hand_on_hip",
     "shy": "hands_clasped",
     "embarrassed": "scratch_head",
-    "sad": "worried",
+    "sad": "hand_on_chest",
     "crying": "crying",
     "angry": "hands_on_hips",
-    "disgusted": "refuse",
-    "surprised": "hands_open",
-    "scared": "head_in_hands",
+    "disgusted": "hand_on_hip",
+    "surprised": "hands_out",
+    "scared": "hands_clasped",
     "confused": "puzzled",
     "serious": "hands_behind",
-    "speechless": "facepalm",
+    "speechless": "slouch",
     "tired": "slouch",
     THINKING: "thinking",
 }
