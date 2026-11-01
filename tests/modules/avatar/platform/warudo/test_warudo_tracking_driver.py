@@ -6,8 +6,10 @@ from typing import Dict, List, Tuple
 
 import pytest
 
+from src.modules.avatar.platform.warudo.body_animations import LOOP_HOLD_MS
 from src.modules.avatar.platform.warudo.ifacialmocap import BODY_POSITION_M, GAZE_YAW_DEG, encode_frame, wire_name
 from src.modules.avatar.platform.warudo.tracking_driver import MARKER_MIN_GAP_MS, WarudoTrackingDriver
+from src.modules.avatar.tracking.body import GESTURE, STANCE, BodyCue
 from src.modules.avatar.tracking.channels import (
     ARKIT_BLENDSHAPES,
     BODY_X,
@@ -116,3 +118,33 @@ async def test_markers_go_over_the_blueprint_channel_quantized_and_rate_limited(
     await driver.apply({**rest_frame(), "marker_tears": 0.42})
     await driver.apply({**rest_frame(), "marker_tears": 0.0})  # 归零立刻发
     assert sent == [("marker_tears", 0.3), ("marker_tears", 0.4), ("marker_tears", 0.0)]
+
+
+async def test_looped_wave_returns_to_the_current_stance_after_a_while(fake_clock: FakeClock) -> None:
+    sent: List[str] = []
+
+    async def send_body(action: str) -> bool:
+        sent.append(action)
+        return True
+
+    cues = [BodyCue(STANCE, "hands_front"), BodyCue(GESTURE, "wave"), BodyCue(GESTURE, "cheer")]
+    driver = WarudoTrackingDriver(body=cues, send_body=send_body, clock=fake_clock.now_ms)
+    driver.attach_transport(FakeTransport())
+    await driver.perform_body(BodyCue(STANCE, "hands_front"))
+    await driver.perform_body(BodyCue(GESTURE, "wave"))
+    fake_clock.tick(LOOP_HOLD_MS - 1)
+    await driver.apply(rest_frame())
+    assert sent == ["body_stance_hands_front", "body_gesture_wave"]  # 还在挥
+    fake_clock.tick(1)
+    await driver.apply(rest_frame())
+    await driver.apply(rest_frame())
+    assert sent[2:] == ["body_stance_hands_front"]  # 挥够了切回当前站姿，只切一次
+
+    # 挥的中途换了站姿：不用再切；一次性手势自己播完回站姿，驱动不管
+    sent.clear()
+    await driver.perform_body(BodyCue(GESTURE, "wave"))
+    await driver.perform_body(BodyCue(STANCE, "standing"))
+    await driver.perform_body(BodyCue(GESTURE, "cheer"))
+    fake_clock.tick(LOOP_HOLD_MS)
+    await driver.apply(rest_frame())
+    assert sent == ["body_gesture_wave", "body_stance_standing", "body_gesture_cheer"]

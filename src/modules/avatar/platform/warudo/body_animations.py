@@ -2,8 +2,9 @@
 
 Warudo 自带一套人形动画（AGIA）：带情绪的待机站姿、叠加在站姿上的局部动作、一次性的动作，
 任何人形模型都能直接用。站姿用"切换待机动画"播放（一直保持到下一个站姿），叠加动作
-叠在当前站姿上播一次，手势整段播一次后回到站姿。蓝图经 WebSocket 动作 ``body_<类别>_<名字>``
-接收（数据 1），蓝图生成与驱动共用这里的名字。
+叠在当前站姿上播一次，手势整段播一次后回到站姿。挥手类手势例外：AGIA 的挥手是循环片段，
+一个来回不到 0.6 秒，播一次只闪一下，所以换成循环的待机动画挥一会儿，再由驱动切回当前站姿。
+蓝图经 WebSocket 动作 ``body_<类别>_<名字>`` 接收（数据 1），蓝图生成与驱动共用这里的名字。
 
 某个动作想换成别的动画，在 ``[platform.warudo.body_animations]`` 按动作名登记即可（可以只写
 AGIA 下的相对路径），改完重新生成并导入蓝图。
@@ -11,7 +12,7 @@ AGIA 下的相对路径），改完重新生成并导入蓝图。
 
 from __future__ import annotations
 
-from typing import Dict, Mapping, Tuple
+from typing import Dict, FrozenSet, Mapping, Tuple
 
 from src.modules.avatar.tracking.body import GESTURE, OVERLAY, STANCE, BodyCue, check_action_map, kind_of
 
@@ -42,13 +43,17 @@ _DEFAULTS: Dict[Tuple[str, str], str] = {
     (STANCE, "thinking"): "01_Idles/AGIA_Idle_think_01",
     (OVERLAY, "sway"): "02_Layers/AGIA_Layer_swing_body_01",
     (OVERLAY, "laugh"): "02_Layers/AGIA_Layer_laugh_up_01",
-    (GESTURE, "wave"): "03_Others/AGIA_Other_wave_hand_01",
+    (GESTURE, "wave"): "03_Others/AGIA_Other_wave_arm_01",
     (GESTURE, "wave_both"): "03_Others/AGIA_Other_wave_hands_01",
     (GESTURE, "point"): "03_Others/AGIA_Other_point_finger_01_emote",
     (GESTURE, "cheer"): "03_Others/AGIA_Other_enegetic_02",
 }
 # 待机动画重置时回到的站姿
 DEFAULT_IDLE = f"{ANIMATION_ROOT}/{_DEFAULTS[(STANCE, 'standing')]}"
+
+# 按循环播放的手势与挥多久：挥手是反复的动作，换上循环动画挥几个来回，再切回当前站姿
+LOOPED: FrozenSet[BodyCue] = frozenset({BodyCue(GESTURE, "wave"), BodyCue(GESTURE, "wave_both")})
+LOOP_HOLD_MS = 2500
 
 
 def body_action(cue: BodyCue) -> str:
@@ -69,4 +74,4 @@ def resolve(overrides: Mapping[str, str]) -> Dict[BodyCue, str]:
     return {cue: path if "://" in path else f"{ANIMATION_ROOT}/{path}" for cue, path in table.items()}
 
 
-__all__ = ["ANIMATION_ROOT", "DEFAULT_IDLE", "body_action", "check_overrides", "resolve"]
+__all__ = ["ANIMATION_ROOT", "DEFAULT_IDLE", "LOOPED", "LOOP_HOLD_MS", "body_action", "check_overrides", "resolve"]

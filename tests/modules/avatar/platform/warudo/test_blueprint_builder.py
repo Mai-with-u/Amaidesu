@@ -33,14 +33,18 @@ def test_body_entries_always_cover_every_body_action_and_markers_only_when_regis
     entries = _entries(build_blueprints({})[BODY])
     every = {body_action(BodyCue(kind, name)) for kind, names in KINDS.items() for name in names}
     assert set(entries) == every  # 合成器的每个身体动作都有入口，名字与驱动发的一致
-    stance, overlay, gesture = (
+    stance, overlay, gesture, wave = (
         entries["body_stance_hands_on_hips"],
         entries["body_overlay_sway"],
+        entries["body_gesture_cheer"],
         entries["body_gesture_wave"],
     )
     assert stance["name"] == "PLAY_CHARACTER_IDLE_ANIMATION"  # 站姿：换待机动画，一直保持
     assert _value(stance, "Animation") == f"{ANIMATION_ROOT}/01_Idles/AGIA_Idle_angry_01_hands_on_waist"
     assert _value(overlay, "Additive") is True and _value(gesture, "Additive") is False  # 叠加 / 整段播一次
+    # 挥手：换成循环动画（过渡和手势一样快），挥够了由驱动切回站姿
+    assert wave["name"] == "PLAY_CHARACTER_IDLE_ANIMATION"
+    assert _value(wave, "TransitionTime") < _value(stance, "TransitionTime")
     assert _value(stance, "Character")["id"] == DEFAULT_CHARACTER_ID
 
 

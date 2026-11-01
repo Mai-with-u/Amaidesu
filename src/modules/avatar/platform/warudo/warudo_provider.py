@@ -128,7 +128,8 @@ class WarudoProvider(ConnectionToolProvider):
             default_factory=dict,
             description=(
                 "身体动作名 → 换用的 Warudo 动画（可以只写 AGIA 下的相对路径，如 "
-                "01_Idles/AGIA_Idle_energetic_02_right_hand_piece）；没写的用默认对照，改完重新生成并导入蓝图"
+                "01_Idles/AGIA_Idle_energetic_02_right_hand_piece）；没写的用默认对照，改完重新生成并导入蓝图。"
+                "挥手、双手挥是换成循环动画挥一会儿再回站姿，换的动画要能循环"
             ),
             json_schema_extra={"x-ui-advanced": True},
         )

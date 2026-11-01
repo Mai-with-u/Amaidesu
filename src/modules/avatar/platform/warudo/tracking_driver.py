@@ -9,18 +9,19 @@ ARKit 形状（完美同步）就照名字写，没有就按 Warudo 面捕设置
 满值立刻发），由生成的蓝图写到模型形状上。
 
 身体动作（换站姿、叠动作、做手势）也走蓝图通道：发 ``body_<类别>_<名字>``，生成的蓝图播放
-Warudo 自带的人形动画。
+Warudo 自带的人形动画。挥手类手势在蓝图里是换成循环动画，驱动记着当前站姿，挥够了再发一次
+站姿切回来；挥的中途换了站姿就不用再切。
 """
 
 from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Collection, Dict, Mapping, Optional, Tuple
 
-from src.modules.avatar.tracking.body import BodyCue
+from src.modules.avatar.tracking.body import STANCE, BodyCue
 from src.modules.avatar.tracking.channels import MARKER_PREFIX, Frame
 from src.modules.utils.time_utils import now_ms as wall_now_ms
 
-from .body_animations import body_action
+from .body_animations import LOOP_HOLD_MS, LOOPED, body_action
 from .ifacialmocap import encode_frame
 
 # 风格化标记经蓝图通道发送：取整步长与同一标记的最短发送间隔
@@ -61,6 +62,9 @@ class WarudoTrackingDriver:
         self._transport: Any = None
         # 每个标记最近一次发出去的值与时刻
         self._sent: Dict[str, Tuple[float, int]] = {}
+        # 当前站姿与循环手势该切回站姿的时刻（没在挥时为 None）
+        self._stance = BodyCue(STANCE, "standing")
+        self._return_at: Optional[int] = None
 
     def attach_transport(self, transport: Any) -> None:
         """挂上 UDP 发送端（需有 ``sendto(bytes)`` 与 ``is_closing()``）；None = 摘下。"""
@@ -91,6 +95,7 @@ class WarudoTrackingDriver:
     async def apply(self, frame: Frame) -> None:
         """这一帧编成一个面捕数据包发出（发完就走），变了的标记再经蓝图通道补发。"""
         self._transport.sendto(encode_frame(frame))
+        await self._return_from_loop()
         if self._send_marker is None:
             return
         for marker, value in self.marker_updates(frame).items():
@@ -102,8 +107,23 @@ class WarudoTrackingDriver:
 
     async def perform_body(self, cue: BodyCue) -> None:
         """经蓝图通道发一个身体动作（蓝图通道没连上时这次动作就落空，站姿等下一次切换）。"""
-        if self._send_body is not None:
-            await self._send_body(body_action(cue))
+        if self._send_body is None:
+            return
+        # 换站姿：记下来，循环手势挥完切回的就是它；换了站姿就不用再切
+        # 循环手势：挥 LOOP_HOLD_MS 后由帧循环切回当前站姿
+        if cue.kind == STANCE:
+            self._stance = cue
+            self._return_at = None
+        elif cue in LOOPED:
+            self._return_at = self._clock() + LOOP_HOLD_MS
+        await self._send_body(body_action(cue))
+
+    async def _return_from_loop(self) -> None:
+        """循环手势挥够了：发一次当前站姿切回去。"""
+        if self._return_at is None or self._clock() < self._return_at or self._send_body is None:
+            return
+        self._return_at = None
+        await self._send_body(body_action(self._stance))
 
 
 __all__ = ["MARKER_MIN_GAP_MS", "MARKER_STEP", "WarudoTrackingDriver", "marker_action"]

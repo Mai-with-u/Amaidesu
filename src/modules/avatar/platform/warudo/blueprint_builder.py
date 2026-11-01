@@ -155,15 +155,15 @@ def _blendshape_graph(name: str, character: Dict[str, str], targets: Iterable[Tu
     return graph
 
 
-def _play_idle(graph: _Graph, animation: str, row: int) -> str:
-    """切换待机动画（站姿）：换上后一直保持，直到下一个站姿。"""
+def _play_idle(graph: _Graph, animation: str, row: int, *, transition: float = _STANCE_TRANSITION_S) -> str:
+    """切换待机动画（站姿、循环播放的手势）：换上后一直循环，直到下一次切换。"""
     return graph.node(
         _PLAY_IDLE_ANIMATION,
         "PLAY_CHARACTER_IDLE_ANIMATION",
         {
             "Character": graph.character_input(),
             "Animation": _value("string", animation),
-            "TransitionTime": _value("float", _STANCE_TRANSITION_S),
+            "TransitionTime": _value("float", transition),
             "TransitionEasing": _value("DG.Tweening.Ease", _EASE_OUT_CUBIC),
             "RestartIfPlaying": _value("bool", False),
             "ResetIfPlaying": _value("bool", False),
@@ -199,13 +199,19 @@ def _play_once(graph: _Graph, animation: str, row: int, *, additive: bool) -> st
 
 
 def _body_graph(character: Dict[str, str], animations: Mapping[BodyCue, str]) -> _Graph:
-    """身体动作：站姿、叠加动作、手势各一个入口（按类别排，同类按名字排）。"""
+    """身体动作：站姿、叠加动作、手势各一个入口（按类别排，同类按名字排）。
+
+    站姿换待机动画；挥手类手势也换待机动画（循环挥），过渡和手势一样快，挥够了由驱动切回站姿；
+    其余手势与叠加动作播一次。
+    """
     graph = _Graph("Amaidesu 身体动作", character)
     order = {STANCE: 0, OVERLAY: 1, GESTURE: 2}
     for row, (cue, animation) in enumerate(sorted(animations.items(), key=lambda i: (order[i[0].kind], i[0].name))):
         entry = graph.on_action(body_animations.body_action(cue), "Integer", row)
         if cue.kind == STANCE:
             player = _play_idle(graph, animation, row)
+        elif cue in body_animations.LOOPED:
+            player = _play_idle(graph, animation, row, transition=_ONE_SHOT_TRANSITION_S)
         else:
             player = _play_once(graph, animation, row, additive=cue.kind == OVERLAY)
         graph.flow(entry, player)
