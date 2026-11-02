@@ -359,7 +359,9 @@ async def apply_component_plan(
     - 集内未运行的顶层组件 → 启动（Agent 的附属采集器随后自动拉起）；
     - 运行中但不在集内的顶层组件 → 停止（Agent 停止连带附属采集器）；
     - 附属采集器条目不单独处理（随所属 Agent 开关），如实记 skipped；
-    - 常驻组件（``RESIDENT_AGENTS``，主播 Agent）即使不在集内也永不停止。
+    - 常驻 Agent（``RESIDENT_AGENTS``，主播）始终并回期望全集：不在运行则拉起，
+      收尾写盘的 enabled 名单同样保留——开播勾选清单按设计不含主播，只按提交
+      清单写盘会把主播从名单剥掉，进程重启后不再装配。
 
     实例层逐项独立执行、单项失败不阻塞其余；收尾经 ``sync_enabled`` 把两组
     enabled 名单一次写为意图全集（实例失败也保留意图，重启后对齐——与单
@@ -381,6 +383,13 @@ async def apply_component_plan(
             )
             continue
         desired_set.add((group, name))
+
+    # 常驻 Agent 始终属于期望运行全集：开播勾选清单按设计不含主播（前端不把它
+    # 列进可勾选清单），只按提交清单收尾写盘会把主播从 [agents].enabled 剥掉，
+    # 进程重启后不再装配；主播不在运行时也在此顺带拉起自愈。停止侧另有显式
+    # 豁免（下方 resident 减法），双层兜底防把开场次变成停主播。
+    for name in sorted(RESIDENT_AGENTS):
+        desired_set.add((_GROUP_AGENTS, name))
 
     to_stop: List[Tuple[str, str]] = []
     to_start: List[Tuple[str, str]] = []

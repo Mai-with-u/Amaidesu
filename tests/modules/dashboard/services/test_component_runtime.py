@@ -295,6 +295,8 @@ def test_plan_starts_desired_stops_absent_and_keeps_matching(tmp_path: Path) -> 
     collector_manager.register(running_console)
     running_console.started = True
     agent_manager = _FakeAgentManager()
+    agent_manager.register("streamer", object())
+    agent_manager.running.add("streamer")
     agent_manager.register("minecraft", object())
     agent_manager.running.add("minecraft")
     ctx = ComponentRuntimeContext(collector_manager=collector_manager, agent_manager=agent_manager)
@@ -317,12 +319,12 @@ def test_plan_starts_desired_stops_absent_and_keeps_matching(tmp_path: Path) -> 
     assert ("agents", "minecraft") not in by_ref  # 已在期望态：不动、不重复回执
     assert collector_manager.disable_calls == ["console_input"]
     assert agent_manager.disable_calls == []
-    assert sync.calls == [{"collectors": ["stt"], "agents": ["minecraft"]}]
+    assert sync.calls == [{"collectors": ["stt"], "agents": ["minecraft", "streamer"]}]
     assert report.config_error == ""
 
 
 def test_plan_never_stops_resident_streamer(tmp_path: Path) -> None:
-    """主播 Agent 常驻：不在期望集也永不停止（服务层兜底，防 UI 缺陷把开场变停主播）。"""
+    """主播 Agent 常驻：不在期望集也永不停止，收尾写盘的名单同样保留（服务层兜底）。"""
     agent_manager = _FakeAgentManager()
     agent_manager.register("streamer", object())
     agent_manager.running.add("streamer")
@@ -333,12 +335,52 @@ def test_plan_never_stops_resident_streamer(tmp_path: Path) -> None:
 
     assert report.items == []  # 无停止动作，也无回执条目
     assert "streamer" in agent_manager.running
-    assert sync.calls == [{"collectors": [], "agents": []}]  # 空意图也如实写盘
+    assert sync.calls == [{"collectors": [], "agents": ["streamer"]}]  # 写盘名单保留常驻主播
+
+
+def test_plan_writeback_preserves_resident_when_plan_lists_other_agents(tmp_path: Path) -> None:
+    """开播清单只含其他 Agent（主播不进勾选清单）时，收尾写盘仍保留主播。
+
+    写盘环节与停止环节适用同一条常驻规则：漏掉停止侧会当场停主播，漏掉
+    写盘侧则进程重启后主播不再装配、寻址主播的请求全部 404。
+    """
+    agent_manager = _FakeAgentManager()
+    agent_manager.register("streamer", object())
+    agent_manager.running.add("streamer")
+    agent_manager.register("minecraft", object())
+    agent_manager.running.add("minecraft")
+    ctx = ComponentRuntimeContext(agent_manager=agent_manager)
+    sync = _FakeEnabledSync()
+
+    report = asyncio.run(apply_component_plan(ctx, None, tmp_path, [("agents", "minecraft")], sync_enabled=sync))
+
+    assert report.items == []  # 两个 Agent 都已在期望态：无启停动作
+    assert agent_manager.disable_calls == []
+    assert sync.calls == [{"collectors": [], "agents": ["minecraft", "streamer"]}]
+
+
+def test_plan_starts_absent_resident_streamer(tmp_path: Path) -> None:
+    """主播未在运行（如进程按缺失名单重启后未装配）时，意图对齐把它拉起并写回名单。"""
+    agent_manager = _FakeAgentManager()
+    agent_manager.register("minecraft", object())
+    agent_manager.running.add("minecraft")
+    ctx = ComponentRuntimeContext(agent_manager=agent_manager)
+    sync = _FakeEnabledSync()
+
+    report = asyncio.run(apply_component_plan(ctx, None, tmp_path, [("agents", "minecraft")], sync_enabled=sync))
+
+    by_ref = {(i.group, i.name): (i.action, i.result) for i in report.items}
+    assert by_ref[("agents", "streamer")] == ("start", "started")
+    assert "streamer" in agent_manager.running
+    assert sync.calls == [{"collectors": [], "agents": ["minecraft", "streamer"]}]
 
 
 def test_plan_skips_companions_and_unknown_groups(tmp_path: Path) -> None:
     """附属采集器随 Agent 开关不单独处理；未知组件组跳过；两者都不进期望名单。"""
-    ctx = ComponentRuntimeContext(collector_manager=_FakeCollectorManager(), agent_manager=_FakeAgentManager())
+    agent_manager = _FakeAgentManager()
+    agent_manager.register("streamer", object())
+    agent_manager.running.add("streamer")
+    ctx = ComponentRuntimeContext(collector_manager=_FakeCollectorManager(), agent_manager=agent_manager)
     sync = _FakeEnabledSync()
 
     report = asyncio.run(
@@ -356,13 +398,15 @@ def test_plan_skips_companions_and_unknown_groups(tmp_path: Path) -> None:
     assert "minecraft" in by_ref[("collectors", "maicraft_attention")][2]
     assert by_ref[("tools", "obs")][:2] == ("skip", "skipped")
     assert by_ref[("agents", "game_2048")][:2] == ("start", "started")
-    assert sync.calls == [{"collectors": [], "agents": ["game_2048"]}]
+    assert sync.calls == [{"collectors": [], "agents": ["game_2048", "streamer"]}]
 
 
 def test_plan_isolated_failures_do_not_block_others(tmp_path: Path) -> None:
     """单项停止失败只记回执：其余启动与收尾写盘照常完成。"""
     collector_manager = _FakeCollectorManager()
     agent_manager = _FakeAgentManager(fail_stop=True)
+    agent_manager.register("streamer", object())
+    agent_manager.running.add("streamer")
     agent_manager.register("minecraft", object())
     agent_manager.running.add("minecraft")
     ctx = ComponentRuntimeContext(collector_manager=collector_manager, agent_manager=agent_manager)
@@ -382,13 +426,16 @@ def test_plan_isolated_failures_do_not_block_others(tmp_path: Path) -> None:
     assert by_ref[("agents", "minecraft")] == ("stop", "failed")
     assert by_ref[("collectors", "stt")] == ("start", "started")
     assert by_ref[("agents", "game_2048")] == ("start", "started")
-    assert sync.calls == [{"collectors": ["stt"], "agents": ["game_2048"]}]
+    assert sync.calls == [{"collectors": ["stt"], "agents": ["game_2048", "streamer"]}]
 
 
 def test_plan_records_config_sync_error_without_rolling_back(tmp_path: Path) -> None:
     """名单写盘失败如实上报 config_error，已完成的实例层对齐不回滚。"""
     collector_manager = _FakeCollectorManager()
-    ctx = ComponentRuntimeContext(collector_manager=collector_manager)
+    agent_manager = _FakeAgentManager()
+    agent_manager.register("streamer", object())
+    agent_manager.running.add("streamer")
+    ctx = ComponentRuntimeContext(collector_manager=collector_manager, agent_manager=agent_manager)
     sync = _FakeEnabledSync(error="写入被校验拒绝")
 
     report = asyncio.run(apply_component_plan(ctx, None, tmp_path, [("collectors", "stt")], sync_enabled=sync))
@@ -405,7 +452,10 @@ def test_plan_without_managers_records_failed_items(tmp_path: Path) -> None:
         apply_component_plan(ComponentRuntimeContext(), None, tmp_path, [("collectors", "stt")], sync_enabled=sync)
     )
 
-    assert [(i.action, i.result, "管理器未装配" in i.detail) for i in report.items] == [("start", "failed", True)]
+    assert [(i.action, i.result, "管理器未装配" in i.detail) for i in report.items] == [
+        ("start", "failed", True),  # stt：期望集内
+        ("start", "failed", True),  # streamer：常驻并回期望集，同样如实记失败
+    ]
 
 
 # -------------------- 共享服务盘点证据：重建拿得到新人设 --------------------
