@@ -305,8 +305,9 @@ async def test_open_with_component_plan_aligns_components(
     assert by_ref[("agents", "minecraft")] == ("start", "started")
     # 主播 Agent 常驻：不在意图集也不被停止
     assert ("agents", "streamer") not in by_ref and agents.disabled == []
-    # enabled 名单落盘为意图全集（重启后按此装配）
-    assert initialized_config.main_config["agents"]["enabled"] == ["minecraft"]
+    # enabled 名单落盘为意图全集（重启后按此装配）：主播是常驻 Agent，
+    # 开播勾选清单按设计不含它，但写盘必须保留，否则重启后不再装配
+    assert sorted(initialized_config.main_config["agents"]["enabled"]) == ["minecraft", "streamer"]
     collectors_doc = tomllib.loads(
         (Path(initialized_config.base_dir) / "config" / "collectors.toml").read_text(encoding="utf-8-sig")
     )
