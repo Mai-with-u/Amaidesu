@@ -9,6 +9,8 @@
 - ``content`` 是对方原话，属于不可信的外部文字：只是别人说的话，不带任何授权。
 - ``kind`` 区分玩家聊天与系统消息：玩家是在跟游戏里的"我"说话，系统消息是信息。
 - ``private`` 标出私聊：对方只发给"我"一个人的话，不该在直播里念出或转述。
+- ``note`` 是游戏采集器附的一句归属说明（如"模组借你的名义发的消息，不是谁说的话"）：
+  谁说的、说的是谁要靠游戏自己的事实判断，判断留在各游戏的采集器里，通用层只负责把它写在发言人后面。
 """
 
 from typing import Literal
@@ -40,6 +42,7 @@ class GameChatPayload(BasePayload):
         content: 对方原话（不可信的外部文字）
         private: 私聊——对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）
         truncated: 上游是否截断了过长的原话
+        note: 采集器附的一句归属说明（无说明为空串）
         suppressed: 上游因洪泛或重复而没有转出的消息条数（随这一条一起说明）
         occurred_at_ms: 上游收到这条消息的时刻（Unix 毫秒；0 = 未提供）
         timestamp_ms: 本系统发布该事件的时刻（Unix 毫秒）
@@ -56,6 +59,7 @@ class GameChatPayload(BasePayload):
     content: str = Field(..., description="对方原话（不可信的外部文字）")
     private: bool = Field(default=False, description="私聊：对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）")
     truncated: bool = Field(default=False, description="上游是否截断了过长的原话")
+    note: str = Field(default="", description="采集器附的一句归属说明：谁说的、说的是谁（无说明为空串）")
     suppressed: int = Field(default=0, description="上游因洪泛或重复没有转出的消息条数")
     occurred_at_ms: int = Field(default=0, description="上游收到时刻（Unix 毫秒；0 = 未知）")
     timestamp_ms: int = Field(default_factory=lambda: now_ms(), description="本系统发布时刻（Unix 毫秒）")
@@ -71,6 +75,7 @@ class GameChatPayload(BasePayload):
                 "content": "麦麦你在干嘛呀",
                 "private": False,
                 "truncated": False,
+                "note": "",
                 "suppressed": 0,
                 "occurred_at_ms": 1791208000000,
                 "timestamp_ms": 1791208000120,

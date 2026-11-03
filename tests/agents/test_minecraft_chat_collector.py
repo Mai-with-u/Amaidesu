@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
+from src.agents.minecraft.chat_attribution import NOTE_SHOWN_AS_SELF, NOTE_UNVERIFIED, attribute_chat
 from src.agents.minecraft.chat_collector import MaicraftChatCollector
 from src.modules.collectors.base import BaseCollector
 from src.modules.agents.companions import build_companion_collectors, owner_of
@@ -51,6 +52,34 @@ async def _primed(
     client.pages.append(events_page([_chat(3, "接手前说的话")], cursor=3))
     await collector._drain()
     return collector, client, bus
+
+
+def test_attribution_tells_machine_lines_from_people() -> None:
+    """没有发言人 UUID 的"玩家消息"名字只是显示出来的：显示名是自己就是模组借名义发的，别人就标无凭据。"""
+    maid_pos = '<ChangingSelf> [name:"winefox_momo", x:-356, y:63, z:36, dim:minecraft:overworld]'
+    unsigned = {"kind": "player", "sender": "ChangingSelf", "text": maid_pos}
+    known = attribute_chat(unsigned, self_name="ChangingSelf")
+    assert (known.kind, known.sender, known.note) == ("system", "", NOTE_SHOWN_AS_SELF)
+    assert known.content.startswith('[name:"winefox_momo"'), "聊天格式加的 <名字> 前缀去掉"
+
+    unknown_self = attribute_chat(unsigned)
+    assert (unknown_self.kind, unknown_self.sender, unknown_self.note) == ("player", "ChangingSelf", NOTE_UNVERIFIED)
+
+    signed = attribute_chat({"kind": "player", "sender": "Steve", "sender_id": _STEVE_ID, "text": "<Steve> 嗨"})
+    assert (signed.note, signed.content) == ("", "<Steve> 嗨"), "带 UUID 的是真发言，原话不动"
+    marked = attribute_chat({"kind": "system", "text": "[name:...]", "shown_as": "ChangingSelf"})
+    assert (marked.kind, marked.note) == ("system", NOTE_SHOWN_AS_SELF), "Mod 已改判的照它的标记说明"
+    assert attribute_chat({"kind": "system", "text": "Alex 加入了游戏"}).note == ""
+
+
+async def test_unsigned_line_is_forwarded_with_a_note() -> None:
+    collector, client, bus = await _primed()
+    line = {"cursor": 4, "kind": "player", "sender": "ChangingSelf", "text": '<ChangingSelf> [name:"x"]'}
+    client.pages.append(events_page([line], cursor=4))
+    await collector._drain()
+    [(_, payload)] = bus.events
+    assert payload.kind == "player" and payload.sender == "ChangingSelf"
+    assert payload.content == '[name:"x"]' and "没有发言人凭据" in payload.note
 
 
 def test_collector_metadata_and_registration() -> None:

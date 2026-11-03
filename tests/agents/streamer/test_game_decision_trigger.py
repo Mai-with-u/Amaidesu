@@ -156,6 +156,23 @@ async def test_game_chat_appends_and_player_wakes_and_fresh_lines_hand_to_replye
     assert batch.fresh_chat == (batch.events[0], batch.events[1])
 
 
+async def test_game_chat_note_follows_the_speaker(live_agent) -> None:
+    """采集器给的归属说明跟在发言人后面：模组借我名义发的坐标不再像是又一个玩家在说话（审计 P2-6）。"""
+    agent, bus = live_agent
+    machine = GameChatPayload(
+        game="minecraft",
+        kind="system",
+        content='[name:"winefox_momo", x:-356, y:63, z:36, dim:minecraft:overworld]',
+        note="模组借你的名义发的消息，不是谁说的话",
+        timestamp_ms=1_000,
+    )
+    await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, machine, source="maicraft_chat")
+    await _wait_until(lambda: len(agent._game_ledger._pending) == 1)
+    assert agent._proactive_signals.game_pending is False, "机器消息不是有人在跟我说话，不唤醒决策"
+    line = agent._scope.drain_window().events[0]
+    assert '系统消息（模组借你的名义发的消息，不是谁说的话）：[name:"winefox_momo"' in line
+
+
 async def test_private_game_chat_reaches_planner_batch_but_never_timeline(live_agent) -> None:
     """私聊：随本窗批次交给决策层，但不进时间线（表达侧与历史都看不到）。"""
     agent, bus = live_agent

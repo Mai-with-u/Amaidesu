@@ -1328,6 +1328,9 @@ class StreamerAgent(BaseAgent):
             if payload.private:
                 # 私聊标在发言人后面：决策看到这是只发给我的话，不在直播里念出或转述
                 speaker += "（私聊，只发给我）"
+            if payload.note:
+                # 采集器的归属说明同样跟在发言人后面：模组借我名义发的机器消息不会被当成又一个玩家
+                speaker += f"（{payload.note}）"
             note = "（原话过长已截断）" if payload.truncated else ""
             if payload.suppressed:
                 note += f"（之前还有 {payload.suppressed} 条重复或刷屏的没转过来）"
