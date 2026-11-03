@@ -232,13 +232,12 @@ async def test_http_remote_contract_and_name_check(loguru_capture: Any) -> None:
         await server.close()
 
 
-async def test_composition_root_shares_notes_only_when_enabled(store: SQLiteDatabase) -> None:
+async def test_composition_root_no_longer_shares_notes(store: SQLiteDatabase) -> None:
+    """阶段 3b 停用了共享长期笔记：不管配置怎么写，组合根都只给本地文件、不会再构造共享存储。
+
+    长期记忆的写入与注入由记忆账本取代，MEMORY.md 只剩文件本体（阶段 4 删除）；
+    [maibot_sync].share_notes 这个配置键随之失效。
+    """
     sync = {"enabled": True, "url": "http://127.0.0.1:8767/live-status", "token": "t"}
     assert app_main._build_long_memory_store({}, store) == (store.long_memory, None)
-    assert app_main._build_long_memory_store({"maibot_sync": {**sync, "share_notes": False}}, store)[1] is None
-
-    config = {"maibot_sync": sync, "agents": {"streamer": {"persona": {"bot_name": "麦麦"}}}}
-    backend, shared = app_main._build_long_memory_store(config, store)
-    assert isinstance(shared, SharedNotesStore) and backend is shared
-    assert backend.path_of("live") == store.long_memory.path_of("live")
-    await shared.close()
+    assert app_main._build_long_memory_store({"maibot_sync": sync}, store) == (store.long_memory, None)

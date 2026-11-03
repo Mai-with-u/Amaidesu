@@ -66,7 +66,6 @@ from src.modules.llm.request_history_manager import RequestHistoryManager
 from src.modules.logging import configure_from_config, get_logger
 from src.modules.logging.log_streamer import LogStreamer
 from src.modules.maibot_sync import (
-    HttpNotesRemote,
     HttpStatusSender,
     LiveStatusReporter,
     MaiBotSyncConfigSchema,
@@ -1100,35 +1099,13 @@ def _build_maibot_sync_reporter(
 def _build_long_memory_store(
     config: Dict[str, Any], database: SQLiteDatabase
 ) -> Tuple[LongMemoryBackend, Optional[SharedNotesStore]]:
-    """长期笔记的读写面：开了 ``[maibot_sync]`` 共享笔记时，在本地文件外包一层发布与收约定。
+    """长期笔记的读写面（阶段 3b 起只读保留，不再与 MaiBot 共享）。
 
-    正本始终是本地 MEMORY.md；共享时正式场写完把"给 QQ 麦麦看的笔记"发布给插件，读之前
-    收下 QQ 里记下的约定。没开同步、没开共享或缺地址 / 令牌时就是本地文件，行为与只用
-    Amaidesu 时完全一样。返回（读写面, 共享存储）——后者只在共享时有，供关停时收尾。
+    MEMORY.md 的写入与注入都由新的记忆账本取代，旧的共享笔记同步（写完发布给 QQ 麦麦、
+    读前收下 QQ 里记下的约定）随之停用：配置里的 [maibot_sync].share_notes 不再生效，
+    文件与历史留底原样留着，等阶段 4 连同整份长期记忆一起删除。
     """
-    raw = config.get("maibot_sync", {}) if isinstance(config, dict) else {}
-    sync_config = MaiBotSyncConfigSchema(**raw) if isinstance(raw, dict) else MaiBotSyncConfigSchema()
-    if not (sync_config.enabled and sync_config.share_notes and sync_config.url and sync_config.token):
-        return database.long_memory, None
-    # 延迟加载：发布的渲染与收约定属于主播记忆的条目格式，导入它们会带起整个主播 Agent 包，
-    # 与工厂按需加载 Agent 的做法一致，只在开了共享笔记时才加载
-    from src.agents.streamer.memory.long_memory import format_long_memory
-    from src.agents.streamer.memory.notes import absorb_promises
-
-    store = SharedNotesStore(
-        local=database.long_memory,
-        remote=HttpNotesRemote(
-            url=sync_config.notes_url,
-            token=sync_config.token,
-            timeout_ms=sync_config.request_timeout_ms,
-            persona_name=_streamer_name(config),
-        ),
-        # 发布给 QQ 麦麦的就是开播注入的那份视图：四个注入节、去掉标签、不含答应某位观众的条目
-        render=format_long_memory,
-        absorb=absorb_promises,
-    )
-    logger.info(f"长期笔记与 MaiBot 共享：正本在本地，写完发布到 {sync_config.notes_url}，读前收下 QQ 里记下的约定")
-    return store, store
+    return database.long_memory, None
 
 
 def _streamer_name(config: Dict[str, Any]) -> str:
