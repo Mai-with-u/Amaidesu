@@ -43,7 +43,6 @@ from src.modules.dashboard.schemas import (
     streamer as streamer_schemas,
     system as system_schemas,
 )
-from src.modules.dashboard.api import memory as memory_api
 from src.modules.dashboard.api import tasks as tasks_api
 from src.modules.dashboard.api import viewers as viewers_api
 
@@ -247,11 +246,6 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
         "liveSessionsApi.close → POST /live-sessions/{id}/close",
         session_schemas.SessionActionResponse,
         ("success", "detail"),
-    ),
-    (
-        "memoryApi.getLongMemory → GET /memory/long-term/{kind}",
-        memory_api.LongMemoryResponse,
-        ("kind", "text", "path", "updated_at_ms"),
     ),
     (
         "liveSessionsApi.setKind → PATCH /live-sessions/{id}/kind",
@@ -489,24 +483,6 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
             "persist_available",
             "window_start_ms",
         ),
-    ),
-    (
-        "memoryApi.listProfiles → GET /memory/profiles",
-        memory_api.ViewerProfileListResponse,
-        (
-            "total",
-            "items.viewer_id",
-            "items.platform",
-            "items.user_name",
-            "items.profile_text",
-            "items.last_compressed_at_ms",
-            "items.updated_at_ms",
-        ),
-    ),
-    (
-        "memoryApi.getStats → GET /memory/stats",
-        memory_api.MemoryStatsResponse,
-        ("profile_count", "latest_updated_ms"),
     ),
 ]
 

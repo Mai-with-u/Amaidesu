@@ -205,7 +205,7 @@ export interface MemoTodoItem {
 }
 
 /** Agent 备忘录/待办快照（`GET /api/v1/agents/{name}/memo`，纯只读观测）。
- *  `todos` / `reports` 仅 minecraft 返回（三元组）；主播只有 `notebook`，两者为 null */
+ *  `todos` / `reports` 仅 minecraft 返回（三元组）；没写过的文档为空串或缺省 */
 export interface AgentMemoResponse {
   name: string;
   notebook: string;
@@ -1373,76 +1373,6 @@ export interface ForgetListCountResponse {
 export interface ForgetListRemoveResponse {
   removed: boolean;
   count: number;
-}
-
-// ===== 观众画像管理（/api/v1/memory） =====
-
-/** 一位观众的印象（viewer_profiles 单行 + 观众的平台与当前昵称） */
-export interface ViewerProfileItem {
-  viewer_id: number;
-  platform: string;
-  user_name: string;
-  profile_text: string;
-  /** 已整理到的时间点：该时刻前的弹幕与付费记录已融进印象 */
-  last_compressed_at_ms: number;
-  updated_at_ms: number;
-}
-
-export interface ViewerProfileListResponse {
-  /** 命中搜索条件的全量行数（分页器用） */
-  total: number;
-  items: ViewerProfileItem[];
-}
-
-/** 画像纠正请求体 */
-export interface ViewerProfileUpdatePayload {
-  profile_text: string;
-}
-
-export interface MemoryMutationResponse {
-  success: boolean;
-}
-
-/** 一份长期记忆（GET / PUT /api/v1/memory/long-term/{kind}） */
-export interface LongMemoryResponse {
-  kind: SessionKind;
-  text: string;
-  /** 文件绝对路径（可直接用编辑器打开） */
-  path: string;
-  /** 文件最近修改时刻；文件还没生成为 0 */
-  updated_at_ms: number;
-}
-
-/** 长期记忆的一条留底记录（GET /api/v1/memory/long-term/{kind}/history） */
-export interface LongMemoryHistoryItem {
-  id: string;
-  at_ms: number;
-  /** 来由：收播整理（场次 #N）/ WebUI 保存 / 恢复到记录 X 之前的版本 */
-  reason: string;
-  /** 收播整理时的场次主键；其余为 null */
-  session_id: number | null;
-  /** 逐条改动说明（收播整理才有） */
-  changes: string[];
-  /** 是否能恢复到这次之前（第一次写入之前没有文件） */
-  has_snapshot: boolean;
-}
-
-export interface LongMemoryHistoryResponse {
-  kind: SessionKind;
-  items: LongMemoryHistoryItem[];
-}
-
-/** 某条留底记录写之前的全文 */
-export interface LongMemorySnapshotResponse {
-  kind: SessionKind;
-  entry_id: string;
-  text: string;
-}
-
-export interface MemoryStatsResponse {
-  profile_count: number;
-  /** 最近一次印象更新时刻，空库为 0 */
-  latest_updated_ms: number;
 }
 
 // ===== 记忆账本（/api/v1/memory/commitments|archive|settle） =====

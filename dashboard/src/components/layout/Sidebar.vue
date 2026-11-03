@@ -20,7 +20,7 @@
         </el-menu-item>
         <el-menu-item index="/memory">
           <el-icon><Avatar /></el-icon>
-          <span>主播记忆</span>
+          <span>记忆账本</span>
         </el-menu-item>
         <el-menu-item index="/collectors">
           <el-icon><Connection /></el-icon>

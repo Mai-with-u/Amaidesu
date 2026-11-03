@@ -96,9 +96,6 @@ import type {
   TriggerProactiveRequest,
   TriggerProactiveResponse,
   LiveSessionListResponse,
-  LongMemoryHistoryResponse,
-  LongMemoryResponse,
-  LongMemorySnapshotResponse,
   SessionKind,
   SessionRundownExecutionResponse,
   SessionTimelineResponse,
@@ -117,10 +114,6 @@ import type {
   ViewerDeleteResponse,
   ForgetListCountResponse,
   ForgetListRemoveResponse,
-  ViewerProfileListResponse,
-  ViewerProfileUpdatePayload,
-  MemoryMutationResponse,
-  MemoryStatsResponse,
   LogsQueryResponse,
   AvatarDebugStatusResponse,
   AvatarDebugTriggerRequest,
@@ -262,7 +255,7 @@ export const agentsApi = {
   /** 硬取消：清除任务追踪、状态置为 cancelled、并通知 Agent 停止执行（任务未知/已终态 404） */
   cancelAgentTask: (name: string, taskId: string) =>
     api.post<AgentCancelTaskResponse>(`/agents/${name}/tasks/${taskId}/cancel`),
-  /** 备忘录/待办快照（只读观测：主播 = notebook；minecraft = notebook/todos/reports 三元组） */
+  /** 备忘录/待办快照（只读观测：minecraft = notebook/todos/reports 三元组） */
   getAgentMemo: (name: string) => api.get<AgentMemoResponse>(`/agents/${name}/memo`),
 };
 
@@ -519,34 +512,6 @@ export const rundownApi = {
     api.post<RundownMutateResponse>(`/rundowns/${rundownId}/duplicate`),
   activate: (rundownId: string) =>
     api.post<RundownMutateResponse>(`/rundowns/${rundownId}/activate`),
-};
-
-// 主播记忆管理（viewer_profiles 的查看与纠正 + 长期记忆 MEMORY.md 的查看与编辑）
-//
-// 读写全部经后端 ViewerProfileRepo（常客印象读写）。
-// `GET /memory/profiles`：画像列表（搜索 / 分页）。
-// `PATCH / DELETE /memory/profiles/{viewerId}`：人工纠正 / 删除印象（按内部观众 ID）。
-// `GET /memory/stats`：总量统计（常客数 / 最近更新）。
-// `GET / PUT /memory/long-term/{kind}`：长期记忆全文读取 / 整份覆盖写（正式 / 彩排各一份）。
-// `GET /memory/long-term/{kind}/history[/{id}]`：留底记录 / 某次写之前的全文；
-// `POST .../history/{id}/restore`：恢复到某次写之前的版本（恢复本身也留底）。
-export const memoryApi = {
-  listProfiles: (params?: { search?: string; limit?: number; offset?: number }) =>
-    api.get<ViewerProfileListResponse>('/memory/profiles', { params }),
-  updateProfile: (viewerId: number, payload: ViewerProfileUpdatePayload) =>
-    api.patch<MemoryMutationResponse>(`/memory/profiles/${viewerId}`, payload),
-  deleteProfile: (viewerId: number) =>
-    api.delete<MemoryMutationResponse>(`/memory/profiles/${viewerId}`),
-  getStats: () => api.get<MemoryStatsResponse>('/memory/stats'),
-  getLongMemory: (kind: SessionKind) => api.get<LongMemoryResponse>(`/memory/long-term/${kind}`),
-  saveLongMemory: (kind: SessionKind, text: string) =>
-    api.put<LongMemoryResponse>(`/memory/long-term/${kind}`, { text }),
-  listLongMemoryHistory: (kind: SessionKind) =>
-    api.get<LongMemoryHistoryResponse>(`/memory/long-term/${kind}/history`),
-  getLongMemorySnapshot: (kind: SessionKind, entryId: string) =>
-    api.get<LongMemorySnapshotResponse>(`/memory/long-term/${kind}/history/${entryId}`),
-  restoreLongMemory: (kind: SessionKind, entryId: string) =>
-    api.post<LongMemoryResponse>(`/memory/long-term/${kind}/history/${entryId}/restore`),
 };
 
 // 记忆账本（承诺 / 场次档案 / 下播整理状态）

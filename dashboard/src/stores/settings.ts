@@ -12,6 +12,7 @@ import type {
   PendingChange,
 } from '@/types/settings';
 import { attributeValidationError } from '@/utils/saveError';
+import { withPersonaFieldPresets } from '@/utils/personaFields';
 import api from '@/api';
 
 /**
@@ -79,7 +80,12 @@ export const useSettingsStore = defineStore('settings', () => {
 
     try {
       const response = await api.get<ConfigSchemaResponse>('/config/schema');
-      schema.value = response.data;
+      // 人设字段（老梗栏等）的呈现缺省由前端补：后端 schema 只给字段与语义，
+      // 多行输入与填写约束在展示层补齐，见 utils/personaFields.ts
+      schema.value = {
+        ...response.data,
+        groups: withPersonaFieldPresets(response.data.groups ?? []),
+      };
 
       // 初始化当前值（嵌套结构，递归包含子字段，与 getFieldValue 的点分遍历匹配）
       const values: Record<string, unknown> = {};

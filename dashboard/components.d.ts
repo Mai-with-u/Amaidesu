@@ -89,7 +89,6 @@ declare module 'vue' {
     HistoryTable: typeof import('./src/components/llm-history/HistoryTable.vue')['default']
     InterventionInput: typeof import('./src/components/dashboard/InterventionInput.vue')['default']
     LiveChannels: typeof import('./src/components/avatar-tuning/LiveChannels.vue')['default']
-    LongMemoryPanel: typeof import('./src/components/viewers/LongMemoryPanel.vue')['default']
     MilestoneCard: typeof import('./src/components/live/cards/MilestoneCard.vue')['default']
     ModelConfigPage: typeof import('./src/components/settings/ModelConfigPage.vue')['default']
     ModelCostDonut: typeof import('./src/components/llm/ModelCostDonut.vue')['default']

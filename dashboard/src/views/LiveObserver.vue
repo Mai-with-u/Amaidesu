@@ -373,11 +373,10 @@
             </ul>
           </div>
 
-          <!-- Agent 备忘录/待办面板：跟随时间线来源过滤只显对应节（纯观测只读）。
+          <!-- 游戏 Agent 备忘录/待办面板：minecraft 的待办 / 工作笔记 / 近期上报（纯观测只读）。
              只在实际时档 + 完整档显示（回看无快照语义、简洁档藏运营面） -->
           <AgentMemoPanel
             v-if="sessionMode === 'live' && isFullMode && !replayActive"
-            :target="agentFilter"
             class="memo-panel-dock"
           />
 
