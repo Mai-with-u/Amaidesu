@@ -5,13 +5,13 @@
 ## 角色分配
 
 ```
-task/*  ──收口──▶  v2.0.0（开发主线）──发布──▶  tag vX.Y.Z + main 快进
+task/*  ──收口──▶  dev（开发主线）──发布──▶  tag vX.Y.Z + main 快进
 ```
 
-- **v2.0.0 = 开发主线**：task/* 的收口目标，日常版本号不因收口而变。
+- **dev = 开发主线**：task/* 的收口目标，日常版本号不因收口而变。
 - **tag `vX.Y.Z` = 发布事实源**：annotated tag，指向 release commit，统一带 `v` 前缀。
 - **main = 发布线**：只在发布时快进，tip 永远指向最新发布，不产生自己的提交。
-- 未来 3.0 代际时从主线长出 `v3.0.0` 分支接班，流程不变。
+- 分支名与版本号解耦：开发主线固定为 `dev`，不随发布改名。
 
 ## 版本号规则（SemVer）
 
@@ -49,14 +49,14 @@ task/*  ──收口──▶  v2.0.0（开发主线）──发布──▶  ta
 
 ## 发布步骤
 
-1. **收口检查**（在 v2.0.0 上）：`uv run pytest tests/` 全量绿 + `uv run ruff check` + `uv run ruff format .`——发版属于全量测试场景。
+1. **收口检查**（在 dev 上）：`uv run pytest tests/` 全量绿 + `uv run ruff check` + `uv run ruff format .`——发版属于全量测试场景。
 2. **写 CHANGELOG**：`CHANGELOG.md` 顶部新增本版本条目。
 3. **定版提交**：bump `pyproject.toml` 的 `version`，与 CHANGELOG 合为一个 release commit：`chore: 发布 2.1.0`。
 4. **打 tag**：`git tag -a v2.1.0 -m "<一句话发布摘要>"`。
-5. **main 快进**：`git switch main && git merge --ff-only v2.0.0 && git switch v2.0.0`。
+5. **main 快进**：`git switch main && git merge --ff-only dev && git switch dev`。
 6. **推送**：分支 + `git push --tags`（推送按提交纪律需用户授权）。
 7. **验证**：启动后 dashboard 系统状态显示新版本号。
 
 ## 节奏
 
-里程碑驱动，不定期发版：一批任务收口、需要给用户一个稳定点时发布。**task 收口并入 v2.0.0 ≠ 发布**，发布永远是显式动作。
+里程碑驱动，不定期发版：一批任务收口、需要给用户一个稳定点时发布。**task 收口并入 dev ≠ 发布**，发布永远是显式动作。
