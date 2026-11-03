@@ -34,7 +34,7 @@ flowchart LR
     R -->|同一份整理原料 + 本场回顾| M
     D -->|本场原话 + 付费记录| W
     V -->|互动量门槛| W
-    MF -->|开播时读出：全场条目，按开着的游戏筛| SP[Planner 系统提示词末尾<br/>+ 快嘴系统提示词]
+    MF -->|开播时读出：全场条目，按开着的游戏筛| SP[Planner 系统提示词末尾]
     MF -->|对某位观众的条目| Q
     SR -->|开播时读最近几场| SP
     VP -->|本批发言人·有印象| Q[Planner 参考段<br/>人物画像-内部参考]
@@ -116,7 +116,7 @@ flowchart LR
 |---|---|
 | Planner 系统提示词末尾"她的长期笔记（内部参考）" | 四个注入节里的全场条目，只含开着的游戏的；去掉标签，约定附"还没兑现 / 已兑现 / 放弃" |
 | 人物画像段 | 本批发言的观众若有对 ta 的条目，在 ta 的画像行下加"（笔记）"行；没有画像也给 |
-| 快嘴系统提示词 | 四个注入节里的全场条目（不按游戏筛） |
+| 快嘴系统提示词 | 不带任何记忆：长期笔记、备忘录与上场回顾都不进快嘴 |
 
 开播时（以及启动善后时）读出并解析一次，整场不变；笔记写明"用得上时再用，不必主动提起"。
 
@@ -129,7 +129,7 @@ flowchart LR
 
 ### 与 MaiBot 共用
 
-开了 infra.toml `[maibot_sync]` 且 `share_notes = true`（默认）时，正式场笔记照旧以本地 `memory/MEMORY.md` 为正本，只和 MaiBot 适配器插件交换两样东西：发布过去的"给 QQ 麦麦看的笔记"，和 QQ 麦麦记下、等这边来收的约定；没开时完全不经过下面这些。取舍见 [ADR-063](../decisions/063-maibot-interop-published-views.md)。
+开了 infra.toml `[maibot_sync]` 且 `share_notes = true`（默认）时，正式场笔记照旧以本地 `memory/MEMORY.md` 为正本，只和 MaiBot 适配器插件交换两样东西：发布过去的"给 QQ 麦麦看的笔记"，和 QQ 麦麦记下、等这边来收的约定；没开时完全不经过下面这些。取舍见 [ADR-063](../decisions/063-maibot-interop-published-views.md)，配置、验证与排错见[与 MaiBot 同步](../guides/maibot-sync.md)。
 
 | 环节 | 规则 |
 |---|---|

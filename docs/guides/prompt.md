@@ -202,9 +202,9 @@ collectors_view = config_service.get_file_section("collectors")
 [agents]
 enabled = ["streamer"]        # 可选: streamer / minecraft / text_adv / game_2048
 
-# config/avatar.toml —— 虚拟形象平台启用（名单成员 = 平台工具全部可见）
+# config/avatar.toml —— 虚拟形象平台启用（名单成员 = 接收面捕合成器的逐帧驱动）
 [platform]
-enabled = ["vts"]             # 合法名: vts / warudo / vrchat
+enabled = ["vts"]             # 合法名: vts / warudo / vrchat / expression_sheet
 
 [tools.vision]
 enabled = true                # vision_look_at_screen（mss 抓屏 + VLM 转文本）

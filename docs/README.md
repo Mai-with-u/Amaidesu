@@ -20,7 +20,8 @@
 - [Minecraft Agent](guides/minecraft-agent.md)
 - [发布](guides/release.md)
 - [GPT-SoVITS 语音服务部署](guides/gptsovits.md)
-- [虚拟形象接入（Warudo / VRChat）](guides/avatar.md)
+- [虚拟形象接入（Warudo / VRChat / 表情差分立绘）](guides/avatar.md)
+- [与 MaiBot 同步（直播近况 / 共享笔记 / 场次回顾）](guides/maibot-sync.md)
 
 ## 架构与设计
 

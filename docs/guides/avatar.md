@@ -1,6 +1,6 @@
-# 虚拟形象接入：Warudo 与 VRChat
+# 虚拟形象接入：Warudo、VRChat 与表情差分立绘
 
-本文说明怎样让 Amaidesu 驱动 Warudo 或 VRChat 里的虚拟形象：形象自己眨眼、看来看去，主播说话时表情跟着情绪变、嘴跟着声音动，身体跟着情绪换站姿，来礼物时挥手，AI 还能点名做动作。VTube Studio 接上就能用，不在本文范围；三个平台各自能做什么，见[虚拟形象架构](../architecture/avatar-platform.md)。
+本文说明怎样让 Amaidesu 驱动 Warudo、VRChat 或表情差分立绘：形象自己眨眼、看来看去，主播说话时表情跟着情绪变、嘴跟着声音动，身体跟着情绪换站姿，来礼物时挥手，AI 还能点名做动作。VTube Studio 接上就能用，不在本文范围；四个平台各自能做什么，见[虚拟形象架构](../architecture/avatar-platform.md)。
 
 > 阅读前提：项目已完成[快速开始](../getting-started.md)的安装步骤，`config/` 下的配置文件已经生成。下文的 `config/avatar.toml` 指项目里的虚拟形象配置文件。
 
@@ -155,3 +155,48 @@ VRChat 会按麦克风收到的声音自己算口型，任何形象都适用，A
 - **风格化标记**：形象作者另做了脸红、眼泪这类参数的，在 `[platform.vrchat.markers]` 登记，比如 `tears = "Tears"`（标记名 = 参数名，参数类型用浮点）。
 
 想核对形象有哪些参数，看第四步说的参数清单文件。
+
+## 表情差分立绘
+
+不想搭 3D 模型时，可以拿一组表情差分图当形象：每个情绪一张图，形象跟着当前情绪换图。眨眼、口型、头部微动这些逐帧效果没有，但换图时机和语音对得上，适合切片立绘。
+
+### 一、准备差分图
+
+- 一个目录放一套图，每个情绪一张，**文件名就是情绪名**：`neutral.png`、`happy.png`、`angry.png`、`speechless.png`……
+- 17 个情绪名（小写英文）：`neutral`、`happy`、`sad`、`angry`、`surprised`、`scared`、`disgusted`、`shy`、`embarrassed`、`confused`、`love`、`excited`、`smug`、`serious`、`tired`、`crying`、`speechless`。
+- 支持 `png` / `jpg` / `jpeg` / `webp`；某张缺了自动回退到 `neutral` 那张，所以至少要准备 `neutral`。
+- 建议所有图同一画布尺寸、同一构图，换图时才不跳。
+
+### 二、在 Amaidesu 里启用
+
+```toml
+# config/avatar.toml
+[platform]
+enabled = ["expression_sheet"]
+
+[platform.expression_sheet]
+# 差分图目录的绝对路径
+image_dir = "D:/live2d/差分图"
+```
+
+改完**重启 Amaidesu** 生效（目录只在启动时读一次）。面捕合成器默认开启，表情由它决定；如果把 `[tracking]` 的 `enabled` 关掉，形象不再被逐帧驱动，差分图会一直停在 `neutral`。
+
+### 三、显示到直播画面
+
+控制台「小部件」页选「差分立绘」，复制页面网址（路径是 `/widget/expression_sheet`），在直播软件里添加一个浏览器源指向它，推荐 1920×1080、背景透明。小部件每 250 毫秒向 Amaidesu 问一次"现在该显示哪张图"。
+
+### 四、换图节奏
+
+- 跟着面捕合成器此刻的主表情：主播这句话带什么情绪，就换到对应那张图。
+- 语音开始播放才换图，播完停一会儿再回落——不会话还没出口就先变脸。
+- 同类表情只延长、不重来；惊、怕这类强情绪可以打断当前表情。
+- `avatar_act` 的"保持表情"立即生效，用来演"假装生气一会儿"这类梗。
+
+### 五、常见问题
+
+| 现象 | 原因 |
+|------|------|
+| 一直显示同一张 | `image_dir` 没配或配错；目录里缺这个情绪的图（会回退 `neutral`）；`[tracking]` 的 `enabled` 被关掉了 |
+| 工具页显示连接失败 | 目录不存在，或一张图都没扫到；按页面提示检查 `image_dir` |
+| 直播软件里是空白 | 浏览器源地址不对；先在浏览器里直接打开小部件网址确认能显示 |
+| 换图比声音慢半拍 | 设计如此：语音真正开始播放才换图，避免说话前先变脸 |

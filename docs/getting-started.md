@@ -141,12 +141,12 @@ user_nickname = "控制台"
 
 #### 启用渲染输出（可选）
 
-字幕 / 虚拟形象 / OBS 等渲染工具由 `config/avatar.toml`（虚拟形象）与 `config/tools.toml`（演播）的装配开关控制（开一个提供者 = 其全部工具进入可见集）；**TTS 是基础设施**，由 `config/infra.toml` 的 `[tts]` 段独立控制（`enabled = true` 即主播每句话自动合成播出，`provider` 单选引擎；ToolRegistry 中零 TTS 条目），详见 [TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
+字幕 / 虚拟形象 / OBS 等渲染输出各有装配入口：虚拟形象由 `config/avatar.toml` 的平台名单决定哪家平台接收面捕合成器的逐帧数据与主播的动作，OBS 走 `config/tools.toml` 的提供者开关，字幕走 `config/infra.toml` 的 `[subtitle]` 段；**TTS 是基础设施**，由 `config/infra.toml` 的 `[tts]` 段独立控制（`enabled = true` 即主播每句话自动合成播出，`provider` 单选引擎；ToolRegistry 中零 TTS 条目），详见 [TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
 
 ```toml
-# config/avatar.toml —— 虚拟形象平台启用（名单成员 = 平台工具全部可见）
+# config/avatar.toml —— 虚拟形象平台启用（名单成员 = 接收面捕合成器的逐帧驱动，不向 LLM 提供工具）
 [platform]
-enabled = ["vts"]                    # 合法名: vts / warudo / vrchat
+enabled = ["vts"]                    # 合法名: vts / warudo / vrchat / expression_sheet
 
 # config/infra.toml —— TTS 基础设施
 [tts]
@@ -192,7 +192,7 @@ uv run python main.py --dry
 | **业务 Agent（Agent）** | 拥有内部状态与工具的主循环体；订阅事件、决策、调用工具 | `src/agents/` | `[agents]` + `[agents.<name>]` |
 | **工具（Tool）** | 单一能力契约（ToolSpec + BaseToolProvider / as_tool_impl），由 Agent 在决策时按需调用 | `src/modules/tools/` | `tools.toml` 提供者开关与子配置 |
 
-> 渲染工具（字幕 / VTS / OBS 等）以 **Tool Provider** 的形式注册：开启对应提供者开关后，工具包内的组件会注册到 `ToolRegistry` 中。**TTS 是例外**——语音是基础模块，不在工具池内，位于 `src/modules/tts/`，由 `config/infra.toml` 的 `[tts]` 段驱动装配（`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，ToolRegistry 中零 TTS 条目；开启后主播每句话自动播出），详见 [GPT-SoVITS 语音服务部署](guides/gptsovits.md)、[组件开发指南](guides/component.md) 与 [TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
+> 渲染输出（字幕 / 虚拟形象 / OBS 等）的装配入口不统一：OBS 等能力以 **Tool Provider** 的形式注册，开启对应开关后工具进入可见集；虚拟形象平台只接收面捕合成器的逐帧数据与 `avatar_act` 的动作，不注册 LLM 工具；字幕由 `infra.toml` 的 `[subtitle]` 段驱动。**TTS 是例外**——语音是基础模块，不在工具池内，位于 `src/modules/tts/`，由 `config/infra.toml` 的 `[tts]` 段驱动装配（`build_tts_infrastructure` 按 `[tts].provider` 单选构造引擎实例注入 StreamerAgent，ToolRegistry 中零 TTS 条目；开启后主播每句话自动播出），详见 [GPT-SoVITS 语音服务部署](guides/gptsovits.md)、[组件开发指南](guides/component.md) 与 [TTS 基础设施管线](decisions/007-tts-infrastructure-pipeline.md)。
 
 ### 3.3 可用组件清单
 
@@ -237,7 +237,7 @@ Agent 附属采集器（不在上表、不进 `collectors.toml`，随所属 Agen
 | 工具包（`[tools.<pack>]`） | 代表工具 | 说明 |
 |----------------------------|---------|------|
 | `vision` | `vision_look_at_screen` | 屏幕感知（mss 多显示器抓屏 + 可选区域 + VLM 转文本） |
-| `avatar.*`（vts / vrchat / warudo） | `vts_trigger_hotkey` / VRChat OSC 工具 / Warudo 工具 | 虚拟形象控制族（由 avatar.toml `[avatar.platform].enabled` 名单装配） |
+| `avatar`（`avatar.toml` 平台名单，非 tools 包） | `avatar_act` / `avatar_list_actions` | 虚拟形象动作族（四平台统一走面捕合成器；平台名只决定谁接收逐帧数据，不提供平台工具） |
 | `studio.obs` | `obs_switch_scene` | 演播控制族（由 `[tools.studio.obs].enabled` 分类开关装配） |
 | Streamer 自带 | `streamer_reply` / `rundown_control` / `memory_recall_*` | 主播自有工具（开 `streamer` 即生效；`rundown_control` 随 rundown 注册项声明） |
 | `framework`（AgentControl） | `framework_delegate` / `framework_task_status` | 框架级委派与任务状态查询（随任一 Agent 启用生效） |
