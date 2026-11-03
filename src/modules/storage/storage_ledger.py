@@ -98,7 +98,7 @@ class StorageLedger:
         self.event_repo = event_repo
         # 场次归属解析（payload 未盖章时回退）；None 时按无场次降级跳过
         self._session_manager = session_manager
-        # 按昵称自动关联老观众的时限；未传时取 storage.toml [viewers] 的默认值
+        # 按昵称自动关联老观众的时限；未传时取 storage.toml [viewers] 的默认值（0 = 不自动关联）
         self._name_match_window_ms = (
             name_match_window_ms
             if name_match_window_ms is not None

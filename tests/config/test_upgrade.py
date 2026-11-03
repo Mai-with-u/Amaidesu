@@ -40,8 +40,12 @@ def sample_cross_hook(host_data: Dict[str, Any], target_data: Dict[str, Any]) ->
 
 @pytest.fixture(autouse=True)
 def isolated_hooks():
-    """隔离生产钩子：暂存清空 agents/tools 的生产钩子链，测试后恢复，防止注册表污染泄漏到其他测试。"""
-    saved = {name: upgrade._FILE_HOOKS.pop(name, None) for name in ("agents.toml", "tools.toml")}
+    """隔离生产钩子：暂存清空 agents/tools/storage 的生产钩子链，测试后恢复，防止注册表污染泄漏到其他测试。
+
+    storage.toml 也清空：各文件的生产钩子都已高于基线，要验"钩子 target 都不高于基线的文件保持
+    基线种子值"，得在空链上自己登记一个 target 等于基线的钩子。
+    """
+    saved = {name: upgrade._FILE_HOOKS.pop(name, None) for name in ("agents.toml", "tools.toml", "storage.toml")}
     yield
     for name, hooks in saved.items():
         upgrade._FILE_HOOKS.pop(name, None)
@@ -148,6 +152,8 @@ def test_load_advances_only_files_with_hooks_writes_back_and_second_load_is_clea
     rewind_and_append(tmp_path, "agents.toml", "2.0.30")
     rewind_and_append(tmp_path, "tools.toml", "2.0.30")
     upgrade.register_file_hook("agents.toml", "sample", "2.0.31", sample_hook)
+    # storage.toml 只有一个 target 等于基线的钩子：生成时已在基线，这个钩子不适用
+    upgrade.register_file_hook("storage.toml", "sample_at_baseline", CONFIG_BASELINE_VERSION, lambda data: [])
 
     config, _ = load_config_dir(tmp_path)
 

@@ -116,7 +116,7 @@ Laplace 的 `message` / `gift` / `superchat` / `toast` / `interaction` 分别映
 ## 已知限制
 
 - **实时流，无历史补播**：断线期间的事件不会补发；重连后依靠 `id` / `stableKey` / 内容指纹去重，降低重复落库概率。gift 的事件 `id` 可能由上游按“时间戳:房间:UID”生成，采集器不单独用 `id` 判断重复，而是比较 uid、礼物 ID、数量、价格、时间戳等内容字段，避免同一用户同一时间戳的不同礼物被误删。
-- **与 official 只能靠昵称对上**：Laplace 公开事件只有 `uid`（legacy 链路是真实 B 站 UID；Open Platform 来源的 `uid` 已废弃、恒 0，且不提供 `open_id`），`bili_danmaku_official` 只有 `open_id`，两者没有对照。换源后，新出现的 ID 若与老观众同名、且老观众的这个昵称 90 天内出现过（`storage.toml` 的 `[viewers].name_match_window_days`），自动视为同一人；超出时限或同名的不止一位，转入 WebUI 待确认页人工处理，错关联可在观众档案页取消关联。B 站字段定义见[开放平台文档](https://open-live.bilibili.com/document/f9ce25be-312e-1f4a-85fd-fef21f1637f8)。
+- **与 official 只能靠昵称对上**：Laplace 公开事件只有 `uid`（legacy 链路是真实 B 站 UID；Open Platform 来源的 `uid` 已废弃、恒 0，且不提供 `open_id`），`bili_danmaku_official` 只有 `open_id`，两者没有对照。换源后，新出现的 ID 默认先当成新观众，若与老观众同名，就在 WebUI 待确认页挂一条合并建议，由你确认是不是同一人（昵称谁都能改，自动认人会让同名新号冒充老观众）。想要自动接上，把 `storage.toml` 的 `[viewers].name_match_window_days` 调成大于 0 的天数：同名老观众只有一位、且这个昵称在这些天内出现过，就自动视为同一人；错关联可在观众档案页取消关联。B 站字段定义见[开放平台文档](https://open-live.bilibili.com/document/f9ce25be-312e-1f4a-85fd-fef21f1637f8)。
 - **礼物金额按实付价统计**：Laplace 只提供含舰队折扣的实付总价，采集器把它同时写入 `total_price` 与 `paid_price`；`unit_price` 是由总价反推的近似值。该源没有标价，按“源只提供实付价时以实付价计贡献”的例外口径统计，因此 laplace 礼物的贡献不高于标价，跨源对比时需注意。
 - **连击信息缺失**：Laplace `gift` 事件只提供 `giftAmount`，没有 `combo_id` / `combo_count`；`GiftInfo` 的 `combo_*` 保持默认，连击归并只能按消息量处理。
 - **SC 金额按人民币换算**：Laplace 的 `priceNormalized` 是实际货币单位（人民币元），采集器优先用它 ×1000 转为金瓜子；只有该字段缺失或非正数时才回退 `price`。金额大小与单位无关，不能按金额猜单位。
@@ -133,6 +133,6 @@ Laplace 的 `message` / `gift` / `superchat` / `toast` / `interaction` 分别映
 | 日志「认证失败（401）」 | `token` 与 leb-server `--auth` 不一致，或控制台密码与之一致但 Amaidesu 未填 |
 | 连接成功但没有事件 | 确认控制台在 `/dashboard/<房间号>` 页面、Event Bridge 显示已连接、直播间确实在开播；若日志提示缺少 uid，检查「进阶」登录同步，或确认连接方式不是「开放平台」 |
 | 日志「Laplace 事件缺少 uid（已丢弃）」 | 在控制台「进阶」配置登录同步；「开放平台」来源 uid 恒 0 且不转发 open_id，当前不可用 |
-| 同一观众变成两个身份 | 换源后昵称超出关联时限或同名候选不止一位时会先分成两位：到 WebUI「观众 → 待确认观众」确认合并，或在档案页手动并入 |
+| 同一观众变成两个身份 | 换源后默认先分成两位（开了自动关联时，超出时限或同名候选不止一位也会分开）：到 WebUI「观众 → 待确认观众」确认合并，或在档案页手动并入 |
 | 事件被过滤 | 检查 `room_id` 是否与事件 `origin` 一致；填 0 可先排除过滤因素 |
 | 同一弹幕出现两次 | 检查 `enabled` 是否同时启用了 legacy/official/laplace 中的多个 |

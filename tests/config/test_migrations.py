@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import pytest
 import tomlkit
@@ -20,6 +20,7 @@ from src.modules.config.upgrade import (
     _FILE_HOOKS,
     _drop_minecraft_max_steps,
     _drop_simulator_llm_profile,
+    _name_match_off_by_default,
     _upgrade_builder_scene_transport,
     _upgrade_minecraft_context_tokens,
     advance_file_versions,
@@ -135,6 +136,26 @@ def _check_maibot_sync_transcript(d: Path) -> None:
     section = read_doc(d, "infra.toml")["maibot_sync"]
     assert section["send_transcript"] is False  # 整场记录推送降为可选：旧默认改写为关
     assert section["share_notes"] is True  # 新增的共享笔记开关按默认补齐
+
+
+def _seed_name_match_window(value: int | None) -> Callable[[Path], None]:
+    def seed(d: Path) -> None:
+        doc = _rewound(d, "storage.toml", "2.0.40")
+        viewers = doc["viewers"]
+        if value is None:
+            del viewers["name_match_window_days"]
+        else:
+            viewers["name_match_window_days"] = value
+        write_doc(d, "storage.toml", doc)
+
+    return seed
+
+
+def _check_name_match_window(expected: int) -> Callable[[Path], None]:
+    def check(d: Path) -> None:
+        assert read_doc(d, "storage.toml")["viewers"]["name_match_window_days"] == expected
+
+    return check
 
 
 def _check_sc_probability(d: Path) -> None:
@@ -466,6 +487,10 @@ CASES = [
         _seed_maibot_sync_transcript,
         _check_maibot_sync_transcript,
     ),
+    # 按昵称自动关联改为默认关：仍是旧默认 90 的改成 0；使用者填的其他天数不动；缺键按新默认 0 补上
+    Case("name-match-old-default", ("storage.toml",), _seed_name_match_window(90), _check_name_match_window(0)),
+    Case("name-match-explicit-days", ("storage.toml",), _seed_name_match_window(30), _check_name_match_window(30)),
+    Case("name-match-missing-key", ("storage.toml",), _seed_name_match_window(None), _check_name_match_window(0)),
 ]
 
 
@@ -495,6 +520,7 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "profile_give_up": ("case", "profile-give-up"),
     "widget_drop_html_page": ("case", "widget-html-page"),
     "maibot_sync_transcript_optional": ("case", "maibot-sync-transcript-optional"),
+    "name_match_off_by_default": ("case", "name-match-old-default"),
     # 具名测试函数覆盖
     "builder_scene_transport": ("test", "test_migrations.py#test_builder_scene_transport_hook_and_writeback"),
     "drop_minecraft_builder_section": ("test", "test_migrations.py#test_builder_scene_transport_hook_and_writeback"),
@@ -607,6 +633,21 @@ def test_second_load_has_no_drift_and_rewrites_nothing(case: Case, tmp_path: Pat
 
 
 # 钩子本体与特殊场景
+
+
+@pytest.mark.parametrize(("before", "after", "warned"), [(90, 0, True), (30, 30, False), (0, 0, False)])
+def test_name_match_hook_rewrites_only_old_default_and_names_it(
+    before: int, after: int, warned: bool, loguru_capture: Any
+) -> None:
+    """只有仍是旧默认 90 的才改成 0，并打一条 warning 点名这一项（有意设成 90 的分不出，请使用者自查）；
+    其他天数、已经是 0 的不动、不告警；再跑一次没有变更（幂等）。"""
+    data = {"viewers": {"name_match_window_days": before}}
+    changed = _name_match_off_by_default(data)
+    assert data["viewers"]["name_match_window_days"] == after
+    assert bool(changed) is warned
+    assert _name_match_off_by_default(data) == []
+    warnings = [r["message"] for r in loguru_capture.records if "name_match_window_days" in r["message"]]
+    assert (len(warnings) == 1 and "如果 90 是你有意设的，请改回" in warnings[0]) if warned else warnings == []
 
 
 def test_simulator_llm_profile_hook_is_idempotent_and_scheduler_advances_version() -> None:

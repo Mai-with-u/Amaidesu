@@ -1,4 +1,5 @@
-"""观众身份解析：同种 ID 命中、改名与昵称记录、按当前昵称关联老观众（时限 / 候选唯一 / 对应 ID 列空着）、待确认。
+"""观众身份解析：同种 ID 命中、改名与昵称记录、按当前昵称关联老观众（时限 / 候选唯一 / 对应 ID 列空着 /
+时限为 0 不自动关联）、待确认。
 
 规则见 ``ViewerRepo`` 模块说明；这里用真实临时库逐条验证。
 """
@@ -22,9 +23,8 @@ OPEN_ID = "39b8fedb-60a5-4e29-ac75-b16955f7e632"
 async def _resolve(viewers: ViewerRepo, external_id: str, name: str, ts: int, **kwargs: Any) -> ViewerResolution:
     kwargs.setdefault("platform", "bilibili")
     kwargs.setdefault("id_kind", "account")
-    return await viewers.resolve_viewer(
-        external_id=external_id, user_name=name, timestamp_ms=ts, name_match_window_ms=WINDOW, **kwargs
-    )
+    kwargs.setdefault("name_match_window_ms", WINDOW)
+    return await viewers.resolve_viewer(external_id=external_id, user_name=name, timestamp_ms=ts, **kwargs)
 
 
 async def _row(store: SQLiteDatabase, viewer_id: int) -> Any:
@@ -72,6 +72,26 @@ async def test_new_id_links_to_old_viewer_by_current_name_within_window(store: S
     # 之后同一个 open_id 直接按 ID 命中
     assert (await _resolve(viewers, OPEN_ID, "甲", 2 * WINDOW, id_kind="open", open_app_id="app1")).outcome == (
         "matched_id"
+    )
+
+
+async def test_zero_window_never_links_by_name_and_only_suggests(store: SQLiteDatabase) -> None:
+    """时限为 0（默认配置，不自动关联）：同名、昵称同一时刻刚出现过、唯一候选，也不认作同一人——
+    先建新观众照常处理消息，挂一条并入建议等运营者确认；老观众身上不多出这个新 ID。
+
+    新 ID 与老观众昵称出现在同一毫秒：时限 0 若只靠"间隔不超过时限"判断，这一刻仍会关联。
+    """
+    viewers = store.viewers
+    old = await _resolve(viewers, "1001", "甲", 1_000)
+    newcomer = await _resolve(viewers, OPEN_ID, "甲", 1_000, id_kind="open", open_app_id="app1", name_match_window_ms=0)
+    assert newcomer.outcome == "pending" and newcomer.viewer_id != old.viewer_id
+    assert newcomer.candidate_id == old.viewer_id
+    old_row, new_row = await _row(store, old.viewer_id), await _row(store, newcomer.viewer_id)
+    assert (old_row["account_id"], old_row["open_id"]) == ("1001", None)
+    assert (new_row["open_id"], new_row["link_status"], new_row["link_candidate_id"]) == (
+        OPEN_ID,
+        "pending",
+        old.viewer_id,
     )
 
 

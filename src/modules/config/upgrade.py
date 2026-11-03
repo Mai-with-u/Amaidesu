@@ -411,6 +411,26 @@ register_file_hook("infra.toml", "drop_simulator_text_limits", "2.0.40", _drop_s
 register_file_hook("tools.toml", "drop_tool_input_limits", "2.0.40", _drop_tool_input_limits)
 register_file_hook("storage.toml", "drop_memory_injection_limit", "2.0.40", _drop_memory_injection_limit)
 
+# storage.toml v2.0.41：按昵称自动关联观众改为默认关。``[viewers].name_match_window_days``
+# 默认由 90 改为 0（0 = 不自动关联，同名新 ID 只挂并入建议）。只改写仍是旧默认 90 的落盘值；
+# 有意设成 90 的与旧默认落盘值分不出，也会被改，所以改了就打一条 warning 点名，请使用者自查。
+_swap_name_match_window = swap_default("viewers.name_match_window_days", 90, 0)
+
+
+def _name_match_off_by_default(data: Dict[str, Any]) -> List[str]:
+    """storage.toml v2.0.41：按昵称自动关联默认关，旧默认 90 改为 0，其他值不动（幂等）。"""
+    changed = _swap_name_match_window(data)
+    if changed:
+        logger.warning(
+            "storage.toml [viewers].name_match_window_days 已从 90 改为 0：同名的新观众 ID 不再自动并入老观众，"
+            "改为在 WebUI 待确认页由你确认（起个同名新号就能冒充老观众）。如果 90 是你有意设的，请改回"
+        )
+    return changed
+
+
+# 生产钩子登记：storage.toml v2.0.41（[viewers].name_match_window_days 默认改为 0，不自动关联）
+register_file_hook("storage.toml", "name_match_off_by_default", "2.0.41", _name_match_off_by_default)
+
 
 # 口型调参键：tools.toml [tools.avatar.vts].config → avatar.toml [avatar.lipsync]
 # （口型分析器升为共享基础设施时调参先落 infra [avatar.lipsync]，avatar 域

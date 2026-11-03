@@ -1,6 +1,6 @@
 <template>
   <section class="identity-card">
-    <!-- 待确认：与老观众同名但超出关联时限或候选不唯一，等人工判断是不是同一个人 -->
+    <!-- 待确认：与老观众同名但没有自动并入（默认不按昵称自动关联；开了时限则是超出时限或候选不唯一），等人工判断是不是同一个人 -->
     <el-alert
       v-if="detail.link_status === 'pending'"
       type="warning"

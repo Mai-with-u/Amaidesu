@@ -15,7 +15,7 @@
 
 **观众与画像**
 
-- `viewers`：观众，一行一人（按平台），同一行记账号 ID 与开放平台 ID，带跨场统计；新出现的 ID 按当前昵称关联老观众，超出时限转人工确认（见 [观众身份映射](../decisions/047-viewer-identity-mapping.md)）。明细四表经 `viewer_id` 挂到观众，并保留收到时的原始外部 ID。
+- `viewers`：观众，一行一人（按平台），同一行记账号 ID 与开放平台 ID，带跨场统计；新出现的 ID 按当前昵称找同名老观众，默认只挂一条合并建议、由人工确认，配置了关联时限才在时限内自动关联（见 [观众身份映射](../decisions/047-viewer-identity-mapping.md) 与 [按昵称关联默认关](../decisions/064-viewer-name-match-off-by-default.md)）。明细四表经 `viewer_id` 挂到观众，并保留收到时的原始外部 ID。
 - `viewer_names`：观众用过的昵称（含曾用名），只在新建、改名、合并时写入。
 - `viewer_profiles`：观众印象文本，按观众 ID 存，收播时批量整理（见 [场次回顾与观众画像](../decisions/042-streamer-memory-recap-and-roster.md)）。
 - `session_recaps`：场次回顾，收播写、开播注入。

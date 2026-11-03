@@ -12,8 +12,9 @@
 2. ID 未命中时，在同平台、同 ``simulated`` 的观众里找当前昵称完全相同、且对应
    ID 列空着的候选。对应列已有另一个值的同名观众不是候选——同一种 ID 不同值
    就是另一个账号，说明昵称已经易主。
-3. 没有候选就新建；唯一候选且它的昵称在时限内出现过，就把新 ID 记到它身上；
-   超出时限或候选不止一个，则新建并标为待确认，建议并入昵称最近出现的候选。
+3. 没有候选就新建；时限大于 0、唯一候选且它的昵称在时限内出现过，就把新 ID
+   记到它身上；时限为 0（默认，不自动关联）、超出时限或候选不止一个，则新建并
+   标为待确认，建议并入昵称最近出现的候选。
 4. 占位昵称（采集器拿不到昵称时填的值、打码昵称）不参与匹配，也不覆盖已知昵称。
 
 只按当前昵称匹配，曾用名不参与：旧昵称可能已经被别人拿走。
@@ -230,18 +231,24 @@ class ViewerRepo(BaseRepo):
                 if viewer_id is not None:
                     _touch_name(conn, viewer_id, user_name, timestamp_ms)
                     return ViewerResolution(viewer_id, "matched_id")
-                # ID 没见过：按当前昵称找同平台的老观众，时限内唯一候选才自动关联
+                # ID 没见过：按当前昵称找同平台的老观众。时限为 0（默认）时一律不自动关联，
+                # 同名的新 ID 只挂并入建议：起个同名新号就能被认成老观众，要运营者确认才算数；
+                # 使用者填了时限，才在时限内唯一候选时自动关联
                 candidates = (
                     []
                     if is_placeholder_name(user_name)
                     else _name_candidates(conn, platform, id_kind, open_app_id, user_name, simulated)
                 )
-                if len(candidates) == 1 and timestamp_ms - int(candidates[0]["name_seen_ms"]) <= name_match_window_ms:
+                if (
+                    name_match_window_ms > 0
+                    and len(candidates) == 1
+                    and timestamp_ms - int(candidates[0]["name_seen_ms"]) <= name_match_window_ms
+                ):
                     linked = int(candidates[0]["id"])
                     _attach_id(conn, linked, id_kind, external_id, open_app_id)
                     _touch_name(conn, linked, user_name, timestamp_ms)
                     return ViewerResolution(linked, "linked_by_name", linked)
-                # 超出时限或候选不唯一：先建新观众照常处理消息，挂一条并入建议等人工确认
+                # 不自动关联、超出时限或候选不唯一：先建新观众照常处理消息，挂一条并入建议等人工确认
                 suggested = max(candidates, key=lambda r: int(r["name_seen_ms"]))["id"] if candidates else None
                 new_id = _insert_viewer(
                     conn,

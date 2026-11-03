@@ -34,13 +34,14 @@ class _FakeSessionManager:
 async def make_ledger(event_bus: EventBus, store: SQLiteDatabase):
     created: list[StorageLedger] = []
 
-    def _make(pk: Optional[int] = _FAKE_PK) -> StorageLedger:
+    def _make(pk: Optional[int] = _FAKE_PK, name_match_window_ms: Optional[int] = None) -> StorageLedger:
         ledger = StorageLedger(
             event_bus=event_bus,
             chat_repo=store.chat,
             viewer_repo=store.viewers,
             event_repo=store.events,
             session_manager=_FakeSessionManager(pk),
+            name_match_window_ms=name_match_window_ms,
         )
         created.append(ledger)
         return ledger
@@ -242,10 +243,34 @@ async def test_viewer_upsert_failure_keeps_main_row(
     assert await store.execute("SELECT * FROM viewers") == []
 
 
-async def test_switching_source_keeps_one_viewer_by_name(ledger, store: SQLiteDatabase, event_bus: EventBus) -> None:
-    # LAPLACE 源给账号 uid，换到官方开放平台源后只有 open_id：同名、时限内 → 仍是同一位观众
-    uid_user = RoomMessageUser(id="1001", name="老王")
-    open_user = RoomMessageUser(id="39b8fedb-60a5-4e29-ac75-b16955f7e632", name="老王", id_kind="open", open_app_id="a")
+_UID_USER = RoomMessageUser(id="1001", name="老王")
+_OPEN_USER = RoomMessageUser(id="39b8fedb-60a5-4e29-ac75-b16955f7e632", name="老王", id_kind="open", open_app_id="a")
+
+
+async def test_switching_source_by_default_splits_and_suggests_merge(
+    ledger, store: SQLiteDatabase, event_bus: EventBus
+) -> None:
+    """默认配置不按昵称自动关联：换源后同名的新 ID 先成为另一位观众，挂一条并入建议等运营者确认。"""
+    await _emit(event_bus, CoreEvents.ROOM_MESSAGE_DANMAKU, make_room_message(user=_UID_USER, content="一"))
+    await _emit(event_bus, CoreEvents.ROOM_MESSAGE_DANMAKU, make_room_message(user=_OPEN_USER, content="二"))
+
+    old, new = await store.execute("SELECT * FROM viewers ORDER BY id")
+    assert (old["account_id"], old["open_id"], old["message_count"]) == ("1001", None, 1)
+    assert (new["open_id"], new["message_count"], new["link_status"], new["link_candidate_id"]) == (
+        _OPEN_USER.id,
+        1,
+        "pending",
+        old["id"],
+    )
+
+
+async def test_switching_source_keeps_one_viewer_by_name_when_enabled(
+    make_ledger, store: SQLiteDatabase, event_bus: EventBus
+) -> None:
+    """使用者打开了按昵称关联（填了时限）：LAPLACE 源给账号 uid，换到官方开放平台源后只有 open_id，
+    同名、时限内 → 仍是同一位观众。"""
+    await make_ledger(name_match_window_ms=90 * 86_400_000).start()
+    uid_user, open_user = _UID_USER, _OPEN_USER
     await _emit(event_bus, CoreEvents.ROOM_MESSAGE_DANMAKU, make_room_message(user=uid_user, content="一"))
     await _emit(event_bus, CoreEvents.ROOM_MESSAGE_DANMAKU, make_room_message(user=open_user, content="二"))
 
