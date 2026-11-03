@@ -15,6 +15,7 @@ from src.modules.dashboard.api import (
     config,
     debug,
     events,
+    ledger,
     llm,
     logs,
     memory,
@@ -78,6 +79,8 @@ def create_app() -> FastAPI:
 
     # 记忆管理接口（列表检索 / 手工增改 / 删除 / 召回测试 / 统计）
     app.include_router(memory.router, prefix="/api/v1/memory", tags=["Memory"])
+    # 记忆账本：承诺与场次档案的查看、纠错与整理状态（与上一条共用 /api/v1/memory 前缀）
+    app.include_router(ledger.router, prefix="/api/v1/memory", tags=["Memory"])
 
     # 任务卡快照（进行中账本 + 已完结事件聚合，游戏 Agent 委派任务消费面）
     app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["Tasks"])

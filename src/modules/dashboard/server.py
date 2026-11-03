@@ -92,6 +92,8 @@ class DashboardServer:
         privacy_service: Optional[Any] = None,
         event_repo: Optional[Any] = None,
         recap_repo: Optional[Any] = None,
+        commitments_repo: Optional[Any] = None,
+        archive_repo: Optional[Any] = None,
         long_memory_store: Optional[Any] = None,
         rundown_transition_repo: Optional[Any] = None,
         storage_db_path: Optional[Path] = None,
@@ -176,6 +178,10 @@ class DashboardServer:
         # 注入 SessionRecapRepo 让 /api/v1/review 的总结面板读 session_recaps；
         # 未注入（极简启动/测试）时复盘聚合的回顾字段按缺数据降级为空
         self.recap_repo = recap_repo
+        # 注入承诺账本与场次档案仓储让 /api/v1/memory/commitments|archive 查看与纠错；
+        # 未注入（极简启动/测试）时这些端点返回 503
+        self.commitments_repo = commitments_repo
+        self.archive_repo = archive_repo
         # 注入长期记忆文件存储让 /api/v1/memory/long-term 查看与编辑 MEMORY.md；
         # 未注入（极简启动/测试）时该端点返回 503
         self.long_memory_store = long_memory_store

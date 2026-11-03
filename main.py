@@ -916,6 +916,9 @@ async def create_app_components(
             storage_db_path=database.db_path,
             # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
             recap_repo=database.recaps,
+            # 记忆账本：承诺与场次档案（下播整理写入；WebUI 查看与纠错）
+            commitments_repo=database.commitments,
+            archive_repo=database.archive,
             # 主播记忆页查看与编辑长期记忆文件（MEMORY.md）
             long_memory_store=long_memory_store,
             rundown_transition_repo=database.rundown_transitions,
@@ -1277,6 +1280,8 @@ async def _start_dashboard(
     privacy_service=None,
     event_repo=None,
     recap_repo=None,
+    commitments_repo=None,
+    archive_repo=None,
     long_memory_store=None,
     rundown_transition_repo=None,
     storage_db_path=None,
@@ -1340,6 +1345,9 @@ async def _start_dashboard(
             event_repo=event_repo,
             # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
             recap_repo=recap_repo,
+            # 记忆账本：承诺与场次档案的查看、纠错与整理状态
+            commitments_repo=commitments_repo,
+            archive_repo=archive_repo,
             # 主播记忆页查看与编辑长期记忆文件（MEMORY.md）
             long_memory_store=long_memory_store,
             rundown_transition_repo=rundown_transition_repo,
