@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from src.modules.storage.models.memory import ArchiveLine
 from src.modules.storage.repos._base import BaseRepo
@@ -68,10 +68,29 @@ class ArchiveRepo(BaseRepo):
                 row = conn.execute(
                     "SELECT s.id FROM live_sessions s"
                     " JOIN archive_lines a ON a.live_session_id = s.id"
-                    " WHERE s.kind=? GROUP BY s.id ORDER BY s.started_at_ms DESC LIMIT 1",
+                    " WHERE s.kind=? GROUP BY s.id ORDER BY s.started_at_ms DESC, s.id DESC LIMIT 1",
                     (kind,),
                 ).fetchone()
                 return int(row[0]) if row else None
+
+        return await self._run_in_executor(_exec)
+
+    async def list_archived_session_bounds(self, *, limit: int = 200) -> List[Tuple[int, int]]:
+        """有档案行的场次与它的开播时刻（开播时刻倒序），供回想工具逐场检索。
+
+        只用档案行判断"这一场有没有档案"，不看 live_chat：保留期清理会把早年弹幕删掉，
+        档案还在，回想工具不能因此查不到。
+        """
+
+        def _exec() -> List[Tuple[int, int]]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT s.id AS session_id, s.started_at_ms AS started_at_ms FROM live_sessions s"
+                    " JOIN archive_lines a ON a.live_session_id = s.id"
+                    " GROUP BY s.id ORDER BY s.started_at_ms DESC, s.id DESC LIMIT ?",
+                    (max(1, int(limit)),),
+                ).fetchall()
+                return [(int(row["session_id"]), int(row["started_at_ms"] or 0)) for row in rows]
 
         return await self._run_in_executor(_exec)
 

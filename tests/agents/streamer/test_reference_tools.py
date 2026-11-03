@@ -95,6 +95,7 @@ def test_planner_prompt_mentions_overview() -> None:
             personality="活泼",
             behavior_style="积极互动",
             boundaries_rule="",
+            inside_jokes="",
             game_rules="",
         )
     finally:

@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import shutil
 import tempfile
@@ -31,7 +30,6 @@ from src.agents.streamer.memory import (
     LongMemoryWriter,
     RegularsRosterWriter,
     SessionRecapWriter,
-    build_memory_tool_provider,
     collect_payment_material,
 )
 from src.agents.streamer.memory.long_memory import format_long_memory
@@ -39,14 +37,11 @@ from src.agents.streamer.memory.notes import absorb_promises
 from src.agents.streamer.memory.recap import clip_whole_sentences
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
-from src.modules.llm.payload import Response
 from src.modules.maibot_sync import SharedNotesStore
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.long_memory import LongMemoryBackend
 from src.modules.storage.models.chat import GiftRecord, GuardRecord, SuperChatRecord
-from src.modules.tools import ToolInvocation, ToolRegistry
-from tests.agents.streamer.helpers import ActiveSessionStub
+from src.modules.tools import ToolRegistry
 from tests.modules.maibot_sync.fakes import FakeNotesRemote
 from tests.modules.llm.fakes import FakeLLMManager
 from tests.modules.storage.viewer_seed import seed_gift, seed_message
@@ -761,83 +756,15 @@ async def test_payment_material_lines() -> None:
     assert await collect_payment_material(None, 1) == []
 
 
-# ---------------------------------------------------------------------------
-# 记忆工具
-# ---------------------------------------------------------------------------
-
-
-async def _invoke(provider: Any, name: str, **arguments: Any) -> str:
-    result = await provider.invoke(ToolInvocation(tool_name=name, arguments=arguments))
-    assert result.success, result.error_message
-    return result.content
-
-
-@pytest.mark.asyncio
-async def test_recall_session_tool(store: SQLiteDatabase) -> None:
-    pks = []
-    for started in (1_000, 5_000, 9_000):
-        sid = await _ended_session(store, started=started, ended=started + 60_000)
-        await store.recaps.upsert_recap(
-            live_session_id=sid, started_at_ms=started, ended_at_ms=started + 60_000, recap_text=f"第{sid}场回顾"
-        )
-        pks.append(sid)
-    assert pks == [1, 2, 3]
-    rehearsal_pk = await _ended_session(store, started=20_000, ended=30_000, kind="rehearsal")
-    await store.recaps.upsert_recap(
-        live_session_id=rehearsal_pk, started_at_ms=20_000, ended_at_ms=30_000, recap_text="彩排回顾"
-    )
-    current = {"pk": 3, "kind": "live"}
-    provider = build_memory_tool_provider(
-        recap_repo=store.recaps,
-        profile_repo=store.viewer_profiles,
-        current_session_provider=lambda: current["pk"],
-        current_kind_provider=lambda: current["kind"],
-    )
-    assert {spec.full_name for spec in provider.list_tools()} == {"memory_recall_session", "memory_recall_viewer"}
-
-    assert "第2场回顾" in await _invoke(provider, "memory_recall_session")  # 本场（3）排除
-    assert "第1场回顾" in await _invoke(provider, "memory_recall_session", n_back=2)
-    assert "没有那么早" in await _invoke(provider, "memory_recall_session", n_back=5)
-
-    current["pk"] = None  # 未开播：上一场就是最近一场正式场（更晚的彩排场不算）
-    assert "第3场回顾" in await _invoke(provider, "memory_recall_session")
-
-    current["kind"] = "rehearsal"  # 彩排里往前数只数彩排场
-    assert "彩排回顾" in await _invoke(provider, "memory_recall_session")
-    assert "没有那么早" in await _invoke(provider, "memory_recall_session", n_back=2)
-
-
-@pytest.mark.asyncio
-async def test_recall_viewer_tool(store: SQLiteDatabase) -> None:
-    vid = await seed_message(store.viewers, platform="bilibili", user_id="u1", user_name="老王", timestamp_ms=1)
-    await store.viewer_profiles.upsert_profile(viewer_id=vid, profile_text="老粉，爱看挖矿", last_compressed_at_ms=1)
-    provider = build_memory_tool_provider(
-        recap_repo=store.recaps, profile_repo=store.viewer_profiles, viewer_repo=store.viewers
-    )
-
-    assert "老粉，爱看挖矿" in await _invoke(provider, "memory_recall_viewer", nickname="老王")
-    assert "老粉，爱看挖矿" in await _invoke(provider, "memory_recall_viewer", viewer_id=vid)
-    assert "没找到" in await _invoke(provider, "memory_recall_viewer", nickname="路人")
-    # 改名后用以前的名字也能找到，并提醒主播对方现在叫什么
-    await seed_message(store.viewers, platform="bilibili", user_id="u1", user_name="王老", timestamp_ms=2)
-    by_old_name = await _invoke(provider, "memory_recall_viewer", nickname="老王")
-    assert "老粉，爱看挖矿" in by_old_name and "现在叫「王老」" in by_old_name
-    assert "请提供" in await _invoke(provider, "memory_recall_viewer")
-
-
-# ---------------------------------------------------------------------------
-# StreamerAgent 接线
-# ---------------------------------------------------------------------------
-
-
 def _build_agent(
     store: SQLiteDatabase | None,
     llm: Any,
-    registry: ToolRegistry | None = None,
+    tool_registry: ToolRegistry | None = None,
     *,
     session_manager: Any = None,
     **memory: Any,
 ) -> StreamerAgent:
+    """装一个只接账本仓储的主播 Agent（旧三份记忆在本阶段已停写）。"""
     config = StreamerConfig.from_dict(
         {
             "proactive": {"enabled": False},
@@ -853,294 +780,61 @@ def _build_agent(
             "sessions_repo": store.sessions,
             "topic_repo": store.topics,
             "viewer_repo": store.viewers,
-            "viewer_profile_repo": store.viewer_profiles,
-            "recap_repo": store.recaps,
             "event_repo": store.events,
-            "long_memory_store": store.long_memory,
+            "commitments_repo": store.commitments,
+            "archive_repo": store.archive,
         }
     return StreamerAgent(
         config=config,
         llm_manager=llm,
         prompt_manager=_prompts(),
-        tool_registry=registry,
+        tool_registry=tool_registry,
         session_manager=session_manager,
         **repos,
     )
 
 
-@pytest.mark.asyncio
-async def test_agent_registers_memory_tools_only_with_repos(store: SQLiteDatabase) -> None:
+# ---------------------------------------------------------------------------
+# 账本接线：回想工具与常驻简报
+# ---------------------------------------------------------------------------
+
+
+async def test_agent_registers_memory_recall_and_retired_tools_stay_gone(store: SQLiteDatabase) -> None:
+    """阶段 3b 起只有一个记忆工具 memory_recall；旧的三个工具不再注册。"""
     registry = ToolRegistry()
-    agent = _build_agent(store, _llm(), registry)
+    agent = _build_agent(store, FakeLLMManager(), tool_registry=registry)
     agent._register_tools()
-    assert registry.has("memory_recall_session") and registry.has("memory_recall_viewer")
-    assert registry.visible_to_of("memory_recall_session") == ["streamer"]
 
-    bare_registry = ToolRegistry()
-    bare = _build_agent(None, _llm(), bare_registry)
-    bare._register_tools()
-    assert not bare_registry.has("memory_recall_session")
+    names = {spec.full_name for spec in registry.list_tools(for_agent="streamer")}
+    assert "memory_recall" in names
+    assert not names & {"memory_recall_session", "memory_recall_viewer", "streamer_notebook"}
 
 
-@pytest.mark.asyncio
-async def test_live_started_loads_previous_recap(store: SQLiteDatabase) -> None:
-    """开播：读出最近一场同类型回顾（排除本场）装进参考段；关注入时为空。"""
-    live_pk = await _ended_session(store, started=1_000, ended=2_000)
-    rehearsal_pk = await _ended_session(store, started=3_000, ended=4_000, kind="rehearsal")
-    await store.recaps.upsert_recap(
-        live_session_id=live_pk, started_at_ms=1_000, ended_at_ms=2_000, recap_text="上场挖到钻石"
+async def test_refresh_brief_reads_previous_archive_and_pending_commitments(store: SQLiteDatabase) -> None:
+    """常驻简报取上一场档案与不针对人、不挂游戏的未了结承诺。"""
+    previous_pk = await _ended_session(store, started=1_000, ended=2_000)
+    await store.archive.insert_line(
+        live_session_id=previous_pk,
+        text="Minecraft：水车搭好了",
+        quote="水车搭好啦",
+        evidence_chat_id=1,
     )
-    await store.recaps.upsert_recap(
-        live_session_id=rehearsal_pk, started_at_ms=3_000, ended_at_ms=4_000, recap_text="调试时乱说的"
-    )
-    agent = _build_agent(store, _llm())
-    await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=9), "test")
-    assert "上场挖到钻石" in agent._session_recap_text()
-    assert "调试时乱说的" not in agent._session_recap_text()
+    await store.commitments.insert_commitment(what="继续炸 TNT", quote="下次接着炸 TNT")
+    # 对某位观众的、挂游戏的都不进常驻简报
+    await store.commitments.insert_commitment(what="给 ta 盖房子", viewer_id=9)
+    await store.commitments.insert_commitment(what="继续挖矿", game="Minecraft")
 
-    rehearsal = _build_agent(store, _llm())
-    await rehearsal._on_live_started("live.started", LiveStartedPayload(live_session_id=9, kind="rehearsal"), "test")
-    assert "调试时乱说的" in rehearsal._session_recap_text()
-    assert "上场挖到钻石" not in rehearsal._session_recap_text()
+    agent = _build_agent(store, FakeLLMManager())
+    await agent._refresh_memory_brief()
 
-    muted = _build_agent(store, _llm(), recap_inject_count=0)
-    await muted._on_live_started("live.started", LiveStartedPayload(live_session_id=2), "test")
-    assert muted._session_recap_text() == ""
+    brief = agent.memory_brief_text
+    assert "上一场：" in brief and "[档#" in brief and "水车搭好啦" in brief
+    assert "下次接着炸 TNT" in brief
+    assert "盖房子" not in brief and "继续挖矿" not in brief
+    assert len(agent.memory_brief_commitment_ids) == 1
 
 
-@pytest.mark.asyncio
-async def test_live_started_loads_long_memory_of_same_kind(store: SQLiteDatabase) -> None:
-    """开播按场次类型读出整份长期记忆装进槽位（决策与快嘴两层都读它）；关掉开关就不装。"""
-    await store.long_memory.write("live", "正式线的笔记")
-    await store.long_memory.write("rehearsal", "彩排线的笔记")
-
-    agent = _build_agent(store, _llm())
-    await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=9), "test")
-    assert agent._scope.long_memory == "正式线的笔记"
-    await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=10, kind="rehearsal"), "test")
-    assert agent._scope.long_memory == "彩排线的笔记"
-
-    disabled = _build_agent(store, _llm(), long_memory_enabled=False)
-    await disabled._on_live_started("live.started", LiveStartedPayload(live_session_id=9), "test")
-    assert disabled._scope.long_memory == ""
-
-
-@pytest.mark.asyncio
-async def test_long_memory_is_routed_by_viewer_and_game(store: SQLiteDatabase) -> None:
-    """决策层的系统提示词只拿全场条目、且只拿开着的游戏的；对某位观众的约定在 ta 发言时另给。
-    嘴不拿任何记忆（没有笔记回调可读），所以这里只验决策层。
-
-    只读穿透 agent._planner 的两个笔记回调（无公开观测面）。
-    """
-    await store.long_memory.write(
-        "live",
-        "## 答应过的事\n- 答应老王下次玩恐怖游戏〔未兑现 · 对 老王#12 · 最近 #1〕\n"
-        "- 答应全场周末更新视频〔未兑现 · 最近 #1〕\n"
-        "## 长线目标\n- 给苦力怕盖海景房〔游戏 minecraft · 最近 #1〕",
-    )
-    agent = _build_agent(store, _llm(), ToolRegistry())
-    await agent._on_live_started("live.started", LiveStartedPayload(live_session_id=9), "test")
-
-    planner_view = agent._planner._long_memory_provider()
-    assert "答应全场周末更新视频（还没兑现）" in planner_view
-    assert "老王" not in planner_view and "海景房" not in planner_view  # minecraft 没接入
-    assert agent._planner._person_notes_provider(12) == ["答应过的事：答应老王下次玩恐怖游戏（还没兑现）"]
-    assert agent._planner._person_notes_provider(13) == []
-
-
-@pytest.mark.asyncio
-async def test_bootstrap_backfills_recap_roster_and_section(store: SQLiteDatabase) -> None:
-    """启动善后：补写漏掉的回顾、补跑该场画像更新，并把回顾装进上场回顾段。"""
-    pk = await _ended_session(store)
-    await _streamer_says(store, pk, "下场继续挖", 2_000)
-    for i in range(3):
-        await _viewer_says(store, pk, "u1", "老王", f"第{i}句", 3_000 + i)
-    reply = _ops({"op": "add", "section": "长线目标", "text": "补写结果"})
-    agent = _build_agent(store, _llm(reply))
-
-    await agent._bootstrap_recaps()
-
-    assert await store.recaps.get_recap(live_session_id=pk) is not None
-    assert await _profile_text(store, "u1") == reply
-    assert "补写结果" in agent._session_recap_text()
-    assert "- 补写结果〔" in await store.long_memory.read("live")  # 补写的场次也合并进长期记忆
-    assert "- 补写结果〔" in agent._scope.long_memory
-    assert await store.recaps.list_unsettled_sessions(limit=5) == []  # 补完记整理完成
-
-
-@pytest.mark.asyncio
-async def test_live_ended_settles_recap_and_roster(store: SQLiteDatabase) -> None:
-    """收播：后台写本场回顾 + 更新常客；空场次与关闭开关时不整理。"""
-    pk = await _ended_session(store)
-    await _streamer_says(store, pk, "下场继续挖", 2_000)
-    for i in range(3):
-        await _viewer_says(store, pk, "u1", "老王", f"第{i}句", 3_000 + i)
-    reply = _ops({"op": "add", "section": "长线目标", "text": "整理结果"})
-    agent = _build_agent(store, _llm(reply))
-
-    await agent._on_live_ended("live.ended", LiveEndedPayload(live_session_id=pk), "test")
-    await asyncio.gather(*agent._memory_tasks)
-
-    recap = await store.recaps.get_recap(live_session_id=pk)
-    assert recap is not None and recap.settled_at_ms is not None  # 三步走完记整理完成
-    assert await _profile_text(store, "u1") == reply
-    assert "- 整理结果〔" in await store.long_memory.read("live")  # 回顾之后合并进长期记忆
-
-    other_pk = await _ended_session(store)
-    await _streamer_says(store, other_pk, "又一场", 2_000)
-    llm = _llm("不该写")
-    disabled = _build_agent(store, llm, recap_enabled=False, roster_enabled=False, long_memory_enabled=False)
-    await disabled._on_live_ended("live.ended", LiveEndedPayload(live_session_id=other_pk), "test")
-    await disabled._on_live_ended(
-        "live.ended", LiveEndedPayload(live_session_id=other_pk, empty_discarded=True), "test"
-    )
-    assert not disabled._memory_tasks
-    llm.generate.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_notebook_written_live_feeds_settle_after_app_stop(store: SQLiteDatabase) -> None:
-    """直播中写的备忘录随写入落进场次行：应用停机后下次启动补整理，回顾原料里仍有它。"""
-    pk = await store.sessions.insert_live_session(stream_id="room", platform="bilibili", started_at_ms=1_000)
-    await _streamer_says(store, pk, "下场继续挖", 2_000)
-    pointer = ActiveSessionStub(pk)
-    registry = ToolRegistry()
-    agent = _build_agent(store, _llm(), registry, session_manager=pointer)
-    agent._register_tools()
-    await registry.invoke(ToolInvocation(tool_name="streamer_notebook", arguments={"content": "答应老王挖钻石"}))
-
-    # 应用停机：场次结账，Agent 已停、收播整理留给下次启动
-    await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=9_000)
-    pointer.active_pk = None
-    llm = _llm("补写的回顾")
-    await _build_agent(store, llm)._bootstrap_recaps()
-
-    recap_prompt = next(
-        call.args[0] for call in llm.generate.await_args_list if call.args[0].startswith("以下是这一场直播留下的记录")
-    )
-    assert "答应老王挖钻石" in recap_prompt
-
-
-@pytest.mark.asyncio
-async def test_stop_cancels_memory_task_stuck_on_llm(store: SQLiteDatabase) -> None:
-    """停止时记忆整理正停在 LLM 调用上：直接取消，停止返回后不再调模型、回顾不落库。"""
-    pk = await _ended_session(store)
-    await _streamer_says(store, pk, "下场继续挖", 2_000)
-    gate = asyncio.Event()
-    llm = FakeLLMManager(gate=gate)
-    agent = _build_agent(store, llm)
-    # 启动善后补写这场漏掉的回顾，补写停在 LLM 调用上
-    await agent.start()
-    await llm.gate_reached.wait()
-    [backfill] = agent._memory_tasks
-
-    await agent.stop()
-
-    assert backfill.cancelled() and not agent._memory_tasks
-    assert llm.calls == []
-    assert await store.recaps.get_recap(live_session_id=pk) is None
-
-
-@pytest.mark.asyncio
-async def test_live_ended_after_stop_leaves_settle_to_next_boot(store: SQLiteDatabase) -> None:
-    """应用停机路径（Agent 先停、live.ended 后到）不起收播整理，下次启动的补写把这场补上。"""
-    llm = FakeLLMManager()
-    agent = _build_agent(store, llm)
-    await agent.start()
-    await asyncio.gather(*agent._memory_tasks)  # 启动善后无场次可补，空跑结束
-    await agent.stop()
-
-    pk = await _ended_session(store)
-    await _streamer_says(store, pk, "下场继续挖", 2_000)
-    await agent._on_live_ended("live.ended", LiveEndedPayload(live_session_id=pk, reason="进程退出"), "test")
-
-    assert not agent._memory_tasks and llm.calls == []
-    assert await store.recaps.get_recap(live_session_id=pk) is None
-
-    rebooted = _build_agent(store, FakeLLMManager())
-    await rebooted._bootstrap_recaps()
-    assert await store.recaps.get_recap(live_session_id=pk) is not None
-
-
-def _settle_step(call: dict[str, Any]) -> str:
-    """按提示词认出一次 LLM 调用属于收播整理的哪一步。"""
-    prompt = str(call["input"])
-    if prompt.startswith("以下是这一场直播留下的记录"):
-        return "回顾"
-    if prompt.startswith("【现在的笔记】"):
-        return "长期记忆"
-    if prompt.startswith("观众："):
-        return "画像"
-    return "其他"
-
-
-async def _release_one(llm: FakeLLMManager, gate: asyncio.Event) -> None:
-    """放行停在闸门前的那一次调用，再等下一次调用停到闸门前（闸门随即关回）。"""
-    llm.gate_reached.clear()
-    gate.set()
-    gate.clear()
-    await llm.gate_reached.wait()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("finished_steps", "resumed_steps"),
-    [(1, ["长期记忆", "画像"]), (2, ["画像"])],
-    ids=["stalled_at_long_memory", "stalled_at_roster"],
-)
-async def test_stop_mid_settle_resumes_remaining_steps_on_next_boot(
-    store: SQLiteDatabase, finished_steps: int, resumed_steps: list[str]
-) -> None:
-    """回顾写完后整理被停止打断：这场留在待办里，下次启动只补没做完的步骤，回顾不重写、长期记忆不重并。"""
-    pk = await _ended_session(store)
-    await _streamer_says(store, pk, "下场继续挖", 2_000)
-    for i in range(3):
-        await _viewer_says(store, pk, "u1", "老王", f"第{i}句", 3_000 + i)
-    gate = asyncio.Event()
-    llm = FakeLLMManager(
-        Response(success=True, content=_ops({"op": "add", "section": "长线目标", "text": "停机前写的"})), gate=gate
-    )
-    agent = _build_agent(store, llm)
-    # 启动善后补写这场：放行前几步，停在下一步的 LLM 调用上
-    await agent.start()
-    await llm.gate_reached.wait()
-    for _ in range(finished_steps):
-        await _release_one(llm, gate)
-
-    await agent.stop()
-
-    recap = await store.recaps.get_recap(live_session_id=pk)
-    assert recap is not None and "停机前写的" in recap.recap_text and recap.settled_at_ms is None
-    assert (recap.long_memory_merged_at_ms is not None) == (finished_steps >= 2)
-    assert [row.live_session_id for row in await store.recaps.list_unsettled_sessions(limit=5)] == [pk]
-
-    rebooted_llm = FakeLLMManager(
-        Response(success=True, content=_ops({"op": "add", "section": "长线目标", "text": "重启后补的"}))
-    )
-    rebooted = _build_agent(store, rebooted_llm)
-    await rebooted._bootstrap_recaps()
-
-    assert [_settle_step(call) for call in rebooted_llm.calls] == resumed_steps
-    recap = await store.recaps.get_recap(live_session_id=pk)
-    assert recap is not None and "停机前写的" in recap.recap_text and recap.settled_at_ms is not None
-    expected_memory = "停机前写的" if finished_steps >= 2 else "重启后补的"
-    assert f"- {expected_memory}〔" in await store.long_memory.read("live")
-    assert "重启后补的" in await _profile_text(store, "u1")
-
-    # 整理已记完成：再启动一次没有待办，不调模型
-    rebooted_llm.calls.clear()
-    await rebooted._bootstrap_recaps()
-    assert rebooted_llm.calls == []
-
-
-@pytest.mark.asyncio
-async def test_settle_without_recap_stays_pending(store: SQLiteDatabase) -> None:
-    """回顾没写成（模型失败）的场次记不上整理完成，下次启动仍会再试回顾。"""
-    pk = await _ended_session(store)
-    await _streamer_says(store, pk, "下场继续挖", 2_000)
-    agent = _build_agent(store, FakeLLMManager(fail=True))
-
-    await agent._settle_session(pk)
-
-    assert await store.recaps.get_recap(live_session_id=pk) is None
-    assert [row.live_session_id for row in await store.recaps.list_unsettled_sessions(limit=5)] == [pk]
+async def test_brief_is_empty_without_ledger_material(store: SQLiteDatabase) -> None:
+    agent = _build_agent(store, FakeLLMManager())
+    await agent._refresh_memory_brief()
+    assert agent.memory_brief_text == "" and agent.memory_brief_commitment_ids == ()

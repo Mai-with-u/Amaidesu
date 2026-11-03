@@ -24,7 +24,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.memory.tools import NOTEBOOK_CLOSED_REPLY
 from src.agents.streamer.planner import RoundOutcome
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.agents.streamer.utterance_queue import UtteranceQueue
@@ -133,8 +132,9 @@ def _no_more_calls() -> Response:
     return Response(success=True, content="")
 
 
-def _recall_call() -> ToolCall:
-    return ToolCall(id="call_recall", name="memory_recall_session", arguments={"n_back": 1})
+def _recall_call(query: str = "钻石") -> ToolCall:
+    """回想工具（阶段 3b 起由 memory_recall 取代旧的两个回想工具）。"""
+    return ToolCall(id="call_recall", name="memory_recall", arguments={"query": query, "scope": "all"})
 
 
 def _routed_llm(planner_steps: List[Response]) -> MagicMock:
@@ -201,17 +201,19 @@ async def _started_signoff_agent(
         chat_repo=stack.store.chat,
         sessions_repo=stack.store.sessions if with_sessions else None,
         session_manager=stack.manager,
-        recap_repo=stack.store.recaps,
-        viewer_profile_repo=stack.store.viewer_profiles,
+        # 下播整理走账本（承诺与场次档案）：接上仓储才会在道别后起一次 summary 档位整理
+        commitments_repo=stack.store.commitments,
+        archive_repo=stack.store.archive,
     )
     await agent.start()
     return agent
 
 
 async def _past_session_with_recap(store: SQLiteDatabase, *, kind: SessionKind, recap: str) -> None:
+    """造一场已整理过的同类型场次：常驻简报取它的档案行（阶段 3b 起不再注入旧回顾文本）。"""
     pk = await store.sessions.insert_live_session(stream_id="room", platform="bilibili", started_at_ms=1_000, kind=kind)
     await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=9_000)
-    await store.recaps.upsert_recap(live_session_id=pk, started_at_ms=1_000, ended_at_ms=9_000, recap_text=recap)
+    await store.archive.insert_line(live_session_id=pk, text=recap, quote=recap, evidence_chat_id=1)
 
 
 async def _viewer_says(store: SQLiteDatabase, pk: int, name: str, text: str) -> None:
@@ -262,11 +264,13 @@ async def test_signoff_round_reads_and_lands_in_the_ending_session(
     await _past_session_with_recap(store, kind="live", recap="正式那场挖到了钻石")
     await _past_session_with_recap(store, kind="rehearsal", recap="彩排那场试了新皮肤")
     # 道别那一轮：先回想上一场，再开口道别；下播后的一轮调试闲聊：只回想上一场、不开口
+    # 道别那一轮只查属于它那一类场次的档案；下播后的轮次没有进行中场次，按正式场查
+    signoff_query = "新皮肤" if "彩排" in recalled else "钻石"
     llm = _routed_llm(
         [
-            _planner_step(_recall_call()),
+            _planner_step(_recall_call(signoff_query)),
             _planner_step(_reply_call()),
-            _planner_step(_recall_call()),
+            _planner_step(_recall_call("钻石")),
             _no_more_calls(),
         ]
     )
@@ -288,11 +292,9 @@ async def test_signoff_round_reads_and_lands_in_the_ending_session(
     assert recalled in second and other_line not in second, "道别那一轮按正在结束的场次类型回想上一场"
     assert [speech.live_session_id for speech in live_stack.speeches] == [pk], "道别句带的是刚结束那一场的编号"
     assert [row.content for row in stored] == [FAREWELL], "记账器把道别句落进刚结束的那一场"
-    # 彩排场那一组才分得出来：正在结束的场次若漏出道别那一轮（比如挂在 Agent 上没清掉），
-    # 下播后的回想仍只翻彩排场
-    assert "正式那场挖到了钻石" in after_recall and "彩排那场试了新皮肤" not in after_recall, (
-        "道别那一轮跑完，正在结束的场次不再左右之后轮次的场次类型"
-    )
+    # 道别那一轮跑完之后：常驻简报仍是这一场开播时定的那份（整场不变，不会因为下播就换一份），
+    # 回想工具不按场次类型过滤，往场的档案照样查得到
+    assert "正式那场挖到了钻石" in after_recall, "道别那一轮跑完，回想工具照样能翻到往场的档案"
 
 
 async def test_signoff_during_new_session_does_not_leak_into_concurrent_round(live_stack: _LiveStack) -> None:
@@ -304,7 +306,7 @@ async def test_signoff_during_new_session_does_not_leak_into_concurrent_round(li
     gate, entered = asyncio.Event(), asyncio.Event()
     # 并发的常规轮次：先回想上一场，再开口打招呼
     regular_steps = [
-        _planner_step(_recall_call()),
+        _planner_step(_recall_call("钻石")),
         _planner_step(_reply_call(topic="和观众打招呼", guidance="欢迎大家来看正式场")),
     ]
     llm, prompt = _gated_signoff_llm(gate, entered, regular_steps), stub_prompt()
@@ -394,174 +396,7 @@ def _logged(loguru_capture: Any, text: str) -> bool:
     return any(text in record["message"] for record in loguru_capture.records)
 
 
-async def test_new_session_opened_during_signoff_keeps_its_own_state(
-    live_stack: _LiveStack, loguru_capture: Any
-) -> None:
-    """彩排场手动下播，道别那一轮还在等模型时开了正式场：彩排场的备忘录不带进正式场（决策上下文与
-    场次行都没有）；道别跑完后不再清场，正式场开场的那条消息和记下的备忘录照样留在决策上下文里。
-
-    顺序：彩排场一轮记备忘录 -> 下播，道别停在闸前 -> 开正式场，等开播回调走完先看场次行 ->
-    开场一轮记备忘录 -> 放行道别 -> 等下播回调走完（它最后排上收播整理，整理用 summary 档位调一次
-    模型）-> 正式场再来一轮，看决策上下文里正式场的东西还在不在。
-    """
-    store, manager = live_stack.store, live_stack.manager
-    farewell = _Gate(_planner_step(_reply_call()))
-    llm = _scripted_llm(
-        [
-            _planner_step(_notebook_call(REHEARSAL_NOTE)),
-            _no_more_calls(),
-            farewell,
-            _planner_step(_notebook_call(LIVE_NOTE)),
-            _no_more_calls(),
-            _no_more_calls(),
-        ]
-    )
-    agent = await _started_signoff_agent(live_stack, llm, with_sessions=True)
-    try:
-        rehearsal = await manager.open_session(kind="rehearsal", title="彩排")
-        await wait_until(agent.is_live_active, what="彩排场开播回调跑完")
-        # 彩排场得有一条落库的消息：调试注入的弹幕不落库，空场次结账时整行丢弃
-        await _viewer_says(store, rehearsal, "阿杰", "彩排一下TNT阵")
-        await agent.debug_test_decision(batch=[{"nickname": "阿杰", "text": "记一下TNT阵"}])
-        await manager.close_session(reason="彩排结束")
-        await asyncio.wait_for(farewell.entered.wait(), timeout=10)  # 道别那一轮停在 Planner 等放行
-
-        live = await manager.open_session(kind="live", title="正式开播")
-        await wait_until(lambda: _logged(loguru_capture, f"场次已开启（id={live}）"), what="正式场开播回调走完")
-        live_row_at_open = await store.sessions.get_live_session(live_session_id=live)
-        await agent.debug_test_decision(batch=[{"nickname": "小鱼", "text": "正式场开始啦"}])
-
-        farewell.released.set()
-        await wait_until(lambda: len(live_stack.speeches) == 1, what="放行后道别那一轮说出道别句")
-        await wait_until(lambda: _profile_calls(llm, "summary") >= 1, what="下播回调走完、排上了收播整理")
-        await agent.debug_test_decision(batch=[{"nickname": "小鱼", "text": "刚才记了什么"}])
-        rehearsal_row = await store.sessions.get_live_session(live_session_id=rehearsal)
-        live_row = await store.sessions.get_live_session(live_session_id=live)
-    finally:
-        await agent.stop()
-
-    requests = _planner_requests(llm)
-    assert len(requests) == 6
-    live_opening, after_signoff = requests[3], requests[5]
-    assert live_row_at_open is not None and live_row_at_open.notebook_text == "", "彩排场的备忘录不落进正式场的场次行"
-    assert REHEARSAL_NOTE not in live_opening, "彩排场的备忘录不带进正式场的决策上下文"
-    assert "正式场开始啦" in after_signoff, "道别跑完不清场：正式场开场那条消息还在对话里"
-    assert LIVE_NOTE in after_signoff, "道别跑完不清场：正式场开场记下的备忘录还在"
-    assert rehearsal_row is not None and rehearsal_row.notebook_text == REHEARSAL_NOTE
-    assert live_row is not None and live_row.notebook_text == LIVE_NOTE, "正式场的场次行只有正式场自己的备忘录"
-
-
 @pytest.mark.parametrize("rehearsal_chat", [["彩排一下TNT阵"], []], ids=["有消息的彩排场", "空彩排场"])
-async def test_signoff_round_cannot_write_notebook_into_new_session(
-    live_stack: _LiveStack, rehearsal_chat: List[str]
-) -> None:
-    """道别那一轮想记备忘录：那一场已经结账，工具拒绝写入、回执让它改写进交接稿；道别期间新开的
-    正式场在决策上下文和场次行里都看不到这段道别笔记。空彩排场结账即删行、道别不交场次，同样如此。
-
-    顺序：彩排场下播，道别第一步（记备忘录）停在闸前 -> 开正式场跑一轮 -> 放行，道别第二步开口 ->
-    正式场再来一轮。
-    """
-    store, manager = live_stack.store, live_stack.manager
-    farewell = _Gate(_planner_step(_notebook_call(FAREWELL_NOTE)))
-    llm = _scripted_llm([farewell, _no_more_calls(), _planner_step(_reply_call()), _no_more_calls()])
-    agent = await _started_signoff_agent(live_stack, llm, with_sessions=True)
-    try:
-        rehearsal = await manager.open_session(kind="rehearsal", title="彩排")
-        await wait_until(agent.is_live_active, what="彩排场开播回调跑完")
-        for line in rehearsal_chat:
-            await _viewer_says(store, rehearsal, "阿杰", line)
-        await manager.close_session(reason="彩排结束")
-        await asyncio.wait_for(farewell.entered.wait(), timeout=10)
-
-        live = await manager.open_session(kind="live", title="正式开播")
-        await wait_until(agent.is_live_active, what="正式场开播回调跑完")
-        await agent.debug_test_decision(batch=[{"nickname": "小鱼", "text": "正式场开始啦"}])
-
-        farewell.released.set()
-        await wait_until(lambda: len(live_stack.speeches) == 1, what="放行后道别那一轮说出道别句")
-        await agent.debug_test_decision(batch=[{"nickname": "小鱼", "text": "刚才记了什么"}])
-        live_row = await store.sessions.get_live_session(live_session_id=live)
-    finally:
-        await agent.stop()
-
-    requests = _planner_requests(llm)
-    assert len(requests) == 4
-    farewell_second_step, live_after = requests[2], requests[3]
-    assert NOTEBOOK_CLOSED_REPLY in farewell_second_step, "备忘录工具回执告诉道别那一轮不再记"
-    assert FAREWELL_NOTE not in live_after, "道别笔记不进正式场的决策上下文"
-    assert live_row is not None and live_row.notebook_text == "", "道别笔记不落进正式场的场次行"
-
-
-@pytest.mark.parametrize(
-    ("viewer_lines", "how"),
-    [([], "close"), (["TNT阵还差最后一排没铺完"], "delete")],
-    ids=["空场次结账即丢弃", "删除进行中场次"],
-)
-async def test_signoff_for_a_session_whose_row_is_gone_is_not_stored(
-    live_stack: _LiveStack, viewer_lines: List[str], how: str
-) -> None:
-    """场次行已删或将删：道别照常跑，道别句不带这一场的编号、不落库，库里不留孤儿行。
-
-    空场次（开播后一条消息都没有）结账时整行丢弃；删除进行中场次时场次管理器先结束这一场、
-    发完 live.ended 紧接着删行，道别句要等模型才说出口，那时行早已删除。
-    """
-    store, manager = live_stack.store, live_stack.manager
-    llm = _routed_llm([_planner_step(_reply_call())])
-    agent = await _started_signoff_agent(live_stack, llm)
-    try:
-        pk = await manager.open_session(kind="live", title="要删的场")
-        await wait_until(agent.is_live_active, what="开播回调跑完")
-        for line in viewer_lines:
-            await _viewer_says(store, pk, "阿杰", line)
-
-        async def _delete() -> None:
-            await manager.delete_session(pk)
-
-        await _end_and_wait_signoff(live_stack, agent, _delete if how == "delete" else None)
-        await wait_until(lambda: len(live_stack.speeches) == 1, what="道别句的发言事件送达")
-    finally:
-        await agent.stop()
-
-    assert len(_planner_requests(llm)) == 1, "道别那一轮照常运行"
-    # 编号 0 且没有进行中场次可补：记账器按"无法归属场次"跳过，不落库
-    assert [speech.live_session_id for speech in live_stack.speeches] == [0], "不给道别句盖已删场次的编号"
-    assert await store.sessions.get_live_session(live_session_id=pk) is None
-    assert await store.chat.list_recent_live_chat(live_session_id=pk, limit=None) == [], "库里不留这一场的孤儿行"
-    assert live_stack.writes.assistant_sessions == []
-
-
-# ---------------------------------------------------------------------------
-# 队尾：下播整理前、停机前先等播放队列播完
-# ---------------------------------------------------------------------------
-
-
-class _GatedEngine:
-    """TTS 引擎替身：每句停在播放中，测试放行才播完；播放中被取消（停队列）的记为没播完。"""
-
-    def __init__(self) -> None:
-        self.started = asyncio.Event()
-        self.release = asyncio.Event()
-        self.finished: List[str] = []
-        self.cancelled: List[str] = []
-
-    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
-        self.started.set()
-        try:
-            await self.release.wait()
-        except asyncio.CancelledError:
-            self.cancelled.append(text)
-            raise
-        self.finished.append(text)
-
-
-@dataclass
-class _IdleWaits:
-    """播放队列空闲等待的记录：每次要等多久，以及有没有人开始等。"""
-
-    timeouts: List[Optional[int]] = field(default_factory=list)
-    entered: asyncio.Event = field(default_factory=asyncio.Event)
-
-
 def _watch_idle_waits(monkeypatch: pytest.MonkeyPatch, *, stuck: bool = False) -> _IdleWaits:
     """把播放队列的空闲等待（公开方法）换成记录版；``stuck`` 模拟 TTS 卡死：立即报"等满上限仍没播完"。
 
@@ -598,7 +433,12 @@ def _farewell_planner() -> MagicMock:
 def _tail_agent(engine: _GatedEngine, llm: Any = None, store: Optional[SQLiteDatabase] = None) -> StreamerAgent:
     """TTS 开着的主播；给了库就接上场次回顾整理（只开回顾这一步，用模型调用观察整理何时开始）。"""
     repos = (
-        {"chat_repo": store.chat, "sessions_repo": store.sessions, "recap_repo": store.recaps}
+        {
+            "chat_repo": store.chat,
+            "sessions_repo": store.sessions,
+            "commitments_repo": store.commitments,
+            "archive_repo": store.archive,
+        }
         if store is not None
         else {}
     )
@@ -632,6 +472,33 @@ async def _ended_session_with_lines(store: SQLiteDatabase) -> int:
 async def _started_with_idle_bootstrap(agent: StreamerAgent) -> None:
     await agent.start()
     await asyncio.gather(*agent._memory_tasks)  # 启动补写无场次可补，空跑结束
+
+
+class _GatedEngine:
+    """TTS 引擎替身：每句停在播放中，测试放行才播完；播放中被取消（停队列）的记为没播完。"""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.finished: List[str] = []
+        self.cancelled: List[str] = []
+
+    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled.append(text)
+            raise
+        self.finished.append(text)
+
+
+@dataclass
+class _IdleWaits:
+    """播放队列空闲等待的记录：每次要等多久，以及有没有人开始等。"""
+
+    timeouts: List[Optional[int]] = field(default_factory=list)
+    entered: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 async def test_settle_starts_after_signoff_line_finishes_playing(
@@ -728,7 +595,8 @@ async def test_signoff_schedules_no_settle_when_session_row_is_gone(
         planner=planner,
         chat_repo=store.chat,
         sessions_repo=store.sessions,
-        recap_repo=store.recaps,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
     )
     await _started_with_idle_bootstrap(agent)
     pk = await _ended_session_with_lines(store)

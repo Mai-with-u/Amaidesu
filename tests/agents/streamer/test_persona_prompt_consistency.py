@@ -35,6 +35,7 @@ def _render_channels(prompts: Any) -> Dict[str, str]:
             personality="活泼",
             behavior_style="积极互动",
             boundaries_rule="",
+            inside_jokes="",
             game_rules="",
         ),
         "replyer": prompts.render(

@@ -37,13 +37,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 from functools import partial
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
 from src.agents.streamer.delegation_workbench import DelegationWorkbench, observation_data
+from src.agents.streamer.memory.render import render_spoken_memory
 from src.agents.streamer.persona_rules import boundaries_line
 from src.agents.streamer.plan import ReplyRoundAttachment, assistant_speech_lines
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
@@ -110,6 +111,14 @@ class PlannerConfig(BaseConfig):
     cold_silence_ms: int = Field(default=45_000, ge=0, title="冷场提示阈值（毫秒）")
 
 
+def _parse_commitment_ref(raw: str) -> Optional[int]:
+    """点名编号解析：接受"约#7""#7""7"三种写法，其余返回 None。"""
+    text = raw.strip()
+    if "#" in text:
+        text = text.rsplit("#", 1)[1].strip()
+    return int(text) if text.isdigit() else None
+
+
 def _as_id_str(value: Any) -> str:
     """消息 ID 字段收敛：仅接受 str，其余（None/Mock 等）按空处理。"""
     return value if isinstance(value, str) else ""
@@ -144,6 +153,8 @@ class RoundOutcome:
     reply_duration_ms: int = 0
     reply_failures: int = 0
     speech_gate_bounces: int = 0
+    # 本轮点名的旧事编号（随 streamer.speech 落库，供"用上即停"与复盘核对）
+    memory_refs: List[int] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -160,11 +171,16 @@ class PlannerEnv:
     elapsed_live_provider: Optional[Callable[[], Optional[int]]] = None
     frame_provider: Optional[Callable[[], Optional[Any]]] = None
     frame_stale_warn_ms: int = 0
-    notebook_text_provider: Optional[Callable[[], str]] = None
-    # 长期笔记注入正文（开播时读出、整场不变；空串 = 没有或未启用）
-    long_memory_provider: Optional[Callable[[], str]] = None
-    # 长期笔记里只对某位观众的条目（按观众编号取；这位观众发言时进人物画像段）
-    person_notes_provider: Optional[Callable[[int], List[str]]] = None
+    # 常驻简报（开播时拼好、整场不变；空串 = 还没有可记的事）
+    brief_provider: Optional[Callable[[], str]] = None
+    # 常驻简报里出现的承诺编号（点名校验的合法名单之一）
+    brief_ids_provider: Optional[Callable[[], Sequence[int]]] = None
+    # 按编号取承诺（点名之后渲染说话档用；异步）
+    commitment_lookup: Optional[Callable[[int], Any]] = None
+    # 线索推送：按本批弹幕与当前开着的游戏算这一批想起来的事（异步）
+    memory_cues_provider: Optional[Callable[[List[Any], Sequence[str]], Any]] = None
+    # 当前开着的游戏名（游戏承诺卡只在这些游戏开着时推）
+    open_games_provider: Optional[Callable[[], Sequence[str]]] = None
     action_recorder: Optional[Callable[[str, str], None]] = None
     delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
 
@@ -197,29 +213,31 @@ class Planner:
         bot_name: str = "麦麦",
         personality: str = "",
         boundaries: str = "",
+        inside_jokes: str = "",
         env: Optional[PlannerEnv] = None,
     ) -> None:
         """初始化 Planner。
 
-        Args:
-            config: Planner 配置（``PlannerConfig``；None 即全默认）。
-            llm_service: LLM 管理器，需提供
-                ``async generate(messages, *, tools=..., profile=...) -> payload.Response``
-                与 ``is_profile_visual(profile) -> bool``。
-            prompt_service: 提示词管理器，需提供 ``render(name, **vars) -> str``。
-            room_state: 直播间态势规则层实例。
-            tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作类工具）。
-            profile_repo: 观众画像查询（``ViewerProfileRepo`` 结构契约，只用
-                ``get_profile_text``）；None 时无画像注入。
-            viewer_repo: ``ViewerRepo``（观众仓储）——画像注入时把消息里的外部 ID
-                换算成观众、实时取昵称与曾用名（昵称会漂移不进画像文本）；None 时无画像注入。
-            context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
-            behavior_style: 人设行为准则（决策侧）。
-            bot_name: 主播名字（她是谁）。
-            personality: 主播性格描述——替她挑话题、定态度的依据。
-            boundaries: 边界栏——她不答应的事（人设字段，运营者可改；空串 = 不带）。
-            env: 运行环境（迟绑定依赖集合，见 :class:`PlannerEnv`）；缺省
-                ``PlannerEnv()`` 即全部可选依赖降级缺席。
+            Args:
+                config: Planner 配置（``PlannerConfig``；None 即全默认）。
+                llm_service: LLM 管理器，需提供
+                    ``async generate(messages, *, tools=..., profile=...) -> payload.Response``
+                    与 ``is_profile_visual(profile) -> bool``。
+                prompt_service: 提示词管理器，需提供 ``render(name, **vars) -> str``。
+                room_state: 直播间态势规则层实例。
+                tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作类工具）。
+                profile_repo: 观众画像查询（``ViewerProfileRepo`` 结构契约，只用
+                    ``get_profile_text``）；None 时无画像注入。
+                viewer_repo: ``ViewerRepo``（观众仓储）——画像注入时把消息里的外部 ID
+                    换算成观众、实时取昵称与曾用名（昵称会漂移不进画像文本）；None 时无画像注入。
+                context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
+                behavior_style: 人设行为准则（决策侧）。
+                bot_name: 主播名字（她是谁）。
+                personality: 主播性格描述——替她挑话题、定态度的依据。
+                boundaries: 边界栏——她不答应的事（人设字段，运营者可改；空串 = 不带）。
+        inside_jokes: 老梗栏——运营者手写的直播间老梗（空串 = 不带）。
+                env: 运行环境（迟绑定依赖集合，见 :class:`PlannerEnv`）；缺省
+                    ``PlannerEnv()`` 即全部可选依赖降级缺席。
         """
         # 配置为 typed 子配置对象单轨注入；缺省即全默认（"未配置降级"由字段默认值表达）
         self.typed_config = config if config is not None else PlannerConfig()
@@ -245,6 +263,8 @@ class Planner:
         self._personality: str = personality or ""
         # 边界栏原文：替她挑话题、写交接稿时同样不答应线下见面、改称呼这类事（渲染见 _boundaries_rule）
         self._boundaries: str = boundaries or ""
+        # 老梗栏：只进 Planner 系统提示词，观众提起时才接（渲染见 _inside_jokes_block）
+        self._inside_jokes: str = inside_jokes or ""
         self._reply_provider: Any = None
         self._reply_provider_factory: Optional[Callable[[], Any]] = env.reply_provider_factory if env else None
         self._elapsed_live_provider = env.elapsed_live_provider if env else None
@@ -271,9 +291,15 @@ class Planner:
         # 本窗是否豁免发言闸的台词重合度检查（收播道别窗：道别话题常与收尾环节发言字面重合）
         self._round_bypass_topic_gate: bool = False
         # 本场备忘录全文查询（经环境注入；空串 = 还没写过，段整段省略）
-        self._notebook_text_provider = env.notebook_text_provider if env else None
-        self._long_memory_provider = env.long_memory_provider if env else None
-        self._person_notes_provider = env.person_notes_provider if env else None
+        self._brief_provider = env.brief_provider if env else None
+        self._brief_ids_provider = env.brief_ids_provider if env else None
+        self._commitment_lookup = env.commitment_lookup if env else None
+        self._memory_cues_provider = env.memory_cues_provider if env else None
+        self._open_games_provider = env.open_games_provider if env else None
+
+        # 本窗合法的点名编号与卡片称呼（每窗在 plan() 入口重算，这里给默认值）
+        self._round_memory_ids: Set[int] = set()
+        self._memory_labels: Dict[int, str] = {}
 
         self._assembler = PlannerAssembler()
         # 工具刚返回的截图：观察里只留文字，真图挂在下一步请求的尾部让模型看一次
@@ -336,7 +362,6 @@ class Planner:
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
         trigger_cause: Optional[TriggerCause] = None,
-        session_recap: str = "",
     ) -> RoundOutcome:
         """对一个决策窗跑 ReAct 循环，产出本轮收场（RoundOutcome）。
 
@@ -357,7 +382,7 @@ class Planner:
             trigger_cause: 本窗触发原因（类型化值对象）；用于判断这一窗
                 有没有新的外部输入，没有时不给手上的游戏活补充要求。
                 缺省（None）按未知批次触发处理——不做任何豁免。
-            session_recap: 上场回顾文本（开播后固定，整场不变；空串 = 没有上一场或未启用）。
+
 
         Returns:
             RoundOutcome：replied / speech / emotion / target / reply_to /
@@ -385,11 +410,15 @@ class Planner:
         system_prompt, prompt_failure = self._render_system_prompt()
         if system_prompt is None:
             return replace(outcome, error=prompt_failure, silent_reason="prompt_render_failed")
-        # 长期笔记与上场回顾开播时读出、整场不变：接在系统提示词末尾，和人设一起吃前缀缓存
+        # 常驻简报开播时拼好、整场不变：接在系统提示词末尾，和人设一起吃前缀缓存
         # （参考段在不断增长的对话历史之后，放那里每个决策窗都要重新计费）
-        memory_block = self._memory_block(session_recap)
-        if memory_block:
-            system_prompt = f"{system_prompt}\n\n{memory_block}"
+        brief_text = self._brief_text()
+        if brief_text:
+            system_prompt = f"{system_prompt}\n\n{brief_text}"
+        # 线索推送每批评一次：卡片与提示行进参考段，编号进本窗合法点名名单
+        memory_cues = await self._collect_memory_cues(batch)
+        self._round_memory_ids = self._round_commitment_ids(memory_cues)
+        self._memory_labels = dict(getattr(memory_cues, "labels", {}) or {})
 
         # 决策前自动读一次配置的只读参考工具（如游戏现场速览）：结果直接进参考段，
         # 不必先花一步请求去查再决定说什么。
@@ -406,6 +435,7 @@ class Planner:
             private_game_chat=private_game_chat,
             overview=overview,
             trigger_cause=trigger_cause,
+            memory_cues=memory_cues,
         )
         if reference_text is None:
             return replace(outcome, error=reference_failure, silent_reason="assembler_failed")
@@ -521,6 +551,37 @@ class Planner:
         # 超步：未完成说话即收场
         return replace(outcome, silent_reason="max_steps")
 
+    async def _resolve_use_memory(self, args: Dict[str, Any]) -> Tuple[str, List[int]]:
+        """解析 reply 的 use_memory：编号在本窗名单内才认，渲染成说话档交表达侧。
+
+        返回（说话档文本, 编号列表）。编号不在本窗常驻简报或本批卡片里、取不到那条承诺、
+        或没注入承诺查询时一律按没填处理并记日志——点名不打回，最多这句没用上旧事。
+        """
+        raw = args.get("use_memory")
+        if not isinstance(raw, str) or not raw.strip():
+            return "", []
+        commitment_id = _parse_commitment_ref(raw)
+        if commitment_id is None:
+            self.logger.debug(f"use_memory 不是可识别的编号（{raw!r}），按没填处理")
+            return "", []
+        if commitment_id not in self._round_memory_ids:
+            self.logger.info(f"use_memory 的编号 {commitment_id} 不在本窗简报或卡片里，忽略")
+            return "", []
+        if self._commitment_lookup is None:
+            self.logger.debug("未注入承诺查询，use_memory 忽略")
+            return "", []
+        try:
+            commitment = await self._commitment_lookup(commitment_id)
+        except Exception as exc:  # noqa: BLE001 - 取不到就当没填，台词照常生成
+            self.logger.warning(f"取承诺 {commitment_id} 失败，本轮不用旧事: {exc}", exc=True)
+            return "", []
+        if commitment is None:
+            self.logger.info(f"承诺 {commitment_id} 不在了，use_memory 忽略")
+            return "", []
+        label = self._memory_labels.get(commitment_id) or "大家"
+        spoken = render_spoken_memory(target_label=label, commitment=commitment)
+        return spoken, [commitment_id]
+
     # ==================== 提示词与上下文 ====================
 
     def _render_system_prompt(self) -> Tuple[Optional[str], Optional[str]]:
@@ -540,6 +601,7 @@ class Planner:
                     personality=personality_render,
                     behavior_style=behavior_style_render,
                     boundaries_rule=self._boundaries_rule(),
+                    inside_jokes=self._inside_jokes_block(),
                     game_rules=self._render_game_rules(),
                 ),
                 None,
@@ -547,6 +609,17 @@ class Planner:
         except Exception as e:
             self.logger.exception(f"渲染 Planner 系统提示词失败: {e}")
             return None, f"prompt_render_failed: {e}"
+
+    def _inside_jokes_block(self) -> str:
+        """老梗栏渲染：运营者手写的老梗，抬头写明只在观众提起时才接；空串时整段省略。
+
+        只进 Planner——Replyer 与快嘴若各自玩梗会反复出现同一段子；Planner 用交接稿
+        把态度交过去就够。内容整场不变，与人设一起吃前缀缓存。
+        """
+        text = self._inside_jokes.strip()
+        if not text:
+            return ""
+        return "## 直播间老梗（运营者写的；观众提起时才接，别自己翻出来，冷场时也别拿来凑话）\n" + text
 
     def _boundaries_rule(self) -> str:
         """「她是谁」一节末尾、AI 声明之后的边界栏一行（带前导空行）；人设里没写时为空串。
@@ -560,26 +633,44 @@ class Planner:
         line = boundaries_line(self._boundaries)
         return f"\n\n{line}（交接稿里别替她答应这些事，碰到就让她婉拒）" if line else ""
 
-    def _memory_block(self, session_recap: str) -> str:
-        """系统提示词末尾的记忆段：长期笔记 + 上场回顾（开播时读出、整场不变）；都没有时为空串。"""
-        long_memory_text = ""
-        if self._long_memory_provider is not None:
+    def _brief_text(self) -> str:
+        """系统提示词末尾的常驻简报（开播时拼好、整场不变）；没有可记的事时为空串。"""
+        if self._brief_provider is None:
+            return ""
+        try:
+            return (self._brief_provider() or "").strip()
+        except Exception as exc:
+            # 简报读不到只省这一段，不挡决策
+            self.logger.warning(f"读取常驻简报失败，本场系统提示词省略简报: {exc}", exc=True)
+            return ""
+
+    async def _collect_memory_cues(self, batch: List[Any]) -> Any:
+        """算本批的线索（承诺卡、老观众在场一行、回执行）；没注入或出错都返回 None。"""
+        if self._memory_cues_provider is None:
+            return None
+        open_games: Sequence[str] = ()
+        if self._open_games_provider is not None:
             try:
-                long_memory_text = (self._long_memory_provider() or "").strip()
+                open_games = tuple(self._open_games_provider() or ())
             except Exception as exc:
-                # 长期笔记读不到只省这一段，不挡决策
-                self.logger.warning(f"读取长期笔记失败，本场系统提示词省略长期笔记: {exc}", exc=True)
-        parts: List[str] = []
-        if long_memory_text:
-            parts.append(
-                "# 她的长期笔记（内部参考）\n\n"
-                "这是她自己整理的、过了好几场还记得的事。用得上时再用，不必主动提起；"
-                "和眼前的对话或游戏记录冲突时以眼前为准。\n\n" + long_memory_text
-            )
-        recap = (session_recap or "").strip()
-        if recap:
-            parts.append("# 上场回顾（内部参考）\n\n" + recap)
-        return "\n\n".join(parts)
+                self.logger.warning(f"读当前开着的游戏失败（本批不出游戏承诺卡）: {exc}", exc=True)
+        try:
+            return await self._memory_cues_provider(list(batch), open_games)
+        except Exception as exc:
+            self.logger.warning(f"线索推送失败（本批不带提示行，不挡决策）: {exc}", exc=True)
+            return None
+
+    def _round_commitment_ids(self, cues: Any) -> Set[int]:
+        """本窗合法的点名编号：常驻简报里的加本批卡片里的。"""
+        ids: Set[int] = set()
+        if self._brief_ids_provider is not None:
+            try:
+                ids.update(int(item) for item in self._brief_ids_provider() or ())
+            except Exception as exc:
+                self.logger.warning(f"读常驻简报的承诺编号失败（本窗只能点名本批卡片）: {exc}", exc=True)
+        card_ids = getattr(cues, "commitment_ids", ()) if cues is not None else ()
+        ids.update(int(item) for item in card_ids)
+        return ids
 
     def _render_game_rules(self) -> str:
         """拼装【当前游戏的玩法】：各工具面的使用说明 + 委派型游戏的守则。
@@ -617,6 +708,7 @@ class Planner:
         private_game_chat: Optional[List[str]] = None,
         overview: str = "",
         trigger_cause: Optional[TriggerCause] = None,
+        memory_cues: Any = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """构造参考段，返回（参考段文本, 失败原因）。
 
@@ -719,27 +811,19 @@ class Planner:
 
         person_profile_section = await self._collect_person_profiles(batch)
 
-        notebook_text = ""
-        if self._notebook_text_provider is not None:
-            try:
-                notebook_text = self._notebook_text_provider() or ""
-            except Exception as exc:
-                # 备忘录读不到只省段，不挡决策
-                self.logger.warning(f"读取备忘录失败，本轮参考段省略备忘录段: {exc}", exc=True)
-
         try:
             assembler_inputs = AssemblerInputs(
                 stage_descriptions=rundown_text or "",
                 environment=env_block,
                 person_profile_section=person_profile_section,
-                notebook_section=notebook_text,
             )
             assembled_text = self._assembler.assemble(assembler_inputs)
         except Exception as e:
             self.logger.exception(f"PlannerAssembler 组装失败: {e}")
             return None, f"assembler_failed: {e}"
 
-        parts = [block for block in (situation_text, assembled_text) if block]
+        cue_text = (getattr(memory_cues, "text", "") or "").strip() if memory_cues is not None else ""
+        parts = [block for block in (situation_text, assembled_text, cue_text) if block]
         return "\n\n".join(parts), None
 
     def _build_dialogue_messages(
@@ -848,9 +932,12 @@ class Planner:
             )
         invoke_started_ms = now_ms()
         try:
+            remembered, memory_ids = await self._resolve_use_memory(args)
             attachment = ReplyRoundAttachment(
                 # 思考流回调只在调用单上活一次，不经 LLM、模型不可伪造
                 thinking_callback=thinking.callback_for("replyer", 1) if thinking else None,
+                # 点名的那条旧事（说话档写法）：表达侧只有它，没有编号与原话
+                remembered=remembered,
                 # 表达侧要看到观众原话才能接上话
                 round_batch=list(batch or []),
                 # 游戏里有人搭话促发的一轮弹幕批是空的，原话同样交给表达侧
@@ -912,6 +999,7 @@ class Planner:
             topic_summary=str(args.get("topic_summary", "") or ""),
             reply_guidance=str(args.get("reply_guidance", "") or ""),
             reply_to=reply_to if isinstance(reply_to, str) and reply_to else None,
+            memory_refs=memory_ids,
         )
         # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到
         self.workbench.note_intent(
@@ -982,15 +1070,13 @@ class Planner:
         self,
         batch: List[Any],
     ) -> str:
-        """按本批发言时间倒序注入全部已有印象（观众画像）与长期笔记里对这位观众的条目。
+        """按本批发言时间倒序注入全部已有印象（观众画像）。
 
         消息只带外部 ID：先换算成观众（同一个人换了数据源也是同一份画像），按观众去重；
-        还没建档的（记账器尚未落库的新观众）没有画像，跳过。答应某位观众的事只在这里出现：
-        这位观众在场时主播才看得到，不对着全场念叨。
+        还没建档的（记账器尚未落库的新观众）没有画像，跳过。对某位观众答应过的事不走这里——
+        它由线索推送的承诺卡在该观众开口时给（不再把旧事塞进人物画像）。
         """
-        if self._viewer_repo is None or not batch:
-            return ""
-        if self._profile_repo is None and self._person_notes_provider is None:
+        if self._viewer_repo is None or not batch or self._profile_repo is None:
             return ""
 
         # 候选收集：发言时间倒序去重（最新发言优先；batch 本身按时间正序）
@@ -1024,31 +1110,16 @@ class Planner:
             except Exception as exc:
                 self.logger.warning(f"画像查询失败（{platform}/{user_id}，跳过该人）: {exc}")
                 continue
-            notes = self._person_notes(viewer_id)
-            if not profile_text and not notes:
-                continue  # 无画像也没有笔记不注入、不占位
-            text = (profile_text or "").replace("\n", " ").strip() or "（还没形成印象）"
+            if not profile_text:
+                continue  # 无画像不注入、不占位
+            text = profile_text.replace("\n", " ").strip()
             display = await self._viewer_display(viewer_id) or f"{platform}/{user_id}"
             lines.append(f"- {display}: {text}")
-            lines.extend(f"  （笔记）{note}" for note in notes)
 
         if not lines:
             return ""
-        header = (
-            "（内部参考，帮助识别老观众；不要逐字复述，与当前对话冲突时以当前对话为准。"
-            "（笔记）是对这位观众的约定和老梗：话题对得上时再提，做不到的就跟 ta 说明）"
-        )
+        header = "（内部参考，帮助识别老观众；不要逐字复述，与当前对话冲突时以当前对话为准。答应的旧事另有承诺卡，不要从这里编）"
         return "\n".join([header, *lines])
-
-    def _person_notes(self, viewer_id: int) -> List[str]:
-        """长期笔记里对这位观众的条目；没有或读失败为空。"""
-        if self._person_notes_provider is None:
-            return []
-        try:
-            return list(self._person_notes_provider(viewer_id))
-        except Exception as exc:
-            self.logger.warning(f"读取对观众 {viewer_id} 的笔记失败（只注入画像）: {exc}", exc=True)
-            return []
 
     async def _viewer_display(self, viewer_id: int) -> str:
         """观众的展示名：当前昵称，改过名的带上曾用名（"乙（以前叫甲）"）。

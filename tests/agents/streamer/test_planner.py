@@ -56,8 +56,8 @@ def _make_planner(
     context_enabled: bool = True,
     max_steps: int = 8,
     elapsed_live_provider: Any | None = None,
-    long_memory_provider: Any | None = None,
-    person_notes_provider: Any | None = None,
+    brief_provider: Any | None = None,
+    brief_ids_provider: Any | None = None,
 ) -> tuple[Planner, MagicMock, MagicMock]:
     """mock LLM（generate）+ mock prompt_service；缺省真注册表 + 注册成功的 reply（reply 经 registry.invoke）。"""
     llm = MagicMock()
@@ -86,8 +86,8 @@ def _make_planner(
         env=PlannerEnv(
             reply_provider_factory=lambda: prov,
             elapsed_live_provider=elapsed_live_provider,
-            long_memory_provider=long_memory_provider,
-            person_notes_provider=person_notes_provider,
+            brief_provider=brief_provider,
+            brief_ids_provider=brief_ids_provider,
         ),
     )
     return planner, llm, prompt
@@ -311,21 +311,6 @@ async def test_person_profiles_are_injected_without_placeholders_and_failures_do
     assert (await planner.plan([_msg()])).silent_reason == "natural"
 
 
-async def test_notes_for_a_viewer_ride_with_that_viewer_only() -> None:
-    """答应某位观众的事跟着 ta 的画像行走：ta 发言才出现，没画像也给；别人发言时不出现。"""
-    notes = {1: ["答应过的事：答应老王下次玩恐怖游戏（还没兑现）"]}
-    planner, llm, _prompt = _make_planner(
-        [_resp(), _resp()], viewer_repo=_viewer_repo(), person_notes_provider=lambda vid: notes.get(vid, [])
-    )
-    await planner.plan([_msg("老王来了")])
-    reference = _reference_message(llm)["content"]
-    assert "- 老王: （还没形成印象）\n  （笔记）答应过的事：答应老王下次玩恐怖游戏（还没兑现）" in reference
-
-    notes.clear()
-    await planner.plan([_msg("老王又来了", mid="m2")])
-    assert "（笔记）" not in _reference_message(llm)["content"]
-
-
 def test_dialogue_messages_use_native_roles_and_dedup_only_the_tail() -> None:
     planner, _llm, _prompt = _make_planner()
     history = [
@@ -360,36 +345,32 @@ def _system_message(llm: Any, call_index: int = -1) -> str:
     return llm.generate.await_args_list[call_index].args[0][0]["content"]
 
 
-async def test_long_memory_and_recap_ride_at_system_prompt_tail_not_in_reference() -> None:
-    """长期笔记与上场回顾接在系统提示词末尾（整场不变，跨决策窗逐字一致可吃前缀缓存），参考段里不再出现。"""
-    planner, llm, _prompt = _make_planner(
-        [_resp(), _resp()], long_memory_provider=lambda: "## 老梗与口头禅\n- 床名一直没定"
-    )
-    recap = "【2026-10-13 的直播】这场我挖到了钻石"
+async def test_brief_rides_at_system_prompt_tail_not_in_reference() -> None:
+    """常驻简报接在系统提示词末尾（整场不变，跨决策窗逐字一致可吃前缀缓存），参考段里不出现。"""
+    brief = "# 她记得的事（内部参考；以眼前为准，用不上就不提）\n上一场：\n- [档#41] 挖到了钻石"
+    planner, llm, _prompt = _make_planner([_resp(), _resp()], brief_provider=lambda: brief)
 
-    await planner.plan([_msg("第一窗")], rundown_text="## 开场", session_recap=recap)
-    await planner.plan([_msg("第二窗", mid="m2")], rundown_text="## 开场", session_recap=recap)
+    await planner.plan([_msg("第一窗")], rundown_text="## 开场")
+    await planner.plan([_msg("第二窗", mid="m2")], rundown_text="## 开场")
 
     system = _system_message(llm)
-    assert system.startswith("SYSTEM_PROMPT\n\n# 她的长期笔记（内部参考）")
-    assert system.index("床名一直没定") < system.index("# 上场回顾（内部参考）") < system.index("这场我挖到了钻石")
+    assert system == "SYSTEM_PROMPT\n\n" + brief
     assert _system_message(llm, 0) == system
-    reference = _reference_message(llm)["content"]
-    assert "床名一直没定" not in reference and "挖到了钻石" not in reference
+    assert "挖到了钻石" not in _reference_message(llm)["content"]
 
 
-async def test_memory_block_omitted_when_absent_or_unreadable() -> None:
-    """没有笔记也没有回顾时系统提示词保持原样；笔记读失败只省笔记段，回顾照放。"""
-    planner, llm, _prompt = _make_planner([_resp(), _resp()])
+async def test_brief_omitted_when_absent_or_unreadable() -> None:
+    """没有简报时系统提示词保持原样；简报读失败只省这一段，决策照常。"""
+    planner, llm, _prompt = _make_planner([_resp()])
     await planner.plan([_msg()])
     assert _system_message(llm) == "SYSTEM_PROMPT"
 
     def broken() -> str:
-        raise RuntimeError("文件坏了")
+        raise RuntimeError("简报坏了")
 
-    planner, llm, _prompt = _make_planner([_resp()], long_memory_provider=broken)
-    await planner.plan([_msg()], session_recap="上一场的回顾")
-    assert _system_message(llm) == "SYSTEM_PROMPT\n\n# 上场回顾（内部参考）\n\n上一场的回顾"
+    planner, llm, _prompt = _make_planner([_resp()], brief_provider=broken)
+    await planner.plan([_msg()])
+    assert _system_message(llm) == "SYSTEM_PROMPT"
 
 
 # ---------------------------------------------------------------------------

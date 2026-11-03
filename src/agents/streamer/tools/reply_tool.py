@@ -135,6 +135,13 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
             "maximum": 1.0,
             "description": "Planner 决定本句情绪强度（0.0-1.0）",
         },
+        "use_memory": {
+            "type": "string",
+            "description": (
+                "要点名的那条旧事编号（可空，一次至多一条）：从【她记得的事】或【这一批想起来的事】里挑，"
+                "写编号本身（如 约#7）。台词会拿到该说的内容；填了别的编号按没填处理。"
+            ),
+        },
     },
     "required": ["topic_summary", "emotion", "intensity", "is_novel"],
 }
@@ -385,6 +392,7 @@ class ReplyToolProvider(BaseToolProvider):
                 game_chat=list(materials.game_chat),
                 state_facts=materials.state_facts,
                 recent_speeches=speech_history,
+                remembered=materials.remembered,
             )
         except Exception as exc:
             self._logger.exception(f"reply_tool: Replyer.generate 抛出未捕获异常: {exc}")

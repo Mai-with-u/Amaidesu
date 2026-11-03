@@ -44,6 +44,7 @@ from src.modules.storage.models.memory import (
 )
 from src.modules.storage.models.sessions import LiveSession
 from src.modules.types.session_kind import SESSION_KIND_LIVE
+from src.agents.streamer.memory.render import memory_ref_numbers
 from src.modules.utils.time_utils import now_ms
 
 from ..background import SUMMARY_PROFILE
@@ -153,26 +154,6 @@ def _as_line_number(raw: Any) -> Optional[int]:
     if isinstance(raw, str) and raw.strip().isdigit():
         return int(raw.strip())
     return None
-
-
-def _memory_ref_numbers(memory_refs: Optional[str]) -> Set[int]:
-    """这句用过的记忆编号里的承诺号（memory_refs 形如 ["约#7"]；取不出就空集）。"""
-    if not memory_refs:
-        return set()
-    try:
-        refs = json.loads(memory_refs)
-    except json.JSONDecodeError:
-        return set()
-    if not isinstance(refs, list):
-        return set()
-    numbers: Set[int] = set()
-    for ref in refs:
-        if not isinstance(ref, str):
-            continue
-        head, _sep, tail = ref.partition("#")
-        if head.strip().startswith("约") and tail.strip().isdigit():
-            numbers.add(int(tail.strip()))
-    return numbers
 
 
 class SessionSettler:
@@ -357,7 +338,7 @@ class SessionSettler:
                 reply_text = " ".join((line.reply_content or "").split())
                 reply_note = f"（回复{code}「{reply_text}」）"
             memory_note = ""
-            used = sorted(_memory_ref_numbers(line.memory_refs))
+            used = sorted(memory_ref_numbers(line.memory_refs))
             if used:
                 memory_note = "（提到" + "、".join(f"约#{item}" for item in used) + "）"
             lines.append(f"{prefix}{reply_note}：{content}{memory_note}")
@@ -581,7 +562,7 @@ class SessionSettler:
                     )
                 )
                 continue
-            if _memory_ref_numbers(line.memory_refs):
+            if memory_ref_numbers(line.memory_refs):
                 logger.info(f"场次 {material.live_session_id}：第 {raw.get('line')} 行已经提到某条旧承诺，不新建")
                 continue
             if int(line.id) in used_lines:

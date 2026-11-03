@@ -79,6 +79,8 @@ class ReplyRoundAttachment(ToolCallAttachment):
     state_facts: str = ""
     gate_exempt: bool = False
     speech_history: Optional[List[str]] = None
+    #: Planner 点名的那条旧事（说话档写法，已去掉编号与原话）；空串 = 本轮没用旧事
+    remembered: str = ""
 
 
 def assistant_speech_lines(history: Optional[List[Any]]) -> List[str]:

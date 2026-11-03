@@ -8,7 +8,6 @@ from typing import Any, Iterator
 import pytest
 
 from src.agents.streamer.config import StreamerPersonaConfig
-from src.agents.streamer.memory.tools import NOTEBOOK_SPEC
 from src.agents.streamer.planner import Planner, PlannerConfig
 from src.agents.streamer.room_state import RoomState
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -58,6 +57,7 @@ def _render_bare(prompts: Any) -> str:
         personality="活泼",
         behavior_style="积极互动",
         boundaries_rule="",
+        inside_jokes="",
         game_rules="",
     )
 
@@ -110,15 +110,6 @@ def test_refusals_follow_the_boundaries_line_not_a_hardcoded_list(prompts: Any) 
     assert "不管人设里列没列，都别让她向观众打听住址、电话、学校这类私人信息" in prompt
 
 
-def test_notebook_rule_says_it_only_reaches_the_decision_side(prompts: Any) -> None:
-    """备忘录只进决策上下文，她开口时看不到：要她说出口的事得写进交接稿。工具描述与提示词口径一致。"""
-    prompt = _render_bare(prompts)
-
-    for text in (prompt, NOTEBOOK_SPEC.description):
-        assert "只自动" in text and "决策上下文" in text and "要她说出口的事写进交接稿" in text
-        assert "表达上下文" not in text
-
-
 def test_prompt_template_tells_planner_to_admit_not_to_invent_for_prelude_directory(prompts: Any) -> None:
     """前情目录规则：本场早先的段落只剩目录一行、眼前没有细节时，坦白记不清、可以问弹幕，不凭目录编细节；
     往场回顾工具翻不到本场说过的话，规则里明说不要为这个去调它。"""
@@ -126,4 +117,4 @@ def test_prompt_template_tells_planner_to_admit_not_to_invent_for_prelude_direct
 
     assert "历史开头的【前情目录】列着已移出上下文的段落" in prompt
     assert "坦白记不清、可以问问弹幕，别凭目录一行编细节" in prompt
-    assert "`memory_recall_session` 只翻往场回顾，翻不到本场说过的话" in prompt
+    assert "拿不准就先用 `memory_recall` 查本场说过的话" in prompt

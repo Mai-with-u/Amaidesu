@@ -163,6 +163,7 @@ class Replyer:
         game_chat: Optional[List[str]] = None,
         state_facts: str = "",
         recent_speeches: Optional[Sequence[str]] = None,
+        remembered: str = "",
     ) -> Optional[Dict[str, Any]]:
         """按一条 system 与一条 user 的复古布局请求纯文本台词。
 
@@ -189,6 +190,7 @@ class Replyer:
             game_chat=game_chat,
             state_facts=state_facts,
             recent_speeches=recent_speeches,
+            remembered=remembered,
         )
         messages: List[Dict[str, Any]] = [{"role": "user", "content": turn_input}]
 
@@ -292,6 +294,7 @@ class Replyer:
         game_chat: Optional[List[str]] = None,
         state_facts: str = "",
         recent_speeches: Optional[Sequence[str]] = None,
+        remembered: str = "",
     ) -> str:
         """她更早说过的话、最近几条聊天记录与本轮材料合并成一条 user。
 
@@ -313,6 +316,7 @@ class Replyer:
             plan=_render_plan_text(plan, target_text=target_text),
             dialogue_prompt="\n".join(dialogue_lines) or "（暂无聊天记录）",
             recent_speech_section=_recent_speech_section(recent_speeches, shown_speeches),
+            remembered_section=_remembered_section(remembered),
             bot_name=self._bot_name,
             turn_context=(
                 "本轮有新观众消息，请结合聊天记录与回复指引接话。"
@@ -407,6 +411,12 @@ _THINK_UNCLOSED = re.compile(r"<think>.*", re.DOTALL)
 
 #: 口吻示例每行开头的列表记号：运营者写成列表时去掉，渲染时统一加
 _EXAMPLE_MARKS = "-*•· \t"
+
+
+def _remembered_section(remembered: str) -> str:
+    """Planner 点名的那条旧事：整段前后各留一个空行，没有时为空串（整段省略）。"""
+    text = (remembered or "").strip()
+    return f"\n\n{text}\n" if text else ""
 
 
 def _plain_text_speech(content: Any) -> str:

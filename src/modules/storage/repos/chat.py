@@ -13,7 +13,7 @@ RoomMessagePayload → 表的写入入口与常见读路径；表结构权威在
 from __future__ import annotations
 
 from datetime import datetime, time as dt_time, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.modules.storage.models.chat import (
     ChatDateCount,
@@ -28,6 +28,12 @@ from src.modules.storage.models.chat import (
     ViewerSessionParticipation,
 )
 from src.modules.storage.repos._base import BaseRepo
+
+
+def _like_contains(keyword: str) -> str:
+    """把关键词包成 ``LIKE`` 的包含模式：``%`` / ``_`` / \\`` 按字面匹配。"""
+    escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 class ChatRepo(BaseRepo):
@@ -490,6 +496,44 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def list_session_memory_refs(self, *, live_session_id: int) -> List[str]:
+        """本场她说过的台词里点名引用过的记忆编号（memory_refs 非空的行）。
+
+        线索推送每批查一次：某个承诺的编号已经出现在本场台词的引用里，就是被用上了，
+        本场不再推这张卡。
+        """
+
+        def _exec() -> List[str]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT memory_refs FROM live_chat"
+                    " WHERE live_session_id=? AND sender_role='assistant' AND memory_refs IS NOT NULL",
+                    (int(live_session_id),),
+                ).fetchall()
+                return [str(row[0]) for row in rows if row and row[0]]
+
+        return await self._run_in_executor(_exec)
+
+    async def list_session_replied_viewer_ids(self, *, live_session_id: int) -> List[int]:
+        """本场她回应过的观众（内部观众 ID 去重；按回复关联键反查弹幕的发言人）。
+
+        老观众在场一行只在"她本场还没回应过 ta"时出现，所以每批查一次。
+        """
+
+        def _exec() -> List[int]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT v.viewer_id FROM live_chat c"
+                    " JOIN live_chat v ON v.live_session_id = c.live_session_id"
+                    "   AND v.message_id = c.reply_to_message_id AND v.sender_role='viewer'"
+                    " WHERE c.live_session_id=? AND c.sender_role='assistant'"
+                    "   AND v.viewer_id IS NOT NULL",
+                    (int(live_session_id),),
+                ).fetchall()
+                return [int(row[0]) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
     async def list_session_speech_for_settle(self, *, live_session_id: int) -> List[SettleSpeechLine]:
         """本场她说过的全部台词（时间正序），附被回应弹幕的原文与发言人。
 
@@ -878,6 +922,95 @@ class ChatRepo(BaseRepo):
                     (int(live_session_id), page_limit),
                 ).fetchall()
                 return list(reversed([GuardRecord.model_validate(dict(row)) for row in rows]))
+
+        return await self._run_in_executor(_exec)
+
+    # -------------------- 回想工具（memory_recall）的检索面 --------------------
+
+    async def search_recall_speech(
+        self,
+        *,
+        keywords: Sequence[str],
+        limit: int = 8,
+        live_session_id: Optional[int] = None,
+        newest_first: bool = True,
+    ) -> List[LiveChatMessage]:
+        """按关键词找她已播出的台词（回想工具用；多个关键词取交集）。
+
+        只认已播出的台词：`sender_role='assistant'` 且 `dropped_at_ms IS NULL`
+        ——确知没送到观众面前的句子不算说过的话。`live_session_id` 给定时只查那一场，
+        缺省查全部历史。每个关键词一个 ``LIKE '%词%'``，一行要同时命中全部关键词；
+        关键词里的 `%` / `_` 按字面匹配（转义写法与观众搜索同口径）。
+        """
+
+        def _exec() -> List[LiveChatMessage]:
+            clauses = ["sender_role='assistant'", "dropped_at_ms IS NULL"]
+            params: List[Any] = []
+            if live_session_id is not None:
+                clauses.append("live_session_id=?")
+                params.append(int(live_session_id))
+            for keyword in keywords:
+                clauses.append("content LIKE ? ESCAPE '\\'")
+                params.append(_like_contains(keyword))
+            order = "DESC" if newest_first else "ASC"
+            params.append(max(1, int(limit)))
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM live_chat WHERE "
+                    + " AND ".join(clauses)  # noqa: S608 子句为代码内常量
+                    + f" ORDER BY timestamp_ms {order}, id {order} LIMIT ?",
+                    params,
+                ).fetchall()
+                return [LiveChatMessage.model_validate(dict(row)) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def search_recall_danmaku(
+        self,
+        *,
+        keywords: Sequence[str],
+        live_session_id: int,
+        limit: int = 8,
+        newest_first: bool = True,
+    ) -> List[LiveChatMessage]:
+        """按关键词找某一场里的观众消息（回想工具用；多个关键词取交集）。
+
+        回想工具里"本场观众弹幕"永远限定本场（跨场回忆只走台词与档案），所以场次必须给。
+        """
+
+        def _exec() -> List[LiveChatMessage]:
+            clauses = ["sender_role='viewer'", "live_session_id=?"]
+            params: List[Any] = [int(live_session_id)]
+            for keyword in keywords:
+                clauses.append("content LIKE ? ESCAPE '\\'")
+                params.append(_like_contains(keyword))
+            order = "DESC" if newest_first else "ASC"
+            params.append(max(1, int(limit)))
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM live_chat WHERE "
+                    + " AND ".join(clauses)  # noqa: S608 子句为代码内常量
+                    + f" ORDER BY timestamp_ms {order}, id {order} LIMIT ?",
+                    params,
+                ).fetchall()
+                return [LiveChatMessage.model_validate(dict(row)) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def list_chat_session_bounds(self) -> List[Tuple[int, int]]:
+        """有明细的场次主键与该场最后一条明细的时刻（最近在前）。
+
+        回想工具据此把结果定位成"本场 / 上一场 / 之前"，并逐场读回档案行；
+        场次先后按场内最后一条明细的时刻算，不读场次表。
+        """
+
+        def _exec() -> List[Tuple[int, int]]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT live_session_id, MAX(timestamp_ms) AS last_ms FROM live_chat"
+                    " GROUP BY live_session_id ORDER BY last_ms DESC, live_session_id DESC"
+                ).fetchall()
+                return [(int(row["live_session_id"]), int(row["last_ms"])) for row in rows]
 
         return await self._run_in_executor(_exec)
 

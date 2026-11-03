@@ -5,6 +5,7 @@ description: "复古表达输入：最近几条聊天记录与新弹幕合并在
 variables:
   - dialogue_prompt
   - recent_speech_section
+  - remembered_section
   - game_chat
   - state_facts
   - rundown
@@ -18,7 +19,7 @@ tags: [decision, live, vtuber, replyer, retro]
 
 你正在直播间和观众聊天。$recent_speech_section
 下面是之前的聊天记录，其中标注 $bot_name(你) 的发言是你自己的发言，请注意区分：
-$dialogue_prompt
+$dialogue_prompt$remembered_section
 
 ## 游戏里刚有人说的话
 

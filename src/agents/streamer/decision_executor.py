@@ -29,6 +29,7 @@ from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import ModuleLogger, get_logger
 from src.modules.utils.time_utils import now_ms
 
+from .memory.render import render_commitment_number
 from .planner import Planner, RoundOutcome
 from .proactive_trigger import ProactiveTrigger
 from .room_state import RoomState
@@ -301,7 +302,6 @@ class DecisionRoundExecutor:
                 thinking=thinking,
                 round_id=round_id,
                 trigger_cause=trigger_cause,
-                session_recap=materials.session_recap,
             )
         except Exception as exc:
             self._logger.exception(f"Planner 调用异常: {exc}")
@@ -350,6 +350,7 @@ class DecisionRoundExecutor:
             reply_to_message_id=outcome.reply_to,
             round_id=round_id,
             live_session_id=scope_pk if scope_pk is not None else 0,
+            memory_refs=[render_commitment_number(item) for item in outcome.memory_refs],
         )
         if speech_info is not None:
             result["speech"], result["emotion"], result["utterance_id"] = speech_info

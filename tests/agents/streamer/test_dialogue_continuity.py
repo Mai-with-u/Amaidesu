@@ -310,6 +310,7 @@ def _render_planner_with_delegate_rules() -> str:
         personality="活泼",
         behavior_style="积极互动",
         boundaries_rule="",
+        inside_jokes="",
         game_rules=rules,
     )
 
@@ -326,6 +327,7 @@ def test_planner_prompt_keeps_viewer_method_and_relays_instead_of_redelegating()
             personality="活泼",
             behavior_style="积极互动",
             boundaries_rule="",
+            inside_jokes="",
             game_rules="",
         )
     finally:
@@ -379,6 +381,7 @@ def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
             personality="活泼",
             behavior_style="积极互动",
             boundaries_rule="",
+            inside_jokes="",
             game_rules="",
         )
     finally:
@@ -401,6 +404,7 @@ def test_planner_prompt_knows_who_she_is_but_stays_the_room_manager() -> None:
             personality="嘴硬但心软",
             behavior_style="",
             boundaries_rule="",
+            inside_jokes="",
             game_rules="",
         )
     finally:
@@ -421,6 +425,7 @@ def test_planner_prompt_only_reports_progress_with_evidence() -> None:
             personality="活泼",
             behavior_style="积极互动",
             boundaries_rule="",
+            inside_jokes="",
             game_rules="",
         )
     finally:
@@ -527,6 +532,7 @@ def test_streamer_prompts_keep_rules(prompts) -> None:
         personality="活泼",
         behavior_style="积极互动",
         boundaries_rule="",
+        inside_jokes="",
         game_rules=rules,
     )
     assert [rule for rule in _PLANNER_PROMPT_RULES if rule not in planner] == []
@@ -559,6 +565,7 @@ def test_planner_prompt_finds_material_instead_of_defaulting_to_silence(prompts:
         personality="活泼",
         behavior_style="积极互动",
         boundaries_rule="",
+        inside_jokes="",
         game_rules="",
     )
     # 沉默不再是默认：复述才是失败，沉默要写理由，【冷场】时默认开口
@@ -607,6 +614,7 @@ def test_replyer_prompts_speak_like_a_streamer_not_a_group_member(prompts: Any) 
         rundown="",
         dialogue_prompt="",
         recent_speech_section="",
+        remembered_section="",
         state_facts="",
         bot_name="麦麦",
         length_rule="整句不超过 40 字。",
@@ -632,6 +640,7 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
         personality="活泼",
         behavior_style="",
         boundaries_rule="",
+        inside_jokes="",
         game_rules="",
     )
     assert "一轮只递一个点" in planner and "只写和这一个点有关的事实" in planner
@@ -657,6 +666,7 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
         rundown="",
         dialogue_prompt="",
         recent_speech_section="",
+        remembered_section="",
         state_facts="",
         bot_name="麦麦",
         length_rule="",
@@ -674,6 +684,7 @@ def test_prompts_forbid_inventing_off_game_life_events(prompts: Any) -> None:
         personality="活泼",
         behavior_style="",
         boundaries_rule="",
+        inside_jokes="",
         game_rules="",
     )
     assert "游戏之外的事同样要有出处" in planner and "没有出处的现实生活经历一律不写" in planner

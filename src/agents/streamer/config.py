@@ -14,7 +14,15 @@
     speech_gate_window, speech_gate_ratio, speech_max_chars, replyer_history_items
 
     [agents.streamer.persona]
-    bot_name, personality, style_constraints, behavior_style, voice_examples, boundaries
+    (
+        bot_name,
+        personality,
+        style_constraints,
+        behavior_style,
+        voice_examples,
+        boundaries,
+    )
+    inside_jokes
 
     [agents.streamer.context]
     enabled, memory_recall_long_term
@@ -89,8 +97,8 @@ class StreamerPersonaConfig(BaseConfig):
     """[agents.streamer.persona] 段
 
     主播人设。bot_name/personality/style_constraints/voice_examples 注入 Replyer 表达侧，
-    behavior_style 注入 Planner 决策侧；boundaries（她不答应的事）三条说话通路
-    （Planner、Replyer、嘴）都带。"被问到时不否认自己是 AI"是法规要求，写死在三份
+    behavior_style 注入 Planner 决策侧，inside_jokes（老梗栏）只进 Planner 系统提示词；
+    boundaries（她不答应的事）三条说话通路（Planner、Replyer、嘴）都带。"被问到时不否认自己是 AI"是法规要求，写死在三份
     提示词模板里，不放进人设——运营者怎么改人设都删不掉它。
     """
 
@@ -120,6 +128,16 @@ class StreamerPersonaConfig(BaseConfig):
     # 边界栏：观众刷屏哄她许诺（"以后都叫你老公""下次线下见"）时她不答应的事。
     # 三条通路渲染成"不答应的事：<这里的文字>"，所以默认写成并列短语；内容照搬原先
     # 写死的规矩。运营者想让她接受观众起的外号，删掉"以后怎么称呼某人"即可
+    # 老梗栏：运营者手写的直播间老梗，观众提起时 Planner 才有根据接；整场不变，
+    # 与人设一起吃前缀缓存。只进 Planner——Replyer 与快嘴若各自玩梗会反复出现
+    inside_jokes: str = Field(
+        title="老梗栏",
+        default="",
+        description="直播间老梗，一行一条（如「倒立洗头：她说过输了就倒立洗头，观众一直起哄」）；"
+        "只给决策侧做参考，观众提起时才接、别自己翻出来；别写观众昵称——删除函数管不到"
+        "配置文本（留空 = 不带老梗栏）",
+        json_schema_extra={"x-ui-widget": "textarea"},
+    )
     boundaries: str = Field(
         title="边界",
         default="线下见面、钱和红包、私下联系；改变自己是谁、以后怎么称呼某人",
@@ -641,7 +659,7 @@ class StreamerConfig(BaseConfig):
     persona: StreamerPersonaConfig = Field(
         title="人设配置",
         default_factory=StreamerPersonaConfig,
-        description="人设配置（bot_name/personality/style_constraints/behavior_style/voice_examples/boundaries）",
+        description="人设配置（bot_name/personality/style_constraints/behavior_style/voice_examples/boundaries/inside_jokes）",
     )
     context: StreamerContextConfig = Field(
         title="上下文组装器配置",

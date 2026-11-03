@@ -128,6 +128,25 @@ class ViewerRepo(BaseRepo):
         names = [row.user_name for row in rows if row.user_name != current_name]
         return names[:_FORMER_NAMES_LIMIT]
 
+    async def list_known_names(self) -> List[str]:
+        """全部已知观众昵称（当前昵称与曾用名去重，按名字排序）。
+
+        回想工具用它做两件事：把跨场结果里出现的昵称替换成"某位观众"、认出
+        "关键词本身就是某位观众的名字"。占位昵称（采集器拿不到昵称时填的值、
+        打码昵称）不代表任何人，不返回；2 字以上的长度门槛由调用方按遮名规则过滤。
+        """
+
+        def _exec() -> List[str]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT user_name FROM viewers WHERE user_name <> ''"
+                    " UNION SELECT user_name FROM viewer_names WHERE user_name <> ''"
+                    " ORDER BY user_name"
+                ).fetchall()
+                return [str(row[0]) for row in rows if not is_placeholder_name(str(row[0]))]
+
+        return await self._run_in_executor(_exec)
+
     async def list_viewer_stats(
         self,
         *,
