@@ -3,7 +3,7 @@
 
 复盘第一步（概览统计）的机械统计都在这里，统计标准与 SKILL.md 一致：
 
-    uv run python .agents/skills/livestream-replay/scripts/overview_stats.py \
+    uv run python .agents/skills/livestream-review/scripts/overview_stats.py \
         --events logs/events/2026-10-15/21.jsonl \
         --llm logs/llm_requests/2026-10-15/21.jsonl \
         --since 21:20 --until 21:49
@@ -17,6 +17,7 @@ import argparse
 import collections
 import json
 import statistics
+import tomllib
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -113,20 +114,38 @@ def _print_session_stats(events: list[dict[str, Any]]) -> None:
     else:
         print("发言 0 条")
     triggers: collections.Counter[str] = collections.Counter()
+    emotions: collections.Counter[str] = collections.Counter()
+    planner_ms: list[int] = []
     replied = 0
     for decision in decisions:
         data = decision.get("data") or {}
         triggers[str(data.get("trigger_reason"))] += 1
         if data.get("should_reply"):
             replied += 1
+        emotion = data.get("emotion")
+        emotions[str(emotion.get("name") if isinstance(emotion, dict) else emotion or "?")] += 1
+        if isinstance(data.get("planner_duration_ms"), (int, float)):
+            planner_ms.append(int(data["planner_duration_ms"]))
     print(f"决策 {len(decisions)} 轮：{dict(triggers)}；其中开口 {replied} 轮 / 沉默 {len(decisions) - replied} 轮")
+    if emotions:
+        # 情绪分布要和当场遭遇（死亡/受伤次数）对照读：正向占比过高是情绪轴与事件轴脱钩的线索
+        positive = sum(emotions[name] for name in ("happy", "smug", "excited"))
+        print(f"情绪分布：{dict(emotions.most_common())}；正向(happy/smug/excited) {positive / len(decisions):.0%}")
+    if planner_ms:
+        planner_ms.sort()
+        print(
+            f"决策时延：中位 {planner_ms[len(planner_ms) // 2] / 1000:.1f}s "
+            f"p90 {planner_ms[int(len(planner_ms) * 0.9)] / 1000:.1f}s 最大 {planner_ms[-1] / 1000:.1f}s"
+        )
     print(f"观众弹幕 {len(chats)} 条；进房 {len(enters)} 次：", end="")
     names = [str((e.get("data") or {}).get("user", {}).get("name", "?")) for e in enters]
     print("、".join(names) if names else "无")
     print()
 
 
-def _print_llm_usage(paths: list[Path], since: Optional[str], until: Optional[str]) -> None:
+def _print_llm_usage(
+    paths: list[Path], since: Optional[str], until: Optional[str], prices: Optional[dict[str, dict[str, Any]]] = None
+) -> None:
     print("== LLM 用量（按请求全文统计）==")
     if not paths:
         print("（未提供 --llm，跳过；缓存命中率只有请求全文里有）")
@@ -149,18 +168,42 @@ def _print_llm_usage(paths: list[Path], since: Optional[str], until: Optional[st
             bucket["prompt"] += prompt
             bucket["max_prompt"] = max(bucket["max_prompt"], prompt)
             details = usage.get("prompt_tokens_details") or {}
-            bucket["cached"] += int(details.get("cached_tokens") or 0) if isinstance(details, dict) else 0
-            bucket["completion"] += int(usage.get("completion_tokens") or 0)
+            cached = int(details.get("cached_tokens") or 0) if isinstance(details, dict) else 0
+            completion = int(usage.get("completion_tokens") or 0)
+            bucket["cached"] += cached
+            bucket["completion"] += completion
             out_details = usage.get("completion_tokens_details") or {}
             bucket["reasoning"] += int(out_details.get("reasoning_tokens") or 0) if isinstance(out_details, dict) else 0
+            pc = (prices or {}).get(str(row.get("model_name") or ""))
+            if pc:
+                p_in = float(pc.get("price_in") or 0)
+                p_out = float(pc.get("price_out") or 0)
+                c_price = float(pc.get("cache_price_in") or 0)
+                if str(pc.get("cache") or "none") != "none" and c_price > 0:
+                    bucket["cost"] += cached / 1e6 * c_price + max(prompt - cached, 0) / 1e6 * p_in
+                else:
+                    bucket["cost"] += prompt / 1e6 * p_in
+                bucket["cost"] += completion / 1e6 * p_out
+    total_cost = 0.0
+    priced = False
     for profile, bucket in sorted(stats.items()):
         hit = bucket["cached"] / bucket["prompt"] * 100 if bucket["prompt"] else 0.0
+        cost = bucket.get("cost", 0.0)
+        total_cost += cost
+        priced = priced or cost > 0
+        cost_text = f" 费用={cost:.2f}" if cost > 0 else ""
         print(
             f"{profile:10s} calls={bucket['calls']:4d} fail={bucket['fail']} "
             f"prompt={bucket['prompt'] / 10000:8.1f}万 cached={bucket['cached'] / 10000:8.1f}万({hit:.0f}%) "
             f"out={bucket['completion'] / 10000:.1f}万(思考{bucket['reasoning'] / 10000:.1f}万) "
-            f"max_prompt={bucket['max_prompt']:,}"
+            f"max_prompt={bucket['max_prompt']:,}{cost_text}"
         )
+    if priced:
+        print(
+            f"总费用 {total_cost:.2f}（口径：--config 价格表每百万 token；分段缓存=命中×cache 价+未命中×in 价+输出×out 价）"
+        )
+    elif prices is not None:
+        print("（价格表存在但本窗请求的模型均未命中价格条目）")
     print()
 
 
@@ -181,7 +224,18 @@ def main() -> None:
     )
     parser.add_argument("--since", help="窗口起点，本地 HH:MM")
     parser.add_argument("--until", help="窗口终点，本地 HH:MM")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="model.toml 路径（给出来才统计费用；价格表每百万 token，与 observation.calculate_cost 同口径）",
+    )
     args = parser.parse_args()
+    prices: Optional[dict[str, dict[str, Any]]] = None
+    if args.config is not None:
+        with args.config.open("rb") as handle:
+            cfg = tomllib.load(handle)
+        prices = {str(m.get("name")): m for m in cfg.get("llm_models", []) if m.get("name")}
 
     event_rows: list[dict[str, Any]] = []
     for events_path in args.events:
@@ -202,7 +256,7 @@ def main() -> None:
 
     _print_lifecycle(event_rows)
     _print_session_stats(event_rows)
-    _print_llm_usage(args.llm or [], args.since, args.until)
+    _print_llm_usage(args.llm or [], args.since, args.until, prices)
 
 
 if __name__ == "__main__":
