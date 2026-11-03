@@ -105,6 +105,10 @@ _PROFILE_REPLYER = "replyer"
 # REST 侧映射 409）——必达语义不允许静默挤掉旧条目。
 _REMINDER_QUEUE_MAX = 5
 
+# 下播整理前、Agent 停止前等播放队列播完队尾的上限（毫秒）。她最后几句（道别、"下次继续……"）
+# 常排在队尾，先等它们播出去；TTS 卡住时等满这么久就照常往下走，不挡下播整理与停机
+_SPEECH_TAIL_WAIT_MS = 30_000
+
 # 收播道别那一轮正在结束的那一场（其余时候为 None）。只在道别那一轮自己的调用链里看得见：
 # _execute_round 开头设上、跑完（含出错）复位。表达侧读历史（reply 工具 → _read_history）与
 # 回想工具取场次类型都在这条调用链上（同一任务，或这一轮派生的任务——派生任务创建时复制上下文），
@@ -640,6 +644,11 @@ class StreamerAgent(BaseAgent):
         if self._mouth is not None:
             await self._mouth.stop()
 
+        # 停发声管线之前先等队尾播完（最多 30 秒）：关程序时 Agent 先停、live.ended 后到，
+        # 她最后几句往往还排在播放队列里，直接停队列会把它们当没送达丢掉。嘴已停、
+        # 不再塞新台词，这里只等已派发的那几句；TTS 卡住等满上限就照常停，剩下的标没送达
+        await self._wait_speech_tail(before="停止发声管线")
+
         # 停止发言管线（TTS 队列先停，保证不遗留 invoke 在飞）
         await self._speech.stop()
 
@@ -939,13 +948,17 @@ class StreamerAgent(BaseAgent):
         # 被新开的场次顶掉（如彩排直接转正式开播）不是真下播：紧接着就是下一场
         # 的开播，道别要好几秒才生成完，会落进新场次、在正式直播开头说"今天就到
         # 这儿"，所以不道别，直接收拾本场
+        # 场次行已删或马上要删的两种情形：空场次（一条消息都没有，结账时整行丢弃），以及
+        # Dashboard 删除进行中场次（场次管理器先结束这一场、发完 live.ended 紧接着删行）。
+        # 这两种都不交场次上下文、不排收播整理，下面两处共用这一个判断
+        session_row_gone = payload.empty_discarded or payload.deleted
         if self._running and not payload.superseded:
             # 场次管理器先把这一场写成已结束、清掉进行中场次，才发 live.ended，道别这一轮里
             # "当前场次"已解析不到：把正在结束的这一场显式交下去，她按这一场读最后的对话、
-            # 道别句记进这一场、彩排场的道别仍按彩排算。空场次（一条消息都没有）结账时整行
-            # 丢弃，不交：道别要等模型好几秒才说出口，那时行早没了，交了会给道别句盖上已删
-            # 场次的编号、在库里留下孤儿行；这时道别照旧运行（她照样说再见），只是这句不落库
-            closing = None if payload.empty_discarded else self._closing_session_of(payload)
+            # 道别句记进这一场、彩排场的道别仍按彩排算。场次行已删或将删时不交：道别要等
+            # 模型好几秒才说出口，那时行早没了，交了会给道别句盖上已删场次的编号、在库里留下
+            # 孤儿行；这时道别照旧运行（她照样说再见），只是这句不落库
+            closing = None if session_row_gone else self._closing_session_of(payload)
             await self._execute_round(
                 [],
                 forced=True,
@@ -965,8 +978,10 @@ class StreamerAgent(BaseAgent):
             await emit_notebook_changed(self._event_bus, "")
         self._notebook.clear()
         # 收播整理：先写这一场的回顾，再给本场活跃的常客更新印象（两次 LLM 调用，
-        # 放后台不阻塞事件回调）。空场次（无任何明细行，行已删）没东西可整理
-        if not payload.empty_discarded and (
+        # 放后台不阻塞事件回调）。场次行已删或将删时不整理：空场次没东西可整理；用户删掉的
+        # 场次本意是把这一场清掉，整理若赶在删行之前读到对话，会给已删场次写出回顾与画像。
+        # 顺序：道别那一轮在上面跑完 → 这里才排进后台 → 后台先等道别句播完再整理
+        if not session_row_gone and (
             self._recap_writer is not None or self._long_memory_writer is not None or self._roster_writer is not None
         ):
             if self.state in (AgentState.STOPPING, AgentState.STOPPED):
@@ -976,7 +991,7 @@ class StreamerAgent(BaseAgent):
                 self._logger.info(f"Agent 已停止，场次 {payload.live_session_id} 的收播整理留给下次启动补写")
             else:
                 spawn_background_task(
-                    self._settle_session(payload.live_session_id),
+                    self._settle_after_speech_tail(payload.live_session_id),
                     logger=self._logger,
                     tasks=self._memory_tasks,
                     label="StreamerAgent.settle_session",
@@ -991,6 +1006,33 @@ class StreamerAgent(BaseAgent):
             kind=payload.kind,
             started_at_ms=started_at_ms,
         )
+
+    async def _wait_speech_tail(self, *, before: str) -> None:
+        """等播放队列把已派发的台词播完再往下走，最多等 ``_SPEECH_TAIL_WAIT_MS``。
+
+        下播整理前与 Agent 停止前共用：她最后几句（道别、"下次继续……"）常排在队尾，先让
+        它们真的播给观众，整理时这几句已经说出口，停队列也不会把它们当没送达丢掉。TTS 关着
+        时没有播放队列，立即返回。等满上限仍没播完（TTS 卡住）记 warning、照常往下走：
+        下播整理不被挡住，停机时剩下的句子随队列停止标没送达。
+        """
+        try:
+            idle = await self._speech.wait_idle(timeout_ms=_SPEECH_TAIL_WAIT_MS)
+        except Exception as exc:  # noqa: BLE001 - 等不等队尾都不能挡住整理与停机
+            self._logger.warning(f"{before}前等播放队列播完出错，不再等、照常继续: {exc}", exc=exc)
+            return
+        if not idle:
+            self._logger.warning(
+                f"{before}前等播放队列播完：等了 {_SPEECH_TAIL_WAIT_MS // 1000} 秒仍没播完（TTS 可能卡住），照常继续"
+            )
+
+    async def _settle_after_speech_tail(self, live_session_id: int) -> None:
+        """下播整理的后台入口：先等队尾台词播完（最多 30 秒），再整理这一场。
+
+        等待放在后台任务里，不阻塞 live.ended 回调；道别那一轮已在回调里跑完才排进来，
+        等的正是道别句。启动补写直接调 :meth:`_settle_session`：那时没有要等的台词。
+        """
+        await self._wait_speech_tail(before=f"下播整理场次 {live_session_id} ")
+        await self._settle_session(live_session_id)
 
     # ==================================================================
     # 主播记忆：场次回顾 / 观众画像

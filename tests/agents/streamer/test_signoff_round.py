@@ -1,10 +1,14 @@
-"""收播道别窗：道别那一轮看得见、落得进正在结束的那一场。
+"""收播道别窗与队尾：道别那一轮看得见、落得进正在结束的那一场；下播整理与停机前先等队尾播完。
 
 道别窗的回归用真实的场次管理器、场次盖章拦截器、记账器与 SQLite 临时库串起来：
 手动下播时场次先写成已结束、再发 ``live.ended``，道别那一轮必须按正在结束的那一场
 读历史、给道别句盖那一场的编号、按那一场的类型回想；这一场只在道别那一轮自己的调用链里
-看得见，道别期间新开的场次与并发的常规轮次照常按进行中场次走。场次行已删（空场次）时
-道别照常跑，但道别句不落库。
+看得见，道别期间新开的场次与并发的常规轮次照常按进行中场次走。场次行已删或将删（空场次、
+删除进行中场次）时道别照常跑，但道别句不落库、不排收播整理。
+
+队尾的用例用一个由测试放行的假 TTS 引擎卡住播放，观察"播完才整理、播完才停"；
+TTS 卡死的情形把播放队列的空闲等待（公开方法）换成立即报"没等到"的替身，
+不真的等满 30 秒。
 
 道别窗用例不用 ``EventBus.wait_until_drained`` 等派发落地：它在 Python 3.12 下遇到
 "任务已完成、移出回调还没轮到"的时刻会同步空转卡死整个事件循环（已另行上报），
@@ -15,15 +19,18 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Awaitable, Callable, List, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.agents.streamer.planner import RoundOutcome
 from src.agents.streamer.streamer_agent import StreamerAgent
+from src.agents.streamer.utterance_queue import UtteranceQueue
 from src.modules.events.event_bus import EventBus
 from src.modules.events.interceptors.session_stamp import SessionStampInterceptor
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.live import LiveEndedPayload
 from src.modules.events.payloads.planner import PlannerDecisionPayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.llm.payload import Response, ToolCall
@@ -37,9 +44,15 @@ from src.modules.types.session_kind import SessionKind
 from src.modules.utils.time_utils import now_ms
 from tests.agents.streamer.helpers import make_streamer_agent, stub_prompt
 from tests.config.helpers import wait_until
+from tests.modules.llm.fakes import FakeLLMManager
+
+# 登记（驱动/只读穿透，合并时进底账）：队尾用例与"场次行已删不排整理"用例直接驱动下播回调
+# （agent._on_live_ended），并等后台整理任务收尾（agent._memory_tasks）；二者均无公开观测面。
 
 FAREWELL = "今天就到这儿啦，下次直播继续炸TNT！"
 GREETING = "晚上好呀，正式场开始啦！"
+_TAIL_WAIT_MS = 30_000
+_TTS_ON = {"enabled": True, "max_queue": 3, "render_timeout_ms": 60_000, "wait_playback": False}
 
 
 # ---------------------------------------------------------------------------
@@ -331,15 +344,16 @@ async def test_signoff_during_new_session_does_not_leak_into_concurrent_round(li
 
 @pytest.mark.parametrize(
     ("viewer_lines", "how"),
-    [([], "close")],
-    ids=["空场次结账即丢弃"],
+    [([], "close"), (["TNT阵还差最后一排没铺完"], "delete")],
+    ids=["空场次结账即丢弃", "删除进行中场次"],
 )
 async def test_signoff_for_a_session_whose_row_is_gone_is_not_stored(
     live_stack: _LiveStack, viewer_lines: List[str], how: str
 ) -> None:
-    """场次行已删：道别照常跑，道别句不带这一场的编号、不落库，库里不留孤儿行。
+    """场次行已删或将删：道别照常跑，道别句不带这一场的编号、不落库，库里不留孤儿行。
 
-    空场次（开播后一条消息都没有）结账时整行丢弃，道别句要等模型才说出口，那时行早已删除。
+    空场次（开播后一条消息都没有）结账时整行丢弃；删除进行中场次时场次管理器先结束这一场、
+    发完 live.ended 紧接着删行，道别句要等模型才说出口，那时行早已删除。
     """
     store, manager = live_stack.store, live_stack.manager
     llm = _routed_llm([_planner_step(_reply_call())])
@@ -364,3 +378,215 @@ async def test_signoff_for_a_session_whose_row_is_gone_is_not_stored(
     assert await store.sessions.get_live_session(live_session_id=pk) is None
     assert await store.chat.list_recent_live_chat(live_session_id=pk, limit=None) == [], "库里不留这一场的孤儿行"
     assert live_stack.writes.assistant_sessions == []
+
+
+# ---------------------------------------------------------------------------
+# 队尾：下播整理前、停机前先等播放队列播完
+# ---------------------------------------------------------------------------
+
+
+class _GatedEngine:
+    """TTS 引擎替身：每句停在播放中，测试放行才播完；播放中被取消（停队列）的记为没播完。"""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.finished: List[str] = []
+        self.cancelled: List[str] = []
+
+    async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled.append(text)
+            raise
+        self.finished.append(text)
+
+
+@dataclass
+class _IdleWaits:
+    """播放队列空闲等待的记录：每次要等多久，以及有没有人开始等。"""
+
+    timeouts: List[Optional[int]] = field(default_factory=list)
+    entered: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+def _watch_idle_waits(monkeypatch: pytest.MonkeyPatch, *, stuck: bool = False) -> _IdleWaits:
+    """把播放队列的空闲等待（公开方法）换成记录版；``stuck`` 模拟 TTS 卡死：立即报"等满上限仍没播完"。
+
+    发言等播放与嘴都关着，队尾等待是这里唯一的调用方。
+    """
+    original = UtteranceQueue.wait_idle
+    waits = _IdleWaits()
+
+    async def _watched(self: UtteranceQueue, timeout_ms: Optional[int] = None) -> bool:
+        waits.timeouts.append(timeout_ms)
+        waits.entered.set()
+        if stuck:
+            return False
+        return await original(self, timeout_ms=timeout_ms)
+
+    monkeypatch.setattr(UtteranceQueue, "wait_idle", _watched)
+    return waits
+
+
+def _farewell_planner() -> MagicMock:
+    """每轮都决定开口说道别句的 Planner 替身（发言照常走真实的决策执行器与发声管线）。"""
+    planner = MagicMock()
+    planner.plan = AsyncMock(
+        return_value=RoundOutcome(
+            replied=True,
+            topic_summary="收播道别",
+            reply_guidance="说再见",
+            reply_payload={"speech": FAREWELL, "emotion": {"name": "happy", "intensity": 0.6}},
+        )
+    )
+    return planner
+
+
+def _tail_agent(engine: _GatedEngine, llm: Any = None, store: Optional[SQLiteDatabase] = None) -> StreamerAgent:
+    """TTS 开着的主播；给了库就接上场次回顾整理（只开回顾这一步，用模型调用观察整理何时开始）。"""
+    repos = (
+        {"chat_repo": store.chat, "sessions_repo": store.sessions, "recap_repo": store.recaps}
+        if store is not None
+        else {}
+    )
+    return make_streamer_agent(
+        {"background": {"enabled": False}, "mouth": {"enabled": False}},
+        llm=llm,
+        planner=_farewell_planner(),
+        tts_engine=engine,
+        speech_config=_TTS_ON,
+        **repos,
+    )
+
+
+async def _ended_session_with_lines(store: SQLiteDatabase) -> int:
+    """一场已结束、有对话可整理的场次（场次管理器写成已结束之后才发 live.ended）。"""
+    pk = await store.sessions.insert_live_session(stream_id="room", platform="bilibili", started_at_ms=1_000)
+    await _viewer_says(store, pk, "阿杰", "TNT阵还差最后一排没铺完")
+    # 回顾以她自己说过的话为原料：至少留一句主播台词，整理才会调模型
+    await store.chat.insert_live_chat(
+        live_session_id=pk,
+        timestamp_ms=now_ms(),
+        sender_role="assistant",
+        sender_name="主播",
+        content="最后一排明天再铺",
+        message_type="speak",
+    )
+    await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=now_ms())
+    return pk
+
+
+async def _started_with_idle_bootstrap(agent: StreamerAgent) -> None:
+    await agent.start()
+    await asyncio.gather(*agent._memory_tasks)  # 启动补写无场次可补，空跑结束
+
+
+async def test_settle_starts_after_signoff_line_finishes_playing(
+    store: SQLiteDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """下播：道别句排在队尾播放中，整理排进后台先等它播完（上限 30 秒），播完才调模型整理。"""
+    engine, llm = _GatedEngine(), FakeLLMManager()
+    agent = _tail_agent(engine, llm, store)
+    await _started_with_idle_bootstrap(agent)
+    waits = _watch_idle_waits(monkeypatch)
+    pk = await _ended_session_with_lines(store)
+    try:
+        await agent._on_live_ended("live.ended", LiveEndedPayload(live_session_id=pk), "test")
+        await asyncio.wait_for(engine.started.wait(), timeout=5)
+        await asyncio.wait_for(waits.entered.wait(), timeout=5)
+        assert llm.calls == [], "道别句还在播，整理不开始"
+
+        engine.release.set()
+        await asyncio.gather(*agent._memory_tasks)
+    finally:
+        await agent.stop()
+
+    assert engine.finished == [FAREWELL] and engine.cancelled == []
+    assert llm.calls, "道别句播完后才开始整理"
+    assert waits.timeouts[0] == _TAIL_WAIT_MS
+
+
+async def test_stop_waits_for_queued_line_before_stopping_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """关程序：队里还有她刚说的一句，停发声管线前先等它播完，不被当没送达丢掉。"""
+    engine = _GatedEngine()
+    agent = _tail_agent(engine)
+    await agent.start()
+    waits = _watch_idle_waits(monkeypatch)
+    await agent.debug_test_decision(batch=[{"nickname": "阿杰", "text": "主播晚安"}])
+    await asyncio.wait_for(engine.started.wait(), timeout=5)
+
+    stopping = asyncio.create_task(agent.stop())
+    await asyncio.wait_for(waits.entered.wait(), timeout=5)
+    assert not stopping.done() and engine.cancelled == [], "还在播，停机等着"
+
+    engine.release.set()
+    await stopping
+
+    assert engine.finished == [FAREWELL] and engine.cancelled == []
+    assert waits.timeouts == [_TAIL_WAIT_MS]
+
+
+async def test_stuck_tts_waits_up_to_limit_then_settles_and_stops_anyway(
+    store: SQLiteDatabase, monkeypatch: pytest.MonkeyPatch, loguru_capture: Any
+) -> None:
+    """TTS 卡死：下播整理与停机各等满 30 秒上限后照常进行，卡住的那句随队列停止作废。"""
+    engine, llm = _GatedEngine(), FakeLLMManager()
+    agent = _tail_agent(engine, llm, store)
+    await _started_with_idle_bootstrap(agent)
+    waits = _watch_idle_waits(monkeypatch, stuck=True)
+    pk = await _ended_session_with_lines(store)
+
+    await agent._on_live_ended("live.ended", LiveEndedPayload(live_session_id=pk), "test")
+    await asyncio.wait_for(engine.started.wait(), timeout=5)
+    await asyncio.gather(*agent._memory_tasks)
+    assert llm.calls, "等满上限仍没播完：照常整理"
+    assert engine.finished == []
+
+    await agent.stop()
+
+    assert waits.timeouts == [_TAIL_WAIT_MS, _TAIL_WAIT_MS], "下播整理与停机各等一次，上限都是 30 秒"
+    assert engine.cancelled == [FAREWELL], "卡住的那句随队列停止作废"
+    stuck_warnings = [r for r in loguru_capture.records if r["level"] == "WARNING" and "仍没播完" in r["message"]]
+    assert len(stuck_warnings) == 2
+
+
+# ---------------------------------------------------------------------------
+# 场次行已删或将删：道别照常跑，不排收播整理
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "row_gone",
+    [{"deleted": True}, {"empty_discarded": True}],
+    ids=["场次行将被删除", "空场次已丢弃"],
+)
+async def test_signoff_schedules_no_settle_when_session_row_is_gone(
+    store: SQLiteDatabase, row_gone: Dict[str, bool]
+) -> None:
+    """live.ended 标着场次行已删或将删：道别那一轮照常跑，但不排收播整理。
+
+    这一场的行还在、有可整理的对话（模拟删除场次时 live.ended 先到、删行在后）：整理一旦
+    排上就会调模型写回顾，所以"没有模型调用"就是"没排整理"。
+    """
+    llm, planner = FakeLLMManager(), _farewell_planner()
+    agent = make_streamer_agent(
+        {"background": {"enabled": False}, "mouth": {"enabled": False}},
+        llm=llm,
+        planner=planner,
+        chat_repo=store.chat,
+        sessions_repo=store.sessions,
+        recap_repo=store.recaps,
+    )
+    await _started_with_idle_bootstrap(agent)
+    pk = await _ended_session_with_lines(store)
+    try:
+        await agent._on_live_ended("live.ended", LiveEndedPayload(live_session_id=pk, **row_gone), "test")
+        await asyncio.gather(*agent._memory_tasks)
+    finally:
+        await agent.stop()
+
+    planner.plan.assert_awaited_once()
+    assert llm.calls == [], "场次行已删或将删：不排收播整理，不给这一场写回顾"

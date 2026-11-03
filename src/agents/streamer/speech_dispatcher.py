@@ -214,6 +214,18 @@ class SpeechDispatcher:
         self._subtitle_follows_playback = False
         self._logger.warning("TTS 管线已降级关闭，字幕从跟随播放回切为派发直出")
 
+    async def wait_idle(self, *, timeout_ms: int) -> bool:
+        """等播放队列把已派发的台词播完（队列空且当前句播完），最多 ``timeout_ms``；返回是否等到。
+
+        下播整理前、Agent 停止前调用：她最后几句（道别、"下次继续……"）常排在队尾，
+        先让它们真的播出去，整理和停队列才往下走。TTS 关闭或启动降级时没有播放队列，
+        没有要等的，立即返回 True；等满上限仍没播完返回 False，是否照常往下走由调用方决定。
+        """
+        queue = self._utterance_queue
+        if queue is None:
+            return True
+        return await queue.wait_idle(timeout_ms=timeout_ms)
+
     async def stop(self) -> None:
         """停止发言管线：先停 TTS 队列，再汇合在飞扇出任务；可重复调用。
 

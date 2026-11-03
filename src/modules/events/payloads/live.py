@@ -9,7 +9,8 @@
 
 - ``live.started``：显式场次开启（手动开启 / 模拟器回放自动开启）。
   默认场次不复用：本事件只在显式 ``open_session`` 开启时发布一次。
-- ``live.ended``：显式场次结束（手动结束 / 进程退出收口 / 回放结束）。
+- ``live.ended``：显式场次结束（手动结束 / 进程退出收口 / 回放结束 / 删除进行中场次前
+  先结束）。
 
 字段约束：
 - ``live_session_id`` 为 ``live_sessions`` 表 INTEGER 主键，事件即事实：
@@ -88,6 +89,10 @@ class LiveEndedPayload(BasePayload):
         superseded: 是否被新开的场次顶掉（开新场次前自动结束旧场次时为 True）。
             紧接着就是下一场的 ``live.started``，订阅方据此跳过只属于
             "真下播"的动作（如主播道别）
+        deleted: 场次行将被删除（删除进行中场次时先结束再删行，此时为 True）。
+            发事件时行还在，订阅方处理时多半已删：与 ``empty_discarded`` 同样
+            对待——不再往这一场写东西（如给主播道别句盖这一场的编号）、不做
+            收播整理。缺省 False，旧发布方不填即"不删"
         ended_at_ms: 场次结束时刻（Unix 毫秒）
         timestamp_ms: 事件发布时间戳（Unix 毫秒）
     """
@@ -104,6 +109,10 @@ class LiveEndedPayload(BasePayload):
     superseded: bool = Field(
         default=False,
         description="被新开的场次顶掉：True 时紧接着就是下一场的 live.started，不是真下播",
+    )
+    deleted: bool = Field(
+        default=False,
+        description="场次行将被删除（删除进行中场次时先结束再删行）：与 empty_discarded 同样对待，不再写入这一场",
     )
     ended_at_ms: int = Field(
         default_factory=lambda: now_ms(),

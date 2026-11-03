@@ -169,6 +169,7 @@ async def test_close_empty_session_discards_row(store: SQLiteDatabase, bus: Even
     assert await store.sessions.get_live_session(live_session_id=pk) is None
     assert collector.ended and collector.ended[0].empty_discarded is True
     assert collector.ended[0].superseded is False  # 手动下播是真下播
+    assert collector.ended[0].deleted is False  # 手动下播不是删除场次
     assert collector.ended[0].duration_ms is not None
 
 
@@ -207,6 +208,29 @@ async def test_delete_active_session_closes_first(store: SQLiteDatabase, bus: Ev
     await bus.wait_until_drained()
     assert manager.active_pk is None
     assert collector.ended and collector.ended[0].live_session_id == pk
+    assert collector.ended[0].deleted is True
+
+
+async def test_delete_active_session_with_details_marks_live_ended_as_deleted(
+    store: SQLiteDatabase, bus: EventBus
+) -> None:
+    """删除有对话的进行中场次：先结束（不算空场次丢弃）再删行，live.ended 带"行将被删除"。
+
+    订阅方据此不再往这一场写东西：事件是后台派发，订阅方处理时行多半已删。
+    """
+    manager = _make_manager(store, bus)
+    collector = _Collector(bus)
+    await manager.start()
+
+    pk = await manager.open_session(kind="live")
+    await store.chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=1_000, sender_role="viewer", content="弹幕", message_type="danmaku"
+    )
+    assert await manager.delete_session(pk) is True
+    await bus.wait_until_drained()
+
+    assert [(p.live_session_id, p.empty_discarded, p.deleted) for p in collector.ended] == [(pk, False, True)]
+    assert await store.sessions.get_live_session(live_session_id=pk) is None
 
 
 async def test_delete_session_cascades_detail_rows(store: SQLiteDatabase, bus: EventBus) -> None:

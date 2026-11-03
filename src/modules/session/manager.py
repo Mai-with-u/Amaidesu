@@ -162,8 +162,14 @@ class LiveSessionManager:
                 return False
             return await self._close_active(reason=reason, ended_at_ms=now_ms())
 
-    async def _close_active(self, *, reason: str, ended_at_ms: int, superseded: bool = False) -> bool:
+    async def _close_active(
+        self, *, reason: str, ended_at_ms: int, superseded: bool = False, deleted: bool = False
+    ) -> bool:
         """结束当前显式场次（调用方持锁）。空场次（无任何明细行）整行丢弃。
+
+        ``deleted`` 由删除路径传 True：这一场结束后紧接着就删行，随 ``live.ended``
+        告诉订阅方别再往这一场写东西。事件是后台派发，订阅方（如主播道别要等模型
+        好几秒）处理时行多半已删；不带这个标记，道别句会被盖上已删场次的编号写成孤儿行。
 
         幂等：目标行不存在或已结账（``ended_at_ms`` 非空）时只复位内存态
         并返回 False，不重复结算、不重复广播 ``live.ended``、不误删行——
@@ -201,6 +207,7 @@ class LiveSessionManager:
                 duration_ms=max(ended_at_ms - started_at, 0),
                 empty_discarded=empty_discarded,
                 superseded=superseded,
+                deleted=deleted,
                 ended_at_ms=ended_at_ms,
             ),
             source="LiveSessionManager",
@@ -228,7 +235,9 @@ class LiveSessionManager:
             if row is None:
                 return False
             if live_session_id == self._active_pk:
-                await self._close_active(reason="删除场次前自动结束", ended_at_ms=now_ms())
+                # 先结束再删行：live.ended 带上"行将被删除"，订阅方据此不再往这一场写东西
+                # （主播照常道别，但道别句不落库）、不做收播整理
+                await self._close_active(reason="删除场次前自动结束", ended_at_ms=now_ms(), deleted=True)
             await self._sessions.delete_live_session(live_session_id=live_session_id)
             logger.info(f"场次已删除: id={live_session_id}（明细级联清除）")
             return True

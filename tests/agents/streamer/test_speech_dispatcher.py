@@ -116,6 +116,29 @@ async def test_dispatch_carries_explicit_session_id(started, given: Optional[int
     assert captured[0][1].live_session_id == expected
 
 
+async def test_wait_idle_returns_at_once_without_playback_queue(started) -> None:
+    """TTS 关着没有播放队列：队尾没有要等的，立即返回已空闲。"""
+    dispatcher = await started()
+
+    assert dispatcher.utterance_queue is None
+    assert await dispatcher.wait_idle(timeout_ms=30_000) is True
+
+
+async def test_wait_idle_forwards_limit_and_verdict_of_playback_queue(started, monkeypatch) -> None:
+    """有播放队列时把等待上限原样交给队列，等满仍没播完（TTS 卡住）如实返回 False。"""
+    dispatcher = await started(engine=_Engine(), config=_TTS_ON)
+    asked: list[Optional[int]] = []
+
+    async def _stuck(timeout_ms: Optional[int] = None) -> bool:
+        asked.append(timeout_ms)
+        return False
+
+    monkeypatch.setattr(dispatcher.utterance_queue, "wait_idle", _stuck)
+
+    assert await dispatcher.wait_idle(timeout_ms=30_000) is False
+    assert asked == [30_000]
+
+
 async def test_utterance_ids_increment_per_dispatch(started) -> None:
     dispatcher = await started()
     ids = [(await dispatcher.dispatch({"speech": f"第 {i} 句", "emotion": ""}))[2] for i in range(3)]
