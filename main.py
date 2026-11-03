@@ -589,6 +589,9 @@ async def create_app_components(
             # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）+ 长期记忆文件
             viewer_profile_repo=database.viewer_profiles,
             recap_repo=database.recaps,
+            # 记忆账本两仓储（承诺与场次档案）：下播整理写入，WebUI 查看与纠错
+            commitments_repo=database.commitments,
+            archive_repo=database.archive,
             event_repo=database.events,
             # 生物名册（Minecraft Agent 跨场次记得主播起的名字与谁死了）
             creature_repo=database.game_creatures,
@@ -705,6 +708,8 @@ async def create_app_components(
                 # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）+ 长期记忆文件
                 viewer_profile_repo=database.viewer_profiles,
                 recap_repo=database.recaps,
+                commitments_repo=database.commitments,
+                archive_repo=database.archive,
                 event_repo=database.events,
                 creature_repo=database.game_creatures,
                 long_memory_store=long_memory_store,

@@ -64,7 +64,8 @@ def instantiate_agent(
     - streamer：thinking_sink / speech_config / tts_engine / subtitle_service /
       session_manager / rundown_repo / rundown_instance_repo /
       rundown_transition_repo / chat_repo / sessions_repo / topic_repo /
-      viewer_repo / viewer_profile_repo / recap_repo / event_repo / long_memory_store /
+      viewer_repo / viewer_profile_repo / recap_repo / commitments_repo /
+      archive_repo / event_repo / long_memory_store /
       context_assembler_config / task_ledger（委派渲染的机器状态查询源）。
       仓储为 None 时对应能力降级（chat_repo 缺失 = 对话历史读取整体短路，
       Planner/Replyer 无历史上下文；记忆两仓储缺失 = 场次回顾 / 观众画像
@@ -114,6 +115,8 @@ def instantiate_agent(
             viewer_repo=deps.viewer_repo,
             viewer_profile_repo=deps.viewer_profile_repo,
             recap_repo=deps.recap_repo,
+            commitments_repo=deps.commitments_repo,
+            archive_repo=deps.archive_repo,
             event_repo=deps.event_repo,
             long_memory_store=deps.long_memory_store,
             context_assembler_config=deps.context_assembler_config,

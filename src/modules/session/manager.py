@@ -58,7 +58,7 @@ from src.modules.utils.time_utils import now_ms
 
 from src.modules.storage.models.sessions import LiveSessionListItem
 from src.modules.storage.repos import ChatRepo, SessionRepo
-from src.modules.types.session_kind import SessionKind
+from src.modules.types.session_kind import SESSION_KIND_REHEARSAL, SessionKind
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -319,9 +319,21 @@ class LiveSessionManager:
         changed = await self._sessions.update_live_session_kind(
             live_session_id=live_session_id, kind=kind, updated_at_ms=self._clock()
         )
-        if changed:
-            logger.info(f"场次类型已更正: id={live_session_id} kind={kind}")
-        return changed
+        if not changed:
+            return False
+        logger.info(f"场次类型已更正: id={live_session_id} kind={kind}")
+        # 改成彩排：彩排场不整理，这一场留下的档案行、本场登记的承诺与整理进度一并清掉，
+        # 免得彩排时说的话进了正式的账。改成正式场则什么都不用做——整理进度为空，
+        # 下一次调度自然会挑到它重新整理
+        if kind == SESSION_KIND_REHEARSAL:
+            try:
+                removed = await self._sessions.reset_memory_ledger_for_session(live_session_id=live_session_id)
+            except Exception as exc:  # noqa: BLE001 - 清理失败不影响类型更正本身
+                logger.warning(f"场次 {live_session_id} 改为彩排后清理账本失败: {exc}", exc=exc)
+            else:
+                if removed:
+                    logger.info(f"场次 {live_session_id} 改为彩排，已清掉账本痕迹 {removed} 条")
+        return True
 
     # -------------------- 场次归属解析 --------------------
 

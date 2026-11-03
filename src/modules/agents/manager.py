@@ -49,7 +49,8 @@ class AgentManager:
             ``enable_agent`` 时如未显式覆盖则用此成员（Dashboard 动态启停
             场景可能不传 tool_registry，回退到成员避免 Agent 拿 None）。
         rundown_repo / chat_repo / sessions_repo / topic_repo / viewer_repo /
-        viewer_profile_repo / recap_repo / event_repo / long_memory_store: 构造时注入的默认仓储
+        viewer_profile_repo / recap_repo / commitments_repo / archive_repo / event_repo /
+    long_memory_store: 构造时注入的默认仓储
         creature_repo: 构造时注入的默认生物名册仓储（Minecraft Agent 跨场次记得同伴）
             （直播对话历史的单一事实源在 live_chat 表，StreamerAgent 的历史
             读取 / 后台维护 / 收播记忆整理依赖它们）。回退语义同 tool_registry
@@ -69,6 +70,8 @@ class AgentManager:
         viewer_repo: Optional[Any] = None,
         viewer_profile_repo: Optional[Any] = None,
         recap_repo: Optional[Any] = None,
+        commitments_repo: Optional[Any] = None,
+        archive_repo: Optional[Any] = None,
         event_repo: Optional[Any] = None,
         creature_repo: Optional[Any] = None,
         long_memory_store: Optional[Any] = None,
@@ -88,6 +91,8 @@ class AgentManager:
         self._viewer_repo = viewer_repo
         self._viewer_profile_repo = viewer_profile_repo
         self._recap_repo = recap_repo
+        self._commitments_repo = commitments_repo
+        self._archive_repo = archive_repo
         self._event_repo = event_repo
         self._creature_repo = creature_repo
         self._long_memory_store = long_memory_store
@@ -229,6 +234,8 @@ class AgentManager:
                 d.viewer_profile_repo if d.viewer_profile_repo is not None else self._viewer_profile_repo
             ),
             recap_repo=d.recap_repo if d.recap_repo is not None else self._recap_repo,
+            commitments_repo=(d.commitments_repo if d.commitments_repo is not None else self._commitments_repo),
+            archive_repo=d.archive_repo if d.archive_repo is not None else self._archive_repo,
             event_repo=d.event_repo if d.event_repo is not None else self._event_repo,
             creature_repo=d.creature_repo if d.creature_repo is not None else self._creature_repo,
             long_memory_store=d.long_memory_store if d.long_memory_store is not None else self._long_memory_store,

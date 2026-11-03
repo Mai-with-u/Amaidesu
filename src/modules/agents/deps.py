@@ -51,6 +51,8 @@ class AgentDeps:
     viewer_repo: Optional[Any] = None
     viewer_profile_repo: Optional[Any] = None
     recap_repo: Optional[Any] = None
+    commitments_repo: Optional[Any] = None
+    archive_repo: Optional[Any] = None
     event_repo: Optional[Any] = None
     creature_repo: Optional[Any] = None
     long_memory_store: Optional[Any] = None
