@@ -7,6 +7,7 @@ from src.modules.events import EVENT_REGISTRY, register_core_events
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import (
+    UtteranceDroppedPayload,
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
     UtteranceStartedPayload,
@@ -82,6 +83,12 @@ def test_utterance_payload_required_fields_and_streaming_duration() -> None:
             error_message="timeout",
             timestamp_ms=1700000000000,
         ),
+        UtteranceDroppedPayload(
+            utterance_id="u",
+            reason="queue_stopped",
+            timestamp_ms=1700000000000,
+        ),
+        _speech(emotion="happy", emotion_intensity=0.7, memory_refs=["约#7"], timestamp_ms=1700000000000),
     ],
 )
 def test_payload_roundtrip(payload) -> None:
@@ -95,6 +102,7 @@ def test_payload_roundtrip(payload) -> None:
         (CoreEvents.TTS_UTTERANCE_STARTED, "tts.utterance.started", UtteranceStartedPayload),
         (CoreEvents.TTS_UTTERANCE_FINISHED, "tts.utterance.finished", UtteranceFinishedPayload),
         (CoreEvents.TTS_UTTERANCE_FAILED, "tts.utterance.failed", UtteranceFailedPayload),
+        (CoreEvents.TTS_UTTERANCE_DROPPED, "tts.utterance.dropped", UtteranceDroppedPayload),
     ],
 )
 def test_event_name_registered_and_bound_to_payload_class(constant: str, name: str, payload_cls: type) -> None:

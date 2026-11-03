@@ -97,6 +97,8 @@ class CoreEvents:
     TTS_UTTERANCE_STARTED = "tts.utterance.started"
     TTS_UTTERANCE_FINISHED = "tts.utterance.finished"
     TTS_UTTERANCE_FAILED = "tts.utterance.failed"
+    # 播放队列确知这句没送到观众面前（关停清队、停机拒收、段落插断、过期作废），且未出字幕
+    TTS_UTTERANCE_DROPPED = "tts.utterance.dropped"
 
     # ========== v2 语义域事件（streamer 主播发言业务事实） ==========
     # 主播 Agent 已生成一条发言的业务事实：与 TTS 启用与否正交，下游消费者

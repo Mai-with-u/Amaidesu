@@ -2,7 +2,7 @@
 事件 Payload 定义：tts.utterance.* 一次发声实例生命周期
 
 定义 ``tts.utterance.started`` / ``tts.utterance.finished`` /
-``tts.utterance.failed`` 三个事件的 Payload。
+``tts.utterance.failed`` / ``tts.utterance.dropped`` 四个事件的 Payload。
 
 按契约：
 - ``utterance_id`` 为全链路关联键（编排层生成），串联 reply 记录、TTS 事件、
@@ -143,6 +143,29 @@ class UtteranceFailedPayload(BasePayload):
     )
 
 
+@register_event(CoreEvents.TTS_UTTERANCE_DROPPED)
+class UtteranceDroppedPayload(BasePayload):
+    """一次发声被播放队列丢弃（确知未送到观众面前）事件 Payload。
+
+    事件名：``tts.utterance.dropped`` —— 仅由播放队列在四条确知未出屏、未出声的路径发布：
+    关停时清掉未轮到的队列条目、停机中拒绝入队、段落被更高优先级插断后丢掉剩余句、过期作废。
+    存储记账器据此在对应台词行写上 ``dropped_at_ms``（没送达标记），排除出"主播说过的话"。
+    """
+
+    utterance_id: str = Field(..., description="一次发声实例的唯一 ID（与 streamer.speech 对应）")
+    reason: str = Field(
+        ..., description="丢弃原因（queue_stopped / stopping_rejected / segment_interrupted / expired）"
+    )
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
+    timestamp_ms: int = Field(
+        default_factory=lambda: now_ms(),
+        description="事件发布时间戳（Unix 毫秒）",
+    )
+
+
 # ---------------------------------------------------------------------------
 # 失败"已报告"标记
 # ---------------------------------------------------------------------------
@@ -177,6 +200,7 @@ __all__ = [
     "UtteranceStartedPayload",
     "UtteranceFinishedPayload",
     "UtteranceFailedPayload",
+    "UtteranceDroppedPayload",
     "FAILURE_REPORTED_ATTR",
     "mark_failure_reported",
     "is_failure_reported",

@@ -43,7 +43,7 @@ from typing import Awaitable, Callable, Deque, Optional
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.utterance import UtteranceFailedPayload, is_failure_reported
+from src.modules.events.payloads.utterance import UtteranceDroppedPayload, UtteranceFailedPayload, is_failure_reported
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
@@ -219,6 +219,7 @@ class UtteranceQueue:
         """
         if self._stopping.is_set():
             self._logger.warning(f"队列正在停止，拒绝入队: utterance_id={utterance_id}")
+            await self._emit_dropped(utterance_id, "stopping_rejected")
             return False
 
         expires_at_ms = self._clock() + ttl_ms if ttl_ms > 0 else 0
@@ -231,7 +232,9 @@ class UtteranceQueue:
             on_start=on_start,
         )
         async with self._lock:
-            self._drop_interrupted_segment(item)
+            interrupted = self._drop_interrupted_segment(item)
+            for dropped_item in interrupted:
+                await self._emit_dropped(dropped_item.utterance_id, "segment_interrupted")
             if len(self._queue) >= self._max_queue:
                 # 丢优先级最低里最旧的；全部同级时就是丢最旧（队首），即普通 FIFO 行为
                 candidates = [queued for queued in self._queue if queued.priority <= item.priority]
@@ -281,6 +284,7 @@ class UtteranceQueue:
         不会等待正在进行的 invoke 完成——若 invoke 已进入 TTS 引擎，
         由 TTS 引擎自身的超时/取消机制兜底。
         """
+        dropped_items: list[_UtteranceItem] = []
         async with self._lock:
             task = self._worker_task
             self._worker_task = None
@@ -288,10 +292,14 @@ class UtteranceQueue:
             self._wakeup.set()  # 唤醒可能阻塞在 wait 的 worker
             if self._queue:
                 # 残留未播放的 utterances 直接丢弃（不入 TTS）
-                dropped = len(self._queue)
+                dropped_items = list(self._queue)
+                dropped = len(dropped_items)
                 self._total_dropped += dropped
                 self._queue.clear()
                 self._logger.warning(f"停止时丢弃未播放的 utterances: count={dropped}")
+
+        for dropped_item in dropped_items:
+            await self._emit_dropped(dropped_item.utterance_id, "queue_stopped")
 
         if task is not None and not task.done():
             task.cancel()
@@ -315,13 +323,13 @@ class UtteranceQueue:
                 return
         self._queue.append(item)
 
-    def _drop_interrupted_segment(self, item: _UtteranceItem) -> None:
+    def _drop_interrupted_segment(self, item: _UtteranceItem) -> list[_UtteranceItem]:
         """正在播的段落被更高优先级的台词插进来：段落里还没播的句子作废，不在反应之后接着讲。
 
         段落还没开播时不算打断——急的先播，段落随后整段照常播。
         """
         if not self._current_segment or item.segment == self._current_segment:
-            return
+            return []
         rest = [
             queued
             for queued in self._queue
@@ -334,6 +342,7 @@ class UtteranceQueue:
             self._logger.info(
                 f"段落被插断，丢弃剩余 {len(rest)} 句: segment={self._current_segment}, 插队={item.utterance_id}"
             )
+        return rest
 
     @property
     def size(self) -> int:
@@ -398,21 +407,26 @@ class UtteranceQueue:
                     return
 
                 # 在锁内取一条；取出后清空 wakeup，避免空转
+                expired_items: list[_UtteranceItem] = []
                 async with self._lock:
                     if self._stopping.is_set():
                         return
-                    item = self._pop_fresh()
+                    item, expired_items = self._pop_fresh()
                     if item is None:
                         self._wakeup.clear()
-                        continue
-                    self._current_segment = item.segment
-                    if not self._queue:
-                        # 取完后队列为空，清除 wakeup 让下一次 enqueue 再唤醒
-                        self._wakeup.clear()
-                    # 置位与取件同临界区：wait_idle 的谓词读 (queue, processing)
-                    # 二元组，同步段内事件循环不切换协程，不会观察到
-                    # "队列已空但 processing 未置位"的假空闲窗口
-                    self._processing = True
+                    else:
+                        self._current_segment = item.segment
+                        if not self._queue:
+                            # 取完后队列为空，清除 wakeup 让下一次 enqueue 再唤醒
+                            self._wakeup.clear()
+                        # 置位与取件同临界区：wait_idle 的谓词读 (queue, processing)
+                        # 二元组，同步段内事件循环不切换协程，不会观察到
+                        # "队列已空但 processing 未置位"的假空闲窗口
+                        self._processing = True
+                for expired_item in expired_items:
+                    await self._emit_dropped(expired_item.utterance_id, "expired")
+                if item is None:
+                    continue
 
                 # 在锁外执行 speak（避免阻塞其他 enqueue）；交给 TTS 之前先告诉上游"轮到这句了"
                 self._notify_start(item)
@@ -461,17 +475,39 @@ class UtteranceQueue:
         except Exception as exc:  # noqa: BLE001 - 兜底事件不阻断队列
             self._logger.warning(f"代发 tts.utterance.failed 失败（已忽略）: utterance_id={utterance_id}, err={exc}")
 
-    def _pop_fresh(self) -> Optional[_UtteranceItem]:
-        """取下一条还没过期的；过期的直接作废（反应过时了再说只会更怪）。"""
+    async def _emit_dropped(self, utterance_id: str, reason: str) -> None:
+        """确知这句没送到观众面前（且未出字幕），发布 ``tts.utterance.dropped`` 供存储打没送达标记。"""
+        if self._event_bus is None:
+            return
+        payload = UtteranceDroppedPayload(
+            utterance_id=utterance_id,
+            reason=reason,
+            timestamp_ms=self._clock(),
+        )
+        try:
+            await self._event_bus.emit(
+                CoreEvents.TTS_UTTERANCE_DROPPED,
+                payload,
+                source="streamer_agent.utterance_queue",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 丢弃事件不阻断队列
+            self._logger.warning(f"发布 tts.utterance.dropped 失败（已忽略）: utterance_id={utterance_id}, err={exc}")
+
+    def _pop_fresh(self) -> tuple[Optional[_UtteranceItem], list[_UtteranceItem]]:
+        """取下一条还没过期的；过期的直接作废并返回，由外层发布丢弃事件。"""
         now = self._clock()
+        expired: list[_UtteranceItem] = []
         while self._queue:
             item = self._queue.popleft()
             if item.expires_at_ms and item.expires_at_ms <= now:
                 self._total_expired += 1
                 self._logger.info(f"utterance 已过期，跳过: utterance_id={item.utterance_id}")
+                expired.append(item)
                 continue
-            return item
-        return None
+            return item, expired
+        return None, expired
 
     async def _dispatch(self, item: _UtteranceItem) -> None:
         """单条 utterance 的处理入口（speak + 超时保护 + 错误兜底）。

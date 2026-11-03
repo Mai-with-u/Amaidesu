@@ -16,7 +16,7 @@ from src.agents.streamer.utterance_queue import (
 )
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.utterance import UtteranceFailedPayload
+from src.modules.events.payloads.utterance import UtteranceDroppedPayload, UtteranceFailedPayload
 from src.modules.tts.common import emit_utterance_failed
 
 
@@ -457,5 +457,92 @@ async def test_start_callback_fires_when_its_turn_comes_and_never_for_a_skipped_
         await _wait_for(lambda: len(recorder.calls) == 2)
         assert started == [("ouch", 0)], "回调在这句交给 TTS 之前"
         assert [uid for _, uid in recorder.calls] == ["ouch", "broken"]
+    finally:
+        await queue.stop()
+
+
+def _capture_dropped(bus: EventBus) -> list[UtteranceDroppedPayload]:
+    captured: list[UtteranceDroppedPayload] = []
+
+    async def _capture(event_name: str, payload: UtteranceDroppedPayload, source: str) -> None:
+        captured.append(payload)
+
+    bus.on(CoreEvents.TTS_UTTERANCE_DROPPED, _capture, model_class=UtteranceDroppedPayload)
+    return captured
+
+
+async def test_dropped_events_only_fire_on_four_confirmed_undelivered_paths() -> None:
+    """规-01：只有关停清队、停机拒收、段落插断、过期作废发 dropped；溢出、超时、speak 异常只发 failed。"""
+    bus = EventBus()
+    dropped = _capture_dropped(bus)
+    failed = _capture_failed(bus)
+    clock = _Clock()
+    recorder = _Recorder(delay_s=0.08)
+    queue = UtteranceQueue(speak=recorder, event_bus=bus, max_queue=4, render_timeout_ms=2000, clock=clock)
+    await queue.start()
+    try:
+        # 1. 段落被插断：p0 开播后，急事插队丢掉剩余 p1、p2
+        await queue.enqueue("p0", "第0句", segment="seg1")
+        await queue.enqueue("p1", "第1句", segment="seg1")
+        await queue.enqueue("p2", "第2句", segment="seg1")
+        await _wait_for(lambda: len(recorder.calls) == 1)
+        await queue.enqueue("urgent", "急事", priority=5)
+        await _wait_for(lambda: len(recorder.calls) == 2)
+
+        # 2. 过期作废：未启动的新队列先缓冲条目，拨动时钟过时效后再启动消费
+        q_exp = UtteranceQueue(speak=recorder, event_bus=bus, max_queue=4, render_timeout_ms=2000, clock=clock)
+        await q_exp.enqueue("exp1", "过期反应", ttl_ms=1000)
+        await q_exp.enqueue("after_exp", "正常句")
+        clock.now += 2000
+        await q_exp.start()
+        await _wait_for(lambda: any(uid == "after_exp" for _, uid in recorder.calls))
+        await q_exp.stop()
+
+        # 3. 关停清队：用慢 speak 堵住当前句，后面排队两句在 stop() 时被清掉
+        slow_gate = asyncio.Event()
+
+        async def _block_first(text: str, utterance_id: Optional[str]) -> None:
+            if utterance_id == "blocking":
+                await slow_gate.wait()
+
+        q2 = UtteranceQueue(speak=_block_first, event_bus=bus, max_queue=2, render_timeout_ms=200, clock=clock)
+        await q2.start()
+        await q2.enqueue("blocking", "卡住中")
+        await asyncio.sleep(0.02)
+        # 队列溢出：队满再塞触发 queue_overflow（出字幕，不发 dropped）
+        await q2.enqueue("ov_victim", "被挤出")
+        await q2.enqueue("queued_stop_1", "没轮到1")
+        await q2.enqueue("queued_stop_2", "没轮到2")
+        await q2.stop()
+
+        # 4. 停机中入队被拒
+        assert await q2.enqueue("rejected_after_stop", "已停机") is False
+
+        # 5. 渲染超时与引擎启动异常：只发 failed，不发 dropped
+        async def _fail_or_hang(text: str, utterance_id: Optional[str]) -> None:
+            if utterance_id == "hang":
+                await asyncio.sleep(5.0)
+            raise RuntimeError("引擎未启动")
+
+        q3 = UtteranceQueue(speak=_fail_or_hang, event_bus=bus, max_queue=3, render_timeout_ms=120, clock=clock)
+        await q3.start()
+        await q3.enqueue("hang", "超时句")
+        await q3.enqueue("err", "报错句")
+        await q3.wait_idle(timeout_ms=2000)
+        await q3.stop()
+
+        await bus.wait_until_drained()
+        by_id = {d.utterance_id: d.reason for d in dropped}
+        assert by_id == {
+            "p1": "segment_interrupted",
+            "p2": "segment_interrupted",
+            "exp1": "expired",
+            "queued_stop_1": "queue_stopped",
+            "queued_stop_2": "queue_stopped",
+            "rejected_after_stop": "stopping_rejected",
+        }
+        failed_ids = {f.utterance_id for f in failed}
+        assert {"ov_victim", "hang", "err"} <= failed_ids
+        assert failed_ids.isdisjoint(set(by_id))
     finally:
         await queue.stop()

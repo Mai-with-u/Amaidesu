@@ -4,7 +4,7 @@ SQLite 连接管理器
 按线程管理连接 + WAL + SAVEPOINT 嵌套事务 + 受管事务深度。
 
 要点：
-- 统一 PRAGMA 配置（journal_mode=WAL / synchronous=NORMAL / cache_size=-64000 / temp_store=MEMORY / foreign_keys=ON）
+- 统一 PRAGMA 配置（journal_mode=WAL / synchronous=NORMAL / cache_size=-64000 / temp_store=MEMORY / foreign_keys=ON / secure_delete=ON）
 - savepoint 命名前缀用 ``amaidesu_tx_`` 标识本项目事务，避免与其他系统的 savepoint 冲突
 - 关库只关空闲连接；正在事务中的连接由持有它的线程在事务收尾后自行关闭，
   关库线程永远不碰别的线程正在用的连接
@@ -120,6 +120,7 @@ class SQLiteConnectionManager:
         connection.execute("PRAGMA cache_size=-64000")
         connection.execute("PRAGMA temp_store=MEMORY")
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA secure_delete = ON")
         return connection
 
     @contextmanager

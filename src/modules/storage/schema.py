@@ -1,9 +1,9 @@
 """
 存储 Schema 定义
 
-本模块是全部 SQLite 表的**单一事实源**：23 张业务表（12 张核心直播表 +
+本模块是全部 SQLite 表的**单一事实源**：24 张业务表（12 张核心直播表 +
 2 张模拟器运行时表 + 5 张流程单域表 + 2 张观众画像表 + 1 张 LLM 请求历史表 +
-1 张游戏生物名册表）+ ``schema_migrations``。
+1 张游戏生物名册表 + 1 张不记录名单表）+ ``schema_migrations``。
 任何建表 DDL 都必须落在这里，不允许业务模块自带 ``CREATE TABLE``——否则
 表结构游离于 ``SCHEMA_VERSION`` 版本管理之外，迁移机制无法覆盖。
 
@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 22
+SCHEMA_VERSION: int = 23
 
 
 # =============================================================================
@@ -71,6 +71,7 @@ SCHEMA_VERSION: int = 22
 # - topics                  话题（每行一个，1NF）
 # - viewers                 观众（一行一人，记外部 ID 与跨场客观数字）
 # - viewer_names            观众昵称记录（含曾用名）
+# - forget_list             不记录名单（发过"忘了我"的观众外部 ID 密钥摘要）
 # - viewer_profiles         观众画像（每位常客一份 LLM 维护的印象文本，主播认人的依据）
 # - session_recaps          场次回顾（每场一份收播总结，主播跨场次记得自己做过什么）
 # - game_events             游戏里程碑事件
@@ -115,6 +116,9 @@ def build_schema_sql() -> str:
         + "\n"
         # viewer_names —— 观众昵称记录
         + _VIEWER_NAMES_SQL
+        + "\n"
+        # forget_list —— 不记录名单
+        + _FORGET_LIST_SQL
         + "\n"
         # viewer_profiles —— 观众画像
         + _VIEWER_PROFILES_SQL
@@ -174,6 +178,7 @@ def list_expected_tables() -> List[str]:
         "topics",
         "viewers",
         "viewer_names",
+        "forget_list",
         "viewer_profiles",
         "session_recaps",
         "rundowns",
@@ -232,7 +237,10 @@ CREATE TABLE IF NOT EXISTS live_chat (
     message_type     TEXT NOT NULL,
     message_id       TEXT,
     reply_to_message_id TEXT,
-    simulated        INTEGER NOT NULL DEFAULT 0
+    simulated        INTEGER NOT NULL DEFAULT 0,
+    utterance_id     TEXT,
+    dropped_at_ms    INTEGER,
+    memory_refs      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_live_chat_session_ts ON live_chat(live_session_id, timestamp_ms);
 """.strip()
@@ -354,6 +362,10 @@ CREATE TABLE IF NOT EXISTS viewers (
     paid_count          INTEGER NOT NULL DEFAULT 0,
     paid_amount         INTEGER NOT NULL DEFAULT 0,
     last_active_ms      INTEGER NOT NULL,
+    sessions_count      INTEGER NOT NULL DEFAULT 0,
+    last_session_id     INTEGER,
+    prev_seen_ms        INTEGER,
+    forget_requested_at_ms INTEGER,
     UNIQUE(platform, account_id),
     UNIQUE(platform, open_app_id, open_id)
 );
@@ -372,6 +384,17 @@ CREATE TABLE IF NOT EXISTS viewer_names (
     first_seen_ms    INTEGER NOT NULL,
     last_seen_ms     INTEGER NOT NULL,
     UNIQUE(viewer_id, user_name)
+);
+""".strip()
+
+
+# --- forget_list —— 不记录名单 ---
+# 存"忘了我"发令者外部 ID 的带密钥摘要 HMAC-SHA256(库外密钥, 种类|外部ID)，不落明文外部 ID。
+
+_FORGET_LIST_SQL = """
+CREATE TABLE IF NOT EXISTS forget_list (
+    id_hash BLOB PRIMARY KEY,
+    at_ms   INTEGER NOT NULL
 );
 """.strip()
 

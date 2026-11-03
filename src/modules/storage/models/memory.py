@@ -119,4 +119,10 @@ class Viewer(BaseModel):
     paid_count: int = Field(default=0, description="历史累计付费次数（礼物 + SC + 上舰）")
     paid_amount: int = Field(default=0, description="历史累计付费金额（平台最小虚拟货币单位）")
     last_active_ms: int = Field(..., description="最近活跃时刻（Unix epoch 毫秒）")
+    sessions_count: int = Field(default=0, description="来过几场正式场（历史累计）")
+    last_session_id: Optional[int] = Field(default=None, description="上次计入来访场次的正式场主键")
+    prev_seen_ms: Optional[int] = Field(default=None, description="本场之前最近一次活跃时刻（Unix epoch 毫秒）")
+    forget_requested_at_ms: Optional[int] = Field(
+        default=None, description="宽限删除请求时刻（Unix epoch 毫秒）；None 即无待执行删除"
+    )
     user_id: str = Field(..., description="代表外部 ID：账号 ID 优先，其次开放平台 ID，都没有为空串")

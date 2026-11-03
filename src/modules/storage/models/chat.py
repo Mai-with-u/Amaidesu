@@ -61,6 +61,9 @@ class LiveChatMessage(BaseModel):
     message_id: Optional[str] = Field(default=None, description="观众行的消息 ID（主播回复关联键）")
     reply_to_message_id: Optional[str] = Field(default=None, description="主播行回复的那条弹幕的消息 ID")
     simulated: bool = Field(default=False, description="是否模拟数据（贯穿列）")
+    utterance_id: Optional[str] = Field(default=None, description="主播发言全链路关联键（与 tts.utterance.* 共用）")
+    dropped_at_ms: Optional[int] = Field(default=None, description="播放队列确知未送达观众面前的时刻；None 表示已送达")
+    memory_refs: Optional[str] = Field(default=None, description="本句点名引用的记忆编号列表 JSON（如 ['约#7']）")
 
 
 class GiftRecord(BaseModel):

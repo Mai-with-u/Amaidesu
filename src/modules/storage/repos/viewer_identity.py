@@ -33,7 +33,15 @@ _DETAIL_TABLES: Tuple[Tuple[str, str, str, str], ...] = (
     ("super_chats", "user_id", "user_name", ""),
     ("guards", "user_id", "user_name", ""),
 )
-_COUNT_COLUMNS = ("message_count", "gift_count", "replied_count", "interaction_count", "paid_count", "paid_amount")
+_COUNT_COLUMNS = (
+    "message_count",
+    "gift_count",
+    "replied_count",
+    "interaction_count",
+    "paid_count",
+    "paid_amount",
+    "sessions_count",
+)
 # 不计付费的币种：银瓜子（免费礼物）与空币种（调试数据），与记账器口径一致
 _UNPAID_CURRENCIES = ("bilibili_silver_coin", "")
 _ID_LABELS = {"account_id": "账号 ID", "open_id": "开放平台 ID"}
@@ -249,6 +257,12 @@ def _detail_stats(conn: sqlite3.Connection, viewer_id: int) -> Dict[str, int]:
     interaction = message + gift + replied
     if interaction == 0 and paid_count:
         interaction = 1  # 只付过费的观众，付费即一次互动
+    sessions_count = one(
+        "SELECT COUNT(DISTINCT lc.live_session_id) FROM live_chat lc"
+        " JOIN live_sessions ls ON ls.id = lc.live_session_id"
+        " WHERE lc.viewer_id=? AND lc.sender_role='viewer' AND lc.message_type='danmaku'"
+        " AND lc.simulated=0 AND ls.kind='live'"
+    )
     last_active = 0
     for table, *_ in _DETAIL_TABLES:
         last_active = max(last_active, one(f"SELECT MAX(timestamp_ms) FROM {table} WHERE viewer_id=?"))  # noqa: S608
@@ -259,6 +273,7 @@ def _detail_stats(conn: sqlite3.Connection, viewer_id: int) -> Dict[str, int]:
         "interaction_count": interaction,
         "paid_count": paid_count,
         "paid_amount": paid_amount,
+        "sessions_count": sessions_count,
         "last_active_ms": last_active,
     }
 

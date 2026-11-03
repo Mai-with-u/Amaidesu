@@ -282,11 +282,55 @@ class ViewerRepo(BaseRepo):
 
     # -------------------- 计数（按观众 ID） --------------------
 
-    async def record_message(self, *, viewer_id: int, timestamp_ms: int) -> None:
-        """观众发言：``message_count`` +1，``interaction_count`` +1。"""
-        await self._bump(
-            viewer_id, timestamp_ms, "message_count=message_count+1, interaction_count=interaction_count+1"
-        )
+    async def record_message(
+        self,
+        *,
+        viewer_id: int,
+        timestamp_ms: int,
+        formal_session_id: Optional[int] = None,
+    ) -> None:
+        """观众发言：``message_count`` +1，``interaction_count`` +1；正式场首条弹幕顺带计入来访场次。
+
+        传入 ``formal_session_id``（正式场且非模拟弹幕）且该观众 ``last_session_id`` 不是本场时，
+        同一条 UPDATE 内先把原 ``last_active_ms`` 抄进 ``prev_seen_ms``（新观众建档与首条弹幕同毫秒时保持 None），
+        再把 ``sessions_count + 1``、``last_session_id`` 记为本场；同场后续弹幕不重复计次。
+        """
+
+        def _exec() -> None:
+            with self._manager.transaction() as conn:
+                if formal_session_id is not None:
+                    conn.execute(
+                        "UPDATE viewers SET"
+                        " prev_seen_ms = CASE"
+                        "   WHEN last_session_id IS NULL AND sessions_count = 0 AND last_active_ms = ? THEN prev_seen_ms"
+                        "   WHEN last_session_id IS NULL OR last_session_id <> ? THEN last_active_ms"
+                        "   ELSE prev_seen_ms"
+                        " END,"
+                        " sessions_count = sessions_count + CASE"
+                        "   WHEN last_session_id IS NULL OR last_session_id <> ? THEN 1 ELSE 0"
+                        " END,"
+                        " last_session_id = ?,"
+                        " message_count = message_count + 1,"
+                        " interaction_count = interaction_count + 1,"
+                        " last_active_ms = ?"
+                        " WHERE id = ?",
+                        (
+                            timestamp_ms,
+                            formal_session_id,
+                            formal_session_id,
+                            formal_session_id,
+                            timestamp_ms,
+                            viewer_id,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE viewers SET message_count=message_count+1, interaction_count=interaction_count+1,"
+                        " last_active_ms=? WHERE id=?",
+                        (timestamp_ms, viewer_id),
+                    )
+
+        await self._run_in_executor(_exec)
 
     async def record_gift(self, *, viewer_id: int, timestamp_ms: int) -> None:
         """观众送礼：``gift_count`` +1，``interaction_count`` +1（付费金额另走 ``record_paid``）。"""

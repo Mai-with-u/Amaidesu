@@ -48,6 +48,9 @@ class ChatRepo(BaseRepo):
         simulated: bool = False,
         viewer_id: Optional[int] = None,
         id_kind: str = "",
+        utterance_id: Optional[str] = None,
+        dropped_at_ms: Optional[int] = None,
+        memory_refs: Optional[str] = None,
     ) -> int:
         """插入一条 live_chat 行，返回 lastrowid。
 
@@ -61,8 +64,9 @@ class ChatRepo(BaseRepo):
                 cur = conn.execute(
                     "INSERT INTO live_chat ("
                     "live_session_id, timestamp_ms, platform, sender_role, sender_id, sender_name,"
-                    " content, message_type, message_id, reply_to_message_id, simulated, viewer_id, id_kind"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " content, message_type, message_id, reply_to_message_id, simulated, viewer_id, id_kind,"
+                    " utterance_id, dropped_at_ms, memory_refs"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         live_session_id,
                         timestamp_ms,
@@ -77,9 +81,25 @@ class ChatRepo(BaseRepo):
                         1 if simulated else 0,
                         viewer_id,
                         id_kind,
+                        utterance_id,
+                        dropped_at_ms,
+                        memory_refs,
                     ),
                 )
                 return int(cur.lastrowid or 0)
+
+        return await self._run_in_executor(_exec)
+
+    async def mark_utterance_dropped(self, *, utterance_id: str, dropped_at_ms: int) -> bool:
+        """按 ``utterance_id`` 给主播台词行写上没送达标记；命中台词行返回 True，未找到返回 False。"""
+
+        def _exec() -> bool:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "UPDATE live_chat SET dropped_at_ms = COALESCE(dropped_at_ms, ?) WHERE utterance_id = ?",
+                    (int(dropped_at_ms), utterance_id),
+                )
+                return cur.rowcount > 0
 
         return await self._run_in_executor(_exec)
 

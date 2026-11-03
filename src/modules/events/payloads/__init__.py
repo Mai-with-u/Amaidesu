@@ -77,6 +77,7 @@ from .tasks import TaskChangedPayload
 from .tool_health import ToolHealthPayload
 from .tool_result import ToolResultPayload
 from .utterance import (
+    UtteranceDroppedPayload,
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
     UtteranceStartedPayload,
@@ -125,6 +126,7 @@ __all__ = [
     "UtteranceStartedPayload",
     "UtteranceFinishedPayload",
     "UtteranceFailedPayload",
+    "UtteranceDroppedPayload",
     # streamer.speech 主播发言业务事实
     "StreamerSpeechPayload",
     # streamer.notebook.changed 主播备忘录观测

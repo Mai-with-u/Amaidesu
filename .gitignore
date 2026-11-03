@@ -179,6 +179,7 @@ maim_message/
 .vscode/
 token.txt
 vts_token.txt
+secrets/
 **/config.toml
 data/
 logs/

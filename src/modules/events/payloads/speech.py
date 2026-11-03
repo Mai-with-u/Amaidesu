@@ -28,7 +28,7 @@
   viewers 的 ``replied_count`` 写穿。
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import Field
 
@@ -107,6 +107,10 @@ class StreamerSpeechPayload(BasePayload):
     llm_request_id: Optional[str] = Field(
         default=None,
         description="本次表达生成的 Replyer LLM 请求历史 ID（完整请求指针）；未进入生成阶段或上游未上报为 None",
+    )
+    memory_refs: Optional[List[str]] = Field(
+        default=None,
+        description="本条发言点名引用的记忆编号列表（如 ['约#7']）；未引用记忆时为 None",
     )
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),
