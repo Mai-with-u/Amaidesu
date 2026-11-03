@@ -11,11 +11,13 @@
 - ``private`` 标出私聊：对方只发给"我"一个人的话，不该在直播里念出或转述。
 - ``note`` 是游戏采集器附的一句归属说明（如"模组借你的名义发的消息，不是谁说的话"）：
   谁说的、说的是谁要靠游戏自己的事实判断，判断留在各游戏的采集器里，通用层只负责把它写在发言人后面。
+- ``mentions`` 与 ``message_key`` 是游戏给出的结构化事实：消息里点到了哪些实体（带游戏里的唯一编号）、
+  这条消息是哪个模板。订阅方据此认出"死的是哪一只"，不从文字里反推名字。
 """
 
-from typing import Literal
+from typing import List, Literal
 
-from pydantic import ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
@@ -24,6 +26,14 @@ from src.modules.utils.time_utils import now_ms
 
 #: 消息来源种类：其他玩家的聊天 / 服务器系统消息
 GameChatKind = Literal["player", "system"]
+
+
+class GameChatMention(BaseModel):
+    """消息里点到的一个游戏实体（如死亡播报里的死者、凶手）。"""
+
+    name: str = Field(default="", description="消息里写出的名字（游戏没给时为空串）")
+    type: str = Field(default="", description="实体类型（如 minecraft:creeper；游戏没给时为空串）")
+    id: str = Field(..., description="实体在游戏里的唯一编号（Minecraft 是 UUID）")
 
 
 @register_event(CoreEvents.GAME_CHAT_RECEIVED)
@@ -43,6 +53,8 @@ class GameChatPayload(BasePayload):
         private: 私聊——对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）
         truncated: 上游是否截断了过长的原话
         note: 采集器附的一句归属说明（无说明为空串）
+        mentions: 消息里点到的实体，按出现先后（死亡播报的死者与凶手等；没有为空列表）
+        message_key: 游戏给这条消息的模板编号（Minecraft 是翻译键；没有为空串）
         suppressed: 上游因洪泛或重复而没有转出的消息条数（随这一条一起说明）
         occurred_at_ms: 上游收到这条消息的时刻（Unix 毫秒；0 = 未提供）
         timestamp_ms: 本系统发布该事件的时刻（Unix 毫秒）
@@ -60,6 +72,12 @@ class GameChatPayload(BasePayload):
     private: bool = Field(default=False, description="私聊：对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）")
     truncated: bool = Field(default=False, description="上游是否截断了过长的原话")
     note: str = Field(default="", description="采集器附的一句归属说明：谁说的、说的是谁（无说明为空串）")
+    mentions: List[GameChatMention] = Field(
+        default_factory=list, description="消息里点到的实体，按出现先后（死亡播报的死者与凶手等）"
+    )
+    message_key: str = Field(
+        default="", description="消息模板编号（Minecraft 是翻译键，如 death.attack.explosion.player；没有为空串）"
+    )
     suppressed: int = Field(default=0, description="上游因洪泛或重复没有转出的消息条数")
     occurred_at_ms: int = Field(default=0, description="上游收到时刻（Unix 毫秒；0 = 未知）")
     timestamp_ms: int = Field(default_factory=lambda: now_ms(), description="本系统发布时刻（Unix 毫秒）")
@@ -76,6 +94,8 @@ class GameChatPayload(BasePayload):
                 "private": False,
                 "truncated": False,
                 "note": "",
+                "mentions": [],
+                "message_key": "",
                 "suppressed": 0,
                 "occurred_at_ms": 1791208000000,
                 "timestamp_ms": 1791208000120,
@@ -84,4 +104,4 @@ class GameChatPayload(BasePayload):
     )
 
 
-__all__ = ["GameChatKind", "GameChatPayload"]
+__all__ = ["GameChatKind", "GameChatMention", "GameChatPayload"]

@@ -1282,12 +1282,26 @@ class MinecraftAgent(BaseAgent):
         顺序：自己的女仆被苦力怕炸死 → 游戏只给主人发一条"莫莫酒狐被苦力怕炸死了" → 名册认出是阿缕 →
         发 game.milestone"阿缕（你的女仆，莫莫酒狐皮肤）被苦力怕炸死了"：嘴当场接住，场次回顾也看得到。
         只记账、发事件，不开任务、不调模型，游戏 Agent 闲着时照样不花钱。
+
+        认死者：消息带模板编号时只看死亡播报（``death.`` 开头），死者是消息开头写出名字的那个点名实体，
+        按她的 UUID 对名册；旧版 Mod 不给模板编号与点名时，交给名册按文字认。
         """
         del event_name, source
         if payload.game != "minecraft" or payload.kind != "system":
             return
+        if payload.message_key and not payload.message_key.startswith("death."):
+            return
+        victim = next(
+            (m for m in payload.mentions if m.name and payload.content.strip().startswith(m.name)),
+            None,
+        )
         try:
-            creature = self._creatures.note_death(payload.content, now_ms())
+            creature = self._creatures.note_death(
+                payload.content,
+                now_ms(),
+                victim_uuid=victim.id if victim is not None else "",
+                victim_name=victim.name if victim is not None else "",
+            )
             if creature is None:
                 return
             self._logger.info(f"生物名册认出死讯：{creature.label()}（原话：{payload.content}）")

@@ -16,7 +16,7 @@ from src.agents.minecraft.maicraft import MaicraftReply
 from src.agents.minecraft.tools import STREAMER_GUIDE
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
-from src.modules.events.payloads.game_chat import GameChatPayload
+from src.modules.events.payloads.game_chat import GameChatMention, GameChatPayload
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.tools.models import ToolInvocation
 
@@ -46,7 +46,8 @@ def _scene(
 
 
 def _with_maid() -> Dict[str, Any]:
-    sheep = {"id": "e1", "type": "minecraft:sheep", "distance": 12, "hostile": False}
+    # 游戏给这只羊报了 UUID（挂过命名牌或被驯服过的才有），起名认得出是它
+    sheep = {"id": "e1", "type": "minecraft:sheep", "uuid": "a1", "distance": 12, "hostile": False}
     return _scene(_maid(), sheep, maids=[{"id": "e3", **_MAID_SKIN}])
 
 
@@ -245,7 +246,7 @@ def test_changes_are_handed_out_once_and_a_reload_restores_the_roster() -> None:
     book.name("羊", "咩咩")
     book.name("咩咩", "")
     changed, removed = book.take_changes()
-    assert [creature.nickname for creature in changed] == ["阿缕"] and removed == ["look:minecraft:sheep||"]
+    assert [creature.nickname for creature in changed] == ["阿缕"] and removed == ["uuid:a1"]
 
     again = CreatureBook()
     again.load("w1", [creature_from_record(creature_record(creature)) for creature in book.creatures()])
@@ -276,3 +277,106 @@ async def test_names_survive_a_restart_and_stay_in_their_world(db_path: Path) ->
         ]
     finally:
         await db.close()
+
+
+_M1 = "5f2b9c1e-0d4a-4c1b-9e7f-1a2b3c4d5e6f"
+_M2 = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+
+
+def _twins() -> Dict[str, Any]:
+    """同皮肤的两只自己的女仆，游戏给了各自的 UUID。"""
+    first = {**_maid("e3"), "uuid": _M1}
+    second = {**_maid("e4", distance=5), "direction": "左侧", "uuid": _M2}
+    return _scene(first, second, maids=[{"id": "e3", **_MAID_SKIN}, {"id": "e4", **_MAID_SKIN}])
+
+
+def test_same_skin_twins_are_told_apart_by_uuid() -> None:
+    """同皮肤的两只各记一条；死讯按点名的 UUID、墓碑按上面带的 UUID 认到各自那一只，名字不串。"""
+    book = CreatureBook()
+    book.observe(_twins(), 1_000)
+    assert len(book.creatures()) == 2
+    unsure = book.name("你的女仆", "阿缕")
+    assert unsure.named is None and "分不清是哪一只" in unsure.reason and "在左侧" in unsure.reason
+
+    dead = book.note_death("莫莫酒狐被苦力怕炸死了", 2_000, victim_uuid=_M2, victim_name="莫莫酒狐")
+    assert dead is not None and dead.uuid == _M2 and dead.death_note == "被苦力怕炸死了"
+    assert book.note_death("莫莫酒狐被苦力怕炸死了", 2_000) is None, "没有点名时同名的两只分不清，宁可不认"
+    assert book.note_death("Steve被苦力怕炸死了", 2_000, victim_uuid="0000", victim_name="Steve") is None
+
+    grave = {"id": "e8", "type": "touhou_little_maid:tombstone", "distance": 2}
+    book.observe(_scene(grave, graves=[{"id": "e8", "maid_name": "莫莫酒狐", "maid_uuid": _M1}]), 3_000)
+    alive_then_dead = {creature.uuid: creature.status for creature in book.creatures()}
+    assert alive_then_dead == {_M1: STATUS_DEAD, _M2: STATUS_DEAD}
+
+
+def test_an_old_record_moves_under_the_uuid_when_the_mod_starts_reporting_it() -> None:
+    """旧版 Mod 时按长相记下并起了名的女仆，升级后第一次带着 UUID 出现：名字跟到 UUID 下，旧键删掉。"""
+    book = CreatureBook()
+    book.load("", [])
+    book.observe(_with_maid(), 1_000)
+    book.name("你的女仆", "阿缕")
+    book.take_changes()
+    upgraded = _with_maid()
+    upgraded["entities"][0]["uuid"] = _M1
+    book.observe(upgraded, 2_000)
+    [maid] = book.creatures()
+    assert (maid.key, maid.nickname) == (f"uuid:{_M1}", "阿缕")
+    changed, removed = book.take_changes()
+    assert [creature.key for creature in changed] == [f"uuid:{_M1}"] and removed == [
+        "look:touhou_little_maid:maid|touhou_little_maid:winefox_momo|"
+    ]
+
+
+def test_a_creature_the_game_cannot_tell_apart_is_not_named() -> None:
+    """没被驯服、没挂命名牌的野生动物游戏不给 UUID，同种的每一只都一样：不登记，说清怎么办。"""
+    book = CreatureBook()
+    book.observe(_scene({"id": "e2", "type": "minecraft:cow", "direction": "前方", "distance": 4}), 1_000)
+    refused = book.name("牛", "哞哞")
+    assert refused.named is None and "挂个命名牌或驯服它" in refused.reason and book.creatures() == []
+
+
+async def test_death_broadcast_is_attributed_by_the_victim_uuid() -> None:
+    """死亡播报带模板编号与点名：按开头写出名字的死者的 UUID 认；不是死亡模板的不认，点名的是别人也不认。"""
+    server = FakeMaicraft()
+    server.scene_view = _twins()
+    server.self_view["name"] = "ChangingSelf"
+    agent, _, bus = await make_minecraft_agent(server)
+    view = await agent._glance()
+    assert view["self_account"] == "ChangingSelf" and "ChangingSelf" not in view["brief"]
+
+    def milestones() -> list[str]:
+        return [
+            call.args[1].message
+            for call in bus.emit.await_args_list
+            if call.args[0] == CoreEvents.GAME_MILESTONE and isinstance(call.args[1], GamePayload)
+        ]
+
+    maid, creeper = (
+        GameChatMention(name="莫莫酒狐", type="touhou_little_maid:maid", id=_M2),
+        GameChatMention(name="苦力怕", type="minecraft:creeper", id="0f0e0d0c-0b0a-4908-8706-050403020100"),
+    )
+    not_death = GameChatPayload(
+        game="minecraft", kind="system", content="莫莫酒狐被苦力怕炸死了", message_key="chat.type.text", mentions=[maid]
+    )
+    await agent._on_game_chat(CoreEvents.GAME_CHAT_RECEIVED, not_death, "maicraft_chat")
+    killer_only = GameChatPayload(
+        game="minecraft",
+        kind="system",
+        content="Steve被苦力怕炸死了",
+        message_key="death.attack.explosion.player",
+        mentions=[GameChatMention(name="Steve", id="8667ba71-b85a-4004-af54-457a9734eed7"), creeper],
+    )
+    await agent._on_game_chat(CoreEvents.GAME_CHAT_RECEIVED, killer_only, "maicraft_chat")
+    assert milestones() == []
+
+    death = GameChatPayload(
+        game="minecraft",
+        kind="system",
+        content="莫莫酒狐被苦力怕炸死了",
+        message_key="death.attack.explosion.player",
+        mentions=[maid, creeper],
+    )
+    await agent._on_game_chat(CoreEvents.GAME_CHAT_RECEIVED, death, "maicraft_chat")
+    assert milestones() == ["你的女仆（莫莫酒狐皮肤）被苦力怕炸死了"]
+    assert [c.uuid for c in agent._creatures.creatures() if c.status == STATUS_DEAD] == [_M2]
+    await agent.stop()

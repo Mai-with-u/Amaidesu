@@ -55,15 +55,11 @@ async def _primed(
 
 
 def test_attribution_tells_machine_lines_from_people() -> None:
-    """没有发言人 UUID 的"玩家消息"名字只是显示出来的：显示名是自己就是模组借名义发的，别人就标无凭据。"""
+    """没有发言人 UUID 的"玩家消息"名字只是显示出来的：标无凭据；Mod 判成借角色名义发的，说明不是谁说的话。"""
     maid_pos = '<ChangingSelf> [name:"winefox_momo", x:-356, y:63, z:36, dim:minecraft:overworld]'
-    unsigned = {"kind": "player", "sender": "ChangingSelf", "text": maid_pos}
-    known = attribute_chat(unsigned, self_name="ChangingSelf")
-    assert (known.kind, known.sender, known.note) == ("system", "", NOTE_SHOWN_AS_SELF)
-    assert known.content.startswith('[name:"winefox_momo"'), "聊天格式加的 <名字> 前缀去掉"
-
-    unknown_self = attribute_chat(unsigned)
-    assert (unknown_self.kind, unknown_self.sender, unknown_self.note) == ("player", "ChangingSelf", NOTE_UNVERIFIED)
+    unsigned = attribute_chat({"kind": "player", "sender": "ChangingSelf", "text": maid_pos})
+    assert (unsigned.kind, unsigned.sender, unsigned.note) == ("player", "ChangingSelf", NOTE_UNVERIFIED)
+    assert unsigned.content.startswith('[name:"winefox_momo"'), "聊天格式加的 <名字> 前缀去掉"
 
     signed = attribute_chat({"kind": "player", "sender": "Steve", "sender_id": _STEVE_ID, "text": "<Steve> 嗨"})
     assert (signed.note, signed.content) == ("", "<Steve> 嗨"), "带 UUID 的是真发言，原话不动"
@@ -80,6 +76,30 @@ async def test_unsigned_line_is_forwarded_with_a_note() -> None:
     [(_, payload)] = bus.events
     assert payload.kind == "player" and payload.sender == "ChangingSelf"
     assert payload.content == '[name:"x"]' and "没有发言人凭据" in payload.note
+
+
+async def test_death_line_carries_who_died_and_its_template() -> None:
+    """死亡播报的死者、凶手按出现先后带 UUID 转出，模板编号一并转出；没有 UUID 的点名不要。"""
+    collector, client, bus = await _primed()
+    line = {
+        "cursor": 4,
+        "kind": "system",
+        "text": "莫莫酒狐被苦力怕炸死了",
+        "mentions": [
+            {"name": "莫莫酒狐", "type": "touhou_little_maid:maid", "uuid": "5f2b9c1e-0d4a-4c1b-9e7f-1a2b3c4d5e6f"},
+            {"name": "苦力怕", "type": "minecraft:creeper", "uuid": "0f0e0d0c-0b0a-4908-8706-050403020100"},
+            {"name": "无名"},
+        ],
+        "translation_key": "death.attack.explosion.player",
+    }
+    client.pages.append(events_page([line], cursor=4))
+    await collector._drain()
+    [(_, payload)] = bus.events
+    assert [(m.name, m.id) for m in payload.mentions] == [
+        ("莫莫酒狐", "5f2b9c1e-0d4a-4c1b-9e7f-1a2b3c4d5e6f"),
+        ("苦力怕", "0f0e0d0c-0b0a-4908-8706-050403020100"),
+    ]
+    assert payload.message_key == "death.attack.explosion.player"
 
 
 def test_collector_metadata_and_registration() -> None:

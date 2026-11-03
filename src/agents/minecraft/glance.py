@@ -316,6 +316,9 @@ def glance_self(reply: MaicraftReply) -> Dict[str, Any]:
         # 角色在真人手上时身体不会自己动，主播要知道这件事才不会以为它卡住了
         body["control"] = "玩家在操作"
     result: Dict[str, Any] = {"body": body}
+    if isinstance(data.get("name"), str) and data["name"]:
+        # 角色在游戏里的账号名：聊天、死亡播报、玩家列表里出现这个名字，说的就是主播自己，不是另一个玩家
+        result["self_account"] = data["name"]
     armor = [item for item in data.get("armor") or [] if isinstance(item, str) and item]
     if armor:
         result["armor"] = armor

@@ -6,8 +6,12 @@
 "那块墓碑"和"刚才跟着我的那只女仆"连成同一只——复盘里主播因此对着墓碑问"是你熟人吗"。
 
 谁进名册：驯服关系是"你的"的生物第一次出现在观察里就自动建档；别的生物只有主播起了名才建档，
-路人不进。每只按身份键记一条：有 UUID 用 UUID（跨重进世界不变）；Mod 还没报 UUID 时，用
-"种类 + 皮肤 + 命名牌名"临时拼一个键（同皮肤的两只会被当成一只，归因时按"认不准就不认"处理）。
+路人不进。每只按身份键记一条：有 UUID 用 UUID（跨重进世界不变；Mod 给玩家、有名字的、被驯服的报 UUID）；
+旧版 Mod 不报 UUID 时，用"种类 + 皮肤 + 命名牌名"临时拼一个键（同皮肤的两只会被当成一只，归因时按
+"认不准就不认"处理）。升级 Mod 后同一只第一次带着 UUID 出现，临时键下的条目连同起的名字转到 UUID 下。
+
+死讯与墓碑优先按 UUID 认：死亡播报里点到的死者、墓碑上写着的女仆都带她的 UUID，对上名册里那一只才算；
+游戏没给 UUID 时才按名字认（名册里只有一只叫这个名字才认）。
 
 状态只在三处变：每次观察（在身边 / 在附近 / 没看到，看到写着它名字的墓碑就确认它死了）、一条认得出
 是它的死亡播报、主播起名。离开视野只改状态不发事件：女仆被设成驻守、走远、区块卸载都会这样，
@@ -42,7 +46,15 @@ from .glance import (
     kind_of,
 )
 
-__all__ = ["Creature", "CreatureBook", "NameResult", "creature_from_record", "creature_record", "identity_key"]
+__all__ = [
+    "Creature",
+    "CreatureBook",
+    "NameResult",
+    "creature_from_record",
+    "creature_record",
+    "identity_key",
+    "look_key",
+]
 
 # 死亡播报的谓语里会有的字眼（中文语言包的死亡句都以受害者名字开头）。Mod 还没给消息模板编号时，
 # 名字对上了还得有这些字眼才认作死讯：车万女仆还会以她的名字开头发别的灰字消息，不能当成死了。
@@ -177,6 +189,11 @@ def identity_key(entity: Dict[str, Any], thing: Dict[str, Any]) -> str:
     uuid = str(entity.get("uuid") or "")
     if uuid:
         return f"uuid:{uuid}"
+    return look_key(entity, thing)
+
+
+def look_key(entity: Dict[str, Any], thing: Dict[str, Any]) -> str:
+    """没有 UUID 时的临时身份键："种类 + 皮肤 + 命名牌名"。"""
     skin = str(thing.get("skin_id") or "")
     return f"look:{entity.get('type') or ''}|{skin}|{entity.get('name') or ''}"
 
@@ -187,9 +204,9 @@ class CreatureBook:
     def __init__(self) -> None:
         # 身份键 → 名册条目，按建档先后
         self._creatures: Dict[str, Creature] = {}
-        # 最近一次观察里看到的生物（起名找对象用）与身边的墓碑（观察编号 → 上面写的名字）
+        # 最近一次观察里看到的生物（起名找对象用）与身边的墓碑（观察编号 → 上面写的名字、她的 UUID）
         self._sightings: List[_Sighting] = []
-        self._graves: Dict[str, str] = {}
+        self._graves: Dict[str, Tuple[str, str]] = {}
         self._observed_ms = 0
         # 名册属于哪个世界：None = 还没认出世界、没读过落库的名册；空串 = 游戏没报世界编号
         self._world_key: Optional[str] = None
@@ -264,18 +281,19 @@ class CreatureBook:
         things = entity_things(scene.get("mod_things"))
         seen: set[str] = set()
         sightings: List[_Sighting] = []
-        graves: Dict[str, str] = {}
+        graves: Dict[str, Tuple[str, str]] = {}
         for entity in scene.get("entities") or []:
             if not isinstance(entity, dict) or not entity.get("type"):
                 continue
             scene_id = str(entity.get("id") or "")
+            thing = things.get(scene_id, {})
             described = described_entity(entity, things)
             if described.get("grave_of"):
                 if _close(entity):
-                    graves[scene_id] = str(described["grave_of"])
+                    graves[scene_id] = (str(described["grave_of"]), str(thing.get("maid_uuid") or ""))
                 continue
-            key = identity_key(entity, things.get(scene_id, {}))
-            creature = self._creatures.get(key)
+            key = identity_key(entity, thing)
+            creature = self._creatures.get(key) or self._adopt(key, look_key(entity, thing))
             if creature is None and described.get("owner") == OWNER_SELF:
                 creature = self._creatures[key] = Creature(key=key, type=str(entity["type"]))
                 self._changed.add(key)
@@ -289,8 +307,8 @@ class CreatureBook:
                 # 刚离开视野：最后看到的时刻要写回，重启后还说得出"几点以后没见到"
                 creature.status = STATUS_AWAY
                 self._changed.add(creature.key)
-        for grave_of in graves.values():
-            owner = self.grave_owner(grave_of)
+        for grave_of, grave_uuid in graves.values():
+            owner = self.grave_owner(grave_of, grave_uuid)
             if owner is None:
                 continue
             if owner.status != STATUS_DEAD:
@@ -299,6 +317,23 @@ class CreatureBook:
         self._sightings = sightings
         self._graves = graves
         self._observed_ms = now_ms
+
+    def _adopt(self, key: str, look: str) -> Optional[Creature]:
+        """旧版 Mod 时按长相记下的那只，第一次带着 UUID 出现：把条目（连同起的名字）转到 UUID 下。
+
+        只转还没有 UUID 的条目；同长相的两只都带 UUID 出现时，先看到的那只接手（旧记录本来就分不清）。
+        """
+        if not key.startswith("uuid:"):
+            return None
+        creature = self._creatures.get(look)
+        if creature is None or creature.uuid:
+            return None
+        del self._creatures[look]
+        self._removed.add(look)
+        creature.key = key
+        self._creatures[key] = creature
+        self._changed.add(key)
+        return creature
 
     def _refresh(self, creature: Creature, entity: Dict[str, Any], described: Dict[str, Any], now_ms: int) -> None:
         """这次看到了它：更新认得出它的事实与在场状态；记过死了又看到（认错了或复活了）就当活着。"""
@@ -327,8 +362,11 @@ class CreatureBook:
         creature.death_note = note or creature.death_note
         self._changed.add(creature.key)
 
-    def grave_owner(self, grave_of: str) -> Optional[Creature]:
-        """墓碑上写的名字 → 名册里那只；名册里不止一只叫这个名字时认不准，返回 None。"""
+    def grave_owner(self, grave_of: str, grave_uuid: str = "") -> Optional[Creature]:
+        """墓碑 → 名册里那只：墓碑带着她的 UUID 就按 UUID 认（名册里没有就不是名册里的）；
+        没带 UUID 才按上面写的名字认，名册里不止一只叫这个名字时认不准，返回 None。"""
+        if grave_uuid:
+            return self._creatures.get(f"uuid:{grave_uuid}")
         return self._only_one_called(grave_of)
 
     def _only_one_called(self, game_name: str) -> Optional[Creature]:
@@ -343,21 +381,32 @@ class CreatureBook:
             creature = self._creatures.get(sighting.key)
             if creature is not None and creature.nickname:
                 names[sighting.scene_id] = creature.nickname
-        for scene_id, grave_of in self._graves.items():
-            owner = self.grave_owner(grave_of)
+        for scene_id, (grave_of, grave_uuid) in self._graves.items():
+            owner = self.grave_owner(grave_of, grave_uuid)
             if owner is not None and owner.nickname:
                 names[scene_id] = owner.nickname
         return names
 
     # ==================== 死讯 ====================
 
-    def note_death(self, message: str, now_ms: int) -> Optional[Creature]:
+    def note_death(
+        self, message: str, now_ms: int, *, victim_uuid: str = "", victim_name: str = ""
+    ) -> Optional[Creature]:
         """一条系统消息若是名册里某只的死讯，记下它死了并返回它；认不准或已经记过就返回 None。
 
-        Mod 还没给结构化的死讯身份时按文字认：消息以名册里某只的游戏名开头、后面是死亡谓语，
-        且名册里只有一只叫这个名字（同皮肤的两只分不清，宁可不认也不认错）。
+        调用方从死亡播报里认出了死者（``victim_uuid``，以及消息里写出的她的名字）时按 UUID 认，名册里没有
+        这只就不是名册里的；死因是消息去掉她名字后的部分。认不出死者时按文字认：消息以名册里某只的游戏名
+        开头、后面是死亡谓语，且名册里只有一只叫这个名字（同皮肤的两只分不清，宁可不认也不认错）。
         """
         text = message.strip()
+        if victim_uuid:
+            creature = self._creatures.get(f"uuid:{victim_uuid}")
+            if creature is None or (creature.status == STATUS_DEAD and creature.death_note):
+                return None
+            name = victim_name or creature.game_name
+            rest = text[len(name) :].strip() if name and text.startswith(name) else text
+            self._mark_dead(creature, now_ms, rest)
+            return creature
         for creature in self._creatures.values():
             name = creature.game_name
             if not name or not text.startswith(name):
@@ -392,6 +441,12 @@ class CreatureBook:
             listed = "；".join(self._distinguish(sighting) for sighting in candidates[:5])
             return NameResult(reason=f"身边有 {len(candidates)} 只对得上「{who}」，分不清是哪一只：{listed}")
         sighting = candidates[0]
+        if sighting.key not in self._creatures and sighting.key == look_key(sighting.entity, {}):
+            # 游戏没给它 UUID、它也没有皮肤和命名牌：同种类的每一只都长一样，名字记下来会安到每一只头上
+            return NameResult(
+                reason=f"游戏里认不出这只{kind_of(sighting.described)}是哪一只（没被驯服、没挂命名牌），"
+                "名字记不住是它；先给它挂个命名牌或驯服它再起名"
+            )
         holder = next(
             (c for c in self._creatures.values() if nickname and c.nickname == nickname and c.key != sighting.key),
             None,
