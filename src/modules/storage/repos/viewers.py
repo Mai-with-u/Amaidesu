@@ -288,17 +288,28 @@ class ViewerRepo(BaseRepo):
         viewer_id: int,
         timestamp_ms: int,
         formal_session_id: Optional[int] = None,
+        live_session_id: Optional[int] = None,
+        simulated: bool = False,
     ) -> None:
         """观众发言：``message_count`` +1，``interaction_count`` +1；正式场首条弹幕顺带计入来访场次。
 
-        传入 ``formal_session_id``（正式场且非模拟弹幕）且该观众 ``last_session_id`` 不是本场时，
-        同一条 UPDATE 内先把原 ``last_active_ms`` 抄进 ``prev_seen_ms``（新观众建档与首条弹幕同毫秒时保持 None），
-        再把 ``sessions_count + 1``、``last_session_id`` 记为本场；同场后续弹幕不重复计次。
+        传入 ``formal_session_id``，或传入 ``live_session_id``（非模拟且在 ``live_sessions`` 中为 ``kind='live'``）
+        且该观众 ``last_session_id`` 不是本场时，同一条 UPDATE 内先把原 ``last_active_ms`` 抄进 ``prev_seen_ms``
+        （新观众建档与首条弹幕同毫秒时保持 None），再把 ``sessions_count + 1``、``last_session_id`` 记为本场；
+        同场后续弹幕不重复计次。
         """
 
         def _exec() -> None:
             with self._manager.transaction() as conn:
-                if formal_session_id is not None:
+                effective_formal_id = formal_session_id
+                if effective_formal_id is None and not simulated and live_session_id is not None:
+                    row = conn.execute(
+                        "SELECT 1 FROM live_sessions WHERE id = ? AND kind = 'live'",
+                        (int(live_session_id),),
+                    ).fetchone()
+                    if row is not None:
+                        effective_formal_id = int(live_session_id)
+                if effective_formal_id is not None:
                     conn.execute(
                         "UPDATE viewers SET"
                         " prev_seen_ms = CASE"
@@ -316,9 +327,9 @@ class ViewerRepo(BaseRepo):
                         " WHERE id = ?",
                         (
                             timestamp_ms,
-                            formal_session_id,
-                            formal_session_id,
-                            formal_session_id,
+                            effective_formal_id,
+                            effective_formal_id,
+                            effective_formal_id,
                             timestamp_ms,
                             viewer_id,
                         ),

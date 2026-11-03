@@ -27,6 +27,8 @@ from src.modules.storage.schema import (
     build_schema_sql,
     list_expected_tables,
 )
+from src.modules.storage.privacy import PrivacyService
+from src.modules.storage.retention import RetentionService
 from src.modules.storage.storage_ledger import StorageLedger
 
 __all__ = [
@@ -45,5 +47,7 @@ __all__ = [
     "list_expected_tables",
     "SQLiteDatabase",
     "sqlite_database",
+    "PrivacyService",
+    "RetentionService",
     "StorageLedger",
 ]

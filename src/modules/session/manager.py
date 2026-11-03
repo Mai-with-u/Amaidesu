@@ -49,7 +49,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
@@ -86,12 +86,14 @@ class LiveSessionManager:
         *,
         platform: str = "unknown",
         room_id: str = "",
+        clock: Callable[[], int] = now_ms,
     ) -> None:
         self._sessions = session_repo
         self._chat = chat_repo
         self._event_bus = event_bus
         self._platform = platform
         self._room_id = room_id
+        self._clock = clock
         self._active_pk: Optional[int] = None
         self._active_source: str = ""
         self._active_kind: Optional[SessionKind] = None
@@ -157,8 +159,8 @@ class LiveSessionManager:
         async with self._lock:
             if self._active_pk is not None:
                 # 顶替旧场次：标记 superseded，订阅方据此不把它当真下播（主播不道别）
-                await self._close_active(reason="开启新场次前自动结束", ended_at_ms=now_ms(), superseded=True)
-            started = now_ms()
+                await self._close_active(reason="开启新场次前自动结束", ended_at_ms=self._clock(), superseded=True)
+            started = self._clock()
             pk = await self._sessions.insert_live_session(
                 stream_id=room_id if room_id is not None else self._room_id,
                 platform=platform or self._platform,
@@ -195,7 +197,7 @@ class LiveSessionManager:
             if self._active_pk is None:
                 logger.debug("close_session: 无进行中的显式场次，忽略")
                 return False
-            return await self._close_active(reason=reason, ended_at_ms=now_ms())
+            return await self._close_active(reason=reason, ended_at_ms=self._clock())
 
     async def _close_active(
         self, *, reason: str, ended_at_ms: int, superseded: bool = False, deleted: bool = False
@@ -284,7 +286,7 @@ class LiveSessionManager:
             if live_session_id == self._active_pk:
                 # 先结束再删行：live.ended 带上"行将被删除"，订阅方据此不再往这一场写东西
                 # （主播照常道别，但道别句不落库）、不做收播整理
-                await self._close_active(reason="删除场次前自动结束", ended_at_ms=now_ms(), deleted=True)
+                await self._close_active(reason="删除场次前自动结束", ended_at_ms=self._clock(), deleted=True)
             await self._sessions.delete_live_session(live_session_id=live_session_id)
             if live_session_id == self._last_ended_pk:
                 # 删掉的正是"最近一场已结束的场次"——归属回退到更早的那场
@@ -297,7 +299,7 @@ class LiveSessionManager:
     async def rename_session(self, live_session_id: int, title: Optional[str]) -> bool:
         """改写场次标题（None/空串的清除语义由调用方规范化后传入）。行不存在返回 False。"""
         renamed = await self._sessions.update_live_session_title(
-            live_session_id=live_session_id, title=title, updated_at_ms=now_ms()
+            live_session_id=live_session_id, title=title, updated_at_ms=self._clock()
         )
         if renamed:
             logger.info(f"场次已重命名: id={live_session_id} title={title!r}")
@@ -315,7 +317,7 @@ class LiveSessionManager:
             logger.info(f"场次 {live_session_id} 进行中，不更正类型")
             return False
         changed = await self._sessions.update_live_session_kind(
-            live_session_id=live_session_id, kind=kind, updated_at_ms=now_ms()
+            live_session_id=live_session_id, kind=kind, updated_at_ms=self._clock()
         )
         if changed:
             logger.info(f"场次类型已更正: id={live_session_id} kind={kind}")

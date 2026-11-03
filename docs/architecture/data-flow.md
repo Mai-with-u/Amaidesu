@@ -137,6 +137,7 @@ v2 不再有"插件系统"。所有新功能通过 Agent 包内聚实现，框�
 - **内容特有逻辑全部内聚到 `src/agents/<name>/` 包内**（目录名 = Agent 注册名）。例：新增"MC Agent" → 在 `src/agents/minecraft/` 建包，内含 `agent.py`（继承 `BaseAgent`）、`tools.py`（自有工具 spec）、`state.py` 等；Agent 自有工具在 `_register_tools()` 中自己 `registry.register_provider(provider)`；avatar/studio 等公用域工具由装配根 `main.py` 的 `bind_core_tools(registry, tools_cfg)` 按域开关显式注册；启动结束 `audit_tools` 审计。
 - **加内容 = 加包 + 配置**，框架层零改动。**禁止**为新功能在 `src/modules/` 加新域；**禁止**通过 monkey-patching 或 import 副作用往框架注入行为。
 - **快照型能力是被调才干活的工具，持续流型才是采集器**。`vision_look_at_screen`（截图感知，返回当前画面）是工具，因为它被 LLM 决策时才看一眼；弹幕持续进入（`bili_danmaku` 持续推 `room.message.danmaku`）才是采集器，因为它推"新消息"事件流。判别口诀："谁驱动谁"——能自我维持状态/轮询/心跳的是 Agent，只在被调用时执行的是 Tool。
+- **存储侧合规例外**：存储记账层可按配置的短语表（`[privacy]`）识别观众对**本人**数据的删除声明（"忘了我"）及其宽限期撤回，用于在不依赖主播 Agent 是否运行的前提下立即停止记录并排期删除发令者本人的数据；该判定只改变发命令者本人的记录与删除状态，不写入任何业务内容。
 
 ---
 

@@ -16,11 +16,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
+from src.modules.config.storage_schemas import PrivacyConfig, RetentionConfig
 from src.modules.logging import get_logger
 from src.modules.storage._default_path import DEFAULT_DB_PATH
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.privacy import PrivacyService
+from src.modules.storage.retention import RetentionService
 
 logger = get_logger("StorageBootstrap")
 
@@ -85,4 +88,61 @@ async def build_database(config: Dict[str, Any]) -> SQLiteDatabase:
     return database
 
 
-__all__ = ["build_database"]
+def _resolve_key_path(raw_key_path: str, db_path: Path) -> Path:
+    """解析不记录名单密钥文件路径：库在项目根内时相对项目根解析；测试用临时目录库时相对库目录隔离解析。"""
+    candidate = Path(raw_key_path)
+    if candidate.is_absolute():
+        return candidate
+    project_root = DEFAULT_DB_PATH.parent.parent.resolve()
+    resolved_db = db_path.resolve()
+    if resolved_db.is_relative_to(project_root):
+        return (project_root / candidate).resolve()
+    return (resolved_db.parent / candidate).resolve()
+
+
+async def build_privacy_and_retention(
+    config: Dict[str, Any],
+    database: SQLiteDatabase,
+    *,
+    bot_name: str = "",
+) -> Tuple[PrivacyService, RetentionService]:
+    """装配隐私服务与保留期清理器：校验密钥文件并在启动期（迁移完成后）跑一次清理。"""
+    storage_scope = config.get("storage") if isinstance(config.get("storage"), dict) else {}
+    privacy_raw = config.get("privacy") if "privacy" in config else storage_scope.get("privacy")
+    privacy_cfg = PrivacyConfig.from_dict(privacy_raw) if isinstance(privacy_raw, dict) else PrivacyConfig()
+    retention_raw = config.get("retention") if "retention" in config else storage_scope.get("retention")
+    retention_cfg = RetentionConfig.from_dict(retention_raw) if isinstance(retention_raw, dict) else RetentionConfig()
+
+    resolved_bot_name = bot_name
+    if not resolved_bot_name:
+        agents_cfg = config.get("agents")
+        if isinstance(agents_cfg, dict):
+            streamer_cfg = agents_cfg.get("streamer")
+            if isinstance(streamer_cfg, dict):
+                persona_cfg = streamer_cfg.get("persona")
+                if isinstance(persona_cfg, dict):
+                    resolved_bot_name = str(persona_cfg.get("bot_name") or "")
+
+    key_path = _resolve_key_path(privacy_cfg.key_path, database.db_path)
+    privacy = PrivacyService(
+        database.manager,
+        db_path=database.db_path,
+        key_path=key_path,
+        forget_phrases=privacy_cfg.forget_phrases,
+        retract_phrases=privacy_cfg.retract_phrases,
+        bot_name=resolved_bot_name,
+    )
+    await privacy.initialize()
+
+    retention = RetentionService(
+        database.manager,
+        privacy,
+        db_path=database.db_path,
+        raw_days=retention_cfg.raw_days,
+        viewer_absence_days=retention_cfg.viewer_absence_days,
+    )
+    await retention.run_cleanup()
+    return privacy, retention
+
+
+__all__ = ["build_database", "build_privacy_and_retention"]

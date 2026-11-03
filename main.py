@@ -73,12 +73,14 @@ from src.modules.maibot_sync import (
     SharedNotesStore,
     StorageTranscriptSource,
 )
-from src.modules.storage.bootstrap import build_database
+from src.modules.storage.bootstrap import build_database, build_privacy_and_retention
 from src.modules.prompts import get_prompt_manager
 from src.modules.session import LiveSessionManager
 from src.modules.simulator import SimulatorService
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.long_memory import LongMemoryBackend
+from src.modules.storage.privacy import PrivacyService
+from src.modules.storage.retention import RetentionService
 from src.modules.subtitle import build_subtitle_infrastructure
 from src.modules.subtitle.backends import DashboardBackend
 from src.modules.tts import TTSProvider, build_tts_infrastructure
@@ -338,6 +340,8 @@ class AppComponents:
     shared_notes_store: Optional[SharedNotesStore] = None
     # 面捕合成器（形象逐帧驱动；关停时在工具 Provider 收尾之后、事件总线清理之前停）
     avatar_tracking: Optional[TrackingRuntime] = None
+    privacy_service: Optional[PrivacyService] = None
+    retention_service: Optional[RetentionService] = None
 
 
 async def create_app_components(
@@ -387,6 +391,7 @@ async def create_app_components(
     # 必须先于 LLMManager 构造：LLMManager 需要注入 store 做 llm_usage 落库
     logger.info("初始化存储（SQLiteDatabase）...")
     database = await build_database(config)
+    privacy_service, retention_service = await build_privacy_and_retention(config, database)
     logger.info(f"存储已就绪（db={database.db_path}）")
 
     # --- EventBus（先于 LLMManager：水位事件经构造器注入引擎）---
@@ -457,6 +462,8 @@ async def create_app_components(
         auto_start=storage_ledger_auto_start,
         session_manager=session_manager,
         name_match_window_ms=viewer_identity_config.name_match_window_days * 86_400_000,
+        privacy=privacy_service,
+        retention=retention_service,
     )
 
     # --- 直播近况与整场记录同步给 MaiBot（[maibot_sync]）---
@@ -964,6 +971,8 @@ async def create_app_components(
         maibot_sync_reporter=maibot_sync_reporter,
         shared_notes_store=shared_notes_store,
         avatar_tracking=avatar_tracking,
+        privacy_service=privacy_service,
+        retention_service=retention_service,
     )
 
 
@@ -998,6 +1007,8 @@ async def _start_storage_ledger(
     auto_start: bool = True,
     session_manager: Optional["LiveSessionManager"] = None,
     name_match_window_ms: Optional[int] = None,
+    privacy: Optional[PrivacyService] = None,
+    retention: Optional[RetentionService] = None,
 ) -> Optional[StorageLedger]:
     """构造 StorageLedger 并按 ``auto_start`` 决定是否订阅。
 
@@ -1017,6 +1028,8 @@ async def _start_storage_ledger(
             event_repo=database.events,
             session_manager=session_manager,
             name_match_window_ms=name_match_window_ms,
+            privacy=privacy,
+            retention=retention,
         )
         if auto_start:
             await ledger.start()
@@ -1582,6 +1595,9 @@ async def run_shutdown(
     if llm_service is not None:
         await safe_log(llm_service.cleanup(), "LLMManager.cleanup")
     logger.info("核心服务已关闭")
+
+    if components.privacy_service is not None:
+        await safe_log(components.privacy_service.close(), "PrivacyService.close")
 
     if database is not None:
         logger.info("正在关闭 SQLiteDatabase...")
