@@ -36,6 +36,7 @@ from src.modules.storage.migrations import SCHEMA_MIGRATIONS
 from src.modules.storage.repos import (
     ChatRepo,
     EventRepo,
+    GameCreatureRepo,
     LLMRepo,
     RundownInstanceRepo,
     RundownRepo,
@@ -116,6 +117,8 @@ class SQLiteDatabase:
         self.viewer_identity = ViewerIdentityRepo(self._manager)
         self.sim = SimRepo(self._manager)
         self.events = EventRepo(self._manager)
+        # 游戏 Agent 的生物名册（主播起的名字、谁死了，按世界分开、跨场次记得）
+        self.game_creatures = GameCreatureRepo(self._manager)
         self.llm = LLMRepo(self._manager)
         self.rundowns = RundownRepo(self._manager)
         # 流程单实例快照与变更事实（崩溃恢复 / 分析数据面；接线由流程单切片承担）

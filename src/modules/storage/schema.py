@@ -1,9 +1,9 @@
 """
 存储 Schema 定义
 
-本模块是全部 SQLite 表的**单一事实源**：22 张业务表（12 张核心直播表 +
-2 张模拟器运行时表 + 5 张流程单域表 + 2 张观众画像表 + 1 张 LLM 请求历史表）
-+ ``schema_migrations``。
+本模块是全部 SQLite 表的**单一事实源**：23 张业务表（12 张核心直播表 +
+2 张模拟器运行时表 + 5 张流程单域表 + 2 张观众画像表 + 1 张 LLM 请求历史表 +
+1 张游戏生物名册表）+ ``schema_migrations``。
 任何建表 DDL 都必须落在这里，不允许业务模块自带 ``CREATE TABLE``——否则
 表结构游离于 ``SCHEMA_VERSION`` 版本管理之外，迁移机制无法覆盖。
 
@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 21
+SCHEMA_VERSION: int = 22
 
 
 # =============================================================================
@@ -74,6 +74,7 @@ SCHEMA_VERSION: int = 21
 # - viewer_profiles         观众画像（每位常客一份 LLM 维护的印象文本，主播认人的依据）
 # - session_recaps          场次回顾（每场一份收播总结，主播跨场次记得自己做过什么）
 # - game_events             游戏里程碑事件
+# - game_creatures          游戏生物名册（游戏 Agent 记住的同伴：主播起的名字、死没死，按世界分开）
 # - timeline_summary        摘要层
 # - llm_usage               LLM 调用记录
 # - llm_requests            LLM 请求历史（完整请求/响应，dashboard 历史页数据源）
@@ -139,6 +140,9 @@ def build_schema_sql() -> str:
         # game_events —— 游戏里程碑
         + _GAME_EVENTS_SQL
         + "\n"
+        # game_creatures —— 游戏生物名册
+        + _GAME_CREATURES_SQL
+        + "\n"
         # timeline_summary —— 摘要层
         + _TIMELINE_SUMMARY_SQL
         + "\n"
@@ -178,6 +182,7 @@ def list_expected_tables() -> List[str]:
         "rundown_instance_segments",
         "rundown_transitions",
         "game_events",
+        "game_creatures",
         "timeline_summary",
         "llm_usage",
         "llm_requests",
@@ -512,6 +517,34 @@ CREATE TABLE IF NOT EXISTS game_events (
     message          TEXT NOT NULL,
     scene            TEXT,
     timestamp_ms     INTEGER NOT NULL
+);
+""".strip()
+
+
+# 游戏 Agent 的生物名册：一行一只（角色自己的生物，或主播起过名的生物），按"游戏 + 世界 + 身份键"区分。
+# world_key 是游戏报的世界身份编号（同一个 UUID 只在同一个世界里有意义），游戏没报时为空串；
+# creature_key 有 UUID 时是 uuid:<UUID>，游戏没报 UUID 时是 look:<种类>|<皮肤>|<命名牌名>。
+# died_ms 非空 = 已死；died_session_id / next_session_id 是死的那一场与之后的第一场，
+# 主播只在这两场里被提起她的死，之后只留在名册里，名字不被安到别的生物身上。
+_GAME_CREATURES_SQL = """
+CREATE TABLE IF NOT EXISTS game_creatures (
+    game             TEXT NOT NULL,
+    world_key        TEXT NOT NULL,
+    creature_key     TEXT NOT NULL,
+    type             TEXT NOT NULL,
+    kind             TEXT NOT NULL DEFAULT '',
+    name             TEXT NOT NULL DEFAULT '',
+    skin             TEXT NOT NULL DEFAULT '',
+    owner            TEXT NOT NULL DEFAULT '',
+    nickname         TEXT NOT NULL DEFAULT '',
+    uuid             TEXT NOT NULL DEFAULT '',
+    last_seen_ms     INTEGER NOT NULL DEFAULT 0,
+    died_ms          INTEGER,
+    death_note       TEXT NOT NULL DEFAULT '',
+    died_session_id  INTEGER,
+    next_session_id  INTEGER,
+    updated_at_ms    INTEGER NOT NULL,
+    PRIMARY KEY (game, world_key, creature_key)
 );
 """.strip()
 

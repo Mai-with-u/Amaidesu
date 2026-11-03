@@ -9,6 +9,7 @@ from __future__ import annotations
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.storage.repos.chat import ChatRepo
 from src.modules.storage.repos.events import EventRepo
+from src.modules.storage.repos.game_creatures import GameCreatureRepo
 from src.modules.storage.repos.llm import LLMRepo
 from src.modules.storage.repos.recaps import SessionRecapRepo
 from src.modules.storage.repos.rundown_instances import RundownInstanceRepo
@@ -25,6 +26,7 @@ __all__ = [
     "BaseRepo",
     "ChatRepo",
     "EventRepo",
+    "GameCreatureRepo",
     "LLMRepo",
     "RundownInstanceRepo",
     "RundownRepo",
