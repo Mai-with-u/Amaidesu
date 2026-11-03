@@ -8,7 +8,7 @@
 
 **场次与消息**
 
-- `live_sessions`：一场直播一行，开播/下播边界与人数、热度实时状态，以及本场备忘录全文（主播每次写备忘录同步落进来，收播整理从这里读）。
+- `live_sessions`：一场直播一行，开播/下播边界与人数、热度实时状态，本场备忘录全文（主播每次写备忘录同步落进来，收播整理从这里读），以及下播整理的进度：`settled_at_ms`（整理完成的时刻，空 = 待整理）、`settle_attempts`（自动重试次数，用满后等运营者手动重排）、`settle_report`（失败原因或未登记清单，JSON 文本）。
 - `live_chat`：全量消息流，观众/主播/搭档同表（`sender_role` 区分）；`message_id` ↔ `reply_to_message_id` 构成"主播回复了哪条弹幕"的关联键。主播行另带 `utterance_id`（与 `tts.utterance.*` 共用的全链路关联键）、`dropped_at_ms`（播放队列确知这句没送到观众面前的时刻；为空即送到过，算"她说过"）与 `memory_refs`（这句点名引用了哪条记忆）。
 - `gifts` / `super_chats` / `guards`：付费明细三表，按平台原始单位入库（口径见 [观众身份复合键与货币口径](../decisions/029-viewer-identity-key-and-currency-unit.md)）。
 - `timeline_summary`：一场内的分段摘要轨迹（后台维护者写入）。
@@ -20,6 +20,11 @@
 - `forget_list`：不记录名单，只存 `HMAC-SHA256(库外密钥, 种类|外部ID)` 摘要与登记时刻，不落明文外部 ID；密钥在库外文件（默认 `secrets/forget.key`）。文件丢失而名单非空时存储启动硬报错，避免被遗忘的观众静默恢复记录。
 - `viewer_profiles`：观众印象文本，按观众 ID 存，收播时批量整理（见 [场次回顾与观众画像](../decisions/042-streamer-memory-recap-and-roster.md)）。
 - `session_recaps`：场次回顾，收播写、开播注入。
+
+**主播记忆账本**
+
+- `commitments`：承诺账本，一行是她当众答应过、还没了结的一件事。带 `quote`（她播出原句的逐字片段，登记时对着台词行校验过）与 `evidence_chat_id`（那句台词的行号，场次被删后成空引用）；`viewer_id` 记对谁说的、`game` 记挂在哪个游戏；状态三分：`open` 未了结 / `closed` 已了结（做完或放弃，看了结原话）/ `void` 运营者判误记。判误记留墓碑而不删行，之后整理遇到同一件事才认得出、不重复登记。
+- `archive_lines`：场次档案，一场至多 8 行，标题加她播出原句的逐字片段，写完不改（运营者可删单行）；它是"她记得自己上一场干了什么"的唯一来源。
 
 **流程单（五表族，设计见 [流程单设计决策](../decisions/011-rundown-replaces-agenda.md)）**
 
@@ -53,7 +58,7 @@
 - 主要写入方：
   - **StorageLedger**：订阅 `room.message.#` 落明细表与观众计数、订阅 `streamer.speech` 写主播发言行（带回复关联、落库前遮名）、订阅 `tts.utterance.dropped` 写没送达标记、订阅 `game.*` 写游戏事件；观众四类消息在判场次之前先过隐私入口（遗忘命令、撤回短语、不记录名单）。不建场次行（归 LiveSessionManager）。
   - **LLM 观察面**：`src/modules/llm/observation.py` 每次调用同事务写 usage 与 requests 两表。
-  - **收播整理**：场次回顾与观众印象由主播 Agent 收播钩子写入。
+  - **收播整理**：场次回顾与观众印象由主播 Agent 收播钩子写入；承诺账本与场次档案由同一次收播整理的后半段写入（跨场次表的一次性写入口是 `SessionRepo.apply_settlement`，一个事务写档案行、新承诺、旧承诺了结与整理完成时刻）。
   - **场内摘要**：timeline_summary / topics 由后台维护者写入。
 
 ## 隐私与保留期
