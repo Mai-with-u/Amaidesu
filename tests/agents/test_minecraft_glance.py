@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.agents.minecraft.glance import glance_brief, glance_scene
+from src.agents.minecraft.glance import entity_label, glance_brief, glance_scene
 from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
 from src.modules.llm.payload import Response
 
@@ -129,6 +129,81 @@ def test_glance_distant_entities_only_counts_what_is_known_to_be_far() -> None:
 
     nearby_only = glance_scene(MaicraftReply(ok=True, data={"entities": [{"type": "minecraft:pig", "distance": 10}]}))
     assert "distant_entities" not in nearby_only, "远处没有东西不写这一栏，上游没给也不写"
+
+
+def _maid_scene() -> Dict[str, Any]:
+    """MaiCraft 装了车万女仆时 observe(scene) 的样子：女仆与墓碑在 entities 里只有种类，身份在 mod_things 里同号给出。"""
+    return {
+        "entities": [
+            {
+                "id": "e3",
+                "type": "touhou_little_maid:maid",
+                "direction": "后方",
+                "distance": 2,
+                "hostile": False,
+                "traits": {"驯服": "你的", "坐着": "是"},
+            },
+            {"id": "e7", "type": "touhou_little_maid:tombstone", "direction": "左侧", "distance": 5, "hostile": False},
+            {"id": "e9", "type": "minecraft:wolf", "name": "小白", "distance": 8, "traits": {"驯服": "别人的"}},
+            {"id": "e1", "type": "minecraft:sheep", "distance": 12, "hostile": False},
+        ],
+        "mod_things": {
+            "maid": [
+                {
+                    "id": "e3",
+                    "distance": 2,
+                    "skin_id": "touhou_little_maid:winefox_momo",
+                    "skin_name": "莫莫酒狐",
+                    "work": "touhou_little_maid:idle",
+                }
+            ],
+            "maid_tombstone": [{"id": "e7", "distance": 5, "maid_name": "莫莫酒狐"}],
+            "gomoku_board": [{"id": "b2", "turn": "you"}],
+        },
+    }
+
+
+def test_glance_tells_whose_creature_and_whose_grave_it_is() -> None:
+    """复盘里女仆在身边一个多小时，速览只写"touhou_little_maid:maid"，死后的墓碑也认不出是谁的。
+    现在驯服关系、坐着、女仆皮肤、墓碑上的名字都按观察编号并到同一只实体上；编号本身不交给主播。"""
+    view = glance_scene(MaicraftReply(ok=True, data=_maid_scene()))
+
+    maid, grave, wolf, sheep = view["entities"]
+    assert maid == {
+        "type": "touhou_little_maid:maid",
+        "kind": "女仆",
+        "skin": "莫莫酒狐",
+        "owner": "你的",
+        "sitting": True,
+        "direction": "后方",
+        "distance": 2,
+        "hostile": False,
+    }
+    assert grave["kind"] == "女仆墓碑" and grave["grave_of"] == "莫莫酒狐"
+    assert wolf["owner"] == "别人的" and wolf["name"] == "小白"
+    assert sheep == {"type": "minecraft:sheep", "distance": 12, "hostile": False}
+    assert not any("id" in entity for entity in view["entities"]), "观察编号不交给主播"
+
+    brief = glance_brief(view)
+    assert brief == (
+        "你的女仆（莫莫酒狐皮肤，坐着）在身边。身边还有女仆墓碑（上面写着莫莫酒狐）、别人的狼（叫小白）、羊。"
+    )
+
+
+def test_glance_label_puts_the_nickname_first() -> None:
+    """主播起过名的生物：名字当称呼，"你的女仆"和皮肤退到括号里当说明。"""
+    maid = {"type": "touhou_little_maid:maid", "kind": "女仆", "skin": "莫莫酒狐", "owner": "你的"}
+    assert entity_label(maid) == "你的女仆（莫莫酒狐皮肤）"
+    assert entity_label({**maid, "nickname": "阿缕"}) == "阿缕（你的女仆，莫莫酒狐皮肤）"
+    assert entity_label({"type": "minecraft:cow"}) == "牛"
+
+
+def test_glance_without_mod_things_keeps_the_plain_view() -> None:
+    """没装车万女仆（没有 mod_things）时照旧：只有种类与方位，驯服关系照样带上。"""
+    scene = {"entities": [{"id": "e2", "type": "minecraft:cat", "distance": 3, "traits": {"驯服": "你的"}}]}
+    view = glance_scene(MaicraftReply(ok=True, data=scene))
+    assert view["entities"] == [{"type": "minecraft:cat", "owner": "你的", "distance": 3}]
+    assert glance_brief(view) == "你的猫在身边。"
 
 
 @pytest.mark.parametrize(
