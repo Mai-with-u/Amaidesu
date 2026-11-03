@@ -156,6 +156,7 @@ sequenceDiagram
 - [文档索引](docs/README.md)（全部文档）
 - [快速开始](docs/getting-started.md)
 - [直播运行手册](docs/guides/runbook.md)（开播清单、自检与排错）
+- [与 MaiBot 同步](docs/guides/maibot-sync.md)（直播近况、共享笔记、场次回顾）
 - [架构总览](docs/architecture/v2-architecture.md)
 - [组件开发指南](docs/guides/component.md)
 - [开发规范](AGENTS.md)

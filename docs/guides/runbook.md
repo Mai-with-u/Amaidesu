@@ -1,6 +1,6 @@
 # 直播运行手册
 
-从开机到开播的操作顺序、每步怎么确认成功、失败时代码会怎么表现。安装与首次配置见[快速开始](getting-started.md)，GPT-SoVITS 服务的部署与调音见 [GPT-SoVITS 语音服务部署](gptsovits.md)——本文只覆盖"每次开播都要做的事"。
+从开机到开播的操作顺序、每步怎么确认成功、失败时代码会怎么表现。安装与首次配置见[快速开始](../getting-started.md)，GPT-SoVITS 服务的部署与调音见 [GPT-SoVITS 语音服务部署](gptsovits.md)——本文只覆盖"每次开播都要做的事"。
 
 ## 开播前清单
 
@@ -15,6 +15,7 @@ Amaidesu 启动时就会去连它们；连接型组件错过也不会坏（各�
 | Warudo | enabled 含 `warudo` | WebSocket 端口 19190 可达，场景里已导入按当前角色生成的 Amaidesu 蓝图（见[虚拟形象接入](avatar.md#warudo)） |
 | VRChat | enabled 含 `vrchat` | VRChat 里 OSC 已启用（见[虚拟形象接入](avatar.md#vrchat)） |
 | OBS | 启用 `live_frame` 采集器或 `[tools.studio.obs]` | WebSocket 服务开启（默认端口 4455），密码与配置一致 |
+| MaiBot + 适配器插件 | `[maibot_sync].enabled = true` | MaiBot 在跑、插件已加载；在白名单群里能查到直播近况（见[与 MaiBot 同步](maibot-sync.md)） |
 
 ### 2. 启动 Amaidesu
 
@@ -22,7 +23,7 @@ Amaidesu 启动时就会去连它们；连接型组件错过也不会坏（各�
 uv run python main.py
 ```
 
-首次运行会生成 config/ 七文件后主动退出，编辑完配置再跑一次（见[快速开始](getting-started.md)）。
+首次运行会生成 config/ 七文件后主动退出，编辑完配置再跑一次（见[快速开始](../getting-started.md)）。
 
 ### 3. 开播前自检（启动后一分钟内）
 
