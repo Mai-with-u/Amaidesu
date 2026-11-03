@@ -296,23 +296,27 @@ class GPTSoVITSProvider:
             # 服务未启动等环境故障是预期内的：简短告警即可，不打全量 traceback
             self.error_count += 1
             self.logger.warning(f"TTS 渲染失败: {e}（本条放弃，等待服务恢复）")
+            # 先发 failed 让字幕出字再上抛；cause=e 给异常打"已报告"标记，队列兜底不再补发第二条
             await emit_utterance_failed(
                 self.event_bus,
                 utterance_id=utterance_id,
                 speech_text=text,
                 engine=self.PROVIDER_NAME,
                 error_message=str(e),
+                cause=e,
             )
             raise
         except Exception as e:
             self.error_count += 1
             self.logger.exception(f"TTS 渲染失败: {e}")
+            # 同上：事件发出后给异常打"已报告"标记，避免队列再补发一条重复的 failed
             await emit_utterance_failed(
                 self.event_bus,
                 utterance_id=utterance_id,
                 speech_text=text,
                 engine=self.PROVIDER_NAME,
                 error_message=f"{type(e).__name__}: {e}",
+                cause=e,
             )
             raise
 

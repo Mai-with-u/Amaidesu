@@ -21,6 +21,7 @@ from src.modules.events.payloads.utterance import (
     UtteranceStartedPayload,
 )
 from src.modules.logging import get_logger
+from src.modules.events.payloads.utterance import is_failure_reported
 from src.modules.tts.common import prepare_speech_text, synthesize_play_and_notify
 from tests.modules.tts.helpers import make_audio_manager, record_lifecycle
 
@@ -82,7 +83,7 @@ async def test_synthesis_failure_emits_failed_and_reraises_without_touching_soun
     captured = record_lifecycle(event_bus)
     mgr = make_audio_manager()
     engine = FakeEngine(event_bus, mgr)
-    with pytest.raises(RuntimeError, match="boom"):
+    with pytest.raises(RuntimeError, match="boom") as raised:
         await _speak(engine, AsyncMock(side_effect=RuntimeError("boom")))
     await event_bus.cleanup()
 
@@ -93,6 +94,32 @@ async def test_synthesis_failure_emits_failed_and_reraises_without_touching_soun
     assert not any(name == CoreEvents.TTS_UTTERANCE_FINISHED for name, _ in captured)
     mgr.stop_audio.assert_not_called()  # 合成阶段失败未触达声卡，无需截断
     assert engine.render_count == 0 and engine.error_count == 1
+    assert is_failure_reported(raised.value)  # failed 已发：异常带标记，队列兜底不再补发
+
+
+async def test_playback_failure_after_started_also_emits_failed_and_marks_the_error(event_bus: EventBus) -> None:
+    """合成成功、started 已发，播放中途失败：同样先发 failed 再上抛，异常带"已报告"标记。"""
+    captured = record_lifecycle(event_bus)
+    mgr = make_audio_manager()
+    mgr.play_audio = AsyncMock(side_effect=OSError("声卡被拔了"))
+    engine = FakeEngine(event_bus, mgr)
+    with pytest.raises(OSError, match="声卡被拔了") as raised:
+        await _speak(engine, AsyncMock(return_value=([0] * 4800, 48000)))
+    await event_bus.cleanup()
+
+    assert [name for name, _ in captured] == [CoreEvents.TTS_UTTERANCE_STARTED, CoreEvents.TTS_UTTERANCE_FAILED]
+    assert is_failure_reported(raised.value)
+    assert engine.render_count == 0 and engine.error_count == 1
+
+
+async def test_failure_without_published_event_leaves_the_error_unmarked(event_bus: EventBus) -> None:
+    """failed 没能发出去（无总线、或无 utterance 上下文）：异常不带标记，队列兜底照常补发，字幕不丢字。"""
+    for bus, utterance_id in [(None, "utt_1"), (event_bus, None)]:
+        engine = FakeEngine(bus, make_audio_manager())
+        with pytest.raises(RuntimeError, match="boom") as raised:
+            await _speak(engine, AsyncMock(side_effect=RuntimeError("boom")), utterance_id=utterance_id)
+        assert not is_failure_reported(raised.value)
+        assert engine.error_count == 1  # 计数照旧，与事件是否发出无关
 
 
 async def test_cancellation_truncates_submitted_playback_and_reraises(event_bus: EventBus) -> None:

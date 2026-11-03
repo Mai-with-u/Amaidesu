@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from src.modules.events.event_bus import EventBus
@@ -10,6 +12,8 @@ from src.modules.events.payloads.utterance import (
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
     UtteranceStartedPayload,
+    is_failure_reported,
+    mark_failure_reported,
 )
 from src.modules.tts.common import (
     build_stats_dict,
@@ -79,6 +83,36 @@ async def test_emit_utterance_event_carries_fields_and_is_silent_without_bus_or_
     assert name == event_name and isinstance(payload, model) and payload.utterance_id == "utt_1"
     assert payload.timestamp_ms > 0
     assert all(getattr(payload, key) == value for key, value in kwargs.items())
+
+
+_FAILED_KWARGS = {"speech_text": "这句没播出来", "engine": "edge", "error_message": "boom"}
+
+
+def test_failure_marker_is_off_by_default_and_keeps_the_error_intact() -> None:
+    """没打过标记的异常（含任何未知异常）一律视为未报告；打标记不改异常类型与内容。"""
+    error = ConnectionError("连不上")
+    assert is_failure_reported(error) is False
+
+    mark_failure_reported(error)
+
+    assert is_failure_reported(error) is True
+    assert type(error) is ConnectionError and error.args == ("连不上",)
+
+
+async def test_emit_failed_marks_the_cause_only_after_the_event_is_really_published(event_bus: EventBus) -> None:
+    """引擎要抛出的异常在 failed 真发出后才打"已报告"标记；没发成就不打，让队列兜底补发。"""
+    published = RuntimeError("发成了")
+    await emit_utterance_failed(event_bus, utterance_id="utt_1", cause=published, **_FAILED_KWARGS)
+    assert is_failure_reported(published)
+
+    # 三种"没发出去"：无 utterance 上下文、无总线、总线发布时抛错——异常都不能带标记
+    no_id, no_bus, bus_down = RuntimeError("无 id"), RuntimeError("无总线"), RuntimeError("总线坏了")
+    await emit_utterance_failed(event_bus, utterance_id=None, cause=no_id, **_FAILED_KWARGS)
+    await emit_utterance_failed(None, utterance_id="utt_2", cause=no_bus, **_FAILED_KWARGS)
+    broken_bus = MagicMock(emit=AsyncMock(side_effect=RuntimeError("bus down")))
+    with pytest.raises(RuntimeError, match="bus down"):
+        await emit_utterance_failed(broken_bus, utterance_id="utt_3", cause=bus_down, **_FAILED_KWARGS)
+    assert not any(is_failure_reported(error) for error in (no_id, no_bus, bus_down))
 
 
 @pytest.mark.parametrize(

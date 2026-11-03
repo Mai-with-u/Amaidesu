@@ -36,6 +36,7 @@ from src.modules.events.payloads.utterance import (
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
     UtteranceStartedPayload,
+    mark_failure_reported,
 )
 from src.modules.utils.time_utils import now_ms
 
@@ -141,7 +142,8 @@ async def synthesize_play_and_notify(
 
     事件序列固定：started（含按 PCM 精确计算的时长）→ 播放 → finished。
     取消（编排队列看门狗超时）时已提交给声卡的播放必须显式截断，否则与下
-    一条语音重叠；失败先记日志再发 failed 事件并向上抛，由编排队列兜底。
+    一条语音重叠；失败先记日志再发 failed 事件并向上抛（异常上带"已报告"
+    标记，编排队列据此不再补发第二条 failed）。
     utterance_id / event_bus 缺失时事件发布静默跳过（见 emit_* 系列），
     播放照常执行。
 
@@ -187,6 +189,8 @@ async def synthesize_play_and_notify(
         provider.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
         raise
     except Exception as e:
+        # 合成或播放中途失败：先发 failed（字幕据此出字），再把异常原样上抛。
+        # cause=e 让事件真正发出后给异常打上"已报告"标记，队列兜底见到标记就不再补发
         provider.error_count += 1
         provider.logger.exception(f"TTS 渲染失败: {e}")
         await emit_utterance_failed(
@@ -195,6 +199,7 @@ async def synthesize_play_and_notify(
             speech_text=speech_text,
             engine=engine,
             error_message=f"{type(e).__name__}: {e}",
+            cause=e,
         )
         raise
 
@@ -337,6 +342,7 @@ async def emit_utterance_failed(
     speech_text: str,
     engine: str,
     error_message: str,
+    cause: Optional[BaseException] = None,
 ) -> None:
     """发布 ``tts.utterance.failed`` 事件。
 
@@ -349,6 +355,9 @@ async def emit_utterance_failed(
         speech_text: 本次发声的展示文本（规范化前原文，合成失败也必带）。
         engine: TTS 引擎标识。
         error_message: 失败原因描述（异常 message / 错误码 / 阶段标记）。
+        cause: 引擎随后要向上抛出的异常。事件真正发布后才给它打"已报告"
+            标记（见 ``mark_failure_reported``）；静默跳过或发布抛错时不打，
+            这样没发成事件的失败仍由队列兜底补发，字幕不会因此丢字。
     """
     if event_bus is None or utterance_id is None:
         return
@@ -360,6 +369,8 @@ async def emit_utterance_failed(
         timestamp_ms=now_ms(),
     )
     await event_bus.emit(CoreEvents.TTS_UTTERANCE_FAILED, payload, source=engine)
+    if cause is not None:
+        mark_failure_reported(cause)
 
 
 __all__ = [

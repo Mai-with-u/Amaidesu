@@ -143,8 +143,41 @@ class UtteranceFailedPayload(BasePayload):
     )
 
 
+# ---------------------------------------------------------------------------
+# 失败"已报告"标记
+# ---------------------------------------------------------------------------
+
+# 放在 failed 载荷旁边而不是 tts 包里：播放队列（主播 Agent 内部件）只依赖事件契约，
+# 不为读一个标记把整个 tts 包（各引擎及其依赖）拉进导入链。
+# 异常上的标记属性名。引擎发完 failed 事件再抛出异常时给异常打上它，
+# 编排队列的兜底（speak 抛异常就补发 failed）看到标记就只计数打日志、不再补发，
+# 否则同一句话会发出两条 failed，仪表盘失败句数与诊断记录都翻倍。
+FAILURE_REPORTED_ATTR = "tts_failure_reported"
+
+
+def mark_failure_reported(exc: BaseException) -> None:
+    """标记"这次失败的 failed 事件引擎已经发布过"。
+
+    触发条件：引擎在合成或播放中途失败、已经把 ``tts.utterance.failed``
+    发出去，接着要把异常继续上抛给编排队列时。直接在异常对象上打属性，
+    不换异常类型，上游按类型捕获异常的逻辑不受影响。
+
+    只有"已确认发出"才该打标记：宁可多出一次字幕，也不能让一句话连字幕
+    都没有，所以没打标记的异常（包括未知异常）队列一律照常补发。
+    """
+    setattr(exc, FAILURE_REPORTED_ATTR, True)
+
+
+def is_failure_reported(exc: BaseException) -> bool:
+    """异常是否带"引擎已发过 failed 事件"的标记；没有标记一律视为未报告。"""
+    return getattr(exc, FAILURE_REPORTED_ATTR, False) is True
+
+
 __all__ = [
     "UtteranceStartedPayload",
     "UtteranceFinishedPayload",
     "UtteranceFailedPayload",
+    "FAILURE_REPORTED_ATTR",
+    "mark_failure_reported",
+    "is_failure_reported",
 ]

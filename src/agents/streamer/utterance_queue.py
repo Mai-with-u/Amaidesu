@@ -5,9 +5,9 @@
   不传优先级时全部同级，等价于普通 FIFO 队列
 - 后台 worker 串行调用 speak 可调用对象（``await self._speak(text, utterance_id)``）
 - 与 TTS 引擎解耦：引擎正常路径的 ``tts.utterance.started`` / ``finished``
-  由引擎自行发布；队列只在"这句到不了引擎"的两条路径（渲染超时、队列溢出
-  丢弃）代发 ``tts.utterance.failed``，让字幕等消费者逐句降级出字，
-  不会无声卡住也不会悬空等待。
+  由引擎自行发布；队列只在"这句没能正常播出、且引擎没替它报失败"的三条路径
+  （渲染超时、队列溢出丢弃、speak 抛出未报告的异常）代发 ``tts.utterance.failed``，
+  让字幕等消费者逐句降级出字，不会无声卡住也不会悬空等待。
 
 设计原则（StreamerAgent 发言管线约束）：
 - 队列溢出丢"优先级最低里最旧的"一条；新来的比队里所有条目都低时丢新来的
@@ -18,8 +18,13 @@
 - 单 worker 串行保证播放顺序，避免叠加/打断
 - 入队即返回（fire-and-forget），不阻塞上游决策循环的 tick 节奏
 - 单 utterance 超时由 `render_timeout_ms` 看门狗保护（防止合成/播放卡死拖垮队列）
-- 渲染超时与队列溢出丢弃时，队列代发 ``tts.utterance.failed``——这句到不了
-  引擎，引擎不会替它发事件，字幕兜底出字的唯一机会在队列这里
+- 渲染超时、队列溢出丢弃与 speak 抛异常时，队列代发 ``tts.utterance.failed``——
+  这句到不了引擎，或引擎在发事件之前就失败了（如首句懒启动 setup() 抛错），
+  引擎不会替它发事件，字幕兜底出字的机会在队列这里
+- 引擎在合成或播放中途失败时会先自己发 failed、再抛异常，异常上带"已报告"
+  标记（见 ``src.modules.events.payloads.utterance.mark_failure_reported``）；队列见到标记
+  只计数打日志、不再补发，避免同一句话出两条 failed。没有标记的未知异常照常
+  补发——辅助通道出问题时，宁可多出一次字幕，也不能让这句话没有字幕
 - ``wait_idle`` 暴露"嘴空"判定（队列空且当前句播完），供发言管线做
   背压等待（发言节奏跟随语音播放）——是否等待由调用方决定，本队列只
   提供状态与阻塞原语
@@ -38,7 +43,7 @@ from typing import Awaitable, Callable, Deque, Optional
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.utterance import UtteranceFailedPayload
+from src.modules.events.payloads.utterance import UtteranceFailedPayload, is_failure_reported
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
@@ -56,8 +61,9 @@ DEFAULT_RENDER_TIMEOUT_MS = 60_000
 # 引擎故障时决策循环会被无限拖住——引擎侧 fail 快速排空则不受影响）。
 DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS = 60_000
 
-# 队列代发失败事件时 payload 的 engine 标识：这两条路径发生在队列层，
-# 引擎未参与，填队列自身标识与引擎名（edge/gptsovits 等）区分来源。
+# 队列代发失败事件时 payload 的 engine 标识：这几条路径（渲染超时、溢出丢弃、
+# 引擎没报告的 speak 异常）上引擎都没替这句发过 failed，填队列自身标识，
+# 与引擎名（edge/gptsovits 等）区分来源。
 QUEUE_ENGINE_ID = "utterance_queue"
 
 # speak 可调用对象的形态：
@@ -101,12 +107,16 @@ class UtteranceQueue:
       包裹，触发 TimeoutError 时取消当前任务、代发
       ``tts.utterance.failed``（``error_message`` 标注 ``render_timeout``）、
       记录 ERROR 并继续下一条。
+    - speak 抛出其他异常时记录 ERROR（不重复打 traceback）并继续下一条：异常
+      未带"引擎已报告失败"标记就代发 ``tts.utterance.failed``（``error_message``
+      标注 ``speak_error``）；带了标记说明引擎已经发过，只计数不补发。
     - ``start()`` 幂等：重复调用不会重建任务；``stop()`` 后再次 ``start()``
       会重建 worker。
 
     注意：本类持有 speak 可调用对象与可选 ``EventBus``。引擎正常路径的
     ``tts.utterance.started`` / ``finished`` 仍由引擎发布；队列只在上述
-    两条"到不了引擎"的路径代发 failed 事件（未注入事件总线时只记日志）。
+    三条"没能正常播出"的路径代发 failed 事件（引擎已报告过的失败除外；
+    未注入事件总线时只记日志，队列照常继续）。
     """
 
     def __init__(
@@ -125,8 +135,8 @@ class UtteranceQueue:
             speak: speak 可调用对象；签名 ``async (text, utterance_id) -> None``。
                 编排队列对外引擎无关：传入真实 TTS 引擎 ``handle_speech``
                 适配器或测试 mock 均可。
-            event_bus: 事件总线（可选）；渲染超时与溢出丢弃时代发
-                ``tts.utterance.failed``，缺省 None 时这两条路径只记日志。
+            event_bus: 事件总线（可选）；渲染超时、溢出丢弃与 speak 抛出未报告
+                异常时代发 ``tts.utterance.failed``，缺省 None 时这三条路径只记日志。
             logger_name: 日志记录器名（默认 ``UtteranceQueue``）。
             max_queue: 队列容量上限（必须 ≥ 1）。
             render_timeout_ms: 单 utterance 调用超时（毫秒；必须 ≥ 100）。
@@ -467,7 +477,9 @@ class UtteranceQueue:
         """单条 utterance 的处理入口（speak + 超时保护 + 错误兜底）。
 
         speak 可调用对象可能抛出异常（引擎 fail / 网络断等），本方法在外层
-        捕获 asyncio.TimeoutError / 任何意外异常，保证 worker 永远能继续下一条。
+        捕获 asyncio.TimeoutError / 任何意外异常，保证 worker 永远能继续下一条；
+        超时与异常都会让字幕照常出字：超时一律代发 ``tts.utterance.failed``，
+        异常只在引擎没报告过失败时代发（带"已报告"标记的不重复发）。
         """
         timeout_s = self._render_timeout_ms / 1000.0
         try:
@@ -487,10 +499,20 @@ class UtteranceQueue:
             # worker 被取消时向上抛，让 worker_loop 退出
             raise
         except Exception as exc:  # noqa: BLE001 - 防御性兜底
-            # speak 引擎内部已打过带上下文的错误日志，此处只计数并继续，
-            # 不再重复打 traceback（连接类环境故障会刷数百行噪声）
+            # 轮到这句、speak 却抛了异常：先计数、打一条不带 traceback 的 ERROR
+            # （引擎内部已打过带上下文的完整日志，连接类环境故障再打 traceback 会刷屏），
+            # 再决定要不要替引擎补发 failed，最后 worker 继续下一条。
             self._total_errors += 1
             self._logger.error(f"speak 调用异常（已忽略，继续下一条）: utterance_id={item.utterance_id}, err={exc}")
+            if is_failure_reported(exc):
+                # 合成或播放中途失败：引擎已经先发过 failed（字幕已据此出字）再抛，
+                # 这里不能再补发，否则同一句话两条 failed，仪表盘失败句数与诊断记录翻倍
+                return
+            # 引擎在发事件之前就失败了（典型：首句懒启动 setup() 抛错，如 Omni 引擎
+            # 缺音色配置、Edge 引擎缺依赖或声卡初始化失败）：引擎一个事件都没发，
+            # 队列补发一条 failed，字幕照常出字，她的话不会因为声音出不来而连字都看不到。
+            # 没有标记的未知异常一律走这里——宁可多出一次字幕，也不能没有字幕
+            await self._emit_failed(item.utterance_id, item.text, f"speak_error: {type(exc).__name__}: {exc}")
 
 
 __all__ = [

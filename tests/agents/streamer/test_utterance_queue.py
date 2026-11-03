@@ -17,6 +17,7 @@ from src.agents.streamer.utterance_queue import (
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.utterance import UtteranceFailedPayload
+from src.modules.tts.common import emit_utterance_failed
 
 
 class _Recorder:
@@ -146,6 +147,97 @@ async def test_render_timeout_emits_failed_event(make_queue) -> None:
     assert payload.speech_text == "这句卡住了"
     assert payload.engine == QUEUE_ENGINE_ID
     assert "render_timeout" in payload.error_message
+
+
+async def test_unreported_speak_exception_emits_failed_event_and_queue_continues(make_queue, loguru_capture) -> None:
+    """speak 抛未报告的异常（如引擎首句懒启动 setup() 失败，一个事件都没发）：队列补发 failed 让字幕出字，并继续下一条。"""
+    bus = EventBus()
+    failed = _capture_failed(bus)
+    calls: list[str] = []
+
+    async def _setup_fails_first(text: str, utterance_id: Optional[str]) -> None:
+        calls.append(utterance_id)
+        if len(calls) == 1:
+            raise RuntimeError("未配置 voice 音色")
+
+    queue = await make_queue(_setup_fails_first, event_bus=bus)
+    await queue.enqueue("utt_broken", "这句声音出不来")
+    await queue.enqueue("utt_next", "下一句照常")
+    assert await queue.wait_idle(timeout_ms=2000)
+    await bus.wait_until_drained()
+
+    # 失败的这句补发了 failed 事件，字幕据此照常显示原文；原因带异常类型与信息
+    assert len(failed) == 1
+    payload = failed[0]
+    assert payload.utterance_id == "utt_broken"
+    assert payload.speech_text == "这句声音出不来"
+    assert payload.engine == QUEUE_ENGINE_ID
+    assert payload.error_message.startswith("speak_error: ")
+    assert "RuntimeError" in payload.error_message and "未配置 voice 音色" in payload.error_message
+    # 队列没被拖垮：下一条照常交给 speak，且只计一次错误
+    assert calls == ["utt_broken", "utt_next"]
+    assert queue.get_stats()["errors"] == 1
+    # 这句只记一条带 utterance_id 的 ERROR
+    errors = [r for r in loguru_capture.records if r["level"] == "ERROR" and "speak 调用异常" in r["message"]]
+    assert len(errors) == 1 and "utt_broken" in errors[0]["message"]
+
+
+async def test_exception_already_reported_by_engine_is_counted_but_not_emitted_again(
+    make_queue, loguru_capture
+) -> None:
+    """引擎合成中途失败，先自己发 failed 再抛（异常带"已报告"标记）：队列只计数打日志，不补发第二条。"""
+    bus = EventBus()
+    failed = _capture_failed(bus)
+    calls: list[str] = []
+
+    async def _engine_reports_then_raises(text: str, utterance_id: Optional[str]) -> None:
+        calls.append(utterance_id)
+        if len(calls) == 1:
+            error = ConnectionError("合成中途连接断了")
+            # 与真实引擎一致：先发 failed（字幕据此出字）并给异常打标记，再把异常抛出去
+            await emit_utterance_failed(
+                bus,
+                utterance_id=utterance_id,
+                speech_text=text,
+                engine="fake_engine",
+                error_message=f"{type(error).__name__}: {error}",
+                cause=error,
+            )
+            raise error
+
+    queue = await make_queue(_engine_reports_then_raises, event_bus=bus)
+    await queue.enqueue("utt_reported", "引擎已经报过失败")
+    await queue.enqueue("utt_next", "下一句照常")
+    assert await queue.wait_idle(timeout_ms=2000)
+    await bus.wait_until_drained()
+
+    # 这句话只有引擎发的那一条 failed，队列没有叠加第二条
+    assert [(p.utterance_id, p.engine) for p in failed] == [("utt_reported", "fake_engine")]
+    # 计数与日志照旧：错误计一次，ERROR 日志仍有；下一条照常处理
+    assert calls == ["utt_reported", "utt_next"]
+    assert queue.get_stats()["errors"] == 1
+    errors = [r for r in loguru_capture.records if r["level"] == "ERROR" and "speak 调用异常" in r["message"]]
+    assert len(errors) == 1 and "utt_reported" in errors[0]["message"]
+
+
+async def test_speak_exception_without_event_bus_still_continues(make_queue, loguru_capture) -> None:
+    """没注入事件总线：speak 抛异常时无处可补发，只计数打日志，队列照常处理下一条。"""
+    calls: list[str] = []
+
+    async def _fails_first(text: str, utterance_id: Optional[str]) -> None:
+        calls.append(utterance_id)
+        if len(calls) == 1:
+            raise RuntimeError("未配置 voice 音色")
+
+    queue = await make_queue(_fails_first, event_bus=None)
+    await queue.enqueue("utt_broken", "这句声音出不来")
+    await queue.enqueue("utt_next", "下一句照常")
+    assert await queue.wait_idle(timeout_ms=2000)
+
+    assert calls == ["utt_broken", "utt_next"]
+    stats = queue.get_stats()
+    assert stats["errors"] == 1 and stats["processed"] == 1
+    assert any(r["level"] == "ERROR" and "utt_broken" in r["message"] for r in loguru_capture.records)
 
 
 async def test_overflow_drop_emits_failed_event(make_queue) -> None:

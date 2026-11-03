@@ -18,6 +18,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.utterance import UtteranceFailedPayload
 from src.modules.tts.backends.gptsovits.client import GPTSoVITSServiceError
 from src.modules.tts.backends.gptsovits.provider import DTYPE, GPTSoVITSProvider
+from src.modules.events.payloads.utterance import is_failure_reported
 from tests.modules.tts.helpers import make_audio_manager, record_lifecycle, setup_with_audio_manager
 
 # api_v2 每请求必填参考音频：走合成路径的测试统一用已配置参考音频的引擎
@@ -77,12 +78,14 @@ async def test_missing_reference_audio_fails_before_synthesis(event_bus: EventBu
     await _started(provider, _stream_client())
     provider.ref_audio_path = provider.prompt_text = ""  # 模拟配置缺失
 
-    with pytest.raises(RuntimeError, match="参考音频未配置"):
+    with pytest.raises(RuntimeError, match="参考音频未配置") as raised:
         await provider.handle_speech("你好", utterance_id="utt_no_ref")
     await event_bus.cleanup()
 
     (failed,) = [p for name, p in captured if name == CoreEvents.TTS_UTTERANCE_FAILED]
     assert isinstance(failed, UtteranceFailedPayload) and "ref_audio_path" in failed.error_message
+    # 通用失败分支同样先发 failed 再抛：异常带"已报告"标记，队列兜底不重复补发
+    assert is_failure_reported(raised.value)
 
 
 async def test_service_unreachable_reports_short_message_without_transport_noise(event_bus: EventBus) -> None:
@@ -91,12 +94,14 @@ async def test_service_unreachable_reports_short_message_without_transport_noise
     error = GPTSoVITSServiceError("GPT-SoVITS 服务不可达 (http://127.0.0.1:9880)，请确认服务已启动")
     await _started(provider, _stream_client(error=error))
 
-    with pytest.raises(GPTSoVITSServiceError, match="服务不可达"):
+    with pytest.raises(GPTSoVITSServiceError, match="服务不可达") as raised:
         await provider.handle_speech("你好", utterance_id="utt_svc_down")
     await event_bus.cleanup()
 
     (failed,) = [p for name, p in captured if name == CoreEvents.TTS_UTTERANCE_FAILED]
     assert "服务不可达" in failed.error_message and "HTTPConnectionPool" not in failed.error_message
+    # 服务环境故障分支也先发 failed 再抛：异常带"已报告"标记，队列兜底不重复补发
+    assert is_failure_reported(raised.value)
 
 
 async def test_startup_warmup_primes_server_and_failure_is_swallowed() -> None:

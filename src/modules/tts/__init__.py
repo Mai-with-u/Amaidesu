@@ -10,10 +10,13 @@
 
 - 引擎自身自治生命周期：``handle_speech()`` 入口内置 ``ensure_setup``
   检查（setup 幂等，重复调用早退），调用方无需在注入前显式 setup。
-- 错误传播语义：引擎合成失败时**主动发** ``tts.utterance.failed`` 事件并
-  向上 raise，由编排队列兜底（不返回 ``ToolExecutionResult``）。
-- 事件契约：``tts.utterance.*`` 生命周期事件由引擎直接发布，队列仅订阅
-  用于对齐自己的 ``started`` / ``finished`` 时刻，不重复发布。
+- 错误传播语义：引擎合成失败时**主动发** ``tts.utterance.failed`` 事件，
+  在异常上打"已上报"标记后向上 raise，由编排队列兜底（不返回
+  ``ToolExecutionResult``）。队列见到标记就不再发；没有标记说明引擎在发
+  事件之前就出错了，由队列补发一条，保证每次失败恰好一条 failed 事件。
+- 事件契约：``tts.utterance.*`` 生命周期事件由引擎直接发布，队列订阅
+  用于对齐自己的 ``started`` / ``finished`` 时刻，只在上面那种引擎没发
+  failed 的情况下替它补发。
 - ``ConfigSchema`` 保留：``multi_file_loader`` 通过模块路径字符串延迟加载
   各 Provider 的 ``ConfigSchema`` 用于配置补全，不与工具注册耦合。
 - 装配自治：``build_tts_infrastructure`` 在本包内（``src/modules/tts/``）
