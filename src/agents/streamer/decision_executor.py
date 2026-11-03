@@ -8,12 +8,15 @@
 依赖全部构造期注入（不持 Agent 引用）；决策窗材料经 ``window_opener``
 一次取齐（出账与读取的顺序不变量内化在 SessionScope.open_window），
 流程单文本与运营提醒这两个非场次作用域项仍经 provider 回调自取。
+
+收播道别那一轮由调用方带上正在结束的场次（``ClosingSession``）：开窗按这一场
+读历史，道别句带这一场的编号送发言管线；其余轮次照常交给场次解析。
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Tuple
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -29,16 +32,25 @@ from src.modules.utils.time_utils import now_ms
 from .planner import Planner, RoundOutcome
 from .proactive_trigger import ProactiveTrigger
 from .room_state import RoomState
-from .session_scope import WindowMaterials
+from .session_scope import ClosingSession, WindowMaterials
 from .speech_dispatcher import SpeechDispatcher
 from .stats import StreamerStats
 from .thinking_stream import ThinkingStreamContext
 from .trigger_cause import TriggerCause, TriggerKind
 
-__all__ = ["DecisionRoundExecutor", "resolve_reply_target_user"]
+__all__ = ["DecisionRoundExecutor", "WindowOpener", "resolve_reply_target_user"]
 
 # 模块级 logger：反查 reply target 的异常路径记 warning 用（组件实例可带注入 logger）
 _MODULE_LOGGER = get_logger("StreamerAgent.DecisionRoundExecutor")
+
+
+class WindowOpener(Protocol):
+    """开一个决策窗的入口（``SessionScope.open_window`` 的形状）。
+
+    ``scope_pk`` 为 None 时按进行中场次读历史；收播道别那一轮传正在结束的那一场。
+    """
+
+    def __call__(self, *, scope_pk: Optional[int] = None) -> Awaitable[WindowMaterials]: ...
 
 
 #: 触发原因种类（TriggerKind 全集）→ 面板可读文案。
@@ -101,7 +113,7 @@ class DecisionRoundExecutor:
         stats: StreamerStats,
         thinking_sink: Optional[Any],
         thinking_enabled: bool,
-        window_opener: Callable[[], Awaitable[WindowMaterials]],
+        window_opener: WindowOpener,
         rundown_text_provider: Callable[[], Optional[str]],
         reminders_provider: Optional[Callable[[], str]] = None,
         logger: Optional[ModuleLogger] = None,
@@ -109,8 +121,9 @@ class DecisionRoundExecutor:
         """决策窗材料的取用契约：
 
         - window_opener: 开一个决策窗，一次取齐场次作用域材料（出账先于读取，
-          顺序不变量内化在 ``SessionScope.open_window``）。返回的
-          ``WindowMaterials`` 字段语义见其类型注释——``history`` 的 ``None``
+          顺序不变量内化在 ``SessionScope.open_window``）。每轮以关键字
+          ``scope_pk`` 调用：常规轮次为 None，收播道别那一轮为正在结束的场次号。
+          返回的 ``WindowMaterials`` 字段语义见其类型注释——``history`` 的 ``None``
           与空列表不同义，``game_batch`` 空批次即无事件，``session_recap``
           空串即不注入。
         - rundown_text: ``Optional[str]``（None = 无流程单情境；非场次作用域
@@ -144,6 +157,7 @@ class DecisionRoundExecutor:
         forced: bool,
         trigger_cause: TriggerCause,
         proactive: bool = False,
+        closing_session: Optional[ClosingSession] = None,
     ) -> Dict[str, Any]:
         """两阶段决策外壳：Planner → 消费 plan 评估 + 触发 reply 工具。
 
@@ -151,6 +165,9 @@ class DecisionRoundExecutor:
         生成本轮 ``round_id``，边界处发射 ``streamer.stage``（planning → idle），
         决策收口处发射 ``planner.decision``——观察者据此回答"主播为什么这么做/
         为什么没反应"，无需翻日志。两阶段执行逻辑在 ``_decide_round``。
+
+        ``closing_session`` 只在收播道别那一轮给出：开窗按这一场读历史、道别句
+        带这一场的编号，她道别时看得到本场最后的对话，说的话也记在这一场。
 
         Returns:
             决策结果视图（正常 flush 循环忽略返回值；调试门面
@@ -198,6 +215,7 @@ class DecisionRoundExecutor:
             forced=forced,
             trigger_cause=trigger_cause,
             proactive=proactive,
+            closing_session=closing_session,
         )
         await self._emit_planner_decision(result, outcome, batch)
         closing = "决策轮结束"
@@ -224,6 +242,7 @@ class DecisionRoundExecutor:
         forced: bool,
         trigger_cause: TriggerCause,
         proactive: bool,
+        closing_session: Optional[ClosingSession] = None,
     ) -> Tuple[Dict[str, Any], Optional[RoundOutcome]]:
         """两阶段决策执行体（被 ``execute`` 外壳驱动），返回（结果视图, Planner 收场）。
 
@@ -231,6 +250,9 @@ class DecisionRoundExecutor:
         统一发射决策事件，本方法不直接发事件。Planner 收场（RoundOutcome）单独
         带回供决策事件字段直取；Planner 调用异常收场时为 None。
         """
+        # 收播道别那一轮：场次已写成已结束，"当前场次"解析不到，按正在结束的那一场读历史、
+        # 给道别句盖号；其余轮次为 None / 0，照常交给场次解析与盖章拦截器
+        scope_pk = closing_session.live_session_id if closing_session is not None else None
         result: Dict[str, Any] = {
             "round_id": round_id,
             "trigger_reason": trigger_cause.to_reason_string(proactive=proactive),
@@ -252,7 +274,7 @@ class DecisionRoundExecutor:
 
         # 开决策窗：出账 + 读历史 + 本窗批次 + 上场回顾一次取齐（顺序不变量
         # 在 SessionScope.open_window 内化——出账的时间线行必先进本轮投影）
-        materials = await self._window_opener()
+        materials = await self._window_opener(scope_pk=scope_pk)
         history = materials.history
 
         # 拼装流程单上下文
@@ -327,6 +349,7 @@ class DecisionRoundExecutor:
             target_user_id=resolve_reply_target_user(outcome, batch),
             reply_to_message_id=outcome.reply_to,
             round_id=round_id,
+            live_session_id=scope_pk if scope_pk is not None else 0,
         )
         if speech_info is not None:
             result["speech"], result["emotion"], result["utterance_id"] = speech_info

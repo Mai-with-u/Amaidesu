@@ -102,6 +102,20 @@ async def test_dispatch_fans_out_with_shared_utterance_id(started) -> None:
     assert dispatcher.utterance_queue.get_stats()["enqueued"] == 1
 
 
+@pytest.mark.parametrize(("given", "expected"), [(None, 0), (42, 42)], ids=["stamped_later", "closing_session"])
+async def test_dispatch_carries_explicit_session_id(started, given: Optional[int], expected: int) -> None:
+    """常规发言不带场次号（交给盖章拦截器按进行中场次补）；收播道别那一轮带刚结束那一场的编号。"""
+    bus = EventBus()
+    captured = _capture_speech(bus)
+    dispatcher = await started(bus=bus)
+
+    kwargs = {} if given is None else {"live_session_id": given}
+    await dispatcher.dispatch({"speech": "下次见", "emotion": {}}, **kwargs)
+    await _until(lambda: captured)
+
+    assert captured[0][1].live_session_id == expected
+
+
 async def test_utterance_ids_increment_per_dispatch(started) -> None:
     dispatcher = await started()
     ids = [(await dispatcher.dispatch({"speech": f"第 {i} 句", "emotion": ""}))[2] for i in range(3)]

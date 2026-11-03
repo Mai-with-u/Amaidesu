@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from collections import deque
+from contextvars import ContextVar
 from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 from src.modules.agents.base import AgentState, BaseAgent
@@ -60,7 +61,7 @@ from .rundown.rundown_coordinator import RundownCoordinator
 from .tools.rundown_tool import build_rundown_tool_provider
 from .background import SUMMARY_PROFILE, BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
-from .session_scope import SessionScope
+from .session_scope import ClosingSession, SessionScope
 from .memory import (
     LongMemoryWriter,
     RegularsRosterWriter,
@@ -103,6 +104,13 @@ _PROFILE_REPLYER = "replyer"
 # 运营递话提醒队列上限（条）。满时拒收递话（receive_prompt 返回 False，
 # REST 侧映射 409）——必达语义不允许静默挤掉旧条目。
 _REMINDER_QUEUE_MAX = 5
+
+# 收播道别那一轮正在结束的那一场（其余时候为 None）。只在道别那一轮自己的调用链里看得见：
+# _execute_round 开头设上、跑完（含出错）复位。表达侧读历史（reply 工具 → _read_history）与
+# 回想工具取场次类型都在这条调用链上（同一任务，或这一轮派生的任务——派生任务创建时复制上下文），
+# 读得到这一场；下播瞬间并发的常规轮次、调试轮次、道别期间新开场次的回调各在自己的任务里，
+# 读到的是 None，照常按进行中场次走。不挂在 Agent 实例上，正是为了不漏给这些并发轮次
+_CLOSING_SESSION: ContextVar[Optional[ClosingSession]] = ContextVar("streamer_closing_session", default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +525,7 @@ class StreamerAgent(BaseAgent):
             logger=self._logger,
         )
         # 决策执行器（两阶段决策的执行半；调度半留 Agent）。测试可注入替身，
-        # 契约 = ``execute(batch, *, forced, trigger_cause, proactive)``；
+        # 契约 = ``execute(batch, *, forced, trigger_cause, proactive, closing_session)``；
         # 注入方经 ``set_reminders_provider`` 接上递话取空动词（内建构造路径
         # 走构造参数收取，两者写同一处状态）
         if round_executor is not None:
@@ -932,14 +940,21 @@ class StreamerAgent(BaseAgent):
         # 的开播，道别要好几秒才生成完，会落进新场次、在正式直播开头说"今天就到
         # 这儿"，所以不道别，直接收拾本场
         if self._running and not payload.superseded:
+            # 场次管理器先把这一场写成已结束、清掉进行中场次，才发 live.ended，道别这一轮里
+            # "当前场次"已解析不到：把正在结束的这一场显式交下去，她按这一场读最后的对话、
+            # 道别句记进这一场、彩排场的道别仍按彩排算。空场次（一条消息都没有）结账时整行
+            # 丢弃，不交：道别要等模型好几秒才说出口，那时行早没了，交了会给道别句盖上已删
+            # 场次的编号、在库里留下孤儿行；这时道别照旧运行（她照样说再见），只是这句不落库
+            closing = None if payload.empty_discarded else self._closing_session_of(payload)
             await self._execute_round(
                 [],
                 forced=True,
                 trigger_cause=TriggerCause(kind=TriggerKind.SIGNOFF, source=TriggerSource.LIVE_END),
                 proactive=True,
+                closing_session=closing,
             )
         # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
-        # （道别发言不属已结账的场次，留在内存对话里供下播后的调试闲聊接续）
+        # （道别句已带着这一场的编号落库，随场次留档，不再留在内存对话里）
         await self._scope.end_session()
         # 备忘录生命周期收口：全文已随每次写入落进场次行（整理从那里读），
         # 这里只清空内存里这份——备忘录是场次作用域，下一场从空白开始
@@ -966,6 +981,16 @@ class StreamerAgent(BaseAgent):
                     tasks=self._memory_tasks,
                     label="StreamerAgent.settle_session",
                 )
+
+    @staticmethod
+    def _closing_session_of(payload: LiveEndedPayload) -> ClosingSession:
+        """从 live.ended 载荷取出正在结束的那一场：编号、类型，开播时刻由结束时刻减时长推得。"""
+        started_at_ms = payload.ended_at_ms - payload.duration_ms if payload.duration_ms is not None else None
+        return ClosingSession(
+            live_session_id=payload.live_session_id,
+            kind=payload.kind,
+            started_at_ms=started_at_ms,
+        )
 
     # ==================================================================
     # 主播记忆：场次回顾 / 观众画像
@@ -1008,7 +1033,15 @@ class StreamerAgent(BaseAgent):
         return row.notebook_text if row is not None else ""
 
     def _current_session_kind(self) -> SessionKind:
-        """进行中场次的类型；未开播按正式场算（开播前的闲聊读的是正式直播的上一场）。"""
+        """进行中场次的类型；未开播按正式场算（开播前的闲聊读的是正式直播的上一场）。
+
+        收播道别那一轮里进行中场次已清空，按正在结束的那一场取：彩排场道别时回想
+        "上一场"仍只翻彩排场，不会被当成正式场。这一场只在道别那一轮自己的调用链里看得见
+        （见 ``_CLOSING_SESSION``）：道别期间并发的常规轮次、刚开的新场次照常取进行中场次的类型。
+        """
+        closing = _CLOSING_SESSION.get()
+        if closing is not None:
+            return closing.kind
         kind = getattr(self._session_manager, "active_kind", None) if self._session_manager is not None else None
         return kind if kind in SESSION_KINDS else SESSION_KIND_LIVE
 
@@ -1484,14 +1517,38 @@ class StreamerAgent(BaseAgent):
         trigger_cause: TriggerCause,
         proactive: bool = False,
         batch_persisted: bool = True,
+        closing_session: Optional[ClosingSession] = None,
     ) -> Dict[str, Any]:
         """执行一轮决策，并把本轮观众消息与主播发言记入尚未落库的对话轮。
 
         ``batch_persisted`` 表示本批消息是否经 room.message 事件进了落库链路；
         调试注入传 False——即使开着场次，这些消息也不在 live_chat 里。
+
+        ``closing_session`` 只在收播道别那一轮给出（正在结束的那一场）。决策执行器开窗按
+        这一场读历史、道别句带这一场的编号；reply 工具经 :meth:`_read_history` 给表达侧取
+        历史、回想工具取场次类型，也都按这一场——这两处不经参数传递，靠 ``_CLOSING_SESSION``
+        这个上下文变量读到。
+
+        每一轮开头都把上下文变量设成本轮的值（常规轮次设 None），跑完（含出错）用 token
+        复位：并发的轮次各在自己的任务里，互相看不见对方的值；两场相继手动结束、两个道别轮
+        重叠时也各管各的，前一轮复位不会清掉后一轮的场次。道别那一轮不持决策锁，与下播瞬间
+        的常规轮次照旧可以并发（她不用等手头那一轮答完才道别，观众的"拜拜"也不用排在道别后）。
         """
-        result = await self._rounds.execute(batch, forced=forced, trigger_cause=trigger_cause, proactive=proactive)
-        await self._scope.remember_round(batch, speech=result.get("speech"), batch_persisted=batch_persisted)
+        token = _CLOSING_SESSION.set(closing_session)
+        try:
+            result = await self._rounds.execute(
+                batch,
+                forced=forced,
+                trigger_cause=trigger_cause,
+                proactive=proactive,
+                closing_session=closing_session,
+            )
+            scope_pk = closing_session.live_session_id if closing_session is not None else None
+            await self._scope.remember_round(
+                batch, speech=result.get("speech"), batch_persisted=batch_persisted, scope_pk=scope_pk
+            )
+        finally:
+            _CLOSING_SESSION.reset(token)
         return result
 
     def _estimate_avg_interval_ms(self) -> Optional[float]:
@@ -1575,8 +1632,12 @@ class StreamerAgent(BaseAgent):
 
         reply_tool 的 history_provider 锚在本方法上，既有测试也经它读历史——
         保留薄转发，读数语义（合并投影/读库失败返回 None）在 SessionScope 单点维护。
+        收播道别那一轮按正在结束的那一场读：表达侧写道别句时看得到本场最后的对话，
+        时间线也不会因为"当前场次"解析成空而被当作换场清空。这一场从 ``_CLOSING_SESSION``
+        取，只有道别那一轮自己的调用链读得到；并发的常规轮次照常读进行中场次。
         """
-        return await self._scope.read_history()
+        closing = _CLOSING_SESSION.get()
+        return await self._scope.read_history(scope_pk=closing.live_session_id if closing is not None else None)
 
     # ==================================================================
     # 统计信息

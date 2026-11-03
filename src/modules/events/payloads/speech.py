@@ -12,8 +12,10 @@
 - ``utterance_id`` 为全链路关联键（编排层生成，格式 ``utt_{epoch_ms}_{seq}``，
   进程内单调递增、单场唯一），与 ``tts.utterance.*`` 共用同一关联键，串联
   reply 记录、TTS 事件、字幕、存储等通道。
-- ``live_session_id``：场次主键（live_sessions.id）。发布方不填，由事件总线的
-  场次盖章拦截器统一注入当前进行中场次；0 表示未归属。
+- ``live_session_id``：场次主键（live_sessions.id）。常规发言发布方不填（0），由
+  事件总线的场次盖章拦截器按当前进行中场次补上；收播道别那一轮场次已结账、拦截器
+  解析不到，由发布方填刚结束那一场的编号，拦截器只补 0、不覆盖非 0 值。补完仍为 0
+  表示未归属（没开场次，或场次行已删/将删时的道别句），记账器据此不落库。
 - ``reply_to_message_id``：本条发言回复的那条弹幕的 message_id（可选），来自
   Planner 决策输出——"主播回应了哪条观众消息"的关联事实，与 live_chat
   观众行的 message_id 构成外键关系，供互动分析查询；None 表示主动发言
@@ -51,8 +53,9 @@ class StreamerSpeechPayload(BasePayload):
         utterance_id: 一次发言实例的唯一 ID（编排层生成，格式
             ``utt_{epoch_ms}_{seq}``，进程内自增、单场唯一），全链路关联键，
             与 ``tts.utterance.*`` 共享同一键空间。
-        live_session_id: 场次主键（live_sessions.id）；发布方不填，由场次盖章
-            拦截器注入当前进行中场次；0 表示未归属。
+        live_session_id: 场次主键（live_sessions.id）。常规发言发布方不填（0），
+            由场次盖章拦截器按进行中场次补；收播道别那一轮由发布方填刚结束那一场
+            的编号，拦截器不覆盖非 0 值。补完仍为 0 表示未归属。
         reply_to_message_id: 本条发言回复的那条弹幕的 message_id（可选）；
             None 表示主动发言或未指向特定弹幕。
         text: 主播发言文本（已 strip；空字符串不触发本事件）。
@@ -76,7 +79,10 @@ class StreamerSpeechPayload(BasePayload):
     )
     live_session_id: int = Field(
         default=0,
-        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+        description=(
+            "场次主键（live_sessions.id）；常规发言发布方不填（0），由场次盖章拦截器按进行中场次补；"
+            "收播道别那一轮由发布方填刚结束那一场的编号，拦截器不覆盖非 0 值；补完仍为 0=未归属"
+        ),
     )
     reply_to_message_id: Optional[str] = Field(
         default=None,

@@ -17,15 +17,35 @@ from typing import Any, List, Optional
 
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import ModuleLogger, get_logger
+from src.modules.types.session_kind import SessionKind
 from src.modules.utils.time_utils import now_ms
 
 from .game_ledger import GameLedger
 from .timeline import GameEventBatch, StreamerTimeline, TimelineTurn
 
-__all__ = ["LiveChatTurn", "SessionScope", "WindowMaterials"]
+__all__ = ["ClosingSession", "LiveChatTurn", "SessionScope", "WindowMaterials"]
 
 # 私聊暂存上限（行）。只进本窗决策参考段，不进时间线
 _PRIVATE_CHAT_LINES_MAX = 10
+
+
+@dataclass(frozen=True)
+class ClosingSession:
+    """正在结束的那一场：收播道别那一轮的显式场次上下文。
+
+    手动下播时场次管理器先把这一场写成已结束、清掉进行中场次，之后才广播 ``live.ended``，
+    道别那一轮里"当前场次"已经解析不到。她道别时要看得到这一场最后的对话、道别句要落进
+    这一场、彩排场的道别仍按彩排算，所以由下播回调把这一场原样交下去：读历史按
+    ``live_session_id`` 读、发言事件带这个编号、取场次类型取 ``kind``。
+
+    场次行已删或将删时不构造本对象，道别那一轮照旧运行、道别句不落库：空场次（开播后一条
+    消息都没有，结账时整行丢弃），以及 Dashboard 删除进行中场次（结束后紧接着删行）。
+    """
+
+    live_session_id: int
+    kind: SessionKind
+    # 开播时刻（Unix 毫秒），由结束时刻减场次时长推得；拿不到时为 None
+    started_at_ms: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -170,13 +190,14 @@ class SessionScope:
         """本窗新入账的游戏事件批次（出账半写入；无新事件为空批次）。"""
         return self._window_game_batch
 
-    async def open_window(self) -> WindowMaterials:
+    async def open_window(self, *, scope_pk: Optional[int] = None) -> WindowMaterials:
         """开一个决策窗：出账（先）→ 读历史（后）→ 附本窗批次与上场回顾。
 
-        "出账先于读取"的顺序不变量由本方法内化——调用方无法错序。
+        "出账先于读取"的顺序不变量由本方法内化——调用方无法错序。``scope_pk``
+        原样交给 :meth:`read_history`：收播道别那一轮传正在结束的那一场。
         """
         game_batch = self.drain_window()
-        history = await self.read_history()
+        history = await self.read_history(scope_pk=scope_pk)
         return WindowMaterials(
             history=history,
             game_batch=game_batch,
@@ -184,26 +205,32 @@ class SessionScope:
             timeline_notes=list(self._timeline_notes),
         )
 
-    async def read_history(self) -> Optional[List[Any]]:
+    async def read_history(self, *, scope_pk: Optional[int] = None) -> Optional[List[Any]]:
         """读取当前对话并经时间线投影：前情提要各章 + 工作层原文，按主播看到的先后排列。
 
         纯读，无副作用——出账见 ``drain_window``（``open_window`` 首步）。显式
         场次进行中时，live_chat 是已落库对话的事实源；没开场次时的对话与调试
         注入的观众消息不会落库，由内存对话轮按发生时刻并入同一条时间线。读库
         失败返回 ``None``（宁可本轮无历史，也不拿残缺历史冒充完整对话）。
+
+        ``scope_pk`` 给定时按这一场读，不再问场次管理器"当前是哪一场"：收播道别
+        那一轮里场次已写成已结束、进行中场次已清空，解析出来是"没开场次"，读到
+        0 行，时间线还会当作换场整个清空。按正在结束的那一场读，时间线认得出
+        还是同一场，接着往后追加，她道别时看得到这一场最后的对话。
         """
         stored: List[LiveChatTurn] = []
-        live_pk: Optional[int] = None
-        if self._chat is not None and self._session_manager is not None:
+        live_pk: Optional[int] = scope_pk
+        if self._chat is not None and (scope_pk is not None or self._session_manager is not None):
             try:
-                live_pk = await self._session_manager.resolve_pk()
+                if live_pk is None:
+                    live_pk = await self._session_manager.resolve_pk()
                 rows = (
                     await self._chat.list_recent_live_chat(live_session_id=live_pk, limit=None)
                     if live_pk is not None
                     else []
                 )
             except Exception as exc:
-                self._logger.warning(f"读取会话历史失败: {exc}")
+                self._logger.warning(f"读取会话历史失败（场次 {live_pk}）: {exc}", exc=exc)
                 return None
             stored = [
                 LiveChatTurn(
@@ -232,13 +259,16 @@ class SessionScope:
         speech: Optional[str],
         *,
         batch_persisted: bool,
+        scope_pk: Optional[int] = None,
     ) -> None:
         """决策轮结束后补记不会从 live_chat 读回的对话：观众先说、主播后答。
 
         ``batch_persisted`` 表示本批消息是否经 room.message 事件进了落库链路；
         调试注入传 False——即使开着场次，这些消息也不在 live_chat 里。
+        ``scope_pk`` 是这一轮显式归属的场次（收播道别那一轮传正在结束的那一场）：
+        道别句带着这一场的编号落进 live_chat，读历史时从库里读回，不再补记进内存。
         """
-        chat_persisted = await self._chat_persisted()
+        chat_persisted = await self._chat_persisted(scope_pk)
         if not (batch_persisted and chat_persisted):
             for msg in batch:
                 user = getattr(msg, "user", None)
@@ -266,9 +296,16 @@ class SessionScope:
                 )
             )
 
-    async def _chat_persisted(self) -> bool:
-        """当前对话是否会写进 live_chat 并能被历史读回（显式场次进行中且有聊天仓储）。"""
-        if self._chat is None or self._session_manager is None:
+    async def _chat_persisted(self, scope_pk: Optional[int] = None) -> bool:
+        """当前对话是否会写进 live_chat 并能被历史读回（显式场次进行中且有聊天仓储）。
+
+        给了 ``scope_pk``（道别那一轮）时只看有没有聊天仓储：这一轮的台词带着该场次号落库。
+        """
+        if self._chat is None:
+            return False
+        if scope_pk is not None:
+            return True
+        if self._session_manager is None:
             return False
         try:
             return await self._session_manager.resolve_pk() is not None

@@ -259,6 +259,7 @@ class SpeechDispatcher:
         target_user_id: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
         round_id: str = "",
+        live_session_id: int = 0,
     ) -> Optional[tuple]:
         """消费 reply 结构化结果并触发下游管线（决策循环安全：永不抛异常）。
 
@@ -273,6 +274,10 @@ class SpeechDispatcher:
                 来自 Planner 决策输出，透传到发言事件并落库为互动关联）。
             round_id: 决策轮次 ID（可选；透传到 ``streamer.speech`` 事件供
                 观察器把发言卡与该轮思考过程成组）。
+            live_session_id: 这句台词归属的场次主键。0（常规路径）= 交给场次
+                盖章拦截器按进行中场次补；收播道别那一轮场次已结账、拦截器解析
+                不到，由调用方给出刚结束那一场的编号——拦截器只补 0、不覆盖非 0
+                值，记账器按这个编号把道别句落进那一场。
 
         Returns:
             ``(speech, emotion, utterance_id)`` 三元组（speech 为空或输入
@@ -327,6 +332,7 @@ class SpeechDispatcher:
                     reply_to_message_id=reply_to_message_id,
                     round_id=round_id,
                     llm_request_id=reply_payload.get("llm_request_id"),
+                    live_session_id=live_session_id,
                 )
                 self._schedule_subtitle_show(cleaned_speech, utterance_id)
                 self._notify_spoken(cleaned_speech)
@@ -506,14 +512,19 @@ class SpeechDispatcher:
         round_id: str = "",
         llm_request_id: Optional[str] = None,
         emotion_at_playback: bool = False,
+        live_session_id: int = 0,
     ) -> None:
-        """发布 ``streamer.speech`` 业务事件（同步 await 发出，保证先于轮末决策记录与空闲状态；失败不反噬决策循环）。"""
+        """发布 ``streamer.speech`` 业务事件（同步 await 发出，保证先于轮末决策记录与空闲状态；失败不反噬决策循环）。
+
+        ``live_session_id`` 非 0 时随事件带出（道别句归刚结束的那一场），0 由场次盖章拦截器补。
+        """
         event_bus = self._event_bus
         if event_bus is None:
             return
         payload = StreamerSpeechPayload(
             utterance_id=utterance_id,
             round_id=round_id or None,
+            live_session_id=live_session_id,
             text=text,
             emotion=emotion,
             emotion_intensity=emotion_intensity,

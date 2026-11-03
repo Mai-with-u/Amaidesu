@@ -2,20 +2,31 @@
 
 锁定的不变量：出账先于读取（open_window 内化的顺序契约）、读历史纯读、
 合并投影按发生时刻稳定排序、读库失败宁可无历史、清场五件套、补记的
-落库判定分支。时间线投影本体（project）有自己的测试，此处用替身。
+落库判定分支。时间线投影本体（project）有自己的测试，此处多用替身；
+"道别那一轮开窗不把时间线当作换场清空"要看真实时间线的章节是否还在，那一条用真件。
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from src.agents.streamer.config import StreamerContextConfig
 from src.agents.streamer.game_ledger import GameLedger
 from src.agents.streamer.session_scope import LiveChatTurn, SessionScope, WindowMaterials
-from src.agents.streamer.timeline import GameEventBatch, TimelineTurn
+from src.agents.streamer.timeline import (
+    CHAPTER_MESSAGE_TYPE,
+    GameEventBatch,
+    StreamerTimeline,
+    TimelineTurn,
+)
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.llm.payload import Response
 from src.modules.storage.models.chat import LiveChatMessage
+from tests.config.helpers import wait_until
 
 
 class _FakeTimeline:
@@ -34,13 +45,15 @@ class _FakeTimeline:
 
 
 class _FakeChat:
-    """聊天仓储替身：返回预置行，可注入异常。"""
+    """聊天仓储替身：返回预置行，可注入异常；记下每次按哪一场读。"""
 
     def __init__(self, rows: Optional[List[Dict[str, Any]]] = None, error: Optional[Exception] = None) -> None:
         self._rows = rows or []
         self._error = error
+        self.read_sessions: List[int] = []
 
     async def list_recent_live_chat(self, *, live_session_id: int, limit: Optional[int]) -> List[LiveChatMessage]:
+        self.read_sessions.append(live_session_id)
         if self._error is not None:
             raise self._error
         return self._rows
@@ -48,13 +61,14 @@ class _FakeChat:
 
 class _FakeSessionManager:
     def __init__(self, pk: Optional[int] = None, error: Optional[Exception] = None) -> None:
-        self._pk = pk
+        # 公开属性：用例直接改它模拟开播与下播（进行中场次被清空）
+        self.pk = pk
         self._error = error
 
     async def resolve_pk(self) -> Optional[int]:
         if self._error is not None:
             raise self._error
-        return self._pk
+        return self.pk
 
 
 def _turn(content: str, ts: int, *, role: str = "viewer", message_type: str = "danmaku") -> LiveChatTurn:
@@ -167,6 +181,83 @@ async def test_read_history_returns_none_on_storage_failure() -> None:
     )
 
     assert await scope.read_history() is None, "读库失败宁可无历史，不拿残缺冒充完整"
+
+
+# 收播道别：按正在结束的那一场读（进行中场次已清空）
+
+
+def _row(content: str, ts: int) -> LiveChatMessage:
+    return LiveChatMessage(
+        id=ts,
+        live_session_id=7,
+        timestamp_ms=ts,
+        sender_role="viewer",
+        content=content,
+        sender_name="观众",
+        message_type="danmaku",
+        message_id=f"m{ts}",
+    )
+
+
+async def test_closing_window_reads_the_ending_session() -> None:
+    """场次已写成已结束、解析不到当前场次时，按给定的场次号读库，并以同一场次号交时间线投影。"""
+    timeline, chat = _FakeTimeline(), _FakeChat(rows=[_row("TNT还差一排", 100)])
+    manager = _FakeSessionManager(pk=7)
+    scope = _scope(chat=chat, session_manager=manager, timeline=timeline)
+    await scope.read_history()  # 直播中：时间线跟着第 7 场
+    manager.pk = None  # 下播：场次管理器已清掉进行中场次
+
+    materials = await scope.open_window(scope_pk=7)
+
+    assert [turn.content for turn in materials.history] == ["TNT还差一排"]
+    assert chat.read_sessions == [7, 7]
+    assert [call["scope"] for call in timeline.project_calls] == [7, 7], "交给时间线的仍是同一场"
+
+
+@pytest.mark.usefixtures("chars_as_tokens")  # 按字符数计 token：30 条约百字的弹幕越过 4000 预算的提前整理线
+async def test_closing_window_keeps_chapter_written_during_the_session() -> None:
+    """真实时间线：直播中后台写好的前情提要，道别那一轮按正在结束的那一场开窗时仍在。
+
+    时间线只在场次号变了时整个清空（章节、在跑的整理一并作废）；道别那一轮若按"没开场次"
+    开窗，这一章会丢，前情要从头再压一遍。
+    """
+    llm = MagicMock()
+    llm.get_profile_context_window = MagicMock(return_value=0)
+    llm.generate = AsyncMock(return_value=Response(success=True, content="阿杰一直催着把TNT阵铺完。"))
+    prompt = MagicMock()
+    prompt.render = MagicMock(return_value="SYSTEM")
+    timeline = StreamerTimeline(
+        budget=StreamerContextConfig(max_tokens=4000),
+        llm_service=llm,
+        prompt_service=prompt,
+        profiles=("planner",),
+        summary_profile="summary",
+    )
+    rows = [_row(f"第{i}句" + "铺" * 100, i) for i in range(1, 31)]
+    manager = _FakeSessionManager(pk=7)
+    scope = _scope(chat=_FakeChat(rows=rows), session_manager=manager, timeline=timeline)
+    await scope.read_history()  # 直播中：越过提前整理线，后台开始写第一章前情提要
+    await wait_until(lambda: llm.generate.await_count == 1, what="后台写完第一章前情提要")
+    manager.pk = None  # 下播：场次管理器已清掉进行中场次
+
+    materials = await scope.open_window(scope_pk=7)
+
+    assert materials.history is not None
+    first = materials.history[0]
+    assert first.message_type == CHAPTER_MESSAGE_TYPE and "阿杰一直催着把TNT阵铺完" in first.content, (
+        "直播中写好的那一章还在：同一场，时间线没被当作换场清空"
+    )
+
+
+async def test_closing_round_speech_is_not_kept_as_unpersisted_turn() -> None:
+    """道别句带着正在结束那一场的编号落库，补记时不再留进内存对话（否则读历史会重复）。"""
+    scope = _scope(chat=_FakeChat(), session_manager=_FakeSessionManager(pk=None))
+
+    await scope.remember_round([], speech="下次继续炸TNT", batch_persisted=True, scope_pk=7)
+    assert await scope.read_history(scope_pk=7) == []
+
+    await scope.remember_round([], speech="下播后的闲聊", batch_persisted=True)
+    assert [turn.content for turn in await scope.read_history()] == ["下播后的闲聊"], "其余轮次照旧按未落库补记"
 
 
 # 清场：五个场次作用域状态归零

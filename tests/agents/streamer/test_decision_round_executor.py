@@ -14,7 +14,7 @@ from src.agents.streamer.decision_executor import (
     trigger_cause_text,
 )
 from src.agents.streamer.planner import RoundOutcome
-from src.agents.streamer.session_scope import WindowMaterials
+from src.agents.streamer.session_scope import ClosingSession, WindowMaterials
 from src.agents.streamer.stats import StreamerStats
 from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
@@ -61,6 +61,7 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
     proactive_trigger = MagicMock()
     stats = StreamerStats()
     bus, emissions = _make_event_bus()
+    window_opener = AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch(), session_recap=""))
 
     executor = DecisionRoundExecutor(
         planner=planner,
@@ -71,14 +72,13 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
         stats=stats,
         thinking_sink=None,
         thinking_enabled=False,
-        window_opener=AsyncMock(
-            return_value=WindowMaterials(history=[], game_batch=GameEventBatch(), session_recap="")
-        ),
+        window_opener=window_opener,
         rundown_text_provider=MagicMock(return_value=None),
     )
     deps = {
         "planner": planner,
         "speech": speech,
+        "window_opener": window_opener,
         "room_state": room_state,
         "proactive_trigger": proactive_trigger,
         "stats": stats,
@@ -111,6 +111,30 @@ async def test_window_opener_runs_once_per_round():
     await executor.execute([], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.BATCH_FULL))
 
     window_opener.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("closing", "scope_pk", "stamped_pk"),
+    [
+        (None, None, 0),
+        (ClosingSession(live_session_id=42, kind="rehearsal", started_at_ms=1_000), 42, 42),
+    ],
+    ids=["regular_round", "signoff_round"],
+)
+async def test_closing_session_scopes_window_and_speech(closing, scope_pk, stamped_pk):
+    """收播道别那一轮：按正在结束的场次开窗、道别句带这一场的编号；其余轮次交给场次解析与盖章。"""
+    executor, deps = _make_executor(_OKAY_OUTCOME)
+
+    await executor.execute(
+        [],
+        forced=True,
+        trigger_cause=TriggerCause(kind=TriggerKind.SIGNOFF),
+        proactive=True,
+        closing_session=closing,
+    )
+
+    deps["window_opener"].assert_awaited_once_with(scope_pk=scope_pk)
+    assert deps["speech"].dispatch.await_args.kwargs["live_session_id"] == stamped_pk
 
 
 # happy：一轮决策的完整产出
