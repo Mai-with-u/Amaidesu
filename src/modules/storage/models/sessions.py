@@ -41,6 +41,11 @@ class LiveSession(BaseModel):
     audience_total: int = Field(default=0, description="累计观众数")
     updated_at_ms: int = Field(..., description="行最近更新时刻（Unix epoch 毫秒）")
     notebook_text: str = Field(default="", description="本场备忘录全文（主播经工具写下的本场结论）；空串即没写")
+    settled_at_ms: Optional[int] = Field(
+        default=None, description="本场整理完成的时刻（Unix epoch 毫秒）；None 即待整理"
+    )
+    settle_attempts: int = Field(default=0, description="自动重新整理已尝试的次数")
+    settle_report: Optional[str] = Field(default=None, description="整理报告：失败原因或未登记清单（JSON 文本）")
 
 
 class LiveSessionListItem(LiveSession):

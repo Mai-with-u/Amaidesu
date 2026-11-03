@@ -37,6 +37,7 @@ __all__ = [
     "SessionSpeaker",
     "ViewerSessionParticipation",
     "SessionSpeechMoment",
+    "SettleSpeechLine",
     "DailyDanmakuCount",
     "ChatDateCount",
 ]
@@ -185,6 +186,26 @@ class SessionSpeechMoment(BaseModel):
 
     live_session_id: int = Field(..., description="场次主键")
     timestamp_ms: int = Field(..., description="发言时刻（Unix epoch 毫秒）")
+
+
+class SettleSpeechLine(BaseModel):
+    """下播整理取料用的一行台词：本场她说的话，连同被回应的那条弹幕。
+
+    没送达标记非空的句子也会带出来——整理侧据此排除，判据是"确知没送到观众面前
+    的那几句不算她说过的话"。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(..., description="live_chat 行主键（承诺的 evidence_chat_id 指向它）")
+    timestamp_ms: int = Field(..., description="发言时刻（Unix epoch 毫秒）")
+    content: str = Field(..., description="台词正文（落库时已过遮名）")
+    dropped_at_ms: Optional[int] = Field(default=None, description="没送达标记时刻；None 即送到了观众面前")
+    reply_to_message_id: Optional[str] = Field(default=None, description="这条台词回应了哪条弹幕的消息 ID")
+    memory_refs: Optional[str] = Field(default=None, description="这句用了哪条记忆（JSON 数组文本）；None 即没用")
+    reply_content: Optional[str] = Field(default=None, description="被回应那条弹幕的原文")
+    reply_viewer_id: Optional[int] = Field(default=None, description="被回应弹幕的发言人（内部观众 ID）")
+    reply_simulated: Optional[bool] = Field(default=None, description="被回应弹幕是否模拟观众发的")
 
 
 class DailyDanmakuCount(BaseModel):

@@ -7,11 +7,22 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
+from src.modules.storage.models.memory import CommitmentClosure, PendingArchiveLine, PendingCommitment
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
+
+
+# 下播整理的自动重试上限：用满后不再自动补跑，等运营者在 WebUI 点「重新整理」把次数清零。
+# 定在存储层：整理执行器与 WebUI 的整理状态接口共用同一个数，不各写一份
+MAX_SETTLE_ATTEMPTS = 3
+
+
+# 下播整理的自动重试上限：用满后不再自动补跑，等运营者在 WebUI 点「重新整理」把次数清零。
+# 定在存储层：整理执行器与 WebUI 的整理状态接口共用同一个数，不各写一份
+MAX_SETTLE_ATTEMPTS = 3
 
 
 class SessionRepo(BaseRepo):
@@ -194,7 +205,9 @@ class SessionRepo(BaseRepo):
         """删除场次行并级联清除其明细数据。
 
         级联范围：live_chat / gifts / super_chats / guards / topics / game_events /
-        timeline_summary / session_recaps（均以 ``live_session_id`` 引用场次主键）。
+        timeline_summary / session_recaps / archive_lines（均以 ``live_session_id``
+        引用场次主键）。承诺不随场次删除：它自带原话，删掉场次后仍能照着标题与引文
+        展示，只是点回原句时找不到台词行。
         """
 
         def _exec() -> bool:
@@ -208,10 +221,171 @@ class SessionRepo(BaseRepo):
                     "game_events",
                     "timeline_summary",
                     "session_recaps",
+                    "archive_lines",
                 ):
                     conn.execute(f"DELETE FROM {table} WHERE live_session_id=?", (live_session_id,))  # noqa: S608 表名为代码内常量
                 cur = conn.execute("DELETE FROM live_sessions WHERE id=?", (live_session_id,))
                 return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
+    async def list_sessions_pending_settle(self, *, limit: int = 4, max_attempts: int = 3) -> List[LiveSession]:
+        """待下播整理的正式场（开播时刻从早到晚）：已结束、未整理完、自动重试没用完。
+
+        彩排场永远不在候选里；重试用满的场次留给运营者在 WebUI 点「重新整理」，
+        免得模型中转站挂一阵就把这一场的承诺与档案永久丢掉。
+        """
+
+        def _exec() -> List[LiveSession]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM live_sessions"
+                    " WHERE ended_at_ms IS NOT NULL AND settled_at_ms IS NULL"
+                    "   AND kind=? AND settle_attempts<?"
+                    " ORDER BY started_at_ms ASC, id ASC LIMIT ?",
+                    (SESSION_KIND_LIVE, max(0, int(max_attempts)), max(1, int(limit))),
+                ).fetchall()
+                return [LiveSession.model_validate(dict(row)) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def mark_settle_done(
+        self,
+        *,
+        live_session_id: int,
+        settled_at_ms: int,
+        settle_report: Optional[str] = None,
+    ) -> bool:
+        """记下这一场整理完成（附整理报告）；行不存在返回 False。
+
+        不动 updated_at_ms：那一列记的是心跳统计的更新时刻。
+        """
+
+        def _exec() -> bool:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "UPDATE live_sessions SET settled_at_ms=?, settle_report=? WHERE id=?",
+                    (int(settled_at_ms), settle_report, int(live_session_id)),
+                )
+                return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
+    async def record_settle_failure(self, *, live_session_id: int, settle_report: str) -> int:
+        """记一次整理失败：重试次数加一、写失败原因，返回累计次数（行不存在返回 0）。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                conn.execute(
+                    "UPDATE live_sessions SET settle_attempts=settle_attempts+1, settle_report=? WHERE id=?",
+                    (settle_report, int(live_session_id)),
+                )
+                row = conn.execute(
+                    "SELECT settle_attempts FROM live_sessions WHERE id=?", (int(live_session_id),)
+                ).fetchone()
+                return int(row[0]) if row else 0
+
+        return await self._run_in_executor(_exec)
+
+    async def apply_settlement(
+        self,
+        *,
+        live_session_id: int,
+        archive_lines: List[PendingArchiveLine],
+        commitments: List[PendingCommitment],
+        closures: List[CommitmentClosure],
+        settled_at_ms: int,
+        now_ms_value: int,
+        settle_report: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """把一场的整理结果一次写进去：档案行、新承诺、了结、整理完成时刻。
+
+        整理必须整场原子提交：半场写进去再失败，重跑时会重复登记。跨三张表的写操作
+        只有这一处，事务边界放在场次仓储里，与删除场次的级联同一层。返回各类写入条数。
+        """
+
+        def _exec() -> Dict[str, int]:
+            written = {"archive": 0, "commitments": 0, "closed": 0}
+            with self._manager.transaction() as conn:
+                for line in archive_lines:
+                    conn.execute(
+                        "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id) VALUES (?, ?, ?, ?)",
+                        (int(live_session_id), line.text, line.quote, int(line.evidence_chat_id)),
+                    )
+                    written["archive"] += 1
+                for item in commitments:
+                    cur = conn.execute(
+                        "INSERT INTO commitments(what, quote, evidence_chat_id, viewer_id, game,"
+                        " created_session_id, created_at_ms, updated_at_ms)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                        " ON CONFLICT(evidence_chat_id) DO NOTHING",
+                        (
+                            item.what,
+                            item.quote,
+                            item.evidence_chat_id,
+                            item.viewer_id,
+                            item.game,
+                            int(live_session_id),
+                            int(now_ms_value),
+                            int(now_ms_value),
+                        ),
+                    )
+                    written["commitments"] += max(0, int(cur.rowcount or 0))
+                for closure in closures:
+                    cur = conn.execute(
+                        "UPDATE commitments SET status='closed', close_chat_id=?, close_quote=?,"
+                        " updated_at_ms=? WHERE id=? AND status='open'",
+                        (
+                            closure.close_chat_id,
+                            closure.close_quote,
+                            int(now_ms_value),
+                            int(closure.commitment_id),
+                        ),
+                    )
+                    written["closed"] += max(0, int(cur.rowcount or 0))
+                conn.execute(
+                    "UPDATE live_sessions SET settled_at_ms=?, settle_report=? WHERE id=?",
+                    (int(settled_at_ms), settle_report, int(live_session_id)),
+                )
+            return written
+
+        return await self._run_in_executor(_exec)
+
+    async def reset_settle_attempts(self, *, live_session_id: int) -> bool:
+        """把重试次数清零并清掉上次的失败原因，下一次整理调度就会再挑到这一场。
+
+        运营者在 WebUI 点「重新整理」时调用；返回是否命中行。
+        """
+
+        def _exec() -> bool:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "UPDATE live_sessions SET settle_attempts=0, settle_report=NULL WHERE id=?",
+                    (int(live_session_id),),
+                )
+                return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
+    async def reset_memory_ledger_for_session(self, *, live_session_id: int) -> int:
+        """清空一场在账本里的痕迹：档案行、本场登记的承诺、整理进度；返回删除条数。
+
+        正式场改成彩排时用（与改类型在同一个调用里）：彩排场不整理，那一场留下的话
+        不该进正式的账。承诺删掉是不留痕的——重新整理时会按那场的台词重新登记。
+        """
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                removed = 0
+                cur = conn.execute("DELETE FROM archive_lines WHERE live_session_id=?", (int(live_session_id),))
+                removed += int(cur.rowcount or 0)
+                cur = conn.execute("DELETE FROM commitments WHERE created_session_id=?", (int(live_session_id),))
+                removed += int(cur.rowcount or 0)
+                conn.execute(
+                    "UPDATE live_sessions SET settled_at_ms=NULL, settle_attempts=0, settle_report=NULL WHERE id=?",
+                    (int(live_session_id),),
+                )
+                return removed
 
         return await self._run_in_executor(_exec)
 
@@ -266,4 +440,4 @@ class SessionRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
 
-__all__ = ["SessionRepo"]
+__all__ = ["MAX_SETTLE_ATTEMPTS", "SessionRepo"]

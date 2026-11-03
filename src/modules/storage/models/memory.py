@@ -31,13 +31,20 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 __all__ = [
+    "ArchiveLine",
+    "Commitment",
+    "CommitmentClosure",
+    "PendingArchiveLine",
+    "PendingCommitment",
     "SessionRecap",
+    "SettleReport",
+    "UnregisteredItem",
     "UnsettledSession",
     "ViewerProfile",
     "ViewerName",
@@ -126,3 +133,92 @@ class Viewer(BaseModel):
         default=None, description="宽限删除请求时刻（Unix epoch 毫秒）；None 即无待执行删除"
     )
     user_id: str = Field(..., description="代表外部 ID：账号 ID 优先，其次开放平台 ID，都没有为空串")
+
+
+class Commitment(BaseModel):
+    """``commitments`` 一行：她当众答应过、还没了结的事。
+
+    ``what`` 是动作标题（≤30 字，不写缘由），``quote`` 是她播出原句的逐字片段；
+    原句所在场次被删时 ``evidence_chat_id`` 成为空引用，读方按"原句所在场次已删除"展示。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(..., description="承诺主键（自增）")
+    what: str = Field(..., description="动作标题（≤30 字，不写缘由）")
+    quote: str = Field(default="", description="她播出原句的逐字片段（≤80 字）；运营者手建为空")
+    evidence_chat_id: Optional[int] = Field(default=None, description="原话所在的 live_chat 行；手建为空")
+    viewer_id: Optional[int] = Field(default=None, description="对某位观众（内部观众 ID）；None 即不针对具体人")
+    game: Optional[str] = Field(default=None, description="挂在哪个游戏；None 即不挂游戏")
+    status: Literal["open", "closed", "void"] = Field(
+        default="open", description="open 未了结 / closed 已了结（做完或放弃）/ void 运营者判误记"
+    )
+    created_session_id: Optional[int] = Field(default=None, description="登记它的场次；运营者手建为空")
+    close_chat_id: Optional[int] = Field(default=None, description="了结依据：她说做完了或不做了的那句台词行")
+    close_quote: Optional[str] = Field(default=None, description="了结那句的原话片段")
+    created_at_ms: int = Field(..., description="登记时刻（Unix epoch 毫秒）")
+    updated_at_ms: int = Field(..., description="最近更新时刻（Unix epoch 毫秒）")
+
+
+class ArchiveLine(BaseModel):
+    """``archive_lines`` 一行：场次档案里的一条，下次开播回想"上一场"时用。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(..., description="档案行主键（自增）")
+    live_session_id: int = Field(..., description="所属场次主键")
+    text: str = Field(..., description="标题（≤30 字；游戏相关的写上游戏名）")
+    quote: str = Field(..., description="她播出原句的逐字片段（≤80 字）")
+    evidence_chat_id: int = Field(..., description="原话所在的 live_chat 行")
+
+
+class UnregisteredItem(BaseModel):
+    """整理时看懂了却没能登记的条目：留原话给运营者在 WebUI 判断要不要手建。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["commitment", "archive"] = Field(..., description="本要登记成什么（承诺 / 档案行）")
+    what: str = Field(default="", description="模型给的标题（可能为空）")
+    quote: str = Field(default="", description="模型引的原话（校验没过时也原样留着）")
+    reason: str = Field(..., description="没登记的原因（代码给的固定措辞）")
+
+
+class SettleReport(BaseModel):
+    """一场的整理报告：失败原因，或成功时那些没能登记的条目。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    failure_reason: Optional[str] = Field(default=None, description="整理失败的原因；成功时为 None")
+    unregistered: List[UnregisteredItem] = Field(default_factory=list, description="没能登记、要人看一眼的条目")
+
+
+class PendingCommitment(BaseModel):
+    """整理校验通过、等着一个事务写进去的新承诺。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    what: str = Field(..., description="动作标题（代码已截到上限）")
+    quote: str = Field(default="", description="她播出原句的逐字片段")
+    evidence_chat_id: Optional[int] = Field(default=None, description="那句台词的 live_chat 行")
+    viewer_id: Optional[int] = Field(default=None, description="对某位观众；None 即不针对具体人")
+    game: Optional[str] = Field(default=None, description="挂在哪个游戏；None 即不挂")
+
+
+class PendingArchiveLine(BaseModel):
+    """整理校验通过、等着写进去的一行场次档案。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(..., description="标题（代码已截到上限）")
+    quote: str = Field(..., description="她播出原句的逐字片段")
+    evidence_chat_id: int = Field(..., description="原话所在的 live_chat 行")
+
+
+class CommitmentClosure(BaseModel):
+    """一条旧承诺的了结依据：她说做完了或不做了的那句台词。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    commitment_id: int = Field(..., description="被了结的承诺主键")
+    close_chat_id: Optional[int] = Field(default=None, description="了结依据的台词行")
+    close_quote: Optional[str] = Field(default=None, description="了结那句的原话片段")

@@ -23,6 +23,7 @@ from src.modules.storage.models.chat import (
     LiveChatMessage,
     SessionSpeaker,
     SessionSpeechMoment,
+    SettleSpeechLine,
     SuperChatRecord,
     ViewerSessionParticipation,
 )
@@ -486,6 +487,35 @@ class ChatRepo(BaseRepo):
                     [int(sid) for sid in live_session_ids],
                 ).fetchall()
                 return [SessionSpeechMoment.model_validate(dict(row)) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def list_session_speech_for_settle(self, *, live_session_id: int) -> List[SettleSpeechLine]:
+        """本场她说过的全部台词（时间正序），附被回应弹幕的原文与发言人。
+
+        下播整理的取料口：不抽样、不截断，先由整理侧按台词编号决定保留多少。
+        被回应的弹幕取同场第一条同消息 ID 的观众行——回放数据里同一条弹幕可能落多行，
+        取最早那行保证发言人稳定。
+        """
+
+        def _exec() -> List[SettleSpeechLine]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT c.id, c.timestamp_ms, c.content, c.dropped_at_ms, c.reply_to_message_id,"
+                    " c.memory_refs, v.content AS reply_content, v.viewer_id AS reply_viewer_id,"
+                    " v.simulated AS reply_simulated"
+                    " FROM live_chat c"
+                    " LEFT JOIN live_chat v ON v.id = ("
+                    "   SELECT MIN(v2.id) FROM live_chat v2"
+                    "   WHERE v2.live_session_id = c.live_session_id"
+                    "     AND v2.message_id = c.reply_to_message_id"
+                    "     AND v2.sender_role = 'viewer'"
+                    " )"
+                    " WHERE c.live_session_id=? AND c.sender_role='assistant'"
+                    " ORDER BY c.timestamp_ms ASC, c.id ASC",
+                    (int(live_session_id),),
+                ).fetchall()
+                return [SettleSpeechLine.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 

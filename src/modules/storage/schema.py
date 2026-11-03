@@ -1,9 +1,9 @@
 """
 存储 Schema 定义
 
-本模块是全部 SQLite 表的**单一事实源**：24 张业务表（12 张核心直播表 +
+本模块是全部 SQLite 表的**单一事实源**：26 张业务表（12 张核心直播表 +
 2 张模拟器运行时表 + 5 张流程单域表 + 2 张观众画像表 + 1 张 LLM 请求历史表 +
-1 张游戏生物名册表 + 1 张不记录名单表）+ ``schema_migrations``。
+1 张游戏生物名册表 + 1 张不记录名单表 + 2 张记忆账本表）+ ``schema_migrations``。
 任何建表 DDL 都必须落在这里，不允许业务模块自带 ``CREATE TABLE``——否则
 表结构游离于 ``SCHEMA_VERSION`` 版本管理之外，迁移机制无法覆盖。
 
@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 23
+SCHEMA_VERSION: int = 24
 
 
 # =============================================================================
@@ -126,6 +126,12 @@ def build_schema_sql() -> str:
         # session_recaps —— 场次回顾
         + _SESSION_RECAPS_SQL
         + "\n"
+        # commitments —— 承诺账本（她当众答应过、还没了结的事）
+        + _COMMITMENTS_SQL
+        + "\n"
+        # archive_lines —— 场次档案（每场几行，供下次开播回想上一场）
+        + _ARCHIVE_LINES_SQL
+        + "\n"
         # rundowns —— 流程单模板（元信息）
         + _RUNDOWNS_SQL
         + "\n"
@@ -181,6 +187,8 @@ def list_expected_tables() -> List[str]:
         "forget_list",
         "viewer_profiles",
         "session_recaps",
+        "commitments",
+        "archive_lines",
         "rundowns",
         "rundown_segments",
         "rundown_instances",
@@ -217,6 +225,9 @@ CREATE TABLE IF NOT EXISTS live_sessions (
     audience_total  INTEGER NOT NULL DEFAULT 0,
     updated_at_ms   INTEGER NOT NULL,
     notebook_text   TEXT NOT NULL DEFAULT '',
+    settled_at_ms   INTEGER,
+    settle_attempts INTEGER NOT NULL DEFAULT 0,
+    settle_report   TEXT,
     CHECK (ended_at_ms IS NULL OR ended_at_ms >= started_at_ms)
 );
 """.strip()
@@ -435,6 +446,50 @@ CREATE TABLE IF NOT EXISTS session_recaps (
     settled_at_ms             INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_session_recaps_started ON session_recaps(started_at_ms);
+""".strip()
+
+# --- commitments —— 承诺账本 ---
+# 她当众答应过、还没了结的事：每个正式场下播后由整理找新的、了结旧的。
+# quote 是她播出原句的逐字片段（整理时对着台词行校验子串），台账因此自带证据，
+# 不依赖台词行还在不在；evidence_chat_id 指向那句台词的 live_chat 行，原话所在
+# 场次被删时这一列成为空引用，读方按“原句所在场次已删除”处理。
+# 状态三分：open 未了结、closed 已了结（做完或放弃，看了结原话）、void 运营者判误记。
+# 判误记不删行而转 void：墓碑让之后每次“找新承诺”都能认出同一件事，不重复登记。
+# 不存“谁改的”：模型只会插入新行、把 open 改成 closed，运营者改过的行模型不再碰。
+
+_COMMITMENTS_SQL = """
+CREATE TABLE IF NOT EXISTS commitments (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    what               TEXT NOT NULL,
+    quote              TEXT NOT NULL DEFAULT '',
+    evidence_chat_id   INTEGER UNIQUE,
+    viewer_id          INTEGER,
+    game               TEXT,
+    status             TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed', 'void')),
+    created_session_id INTEGER,
+    close_chat_id      INTEGER,
+    close_quote        TEXT,
+    created_at_ms      INTEGER NOT NULL,
+    updated_at_ms      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
+""".strip()
+
+
+# --- archive_lines —— 场次档案 ---
+# 每场正式场下播后写 ≤8 行，标题加她播出原句的逐字片段，写完不改（运营者可删单行）。
+# 场次档案是她记得自己上一场干了什么的唯一来源，也是回想工具的检索单元；
+# 不存游戏列——游戏相关的行由标题自己写上游戏名。
+
+_ARCHIVE_LINES_SQL = """
+CREATE TABLE IF NOT EXISTS archive_lines (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id  INTEGER NOT NULL,
+    text             TEXT NOT NULL,
+    quote            TEXT NOT NULL,
+    evidence_chat_id INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_archive_lines_session ON archive_lines(live_session_id);
 """.strip()
 
 

@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 from src.modules.storage.repos._base import BaseRepo
+from src.modules.storage.repos.archive import ArchiveRepo
 from src.modules.storage.repos.chat import ChatRepo
+from src.modules.storage.repos.commitments import CommitmentRepo
 from src.modules.storage.repos.events import EventRepo
 from src.modules.storage.repos.game_creatures import GameCreatureRepo
 from src.modules.storage.repos.llm import LLMRepo
@@ -23,8 +25,10 @@ from src.modules.storage.repos.viewer_profiles import ViewerProfileRepo
 from src.modules.storage.repos.viewers import ViewerRepo
 
 __all__ = [
+    "ArchiveRepo",
     "BaseRepo",
     "ChatRepo",
+    "CommitmentRepo",
     "EventRepo",
     "GameCreatureRepo",
     "LLMRepo",
