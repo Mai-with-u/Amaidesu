@@ -99,6 +99,11 @@ class LiveSessionManager:
         # 归属回退用：最近一场已结束且行留存的场次主键（惰性装载后缓存）
         self._last_ended_pk: Optional[int] = None
         self._last_ended_loaded: bool = False
+        # 归属回退被挡住：最近一场已结束的场次行已经不存在（空场次整行丢弃、
+        # 或刚结束就要被删）。此时没有安全的归属目标——回退到更早的那场会把
+        # 这一场的道别句写进别的场次，宁可不归属（保持 0、不落库）。
+        # 下一场开播时解除。
+        self._attribution_blocked: bool = False
         # 与 _lock 分开：归属装载/更新不与场次生命周期互锁，避免锁序纠缠
         self._attribution_lock = asyncio.Lock()
         self._started = False
@@ -165,6 +170,9 @@ class LiveSessionManager:
             self._active_pk = pk
             self._active_source = source
             self._active_kind = kind
+            # 新场开播：上一场留下的"行已不在、暂不做归属"解除——这一场结束
+            # 之后，场后发言照旧归它
+            self._attribution_blocked = False
             await self._event_bus.emit(
                 CoreEvents.LIVE_STARTED,
                 LiveStartedPayload(
@@ -224,6 +232,12 @@ class LiveSessionManager:
             logger.info(f"空场次已丢弃: id={pk}（无任何明细行，不保留）")
             # 行已删，不能再当"最近一场已结束的场次"——归属回退到更早的那场
             await self._forget_last_ended()
+            self._block_attribution()
+        elif deleted:
+            # 行马上要删（删场路径）：这一场不能当归属目标——道别句会被盖上
+            # 已删场次的编号，在库里留下孤儿行
+            await self._forget_last_ended()
+            self._block_attribution()
         else:
             # 行留存：它就是"最近一场已结束的场次"，其后到下一场开播之前的
             # 发言与进房消息归它
@@ -329,9 +343,15 @@ class LiveSessionManager:
 
         一场都没结束过（第一次开播前）返回 ``None``：此时没有可归属的场次，
         保持 0 是合理的，不硬造。
+
+        最近一场已结束的场次行已经不存在（空场次丢弃或刚结束就被删）时同样
+        返回 ``None``：这一场的道别句按"场次行没了就不落库"的约定不写库，
+        也不能回退到更早的场次——那会把话记到别的场次里去。
         """
         if self._active_pk is not None:
             return self._active_pk
+        if self._attribution_blocked:
+            return None
         return await self._load_last_ended_pk()
 
     async def _load_last_ended_pk(self) -> Optional[int]:
@@ -358,6 +378,14 @@ class LiveSessionManager:
         async with self._attribution_lock:
             self._last_ended_pk = None
             self._last_ended_loaded = False
+
+    def _block_attribution(self) -> None:
+        """挡住归属回退：最近一场已结束的场次行已不存在，没有安全归属目标。
+
+        这一场自己的道别句按"行没了就不落库"的约定不写库；回退到更早的场次
+        会把话记到别的场次里去，所以宁可保持无归属。下一场开播时解除。
+        """
+        self._attribution_blocked = True
 
     # -------------------- 查询访问面 --------------------
 

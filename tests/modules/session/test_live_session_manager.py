@@ -339,17 +339,53 @@ async def test_attribution_none_before_first_session(store: SQLiteDatabase, bus:
 
 
 async def test_attribution_skips_discarded_empty_session(store: SQLiteDatabase, bus: EventBus) -> None:
-    """空场次整行丢弃 → 不当归属目标，回退到更早那场。"""
+    """空场次整行丢弃 → 这一场的道别句不落库，也不回退到更早那场。
+
+    行没了就没有安全的归属目标：回退到更早那场会把这一场的道别句记到别的
+    场次里去，宁可保持无归属（保持 0、不落库），等下一场开播再恢复归属。
+    """
     manager = _make_manager(store, bus)
     await manager.start()
 
-    kept = await _open_with_chat(store, manager)
+    await _open_with_chat(store, manager)
     await manager.close_session()
     await manager.open_session(kind="live")  # 无明细的空场次
     await manager.close_session()
     await bus.wait_until_drained()
 
-    assert await manager.resolve_attribution_pk() == kept
+    assert await manager.resolve_attribution_pk() is None
+
+
+async def test_attribution_blocked_after_deleting_active_session(store: SQLiteDatabase, bus: EventBus) -> None:
+    """删掉进行中场次 → 归属不落回已删的那场，也不落到更早那场。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+
+    earlier = await _open_with_chat(store, manager)
+    await manager.close_session()
+    deleted = await _open_with_chat(store, manager)
+    await bus.wait_until_drained()
+
+    assert await manager.delete_session(deleted) is True
+    assert await manager.resolve_attribution_pk() is None
+    assert earlier != deleted  # 更早那场确实存在，只是不拿它当归属目标
+
+
+async def test_attribution_unblocked_after_next_session_starts(store: SQLiteDatabase, bus: EventBus) -> None:
+    """行没了导致归属被挡 → 下一场开播解除；该场结束后场后发言照旧归它。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+
+    await manager.open_session(kind="live")  # 空场次
+    await manager.close_session()
+    await bus.wait_until_drained()
+    assert await manager.resolve_attribution_pk() is None
+
+    pk = await _open_with_chat(store, manager)
+    await manager.close_session()
+    await bus.wait_until_drained()
+
+    assert await manager.resolve_attribution_pk() == pk
 
 
 async def test_attribution_after_deleting_last_ended_session(store: SQLiteDatabase, bus: EventBus) -> None:
