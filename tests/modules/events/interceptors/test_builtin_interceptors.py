@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import pytest
 
@@ -13,6 +13,7 @@ from src.modules.events.interceptors.session_stamp import SessionStampIntercepto
 from src.modules.events.interceptors.similar_filter import SimilarFilterInterceptor
 from src.modules.events.payloads.planner import StreamerStagePayload
 from src.modules.events.payloads.rundown import RundownChangedPayload
+from tests.modules.session.fakes import FakeSessionManager
 
 EVENT = "room.message.danmaku"
 
@@ -80,19 +81,6 @@ async def test_similar_filter_contained_text_weighting_and_reset() -> None:
 # 场次盖章
 
 
-class _FakeSessionManager:
-    def __init__(self, pk: Optional[int] = 42, *, raise_on_resolve: bool = False) -> None:
-        self._pk = pk
-        self._raise = raise_on_resolve
-        self.calls = 0
-
-    async def resolve_pk(self) -> Optional[int]:
-        self.calls += 1
-        if self._raise:
-            raise RuntimeError("解析失败")
-        return self._pk
-
-
 @pytest.mark.parametrize(
     "event_name",
     # 全部取不在历史盖章域名单内的名字：实证盖章由字段声明驱动、不限事件域
@@ -105,16 +93,25 @@ class _FakeSessionManager:
     ],
 )
 async def test_stamps_any_domain_when_field_declared(event_name: str) -> None:
-    sm = _FakeSessionManager(42)
+    sm = FakeSessionManager(active_pk=42)
     chain = InterceptorChain()
     chain.register(SessionStampInterceptor(sm))
     out = await chain.apply(event_name, {"live_session_id": 0}, "test")
-    assert out == {"live_session_id": 42} and sm.calls == 1
+    assert out == {"live_session_id": 42} and sm.resolve_calls == 1
+
+
+async def test_stamp_falls_back_to_last_ended_session() -> None:
+    """没有进行中场次时盖章最近一场已结束的场次：场后发言归刚结束的那一场。"""
+    sm = FakeSessionManager(active_pk=None, last_ended_pk=50)
+    chain = InterceptorChain()
+    chain.register(SessionStampInterceptor(sm))
+    out = await chain.apply("streamer.speech", {"live_session_id": 0}, "test")
+    assert out == {"live_session_id": 50}
 
 
 async def test_stamps_real_payload_shapes() -> None:
     chain = InterceptorChain()
-    chain.register(SessionStampInterceptor(_FakeSessionManager(42)))
+    chain.register(SessionStampInterceptor(FakeSessionManager(active_pk=42)))
     for event_name, payload in (
         ("rundown.changed", RundownChangedPayload(rundown_id="default_first_stream")),
         ("streamer.stage", StreamerStagePayload(stage="planning")),
@@ -125,20 +122,26 @@ async def test_stamps_real_payload_shapes() -> None:
 
 
 async def test_stamp_skips_nonzero_fieldless_and_live_lifecycle_payloads() -> None:
-    sm = _FakeSessionManager(42)
+    sm = FakeSessionManager(active_pk=42)
     ic = SessionStampInterceptor(sm)
     # 非 0 主键（含 live.* 生命周期事件自带主键的形态）不被覆盖
     assert (await ic.intercept("example.thing.happened", {"live_session_id": 7}, "t"))["live_session_id"] == 7
     assert (await ic.intercept("live.session.started", {"live_session_id": 9}, "t"))["live_session_id"] == 9
-    assert sm.calls == 0  # 已带主键不再解析
+    assert sm.resolve_calls == 0  # 已带主键不再解析
 
     # 未声明 live_session_id 字段 → 原样放行、不注入未知键
     assert "live_session_id" not in await ic.intercept("example.thing.happened", {"timeline_summary": "x"}, "t")
-    assert sm.calls == 0
+    assert sm.resolve_calls == 0
 
 
-@pytest.mark.parametrize("manager", [_FakeSessionManager(raise_on_resolve=True), _FakeSessionManager(pk=None)])
-async def test_stamp_passes_payload_through_when_resolve_fails_or_returns_none(manager: _FakeSessionManager) -> None:
+@pytest.mark.parametrize(
+    "manager",
+    [
+        FakeSessionManager(raise_on_resolve=True),
+        FakeSessionManager(active_pk=None, last_ended_pk=None),
+    ],
+)
+async def test_stamp_passes_payload_through_when_resolve_fails_or_returns_none(manager: FakeSessionManager) -> None:
     payload: Dict[str, Any] = {"live_session_id": 0, "content": "hi"}
     out = await SessionStampInterceptor(manager).intercept(EVENT, payload, "t")
     assert out is not None and out["live_session_id"] == 0  # 无场次时原样放行，由落库路径跳过

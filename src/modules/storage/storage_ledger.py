@@ -20,7 +20,8 @@ StorageLedger —— 直播间消息流落库器
   - ``enter``     → 当前 schema 无 enter 明细表 → debug 日志后丢弃（场次状态归 LiveSessionManager，不在本层职责）
 - viewers 同步写穿（write-through）：选在主表落库同点 upsert，避免后台 tick 的重复扫描与时序问题
 - 订阅 ``streamer.speech`` 业务事件（主播发言），写入 live_chat（sender_role="assistant"，message_type="speak"）。
-  场次归属取 payload.live_session_id（场次盖章拦截器已注入；0 时回退 LiveSessionManager 解析）。
+  场次归属取 payload.live_session_id（场次盖章拦截器已注入；0 时回退 LiveSessionManager 的归属解析：
+  进行中场次优先，没有进行中场次时归最近一场已结束的场次，场后道别发言不丢）。
   若 payload.target_user_id 非空，按外部 ID 找到该观众，把 replied_count /
   interaction_count +1（找不到就跳过）。
   payload.reply_to_message_id 落 live_chat.reply_to_message_id 列——"主播回应了
@@ -492,14 +493,16 @@ class StorageLedger:
         """解析明细行的场次主键。
 
         优先消费 payload 上已盖章的 ``live_session_id``（>0）；为 0 时回退
-        ``LiveSessionManager.resolve_pk()``；管理器不可用返回 None（调用方降级）。
+        ``LiveSessionManager.resolve_attribution_pk()``（进行中场次优先，
+        没有进行中场次时归最近一场已结束的场次——场后发言与进房消息不丢）；
+        管理器不可用返回 None（调用方降级）。
         """
         if stamped_pk and stamped_pk > 0:
             return stamped_pk
         if self._session_manager is None:
             return None
         try:
-            return await self._session_manager.resolve_pk()
+            return await self._session_manager.resolve_attribution_pk()
         except Exception as exc:  # noqa: BLE001 归属失败降级，不阻断主直播流
             logger.warning(f"场次归属解析失败，明细行跳过落库: {exc}")
             return None

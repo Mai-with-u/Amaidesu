@@ -7,27 +7,20 @@ from typing import Any, Optional
 import pytest
 
 from src.modules.events.event_bus import EventBus
+from src.modules.events.interceptors.session_stamp import SessionStampInterceptor
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.speech import StreamerSpeechPayload
+from src.modules.session import LiveSessionManager
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.storage_ledger import StorageLedger
+from tests.modules.session.fakes import FakeSessionManager
 from tests.modules.storage.helpers import make_room_message
 
 # 场次管理器替身解析出的场次主键（模拟"显式场次进行中"）
 _FAKE_PK = 4242
 _TABLES = ("live_chat", "gifts", "super_chats", "game_events")
-
-
-class _FakeSessionManager:
-    def __init__(self, pk: Optional[int]) -> None:
-        self._pk = pk
-        # 主播发言行的平台归属（与采集器的 platform 一致，被回复计数据此找观众）
-        self.platform = "bilibili"
-
-    async def resolve_pk(self) -> Optional[int]:
-        return self._pk
 
 
 @pytest.fixture
@@ -40,7 +33,7 @@ async def make_ledger(event_bus: EventBus, store: SQLiteDatabase):
             chat_repo=store.chat,
             viewer_repo=store.viewers,
             event_repo=store.events,
-            session_manager=_FakeSessionManager(pk),
+            session_manager=FakeSessionManager(active_pk=pk),
             name_match_window_ms=name_match_window_ms,
         )
         created.append(ledger)
@@ -337,12 +330,49 @@ async def test_enter_event_is_not_persisted(ledger, store: SQLiteDatabase, event
     assert set((await _counts(store)).values()) == {0}
 
 
-async def test_nothing_persists_without_active_session(make_ledger, store: SQLiteDatabase, event_bus) -> None:
-    """resolve_pk() 返回 None：消息只在内存流转，全部类型都不落库。"""
+async def test_nothing_persists_without_any_attributable_session(make_ledger, store: SQLiteDatabase, event_bus) -> None:
+    """一场都没结束过（没有可归属的场次）：消息只在内存流转，全部类型都不落库。"""
     await make_ledger(pk=None).start()
     for event, payload in _ALL_EVENTS:
         await _emit(event_bus, event, payload)
     assert set((await _counts(store)).values()) == {0}
+
+
+async def test_post_session_speech_lands_in_last_ended_session(store: SQLiteDatabase, event_bus: EventBus) -> None:
+    """场后发言（上一场已结束、本场未开）落进刚结束的那一场，不再凭空消失。
+
+    走真实装配：盖章拦截器 + StorageLedger + LiveSessionManager——收播道别
+    与场后观众消息记成 0 时会被落库路径整体跳过，统计里凭空少一段。
+    """
+    manager = LiveSessionManager(store.sessions, store.chat, event_bus, platform="bilibili")
+    await manager.start()
+    event_bus.add_interceptor(SessionStampInterceptor(manager))
+    ledger = StorageLedger(
+        event_bus=event_bus,
+        chat_repo=store.chat,
+        viewer_repo=store.viewers,
+        event_repo=store.events,
+        session_manager=manager,
+    )
+    await ledger.start()
+    try:
+        pk = await manager.open_session(kind="live")
+        await _emit(event_bus, CoreEvents.ROOM_MESSAGE_DANMAKU, make_room_message(content="播中弹幕"))
+        await manager.close_session()
+        await event_bus.wait_until_drained()
+
+        # 场后：上一场已结束、本场未开——道别发言归刚结束的那一场
+        await _emit(event_bus, CoreEvents.STREAMER_SPEECH, _speech("今晚就到这儿吧"))
+
+        rows = await store.execute(
+            "SELECT live_session_id, content FROM live_chat WHERE message_type='speak' ORDER BY id"
+        )
+        assert [(r["live_session_id"], r["content"]) for r in rows] == [(pk, "今晚就到这儿吧")]
+        # 播中那条弹幕仍归本场，不受场后归属影响
+        chat = await store.execute("SELECT live_session_id, content FROM live_chat WHERE message_type='danmaku'")
+        assert [(r["live_session_id"], r["content"]) for r in chat] == [(pk, "播中弹幕")]
+    finally:
+        await ledger.stop()
 
 
 async def test_repeated_start_then_stop_unsubscribes_everything(make_ledger, store: SQLiteDatabase, event_bus) -> None:

@@ -6,7 +6,8 @@
 - 行级写入经 ``SessionRepo`` 的 live_sessions 领域方法（主键 AUTOINCREMENT）；
 - 生命周期广播 ``live.started`` / ``live.ended`` 事件；
 - 对下游（StorageLedger / 场次盖章拦截器 / 模拟器 / Dashboard API）暴露
-  ``resolve_pk()``——显式场次进行中返回其主键，否则返回 ``None``。
+  ``resolve_pk()``——显式场次进行中返回其主键，否则返回 ``None``；归属解析
+  另有 ``resolve_attribution_pk()``（场后发言归到最近一场已结束的场次）。
 
 ## 显式开启场次才落库
 
@@ -19,6 +20,21 @@
 - 显式场次由手动开关或模拟器开启；结束时若无任何明细行则整行丢弃
   （空场次不留行）；
 - 场次可删除（级联清明细），调试产生的场次随手清理。
+
+## 场后发言归到最近一场已结束的场次
+
+一场直播结束到下一场开播之间，主播仍会说话（收播道别），观众仍会进房。
+这些发言与消息属于刚结束的那一场，不属于"没有场次"——落库路径若一律按
+"无进行中场次"跳过，它们在统计里凭空消失，事后也无从复盘上一场实际说了什么。
+
+归属解析因此分两问：
+
+- ``resolve_pk()``：显式场次**进行中**返回其主键，否则 ``None``——活跃语义，
+  供需要"当下这一场"的调用方使用（对话记忆作用域、心跳统计落哪一行、
+  模拟器世界窗口）；
+- ``resolve_attribution_pk()``：进行中场次优先；没有进行中场次时回退**最近
+  一场已结束的场次**；一场都没结束过则 ``None``（第一次开播前没有可归属的
+  场次，保持 0 是合理的，不硬造）。
 
 ## 场次类型在开场时声明
 
@@ -57,7 +73,9 @@ class LiveSessionManager:
     - 至多一个显式进行中场次（开启新场次前自动结束旧场次）；
     - 场次类型开场时声明，进行中不改；
     - 空显式场次在结账时整行丢弃；
-    - 无显式场次期间 ``resolve_pk()`` 返回 ``None``，不创建任何兜底行。
+    - 无显式场次期间 ``resolve_pk()`` 返回 ``None``，不创建任何兜底行；
+    - ``resolve_attribution_pk()`` 在没有进行中场次时回退最近一场已结束的
+      场次（整行丢弃的空场次不在其列），一场都没有才返回 ``None``。
     """
 
     def __init__(
@@ -78,6 +96,11 @@ class LiveSessionManager:
         self._active_source: str = ""
         self._active_kind: Optional[SessionKind] = None
         self._lock = asyncio.Lock()
+        # 归属回退用：最近一场已结束且行留存的场次主键（惰性装载后缓存）
+        self._last_ended_pk: Optional[int] = None
+        self._last_ended_loaded: bool = False
+        # 与 _lock 分开：归属装载/更新不与场次生命周期互锁，避免锁序纠缠
+        self._attribution_lock = asyncio.Lock()
         self._started = False
 
     # -------------------- 生命周期 --------------------
@@ -96,6 +119,10 @@ class LiveSessionManager:
             logger.warning(
                 f"收口上次残留的进行中场次: id={row.id} title={row.title!r} （ended_at_ms 补为最后活动时刻 {ended}）"
             )
+
+        # 预热"最近一场已结束的场次"：场后发言的归属回退要用它。启动期先查
+        # 一次库，避免第一条场后事件卡在归属解析的库查询上。
+        await self._load_last_ended_pk()
 
         self._started = True
         logger.info("LiveSessionManager 已启动（启动不自动开新场次；显式场次经 open_session 开启；无场次时消息不落库）")
@@ -195,6 +222,12 @@ class LiveSessionManager:
             await self._sessions.delete_live_session(live_session_id=pk)
             empty_discarded = True
             logger.info(f"空场次已丢弃: id={pk}（无任何明细行，不保留）")
+            # 行已删，不能再当"最近一场已结束的场次"——归属回退到更早的那场
+            await self._forget_last_ended()
+        else:
+            # 行留存：它就是"最近一场已结束的场次"，其后到下一场开播之前的
+            # 发言与进房消息归它
+            await self._remember_last_ended(pk)
 
         self._reset_active()
         await self._event_bus.emit(
@@ -239,6 +272,9 @@ class LiveSessionManager:
                 # （主播照常道别，但道别句不落库）、不做收播整理
                 await self._close_active(reason="删除场次前自动结束", ended_at_ms=now_ms(), deleted=True)
             await self._sessions.delete_live_session(live_session_id=live_session_id)
+            if live_session_id == self._last_ended_pk:
+                # 删掉的正是"最近一场已结束的场次"——归属回退到更早的那场
+                await self._forget_last_ended()
             logger.info(f"场次已删除: id={live_session_id}（明细级联清除）")
             return True
 
@@ -281,6 +317,47 @@ class LiveSessionManager:
         ——落库路径据此跳过，事件分发链路照常运行。
         """
         return self._active_pk
+
+    async def resolve_attribution_pk(self) -> Optional[int]:
+        """解析"归属场次"主键：进行中场次优先，否则回退最近一场已结束的场次。
+
+        与 :meth:`resolve_pk` 的分工：``resolve_pk`` 回答"当下有没有进行中的
+        场次"（活跃语义，供对话记忆作用域、心跳统计落哪一行等调用方使用）；
+        本方法回答"这条消息该记在哪一场"——一场直播结束到下一场开播之前，
+        主播的道别发言与观众进房消息仍属于刚结束的那一场，记成无归属（0）
+        会让它们在统计里凭空消失、事后也无从复盘上一场实际说了什么。
+
+        一场都没结束过（第一次开播前）返回 ``None``：此时没有可归属的场次，
+        保持 0 是合理的，不硬造。
+        """
+        if self._active_pk is not None:
+            return self._active_pk
+        return await self._load_last_ended_pk()
+
+    async def _load_last_ended_pk(self) -> Optional[int]:
+        """取最近一场已结束的场次主键（惰性装载，库查询一次后缓存）。"""
+        if self._last_ended_loaded:
+            return self._last_ended_pk
+        async with self._attribution_lock:
+            # 装载期间可能有场次刚好结账或被删——锁内复查避免用旧结果覆盖新值
+            if self._last_ended_loaded:
+                return self._last_ended_pk
+            live_session_id = await self._sessions.get_last_ended_live_session_id()
+            self._last_ended_pk = live_session_id
+            self._last_ended_loaded = True
+            return live_session_id
+
+    async def _remember_last_ended(self, live_session_id: int) -> None:
+        """记住刚结账且行留存的场次：其后到下一场开播之前的发言归它。"""
+        async with self._attribution_lock:
+            self._last_ended_pk = live_session_id
+            self._last_ended_loaded = True
+
+    async def _forget_last_ended(self) -> None:
+        """作废"最近一场已结束的场次"缓存（行已删），下次解析回库重取。"""
+        async with self._attribution_lock:
+            self._last_ended_pk = None
+            self._last_ended_loaded = False
 
     # -------------------- 查询访问面 --------------------
 

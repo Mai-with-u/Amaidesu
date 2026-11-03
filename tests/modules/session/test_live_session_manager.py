@@ -2,6 +2,10 @@
 
 显式开启场次才落库语义：无显式场次期间 ``resolve_pk()`` 返回 ``None``，
 不创建任何兜底行——下游落库路径据此跳过。
+
+归属解析分两问：``resolve_pk()`` 是活跃语义（当下有没有进行中场次），
+``resolve_attribution_pk()`` 回答"这条消息该记在哪一场"——场后发言归到
+最近一场已结束的场次，一场都没结束过才返回 ``None``。
 """
 
 from __future__ import annotations
@@ -282,3 +286,97 @@ async def test_resolve_pk_after_close_returns_none(store: SQLiteDatabase, bus: E
     # 唯一在场 live_sessions 行是已关闭的 pk（empty_discarded=False 因为没有明细也没显式 insert）
     rows = await store.execute("SELECT * FROM live_sessions WHERE ended_at_ms IS NULL")
     assert rows == [], "无显式场次期间不应有 ended_at_ms IS NULL 的进行中行"
+
+
+# -------------------- 归属解析（场后发言归最近一场已结束的场次） --------------------
+
+
+async def _open_with_chat(store: SQLiteDatabase, manager: LiveSessionManager) -> int:
+    """开一场并写入一条明细（让结账时行留存，不被当空场次丢弃）。"""
+    pk = await manager.open_session(kind="live")
+    await store.chat.insert_live_chat(
+        live_session_id=pk,
+        timestamp_ms=1_000,
+        sender_role="viewer",
+        content="hi",
+        message_type="danmaku",
+    )
+    return pk
+
+
+async def test_attribution_prefers_active_session(store: SQLiteDatabase, bus: EventBus) -> None:
+    """进行中场次优先：归属解析回退到上一场的同时，进行中场次照旧优先。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+
+    await _open_with_chat(store, manager)
+    await manager.close_session()
+    second = await manager.open_session(kind="live")
+
+    assert await manager.resolve_attribution_pk() == second
+    assert await manager.resolve_pk() == second
+
+
+async def test_attribution_falls_back_to_last_ended_session(store: SQLiteDatabase, bus: EventBus) -> None:
+    """场后（上一场已结束、本场未开）→ 归属回退到刚结束的那一场。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+
+    pk = await _open_with_chat(store, manager)
+    await manager.close_session()
+    await bus.wait_until_drained()
+
+    assert await manager.resolve_pk() is None  # 活跃语义：没有进行中场次
+    assert await manager.resolve_attribution_pk() == pk  # 归属语义：归刚结束的那一场
+
+
+async def test_attribution_none_before_first_session(store: SQLiteDatabase, bus: EventBus) -> None:
+    """一场都没结束过（第一次开播前）：没有可归属的场次，返回 None。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+
+    assert await manager.resolve_attribution_pk() is None
+
+
+async def test_attribution_skips_discarded_empty_session(store: SQLiteDatabase, bus: EventBus) -> None:
+    """空场次整行丢弃 → 不当归属目标，回退到更早那场。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+
+    kept = await _open_with_chat(store, manager)
+    await manager.close_session()
+    await manager.open_session(kind="live")  # 无明细的空场次
+    await manager.close_session()
+    await bus.wait_until_drained()
+
+    assert await manager.resolve_attribution_pk() == kept
+
+
+async def test_attribution_after_deleting_last_ended_session(store: SQLiteDatabase, bus: EventBus) -> None:
+    """删掉最近一场已结束的场次 → 归属回退到更早那场。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+
+    first = await _open_with_chat(store, manager)
+    await manager.close_session()
+    second = await _open_with_chat(store, manager)
+    await manager.close_session()
+    await bus.wait_until_drained()
+
+    assert await manager.resolve_attribution_pk() == second
+    assert await manager.delete_session(second) is True
+    assert await manager.resolve_attribution_pk() == first
+
+
+async def test_attribution_loads_last_ended_from_db_after_restart(store: SQLiteDatabase, bus: EventBus) -> None:
+    """进程重启后从库里装载最近一场已结束的场次（内存态不跨进程）。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+    pk = await _open_with_chat(store, manager)
+    await manager.close_session()
+    await bus.wait_until_drained()
+
+    restarted = _make_manager(store, bus)  # 新进程：新的管理器实例
+    await restarted.start()
+
+    assert await restarted.resolve_attribution_pk() == pk

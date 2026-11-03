@@ -173,6 +173,23 @@ class SessionRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def get_last_ended_live_session_id(self) -> Optional[int]:
+        """取最近一场已结束的场次主键（按结账时刻倒序）；一场都没有返回 None。
+
+        供场次归属回退用：场后发言（上一场已结束、本场未开）归到刚结束的那场。
+        空场次在结账时整行丢弃，库里没有它们的行，不会被选中。
+        """
+
+        def _exec() -> Optional[int]:
+            with self._manager.transaction() as conn:
+                row = conn.execute(
+                    "SELECT id FROM live_sessions WHERE ended_at_ms IS NOT NULL "
+                    "ORDER BY ended_at_ms DESC, id DESC LIMIT 1"
+                ).fetchone()
+                return int(row[0]) if row else None
+
+        return await self._run_in_executor(_exec)
+
     async def delete_live_session(self, *, live_session_id: int) -> bool:
         """删除场次行并级联清除其明细数据。
 
