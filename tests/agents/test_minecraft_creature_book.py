@@ -12,6 +12,7 @@ from typing import Any, Dict, Sequence
 from src.agents.minecraft.creature_book import CreatureBook
 from src.agents.minecraft.glance import STATUS_AWAY, STATUS_DEAD, STATUS_NEARBY, glance_brief, glance_scene
 from src.agents.minecraft.maicraft import MaicraftReply
+from src.agents.minecraft.tools import STREAMER_GUIDE
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_chat import GameChatPayload
@@ -149,6 +150,19 @@ def test_her_grave_confirms_the_death_and_is_called_by_her_name() -> None:
     assert maid.status == STATUS_NEARBY, "又看到她（认错了或被复活）就当活着"
 
 
+def test_game_agent_and_streamer_are_told_about_names() -> None:
+    """游戏 Agent 拿到"名字 → 是哪一只、此刻怎样"，主播的玩法说明写明起名要登记、已死就是死了。"""
+    book = CreatureBook()
+    book.observe(_with_maid(), 1_000)
+    assert book.named_view() == {}
+    book.name("你的女仆", "阿缕")
+    assert book.named_view() == {"阿缕": "你的女仆（莫莫酒狐皮肤），在身边"}
+    book.note_death("莫莫酒狐被苦力怕炸死了", 2_000)
+    assert book.named_view() == {"阿缕": "你的女仆（莫莫酒狐皮肤），已死：被苦力怕炸死了"}
+
+    assert "minecraft_name_creature" in STREAMER_GUIDE and "已死的就是死了" in STREAMER_GUIDE
+
+
 async def test_replay_of_the_audit_timeline() -> None:
     """按复盘时间线回放：21:40 起名 → 22:02:53 最后一次在身边 → 22:03:00 死讯 → 22:03:13 墓碑。
 
@@ -167,6 +181,7 @@ async def test_replay_of_the_audit_timeline() -> None:
     )
     assert result.success and result.structured_content["named"] == "阿缕（你的女仆，莫莫酒狐皮肤）"
     assert "阿缕（你的女仆，莫莫酒狐皮肤）在身边" in (await agent._glance())["brief"]
+    assert agent._current_task_context()["named_creatures"] == {"阿缕": "你的女仆（莫莫酒狐皮肤），在身边"}
 
     death = GameChatPayload(game="minecraft", kind="system", content="莫莫酒狐被苦力怕炸死了")
     await agent._on_game_chat(CoreEvents.GAME_CHAT_RECEIVED, death, "maicraft_chat")

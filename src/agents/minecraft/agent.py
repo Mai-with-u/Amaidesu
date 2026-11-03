@@ -1129,8 +1129,9 @@ class MinecraftAgent(BaseAgent):
         return any(todo.status != "done" for todo in self._mc_state.todos)
 
     def _current_task_context(self) -> Dict[str, Any]:
-        """恢复与集中整理都保留：原始指令、待办、笔记、在跑的目标与最近结束的目标。"""
-        return {
+        """恢复与集中整理都保留：原始指令、待办、笔记、在跑的目标与最近结束的目标，
+        以及主播给生物起的名字（有才带：主播说"带上阿缕"时，身体要认得出阿缕是哪一只）。"""
+        context: Dict[str, Any] = {
             "original_instructions": list(self._task_instructions),
             "todo": self._mc_state.todo_doc()["todos"],
             "notebook": self._mc_state.notebook,
@@ -1138,6 +1139,10 @@ class MinecraftAgent(BaseAgent):
             "recently_finished_goals": self._goal_ledger.recent_finished(),
             "reasoning_steps_used": self._task_steps,
         }
+        named = self._creatures.named_view()
+        if named:
+            context["named_creatures"] = named
+        return context
 
     def _continue_task_context(self) -> Dict[str, Any]:
         """续做时相对前文最近一份完整任务状态只交付变化；首次续做交付完整状态。"""

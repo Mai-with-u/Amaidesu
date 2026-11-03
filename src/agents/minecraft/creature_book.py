@@ -77,8 +77,8 @@ class Creature:
         """游戏里显示的名字：命名牌名，没有用女仆皮肤名，再没有用种类叫法。死亡播报与墓碑上写的就是它。"""
         return self.name or self.skin or self.kind
 
-    def label(self) -> str:
-        """主播叫得出的称呼，与速览里身边实体的写法一致（起过名的名字在前）。"""
+    def label(self, *, with_nickname: bool = True) -> str:
+        """主播叫得出的称呼，与速览里身边实体的写法一致（起过名的名字在前）；``with_nickname=False`` 只说是哪一只。"""
         return entity_label(
             {
                 "type": self.type,
@@ -86,7 +86,7 @@ class Creature:
                 "owner": self.owner,
                 "name": self.name,
                 "skin": self.skin,
-                "nickname": self.nickname,
+                "nickname": self.nickname if with_nickname else "",
             }
         )
 
@@ -330,6 +330,18 @@ class CreatureBook:
             if creature.nickname:
                 item["named"] = True
             view.append(item)
+        return view
+
+    def named_view(self) -> Dict[str, str]:
+        """主播起过的名字 → 是哪一只、此刻怎样。给游戏 Agent：主播用名字下指令时（"带上阿缕"）它认得出是谁。"""
+        view: Dict[str, str] = {}
+        for creature in self._creatures.values():
+            if not creature.nickname:
+                continue
+            state = creature.status
+            if creature.status == STATUS_DEAD and creature.death_note:
+                state = f"{state}：{creature.death_note}"
+            view[creature.nickname] = f"{creature.label(with_nickname=False)}，{state}"
         return view
 
     def creatures(self) -> List[Creature]:
