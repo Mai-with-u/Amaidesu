@@ -1035,7 +1035,9 @@ def _build_maibot_sync_reporter(
 ) -> Optional[LiveStatusReporter]:
     """按 ``[maibot_sync]`` 装配直播近况上报器；未启用或缺地址/令牌时不装配。
 
-    ``send_transcript`` 开启且有数据库时，回顾写好后一并从库里读出整场记录推过去。
+    ``send_recap`` 控制是否推场次回顾（回顾正文含观众昵称与付费者），关掉后开播、换环节、
+    收播近况照常推。``send_transcript`` 开启且有数据库时，回顾写好后一并从库里读出整场记录
+    推过去，与 ``send_recap`` 各自独立。
     """
     raw = config.get("maibot_sync", {}) if isinstance(config, dict) else {}
     sync_config = MaiBotSyncConfigSchema(**raw) if isinstance(raw, dict) else MaiBotSyncConfigSchema()
@@ -1057,9 +1059,15 @@ def _build_maibot_sync_reporter(
         ),
         heartbeat_interval_ms=sync_config.heartbeat_interval_ms,
         transcript_source=transcript_source,
+        send_recap=sync_config.send_recap,
     )
     reporter.setup()
-    pushed = "开播 / 换环节 / 收播 / 场次回顾" + (" / 整场记录" if transcript_source is not None else "")
+    # 日志里列出实际会推的内容：场次回顾看 send_recap 开关，整场记录看是否有记录来源
+    pushed = "开播 / 换环节 / 收播"
+    if sync_config.send_recap:
+        pushed += " / 场次回顾"
+    if transcript_source is not None:
+        pushed += " / 整场记录"
     logger.info(f"直播近况同步已接线：{pushed} → {sync_config.url}")
     return reporter
 

@@ -162,6 +162,64 @@ async def test_recap_retries_until_delivered_and_gives_up_after_budget() -> None
         await reporter.stop()
 
 
+def _recap_payload(live_session_id: int = 5) -> StreamerRecapWrittenPayload:
+    return StreamerRecapWrittenPayload(
+        live_session_id=live_session_id, started_at_ms=1_000, ended_at_ms=2_000, recap_text="答应了小明明天再播"
+    )
+
+
+async def test_send_recap_on_subscribes_and_pushes_recap() -> None:
+    """回顾推送开着（默认）：订阅回顾事件，回顾写好后推给插件，正文原样带上。"""
+    sender = FakeSender()
+    bus, reporter = _reporter(sender, send_recap=True)
+    try:
+        assert bus.get_listeners_count(CoreEvents.STREAMER_RECAP_WRITTEN) == 1
+        await bus.emit(CoreEvents.STREAMER_RECAP_WRITTEN, _recap_payload(), source="test")
+        await _wait_until(lambda: len(sender.bodies) == 1)
+        assert sender.bodies[0]["type"] == "recap" and sender.bodies[0]["text"] == "答应了小明明天再播"
+    finally:
+        await reporter.stop()
+    # 收尾时一并退订
+    assert bus.get_listeners_count(CoreEvents.STREAMER_RECAP_WRITTEN) == 0
+
+
+async def test_send_recap_off_neither_subscribes_nor_pushes() -> None:
+    """回顾推送关掉：不订阅回顾事件，回顾正文（含观众昵称与付费者）不会推出去，开播近况照常推。"""
+    sender = FakeSender()
+    bus, reporter = _reporter(sender, send_recap=False)
+    try:
+        assert bus.get_listeners_count(CoreEvents.STREAMER_RECAP_WRITTEN) == 0
+        await bus.emit(CoreEvents.STREAMER_RECAP_WRITTEN, _recap_payload(), source="test")
+        await bus.wait_until_drained()
+        assert sender.attempts == 0
+
+        # 关回顾不影响近况：开播快照照常推送
+        await bus.emit(CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=5, title="t"), source="test")
+        await _wait_until(lambda: len(sender.bodies) == 1)
+        assert sender.bodies[0]["type"] == "snapshot"
+    finally:
+        await reporter.stop()
+    assert bus.get_listeners_count(CoreEvents.STREAMER_RECAP_WRITTEN) == 0
+
+
+async def test_send_recap_off_still_pushes_transcript_when_enabled() -> None:
+    """只关回顾、整场记录另开：两个开关各管各的——整场记录照推，回顾不推。"""
+    sender = FakeSender()
+    transcript = {"type": "transcript", "live_session_id": 5, "lines": [{"ts_ms": 1, "role": "viewer", "text": "hi"}]}
+    source = FakeTranscriptSource({5: transcript})
+    bus, reporter = _reporter(sender, send_recap=False, transcript_source=source)
+    try:
+        # 整场记录挂在回顾事件上，所以仍要订阅，但回顾正文不发
+        assert bus.get_listeners_count(CoreEvents.STREAMER_RECAP_WRITTEN) == 1
+        await bus.emit(CoreEvents.STREAMER_RECAP_WRITTEN, _recap_payload(), source="test")
+        await _wait_until(lambda: len(sender.bodies) == 1)
+        assert [body["type"] for body in sender.bodies] == ["transcript"]
+        assert source.loaded == [5]
+    finally:
+        await reporter.stop()
+    assert bus.get_listeners_count(CoreEvents.STREAMER_RECAP_WRITTEN) == 0
+
+
 async def test_rejected_push_is_not_retried() -> None:
     """插件明确拒收（如没开整场记录回放，回 403）：重试也没用，只推一次。"""
     sender = FakeSender(failures=100, error=StatusRejected("HTTP 403: live_memory.enabled=false"))
@@ -227,12 +285,20 @@ async def test_transcript_follows_recap_with_retry_and_skips_missing_or_broken()
         await reporter.stop()
 
 
-async def test_discarded_empty_session_is_flagged() -> None:
+@pytest.mark.parametrize(
+    "ended",
+    [
+        pytest.param(LiveEndedPayload(live_session_id=9, empty_discarded=True), id="empty-discarded"),
+        pytest.param(LiveEndedPayload(live_session_id=9, deleted=True), id="deleted-by-operator"),
+    ],
+)
+async def test_discarded_or_deleted_session_is_flagged(ended: LiveEndedPayload) -> None:
+    """空场次被丢弃、运营者删掉进行中的场次，两种都告诉插件这一场作废。"""
     sender = FakeSender()
     bus, reporter = _reporter(sender)
     try:
         await bus.emit(CoreEvents.LIVE_STARTED, LiveStartedPayload(live_session_id=9), source="test")
-        await bus.emit(CoreEvents.LIVE_ENDED, LiveEndedPayload(live_session_id=9, empty_discarded=True), source="test")
+        await bus.emit(CoreEvents.LIVE_ENDED, ended, source="test")
         await _wait_until(lambda: len(sender.bodies) == 2)
         assert sender.bodies[1]["discarded"] is True and sender.bodies[1]["live"] is False
     finally:
@@ -300,6 +366,33 @@ def test_composition_root_builds_reporter_only_when_fully_configured() -> None:
     reporter = app_main._build_maibot_sync_reporter(
         bus, {"maibot_sync": {"enabled": True, "url": "http://127.0.0.1:8767/live-status", "token": "t"}}
     )
-    assert isinstance(reporter, LiveStatusReporter) and reporter._subscribed
+    # 装配完成即已接线：默认配置下开播与回顾事件都有订阅者
+    assert isinstance(reporter, LiveStatusReporter)
+    assert bus.get_listeners_count(CoreEvents.LIVE_STARTED) == 1
+    assert bus.get_listeners_count(CoreEvents.STREAMER_RECAP_WRITTEN) == 1
     # 没有数据库时只推近况与回顾，不推整场记录
     assert reporter._transcript_source is None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "recap_pushed"),
+    [({}, True), ({"send_recap": True}, True), ({"send_recap": False}, False)],
+    ids=["default", "recap-on", "recap-off"],
+)
+async def test_composition_root_passes_send_recap_switch_to_reporter(
+    overrides: Dict[str, Any], recap_pushed: bool, loguru_capture: Any
+) -> None:
+    """组合根把 ``[maibot_sync].send_recap`` 传给上报器：关掉时回顾事件没有订阅者（回顾不会离开本机），
+    默认与显式打开时照旧；开播近况不受开关影响，接线日志也按开关如实列出会推的内容。"""
+    bus = EventBus()
+    maibot_sync = {"enabled": True, "url": "http://127.0.0.1:8767/live-status", "token": "t", **overrides}
+    reporter = app_main._build_maibot_sync_reporter(bus, {"maibot_sync": maibot_sync})
+    assert isinstance(reporter, LiveStatusReporter)
+    try:
+        assert bus.get_listeners_count(CoreEvents.STREAMER_RECAP_WRITTEN) == (1 if recap_pushed else 0)
+        assert bus.get_listeners_count(CoreEvents.LIVE_STARTED) == 1
+    finally:
+        await reporter.stop()
+
+    (wired,) = [r["message"] for r in loguru_capture.records if "直播近况同步已接线" in r["message"]]
+    assert ("场次回顾" in wired) is recap_pushed and "开播 / 换环节 / 收播" in wired

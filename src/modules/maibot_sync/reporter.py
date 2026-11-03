@@ -10,10 +10,13 @@ MaiBot 7×24 常驻，Amaidesu 开播时才启动；QQ 那边的麦麦要知道"
   直播期间按心跳间隔重发，插件错过任何一次都能被下一次补齐，也据此判断直播是否
   仍在进行。
 - **场次回顾**：回顾写好后单独发一次，失败按 5s / 30s / 2min 重试三次；插件明确拒收
-  （4xx：对应开关没开、格式不对）时不再重试。
+  （4xx：对应开关没开、格式不对）时不再重试。回顾正文含观众昵称与付费者，走 B 站官方
+  开放平台采集时向第三方显示这些信息与平台管理规范冲突，所以推送受 ``send_recap`` 开关
+  控制（默认开）；关掉后不推回顾正文，没配整场记录时连回顾事件也不订阅。
 - **整场记录**：回顾写好时一并从库里读出这场的全部对话推过去（重试同上），插件把它
   回放进 MaiBot 的直播间会话、由聊天摘要吸收进长期记忆。挂在回顾事件上而不是收播事件
-  上：进程退出时收播来不及推，回顾则会在下次启动时补写，整场记录随之补推。
+  上：进程退出时收播来不及推，回顾则会在下次启动时补写，整场记录随之补推。整场记录与
+  场次回顾各有各的开关、互不牵连：只关回顾时仍订阅回顾事件，只为触发整场记录。
 
 彩排场次（``kind="rehearsal"``：模拟、回放、调试）不对外同步：开播、收播、回顾都按
 事件里带的场次类型判断，进程重启后补写的回顾也一样。
@@ -115,13 +118,27 @@ class LiveStatusReporter:
         heartbeat_interval_ms: int = 60_000,
         retry_delays_ms: Sequence[int] = _RETRY_DELAYS_MS,
         transcript_source: Optional[TranscriptSource] = None,
+        send_recap: bool = True,
         clock_ms: Callable[[], int] = now_ms,
     ) -> None:
+        """构造上报器。
+
+        Args:
+            event_bus: 事件总线，订阅开播、收播、流程单与回顾事件。
+            sender: 把近况 JSON 送到适配器插件的发送器。
+            heartbeat_interval_ms: 直播期间重发完整近况的间隔（毫秒）。
+            retry_delays_ms: 回顾与整场记录推送失败后的重试间隔（毫秒）。
+            transcript_source: 整场记录来源；None = 不推整场记录。
+            send_recap: 是否推场次回顾；False 时回顾正文（含观众昵称与付费者）
+                不会离开本机，也不为它订阅回顾事件。
+            clock_ms: 当前时刻（Unix 毫秒），测试可注入。
+        """
         self._event_bus = event_bus
         self._sender = sender
         self._heartbeat_interval_ms = heartbeat_interval_ms
         self._retry_delays_ms = tuple(retry_delays_ms)
         self._transcript_source = transcript_source
+        self._send_recap = send_recap
         self._clock_ms = clock_ms
         self._live: Optional[_LiveState] = None
         self._heartbeat_task: Optional[asyncio.Task[None]] = None
@@ -129,16 +146,26 @@ class LiveStatusReporter:
         self._last_failure = ""
         self._subscribed = False
 
+    @property
+    def _watches_recap(self) -> bool:
+        """是否需要订阅"回顾写好"事件：推回顾，或回顾事件是整场记录的触发点时才需要。"""
+        return self._send_recap or self._transcript_source is not None
+
     def setup(self) -> None:
-        """接线：订阅开播、收播、流程单与回顾事件（不触发任何推送）。"""
+        """接线：订阅开播、收播、流程单与回顾事件（不触发任何推送）。
+
+        回顾事件只在要推回顾、或要借它触发整场记录时订阅；两样都不推时（关了
+        ``send_recap`` 又没开整场记录）完全不订阅，回顾内容不会经过本上报器。
+        """
         if self._subscribed:
             return
         self._event_bus.on(CoreEvents.LIVE_STARTED, self._on_live_started, model_class=LiveStartedPayload)
         self._event_bus.on(CoreEvents.LIVE_ENDED, self._on_live_ended, model_class=LiveEndedPayload)
         self._event_bus.on(CoreEvents.RUNDOWN_CHANGED, self._on_rundown_changed, model_class=RundownChangedPayload)
-        self._event_bus.on(
-            CoreEvents.STREAMER_RECAP_WRITTEN, self._on_recap_written, model_class=StreamerRecapWrittenPayload
-        )
+        if self._watches_recap:
+            self._event_bus.on(
+                CoreEvents.STREAMER_RECAP_WRITTEN, self._on_recap_written, model_class=StreamerRecapWrittenPayload
+            )
         self._subscribed = True
 
     async def stop(self) -> None:
@@ -147,7 +174,8 @@ class LiveStatusReporter:
             self._event_bus.off(CoreEvents.LIVE_STARTED, self._on_live_started)
             self._event_bus.off(CoreEvents.LIVE_ENDED, self._on_live_ended)
             self._event_bus.off(CoreEvents.RUNDOWN_CHANGED, self._on_rundown_changed)
-            self._event_bus.off(CoreEvents.STREAMER_RECAP_WRITTEN, self._on_recap_written)
+            if self._watches_recap:
+                self._event_bus.off(CoreEvents.STREAMER_RECAP_WRITTEN, self._on_recap_written)
             self._subscribed = False
         tasks = [task for task in (self._heartbeat_task, *self._push_tasks) if task is not None]
         self._heartbeat_task = None
@@ -207,21 +235,28 @@ class LiveStatusReporter:
         await self._stop_heartbeat()
         body = self._snapshot_of(live, live_flag=False)
         body["ended_at_ms"] = payload.ended_at_ms
-        body["discarded"] = bool(payload.empty_discarded)
+        # 空场次被丢弃、或运营者在 WebUI 删掉了进行中的场次，这一场都不再留档：
+        # 告诉插件这一场作废，免得 QQ 群里的她还提起一场已经不存在的直播
+        body["discarded"] = bool(payload.empty_discarded or payload.deleted)
         await self._send(body, "收播近况")
 
     async def _on_recap_written(self, event_name: str, payload: StreamerRecapWrittenPayload, source: str) -> None:
-        """回顾写好：后台推回顾与整场记录，失败按退避重试，不阻塞事件分发。"""
+        """回顾写好：后台推回顾与整场记录，失败按退避重试，不阻塞事件分发。
+
+        正式场的回顾写好后，先按 ``send_recap`` 决定推不推回顾正文，再按是否配了整场记录
+        来源决定推不推整场记录；两件事各管各的，彩排场次一概不推。
+        """
         if payload.kind == SESSION_KIND_REHEARSAL:
             return
-        body = {
-            "type": "recap",
-            "live_session_id": payload.live_session_id,
-            "started_at_ms": payload.started_at_ms,
-            "ended_at_ms": payload.ended_at_ms,
-            "text": payload.recap_text,
-        }
-        self._spawn(self._send_with_retry(body, "场次回顾"), "maibot-sync-recap")
+        if self._send_recap:
+            body = {
+                "type": "recap",
+                "live_session_id": payload.live_session_id,
+                "started_at_ms": payload.started_at_ms,
+                "ended_at_ms": payload.ended_at_ms,
+                "text": payload.recap_text,
+            }
+            self._spawn(self._send_with_retry(body, "场次回顾"), "maibot-sync-recap")
         if self._transcript_source is not None:
             self._spawn(self._push_transcript(payload.live_session_id), "maibot-sync-transcript")
 
