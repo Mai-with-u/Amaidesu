@@ -26,6 +26,7 @@ from src.modules.utils.time_utils import now_ms
 __all__ = [
     "GameToolHandler",
     "GameToolProvider",
+    "business_fail_result",
     "capture_failed_result",
     "emit_game_error",
     "fail_result",

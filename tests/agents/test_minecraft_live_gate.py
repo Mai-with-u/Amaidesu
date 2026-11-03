@@ -99,6 +99,31 @@ async def test_start_enters_offline_until_live_started() -> None:
     assert len(agent._message_queue) == 1
 
 
+async def test_offline_refusal_returns_a_reason_instead_of_none() -> None:
+    """收工态拒收回一句人话理由：框架把 None 当"受理成功"。
+
+    无理由的 None 会让框架登记一条"已受理"的委派单，而执行侧从没收到这条指令——
+    账面有、没人做、也不报错（僵尸委派任务）。
+    """
+    agent, _llm = _agent(mcp_provider=FakeMaicraft())
+    await agent._on_start()
+    assert agent._live_active is False
+    agent._running = False
+    agent._wake_event.set()
+    if agent._worker_task is not None:
+        with suppress(asyncio.CancelledError):
+            await agent._worker_task
+
+    reason = agent.receive_delegation(instruction="建房子", task_id="t1")
+    assert isinstance(reason, str) and "收工" in reason
+    assert len(agent._message_queue) == 0  # 没接活
+
+    # 开播后同一入口回 None（= 已受理），与"理由串表示拒收"的约定一致
+    await agent._on_live_started("live.started", _started_payload(), "test")
+    assert agent.receive_delegation(instruction="建房子", task_id="t2") is None
+    assert len(agent._message_queue) == 1
+
+
 async def test_offline_worker_never_starts_batch() -> None:
     """收工态下唤醒信号与队列残留都不会开新任务批。"""
     agent, llm = _agent(live=False)

@@ -165,6 +165,54 @@ async def test_acceptance_failures_do_not_register(args: dict, needle: str) -> N
     rig = _Rig(_StubAgent("agent_a"), _StubAgent("agent_b", refuse="忙不过来"))
     res = await rig.call("framework_delegate", args)
     assert res.success is False and needle in res.error_message and len(rig.ledger) == 0
+    # 受理失败是"对方/调用方纠正后能重派"的业务拒绝，不是工具坏了——不进熔断计数
+    assert res.failure_kind == "business"
+
+
+async def test_business_rejection_does_not_trip_the_tool() -> None:
+    """连续业务拒绝不计入健康计数、不熔断：熔断阈值 3 次。
+
+    未分类的失败会被当成执行故障，连续三次就能把 framework_delegate 摘掉——
+    委派能力从此不可用（本缺陷的原始形态）。
+    """
+    rig = _Rig(_StubAgent("agent_a"), _StubAgent("agent_b", refuse="忙不过来"))
+    for _ in range(4):
+        res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "干活"})
+        assert res.success is False and res.failure_kind == "business"
+    assert not rig.registry.is_tripped("framework_delegate")
+    state = rig.registry.health_state_of("framework_delegate")
+    assert state is not None and state.consecutive_failures == 0  # 服务已应答：故障计数保持 0
+
+
+async def test_prompt_rejection_is_a_business_failure() -> None:
+    """递话被拒（对方通道堵了）是业务拒绝：标 business、不熔断。"""
+
+    class _PromptRefuser(_StubAgent):
+        def receive_prompt(self, *, content: str, source: str = "") -> bool:
+            return False
+
+    rig = _Rig(_StubAgent("agent_a"), _PromptRefuser("agent_b"))
+    res = await rig.call("framework_prompt", {"agent": "agent_b", "content": "在吗"})
+    assert res.success is False and "拒收递话" in res.error_message
+    assert res.failure_kind == "business"
+    assert not rig.registry.is_tripped("framework_prompt")
+
+
+async def test_missing_task_ledger_stays_an_execution_failure() -> None:
+    """任务基建未装配是依赖不可用（真执行故障）：不标业务拒绝，照常计入故障计数。
+
+    反向约束：若把真故障也标成 business，健康监控就彻底失效（永不熔断）。
+    """
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    manager = AgentManager()
+    manager.register(_StubAgent("agent_a"))
+    registry.register_provider(build_agent_control_provider(manager, None, event_bus=bus))
+
+    res = await registry.invoke(_inv("framework_task_status", {"task_id": "deleg_1700000000000_1"}))
+    assert res.success is False and res.failure_kind != "business"
+    state = registry.health_state_of("framework_task_status")
+    assert state is not None and state.consecutive_failures == 1  # 真故障照常计数
 
 
 async def test_default_refusal_without_receive_entry_is_acceptance_failure() -> None:
@@ -339,7 +387,7 @@ async def test_task_cancel_rejects_non_framework_ids_and_unknown(rig: _Rig) -> N
 
 
 class _McRig(_Rig):
-    def __init__(self) -> None:
+    def __init__(self, *, live_active: bool = True) -> None:
         bus = EventBus(enable_stats=False)
         registry = ToolRegistry(event_bus=bus)
         ledger = TaskLedger(event_bus=bus)
@@ -354,6 +402,7 @@ class _McRig(_Rig):
             tool_registry=registry,
             task_tracker=TaskTracker(registry, ledger, poll_interval_ms=20),
             mcp_provider=SimpleNamespace(list_tools=lambda: ["maicraft_observe"]),
+            live_active=live_active,
         )
         super().__init__(self.minecraft)
         # 复用上面 _Rig 构造出的 bus/registry/ledger 会与 Agent 持有的不一致，这里改为沿用 Agent 的那一套
@@ -383,6 +432,28 @@ class _McRig(_Rig):
 @pytest.fixture
 def mc() -> _McRig:
     return _McRig()
+
+
+@pytest.fixture
+def mc_offline() -> _McRig:
+    """收工态的 minecraft agent（没开播）：委派要被拒收并回一句理由。"""
+    return _McRig(live_active=False)
+
+
+async def test_offline_minecraft_refuses_delegation_with_reason_and_leaves_no_zombie(mc_offline: _McRig) -> None:
+    """收工态拒收：理由回给派活的一方，账面不出现"已受理"的僵尸条目。
+
+    缺陷形态：收工态分支返回 None（框架把 None 当受理成功）→ 账面登记 accepted，
+    可执行侧从没收到这条指令——账面有、没人做、也不报错。
+    """
+    res = await mc_offline.call(
+        "framework_delegate", {"agent": "minecraft", "instruction": "建一座木头房子"}, source="streamer"
+    )
+    assert res.success is False
+    assert "收工" in res.error_message  # 拒收理由原样回传，不是一句"受理成功"
+    assert res.failure_kind == "business"  # 对方拒收属业务结果，不进熔断计数
+    assert len(mc_offline.ledger) == 0  # 拒收不登记：没有僵尸条目
+    assert len(mc_offline.minecraft._message_queue) == 0  # 执行侧确实没收到指令
 
 
 async def test_minecraft_receives_delegation_and_reports_terminal(mc: _McRig) -> None:

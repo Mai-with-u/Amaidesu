@@ -52,6 +52,7 @@ from src.agents.minecraft.maicraft import (
 )
 from src.agents.minecraft.notice_router import (
     GAME_NOT_CONNECTED,
+    LIVE_NOT_ACTIVE,
     MAX_BATCH_BODY_EVENTS,
     PROMPT_SOURCE_LABELS,
     attention_notice,
@@ -518,11 +519,16 @@ class MinecraftAgent(BaseAgent):
         return True
 
     def receive_delegation(self, *, instruction: str, task_id: str) -> Optional[str]:
-        """接收委派（framework_delegate）：指令入队（带任务号）+ 唤醒；收工态拒收并如实记账；游戏没连上时拒收并说明原因。"""
+        """接收委派（framework_delegate）：指令入队（带任务号）+ 唤醒。
+
+        拒收一律回一句人话理由（不返回 None）：调用方把 None 当"受理成功"，
+        拒收却不给理由就会留下一条账面已受理、执行侧从没收到的僵尸任务。
+        收工态拒收并如实记账；游戏没连上时拒收并说明原因。
+        """
         if not self._live_active:
             self._logger.warning(f"收工态拒收委派（task_id={task_id}）：{instruction[:60]}")
             self._delegations.reject(task_id, summary="收工态拒收（下播即收工）")
-            return None
+            return LIVE_NOT_ACTIVE
         if not self._has_maicraft_tools():
             # 开播了但 maicraft 一个工具都没有（客户端没开、MCP 没连上）：接下来没有任何办法操作角色，
             # 接了只会拿截屏翻显示器找游戏窗口白耗几分钟。直接拒收，原因原样回给派活的一方，等连上再派。

@@ -29,6 +29,7 @@ __all__ = [
     "MAX_BATCH_BODY_EVENTS",
     "PROMPT_SOURCE_LABELS",
     "GAME_NOT_CONNECTED",
+    "LIVE_NOT_ACTIVE",
     "attention_notice",
     "body_notice_content",
     "route_body_event",
@@ -75,6 +76,10 @@ _TIMER_NOTICE = (
 GAME_NOT_CONNECTED = (
     "游戏没连上：maicraft 一个工具都没有（Minecraft 客户端没开，或 MaiCraft 的 MCP 没连上），没法操作角色；连上后再派"
 )
+
+# 收工态（没开播或已下播收工）拒收委派的原因：经委派工具原样回给派活的一方，
+# 它据此知道这条活没人接（不是丢了），等开播后再派。
+LIVE_NOT_ACTIVE = "收工态：MinecraftAgent 现在不在直播场次里（没开播，或已下播收工），不接新委派；开播后再派"
 
 
 @dataclass(frozen=True, slots=True)

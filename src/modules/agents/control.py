@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, Iterable, List, Optional
 
 from src.modules.agents.base import BaseAgent
+from src.modules.agents.game_tools import business_fail_result
 from src.modules.agents.manager import AgentManager
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentPromptedPayload
@@ -584,14 +585,15 @@ class AgentControlProvider(BaseToolProvider):
 
         目标解析、在途门、接收入口、账面登记都在 ``_DelegationCore``——
         与控制面直调（REST）共用同一套受理不变量。
+
+        失败分两类：目标不存在/在途冲突/目标拒收这类"对方或调用方纠正后能重派"的
+        业务拒绝，标 ``failure_kind="business"``（不算执行故障，不进熔断计数）；
+        任务基建未装配这类依赖不可用是真执行故障，不标——标了健康监控就废了。
         """
+        started_ms = now_ms()
         instruction = str(args.get("instruction", "") or "")
         if not instruction:
-            return ToolExecutionResult(
-                tool_name="framework_delegate",
-                success=False,
-                error_message="delegate 需要 instruction（自然语言指令）",
-            )
+            return business_fail_result("framework_delegate", started_ms, "delegate 需要 instruction（自然语言指令）")
         outcome = await self._delegation.delegate(
             target_name=str(args.get("agent", "") or ""),
             instruction=instruction,
@@ -604,39 +606,38 @@ class AgentControlProvider(BaseToolProvider):
                 success=True,
                 structured_content={"accepted": True, "task_id": outcome.task_id, "executor": outcome.executor},
             )
-        return ToolExecutionResult(
-            tool_name="framework_delegate",
-            success=False,
-            error_message=outcome.message,
-        )
+        if outcome.error == "no_ledger":
+            # 任务基建未装配：依赖不可用，重试无用——真执行故障，不标业务拒绝。
+            return ToolExecutionResult(
+                tool_name="framework_delegate",
+                success=False,
+                error_message=outcome.message,
+            )
+        return business_fail_result("framework_delegate", started_ms, outcome.message)
 
     def _invoke_prompt(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
         """受理递话：目标解析（复用受理核心，委派同款不变量）→ 目标接收入口 → 回执。
 
         纯文本留言**不登记任务记录表**——递话与委派传输同路、记账分家。
+
+        失败都是对方或调用方纠正后能重来的业务拒绝（内容为空、目标不存在或自派、
+        目标拒收递话），标 ``failure_kind="business"``——不算执行故障，不进熔断计数。
         """
+        started_ms = now_ms()
         content = str(args.get("content", "") or "")
         if not content:
-            return ToolExecutionResult(
-                tool_name="framework_prompt",
-                success=False,
-                error_message="prompt 需要 content（递话文本）",
-            )
+            return business_fail_result("framework_prompt", started_ms, "prompt 需要 content（递话文本）")
         target_name = str(args.get("agent", "") or "")
         target, failure = self._delegation.resolve_target(target_name, caller, self._roster("receive_prompt"))
         if failure is not None:
-            return ToolExecutionResult(
-                tool_name="framework_prompt",
-                success=False,
-                error_message=failure.message,
-            )
+            return business_fail_result("framework_prompt", started_ms, failure.message)
         assert target is not None  # 解析成功时必有实例（类型收窄）
         delivered = target.receive_prompt(content=content, source=caller or "unknown")
         if not delivered:
-            return ToolExecutionResult(
-                tool_name="framework_prompt",
-                success=False,
-                error_message=f"目标 '{target.name}' 拒收递话（未实现消化通道或留言已满）",
+            return business_fail_result(
+                "framework_prompt",
+                started_ms,
+                f"目标 '{target.name}' 拒收递话（未实现消化通道或留言已满）",
             )
         _emit_prompted(self.event_bus, target=target.name, content=content, source=caller or "unknown")
         return ToolExecutionResult(
@@ -651,25 +652,31 @@ class AgentControlProvider(BaseToolProvider):
         只收 deleg_ 前缀的框架委派号——执行方内部目标号（如 maicraft-goal-N）
         是另一本账（执行 Agent 在游戏里挂的目标），不归框架撤，提示走执行方
         自己的目标工具。取消经执行 Agent（单写者规则），框架不代写账面。
+
+        失败多数是业务拒绝（任务号写错、任务已终态、执行者不在名册）——调用方
+        换个号或等一会儿就能重来，标 ``failure_kind="business"``，不进熔断计数；
+        任务基建未装配是依赖不可用，属真执行故障，不标。
         """
+        started_ms = now_ms()
         task_id = str(args.get("task_id", "") or "")
         tool_name = "framework_task_cancel"
         if not task_id:
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message="task_cancel 需要 task_id（framework_delegate 回执返回的委派任务号）",
+            return business_fail_result(
+                tool_name,
+                started_ms,
+                "task_cancel 需要 task_id（framework_delegate 回执返回的委派任务号）",
             )
         if not task_id.startswith("deleg_"):
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message=(
+            return business_fail_result(
+                tool_name,
+                started_ms,
+                (
                     f"只能撤委派任务（deleg_ 开头），'{task_id}' 是执行方内部目标号，"
                     "不归这里撤——让执行方用它自己的目标工具（如 maicraft_goal 的 cancel）收场"
                 ),
             )
         if self.task_ledger is None:
+            # 任务基建未装配：依赖不可用，重试无用——真执行故障，不标业务拒绝。
             return ToolExecutionResult(
                 tool_name=tool_name,
                 success=False,
@@ -677,25 +684,21 @@ class AgentControlProvider(BaseToolProvider):
             )
         record = self.task_ledger.get(task_id)
         if record is None:
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message=f"任务不存在: '{task_id}'（未知任务号或已终态）",
-            )
+            return business_fail_result(tool_name, started_ms, f"任务不存在: '{task_id}'（未知任务号或已终态）")
         target = self.manager.get_agent_by_name(record.executor)
         if target is None:
             logger.warning(f"task_cancel: 执行者 '{record.executor}' 不在名册（task_id={task_id}）")
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message=f"撤单失败：执行者 '{record.executor}' 不在名册，无法送达停手通知",
+            return business_fail_result(
+                tool_name,
+                started_ms,
+                f"撤单失败：执行者 '{record.executor}' 不在名册，无法送达停手通知",
             )
         cancelled = target.cancel_task(task_id, source=caller or "unknown")
         if not cancelled:
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message=f"撤单失败：任务 '{task_id}' 不在执行者 '{record.executor}' 的追踪范围（未知号或已终态）",
+            return business_fail_result(
+                tool_name,
+                started_ms,
+                f"撤单失败：任务 '{task_id}' 不在执行者 '{record.executor}' 的追踪范围（未知号或已终态）",
             )
         logger.info(f"委派撤单: {caller or 'unknown'} 撤掉 {record.executor} 的 {task_id}")
         return ToolExecutionResult(
@@ -705,20 +708,32 @@ class AgentControlProvider(BaseToolProvider):
         )
 
     def _invoke_task_status(self, args: Dict[str, Any]) -> ToolExecutionResult:
-        """按任务号查记录表：状态 + 快照；未知/已终态移除 → 失败结果。"""
+        """按任务号查记录表：状态 + 快照；未知/已终态移除 → 失败结果。
+
+        查不到任务是业务拒绝（任务号写错或已终态），标 ``failure_kind="business"``；
+        任务基建未装配是依赖不可用，属真执行故障，不标。
+        """
+        started_ms = now_ms()
         task_id = str(args.get("task_id", "") or "")
-        if not task_id or self.task_ledger is None:
+        if not task_id:
+            return business_fail_result(
+                "framework_task_status",
+                started_ms,
+                "task_status 需要 task_id（framework_delegate 回执返回的委派任务号）",
+            )
+        if self.task_ledger is None:
+            # 任务基建未装配：依赖不可用，重试无用——真执行故障，不标业务拒绝。
             return ToolExecutionResult(
                 tool_name="framework_task_status",
                 success=False,
-                error_message="任务不存在（task_id 为空或任务基建未装配）",
+                error_message="任务基建未装配（task_ledger 未注入），查状态不可用",
             )
         record = self.task_ledger.get(task_id)
         if record is None:
-            return ToolExecutionResult(
-                tool_name="framework_task_status",
-                success=False,
-                error_message=f"任务不存在: '{task_id}'（未知任务号或已终态移除）",
+            return business_fail_result(
+                "framework_task_status",
+                started_ms,
+                f"任务不存在: '{task_id}'（未知任务号或已终态移除）",
             )
         return ToolExecutionResult(
             tool_name="framework_task_status",
