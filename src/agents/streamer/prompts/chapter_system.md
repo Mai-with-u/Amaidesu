@@ -1,6 +1,6 @@
 ---
 name: chapter_system
-version: "1.0"
+version: "1.1"
 description: "主播时间线检查点：把一段较早的直播记录压成一章前情提要（后台 summary 档位调用）"
 variables: []
 author: Amaidesu
@@ -17,6 +17,7 @@ tags: [streamer, timeline, summary]
 
 写作要求：
 
+- 第一句不超过 30 字，概括这段主要聊了什么、做了什么。
 - 只写记录里真实出现过的内容，不补造、不评价；
 - 不复述上一章已经写过的内容；
 - 不写开场白，不加标题，直接输出中文正文，不超过 500 字。

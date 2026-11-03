@@ -54,7 +54,7 @@
 Planner 读历史投影（`StreamerTimeline`）；Replyer 默认不读它，只拿最近 `replyer_history_items` 条原文（默认 14，章节不进）和滑出这段窗口的她自己说过的话，表达侧看到的是"刚才聊到哪了"而不是整场摘要。`replyer_history_items = 0` 是回退开关：Replyer 改回与 Planner 共用时间线。
 
 - **只追加**：记录按主播第一次看到的先后进入时间线，进去后不挪位置、不改写；相邻两个决策窗的历史前缀逐字一致。
-- **预算**：`[agents.streamer.context]` 的 `window_ratio` / `max_tokens` 按 planner 档位的模型窗口换算（回退开关打开时取 planner、replyer 里较小的那个；窗口未配置按 128k 计）。
+- **预算**：`[agents.streamer.context]` 的 `window_ratio` / `max_tokens` 按 planner 档位的模型窗口换算（回退开关打开时取 planner、replyer 里较小的那个；窗口未配置按 128k 计）。前情提要这一层最多占预算的 30%，超出时从最老的章节开始移出，每移出一章留一行前情目录（取该章第一句，不超过 30 字），细节记不清时让她坦白或问弹幕。
 - **按章压缩**：历史越过提前整理线（`prepare_ratio`）时，后台用 summary 档位把最老的一段写成一章前情提要，写好后的下一窗换上，压回到回落线（`target_ratio`）；最近 20 条始终保持原文。章节只追加，两次换章之间前缀不变。
 - **兜底**：摘要迟迟出不来、历史涨到预算两倍时，同步把最老一段换成占位说明，避免撞上模型窗口。
 - **场次边界**：开播、下播、读到的场次变化时时间线清空重来。

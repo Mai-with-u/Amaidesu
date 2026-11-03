@@ -1,4 +1,4 @@
-"""Planner 系统提示词里的底线与规则：AI 声明、边界栏、做不到的不答应、备忘录口径——
+"""Planner 系统提示词里的底线与规则：AI 声明、边界栏、做不到的不答应、备忘录口径、前情目录——
 用真实提示词模板渲染，经 plan() 取发给模型的系统提示词。"""
 
 from __future__ import annotations
@@ -117,3 +117,13 @@ def test_notebook_rule_says_it_only_reaches_the_decision_side(prompts: Any) -> N
     for text in (prompt, NOTEBOOK_SPEC.description):
         assert "只自动" in text and "决策上下文" in text and "要她说出口的事写进交接稿" in text
         assert "表达上下文" not in text
+
+
+def test_prompt_template_tells_planner_to_admit_not_to_invent_for_prelude_directory(prompts: Any) -> None:
+    """前情目录规则：本场早先的段落只剩目录一行、眼前没有细节时，坦白记不清、可以问弹幕，不凭目录编细节；
+    往场回顾工具翻不到本场说过的话，规则里明说不要为这个去调它。"""
+    prompt = _render_bare(prompts)
+
+    assert "历史开头的【前情目录】列着已移出上下文的段落" in prompt
+    assert "坦白记不清、可以问问弹幕，别凭目录一行编细节" in prompt
+    assert "`memory_recall_session` 只翻往场回顾，翻不到本场说过的话" in prompt
