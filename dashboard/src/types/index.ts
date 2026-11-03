@@ -1444,3 +1444,122 @@ export interface MemoryStatsResponse {
   /** 最近一次印象更新时刻，空库为 0 */
   latest_updated_ms: number;
 }
+
+// ===== 记忆账本（/api/v1/memory/commitments|archive|settle） =====
+
+/** 承诺状态：open 未了结 / closed 已了结 / void 判误记 */
+export type CommitmentStatus = 'open' | 'closed' | 'void';
+
+/** 承诺账本一行（GET /api/v1/memory/commitments） */
+export interface CommitmentItem {
+  id: number;
+  /** 动作标题（1..60 字） */
+  what: string;
+  /** 她播出原句的逐字片段；运营者手建为空串 */
+  quote: string;
+  /** 对某位观众（内部观众 ID）；null = 不针对具体人 */
+  viewer_id: number | null;
+  /** 那位观众当前的昵称（读不到时为 null） */
+  viewer_name: string | null;
+  /** 挂在哪个游戏；null = 不挂 */
+  game: string | null;
+  status: CommitmentStatus;
+  /** 登记它的场次；运营者手建为 null */
+  created_session_id: number | null;
+  /** 了结那句的原话 */
+  close_quote: string | null;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+/** 承诺列表：筛选后的行与两个计数（页面顶部与筛选按钮用） */
+export interface CommitmentListResponse {
+  items: CommitmentItem[];
+  /** 当前筛选条件下的条数 */
+  total: number;
+  open_count: number;
+  void_count: number;
+}
+
+/** 手建承诺请求体 */
+export interface CommitmentCreatePayload {
+  /** 动作标题（1..60 字） */
+  what: string;
+  /** 她当时说的原话（可空） */
+  quote?: string;
+  viewer_id?: number | null;
+  game?: string | null;
+}
+
+/** 标了结请求体（了结依据原话可空） */
+export interface CommitmentClosePayload {
+  close_quote?: string;
+}
+
+/** 账本写操作统一回执（标了结 / 判误记 / 删除 / 删档案行 / 重新整理共用） */
+export interface LedgerMutationResponse {
+  success: boolean;
+  detail: string;
+}
+
+/** 场次档案的一行：标题加她说的原话 */
+export interface ArchiveLineItem {
+  id: number;
+  live_session_id: number;
+  /** 标题（游戏相关的写上游戏名） */
+  text: string;
+  /** 她播出原句的逐字片段 */
+  quote: string;
+  /** 原话所在的台词行 */
+  evidence_chat_id: number;
+}
+
+/** 某一场的档案行（按写入顺序） */
+export interface ArchiveListResponse {
+  live_session_id: number;
+  items: ArchiveLineItem[];
+}
+
+/** 整理时没能登记的条目类型：承诺 / 档案行 */
+export type UnregisteredKind = 'commitment' | 'archive';
+
+/** 整理时看懂了却没能登记的条目：留原话给运营者判断要不要手建 */
+export interface UnregisteredItem {
+  kind: UnregisteredKind;
+  what: string;
+  quote: string;
+  /** 没登记的原因（代码给的固定措辞） */
+  reason: string;
+}
+
+/** 一场的整理报告：失败原因，或成功时那些没能登记的条目 */
+export interface SettleReport {
+  /** 整理失败的原因；成功时为 null */
+  failure_reason: string | null;
+  unregistered: UnregisteredItem[];
+}
+
+/** 一场正式场的整理状态（GET /api/v1/memory/settle） */
+export interface SettleSessionItem {
+  live_session_id: number;
+  title: string | null;
+  started_at_ms: number;
+  ended_at_ms: number | null;
+  /** 整理完成时刻；null = 待整理 */
+  settled_at_ms: number | null;
+  /** 自动重试次数 */
+  settle_attempts: number;
+  settle_report: SettleReport | null;
+  /** 本场写了几行档案 */
+  archive_count: number;
+}
+
+/** 整理状态列表：待整理场数与最近的正式场整理状态 */
+export interface SettleListResponse {
+  /** 待整理（且自动重试没用完）的正式场数 */
+  pending_count: number;
+  /** 自动重试上限 */
+  max_attempts: number;
+  /** 最近的正式场，新的在前 */
+  items: SettleSessionItem[];
+}

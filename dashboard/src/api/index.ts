@@ -16,10 +16,16 @@ import type {
   AgentPromptResponse,
   AgentState,
   AgentCancelTaskResponse,
+  ArchiveListResponse,
   SystemStatusResponse,
   SystemHealthResponse,
   SystemHealthWallResponse,
   ChangelogResponse,
+  CommitmentClosePayload,
+  CommitmentCreatePayload,
+  CommitmentItem,
+  CommitmentListResponse,
+  CommitmentStatus,
   ConfigGetResponse,
   ConfigBatchSaveResponse,
   EventListResponse,
@@ -52,6 +58,7 @@ import type {
   LLMModelTestResponse,
   LLMRequestHistory,
   LLMRequestStatsBatch,
+  LedgerMutationResponse,
   ToolsView,
   ToolCategoriesView,
   ToolInvokeResult,
@@ -96,6 +103,7 @@ import type {
   SessionRundownExecutionResponse,
   SessionTimelineResponse,
   SessionReviewResponse,
+  SettleListResponse,
   ViewerListResponse,
   ViewerInsights,
   VisionMonitorsResponse,
@@ -539,6 +547,40 @@ export const memoryApi = {
     api.get<LongMemorySnapshotResponse>(`/memory/long-term/${kind}/history/${entryId}`),
   restoreLongMemory: (kind: SessionKind, entryId: string) =>
     api.post<LongMemoryResponse>(`/memory/long-term/${kind}/history/${entryId}/restore`),
+};
+
+// 记忆账本（承诺 / 场次档案 / 下播整理状态）
+//
+// 每场正式场收播后，主播 Agent 把这一场整理成承诺账本与场次档案；本组接口只做
+// 查看与人工纠错。承诺按状态（open / closed / void，空或 all 不过滤）、观众、游戏
+// 筛选，total / open_count / void_count 随列表返回；手建、标了结、判误记、删除各
+// 一个端点。档案按场次读取，可删单行。整理状态返回最近正式场（失败原因与未登记
+// 清单在这里给页面看），resettle 把重试次数清零让下一次调度重新整理该场。
+export const ledgerApi = {
+  listCommitments: (params?: {
+    status?: CommitmentStatus | 'all';
+    viewer_id?: number;
+    game?: string;
+    limit?: number;
+    offset?: number;
+  }) => api.get<CommitmentListResponse>('/memory/commitments', { params }),
+  createCommitment: (payload: CommitmentCreatePayload) =>
+    api.post<CommitmentItem>('/memory/commitments', payload),
+  // 标了结：已了结或判误记的承诺返回 409（行内提示，不影响其余列表）
+  closeCommitment: (id: number, payload: CommitmentClosePayload = {}) =>
+    api.post<LedgerMutationResponse>(`/memory/commitments/${id}/close`, payload),
+  // 判误记：留一行墓碑，之后整理再遇到同一件事不会重新登记
+  voidCommitment: (id: number) =>
+    api.post<LedgerMutationResponse>(`/memory/commitments/${id}/void`),
+  deleteCommitment: (id: number) => api.delete<LedgerMutationResponse>(`/memory/commitments/${id}`),
+  listArchive: (liveSessionId: number) =>
+    api.get<ArchiveListResponse>(`/memory/archive/${liveSessionId}`),
+  deleteArchiveLine: (lineId: number) =>
+    api.delete<LedgerMutationResponse>(`/memory/archive/lines/${lineId}`),
+  getSettleState: () => api.get<SettleListResponse>('/memory/settle'),
+  // 重新整理：重试次数清零并清掉上次失败原因，下一次调度会再挑到这一场
+  resettle: (liveSessionId: number) =>
+    api.post<LedgerMutationResponse>(`/memory/settle/${liveSessionId}/resettle`),
 };
 
 // 场次复盘（只读聚合 + 数据包导出）

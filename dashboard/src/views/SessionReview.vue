@@ -1,10 +1,10 @@
 <!--
   SessionReview - 场次复盘页（只读聚合）
 
-  布局：主播收播总结（session_recaps，只读）→ 信息 chips → 指标卡（超阈仅染色，
-  沉默/最慢时延卡带"跳转时刻"深链进控制台回看）→ 流程单执行（单场）→
-  观众构成 + 游戏明细（单场，明细逐条锚定跳转）→ 水位图 + LLM 用量表 →
-  深入入口（事件回看 / LLM 历史 · 本场预过滤）。全部数字来自后端结构化聚合
+  布局：主播收播总结（session_recaps，只读）→ 场次档案（archive_lines，可删单行）→
+  信息 chips → 指标卡（超阈仅染色，沉默/最慢时延卡带"跳转时刻"深链进控制台回看）→
+  流程单执行（单场）→ 观众构成 + 游戏明细（单场，明细逐条锚定跳转）→
+  水位图 + LLM 用量表 → 深入入口（事件回看 / LLM 历史 · 本场预过滤）。全部数字来自后端结构化聚合
   （GET /api/v1/review），本页不做告警判定；多选合并视图由后端窗口合并、
   水位图按 session_id 断线留空隙；总结/流程单/观众/游戏明细属单场语义，
   合并视图不产出。深挖取证不在本页——带数字开 AI 会话。
@@ -74,6 +74,22 @@
           <div class="recap-meta mono">{{ block.heading }}</div>
           <p class="recap-text">{{ block.text }}</p>
         </div>
+      </section>
+
+      <!-- 场次档案（本场整理出的标题 + 原话；删单行只影响下一场开播的"上一场"回想） -->
+      <section v-if="archiveSessionId !== null" class="panel archive-panel" aria-label="场次档案">
+        <div class="panel-title archive-panel-title">
+          <span>场次档案</span>
+          <span class="archive-hint">整理自本场台词，下一场开播回想“上一场”时用</span>
+        </div>
+        <p v-if="archiveError" class="archive-error">{{ archiveError }}</p>
+        <ArchiveLineList
+          :items="archiveLines"
+          deletable
+          :busy-line-id="archiveBusyLineId"
+          empty-text="这一场还没有档案行"
+          @delete="removeArchiveLine"
+        />
       </section>
 
       <!-- 复盘报告（logs/reviews 可视化页，由直播复盘流程离线生成；仅单场次且有报告时渲染） -->
@@ -329,8 +345,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import type { EChartsCoreOption } from 'echarts/core';
-import { liveSessionsApi, reviewApi } from '@/api';
+import { ledgerApi, liveSessionsApi, reviewApi } from '@/api';
 import type {
+  ArchiveLineItem,
   LiveSessionItem,
   ReviewSessionBrief,
   RundownSegmentRun,
@@ -338,6 +355,8 @@ import type {
   SessionRundownExecutionResponse,
 } from '@/types';
 import { getApiErrorMessage } from '@/utils/apiError';
+import { confirmAction } from '@/utils/confirmAction';
+import ArchiveLineList from '@/components/memory/ArchiveLineList.vue';
 import { compactNumber } from '@/utils/chartFormat';
 import { formatCost, formatDateTime, formatTimeHMS } from '@/utils/format';
 import {
@@ -361,6 +380,11 @@ const errorMessage = ref('');
 
 /** 流程单执行回看（单场选择时加载；未装配/无事实行时为 null，面板整体隐藏） */
 const rundown = ref<SessionRundownExecutionResponse | null>(null);
+
+/** 本场档案行（下播整理产出；单场选择时加载，删除后原地重拉） */
+const archiveLines = ref<ArchiveLineItem[]>([]);
+const archiveError = ref('');
+const archiveBusyLineId = ref<number | null>(null);
 
 const chartRef = ref<HTMLElement | null>(null);
 const palette = useChartPalette();
@@ -395,6 +419,7 @@ async function loadReview(): Promise<void> {
     loading.value = false;
   }
   await loadRundown();
+  await loadArchive();
 }
 
 /** 流程单执行仅在单场选择时加载；接口不可用/无事实行按无数据降级（面板隐藏） */
@@ -412,10 +437,51 @@ async function loadRundown(): Promise<void> {
   }
 }
 
+/** 本场档案行：单场选择时拉取；失败只让档案面板显示错误，不影响复盘聚合 */
+async function loadArchive(): Promise<void> {
+  const sessionId = archiveSessionId.value;
+  archiveError.value = '';
+  if (sessionId === null) {
+    archiveLines.value = [];
+    return;
+  }
+  try {
+    archiveLines.value = (await ledgerApi.listArchive(sessionId)).data.items;
+  } catch (error) {
+    archiveLines.value = [];
+    archiveError.value = getApiErrorMessage(error, '场次档案加载失败');
+  }
+}
+
+/** 删一行档案：二次确认后调接口，成功原地重拉本场档案（不整体刷新复盘） */
+async function removeArchiveLine(line: ArchiveLineItem): Promise<void> {
+  if (
+    !(await confirmAction(
+      `删除档案行「${line.text}」？删掉后这一行不会再出现在下一场开播的回想里，也不影响承诺账本。`,
+      '删除档案行',
+    ))
+  ) {
+    return;
+  }
+  archiveBusyLineId.value = line.id;
+  archiveError.value = '';
+  try {
+    await ledgerApi.deleteArchiveLine(line.id);
+    await loadArchive();
+  } catch (error) {
+    archiveError.value = getApiErrorMessage(error, '删除档案行失败');
+  } finally {
+    archiveBusyLineId.value = null;
+  }
+}
+
 /** 单场选择的 brief（多选合并视图为 null——单场语义面板以此为开关） */
 const singleBrief = computed<ReviewSessionBrief | null>(() =>
   review.value && review.value.sessions.length === 1 ? review.value.sessions[0] : null,
 );
+
+/** 场次档案挂在单场语义上：合并视图不拉档案（没有对应的单场） */
+const archiveSessionId = computed<number | null>(() => singleBrief.value?.live_session_id ?? null);
 
 /**
  * 复盘报告 iframe 地址（静态路由 /api/v1/review/files/ 下，相对引用的
@@ -789,6 +855,26 @@ function exportPackage(): void {
   font-size: 14px;
   font-weight: 600;
   margin-bottom: 12px;
+}
+
+/* 场次档案面板：标题与口径说明同行，错误就地显示 */
+.archive-panel-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.archive-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.archive-error {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--color-danger);
 }
 
 /* 复盘报告（iframe 沙箱嵌入 + 新标签页兜底） */

@@ -5,7 +5,7 @@
       <div class="header-left">
         <h1 class="page-title">主播记忆</h1>
         <p class="page-subtitle">
-          长期记忆与对常客的印象 · 查看 / 纠正 / 清理
+          长期记忆、承诺账本与对常客的印象 · 查看 / 纠正 / 清理
           <template v-if="stats && stats.profile_count > 0">
             （常客 {{ stats.profile_count }} 位）</template
           >
@@ -18,6 +18,14 @@
 
     <!-- 长期记忆（MEMORY.md）：正式 / 彩排各一份，整份编辑                        -->
     <LongMemoryPanel />
+
+    <!-- 承诺账本 / 下播整理 / 场次档案：下播整理产出的可纠错视图                  -->
+    <CommitmentPanel ref="commitmentPanel" />
+    <SettlePanel ref="settlePanel" @view-archive="openArchive" />
+    <ArchivePanel ref="archivePanel" :focus-session-id="archiveSessionId" />
+
+    <!-- 常客画像：搜索 + 分页                                                    -->
+    <h2 class="section-title">常客画像</h2>
 
     <!-- 工具条：搜索（防抖）                                                     -->
     <div class="toolbar">
@@ -125,14 +133,15 @@
 
 <script setup lang="ts">
 /**
- * 主播记忆管理 —— 长期记忆（MEMORY.md）与 viewer_profiles 的查看 / 纠正 / 清理入口
+ * 主播记忆管理 —— 长期记忆（MEMORY.md）、承诺账本与 viewer_profiles 的查看 / 纠正 / 清理入口
  *
- * 数据接口：/api/v1/memory/*（画像列表 / 纠正 / 删除 / 统计）。印象由主播在每场
- * 收播时为本场活跃的常客整理，这里只提供人工查看与纠正。
+ * 数据接口：/api/v1/memory/*（画像列表 / 纠正 / 删除 / 统计 / 承诺 / 档案 / 整理状态）。
+ * 长期记忆与常客印象由主播在每场收播时整理；承诺账本与场次档案同样在下播后自动整理，
+ * 这里只提供人工查看与纠错。页面头的“刷新”会连同账本三个面板一起重拉。
  * 搜索 250ms 防抖走服务端 LIKE（印象文本 / 观众当前昵称）。画像按内部观众 ID 读写，
  * 观众列可点进档案页。
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { Search } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { memoryApi } from '@/api';
@@ -140,6 +149,9 @@ import type { ViewerProfileItem, MemoryStatsResponse } from '@/types';
 import { formatDateTimeCn as formatTime, relativeAge } from '@/utils/format';
 import { confirmAction } from '@/utils/confirmAction';
 import LongMemoryPanel from '@/components/viewers/LongMemoryPanel.vue';
+import CommitmentPanel from '@/components/memory/CommitmentPanel.vue';
+import SettlePanel from '@/components/memory/SettlePanel.vue';
+import ArchivePanel from '@/components/memory/ArchivePanel.vue';
 
 const pageSize = 20;
 
@@ -150,6 +162,12 @@ const items = ref<ViewerProfileItem[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const stats = ref<MemoryStatsResponse | null>(null);
+
+/** 账本三个面板：页面头"刷新"一并刷新；整理状态的"查看该场档案"跳到档案面板 */
+const commitmentPanel = ref<InstanceType<typeof CommitmentPanel> | null>(null);
+const settlePanel = ref<InstanceType<typeof SettlePanel> | null>(null);
+const archivePanel = ref<InstanceType<typeof ArchivePanel> | null>(null);
+const archiveSessionId = ref<number | null>(null);
 
 const shownRange = computed(() => {
   if (total.value === 0) return '0';
@@ -189,9 +207,28 @@ async function loadStats(): Promise<void> {
   }
 }
 
-function reload(): void {
+/** 画像与统计（印象纠正/删除后只需刷这一块） */
+function reloadProfiles(): void {
   void loadProfiles();
   void loadStats();
+}
+
+/** 页面头"刷新"：画像与账本三个面板一起重拉（账本面板各自带 loading 态） */
+function reload(): void {
+  reloadProfiles();
+  void commitmentPanel.value?.reload();
+  void settlePanel.value?.reload();
+  void archivePanel.value?.reload();
+}
+
+/** 整理状态面板的"查看该场档案"：切到那一场并滚到档案面板 */
+function openArchive(liveSessionId: number): void {
+  archiveSessionId.value = liveSessionId;
+  void nextTick(() => {
+    document
+      .getElementById('ledger-archive')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 }
 
 function onPageChange(next: number): void {
@@ -235,7 +272,7 @@ async function saveProfile(): Promise<void> {
     await memoryApi.updateProfile(target.viewer_id, { profile_text: text });
     ElMessage.success('已纠正印象');
     editVisible.value = false;
-    reload();
+    reloadProfiles();
   } catch {
     ElMessage.error('保存失败');
   } finally {
@@ -254,14 +291,15 @@ async function removeProfile(profile: ViewerProfileItem): Promise<void> {
   try {
     await memoryApi.deleteProfile(profile.viewer_id);
     ElMessage.success('已删除');
-    reload();
+    reloadProfiles();
   } catch {
     ElMessage.error('删除失败');
   }
 }
 
+// 账本三个面板各自在挂载时拉自己的数据，这里只拉画像与统计，避免重复请求
 onMounted(() => {
-  reload();
+  reloadProfiles();
 });
 </script>
 
@@ -290,6 +328,13 @@ onMounted(() => {
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.section-title {
+  margin: var(--spacing-sm) 0 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-primary);
 }
 
 .header-actions {
