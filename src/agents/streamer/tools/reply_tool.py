@@ -15,6 +15,8 @@
 - 发言闸门：``is_novel=false`` 立即打回；生成后的成品台词对最近发言做
   bigram 包含率检查（topic_gate 纯函数），超阈值同样打回——每个决策窗
   最多打回 1 次后引导沉默（计数在检测到新决策窗 round_id 时清零）
+- 她已说过的台词（发言闸语料）先交表达侧，聊天记录里看不到的那几句单列成"更早一点你说过的话"，
+  生成后再拿同一份查重
 - 失败兜底：ToolExecutionResult(success=False, error_message=...)
 """
 
@@ -23,7 +25,6 @@ from __future__ import annotations
 import inspect
 from typing import Any, ClassVar, Dict, Iterable, List, Optional
 
-from src.agents.streamer.canonical import turn_to_message
 from src.agents.streamer.topic_gate import SpeechGate
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.planner import PlannerVerdictPayload
@@ -33,7 +34,7 @@ from src.modules.tools.models import ToolExecutionResult
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.types.emotion_vocab import Emotion
 
-from ..plan import DecisionPlan, ReplyRoundAttachment
+from ..plan import DecisionPlan, ReplyRoundAttachment, assistant_speech_lines
 from ..replyer import Replyer
 
 __all__ = [
@@ -262,24 +263,6 @@ class ReplyToolProvider(BaseToolProvider):
             self._logger.warning(f"reply_tool: rundown_text_provider 调用失败: {exc}")
             return None
 
-    async def _recent_speeches(self) -> List[str]:
-        """兜底语料：裸调用（无 attachment）时现读历史的 assistant 台词行。
-
-        Planner 路径的语料由 attachment 随单携带（窗起点算好，与本窗批材料
-        同源）；历史读取失败按空语料处理（无从比对即放行，不反噬表达链路）。
-        窗口截取在 SpeechGate 内完成。
-        """
-        history = await self._resolve_history()
-        if not history:
-            return []
-        lines: List[str] = []
-        for turn in history:
-            message = turn_to_message(turn)
-            content = str(message.get("content") or "").strip()
-            if message.get("role") == "assistant" and content:
-                lines.append(content)
-        return lines
-
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         """reply 工具的 invoke（ToolProvider 协议）。
 
@@ -383,6 +366,14 @@ class ReplyToolProvider(BaseToolProvider):
                 error_message=f"reply_tool 依赖解析失败: {type(exc).__name__}: {exc}",
             )
 
+        # 她已经说过的台词（发言闸语料，旧→新）：Planner 路径在窗起点算好随单携带；
+        # 裸调用（无 attachment 语料）时从刚读到的历史里现取，读失败（None）按空语料处理。
+        # 同一份语料先交表达侧：聊天记录里看不到的那几句单列成"更早一点你说过的话"让她别再说一遍；
+        # 生成后再拿同一份语料查重
+        speech_history = materials.speech_history
+        if speech_history is None:
+            speech_history = assistant_speech_lines(history)
+
         # 思考流回调随 attachment 一次性传入（调用即弃，无跨轮残留）
         try:
             result = await self._replyer.generate(
@@ -393,6 +384,7 @@ class ReplyToolProvider(BaseToolProvider):
                 on_delta=materials.thinking_callback,
                 game_chat=list(materials.game_chat),
                 state_facts=materials.state_facts,
+                recent_speeches=speech_history,
             )
         except Exception as exc:
             self._logger.exception(f"reply_tool: Replyer.generate 抛出未捕获异常: {exc}")
@@ -415,10 +407,7 @@ class ReplyToolProvider(BaseToolProvider):
         if materials.gate_exempt:
             self._logger.info("发言闸豁免：is_novel=true 结果=pass 重合度=未检查")
         else:
-            corpus = materials.speech_history
-            if corpus is None:
-                corpus = await self._recent_speeches()
-            verdict = self._gate.verdict(speech, corpus)
+            verdict = self._gate.verdict(speech, speech_history)
             if not verdict.passed:
                 retry_exhausted = self._gate_bounces >= 1
                 self._gate_bounces += 1

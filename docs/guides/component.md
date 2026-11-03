@@ -880,8 +880,8 @@ class MyToolProvider(ToolProvider):
 8. LLM 调 reply(意图参数 {topic_summary, reply_guidance, target})
          ↓ Planner 循环内直连 _reply_provider.invoke（局部工具，不进 ToolRegistry）
 9. ReplyToolProvider.invoke(invocation)
-         ↓ 注入依赖：history / rundown / game_chat / state_facts（人设经 system 模板构造期渲染）
-10. Replyer.generate(plan, batch, history=…, rundown=…, game_chat=…, state_facts=…)
+         ↓ 注入依赖：history / rundown / game_chat / state_facts / recent_speeches（人设经 system 模板构造期渲染）
+10. Replyer.generate(plan, batch, history=…, rundown=…, game_chat=…, state_facts=…, recent_speeches=…)
          ↓ LLM（llm profile，高质量模型）+ 人设 prompt + 敏感词净化；LLM 只见 reply
 11. ToolExecutionResult{success=True, structured_content={speech, emotion, metadata}}
          ↓

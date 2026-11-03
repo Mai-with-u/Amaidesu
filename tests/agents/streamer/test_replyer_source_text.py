@@ -1,9 +1,10 @@
-"""表达侧看到要回应的原文——target 展开成原话、游戏里有人搭话时原话随说话一起交给表达侧。"""
+"""表达侧看到要回应的原文——target 按整场历史展开成原话、游戏里有人搭话时原话随说话一起交给表达侧，
+她刚说过的话随 reply 一起交给表达侧。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,7 +14,7 @@ from src.agents.streamer.planner import PlannerConfig, RoundOutcome
 from src.agents.streamer.decision_executor import DecisionRoundExecutor
 from src.agents.streamer.session_scope import WindowMaterials
 from src.agents.streamer.timeline import GameEventBatch
-from src.agents.streamer.plan import DecisionPlan
+from src.agents.streamer.plan import DecisionPlan, ReplyRoundAttachment
 from src.agents.streamer.planner import Planner, PlannerEnv
 from src.agents.streamer.replyer import Replyer
 from src.agents.streamer.room_state import RoomState
@@ -22,6 +23,7 @@ from src.agents.streamer.tools.reply_tool import ReplyToolProvider
 from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
+from src.modules.tools.models import ToolInvocation
 
 
 @dataclass(frozen=True)
@@ -84,22 +86,38 @@ def _turn_kwargs(prompt: MagicMock) -> Dict[str, Any]:
 @pytest.mark.parametrize(
     ("target", "expected_line"),
     [
-        # 一批有好几条时直接给出 target 那条原话，表达侧不用自己对号
-        ("[id:m2]", "target: [id:m2]\ntarget 原文: 观众B: 锯子修好了吗 [id:m2]\n"),
-        # 找不到原话时不出这一行，不拿别人的话凑数
-        ("观众C", None),
+        # 一批有好几条时直接给出 target 那条原话，表达侧不用自己对号；消息 ID 不再给她看
+        ("[id:m2]", "target 原文: 观众B: 锯子修好了吗\n"),
+        # 找不到原话时不出原文行，不拿别人的话凑数；Planner 填的片段照旧给出
+        ("观众C", "target: 观众C\n"),
+        # 填的是消息 ID 写法却查不到（ID 写错，或那条已折进前情提要）：不把 ID 给她看，按面向全体观众说
+        ("[id:zzz]", "target: （无特定目标，面向全体观众）\n"),
+        ("id:zzz", "target: （无特定目标，面向全体观众）\n"),
+        # 没填：面向全体观众
+        ("", "target: （无特定目标，面向全体观众）\n"),
     ],
+    ids=["found-by-id", "nickname-kept", "unknown-bracket-id", "unknown-bare-prefix-id", "no-target"],
 )
-async def test_plan_carries_target_original_text(target: str, expected_line) -> None:
+async def test_plan_carries_target_original_text(target: str, expected_line: str) -> None:
     replyer, prompt = _replyer()
     batch = [_msg("今天玩什么", "m1", "观众A"), _msg("锯子修好了吗", "m2", "观众B")]
     await replyer.generate(DecisionPlan(should_reply=True, target=target, topic_summary="锯子"), batch)
 
     plan_text = _turn_kwargs(prompt)["plan"]
-    if expected_line is None:
-        assert "target 原文" not in plan_text
-    else:
-        assert expected_line in plan_text
+    assert plan_text.startswith(expected_line) and "[id:" not in plan_text
+    assert plan_text.count("target") == 1
+
+
+async def test_target_found_in_the_whole_session_not_just_the_recent_window() -> None:
+    """要回应的那条弹幕已滑出最近几条：原话按整份历史查回来，截取不影响找目标。"""
+    replyer, prompt = _replyer()
+    history = [FakeTurn(role="user", content="开场那个梦后来呢", sender_name="观众C", message_id="h0")]
+    history += [FakeTurn(role="user", content=f"刷屏{i}", sender_name="路人", message_id=f"h{i}") for i in range(1, 40)]
+    await replyer.generate(DecisionPlan(should_reply=True, target="h0", topic_summary="接着讲梦"), [], history=history)
+
+    turn = _turn_kwargs(prompt)
+    assert turn["plan"].startswith("target 原文: 观众C: 开场那个梦后来呢\n")
+    assert "开场那个梦后来呢" not in turn["dialogue_prompt"]  # 聊天记录本身仍只有最近几条
 
 
 async def test_game_chat_rendered_or_placeholder() -> None:
@@ -166,6 +184,51 @@ async def test_planner_hands_fresh_game_chat_to_reply_tool() -> None:
     assert seen == [["[20:01 minecraft] 玩家 Steve：在吗"]]
     # 游戏聊天原话随调用单一次性传入：Provider 上不再有跨调用槽位
     assert not hasattr(provider, "_round_game_chat")
+
+
+class _RecordingReplyer:
+    """表达层桩：记下 reply 工具交来的已说台词，固定回一句新台词。"""
+
+    def __init__(self) -> None:
+        self.recent_speeches: List[Any] = []
+
+    async def generate(self, **kwargs: Any) -> Dict[str, Any]:
+        self.recent_speeches.append(kwargs["recent_speeches"])
+        return {"speech": "这句是新的", "llm_request_id": None}
+
+
+@pytest.mark.parametrize(
+    ("attachment", "history", "expected"),
+    [
+        # Planner 路径：窗起点算好的发言闸语料随单携带，原样交给表达侧
+        (ReplyRoundAttachment(speech_history=["刚说的一句"]), None, ["刚说的一句"]),
+        # 裸调用：从刚读到的历史里现取她说过的话（与发言闸兜底同源）
+        (
+            None,
+            [FakeTurn(role="user", content="在吗", sender_name="观众A"), FakeTurn(role="assistant", content="在呢")],
+            ["在呢"],
+        ),
+    ],
+    ids=["planner-attachment", "bare-call"],
+)
+async def test_reply_tool_hands_recent_speeches_to_the_replyer(
+    attachment: Optional[ReplyRoundAttachment], history: Optional[List[Any]], expected: List[str]
+) -> None:
+    """她刚说过的话和发言闸查重用同一份语料：先交表达侧列出来，生成后再拿来查重。"""
+    replyer = _RecordingReplyer()
+    provider = ReplyToolProvider(
+        replyer=cast(Replyer, replyer), history_provider=(lambda: history) if history is not None else None
+    )
+    result = await provider.invoke(
+        ToolInvocation(
+            tool_name="streamer_reply",
+            arguments={"topic_summary": "接话", "is_novel": True, "emotion": "neutral", "intensity": 0.5},
+            source="planner-react",
+            attachment=attachment,
+        )
+    )
+    assert result.success is True
+    assert replyer.recent_speeches == [expected]
 
 
 async def test_executor_splits_game_chat_view() -> None:

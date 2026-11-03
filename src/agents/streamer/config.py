@@ -11,7 +11,7 @@
         planner_recent_intents_max,
         planner_recent_relays_max,
     )
-    speech_gate_window, speech_gate_ratio, speech_max_chars
+    speech_gate_window, speech_gate_ratio, speech_max_chars, replyer_history_items
 
     [agents.streamer.persona]
     bot_name, personality, style_constraints, behavior_style, voice_examples, boundaries
@@ -623,6 +623,17 @@ class StreamerConfig(BaseConfig):
         default=40,
         ge=0,
         description="一句台词最多多少字；超出时先让模型重说成一句，仍超就截到预算内最后一个完整句子（0 = 不限制）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    # 表达侧只看最近几条：Replyer 背着整场历史开口，后半场历史挤掉人设、说话像换了个人；
+    # 改为最近 N 条原文 + 她刚说过的几句 + 交接稿。设 0 是回退开关：带回整份历史，
+    # 时间线预算也改回按 Planner 与 Replyer 两个模型中较小的窗口算
+    replyer_history_items: int = Field(
+        title="表达侧带几条最近记录",
+        default=14,
+        ge=0,
+        description="Replyer 每次看到的最近记录条数（弹幕、她说过的话、游戏条目），另附她刚说过的几句与交接稿；"
+        "0 = 带整份对话历史，时间线预算也改回按决策、表达两个模型中较小的窗口算",
         json_schema_extra={"x-ui-advanced": True},
     )
 

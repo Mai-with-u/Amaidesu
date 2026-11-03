@@ -154,12 +154,16 @@ def test_planner_maps_chapter_as_plain_user_message() -> None:
 
 
 async def test_replyer_renders_chapter_line_verbatim() -> None:
-    """Replyer 的聊天记录里，前情提要与游戏记录原样成行，不被拆成"某人说"。"""
+    """回退开关（history_items=0，整份历史原样交给 Replyer）下，前情提要与游戏记录原样成行，不被拆成"某人说"。
+
+    测的是回退路径：Replyer 默认（history_items>0）只带最近的原文、不带前情提要，
+    那条默认路径由 test_replyer.py 覆盖；回退开关一开，章节层条目照旧整行进聊天记录。
+    """
     prompt = MagicMock()
     prompt.render = MagicMock(return_value="PROMPT")
     llm = MagicMock()
     llm.generate = AsyncMock(return_value=Response(success=True, content="好"))
-    replyer = Replyer(config={}, llm_service=llm, prompt_service=prompt)
+    replyer = Replyer(config={"history_items": 0}, llm_service=llm, prompt_service=prompt)
     chapter = TimelineTurn(role="user", content="[前情提要·第 1 章]\n主播: 答应唱歌", message_type=CHAPTER_MESSAGE_TYPE)
     note = note_turn("游戏·minecraft·report", "交付: 木头砍好了", 0)
     assert note.message_type == GAME_MESSAGE_TYPE and note.content == "[游戏·minecraft·report] 交付: 木头砍好了"

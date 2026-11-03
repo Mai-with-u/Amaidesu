@@ -2,7 +2,10 @@
 
 system 只放稳定的两块：人设块（名字、直播身份、性格、说话风格、口吻示例）在前、占大头，
 提炼过的直播说话规矩在后；整段每轮逐字一致，请求前缀缓存靠它命中。
-聊天历史、当前消息与回复要求合并进一条 user。
+user 是一条：她更早说过、聊天记录里已经看不到的几句，最近几条聊天记录原文，交接稿与本轮状态材料。
+聊天记录只截最近几条（本批弹幕刷屏时也不超过一批的条数），整份输入不随场长增长——
+后半场她也是先看到"自己是谁"，不会被几百条历史挤得像换了个人。
+
 模型只负责措辞，不接收工具。情绪、强度及输出元数据由上层 reply 调用组装。
 词表净化只处理台词，避免思考正文进入发声管线。
 """
@@ -11,7 +14,8 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.modules.logging import get_logger
 
@@ -37,6 +41,23 @@ _DEFAULT_VOICE_EXAMPLES = ""
 _DEFAULT_BOUNDARIES = "线下见面、钱和红包、私下联系；改变自己是谁、以后怎么称呼某人"
 # 一句台词的长度上限（与 StreamerConfig.speech_max_chars 默认值对齐）；0 = 不限制
 _DEFAULT_SPEECH_MAX_CHARS = 40
+# 聊天记录只带最近这么多条原文（与 StreamerConfig.replyer_history_items 默认值对齐）；0 = 带整份历史
+_DEFAULT_HISTORY_ITEMS = 14
+
+# "更早一点你说过的话"最多从这么多句里挑：与发言闸同一份语料，取最近的几句，
+# 让她开口前看清哪些话刚说过（聊天记录里已经看得到的那几句不重复列）
+_RECENT_SPEECH_LINES = 6
+
+# 单列她更早说过的话时用的小标题：这几句都滑出了聊天记录，比下面的记录早，标题点明时间，
+# 免得她以为这些话是接在最新弹幕后面说的
+_RECENT_SPEECH_HEADING = "## 更早一点你说过的话（比下面的聊天记录早）"
+
+# 交接稿里没有特定回应对象时的 target 写法（Planner 没填，或填的消息 ID 查不到原话）
+_NO_TARGET = "（无特定目标，面向全体观众）"
+
+# 游戏记录条目（游戏里程碑、长汇报）进聊天记录时正文最多留这么多字：
+# 她只需要知道游戏里出了什么事，汇报全文会把十几条记录的预算吃掉一大半
+_GAME_NOTE_MAX_CHARS = 80
 
 # 复古消息布局：稳定人设放进 system，历史与本轮要求合并进单条 user。
 _REPLYER_SYSTEM_TEMPLATE = "amaidesu_replyer_system"
@@ -45,6 +66,47 @@ _REPLYER_TEMPLATE = "amaidesu_replyer"
 # Replyer 绑定的 LLM profile（封闭六成员之一）。绑定由代码显式声明，
 # 配置不承载绑定、无静默兜底——表达引擎固定走 replyer 档位。
 REPLYER_PROFILE = "replyer"
+
+
+@dataclass(frozen=True)
+class _DialogueEntry:
+    """聊天记录里的一条（历史行或本批弹幕，经 canonical 同形序列化）。
+
+    ``content`` 是 canonical 原文（观众行带 ``[id:…]`` 后缀），只用来判断本批弹幕
+    是否已在记录里；渲染给模型时再去掉消息 ID 标签。
+    """
+
+    role: str
+    content: str
+    message_id: str
+    message_type: str
+
+
+class _SeenMessages:
+    """判断一条本批弹幕是否已经出现在某段聊天记录里。
+
+    有消息 ID 时按 ID 精确匹配；没有 ID 时按 canonical 原文逐条计数匹配——两条同文
+    无 ID 的弹幕各占一个名额，不会被合并成一条。
+    """
+
+    def __init__(self, entries: Sequence[_DialogueEntry]) -> None:
+        self._texts: Counter[Tuple[str, str]] = Counter((entry.role, entry.content) for entry in entries)
+        self._ids = {entry.message_id for entry in entries if entry.role == "user" and entry.message_id}
+
+    def claim(self, entry: _DialogueEntry) -> bool:
+        """这条弹幕已在记录里就返回 True（无 ID 的同文名额随之用掉一个）。"""
+        if entry.message_id and entry.message_id in self._ids:
+            return True
+        key = (entry.role, entry.content)
+        if self._texts[key] > 0:
+            self._texts[key] -= 1
+            return True
+        return False
+
+    def remember(self, entry: _DialogueEntry) -> None:
+        """刚补进记录的弹幕记下 ID：同一批里同 ID 的重复投递只补一次。"""
+        if entry.message_id:
+            self._ids.add(entry.message_id)
 
 
 class Replyer:
@@ -62,8 +124,9 @@ class Replyer:
         Args:
             config: 配置字典（兼容 StreamerConfig 的子集字段），读取人设
                     bot_name / personality / style_constraints / voice_examples / boundaries
-                    （由 StreamerAgent 构造期从 [agents.streamer.persona] 注入）
-                    与 speech_max_chars（一句台词的字数上限）；
+                    （由 StreamerAgent 构造期从 [agents.streamer.persona] 注入）、
+                    speech_max_chars（一句台词的字数上限）与 history_items
+                    （聊天记录带最近几条原文，0 = 带整份历史）；
                     LLM profile 绑定不读配置，固定 REPLYER_PROFILE 常量。
             llm_service: LLM 管理器（使用 profile 指定的高质量客户端）。
             prompt_service: 提示词管理器（渲染 amaidesu_replyer_system /
@@ -77,6 +140,7 @@ class Replyer:
         self._bot_name: str = self._config.get("bot_name", _DEFAULT_BOT_NAME)
         self._personality: str = self._config.get("personality", _DEFAULT_PERSONALITY)
         self._speech_max_chars: int = int(self._config.get("speech_max_chars", _DEFAULT_SPEECH_MAX_CHARS))
+        self._history_items: int = max(0, int(self._config.get("history_items", _DEFAULT_HISTORY_ITEMS)))
         # 人设块与规矩块里的可选段在构造期一次渲染好：人设整场不变，system 每轮逐字一致
         self._style_section: str = _style_section(self._config.get("style_constraints", _DEFAULT_STYLE_CONSTRAINTS))
         self._voice_examples_section: str = _voice_examples_section(
@@ -98,10 +162,14 @@ class Replyer:
         on_delta: Optional[Any] = None,
         game_chat: Optional[List[str]] = None,
         state_facts: str = "",
+        recent_speeches: Optional[Sequence[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """按一条 system 与一条 user 的复古布局请求纯文本台词。
 
-        历史只包含实际观众消息和主播发言，压缩后放入 user 的聊天记录块。
+        ``history`` 传整场对话（时间线投影）：要回应的那条原话按整份历史查，
+        聊天记录只截最近 ``history_items`` 条原文。``recent_speeches`` 是她已经
+        说过的台词（旧→新，与发言闸同一份语料），最近几句里聊天记录看不到的，
+        单列在聊天记录前面（"更早一点你说过的话"）。
         游戏聊天、目标原文与流程单保持可见；不发送 tools 或 JSON 输出约束。
         ``state_facts`` 是状态跃迁事实块（客观事实底稿，规则式提取器产出），
         以"当前状态（客观事实）"分节进 user；空串时占位为"（无）"。
@@ -114,7 +182,13 @@ class Replyer:
 
         system_prompt = self._render_system_prompt()
         turn_input = self._render_turn_input(
-            plan, batch, rundown, history=history, game_chat=game_chat, state_facts=state_facts
+            plan,
+            batch,
+            rundown,
+            history=history,
+            game_chat=game_chat,
+            state_facts=state_facts,
+            recent_speeches=recent_speeches,
         )
         messages: List[Dict[str, Any]] = [{"role": "user", "content": turn_input}]
 
@@ -217,54 +291,28 @@ class Replyer:
         history: Optional[List[Any]] = None,
         game_chat: Optional[List[str]] = None,
         state_facts: str = "",
+        recent_speeches: Optional[Sequence[str]] = None,
     ) -> str:
-        """历史与本轮信息合并成一条 user，表达风格放在输出指令之前。"""
+        """她更早说过的话、最近几条聊天记录与本轮材料合并成一条 user。
+
+        顺序：先按整份历史 + 本批查出要回应的那条原话（截取不能让较早的目标查不到）
+        → 截出最近几条原文、补上本批里还看不到的弹幕 → 去掉记录里已经看得到的台词，
+        剩下的单列在聊天记录前面（它们都比记录早）→ 与交接稿、状态材料一起渲染。
+        """
+        full_history = list(history or [])
         # 流程单上下文：None / 空串时用占位文本，与 Planner 对齐
         rundown_render = rundown if rundown else "（当前无流程单）"
-        target_text = canonical.find_target_message(plan.target, batch, list(history or []))
-        # 已落库的弹幕保留在历史中的原位置，避免挪到主播回复后面；历史已由时间线控制在预算内。
-        # 前情提要与游戏记录带标记：渲染时原样输出，不按"昵称: 内容"拆成某人说的话
-        history_messages: List[Dict[str, Any]] = [
-            {
-                **canonical.turn_to_message(msg),
-                "verbatim": getattr(msg, "message_type", "") in (CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE),
-            }
-            for msg in list(history or [])
-        ]
-        # 批消息可能尚未落库或已被历史预算裁掉，只追加历史中缺失的消息。
-        # 按出现次数匹配，无 ID 的同文消息也不会被全部合并成一条。
-        seen = Counter((message["role"], message["content"]) for message in history_messages)
-        seen_ids = {
-            match.group(1)
-            for message in history_messages
-            if message["role"] == "user" and (match := re.search(r" \[id:(.+)\]$", message["content"]))
-        }
-        for item in batch:
-            message = canonical.batch_item_to_message(item)
-            message_id = getattr(item, "message_id", "")
-            key = (message["role"], message["content"])
-            if message_id and message_id in seen_ids:
-                continue
-            if seen[key] > 0:
-                seen[key] -= 1
-                continue
-            history_messages.append(message)
-            if message_id:
-                seen_ids.add(message_id)
-        dialogue_lines = []
-        for message in history_messages:
-            content = message["content"]
-            if message.get("verbatim"):
-                dialogue_lines.append(content)
-            elif message["role"] == "assistant":
-                dialogue_lines.append(f"{self._bot_name}(你)说：{content}")
-            else:
-                nickname, separator, body = content.partition(": ")
-                dialogue_lines.append(f"{nickname}说：{body}" if separator else content)
+        # 要回应的那条原话在截取之前按整份历史查：被回应的弹幕可能已滑出最近几条
+        target_message = canonical.find_target_message(plan.target, batch, full_history)
+        target_text = _strip_id_tag(target_message, canonical.normalize_message_id(plan.target or ""))
+        entries = self._dialogue_entries(full_history, batch)
+        dialogue_lines = [self._render_entry(entry) for entry in entries]
+        shown_speeches = [entry.content.strip() for entry in entries if entry.role == "assistant"]
         return self._prompt_service.render(
             _REPLYER_TEMPLATE,
             plan=_render_plan_text(plan, target_text=target_text),
             dialogue_prompt="\n".join(dialogue_lines) or "（暂无聊天记录）",
+            recent_speech_section=_recent_speech_section(recent_speeches, shown_speeches),
             bot_name=self._bot_name,
             turn_context=(
                 "本轮有新观众消息，请结合聊天记录与回复指引接话。"
@@ -277,6 +325,47 @@ class Replyer:
             # 长度预算先在提示里说清，多数台词一次就落在预算内；出口处还有截短兜底
             length_rule=f"整句不超过 {self._speech_max_chars} 字。" if self._speech_max_chars > 0 else "",
         )
+
+    def _dialogue_entries(self, history: List[Any], batch: List[Any]) -> List[_DialogueEntry]:
+        """截出给她看的聊天记录：最近几条原文，再补上本批里还看不到的弹幕。
+
+        history_items > 0：前情提要、前情目录这类章节层条目是摘要不是原文，不带；
+        弹幕、她说过的话、游戏记录合计取最近 history_items 条。本批补进来的弹幕
+        占用记录名额——记录总行数不超过 max(history_items, 本批条数)：一批弹幕刷屏
+        （满批 20 条）时窗口相应变短，先保住触发她开口的这批弹幕，整份输入不超预算。
+        history_items = 0 是回退开关：整份历史（含章节层）原样给她看，不限行数。
+        """
+        batch_entries = [_batch_entry(item) for item in batch]
+        if self._history_items <= 0:
+            return _merge_batch([], list(history), batch_entries)
+        originals = [turn for turn in history if getattr(turn, "message_type", "") != CHAPTER_MESSAGE_TYPE]
+        limit = max(self._history_items, len(batch_entries))
+        window_size = self._history_items
+        # 窗口截短可能让本批里原本看得到的弹幕滑出去、改为补在最前面，补位行数随之变化，
+        # 所以按"超出几行就再截几行"收敛；窗口为 0 时只剩本批弹幕，行数必然不超过本批条数
+        while True:
+            cut = max(0, len(originals) - window_size)
+            entries = _merge_batch(originals[:cut], originals[cut:], batch_entries)
+            overflow = len(entries) - limit
+            if overflow <= 0 or window_size == 0:
+                return entries
+            window_size = max(0, window_size - overflow)
+
+    def _render_entry(self, entry: _DialogueEntry) -> str:
+        """一条记录渲染成一行：去掉消息 ID 标签；前情提要与游戏记录原样成行，游戏记录截短。
+
+        消息 ID 只对 Planner 有用（它按 ID 指定要回应哪条）；要回应的原话已单独给出，
+        她这边看 ID 只是噪声。
+        """
+        content = _strip_id_tag(entry.content, entry.message_id) if entry.role == "user" else entry.content
+        if entry.message_type == GAME_MESSAGE_TYPE:
+            return _clip_game_note(content)
+        if entry.message_type == CHAPTER_MESSAGE_TYPE:
+            return content
+        if entry.role == "assistant":
+            return f"{self._bot_name}(你)说：{content}"
+        nickname, separator, body = content.partition(": ")
+        return f"{nickname}说：{body}" if separator else content
 
     # ==================== 敏感词净化（输出端） ====================
 
@@ -333,6 +422,92 @@ def _text(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _history_entry(turn: Any) -> _DialogueEntry:
+    """历史行（时间线条目 / live_chat 行）→ 聊天记录条目。"""
+    message = canonical.turn_to_message(turn)
+    return _DialogueEntry(
+        role=message["role"],
+        content=message["content"],
+        message_id=_text(getattr(turn, "message_id", None)),
+        message_type=_text(getattr(turn, "message_type", None)),
+    )
+
+
+def _batch_entry(item: Any) -> _DialogueEntry:
+    """本批弹幕 → 聊天记录条目（与历史行同形，便于判重）。"""
+    message = canonical.batch_item_to_message(item)
+    return _DialogueEntry(
+        role=message["role"],
+        content=message["content"],
+        message_id=_text(getattr(item, "message_id", None)),
+        message_type=_text(getattr(item, "message_type", None)),
+    )
+
+
+def _merge_batch(
+    earlier: Sequence[Any], window: Sequence[Any], batch_entries: Sequence[_DialogueEntry]
+) -> List[_DialogueEntry]:
+    """把本批弹幕合进截出的记录：本轮触发她开口的消息必须看得到。
+
+    已落库的弹幕保留在历史里的原位置，避免挪到主播回复后面。本批弹幕不在截出的
+    记录里时分两种：在更早的历史里（滑出了最近几条）就放到记录最前面，保持先后；
+    还没落库就追加在末尾。
+    """
+    shown = [_history_entry(turn) for turn in window]
+    visible = _SeenMessages(shown)
+    older: Optional[_SeenMessages] = None
+    lead: List[_DialogueEntry] = []
+    tail: List[_DialogueEntry] = []
+    for entry in batch_entries:
+        if visible.claim(entry):
+            continue
+        # 更早的历史可能有几百条，只在确有弹幕不在窗口里时才建索引
+        if older is None:
+            older = _SeenMessages([_history_entry(turn) for turn in earlier])
+        (lead if older.claim(entry) else tail).append(entry)
+        visible.remember(entry)
+    return [*lead, *shown, *tail]
+
+
+def _strip_id_tag(content: str, message_id: str) -> str:
+    """去掉 canonical 观众行末尾的 `` [id:…]`` 标签；没有 ID 时原样返回。"""
+    if not message_id:
+        return content
+    return content.removesuffix(f" [id:{message_id}]")
+
+
+def _clip_game_note(content: str) -> str:
+    """游戏记录正文截到上限字数：行首的 ``[时刻 标签]`` 保留，正文超长的部分换成省略号。"""
+    head, separator, body = content.partition("] ")
+    if not (content.startswith("[") and separator):
+        head, separator, body = "", "", content
+    if len(body) <= _GAME_NOTE_MAX_CHARS:
+        return content
+    return f"{head}{separator}{body[:_GAME_NOTE_MAX_CHARS]}…"
+
+
+def _recent_speech_section(recent_speeches: Optional[Sequence[str]], shown_speeches: Sequence[str]) -> str:
+    """她最近说过的几句里、聊天记录里已经看不到的那些，单列成"更早一点你说过的话"一段。
+
+    取发言闸同一份语料的最近几句（旧→新）；已经在聊天记录里的那几句不再重复列，
+    免得同一句话在输入里出现两遍、像她说了两次。剩下的都滑出了聊天记录、比记录早，
+    所以这一段放在聊天记录前面，标题点明时间——排在最新弹幕后面会让她以为
+    这些话是刚接着弹幕说的。全都看得到（安静时最常见）或没有语料时整段省略。
+    渲染结果前后各带一个空行，夹在开场白与聊天记录之间。
+    """
+    recent = [line.strip() for line in recent_speeches or () if isinstance(line, str) and line.strip()]
+    visible = Counter(shown_speeches)
+    missing: List[str] = []
+    for line in recent[-_RECENT_SPEECH_LINES:]:
+        if visible[line] > 0:
+            visible[line] -= 1
+            continue
+        missing.append(line)
+    if not missing:
+        return ""
+    return f"\n\n{_RECENT_SPEECH_HEADING}\n\n" + "\n".join(f"- {line}" for line in missing) + "\n"
+
+
 def _style_section(style_constraints: Any) -> str:
     """人设块里的说话风格一段（带前导空行）；人设里没写时整段省略。"""
     style = _text(style_constraints).strip()
@@ -360,12 +535,29 @@ def _boundaries_rule(boundaries: Any) -> str:
     return f"\n- {line}" if line else ""
 
 
+def _unresolved_target(target: Optional[str]) -> str:
+    """要回应的原话查不到时，交接稿里 target 一行的写法。
+
+    Planner 填的是昵称或片段时照旧给出，她据此对号；填的是消息 ID 写法（``[id:…]`` /
+    ``id:…``）却查不到原话时（ID 写错，或那条已被折进前情提要）不再给 ID——ID 对她
+    只是噪声，按面向全体观众说。没填时同样面向全体观众。
+    """
+    raw = (target or "").strip()
+    if not raw or canonical.normalize_message_id(raw) != raw:
+        return _NO_TARGET
+    return raw
+
+
 def _render_plan_text(plan: DecisionPlan, *, target_text: str = "") -> str:
-    """把 DecisionPlan 渲染为供 prompt 使用的可读文本；找到 target 原话时紧跟在 target 后面。"""
-    target = plan.target or "（无特定目标，面向全体观众）"
-    target_line = f"target 原文: {target_text}\n" if target_text else ""
+    """把 DecisionPlan 渲染为交接稿文本；查到要回应的原话时直接给原话，不再给消息 ID。
+
+    原话找不到时按 :func:`_unresolved_target` 给出 target（昵称或片段照旧，ID 写法不给）。
+    """
+    if target_text:
+        target_line = f"target 原文: {target_text}\n"
+    else:
+        target_line = f"target: {_unresolved_target(plan.target)}\n"
     return (
-        f"target: {target}\n"
         f"{target_line}"
         f"topic_summary: {plan.topic_summary or '（无特定话题）'}\n"
         f"reply_guidance: {plan.reply_guidance or '（无额外指引）'}\n"

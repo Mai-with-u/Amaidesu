@@ -1,8 +1,9 @@
-"""Replyer 系统提示词预算：以人设为主、规矩精简。
+"""Replyer 输入预算：系统提示词以人设为主、规矩精简，整份输入有上限且不随场长增长。
 
-旧做法里名字和性格只占系统提示词的 3%，后半场她说话像换了个人。这里用真实模板把几条预算
-钉住：系统提示词 ≤1,000、规矩块 ≤600、有代表性的人设占系统提示词四成以上。另核对人设块
-只写身份、AI 声明写死、边界栏可省、稳定段逐字一致。
+旧做法里表达侧背着整场历史开口：90 分钟时输入上万 token，名字和性格只占系统提示词的 3%，
+后半场她说话像换了个人。这里用真实模板把几条预算钉住：系统提示词 ≤1,000、规矩块 ≤600、
+有代表性的人设占系统提示词四成以上；整份输入 ≤3,200，50 条历史和 500 条历史一样多，
+本批弹幕满批时也不超。另核对人设块只写身份、AI 声明写死、边界栏可省、稳定段逐字一致。
 
 token 口径在每条用例里写明，两种：
 - cl100k：tiktoken 的 cl100k_base 分词，设计文档里的预算都按它量；词表拉不到（离线且没有本地缓存）时跳过。
@@ -16,8 +17,8 @@ from typing import Any, Callable, Dict, Iterator, List, Tuple
 
 import pytest
 
-from src.agents.streamer.config import StreamerPersonaConfig
-from src.agents.streamer.plan import DecisionPlan
+from src.agents.streamer.config import StreamerBatchConfig, StreamerPersonaConfig
+from src.agents.streamer.plan import DecisionPlan, assistant_speech_lines
 from src.agents.streamer.replyer import Replyer
 from src.agents.streamer.timeline import CHAPTER_MESSAGE_TYPE, TimelineTurn, note_turn
 from src.modules.events.payloads.room import RoomMessageUser
@@ -32,9 +33,10 @@ _RULES_HEADING = "# 说话的规矩"
 
 _AI_DISCLOSURE = "被问到是不是真人时，坦白自己是 AI 主播，可以俏皮，但不能否认。"
 
-# 预算上限（cl100k 口径）：系统提示词、其中的规矩块
+# 预算上限（cl100k 口径）：系统提示词、其中的规矩块、整份输入（system + user）
 _SYSTEM_MAX = 1_000
 _RULES_MAX = 600
+_INPUT_MAX = 3_200
 
 # 有代表性的人设：名字、两三句性格、说话风格、5 句口吻示例；边界栏用默认文本
 _PERSONA: Dict[str, Any] = {
@@ -174,6 +176,7 @@ async def _request(replyer: Replyer, llm: FakeLLMManager, history: List[Any], ba
         rundown="当前环节：挖矿冲钻石（第 2/3 环节，已进行 25 分钟）。方向：边挖边和弹幕聊，挖到钻石就收尾进下一环节。",
         game_chat=["[minecraft] 玩家 Steve：麦麦你在哪一层", "[minecraft] 玩家 Alex：我在你上面"],
         state_facts="生命值偏低；背包里有铁矿、红石、青金石；脚下是深板岩层，东侧有岩浆湖",
+        recent_speeches=assistant_speech_lines(history),
     )
     call = llm.calls[-1]
     return call["system"], call["input"][0]["content"]
@@ -213,6 +216,57 @@ async def test_persona_block_holds_identity_and_behavior_lives_in_rules(prompts:
     assert "你叫 麦麦" in persona and "你是这场直播的中心，撑场子、带话题本来就是你的工作" in persona
     for behavior in ('观众统一叫"大家"', "没人发弹幕也照常说", "对事情有自己的态度"):
         assert behavior not in persona and behavior in rules
+
+
+async def test_whole_input_is_capped_and_flat_over_session_length(prompts: Any) -> None:
+    """整份输入（system + user，cl100k 口径）≤3,200，50 条历史和 500 条历史一样多：后半场不再被历史挤掉人设。"""
+    totals = []
+    for length in (50, 500):
+        replyer, llm = _replyer(prompts)
+        system, user = await _session_request(replyer, llm, length)
+        totals.append(_cl100k_tokens(system) + _cl100k_tokens(user))
+        # 要回应的开场弹幕早已滑出最近几条，原话照样按整场查回来
+        assert "target 原文: 阿杰: 主播今天打算挖到钻石吗" in user
+        assert "前情提要" not in user and "前情目录" not in user and "[id:" not in user
+    assert totals[0] == totals[1] <= _INPUT_MAX
+
+
+@pytest.mark.parametrize("stored", [True, False], ids=["stored", "not-yet-stored"])
+async def test_full_batch_stays_within_budget(prompts: Any, stored: bool) -> None:
+    """本批满批（单批条数上限的默认值，每条 40 字）：补进来的弹幕占用记录名额，整份输入仍 ≤3,200（cl100k 口径）。
+
+    已落库（正常开场次）与还没落库（没开场次、调试注入）两种都量。记录总行数不超过本批条数，
+    本批每一条都看得到；她更早说过的话单列在记录前面，标题点明比记录早。
+    """
+    batch_size = StreamerBatchConfig().batch_max_size
+    history = _session(500)
+    batch: List[Any] = []
+    for index in range(batch_size):
+        content = f"{_LONG_DANMAKU}{index:02d}"
+        batch.append(make_room_message(message_id=f"b{index}", content=content, user=_AJIE))
+        if stored:
+            history.append(TimelineTurn(role="user", content=content, sender_name="阿杰", message_id=f"b{index}"))
+    assert all(len(item.content) == 40 for item in batch)
+
+    replyer, llm = _replyer(prompts)
+    system, user = await _request(replyer, llm, history, batch)
+
+    assert _cl100k_tokens(system) + _cl100k_tokens(user) <= _INPUT_MAX
+    dialogue = user.partition("请注意区分：\n")[2].partition("\n\n## 游戏里刚有人说的话")[0]
+    assert dialogue.splitlines() == [f"阿杰说：{item.content}" for item in batch]
+    assert user.index("## 更早一点你说过的话（比下面的聊天记录早）") < user.index("下面是之前的聊天记录")
+
+
+async def test_fallback_switch_brings_back_the_whole_history(prompts: Any) -> None:
+    """回退开关（history_items=0）：聊天记录回到整份历史，输入随场长增长；其余改动不随开关回退。"""
+    totals = []
+    for length in (50, 500):
+        replyer, llm = _replyer(prompts, history_items=0)
+        system, user = await _session_request(replyer, llm, length)
+        totals.append(_cl100k_tokens(user))
+        assert "[id:" not in user and "更早一点你说过的话" not in user  # 她的话全在记录里，不再单列
+        assert _AI_DISCLOSURE in system
+    assert totals[1] > totals[0] * 5
 
 
 async def test_system_prompt_is_byte_identical_across_turns(prompts: Any) -> None:

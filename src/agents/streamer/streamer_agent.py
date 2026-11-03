@@ -388,6 +388,8 @@ class StreamerAgent(BaseAgent):
                 "boundaries": config.persona.boundaries,
                 # 表达出口的台词长度预算：超出先重说成一句，仍超按完整句子截短
                 "speech_max_chars": config.speech_max_chars,
+                # 表达侧只带最近几条原文（0 = 回退到整份历史）
+                "history_items": config.replyer_history_items,
             },
             llm_service=llm_manager,
             prompt_service=prompt_manager,
@@ -486,13 +488,18 @@ class StreamerAgent(BaseAgent):
         # 统计（决策循环各分支增量；对外经 get_statistics 导出）
         self._stats = StreamerStats()
 
-        # 本场对话进 LLM 前的只追加投影：Planner 与 Replyer 共用同一份历史，
-        # 超预算时后台按章压成前情提要，两次换章之间历史前缀逐字不变
+        # 本场对话进 LLM 前的只追加投影：超预算时后台按章压成前情提要，两次换章之间
+        # 历史前缀逐字不变。Replyer 只截最近几条原文，不再整份消费时间线，所以预算只按
+        # Planner 的模型窗口换算；回退开关（replyer_history_items=0）让 Replyer 重新整份
+        # 消费，预算随之改回取两个模型中较小的窗口，免得整份历史撑爆表达侧
+        timeline_profiles = (
+            (_PROFILE_PLANNER,) if config.replyer_history_items > 0 else (_PROFILE_PLANNER, _PROFILE_REPLYER)
+        )
         self._timeline = StreamerTimeline(
             budget=config.context,
             llm_service=llm_manager,
             prompt_service=self._prompt,
-            profiles=(_PROFILE_PLANNER, _PROFILE_REPLYER),
+            profiles=timeline_profiles,
             summary_profile=SUMMARY_PROFILE,
         )
         # 场次作用域：这一场记得什么（游戏账本、私聊行、未落库轮、时间线 notes、
