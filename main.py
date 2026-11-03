@@ -583,6 +583,8 @@ async def create_app_components(
             viewer_profile_repo=database.viewer_profiles,
             recap_repo=database.recaps,
             event_repo=database.events,
+            # 生物名册（Minecraft Agent 跨场次记得主播起的名字与谁死了）
+            creature_repo=database.game_creatures,
             long_memory_store=long_memory_store,
             supervisor_config=supervisor_config,
         )
@@ -697,6 +699,7 @@ async def create_app_components(
                 viewer_profile_repo=database.viewer_profiles,
                 recap_repo=database.recaps,
                 event_repo=database.events,
+                creature_repo=database.game_creatures,
                 long_memory_store=long_memory_store,
                 # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
                 context_assembler_config=None,

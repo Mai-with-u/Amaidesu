@@ -7,15 +7,17 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, Dict, Sequence
 
-from src.agents.minecraft.creature_book import CreatureBook
+from src.agents.minecraft.creature_book import CreatureBook, creature_from_record, creature_record
 from src.agents.minecraft.glance import STATUS_AWAY, STATUS_DEAD, STATUS_NEARBY, glance_brief, glance_scene
 from src.agents.minecraft.maicraft import MaicraftReply
 from src.agents.minecraft.tools import STREAMER_GUIDE
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_chat import GameChatPayload
+from src.modules.storage.database import SQLiteDatabase
 from src.modules.tools.models import ToolInvocation
 
 from .minecraft_v1_fakes import FakeMaicraft, make_minecraft_agent
@@ -204,3 +206,73 @@ async def test_replay_of_the_audit_timeline() -> None:
         "玩家打的字不当死讯，同一次死也不重复发"
     )
     await agent.stop()
+
+
+def test_a_death_is_mentioned_in_its_session_and_the_next_one_only() -> None:
+    """第 52 场死的：52 场和下播后、53 场里还提；54 场起只留在名册里占着名字。"""
+    book = CreatureBook()
+    book.load("w1", [])
+    book.start_session(52)
+    book.observe(_with_maid(), 1_000)
+    book.name("你的女仆", "阿缕")
+    book.note_death("莫莫酒狐被苦力怕炸死了", 2_000)
+    assert book.status_view()[0]["status"] == STATUS_DEAD
+    book.end_session()
+    assert book.status_view(), "下播后、下一场开播前还提"
+    book.start_session(53)
+    assert book.status_view() and "阿缕" in book.named_view()
+
+    book.end_session()
+    book.start_session(54)
+    assert book.status_view() == [] and book.named_view() == {}
+    wolf = {"id": "e5", "type": "minecraft:wolf", "distance": 3, "traits": {"驯服": "你的"}}
+    book.observe(_scene(wolf), 3_000)
+    taken = book.name("狼", "阿缕")
+    assert taken.named is None and "它已经死了，名字留给它" in taken.reason
+
+
+def test_changes_are_handed_out_once_and_a_reload_restores_the_roster() -> None:
+    """只有落库的事实变了才交出去写回；按落库的行读回来，名字还在，此刻在不在身边等下一次观察。"""
+    book = CreatureBook()
+    book.load("w1", [])
+    book.observe(_with_maid(), 1_000)
+    changed, removed = book.take_changes()
+    assert [creature.skin for creature in changed] == ["莫莫酒狐"] and removed == []
+    book.observe(_with_maid(), 2_000)
+    assert book.take_changes() == ([], []), "只是又看到一次，不用写回"
+
+    book.name("你的女仆", "阿缕")
+    book.name("羊", "咩咩")
+    book.name("咩咩", "")
+    changed, removed = book.take_changes()
+    assert [creature.nickname for creature in changed] == ["阿缕"] and removed == ["look:minecraft:sheep||"]
+
+    again = CreatureBook()
+    again.load("w1", [creature_from_record(creature_record(creature)) for creature in book.creatures()])
+    [maid] = again.creatures()
+    assert maid.nickname == "阿缕" and maid.status == STATUS_AWAY and maid.last_seen_ms == 2_000
+
+
+async def test_names_survive_a_restart_and_stay_in_their_world(db_path: Path) -> None:
+    """起过名的女仆：Agent 重建后还认得；换到别的世界，名册是那个世界的，不串。"""
+    db = SQLiteDatabase(db_path)
+    await db.initialize()
+    try:
+        server = FakeMaicraft()
+        server.scene_view = _with_maid()
+        server.self_view["world_key"] = "w1"
+        agent, _, _ = await make_minecraft_agent(server, creature_repo=db.game_creatures)
+        await agent._glance()
+        assert (await agent._name_creature("你的女仆", "阿缕"))["success"]
+        await agent.stop()
+
+        again, _, _ = await make_minecraft_agent(server, creature_repo=db.game_creatures)
+        assert "阿缕（你的女仆，莫莫酒狐皮肤）在身边" in (await again._glance())["brief"]
+        server.self_view["world_key"] = "w2"
+        assert "阿缕" not in (await again._glance())["brief"]
+        await again.stop()
+        assert [r.nickname for r in await db.game_creatures.list_creatures(game="minecraft", world_key="w1")] == [
+            "阿缕"
+        ]
+    finally:
+        await db.close()

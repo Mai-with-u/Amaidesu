@@ -13,6 +13,10 @@
 是它的死亡播报、主播起名。离开视野只改状态不发事件：女仆被设成驻守、走远、区块卸载都会这样，
 不能当成走了；死亡是唯一要当场讲给主播的变化，由调用方据 ``note_death`` 的返回发游戏进展事件。
 
+跨场次记得：名册按世界分开落库（世界编号由游戏报出），进一个世界时整份读回，之后只把变了的几只交给
+调用方写回（``take_changes``）。死了的只在死的那一场和之后的第一场里提起，再往后只留在名册里占着名字，
+免得"阿缕"被安到别的生物身上；场次由调用方在开播、下播时告知。
+
 本模块是 Minecraft Agent 的内部件（代码直连，不是工具），只在 Agent 的事件循环里用，非线程安全。
 """
 
@@ -21,7 +25,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from src.modules.storage.models import GameCreatureRecord
 
 from .glance import (
     NEARBY_BLOCKS,
@@ -36,7 +42,7 @@ from .glance import (
     kind_of,
 )
 
-__all__ = ["Creature", "CreatureBook", "NameResult", "identity_key"]
+__all__ = ["Creature", "CreatureBook", "NameResult", "creature_from_record", "creature_record", "identity_key"]
 
 # 死亡播报的谓语里会有的字眼（中文语言包的死亡句都以受害者名字开头）。Mod 还没给消息模板编号时，
 # 名字对上了还得有这些字眼才认作死讯：车万女仆还会以她的名字开头发别的灰字消息，不能当成死了。
@@ -71,6 +77,9 @@ class Creature:
     died_ms: int = 0
     death_note: str = ""
     grave_nearby: bool = False
+    # 死的那一场与死后开的第一场（场次主键）：已死的只在这两场里提起
+    died_session_id: Optional[int] = None
+    next_session_id: Optional[int] = None
 
     @property
     def game_name(self) -> str:
@@ -89,6 +98,60 @@ class Creature:
                 "nickname": self.nickname if with_nickname else "",
             }
         )
+
+    def facts(self) -> Tuple[Any, ...]:
+        """要落库的事实（不含最后看到的时刻与此刻在不在身边）：前后不同就说明这只要写回。"""
+        return (
+            self.kind,
+            self.name,
+            self.skin,
+            self.owner,
+            self.nickname,
+            self.uuid,
+            self.died_ms,
+            self.death_note,
+            self.died_session_id,
+            self.next_session_id,
+        )
+
+
+def creature_record(creature: Creature) -> GameCreatureRecord:
+    """名册条目 → 落库的一行（活着的死亡时刻写空）。"""
+    return GameCreatureRecord(
+        creature_key=creature.key,
+        type=creature.type,
+        kind=creature.kind,
+        name=creature.name,
+        skin=creature.skin,
+        owner=creature.owner,
+        nickname=creature.nickname,
+        uuid=creature.uuid,
+        last_seen_ms=creature.last_seen_ms,
+        died_ms=creature.died_ms or None,
+        death_note=creature.death_note,
+        died_session_id=creature.died_session_id,
+        next_session_id=creature.next_session_id,
+    )
+
+
+def creature_from_record(record: GameCreatureRecord) -> Creature:
+    """落库的一行 → 名册条目。此刻在不在身边要等下一次观察：活着的先记没看到。"""
+    return Creature(
+        key=record.creature_key,
+        type=record.type,
+        kind=record.kind,
+        name=record.name,
+        skin=record.skin,
+        owner=record.owner,
+        nickname=record.nickname,
+        uuid=record.uuid,
+        status=STATUS_DEAD if record.died_ms else STATUS_AWAY,
+        last_seen_ms=record.last_seen_ms,
+        died_ms=record.died_ms or 0,
+        death_note=record.death_note,
+        died_session_id=record.died_session_id,
+        next_session_id=record.next_session_id,
+    )
 
 
 @dataclass(frozen=True)
@@ -119,7 +182,7 @@ def identity_key(entity: Dict[str, Any], thing: Dict[str, Any]) -> str:
 
 
 class CreatureBook:
-    """生物名册（内存态）。"""
+    """生物名册：内存里是当前世界的一份，落库由调用方按 ``take_changes`` 写回。"""
 
     def __init__(self) -> None:
         # 身份键 → 名册条目，按建档先后
@@ -128,6 +191,70 @@ class CreatureBook:
         self._sightings: List[_Sighting] = []
         self._graves: Dict[str, str] = {}
         self._observed_ms = 0
+        # 名册属于哪个世界：None = 还没认出世界、没读过落库的名册；空串 = 游戏没报世界编号
+        self._world_key: Optional[str] = None
+        # 当前场次主键（不在场次里为 None）：死讯记在哪一场、已死的提到哪一场为止
+        self._session_id: Optional[int] = None
+        # 上次写回之后变了的条目、被移出名册的条目（身份键）
+        self._changed: set[str] = set()
+        self._removed: set[str] = set()
+
+    # ==================== 世界与场次 ====================
+
+    @property
+    def world_key(self) -> Optional[str]:
+        """名册属于哪个世界；还没认出世界为 None。"""
+        return self._world_key
+
+    def load(self, world_key: str, creatures: Iterable[Creature]) -> None:
+        """换到一个世界：换上这个世界落库的名册，忘掉上一个世界的观察（编号在新世界里不算数）。
+
+        顺序：调用方先把旧世界的变化写回 → 读出新世界的名册 → 交给这里；
+        读回的已死条目按当前场次推算还提不提。
+        """
+        self._world_key = world_key
+        self._creatures = {creature.key: creature for creature in creatures}
+        self._sightings = []
+        self._graves = {}
+        self._changed.clear()
+        self._removed.clear()
+        self._age_deaths()
+
+    def start_session(self, session_id: int) -> None:
+        """开播：死在之前场次的，这一场是它死后的第一场就记下，再往后的场次不再提。"""
+        self._session_id = session_id
+        self._age_deaths()
+
+    def end_session(self) -> None:
+        """下播：之后的观察不属于任何场次。"""
+        self._session_id = None
+
+    def _age_deaths(self) -> None:
+        """已死、还没记"死后第一场"的，当前场次不是它死的那一场，就把当前场次记成死后第一场。"""
+        if self._session_id is None:
+            return
+        for creature in self._creatures.values():
+            if (
+                creature.status == STATUS_DEAD
+                and creature.next_session_id is None
+                and creature.died_session_id != self._session_id
+            ):
+                creature.next_session_id = self._session_id
+                self._changed.add(creature.key)
+
+    def _is_past(self, creature: Creature) -> bool:
+        """死在两场以前的：只留在名册里占着名字，速览与游戏 Agent 的上下文里都不再提。"""
+        if creature.status != STATUS_DEAD or creature.next_session_id is None:
+            return False
+        return self._session_id not in (creature.died_session_id, creature.next_session_id)
+
+    def take_changes(self) -> Tuple[List[Creature], List[str]]:
+        """取走上次写回之后的变化：变了的条目，被移出名册的身份键。取走即清空。"""
+        changed = [self._creatures[key] for key in self._changed if key in self._creatures]
+        removed = [key for key in self._removed if key not in self._creatures]
+        self._changed.clear()
+        self._removed.clear()
+        return changed, removed
 
     # ==================== 观察 ====================
 
@@ -151,6 +278,7 @@ class CreatureBook:
             creature = self._creatures.get(key)
             if creature is None and described.get("owner") == OWNER_SELF:
                 creature = self._creatures[key] = Creature(key=key, type=str(entity["type"]))
+                self._changed.add(key)
             if creature is not None:
                 self._refresh(creature, entity, described, now_ms)
                 seen.add(key)
@@ -158,22 +286,23 @@ class CreatureBook:
         for creature in self._creatures.values():
             creature.grave_nearby = False
             if creature.key not in seen and creature.status in (STATUS_NEARBY, STATUS_AROUND):
+                # 刚离开视野：最后看到的时刻要写回，重启后还说得出"几点以后没见到"
                 creature.status = STATUS_AWAY
+                self._changed.add(creature.key)
         for grave_of in graves.values():
             owner = self.grave_owner(grave_of)
             if owner is None:
                 continue
             if owner.status != STATUS_DEAD:
-                owner.status = STATUS_DEAD
-                owner.died_ms = now_ms
+                self._mark_dead(owner, now_ms, "")
             owner.grave_nearby = True
         self._sightings = sightings
         self._graves = graves
         self._observed_ms = now_ms
 
-    @staticmethod
-    def _refresh(creature: Creature, entity: Dict[str, Any], described: Dict[str, Any], now_ms: int) -> None:
+    def _refresh(self, creature: Creature, entity: Dict[str, Any], described: Dict[str, Any], now_ms: int) -> None:
         """这次看到了它：更新认得出它的事实与在场状态；记过死了又看到（认错了或复活了）就当活着。"""
+        before = creature.facts()
         creature.kind = kind_of(described)
         creature.name = str(entity.get("name") or "")
         creature.skin = str(described.get("skin") or creature.skin)
@@ -183,6 +312,20 @@ class CreatureBook:
         creature.last_seen_ms = now_ms
         creature.died_ms = 0
         creature.death_note = ""
+        creature.died_session_id = None
+        creature.next_session_id = None
+        if creature.facts() != before:
+            self._changed.add(creature.key)
+
+    def _mark_dead(self, creature: Creature, now_ms: int, note: str) -> None:
+        """记下它死了：死亡时刻与场次只记第一次（墓碑先看到、死讯后到也是同一次死），死因有就补上。"""
+        if creature.status != STATUS_DEAD:
+            creature.status = STATUS_DEAD
+            creature.died_ms = now_ms
+            creature.died_session_id = self._session_id
+            creature.next_session_id = None
+        creature.death_note = note or creature.death_note
+        self._changed.add(creature.key)
 
     def grave_owner(self, grave_of: str) -> Optional[Creature]:
         """墓碑上写的名字 → 名册里那只；名册里不止一只叫这个名字时认不准，返回 None。"""
@@ -226,9 +369,7 @@ class CreatureBook:
                 return None
             if creature.status == STATUS_DEAD and creature.death_note:
                 return None
-            creature.status = STATUS_DEAD
-            creature.died_ms = creature.died_ms or now_ms
-            creature.death_note = rest
+            self._mark_dead(creature, now_ms, rest)
             return creature
         return None
 
@@ -255,6 +396,9 @@ class CreatureBook:
             (c for c in self._creatures.values() if nickname and c.nickname == nickname and c.key != sighting.key),
             None,
         )
+        if holder is not None and holder.status == STATUS_DEAD:
+            # 死了的同伴名字仍归它：换给新来的会让回顾和老观众把两只混成一只
+            return NameResult(reason=f"「{nickname}」是{holder.label()}的名字，它已经死了，名字留给它，换一个名字")
         if holder is not None:
             return NameResult(reason=f"「{nickname}」已经是{holder.label()}的名字了，换一个名字")
         creature = self._creatures.get(sighting.key)
@@ -264,9 +408,11 @@ class CreatureBook:
             creature = self._creatures[sighting.key] = Creature(key=sighting.key, type=str(sighting.entity["type"]))
             self._refresh(creature, sighting.entity, sighting.described, self._observed_ms)
         creature.nickname = nickname
+        self._changed.add(creature.key)
         if not nickname and creature.owner != OWNER_SELF:
-            # 路人只因起了名才进名册：名字取消了就不再记它
+            # 路人只因起了名才进名册：名字取消了就不再记它，落库的那一行也删掉
             del self._creatures[creature.key]
+            self._removed.add(creature.key)
         return NameResult(named=creature)
 
     def _match(self, who: str) -> List[_Sighting]:
@@ -312,11 +458,12 @@ class CreatureBook:
     def status_view(self) -> List[Dict[str, Any]]:
         """名册里各只此刻的状态，给速览用：称呼、状态、时刻、死因、墓碑在不在身边。
 
-        起过名的全列；没起名的自己的生物只列在场与死了的（家里一圈马不该每次都报"没看到"）。
+        起过名的全列；没起名的自己的生物只列在场与死了的（家里一圈马不该每次都报"没看到"）；
+        死在两场以前的不再列。
         """
         view: List[Dict[str, Any]] = []
         for creature in self._creatures.values():
-            if not creature.nickname and creature.status == STATUS_AWAY:
+            if (not creature.nickname and creature.status == STATUS_AWAY) or self._is_past(creature):
                 continue
             item: Dict[str, Any] = {"who": creature.label(), "status": creature.status}
             if creature.status == STATUS_DEAD:
@@ -333,10 +480,13 @@ class CreatureBook:
         return view
 
     def named_view(self) -> Dict[str, str]:
-        """主播起过的名字 → 是哪一只、此刻怎样。给游戏 Agent：主播用名字下指令时（"带上阿缕"）它认得出是谁。"""
+        """主播起过的名字 → 是哪一只、此刻怎样。给游戏 Agent：主播用名字下指令时（"带上阿缕"）它认得出是谁。
+
+        死在两场以前的不再列：游戏 Agent 用不上，名字仍由名册占着。
+        """
         view: Dict[str, str] = {}
         for creature in self._creatures.values():
-            if not creature.nickname:
+            if not creature.nickname or self._is_past(creature):
                 continue
             state = creature.status
             if creature.status == STATUS_DEAD and creature.death_note:

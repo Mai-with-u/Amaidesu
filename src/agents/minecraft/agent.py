@@ -32,7 +32,7 @@ from src.agents.minecraft.context import (
     json_text,
     strip_unsendable,
 )
-from src.agents.minecraft.creature_book import CreatureBook
+from src.agents.minecraft.creature_book import CreatureBook, creature_from_record, creature_record
 from src.agents.minecraft.delegation_book import DelegationBook
 from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_label, pause_notice
 from src.agents.minecraft.glance import glance_brief, glance_scene, glance_self
@@ -91,6 +91,8 @@ __all__ = ["MinecraftAgent"]
 
 # 游戏决策使用独立用途。
 MINECRAFT_PROFILE = "minecraft"
+# 生物名册落库时的游戏标识（与发出的游戏事件同一个）
+_GAME = "minecraft"
 
 # 模型调用失败、身体停下时主播看一眼读到的说法（她本人的口吻）：暂时性失败再派一次活就会重试；
 # 请求发不出去且换回执、重开对话都补救不了时，再派活也是同一个结果
@@ -139,6 +141,7 @@ class MinecraftAgent(BaseAgent):
         thinking_sink: Optional[Any] = None,
         task_tracker: Optional[Any] = None,
         skill_library: Optional[SkillLibrary] = None,
+        creature_repo: Optional[Any] = None,
         clock: Optional[Callable[[], float]] = None,
         live_active: Optional[bool] = None,
         mcp_client: Optional[Any] = None,
@@ -161,6 +164,8 @@ class MinecraftAgent(BaseAgent):
             skill_library: 技能库。注入时系统提示词附技能目录，并提供
                 ``minecraft_skill`` 按名读正文；本地是直播策略，玩法技能从 MaiCraft 的
                 ``resources/list`` 合并进来，正文按 ``skill://`` 地址读。
+            creature_repo: 生物名册仓储（``list_creatures`` / ``save_creatures``）。注入时名册按世界
+                落库、跨场次记得主播起的名字与谁死了；None 时名册只在内存里，Agent 重建即丢。
             clock: 保留给测试注入假时钟的构造参数（统一构造签名）。
             live_active: 直播闸初始态。None = 生产默认（构造期按直播中，启动钩子落收工态，
                 等 live.started 恢复）；显式给值（测试用）则启动钩子不再改写。
@@ -201,6 +206,7 @@ class MinecraftAgent(BaseAgent):
         )
         # 生物名册：自己的生物与主播起过名的生物是谁、在不在身边、死没死（速览、起名与死讯共用这一份）
         self._creatures = CreatureBook()
+        self._creature_repo = creature_repo
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
             state=self._mc_state,
@@ -319,12 +325,16 @@ class MinecraftAgent(BaseAgent):
         """live.started 回调：开播，恢复接受委派。"""
         del event_name, source
         self._live_active = True
+        # 名册按场次决定已死的还提不提：死在上一场的，这一场是最后一次提起
+        self._creatures.start_session(payload.live_session_id)
+        await self._save_creatures()
         self._logger.info(f"场次已开启（id={payload.live_session_id}）：minecraft 恢复接受委派")
 
     async def _on_live_ended(self, event_name: str, payload: LiveEndedPayload, source: str) -> None:
         """live.ended 回调：收工即停，未处理消息一并丢弃，不留到下一场突然开跑。"""
         del event_name, source
         self._live_active = False
+        self._creatures.end_session()
         dropped = len(self._message_queue)
         self._wake_queue.clear()
         settled = self._delegations.settle_on_live_end()
@@ -1237,11 +1247,10 @@ class MinecraftAgent(BaseAgent):
         if not self._maicraft_ready():
             view["unavailable"] = "游戏连接还没就绪，暂时看不到游戏里的情况"
         else:
-            view.update(glance_self(await self._call_maicraft(OBSERVE, {"what": "self"})))
-            scene = await self._call_maicraft(OBSERVE, {"what": "scene"})
-            if scene.ok:
-                # 先更新名册再写身边：起过名的按名字称呼，墓碑对到死者
-                self._creatures.observe(scene.data, now_ms())
+            body = await self._call_maicraft(OBSERVE, {"what": "self"})
+            view.update(glance_self(body))
+            # 先更新名册再写身边：起过名的按名字称呼，墓碑对到死者
+            scene = await self._read_creatures(body)
             view.update(glance_scene(scene, self._creatures.nicknames_by_scene_id()))
             creatures = self._creatures.status_view()
             if creatures:
@@ -1256,12 +1265,11 @@ class MinecraftAgent(BaseAgent):
         找不到、分不清是哪只、名字被占了都不登记，原因原样回给主播。
         """
         if self._maicraft_ready():
-            scene = await self._call_maicraft(OBSERVE, {"what": "scene"})
-            if scene.ok:
-                self._creatures.observe(scene.data, now_ms())
+            await self._read_creatures(await self._call_maicraft(OBSERVE, {"what": "self"}))
         result = self._creatures.name(who, nickname)
         if result.named is None:
             return {"success": False, "error": result.reason}
+        await self._save_creatures()
         creature = result.named
         if not creature.nickname:
             return {"success": True, "named": creature.label(), "note": "不再用主播起的名字称呼它"}
@@ -1283,9 +1291,62 @@ class MinecraftAgent(BaseAgent):
             if creature is None:
                 return
             self._logger.info(f"生物名册认出死讯：{creature.label()}（原话：{payload.content}）")
+            await self._save_creatures()
             await self._emit_game_event("milestone", f"{creature.label()}{creature.death_note}")
         except Exception as exc:  # noqa: BLE001 - 认不出死讯不影响聊天流本身
             self._logger.warning(f"按名册认死讯失败（原话：{payload.content}）", exc=exc)
+
+    async def _read_creatures(self, body: MaicraftReply) -> MaicraftReply:
+        """读一次周围并更新名册，返回这次的场景。
+
+        顺序：按 observe(self) 认出所在的世界（换了世界先换上那个世界的名册）→ 读 observe(scene) →
+        名册记下这次看到的 → 变化写回库。认不出世界时不更新名册：分不清这些生物属于哪个世界。
+        """
+        await self._bind_creature_world(body)
+        scene = await self._call_maicraft(OBSERVE, {"what": "scene"})
+        if scene.ok and self._creatures.world_key is not None:
+            self._creatures.observe(scene.data, now_ms())
+            await self._save_creatures()
+        return scene
+
+    async def _bind_creature_world(self, body: MaicraftReply) -> None:
+        """认出角色在哪个世界：刚启动或换了世界，就先把旧世界的名册写回，再读回这个世界的。
+
+        世界编号是 observe(self) 的 ``world_key``；旧版 Mod 不报时按空串，各世界共用一份。
+        读不到自己时不换。读库失败从空名册开始（只会少认出几只，不会改坏库里的记录）。
+        """
+        if not body.ok:
+            return
+        world_key = str(body.data.get("world_key") or "")
+        if world_key == self._creatures.world_key:
+            return
+        await self._save_creatures()
+        records: List[Any] = []
+        if self._creature_repo is not None:
+            try:
+                records = await self._creature_repo.list_creatures(game=_GAME, world_key=world_key)
+            except Exception as exc:  # noqa: BLE001 - 读不到名册不影响看一眼本身
+                self._logger.warning(f"读生物名册失败（世界 {world_key or '未报编号'}），从空名册开始", exc=exc)
+        self._creatures.load(world_key, [creature_from_record(record) for record in records])
+        self._logger.info(f"生物名册换到世界 {world_key or '未报编号'}：读回 {len(records)} 只")
+
+    async def _save_creatures(self) -> None:
+        """把名册上次写回之后的变化写进库；没装存储或还没认出世界时只留在内存里。"""
+        world_key = self._creatures.world_key
+        if self._creature_repo is None or world_key is None:
+            return
+        changed, removed = self._creatures.take_changes()
+        if not changed and not removed:
+            return
+        try:
+            await self._creature_repo.save_creatures(
+                game=_GAME,
+                world_key=world_key,
+                creatures=[creature_record(creature) for creature in changed],
+                removed_keys=removed,
+            )
+        except Exception as exc:  # noqa: BLE001 - 写不进库时名册仍在内存里可用
+            self._logger.warning(f"生物名册写回失败（{len(changed)} 只有变化，{len(removed)} 只移出）", exc=exc)
 
     def _glance_work(self) -> Dict[str, Any]:
         """身体手头的工作，写成主播自己的口吻：读这份结果的就是主播本人。"""

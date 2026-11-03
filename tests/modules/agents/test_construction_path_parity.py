@@ -12,7 +12,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import main as app_main
-from src.agents.minecraft.agent import MINECRAFT_PROFILE
+from src.agents.minecraft.agent import MINECRAFT_PROFILE, MinecraftAgent
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.deps import AgentDeps
 from src.modules.agents.factory import SUPPORTED_AGENTS, instantiate_agent
@@ -39,6 +39,7 @@ SERVICES: dict[str, Any] = {
     "viewer_profile_repo": object(),
     "recap_repo": object(),
     "event_repo": object(),
+    "creature_repo": object(),
     "context_assembler_config": None,
     "task_tracker": object(),
 }
@@ -122,6 +123,14 @@ def test_factory_forwards_streamer_infrastructure_and_repositories() -> None:
         agent._background._sessions_repo is repos["sessions_repo"]
         and agent._background._topic_repo is repos["topic_repo"]
     )
+
+
+def test_minecraft_gets_the_creature_roster_repository() -> None:
+    """生物名册仓储经工厂交给 Minecraft Agent；Dashboard 动态启用不传时回落管理器成员。"""
+    repo = object()
+    agent = instantiate_agent("minecraft", {}, deps=AgentDeps(llm_manager=MagicMock(), creature_repo=repo))
+    assert isinstance(agent, MinecraftAgent) and agent._creature_repo is repo
+    assert AgentManager(creature_repo=repo)._resolve_deps(None).creature_repo is repo
 
 
 async def test_enable_agent_falls_back_to_the_manager_repositories() -> None:
