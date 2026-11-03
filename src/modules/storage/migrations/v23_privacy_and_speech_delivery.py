@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from src.modules.storage.migrations._common import column_exists
+from src.modules.storage.migrations._common import column_exists, table_exists
 from src.modules.storage.schema import _FORGET_LIST_SQL
 
 
@@ -44,7 +44,21 @@ def migrate(conn: sqlite3.Connection) -> None:
     if not column_exists(conn, "viewers", "forget_requested_at_ms"):
         conn.execute("ALTER TABLE viewers ADD COLUMN forget_requested_at_ms INTEGER")
 
-    # 从历史真实观众弹幕回填正式场来访计数与最近来访场次（仅针对尚未计数的非模拟观众，重复执行结果不变）
+    # 从历史真实观众弹幕回填正式场来访计数与最近来访场次（仅针对尚未计数的非模拟观众，重复执行结果不变）。
+    # 极旧的中间形状可能缺场次表或 live_chat 的角色/类型列：这时无法判定"正式场真弹幕"，保持计数为默认 0，
+    # 不阻断迁移（缺列的库本就没有可用的历史观众弹幕可数）。
+    can_backfill = (
+        table_exists(conn, "live_sessions")
+        and all(
+            column_exists(conn, "live_chat", column)
+            for column in ("sender_role", "message_type", "simulated", "viewer_id")
+        )
+        and all(column_exists(conn, "live_sessions", column) for column in ("kind", "started_at_ms", "ended_at_ms"))
+    )
+    if not can_backfill:
+        conn.executescript(_FORGET_LIST_SQL)
+        return
+
     conn.execute(
         """
         UPDATE viewers

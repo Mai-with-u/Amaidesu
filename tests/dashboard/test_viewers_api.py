@@ -17,6 +17,7 @@ BASE = 1_700_000_000_000
 LIST_ITEM_KEYS = {
     "viewer_id", "platform", "user_id", "user_name", "link_status", "message_count", "gift_count",
     "replied_count", "interaction_count", "paid_count", "paid_amount", "last_active_ms",
+    "sessions_count", "forget_requested_at_ms",
 }  # fmt: skip
 
 
@@ -40,6 +41,8 @@ async def test_list_contract_keys_filter_and_paging(viewers_client, store) -> No
     assert body["total"] == 1
     assert set(body["items"][0]) == LIST_ITEM_KEYS
     assert (body["items"][0]["viewer_id"], body["items"][0]["gift_count"]) == (vid, 1)
+    # 行上带正式场来访计数与待删除标记（无请求时为 None，前端据此渲染"待删除"）
+    assert (body["items"][0]["sessions_count"], body["items"][0]["forget_requested_at_ms"]) == (0, None)
     paged = (await viewers_client.get("/api/v1/viewers", params={"limit": 1, "offset": 1})).json()
     assert (paged["total"], paged["items"]) == (1, [])  # total 不随分页变
 

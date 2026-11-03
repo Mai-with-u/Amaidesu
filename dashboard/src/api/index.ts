@@ -106,6 +106,9 @@ import type {
   ViewerSessionsResponse,
   PendingViewersResponse,
   ViewerIdentityActionResponse,
+  ViewerDeleteResponse,
+  ForgetListCountResponse,
+  ForgetListRemoveResponse,
   ViewerProfileListResponse,
   ViewerProfileUpdatePayload,
   MemoryMutationResponse,
@@ -387,6 +390,18 @@ export const viewersApi = {
     api.post<ViewerIdentityActionResponse>(`/viewers/${viewerId}/keep`),
   unlink: (viewerId: number, idKind: 'account' | 'open') =>
     api.post<ViewerIdentityActionResponse>(`/viewers/${viewerId}/unlink`, { id_kind: idKind }),
+  retractForget: (viewerId: number) =>
+    api.post<ViewerIdentityActionResponse>(`/viewers/${viewerId}/retract-forget`),
+  remove: (viewerId: number, addToForgetList = false) =>
+    api.delete<ViewerDeleteResponse>(`/viewers/${viewerId}`, {
+      params: { add_to_forget_list: addToForgetList },
+    }),
+  getForgetListCount: () => api.get<ForgetListCountResponse>('/viewers/forget-list'),
+  removeFromForgetList: (idKind: 'account' | 'open', externalId: string) =>
+    api.post<ForgetListRemoveResponse>('/viewers/forget-list/remove', {
+      id_kind: idKind,
+      external_id: externalId,
+    }),
 };
 
 // Streamer 测试台（主播发言调试）

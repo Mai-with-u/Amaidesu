@@ -24,6 +24,10 @@ class ViewerListItem(BaseModel):
     paid_count: int
     paid_amount: int = Field(description="付费总额（金瓜子，展示层 ÷1000 = 元）")
     last_active_ms: int
+    sessions_count: int = Field(default=0, description="来过的正式直播场次数（历史累计）")
+    forget_requested_at_ms: Optional[int] = Field(
+        default=None, description="宽限删除请求时刻（毫秒）；非空表示待下播后删除"
+    )
 
 
 class ViewerListResponse(BaseModel):
@@ -93,7 +97,12 @@ class ViewerDetailResponse(BaseModel):
     gift_total_amount: int = Field(default=0, description="礼物标价总额（金瓜子）")
     sc_total_amount: float = Field(default=0.0, description="SC 总金额（元，金瓜子 ÷1000）")
     sc_total_count: int = Field(default=0, description="SC 条数")
-    session_count: int = Field(default=0, description="参与过的直播场次数")
+    session_count: int = Field(default=0, description="参与过的直播场次数（现存明细聚合）")
+    sessions_count: int = Field(default=0, description="来过的正式直播场次数（历史累计）")
+    forget_requested_at_ms: Optional[int] = Field(
+        default=None, description="宽限删除请求时刻（毫秒）；非空表示待下播后删除"
+    )
+    forget_due_at_ms: Optional[int] = Field(default=None, description="宽限删除最迟执行时刻（发令后 24 小时，毫秒）")
 
 
 class DialogueItem(BaseModel):
@@ -210,3 +219,30 @@ class IdentityActionResponse(BaseModel):
     """人工处理结果：``viewer_id`` 为处理后应跳转查看的观众（合并的目标 / 拆出的新观众 / 原观众）。"""
 
     viewer_id: int
+
+
+class DeleteViewerResponse(BaseModel):
+    """删除观众响应。"""
+
+    deleted: bool
+    added_to_forget_list: bool
+
+
+class ForgetListCountResponse(BaseModel):
+    """不记录名单统计（只暴露条数，不暴露摘要本身）。"""
+
+    count: int
+
+
+class ForgetListRemoveRequest(BaseModel):
+    """按外部 ID 种类与明文 ID 解除不记录名单。"""
+
+    id_kind: Literal["account", "open"]
+    external_id: str = Field(..., min_length=1, max_length=256)
+
+
+class ForgetListRemoveResponse(BaseModel):
+    """解除不记录名单响应。"""
+
+    removed: bool
+    count: int

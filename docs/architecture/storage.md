@@ -9,14 +9,15 @@
 **场次与消息**
 
 - `live_sessions`：一场直播一行，开播/下播边界与人数、热度实时状态，以及本场备忘录全文（主播每次写备忘录同步落进来，收播整理从这里读）。
-- `live_chat`：全量消息流，观众/主播/搭档同表（`sender_role` 区分）；`message_id` ↔ `reply_to_message_id` 构成"主播回复了哪条弹幕"的关联键。
+- `live_chat`：全量消息流，观众/主播/搭档同表（`sender_role` 区分）；`message_id` ↔ `reply_to_message_id` 构成"主播回复了哪条弹幕"的关联键。主播行另带 `utterance_id`（与 `tts.utterance.*` 共用的全链路关联键）、`dropped_at_ms`（播放队列确知这句没送到观众面前的时刻；为空即送到过，算"她说过"）与 `memory_refs`（这句点名引用了哪条记忆）。
 - `gifts` / `super_chats` / `guards`：付费明细三表，按平台原始单位入库（口径见 [观众身份复合键与货币口径](../decisions/029-viewer-identity-key-and-currency-unit.md)）。
 - `timeline_summary`：一场内的分段摘要轨迹（后台维护者写入）。
 
 **观众与画像**
 
-- `viewers`：观众，一行一人（按平台），同一行记账号 ID 与开放平台 ID，带跨场统计；新出现的 ID 按当前昵称找同名老观众，默认只挂一条合并建议、由人工确认，配置了关联时限才在时限内自动关联（见 [观众身份映射](../decisions/047-viewer-identity-mapping.md) 与 [按昵称关联默认关](../decisions/064-viewer-name-match-off-by-default.md)）。明细四表经 `viewer_id` 挂到观众，并保留收到时的原始外部 ID。
+- `viewers`：观众，一行一人（按平台），同一行记账号 ID 与开放平台 ID，带跨场统计（其中 `sessions_count` / `last_session_id` / `prev_seen_ms` 是正式场来访计数与档位依据，由观众本场第一条真弹幕在同一事务里推进）；新出现的 ID 按当前昵称找同名老观众，默认只挂一条合并建议、由人工确认，配置了关联时限才在时限内自动关联（见 [观众身份映射](../decisions/047-viewer-identity-mapping.md) 与 [按昵称关联默认关](../decisions/064-viewer-name-match-off-by-default.md)）。明细四表经 `viewer_id` 挂到观众，并保留收到时的原始外部 ID。
 - `viewer_names`：观众用过的昵称（含曾用名），只在新建、改名、合并时写入。
+- `forget_list`：不记录名单，只存 `HMAC-SHA256(库外密钥, 种类|外部ID)` 摘要与登记时刻，不落明文外部 ID；密钥在库外文件（默认 `secrets/forget.key`）。文件丢失而名单非空时存储启动硬报错，避免被遗忘的观众静默恢复记录。
 - `viewer_profiles`：观众印象文本，按观众 ID 存，收播时批量整理（见 [场次回顾与观众画像](../decisions/042-streamer-memory-recap-and-roster.md)）。
 - `session_recaps`：场次回顾，收播写、开播注入。
 
@@ -50,10 +51,21 @@
 
 - 仓储按域拆分在 `src/modules/storage/repos/`（sessions / chat / viewers / viewer_profiles / recaps / topics / events / llm / rundowns / rundown_instances / rundown_transitions / sim），清单以 `repos/__init__.py` 导出为准；同步 SQLite 调用统一经 `asyncio.to_thread` 包装，事件循环零阻塞。
 - 主要写入方：
-  - **StorageLedger**：订阅 `room.message.#` 落明细表与观众计数、订阅 `streamer.speech` 写主播发言行（带回复关联）、订阅 `game.*` 写游戏事件；不建场次行（归 LiveSessionManager）。
+  - **StorageLedger**：订阅 `room.message.#` 落明细表与观众计数、订阅 `streamer.speech` 写主播发言行（带回复关联、落库前遮名）、订阅 `tts.utterance.dropped` 写没送达标记、订阅 `game.*` 写游戏事件；观众四类消息在判场次之前先过隐私入口（遗忘命令、撤回短语、不记录名单）。不建场次行（归 LiveSessionManager）。
   - **LLM 观察面**：`src/modules/llm/observation.py` 每次调用同事务写 usage 与 requests 两表。
   - **收播整理**：场次回顾与观众印象由主播 Agent 收播钩子写入。
   - **场内摘要**：timeline_summary / topics 由后台维护者写入。
+
+## 隐私与保留期
+
+存储层自己做两件事，不依赖主播 Agent 是否在跑——观众能不能删掉自己的数据不该取决于直播间状态。
+
+- **遗忘命令**：观众发"忘了我"后，记账入口在判场次之前就把 ta 的外部 ID 摘要写进 `forget_list` 并在 `viewers.forget_requested_at_ms` 记下时刻，此后 ta 的弹幕不再落库、不建观众行，付费只留金额与类型。删除推迟到发令之后第一次下播后的清理（最迟 24 小时），执行前本人发撤回短语即取消。判定与撤回短语表都在 `storage.toml` 的 `[privacy]` 段。
+- **删除函数**：`PrivacyService.delete_viewer` 是唯一入口，一个事务内删观众行与曾用名、ta 的弹幕与对 ta 的承诺、相同外部 ID 的模拟回放副本，清空付费三表的身份与留言列，并按每个昵称的使用期把相关场次里主播台词、档案、承诺、话题与摘要中的昵称换成"一位观众"。同名昵称只在 ta 出现过的那几场替换，避免误伤日常用词。
+- **保留期清理**：`[retention].raw_days` / `viewer_absence_days` 默认都是 0（不自动删除），由使用者按自己的接入方式与合规判断配置；清理在启动时与每次下播后跑，同时执行到期的遗忘删除。
+- **删得干净**：所有连接开 `PRAGMA secure_delete=ON`，删除与清理后 `PRAGMA wal_checkpoint(TRUNCATE)` 截断预写日志，避免已删内容留在库文件或 `-wal` 里。
+
+诊断日志、LLM 请求正文与迁移前备份的保留期同样交给使用者，方案不替任何人改默认值。
 
 ## 诊断出库
 

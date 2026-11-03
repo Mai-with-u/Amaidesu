@@ -31,7 +31,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.viewers import (
     ContributionsResponse,
+    DeleteViewerResponse,
     DialogueResponse,
+    ForgetListCountResponse,
+    ForgetListRemoveRequest,
+    ForgetListRemoveResponse,
     IdentityActionResponse,
     MergeRequest,
     PendingViewersResponse,
@@ -52,6 +56,7 @@ from src.modules.dashboard.services.viewer_profiles import (
     list_viewers,
     require_chat_repo,
     require_identity_repo,
+    require_privacy_service,
     require_viewer_repo,
 )
 from src.modules.storage.repos.viewer_identity import ViewerIdentityError
@@ -123,6 +128,22 @@ async def list_pending_viewers(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/forget-list", response_model=ForgetListCountResponse)
+async def get_forget_list_count(server: ServerDep) -> ForgetListCountResponse:
+    """读取不记录名单当前条数（只显示数量，不暴露摘要）。"""
+    privacy = _available(require_privacy_service, server)
+    return ForgetListCountResponse(count=await privacy.count_forget_list())
+
+
+@router.post("/forget-list/remove", response_model=ForgetListRemoveResponse)
+async def remove_forget_list_entry(request: ForgetListRemoveRequest, server: ServerDep) -> ForgetListRemoveResponse:
+    """按外部 ID 种类与明文 ID 从不记录名单移出。"""
+    privacy = _available(require_privacy_service, server)
+    removed = await privacy.remove_from_forget_list(id_kind=request.id_kind, external_id=request.external_id)
+    count = await privacy.count_forget_list()
+    return ForgetListRemoveResponse(removed=removed, count=count)
 
 
 @router.get("/{viewer_id}", response_model=ViewerDetailResponse)
@@ -197,3 +218,26 @@ async def unlink_viewer_id(viewer_id: int, request: UnlinkRequest, server: Serve
     except ViewerIdentityError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return IdentityActionResponse(viewer_id=new_id)
+
+
+@router.post("/{viewer_id}/retract-forget", response_model=IdentityActionResponse)
+async def retract_viewer_forget(viewer_id: int, server: ServerDep) -> IdentityActionResponse:
+    """运营者替观众撤回尚未执行的宽限删除请求，恢复正常记录。"""
+    privacy = _available(require_privacy_service, server)
+    if not await privacy.retract_pending_forget(viewer_id=viewer_id):
+        raise HTTPException(status_code=409, detail=f"观众 #{viewer_id} 不存在或没有待执行的删除请求")
+    return IdentityActionResponse(viewer_id=viewer_id)
+
+
+@router.delete("/{viewer_id}", response_model=DeleteViewerResponse)
+async def delete_viewer_endpoint(
+    viewer_id: int,
+    server: ServerDep,
+    add_to_forget_list: Annotated[bool, Query(description="是否同时将该观众的外部 ID 加入不记录名单")] = False,
+) -> DeleteViewerResponse:
+    """删除这位观众及其关联数据，可选同时加入不记录名单。"""
+    privacy = _available(require_privacy_service, server)
+    deleted = await privacy.delete_viewer(viewer_id=viewer_id, add_to_forget_list=add_to_forget_list)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"观众不存在: #{viewer_id}")
+    return DeleteViewerResponse(deleted=True, added_to_forget_list=add_to_forget_list)

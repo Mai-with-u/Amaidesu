@@ -452,7 +452,7 @@ async def test_export_zip_contains_db_manifest_logs(review_client, store, tmp_pa
     manifest = json.loads(zf.read("manifest.json"))
     assert manifest["sessions"][0]["live_session_id"] == pk
     assert manifest["windows_ms"] == [[BASE, BASE + 60_000]]
-    assert manifest["notice"] == "含观众数据，仅限开发组"
+    assert manifest["notice"] == "包里含观众身份，仅限开发组使用，用完删除"
     assert any(f["path"].startswith("logs/events/") for f in manifest["files"])
 
 

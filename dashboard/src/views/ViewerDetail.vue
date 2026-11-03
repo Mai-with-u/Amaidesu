@@ -42,8 +42,13 @@
       </div>
     </section>
 
-    <!-- 身份：外部 ID / 用过的昵称 / 待确认与合并、取消关联                 -->
-    <ViewerIdentityCard v-if="detail" :detail="detail" @navigate="openViewer" />
+    <!-- 身份：外部 ID / 用过的昵称 / 待确认与合并、取消关联 / 待删除撤回与删除 -->
+    <ViewerIdentityCard
+      v-if="detail"
+      :detail="detail"
+      @navigate="openViewer"
+      @deleted="onViewerDeleted"
+    />
 
     <!-- 三区：对话 / 贡献 / 场次                                        -->
     <section v-if="detail" class="tabs-card">
@@ -370,6 +375,10 @@ function openViewer(viewerId: number): void {
     return;
   }
   void router.push(`/viewers/${viewerId}`);
+}
+
+function onViewerDeleted(): void {
+  void router.push('/viewers');
 }
 
 onMounted(async () => {

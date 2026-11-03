@@ -193,7 +193,7 @@ class ReviewExportManifest(BaseModel):
     windows_ms: List[List[int]] = Field(default_factory=list)
     git_head: Optional[str] = None
     files: List[Dict[str, object]] = Field(default_factory=list)
-    notice: str = "含观众数据，仅限开发组"
+    notice: str = "包里含观众身份，仅限开发组使用，用完删除"
 
 
 __all__ = [

@@ -923,6 +923,7 @@ async def create_app_components(
             viewer_profile_repo=database.viewer_profiles,
             # 观众身份人工处理：待确认页、合并与取消关联
             viewer_identity_repo=database.viewer_identity,
+            privacy_service=privacy_service,
             # 任务卡快照与运营委派的数据源（通用任务基建）
             task_tracker=task_tracker,
             # 请求历史管理器：与引擎写入侧同源的共享实例
@@ -1268,6 +1269,7 @@ async def _start_dashboard(
     chat_repo=None,
     viewer_profile_repo=None,
     viewer_identity_repo=None,
+    privacy_service=None,
     event_repo=None,
     recap_repo=None,
     long_memory_store=None,
@@ -1328,6 +1330,7 @@ async def _start_dashboard(
             viewer_profile_repo=viewer_profile_repo,
             # 观众身份人工处理：待确认页、合并与取消关联（/api/v1/viewers/pending|merge|keep|unlink）
             viewer_identity_repo=viewer_identity_repo,
+            privacy_service=privacy_service,
             # 场次复盘面：game_events 计数仓储与 db 快照路径（/api/v1/review*）
             event_repo=event_repo,
             # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行

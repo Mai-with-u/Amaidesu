@@ -12,6 +12,9 @@
       </div>
       <div class="header-actions">
         <el-button type="primary" plain :loading="loading" @click="load">刷新</el-button>
+        <el-button plain @click="openForgetDialog">
+          不记录名单<template v-if="forgetCount > 0">（{{ forgetCount }}）</template>
+        </el-button>
         <!-- 有观众与老观众同名、等人工确认是不是同一个人时，入口带上数量提醒 -->
         <router-link to="/viewers/pending" class="insights-link">
           待确认观众<template v-if="pendingTotal > 0">（{{ pendingTotal }}）</template> →
@@ -64,6 +67,15 @@
             >
               待确认
             </el-tag>
+            <el-tag
+              v-if="row.forget_requested_at_ms"
+              size="small"
+              type="danger"
+              class="pending-tag"
+              :title="`已请求遗忘，将于下播后或 ${formatTime(row.forget_requested_at_ms + 86_400_000)} 前删除`"
+            >
+              待删除
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="外部 ID" min-width="150">
@@ -110,6 +122,35 @@
       :current-page="page"
       @current-change="onPageChange"
     />
+
+    <!-- 不记录名单管理弹窗：仅展示总条数（不保存明文 ID），支持按外部 ID 解除 -->
+    <el-dialog v-model="forgetDialogVisible" title="不记录名单" width="460px">
+      <div class="forget-dialog-body">
+        <p class="forget-desc">
+          当前不记录名单共有 <strong>{{ forgetCount }}</strong> 条外部 ID 摘要（数据库不保存明文外部
+          ID）。若观众请求恢复记录，请输入其平台外部 ID 解除限制；已删除的历史数据无法恢复。
+        </p>
+        <div class="forget-form">
+          <el-select v-model="unblockIdKind" style="width: 130px">
+            <el-option label="账号 ID" value="account" />
+            <el-option label="开放平台 ID" value="open" />
+          </el-select>
+          <el-input
+            v-model="unblockExternalId"
+            placeholder="输入外部 ID（如 B 站 uid 或 open_id）"
+            clearable
+          />
+          <el-button
+            type="primary"
+            :loading="unblockBusy"
+            :disabled="!unblockExternalId.trim()"
+            @click="submitUnblock"
+          >
+            解除
+          </el-button>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -124,9 +165,11 @@
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
 import { viewersApi } from '@/api';
 import type { ViewerListItem } from '@/types';
+import { getApiErrorMessage } from '@/utils/apiError';
 import { formatDateTimeCn as formatTime, relativeAge } from '@/utils/format';
 
 const router = useRouter();
@@ -149,6 +192,11 @@ const items = ref<ViewerListItem[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const pendingTotal = ref(0);
+const forgetCount = ref(0);
+const forgetDialogVisible = ref(false);
+const unblockIdKind = ref<'account' | 'open'>('account');
+const unblockExternalId = ref('');
+const unblockBusy = ref(false);
 
 const shownRange = computed(() => {
   if (total.value === 0) return '0';
@@ -171,11 +219,41 @@ async function load(): Promise<void> {
   } finally {
     loading.value = false;
   }
-  // 待确认数只用于入口提醒，取不到不影响列表
+  // 待确认数与不记录名单条数只用于入口提醒，取不到不影响列表
   try {
     pendingTotal.value = (await viewersApi.pending({ limit: 1 })).data.total;
   } catch {
     pendingTotal.value = 0;
+  }
+  try {
+    forgetCount.value = (await viewersApi.getForgetListCount()).data.count;
+  } catch {
+    forgetCount.value = 0;
+  }
+}
+
+function openForgetDialog(): void {
+  forgetDialogVisible.value = true;
+}
+
+async function submitUnblock(): Promise<void> {
+  const extId = unblockExternalId.value.trim();
+  if (!extId) return;
+  unblockBusy.value = true;
+  try {
+    const res = await viewersApi.removeFromForgetList(unblockIdKind.value, extId);
+    forgetCount.value = res.data.count;
+    if (res.data.removed) {
+      ElMessage.success('已从不记录名单解除，后续发言将恢复正常记录');
+      unblockExternalId.value = '';
+      void load();
+    } else {
+      ElMessage.info('该外部 ID 不在不记录名单中');
+    }
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, '解除不记录名单失败'));
+  } finally {
+    unblockBusy.value = false;
   }
 }
 
@@ -279,6 +357,25 @@ onMounted(() => {
 .id-cell {
   font-size: 11px;
   color: var(--text-placeholder);
+}
+
+.forget-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.forget-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.forget-form {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
 }
 
 .empty-hint {

@@ -1189,6 +1189,8 @@ export interface ViewerListItem {
   /** 付费总额（金瓜子，展示层 ÷1000 = 元） */
   paid_amount: number;
   last_active_ms: number;
+  sessions_count?: number;
+  forget_requested_at_ms?: number | null;
 }
 
 export interface ViewerListResponse {
@@ -1260,6 +1262,9 @@ export interface ViewerDetail {
   sc_total_amount: number;
   sc_total_count: number;
   session_count: number;
+  sessions_count?: number;
+  forget_requested_at_ms?: number | null;
+  forget_due_at_ms?: number | null;
 }
 
 /** 对话交织行：viewer=观众消息 / reply=主播对其的回复 */
@@ -1354,6 +1359,20 @@ export interface PendingViewersResponse {
 /** 观众身份人工处理的结果：处理后应查看的观众（合并的目标 / 拆出的新观众 / 原观众） */
 export interface ViewerIdentityActionResponse {
   viewer_id: number;
+}
+
+export interface ViewerDeleteResponse {
+  deleted: boolean;
+  added_to_forget_list: boolean;
+}
+
+export interface ForgetListCountResponse {
+  count: number;
+}
+
+export interface ForgetListRemoveResponse {
+  removed: boolean;
+  count: number;
 }
 
 // ===== 观众画像管理（/api/v1/memory） =====

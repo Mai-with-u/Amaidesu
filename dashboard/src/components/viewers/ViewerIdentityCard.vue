@@ -1,5 +1,26 @@
 <template>
   <section class="identity-card">
+    <!-- 宽限删除待执行提示：观众发过"忘了我"，下播后或 24h 内将执行删除；运营者也可代为撤回 -->
+    <el-alert
+      v-if="detail.forget_requested_at_ms != null"
+      type="error"
+      :closable="false"
+      show-icon
+      class="pending-alert"
+    >
+      <template #title>
+        待删除（预计执行时刻：之后第一次下播后，最迟 {{ forgetDeadlineText }}）
+      </template>
+      <div class="pending-actions">
+        <span class="hint"
+          >当前已停止记录该观众的新弹幕与身份；执行前本人发撤回短语或在此点击均可取消。</span
+        >
+        <el-button size="small" type="warning" plain :loading="busy" @click="retractForget">
+          撤回删除请求
+        </el-button>
+      </div>
+    </el-alert>
+
     <!-- 待确认：与老观众同名但没有自动并入（默认不按昵称自动关联；开了时限则是超出时限或候选不唯一），等人工判断是不是同一个人 -->
     <el-alert
       v-if="detail.link_status === 'pending'"
@@ -91,7 +112,40 @@
         </div>
         <p class="hint">两边各有不同的账号 ID 或开放平台 ID 时不能合并——那是两个不同账号</p>
       </div>
+
+      <!-- 删除观众：清除观众行、弹幕、曾用名与付费身份，并在出场场次的台词与摘要里遮名 -->
+      <div class="identity-block">
+        <h3 class="block-title">隐私与删除</h3>
+        <div class="merge-row">
+          <el-button
+            size="small"
+            type="danger"
+            plain
+            :loading="busy"
+            @click="deleteDialogVisible = true"
+          >
+            删除这位观众…
+          </el-button>
+        </div>
+        <p class="hint">不可撤销：删除弹幕与观众记录、清空付费身份，并替换相关场次台词里的昵称</p>
+      </div>
     </div>
+
+    <el-dialog v-model="deleteDialogVisible" title="删除观众" width="440px">
+      <p class="delete-desc">
+        确定彻底删除「{{ detail.user_name || '（未留名）' }}」（#{{
+          detail.viewer_id
+        }}）的全部记录？ 其弹幕、曾用名、模拟回放副本及对 ta
+        的承诺将被删除，付费记录将清空身份与留言，主播在相关场次台词中叫过的昵称将替换为「一位观众」。此操作不可恢复。
+      </p>
+      <el-checkbox v-model="alsoAddToForgetList">
+        同时将外部 ID 加入不记录名单（今后不再记录该观众）
+      </el-checkbox>
+      <template #footer>
+        <el-button @click="deleteDialogVisible = false">取消</el-button>
+        <el-button type="danger" :loading="busy" @click="confirmDeleteViewer">确认删除</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -112,10 +166,19 @@ import { getApiErrorMessage } from '@/utils/apiError';
 import { formatDateTimeCn } from '@/utils/format';
 
 const props = defineProps<{ detail: ViewerDetail }>();
-const emit = defineEmits<{ navigate: [viewerId: number] }>();
+const emit = defineEmits<{ navigate: [viewerId: number]; deleted: [] }>();
 
 const busy = ref(false);
 const mergeTarget = ref<number | null>(null);
+const deleteDialogVisible = ref(false);
+const alsoAddToForgetList = ref(false);
+
+const forgetDeadlineText = computed(() => {
+  const reqMs = props.detail.forget_requested_at_ms;
+  if (reqMs == null) return '';
+  const dueMs = props.detail.forget_due_at_ms ?? reqMs + 86_400_000;
+  return formatDateTimeCn(dueMs);
+});
 
 const bothIds = computed(() => Boolean(props.detail.account_id && props.detail.open_id));
 
@@ -184,6 +247,29 @@ function unlink(kind: 'account' | 'open', label: string): void {
     async () => (await viewersApi.unlink(props.detail.viewer_id, kind)).data.viewer_id,
     '已拆成新观众',
   );
+}
+
+function retractForget(): void {
+  void act(
+    `撤回「${props.detail.user_name}」尚未执行的遗忘删除请求，并移出不记录名单？`,
+    '撤回删除请求',
+    async () => (await viewersApi.retractForget(props.detail.viewer_id)).data.viewer_id,
+    '已撤回删除请求，恢复正常记录',
+  );
+}
+
+async function confirmDeleteViewer(): Promise<void> {
+  busy.value = true;
+  try {
+    await viewersApi.remove(props.detail.viewer_id, alsoAddToForgetList.value);
+    ElMessage.success(alsoAddToForgetList.value ? '已删除观众并加入不记录名单' : '已删除观众记录');
+    deleteDialogVisible.value = false;
+    emit('deleted');
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, '删除观众失败'));
+  } finally {
+    busy.value = false;
+  }
 }
 </script>
 
@@ -278,6 +364,13 @@ function unlink(kind: 'account' | 'open', label: string): void {
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
+}
+
+.delete-desc {
+  margin: 0 0 var(--spacing-sm);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
 }
 
 .hint,

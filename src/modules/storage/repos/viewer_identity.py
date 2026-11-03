@@ -20,6 +20,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
+from src.modules.storage.migrations._common import table_exists
 from src.modules.storage.models.viewer_identity import PendingViewerSummary
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.utils.time_utils import now_ms
@@ -175,6 +176,8 @@ def _merge_rows(conn: sqlite3.Connection, src: Dict[str, Any], dst: Dict[str, An
     conn.execute("DELETE FROM viewer_names WHERE viewer_id=?", (src_id,))
     for table, *_ in _DETAIL_TABLES:
         conn.execute(f"UPDATE {table} SET viewer_id=? WHERE viewer_id=?", (dst_id, src_id))  # noqa: S608 常量表名
+    if table_exists(conn, "commitments"):
+        conn.execute("UPDATE commitments SET viewer_id=? WHERE viewer_id=?", (dst_id, src_id))
     # 画像以目标为准；目标还没有画像时沿用来源的
     if conn.execute("SELECT 1 FROM viewer_profiles WHERE viewer_id=?", (dst_id,)).fetchone() is None:
         conn.execute("UPDATE viewer_profiles SET viewer_id=? WHERE viewer_id=?", (dst_id, src_id))

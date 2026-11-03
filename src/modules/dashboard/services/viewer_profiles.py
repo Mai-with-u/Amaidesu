@@ -25,6 +25,7 @@ from src.modules.dashboard.schemas.viewers import (
     ViewerSessionItem,
     ViewerSessionsResponse,
 )
+from src.modules.storage.privacy import GRACE_DELETE_MAX_MS
 from src.modules.types.currency import to_cny
 
 if TYPE_CHECKING:
@@ -59,6 +60,14 @@ def require_chat_repo(server: "DashboardServer") -> Any:
     return repo
 
 
+def require_privacy_service(server: "DashboardServer") -> Any:
+    """取观众隐私服务，未装配时抛 :class:`RepoUnavailableError`。"""
+    svc = server.privacy_service
+    if svc is None:
+        raise RepoUnavailableError("观众隐私服务不可用")
+    return svc
+
+
 def _viewer_to_list_item(viewer: Any) -> ViewerListItem:
     return ViewerListItem(
         viewer_id=viewer.id,
@@ -73,6 +82,8 @@ def _viewer_to_list_item(viewer: Any) -> ViewerListItem:
         paid_count=viewer.paid_count or 0,
         paid_amount=viewer.paid_amount or 0,
         last_active_ms=viewer.last_active_ms or 0,
+        sessions_count=getattr(viewer, "sessions_count", 0) or 0,
+        forget_requested_at_ms=getattr(viewer, "forget_requested_at_ms", None),
     )
 
 
@@ -164,6 +175,8 @@ async def build_viewer_detail(viewer_repo: Any, chat_repo: Any, viewer_id: int) 
         candidate_viewer = await viewer_repo.get_viewer(viewer_id=row.link_candidate_id)
         if candidate_viewer is not None:
             candidate = ViewerBrief(viewer_id=candidate_viewer.id, user_name=candidate_viewer.user_name)
+    # 观众行上可能没有待删除标记（极简测试替身 / 未迁移形状），缺省按"无待执行删除"处理
+    forget_requested_at_ms: Optional[int] = getattr(row, "forget_requested_at_ms", None)
     bounds = await chat_repo.get_viewer_activity_bounds(viewer_id=viewer_id)
     summary = await chat_repo.summarize_viewer_contributions(viewer_id=viewer_id)
     sessions = await chat_repo.list_viewer_sessions(viewer_id=viewer_id)
@@ -198,6 +211,11 @@ async def build_viewer_detail(viewer_repo: Any, chat_repo: Any, viewer_id: int) 
         sc_total_amount=to_cny(int(summary.get("sc_total_amount", 0))) or 0.0,
         sc_total_count=int(summary.get("sc_total_count", 0)),
         session_count=len(sessions),
+        sessions_count=getattr(row, "sessions_count", 0) or 0,
+        forget_requested_at_ms=forget_requested_at_ms,
+        forget_due_at_ms=(
+            int(forget_requested_at_ms) + GRACE_DELETE_MAX_MS if forget_requested_at_ms is not None else None
+        ),
     )
 
 

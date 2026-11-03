@@ -152,3 +152,27 @@ async def test_fresh_db_enables_secure_delete_and_includes_forget_list(db_path: 
         assert row is not None and int(row[0]) == 1
     finally:
         await db.close()
+
+
+def test_v23_backfill_skips_shapes_without_required_columns() -> None:
+    """极旧的中间形状（live_chat 无 sender_role / 无 live_sessions）不做回填、不报错，其余结构照常补齐。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    _make_v22_schema(conn)
+    conn.execute("DROP TABLE live_sessions")
+    conn.execute("ALTER TABLE live_chat DROP COLUMN sender_role")
+    conn.execute(
+        "INSERT INTO viewers(id, platform, account_id, user_name, simulated, last_active_ms)"
+        " VALUES (1, 'bilibili', 'u1', '甲', 0, 1000)"
+    )
+
+    for _ in range(2):
+        v23_migrate(conn)
+
+    row = conn.execute("SELECT sessions_count, last_session_id FROM viewers WHERE id=1").fetchone()
+    assert (row["sessions_count"], row["last_session_id"]) == (0, None)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "forget_list" in tables
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(live_chat)")}
+    assert {"utterance_id", "dropped_at_ms", "memory_refs"} <= columns
+    conn.close()
