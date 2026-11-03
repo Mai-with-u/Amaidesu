@@ -87,3 +87,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-063：两个身体之间只交换发布出来的东西（取代 ADR-059：笔记正本留在 Amaidesu 本地 / 发布给 QQ 麦麦看的那份 / QQ 里的约定先进插件的待收清单 / 搁置 ADR-062 的粉丝群消息递给直播）](063-maibot-interop-published-views.md)
 - [ADR-064：按昵称关联观众默认关（部分取代 ADR-047 的自动关联默认：时限默认 0 / 同名一律转待确认 / 想要自动关联的人自己把天数调回来）](064-viewer-name-match-off-by-default.md)
 - [ADR-065：主播记忆改按账本记录（下播整理三次调用 / 承诺与场次档案两张表 / 先只写不读跑一段）](065-memory-ledger-shadow-run.md)
+- [ADR-066：记忆注入切到账本（常驻简报 + 线索推送 + memory_recall / 旧三份记忆停写并退出提示词）](066-memory-injection-switch.md)
