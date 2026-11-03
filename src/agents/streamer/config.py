@@ -465,7 +465,7 @@ class StreamerMemoryConfig(BaseConfig):
         default=2000,
         ge=100,
         le=20000,
-        description="本场备忘录（工作笔记）的字符上限，超出截断；备忘录每轮全量注入决策与表达两层，"
+        description="本场备忘录（工作笔记）的字符上限，超出截断；备忘录每轮全量注入决策层（表达侧不带），"
         "覆盖写的结论集量级天然小，默认值按注入成本与结论体量折中",
         json_schema_extra={"x-ui-advanced": True},
     )

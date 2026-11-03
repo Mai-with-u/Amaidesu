@@ -1,4 +1,4 @@
-"""Planner 系统提示词里的底线与规则：AI 声明、边界栏、做不到的不答应——
+"""Planner 系统提示词里的底线与规则：AI 声明、边界栏、做不到的不答应、备忘录口径——
 用真实提示词模板渲染，经 plan() 取发给模型的系统提示词。"""
 
 from __future__ import annotations
@@ -8,6 +8,7 @@ from typing import Any, Iterator
 import pytest
 
 from src.agents.streamer.config import StreamerPersonaConfig
+from src.agents.streamer.memory.tools import NOTEBOOK_SPEC
 from src.agents.streamer.planner import Planner, PlannerConfig
 from src.agents.streamer.room_state import RoomState
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -107,3 +108,12 @@ def test_refusals_follow_the_boundaries_line_not_a_hardcoded_list(prompts: Any) 
     assert "「她是谁」里列出的她不答应的事" in prompt
     assert all(word not in prompt for word in ("线下见面", "要钱", "要私人信息"))
     assert "不管人设里列没列，都别让她向观众打听住址、电话、学校这类私人信息" in prompt
+
+
+def test_notebook_rule_says_it_only_reaches_the_decision_side(prompts: Any) -> None:
+    """备忘录只进决策上下文，她开口时看不到：要她说出口的事得写进交接稿。工具描述与提示词口径一致。"""
+    prompt = _render_bare(prompts)
+
+    for text in (prompt, NOTEBOOK_SPEC.description):
+        assert "只自动" in text and "决策上下文" in text and "要她说出口的事写进交接稿" in text
+        assert "表达上下文" not in text

@@ -70,7 +70,6 @@ def _mouth(
     *,
     live: bool = True,
     clock: Optional[_Clock] = None,
-    long_memory: str = "",
     boundaries: str = "",
     **config: Any,
 ) -> Mouth:
@@ -97,11 +96,9 @@ def _mouth(
         gate=SpeechGate(window=10, ratio=0.5),
         word_filter=None,
         goals_provider=lambda: [GoalLine(game="minecraft", instruction="回到基地家中", started_ms=NOW - 120_000)],
-        notebook_provider=lambda: "",
         segment_provider=lambda: "互动闲聊",
         scene_reader=_scene,
         is_live=lambda: live,
-        long_memory_provider=lambda: long_memory,
         clock=clock,
     )
     mouth.scene_reads = scene_reads  # type: ignore[attr-defined]
@@ -134,16 +131,16 @@ async def test_urgent_encounter_gets_one_short_reaction_with_scene_card(prompts:
     assert mouth._room_state.last_speech_ms == NOW
 
 
-async def test_long_memory_rides_in_system_prompt_only_when_present(prompts: Any) -> None:
-    """长期笔记有内容才进系统提示词（用得上时拿来接话，不催她主动提）；没有时不留空段。"""
-    llm = _LLM("happy：好家伙", "happy：好家伙")
-    remembering = _mouth(llm, _Speech(), prompts, long_memory="## 老梗与口头禅\n- 床名一直没定")
-    await remembering.react_once([_trigger()])
-    assert "你自己整理的长期笔记" in llm.calls[0]["system"] and "床名一直没定" in llm.calls[0]["system"]
+async def test_mouth_carries_no_memory_in_system_prompt_or_scene_card(prompts: Any) -> None:
+    """嘴不拿任何记忆：系统提示词里没有长期笔记，现场卡里没有备忘录（悬着的事）一段。"""
+    llm = _LLM("happy：好家伙")
+    mouth = _mouth(llm, _Speech(), prompts)
 
-    forgetful = _mouth(llm, _Speech(), prompts)
-    await forgetful.react_once([_trigger()])
-    assert "你自己整理的长期笔记" not in llm.calls[1]["system"]
+    await mouth.react_once([_trigger()])
+
+    assert "长期笔记" not in llm.calls[0]["system"]
+    card = llm.calls[0]["messages"][-1]["content"]
+    assert card.startswith("【现场】") and "悬着的事" not in card
 
 
 #: AI 声明写死在三条说话通路的模板里，不随人设配置变；嘴的这条后面接边界栏那一行（有的话）

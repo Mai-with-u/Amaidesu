@@ -294,7 +294,7 @@ class StreamerAgent(BaseAgent):
         # 房间态势（纯规则滑动窗口）
         self._room_state = RoomState()
 
-        # 本场备忘录：决策与表达每轮读内存里这份；每次写入同步落进本场的场次行，
+        # 本场备忘录：决策每轮读内存里这份；每次写入同步落进本场的场次行，
         # 收播整理从场次行读回（直播中途关掉应用也不丢），收播后内存里这份清空
         self._notebook = StreamerNotebook(max_chars=config.memory.notebook_max_chars)
         # 开播时读出的长期笔记（解析后的条目）：决策层按开着的游戏取全场条目、按发言观众取
@@ -392,7 +392,6 @@ class StreamerAgent(BaseAgent):
             llm_service=llm_manager,
             prompt_service=prompt_manager,
             word_filter=self._word_filter,
-            notebook_text_provider=self._notebook.read,
         )
 
         # 主动发言触发器（纯规则组件，Agent 内部件）
@@ -580,11 +579,9 @@ class StreamerAgent(BaseAgent):
                 gate=self._speech_gate,
                 word_filter=self._word_filter,
                 goals_provider=self._planner.workbench.current_goals,
-                notebook_provider=self._notebook.read,
                 segment_provider=self._current_segment_title,
                 scene_reader=self._read_scene_brief,
                 is_live=lambda: self._live_active,
-                long_memory_provider=lambda: render_for_injection(self._notes_doc),
                 profile=_PROFILE_REPLYER,
             )
         if self._mouth is not None:

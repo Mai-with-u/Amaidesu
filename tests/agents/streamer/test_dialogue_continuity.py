@@ -607,7 +607,6 @@ def test_replyer_prompts_speak_like_a_streamer_not_a_group_member(prompts: Any) 
         rundown="",
         dialogue_prompt="",
         state_facts="",
-        notebook_section="",
         bot_name="麦麦",
         length_rule="整句不超过 40 字。",
     )
@@ -657,7 +656,6 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
         rundown="",
         dialogue_prompt="",
         state_facts="",
-        notebook_section="",
         bot_name="麦麦",
         length_rule="",
     )

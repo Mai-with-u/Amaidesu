@@ -52,7 +52,6 @@ def _render_channels(prompts: Any) -> Dict[str, str]:
             style_constraints="口语化",
             max_chars="40",
             emotions="happy",
-            long_memory="",
             boundaries_rule="",
         ),
     }

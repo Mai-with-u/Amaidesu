@@ -17,7 +17,6 @@ def _inputs(**overrides: object) -> SceneInputs:
         "recent_events": ((NOW - 8_000, "被苦力怕炸到一下，血掉了不少"), (NOW - 70_000, "天色变了：天亮了")),
         "segment_title": "互动闲聊",
         "room_activity": "近 1 分钟弹幕 0 条（热度 low）",
-        "notebook": "床的名字定了：苦力怕拆迁床",
         "recent_speeches": ("走走走，回家！", "天总算亮了。"),
     }
     base.update(overrides)
@@ -33,7 +32,6 @@ def test_card_reads_in_order_and_marks_goals_as_plans() -> None:
         "【手上的目标】",
         "【刚发生的事】",
         "【直播间】",
-        "【悬着的事】",
         "【你刚说过】",
         "【这次的由头】",
     ]
@@ -68,15 +66,21 @@ def test_empty_sections_are_left_out() -> None:
 
 
 def test_long_card_drops_low_priority_sections_first() -> None:
-    """超长时先减事件与台词条数，再丢悬着的事、直播间；现状、目标与由头一直保留。"""
+    """超长时先减事件与台词条数，再丢直播间；现状、目标与由头一直保留。"""
     events = tuple((NOW - i * 5_000, f"第{i}件事" + "很长的描述" * 6) for i in range(10, 0, -1))
     speeches = tuple(f"说过的第{i}句话" + "啰嗦" * 10 for i in range(8))
-    card = build_scene_card(
-        _inputs(recent_events=events, recent_speeches=speeches, notebook="备忘" * 80), max_chars=500
-    )
-    assert len(card) <= 500
+    card = build_scene_card(_inputs(recent_events=events, recent_speeches=speeches), max_chars=350)
+    assert len(card) <= 350
     assert "【现在的状态】" in card and "【手上的目标】" in card and "【这次的由头】" in card
-    assert "【悬着的事】" not in card
+    # 事件与台词先减到各留两条，仍放不下才丢直播间
+    assert "【直播间】" not in card and card.count("件事") == 2 and card.count("句话") == 2
+
+
+def test_card_has_no_notebook_section() -> None:
+    """现场卡不再有备忘录（悬着的事）一段：嘴不拿任何记忆，输入里也没有这个字段可填。"""
+    card = build_scene_card(_inputs())
+    assert "悬着的事" not in card
+    assert "notebook" not in SceneInputs.__dataclass_fields__
 
 
 def test_brief_of_reads_only_the_brief_field() -> None:

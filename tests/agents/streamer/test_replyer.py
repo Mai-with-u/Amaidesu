@@ -85,10 +85,10 @@ async def test_persona_goes_into_system_template_and_turn_data_into_the_turn_tem
         "boundaries_rule": "\n- 不答应的事：线下见面",
     }
 
-    turn = by_template["amaidesu_replyer"]  # 每轮变化的决策与弹幕；说话风格不在这里
+    turn = by_template["amaidesu_replyer"]  # 每轮变化的决策与弹幕；风格与备忘录都不在这里
     assert turn["plan"] is not None and turn["bot_name"] == "麦麦"
     assert turn["rundown"] == "（当前无流程单）"
-    assert {"personality", "style_constraints"}.isdisjoint(turn)
+    assert {"personality", "style_constraints", "notebook_section"}.isdisjoint(turn)
 
 
 @pytest.mark.parametrize("blank", ["", "  \n "])

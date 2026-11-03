@@ -8,7 +8,8 @@
   下一句合并成一个由头；同一类遭遇冷却一段时间；小事（急事开始结束、天色）只在她安静了一阵时才开口。
 - 依据：系统提示词只有人设和几条规矩（含"被问到是不是真人时坦白自己是 AI"和人设里的边界栏），事实全在
   每次附上的现场卡里（现在的状态、手上的目标、刚发生的事、她刚说过的话）——实验里没有这张卡的瘦嘴会
-  理直气壮地编现场。
+  理直气壮地编现场。嘴不带任何记忆：长期笔记和备忘录都不给，几秒内的一句反应用不上，带上只会让她在
+  急事里翻旧账、拖长输入。
 - 兜底：输出一到三行"情绪：台词"或"[沉默]"——情绪在一次反应里转了（先吓一跳再松口气）就拆成
   几行，每行一个情绪；没写情绪的行沿用上一行的。台词按句累计截到长度预算、过敏感词过滤、几行拼起来
   和她最近说过的话比重合度，重复的直接丢弃不重试。出声走发声分发器的反应通道：前一句没播完最多等一会
@@ -101,11 +102,9 @@ class Mouth:
         gate: SpeechGate,
         word_filter: Optional[WordFilter],
         goals_provider: Callable[[], Sequence[GoalLine]],
-        notebook_provider: Callable[[], str],
         segment_provider: Callable[[], str],
         scene_reader: Callable[[], Awaitable[str]],
         is_live: Callable[[], bool],
-        long_memory_provider: Callable[[], str] = lambda: "",
         profile: str = "replyer",
         clock: Callable[[], int] = now_ms,
     ) -> None:
@@ -121,11 +120,9 @@ class Mouth:
         self._gate = gate
         self._word_filter = word_filter
         self._goals_provider = goals_provider
-        self._notebook_provider = notebook_provider
         self._segment_provider = segment_provider
         self._scene_reader = scene_reader
         self._is_live = is_live
-        self._long_memory_provider = long_memory_provider
         self._profile = profile
         self._clock = clock
         self._logger = get_logger("StreamerAgent.Mouth")
@@ -272,6 +269,8 @@ class Mouth:
     # ---------------- 输入 ----------------
 
     def _system_prompt(self) -> str:
+        """系统提示词只有人设和规矩：人设、说话风格、边界栏随人设配置变，"被问到是不是真人时坦白是 AI"
+        写死在模板里；不带长期笔记（嘴不拿任何记忆），整场内容不变，前缀稳定。"""
         return self._prompt.render(
             MOUTH_TEMPLATE,
             bot_name=self._persona.get("bot_name", "麦麦"),
@@ -279,7 +278,6 @@ class Mouth:
             style_constraints=self._persona.get("style_constraints", ""),
             max_chars=str(self._speech_max_chars or 40),
             emotions="、".join(emotion.value for emotion in Emotion),
-            long_memory=self._long_memory_block(),
             boundaries_rule=self._boundaries_rule(),
         )
 
@@ -292,20 +290,6 @@ class Mouth:
         """
         line = boundaries_line(self._persona.get("boundaries", ""))
         return f"\n- {line}" if line else ""
-
-    def _long_memory_block(self) -> str:
-        """长期记忆进系统提示词的那一段；没有就是空串。开播时读出、整场不变，系统提示词前缀稳定。"""
-        try:
-            text = (self._long_memory_provider() or "").strip()
-        except Exception as exc:  # noqa: BLE001 - 读不到就不带，照常说话
-            self._logger.warning(f"读长期记忆失败: {exc}", exc=True)
-            return ""
-        if not text:
-            return ""
-        return (
-            "\n\n你自己整理的长期笔记（过了好几场还记得的事：用得上时再用，不必主动提起；"
-            f"现场的事以【现场】为准）：\n{text}\n"
-        )
 
     @staticmethod
     def _trigger_text(triggers: Sequence[Trigger]) -> str:
@@ -336,11 +320,6 @@ class Mouth:
             self._logger.warning(f"读手上的目标失败: {exc}", exc=True)
             goals = []
         try:
-            notebook = self._notebook_provider() or ""
-        except Exception as exc:  # noqa: BLE001
-            self._logger.warning(f"读备忘录失败: {exc}", exc=True)
-            notebook = ""
-        try:
             segment = self._segment_provider() or ""
         except Exception as exc:  # noqa: BLE001
             self._logger.warning(f"读当前环节失败: {exc}", exc=True)
@@ -354,7 +333,6 @@ class Mouth:
             recent_events=[(record.at_ms, record.text) for record in self._records if record.kind == "game"],
             segment_title=segment,
             room_activity=self._room_state.activity_line(),
-            notebook=notebook,
             recent_speeches=[record.text for record in self._records if record.kind == "speech"],
         )
 

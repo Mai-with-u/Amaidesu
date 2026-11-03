@@ -7,7 +7,9 @@
 - 现在的状态：游戏提供的一句话现场（参考工具结果里的 ``brief``），带"几秒前看的"；
 - 手上的目标：正在做的事和进展。目标和现状分开写——实验里瘦嘴把"退回屋内关好门"这条指令
   当成了已经发生的事，所以这一段明写"这是打算，不一定已经做到"；
-- 刚发生的事、直播间、悬着的事（备忘录）、她刚说过的话、这次的由头。
+- 刚发生的事、直播间、她刚说过的话、这次的由头。
+
+卡里没有备忘录和长期笔记：嘴不拿任何记忆，几秒内的一句反应只靠上面这些现场事实，不翻旧账。
 
 本模块只按输入拼卡、按长度取舍，不读事件、不调 LLM；数据从哪来、多久刷新由调用方决定。
 卡里不出现任何具体游戏的知识：游戏相关的白话化在各游戏 Agent 包里完成，这里只当成文字放进来。
@@ -51,7 +53,6 @@ class SceneInputs:
     recent_events: Sequence[Tuple[int, str]] = ()
     segment_title: str = ""
     room_activity: str = ""
-    notebook: str = ""
     recent_speeches: Sequence[str] = field(default_factory=tuple)
 
 
@@ -117,10 +118,6 @@ def _room_section(inputs: SceneInputs) -> str:
     return "【直播间】" + "；".join(parts) if parts else ""
 
 
-def _notebook_section(inputs: SceneInputs) -> str:
-    return f"【悬着的事】\n{_clip(inputs.notebook, 200)}" if inputs.notebook.strip() else ""
-
-
 def _speeches_section(inputs: SceneInputs, limit: int) -> str:
     speeches = [line for line in inputs.recent_speeches if line.strip()][-limit:] if limit > 0 else []
     if not speeches:
@@ -137,19 +134,18 @@ def build_scene_card(
 ) -> str:
     """拼一张不超过 ``max_chars`` 的现场卡。
 
-    超长时按"谁最不能丢"往下砍：先减刚发生的事和她刚说过的话的条数，再丢悬着的事、直播间；
+    超长时按"谁最不能丢"往下砍：先减刚发生的事和她刚说过的话的条数，再丢直播间；
     现在的状态、手上的目标与这次的由头一直保留（各自已截短）。段落按阅读顺序排列，由头放最后。
     """
     trigger = f"【这次的由头】{_clip(inputs.trigger, 120)}" if inputs.trigger.strip() else ""
     events, speeches = max_events, max_speeches
-    keep_room, keep_notebook = True, True
+    keep_room = True
     while True:
         sections = [
             _scene_section(inputs),
             _goal_section(inputs),
             _events_section(inputs, events),
             _room_section(inputs) if keep_room else "",
-            _notebook_section(inputs) if keep_notebook else "",
             _speeches_section(inputs, speeches),
             trigger,
         ]
@@ -158,8 +154,6 @@ def build_scene_card(
             return card
         if events > 2 or speeches > 2:
             events, speeches = max(2, events - 1), max(2, speeches - 1)
-        elif keep_notebook:
-            keep_notebook = False
         elif keep_room:
             keep_room = False
         elif events > 0 or speeches > 0:

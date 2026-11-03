@@ -15,7 +15,6 @@ from src.agents.streamer.memory import (
 from src.agents.streamer.memory.recap import SessionRecapWriter
 from src.agents.streamer.memory.tools import NOTEBOOK_SPEC
 from src.agents.streamer.planner_context import AssemblerInputs, PlannerAssembler
-from src.agents.streamer.replyer import Replyer
 from src.modules.storage.models.sessions import LiveSession
 from src.modules.tools import ToolRegistry
 from src.modules.tools.models import ToolInvocation
@@ -122,43 +121,6 @@ def test_assembler_omits_notebook_section_when_empty() -> None:
     text = PlannerAssembler().assemble(AssemblerInputs(stage_descriptions="环节"))
     assert "备忘录" not in text
     assert PlannerAssembler().assemble(AssemblerInputs(notebook_section="")) == ""
-
-
-# ---------------------------------------------------------------------------
-# 注入：表达层 user 消息携带同段（空内容省略）
-# ---------------------------------------------------------------------------
-
-
-def _replyer_with_prompt_capture(notebook: StreamerNotebook) -> tuple[Replyer, MagicMock]:
-    prompt = MagicMock()
-    prompt.render = MagicMock(return_value="PROMPT")
-    replyer = Replyer(
-        config={"bot_name": "麦麦", "personality": "", "style_constraints": ""},
-        llm_service=MagicMock(),
-        prompt_service=prompt,
-        notebook_text_provider=notebook.read,
-    )
-    return replyer, prompt
-
-
-def _render_turn(replyer: Replyer) -> None:
-    from src.agents.streamer.plan import DecisionPlan
-
-    replyer._render_turn_input(DecisionPlan(should_reply=True), [])
-
-
-def test_replyer_turn_input_carries_notebook_section() -> None:
-    notebook = StreamerNotebook()
-    notebook.set("答应过 alice 画新皮肤")
-    replyer, prompt = _replyer_with_prompt_capture(notebook)
-    _render_turn(replyer)
-    assert prompt.render.call_args.kwargs["notebook_section"] == "## 备忘录\n\n答应过 alice 画新皮肤"
-
-
-def test_replyer_turn_input_omits_notebook_when_empty() -> None:
-    replyer, prompt = _replyer_with_prompt_capture(StreamerNotebook())
-    _render_turn(replyer)
-    assert prompt.render.call_args.kwargs["notebook_section"] == ""
 
 
 # ---------------------------------------------------------------------------
