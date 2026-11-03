@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -12,12 +13,14 @@ import tomlkit
 from pydantic import ConfigDict
 
 from src.modules import component_catalog
+from src.modules.config import multi_file_loader
 from src.modules.config.errors import ConfigValidationError
 from src.modules.config.multi_file_loader import (
     _validate_file,
     _write_back_schema_file,
     generate_default_configs,
     load_config_dir,
+    update_config_values,
 )
 from src.modules.config.registry import COLLECTOR_SCHEMAS
 from src.modules.config.schemas.base import BaseConfig
@@ -83,6 +86,28 @@ def test_unchanged_load_never_writes_and_drift_write_backs_up_once(config_dir) -
     assert not report.has_drift
     assert _write_back_schema_file(config_dir, "agents.toml", type(instance), instance) is None  # 内容不变短路
     assert len(list((config_dir / "old").rglob("agents.toml"))) == 1
+
+
+def test_same_second_writes_keep_every_pre_write_backup(config_dir, monkeypatch) -> None:
+    """同一整秒内连续两次写同一文件：各自成批，两次写入之前的旧版本都留着，后一批不覆盖前一批。"""
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return datetime(2026, 1, 1, 12, 0, 0)
+
+    generate_default_configs(config_dir)
+    _settle(config_dir)
+    monkeypatch.setattr(multi_file_loader, "datetime", _FrozenDatetime)
+
+    storage_path = config_dir / "storage.toml"
+    original = storage_path.read_bytes()
+    update_config_values(config_dir, "storage.toml", {"sqlite.db_path": "data/a.db"})
+    after_first = storage_path.read_bytes()
+    update_config_values(config_dir, "storage.toml", {"sqlite.db_path": "data/b.db"})
+
+    backups = {path.parent.name: path.read_bytes() for path in (config_dir / "old").rglob("storage.toml")}
+    assert backups == {"20260101_120000": original, "20260101_120000_2": after_first}
 
 
 def test_self_write_marks_are_one_shot_expire_and_only_cover_the_written_file(config_dir, tmp_path) -> None:

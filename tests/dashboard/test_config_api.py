@@ -5,11 +5,14 @@ API 键 = scope 前缀 + 文件内点分路径（如 ``tools.tools.tasks.poll_in
 
 from __future__ import annotations
 
+import itertools
 import tomllib
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from src.modules.config import multi_file_loader
 from src.modules.config.multi_file_loader import generate_default_configs
 from src.modules.config.service import ConfigService
 
@@ -165,8 +168,36 @@ def test_batch_empty_is_rejected_and_write_leaves_backup(client, config_dir) -> 
     empty = client.post("/api/v1/config/batch", json={"changes": []})
     assert empty.status_code == 200 and empty.json()["success"] is False
 
+    # 夹具里 service.initialize() 的版本推进也会把 storage.toml 备份进 config/old/，
+    # 所以只数这次写入新增的备份，并核对内容就是写入前的旧文件
+    before_bytes = (config_dir / "storage.toml").read_bytes()
+    backups_before = set((config_dir / "old").rglob("storage.toml"))
     client.post("/api/v1/config/batch", json={"changes": [{"key": "storage.sqlite.db_path", "value": "data/other.db"}]})
-    assert len(list((config_dir / "old").rglob("storage.toml"))) == 1  # 备份在 config/old/<批次>/
+    new_backups = set((config_dir / "old").rglob("storage.toml")) - backups_before
+    assert len(new_backups) == 1  # 备份在 config/old/<批次>/，批次目录不与之前的撞名
+    assert new_backups.pop().read_bytes() == before_bytes
+
+
+def test_batch_across_files_shares_one_backup_dir(client, config_dir, monkeypatch) -> None:
+    """一次保存跨多个文件：写入过程中时钟每次读数都走过整秒，旧版本仍落在同一个批次目录。"""
+    ticks = itertools.count()
+
+    class _TickingDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return datetime(2026, 1, 1, 12, 0, 0) + timedelta(seconds=next(ticks))
+
+    monkeypatch.setattr(multi_file_loader, "datetime", _TickingDatetime)
+    backups_before = set((config_dir / "old").rglob("*.toml"))
+    changes = [
+        {"key": "tools.tools.tasks.poll_interval_ms", "value": 3000},
+        {"key": "infra.dashboard.port", "value": 60300},
+    ]
+    assert client.post("/api/v1/config/batch", json={"changes": changes}).json()["success"] is True
+
+    new_backups = set((config_dir / "old").rglob("*.toml")) - backups_before
+    assert {path.name for path in new_backups} == {"tools.toml", "infra.toml"}
+    assert len({path.parent for path in new_backups}) == 1  # 两个文件的旧版本同一批次目录
 
 
 def _leaf_fields(fields: list[dict]) -> list[dict]:

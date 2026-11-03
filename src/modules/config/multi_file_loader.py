@@ -112,7 +112,30 @@ def validate_config_updates(config_dir: Path, file_name: str, updates: dict[str,
     _validate_file(file_name, raw)
 
 
-def update_config_values(config_dir: Path, file_name: str, updates: dict[str, Any]) -> None:
+def new_backup_batch_id(config_dir: Path) -> str:
+    """生成一个尚未被占用的备份批次目录名（对应 ``config/old/<批次>/``）。
+
+    批次号取当前时间，精确到秒。同一秒内再开新批次时该目录已存在，
+    就追加 ``_2``、``_3`` 后缀：若沿用同名目录，后一批次的备份会覆盖前一批次
+    同名文件，前一次写入之前的旧版本就被悄悄丢掉。
+    """
+    base = datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidate = base
+    suffix = 2
+    # 同秒已有批次目录 -> 换带序号的新名字，直到找到空位
+    while (config_dir / "old" / candidate).exists():
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    return candidate
+
+
+def update_config_values(
+    config_dir: Path,
+    file_name: str,
+    updates: dict[str, Any],
+    *,
+    batch_id: str | None = None,
+) -> None:
     """把键级变更并入指定配置文件并经统一管线写回（对外写入口）。
 
     流程：读原始文档 → 应用点分键变更 → Schema 校验（硬错，ConfigValidationError
@@ -123,6 +146,9 @@ def update_config_values(config_dir: Path, file_name: str, updates: dict[str, An
         file_name: 目标文件名（七文件之一）
         updates: ``{文件内点分路径: 新值}``，路径不含 scope 前缀；
             同路径多次给定时后者覆盖前者
+        batch_id: 备份批次号；一次保存要连续写多个文件时由调用方生成一个
+            （``new_backup_batch_id``）传入，让这些文件的旧版本落进同一个批次目录；
+            为 None 时本次写入自成一批
 
     Raises:
         ConfigValidationError: 合并后的文档未通过 Schema 校验（磁盘零写入）
@@ -130,7 +156,7 @@ def update_config_values(config_dir: Path, file_name: str, updates: dict[str, An
     raw = _read_toml_dict(config_dir / file_name)
     _apply_updates_to_raw(raw, updates)
     instance, _report = _validate_file(file_name, raw)
-    batch_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    batch_id = batch_id or new_backup_batch_id(config_dir)
     _write_back_schema_file(config_dir, file_name, _ROOT_SCHEMAS[file_name], instance, batch_id=batch_id)
 
 
@@ -1028,7 +1054,8 @@ def load_config_dir(
     for fname, (instance, report) in validated.items():
         advanced = fname in version_changes
         if report.has_drift or advanced:
-            batch_id = batch_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+            # 本轮加载首个需要写回的文件开新批次，其余文件共用它
+            batch_id = batch_id or new_backup_batch_id(config_dir)
             backup = _write_back_schema_file(config_dir, fname, _ROOT_SCHEMAS[fname], instance, batch_id=batch_id)
             if report.has_drift:
                 _log_drift_writeback(fname, backup, config_dir, report.missing, report.redundant)

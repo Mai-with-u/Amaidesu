@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from src.modules.config.errors import ConfigValidationError
 from src.modules.config.layout import CONFIG_SCOPES
 from src.modules.config.multi_file_loader import (
+    new_backup_batch_id,
     resolve_root_schema,
     update_config_values,
     validate_config_updates,
@@ -759,9 +760,12 @@ async def write_config_updates(
     except ConfigValidationError as e:
         return ConfigWriteResult(success=False, message=str(e))
 
+    # 一次保存可能跨多个配置文件：共用一个备份批次号，
+    # 避免写入中途跨过整秒时同一次保存被拆进两个批次目录
+    batch_id = new_backup_batch_id(config_dir)
     for file_name, updates in updates_by_file.items():
         try:
-            update_config_values(config_dir, file_name, updates)
+            update_config_values(config_dir, file_name, updates, batch_id=batch_id)
         except ConfigValidationError as e:
             # 前置校验已通过，此处失败属并发修改窗口；忠实上报
             logger.error(f"写入配置文件失败: {file_name}: {e}")
