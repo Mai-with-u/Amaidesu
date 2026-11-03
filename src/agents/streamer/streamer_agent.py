@@ -360,6 +360,8 @@ class StreamerAgent(BaseAgent):
                 # 房管也要知道她是谁：挑话题、在回复指引里定她的态度都以人设为准；措辞风格仍只给表达侧
                 bot_name=config.persona.bot_name,
                 personality=config.persona.personality,
+                # 边界栏与嘴同源：房管替她拿主意时也不答应线下见面、改称呼这类事
+                boundaries=config.persona.boundaries,
                 env=planner_env,
             )
 
@@ -568,6 +570,8 @@ class StreamerAgent(BaseAgent):
                     "bot_name": config.persona.bot_name,
                     "personality": config.persona.personality,
                     "style_constraints": config.persona.style_constraints,
+                    # 游戏里出急事时脱口而出的一句同样守边界栏
+                    "boundaries": config.persona.boundaries,
                 },
                 speech_max_chars=config.speech_max_chars,
                 gate=self._speech_gate,

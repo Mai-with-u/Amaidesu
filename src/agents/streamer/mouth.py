@@ -6,8 +6,9 @@
 
 - 触发：主播 Agent 把游戏事件转进来（:meth:`react`）。同一时刻只生成一句，生成期间来的事件攒着，
   下一句合并成一个由头；同一类遭遇冷却一段时间；小事（急事开始结束、天色）只在她安静了一阵时才开口。
-- 依据：系统提示词只有人设和几条规矩，事实全在每次附上的现场卡里（现在的状态、手上的目标、刚发生的事、
-  她刚说过的话）——实验里没有这张卡的瘦嘴会理直气壮地编现场。
+- 依据：系统提示词只有人设和几条规矩（含"被问到是不是真人时坦白自己是 AI"和人设里的边界栏），事实全在
+  每次附上的现场卡里（现在的状态、手上的目标、刚发生的事、她刚说过的话）——实验里没有这张卡的瘦嘴会
+  理直气壮地编现场。
 - 兜底：输出一到三行"情绪：台词"或"[沉默]"——情绪在一次反应里转了（先吓一跳再松口气）就拆成
   几行，每行一个情绪；没写情绪的行沿用上一行的。台词按句累计截到长度预算、过敏感词过滤、几行拼起来
   和她最近说过的话比重合度，重复的直接丢弃不重试。出声走发声分发器的反应通道：前一句没播完最多等一会
@@ -31,6 +32,7 @@ from src.modules.types.emotion_vocab import Emotion
 from src.modules.utils.time_utils import now_ms
 
 from .config import StreamerMouthConfig
+from .persona_rules import boundaries_line
 from .scene_card import GoalLine, SceneInputs, build_scene_card
 from .speech_guard import WordFilter, apply_word_filter, fit_to_budget, guard
 from .tools.reply_tool import coerce_emotion
@@ -278,7 +280,18 @@ class Mouth:
             max_chars=str(self._speech_max_chars or 40),
             emotions="、".join(emotion.value for emotion in Emotion),
             long_memory=self._long_memory_block(),
+            boundaries_rule=self._boundaries_rule(),
         )
+
+    def _boundaries_rule(self) -> str:
+        """把人设里的边界栏接成规矩列表里的一行；人设里没写（空串或只有空白）时整行省略，不留空行。
+
+        措辞与多行折成一行的规则都归 ``persona_rules``，三条说话通路（Planner、Replyer、嘴）同源，
+        这里只补规矩列表自己的格式：开头的换行加列表记号。模板把返回值直接接在上一条规矩的句末，
+        所以空串时那条规矩后面什么都不多，非空时多出一条独立的规矩行。
+        """
+        line = boundaries_line(self._persona.get("boundaries", ""))
+        return f"\n- {line}" if line else ""
 
     def _long_memory_block(self) -> str:
         """长期记忆进系统提示词的那一段；没有就是空串。开播时读出、整场不变，系统提示词前缀稳定。"""

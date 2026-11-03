@@ -3,8 +3,9 @@
 人设唯一来源是 agents.toml ``[agents.streamer.persona]``：
   1. 表达侧：StreamerAgent 构造期把 bot_name/personality/style_constraints 注入 Replyer，
      prompt 渲染 kwargs 必须等于配置值（非 _DEFAULT_* 硬编码兜底）。
-  2. 决策侧：behavior_style 仅注入 Planner；bot_name/personality 同时注入 Planner（房管据此替她挑话题、
-     定态度），style_constraints 不得进 Planner（措辞风格只归表达侧的反向断言）。
+  2. 决策侧：behavior_style 仅注入 Planner 且原文不动；bot_name/personality 同时注入 Planner（房管据此替她
+     挑话题、定态度），边界栏（boundaries）作为独立变量进 Planner，不拼进行动准则；style_constraints
+     不得进 Planner（措辞风格只归表达侧的反向断言）。
   3. bot_name 默认值全库统一为 "麦麦"，历史 "爱德丝" 禁止。
 
 入口是 factory.instantiate_agent（与 manager 动态启用路径同源），任一项回退都会在对应断言点失败。
@@ -20,6 +21,7 @@ import pytest
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.streamer import replyer
 from src.agents.streamer.config import StreamerConfig, StreamerPersonaConfig
+from src.agents.streamer.persona_rules import boundaries_line
 from src.agents.streamer.plan import DecisionPlan
 from src.agents.text_adv.config import TextAdvConfig
 from src.modules.agents.deps import AgentDeps
@@ -94,7 +96,11 @@ async def test_planner_gets_behavior_style_only_and_none_of_the_expression_side_
     assert await agent._planner.plan([message], forced=False) is not None
 
     kwargs = prompt.render.call_args.kwargs
-    assert kwargs.get("behavior_style") == _PERSONA["behavior_style"]
+    assert kwargs.get("behavior_style") == _PERSONA["behavior_style"]  # 行动准则是配置原文，边界栏不拼进去
+    # 边界栏作为独立变量进决策侧（没配人设边界时用配置默认值），带"交接稿里别替她答应"的提醒
+    boundaries_rule = kwargs.get("boundaries_rule") or ""
+    assert boundaries_line(StreamerPersonaConfig().boundaries) in boundaries_rule
+    assert "交接稿里别替她答应" in boundaries_rule
     # 房管也要知道她是谁：名字与性格进决策侧；措辞风格仍只归 Replyer 表达侧
     assert (kwargs.get("bot_name"), kwargs.get("personality")) == (_PERSONA["bot_name"], _PERSONA["personality"])
     assert "style_constraints" not in kwargs

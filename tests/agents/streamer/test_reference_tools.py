@@ -90,7 +90,12 @@ def test_planner_prompt_mentions_overview() -> None:
     reset_prompt_manager()
     try:
         prompt = get_prompt_manager().render(
-            "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=""
+            "amaidesu_planner_react",
+            bot_name="麦麦",
+            personality="活泼",
+            behavior_style="积极互动",
+            boundaries_rule="",
+            game_rules="",
         )
     finally:
         reset_prompt_manager()

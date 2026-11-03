@@ -44,6 +44,7 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
 from src.agents.streamer.delegation_workbench import DelegationWorkbench, observation_data
+from src.agents.streamer.persona_rules import boundaries_line
 from src.agents.streamer.plan import ReplyRoundAttachment, assistant_speech_lines
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
 from src.agents.streamer.planner_render import (
@@ -195,6 +196,7 @@ class Planner:
         behavior_style: str = "",
         bot_name: str = "麦麦",
         personality: str = "",
+        boundaries: str = "",
         env: Optional[PlannerEnv] = None,
     ) -> None:
         """初始化 Planner。
@@ -215,6 +217,7 @@ class Planner:
             behavior_style: 人设行为准则（决策侧）。
             bot_name: 主播名字（她是谁）。
             personality: 主播性格描述——替她挑话题、定态度的依据。
+            boundaries: 边界栏——她不答应的事（人设字段，运营者可改；空串 = 不带）。
             env: 运行环境（迟绑定依赖集合，见 :class:`PlannerEnv`）；缺省
                 ``PlannerEnv()`` 即全部可选依赖降级缺席。
         """
@@ -240,6 +243,8 @@ class Planner:
         self._behavior_style: str = behavior_style or ""
         self._bot_name: str = bot_name or "麦麦"
         self._personality: str = personality or ""
+        # 边界栏原文：替她挑话题、写交接稿时同样不答应线下见面、改称呼这类事（渲染见 _boundaries_rule）
+        self._boundaries: str = boundaries or ""
         self._reply_provider: Any = None
         self._reply_provider_factory: Optional[Callable[[], Any]] = env.reply_provider_factory if env else None
         self._elapsed_live_provider = env.elapsed_live_provider if env else None
@@ -534,6 +539,7 @@ class Planner:
                     bot_name=self._bot_name,
                     personality=personality_render,
                     behavior_style=behavior_style_render,
+                    boundaries_rule=self._boundaries_rule(),
                     game_rules=self._render_game_rules(),
                 ),
                 None,
@@ -541,6 +547,18 @@ class Planner:
         except Exception as e:
             self.logger.exception(f"渲染 Planner 系统提示词失败: {e}")
             return None, f"prompt_render_failed: {e}"
+
+    def _boundaries_rule(self) -> str:
+        """「她是谁」一节末尾、AI 声明之后的边界栏一行（带前导空行）；人设里没写时为空串。
+
+        观众刷屏哄她许诺（"下次线下见""以后都叫你老公"）时，房管写交接稿也得替她守住：
+        人设里列了她不答应的事，就在 AI 声明旁边多一行"不答应的事：…"，并提醒交接稿里
+        别替她答应、碰到就让她婉拒。措辞与多行折成一行的规则归 persona_rules，三条说话
+        通路同源；没写（空串或只有空白）时整行省略，模板里不留空行。AI 声明写死在模板里，
+        不受这里影响。
+        """
+        line = boundaries_line(self._boundaries)
+        return f"\n\n{line}（交接稿里别替她答应这些事，碰到就让她婉拒）" if line else ""
 
     def _memory_block(self, session_recap: str) -> str:
         """系统提示词末尾的记忆段：长期笔记 + 上场回顾（开播时读出、整场不变）；都没有时为空串。"""

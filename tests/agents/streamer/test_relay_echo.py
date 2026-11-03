@@ -133,7 +133,12 @@ def test_prompts_state_relay_and_completion_rules() -> None:
     try:
         rules = get_prompt_manager().render("amaidesu_planner_delegate_rules")
         planner = get_prompt_manager().render(
-            "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=rules
+            "amaidesu_planner_react",
+            bot_name="麦麦",
+            personality="活泼",
+            behavior_style="积极互动",
+            boundaries_rule="",
+            game_rules=rules,
         )
         game = get_prompt_manager().render("amaidesu_minecraft_agent")
     finally:

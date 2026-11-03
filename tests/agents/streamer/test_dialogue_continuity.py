@@ -305,7 +305,12 @@ def _render_planner_with_delegate_rules() -> str:
     manager = get_prompt_manager()
     rules = manager.render("amaidesu_planner_delegate_rules")
     return manager.render(
-        "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=rules
+        "amaidesu_planner_react",
+        bot_name="麦麦",
+        personality="活泼",
+        behavior_style="积极互动",
+        boundaries_rule="",
+        game_rules=rules,
     )
 
 
@@ -316,7 +321,12 @@ def test_planner_prompt_keeps_viewer_method_and_relays_instead_of_redelegating()
     try:
         prompt = _render_planner_with_delegate_rules()
         bare = get_prompt_manager().render(
-            "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=""
+            "amaidesu_planner_react",
+            bot_name="麦麦",
+            personality="活泼",
+            behavior_style="积极互动",
+            boundaries_rule="",
+            game_rules="",
         )
     finally:
         reset_prompt_manager()
@@ -361,7 +371,12 @@ def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
     reset_prompt_manager()
     try:
         prompt = get_prompt_manager().render(
-            "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=""
+            "amaidesu_planner_react",
+            bot_name="麦麦",
+            personality="活泼",
+            behavior_style="积极互动",
+            boundaries_rule="",
+            game_rules="",
         )
     finally:
         reset_prompt_manager()
@@ -378,7 +393,12 @@ def test_planner_prompt_knows_who_she_is_but_stays_the_room_manager() -> None:
     reset_prompt_manager()
     try:
         prompt = get_prompt_manager().render(
-            "amaidesu_planner_react", bot_name="麦麦", personality="嘴硬但心软", behavior_style="", game_rules=""
+            "amaidesu_planner_react",
+            bot_name="麦麦",
+            personality="嘴硬但心软",
+            behavior_style="",
+            boundaries_rule="",
+            game_rules="",
         )
     finally:
         reset_prompt_manager()
@@ -393,7 +413,12 @@ def test_planner_prompt_only_reports_progress_with_evidence() -> None:
     reset_prompt_manager()
     try:
         prompt = get_prompt_manager().render(
-            "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=""
+            "amaidesu_planner_react",
+            bot_name="麦麦",
+            personality="活泼",
+            behavior_style="积极互动",
+            boundaries_rule="",
+            game_rules="",
         )
     finally:
         reset_prompt_manager()
@@ -494,7 +519,12 @@ def test_streamer_prompts_keep_rules(prompts) -> None:
     # 清单横跨主模板与委派守则子模板：按生产拼装方式（委派型游戏在场）渲染后一并核对
     rules = prompts.render("amaidesu_planner_delegate_rules")
     planner = prompts.render(
-        "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=rules
+        "amaidesu_planner_react",
+        bot_name="麦麦",
+        personality="活泼",
+        behavior_style="积极互动",
+        boundaries_rule="",
+        game_rules=rules,
     )
     assert [rule for rule in _PLANNER_PROMPT_RULES if rule not in planner] == []
     assert "【身体" not in planner
@@ -512,7 +542,12 @@ def test_planner_prompt_finds_material_instead_of_defaulting_to_silence(prompts:
     床名向零观众的房间讨了 7 次也没定下来。
     """
     planner = prompts.render(
-        "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="积极互动", game_rules=""
+        "amaidesu_planner_react",
+        bot_name="麦麦",
+        personality="活泼",
+        behavior_style="积极互动",
+        boundaries_rule="",
+        game_rules="",
     )
     # 沉默不再是默认：复述才是失败，沉默要写理由，【冷场】时默认开口
     assert "复述是失败的选择，沉默要有理由" in planner and "说明里写清为什么不说" in planner
@@ -572,7 +607,12 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
     指引只有一个点的那句 50 字，四五个点的一百出头。
     """
     planner = prompts.render(
-        "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="", game_rules=""
+        "amaidesu_planner_react",
+        bot_name="麦麦",
+        personality="活泼",
+        behavior_style="",
+        boundaries_rule="",
+        game_rules="",
     )
     assert "一轮只递一个点" in planner and "只写和这一个点有关的事实" in planner
     assert "一句话以内" in planner and "五个点，表达引擎会一口气全讲完" in planner
@@ -587,7 +627,12 @@ def test_prompts_forbid_inventing_off_game_life_events(prompts: Any) -> None:
     """游戏之外的事也要有出处：实测 Planner 在话题摘要里编出"开播前桌上摆了两升大水壶、差点碰翻"，
     表达侧照着当真事讲了一大段。看法和感受可以聊，凭空多出来的现实经历不行。"""
     planner = prompts.render(
-        "amaidesu_planner_react", bot_name="麦麦", personality="活泼", behavior_style="", game_rules=""
+        "amaidesu_planner_react",
+        bot_name="麦麦",
+        personality="活泼",
+        behavior_style="",
+        boundaries_rule="",
+        game_rules="",
     )
     assert "游戏之外的事同样要有出处" in planner and "没有出处的现实生活经历一律不写" in planner
     assert "不能凭空给她多出一段现实生活里的经历" in planner

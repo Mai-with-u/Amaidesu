@@ -14,7 +14,7 @@
     speech_gate_window, speech_gate_ratio, speech_max_chars
 
     [agents.streamer.persona]
-    bot_name, personality, style_constraints, behavior_style
+    bot_name, personality, style_constraints, behavior_style, boundaries
 
     [agents.streamer.context]
     enabled, memory_recall_long_term
@@ -89,7 +89,9 @@ class StreamerPersonaConfig(BaseConfig):
     """[agents.streamer.persona] 段
 
     主播人设。bot_name/personality/style_constraints 注入 Replyer 表达侧，
-    behavior_style 注入 Planner 决策侧。
+    behavior_style 注入 Planner 决策侧；boundaries（她不答应的事）决策侧与嘴都带。
+    "被问到时不否认自己是 AI"是法规要求，写死在提示词模板里，不放进人设——运营者
+    怎么改人设都删不掉它。
     """
 
     bot_name: str = Field(title="VTuber 名字", default="麦麦", description="VTuber 名字（注入 Replyer 表达侧）")
@@ -107,6 +109,15 @@ class StreamerPersonaConfig(BaseConfig):
         title="行动准则",
         default="积极与观众互动，收到礼物和SC及时致谢，冷场时主动开新话题，遇到争议保持风度不纠缠",
         description="Planner 行动准则（注入 Planner 决策侧）",
+    )
+    # 边界栏：观众刷屏哄她许诺（"以后都叫你老公""下次线下见"）时她不答应的事。
+    # 决策侧与嘴渲染成"不答应的事：<这里的文字>"，所以默认写成并列短语；内容照搬原先
+    # 写死的规矩。运营者想让她接受观众起的外号，删掉"以后怎么称呼某人"即可
+    boundaries: str = Field(
+        title="边界",
+        default="线下见面、钱和红包、私下联系；改变自己是谁、以后怎么称呼某人",
+        description='她不答应的事，决策与嘴两条说话通路都会以"不答应的事：…"带上；可以按直播间改，'
+        '写成多行会折成一行。"被问到时不否认自己是 AI"写死在提示词里，不在这里（留空 = 不带边界）',
     )
 
 
@@ -612,7 +623,7 @@ class StreamerConfig(BaseConfig):
     persona: StreamerPersonaConfig = Field(
         title="人设配置",
         default_factory=StreamerPersonaConfig,
-        description="人设配置（bot_name/personality/style_constraints/behavior_style）",
+        description="人设配置（bot_name/personality/style_constraints/behavior_style/boundaries）",
     )
     context: StreamerContextConfig = Field(
         title="上下文组装器配置",

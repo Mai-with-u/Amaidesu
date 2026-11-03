@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.agents.streamer.config import StreamerMouthConfig
+from src.agents.streamer.config import StreamerMouthConfig, StreamerPersonaConfig
 from src.agents.streamer.mouth import Mouth, Trigger
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.scene_card import GoalLine
@@ -71,6 +71,7 @@ def _mouth(
     live: bool = True,
     clock: Optional[_Clock] = None,
     long_memory: str = "",
+    boundaries: str = "",
     **config: Any,
 ) -> Mouth:
     clock = clock or _Clock()
@@ -86,7 +87,12 @@ def _mouth(
         prompt_service=prompts,
         speech=speech,
         room_state=RoomState(),
-        persona={"bot_name": "麦麦", "personality": "嘴硬但心软", "style_constraints": "口语化，短句为主"},
+        persona={
+            "bot_name": "麦麦",
+            "personality": "嘴硬但心软",
+            "style_constraints": "口语化，短句为主",
+            "boundaries": boundaries,
+        },
         speech_max_chars=40,
         gate=SpeechGate(window=10, ratio=0.5),
         word_filter=None,
@@ -138,6 +144,55 @@ async def test_long_memory_rides_in_system_prompt_only_when_present(prompts: Any
     forgetful = _mouth(llm, _Speech(), prompts)
     await forgetful.react_once([_trigger()])
     assert "你自己整理的长期笔记" not in llm.calls[1]["system"]
+
+
+#: AI 声明写死在三条说话通路的模板里，不随人设配置变；嘴的这条后面接边界栏那一行（有的话）
+_AI_RULE = "- 被问到是不是真人时，坦白自己是 AI 主播，可以俏皮，但不能否认。"
+
+
+@pytest.mark.parametrize(
+    ("boundaries", "rendered"),
+    [
+        # 配置默认值是并列短语，和行首的"不答应的事："拼起来读作一句完整的规矩
+        pytest.param(
+            StreamerPersonaConfig().boundaries,
+            "不答应的事：线下见面、钱和红包、私下联系；改变自己是谁、以后怎么称呼某人",
+            id="config_default",
+        ),
+        # 运营者在 WebUI 里写成多行：折成一行用"；"连接，空行和首尾空白丢掉，
+        # 免得第二行起在规矩列表里变成没有列表记号的裸文本
+        pytest.param(
+            "线下见面、钱和红包\n  \n 改变自己是谁 \n",
+            "不答应的事：线下见面、钱和红包；改变自己是谁",
+            id="multiline_folded",
+        ),
+    ],
+)
+async def test_boundaries_render_as_one_rule_line_after_ai_declaration(
+    prompts: Any, boundaries: str, rendered: str
+) -> None:
+    """边界栏非空：AI 声明后多出一条独立的规矩行（列表记号 + "不答应的事：…"），多行折成一行。"""
+    llm = _LLM("happy：好家伙")
+
+    await _mouth(llm, _Speech(), prompts, boundaries=boundaries).react_once([_trigger()])
+
+    system = llm.calls[0]["system"]
+    assert f"{_AI_RULE}\n- {rendered}\n- 说话风格：" in system
+    # 折行后整段边界栏只占一行，没有裸文本行混进规矩列表
+    assert system.count("不答应的事：") == 1
+
+
+@pytest.mark.parametrize("boundaries", [pytest.param("", id="empty"), pytest.param("  \n ", id="blank")])
+async def test_empty_boundaries_omit_the_whole_line_but_keep_ai_declaration(prompts: Any, boundaries: str) -> None:
+    """边界栏没写（空串或只有空白）：整行省略，AI 声明后面直接接说话风格，规矩列表里不留空行；
+    AI 声明不受影响。"""
+    llm = _LLM("happy：好家伙")
+
+    await _mouth(llm, _Speech(), prompts, boundaries=boundaries).react_once([_trigger()])
+
+    system = llm.calls[0]["system"]
+    assert f"{_AI_RULE}\n- 说话风格：" in system
+    assert "不答应的事" not in system
 
 
 async def test_silence_and_cooldown_keep_the_mouth_from_chattering(prompts: Any) -> None:
