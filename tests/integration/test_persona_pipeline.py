@@ -2,7 +2,7 @@
 
 人设唯一来源是 agents.toml ``[agents.streamer.persona]``：
   1. 表达侧：StreamerAgent 构造期把 bot_name/personality/style_constraints 注入 Replyer，
-     prompt 渲染 kwargs 必须等于配置值（非 _DEFAULT_* 硬编码兜底）。
+     prompt 渲染 kwargs 必须等于配置值（非 _DEFAULT_* 硬编码兜底）；说话风格属于人设，进 system 人设块。
   2. 决策侧：behavior_style 仅注入 Planner 且原文不动；bot_name/personality 同时注入 Planner（房管据此替她
      挑话题、定态度），边界栏（boundaries）作为独立变量进 Planner，不拼进行动准则；style_constraints
      不得进 Planner（措辞风格只归表达侧的反向断言）。
@@ -55,9 +55,9 @@ def streamer() -> tuple[Any, MagicMock, MagicMock]:
 
 
 async def test_replyer_renders_config_persona_and_never_the_planner_only_behavior_style(streamer) -> None:
-    """system 稳定段承载全程不变的人设（bot_name/personality），style_constraints 属本轮表达风格，
-    进本轮输入模板；behavior_style 只进 Planner。audience_salutation 已随模板硬编码退役：
-    Schema 不再承载，配置传入即加载期未知字段硬错。"""
+    """system 稳定段承载全程不变的人设：bot_name/personality 原样注入，说话风格（style_constraints）
+    渲染成人设块里的"说话风格：…"一段，不再进本轮输入模板；behavior_style 只进 Planner。
+    audience_salutation 已随模板硬编码退役：Schema 不再承载，配置传入即加载期未知字段硬错。"""
     # Schema 已无此字段：字段在即视为回退（配置契约面不应再出现该键）
     assert "audience_salutation" not in StreamerPersonaConfig.model_fields
     agent, llm, prompt = streamer
@@ -72,7 +72,8 @@ async def test_replyer_renders_config_persona_and_never_the_planner_only_behavio
         f: _PERSONA[f] for f in ("bot_name", "personality")
     }
     assert "audience_salutation" not in system_kwargs  # 变量已退役：模板正文硬编码，传参即渲染期硬错
-    assert by_template["amaidesu_replyer"].get("style_constraints") == _PERSONA["style_constraints"]
+    assert _PERSONA["style_constraints"] in system_kwargs["style_section"]  # 说话风格属人设，进 system 人设块
+    assert "style_constraints" not in by_template["amaidesu_replyer"]  # 本轮输入模板不再带风格
     assert all("behavior_style" not in kwargs for kwargs in by_template.values())  # 决策/表达侧分离契约
 
 

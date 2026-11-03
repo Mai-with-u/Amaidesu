@@ -1,6 +1,8 @@
 """主播表达引擎：按复古提示词格式生成纯文本台词。
 
-人设与注意事项放进 system；聊天历史、当前消息与回复要求合并进一条 user。
+system 只放稳定的两块：人设块（名字、直播身份、性格、说话风格、口吻示例）在前、占大头，
+提炼过的直播说话规矩在后；整段每轮逐字一致，请求前缀缓存靠它命中。
+聊天历史、当前消息与回复要求合并进一条 user。
 模型只负责措辞，不接收工具。情绪、强度及输出元数据由上层 reply 调用组装。
 词表净化只处理台词，避免思考正文进入发声管线。
 """
@@ -14,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from src.modules.logging import get_logger
 
 from . import canonical
+from .persona_rules import boundaries_line
 from .plan import DecisionPlan
 from .speech_guard import WordFilter, apply_word_filter, fit_to_budget
 from .timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE
@@ -24,12 +27,14 @@ from .timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE
 # [agents.streamer.persona]）；本模块 _DEFAULT_* 常量仅在构造 config
 # 完全缺失/字段缺位时兜底，避免冷启动崩。
 #
-# _DEFAULT_BOT_NAME = '麦麦'、personality/style_constraints 文本与
-# StreamerConfig.persona 默认值对齐；不允许 config 模块反向依赖 agents 层，
+# _DEFAULT_BOT_NAME = '麦麦'、personality/style_constraints/voice_examples/boundaries
+# 文本与 StreamerConfig.persona 默认值对齐；不允许 config 模块反向依赖 agents 层，
 # 故这里复制文本（保持依赖方向 agents → config 干净）。
 _DEFAULT_BOT_NAME = "麦麦"
 _DEFAULT_PERSONALITY = "活泼开朗，有些调皮，喜欢和观众互动"
 _DEFAULT_STYLE_CONSTRAINTS = "口语化，短句为主，偶尔玩个梗，不堆网络流行语"
+_DEFAULT_VOICE_EXAMPLES = ""
+_DEFAULT_BOUNDARIES = "线下见面、钱和红包、私下联系；改变自己是谁、以后怎么称呼某人"
 # 一句台词的长度上限（与 StreamerConfig.speech_max_chars 默认值对齐）；0 = 不限制
 _DEFAULT_SPEECH_MAX_CHARS = 40
 
@@ -56,10 +61,11 @@ class Replyer:
         """初始化 Replyer。
 
         Args:
-            config: 配置字典（兼容 StreamerConfig 的子集字段），
-                    读取 bot_name / personality / style_constraints
-                    （人设三件套由 StreamerAgent 构造期注入；
-                    LLM profile 绑定不读配置，固定 REPLYER_PROFILE 常量）。
+            config: 配置字典（兼容 StreamerConfig 的子集字段），读取人设
+                    bot_name / personality / style_constraints / voice_examples / boundaries
+                    （由 StreamerAgent 构造期从 [agents.streamer.persona] 注入）
+                    与 speech_max_chars（一句台词的字数上限）；
+                    LLM profile 绑定不读配置，固定 REPLYER_PROFILE 常量。
             llm_service: LLM 管理器（使用 profile 指定的高质量客户端）。
             prompt_service: 提示词管理器（渲染 amaidesu_replyer_system /
                     amaidesu_replyer 两个模板，分别承载 system 稳定段与本轮变化段）。
@@ -72,8 +78,13 @@ class Replyer:
         self.profile: str = REPLYER_PROFILE
         self._bot_name: str = self._config.get("bot_name", _DEFAULT_BOT_NAME)
         self._personality: str = self._config.get("personality", _DEFAULT_PERSONALITY)
-        self._style_constraints: str = self._config.get("style_constraints", _DEFAULT_STYLE_CONSTRAINTS)
         self._speech_max_chars: int = int(self._config.get("speech_max_chars", _DEFAULT_SPEECH_MAX_CHARS))
+        # 人设块与规矩块里的可选段在构造期一次渲染好：人设整场不变，system 每轮逐字一致
+        self._style_section: str = _style_section(self._config.get("style_constraints", _DEFAULT_STYLE_CONSTRAINTS))
+        self._voice_examples_section: str = _voice_examples_section(
+            self._config.get("voice_examples", _DEFAULT_VOICE_EXAMPLES)
+        )
+        self._boundaries_rule: str = _boundaries_rule(self._config.get("boundaries", _DEFAULT_BOUNDARIES))
 
         self._llm_service = llm_service
         self._prompt_service = prompt_service
@@ -184,16 +195,20 @@ class Replyer:
     # ==================== prompt 渲染（人设注入核心） ====================
 
     def _render_system_prompt(self) -> str:
-        """渲染 system 提示词（全程稳定段）。
+        """渲染 system 提示词（全程稳定段）：人设块在前，说话规矩在后。
 
-        人设分离承诺：$personality / $bot_name 人设字段均读构造期注入的
-        自身人设（StreamerAgent 从 config.persona 单点构建）。稳定段每轮
-        渲染结果逐字一致——请求前缀缓存命中靠它。
+        人设分离承诺：人设字段均读构造期注入的自身人设（StreamerAgent 从
+        config.persona 单点构建），可选段在构造期渲染好。"被问到时不否认自己是 AI"
+        写死在模板的规矩块里，运营者改人设删不掉。稳定段每轮渲染结果逐字一致——
+        请求前缀缓存命中靠它。
         """
         return self._prompt_service.render(
             _REPLYER_SYSTEM_TEMPLATE,
             bot_name=self._bot_name,
             personality=self._personality,
+            style_section=self._style_section,
+            voice_examples_section=self._voice_examples_section,
+            boundaries_rule=self._boundaries_rule,
         )
 
     def _render_turn_input(
@@ -263,7 +278,6 @@ class Replyer:
             plan=_render_plan_text(plan, target_text=target_text),
             dialogue_prompt="\n".join(dialogue_lines) or "（暂无聊天记录）",
             bot_name=self._bot_name,
-            style_constraints=self._style_constraints,
             turn_context=(
                 "本轮有新观众消息，请结合聊天记录与回复指引接话。"
                 if batch
@@ -315,6 +329,9 @@ class Replyer:
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 _THINK_UNCLOSED = re.compile(r"<think>.*", re.DOTALL)
 
+#: 口吻示例每行开头的列表记号：运营者写成列表时去掉，渲染时统一加
+_EXAMPLE_MARKS = "-*•· \t"
+
 
 def _plain_text_speech(content: Any) -> str:
     """取纯文本台词，剔除闭合或未闭合的思考段，避免把推理念出来。"""
@@ -322,6 +339,38 @@ def _plain_text_speech(content: Any) -> str:
         return ""
     text = _THINK_UNCLOSED.sub("", _THINK_BLOCK.sub("", content)).strip()
     return text
+
+
+def _text(value: Any) -> str:
+    """鸭子字段取值收敛：仅接受 str，其余（None/Mock 等）按空处理。"""
+    return value if isinstance(value, str) else ""
+
+
+def _style_section(style_constraints: Any) -> str:
+    """人设块里的说话风格一段（带前导空行）；人设里没写时整段省略。"""
+    style = _text(style_constraints).strip()
+    return f"\n\n说话风格：{style}" if style else ""
+
+
+def _voice_examples_section(voice_examples: Any) -> str:
+    """人设块里的口吻示例一段（带前导空行）：先说明只学口吻、不照搬句子，再一行一句列出。
+
+    运营者一行写一句；空行与行首的列表记号去掉。没写示例时整段省略。
+    """
+    lines = [line.strip().lstrip(_EXAMPLE_MARKS).strip() for line in _text(voice_examples).splitlines()]
+    examples = [line for line in lines if line]
+    if not examples:
+        return ""
+    return "\n\n下面几句只学口吻，不照搬句子：\n" + "\n".join(f"- {line}" for line in examples)
+
+
+def _boundaries_rule(boundaries: Any) -> str:
+    """规矩块末尾的边界栏一行"- 不答应的事：…"（带前导换行）；没写边界时整行省略、不留空行。
+
+    措辞与多行折成一行的规则由 persona_rules 统一定义，三条说话通路写法一致。
+    """
+    line = boundaries_line(_text(boundaries))
+    return f"\n- {line}" if line else ""
 
 
 def _render_plan_text(plan: DecisionPlan, *, target_text: str = "") -> str:

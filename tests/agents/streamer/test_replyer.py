@@ -63,25 +63,42 @@ async def test_generate_returns_speech_with_request_id_and_binds_the_replyer_pro
 
 
 async def test_persona_goes_into_system_template_and_turn_data_into_the_turn_template() -> None:
+    """人设整块进 system（说话风格从 user 挪回来、口吻示例一行一句、边界栏一行），user 只放本轮数据。"""
     replyer, _, prompt = _replyer(
-        config={"bot_name": "麦麦", "personality": "活泼开朗，有些调皮", "style_constraints": "口语化、简短"}
+        config={
+            "bot_name": "麦麦",
+            "personality": "活泼开朗，有些调皮",
+            "style_constraints": "口语化、简短",
+            # 运营者可能写成列表、夹着空行：去掉记号与空行后统一一行一句
+            "voice_examples": "诶等一下\n\n- 行吧行吧\n",
+            "boundaries": "线下见面",
+        }
     )
     await replyer.generate(_plan(), [])
 
     by_template = {call.args[0]: call.kwargs for call in prompt.render.call_args_list}
-    system = by_template["amaidesu_replyer_system"]  # 全程稳定的人设字段
-    assert (system["personality"], system["bot_name"]) == (
-        "活泼开朗，有些调皮",
-        "麦麦",
-    )
-    # 模板正文已硬编码对观众的统一称呼，变量退役；再多传会被渲染期硬错
-    assert "audience_salutation" not in system
-    assert "plan" not in system and "dialogue_prompt" not in system
+    assert by_template["amaidesu_replyer_system"] == {  # 全程稳定的人设块与规矩块可选段
+        "bot_name": "麦麦",
+        "personality": "活泼开朗，有些调皮",
+        "style_section": "\n\n说话风格：口语化、简短",
+        "voice_examples_section": "\n\n下面几句只学口吻，不照搬句子：\n- 诶等一下\n- 行吧行吧",
+        "boundaries_rule": "\n- 不答应的事：线下见面",
+    }
 
-    turn = by_template["amaidesu_replyer"]  # 每轮变化的决策、弹幕与风格约束
-    assert turn["plan"] is not None and turn["style_constraints"] == "口语化、简短" and turn["bot_name"] == "麦麦"
+    turn = by_template["amaidesu_replyer"]  # 每轮变化的决策与弹幕；说话风格不在这里
+    assert turn["plan"] is not None and turn["bot_name"] == "麦麦"
     assert turn["rundown"] == "（当前无流程单）"
-    assert "personality" not in turn and "audience_salutation" not in turn
+    assert {"personality", "style_constraints"}.isdisjoint(turn)
+
+
+@pytest.mark.parametrize("blank", ["", "  \n "])
+async def test_unset_persona_parts_leave_no_section(blank: str) -> None:
+    """说话风格、口吻示例、边界栏没写时对应段为空串：模板里整段（整行）省略，不留空行。"""
+    replyer, _, prompt = _replyer(config={"style_constraints": blank, "voice_examples": blank, "boundaries": blank})
+    await replyer.generate(_plan(), [])
+
+    system = {call.args[0]: call.kwargs for call in prompt.render.call_args_list}["amaidesu_replyer_system"]
+    assert (system["style_section"], system["voice_examples_section"], system["boundaries_rule"]) == ("", "", "")
 
 
 async def test_history_is_merged_into_one_user_turn_and_system_stays_byte_identical() -> None:

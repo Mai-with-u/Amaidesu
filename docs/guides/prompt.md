@@ -69,18 +69,20 @@ pm.load_all()
 
 ```yaml
 ---
-name: amaidesu_replyer
-description: "Amaidesu 直播回复生成模板"
+name: amaidesu_replyer_system
+description: "主播表达引擎的系统提示词"
 author: Amaidesu
-tags: [decision, live, vtuber, replyer, persona]
+tags: [live, vtuber, replyer, persona]
 variables:
   - bot_name
   - personality
-  - style_constraints
+  - style_section
+  - voice_examples_section
+  - boundaries_rule
 ---
 
 模板正文...
-你叫 $bot_name，是一位正在 B 站进行实时直播的 AI VTuber。
+你叫 $bot_name，是一位正在 B 站直播的 VTuber。
 ```
 
 **元数据字段说明：**
@@ -101,8 +103,8 @@ variables:
 `render` 是**唯一渲染路径**，全系统不存在安全模式/容错渲染。
 
 ```python
-# 渲染模板，缺失变量抛出 KeyError
-prompt = pm.render("amaidesu_replyer", bot_name="麦麦", personality="活泼开朗", style_constraints="...")
+# 渲染模板，缺失变量抛出 KeyError（这里少给了 style_section 等三个变量）
+prompt = pm.render("amaidesu_replyer_system", bot_name="麦麦", personality="活泼开朗")
 ```
 
 契约语义：
@@ -133,10 +135,12 @@ class MyComponent:
     def build_prompt(self) -> str:
         # 渲染模板（键 = 模板 frontmatter 的 name）
         return self._prompt_mgr.render(
-            "amaidesu_replyer",
+            "amaidesu_replyer_system",
             bot_name="麦麦",
             personality="活泼开朗",
-            style_constraints="口语化、简短",
+            style_section="",
+            voice_examples_section="",
+            boundaries_rule="",
         )
 ```
 
