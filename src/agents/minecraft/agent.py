@@ -32,6 +32,7 @@ from src.agents.minecraft.context import (
     json_text,
     strip_unsendable,
 )
+from src.agents.minecraft.creature_book import CreatureBook
 from src.agents.minecraft.delegation_book import DelegationBook
 from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_label, pause_notice
 from src.agents.minecraft.glance import glance_brief, glance_scene, glance_self
@@ -70,6 +71,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.game_chat import GameChatPayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
@@ -81,6 +83,7 @@ from src.modules.tools.conversation import to_conversation_view
 from src.modules.tools.llm_defs import function_definition
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
+from src.modules.utils.time_utils import now_ms
 
 from .config import MinecraftConfig
 
@@ -119,6 +122,7 @@ class MinecraftAgent(BaseAgent):
 
     # ----- 事件族声明 -----
     emits_events = (
+        CoreEvents.GAME_MILESTONE,
         CoreEvents.GAME_REPORT,
         CoreEvents.GAME_ATTENTION_REQUIRED,
         CoreEvents.GAME_ERROR,
@@ -195,12 +199,15 @@ class MinecraftAgent(BaseAgent):
             execute_tool=self._execute_tool,
             absorb_reply=self._absorb_reply,
         )
+        # 生物名册：自己的生物与主播起过名的生物是谁、在不在身边、死没死（速览、起名与死讯共用这一份）
+        self._creatures = CreatureBook()
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
             state=self._mc_state,
             report_callback=self._handle_report,
             wait_callback=self._request_wait,
             glance_reader=self._glance,
+            creature_namer=self._name_creature,
             skill_reader=self._skill_support.read_skill if skill_library is not None else None,
         )
 
@@ -304,6 +311,8 @@ class MinecraftAgent(BaseAgent):
         if self._event_bus is not None:
             self._event_bus.on(CoreEvents.LIVE_STARTED, self._on_live_started, model_class=LiveStartedPayload)
             self._event_bus.on(CoreEvents.LIVE_ENDED, self._on_live_ended, model_class=LiveEndedPayload)
+            # 聊天流里的死亡播报：认出是名册里哪一只，就把她的死当成游戏进展讲给主播
+            self._event_bus.on(CoreEvents.GAME_CHAT_RECEIVED, self._on_game_chat, model_class=GameChatPayload)
         self._logger.info("MinecraftAgent 已启动（命令驱动：等待委派指令；当前收工态，开播后接受委派）")
 
     async def _on_live_started(self, event_name: str, payload: LiveStartedPayload, source: str) -> None:
@@ -429,6 +438,8 @@ class MinecraftAgent(BaseAgent):
         """停止钩子：取消命令 worker、目标跟踪与恢复循环，摘除工具并关闭 MCP。"""
         self._running = False
         self._wake_event.set()
+        if self._event_bus is not None:
+            self._event_bus.off(CoreEvents.GAME_CHAT_RECEIVED, self._on_game_chat)
         await self._idle_prep.cancel()
         await self._goals.stop()
         for task in (self._worker_task,):
@@ -1222,9 +1233,54 @@ class MinecraftAgent(BaseAgent):
             view["unavailable"] = "游戏连接还没就绪，暂时看不到游戏里的情况"
         else:
             view.update(glance_self(await self._call_maicraft(OBSERVE, {"what": "self"})))
-            view.update(glance_scene(await self._call_maicraft(OBSERVE, {"what": "scene"})))
+            scene = await self._call_maicraft(OBSERVE, {"what": "scene"})
+            if scene.ok:
+                # 先更新名册再写身边：起过名的按名字称呼，墓碑对到死者
+                self._creatures.observe(scene.data, now_ms())
+            view.update(glance_scene(scene, self._creatures.nicknames_by_scene_id()))
+            creatures = self._creatures.status_view()
+            if creatures:
+                view["creatures"] = creatures
         view["work"] = self._glance_work()
         return {"tool": "glance", "brief": glance_brief(view), **view}
+
+    async def _name_creature(self, who: str, nickname: str) -> Dict[str, Any]:
+        """主播给游戏里的生物起名：先重读一次身边（起名对象以眼下为准），再在名册里登记。
+
+        顺序：主播说"就叫你阿缕吧" → Planner 调起名工具 → 读一次身边 → 按速览里的称呼找到那只 → 登记；
+        找不到、分不清是哪只、名字被占了都不登记，原因原样回给主播。
+        """
+        if self._maicraft_ready():
+            scene = await self._call_maicraft(OBSERVE, {"what": "scene"})
+            if scene.ok:
+                self._creatures.observe(scene.data, now_ms())
+        result = self._creatures.name(who, nickname)
+        if result.named is None:
+            return {"success": False, "error": result.reason}
+        creature = result.named
+        if not creature.nickname:
+            return {"success": True, "named": creature.label(), "note": "不再用主播起的名字称呼它"}
+        self._logger.info(f"生物名册登记名字：{creature.label()}（身份 {creature.key}）")
+        return {"success": True, "named": creature.label(), "note": "以后现场速览里按这个名字称呼它"}
+
+    async def _on_game_chat(self, event_name: str, payload: GameChatPayload, source: str) -> None:
+        """``game.chat.received`` 回调：系统消息若是名册里某只的死讯，把她的死当成游戏进展发给主播。
+
+        顺序：自己的女仆被苦力怕炸死 → 游戏只给主人发一条"莫莫酒狐被苦力怕炸死了" → 名册认出是阿缕 →
+        发 game.milestone"阿缕（你的女仆，莫莫酒狐皮肤）被苦力怕炸死了"：嘴当场接住，场次回顾也看得到。
+        只记账、发事件，不开任务、不调模型，游戏 Agent 闲着时照样不花钱。
+        """
+        del event_name, source
+        if payload.game != "minecraft" or payload.kind != "system":
+            return
+        try:
+            creature = self._creatures.note_death(payload.content, now_ms())
+            if creature is None:
+                return
+            self._logger.info(f"生物名册认出死讯：{creature.label()}（原话：{payload.content}）")
+            await self._emit_game_event("milestone", f"{creature.label()}{creature.death_note}")
+        except Exception as exc:  # noqa: BLE001 - 认不出死讯不影响聊天流本身
+            self._logger.warning(f"按名册认死讯失败（原话：{payload.content}）", exc=exc)
 
     def _glance_work(self) -> Dict[str, Any]:
         """身体手头的工作，写成主播自己的口吻：读这份结果的就是主播本人。"""
@@ -1313,7 +1369,7 @@ class MinecraftAgent(BaseAgent):
 
     async def _emit_game_event(
         self,
-        event_type: Literal["report", "attention_required", "error"],
+        event_type: Literal["milestone", "report", "attention_required", "error"],
         message: str,
         *,
         scene: str = "",
@@ -1340,6 +1396,8 @@ class MinecraftAgent(BaseAgent):
             await self.emit_event(CoreEvents.GAME_REPORT, payload)
         elif event_type == "attention_required":
             await self.emit_event(CoreEvents.GAME_ATTENTION_REQUIRED, payload)
+        elif event_type == "milestone":
+            await self.emit_event(CoreEvents.GAME_MILESTONE, payload)
         else:
             await self.emit_event(CoreEvents.GAME_ERROR, payload)
 

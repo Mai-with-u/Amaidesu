@@ -1,5 +1,5 @@
 """MinecraftAgent 局部工具（minecraft_report / minecraft_todo /
-minecraft_notebook / minecraft_wait / minecraft_get_work_log / minecraft_glance）
+minecraft_notebook / minecraft_wait / minecraft_get_work_log / minecraft_glance / minecraft_name_creature）
 
 工具归属约定（text_adv 同构）：
 - 局部工具（minecraft_todo / minecraft_notebook）= Agent 自己 LLM 用，驱动 ReAct 循环
@@ -7,6 +7,8 @@ minecraft_notebook / minecraft_wait / minecraft_get_work_log / minecraft_glance�
 - 对外工作文档读取（minecraft_get_work_log）= 主播经 ToolRegistry 调，只读——叙事素材通道
 - 主播看一眼（minecraft_glance）= 主播经 ToolRegistry 调，只读——身体现状与周边的精简叙事视图，
   代替原始观察（原始观察的几何与证据是给游戏 Agent 规划用的）
+- 主播给生物起名（minecraft_name_creature）= 主播经 ToolRegistry 调——把起的名字登记进生物名册，
+  之后速览、死讯都按这个名字称呼那一只
 - 跨 Agent 派活走框架委派原语（framework_delegate；原 minecraft_send_prompt
   已退役，职能并入 Agent 的接收委派入口）——主播是玩家 Agent 的用户：
   派发/调整任务、回答问题、补充要求；系统不代写 todo（目标分解是 LLM 用
@@ -53,6 +55,8 @@ STREAMER_GUIDE = (
     "游戏里的身体自己拆解、动手，做完或卡住再以游戏记录上报；中途要改要求用 framework_prompt。"
     "想看一眼现场（身体状态、背包、身边的生物与设施）用 minecraft_glance；"
     "想看待办、笔记和近期上报用 minecraft_get_work_log。"
+    "给游戏里的生物起了名（“就叫你阿缕吧”），同一步用 minecraft_name_creature 登记，不登记的名字下一轮就对不上是哪一只；"
+    "速览里出现“你的女仆（莫莫酒狐皮肤）”这类还没起名的、而她已经这样叫过它时，补登记一次。"
     "方向键、选项这类逐步操作在这款游戏里不存在，所有游戏内行动都走委派。"
 )
 
@@ -69,6 +73,7 @@ _LOCAL_VISIBLE_TO: Dict[str, List[str]] = {
     "wait": ["minecraft"],
     "get_work_log": ["streamer"],
     "glance": ["streamer"],
+    "name_creature": ["streamer"],
     "skill": ["minecraft"],
 }
 
@@ -259,6 +264,33 @@ def build_glance_spec() -> ToolSpec:
     )
 
 
+def build_name_creature_spec() -> ToolSpec:
+    """``minecraft_name_creature`` 工具规格——主播给游戏里的生物起名（登记进生物名册）"""
+    return ToolSpec(
+        name="name_creature",
+        description=(
+            "给游戏里身边的一只生物起名或改名：登记之后，现场速览、死讯都用这个名字称呼它，下一场也记得。"
+            "who 照现场速览里的称呼写（如“你的女仆”“莫莫酒狐”“那只狼”），只在身边一只对得上时登记；"
+            "几只都对得上会列出来让你说清是哪一只。nickname 写空串表示不再这么叫。只登记名字，不在游戏里做任何动作。"
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "who": {"type": "string", "description": "现场速览里对它的称呼（种类、皮肤名、命名牌名或已起的名字）"},
+                "nickname": {"type": "string", "description": "起的名字；空串 = 不再这么叫"},
+            },
+            "required": ["who", "nickname"],
+            "additionalProperties": False,
+        },
+        kind="sync",
+        provider=PROVIDER_NAME,
+        output_schema={
+            "type": "object",
+            "properties": {"named": {"type": "string"}, "note": {"type": "string"}, "error": {"type": "string"}},
+        },
+    )
+
+
 def build_wait_spec() -> ToolSpec:
     """``minecraft_wait`` 工具规格——让出本轮，等后台目标的真实进展"""
     return ToolSpec(
@@ -351,6 +383,8 @@ class MinecraftToolProvider(GameToolProvider):
     wait_callback: Optional[Callable[[], Dict[str, Any]]] = None
     # 主播看一眼：由 Agent 读观察并精简成叙事视图（未注入时不提供该工具）
     glance_reader: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None
+    # 主播给生物起名：由 Agent 读一次身边再登记进生物名册（未注入时不提供该工具）
+    creature_namer: Optional[Callable[[str, str], Awaitable[Dict[str, Any]]]] = None
     # 按名读技能正文：由 Agent 按自己的受众名筛本地策略，远端玩法技能按地址去 MaiCraft 读（未注入技能库时不提供该工具）；
     # 远端技能要经 MCP 的 resources/read 取正文，所以读取器是异步的。
     skill_reader: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None
@@ -370,6 +404,8 @@ class MinecraftToolProvider(GameToolProvider):
             specs.append(build_wait_spec())
         if self.glance_reader is not None:
             specs.append(build_glance_spec())
+        if self.creature_namer is not None:
+            specs.append(build_name_creature_spec())
         if self.skill_reader is not None:
             specs.append(build_skill_spec(PROVIDER_NAME))
         # 逐 spec 盖可见名单（技能工具未注入读取器时本就不提供，名单映射无残留键）
@@ -401,6 +437,9 @@ class MinecraftToolProvider(GameToolProvider):
         if self.glance_reader is not None:
             glance_spec = build_glance_spec()
             handlers[glance_spec.full_name] = self._dict_handler(glance_spec, self._invoke_glance)
+        if self.creature_namer is not None:
+            name_spec = build_name_creature_spec()
+            handlers[name_spec.full_name] = self._dict_handler(name_spec, self._invoke_name_creature)
         if self.skill_reader is not None:
             skill_spec = build_skill_spec(PROVIDER_NAME)
             handlers[skill_spec.full_name] = self._dict_handler(skill_spec, self._invoke_skill)
@@ -433,6 +472,10 @@ class MinecraftToolProvider(GameToolProvider):
         del args
         assert self.glance_reader is not None  # 处理器表按读取器在册建表
         return await self.glance_reader()
+
+    async def _invoke_name_creature(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        assert self.creature_namer is not None  # 处理器表按回调在册建表
+        return await self.creature_namer(str(args.get("who", "")), str(args.get("nickname", "")))
 
     async def _invoke_skill(self, args: Dict[str, Any]) -> Dict[str, Any]:
         assert self.skill_reader is not None  # 处理器表按读取器在册建表
@@ -488,6 +531,7 @@ __all__ = [
     "build_notebook_spec",
     "build_get_work_log_spec",
     "build_glance_spec",
+    "build_name_creature_spec",
     "build_report_spec",
     "build_wait_spec",
     "PROVIDER_NAME",

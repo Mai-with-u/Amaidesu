@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .attention_matrix import biome_name, item_name
 from .maicraft import MaicraftReply
@@ -21,8 +21,13 @@ __all__ = [
     "NEARBY_BLOCKS",
     "OWNER_SELF",
     "described_entity",
+    "STATUS_AROUND",
+    "STATUS_AWAY",
+    "STATUS_DEAD",
+    "STATUS_NEARBY",
     "entity_label",
     "entity_things",
+    "kind_of",
     "glance_brief",
     "glance_scene",
     "glance_self",
@@ -104,6 +109,12 @@ _TRAIT_SITTING = "坐着"
 #: 驯服关系里表示"是角色自己的"那个说法
 OWNER_SELF = "你的"
 
+#: 生物名册里一只生物此刻的状态：在身边（近处）、在附近（列出来了但不在身边范围内）、这次没看到、死了
+STATUS_NEARBY = "在身边"
+STATUS_AROUND = "在附近"
+STATUS_AWAY = "没看到"
+STATUS_DEAD = "已死"
+
 
 def _mob_name(raw: str) -> str:
     plain = item_name(raw)
@@ -137,13 +148,19 @@ def _food_words(food: Any) -> str:
     return "有点饿" if food >= 10 else "很饿"
 
 
+def kind_of(entity: Dict[str, Any]) -> str:
+    """实体的种类叫法：模组报的叫法（女仆、女仆墓碑）优先，其次是常见生物的中文名，再不行是去掉原版命名空间的 ID。"""
+    return str(entity.get("kind") or _mob_name(str(entity.get("type") or "")))
+
+
 def entity_label(entity: Dict[str, Any]) -> str:
     """一只身边的实体 → 主播叫得出的称呼：主播起的名字在前，括号里是认出它的事实。
 
     例："阿缕（你的女仆，莫莫酒狐皮肤，坐着）""你的狼（叫小白）""女仆墓碑（上面写着莫莫酒狐）"。
     驯服关系写成"你的 / 自家人的 / 别人的"放在种类前面；没起名时种类就是称呼本身。
+    墓碑带的名字是死者的："阿缕的女仆墓碑（上面写着莫莫酒狐）"。
     """
-    kind = str(entity.get("kind") or _mob_name(str(entity.get("type") or "")))
+    kind = kind_of(entity)
     owner = str(entity.get("owner") or "")
     whose = f"{owner}{kind}" if owner else kind
     facts: List[str] = []
@@ -156,6 +173,9 @@ def entity_label(entity: Dict[str, Any]) -> str:
     if entity.get("sitting"):
         facts.append("坐着")
     nickname = str(entity.get("nickname") or "")
+    if nickname and entity.get("grave_of"):
+        # 墓碑上的名字是死者的：称呼写成"谁的墓碑"，不把墓碑叫成她
+        return f"{nickname}的{whose}（{'，'.join(facts)}）"
     if nickname:
         # 起过名的：名字当称呼，"你的女仆"退到括号里当说明
         return f"{nickname}（{'，'.join([whose, *facts])}）"
@@ -211,6 +231,7 @@ def glance_brief(view: Dict[str, Any]) -> str:
     own = [entity for entity in entities if entity.get("hostile") is not True and entity.get("owner") == OWNER_SELF]
     if own:
         sentences.append(_list_words([entity_label(entity) for entity in own], 4) + "在身边")
+    sentences.extend(_creature_sentences(view.get("creatures")))
     friendly = [
         entity_label(entity)
         for entity in entities
@@ -243,6 +264,26 @@ def glance_brief(view: Dict[str, Any]) -> str:
             break
         brief += sentence + "。"
     return brief
+
+
+def _creature_sentences(creatures: Any) -> List[str]:
+    """生物名册里不在身边的那几只怎样了：死了的写死因与墓碑，起过名的写没在身边或在附近。
+
+    在身边的已经在"在身边"那句里，这里不重复；没起名、没看到的自己的生物不提（家里一圈马不该每次都报）。
+    """
+    sentences: List[str] = []
+    for item in creatures or []:
+        if not isinstance(item, dict) or not item.get("who"):
+            continue
+        who, status = str(item["who"]), item.get("status")
+        if status == STATUS_DEAD:
+            grave = "，墓碑就在身边" if item.get("grave_nearby") else ""
+            sentences.append(f"{who}{item.get('note') or '死了'}{grave}")
+        elif status == STATUS_AWAY and item.get("named"):
+            sentences.append(f"{who}这会儿没在身边")
+        elif status == STATUS_AROUND and item.get("named"):
+            sentences.append(f"{who}在附近")
+    return sentences
 
 
 def _failure(reply: MaicraftReply) -> str:
@@ -291,10 +332,11 @@ def glance_self(reply: MaicraftReply) -> Dict[str, Any]:
     return result
 
 
-def glance_scene(reply: MaicraftReply) -> Dict[str, Any]:
+def glance_scene(reply: MaicraftReply, nicknames: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """周边：时段天气、生物群系、身边的生物与设施（各带距离和大致方位），远处的生物按种类计数。
 
-    身边的生物带上认出它是谁的事实（驯服关系、坐着、名字、女仆皮肤、墓碑上的名字），见 ``described_entity``。
+    身边的生物带上认出它是谁的事实（驯服关系、坐着、名字、女仆皮肤、墓碑上的名字），见 ``described_entity``；
+    ``nicknames`` 是生物名册给的"观察编号 → 主播起的名字"（墓碑对到死者），对上的条目带 ``nickname``。
     """
     if not reply.ok:
         return {"nearby_error": _failure(reply)}
@@ -304,7 +346,14 @@ def glance_scene(reply: MaicraftReply) -> Dict[str, Any]:
         if data.get(key):
             result[key] = data[key]
     things = entity_things(data.get("mod_things"))
-    entities = [described_entity(entity, things) for entity in _close(data.get("entities"))]
+    names = nicknames or {}
+    entities = []
+    for entity in _close(data.get("entities")):
+        described = described_entity(entity, things)
+        nickname = names.get(str(entity.get("id") or ""))
+        if nickname:
+            described = {**described, "nickname": nickname}
+        entities.append(described)
     if entities:
         result["entities"] = entities
     distant = _distant(data.get("entities"), data.get("distant_entities"))
