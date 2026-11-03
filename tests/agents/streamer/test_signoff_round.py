@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.agents.streamer.memory.tools import NOTEBOOK_CLOSED_REPLY
 from src.agents.streamer.planner import RoundOutcome
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.agents.streamer.utterance_queue import UtteranceQueue
@@ -183,9 +184,14 @@ def _replyer_dialogues(prompt: MagicMock) -> List[str]:
 
 
 async def _started_signoff_agent(
-    stack: _LiveStack, llm: MagicMock, prompt: Optional[MagicMock] = None
+    stack: _LiveStack, llm: MagicMock, prompt: Optional[MagicMock] = None, *, with_sessions: bool = False
 ) -> StreamerAgent:
-    """真实 Planner + Replyer；只接聊天仓储与回顾、印象两张表（回想工具要用），不起收播整理。"""
+    """真实 Planner + Replyer；只接聊天仓储与回顾、印象两张表（回想工具要用），不起收播整理。
+
+    ``with_sessions`` 再接上场次表：备忘录每次写入落进场次行，用例才看得到哪一场存了什么；
+    同时收播整理也会起（下播后后台用 summary 档位写一次回顾）。默认不接——接上后开播时会把
+    上场回顾读进系统提示词，按整份请求断言的用例会被它干扰。
+    """
     agent = make_streamer_agent(
         {"background": {"enabled": False}, "mouth": {"enabled": False}},
         llm=llm,
@@ -193,6 +199,7 @@ async def _started_signoff_agent(
         event_bus=stack.bus,
         tool_registry=ToolRegistry(),
         chat_repo=stack.store.chat,
+        sessions_repo=stack.store.sessions if with_sessions else None,
         session_manager=stack.manager,
         recap_repo=stack.store.recaps,
         viewer_profile_repo=stack.store.viewer_profiles,
@@ -340,6 +347,149 @@ async def test_signoff_during_new_session_does_not_leak_into_concurrent_round(li
     ]
     assert [row.content for row in live_lines] == [GREETING]
     assert [row.content for row in rehearsal_lines] == [FAREWELL]
+
+
+class _Gate:
+    """Planner 脚本里的闸：走到这一步先报"已进闸"，等测试放行后才交出这一步的回复。"""
+
+    def __init__(self, response: Response) -> None:
+        self.response = response
+        self.entered = asyncio.Event()
+        self.released = asyncio.Event()
+
+
+def _scripted_llm(planner_steps: List[Any]) -> MagicMock:
+    """Planner 按调用先后逐步取脚本，遇到闸就停在闸前等放行；表达侧固定回道别句。"""
+    llm = MagicMock()
+    steps = list(planner_steps)
+
+    async def _generate(*args: Any, **kwargs: Any) -> Response:
+        if kwargs.get("profile") != "planner":
+            return Response(success=True, content=FAREWELL)
+        step = steps.pop(0)
+        if isinstance(step, _Gate):
+            step.entered.set()
+            await step.released.wait()
+            return step.response
+        return step
+
+    llm.generate = AsyncMock(side_effect=_generate)
+    return llm
+
+
+def _notebook_call(text: str) -> ToolCall:
+    return ToolCall(id="call_notebook", name="streamer_notebook", arguments={"content": text})
+
+
+REHEARSAL_NOTE = "彩排记下：TNT阵还差最后一排"
+LIVE_NOTE = "正式场记下：开场先炸TNT"
+FAREWELL_NOTE = "道别时记下：下次先铺最后一排"
+
+
+def _profile_calls(llm: MagicMock, profile: str) -> int:
+    return sum(1 for call in llm.generate.await_args_list if call.kwargs.get("profile") == profile)
+
+
+def _logged(loguru_capture: Any, text: str) -> bool:
+    return any(text in record["message"] for record in loguru_capture.records)
+
+
+async def test_new_session_opened_during_signoff_keeps_its_own_state(
+    live_stack: _LiveStack, loguru_capture: Any
+) -> None:
+    """彩排场手动下播，道别那一轮还在等模型时开了正式场：彩排场的备忘录不带进正式场（决策上下文与
+    场次行都没有）；道别跑完后不再清场，正式场开场的那条消息和记下的备忘录照样留在决策上下文里。
+
+    顺序：彩排场一轮记备忘录 -> 下播，道别停在闸前 -> 开正式场，等开播回调走完先看场次行 ->
+    开场一轮记备忘录 -> 放行道别 -> 等下播回调走完（它最后排上收播整理，整理用 summary 档位调一次
+    模型）-> 正式场再来一轮，看决策上下文里正式场的东西还在不在。
+    """
+    store, manager = live_stack.store, live_stack.manager
+    farewell = _Gate(_planner_step(_reply_call()))
+    llm = _scripted_llm(
+        [
+            _planner_step(_notebook_call(REHEARSAL_NOTE)),
+            _no_more_calls(),
+            farewell,
+            _planner_step(_notebook_call(LIVE_NOTE)),
+            _no_more_calls(),
+            _no_more_calls(),
+        ]
+    )
+    agent = await _started_signoff_agent(live_stack, llm, with_sessions=True)
+    try:
+        rehearsal = await manager.open_session(kind="rehearsal", title="彩排")
+        await wait_until(agent.is_live_active, what="彩排场开播回调跑完")
+        # 彩排场得有一条落库的消息：调试注入的弹幕不落库，空场次结账时整行丢弃
+        await _viewer_says(store, rehearsal, "阿杰", "彩排一下TNT阵")
+        await agent.debug_test_decision(batch=[{"nickname": "阿杰", "text": "记一下TNT阵"}])
+        await manager.close_session(reason="彩排结束")
+        await asyncio.wait_for(farewell.entered.wait(), timeout=10)  # 道别那一轮停在 Planner 等放行
+
+        live = await manager.open_session(kind="live", title="正式开播")
+        await wait_until(lambda: _logged(loguru_capture, f"场次已开启（id={live}）"), what="正式场开播回调走完")
+        live_row_at_open = await store.sessions.get_live_session(live_session_id=live)
+        await agent.debug_test_decision(batch=[{"nickname": "小鱼", "text": "正式场开始啦"}])
+
+        farewell.released.set()
+        await wait_until(lambda: len(live_stack.speeches) == 1, what="放行后道别那一轮说出道别句")
+        await wait_until(lambda: _profile_calls(llm, "summary") >= 1, what="下播回调走完、排上了收播整理")
+        await agent.debug_test_decision(batch=[{"nickname": "小鱼", "text": "刚才记了什么"}])
+        rehearsal_row = await store.sessions.get_live_session(live_session_id=rehearsal)
+        live_row = await store.sessions.get_live_session(live_session_id=live)
+    finally:
+        await agent.stop()
+
+    requests = _planner_requests(llm)
+    assert len(requests) == 6
+    live_opening, after_signoff = requests[3], requests[5]
+    assert live_row_at_open is not None and live_row_at_open.notebook_text == "", "彩排场的备忘录不落进正式场的场次行"
+    assert REHEARSAL_NOTE not in live_opening, "彩排场的备忘录不带进正式场的决策上下文"
+    assert "正式场开始啦" in after_signoff, "道别跑完不清场：正式场开场那条消息还在对话里"
+    assert LIVE_NOTE in after_signoff, "道别跑完不清场：正式场开场记下的备忘录还在"
+    assert rehearsal_row is not None and rehearsal_row.notebook_text == REHEARSAL_NOTE
+    assert live_row is not None and live_row.notebook_text == LIVE_NOTE, "正式场的场次行只有正式场自己的备忘录"
+
+
+@pytest.mark.parametrize("rehearsal_chat", [["彩排一下TNT阵"], []], ids=["有消息的彩排场", "空彩排场"])
+async def test_signoff_round_cannot_write_notebook_into_new_session(
+    live_stack: _LiveStack, rehearsal_chat: List[str]
+) -> None:
+    """道别那一轮想记备忘录：那一场已经结账，工具拒绝写入、回执让它改写进交接稿；道别期间新开的
+    正式场在决策上下文和场次行里都看不到这段道别笔记。空彩排场结账即删行、道别不交场次，同样如此。
+
+    顺序：彩排场下播，道别第一步（记备忘录）停在闸前 -> 开正式场跑一轮 -> 放行，道别第二步开口 ->
+    正式场再来一轮。
+    """
+    store, manager = live_stack.store, live_stack.manager
+    farewell = _Gate(_planner_step(_notebook_call(FAREWELL_NOTE)))
+    llm = _scripted_llm([farewell, _no_more_calls(), _planner_step(_reply_call()), _no_more_calls()])
+    agent = await _started_signoff_agent(live_stack, llm, with_sessions=True)
+    try:
+        rehearsal = await manager.open_session(kind="rehearsal", title="彩排")
+        await wait_until(agent.is_live_active, what="彩排场开播回调跑完")
+        for line in rehearsal_chat:
+            await _viewer_says(store, rehearsal, "阿杰", line)
+        await manager.close_session(reason="彩排结束")
+        await asyncio.wait_for(farewell.entered.wait(), timeout=10)
+
+        live = await manager.open_session(kind="live", title="正式开播")
+        await wait_until(agent.is_live_active, what="正式场开播回调跑完")
+        await agent.debug_test_decision(batch=[{"nickname": "小鱼", "text": "正式场开始啦"}])
+
+        farewell.released.set()
+        await wait_until(lambda: len(live_stack.speeches) == 1, what="放行后道别那一轮说出道别句")
+        await agent.debug_test_decision(batch=[{"nickname": "小鱼", "text": "刚才记了什么"}])
+        live_row = await store.sessions.get_live_session(live_session_id=live)
+    finally:
+        await agent.stop()
+
+    requests = _planner_requests(llm)
+    assert len(requests) == 4
+    farewell_second_step, live_after = requests[2], requests[3]
+    assert NOTEBOOK_CLOSED_REPLY in farewell_second_step, "备忘录工具回执告诉道别那一轮不再记"
+    assert FAREWELL_NOTE not in live_after, "道别笔记不进正式场的决策上下文"
+    assert live_row is not None and live_row.notebook_text == "", "道别笔记不落进正式场的场次行"
 
 
 @pytest.mark.parametrize(

@@ -116,6 +116,11 @@ _SPEECH_TAIL_WAIT_MS = 30_000
 # 读到的是 None，照常按进行中场次走。不挂在 Agent 实例上，正是为了不漏给这些并发轮次
 _CLOSING_SESSION: ContextVar[Optional[ClosingSession]] = ContextVar("streamer_closing_session", default=None)
 
+# 当前调用链是不是收播道别那一轮（下播回调跑道别前设上、跑完复位）。与上面不同，场次行已删
+# 或将删、不交场次的道别也算：这一轮里备忘录工具拒绝写入——那一场已经结账，写了落不进场次行；
+# 道别期间若已开了新场次，写进内存的那份还会被当成新场次的备忘录
+_SIGNOFF_ROUND: ContextVar[bool] = ContextVar("streamer_signoff_round", default=False)
+
 
 # ---------------------------------------------------------------------------
 # StreamerAgent
@@ -481,6 +486,13 @@ class StreamerAgent(BaseAgent):
         # 场次进行位：live.started 置位 / live.ended 复位。主动发言的业务边界
         # = 场次——没开播只回弹幕不主动开题，开场白（rundown opening）等开播
         self._live_active: bool = False
+        # 开播计数：每收到一次 live.started 加一。下播回调要等道别那一轮跑完（等模型好几秒）
+        # 才清场，这期间若已开了新场次，新场次的开播回调已经清过一次场、对话与备忘录都归
+        # 新场次了；下播回调比对道别前后的计数，变了就不再清，免得把新场次刚记下的东西抹掉
+        self._session_epoch: int = 0
+        # 正在收尾的下播回调数（进回调加一、道别跑完减一）。开播回调据此判断内存里那份
+        # 备忘录是开播前写下的（带进新场次），还是上一场还没来得及清掉的（不带）
+        self._closings_in_flight: int = 0
         # 一次性主动触发信号（外部点播/流程单环节/游戏待定夺）：状态与
         # 消费纪律一处声明（game/rundown 确认消费、external 读即消费）
         self._proactive_signals = ProactiveSignals()
@@ -797,7 +809,10 @@ class StreamerAgent(BaseAgent):
             # 备忘录工具：随主播 Agent 无条件注册（会话内状态，不依赖任何仓储）
             self.register_tool_provider(
                 build_notebook_tool_provider(
-                    self._notebook, event_bus=self._event_bus, on_saved=self._persist_notebook
+                    self._notebook,
+                    event_bus=self._event_bus,
+                    on_saved=self._persist_notebook,
+                    writable=lambda: not _SIGNOFF_ROUND.get(),
                 ),
                 registry=self._tool_registry,
             )
@@ -915,7 +930,15 @@ class StreamerAgent(BaseAgent):
     ) -> None:
         """live.started 回调：开播，放行主动发言，读出上场回顾固定整场。"""
         del event_name, source
+        # 开播计数先加：上一场的下播回调若还在等道别那一轮，跑完后据此知道已经换场、不再清场
+        self._session_epoch += 1
         self._live_active = True
+        # 上一场的下播回调还在收尾（道别那一轮在等模型）时，内存里这份备忘录是上一场的
+        # 工作笔记（每次写入都已落进上一场的场次行），不是开播前写下的：当场清掉、不带进
+        # 新场次。放在第一个 await 之前，新场次的第一轮决策开窗时读到的已经是空备忘录
+        stale_notebook = bool(self._closings_in_flight and self._notebook.read())
+        if stale_notebook:
+            self._notebook.clear()
         if self._mouth is not None:
             self._mouth.reset()
         # 流程单开播起算：armed（已装载待开播）→ running，双锚点 = 开播时刻。
@@ -931,8 +954,12 @@ class StreamerAgent(BaseAgent):
         await self._refresh_recap_section(exclude_session_id=payload.live_session_id, kind=payload.kind)
         # 长期记忆：同样在开播这一刻按场次类型读出整份，整场固定（彩排读彩排那份）
         await self._refresh_long_memory_section(kind=payload.kind)
-        # 开播前写下的备忘录会带进这一场（决策照常读得到），先落进新场次行，收播整理才对得上
-        if self._notebook.read():
+        # 开播前写下的备忘录会带进这一场（决策照常读得到），先落进新场次行，收播整理才对得上；
+        # 上面清掉的上一场备忘录只补发一次清空的观测事件，不落进新场次
+        if stale_notebook:
+            self._logger.info("上一场还在道别，内存里的备忘录属于上一场（已随场次落盘），不带进新场次")
+            await emit_notebook_changed(self._event_bus, "")
+        elif self._notebook.read():
             await self._persist_notebook(self._notebook.read())
         self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
 
@@ -963,31 +990,59 @@ class StreamerAgent(BaseAgent):
         # Dashboard 删除进行中场次（场次管理器先结束这一场、发完 live.ended 紧接着删行）。
         # 这两种都不交场次上下文、不排收播整理，下面两处共用这一个判断
         session_row_gone = payload.empty_discarded or payload.deleted
-        if self._running and not payload.superseded:
-            # 场次管理器先把这一场写成已结束、清掉进行中场次，才发 live.ended，道别这一轮里
-            # "当前场次"已解析不到：把正在结束的这一场显式交下去，她按这一场读最后的对话、
-            # 道别句记进这一场、彩排场的道别仍按彩排算。场次行已删或将删时不交：道别要等
-            # 模型好几秒才说出口，那时行早没了，交了会给道别句盖上已删场次的编号、在库里留下
-            # 孤儿行；这时道别照旧运行（她照样说再见），只是这句不落库
-            closing = None if session_row_gone else self._closing_session_of(payload)
-            await self._execute_round(
-                [],
-                forced=True,
-                trigger_cause=TriggerCause(kind=TriggerKind.SIGNOFF, source=TriggerSource.LIVE_END),
-                proactive=True,
-                closing_session=closing,
+        # 记下道别前的开播计数，并登记"有一场正在收尾"：道别那一轮要等模型好几秒，期间新开的
+        # 场次由它自己的开播回调接管对话与备忘录，道别跑完后据此决定这里还清不清场
+        epoch = self._session_epoch
+        self._closings_in_flight += 1
+        try:
+            if self._running and not payload.superseded:
+                # 场次管理器先把这一场写成已结束、清掉进行中场次，才发 live.ended，道别这一轮里
+                # "当前场次"已解析不到：把正在结束的这一场显式交下去，她按这一场读最后的对话、
+                # 道别句记进这一场、彩排场的道别仍按彩排算。场次行已删或将删时不交：道别要等
+                # 模型好几秒才说出口，那时行早没了，交了会给道别句盖上已删场次的编号、在库里留下
+                # 孤儿行；这时道别照旧运行（她照样说再见），只是这句不落库
+                closing = None if session_row_gone else self._closing_session_of(payload)
+                # 标记"这是道别那一轮"：这一轮里备忘录工具拒绝写入（见 _SIGNOFF_ROUND）
+                signoff_token = _SIGNOFF_ROUND.set(True)
+                try:
+                    await self._execute_round(
+                        [],
+                        forced=True,
+                        trigger_cause=TriggerCause(kind=TriggerKind.SIGNOFF, source=TriggerSource.LIVE_END),
+                        proactive=True,
+                        closing_session=closing,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 道别失败不能挡住清场与收播整理
+                    # 道别没说出来只少一句再见；要是让异常穿出去，下面的清场与收播整理全被跳过，
+                    # 这一场的对话与备忘录留在内存里，下一场开播会把它当成开播前写下的带进去
+                    self._logger.exception(
+                        f"场次 {payload.live_session_id} 的道别那一轮出错，照常清场与收播整理: {exc}"
+                    )
+                finally:
+                    _SIGNOFF_ROUND.reset(signoff_token)
+        finally:
+            self._closings_in_flight -= 1
+        if self._session_epoch != epoch:
+            # 道别那几秒里已开了新场次：新场次的开播回调已清过一次场（对话轮、游戏账本、时间线
+            # 归零），也已把这一场的备忘录清掉；此刻内存里的东西都是新场次刚记下的，再清就会
+            # 抹掉新场次的开场内容
+            self._logger.info(
+                f"场次 {payload.live_session_id} 道别期间已开新场次，内存里的对话与备忘录归新场次，不再清场"
             )
-        # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
-        # （道别句已带着这一场的编号落库，随场次留档，不再留在内存对话里）
-        await self._scope.end_session()
-        # 备忘录生命周期收口：全文已随每次写入落进场次行（整理从那里读），
-        # 这里只清空内存里这份——备忘录是场次作用域，下一场从空白开始
-        notebook_text = self._notebook.read()
-        if notebook_text:
-            self._logger.info(f"本场备忘录已随场次落盘（{len(notebook_text)} 字），内存里这份清空")
-            # 清空也是备忘录状态变化：发观测事件（快照非空才发——空备忘录清空无状态变化）
-            await emit_notebook_changed(self._event_bus, "")
-        self._notebook.clear()
+        else:
+            # 备忘录生命周期收口：全文已随每次写入落进场次行（整理从那里读），这里只清空内存
+            # 里这份——备忘录是场次作用域，下一场从空白开始。先清备忘录再清场：清场要 await，
+            # 期间若开了新场次，开播回调看到的已是空备忘录，不会把这一场的工作笔记当成开播前
+            # 写下的带进新场次
+            notebook_text = self._notebook.read()
+            self._notebook.clear()
+            # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
+            # （道别句已带着这一场的编号落库，随场次留档，不再留在内存对话里）
+            await self._scope.end_session()
+            if notebook_text:
+                self._logger.info(f"本场备忘录已随场次落盘（{len(notebook_text)} 字），内存里这份清空")
+                # 清空也是备忘录状态变化：发观测事件（快照非空才发——空备忘录清空无状态变化）
+                await emit_notebook_changed(self._event_bus, "")
         # 收播整理：先写这一场的回顾，再给本场活跃的常客更新印象（两次 LLM 调用，
         # 放后台不阻塞事件回调）。场次行已删或将删时不整理：空场次没东西可整理；用户删掉的
         # 场次本意是把这一场清掉，整理若赶在删行之前读到对话，会给已删场次写出回顾与画像。

@@ -32,6 +32,7 @@ logger = get_logger("StreamerNotebookTools")
 
 __all__ = [
     "MEMORY_PROVIDER_NAME",
+    "NOTEBOOK_CLOSED_REPLY",
     "NOTEBOOK_SPEC",
     "NOTEBOOK_TOOL_FULL_NAME",
     "RECALL_SESSION_SPEC",
@@ -143,10 +144,15 @@ async def emit_notebook_changed(event_bus: Any, notebook_text: str) -> None:
         logger.warning(f"streamer.notebook.changed 发布失败（已忽略）: {exc}")
 
 
+#: 道别那一轮想写备忘录时给模型的回执：这一场已经结账，写了也落不进场次行
+NOTEBOOK_CLOSED_REPLY = "这一场已经下播，备忘录不再记了；想让她说出口的话写进交接稿。"
+
+
 def build_notebook_tool_provider(
     notebook: StreamerNotebook,
     event_bus: Any = None,
     on_saved: Optional[Callable[[str], Awaitable[None]]] = None,
+    writable: Optional[Callable[[], bool]] = None,
 ) -> ToolProvider:
     """组装备忘录工具 Provider（provider="streamer"，全名 ``streamer_notebook``）。
 
@@ -156,6 +162,9 @@ def build_notebook_tool_provider(
     （读回不发——读不改变备忘录状态）；未注入（极简场景）时只写不发。
     ``on_saved`` 在每次写入后收到实际保存的全文，主播 Agent 用它把备忘录落进
     本场的场次行；落盘失败只告警，模型照常拿到写回执。
+    ``writable`` 返回 False 时拒绝写入（读照常）：主播 Agent 在收播道别那一轮里关上它——
+    那一场已经结账、场次行不再接受写入，道别期间若已开了新场次，写进内存的那份还会被
+    当成新场次的备忘录。未注入时一律可写。
     """
 
     async def _notebook(invocation: ToolInvocation) -> str:
@@ -163,6 +172,10 @@ def build_notebook_tool_provider(
         if "content" not in args:
             text = notebook.read()
             return text if text else "（备忘录还是空的）"
+        if writable is not None and not writable():
+            # 道别那一轮：内存里这份不动，回执告诉模型改写进交接稿
+            logger.debug("道别那一轮不记备忘录：这一场已结账")
+            return NOTEBOOK_CLOSED_REPLY
         saved = notebook.set(str(args.get("content", "")))
         if on_saved is not None:
             try:
