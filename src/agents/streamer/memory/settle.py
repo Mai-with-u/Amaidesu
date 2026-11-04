@@ -112,6 +112,8 @@ class SettleMaterial:
     speech_note: Optional[str]
     games: List[str]
     games_text: str
+    # 启用了的游戏 Agent：承诺的 game 也可以是它们（短场次可能一条游戏事件都没记下）
+    game_agents: List[str]
     abilities_text: str
     open_commitments: List[Commitment]
     void_titles: List[Tuple[int, str]]
@@ -475,7 +477,8 @@ class SessionSettler:
         """把一场的原料全取出来：她说的话、游戏、她能做的事、旧承诺。"""
         speech_text, lines_by_number, speech_note = self._render_speech(delivered)
         games, games_text = await self._render_games(session)
-        abilities_text = self._render_abilities()
+        game_agents = self._enabled_game_names()
+        abilities_text = self._render_abilities(game_agents)
         open_commitments, open_text, void_titles, void_text = await self._load_commitments(session)
         return SettleMaterial(
             live_session_id=int(session.id),
@@ -484,6 +487,7 @@ class SessionSettler:
             speech_note=speech_note,
             games=games,
             games_text=games_text,
+            game_agents=game_agents,
             abilities_text=abilities_text,
             open_commitments=open_commitments,
             void_titles=void_titles,
@@ -581,15 +585,20 @@ class SessionSettler:
             text += "\n\n【游戏里的关键事件】\n" + "\n".join(event_lines)
         return games, text
 
-    def _render_abilities(self) -> str:
+    def _enabled_game_names(self) -> List[str]:
+        """启用了的游戏 Agent 名单；拿不到就空（只少写几个名字，承诺照常整理）。"""
+        if self._game_names_provider is None:
+            return []
+        try:
+            return [str(name).strip() for name in self._game_names_provider() if str(name).strip()]
+        except Exception as exc:  # noqa: BLE001 - 拿不到名单只少写几个名字
+            logger.warning(f"取游戏 Agent 名单失败: {exc}", exc=exc)
+            return []
+
+    @staticmethod
+    def _render_abilities(game_agents: Sequence[str]) -> str:
         """她能做的事：启用的游戏 Agent 名单，加上不需要额外能力就能做的事。"""
-        names: List[str] = []
-        if self._game_names_provider is not None:
-            try:
-                names = [str(name) for name in self._game_names_provider() if str(name).strip()]
-            except Exception as exc:  # noqa: BLE001 - 拿不到名单只少写几个名字
-                logger.warning(f"取游戏 Agent 名单失败: {exc}", exc=exc)
-        abilities = list(dict.fromkeys([*names, *_BASE_ABILITIES]))
+        abilities = list(dict.fromkeys([*game_agents, *_BASE_ABILITIES]))
         return "、".join(abilities)
 
     async def _load_commitments(self, session: LiveSession) -> Tuple[List[Commitment], str, List[Tuple[int, str]], str]:
@@ -851,7 +860,10 @@ class SessionSettler:
                 viewer_id = int(reply_viewer_id)
             game = raw.get("game")
             game_name = str(game).strip() if isinstance(game, str) and game.strip() else None
-            if game_name is not None and game_name not in material.games:
+            # 挂的游戏要么本场有游戏事件，要么是启用了的游戏 Agent：开错后马上重开的一两分钟里
+            # 常常一条游戏事件都没记下，承诺明明是游戏里的事却挂不上游戏，就会进常驻简报、
+            # 不玩这个游戏时也每场被念叨
+            if game_name is not None and game_name not in material.games and game_name not in material.game_agents:
                 game_name = None
             written.append(
                 PendingCommitment(

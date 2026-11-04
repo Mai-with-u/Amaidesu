@@ -207,6 +207,25 @@ async def test_game_outside_session_is_dropped(store: SQLiteDatabase, prompt_man
     assert len(commitments) == 1 and commitments[0].game is None
 
 
+async def test_game_commitment_sticks_to_enabled_game_without_session_events(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """开错后马上重开的一两分钟里一条游戏事件都没记下：承诺明明是游戏里的事，挂到启用了的游戏
+    Agent 上照样算数，不会因为挂不上游戏而进常驻简报、不玩这个游戏时也被念叨。"""
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "这口气我记着了，下次接着救那块墓碑的女仆")
+    llm = _reply(
+        '{"archive": []}',
+        '{"commitments": [{"line": 1, "quote": "下次接着救那块墓碑的女仆",'
+        ' "what": "接着救墓碑女仆", "to": "everyone", "game": "Minecraft", "same_as": null}]}',
+    )
+    settler = _settler(store, llm, prompt_manager, games=["Minecraft"])
+
+    assert await settler.settle_session(session_id) is True
+    commitments = await store.commitments.list_commitments()
+    assert len(commitments) == 1 and commitments[0].game == "Minecraft"
+
+
 async def test_commitment_to_person_without_reply_target_is_reported(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
