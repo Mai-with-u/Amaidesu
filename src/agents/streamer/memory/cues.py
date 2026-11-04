@@ -20,16 +20,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
 from .render import (
     memory_ref_numbers,
-    render_commitment_number,
     render_cue_block,
     render_forget_notice,
+    render_game_card,
     render_presence_line,
     render_retract_notice,
     render_viewer_card,
@@ -99,14 +99,20 @@ class MemoryCueProvider:
         viewer_repo: Optional["ViewerRepo"] = None,
         privacy_service: Optional["PrivacyService"] = None,
         current_session_provider: Optional[Callable[[], Optional[int]]] = None,
+        previous_session_provider: Optional[Callable[[], Awaitable[Optional[int]]]] = None,
         clock: Callable[[], int] = now_ms,
     ) -> None:
-        """仓储与时钟注入；隐私服务缺失时不出回执行（看不见遗忘命令）。"""
+        """仓储与时钟注入；隐私服务缺失时不出回执行（看不见遗忘命令）。
+
+        ``previous_session_provider`` 给"上一场"的判定（承诺卡的时间词）：缺省时
+        承诺卡一律写"之前"，不冒险把三场前的承诺说成上一场。
+        """
         self._commitments = commitments_repo
         self._chat = chat_repo
         self._viewers = viewer_repo
         self._privacy = privacy_service
         self._current_session_provider = current_session_provider
+        self._previous_session_provider = previous_session_provider
         self._clock = clock
         self._session_id: Optional[int] = None
         # 承诺编号 → 本场推送时刻列表
@@ -131,9 +137,11 @@ class MemoryCueProvider:
         self._reset_if_new_session(int(session_id))
         senders = await self._resolve_senders(batch)
         used = await self._used_commitment_ids(int(session_id))
-        cards, card_ids = await self._collect_cards(senders, used, open_games)
-        presence = "" if cards else await self._presence_line(int(session_id), senders)
-        notices = self._command_notices(senders)
+        previous_session_id = await self._previous_session_id()
+        cards, card_ids, carded_viewers = await self._collect_cards(senders, used, open_games, previous_session_id)
+        # 老观众一行不再因为"本批有别人的卡"整行消失；只跳过这一批拿了自己卡的观众
+        presence = await self._presence_line(int(session_id), senders, carded_viewers)
+        notices = self._command_notices(batch)
         text = render_cue_block(cards=cards, presence=presence, notices=notices)
         return MemoryCues(
             text=text,
@@ -244,14 +252,19 @@ class MemoryCueProvider:
         senders: Sequence[_Sender],
         used: Set[int],
         open_games: Sequence[str],
-    ) -> Tuple[List[str], List[int]]:
-        """按优先级凑卡片：先对象开口，再游戏开着；每批至多三张。"""
+        previous_session_id: Optional[int],
+    ) -> Tuple[List[str], List[int], Set[int]]:
+        """按优先级凑卡片：先对象开口，再正在玩的游戏；每批至多三张。
+
+        第三个返回值是本批拿到"对 ta 的承诺卡"的观众编号：老观众在场一行只跳过这些人。
+        """
         cards: List[str] = []
         ids: List[int] = []
+        carded_viewers: Set[int] = set()
         self._round_labels = {}
         for sender in senders:
             if len(cards) >= MAX_CARDS_PER_BATCH:
-                return cards, ids
+                return cards, ids, carded_viewers
             if sender.viewer_id is None or sender.forget_requested_at_ms is not None:
                 continue
             for commitment in await self._open_commitments(viewer_id=sender.viewer_id):
@@ -262,9 +275,11 @@ class MemoryCueProvider:
                         commitment,
                         viewer_label=sender.user_name or "观众",
                         message_id=sender.message_id,
+                        is_previous=self._registered_in_previous_session(commitment, previous_session_id),
                     )
                 )
                 ids.append(int(commitment.id))
+                carded_viewers.add(int(sender.viewer_id))
                 self._round_labels[int(commitment.id)] = sender.user_name or "观众"
                 self._record_push(int(commitment.id))
                 break
@@ -276,11 +291,33 @@ class MemoryCueProvider:
                     continue
                 if not self._may_push(int(commitment.id), used):
                     continue
-                cards.append(_render_game_card(commitment, game=game))
+                cards.append(render_game_card(commitment, game=game))
                 ids.append(int(commitment.id))
                 self._record_push(int(commitment.id))
                 break
-        return cards, ids
+        return cards, ids, carded_viewers
+
+    @staticmethod
+    def _registered_in_previous_session(commitment: Any, previous_session_id: Optional[int]) -> bool:
+        """承诺是不是登记在"上一场"：只有这一种写"上一场"，本场与更早的都写"之前"。"""
+        session_id = getattr(commitment, "created_session_id", None)
+        if session_id is None or previous_session_id is None:
+            return False
+        return int(session_id) == int(previous_session_id)
+
+    async def _previous_session_id(self) -> Optional[int]:
+        """上一场 = 最近一个已整理、有档案行的同类型场次（与常驻简报同口径）。
+
+        没注入回调或取不到时返回 None：承诺卡一律写"之前"，不把三场前的事说成上一场。
+        """
+        if self._previous_session_provider is None:
+            return None
+        try:
+            value = await self._previous_session_provider()
+        except Exception as exc:  # noqa: BLE001 - 取不到就按没有上一场处理，不挡线索推送
+            logger.warning(f"线索推送取上一场失败（承诺卡时间词写「之前」）: {exc}", exc=exc)
+            return None
+        return int(value) if value is not None else None
 
     async def _open_commitments(self, *, viewer_id: Optional[int] = None, game: Optional[str] = None) -> List[Any]:
         """名下的未了结承诺（新的在前）；查不到就当没有。"""
@@ -313,16 +350,25 @@ class MemoryCueProvider:
     # 老观众在场一行与回执行
     # ------------------------------------------------------------------
 
-    async def _presence_line(self, session_id: int, senders: Sequence[_Sender]) -> str:
+    async def _presence_line(
+        self,
+        session_id: int,
+        senders: Sequence[_Sender],
+        carded_viewers: Set[int],
+    ) -> str:
         """老观众在场一行：本场之前来过至少三场正式场、她本场还没回应过、没有待删请求的观众。
 
         ``sessions_count`` 是含本场的累计（观众本场首条弹幕进账时 +1）：这位观众上次计入
         的场次就是本场时，先减掉本场再比门槛——否则回访第 3 场的人会被当成老观众。
+        这一批拿到对 ta 本人承诺卡的观众不进行：同一批里说两遍同一件事；别人拿卡不压 ta。
         """
         replied = await self._replied_viewer_ids(session_id)
         entries: List[Tuple[str, Optional[int]]] = []
         for sender in senders:
             if sender.viewer_id is None:
+                continue
+            # 只跳过这一批拿了对 ta 本人承诺卡的观众；别人拿卡不压 ta 这一行
+            if sender.viewer_id in carded_viewers:
                 continue
             earlier_sessions = sender.sessions_count
             if sender.last_session_id is not None and sender.last_session_id == session_id:
@@ -336,43 +382,39 @@ class MemoryCueProvider:
             entries.append((sender.user_name or "观众", sender.prev_seen_ms))
         return render_presence_line(entries, now_ms=int(self._clock()))
 
-    def _command_notices(self, senders: Sequence[_Sender]) -> List[str]:
-        """本批遗忘命令的回执行：忘了我 → 告知不再记录；撤回短语 → 告知删除取消。
+    def _command_notices(self, batch: Sequence[Any]) -> List[str]:
+        """本批遗忘命令的回执行：逐条看非模拟弹幕，不按发言人去重。
 
-        只认记账侧真正处理过的命令：记账侧只处理弹幕里的遗忘命令（超级留言、礼物、
-        上舰里的文本不进遗忘流程），所以非弹幕消息一律不回执——否则主播会答应一场
-        并不会发生的删除；撤回短语还要记账侧确认撤回已生效才回执。
+        同一批里老观众先发"哈哈"再发"忘了我"时，按人去重只剩第一条，回执就丢了——
+        卡片与老观众一行才需要按人去重。只认记账侧真正处理过的命令：记账侧只处理
+        弹幕里的遗忘命令（超级留言、礼物、上舰里的文本不进遗忘流程），所以非弹幕消息
+        一律不回执；撤回短语还要记账侧确认撤回已生效才回执。
         """
         if self._privacy is None:
             return []
         notices: List[str] = []
-        for sender in senders:
-            if not sender.message_id or not sender.content:
+        for message in batch:
+            if bool(getattr(message, "simulated", False)):
                 continue
-            if sender.message_type != "danmaku":
+            user = getattr(message, "user", None)
+            external_id = str(getattr(user, "id", "") or "").strip()
+            if user is None or not external_id:
                 continue
-            if self._privacy.is_forget_command(sender.content):
-                notices.append(render_forget_notice(message_id=sender.message_id))
+            message_id = str(getattr(message, "message_id", "") or "")
+            content = str(getattr(message, "content", "") or "")
+            if not message_id or not content:
                 continue
-            if not self._privacy.is_retract_command(sender.content):
+            if str(getattr(message, "message_type", "") or "") != "danmaku":
+                continue
+            if self._privacy.is_forget_command(content):
+                notices.append(render_forget_notice(message_id=message_id))
+                continue
+            if not self._privacy.is_retract_command(content):
                 continue
             if self._privacy.was_retracted_in_session(
-                message_id=sender.message_id,
-                platform=sender.platform,
-                external_id=sender.external_id,
+                message_id=message_id,
+                platform=str(getattr(message, "platform", "") or ""),
+                external_id=external_id,
             ):
-                notices.append(render_retract_notice(message_id=sender.message_id))
+                notices.append(render_retract_notice(message_id=message_id))
         return notices
-
-
-def _render_game_card(commitment: Any, *, game: str) -> str:
-    """游戏承诺卡：挂在这个游戏上、不针对具体观众的未了结承诺。
-
-    ``open_games`` 是"已启用的游戏工具面"（可能同时启用几个），不表示主播此刻
-    正在玩哪一个；卡面因此不写"现在 X 开着"，避免决策层把没在玩的游戏当成当前现场。
-    """
-    quote = (commitment.quote or "").strip() or (commitment.what or "").strip()
-    return (
-        f"[{render_commitment_number(commitment.id)}·{game}] "
-        f"你之前说过「{quote}」，截至上一场还没做。这件承诺挂在你玩的游戏 {game} 上；时机对再提。"
-    )

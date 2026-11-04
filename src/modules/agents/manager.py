@@ -73,6 +73,7 @@ class AgentManager:
         event_repo: Optional[Any] = None,
         creature_repo: Optional[Any] = None,
         privacy_service: Optional[Any] = None,
+        storage_ledger: Optional[Any] = None,
         supervisor_config: Optional[AgentSupervisorConfig] = None,
     ) -> None:
         self._agents: Dict[str, AgentRegistration] = {}
@@ -92,6 +93,7 @@ class AgentManager:
         self._event_repo = event_repo
         self._creature_repo = creature_repo
         self._privacy_service = privacy_service
+        self._storage_ledger = storage_ledger
         self._lock = asyncio.Lock()
         # ----- 守护（心跳巡检 + 自动重建 + 风暴保护）-----
         self._supervisor_config = supervisor_config if supervisor_config is not None else AgentSupervisorConfig()
@@ -231,6 +233,7 @@ class AgentManager:
             event_repo=d.event_repo if d.event_repo is not None else self._event_repo,
             creature_repo=d.creature_repo if d.creature_repo is not None else self._creature_repo,
             privacy_service=d.privacy_service if d.privacy_service is not None else self._privacy_service,
+            storage_ledger=d.storage_ledger if d.storage_ledger is not None else self._storage_ledger,
         )
 
     async def enable_agent(

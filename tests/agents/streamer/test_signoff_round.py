@@ -297,6 +297,41 @@ async def test_signoff_round_reads_and_lands_in_the_ending_session(
     assert "正式那场挖到了钻石" in after_recall, "道别那一轮跑完，回想工具照样能翻到往场的档案"
 
 
+async def test_signoff_round_recalls_this_stream_of_the_ending_session(live_stack: _LiveStack) -> None:
+    """道别那一轮回想"本场"：查的是正在结束的那一场，原文不遮名。
+
+    场次管理器发 live.ended 前已清掉进行中场次；回想工具取"本场"若照常读进行中场次，
+    道别时会答"现在不在直播"，或把刚结束的这一场当成往场、把观众昵称遮掉。
+    """
+    store, manager = live_stack.store, live_stack.manager
+    llm = _routed_llm(
+        [
+            _planner_step(
+                ToolCall(
+                    id="call_recall_stream",
+                    name="memory_recall",
+                    arguments={"query": "TNT阵", "scope": "this_stream"},
+                )
+            ),
+            _planner_step(_reply_call()),
+        ]
+    )
+    agent = await _started_signoff_agent(live_stack, llm)
+    try:
+        pk = await manager.open_session(kind="live", title="炸TNT")
+        await wait_until(agent.is_live_active, what="开播回调跑完")
+        await _viewer_says(store, pk, "小鱼", "下播前把TNT阵炸了吧")
+        await _viewer_says(store, pk, "阿杰", "TNT阵等小鱼来了再炸")
+
+        await _end_and_wait_signoff(live_stack, agent)
+    finally:
+        await agent.stop()
+
+    _signoff_plan, after_recall = _planner_requests(llm)
+    assert "现在不在直播" not in after_recall, "道别那一轮还算在这一场里"
+    assert "TNT阵等小鱼来了再炸" in after_recall, "本场的原文不遮观众昵称"
+
+
 async def test_signoff_during_new_session_does_not_leak_into_concurrent_round(live_stack: _LiveStack) -> None:
     """彩排场手动下播，道别那一轮还在等模型时开了正式场、跑了一轮常规决策：这一轮按正式场
     读历史、按正式场回想上一场、台词记进正式场；道别那一轮照旧按彩排场读、记进彩排场。"""

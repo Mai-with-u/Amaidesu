@@ -116,6 +116,7 @@ def instantiate_agent(
             archive_repo=deps.archive_repo,
             event_repo=deps.event_repo,
             privacy_service=deps.privacy_service,
+            stream_ledger=deps.storage_ledger,
             context_assembler_config=deps.context_assembler_config,
             speech_config=deps.speech_config,
             tts_engine=deps.tts_engine,

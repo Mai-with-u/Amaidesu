@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 import tempfile
 from pathlib import Path
@@ -15,6 +16,7 @@ import pytest
 
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.streamer_agent import StreamerAgent
+from src.modules.llm.payload import Response
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.tools import ToolRegistry
 from tests.modules.llm.fakes import FakeLLMManager
@@ -162,3 +164,29 @@ async def test_brief_is_empty_without_ledger_material(store: SQLiteDatabase) -> 
     agent = _build_agent(store, FakeLLMManager())
     await agent._refresh_memory_brief()
     assert agent.memory_brief_text == "" and agent.memory_brief_commitment_ids == ()
+
+
+async def test_open_start_settle_is_scheduled_in_background(store: SQLiteDatabase) -> None:
+    """开播回调不能同步等整理：补整理排后台，回调本身立即返回，模型调用随后才发生。"""
+    pending = await _ended_session(store, started=1_000, ended=2_000)
+    await store.chat.insert_live_chat(
+        live_session_id=pending,
+        timestamp_ms=1_500,
+        sender_role="assistant",
+        content="下次接着讲鬼故事",
+        message_type="speech",
+    )
+    gate = asyncio.Event()
+    llm = FakeLLMManager(response=Response(success=True, content='{"archive": []}'), gate=gate)
+    agent = _build_agent(store, llm)
+
+    agent._settle_pending_before_brief()
+
+    assert llm.calls == [], "开播回调返回时不该已经等过模型"
+    await asyncio.wait_for(llm.gate_reached.wait(), timeout=5)
+    tasks = list(agent._memory_tasks)
+    gate.set()
+    assert tasks
+    await asyncio.gather(*tasks)
+    row = await store.sessions.get_live_session(live_session_id=pending)
+    assert row is not None and row.settled_at_ms is not None, "后台补整理应把待整理场次写完"

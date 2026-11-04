@@ -22,7 +22,7 @@
 - ``rundown/``          - 流程单（Rundown）子系统：``rundown``（数据契约 + 内置默认流程单）/
   ``rundown_state``（运行时状态：游标 + 计时 + 唯一变更边界）/ ``rundown_tool``（Agent 推进工具）/
   ``presentation``（Dashboard 视图拼装 + 手动控制翻译，纯函数）
-- ``memory/``           - 主播记忆：``recap``（场次回顾，收播写 / 开播注入）/ ``roster``（观众画像，
+- ``memory/``           - 主播记忆：``settle``（下播整理：写承诺与场次档案）/ ``brief``（常驻简报）/ ``cues``（线索推送）/ ``recall``（回想工具）/ ``render``（两档写法），
   收播更新观众印象）/ ``tools``（``memory_recall_session`` / ``memory_recall_viewer``，名单 ``["streamer"]``）
 - ``tools/``            - Agent 专属工具壳层（**真工具**）：``reply_tool``（provider="streamer"）
   （reply / rundown_control，经 ToolRegistry 注册 + 名单隔离）；

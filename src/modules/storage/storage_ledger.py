@@ -23,8 +23,9 @@ StorageLedger —— 直播间消息流落库器
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from src.modules.config.storage_schemas import ViewerIdentityConfig
 from src.modules.events.names import CoreEvents
@@ -84,17 +85,73 @@ class StorageLedger:
         self._dropped_miss_count = 0
         self._subscriptions: dict[str, Callable] = {}
         self._started = False
+        # 在写的用户可见文本处理数：主播 Agent 的下播收尾要等最后几句台词与观众消息
+        # 落库之后再清遮名、执行删除（见 wait_writes_idle）。事件回调都在同一个事件
+        # 循环里跑，计数不需要加锁
+        self._writes_in_flight = 0
+        self._writes_idle = asyncio.Event()
+        self._writes_idle.set()
 
     def set_cleanup_on_live_ended(self, enabled: bool) -> None:
-        """由主播下播整理托管下播后清理时置 False，避免与整理并发执行删除。"""
+        """由主播 Agent 接管下播清理时置 False。
+
+        接管后本类不在 ``live.ended`` 里清遮名、也不跑到期清理——主播 Agent
+        还要等道别那一轮落库、队尾台词播完、本场整理跑完，才调 ``finish_stream_end``；
+        没人接管（没有主播 Agent，或它在启动时就已停止）时保持原行为。
+        """
         self._cleanup_on_live_ended = enabled
+
+    async def wait_writes_idle(self, *, timeout_ms: int = 15_000) -> bool:
+        """等当前在写的观众消息与主播台词落库；全部写完返回 True，等满上限返回 False。
+
+        下播收尾用的时序口：清遮名与执行删除必须排在最后几句台词写库之后，否则
+        道别句里的观众昵称会漏出、整理也会读到已删的观众。只等"已经在写"的处理，
+        不拦之后新到的事件（那时场次已经结账，事件归属不到场次、不会再写）。
+        """
+        if self._writes_in_flight == 0:
+            return True
+        try:
+            await asyncio.wait_for(self._writes_idle.wait(), timeout=max(1, int(timeout_ms)) / 1000)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"等下播写库落完超时（{timeout_ms} 毫秒，仍有 {self._writes_in_flight} 个处理在写），照常继续清理"
+            )
+            return False
+        return True
+
+    async def finish_stream_end(self, *, clear_masks: bool = True) -> None:
+        """下播收尾：先执行保留期与到期待删观众的清理，最后清空本场遮名集合。
+
+        由主播 Agent 在道别、队尾与下播整理都结束后调用（遮名要留到最后一句台词写库）；
+        没有主播 Agent 接管时由 ``_on_live_ended`` 自己调。``clear_masks=False`` 用于
+        道别期间已经开了新场次的情形：旧场次照样跑清理，但新场次刚记下的遮名不能被抹掉。
+        """
+        if self._retention is not None:
+            await self._retention.run_cleanup(after_stream_end=True)
+        if self._privacy is not None and clear_masks:
+            self._privacy.clear_session_masks()
+
+    def _tracked(self, handler: Callable[..., Awaitable[None]]) -> Callable[..., Awaitable[None]]:
+        """把写库回调包一层在写计数：收尾等库时能知道还有没有处理在写。"""
+
+        async def _wrapped(event_name: str, payload: Any, source: str) -> None:
+            self._writes_in_flight += 1
+            self._writes_idle.clear()
+            try:
+                await handler(event_name, payload, source)
+            finally:
+                self._writes_in_flight = max(0, self._writes_in_flight - 1)
+                if self._writes_in_flight == 0:
+                    self._writes_idle.set()
+
+        return _wrapped
 
     async def start(self) -> None:
         """订阅行为流、发言、丢弃、游戏与下播事件。"""
         if self._started:
             logger.debug("StorageLedger 已启动，跳过重复订阅")
             return
-        handler = self._on_room_message
+        handler = self._tracked(self._on_room_message)
         self.event_bus.on(
             _ROOM_MESSAGE_WILDCARD,
             handler,
@@ -102,7 +159,7 @@ class StorageLedger:
         )
         self._subscriptions[_ROOM_MESSAGE_WILDCARD] = handler
 
-        speech_handler = self._on_streamer_speech
+        speech_handler = self._tracked(self._on_streamer_speech)
         self.event_bus.on(
             CoreEvents.STREAMER_SPEECH,
             speech_handler,
@@ -505,15 +562,20 @@ class StorageLedger:
         payload: LiveEndedPayload,
         source: str,
     ) -> None:
-        """``live.ended`` 回调：输出本场生产计数、清空本场遮名集合，按配置执行到期清理。"""
+        """``live.ended`` 回调：输出本场生产计数；没被主播 Agent 接管时执行下播清理。
+
+        主播 Agent 在运行时接管（``set_cleanup_on_live_ended(False)``）：它要等道别那一轮
+        落库、队尾台词播完、本场整理跑完才调 ``finish_stream_end``，这里只记生产计数，
+        不提前清遮名、也不提前删除观众——否则道别句里的昵称会漏出、整理会读到已删的观众。
+        """
         try:
             miss_count = self._dropped_miss_count
             self._dropped_miss_count = 0
             logger.info(f"场次 #{payload.live_session_id} 收播记账统计: 没送达标记找不到台词行次数={miss_count}")
-            if self._privacy is not None:
-                self._privacy.clear_session_masks()
-            if self._retention is not None and self._cleanup_on_live_ended:
-                await self._retention.run_cleanup(after_stream_end=True)
+            if not self._cleanup_on_live_ended:
+                logger.debug(f"场次 #{payload.live_session_id} 的下播清理由主播 Agent 接管，记账器不在此清理")
+                return
+            await self.finish_stream_end()
         except Exception as exc:  # noqa: BLE001
             logger.error(f"StorageLedger 下播收尾失败（session={payload.live_session_id}）: {exc}", exc=True)
 

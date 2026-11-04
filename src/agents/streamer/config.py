@@ -25,7 +25,7 @@
     inside_jokes
 
     [agents.streamer.context]
-    enabled, memory_recall_long_term
+    enabled
 
     [agents.streamer.background]
     enabled, light_tick_ms, summary_interval_ms

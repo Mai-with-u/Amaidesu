@@ -54,6 +54,7 @@ class AgentDeps:
     event_repo: Optional[Any] = None
     creature_repo: Optional[Any] = None
     privacy_service: Optional[Any] = None
+    storage_ledger: Optional[Any] = None
     context_assembler_config: Optional[Any] = None
     task_tracker: Optional[Any] = None
     task_ledger: Optional[Any] = None

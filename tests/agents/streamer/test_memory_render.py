@@ -107,7 +107,7 @@ def test_brief_is_empty_without_material() -> None:
 def test_game_card_names_the_game_and_her_line() -> None:
     card = render_game_card(_commitment(cid=7, game="Minecraft"), game="Minecraft")
     assert card.startswith("[约#7·Minecraft]")
-    assert "Minecraft 开着" in card
+    assert "这件承诺挂在你玩的游戏 Minecraft 上" in card
 
 
 def test_viewer_card_gives_action_only_and_the_responding_danmaku() -> None:

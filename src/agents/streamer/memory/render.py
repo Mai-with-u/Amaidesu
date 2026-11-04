@@ -197,11 +197,15 @@ def render_cue_header() -> str:
 
 
 def render_game_card(commitment: Commitment, *, game: str) -> str:
-    """游戏承诺卡：挂在这个游戏上、不针对具体观众的承诺；游戏开着时推。"""
+    """游戏承诺卡：挂在这个游戏上、不针对具体观众的承诺；主播正在玩这个游戏时推。
+
+    卡面不写"现在开着"：线索推送只认"正在玩"（有进行中的委派任务或刚有游戏事件），
+    但决策层自己看得见眼前现场，卡面替它断言反而容易说错。
+    """
     quote = (commitment.quote or "").strip() or (commitment.what or "").strip()
     return (
         f"[{render_commitment_number(commitment.id)}·{game}] "
-        f"你之前说过「{quote}」，截至上一场还没做。现在 {game} 开着。"
+        f"你之前说过「{quote}」，截至上一场还没做。这件承诺挂在你玩的游戏 {game} 上；时机对再提。"
     )
 
 
@@ -210,9 +214,13 @@ def render_viewer_card(
     *,
     viewer_label: str,
     message_id: str,
-    is_previous: bool = True,
+    is_previous: bool = False,
 ) -> str:
-    """对某位观众的承诺卡：只给动作标题，不提当时的缘由与原话。"""
+    """对某位观众的承诺卡：只给动作标题，不提当时的缘由与原话。
+
+    ``is_previous`` 按承诺登记在不在"上一场"给：本场与更早的都写"之前"——一条三场前
+    的承诺说成上一场，主播会照着卡面在观众面前把时间说错。
+    """
     when = _when_word(is_previous=is_previous, spoken=False)
     target = f"{viewer_label}（弹幕 {message_id}）在" if message_id else f"{viewer_label} 在"
     return (
