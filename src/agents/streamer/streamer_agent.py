@@ -122,6 +122,11 @@ _GAME_ACTIVE_WINDOW_MS = 5 * 60 * 1000
 # 读到的是 None，照常按进行中场次走。不挂在 Agent 实例上，正是为了不漏给这些并发轮次
 _CLOSING_SESSION: ContextVar[Optional[ClosingSession]] = ContextVar("streamer_closing_session", default=None)
 
+# 本轮开窗时所在场次的开播计数（开窗时没在直播、或这一轮是道别轮时为 None）。说完要出声前
+# 拿它比对：开窗时的那一场已经下播（不在直播了，或已换成下一场），这句就作废——下播后只有
+# 道别那一轮能开口。与 _CLOSING_SESSION 同理放在上下文变量里，并发的轮次各看各的
+_ROUND_LIVE_EPOCH: ContextVar[Optional[int]] = ContextVar("streamer_round_live_epoch", default=None)
+
 # ---------------------------------------------------------------------------
 # StreamerAgent
 # ---------------------------------------------------------------------------
@@ -556,6 +561,7 @@ class StreamerAgent(BaseAgent):
             window_opener=self._scope.open_window,
             rundown_text_provider=self._rundown_coord.build_text,
             reminders_provider=self._drain_reminders,
+            speech_allowed=self._round_session_still_live,
             logger=self._logger,
         )
 
@@ -1719,12 +1725,17 @@ class StreamerAgent(BaseAgent):
         每一轮开头都把上下文变量设成本轮的值（常规轮次设 None），跑完（含出错）用 token
         复位：并发的轮次各在自己的任务里，互相看不见对方的值；两场相继手动结束、两个道别轮
         重叠时也各管各的，前一轮复位不会清掉后一轮的场次。道别那一轮不持决策锁，与下播瞬间
-        的常规轮次照旧可以并发（她不用等手头那一轮答完才道别，观众的"拜拜"也不用排在道别后）。
+        的常规轮次照旧可以并发（她不用等手头那一轮答完才道别）；下播前开窗的常规轮说完时
+        那一场已经下播，台词作废不出声（见 :meth:`_round_session_still_live`），道别句是本场最后一句。
         """
         token = _CLOSING_SESSION.set(closing_session)
-        # 每窗按台账快照重渲常驻简报（直播中纠错下一窗生效；表没变时逐字节相同，缓存不失效）
-        await self._refresh_memory_brief()
+        # 开窗时在直播的常规轮记下这一场的开播计数，说完出声前再比对一次（见 _ROUND_LIVE_EPOCH）；
+        # 道别轮不记：它就是下播后那唯一一句
+        is_signoff = trigger_cause.kind is TriggerKind.SIGNOFF
+        live_token = _ROUND_LIVE_EPOCH.set(self._session_epoch if self._live_active and not is_signoff else None)
         try:
+            # 每窗按台账快照重渲常驻简报（直播中纠错下一窗生效；表没变时逐字节相同，缓存不失效）
+            await self._refresh_memory_brief()
             result = await self._rounds.execute(
                 batch,
                 forced=forced,
@@ -1737,8 +1748,15 @@ class StreamerAgent(BaseAgent):
                 batch, speech=result.get("speech"), batch_persisted=batch_persisted, scope_pk=scope_pk
             )
         finally:
+            _ROUND_LIVE_EPOCH.reset(live_token)
             _CLOSING_SESSION.reset(token)
         return result
+
+    def _round_session_still_live(self) -> bool:
+        """本轮说完时还能不能出声：开窗时没在直播或这是道别轮的一律能；开窗时在直播的，
+        要那一场还在播（没下播、也没换成下一场）。"""
+        epoch = _ROUND_LIVE_EPOCH.get()
+        return epoch is None or (self._live_active and self._session_epoch == epoch)
 
     def _estimate_avg_interval_ms(self) -> Optional[float]:
         """估算缓冲内消息平均间隔（供 idle 补偿公式使用）。"""

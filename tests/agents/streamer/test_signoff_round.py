@@ -414,24 +414,33 @@ def _scripted_llm(planner_steps: List[Any]) -> MagicMock:
     return llm
 
 
-def _notebook_call(text: str) -> ToolCall:
-    return ToolCall(id="call_notebook", name="streamer_notebook", arguments={"content": text})
+async def test_round_opened_before_live_end_stays_silent_after_signoff(live_stack: _LiveStack) -> None:
+    """常规轮开窗后、说完前运营结束了场次：道别那一轮照常说再见，这一轮的台词作废不出声，
+    也不记进这一场——道别句就是本场最后一句，下播整理不会把下播后冒出来的话写进档案。"""
+    store, manager = live_stack.store, live_stack.manager
+    held = _Gate(_planner_step(_reply_call(topic="炉子还没点火", guidance="吐槽自己拖延")))
+    llm = _scripted_llm([held, _planner_step(_reply_call())])
+    agent = await _started_signoff_agent(live_stack, llm)
+    try:
+        live = await manager.open_session(kind="live", title="正式开播")
+        await wait_until(agent.is_live_active, what="开播回调跑完")
+        # 场次里得有消息：空场次在结账时整行丢弃，道别句就不落库了
+        await _viewer_says(store, live, "小鱼", "炉子点了吗")
+        regular = asyncio.create_task(agent.debug_test_decision(batch=[{"nickname": "小鱼", "text": "炉子点了吗"}]))
+        await asyncio.wait_for(held.entered.wait(), timeout=10)  # 常规轮停在 Planner 等放行
+
+        await _end_and_wait_signoff(live_stack, agent)
+        held.released.set()
+        result = await asyncio.wait_for(regular, timeout=10)
+        lines = await _stored_assistant_lines(live_stack, live, expect=1)
+    finally:
+        await agent.stop()
+
+    assert result["speech"] is None and result["silent_reason"] == "session_ended"
+    assert [speech.text for speech in live_stack.speeches] == [FAREWELL]
+    assert [row.content for row in lines] == [FAREWELL]
 
 
-REHEARSAL_NOTE = "彩排记下：TNT阵还差最后一排"
-LIVE_NOTE = "正式场记下：开场先炸TNT"
-FAREWELL_NOTE = "道别时记下：下次先铺最后一排"
-
-
-def _profile_calls(llm: MagicMock, profile: str) -> int:
-    return sum(1 for call in llm.generate.await_args_list if call.kwargs.get("profile") == profile)
-
-
-def _logged(loguru_capture: Any, text: str) -> bool:
-    return any(text in record["message"] for record in loguru_capture.records)
-
-
-@pytest.mark.parametrize("rehearsal_chat", [["彩排一下TNT阵"], []], ids=["有消息的彩排场", "空彩排场"])
 def _watch_idle_waits(monkeypatch: pytest.MonkeyPatch, *, stuck: bool = False) -> _IdleWaits:
     """把播放队列的空闲等待（公开方法）换成记录版；``stuck`` 模拟 TTS 卡死：立即报"等满上限仍没播完"。
 

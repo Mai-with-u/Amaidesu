@@ -80,6 +80,7 @@ _SILENT_REASON_LABEL: Dict[str, str] = {
     "llm_failed": "LLM 返回失败",
     "prompt_render_failed": "提示词渲染失败",
     "assembler_failed": "上下文组装失败",
+    "session_ended": "开窗时的场次已下播",
 }
 
 
@@ -117,6 +118,7 @@ class DecisionRoundExecutor:
         window_opener: WindowOpener,
         rundown_text_provider: Callable[[], Optional[str]],
         reminders_provider: Optional[Callable[[], str]] = None,
+        speech_allowed: Optional[Callable[[], bool]] = None,
         logger: Optional[ModuleLogger] = None,
     ) -> None:
         """决策窗材料的取用契约：
@@ -131,6 +133,9 @@ class DecisionRoundExecutor:
           项，经流程单协调器自取）。
         - reminders: ``str``（可为空串；运营递话留言，**读取即取空队列**——
           送达一次制，缺省 = 不注入）。
+        - speech_allowed: 本轮说完时还能不能出声（缺省 = 一律能）。Agent 按"开窗时所在
+          的场次是否已下播"回答：下播后只有道别那一轮能开口，下播前开窗、下播后才拿到
+          结果的常规轮作废，免得道别句之后又冒一句、还被记进这一场。
         """
         self._logger = logger or get_logger("StreamerAgent.DecisionRoundExecutor")
         self._planner = planner
@@ -144,6 +149,7 @@ class DecisionRoundExecutor:
         self._window_opener = window_opener
         self._rundown_text_provider = rundown_text_provider
         self._reminders_provider = reminders_provider
+        self._speech_allowed = speech_allowed
         # 决策轮次自增计数器（round_id 生成用；进程内单调）
         self._round_seq: int = 0
 
@@ -340,6 +346,17 @@ class DecisionRoundExecutor:
             if outcome.error:
                 self._stats.planner_failures += 1
                 result["error"] = f"planner_failed: {outcome.error}"
+            result["total_duration_ms"] = now_ms() - started_ms
+            return result, outcome
+
+        # 开窗时所在的场次已经下播（常规轮跑到一半，运营结束了场次）：这句不送发言管线。
+        # 道别那一轮与它并发，往往先说完"大家晚安"，这句再出声就排在道别句后面，
+        # 还会记进这一场、被下播整理当成她最后说的话写进档案
+        if self._speech_allowed is not None and not self._speech_allowed():
+            self._logger.info(f"开窗时的场次已下播，本轮台词作废不出声: round_id={round_id}")
+            self._stats.total_no_action += 1
+            result["silent_reason"] = "session_ended"
+            result["plan"]["silent_reason"] = "session_ended"
             result["total_duration_ms"] = now_ms() - started_ms
             return result, outcome
 
