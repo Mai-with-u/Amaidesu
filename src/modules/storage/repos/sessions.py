@@ -325,9 +325,10 @@ class SessionRepo(BaseRepo):
         幂等：先用「settled_at_ms 为空且仍是正式场」抢占本场——同一场被两次整理同时
         挑中时只有一次写进去（begin immediate 把第二个写事务挡在对方提交之后，重读即
         看到已完成）；整理途中场次被改成彩排时，这里也写不进去。运营者重置进度后重跑
-        时，同一事务里先删掉本场旧档案行与本场登记的未了结承诺、把上一轮用本场台词
-        了结的旧承诺放回未了结，再写，重跑整场替换：不会越堆越多，上一轮认定、这一轮
-        不再认定的了结也不会留在账上，运营者已了结或判误记的承诺不受影响。
+        时，同一事务里先删掉本场旧档案行、把上一轮用本场台词了结的旧承诺放回未了结，
+        再写，重跑整场替换：不会越堆越多，上一轮认定、这一轮不再认定的了结也不会留在
+        账上。本场登记的未了结承诺按原话那句台词对齐——这一轮还认定的保留原编号、原地
+        更新，不再认定的才删；运营者已了结或判误记的承诺不受影响。
         返回各类写入条数（claimed = 1 表示这次真的抢到并写了）。
         """
 
@@ -342,11 +343,21 @@ class SessionRepo(BaseRepo):
                 if claim.rowcount <= 0:
                     return written
                 written["claimed"] = 1
-                # 重跑整场替换：旧档案行全清；本场登记的承诺只清还没被运营者处理过的
+                # 重跑整场替换：旧档案行全清。本场登记、仍未了结的承诺按原话那句台词对齐：
+                # 这一轮还认定的保留原编号、只更新标题等字段（台词里点名过的编号不悬空，
+                # 线索推送的"用上即停"仍认得它）；这一轮不再认定的才删；运营者已了结或
+                # 判误记的一概不动
                 delete_archive_lines_by_session(conn, live_session_id=int(live_session_id))
+                kept_evidence = sorted(
+                    {int(item.evidence_chat_id) for item in commitments if item.evidence_chat_id is not None}
+                )
+                stale_filter = ""
+                if kept_evidence:
+                    placeholders = ",".join("?" for _ in kept_evidence)
+                    stale_filter = f" AND (evidence_chat_id IS NULL OR evidence_chat_id NOT IN ({placeholders}))"
                 conn.execute(
-                    "DELETE FROM commitments WHERE created_session_id=? AND status='open'",
-                    (int(live_session_id),),
+                    "DELETE FROM commitments WHERE created_session_id=? AND status='open'" + stale_filter,  # noqa: S608 占位符由代码生成
+                    (int(live_session_id), *kept_evidence),
                 )
                 # 上一轮整理用本场台词了结的旧承诺先放回未了结，再按这一轮的结果重新了结
                 reopen_commitments_closed_by_session(
@@ -368,7 +379,13 @@ class SessionRepo(BaseRepo):
                         "INSERT INTO commitments(what, quote, evidence_chat_id, viewer_id, game,"
                         " created_session_id, created_at_ms, updated_at_ms)"
                         " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-                        " ON CONFLICT(evidence_chat_id) DO NOTHING",
+                        # 同一句台词已登记过：本场仍未了结的那条原地更新（编号不变），
+                        # 已了结、判误记或别处登记的不动
+                        " ON CONFLICT(evidence_chat_id) DO UPDATE SET"
+                        " what=excluded.what, quote=excluded.quote, viewer_id=excluded.viewer_id,"
+                        " game=excluded.game, updated_at_ms=excluded.updated_at_ms"
+                        " WHERE commitments.status='open'"
+                        " AND commitments.created_session_id=excluded.created_session_id",
                         (
                             item.what,
                             item.quote,

@@ -272,6 +272,61 @@ async def test_apply_settlement_rerun_replaces_archive_and_open_commitments(stor
     assert "被运营者了结" in whats, "运营者已了结的承诺不随重跑删除"
 
 
+async def test_rerun_keeps_number_of_commitment_on_the_same_line(store: SQLiteDatabase) -> None:
+    """重新整理时，同一句台词这一轮仍认定是承诺：保留原编号、原地更新标题。
+
+    本场台词点名用的是承诺编号（约#N）；重跑换了新编号，旧台词里的引用就指向一条
+    已经不存在的承诺，线索推送的"用上即停"也认不出它。这一轮不再认定的照旧删掉，
+    判过误记的同一句不会被这一轮复活。
+    """
+    session_id = await _ended_session(store)
+    await _settle_once(
+        store,
+        session_id,
+        archive_text="档案",
+        archive_evidence=2,
+        commitment_what="接着讲鬼故事",
+        commitment_evidence=3,
+    )
+    (first,) = await store.commitments.list_commitments(statuses=["open"])
+    voided = await store.commitments.insert_commitment(
+        what="随口说的", evidence_chat_id=4, created_session_id=session_id, now_ms_value=9_999
+    )
+    assert voided is not None and await store.commitments.void_commitment(commitment_id=voided)
+
+    assert await store.sessions.requeue_settlement(live_session_id=session_id)
+    second = await store.sessions.apply_settlement(
+        live_session_id=session_id,
+        archive_lines=[],
+        commitments=[
+            PendingCommitment(what="把鬼故事讲完", quote="下次接着讲", evidence_chat_id=3),
+            PendingCommitment(what="随口说的", quote="随口说的", evidence_chat_id=4),
+        ],
+        closures=[],
+        settled_at_ms=10_500,
+        now_ms_value=10_500,
+    )
+    assert second["claimed"] == 1 and second["commitments"] == 1, "只更新了仍未了结的那条，判误记的不算"
+
+    kept = await store.commitments.get_commitment(commitment_id=first.id)
+    assert kept is not None and kept.status == "open" and kept.what == "把鬼故事讲完", "同一句保留原编号"
+    still_void = await store.commitments.get_commitment(commitment_id=voided)
+    assert still_void is not None and still_void.status == "void" and still_void.what == "随口说的"
+    assert await store.commitments.count_commitments() == 2
+
+    # 再重跑一轮、不再认定那句是承诺：这条才删掉
+    assert await store.sessions.requeue_settlement(live_session_id=session_id)
+    await store.sessions.apply_settlement(
+        live_session_id=session_id,
+        archive_lines=[],
+        commitments=[],
+        closures=[],
+        settled_at_ms=11_000,
+        now_ms_value=11_000,
+    )
+    assert await store.commitments.get_commitment(commitment_id=first.id) is None
+
+
 async def _closing_line(store: SQLiteDatabase, session_id: int, content: str) -> int:
     return await store.chat.insert_live_chat(
         live_session_id=session_id,
