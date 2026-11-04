@@ -339,10 +339,10 @@ async def test_death_broadcast_is_attributed_by_the_victim_uuid() -> None:
     """死亡播报带模板编号与点名：按开头写出名字的死者的 UUID 认；不是死亡模板的不认，点名的是别人也不认。"""
     server = FakeMaicraft()
     server.scene_view = _twins()
-    server.self_view["name"] = "ChangingSelf"
+    server.self_view["name"] = "Alex"
     agent, _, bus = await make_minecraft_agent(server)
     view = await agent._glance()
-    assert view["self_account"] == "ChangingSelf" and "ChangingSelf" not in view["brief"]
+    assert view["self_account"] == "Alex" and "Alex" not in view["brief"]
 
     def milestones() -> list[str]:
         return [

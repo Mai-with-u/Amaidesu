@@ -64,14 +64,14 @@ async def _primed(
 
 def test_attribution_tells_machine_lines_from_people() -> None:
     """没有发言人 UUID 的"玩家消息"名字只是显示出来的：标无凭据；Mod 判成借角色名义发的，说明不是谁说的话。"""
-    maid_pos = '<ChangingSelf> [name:"winefox_momo", x:-356, y:63, z:36, dim:minecraft:overworld]'
-    unsigned = attribute_chat({"kind": "player", "sender": "ChangingSelf", "text": maid_pos})
-    assert (unsigned.kind, unsigned.sender, unsigned.note) == ("player", "ChangingSelf", NOTE_UNVERIFIED)
+    maid_pos = '<Alex> [name:"winefox_momo", x:-356, y:63, z:36, dim:minecraft:overworld]'
+    unsigned = attribute_chat({"kind": "player", "sender": "Alex", "text": maid_pos})
+    assert (unsigned.kind, unsigned.sender, unsigned.note) == ("player", "Alex", NOTE_UNVERIFIED)
     assert unsigned.content.startswith('[name:"winefox_momo"'), "聊天格式加的 <名字> 前缀去掉"
 
     signed = attribute_chat({"kind": "player", "sender": "Steve", "sender_id": _STEVE_ID, "text": "<Steve> 嗨"})
     assert (signed.note, signed.content) == ("", "<Steve> 嗨"), "带 UUID 的是真发言，原话不动"
-    marked = attribute_chat({"kind": "system", "text": "[name:...]", "shown_as": "ChangingSelf"})
+    marked = attribute_chat({"kind": "system", "text": "[name:...]", "shown_as": "Alex"})
     assert (marked.kind, marked.note) == ("system", NOTE_SHOWN_AS_SELF), "Mod 已改判的照它的标记说明"
     assert attribute_chat({"kind": "system", "text": "Alex 加入了游戏"}).note == ""
 
@@ -154,11 +154,11 @@ async def test_unknown_account_keeps_line_as_system_and_retries() -> None:
 
 async def test_unsigned_line_is_forwarded_with_a_note() -> None:
     collector, client, bus = await _primed()
-    line = {"cursor": 4, "kind": "player", "sender": "ChangingSelf", "text": '<ChangingSelf> [name:"x"]'}
+    line = {"cursor": 4, "kind": "player", "sender": "Alex", "text": '<Alex> [name:"x"]'}
     client.pages.append(events_page([line], cursor=4))
     await collector._drain()
     [(_, payload)] = bus.events
-    assert payload.kind == "player" and payload.sender == "ChangingSelf"
+    assert payload.kind == "player" and payload.sender == "Alex"
     assert payload.content == '[name:"x"]' and "没有发言人凭据" in payload.note
 
 

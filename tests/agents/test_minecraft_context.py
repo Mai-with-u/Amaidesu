@@ -139,7 +139,7 @@ async def test_compact_summarize_request_carries_refs_not_base64() -> None:
 async def test_oversized_old_result_is_elided_and_history_is_split_under_the_guard() -> None:
     """一份 20 万字符的世界记忆留在旧历史里，整理照样做成：摘要请求里它换成占位，任何一段都碰不到装配守卫。
 
-    回归锚点：ChangingSelf 场次 26 的 observe(world_memory) 回执 19.9 万字符，压缩器把全历史拼成一个
+    回归锚点：实测一场直播里 observe(world_memory) 的回执 19.9 万字符，压缩器把全历史拼成一个
     37 万字符的字段，被 20 万字符的装配守卫拦了 17 次，历史 24 分钟只涨不落。
     """
     llm = MagicMock()
