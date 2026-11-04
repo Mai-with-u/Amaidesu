@@ -44,7 +44,7 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
 from src.agents.streamer.delegation_workbench import DelegationWorkbench, observation_data
-from src.agents.streamer.memory.render import render_spoken_memory
+from src.agents.streamer.memory.render import memory_ref_numbers, render_spoken_memory
 from src.agents.streamer.persona_rules import boundaries_line
 from src.agents.streamer.plan import ReplyRoundAttachment, assistant_speech_lines
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
@@ -111,12 +111,45 @@ class PlannerConfig(BaseConfig):
     cold_silence_ms: int = Field(default=45_000, ge=0, title="冷场提示阈值（毫秒）")
 
 
-def _parse_commitment_ref(raw: str) -> Optional[int]:
-    """点名编号解析：接受"约#7""#7""7"三种写法，其余返回 None。"""
+def _parse_commitment_ref(raw: Any) -> Optional[int]:
+    """点名编号解析：接受"约#7""#7""7"三种写法，其余返回 None。
+
+    "档#41"是档案行编号，和承诺编号是两个空间，同号不同义，不能当成承诺 41。
+    """
+    if not isinstance(raw, str):
+        return None
     text = raw.strip()
+    if not text:
+        return None
     if "#" in text:
-        text = text.rsplit("#", 1)[1].strip()
+        head, _sep, tail = text.rpartition("#")
+        if head.strip():
+            refs = memory_ref_numbers(json.dumps([text], ensure_ascii=False))
+            return int(next(iter(refs))) if len(refs) == 1 else None
+        text = tail.strip()
     return int(text) if text.isdigit() else None
+
+
+def _single_memory_ref(raw: Any, *, logger: Any) -> Optional[str]:
+    """把 use_memory 收敛成一个编号文本。
+
+    字符串原样返回（空串按没填）；数组只接受一个非空字符串元素——不同服务端
+    对 string 参数的回传形态不一致，常见的是一元素数组。多元素、空数组与其他
+    类型记日志后按没填处理。
+    """
+    if isinstance(raw, str):
+        text = raw.strip()
+        return text or None
+    if isinstance(raw, list):
+        items = [item for item in raw if isinstance(item, str) and item.strip()]
+        if len(items) == 1:
+            return str(items[0]).strip()
+        if items:
+            logger.warning(f"use_memory 传了 {len(items)} 个编号，一次只能点名一条，按没填处理：{raw!r}")
+        return None
+    if raw is not None:
+        logger.warning(f"use_memory 的类型认不出（{type(raw).__name__}），按没填处理：{raw!r}")
+    return None
 
 
 def _as_id_str(value: Any) -> str:
@@ -406,8 +439,8 @@ class Planner:
         system_prompt, prompt_failure = self._render_system_prompt()
         if system_prompt is None:
             return replace(outcome, error=prompt_failure, silent_reason="prompt_render_failed")
-        # 常驻简报开播时拼好、整场不变：接在系统提示词末尾，和人设一起吃前缀缓存
-        # （参考段在不断增长的对话历史之后，放那里每个决策窗都要重新计费）
+        # 常驻简报每窗按台账快照重渲：接在系统提示词末尾，表没变时逐字节相同，
+        # 仍和人设一起吃前缀缓存（参考段在不断增长的对话历史之后，放那里每个决策窗都要重新计费）
         brief_text = self._brief_text()
         if brief_text:
             system_prompt = f"{system_prompt}\n\n{brief_text}"
@@ -554,11 +587,14 @@ class Planner:
         或没注入承诺查询时一律按没填处理并记日志——点名不打回，最多这句没用上旧事。
         """
         raw = args.get("use_memory")
-        if not isinstance(raw, str) or not raw.strip():
+        ref_text = _single_memory_ref(raw, logger=self.logger)
+        if ref_text is None:
             return "", []
-        commitment_id = _parse_commitment_ref(raw)
+        commitment_id = _parse_commitment_ref(ref_text)
         if commitment_id is None:
-            self.logger.debug(f"use_memory 不是可识别的编号（{raw!r}），按没填处理")
+            self.logger.warning(
+                f"use_memory 的编号认不出（{ref_text!r}）：只认 约#N / #N / N，档#N 是档案行编号不能点名"
+            )
             return "", []
         if commitment_id not in self._round_memory_ids:
             self.logger.info(f"use_memory 的编号 {commitment_id} 不在本窗简报或卡片里，忽略")
@@ -610,7 +646,7 @@ class Planner:
         """老梗栏渲染：运营者手写的老梗，抬头写明只在观众提起时才接；空串时整段省略。
 
         只进 Planner——Replyer 与快嘴若各自玩梗会反复出现同一段子；Planner 用交接稿
-        把态度交过去就够。内容整场不变，与人设一起吃前缀缓存。
+        把态度交过去就够。内容来自配置、整场不随表变化，与人设一起吃前缀缓存。
         """
         text = self._inside_jokes.strip()
         if not text:
@@ -630,7 +666,7 @@ class Planner:
         return f"\n\n{line}（交接稿里别替她答应这些事，碰到就让她婉拒）" if line else ""
 
     def _brief_text(self) -> str:
-        """系统提示词末尾的常驻简报（开播时拼好、整场不变）；没有可记的事时为空串。"""
+        """系统提示词末尾的常驻简报（每决策窗按台账快照重渲；表没变时逐字节相同），没有可记的事时为空串。"""
         if self._brief_provider is None:
             return ""
         try:

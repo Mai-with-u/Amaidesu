@@ -8,8 +8,12 @@ live.ended 之后、道别句播完才排进后台，一次整理待整理的场
 
 一场失败不挡后面的场：任何一次调用失败、输出读不懂或输入超出模型窗口（调用本身报错），
 这一场整场不提交，重试次数加一并把原因写进整理报告；次数用满后不再自动补跑，等运营者
-在 WebUI 点「重新整理」把次数清零。一场一个事务——半场写进去再失败，重跑时会重复登记，
-所以校验全部通过才落进 apply_settlement。
+在 WebUI 点「重新整理」把次数清零。一场一个事务：校验全部通过才落进 apply_settlement，
+重跑时先在同一事务里清掉本场旧档案与本场登记的未了结承诺再写，不会重复登记。
+
+同一场的整理可能被下播后台、开播补整理与隐私清理前的等待同时触发：进程内按场次共享
+同一个在途任务，只调一次模型；存储侧再用「整理完成时刻为空」抢占，两个进程同时跑也只
+有一个写事务成功。
 
 三次调用各只做一种判断
 ----------------------
@@ -26,6 +30,7 @@ live.ended 之后、道别句播完才排进后台，一次整理待整理的场
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -203,14 +208,66 @@ def _clock_text(timestamp_ms: int) -> str:
 
 
 def _as_line_number(raw: Any) -> Optional[int]:
-    """模型给的台词编号：整数或纯数字字符串才认，其余当没给。"""
+    """模型给的台词编号：整数、纯数字或 #N 才认，其余当没给。
+
+    给模型的台词逐行写作 ``#18 12:00 你：……``，模型照抄成 ``"#18"`` 也放行；
+    带别的前缀（如 约#18、档#18）不是台词编号，不认。
+    """
     if isinstance(raw, bool):
         return None
     if isinstance(raw, int):
         return raw
-    if isinstance(raw, str) and raw.strip().isdigit():
-        return int(raw.strip())
-    return None
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if text.startswith("#"):
+        text = text[1:].strip()
+    return int(text) if text.isdigit() else None
+
+
+def _as_commitment_ref(raw: Any) -> Optional[int]:
+    """模型给的承诺编号：整数、纯数字、#N、约#N 都认；档# 与其余写法返回 None。
+
+    给模型的旧承诺清单写作 #12，台词里的记忆引用写作 约#12，模型照抄哪一种都放行；
+    档# 是场次档案行的编号空间，不能落进承诺编号。
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return int(raw)
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    if "#" in text:
+        head, _sep, tail = text.rpartition("#")
+        if head.strip():
+            # 带前缀的只认承诺前缀；用渲染层的解析器判断，避免在两处各写一份编号格式
+            refs = memory_ref_numbers(json.dumps([text], ensure_ascii=False))
+            if len(refs) != 1:
+                return None
+            return int(next(iter(refs)))
+        text = tail.strip()
+    return int(text) if text.isdigit() else None
+
+
+# 模型表达"没有"时常写成字符串：这些写法都按没填处理，不当成认不出的编号
+_EMPTY_LITERALS = frozenset({"none", "null", "nil", "n/a", "na", "-", "无", "没有", "空", "否"})
+
+
+def _has_value(raw: Any) -> bool:
+    """模型是否真的填了这个字段（None、空串、纯空白与"无/none/null"一类写法都算没填）。
+
+    same_as 填了却认不出时整条新承诺进未登记清单；模型把"不是同一件事"写成字符串
+    ``"无"``、``"null"`` 很常见，按认不出处理会把一条正常的新承诺丢掉。
+    """
+    if raw is None:
+        return False
+    if isinstance(raw, str):
+        text = raw.strip()
+        return bool(text) and text.lower() not in _EMPTY_LITERALS
+    return True
 
 
 class SessionSettler:
@@ -241,6 +298,8 @@ class SessionSettler:
         self._prompt_manager = prompt_manager
         self._game_names_provider = game_names_provider
         self._clock = clock
+        # 场次主键 → 在途整理任务：同一场的并发触发共享这个任务，只付一次模型调用
+        self._inflight: Dict[int, asyncio.Task[bool]] = {}
 
     # ------------------------------------------------------------------
     # 调度
@@ -264,6 +323,52 @@ class SessionSettler:
         return settled
 
     async def settle_session(self, live_session_id: int) -> bool:
+        """整理一场：同一场的并发调用共享同一个在途任务，只付一次模型调用。
+
+        下播后台整理、开播补整理与隐私清理前的等待可能同时指向同一场：第一个调用创建
+        任务，其余调用等它结束，拿同一个结果。成功返回 True；失败或跳过返回 False，
+        内部异常转成 False 并记日志，不向调用方抛。
+        """
+        session_id = int(live_session_id)
+        current = asyncio.current_task()
+        task = self._inflight.get(session_id)
+        if task is not None and not task.done() and task is not current:
+            return await asyncio.shield(task)
+        if task is not None and task.done():
+            self._inflight.pop(session_id, None)
+        task = asyncio.create_task(self._settle_session_guarded(session_id), name=f"settle-session-{session_id}")
+        self._inflight[session_id] = task
+
+        def _forget(done: asyncio.Task[bool]) -> None:
+            # 调用方超时取消只取消它自己的 await（shield 住任务）；任务本身跑完后在这里
+            # 从在途表摘除，避免等待方把“还在跑”误判成“没在跑”又起一份
+            if self._inflight.get(session_id) is done:
+                self._inflight.pop(session_id, None)
+
+        task.add_done_callback(_forget)
+        return await asyncio.shield(task)
+
+    async def wait_settled(self, live_session_id: int) -> bool:
+        """等某场正在进行的整理结束（成功或失败都算）；没有在途整理时立即返回 False。
+
+        只等已经开始的整理，不会等将来才排进来的调度。调用方若要「等这一场整理完」，
+        直接 await settle_session(live_session_id) 更稳：它会创建或加入该场任务。
+        """
+        task = self._inflight.get(int(live_session_id))
+        if task is None or task.done():
+            return False
+        await asyncio.shield(task)
+        return True
+
+    async def _settle_session_guarded(self, live_session_id: int) -> bool:
+        """在途任务的统一异常边界：意外异常记日志并按失败返回，等待方不被炸。"""
+        try:
+            return await self._settle_session_once(live_session_id)
+        except Exception as exc:  # noqa: BLE001 - 整理失败只影响这一场，不能炸穿调度与等待方
+            logger.warning(f"场次 {live_session_id} 整理异常: {exc}", exc=exc)
+            return False
+
+    async def _settle_session_once(self, live_session_id: int) -> bool:
         """整理一场：成功返回 True；失败或跳过时把原因写进整理报告并返回 False。"""
         session = await self._sessions.get_live_session(live_session_id=int(live_session_id))
         if session is None:
@@ -287,8 +392,7 @@ class SessionSettler:
             return False
         delivered = [line for line in speech if line.dropped_at_ms is None]
         if not delivered:
-            await self._mark_done(session, note="本场没有播出台词，不用整理")
-            return True
+            return await self._mark_done(session, note="本场没有播出台词，不用整理")
 
         try:
             material = await self._collect_material(session, delivered)
@@ -318,6 +422,11 @@ class SessionSettler:
             await self._record_failure(session, f"写入整理结果失败：{exc}")
             return False
 
+        if not int(written.get("claimed", 0)):
+            # 整理期间场次被改成彩排，或另一进程已先一步写完整理完成时刻：不算失败，也不清账
+            logger.info(f"场次 {live_session_id} 的整理结果未写入（场次类型已改或已被别的整理抢先），不重复提交")
+            return False
+
         logger.info(
             f"场次 {live_session_id} 整理完成：档案 {written.get('archive', 0)} 行、"
             f"新承诺 {written.get('commitments', 0)} 条、了结 {written.get('closed', 0)} 条、"
@@ -325,17 +434,19 @@ class SessionSettler:
         )
         return True
 
-    async def _mark_done(self, session: LiveSession, *, note: str) -> None:
+    async def _mark_done(self, session: LiveSession, *, note: str) -> bool:
         """直接标成已整理（没有播出台词、不用调模型）。"""
         try:
-            await self._sessions.mark_settle_done(
+            ok = await self._sessions.mark_settle_done(
                 live_session_id=int(session.id),
                 settled_at_ms=int(self._clock()),
                 settle_report=None,
             )
             logger.info(f"场次 {session.id} {note}")
+            return bool(ok)
         except Exception as exc:  # noqa: BLE001 - 落库失败下次调度会重来
             logger.warning(f"场次 {session.id} 标记整理完成失败: {exc}", exc=exc)
+            return False
 
     async def _record_failure(self, session: LiveSession, reason: str) -> None:
         """记一次失败：重试次数加一、写原因；次数用满后只告警不再自动补跑。"""
@@ -574,11 +685,18 @@ class SessionSettler:
     # ------------------------------------------------------------------
 
     def _verified_quote(self, line: SettleSpeechLine, quote: Any) -> Optional[str]:
-        """逐字引文校验：原话必须是那一行文本的逐字子串、且不超过上限，否则返回 None。"""
+        """逐字引文校验：原话必须是那一行文本的逐字子串、且不超过上限，否则返回 None。
+
+        给模型看的台词把连续空白压成了一个空格，模型照抄压缩后的文本也算逐字引文；
+        原文与压缩文本两种口径都接受，否则换行/多空格的句子会被系统性地误判。
+        """
         text = str(quote or "").strip()
         if not text or len(text) > MAX_QUOTE_CHARS:
             return None
-        return text if text in (line.content or "") else None
+        content = line.content or ""
+        if text in content:
+            return text
+        return text if text in " ".join(content.split()) else None
 
     def _line_of(self, raw: Any, material: SettleMaterial) -> Optional[SettleSpeechLine]:
         """模型给的行号换成台词行；行号缺失或不是本场她的台词时返回 None。"""
@@ -646,7 +764,19 @@ class SessionSettler:
             if not what:
                 missed.append(UnregisteredItem(kind="commitment", quote=quote, reason="没有动作标题"))
                 continue
-            same_as = _as_line_number(raw.get("same_as"))
+            same_as_raw = raw.get("same_as")
+            same_as = _as_commitment_ref(same_as_raw)
+            if same_as is None and _has_value(same_as_raw):
+                # 认不出编号就不猜：宁可进未登记清单让运营者判断，也不把重申的事又登记一遍
+                missed.append(
+                    UnregisteredItem(
+                        kind="commitment",
+                        what=what,
+                        quote=quote,
+                        reason=f"same_as 编号认不出（{str(same_as_raw)[:20]}），未登记",
+                    )
+                )
+                continue
             if same_as is not None and same_as in open_ids:
                 logger.info(f"场次 {material.live_session_id}：模型认出这是又说了一遍 #{same_as}，不新建")
                 continue
@@ -738,7 +868,7 @@ class SessionSettler:
     def _validate_closures(
         self, rows: List[Any], material: SettleMaterial
     ) -> Tuple[List[CommitmentClosure], List[UnregisteredItem]]:
-        """了结的校验：只能了结本场开播之前就未了结的承诺，且引文逐字。"""
+        """了结的校验：只能了结本场之前就有的未了结承诺，且引文逐字。"""
         written: List[CommitmentClosure] = []
         missed: List[UnregisteredItem] = []
         open_ids = {int(row.id) for row in material.open_commitments}
@@ -746,10 +876,26 @@ class SessionSettler:
         for raw in rows:
             if not isinstance(raw, dict):
                 continue
-            commitment_id = _as_line_number(raw.get("id"))
+            commitment_id_raw = raw.get("id")
+            commitment_id = _as_commitment_ref(commitment_id_raw)
             quote = str(raw.get("quote") or "").strip()
-            if commitment_id is None or commitment_id not in open_ids:
-                logger.debug(f"场次 {material.live_session_id}：模型了结的 #{commitment_id} 不是未了结的旧承诺，跳过")
+            if commitment_id is None:
+                if _has_value(commitment_id_raw):
+                    missed.append(
+                        UnregisteredItem(
+                            kind="commitment",
+                            what=f"了结 {str(commitment_id_raw)[:20]}",
+                            quote=quote,
+                            reason="承诺编号认不出，未登记",
+                        )
+                    )
+                continue
+            if commitment_id not in open_ids:
+                # 运营者已判误记或已了结的条目不归模型改：记下来便于排查，不改库
+                logger.info(
+                    f"场次 {material.live_session_id}：模型了结的 #{commitment_id} 不是未了结的旧承诺"
+                    "（可能已了结或判误记），跳过"
+                )
                 continue
             if commitment_id in closed_ids:
                 continue

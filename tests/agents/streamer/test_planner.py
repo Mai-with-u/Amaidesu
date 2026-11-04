@@ -9,6 +9,7 @@ from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GameEventBatch
 from src.modules.llm.payload import Response, ToolCall
+from src.modules.storage.models.memory import Commitment
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
@@ -55,6 +56,7 @@ def _make_planner(
     elapsed_live_provider: Any | None = None,
     brief_provider: Any | None = None,
     brief_ids_provider: Any | None = None,
+    commitment_lookup: Any | None = None,
 ) -> tuple[Planner, MagicMock, MagicMock]:
     """mock LLM（generate）+ mock prompt_service；缺省真注册表 + 注册成功的 reply（reply 经 registry.invoke）。"""
     llm = MagicMock()
@@ -83,6 +85,7 @@ def _make_planner(
             elapsed_live_provider=elapsed_live_provider,
             brief_provider=brief_provider,
             brief_ids_provider=brief_ids_provider,
+            commitment_lookup=commitment_lookup,
         ),
     )
     return planner, llm, prompt
@@ -379,3 +382,96 @@ async def test_system_prompt_render_receives_game_rules() -> None:
     kwargs = prompt.render.call_args.kwargs
     assert prompt.render.call_args.args[0] == "amaidesu_planner_react"
     assert kwargs["game_rules"] == "- X 的玩法"
+
+
+# ---------------------------------------------------------------------------
+# 点名 use_memory：编号前缀与回传形态
+# ---------------------------------------------------------------------------
+
+_BRIEF_WITH_COMMITMENT = "# 她记得的事（内部参考）\n- [约#7] 讲完鬼故事的结局"
+
+
+def _commitment(commitment_id: int = 7) -> Commitment:
+    return Commitment(
+        id=commitment_id,
+        what="讲完鬼故事的结局",
+        quote="下次接着讲那个鬼故事的结局",
+        status="open",
+        created_at_ms=1,
+        updated_at_ms=1,
+    )
+
+
+def _reply_with_memory(use_memory: Any) -> list:
+    return [
+        _resp(
+            tool_calls=[
+                _tc(
+                    "streamer_reply",
+                    {
+                        "topic_summary": "t",
+                        "is_novel": True,
+                        "emotion": "happy",
+                        "intensity": 0.5,
+                        "use_memory": use_memory,
+                    },
+                )
+            ]
+        )
+    ]
+
+
+async def test_use_memory_accepts_single_item_list_and_renders_spoken_form() -> None:
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    commitments = {7: _commitment()}
+
+    async def lookup(commitment_id: int) -> Any:
+        return commitments.get(commitment_id)
+
+    planner, _llm, _prompt = _make_planner(
+        _reply_with_memory(["约#7"]),
+        reply_provider=provider,
+        brief_provider=lambda: _BRIEF_WITH_COMMITMENT,
+        brief_ids_provider=lambda: [7],
+        commitment_lookup=lookup,
+    )
+
+    outcome = await planner.plan([_msg()])
+
+    assert outcome.replied is True and outcome.memory_refs == [7]
+    attachment = provider.invoke.await_args.args[0].attachment
+    assert "讲完鬼故事的结局" in attachment.remembered
+    assert "约#7" not in attachment.remembered, "说话档不带编号"
+
+
+async def test_use_memory_rejects_archive_prefix_and_multi_values(loguru_capture: Any) -> None:
+    """档#7 是档案行编号，不能借承诺 7 的编号混进来；一次只能点名一条。"""
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    commitments = {7: _commitment(), 8: _commitment(8)}
+
+    async def lookup(commitment_id: int) -> Any:
+        return commitments.get(commitment_id)
+
+    responses = [
+        *_reply_with_memory("档#7"),
+        *_reply_with_memory(["约#7", "约#8"]),
+        *_reply_with_memory(42),
+    ]
+    planner, _llm, _prompt = _make_planner(
+        responses,
+        reply_provider=provider,
+        brief_provider=lambda: _BRIEF_WITH_COMMITMENT,
+        brief_ids_provider=lambda: [7, 8],
+        commitment_lookup=lookup,
+    )
+
+    for _index in range(3):
+        outcome = await planner.plan([_msg()])
+        assert outcome.memory_refs == []
+
+    messages = [record["message"] for record in loguru_capture.records]
+    assert any("认不出" in message and "档#7" in message for message in messages)
+    assert any("一次只能点名一条" in message for message in messages)
+    assert any("类型认不出" in message for message in messages)
