@@ -16,6 +16,7 @@ import type {
   AgentPromptResponse,
   AgentState,
   AgentCancelTaskResponse,
+  AgentStopResponse,
   ArchiveListResponse,
   SystemStatusResponse,
   SystemHealthResponse,
@@ -255,8 +256,11 @@ export const agentsApi = {
   delegateAgent: (name: string, instruction: string) =>
     api.post<AgentDelegateResponse>(`/agents/${name}/delegate`, { instruction }),
   /** 硬取消：清除任务追踪、状态置为 cancelled、并通知 Agent 停止执行（任务未知/已终态 404） */
-  cancelAgentTask: (name: string, taskId: string) =>
-    api.post<AgentCancelTaskResponse>(`/agents/${name}/tasks/${taskId}/cancel`),
+  cancelAgentTask: (name: string, taskId: string, reason?: string) =>
+    api.post<AgentCancelTaskResponse>(`/agents/${name}/tasks/${taskId}/cancel`, reason ? { reason } : {}),
+  /** 急停：停掉该 Agent 当前所有在跑目标并注入叫停理由（默认不撤委派单；不支持急停 409） */
+  stopAgent: (name: string, reason = '', cancelDelegations = false) =>
+    api.post<AgentStopResponse>(`/agents/${name}/stop`, { reason, cancel_delegations: cancelDelegations }),
   /** 备忘录/待办快照（只读观测：minecraft = notebook/todos/reports 三元组） */
   getAgentMemo: (name: string) => api.get<AgentMemoResponse>(`/agents/${name}/memo`),
 };

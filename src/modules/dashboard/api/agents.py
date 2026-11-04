@@ -7,7 +7,8 @@ Agent 控制面 API（运行态观测 + 框架级控制端点）
 - POST /api/v1/agents/{name}/control   -> 框架级控制（pause/resume/shutdown/restart）
 - POST /api/v1/agents/{name}/prompt    -> 递话（运营提醒/插话：纯文本留言，不派新任务）
 - POST /api/v1/agents/{name}/delegate  -> 运营直派（派新任务，登记账本，任务卡可见）
-- POST /api/v1/agents/{name}/tasks/{task_id}/cancel -> 硬取消（强制清账 + 通知停手）
+- POST /api/v1/agents/{name}/tasks/{task_id}/cancel -> 硬取消（先停手 + 强制清账 + 通知停手）
+- POST /api/v1/agents/{name}/stop   -> 急停（停掉所有在跑目标 + 注入叫停理由，默认不撤委派单）
 
 数据源：``DashboardServer.agent_control``（AgentControl 直调接口，构造时由
 agent_manager 生成）。enabled 标记读 agents.toml ``[agents].enabled`` 名单
@@ -26,6 +27,7 @@ from fastapi.responses import JSONResponse
 
 from src.modules.dashboard.dependencies import get_dashboard_server, server_component
 from src.modules.dashboard.schemas.agent import (
+    AgentCancelTaskRequest,
     AgentCancelTaskResponse,
     AgentControlAction,
     AgentControlRequest,
@@ -37,6 +39,8 @@ from src.modules.dashboard.schemas.agent import (
     AgentPromptRequest,
     AgentPromptResponse,
     AgentStateResponse,
+    AgentStopRequest,
+    AgentStopResponse,
     AgentSummary,
     MemoTodoItem,
 )
@@ -244,20 +248,45 @@ async def prompt_agent(
 @router.post(
     "/{name}/tasks/{task_id}/cancel",
     response_model=AgentCancelTaskResponse,
-    summary="硬取消 Agent 的任务（强制清账 + 通知停手）",
+    summary="硬取消 Agent 的任务（先停手 + 强制清账 + 通知停手）",
 )
 async def cancel_agent_task(
-    name: str, task_id: str, server: ServerDep, control: AgentControlDep
+    name: str,
+    task_id: str,
+    server: ServerDep,
+    control: AgentControlDep,
+    request: Optional[AgentCancelTaskRequest] = None,
 ) -> AgentCancelTaskResponse:
-    """强制取消指定任务：清执行 Agent 的委派追踪 + 账面写 cancelled + 注入停手通知。
+    """强制取消指定任务：先让执行 Agent 直连停手，再清委派追踪 + 账面写 cancelled + 注入停手通知。
 
-    取消经执行 Agent 写账（单写者规则），软取消不打断当前工具调用。
+    取消经执行 Agent 写账（单写者规则）。``reason`` 非空时原文附进停手通知。
     source 固定记 "operator"。Agent 不在名册、任务未知或已终态 → 404。
     """
-    result = await control.cancel_task(name, task_id, source="operator")
+    reason = request.reason if request is not None else ""
+    result = await control.cancel_task(name, task_id, source="operator", reason=reason)
     if not result["ok"]:
         raise HTTPException(status_code=404, detail=result["message"])
     return AgentCancelTaskResponse(cancelled=True)
+
+
+@router.post(
+    "/{name}/stop",
+    response_model=AgentStopResponse,
+    summary="急停 Agent（停掉所有在跑目标 + 注入叫停理由，默认不撤委派单）",
+)
+async def stop_agent(
+    name: str, request: AgentStopRequest, server: ServerDep, control: AgentControlDep
+) -> AgentStopResponse:
+    """急停指定 Agent：停掉当前所有在跑目标并注入叫停理由（理由原文转给执行 Agent）。
+
+    默认只停手不撤委派单；``cancel_delegations`` 为真时连委派单一起撤。
+    Agent 不在名册 404；目标不支持急停 409。
+    """
+    result = await control.stop_actions(name, request.reason, cancel_delegations=request.cancel_delegations)
+    if not result["ok"]:
+        code = 404 if result["error"] == "agent_not_found" else 409
+        raise HTTPException(status_code=code, detail=result["message"])
+    return AgentStopResponse(stopped=True)
 
 
 @router.post(

@@ -81,10 +81,29 @@ class AgentPromptResponse(BaseModel):
     delivered: bool
 
 
+class AgentCancelTaskRequest(BaseModel):
+    """任务硬取消请求体（理由可选，随停手通知原文转给执行 Agent）"""
+
+    reason: str = ""
+
+
 class AgentCancelTaskResponse(BaseModel):
     """任务硬取消响应"""
 
     cancelled: bool
+
+
+class AgentStopRequest(BaseModel):
+    """急停请求体（理由可选；``cancel_delegations`` 为真时连委派单一起撤）"""
+
+    reason: str = ""
+    cancel_delegations: bool = False
+
+
+class AgentStopResponse(BaseModel):
+    """急停响应"""
+
+    stopped: bool
 
 
 class AgentDelegateRequest(BaseModel):

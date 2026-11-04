@@ -340,10 +340,11 @@ class AgentControl:
         _emit_prompted(self._event_bus, target=name, content=content, source=source)
         return {"ok": True, "delivered": True, "executor": name}
 
-    async def cancel_task(self, name: str, task_id: str, *, source: str = "operator") -> dict:
+    async def cancel_task(self, name: str, task_id: str, *, source: str = "operator", reason: str = "") -> dict:
         """硬取消指定 Agent 的任务（控制面直调，供运营 REST）。
 
-        取消经执行 Agent（单写者规则：框架不代写账面）。返回
+        取消经执行 Agent（单写者规则：框架不代写账面）；``reason`` 非空时
+        随停手通知原文转给执行 Agent。返回
         ``{"ok": True, "cancelled": True}`` 或
         ``{"ok": False, "error": "agent_not_found"|"task_not_found",
         "message": …}``——REST 侧一律映射 404（不在名册 / 任务未知或已终态）。
@@ -352,7 +353,7 @@ class AgentControl:
         if agent is None:
             logger.warning(f"cancel_task: 未找到 Agent '{name}'")
             return {"ok": False, "error": "agent_not_found", "message": f"Agent 不存在: {name}"}
-        cancelled = agent.cancel_task(task_id, source=source)
+        cancelled = await agent.cancel_task_now(task_id, source=source, reason=reason)
         if not cancelled:
             logger.info(f"cancel_task: Agent '{name}' 拒收取消（task_id={task_id}）")
             return {
@@ -361,6 +362,24 @@ class AgentControl:
                 "message": f"任务不存在或已终态: {task_id}（Agent '{name}' 未在追踪）",
             }
         return {"ok": True, "cancelled": True}
+
+    async def stop_actions(self, name: str, reason: str = "", *, cancel_delegations: bool = False) -> dict:
+        """急停指定 Agent（控制面直调，供运营 REST）：停掉所有在跑目标并注入叫停理由。
+
+        默认只停手不撤委派单；``cancel_delegations`` 为真时连委派单一起撤
+        （复用执行 Agent 的 cancel 路径，单写者规则不动）。返回
+        ``{"ok": True, "stopped": True}`` 或
+        ``{"ok": False, "error": "agent_not_found"|"not_supported", "message": …}``。
+        """
+        agent = self._manager.get_agent_by_name(name)
+        if agent is None:
+            logger.warning(f"stop_actions: 未找到 Agent '{name}'")
+            return {"ok": False, "error": "agent_not_found", "message": f"Agent 不存在: {name}"}
+        stopped = await agent.stop_actions(reason, cancel_delegations=cancel_delegations)
+        if not stopped:
+            logger.info(f"stop_actions: Agent '{name}' 不支持急停")
+            return {"ok": False, "error": "not_supported", "message": f"Agent '{name}' 不支持急停"}
+        return {"ok": True, "stopped": True}
 
     async def delegate(self, name: str, instruction: str, *, initiator: str = "operator") -> dict:
         """运营直派任务（控制面直调，供 REST）：委托给受理核心，映射 REST 错误形态。
@@ -564,7 +583,7 @@ class AgentControlProvider(BaseToolProvider):
             if name == "framework_task_status":
                 return self._invoke_task_status(args)
             if name == "framework_task_cancel":
-                return self._invoke_task_cancel(args, caller=invocation.source)
+                return await self._invoke_task_cancel(args, caller=invocation.source)
             return ToolExecutionResult(
                 tool_name=name,
                 success=False,
@@ -646,8 +665,8 @@ class AgentControlProvider(BaseToolProvider):
             structured_content={"delivered": True, "executor": target.name},
         )
 
-    def _invoke_task_cancel(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
-        """撤委派单：前缀校验 → 查记录表定位执行者 → 转发目标 cancel_task。
+    async def _invoke_task_cancel(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
+        """撤委派单：前缀校验 → 查记录表定位执行者 → 转发目标 cancel_task_now。
 
         只收 deleg_ 前缀的框架委派号——执行方内部目标号（如 maicraft-goal-N）
         是另一本账（执行 Agent 在游戏里挂的目标），不归框架撤，提示走执行方
@@ -693,7 +712,7 @@ class AgentControlProvider(BaseToolProvider):
                 started_ms,
                 f"撤单失败：执行者 '{record.executor}' 不在名册，无法送达停手通知",
             )
-        cancelled = target.cancel_task(task_id, source=caller or "unknown")
+        cancelled = await target.cancel_task_now(task_id, source=caller or "unknown")
         if not cancelled:
             return business_fail_result(
                 tool_name,

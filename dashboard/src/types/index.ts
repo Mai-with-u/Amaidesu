@@ -191,6 +191,11 @@ export interface AgentCancelTaskResponse {
   cancelled: boolean;
 }
 
+/** Agent 急停响应（停掉所有在跑目标；Agent 不存在 404，不支持急停 409） */
+export interface AgentStopResponse {
+  stopped: boolean;
+}
+
 /** Agent 直派受理回执（派新任务，登记到任务列表） */
 export interface AgentDelegateResponse {
   accepted: boolean;

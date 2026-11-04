@@ -22,10 +22,11 @@ class _SampleAgent(BaseAgent):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.accept_prompt = self.accept_cancel = self.accept_delegate = True
+        self.accept_prompt = self.accept_cancel = self.accept_delegate = self.accept_stop = True
         self.received_prompts: list[tuple[str, str]] = []
         self.cancelled_tasks: list[str] = []
         self.delegated: list[tuple[str, str]] = []
+        self.stop_calls: list[tuple[str, bool]] = []  # (reason, cancel_delegations)
 
     def list_tools(self) -> Iterable[ToolSpec]:
         return []
@@ -45,6 +46,12 @@ class _SampleAgent(BaseAgent):
         if self.accept_cancel:
             self.cancelled_tasks.append(task_id)
         return self.accept_cancel
+
+    async def stop_actions(self, reason: str = "", *, cancel_delegations: bool = False) -> bool:
+        if not self.accept_stop:
+            return False
+        self.stop_calls.append((reason, cancel_delegations))
+        return True
 
     async def _on_start(self) -> None:
         return None
@@ -163,6 +170,24 @@ def test_cancel_task(client, manager: AgentManager) -> None:
     _agent(manager).accept_cancel = False  # 任务不在追踪（未知号/已终态移除）
     gone = client.post("/api/v1/agents/sample_agent/tasks/deleg_gone/cancel")
     assert gone.status_code == 404 and "deleg_gone" in gone.json()["detail"]
+
+
+def test_stop_agent_with_optional_reason(client, manager: AgentManager) -> None:
+    resp = client.post("/api/v1/agents/sample_agent/stop", json={"reason": "别挖了", "cancel_delegations": False})
+    assert (resp.status_code, resp.json()) == (200, {"stopped": True})
+    assert _agent(manager).stop_calls == [("别挖了", False)]
+
+    # 空请求体（默认只停手）与不支持急停的 Agent
+    empty = client.post("/api/v1/agents/sample_agent/stop", json={})
+    assert (empty.status_code, empty.json()) == (200, {"stopped": True})
+    assert _agent(manager).stop_calls[-1] == ("", False)
+
+    _agent(manager).accept_stop = False
+    refused = client.post("/api/v1/agents/sample_agent/stop", json={})
+    assert refused.status_code == 409 and "急停" in refused.json()["detail"]
+
+    ghost = client.post("/api/v1/agents/ghost/stop", json={})
+    assert ghost.status_code == 404 and "ghost" in ghost.json()["detail"]
 
 
 def test_delegate_registers_ledger_and_refusal_is_not_recorded(

@@ -265,6 +265,27 @@ class BaseAgent(abc.ABC):
         logger.debug(f"Agent '{self.name or type(self).__name__}' 拒收取消（未实现取消入口）")
         return False
 
+    async def cancel_task_now(self, task_id: str, source: str = "", reason: str = "") -> bool:
+        """急取消入口（控制面异步直调）：默认与 ``cancel_task`` 同义。
+
+        能在撤单记账前让外部执行体（如游戏 Mod）立刻停手的 Agent 覆写本方法，
+        先停手再走 ``cancel_task``；默认实现直接转发同步取消。``reason`` 仅
+        用于随停手通知转给执行循环，默认实现忽略。
+        """
+        del reason
+        return self.cancel_task(task_id, source=source)
+
+    async def stop_actions(self, reason: str = "", *, cancel_delegations: bool = False) -> bool:
+        """急停入口（控制面异步直调；**默认拒收**）。
+
+        语义：停掉本 Agent 当前所有在跑目标并注入一条叫停理由（含原文，
+        供决策循环下一轮读到），默认不撤委派单；``cancel_delegations`` 为真时
+        连名下委派单一起撤。不支持急停的 Agent 返回 False（控制面映射 409）。
+        """
+        del reason, cancel_delegations
+        logger.debug(f"Agent '{self.name or type(self).__name__}' 拒收急停（未实现急停入口）")
+        return False
+
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """任务变化通知钩子（``task.changed``，仅发起方是自己时被调）。
 

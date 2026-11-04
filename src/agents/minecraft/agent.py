@@ -560,11 +560,12 @@ class MinecraftAgent(BaseAgent):
         self._logger.info(f"MinecraftAgent 收到委派（task_id={task_id}）：{instruction[:60]}")
         return None
 
-    def cancel_task(self, task_id: str, source: str = "") -> bool:
+    def cancel_task(self, task_id: str, source: str = "", reason: str = "") -> bool:
         """硬取消：清委派追踪清单 + 账面 cancelled + 注入停手通知（不打断当前工具调用）。
 
         还排在消息队列里、没被任何批次吸收的委派单同样可撤：直接出队并记账，
         不注入停手通知（模型根本没见过这条指令，无需停手）。
+        ``reason`` 非空时原文附进停手通知，供下一轮读到取消原因。
         """
         if self._wake_queue.drop_task(task_id):
             self._delegations.reject(task_id, summary=f"被取消（source={source or '未知'}）")
@@ -572,10 +573,53 @@ class MinecraftAgent(BaseAgent):
             return True
         if not self._delegations.cancel(task_id, summary=f"被取消（source={source or '未知'}）"):
             return False
-        self._inject_wakeup_message(
-            f"[系统] 任务 {task_id} 已被取消，请停止相关工作；还在跑的游戏目标用 maicraft_goal(operation=cancel) 取消。"
+        notice = (
+            f"[系统] 任务 {task_id} 已被取消，请停止相关工作；若还有在跑的游戏目标，"
+            "用 maicraft_goal(operation=cancel) 取消。"
         )
+        if reason:
+            notice = f"{notice}理由：{reason}"
+        self._inject_wakeup_message(notice)
         self._logger.info(f"MinecraftAgent 任务已取消（task_id={task_id}, source={source or '未知'}）")
+        return True
+
+    async def _cancel_tracked_goals(self) -> None:
+        """逐个向游戏直连取消在跑目标：让 Mod 立刻停手，不等游戏 Agent 下一轮推理。
+
+        单个目标取消失败（游戏没连上、目标已结束）只记 warning，不阻断其余目标；
+        取消成功后目标结束事件经事件流回来，跟踪名单与账面由既有路径收尾。
+        """
+        for goal_id in list(self._goals.tracked_ids()):
+            try:
+                reply = await self._call_maicraft(GOAL, {"operation": "cancel", "goal_id": goal_id})
+            except Exception as exc:  # noqa: BLE001 - 单个目标失败不阻断其余目标
+                self._logger.warning(f"直连取消游戏目标 {goal_id} 异常：{exc}", exc=True)
+                continue
+            if not reply.ok:
+                self._logger.warning(
+                    f"直连取消游戏目标 {goal_id} 未成功：{reply.error_message or reply.error_code or '未知原因'}"
+                )
+
+    async def cancel_task_now(self, task_id: str, source: str = "", reason: str = "") -> bool:
+        """急取消（运营 REST 用）：先经直连通道让游戏立刻停手，再走 cancel_task 记账与通知。"""
+        await self._cancel_tracked_goals()
+        return self.cancel_task(task_id, source=source, reason=reason)
+
+    async def stop_actions(self, reason: str = "", *, cancel_delegations: bool = False) -> bool:
+        """急停：直连取消所有在跑游戏目标并注入叫停理由，游戏 Agent 下一轮读到后调整。
+
+        默认不撤委派单（角色停手但任务账不动）；``cancel_delegations`` 为真时
+        连名下委派单一起撤（复用 cancel_task 的记账与通知路径）。
+        """
+        await self._cancel_tracked_goals()
+        if cancel_delegations:
+            for task_id in self._delegations.tracked_ids():
+                self.cancel_task(task_id, source="operator")
+        notice = "[系统] 操作员叫停了当前动作。"
+        if reason:
+            notice = f"[系统] 操作员叫停了当前动作。理由：{reason}"
+        self._inject_wakeup_message(notice)
+        self._logger.info(f"MinecraftAgent 急停（cancel_delegations={cancel_delegations}）：{reason[:60]}")
         return True
 
     async def _worker(self) -> None:

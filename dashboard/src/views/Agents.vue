@@ -139,6 +139,14 @@
               >
                 恢复
               </el-button>
+              <!-- 急停：危险样式区分于普通操作；点击弹出可选理由与撤单开关 -->
+              <el-button
+                type="danger"
+                :loading="emergencyStopLoading"
+                @click="openEmergencyStop"
+              >
+                急停
+              </el-button>
               <!-- 重启/关机为低频高风险动作，收进下拉（点击后仍有确认框） -->
               <el-dropdown class="more-actions" trigger="click" @command="onMoreCommand">
                 <el-button plain :loading="moreActionsLoading">
@@ -366,6 +374,32 @@
         <div v-else class="md-detail-empty">
           <el-empty description="从左侧选择一个 Agent 查看详情" />
         </div>
+
+        <!-- 急停对话框：理由可留空；勾选后连委派单一起撤 -->
+        <el-dialog
+          v-model="emergencyStopVisible"
+          title="急停当前动作"
+          width="420px"
+          :close-on-click-modal="false"
+        >
+          <p class="md-stop-hint">将立即叫停该 Agent 当前所有在跑动作，理由会转给 Agent 供其调整。</p>
+          <el-input
+            v-model="emergencyStopReason"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+            placeholder="叫停理由（可留空）"
+          />
+          <el-checkbox v-model="emergencyStopCancelDelegations" class="md-stop-checkbox">
+            连任务一起撤（默认只停手，委派单保留）
+          </el-checkbox>
+          <template #footer>
+            <el-button @click="emergencyStopVisible = false">取消</el-button>
+            <el-button type="danger" :loading="emergencyStopLoading" @click="confirmEmergencyStop">
+              确认急停
+            </el-button>
+          </template>
+        </el-dialog>
       </main>
     </div>
   </div>
@@ -551,6 +585,33 @@ async function handleAgentControl(action: AgentControlActionType): Promise<void>
   } finally {
     controlLoading[key] = false;
     await refreshAgentStates();
+  }
+}
+
+// 急停：停掉该 Agent 当前所有在跑动作（理由可留空；勾选后连委派单一起撤）
+const emergencyStopVisible = ref(false);
+const emergencyStopLoading = ref(false);
+const emergencyStopReason = ref('');
+const emergencyStopCancelDelegations = ref(false);
+
+function openEmergencyStop(): void {
+  emergencyStopReason.value = '';
+  emergencyStopCancelDelegations.value = false;
+  emergencyStopVisible.value = true;
+}
+
+async function confirmEmergencyStop(): Promise<void> {
+  const name = selectedName.value;
+  if (!name) return;
+  emergencyStopLoading.value = true;
+  try {
+    await agentsApi.stopAgent(name, emergencyStopReason.value, emergencyStopCancelDelegations.value);
+    ElMessage.success('已叫停');
+    emergencyStopVisible.value = false;
+  } catch (error) {
+    ElMessage.error(getApiErrorMessage(error, '急停失败'));
+  } finally {
+    emergencyStopLoading.value = false;
   }
 }
 
@@ -908,6 +969,16 @@ onMounted(() => {
 .md-task-cancel {
   margin-left: auto;
   flex-shrink: 0;
+}
+
+.md-stop-hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.md-stop-checkbox {
+  margin-top: 12px;
 }
 
 .md-task-instruction {

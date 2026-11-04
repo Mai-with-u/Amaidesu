@@ -51,6 +51,10 @@ class DelegationBook:
         """已入账 running、待本批写终态的任务号（只读快照，目标账本联动结算用）。"""
         return tuple(self._finished_ids)
 
+    def tracked_ids(self) -> Tuple[str, ...]:
+        """名下仍在追踪的委派任务号（待开跑 + 已入账 running；只读快照，急停撤单用）。"""
+        return tuple(self._batch_ids) + tuple(self._finished_ids)
+
     def mark_running(self) -> None:
         """批次开跑：本批吸收的委派写 running 并入终态追踪清单；上批留下的恢复原任务。"""
         ledger = self._framework_ledger()
