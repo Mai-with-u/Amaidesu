@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import pytest
 
@@ -830,6 +830,16 @@ def test_memory_eval_dry_self_check_passes() -> None:
     assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
 
 
+def test_archive_game_eval_dry_self_check_passes() -> None:
+    """档案挂游戏的评测器（scripts/memory_eval/archive_game.py）同样回放生产整理器：档案提示词、
+    取料或档案校验改了而评测没跟上，live 量出的游戏归属准确率就不是生产的真实水平。"""
+    script = Path(__file__).resolve().parents[3] / "scripts" / "memory_eval" / "archive_game.py"
+    completed = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=300, check=False
+    )
+    assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
+
+
 # 例句与评测台词共用的连续字数达到这么多，就算"同一句"：短于它的多是"下次一定"这类说法标签，本来就该共用。
 _SHARED_RUN_CHARS = 6
 
@@ -842,15 +852,20 @@ def test_memory_prompt_examples_stay_out_of_eval_datasets() -> None:
     评测集，提示词只写类型说明，配另外编的例句。
     """
     root = Path(__file__).resolve().parents[3]
-    speech: List[str] = []
+    # （样本集名, 台词）：只拿台词比对，样本集名只用来报出是哪一份——名字里的英文词会撞上 JSON 示例的键
+    speech: List[Tuple[str, str]] = []
     for dataset in sorted((root / "scripts" / "memory_eval" / "datasets").glob("*.jsonl")):
         for raw in dataset.read_text(encoding="utf-8").splitlines():
             if raw.strip():
-                speech.extend(f"{dataset.stem}:{line['text']}" for line in json.loads(raw).get("speech", []))
+                speech.extend((dataset.stem, line["text"]) for line in json.loads(raw).get("speech", []))
     shared: List[str] = []
     for prompt in sorted((root / "src" / "agents" / "streamer" / "prompts").glob("memory_*.md")):
         # 例句写在半角双引号里；JSON 示例里的键值带冒号或逗号，排除掉
         for example in re.findall(r'"([^"\n{}:,]+)"', prompt.read_text(encoding="utf-8")):
             runs = {example[i : i + _SHARED_RUN_CHARS] for i in range(len(example) - _SHARED_RUN_CHARS + 1)}
-            shared.extend(f"{prompt.name}「{example}」↔ {text}" for text in speech if any(run in text for run in runs))
+            shared.extend(
+                f"{prompt.name}「{example}」↔ {stem}:{text}"
+                for stem, text in speech
+                if any(run in text for run in runs)
+            )
     assert shared == []

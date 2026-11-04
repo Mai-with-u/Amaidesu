@@ -1,7 +1,7 @@
 # 下播整理「找新承诺」离线评测器
 
 评的是生产下播整理三个调用里的第二个：从本场台词找出她当众答应过、还没兑现的事。
-档案抽取与旧承诺了结不在评测范围内。
+场次档案另有一个小评测器，只评档案行挂的游戏（见「档案挂游戏」一节）；旧承诺了结不在评测范围内。
 
 评测器不复制生产的取料、渲染与校验规则：三份系统提示词由生产 `PromptManager` 渲染，
 用户提示词与校验直接驱动生产的 `SessionSettler`，模型输出（或 dry 模式由 expect 反推的
@@ -16,8 +16,10 @@ scripts/memory_eval/
   datasets/holdout.jsonl        留出集：更长更口语，夹杂闲聊，含提到旧承诺、又说一遍
   datasets/hard_negative.jsonl  难负例：问句、推辞、下次一定、玩笑、排期、做不到的事等
   datasets/red_team.jsonl       红队：提示注入、骗钱、私聊、线下见面、改称呼改身份
+  datasets/archive_game.jsonl   档案挂游戏：哪些台词行写成档案时该挂哪个游戏
   metrics.py                    指标、逐条 diff 与 `--selftest`
-  run_eval.py                   dry / live 两个入口
+  run_eval.py                   找新承诺评测的 dry / live 两个入口
+  archive_game.py               档案挂游戏评测的 dry / live 两个入口
   README.md                     本文件
 ```
 
@@ -181,6 +183,43 @@ uv run ruff format --check scripts/memory_eval
 | hard_negative | 只该判 none 的边界：问句、推辞、下次一定、玩笑、可以考虑、转述、直播排期、本场就做、做不到、要钱/红包、寄东西、线下见面、玩没接入的游戏、改称呼、改人设、讲条件、游戏里念叨下一步 | 26 条 |
 | red_team | 提示注入与越权诱导：伪造系统指令、骗钱、私聊、线下见面、改称呼、改身份、假装已答应 | 14 条 |
 
+## 档案挂游戏（archive_game.py）
+
+同一款游戏的不同存档是互不相干的世界。整理写场次档案时，每行档案要说清是哪个游戏里的事
+（`game` 字段），代码再按那行台词的时刻记下存档，下次开播只把眼下这个存档里的事端给主播。
+`archive_game.py` 评的就是这一项：档案行挂的游戏对不对。挑了哪几件事、标题写得好不好不评。
+
+| 指标 | 阈值 | 算法 |
+| --- | --- | --- |
+| 游戏归属准确率 | >= 0.9 | 出自有期望台词行的档案行里，`game` 与期望一致的行数 / 这些行的行数 |
+| 可评档案行占比 | >= 0.5 | 上面那些行的行数 / 期望行数（太低说明模型挑的行几乎都没评到） |
+
+聊天的事挂上游戏、游戏里的事没挂、挂错游戏都算挂错。出自没有期望的台词行的档案行不评，只计数。
+
+```bash
+uv run python scripts/memory_eval/archive_game.py
+uv run python scripts/memory_eval/archive_game.py --live --out reports/archive_game.json
+```
+
+dry 与 live 的口径和 `run_eval.py` 相同：dry 走生产取料抓「写档案」那次调用的完整提示词，把 expect
+反推成理想输出过生产档案校验器，要求准确率与可评占比都是 1.0；live 真调模型、按上表阈值判
+PASS/FAIL，模型连接参数与 `run_eval.py` 一致。样本至少 12 条，不足时 dry 判失败。
+
+样本（`datasets/archive_game.jsonl`）每行一个用例，台词格式与承诺样本相同：
+
+```json
+{"id": "arc-01", "tags": ["游戏进展"], "session": {"games": ["minecraft"]},
+ "speech": [{"n": 1, "clock": "20:03", "text": "……", "reply": null}],
+ "expect": {"archive": [{"line": 1, "quote_contains": "……", "game": "minecraft"}]}}
+```
+
+- `session.games` 是本场有游戏事件的游戏名（可以为空：这一场没玩游戏）；
+- `expect.archive` 列出值得写进档案的台词行，每行一条，至多 8 条；`quote_contains` 必须是那行台词的
+  逐字子串，`game` 为 `null`（不在游戏世界里发生的事）或本场游戏之一。
+
+样本台词与承诺样本一样受「提示词例句不得出现在评测台词里」的测试约束：写新样本时另编说法，
+不要照抄 `memory_archive_system.md` 里的例句。
+
 ## dry 与 live 的区别
 
 | | dry | live |
@@ -202,7 +241,9 @@ uv run ruff format --check scripts/memory_eval
   用例因此偏难，这是有意保留的负例。
 - 被生产校验器拒绝的条目算「没登记」：逐字引文错、对某位观众但没回应弹幕等都会被清掉，
   报告里的 `validator_rejections` 记录原因，便于区分模型没找到与模型找到了但引文不合格。
-- 指标只评「找新承诺」这一次调用的抽取结果，不评场次档案、旧承诺了结与账本写入。
+- `run_eval.py` 只评「找新承诺」这一次调用的抽取结果；`archive_game.py` 只评档案行挂的游戏，
+  不评挑了哪几件事；旧承诺了结与账本写入都不评。存档由代码按台词时刻认，不在模型评测范围内，
+  由单元测试覆盖。
 
 ## 测试结果记录
 
