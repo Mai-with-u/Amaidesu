@@ -400,9 +400,13 @@ class Planner:
         if age_ms > self._frame_stale_warn_ms and current_ms - self._last_stale_warn_ms >= _STALE_WARN_INTERVAL_MS:
             self._last_stale_warn_ms = current_ms
             self.logger.warning(f"直播画面已 {age_text(age_ms)}未更新（超过告警阈值），请检查画面来源是否断流")
+        # 画面里的聊天栏不当证据：实测截图上"我"正在输入框里打的问候（开头是对方的名字）被读成
+        # 对方说了"这是我的"，凭空多出一句"认领"，一路递进游戏里成了质问对方"先认领又否认"
         note = (
             f"【直播画面】观众此刻看到的画面（{age_text(age_ms)}截取）。描述观感、氛围时可以参考；"
             "游戏里的数值和进展以游戏记录和查询结果为准，画面里看不清的不要猜。"
+            "画面里聊天栏的字不算谁说过的话：截图小、字容易认错，输入框里还可能是我自己正在打的字；"
+            "谁说了什么以对话记录里的游戏聊天条目为准。"
         )
         return {"role": "user", "content": [{"type": "text", "text": note}, {"type": "image_ref", "ref": ref}]}
 

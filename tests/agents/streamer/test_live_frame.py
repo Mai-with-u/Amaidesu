@@ -82,6 +82,8 @@ async def test_frame_rides_first_request_only(monkeypatch: pytest.MonkeyPatch) -
     assert [_has_frame(messages) for messages in requests] == [True, False]
     note = requests[0][-1]["content"][0]["text"]
     assert note.startswith("【直播画面】") and "刚刚截取" in note
+    # 聊天栏的字不当证据：截图上自己正在打的字曾被读成对方说的话
+    assert "画面里聊天栏的字不算谁说过的话" in note and "以对话记录里的游戏聊天条目为准" in note
 
 
 async def test_every_window_sees_frame_even_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
