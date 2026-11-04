@@ -49,6 +49,11 @@ KIND_TO_EVENT: Dict[str, str] = {
     "dimension_changed": CoreEvents.GAME_BODY_DIMENSION_CHANGED,
     "need_unhandled": CoreEvents.GAME_BODY_NEED_UNHANDLED,
     "unknown": CoreEvents.GAME_BODY_UNKNOWN,
+    # 语义稳定的上游种类有各自的事件名：主播按种类认领叙事素材，不再挤在 unknown 里
+    "gear_broken": CoreEvents.GAME_BODY_GEAR_BROKEN,
+    "discovered": CoreEvents.GAME_BODY_DISCOVERED,
+    "follow_status": CoreEvents.GAME_BODY_FOLLOW_STATUS,
+    "sky_changed": CoreEvents.GAME_BODY_SKY_CHANGED,
     # 步进完成不进身体事件通道，转 game.milestone（主播可讲的进展）
     "milestone": CoreEvents.GAME_MILESTONE,
 }
@@ -68,6 +73,12 @@ _SOURCE_KINDS: Dict[str, str] = {
     "character_died": "died",
     # 步进完成是主播可讲的进展（画面在动、自带结论句），转 milestone 通道
     "step_finished": "milestone",
+    # 装备用坏、探索发现、跟随处境变化、天色变化都有稳定语义，各自成一种叙事；
+    # 上游再加新种类仍归 unknown 兜底
+    "gear_broken": "gear_broken",
+    "discovered": "discovered",
+    "follow_status": "follow_status",
+    "sky_changed": "sky_changed",
 }
 
 #: 目标运行的处境变化与死亡恢复决策的执行结果：游戏 Agent 的任务通道，不进叙事通道
@@ -90,7 +101,8 @@ _LEADS: Dict[str, str] = {
     "died": "死了",
 }
 
-#: 没有专门叙事种类、走 unknown 的事件里，主播也能讲的几种：给一个说清性质的开头，不让它读成"身体事件：xxx"
+#: 叙事种类自己没配开头时按上游种类补的开头（种类值与上游名相同的四种在 _SOURCE_LEADS 也能命中）：
+#: 给一个说清性质的开头，不让它读成"身体事件：xxx"
 _SOURCE_LEADS: Dict[str, str] = {
     "gear_broken": "装备用坏了",
     "discovered": "发现了新东西",

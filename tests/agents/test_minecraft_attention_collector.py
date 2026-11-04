@@ -91,9 +91,10 @@ def test_hurt_and_dimension_change_are_encounters_and_reminders_stay_silent() ->
     assert classify("hurt") == "attacked"
     assert classify("dimension_changed") == "dimension_changed"
     assert classify("reminder") is None
-    assert classify("gear_broken") == "unknown", "装备用坏没有专门事件名，走 unknown 但有说清性质的开头"
-    assert classify("discovered") == "unknown"
-    assert classify("sky_changed") == "unknown", "天色变了是观众也看得见的变化，进叙事通道而不是静默"
+    assert classify("gear_broken") == "gear_broken", "装备用坏语义稳定，有专门的叙事种类"
+    assert classify("discovered") == "discovered"
+    assert classify("follow_status") == "follow_status"
+    assert classify("sky_changed") == "sky_changed", "天色变了是观众也看得见的变化，进叙事通道而不是静默"
     assert classify("timer_due") is None, "计时到点是游戏 Agent 给自己定的回头看一眼，后续进展另走步进完成与交付"
 
 
@@ -170,20 +171,21 @@ def test_hurt_and_dimension_change_are_encounters_and_reminders_stay_silent() ->
         ),
         # 括号里的时间天气说得出口就照念；夹了倒计时这种数字就整段不要，不留半截
         (
-            "unknown",
+            "sky_changed",
             "sky_changed",
             "天黑了，到了能睡的时间（傍晚，晴）",
             "天色变了：天黑了，到了能睡的时间（傍晚，晴）",
         ),
-        ("unknown", "sky_changed", "开始下雨了（夜晚，距天亮约 8 分钟；雨）", "天色变了：开始下雨了"),
+        ("sky_changed", "sky_changed", "开始下雨了（夜晚，距天亮约 8 分钟；雨）", "天色变了：开始下雨了"),
         (
-            "unknown",
+            "gear_broken",
             "gear_broken",
             "装备用坏了，mainhand 的 minecraft:iron_pickaxe 耐久打空消灭了（满耐久 250，最后看到剩 1）",
             "装备用坏了：铁镐坏了",
         ),
-        ("unknown", "discovered", "发现群系 minecraft:lush_caves（脚下）", "发现了新东西：繁茂洞穴（脚下）"),
-        ("unknown", "discovered", "看见一片岩浆湖", "发现了新东西：看见一片岩浆湖"),
+        ("discovered", "discovered", "发现群系 minecraft:lush_caves（脚下）", "发现了新东西：繁茂洞穴（脚下）"),
+        ("discovered", "discovered", "看见一片岩浆湖", "发现了新东西：看见一片岩浆湖"),
+        ("follow_status", "follow_status", "跟丢了在找：他过了门", "跟着人走时：跟丢了在找，他过了门"),
         (
             "unknown",
             "stalled",
@@ -216,7 +218,7 @@ def test_without_coordinates_keeps_milestone_conclusions() -> None:
 
 
 def test_body_event_names_are_the_closed_kind_set() -> None:
-    """9 个身体事件与 milestone 转发事件各就各位，通配订阅仍然可用。"""
+    """各身体事件与 milestone 转发事件各就各位，通配订阅仍然可用。"""
     assert CoreEvents.GAME_BODY_WILDCARD == "game.body.#"
     assert set(KIND_TO_EVENT.values()) == {
         CoreEvents.GAME_BODY_ATTACKED,
@@ -228,6 +230,10 @@ def test_body_event_names_are_the_closed_kind_set() -> None:
         CoreEvents.GAME_BODY_DIMENSION_CHANGED,
         CoreEvents.GAME_BODY_NEED_UNHANDLED,
         CoreEvents.GAME_BODY_UNKNOWN,
+        CoreEvents.GAME_BODY_GEAR_BROKEN,
+        CoreEvents.GAME_BODY_DISCOVERED,
+        CoreEvents.GAME_BODY_FOLLOW_STATUS,
+        CoreEvents.GAME_BODY_SKY_CHANGED,
         CoreEvents.GAME_MILESTONE,
     }
     for kind, event_name in KIND_TO_EVENT.items():

@@ -3,10 +3,10 @@
 
 上游是 MaiCraft 的任务事件流；**分类与叙事化**（哪些值得讲、怎么讲）由
 ``src/agents/minecraft/attention_matrix.py`` 负责——那是游戏侧知识。
-本模块只定义事件契约：9 个具名事件共享一个 payload 类，``kind`` 为判别字段。
+本模块只定义事件契约：具名事件共享一个 payload 类，``kind`` 为判别字段。
 
 契约约定：
-- **封闭集合**：``kind`` 9 个取值与 9 个事件名一一对应；上游类型可增可减，
+- **封闭集合**：``kind`` 取值与事件名一一对应；上游类型可增可减，
   未知类型归 ``unknown`` 并保留 ``source_event_type``，事件面不随上游漂移。
 - **遥测不入事件**：血量数值、坐标、游标编号不在这里；主播要这些时走
   工具直读（``minecraft_glance``），不占用叙事通道。
@@ -23,7 +23,7 @@ from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
 from src.modules.utils.time_utils import now_ms
 
-#: 叙事种类（判别字段取值；与 9 个事件名末段一一对应）
+#: 叙事种类（判别字段取值；与事件名末段一一对应）
 BodyKind = Literal[
     "attacked",
     "attack_ended",
@@ -34,6 +34,10 @@ BodyKind = Literal[
     "dimension_changed",
     "need_unhandled",
     "unknown",
+    "gear_broken",
+    "discovered",
+    "follow_status",
+    "sky_changed",
 ]
 
 
@@ -46,6 +50,10 @@ BodyKind = Literal[
 @register_event(CoreEvents.GAME_BODY_DIMENSION_CHANGED)
 @register_event(CoreEvents.GAME_BODY_NEED_UNHANDLED)
 @register_event(CoreEvents.GAME_BODY_UNKNOWN)
+@register_event(CoreEvents.GAME_BODY_GEAR_BROKEN)
+@register_event(CoreEvents.GAME_BODY_DISCOVERED)
+@register_event(CoreEvents.GAME_BODY_FOLLOW_STATUS)
+@register_event(CoreEvents.GAME_BODY_SKY_CHANGED)
 class BodyEventPayload(BasePayload):
     """AI 玩家身体事件（已分类、已叙事化）。
 
