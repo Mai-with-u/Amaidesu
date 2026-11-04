@@ -31,7 +31,8 @@ from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger
 from src.modules.utils.time_utils import now_ms
 from src.modules.types.game_save import GameSave
-from tests.agents.streamer.helpers import FakeRoundExecutor, SavedGameProvider, make_streamer_agent
+from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
+from tests.modules.tools.fakes import SavedGameProvider
 
 # 登记（只读/驱动穿透，合并时进底账）：planner 段的替身是测试自建的真实 Planner
 # 实例，个别用例直接驱动其内部组装件（planner._invoke_registry_tool）；公开接缝

@@ -33,7 +33,8 @@ from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools import ToolRegistry
 from src.modules.types.game_save import GameSave
 from src.modules.utils.time_utils import now_ms
-from tests.agents.streamer.helpers import ActiveSessionStub, SavedGameProvider, make_streamer_agent
+from tests.agents.streamer.helpers import ActiveSessionStub, make_streamer_agent
+from tests.modules.tools.fakes import SavedGameProvider
 from tests.config.helpers import wait_until
 from tests.modules.llm.fakes import FakeLLMManager
 

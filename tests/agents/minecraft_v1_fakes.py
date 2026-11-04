@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.minecraft.agent import MinecraftAgent
@@ -509,3 +509,39 @@ async def make_minecraft_agent(
     )
     await agent.start()
     return agent, llm, bus
+
+
+# ---------------------------------------------------------------------------
+# 场景工厂：身边有女仆、羊的 observe(scene)（名册测试与换存档端到端测试共用）
+# ---------------------------------------------------------------------------
+
+MAID_SKIN = {"skin_id": "touhou_little_maid:winefox_momo", "skin_name": "莫莫酒狐"}
+
+
+def maid_entity(scene_id: str = "e3", distance: int = 2, owner: str = "你的") -> Dict[str, Any]:
+    """一只女仆实体（默认是角色自己的、在身后两格）。"""
+    return {
+        "id": scene_id,
+        "type": "touhou_little_maid:maid",
+        "direction": "后方",
+        "distance": distance,
+        "hostile": False,
+        "traits": {"驯服": owner},
+    }
+
+
+def scene_with(
+    *entities: Dict[str, Any], maids: Sequence[Dict[str, Any]] = (), graves: Sequence[Dict[str, Any]] = ()
+) -> Dict[str, Any]:
+    """拼一份 observe(scene)：实体列表，加女仆模组的女仆与墓碑附加信息。"""
+    return {
+        "entities": list(entities),
+        "mod_things": {"maid": list(maids), "maid_tombstone": list(graves)},
+    }
+
+
+def scene_with_maid() -> Dict[str, Any]:
+    """身边一只自己的女仆（莫莫酒狐皮肤）和一只报了 UUID 的羊。"""
+    # 游戏给这只羊报了 UUID（挂过命名牌或被驯服过的才有），起名认得出是它
+    sheep = {"id": "e1", "type": "minecraft:sheep", "uuid": "a1", "distance": 12, "hostile": False}
+    return scene_with(maid_entity(), sheep, maids=[{"id": "e3", **MAID_SKIN}])

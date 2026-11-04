@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, Sequence
+from typing import Any, Dict
 
 from src.agents.minecraft.creature_book import CreatureBook, creature_from_record, creature_record
 from src.agents.minecraft.glance import STATUS_AWAY, STATUS_DEAD, STATUS_NEARBY, glance_brief, glance_scene
@@ -20,46 +20,25 @@ from src.modules.events.payloads.game_chat import GameChatMention, GameChatPaylo
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.tools.models import ToolInvocation
 
-from .minecraft_v1_fakes import FakeMaicraft, make_minecraft_agent
-
-_MAID_SKIN = {"skin_id": "touhou_little_maid:winefox_momo", "skin_name": "莫莫酒狐"}
-
-
-def _maid(scene_id: str = "e3", distance: int = 2, owner: str = "你的") -> Dict[str, Any]:
-    return {
-        "id": scene_id,
-        "type": "touhou_little_maid:maid",
-        "direction": "后方",
-        "distance": distance,
-        "hostile": False,
-        "traits": {"驯服": owner},
-    }
-
-
-def _scene(
-    *entities: Dict[str, Any], maids: Sequence[Dict[str, Any]] = (), graves: Sequence[Dict[str, Any]] = ()
-) -> Dict[str, Any]:
-    return {
-        "entities": list(entities),
-        "mod_things": {"maid": list(maids), "maid_tombstone": list(graves)},
-    }
-
-
-def _with_maid() -> Dict[str, Any]:
-    # 游戏给这只羊报了 UUID（挂过命名牌或被驯服过的才有），起名认得出是它
-    sheep = {"id": "e1", "type": "minecraft:sheep", "uuid": "a1", "distance": 12, "hostile": False}
-    return _scene(_maid(), sheep, maids=[{"id": "e3", **_MAID_SKIN}])
+from .minecraft_v1_fakes import (
+    MAID_SKIN,
+    FakeMaicraft,
+    maid_entity,
+    make_minecraft_agent,
+    scene_with,
+    scene_with_maid,
+)
 
 
 def _with_grave() -> Dict[str, Any]:
     grave = {"id": "e8", "type": "touhou_little_maid:tombstone", "direction": "后方", "distance": 3, "hostile": False}
-    return _scene(grave, graves=[{"id": "e8", "maid_name": "莫莫酒狐"}])
+    return scene_with(grave, graves=[{"id": "e8", "maid_name": "莫莫酒狐"}])
 
 
 def test_own_creatures_are_registered_and_strangers_are_not() -> None:
     book = CreatureBook()
     stray = {"id": "e5", "type": "minecraft:wolf", "distance": 6}
-    book.observe(_scene(_maid(), stray, maids=[{"id": "e3", **_MAID_SKIN}]), 1_000)
+    book.observe(scene_with(maid_entity(), stray, maids=[{"id": "e3", **MAID_SKIN}]), 1_000)
 
     [maid] = book.creatures()
     assert maid.status == STATUS_NEARBY and maid.game_name == "莫莫酒狐"
@@ -69,7 +48,7 @@ def test_own_creatures_are_registered_and_strangers_are_not() -> None:
 
 def test_naming_finds_the_one_creature_and_refuses_when_unsure() -> None:
     book = CreatureBook()
-    book.observe(_with_maid(), 1_000)
+    book.observe(scene_with_maid(), 1_000)
 
     assert book.name("牛", "阿哞").named is None, "身边没有牛就不登记"
     named = book.name("你的女仆", "阿缕").named
@@ -87,11 +66,11 @@ def test_naming_finds_the_one_creature_and_refuses_when_unsure() -> None:
 
 def test_two_matching_creatures_pick_your_own_or_ask_which_one() -> None:
     book = CreatureBook()
-    theirs = _maid("e4", distance=5, owner="别人的")
-    book.observe(_scene(_maid(), theirs, maids=[{"id": "e3", **_MAID_SKIN}, {"id": "e4", **_MAID_SKIN}]), 1_000)
+    theirs = maid_entity("e4", distance=5, owner="别人的")
+    book.observe(scene_with(maid_entity(), theirs, maids=[{"id": "e3", **MAID_SKIN}, {"id": "e4", **MAID_SKIN}]), 1_000)
     assert book.name("女仆", "阿缕").named is not None, "一只是自己的就挑自己的"
 
-    both_wild = _scene(
+    both_wild = scene_with(
         {"id": "e6", "type": "minecraft:cat", "direction": "左侧", "distance": 4},
         {"id": "e7", "type": "minecraft:cat", "direction": "右侧", "distance": 6},
     )
@@ -103,14 +82,14 @@ def test_two_matching_creatures_pick_your_own_or_ask_which_one() -> None:
 def test_out_of_sight_is_a_state_not_an_event() -> None:
     """离开视野只改状态：起过名的在速览里说一句"这会儿没在身边"，没起名的不提。"""
     book = CreatureBook()
-    book.observe(_with_maid(), 1_000)
-    book.observe(_scene(), 2_000)
+    book.observe(scene_with_maid(), 1_000)
+    book.observe(scene_with(), 2_000)
     assert book.creatures()[0].status == STATUS_AWAY
     assert book.status_view() == [], "没起名、没看到的自己的生物不提"
 
-    book.observe(_with_maid(), 3_000)
+    book.observe(scene_with_maid(), 3_000)
     book.name("你的女仆", "阿缕")
-    book.observe(_scene(), 4_000)
+    book.observe(scene_with(), 4_000)
     [item] = book.status_view()
     assert item["status"] == STATUS_AWAY and item["named"] is True
     assert "阿缕（你的女仆，莫莫酒狐皮肤）这会儿没在身边" in glance_brief({"creatures": book.status_view()})
@@ -118,7 +97,7 @@ def test_out_of_sight_is_a_state_not_an_event() -> None:
 
 def test_a_death_message_is_recognized_only_when_it_is_surely_hers() -> None:
     book = CreatureBook()
-    book.observe(_with_maid(), 1_000)
+    book.observe(scene_with_maid(), 1_000)
 
     assert book.note_death("莫莫酒狐 的好感度提升了", 2_000) is None, "以她的名字开头但不是死讯"
     assert book.note_death("Steve被苦力怕炸死了", 2_000) is None, "别人的死讯不归她"
@@ -128,7 +107,9 @@ def test_a_death_message_is_recognized_only_when_it_is_surely_hers() -> None:
 
     twins = CreatureBook()
     twins.observe(
-        _scene(_maid(), _maid("e4", distance=5), maids=[{"id": "e3", **_MAID_SKIN}, {"id": "e4", **_MAID_SKIN}]),
+        scene_with(
+            maid_entity(), maid_entity("e4", distance=5), maids=[{"id": "e3", **MAID_SKIN}, {"id": "e4", **MAID_SKIN}]
+        ),
         1_000,
     )
     assert len(twins.creatures()) == 1, "没有 UUID 时同皮肤的两只拼出同一个身份键"
@@ -136,7 +117,7 @@ def test_a_death_message_is_recognized_only_when_it_is_surely_hers() -> None:
 
 def test_her_grave_confirms_the_death_and_is_called_by_her_name() -> None:
     book = CreatureBook()
-    book.observe(_with_maid(), 1_000)
+    book.observe(scene_with_maid(), 1_000)
     book.name("你的女仆", "阿缕")
     book.observe(_with_grave(), 2_000)
 
@@ -149,14 +130,14 @@ def test_her_grave_confirms_the_death_and_is_called_by_her_name() -> None:
         "阿缕（你的女仆，莫莫酒狐皮肤）死了，墓碑就在身边。身边还有阿缕的女仆墓碑（上面写着莫莫酒狐）。"
     )
 
-    book.observe(_with_maid(), 3_000)
+    book.observe(scene_with_maid(), 3_000)
     assert maid.status == STATUS_NEARBY, "又看到她（认错了或被复活）就当活着"
 
 
 def test_game_agent_and_streamer_are_told_about_names() -> None:
     """游戏 Agent 拿到"名字 → 是哪一只、此刻怎样"，主播的玩法说明写明起名要登记、已死就是死了。"""
     book = CreatureBook()
-    book.observe(_with_maid(), 1_000)
+    book.observe(scene_with_maid(), 1_000)
     assert book.named_view() == {}
     book.name("你的女仆", "阿缕")
     assert book.named_view() == {"阿缕": "你的女仆（莫莫酒狐皮肤），在身边"}
@@ -173,7 +154,7 @@ async def test_replay_of_the_audit_timeline() -> None:
     之后的速览写明她死了、墓碑就在身边，不再有"阿缕在身后"可供误读。
     """
     server = FakeMaicraft()
-    server.scene_view = _with_maid()
+    server.scene_view = scene_with_maid()
     agent, _, bus = await make_minecraft_agent(server)
 
     brief = (await agent._glance())["brief"]
@@ -214,7 +195,7 @@ def test_a_death_is_mentioned_in_its_session_and_the_next_one_only() -> None:
     book = CreatureBook()
     book.load("w1", [])
     book.start_session(52)
-    book.observe(_with_maid(), 1_000)
+    book.observe(scene_with_maid(), 1_000)
     book.name("你的女仆", "阿缕")
     book.note_death("莫莫酒狐被苦力怕炸死了", 2_000)
     assert book.status_view()[0]["status"] == STATUS_DEAD
@@ -227,7 +208,7 @@ def test_a_death_is_mentioned_in_its_session_and_the_next_one_only() -> None:
     book.start_session(54)
     assert book.status_view() == [] and book.named_view() == {}
     wolf = {"id": "e5", "type": "minecraft:wolf", "distance": 3, "traits": {"驯服": "你的"}}
-    book.observe(_scene(wolf), 3_000)
+    book.observe(scene_with(wolf), 3_000)
     taken = book.name("狼", "阿缕")
     assert taken.named is None and "它已经死了，名字留给它" in taken.reason
 
@@ -236,10 +217,10 @@ def test_changes_are_handed_out_once_and_a_reload_restores_the_roster() -> None:
     """只有落库的事实变了才交出去写回；按落库的行读回来，名字还在，此刻在不在身边等下一次观察。"""
     book = CreatureBook()
     book.load("w1", [])
-    book.observe(_with_maid(), 1_000)
+    book.observe(scene_with_maid(), 1_000)
     changed, removed = book.take_changes()
     assert [creature.skin for creature in changed] == ["莫莫酒狐"] and removed == []
-    book.observe(_with_maid(), 2_000)
+    book.observe(scene_with_maid(), 2_000)
     assert book.take_changes() == ([], []), "只是又看到一次，不用写回"
 
     book.name("你的女仆", "阿缕")
@@ -260,7 +241,7 @@ async def test_names_survive_a_restart_and_stay_in_their_world(db_path: Path) ->
     await db.initialize()
     try:
         server = FakeMaicraft()
-        server.scene_view = _with_maid()
+        server.scene_view = scene_with_maid()
         server.self_view["world_key"] = "w1"
         agent, _, _ = await make_minecraft_agent(server, creature_repo=db.game_creatures)
         await agent._glance()
@@ -285,7 +266,7 @@ async def test_roster_follows_world_id_and_adopts_rows_under_old_key(db_path: Pa
     await db.initialize()
     try:
         server = FakeMaicraft()
-        server.scene_view = _with_maid()
+        server.scene_view = scene_with_maid()
         server.self_view["world_key"] = "old-hash"
         agent, _, _ = await make_minecraft_agent(server, creature_repo=db.game_creatures)
         await agent._glance()
@@ -322,9 +303,9 @@ _M2 = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
 
 def _twins() -> Dict[str, Any]:
     """同皮肤的两只自己的女仆，游戏给了各自的 UUID。"""
-    first = {**_maid("e3"), "uuid": _M1}
-    second = {**_maid("e4", distance=5), "direction": "左侧", "uuid": _M2}
-    return _scene(first, second, maids=[{"id": "e3", **_MAID_SKIN}, {"id": "e4", **_MAID_SKIN}])
+    first = {**maid_entity("e3"), "uuid": _M1}
+    second = {**maid_entity("e4", distance=5), "direction": "左侧", "uuid": _M2}
+    return scene_with(first, second, maids=[{"id": "e3", **MAID_SKIN}, {"id": "e4", **MAID_SKIN}])
 
 
 def test_same_skin_twins_are_told_apart_by_uuid() -> None:
@@ -341,7 +322,7 @@ def test_same_skin_twins_are_told_apart_by_uuid() -> None:
     assert book.note_death("Steve被苦力怕炸死了", 2_000, victim_uuid="0000", victim_name="Steve") is None
 
     grave = {"id": "e8", "type": "touhou_little_maid:tombstone", "distance": 2}
-    book.observe(_scene(grave, graves=[{"id": "e8", "maid_name": "莫莫酒狐", "maid_uuid": _M1}]), 3_000)
+    book.observe(scene_with(grave, graves=[{"id": "e8", "maid_name": "莫莫酒狐", "maid_uuid": _M1}]), 3_000)
     alive_then_dead = {creature.uuid: creature.status for creature in book.creatures()}
     assert alive_then_dead == {_M1: STATUS_DEAD, _M2: STATUS_DEAD}
 
@@ -350,10 +331,10 @@ def test_an_old_record_moves_under_the_uuid_when_the_mod_starts_reporting_it() -
     """旧版 Mod 时按长相记下并起了名的女仆，升级后第一次带着 UUID 出现：名字跟到 UUID 下，旧键删掉。"""
     book = CreatureBook()
     book.load("", [])
-    book.observe(_with_maid(), 1_000)
+    book.observe(scene_with_maid(), 1_000)
     book.name("你的女仆", "阿缕")
     book.take_changes()
-    upgraded = _with_maid()
+    upgraded = scene_with_maid()
     upgraded["entities"][0]["uuid"] = _M1
     book.observe(upgraded, 2_000)
     [maid] = book.creatures()
@@ -367,7 +348,7 @@ def test_an_old_record_moves_under_the_uuid_when_the_mod_starts_reporting_it() -
 def test_a_creature_the_game_cannot_tell_apart_is_not_named() -> None:
     """没被驯服、没挂命名牌的野生动物游戏不给 UUID，同种的每一只都一样：不登记，说清怎么办。"""
     book = CreatureBook()
-    book.observe(_scene({"id": "e2", "type": "minecraft:cow", "direction": "前方", "distance": 4}), 1_000)
+    book.observe(scene_with({"id": "e2", "type": "minecraft:cow", "direction": "前方", "distance": 4}), 1_000)
     refused = book.name("牛", "哞哞")
     assert refused.named is None and "挂个命名牌或驯服它" in refused.reason and book.creatures() == []
 
