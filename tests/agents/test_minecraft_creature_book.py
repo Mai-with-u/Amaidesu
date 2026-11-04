@@ -279,6 +279,43 @@ async def test_names_survive_a_restart_and_stay_in_their_world(db_path: Path) ->
         await db.close()
 
 
+async def test_roster_follows_world_id_and_adopts_rows_under_old_key(db_path: Path) -> None:
+    """新版 Mod 按 world.id 分名册：旧版本存在旧编号名下的名字搬过来，换到别的存档不串，还没认出时不换。"""
+    db = SQLiteDatabase(db_path)
+    await db.initialize()
+    try:
+        server = FakeMaicraft()
+        server.scene_view = _with_maid()
+        server.self_view["world_key"] = "old-hash"
+        agent, _, _ = await make_minecraft_agent(server, creature_repo=db.game_creatures)
+        await agent._glance()
+        assert (await agent._name_creature("你的女仆", "阿缕"))["success"]
+        await agent.stop()
+
+        # Mod 升级：同一个世界有了世界编号，旧版本的数据在 old-hash 名下
+        server.enter_world("id-home", "老家")
+        again, _, _ = await make_minecraft_agent(server, creature_repo=db.game_creatures)
+        assert "阿缕（你的女仆，莫莫酒狐皮肤）在身边" in (await again._glance())["brief"]
+        assert [r.nickname for r in await db.game_creatures.list_creatures(game="minecraft", world_key="id-home")] == [
+            "阿缕"
+        ]
+        assert await db.game_creatures.list_creatures(game="minecraft", world_key="old-hash") == []
+
+        # 新建的存档：world_key 与 world.id 相同，没有可搬的，名册是空的
+        server.enter_world("id-new", "新的世界")
+        server.self_view["world_key"] = "id-new"
+        assert "阿缕" not in (await again._glance())["brief"]
+        assert again._creatures.world_key == "id-new"
+
+        # 回主菜单：认不出世界，名册不换
+        server.leave_world()
+        await again._glance()
+        assert again._creatures.world_key == "id-new"
+        await again.stop()
+    finally:
+        await db.close()
+
+
 _M1 = "5f2b9c1e-0d4a-4c1b-9e7f-1a2b3c4d5e6f"
 _M2 = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
 

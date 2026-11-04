@@ -47,6 +47,30 @@ async def test_roster_is_kept_per_world_and_rewritten_by_changes(db_path: Path) 
         await db.close()
 
 
+async def test_move_world_carries_roster_once_and_never_mixes(db_path: Path) -> None:
+    """旧编号名下的名册整份搬到世界编号名下；新编号名下已有名册就不搬；搬过一次再调不动。"""
+    db = SQLiteDatabase(db_path)
+    await db.initialize()
+    try:
+        repo = db.game_creatures
+        named = _MAID.model_copy(update={"nickname": "阿缕"})
+        await repo.save_creatures(game="minecraft", world_key="old-hash", creatures=[named])
+        await repo.save_creatures(game="text_adv", world_key="old-hash", creatures=[_MAID])
+
+        assert await repo.move_world(game="minecraft", from_key="old-hash", to_key="new-id") == 1
+        assert await repo.list_creatures(game="minecraft", world_key="new-id") == [named]
+        assert await repo.list_creatures(game="minecraft", world_key="old-hash") == []
+        assert len(await repo.list_creatures(game="text_adv", world_key="old-hash")) == 1  # 别的游戏不动
+        assert await repo.move_world(game="minecraft", from_key="old-hash", to_key="new-id") == 0
+
+        await repo.save_creatures(game="minecraft", world_key="other-old", creatures=[_MAID])
+        assert await repo.move_world(game="minecraft", from_key="other-old", to_key="new-id") == 0
+        assert await repo.list_creatures(game="minecraft", world_key="new-id") == [named]
+        assert await repo.move_world(game="minecraft", from_key="", to_key="new-id") == 0
+    finally:
+        await db.close()
+
+
 async def test_v21_database_gains_creature_table(db_path: Path) -> None:
     """旧库没有名册表：升级后表在、版本到最新、能读写；再开一次版本与数据都不变。"""
     db = SQLiteDatabase(db_path)

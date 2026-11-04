@@ -66,7 +66,7 @@ from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
 from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
 from src.agents.minecraft.wake_queue import WakeQueue, opens_task
-from src.agents.minecraft.world_identity import WorldChange, WorldIdentity
+from src.agents.minecraft.world_identity import WorldChange, WorldIdentity, world_ref_of
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.context import BackgroundCheckpoint, PrefixGuard, TransientImages, absorb_result_images
 from src.modules.llm.capabilities import ProfileVisualCapabilityLookup, validate_llm_capability
@@ -1415,7 +1415,7 @@ class MinecraftAgent(BaseAgent):
     async def _read_creatures(self, body: MaicraftReply) -> MaicraftReply:
         """读一次周围并更新名册，返回这次的场景。
 
-        顺序：按 observe(self) 认出所在的世界（换了世界先换上那个世界的名册）→ 读 observe(scene) →
+        顺序：按 observe(self) 认出所在的世界（认存档；换了世界先换上那个世界的名册）→ 读 observe(scene) →
         名册记下这次看到的 → 变化写回库。认不出世界时不更新名册：分不清这些生物属于哪个世界。
         """
         if body.ok:
@@ -1432,15 +1432,28 @@ class MinecraftAgent(BaseAgent):
     async def _bind_creature_world(self, body: MaicraftReply) -> None:
         """认出角色在哪个世界：刚启动或换了世界，就先把旧世界的名册写回，再读回这个世界的。
 
-        世界编号是 observe(self) 的 ``world_key``；旧版 Mod 不报时按空串，各世界共用一份。
-        读不到自己时不换。读库失败从空名册开始（只会少认出几只，不会改坏库里的记录）。
+        世界编号取 observe(self) 的 ``world.id``（与认存档同一口径）。第一次按这个编号读名册前，
+        如果 Mod 说这个世界的数据在旧版本里存在另一个编号名下（``world_key`` 与 ``world.id`` 不同），
+        先把那个编号名下的名册搬过来（新编号名下已有名册就不搬）。``world`` 为 null（还没认出）
+        时不换：分不清这些生物属于哪个世界。旧版 Mod 不报 ``world``：照旧按 ``world_key`` 分，
+        也不报时按空串、各世界共用一份。读不到自己时不换。读库失败从空名册开始（只会少认出
+        几只，不会改坏库里的记录）。
         """
         if not body.ok:
             return
-        world_key = str(body.data.get("world_key") or "")
+        legacy_key = str(body.data.get("world_key") or "")
+        if "world" in body.data:
+            ref = world_ref_of(body.data.get("world"))
+            if ref is None:
+                return
+            world_key = ref.id
+        else:
+            world_key = legacy_key
         if world_key == self._creatures.world_key:
             return
         await self._save_creatures()
+        if world_key != legacy_key:
+            await self._adopt_old_creatures(legacy_key, world_key)
         records: List[Any] = []
         if self._creature_repo is not None:
             try:
@@ -1449,6 +1462,18 @@ class MinecraftAgent(BaseAgent):
                 self._logger.warning(f"读生物名册失败（世界 {world_key or '未报编号'}），从空名册开始", exc=exc)
         self._creatures.load(world_key, [creature_from_record(record) for record in records])
         self._logger.info(f"生物名册换到世界 {world_key or '未报编号'}：读回 {len(records)} 只")
+
+    async def _adopt_old_creatures(self, legacy_key: str, world_key: str) -> None:
+        """旧版本按另一个编号存的这个世界的名册，搬到世界编号名下；搬不动只记日志，从现有记录读。"""
+        if self._creature_repo is None or not legacy_key:
+            return
+        try:
+            moved = await self._creature_repo.move_world(game=_GAME, from_key=legacy_key, to_key=world_key)
+        except Exception as exc:  # noqa: BLE001 - 搬不动不影响看一眼，旧行留在原处下次再搬
+            self._logger.warning(f"生物名册从旧编号搬到世界编号失败（{legacy_key} → {world_key}）", exc=exc)
+            return
+        if moved:
+            self._logger.info(f"生物名册从旧编号搬到世界编号：{moved} 只（{legacy_key} → {world_key}）")
 
     async def _save_creatures(self) -> None:
         """把名册上次写回之后的变化写进库；没装存储或还没认出世界时只留在内存里。"""
