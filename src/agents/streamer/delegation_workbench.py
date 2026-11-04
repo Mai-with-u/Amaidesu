@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple
 
 from src.agents.streamer.planner_render import (
     Delegation,
@@ -33,6 +33,7 @@ from src.agents.streamer.planner_render import (
 from src.agents.streamer.scene_card import GoalLine
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
+from src.modules.tools.tasks import IN_PROGRESS_TASK_STATES
 from src.modules.utils.time_utils import now_ms
 
 __all__ = ["DelegationWorkbench", "observation_data"]
@@ -149,6 +150,23 @@ class DelegationWorkbench:
         """决策窗入口：清空本窗回执（委派/递话/打算是跨窗记忆，不清）。"""
         self._round_receipts = []
 
+    def reset(self) -> None:
+        """开播清场：已了结的委派连同补充过的要求清掉，已聊话题与本窗回执全部清空。
+
+        这几样大多只在一场之内有意义：上一场正常下播时游戏侧已经把委派结算掉，新场次的对话
+        历史也从空白开始。留着它们，新的一场开头她会看到"两小时前在游戏里开始做某事"、把上一场
+        聊过的话题当成刚聊过。例外是任务账本上还在做（含停着等定夺）的委派——开播前调试时派的、
+        上一场没走下播留下的，游戏那边可能还在做；清掉它她不知道手上有事，再派新的会被拒，
+        开场先碰一次壁。原地删改而不是换新容器：渲染层持有的是活引用。
+        """
+        kept = {agent for agent, delegation in self._delegations.items() if self._in_flight(delegation)}
+        for agent in sorted(kept):
+            self.logger.info(f"开播时 {agent} 手上的委派账面还在做，保留：{self._delegations[agent].instruction}")
+        touched = set(self._delegations) | {relay.agent for relay in self._recent_relays} | set(self._last_relay_ms)
+        self._drop(touched - kept)
+        self._recent_intents.clear()
+        self._round_receipts = []
+
     def note_receipt(self, name: str, data: Dict[str, Any]) -> None:
         """记一条本窗工具回执（通用调用路径的成功结果由 Planner 送来）。"""
         self._round_receipts.append((name, data))
@@ -170,6 +188,27 @@ class DelegationWorkbench:
     def current_goals(self) -> List[GoalLine]:
         """手上的事（嘴的现场卡用）：每个游戏最近一次开始做的事、原话（已脱敏）与进展。"""
         return goal_lines(self._delegations)
+
+    def _in_flight(self, delegation: Delegation) -> bool:
+        """任务账本上这件委派是否还在做（受理、在跑、停着等定夺）；没装账本、查不到或已结算都不算。"""
+        if self._delegation_status_provider is None or not delegation.task_id:
+            return False
+        record = self._delegation_status_provider(delegation.task_id)
+        return record is not None and record.get("status") in IN_PROGRESS_TASK_STATES
+
+    def _drop(self, agents: Set[str]) -> None:
+        """清掉这些执行者手上的委派、补充过的要求与"最近一次答复时刻"（原地删改，渲染层持有活引用）。
+
+        三样随委派一起留或清：留下的委派还在等我拿主意时，"这次求助之后答复过没有"照旧按原来的
+        答复时刻判，开播或换存档不会让闸门对同一次求助重新放行，也不会把没答复的算成答复过。
+        """
+        for agent in agents:
+            self._delegations.pop(agent, None)
+            self._last_relay_ms.pop(agent, None)
+        relays = [relay for relay in self._recent_relays if relay.agent not in agents]
+        if len(relays) != len(self._recent_relays):
+            self._recent_relays.clear()
+            self._recent_relays.extend(relays)
 
     # ==================== 拦截受理 ====================
 

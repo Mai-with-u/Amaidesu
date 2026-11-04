@@ -15,7 +15,7 @@ import pytest
 
 from src.agents.streamer import canonical
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
-from src.agents.streamer.planner_render import Delegation, render_delegations
+from src.agents.streamer.planner_render import Delegation, Intent, Relay, render_delegations
 from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider, build_reply_tool_spec
@@ -28,6 +28,7 @@ from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
+from src.modules.tools.tasks import TaskLedger
 from src.modules.utils.time_utils import now_ms
 from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
 
@@ -94,6 +95,59 @@ async def test_unopened_session_keeps_memory_turns_until_live_starts() -> None:
     started = LiveStartedPayload(live_session_id=1, source="manual", started_at_ms=1)
     await agent._on_live_started("live.started", started, "test")
     assert await _history(agent) == [], "开播清场：调试注入的未落库轮不再进历史"
+
+
+async def test_live_start_keeps_delegations_the_ledger_still_runs() -> None:
+    """开播前调试派的、上一场没走下播留下的委派，账面还在做（含等定夺）就留着连同补充要求；
+    已结算、查不到的清掉。已聊话题照旧清空。"""
+    ledger = TaskLedger()
+    ledger.register(
+        task_id="d1", provider="minecraft", tool="delegate", initiator="streamer", executor="minecraft", source="agent"
+    )
+    ledger.register(
+        task_id="d2",
+        provider="text_adv",
+        tool="delegate",
+        initiator="streamer",
+        executor="text_adv",
+        status="waiting_for_decision",
+        source="agent",
+    )
+    agent = make_streamer_agent(task_ledger=ledger, round_executor=FakeRoundExecutor({"speech": "好"}))
+    workbench = agent._planner.workbench
+    workbench.delegations["minecraft"] = Delegation(agent="minecraft", instruction="把屋顶封上", task_id="d1", at_ms=1)
+    workbench.delegations["text_adv"] = Delegation(agent="text_adv", instruction="去塔顶", task_id="d2", at_ms=1)
+    workbench.delegations["game_2048"] = Delegation(agent="game_2048", instruction="合到 512", task_id="d3", at_ms=1)
+    workbench.recent_relays.append(Relay(at_ms=1, agent="minecraft", content="先补屋顶"))
+    workbench.recent_relays.append(Relay(at_ms=1, agent="game_2048", content="往左合"))
+    workbench.note_intent(Intent(at_ms=1, topic_summary="屋顶漏风", reply_guidance=""))
+
+    started = LiveStartedPayload(live_session_id=1, source="manual", started_at_ms=1)
+    await agent._on_live_started("live.started", started, "test")
+
+    assert set(workbench.delegations) == {"minecraft", "text_adv"}
+    assert [relay.agent for relay in workbench.recent_relays] == ["minecraft"]
+    assert list(workbench.recent_intents) == []
+
+
+async def test_live_start_clears_previous_session_workbench() -> None:
+    """上一场留下的手头的事、补充要求与已聊话题，新一场开播即清空，不当成刚发生的事。"""
+    agent = _agent([], None, "好")
+    workbench = agent._planner.workbench
+    workbench.delegations["minecraft"] = Delegation(
+        agent="minecraft", instruction="把屋顶封上", task_id="deleg_1", at_ms=1, report_kind="escalation"
+    )
+    workbench.note_intent(Intent(at_ms=1, topic_summary="屋顶漏风", reply_guidance=""))
+    workbench.recent_relays.append(Relay(at_ms=1, agent="minecraft", content="先补屋顶"))
+    workbench.note_receipt("minecraft_glance", {"body": {}})
+
+    started = LiveStartedPayload(live_session_id=1, source="manual", started_at_ms=1)
+    await agent._on_live_started("live.started", started, "test")
+
+    assert workbench.delegations == {}
+    assert list(workbench.recent_intents) == []
+    assert list(workbench.recent_relays) == []
+    assert workbench.round_receipts == []
 
 
 async def test_open_session_merges_only_unpersisted_turns_by_time() -> None:

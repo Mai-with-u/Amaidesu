@@ -929,6 +929,9 @@ class StreamerAgent(BaseAgent):
             self._logger.debug(f"开播起算流程单跳过（{reject.reason}）：流程单已在进行中")
         # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
         await self._scope.begin_session()
+        # 手头的事、补充要求、已聊话题只属于上一场：开播清空，新的一场不从"两小时前在游戏里
+        # 开始做某事"接着说（上一场下播时游戏侧已结算委派）
+        self._planner.workbench.reset()
         # 按场次类型先拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗按表快照重渲。
         # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策窗自然重渲出
         # 新简报，这期间简报退化为更早一场的档案

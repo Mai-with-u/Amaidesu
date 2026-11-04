@@ -10,6 +10,8 @@ import json
 from typing import Any, Callable, Dict, List, Optional, Set
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from src.agents.minecraft.state import MinecraftInstruction
 from src.agents.streamer.delegation_workbench import DelegationWorkbench
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
@@ -173,6 +175,52 @@ async def test_answer_is_remembered_after_other_relays_push_it_out() -> None:
     assert [relay.agent for relay in workbench.recent_relays] == ["other_game"]
 
     assert workbench.awaits_decision("minecraft") is False, "答复过的求助不能因为记录被挤掉又算成没答复"
+
+
+# 账面还在做的三种状态，与等主意闸门对没有新输入的补充要求是否放行：只有等定夺且没答复过才放行
+_IN_FLIGHT_GATES = [("accepted", False), ("running", False), ("waiting_for_decision", True)]
+
+
+def _ledger_workbench(statuses: Dict[str, Dict[str, Any]], invoked: List[ToolInvocation]) -> DelegationWorkbench:
+    """装了任务账本（``statuses`` 按任务号给账面）的工作台，记下真正递到游戏侧的调用。"""
+
+    async def _invoke(invocation: ToolInvocation) -> ToolExecutionResult:
+        invoked.append(invocation)
+        agent = invocation.arguments["agent"]
+        if invocation.tool_name == "framework_delegate":
+            data: Dict[str, Any] = {"accepted": True, "task_id": f"deleg_{agent}", "executor": agent}
+        else:
+            data = {"delivered": True, "executor": agent}
+        return ToolExecutionResult(tool_name=invocation.tool_name, success=True, structured_content=data)
+
+    registry = MagicMock()
+    registry.invoke = AsyncMock(side_effect=_invoke)
+    return DelegationWorkbench(registry, intents_max=4, relays_max=4, delegation_status_provider=statuses.get)
+
+
+async def _relay_without_input(workbench: DelegationWorkbench, invoked: List[ToolInvocation]) -> List[str]:
+    """没有新输入的窗里给 minecraft 补一句，返回真正递到游戏侧的调用名。"""
+    invoked.clear()
+    await workbench.handle(
+        "framework_prompt", {"agent": "minecraft", "content": "收手，用魂符放新女仆"}, relay_without_input=True
+    )
+    return [call.tool_name for call in invoked]
+
+
+@pytest.mark.parametrize(("status", "opens"), _IN_FLIGHT_GATES)
+async def test_delegation_kept_at_live_start_keeps_its_decision_gate(status: str, opens: bool) -> None:
+    """开播清场留下的委派（账面还在做），等主意闸门和清场前一样：停着等定夺、还没答复过就放行补充要求，
+    受理、在跑时照常拦。"""
+    statuses = {"deleg_minecraft": {"status": status, "updated_at_ms": 1}}
+    invoked: List[ToolInvocation] = []
+    workbench = _ledger_workbench(statuses, invoked)
+    await workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "把女仆救回来"})
+
+    workbench.reset()
+
+    assert "minecraft" in workbench.delegations
+    assert workbench.awaits_decision("minecraft") is opens
+    assert await _relay_without_input(workbench, invoked) == (["framework_prompt"] if opens else [])
 
 
 def _speaking_planner(
