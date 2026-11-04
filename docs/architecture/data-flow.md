@@ -113,11 +113,11 @@ subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
 
 ### ③ 发现平面（受限放行，允许上行）
 
-"能做什么"这类只读、静态的能力/发现元数据**允许**从工具层上行到 Agent（用于动作选择），但必须满足全部以下条件：
+"能做什么"这类只读、静态或慢变的能力/发现元数据**允许**从工具层上行到 Agent（用于动作选择）。慢变指只随人在游戏里的操作慢慢变、读它不触发任何行为的状态，例如游戏眼下所在的存档（`ToolRegistry.current_saves()`，见 [游戏里的记忆按存档分开](../decisions/069-game-memory-per-save.md)）。必须满足全部以下条件：
 
 - **只读**：Agent 只查询，不写、不触发工具行为。
 - **拉取式（pull）**：由 Agent 主动查询，不是工具推送/广播事件给 Agent。推送会落回 ① 的禁区。
-- **经只读抽象**：通过只读 Protocol 或 `ToolRegistry.list_tools()` / `to_llm_definitions()`，Agent 不 import 工具实现。
+- **经只读抽象**：通过只读 Protocol 或 `ToolRegistry.list_tools()` / `to_llm_definitions()` / `current_saves()`，Agent 不 import 工具实现。
 - **组合根接线**：具体实现只在 `main.py` 注入，组合根允许认识所有层。
 
 **① 和 ③ 的一句话区分**：

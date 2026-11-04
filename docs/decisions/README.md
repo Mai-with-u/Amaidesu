@@ -87,3 +87,4 @@ ADR 编号按创建时间递增，不因条目删除而重排——001~004 因�
 - [ADR-066：记忆注入切到账本（常驻简报 + 线索推送 + memory_recall / 旧三份记忆停写并退出提示词）](066-memory-injection-switch.md)
 - [ADR-067：清掉旧记忆的存储面（删三处旧结构 / 把库文件旁的旧笔记目录移进迁移备份 / 复盘页可按句删除）](067-irreversible-memory-cleanup.md)
 - [ADR-068：观众数据可自行删除与保留期（忘了我命令 / 宽限删除 / 不记录名单 / 保留期默认不删）](068-memory-privacy-retention-and-forget.md)
+- [ADR-069：游戏里的记忆按存档分开（细化 ADR-066 的挂游戏口径：游戏 Agent 报眼下的存档 / 整理时按台词时刻记下存档 / 别的存档里的事不催、不当成眼前的事）](069-game-memory-per-save.md)
