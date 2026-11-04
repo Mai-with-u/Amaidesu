@@ -1,7 +1,7 @@
 """目标账本直测：三簿记账与目标↔任务账/委派账联动，不建 Agent、不连游戏。
 
 覆盖：受理登记（内存簿 + 任务账）、暂停簿进出、可行动目标查询、终态收账
-（含批级委派共享结算与状态粘滞）、查不到目标的失败收账、停滞标记、
+（含批级委派写游戏侧进展备注、不写终态）、查不到目标的失败收账、停滞标记、
 结束/暂停通知文案。
 """
 
@@ -23,6 +23,9 @@ class _FakeLedger:
 
     def update(self, task_id: str, status: str, **kwargs: Any) -> None:
         self.updates.append({"task_id": task_id, "status": status, **kwargs})
+        record = self.records.get(task_id)
+        if record is not None and kwargs.get("snapshot") is not None:
+            record.snapshot = dict(kwargs["snapshot"])
 
     def get(self, task_id: str) -> Optional[Any]:
         return self.records.get(task_id)
@@ -66,9 +69,9 @@ def test_paused_book_and_actionable_query() -> None:
     assert ledger.actionable_goal_ids() == [2]
 
 
-def test_settle_finished_closes_books_and_settles_batch() -> None:
+def test_settle_finished_notes_batch_delegations_without_settling() -> None:
     book = _FakeLedger()
-    book.records["deleg-9"] = MagicMock(snapshot={})
+    book.records["deleg-9"] = MagicMock(status="running", snapshot={})
     tracker = _tracker(book)
     ledger = GoalLedger(task_tracker=tracker, agent_name="minecraft", finished_ids=lambda: ("deleg-9", "deleg-gone"))
     ledger.track(_run(state="running"))
@@ -81,8 +84,29 @@ def test_settle_finished_closes_books_and_settles_batch() -> None:
     assert ledger.recent_finished()[-1]["status"] == "done"
     statuses = {u["task_id"]: u["status"] for u in book.updates}
     assert statuses["maicraft-goal-1"] == "succeeded"
-    # 批内委派共享终态；已不在册的委派（LLM 交付先写过终态）状态粘滞不回退
-    assert statuses["deleg-9"] == "succeeded"
+    # 目标终态不给委派写终态：委派还在途，只在快照记一条游戏侧进展
+    assert "deleg-9" not in statuses or statuses["deleg-9"] == "running"
+    deleg_updates = [u for u in book.updates if u["task_id"] == "deleg-9"]
+    assert deleg_updates, "批内委派应有游戏侧进展备注"
+    assert all(u["status"] == "running" for u in deleg_updates)
+    assert deleg_updates[-1]["snapshot"]["game_progress_notes"] == ["游戏目标 1（maicraft:gather）done：砍了 5 块原木"]
+
+
+def test_batch_progress_notes_skip_removed_delegations_and_cap_history() -> None:
+    book = _FakeLedger()
+    book.records["deleg-1"] = MagicMock(status="running", snapshot={})
+    tracker = _tracker(book)
+    ledger = GoalLedger(task_tracker=tracker, agent_name="minecraft", finished_ids=lambda: ("deleg-1", "deleg-gone"))
+
+    for goal_id in range(1, 8):
+        finished = _run(goal_id=goal_id, state="finished", result={"status": "done", "summary": f"第 {goal_id} 步"})
+        ledger.settle_finished(finished)
+
+    updates = [u for u in book.updates if u["task_id"] == "deleg-1"]
+    # 只留最近几条备注，快照不随目标数无限膨胀
+    assert updates[-1]["snapshot"]["game_progress_notes"] == [
+        f"游戏目标 {goal_id}（maicraft:gather）done：第 {goal_id} 步" for goal_id in range(3, 8)
+    ]
 
 
 def test_mark_gone_records_failure_and_returns_last_note() -> None:

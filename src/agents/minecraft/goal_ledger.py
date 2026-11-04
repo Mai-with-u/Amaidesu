@@ -7,11 +7,12 @@
 - 最近结束的目标（新任务开始时清空，恢复与集中整理带上看）。
 
 任务账与批级委派账联动：经注入的 ``task_tracker`` 写框架侧账本（受理登记 /
-进度 / 终态 / 停滞标记），目标到终态时本批吸收的委派共享结算（干巴机器摘要
-先到账保底，LLM 交付语后到按终态粘滞写不动）。``task_tracker`` 缺省 None =
-只记内存簿，不写框架账（无任务基建的装配降级）。批级委派的任务号清单经构造
-注入的 ``finished_ids`` 供给现取（即 :class:`DelegationBook.finished_ids`）：
-批的生命周期归 Agent，账本只读快照、不持它。
+进度 / 终态 / 停滞标记），目标到终态时给本批吸收的委派写一条游戏侧进展备注
+（快照 ``game_progress_notes``，状态不动——委派终态只由交付上报 / 撤单 /
+下播兜底写）``task_tracker`` 缺省 None = 只记内存簿，不写框架账（无任务基建
+的装配降级）。批级委派的任务号清单经构造注入的 ``finished_ids`` 供给现取
+（即 :class:`DelegationBook.finished_ids`）：批的生命周期归 Agent，账本只读
+快照、不持它。
 
 通知路由（结束/暂停/提问时唤醒哪个队列）留在 Agent；本模块只出文案：
 ``finish_notice`` / ``pause_notice`` 是纯函数，暂停通知里"暂停前急事"的
@@ -39,6 +40,9 @@ _RECENT_FINISHED_GOALS = 6
 
 # 暂停前急事的保鲜期：超过这个时长才到的暂停通知不再拿它解释暂停原因
 _URGENT_BEFORE_PAUSE_S = 60.0
+
+# 委派快照里游戏侧进展备注的保留条数：只留最近的，快照不随目标数无限膨胀
+_GAME_PROGRESS_NOTES_MAX = 5
 
 # Mod 写的这种"目标 X 已暂停（第 N 步）"不算暂停原因（宿主自己发的例行通知）
 _BARE_PAUSE_DOING = re.compile(r"目标 \S+ 已暂停（第 \d+ 步）")
@@ -187,7 +191,7 @@ class GoalLedger:
         ledger = self._framework_ledger()
         if ledger is not None:
             ledger.update(ledger_task_id(goal_id), "failed", summary=reason)
-        self._settle_batch("failed", f"游戏目标 {goal_id} 不在了：{reason}")
+        self._note_batch_progress(f"游戏目标 {goal_id} 不在了：{reason}")
         return note
 
     def actionable_goal_ids(self) -> List[int]:
@@ -241,14 +245,14 @@ class GoalLedger:
         self.update_task_ledger(run)
 
     def update_task_ledger(self, run: GoalRun, summary: str = "") -> None:
-        """目标进度/终态写任务账；终态时本批吸收的委派共享结算。"""
+        """目标进度/终态写任务账；终态时给本批吸收的委派写游戏侧进展备注。"""
         ledger = self._framework_ledger()
         if ledger is None:
             return
         status = ledger_status_of(run)
         ledger.update(ledger_task_id(run.goal_id), status, snapshot=run.data, summary=summary or run.summary)
         if status in TERMINAL_TASK_STATES:
-            self._settle_batch(status, _dry_goal_summary(run))
+            self._note_batch_progress(_dry_goal_summary(run))
 
     def note_stalled(self, run: GoalRun) -> None:
         """Mod 报告目标停着没动静的账面中间态：快照带停滞标记，本批委派账同步打标。"""
@@ -265,27 +269,34 @@ class GoalLedger:
     def _framework_ledger(self) -> Optional[Any]:
         return getattr(self._task_tracker, "ledger", None)
 
-    def _settle_batch(self, status: str, summary: str) -> None:
-        """批级关联：本批吸收的委派共享批内目标的终态，干巴机器摘要先到账保底。
+    def _note_batch_progress(self, summary: str) -> None:
+        """批级关联：批内目标收尾一步，给本批吸收的委派写一条游戏侧进展备注。
 
-        任务号经构造注入的 ``finished_ids`` 供给现取。LLM 的交付/升级后到时
-        按终态粘滞改不动状态（条目已移除，重复写入无效），它的话术经
-        game.report 走主播侧；这里保证的是"LLM 一句没说也有回音"。
-        粗糙性已知并接受：一批委派共享批内目标终态，批中途某个目标先失败就先写失败。
+        备注落在委派快照的 ``game_progress_notes``（保留最近若干条），委派
+        状态不动：一个委派的活常拆成多个游戏目标，某个目标终态不代表委派
+        整体干完，提前写终态会让主播读成"做完了"而在途门放行重派。委派
+        终态只由交付上报、撤单、下播兜底写。任务号经构造注入的
+        ``finished_ids`` 供给现取；条目不在册（已被终态移除）的跳过。
         """
         ledger = self._framework_ledger()
         if ledger is None:
             return
         for task_id in self._finished_ids():
-            if ledger.get(task_id) is None:
-                # 已被早到的目标终态或 LLM 交付写过终态：状态粘滞，不回退
+            record = ledger.get(task_id)
+            if record is None:
                 continue
-            ledger.update(task_id, status, summary=summary)
+            notes = list(record.snapshot.get("game_progress_notes") or [])
+            notes.append(summary)
+            ledger.update(
+                task_id,
+                record.status,
+                snapshot={**record.snapshot, "game_progress_notes": notes[-_GAME_PROGRESS_NOTES_MAX:]},
+            )
 
     def _flag_batch_stalled(self, goal_id: int, ability: str) -> None:
         """STALLED 打进本批委派账的快照（中间态）：主播侧渲染看得到"停着没动静"。
 
-        目标随后结束（或恢复有动静）时分别由终态直写与常规进度写入覆盖掉这份标记。
+        目标随后恢复有动静时由常规进度写入覆盖掉这份标记。
         """
         ledger = self._framework_ledger()
         if ledger is None:

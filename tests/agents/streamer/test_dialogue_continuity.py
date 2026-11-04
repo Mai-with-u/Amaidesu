@@ -712,7 +712,7 @@ def test_delegation_rendering_merges_machine_status_and_stall_age() -> None:
         provider = (lambda task_id: record) if bind else None
         return render_delegations(delegations, provider, now)
 
-    # 账本已终态移除（目标终态直写后、交付语未到）：保底说已了结
+    # 账本已终态移除（撤单或下播结算后、交付语未到）：保底说已了结
     assert "账面上已了结" in render(None)
 
     # 账本在途、刚刷新：普通"还在做"
@@ -726,6 +726,16 @@ def test_delegation_rendering_merges_machine_status_and_stall_age() -> None:
         {"status": "running", "updated_at_ms": now - 30_000, "snapshot": {"stalled_goals": {"1": "maicraft:gather"}}}
     )
     assert "停着没动静" in stalled and "maicraft:gather" in stalled
+
+    # 游戏侧进展备注（批内某目标收尾一步）：委派还在途，只说有一步收尾
+    noted = render(
+        {
+            "status": "running",
+            "updated_at_ms": now - 30_000,
+            "snapshot": {"game_progress_notes": ["游戏目标 41（maicraft:design）done：读了小屋成层图"]},
+        }
+    )
+    assert "还在做，游戏那边有一步收尾了" in noted and "读了小屋成层图" in noted
 
     # 账本等定夺：渲染停着等主意
     assert "停着等我和观众拿主意" in render(

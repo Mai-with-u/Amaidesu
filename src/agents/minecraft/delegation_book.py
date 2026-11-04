@@ -11,9 +11,10 @@
 批结束时账面必须已登记——未走过 ``absorb`` → ``mark_running`` 的任务号
 写终态会落空（框架账本不认识它），这是撤单与终态结算的正确性前提。
 
-``finished_ids`` 只读视图供目标账本联动结算：目标到终态时本批吸收的
-委派共享结算（见 ``GoalLedger._settle_batch``）。消息队列与停手通知的
-注入留在 Agent——那是消息路由的事，账只管账。
+``finished_ids`` 只读视图供目标账本联动写进展备注：批内目标收尾一步时，
+本批吸收的委派在快照里记一条游戏侧进展（状态不动，见
+``GoalLedger._note_batch_progress``）。消息队列与停手通知的注入留在
+Agent——那是消息路由的事，账只管账。
 """
 
 from __future__ import annotations

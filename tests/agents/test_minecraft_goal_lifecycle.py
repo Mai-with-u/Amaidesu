@@ -325,8 +325,8 @@ async def test_tracker_fallback_verification_uses_the_goal_query_adapter() -> No
     assert "maicraft-goal-1" not in ledger, "周期兜底核实出终态，条目移除"
 
 
-async def test_a_failed_goal_settles_the_batch_delegations_with_a_dry_summary() -> None:
-    """批级关联：批内目标终态直写本批委派账（干巴保底），LLM 后到的交付改不动状态。"""
+async def test_a_failed_goal_notes_the_batch_delegations_without_settling() -> None:
+    """批级关联：批内目标终态只给本批委派写游戏侧进展备注（状态不动），交付上报才结账。"""
     server = FakeMaicraft()
     ledger = TaskLedger()
     ledger_bus = SimpleNamespace(emit=AsyncMock())
@@ -334,8 +334,15 @@ async def test_a_failed_goal_settles_the_batch_delegations_with_a_dry_summary() 
     tracker = TaskTracker(ToolRegistry(), ledger)
 
     def script(messages: List[Dict[str, Any]]) -> Response:
-        if "目标 1" in _texts(messages) or "结束了" in _texts(messages):
-            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "没做成，坑壁有缺口"})])
+        text = _texts(messages)
+        if "你在整理 Minecraft 玩家已经发生的任务历史" in text:
+            return _resp("已挖坑壁附近的矿，一个目标失败一个在跑。")
+        # 只看最后一条消息判断本轮意图：历史里早有"结束了"，全量计数会误判
+        last = str(messages[-1].get("content") or "")
+        if "结束了" in last and "目标 2" in text:
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "都收尾了"})])
+        if "结束了" in last:
+            return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
             return _resp(calls=[_call("minecraft_wait", {"reason": "等"})])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
@@ -355,19 +362,24 @@ async def test_a_failed_goal_settles_the_batch_delegations_with_a_dry_summary() 
     await _wait_until(lambda: ledger.get("d-1") is not None and ledger.get("d-1").status == "running")
 
     server.finish(1, status="failed", summary="坑壁有缺口，够不着")
-    await _wait_until(lambda: "maicraft-goal-1" not in ledger)
-    await _wait_until(lambda: ledger.get("d-1") is None)
+    await _wait_until(lambda: "maicraft-goal-2" in ledger, timeout=15.0)
+    await _wait_until(
+        lambda: ledger.get("d-1") is not None and bool((ledger.get("d-1").snapshot or {}).get("game_progress_notes"))
+    )
+    # 目标终态不结账：委派还在途，快照带游戏侧进展备注
+    record = ledger.get("d-1")
+    assert record is not None and record.status == "running"
+    assert any("游戏目标 1（maicraft:gather）failed" in note for note in record.snapshot["game_progress_notes"])
 
+    # LLM 的交付上报是四条终态路径之一：此时才结账 succeeded
+    server.finish(2, status="done", summary="补挖完成")
+    await _wait_until(lambda: ledger.get("d-1") is None, timeout=15.0)
     changed = [
         call.args[1]
         for call in ledger_bus.emit.await_args_list
         if call.args and getattr(call.args[1], "task_id", "") == "d-1"
     ]
-    assert changed and changed[0].status == "failed"
-    assert "坑壁有缺口" in changed[0].summary, "保底摘要是干巴但真实的机器摘要"
-
-    agent._delegations.finish("succeeded", summary="delivery: 没做成，坑壁有缺口")
-    assert ledger.get("d-1") is None, "终态粘滞：LLM 后到的交付不复活也不回退账面状态"
+    assert changed and changed[-1].status == "succeeded"
     await agent.stop()
 
 
