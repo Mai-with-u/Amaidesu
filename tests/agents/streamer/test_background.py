@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,16 +21,28 @@ from src.modules.storage.models.chat import LiveChatMessage, SuperChatRecord
 from src.agents.streamer.config import StreamerBackgroundConfig
 
 
-def _make_maintainer(*, llm_response: str = "", llm_success: bool = True) -> tuple[BackgroundMaintainer, MagicMock]:
-    """构造带 mock LLM / mock 仓储的 BackgroundMaintainer（摘要链路全通）。"""
+def _make_maintainer(
+    *,
+    llm_response: str = "观众在聊考试",
+    llm_success: bool = True,
+    danmaku_texts: Optional[List[str]] = None,
+    sc_messages: Optional[List[str]] = None,
+) -> tuple[BackgroundMaintainer, MagicMock]:
+    """构造带 mock LLM / mock 仓储的 BackgroundMaintainer（摘要链路全通）。
+
+    弹幕与 SC 内容可自定义；默认 2 条弹幕 + 1 条 SC（合计 3 条，满足
+    摘要的最少观众发言下限）。
+    """
     room_state = MagicMock()
     rs_snap = MagicMock()
     rs_snap.heat = "low"
     rs_snap.topics = []
     room_state.get_snapshot = MagicMock(return_value=rs_snap)
+    room_state.last_message_ms = None
 
     llm = MagicMock()
     response = MagicMock()
+    response.ok = llm_success
     response.success = llm_success
     response.content = llm_response
     llm.generate = AsyncMock(return_value=response)
@@ -41,34 +55,38 @@ def _make_maintainer(*, llm_response: str = "", llm_success: bool = True) -> tup
 
     chat_repo = MagicMock()
     # 读面按真实契约模型返回（消费方取模型字段）
+    texts = danmaku_texts if danmaku_texts is not None else ["下周要考试了", "复习不过来了"]
     chat_repo.list_recent_live_chat = AsyncMock(
         return_value=[
             LiveChatMessage(
-                id=1,
+                id=i + 1,
                 live_session_id=1,
-                timestamp_ms=100,
+                timestamp_ms=100 + i,
                 sender_role="viewer",
                 message_type="danmaku",
-                message_id="m1",
-                sender_name="观众甲",
-                sender_id="u1",
+                message_id=f"m{i + 1}",
+                sender_name=f"观众{i}",
+                sender_id=f"u{i}",
                 platform="bilibili",
-                content="下周要考试了",
+                content=text,
             )
+            for i, text in enumerate(texts)
         ]
     )
+    sc_texts = sc_messages if sc_messages is not None else ["加油"]
     chat_repo.list_super_chats_since = AsyncMock(
         return_value=[
             SuperChatRecord(
-                id=1,
+                id=i + 1,
                 live_session_id=1,
-                timestamp_ms=200,
-                message_id="s1",
-                user_name="观众乙",
-                user_id="u2",
+                timestamp_ms=200 + i,
+                message_id=f"s{i + 1}",
+                user_name=f"观众乙{i}",
+                user_id=f"u{i}",
                 platform="bilibili",
-                message="加油",
+                message=text,
             )
+            for i, text in enumerate(sc_texts)
         ]
     )
 
@@ -130,3 +148,111 @@ class TestSummarizeTopic:
         await maintainer._summarize_topic(now_ms=10_000)
         maintainer._room_state.set_topic_summary.assert_not_called()
         assert maintainer._last_summary_ms == 0
+
+
+class TestSummaryRetryBackoff:
+    """摘要失败退避：退避窗口内门控不放行，等待时长逐次翻倍封顶，成功后清零。"""
+
+    @pytest.mark.asyncio
+    async def test_failure_blocks_gate_until_retry_after(self) -> None:
+        """失败一次后，退避窗口内不投递任务；窗口过后恢复放行。"""
+        maintainer, _ = _make_maintainer(llm_success=False)
+        await maintainer._summarize_topic(now_ms=10_000)
+        assert maintainer._summary_retry_after_ms == 15_000
+
+        await maintainer._maybe_summarize(now_ms=14_999)
+        assert maintainer._compress_queue.empty()
+
+        await maintainer._maybe_summarize(now_ms=15_000)
+        assert maintainer._compress_queue.qsize() == 1
+
+    @pytest.mark.asyncio
+    async def test_backoff_doubles_and_caps(self) -> None:
+        """连续失败时退避按 5→10→20→40→80→120 秒翻倍，之后封顶 120 秒。"""
+        maintainer, _ = _make_maintainer(llm_success=False)
+        expected_waits = [5_000, 10_000, 20_000, 40_000, 80_000, 120_000, 120_000]
+        now_ms = 10_000
+        for wait in expected_waits:
+            await maintainer._summarize_topic(now_ms=now_ms)
+            assert maintainer._summary_retry_after_ms == now_ms + wait
+            now_ms = maintainer._summary_retry_after_ms
+
+    @pytest.mark.asyncio
+    async def test_success_resets_backoff(self) -> None:
+        """一次成功后退避时刻与等待时长都清零，下次失败重新从基础值起算。"""
+        maintainer, _ = _make_maintainer(llm_success=False)
+        await maintainer._summarize_topic(now_ms=10_000)
+        assert maintainer._summary_retry_backoff_ms == 10_000
+
+        maintainer2, _ = _make_maintainer(llm_success=True)
+        assert maintainer2._summary_retry_backoff_ms == 5_000
+        await maintainer2._summarize_topic(now_ms=10_000)
+        assert maintainer2._summary_retry_after_ms == 0
+        assert maintainer2._summary_retry_backoff_ms == 5_000
+        assert maintainer2._last_summary_ms == 10_000
+
+
+class TestSummaryQueueDedup:
+    """队列去重：已有待消费的摘要任务时，门控不重复入队。"""
+
+    @pytest.mark.asyncio
+    async def test_pending_task_prevents_duplicate_enqueue(self) -> None:
+        maintainer, _ = _make_maintainer(llm_response="观众在聊考试")
+        await maintainer._maybe_summarize(now_ms=10_000)
+        assert maintainer._compress_queue.qsize() == 1
+        assert maintainer._summary_pending is True
+
+        await maintainer._maybe_summarize(now_ms=50_000)
+        assert maintainer._compress_queue.qsize() == 1
+
+    @pytest.mark.asyncio
+    async def test_pending_cleared_after_consumption(self) -> None:
+        """任务被压缩 worker 消费完复位待办标记，门控可再次放行。"""
+        maintainer, _ = _make_maintainer(llm_response="观众在聊考试")
+        await maintainer._maybe_summarize(now_ms=10_000)
+        maintainer._running = True
+        loop_task = asyncio.create_task(maintainer._compress_loop())
+        try:
+            while maintainer._summary_pending:
+                await asyncio.sleep(0)
+        finally:
+            maintainer._running = False
+            loop_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await loop_task
+
+        assert maintainer._compress_queue.empty()
+        await maintainer._maybe_summarize(now_ms=50_000)
+        assert maintainer._compress_queue.qsize() == 1
+
+
+class TestSummaryMinMessages:
+    """观众发言太少不调模型：弹幕 + 付费留言合计不足 3 条时保留原摘要。"""
+
+    @pytest.mark.asyncio
+    async def test_too_few_messages_skips_llm_and_keeps_summary(self) -> None:
+        maintainer, llm = _make_maintainer(danmaku_texts=["第一条"], sc_messages=["好棒"])
+        await maintainer._summarize_topic(now_ms=10_000)
+        llm.generate.assert_not_called()
+        maintainer._room_state.set_topic_summary.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_minimum_reached_calls_llm(self) -> None:
+        """1 条弹幕 + 2 条 SC 合计 3 条，达到下限，正常调用。"""
+        maintainer, llm = _make_maintainer(
+            llm_response="观众在聊考试",
+            danmaku_texts=["第一条"],
+            sc_messages=["好棒", "再来一个"],
+        )
+        await maintainer._summarize_topic(now_ms=10_000)
+        llm.generate.assert_awaited_once()
+        maintainer._room_state.set_topic_summary.assert_called_with("观众在聊考试", now_ms=10_000)
+
+    @pytest.mark.asyncio
+    async def test_failure_backoff_not_armed_by_too_few_messages(self) -> None:
+        """发言不足是正常跳过而非失败：不进入退避，下轮窗口照常触发。"""
+        maintainer, _ = _make_maintainer(danmaku_texts=["仅有一条"], sc_messages=[])
+        await maintainer._summarize_topic(now_ms=10_000)
+        assert maintainer._summary_retry_after_ms == 0
+        await maintainer._maybe_summarize(now_ms=11_000)
+        assert maintainer._compress_queue.qsize() == 1

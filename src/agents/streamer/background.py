@@ -56,6 +56,16 @@ _SUMMARY_SYSTEM_TEMPLATE = "summary_system"
 # 话题摘要句长度上限（字符）：一句话总结，超出按截断处理
 _SUMMARY_MAX_CHARS = 80
 
+# 摘要失败重试退避：失败后从 5 秒起逐次翻倍、封顶 120 秒。
+# 防场景：服务端限流（429）期间门控每 tick 都放行，任务入队快于消费，
+# 积压满后限流解除一次性重复消化，写出成百行重复摘要。
+_SUMMARY_RETRY_BASE_MS = 5_000
+_SUMMARY_RETRY_MAX_MS = 120_000
+
+# 摘要最少观众发言条数（弹幕 + 付费留言合计）：发言太少不值得调模型，
+# 保留上一次摘要即可；完全没有弹幕走另一条清空路径（防自嗨）。
+_SUMMARY_MIN_MESSAGES = 3
+
 
 class BackgroundMaintainer:
     """主播 Agent 后台维护器（双任务模型：轻循环 + 压缩 worker）。
@@ -124,6 +134,12 @@ class BackgroundMaintainer:
         self._compress_task: Optional[asyncio.Task] = None
         self._running = False
         self._last_summary_ms: int = 0
+        # 摘要失败退避（独立于 _last_summary_ms：后者是"上次成功摘要时刻"，
+        # 用于计算摘要窗口起点，混入失败重试语义会污染窗口）
+        self._summary_retry_after_ms: int = 0
+        self._summary_retry_backoff_ms: int = _SUMMARY_RETRY_BASE_MS
+        # 摘要任务已排待办标记：入队置位、消费完复位；门控靠它跳过重复入队
+        self._summary_pending: bool = False
         self._compress_queue: asyncio.Queue = asyncio.Queue(maxsize=config.compressor.queue_max)
 
     # ------------------------------------------------------------------
@@ -231,6 +247,12 @@ class BackgroundMaintainer:
         """摘要门控：按热度频率投递摘要任务。"""
         if self._llm_service is None or self._chat_repo is None:
             return
+        # 失败退避窗口内不触发（避免限流期间每 tick 重复投递）
+        if now_ms < self._summary_retry_after_ms:
+            return
+        # 已有待消费的摘要任务时不重复入队（队列只有一个生产者与一个消费者）
+        if self._summary_pending:
+            return
         snap = self._room_state.get_snapshot(now_ms=now_ms)
         interval = self._interval_for_heat(snap.heat)
         if now_ms - self._last_summary_ms < interval:
@@ -245,6 +267,8 @@ class BackgroundMaintainer:
             self._compress_queue.put_nowait({"type": "summary", "now_ms": now_ms})
         except asyncio.QueueFull:
             self._logger.warning("压缩队列已满，丢弃本次摘要请求")
+        else:
+            self._summary_pending = True
 
     def _interval_for_heat(self, heat: str) -> int:
         """根据热度调整摘要频率（高热 → 半间隔）。"""
@@ -252,6 +276,12 @@ class BackgroundMaintainer:
         if heat == "high":
             return max(base // 2, 5_000)
         return base
+
+    def _arm_summary_retry(self, now_ms: int) -> None:
+        """摘要失败后设定下次允许尝试的时刻，等待时长逐次翻倍、封顶。"""
+        self._summary_retry_after_ms = now_ms + self._summary_retry_backoff_ms
+        self._summary_retry_backoff_ms = min(self._summary_retry_backoff_ms * 2, _SUMMARY_RETRY_MAX_MS)
+        self._logger.warning(f"话题摘要失败，{self._summary_retry_after_ms - now_ms} 毫秒后重试")
 
     # ------------------------------------------------------------------
     # 压缩 worker（asyncio.Queue 触发）
@@ -275,6 +305,9 @@ class BackgroundMaintainer:
                     await self._handle_compress_task(task)
                 except Exception as exc:
                     self._logger.exception(f"压缩 worker 处理失败: {exc}")
+                finally:
+                    # 任务已消费完毕（含处理异常路径），允许门控投递下一个摘要任务
+                    self._summary_pending = False
         except asyncio.CancelledError:
             raise
 
@@ -294,6 +327,9 @@ class BackgroundMaintainer:
 
         LLM 只输出摘要句本身；旧契约的 JSON 形态（``{"summary": …}``）与
         代码围栏在解析时容错剥掉。
+
+        失败路径（读取弹幕失败 / LLM 调用异常 / 返回失败）设定退避：门控在
+        退避窗口内不再投递，等待时长逐次翻倍封顶，一次成功后清零。
         """
         if self._llm_service is None or self._chat_repo is None or self._session_manager is None:
             return
@@ -309,6 +345,7 @@ class BackgroundMaintainer:
             )
         except Exception as exc:
             self._logger.warning(f"读取 live_chat 观众弹幕失败: {exc}")
+            self._arm_summary_retry(now_ms)
             return
 
         if not rows:
@@ -343,9 +380,12 @@ class BackgroundMaintainer:
                 canonical_content(role="user", nickname=nickname, text=text, message_id=str(sc.message_id or ""))
             )
 
-        history_text = "\n".join(lines)
-        if not history_text.strip():
+        # 观众发言太少不调模型（弹幕 + 付费留言合计）：保留上一次摘要不清空；
+        # 完全没有弹幕的清空路径在上面已处理
+        if len(lines) < _SUMMARY_MIN_MESSAGES:
             return
+
+        history_text = "\n".join(lines)
 
         prompt = f"以下是最近直播间消息（弹幕与醒目留言），请用一句话总结观众在聊什么：\n\n{history_text}"
         try:
@@ -356,15 +396,20 @@ class BackgroundMaintainer:
             )
         except Exception as exc:
             self._logger.warning(f"话题摘要 LLM 调用异常: {exc}")
+            self._arm_summary_retry(now_ms)
             return
 
         if not (response.ok and response.content):
             self._logger.warning("话题摘要 LLM 返回失败")
+            self._arm_summary_retry(now_ms)
             return
 
         summary = self._parse_summary(response.content)
         self._room_state.set_topic_summary(summary, now_ms=now_ms)
         self._last_summary_ms = now_ms
+        # 一次成功即清除退避：下次失败重新从基础等待时长起算
+        self._summary_retry_after_ms = 0
+        self._summary_retry_backoff_ms = _SUMMARY_RETRY_BASE_MS
         self._logger.debug(f"话题摘要已更新: {summary[:50]}")
         # 摘要落地 → 存储写入，失败降级不阻断记账
         await self._persist_topic_snapshot(summary, now_ms=now_ms, previous_summary_ms=previous_summary_ms)

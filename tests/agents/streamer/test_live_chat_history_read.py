@@ -161,7 +161,10 @@ async def test_topic_summary_reads_viewer_rows(store: SQLiteDatabase) -> None:
     prompt_manager = PromptManager(auto_scan_src=True)
     prompt_manager.load_all()
     maintainer, llm = _maintainer(store, prompt_manager=prompt_manager)
+    # 观众发言需达到最少 3 条（弹幕 + 付费留言合计）才会调模型
     await _chat(store, 100, "viewer", "新版本什么时候上线")
+    await _chat(store, 101, "viewer", "等好久了")
+    await _chat(store, 102, "viewer", "蹲一个日期")
 
     await maintainer._summarize_topic(now_ms=200_000)
     assert "新版本什么时候上线" in llm.generate.await_args.args[0]
