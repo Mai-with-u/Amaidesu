@@ -8,6 +8,7 @@
 - 私聊照常转出并标 private；空白消息不转，游标照样往后走
 - 服务器把玩家聊天当系统消息发来："<账号名> 正文"认成玩家发言，角色自己的回显不转；
   还不知道角色账号名时照系统消息转出
+- 没有发言人 UUID 的玩家消息：Mod 标了发言人此刻在线的不附说明，没标的和兜底认出来的附"没有发言人凭据"
 """
 
 from __future__ import annotations
@@ -74,6 +75,24 @@ def test_attribution_tells_machine_lines_from_people() -> None:
     marked = attribute_chat({"kind": "system", "text": "[name:...]", "shown_as": "Alex"})
     assert (marked.kind, marked.note) == ("system", NOTE_SHOWN_AS_SELF), "Mod 已改判的照它的标记说明"
     assert attribute_chat({"kind": "system", "text": "Alex 加入了游戏"}).note == ""
+
+
+def test_note_follows_whether_the_speaker_was_checked() -> None:
+    """附不附"没有发言人凭据"只看发言人核对过没有：有 UUID 或 Mod 标了此刻在线的不附，其余都附。"""
+    # 有发言人 UUID：照旧当已核对
+    signed = attribute_chat({"kind": "player", "sender": "Steve", "sender_id": _STEVE_ID, "text": "嗨"})
+    assert signed.note == ""
+    # 没签名的服务器转来的公屏聊天：Mod 对过在线玩家列表，按这个人说的话转出
+    checked = attribute_chat({"kind": "player", "sender": "Steve", "sender_online": True, "text": "不是我的"})
+    assert (checked.kind, checked.sender, checked.content, checked.note) == ("player", "Steve", "不是我的", "")
+    # 命令方块的 /say 只借了个名字；旧版 Mod 不给这个字段：都附说明
+    say = {"kind": "player", "sender": "Server", "sender_online": False, "text": "[Server] 十分钟后重启"}
+    assert attribute_chat(say).note == NOTE_UNVERIFIED
+    old_mod = attribute_chat({"kind": "player", "sender": "Steve", "text": "不是我的"})
+    assert old_mod.note == NOTE_UNVERIFIED
+    # 宿主从系统消息兜底认出来的：没对过在线玩家列表，固定附说明
+    fallback = attribute_chat({"kind": "system", "text": "<Steve> 不是我的"}, self_name="Alex")
+    assert (fallback.kind, fallback.sender, fallback.note) == ("player", "Steve", NOTE_UNVERIFIED)
 
 
 def test_chat_lines_sent_as_system_messages_are_attributed() -> None:
@@ -160,6 +179,15 @@ async def test_unsigned_line_is_forwarded_with_a_note() -> None:
     [(_, payload)] = bus.events
     assert payload.kind == "player" and payload.sender == "Alex"
     assert payload.content == '[name:"x"]' and "没有发言人凭据" in payload.note
+
+
+async def test_checked_line_is_forwarded_without_a_note() -> None:
+    collector, client, bus = await _primed()
+    line = {"cursor": 4, "kind": "player", "sender": "Steve", "sender_online": True, "text": "不是我的"}
+    client.pages.append(events_page([line], cursor=4))
+    await collector._drain()
+    [(_, payload)] = bus.events
+    assert (payload.kind, payload.sender, payload.content, payload.note) == ("player", "Steve", "不是我的", "")
 
 
 async def test_death_line_carries_who_died_and_its_template() -> None:

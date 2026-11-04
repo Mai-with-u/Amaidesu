@@ -7,16 +7,20 @@
 却没有发言人 UUID 的消息，Mod 改记成系统消息并在 ``shown_as`` 写出借的名字。这里按消息自带的事实附说明：
 
 - 系统消息带 ``shown_as``：不是任何人说的话，是模组借角色名义发的；
-- 没有发言人 UUID 的玩家消息：照记成玩家消息，但说明"没有发言人凭据，不一定是这个人说的"
-  （旧版 Mod 不做上一条判断时，借角色名字发的坐标也落在这里，至少不会被当成真发言）；
+- 没有发言人 UUID 的玩家消息：Mod 标了 ``sender_online``（发言人此刻就在在线玩家列表里，Mod 收到时核对过；
+  没签名的服务器转来的公屏聊天就是这样）的，按那个人说的话转出、不加说明；没标或标了 false 的（控制台、
+  命令方块的 /say 只借了个名字；旧版 Mod 不给这个字段）照记成玩家消息，但说明"没有发言人凭据，不一定是
+  这个人说的"。这句说明当初是为旧版 Mod 借角色名字发的女仆坐标写的；新版 Mod 把那类改成带 ``shown_as`` 的
+  系统消息，又替核对过的发言人作了保证，核对过的再挂这句只会让主播对每句搭话都起疑、问成盘问；
 - 带 UUID 的玩家消息与普通系统消息照旧，不加说明；
 - 整行是 ``<名字> 正文`` 的系统消息：有的服务器把玩家聊天当系统消息下发（实测带正版登录模组的局域网服），
   Mod 走的是系统消息路径，既认不出发言人、也滤不掉角色自己的回显。名字是角色自己的账号名，就是角色刚发出去
   的话回到了聊天栏，按回显丢掉；是别人的名字，就按没有发言人凭据的玩家消息转出。不认的话，玩家搭话被当成
   服务器公告、叫不醒主播，角色自己的话又被当成另一个叫这个名字的人说的。还不知道角色账号名时分不清是不是
   回显，照系统消息转出并说明发言人未确认：宁可漏接一次玩家搭话，也不能让她把自己的话当别人的话去接，
-  接了又在游戏里回一句、回的话再回流，自己跟自己聊起来。这种格式谁都能伪造（服务器插件、起了名的生物），
-  所以认出来的也只是没有凭据的玩家发言，不带任何额外分量。
+  接了又在游戏里回一句、回的话再回流，自己跟自己聊起来。这条路是宿主按格式认的，没对过在线玩家列表，
+  这种格式谁都能伪造（服务器插件、起了名的生物），所以认出来的一律附"没有发言人凭据"的说明，不带额外分量。
+  新版 Mod 自己认这种整行并标 ``sender_online``，这条兜底只对旧版 Mod 起作用。
 
 整行文字里聊天格式加的 ``<名字> `` 前缀去掉（发言人已经单独写出），正文其余原样保留。
 
@@ -87,9 +91,7 @@ def attribute_chat(event: Dict[str, Any], self_name: str = "") -> Optional[ChatA
                 )
             if speaker.casefold() == self_name.casefold():
                 return None
-            said = _CHAT_LINE.fullmatch(text)
-            content = said.group(2) if said else text
-            return ChatAttribution(kind="player", sender=speaker, sender_id="", content=content, note=NOTE_UNVERIFIED)
+            return _from_chat_line(speaker, text)
         # Mod 已经把"以角色名字显示、却没有角色 UUID"的消息改判成系统消息，并标出显示名
         note = NOTE_SHOWN_AS_SELF if event.get("shown_as") else ""
         return ChatAttribution(kind="system", sender="", sender_id="", content=text, note=note)
@@ -97,10 +99,24 @@ def attribute_chat(event: Dict[str, Any], self_name: str = "") -> Optional[ChatA
     sender_id = str(event.get("sender_id") or "")
     if sender_id or not sender:
         return ChatAttribution(kind="player", sender=sender, sender_id=sender_id, content=text)
-    # 没有发言人 UUID：名字是聊天栏上显示的；整行文字带着聊天格式的"<名字> "前缀
+    # 没有发言人 UUID：Mod 核对过发言人此刻在线（没签名的服务器转来的公屏聊天）就按那个人说的话转出；
+    # 没核对过（/say 只借了个名字，或旧版 Mod 不给这个字段）的名字只是聊天栏上显示的，附说明。
+    # 旧版 Mod 的整行文字还带着聊天格式的"<名字> "前缀，去掉
     prefix = f"<{sender}> "
     content = text[len(prefix) :] if text.startswith(prefix) else text
-    return ChatAttribution(kind="player", sender=sender, sender_id="", content=content, note=NOTE_UNVERIFIED)
+    note = "" if event.get("sender_online") is True else NOTE_UNVERIFIED
+    return ChatAttribution(kind="player", sender=sender, sender_id="", content=content, note=note)
+
+
+def _from_chat_line(speaker: str, text: str) -> ChatAttribution:
+    """从系统消息兜底认出来的"<名字> 正文"：按玩家发言转出，固定附"没有发言人凭据"的说明。
+
+    这条路是宿主自己按格式认的，没对过在线玩家列表，说话的不一定是这个名字的人；
+    附不附说明只看走的是哪条路，不看正文长什么样。
+    """
+    said = _CHAT_LINE.fullmatch(text)
+    content = said.group(2) if said else text
+    return ChatAttribution(kind="player", sender=speaker, sender_id="", content=content, note=NOTE_UNVERIFIED)
 
 
 def mentions_of(event: Dict[str, Any]) -> List[GameChatMention]:
