@@ -78,7 +78,7 @@ def test_rerun_keeps_new_recap_unsettled() -> None:
         v20_migrate(conn)
         conn.execute(
             "INSERT INTO session_recaps(live_session_id, started_at_ms, ended_at_ms, recap_text, created_at_ms)"
-            " VALUES (9, 1, 2, '刚写的回顾', 3_000)"
+            " VALUES (9, 1, 2, '刚写的回顾', 3000)"
         )
 
         v20_migrate(conn)
