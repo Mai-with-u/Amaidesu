@@ -13,8 +13,11 @@ from src.modules.storage.models.memory import CommitmentClosure, PendingArchiveL
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.storage.repos.archive import delete_archive_lines_by_session
-from src.modules.storage.repos.commitments import delete_commitments_by_session
-from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
+from src.modules.storage.repos.commitments import (
+    delete_commitments_by_session,
+    reopen_commitments_closed_by_session,
+)
+from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KIND_REHEARSAL, SessionKind
 
 
 # 下播整理的自动重试上限：用满后不再自动补跑，等运营者在 WebUI 点「重新整理」把次数清零。
@@ -102,25 +105,58 @@ class SessionRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def update_live_session_kind(
+    async def set_live_session_kind_with_ledger(
         self,
         *,
         live_session_id: int,
         kind: SessionKind,
         updated_at_ms: int,
-    ) -> bool:
-        """更正已结账场次的类型（存量回填判错时由人手改）。进行中或不存在的场次返回 False。
+    ) -> Dict[str, int]:
+        """更正已结账场次的类型，并在同一个事务里联动账本。
 
-        进行中的场次不改：类型在开场时声明，主播记忆与对外同步已按它分流。
+        改成彩排：删掉本场档案行与本场登记的承诺、把本场台词了结掉的旧承诺放回未了结、
+        清空整理进度——彩排场不整理，那一场留下的话不该进正式的账。改成正式场：只把「迁移时被标记为已整理、
+        其实从没真正整理过」的场次放回待整理队列。v24 迁移给存量已结束场次写的
+        整理完成时刻等于结账时刻；真实整理发生在结账之后，两者不会相等。真正的
+        历史正式场保持已整理，不在升级后集中补跑。
+        进行中或不存在的场次返回全 0。
         """
 
-        def _exec() -> bool:
-            with self._manager.transaction() as conn:
+        def _exec() -> Dict[str, int]:
+            result = {"changed": 0, "ledger_removed": 0, "reopened": 0, "requeued": 0}
+            with self._manager.transaction(immediate=True) as conn:
+                row = conn.execute(
+                    "SELECT kind, ended_at_ms, settled_at_ms FROM live_sessions WHERE id=?",
+                    (int(live_session_id),),
+                ).fetchone()
+                if row is None or row["ended_at_ms"] is None:
+                    return result
                 cur = conn.execute(
                     "UPDATE live_sessions SET kind=?, updated_at_ms=? WHERE id=? AND ended_at_ms IS NOT NULL",
-                    (kind, updated_at_ms, live_session_id),
+                    (kind, int(updated_at_ms), int(live_session_id)),
                 )
-                return cur.rowcount > 0
+                if cur.rowcount <= 0:
+                    return result
+                result["changed"] = 1
+                if kind == SESSION_KIND_REHEARSAL:
+                    result["ledger_removed"] = delete_archive_lines_by_session(
+                        conn, live_session_id=int(live_session_id)
+                    ) + delete_commitments_by_session(conn, live_session_id=int(live_session_id))
+                    # 彩排台词做出的了结也作废：被它了结的旧承诺放回未了结
+                    result["reopened"] = reopen_commitments_closed_by_session(
+                        conn, live_session_id=int(live_session_id), updated_at_ms=int(updated_at_ms)
+                    )
+                    conn.execute(
+                        "UPDATE live_sessions SET settled_at_ms=NULL, settle_attempts=0, settle_report=NULL WHERE id=?",
+                        (int(live_session_id),),
+                    )
+                elif row["settled_at_ms"] is not None and int(row["settled_at_ms"]) == int(row["ended_at_ms"]):
+                    conn.execute(
+                        "UPDATE live_sessions SET settled_at_ms=NULL, settle_attempts=0, settle_report=NULL WHERE id=?",
+                        (int(live_session_id),),
+                    )
+                    result["requeued"] = 1
+            return result
 
         return await self._run_in_executor(_exec)
 
@@ -238,16 +274,17 @@ class SessionRepo(BaseRepo):
         settled_at_ms: int,
         settle_report: Optional[str] = None,
     ) -> bool:
-        """记下这一场整理完成（附整理报告）；行不存在返回 False。
+        """记下这一场正式场的整理完成（附整理报告）；行不存在或已不是正式场返回 False。
 
+        条件更新带 kind='live'：整理途中场次被改成彩排时不能再补写完成时刻。
         不动 updated_at_ms：那一列记的是心跳统计的更新时刻。
         """
 
         def _exec() -> bool:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "UPDATE live_sessions SET settled_at_ms=?, settle_report=? WHERE id=?",
-                    (int(settled_at_ms), settle_report, int(live_session_id)),
+                    "UPDATE live_sessions SET settled_at_ms=?, settle_report=? WHERE id=? AND kind=?",
+                    (int(settled_at_ms), settle_report, int(live_session_id), SESSION_KIND_LIVE),
                 )
                 return cur.rowcount > 0
 
@@ -282,31 +319,40 @@ class SessionRepo(BaseRepo):
     ) -> Dict[str, int]:
         """把一场的整理结果一次写进去：档案行、新承诺、了结、整理完成时刻。
 
-        整理必须整场原子提交：半场写进去再失败，重跑时会重复登记。跨三张表的写操作
-        只有这一处，事务边界放在场次仓储里，与删除场次的级联同一层。
+        整理必须整场原子提交：任何一步失败都回滚，不能让这一场留下半份结果。
+        跨三张表的写操作只有这一处，事务边界放在场次仓储里，与删除场次的级联同一层。
 
-        幂等：先用「settled_at_ms 为空」抢占本场——同一场被两次整理同时挑中时只有一次
-        写进去（begin immediate 把第二个写事务挡在对方提交之后，重读即看到已完成）。
-        运营者重置进度后重跑时，库里已有的档案行按 evidence_chat_id 去重，不写重复行。
-        返回各类写入条数；本场已被别的整理写掉时全为 0。
+        幂等：先用「settled_at_ms 为空且仍是正式场」抢占本场——同一场被两次整理同时
+        挑中时只有一次写进去（begin immediate 把第二个写事务挡在对方提交之后，重读即
+        看到已完成）；整理途中场次被改成彩排时，这里也写不进去。运营者重置进度后重跑
+        时，同一事务里先删掉本场旧档案行与本场登记的未了结承诺、把上一轮用本场台词
+        了结的旧承诺放回未了结，再写，重跑整场替换：不会越堆越多，上一轮认定、这一轮
+        不再认定的了结也不会留在账上，运营者已了结或判误记的承诺不受影响。
+        返回各类写入条数（claimed = 1 表示这次真的抢到并写了）。
         """
 
         def _exec() -> Dict[str, int]:
-            written = {"archive": 0, "commitments": 0, "closed": 0}
+            written = {"archive": 0, "commitments": 0, "closed": 0, "claimed": 0}
             with self._manager.transaction(immediate=True) as conn:
                 claim = conn.execute(
-                    "UPDATE live_sessions SET settled_at_ms=?, settle_report=? WHERE id=? AND settled_at_ms IS NULL",
-                    (int(settled_at_ms), settle_report, int(live_session_id)),
+                    "UPDATE live_sessions SET settled_at_ms=?, settle_report=?"
+                    " WHERE id=? AND settled_at_ms IS NULL AND kind=?",
+                    (int(settled_at_ms), settle_report, int(live_session_id), SESSION_KIND_LIVE),
                 )
                 if claim.rowcount <= 0:
                     return written
-                existing_evidence = {
-                    int(row[0])
-                    for row in conn.execute(
-                        "SELECT evidence_chat_id FROM archive_lines WHERE live_session_id=?",
-                        (int(live_session_id),),
-                    ).fetchall()
-                }
+                written["claimed"] = 1
+                # 重跑整场替换：旧档案行全清；本场登记的承诺只清还没被运营者处理过的
+                delete_archive_lines_by_session(conn, live_session_id=int(live_session_id))
+                conn.execute(
+                    "DELETE FROM commitments WHERE created_session_id=? AND status='open'",
+                    (int(live_session_id),),
+                )
+                # 上一轮整理用本场台词了结的旧承诺先放回未了结，再按这一轮的结果重新了结
+                reopen_commitments_closed_by_session(
+                    conn, live_session_id=int(live_session_id), updated_at_ms=int(now_ms_value)
+                )
+                existing_evidence: set[int] = set()
                 for line in archive_lines:
                     evidence_chat_id = int(line.evidence_chat_id)
                     if evidence_chat_id in existing_evidence:
@@ -369,39 +415,21 @@ class SessionRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def requeue_settlement(self, *, live_session_id: int) -> bool:
-        """把一个已结束的场次重新排进整理队列：清掉整理完成时刻与重试次数，返回是否命中行。
+        """把一个已结束的正式场重新排进整理队列：清掉整理完成时刻与重试次数，返回是否命中行。
 
         运营者在 WebUI 点「重新整理」时调用：已成功整理过的场次同样要能重排（重跑时
-        按 evidence_chat_id 去重，不会写出重复档案行）。进行中或不存在的场次返回 False。
+        整场替换，不会写出重复档案行）。进行中、不存在或彩排场返回 False——彩排场
+        从不整理，重排没有意义。
         """
 
         def _exec() -> bool:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "UPDATE live_sessions SET settled_at_ms=NULL, settle_attempts=0, settle_report=NULL"
-                    " WHERE id=? AND ended_at_ms IS NOT NULL",
-                    (int(live_session_id),),
+                    " WHERE id=? AND ended_at_ms IS NOT NULL AND kind=?",
+                    (int(live_session_id), SESSION_KIND_LIVE),
                 )
                 return cur.rowcount > 0
-
-        return await self._run_in_executor(_exec)
-
-    async def reset_memory_ledger_for_session(self, *, live_session_id: int) -> int:
-        """清空一场在账本里的痕迹：档案行、本场登记的承诺、整理进度；返回删除条数。
-
-        正式场改成彩排时用（与改类型在同一个调用里）：彩排场不整理，那一场留下的话
-        不该进正式的账。承诺删掉是不留痕的——重新整理时会按那场的台词重新登记。
-        """
-
-        def _exec() -> int:
-            with self._manager.transaction() as conn:
-                removed = delete_archive_lines_by_session(conn, live_session_id=int(live_session_id))
-                removed += delete_commitments_by_session(conn, live_session_id=int(live_session_id))
-                conn.execute(
-                    "UPDATE live_sessions SET settled_at_ms=NULL, settle_attempts=0, settle_report=NULL WHERE id=?",
-                    (int(live_session_id),),
-                )
-                return removed
 
         return await self._run_in_executor(_exec)
 

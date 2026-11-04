@@ -157,7 +157,8 @@ async function resettle(row: SettleSessionItem): Promise<void> {
   const label = row.title || `场次 #${row.live_session_id}`;
   if (
     !(await confirmAction(
-      `把「${label}」重新排进整理队列？重试次数清零并清掉上次的失败原因，下一次调度会再整理这一场；已登记的内容不受影响。`,
+      `把「${label}」重新排进整理队列？重试次数清零、清掉上次的失败原因，下一次调度会重新整理这一场；` +
+        '该场已登记的档案行与本场尚未了结的承诺会被这次整理的结果替换，运营者已了结或判误记的承诺保留。',
       '重新整理',
     ))
   ) {

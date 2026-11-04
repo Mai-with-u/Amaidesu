@@ -522,7 +522,8 @@ export const rundownApi = {
 // 查看与人工纠错。承诺按状态（open / closed / void，空或 all 不过滤）、观众、游戏
 // 筛选，total / open_count / void_count 随列表返回；手建、标了结、判误记、删除各
 // 一个端点。档案按场次读取，可删单行。整理状态返回最近正式场（失败原因与未登记
-// 清单在这里给页面看），resettle 把重试次数清零让下一次调度重新整理该场。
+// 清单在这里给页面看），resettle 把重试次数清零让下一次调度重新整理该场（重跑会替换该场
+// 档案行与本场未了结的承诺，运营者已了结或判误记的保留）。
 export const ledgerApi = {
   listCommitments: (params?: {
     status?: CommitmentStatus | 'all';

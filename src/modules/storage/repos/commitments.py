@@ -36,6 +36,22 @@ def delete_commitments_by_session(conn: sqlite3.Connection, *, live_session_id: 
     return int(cur.rowcount or 0)
 
 
+def reopen_commitments_closed_by_session(conn: sqlite3.Connection, *, live_session_id: int, updated_at_ms: int) -> int:
+    """把"由这一场的台词了结"的承诺放回未了结，返回条数（重新整理、改成彩排时用）。
+
+    了结记录只存了结那句台词的明细编号（close_chat_id）；运营者在 WebUI 手动了结的
+    没有这个编号，不受影响。这一场的整理结果要整场替换或作废时，它了结掉的旧承诺
+    也要还原：否则重新整理不再认定的了结、彩排台词做出的了结会一直留在账上。
+    """
+    cur = conn.execute(
+        "UPDATE commitments SET status='open', close_chat_id=NULL, close_quote=NULL, updated_at_ms=?"
+        " WHERE status='closed'"
+        " AND close_chat_id IN (SELECT id FROM live_chat WHERE live_session_id=?)",
+        (int(updated_at_ms), int(live_session_id)),
+    )
+    return int(cur.rowcount or 0)
+
+
 class CommitmentRepo(BaseRepo):
     """commitments 表的读写面。"""
 
@@ -196,15 +212,35 @@ class CommitmentRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_open_before(self, *, before_ms: int, limit: int = 200) -> List[Commitment]:
-        """本场开播之前登记的未了结承诺（最老的在前）：下播整理拿它们去核对有没有做完。"""
-        params: List[object] = [int(before_ms), max(1, int(limit))]
+    async def list_open_before_session(self, *, live_session_id: int, limit: int = 200) -> List[Commitment]:
+        """这一场之前就已存在的未了结承诺（最老的在前）：下播整理拿它们去核对有没有做完。
+
+        判据按场次先后，不按写入时刻：开播时补整理的上一场，它的承诺是在本场开播之后
+        才写进库的，按写入时刻截断会漏掉。来源场次开播早于本场的才算——补整理或重新
+        整理较早一场时，更晚场次登记的承诺不能拿来核对，否则前一场的台词会"了结"后一场
+        才答应的事。手建条目（或来源场次已删）没有场次可比，按建条时刻不晚于本场下播算。
+        """
+        params: List[object] = [
+            int(live_session_id),
+            int(live_session_id),
+            int(live_session_id),
+            max(1, int(limit)),
+        ]
 
         def _exec() -> List[Commitment]:
             with self._manager.transaction() as conn:
                 rows = conn.execute(
-                    f"SELECT {_COMMITMENT_COLUMNS} FROM commitments"  # noqa: S608 列为代码内常量
-                    " WHERE status='open' AND created_at_ms < ? ORDER BY id ASC LIMIT ?",
+                    f"SELECT {_COMMITMENT_COLUMNS} FROM commitments AS c"  # noqa: S608 列为代码内常量
+                    " WHERE c.status='open'"
+                    " AND (c.created_session_id IS NULL OR c.created_session_id != ?)"
+                    " AND CASE"
+                    "  WHEN EXISTS (SELECT 1 FROM live_sessions s WHERE s.id = c.created_session_id)"
+                    "  THEN (SELECT s.started_at_ms FROM live_sessions s WHERE s.id = c.created_session_id)"
+                    "       < (SELECT cur.started_at_ms FROM live_sessions cur WHERE cur.id = ?)"
+                    "  ELSE c.created_at_ms <= COALESCE("
+                    "       (SELECT cur.ended_at_ms FROM live_sessions cur WHERE cur.id = ?), c.created_at_ms)"
+                    " END"
+                    " ORDER BY c.id ASC LIMIT ?",
                     params,
                 ).fetchall()
                 return [Commitment.model_validate(dict(row)) for row in rows]
@@ -231,4 +267,4 @@ class CommitmentRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
 
-__all__ = ["CommitmentRepo", "delete_commitments_by_session"]
+__all__ = ["CommitmentRepo", "delete_commitments_by_session", "reopen_commitments_closed_by_session"]

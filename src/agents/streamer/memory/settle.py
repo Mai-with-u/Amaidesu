@@ -482,10 +482,9 @@ class SessionSettler:
         return "、".join(abilities)
 
     async def _load_commitments(self, session: LiveSession) -> Tuple[List[Commitment], str, List[Tuple[int, str]], str]:
-        """未了结的旧承诺（本场开播之前登记的）与判误记的旧承诺标题。"""
-        started_at_ms = int(session.started_at_ms or 0)
+        """本场之前就有的未了结承诺（按场次先后，不含更晚场次登记的）与判误记的旧承诺标题。"""
         try:
-            open_commitments = await self._commitments.list_open_before(before_ms=started_at_ms)
+            open_commitments = await self._commitments.list_open_before_session(live_session_id=int(session.id))
         except Exception as exc:  # noqa: BLE001 - 取不到就当没有旧承诺，整理照常跑
             logger.warning(f"场次 {session.id} 读未了结承诺失败: {exc}", exc=exc)
             open_commitments = []

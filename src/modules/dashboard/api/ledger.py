@@ -250,12 +250,19 @@ async def list_settle_state(sessions: SessionRepoDep, archive: ArchiveRepoDep) -
 async def resettle_session(live_session_id: int, sessions: SessionRepoDep) -> LedgerMutationResponse:
     """把一场重新排进整理队列：清掉整理完成时刻与重试次数（已整理过的场次也会真重跑）。
 
-    失败场次与整理完但想重做的场次共用这一个出口；重跑时档案行按原台词去重，
-    不会写出重复行。进行中或不存在的场次返回 404。
+    失败场次与整理完但想重做的场次共用这一个出口；重跑时整场替换，不会写出重复行。
+    不存在的场次返回 404；彩排场从不整理、进行中的场次还没内容可整理，都返回 409。
     """
+    session = await sessions.get_live_session(live_session_id=int(live_session_id))
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"场次不存在: {live_session_id}")
+    if session.kind != SESSION_KIND_LIVE:
+        raise HTTPException(status_code=409, detail="彩排场不整理，不能重新整理")
+    if session.ended_at_ms is None:
+        raise HTTPException(status_code=409, detail="场次还没结束，不能重新整理")
     changed = await sessions.requeue_settlement(live_session_id=int(live_session_id))
     if not changed:
-        raise HTTPException(status_code=404, detail=f"场次不存在或还没结束: {live_session_id}")
+        raise HTTPException(status_code=409, detail="场次状态已变化，没能排进整理队列")
     return LedgerMutationResponse(success=True, detail="已排进下一次整理")
 
 

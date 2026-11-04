@@ -127,3 +127,16 @@ async def test_settle_state_exposes_pending_report_and_resettle(client, store: S
     after = (await client.get("/api/v1/memory/settle")).json()["items"][0]
     assert after["settle_attempts"] == 0 and after["settle_report"] is None
     assert (await client.post("/api/v1/memory/settle/9999/resettle")).status_code == 404
+
+
+async def test_resettle_rejects_rehearsal_and_ongoing(client, store: SQLiteDatabase) -> None:
+    """彩排场从不整理、进行中的场次还没内容可整理：都返回 409 与可读原因。"""
+    rehearsal = await _ended_session(store, started_at_ms=1_000, kind="rehearsal")
+    rehearsal_resp = await client.post(f"/api/v1/memory/settle/{rehearsal}/resettle")
+    assert rehearsal_resp.status_code == 409
+    assert "彩排" in rehearsal_resp.json()["detail"]
+
+    ongoing = await store.sessions.insert_live_session(started_at_ms=2_000)
+    ongoing_resp = await client.post(f"/api/v1/memory/settle/{ongoing}/resettle")
+    assert ongoing_resp.status_code == 409
+    assert "还没结束" in ongoing_resp.json()["detail"]

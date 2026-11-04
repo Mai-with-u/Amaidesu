@@ -308,31 +308,29 @@ class LiveSessionManager:
     # -------------------- 类型更正 --------------------
 
     async def set_session_kind(self, live_session_id: int, kind: SessionKind) -> bool:
-        """更正已结账场次的类型。进行中或不存在的场次返回 False。
+        """更正已结账场次的类型；账本联动与改类型在同一个事务里。进行中或不存在的场次返回 False。
 
         进行中的场次不改：开播时主播已按类型读了对应的上场回顾、对外同步
         也已按类型决定推不推，中途改类型会让这一场前后两半分到两条记忆线。
+        改成彩排时删掉本场档案与承诺、清空整理进度，免得彩排时说的话进了正式的账；
+        改成正式场时，把迁移期标成「已整理」其实从没整理过的场次放回待整理队列。
         """
         if live_session_id == self._active_pk:
             logger.info(f"场次 {live_session_id} 进行中，不更正类型")
             return False
-        changed = await self._sessions.update_live_session_kind(
+        result = await self._sessions.set_live_session_kind_with_ledger(
             live_session_id=live_session_id, kind=kind, updated_at_ms=self._clock()
         )
-        if not changed:
+        if not result["changed"]:
             return False
         logger.info(f"场次类型已更正: id={live_session_id} kind={kind}")
-        # 改成彩排：彩排场不整理，这一场留下的档案行、本场登记的承诺与整理进度一并清掉，
-        # 免得彩排时说的话进了正式的账。改成正式场则什么都不用做——整理进度为空，
-        # 下一次调度自然会挑到它重新整理
-        if kind == SESSION_KIND_REHEARSAL:
-            try:
-                removed = await self._sessions.reset_memory_ledger_for_session(live_session_id=live_session_id)
-            except Exception as exc:  # noqa: BLE001 - 清理失败不影响类型更正本身
-                logger.warning(f"场次 {live_session_id} 改为彩排后清理账本失败: {exc}", exc=exc)
-            else:
-                if removed:
-                    logger.info(f"场次 {live_session_id} 改为彩排，已清掉账本痕迹 {removed} 条")
+        if kind == SESSION_KIND_REHEARSAL and (result["ledger_removed"] or result["reopened"]):
+            logger.info(
+                f"场次 {live_session_id} 改为彩排，已清掉账本痕迹 {result['ledger_removed']} 条、"
+                f"放回未了结 {result['reopened']} 条"
+            )
+        if result["requeued"]:
+            logger.info(f"场次 {live_session_id} 改为正式场，已排回待整理队列")
         return True
 
     # -------------------- 场次归属解析 --------------------

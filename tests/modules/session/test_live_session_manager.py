@@ -416,3 +416,45 @@ async def test_attribution_loads_last_ended_from_db_after_restart(store: SQLiteD
     await restarted.start()
 
     assert await restarted.resolve_attribution_pk() == pk
+
+
+async def test_set_session_kind_moves_ledger_in_the_same_call(store: SQLiteDatabase, bus: EventBus) -> None:
+    """正式场改成彩排：类型、档案行、本场承诺与整理进度在同一次调用里一起处理。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+    pk = await manager.open_session(kind="live")
+    await store.chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=1_100, sender_role="viewer", content="hi", message_type="danmaku"
+    )
+    await manager.close_session()
+    await store.archive.insert_line(live_session_id=pk, text="正式场档案", quote="正式场档案", evidence_chat_id=1)
+    await store.commitments.insert_commitment(what="正式场承诺", created_session_id=pk)
+    await store.sessions.mark_settle_done(live_session_id=pk, settled_at_ms=6_000)
+
+    assert await manager.set_session_kind(pk, "rehearsal") is True
+
+    row = await store.sessions.get_live_session(live_session_id=pk)
+    assert row is not None and row.kind == "rehearsal" and row.settled_at_ms is None
+    assert await store.archive.list_lines(live_session_id=pk) == []
+    assert await store.commitments.count_commitments() == 0
+
+
+async def test_set_session_kind_requeues_migrated_rehearsal(store: SQLiteDatabase, bus: EventBus) -> None:
+    """v24 把存量场次标成已整理（完成时刻 == 结账时刻）；改回正式场要重新排队。"""
+    manager = _make_manager(store, bus)
+    await manager.start()
+    pk = await manager.open_session(kind="rehearsal")
+    await store.chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=1_100, sender_role="viewer", content="hi", message_type="danmaku"
+    )
+    assert await manager.close_session() is True
+    ended = await store.sessions.get_live_session(live_session_id=pk)
+    assert ended is not None and ended.ended_at_ms is not None
+    await store.sessions.mark_settle_done(live_session_id=pk, settled_at_ms=int(ended.ended_at_ms))
+
+    assert await manager.set_session_kind(pk, "live") is True
+
+    row = await store.sessions.get_live_session(live_session_id=pk)
+    assert row is not None and row.kind == "live" and row.settled_at_ms is None
+    pending = await store.sessions.list_sessions_pending_settle(limit=10)
+    assert [item.id for item in pending] == [pk]
