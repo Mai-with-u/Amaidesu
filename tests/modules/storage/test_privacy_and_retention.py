@@ -957,7 +957,11 @@ async def test_delete_viewer_scrubs_commitments_archive_and_settle_report(tmp_pa
 
 
 async def test_delete_viewer_scrubs_game_creature_and_event_text(tmp_path: Path) -> None:
-    """游戏侧自由文本（生物名/称呼/死亡说明、游戏事件正文）里的昵称也替换成代称。"""
+    """ta 出现过的场次里，游戏事件正文与生物死亡说明里的昵称换成代称；别的场次与名册名字不动。
+
+    名册里与 ta 同名的生物（她的狗也叫这个名字）不能被改成"一位观众"：名册跨场次，
+    记不得名字是哪一场起的，按名字全表替换会误改无关的生物。
+    """
     db_file = tmp_path / "data" / "amaidesu.db"
     store = SQLiteDatabase(db_file)
     await store.initialize()
@@ -967,6 +971,9 @@ async def test_delete_viewer_scrubs_game_creature_and_event_text(tmp_path: Path)
     try:
         session_id = await store.sessions.insert_live_session(started_at_ms=1000, kind="live")
         await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=2000)
+        # ta 没来过、昵称使用期之外的一场
+        other_session = await store.sessions.insert_live_session(started_at_ms=50_000, kind="live")
+        await store.sessions.close_live_session(live_session_id=other_session, ended_at_ms=60_000)
         resolution = await store.viewers.resolve_viewer(
             platform="bilibili",
             id_kind="account",
@@ -977,24 +984,37 @@ async def test_delete_viewer_scrubs_game_creature_and_event_text(tmp_path: Path)
         )
         await store.execute(
             "INSERT INTO game_creatures(game, world_key, creature_key, type, kind, name, nickname, owner,"
-            " death_note, updated_at_ms) VALUES ('minecraft', 'w1', 'uuid:1', 'wolf', 'tamed', ?, ?, '主播', ?, 1)",
-            (nickname, nickname, f"{nickname}送的花"),
+            " death_note, died_session_id, updated_at_ms)"
+            " VALUES ('minecraft', 'w1', 'uuid:1', 'wolf', 'tamed', ?, ?, '主播', ?, ?, 1)",
+            (nickname, nickname, f"{nickname}送的花", session_id),
+        )
+        await store.execute(
+            "INSERT INTO game_creatures(game, world_key, creature_key, type, kind, name, nickname, owner,"
+            " death_note, died_session_id, updated_at_ms)"
+            " VALUES ('minecraft', 'w1', 'uuid:2', 'cat', 'tamed', ?, ?, '主播', ?, ?, 1)",
+            (nickname, nickname, f"{nickname}掉进了岩浆", other_session),
         )
         await store.execute(
             "INSERT INTO game_events(live_session_id, game, event_type, message, timestamp_ms)"
             " VALUES (?, 'minecraft', 'milestone', ?, 1200)",
             (session_id, f"{nickname}的狗生崽了"),
         )
+        await store.execute(
+            "INSERT INTO game_events(live_session_id, game, event_type, message, timestamp_ms)"
+            " VALUES (?, 'minecraft', 'milestone', ?, 55000)",
+            (other_session, f"{nickname}（猫）出门了"),
+        )
 
         assert await privacy.delete_viewer(viewer_id=resolution.viewer_id, add_to_forget_list=True) is True
 
-        (creature,) = await store.execute("SELECT name, nickname, owner, death_note FROM game_creatures")
-        assert creature["name"] == "一位观众"
-        assert creature["nickname"] == "一位观众"
-        assert creature["owner"] == "主播", "主人是游戏内玩家名，不含观众昵称时不改"
-        assert creature["death_note"] == "一位观众送的花"
-        (event,) = await store.execute("SELECT message FROM game_events")
-        assert event["message"] == "一位观众的狗生崽了"
+        wolf, cat = await store.execute(
+            "SELECT name, nickname, owner, death_note FROM game_creatures ORDER BY creature_key"
+        )
+        assert wolf["death_note"] == "一位观众送的花", "ta 出现过的那一场写下的死亡说明要替换"
+        assert (wolf["name"], wolf["nickname"], wolf["owner"]) == (nickname, nickname, "主播"), "名册名字不动"
+        assert cat["death_note"] == f"{nickname}掉进了岩浆", "别的场次的同名内容不误改"
+        events = [row["message"] for row in await store.execute("SELECT message FROM game_events ORDER BY id")]
+        assert events == ["一位观众的狗生崽了", f"{nickname}（猫）出门了"]
     finally:
         await privacy.close()
         await store.close()

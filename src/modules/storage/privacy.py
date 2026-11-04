@@ -10,7 +10,7 @@
 - **宽限删除**：观众发"忘了我"后立即进不记录名单、停止记录并在观众行记 ``forget_requested_at_ms``；
   实际删除推迟到发令之后第一次下播后的清理（或最迟发令后 24 小时），执行前本人发撤回短语即可移出名单、清掉待删标记。
 - **删除函数**：单一事务清除观众行、曾用名、弹幕、对 ta 的承诺、相同外部 ID 的模拟回放副本，清空付费三表的身份/留言/原始消息，
-  按每个昵称的使用期找出重叠或出现过的场次，把主播台词、档案、承诺、话题摘要、时间线摘要、整理报告与游戏侧自由文本里的昵称
+  按每个昵称的使用期找出重叠或出现过的场次，把这些场次的主播台词、档案、承诺、话题摘要、时间线摘要、整理报告、游戏事件正文与生物死亡说明里的昵称
   替换为"一位观众"，最后执行 ``PRAGMA wal_checkpoint(TRUNCATE)``。过渡期的旧画像表与旧笔记目录已由 v25 迁移整体删除。
 """
 
@@ -904,7 +904,7 @@ def _replace_nickname_in_sessions(
         )
 
     _replace_nickname_in_settle_reports(conn, session_ids=session_ids, nickname=nickname)
-    _replace_nickname_in_game_data(conn, nickname=nickname)
+    _replace_nickname_in_game_data(conn, session_ids=session_ids, nickname=nickname)
 
 
 def _replace_nickname_in_settle_reports(
@@ -956,28 +956,35 @@ def _replace_nickname_in_report_json(raw: str, nickname: str) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 
-def _replace_nickname_in_game_data(conn: sqlite3.Connection, *, nickname: str) -> None:
-    """游戏侧自由文本里的昵称换成代称：生物名/称呼/主人/死亡说明与游戏事件正文。
+def _replace_nickname_in_game_data(
+    conn: sqlite3.Connection,
+    *,
+    session_ids: Sequence[int],
+    nickname: str,
+) -> None:
+    """游戏侧按场次记下的文本里的昵称换成代称：ta 出现过的场次里的游戏事件正文与生物死亡说明。
 
-    这几列存的都是模型或游戏侧写下的自由文本（她给生物起的名字、死亡说明、事件播报），
-    可能带观众昵称；外部 ID 不写入这些列，因此只需要按昵称替换。
+    与台词替换同一个范围（ta 出现过、或昵称使用期重叠的场次）：全表按昵称替换会误改与
+    ta 同名、却和 ta 无关的内容。生物名册里的名字、称呼与主人名不替换——名册跨场次、
+    记不得名字是哪一场起的，名字又常是常见词（观众叫"小白"，她的狗也叫"小白"），按名字
+    替换会把无关的生物改成"一位观众"；名字与主人名还由游戏每次照原样报回，改了下次就被
+    写回。这部分列在运维文档的残留边界里。
     """
-    if not nickname:
+    if not nickname or not session_ids:
         return
     like_pat = f"%{nickname}%"
+    sid_ph = ",".join("?" for _ in session_ids)
     if table_exists(conn, "game_creatures"):
         conn.execute(
-            "UPDATE game_creatures SET"  # noqa: S608 常量列名
-            " name = REPLACE(name, ?, ?), nickname = REPLACE(nickname, ?, ?),"
-            " owner = REPLACE(owner, ?, ?), death_note = REPLACE(death_note, ?, ?)"
-            " WHERE name LIKE ? OR nickname LIKE ? OR owner LIKE ? OR death_note LIKE ?",
-            [nickname, MASKED_VIEWER_LABEL] * 4 + [like_pat] * 4,
+            "UPDATE game_creatures SET death_note = REPLACE(death_note, ?, ?)"  # noqa: S608 常量列名
+            f" WHERE died_session_id IN ({sid_ph}) AND death_note LIKE ?",
+            [nickname, MASKED_VIEWER_LABEL, *session_ids, like_pat],
         )
     if table_exists(conn, "game_events"):
         conn.execute(
             "UPDATE game_events SET message = REPLACE(message, ?, ?)"  # noqa: S608 常量列名
-            " WHERE message LIKE ?",
-            (nickname, MASKED_VIEWER_LABEL, like_pat),
+            f" WHERE live_session_id IN ({sid_ph}) AND message LIKE ?",
+            [nickname, MASKED_VIEWER_LABEL, *session_ids, like_pat],
         )
 
 
