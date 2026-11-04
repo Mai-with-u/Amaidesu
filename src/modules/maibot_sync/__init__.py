@@ -7,12 +7,6 @@
 """
 
 from src.modules.maibot_sync.config_schema import MaiBotSyncConfigSchema
-from src.modules.maibot_sync.notes_sync import (
-    HttpNotesRemote,
-    NotesRemote,
-    PendingPromise,
-    SharedNotesStore,
-)
 from src.modules.maibot_sync.reporter import (
     HttpStatusSender,
     LiveStatusReporter,
@@ -23,13 +17,10 @@ from src.modules.maibot_sync.reporter import (
 from src.modules.maibot_sync.transcript import StorageTranscriptSource
 
 __all__ = [
-    "HttpNotesRemote",
     "HttpStatusSender",
     "LiveStatusReporter",
     "MaiBotSyncConfigSchema",
-    "NotesRemote",
     "PendingPromise",
-    "SharedNotesStore",
     "StatusRejected",
     "StatusSender",
     "StorageTranscriptSource",

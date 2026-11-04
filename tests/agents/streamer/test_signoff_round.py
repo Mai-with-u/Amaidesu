@@ -583,16 +583,29 @@ async def test_stuck_tts_waits_up_to_limit_then_settles_and_stops_anyway(
 async def test_signoff_schedules_no_settle_when_session_row_is_gone(
     store: SQLiteDatabase, row_gone: Dict[str, bool]
 ) -> None:
-    """live.ended 标着场次行已删或将删：道别那一轮照常跑，但不排收播整理。
+    """live.ended 标着场次行已删或将删：道别照常跑，但不排收播整理，道别句也不落库。
 
     这一场的行还在、有可整理的对话（模拟删除场次时 live.ended 先到、删行在后）：整理一旦
-    排上就会调模型写回顾，所以"没有模型调用"就是"没排整理"。
+    排上就会调模型写回顾，所以"没有模型调用"就是"没排整理"。两种情形下道别那一轮都不交
+    场次上下文，道别句不带场次编号；记账器没有可归属的场次时跳过写入——库里不留这一场的
+    孤儿行，也不会写出一行主播放台词。
     """
     llm, planner = FakeLLMManager(), _farewell_planner()
+    bus = EventBus()
+    writes = _LedgerChatWrites(store.chat)
+    ledger = StorageLedger(bus, writes, store.viewers, store.events)  # type: ignore[arg-type]
+    await ledger.start()
+    speeches: List[StreamerSpeechPayload] = []
+
+    async def _on_speech(event_name: str, payload: StreamerSpeechPayload, source: str) -> None:
+        speeches.append(payload)
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _on_speech, model_class=StreamerSpeechPayload)
     agent = make_streamer_agent(
         {"background": {"enabled": False}, "mouth": {"enabled": False}},
         llm=llm,
         planner=planner,
+        event_bus=bus,
         chat_repo=store.chat,
         sessions_repo=store.sessions,
         commitments_repo=store.commitments,
@@ -603,8 +616,16 @@ async def test_signoff_schedules_no_settle_when_session_row_is_gone(
     try:
         await agent._on_live_ended("live.ended", LiveEndedPayload(live_session_id=pk, **row_gone), "test")
         await asyncio.gather(*agent._memory_tasks)
+        await wait_until(lambda: len(speeches) == 1, what="道别句的发言事件送达")
     finally:
         await agent.stop()
+        await ledger.stop()
 
     planner.plan.assert_awaited_once()
     assert llm.calls == [], "场次行已删或将删：不排收播整理，不给这一场写回顾"
+    assert [speech.live_session_id for speech in speeches] == [0], "不给道别句盖已删场次的编号"
+    assert writes.assistant_sessions == [], "记账器不写主播放台词行"
+    stored = await store.chat.list_recent_live_chat(live_session_id=pk, limit=None, sender_role="assistant")
+    assert [row.content for row in stored] == ["最后一排明天再铺"], "道别句不落库：库里只留这一场原有的台词"
+    orphan_rows = await store.execute("SELECT COUNT(*) AS n FROM live_chat WHERE content = ?", (FAREWELL,))
+    assert int(orphan_rows[0]["n"]) == 0, "库里没有任何一行是这句道别"

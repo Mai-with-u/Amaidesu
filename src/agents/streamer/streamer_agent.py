@@ -21,8 +21,6 @@ agent = StreamerAgent(
     chat_repo=store.chat,
     sessions_repo=store.sessions,
     topic_repo=store.topics,
-    viewer_profile_repo=store.viewer_profiles,
-    recap_repo=store.recaps,
 )
 await agent.start()
 # Agent now: subscribes room.message.danmaku → buffers → planner → reply tool → ...
@@ -62,18 +60,10 @@ from .tools.rundown_tool import build_rundown_tool_provider
 from .background import SUMMARY_PROFILE, BackgroundMaintainer
 from .decision_executor import DecisionRoundExecutor
 from .session_scope import ClosingSession, SessionScope
-from .memory import (
-    LongMemoryWriter,
-    RegularsRosterWriter,
-    SessionRecapWriter,
-    StreamerNotebook,
-    emit_notebook_changed,
-)
 from .memory.brief import build_brief
 from .memory.cues import MemoryCueProvider
-from .memory.notes import NoteDocument, parse_notes
 from .memory.recall import MemoryRecallService, build_memory_recall_provider
-from .memory.settle import SessionSettler
+from .memory.settle import MAX_ATTEMPTS, SessionSettler
 from .message_buffer import MessageBuffer
 from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
 from .planner import Planner, PlannerConfig, PlannerEnv
@@ -148,7 +138,7 @@ class StreamerAgent(BaseAgent):
     description = "Streamer Agent - 主播决策 + 表达 + 后台维护"
 
     # -----事件族声明（可选）-----
-    emits_events = (CoreEvents.RUNDOWN_CHANGED, CoreEvents.STREAMER_RECAP_WRITTEN)
+    emits_events = (CoreEvents.RUNDOWN_CHANGED,)
 
     def __init__(
         self,
@@ -165,13 +155,10 @@ class StreamerAgent(BaseAgent):
         sessions_repo: Optional[Any] = None,
         topic_repo: Optional[Any] = None,
         viewer_repo: Optional[Any] = None,
-        viewer_profile_repo: Optional[Any] = None,
-        recap_repo: Optional[Any] = None,
         commitments_repo: Optional[Any] = None,
         archive_repo: Optional[Any] = None,
         event_repo: Optional[Any] = None,
         privacy_service: Optional[Any] = None,
-        long_memory_store: Optional[Any] = None,
         context_assembler_config: Optional[Any] = None,
         speech_config: Optional[Dict[str, Any]] = None,
         tts_engine: Optional["TTSProvider"] = None,
@@ -206,18 +193,8 @@ class StreamerAgent(BaseAgent):
             viewer_repo: 可选 ``ViewerRepo``（观众统计仓储）——Planner 画像注入
                 时经它实时取观众昵称、观众画像按互动量筛候选、工具按昵称反查；
                 None 时注入行回退 platform/user_id、画像不更新
-            viewer_profile_repo: 可选 ``ViewerProfileRepo``（观众画像）。``None`` 时
-                画像相关功能整体降级——Planner 走无画像注入路径、收播不更新印象、
-                ``memory_recall_viewer`` 工具不注册
-            recap_repo: 可选 ``SessionRecapRepo``（场次回顾）。``None`` 时收播不写
-                回顾、开播不注入上场回顾、``memory_recall_session`` 工具不注册
-            commitments_repo: 可选 ``CommitmentRepo``（承诺账本）。``archive_repo`` 与它
-                任一缺失时下播整理整体关闭，旧收播整理照常
-            archive_repo: 可选 ``ArchiveRepo``（场次档案）
             event_repo: 可选 ``EventRepo``（游戏事件）——场次回顾的游戏进展原料；
                 None 时回顾少这一类原料
-            long_memory_store: 可选 ``LongMemoryStore``（长期记忆文件 MEMORY.md）。
-                ``None`` 时收播不整理长期记忆、开播不注入（需同时有场次回顾仓储）
             context_assembler_config: 可选上下文组装器配置（[agents.streamer.context] 子段；
                 控制 Planner 组装路径开关；None 时 Planner 走内置默认）
             speech_config: 可选发言管线配置（来自核心 ``[tts]`` 段）。
@@ -282,18 +259,18 @@ class StreamerAgent(BaseAgent):
         self._thinking_sink = thinking_sink
         # 观众统计仓储（Planner 注入画像时实时取昵称用；None 时回退 platform/user_id）
         self._viewer_repo = viewer_repo
-        # 主播记忆的两张表（可选；None 时对应记忆功能整体降级）
-        self._profile_repo = viewer_profile_repo
-        # 场次表：备忘录每次写入都落进本场的场次行，收播整理按场次主键读回
+        # 场次表：下播整理按场次主键取台词与状态
         self._sessions_repo = sessions_repo
-        self._recap_repo = recap_repo
+        # 聊天仓储：开播日志统计"上一场播出了几句台词"用（None 时日志省略句数）
+        self._chat_repo = chat_repo
+        # 账本两仓储（承诺 + 场次档案）：下播整理写入，常驻简报/线索卡/回想工具读取
         self._commitments_repo = commitments_repo
         self._archive_repo = archive_repo
         self._event_repo = event_repo
         # 隐私服务：线索推送要按配置的短语表判定"忘了我"与撤回（缺失时不出回执行）
         self._privacy_service = privacy_service
         self._logger = get_logger("StreamerAgent")
-        # 主播记忆整理的后台任务（启动补写回顾、收播整理），强引用防 GC 中途回收。
+        # 主播记忆整理的后台任务（启动补写整理、收播整理），强引用防 GC 中途回收。
         # 每个都含好几次 LLM 调用、可能跑几十秒，停止时直接取消不等：没做完的
         # 整理由下次启动的补写补完（流程单落库这类短写入归协调器，停止时等它做完）
         self._memory_tasks: set[asyncio.Task[Any]] = set()
@@ -310,13 +287,6 @@ class StreamerAgent(BaseAgent):
         self._force_message_types = frozenset(config.force.force_message_types)
         # 房间态势（纯规则滑动窗口）
         self._room_state = RoomState()
-
-        # 本场备忘录：决策每轮读内存里这份；每次写入同步落进本场的场次行，
-        # 收播整理从场次行读回（直播中途关掉应用也不丢），收播后内存里这份清空
-        self._notebook = StreamerNotebook(max_chars=config.memory.notebook_max_chars)
-        # 开播时读出的长期笔记（解析后的条目）：决策层按开着的游戏取全场条目、按发言观众取
-        # 对 ta 的条目，快嘴取全场条目；整场不变，开播或启动善后时刷新
-        self._notes_doc = NoteDocument()
 
         # 流程单（Rundown）子系统：备忘录 + 闹钟（推进权归 Agent）。
         # 状态机与仓储/总线/场次解析的粘合收拢在协调器内（依赖全构造注入，
@@ -372,7 +342,6 @@ class StreamerAgent(BaseAgent):
                 prompt_service=prompt_manager,
                 room_state=self._room_state,
                 tool_registry=tool_registry,
-                profile_repo=viewer_profile_repo,
                 viewer_repo=viewer_repo,
                 context_enabled=bool(_context_enabled),
                 behavior_style=_behavior_style,
@@ -432,15 +401,8 @@ class StreamerAgent(BaseAgent):
             prompt_manager=self._prompt,  # 摘要/画像系统提示词渲染（复用 Agent 持有的 PromptManager）
         )
 
-        # 旧的收播整理（场次回顾 / 长期记忆 / 观众画像）在本阶段停写：写入器统一置空，
-        # 表与文件原样保留；收播只跑新的账本整理（承诺与场次档案）
-        self._recap_inject_count: int = int(config.memory.recap_inject_count)
-        self._recap_writer: Optional[SessionRecapWriter] = None
-        self._long_memory_writer: Optional[LongMemoryWriter] = None
-        self._roster_writer: Optional[RegularsRosterWriter] = None
-
-        # 下播整理：把一场正式直播整理成承诺账本与场次档案（影子运行，只写不读）。
-        # 两个仓储或模型任一缺失就整体关闭，旧收播整理照常
+        # 下播整理：每场正式直播结束后把承诺与场次档案写进账本（账本唯一写入入口）。
+        # 四个仓储或模型任一缺失就整体关闭，账本保持为空
         self._settler: Optional[SessionSettler] = None
         if (
             commitments_repo is not None
@@ -457,10 +419,10 @@ class StreamerAgent(BaseAgent):
                 prompt_manager=prompt_manager,
                 game_names_provider=self._game_names,
             )
-        # 常驻简报：开播时按"上一场的档案 + 不针对人的未了结承诺"拼好，整场不变
+
+        # 常驻简报：按"上一场的档案 + 不针对人的未了结承诺"渲染，每窗按表快照重渲
         self._memory_brief_text: str = ""
         self._memory_brief_ids: tuple[int, ...] = ()
-        self._memory_labels: dict[int, str] = {}
         # 线索推送：每批按弹幕与开着的游戏算"这一批想起来的事"；状态只活在本场
         self._memory_cues: Optional[MemoryCueProvider] = None
         if commitments_repo is not None and chat_repo is not None:
@@ -645,7 +607,7 @@ class StreamerAgent(BaseAgent):
 
         # 收播整理善后：上次退出时没整理完的场次（没写回顾，或回顾写完后整理被打断），
         # 启动后在后台补完一场，补完再把长期记忆与"上场回顾"段读出来（开播前就能用）
-        if self._recap_writer is not None or self._settler is not None:
+        if self._settler is not None:
             spawn_background_task(
                 self._bootstrap_recaps(),
                 logger=self._logger,
@@ -743,14 +705,6 @@ class StreamerAgent(BaseAgent):
     # 观测面（只读快照，供 dashboard REST 查询；无任何写入口）
     # ==================================================================
 
-    def memo_snapshot(self) -> Dict[str, Any]:
-        """备忘录快照（只读）：``GET /agents/streamer/memo`` 的数据源。"""
-        return {"notebook": self._notebook.read()}
-
-    # ==================================================================
-    # 工具提供（list_tools）
-    # ==================================================================
-
     def list_tools(self) -> Iterable[ToolSpec]:
         """声明本 Agent 暴露的工具（审计对账口径，AgentManager.audit_tools）。
 
@@ -783,8 +737,6 @@ class StreamerAgent(BaseAgent):
           Provider 注册/摘除进出名单（Agent 启动即注册，无需二次开关）。
         - ``memory_recall_session`` / ``memory_recall_viewer``：主播记忆工具
           （provider="memory"，名单 ``["streamer"]``），两张记忆表都注入时才注册。
-        - ``streamer_notebook``：本场备忘录（provider="streamer"，名单 ``["streamer"]``），
-          会话内状态不依赖仓储，随注册无条件注册。
         """
 
         # reply tool（构造注入的替身复用不重建；缺省时构造——注册与 Planner 侧引用共用同一实例）
@@ -924,9 +876,6 @@ class StreamerAgent(BaseAgent):
         # 上一场的下播回调还在收尾（道别那一轮在等模型）时，内存里这份备忘录是上一场的
         # 工作笔记（每次写入都已落进上一场的场次行），不是开播前写下的：当场清掉、不带进
         # 新场次。放在第一个 await 之前，新场次的第一轮决策开窗时读到的已经是空备忘录
-        stale_notebook = bool(self._closings_in_flight and self._notebook.read())
-        if stale_notebook:
-            self._notebook.clear()
         if self._mouth is not None:
             self._mouth.reset()
         # 流程单开播起算：armed（已装载待开播）→ running，双锚点 = 开播时刻。
@@ -937,19 +886,13 @@ class StreamerAgent(BaseAgent):
             self._logger.debug(f"开播起算流程单跳过（{reject.reason}）：流程单已在进行中")
         # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
         await self._scope.begin_session()
-        # 常驻简报：开播这一刻按场次类型拼好（上一场的档案 + 不针对人的未了结承诺），
-        # 整场固定；正式场接正式场、彩排场接彩排场
-        await self._refresh_memory_brief(kind=payload.kind)
+        # 上一场刚结束、整理还在后台跑时先补整理：否则这一场的"上一场"会退到更早一场。
+        # 随后按场次类型拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗重渲
+        await self._settle_pending_before_brief()
+        await self._refresh_memory_brief(kind=payload.kind, announce=True)
         # 线索推送的计数与回执追踪只在本场内有效，开播先清零
         if self._memory_cues is not None:
             self._memory_cues.reset()
-        # 开播前写下的备忘录会带进这一场（决策照常读得到），先落进新场次行，收播整理才对得上；
-        # 上面清掉的上一场备忘录只补发一次清空的观测事件，不落进新场次
-        if stale_notebook:
-            self._logger.info("上一场还在道别，内存里的备忘录属于上一场（已随场次落盘），不带进新场次")
-            await emit_notebook_changed(self._event_bus, "")
-        elif self._notebook.read():
-            await self._persist_notebook(self._notebook.read())
         self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
 
     async def _on_live_ended(
@@ -958,7 +901,7 @@ class StreamerAgent(BaseAgent):
         payload: LiveEndedPayload,
         source: str,
     ) -> None:
-        """live.ended 回调：下播，主动发言收闸，道别收束本场，后台写本场回顾并更新观众画像。"""
+        """live.ended 回调：下播，主动发言收闸，道别收束本场，后台跑这次的下播整理。"""
         del event_name, source
         self._live_active = False
         if self._mouth is not None:
@@ -1019,29 +962,14 @@ class StreamerAgent(BaseAgent):
                 f"场次 {payload.live_session_id} 道别期间已开新场次，内存里的对话与备忘录归新场次，不再清场"
             )
         else:
-            # 备忘录生命周期收口：全文已随每次写入落进场次行（整理从那里读），这里只清空内存
-            # 里这份——备忘录是场次作用域，下一场从空白开始。先清备忘录再清场：清场要 await，
-            # 期间若开了新场次，开播回调看到的已是空备忘录，不会把这一场的工作笔记当成开播前
-            # 写下的带进新场次
-            notebook_text = self._notebook.read()
-            self._notebook.clear()
             # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
             # （道别句已带着这一场的编号落库，随场次留档，不再留在内存对话里）
             await self._scope.end_session()
-            if notebook_text:
-                self._logger.info(f"本场备忘录已随场次落盘（{len(notebook_text)} 字），内存里这份清空")
-                # 清空也是备忘录状态变化：发观测事件（快照非空才发——空备忘录清空无状态变化）
-                await emit_notebook_changed(self._event_bus, "")
         # 收播整理：先写这一场的回顾，再给本场活跃的常客更新印象（两次 LLM 调用，
         # 放后台不阻塞事件回调）。场次行已删或将删时不整理：空场次没东西可整理；用户删掉的
         # 场次本意是把这一场清掉，整理若赶在删行之前读到对话，会给已删场次写出回顾与画像。
         # 顺序：道别那一轮在上面跑完 → 这里才排进后台 → 后台先等道别句播完再整理
-        if not session_row_gone and (
-            self._recap_writer is not None
-            or self._long_memory_writer is not None
-            or self._roster_writer is not None
-            or self._settler is not None
-        ):
+        if not session_row_gone and self._settler is not None:
             if self.state in (AgentState.STOPPING, AgentState.STOPPED):
                 # 应用停机路径：Agent 先停、live.ended 后到，LLM 与数据库紧接着就关，
                 # 整理跑不完还白调一次模型，干脆不起；这场没有回顾，下次启动的补写会把
@@ -1087,10 +1015,9 @@ class StreamerAgent(BaseAgent):
         """下播整理的后台入口：先等队尾台词播完（最多 30 秒），再整理这一场。
 
         等待放在后台任务里，不阻塞 live.ended 回调；道别那一轮已在回调里跑完才排进来，
-        等的正是道别句。启动补写直接调 :meth:`_settle_session`：那时没有要等的台词。
+        等的正是道别句。启动补写直接调 :meth:`_settle_ledger`：那时没有要等的台词。
         """
         await self._wait_speech_tail(before=f"下播整理场次 {live_session_id} ")
-        await self._settle_session(live_session_id)
         # 旧收播整理跑完再跑新账本整理：两者都读本场台词，顺序无关，但排在后面能保证
         # 道别句已经落库；新整理只写承诺与档案，旧记忆照常注入
         await self._settle_ledger()
@@ -1109,10 +1036,6 @@ class StreamerAgent(BaseAgent):
         """常驻简报里出现的承诺编号（Planner 点名的合法名单之一，观测与测试用）。"""
         return self._memory_brief_ids
 
-    def _session_recap_text(self) -> str:
-        """上场回顾段（DecisionRoundExecutor 每窗读；开播时固定，整场不变）。"""
-        return self._scope.session_recap
-
     def _current_session_pk(self) -> Optional[int]:
         """进行中场次主键（无场次管理器或未开播为 None）；回忆往前第 n 场时要排除本场。"""
         if self._session_manager is None:
@@ -1130,21 +1053,6 @@ class StreamerAgent(BaseAgent):
             if provider != FRAMEWORK_PROVIDER
         ]
 
-    async def _persist_notebook(self, text: str) -> None:
-        """把备忘录全文落进进行中场次的场次行；未开播（调试闲聊）或没有场次表时不落盘。"""
-        pk = self._current_session_pk()
-        if pk is None or self._sessions_repo is None:
-            return
-        if not await self._sessions_repo.set_session_notebook(live_session_id=pk, notebook_text=text):
-            self._logger.warning(f"备忘录没落进场次 {pk}（场次已结账或不存在）")
-
-    async def _session_notebook_text(self, live_session_id: int) -> str:
-        """某场落盘的备忘录全文（收播整理与启动补整理共用）；场次行不在时为空。"""
-        if self._sessions_repo is None:
-            return ""
-        row = await self._sessions_repo.get_live_session(live_session_id=int(live_session_id))
-        return row.notebook_text if row is not None else ""
-
     def _current_session_kind(self) -> SessionKind:
         """进行中场次的类型；未开播按正式场算（开播前的闲聊读的是正式直播的上一场）。
 
@@ -1158,51 +1066,38 @@ class StreamerAgent(BaseAgent):
         kind = getattr(self._session_manager, "active_kind", None) if self._session_manager is not None else None
         return kind if kind in SESSION_KINDS else SESSION_KIND_LIVE
 
-    async def _refresh_recap_section(
-        self, *, exclude_session_id: Optional[int] = None, kind: Optional[SessionKind] = None
-    ) -> None:
-        """从库里读最近几场同类型场次的回顾渲染成注入段；未启用或没有上一场时为空串（段整段省略）。
-
-        ``kind`` 缺省取进行中场次的类型（未开播按正式场）。
-        """
-        if self._recap_writer is None or self._recap_inject_count <= 0:
-            self._scope.set_session_recap("")
-            return
-        current = exclude_session_id if exclude_session_id is not None else self._current_session_pk()
-        recap_section = await self._recap_writer.render_recent(
-            count=self._recap_inject_count,
-            exclude_session_id=current,
-            kind=kind if kind is not None else self._current_session_kind(),
-        )
-        self._scope.set_session_recap(recap_section)
-        if recap_section:
-            self._logger.info(f"上场回顾已装入参考段（{len(recap_section)} 字）")
-
-    async def _refresh_long_memory_section(self, *, kind: Optional[SessionKind] = None) -> None:
-        """按场次类型读出长期记忆装进槽位；未启用或文件不存在时为空串（段整段省略）。
-
-        ``kind`` 缺省取进行中场次的类型（未开播按正式场）。
-        """
-        if self._long_memory_writer is None:
-            self._scope.set_long_memory("")
-            self._notes_doc = NoteDocument()
-            return
-        text = await self._long_memory_writer.read(kind if kind is not None else self._current_session_kind())
-        self._scope.set_long_memory(text)
-        self._notes_doc = parse_notes(text)
-        if text:
-            self._logger.info(f"长期记忆已装入（{len(text)} 字）")
-
     async def _bootstrap_recaps(self) -> None:
-        """启动善后：补完上次退出时没整理完的场次，再拼好常驻简报。
-
-        整理走账本（承诺与场次档案）；旧的回顾 / 长期记忆 / 画像在本阶段已停写。
-        """
+        """启动善后：补完上次退出时没整理完的场次，再拼好常驻简报。"""
         await self._settle_ledger()
-        await self._refresh_memory_brief()
+        await self._refresh_memory_brief(announce=True)
 
-    async def _refresh_memory_brief(self, *, kind: Optional[SessionKind] = None) -> None:
-        """拼常驻简报（开播与启动各一次），拼好整场不变；仓储缺失时为空。"""
+    async def _settle_pending_before_brief(self) -> None:
+        """开播前补整理上一场（若还没整理完），简报才读得到它的档案。
+
+        下播整理在后台跑：道别那一轮、等队尾台词（最多 30 秒）、三次模型调用，常超过
+        一分钟；这段时间里新开一场，简报会把更早一场当成"上一场"。只有确有到点可整理
+        的场次才调模型（一次轻量索引查询换开播前的记忆正确性）；整理失败不影响开播，
+        简报退化为更早一场的档案。
+        """
+        if self._settler is None or self._sessions_repo is None:
+            return
+        try:
+            pending = await self._sessions_repo.list_sessions_pending_settle(limit=1, max_attempts=MAX_ATTEMPTS)
+        except Exception as exc:  # noqa: BLE001 - 查不到就按没有待整理，不挡开播
+            self._logger.warning(f"开播前查询待整理场次失败（简报可能少上一场）: {exc}", exc=exc)
+            return
+        if not pending:
+            return
+        self._logger.info(f"开播前仍有 {len(pending)} 场待整理，先整理再拼常驻简报")
+        await self._settle_ledger()
+
+    async def _refresh_memory_brief(self, *, kind: Optional[SessionKind] = None, announce: bool = False) -> None:
+        """按台账快照重渲常驻简报（每决策窗一次）；仓储缺失时为空。
+
+        渲染只依赖表快照：表没变时输出逐字节相同，Planner 系统提示词的前缀缓存仍命中；
+        表变了（直播中纠错、上一场整理刚写完）下一窗就反映出来。``announce`` 只在开播与
+        启动善后打开：那条 info 日志带"上一场编号与播出台词数"，供运营者核对注入内容。
+        """
         if self._commitments_repo is None or self._archive_repo is None:
             self._memory_brief_text = ""
             self._memory_brief_ids = ()
@@ -1221,8 +1116,32 @@ class StreamerAgent(BaseAgent):
             return
         self._memory_brief_text = brief.text
         self._memory_brief_ids = brief.commitment_ids
-        if brief.text:
-            self._logger.info(f"常驻简报已装入（{len(brief.text)} 字，承诺 {len(brief.commitment_ids)} 条）")
+        if announce:
+            await self._log_brief_summary(brief)
+
+    async def _log_brief_summary(self, brief: Any) -> None:
+        """开播时记一条简报摘要：上一场编号、档案行数、播出台词数与承诺条数。"""
+        if brief.previous_session_id is None:
+            self._logger.info(
+                f"常驻简报已装入：没有上一场，承诺 {len(brief.commitment_ids)} 条（{len(brief.text)} 字）"
+            )
+            return
+        speech_count = await self._count_delivered_speech(int(brief.previous_session_id))
+        self._logger.info(
+            f"常驻简报已装入：上一场 #{brief.previous_session_id}，档案 {brief.archive_line_count} 行，"
+            f"播出台词 {speech_count} 句，承诺 {len(brief.commitment_ids)} 条（{len(brief.text)} 字）"
+        )
+
+    async def _count_delivered_speech(self, live_session_id: int) -> int:
+        """某场真正播出的台词条数（掉落标记为空的行）；取不到按 0 记并告警。"""
+        if self._chat_repo is None:
+            return 0
+        try:
+            lines = await self._chat_repo.list_session_speech_for_settle(live_session_id=int(live_session_id))
+        except Exception as exc:  # noqa: BLE001 - 日志统计失败不影响开播
+            self._logger.warning(f"统计上一场 #{live_session_id} 播出台词数失败（按 0 记）: {exc}", exc=exc)
+            return 0
+        return sum(1 for line in lines if line.dropped_at_ms is None)
 
     async def _lookup_commitment(self, commitment_id: int) -> Any:
         """按编号取一条承诺（Planner 点名后渲染说话档用）；取不到返回 None。"""
@@ -1234,9 +1153,7 @@ class StreamerAgent(BaseAgent):
         """本批线索：承诺卡、老观众在场一行、回执行；没启用线索推送时返回 None。"""
         if self._memory_cues is None:
             return None
-        cues = await self._memory_cues.collect(batch=list(batch), open_games=list(open_games or ()))
-        self._memory_labels = dict(cues.labels)
-        return cues
+        return await self._memory_cues.collect(batch=list(batch), open_games=list(open_games or ()))
 
     async def _settle_ledger(self) -> None:
         """整理待整理的场次，把承诺与场次档案写进账本；没启用时直接返回。
@@ -1250,35 +1167,6 @@ class StreamerAgent(BaseAgent):
             await self._settler.settle_pending()
         except Exception as exc:  # noqa: BLE001 - 账本整理失败不能挡住收播与启动
             self._logger.warning(f"下播整理账本出错: {exc}", exc=exc)
-
-    async def _settle_session(self, live_session_id: int) -> None:
-        """收播整理：回顾 → 长期记忆 → 观众画像 → 记整理完成；收播钩子与启动补写共用。
-
-        逐项降级，一项失败不影响其余；长期记忆以本场回顾为原料，必须排在回顾之后。
-        三步都走完才记完成，中途被停止取消的场次留在待办里，下次启动再走一遍：
-        回顾已有不重写，长期记忆已合并不再并，画像只取上次整理之后的新话。
-        本场没写成回顾时完成记不上，下次启动再试回顾。
-        """
-        if self._recap_writer is not None:
-            try:
-                await self._recap_writer.ensure_recap(live_session_id)
-            except Exception as exc:
-                self._logger.warning(f"收播写回顾失败（场次 {live_session_id}）: {exc}")
-        if self._long_memory_writer is not None:
-            try:
-                await self._long_memory_writer.consolidate(live_session_id)
-            except Exception as exc:
-                self._logger.warning(f"收播整理长期记忆失败（场次 {live_session_id}）: {exc}")
-        if self._roster_writer is not None:
-            try:
-                await self._roster_writer.update_for_session(live_session_id)
-            except Exception as exc:
-                self._logger.warning(f"收播更新观众画像失败（场次 {live_session_id}）: {exc}")
-        if self._recap_writer is not None:
-            try:
-                await self._recap_writer.mark_settled(live_session_id)
-            except Exception as exc:
-                self._logger.warning(f"记收播整理完成失败（场次 {live_session_id}，下次启动重走）: {exc}", exc=True)
 
     async def _on_game_event(
         self,
@@ -1696,6 +1584,8 @@ class StreamerAgent(BaseAgent):
         的常规轮次照旧可以并发（她不用等手头那一轮答完才道别，观众的"拜拜"也不用排在道别后）。
         """
         token = _CLOSING_SESSION.set(closing_session)
+        # 每窗按台账快照重渲常驻简报（直播中纠错下一窗生效；表没变时逐字节相同，缓存不失效）
+        await self._refresh_memory_brief()
         try:
             result = await self._rounds.execute(
                 batch,

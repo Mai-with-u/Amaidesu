@@ -10,9 +10,11 @@
 算）；本场台词的记忆引用里已经出现这张卡的编号，就是被用上了，本场不再推——这一条每批
 查一次库，进程重启也不丢。
 
-另外两种输出不是卡而是提示行：老观众在场一行（本批开口、本场之前来过至少三场、这一批
-没有承诺卡、她本场还没回应过、没有待删请求的观众合成一行），以及本批遗忘命令的回执行。
-三者合成一个线索块交给参考段；没有线索时整块省略。
+另外两种输出不是卡而是提示行：老观众在场一行（本批开口、本场之前来过至少三场正式场、
+这一批没有承诺卡、她本场还没回应过、没有待删请求的观众合成一行），以及本批遗忘命令的
+回执行。回执只认记账侧真正处理过的命令：弹幕里的「忘了我」记账侧一定受理；撤回短语要
+记账侧确认那次撤回已经生效（``PrivacyService.was_retracted_in_session``）才回执，超级
+留言/礼物里的文本一律不回执。三者合成一个线索块交给参考段；没有线索时整块省略。
 """
 
 from __future__ import annotations
@@ -25,9 +27,9 @@ from src.modules.utils.time_utils import now_ms
 
 from .render import (
     memory_ref_numbers,
+    render_commitment_number,
     render_cue_block,
     render_forget_notice,
-    render_game_card,
     render_presence_line,
     render_retract_notice,
     render_viewer_card,
@@ -77,9 +79,12 @@ class _Sender:
     user_name: str = ""
     content: str = ""
     message_id: str = ""
+    message_type: str = ""
+    platform: str = ""
     viewer_id: Optional[int] = None
     forget_requested_at_ms: Optional[int] = None
     sessions_count: int = 0
+    last_session_id: Optional[int] = None
     prev_seen_ms: Optional[int] = None
 
 
@@ -106,10 +111,6 @@ class MemoryCueProvider:
         self._session_id: Optional[int] = None
         # 承诺编号 → 本场推送时刻列表
         self._push_at: dict[int, List[int]] = {}
-        # 本场已经出过"已按忘了我处理"的发送者（外部 ID），撤回短语据此判断依据
-        self._forget_notified: Set[str] = set()
-        self._replied_viewer_cache: Set[int] = set()
-        self._replied_loaded = False
         # 本批推送的卡：编号 → 对方称呼（说话档据此说"答应过谁"）
         self._round_labels: Dict[int, str] = {}
 
@@ -145,9 +146,6 @@ class MemoryCueProvider:
         """下播时清空本场状态（推送计数与回执追踪都只在本场内有效）。"""
         self._session_id = None
         self._push_at.clear()
-        self._forget_notified.clear()
-        self._replied_viewer_cache.clear()
-        self._replied_loaded = False
 
     # ------------------------------------------------------------------
     # 取数
@@ -176,6 +174,8 @@ class MemoryCueProvider:
                 user_name=str(getattr(user, "name", "") or ""),
                 content=str(getattr(message, "content", "") or ""),
                 message_id=str(getattr(message, "message_id", "") or ""),
+                message_type=str(getattr(message, "message_type", "") or ""),
+                platform=str(getattr(message, "platform", "") or ""),
             )
             if self._viewers is not None:
                 await self._fill_viewer(sender, platform=str(getattr(message, "platform", "") or ""))
@@ -207,6 +207,7 @@ class MemoryCueProvider:
         sender.user_name = row.user_name or sender.user_name
         sender.forget_requested_at_ms = row.forget_requested_at_ms
         sender.sessions_count = int(row.sessions_count)
+        sender.last_session_id = int(row.last_session_id) if row.last_session_id is not None else None
         sender.prev_seen_ms = row.prev_seen_ms
 
     async def _used_commitment_ids(self, session_id: int) -> Set[int]:
@@ -222,17 +223,17 @@ class MemoryCueProvider:
         return used
 
     async def _replied_viewer_ids(self, session_id: int) -> Set[int]:
-        """本场她回应过的观众（每场查一次，缓存到换场）。"""
-        if self._replied_loaded:
-            return self._replied_viewer_cache
+        """本场她回应过的观众。
+
+        每批查一次、不整场缓存：缓存会让"这一批刚回应过 ta"晚一批才生效，
+        老观众一行会在她已经回应之后又多冒一批；一次轻查询换时序正确。
+        """
         try:
             ids = await self._chat.list_session_replied_viewer_ids(live_session_id=session_id)
         except Exception as exc:  # noqa: BLE001 - 查不到按都没回应过，最多多出一行提示
             logger.warning(f"读本场已回应的观众失败（本批不做回应过滤）: {exc}", exc=exc)
             return set()
-        self._replied_viewer_cache = {int(item) for item in ids}
-        self._replied_loaded = True
-        return self._replied_viewer_cache
+        return {int(item) for item in ids}
 
     # ------------------------------------------------------------------
     # 卡片
@@ -275,7 +276,7 @@ class MemoryCueProvider:
                     continue
                 if not self._may_push(int(commitment.id), used):
                     continue
-                cards.append(render_game_card(commitment, game=game))
+                cards.append(_render_game_card(commitment, game=game))
                 ids.append(int(commitment.id))
                 self._record_push(int(commitment.id))
                 break
@@ -313,13 +314,20 @@ class MemoryCueProvider:
     # ------------------------------------------------------------------
 
     async def _presence_line(self, session_id: int, senders: Sequence[_Sender]) -> str:
-        """老观众在场一行：本场之前来过至少三场、她本场还没回应过、没有待删请求的观众。"""
+        """老观众在场一行：本场之前来过至少三场正式场、她本场还没回应过、没有待删请求的观众。
+
+        ``sessions_count`` 是含本场的累计（观众本场首条弹幕进账时 +1）：这位观众上次计入
+        的场次就是本场时，先减掉本场再比门槛——否则回访第 3 场的人会被当成老观众。
+        """
         replied = await self._replied_viewer_ids(session_id)
         entries: List[Tuple[str, Optional[int]]] = []
         for sender in senders:
             if sender.viewer_id is None:
                 continue
-            if sender.sessions_count < MIN_SESSIONS_FOR_PRESENCE:
+            earlier_sessions = sender.sessions_count
+            if sender.last_session_id is not None and sender.last_session_id == session_id:
+                earlier_sessions -= 1
+            if earlier_sessions < MIN_SESSIONS_FOR_PRESENCE:
                 continue
             if sender.forget_requested_at_ms is not None:
                 continue
@@ -329,20 +337,42 @@ class MemoryCueProvider:
         return render_presence_line(entries, now_ms=int(self._clock()))
 
     def _command_notices(self, senders: Sequence[_Sender]) -> List[str]:
-        """本批遗忘命令的回执行：忘了我 → 告知不再记录；撤回短语 → 告知删除取消。"""
+        """本批遗忘命令的回执行：忘了我 → 告知不再记录；撤回短语 → 告知删除取消。
+
+        只认记账侧真正处理过的命令：记账侧只处理弹幕里的遗忘命令（超级留言、礼物、
+        上舰里的文本不进遗忘流程），所以非弹幕消息一律不回执——否则主播会答应一场
+        并不会发生的删除；撤回短语还要记账侧确认撤回已生效才回执。
+        """
         if self._privacy is None:
             return []
         notices: List[str] = []
         for sender in senders:
             if not sender.message_id or not sender.content:
                 continue
+            if sender.message_type != "danmaku":
+                continue
             if self._privacy.is_forget_command(sender.content):
                 notices.append(render_forget_notice(message_id=sender.message_id))
-                self._forget_notified.add(sender.external_id)
                 continue
             if not self._privacy.is_retract_command(sender.content):
                 continue
-            has_pending = sender.forget_requested_at_ms is not None
-            if has_pending or sender.external_id in self._forget_notified:
+            if self._privacy.was_retracted_in_session(
+                message_id=sender.message_id,
+                platform=sender.platform,
+                external_id=sender.external_id,
+            ):
                 notices.append(render_retract_notice(message_id=sender.message_id))
         return notices
+
+
+def _render_game_card(commitment: Any, *, game: str) -> str:
+    """游戏承诺卡：挂在这个游戏上、不针对具体观众的未了结承诺。
+
+    ``open_games`` 是"已启用的游戏工具面"（可能同时启用几个），不表示主播此刻
+    正在玩哪一个；卡面因此不写"现在 X 开着"，避免决策层把没在玩的游戏当成当前现场。
+    """
+    quote = (commitment.quote or "").strip() or (commitment.what or "").strip()
+    return (
+        f"[{render_commitment_number(commitment.id)}·{game}] "
+        f"你之前说过「{quote}」，截至上一场还没做。这件承诺挂在你玩的游戏 {game} 上；时机对再提。"
+    )

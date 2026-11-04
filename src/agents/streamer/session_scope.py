@@ -2,11 +2,11 @@
 
 「这一场主播记得什么」在此单点承载——游戏账本（出账与清场经本模块动词，
 入账动词见 :attr:`SessionScope.ledger`）、待入私聊行、未落库对话轮、时间线
-notes、本窗游戏批次与上场回顾快照。对外动词：开窗（``open_window``，出账
-先于读历史的顺序不变量内化其中）、读历史（``read_history``，纯读）、补记
-一轮（``remember_round``）、清场（``begin_session`` / ``end_session``）。
-live_chat 是已落库对话的事实源，本模块只读不写；回顾刷新等记忆域动作仍归
-StreamerAgent，经 :meth:`SessionScope.set_session_recap` 写入槽位。
+notes、本窗游戏批次。对外动词：开窗（``open_window``，出账先于读历史的顺序
+不变量内化其中）、读历史（``read_history``，纯读）、补记一轮
+（``remember_round``）、清场（``begin_session`` / ``end_session``）。
+live_chat 是已落库对话的事实源，本模块只读不写；跨场记忆（常驻简报、承诺与
+场次档案）归 StreamerAgent 与 memory 子包，不在这里落状态。
 """
 
 from __future__ import annotations
@@ -74,14 +74,12 @@ class WindowMaterials:
     - ``history``：``None`` = 读库失败，宁可本轮无历史，不拿残缺冒充完整；
       空列表 = 真的无历史。
     - ``game_batch``：空批次 = 本窗无新游戏事件（不用 None 表达）。
-    - ``session_recap``：空串 = 不注入（未启用或没有上一场）。
     - ``timeline_notes``：本窗开窗时点的时间线 notes 累积快照（只读观察面，
       写入仍只经本模块动词）。
     """
 
     history: Optional[List[Any]]
     game_batch: GameEventBatch
-    session_recap: str
     timeline_notes: List[TimelineTurn] = field(default_factory=list)
 
 
@@ -112,8 +110,6 @@ class SessionScope:
         self._unpersisted_turns: List[LiveChatTurn] = []
         self._timeline_notes: List[TimelineTurn] = []
         self._window_game_batch = GameEventBatch()
-        self._session_recap: str = ""
-        self._long_memory: str = ""
 
     # -- 状态便道 ------------------------------------------------------
 
@@ -122,24 +118,6 @@ class SessionScope:
         """游戏账本。入账动词（record_event/record_encounter/record_chat）归账本
         接口本身，本模块不复制；出账（drain）与清场（reset）走本模块动词。"""
         return self._ledger
-
-    @property
-    def session_recap(self) -> str:
-        """上场回顾段（开播时装入，整场不变；空串 = 不注入）。"""
-        return self._session_recap
-
-    def set_session_recap(self, text: str) -> None:
-        """回顾槽位写入（记忆域刷新完成时调；本模块不背仓储依赖）。"""
-        self._session_recap = text
-
-    @property
-    def long_memory(self) -> str:
-        """长期记忆全文（开播时装入，整场不变；空串 = 不注入）。"""
-        return self._long_memory
-
-    def set_long_memory(self, text: str) -> None:
-        """长期记忆槽位写入（开播或启动善后时由主播 Agent 读文件后调）。"""
-        self._long_memory = text
 
     # -- 入账便道 ------------------------------------------------------
 
@@ -201,7 +179,6 @@ class SessionScope:
         return WindowMaterials(
             history=history,
             game_batch=game_batch,
-            session_recap=self._session_recap,
             timeline_notes=list(self._timeline_notes),
         )
 

@@ -203,7 +203,7 @@ class MemoryRecallService:
                 exc=True,
             )
             return f"没查到（{str(exc).strip() or type(exc).__name__}）"
-        logger.debug(
+        logger.info(
             f"memory_recall 完成：query={query!r} scope={scope_value} order={order_value}"
             f" 耗时 {int(self._clock()) - started_ms}ms"
         )
@@ -360,7 +360,11 @@ class MemoryRecallService:
         return _RecallHit(timestamp_ms=timestamp_ms, text=body)
 
     async def _commitment_hits(self, context: _RecallContext) -> List[_RecallHit]:
-        """不针对具体观众的承诺；分页读全后按关键词过滤，未了结与已了结都给。"""
+        """不针对具体观众的承诺；分页读全后按关键词过滤，未了结与已了结都给。
+
+        ``scope=this_stream`` 时只留本场登记的（按承诺的 ``created_session_id`` 过滤），
+        与台词、弹幕、档案三路的范围语义一致；运营者手建（无场次）与往场承诺不返回。
+        """
         matched: List[Any] = []
         offset = 0
         while True:
@@ -372,6 +376,12 @@ class MemoryRecallService:
             for row in page:
                 # 对某位观众的承诺不在这里给：原话可能夹着 ta 的私事
                 if row.viewer_id is not None:
+                    continue
+                if context.scope == SCOPE_THIS_STREAM and (
+                    row.created_session_id is None
+                    or context.current_session_id is None
+                    or int(row.created_session_id) != int(context.current_session_id)
+                ):
                     continue
                 haystack = "\n".join([row.what or "", row.quote or "", row.close_quote or ""])
                 if _matches_all_keywords(haystack, context.keywords):

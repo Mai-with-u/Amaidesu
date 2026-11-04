@@ -420,104 +420,6 @@ class StreamerLiveFrameConfig(BaseConfig):
 # ---------------------------------------------------------------------------
 
 
-class StreamerMemoryConfig(BaseConfig):
-    """[agents.streamer.memory] —— 主播自己的记忆：场次回顾 + 观众画像 + 长期记忆
-
-    场次回顾在收播时写（启动时补写上一场缺失的），开播后注入最近几场；
-    观众画像在收播时为本场来过、互动量达门槛的常客轮流更新印象（没建档的先来）；
-    长期记忆（MEMORY.md）在收播时按条目合并本场的新东西、让没人再提的条目淡出，
-    开播时注入。
-    都用 summary 档位的模型，失败只降级不阻断直播主链路。
-    """
-
-    recap_enabled: bool = Field(
-        title="是否启用场次回顾",
-        default=True,
-        description="收播时写本场回顾、开播后注入上场回顾（关闭后主播跨场次不记得自己做过什么）",
-    )
-    recap_max_length: int = Field(
-        title="回顾长度上限",
-        default=500,
-        ge=100,
-        le=2000,
-        description="单场回顾文本长度上限（字符；提示词约束 LLM 篇幅，超出截断）",
-    )
-    recap_inject_count: int = Field(
-        title="开播注入最近几场",
-        default=1,
-        ge=0,
-        le=5,
-        description="开播后注入最近几场的回顾（0 = 不注入，只留工具按需查）",
-    )
-    roster_enabled: bool = Field(
-        title="是否启用观众画像",
-        default=True,
-        description="收播时为本场活跃常客更新印象（关闭后收播不再更新，已有印象仍注入）",
-    )
-    roster_min_interactions: int = Field(
-        title="建档门槛",
-        default=3,
-        ge=1,
-        le=100,
-        description="累计互动量（viewers.interaction_count）达到多少才建档；不够格不建、自然不注入",
-    )
-    roster_batch_max: int = Field(
-        title="每场更新人数上限",
-        default=5,
-        ge=1,
-        le=20,
-        description=(
-            "每场收播最多为几位常客更新印象：候选是本场发过弹幕或付过费、互动量达门槛的观众，"
-            "还没建档的先来，其次是印象最久没更新的"
-        ),
-    )
-    profile_max_length: int = Field(
-        title="印象长度上限",
-        default=400,
-        ge=100,
-        le=1000,
-        description="单人印象文本长度上限（字符；提示词约束 LLM 篇幅，超出截断）",
-    )
-    notebook_max_chars: int = Field(
-        title="备忘录容量上限",
-        default=2000,
-        ge=100,
-        le=20000,
-        description="本场备忘录（工作笔记）的字符上限，超出截断；备忘录每轮全量注入决策层（表达侧不带），"
-        "覆盖写的结论集量级天然小，默认值按注入成本与结论体量折中",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    long_memory_enabled: bool = Field(
-        title="是否启用长期记忆",
-        default=True,
-        description=(
-            "收播时把本场回顾与备忘录合并进长期记忆（数据目录 memory/MEMORY.md，彩排场另存一份），"
-            "开播时整份注入；关闭后既不更新也不注入，已有文件保留"
-        ),
-    )
-    long_memory_max_chars: int = Field(
-        title="长期记忆长度上限",
-        default=2000,
-        ge=300,
-        le=8000,
-        description=(
-            "长期记忆里会注入的四节（答应过的事、老梗、长线目标、关于我自己）合计的字符上限；"
-            "收播整理后超出时，先把最久没人提起的条目挪进搁置区，人工写的条目不动"
-        ),
-    )
-    long_memory_stale_sessions: int = Field(
-        title="几场没人提就搁置",
-        default=3,
-        ge=1,
-        le=20,
-        description=(
-            "长期记忆里模型记下的条目，连续这么多场（同类型、写过回顾的场次）都没有观众或游戏再提起，"
-            "收播整理时就挪进搁置区、不再注入；以后有人再提还会挪回来。只跟某个游戏有关的目标与老梗只数"
-            "玩过那个游戏的场次，约定不管玩没玩照常数，关于主播自己的条目不按场次淡出"
-        ),
-    )
-
-
 class StreamerMouthConfig(BaseConfig):
     """[agents.streamer.mouth] 段
 
@@ -666,11 +568,7 @@ class StreamerConfig(BaseConfig):
         default_factory=StreamerContextConfig,
         description="上下文组装器配置（enabled + 对话历史预算）",
     )
-    memory: StreamerMemoryConfig = Field(
-        title="主播记忆",
-        default_factory=StreamerMemoryConfig,
-        description="主播自己的记忆：场次回顾（收播写、开播注入）与观众画像（收播更新观众印象）",
-    )
+
     background: StreamerBackgroundConfig = Field(
         title="后台维护配置",
         default_factory=StreamerBackgroundConfig,
@@ -722,7 +620,6 @@ __all__ = [
     "StreamerConfig",
     "StreamerPersonaConfig",
     "StreamerContextConfig",
-    "StreamerMemoryConfig",
     "StreamerBackgroundConfig",
     "StreamerCompressorConfig",
     "StreamerBatchConfig",

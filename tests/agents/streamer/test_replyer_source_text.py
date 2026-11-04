@@ -251,7 +251,6 @@ async def test_executor_splits_game_chat_view() -> None:
                     events=("[20:01 minecraft] 玩家 Steve：在吗",),
                     fresh_chat=("[20:01 minecraft] 玩家 Steve：在吗",),
                 ),
-                session_recap="",
             )
         ),
         rundown_text_provider=MagicMock(return_value=None),

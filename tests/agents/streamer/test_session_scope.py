@@ -317,7 +317,7 @@ async def test_remember_round_keeps_viewer_turns_when_batch_not_persisted() -> N
     assert [turn.content for turn in await scope.read_history()] == ["调试注入"]
 
 
-# 私聊与回顾槽位
+# 私聊
 
 
 async def test_private_chat_travels_with_window_batch_once() -> None:
@@ -328,15 +328,6 @@ async def test_private_chat_travels_with_window_batch_once() -> None:
 
     assert batch.private_chat == ("[minecraft] 悄悄说",)
     assert scope.drain_window().private_chat == (), "送达一次制，下一窗不再携带"
-
-
-async def test_recap_slot_flows_into_window_materials() -> None:
-    scope = _scope()
-    scope.set_session_recap("上场挖到钻石")
-
-    materials = await scope.open_window()
-
-    assert materials.session_recap == "上场挖到钻石"
 
 
 async def test_note_delegation_writes_timeline_note_without_window_batch() -> None:

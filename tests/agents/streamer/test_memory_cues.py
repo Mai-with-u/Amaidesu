@@ -170,6 +170,26 @@ async def test_card_stops_once_the_line_referenced_it(store: SQLiteDatabase) -> 
     assert cues.card_count == 0 and cues.text == ""
 
 
+async def test_dropped_line_does_not_count_as_used(store: SQLiteDatabase) -> None:
+    """没送到观众面前的台词不算"用上了"：引用它的那句没被听见，卡照推。"""
+    session_id = await _session(store)
+    viewer_id = await _viewer(store, external_id="u1", name="阿杰")
+    commitment_id = await store.commitments.insert_commitment(what="给 ta 盖个小房子", viewer_id=viewer_id)
+    assert commitment_id is not None
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=_NOW,
+        sender_role="assistant",
+        content="安心啦，回头就给你盖",
+        message_type="speech",
+        memory_refs=f'["约#{commitment_id}"]',
+        dropped_at_ms=_NOW,
+    )
+
+    cues = await _provider(store, session_id=session_id).collect(batch=[_message()])
+    assert cues.card_count == 1 and cues.commitment_ids == (commitment_id,)
+
+
 async def test_new_session_resets_push_counters(store: SQLiteDatabase) -> None:
     first = await _session(store, started_at_ms=_NOW - 10_000)
     viewer_id = await _viewer(store, external_id="u1", name="阿杰")
@@ -193,7 +213,9 @@ async def test_game_commitment_card_only_while_that_game_is_open(store: SQLiteDa
     assert closed.card_count == 0
     opened = await provider.collect(batch=[_message()], open_games=["Minecraft"])
     assert opened.card_count == 1
-    assert "Minecraft 开着" in opened.text and "下次接着炸 TNT" in opened.text
+    # 卡面点名编号、游戏与她的原话；不写"现在 X 开着"——open_games 是已启用的工具面，
+    # 不代表主播此刻正在玩哪一个
+    assert "[约#" in opened.text and "Minecraft" in opened.text and "下次接着炸 TNT" in opened.text
 
 
 async def test_cards_are_capped_per_batch(store: SQLiteDatabase) -> None:
@@ -241,6 +263,55 @@ async def test_presence_line_for_returning_viewers_until_she_replies(store: SQLi
     assert "老观众在场" not in after.text
 
 
+async def _returning_viewer(store: SQLiteDatabase) -> tuple[MemoryCueProvider, int]:
+    """造一位老观众与 ta 本场那句弹幕，返回 (provider, 场次号)；回应由用例按需追加。"""
+    session_id = await _session(store)
+    viewer_id = await _viewer(store, external_id="u1", name="小林", sessions_count=4, prev_seen_ms=_NOW - 60_000)
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=_NOW,
+        sender_role="viewer",
+        content="我回来啦",
+        message_type="danmaku",
+        message_id="m9",
+        viewer_id=viewer_id,
+    )
+    return _provider(store, session_id=session_id), session_id
+
+
+async def _her_reply_to(store: SQLiteDatabase, session_id: int, *, dropped_at_ms: Optional[int]) -> None:
+    """她回应 ta 的那句台词；dropped_at_ms 非空表示播放队列确认没送到观众面前。"""
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=_NOW,
+        sender_role="assistant",
+        content="欢迎回来",
+        message_type="speech",
+        reply_to_message_id="m9",
+        dropped_at_ms=dropped_at_ms,
+    )
+
+
+async def test_dropped_reply_does_not_count_as_replied(store: SQLiteDatabase) -> None:
+    """回应了但那一句没送到观众面前，不算回应过：老观众一行照出。"""
+    provider, session_id = await _returning_viewer(store)
+    await _her_reply_to(store, session_id, dropped_at_ms=_NOW)
+
+    cues = await provider.collect(batch=[_message(external_id="u1", name="小林")])
+    assert "老观众在场" in cues.text
+
+
+async def test_replied_state_is_requeried_every_batch(store: SQLiteDatabase) -> None:
+    """老观众一行的"已回应"判断每批重查、不整场缓存：同一实例里刚送达的回应，下一批立刻生效。"""
+    provider, session_id = await _returning_viewer(store)
+    before = await provider.collect(batch=[_message(external_id="u1", name="小林")])
+    assert "老观众在场" in before.text, "还没回应：照常提示"
+
+    await _her_reply_to(store, session_id, dropped_at_ms=None)
+    after = await provider.collect(batch=[_message(external_id="u1", name="小林", message_id="m2")])
+    assert "老观众在场" not in after.text, "回应已送达：同一实例的下一批就查到了，不用等换场"
+
+
 async def test_presence_line_is_suppressed_when_a_card_is_pushed(store: SQLiteDatabase) -> None:
     session_id = await _session(store)
     viewer_id = await _viewer(store, external_id="u1", name="小林", sessions_count=5, prev_seen_ms=_NOW - 60_000)
@@ -276,11 +347,44 @@ async def test_new_viewer_and_pending_deletion_viewers_are_not_presence(store: S
 async def test_forget_command_gets_a_notice_and_enables_retraction(
     store: SQLiteDatabase, privacy: PrivacyService
 ) -> None:
+    """遗忘命令回执：忘了我即时回执；撤回短语只认记账侧确认已生效的那一次撤回。
+
+    线索侧自己不猜——没经过记账入口的撤回短语不回执，否则会答应一场并不会发生的撤回。
+    """
     session_id = await _session(store)
+    await _viewer(store, external_id="u1", name="阿杰")
     provider = _provider(store, session_id=session_id, privacy=privacy)
 
     forget = await provider.collect(batch=[_message(content="忘了我吧", message_id="m815")])
     assert "【已按" in forget.text and "m815" in forget.text
+
+    unhandled = await provider.collect(batch=[_message(content="开玩笑的", message_id="m821")])
+    assert unhandled.text == "", "记账侧没处理过的撤回短语不回执"
+
+    assert (
+        await privacy.process_incoming_viewer_message(
+            platform="bilibili",
+            id_kind="account",
+            external_id="u1",
+            user_name="阿杰",
+            message_type="danmaku",
+            content="忘了我吧",
+            message_id="m815",
+        )
+        == "forget_command"
+    )
+    assert (
+        await privacy.process_incoming_viewer_message(
+            platform="bilibili",
+            id_kind="account",
+            external_id="u1",
+            user_name="阿杰",
+            message_type="danmaku",
+            content="开玩笑的",
+            message_id="m821",
+        )
+        == "retracted"
+    )
 
     retract = await provider.collect(batch=[_message(content="开玩笑的", message_id="m821")])
     assert "【已撤回" in retract.text and "m821" in retract.text

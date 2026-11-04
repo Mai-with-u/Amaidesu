@@ -36,15 +36,13 @@ class AssemblerInputs:
 
     stage_descriptions: str = ""  # 环节描述
     environment: Optional[EnvironmentBlock] = None
-    person_profile_section: str = ""  # 人物画像段（本批发言人里有印象的常客，由观众画像取得）
-    notebook_section: str = ""  # 备忘录段（本场工作笔记全文，模型经 streamer_notebook 主动写）
 
 
 class PlannerAssembler:
     """Planner 参考段组装器
 
-    组装顺序：环节描述 → 直播间快照 → 人物画像 → 备忘录。顺序由测试锁定
-    （test_planner_context.py）；整段作为一条 user 消息固定在消息序列尾部，
+    组装顺序：环节描述 → 直播间快照。顺序由测试锁定（test_planner_context.py）；
+    整段作为一条 user 消息固定在消息序列尾部，
     ReAct 循环的 assistant/tool 消息追加在其后（append-only，服务端 LLM
     前缀缓存可命中既有前缀）。
 
@@ -60,12 +58,6 @@ class PlannerAssembler:
         env_body = _render_environment(inputs.environment)
         if env_body:
             sections.append(("直播间快照", env_body))
-
-        if inputs.person_profile_section:
-            sections.append(("人物画像-内部参考", inputs.person_profile_section))
-
-        if inputs.notebook_section:
-            sections.append(("备忘录-内部参考", inputs.notebook_section))
 
         return "\n\n".join(f"## {title}\n{body}" for title, body in sections)
 

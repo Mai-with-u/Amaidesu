@@ -49,12 +49,12 @@ class AgentManager:
             ``enable_agent`` 时如未显式覆盖则用此成员（Dashboard 动态启停
             场景可能不传 tool_registry，回退到成员避免 Agent 拿 None）。
         rundown_repo / chat_repo / sessions_repo / topic_repo / viewer_repo /
-        viewer_profile_repo / recap_repo / commitments_repo / archive_repo / event_repo /
-    long_memory_store: 构造时注入的默认仓储
+        commitments_repo / archive_repo / event_repo: 构造时注入的默认仓储
+        （直播对话历史的单一事实源在 live_chat 表，StreamerAgent 的历史
+        读取 / 后台维护 / 收播整理依赖它们。回退语义同 tool_registry
+        ——Dashboard 动态启用不传时回退成员，避免 Agent 拿 None 降级）。
         creature_repo: 构造时注入的默认生物名册仓储（Minecraft Agent 跨场次记得同伴）
-            （直播对话历史的单一事实源在 live_chat 表，StreamerAgent 的历史
-            读取 / 后台维护 / 收播记忆整理依赖它们）。回退语义同 tool_registry
-            ——Dashboard 动态启用不传时回退成员，避免 Agent 拿 None 降级。
+        privacy_service: 删除/遮蔽服务（回忆工具与线索推送按它遮名、核对遗忘命令）
     """
 
     def __init__(
@@ -68,13 +68,11 @@ class AgentManager:
         sessions_repo: Optional[Any] = None,
         topic_repo: Optional[Any] = None,
         viewer_repo: Optional[Any] = None,
-        viewer_profile_repo: Optional[Any] = None,
-        recap_repo: Optional[Any] = None,
         commitments_repo: Optional[Any] = None,
         archive_repo: Optional[Any] = None,
         event_repo: Optional[Any] = None,
         creature_repo: Optional[Any] = None,
-        long_memory_store: Optional[Any] = None,
+        privacy_service: Optional[Any] = None,
         supervisor_config: Optional[AgentSupervisorConfig] = None,
     ) -> None:
         self._agents: Dict[str, AgentRegistration] = {}
@@ -89,13 +87,11 @@ class AgentManager:
         self._sessions_repo = sessions_repo
         self._topic_repo = topic_repo
         self._viewer_repo = viewer_repo
-        self._viewer_profile_repo = viewer_profile_repo
-        self._recap_repo = recap_repo
         self._commitments_repo = commitments_repo
         self._archive_repo = archive_repo
         self._event_repo = event_repo
         self._creature_repo = creature_repo
-        self._long_memory_store = long_memory_store
+        self._privacy_service = privacy_service
         self._lock = asyncio.Lock()
         # ----- 守护（心跳巡检 + 自动重建 + 风暴保护）-----
         self._supervisor_config = supervisor_config if supervisor_config is not None else AgentSupervisorConfig()
@@ -230,15 +226,11 @@ class AgentManager:
             sessions_repo=d.sessions_repo if d.sessions_repo is not None else self._sessions_repo,
             topic_repo=d.topic_repo if d.topic_repo is not None else self._topic_repo,
             viewer_repo=d.viewer_repo if d.viewer_repo is not None else self._viewer_repo,
-            viewer_profile_repo=(
-                d.viewer_profile_repo if d.viewer_profile_repo is not None else self._viewer_profile_repo
-            ),
-            recap_repo=d.recap_repo if d.recap_repo is not None else self._recap_repo,
             commitments_repo=(d.commitments_repo if d.commitments_repo is not None else self._commitments_repo),
             archive_repo=d.archive_repo if d.archive_repo is not None else self._archive_repo,
             event_repo=d.event_repo if d.event_repo is not None else self._event_repo,
             creature_repo=d.creature_repo if d.creature_repo is not None else self._creature_repo,
-            long_memory_store=d.long_memory_store if d.long_memory_store is not None else self._long_memory_store,
+            privacy_service=d.privacy_service if d.privacy_service is not None else self._privacy_service,
         )
 
     async def enable_agent(

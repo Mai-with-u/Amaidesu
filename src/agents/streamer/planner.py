@@ -171,7 +171,7 @@ class PlannerEnv:
     elapsed_live_provider: Optional[Callable[[], Optional[int]]] = None
     frame_provider: Optional[Callable[[], Optional[Any]]] = None
     frame_stale_warn_ms: int = 0
-    # 常驻简报（开播时拼好、整场不变；空串 = 还没有可记的事）
+    # 常驻简报（每窗按台账快照重渲；空串 = 还没有可记的事）
     brief_provider: Optional[Callable[[], str]] = None
     # 常驻简报里出现的承诺编号（点名校验的合法名单之一）
     brief_ids_provider: Optional[Callable[[], Sequence[int]]] = None
@@ -179,7 +179,7 @@ class PlannerEnv:
     commitment_lookup: Optional[Callable[[int], Any]] = None
     # 线索推送：按本批弹幕与当前开着的游戏算这一批想起来的事（异步）
     memory_cues_provider: Optional[Callable[[List[Any], Sequence[str]], Any]] = None
-    # 当前开着的游戏名（游戏承诺卡只在这些游戏开着时推）
+    # 已启用的游戏工具面（提示行只在这些游戏里取承诺卡；不表示主播正在玩哪一个）
     open_games_provider: Optional[Callable[[], Sequence[str]]] = None
     action_recorder: Optional[Callable[[str, str], None]] = None
     delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
@@ -206,7 +206,6 @@ class Planner:
         prompt_service: Any,
         room_state: RoomState,
         tool_registry: Any = None,
-        profile_repo: Any = None,
         viewer_repo: Any = None,
         context_enabled: bool = True,
         behavior_style: str = "",
@@ -218,26 +217,24 @@ class Planner:
     ) -> None:
         """初始化 Planner。
 
-            Args:
-                config: Planner 配置（``PlannerConfig``；None 即全默认）。
-                llm_service: LLM 管理器，需提供
-                    ``async generate(messages, *, tools=..., profile=...) -> payload.Response``
-                    与 ``is_profile_visual(profile) -> bool``。
-                prompt_service: 提示词管理器，需提供 ``render(name, **vars) -> str``。
-                room_state: 直播间态势规则层实例。
-                tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作类工具）。
-                profile_repo: 观众画像查询（``ViewerProfileRepo`` 结构契约，只用
-                    ``get_profile_text``）；None 时无画像注入。
-                viewer_repo: ``ViewerRepo``（观众仓储）——画像注入时把消息里的外部 ID
-                    换算成观众、实时取昵称与曾用名（昵称会漂移不进画像文本）；None 时无画像注入。
-                context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
-                behavior_style: 人设行为准则（决策侧）。
-                bot_name: 主播名字（她是谁）。
-                personality: 主播性格描述——替她挑话题、定态度的依据。
-                boundaries: 边界栏——她不答应的事（人设字段，运营者可改；空串 = 不带）。
-        inside_jokes: 老梗栏——运营者手写的直播间老梗（空串 = 不带）。
-                env: 运行环境（迟绑定依赖集合，见 :class:`PlannerEnv`）；缺省
-                    ``PlannerEnv()`` 即全部可选依赖降级缺席。
+        Args:
+            config: Planner 配置（``PlannerConfig``；None 即全默认）。
+            llm_service: LLM 管理器，需提供
+                ``async generate(messages, *, tools=..., profile=...) -> payload.Response``
+                与 ``is_profile_visual(profile) -> bool``。
+            prompt_service: 提示词管理器，需提供 ``render(name, **vars) -> str``。
+            room_state: 直播间态势规则层实例。
+            tool_registry: 全局 ToolRegistry——ReAct 工具列表来源（信息收集/动作类工具）。
+            viewer_repo: ``ViewerRepo``（观众仓储）——当前决策链不直接读它
+                （观众画像注入已随旧记忆退役），保留注入点供调用方按需使用；None 合法。
+            context_enabled: 组装器路径开关；False 时以直播流窗口文本为 context_block。
+            behavior_style: 人设行为准则（决策侧）。
+            bot_name: 主播名字（她是谁）。
+            personality: 主播性格描述——替她挑话题、定态度的依据。
+            boundaries: 边界栏——她不答应的事（人设字段，运营者可改；空串 = 不带）。
+            inside_jokes: 老梗栏——运营者手写的直播间老梗（空串 = 不带）。
+            env: 运行环境（迟绑定依赖集合，见 :class:`PlannerEnv`）；缺省
+                ``PlannerEnv()`` 即全部可选依赖降级缺席。
         """
         # 配置为 typed 子配置对象单轨注入；缺省即全默认（"未配置降级"由字段默认值表达）
         self.typed_config = config if config is not None else PlannerConfig()
@@ -255,7 +252,6 @@ class Planner:
         self._room_state = room_state
         self._cold_silence_ms: int = self.typed_config.cold_silence_ms
         self._tool_registry = tool_registry
-        self._profile_repo = profile_repo
         self._viewer_repo = viewer_repo
         self._context_enabled = context_enabled
         self._behavior_style: str = behavior_style or ""
@@ -713,9 +709,9 @@ class Planner:
         """构造参考段，返回（参考段文本, 失败原因）。
 
         内容 = 情境标注（强制/主动，按触发原因取条件子句）+ 私密游戏聊天 + 运营提醒 +
-        组装器元数据段（环节描述 / 直播间快照 / 人物画像 / 备忘录）。对话内容与游戏事件
-        不在此处——历史（含 game 条目）与本批走 canonical 映射的原生消息通道；整场不变的
-        长期笔记与上场回顾在系统提示词末尾（见 ``_memory_block``）。
+        组装器元数据段（环节描述 / 直播间快照）+ 本批线索块。对话内容与游戏事件
+        不在此处——历史（含 game 条目）与本批走 canonical 映射的原生消息通道；
+        常驻简报与老梗栏在系统提示词里，不占参考段。
         组装失败时文本为 None，失败原因随 outcome.error 写进决策事件。
         """
         signoff_window = trigger_cause is not None and trigger_cause.kind is TriggerKind.SIGNOFF
@@ -809,13 +805,10 @@ class Planner:
             unread_summary=self._room_state.consume_topic_summary(),
         )
 
-        person_profile_section = await self._collect_person_profiles(batch)
-
         try:
             assembler_inputs = AssemblerInputs(
                 stage_descriptions=rundown_text or "",
                 environment=env_block,
-                person_profile_section=person_profile_section,
             )
             assembled_text = self._assembler.assemble(assembler_inputs)
         except Exception as e:
@@ -1063,76 +1056,3 @@ class Planner:
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
         return render_observation(data)
-
-    # ==================== 人物画像注入 ====================
-
-    async def _collect_person_profiles(
-        self,
-        batch: List[Any],
-    ) -> str:
-        """按本批发言时间倒序注入全部已有印象（观众画像）。
-
-        消息只带外部 ID：先换算成观众（同一个人换了数据源也是同一份画像），按观众去重；
-        还没建档的（记账器尚未落库的新观众）没有画像，跳过。对某位观众答应过的事不走这里——
-        它由线索推送的承诺卡在该观众开口时给（不再把旧事塞进人物画像）。
-        """
-        if self._viewer_repo is None or not batch or self._profile_repo is None:
-            return ""
-
-        # 候选收集：发言时间倒序去重（最新发言优先；batch 本身按时间正序）
-        candidates: List[tuple[str, str]] = []  # (platform, 外部 ID)
-        seen: set[tuple[str, str]] = set()
-        for msg in reversed(batch):
-            platform = _as_id_str(getattr(msg, "platform", None))
-            user = getattr(msg, "user", None)
-            user_id = _as_id_str(getattr(user, "id", None)) if user is not None else ""
-            if not platform or not user_id:
-                continue
-            key = (platform, user_id)
-            if key in seen:
-                continue
-            seen.add(key)
-            candidates.append(key)
-
-        lines: List[str] = []
-        injected: set[int] = set()
-        for platform, user_id in candidates:
-            try:
-                viewer_id = await self._viewer_repo.find_viewer_id(platform=platform, external_id=user_id)
-                if viewer_id is None or viewer_id in injected:
-                    continue
-                injected.add(viewer_id)
-                profile_text = (
-                    await self._profile_repo.get_profile_text(viewer_id=viewer_id)
-                    if self._profile_repo is not None
-                    else ""
-                )
-            except Exception as exc:
-                self.logger.warning(f"画像查询失败（{platform}/{user_id}，跳过该人）: {exc}")
-                continue
-            if not profile_text:
-                continue  # 无画像不注入、不占位
-            text = profile_text.replace("\n", " ").strip()
-            display = await self._viewer_display(viewer_id) or f"{platform}/{user_id}"
-            lines.append(f"- {display}: {text}")
-
-        if not lines:
-            return ""
-        header = "（内部参考，帮助识别老观众；不要逐字复述，与当前对话冲突时以当前对话为准。答应的旧事另有承诺卡，不要从这里编）"
-        return "\n".join([header, *lines])
-
-    async def _viewer_display(self, viewer_id: int) -> str:
-        """观众的展示名：当前昵称，改过名的带上曾用名（"乙（以前叫甲）"）。
-
-        场次回顾按当时的名字写，主播要知道"乙就是以前的甲"才对得上号；查询失败回退空串。
-        """
-        try:
-            row = await self._viewer_repo.get_viewer(viewer_id=viewer_id)
-            if row is None:
-                return ""
-            name = row.user_name
-            former = await self._viewer_repo.list_former_names(viewer_id=viewer_id, current_name=name)
-        except Exception as exc:
-            self.logger.warning(f"观众昵称查询失败（viewer {viewer_id}）: {exc}")
-            return ""
-        return f"{name}（以前叫{'、'.join(former)}）" if former else name

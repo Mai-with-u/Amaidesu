@@ -1,6 +1,6 @@
 """Planner ReAct 循环：工具列表、reply 收尾 / 自然终止 / 超步、registry 路由与观察回灌、降级、上下文与记忆、消息构成"""
 
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,7 +8,6 @@ import pytest
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GameEventBatch
-from src.modules.storage.models.memory import Viewer
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
@@ -51,8 +50,6 @@ def _make_planner(
     chat_responses: list | None = None,
     registry: Any | None = None,
     reply_provider: Any | None = None,
-    profile_repo: Any | None = None,
-    viewer_repo: Any | None = None,
     context_enabled: bool = True,
     max_steps: int = 8,
     elapsed_live_provider: Any | None = None,
@@ -80,8 +77,6 @@ def _make_planner(
         prompt_service=prompt,
         room_state=RoomState(),
         tool_registry=reg,
-        profile_repo=profile_repo,
-        viewer_repo=viewer_repo,
         context_enabled=context_enabled,
         env=PlannerEnv(
             reply_provider_factory=lambda: prov,
@@ -246,69 +241,6 @@ async def test_elapsed_live_duration_line(provider, expected) -> None:
     reference = _reference_message(llm)["content"]
     assert outcome.silent_reason == "natural"
     assert (expected in reference) if expected else ("已开播时长" not in reference)
-
-
-def _viewer_repo(former: Dict[int, List[str]] | None = None) -> MagicMock:
-    """观众仓储替身：外部 ID "u_<n>" 换算成观众 n（其余为 1），昵称"老王"，曾用名按 ``former`` 给。"""
-
-    async def find(*, platform: str, external_id: str) -> int:
-        return int(external_id[2:]) + 100 if external_id.startswith("u_") and external_id[2:].isdigit() else 1
-
-    async def former_names(*, viewer_id: int, current_name: str) -> List[str]:
-        return (former or {}).get(viewer_id, [])
-
-    repo = MagicMock()
-    repo.find_viewer_id = AsyncMock(side_effect=find)
-    repo.get_viewer = AsyncMock(
-        return_value=Viewer(
-            id=1,
-            platform="bilibili",
-            user_name="老王",
-            name_seen_ms=0,
-            link_status="confirmed",
-            last_active_ms=0,
-            user_id="u1",
-        )
-    )
-    repo.list_former_names = AsyncMock(side_effect=former_names)
-    return repo
-
-
-async def test_person_profiles_are_injected_without_placeholders_and_failures_do_not_block() -> None:
-    profile_repo = MagicMock()
-    profile_repo.get_profile_text = AsyncMock(return_value="老粉，喜欢工作台话题")
-    planner, llm, _prompt = _make_planner([_resp()], profile_repo=profile_repo, viewer_repo=_viewer_repo({1: ["王哥"]}))
-    await planner.plan([_msg("工作台")])
-    # 昵称从 viewers 实时取，画像行与弹幕侧"老王: ..."同源可关联；改过名的带上以前的名字
-    assert "- 老王（以前叫王哥）: 老粉，喜欢工作台话题" in _reference_message(llm)["content"]
-
-    # 无画像的候选不占位，其余照常注入
-    async def profile(*, viewer_id: int) -> str:
-        return "" if viewer_id == 107 else "有画像"
-
-    profile_repo.get_profile_text = AsyncMock(side_effect=profile)
-    portraitless = _msg("随便聊聊")
-    portraitless.user.id = "u_7"
-    section = await planner._collect_person_profiles([portraitless, _msg("有画像的人说话")])
-    assert section.count("- ") == 1 and "有画像" in section
-
-    # 本批全部观众画像完整注入，不丢尾部经历
-    profile_repo.get_profile_text = AsyncMock(return_value="画" * 900)
-    batch = [_msg(f"第{i}条") for i in range(5)]
-    for i, msg in enumerate(batch):
-        msg.user.id = f"u_{i}"
-    section = await planner._collect_person_profiles(batch)
-    assert section.startswith("（内部参考") and section.count("- ") == 5 and section.count("画" * 900) == 5
-
-    # 同一位观众的两个外部 ID（换过数据源）只注入一次
-    twins = [_msg("账号 ID 说话"), _msg("开放平台 ID 说话")]
-    twins[0].user.id, twins[1].user.id = "uid-x", "open-x"
-    section = await planner._collect_person_profiles(twins)
-    assert section.count("- ") == 1
-
-    profile_repo.get_profile_text = AsyncMock(side_effect=RuntimeError("db down"))  # 画像查询异常静默降级
-    planner, _llm, _prompt = _make_planner([_resp()], profile_repo=profile_repo, viewer_repo=_viewer_repo())
-    assert (await planner.plan([_msg()])).silent_reason == "natural"
 
 
 def test_dialogue_messages_use_native_roles_and_dedup_only_the_tail() -> None:

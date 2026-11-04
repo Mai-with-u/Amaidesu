@@ -125,8 +125,8 @@ class DecisionRoundExecutor:
           顺序不变量内化在 ``SessionScope.open_window``）。每轮以关键字
           ``scope_pk`` 调用：常规轮次为 None，收播道别那一轮为正在结束的场次号。
           返回的 ``WindowMaterials`` 字段语义见其类型注释——``history`` 的 ``None``
-          与空列表不同义，``game_batch`` 空批次即无事件，``session_recap``
-          空串即不注入。
+          与空列表不同义，``game_batch`` 空批次即无事件，``timeline_notes`` 空列表
+          即本窗没有新的游戏动作记录。
         - rundown_text: ``Optional[str]``（None = 无流程单情境；非场次作用域
           项，经流程单协调器自取）。
         - reminders: ``str``（可为空串；运营递话留言，**读取即取空队列**——
@@ -273,7 +273,7 @@ class DecisionRoundExecutor:
             "total_duration_ms": now_ms() - started_ms,
         }
 
-        # 开决策窗：出账 + 读历史 + 本窗批次 + 上场回顾一次取齐（顺序不变量
+        # 开决策窗：出账 + 读历史 + 本窗批次 + 时间线 notes 一次取齐（顺序不变量
         # 在 SessionScope.open_window 内化——出账的时间线行必先进本轮投影）
         materials = await self._window_opener(scope_pk=scope_pk)
         history = materials.history

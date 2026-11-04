@@ -1,4 +1,4 @@
-"""Planner 参考段组装器：有数据才渲染段、无占位文本、段序固定（环节描述 → 直播间快照 → 人物画像 → 备忘录），时刻按本地时区"""
+"""Planner 参考段组装器：有数据才渲染段、无占位文本、段序固定（环节描述 → 直播间快照），时刻按本地时区"""
 
 from __future__ import annotations
 
@@ -20,8 +20,6 @@ def _production_inputs() -> AssemblerInputs:
             duration_so_far_ms=45 * 60_000,
             unread_summary="3 条未读互动",
         ),
-        person_profile_section="- bilibili/alice: 上次问过新皮肤",
-        notebook_section="答应 alice 下次画新皮肤",
     )
 
 
@@ -30,10 +28,10 @@ def test_sections_render_in_fixed_order() -> None:
     sections = (
         "## 环节描述",
         "## 直播间快照",
-        "## 人物画像-内部参考",
-        "## 备忘录-内部参考",
     )
     assert [text.index(section) for section in sections] == sorted(text.index(section) for section in sections)
+    # 观众画像注入已下线，任何输入都不该出现该段
+    assert "人物画像-内部参考" not in text
     # 空输入整段省略，连段标题也不出现
     assert PlannerAssembler().assemble(AssemblerInputs()) == ""
     assert "人物画像-内部参考" not in PlannerAssembler().assemble(AssemblerInputs(stage_descriptions="有环节"))

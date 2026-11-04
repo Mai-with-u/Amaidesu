@@ -357,6 +357,33 @@ async def test_rehearsal_session_is_not_settled(store: SQLiteDatabase, prompt_ma
     assert await settler.settle_pending() == 0
 
 
+async def test_settling_the_same_session_twice_writes_archive_lines_once(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """同一场被整理两次（重新整理与启动补跑撞车）：第二次直接跳过，不重复写。
+
+    已整理场次在入口按 settled_at_ms 跳过（不白跑模型调用）；即使绕过入口，
+    写入侧也按"已完成"抢占挡下（written 全为 0），库里只保留第一份整理结果。
+    """
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
+    archive = '{"archive": [{"line": 1, "title": "答应了讲鬼故事的结局", "quote": "下次接着讲那个鬼故事的结局"}]}'
+    llm = _reply(archive, '{"commitments": []}', archive, '{"commitments": []}')
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+    assert [line.text for line in await store.archive.list_lines(live_session_id=session_id)] == [
+        "答应了讲鬼故事的结局"
+    ]
+
+    assert await settler.settle_session(session_id) is False, "已整理场次应直接跳过"
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert [line.text for line in lines] == ["答应了讲鬼故事的结局"], "重复整理不重复写档案行"
+    assert await store.commitments.count_commitments() == 0
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settled_at_ms == 7_777 and row.settle_report is None
+
+
 # ---------------------------------------------------------------------------
 # JSON 解析
 # ---------------------------------------------------------------------------

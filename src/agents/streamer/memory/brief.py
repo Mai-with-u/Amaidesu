@@ -1,17 +1,18 @@
-"""常驻简报：开播时拼好、整场不变的一段记忆摘要。
+"""常驻简报：按台账快照渲染的一段记忆摘要。
 
 两段料：最近一个已整理、有档案行的同类型场次的档案；所有不针对具体观众、不挂游戏的
 未了结承诺（最老的在前，至多五条，多出来的折成一行指向回想工具）。彩排场接彩排场、
 正式场接正式场，调试场不会被当成正式直播的上一场。
 
-拼好之后整场不再重算：前缀缓存才命中，Planner 每个决策窗的输入逐字节相同。运营者
-在直播中判误记或删一条，要等下一场开播才从简报里消失（参考段的卡片不受影响）。
+渲染只依赖表快照、不含时刻：表没变时每个决策窗的输出逐字节相同，Planner 的系统
+提示词前缀缓存仍然命中；表变了（运营者判误记、了结、删一行，或上一场整理刚写完）
+下一窗就反映出来——每窗重渲正是为了让直播中的纠错"下一窗少一行"。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Sequence, Tuple
+from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.storage.models.memory import Commitment
@@ -32,10 +33,16 @@ _CANDIDATE_LIMIT = 200
 
 @dataclass(frozen=True)
 class MemoryBrief:
-    """常驻简报的成品：一段文本 + 其中的承诺编号（点名的合法名单之一）。"""
+    """常驻简报的成品：一段文本 + 其中的承诺编号（点名的合法名单之一）。
+
+    ``previous_session_id`` / ``archive_line_count`` 只供观测（开播日志与测试核对
+    "上一场是谁、带了几行档案"）；文本本身仍是唯一注入面。
+    """
 
     text: str = ""
     commitment_ids: Tuple[int, ...] = field(default_factory=tuple)
+    previous_session_id: Optional[int] = None
+    archive_line_count: int = 0
 
 
 async def build_brief(
@@ -54,7 +61,12 @@ async def build_brief(
         previous_session_id=previous_session_id,
         earlier_commitment_count=earlier,
     )
-    return MemoryBrief(text=text, commitment_ids=tuple(int(item.id) for item in taken))
+    return MemoryBrief(
+        text=text,
+        commitment_ids=tuple(int(item.id) for item in taken),
+        previous_session_id=int(previous_session_id) if previous_session_id is not None else None,
+        archive_line_count=len(archive_lines),
+    )
 
 
 async def _archive_lines(archive_repo: "ArchiveRepo", kind: SessionKind) -> List:

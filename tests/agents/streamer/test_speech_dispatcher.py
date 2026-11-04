@@ -382,9 +382,7 @@ async def test_speech_event_precedes_round_end_events() -> None:
         stats=StreamerStats(),
         thinking_sink=None,
         thinking_enabled=False,
-        window_opener=AsyncMock(
-            return_value=WindowMaterials(history=[], game_batch=GameEventBatch(), session_recap="")
-        ),
+        window_opener=AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch())),
         rundown_text_provider=MagicMock(return_value=None),
     )
     order: list[str] = []

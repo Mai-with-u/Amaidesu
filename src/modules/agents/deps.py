@@ -49,13 +49,11 @@ class AgentDeps:
     sessions_repo: Optional[Any] = None
     topic_repo: Optional[Any] = None
     viewer_repo: Optional[Any] = None
-    viewer_profile_repo: Optional[Any] = None
-    recap_repo: Optional[Any] = None
     commitments_repo: Optional[Any] = None
     archive_repo: Optional[Any] = None
     event_repo: Optional[Any] = None
     creature_repo: Optional[Any] = None
-    long_memory_store: Optional[Any] = None
+    privacy_service: Optional[Any] = None
     context_assembler_config: Optional[Any] = None
     task_tracker: Optional[Any] = None
     task_ledger: Optional[Any] = None

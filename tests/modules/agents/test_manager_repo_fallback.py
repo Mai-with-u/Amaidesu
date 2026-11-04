@@ -2,11 +2,11 @@
 AgentManager 仓储 / tool_registry 回退逻辑测试。
 
 覆盖：
-- ``AgentManager(viewer_profile_repo=..., recap_repo=...)`` 成员持有
+- ``AgentManager(commitments_repo=..., archive_repo=..., privacy_service=...)`` 成员持有
 - ``enable_agent(name)`` 不传仓储 → 回退到成员（Dashboard 动态启用场景）
-- ``enable_agent(name, deps=AgentDeps(recap_repo=explicit))`` → 显式值覆盖成员
+- ``enable_agent(name, deps=AgentDeps(commitments_repo=explicit))`` → 显式值覆盖成员
 - ``tool_registry`` 同样的回退逻辑
-- ``instantiate_agent`` 签名接受主播记忆两仓储与游戏事件仓储
+- ``instantiate_agent`` 签名接受账本两仓储、游戏事件仓储与删除/遮名服务
 
 通过 ``unittest.mock.patch`` stub ``factory.instantiate_agent``，避免真实构造
 ``StreamerAgent``。
@@ -50,13 +50,14 @@ def stub_factory():
 
 @pytest.fixture
 async def manager_with_repos(stub_factory) -> AsyncGenerator[tuple[AgentManager, list], None]:
-    """构造带记忆仓储 + tool_registry 的 AgentManager；patch 工厂以记录调用。"""
+    """构造带账本仓储 + tool_registry 的 AgentManager；patch 工厂以记录调用。"""
     patcher, calls = stub_factory
     mgr = AgentManager(
         tool_registry=ToolRegistry(),
-        viewer_profile_repo=object(),
-        recap_repo=object(),
+        commitments_repo=object(),
+        archive_repo=object(),
         event_repo=object(),
+        privacy_service=object(),
     )
     patcher.start()
     try:
@@ -72,35 +73,40 @@ async def _enable(mgr: AgentManager, **kwargs: Any) -> bool:
 
 
 def test_manager_init_stores_repo_members() -> None:
-    profile_repo, recap_repo = object(), object()
-    mgr = AgentManager(viewer_profile_repo=profile_repo, recap_repo=recap_repo)
-    assert mgr._viewer_profile_repo is profile_repo
-    assert mgr._recap_repo is recap_repo
-    assert AgentManager()._recap_repo is None
+    commitments, archive, privacy = object(), object(), object()
+    mgr = AgentManager(commitments_repo=commitments, archive_repo=archive, privacy_service=privacy)
+    assert mgr._commitments_repo is commitments
+    assert mgr._archive_repo is archive
+    assert mgr._privacy_service is privacy
+    default = AgentManager()
+    assert default._commitments_repo is None
+    assert default._archive_repo is None
+    assert default._privacy_service is None
 
 
 @pytest.mark.asyncio
 async def test_enable_agent_repos_fallback_to_members(manager_with_repos) -> None:
-    """Dashboard 场景：不传记忆仓储 → 工厂收到成员对象。"""
+    """Dashboard 场景：不传仓储 → 工厂收到成员对象。"""
     mgr, calls = manager_with_repos
     assert await _enable(mgr) is True
     resolved = calls[0]["deps"]
-    assert resolved.viewer_profile_repo is mgr._viewer_profile_repo
-    assert resolved.recap_repo is mgr._recap_repo
+    assert resolved.commitments_repo is mgr._commitments_repo
+    assert resolved.archive_repo is mgr._archive_repo
     assert resolved.event_repo is mgr._event_repo
+    assert resolved.privacy_service is mgr._privacy_service
     assert resolved.tool_registry is mgr._tool_registry
 
 
 @pytest.mark.asyncio
 async def test_enable_agent_explicit_overrides_members(manager_with_repos) -> None:
     mgr, calls = manager_with_repos
-    explicit_recap, explicit_reg = object(), ToolRegistry()
-    await _enable(mgr, recap_repo=explicit_recap, tool_registry=explicit_reg)
+    explicit_commitments, explicit_reg = object(), ToolRegistry()
+    await _enable(mgr, commitments_repo=explicit_commitments, tool_registry=explicit_reg)
     resolved = calls[0]["deps"]
-    assert resolved.recap_repo is explicit_recap
+    assert resolved.commitments_repo is explicit_commitments
     assert resolved.tool_registry is explicit_reg
     # 未显式传的仍回退成员
-    assert resolved.viewer_profile_repo is mgr._viewer_profile_repo
+    assert resolved.archive_repo is mgr._archive_repo
 
 
 @pytest.mark.asyncio
@@ -111,23 +117,26 @@ async def test_enable_agent_without_members_passes_none(stub_factory) -> None:
     try:
         await _enable(AgentManager())
         resolved = calls[0]["deps"]
-        assert resolved.recap_repo is None
-        assert resolved.viewer_profile_repo is None
+        assert resolved.commitments_repo is None
+        assert resolved.archive_repo is None
+        assert resolved.privacy_service is None
         assert resolved.tool_registry is None
     finally:
         patcher.stop()
 
 
 def test_factory_signature_takes_single_deps_value_object() -> None:
-    """``instantiate_agent`` 的基建签名收敛为单一 ``deps`` 值对象；记忆两仓储与游戏事件仓储在 AgentDeps 字段里。"""
-    from src.modules.agents.deps import AgentDeps
+    """``instantiate_agent`` 的基建签名收敛为单一 ``deps`` 值对象；账本仓储与删除服务在 AgentDeps 字段里。"""
+    from src.modules.agents.deps import AgentDeps as DepsClass
     from src.modules.agents.factory import instantiate_agent
 
     params = inspect.signature(instantiate_agent).parameters
     assert list(params) == ["name", "config", "deps"]
     assert params["deps"].kind == inspect.Parameter.KEYWORD_ONLY
-    fields = AgentDeps.__dataclass_fields__
-    for name in ("viewer_profile_repo", "recap_repo", "event_repo"):
+    fields = DepsClass.__dataclass_fields__
+    for name in ("commitments_repo", "archive_repo", "event_repo", "privacy_service"):
         assert name in fields and fields[name].default is None
+    for retired in ("viewer_profile_repo", "recap_repo", "long_memory_store"):
+        assert retired not in fields
     assert "memory" not in params
     assert "memory_policy" not in params

@@ -69,7 +69,6 @@ from src.modules.maibot_sync import (
     HttpStatusSender,
     LiveStatusReporter,
     MaiBotSyncConfigSchema,
-    SharedNotesStore,
     StorageTranscriptSource,
 )
 from src.modules.storage.bootstrap import build_database, build_privacy_and_retention
@@ -77,7 +76,6 @@ from src.modules.prompts import get_prompt_manager
 from src.modules.session import LiveSessionManager
 from src.modules.simulator import SimulatorService
 from src.modules.storage.database import SQLiteDatabase
-from src.modules.storage.long_memory import LongMemoryBackend
 from src.modules.storage.privacy import PrivacyService
 from src.modules.storage.retention import RetentionService
 from src.modules.subtitle import build_subtitle_infrastructure
@@ -336,7 +334,6 @@ class AppComponents:
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder]
     maibot_sync_reporter: Optional[LiveStatusReporter]
     # 与 MaiBot 共享的长期笔记（开了 [maibot_sync] 共享笔记才有；关停时停后台补发、关连接）
-    shared_notes_store: Optional[SharedNotesStore] = None
     # 面捕合成器（形象逐帧驱动；关停时在工具 Provider 收尾之后、事件总线清理之前停）
     avatar_tracking: Optional[TrackingRuntime] = None
     privacy_service: Optional[PrivacyService] = None
@@ -469,8 +466,6 @@ async def create_app_components(
     # 第 ① 段只接线订阅：心跳随 live.started 才起，第 ② 段 Agent 启动补写回顾发出的
     # streamer.recap.written 也能接住（整场记录随回顾一起补推）
     maibot_sync_reporter = _build_maibot_sync_reporter(event_bus, config, database=database)
-    # 长期笔记的读写面：共享时在本地文件外包一层发布与收约定，主播 Agent 与 WebUI 共用同一个
-    long_memory_store, shared_notes_store = _build_long_memory_store(config, database)
 
     # --- CollectorManager ---
     # 采集器配置位于 collectors.toml：根键 = enabled 名单 + 各采集器同名子段
@@ -585,16 +580,14 @@ async def create_app_components(
             sessions_repo=database.sessions,
             topic_repo=database.topics,
             viewer_repo=database.viewers,
-            # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）+ 长期记忆文件
-            viewer_profile_repo=database.viewer_profiles,
-            recap_repo=database.recaps,
             # 记忆账本两仓储（承诺与场次档案）：下播整理写入，WebUI 查看与纠错
             commitments_repo=database.commitments,
             archive_repo=database.archive,
             event_repo=database.events,
+            # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
+            privacy_service=privacy_service,
             # 生物名册（Minecraft Agent 跨场次记得主播起的名字与谁死了）
             creature_repo=database.game_creatures,
-            long_memory_store=long_memory_store,
             supervisor_config=supervisor_config,
         )
 
@@ -704,14 +697,13 @@ async def create_app_components(
                 sessions_repo=database.sessions,
                 topic_repo=database.topics,
                 viewer_repo=database.viewers,
-                # 主播记忆两仓储 + 游戏事件查询（场次回顾原料）+ 长期记忆文件
-                viewer_profile_repo=database.viewer_profiles,
-                recap_repo=database.recaps,
+                # 记忆账本两仓储 + 游戏事件查询（场次档案的游戏进展原料）
                 commitments_repo=database.commitments,
                 archive_repo=database.archive,
                 event_repo=database.events,
+                # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
+                privacy_service=privacy_service,
                 creature_repo=database.game_creatures,
-                long_memory_store=long_memory_store,
                 # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
                 context_assembler_config=None,
                 task_tracker=task_tracker,
@@ -914,12 +906,10 @@ async def create_app_components(
             event_repo=database.events,
             storage_db_path=database.db_path,
             # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
-            recap_repo=database.recaps,
             # 记忆账本：承诺与场次档案（下播整理写入；WebUI 查看与纠错）
             commitments_repo=database.commitments,
             archive_repo=database.archive,
             # 主播记忆页查看与编辑长期记忆文件（MEMORY.md）
-            long_memory_store=long_memory_store,
             rundown_transition_repo=database.rundown_transitions,
             # 观众域查询接口：列表 / 档案 / 对话 / 贡献聚合直查存储层
             viewer_repo=database.viewers,
@@ -927,7 +917,6 @@ async def create_app_components(
             # 模拟域仓储：模拟器页"启用"按钮运行期装配 SimulatorService 的数据源
             sim_repo=database.sim,
             # 观众画像仓储：/api/v1/memory/* 管理接口与主播 Agent 共用同一张表
-            viewer_profile_repo=database.viewer_profiles,
             # 观众身份人工处理：待确认页、合并与取消关联
             viewer_identity_repo=database.viewer_identity,
             privacy_service=privacy_service,
@@ -977,7 +966,6 @@ async def create_app_components(
         task_tracker=task_tracker if agents_config else None,
         tts_diagnostics_recorder=tts_diagnostics_recorder,
         maibot_sync_reporter=maibot_sync_reporter,
-        shared_notes_store=shared_notes_store,
         avatar_tracking=avatar_tracking,
         privacy_service=privacy_service,
         retention_service=retention_service,
@@ -1059,9 +1047,7 @@ def _build_maibot_sync_reporter(
 ) -> Optional[LiveStatusReporter]:
     """按 ``[maibot_sync]`` 装配直播近况上报器；未启用或缺地址/令牌时不装配。
 
-    ``send_recap`` 控制是否推场次回顾（回顾正文含观众昵称与付费者），关掉后开播、换环节、
-    收播近况照常推。``send_transcript`` 开启且有数据库时，回顾写好后一并从库里读出整场记录
-    推过去，与 ``send_recap`` 各自独立。
+    收播近况照常推。``send_transcript`` 开启且有数据库时，收播近况送出后从库里读出整场记录一并推送。
     """
     raw = config.get("maibot_sync", {}) if isinstance(config, dict) else {}
     sync_config = MaiBotSyncConfigSchema(**raw) if isinstance(raw, dict) else MaiBotSyncConfigSchema()
@@ -1083,29 +1069,14 @@ def _build_maibot_sync_reporter(
         ),
         heartbeat_interval_ms=sync_config.heartbeat_interval_ms,
         transcript_source=transcript_source,
-        send_recap=sync_config.send_recap,
     )
     reporter.setup()
-    # 日志里列出实际会推的内容：场次回顾看 send_recap 开关，整场记录看是否有记录来源
+    # 日志里列出实际会推的内容：整场记录看是否有记录来源
     pushed = "开播 / 换环节 / 收播"
-    if sync_config.send_recap:
-        pushed += " / 场次回顾"
     if transcript_source is not None:
         pushed += " / 整场记录"
     logger.info(f"直播近况同步已接线：{pushed} → {sync_config.url}")
     return reporter
-
-
-def _build_long_memory_store(
-    config: Dict[str, Any], database: SQLiteDatabase
-) -> Tuple[LongMemoryBackend, Optional[SharedNotesStore]]:
-    """长期笔记的读写面（阶段 3b 起只读保留，不再与 MaiBot 共享）。
-
-    MEMORY.md 的写入与注入都由新的记忆账本取代，旧的共享笔记同步（写完发布给 QQ 麦麦、
-    读前收下 QQ 里记下的约定）随之停用：配置里的 [maibot_sync].share_notes 不再生效，
-    文件与历史留底原样留着，等阶段 4 连同整份长期记忆一起删除。
-    """
-    return database.long_memory, None
 
 
 def _streamer_name(config: Dict[str, Any]) -> str:
@@ -1252,14 +1223,11 @@ async def _start_dashboard(
     rundown_repo=None,
     viewer_repo=None,
     chat_repo=None,
-    viewer_profile_repo=None,
     viewer_identity_repo=None,
     privacy_service=None,
     event_repo=None,
-    recap_repo=None,
     commitments_repo=None,
     archive_repo=None,
-    long_memory_store=None,
     rundown_transition_repo=None,
     storage_db_path=None,
     task_tracker=None,
@@ -1313,20 +1281,15 @@ async def _start_dashboard(
             # 观众域仓储：统计表（viewers）与明细三表（live_chat 族）
             viewer_repo=viewer_repo,
             chat_repo=chat_repo,
-            # 观众画像仓储：/api/v1/memory/* 管理接口与主播 Agent 共用同一张表
-            viewer_profile_repo=viewer_profile_repo,
             # 观众身份人工处理：待确认页、合并与取消关联（/api/v1/viewers/pending|merge|keep|unlink）
             viewer_identity_repo=viewer_identity_repo,
             privacy_service=privacy_service,
             # 场次复盘面：game_events 计数仓储与 db 快照路径（/api/v1/review*）
             event_repo=event_repo,
-            # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
-            recap_repo=recap_repo,
             # 记忆账本：承诺与场次档案的查看、纠错与整理状态
             commitments_repo=commitments_repo,
             archive_repo=archive_repo,
-            # 主播记忆页查看与编辑长期记忆文件（MEMORY.md）
-            long_memory_store=long_memory_store,
+            # 流程单执行面板读变更事实行
             rundown_transition_repo=rundown_transition_repo,
             storage_db_path=storage_db_path,
             # 任务跟踪器：任务卡快照（GET /api/v1/tasks）与运营委派的数据源
@@ -1453,7 +1416,6 @@ async def run_shutdown(
     task_tracker: Optional[TaskTracker] = components.task_tracker
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder] = components.tts_diagnostics_recorder
     maibot_sync_reporter: Optional[LiveStatusReporter] = components.maibot_sync_reporter
-    shared_notes_store: Optional[SharedNotesStore] = components.shared_notes_store
 
     _saw_cancelled = False
 
@@ -1580,10 +1542,6 @@ async def run_shutdown(
     # 等到处理完，"已下播"近况才推得出去；之后再退订、停心跳、关连接
     if maibot_sync_reporter is not None:
         await safe_log(maibot_sync_reporter.stop(), "LiveStatusReporter.stop")
-    # 共享笔记同理放在总线清理之后：退出结账的收播整理写完笔记并发布，再停后台补发、关连接
-    if shared_notes_store is not None:
-        await safe_log(shared_notes_store.close(), "SharedNotesStore.close")
-
     logger.info("正在清理 LLMManager...")
     if llm_service is not None:
         await safe_log(llm_service.cleanup(), "LLMManager.cleanup")

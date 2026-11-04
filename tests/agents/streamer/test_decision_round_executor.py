@@ -61,7 +61,7 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
     proactive_trigger = MagicMock()
     stats = StreamerStats()
     bus, emissions = _make_event_bus()
-    window_opener = AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch(), session_recap=""))
+    window_opener = AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch()))
 
     executor = DecisionRoundExecutor(
         planner=planner,
@@ -89,7 +89,7 @@ def _make_executor(outcome, *, planner_error: bool = False) -> tuple[DecisionRou
 
 async def test_window_opener_runs_once_per_round():
     """开窗器每轮恰好调用一次（出账先于读取的顺序不变量由 SessionScope.open_window 内化，在此只锁 executor 侧调用纪律）。"""
-    window_opener = AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch(), session_recap=""))
+    window_opener = AsyncMock(return_value=WindowMaterials(history=[], game_batch=GameEventBatch()))
 
     planner = MagicMock()
     planner.plan = AsyncMock(return_value=replace(_OKAY_OUTCOME, raw_content="RAW"))
