@@ -9,6 +9,9 @@ from src.modules.config.multi_file_loader import generate_default_configs, load_
 from src.modules.config.upgrade import _drop_minecraft_max_steps
 
 
+from tests.config.helpers import tail_version
+
+
 def test_step_limit_removal_is_idempotent_and_preserves_other_settings() -> None:
     """父玩家的旧上限被清理，子设计任务与后台查询仍使用各自配置。"""
     minecraft = {"max_steps": 50, "execute_poll_interval_ms": 4000, "builder": {"max_steps": 9}}
@@ -38,7 +41,7 @@ def test_step_limit_removal_is_written_back_only_to_agents(tmp_path: Path, old_v
 
     migrated = tomlkit.parse(agents_path.read_text(encoding="utf-8-sig"))
     minecraft = migrated["agents"]["minecraft"]
-    assert migrated["meta"]["version"] == "2.0.50"
+    assert migrated["meta"]["version"] == tail_version("agents.toml")
     assert "max_steps" not in minecraft
     assert minecraft["context"]["recent_turns"] == 9
     assert all(path.read_bytes() == content for path, content in others.items())

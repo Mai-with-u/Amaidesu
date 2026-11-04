@@ -135,7 +135,7 @@ def _seed_maibot_sync_transcript(d: Path) -> None:
 def _check_maibot_sync_transcript(d: Path) -> None:
     section = read_doc(d, "infra.toml")["maibot_sync"]
     assert section["send_transcript"] is False  # 整场记录推送降为可选：旧默认改写为关
-    assert section["share_notes"] is True  # 新增的共享笔记开关按默认补齐
+    assert "share_notes" not in section  # 共享笔记同步已随旧记忆退役，这一版把键一并删掉
 
 
 def _seed_name_match_window(value: int | None) -> Callable[[Path], None]:
@@ -584,6 +584,14 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "drop_persona_audience_salutation": (
         "test",
         "test_audience_salutation_retire_migration.py#test_persona_audience_salutation_dropped_and_written_back",
+    ),
+    "drop_streamer_memory_section": (
+        "test",
+        "test_memory_retire_migration.py#test_streamer_memory_section_removed_and_written_back",
+    ),
+    "drop_maibot_sync_share_notes": (
+        "test",
+        "test_memory_retire_migration.py#test_maibot_sync_share_notes_removed_and_written_back",
     ),
 }
 

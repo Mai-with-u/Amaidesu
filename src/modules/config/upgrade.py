@@ -1071,6 +1071,21 @@ _upgrade_maibot_sync_transcript_optional = swap_default("maibot_sync.send_transc
 # 生产钩子登记：infra.toml v2.0.44（[maibot_sync].send_transcript 默认改为关）
 register_file_hook("infra.toml", "maibot_sync_transcript_optional", "2.0.44", _upgrade_maibot_sync_transcript_optional)
 
+# agents.toml v2.0.51：删 [agents.streamer.memory] 整段。主播记忆改按账本记录
+# （承诺与场次档案），场次回顾 / 观众画像 / 长期笔记三个写入器都已停写、也不再注入，
+# 这 11 个键不再有任何消费者；整段删掉，免得用户还在改一堆没作用的开关。
+_drop_streamer_memory_section = drop_section("agents.streamer.memory")
+
+# 生产钩子登记：agents.toml v2.0.51（[agents.streamer.memory] 整段退役）
+register_file_hook("agents.toml", "drop_streamer_memory_section", "2.0.51", _drop_streamer_memory_section)
+
+# infra.toml v2.0.45：删 [maibot_sync].share_notes 与 send_recap。共享长期笔记同步与
+# 场次回顾推送都随旧记忆一起停用（回顾已由记忆账本取代），配置键留着只会让人以为还能打开。
+_drop_maibot_sync_share_notes = drop_section_keys("maibot_sync", ("share_notes", "send_recap"))
+
+# 生产钩子登记：infra.toml v2.0.45（[maibot_sync].share_notes 删键）
+register_file_hook("infra.toml", "drop_maibot_sync_share_notes", "2.0.45", _drop_maibot_sync_share_notes)
+
 
 __all__ = [
     "FileUpgradeHook",

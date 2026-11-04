@@ -13,6 +13,9 @@ from src.modules.config.multi_file_loader import generate_default_configs, load_
 from src.modules.config.upgrade import _retire_streamer_narrative
 
 
+from tests.config.helpers import tail_version
+
+
 def _write_old_narrative(tmp_path: Path, version: str = "2.0.47") -> Path:
     """把 agents.toml 拨回旧布局：streamer 下带 narrative 段，版本 2.0.47。"""
     path = tmp_path / "agents.toml"
@@ -35,7 +38,7 @@ def test_narrative_section_removed_and_written_back(tmp_path: Path) -> None:
 
     doc = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
     assert "narrative" not in doc["agents"]["streamer"]
-    assert doc["meta"]["version"] == "2.0.50"
+    assert doc["meta"]["version"] == tail_version("agents.toml")
 
     first = path.read_text(encoding="utf-8-sig")
     load_config_dir(tmp_path)

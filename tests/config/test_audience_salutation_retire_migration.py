@@ -14,6 +14,9 @@ import tomlkit
 from src.modules.config.multi_file_loader import get_config_version, load_config_dir
 
 
+from tests.config.helpers import tail_version
+
+
 def _seed_old_audience_salutation(config_dir: Path) -> None:
     """把 agents.toml 的 persona 段加回 audience_salutation 并拨回旧版本。"""
     path = config_dir / "agents.toml"
@@ -37,7 +40,7 @@ def test_persona_audience_salutation_dropped_and_written_back(tmp_path: Path):
     doc = tomlkit.parse((tmp_path / "agents.toml").read_text(encoding="utf-8-sig"))
     persona = doc["agents"]["streamer"]["persona"]
     assert "audience_salutation" not in persona
-    assert get_config_version(tmp_path, "agents.toml") == "2.0.50"
+    assert get_config_version(tmp_path, "agents.toml") == tail_version("agents.toml")
 
 
 def test_migration_is_idempotent(tmp_path: Path):
@@ -52,4 +55,4 @@ def test_migration_is_idempotent(tmp_path: Path):
     load_config_dir(tmp_path)
 
     assert (tmp_path / "agents.toml").stat().st_mtime_ns == first_mtime, "二次加载不应再写盘"
-    assert get_config_version(tmp_path, "agents.toml") == "2.0.50"
+    assert get_config_version(tmp_path, "agents.toml") == tail_version("agents.toml")

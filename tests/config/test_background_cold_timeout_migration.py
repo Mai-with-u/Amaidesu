@@ -13,18 +13,21 @@ from pathlib import Path
 import tomlkit
 
 from src.modules.config.multi_file_loader import get_config_version, load_config_dir
+from tests.config.helpers import tail_version
 
 
 def _seed_old_cold_timeout(config_dir: Path) -> None:
-    """把 agents.toml 的 background 段加回 cold_timeout_ms 并拨回旧版本。"""
+    """把 cold_timeout_ms 加回 background 段，并把版本拨到该钩子（v2.0.49）的前一版。"""
     path = config_dir / "agents.toml"
-    content = path.read_text(encoding="utf-8-sig")
-    marker = "[agents.streamer.background]\n"
-    old_block = marker + "cold_timeout_ms = 60000\n"
-    assert marker in content
-    content = content.replace(marker, old_block, 1)
-    content = content.replace('version = "2.0.48"', 'version = "2.0.47"', 1)
-    path.write_text(content, encoding="utf-8-sig")
+    doc = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
+    doc["meta"]["version"] = "2.0.48"
+    doc["agents"]["streamer"]["background"]["cold_timeout_ms"] = 60_000
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+
+    # 种子自检：版本与旧键都真的落盘，否则钩子不跑、测试会静默空过
+    seeded = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
+    assert seeded["meta"]["version"] == "2.0.48"
+    assert seeded["agents"]["streamer"]["background"]["cold_timeout_ms"] == 60_000
 
 
 def test_background_cold_timeout_dropped_and_written_back(tmp_path: Path):
@@ -41,7 +44,7 @@ def test_background_cold_timeout_dropped_and_written_back(tmp_path: Path):
     assert "cold_timeout_ms" not in background
     proactive = doc["agents"]["streamer"]["proactive"]
     assert "cold_timeout_ms" in proactive, "proactive 段的同名字段是冷场判定的唯一所在，不受影响"
-    assert get_config_version(tmp_path, "agents.toml") == "2.0.50"
+    assert get_config_version(tmp_path, "agents.toml") == tail_version("agents.toml")
 
 
 def test_migration_is_idempotent(tmp_path: Path):
@@ -56,4 +59,4 @@ def test_migration_is_idempotent(tmp_path: Path):
     load_config_dir(tmp_path)
 
     assert (tmp_path / "agents.toml").stat().st_mtime_ns == first_mtime, "二次加载不应再写盘"
-    assert get_config_version(tmp_path, "agents.toml") == "2.0.50"
+    assert get_config_version(tmp_path, "agents.toml") == tail_version("agents.toml")

@@ -12,6 +12,9 @@ from src.modules.config.multi_file_loader import generate_default_configs, load_
 from src.modules.config.upgrade import _upgrade_replyer_style_drop_emoji
 
 
+from tests.config.helpers import tail_version
+
+
 def _write_style(tmp_path: Path, value: str, version: str = "2.0.44") -> Path:
     """把 agents.toml 拨到旧版本并写入给定的 style_constraints 值。"""
     path = tmp_path / "agents.toml"
@@ -31,7 +34,7 @@ def test_old_default_rewritten_and_version_advanced(tmp_path: Path) -> None:
 
     doc = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
     assert doc["agents"]["streamer"]["persona"]["style_constraints"] == "口语化，使用网络流行语，避免机械式回复"
-    assert doc["meta"]["version"] == "2.0.50"
+    assert doc["meta"]["version"] == tail_version("agents.toml")
 
     first = path.read_text(encoding="utf-8-sig")
     load_config_dir(tmp_path)
@@ -47,7 +50,7 @@ def test_user_custom_value_untouched(tmp_path: Path) -> None:
 
     doc = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
     assert doc["agents"]["streamer"]["persona"]["style_constraints"] == "简短、犀利，带点方言味"
-    assert doc["meta"]["version"] == "2.0.50"
+    assert doc["meta"]["version"] == tail_version("agents.toml")
 
 
 def test_hook_is_idempotent() -> None:

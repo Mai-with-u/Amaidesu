@@ -11,6 +11,9 @@ from src.modules.config.multi_file_loader import generate_default_configs, load_
 from src.modules.config.upgrade import _widen_recent_intents_window
 
 
+from tests.config.helpers import tail_version
+
+
 def _write_old_default(tmp_path: Path, value: int, version: str = "2.0.46") -> Path:
     """把 agents.toml 拨回旧布局：话题回看窗落盘为旧默认 6，版本 2.0.46。"""
     path = tmp_path / "agents.toml"
@@ -30,7 +33,7 @@ def test_old_default_rewritten_and_written_back(tmp_path: Path) -> None:
 
     doc = tomlkit.parse(path.read_text(encoding="utf-8-sig"))
     assert doc["agents"]["streamer"]["planner_recent_intents_max"] == 60
-    assert doc["meta"]["version"] == "2.0.50"
+    assert doc["meta"]["version"] == tail_version("agents.toml")
 
     first = path.read_text(encoding="utf-8-sig")
     load_config_dir(tmp_path)

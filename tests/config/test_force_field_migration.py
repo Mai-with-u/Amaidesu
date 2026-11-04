@@ -17,6 +17,9 @@ from src.modules.config.file_meta import CONFIG_BASELINE_VERSION
 from src.modules.config.multi_file_loader import get_config_version, load_config_dir
 
 
+from tests.config.helpers import tail_version
+
+
 def _rewrite_force_section(config_dir: Path, old_section: str) -> None:
     """把 agents.toml 的 force 段替换为旧字段布局并拨回旧版本。"""
     path = config_dir / "agents.toml"
@@ -53,7 +56,7 @@ def test_force_fields_migrated_and_written_back(tmp_path: Path):
     assert force["force_message_types"] == ["super_chat", "guard", "gift"]
     # agents.toml 版本流独立：只推进到本文件最后一个钩子 target，
     # 不随其他文件（如 tools.toml 2.0.36）前进而前进
-    assert get_config_version(tmp_path, "agents.toml") == "2.0.50"
+    assert get_config_version(tmp_path, "agents.toml") == tail_version("agents.toml")
 
 
 def test_migration_idempotent_on_second_load(tmp_path: Path):

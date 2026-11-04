@@ -265,6 +265,7 @@ async def test_stats_start_at_zero_return_snapshots_and_count_successes(make_wat
     await watcher.start()
     await _write(toml_file)
     assert await _wait_count(received, 1)
+    # batches_seen 在分发前计数、成功计数在回调返回后才加：分开等，不要采样到中间态
     await wait_until(lambda: watcher.stats.batches_seen >= 1, what="统计快照更新")
+    await wait_until(lambda: watcher.stats.callbacks_succeeded >= 1, what="成功回调被记录")
     assert watcher.stats.batches_seen >= 1 and watcher.stats.changes_seen >= 1
-    assert watcher.stats.callbacks_succeeded >= 1

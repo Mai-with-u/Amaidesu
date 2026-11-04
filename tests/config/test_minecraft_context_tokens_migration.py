@@ -13,6 +13,9 @@ from src.modules.config.multi_file_loader import generate_default_configs, load_
 from src.modules.config.upgrade import _upgrade_minecraft_context_tokens
 
 
+from tests.config.helpers import tail_version
+
+
 def _write_old_context(tmp_path: Path, chars: int) -> Path:
     """把 agents.toml 拨回旧布局：Minecraft 上下文只有字符预算，版本 2.0.40。"""
     path = tmp_path / "agents.toml"
@@ -38,7 +41,7 @@ def test_char_budget_converted_and_written_back(tmp_path: Path, chars: int, expe
     context = doc["agents"]["minecraft"]["context"]
     assert "max_context_chars" not in context
     assert context["max_tokens"] == expected_tokens
-    assert doc["meta"]["version"] == "2.0.50"
+    assert doc["meta"]["version"] == tail_version("agents.toml")
 
     first = path.read_text(encoding="utf-8-sig")
     load_config_dir(tmp_path)
