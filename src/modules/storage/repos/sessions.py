@@ -369,21 +369,31 @@ class SessionRepo(BaseRepo):
                     if evidence_chat_id in existing_evidence:
                         continue
                     conn.execute(
-                        "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id) VALUES (?, ?, ?, ?)",
-                        (int(live_session_id), line.text, line.quote, evidence_chat_id),
+                        "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id,"
+                        " game, save_id, save_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            int(live_session_id),
+                            line.text,
+                            line.quote,
+                            evidence_chat_id,
+                            line.game,
+                            line.save_id,
+                            line.save_name,
+                        ),
                     )
                     existing_evidence.add(evidence_chat_id)
                     written["archive"] += 1
                 for item in commitments:
                     cur = conn.execute(
-                        "INSERT INTO commitments(what, quote, evidence_chat_id, viewer_id, game,"
+                        "INSERT INTO commitments(what, quote, evidence_chat_id, viewer_id, game, save_id, save_name,"
                         " created_session_id, created_at_ms, updated_at_ms)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                         # 同一句台词已登记过：本场仍未了结的那条原地更新（编号不变），
                         # 已了结、判误记或别处登记的不动
                         " ON CONFLICT(evidence_chat_id) DO UPDATE SET"
                         " what=excluded.what, quote=excluded.quote, viewer_id=excluded.viewer_id,"
-                        " game=excluded.game, updated_at_ms=excluded.updated_at_ms"
+                        " game=excluded.game, save_id=excluded.save_id, save_name=excluded.save_name,"
+                        " updated_at_ms=excluded.updated_at_ms"
                         " WHERE commitments.status='open'"
                         " AND commitments.created_session_id=excluded.created_session_id",
                         (
@@ -392,6 +402,8 @@ class SessionRepo(BaseRepo):
                             item.evidence_chat_id,
                             item.viewer_id,
                             item.game,
+                            item.save_id,
+                            item.save_name,
                             int(live_session_id),
                             int(now_ms_value),
                             int(now_ms_value),

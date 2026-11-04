@@ -105,6 +105,8 @@ class Commitment(BaseModel):
     evidence_chat_id: Optional[int] = Field(default=None, description="原话所在的 live_chat 行；手建为空")
     viewer_id: Optional[int] = Field(default=None, description="对某位观众（内部观众 ID）；None 即不针对具体人")
     game: Optional[str] = Field(default=None, description="挂在哪个游戏；None 即不挂游戏")
+    save_id: str = Field(default="", description="答应时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
+    save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
     status: Literal["open", "closed", "void"] = Field(
         default="open", description="open 未了结 / closed 已了结（做完或放弃）/ void 运营者判误记"
     )
@@ -125,6 +127,9 @@ class ArchiveLine(BaseModel):
     text: str = Field(..., description="标题（≤30 字；游戏相关的写上游戏名）")
     quote: str = Field(..., description="她播出原句的逐字片段（≤80 字）")
     evidence_chat_id: int = Field(..., description="原话所在的 live_chat 行")
+    game: Optional[str] = Field(default=None, description="写的是哪个游戏世界里的事；None 即与游戏世界无关")
+    save_id: str = Field(default="", description="那件事发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
+    save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
 
 
 class UnregisteredItem(BaseModel):
@@ -160,6 +165,8 @@ class PendingCommitment(BaseModel):
     evidence_chat_id: Optional[int] = Field(default=None, description="那句台词的 live_chat 行")
     viewer_id: Optional[int] = Field(default=None, description="对某位观众；None 即不针对具体人")
     game: Optional[str] = Field(default=None, description="挂在哪个游戏；None 即不挂")
+    save_id: str = Field(default="", description="答应时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
+    save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
 
 
 class PendingArchiveLine(BaseModel):
@@ -170,6 +177,9 @@ class PendingArchiveLine(BaseModel):
     text: str = Field(..., description="标题（代码已截到上限）")
     quote: str = Field(..., description="她播出原句的逐字片段")
     evidence_chat_id: int = Field(..., description="原话所在的 live_chat 行")
+    game: Optional[str] = Field(default=None, description="写的是哪个游戏世界里的事；None 即与游戏世界无关")
+    save_id: str = Field(default="", description="那件事发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
+    save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
 
 
 class CommitmentClosure(BaseModel):

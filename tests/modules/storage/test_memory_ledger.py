@@ -225,6 +225,51 @@ async def test_apply_settlement_writes_everything_in_one_call(store: SQLiteDatab
     assert closed is not None and closed.status == "closed" and closed.close_quote == "弄完啦"
 
 
+async def test_apply_settlement_keeps_game_and_save_of_lines(store: SQLiteDatabase) -> None:
+    """整理写下的档案行与承诺带着游戏与存档；与游戏世界无关的行这几列为空。"""
+    session_id = await _ended_session(store)
+    await store.sessions.apply_settlement(
+        live_session_id=session_id,
+        archive_lines=[
+            PendingArchiveLine(
+                text="Minecraft：屋子盖好了",
+                quote="屋子盖好啦",
+                evidence_chat_id=2,
+                game="minecraft",
+                save_id="ab12",
+                save_name="新的世界",
+            ),
+            PendingArchiveLine(text="和大家定了猫的名字", quote="就叫团子", evidence_chat_id=3),
+        ],
+        commitments=[
+            PendingCommitment(
+                what="把屋顶封上",
+                quote="下次把屋顶封上",
+                evidence_chat_id=4,
+                game="minecraft",
+                save_id="ab12",
+                save_name="新的世界",
+            )
+        ],
+        closures=[],
+        settled_at_ms=9999,
+        now_ms_value=9999,
+    )
+
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert [(line.game, line.save_id, line.save_name) for line in lines] == [
+        ("minecraft", "ab12", "新的世界"),
+        (None, "", ""),
+    ]
+    [commitment] = await store.commitments.list_commitments(statuses=["open"])
+    assert (commitment.game, commitment.save_id, commitment.save_name) == ("minecraft", "ab12", "新的世界")
+    # 运营者手建的承诺不带存档
+    manual = await store.commitments.insert_commitment(what="手建", game="minecraft")
+    assert manual is not None
+    row = await store.commitments.get_commitment(commitment_id=manual)
+    assert row is not None and (row.save_id, row.save_name) == ("", "")
+
+
 async def test_delete_live_session_cascades_archive_lines(store: SQLiteDatabase) -> None:
     session_id = await _ended_session(store)
     await store.archive.insert_line(live_session_id=session_id, text="档案", quote="档案", evidence_chat_id=1)

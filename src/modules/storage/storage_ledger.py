@@ -598,6 +598,8 @@ class StorageLedger:
                 message=payload.message,
                 scene=payload.scene or None,
                 timestamp_ms=payload.timestamp_ms,
+                save_id=payload.save_id,
+                save_name=payload.save_name,
             )
         except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
             logger.error(

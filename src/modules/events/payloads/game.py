@@ -67,6 +67,13 @@ class GamePayload(BasePayload):
     )
     message: str = Field(..., description="人类可读的描述")
     scene: str = Field(default="", description="场景信息（关卡坐标/区块名等自由文本）")
+    # 事件发生时角色所在的存档：由发布方（游戏 Agent / 采集器）按自己读到的世界身份填，
+    # 不由框架按分发时刻补——换存档前后几刻的事件会被归错。下播整理据此判定档案与承诺属于哪个存档
+    save_id: str = Field(
+        default="",
+        description="存档编号（游戏给的不透明串，只做相等比较）；空串 = 这个游戏不分存档或当时还没认出存档",
+    )
+    save_name: str = Field(default="", description="存档给人看的名字（只显示，不当键）")
     report_kind: Optional[Literal["delivery", "escalation"]] = Field(
         default=None,
         description="上报种类（仅 event_type='report' 时有值：delivery=交付总结 / escalation=升级决策）",

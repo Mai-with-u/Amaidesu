@@ -18,7 +18,7 @@ from src.modules.storage.repos._base import BaseRepo
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
 # 档案行读面的列（与 ArchiveLine 字段一一对应）
-_ARCHIVE_COLUMNS = "id, live_session_id, text, quote, evidence_chat_id"
+_ARCHIVE_COLUMNS = "id, live_session_id, text, quote, evidence_chat_id, game, save_id, save_name"
 
 
 def delete_archive_lines_by_session(conn: sqlite3.Connection, *, live_session_id: int) -> int:
@@ -41,6 +41,9 @@ class ArchiveRepo(BaseRepo):
         text: str,
         quote: str,
         evidence_chat_id: int,
+        game: Optional[str] = None,
+        save_id: str = "",
+        save_name: str = "",
     ) -> int:
         """写一行档案，返回主键；标题或原话为空时不写（返回 0）。
 
@@ -55,8 +58,17 @@ class ArchiveRepo(BaseRepo):
         def _exec() -> int:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id) VALUES (?, ?, ?, ?)",
-                    (int(live_session_id), title, quote_text, int(evidence_chat_id)),
+                    "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id, game, save_id, save_name)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        int(live_session_id),
+                        title,
+                        quote_text,
+                        int(evidence_chat_id),
+                        game,
+                        save_id or "",
+                        save_name or "",
+                    ),
                 )
                 return int(cur.lastrowid or 0)
 

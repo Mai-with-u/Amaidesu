@@ -30,6 +30,8 @@ class GameEventRecord(BaseModel):
     message: str = Field(..., description="事件描述正文")
     scene: Optional[str] = Field(default=None, description="事件发生时的游戏场景；未记录为 None")
     timestamp_ms: int = Field(..., description="事件时刻（Unix epoch 毫秒）")
+    save_id: str = Field(default="", description="事件发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
+    save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
 
 
 class GameEventTypeCount(BaseModel):

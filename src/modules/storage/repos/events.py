@@ -25,15 +25,17 @@ class EventRepo(BaseRepo):
         message: str,
         scene: Optional[str] = None,
         timestamp_ms: int = 0,
+        save_id: str = "",
+        save_name: str = "",
     ) -> int:
-        """插入一条 game_events 行，返回 lastrowid。"""
+        """插入一条 game_events 行，返回 lastrowid；``save_id`` 空串 = 不分存档或存档不明。"""
 
         def _exec() -> int:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "INSERT INTO game_events (live_session_id, game, event_type, message, scene, timestamp_ms) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (live_session_id, game, event_type, message, scene, timestamp_ms),
+                    "INSERT INTO game_events (live_session_id, game, event_type, message, scene, timestamp_ms,"
+                    " save_id, save_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (live_session_id, game, event_type, message, scene, timestamp_ms, save_id or "", save_name or ""),
                 )
                 return int(cur.lastrowid or 0)
 
@@ -46,7 +48,7 @@ class EventRepo(BaseRepo):
         def _exec() -> List[GameEventRecord]:
             with self._manager.transaction() as conn:
                 rows = conn.execute(
-                    "SELECT game, event_type, message, scene, timestamp_ms FROM game_events"
+                    "SELECT game, event_type, message, scene, timestamp_ms, save_id, save_name FROM game_events"
                     " WHERE live_session_id=? ORDER BY timestamp_ms DESC LIMIT ?",
                     (int(live_session_id), page_limit),
                 ).fetchall()

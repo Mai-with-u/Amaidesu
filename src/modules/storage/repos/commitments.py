@@ -21,7 +21,7 @@ from src.modules.utils.time_utils import now_ms
 
 # 承诺行读面的列（与 Commitment 字段一一对应）
 _COMMITMENT_COLUMNS = (
-    "id, what, quote, evidence_chat_id, viewer_id, game, status,"
+    "id, what, quote, evidence_chat_id, viewer_id, game, save_id, save_name, status,"
     " created_session_id, close_chat_id, close_quote, created_at_ms, updated_at_ms"
 )
 
@@ -63,6 +63,8 @@ class CommitmentRepo(BaseRepo):
         evidence_chat_id: Optional[int] = None,
         viewer_id: Optional[int] = None,
         game: Optional[str] = None,
+        save_id: str = "",
+        save_name: str = "",
         created_session_id: Optional[int] = None,
         now_ms_value: Optional[int] = None,
     ) -> Optional[int]:
@@ -80,9 +82,9 @@ class CommitmentRepo(BaseRepo):
         def _exec() -> Optional[int]:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "INSERT INTO commitments(what, quote, evidence_chat_id, viewer_id, game,"
+                    "INSERT INTO commitments(what, quote, evidence_chat_id, viewer_id, game, save_id, save_name,"
                     " created_session_id, created_at_ms, updated_at_ms)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     " ON CONFLICT(evidence_chat_id) DO NOTHING",
                     (
                         text,
@@ -90,6 +92,8 @@ class CommitmentRepo(BaseRepo):
                         evidence_chat_id,
                         viewer_id,
                         game,
+                        save_id or "",
+                        save_name or "",
                         created_session_id,
                         ts,
                         ts,

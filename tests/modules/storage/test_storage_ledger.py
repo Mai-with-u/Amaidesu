@@ -306,6 +306,15 @@ async def test_game_events_persist_with_null_empty_scene(ledger, store: SQLiteDa
     assert rows[1]["scene"] is None
 
 
+async def test_game_events_keep_save_reported_by_publisher(ledger, store: SQLiteDatabase, event_bus: EventBus) -> None:
+    """发布方填的存档原样落库；不分存档的游戏不填，落空串。"""
+    await _emit(event_bus, "game.milestone", _game("milestone", save_id="ab12", save_name="新的世界"))
+    await _emit(event_bus, "game.milestone", _game("milestone"))
+
+    rows = await store.execute("SELECT save_id, save_name FROM game_events ORDER BY id")
+    assert [(r["save_id"], r["save_name"]) for r in rows] == [("ab12", "新的世界"), ("", "")]
+
+
 async def test_game_event_write_failure_is_swallowed(
     ledger, store: SQLiteDatabase, event_bus: EventBus, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 25
+SCHEMA_VERSION: int = 26
 
 
 # =============================================================================
@@ -407,6 +407,8 @@ CREATE TABLE IF NOT EXISTS forget_list (
 # 状态三分：open 未了结、closed 已了结（做完或放弃，看了结原话）、void 运营者判误记。
 # 判误记不删行而转 void：墓碑让之后每次“找新承诺”都能认出同一件事，不重复登记。
 # 不存“谁改的”：模型只会插入新行、把 open 改成 closed，运营者改过的行模型不再碰。
+# save_id / save_name 是挂了游戏的承诺在哪个存档里答应的（整理时由代码按本场游戏事件判定，
+# 空串 = 不分存档或存档不明）：换了存档时，别的存档里的承诺不再当成眼前的事推给她。
 
 _COMMITMENTS_SQL = """
 CREATE TABLE IF NOT EXISTS commitments (
@@ -416,6 +418,8 @@ CREATE TABLE IF NOT EXISTS commitments (
     evidence_chat_id   INTEGER UNIQUE,
     viewer_id          INTEGER,
     game               TEXT,
+    save_id            TEXT NOT NULL DEFAULT '',
+    save_name          TEXT NOT NULL DEFAULT '',
     status             TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed', 'void')),
     created_session_id INTEGER,
     close_chat_id      INTEGER,
@@ -430,7 +434,8 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 # --- archive_lines —— 场次档案 ---
 # 每场正式场下播后写 ≤8 行，标题加她播出原句的逐字片段，写完不改（运营者可删单行）。
 # 场次档案是她记得自己上一场干了什么的唯一来源，也是回想工具的检索单元；
-# 不存游戏列——游戏相关的行由标题自己写上游戏名。
+# game 是这一行写的是哪个游戏世界里的事（建筑、进度、地点；与世界无关为空），save_id /
+# save_name 是那个世界的存档（整理时由代码按本场游戏事件判定，空串 = 不分存档或存档不明）。
 
 _ARCHIVE_LINES_SQL = """
 CREATE TABLE IF NOT EXISTS archive_lines (
@@ -438,7 +443,10 @@ CREATE TABLE IF NOT EXISTS archive_lines (
     live_session_id  INTEGER NOT NULL,
     text             TEXT NOT NULL,
     quote            TEXT NOT NULL,
-    evidence_chat_id INTEGER NOT NULL
+    evidence_chat_id INTEGER NOT NULL,
+    game             TEXT,
+    save_id          TEXT NOT NULL DEFAULT '',
+    save_name        TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_archive_lines_session ON archive_lines(live_session_id);
 """.strip()
@@ -537,6 +545,9 @@ CREATE INDEX IF NOT EXISTS idx_rundown_transitions_session ON rundown_transition
 """.strip()
 
 
+# 游戏里程碑：save_id / save_name 是事件发生时角色所在的存档，由发布事件的游戏 Agent 或
+# 采集器自己填（空串 = 这个游戏不分存档，或当时还没认出存档）。下播整理按它判定档案行与
+# 承诺属于哪个存档，是"某一场玩过哪些存档"的唯一依据。
 _GAME_EVENTS_SQL = """
 CREATE TABLE IF NOT EXISTS game_events (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -545,7 +556,9 @@ CREATE TABLE IF NOT EXISTS game_events (
     event_type       TEXT NOT NULL,
     message          TEXT NOT NULL,
     scene            TEXT,
-    timestamp_ms     INTEGER NOT NULL
+    timestamp_ms     INTEGER NOT NULL,
+    save_id          TEXT NOT NULL DEFAULT '',
+    save_name        TEXT NOT NULL DEFAULT ''
 );
 """.strip()
 
