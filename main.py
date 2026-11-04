@@ -350,6 +350,7 @@ async def create_app_components(
     providers_auto_start: bool = True,
     log_streamer_persist: bool = True,
     log_streamer_persist_dir: Optional[str] = None,
+    startup_effects: bool = True,
 ) -> AppComponents:
     """组合根：构造并连接所有核心组件。
 
@@ -375,6 +376,8 @@ async def create_app_components(
             ``--dry`` 与测试装配传 False，避免向真实 ``logs/webui/`` 写入运行数据。
         log_streamer_persist_dir: LogStreamer 落盘目录（None 用默认）。
             集成测试需要验证持久化时指向临时目录，实现与真实数据隔离。
+        startup_effects: 是否执行启动期真实副作用（生成不记录名单密钥文件、跑保留期清理）。
+            ``--dry`` 传 False：只做装配冒烟，不写密钥文件、不删任何数据。
 
     Returns:
         AppComponents：字段依次为 event_bus / llm_service / dashboard_server /
@@ -387,7 +390,9 @@ async def create_app_components(
     # 必须先于 LLMManager 构造：LLMManager 需要注入 store 做 llm_usage 落库
     logger.info("初始化存储（SQLiteDatabase）...")
     database = await build_database(config)
-    privacy_service, retention_service = await build_privacy_and_retention(config, database)
+    privacy_service, retention_service = await build_privacy_and_retention(
+        config, database, startup_effects=startup_effects
+    )
     logger.info(f"存储已就绪（db={database.db_path}）")
 
     # --- EventBus（先于 LLMManager：水位事件经构造器注入引擎）---
@@ -1593,6 +1598,7 @@ async def main() -> None:
         session_manager_auto_start=not args.dry,
         providers_auto_start=not args.dry,
         log_streamer_persist=not args.dry,
+        startup_effects=not args.dry,
     )
     event_bus = components.event_bus
     session_manager = components.session_manager

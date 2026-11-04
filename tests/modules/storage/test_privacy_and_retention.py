@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -19,8 +22,10 @@ from src.modules.events.payloads.utterance import UtteranceDroppedPayload
 from src.modules.session import LiveSessionManager
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.privacy import GRACE_DELETE_MAX_MS, PrivacyService, matches_phrase_table
+from src.modules.storage.bootstrap import build_privacy_and_retention
 from src.modules.storage.retention import RetentionService
 from src.modules.storage.storage_ledger import StorageLedger
+from src.modules.utils.time_utils import now_ms
 from tests.helpers import FakeClock
 from tests.modules.storage.helpers import make_room_message
 
@@ -45,8 +50,13 @@ async def _emit(bus: EventBus, event: str, payload: Any) -> None:
         ("麦麦，忘了我", True),
         ("@麦麦 忘了我吧", True),
         ("@路人甲 忘了我", True),
+        ("@麦麦忘了我", True),  # @ 与正文粘连：剥掉 @+称呼后仍剩完整短语
+        ("忘了我吧[微笑]", True),  # B 站文字表情码只作分隔，不算进短语
+        ("[doge]忘了我", True),
         ("忘了我吧😭", True),
         ("忘了我吧~", True),
+        ("忘了我吧３", False),  # 全角数字算词内字符（Unicode 意义），不再当分隔符切掉
+        ("忘了我ね", False),  # 假名同理：整句不是纯短语
         ("别忘了我", False),
         ("你会不会忘了我呀", False),
         ("忘了我吧哈哈", False),
@@ -743,3 +753,316 @@ def test_storage_toml_materializes_retention_and_privacy_defaults(tmp_path: Path
     assert root.retention.raw_days == 0 and root.retention.viewer_absence_days == 0
     assert root.privacy.key_path == "secrets/forget.key"
     assert "忘了我" in root.privacy.forget_phrases and "开玩笑的" in root.privacy.retract_phrases
+
+
+async def test_delete_viewer_warns_when_wal_checkpoint_is_busy(tmp_path: Path, loguru_capture: Any) -> None:
+    """删除后截断预写日志被其它连接挡住时：删除照常成功，但打 warning 点名可能残留。"""
+    db_file = tmp_path / "data" / "amaidesu.db"
+    # 忙等待超时调小：本用例要观察 checkpoint 拿不到锁时的告警，不必等满默认 30 秒
+    store = SQLiteDatabase(db_file, timeout=0.2)
+    await store.initialize()
+    privacy = PrivacyService(store.manager, db_path=db_file, key_path=tmp_path / "forget.key")
+    await privacy.initialize()
+    reader = sqlite3.connect(db_file)
+    try:
+        resolution = await store.viewers.resolve_viewer(
+            platform="bilibili",
+            id_kind="account",
+            external_id="UID_WAL_BUSY",
+            user_name="占用连接观众",
+            timestamp_ms=1_000,
+            name_match_window_ms=0,
+        )
+        # 另一个连接持有读事务：checkpoint 拿不到锁，PRAGMA 返回 busy=1
+        reader.execute("BEGIN")
+        reader.execute("SELECT COUNT(*) FROM viewers").fetchone()
+
+        assert await privacy.delete_viewer(viewer_id=resolution.viewer_id, add_to_forget_list=True) is True
+        assert await store.viewers.get_viewer(viewer_id=resolution.viewer_id) is None
+        warnings = [record for record in loguru_capture.records if record["level"] == "WARNING"]
+        assert any("截断预写日志未完成" in record["message"] for record in warnings), (
+            f"应记录 checkpoint busy 告警，实际日志: {[record['message'] for record in warnings]}"
+        )
+    finally:
+        reader.rollback()
+        reader.close()
+        await privacy.close()
+        await store.close()
+
+
+async def test_build_privacy_and_retention_startup_effects_false_skips_key_and_cleanup(tmp_path: Path) -> None:
+    """--dry 冒烟装配：不生成密钥文件、不跑启动期保留期清理（过期行原样留着）。"""
+    now = now_ms()
+    db_file = tmp_path / "data" / "amaidesu.db"
+    store = SQLiteDatabase(db_file)
+    await store.initialize()
+    try:
+        session_id = await store.sessions.insert_live_session(started_at_ms=now - 11 * 86_400_000, kind="live")
+        await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=now - 10 * 86_400_000)
+        resolution = await store.viewers.resolve_viewer(
+            platform="bilibili",
+            id_kind="account",
+            external_id="U_DRY_SMOKE",
+            user_name="冒烟观众",
+            timestamp_ms=now - 10 * 86_400_000,
+            name_match_window_ms=0,
+        )
+        await store.chat.insert_live_chat(
+            live_session_id=session_id,
+            timestamp_ms=now - 10 * 86_400_000,
+            sender_role="viewer",
+            sender_id="U_DRY_SMOKE",
+            sender_name="冒烟观众",
+            content="过期弹幕_DRY_SMOKE",
+            message_type="danmaku",
+            viewer_id=resolution.viewer_id,
+            id_kind="account",
+        )
+    finally:
+        await store.close()
+
+    config = {
+        "sqlite": {"db_path": str(db_file)},
+        "retention": {"raw_days": 7},
+        "privacy": {"key_path": str(tmp_path / "secrets" / "dry.key")},
+    }
+    database = SQLiteDatabase(db_file)
+    await database.initialize()
+    try:
+        privacy, _retention = await build_privacy_and_retention(config, database, startup_effects=False)
+        try:
+            assert not (tmp_path / "secrets" / "dry.key").exists(), "冒烟装配不应生成密钥文件"
+            (row,) = await database.execute("SELECT COUNT(*) AS n FROM live_chat WHERE content='过期弹幕_DRY_SMOKE'")
+            assert row["n"] == 1, "冒烟装配不应执行启动期保留期清理"
+        finally:
+            await privacy.close()
+
+        # 对照：同样的库与配置，startup_effects=True 时清理真的会跑（密钥生成、过期行删除）
+        privacy, _retention = await build_privacy_and_retention(config, database, startup_effects=True)
+        try:
+            assert (tmp_path / "secrets" / "dry.key").exists()
+            (row,) = await database.execute("SELECT COUNT(*) AS n FROM live_chat WHERE content='过期弹幕_DRY_SMOKE'")
+            assert row["n"] == 0
+        finally:
+            await privacy.close()
+    finally:
+        await database.close()
+
+
+async def test_delete_viewer_scrubs_commitments_archive_and_settle_report(tmp_path: Path) -> None:
+    """删除观众时承诺、场次档案、整理报告 JSON 与字节级残留一并处理。"""
+    db_file = tmp_path / "data" / "amaidesu.db"
+    store = SQLiteDatabase(db_file)
+    await store.initialize()
+    privacy = PrivacyService(store.manager, db_path=db_file, key_path=tmp_path / "forget.key")
+    await privacy.initialize()
+    nickname = "隐私测试昵称"
+    try:
+        session_id = await store.sessions.insert_live_session(started_at_ms=1000, kind="live")
+        await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=2000)
+        resolution = await store.viewers.resolve_viewer(
+            platform="bilibili",
+            id_kind="account",
+            external_id="UID_SCRUB_777",
+            user_name=nickname,
+            timestamp_ms=1100,
+            name_match_window_ms=0,
+        )
+        viewer_id = resolution.viewer_id
+        speech = await store.chat.insert_live_chat(
+            live_session_id=session_id,
+            timestamp_ms=1500,
+            sender_role="assistant",
+            content=f"欢迎{nickname}，晚上好",
+            message_type="speak",
+        )
+        await store.chat.insert_live_chat(
+            live_session_id=session_id,
+            timestamp_ms=1600,
+            sender_role="viewer",
+            sender_id="UID_SCRUB_777",
+            sender_name=nickname,
+            content="观众弹幕_SCRUB_UNIQUE",
+            message_type="danmaku",
+            viewer_id=viewer_id,
+            id_kind="account",
+        )
+        # 对 ta 的承诺（随删除整行清掉）与只在台词里提到 ta 的承诺（保留、原话去名）
+        await store.commitments.insert_commitment(
+            what=f"给{nickname}画头像",
+            quote=f"下播给{nickname}画头像",
+            viewer_id=viewer_id,
+            created_session_id=session_id,
+        )
+        await store.commitments.insert_commitment(
+            what=f"帮{nickname}找歌", quote=f"帮{nickname}找歌", created_session_id=session_id
+        )
+        await store.archive.insert_line(
+            live_session_id=session_id,
+            text=f"{nickname}来互动",
+            quote=f"欢迎{nickname}，晚上好",
+            evidence_chat_id=int(speech),
+        )
+        settle_report = json.dumps(
+            {
+                "failure_reason": None,
+                "unregistered": [
+                    {
+                        "kind": "commitment",
+                        "what": f"{nickname}说过的事",
+                        "quote": f"原话里带{nickname}",
+                        "reason": "测试原因",
+                    }
+                ],
+                "input_note": f"台词提到{nickname}，已裁剪",
+            },
+            ensure_ascii=False,
+        )
+        await store.execute("UPDATE live_sessions SET settle_report=? WHERE id=?", (settle_report, session_id))
+
+        assert await privacy.delete_viewer(viewer_id=viewer_id, add_to_forget_list=True) is True
+
+        commitments = [dict(row) for row in await store.execute("SELECT * FROM commitments ORDER BY id")]
+        assert len(commitments) == 1, "对 ta 的承诺随删除清掉，其余承诺保留"
+        survivor = commitments[0]
+        assert nickname not in (survivor["what"] or "") and nickname not in (survivor["quote"] or "")
+        assert "一位观众" in (survivor["what"] or "") and "一位观众" in (survivor["quote"] or "")
+        # 场次档案不按观众删（它不是 ta 的数据），但其中的昵称要替换掉
+        (archive_row,) = await store.execute("SELECT text, quote FROM archive_lines")
+        assert archive_row["text"] == "一位观众来互动"
+        assert archive_row["quote"] == "欢迎一位观众，晚上好"
+
+        (session_row,) = await store.execute("SELECT settle_report FROM live_sessions WHERE id=?", (session_id,))
+        report = json.loads(session_row["settle_report"])
+        assert report["failure_reason"] is None
+        assert report["unregistered"][0]["kind"] == "commitment"
+        assert report["unregistered"][0]["reason"] == "测试原因"
+        assert nickname not in json.dumps(report, ensure_ascii=False)
+        assert "一位观众" in report["unregistered"][0]["what"]
+        assert "一位观众" in report["unregistered"][0]["quote"]
+        assert "一位观众" in report["input_note"]
+
+        await privacy.close()
+        await store.close()
+        forbidden = [b"UID_SCRUB_777", nickname.encode("utf-8"), "观众弹幕_SCRUB_UNIQUE".encode("utf-8")]
+        for candidate in [db_file, Path(str(db_file) + "-wal")]:
+            if candidate.exists():
+                raw = candidate.read_bytes()
+                for token in forbidden:
+                    assert token not in raw, f"{candidate.name} 残留敏感字节: {token!r}"
+    finally:
+        if store.initialized:
+            await privacy.close()
+            await store.close()
+
+
+async def test_delete_viewer_scrubs_game_creature_and_event_text(tmp_path: Path) -> None:
+    """游戏侧自由文本（生物名/称呼/死亡说明、游戏事件正文）里的昵称也替换成代称。"""
+    db_file = tmp_path / "data" / "amaidesu.db"
+    store = SQLiteDatabase(db_file)
+    await store.initialize()
+    privacy = PrivacyService(store.manager, db_path=db_file, key_path=tmp_path / "forget.key")
+    await privacy.initialize()
+    nickname = "游戏测试昵称"
+    try:
+        session_id = await store.sessions.insert_live_session(started_at_ms=1000, kind="live")
+        await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=2000)
+        resolution = await store.viewers.resolve_viewer(
+            platform="bilibili",
+            id_kind="account",
+            external_id="UID_GAME_555",
+            user_name=nickname,
+            timestamp_ms=1100,
+            name_match_window_ms=0,
+        )
+        await store.execute(
+            "INSERT INTO game_creatures(game, world_key, creature_key, type, kind, name, nickname, owner,"
+            " death_note, updated_at_ms) VALUES ('minecraft', 'w1', 'uuid:1', 'wolf', 'tamed', ?, ?, '主播', ?, 1)",
+            (nickname, nickname, f"{nickname}送的花"),
+        )
+        await store.execute(
+            "INSERT INTO game_events(live_session_id, game, event_type, message, timestamp_ms)"
+            " VALUES (?, 'minecraft', 'milestone', ?, 1200)",
+            (session_id, f"{nickname}的狗生崽了"),
+        )
+
+        assert await privacy.delete_viewer(viewer_id=resolution.viewer_id, add_to_forget_list=True) is True
+
+        (creature,) = await store.execute("SELECT name, nickname, owner, death_note FROM game_creatures")
+        assert creature["name"] == "一位观众"
+        assert creature["nickname"] == "一位观众"
+        assert creature["owner"] == "主播", "主人是游戏内玩家名，不含观众昵称时不改"
+        assert creature["death_note"] == "一位观众送的花"
+        (event,) = await store.execute("SELECT message FROM game_events")
+        assert event["message"] == "一位观众的狗生崽了"
+    finally:
+        await privacy.close()
+        await store.close()
+
+
+async def test_grace_fallback_timer_deletes_existing_viewer_after_24h(tmp_path: Path) -> None:
+    """开播前发令且已有观众行：行上记待删标记，24 小时兜底定时器到点执行删除。
+
+    定时器的等待函数可注入（生产是 asyncio.sleep），测试用假等待把时钟推进满 24 小时，
+    不依赖真实等待。
+    """
+    clock = FakeClock()
+    started_calls: list[int] = []
+    release_timer = asyncio.Event()
+
+    class _BlockingSleep:
+        """记录请求的等待时长并挂起，直到测试放行；时间流逝由假时钟显式推进。"""
+
+        async def __call__(self, seconds: float) -> None:
+            started_calls.append(int(seconds * 1000))
+            await release_timer.wait()
+
+    db_file = tmp_path / "data" / "amaidesu.db"
+    store = SQLiteDatabase(db_file)
+    await store.initialize()
+    privacy = PrivacyService(
+        store.manager,
+        db_path=db_file,
+        key_path=tmp_path / "forget.key",
+        clock=clock.now_ms,
+        sleep=_BlockingSleep(),
+    )
+    await privacy.initialize()
+    try:
+        resolution = await store.viewers.resolve_viewer(
+            platform="bilibili",
+            id_kind="account",
+            external_id="U_GRACE_TIMER",
+            user_name="宽限定时观众",
+            timestamp_ms=clock.now_ms(),
+            name_match_window_ms=0,
+        )
+        viewer_id = resolution.viewer_id
+
+        disposition = await privacy.process_incoming_viewer_message(
+            platform="bilibili",
+            id_kind="account",
+            external_id="U_GRACE_TIMER",
+            user_name="宽限定时观众",
+            message_type="danmaku",
+            content="忘了我",
+            timestamp_ms=clock.now_ms(),
+        )
+        assert disposition == "forget_command"
+        (row,) = await store.execute("SELECT forget_requested_at_ms FROM viewers WHERE id=?", (viewer_id,))
+        assert row["forget_requested_at_ms"] == clock.now_ms(), "已有观众行要记下待删时刻"
+
+        # 未满 24 小时、也没有下播：此刻不该删；定时器已在等（等待函数被调用，尚未到点）
+        assert await privacy.execute_due_forget_deletions() == 0
+        assert await store.viewers.get_viewer(viewer_id=viewer_id) is not None
+        assert started_calls == [GRACE_DELETE_MAX_MS]
+
+        # 时间过去 24 小时后放行兜底定时器；不真实等待
+        clock.tick(GRACE_DELETE_MAX_MS)
+        release_timer.set()
+        await privacy.wait_grace_timers()
+        assert started_calls == [GRACE_DELETE_MAX_MS]
+        assert await store.viewers.get_viewer(viewer_id=viewer_id) is None
+    finally:
+        await privacy.close()
+        await store.close()

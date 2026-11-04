@@ -1,16 +1,17 @@
 """观众隐私与自主遗忘服务：命令判定、不记录名单与密钥、场内遮名、宽限删除与完整删除函数。
 
 核心契约：
-- **命令与撤回判定**：存储与决策侧共用纯函数 ``matches_phrase_table``。先把弹幕里的 ``@某人`` 提及剥除，
-  再按非汉字、非字母数字字符切成小句，每个小句剥掉开头的称呼（"主播"与配置里的主播名），空小句丢弃；
-  剩余小句非空且**全部**在短语表内才算命中。
+- **命令与撤回判定**：存储与决策侧共用纯函数 ``matches_phrase_table``。先剥掉 B 站文字表情码
+  （``[微笑]`` / ``[doge]`` 这类）与 ``@某人`` 提及，再按 Unicode 意义切小句——字母、数字、汉字、
+  假名等连续段算一个词，标点/空格/符号/表情作分隔；每个小句剥掉开头的称呼（"主播"与配置里的主播名），
+  空小句丢弃；剩余小句非空且**全部**在短语表内才算命中。
 - **不记录名单（forget_list）**：只存 ``HMAC-SHA256(库外密钥, 种类|外部ID)``，不含应用编号。启动时校验库外密钥文件：
   文件缺失且名单为空时自动生成 32 字节随机密钥；文件缺失但名单非空时直接抛错阻止启动，给出找回密钥或清空名单两条出路。
 - **宽限删除**：观众发"忘了我"后立即进不记录名单、停止记录并在观众行记 ``forget_requested_at_ms``；
   实际删除推迟到发令之后第一次下播后的清理（或最迟发令后 24 小时），执行前本人发撤回短语即可移出名单、清掉待删标记。
 - **删除函数**：单一事务清除观众行、曾用名、弹幕、对 ta 的承诺、相同外部 ID 的模拟回放副本，清空付费三表的身份/留言/原始消息，
-  按每个昵称的使用期找出重叠或出现过的场次，把主播台词、档案、承诺、话题摘要、时间线摘要及过渡期旧回顾里的昵称替换为"一位观众"，
-  最后执行 ``PRAGMA wal_checkpoint(TRUNCATE)``。过渡期的旧画像表与旧笔记目录已由 v25 迁移整体删除。
+  按每个昵称的使用期找出重叠或出现过的场次，把主播台词、档案、承诺、话题摘要、时间线摘要、整理报告与游戏侧自由文本里的昵称
+  替换为"一位观众"，最后执行 ``PRAGMA wal_checkpoint(TRUNCATE)``。过渡期的旧画像表与旧笔记目录已由 v25 迁移整体删除。
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
@@ -25,12 +27,12 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, List, Literal, Optional, Sequence, Set, Tuple
+from typing import Awaitable, Callable, Iterable, List, Literal, Optional, Sequence, Set, Tuple
 
 from src.modules.config.storage_schemas import DEFAULT_FORGET_PHRASES, DEFAULT_RETRACT_PHRASES
 from src.modules.logging import get_logger
 from src.modules.storage.connection import SQLiteConnectionManager
-from src.modules.storage.migrations._common import table_exists
+from src.modules.storage.migrations._common import column_exists, table_exists
 from src.modules.storage.repos.viewers import IdKind, is_placeholder_name
 from src.modules.storage.run_in_executor import run_in_executor
 from src.modules.utils.time_utils import now_ms
@@ -45,14 +47,49 @@ MASKED_VIEWER_LABEL: str = "一位观众"
 
 IncomingDisposition = Literal["forget_command", "retracted", "forget_listed", "normal"]
 
-# 剥除句首或分隔符后的 @提及（如 "@麦麦 忘了我"）
+# B 站文字表情码：方括号包起来的短标签（[微笑]、[doge]、[2022拜年纪]…），判定命令前整段剥掉
+_TEXT_EMOTICON_RE = re.compile(r"[\[［][^\[\]［］]{1,20}[\]］]")
+# 剥除独立书写的 @提及（如 "@路人甲 忘了我"）：@ 在句首或分隔符后，一直取到下一个分隔符
 _AT_MENTION_RE = re.compile(r"(?:^|(?<=[\s,，。！!?？~～、：:；;]))@[^\s,，。！!?？~～、：:；;@]+")
-# 按一切非汉字、非 ASCII 字母数字的字符切小句（标点、空格、符号、表情均作为分隔）
-_CLAUSE_SPLIT_RE = re.compile(r"[^0-9A-Za-z\u4e00-\u9fff\u3400-\u4dbf]+")
 
 
 def _normalize_phrase(text: str) -> str:
     return text.strip().casefold()
+
+
+def _split_clauses(text: str) -> List[str]:
+    """按 Unicode 意义切小句：字母、数字、汉字、假名等连续段算一个词，其余字符作分隔。
+
+    用字符自身的 Unicode 类别（``str.isalnum``）而不是 ASCII 白名单：全角数字/字母、假名
+    都算词内字符，不会被误当成标点切开（老口径只认 ASCII，会把这几种写成两个小句）。
+    """
+    clauses: List[str] = []
+    current: List[str] = []
+    for char in text:
+        if char.isalnum():
+            current.append(char)
+        elif current:
+            clauses.append("".join(current))
+            current = []
+    if current:
+        clauses.append("".join(current))
+    return clauses
+
+
+def _strip_mentions(content: str, callouts: Sequence[str]) -> str:
+    """剥掉命令判定里的 ``@提及``，含与正文粘连的写法（@麦麦忘了我）。
+
+    先剥 "@ + 称呼"（称呼表 = 主播与配置的主播名）：剥完只留下称呼后面的正文，
+    所以粘连写法也能命中；再剥独立书写的 @某人；最后把残余的 @ 当分隔符，
+    避免漏掉无法判断名字边界的提及。
+    """
+    text = _TEXT_EMOTICON_RE.sub(" ", content)
+    for callout in callouts:
+        text = re.sub(rf"[@＠]\s*{re.escape(callout)}", " ", text, flags=re.IGNORECASE)
+    text = _AT_MENTION_RE.sub(" ", text)
+    for mark in ("@", "＠"):
+        text = text.replace(mark, " ")
+    return text
 
 
 def matches_phrase_table(
@@ -63,8 +100,9 @@ def matches_phrase_table(
 ) -> bool:
     """判定弹幕是否严格由短语表中的短语组成。
 
-    步骤：剥掉 ``@某人`` → 按一切非汉字非字母数字字符切小句 → 每小句剥掉开头的称呼
-    （"主播"与 ``bot_name``）→ 丢弃空小句 → 剩余至少一句且每句都在 ``phrases`` 中。
+    步骤：剥掉 B 站文字表情码（``[微笑]`` 这类）与 ``@某人`` 提及（含粘连写法）→ 按 Unicode
+    意义切小句 → 每小句剥掉开头的称呼（"主播"与 ``bot_name``）→ 丢弃空小句 → 剩余至少一句
+    且每句都在 ``phrases`` 中。表情码、@提及、标点都只起分隔作用，不参与命中判断。
     """
     if not content or not phrases:
         return False
@@ -72,18 +110,17 @@ def matches_phrase_table(
     if not phrase_set:
         return False
 
-    stripped_at = _AT_MENTION_RE.sub(" ", content)
-    raw_clauses = [part for part in _CLAUSE_SPLIT_RE.split(stripped_at) if part]
-    if not raw_clauses:
-        return False
-
     callouts = ["主播"]
     clean_bot = (bot_name or "").strip()
     if clean_bot:
-        for part in _CLAUSE_SPLIT_RE.split(clean_bot):
+        for part in _split_clauses(clean_bot):
             if part and part not in callouts:
                 callouts.append(part)
     callouts.sort(key=len, reverse=True)
+
+    raw_clauses = _split_clauses(_strip_mentions(content, callouts))
+    if not raw_clauses:
+        return False
 
     cleaned: List[str] = []
     for clause in raw_clauses:
@@ -158,6 +195,7 @@ class PrivacyService:
         retract_phrases: Sequence[str] = DEFAULT_RETRACT_PHRASES,
         bot_name: str = "",
         clock: Callable[[], int] = now_ms,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._manager = manager
         self._db_path = Path(db_path)
@@ -166,6 +204,8 @@ class PrivacyService:
         self._retract_phrases: Tuple[str, ...] = tuple(retract_phrases)
         self._bot_name = bot_name
         self._clock = clock
+        # 24 小时兜底延时的等待函数：生产用 asyncio.sleep，测试注入假等待以确定性地推进时间
+        self._sleep = sleep
         self._secret_key: Optional[bytes] = None
 
         self._state_lock = threading.Lock()
@@ -211,11 +251,15 @@ class PrivacyService:
                 deletions_executed=self._deletions_executed,
             )
 
-    async def initialize(self) -> None:
-        """校验或初始化库外密钥文件；缺失且名单非空时抛 RuntimeError 拒启。"""
-        await run_in_executor(self._initialize_blocking)
+    async def initialize(self, *, persist_key: bool = True) -> None:
+        """校验或初始化库外密钥文件；缺失且名单非空时抛 RuntimeError 拒启。
 
-    def _initialize_blocking(self) -> None:
+        ``persist_key=False`` 供组合根冒烟（--dry）用：密钥文件缺失且名单为空时只用
+        本次进程内的临时密钥，不建目录、不写文件；缺真密钥而名单非空时仍照常拒启。
+        """
+        await run_in_executor(self._initialize_blocking, persist_key)
+
+    def _initialize_blocking(self, persist_key: bool = True) -> None:
         with self._manager.transaction() as conn:
             row = conn.execute("SELECT COUNT(*) AS n FROM forget_list").fetchone()
             list_count = int(row["n"]) if row else 0
@@ -236,8 +280,12 @@ class PrivacyService:
                 "请对数据库执行 DELETE FROM forget_list; 后重新启动。"
             )
 
-        self._key_path.parent.mkdir(parents=True, exist_ok=True)
         generated = secrets.token_bytes(32)
+        if not persist_key:
+            self._secret_key = generated
+            logger.info(f"冒烟装配：密钥文件缺失且不记录名单为空，本次运行使用临时密钥、不落盘: {self._key_path}")
+            return
+        self._key_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self._key_path.with_name(self._key_path.name + ".tmp")
         tmp_path.write_bytes(generated)
         os.replace(tmp_path, self._key_path)
@@ -249,6 +297,16 @@ class PrivacyService:
             self._initialize_blocking()
         assert self._secret_key is not None
         return self._secret_key
+
+    async def wait_grace_timers(self) -> None:
+        """等当前挂起的 24 小时宽限兜底任务结束（没有任务时立即返回）。
+
+        正常关闭走 :meth:`close`（取消并回收）；本方法供确定性地等兜底检查跑完
+        （例如测试注入假等待后直接观察删除结果），不改变任务本身的调度方式。
+        """
+        tasks = list(self._timer_tasks)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def close(self) -> None:
         """取消挂起的 24 小时宽限删除延时任务。"""
@@ -460,7 +518,7 @@ class PrivacyService:
 
         async def _delayed() -> None:
             try:
-                await asyncio.sleep(GRACE_DELETE_MAX_MS / 1000.0)
+                await self._sleep(GRACE_DELETE_MAX_MS / 1000.0)
                 if not self._closed:
                     await self.execute_due_forget_deletions()
             except asyncio.CancelledError:
@@ -717,7 +775,13 @@ class PrivacyService:
             conn.execute(f"DELETE FROM viewers WHERE id IN ({vid_placeholders})", all_viewer_ids)  # noqa: S608
 
         conn = self._manager.connection()
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        # PRAGMA 首列是 busy：1 表示还有别的连接在用，删掉的内容可能仍留在 -wal 里
+        if checkpoint and int(checkpoint[0]) != 0:
+            logger.warning(
+                f"删除观众后截断预写日志未完成（busy={checkpoint[0]}）："
+                "有其它连接占用数据库，已删内容可能暂留在 -wal，稍后随检查点落盘"
+            )
         return True
 
 
@@ -783,7 +847,11 @@ def _replace_nickname_in_sessions(
     session_ids: Sequence[int],
     nickname: str,
 ) -> None:
-    """在指定场次集合内把主播台词、话题、摘要、档案、承诺及旧回顾里的昵称替换为"一位观众"。"""
+    """在指定场次集合内把主播台词、话题、摘要、档案、承诺、整理报告与游戏侧文本里的昵称换成代称。
+
+    整理报告是 JSON 文本，逐个文本字段替换后再序列化回去，保证 WebUI 还能解析；游戏侧
+    自由文本（生物名/主人/死亡说明、游戏事件正文）不在场次集合里，按昵称全表替换。
+    """
     sid_ph = ",".join("?" for _ in session_ids)
     like_pat = f"%{nickname}%"
 
@@ -833,6 +901,83 @@ def _replace_nickname_in_sessions(
                 like_pat,
                 like_pat,
             ],
+        )
+
+    _replace_nickname_in_settle_reports(conn, session_ids=session_ids, nickname=nickname)
+    _replace_nickname_in_game_data(conn, nickname=nickname)
+
+
+def _replace_nickname_in_settle_reports(
+    conn: sqlite3.Connection,
+    *,
+    session_ids: Sequence[int],
+    nickname: str,
+) -> None:
+    """把场次整理报告 JSON 里的昵称换成代称，报告仍保持可解析。
+
+    报告的未登记清单存着模型给的原话与标题，失败原因也可能回显模型输出，都可能夹着
+    观众昵称；按字段替换而不是整段文本替换，避免破坏 JSON 结构导致 WebUI 读不出报告。
+    """
+    if not column_exists(conn, "live_sessions", "settle_report"):
+        return
+    sid_ph = ",".join("?" for _ in session_ids)
+    like_pat = f"%{nickname}%"
+    rows = conn.execute(
+        f"SELECT id, settle_report FROM live_sessions"  # noqa: S608 常量列名
+        f" WHERE id IN ({sid_ph}) AND settle_report IS NOT NULL AND settle_report LIKE ?",
+        [*session_ids, like_pat],
+    ).fetchall()
+    for row in rows:
+        cleaned = _replace_nickname_in_report_json(str(row["settle_report"]), nickname)
+        conn.execute("UPDATE live_sessions SET settle_report=? WHERE id=?", (cleaned, int(row["id"])))
+
+
+def _replace_nickname_in_report_json(raw: str, nickname: str) -> str:
+    """整理报告 JSON 的文本字段逐个替换昵称；读不懂时退回原文替换（至少不残留明文）。"""
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw.replace(nickname, MASKED_VIEWER_LABEL)
+    if not isinstance(data, dict):
+        return raw.replace(nickname, MASKED_VIEWER_LABEL)
+    for key in ("failure_reason", "input_note"):
+        value = data.get(key)
+        if isinstance(value, str):
+            data[key] = value.replace(nickname, MASKED_VIEWER_LABEL)
+    items = data.get("unregistered")
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for key in ("what", "quote", "reason"):
+                value = item.get(key)
+                if isinstance(value, str):
+                    item[key] = value.replace(nickname, MASKED_VIEWER_LABEL)
+    return json.dumps(data, ensure_ascii=False)
+
+
+def _replace_nickname_in_game_data(conn: sqlite3.Connection, *, nickname: str) -> None:
+    """游戏侧自由文本里的昵称换成代称：生物名/称呼/主人/死亡说明与游戏事件正文。
+
+    这几列存的都是模型或游戏侧写下的自由文本（她给生物起的名字、死亡说明、事件播报），
+    可能带观众昵称；外部 ID 不写入这些列，因此只需要按昵称替换。
+    """
+    if not nickname:
+        return
+    like_pat = f"%{nickname}%"
+    if table_exists(conn, "game_creatures"):
+        conn.execute(
+            "UPDATE game_creatures SET"  # noqa: S608 常量列名
+            " name = REPLACE(name, ?, ?), nickname = REPLACE(nickname, ?, ?),"
+            " owner = REPLACE(owner, ?, ?), death_note = REPLACE(death_note, ?, ?)"
+            " WHERE name LIKE ? OR nickname LIKE ? OR owner LIKE ? OR death_note LIKE ?",
+            [nickname, MASKED_VIEWER_LABEL] * 4 + [like_pat] * 4,
+        )
+    if table_exists(conn, "game_events"):
+        conn.execute(
+            "UPDATE game_events SET message = REPLACE(message, ?, ?)"  # noqa: S608 常量列名
+            " WHERE message LIKE ?",
+            (nickname, MASKED_VIEWER_LABEL, like_pat),
         )
 
 

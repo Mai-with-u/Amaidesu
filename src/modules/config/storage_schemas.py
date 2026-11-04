@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from typing import List
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator
 
 from src.modules.config.file_meta import FileMetaConfig
 from src.modules.config.schemas.base import BaseConfig
@@ -134,6 +134,28 @@ class PrivacyConfig(BaseConfig):
         "（相对项目根目录或绝对路径）。请单独妥善备份：文件丢失且不记录名单非空时程序将拒绝启动",
         json_schema_extra={"x-ui-advanced": True},
     )
+
+    @field_validator("forget_phrases", "retract_phrases")
+    @classmethod
+    def _check_phrases(cls, phrases: List[str]) -> List[str]:
+        """短语必须是一个能独立命中的词：去首尾空白后非空，且每个字符都是文字/数字字符。
+
+        判定命令时短语按 Unicode 意义切小句、标点与表情只作分隔，所以带标点、空格或
+        表情的短语永远不会与任何小句相等（写了也从不命中）。按"未知即硬错"在加载期
+        点名拦下，而不是让使用者以为配置生效、实际从未触发。
+        """
+        for phrase in phrases:
+            clean = (phrase or "").strip()
+            if not clean:
+                raise ValueError("短语表里有空短语：每条短语去掉首尾空白后必须非空")
+            bad_chars = [char for char in clean if not char.isalnum()]
+            if bad_chars:
+                shown = "".join(bad_chars)
+                raise ValueError(
+                    f"短语「{clean}」永远不会命中：标点、空格、表情与符号在判定时被当作分隔符，"
+                    f"短语只能由文字/数字字符组成；请改写成不含「{shown}」的写法或删掉这条"
+                )
+        return phrases
 
 
 class StorageRootConfig(BaseConfig):

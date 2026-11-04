@@ -105,8 +105,14 @@ async def build_privacy_and_retention(
     database: SQLiteDatabase,
     *,
     bot_name: str = "",
+    startup_effects: bool = True,
 ) -> Tuple[PrivacyService, RetentionService]:
-    """装配隐私服务与保留期清理器：校验密钥文件并在启动期（迁移完成后）跑一次清理。"""
+    """装配隐私服务与保留期清理器：校验密钥文件并在启动期（迁移完成后）跑一次清理。
+
+    ``startup_effects=False`` 供组合根冒烟（--dry）用：密钥文件缺失时只用进程内临时密钥、
+    不写文件，也不跑启动期保留期清理（不删任何数据）；缺真密钥而名单非空时仍照常拒启。
+    默认 True，既有调用方与测试行为不变。
+    """
     storage_scope = config.get("storage") if isinstance(config.get("storage"), dict) else {}
     privacy_raw = config.get("privacy") if "privacy" in config else storage_scope.get("privacy")
     privacy_cfg = PrivacyConfig.from_dict(privacy_raw) if isinstance(privacy_raw, dict) else PrivacyConfig()
@@ -132,7 +138,7 @@ async def build_privacy_and_retention(
         retract_phrases=privacy_cfg.retract_phrases,
         bot_name=resolved_bot_name,
     )
-    await privacy.initialize()
+    await privacy.initialize(persist_key=startup_effects)
 
     retention = RetentionService(
         database.manager,
@@ -141,7 +147,8 @@ async def build_privacy_and_retention(
         raw_days=retention_cfg.raw_days,
         viewer_absence_days=retention_cfg.viewer_absence_days,
     )
-    await retention.run_cleanup()
+    if startup_effects:
+        await retention.run_cleanup()
     return privacy, retention
 
 
