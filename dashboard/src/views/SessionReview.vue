@@ -1,12 +1,12 @@
 <!--
   SessionReview - 场次复盘页（只读聚合）
 
-  布局：主播收播总结（session_recaps，只读）→ 场次档案（archive_lines，可删单行）→
+  布局：场次档案（archive_lines，可删单行）→ 本场台词（逐句可删）→
   信息 chips → 指标卡（超阈仅染色，沉默/最慢时延卡带"跳转时刻"深链进控制台回看）→
   流程单执行（单场）→ 观众构成 + 游戏明细（单场，明细逐条锚定跳转）→
   水位图 + LLM 用量表 → 深入入口（事件回看 / LLM 历史 · 本场预过滤）。全部数字来自后端结构化聚合
   （GET /api/v1/review），本页不做告警判定；多选合并视图由后端窗口合并、
-  水位图按 session_id 断线留空隙；总结/流程单/观众/游戏明细属单场语义，
+  水位图按 session_id 断线留空隙；档案/台词/流程单/观众/游戏明细属单场语义，
   合并视图不产出。深挖取证不在本页——带数字开 AI 会话。
 -->
 <template>
@@ -64,18 +64,6 @@
     />
 
     <template v-if="review">
-      <!-- 主播收播总结（session_recaps；写作者视角=主播本人，注入下场开场记忆） -->
-      <section v-if="recapBlocks.length" class="panel recap-panel" aria-label="主播收播总结">
-        <div class="panel-title">主播收播总结</div>
-        <p class="recap-hint">
-          主播视角的自动总结——收播时生成、下一场开播时注入其记忆；此处只读，纠正记忆走记忆管理通道
-        </p>
-        <div v-for="block in recapBlocks" :key="block.sessionId" class="recap-block">
-          <div class="recap-meta mono">{{ block.heading }}</div>
-          <p class="recap-text">{{ block.text }}</p>
-        </div>
-      </section>
-
       <!-- 场次档案（本场整理出的标题 + 原话；删单行只影响下一场开播的"上一场"回想） -->
       <section v-if="archiveSessionId !== null" class="panel archive-panel" aria-label="场次档案">
         <div class="panel-title archive-panel-title">
@@ -83,13 +71,53 @@
           <span class="archive-hint">整理自本场台词，下一场开播回想“上一场”时用</span>
         </div>
         <p v-if="archiveError" class="archive-error">{{ archiveError }}</p>
-        <ArchiveLineList
-          :items="archiveLines"
-          deletable
-          :busy-line-id="archiveBusyLineId"
-          empty-text="这一场还没有档案行"
-          @delete="removeArchiveLine"
-        />
+        <template v-else>
+          <p v-if="archiveActionError" class="archive-error">{{ archiveActionError }}</p>
+          <div v-loading="archiveLoading" class="archive-lines">
+            <ArchiveLineList
+              :items="archiveLines"
+              deletable
+              :busy-line-id="archiveBusyLineId"
+              empty-text="这一场还没有档案行"
+              @delete="removeArchiveLine"
+            />
+          </div>
+        </template>
+      </section>
+
+      <!-- 本场台词（直播里说过的每一句；删一句会连带删掉引用它的档案行） -->
+      <section v-if="archiveSessionId !== null" class="panel speech-panel" aria-label="本场台词">
+        <div class="panel-title speech-panel-title">
+          <span>本场台词</span>
+          <span class="speech-hint"
+            >按时间正序；删一句会删掉引用它的档案行，承诺保留但原话标为已删除</span
+          >
+        </div>
+        <p v-if="speechError" class="speech-error">{{ speechError }}</p>
+        <template v-else>
+          <p v-if="speechActionError" class="speech-error">{{ speechActionError }}</p>
+          <div v-loading="speechLoading" class="speech-lines">
+            <ul v-if="speechLines.length > 0" class="speech-list">
+              <li v-for="line in speechLines" :key="line.chat_id" class="speech-item">
+                <span class="mono speech-time">{{ formatTimeHMS(line.timestamp_ms) }}</span>
+                <span class="speech-content" :class="{ 'is-dropped': line.dropped }">
+                  {{ line.content }}
+                </span>
+                <el-tag v-if="line.dropped" size="small" type="info" effect="plain">未送达</el-tag>
+                <el-button
+                  link
+                  size="small"
+                  type="danger"
+                  :loading="speechBusyChatId === line.chat_id"
+                  :disabled="speechBusyChatId !== null"
+                  @click="removeSpeechLine(line)"
+                  >删除这句</el-button
+                >
+              </li>
+            </ul>
+            <p v-else class="speech-empty">这一场还没有台词记录</p>
+          </div>
+        </template>
       </section>
 
       <!-- 复盘报告（logs/reviews 可视化页，由直播复盘流程离线生成；仅单场次且有报告时渲染） -->
@@ -344,12 +372,14 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
+import { ElMessage } from 'element-plus';
 import type { EChartsCoreOption } from 'echarts/core';
 import { ledgerApi, liveSessionsApi, reviewApi } from '@/api';
 import type {
   ArchiveLineItem,
   LiveSessionItem,
   ReviewSessionBrief,
+  ReviewSpeechLine,
   RundownSegmentRun,
   SessionReviewResponse,
   SessionRundownExecutionResponse,
@@ -357,6 +387,8 @@ import type {
 import { getApiErrorMessage } from '@/utils/apiError';
 import { confirmAction } from '@/utils/confirmAction';
 import ArchiveLineList from '@/components/memory/ArchiveLineList.vue';
+import { useArchiveLines } from '@/composables/useArchiveLines';
+import { useReviewSpeech } from '@/composables/useReviewSpeech';
 import { compactNumber } from '@/utils/chartFormat';
 import { formatCost, formatDateTime, formatTimeHMS } from '@/utils/format';
 import {
@@ -381,10 +413,30 @@ const errorMessage = ref('');
 /** 流程单执行回看（单场选择时加载；未装配/无事实行时为 null，面板整体隐藏） */
 const rundown = ref<SessionRundownExecutionResponse | null>(null);
 
-/** 本场档案行（下播整理产出；单场选择时加载，删除后原地重拉） */
-const archiveLines = ref<ArchiveLineItem[]>([]);
-const archiveError = ref('');
+/**
+ * 本场档案行：切场语义与记忆页档案面板共用同一组合式（切场先清空、过期响应
+ * 丢弃、错误与空态分开）；删除后原地重拉这一场。
+ */
+const {
+  lines: archiveLines,
+  loading: archiveLoading,
+  error: archiveError,
+  load: loadArchive,
+} = useArchiveLines();
 const archiveBusyLineId = ref<number | null>(null);
+/** 删除档案行的失败原因（加载错误由组合式管；这里只影响提示，不藏列表） */
+const archiveActionError = ref('');
+
+/** 本场台词：逐句可删，删除会连带删掉引用它的档案行（同组合式负责 busy 与错误） */
+const {
+  items: speechLines,
+  loading: speechLoading,
+  error: speechError,
+  actionError: speechActionError,
+  busyChatId: speechBusyChatId,
+  load: loadSpeech,
+  remove: deleteSpeech,
+} = useReviewSpeech();
 
 const chartRef = ref<HTMLElement | null>(null);
 const palette = useChartPalette();
@@ -406,20 +458,32 @@ onMounted(async () => {
 
 watch(selectedIds, loadReview, { deep: true });
 
+/** 复盘聚合请求序号：快速切换场次时只认最后发起的响应 */
+let reviewSeq = 0;
+
 async function loadReview(): Promise<void> {
+  const seq = ++reviewSeq;
   loading.value = true;
   errorMessage.value = '';
   try {
     const resp = await reviewApi.get(selectedIds.value);
+    if (seq !== reviewSeq) return;
     review.value = resp.data;
   } catch (error) {
+    if (seq !== reviewSeq) return;
     review.value = null;
     errorMessage.value = getApiErrorMessage(error, '复盘聚合加载失败');
   } finally {
-    loading.value = false;
+    if (seq === reviewSeq) loading.value = false;
   }
-  await loadRundown();
-  await loadArchive();
+  if (seq !== reviewSeq) return;
+  archiveActionError.value = '';
+  // 单场语义的三块互不依赖：并行加载，互不阻塞
+  await Promise.all([
+    loadRundown(),
+    loadArchive(archiveSessionId.value),
+    loadSpeech(archiveSessionId.value),
+  ]);
 }
 
 /** 流程单执行仅在单场选择时加载；接口不可用/无事实行按无数据降级（面板隐藏） */
@@ -437,22 +501,6 @@ async function loadRundown(): Promise<void> {
   }
 }
 
-/** 本场档案行：单场选择时拉取；失败只让档案面板显示错误，不影响复盘聚合 */
-async function loadArchive(): Promise<void> {
-  const sessionId = archiveSessionId.value;
-  archiveError.value = '';
-  if (sessionId === null) {
-    archiveLines.value = [];
-    return;
-  }
-  try {
-    archiveLines.value = (await ledgerApi.listArchive(sessionId)).data.items;
-  } catch (error) {
-    archiveLines.value = [];
-    archiveError.value = getApiErrorMessage(error, '场次档案加载失败');
-  }
-}
-
 /** 删一行档案：二次确认后调接口，成功原地重拉本场档案（不整体刷新复盘） */
 async function removeArchiveLine(line: ArchiveLineItem): Promise<void> {
   if (
@@ -464,15 +512,39 @@ async function removeArchiveLine(line: ArchiveLineItem): Promise<void> {
     return;
   }
   archiveBusyLineId.value = line.id;
-  archiveError.value = '';
+  archiveActionError.value = '';
   try {
     await ledgerApi.deleteArchiveLine(line.id);
-    await loadArchive();
+    await loadArchive(archiveSessionId.value, { clearLines: false });
   } catch (error) {
-    archiveError.value = getApiErrorMessage(error, '删除档案行失败');
+    archiveActionError.value = getApiErrorMessage(error, '删除档案行失败');
   } finally {
     archiveBusyLineId.value = null;
   }
+}
+
+/**
+ * 删一句台词：二次确认后调接口；成功刷新台词与档案两块——引用这句的档案行
+ * 会被后端一起删掉，承诺保留但原话清空（记忆页显示"原句已删除"）。
+ */
+async function removeSpeechLine(line: ReviewSpeechLine): Promise<void> {
+  const ok = await confirmAction(
+    '删除这句台词？引用它的档案行会一起删除；对它的承诺会保留并显示「原句已删除」。此操作不可恢复。',
+    '删除这句台词',
+  );
+  if (!ok) return;
+  const result = await deleteSpeech(line.chat_id);
+  if (result === null) return;
+  const notes = ['已删除这句台词'];
+  if (result.archive_lines_removed > 0)
+    notes.push(`同时删掉 ${result.archive_lines_removed} 行档案`);
+  if (result.commitments_cleared > 0)
+    notes.push(`${result.commitments_cleared} 条承诺的原话已标为删除`);
+  ElMessage.success(notes.join('；'));
+  await Promise.all([
+    loadSpeech(archiveSessionId.value, { clearLines: false }),
+    loadArchive(archiveSessionId.value, { clearLines: false }),
+  ]);
 }
 
 /** 单场选择的 brief（多选合并视图为 null——单场语义面板以此为开关） */
@@ -513,28 +585,6 @@ function dwellCellClass(seg: RundownSegmentRun): string {
   const level = dwellLevel(seg.dwell_ms, seg.expected_ms, seg.left_at_ms);
   return level === 'red' ? 'dwell-red' : level === 'yellow' ? 'dwell-yellow' : '';
 }
-
-/** 收播总结块（有回顾的场次各一块；单场只出自身） */
-const recapBlocks = computed<Array<{ sessionId: number; heading: string; text: string }>>(() => {
-  const r = review.value;
-  if (!r) return [];
-  const merged = r.sessions.length > 1;
-  return r.sessions
-    .filter(s => (s.recap_text ?? '').length > 0)
-    .map(s => {
-      const label = `${s.title || `场次 #${s.live_session_id}`}`;
-      const generated = s.recap_created_at_ms !== null ? formatDateTime(s.recap_created_at_ms) : '';
-      const headingParts = [
-        ...(merged ? [`场次 #${s.live_session_id} · ${label}`] : [label]),
-        ...(generated ? [`生成于 ${generated}`] : []),
-      ];
-      return {
-        sessionId: s.live_session_id,
-        heading: headingParts.join(' · '),
-        text: s.recap_text ?? '',
-      };
-    });
-});
 
 function sessionLabel(item: LiveSessionItem): string {
   const title = item.title || `场次 #${item.live_session_id}`;
@@ -960,30 +1010,76 @@ function exportPackage(): void {
   color: var(--text-secondary);
 }
 
-/* 收播总结面板：正文保留换行，元信息弱化 */
-.recap-hint {
-  margin: -6px 0 10px;
+/* 档案 / 台词块：加载与空态都在块内，错误时不渲染列表 */
+.archive-lines,
+.speech-lines {
+  min-height: 40px;
+}
+
+.speech-panel-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.speech-hint {
   font-size: 12px;
+  font-weight: 400;
   color: var(--text-secondary);
 }
 
-.recap-block + .recap-block {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--border-color-light);
-}
-
-.recap-meta {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-}
-
-.recap-text {
+.speech-error {
   margin: 0;
+  font-size: 12px;
+  color: var(--color-danger);
+}
+
+.speech-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.speech-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--border-color-light);
   font-size: 13px;
-  line-height: 1.7;
-  white-space: pre-wrap;
+}
+
+.speech-item:last-child {
+  border-bottom: none;
+}
+
+.speech-time {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.speech-content {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* 未送达的台词弱化并划掉：仍列出，方便运营者删掉脏数据 */
+.speech-content.is-dropped {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
+.speech-empty {
+  margin: 0;
+  padding: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-placeholder);
 }
 
 /* 流程单停留超时染色（阈值口径同 dwellLevel 常量） */

@@ -138,7 +138,6 @@ class SessionReviewAggregator:
         llm_repo: Optional[object] = None,
         event_repo: Optional[object] = None,
         event_reader: Optional[SessionEventReader] = None,
-        recap_repo: Optional[object] = None,
         slow_thresholds: Optional[Dict[str, int]] = None,
         reviews_dir: Optional[Path] = None,
     ) -> None:
@@ -146,7 +145,6 @@ class SessionReviewAggregator:
         self.llm_repo = llm_repo
         self.event_repo = event_repo
         self.event_reader = event_reader
-        self.recap_repo = recap_repo
         # 每 profile 慢调用阈值（毫秒；来自 [llm_profiles.<name>].slow_threshold_ms，
         # 与运行期慢调用告警同源同值），未配置的 profile 落全局缺省
         self.slow_thresholds = slow_thresholds or {}
@@ -179,7 +177,6 @@ class SessionReviewAggregator:
         llm, waterline = await self._llm_section(windows, session_ids)
         decisions, degraded = await self._decision_section(session_ids, windows)
         game = await self._game_section(session_ids)
-        await self._fill_recaps(briefs)
         # 观众构成/游戏明细属单场语义，合并视图不产出
         viewers = await self._viewers_section(briefs[0]) if len(briefs) == 1 else None
 
@@ -211,25 +208,6 @@ class SessionReviewAggregator:
         except OSError:
             return None
         return matches[0].name if matches else None
-
-    async def _fill_recaps(self, briefs: List[ReviewSessionBrief]) -> None:
-        """把收播总结按场次主键回填到 brief（缺回顾的场次保持 None）。"""
-        if self.recap_repo is None or not briefs:
-            return
-        try:
-            rows = await self.recap_repo.list_recaps_by_session_ids(  # type: ignore[attr-defined]
-                live_session_ids=[b.live_session_id for b in briefs]
-            )
-        except Exception as exc:  # noqa: BLE001 - 回顾缺失不阻断聚合，按无数据降级
-            logger.warning(f"读取场次回顾失败，复盘页总结面板降级: {exc}", exc=True)
-            return
-        by_id = {recap.live_session_id: recap for recap in rows}
-        for brief in briefs:
-            recap = by_id.get(brief.live_session_id)
-            if recap is None:
-                continue
-            brief.recap_text = recap.recap_text or ""
-            brief.recap_created_at_ms = recap.created_at_ms if recap.created_at_ms else None
 
     # ------------------------------------------------------------------ #
     # 各数据源分节                                                        #

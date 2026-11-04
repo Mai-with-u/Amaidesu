@@ -28,7 +28,7 @@
           <span class="settle-time mono">
             {{ formatDateTimeCn(row.started_at_ms) }}
             <template v-if="row.ended_at_ms !== null">
-              – {{ formatTimeHM(row.ended_at_ms) }}
+              – {{ formatRangeEnd(row.started_at_ms, row.ended_at_ms) }}
             </template>
           </span>
           <el-tag size="small" :type="row.settled_at_ms !== null ? 'success' : 'warning'">{{
@@ -122,7 +122,7 @@ import type { SettleListResponse, SettleSessionItem } from '@/types';
 import { ledgerApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { confirmAction } from '@/utils/confirmAction';
-import { formatDateTimeCn, formatTimeHM } from '@/utils/format';
+import { formatDateTimeCn, formatRangeEnd } from '@/utils/format';
 import {
   settleAttemptsExhausted,
   settleAttemptsText,

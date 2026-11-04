@@ -31,7 +31,6 @@ const EVENT = {
   liveStarted: 'live.started',
   liveEnded: 'live.ended',
   streamerSpeech: 'streamer.speech',
-  streamerNotebookChanged: 'streamer.notebook.changed',
   rundownChanged: 'rundown.changed',
 
   // —— 直通：游戏上报与游戏域事件流已知成员 ——

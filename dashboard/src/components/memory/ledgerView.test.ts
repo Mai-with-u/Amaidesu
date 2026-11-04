@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CLOSE_QUOTE_MAX_LENGTH,
+  commitmentQuoteState,
   commitmentStatusLabel,
   commitmentStatusQuery,
   commitmentStatusTagType,
@@ -8,6 +10,7 @@ import {
   settleAttemptsText,
   settleStateLabel,
   unregisteredKindLabel,
+  validateCloseQuote,
 } from './ledgerView';
 
 describe('承诺状态展示', () => {
@@ -36,6 +39,30 @@ describe('承诺对谁', () => {
 
   it('没有具体对象时显示“对全场”', () => {
     expect(commitmentTargetLabel({ viewer_id: null, viewer_name: null })).toBe('对全场');
+  });
+});
+
+describe('承诺原话状态', () => {
+  it('有原话就是 quoted', () => {
+    expect(commitmentQuoteState({ quote: '我下周唱', created_session_id: 3 })).toBe('quoted');
+    expect(commitmentQuoteState({ quote: '手写的原话', created_session_id: null })).toBe('quoted');
+  });
+
+  it('手工登记的承诺没有原话是 manual', () => {
+    expect(commitmentQuoteState({ quote: '', created_session_id: null })).toBe('manual');
+  });
+
+  it('场次登记的承诺没原话只可能是台词被删，显示“原句已删除”', () => {
+    expect(commitmentQuoteState({ quote: '', created_session_id: 3 })).toBe('deleted');
+  });
+});
+
+describe('了结原话校验', () => {
+  it('上限 200 字，边界内通过、超长给提示', () => {
+    expect(CLOSE_QUOTE_MAX_LENGTH).toBe(200);
+    expect(validateCloseQuote('')).toBeNull();
+    expect(validateCloseQuote('好'.repeat(200))).toBeNull();
+    expect(validateCloseQuote('好'.repeat(201))).toBe('最多 200 字');
   });
 });
 

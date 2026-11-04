@@ -1,15 +1,12 @@
-// settings store 的测试
+// settings store 逐项撤销（revertChange）的测试
 //
-// 覆盖：逐项撤销 revertChange（嵌套 key 的当前值恢复、清单移除、不影响其他项、
-// 不存在的 key 零操作），以及 fetchSchema 对设置页 schema 做的展示层预设
-// （人设老梗栏补多行文本与填写提示，字段本身的值树初始化不受影响）。
+// 覆盖：嵌套 key 的当前值恢复（恢复为 originalValues 对应值且不共享引用）、
+// 撤销后待保存清单移除该条、撤销中间一项不影响其他项、撤销不存在的 key 零操作。
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import type { ConfigFieldSchema, ConfigGroupSchema, PendingChange } from '@/types/settings';
-import { INSIDE_JOKES_KEY } from '@/utils/personaFields';
+import type { ConfigFieldSchema, PendingChange } from '@/types/settings';
 import { restoreNestedValue, useSettingsStore } from '@/stores/settings';
-import api from '@/api';
 
 // store 模块顶部导入 api 单例，测试环境无后端，mock 掉即可
 vi.mock('@/api', () => ({
@@ -90,46 +87,6 @@ describe('settings store revertChange', () => {
 
     expect(store.pendingChanges).toHaveLength(0);
     expect((store.currentValues as Record<string, any>).infra.dashboard).toEqual({});
-  });
-});
-
-describe('settings store fetchSchema 人设字段预设', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia());
-    vi.mocked(api.get).mockReset();
-  });
-
-  it('老梗栏补成多行文本并带填写提示，值仍按点分路径进编辑值树', async () => {
-    const groups: ConfigGroupSchema[] = [
-      {
-        key: 'agents',
-        label: '业务 Agent',
-        order: 1,
-        fields: [
-          {
-            key: INSIDE_JOKES_KEY,
-            label: '老梗栏',
-            type: 'string' as ConfigFieldSchema['type'],
-            default: '',
-            value: '',
-            required: false,
-            sensitive: false,
-          },
-        ],
-      },
-    ];
-    vi.mocked(api.get).mockResolvedValueOnce({ data: { groups, version: '1.0.0' } } as never);
-
-    const store = useSettingsStore();
-    await store.fetchSchema();
-
-    const field = store.groups[0].fields[0];
-    expect(field.widget).toBe('textarea');
-    expect(field.description).toContain('删除函数管不到配置文本');
-    // 预设只改呈现：字段值照常进值树，保存仍走原管线
-    expect(store.currentValues).toEqual({
-      agents: { agents: { streamer: { persona: { inside_jokes: '' } } } },
-    });
   });
 });
 

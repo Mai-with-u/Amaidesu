@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 
 class ReviewSessionBrief(BaseModel):
-    """聚合范围内的单场基本信息（live_sessions 行投影 + 场次回顾行投影）。"""
+    """聚合范围内的单场基本信息（live_sessions 行投影）。"""
 
     live_session_id: int
     title: Optional[str] = None
@@ -23,10 +23,6 @@ class ReviewSessionBrief(BaseModel):
     viewer_count: int = 0
     audience_total: int = 0
     """本场累计观看人次（UV 口径；room.state 记账写入，无推送的场次为 0）。"""
-    recap_text: Optional[str] = None
-    """收播总结全文（session_recaps；未生成/功能前老场次为 None）。"""
-    recap_created_at_ms: Optional[int] = None
-    """收播总结的生成时刻（Unix 毫秒）。"""
 
 
 class ReviewChips(BaseModel):
@@ -50,6 +46,29 @@ class ReviewSpeech(BaseModel):
     longest_silence_ms: Optional[int] = None
     longest_silence_start_ms: Optional[int] = None
     """最长沉默区间的起点时刻（= 沉默前最后一条发言；零/单点发言为 None）。"""
+
+
+class ReviewSpeechItem(BaseModel):
+    """复盘页逐句台词（运营者可按句删除）。"""
+
+    chat_id: int
+    timestamp_ms: int
+    content: str
+    dropped: bool = False
+    """播放队列确知没送到观众面前（仍算发过，但不该当众承担）；删句同样可删。"""
+    memory_refs: List[int] = Field(default_factory=list)
+
+
+class ReviewSpeechItems(BaseModel):
+    items: List[ReviewSpeechItem] = Field(default_factory=list)
+
+
+class SpeechDeleteResponse(BaseModel):
+    """删一句台词的结果：引用它的档案行一并删除，对它的承诺保留并清空原话。"""
+
+    deleted: bool
+    archive_lines_removed: int = 0
+    commitments_cleared: int = 0
 
 
 class DecisionLatency(BaseModel):

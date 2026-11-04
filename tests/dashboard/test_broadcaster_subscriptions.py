@@ -17,7 +17,6 @@ from src.modules.events.payloads import (
     RoomMessageUser,
     RoomStateWatchedPayload,
     RundownChangedPayload,
-    StreamerNotebookChangedPayload,
     StreamerSpeechPayload,
     TaskChangedPayload,
     ToolResultPayload,
@@ -80,7 +79,6 @@ async def test_start_subscribes_to_every_forwarded_event_and_stop_unsubscribes_a
         CoreEvents.TOOL_RESULT_WILDCARD,
         CoreEvents.TOOL_HEALTH_WILDCARD,
         CoreEvents.STREAMER_SPEECH,
-        CoreEvents.STREAMER_NOTEBOOK_CHANGED,
         CoreEvents.GAME_REPORT,
         CoreEvents.GAME_ATTENTION_REQUIRED,
         CoreEvents.GAME_ERROR,
@@ -147,13 +145,13 @@ async def test_rundown_changed_and_streamer_speech_payloads(started) -> None:
     )
 
 
-async def test_streamer_notebook_changed_payload_passthrough(started) -> None:
-    """备忘录观测事件直通广播：WS type 为精确事件名，notebook 全文透传。"""
-    _bus, _ws, deliver = started
-    payload = StreamerNotebookChangedPayload(notebook="屋里没有床，别再找床了")
-    call = await deliver(CoreEvents.STREAMER_NOTEBOOK_CHANGED, payload)
-    assert call.args[0] == "streamer.notebook.changed" and call.kwargs.get("message_id") == payload.id
-    assert call.args[1]["notebook"] == "屋里没有床，别再找床了"
+async def test_retired_notebook_event_is_no_longer_subscribed(started) -> None:
+    """主播备忘录观测事件随备忘录退役：广播器不再订阅 streamer.notebook.changed。
+
+    事件常量与载荷模块已删除，订阅清单里再出现这个字面量说明有人把它加了回来。
+    """
+    bus, _ws, _deliver = started
+    assert "streamer.notebook.changed" not in bus.subscribed
 
 
 async def test_wildcard_subscriptions_keep_concrete_event_name_as_ws_type(started) -> None:

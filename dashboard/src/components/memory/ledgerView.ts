@@ -43,6 +43,29 @@ export function commitmentStatusQuery(
   return filter === 'all' ? undefined : filter;
 }
 
+/** 了结原话长度上限（与后端 CommitmentCloseRequest.close_quote 的 max_length 一致） */
+export const CLOSE_QUOTE_MAX_LENGTH = 200;
+
+/** 了结原话校验：通过返回 null，超长返回提示文案（ElMessageBox 的 inputValidator 直接消费） */
+export function validateCloseQuote(value: string): string | null {
+  return value.length <= CLOSE_QUOTE_MAX_LENGTH ? null : `最多 ${CLOSE_QUOTE_MAX_LENGTH} 字`;
+}
+
+/** 承诺原话的三种状态：有原话 / 手工登记本就没有 / 原句已从本场台词里删掉 */
+export type CommitmentQuoteState = 'quoted' | 'manual' | 'deleted';
+
+/**
+ * 承诺原话状态：手建承诺没有来源场次（created_session_id 为空），本就没有原话；
+ * 场次整理登记的承诺原话为空，只可能是引用它的那句台词被删了——承诺保留，
+ * 页面显示"原句已删除"。
+ */
+export function commitmentQuoteState(
+  item: Pick<CommitmentItem, 'quote' | 'created_session_id'>,
+): CommitmentQuoteState {
+  if (item.quote) return 'quoted';
+  return item.created_session_id === null ? 'manual' : 'deleted';
+}
+
 /** 未登记条目类型 → 页面标签 */
 export function unregisteredKindLabel(kind: UnregisteredKind): string {
   return kind === 'commitment' ? '承诺' : '档案';

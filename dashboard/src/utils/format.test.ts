@@ -14,6 +14,7 @@ import {
   formatImageSize,
   formatLatency,
   formatNumber,
+  formatRangeEnd,
   formatTimeHM,
   formatTimeHMS,
   getLatencyClass,
@@ -180,5 +181,23 @@ describe('formatImageSize', () => {
     expect(formatImageSize(512)).toBe('512 B');
     expect(formatImageSize(1024)).toBe('1 KB');
     expect(formatImageSize((91811 * 3) / 4)).toBe('67 KB');
+  });
+});
+
+describe('formatRangeEnd', () => {
+  it('同一自然日只给时分', () => {
+    const start = new Date(2026, 0, 2, 20, 0).getTime();
+    const end = new Date(2026, 0, 2, 23, 5).getTime();
+    expect(formatRangeEnd(start, end)).toBe('23:05');
+  });
+
+  it('跨零点给完整日期时间，不把次日凌晨误读成当天', () => {
+    const start = new Date(2026, 0, 2, 22, 0).getTime();
+    const end = new Date(2026, 0, 3, 0, 30).getTime();
+    const label = formatRangeEnd(start, end);
+    expect(label).toContain('00:30');
+    expect(label).not.toBe(formatTimeHM(end));
+    // 跨日形态带日期部分（本地化渲染细节随 ICU 版本变化，只断言日期在场）
+    expect(label).toMatch(/2026/);
   });
 });

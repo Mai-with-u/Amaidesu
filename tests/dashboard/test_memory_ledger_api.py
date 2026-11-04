@@ -19,6 +19,15 @@ async def client(api, store: SQLiteDatabase):
     )
 
 
+async def test_read_endpoints_answer_503_when_repos_are_not_wired(api) -> None:
+    """账本仓储未装配（极简启动/部分测试）时三个读端点统一 503，不返回空数据也不 500。"""
+    client = await api()
+    for path in ("/api/v1/memory/commitments", "/api/v1/memory/archive/1", "/api/v1/memory/settle"):
+        resp = await client.get(path)
+        assert resp.status_code == 503, f"{path} 应报装配缺失"
+        assert resp.json()["detail"], f"{path} 的 503 没给可读文案"
+
+
 async def _ended_session(store: SQLiteDatabase, *, started_at_ms: int = 1_000, kind: str = "live") -> int:
     session_id = await store.sessions.insert_live_session(started_at_ms=started_at_ms, kind=kind)
     await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=started_at_ms + 600)

@@ -133,10 +133,10 @@ async def get_agent_memo(
 ) -> AgentMemoResponse:
     """Agent 的工作笔记快照（纯观测，无任何写端点）。
 
-    - 主播：备忘录全文（``{notebook}``）
     - minecraft：待办/工作笔记/近期上报三元组（``{notebook, todos, reports}``）
 
-    AgentManager 未注入 503；Agent 不存在或该 Agent 不提供备忘录快照 404。
+    AgentManager 未注入 503；Agent 不存在或该 Agent 不提供备忘录快照 404
+    （主播的记忆已改为数据库账本，不提供本快照）。
     """
     agent = manager.get_agent_by_name(name)
     if agent is None:

@@ -17,7 +17,7 @@ const CATEGORY_META: Record<string, { label: string; description: string }> = {
   vision: { label: '视觉', description: '屏幕感知能力（look_at_screen）' },
   memory: {
     label: '记忆',
-    description: '观众事实与画像查询（query_memory / query_viewer_profile）',
+    description: '承诺账本与场次档案的记忆检索（memory_recall）',
   },
   mcp: { label: 'MCP', description: '外部 MCP server 提供的工具' },
   game: { label: '游戏 Agent', description: '游戏 Agent 自声明的工具（text_adv 等）' },

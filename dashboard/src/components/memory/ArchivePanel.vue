@@ -26,9 +26,9 @@
         </el-select>
         <el-button
           size="small"
-          :loading="linesLoading"
+          :loading="loading"
           :disabled="selectedId === null"
-          @click="loadLines"
+          @click="refreshCurrent"
         >
           刷新
         </el-button>
@@ -36,17 +36,21 @@
     </header>
 
     <p v-if="loadError" class="panel-error">{{ loadError }}</p>
-    <p v-else-if="selectedId !== null" class="archive-summary mono">
-      {{ currentSessionLabel }} · {{ lines.length }} 行
-    </p>
-
-    <ArchiveLineList
-      :items="lines"
-      deletable
-      :busy-line-id="busyLineId"
-      :empty-text="emptyText"
-      @delete="removeLine"
-    />
+    <template v-else>
+      <p v-if="actionError" class="panel-error">{{ actionError }}</p>
+      <p v-if="selectedId !== null" class="archive-summary mono">
+        {{ currentSessionLabel }} · {{ lines.length }} 行
+      </p>
+      <div v-loading="loading" class="archive-lines">
+        <ArchiveLineList
+          :items="lines"
+          deletable
+          :busy-line-id="busyLineId"
+          :empty-text="emptyText"
+          @delete="removeLine"
+        />
+      </div>
+    </template>
   </section>
 </template>
 
@@ -54,30 +58,34 @@
 /**
  * 场次档案面板 —— 按场次查看档案行，可删单行
  *
- * 场次候选来自 live-sessions 列表里已结束的正式场（新的在前）。父页面通过
- * focusSessionId 指定要看哪一场（整理状态面板的"查看该场档案"入口），选中后
- * 拉取该场档案行；删除单行先二次确认，成功后原地重拉这一场的档案。
+ * 场次候选来自 live-sessions 列表里已结束的正式场（新的在前）。外部入口
+ * （整理状态面板的"查看该场档案"）由父页面经 ref 调 `selectSession` 指定场次，
+ * 不靠 prop 监听：切场时清空旧行、丢弃先发后到的过期响应，错误态与空态分开。
+ * 删除单行先二次确认，成功后原地重拉这一场的档案。
+ *
+ * 加载状态机在 composables/useArchiveLines（与场次复盘页共用同一套切场语义）。
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { ArchiveLineItem, LiveSessionItem } from '@/types';
 import { ledgerApi, liveSessionsApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { confirmAction } from '@/utils/confirmAction';
 import { formatDateTimeCn } from '@/utils/format';
+import { useArchiveLines } from '@/composables/useArchiveLines';
 import ArchiveLineList from './ArchiveLineList.vue';
 
-const props = withDefaults(defineProps<{ focusSessionId?: number | null }>(), {
-  focusSessionId: null,
-});
+const { lines, loading, error, load } = useArchiveLines();
 
 const sessions = ref<LiveSessionItem[]>([]);
 const sessionsLoading = ref(false);
 const selectedId = ref<number | null>(null);
-const lines = ref<ArchiveLineItem[]>([]);
-const linesLoading = ref(false);
 const busyLineId = ref<number | null>(null);
-const loadError = ref('');
+const sessionsError = ref('');
+const actionError = ref('');
+
+/** 加载类错误（场次列表 / 档案行）：非空时列表不渲染，避免显示误导性的空态 */
+const loadError = computed(() => sessionsError.value || error.value);
 
 const currentSession = computed<LiveSessionItem | null>(
   () => sessions.value.find(item => item.live_session_id === selectedId.value) ?? null,
@@ -98,46 +106,34 @@ function sessionOptionLabel(item: LiveSessionItem): string {
 
 async function loadSessions(): Promise<void> {
   sessionsLoading.value = true;
-  loadError.value = '';
+  sessionsError.value = '';
   try {
     const response = await liveSessionsApi.list({ kind: 'live', limit: 60 });
     sessions.value = response.data.items.filter(item => item.ended_at_ms !== null);
-  } catch (error) {
-    loadError.value = getApiErrorMessage(error, '场次列表加载失败');
+  } catch (err) {
+    sessionsError.value = getApiErrorMessage(err, '场次列表加载失败');
   } finally {
     sessionsLoading.value = false;
   }
 }
 
-async function loadLines(): Promise<void> {
-  if (selectedId.value === null) {
-    lines.value = [];
-    return;
-  }
-  linesLoading.value = true;
-  loadError.value = '';
-  try {
-    lines.value = (await ledgerApi.listArchive(selectedId.value)).data.items;
-  } catch (error) {
-    lines.value = [];
-    loadError.value = getApiErrorMessage(error, '场次档案加载失败');
-  } finally {
-    linesLoading.value = false;
-  }
-}
-
+/** 切到某一场：父页面（"查看该场档案"）与下拉选择共用；同一场再点等于刷新 */
 function selectSession(liveSessionId: number): void {
-  if (selectedId.value === liveSessionId) {
-    void loadLines();
-    return;
-  }
+  const changed = selectedId.value !== liveSessionId;
   selectedId.value = liveSessionId;
-  void loadLines();
+  actionError.value = '';
+  void load(liveSessionId, { clearLines: changed });
 }
 
 function onSessionChange(value: number | undefined): void {
   if (typeof value !== 'number') return;
   selectSession(value);
+}
+
+function refreshCurrent(): void {
+  if (selectedId.value === null) return;
+  actionError.value = '';
+  void load(selectedId.value, { clearLines: false });
 }
 
 async function removeLine(line: ArchiveLineItem): Promise<void> {
@@ -149,20 +145,23 @@ async function removeLine(line: ArchiveLineItem): Promise<void> {
   ) {
     return;
   }
+  const target = selectedId.value;
+  if (target === null) return;
   busyLineId.value = line.id;
-  loadError.value = '';
+  actionError.value = '';
   try {
     await ledgerApi.deleteArchiveLine(line.id);
     ElMessage.success('已删除这一行');
-    await loadLines();
-  } catch (error) {
-    loadError.value = getApiErrorMessage(error, '删除档案行失败');
+    await load(target, { clearLines: false });
+  } catch (err) {
+    actionError.value = getApiErrorMessage(err, '删除档案行失败');
   } finally {
     busyLineId.value = null;
   }
 }
 
 async function reload(): Promise<void> {
+  actionError.value = '';
   await loadSessions();
   if (
     selectedId.value !== null &&
@@ -170,30 +169,22 @@ async function reload(): Promise<void> {
   ) {
     selectedId.value = null;
   }
-  if (selectedId.value === null) {
-    selectedId.value = props.focusSessionId ?? sessions.value[0]?.live_session_id ?? null;
-  }
-  if (selectedId.value === null) {
-    lines.value = [];
+  const target = selectedId.value ?? sessions.value[0]?.live_session_id ?? null;
+  if (target === null) {
+    selectedId.value = null;
+    await load(null);
     return;
   }
-  await loadLines();
+  const changed = selectedId.value !== target;
+  selectedId.value = target;
+  await load(target, { clearLines: changed });
 }
 
-watch(
-  () => props.focusSessionId,
-  liveSessionId => {
-    if (liveSessionId !== null) selectSession(liveSessionId);
-  },
-);
-
-onMounted(async () => {
-  await loadSessions();
-  const target = props.focusSessionId ?? sessions.value[0]?.live_session_id ?? null;
-  if (target !== null) selectSession(target);
+onMounted(() => {
+  void reload();
 });
 
-defineExpose({ reload });
+defineExpose({ reload, selectSession });
 </script>
 
 <style scoped>
@@ -251,6 +242,10 @@ defineExpose({ reload });
   margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.archive-lines {
+  min-height: 40px;
 }
 
 @media (max-width: 860px) {

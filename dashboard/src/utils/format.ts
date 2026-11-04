@@ -73,6 +73,20 @@ export function formatDateTimeCn(ms: number): string {
   return new Date(ms).toLocaleString('zh-CN', { hour12: false });
 }
 
+/**
+ * 区间结束时刻：与开始同一自然日只给 HH:MM（列表紧凑），跨日给完整日期时间
+ * ——跨零点场次的结束时间只给时分会被误读成当天。
+ */
+export function formatRangeEnd(startMs: number, endMs: number): string {
+  const start = new Date(startMs);
+  const end = new Date(endMs);
+  const sameDay =
+    start.getFullYear() === end.getFullYear() &&
+    start.getMonth() === end.getMonth() &&
+    start.getDate() === end.getDate();
+  return sameDay ? formatTimeHM(endMs) : formatDateTimeCn(endMs);
+}
+
 // ==================== 数字 ====================
 
 /**

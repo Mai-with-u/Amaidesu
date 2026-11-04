@@ -16,7 +16,7 @@
     <!-- 承诺账本 / 下播整理 / 场次档案：下播整理产出的可纠错视图                  -->
     <CommitmentPanel ref="commitmentPanel" />
     <SettlePanel ref="settlePanel" @view-archive="openArchive" />
-    <ArchivePanel ref="archivePanel" :focus-session-id="archiveSessionId" />
+    <ArchivePanel ref="archivePanel" />
   </div>
 </template>
 
@@ -27,7 +27,8 @@
  * 页面只剩账本三块：承诺（未了结 / 已了结 / 误记）、下播整理状态与场次档案。
  * 旧版长期记忆（MEMORY.md）与常客画像两套接口在记忆重设计中下线，记忆内容
  * 改由下播整理写进承诺账本与场次档案；三个面板各自在挂载时拉自己的数据，
- * 页头"刷新"一并重拉，整理状态面板的"查看该场档案"把场次交给档案面板并滚过去。
+ * 页头"刷新"一并重拉，整理状态面板的"查看该场档案"经 ref 调档案面板的
+ * selectSession 切场，再把页面滚到档案面板。
  */
 import { nextTick, ref } from 'vue';
 import CommitmentPanel from '@/components/memory/CommitmentPanel.vue';
@@ -41,7 +42,6 @@ const refreshing = ref(false);
 const commitmentPanel = ref<InstanceType<typeof CommitmentPanel> | null>(null);
 const settlePanel = ref<InstanceType<typeof SettlePanel> | null>(null);
 const archivePanel = ref<InstanceType<typeof ArchivePanel> | null>(null);
-const archiveSessionId = ref<number | null>(null);
 
 /** 页面头"刷新"：三个账本面板一起重拉（面板各自带 loading 态） */
 async function reload(): Promise<void> {
@@ -57,9 +57,9 @@ async function reload(): Promise<void> {
   }
 }
 
-/** 整理状态面板的"查看该场档案"：切到那一场并滚到档案面板 */
+/** 整理状态面板的"查看该场档案"：调档案面板切场并滚过去 */
 function openArchive(liveSessionId: number): void {
-  archiveSessionId.value = liveSessionId;
+  archivePanel.value?.selectSession(liveSessionId);
   void nextTick(() => {
     document
       .getElementById('ledger-archive')

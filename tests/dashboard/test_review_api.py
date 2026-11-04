@@ -292,29 +292,8 @@ async def test_aggregator_decisions_from_events_jsonl(store, tmp_path: Path) -> 
 
 
 # ---------------------------------------------------------------------- #
-# 单场语义分节（回顾回填 / 观众构成 / 游戏明细）                          #
+# 单场语义分节（观众构成 / 游戏明细）                                     #
 # ---------------------------------------------------------------------- #
-
-
-async def test_aggregator_fills_recaps_and_tolerates_missing(store) -> None:
-    a = await _seed_session(store, BASE, BASE + 60_000)
-    b = await _seed_session(store, BASE + 600_000, BASE + 660_000)
-    await store.recaps.upsert_recap(
-        live_session_id=a, started_at_ms=BASE, ended_at_ms=BASE + 60_000, recap_text="上一场聊了改版"
-    )
-
-    agg = SessionReviewAggregator(recap_repo=store.recaps)
-    rows = [((await store.sessions.get_live_session(live_session_id=pk)).model_dump()) for pk in (a, b)]
-    body = await agg.build(rows)
-
-    filled = {s.live_session_id: s for s in body.sessions}
-    assert filled[a].recap_text == "上一场聊了改版"
-    assert filled[a].recap_created_at_ms is not None
-    # 无回顾的场次保持 None（老场次/生成失败），不阻断聚合
-    assert filled[b].recap_text is None
-    # 仓储未注入时同样降级为空
-    bare = await SessionReviewAggregator().build(rows)
-    assert all(s.recap_text is None for s in bare.sessions)
 
 
 async def test_aggregator_viewer_cohorts_single_session_only(store) -> None:
@@ -392,8 +371,7 @@ async def review_client(api, event_bus, store, tmp_path: Path) -> AsyncGenerator
             chat_repo=store.chat,
             llm_repo=store.llm,
             event_repo=store.events,
-            recap_repo=store.recaps,
-            storage_db_path=store.db_path if hasattr(store, "db_path") else None,
+            storage_db_path=store.db_path,
             diagnostics_writer=SimpleNamespace(base_dir=tmp_path / "logs"),
         )
         client.tmp_path = tmp_path  # type: ignore[attr-defined]
@@ -507,3 +485,106 @@ async def test_review_report_files_endpoint_rejects_unsafe_names(review_client) 
     for bad in ("..%2F..%2Fsecret.html", "session-1.html%00.css", "notes.txt", "no-such-file.html"):
         resp = await review_client.get(f"/api/v1/review/files/{bad}")
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------- #
+# 逐句台词与删除单句                                                       #
+# ---------------------------------------------------------------------- #
+
+
+async def _seed_speech(
+    store,
+    pk: int,
+    ts: int,
+    content: str,
+    *,
+    memory_refs: str | None = None,
+    dropped_at_ms: int | None = None,
+) -> int:
+    return await store.chat.insert_live_chat(
+        live_session_id=pk,
+        timestamp_ms=ts,
+        sender_role="assistant",
+        content=content,
+        message_type="speak",
+        memory_refs=memory_refs,
+        dropped_at_ms=dropped_at_ms,
+    )
+
+
+async def test_speech_endpoint_lists_utterances(review_client, store) -> None:
+    """按时间正序返回逐句台词，带未送达标记与解析后的记忆引用编号。"""
+    pk = await _seed_session(store, BASE, BASE + 600_000)
+    first = await _seed_speech(store, pk, BASE + 1_000, "第一句", memory_refs="[5, 7]")
+    dropped = await _seed_speech(store, pk, BASE + 2_000, "没送到", dropped_at_ms=BASE + 2_100)
+    plain = await _seed_speech(store, pk, BASE + 3_000, "普通一句", memory_refs="不是 JSON")
+
+    resp = await review_client.get("/api/v1/review/speech", params={"session_id": pk})
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert [item["chat_id"] for item in items] == [first, dropped, plain]
+    assert items[0]["memory_refs"] == [5, 7]
+    assert items[1]["dropped"] is True
+    assert items[2]["memory_refs"] == [] and items[2]["dropped"] is False
+
+
+async def test_speech_endpoint_requires_chat_repo(api) -> None:
+    """未装配对话仓储时 503（极简启动形态）。"""
+    client = await api()
+
+    resp = await client.get("/api/v1/review/speech", params={"session_id": 1})
+
+    assert resp.status_code == 503
+
+
+async def test_delete_speech_removes_references_and_clears_quote(review_client, store) -> None:
+    """删一句：台词行与引用它的档案行一起删；对它的承诺保留、原话清空。"""
+    pk = await _seed_session(store, BASE, BASE + 600_000)
+    chat_id = await _seed_speech(store, pk, BASE + 1_000, "这句会被删掉")
+    line_id = await store.archive.insert_line(
+        live_session_id=pk, text="档案行", quote="这句会被删掉", evidence_chat_id=chat_id
+    )
+    assert line_id > 0
+    commitment_id = await store.commitments.insert_commitment(
+        what="答应过的事", quote="这句会被删掉", evidence_chat_id=chat_id, created_session_id=pk
+    )
+    assert commitment_id is not None
+
+    resp = await review_client.delete(f"/api/v1/review/speech/{chat_id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"deleted": True, "archive_lines_removed": 1, "commitments_cleared": 1}
+    assert await store.archive.list_lines(live_session_id=pk) == []
+    kept = await store.commitments.get_commitment(commitment_id=int(commitment_id))
+    assert kept is not None and kept.quote == ""
+    assert await store.chat.list_session_speech_for_settle(live_session_id=pk) == []
+    # 同一句删第二次：行已不在 → 404
+    assert (await review_client.delete(f"/api/v1/review/speech/{chat_id}")).status_code == 404
+
+
+async def test_delete_speech_rejects_viewer_message(review_client, store) -> None:
+    """观众弹幕不是主播台词，删句端点 404，不误删。"""
+    pk = await _seed_session(store, BASE, BASE + 600_000)
+    viewer_chat_id = await store.chat.insert_live_chat(
+        live_session_id=pk,
+        timestamp_ms=BASE + 1_000,
+        sender_role="viewer",
+        content="观众弹幕",
+        message_type="danmaku",
+        sender_id="u1",
+        sender_name="某人",
+    )
+
+    resp = await review_client.delete(f"/api/v1/review/speech/{viewer_chat_id}")
+
+    assert resp.status_code == 404
+
+
+async def test_delete_speech_requires_chat_repo(api) -> None:
+    """未装配对话仓储时 503。"""
+    client = await api()
+
+    resp = await client.delete("/api/v1/review/speech/1")
+
+    assert resp.status_code == 503

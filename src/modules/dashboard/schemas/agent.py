@@ -111,8 +111,8 @@ class MemoTodoItem(BaseModel):
 class AgentMemoResponse(BaseModel):
     """Agent 备忘录/待办快照（只读观测；仅 GET，无任何写端点）。
 
-    ``todos`` / ``reports`` 仅 minecraft 目标返回（三元组）；主播只有
-    ``notebook``，两者为 None。
+    ``notebook`` / ``todos`` / ``reports`` 三态三元组，当前只有 minecraft
+    目标提供；不提供快照的 Agent（如主播）由端点返回 404。
     """
 
     name: str

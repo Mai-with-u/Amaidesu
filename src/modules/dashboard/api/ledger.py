@@ -11,7 +11,7 @@
 - GET    /memory/archive/{session_id}         某一场的档案行
 - DELETE /memory/archive/lines/{line_id}      删一行档案
 - GET    /memory/settle                       整理状态（最近的正式场与待整理数）
-- POST   /memory/settle/{session_id}/resettle 把重试次数清零，下次调度重新整理
+- POST   /memory/settle/{session_id}/resettle 重新排进整理队列（清整理完成时刻与重试次数）
 
 账本是"她说过什么"的证据面：原话片段由整理时逐字校验过，删掉台词行也不影响阅读。
 本模块不做 SQL，读写全部经仓储；未注入仓储时端点返回 503。
@@ -216,14 +216,15 @@ def _parse_report(raw: Optional[str]) -> Optional[SettleReport]:
         return None
     try:
         return SettleReport.model_validate_json(raw)
-    except Exception:  # noqa: BLE001 - 历史数据或半写状态都可能读不懂，降级即可
+    except Exception as exc:  # noqa: BLE001 - 历史数据或半写状态都可能读不懂，降级即可
+        logger.warning(f"整理报告读不懂（按无报告展示）: {exc}", exc=exc)
         return None
 
 
 @router.get("/settle", response_model=SettleListResponse)
 async def list_settle_state(sessions: SessionRepoDep, archive: ArchiveRepoDep) -> SettleListResponse:
     """最近正式场的整理状态与待整理场数；失败原因与未登记清单在这里给页面看。"""
-    pending = await sessions.list_sessions_pending_settle(limit=_MAX_LIST_LIMIT, max_attempts=MAX_SETTLE_ATTEMPTS)
+    pending_count = await sessions.count_sessions_pending_settle(max_attempts=MAX_SETTLE_ATTEMPTS)
     rows = await sessions.list_live_sessions(kind=SESSION_KIND_LIVE, limit=_SETTLE_LIST_LIMIT)
     items: List[SettleSessionItem] = []
     for row in rows:
@@ -242,15 +243,19 @@ async def list_settle_state(sessions: SessionRepoDep, archive: ArchiveRepoDep) -
                 archive_count=len(lines),
             )
         )
-    return SettleListResponse(pending_count=len(pending), max_attempts=MAX_SETTLE_ATTEMPTS, items=items)
+    return SettleListResponse(pending_count=pending_count, max_attempts=MAX_SETTLE_ATTEMPTS, items=items)
 
 
 @router.post("/settle/{live_session_id}/resettle", response_model=LedgerMutationResponse)
 async def resettle_session(live_session_id: int, sessions: SessionRepoDep) -> LedgerMutationResponse:
-    """把重试次数清零：下一次整理调度会重新挑到这一场（失败场次的人工出口）。"""
-    changed = await sessions.reset_settle_attempts(live_session_id=int(live_session_id))
+    """把一场重新排进整理队列：清掉整理完成时刻与重试次数（已整理过的场次也会真重跑）。
+
+    失败场次与整理完但想重做的场次共用这一个出口；重跑时档案行按原台词去重，
+    不会写出重复行。进行中或不存在的场次返回 404。
+    """
+    changed = await sessions.requeue_settlement(live_session_id=int(live_session_id))
     if not changed:
-        raise HTTPException(status_code=404, detail=f"场次不存在: {live_session_id}")
+        raise HTTPException(status_code=404, detail=f"场次不存在或还没结束: {live_session_id}")
     return LedgerMutationResponse(success=True, detail="已排进下一次整理")
 
 

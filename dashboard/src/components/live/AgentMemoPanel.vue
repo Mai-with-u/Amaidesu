@@ -10,6 +10,7 @@ import { ref, watch } from 'vue';
 import { agentsApi } from '@/api';
 import { useEventsStore } from '@/stores';
 import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
+import { countMemoToolResults, type MemoStoreEvent } from '@/utils/agentMemo';
 import type { MemoTodoItem } from '@/types';
 
 // 数据流：minecraft 工作文档（todo / 工作笔记 / 近期上报）只读视图
@@ -21,15 +22,6 @@ import type { MemoTodoItem } from '@/types';
 
 /** 静默轮询周期：备忘录写入频率低，30 秒级兜底足够 */
 const MEMO_POLL_INTERVAL_MS = 30000;
-
-/** 触发刷新的工具结果（tool.result 事件 payload 的 tool_name） */
-const MEMO_TOOL_NAMES = new Set(['minecraft_notebook', 'minecraft_todo', 'minecraft_report']);
-
-/** WebSocketMessage 最小形状（events store 条目；tool_name 读取只关心这一段） */
-interface StoreEvent {
-  type: string;
-  data?: { tool_name?: string } | null;
-}
 
 /** minecraft 工作文档三元组（todos/reports 拉取失败时为 null，面板显示占位） */
 interface MinecraftMemo {
@@ -62,14 +54,8 @@ let lastToolResultCount = 0;
 watch(
   () => eventsStore.events,
   events => {
-    const storeEvents = events as unknown as StoreEvent[];
-    const toolCount = storeEvents.reduce(
-      (count, e) =>
-        e.type.startsWith('tool.result.') && MEMO_TOOL_NAMES.has(e.data?.tool_name ?? '')
-          ? count + 1
-          : count,
-      0,
-    );
+    // 计数变化即说明文档被改过：只重拉一次快照（规则与可测实现见 utils/agentMemo）
+    const toolCount = countMemoToolResults(events as unknown as MemoStoreEvent[]);
     if (toolCount !== lastToolResultCount) {
       lastToolResultCount = toolCount;
       void refreshMemo();

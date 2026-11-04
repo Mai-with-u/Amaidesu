@@ -76,7 +76,7 @@ def create_app() -> FastAPI:
     # Agent 控制面（运行态观测 + 框架级控制）
     app.include_router(agents.router, prefix="/api/v1/agents", tags=["Agents"])
 
-    # 记忆账本：承诺与场次档案的查看、纠错与整理状态（旧的画像 / 长期记忆端点已随阶段 3b 下线）
+    # 记忆账本：承诺与场次档案的查看、纠错与整理状态（旧画像与长期记忆端点不再存在）
     app.include_router(ledger.router, prefix="/api/v1/memory", tags=["Memory"])
 
     # 任务卡快照（进行中账本 + 已完结事件聚合，游戏 Agent 委派任务消费面）

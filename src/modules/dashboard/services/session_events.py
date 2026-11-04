@@ -59,7 +59,6 @@ _REPLAY_EXCLUDED = frozenset(
         # 任务卡条/Agent 任务板是快照面板非时间线卡（实时亦然，对齐的是卡面）
         CoreEvents.TASK_CHANGED,
         # 备忘录面板刷新触发，非时间线卡
-        CoreEvents.STREAMER_NOTEBOOK_CHANGED,
         # 系统生命线：无场次归属字段，按场次过滤不可达，非时间线卡
         CoreEvents.CORE_STARTUP,
         CoreEvents.CORE_SHUTDOWN,

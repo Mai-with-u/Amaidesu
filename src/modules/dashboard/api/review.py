@@ -1,6 +1,7 @@
 """场次复盘 API（``/api/v1/review``）
 
-只读聚合面（``GET /review``）与数据包导出（``GET /review/export``）。
+只读聚合面（``GET /review``）、逐句台词查看与删除（``GET/DELETE /review/speech``）、
+数据包导出（``GET /review/export``）。
 聚合口径见 ``services.session_review``；本层只做参数解析、装配取数与
 响应/文件流编排，不含指标语义。
 """
@@ -25,7 +26,10 @@ from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.review import (
     ReviewExportManifest,
     ReviewSessionBrief,
+    ReviewSpeechItem,
+    ReviewSpeechItems,
     SessionReviewResponse,
+    SpeechDeleteResponse,
 )
 from src.modules.dashboard.services.event_query import events_dir_of
 from src.modules.dashboard.services.session_events import SessionEventReader
@@ -127,7 +131,6 @@ def _build_aggregator(server: "DashboardServer") -> SessionReviewAggregator:
         llm_repo=server.llm_repo,
         event_repo=server.event_repo,
         event_reader=reader,
-        recap_repo=server.recap_repo,
         slow_thresholds=_slow_thresholds(server),
         reviews_dir=_reviews_dir_of(server),
     )
@@ -142,6 +145,63 @@ async def session_review(
     session_rows = await _resolve_sessions(server, _parse_ids(ids) if ids else [])
     aggregator = _build_aggregator(server)
     return await aggregator.build(session_rows)
+
+
+def _parse_memory_refs(text: Optional[str]) -> List[int]:
+    """memory_refs 列（JSON 数组文本）→ 编号列表；空值或坏数据按空处理。"""
+    if not text:
+        return []
+    try:
+        raw = json.loads(text)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    refs: List[int] = []
+    for item in raw:
+        if isinstance(item, int) and not isinstance(item, bool):
+            refs.append(item)
+    return refs
+
+
+@router.get("/speech", response_model=ReviewSpeechItems)
+async def session_speech(
+    server: ServerDep,
+    session_id: Annotated[int, Query(gt=0, description="场次 id（live_sessions 主键）")],
+) -> ReviewSpeechItems:
+    """单场逐句台词（时间正序），供运营者按句删除。"""
+    chat_repo = server.chat_repo
+    if chat_repo is None:
+        raise HTTPException(status_code=503, detail="对话历史仓储未装配")
+    rows = await chat_repo.list_session_speech_for_settle(live_session_id=session_id)
+    return ReviewSpeechItems(
+        items=[
+            ReviewSpeechItem(
+                chat_id=row.id,
+                timestamp_ms=row.timestamp_ms,
+                content=row.content,
+                dropped=row.dropped_at_ms is not None,
+                memory_refs=_parse_memory_refs(row.memory_refs),
+            )
+            for row in rows
+        ]
+    )
+
+
+@router.delete("/speech/{chat_id}", response_model=SpeechDeleteResponse)
+async def delete_session_speech(server: ServerDep, chat_id: int) -> SpeechDeleteResponse:
+    """删一句台词：引用它的档案行一并删除，对它的承诺保留并清空原话。"""
+    chat_repo = server.chat_repo
+    if chat_repo is None:
+        raise HTTPException(status_code=503, detail="对话历史仓储未装配")
+    result = await chat_repo.delete_speech_and_references(chat_id=chat_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="台词不存在（或不是主播台词）")
+    return SpeechDeleteResponse(
+        deleted=result.deleted,
+        archive_lines_removed=result.archive_lines_removed,
+        commitments_cleared=result.commitments_cleared,
+    )
 
 
 # ---------------------------------------------------------------------- #

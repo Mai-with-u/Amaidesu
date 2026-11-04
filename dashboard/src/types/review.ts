@@ -31,10 +31,6 @@ export interface ReviewSessionBrief {
   viewer_count: number;
   /** 本场累计观看人次（UV 口径；无推送的场次为 0） */
   audience_total: number;
-  /** 收播总结全文（未生成/功能前老场次为 null） */
-  recap_text: string | null;
-  /** 收播总结的生成时刻（Unix 毫秒） */
-  recap_created_at_ms: number | null;
 }
 
 /** 决策→发言链路时延分位（口径：planner.verdict → streamer.speech 按 round_id 配对） */
@@ -89,6 +85,32 @@ export interface ReviewViewers {
     user_name: string;
     message_count: number;
   }>;
+}
+
+/** 本场一句台词（GET /api/v1/review/speech，按时间正序） */
+export interface ReviewSpeechLine {
+  /** 台词行主键（live_chat.id，删除接口按它定位） */
+  chat_id: number;
+  timestamp_ms: number;
+  content: string;
+  /** 确知没送到观众面前（TTS 丢弃等）；仍列出以便运营者删除 */
+  dropped: boolean;
+  /** 引用了这句的档案行 id（删台词时这些行一起删） */
+  memory_refs: number[];
+}
+
+/** 某一场的台词列表 */
+export interface ReviewSpeechListResponse {
+  items: ReviewSpeechLine[];
+}
+
+/** 删除一句台词的回执（DELETE /api/v1/review/speech/{chat_id}） */
+export interface ReviewSpeechDeleteResponse {
+  deleted: boolean;
+  /** 跟着一起删掉的档案行数（引用这句的） */
+  archive_lines_removed: number;
+  /** 被清空原话的承诺数（承诺保留，页面显示"原句已删除"） */
+  commitments_cleared: number;
 }
 
 export interface SessionReviewResponse {

@@ -51,6 +51,9 @@
             }}</el-tag>
           </div>
           <blockquote v-if="item.quote" class="item-quote">“{{ item.quote }}”</blockquote>
+          <p v-else-if="commitmentQuoteState(item) === 'deleted'" class="item-quote is-empty">
+            原句已删除（引用它的那句台词已被删除，这条承诺保留）
+          </p>
           <p v-else class="item-quote is-empty">手工登记，没有原话</p>
           <p class="item-meta mono">
             登记于 {{ formatDateTimeCn(item.created_at_ms) }}
@@ -145,7 +148,9 @@
  *
  * 列表按状态筛选、按页续拉（加载更多）；行级操作只有 open 态才给"标了结"
  * "判误记"，删除任何状态都能做且必须二次确认。行操作失败（含 409：这条已
- * 被别的标签处理过或已不存在）只写该行行内提示，不打断整页。
+ * 被别的标签处理过或已不存在）只写该行行内提示，不打断整页；409 另重拉列表
+ * 对齐最新状态但保留行内提示。列表请求带序号（筛选/刷新/行操作并发时只有最后
+ * 发起的那次生效），行操作成功后按已加载条数重拉，不把分页打回第一页。
  * 手建对话框复用观众选择器，观众 ID 留空表示对全场。
  */
 import { computed, onMounted, ref } from 'vue';
@@ -154,13 +159,15 @@ import type { CommitmentCreatePayload, CommitmentItem } from '@/types';
 import { ledgerApi } from '@/api';
 import ViewerPicker from '@/components/viewers/ViewerPicker.vue';
 import { confirmAction } from '@/utils/confirmAction';
-import { getApiErrorMessage } from '@/utils/apiError';
+import { getApiErrorMessage, getApiErrorStatus } from '@/utils/apiError';
 import { formatDateTimeCn } from '@/utils/format';
 import {
+  commitmentQuoteState,
   commitmentStatusLabel,
   commitmentStatusQuery,
   commitmentStatusTagType,
   commitmentTargetLabel,
+  validateCloseQuote,
   type CommitmentStatusFilter,
 } from './ledgerView';
 
@@ -184,6 +191,10 @@ const loadError = ref('');
 /** 行级操作错误：按承诺 id 收，只在该行显示 */
 const rowErrors = ref<Record<number, string>>({});
 const busyId = ref<number | null>(null);
+/** 列表请求序号：筛选 / 刷新 / 行操作并发时只有最后发起的那次生效 */
+let requestSeq = 0;
+/** 「加载更多」独立序号（刷新会让在途的加载更多作废） */
+let moreSeq = 0;
 
 const summaryText = computed(
   () => `未了结 ${openCount.value} · 误记 ${voidCount.value} · 当前筛选 ${total.value} 条`,
@@ -209,41 +220,62 @@ function clearRowError(id: number): void {
   rowErrors.value = next;
 }
 
-async function reload(): Promise<void> {
+interface ReloadOptions {
+  /** 保留行内错误（409 后重拉时用：重新对齐列表但不抹掉"这条已被处理"的提示） */
+  keepRowErrors?: boolean;
+  /** 重拉的条数；行操作后按"已加载条数"重拉，不把分页打回第一页 */
+  limit?: number;
+}
+
+/**
+ * 从第一页重拉列表。筛选变化、页头刷新、行操作后都走这里：
+ * 序号丢弃过期响应；行操作后可指定条数保持当前已加载量，并保留行内错误。
+ */
+async function reload(options: ReloadOptions = {}): Promise<void> {
+  const seq = ++requestSeq;
+  moreSeq += 1; // 让在途的「加载更多」作废
+  loadingMore.value = false;
   loading.value = true;
   loadError.value = '';
-  rowErrors.value = {};
+  if (!options.keepRowErrors) rowErrors.value = {};
   try {
     const response = await ledgerApi.listCommitments({
       status: commitmentStatusQuery(statusFilter.value),
-      limit: PAGE_SIZE,
+      limit: options.limit ?? PAGE_SIZE,
       offset: 0,
     });
+    if (seq !== requestSeq) return;
     items.value = response.data.items;
     total.value = response.data.total;
     openCount.value = response.data.open_count;
     voidCount.value = response.data.void_count;
   } catch (error) {
+    if (seq !== requestSeq) return;
     loadError.value = getApiErrorMessage(error, '承诺列表加载失败');
   } finally {
-    loading.value = false;
+    if (seq === requestSeq) loading.value = false;
   }
 }
 
 async function loadMore(): Promise<void> {
-  if (loadingMore.value || items.value.length >= total.value) return;
+  if (loading.value || loadingMore.value || items.value.length >= total.value) return;
+  const seq = ++moreSeq;
+  const seqAtStart = requestSeq;
+  const offset = items.value.length;
   loadingMore.value = true;
   try {
     const response = await ledgerApi.listCommitments({
       status: commitmentStatusQuery(statusFilter.value),
       limit: PAGE_SIZE,
-      offset: items.value.length,
+      offset,
     });
+    if (seq !== moreSeq || seqAtStart !== requestSeq) return;
     items.value = [...items.value, ...response.data.items];
     total.value = response.data.total;
     openCount.value = response.data.open_count;
     voidCount.value = response.data.void_count;
   } catch (error) {
+    if (seq !== moreSeq || seqAtStart !== requestSeq) return;
     loadError.value = getApiErrorMessage(error, '承诺列表加载失败');
   } finally {
     loadingMore.value = false;
@@ -257,7 +289,10 @@ function onFilterChange(value: string | number | boolean | undefined): void {
   void reload();
 }
 
-/** 行级写操作：成功后重新拉列表，失败只在该行留提示 */
+/**
+ * 行级写操作：成功后按已加载条数重拉（不把分页打回第一页），失败只在该行留提示。
+ * 409 表示这条已被别的标签处理过或已不存在——重拉列表对齐最新状态，但保留行内提示。
+ */
 async function mutate(
   item: CommitmentItem,
   run: () => Promise<unknown>,
@@ -265,15 +300,19 @@ async function mutate(
 ): Promise<void> {
   busyId.value = item.id;
   clearRowError(item.id);
+  const refreshLimit = Math.max(PAGE_SIZE, items.value.length);
   try {
     await run();
     ElMessage.success(doneText);
-    await reload();
+    await reload({ limit: refreshLimit });
   } catch (error) {
     rowErrors.value = {
       ...rowErrors.value,
       [item.id]: getApiErrorMessage(error, '操作失败'),
     };
+    if (getApiErrorStatus(error) === 409) {
+      await reload({ keepRowErrors: true, limit: refreshLimit });
+    }
   } finally {
     busyId.value = null;
   }
@@ -290,6 +329,8 @@ async function markClosed(item: CommitmentItem): Promise<void> {
         cancelButtonText: '取消',
         inputType: 'textarea',
         inputPlaceholder: '了结依据的原话（可空）',
+        // 与后端 CommitmentCloseRequest.close_quote 的 200 字上限对齐
+        inputValidator: (value: string) => validateCloseQuote(value ?? '') ?? true,
       },
     );
     closeQuote = (value ?? '').trim();
