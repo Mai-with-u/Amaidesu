@@ -74,7 +74,7 @@ def test_v24_callback_tolerates_missing_live_sessions_table() -> None:
 
 
 def test_schema_expected_tables_include_memory_ledger() -> None:
-    assert SCHEMA_VERSION == 24
+    assert SCHEMA_VERSION >= 24  # 账本自 v24 起在位；后续版本只做旧存储清理
     tables = list_expected_tables()
     assert "commitments" in tables
     assert "archive_lines" in tables

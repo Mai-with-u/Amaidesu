@@ -10,7 +10,7 @@
   实际删除推迟到发令之后第一次下播后的清理（或最迟发令后 24 小时），执行前本人发撤回短语即可移出名单、清掉待删标记。
 - **删除函数**：单一事务清除观众行、曾用名、弹幕、对 ta 的承诺、相同外部 ID 的模拟回放副本，清空付费三表的身份/留言/原始消息，
   按每个昵称的使用期找出重叠或出现过的场次，把主播台词、档案、承诺、话题摘要、时间线摘要及过渡期旧回顾里的昵称替换为"一位观众"，
-  并同步清理过渡期旧画像与 ``memory/`` 目录下的旧笔记及历史留底快照，最后执行 ``PRAGMA wal_checkpoint(TRUNCATE)``。
+  最后执行 ``PRAGMA wal_checkpoint(TRUNCATE)``。过渡期的旧画像表与旧笔记目录已由 v25 迁移整体删除。
 """
 
 from __future__ import annotations
@@ -49,8 +49,6 @@ IncomingDisposition = Literal["forget_command", "retracted", "forget_listed", "n
 _AT_MENTION_RE = re.compile(r"(?:^|(?<=[\s,，。！!?？~～、：:；;]))@[^\s,，。！!?？~～、：:；;@]+")
 # 按一切非汉字、非 ASCII 字母数字的字符切小句（标点、空格、符号、表情均作为分隔）
 _CLAUSE_SPLIT_RE = re.compile(r"[^0-9A-Za-z\u4e00-\u9fff\u3400-\u4dbf]+")
-# 过渡期旧笔记 MEMORY.md 行尾标签块
-_LEGACY_NOTE_TAG_RE = re.compile(r"〔([^〔〕]*)〕\s*$")
 
 
 def _normalize_phrase(text: str) -> str:
@@ -606,7 +604,6 @@ class PrivacyService:
 
     def _delete_viewer_blocking(self, viewer_id: int, add_to_forget_list: bool, at_ms: int) -> bool:
         secret_key = self._require_key() if add_to_forget_list else None
-        all_valid_names: Set[str] = set()
         all_viewer_ids: List[int] = []
 
         with self._manager.transaction(immediate=True) as conn:
@@ -672,8 +669,6 @@ class PrivacyService:
                     else:
                         name_windows[uname] = (lo, hi)
 
-            all_valid_names = set(name_windows.keys())
-
             # 按昵称从长到短处理，避免短曾用名把长当前名截半
             for uname in sorted(name_windows.keys(), key=len, reverse=True):
                 first_ms, last_ms = name_windows[uname]
@@ -693,6 +688,13 @@ class PrivacyService:
             )
             if ext_ids:
                 ext_ph = ",".join("?" for _ in ext_ids)
+                # 兜底：v18 回填按 (platform, sender_id) 精确匹配，平台不一致的历史行 viewer_id 仍为空。
+                # 这些真实弹幕按外部 ID 再删一遍，否则 ta 的弹幕与昵称会留在库里
+                conn.execute(
+                    f"DELETE FROM live_chat WHERE sender_role = 'viewer' AND simulated = 0"  # noqa: S608
+                    f" AND viewer_id IS NULL AND sender_id IN ({ext_ph})",
+                    list(ext_ids),
+                )
                 conn.execute(
                     f"DELETE FROM live_chat WHERE sender_role = 'viewer' AND simulated = 1 AND sender_id IN ({ext_ph})",  # noqa: S608
                     list(ext_ids),
@@ -706,12 +708,6 @@ class PrivacyService:
                     all_viewer_ids,
                 )
 
-            if table_exists(conn, "viewer_profiles"):
-                conn.execute(
-                    f"DELETE FROM viewer_profiles WHERE viewer_id IN ({vid_placeholders})",  # noqa: S608
-                    all_viewer_ids,
-                )
-
             conn.execute(
                 f"UPDATE viewers SET link_status = 'confirmed', link_candidate_id = NULL"  # noqa: S608
                 f" WHERE link_candidate_id IN ({vid_placeholders})",
@@ -719,12 +715,6 @@ class PrivacyService:
             )
             conn.execute(f"DELETE FROM viewer_names WHERE viewer_id IN ({vid_placeholders})", all_viewer_ids)  # noqa: S608
             conn.execute(f"DELETE FROM viewers WHERE id IN ({vid_placeholders})", all_viewer_ids)  # noqa: S608
-
-        _scrub_legacy_memory_files(
-            memory_dir=self._db_path.parent / "memory",
-            viewer_ids=set(all_viewer_ids),
-            nicknames=all_valid_names,
-        )
 
         conn = self._manager.connection()
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -845,13 +835,6 @@ def _replace_nickname_in_sessions(
             ],
         )
 
-    if table_exists(conn, "session_recaps"):
-        conn.execute(
-            f"UPDATE session_recaps SET recap_text = REPLACE(recap_text, ?, ?)"  # noqa: S608
-            f" WHERE live_session_id IN ({sid_ph}) AND recap_text LIKE ?",
-            [nickname, MASKED_VIEWER_LABEL, *session_ids, like_pat],
-        )
-
 
 def _scrub_payment_tables_for_viewer(
     conn: sqlite3.Connection,
@@ -883,93 +866,6 @@ def _scrub_payment_tables_for_viewer(
         f" fans_medal_name = '', raw_data = NULL WHERE viewer_id IN ({vid_ph}){ext_clause}",
         params,
     )
-
-
-def _scrub_legacy_note_markdown(text: str, *, viewer_ids: Set[int], nicknames: Set[str]) -> str:
-    """移除旧 MEMORY.md 中指向指定观众编号的条目，并对其余文本替换昵称（过渡期辅助，阶段 4 删除）。"""
-    if not text:
-        return text
-    viewer_tag_re = re.compile(r"^对\s*.*?#(\d+)$")
-
-    def _targets_deleted_viewer(line: str) -> bool:
-        m = _LEGACY_NOTE_TAG_RE.search(line)
-        if not m:
-            return False
-        for token in (part.strip() for part in m.group(1).split("·")):
-            vm = viewer_tag_re.match(token)
-            if vm and int(vm.group(1)) in viewer_ids:
-                return True
-        return False
-
-    preamble: List[str] = []
-    sections: List[Tuple[str, List[str]]] = []
-    current_header: Optional[str] = None
-    current_lines: List[str] = []
-
-    for raw_line in text.splitlines():
-        stripped = raw_line.strip()
-        if stripped.startswith("## "):
-            if current_header is not None and any(item.strip() for item in current_lines):
-                sections.append((current_header, current_lines))
-            current_header = raw_line
-            current_lines = []
-            continue
-        if current_header is None:
-            if not _targets_deleted_viewer(stripped):
-                preamble.append(raw_line)
-        else:
-            if not stripped:
-                continue
-            if _targets_deleted_viewer(stripped):
-                continue
-            current_lines.append(raw_line)
-
-    if current_header is not None and any(item.strip() for item in current_lines):
-        sections.append((current_header, current_lines))
-
-    blocks: List[str] = []
-    pre_text = "\n".join(preamble).strip()
-    if pre_text:
-        blocks.append(pre_text)
-    for header, lines in sections:
-        blocks.append("\n".join([header, *lines]))
-    rebuilt = "\n\n".join(blocks)
-    rebuilt = mask_names_in_text(rebuilt, nicknames, replacement=MASKED_VIEWER_LABEL)
-    return (rebuilt + "\n") if rebuilt else ""
-
-
-def _scrub_legacy_memory_files(
-    *,
-    memory_dir: Path,
-    viewer_ids: Set[int],
-    nicknames: Set[str],
-) -> None:
-    """清理 data/memory/ 下 MEMORY.md、MEMORY.rehearsal.md 与 history/ 快照及变更记录（阶段 2–3b 过渡期）。"""
-    if not memory_dir.exists() or (not viewer_ids and not nicknames):
-        return
-    for md_file in memory_dir.rglob("*.md"):
-        try:
-            original = md_file.read_bytes().decode("utf-8-sig")
-            cleaned = _scrub_legacy_note_markdown(original, viewer_ids=viewer_ids, nicknames=nicknames)
-            if cleaned != original:
-                tmp = md_file.with_name(md_file.name + ".tmp")
-                tmp.write_bytes(cleaned.encode("utf-8"))
-                os.replace(tmp, md_file)
-        except Exception as exc:  # noqa: BLE001 单个快照文件清理异常记录日志继续
-            logger.warning(f"清理旧记忆文件失败（{md_file}）: {exc}", exc=True)
-
-    for jsonl_file in memory_dir.rglob("*.jsonl"):
-        try:
-            original = jsonl_file.read_bytes().decode("utf-8-sig")
-            cleaned = mask_names_in_text(original, nicknames, replacement=MASKED_VIEWER_LABEL)
-            for vid in viewer_ids:
-                cleaned = re.sub(rf"对\s*[^\s#·\"]*#{vid}\b", f"对 {MASKED_VIEWER_LABEL}", cleaned)
-            if cleaned != original:
-                tmp = jsonl_file.with_name(jsonl_file.name + ".tmp")
-                tmp.write_bytes(cleaned.encode("utf-8"))
-                os.replace(tmp, jsonl_file)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"清理旧记忆变更记录失败（{jsonl_file}）: {exc}", exc=True)
 
 
 __all__ = [

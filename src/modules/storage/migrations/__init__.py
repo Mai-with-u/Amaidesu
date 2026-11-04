@@ -43,6 +43,7 @@ from src.modules.storage.migrations import (
     v22_game_creatures,
     v23_privacy_and_speech_delivery,
     v24_memory_ledger,
+    v25_drop_legacy_memory,
 )
 
 SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
@@ -70,6 +71,7 @@ SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     22: v22_game_creatures.migrate,
     23: v23_privacy_and_speech_delivery.migrate,
     24: v24_memory_ledger.migrate,
+    25: v25_drop_legacy_memory.migrate,
 }
 
 __all__ = ["SCHEMA_MIGRATIONS"]

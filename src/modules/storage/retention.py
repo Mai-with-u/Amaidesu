@@ -7,7 +7,8 @@
   2. 清空付费三表（``gifts`` / ``super_chats`` / ``guards``）到期行的观众身份、昵称、留言与原始消息，保留金额、类型、时刻
   3. 删除到期场次的话题与时间线摘要（``topics`` / ``timeline_summary``）
   4. 清空 ``llm_requests`` 到期行的响应正文与预览（保留 token/耗时/费用统计列）
-  5. 删除 ``<db目录>/backups/`` 下最后修改时间早于截止时刻的迁移前整库备份文件
+  5. 删除 ``<db目录>/backups/`` 下最后修改时间早于截止时刻的整库备份文件（``*-pre-v*.db``
+     这类 schema 迁移前快照除外：不可逆迁移的恢复只能靠它们，不随保留期清理）
 - ``viewer_absence_days > 0`` 时：对最后活跃早于截止时刻的观众调用统一删除函数（不加入不记录名单）
 - 有数据库行被删除或擦除时，执行 ``PRAGMA wal_checkpoint(TRUNCATE)`` 截断预写日志残留。
 """
@@ -191,6 +192,9 @@ class RetentionService:
         backup_dir = self._db_path.parent / "backups"
         if backup_dir.exists():
             for item in backup_dir.glob("*.db"):
+                # schema 迁移前快照不参与保留期清理：不可逆迁移（如删旧记忆表）只能靠它恢复
+                if "-pre-v" in item.name:
+                    continue
                 try:
                     mtime_ms = int(item.stat().st_mtime * 1000)
                     if mtime_ms <= cutoff_ms:

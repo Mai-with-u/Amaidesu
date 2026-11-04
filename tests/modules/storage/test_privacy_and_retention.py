@@ -21,19 +21,14 @@ from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.privacy import GRACE_DELETE_MAX_MS, PrivacyService, matches_phrase_table
 from src.modules.storage.retention import RetentionService
 from src.modules.storage.storage_ledger import StorageLedger
+from tests.helpers import FakeClock
 from tests.modules.storage.helpers import make_room_message
 
 
-class _FakeClock:
-    def __init__(self, now: int = 1_700_000_000_000) -> None:
-        self.now = now
-
-    def __call__(self) -> int:
-        return self.now
-
-    def advance(self, delta_ms: int) -> int:
-        self.now += delta_ms
-        return self.now
+def _advance(clock: FakeClock, delta_ms: int) -> int:
+    """推进假时钟并返回推进后的时刻（供以时刻作载荷字段的行内调用）。"""
+    clock.tick(delta_ms)
+    return clock.now_ms()
 
 
 async def _emit(bus: EventBus, event: str, payload: Any) -> None:
@@ -109,13 +104,13 @@ async def test_key_file_auto_generated_when_empty_and_refuses_boot_when_missing_
 async def test_ledger_speech_utterance_dropped_and_formal_visit_counts(
     store: SQLiteDatabase, event_bus: EventBus, tmp_path: Path, loguru_capture
 ) -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     privacy = PrivacyService(
-        store.manager, db_path=store.db_path, key_path=tmp_path / "forget.key", bot_name="麦麦", clock=clock
+        store.manager, db_path=store.db_path, key_path=tmp_path / "forget.key", bot_name="麦麦", clock=clock.now_ms
     )
     await privacy.initialize()
-    retention = RetentionService(store.manager, privacy, db_path=store.db_path, clock=clock)
-    manager = LiveSessionManager(store.sessions, store.chat, event_bus, platform="bilibili", clock=clock)
+    retention = RetentionService(store.manager, privacy, db_path=store.db_path, clock=clock.now_ms)
+    manager = LiveSessionManager(store.sessions, store.chat, event_bus, platform="bilibili", clock=clock.now_ms)
     await manager.start()
     event_bus.add_interceptor(SessionStampInterceptor(manager))
     ledger = StorageLedger(
@@ -135,13 +130,13 @@ async def test_ledger_speech_utterance_dropped_and_formal_visit_counts(
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=ajie, content="第一条", timestamp_ms=clock.now),
+            make_room_message(user=ajie, content="第一条", timestamp_ms=clock.now_ms()),
         )
-        clock.advance(5_000)
+        clock.tick(5_000)
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=ajie, content="第二条", timestamp_ms=clock.now),
+            make_room_message(user=ajie, content="第二条", timestamp_ms=clock.now_ms()),
         )
         # 主播发两句台词，其中第 2 句随后收到 dropped 事件；另发一条找不到行的 dropped
         await _emit(
@@ -153,7 +148,7 @@ async def test_ledger_speech_utterance_dropped_and_formal_visit_counts(
                 emotion="happy",
                 emotion_intensity=0.6,
                 memory_refs=["约#7"],
-                timestamp_ms=clock.now,
+                timestamp_ms=clock.now_ms(),
             ),
         )
         await _emit(
@@ -164,41 +159,41 @@ async def test_ledger_speech_utterance_dropped_and_formal_visit_counts(
                 text="这句被关停清掉",
                 emotion="neutral",
                 emotion_intensity=0.5,
-                timestamp_ms=clock.now,
+                timestamp_ms=clock.now_ms(),
             ),
         )
         await _emit(
             event_bus,
             CoreEvents.TTS_UTTERANCE_DROPPED,
-            UtteranceDroppedPayload(utterance_id="utt_drop", reason="queue_stopped", timestamp_ms=clock.now + 10),
+            UtteranceDroppedPayload(utterance_id="utt_drop", reason="queue_stopped", timestamp_ms=clock.now_ms() + 10),
         )
         await _emit(
             event_bus,
             CoreEvents.TTS_UTTERANCE_DROPPED,
-            UtteranceDroppedPayload(utterance_id="utt_missing", reason="expired", timestamp_ms=clock.now + 20),
+            UtteranceDroppedPayload(utterance_id="utt_missing", reason="expired", timestamp_ms=clock.now_ms() + 20),
         )
         await manager.close_session()
         await event_bus.wait_until_drained()
 
         # 彩排场：阿杰发言不增加正式场来访数
-        clock.advance(60_000)
+        clock.tick(60_000)
         await manager.open_session(kind="rehearsal")
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=ajie, content="彩排发言", timestamp_ms=clock.now),
+            make_room_message(user=ajie, content="彩排发言", timestamp_ms=clock.now_ms()),
         )
-        last_rehearsal_ms = clock.now
+        last_rehearsal_ms = clock.now_ms()
         await manager.close_session()
         await event_bus.wait_until_drained()
 
         # 正式场 2：阿杰再次发言，sessions_count 1->2，prev_seen_ms 记下本场前最后活跃时刻
-        clock.advance(120_000)
+        clock.tick(120_000)
         s3 = await manager.open_session(kind="live")
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=ajie, content="又来啦", timestamp_ms=clock.now),
+            make_room_message(user=ajie, content="又来啦", timestamp_ms=clock.now_ms()),
         )
         await manager.close_session()
         await event_bus.wait_until_drained()
@@ -223,13 +218,13 @@ async def test_ledger_speech_utterance_dropped_and_formal_visit_counts(
 async def test_grace_deletion_retraction_masking_and_anonymized_payments(
     store: SQLiteDatabase, event_bus: EventBus, tmp_path: Path
 ) -> None:
-    clock = _FakeClock()
+    clock = FakeClock()
     privacy = PrivacyService(
-        store.manager, db_path=store.db_path, key_path=tmp_path / "forget.key", bot_name="麦麦", clock=clock
+        store.manager, db_path=store.db_path, key_path=tmp_path / "forget.key", bot_name="麦麦", clock=clock.now_ms
     )
     await privacy.initialize()
-    retention = RetentionService(store.manager, privacy, db_path=store.db_path, clock=clock)
-    manager = LiveSessionManager(store.sessions, store.chat, event_bus, platform="bilibili", clock=clock)
+    retention = RetentionService(store.manager, privacy, db_path=store.db_path, clock=clock.now_ms)
+    manager = LiveSessionManager(store.sessions, store.chat, event_bus, platform="bilibili", clock=clock.now_ms)
     await manager.start()
     event_bus.add_interceptor(SessionStampInterceptor(manager))
     ledger = StorageLedger(
@@ -248,7 +243,7 @@ async def test_grace_deletion_retraction_masking_and_anonymized_payments(
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=pre_user, content="主播忘了我吧", timestamp_ms=clock.now),
+            make_room_message(user=pre_user, content="主播忘了我吧", timestamp_ms=clock.now_ms()),
         )
         assert await privacy.is_external_id_forgotten(id_kind="account", external_id="u_pre") is True
 
@@ -257,13 +252,13 @@ async def test_grace_deletion_retraction_masking_and_anonymized_payments(
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=pre_user, content="名单内弹幕不落库", timestamp_ms=clock.advance(1000)),
+            make_room_message(user=pre_user, content="名单内弹幕不落库", timestamp_ms=_advance(clock, 1000)),
         )
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_GIFT,
             make_room_message(
-                user=pre_user, message_type="gift", gift_name="火箭", gift_count=1, timestamp_ms=clock.advance(1000)
+                user=pre_user, message_type="gift", gift_name="火箭", gift_count=1, timestamp_ms=_advance(clock, 1000)
             ),
         )
         await _emit(
@@ -274,7 +269,7 @@ async def test_grace_deletion_retraction_masking_and_anonymized_payments(
                 message_type="super_chat",
                 content="秘密留言",
                 sc_amount=30.0,
-                timestamp_ms=clock.advance(1000),
+                timestamp_ms=_advance(clock, 1000),
             ),
         )
         await _emit(
@@ -287,7 +282,7 @@ async def test_grace_deletion_retraction_masking_and_anonymized_payments(
                 text="谢谢前排哥的火箭！",
                 emotion="happy",
                 emotion_intensity=0.8,
-                timestamp_ms=clock.advance(1000),
+                timestamp_ms=_advance(clock, 1000),
             ),
         )
 
@@ -316,12 +311,12 @@ async def test_grace_deletion_retraction_masking_and_anonymized_payments(
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=real_user, content="大家好", timestamp_ms=clock.advance(1000)),
+            make_room_message(user=real_user, content="大家好", timestamp_ms=_advance(clock, 1000)),
         )
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=real_user, content="忘了我", simulated=True, timestamp_ms=clock.advance(1000)),
+            make_room_message(user=real_user, content="忘了我", simulated=True, timestamp_ms=_advance(clock, 1000)),
         )
         assert await privacy.is_external_id_forgotten(id_kind="account", external_id="u_ajie") is False
 
@@ -330,7 +325,7 @@ async def test_grace_deletion_retraction_masking_and_anonymized_payments(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
             make_room_message(
-                user=real_user, content="忘了我吧😭", message_id="m_f1", timestamp_ms=clock.advance(1000)
+                user=real_user, content="忘了我吧😭", message_id="m_f1", timestamp_ms=_advance(clock, 1000)
             ),
         )
         (ajie_pending,) = await store.execute("SELECT * FROM viewers WHERE account_id='u_ajie'")
@@ -338,12 +333,14 @@ async def test_grace_deletion_retraction_masking_and_anonymized_payments(
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=real_user, content="中间这句不记", timestamp_ms=clock.advance(1000)),
+            make_room_message(user=real_user, content="中间这句不记", timestamp_ms=_advance(clock, 1000)),
         )
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=real_user, content="开玩笑的", message_id="m_r1", timestamp_ms=clock.advance(1000)),
+            make_room_message(
+                user=real_user, content="开玩笑的", message_id="m_r1", timestamp_ms=_advance(clock, 1000)
+            ),
         )
         assert privacy.was_retracted_in_session(message_id="m_r1") is True
         (ajie_restored,) = await store.execute("SELECT * FROM viewers WHERE account_id='u_ajie'")
@@ -361,14 +358,14 @@ async def test_grace_deletion_retraction_masking_and_anonymized_payments(
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=xiaolin, content="我来过", timestamp_ms=clock.advance(1000)),
+            make_room_message(user=xiaolin, content="我来过", timestamp_ms=_advance(clock, 1000)),
         )
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=xiaolin, content="忘了我", timestamp_ms=clock.advance(1000)),
+            make_room_message(user=xiaolin, content="忘了我", timestamp_ms=_advance(clock, 1000)),
         )
-        clock.advance(10_000)
+        clock.tick(10_000)
         await manager.close_session()
         await event_bus.wait_until_drained()
 
@@ -377,7 +374,7 @@ async def test_grace_deletion_retraction_masking_and_anonymized_payments(
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=xiaolin, content="开玩笑的", timestamp_ms=clock.advance(1000)),
+            make_room_message(user=xiaolin, content="开玩笑的", timestamp_ms=_advance(clock, 1000)),
         )
         assert privacy.get_stats().late_retractions == 1
 
@@ -385,12 +382,12 @@ async def test_grace_deletion_retraction_masking_and_anonymized_payments(
         await _emit(
             event_bus,
             CoreEvents.ROOM_MESSAGE_DANMAKU,
-            make_room_message(user=real_user, content="忘了我", timestamp_ms=clock.advance(5_000)),
+            make_room_message(user=real_user, content="忘了我", timestamp_ms=_advance(clock, 5_000)),
         )
-        clock.advance(GRACE_DELETE_MAX_MS - 1_000)
+        clock.tick(GRACE_DELETE_MAX_MS - 1_000)
         await retention.run_cleanup()
         assert len(await store.execute("SELECT id FROM viewers WHERE account_id='u_ajie'")) == 1
-        clock.advance(2_000)
+        clock.tick(2_000)
         await retention.run_cleanup()
         assert await store.execute("SELECT id FROM viewers WHERE account_id='u_ajie'") == []
     finally:
@@ -398,7 +395,7 @@ async def test_grace_deletion_retraction_masking_and_anonymized_payments(
         await privacy.close()
 
 
-async def test_delete_viewer_erases_bytes_from_db_wal_and_legacy_files_and_scopes_short_names(
+async def test_delete_viewer_erases_bytes_from_db_wal_and_scopes_short_names(
     tmp_path: Path,
 ) -> None:
     db_file = tmp_path / "data" / "amaidesu.db"
@@ -497,7 +494,7 @@ async def test_delete_viewer_erases_bytes_from_db_wal_and_legacy_files_and_scope
             viewer_id=vid,
             id_kind="account",
         )
-        # 场次 1 主播台词、话题、时间线摘要、旧画像、旧回顾
+        # 场次 1 主播台词、话题、时间线摘要
         await store.chat.insert_live_chat(
             live_session_id=s1,
             timestamp_ms=1500,
@@ -522,26 +519,6 @@ async def test_delete_viewer_erases_bytes_from_db_wal_and_legacy_files_and_scope
             " VALUES (?, 1000, 2000, '小雨进场互动')",
             (s1,),
         )
-        await store.viewer_profiles.upsert_profile(
-            viewer_id=vid, profile_text="小雨喜欢听歌_PROFILE_UNIQUE", last_compressed_at_ms=1800
-        )
-        await store.recaps.upsert_recap(
-            live_session_id=s1, started_at_ms=1000, ended_at_ms=2000, recap_text="本场小雨送了礼花"
-        )
-
-        # 旧 MEMORY.md 与历史快照留底
-        await store.long_memory.write(
-            "live",
-            f"## 答应过的事\n- 给小雨唱首歌〔未兑现 · 对 小雨#{vid}〕\n- 继续炸 TNT〔未兑现〕\n\n## 老梗与口头禅\n- 小雨上次起哄的梗〔整理〕",
-            reason="第 1 场整理",
-            changes=[f"新增对 小雨#{vid} 的约定"],
-            as_baseline=True,
-        )
-        await store.long_memory.write(
-            "live",
-            f"## 答应过的事\n- 给小雨唱首歌〔未兑现 · 对 小雨#{vid}〕\n- 继续炸 TNT〔未兑现〕",
-            reason="第 2 次保存",
-        )
 
         assert await privacy.delete_viewer(viewer_id=vid, add_to_forget_list=True) is True
 
@@ -559,12 +536,7 @@ async def test_delete_viewer_erases_bytes_from_db_wal_and_legacy_files_and_scope
         assert s1_speech == "欢迎一位观众，今天风好大呀！"
         assert s2_speech == "外面下小雨啦，真凉快"
 
-        # 2) 旧笔记里指向 vid 的整行删除，非指向 vid 的行替换昵称，继续炸 TNT 保留
-        mem_text = await store.long_memory.read("live")
-        assert "继续炸 TNT" in mem_text
-        assert "小雨" not in mem_text and f"#{vid}" not in mem_text
-
-        # 3) 关闭连接后对 .db、.db-wal 与 memory/ 全部文件做字节级残留检查
+        # 2) 关闭连接后对 .db 与 .db-wal 做字节级残留检查（旧记忆目录已由 v25 迁移整体删除）
         await privacy.close()
         await store.close()
 
@@ -574,18 +546,12 @@ async def test_delete_viewer_erases_bytes_from_db_wal_and_legacy_files_and_scope
             "真实弹幕内容_UNIQUE".encode("utf-8"),
             "回放弹幕内容_UNIQUE".encode("utf-8"),
             "SC里的私密话_UNIQUE".encode("utf-8"),
-            "小雨喜欢听歌_PROFILE_UNIQUE".encode("utf-8"),
         ]
         for candidate in [db_file, Path(str(db_file) + "-wal")]:
             if candidate.exists():
                 raw = candidate.read_bytes()
                 for token in forbidden_tokens:
                     assert token not in raw, f"{candidate.name} 残留敏感字节: {token!r}"
-
-        for mfile in (db_file.parent / "memory").rglob("*"):
-            if mfile.is_file():
-                raw = mfile.read_bytes()
-                assert "小雨".encode("utf-8") not in raw, f"{mfile} 残留被删观众昵称"
     finally:
         if store.initialized:
             await privacy.close()
@@ -593,15 +559,15 @@ async def test_delete_viewer_erases_bytes_from_db_wal_and_legacy_files_and_scope
 
 
 async def test_retention_cleanup_respects_zero_defaults_and_cleans_expired_items(tmp_path: Path) -> None:
-    clock = _FakeClock(now=100 * 86_400_000)
+    clock = FakeClock(100 * 86_400_000)
     db_file = tmp_path / "data" / "amaidesu.db"
     store = SQLiteDatabase(db_file)
     await store.initialize()
-    privacy = PrivacyService(store.manager, db_path=db_file, key_path=tmp_path / "forget.key", clock=clock)
+    privacy = PrivacyService(store.manager, db_path=db_file, key_path=tmp_path / "forget.key", clock=clock.now_ms)
     await privacy.initialize()
     try:
-        old_end = clock.now - 10 * 86_400_000
-        recent_end = clock.now - 2 * 86_400_000
+        old_end = clock.now_ms() - 10 * 86_400_000
+        recent_end = clock.now_ms() - 2 * 86_400_000
         s_old = await store.sessions.insert_live_session(started_at_ms=old_end - 3600_000, kind="live")
         await store.sessions.close_live_session(live_session_id=s_old, ended_at_ms=old_end)
         s_new = await store.sessions.insert_live_session(started_at_ms=recent_end - 3600_000, kind="live")
@@ -614,7 +580,7 @@ async def test_retention_cleanup_respects_zero_defaults_and_cleans_expired_items
                 id_kind="account",
                 external_id="U_ABSENT_40D",
                 user_name="远古路人",
-                timestamp_ms=clock.now - 40 * 86_400_000,
+                timestamp_ms=clock.now_ms() - 40 * 86_400_000,
                 name_match_window_ms=0,
             )
         ).viewer_id
@@ -679,23 +645,34 @@ async def test_retention_cleanup_respects_zero_defaults_and_cleans_expired_items
 
         backup_dir = db_file.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
-        old_backup = backup_dir / "amaidesu-pre-v22-old.db"
-        new_backup = backup_dir / "amaidesu-pre-v23-new.db"
-        old_backup.write_bytes(b"old")
-        new_backup.write_bytes(b"new")
-        os.utime(old_backup, (old_end / 1000.0, old_end / 1000.0))
-        os.utime(new_backup, (recent_end / 1000.0, recent_end / 1000.0))
+        # 迁移前快照（*-pre-v*.db）：不可逆迁移（如删旧记忆表）的恢复只能靠它，不参与保留期清理
+        old_migration_backup = backup_dir / "amaidesu-pre-v24-old.db"
+        new_migration_backup = backup_dir / "amaidesu-pre-v25-new.db"
+        # 普通整库备份：按最后修改时间随保留期清理
+        old_plain_backup = backup_dir / "amaidesu-2025-01-01.db"
+        new_plain_backup = backup_dir / "amaidesu-2025-01-09.db"
+        for path, content in (
+            (old_migration_backup, b"old-migration"),
+            (new_migration_backup, b"new-migration"),
+            (old_plain_backup, b"old-plain"),
+            (new_plain_backup, b"new-plain"),
+        ):
+            path.write_bytes(content)
+        os.utime(old_migration_backup, (old_end / 1000.0, old_end / 1000.0))
+        os.utime(new_migration_backup, (recent_end / 1000.0, recent_end / 1000.0))
+        os.utime(old_plain_backup, (old_end / 1000.0, old_end / 1000.0))
+        os.utime(new_plain_backup, (recent_end / 1000.0, recent_end / 1000.0))
 
         # 1) 默认 0 天什么都不删
         noop_retention = RetentionService(
-            store.manager, privacy, db_path=db_file, raw_days=0, viewer_absence_days=0, clock=clock
+            store.manager, privacy, db_path=db_file, raw_days=0, viewer_absence_days=0, clock=clock.now_ms
         )
         noop_res = await noop_retention.run_cleanup()
-        assert noop_res.chat_deleted == 0 and old_backup.exists()
+        assert noop_res.chat_deleted == 0 and old_plain_backup.exists()
 
         # 2) 配置 raw_days=7, viewer_absence_days=30 执行清理
         active_retention = RetentionService(
-            store.manager, privacy, db_path=db_file, raw_days=7, viewer_absence_days=30, clock=clock
+            store.manager, privacy, db_path=db_file, raw_days=7, viewer_absence_days=30, clock=clock.now_ms
         )
         res = await active_retention.run_cleanup()
         assert res.chat_deleted == 1
@@ -704,7 +681,9 @@ async def test_retention_cleanup_respects_zero_defaults_and_cleans_expired_items
         assert res.llm_bodies_scrubbed == 1
         assert res.backups_deleted == 1
         assert res.absent_viewers_deleted == 1
-        assert not old_backup.exists() and new_backup.exists()
+        # 过期普通备份删除、近期普通备份保留；迁移前快照无论多旧都保留
+        assert not old_plain_backup.exists() and new_plain_backup.exists()
+        assert old_migration_backup.exists() and new_migration_backup.exists()
 
         # 主播台词、近期观众弹幕、SC 金额、LLM token 统计均保留；缺席观众被删但不进 forget_list
         chats = [r["content"] for r in await store.execute("SELECT content FROM live_chat ORDER BY id")]

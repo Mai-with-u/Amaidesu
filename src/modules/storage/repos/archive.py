@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import List, Optional, Tuple
 
 from src.modules.storage.models.memory import ArchiveLine
@@ -18,6 +19,16 @@ from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
 # 档案行读面的列（与 ArchiveLine 字段一一对应）
 _ARCHIVE_COLUMNS = "id, live_session_id, text, quote, evidence_chat_id"
+
+
+def delete_archive_lines_by_session(conn: sqlite3.Connection, *, live_session_id: int) -> int:
+    """删除某一场的全部档案行，返回删除条数（场次改类型、删除场次时用）。
+
+    模块级函数供跨表事务内的调用方复用同一条删除语句；ArchiveRepo 的异步方法
+    只是它的事务包装。
+    """
+    cur = conn.execute("DELETE FROM archive_lines WHERE live_session_id=?", (int(live_session_id),))
+    return int(cur.rowcount or 0)
 
 
 class ArchiveRepo(BaseRepo):
@@ -31,13 +42,21 @@ class ArchiveRepo(BaseRepo):
         quote: str,
         evidence_chat_id: int,
     ) -> int:
-        """写一行档案，返回主键；标题为空时不写（返回 0）。"""
+        """写一行档案，返回主键；标题或原话为空时不写（返回 0）。
+
+        档案行自带原话作证据，两者缺一就失去意义（调用方给了空白串也不入库）；
+        内容与原话都去首尾空白后再写。
+        """
+        title = (text or "").strip()
+        quote_text = (quote or "").strip()
+        if not title or not quote_text:
+            return 0
 
         def _exec() -> int:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id) VALUES (?, ?, ?, ?)",
-                    (int(live_session_id), text, quote, int(evidence_chat_id)),
+                    (int(live_session_id), title, quote_text, int(evidence_chat_id)),
                 )
                 return int(cur.lastrowid or 0)
 
@@ -109,13 +128,9 @@ class ArchiveRepo(BaseRepo):
 
         def _exec() -> int:
             with self._manager.transaction() as conn:
-                cur = conn.execute(
-                    "DELETE FROM archive_lines WHERE live_session_id=?",
-                    (int(live_session_id),),
-                )
-                return int(cur.rowcount or 0)
+                return delete_archive_lines_by_session(conn, live_session_id=int(live_session_id))
 
         return await self._run_in_executor(_exec)
 
 
-__all__ = ["ArchiveRepo"]
+__all__ = ["ArchiveRepo", "delete_archive_lines_by_session"]

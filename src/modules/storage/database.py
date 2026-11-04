@@ -7,9 +7,9 @@ SQLiteDatabase —— 存储装配入口（组合根）
 - **schema 迁移自动应用**：``initialize()`` 时自动 ``CREATE TABLE IF NOT EXISTS``、
   按版本执行 ``migrations/`` 注册表回调并写入 ``schema_migrations``
 - **健康自检**：``is_healthy()`` / ``table_exists()`` / 表清单 / 版本号
-- **按域装配仓储**：``sessions`` / ``chat`` / ``viewers`` / ``viewer_profiles`` /
-  ``recaps`` / ``sim`` / ``events`` / ``llm`` / ``rundowns`` / ``rundown_instances`` /
-  ``rundown_transitions`` / ``topics`` 十二个域仓储（见 ``repos/``）。
+- **按域装配仓储**：``sessions`` / ``chat`` / ``viewers`` / ``viewer_identity`` /
+  ``commitments`` / ``archive`` / ``sim`` / ``events`` / ``llm`` / ``rundowns`` /
+  ``rundown_instances`` / ``rundown_transitions`` / ``topics`` 等域仓储（见 ``repos/``）。
   业务消费者按需注入仓储，不经过本类做领域读写
 - **原始执行面**：``execute`` 系列保留给运维脚本、自检与测试；业务表读写一律走仓储
 
@@ -30,7 +30,6 @@ from typing import Any, Callable, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.storage.connection import SQLiteConnectionManager
-from src.modules.storage.long_memory import LongMemoryStore
 from src.modules.storage.run_in_executor import run_in_executor
 from src.modules.storage.migrations import SCHEMA_MIGRATIONS
 from src.modules.storage.repos import (
@@ -43,12 +42,10 @@ from src.modules.storage.repos import (
     RundownInstanceRepo,
     RundownRepo,
     RundownTransitionRepo,
-    SessionRecapRepo,
     SessionRepo,
     SimRepo,
     TopicRepo,
     ViewerIdentityRepo,
-    ViewerProfileRepo,
     ViewerRepo,
 )
 from src.modules.storage.schema import (
@@ -59,6 +56,10 @@ from src.modules.storage.schema import (
 
 
 logger = get_logger("SQLiteDatabase")
+
+
+class SchemaVersionDowngradeError(RuntimeError):
+    """数据库 schema 版本高于当前代码（这份库来自更新的程序）。"""
 
 
 # =============================================================================
@@ -127,17 +128,9 @@ class SQLiteDatabase:
         self.rundown_instances = RundownInstanceRepo(self._manager)
         self.rundown_transitions = RundownTransitionRepo(self._manager)
         self.topics = TopicRepo(self._manager)
-        # 主播记忆的两张表：观众画像 + 场次回顾（写入归主播 Agent，读取给 Planner/工具/WebUI）
-        self.viewer_profiles = ViewerProfileRepo(self._manager)
-        self.recaps = SessionRecapRepo(self._manager)
         # 记忆账本：承诺与场次档案（下播整理写入；WebUI 查看、纠错与手建）
         self.commitments = CommitmentRepo(self._manager)
         self.archive = ArchiveRepo(self._manager)
-        # 记忆账本：承诺与场次档案（下播整理写入；WebUI 查看、纠错与手建）
-        self.commitments = CommitmentRepo(self._manager)
-        self.archive = ArchiveRepo(self._manager)
-        # 主播长期记忆（MEMORY.md 纯文本文件，放在数据库同目录的 memory/ 下，人可直接改）
-        self.long_memory = LongMemoryStore(self._db_path.parent / "memory")
 
     # -------------------- 属性 --------------------
 
@@ -320,9 +313,10 @@ class SQLiteDatabase:
                     )
                 logger.info(f"SQLiteDatabase schema 已应用: version={SCHEMA_VERSION}（前版本={current_version}）")
             elif current_version > SCHEMA_VERSION:
-                logger.warning(
-                    f"SQLiteDatabase 数据库 schema 版本 ({current_version}) 高于代码期望 ({SCHEMA_VERSION})。"
-                    f"可能是回滚到旧版本；请确认意图。"
+                raise SchemaVersionDowngradeError(
+                    f"数据库 schema 版本 ({current_version}) 高于代码期望 ({SCHEMA_VERSION})："
+                    f"这份库来自更新的版本，旧代码继续使用会按旧建库语句重建已删除的表并与新口径分叉。"
+                    f"请换回新版本程序，或先用升级前备份恢复。"
                 )
             else:
                 logger.debug(f"SQLiteDatabase schema 已是当前版本: {SCHEMA_VERSION}")

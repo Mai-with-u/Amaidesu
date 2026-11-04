@@ -19,11 +19,8 @@ from src.modules.storage.models.chat import (
 from src.modules.storage.models.events import GameEventRecord, GameEventTypeCount
 from src.modules.storage.models.game_creatures import GameCreatureRecord
 from src.modules.storage.models.memory import (
-    SessionRecap,
-    UnsettledSession,
     Viewer,
     ViewerName,
-    ViewerProfile,
 )
 from src.modules.storage.models.rundown import (
     DEFAULT_RUNDOWN,
@@ -55,11 +52,8 @@ __all__ = [
     # game_creatures 域
     "GameCreatureRecord",
     # memory 域
-    "SessionRecap",
-    "UnsettledSession",
     "Viewer",
     "ViewerName",
-    "ViewerProfile",
     # rundown 域
     "DEFAULT_RUNDOWN",
     "Rundown",

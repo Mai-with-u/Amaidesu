@@ -38,6 +38,7 @@ __all__ = [
     "ViewerSessionParticipation",
     "SessionSpeechMoment",
     "SettleSpeechLine",
+    "SpeechDeleteResult",
     "DailyDanmakuCount",
     "ChatDateCount",
 ]
@@ -206,6 +207,16 @@ class SettleSpeechLine(BaseModel):
     reply_content: Optional[str] = Field(default=None, description="被回应那条弹幕的原文")
     reply_viewer_id: Optional[int] = Field(default=None, description="被回应弹幕的发言人（内部观众 ID）")
     reply_simulated: Optional[bool] = Field(default=None, description="被回应弹幕是否模拟观众发的")
+
+
+class SpeechDeleteResult(BaseModel):
+    """删除一句主播台词的落库结果：台词行本身与挂在它上面的档案/承诺引用。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    deleted: bool = Field(..., description="台词行是否真的删掉了")
+    archive_lines_removed: int = Field(default=0, description="随这句台词删掉的场次档案行数")
+    commitments_cleared: int = Field(default=0, description="清掉原话引用（或了结原话）的承诺条数")
 
 
 class DailyDanmakuCount(BaseModel):

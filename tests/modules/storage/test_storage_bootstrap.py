@@ -18,7 +18,7 @@ import pytest
 import src.modules.storage.bootstrap as bootstrap_module
 from src.modules.storage._default_path import DEFAULT_DB_PATH
 from src.modules.storage.bootstrap import build_database
-from src.modules.storage.schema import list_expected_tables
+from src.modules.storage.schema import SCHEMA_VERSION, list_expected_tables
 
 
 @pytest.fixture
@@ -47,7 +47,8 @@ async def test_build_database_idempotent(tmp_db_dir: Path) -> None:
     await first.close()
     second = await build_database(config)
     try:
-        assert await second.table_exists("session_recaps")
+        assert await second.get_schema_version() == SCHEMA_VERSION
+        assert await second.table_exists("commitments")
     finally:
         await second.close()
 

@@ -13,7 +13,6 @@ from src.modules.storage.repos.commitments import CommitmentRepo
 from src.modules.storage.repos.events import EventRepo
 from src.modules.storage.repos.game_creatures import GameCreatureRepo
 from src.modules.storage.repos.llm import LLMRepo
-from src.modules.storage.repos.recaps import SessionRecapRepo
 from src.modules.storage.repos.rundown_instances import RundownInstanceRepo
 from src.modules.storage.repos.rundown_transitions import RundownTransitionRepo
 from src.modules.storage.repos.rundowns import RundownRepo
@@ -21,7 +20,6 @@ from src.modules.storage.repos.sessions import SessionRepo
 from src.modules.storage.repos.sim import SimRepo
 from src.modules.storage.repos.topics import TopicRepo
 from src.modules.storage.repos.viewer_identity import ViewerIdentityRepo
-from src.modules.storage.repos.viewer_profiles import ViewerProfileRepo
 from src.modules.storage.repos.viewers import ViewerRepo
 
 __all__ = [
@@ -35,11 +33,9 @@ __all__ = [
     "RundownInstanceRepo",
     "RundownRepo",
     "RundownTransitionRepo",
-    "SessionRecapRepo",
     "SessionRepo",
     "SimRepo",
     "TopicRepo",
     "ViewerIdentityRepo",
-    "ViewerProfileRepo",
     "ViewerRepo",
 ]

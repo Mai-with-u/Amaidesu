@@ -178,11 +178,6 @@ def _merge_rows(conn: sqlite3.Connection, src: Dict[str, Any], dst: Dict[str, An
         conn.execute(f"UPDATE {table} SET viewer_id=? WHERE viewer_id=?", (dst_id, src_id))  # noqa: S608 常量表名
     if table_exists(conn, "commitments"):
         conn.execute("UPDATE commitments SET viewer_id=? WHERE viewer_id=?", (dst_id, src_id))
-    # 画像以目标为准；目标还没有画像时沿用来源的
-    if conn.execute("SELECT 1 FROM viewer_profiles WHERE viewer_id=?", (dst_id,)).fetchone() is None:
-        conn.execute("UPDATE viewer_profiles SET viewer_id=? WHERE viewer_id=?", (dst_id, src_id))
-    else:
-        conn.execute("DELETE FROM viewer_profiles WHERE viewer_id=?", (src_id,))
     # 目标自己正等着并入来源：人工已经反向处理，这条建议作废；其他建议并入来源的改为建议并入目标
     conn.execute(
         "UPDATE viewers SET link_status='confirmed', link_candidate_id=NULL WHERE id=? AND link_candidate_id=?",

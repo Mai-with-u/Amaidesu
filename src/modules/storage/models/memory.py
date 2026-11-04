@@ -1,26 +1,26 @@
-"""记忆域数据契约（session_recaps / viewer_profiles / viewers 表的读模型）
+"""记忆域数据契约（承诺账本、场次档案与观众表的读模型）
 
 设计要点
 --------
 
-- 三个记忆域表读取结果的**持久化契约**：被主播 Agent 行为侧（场次回顾、
-  常客画像）、storage 仓储（逐行反序列化）、Dashboard API（管理页投影）
-  三方共同消费，依赖方向一律向下（agents → modules、dashboard → storage）。
+- 两类表的**持久化契约**：记忆账本（commitments / archive_lines，由下播整理写入、
+  WebUI 查看与纠错）与观众表（viewers / viewer_names）；被主播 Agent 行为侧、
+  storage 仓储（逐行反序列化）、Dashboard API（管理页投影）三方共同消费，
+  依赖方向一律向下（agents → modules、dashboard → storage）。
 - ``extra="forbid"``：与代码库其他 Pydantic 模型保持一致，严格拒绝未知字段。
 - 时间字段统一毫秒（Unix epoch 毫秒），与仓库约定一致。
 
 字段说明
 --------
 
-``SessionRecap`` —— ``session_recaps`` 一行：每场直播一份收播总结，
-以 ``live_session_id`` 唯一定位；顺带记收播整理进度（长期记忆合并、整理完成）。
+``Commitment`` —— ``commitments`` 一行：她当众答应过、还没了结的事，
+自带逐字原话作证据；原话所在场次被删时 evidence_chat_id 成为空引用。
 
-``UnsettledSession`` —— 已结束却没整理完的场次（启动补写的待办行）：没有回顾，
-或有回顾但整理进度未记完成；来自 ``live_sessions`` LEFT JOIN ``session_recaps``。
+``ArchiveLine`` —— ``archive_lines`` 一行：场次档案的标题与原话片段，
+下次开播回想「上一场」时用。
 
-``ViewerProfile`` —— ``viewer_profiles`` JOIN ``viewers`` 的画像行：印象文本
-（``viewer_profiles``）带上观众的平台与当前昵称（``viewers``，昵称随改名
-漂移、权威在 viewers 表），消费方不必再逐个反查。
+``SettleReport`` —— 一场整理的报告：失败原因，或成功时那些没能登记的条目
+与原料裁剪说明。
 
 ``ViewerName`` —— ``viewer_names`` 一行：观众用过的昵称与首末出现时刻。
 
@@ -42,56 +42,11 @@ __all__ = [
     "CommitmentClosure",
     "PendingArchiveLine",
     "PendingCommitment",
-    "SessionRecap",
     "SettleReport",
     "UnregisteredItem",
-    "UnsettledSession",
-    "ViewerProfile",
     "ViewerName",
     "Viewer",
 ]
-
-
-class SessionRecap(BaseModel):
-    """``session_recaps`` 一行：一场直播的收播总结。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    live_session_id: int = Field(..., description="场次主键（表内唯一）")
-    started_at_ms: int = Field(..., description="该场开播时刻（Unix epoch 毫秒）")
-    ended_at_ms: int = Field(..., description="该场收播时刻（Unix epoch 毫秒）")
-    recap_text: str = Field(..., description="收播总结正文（LLM 生成）")
-    created_at_ms: int = Field(..., description="总结写入时刻（Unix epoch 毫秒，覆盖写时刷新）")
-    long_memory_merged_at_ms: Optional[int] = Field(
-        default=None, description="本场合并进长期记忆的时刻（Unix epoch 毫秒；空 = 还没并）"
-    )
-    settled_at_ms: Optional[int] = Field(
-        default=None, description="收播整理三步都走完的时刻（Unix epoch 毫秒；空 = 整理没做完）"
-    )
-
-
-class UnsettledSession(BaseModel):
-    """已结束却没整理完的场次（启动补写待办行；回顾可能已有也可能没有）。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    live_session_id: int = Field(..., description="场次主键")
-    started_at_ms: int = Field(..., description="开播时刻（Unix epoch 毫秒）")
-    ended_at_ms: int = Field(..., description="收播时刻（Unix epoch 毫秒，非空才进待办）")
-    title: Optional[str] = Field(default=None, description="场次标题（可空）")
-
-
-class ViewerProfile(BaseModel):
-    """``viewer_profiles`` JOIN ``viewers`` 的画像行：印象 + 观众的平台与当前昵称。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    viewer_id: int = Field(..., description="内部观众 ID（viewers.id，画像表主键）")
-    platform: str = Field(..., description="观众所在平台")
-    user_name: str = Field(..., description="观众当前昵称（来自 viewers，随改名漂移）")
-    profile_text: str = Field(..., description="印象文本（收播时 LLM 融合生成）")
-    last_compressed_at_ms: int = Field(..., description="已整理到的时间点：该时刻前的弹幕与付费记录已融进印象")
-    updated_at_ms: int = Field(..., description="印象最近更新时刻（Unix epoch 毫秒）")
 
 
 class ViewerName(BaseModel):
@@ -184,12 +139,15 @@ class UnregisteredItem(BaseModel):
 
 
 class SettleReport(BaseModel):
-    """一场的整理报告：失败原因，或成功时那些没能登记的条目。"""
+    """一场的整理报告：失败原因，或成功时那些没能登记的条目与原料裁剪说明。"""
 
     model_config = ConfigDict(extra="forbid")
 
     failure_reason: Optional[str] = Field(default=None, description="整理失败的原因；成功时为 None")
     unregistered: List[UnregisteredItem] = Field(default_factory=list, description="没能登记、要人看一眼的条目")
+    input_note: Optional[str] = Field(
+        default=None, description="整理原料被裁剪的说明（台词超出模型窗口时）；未裁剪为 None"
+    )
 
 
 class PendingCommitment(BaseModel):

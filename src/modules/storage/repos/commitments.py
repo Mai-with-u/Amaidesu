@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import List, Optional
 
 from src.modules.storage.models.memory import Commitment
@@ -23,6 +24,16 @@ _COMMITMENT_COLUMNS = (
     "id, what, quote, evidence_chat_id, viewer_id, game, status,"
     " created_session_id, close_chat_id, close_quote, created_at_ms, updated_at_ms"
 )
+
+
+def delete_commitments_by_session(conn: sqlite3.Connection, *, live_session_id: int) -> int:
+    """删除某一场登记的全部承诺，返回删除条数（场次改类型、删除场次时用）。
+
+    模块级函数供跨表事务内的调用方复用同一条删除语句；CommitmentRepo 的异步方法
+    只是它的事务包装。
+    """
+    cur = conn.execute("DELETE FROM commitments WHERE created_session_id=?", (int(live_session_id),))
+    return int(cur.rowcount or 0)
 
 
 class CommitmentRepo(BaseRepo):
@@ -181,11 +192,7 @@ class CommitmentRepo(BaseRepo):
 
         def _exec() -> int:
             with self._manager.transaction() as conn:
-                cur = conn.execute(
-                    "DELETE FROM commitments WHERE created_session_id=?",
-                    (int(live_session_id),),
-                )
-                return int(cur.rowcount or 0)
+                return delete_commitments_by_session(conn, live_session_id=int(live_session_id))
 
         return await self._run_in_executor(_exec)
 
@@ -224,4 +231,4 @@ class CommitmentRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
 
-__all__ = ["CommitmentRepo"]
+__all__ = ["CommitmentRepo", "delete_commitments_by_session"]

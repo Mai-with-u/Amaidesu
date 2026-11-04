@@ -2,7 +2,7 @@
 存储 Schema 定义
 
 本模块是全部 SQLite 表的**单一事实源**：26 张业务表（12 张核心直播表 +
-2 张模拟器运行时表 + 5 张流程单域表 + 2 张观众画像表 + 1 张 LLM 请求历史表 +
+2 张模拟器运行时表 + 5 张流程单域表 + 1 张 LLM 请求历史表 +
 1 张游戏生物名册表 + 1 张不记录名单表 + 2 张记忆账本表）+ ``schema_migrations``。
 任何建表 DDL 都必须落在这里，不允许业务模块自带 ``CREATE TABLE``——否则
 表结构游离于 ``SCHEMA_VERSION`` 版本管理之外，迁移机制无法覆盖。
@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 24
+SCHEMA_VERSION: int = 25
 
 
 # =============================================================================
@@ -72,8 +72,6 @@ SCHEMA_VERSION: int = 24
 # - viewers                 观众（一行一人，记外部 ID 与跨场客观数字）
 # - viewer_names            观众昵称记录（含曾用名）
 # - forget_list             不记录名单（发过"忘了我"的观众外部 ID 密钥摘要）
-# - viewer_profiles         观众画像（每位常客一份 LLM 维护的印象文本，主播认人的依据）
-# - session_recaps          场次回顾（每场一份收播总结，主播跨场次记得自己做过什么）
 # - game_events             游戏里程碑事件
 # - game_creatures          游戏生物名册（游戏 Agent 记住的同伴：主播起的名字、死没死，按世界分开）
 # - timeline_summary        摘要层
@@ -119,12 +117,6 @@ def build_schema_sql() -> str:
         + "\n"
         # forget_list —— 不记录名单
         + _FORGET_LIST_SQL
-        + "\n"
-        # viewer_profiles —— 观众画像
-        + _VIEWER_PROFILES_SQL
-        + "\n"
-        # session_recaps —— 场次回顾
-        + _SESSION_RECAPS_SQL
         + "\n"
         # commitments —— 承诺账本（她当众答应过、还没了结的事）
         + _COMMITMENTS_SQL
@@ -185,8 +177,6 @@ def list_expected_tables() -> List[str]:
         "viewers",
         "viewer_names",
         "forget_list",
-        "viewer_profiles",
-        "session_recaps",
         "commitments",
         "archive_lines",
         "rundowns",
@@ -224,7 +214,6 @@ CREATE TABLE IF NOT EXISTS live_sessions (
     viewer_count    INTEGER NOT NULL DEFAULT 0,
     audience_total  INTEGER NOT NULL DEFAULT 0,
     updated_at_ms   INTEGER NOT NULL,
-    notebook_text   TEXT NOT NULL DEFAULT '',
     settled_at_ms   INTEGER,
     settle_attempts INTEGER NOT NULL DEFAULT 0,
     settle_report   TEXT,
@@ -409,44 +398,6 @@ CREATE TABLE IF NOT EXISTS forget_list (
 );
 """.strip()
 
-
-# --- viewer_profiles —— 观众画像 ---
-# 每位常客一行印象文本；``last_compressed_at_ms`` 是已整理到的时间点：该时刻
-# 之前的弹幕与付费记录已经融进印象，下次只整理这之后的新话。有印象才注入
-# planner——主播由此认出老观众。
-
-_VIEWER_PROFILES_SQL = """
-CREATE TABLE IF NOT EXISTS viewer_profiles (
-    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-    viewer_id              INTEGER NOT NULL UNIQUE,
-    profile_text           TEXT NOT NULL,
-    last_compressed_at_ms  INTEGER NOT NULL DEFAULT 0,
-    updated_at_ms          INTEGER NOT NULL
-);
-""".strip()
-
-
-# --- session_recaps —— 场次回顾 ---
-# 每场直播一份收播总结（主播做了什么、答应过什么、聊了什么梗、谁来得多）。
-# 下一场开播时注入"上场回顾"，主播才不会每次开播都失忆。
-# 收播整理按 回顾 → 长期记忆 → 观众画像 顺序跑，回顾行顺带记整理进度：
-# ``long_memory_merged_at_ms`` 非空 = 本场已并进长期记忆（每场只并一次）；
-# ``settled_at_ms`` 非空 = 三步都走完了。停止或崩溃打断的整理两列留空，
-# 下次启动据此补完后续步骤。
-
-_SESSION_RECAPS_SQL = """
-CREATE TABLE IF NOT EXISTS session_recaps (
-    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
-    live_session_id           INTEGER NOT NULL UNIQUE,
-    started_at_ms             INTEGER NOT NULL,
-    ended_at_ms               INTEGER NOT NULL,
-    recap_text                TEXT NOT NULL,
-    created_at_ms             INTEGER NOT NULL,
-    long_memory_merged_at_ms  INTEGER,
-    settled_at_ms             INTEGER
-);
-CREATE INDEX IF NOT EXISTS idx_session_recaps_started ON session_recaps(started_at_ms);
-""".strip()
 
 # --- commitments —— 承诺账本 ---
 # 她当众答应过、还没了结的事：每个正式场下播后由整理找新的、了结旧的。

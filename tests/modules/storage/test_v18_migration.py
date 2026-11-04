@@ -1,55 +1,65 @@
 """v17 → v18 迁移：观众表改为一行一人、外部 ID 分列，明细挂上观众 ID，画像改按观众 ID 存，昵称记录回填。
 
-先建最新库，再把观众相关表退回 v17 形状、写入存量数据，重新打开触发迁移。
+直接用 v17 形状的最小 DDL 造前置形状后调用 v18 的 ``migrate(conn)``：最新库的建表
+DDL 已不含 ``viewer_profiles``（v25 已删），"先建最新库再退回旧形状"的做法不再成立。
 """
 
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict
 
 from src.modules.storage.database import SQLiteDatabase
-from src.modules.storage.schema import SCHEMA_VERSION
+from src.modules.storage.migrations.v18_viewer_identity_mapping import migrate as v18_migrate
 
 OPEN_ID = "39b8fedb-60a5-4e29-ac75-b16955f7e632"
 
-_V17_VIEWERS = """
+# v17 形状的最小 DDL：v18 回调读写到的列都在里面，其余列与本回调无关。
+_V17_SCHEMA = """
 CREATE TABLE viewers (
     id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT NOT NULL DEFAULT '', user_id TEXT NOT NULL,
     user_name TEXT NOT NULL, message_count INTEGER NOT NULL DEFAULT 0, gift_count INTEGER NOT NULL DEFAULT 0,
     replied_count INTEGER NOT NULL DEFAULT 0, interaction_count INTEGER NOT NULL DEFAULT 0,
     paid_count INTEGER NOT NULL DEFAULT 0, paid_amount INTEGER NOT NULL DEFAULT 0,
     last_active_ms INTEGER NOT NULL, UNIQUE(platform, user_id)
-)"""
-_V17_PROFILES = """
+);
 CREATE TABLE viewer_profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT NOT NULL, user_id TEXT NOT NULL,
     profile_text TEXT NOT NULL, last_compressed_at_ms INTEGER NOT NULL DEFAULT 0,
     updated_at_ms INTEGER NOT NULL, UNIQUE(platform, user_id)
-)"""
+);
+CREATE TABLE viewer_names (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, viewer_id INTEGER NOT NULL, user_name TEXT NOT NULL,
+    first_seen_ms INTEGER NOT NULL, last_seen_ms INTEGER NOT NULL, UNIQUE(viewer_id, user_name)
+);
+CREATE TABLE live_chat (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, live_session_id INTEGER NOT NULL, timestamp_ms INTEGER NOT NULL,
+    platform TEXT NOT NULL DEFAULT '', sender_role TEXT NOT NULL, sender_id TEXT, sender_name TEXT,
+    simulated INTEGER NOT NULL DEFAULT 0, content TEXT NOT NULL, message_type TEXT NOT NULL
+);
+CREATE TABLE gifts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, live_session_id INTEGER NOT NULL, timestamp_ms INTEGER NOT NULL,
+    platform TEXT NOT NULL DEFAULT '', user_id TEXT NOT NULL, user_name TEXT NOT NULL,
+    gift_name TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 1, simulated INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE super_chats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, live_session_id INTEGER NOT NULL, timestamp_ms INTEGER NOT NULL,
+    platform TEXT NOT NULL DEFAULT '', user_id TEXT NOT NULL, user_name TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '', simulated INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE guards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, live_session_id INTEGER NOT NULL, timestamp_ms INTEGER NOT NULL,
+    platform TEXT NOT NULL DEFAULT '', user_id TEXT NOT NULL, user_name TEXT NOT NULL,
+    simulated INTEGER NOT NULL DEFAULT 0
+);
+"""
 
 
-async def _open(path: Path) -> SQLiteDatabase:
-    db = SQLiteDatabase(path)
-    await db.initialize()
-    return db
-
-
-def _make_v17(path: Path) -> None:
-    """把观众相关表退回 v17 形状并写入存量数据。"""
-    conn = sqlite3.connect(path)
-    for table in ("live_chat", "gifts", "super_chats", "guards"):
-        conn.execute(f"DROP INDEX IF EXISTS idx_{table}_viewer")
-        conn.execute(f"ALTER TABLE {table} DROP COLUMN viewer_id")
-        conn.execute(f"ALTER TABLE {table} DROP COLUMN id_kind")
-    conn.execute("DROP INDEX IF EXISTS idx_viewer_names_name")
-    conn.execute("DROP TABLE viewer_names")
-    conn.execute("DROP TABLE viewers")
-    conn.execute("DROP TABLE viewer_profiles")
-    conn.execute(_V17_VIEWERS)
-    conn.execute(_V17_PROFILES)
-    conn.execute("DELETE FROM schema_migrations WHERE version > 17")
+def _make_v17() -> sqlite3.Connection:
+    """v17 形状旧库 + 存量数据：同一 uid 有带/漏平台的重复行，开放平台 ID、兜底身份、模拟观众各一条。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(_V17_SCHEMA)
     viewers = [
         # (id, platform, user_id, user_name, message_count, last_active_ms)
         (1, "bilibili", "1001", "老王", 5, 1_000),
@@ -85,25 +95,22 @@ def _make_v17(path: Path) -> None:
         "INSERT INTO viewer_profiles(platform, user_id, profile_text, updated_at_ms) VALUES (?,?,?,?)",
         [("bilibili", "1001", "画像A", 10), ("", "1001", "画像B", 20), ("bilibili", "ghost", "无主画像", 30)],
     )
-    conn.commit()
-    conn.close()
+    return conn
 
 
-async def _snapshot(db: SQLiteDatabase) -> Dict[str, Any]:
+def _snapshot(conn: sqlite3.Connection) -> dict[str, list[tuple]]:
     return {
-        table: [tuple(r) for r in await db.execute(f"SELECT * FROM {table} ORDER BY id")]
+        table: [tuple(r) for r in conn.execute(f"SELECT * FROM {table} ORDER BY id")]
         for table in ("viewers", "viewer_names", "viewer_profiles", "live_chat", "gifts")
     }
 
 
-async def test_v17_viewers_split_ids_and_backfill(db_path: Path) -> None:
-    await (await _open(db_path)).close()  # 先建最新库，再退回 v17 形状
-    _make_v17(db_path)
-
-    db = await _open(db_path)
+def test_v17_viewers_split_ids_and_backfill() -> None:
+    conn = _make_v17()
     try:
-        assert await db.get_schema_version() == SCHEMA_VERSION
-        rows = {r["id"]: r for r in await db.execute("SELECT * FROM viewers")}
+        v18_migrate(conn)
+
+        rows = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM viewers")}
         assert sorted(rows) == [1, 3, 4, 5, 6]  # 漏写平台的同一个 uid 并进带平台的那一行
         laowang = rows[1]
         assert (laowang["platform"], laowang["account_id"], laowang["open_id"]) == ("bilibili", "1001", None)
@@ -114,7 +121,7 @@ async def test_v17_viewers_split_ids_and_backfill(db_path: Path) -> None:
         assert [r["id"] for r in rows.values() if r["simulated"]] == [6]  # 明细全是模拟数据才算模拟观众
         assert {r["link_status"] for r in rows.values()} == {"confirmed"}
 
-        chat = await db.execute("SELECT sender_id, platform, viewer_id, id_kind FROM live_chat ORDER BY id")
+        chat = conn.execute("SELECT sender_id, platform, viewer_id, id_kind FROM live_chat ORDER BY id").fetchall()
         assert [(r["viewer_id"], r["id_kind"]) for r in chat] == [
             (1, "account"),
             (1, "account"),  # 漏写平台的旧弹幕也归到合并后的观众
@@ -123,38 +130,36 @@ async def test_v17_viewers_split_ids_and_backfill(db_path: Path) -> None:
             (6, "account"),
             (None, ""),  # 主播发言不挂观众
         ]
-        (gift,) = await db.execute("SELECT viewer_id, id_kind FROM gifts")
+        (gift,) = conn.execute("SELECT viewer_id, id_kind FROM gifts").fetchall()
         assert (gift["viewer_id"], gift["id_kind"]) == (1, "account")
 
-        profiles = await db.execute("SELECT viewer_id, profile_text FROM viewer_profiles")
-        assert [(r["viewer_id"], r["profile_text"]) for r in profiles] == [(1, "画像B")]  # 保留较新的，无主画像丢弃
+        # 冻结在 v18 里的建表语句能独立重建 viewer_profiles；对不上观众的画像丢弃，同人多份留较新的
+        profile_columns = {row[1] for row in conn.execute("PRAGMA table_info(viewer_profiles)")}
+        assert "viewer_id" in profile_columns and "user_id" not in profile_columns
+        profiles = conn.execute("SELECT viewer_id, profile_text FROM viewer_profiles").fetchall()
+        assert [(r["viewer_id"], r["profile_text"]) for r in profiles] == [(1, "画像B")]
 
-        names = await db.execute(
+        names = conn.execute(
             "SELECT user_name, first_seen_ms, last_seen_ms FROM viewer_names WHERE viewer_id=1 ORDER BY first_seen_ms"
-        )
+        ).fetchall()
         assert [tuple(r) for r in names] == [("老王旧名", 100, 100), ("老王", 900, 2_000)]
 
-        before = await _snapshot(db)
+        before = _snapshot(conn)
+        v18_migrate(conn)  # 已是最新形状：不重复迁移
+        assert _snapshot(conn) == before
     finally:
-        await db.close()
-
-    # 再次打开：已是最新版本，不重复迁移
-    db = await _open(db_path)
-    try:
-        assert await _snapshot(db) == before
-    finally:
-        await db.close()
+        conn.close()
 
 
 async def test_new_database_has_v18_shape(db_path: Path) -> None:
-    await (await _open(db_path)).close()
-    conn = sqlite3.connect(db_path)
+    db = SQLiteDatabase(db_path)
+    await db.initialize()
     try:
-        viewer_cols = {row[1] for row in conn.execute("PRAGMA table_info(viewers)")}
+        viewer_cols = {r["name"] for r in await db.execute("PRAGMA table_info(viewers)")}
         assert {"account_id", "open_id", "open_app_id", "name_seen_ms", "link_status"} <= viewer_cols
         assert "user_id" not in viewer_cols
-        assert "viewer_id" in {row[1] for row in conn.execute("PRAGMA table_info(viewer_profiles)")}
         for table in ("live_chat", "gifts", "super_chats", "guards"):
-            assert {"viewer_id", "id_kind"} <= {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            columns = {r["name"] for r in await db.execute(f"PRAGMA table_info({table})")}
+            assert {"viewer_id", "id_kind"} <= columns
     finally:
-        conn.close()
+        await db.close()

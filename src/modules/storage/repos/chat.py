@@ -24,6 +24,7 @@ from src.modules.storage.models.chat import (
     SessionSpeaker,
     SessionSpeechMoment,
     SettleSpeechLine,
+    SpeechDeleteResult,
     SuperChatRecord,
     ViewerSessionParticipation,
 )
@@ -107,6 +108,36 @@ class ChatRepo(BaseRepo):
                     (int(dropped_at_ms), utterance_id),
                 )
                 return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
+    async def delete_speech_and_references(self, *, chat_id: int) -> Optional[SpeechDeleteResult]:
+        """删除一句主播台词，并清掉挂在它上面的账本引用（运营者从台词列表删句）。
+
+        只处理 `sender_role='assistant'` 的行；观众弹幕的删除走隐私删除入口，不在这里。
+        三张表在同一个事务里改完：场次档案行整行删除（它的唯一证据就是这句台词），承诺保留
+        但清空原话（承诺本身仍是承诺，证据没了就只留标题），最后才删台词行本身。
+        行不存在或不是主播台词时返回 None，调用方据此回 404。
+        """
+
+        def _exec() -> Optional[SpeechDeleteResult]:
+            with self._manager.transaction() as conn:
+                row = conn.execute("SELECT sender_role FROM live_chat WHERE id=?", (int(chat_id),)).fetchone()
+                if row is None or str(row["sender_role"]) != "assistant":
+                    return None
+                archive_cur = conn.execute("DELETE FROM archive_lines WHERE evidence_chat_id=?", (int(chat_id),))
+                commitments_cur = conn.execute(
+                    "UPDATE commitments SET quote = CASE WHEN evidence_chat_id=? THEN '' ELSE quote END,"
+                    " close_quote = CASE WHEN close_chat_id=? THEN '' ELSE close_quote END"
+                    " WHERE evidence_chat_id=? OR close_chat_id=?",
+                    (int(chat_id), int(chat_id), int(chat_id), int(chat_id)),
+                )
+                conn.execute("DELETE FROM live_chat WHERE id=?", (int(chat_id),))
+                return SpeechDeleteResult(
+                    deleted=True,
+                    archive_lines_removed=int(archive_cur.rowcount or 0),
+                    commitments_cleared=int(commitments_cur.rowcount or 0),
+                )
 
         return await self._run_in_executor(_exec)
 
@@ -500,14 +531,16 @@ class ChatRepo(BaseRepo):
         """本场她说过的台词里点名引用过的记忆编号（memory_refs 非空的行）。
 
         线索推送每批查一次：某个承诺的编号已经出现在本场台词的引用里，就是被用上了，
-        本场不再推这张卡。
+        本场不再推这张卡。确知没送到观众面前的台词不算"用上了"——`dropped_at_ms`
+        非空的行排除，与回想、下播整理的送达口径一致。
         """
 
         def _exec() -> List[str]:
             with self._manager.transaction() as conn:
                 rows = conn.execute(
                     "SELECT memory_refs FROM live_chat"
-                    " WHERE live_session_id=? AND sender_role='assistant' AND memory_refs IS NOT NULL",
+                    " WHERE live_session_id=? AND sender_role='assistant'"
+                    " AND memory_refs IS NOT NULL AND dropped_at_ms IS NULL",
                     (int(live_session_id),),
                 ).fetchall()
                 return [str(row[0]) for row in rows if row and row[0]]
@@ -517,7 +550,8 @@ class ChatRepo(BaseRepo):
     async def list_session_replied_viewer_ids(self, *, live_session_id: int) -> List[int]:
         """本场她回应过的观众（内部观众 ID 去重；按回复关联键反查弹幕的发言人）。
 
-        老观众在场一行只在"她本场还没回应过 ta"时出现，所以每批查一次。
+        老观众在场一行只在"她本场还没回应过 ta"时出现，所以每批查一次。只有确知
+        送到观众面前的台词才算回应（`dropped_at_ms` 非空的那几句没被听见）。
         """
 
         def _exec() -> List[int]:
@@ -527,7 +561,7 @@ class ChatRepo(BaseRepo):
                     " JOIN live_chat v ON v.live_session_id = c.live_session_id"
                     "   AND v.message_id = c.reply_to_message_id AND v.sender_role='viewer'"
                     " WHERE c.live_session_id=? AND c.sender_role='assistant'"
-                    "   AND v.viewer_id IS NOT NULL",
+                    "   AND c.dropped_at_ms IS NULL AND v.viewer_id IS NOT NULL",
                     (int(live_session_id),),
                 ).fetchall()
                 return [int(row[0]) for row in rows]

@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
+from src.modules.context.tokens import TokenCounter
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
 from src.modules.storage.models.chat import SettleSpeechLine
@@ -43,6 +44,7 @@ from src.modules.storage.models.memory import (
     UnregisteredItem,
 )
 from src.modules.storage.models.sessions import LiveSession
+from src.modules.storage.repos.sessions import MAX_SETTLE_ATTEMPTS
 from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.agents.streamer.memory.render import memory_ref_numbers
 from src.modules.utils.time_utils import now_ms
@@ -64,8 +66,17 @@ _ARCHIVE_TEMPLATE = "memory_archive_system"
 _COMMITMENT_TEMPLATE = "memory_commitment_system"
 _CLOSE_TEMPLATE = "memory_commitment_close_system"
 
-# 自动重试上限：用满后不再补跑，等运营者在 WebUI 点「重新整理」
-MAX_ATTEMPTS = 3
+# 自动重试上限：用满后不再补跑，等运营者在 WebUI 点「重新整理」。
+# 与存储层共用同一个数（WebUI 整理状态接口读它做展示与重置口径），不各写一份
+MAX_ATTEMPTS = MAX_SETTLE_ATTEMPTS
+# 台词预算占模型上下文窗口的比例：其余留给系统提示词、旧承诺与模型输出
+_SPEECH_WINDOW_RATIO = 0.45
+# 窗口查不到时的保守默认窗口（token），按它换算台词预算
+_DEFAULT_CONTEXT_WINDOW = 32_768
+# 裁剪台词时首尾各至少保留几行：预算再紧也留着，模型才看得到这一场的开场与收尾
+_EDGE_LINES_KEPT = 3
+# 每行台词的行号前缀（"#N "）按固定 token 计，避免逐行分词量前缀
+_LINE_PREFIX_TOKENS = 4
 # 一次调度最多整理几场（启动补跑时可能有积压）
 MAX_SESSIONS_PER_RUN = 4
 # 一次整理最多写几行档案（模型多给了就只取前几行）
@@ -93,6 +104,7 @@ class SettleMaterial:
     live_session_id: int
     speech_text: str
     lines_by_number: Dict[int, SettleSpeechLine]
+    speech_note: Optional[str]
     games: List[str]
     games_text: str
     abilities_text: str
@@ -110,6 +122,7 @@ class SettleOutcome:
     commitments: List[PendingCommitment] = field(default_factory=list)
     closures: List[CommitmentClosure] = field(default_factory=list)
     unregistered: List[UnregisteredItem] = field(default_factory=list)
+    input_note: Optional[str] = None
 
 
 def parse_json_object(text: str) -> Dict[str, Any]:
@@ -138,6 +151,50 @@ def _clip(text: str, limit: int) -> str:
     """按字数截断（标题用；引文不截断，截过的引文已经不是逐字引文）。"""
     cleaned = (text or "").strip()
     return cleaned[:limit] if len(cleaned) > limit else cleaned
+
+
+# "对谁"字段的已知取值：对具体观众 / 对全体观众。提示词只要求这两个值，
+# 其余取值（含缺失、空串）一律不登记——认不出是谁就不能写进承诺账本
+_TARGET_PERSON = frozenset({"person", "viewer", "观众"})
+_TARGET_EVERYONE = frozenset({"everyone", "all", "全体", "所有人", "大家"})
+
+
+def _select_speech_lines(*, costs: Sequence[int], key_flags: Sequence[bool], budget: int) -> List[int]:
+    """按 token 预算选出要喂给模型的台词行下标（保留首尾与关键行，中间整段省略）。
+
+    优先级：关键行（回应了观众的弹幕、点名引用了记忆）→ 首尾各 _EDGE_LINES_KEPT 行
+    （预算再紧也留，模型至少看得到开场与收尾）→ 余量先给最近的台词，再给最早的。
+    返回升序下标；调用方按保留顺序重新编号，台词行本身仍指向原行。
+    """
+    total = sum(costs)
+    indices = list(range(len(costs)))
+    if total <= budget:
+        return indices
+    keep: Set[int] = set()
+    remaining = max(0, int(budget))
+    for index in reversed(indices):
+        if key_flags[index] and costs[index] <= remaining:
+            keep.add(index)
+            remaining -= costs[index]
+    for index in [*indices[:_EDGE_LINES_KEPT], *indices[-_EDGE_LINES_KEPT:]]:
+        if index not in keep:
+            keep.add(index)
+            remaining -= costs[index]
+    for index in reversed(indices):
+        if remaining <= 0:
+            break
+        if index in keep or costs[index] > remaining:
+            continue
+        keep.add(index)
+        remaining -= costs[index]
+    for index in indices:
+        if remaining <= 0:
+            break
+        if index in keep or costs[index] > remaining:
+            continue
+        keep.add(index)
+        remaining -= costs[index]
+    return sorted(keep)
 
 
 def _clock_text(timestamp_ms: int) -> str:
@@ -218,6 +275,10 @@ class SessionSettler:
         if session.ended_at_ms is None:
             logger.debug(f"场次 {live_session_id} 还没结束，不整理")
             return False
+        if session.settled_at_ms is not None:
+            # 已整理过的场次不再白跑两次模型调用；运营者要重跑先经 WebUI 重新整理（清进度）
+            logger.debug(f"场次 {live_session_id} 已整理过，跳过重复整理")
+            return False
 
         try:
             speech = await self._chat.list_session_speech_for_settle(live_session_id=int(live_session_id))
@@ -240,7 +301,7 @@ class SessionSettler:
             await self._record_failure(session, f"整理异常：{exc}")
             return False
 
-        report = SettleReport(unregistered=outcome.unregistered)
+        report = SettleReport(unregistered=outcome.unregistered, input_note=outcome.input_note)
         now = int(self._clock())
         try:
             written = await self._sessions.apply_settlement(
@@ -250,7 +311,7 @@ class SessionSettler:
                 closures=outcome.closures,
                 settled_at_ms=now,
                 now_ms_value=now,
-                settle_report=report.model_dump_json() if outcome.unregistered else None,
+                settle_report=(report.model_dump_json() if (outcome.unregistered or outcome.input_note) else None),
             )
         except Exception as exc:  # noqa: BLE001 - 写入失败按整理失败记账，事务已回滚
             logger.warning(f"场次 {live_session_id} 整理写入失败: {exc}", exc=exc)
@@ -301,7 +362,7 @@ class SessionSettler:
 
     async def _collect_material(self, session: LiveSession, delivered: List[SettleSpeechLine]) -> SettleMaterial:
         """把一场的原料全取出来：她说的话、游戏、她能做的事、旧承诺。"""
-        speech_text, lines_by_number = self._render_speech(delivered)
+        speech_text, lines_by_number, speech_note = self._render_speech(delivered)
         games, games_text = await self._render_games(session)
         abilities_text = self._render_abilities()
         open_commitments, open_text, void_titles, void_text = await self._load_commitments(session)
@@ -309,6 +370,7 @@ class SessionSettler:
             live_session_id=int(session.id),
             speech_text=speech_text,
             lines_by_number=lines_by_number,
+            speech_note=speech_note,
             games=games,
             games_text=games_text,
             abilities_text=abilities_text,
@@ -318,19 +380,20 @@ class SessionSettler:
             void_text=void_text,
         )
 
-    def _render_speech(self, delivered: List[SettleSpeechLine]) -> Tuple[str, Dict[int, SettleSpeechLine]]:
+    def _render_speech(
+        self, delivered: List[SettleSpeechLine]
+    ) -> Tuple[str, Dict[int, SettleSpeechLine], Optional[str]]:
         """台词渲染成带编号的行；回应弹幕的把那句原文与发言人代号附在前面。
 
-        编号是本场内的序号，模型的输出按它指回具体那一行；同一观众整场用同一个代号，
-        模特才能说清「对谁答应的」而不用昵称。
+        编号是模型输出用来指回具体台词的键：整场台词超过模型窗口预算时只保留一部分，
+        按保留顺序重新编号，台词行本身仍指向原行。返回的第三项是裁剪说明（未裁剪为 None），
+        由调用方写进整理报告。同一观众整场用同一个代号，模特才能说清「对谁答应的」而不用昵称。
         """
         codes: Dict[int, str] = {}
-        lines: List[str] = []
-        lines_by_number: Dict[int, SettleSpeechLine] = {}
-        for number, line in enumerate(delivered, start=1):
-            lines_by_number[number] = line
+        bodies: List[str] = []
+        key_flags: List[bool] = []
+        for line in delivered:
             content = " ".join((line.content or "").split())
-            prefix = f"#{number} {_clock_text(int(line.timestamp_ms))} 你"
             reply_note = ""
             reply_viewer_id = line.reply_viewer_id
             if line.reply_content and reply_viewer_id is not None:
@@ -341,8 +404,43 @@ class SessionSettler:
             used = sorted(memory_ref_numbers(line.memory_refs))
             if used:
                 memory_note = "（提到" + "、".join(f"约#{item}" for item in used) + "）"
-            lines.append(f"{prefix}{reply_note}：{content}{memory_note}")
-        return "\n".join(lines), lines_by_number
+            bodies.append(f"{_clock_text(int(line.timestamp_ms))} 你{reply_note}：{content}{memory_note}")
+            key_flags.append(bool(reply_note) or bool(used))
+
+        counter = TokenCounter()
+        costs = [counter.text(f"#{index} {body}") + _LINE_PREFIX_TOKENS for index, body in enumerate(bodies, start=1)]
+        kept = _select_speech_lines(costs=costs, key_flags=key_flags, budget=self._speech_token_budget())
+        lines_by_number: Dict[int, SettleSpeechLine] = {}
+        lines: List[str] = []
+        for number, index in enumerate(kept, start=1):
+            lines.append(f"#{number} {bodies[index]}")
+            lines_by_number[number] = delivered[index]
+        note: Optional[str] = None
+        if len(kept) < len(delivered):
+            note = (
+                f"本场台词 {len(delivered)} 行超出模型上下文窗口，已省略中间 {len(delivered) - len(kept)} 行"
+                f"（保留首尾与回应观众、引用记忆的关键行），本次整理只看到 {len(kept)} 行"
+            )
+            logger.warning(f"下播整理台词已裁剪：{note}")
+        return "\n".join(lines), lines_by_number, note
+
+    def _speech_token_budget(self) -> int:
+        """台词可用的 token 预算：按 summary profile 的上下文窗口换算，查不到按保守窗口。
+
+        整理原料里台词占大头，其余（系统提示词、旧承诺清单、模型输出）留在剩余窗口里，
+        所以只按窗口的一定比例给台词。
+        """
+        window = 0
+        getter = getattr(self._llm, "get_profile_context_window", None)
+        if callable(getter):
+            try:
+                value = getter(SUMMARY_PROFILE)
+                window = int(value) if isinstance(value, int) and value > 0 else 0
+            except Exception as exc:  # noqa: BLE001 - 查不到窗口按保守预算，整理照常进行
+                logger.warning(f"查询 {SUMMARY_PROFILE} 上下文窗口失败，按保守窗口换算台词预算: {exc}")
+        if window <= 0:
+            window = _DEFAULT_CONTEXT_WINDOW
+        return max(512, int(window * _SPEECH_WINDOW_RATIO))
 
     async def _render_games(self, session: LiveSession) -> Tuple[List[str], str]:
         """本场玩过的游戏名与游戏里的关键事件；没有游戏事件时两者都空。"""
@@ -447,6 +545,7 @@ class SessionSettler:
             commitments=commitments,
             closures=closures,
             unregistered=[*archive_misses, *commitment_misses, *closure_misses],
+            input_note=material.speech_note,
         )
 
     async def _ask_for_list(self, *, template: str, prompt: str, key: str) -> List[Any]:
@@ -588,7 +687,17 @@ class SessionSettler:
                 continue
             target = str(raw.get("to") or "").strip().lower()
             viewer_id: Optional[int] = None
-            if target in ("person", "viewer", "观众"):
+            if target not in _TARGET_PERSON and target not in _TARGET_EVERYONE:
+                missed.append(
+                    UnregisteredItem(
+                        kind="commitment",
+                        what=what,
+                        quote=quote,
+                        reason=f"「对谁」字段认不出（{str(raw.get('to') or '空')[:20]}），未登记",
+                    )
+                )
+                continue
+            if target in _TARGET_PERSON:
                 reply_viewer_id = line.reply_viewer_id
                 if reply_viewer_id is None:
                     missed.append(

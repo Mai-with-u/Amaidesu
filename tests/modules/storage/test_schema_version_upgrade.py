@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import AsyncIterator
 
 
-from src.modules.storage.database import SQLiteDatabase
+import pytest
+
+from src.modules.storage.database import SchemaVersionDowngradeError, SQLiteDatabase
 from src.modules.storage.migrations import SCHEMA_MIGRATIONS
 from src.modules.storage.migrations.v13_llm_context_breakdown import migrate as v13_migrate
 from src.modules.storage.migrations.v14_llm_request_preview_column import migrate as v14_migrate
@@ -44,14 +46,17 @@ async def test_fresh_db_records_full_version_chain_without_private_tables(db_pat
         tables = await store.execute("SELECT name FROM sqlite_master WHERE type='table'")
         assert [r["name"] for r in tables if str(r["name"]).startswith("_")] == []
         await store.assert_schema_ready()
+        # 当前形状（v25）：旧记忆的两张表与场次备忘录列都已退役
+        for retired in ("session_recaps", "viewer_profiles"):
+            assert await store.table_exists(retired) is False
+        session_columns = {r["name"] for r in await store.execute("PRAGMA table_info(live_sessions)")}
+        assert "notebook_text" not in session_columns
 
 
 def test_build_schema_sql_is_current_shape() -> None:
     sql = build_schema_sql()
     for marker in (
         "CREATE TABLE IF NOT EXISTS guards",
-        "CREATE TABLE IF NOT EXISTS viewer_profiles",
-        "CREATE TABLE IF NOT EXISTS session_recaps",
         "UNIQUE(platform, account_id)",
         "CREATE TABLE IF NOT EXISTS viewer_names",
         "preview_text",
@@ -59,11 +64,33 @@ def test_build_schema_sql_is_current_shape() -> None:
         "rundown_segments",
     ):
         assert marker in sql
-    for gone in ("breakdown_json", "usage_raw_json", "segments_json", "tool_result"):
+    # 旧记忆（v25 退役）不再出现在建表 DDL 里：表与场次备忘录列都已删除
+    for gone in (
+        "breakdown_json",
+        "usage_raw_json",
+        "segments_json",
+        "tool_result",
+        "CREATE TABLE IF NOT EXISTS viewer_profiles",
+        "CREATE TABLE IF NOT EXISTS session_recaps",
+        "notebook_text",
+    ):
         assert gone not in sql
     # gifts 已改名 quantity（viewers 的 gift_count 属不同语义）；扁平事实私有表与观众事实中间表均已移除
     assert "gift_count" not in _GIFTS_SQL
     assert "_memory_facts" not in sql and "viewer_facts" not in sql
+
+
+async def test_newer_schema_version_is_rejected(db_path: Path) -> None:
+    """库版本高于代码期望时硬错：旧代码继续用会按旧建库语句重建已删的表。"""
+    async with _opened(db_path) as store:
+        await store.execute(
+            "INSERT INTO schema_migrations(version, applied_at_ms) VALUES (?, ?)",
+            (SCHEMA_VERSION + 1, 0),
+        )
+
+    with pytest.raises(SchemaVersionDowngradeError):
+        async with _opened(db_path):
+            pass
 
 
 async def test_old_db_upgrades_monotonically_keeping_data(db_path: Path) -> None:
@@ -205,8 +232,12 @@ async def test_v9_to_v10_migration_semantics(db_path: Path) -> None:
         assert (await store.execute("SELECT * FROM live_chat"))[0]["platform"] == "bilibili"
         assert await store.table_exists("_memory_facts") is False
         assert await store.table_exists("viewer_facts") is False  # 随 v15 退役：旧库升级后不应再有该表
-        for table in ("viewer_profiles", "session_recaps", "guards"):
-            assert await store.table_exists(table) is True
+        # 一路升到当前版本后，旧记忆的画像与回顾表也已被 v25 清掉
+        for table in ("viewer_profiles", "session_recaps"):
+            assert await store.table_exists(table) is False
+        assert await store.table_exists("guards") is True
+        session_columns = {r["name"] for r in await store.execute("PRAGMA table_info(live_sessions)")}
+        assert "notebook_text" not in session_columns
 
     async with _opened(db_path) as again:
         assert [r["total_price"] for r in await again.execute("SELECT total_price FROM super_chats")] == [50_000]

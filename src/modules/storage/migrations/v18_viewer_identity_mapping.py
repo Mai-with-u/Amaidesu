@@ -24,7 +24,21 @@ from typing import Dict, List, Optional, Tuple
 
 from src.modules.storage.migrations._common import column_exists, table_exists
 from src.modules.storage.repos.viewers import is_placeholder_name
-from src.modules.storage.schema import _VIEWER_PROFILES_SQL, _VIEWERS_SQL
+from src.modules.storage.schema import _VIEWERS_SQL
+
+# 冻结的 viewer_profiles 建表语句：这一版升级时要重建这张表，而表在 v25 已被删除
+# （记忆改按账本记录后不再有观众画像）。迁移必须能独立成立，所以原文抄在这里，
+# 不再引用 schema.py——迁移包在模块顶部导入，schema 里删掉它会让程序起不来。
+_VIEWER_PROFILES_SQL_V18 = """
+CREATE TABLE IF NOT EXISTS viewer_profiles (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    viewer_id              INTEGER NOT NULL UNIQUE,
+    profile_text           TEXT NOT NULL,
+    last_compressed_at_ms  INTEGER NOT NULL DEFAULT 0,
+    updated_at_ms          INTEGER NOT NULL
+);
+""".strip()
+
 
 _BILIBILI = "bilibili"
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -176,7 +190,7 @@ def _rebuild_profiles(conn: sqlite3.Connection) -> None:
     if not table_exists(conn, "viewer_profiles") or not column_exists(conn, "viewer_profiles", "user_id"):
         return
     conn.execute(
-        _VIEWER_PROFILES_SQL.replace(
+        _VIEWER_PROFILES_SQL_V18.replace(
             "CREATE TABLE IF NOT EXISTS viewer_profiles (", "CREATE TABLE viewer_profiles_v18_new ("
         )
     )

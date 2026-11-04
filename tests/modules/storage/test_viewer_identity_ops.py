@@ -1,4 +1,4 @@
-"""观众身份的人工处理：待确认列表、保持新建、合并（ID / 计数 / 昵称 / 明细 / 画像 / 并入建议）、取消关联（明细改指与计数重算）。"""
+"""观众身份的人工处理：待确认列表、保持新建、合并（ID / 计数 / 昵称 / 明细 / 并入建议）、取消关联（明细改指与计数重算）。"""
 
 from __future__ import annotations
 
@@ -72,7 +72,6 @@ async def test_list_pending_and_keep_separate(store: SQLiteDatabase) -> None:
 
 async def test_merge_pending_into_candidate(store: SQLiteDatabase) -> None:
     old, pending = await _pending_pair(store)
-    await store.viewer_profiles.upsert_profile(viewer_id=pending, profile_text="新档画像", last_compressed_at_ms=1)
     await store.execute("UPDATE viewers SET replied_count=2 WHERE id=?", (pending,))
 
     await store.viewer_identity.merge(source_id=pending, target_id=old)
@@ -83,28 +82,22 @@ async def test_merge_pending_into_candidate(store: SQLiteDatabase) -> None:
     assert (row["message_count"], row["replied_count"], row["name_seen_ms"]) == (2, 2, 1_000 + WINDOW + 1)
     chat = await store.execute("SELECT DISTINCT viewer_id FROM live_chat")
     assert [r["viewer_id"] for r in chat] == [old]  # 明细全部改指老观众
-    # 老观众没有画像时沿用来源的
-    assert await store.viewer_profiles.get_profile_text(viewer_id=old) == "新档画像"
     names = await store.execute("SELECT user_name FROM viewer_names WHERE viewer_id=?", (old,))
     assert [r["user_name"] for r in names] == ["甲"]
     assert (await store.viewer_identity.list_pending())[0] == 0
 
 
-async def test_merge_rewires_other_suggestions_and_keeps_target_profile(store: SQLiteDatabase) -> None:
+async def test_merge_rewires_other_suggestions(store: SQLiteDatabase) -> None:
     a = await _says(store, "2001", "乙", 1_000)
     b = await _says(store, "2002", "丙", 2_000)
     # 第三位待确认观众建议并入 b；人工把 b 并入 a 之后，建议改指 a
     c = await _says(store, OPEN_ID, "丙", 2_000 + WINDOW + 1, kind="open")
-    await store.viewer_profiles.upsert_profile(viewer_id=a, profile_text="A 的画像", last_compressed_at_ms=1)
-    await store.viewer_profiles.upsert_profile(viewer_id=b, profile_text="B 的画像", last_compressed_at_ms=1)
     with pytest.raises(ViewerIdentityError, match="两个不同账号"):
         await store.viewer_identity.merge(source_id=b, target_id=a)  # 两个不同账号 ID 不能合并
 
     await store.execute("UPDATE viewers SET account_id=NULL WHERE id=?", (b,))  # 构造：b 没有账号 ID
     await store.viewer_identity.merge(source_id=b, target_id=a)
     assert (await _row(store, c))["link_candidate_id"] == a
-    assert await store.viewer_profiles.get_profile_text(viewer_id=a) == "A 的画像"  # 目标画像为准
-    assert await store.viewer_profiles.count_profiles() == 1
     # 昵称取最近出现的一方，两边昵称记录合并
     assert (await _row(store, a))["user_name"] == "丙"
     names = await store.execute("SELECT user_name FROM viewer_names WHERE viewer_id=? ORDER BY user_name", (a,))
@@ -142,7 +135,6 @@ async def test_unlink_moves_details_and_recounts(store: SQLiteDatabase) -> None:
         reply_to_message_id="m3",
     )  # fmt: skip
     await store.viewers.record_replied(viewer_id=vid, timestamp_ms=3_500)
-    await store.viewer_profiles.upsert_profile(viewer_id=vid, profile_text="老观众画像", last_compressed_at_ms=1)
 
     new_id = await store.viewer_identity.unlink(viewer_id=vid, id_kind="open")
 
@@ -157,9 +149,6 @@ async def test_unlink_moves_details_and_recounts(store: SQLiteDatabase) -> None:
     assert orig["user_name"] == "甲"
     moved = await store.execute("SELECT message_id FROM live_chat WHERE viewer_id=? ORDER BY id", (new_id,))
     assert [r["message_id"] for r in moved] == ["m2", "m3"]
-    # 画像留在原观众身上，新观众从零开始
-    assert await store.viewer_profiles.get_profile_text(viewer_id=vid) == "老观众画像"
-    assert await store.viewer_profiles.get_profile_text(viewer_id=new_id) is None
     names = await store.execute("SELECT user_name FROM viewer_names WHERE viewer_id=? ORDER BY user_name", (vid,))
     assert [r["user_name"] for r in names] == ["甲"]
 
