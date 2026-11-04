@@ -74,7 +74,7 @@ def test_archive_block_renders_title_and_quote_and_caps_lines() -> None:
     lines = [_archive(line_id=index, text=f"第 {index} 条", quote="原话") for index in range(1, 12)]
     rendered = render_archive_block(lines)
     assert len(rendered) == 8
-    assert rendered[0] == "- [档#1] 第 1 条（你说过「原话」）"
+    assert rendered[0] == "- 第 1 条（你说过「原话」）", "档案行不带编号：点名只认承诺编号"
     assert render_archive_block([_archive(text="", quote="")]) == []
 
 
@@ -86,7 +86,7 @@ def test_brief_has_archive_section_and_commitment_section() -> None:
     )
     assert brief.startswith("# 她记得的事")
     assert "上一场：" in brief
-    assert "[档#41] Minecraft：水车搭好了（你说过「水车搭好啦」）" in brief
+    assert "- Minecraft：水车搭好了（你说过「水车搭好啦」）" in brief and "档#" not in brief
     assert "还没兑现、你当众说过的事：" in brief
     assert "[约#5] 「等我把城堡屋顶盖完，第一个请大家来参观」（上一场）" in brief
 

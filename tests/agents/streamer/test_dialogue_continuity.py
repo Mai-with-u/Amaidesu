@@ -18,7 +18,7 @@ from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.planner_render import Delegation, render_delegations
 from src.agents.streamer.timeline import GameEventBatch
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.tools.reply_tool import ReplyToolProvider
+from src.agents.streamer.tools.reply_tool import ReplyToolProvider, build_reply_tool_spec
 from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind, TriggerSource
 from src.modules.events.payloads.live import LiveStartedPayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -390,8 +390,29 @@ def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
     assert "可核对的客观状态陈述" in prompt and "禁止第一人称叙事" in prompt
     assert "reply_guidance = 方向 + 她的态度与语气" in prompt and "纯方向意图" not in prompt
     assert "态度只针对 `topic_summary` 里已有的事实" in prompt and "不写成她口吻的整句台词" in prompt
-    assert "情绪类别和强度仍由 `reply` 的 emotion / intensity 字段给出" in prompt
+    assert "情绪类别和强度仍由 `streamer_reply` 的 emotion / intensity 字段给出" in prompt
     assert "错误示范（reply_guidance）" in prompt and "正确示范（reply_guidance）" in prompt
+
+
+def test_planner_prompt_names_the_reply_tool_as_registered() -> None:
+    """提示词里写的说话工具名就是工具列表里的名字：写成短名 `reply`，模型会照抄去调、找不到工具，
+    白跑一轮决策（真实场次里一场出过 4 次）。"""
+    reset_prompt_manager()
+    try:
+        prompt = get_prompt_manager().render(
+            "amaidesu_planner_react",
+            bot_name="麦麦",
+            personality="活泼",
+            behavior_style="积极互动",
+            boundaries_rule="",
+            inside_jokes="",
+            game_rules="",
+        )
+    finally:
+        reset_prompt_manager()
+    full_name = build_reply_tool_spec().full_name
+    assert f"`{full_name}`" in prompt
+    assert "`reply`" not in prompt
 
 
 def test_planner_prompt_knows_who_she_is_but_stays_the_room_manager() -> None:

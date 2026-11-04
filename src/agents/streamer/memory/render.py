@@ -4,7 +4,7 @@
 
 | 成分 | Planner 档 | 说话档（Replyer） |
 |---|---|---|
-| 编号 | 有（约#7、档#41），用于点名 | 没有 |
+| 编号 | 承诺有（约#7），用于点名；档案行不带（档#41 只在 WebUI 给运营者看） | 没有 |
 | 时间 | 跨场只用"上一场""之前" | 跨场只用"上次""之前" |
 | 内容 | 不针对具体观众的承诺给标题加原话；对某位观众的承诺只给动作标题；档案给标题加原话 | 承诺只给动作标题；档案只给标题 |
 
@@ -57,7 +57,7 @@ PRESENCE_RECENT_MS = 3 * 24 * 60 * 60 * 1000
 _BRIEF_HEADER = "# 她记得的事（内部参考；以眼前为准，用不上就不提）"
 _CUE_HEADER = (
     "【这一批想起来的事】"
-    "（代码按线索找的；不提也行。要用就把编号写进 reply 的 use_memory，一次一条；"
+    "（代码按线索找的；不提也行。要用就把编号写进 streamer_reply 的 use_memory，一次一条；"
     "一句台词最多带一件旧事）"
 )
 _PRESENCE_HEADER = "老观众在场（只知道 ta 常来、多久没来；ta 的往事你不记得，别编，想知道就问）："
@@ -105,7 +105,7 @@ def render_commitment_number(commitment_id: int) -> str:
 
 
 def render_archive_number(archive_line_id: int) -> str:
-    """档案行编号的写法（档#41）。"""
+    """档案行编号的写法（档#41）：运营者在 WebUI 里认行用，不进提示词。"""
     return f"{_ARCHIVE_PREFIX}#{int(archive_line_id)}"
 
 
@@ -134,14 +134,18 @@ def render_commitment_text(
 
 
 def render_archive_block(lines: Sequence[ArchiveLine]) -> List[str]:
-    """上一场档案渲染成简报行（编号、标题、她的原话）。"""
+    """上一场档案渲染成简报行（标题、她的原话）。
+
+    不带档案行编号：点名（use_memory）只认承诺编号，简报里标着档#N 只会让 Planner 照抄去点名、
+    再被拒绝；上一场的经过要提就直接写进交接稿。
+    """
     rendered: List[str] = []
     for line in list(lines)[:MAX_BRIEF_ARCHIVE_LINES]:
         title = (line.text or "").strip()
         quote = (line.quote or "").strip()
         if not title:
             continue
-        head = f"- [{render_archive_number(line.id)}] {title}"
+        head = f"- {title}"
         rendered.append(f"{head}（你说过「{quote}」）" if quote else head)
     return rendered
 

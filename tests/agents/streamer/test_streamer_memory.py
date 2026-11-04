@@ -146,7 +146,7 @@ async def test_refresh_brief_reads_previous_archive_and_pending_commitments(stor
     await agent._refresh_memory_brief()
 
     brief = agent.memory_brief_text
-    assert "上一场：" in brief and "[档#" in brief and "水车搭好啦" in brief
+    assert "上一场：" in brief and "水车搭好啦" in brief
     assert "下次接着炸 TNT" in brief
     assert "盖房子" not in brief and "继续挖矿" not in brief
     assert len(agent.memory_brief_commitment_ids) == 1
