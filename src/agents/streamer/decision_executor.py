@@ -184,6 +184,7 @@ class DecisionRoundExecutor:
                         "target",
                         "reply_to",
                         "topic_summary",
+                        "topic_tag",
                         "reply_guidance",
                         "silent_reason",
                     }
@@ -324,6 +325,7 @@ class DecisionRoundExecutor:
             "target": outcome.target,
             "reply_to": outcome.reply_to,
             "topic_summary": outcome.topic_summary,
+            "topic_tag": outcome.topic_tag,
             "reply_guidance": outcome.reply_guidance,
             "silent_reason": outcome.silent_reason,
         }
@@ -439,6 +441,7 @@ class DecisionRoundExecutor:
             should_reply=plan_view.replied,
             target=(str(plan_view.target) if plan_view.target else None),
             topic_summary=str(plan_view.topic_summary or ""),
+            topic_tag=str(plan_view.topic_tag or ""),
             reply_guidance=str(plan_view.reply_guidance or ""),
             reply_to_message_id=str(reply_to) if reply_to else None,
             silent_reason=str(silent) if silent else None,

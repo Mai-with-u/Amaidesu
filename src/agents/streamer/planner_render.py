@@ -76,6 +76,9 @@ class Intent:
     at_ms: int
     topic_summary: str
     reply_guidance: str
+    # 话题短名：同话题的轮次在"已聊话题"清单里聚合为一行；空串 = 无短名（旧数据
+    # 或模型未填），该条在清单里按原样逐条渲染
+    topic_tag: str = ""
     speech: str = ""
 
 
@@ -277,11 +280,33 @@ def render_recent_intents(
     说出口的条目里，对游戏进展的说法只是当时的猜测（"还没挖进包"），回执才是
     权威事实；已被回执覆盖的条目标注以游戏记录为准，避免模型在两条都标
     "刚刚"的矛盾说法里任选一条播报。
+
+    带 topic_tag 的条目按话题聚合：同一话题只输出一行（话题名、轮数、时间跨度、
+    最新一条状态）——topic_summary 是客观状态陈述，游戏停滞时连续几十轮同义句，
+    逐条渲染的清单本身会放大重复；聚合后一眼可见"这件事聊了多少轮、最近说到哪"。
+    分组顺序按每组最近一次出现的时间由旧到新。无 topic_tag 的条目按原样逐条渲染。
     """
-    lines: List[str] = []
+    tagged_groups: Dict[str, List[Intent]] = {}
+    untagged_lines: List[str] = []
     for intent in intents:
-        line = f"- {age_text(current_ms - intent.at_ms)} 话题：{intent.topic_summary or '（无）'}"
-        if superseded_by_game_report(intent, delegations):
+        tag = intent.topic_tag.strip()
+        if not tag:
+            line = f"- {age_text(current_ms - intent.at_ms)} 话题：{intent.topic_summary or '（无）'}"
+            if superseded_by_game_report(intent, delegations):
+                line += "（其中对游戏进展的说法已被游戏回执覆盖，以游戏记录为准）"
+            untagged_lines.append(line)
+        else:
+            tagged_groups.setdefault(tag, []).append(intent)
+    lines: List[str] = untagged_lines
+    # dict 保持插入序（首次出现序），再按每组最近一次出现的时刻由旧到新排
+    ordered_groups = sorted(tagged_groups.items(), key=lambda item: item[1][-1].at_ms)
+    for tag, members in ordered_groups:
+        first, last = members[0], members[-1]
+        span = f"{age_text(current_ms - first.at_ms)}–{age_text(current_ms - last.at_ms)}"
+        line = f"- {tag}（{len(members)} 轮，{span}）：{last.topic_summary or '（无）'}"
+        # 聚合行取的是最新一条 topic_summary，同样可能落在游戏回执到达前的在途叙述；
+        # 不标会让模型拿过时猜测当权威事实播报（判定与标注口径同逐条渲染路径）
+        if superseded_by_game_report(last, delegations):
             line += "（其中对游戏进展的说法已被游戏回执覆盖，以游戏记录为准）"
         lines.append(line)
     return "\n".join(lines)

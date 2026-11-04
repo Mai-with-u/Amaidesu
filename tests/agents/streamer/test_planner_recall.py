@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
-from src.agents.streamer.planner_render import Intent
+from src.agents.streamer.planner_render import Delegation, Intent, render_recent_intents
 from src.agents.streamer.room_state import RoomState
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.utils.time_utils import now_ms
@@ -241,3 +241,137 @@ def test_agent_passes_recall_limits_to_planner() -> None:
     """[agents.streamer] 的回看条数一路传到 Planner。"""
     agent = make_streamer_agent({"planner_recent_intents_max": 3, "planner_recent_relays_max": 1})
     assert (agent._planner.workbench.recent_intents.maxlen, agent._planner.workbench.recent_relays.maxlen) == (3, 1)
+
+
+def _delegation_book() -> dict:
+    return {}
+
+
+def test_tagged_intents_merge_into_one_line() -> None:
+    """同一 topic_tag 的多条打算合并成一行：话题名、轮数、时间跨度、最新一条状态。
+
+    topic_summary 是客观状态陈述，游戏停滞时连续几十轮同义句——逐条渲染的清单
+    本身会放大重复；聚合后一眼可见"这件事聊了多少轮、最近说到哪"。
+    """
+    current_ms = 100 * 60 * 1000
+    intents = [
+        Intent(at_ms=current_ms - 17 * 60 * 1000, topic_summary="火把已到手", reply_guidance="", topic_tag="照明进度"),
+        Intent(
+            at_ms=current_ms - 5 * 60 * 1000, topic_summary="屋里五个点全亮", reply_guidance="", topic_tag="照明进度"
+        ),
+        Intent(
+            at_ms=current_ms - 2 * 60 * 1000,
+            topic_summary="门已装好，还差夜里验收",
+            reply_guidance="",
+            topic_tag="照明进度",
+        ),
+    ]
+
+    text = render_recent_intents(intents, _delegation_book(), current_ms)
+
+    assert text == "- 照明进度（3 轮，17 分钟前–2 分钟前）：门已装好，还差夜里验收"
+
+
+def test_different_tags_render_as_separate_lines() -> None:
+    """不同话题各占一行，分组按每组最近一次出现的时间由旧到新排。"""
+    current_ms = 100 * 60 * 1000
+    intents = [
+        Intent(
+            at_ms=current_ms - 9 * 60 * 1000, topic_summary="玩家被打了一下", reply_guidance="", topic_tag="女仆妖精"
+        ),
+        Intent(at_ms=current_ms - 7 * 60 * 1000, topic_summary="开始找羊", reply_guidance="", topic_tag="照明进度"),
+        Intent(
+            at_ms=current_ms - 1 * 60 * 1000, topic_summary="玩家又被打了一下", reply_guidance="", topic_tag="女仆妖精"
+        ),
+    ]
+
+    lines = render_recent_intents(intents, _delegation_book(), current_ms).splitlines()
+
+    assert lines == [
+        "- 照明进度（1 轮，7 分钟前–7 分钟前）：开始找羊",
+        "- 女仆妖精（2 轮，9 分钟前–1 分钟前）：玩家又被打了一下",
+    ]
+
+
+def test_untagged_intents_render_verbatim() -> None:
+    """没有 topic_tag 的条目按原样逐条渲染（旧数据），一条都不丢。"""
+    current_ms = 100 * 60 * 1000
+    intents = [
+        Intent(at_ms=current_ms - 3 * 60 * 1000, topic_summary="报平安：满血了", reply_guidance=""),
+        Intent(at_ms=current_ms - 1 * 60 * 1000, topic_summary="还是满血", reply_guidance=""),
+    ]
+
+    text = render_recent_intents(intents, _delegation_book(), current_ms)
+
+    assert text == "- 3 分钟前 话题：报平安：满血了\n- 1 分钟前 话题：还是满血"
+
+
+def test_mixed_tagged_and_untagged_keep_every_topic() -> None:
+    """带 tag 与不带 tag 混排：两条路径各走各的渲染，话题信息都不丢。"""
+    current_ms = 100 * 60 * 1000
+    intents = [
+        Intent(at_ms=current_ms - 4 * 60 * 1000, topic_summary="旧数据没短名", reply_guidance=""),
+        Intent(at_ms=current_ms - 2 * 60 * 1000, topic_summary="第一轮进展", reply_guidance="", topic_tag="照明进度"),
+    ]
+
+    lines = render_recent_intents(intents, _delegation_book(), current_ms).splitlines()
+
+    assert lines == [
+        "- 4 分钟前 话题：旧数据没短名",
+        "- 照明进度（1 轮，2 分钟前–2 分钟前）：第一轮进展",
+    ]
+
+
+async def test_reply_topic_tag_flows_into_intent() -> None:
+    """reply 参数里的 topic_tag 跟着话题一起记进打算账：同话题合并成一行。"""
+    calls = [
+        Response(
+            success=True,
+            content="",
+            tool_calls=[
+                ToolCall(
+                    id=f"c{i}",
+                    name="streamer_reply",
+                    arguments={"topic_summary": summary, "reply_guidance": "", "topic_tag": "照明进度"},
+                )
+            ],
+        )
+        for i, summary in enumerate(("火把已到手", "屋里五个点全亮"))
+    ]
+    planner = _planner(calls)
+
+    await planner.plan([], proactive=True)
+    await planner.plan([], proactive=True)
+    text = await _reference(planner)
+
+    assert "- 照明进度（2 轮，刚刚–刚刚）：屋里五个点全亮" in _topic_lines(text)[0]
+
+
+def test_superseded_group_line_keeps_game_report_note() -> None:
+    """聚合行的最新一条落在游戏回执覆盖区间内时，行尾保留"以游戏记录为准"标注——
+    不标会让模型拿回执到达前的在途猜测当权威事实播报。"""
+    current_ms = 100 * 60 * 1000
+    intents = [
+        Intent(
+            at_ms=current_ms - 5 * 60 * 1000,
+            topic_summary="床已经放好了",
+            reply_guidance="",
+            topic_tag="照明进度",
+        )
+    ]
+    delegations = {
+        "minecraft": Delegation(
+            agent="minecraft",
+            instruction="放个床",
+            task_id="task_1",
+            at_ms=current_ms - 10 * 60 * 1000,
+            report_kind="delivery",
+            reported_ms=current_ms - 1 * 60 * 1000,
+        )
+    }
+
+    text = render_recent_intents(intents, delegations, current_ms)
+
+    assert text == (
+        "- 照明进度（1 轮，5 分钟前–5 分钟前）：床已经放好了（其中对游戏进展的说法已被游戏回执覆盖，以游戏记录为准）"
+    )

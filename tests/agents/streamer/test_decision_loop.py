@@ -155,6 +155,18 @@ async def test_reply_target_flows_into_decision_event(rig_factory) -> None:
     assert (await rig.wait_decision()).reply_to_message_id == "msg_abc"
 
 
+async def test_topic_tag_flows_into_decision_event(rig_factory) -> None:
+    """reply 参数里的 topic_tag 进 planner.decision：复盘据此统计聚合是否生效。"""
+    call = ToolCall(
+        id="call_t1",
+        name="streamer_reply",
+        arguments={"topic_summary": "屋里五个点全亮", "topic_tag": "照明进度", "is_novel": True},
+    )
+    rig = await rig_factory([_planner_step(call)])
+    await rig.emit()
+    assert (await rig.wait_decision()).topic_tag == "照明进度"
+
+
 async def test_proactive_is_gated_by_live_session_not_by_danmaku(rig_factory) -> None:
     """开播前主动发言静默且 pending 保留，开播后首个 tick 消费；下播收闸，下场前 pending 保留。"""
     rig = await rig_factory([_planner_step()], proactive={"enabled": True})

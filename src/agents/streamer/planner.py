@@ -176,6 +176,8 @@ class RoundOutcome:
     reply_to: Optional[str] = None
     topic_summary: str = ""
     reply_guidance: str = ""
+    # 话题短名（3–8 字）：已聊话题清单按它聚合，同一话题合并成一行
+    topic_tag: str = ""
     silent_reason: Optional[str] = None
     steps: int = 0
     tool_trace: List[str] = field(default_factory=list)
@@ -807,7 +809,8 @@ class Planner:
             # 也认表达上的新（新态度、新联想、旧事）；线上回放里 30 句有 27 句在复述同一个打算，
             # 所以讲过的结论和打算单独点名不再复述；拿不出新角度先换话题，再考虑沉默
             lines.append(
-                "【已聊话题】（由旧到新，只列话题一句话；说出口的原话见对话历史）\n"
+                "【已聊话题】（由旧到新，同一话题合并成一行：话题名（轮数，时间跨度）：最新状态；"
+                "说出口的原话见对话历史）\n"
                 f"{intents}\n"
                 "硬规则：本轮想说的话题若与上述清单重叠，必须换一个实质性新角度"
                 "（新事实/新进展/新互动对象，或她对这件事的新态度、新联想、相关旧事；"
@@ -1027,6 +1030,7 @@ class Planner:
             target=metadata.get("target") or args.get("target"),
             topic_summary=str(args.get("topic_summary", "") or ""),
             reply_guidance=str(args.get("reply_guidance", "") or ""),
+            topic_tag=str(args.get("topic_tag", "") or ""),
             reply_to=reply_to if isinstance(reply_to, str) and reply_to else None,
             memory_refs=memory_ids,
         )
@@ -1036,6 +1040,7 @@ class Planner:
                 at_ms=now_ms(),
                 topic_summary=outcome.topic_summary,
                 reply_guidance=outcome.reply_guidance,
+                topic_tag=outcome.topic_tag,
                 speech=str(payload.get("speech") or ""),
             )
         )

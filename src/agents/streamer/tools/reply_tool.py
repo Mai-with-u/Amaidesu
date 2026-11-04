@@ -11,7 +11,7 @@
 工具契约：
 - kind: ``"sync"``（gather 等齐结果；Replyer 是一次性 LLM 调用，不是 fire-and-forget）
 - provider: ``"streamer"``（主播 Agent 自有工具；全名 streamer_reply）
-- arguments: ``{topic_summary, emotion, intensity, is_novel, reply_guidance?, target?}``
+- arguments: ``{topic_summary, emotion, intensity, is_novel, reply_guidance?, topic_tag?, target?}``
 - 发言闸门：``is_novel=false`` 立即打回；生成后的成品台词对最近发言做
   bigram 包含率检查（topic_gate 纯函数），超阈值同样打回——每个决策窗
   最多打回 1 次后引导沉默（计数在检测到新决策窗 round_id 时清零）
@@ -119,6 +119,13 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
         "reply_guidance": {
             "type": "string",
             "description": "回复指引：一件事、一个态度，一句话以内——说什么方向、对谁说、不提什么，以及她对这件事的态度与语气（可空；不写成台词）",
+        },
+        "topic_tag": {
+            "type": "string",
+            "description": (
+                "话题短名（可空）：3–8 个字，给本轮话题起个名字，如 照明进度、玩家打人、女仆妖精。"
+                "还是同一件事就用同一个短名；换话题就换新名；只写事实指向，不带评价。"
+            ),
         },
         "target": {
             "type": "string",

@@ -56,6 +56,7 @@ class PlannerDecisionPayload(BasePayload):
         should_reply: 决策结论：是否发言
         target: 决策面向的对象（用户名 / "all"）
         topic_summary: 话题摘要
+        topic_tag: 话题短名（3–8 字；已聊话题清单按它聚合，空=模型未填）
         reply_guidance: 给 Replyer 的方向性指引
         reply_to_message_id: 决策所回复弹幕的 message_id（Planner 输出；互动分析关联键）
         silent_reason: 静默原因标记（natural=自然终止 / max_steps=超步 /
@@ -84,6 +85,7 @@ class PlannerDecisionPayload(BasePayload):
     should_reply: bool = Field(default=False, description="决策结论：是否发言")
     target: Optional[str] = Field(default=None, description="决策面向的对象")
     topic_summary: str = Field(default="", description="话题摘要")
+    topic_tag: str = Field(default="", description="话题短名（已聊话题清单的聚合键；空=模型未填）")
     reply_guidance: str = Field(default="", description="给 Replyer 的方向性指引")
     reply_to_message_id: Optional[str] = Field(
         default=None,
