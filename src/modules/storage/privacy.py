@@ -1,9 +1,9 @@
 """观众隐私与自主遗忘服务：命令判定、不记录名单与密钥、场内遮名、宽限删除与完整删除函数。
 
 核心契约：
-- **命令与撤回判定**：存储与决策侧共用纯函数 ``matches_phrase_table``。先剥掉 B 站文字表情码
-  （``[微笑]`` / ``[doge]`` 这类）与 ``@某人`` 提及，再按 Unicode 意义切小句——字母、数字、汉字、
-  假名等连续段算一个词，标点/空格/符号/表情作分隔；每个小句剥掉开头的称呼（"主播"与配置里的主播名），
+- **命令与撤回判定**：存储与决策侧共用纯函数 ``matches_phrase_table``。先剥掉认得的 B 站文字表情码
+  （``[微笑]`` / ``[doge]`` 这类；认不出的方括号内容按正文算）与 ``@某人`` 提及，再按 Unicode
+  意义切小句——字母、数字、汉字、假名等连续段算一个词，标点/空格/符号/表情作分隔；每个小句剥掉开头的称呼（"主播"与配置里的主播名），
   空小句丢弃；剩余小句非空且**全部**在短语表内才算命中。
 - **不记录名单（forget_list）**：只存 ``HMAC-SHA256(库外密钥, 种类|外部ID)``，不含应用编号。启动时校验库外密钥文件：
   文件缺失且名单为空时自动生成 32 字节随机密钥；文件缺失但名单非空时直接抛错阻止启动，给出找回密钥或清空名单两条出路。
@@ -47,8 +47,23 @@ MASKED_VIEWER_LABEL: str = "一位观众"
 
 IncomingDisposition = Literal["forget_command", "retracted", "forget_listed", "normal"]
 
-# B 站文字表情码：方括号包起来的短标签（[微笑]、[doge]、[2022拜年纪]…），判定命令前整段剥掉
-_TEXT_EMOTICON_RE = re.compile(r"[\[［][^\[\]［］]{1,20}[\]］]")
+# 方括号包起来的短标签（[微笑]、[doge]…）：是认得的 B 站文字表情码才在判定命令前整段剥掉
+_TEXT_EMOTICON_RE = re.compile(r"[\[［]([^\[\]［］]{1,20})[\]］]")
+# 认得的 B 站文字表情码名（小黄脸与常用系统表情；比较时忽略大小写）。只剥认得的：方括号里
+# 也可能是正文（"忘了我[不是]"），一律剥掉会把它当成遗忘命令；认不出的表情最多让这条
+# 命令没生效、观众去掉表情再发一次即可——误删一位观众的代价远大于少认一次命令
+_KNOWN_TEXT_EMOTICONS = frozenset(
+    name.casefold()
+    for name in (
+        "微笑 呲牙 笑 大笑 偷笑 笑哭 喜极而泣 哈哈 滑稽 奸笑 坏笑 阴险 调皮 歪嘴 傲娇 害羞 星星眼 喜欢 爱心 爱 "
+        "比心 给心心 亲亲 嘟嘟 惊喜 惊讶 吃惊 疑惑 思考 无语 尴尬 捂脸 囧 呆 抠鼻 委屈 难过 大哭 哭泣 生气 "
+        "抓狂 撇嘴 嫌弃 翻白眼 辣眼睛 呕吐 吐 晕 疼 冷 生病 口罩 吓 灵魂出窍 哈欠 睡觉 奋斗 加油 鼓掌 赞 点赞 "
+        "打call OK 妙啊 妙 哇 哦呼 酸了 吃瓜 嗑瓜子 墨镜 再见 捂眼 支持 花 鲜花 礼物 手机 dog doge "
+        "狗头 脱单doge"
+    ).split()
+)
+# 小电视系列表情码统一带这个前缀（[tv_微笑]、[tv_doge]…）
+_TV_EMOTICON_PREFIX = "tv_"
 # 剥除独立书写的 @提及（如 "@路人甲 忘了我"）：@ 在句首或分隔符后，一直取到下一个分隔符
 _AT_MENTION_RE = re.compile(r"(?:^|(?<=[\s,，。！!?？~～、：:；;]))@[^\s,，。！!?？~～、：:；;@]+")
 
@@ -76,6 +91,14 @@ def _split_clauses(text: str) -> List[str]:
     return clauses
 
 
+def _strip_known_emoticon(match: "re.Match[str]") -> str:
+    """认得的文字表情码换成分隔用的空格；认不出的原样留下，方括号里的字照常参与判定。"""
+    name = match.group(1).strip().casefold()
+    if name in _KNOWN_TEXT_EMOTICONS or name.startswith(_TV_EMOTICON_PREFIX):
+        return " "
+    return match.group(0)
+
+
 def _strip_mentions(content: str, callouts: Sequence[str]) -> str:
     """剥掉命令判定里的 ``@提及``，含与正文粘连的写法（@麦麦忘了我）。
 
@@ -83,7 +106,7 @@ def _strip_mentions(content: str, callouts: Sequence[str]) -> str:
     所以粘连写法也能命中；再剥独立书写的 @某人；最后把残余的 @ 当分隔符，
     避免漏掉无法判断名字边界的提及。
     """
-    text = _TEXT_EMOTICON_RE.sub(" ", content)
+    text = _TEXT_EMOTICON_RE.sub(_strip_known_emoticon, content)
     for callout in callouts:
         text = re.sub(rf"[@＠]\s*{re.escape(callout)}", " ", text, flags=re.IGNORECASE)
     text = _AT_MENTION_RE.sub(" ", text)
@@ -100,7 +123,7 @@ def matches_phrase_table(
 ) -> bool:
     """判定弹幕是否严格由短语表中的短语组成。
 
-    步骤：剥掉 B 站文字表情码（``[微笑]`` 这类）与 ``@某人`` 提及（含粘连写法）→ 按 Unicode
+    步骤：剥掉认得的 B 站文字表情码（``[微笑]`` 这类）与 ``@某人`` 提及（含粘连写法）→ 按 Unicode
     意义切小句 → 每小句剥掉开头的称呼（"主播"与 ``bot_name``）→ 丢弃空小句 → 剩余至少一句
     且每句都在 ``phrases`` 中。表情码、@提及、标点都只起分隔作用，不参与命中判断。
     """
