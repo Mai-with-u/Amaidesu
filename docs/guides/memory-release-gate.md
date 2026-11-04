@@ -68,6 +68,7 @@ uv run python main.py --dry
 - `config/` 下 agents.toml、infra.toml（以及带变更的文件）版本号已推进，`config/old/` 下有改前备份；日志有配置写回记录；
 - 完整性：`uv run python -c "import sqlite3;print(sqlite3.connect('data/amaidesu.db').execute('PRAGMA integrity_check').fetchone())"` 输出 `ok`；
 - 二次启动幂等：再跑一次 `uv run python main.py --dry`，没有重复迁移、没有再次搬目录、没有新的 pre-v25 备份；
+- 补整理留的那一场：`uv run python -c "import sqlite3;print(sqlite3.connect('data/amaidesu.db').execute('SELECT id, (ended_at_ms-started_at_ms)/60000 FROM live_sessions WHERE settled_at_ms IS NULL').fetchall())"` 列出的应是升级前最后一场正式场（时长至少 5 分钟）；去掉 `--dry` 启动一次后它被整理掉，记忆账本页能看到这一场的档案；
 - 想在隔离副本里额外看隐私密钥生成与保留期清理，去掉 `--dry` 再启动一次（会尝试连外部服务，连不上只会告警；默认保留期 0，不会删数据）。
 
 ## 4. 至少 3 个真实正式场由运营者人工判误记

@@ -67,6 +67,39 @@ def test_v24_callback_backfills_settled_and_is_idempotent() -> None:
     conn.close()
 
 
+def test_v24_leaves_latest_real_live_session_for_settling() -> None:
+    """旧记忆在同一次升级里退役、新账本是空的：最近一场够长的正式场留着待整理，启动补整理从它长出
+    第一份档案与承诺。更早的正式场、彩排场、开错后马上重开的一两分钟照旧标成已整理。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    _make_v23_schema(conn)
+    minute = 60_000
+    conn.executescript(
+        f"""
+        INSERT INTO live_sessions (id, started_at_ms, ended_at_ms, kind, updated_at_ms) VALUES
+            (10, 100000000, {100000000 + 38 * minute}, 'live', 0),
+            (11, 200000000, {200000000 + 49 * minute}, 'live', 0),
+            (12, 300000000, {300000000 + 30 * minute}, 'rehearsal', 0),
+            (13, 400000000, {400000000 + 1 * minute}, 'live', 0);
+        """
+    )
+
+    v24_migrate(conn)
+
+    settled = {
+        int(row["id"]): row["settled_at_ms"] for row in conn.execute("SELECT id, settled_at_ms FROM live_sessions")
+    }
+    assert settled[11] is None, "最近一场够长的正式场留给启动补整理"
+    assert all(settled[pk] is not None for pk in (1, 2, 10, 12, 13))
+    assert settled[3] is None, "没结束的场次本来就待整理"
+
+    # 幂等：列已补齐，再跑一次不再改任何一行
+    conn.execute("UPDATE live_sessions SET settled_at_ms=1 WHERE id=11")
+    v24_migrate(conn)
+    assert conn.execute("SELECT settled_at_ms FROM live_sessions WHERE id=11").fetchone()[0] == 1
+    conn.close()
+
+
 def test_v24_callback_tolerates_missing_live_sessions_table() -> None:
     conn = sqlite3.connect(":memory:")
     v24_migrate(conn)
