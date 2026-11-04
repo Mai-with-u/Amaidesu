@@ -5,14 +5,16 @@
 
 - **合并**（一位观众并入另一位）：外部 ID 搬到目标观众；两边同一种 ID 都有值且
   不同（两个不同账号）时拒绝。计数相加，昵称取最近出现的一方，昵称记录合并，
-  明细改指目标观众；画像以目标为准，目标没有画像时沿用来源的。
+  明细与承诺改指目标观众；任一方有待执行的遗忘删除请求时目标行保留最早的请求时刻，
+  使之后的下播清理能照常执行删除。
 - **保持新建**：清除待确认标记，作为独立观众保留。
 - **取消关联**：把某一个外部 ID 从观众身上拆出去，用它新建一位观众；明细里原始
   外部 ID 及种类相同的行改指新观众，新观众的计数按这些明细重算，原观众减去同样
-  的数。已删除场次的明细拆不出来，那部分计数留在原观众身上；画像留在原观众身上。
+  的数。已删除场次的明细拆不出来，那部分计数留在原观众身上；新观众记下改指明细里
+  最近一场正式场，避免同一场再发言时把来访场次重复计一次。
 
-合并与拆分都跨 viewers / viewer_names / viewer_profiles / 明细四表，在一个立即事务
-里完成，避免与记账器的并发写交错。
+合并与拆分都跨 viewers / viewer_names / 明细四表与承诺表，在一个立即事务里完成，
+避免与记账器的并发写交错。
 """
 
 from __future__ import annotations
@@ -142,7 +144,7 @@ def _load(conn: sqlite3.Connection, viewer_id: int) -> Optional[Dict[str, Any]]:
 
 
 def _merge_rows(conn: sqlite3.Connection, src: Dict[str, Any], dst: Dict[str, Any]) -> None:
-    """合并的落库步骤：外部 ID、计数与昵称、昵称记录、明细、画像、其他观众的并入建议。"""
+    """合并的落库步骤：外部 ID、计数与昵称、昵称记录、明细、承诺、待删请求、其他人的并入建议。"""
     src_id, dst_id = int(src["id"]), int(dst["id"])
     # 先清空来源行的外部 ID，再写到目标行，避免两行同时持有同一 ID 撞唯一约束
     conn.execute("UPDATE viewers SET account_id=NULL, open_id=NULL, open_app_id=NULL WHERE id=?", (src_id,))
@@ -151,7 +153,14 @@ def _merge_rows(conn: sqlite3.Connection, src: Dict[str, Any], dst: Dict[str, An
     conn.execute(
         "UPDATE viewers SET account_id=?, open_id=?, open_app_id=?, user_name=?, name_seen_ms=?,"
         + ", ".join(f" {col}={col}+?" for col in _COUNT_COLUMNS)
-        + ", last_active_ms=MAX(last_active_ms, ?) WHERE id=?",
+        + ", last_active_ms=MAX(last_active_ms, ?),"
+        # 任一方有待删除请求就保留标记（取更早的时刻），否则合并后目标行没有标记、
+        # 下播清理永远不会执行删除；名单摘要按外部 ID 计算，ID 搬到目标行后照样有效
+        " forget_requested_at_ms = CASE"
+        "   WHEN ? IS NULL THEN forget_requested_at_ms"
+        "   WHEN forget_requested_at_ms IS NULL THEN ?"
+        "   ELSE MIN(forget_requested_at_ms, ?)"
+        " END WHERE id=?",
         (
             dst["account_id"] or src["account_id"],
             open_src["open_id"],
@@ -160,6 +169,9 @@ def _merge_rows(conn: sqlite3.Connection, src: Dict[str, Any], dst: Dict[str, An
             int(newer["name_seen_ms"]),
             *(int(src[col]) for col in _COUNT_COLUMNS),
             int(src["last_active_ms"]),
+            src.get("forget_requested_at_ms"),
+            src.get("forget_requested_at_ms"),
+            src.get("forget_requested_at_ms"),
             dst_id,
         ),
     )
@@ -185,6 +197,11 @@ def _merge_rows(conn: sqlite3.Connection, src: Dict[str, Any], dst: Dict[str, An
     )
     conn.execute("UPDATE viewers SET link_candidate_id=? WHERE link_candidate_id=?", (dst_id, src_id))
     conn.execute("DELETE FROM viewers WHERE id=?", (src_id,))
+    # 两边明细都改指目标后重算"上次计入来访的正式场"：两行各记着一场时，留着旧值会让
+    # 目标在来源那场再发言时把同一场重复计一次
+    merged_last_session = _last_formal_session(conn, dst_id)
+    if merged_last_session is not None:
+        conn.execute("UPDATE viewers SET last_session_id=? WHERE id=?", (merged_last_session, dst_id))
 
 
 def _split_id(conn: sqlite3.Connection, row: Dict[str, Any], id_kind: IdKind, column: str) -> int:
@@ -217,16 +234,32 @@ def _split_id(conn: sqlite3.Connection, row: Dict[str, Any], id_kind: IdKind, co
             (new_id, orig_id, id_kind, external_id),
         )
     moved = _detail_stats(conn, new_id)
-    # 新观众：计数按改指过来的明细重算，昵称取这些明细里最近的一个
+    # 新观众：计数按改指过来的明细重算，昵称取这些明细里最近的一个；last_session_id 必须
+    # 一起写上，否则 sessions_count>0 却没有"上次计入的场次"，同场再发言会把这一场重复计一次
     conn.execute(
-        "UPDATE viewers SET " + ", ".join(f"{col}=?" for col in _COUNT_COLUMNS) + ", last_active_ms=? WHERE id=?",
-        (*(moved[col] for col in _COUNT_COLUMNS), moved["last_active_ms"] or now_ms(), new_id),
+        "UPDATE viewers SET "
+        + ", ".join(f"{col}=?" for col in _COUNT_COLUMNS)
+        + ", last_active_ms=?, last_session_id=? WHERE id=?",
+        (
+            *(moved[col] for col in _COUNT_COLUMNS),
+            moved["last_active_ms"] or now_ms(),
+            moved["last_session_id"],
+            new_id,
+        ),
     )
-    # 原观众：减去同样的数（历史累计里拆不出来的部分留在原观众身上）
+    # 原观众：减去同样的数（历史累计里拆不出来的部分留在原观众身上）；最近来访场次
+    # 按剩余明细重算，避免还指着已经整场拆走的那一场、导致那场再也计不进来
     conn.execute(
         "UPDATE viewers SET " + ", ".join(f"{col}=MAX({col}-?, 0)" for col in _COUNT_COLUMNS) + " WHERE id=?",
         (*(moved[col] for col in _COUNT_COLUMNS), orig_id),
     )
+    (orig_left,) = conn.execute("SELECT sessions_count FROM viewers WHERE id=?", (orig_id,)).fetchone()
+    remaining_session = _last_formal_session(conn, orig_id)
+    if int(orig_left or 0) <= 0:
+        # 拆完不再有已计入的场次：清掉"上次计入的场次"，剩余明细所在场再发言时才能重新计一次
+        conn.execute("UPDATE viewers SET last_session_id=NULL WHERE id=?", (orig_id,))
+    elif remaining_session is not None:
+        conn.execute("UPDATE viewers SET last_session_id=? WHERE id=?", (remaining_session, orig_id))
     _move_names(conn, orig_id, new_id, row)
     return new_id
 
@@ -272,8 +305,22 @@ def _detail_stats(conn: sqlite3.Connection, viewer_id: int) -> Dict[str, int]:
         "paid_count": paid_count,
         "paid_amount": paid_amount,
         "sessions_count": sessions_count,
+        "last_session_id": _last_formal_session(conn, viewer_id),
         "last_active_ms": last_active,
     }
+
+
+def _last_formal_session(conn: sqlite3.Connection, viewer_id: int) -> Optional[int]:
+    """这位观众最近一次计入来访场次统计的正式场（与 sessions_count 同一口径）；没有返回 None。"""
+    row = conn.execute(
+        "SELECT lc.live_session_id FROM live_chat lc"
+        " JOIN live_sessions ls ON ls.id = lc.live_session_id"
+        " WHERE lc.viewer_id=? AND lc.sender_role='viewer' AND lc.message_type='danmaku'"
+        " AND lc.simulated=0 AND ls.kind='live'"
+        " ORDER BY ls.started_at_ms DESC, ls.id DESC LIMIT 1",
+        (viewer_id,),
+    ).fetchone()
+    return int(row[0]) if row else None
 
 
 def _detail_names(conn: sqlite3.Connection, viewer_id: int) -> List[Tuple[str, int, int]]:

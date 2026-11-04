@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.privacy import PrivacyService
 from src.modules.storage.repos.viewer_identity import ViewerIdentityError
 
 DAY = 86_400_000
@@ -151,6 +153,113 @@ async def test_unlink_moves_details_and_recounts(store: SQLiteDatabase) -> None:
     assert [r["message_id"] for r in moved] == ["m2", "m3"]
     names = await store.execute("SELECT user_name FROM viewer_names WHERE viewer_id=? ORDER BY user_name", (vid,))
     assert [r["user_name"] for r in names] == ["甲"]
+
+
+async def test_merge_keeps_pending_forget_request_and_deletion_still_runs(
+    store: SQLiteDatabase, tmp_path: Path
+) -> None:
+    """来源行有待删请求：合并后目标行保留标记，名单摘要按外部 ID 仍然有效、删除照常执行。"""
+    old, pending = await _pending_pair(store)
+    privacy = PrivacyService(store.manager, db_path=store.db_path, key_path=tmp_path / "forget.key")
+    await privacy.initialize()
+    try:
+        disposition = await privacy.process_incoming_viewer_message(
+            platform="bilibili",
+            id_kind="open",
+            external_id=OPEN_ID,
+            open_app_id="app1",
+            user_name="甲",
+            message_type="danmaku",
+            content="忘了我",
+            timestamp_ms=1_000 + WINDOW + 2,
+        )
+        assert disposition == "forget_command"
+        requested = (await _row(store, pending))["forget_requested_at_ms"]
+        assert requested is not None
+
+        await store.viewer_identity.merge(source_id=pending, target_id=old)
+
+        assert (await _row(store, old))["forget_requested_at_ms"] == requested, "合并不能丢掉待删标记"
+        # 下播后清理会执行删除（force 表示"本次下播后立即执行"，不必等满 24h）
+        assert await privacy.execute_due_forget_deletions(force_after_stream_end=True) == 1
+        assert await _row(store, old) is None
+    finally:
+        await privacy.close()
+
+
+async def test_merge_repoints_commitments_and_sums_session_counts(store: SQLiteDatabase) -> None:
+    """合并后承诺改指目标；来访场次求和，目标在"最近一场"再发言时不多计一次。"""
+    old, pending = await _pending_pair(store)
+    await store.execute(
+        "INSERT INTO live_sessions(id, started_at_ms, ended_at_ms, updated_at_ms, kind)"
+        " VALUES (1, 1000, 2000, 2000, 'live')"
+    )
+    await store.execute(
+        "INSERT INTO live_sessions(id, started_at_ms, ended_at_ms, updated_at_ms, kind)"
+        " VALUES (2, 3000, 4000, 4000, 'live')"
+    )
+    await store.viewers.record_message(viewer_id=old, timestamp_ms=1100, live_session_id=1)
+    # 待确认观众在场次 2 有一条明细（_says 固定写场次 1，这里补记真实所在场）
+    await store.chat.insert_live_chat(
+        live_session_id=2,
+        timestamp_ms=3100,
+        sender_role="viewer",
+        sender_id=OPEN_ID,
+        sender_name="甲",
+        content="场次二的弹幕",
+        message_type="danmaku",
+        viewer_id=pending,
+        id_kind="open",
+    )
+    await store.viewers.record_message(viewer_id=pending, timestamp_ms=3100, live_session_id=2)
+    await store.commitments.insert_commitment(
+        what="给待确认观众画头像", quote="答应画头像", viewer_id=pending, created_session_id=2
+    )
+
+    await store.viewer_identity.merge(source_id=pending, target_id=old)
+
+    rows = await store.execute("SELECT viewer_id FROM commitments")
+    assert [row["viewer_id"] for row in rows] == [old], "合并后承诺应改指目标观众"
+    merged = await _row(store, old)
+    assert merged["sessions_count"] == 2
+    assert merged["last_session_id"] == 2, "最近计入的场次应取两行里更晚的那一场"
+
+    # 目标在最近一场（场次 2）再发言：这一场已经计过，不再 +1
+    await store.viewers.record_message(viewer_id=old, timestamp_ms=3200, live_session_id=2)
+    assert (await _row(store, old))["sessions_count"] == 2
+
+
+async def test_unlink_sets_last_session_so_same_session_is_not_double_counted(store: SQLiteDatabase) -> None:
+    """拆出的新观众：sessions_count 与 last_session_id 一致，同场再发言不会多计一次。"""
+    await store.execute(
+        "INSERT INTO live_sessions(id, started_at_ms, ended_at_ms, updated_at_ms, kind)"
+        " VALUES (1, 1000, 2000, 2000, 'live')"
+    )
+    viewer_id = await _says(store, "1001", "甲", 1_000, message_id="m1")
+    assert await _says(store, OPEN_ID, "甲", 1_200, kind="open", message_id="m2") == viewer_id
+    await store.viewers.record_message(viewer_id=viewer_id, timestamp_ms=1_100, live_session_id=1)
+    await store.viewers.record_message(viewer_id=viewer_id, timestamp_ms=1_300, live_session_id=1)
+    assert (await _row(store, viewer_id))["sessions_count"] == 1
+
+    new_id = await store.viewer_identity.unlink(viewer_id=viewer_id, id_kind="open")
+
+    new = await _row(store, new_id)
+    assert new["sessions_count"] == 1
+    assert new["last_session_id"] == 1, "拆出的新观众要记下已计入的那一场"
+    # 同一场再发言：已经计过，不再 +1
+    await store.viewers.record_message(viewer_id=new_id, timestamp_ms=1_400, live_session_id=1)
+    assert (await _row(store, new_id))["sessions_count"] == 1
+    # 新的一场才 +1
+    await store.execute(
+        "INSERT INTO live_sessions(id, started_at_ms, ended_at_ms, updated_at_ms, kind)"
+        " VALUES (2, 3000, 4000, 4000, 'live')"
+    )
+    await store.viewers.record_message(viewer_id=new_id, timestamp_ms=3_100, live_session_id=2)
+    assert (await _row(store, new_id))["sessions_count"] == 2
+
+    # 原观众这边：拆完已没有"计入过的场次"，同场再发言能重新计一次
+    await store.viewers.record_message(viewer_id=viewer_id, timestamp_ms=1_500, live_session_id=1)
+    assert (await _row(store, viewer_id))["sessions_count"] == 1
 
 
 async def test_unlink_refuses_last_or_missing_id(store: SQLiteDatabase) -> None:
