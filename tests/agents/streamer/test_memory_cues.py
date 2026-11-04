@@ -16,6 +16,7 @@ from src.agents.streamer.memory.cues import (
 from src.modules.events.payloads.room import RoomMessageUser
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.privacy import PrivacyService
+from src.modules.types.game_save import GameSave
 from tests.modules.storage.helpers import make_room_message
 
 _NOW = 1_000_000_000_000
@@ -414,3 +415,38 @@ async def test_without_session_there_are_no_cues(store: SQLiteDatabase) -> None:
     await store.commitments.insert_commitment(what="给 ta 盖个小房子", viewer_id=viewer_id)
     cues = await _provider(store, session_id=None).collect(batch=[_message()])
     assert cues.text == "" and cues.card_count == 0
+
+
+async def test_game_cards_only_for_the_current_save(store: SQLiteDatabase) -> None:
+    """眼下在新档：老档里答应的不推；新档里答应的照推；没记存档的照推并注明不确定。"""
+    session_id = await _session(store)
+    await store.commitments.insert_commitment(what="修北边的桥", quote="桥下次修完", game="minecraft", save_id="a")
+    here = await store.commitments.insert_commitment(
+        what="去村里换绿宝石", quote="下回去村里换绿宝石", game="minecraft", save_id="b"
+    )
+    provider = _provider(store, session_id=session_id)
+    current = {"minecraft": GameSave(id="b", name="新档")}
+
+    cues = await provider.collect(batch=[_message()], open_games=["minecraft"], current_saves=current)
+    assert cues.commitment_ids == (here,)
+    assert "桥下次修完" not in cues.text
+
+    await store.execute("UPDATE commitments SET status='closed' WHERE id=?", (here,))
+    unsure = await store.commitments.insert_commitment(what="把仓库理一遍", quote="仓库我下次理", game="minecraft")
+    cues = await provider.collect(batch=[_message()], open_games=["minecraft"], current_saves=current)
+    assert cues.commitment_ids == (unsure,)
+    assert "不确定是在哪个存档里答应的" in cues.text
+
+
+async def test_viewer_card_says_which_save_the_promise_was_made_in(store: SQLiteDatabase) -> None:
+    session_id = await _session(store)
+    viewer_id = await _viewer(store, external_id="u1", name="阿杰")
+    await store.commitments.insert_commitment(
+        what="给 ta 盖个小房子", viewer_id=viewer_id, game="minecraft", save_id="a", save_name="老档"
+    )
+    cues = await _provider(store, session_id=session_id).collect(
+        batch=[_message()], current_saves={"minecraft": GameSave(id="b", name="新档")}
+    )
+
+    assert cues.card_count == 1
+    assert "在 minecraft「老档」里，不是眼下这个存档" in cues.text

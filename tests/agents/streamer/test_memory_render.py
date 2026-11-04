@@ -24,6 +24,7 @@ from src.agents.streamer.memory.render import (
     render_viewer_card,
 )
 from src.modules.storage.models.memory import ArchiveLine, Commitment
+from src.modules.types.game_save import GameSave
 
 _NOW = 10_000_000_000
 
@@ -197,3 +198,68 @@ def test_spoken_memory_has_header_action_and_no_quote() -> None:
 @pytest.mark.parametrize("cid", [1, 12, 999])
 def test_commitment_number_is_stable(cid: int) -> None:
     assert render_commitment_number(cid) == f"约#{cid}"
+
+
+def _game_line(
+    text: str, *, game: Optional[str], save_id: str = "", save_name: str = "", chat_id: int = 3
+) -> ArchiveLine:
+    return ArchiveLine(
+        id=chat_id,
+        live_session_id=7,
+        text=text,
+        quote="",
+        evidence_chat_id=chat_id,
+        game=game,
+        save_id=save_id,
+        save_name=save_name,
+    )
+
+
+def test_brief_folds_other_save_lines_and_marks_unsure_ones() -> None:
+    """上一场在老档里做的事折成一行；本存档的、没挂游戏的照列；没记存档的游戏行注明不确定；开头写眼下在哪。"""
+    lines = [
+        _game_line("Minecraft：北边的桥修好了", game="minecraft", save_id="a", save_name="老档", chat_id=1),
+        _game_line("猜谜环节", game=None, chat_id=2),
+        _game_line("Minecraft：麦田翻了一遍", game="minecraft", save_id="a", save_name="老档", chat_id=3),
+        _game_line("Minecraft：出生点旁边有村子", game="minecraft", save_id="b", save_name="新档", chat_id=4),
+        _game_line("Minecraft：挖到钻石", game="minecraft", chat_id=5),
+    ]
+    brief = render_brief(archive_lines=lines, current_saves={"minecraft": GameSave(id="b", name="新档")})
+
+    assert brief.splitlines()[1:] == [
+        "眼下 minecraft 开着存档「新档」。",
+        "上一场：",
+        "- 还在 minecraft「老档」里做过 2 件事（现在开着「新档」，那边的建筑和进度这里没有；要细节用 memory_recall 查）",
+        "- 猜谜环节",
+        "- Minecraft：出生点旁边有村子",
+        "- Minecraft：挖到钻石（不确定是 minecraft 哪个存档里的事）",
+    ]
+    # 不分存档时与原来逐字节相同
+    assert render_brief(archive_lines=lines) == render_brief(archive_lines=lines, current_saves={})
+    plain = render_brief(archive_lines=lines)
+    assert "- Minecraft：北边的桥修好了" in plain and "做过 2 件事" not in plain
+
+
+def test_brief_before_entering_a_save_folds_every_saved_line_and_notes_unsaved_session() -> None:
+    """还没进存档：记着存档的一律折起来；上一场玩时还没记存档的，块尾注一句。"""
+    lines = [
+        _game_line("Minecraft：北边的桥修好了", game="minecraft", save_id="a", save_name="老档", chat_id=1),
+        _game_line("聊了最近的动画", game=None, chat_id=2),
+    ]
+    brief = render_brief(archive_lines=lines, current_saves={"minecraft": GameSave()}, unsaved_games=["minecraft"])
+
+    assert "minecraft 眼下还没进存档，先别把游戏里的进度当成眼前的事。" in brief
+    assert "还在 minecraft「老档」里做过 1 件事（现在还没进 minecraft 的存档" in brief
+    assert brief.endswith("（那场玩 minecraft 时还没记存档，上面游戏里的事未必是现在这个存档的）")
+
+
+def test_cards_mark_unsure_save_and_where_a_viewer_promise_was_made() -> None:
+    unsure = render_game_card(_commitment(cid=7, game="minecraft"), game="minecraft", unsure_save=True)
+    assert "不确定是在哪个存档里答应的，先对一对眼前的世界；时机对再提" in unsure
+    card = render_viewer_card(
+        _commitment(cid=9, what="给 ta 盖个小房子", viewer_id=9, game="minecraft"),
+        viewer_label="阿杰",
+        message_id="m812",
+        place="在 minecraft「老档」里，不是眼下这个存档",
+    )
+    assert "你答应过 ta：给 ta 盖个小房子（之前；在 minecraft「老档」里，不是眼下这个存档）。" in card

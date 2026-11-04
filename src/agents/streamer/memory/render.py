@@ -19,9 +19,12 @@
 from __future__ import annotations
 
 import json
-from typing import Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.storage.models.memory import ArchiveLine, Commitment
+from src.modules.types.game_save import GameSave
+
+from .saves import SavePlace, place_of
 
 __all__ = [
     "MAX_BRIEF_ARCHIVE_LINES",
@@ -41,6 +44,7 @@ __all__ = [
     "render_game_card",
     "render_presence_line",
     "render_retract_notice",
+    "render_save_heads",
     "render_spoken_memory",
     "render_viewer_card",
 ]
@@ -133,21 +137,69 @@ def render_commitment_text(
     return what
 
 
-def render_archive_block(lines: Sequence[ArchiveLine]) -> List[str]:
+def render_archive_block(
+    lines: Sequence[ArchiveLine], current_saves: Optional[Mapping[str, GameSave]] = None
+) -> List[str]:
     """上一场档案渲染成简报行（标题、她的原话）。
 
     不带档案行编号：点名（use_memory）只认承诺编号，简报里标着档#N 只会让 Planner 照抄去点名、
     再被拒绝；上一场的经过要提就直接写进交接稿。
+
+    按游戏眼下所在的存档分（``current_saves``）：别的存档里的事每个存档折成一行，只说做过几件、
+    细节去回想里查——逐行列出来，她会当成眼前这个世界里的建筑和进度；没记下存档的游戏行照列，
+    注明不确定是哪个存档。
     """
+    current = current_saves or {}
     rendered: List[str] = []
+    # 别的存档：(游戏, 存档编号) → [折成的那一行在 rendered 里的位置, 件数]；那一行放在第一件的位置
+    folded: Dict[Tuple[str, str], List[int]] = {}
     for line in list(lines)[:MAX_BRIEF_ARCHIVE_LINES]:
         title = (line.text or "").strip()
         quote = (line.quote or "").strip()
         if not title:
             continue
+        place = place_of(line.game, line.save_id, current)
+        if place is SavePlace.OTHER and line.game:
+            key = (line.game, line.save_id)
+            if key not in folded:
+                folded[key] = [len(rendered), 0]
+                rendered.append("")
+            folded[key][1] += 1
+            rendered[folded[key][0]] = _render_other_save_line(
+                game=line.game,
+                save=GameSave(id=line.save_id, name=line.save_name),
+                count=folded[key][1],
+                current=current,
+            )
+            continue
+        notes = [f"你说过「{quote}」"] if quote else []
+        if place is SavePlace.UNSURE:
+            notes.append(f"不确定是 {line.game} 哪个存档里的事")
         head = f"- {title}"
-        rendered.append(f"{head}（你说过「{quote}」）" if quote else head)
+        rendered.append(f"{head}（{'；'.join(notes)}）" if notes else head)
     return rendered
+
+
+def _render_other_save_line(*, game: str, save: GameSave, count: int, current: Mapping[str, GameSave]) -> str:
+    """别的存档里的事折成的一行：在哪个存档、做过几件、眼下开着哪个存档、细节去哪查。"""
+    now = current.get(game)
+    where_now = f"现在开着「{now.label}」" if now is not None and now.known else f"现在还没进 {game} 的存档"
+    return (
+        f"- 还在 {game}「{save.label}」里做过 {count} 件事（{where_now}，那边的建筑和进度这里没有；"
+        "要细节用 memory_recall 查）"
+    )
+
+
+def render_save_heads(current_saves: Mapping[str, GameSave]) -> List[str]:
+    """简报开头的"眼下在哪个存档"：每个分存档的游戏一行；还没进存档的提醒别把游戏进度当成眼前的事。"""
+    heads: List[str] = []
+    for game in sorted(current_saves):
+        save = current_saves[game]
+        if save.known:
+            heads.append(f"眼下 {game} 开着存档「{save.label}」。")
+        else:
+            heads.append(f"{game} 眼下还没进存档，先别把游戏里的进度当成眼前的事。")
+    return heads
 
 
 def render_brief(
@@ -156,24 +208,34 @@ def render_brief(
     commitments: Sequence[Commitment] = (),
     previous_session_id: Optional[int] = None,
     earlier_commitment_count: int = 0,
+    current_saves: Optional[Mapping[str, GameSave]] = None,
+    unsaved_games: Sequence[str] = (),
 ) -> str:
     """Planner 系统提示词末尾的常驻简报；两段都空时返回空串（整段省略）。
 
     上一场 = 最近一个已整理、有档案行的正式场；承诺只放不针对具体观众、不挂游戏的
     open 条，最老的在前至多 5 条，更多的折成一行指向回想工具。
+
+    ``current_saves`` 是分存档的游戏眼下所在的存档：简报开头写明，上一场的游戏行按它分
+    （见 :func:`render_archive_block`）。``unsaved_games`` 是上一场玩过、但那时还没记存档的
+    游戏：上一场那几行没标游戏，分不出是不是眼下这个世界的事，块尾注一句。存档没换、表没变时
+    输出逐字节不变（前缀缓存照旧命中）。
     """
     sections: List[str] = []
     listed = [item for item in list(commitments)[:MAX_BRIEF_COMMITMENTS] if (item.what or "").strip()]
     # 档案行与列出的承诺出自同一句台词时只留承诺那一条：同一件事在简报里出现两遍，
     # 她会当成两件事、一整场围着它转
     promised_lines = {int(item.evidence_chat_id) for item in listed if item.evidence_chat_id is not None}
-    archive_rows = render_archive_block(
-        [
-            line
-            for line in archive_lines
-            if line.evidence_chat_id is None or int(line.evidence_chat_id) not in promised_lines
-        ]
-    )
+    shown_lines = [
+        line
+        for line in archive_lines
+        if line.evidence_chat_id is None or int(line.evidence_chat_id) not in promised_lines
+    ]
+    archive_rows = render_archive_block(shown_lines, current_saves)
+    # 上一场还没记存档的游戏：没标游戏的那几行里可能有它的事，分不出是不是眼下这个世界
+    if archive_rows and unsaved_games and any(not line.game for line in shown_lines):
+        for game in unsaved_games:
+            archive_rows.append(f"（那场玩 {game} 时还没记存档，上面游戏里的事未必是现在这个存档的）")
     if archive_rows:
         sections.append("上一场：\n" + "\n".join(archive_rows))
     pending: List[str] = []
@@ -200,7 +262,7 @@ def render_brief(
         sections.append("\n".join(block))
     if not sections:
         return ""
-    return _BRIEF_HEADER + "\n" + "\n".join(sections)
+    return "\n".join([_BRIEF_HEADER, *render_save_heads(current_saves or {}), *sections])
 
 
 def render_cue_header() -> str:
@@ -208,16 +270,18 @@ def render_cue_header() -> str:
     return _CUE_HEADER
 
 
-def render_game_card(commitment: Commitment, *, game: str) -> str:
+def render_game_card(commitment: Commitment, *, game: str, unsure_save: bool = False) -> str:
     """游戏承诺卡：挂在这个游戏上、不针对具体观众的承诺；主播正在玩这个游戏时推。
 
     卡面不写"现在开着"：线索推送只认"正在玩"（有进行中的委派任务或刚有游戏事件），
-    但决策层自己看得见眼前现场，卡面替它断言反而容易说错。
+    但决策层自己看得见眼前现场，卡面替它断言反而容易说错。别的存档里答应的不推这张卡；
+    ``unsure_save``：这个游戏分存档、但这件承诺没记下是哪个存档，卡面让她先对一对眼前的世界。
     """
     quote = (commitment.quote or "").strip() or (commitment.what or "").strip()
+    unsure = "不确定是在哪个存档里答应的，先对一对眼前的世界；" if unsure_save else ""
     return (
         f"[{render_commitment_number(commitment.id)}·{game}] "
-        f"你之前说过「{quote}」，截至上一场还没做。这件承诺挂在你玩的游戏 {game} 上；时机对再提。"
+        f"你之前说过「{quote}」，截至上一场还没做。这件承诺挂在你玩的游戏 {game} 上；{unsure}时机对再提。"
     )
 
 
@@ -227,17 +291,22 @@ def render_viewer_card(
     viewer_label: str,
     message_id: str,
     is_previous: bool = False,
+    place: str = "",
 ) -> str:
     """对某位观众的承诺卡：只给动作标题，不提当时的缘由与原话。
+
+    ``place`` 是挂了分存档游戏的承诺"在哪个存档里答应的"（见 ``saves.place_note``）：ta 开口时
+    照推，但她得知道那件事是不是在眼下这个世界里。
 
     ``is_previous`` 按承诺登记在不在"上一场"给：本场与更早的都写"之前"——一条三场前
     的承诺说成上一场，主播会照着卡面在观众面前把时间说错。
     """
     when = _when_word(is_previous=is_previous, spoken=False)
     target = f"{viewer_label}（弹幕 {message_id}）在" if message_id else f"{viewer_label} 在"
+    detail = f"{when}；{place}" if place else when
     return (
         f"[{render_commitment_number(commitment.id)}·对{viewer_label}] "
-        f"{target}。你答应过 ta：{(commitment.what or '').strip()}（{when}）。"
+        f"{target}。你答应过 ta：{(commitment.what or '').strip()}（{detail}）。"
         "只提答应的事，别提当时的缘由。"
     )
 

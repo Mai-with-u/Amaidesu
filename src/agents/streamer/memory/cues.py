@@ -5,6 +5,8 @@
 1. 对象开口：本批发言人按外部 ID 精确解析出观众编号（只读，不建观众；有待执行删除请求
    的不算），名下有未了结承诺 → 推那张对 ta 的承诺卡，只给动作标题；
 2. 游戏开着：主播当前开着某个游戏，有挂这个游戏、不针对具体观众的未了结承诺 → 推游戏卡。
+   分存档的游戏只推眼下这个存档里答应的（别的存档里的事不催她提起），没记存档的照推、
+   卡面注明不确定；对某位观众的卡照推，注明是在哪个存档里答应的（判定见 ``saves``）。
 
 限频与用上即停：同一张卡每场至多推两次、两次至少隔十分钟（计数在内存里，进程重启从零
 算）；本场台词的记忆引用里已经出现这张卡的编号，就是被用上了，本场不再推——这一条每批
@@ -20,9 +22,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.logging import get_logger
+from src.modules.types.game_save import GameSave
 from src.modules.utils.time_utils import now_ms
 
 from .brief import load_used_commitment_ids
@@ -34,6 +37,7 @@ from .render import (
     render_retract_notice,
     render_viewer_card,
 )
+from .saves import SavePlace, place_note, place_of
 
 if TYPE_CHECKING:
     from src.modules.storage.privacy import PrivacyService
@@ -58,6 +62,8 @@ PUSH_COOLDOWN_MS = 10 * 60 * 1000
 MIN_SESSIONS_FOR_PRESENCE = 3
 # 观众名下最多取几条未了结承诺（一位观众同时压着更多就不是这场该操心的事）
 _MAX_COMMITMENTS_PER_VIEWER = 3
+# 挂在一个游戏上的未了结承诺最多看几条：别的存档里答应的不推，要往后多看几条才找得到眼下这个存档的
+_MAX_COMMITMENTS_PER_GAME = 20
 
 
 @dataclass(frozen=True)
@@ -129,8 +135,12 @@ class MemoryCueProvider:
         *,
         batch: Sequence[Any],
         open_games: Sequence[str] = (),
+        current_saves: Optional[Mapping[str, GameSave]] = None,
     ) -> MemoryCues:
-        """算一批的线索：卡片、老观众在场一行、回执行合成一个块；没有线索返回空串。"""
+        """算一批的线索：卡片、老观众在场一行、回执行合成一个块；没有线索返回空串。
+
+        ``current_saves`` 是分存档的游戏眼下所在的存档：游戏卡只推这个存档里答应的。
+        """
         session_id = self._current_session_provider() if self._current_session_provider is not None else None
         if session_id is None:
             return MemoryCues()
@@ -138,7 +148,9 @@ class MemoryCueProvider:
         senders = await self._resolve_senders(batch)
         used = await self._used_commitment_ids(int(session_id))
         previous_session_id = await self._previous_session_id()
-        cards, card_ids, carded_viewers = await self._collect_cards(senders, used, open_games, previous_session_id)
+        cards, card_ids, carded_viewers = await self._collect_cards(
+            senders, used, open_games, previous_session_id, current_saves or {}
+        )
         # 老观众一行不再因为"本批有别人的卡"整行消失；只跳过这一批拿了自己卡的观众
         presence = await self._presence_line(int(session_id), senders, carded_viewers)
         notices = self._command_notices(batch)
@@ -245,6 +257,7 @@ class MemoryCueProvider:
         used: Set[int],
         open_games: Sequence[str],
         previous_session_id: Optional[int],
+        current_saves: Mapping[str, GameSave],
     ) -> Tuple[List[str], List[int], Set[int]]:
         """按优先级凑卡片：先对象开口，再正在玩的游戏；每批至多三张。
 
@@ -268,6 +281,7 @@ class MemoryCueProvider:
                         viewer_label=sender.user_name or "观众",
                         message_id=sender.message_id,
                         is_previous=self._registered_in_previous_session(commitment, previous_session_id),
+                        place=place_note(commitment.game, commitment.save_id, commitment.save_name, current_saves),
                     )
                 )
                 ids.append(int(commitment.id))
@@ -278,12 +292,16 @@ class MemoryCueProvider:
         for game in open_games:
             if len(cards) >= MAX_CARDS_PER_BATCH:
                 break
-            for commitment in await self._open_commitments(game=game):
+            for commitment in await self._open_commitments(game=game, limit=_MAX_COMMITMENTS_PER_GAME):
                 if commitment.viewer_id is not None:
+                    continue
+                # 别的存档里答应的事不催她提起：眼前这个世界里没有那座房子
+                place = place_of(game, commitment.save_id, current_saves)
+                if place is SavePlace.OTHER:
                     continue
                 if not self._may_push(int(commitment.id), used):
                     continue
-                cards.append(render_game_card(commitment, game=game))
+                cards.append(render_game_card(commitment, game=game, unsure_save=place is SavePlace.UNSURE))
                 ids.append(int(commitment.id))
                 self._record_push(int(commitment.id))
                 break
@@ -311,14 +329,20 @@ class MemoryCueProvider:
             return None
         return int(value) if value is not None else None
 
-    async def _open_commitments(self, *, viewer_id: Optional[int] = None, game: Optional[str] = None) -> List[Any]:
+    async def _open_commitments(
+        self,
+        *,
+        viewer_id: Optional[int] = None,
+        game: Optional[str] = None,
+        limit: int = _MAX_COMMITMENTS_PER_VIEWER,
+    ) -> List[Any]:
         """名下的未了结承诺（新的在前）；查不到就当没有。"""
         try:
             return await self._commitments.list_commitments(
                 statuses=["open"],
                 viewer_id=viewer_id,
                 game=game,
-                limit=_MAX_COMMITMENTS_PER_VIEWER,
+                limit=limit,
             )
         except Exception as exc:  # noqa: BLE001 - 查不到这张卡，不挡本批其余线索
             logger.warning(f"读未了结承诺失败（本批少一张卡）: {exc}", exc=exc)

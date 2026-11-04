@@ -7,6 +7,9 @@
 承诺不再进简报（与线索卡的"用上即停"同口径）：一件事一场提一次就够，不然她每个
 决策窗都看到它，会一整场围着它转。
 
+分存档的游戏（工具面报得出眼下在哪个存档）：简报开头写明眼下在哪个存档，上一场在别的
+存档里做的事折成一行，没记存档的游戏行注明不确定（判定见 ``saves``）。
+
 渲染只依赖表快照、不含时刻：表没变时每个决策窗的输出逐字节相同，Planner 的系统
 提示词前缀缓存仍然命中；表变了（运营者判误记、了结、删一行，或上一场整理刚写完）
 下一窗就反映出来——每窗重渲正是为了让直播中的纠错"下一窗少一行"。
@@ -15,16 +18,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, AbstractSet, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, AbstractSet, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.storage.models.memory import Commitment
+from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
 from .render import MAX_BRIEF_COMMITMENTS, memory_ref_numbers, render_brief
 
 if TYPE_CHECKING:
-    from src.modules.storage.repos import ArchiveRepo, ChatRepo, CommitmentRepo
+    from src.modules.storage.repos import ArchiveRepo, ChatRepo, CommitmentRepo, EventRepo
 
 __all__ = ["MemoryBrief", "build_brief", "load_used_commitment_ids"]
 
@@ -56,12 +60,15 @@ async def build_brief(
     min_session_ms: int = 0,
     chat_repo: Optional["ChatRepo"] = None,
     live_session_id: Optional[int] = None,
+    event_repo: Optional["EventRepo"] = None,
+    current_saves: Optional[Mapping[str, GameSave]] = None,
 ) -> MemoryBrief:
     """拼一份常驻简报；两段料都没取到时返回空简报（系统提示词里整段省略）。
 
     ``min_session_ms``：时长不到它的场次不当"上一场"（开错后马上重开的那一小段），往前找。
     ``chat_repo`` 与 ``live_session_id`` 都给了（正在直播）才做"用上即停"：本场台词点名过的
-    承诺不进这一份简报。
+    承诺不进这一份简报。``current_saves`` 是分存档的游戏眼下所在的存档；``event_repo`` 给了才查
+    "上一场玩这些游戏时记没记下存档"（没记下的块尾注一句）。
     """
     archive_lines = await _archive_lines(archive_repo, kind, min_session_ms)
     used: Set[int] = set()
@@ -69,11 +76,14 @@ async def build_brief(
         used = await load_used_commitment_ids(chat_repo, int(live_session_id))
     taken, earlier = await _pending_commitments(commitments_repo, used)
     previous_session_id = archive_lines[0].live_session_id if archive_lines else None
+    saves = dict(current_saves or {})
     text = render_brief(
         archive_lines=archive_lines,
         commitments=taken,
         previous_session_id=previous_session_id,
         earlier_commitment_count=earlier,
+        current_saves=saves,
+        unsaved_games=await _unsaved_games(event_repo, previous_session_id, saves),
     )
     return MemoryBrief(
         text=text,
@@ -97,6 +107,23 @@ async def _archive_lines(archive_repo: "ArchiveRepo", kind: SessionKind, min_ses
     except Exception as exc:  # noqa: BLE001 - 同上
         logger.warning(f"取上一场的档案行失败（简报不带档案段）: {exc}", exc=exc)
         return []
+
+
+async def _unsaved_games(
+    event_repo: Optional["EventRepo"], session_id: Optional[int], current: Mapping[str, GameSave]
+) -> List[str]:
+    """上一场玩过、眼下分存档、但那场一条带存档的事件都没记下的游戏（升级前的旧场次、旧版游戏）。"""
+    if event_repo is None or session_id is None or not current:
+        return []
+    try:
+        played = await event_repo.list_games_by_session(live_session_ids=[int(session_id)])
+        spans = await event_repo.list_session_save_spans(live_session_id=int(session_id))
+    except Exception as exc:  # noqa: BLE001 - 查不到就不加注，简报照常
+        logger.warning(f"查上一场玩游戏时记没记存档失败（简报不加注）: {exc}", exc=exc)
+        return []
+    saved = {span.game for span in spans}
+    games = played.get(int(session_id), set())
+    return [game for game in sorted(current) if game in games and game not in saved]
 
 
 async def load_used_commitment_ids(chat_repo: "ChatRepo", live_session_id: int) -> Set[int]:
