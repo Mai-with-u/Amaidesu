@@ -16,6 +16,9 @@ from src.modules.storage.migrations.v13_llm_context_breakdown import migrate as 
 from src.modules.storage.migrations.v14_llm_request_preview_column import migrate as v14_migrate
 from src.modules.storage.schema import _GIFTS_SQL, SCHEMA_VERSION, build_schema_sql
 
+# 真实 v1 形状的冻结建库 DDL（引入 SCHEMA_VERSION 的第一次提交原文），用于整链升级测试
+_V1_SCHEMA_PATH = Path(__file__).parent / "fixtures" / "v1_schema.sql"
+
 
 @asynccontextmanager
 async def _opened(path: Path, **kwargs) -> AsyncIterator[SQLiteDatabase]:
@@ -103,6 +106,76 @@ async def test_old_db_upgrades_monotonically_keeping_data(db_path: Path) -> None
     async with _opened(db_path) as reopened:
         assert await reopened.get_schema_version() == SCHEMA_VERSION
         assert [r["content"] for r in await reopened.execute("SELECT content FROM live_chat")] == ["升级前的话"]
+
+
+def _seed_real_v1_database(path: Path) -> None:
+    """用冻结的 v1 DDL 建库并放几行旧数据（版本表只记到 1）。"""
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(_V1_SCHEMA_PATH.read_text(encoding="utf-8"))
+        conn.execute("INSERT INTO schema_migrations(version, applied_at_ms) VALUES (1, 0)")
+        conn.execute(
+            "INSERT INTO live_sessions(id, stream_id, platform, started_at_ms, ended_at_ms, title, updated_at_ms)"
+            " VALUES (1, 'room', 'bilibili', 1000, 2000, '老场次', 2000)"
+        )
+        conn.execute(
+            "INSERT INTO live_chat(live_session_id, timestamp_ms, sender_role, sender_id, sender_name,"
+            " content, message_type, simulated)"
+            " VALUES (1, 1100, 'viewer', '12345', '老观众', '升级前的观众弹幕', 'danmaku', 0)"
+        )
+        conn.execute(
+            "INSERT INTO live_chat(live_session_id, timestamp_ms, sender_role, content, message_type, simulated)"
+            " VALUES (1, 1200, 'assistant', '升级前的主播台词', 'danmaku', 0)"
+        )
+        conn.execute(
+            "INSERT INTO viewers(user_id, user_name, message_count, last_active_ms) VALUES ('12345', '老观众', 3, 1500)"
+        )
+        conn.execute(
+            "INSERT INTO viewers(user_id, user_name, message_count, last_active_ms) VALUES ('67890', '另一位', 1, 1400)"
+        )
+        conn.execute(
+            "INSERT INTO gifts(live_session_id, timestamp_ms, user_id, user_name, gift_name, gift_count)"
+            " VALUES (1, 1300, '12345', '老观众', '辣条', 2)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def test_real_v1_shape_upgrades_to_current_version_keeping_data(db_path: Path) -> None:
+    """从真实 v1 形状（冻结 DDL，11 张初始表）一路升到当前版本。
+
+    与"最新库回退版本号"的模拟不同：这里旧表真的只有 v1 那几列，整条 2..SCHEMA_VERSION
+    迁移链都会在真实旧形状上执行；断言数据保留、观众身份按 v18 回填、v23 按历史弹幕回填
+    来访计数、v6 换掉议程表、v25 退役旧记忆表，以及迁移前备份落在同目录。
+    """
+    _seed_real_v1_database(db_path)
+
+    async with _opened(db_path) as store:
+        assert await store.get_schema_version() == SCHEMA_VERSION
+        await store.assert_schema_ready()
+        for gone in ("agenda_plan", "agenda_runtime", "session_recaps", "viewer_profiles"):
+            assert await store.table_exists(gone) is False
+        chats = await store.execute("SELECT content, viewer_id, id_kind FROM live_chat ORDER BY id")
+        assert [row["content"] for row in chats] == ["升级前的观众弹幕", "升级前的主播台词"]
+        assert (chats[0]["viewer_id"], chats[0]["id_kind"]) == (1, "account")
+        viewers = await store.execute("SELECT platform, account_id, user_name, sessions_count FROM viewers ORDER BY id")
+        assert [(row["platform"], row["account_id"]) for row in viewers] == [
+            ("bilibili", "12345"),
+            ("bilibili", "67890"),
+        ]
+        # v23：按历史观众弹幕回填正式场来访计数（场次 1 是 kind=live）
+        assert viewers[0]["sessions_count"] == 1
+        (gift,) = await store.execute("SELECT user_id, viewer_id FROM gifts")
+        assert (gift["user_id"], gift["viewer_id"]) == ("12345", 1)
+
+    backups = list((db_path.parent / "backups").glob("*-pre-v*.db"))
+    assert len(backups) == 1, "整链升级前应生成一份迁移前备份"
+
+    # 再开一次：已是当前版本，不重跑迁移、不再生成备份
+    async with _opened(db_path) as reopened:
+        assert await reopened.get_schema_version() == SCHEMA_VERSION
+    assert len(list((db_path.parent / "backups").glob("*-pre-v*.db"))) == 1
 
 
 async def test_v6_to_v7_drops_memory_profiles_idempotently(db_path: Path) -> None:
