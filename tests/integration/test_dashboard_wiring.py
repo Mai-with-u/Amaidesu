@@ -72,7 +72,7 @@ def _config(db_path: Path, agents: Dict[str, Any]) -> Dict[str, Any]:
 
 @pytest.mark.parametrize("agents", [{"enabled": []}, {}], ids=["agents_section", "no_agents_section"])
 async def test_dashboard_receives_viewer_repos(tmp_path: Path, agents: Dict[str, Any]) -> None:
-    """没有 [agents] 段时组合根不构造任务跟踪器与 TTS 引擎，Dashboard 照样装配、以 None 接收两者。"""
+    """组合根把观众域、身份处理与记忆账本仓储原样交给 Dashboard（页面读面与写面共用同一批仓储）。"""
     config_service = ConfigService(base_dir=str(tmp_path))
     config_service._main_config = _config(tmp_path / "wiring.db", agents)  # 绕开真实 TOML 加载
     config_service._initialized = True
@@ -84,7 +84,7 @@ async def test_dashboard_receives_viewer_repos(tmp_path: Path, agents: Dict[str,
     )
     try:
         (server,) = _FakeDashboardServer.instances
-        for name in ("viewer_repo", "chat_repo", "viewer_profile_repo", "viewer_identity_repo"):
+        for name in ("viewer_repo", "chat_repo", "viewer_identity_repo", "commitments_repo", "archive_repo"):
             assert server.kwargs.get(name) is not None, f"DashboardServer 没收到 {name}"
     finally:
         # 日志流在全局日志上挂了 sink，替身服务器不会去停它：这里摘掉，免得污染后续的日志测试
