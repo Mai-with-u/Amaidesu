@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -766,3 +767,29 @@ def test_memory_eval_dry_self_check_passes() -> None:
         [sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=300, check=False
     )
     assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
+
+
+# 例句与评测台词共用的连续字数达到这么多，就算"同一句"：短于它的多是"下次一定"这类说法标签，本来就该共用。
+_SHARED_RUN_CHARS = 6
+
+
+def test_memory_prompt_examples_stay_out_of_eval_datasets() -> None:
+    """记忆提示词里的例句不能出现在评测样本的台词里。
+
+    评测量的是提示词对没见过的说法能不能判对：例句和样本是同一句话时，这条样本必然判对，
+    召回与误登记率被它抬高，发版门槛第 1 步就量不出真实泛化能力。真实场次里抓到的说法留在
+    评测集，提示词只写类型说明，配另外编的例句。
+    """
+    root = Path(__file__).resolve().parents[3]
+    speech: List[str] = []
+    for dataset in sorted((root / "scripts" / "memory_eval" / "datasets").glob("*.jsonl")):
+        for raw in dataset.read_text(encoding="utf-8").splitlines():
+            if raw.strip():
+                speech.extend(f"{dataset.stem}:{line['text']}" for line in json.loads(raw).get("speech", []))
+    shared: List[str] = []
+    for prompt in sorted((root / "src" / "agents" / "streamer" / "prompts").glob("memory_*.md")):
+        # 例句写在半角双引号里；JSON 示例里的键值带冒号或逗号，排除掉
+        for example in re.findall(r'"([^"\n{}:,]+)"', prompt.read_text(encoding="utf-8")):
+            runs = {example[i : i + _SHARED_RUN_CHARS] for i in range(len(example) - _SHARED_RUN_CHARS + 1)}
+            shared.extend(f"{prompt.name}「{example}」↔ {text}" for text in speech if any(run in text for run in runs))
+    assert shared == []
