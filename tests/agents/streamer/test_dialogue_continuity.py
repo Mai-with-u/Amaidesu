@@ -30,7 +30,8 @@ from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger
 from src.modules.utils.time_utils import now_ms
-from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
+from src.modules.types.game_save import GameSave
+from tests.agents.streamer.helpers import FakeRoundExecutor, SavedGameProvider, make_streamer_agent
 
 # 登记（只读/驱动穿透，合并时进底账）：planner 段的替身是测试自建的真实 Planner
 # 实例，个别用例直接驱动其内部组装件（planner._invoke_registry_tool）；公开接缝
@@ -148,6 +149,67 @@ async def test_live_start_clears_previous_session_workbench() -> None:
     assert list(workbench.recent_intents) == []
     assert list(workbench.recent_relays) == []
     assert workbench.round_receipts == []
+
+
+async def test_switching_save_forgets_only_that_games_work() -> None:
+    """MC 从老档经主菜单换到新档：MC 手头的事与补充要求清掉，别的游戏的、已聊话题保留；
+    回主菜单再进同一个存档不算换。"""
+    registry = ToolRegistry()
+    game = SavedGameProvider("minecraft", GameSave(id="a", name="老档"))
+    registry.register_provider(game)
+    agent = make_streamer_agent(tool_registry=registry, round_executor=FakeRoundExecutor({"speech": "好"}))
+    workbench = agent._planner.workbench
+    agent._sync_current_saves()
+    workbench.delegations["minecraft"] = Delegation(agent="minecraft", instruction="把屋顶封上", task_id="d1", at_ms=1)
+    workbench.delegations["text_adv"] = Delegation(agent="text_adv", instruction="去塔顶", task_id="d2", at_ms=1)
+    workbench.recent_relays.append(Relay(at_ms=1, agent="minecraft", content="先补屋顶"))
+    workbench.recent_relays.append(Relay(at_ms=1, agent="text_adv", content="带上灯"))
+    workbench.note_intent(Intent(at_ms=1, topic_summary="屋顶漏风", reply_guidance=""))
+
+    game.save = GameSave()
+    agent._sync_current_saves()
+    game.save = GameSave(id="a", name="老档")
+    agent._sync_current_saves()
+    assert set(workbench.delegations) == {"minecraft", "text_adv"}
+
+    game.save = GameSave()
+    agent._sync_current_saves()
+    game.save = GameSave(id="b", name="新档")
+    agent._sync_current_saves()
+
+    assert set(workbench.delegations) == {"text_adv"}
+    assert [relay.agent for relay in workbench.recent_relays] == ["text_adv"]
+    assert len(workbench.recent_intents) == 1
+
+
+@pytest.mark.parametrize(
+    ("ledger_status", "kept"),
+    [("running", True), ("waiting_for_decision", True), ("succeeded", False)],
+)
+async def test_switching_save_keeps_only_the_task_the_game_is_still_on(ledger_status: str, kept: bool) -> None:
+    """换存档时先问任务账本：MC 的委派还在做（含等定夺）就连同补充要求留着——游戏 Agent 会自己看
+    眼前再决定接着做还是上报；已结算（终态从账本移除）的清掉。"""
+    ledger = TaskLedger()
+    ledger.register(
+        task_id="d1", provider="minecraft", tool="delegate", initiator="streamer", executor="minecraft", source="agent"
+    )
+    ledger.update("d1", ledger_status)
+    registry = ToolRegistry()
+    game = SavedGameProvider("minecraft", GameSave(id="a", name="老档"))
+    registry.register_provider(game)
+    agent = make_streamer_agent(
+        tool_registry=registry, task_ledger=ledger, round_executor=FakeRoundExecutor({"speech": "好"})
+    )
+    workbench = agent._planner.workbench
+    agent._sync_current_saves()
+    workbench.delegations["minecraft"] = Delegation(agent="minecraft", instruction="把屋顶封上", task_id="d1", at_ms=1)
+    workbench.recent_relays.append(Relay(at_ms=1, agent="minecraft", content="先补屋顶"))
+
+    game.save = GameSave(id="b", name="新档")
+    agent._sync_current_saves()
+
+    assert ("minecraft" in workbench.delegations) is kept
+    assert [relay.agent for relay in workbench.recent_relays] == (["minecraft"] if kept else [])
 
 
 async def test_open_session_merges_only_unpersisted_turns_by_time() -> None:

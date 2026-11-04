@@ -31,8 +31,9 @@ from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.repos import ChatRepo
 from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools import ToolRegistry
+from src.modules.types.game_save import GameSave
 from src.modules.utils.time_utils import now_ms
-from tests.agents.streamer.helpers import ActiveSessionStub, make_streamer_agent
+from tests.agents.streamer.helpers import ActiveSessionStub, SavedGameProvider, make_streamer_agent
 from tests.config.helpers import wait_until
 from tests.modules.llm.fakes import FakeLLMManager
 
@@ -466,3 +467,41 @@ async def test_use_memory_lands_with_the_line_and_stops_the_card(store: SQLiteDa
     assert [memory_ref_numbers(raw) for raw in stored_refs] == [{commitment_id}], "引用随台词落库"
     second = _danmaku_from_xiaoyu("今天画什么呀", "m2")
     assert number not in await _cards_for(store, pk, second), "本场已经用上，再看到小鱼也不推这张卡"
+
+
+async def test_brief_follows_the_save_the_game_reports(store: SQLiteDatabase) -> None:
+    """工具面报眼下在新档：简报开头写明，上一场老档里的事折成一行；回主菜单时提醒别当成眼前的事。"""
+    previous_pk = await _ended_session(store, started=1_000)
+    await store.events.insert_game_event(
+        live_session_id=previous_pk,
+        game="minecraft",
+        event_type="milestone",
+        message="m",
+        timestamp_ms=1_100,
+        save_id="a",
+        save_name="老档",
+    )
+    await store.archive.insert_line(
+        live_session_id=previous_pk,
+        text="Minecraft：屋顶封好了",
+        quote="屋顶终于封好了",
+        evidence_chat_id=1,
+        game="minecraft",
+        save_id="a",
+        save_name="老档",
+    )
+    registry = ToolRegistry()
+    game = SavedGameProvider("minecraft", GameSave(id="b", name="新档"))
+    registry.register_provider(game)
+    agent = _build_agent(store, FakeLLMManager(), tool_registry=registry)
+
+    agent._sync_current_saves()
+    await agent._refresh_memory_brief()
+    assert "眼下 minecraft 开着存档「新档」。" in agent.memory_brief_text
+    assert "还在 minecraft「老档」里做过 1 件事（现在开着「新档」" in agent.memory_brief_text
+    assert "屋顶终于封好了" not in agent.memory_brief_text
+
+    game.save = GameSave(id="a", name="老档")
+    agent._sync_current_saves()
+    await agent._refresh_memory_brief()
+    assert "- Minecraft：屋顶封好了（你说过「屋顶终于封好了」）" in agent.memory_brief_text

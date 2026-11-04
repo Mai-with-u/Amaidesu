@@ -50,6 +50,7 @@ from src.modules.tools import ToolSpec
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.tasks import IN_PROGRESS_TASK_STATES
 from src.modules.tools.registry import ToolRegistry
+from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KINDS, SessionKind
 from src.modules.utils.time_utils import now_ms
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -275,6 +276,10 @@ class StreamerAgent(BaseAgent):
         # 游戏承诺卡只认"正在玩"（见 _playing_games），下播整理取"本场玩过"（见 _session_game_names）
         self._game_activity_ms: Dict[str, int] = {}
         self._session_games: set[str] = set()
+        # 分存档的游戏眼下所在的存档（每个决策窗开窗前从工具面拉一次），与每个游戏上一次
+        # 认出的存档：简报、线索卡、回想按前者分存档；换存档按后者认（中间回过主菜单也认得出）
+        self._current_saves: Dict[str, GameSave] = {}
+        self._known_saves: Dict[str, GameSave] = {}
         # 仓储注入（组合根按需分发；None 时对应能力降级。流程单三仓储由
         # RundownCoordinator 直接收取，不在 Agent 身上落字段；聊天仓储进
         # SessionScope 作只读事实源）
@@ -469,6 +474,8 @@ class StreamerAgent(BaseAgent):
                 privacy_service=privacy_service,
                 viewer_repo=viewer_repo,
                 current_session_provider=self._current_session_pk,
+                event_repo=event_repo,
+                saves_provider=lambda: self._current_saves,
             )
         # 后台 flush 循环（Agent 主循环）
         self._flush_task: Optional[asyncio.Task] = None
@@ -935,6 +942,7 @@ class StreamerAgent(BaseAgent):
         # 按场次类型先拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗按表快照重渲。
         # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策窗自然重渲出
         # 新简报，这期间简报退化为更早一场的档案
+        self._sync_current_saves()
         await self._refresh_memory_brief(kind=payload.kind, announce=True)
         self._settle_pending_before_brief()
         # 线索推送的计数与回执追踪只在本场内有效，开播先清零
@@ -1179,6 +1187,30 @@ class StreamerAgent(BaseAgent):
                 playing.add(game)
         return sorted(playing)
 
+    def _sync_current_saves(self) -> None:
+        """从游戏工具面拉一次各游戏眼下所在的存档（只读，不触发游戏里的任何动作）。
+
+        某个游戏从一个认出的存档换到了另一个（中间回过主菜单也算）：手头在这个游戏里的事是在
+        旧世界里交代的，清掉这个游戏的委派与补充要求。换存档这件事本身由游戏自己发的里程碑进
+        时间线（MaiCraft 的游戏 Agent 认出换存档时发），这里不再写一遍。拉不到就沿用上一次的。
+        """
+        if self._tool_registry is None:
+            return
+        try:
+            saves = self._tool_registry.current_saves(for_agent="streamer")
+        except Exception as exc:  # noqa: BLE001 - 拉不到存档就沿用上一次的，不挡决策
+            self._logger.warning(f"读各游戏眼下的存档失败（沿用上一次的）: {exc}", exc=exc)
+            return
+        for game, save in saves.items():
+            if not save.known:
+                continue
+            before = self._known_saves.get(game)
+            if before is not None and before.id != save.id:
+                self._planner.workbench.forget_game(game)
+                self._logger.info(f"{game} 从存档「{before.label}」换到「{save.label}」：清掉手头这个游戏的事")
+            self._known_saves[game] = save
+        self._current_saves = dict(saves)
+
     def _session_game_names(self) -> List[str]:
         """本场出现过事件的游戏（整场口径；下播整理取"本场玩过的游戏"用）。"""
         return sorted(self._session_games)
@@ -1216,6 +1248,7 @@ class StreamerAgent(BaseAgent):
     async def _bootstrap_recaps(self) -> None:
         """启动善后：补完上次退出时没整理完的场次，再拼好常驻简报。"""
         await self._settle_ledger()
+        self._sync_current_saves()
         await self._refresh_memory_brief(announce=True)
 
     def _settle_pending_before_brief(self) -> None:
@@ -1257,6 +1290,9 @@ class StreamerAgent(BaseAgent):
                 # 本场点名用过的承诺不再列（用上即停）；没在直播时没有"本场"，整份照列
                 chat_repo=self._chat_repo,
                 live_session_id=self._current_session_pk(),
+                # 分存档的游戏：开头写眼下在哪个存档，上一场别的存档里的事折成一行
+                event_repo=self._event_repo,
+                current_saves=self._current_saves,
             )
         except Exception as exc:  # noqa: BLE001 - 简报拼不出来只省这一段，不挡开播
             self._logger.warning(f"拼常驻简报失败（本场省略简报段）: {exc}", exc=exc)
@@ -1302,7 +1338,9 @@ class StreamerAgent(BaseAgent):
         """本批线索：承诺卡、老观众在场一行、回执行；没启用线索推送时返回 None。"""
         if self._memory_cues is None:
             return None
-        return await self._memory_cues.collect(batch=list(batch), open_games=list(open_games or ()))
+        return await self._memory_cues.collect(
+            batch=list(batch), open_games=list(open_games or ()), current_saves=self._current_saves
+        )
 
     async def _settle_ledger(self) -> None:
         """整理待整理的场次，把承诺与场次档案写进账本；没启用时直接返回。
@@ -1744,7 +1782,9 @@ class StreamerAgent(BaseAgent):
         is_signoff = trigger_cause.kind is TriggerKind.SIGNOFF
         live_token = _ROUND_LIVE_EPOCH.set(self._session_epoch if self._live_active and not is_signoff else None)
         try:
-            # 每窗按台账快照重渲常驻简报（直播中纠错下一窗生效；表没变时逐字节相同，缓存不失效）
+            # 开窗前先看各游戏眼下在哪个存档（换了存档清掉那个游戏手头的事），再按台账快照重渲
+            # 常驻简报（直播中纠错下一窗生效；表没变、存档没换时逐字节相同，缓存不失效）
+            self._sync_current_saves()
             await self._refresh_memory_brief()
             result = await self._rounds.execute(
                 batch,

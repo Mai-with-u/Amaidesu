@@ -28,6 +28,7 @@ from src.agents.streamer.memory.recall import (
 )
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.tools import ToolInvocation
+from src.modules.types.game_save import GameSave
 from tests.helpers import FakeClock
 from tests.modules.storage.viewer_seed import seed_message, seed_viewer
 
@@ -335,3 +336,47 @@ async def test_provider_exposes_memory_recall_tool(store: SQLiteDatabase) -> Non
     empty = await provider.invoke(ToolInvocation(tool_name=MEMORY_RECALL_TOOL_NAME, arguments={}))
     assert empty.success
     assert "想查什么" in empty.content
+
+
+async def test_recall_marks_which_save_game_memories_belong_to(store: SQLiteDatabase) -> None:
+    """眼下在新档：老档里的档案行、承诺注明不是眼下这个存档；那场只在老档玩过时，她那场说过的话也注明。"""
+    old = await _session(store, started=1_000, ended=2_000)
+    await _streamer_says(store, old, "屋顶终于封好了", 1_100)
+    await store.events.insert_game_event(
+        live_session_id=old,
+        game="minecraft",
+        event_type="milestone",
+        message="m",
+        timestamp_ms=1_050,
+        save_id="a",
+        save_name="老档",
+    )
+    await store.archive.insert_line(
+        live_session_id=old,
+        text="Minecraft：屋顶封好了",
+        quote="屋顶终于封好了",
+        evidence_chat_id=1,
+        game="minecraft",
+        save_id="a",
+        save_name="老档",
+    )
+    await store.commitments.insert_commitment(what="屋顶再加一层", quote="屋顶下次再加一层", game="minecraft")
+    service = MemoryRecallService(
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
+        current_session_provider=lambda: None,
+        clock=FakeClock().now_ms,
+        event_repo=store.events,
+        saves_provider=lambda: {"minecraft": GameSave(id="b", name="新档")},
+    )
+
+    lines = _hit_lines(await service.recall("屋顶"))
+
+    assert any("你说：「屋顶终于封好了」（那场 minecraft 在「老档」里，不是眼下这个存档）" in line for line in lines)
+    assert any(
+        "档案「Minecraft：屋顶封好了」" in line and "在 minecraft「老档」里，不是眼下这个存档" in line for line in lines
+    )
+    assert any("屋顶再加一层" in line and "在 minecraft 里，不确定是哪个存档" in line for line in lines)
+    # 不分存档时一句都不注
+    assert "存档" not in await _service(store).recall("屋顶")

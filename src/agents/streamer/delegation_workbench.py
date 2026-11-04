@@ -167,6 +167,19 @@ class DelegationWorkbench:
         self._recent_intents.clear()
         self._round_receipts = []
 
+    def forget_game(self, game: str) -> None:
+        """某个游戏换了存档：这个游戏已了结的委派与补充过的要求是在旧世界里交代的，清掉。
+
+        新世界里没有那座房子、那条矿道，留着它们她会接着催一件在眼前世界里无从做起的事。
+        账面还在做的委派保留：游戏 Agent 换存档时会自己看眼前再决定接着做还是上报，在那之前
+        身体手上确实还有这件事，清掉它她再派新的会被拒。已聊话题与本窗回执不分游戏，保留。
+        """
+        delegation = self._delegations.get(game)
+        if delegation is not None and self._in_flight(delegation):
+            self.logger.info(f"{game} 换了存档，手上的委派账面还在做，保留：{delegation.instruction}")
+            return
+        self._drop({game})
+
     def note_receipt(self, name: str, data: Dict[str, Any]) -> None:
         """记一条本窗工具回执（通用调用路径的成功结果由 Planner 送来）。"""
         self._round_receipts.append((name, data))

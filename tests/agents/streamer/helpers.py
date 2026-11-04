@@ -7,6 +7,9 @@ from unittest.mock import MagicMock
 
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.streamer_agent import StreamerAgent
+from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.provider import BaseToolProvider
+from src.modules.types.game_save import GameSave
 from tests.modules.llm.fakes import FakeLLMManager
 
 __all__ = ["FakeRoundExecutor", "make_streamer_agent", "streamer_config", "stub_llm", "stub_prompt"]
@@ -137,3 +140,33 @@ SAMPLE_NOTES = """运营写在最前面的说明
 ## 运营自己的节
 - 周三不播
 """
+
+
+class SavedGameProvider(BaseToolProvider):
+    """分存档的游戏工具面替身：一个动作工具 + 可拨动的"眼下在哪个存档"。
+
+    ``save`` 为 None 表示这个游戏报不出存档（旧版游戏）；``GameSave()`` 表示还没进存档。
+    测试直接改 ``save`` 模拟换存档、回主菜单。
+    """
+
+    category = "game"
+
+    def __init__(self, name: str = "minecraft", save: Optional[GameSave] = None) -> None:
+        self._name = name
+        self.save = save
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def list_tools(self) -> List[ToolSpec]:
+        return [ToolSpec(name="act", description="动作", kind="sync", provider=self._name)]
+
+    async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
+        return ToolExecutionResult(tool_name=invocation.tool_name, success=True)
+
+    def guide_for(self, agent_name: str) -> str:
+        return "玩法"
+
+    def current_save(self) -> Optional[GameSave]:
+        return self.save

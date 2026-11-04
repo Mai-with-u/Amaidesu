@@ -223,6 +223,22 @@ async def test_delegation_kept_at_live_start_keeps_its_decision_gate(status: str
     assert await _relay_without_input(workbench, invoked) == (["framework_prompt"] if opens else [])
 
 
+@pytest.mark.parametrize(("status", "opens"), _IN_FLIGHT_GATES)
+async def test_delegation_kept_at_save_switch_keeps_its_decision_gate(status: str, opens: bool) -> None:
+    """换存档时留下的委派（账面还在做），等主意闸门和换存档前一样：游戏 Agent 在新世界里停着等我拿主意时，
+    补充要求就是答复，照样放行。"""
+    statuses = {"deleg_minecraft": {"status": status, "updated_at_ms": 1}}
+    invoked: List[ToolInvocation] = []
+    workbench = _ledger_workbench(statuses, invoked)
+    await workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "把女仆救回来"})
+
+    workbench.forget_game("minecraft")
+
+    assert "minecraft" in workbench.delegations
+    assert workbench.awaits_decision("minecraft") is opens
+    assert await _relay_without_input(workbench, invoked) == (["framework_prompt"] if opens else [])
+
+
 def _speaking_planner(
     responses: List[Response],
     refuse: Set[str],

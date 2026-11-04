@@ -18,6 +18,10 @@
 ta 的发言和身份带到下一场；本场结果不替换。关键词恰好是某个已知昵称时直接丢掉该词，
 并在抬头说明，因为主播会拿观众名字当关键词试探"你还记得 ta 吗"。
 
+分存档的游戏：档案行与承诺挂了游戏的，逐条注明是在哪个存档里（是不是眼下这个）；她过去
+说过的话，那场只在别的存档里玩过时注明——翻出"屋顶盖好了"时看得出那是别的世界里的事
+（判定见 ``saves``）。
+
 档案与承诺没有现成的检索方法：档案按场次逐场读回后在代码里做关键词交集（每场至多
 8 行，按排序方向读到够 8 条即停），承诺一次分页读全（账本行数少）。
 """
@@ -26,14 +30,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.storage.privacy import MIN_MASK_NAME_LEN, mask_names_in_text
 from src.modules.storage.repos.viewers import is_placeholder_name
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
+from src.modules.types.game_save import GameSave
 from src.modules.utils.time_utils import now_ms
+
+from .saves import place_note, session_note
 
 __all__ = [
     "MEMORY_RECALL_PROVIDER_NAME",
@@ -121,6 +128,8 @@ class _RecallContext:
     current_session_id: Optional[int]
     previous_session_id: Optional[int]
     names: Sequence[str]
+    # 分存档的游戏眼下所在的存档：结果按它注明是不是眼下这个存档
+    current_saves: Mapping[str, GameSave]
 
 
 def _split_keywords(query: str) -> List[str]:
@@ -168,6 +177,7 @@ class MemoryRecallService:
 
     构造参数全由宿主注入：四个仓储（台词与弹幕、承诺、档案）、可选的隐私服务与观众仓储
     （跨场遮名、昵称关键词识别）、进行中场次回调（决定"本场"是第几场）与毫秒时钟（耗时日志）。
+    可选的游戏事件仓储与眼下存档回调给结果注明存档；缺了就不注。
     仓储都按鸭子类型取用，只依赖它们各自读面上的方法。
     """
 
@@ -180,6 +190,8 @@ class MemoryRecallService:
         viewer_repo: Any = None,
         current_session_provider: Optional[Callable[[], Optional[int]]] = None,
         clock: Optional[Callable[[], int]] = None,
+        event_repo: Any = None,
+        saves_provider: Optional[Callable[[], Mapping[str, GameSave]]] = None,
     ) -> None:
         self._chat_repo = chat_repo
         self._commitments_repo = commitments_repo
@@ -188,6 +200,8 @@ class MemoryRecallService:
         self._viewer_repo = viewer_repo
         self._current_session_provider = current_session_provider
         self._clock = clock if clock is not None else now_ms
+        self._event_repo = event_repo
+        self._saves_provider = saves_provider
 
     async def recall(self, query: str, scope: str = SCOPE_ALL, order: str = ORDER_NEWEST) -> str:
         """执行一次回想，返回给模型看的文本；查询异常不抛，转成「没查到（原因）」。"""
@@ -254,6 +268,7 @@ class MemoryRecallService:
             current_session_id=current_session_id,
             previous_session_id=self._previous_session(session_bounds, current_session_id),
             names=names,
+            current_saves=self._current_saves(),
         )
 
         hits: List[_RecallHit] = []
@@ -282,16 +297,34 @@ class MemoryRecallService:
             live_session_id=context.current_session_id if context.scope == SCOPE_THIS_STREAM else None,
             newest_first=context.newest_first,
         )
-        return [
-            _RecallHit(
-                timestamp_ms=int(row.timestamp_ms),
-                text=(
-                    f"- {self._when(row.live_session_id, row.timestamp_ms, context)} 你说："
-                    f"「{self._mask(row.content, row.live_session_id, context)}」"
-                ),
+        notes = await self._session_notes([row.live_session_id for row in rows], context)
+        hits: List[_RecallHit] = []
+        for row in rows:
+            note = notes.get(row.live_session_id, "")
+            text = (
+                f"- {self._when(row.live_session_id, row.timestamp_ms, context)} 你说："
+                f"「{self._mask(row.content, row.live_session_id, context)}」"
             )
-            for row in rows
-        ]
+            hits.append(_RecallHit(timestamp_ms=int(row.timestamp_ms), text=f"{text}（{note}）" if note else text))
+        return hits
+
+    async def _session_notes(self, session_ids: Sequence[Optional[int]], context: _RecallContext) -> Dict[int, str]:
+        """过去几场里，眼下分存档的游戏只在别的存档里玩过的，各给一句注（本场不注）。"""
+        notes: Dict[int, str] = {}
+        if self._event_repo is None or not context.current_saves:
+            return notes
+        for session_id in dict.fromkeys(item for item in session_ids if item is not None):
+            if session_id == context.current_session_id:
+                continue
+            try:
+                spans = await self._event_repo.list_session_save_spans(live_session_id=int(session_id))
+            except Exception as exc:  # noqa: BLE001 - 查不到那场的存档只少一句注，回想照常
+                logger.warning(f"回想工具读场次 {session_id} 的存档段失败（不注存档）: {exc}", exc=exc)
+                continue
+            note = session_note(spans, context.current_saves)
+            if note:
+                notes[int(session_id)] = note
+        return notes
 
     async def _danmaku_hits(self, context: _RecallContext) -> List[_RecallHit]:
         """本场观众弹幕；没在直播时没有本场，直接跳过。"""
@@ -357,6 +390,9 @@ class MemoryRecallService:
         body = f"- {when} 你说（档案「{title}」）"
         if quote:
             body += f"：「{quote}」"
+        note = place_note(line.game, line.save_id, line.save_name, context.current_saves)
+        if note:
+            body += f"（{note}）"
         return _RecallHit(timestamp_ms=timestamp_ms, text=body)
 
     async def _commitment_hits(self, context: _RecallContext) -> List[_RecallHit]:
@@ -406,6 +442,9 @@ class MemoryRecallService:
         close_quote = self._mask((row.close_quote or "").strip(), session_id, context)
         if row.status == "closed" and close_quote:
             body += f"；了结时你说「{close_quote}」"
+        note = place_note(row.game, row.save_id, row.save_name, context.current_saves)
+        if note:
+            body += f"（{note}）"
         return _RecallHit(timestamp_ms=timestamp_ms, text=body)
 
     def _when(self, session_id: Optional[int], timestamp_ms: int, context: _RecallContext) -> str:
@@ -482,6 +521,16 @@ class MemoryRecallService:
             if len(name) >= MIN_MASK_NAME_LEN and not is_placeholder_name(name):
                 names.append(name)
         return names
+
+    def _current_saves(self) -> Mapping[str, GameSave]:
+        """分存档的游戏眼下所在的存档；没注入回调或回调出错时按"都不分存档"处理（不加注）。"""
+        if self._saves_provider is None:
+            return {}
+        try:
+            return dict(self._saves_provider())
+        except Exception as exc:  # noqa: BLE001 - 读不到存档只少几句注，不反噬回想本身
+            logger.warning(f"回想工具读取眼下存档失败（本次不注存档）: {exc}", exc=exc)
+            return {}
 
     def _current_session(self) -> Optional[int]:
         """进行中场次的主键；没注入回调、回调返回 None 或抛异常时都按未开播处理。"""
