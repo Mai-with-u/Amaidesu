@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List, Optional
 
 import pytest
 from loguru import logger
@@ -15,6 +15,7 @@ from src.modules.tools.llm_defs import to_llm_definitions
 from src.modules.tools.operations import ToolOperations
 from src.modules.tools.registry import default_tool_registry, set_default_registry
 from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
+from src.modules.types.game_save import GameSave
 
 
 def _ops(registry: ToolRegistry) -> ToolOperations:
@@ -403,6 +404,37 @@ def test_guides_skips_disabled_tools_and_broken_guides(registry: ToolRegistry) -
     registry.apply_disabled(["muted_act"])
 
     assert registry.guides(for_agent="streamer") == [("alpha", "甲的玩法（读者 streamer）")]
+
+
+class _SavedProvider(_GuidedProvider):
+    """分存档的游戏工具面：报眼下的存档，也可配置为读取失败。"""
+
+    def __init__(self, name: str, save: Optional[GameSave], *, raise_on_save: bool = False, **kwargs: Any) -> None:
+        super().__init__(name, "玩法", **kwargs)
+        self._save = save
+        self._raise_on_save = raise_on_save
+
+    def current_save(self) -> Optional[GameSave]:
+        if self._raise_on_save:
+            raise RuntimeError("读不到存档")
+        return self._save
+
+
+def test_current_saves_collects_only_visible_save_aware_games(registry: ToolRegistry) -> None:
+    """只收分存档、对读者可见的游戏；不分存档的、不可见的、停用的、读取失败的都不在结果里。"""
+    registry.register_provider(_SavedProvider("minecraft", GameSave(id="ab12", name="新的世界")))
+    registry.register_provider(_SavedProvider("lobby", GameSave()))
+    registry.register_provider(_SavedProvider("board", None))
+    registry.register_provider(_GuidedProvider("chess", "下棋"))
+    registry.register_provider(_SavedProvider("hidden", GameSave(id="x"), visible_to=["other"]))
+    registry.register_provider(_SavedProvider("muted", GameSave(id="y")))
+    registry.register_provider(_SavedProvider("broken", GameSave(id="z"), raise_on_save=True))
+    registry.apply_disabled(["muted_act"])
+
+    saves = registry.current_saves(for_agent="streamer")
+
+    assert saves == {"minecraft": GameSave(id="ab12", name="新的世界"), "lobby": GameSave()}
+    assert saves["minecraft"].known and not saves["lobby"].known
 
 
 def test_guides_default_empty_for_plain_provider(registry: ToolRegistry) -> None:

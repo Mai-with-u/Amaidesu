@@ -43,6 +43,7 @@ from src.modules.tools.models import (
 )
 from src.modules.tools.provider import BaseToolProvider, ToolProvider
 from src.modules.tools.tool_health_monitor import ToolCircuitBreaker, ToolHealthState
+from src.modules.types.game_save import GameSave
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -505,6 +506,30 @@ class ToolRegistry:
                 continue
             if text:
                 result.append((provider.name, text))
+        return result
+
+    def current_saves(self, for_agent: str) -> Dict[str, GameSave]:
+        """对某 Agent 可见的各游戏眼下在哪个存档里：提供者名 → ``GameSave``。
+
+        只收分存档的游戏（提供者有 ``current_save`` 且给出了 ``GameSave``）；不分存档的
+        游戏、没启用或全部工具不可见的提供者不在结果里，读方按"不分存档"处理。存档只随
+        人在游戏里的操作慢慢变，读它不触发任何动作——和 ``guides`` 一样是只读的发现信息。
+        单个提供者读取失败只记日志并跳过。
+        """
+        result: Dict[str, GameSave] = {}
+        for provider in self._providers:
+            save_fn = getattr(provider, "current_save", None)
+            if not callable(save_fn):
+                continue
+            if not self.list_tools(provider=provider.name, for_agent=for_agent):
+                continue
+            try:
+                save = save_fn()
+            except Exception as exc:  # noqa: BLE001 - 单个游戏读不到存档只当它不分存档
+                logger.warning(f"Provider '{provider.name}' 当前存档读取失败（跳过）: {type(exc).__name__}: {exc}")
+                continue
+            if isinstance(save, GameSave):
+                result[provider.name] = save
         return result
 
     def _is_visible_to(self, full_name: str, agent_name: str) -> bool:

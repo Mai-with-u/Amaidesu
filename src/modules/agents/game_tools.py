@@ -21,6 +21,7 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
+from src.modules.types.game_save import GameSave
 from src.modules.utils.time_utils import now_ms
 
 __all__ = [
@@ -164,6 +165,15 @@ class GameToolProvider(BaseToolProvider):
     def unknown_tool_reason(self, tool_name: str) -> str:
         """未知工具的回执文案（子类可覆写补充出路提示）。"""
         return f"未知 {self.log_label} 工具 '{tool_name}'"
+
+    def current_save(self) -> Optional[GameSave]:
+        """角色眼下在哪个存档里（同步读游戏 Agent 内存里的世界身份，不发请求）。
+
+        默认 None：这个游戏不分存档，主播记忆照旧只按游戏区分。分存档的游戏覆写它：
+        认出存档时给编号与名字，还没进世界或还没认出时给编号为空的 ``GameSave``。
+        主播在开播与每个决策窗开窗前经注册表拉取，用来分清记忆里哪些是这个存档的事。
+        """
+        return None
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         name = invocation.tool_name
