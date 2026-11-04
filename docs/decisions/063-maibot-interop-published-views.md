@@ -1,12 +1,12 @@
 # ADR-063：两个身体之间只交换发布出来的东西（取代 ADR-059：笔记正本留在 Amaidesu 本地 / 发布给 QQ 麦麦看的那份 / QQ 里的约定先进插件的待收清单 / 搁置 ADR-062 的粉丝群消息递给直播）
 
-- 状态：已采纳；整篇取代 ADR-059（笔记正本从插件挪回 Amaidesu 本地，去掉版本对齐与三方合并；ADR-059 里仍成立的决定在本篇重述），因此也接过 ADR-059 对 [ADR-046](046-live-transcript-to-maibot-memory.md) 定位（整场回放降为可选）与 [ADR-045](045-live-status-sync-to-maibot.md) 注入范围（只注入白名单群）的部分取代；部分取代 [ADR-062](062-persona-and-ops-belong-to-maibot.md) 第 3 条里"两边都用时正本在插件"的说法，并搁置它的第 5–7 条（粉丝群消息怎么到直播）
+- 状态：已采纳；整篇取代 ADR-059（笔记正本从插件挪回 Amaidesu 本地，去掉版本对齐与三方合并；ADR-059 里仍成立的决定在本篇重述），因此也接过 ADR-059 对 [ADR-046](046-live-transcript-to-maibot-memory.md) 定位（整场回放降为可选）与 [ADR-045](045-live-status-sync-to-maibot.md) 注入范围（只注入白名单群）的部分取代；部分取代 [ADR-062](062-persona-and-ops-belong-to-maibot.md) 第 3 条里"两边都用时正本在插件"的说法，并搁置它的第 5–7 条（粉丝群消息怎么到直播）。本篇的共享笔记发布与收约定已由 [ADR-067](067-irreversible-memory-cleanup.md) 部分取代并退役；其中"插件留下每一场回顾"那条对新场次不再成立（回顾已停写，QQ 麦麦不再收到新场次回顾）
 - 日期：2026-11-02
 - 实现提交：Amaidesu `5460030170cbd3779cebf04957499caacf40e832`（feat(streamer): 长期笔记加并进别处约定的函数）、`36bfbf860cbd70d6aae94aaf40f66d8e1e959eed`（refactor(maibot_sync): 共享笔记改为本地正本加发布）、`a88b11ee63fb7cc056b54f4003ecde418837a73f`（refactor: 删掉三方合并与正本在插件的旧说法）；插件侧在 MaiBot-Amaidesu-Adapter 仓库 `038af3fed6dd825f5f8d2be8e8e24b76c6697797`（refactor: 共享笔记正本交回 Amaidesu）
 
 ## 背景（Context）
 
-Amaidesu 与 MaiBot 是同一个麦麦的两个身体：MaiBot 7×24 常驻 QQ，Amaidesu 开播时才启动。主播的长期笔记（[ADR-051](051-streamer-long-term-memory-file.md)、[ADR-058](058-streamer-memory-items-and-fading.md)）里"身份"那一层——答应过的事、老梗与口头禅、长线目标、关于我自己——QQ 那边的麦麦也该知道，QQ 里答应群友的事直播那边也该知道。
+Amaidesu 与 MaiBot 是同一个麦麦的两个身体：MaiBot 7×24 常驻 QQ，Amaidesu 开播时才启动。主播的长期笔记里"身份"那一层——答应过的事、老梗与口头禅、长线目标、关于我自己——QQ 那边的麦麦也该知道，QQ 里答应群友的事直播那边也该知道（本篇讨论的长期笔记与共享笔记机制后来都随 ADR-065、066、067 的记忆重设计退役）。
 
 ADR-059 的做法是：两边都用时，笔记的正本放在 MaiBot 适配器插件里，Amaidesu 本地的 `MEMORY.md` 当缓存。Amaidesu 每次读写都先找插件：两边用同一种算法给全文算版本号，写入带版本号防覆盖；两边都改过时按条目做三方合并，合并要用的"上次同步时的全文"存在 Amaidesu 本地；插件按 Amaidesu 的笔记格式挑出要注入的几节、去掉标签，QQ 麦麦记约定时也按这个格式往"答应过的事"末尾追加一行带标签的条目。理由是"身份那一层跟着常驻的身体走"。当时拒绝了"正本留在 Amaidesu、插件只存副本加一个收件箱"，理由有两条：Amaidesu 多数时候不开，QQ 里记下的约定只能在收件箱里等，正本长期不更新；换机器或重装 Amaidesu 时，正本只在旧机器上。
 
@@ -17,7 +17,7 @@ ADR-059 的做法是：两边都用时，笔记的正本放在 MaiBot 适配器�
 
 再看当初拒绝"正本留在本地"的两条理由：
 
-- "约定只能在收件箱里等"：QQ 麦麦记下的约定可以和笔记一起注入，它自己当场就看得到；直播那边本来就只在开播时读一次笔记、整场不变（ADR-058），约定是"当场进了正本"还是"在收件箱里等到下次读"，对直播那边没有区别。
+- "约定只能在收件箱里等"：QQ 麦麦记下的约定可以和笔记一起注入，它自己当场就看得到；直播那边本来就只在开播时读一次笔记、整场不变（当时的条目化长期笔记，现已退役），约定是"当场进了正本"还是"在收件箱里等到下次读"，对直播那边没有区别。
 - "换机器时正本在旧机器上"：场次回顾、观众画像、彩排场的笔记本来就都只在 Amaidesu 本地，换机器本来就要搬数据目录；只把一份文件的正本放到远处，解决不了这件事。
 
 还有一个现成的事实：Amaidesu 开播注入用的那份视图（四个注入节与人自己加的节，去掉标签，不含答应某位直播观众的条目），和 ADR-059 里插件给 QQ 麦麦渲染的内容是同一份东西。Amaidesu 直接把它发布过去，插件就不必认识笔记格式。
@@ -107,7 +107,7 @@ ADR-059 的做法是：两边都用时，笔记的正本放在 MaiBot 适配器�
 
 - [ADR-045：直播近况推给 MaiBot](045-live-status-sync-to-maibot.md)
 - [ADR-046：直播内容进 MaiBot 长期记忆（整场回放）](046-live-transcript-to-maibot-memory.md)
-- [ADR-058：主播记忆条目化、会淡出、按对象注入](058-streamer-memory-items-and-fading.md)
+- [ADR-067：清掉旧记忆的存储面](067-irreversible-memory-cleanup.md)——本篇的共享笔记发布与收约定随旧笔记退役
 - [ADR-061：QQ 群里只留 QQ 麦麦一张嘴](061-qq-group-single-voice.md)
 - [ADR-062：拟人与账号运营归 MaiBot，Amaidesu 只管直播](062-persona-and-ops-belong-to-maibot.md)
 - 架构事实：[主播记忆](../architecture/streamer-memory.md)

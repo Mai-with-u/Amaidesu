@@ -48,9 +48,9 @@
 - 版本声明 `SCHEMA_VERSION` 在 schema.py；`schema_migrations` 表记录已应用版本。
 - 迁移一版本一文件、编号严格 +1（`src/modules/storage/migrations/`），注册表完整性由守护测试断言。
 - 启动时先执行完整 DDL（`IF NOT EXISTS` 幂等），再按当前版本到目标版本的区间依次跑迁移回调；回调原地修改、自带列存在性检查，重复执行无副作用。
-- 升版本前自动在线备份到 `data/backups/`（`<库名>-pre-v<版本>-<时间戳>.db`）；备份失败仅告警不阻塞迁移，备份不自动清理。
+- 升版本前自动在线备份到 `data/backups/`（`<库名>-pre-v<版本>-<时间戳>.db`）；备份失败仅告警不阻塞迁移。备份默认不自动清理，配置了 `[retention].raw_days` 后按保留期统一清理：整库备份与迁移时移入的旧记忆目录都按条目自身的修改时刻判定。
 - 库版本高于代码版本（回滚到旧程序）只告警不拒启。
-- **存在不可逆的清理版本**：记忆改按账本记录之后，删除旧表（`session_recaps`、`viewer_profiles`）、场次表的备忘录列，并删除库文件同级的 `memory/` 目录（旧长期笔记与历史留底）。这一版之后旧版本二进制无法正确回退（它会把旧表按建库语句重建出来），唯一退路是升级前自动留下的库备份；升级前请确认备份可用。设计见 [清掉旧记忆的存储面](../decisions/067-irreversible-memory-cleanup.md)。
+- **存在不可逆的清理版本**：记忆改按账本记录之后，删除旧表（`session_recaps`、`viewer_profiles`）与场次表的备忘录列，并把库文件同级的 `memory/` 目录（旧长期笔记与历史留底）整目录移入 `backups/` 下的 `memory-pre-v25-<时间戳>/`——移走后不再被任何代码读取，内容留在备份目录里，可手工取回。这一版之后旧版本二进制无法正确回退（它会把旧表按建库语句重建出来），退路是升级前自动留下的整库备份与这次移入备份目录的旧记忆目录；升级前请确认备份可用。设计见 [清掉旧记忆的存储面](../decisions/067-irreversible-memory-cleanup.md)。
 
 ## 访问层
 
@@ -67,7 +67,7 @@
 
 - **遗忘命令**：观众发"忘了我"后，记账入口在判场次之前就把 ta 的外部 ID 摘要写进 `forget_list` 并在 `viewers.forget_requested_at_ms` 记下时刻，此后 ta 的弹幕不再落库、不建观众行，付费只留金额与类型。删除推迟到发令之后第一次下播后的清理，且有最长等待上限（上限常量在 `storage/privacy.py`），执行前本人发撤回短语即取消。判定与撤回短语表都在 `storage.toml` 的 `[privacy]` 段。
 - **删除函数**：`PrivacyService.delete_viewer` 是唯一入口，一个事务内删观众行与曾用名、ta 的弹幕与对 ta 的承诺、相同外部 ID 的模拟回放副本，清空付费三表的身份与留言列，并按每个昵称的使用期把相关场次里主播台词、档案、承诺、话题与摘要中的昵称换成"一位观众"。同名昵称只在 ta 出现过的那几场替换，避免误伤日常用词。
-- **保留期清理**：`[retention].raw_days` / `viewer_absence_days` 默认都是 0（不自动删除），由使用者按自己的接入方式与合规判断配置；清理在启动时与每次下播后跑，同时执行到期的遗忘删除。
+- **保留期清理**：`[retention].raw_days` / `viewer_absence_days` 默认都是 0（不自动删除），由使用者按自己的接入方式与合规判断配置；清理在启动时与每次下播后跑，同时执行到期的遗忘删除。下播那次由主播 Agent 的下播收尾在道别句播完、下播整理结束后触发（顺序见[主播记忆 - 下播收尾](streamer-memory.md#合规删除与遗忘)）。
 - **删得干净**：所有连接开 `PRAGMA secure_delete=ON`，删除与清理后 `PRAGMA wal_checkpoint(TRUNCATE)` 截断预写日志，避免已删内容留在库文件或 `-wal` 里。
 
 诊断日志、LLM 请求正文与迁移前备份的保留期同样交给使用者，方案不替任何人改默认值。
@@ -95,4 +95,5 @@
 - [主播记忆改按账本记录](../decisions/065-memory-ledger-shadow-run.md)
 - [记忆注入切到账本](../decisions/066-memory-injection-switch.md)
 - [清掉旧记忆的存储面](../decisions/067-irreversible-memory-cleanup.md)
+- [观众数据可自行删除与保留期](../decisions/068-memory-privacy-retention-and-forget.md)
 - [观众身份映射](../decisions/047-viewer-identity-mapping.md)

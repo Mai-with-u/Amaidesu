@@ -59,4 +59,4 @@ MaiBot 维护者的建议是：把每次直播当成 MaiBot 里的一场群聊�
 ## 关联
 
 - [ADR-045：直播近况推给 MaiBot](045-live-status-sync-to-maibot.md)
-- [ADR-042：主播记忆改为场次回顾 + 观众画像](042-streamer-memory-recap-and-roster.md)
+- [ADR-067：清掉旧记忆的存储面](067-irreversible-memory-cleanup.md)——本篇赖以成立的长期记忆与回顾载体已退役

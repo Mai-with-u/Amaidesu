@@ -70,7 +70,7 @@
 
 ## 关联
 
-- [ADR-042：主播记忆改为场次回顾 + 观众画像](042-streamer-memory-recap-and-roster.md)——观众画像以本决策的身份键定位观众
+- [ADR-065：主播记忆改按账本记录](065-memory-ledger-shadow-run.md)——账本里的承诺按本决策的身份键定位观众（原“观众画像”形态已由该系列取代并删除）
 - [ADR-047：观众身份映射](047-viewer-identity-mapping.md)——取代本决策的"身份键"一节
 - [LAPLACE Event Bridge 弹幕接入](../guides/laplace-bridge.md)——该源的礼物按“源受限例外”以实付价统计贡献
 - 表结构权威：`src/modules/storage/schema.py`；展示换算：`src/modules/types/currency.py`

@@ -176,7 +176,7 @@ WebUI 提供"待确认观众"列表，处理方式参照 MaiBot 表达方式审�
 ## 关联
 
 - [ADR-029：观众身份复合键与平台虚拟货币口径](029-viewer-identity-key-and-currency-unit.md)——本决策取代其"身份键"一节
-- [ADR-042：主播记忆改为场次回顾 + 观众画像](042-streamer-memory-recap-and-roster.md)——观众画像改以内部观众 ID 定位
+- [ADR-065：主播记忆改按账本记录](065-memory-ledger-shadow-run.md)——账本里的承诺与对象观众改以内部观众 ID 定位
 - [ADR-045：直播近况推给 MaiBot](045-live-status-sync-to-maibot.md)——同步给 MaiBot 的观众 ID 随之改变
 - [LAPLACE Event Bridge 弹幕接入](../guides/laplace-bridge.md)——"同一房间不要混用数据源"的限制在实现后可放宽
 - 表结构权威：`src/modules/storage/schema.py`

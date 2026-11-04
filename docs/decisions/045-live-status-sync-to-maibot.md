@@ -48,4 +48,4 @@ MaiBot 7×24 常驻 QQ，Amaidesu 开播时才启动。两边定位为"一个身
 ## 关联
 
 - [ADR-031：组件间通信通道指派学说](031-communication-channel-doctrine.md)
-- [ADR-042：主播记忆改为场次回顾 + 观众画像](042-streamer-memory-recap-and-roster.md)
+- [ADR-067：清掉旧记忆的存储面](067-irreversible-memory-cleanup.md)——本篇的场次回顾推送随回顾退役（部分取代）

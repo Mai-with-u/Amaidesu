@@ -20,6 +20,7 @@
 - [Minecraft Agent](guides/minecraft-agent.md)
 - [发布](guides/release.md)
 - [GPT-SoVITS 语音服务部署](guides/gptsovits.md)
+- [主播记忆重设计发版前门槛](guides/memory-release-gate.md)
 - [虚拟形象接入（Warudo / VRChat / 表情差分立绘）](guides/avatar.md)
 - [与 MaiBot 同步（直播近况 / 整场记录）](guides/maibot-sync.md)
 

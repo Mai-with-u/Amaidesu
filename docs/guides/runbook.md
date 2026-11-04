@@ -67,6 +67,74 @@ uv run python main.py
 
 Ctrl+C 走优雅关停：采集器 → Agent → Dashboard → 场次结账（保证下播落账）→ 诊断落盘冲刷 → 存储关闭。异常退出有两层兜底：关停链里的兜底会补做场次结账；没跑到或被打断的下播整理（承诺与场次档案的账本整理）由下次启动补完待整理的场次。
 
+## 隐私删除与不记录名单
+
+- 「忘了我」命中后：立即停止记录那位观众，下播后的清理里执行删除（最迟发令后 24 小时）。执行前 ta 本人发撤回短语（默认「算了」「开玩笑的」「别忘了我」等，见 `storage.toml` `[privacy].retract_phrases`）即取消；WebUI 观众页可看"待删除（预计执行时刻）"，运营者也能代办撤回或解除名单。
+- 不记录名单只存外部 ID 的摘要，密钥是库外文件（`[privacy].key_path`，默认 `secrets/forget.key`，不入库）。**这个文件和数据库一样要单独备份**：它不在整库备份里，恢复数据库后若名单非空而密钥缺失，程序会启动报错，只给两条出路——找回密钥文件，或按报错里给出的语句确认放弃名单（清空后名单里的人会重新被记录）。
+- 恢复时把密钥放回配置里的路径（数据库在项目内时相对项目根解析，数据库在项目外时相对库文件所在目录），再启动。
+- 保留期在 `storage.toml` 的 `[retention]`：`raw_days` 管弹幕、付费身份列、话题摘要、请求正文、迁移前整库备份与迁移时移入的旧记忆目录；`viewer_absence_days` 管长期不来的观众行。两键默认 0 = 永不自动删除；清理在启动时和每次下播整理后运行。设了 `raw_days` 后，到期的迁移前整库备份与旧记忆目录也会被删掉，之后就不能再靠它们回滚——要保留回滚能力，升级前按下文自己另存整个 `data/`。
+
+## 升级与回滚
+
+**升级前（一次性）**：
+
+1. 停掉程序，整目录备份 `data/`（库、`backups/`、若还在的 `memory/`）、`config/` 与 `secrets/`；
+2. 记录当前库版本（库版本记在 `schema_migrations` 表里）：`uv run python -c "import sqlite3;print(sqlite3.connect('data/amaidesu.db').execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0])"`；
+3. 想先演练就按[发版前门槛清单](memory-release-gate.md#3-在真实直播库副本上演练升级)在隔离副本里跑一遍。
+
+**升级**：启动程序，等日志出现 `存储已就绪`；确认 `data/backups/` 下有 `amaidesu-pre-v25-<时刻>.db`，日志有 `旧记忆目录已移入迁移备份（未删除，可手工取回）: <源> -> <目标>`（升级前有过 `data/memory/` 时）；确认 `config/old/` 下有改前配置、版本号已推进；再跑一次确认二次启动幂等。迁移是**不可逆**的：升级成功后旧回顾、旧画像、本场备忘录与 `memory/` 目录都不在程序的数据路径里了，回退旧二进制不能直接启动现有库（旧代码会把两张表按建库语句重建出来，与账本口径分叉）。
+
+**回滚**（只在必须退回升级前版本时）：
+
+1. 停程序，另存一份升级后产生的新数据（升级后已经播过的场次账本、承诺等，回滚会丢）；
+2. 用升级前的整库备份还原：把 `data/backups/amaidesu-pre-v25-<时刻>.db` 复制回 `data/amaidesu.db`（同时移走 `-wal`/`-shm`）；
+3. 把 `data/backups/memory-pre-v25-<时刻>/` 整个目录移回 `data/memory/`；
+4. 用 `config/old/` 下的备份把 `config/` 还原成升级前版本，放回 `secrets/forget.key`；
+5. 换回升级前的程序版本启动。
+
+## 已知残留边界
+
+以下位置仍可能有观众身份，删除与保留期都按使用者的配置处理，写公告与对外说明时一并交代：
+
+- 宽限期（发令到之后第一次下播后的清理，最迟 24 小时）内，ta 的数据还在库里；
+- 诊断日志（LLM 请求正文、事件流）与 WebUI 落盘日志（`logs/webui/*.jsonl`，含外部 ID 与昵称）、LLM 请求记录表正文、迁移前备份与迁入备份目录的旧记忆；
+- 复盘数据包导出（`GET /api/v1/review/export` 打出的整库副本与日志）导出后不受保留期与删除管辖，包里含观众身份，仅限开发组使用、用完删除；
+- 单字昵称、ta 没有出现过的场次里她提到 ta 的名字、本场内存时间线、运营者手写老梗栏里的昵称不替换；
+- 换开放平台应用后 open_id 会变，不记录名单认不出 ta。
+- 提示词里给会话能点名的只有承诺（`约#N`）与老梗（`梗#N`）；场次档案行编号 `档#N` 目前只能由运营者在 WebUI 看，会话点名它会被拒绝并记一条 warning 到日志。
+
+## 生产计数（只读 SQL）
+
+对账与评测用；只读查询，不改库。先 `uv run python -c "import sqlite3;..."` 或任意只读 SQLite 工具连 `data/amaidesu.db`。
+
+```sql
+-- 承诺账本：状态分布与总数
+SELECT status, COUNT(*) FROM commitments GROUP BY status;
+
+-- 每场新登记的承诺与判误记条数（人工判误记占比的分子分母）
+SELECT created_session_id AS session, COUNT(*) AS total,
+       SUM(status = 'void') AS voided
+FROM commitments WHERE created_session_id IS NOT NULL
+GROUP BY created_session_id ORDER BY session DESC LIMIT 10;
+
+-- 最近场次的档案行数
+SELECT live_session_id, COUNT(*) AS lines FROM archive_lines
+GROUP BY live_session_id ORDER BY live_session_id DESC LIMIT 10;
+
+-- 整理进度：正式场/彩排场、已整理/待整理、尝试次数
+SELECT kind, settled_at_ms IS NULL AS pending, settle_attempts, COUNT(*)
+FROM live_sessions GROUP BY 1, 2, 3;
+
+-- 不记录名单与待删除
+SELECT COUNT(*) FROM forget_list;
+SELECT COUNT(*) FROM viewers WHERE forget_requested_at_ms IS NOT NULL;
+
+-- 送达口径：某场她的台词里送达与未送达（把 ? 换成场次主键）
+SELECT SUM(dropped_at_ms IS NULL) AS delivered,
+       SUM(dropped_at_ms IS NOT NULL) AS dropped
+FROM live_chat WHERE sender_role = 'assistant' AND live_session_id = ?;
+```
+
 ## 只验证不运行
 
 ```bash

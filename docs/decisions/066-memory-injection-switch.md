@@ -1,8 +1,8 @@
 # ADR-066：记忆注入切到账本（常驻简报 + 线索推送 + memory_recall / 旧三份记忆停写并退出提示词）
 
-- 状态：已采纳；接续 [ADR-065](065-memory-ledger-shadow-run.md) 的影子运行阶段，把注入侧从旧的场次回顾、长期记忆 MEMORY.md、观众画像与本场备忘录切到承诺账本与场次档案；旧表与旧文件原样保留，存储面清理由 [ADR-067](067-irreversible-memory-cleanup.md) 接棒
+- 状态：已采纳；接续 [ADR-065](065-memory-ledger-shadow-run.md) 的影子运行阶段，把注入侧从旧的场次回顾、长期记忆 MEMORY.md、观众画像与本场备忘录切到承诺账本与场次档案；旧表与旧文件原样保留，存储面清理由 [ADR-067](067-irreversible-memory-cleanup.md) 接棒。部分取代 [ADR-062](062-persona-and-ops-belong-to-maibot.md) 第 3 条中「场次回顾、观众画像、长期笔记」三样的具体形态——直播记忆留在 Amaidesu、只用 Amaidesu 时照常单独运行这两点不变，改变的是记忆的形态与读写方式
 - 日期：2026-11-04
-- 实现提交：与本篇同笔交付，`git log -- docs/decisions/066-memory-injection-switch.md` 可检索
+- 实现提交：`1e394c68e31934d45b95ce5f1ecfe614c865887b`（feat(streamer): 记忆读路径改走账本）、`0e65f63841b236b2a80d33fefb332823f32dd706`（feat(dashboard): 记忆页收敛到账本并下线旧接口）、`37f7bd441443bf558b7a6e188475b50036fc47d5`（chore(streamer): 退役旧记忆工具与笔记同步）
 
 ## 背景（Context）
 

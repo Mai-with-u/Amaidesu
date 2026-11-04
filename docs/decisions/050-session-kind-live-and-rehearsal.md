@@ -57,6 +57,6 @@ ADR-006 定下"模拟数据在数据面是二等"，落地方式是每条明细�
 ## 关联
 
 - [ADR-006：LLM 模拟器是官方开发基础设施](006-simulator-is-dev-infrastructure.md)
-- [ADR-042：主播记忆改为场次回顾 + 观众画像](042-streamer-memory-recap-and-roster.md)
+- [ADR-065：主播记忆改按账本记录](065-memory-ledger-shadow-run.md)——场次类型继续决定记忆走哪条线（账本只整理正式场）
 - [ADR-045：直播近况推给 MaiBot](045-live-status-sync-to-maibot.md)
 - 架构事实：[主播记忆](../architecture/streamer-memory.md)、[模拟器指南](../guides/simulator.md)
