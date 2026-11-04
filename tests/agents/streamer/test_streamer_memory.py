@@ -58,11 +58,19 @@ def _prompts() -> Any:
     return prompt_manager
 
 
-async def _ended_session(store: SQLiteDatabase, *, started: int = 1_000, ended: int = 9_000, kind: str = "live") -> int:
+_SESSION_MS = 30 * 60_000  # 正经一场的时长（够常驻简报的"上一场最短时长"）
+
+
+async def _ended_session(
+    store: SQLiteDatabase, *, started: int = 1_000, ended: int | None = None, kind: str = "live"
+) -> int:
+    """造一场已结束的场次；不给结束时刻就按正经一场的时长算。"""
     pk = await store.sessions.insert_live_session(
         stream_id="room", platform="bilibili", started_at_ms=started, kind=kind
     )
-    await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=ended)
+    await store.sessions.close_live_session(
+        live_session_id=pk, ended_at_ms=ended if ended is not None else started + _SESSION_MS
+    )
     return pk
 
 
@@ -122,7 +130,7 @@ async def test_agent_registers_memory_recall_and_retired_tools_stay_gone(store: 
 
 async def test_refresh_brief_reads_previous_archive_and_pending_commitments(store: SQLiteDatabase) -> None:
     """常驻简报取上一场档案与不针对人、不挂游戏的未了结承诺。"""
-    previous_pk = await _ended_session(store, started=1_000, ended=2_000)
+    previous_pk = await _ended_session(store, started=1_000)
     await store.archive.insert_line(
         live_session_id=previous_pk,
         text="Minecraft：水车搭好了",
@@ -149,7 +157,7 @@ async def test_next_brief_reflects_operator_corrections(store: SQLiteDatabase) -
 
     简报只依赖表快照、每场开播重拼一次：删掉的行在下一份简报里不再出现，没动的照旧在。
     """
-    previous_pk = await _ended_session(store, started=1_000, ended=2_000)
+    previous_pk = await _ended_session(store, started=1_000)
     kept_line = await store.archive.insert_line(
         live_session_id=previous_pk, text="水车搭好了", quote="水车搭好啦", evidence_chat_id=1
     )
@@ -181,7 +189,7 @@ async def test_brief_rerender_is_byte_identical_when_ledger_unchanged(store: SQL
     简报在 Planner 系统提示词的前段，逐字节相同前缀缓存才命中。简报不取的那些行（对某位
     观众的、挂游戏的承诺，彩排场的档案）变了也不该让它变；简报用到的行变了才变。
     """
-    previous_pk = await _ended_session(store, started=1_000, ended=2_000)
+    previous_pk = await _ended_session(store, started=1_000)
     await store.archive.insert_line(
         live_session_id=previous_pk, text="Minecraft：水车搭好了", quote="水车搭好啦", evidence_chat_id=1
     )
@@ -219,9 +227,30 @@ async def test_brief_is_empty_without_ledger_material(store: SQLiteDatabase) -> 
     assert agent.memory_brief_text == "" and agent.memory_brief_commitment_ids == ()
 
 
+async def test_brief_skips_false_start_session_but_keeps_its_commitment(store: SQLiteDatabase) -> None:
+    """开错后马上重开：那一小段（1.5 分钟）也整理出了档案行和一条承诺。简报的"上一场"跳过它、
+    取前面正经的那一场；它登记的承诺照常列着，时间词按"之前"写（不是简报里的那个上一场）。"""
+    real = await _ended_session(store, started=1_000)
+    await store.archive.insert_line(live_session_id=real, text="钻石剑做好了", quote="钻石剑到手", evidence_chat_id=1)
+    false_start = await _ended_session(store, started=5_000_000, ended=5_090_000)
+    await store.archive.insert_line(
+        live_session_id=false_start, text="墓碑女仆救援留待下次", quote="下次接着救", evidence_chat_id=2
+    )
+    await store.commitments.insert_commitment(
+        what="接着救墓碑女仆", quote="下次接着救", created_session_id=false_start, evidence_chat_id=2
+    )
+
+    agent = _build_agent(store, FakeLLMManager())
+    await agent._refresh_memory_brief()
+
+    brief = agent.memory_brief_text
+    assert "钻石剑到手" in brief and "墓碑女仆救援留待下次" not in brief
+    assert "「下次接着救」（之前）" in brief
+
+
 async def test_open_start_settle_is_scheduled_in_background(store: SQLiteDatabase) -> None:
     """开播回调不能同步等整理：补整理排后台，回调本身立即返回，模型调用随后才发生。"""
-    pending = await _ended_session(store, started=1_000, ended=2_000)
+    pending = await _ended_session(store, started=1_000)
     await store.chat.insert_live_chat(
         live_session_id=pending,
         timestamp_ms=1_500,
@@ -323,7 +352,7 @@ async def test_use_memory_lands_with_the_line_and_stops_the_card(store: SQLiteDa
         timestamp_ms=1_000,
         name_match_window_ms=0,
     )
-    previous_pk = await _ended_session(store, started=1_000, ended=2_000)
+    previous_pk = await _ended_session(store, started=1_000)
     commitment_id = await store.commitments.insert_commitment(
         what="给小鱼画头像",
         quote="下次给你画头像",

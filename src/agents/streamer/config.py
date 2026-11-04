@@ -556,6 +556,16 @@ class StreamerConfig(BaseConfig):
         "0 = 带整份对话历史，时间线预算也改回按决策、表达两个模型中较小的窗口算",
         json_schema_extra={"x-ui-advanced": True},
     )
+    # 开错后马上重开的那一小段（播了一两分钟就结束、紧接着重开）照样整理得出档案行；常驻简报
+    # 按"最近一场有档案的"取上一场时，它会顶掉真正的上一场，她整场只记得那一两句
+    memory_brief_min_session_ms: int = Field(
+        title="上一场最短时长",
+        default=300_000,
+        ge=0,
+        description="常驻简报取「上一场」时，跳过时长不到这么久的场次，往前找（毫秒；默认 5 分钟，0 = 不跳过）。"
+        "被跳过的场次档案仍可用回想工具查到，它登记的承诺照常进简报",
+        json_schema_extra={"x-ui-advanced": True},
+    )
 
     # 子段
     persona: StreamerPersonaConfig = Field(

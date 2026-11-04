@@ -1194,7 +1194,7 @@ class StreamerAgent(BaseAgent):
         return kind if kind in SESSION_KINDS else SESSION_KIND_LIVE
 
     async def _previous_session_id(self) -> Optional[int]:
-        """上一场 = 最近一个已整理、有档案行的同类型场次（与常驻简报同口径）。
+        """上一场 = 最近一个已整理、有档案行、时长够的同类型场次（与常驻简报同口径）。
 
         承诺卡的时间词按它给：登记在上一场的写"上一场"，其余写"之前"。没有档案仓储
         （账本没启用）或读不到时返回 None，承诺卡一律写"之前"。
@@ -1202,7 +1202,10 @@ class StreamerAgent(BaseAgent):
         if self._archive_repo is None:
             return None
         try:
-            return await self._archive_repo.get_last_archived_session_id(kind=self._current_session_kind())
+            return await self._archive_repo.get_last_archived_session_id(
+                kind=self._current_session_kind(),
+                min_duration_ms=self.typed_config.memory_brief_min_session_ms,
+            )
         except Exception as exc:  # noqa: BLE001 - 取不到就按没有上一场处理，不挡线索推送
             self._logger.warning(f"取上一场编号失败（承诺卡时间词写「之前」）: {exc}", exc=exc)
             return None
@@ -1247,6 +1250,7 @@ class StreamerAgent(BaseAgent):
                 archive_repo=self._archive_repo,
                 commitments_repo=self._commitments_repo,
                 kind=resolved_kind,
+                min_session_ms=self.typed_config.memory_brief_min_session_ms,
             )
         except Exception as exc:  # noqa: BLE001 - 简报拼不出来只省这一段，不挡开播
             self._logger.warning(f"拼常驻简报失败（本场省略简报段）: {exc}", exc=exc)

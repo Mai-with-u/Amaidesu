@@ -2,7 +2,8 @@
 
 两段料：最近一个已整理、有档案行的同类型场次的档案；所有不针对具体观众、不挂游戏的
 未了结承诺（最老的在前，至多五条，多出来的折成一行指向回想工具）。彩排场接彩排场、
-正式场接正式场，调试场不会被当成正式直播的上一场。
+正式场接正式场，调试场不会被当成正式直播的上一场；时长太短的场次（开错后马上重开的
+那一小段）也不算上一场，往前找，它登记的承诺照常进承诺段。
 
 渲染只依赖表快照、不含时刻：表没变时每个决策窗的输出逐字节相同，Planner 的系统
 提示词前缀缓存仍然命中；表变了（运营者判误记、了结、删一行，或上一场整理刚写完）
@@ -50,9 +51,13 @@ async def build_brief(
     archive_repo: "ArchiveRepo",
     commitments_repo: "CommitmentRepo",
     kind: SessionKind = SESSION_KIND_LIVE,
+    min_session_ms: int = 0,
 ) -> MemoryBrief:
-    """拼一份常驻简报；两段料都没取到时返回空简报（系统提示词里整段省略）。"""
-    archive_lines = await _archive_lines(archive_repo, kind)
+    """拼一份常驻简报；两段料都没取到时返回空简报（系统提示词里整段省略）。
+
+    ``min_session_ms``：时长不到它的场次不当"上一场"（开错后马上重开的那一小段），往前找。
+    """
+    archive_lines = await _archive_lines(archive_repo, kind, min_session_ms)
     taken, earlier = await _pending_commitments(commitments_repo)
     previous_session_id = archive_lines[0].live_session_id if archive_lines else None
     text = render_brief(
@@ -69,10 +74,10 @@ async def build_brief(
     )
 
 
-async def _archive_lines(archive_repo: "ArchiveRepo", kind: SessionKind) -> List:
-    """最近一个已整理、有档案行的同类型场次的档案行；没有就空。"""
+async def _archive_lines(archive_repo: "ArchiveRepo", kind: SessionKind, min_session_ms: int) -> List:
+    """最近一个已整理、有档案行、时长够的同类型场次的档案行；没有就空。"""
     try:
-        session_id = await archive_repo.get_last_archived_session_id(kind=kind)
+        session_id = await archive_repo.get_last_archived_session_id(kind=kind, min_duration_ms=min_session_ms)
     except Exception as exc:  # noqa: BLE001 - 读不到就当没有上一场，简报少一段
         logger.warning(f"取上一场的编号失败（简报不带档案段）: {exc}", exc=exc)
         return []

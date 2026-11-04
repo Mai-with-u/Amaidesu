@@ -24,9 +24,11 @@ async def store(tmp_path: Path):
         await db.close()
 
 
-async def _ended_session(store: SQLiteDatabase, *, kind: str = "live", started_at_ms: int = 1000) -> int:
+async def _ended_session(
+    store: SQLiteDatabase, *, kind: str = "live", started_at_ms: int = 1000, duration_ms: int = 500
+) -> int:
     session_id = await store.sessions.insert_live_session(started_at_ms=started_at_ms, kind=kind)
-    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=started_at_ms + 500)
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=started_at_ms + duration_ms)
     return session_id
 
 
@@ -152,6 +154,24 @@ async def test_last_archived_session_ignores_rehearsal_and_empty(store: SQLiteDa
     await store.archive.insert_line(live_session_id=rehearsal, text="彩排", quote="彩排", evidence_chat_id=2)
     assert await store.archive.get_last_archived_session_id() == formal
     assert await store.archive.get_last_archived_session_id(kind="rehearsal") == rehearsal
+
+
+async def test_last_archived_session_skips_sessions_shorter_than_minimum(store: SQLiteDatabase) -> None:
+    """开错后马上重开的那一小段（1.5 分钟）也有档案行，设了最短时长就不算上一场，往前找到正经的那一场；
+    还没结束的场次量不出时长，按够长处理。"""
+    real = await _ended_session(store, started_at_ms=1_000, duration_ms=49 * 60_000)
+    await store.archive.insert_line(live_session_id=real, text="钻石剑做好了", quote="钻石剑到手", evidence_chat_id=1)
+    false_start = await _ended_session(store, started_at_ms=4_000_000, duration_ms=90_000)
+    await store.archive.insert_line(
+        live_session_id=false_start, text="下次接着救", quote="下次接着救", evidence_chat_id=2
+    )
+
+    assert await store.archive.get_last_archived_session_id() == false_start
+    assert await store.archive.get_last_archived_session_id(min_duration_ms=300_000) == real
+
+    unfinished = await store.sessions.insert_live_session(started_at_ms=9_000_000)
+    await store.archive.insert_line(live_session_id=unfinished, text="没收尾的一场", quote="先这样", evidence_chat_id=3)
+    assert await store.archive.get_last_archived_session_id(min_duration_ms=300_000) == unfinished
 
 
 # ---------------------------------------------------------------------------

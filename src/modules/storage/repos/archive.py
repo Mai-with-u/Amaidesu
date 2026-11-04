@@ -75,11 +75,16 @@ class ArchiveRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def get_last_archived_session_id(self, *, kind: SessionKind = SESSION_KIND_LIVE) -> Optional[int]:
+    async def get_last_archived_session_id(
+        self, *, kind: SessionKind = SESSION_KIND_LIVE, min_duration_ms: int = 0
+    ) -> Optional[int]:
         """最近一个已整理、有档案行且属于该类型的场次主键；一场都没有返回 None。
 
         「上一场」由此定义：整理失败或当场没写出档案行的场次不算，主播不会把一场
-        空场次当成上一场来回忆。
+        空场次当成上一场来回忆。``min_duration_ms`` 大于 0 时，时长不到它的场次也不算：
+        开错后马上重开的那一小段只播了一两分钟，照样整理得出档案行，不跳过就会顶掉
+        真正的上一场。时长按场次行的起止时刻算（保留期不删场次行，早年的场次也量得出）；
+        没有结束时刻的场次量不出时长，按够长处理，不因此丢掉上一场。
         """
 
         def _exec() -> Optional[int]:
@@ -87,8 +92,9 @@ class ArchiveRepo(BaseRepo):
                 row = conn.execute(
                     "SELECT s.id FROM live_sessions s"
                     " JOIN archive_lines a ON a.live_session_id = s.id"
-                    " WHERE s.kind=? GROUP BY s.id ORDER BY s.started_at_ms DESC, s.id DESC LIMIT 1",
-                    (kind,),
+                    " WHERE s.kind=? AND (s.ended_at_ms IS NULL OR s.ended_at_ms - s.started_at_ms >= ?)"
+                    " GROUP BY s.id ORDER BY s.started_at_ms DESC, s.id DESC LIMIT 1",
+                    (kind, max(0, int(min_duration_ms))),
                 ).fetchone()
                 return int(row[0]) if row else None
 
