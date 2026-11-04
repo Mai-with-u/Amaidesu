@@ -6,13 +6,21 @@
 - 读的是 events(topic=chat)；首次读取只建游标，接手前的聊天不补发
 - 玩家聊天带发言人与 UUID，系统消息不带发言人，截断标记照传
 - 私聊照常转出并标 private；空白消息不转，游标照样往后走
+- 服务器把玩家聊天当系统消息发来："<账号名> 正文"认成玩家发言，角色自己的回显不转；
+  还不知道角色账号名时照系统消息转出
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
-from src.agents.minecraft.chat_attribution import NOTE_SHOWN_AS_SELF, NOTE_UNVERIFIED, attribute_chat
+from src.agents.minecraft.chat_attribution import (
+    NOTE_SHOWN_AS_SELF,
+    NOTE_SPEAKER_UNCONFIRMED,
+    NOTE_UNVERIFIED,
+    attribute_chat,
+    line_speaker,
+)
 from src.agents.minecraft.chat_collector import MaicraftChatCollector
 from src.modules.collectors.base import BaseCollector
 from src.modules.agents.companions import build_companion_collectors, owner_of
@@ -66,6 +74,82 @@ def test_attribution_tells_machine_lines_from_people() -> None:
     marked = attribute_chat({"kind": "system", "text": "[name:...]", "shown_as": "ChangingSelf"})
     assert (marked.kind, marked.note) == ("system", NOTE_SHOWN_AS_SELF), "Mod 已改判的照它的标记说明"
     assert attribute_chat({"kind": "system", "text": "Alex 加入了游戏"}).note == ""
+
+
+def test_chat_lines_sent_as_system_messages_are_attributed() -> None:
+    """服务器把玩家聊天当系统消息发来："<账号名> 正文"认成玩家发言；是角色自己的名字就是回显，不转。"""
+    other = attribute_chat({"kind": "system", "text": "<Steve> 不是我的"}, self_name="Alex")
+    assert other is not None
+    assert (other.kind, other.sender, other.sender_id, other.content, other.note) == (
+        "player",
+        "Steve",
+        "",
+        "不是我的",
+        NOTE_UNVERIFIED,
+    )
+    assert attribute_chat({"kind": "system", "text": "<alex> 你好"}, self_name="Alex") is None, "账号名不分大小写"
+    # 还不知道自己叫什么：分不清是不是回显，照系统消息转出、原话不动，不当成别人搭话
+    unknown_self = attribute_chat({"kind": "system", "text": "<Alex> 你好"})
+    assert unknown_self is not None
+    assert (unknown_self.kind, unknown_self.sender, unknown_self.content, unknown_self.note) == (
+        "system",
+        "",
+        "<Alex> 你好",
+        NOTE_SPEAKER_UNCONFIRMED,
+    )
+    # 不是这种整行的照普通系统消息：死亡播报、带称号的格式、Mod 已标出借名的
+    for line in ({"kind": "system", "text": "Steve被杀死了"}, {"kind": "system", "text": "<[VIP]Bob> hi"}):
+        kept = attribute_chat(line, self_name="Alex")
+        assert kept is not None and (kept.kind, kept.content) == ("system", line["text"])
+    assert line_speaker({"kind": "system", "text": "<Alex> x", "shown_as": "Alex"}) == ""
+    assert line_speaker({"kind": "player", "sender": "Steve", "text": "<Steve> x"}) == ""
+
+
+async def test_collector_drops_own_echo_and_reads_account_once() -> None:
+    """账号名在这条连接上只读一次；自己的回显不转，别人的话按玩家发言转出；重连后重新认。"""
+    collector, client, bus = await _primed()
+    client.replies["observe"] = {"ok": True, "data": {"name": "Alex"}}
+    client.pages.append(
+        events_page(
+            [
+                {"cursor": 4, "kind": "system", "text": "<Alex> 你好，这块墓碑是你的吗"},
+                {"cursor": 5, "kind": "system", "text": "<Steve> 不是我的"},
+                {"cursor": 6, "kind": "system", "text": "Steve加入了游戏"},
+            ],
+            cursor=6,
+        )
+    )
+    await collector._drain()
+
+    assert [(p.kind, p.sender, p.content) for _, p in bus.events] == [
+        ("player", "Steve", "不是我的"),
+        ("system", "", "Steve加入了游戏"),
+    ]
+    assert [call["name"] for call in client.read_calls].count("observe") == 1
+
+    await collector._teardown()
+    assert await collector._ensure_ready() is True
+    reconnected = FakeMcpClient.instances[-1]
+    reconnected.replies["observe"] = {"ok": True, "data": {"name": "Steve"}}
+    reconnected.pages.append(events_page([{"cursor": 7, "kind": "system", "text": "<Steve> 换号了"}], cursor=7))
+    await collector._drain()
+    assert len(bus.events) == 2, "重连后按新读到的账号名认回显"
+
+
+async def test_unknown_account_keeps_line_as_system_and_retries() -> None:
+    """读不到账号名时这一行照系统消息转出、不当成别人搭话，下一行再试着读。"""
+    collector, client, bus = await _primed()
+    client.replies["observe"] = {"ok": False, "error": {"code": "not_in_world", "message": "不在世界里"}}
+    client.pages.append(events_page([{"cursor": 4, "kind": "system", "text": "<Alex> 在吗"}], cursor=4))
+    await collector._drain()
+    [(_, payload)] = bus.events
+    assert (payload.kind, payload.sender, payload.note) == ("system", "", NOTE_SPEAKER_UNCONFIRMED)
+
+    client.replies["observe"] = {"ok": True, "data": {"name": "Alex"}}
+    client.pages.append(events_page([{"cursor": 5, "kind": "system", "text": "<Alex> 在吗"}], cursor=5))
+    await collector._drain()
+    assert len(bus.events) == 1, "读到账号名后认出是自己的回显，不再转出"
+    assert [call["name"] for call in client.read_calls].count("observe") == 2
 
 
 async def test_unsigned_line_is_forwarded_with_a_note() -> None:

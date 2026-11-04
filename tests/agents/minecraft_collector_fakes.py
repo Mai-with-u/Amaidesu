@@ -32,6 +32,8 @@ class FakeMcpClient:
         self.pages: List[Dict[str, Any]] = []
         self.read_error: Optional[Exception] = None
         self.read_calls: List[Dict[str, Any]] = []
+        # 非 events 工具的固定回复（工具名 → 整份回复），例如聊天采集器读账号名用的 observe
+        self.replies: Dict[str, Dict[str, Any]] = {}
         FakeMcpClient.instances.append(self)
 
     async def connect(self) -> bool:
@@ -48,6 +50,8 @@ class FakeMcpClient:
         self.read_calls.append({"name": name, "arguments": dict(arguments)})
         if self.read_error is not None:
             raise self.read_error
+        if name in self.replies:
+            return FakeCallResult(self.replies[name])
         page = self.pages.pop(0) if self.pages else events_page([], cursor=0)
         return FakeCallResult({"ok": True, "data": page})
 

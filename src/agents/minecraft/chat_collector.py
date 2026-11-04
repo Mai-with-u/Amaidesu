@@ -2,7 +2,8 @@
 MaicraftChatCollector —— 游戏内聊天采集器
 
 上游是 MaiCraft v1 的聊天事件流（``events(topic=chat)``）：聊天栏收到的玩家聊天与服务器系统消息，
-角色自己说的话 Mod 已经滤掉。本采集器**常驻**带着游标长轮询，把别人说的话转成通用的
+角色自己说的话 Mod 已经滤掉；服务器把玩家聊天当系统消息下发时 Mod 滤不掉，这里按角色账号名认出回显再丢掉
+（账号名每次接上连接后读一次 ``observe(self)``，只在遇到 ``<名字> 正文`` 这种系统消息时才去读）。本采集器**常驻**带着游标长轮询，把别人说的话转成通用的
 ``game.chat.received`` 事件，交给主播 Agent。连接、长轮询与游标都在 :class:`MaicraftEventsCollector`。
 
 私聊（别人用 /msg 对角色说的话）照常转出并标 ``private``：主播据此只拿它做决定，不在直播里念出或转述。
@@ -13,12 +14,15 @@ MaicraftChatCollector —— 游戏内聊天采集器
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
-from src.agents.minecraft.chat_attribution import attribute_chat, mentions_of
+from src.agents.minecraft.chat_attribution import attribute_chat, line_speaker, mentions_of
 from src.agents.minecraft.events_collector import MaicraftEventsCollector
+from src.agents.minecraft.maicraft import OBSERVE, reply_of
+from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game_chat import GameChatPayload
+from src.modules.tools.models import ToolInvocation
 
 
 class MaicraftChatCollector(MaicraftEventsCollector):
@@ -29,12 +33,56 @@ class MaicraftChatCollector(MaicraftEventsCollector):
     topic = "chat"
     stream_label = "聊天流"
 
+    def __init__(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        event_bus: Optional[EventBus] = None,
+        client_factory: Optional[Callable[..., Any]] = None,
+    ) -> None:
+        super().__init__(config=config, event_bus=event_bus, client_factory=client_factory)
+        # 角色的账号名：认"<名字> 正文"这种系统消息是不是自己的回显用。None = 这条连接上还没读到
+        self._account: Optional[str] = None
+
+    async def _teardown(self) -> None:
+        """拆连接时忘掉账号名：重新接上可能已经换了号，下次遇到要认的整行再读。"""
+        self._account = None
+        await super()._teardown()
+
+    async def _self_account(self) -> str:
+        """角色的账号名；这条连接上第一次要用时读一次 ``observe(self)``，读不到返回空串、下次再试。
+
+        Mod 那边读一次自己会顺带"读完顺着看一眼"（闲着时打开背包看两三秒），所以每条连接只读一次、
+        只在遇到要认的整行时才读，不定时去读。
+        """
+        if self._account is not None:
+            return self._account
+        provider = self._provider
+        if provider is None:
+            return ""
+        try:
+            reply = reply_of(
+                await provider.invoke(ToolInvocation(tool_name=OBSERVE, arguments={"what": "self"}, source=self.name))
+            )
+        except Exception as exc:  # noqa: BLE001 - 读不到账号名只影响认回显，聊天照转
+            self.logger.warning("读角色账号名失败，这条聊天按别人的话转出", exc=exc)
+            return ""
+        name = reply.data.get("name") if reply.ok and isinstance(reply.data, dict) else None
+        if not isinstance(name, str) or not name:
+            self.logger.warning(f"observe(self) 没给出角色账号名，这条聊天按别人的话转出：{reply.raw}")
+            return ""
+        self._account = name
+        return name
+
     async def _forward(self, event: Dict[str, Any]) -> bool:
-        """一条收到的聊天 → 一条 ``game.chat.received``；空白的不转，私聊照转并标出来。"""
+        """一条收到的聊天 → 一条 ``game.chat.received``；空白的、角色自己的回显不转，私聊照转并标出来。"""
         text = event.get("text")
         if not isinstance(text, str) or not text.strip():
             return False
-        attributed = attribute_chat(event)
+        # 只有"<名字> 正文"这种系统消息才要分辨是不是自己说的：先认账号名，再归属
+        account = await self._self_account() if line_speaker(event) else ""
+        attributed = attribute_chat(event, self_name=account)
+        if attributed is None:
+            return False
         system = attributed.kind == "system"
         payload = GameChatPayload(
             game="minecraft",
