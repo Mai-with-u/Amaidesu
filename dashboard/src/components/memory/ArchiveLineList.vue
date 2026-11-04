@@ -3,7 +3,12 @@
     <ul v-if="items.length > 0" class="line-list">
       <li v-for="line in items" :key="line.id" class="line-item">
         <div class="line-main">
-          <div class="line-text">{{ line.text }}</div>
+          <div class="line-text">
+            {{ line.text }}
+            <el-tag v-if="line.game" size="small" type="info" effect="plain">{{
+              gameSaveLabel(line)
+            }}</el-tag>
+          </div>
           <blockquote class="line-quote">“{{ line.quote }}”</blockquote>
         </div>
         <el-button
@@ -25,11 +30,13 @@
 /**
  * 场次档案行列表 —— 记忆页与场次复盘页共用的档案行展示
  *
- * 档案是"这一场她说过什么"的逐条记录（标题 + 原话）。删除的二次确认与接口
+ * 档案是"这一场她说过什么"的逐条记录（标题 + 原话）；游戏里的事标出游戏与存档，
+ * 同一款游戏的不同存档是互不相干的世界，纠错时要看得出是哪个存档里的事。删除的二次确认与接口
  * 调用放在父组件，本组件只在 deletable 时渲染删除按钮并抛出 delete 意图，
  * 由父组件决定删完怎么刷新。
  */
 import type { ArchiveLineItem } from '@/types';
+import { gameSaveLabel } from './ledgerView';
 
 withDefaults(
   defineProps<{

@@ -7,6 +7,24 @@
 
 import type { CommitmentItem, CommitmentStatus, UnregisteredKind } from '@/types';
 
+/** 挂了游戏的条目共有的三个字段（承诺与档案行都有） */
+export interface GameSaveFields {
+  game: string | null;
+  save_id: string;
+  save_name: string;
+}
+
+/**
+ * 游戏与存档标签：同一款游戏的不同存档是互不相干的世界，运营者纠错时要看得出是哪个存档里的事。
+ * 有存档名写名字，没名字写编号前 8 位，没记存档（旧数据、当时没认出）只写游戏名；不挂游戏为 null。
+ */
+export function gameSaveLabel(item: GameSaveFields): string | null {
+  if (!item.game) return null;
+  if (item.save_name) return `${item.game}「${item.save_name}」`;
+  if (item.save_id) return `${item.game}「编号 ${item.save_id.slice(0, 8)}」`;
+  return item.game;
+}
+
 /** 承诺筛选值：all = 全部（与后端 status 参数的空值语义一致） */
 export type CommitmentStatusFilter = CommitmentStatus | 'all';
 

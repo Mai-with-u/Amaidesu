@@ -69,6 +69,8 @@ def _to_item(commitment: Commitment, viewer_name: Optional[str]) -> CommitmentIt
         viewer_id=commitment.viewer_id,
         viewer_name=viewer_name,
         game=commitment.game,
+        save_id=commitment.save_id,
+        save_name=commitment.save_name,
         status=commitment.status,
         created_session_id=commitment.created_session_id,
         close_quote=commitment.close_quote,
@@ -195,6 +197,9 @@ async def list_archive_lines(live_session_id: int, archive: ArchiveRepoDep) -> A
                 text=row.text,
                 quote=row.quote,
                 evidence_chat_id=row.evidence_chat_id,
+                game=row.game,
+                save_id=row.save_id,
+                save_name=row.save_name,
             )
             for row in rows
         ],

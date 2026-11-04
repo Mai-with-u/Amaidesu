@@ -1398,6 +1398,10 @@ export interface CommitmentItem {
   viewer_name: string | null;
   /** 挂在哪个游戏；null = 不挂 */
   game: string | null;
+  /** 答应时角色所在的游戏存档编号；空串 = 不分存档或存档不明 */
+  save_id: string;
+  /** 那个存档给人看的名字（只显示） */
+  save_name: string;
   status: CommitmentStatus;
   /** 登记它的场次；运营者手建为 null */
   created_session_id: number | null;
@@ -1447,6 +1451,12 @@ export interface ArchiveLineItem {
   quote: string;
   /** 原话所在的台词行 */
   evidence_chat_id: number;
+  /** 写的是哪个游戏里的事；null = 与游戏无关 */
+  game: string | null;
+  /** 那件事发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明 */
+  save_id: string;
+  /** 那个存档给人看的名字（只显示） */
+  save_name: string;
 }
 
 /** 某一场的档案行（按写入顺序） */

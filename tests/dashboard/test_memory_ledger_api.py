@@ -140,3 +140,26 @@ async def test_resettle_rejects_rehearsal_and_ongoing(client, store: SQLiteDatab
     ongoing_resp = await client.post(f"/api/v1/memory/settle/{ongoing}/resettle")
     assert ongoing_resp.status_code == 409
     assert "还没结束" in ongoing_resp.json()["detail"]
+
+
+async def test_commitments_and_archive_lines_carry_game_and_save(client, store: SQLiteDatabase) -> None:
+    """挂了游戏的承诺与档案行带上存档编号与名字，记忆页据此标出是哪个存档里的事。"""
+    session_id = await _ended_session(store)
+    await store.commitments.insert_commitment(
+        what="去村里换绿宝石", evidence_chat_id=1, game="minecraft", save_id="b", save_name="新档"
+    )
+    await store.archive.insert_line(
+        live_session_id=session_id,
+        text="Minecraft：出生点旁边有村子",
+        quote="出生点旁边就有村子",
+        evidence_chat_id=2,
+        game="minecraft",
+        save_id="b",
+        save_name="新档",
+    )
+    await store.archive.insert_line(live_session_id=session_id, text="猜谜环节", quote="猜得好准", evidence_chat_id=3)
+
+    item = (await client.get("/api/v1/memory/commitments")).json()["items"][0]
+    assert (item["game"], item["save_id"], item["save_name"]) == ("minecraft", "b", "新档")
+    lines = (await client.get(f"/api/v1/memory/archive/{session_id}")).json()["items"]
+    assert [(line["game"], line["save_name"]) for line in lines] == [("minecraft", "新档"), (None, "")]

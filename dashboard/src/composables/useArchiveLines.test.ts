@@ -13,7 +13,16 @@ vi.mock('@/api', () => ({ ledgerApi: { listArchive: vi.fn() } }));
 const listArchiveMock = vi.mocked(ledgerApi.listArchive);
 
 function line(id: number) {
-  return { id, live_session_id: 1, text: `标题${id}`, quote: `原话${id}`, evidence_chat_id: id };
+  return {
+    id,
+    live_session_id: 1,
+    text: `标题${id}`,
+    quote: `原话${id}`,
+    evidence_chat_id: id,
+    game: null,
+    save_id: '',
+    save_name: '',
+  };
 }
 
 function ok(items: ReturnType<typeof line>[]) {

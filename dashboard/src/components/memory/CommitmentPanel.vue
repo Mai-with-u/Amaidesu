@@ -47,7 +47,7 @@
             }}</el-tag>
             <span class="item-target">{{ commitmentTargetLabel(item) }}</span>
             <el-tag v-if="item.game" size="small" type="info" effect="plain">{{
-              item.game
+              gameSaveLabel(item)
             }}</el-tag>
           </div>
           <blockquote v-if="item.quote" class="item-quote">“{{ item.quote }}”</blockquote>
@@ -167,6 +167,7 @@ import {
   commitmentStatusQuery,
   commitmentStatusTagType,
   commitmentTargetLabel,
+  gameSaveLabel,
   validateCloseQuote,
   type CommitmentStatusFilter,
 } from './ledgerView';

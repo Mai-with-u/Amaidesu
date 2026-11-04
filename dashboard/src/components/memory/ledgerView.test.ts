@@ -6,6 +6,7 @@ import {
   commitmentStatusQuery,
   commitmentStatusTagType,
   commitmentTargetLabel,
+  gameSaveLabel,
   settleAttemptsExhausted,
   settleAttemptsText,
   settleStateLabel,
@@ -83,5 +84,18 @@ describe('整理状态展示', () => {
   it('未登记条目按类型区分承诺与档案', () => {
     expect(unregisteredKindLabel('commitment')).toBe('承诺');
     expect(unregisteredKindLabel('archive')).toBe('档案');
+  });
+});
+
+describe('游戏与存档标签', () => {
+  it('有名字写名字、没名字写编号前 8 位、没记存档只写游戏、不挂游戏不出标签', () => {
+    expect(gameSaveLabel({ game: 'minecraft', save_id: 'b', save_name: '新档' })).toBe(
+      'minecraft「新档」',
+    );
+    expect(gameSaveLabel({ game: 'minecraft', save_id: '0123456789abcdef', save_name: '' })).toBe(
+      'minecraft「编号 01234567」',
+    );
+    expect(gameSaveLabel({ game: 'minecraft', save_id: '', save_name: '' })).toBe('minecraft');
+    expect(gameSaveLabel({ game: null, save_id: '', save_name: '' })).toBeNull();
   });
 });

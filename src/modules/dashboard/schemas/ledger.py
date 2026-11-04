@@ -18,6 +18,8 @@ class CommitmentItem(BaseModel):
     viewer_id: Optional[int] = Field(default=None, description="对某位观众（内部观众 ID）；空 = 不针对具体人")
     viewer_name: Optional[str] = Field(default=None, description="那位观众当前的昵称（读不到时为空）")
     game: Optional[str] = Field(default=None, description="挂在哪个游戏；空 = 不挂")
+    save_id: str = Field(default="", description="答应时角色所在的游戏存档编号；空 = 不分存档或存档不明")
+    save_name: str = Field(default="", description="那个存档给人看的名字（只显示）")
     status: str = Field(description="open 未了结 / closed 已了结 / void 判误记")
     created_session_id: Optional[int] = Field(default=None, description="登记它的场次")
     close_quote: Optional[str] = Field(default=None, description="了结那句的原话")
@@ -50,13 +52,16 @@ class CommitmentCloseRequest(BaseModel):
 
 
 class ArchiveLineItem(BaseModel):
-    """场次档案的一行：标题加她说的原话。"""
+    """场次档案的一行：标题加她说的原话，游戏里的事带上游戏与存档。"""
 
     id: int = Field(description="档案行主键")
     live_session_id: int = Field(description="所属场次")
     text: str = Field(description="标题")
     quote: str = Field(description="她播出原句的逐字片段")
     evidence_chat_id: int = Field(description="原话所在的台词行")
+    game: Optional[str] = Field(default=None, description="写的是哪个游戏里的事；空 = 与游戏无关")
+    save_id: str = Field(default="", description="那件事发生时角色所在的游戏存档编号；空 = 不分存档或存档不明")
+    save_name: str = Field(default="", description="那个存档给人看的名字（只显示）")
 
 
 class ArchiveListResponse(BaseModel):
