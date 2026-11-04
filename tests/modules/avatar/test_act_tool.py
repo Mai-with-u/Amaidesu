@@ -94,3 +94,25 @@ async def test_look_at_chat_and_hold_expression(fake_clock: FakeClock) -> None:
 async def test_unknown_action_returns_catalog(fake_clock: FakeClock) -> None:
     result = await _call(AvatarActProvider(_runtime(fake_clock)), "avatar_act", action="后空翻")
     assert result.success is False and "点头" in result.structured_content["available_actions"]
+
+
+async def test_act_schema_description_lists_current_catalog(fake_clock: FakeClock) -> None:
+    runtime = _runtime(fake_clock)
+    runtime.register_clips("vts", lambda: ["挥手动画"], lambda name: _unreachable(name))
+    provider = AvatarActProvider(runtime)
+    spec = next(s for s in provider.list_tools() if s.full_name == "avatar_act")
+    description = spec.parameters_schema["properties"]["action"]["description"]
+    # 当前目录里的动作名全部出现在说明里（含平台登记片段），模型无需先猜错再改
+    assert "点头" in description and "眨一只眼" in description and "看弹幕" in description
+    assert "保持表情" in description and "挥手动画" in description
+
+    # 目录变化时描述跟着变：说明里没有写死的旧清单
+    runtime.unregister_clips("vts")
+    new_description = next(s for s in provider.list_tools() if s.full_name == "avatar_act").parameters_schema[
+        "properties"
+    ]["action"]["description"]
+    assert "挥手动画" not in new_description and "点头" in new_description
+
+
+def _unreachable(name: str) -> bool:
+    raise AssertionError("测试不应触发动作片段")

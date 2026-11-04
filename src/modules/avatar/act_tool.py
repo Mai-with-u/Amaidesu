@@ -42,10 +42,7 @@ GUIDE = (
 _ACT_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
-        "action": {
-            "type": "string",
-            "description": f"动作名（取自 avatar_list_actions 返回的目录）；摆一个表情并保持写“{HOLD_EXPRESSION}”",
-        },
+        "action": {"type": "string"},
         "emotion": {
             "type": "string",
             "enum": [e.value for e in Emotion],
@@ -89,6 +86,12 @@ class AvatarActProvider(BaseToolProvider):
         return PROVIDER_NAME
 
     def list_tools(self) -> Iterable[ToolSpec]:
+        schema = dict(_ACT_SCHEMA)
+        schema["properties"] = dict(schema["properties"])
+        schema["properties"]["action"] = {
+            "type": "string",
+            "description": self._action_description(),
+        }
         return [
             ToolSpec(
                 name=LIST_TOOL,
@@ -101,9 +104,17 @@ class AvatarActProvider(BaseToolProvider):
                 description="让形象做一个有意的动作，或摆一个表情保持一会儿（平时的表情与小动作不需要调用）",
                 kind="sync",
                 provider=PROVIDER_NAME,
-                parameters_schema=_ACT_SCHEMA,
+                parameters_schema=schema,
             ),
         ]
+
+    def _action_description(self) -> str:
+        """把当前可用动作全列进参数说明：模型第一次调用就能选对名字，不用猜错再看失败目录。"""
+        names = "、".join(self._catalog_names())
+        return (
+            f"动作名，从这些里选：{names}（另可用 avatar_list_actions 查完整目录及说明；"
+            f"要摆某个表情并保持，动作名写“{HOLD_EXPRESSION}”并给出 emotion 与 seconds）"
+        )
 
     def guide_for(self, agent_name: str) -> str:
         """工具组说明：读者固定是主播，不按读者区分。"""
