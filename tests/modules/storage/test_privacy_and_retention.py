@@ -645,10 +645,9 @@ async def test_retention_cleanup_respects_zero_defaults_and_cleans_expired_items
 
         backup_dir = db_file.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
-        # 迁移前快照（*-pre-v*.db）：不可逆迁移（如删旧记忆表）的恢复只能靠它，不参与保留期清理
+        # 备份全族按条目修改时刻统一参与保留期：迁移前整库快照、普通整库备份、迁移时移入的旧记忆目录
         old_migration_backup = backup_dir / "amaidesu-pre-v24-old.db"
         new_migration_backup = backup_dir / "amaidesu-pre-v25-new.db"
-        # 普通整库备份：按最后修改时间随保留期清理
         old_plain_backup = backup_dir / "amaidesu-2025-01-01.db"
         new_plain_backup = backup_dir / "amaidesu-2025-01-09.db"
         for path, content in (
@@ -658,17 +657,27 @@ async def test_retention_cleanup_respects_zero_defaults_and_cleans_expired_items
             (new_plain_backup, b"new-plain"),
         ):
             path.write_bytes(content)
-        os.utime(old_migration_backup, (old_end / 1000.0, old_end / 1000.0))
-        os.utime(new_migration_backup, (recent_end / 1000.0, recent_end / 1000.0))
-        os.utime(old_plain_backup, (old_end / 1000.0, old_end / 1000.0))
-        os.utime(new_plain_backup, (recent_end / 1000.0, recent_end / 1000.0))
+        old_memory_backup = backup_dir / "memory-pre-v25-20250101-000000000000"
+        new_memory_backup = backup_dir / "memory-pre-v25-20250109-000000000000"
+        old_memory_backup.mkdir()
+        new_memory_backup.mkdir()
+        (old_memory_backup / "MEMORY.md").write_text("旧笔记", encoding="utf-8")
+        (new_memory_backup / "MEMORY.md").write_text("新笔记", encoding="utf-8")
+        # 备份目录里的其它文件不归保留期管
+        unrelated_file = backup_dir / "notes.txt"
+        unrelated_file.write_text("手工笔记", encoding="utf-8")
+        for path in (old_migration_backup, old_plain_backup, old_memory_backup):
+            os.utime(path, (old_end / 1000.0, old_end / 1000.0))
+        for path in (new_migration_backup, new_plain_backup, new_memory_backup, unrelated_file):
+            os.utime(path, (recent_end / 1000.0, recent_end / 1000.0))
 
         # 1) 默认 0 天什么都不删
         noop_retention = RetentionService(
             store.manager, privacy, db_path=db_file, raw_days=0, viewer_absence_days=0, clock=clock.now_ms
         )
         noop_res = await noop_retention.run_cleanup()
-        assert noop_res.chat_deleted == 0 and old_plain_backup.exists()
+        assert noop_res.chat_deleted == 0
+        assert old_plain_backup.exists() and old_migration_backup.exists() and old_memory_backup.is_dir()
 
         # 2) 配置 raw_days=7, viewer_absence_days=30 执行清理
         active_retention = RetentionService(
@@ -679,11 +688,13 @@ async def test_retention_cleanup_respects_zero_defaults_and_cleans_expired_items
         assert res.payments_scrubbed == 1
         assert res.summaries_deleted == 1
         assert res.llm_bodies_scrubbed == 1
-        assert res.backups_deleted == 1
+        # 到期的三类备份都删：普通整库备份、迁移前快照、迁移时移入的旧记忆目录
+        assert res.backups_deleted == 3
         assert res.absent_viewers_deleted == 1
-        # 过期普通备份删除、近期普通备份保留；迁移前快照无论多旧都保留
         assert not old_plain_backup.exists() and new_plain_backup.exists()
-        assert old_migration_backup.exists() and new_migration_backup.exists()
+        assert not old_migration_backup.exists() and new_migration_backup.exists()
+        assert not old_memory_backup.exists() and new_memory_backup.is_dir()
+        assert unrelated_file.exists()
 
         # 主播台词、近期观众弹幕、SC 金额、LLM token 统计均保留；缺席观众被删但不进 forget_list
         chats = [r["content"] for r in await store.execute("SELECT content FROM live_chat ORDER BY id")]

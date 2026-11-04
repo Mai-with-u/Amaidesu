@@ -346,8 +346,8 @@ class SQLiteDatabase:
     def _backup_before_migration(self, pre_version: int) -> None:
         """用 SQLite 在线备份 API 快照当前库到 ``<db目录>/backups/``。
 
-        备份文件不自动清理，由用户自行管理；备份失败仅告警，不阻塞迁移
-        （启动可用性优先于备份完备性）。
+        备份默认不自动清理；配置了 ``[retention].raw_days`` 后随保留期统一清理（与迁移时
+        移入的旧记忆目录同一口径）。备份失败仅告警，不阻塞迁移（启动可用性优先于备份完备性）。
         """
         try:
             backup_dir = self._db_path.parent / "backups"
@@ -371,7 +371,7 @@ class SQLiteDatabase:
                     destination.close()
             finally:
                 source.close()
-            logger.info(f"schema 迁移前备份完成（v{pre_version} → v{SCHEMA_VERSION}，不自动清理）: {target}")
+            logger.info(f"schema 迁移前备份完成（v{pre_version} → v{SCHEMA_VERSION}）: {target}")
         except Exception as exc:  # noqa: BLE001 备份失败不阻塞迁移
             logger.warning(f"schema 迁移前备份失败，继续迁移: {exc}")
 

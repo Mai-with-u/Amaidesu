@@ -3,14 +3,17 @@
 覆盖：
 - 全新库：``session_recaps`` / ``viewer_profiles`` 两张表与 ``live_sessions.notebook_text` 列都不存在，
   启动闸门清单里也没有；
-- v24 旧库（带两张表、备忘录列与库旁 ``memory/`` 目录）升级后表 / 列 / 目录都被清掉，
-  场次行本身保留；
-- 重复执行幂等：升级后再开一次不报错，回调对旧形状重复调用安全。
+- v24 旧库（带两张表、备忘录列与库旁 ``memory/`` 目录）升级后表 / 列都被清掉，场次行
+  本身保留；旧记忆目录整目录移进 ``backups/memory-pre-v25-*/``，文件内容原样保留；
+- 备份目录不可用时目录原地保留（只告警，不丢数据、不阻塞升级）；
+- 重复执行幂等：升级后再开一次不报错，不会重复搬第二份；回调对旧形状重复调用安全。
 """
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import time
 from pathlib import Path
 
 from src.modules.storage.database import SQLiteDatabase
@@ -24,6 +27,14 @@ async def _open(path: Path) -> SQLiteDatabase:
     db = SQLiteDatabase(path)
     await db.initialize()
     return db
+
+
+def _memory_backups(db_path: Path) -> list[Path]:
+    """库旁备份目录里的旧记忆备份目录（按名字排序，便于断言只搬了一份）。"""
+    backup_dir = db_path.parent / "backups"
+    if not backup_dir.is_dir():
+        return []
+    return sorted(backup_dir.glob("memory-pre-v25-*"))
 
 
 def _column_names(db_path: Path, table: str) -> set[str]:
@@ -115,8 +126,15 @@ async def test_v24_database_upgrade_drops_tables_column_and_memory_dir(db_path: 
 
     assert memory_dir.exists() is False
     assert _column_names(db_path, "live_sessions").isdisjoint({"notebook_text"})
+    # 目录整份移进备份：文件内容原样保留，可手工取回
+    backups = _memory_backups(db_path)
+    assert len(backups) == 1
+    moved = backups[0]
+    assert moved.is_dir()
+    assert (moved / "MEMORY.md").read_text(encoding="utf-8") == "## 老梗\n- 小雨上次起哄的梗\n"
+    assert (moved / "snapshots" / "2026-01-01.md").read_text(encoding="utf-8") == "旧快照"
 
-    # 再开一次：版本已是最新，不重跑迁移也不重建旧结构
+    # 再开一次：版本已是最新，不重跑迁移也不重建旧结构、不搬第二份
     reopened = await _open(db_path)
     try:
         assert await reopened.get_schema_version() == SCHEMA_VERSION
@@ -125,6 +143,49 @@ async def test_v24_database_upgrade_drops_tables_column_and_memory_dir(db_path: 
     finally:
         await reopened.close()
     assert memory_dir.exists() is False
+    assert _memory_backups(db_path) == backups
+
+
+async def test_moved_memory_dir_counts_as_backed_up_now(db_path: Path) -> None:
+    """移进备份的旧记忆目录从移入那一刻起算保留期，不沿用目录原来的修改时刻。
+
+    保留期按备份条目自身的修改时刻判定；改名不更新目录的修改时刻，几个月没动过的旧目录
+    若不重置，升级后同一次启动的保留期清理就会把刚移进来的唯一一份旧笔记删掉。
+    """
+    await (await _open(db_path)).close()
+    memory_dir = _seed_v24_shape(db_path)
+    ninety_days_ago = time.time() - 90 * 24 * 3600
+    os.utime(memory_dir, (ninety_days_ago, ninety_days_ago))
+
+    before = time.time()
+    await (await _open(db_path)).close()
+
+    (moved,) = _memory_backups(db_path)
+    assert moved.stat().st_mtime >= before - 5, "移入备份后目录修改时刻应为移入时刻"
+
+
+def test_memory_dir_kept_when_backup_target_unusable(tmp_path: Path) -> None:
+    """备份目录不可用（同名文件占位）时：目录原地保留，文件名与内容不变，迁移不抛异常。"""
+    db_path = tmp_path / "amaidesu.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE live_sessions ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " started_at_ms INTEGER NOT NULL,"
+            " updated_at_ms INTEGER NOT NULL)"
+        )
+        memory_dir = tmp_path / "memory"
+        (memory_dir / "snapshots").mkdir(parents=True)
+        (memory_dir / "MEMORY.md").write_text("旧笔记", encoding="utf-8")
+        (tmp_path / "backups").write_text("占位：不是目录", encoding="utf-8")
+
+        v25_migrate(conn)
+
+        assert memory_dir.is_dir()
+        assert (memory_dir / "MEMORY.md").read_text(encoding="utf-8") == "旧笔记"
+    finally:
+        conn.close()
 
 
 def test_migrate_is_idempotent_on_legacy_shape() -> None:

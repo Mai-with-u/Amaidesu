@@ -7,14 +7,15 @@
   2. 清空付费三表（``gifts`` / ``super_chats`` / ``guards``）到期行的观众身份、昵称、留言与原始消息，保留金额、类型、时刻
   3. 删除到期场次的话题与时间线摘要（``topics`` / ``timeline_summary``）
   4. 清空 ``llm_requests`` 到期行的响应正文与预览（保留 token/耗时/费用统计列）
-  5. 删除 ``<db目录>/backups/`` 下最后修改时间早于截止时刻的整库备份文件（``*-pre-v*.db``
-     这类 schema 迁移前快照除外：不可逆迁移的恢复只能靠它们，不随保留期清理）
+  5. 删除 ``<db目录>/backups/`` 下最后修改时间早于截止时刻的整库备份文件与迁移前移入的
+     旧记忆目录（``memory-pre-v*``）：迁移前快照与普通备份同一口径，都受使用者配置的保留期管理
 - ``viewer_absence_days > 0`` 时：对最后活跃早于截止时刻的观众调用统一删除函数（不加入不记录名单）
 - 有数据库行被删除或擦除时，执行 ``PRAGMA wal_checkpoint(TRUNCATE)`` 截断预写日志残留。
 """
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -188,22 +189,40 @@ class RetentionService:
             conn = self._manager.connection()
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
-        backups_del = 0
-        backup_dir = self._db_path.parent / "backups"
-        if backup_dir.exists():
-            for item in backup_dir.glob("*.db"):
-                # schema 迁移前快照不参与保留期清理：不可逆迁移（如删旧记忆表）只能靠它恢复
-                if "-pre-v" in item.name:
-                    continue
-                try:
-                    mtime_ms = int(item.stat().st_mtime * 1000)
-                    if mtime_ms <= cutoff_ms:
-                        item.unlink(missing_ok=True)
-                        backups_del += 1
-                except Exception as exc:  # noqa: BLE001 单个备份删除失败记日志不中断
-                    logger.warning(f"删除过期数据库备份失败（{item}）: {exc}", exc=True)
+        backups_del = self._delete_expired_backups(cutoff_ms)
 
         return chat_del, pay_scrub, sum_del, llm_scrub, backups_del
+
+    def _delete_expired_backups(self, cutoff_ms: int) -> int:
+        """删除 backups/ 下到期的备份条目，返回删除数。
+
+        参与清理的有两类，判定口径一致：迁移前整库快照（``*-pre-v*.db``，与普通
+        ``*.db`` 备份同样按自身修改时刻）与迁移时移入的旧记忆目录
+        （``memory-pre-v*``）。目录按**目录自身的修改时刻**判定：目录 mtime 只在其中
+        增删改条目名时变化，目录里文件内容被改写不会改变它——这里判的是"整份备份有多旧"，
+        这个口径即可，不跟随内容变化。保留期交给使用者：``raw_days = 0`` 时本方法不会被
+        调用，备份永不自动删除；删不掉的条目记日志、不中断其余清理。
+        """
+        backup_dir = self._db_path.parent / "backups"
+        if not backup_dir.is_dir():
+            return 0
+        deleted = 0
+        for item in backup_dir.iterdir():
+            is_db_backup = item.is_file() and item.suffix == ".db"
+            is_memory_backup = item.is_dir() and item.name.startswith("memory-pre-v")
+            if not (is_db_backup or is_memory_backup):
+                continue
+            try:
+                if int(item.stat().st_mtime * 1000) > cutoff_ms:
+                    continue
+                if is_memory_backup:
+                    shutil.rmtree(item)
+                else:
+                    item.unlink(missing_ok=True)
+                deleted += 1
+            except OSError as exc:  # noqa: BLE001 单个备份删除失败记日志不中断
+                logger.warning(f"删除过期备份失败（{item}）: {exc}", exc=exc)
+        return deleted
 
     def _list_absent_viewer_ids_blocking(self, cutoff_ms: int) -> List[int]:
         with self._manager.transaction() as conn:
