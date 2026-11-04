@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
-from typing import Any, List
+import json
+from typing import Any, Callable, Dict, List, Optional, Set
 from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.minecraft.state import MinecraftInstruction
+from src.agents.streamer.delegation_workbench import DelegationWorkbench
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GameEventBatch
@@ -23,14 +25,18 @@ from src.modules.tools.registry import ToolRegistry
 from tests.agents.minecraft_v1_fakes import assemble_minecraft_agent
 
 
-def _planner(responses: List[Response], invoked: List[ToolInvocation]) -> Planner:
+def _planner(
+    responses: List[Response],
+    invoked: List[ToolInvocation],
+    status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
+) -> Planner:
     async def _invoke(invocation: ToolInvocation) -> ToolExecutionResult:
         invoked.append(invocation)
-        return ToolExecutionResult(
-            tool_name=invocation.tool_name,
-            success=True,
-            structured_content={"delivered": True, "executor": "minecraft"},
-        )
+        if invocation.tool_name == "framework_delegate":
+            data: Dict[str, Any] = {"accepted": True, "task_id": "deleg_1", "executor": "minecraft"}
+        else:
+            data = {"delivered": True, "executor": "minecraft"}
+        return ToolExecutionResult(tool_name=invocation.tool_name, success=True, structured_content=data)
 
     registry = MagicMock()
     registry.list_tools = MagicMock(return_value=[])
@@ -45,7 +51,7 @@ def _planner(responses: List[Response], invoked: List[ToolInvocation]) -> Planne
         prompt_service=prompt,
         room_state=RoomState(),
         tool_registry=registry,
-        env=PlannerEnv(reply_provider_factory=lambda: MagicMock()),
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock(), delegation_status_provider=status_provider),
     )
 
 
@@ -81,6 +87,227 @@ async def test_game_request_and_reminder_windows_still_relay() -> None:
     planner = _planner([_relay("运营说先停一下"), Response(success=True, content="不说")], invoked)
     await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN), reminders="先停一下")
     assert [call.tool_name for call in invoked] == ["framework_prompt"]
+
+
+async def test_rundown_window_relays_when_game_waits_for_my_decision() -> None:
+    """她在游戏里卡住、停着等我拿主意时，流程单推进窗的补充要求就是答复，放行；答复送达后空窗照常拦。
+
+    实测：游戏侧上报卡住后，派新事被"手上有一件没做完"拒、补充被"没有新输入"拦，
+    主播嘴上说了改主意，游戏那边停了一分多钟。
+    """
+    invoked: List[ToolInvocation] = []
+    planner = _planner(
+        [
+            _relay("墓碑那边收手，用魂符放一只新女仆"),
+            Response(success=True, content="不说"),
+            _relay("再补一句"),
+            Response(success=True, content="不说"),
+        ],
+        invoked,
+    )
+    await planner.workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "把女仆救回来"})
+    planner.workbench.note_game_report("minecraft", "escalation")
+    invoked.clear()
+
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN))
+    assert [call.tool_name for call in invoked] == ["framework_prompt"]
+
+    invoked.clear()
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN))
+    assert invoked == []
+
+
+async def test_task_ledger_decides_whether_game_waits() -> None:
+    """装了任务账本时以账面状态为准：等定夺放行；答复递达过一次就恢复拦截，回到"还在做"也照常拦。"""
+    statuses = {"deleg_1": {"status": "waiting_for_decision"}}
+    invoked: List[ToolInvocation] = []
+    planner = _planner(
+        [
+            _relay("换个办法"),
+            Response(success=True, content="不说"),
+            _relay("我再补一句"),
+            Response(success=True, content="不说"),
+            _relay("再换"),
+            Response(success=True, content="不说"),
+        ],
+        invoked,
+        status_provider=statuses.get,
+    )
+    await planner.workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "把女仆救回来"})
+    invoked.clear()
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.COLD))
+    assert [call.tool_name for call in invoked] == ["framework_prompt"]
+
+    # 答复已经递达、游戏侧还没来得及把账面改回"还在做"：冷场窗不能借"还在等"再递一次
+    invoked.clear()
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.COLD))
+    assert invoked == []
+
+    statuses["deleg_1"] = {"status": "running"}
+    invoked.clear()
+    await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.COLD))
+    assert invoked == []
+
+
+async def test_answer_is_remembered_after_other_relays_push_it_out() -> None:
+    """ "答复过没有"按执行者单独记：给别的游戏补过几次话、把这条挤出最近几条记录，也不会忘成"还没答复"。"""
+
+    async def _invoke(invocation: ToolInvocation) -> ToolExecutionResult:
+        agent = invocation.arguments["agent"]
+        if invocation.tool_name == "framework_delegate":
+            data: Dict[str, Any] = {"accepted": True, "task_id": f"deleg_{agent}", "executor": agent}
+        else:
+            data = {"delivered": True, "executor": agent}
+        return ToolExecutionResult(tool_name=invocation.tool_name, success=True, structured_content=data)
+
+    registry = MagicMock()
+    registry.invoke = AsyncMock(side_effect=_invoke)
+    workbench = DelegationWorkbench(registry, intents_max=4, relays_max=1)
+
+    # 她卡住求助 -> 我答复一次 -> 又给另一个游戏补了一句（最近记录只留一条，答复被挤掉）
+    await workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "把女仆救回来"})
+    workbench.note_game_report("minecraft", "escalation")
+    assert workbench.awaits_decision("minecraft") is True
+    await workbench.handle("framework_prompt", {"agent": "minecraft", "content": "收手，用魂符放新女仆"})
+    await workbench.handle("framework_prompt", {"agent": "other_game", "content": "先歇一会"})
+    assert [relay.agent for relay in workbench.recent_relays] == ["other_game"]
+
+    assert workbench.awaits_decision("minecraft") is False, "答复过的求助不能因为记录被挤掉又算成没答复"
+
+
+def _speaking_planner(
+    responses: List[Response],
+    refuse: Set[str],
+    status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
+) -> tuple[Planner, List[ToolInvocation], MagicMock]:
+    """会出声的 Planner：refuse 里的工具名受理失败（集合可在测试中途改），说话工具成功出声。"""
+    invoked: List[ToolInvocation] = []
+
+    async def _invoke(invocation: ToolInvocation) -> ToolExecutionResult:
+        invoked.append(invocation)
+        name = invocation.tool_name
+        if name in refuse:
+            return ToolExecutionResult(tool_name=name, success=False, error_message=f"受理失败：{name} 送不到")
+        if name == "framework_delegate":
+            data: Dict[str, Any] = {"accepted": True, "task_id": "deleg_1", "executor": "minecraft"}
+        elif name == "framework_prompt":
+            data = {"delivered": True, "executor": "minecraft"}
+        else:
+            data = {"speech": "说了", "emotion": {"name": "happy"}, "metadata": {}}
+        return ToolExecutionResult(tool_name=name, success=True, structured_content=data)
+
+    registry = MagicMock()
+    registry.list_tools = MagicMock(return_value=[])
+    registry.invoke = AsyncMock(side_effect=_invoke)
+    llm = MagicMock()
+    llm.generate = AsyncMock(side_effect=list(responses))
+    prompt = MagicMock()
+    prompt.render = MagicMock(return_value="SYSTEM")
+    planner = Planner(
+        config=PlannerConfig(planner_max_steps=4),
+        llm_service=llm,
+        prompt_service=prompt,
+        room_state=RoomState(),
+        tool_registry=registry,
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock(), delegation_status_provider=status_provider),
+    )
+    return planner, invoked, llm
+
+
+def _say(call_id: str, topic: str) -> ToolCall:
+    return ToolCall(id=call_id, name="streamer_reply", arguments={"topic_summary": topic, "reply_guidance": "嘴硬"})
+
+
+def _delegate(call_id: str) -> ToolCall:
+    return ToolCall(id=call_id, name="framework_delegate", arguments={"agent": "minecraft", "instruction": "放新女仆"})
+
+
+def _tool_reply(llm: MagicMock, call_id: str) -> Dict[str, Any]:
+    """最后一次请求里某个调用的工具回执（JSON 解析后）。"""
+    [message] = [m for m in llm.generate.call_args_list[-1].args[0] if m.get("tool_call_id") == call_id]
+    return json.loads(message["content"])
+
+
+async def test_reply_is_held_when_same_step_arrangement_is_refused() -> None:
+    """同一步里给游戏的安排被拒：这句不出口，原话连同拒绝理由退回；下一步改了说法照常说出去。
+
+    实测委派被拒（手上有一件没做完）后照样说出"那我自己招一只……来"，游戏那边什么也没收到。
+    """
+    planner, invoked, llm = _speaking_planner(
+        [
+            Response(success=True, tool_calls=[_say("r1", "那我自己招一只"), _delegate("d1")]),
+            Response(success=True, tool_calls=[_say("r2", "墓碑这事先放一放")]),
+        ],
+        refuse={"framework_delegate"},
+    )
+
+    outcome = await planner.plan([_msg("救不了就换一只吧")])
+
+    assert [c.arguments["topic_summary"] for c in invoked if c.tool_name == "streamer_reply"] == ["墓碑这事先放一放"]
+    held = _tool_reply(llm, "r1")
+    assert "这句先不说" in held["error"]
+    assert held["held_reply"] == {"topic_summary": "那我自己招一只", "reply_guidance": "嘴硬"}
+    assert "framework_delegate 送不到" in held["refusal"]
+    assert outcome.replied is True
+
+
+async def test_reply_is_held_at_most_once_per_window() -> None:
+    """一窗只压一次：同一窗里安排再被拒，这句照常说出去，不让整窗哑掉。"""
+    planner, invoked, _llm = _speaking_planner(
+        [
+            Response(success=True, tool_calls=[_say("r1", "我自己招一只"), _delegate("d1")]),
+            Response(success=True, tool_calls=[_say("r2", "那换个说法"), _delegate("d2")]),
+        ],
+        refuse={"framework_delegate"},
+    )
+
+    outcome = await planner.plan([_msg("换一只吧")])
+
+    assert [c.arguments["topic_summary"] for c in invoked if c.tool_name == "streamer_reply"] == ["那换个说法"]
+    assert outcome.replied is True
+
+
+async def test_window_that_stays_quiet_after_hold_records_reply_held() -> None:
+    """压住一句后这一窗没再开口：静默原因记 reply_held，复盘看得出是被压住的。"""
+    planner, invoked, _llm = _speaking_planner(
+        [
+            Response(success=True, tool_calls=[_say("r1", "我自己招一只"), _delegate("d1")]),
+            Response(success=True, content="不说了"),
+        ],
+        refuse={"framework_delegate"},
+    )
+
+    outcome = await planner.plan([_msg("换一只吧")])
+
+    assert [c.tool_name for c in invoked] == ["framework_delegate"]
+    assert (outcome.replied, outcome.silent_reason) == (False, "reply_held")
+
+
+async def test_stuck_game_and_refused_delegate_no_longer_deadlock() -> None:
+    """复现 54 场 23:35 的死结：游戏卡住等主意 → 流程单推进窗里派新事被拒、那句话被压住 →
+    补充要求不再被空窗闸门拦、递达 → 再开口说出去。修复前补充被拦、话照样说，游戏一直停着。"""
+    statuses = {"deleg_1": {"status": "running"}}
+    refuse: Set[str] = set()
+    planner, invoked, _llm = _speaking_planner(
+        [
+            Response(success=True, tool_calls=[_say("r1", "救不了那只，那我自己招一只"), _delegate("d1")]),
+            _relay("墓碑那边收手，用背包里的魂符放一只新女仆"),
+            Response(success=True, tool_calls=[_say("r2", "魂符攥手里了，招一只新的")]),
+        ],
+        refuse,
+        status_provider=statuses.get,
+    )
+    await planner.workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "把女仆救回来"})
+    planner.workbench.note_game_report("minecraft", "escalation")
+    statuses["deleg_1"] = {"status": "waiting_for_decision"}
+    refuse.add("framework_delegate")  # 手上那件没做完：新的派不进去
+    invoked.clear()
+
+    outcome = await planner.plan([], proactive=True, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN))
+
+    assert [c.tool_name for c in invoked] == ["framework_delegate", "framework_prompt", "streamer_reply"]
+    assert invoked[-1].arguments["topic_summary"] == "魂符攥手里了，招一只新的"
+    assert outcome.replied is True
 
 
 async def test_only_fresh_game_chat_counts_as_new_input() -> None:

@@ -226,7 +226,17 @@ class _DelegationCore:
         extras = {k: v for k, v in record.snapshot.items() if k not in ("instruction",)}
         if extras:
             lines.append(f"在途任务的已知进展：{extras}")
-        lines.append("等它交付或用 framework_prompt 递话调整，不要重复派同一件事。")
+        # 出路按对方此刻的状态给：停着等主意时补充要求就是答复；还在做时别把人引去补充——
+        # 没有新输入的空窗补充会被拦，两边的拒绝理由互相指，主播就卡在中间什么也送不出去
+        if record.status == "waiting_for_decision":
+            lines.append(
+                "它停着等你拿主意：用 framework_prompt 把决定补给它（换做法、收手、改做别的都行），不要重复派。"
+            )
+        else:
+            lines.append(
+                "等它交付，不要重复派同一件事；这一窗有观众、运营或游戏聊天的新说法才用 framework_prompt 补给它，"
+                "没有就直接说话。"
+            )
         return "\n".join(lines)
 
     async def accept(self, target: BaseAgent, instruction: str, initiator: str) -> _DelegationOutcome:

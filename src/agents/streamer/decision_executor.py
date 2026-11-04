@@ -81,6 +81,7 @@ _SILENT_REASON_LABEL: Dict[str, str] = {
     "prompt_render_failed": "提示词渲染失败",
     "assembler_failed": "上下文组装失败",
     "session_ended": "开窗时的场次已下播",
+    "reply_held": "给游戏的安排被拒，那句话压住后没再开口",
 }
 
 

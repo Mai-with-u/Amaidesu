@@ -91,6 +91,9 @@ class DelegationWorkbench:
         # 最近几次给手上的游戏活补充过的要求（主播自己的原话，不含附带的来源对话）：
         # 看得到自己刚交代过什么，没有新要求时才不会把同样的话再补一遍
         self._recent_relays: Deque[Relay] = deque(maxlen=relays_max)
+        # 每个执行 Agent 最近一次递达补充要求的时刻：判断"她求助之后我答复过没有"用。上面那份只留最近几条，
+        # 给别的游戏补过几次话就会把这条挤掉，单靠它会把"答复过了"忘成"还没答复"，冷场窗又能递话
+        self._last_relay_ms: Dict[str, int] = {}
         # 本决策窗的工具回执（名字, 观察数据）：reply 交接时的状态跃迁事实块从这里取
         # 观察工具的关键字段，随 ReAct 循环逐步累积，begin_round() 在窗入口清空
         self._round_receipts: List[Tuple[str, Any]] = []
@@ -183,15 +186,17 @@ class DelegationWorkbench:
     ) -> str:
         """受理一个被拦截的工具调用，返回观察 JSON 文本。
 
-        流程：无新输入闸（仅递话）→ 参数整备（记下主播自己的原话、附来源对话）
+        流程：无新输入闸（仅递话；对象停着等我拿主意时放行）→ 参数整备（记下主播自己的原话、附来源对话）
         → 经 ToolRegistry 调用 → 成功受理则按规则做状态迁移并记本窗回执。
         ``on_result(name, result)`` 让调用方在结果返回时吸收副作用（如截图挂尾），
         成败结果都会到达。
         """
         if self._tool_registry is None:
             return json.dumps({"ok": False, "error": "tool_registry 未注入"}, ensure_ascii=False)
-        if name == FRAMEWORK_PROMPT_TOOL and relay_without_input:
+        if name == FRAMEWORK_PROMPT_TOOL and relay_without_input and not self._awaits_my_decision(args):
             # 没有新输入的主动窗不补充要求：游戏里的进展以游戏侧回执为准，这一窗只管说话。
+            # 例外是她在游戏里卡住、停着等我拿主意：这时补充要求就是我的决定，不放行就成了死结——
+            # 派新事因"手上有一件没做完"被拒，补充又因"没有新输入"被拦，主播嘴上说了改主意，游戏那边一直停着。
             return json.dumps(
                 {
                     "ok": False,
@@ -224,6 +229,36 @@ class DelegationWorkbench:
         rule.settle(args, own_text, data)
         self._round_receipts.append((name, data))
         return render_observation(data)
+
+    def awaits_decision(self, agent: str) -> bool:
+        """``agent`` 手上的委派此刻是否停着等我拿主意，而且这次求助之后我还没递达过答复。
+
+        顺序：她在游戏里试过几条路都不通 → 上报卡住、停手 → 账面记成等定夺 → 我这一窗补的要求就是答复，
+        闸门放行；答复递达一次就算回应过了，后面的空窗照常拦，冷场窗不能借"还在等"反复递话。
+        "在等"有任务账本时以账面状态为准，没装账本时看身体有没有上报卡住；求助时刻取上报时刻，
+        没有上报记录时取账面最近一次变动。``agent`` 为空串时看手上任意一件委派。
+        """
+        delegations = list(self._delegations.values()) if not agent else []
+        if agent in self._delegations:
+            delegations = [self._delegations[agent]]
+        for delegation in delegations:
+            record = None
+            if self._delegation_status_provider is not None and delegation.task_id:
+                record = self._delegation_status_provider(delegation.task_id)
+                waiting = record is not None and record.get("status") == "waiting_for_decision"
+            else:
+                waiting = delegation.report_kind == "escalation"
+            if not waiting:
+                continue
+            asked_ms = delegation.reported_ms or int((record or {}).get("updated_at_ms") or 0)
+            answered = self._last_relay_ms.get(delegation.agent, -1) >= asked_ms
+            if not answered:
+                return True
+        return False
+
+    def _awaits_my_decision(self, args: Dict[str, Any]) -> bool:
+        """补充要求的对象（参数里点名的执行者，没点名时看任意一件）是否在等我拿主意、还没回应过。"""
+        return self.awaits_decision(str(args.get("agent") or ""))
 
     # ----- 参数整备（调用前） -----
 
@@ -271,4 +306,6 @@ class DelegationWorkbench:
         if not (data.get("delivered") and own_relay.strip()):
             return
         agent = str(data.get("executor") or args.get("agent") or "")
-        self._recent_relays.append(Relay(at_ms=now_ms(), agent=agent, content=own_relay))
+        at_ms = now_ms()
+        self._recent_relays.append(Relay(at_ms=at_ms, agent=agent, content=own_relay))
+        self._last_relay_ms[agent] = at_ms

@@ -220,6 +220,34 @@ class PlannerEnv:
     delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
 
 
+def _observation_error(observation: str) -> Optional[str]:
+    """工具观察文本是一次失败（``{"ok": false, ...}``）时返回拒绝理由，否则 None。
+
+    读不懂的按没失败算，不因格式问题压住说话。
+    """
+    try:
+        data = json.loads(observation)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("ok") is not False:
+        return None
+    return str(data.get("error") or "（回执没写理由）")
+
+
+def _held_reply_words(args: Dict[str, Any]) -> Dict[str, str]:
+    """被压住的那句话的原意（话题与指引），原样退回给 Planner 改。"""
+    return {key: str(args.get(key) or "") for key in ("topic_summary", "reply_guidance")}
+
+
+def _held_reply_error(arrangement: str) -> str:
+    """同一步给游戏的安排没送到时，压住的那句话退回给 Planner 的理由。"""
+    return (
+        f"同一步里给游戏的安排（{arrangement}）没送到，这句先不说：嘴上宣布了、游戏里却没动，观众会看到对不上。"
+        "被压住的原话在 held_reply，拒绝理由在 refusal。按理由改好安排再说；不改安排的话，"
+        "换一句不提这个决定的说法再调用 streamer_reply。这一窗只压这一次，下一句照常说出去。"
+    )
+
+
 class Planner:
     """主播 Agent 决策核心：ReAct 循环（查→想→说）。
 
@@ -498,6 +526,9 @@ class Planner:
 
         # 直播画面只挂在本窗第一次请求的尾部：后续 ReAct 步骤靠模型第一步的判断继续
         frame_tail = self._live_frame_message()
+        # 本窗压住过的那句话（给游戏的安排被拒时）：每窗最多压一次，免得一窗里接连被拒、整窗哑掉；
+        # 压过之后这一窗没再开口，静默原因记成 reply_held，复盘看得出是被压住的
+        held_once = False
         steps = 0
         while steps < self.max_steps:
             steps += 1
@@ -538,9 +569,12 @@ class Planner:
 
             # 自然终止：LLM 不再调用任何工具 = 本轮不说话
             if not tool_calls:
-                return replace(outcome, silent_reason="natural")
+                return replace(outcome, silent_reason="reply_held" if held_once else "natural")
 
             replied = False
+            # 同一步里给游戏的安排（开始做事 / 补充要求）没送到时，记下是哪个调用和它的拒绝回执：这一步的话先不说
+            arrangement_failed = ""
+            arrangement_refusal = ""
             # 同一步里并列的委派/环节切换先执行、说话最后收尾：reply 一成功本轮即结束，
             # 排在它后面的调用若不先做就会被丢掉（例如说完话却没切到下一个环节）
             for call in reply_last(tool_calls):
@@ -551,7 +585,22 @@ class Planner:
                     continue
                 outcome = replace(outcome, tool_trace=[*outcome.tool_trace, name])
 
-                if name == "streamer_reply":
+                if name == "streamer_reply" and arrangement_failed and not held_once:
+                    # 安排被拒 -> 这句不出口 -> 原话连同拒绝理由退回给我 -> 改好安排或换个说法，下一步再说。
+                    # 实测委派被拒后照样说出"那我自己招一只……来"，观众听到了决定，游戏那边什么也没收到
+                    held_once = True
+                    held = _held_reply_words(args)
+                    self.logger.info(f"同一步给游戏的安排（{arrangement_failed}）被拒，压住这句：{held}")
+                    observation = json.dumps(
+                        {
+                            "ok": False,
+                            "error": _held_reply_error(arrangement_failed),
+                            "held_reply": held,
+                            "refusal": arrangement_refusal,
+                        },
+                        ensure_ascii=False,
+                    )
+                elif name == "streamer_reply":
                     observation, outcome, replied = await self._invoke_reply(
                         args,
                         outcome,
@@ -569,6 +618,9 @@ class Planner:
                         source_dialogue=source_dialogue,
                         relay_without_input=relay_without_input,
                     )
+                    refusal = _observation_error(observation) if self.workbench.handles(name) else None
+                    if refusal is not None:
+                        arrangement_failed, arrangement_refusal = name, refusal
                 messages.append(
                     {
                         "role": "tool",
@@ -579,8 +631,8 @@ class Planner:
                 if replied:
                     return outcome
 
-        # 超步：未完成说话即收场
-        return replace(outcome, silent_reason="max_steps")
+        # 超步：未完成说话即收场（压住过一句又没再开口时记成 reply_held）
+        return replace(outcome, silent_reason="reply_held" if held_once else "max_steps")
 
     async def _resolve_use_memory(self, args: Dict[str, Any]) -> Tuple[str, List[int]]:
         """解析 reply 的 use_memory：编号在本窗名单内才认，渲染成说话档交表达侧。

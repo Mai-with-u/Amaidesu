@@ -296,6 +296,26 @@ async def test_delegate_rejected_while_target_has_in_flight_delegation(rig: _Rig
     assert res.success and res.structured_content["accepted"] is True
 
 
+async def test_in_flight_refusal_points_to_prompt_only_when_target_waits(rig: _Rig) -> None:
+    """拒绝理由的出路按对方状态给：停着等主意时指向补充要求；还在做时让主播直接说话。
+
+    实测委派拒绝说"用 framework_prompt 调整"，补充要求又被空窗闸门拦下说"直接说话"，两边互相指成死结。
+    """
+    first = (
+        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "把女仆救回来"})
+    ).structured_content["task_id"]
+
+    rig.ledger.update(first, "running", summary="还在做")
+    busy = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "放一只新女仆"})
+    assert busy.success is False
+    assert "没有就直接说话" in busy.error_message and "停着等你拿主意" not in busy.error_message
+
+    rig.ledger.update(first, "waiting_for_decision", summary="卡住了，等主播拿主意")
+    waiting = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "放一只新女仆"})
+    assert waiting.success is False
+    assert "停着等你拿主意：用 framework_prompt 把决定补给它" in waiting.error_message
+
+
 async def test_in_flight_gate_is_per_target(rig: _Rig) -> None:
     """门只看目标名下：agent_b 在途不挡别人的单。"""
     await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
