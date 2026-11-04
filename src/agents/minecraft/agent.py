@@ -66,6 +66,7 @@ from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
 from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
 from src.agents.minecraft.wake_queue import WakeQueue, opens_task
+from src.agents.minecraft.world_identity import WorldChange, WorldIdentity
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.context import BackgroundCheckpoint, PrefixGuard, TransientImages, absorb_result_images
 from src.modules.llm.capabilities import ProfileVisualCapabilityLookup, validate_llm_capability
@@ -192,8 +193,10 @@ class MinecraftAgent(BaseAgent):
         self._thinking_sink = thinking_sink
         self._logger = get_logger("MinecraftAgent")
 
-        # Agent 内部状态（内存，不持久化）
+        # Agent 内部状态（内存，不持久化）：工作文档按存档分开，换存档经 switch_world 一处切换
         self._mc_state: MinecraftAgentState = MinecraftAgentState()
+        # 角色眼下在哪个存档里：GoalWatch 每读一页、每次读自己时喂入（认存档的唯一记录）
+        self._world = WorldIdentity()
         # 技能世界支撑件：目录合并、正文按需读、按连接缓存的装载资料与开局代读。
         # 构造早于工具 Provider——minecraft_skill 的执行后端从这里取
         self._skill_support = SkillSupport(
@@ -219,6 +222,7 @@ class MinecraftAgent(BaseAgent):
             glance_reader=self._glance,
             creature_namer=self._name_creature,
             skill_reader=self._skill_support.read_skill if skill_library is not None else None,
+            save_reader=self._world.game_save,
         )
 
         # 命令驱动运行骨架：worker 等命令信号，收到命令后持续推进当前游戏任务。
@@ -271,6 +275,7 @@ class MinecraftAgent(BaseAgent):
             on_goal_gone=self._on_goal_gone,
             on_body_event=self._on_body_event,
             on_decision_asked=self._on_decision_asked,
+            on_page=self._on_events_page,
             wait_ms=config.events_wait_ms,
         )
 
@@ -1160,6 +1165,39 @@ class MinecraftAgent(BaseAgent):
             "需要时取消或换办法。"
         )
 
+    # ==================================================================
+    # 认出存档
+    # ==================================================================
+
+    async def _on_events_page(self, page: Any) -> None:
+        """GoalWatch 每读到一页：页里带着角色眼下在哪个存档（换存档时 Mod 会当场叫醒这次读取）。"""
+        await self._apply_world_change(self._world.absorb(page.world_fields))
+
+    async def _apply_world_change(self, change: Optional[WorldChange]) -> None:
+        """事件页或 observe(self) 认出了新的存档：切换工作文档；没变化什么也不做。"""
+        if change is not None:
+            await self._on_world_identified(change)
+
+    async def _on_world_identified(self, change: WorldChange) -> None:
+        """认出存档：进程启动后第一次认出只记下；从一个存档换到另一个时按以下顺序处理。
+
+        收起旧存档的待办、笔记与近期上报，换上新存档的一份（回到老存档会还原）→ 手上有任务时
+        告诉它这个任务是在旧存档里接的，先看眼前再决定继续还是上报 → 发一条换存档的里程碑，
+        主播的时间线上记下"从「A」换到了「B」"、存储据此知道这一场后半段玩的是哪个存档。
+        """
+        self._mc_state.switch_world(change.after.id)
+        if not change.switched or change.before is None:
+            self._logger.info(f"认出所在存档：「{change.after.label()}」")
+            return
+        before, after = change.before.label(), change.after.label()
+        self._logger.info(f"角色换了存档：「{before}」→「{after}」，工作文档已切换")
+        if not self._task_finished:
+            self._inject_wakeup_message(
+                f"[系统] 角色进了另一个世界「{after}」（原来在「{before}」）。在「{before}」记的待办和工作笔记已经收起，"
+                f"回到「{before}」会还原；手上这个任务是在「{before}」里接的，先看看眼前再决定继续做还是用 escalation 上报。"
+            )
+        await self._emit_game_event("milestone", f"从存档「{before}」换到了「{after}」")
+
     def _inject_wakeup_message(self, content: str) -> None:
         self._wake_queue.push_notice(content)
         self._wake_event.set()
@@ -1380,6 +1418,10 @@ class MinecraftAgent(BaseAgent):
         顺序：按 observe(self) 认出所在的世界（换了世界先换上那个世界的名册）→ 读 observe(scene) →
         名册记下这次看到的 → 变化写回库。认不出世界时不更新名册：分不清这些生物属于哪个世界。
         """
+        if body.ok:
+            # 读自己的回复同样带着 world：顺手更新一次眼下的存档；是不是旧版 Mod 只看事件页，
+            # 这次回复恰好缺 world 键时不把已认出的存档退回不分存档
+            await self._apply_world_change(self._world.absorb_observation(body.data))
         await self._bind_creature_world(body)
         scene = await self._call_maicraft(OBSERVE, {"what": "scene"})
         if scene.ok and self._creatures.world_key is not None:
@@ -1526,11 +1568,15 @@ class MinecraftAgent(BaseAgent):
         body_events: List[Dict[str, Any]] = []
         if event_type in ("report", "attention_required"):
             body_events = [dict(item) for item in self._batch_body_events]
+        # 事件发生时所在的存档由本 Agent 自己填（旧版 Mod 与不明时为空串）
+        save_id, save_name = self._world.save_fields()
         payload = GamePayload(
             game="minecraft",
             event_type=event_type,
             message=message,
             scene=scene,
+            save_id=save_id,
+            save_name=save_name,
             report_kind=report_kind,
             already_resolved=already_resolved,
             body_events=body_events,

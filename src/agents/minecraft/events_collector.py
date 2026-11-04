@@ -22,6 +22,7 @@ from pydantic import Field
 
 from src.agents.minecraft.config import DEFAULT_MAICRAFT_MCP_URL
 from src.agents.minecraft.maicraft import EVENTS, events_page_of, reply_of
+from src.agents.minecraft.world_identity import WorldRef, world_ref_of
 from src.modules.collectors.base import BaseCollector
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.events.event_bus import EventBus
@@ -88,6 +89,8 @@ class MaicraftEventsCollector(BaseCollector):
         self._stream_id: Optional[str] = None
         self._cursor: int = 0
         self._emitted_total: int = 0
+        # 最近读到的一页所在的存档（旧版 Mod 不报、不在世界里时为 None）
+        self._page_world: Optional[WorldRef] = None
         # 不可用原因特征串：Mod 长期不在时同因失败只报一次，避免常驻刷屏
         self._unavailable_reason: str = ""
 
@@ -218,6 +221,8 @@ class MaicraftEventsCollector(BaseCollector):
             arguments["after_cursor"] = self._cursor
         started = asyncio.get_running_loop().time()
         page = await self._read(arguments)
+        # 这一页的事件发生在哪个存档：子类转发里程碑时按它填存档（旧版 Mod 与不明时为 None）
+        self._page_world = world_ref_of(page.world_fields.get("world"))
         if first or page.cursor_status != "valid" or page.stream_id != self._stream_id:
             # 不带游标读到的是流里最早保留的一页：一页页翻到最新再开始转发。
             self._stream_id = page.stream_id

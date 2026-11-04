@@ -112,6 +112,10 @@ class FakeMaicraft(BaseToolProvider):
         self.events: List[Dict[str, Any]] = []
         self.stream_id = "stream-1"
         self.calls: List[tuple[str, Dict[str, Any]]] = []
+        # 角色所在的存档：reports_world 为 False 时扮演旧版 Mod（回复里没有 world 键）
+        self.reports_world = False
+        self.world: Optional[Dict[str, Any]] = None
+        self._streams = 1
         self.self_view: Dict[str, Any] = {
             "position": {"x": 3.6, "y": 64.0, "z": -7.2, "dimension": "minecraft:overworld"},
             "facing": "南",
@@ -182,7 +186,10 @@ class FakeMaicraft(BaseToolProvider):
 
     async def _observe(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         what = arguments.get("what", "scene")
-        return ok(dict(self.self_view if what == "self" else self.scene_view))
+        view = dict(self.self_view if what == "self" else self.scene_view)
+        if what == "self" and self.reports_world:
+            view["world"] = self.world
+        return ok(view)
 
     async def _lookup(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         return ok({"abilities": [{"ability": "maicraft:gather"}, {"ability": "maicraft:remember"}]})
@@ -252,9 +259,16 @@ class FakeMaicraft(BaseToolProvider):
         page = [event for event in self.events if event["cursor"] > after]
         cursor = page[-1]["cursor"] if page else (self.events[-1]["cursor"] if self.events else 0)
         cursor = max(cursor, after) if status == "valid" else cursor
-        return ok(
-            {"stream_id": self.stream_id, "cursor": cursor, "has_more": False, "cursor_status": status, "events": page}
-        )
+        data = {
+            "stream_id": self.stream_id,
+            "cursor": cursor,
+            "has_more": False,
+            "cursor_status": status,
+            "events": page,
+        }
+        if self.reports_world:
+            data["world"] = self.world
+        return ok(data)
 
     # 测试推进目标
 
@@ -344,6 +358,20 @@ class FakeMaicraft(BaseToolProvider):
         }
         self._append("asked", decision_id, question["text"])
         return decision_id
+
+    def enter_world(self, world_id: str, name: str = "") -> None:
+        """进了某个存档（Mod 认出了世界）：事件流换新编号，每页与读自己都带上这个存档。"""
+        self.reports_world = True
+        self.world = {"id": world_id, "name": name, "source": "world_id_file"}
+        self._streams += 1
+        self.stream_id = f"stream-{self._streams}"
+        self._new_event.set()
+
+    def leave_world(self) -> None:
+        """退回主菜单：world 为 null，事件流不换。"""
+        self.reports_world = True
+        self.world = None
+        self._new_event.set()
 
     def change_world(self) -> None:
         """换了世界：事件流换新编号，旧目标都不在了。"""

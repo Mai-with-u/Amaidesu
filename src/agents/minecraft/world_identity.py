@@ -1,0 +1,138 @@
+"""角色眼下在哪个 Minecraft 存档里：从 MaiCraft 报的 ``world`` 认出存档，判定"换了存档"。
+
+MaiCraft 在 ``events`` 每一页与 ``observe(self)`` 里都带 ``world``：``{"id", "name", "source"}``，
+不在世界里或还没认出时为 null。``id`` 同一个存档重进、重启游戏都不变，删档后同名重建、
+复制出来的存档都是新的；``name`` 只给人看。本模块把它读成三种状态：
+
+- 旧版 Mod：回复里根本没有 ``world`` 这个键——报不出存档，记忆与工作日志照旧不分存档；
+- 不明：``world`` 为 null（在主菜单、刚进世界还没认出），或还没读到过任何一页；
+- 认出：``world.id`` 非空。
+
+"换了存档"只认"上一个认出的编号被另一个认出的编号取代"：回主菜单再进同一个存档不算换；
+不看 ``stream_id``（重进同一个世界它也会变）。进程启动后第一次认出不算换，只是认出。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Mapping, Optional
+
+from src.modules.logging import get_logger
+from src.modules.types.game_save import GameSave
+
+__all__ = ["WorldChange", "WorldIdentity", "WorldRef", "world_ref_of"]
+
+logger = get_logger("MinecraftWorldIdentity")
+
+# 存档名进提示词与标签前截到这个长度（服务器列表名可以很长）
+_NAME_MAX_CHARS = 32
+
+
+@dataclass(frozen=True)
+class WorldRef:
+    """一个认出的存档：编号只做相等比较，名字只显示。"""
+
+    id: str
+    name: str = ""
+
+    def label(self) -> str:
+        """给人看的称呼：有名字用名字，没有名字用编号前几位。"""
+        return self.name or f"编号 {self.id[:8]}"
+
+
+@dataclass(frozen=True)
+class WorldChange:
+    """一次存档变化：``before`` 为 None 是进程启动后第一次认出，不算换存档。"""
+
+    before: Optional[WorldRef]
+    after: WorldRef
+
+    @property
+    def switched(self) -> bool:
+        """是否从一个认出的存档换到了另一个。"""
+        return self.before is not None and self.before.id != self.after.id
+
+
+def world_ref_of(raw: Any) -> Optional[WorldRef]:
+    """读 MaiCraft 的 ``world`` 对象；null、形状不对或编号为空都按"不明"返回 None。"""
+    if not isinstance(raw, Mapping):
+        return None
+    world_id = raw.get("id")
+    if not isinstance(world_id, str) or not world_id.strip():
+        return None
+    name = raw.get("name")
+    clean_name = " ".join(name.split())[:_NAME_MAX_CHARS] if isinstance(name, str) else ""
+    return WorldRef(id=world_id.strip(), name=clean_name)
+
+
+class WorldIdentity:
+    """MC 包内唯一的存档身份记录：喂入 MaiCraft 回复，给出眼下的存档与"换没换"。"""
+
+    def __init__(self) -> None:
+        # None = 还没读到过回复（不知道 Mod 报不报存档）；True = 旧版 Mod，报不出存档
+        self._legacy: Optional[bool] = None
+        # 眼下认出的存档；None = 不明（主菜单、刚进世界、还没读到）
+        self._current: Optional[WorldRef] = None
+        # 最近一次认出的存档：回主菜单时保留，再进别的存档时据此判定"换了"
+        self._last_known: Optional[WorldRef] = None
+
+    @property
+    def legacy(self) -> bool:
+        """是否旧版 Mod（回复里没有 ``world`` 键）。"""
+        return bool(self._legacy)
+
+    @property
+    def current(self) -> Optional[WorldRef]:
+        """眼下认出的存档；不明或旧版 Mod 为 None。"""
+        return self._current
+
+    def absorb(self, data: Mapping[str, Any]) -> Optional[WorldChange]:
+        """喂入一页 ``events`` 的 data；认出了新的存档时返回变化。
+
+        是不是旧版 Mod 只由事件页判定：页里没有 ``world`` 键就是旧版，记一次、此后一直按
+        不分存档处理，直到某一页带上了这个键（Mod 升级后重连）。
+        """
+        if "world" not in data:
+            if self._legacy is not True:
+                logger.info("MaiCraft 事件页里没有 world：按旧版 Mod 处理，记忆与工作日志不分存档")
+            self._legacy = True
+            self._current = None
+            return None
+        self._legacy = False
+        return self._take(data.get("world"))
+
+    def absorb_observation(self, data: Mapping[str, Any]) -> Optional[WorldChange]:
+        """喂入一次 ``observe(self)`` 的 data：只更新眼下的存档，不判是不是旧版 Mod。
+
+        新版 Mod 在世界里时 ``observe(self)`` 一定带 ``world``；万一某次回复缺了这个键，
+        按"这次没说"跳过，不把已经认出的存档退回不分存档、等下一页事件页再翻回来。
+        """
+        if "world" not in data:
+            return None
+        return self._take(data.get("world"))
+
+    def _take(self, raw: Any) -> Optional[WorldChange]:
+        """记下眼下的存档；认出的编号与上一个认出的不同时返回变化（null 只算回主菜单）。"""
+        ref = world_ref_of(raw)
+        self._current = ref
+        if ref is None:
+            return None
+        before = self._last_known
+        self._last_known = ref
+        if before is not None and before.id == ref.id:
+            return None
+        return WorldChange(before=before, after=ref)
+
+    def game_save(self) -> Optional[GameSave]:
+        """报给主播的存档：旧版 Mod 不报（None = 不分存档）；不明时编号为空。"""
+        if self._legacy:
+            return None
+        if self._current is None:
+            return GameSave()
+        return GameSave(id=self._current.id, name=self._current.name)
+
+    def save_fields(self) -> tuple[str, str]:
+        """游戏事件载荷的存档两列（编号, 名字）；不明或旧版 Mod 为两个空串。"""
+        if self._current is None:
+            return "", ""
+        return self._current.id, self._current.name

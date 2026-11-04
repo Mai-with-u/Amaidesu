@@ -76,10 +76,13 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
             # 步进完成是主播可讲的进展：Mod 自带结论句，去坐标/观察编号后直接讲；
             # 不走 summarize()（那是为身体事件配的开头句式）。
             message = str(event.get("message") or "")
+            world = self._page_world
             payload = GamePayload(
                 game="minecraft",
                 event_type="milestone",
                 message=without_coordinates(message),
+                save_id=world.id if world is not None else "",
+                save_name=world.name if world is not None else "",
             )
             await self.emit_event(KIND_TO_EVENT[kind], payload, source=self.name)
             self.logger.info(f"[进展事件] {payload.message}（{source_type}）")

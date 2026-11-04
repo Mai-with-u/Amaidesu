@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 
-from .maicraft import AWAITING_ANSWER, EVENTS, GOAL, GoalRun, MaicraftReply, events_page_of, goal_run_of
+from .maicraft import AWAITING_ANSWER, EVENTS, GOAL, EventsPage, GoalRun, MaicraftReply, events_page_of, goal_run_of
 
 logger = get_logger("MinecraftGoals")
 
@@ -68,6 +68,8 @@ GoalChanged = Callable[[GoalRun, bool, str, bool], Awaitable[None]]
 GoalGone = Callable[[int, str], Awaitable[None]]
 DecisionAsked = Callable[[GoalRun], Awaitable[None]]
 BodyEvent = Callable[[Dict[str, Any]], Awaitable[None]]
+# 每读到一页事件就把这一页交出去：页里带着角色眼下在哪个存档（认存档的唯一喂入点）
+PageSeen = Callable[[EventsPage], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -91,6 +93,7 @@ class GoalWatch:
         on_goal_gone: GoalGone,
         on_body_event: BodyEvent,
         on_decision_asked: Optional[DecisionAsked] = None,
+        on_page: Optional[PageSeen] = None,
         wait_ms: int = DEFAULT_WAIT_MS,
     ) -> None:
         self._call = call
@@ -99,6 +102,7 @@ class GoalWatch:
         self._on_goal_gone = on_goal_gone
         self._on_body_event = on_body_event
         self._on_decision_asked = on_decision_asked
+        self._on_page = on_page
         self._wait_ms = wait_ms
         self._goals: Dict[int, TrackedGoal] = {}
         self._stream_id: Optional[str] = None
@@ -193,6 +197,7 @@ class GoalWatch:
             await self._back_off()
             return
         self._failures = 0
+        await self._see_page(page)
         if first or page.cursor_status != "valid" or page.stream_id != self._stream_id:
             # 首次读取：之前的事件发生在本 Agent 接手之前，不补发；事件流换了：旧游标作废，
             # 在跟踪的目标可能随换世界不在了，逐个查清楚。
@@ -212,6 +217,15 @@ class GoalWatch:
         if not page.events and asyncio.get_running_loop().time() - started < _EMPTY_READ_FLOOR_S:
             # 服务端没按要求等就空手返回（旧版本或异常）：停一下再读，不让跟踪循环空转。
             await asyncio.sleep(_EMPTY_READ_FLOOR_S)
+
+    async def _see_page(self, page: EventsPage) -> None:
+        """把这一页交给页回调（认存档）；回调出错只记日志，不打断目标跟踪。"""
+        if self._on_page is None:
+            return
+        try:
+            await self._on_page(page)
+        except Exception as exc:  # noqa: BLE001 - 认存档出错不影响读事件、跟踪目标
+            logger.warning(f"处理事件页上的存档信息出错: {type(exc).__name__}: {exc}", exc=True)
 
     async def _skip_backlog(self, has_more: bool) -> None:
         """不带游标读到的是流里最早保留的一页：一页页翻到最新，旧事件不补发。"""

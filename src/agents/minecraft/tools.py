@@ -39,6 +39,7 @@ from src.modules.tools.models import (
     ToolExecutionResult,
     ToolSpec,
 )
+from src.modules.types.game_save import GameSave
 
 from .maicraft import GOAL, MaicraftReply, goal_id_of_ledger, goal_run_of, ledger_status_of
 from .state import MinecraftAgentState
@@ -391,10 +392,16 @@ class MinecraftToolProvider(GameToolProvider):
     # 按名读技能正文：由 Agent 按自己的受众名筛本地策略，远端玩法技能按地址去 MaiCraft 读（未注入技能库时不提供该工具）；
     # 远端技能要经 MCP 的 resources/read 取正文，所以读取器是异步的。
     skill_reader: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None
+    # 角色眼下在哪个存档里：由 Agent 从 MaiCraft 报的世界身份读（未注入时按不分存档）
+    save_reader: Optional[Callable[[], Optional[GameSave]]] = None
 
     @property
     def name(self) -> str:
         return PROVIDER_NAME
+
+    def current_save(self) -> Optional[GameSave]:
+        """眼下的存档（主播按它分清记忆里哪些是这个存档的事）；旧版 Mod 报不出存档时为 None。"""
+        return self.save_reader() if self.save_reader is not None else None
 
     def list_tools(self) -> Iterable[ToolSpec]:
         specs = [

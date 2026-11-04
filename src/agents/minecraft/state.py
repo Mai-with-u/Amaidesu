@@ -3,6 +3,10 @@
 状态归属：todo（待办）/ notebook（工作笔记）/ reports（近期上报）
 全部内存存储，不持久化（Agent 生命周期内有效；跨场次恢复后续按需添加）。
 
+三样工作文档按存档分开：换了存档（Minecraft 的另一个世界）时收起旧存档那一份、换上新存档
+那一份（新存档是空的），回到老存档还原。读写入口只有本类：``todos`` / ``notebook`` /
+``reports`` 永远是眼下这个存档的，任何人往里写都落进眼下这个存档；换存档只经 ``switch_world``。
+
 不建模游戏世界数据（health/food/坐标等）——那是 maicraft 执行层的事；
 maicraft 返回原样给 LLM 读，本状态只承载 Agent 自己的"指令 + 待办 + 记录"。
 任务原始指令、执行阶段与步数由 MinecraftAgent 随逻辑任务保留，不属于这些可编辑工作文档。
@@ -47,6 +51,15 @@ class TodoItem:
 
 
 @dataclass(slots=True)
+class _WorldDocs:
+    """收起来的某个存档的工作文档。"""
+
+    todos: List[TodoItem]
+    notebook: str
+    reports: List[Dict[str, str]]
+
+
+@dataclass(slots=True)
 class MinecraftAgentState:
     """MinecraftAgent 内存状态
 
@@ -54,11 +67,34 @@ class MinecraftAgentState:
         todos: 待办列表（minecraft_todo 全量文档）
         notebook: 工作笔记全文（minecraft_notebook 全量文档）
         reports: 近期上报（emit game.report 时同步；最多 MAX_REPORTS 条）
+        world_id: 这三样属于哪个存档；空串 = 还没认出过存档（旧版 Mod 一直是空串）
+        shelved: 收起来的别的存档的工作文档（存档编号 → 那一份）
     """
 
     todos: List[TodoItem] = field(default_factory=list)
     notebook: str = ""
     reports: List[Dict[str, str]] = field(default_factory=list)
+    world_id: str = ""
+    shelved: Dict[str, _WorldDocs] = field(default_factory=dict)
+
+    # ---- 存档 ----
+
+    def switch_world(self, world_id: str) -> bool:
+        """换到某个存档的工作文档，返回是否真的换了一份。
+
+        认出的存档和眼下这份相同：不动。眼下这份还没归属（进程刚起、还没认出过存档）：
+        手上的文档就归这个存档——没进世界时角色什么也做不了，写下的只会是这个存档的事。
+        否则收起眼下这份、换上那个存档收起过的一份（没有就是空的）。
+        """
+        if not world_id or world_id == self.world_id:
+            return False
+        previous, self.world_id = self.world_id, world_id
+        if not previous:
+            return False
+        self.shelved[previous] = _WorldDocs(todos=self.todos, notebook=self.notebook, reports=self.reports)
+        docs = self.shelved.pop(world_id, None) or _WorldDocs(todos=[], notebook="", reports=[])
+        self.todos, self.notebook, self.reports = docs.todos, docs.notebook, docs.reports
+        return True
 
     # ---- todo 文档操作 ----
 

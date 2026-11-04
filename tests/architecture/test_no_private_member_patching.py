@@ -32,7 +32,7 @@ TESTS = Path(__file__).resolve().parents[1]
 # 条目会因"调用消失"而红，由合并者删除条目转绿——预期协作方式。
 ALLOWED_PRIVATE_PATCHES: dict[str, str] = {
     # agents/test_minecraft_attention_collector.py：采集器内部就绪检查，无公有接缝
-    "agents/test_minecraft_attention_collector.py:517": "collector._ensure_ready",
+    "agents/test_minecraft_attention_collector.py:533": "collector._ensure_ready",
     # dashboard/test_system_api_v2.py：系统信息装配的内部聚合项与 changelog 路径常量
     "dashboard/test_system_api_v2.py:213": "system_api._build_component_items",
     "dashboard/test_system_api_v2.py:232": "system_api._CHANGELOG_PATH",

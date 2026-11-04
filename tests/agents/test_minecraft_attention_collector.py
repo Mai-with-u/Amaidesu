@@ -334,6 +334,22 @@ async def test_step_finished_forwards_to_milestone_without_coordinates() -> None
     assert "-9" not in payload.message
 
 
+async def test_step_finished_milestone_carries_the_save_of_its_page() -> None:
+    """步进完成转出的里程碑带着这一页所在的存档；旧版 Mod 的页没有 world，存档留空。"""
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5)
+    page = _page([_event(6, "step_finished", "水车搭好了", goal_id=3)], cursor=6)
+    page["world"] = {"id": "aaa", "name": "老家", "source": "world_id_file"}
+    client.pages.append(page)
+    client.pages.append(_page([_event(7, "step_finished", "屋顶封好了", goal_id=3)], cursor=7))
+
+    await collector._drain()
+    await collector._drain()
+
+    saves = [(payload.save_id, payload.save_name) for _name, payload in bus.events]
+    assert saves == [("aaa", "老家"), ("", "")]
+
+
 async def test_finished_temporary_task_is_marked_resolved() -> None:
     bus = _FakeEventBus()
     collector, client = await _primed(bus)

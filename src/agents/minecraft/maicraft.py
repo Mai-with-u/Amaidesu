@@ -170,13 +170,18 @@ def goal_id_of_ledger(task_id: str) -> Optional[int]:
 
 @dataclass(slots=True)
 class EventsPage:
-    """一页任务事件：流编号、读到哪、这一页的事件、后面还有没有、游标是否还有效。"""
+    """一页任务事件：流编号、读到哪、这一页的事件、后面还有没有、游标是否还有效，以及角色所在的存档。
+
+    ``world_fields`` 原样留着这一页的 ``world`` 键（``{"world": ...}``）；旧版 Mod 不报存档时为空字典，
+    交给 ``WorldIdentity.absorb`` 区分"旧版 Mod"与"不在世界里"。
+    """
 
     stream_id: str
     cursor: int
     events: List[Dict[str, Any]]
     has_more: bool
     cursor_status: str
+    world_fields: Dict[str, Any] = field(default_factory=dict)
 
 
 def events_page_of(data: Dict[str, Any]) -> Optional[EventsPage]:
@@ -192,6 +197,7 @@ def events_page_of(data: Dict[str, Any]) -> Optional[EventsPage]:
         events=[event for event in events if isinstance(event, dict)],
         has_more=bool(data.get("has_more")),
         cursor_status=str(data.get("cursor_status") or "valid"),
+        world_fields={"world": data.get("world")} if "world" in data else {},
     )
 
 
