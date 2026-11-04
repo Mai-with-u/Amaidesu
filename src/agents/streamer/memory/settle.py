@@ -50,8 +50,10 @@ from src.modules.storage.models.memory import (
 )
 from src.modules.storage.models.sessions import LiveSession
 from src.modules.storage.repos.sessions import MAX_SETTLE_ATTEMPTS
+from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.agents.streamer.memory.render import memory_ref_numbers
+from src.agents.streamer.memory.saves import SaveTimeline
 from src.modules.utils.time_utils import now_ms
 
 from ..background import SUMMARY_PROFILE
@@ -114,6 +116,8 @@ class SettleMaterial:
     games_text: str
     # 启用了的游戏 Agent：承诺的 game 也可以是它们（短场次可能一条游戏事件都没记下）
     game_agents: List[str]
+    # 各游戏这一场先后待过的存档：档案与承诺挂了游戏时，按台词时刻认是在哪个存档里说的
+    saves: SaveTimeline
     abilities_text: str
     open_commitments: List[Commitment]
     void_titles: List[Tuple[int, str]]
@@ -256,6 +260,37 @@ def _as_commitment_ref(raw: Any) -> Optional[int]:
 
 # 模型表达"没有"时常写成字符串：这些写法都按没填处理，不当成认不出的编号
 _EMPTY_LITERALS = frozenset({"none", "null", "nil", "n/a", "na", "-", "无", "没有", "空", "否"})
+
+
+def _game_of(raw: Any, material: SettleMaterial) -> Optional[str]:
+    """模型给的游戏名换成本场认得的游戏；认不出就当与游戏无关。
+
+    挂的游戏要么本场有游戏事件，要么是启用了的游戏 Agent：开错后马上重开的一两分钟里
+    常常一条游戏事件都没记下，明明是游戏里的事却挂不上游戏，就会进常驻简报、不玩这个
+    游戏时也每场被念叨。事件行前面标着存档（"minecraft「新档」"），模型偶尔把存档名
+    一起抄进游戏名，这时只认前面的游戏名。
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    name = raw.strip()
+    known = [*material.games, *material.game_agents]
+    if name in known:
+        return name
+    for game in known:
+        if name.startswith(f"{game}「"):
+            return game
+    return None
+
+
+def _place_of(row: Commitment) -> str:
+    """旧承诺挂在哪：给模型看的后缀（"；挂在 minecraft 的存档「生存一档」"），没挂游戏为空串。
+
+    同一句"把桥修完"在不同存档里是两件事；标出存档，模型判"又说了一遍"和"做完了"时才分得清。
+    """
+    if not row.game:
+        return ""
+    save = GameSave(id=row.save_id, name=row.save_name)
+    return f"；挂在 {row.game} 的存档「{save.label}」" if save.known else f"；挂在 {row.game}"
 
 
 def _has_value(raw: Any) -> bool:
@@ -474,9 +509,10 @@ class SessionSettler:
     # ------------------------------------------------------------------
 
     async def _collect_material(self, session: LiveSession, delivered: List[SettleSpeechLine]) -> SettleMaterial:
-        """把一场的原料全取出来：她说的话、游戏、她能做的事、旧承诺。"""
+        """把一场的原料全取出来：她说的话、游戏（连同待过的存档）、她能做的事、旧承诺。"""
         speech_text, lines_by_number, speech_note = self._render_speech(delivered)
-        games, games_text = await self._render_games(session)
+        saves = await self._load_saves(session)
+        games, games_text = await self._render_games(session, saves)
         game_agents = self._enabled_game_names()
         abilities_text = self._render_abilities(game_agents)
         open_commitments, open_text, void_titles, void_text = await self._load_commitments(session)
@@ -488,6 +524,7 @@ class SessionSettler:
             games=games,
             games_text=games_text,
             game_agents=game_agents,
+            saves=saves,
             abilities_text=abilities_text,
             open_commitments=open_commitments,
             void_titles=void_titles,
@@ -557,8 +594,23 @@ class SessionSettler:
             window = _DEFAULT_CONTEXT_WINDOW
         return max(512, int(window * _SPEECH_WINDOW_RATIO))
 
-    async def _render_games(self, session: LiveSession) -> Tuple[List[str], str]:
-        """本场玩过的游戏名与游戏里的关键事件；没有游戏事件时两者都空。"""
+    async def _load_saves(self, session: LiveSession) -> SaveTimeline:
+        """这一场各游戏先后待过的存档；读不到就当都认不出（挂游戏的条目按"不确定是哪个存档"记）。"""
+        if self._events is None:
+            return SaveTimeline()
+        try:
+            spans = await self._events.list_session_save_spans(live_session_id=int(session.id))
+        except Exception as exc:  # noqa: BLE001 - 认不出存档只少一层区分，整理照常跑
+            logger.warning(f"场次 {session.id} 读游戏存档段失败，挂游戏的条目不标存档: {exc}", exc=exc)
+            return SaveTimeline()
+        return SaveTimeline(spans)
+
+    async def _render_games(self, session: LiveSession, saves: SaveTimeline) -> Tuple[List[str], str]:
+        """本场玩过的游戏名与游戏里的关键事件；没有游戏事件时两者都空。
+
+        事件前面标着当时在哪个存档；一场里换过存档的游戏另起一行说明，让模型知道那是两个
+        互不相干的世界，不把两个存档里的事写成同一件。
+        """
         if self._events is None:
             return [], ""
         try:
@@ -574,12 +626,22 @@ class SessionSettler:
         if not games:
             return [], ""
         game_lines = [f"#{index} {name}" for index, name in enumerate(games, start=1)]
+        for name in games:
+            visited = saves.saves_of(name)
+            if len(visited) > 1:
+                labels = "".join(f"「{save.label}」" for save in visited)
+                game_lines.append(
+                    f"（{name} 这一场待过不止一个存档：{labels}。不同存档是互不相干的世界，事件前面标着是哪个存档）"
+                )
         event_lines: List[str] = []
         for record in records:
             message = " ".join((getattr(record, "message", "") or "").split())
             if not message:
                 continue
-            event_lines.append(f"- [{getattr(record, 'game', '')}] {message}")
+            game = getattr(record, "game", "")
+            save = GameSave(id=getattr(record, "save_id", "") or "", name=getattr(record, "save_name", "") or "")
+            where = f"{game}「{save.label}」" if save.known else game
+            event_lines.append(f"- [{where}] {message}")
         text = "【本场玩过的游戏】\n" + "\n".join(game_lines)
         if event_lines:
             text += "\n\n【游戏里的关键事件】\n" + "\n".join(event_lines)
@@ -614,7 +676,9 @@ class SessionSettler:
             logger.warning(f"场次 {session.id} 读误记承诺失败: {exc}", exc=exc)
             void_rows = []
         void_titles = [(int(row.id), row.what) for row in reversed(void_rows)]
-        open_lines = [f"#{row.id} 「{row.what}」（当初的原话「{row.quote or '无'}」）" for row in open_commitments]
+        open_lines = [
+            f"#{row.id} 「{row.what}」（当初的原话「{row.quote or '无'}」{_place_of(row)}）" for row in open_commitments
+        ]
         void_lines = [f"#{commitment_id} 「{what}」" for commitment_id, what in void_titles]
         return open_commitments, "\n".join(open_lines), void_titles, "\n".join(void_lines)
 
@@ -717,7 +781,10 @@ class SessionSettler:
     def _validate_archive(
         self, rows: List[Any], material: SettleMaterial
     ) -> Tuple[List[PendingArchiveLine], List[UnregisteredItem]]:
-        """场次档案的校验：逐字引文 + 至多 8 行；没通过的连同原话进未登记清单。"""
+        """场次档案的校验：逐字引文 + 至多 8 行；没通过的连同原话进未登记清单。
+
+        挂的游戏与承诺同一口径；挂了游戏的，按那行台词的时刻认是在哪个存档里说的。
+        """
         written: List[PendingArchiveLine] = []
         missed: List[UnregisteredItem] = []
         for raw in rows:
@@ -747,7 +814,18 @@ class SessionSettler:
                     )
                 )
                 continue
-            written.append(PendingArchiveLine(text=title, quote=verified, evidence_chat_id=int(line.id)))
+            game_name = _game_of(raw.get("game"), material)
+            save = material.saves.save_at(game_name, int(line.timestamp_ms))
+            written.append(
+                PendingArchiveLine(
+                    text=title,
+                    quote=verified,
+                    evidence_chat_id=int(line.id),
+                    game=game_name,
+                    save_id=save.id,
+                    save_name=save.name,
+                )
+            )
         return written, missed
 
     def _validate_commitments(
@@ -858,13 +936,9 @@ class SessionSettler:
                     )
                     continue
                 viewer_id = int(reply_viewer_id)
-            game = raw.get("game")
-            game_name = str(game).strip() if isinstance(game, str) and game.strip() else None
-            # 挂的游戏要么本场有游戏事件，要么是启用了的游戏 Agent：开错后马上重开的一两分钟里
-            # 常常一条游戏事件都没记下，承诺明明是游戏里的事却挂不上游戏，就会进常驻简报、
-            # 不玩这个游戏时也每场被念叨
-            if game_name is not None and game_name not in material.games and game_name not in material.game_agents:
-                game_name = None
+            # 挂了游戏的，按答应那句话的时刻认是在哪个存档里答应的
+            game_name = _game_of(raw.get("game"), material)
+            save = material.saves.save_at(game_name, int(line.timestamp_ms))
             written.append(
                 PendingCommitment(
                     what=what,
@@ -872,6 +946,8 @@ class SessionSettler:
                     evidence_chat_id=int(line.id),
                     viewer_id=viewer_id,
                     game=game_name,
+                    save_id=save.id,
+                    save_name=save.name,
                 )
             )
             used_lines.add(int(line.id))

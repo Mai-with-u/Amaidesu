@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence, Set
 
-from src.modules.storage.models.events import GameEventRecord, GameEventTypeCount
+from src.modules.storage.models.events import GameEventRecord, GameEventTypeCount, GameSaveSpan
 from src.modules.storage.repos._base import BaseRepo
 
 
@@ -53,6 +53,38 @@ class EventRepo(BaseRepo):
                     (int(live_session_id), page_limit),
                 ).fetchall()
                 return [GameEventRecord.model_validate(dict(row)) for row in reversed(rows)]
+
+        return await self._run_in_executor(_exec)
+
+    async def list_session_save_spans(self, *, live_session_id: int) -> List[GameSaveSpan]:
+        """取一场里每个游戏按时间先后待过的存档段（只看记下了存档的事件）。
+
+        同一游戏连续几条事件在同一个存档里就并成一段，A → B → 回 A 是三段；段名取这段里最后
+        一次报的名字（存档改过名时显示新名）。只取四列、不限条数：长场次前半段待过的存档不能
+        因为只看最近几十条事件而丢掉，否则前半场说的话会被认成是在后来的存档里说的。
+        """
+
+        def _exec() -> List[GameSaveSpan]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT game, save_id, save_name, timestamp_ms FROM game_events"
+                    " WHERE live_session_id=? AND save_id != '' ORDER BY timestamp_ms ASC, id ASC",
+                    (int(live_session_id),),
+                ).fetchall()
+            spans: List[GameSaveSpan] = []
+            # 每个游戏眼下这一段在 spans 里的位置：存档没变就延长这一段，变了就另起一段
+            current: Dict[str, int] = {}
+            for row in rows:
+                game, save_id = str(row["game"]), str(row["save_id"])
+                name, at_ms = str(row["save_name"] or ""), int(row["timestamp_ms"])
+                index = current.get(game)
+                if index is not None and spans[index].save_id == save_id:
+                    span = spans[index]
+                    spans[index] = span.model_copy(update={"ended_ms": at_ms, "save_name": name or span.save_name})
+                    continue
+                current[game] = len(spans)
+                spans.append(GameSaveSpan(game=game, save_id=save_id, save_name=name, started_ms=at_ms, ended_ms=at_ms))
+            return spans
 
         return await self._run_in_executor(_exec)
 

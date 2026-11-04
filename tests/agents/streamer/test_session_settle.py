@@ -229,6 +229,67 @@ async def test_game_commitment_sticks_to_enabled_game_without_session_events(
     assert len(commitments) == 1 and commitments[0].game == "Minecraft"
 
 
+async def test_archive_and_commitments_carry_the_save_they_were_said_in(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """一场里从老档换到新档：挂游戏的档案与承诺按那句话说出口的时刻记下存档，不挂游戏的不记；
+    模型看到事件标着存档、换过存档有说明、旧承诺标着挂在哪个存档。"""
+    session_id = await _ended_session(store)
+    old = await store.commitments.insert_commitment(
+        what="把北边的桥修完",
+        quote="桥我下次一定修完",
+        game="Minecraft",
+        save_id="a",
+        save_name="老档",
+        now_ms_value=100,
+    )
+    assert old is not None
+    for at_ms, save_id, save_name, message in (
+        (1_150, "a", "老档", "麦田收完了"),
+        (1_500, "b", "新档", "进了新世界"),
+    ):
+        await store.events.insert_game_event(
+            live_session_id=session_id,
+            game="Minecraft",
+            event_type="milestone",
+            message=message,
+            timestamp_ms=at_ms,
+            save_id=save_id,
+            save_name=save_name,
+        )
+    await _speech(store, session_id, "麦子全收进仓库了，一粒没剩", timestamp_ms=1_200)
+    await _speech(store, session_id, "新世界出生点旁边就有村子，下回先去村里换绿宝石", timestamp_ms=1_600)
+    await _speech(store, session_id, "今天的猜谜大家猜得好准", timestamp_ms=1_700)
+    llm = _reply(
+        '{"archive": ['
+        '{"line": 1, "title": "Minecraft：麦子收完", "quote": "麦子全收进仓库了", "game": "Minecraft"},'
+        '{"line": 2, "title": "Minecraft：出生点旁边有村子", "quote": "新世界出生点旁边就有村子", "game": "Minecraft「新档」"},'
+        '{"line": 3, "title": "猜谜环节", "quote": "今天的猜谜大家猜得好准", "game": null}]}',
+        '{"commitments": [{"line": 2, "quote": "下回先去村里换绿宝石",'
+        ' "what": "去村里换绿宝石", "to": "everyone", "game": "Minecraft", "same_as": null}]}',
+        '{"closed": []}',
+    )
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert [(line.text, line.game, line.save_id, line.save_name) for line in lines] == [
+        ("Minecraft：麦子收完", "Minecraft", "a", "老档"),
+        ("Minecraft：出生点旁边有村子", "Minecraft", "b", "新档"),
+        ("猜谜环节", None, "", ""),
+    ]
+    added = [item for item in await store.commitments.list_commitments(statuses=["open"]) if item.id != old]
+    assert [(item.what, item.save_id, item.save_name) for item in added] == [("去村里换绿宝石", "b", "新档")]
+    commitment_prompt = llm.calls[1]["input"]
+    assert "[Minecraft「老档」] 麦田收完了" in commitment_prompt
+    assert "Minecraft 这一场待过不止一个存档：「老档」「新档」" in commitment_prompt
+    assert (
+        "#%d 「把北边的桥修完」（当初的原话「桥我下次一定修完」；挂在 Minecraft 的存档「老档」）" % old
+        in commitment_prompt
+    )
+
+
 async def test_commitment_to_person_without_reply_target_is_reported(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:

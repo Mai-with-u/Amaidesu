@@ -1,6 +1,6 @@
 ---
 name: memory_archive_system
-version: "1.0"
+version: "1.1"
 description: "下播整理的第一次调用：从本场台词与游戏事件里挑出值得下次开播提起的事，写成场次档案（后台 summary 档位调用）"
 variables: []
 author: Amaidesu
@@ -22,12 +22,13 @@ tags: [streamer, memory, archive]
 
 只输出 JSON，不要解释，不要代码块标记：
 
-{"archive": [{"line": 12, "title": "Minecraft：水车搭好了", "quote": "水车搭好啦"}]}
+{"archive": [{"line": 12, "title": "Minecraft：水车搭好了", "quote": "水车搭好啦", "game": "minecraft"}]}
 
-每项三个字段：
+每项四个字段：
 
 - line：这件事出自她的哪一行台词，填台词前的编号；
 - title：不超过 30 字的一句话标题。游戏相关的写上游戏名（"Minecraft：水车搭好了"）；不写这是第几场，不写"第一次"；
-- quote：她那行台词里的一段原话，直接照抄，不超过 80 字，挑最能说明这件事的那半句。
+- quote：她那行台词里的一段原话，直接照抄，不超过 80 字，挑最能说明这件事的那半句；
+- game：这件事发生在哪个游戏里，照抄【本场玩过的游戏】里编号后面的游戏名，只写游戏名、不带存档名；聊天、讲故事这类不在游戏世界里发生的事填 null，本场没有玩游戏时一律填 null。
 
 最多 8 项，重要的排前面。没有值得下次提起的事就输出 {"archive": []}，不要硬凑。

@@ -30,3 +30,10 @@ class GameSave(BaseModel):
     def known(self) -> bool:
         """是否认出了眼下的存档。"""
         return bool(self.id)
+
+    @property
+    def label(self) -> str:
+        """给人看的称呼：有名字用名字，没名字用编号前 8 位，存档不明为空串（调用方自己加书名号）。"""
+        if self.name:
+            return self.name
+        return f"编号 {self.id[:8]}" if self.id else ""

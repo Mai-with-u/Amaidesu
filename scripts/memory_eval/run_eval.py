@@ -413,6 +413,10 @@ class _EventsRepoStub:
     async def list_session_game_events(self, *, live_session_id: int) -> list[Any]:
         return list(self._records)
 
+    async def list_session_save_spans(self, *, live_session_id: int) -> list[Any]:
+        # 用例不带存档：挂游戏的条目认不出存档，与旧版游戏的生产口径一致；存档归属由单元测试覆盖
+        return []
+
 
 class _RecordingLLM:
     """记录生产整理发出的每次调用并返回空列表；只用于抓取与生产同构的提示词。"""

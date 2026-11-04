@@ -17,7 +17,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
-__all__ = ["GameEventRecord", "GameEventTypeCount"]
+__all__ = ["GameEventRecord", "GameEventTypeCount", "GameSaveSpan"]
 
 
 class GameEventRecord(BaseModel):
@@ -32,6 +32,22 @@ class GameEventRecord(BaseModel):
     timestamp_ms: int = Field(..., description="事件时刻（Unix epoch 毫秒）")
     save_id: str = Field(default="", description="事件发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
+
+
+class GameSaveSpan(BaseModel):
+    """一场里某个游戏连续待在同一个存档的一段（由记下了存档的游戏事件按时间并成）。
+
+    下播整理按台词时刻对上这些段，认出一句话是在哪个存档里说的。同一游戏 A → B → 回 A
+    是三段；不分存档或存档不明的事件不参与。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    game: str = Field(..., description="游戏标识")
+    save_id: str = Field(..., description="存档编号（非空）")
+    save_name: str = Field(default="", description="这一段里最后一次报的存档名（只显示）")
+    started_ms: int = Field(..., description="这一段第一条事件的时刻（Unix epoch 毫秒）")
+    ended_ms: int = Field(..., description="这一段最后一条事件的时刻（Unix epoch 毫秒）")
 
 
 class GameEventTypeCount(BaseModel):
