@@ -397,8 +397,8 @@ class _CommitmentsRepoStub:
         self._open = list(open_rows)
         self._void = list(void_rows)
 
-    async def list_open_before(self, *, before_ms: int) -> list[Commitment]:
-        return list(self._open)
+    async def list_open_before_session(self, *, live_session_id: int, limit: int = 200) -> list[Commitment]:
+        return list(self._open)[:limit]
 
     async def list_commitments(self, *, statuses: Sequence[str], limit: int) -> list[Commitment]:
         return list(self._void)[:limit]

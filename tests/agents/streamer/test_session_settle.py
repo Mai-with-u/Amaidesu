@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -748,3 +750,19 @@ async def test_cancelling_waiting_caller_does_not_cancel_settlement(
     row = await store.sessions.get_live_session(live_session_id=session_id)
     assert row is not None and row.settled_at_ms == 7_777
     assert len(llm.calls) == 2, "取消等待不应让整理重跑一遍模型调用"
+
+
+# ---------------------------------------------------------------------------
+# 离线评测器跟得上生产整理器
+# ---------------------------------------------------------------------------
+
+
+def test_memory_eval_dry_self_check_passes() -> None:
+    """离线评测器（scripts/memory_eval）回放生产整理器，仓储用替身：生产取料改了接口而替身没跟上，
+    旧承诺就静默缺席，发版门槛的 live 评测里"了结""又说了一遍"这类用例全部失真。dry 自检不调模型，
+    按生产流程把四份样本集过一遍，失败就说明替身或样本跟生产对不上了。"""
+    script = Path(__file__).resolve().parents[3] / "scripts" / "memory_eval" / "run_eval.py"
+    completed = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=300, check=False
+    )
+    assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
