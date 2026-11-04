@@ -25,8 +25,8 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
+from .brief import load_used_commitment_ids
 from .render import (
-    memory_ref_numbers,
     render_cue_block,
     render_forget_notice,
     render_game_card,
@@ -219,16 +219,8 @@ class MemoryCueProvider:
         sender.prev_seen_ms = row.prev_seen_ms
 
     async def _used_commitment_ids(self, session_id: int) -> Set[int]:
-        """本场台词已经点名引用过的承诺编号（用上即停）。"""
-        try:
-            raw_rows = await self._chat.list_session_memory_refs(live_session_id=session_id)
-        except Exception as exc:  # noqa: BLE001 - 查不到就当没用上，最多多推一次
-            logger.warning(f"读本场记忆引用失败（本批不做用上即停）: {exc}", exc=exc)
-            return set()
-        used: Set[int] = set()
-        for raw in raw_rows:
-            used.update(memory_ref_numbers(raw))
-        return used
+        """本场台词已经点名引用过的承诺编号（用上即停；与常驻简报同一份口径）。"""
+        return await load_used_commitment_ids(self._chat, session_id)
 
     async def _replied_viewer_ids(self, session_id: int) -> Set[int]:
         """本场她回应过的观众。

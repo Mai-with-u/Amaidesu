@@ -91,6 +91,29 @@ def test_brief_has_archive_section_and_commitment_section() -> None:
     assert "[约#5] 「等我把城堡屋顶盖完，第一个请大家来参观」（上一场）" in brief
 
 
+def test_brief_lists_one_thing_once_when_archive_and_commitment_share_a_line() -> None:
+    """同一句台词既整理成档案行、又登记成承诺：简报只留承诺那一条，别的档案行照旧。"""
+    promise = Commitment(
+        id=1,
+        what="接着救墓碑女仆",
+        quote="下次接着救",
+        evidence_chat_id=1226,
+        created_session_id=53,
+        created_at_ms=1,
+        updated_at_ms=1,
+    )
+    same_line = ArchiveLine(
+        id=1, live_session_id=53, text="墓碑女仆救援留待下次", quote="下次接着救", evidence_chat_id=1226
+    )
+    other_line = ArchiveLine(id=2, live_session_id=53, text="墓碑归属悬念未解", quote="我偏不信", evidence_chat_id=1225)
+
+    brief = render_brief(archive_lines=[same_line, other_line], commitments=[promise], previous_session_id=53)
+
+    assert "墓碑女仆救援留待下次" not in brief
+    assert "墓碑归属悬念未解" in brief
+    assert brief.count("下次接着救") == 1
+
+
 def test_brief_caps_commitments_and_points_to_recall_tool() -> None:
     commitments = [_commitment(cid=index, quote=f"第 {index} 件事") for index in range(1, 9)]
     brief = render_brief(commitments=commitments, earlier_commitment_count=0)

@@ -1251,6 +1251,9 @@ class StreamerAgent(BaseAgent):
                 commitments_repo=self._commitments_repo,
                 kind=resolved_kind,
                 min_session_ms=self.typed_config.memory_brief_min_session_ms,
+                # 本场点名用过的承诺不再列（用上即停）；没在直播时没有"本场"，整份照列
+                chat_repo=self._chat_repo,
+                live_session_id=self._current_session_pk(),
             )
         except Exception as exc:  # noqa: BLE001 - 简报拼不出来只省这一段，不挡开播
             self._logger.warning(f"拼常驻简报失败（本场省略简报段）: {exc}", exc=exc)

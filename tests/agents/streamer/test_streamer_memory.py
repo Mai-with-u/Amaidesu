@@ -18,7 +18,7 @@ import pytest
 
 from src.agents.streamer.config import StreamerConfig
 from src.agents.streamer.memory.cues import MemoryCueProvider
-from src.agents.streamer.memory.render import memory_ref_numbers, render_commitment_number
+from src.agents.streamer.memory.render import format_memory_refs, memory_ref_numbers, render_commitment_number
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.interceptors.session_stamp import SessionStampInterceptor
@@ -32,7 +32,7 @@ from src.modules.storage.repos import ChatRepo
 from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools import ToolRegistry
 from src.modules.utils.time_utils import now_ms
-from tests.agents.streamer.helpers import make_streamer_agent
+from tests.agents.streamer.helpers import ActiveSessionStub, make_streamer_agent
 from tests.config.helpers import wait_until
 from tests.modules.llm.fakes import FakeLLMManager
 
@@ -225,6 +225,48 @@ async def test_brief_is_empty_without_ledger_material(store: SQLiteDatabase) -> 
     agent = _build_agent(store, FakeLLMManager())
     await agent._refresh_memory_brief()
     assert agent.memory_brief_text == "" and agent.memory_brief_commitment_ids == ()
+
+
+async def test_brief_drops_commitment_once_cited_in_this_session(store: SQLiteDatabase) -> None:
+    """本场她已经点名提过的承诺，下一份简报不再列（与线索卡的用上即停同口径）；确知没送达的
+    那句不算提过。没在直播时没有"本场"，整份照列。"""
+    previous = await _ended_session(store, started=1_000)
+    cited = await store.commitments.insert_commitment(
+        what="接着救墓碑女仆", quote="下次接着救", created_session_id=previous
+    )
+    other = await store.commitments.insert_commitment(
+        what="教大家搭电梯", quote="下次教你们搭电梯", created_session_id=previous
+    )
+    assert cited is not None and other is not None
+    current = await store.sessions.insert_live_session(stream_id="room", platform="bilibili", started_at_ms=5_000_000)
+    session = ActiveSessionStub(active_pk=current)
+    agent = _build_agent(store, FakeLLMManager(), session_manager=session)
+
+    async def _line(text: str, *, refs: str, dropped: bool = False) -> None:
+        await store.chat.insert_live_chat(
+            live_session_id=current,
+            timestamp_ms=5_000_100,
+            sender_role="assistant",
+            content=text,
+            message_type="speak",
+            utterance_id=f"utt_{text}",
+            dropped_at_ms=5_000_200 if dropped else None,
+            memory_refs=refs,
+        )
+
+    await _line("电梯的事我记着", refs=format_memory_refs([other]), dropped=True)
+    await agent._refresh_memory_brief()
+    assert "下次接着救" in agent.memory_brief_text and "下次教你们搭电梯" in agent.memory_brief_text
+
+    await _line("墓碑那事我还记着", refs=format_memory_refs([cited]))
+    await agent._refresh_memory_brief()
+    assert "下次接着救" not in agent.memory_brief_text, "本场提过一次就不再列"
+    assert "下次教你们搭电梯" in agent.memory_brief_text, "没送达的那句不算提过"
+    assert agent.memory_brief_commitment_ids == (other,)
+
+    session.active_pk = None
+    await agent._refresh_memory_brief()
+    assert "下次接着救" in agent.memory_brief_text
 
 
 async def test_brief_skips_false_start_session_but_keeps_its_commitment(store: SQLiteDatabase) -> None:

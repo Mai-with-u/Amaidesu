@@ -159,14 +159,22 @@ def render_brief(
     open 条，最老的在前至多 5 条，更多的折成一行指向回想工具。
     """
     sections: List[str] = []
-    archive_rows = render_archive_block(archive_lines)
+    listed = [item for item in list(commitments)[:MAX_BRIEF_COMMITMENTS] if (item.what or "").strip()]
+    # 档案行与列出的承诺出自同一句台词时只留承诺那一条：同一件事在简报里出现两遍，
+    # 她会当成两件事、一整场围着它转
+    promised_lines = {int(item.evidence_chat_id) for item in listed if item.evidence_chat_id is not None}
+    archive_rows = render_archive_block(
+        [
+            line
+            for line in archive_lines
+            if line.evidence_chat_id is None or int(line.evidence_chat_id) not in promised_lines
+        ]
+    )
     if archive_rows:
         sections.append("上一场：\n" + "\n".join(archive_rows))
     pending: List[str] = []
-    for commitment in list(commitments)[:MAX_BRIEF_COMMITMENTS]:
+    for commitment in listed:
         what = (commitment.what or "").strip()
-        if not what:
-            continue
         quote = (commitment.quote or "").strip()
         is_previous = (
             previous_session_id is not None
