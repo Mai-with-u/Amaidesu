@@ -128,3 +128,49 @@ async def test_unknown_platform_left_blank_for_plugin_default(store: SQLiteDatab
     body = await StorageTranscriptSource(sessions=store.sessions, chat=store.chat).load(pk)
 
     assert body is not None and body["platform"] == ""
+
+
+async def _session_at(store: SQLiteDatabase, *, started_at_ms: int, kind: str = "live", ended: bool = True) -> int:
+    pk = await store.sessions.insert_live_session(
+        stream_id="778899", platform="bilibili", started_at_ms=started_at_ms, kind=kind
+    )
+    if ended:
+        await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=started_at_ms + 60_000)
+    return pk
+
+
+@pytest.mark.asyncio
+async def test_catch_up_candidates_are_ended_formal_sessions_newest_first(store: SQLiteDatabase) -> None:
+    """启动补推的候选：只要已结束的正式场，按开播倒序、受条数上限约束；彩排场与进行中的不算。"""
+    first = await _session_at(store, started_at_ms=BASE_MS)
+    second = await _session_at(store, started_at_ms=BASE_MS + 3_600_000)
+    await _session_at(store, started_at_ms=BASE_MS + 7_200_000, kind="rehearsal")
+    await _session_at(store, started_at_ms=BASE_MS + 9_000_000, ended=False)
+    source = StorageTranscriptSource(sessions=store.sessions, chat=store.chat)
+
+    candidates = await source.list_catch_up_sessions(limit=10)
+    assert [item.live_session_id for item in candidates] == [second, first]
+    assert candidates[0].ended_at_ms == BASE_MS + 3_600_000 + 60_000
+    assert [item.live_session_id for item in await source.list_catch_up_sessions(limit=1)] == [second]
+
+
+@pytest.mark.asyncio
+async def test_has_spoken_lines_counts_only_delivered_streamer_lines(store: SQLiteDatabase) -> None:
+    """只有观众弹幕、或台词全被播放队列标成没送达的场次，都算"她没说过话"，不补推。"""
+    pk = await _session_at(store, started_at_ms=BASE_MS)
+    source = StorageTranscriptSource(sessions=store.sessions, chat=store.chat)
+    await store.chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=BASE_MS + 1_000, sender_role="viewer", content="来了",
+        message_type="danmaku", sender_id="1001", sender_name="小明",
+    )  # fmt: skip
+    await store.chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=BASE_MS + 2_000, sender_role="assistant", content="没播出去的一句",
+        message_type="speech", dropped_at_ms=BASE_MS + 2_500,
+    )  # fmt: skip
+    assert await source.has_spoken_lines(pk) is False
+
+    await store.chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=BASE_MS + 3_000, sender_role="assistant", content="欢迎小明",
+        message_type="speech",
+    )  # fmt: skip
+    assert await source.has_spoken_lines(pk) is True

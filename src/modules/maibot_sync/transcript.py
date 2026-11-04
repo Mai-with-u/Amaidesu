@@ -17,11 +17,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 from src.modules.types.currency import to_cny
-from src.modules.types.session_kind import SESSION_KIND_REHEARSAL
+from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KIND_REHEARSAL
 
 if TYPE_CHECKING:
     from src.modules.storage.repos.chat import ChatRepo
@@ -35,6 +36,18 @@ MAX_TRANSCRIPT_LINES = 20_000
 _SUPER_CHAT_ROWS = 2_000
 # live_chat.sender_role → 契约里的说话人角色
 _ROLE_BY_SENDER = {"viewer": "viewer", "partner": "partner", "assistant": "streamer"}
+
+
+@dataclass(frozen=True)
+class TranscriptCandidate:
+    """一场可能还没推成功的正式场：主键加结束时刻。
+
+    已推标记按两者一起判：恢复旧库备份后同一场的结束时刻可能不同，只比主键会把
+    该补推的场次判成已推。
+    """
+
+    live_session_id: int
+    ended_at_ms: int
 
 
 def _viewer_user_id(row: Any, external_attr: str) -> str:
@@ -90,6 +103,31 @@ class StorageTranscriptSource:
             "ended_at_ms": int(session_row.ended_at_ms or 0),
             "lines": lines,
         }
+
+    async def list_catch_up_sessions(self, *, limit: int) -> List[TranscriptCandidate]:
+        """最近若干正式场里"可补推"的候选：已结束、非彩排（是否已推由调用方的标记判断）。
+
+        按开播时间倒序返回，最多 ``limit`` 场；还没结账的进行中场次与彩排场不在候选里。
+        多取一行：同一时刻至多一场进行中，它占掉的名额由下一场补上。
+        """
+        wanted = max(1, int(limit))
+        rows = await self._sessions.list_live_sessions(limit=wanted + 1, kind=SESSION_KIND_LIVE)
+        candidates: List[TranscriptCandidate] = []
+        for row in rows:
+            if not row.ended_at_ms:
+                continue
+            candidates.append(TranscriptCandidate(live_session_id=int(row.id), ended_at_ms=int(row.ended_at_ms)))
+        return candidates[:wanted]
+
+    async def has_spoken_lines(self, live_session_id: int) -> bool:
+        """这一场有没有真正播出的台词（播放队列标了没送达的不算）。
+
+        启动补推只推"她真的说过话"的场次：一句话都没说过的不值得推给 MaiBot。
+        """
+        lines = await self._chat.list_recent_live_chat(
+            live_session_id=int(live_session_id), limit=None, sender_role="assistant"
+        )
+        return any(line.dropped_at_ms is None for line in lines)
 
     @staticmethod
     def _chat_lines(rows: List[Any]) -> List[Dict[str, Any]]:

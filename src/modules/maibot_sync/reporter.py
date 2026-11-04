@@ -17,13 +17,23 @@ MaiBot 7×24 常驻，Amaidesu 开播时才启动；QQ 那边的麦麦要知道"
 
 彩排场次（``kind="rehearsal"``：模拟、回放、调试）不对外同步：开播、收播都按事件
 里带的场次类型判断，整场记录由来源侧按场次类型决定是否返回。
+
+- **补推**：整场记录推成功（或被插件明确拒收）后写一条"已处理"标记（库文件旁的
+  文本文件，按场次主键与结束时刻一起记）。启动时扫最近几天结束的正式场，标记里
+  没有的补推一次——下播后很快关程序的场次不会永远丢。只补推正式场、已结束、有
+  真正播出台词的场次；推送失败不写标记，留待下次，MaiBot 连不上时整批停下。标记
+  不在数据库事务与备份恢复的管辖内：恢复旧库备份后可能对同一场重复补推一次（QQ
+  里多一条），不会丢数据。
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, Optional, Protocol, Sequence
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, List, Optional, Protocol, Sequence, Set, Tuple
 
 import aiohttp
 
@@ -37,6 +47,7 @@ from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
+    from src.modules.maibot_sync.transcript import TranscriptCandidate
 
 logger = get_logger("LiveStatusReporter")
 
@@ -52,6 +63,11 @@ _SIGNOFF_WAIT_TIMEOUT_S = 120.0
 _TRANSCRIPT_SETTLE_DELAY_S = 0.3
 # 一次推送的结果：送到 / 暂时失败（可重试）/ 被插件拒收（重试也没用）
 _DELIVERED, _FAILED, _REJECTED = "delivered", "failed", "rejected"
+# 启动补推最多看最近多少场正式场（不一次把历史全推出去）
+_CATCH_UP_LIMIT = 20
+# 启动补推只补这么久以内结束的场次（毫秒）：第一次启用标记或标记文件丢了时，
+# 不把几个月前的场次整批推给 MaiBot
+_CATCH_UP_WINDOW_MS = 3 * 24 * 3600 * 1000
 
 
 class StatusSender(Protocol):
@@ -67,9 +83,19 @@ class StatusRejected(RuntimeError):
 
 
 class TranscriptSource(Protocol):
-    """按场次主键给出推给插件的整场记录；没有可推的（空场次、彩排场次等）返回 None。"""
+    """整场记录的来源：读一场的记录，以及启动补推要用的候选与"她说过话没有"。"""
 
-    async def load(self, live_session_id: int) -> Optional[Dict[str, Any]]: ...
+    async def load(self, live_session_id: int) -> Optional[Dict[str, Any]]:
+        """按场次主键给出推给插件的整场记录；没有可推的（空场次、彩排场次等）返回 None。"""
+        ...
+
+    async def list_catch_up_sessions(self, *, limit: int) -> List["TranscriptCandidate"]:
+        """最近若干已结束的正式场（按开播倒序），供启动补推比对已处理标记。"""
+        ...
+
+    async def has_spoken_lines(self, live_session_id: int) -> bool:
+        """这一场有没有真正播出的台词；一句没说过的场次不补推。"""
+        ...
 
 
 class HttpStatusSender:
@@ -108,6 +134,66 @@ class _LiveState:
     segment: Optional[Dict[str, Any]] = None
 
 
+class TranscriptPushLog:
+    """整场记录"已处理"标记：库文件旁的一个文本文件，随库走、不占数据库事务。
+
+    每行一个 JSON：``{"session_id": <主键>, "ended_at_ms": <场次结束时刻>}``。主键与结束
+    时刻一起判：恢复旧库备份后同一场的结束时刻可能不同，只比主键会把该补推的场次
+    判成已推。写入只在文件末尾追加一行、不重写已有内容：读失败或有坏行时也不会把
+    已有标记覆盖掉；读到半行、坏行时跳过那一行。
+
+    这条边界要知道：标记在数据库之外，不受事务与备份恢复管辖。恢复旧库备份后，
+    标记里可能还记着"已推过"的场次，也可能只有旧标记——最多导致同一场重复补推
+    一次（QQ 里多一条整场记录），不会丢数据。
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = Path(path)
+        self._lock = asyncio.Lock()
+
+    async def read(self) -> Set[Tuple[int, int]]:
+        """全部已处理标记（场次主键, 结束时刻）；文件不存在为空，读不了抛 ``OSError``。"""
+        return await asyncio.to_thread(self._read_marks)
+
+    async def contains(self, live_session_id: int, ended_at_ms: int) -> bool:
+        """这一场（按主键与结束时刻）是否已处理过；读不了抛 ``OSError``。"""
+        return (int(live_session_id), int(ended_at_ms)) in await self.read()
+
+    async def mark(self, live_session_id: int, ended_at_ms: int) -> None:
+        """记下这一场已处理（推送成功或被插件明确拒收；暂时失败时不要调）。写不下抛 ``OSError``。"""
+        async with self._lock:
+            await asyncio.to_thread(self._append_mark, int(live_session_id), int(ended_at_ms))
+
+    def _read_marks(self) -> Set[Tuple[int, int]]:
+        try:
+            text = self._path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return set()
+        marks: Set[Tuple[int, int]] = set()
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                item = json.loads(stripped)
+                marks.add((int(item["session_id"]), int(item["ended_at_ms"])))
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                logger.warning(f"整场记录推送标记有一行读不懂，跳过: {stripped[:80]}")
+        return marks
+
+    def _append_mark(self, live_session_id: int, ended_at_ms: int) -> None:
+        """在文件末尾追加一行；上次写到一半（末尾没有换行）时先补一个换行，不和半行粘在一起。"""
+        line = json.dumps({"session_id": live_session_id, "ended_at_ms": ended_at_ms}, ensure_ascii=False) + "\n"
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._path.open("a+b") as handle:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() > 0:
+                handle.seek(-1, os.SEEK_END)
+                if handle.read(1) != b"\n":
+                    line = "\n" + line
+            handle.write(line.encode("utf-8"))
+
+
 class LiveStatusReporter:
     """订阅场次、流程单与决策轮事件，把近况与整场记录推给适配器插件。
 
@@ -123,6 +209,9 @@ class LiveStatusReporter:
         heartbeat_interval_ms: int = 60_000,
         retry_delays_ms: Sequence[int] = _RETRY_DELAYS_MS,
         transcript_source: Optional[TranscriptSource] = None,
+        push_log_path: Optional[Path] = None,
+        catch_up_limit: int = _CATCH_UP_LIMIT,
+        catch_up_window_ms: int = _CATCH_UP_WINDOW_MS,
         signoff_settle_s: float = _TRANSCRIPT_SETTLE_DELAY_S,
         clock_ms: Callable[[], int] = now_ms,
     ) -> None:
@@ -134,6 +223,9 @@ class LiveStatusReporter:
             heartbeat_interval_ms: 直播期间重发完整近况的间隔（毫秒）。
             retry_delays_ms: 整场记录推送失败后的重试间隔（毫秒）。
             transcript_source: 整场记录来源；None = 不推整场记录。
+            push_log_path: "已处理"标记文件的路径；None = 不记标记、也不做启动补推。
+            catch_up_limit: 启动补推最多看最近多少场正式场。
+            catch_up_window_ms: 启动补推只补这么久以内结束的场次（毫秒）。
             signoff_settle_s: 收到道别轮信号后等台词行落库的余量（秒）；测试可传 0。
             clock_ms: 当前时刻（毫秒），测试注入假时钟。
         """
@@ -142,6 +234,9 @@ class LiveStatusReporter:
         self._heartbeat_interval_ms = heartbeat_interval_ms
         self._retry_delays_ms = tuple(retry_delays_ms)
         self._transcript_source = transcript_source
+        self._push_log = TranscriptPushLog(push_log_path) if push_log_path is not None else None
+        self._catch_up_limit = max(1, int(catch_up_limit))
+        self._catch_up_window_ms = max(0, int(catch_up_window_ms))
         self._signoff_settle_s = max(0.0, float(signoff_settle_s))
         self._clock_ms = clock_ms
         self._live: Optional[_LiveState] = None
@@ -168,6 +263,7 @@ class LiveStatusReporter:
             model_class=PlannerDecisionPayload,
         )
         self._subscribed = True
+        self._spawn_catch_up()
 
     async def stop(self) -> None:
         """退订事件，取消心跳与推送任务，关闭连接（幂等）。"""
@@ -291,6 +387,76 @@ class LiveStatusReporter:
             await asyncio.sleep(self._signoff_settle_s)
         await self._push_transcript(live_session_id)
 
+    def _spawn_catch_up(self) -> None:
+        """启动补推：上次下播后很快关程序、整场记录没推成功的场次，这次启动补上。
+
+        没有事件循环（同步装配、单元测试）时静默跳过；没有标记文件或记录来源时不做。
+        """
+        if self._push_log is None or self._transcript_source is None:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.debug("启动补推跳过：当前没有运行中的事件循环")
+            return
+        self._spawn(self._catch_up_pending_transcripts(), "maibot-transcript-catchup")
+
+    async def _catch_up_pending_transcripts(self) -> None:
+        """扫最近结束的正式场，把没有"已处理"标记的整场记录补推一次。
+
+        只补推同时满足这些条件的场次：正式场、已结束、结束在补推时间窗内、有真正播出的
+        台词；彩排场永不补推。时间窗挡住"第一次启用标记"或"标记文件被删"时把历史整批推给
+        MaiBot。推成功或被插件明确拒收才写标记；某一场多次重试仍失败（多半是 MaiBot 没起来）
+        就停下，剩下的留给下次启动，不在 MaiBot 离线时逐场等满重试。标记文件读不了时整次
+        跳过：分不清哪些推过，宁可这次不补，也不把最近若干场重推一遍。
+        """
+        assert self._push_log is not None and self._transcript_source is not None  # noqa: S101 调用方已判空
+        source = self._transcript_source
+        try:
+            candidates = list(await source.list_catch_up_sessions(limit=self._catch_up_limit))
+        except Exception as exc:  # noqa: BLE001 - 补推失败不影响本次运行的近况推送
+            logger.warning(f"启动补推：读待补推场次失败（本次跳过）: {exc}", exc=True)
+            return
+        earliest_ms = self._clock_ms() - self._catch_up_window_ms
+        recent = [item for item in candidates if item.ended_at_ms >= earliest_ms]
+        try:
+            marks = await self._push_log.read()
+        except OSError as exc:
+            logger.warning(f"启动补推：读推送标记失败，本次不补推（分不清哪些推过）: {exc}", exc=True)
+            return
+        pending: List["TranscriptCandidate"] = [
+            item for item in recent if (item.live_session_id, item.ended_at_ms) not in marks
+        ]
+        if not pending:
+            logger.debug("启动补推：最近场次都推过了")
+            return
+        logger.info(f"启动补推：最近结束的 {len(recent)} 场正式场里有 {len(pending)} 场没推成功，开始补推")
+        delivered = 0
+        # 候选按开播倒序，补推按时间正序来（旧场先到 QQ）
+        ordered = list(reversed(pending))
+        for index, candidate in enumerate(ordered):
+            try:
+                if not await source.has_spoken_lines(candidate.live_session_id):
+                    logger.info(f"启动补推：场次 {candidate.live_session_id} 没有播出的台词，不推整场记录")
+                    continue
+                body = await source.load(candidate.live_session_id)
+            except Exception as exc:  # noqa: BLE001 - 单场读库失败只跳过这一场
+                logger.warning(f"启动补推：读场次 {candidate.live_session_id} 的整场记录失败（跳过）: {exc}", exc=True)
+                continue
+            if body is None:
+                continue
+            outcome = await self._send_with_retry(body, "整场记录补推")
+            if outcome == _FAILED:
+                logger.warning(
+                    f"启动补推：场次 {candidate.live_session_id} 多次推送失败，"
+                    f"剩下 {len(ordered) - index} 场留到下次启动"
+                )
+                break
+            await self._write_mark(candidate.live_session_id, candidate.ended_at_ms)
+            if outcome == _DELIVERED:
+                delivered += 1
+        logger.info(f"启动补推结束：送到 {delivered} 场")
+
     def _snapshot(self) -> Dict[str, Any]:
         assert self._live is not None  # noqa: S101 调用方已 guard
         return self._snapshot_of(self._live, live_flag=True)
@@ -336,7 +502,16 @@ class LiveStatusReporter:
     def _spawn(self, coro: Coroutine[Any, Any, None], name: str) -> None:
         task = asyncio.create_task(coro, name=name)
         self._push_tasks.add(task)
-        task.add_done_callback(self._push_tasks.discard)
+        task.add_done_callback(self._on_push_task_done)
+
+    def _on_push_task_done(self, task: "asyncio.Task[None]") -> None:
+        """后台推送任务收尾：移出任务集；漏出来的异常记日志，不让它无声中止。"""
+        self._push_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(f"后台推送任务 {task.get_name()} 异常退出: {exc}", exc=exc)
 
     async def _push_transcript(self, live_session_id: int) -> None:
         """读出整场记录推给插件；读库失败只记日志，不影响近况推送。"""
@@ -348,20 +523,40 @@ class LiveStatusReporter:
             return
         if body is None:
             return
-        await self._send_with_retry(body, "整场记录")
+        if await self._send_with_retry(body, "整场记录") == _FAILED:
+            return
+        ended_at_ms = int(body.get("ended_at_ms") or 0)
+        if ended_at_ms <= 0:
+            logger.warning(f"场次 {live_session_id} 的整场记录没有结束时刻，不写已处理标记")
+            return
+        await self._write_mark(int(body.get("live_session_id") or live_session_id), ended_at_ms)
 
-    async def _send_with_retry(self, body: Dict[str, Any], what: str) -> None:
-        """推送并按退避重试；插件拒收（如没开整场记录回放）时不再重试。"""
+    async def _write_mark(self, live_session_id: int, ended_at_ms: int) -> None:
+        """写"已处理"标记（送到或被拒收；暂时失败不写，留给下次启动补推）；没有标记文件时不动。
+
+        拒收也写：插件明确拒收（例如没开整场记录回放）时原样重推也不会成功，不写的话
+        每次启动都要把这些场次再推一遍。
+        """
+        if self._push_log is None:
+            return
+        try:
+            await self._push_log.mark(live_session_id, ended_at_ms)
+        except OSError as exc:  # 标记写不下最多下次重推一次，不挡推送
+            logger.warning(f"整场记录推送标记写入失败（下次启动可能重推场次 {live_session_id}）: {exc}", exc=True)
+
+    async def _send_with_retry(self, body: Dict[str, Any], what: str) -> str:
+        """推送并按退避重试，返回送到 / 失败 / 被拒收；插件拒收（如没开整场记录回放）时不再重试。"""
         for delay_ms in (0, *self._retry_delays_ms):
             if delay_ms:
                 await asyncio.sleep(delay_ms / 1000)
             outcome = await self._deliver(body, what)
             if outcome == _DELIVERED:
-                return
+                return _DELIVERED
             if outcome == _REJECTED:
                 logger.info(f"{what}（场次 {body['live_session_id']}）被插件拒收，不再重试")
-                return
+                return _REJECTED
         logger.warning(f"{what}（场次 {body['live_session_id']}）多次推送失败，已放弃")
+        return _FAILED
 
     def _start_heartbeat(self) -> None:
         if self._heartbeat_task is not None and not self._heartbeat_task.done():

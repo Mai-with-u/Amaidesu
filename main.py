@@ -23,6 +23,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger as loguru_logger
@@ -1048,6 +1049,10 @@ async def _start_storage_ledger(
         return None
 
 
+# 整场记录"已处理"标记文件名（放在库文件旁）
+_MAIBOT_TRANSCRIPT_PUSH_LOG = "maibot_transcript_pushed.jsonl"
+
+
 def _build_maibot_sync_reporter(
     event_bus: EventBus,
     config: Dict[str, Any],
@@ -1056,7 +1061,8 @@ def _build_maibot_sync_reporter(
 ) -> Optional[LiveStatusReporter]:
     """按 ``[maibot_sync]`` 装配直播近况上报器；未启用或缺地址/令牌时不装配。
 
-    收播近况照常推。``send_transcript`` 开启且有数据库时，收播近况送出后从库里读出整场记录一并推送。
+    收播近况照常推。``send_transcript`` 开启且有数据库时，收播近况送出后从库里读出整场记录一并推送，
+    并在库文件旁记"已处理"标记：下播后很快关程序没推成的场次，下次启动补推。
     """
     raw = config.get("maibot_sync", {}) if isinstance(config, dict) else {}
     sync_config = MaiBotSyncConfigSchema(**raw) if isinstance(raw, dict) else MaiBotSyncConfigSchema()
@@ -1067,8 +1073,11 @@ def _build_maibot_sync_reporter(
         logger.warning("[maibot_sync] 已启用但 url 或 token 未设置，不向 MaiBot 同步直播近况")
         return None
     transcript_source: Optional[StorageTranscriptSource] = None
+    push_log_path: Optional[Path] = None
     if sync_config.send_transcript and database is not None:
         transcript_source = StorageTranscriptSource(sessions=database.sessions, chat=database.chat)
+        # 标记跟着库文件走：换库（含恢复备份）时标记与库放在同一处，便于一起处理
+        push_log_path = Path(database.db_path).with_name(_MAIBOT_TRANSCRIPT_PUSH_LOG)
     reporter = LiveStatusReporter(
         event_bus=event_bus,
         sender=HttpStatusSender(
@@ -1078,6 +1087,7 @@ def _build_maibot_sync_reporter(
         ),
         heartbeat_interval_ms=sync_config.heartbeat_interval_ms,
         transcript_source=transcript_source,
+        push_log_path=push_log_path,
     )
     reporter.setup()
     # 日志里列出实际会推的内容：整场记录看是否有记录来源
