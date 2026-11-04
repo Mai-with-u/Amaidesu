@@ -1,6 +1,8 @@
-"""主播 Agent 的记忆接线：账本仓储接上时才注册回想工具，开播拼常驻简报。
+"""主播 Agent 的记忆接线：账本仓储接上时才注册回想工具，开播拼常驻简报，点名用上即停推。
 
-旧的场次回顾 / 长期记忆 / 观众画像已停写停注入（阶段 4 删除了对应模块），这里只测账本这条线。
+旧的场次回顾 / 长期记忆 / 观众画像已停写停注入，这里只测账本这条线。点名链路的用例用真实的
+场次管理器、场次盖章拦截器、记账器与 SQLite 临时库串起来，等待落库用共享等待助手，不用
+``EventBus.wait_until_drained``（原因见道别窗用例的模块说明）。
 """
 
 from __future__ import annotations
@@ -9,16 +11,29 @@ import asyncio
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, AsyncGenerator, Generator
-from unittest.mock import MagicMock
+from typing import Any, AsyncGenerator, Generator, List
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.agents.streamer.config import StreamerConfig
+from src.agents.streamer.memory.cues import MemoryCueProvider
+from src.agents.streamer.memory.render import memory_ref_numbers, render_commitment_number
 from src.agents.streamer.streamer_agent import StreamerAgent
-from src.modules.llm.payload import Response
+from src.modules.events.event_bus import EventBus
+from src.modules.events.interceptors.session_stamp import SessionStampInterceptor
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.events.payloads.speech import StreamerSpeechPayload
+from src.modules.llm.payload import Response, ToolCall
+from src.modules.session.manager import LiveSessionManager
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.repos import ChatRepo
+from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools import ToolRegistry
+from src.modules.utils.time_utils import now_ms
+from tests.agents.streamer.helpers import make_streamer_agent
+from tests.config.helpers import wait_until
 from tests.modules.llm.fakes import FakeLLMManager
 
 
@@ -160,6 +175,44 @@ async def test_next_brief_reflects_operator_corrections(store: SQLiteDatabase) -
     assert "答应你画头像" not in second and "回头再说" not in second, "删掉/判误记的行下一份简报不再出现"
 
 
+async def test_brief_rerender_is_byte_identical_when_ledger_unchanged(store: SQLiteDatabase) -> None:
+    """每个决策窗都按表快照重渲简报：表里简报用到的部分没变时，前后两份逐字节相同。
+
+    简报在 Planner 系统提示词的前段，逐字节相同前缀缓存才命中。简报不取的那些行（对某位
+    观众的、挂游戏的承诺，彩排场的档案）变了也不该让它变；简报用到的行变了才变。
+    """
+    previous_pk = await _ended_session(store, started=1_000, ended=2_000)
+    await store.archive.insert_line(
+        live_session_id=previous_pk, text="Minecraft：水车搭好了", quote="水车搭好啦", evidence_chat_id=1
+    )
+    await store.archive.insert_line(
+        live_session_id=previous_pk, text="答应过画头像", quote="答应你画头像", evidence_chat_id=2
+    )
+    await store.commitments.insert_commitment(what="继续炸 TNT", quote="下次接着炸 TNT", now_ms_value=100)
+    await store.commitments.insert_commitment(what="接着讲鬼故事", quote="下次讲完鬼故事", now_ms_value=100)
+
+    agent = _build_agent(store, FakeLLMManager())
+    await agent._refresh_memory_brief()
+    first, first_ids = agent.memory_brief_text, agent.memory_brief_commitment_ids
+    assert first
+
+    # 简报不取的行：对某位观众的承诺、挂游戏的承诺、彩排场的档案
+    await store.commitments.insert_commitment(what="给 ta 盖房子", viewer_id=9, now_ms_value=200)
+    await store.commitments.insert_commitment(what="继续挖矿", game="Minecraft", now_ms_value=200)
+    rehearsal_pk = await _ended_session(store, started=3_000, ended=4_000, kind="rehearsal")
+    await store.archive.insert_line(
+        live_session_id=rehearsal_pk, text="彩排试了新皮肤", quote="试试新皮肤", evidence_chat_id=3
+    )
+    await agent._refresh_memory_brief()
+    assert agent.memory_brief_text.encode("utf-8") == first.encode("utf-8")
+    assert agent.memory_brief_commitment_ids == first_ids
+
+    # 简报用到的行变了，下一窗就变
+    await store.commitments.insert_commitment(what="教大家搭电梯", quote="下次教你们搭电梯", now_ms_value=300)
+    await agent._refresh_memory_brief()
+    assert agent.memory_brief_text != first and "下次教你们搭电梯" in agent.memory_brief_text
+
+
 async def test_brief_is_empty_without_ledger_material(store: SQLiteDatabase) -> None:
     agent = _build_agent(store, FakeLLMManager())
     await agent._refresh_memory_brief()
@@ -190,3 +243,155 @@ async def test_open_start_settle_is_scheduled_in_background(store: SQLiteDatabas
     await asyncio.gather(*tasks)
     row = await store.sessions.get_live_session(live_session_id=pending)
     assert row is not None and row.settled_at_ms is not None, "后台补整理应把待整理场次写完"
+
+
+# ---------------------------------------------------------------------------
+# 点名链路：承诺卡 → use_memory → 台词落库带引用 → 本场不再推这张卡
+# ---------------------------------------------------------------------------
+
+
+class _AssistantWrites:
+    """记账器用的聊天仓储：写库原样交给真实仓储，另记下写进库的主播台词条数。
+
+    记账器在自己的订阅任务里写库，测试拿不到那个任务；包这一层只为知道"这句已经写完"，
+    好用共享等待助手等它。其余方法原样转给真实仓储。
+    """
+
+    def __init__(self, chat: ChatRepo) -> None:
+        self._chat = chat
+        self.assistant_lines = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._chat, name)
+
+    async def insert_live_chat(self, **fields: Any) -> Any:
+        result = await self._chat.insert_live_chat(**fields)
+        if fields.get("sender_role") == "assistant":
+            self.assistant_lines += 1
+        return result
+
+
+def _danmaku_from_xiaoyu(text: str, message_id: str) -> RoomMessagePayload:
+    return RoomMessagePayload(
+        message_type="danmaku",
+        platform="bilibili",
+        message_id=message_id,
+        user=RoomMessageUser(id="u_xiaoyu", name="小鱼"),
+        content=text,
+        timestamp_ms=now_ms(),
+    )
+
+
+async def _cards_for(store: SQLiteDatabase, session_pk: int, message: RoomMessagePayload) -> str:
+    """一个新的线索推送实例（没有本场推送记录）对这条弹幕给出的线索块。"""
+    cues = MemoryCueProvider(
+        commitments_repo=store.commitments,
+        chat_repo=store.chat,
+        viewer_repo=store.viewers,
+        current_session_provider=lambda: session_pk,
+    )
+    return (await cues.collect(batch=[message])).text
+
+
+async def test_use_memory_lands_with_the_line_and_stops_the_card(store: SQLiteDatabase) -> None:
+    """老观众开口 → 推对 ta 的承诺卡 → Planner 用 use_memory 点名 → 台词带着引用落库 →
+    本场再看到 ta，这张卡不再推（用上即停）。
+
+    "停推"用一个新的线索推送实例判定：它没有本场推送记录，限频挡不住它，只有库里
+    那条引用能让它不推——证明停推靠的是落库的引用，不是内存里的推送计数。
+    """
+    bus = EventBus()
+    manager = LiveSessionManager(store.sessions, store.chat, bus, platform="bilibili", room_id="room")
+    await manager.start()
+    bus.add_interceptor(SessionStampInterceptor(manager))
+    writes = _AssistantWrites(store.chat)
+    ledger = StorageLedger(bus, writes, store.viewers, store.events, session_manager=manager)  # type: ignore[arg-type]
+    await ledger.start()
+    speeches: List[StreamerSpeechPayload] = []
+
+    async def _on_speech(event_name: str, payload: StreamerSpeechPayload, source: str) -> None:
+        speeches.append(payload)
+
+    bus.on(CoreEvents.STREAMER_SPEECH, _on_speech, model_class=StreamerSpeechPayload)
+
+    # 小鱼是老观众，上一场答应过给 ta 画头像
+    resolution = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_xiaoyu",
+        user_name="小鱼",
+        timestamp_ms=1_000,
+        name_match_window_ms=0,
+    )
+    previous_pk = await _ended_session(store, started=1_000, ended=2_000)
+    commitment_id = await store.commitments.insert_commitment(
+        what="给小鱼画头像",
+        quote="下次给你画头像",
+        viewer_id=resolution.viewer_id,
+        created_session_id=previous_pk,
+        now_ms_value=1_500,
+    )
+    assert commitment_id is not None
+    number = render_commitment_number(commitment_id)
+
+    planner_steps = [
+        Response(
+            success=True,
+            content="",
+            tool_calls=[
+                ToolCall(
+                    id="call_reply",
+                    name="streamer_reply",
+                    arguments={
+                        "topic_summary": "回应小鱼",
+                        "reply_guidance": "提一句答应过的头像",
+                        "is_novel": True,
+                        "use_memory": number,
+                    },
+                )
+            ],
+        ),
+        Response(success=True, content=""),
+    ]
+    llm = MagicMock()
+
+    async def _generate(*args: Any, **kwargs: Any) -> Response:
+        if kwargs.get("profile") == "planner":
+            return planner_steps.pop(0) if planner_steps else Response(success=True, content="")
+        return Response(success=True, content="小鱼来啦，头像我记着呢")
+
+    llm.generate = AsyncMock(side_effect=_generate)
+    agent = make_streamer_agent(
+        {"background": {"enabled": False}, "mouth": {"enabled": False}},
+        llm=llm,
+        event_bus=bus,
+        tool_registry=ToolRegistry(),
+        session_manager=manager,
+        chat_repo=store.chat,
+        viewer_repo=store.viewers,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
+    )
+    await agent.start()
+    try:
+        pk = await manager.open_session(kind="live", title="画画")
+        await wait_until(agent.is_live_active, what="开播回调跑完")
+        first = _danmaku_from_xiaoyu("主播还记得我吗", "m1")
+        assert number in await _cards_for(store, pk, first), "点名之前，对小鱼的承诺卡照常推"
+
+        await bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, first, source="bilibili")
+        await wait_until(lambda: writes.assistant_lines >= 1, what="点名的那句台词写进库")
+    finally:
+        await agent.stop()
+        await ledger.stop()
+        await bus.cleanup()
+
+    planner_requests = [
+        str(call.args[0]) for call in llm.generate.await_args_list if call.kwargs.get("profile") == "planner"
+    ]
+    assert number in planner_requests[0], "Planner 这一窗看得到承诺卡"
+    assert [speech.memory_refs for speech in speeches] == [[number]], "台词带着点名的编号发出"
+    stored_refs = await store.chat.list_session_memory_refs(live_session_id=pk)
+    assert [memory_ref_numbers(raw) for raw in stored_refs] == [{commitment_id}], "引用随台词落库"
+    second = _danmaku_from_xiaoyu("今天画什么呀", "m2")
+    assert number not in await _cards_for(store, pk, second), "本场已经用上，再看到小鱼也不推这张卡"
