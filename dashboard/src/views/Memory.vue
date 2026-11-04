@@ -17,6 +17,9 @@
     <CommitmentPanel ref="commitmentPanel" />
     <SettlePanel ref="settlePanel" @view-archive="openArchive" />
     <ArchivePanel ref="archivePanel" />
+
+    <!-- 直播间公告：按保留期配置拼出的观众告知文本，一键复制                  -->
+    <AnnouncementPanel />
   </div>
 </template>
 
@@ -28,9 +31,11 @@
  * 旧版长期记忆（MEMORY.md）与常客画像两套接口在记忆重设计中下线，记忆内容
  * 改由下播整理写进承诺账本与场次档案；三个面板各自在挂载时拉自己的数据，
  * 页头"刷新"一并重拉，整理状态面板的"查看该场档案"经 ref 调档案面板的
- * selectSession 切场，再把页面滚到档案面板。
+ * selectSession 切场，再把页面滚到档案面板。底部的直播间公告按保留期配置
+ * 拼出观众告知文本，供运营者贴进直播间简介。
  */
 import { nextTick, ref } from 'vue';
+import AnnouncementPanel from '@/components/memory/AnnouncementPanel.vue';
 import CommitmentPanel from '@/components/memory/CommitmentPanel.vue';
 import SettlePanel from '@/components/memory/SettlePanel.vue';
 import ArchivePanel from '@/components/memory/ArchivePanel.vue';
