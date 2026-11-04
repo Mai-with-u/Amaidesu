@@ -1,6 +1,6 @@
 # ADR-066：记忆注入切到账本（常驻简报 + 线索推送 + memory_recall / 旧三份记忆停写并退出提示词）
 
-- 状态：已采纳；接续 [ADR-065](065-memory-ledger-shadow-run.md) 的影子运行阶段，把注入侧从旧的场次回顾、长期记忆 MEMORY.md、观众画像与本场备忘录切到承诺账本与场次档案；旧表与旧文件原样保留，清理由后续提交做
+- 状态：已采纳；接续 [ADR-065](065-memory-ledger-shadow-run.md) 的影子运行阶段，把注入侧从旧的场次回顾、长期记忆 MEMORY.md、观众画像与本场备忘录切到承诺账本与场次档案；旧表与旧文件原样保留，存储面清理由 [ADR-067](067-irreversible-memory-cleanup.md) 接棒
 - 日期：2026-11-04
 - 实现提交：与本篇同笔交付，`git log -- docs/decisions/066-memory-injection-switch.md` 可检索
 

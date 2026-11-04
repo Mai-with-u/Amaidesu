@@ -1,4 +1,4 @@
-﻿# 提示词管理与配置管理
+# 提示词管理与配置管理
 
 本文档详细介绍 Amaidesu 项目中的提示词管理和配置管理机制。
 
@@ -48,8 +48,9 @@ pm.load_all()
 | `amaidesu_replyer_system` | `src/agents/streamer/prompts/` | Replyer 的 system 稳定段（人设与表达契约，构造期渲染） |
 | `summary_system` | `src/agents/streamer/prompts/` | 后台维护者话题摘要的系统提示词 |
 | `chapter_system` | `src/agents/streamer/prompts/` | 按章压缩的系统提示词（上下文检查点） |
-| `profile_system` | `src/agents/streamer/prompts/` | 观众画像整理的系统提示词（收播整理） |
-| `session_recap_system` | `src/agents/streamer/prompts/` | 场次回顾总结的系统提示词（收播整理） |
+| `memory_archive_system` | `src/agents/streamer/prompts/` | 下播整理·场次档案（写这场干了什么，供下一场回想） |
+| `memory_commitment_system` | `src/agents/streamer/prompts/` | 下播整理·找新承诺（从她播出的原话里找当众答应、还没兑现的事） |
+| `memory_commitment_close_system` | `src/agents/streamer/prompts/` | 下播整理·了结旧承诺（有人明确说做完了或不做时才调） |
 | `amaidesu_minecraft_agent` | `src/agents/minecraft/prompts/` | MinecraftAgent 系统提示词（事件驱动 ReAct AI 玩家） |
 | `text_adv_vlm_question` | `src/agents/text_adv/prompts/` | 文字冒险观察循环的 VLM 用户提问 |
 | `screen_vlm_system` | `src/modules/vision/prompts/` | 屏幕感知 VLM 的 system message |

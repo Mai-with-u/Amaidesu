@@ -21,7 +21,7 @@
 - [发布](guides/release.md)
 - [GPT-SoVITS 语音服务部署](guides/gptsovits.md)
 - [虚拟形象接入（Warudo / VRChat / 表情差分立绘）](guides/avatar.md)
-- [与 MaiBot 同步（直播近况 / 共享笔记 / 场次回顾）](guides/maibot-sync.md)
+- [与 MaiBot 同步（直播近况 / 整场记录）](guides/maibot-sync.md)
 
 ## 架构与设计
 
@@ -36,7 +36,7 @@
 - [游戏 Agent（Minecraft）](architecture/minecraft-agent.md)
 - [虚拟形象（Avatar）](architecture/avatar-platform.md)
 - [主播上下文构成](architecture/streamer-context.md)
-- [主播记忆（场次回顾 + 观众画像）](architecture/streamer-memory.md)
+- [主播记忆（承诺账本 + 场次档案）](architecture/streamer-memory.md)
 
 ## 架构决策记录
 

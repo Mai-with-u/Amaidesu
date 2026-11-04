@@ -28,7 +28,7 @@ Amaidesu 是一个 AI 虚拟主播框架：采集直播间弹幕与语音输入�
 - **语音合成**：主播每句回复自动合成播出，引擎可插拔，云端与本地推理按配置单选
 - **虚拟形象与演播**：情绪驱动 VTube Studio 虚拟形象的表情与动作、OBS 场景切换、字幕窗口
 - **屏幕感知**：屏幕抓取经 VLM 转文字供决策参考；直播画面帧常驻采样，主播每次决策看得到直播间此刻
-- **记忆**：SQLite 持久化场次、消息、礼物、醒目留言与流程单；收播自动整理场次回顾与观众画像，跨场按场次与观众直取注入决策上下文
+- **记忆**：SQLite 持久化场次、消息、礼物、醒目留言与流程单；收播后把这一场整理成承诺账本与场次档案，下一场按承诺、上一场档案与回想工具注入决策上下文
 - **直播编排**：Rundown 流程单定义直播环节与节奏，支持开播前预挂、直播中追加环节；可在 Web Dashboard 中编辑流程单库
 - **游戏 Agent**：Minecraft 为委派型（主播下指令，经 MCP 驱动 [MaiCraftMod](https://github.com/Mai-with-u/MaiCraftMod) 里的 AI 玩家干活），文字冒险与 2048 为遥控型示例；均命令驱动、任务完成即停
 - **Web Dashboard**：直播控制台、实时事件流、观众数据、LLM 用量与请求历史、组件启停与健康状态、配置在线编辑
@@ -112,8 +112,8 @@ sequenceDiagram
     总线->>总线: 拦截器：限流 + 相似合并（拦刷屏与复读）
     总线->>主播: 分发
     主播->>主播: MessageBuffer 攒批（默认窗口 3 秒 / 满 20 条）
-    主播->>工具: memory_recall_session(n_back=1)
-    工具-->>主播: 上场回顾「答应大家这周开 Minecraft 新坑」
+    主播->>工具: memory_recall(query="上次的约定")
+    工具-->>主播: 上一场她说「下周开 Minecraft 新坑」
     Note over 主播,工具: Planner ReAct 决策（有步数上限，防失控）
     主播->>工具: obs_switch_scene（切到游戏场景）
     主播->>工具: streamer_reply（生成台词与情绪）
@@ -156,7 +156,7 @@ sequenceDiagram
 - [文档索引](docs/README.md)（全部文档）
 - [快速开始](docs/getting-started.md)
 - [直播运行手册](docs/guides/runbook.md)（开播清单、自检与排错）
-- [与 MaiBot 同步](docs/guides/maibot-sync.md)（直播近况、共享笔记、场次回顾）
+- [与 MaiBot 同步](docs/guides/maibot-sync.md)（直播近况、整场记录）
 - [架构总览](docs/architecture/v2-architecture.md)
 - [组件开发指南](docs/guides/component.md)
 - [开发规范](AGENTS.md)

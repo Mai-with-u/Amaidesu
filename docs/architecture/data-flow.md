@@ -64,7 +64,7 @@ subgraph StreamerAgent["StreamerAgent src/agents/streamer/"]
     end
 
     subgraph Storage["存储 SQLite"]
-        DB[("SQLite 业务表（全集以 storage/schema.py 建表为准）<br/>场次与消息：live_sessions / live_chat / gifts<br/>super_chats / guards / topics<br/>观众与记忆：viewers / viewer_profiles / session_recaps<br/>流程单：rundowns / rundown_segments / rundown_instances<br/>rundown_instance_segments / rundown_transitions<br/>游戏与用量：game_events / timeline_summary<br/>llm_usage / llm_requests<br/>模拟：sim_personas / sim_gifts")]
+        DB[("SQLite 业务表（全集以 storage/schema.py 建表为准）<br/>场次与消息：live_sessions / live_chat / gifts<br/>super_chats / guards / topics<br/>观众与记忆：viewers / viewer_names / forget_list<br/>commitments / archive_lines<br/>流程单：rundowns / rundown_segments / rundown_instances<br/>rundown_instance_segments / rundown_transitions<br/>游戏与用量：game_events / timeline_summary<br/>llm_usage / llm_requests<br/>模拟：sim_personas / sim_gifts")]
     end
 
     Ext --> Collectors

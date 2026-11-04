@@ -232,14 +232,14 @@ Agent 附属采集器（不在上表、不进 `collectors.toml`，随所属 Agen
 
 #### 工具（按族列举，代表工具名）
 
-工具注册走 `src/modules/tools/registry.py` 的 `ToolRegistry`。StreamerAgent 自带 `streamer_reply`（发言出口）、`rundown_control`（流程单推进，随 rundown 注册项）与 `memory_recall_session` / `memory_recall_viewer`（场次回顾 / 观众印象），均只对 `streamer` Agent 可见。主动发言判定与观众 `/命令` 解析是代码直连的内部件，不是工具。其他族系需要启用对应 `[tools.<pack>]` 包才会注入。
+工具注册走 `src/modules/tools/registry.py` 的 `ToolRegistry`。StreamerAgent 自带 `streamer_reply`（发言出口）、`rundown_control`（流程单推进，随 rundown 注册项）与 `memory_recall`（回想她说过的台词、场次档案与答应过的事），均只对 `streamer` Agent 可见。主动发言判定与观众 `/命令` 解析是代码直连的内部件，不是工具。其他族系需要启用对应 `[tools.<pack>]` 包才会注入。
 
 | 工具包（`[tools.<pack>]`） | 代表工具 | 说明 |
 |----------------------------|---------|------|
 | `vision` | `vision_look_at_screen` | 屏幕感知（mss 多显示器抓屏 + 可选区域 + VLM 转文本） |
 | `avatar`（`avatar.toml` 平台名单，非 tools 包） | `avatar_act` / `avatar_list_actions` | 虚拟形象动作族（四平台统一走面捕合成器；平台名只决定谁接收逐帧数据，不提供平台工具） |
 | `studio.obs` | `obs_switch_scene` | 演播控制族（由 `[tools.studio.obs].enabled` 分类开关装配） |
-| Streamer 自带 | `streamer_reply` / `rundown_control` / `memory_recall_*` | 主播自有工具（开 `streamer` 即生效；`rundown_control` 随 rundown 注册项声明） |
+| Streamer 自带 | `streamer_reply` / `rundown_control` / `memory_recall` | 主播自有工具（开 `streamer` 即生效；`rundown_control` 随 rundown 注册项声明） |
 | `framework`（AgentControl） | `framework_delegate` / `framework_task_status` | 框架级委派与任务状态查询（随任一 Agent 启用生效） |
 | `game` | （由具体游戏 Agent 注入） | 游戏专属推进工具（如 text_adv 的选单推进） |
 | `external` | （预留） | 外部工具源（MCP 桥接经 `[tools.mcp]` 启用） |
