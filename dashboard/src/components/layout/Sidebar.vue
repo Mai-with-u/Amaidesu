@@ -1,86 +1,114 @@
 <template>
   <div class="sidebar">
     <nav class="sidebar-nav">
+      <!--
+        导航按一场直播的工作流排布：直播中 → 档案与复盘 → 系统组件 → 运行记录
+        → 调试 → 外部集成 → 设置。运营者找页面的依据是「现在该做什么」，不是页面
+        归属哪个子系统；组件启停类页面（采集器 / Agent / 工具）因此统一沉到
+        系统组件，不再与直播主循环页面混排。
+
+        观众页统计的是累计名单与活跃度，不是直播现场的实时看板（现场数据在
+        直播控制台里），所以与场次复盘、记忆账本同列在档案侧。调试组收的是
+        「把自己系统调到预期状态」的手段：基础设施直测、形象链路排查与调参、
+        注入模拟观众的观众模拟器；外部集成留给 OBS 嵌入页这类对外输出页。
+      -->
       <el-menu :default-active="currentRoute" class="sidebar-menu" router>
-        <el-menu-item index="/">
-          <el-icon><Monitor /></el-icon>
-          <span>运行总览</span>
-        </el-menu-item>
-        <el-menu-item index="/review">
-          <el-icon><DataAnalysis /></el-icon>
-          <span>场次复盘</span>
-        </el-menu-item>
-        <el-menu-item index="/live">
-          <el-icon><VideoCamera /></el-icon>
-          <span>直播控制台</span>
-        </el-menu-item>
-        <el-menu-item index="/viewers">
-          <el-icon><User /></el-icon>
-          <span>观众</span>
-        </el-menu-item>
-        <el-menu-item index="/memory">
-          <el-icon><Avatar /></el-icon>
-          <span>记忆账本</span>
-        </el-menu-item>
-        <el-menu-item index="/collectors">
-          <el-icon><Connection /></el-icon>
-          <span>采集器</span>
-        </el-menu-item>
-        <el-menu-item index="/agents">
-          <el-icon><Cpu /></el-icon>
-          <span>Agent</span>
-        </el-menu-item>
-        <el-menu-item index="/tools">
-          <el-icon><Tools /></el-icon>
-          <span>工具</span>
-        </el-menu-item>
-        <el-menu-item index="/eventlog">
-          <el-icon><Document /></el-icon>
-          <span>事件流</span>
-        </el-menu-item>
-        <el-menu-item index="/logs">
-          <el-icon><Tickets /></el-icon>
-          <span>日志</span>
-        </el-menu-item>
-        <el-menu-item index="/outline">
-          <el-icon><List /></el-icon>
-          <span>流程单工作台</span>
-        </el-menu-item>
-        <el-menu-item index="/widgets">
-          <el-icon><Grid /></el-icon>
-          <span>小部件</span>
-        </el-menu-item>
+        <el-menu-item-group title="直播中">
+          <el-menu-item index="/">
+            <el-icon><Monitor /></el-icon>
+            <span>运行总览</span>
+          </el-menu-item>
+          <el-menu-item index="/live">
+            <el-icon><VideoCamera /></el-icon>
+            <span>直播控制台</span>
+          </el-menu-item>
+          <el-menu-item index="/outline">
+            <el-icon><List /></el-icon>
+            <span>流程单工作台</span>
+          </el-menu-item>
+        </el-menu-item-group>
 
-        <div class="sidebar-divider" />
+        <el-menu-item-group title="档案与复盘">
+          <el-menu-item index="/review">
+            <el-icon><DataAnalysis /></el-icon>
+            <span>场次复盘</span>
+          </el-menu-item>
+          <el-menu-item index="/memory">
+            <el-icon><Avatar /></el-icon>
+            <span>记忆账本</span>
+          </el-menu-item>
+          <el-menu-item index="/viewers">
+            <el-icon><User /></el-icon>
+            <span>观众</span>
+          </el-menu-item>
+        </el-menu-item-group>
 
-        <el-menu-item index="/simulator">
-          <el-icon><MagicStick /></el-icon>
-          <span>观众模拟器</span>
-        </el-menu-item>
-        <el-menu-item index="/debug">
-          <el-icon><Odometer /></el-icon>
-          <span>调试</span>
-        </el-menu-item>
-        <el-menu-item index="/avatar-debug">
-          <el-icon><PictureRounded /></el-icon>
-          <span>形象调试</span>
-        </el-menu-item>
-        <el-menu-item index="/avatar-tuning">
-          <el-icon><Operation /></el-icon>
-          <span>形象调校</span>
-        </el-menu-item>
-        <el-menu-item index="/llm/usage">
-          <el-icon><TrendCharts /></el-icon>
-          <span>LLM 用量</span>
-        </el-menu-item>
-        <el-menu-item index="/llm/history">
-          <el-icon><Clock /></el-icon>
-          <span>LLM 历史</span>
-        </el-menu-item>
-        <el-menu-item index="/settings">
-          <el-icon><Setting /></el-icon>
-          <span>设置</span>
-        </el-menu-item>
+        <el-menu-item-group title="系统组件">
+          <el-menu-item index="/collectors">
+            <el-icon><Connection /></el-icon>
+            <span>采集器</span>
+          </el-menu-item>
+          <el-menu-item index="/agents">
+            <el-icon><Cpu /></el-icon>
+            <span>Agent</span>
+          </el-menu-item>
+          <el-menu-item index="/tools">
+            <el-icon><Tools /></el-icon>
+            <span>工具</span>
+          </el-menu-item>
+        </el-menu-item-group>
+
+        <el-menu-item-group title="运行记录">
+          <el-menu-item index="/eventlog">
+            <el-icon><Document /></el-icon>
+            <span>事件流</span>
+          </el-menu-item>
+          <el-menu-item index="/logs">
+            <el-icon><Tickets /></el-icon>
+            <span>日志</span>
+          </el-menu-item>
+          <el-menu-item index="/llm/usage">
+            <el-icon><TrendCharts /></el-icon>
+            <span>LLM 用量</span>
+          </el-menu-item>
+          <el-menu-item index="/llm/history">
+            <el-icon><Clock /></el-icon>
+            <span>LLM 历史</span>
+          </el-menu-item>
+        </el-menu-item-group>
+
+        <el-menu-item-group title="调试">
+          <el-menu-item index="/debug">
+            <el-icon><Odometer /></el-icon>
+            <span>调试</span>
+          </el-menu-item>
+          <el-menu-item index="/avatar-debug">
+            <el-icon><PictureRounded /></el-icon>
+            <span>形象调试</span>
+          </el-menu-item>
+          <el-menu-item index="/avatar-tuning">
+            <el-icon><Operation /></el-icon>
+            <span>形象调校</span>
+          </el-menu-item>
+          <el-menu-item index="/simulator">
+            <el-icon><MagicStick /></el-icon>
+            <span>观众模拟器</span>
+          </el-menu-item>
+        </el-menu-item-group>
+
+        <el-menu-item-group title="外部集成">
+          <el-menu-item index="/widgets">
+            <el-icon><Grid /></el-icon>
+            <span>小部件</span>
+          </el-menu-item>
+        </el-menu-item-group>
+
+        <el-menu-item-group title="设置">
+          <el-menu-item index="/settings">
+            <el-icon><Setting /></el-icon>
+            <span>设置</span>
+          </el-menu-item>
+        </el-menu-item-group>
       </el-menu>
     </nav>
 
@@ -212,10 +240,18 @@ onMounted(() => {
   transform: scale(0.98);
 }
 
-.sidebar-divider {
-  height: 1px;
-  margin: var(--spacing-sm) var(--spacing-lg);
-  background-color: var(--border-color-light);
+.sidebar-menu :deep(.el-menu-item-group__title) {
+  padding: var(--spacing-sm) var(--spacing-lg) var(--spacing-xs);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* 首组紧贴导航区顶部，不额外留白 */
+.sidebar-menu :deep(.el-menu-item-group:first-child .el-menu-item-group__title) {
+  padding-top: var(--spacing-xs);
 }
 
 .sidebar-footer {
