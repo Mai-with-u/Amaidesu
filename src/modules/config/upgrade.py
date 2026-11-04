@@ -886,10 +886,9 @@ register_file_hook("model.toml", "profile_give_up", "2.0.45", _upgrade_profile_g
 def _drop_tools_memory_section(data: Dict[str, Any]) -> List[str]:
     """tools.toml v2.0.45：删 ``[tools.memory]`` 段。
 
-    通用记忆检索工具（query_memory / query_viewer_profile）退役，主播记忆改为
-    随主播 Agent 注册的 ``memory_recall_session`` / ``memory_recall_viewer``，
-    不再有独立开关；段留在 forbid 根下属未知段硬错，整段删除。对已迁移数据
-    零变更（幂等）。
+    通用记忆检索工具（query_memory / query_viewer_profile）退役，主播记忆改由
+    主播 Agent 注册的 ``memory_recall`` 提供，不再有独立开关；段留在 forbid 根下
+    属未知段硬错，整段删除。对已迁移数据零变更（幂等）。
     """
     tools = data.get("tools")
     if not isinstance(tools, dict) or "memory" not in tools:

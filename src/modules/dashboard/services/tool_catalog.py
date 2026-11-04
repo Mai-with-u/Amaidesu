@@ -25,7 +25,7 @@ PROVIDER_DESCRIPTIONS: Dict[Tuple[str, str], str] = {
     ("avatar", "warudo"): "Warudo 控制",
     ("studio", "obs"): "OBS Studio 控制",
     ("vision", "vision"): "视觉感知（vision_look_at_screen）",
-    ("memory", "memory"): "主播记忆（memory_recall_session / memory_recall_viewer）",
+    ("memory", "memory"): "主播记忆（memory_recall）",
     ("web", "search"): "联网搜索（web_search / web_fetch_url）",
     ("game", "text_adv"): "文字冒险游戏（text_adv_*）",
     ("framework", "framework"): "框架内置（framework_*，如 AgentControl）",
