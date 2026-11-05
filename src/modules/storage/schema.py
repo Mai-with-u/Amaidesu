@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 26
+SCHEMA_VERSION: int = 27
 
 
 # =============================================================================
@@ -432,10 +432,13 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 
 
 # --- archive_lines —— 场次档案 ---
-# 每场正式场下播后写 ≤8 行，标题加她播出原句的逐字片段，写完不改（运营者可删单行）。
-# 场次档案是她记得自己上一场干了什么的唯一来源，也是回想工具的检索单元；
-# game 是这一行写的是哪个游戏世界里的事（建筑、进度、地点；与世界无关为空），save_id /
-# save_name 是那个世界的存档（整理时由代码按本场游戏事件判定，空串 = 不分存档或存档不明）。
+# 每场正式场下播后写一份滚动档案（≤12 行）：本场新事 + 上一份档案里仍然成立的行，标题加她播出
+# 原句的逐字片段，写完不改（运营者可删单行）。场次档案是她记得前几场干了什么的唯一来源，也是回想
+# 工具的检索单元；game 是这一行写的是哪个游戏世界里的事（建筑、进度、地点；与世界无关为空），
+# save_id / save_name 是那个世界的存档（整理时由代码按本场游戏事件判定，空串 = 不分存档或存档不明）；
+# from_session_id 是这件事出自哪一场（接过来的行指向最初那一场，空 = 滚动之前的旧行，出自本行所在
+# 场次），lasting 标名字、关系、住处这类长期有效的事。from_session_id 的索引由 v27 迁移建（老库先跑
+# 这段建表语句时还没有这一列）。
 
 _ARCHIVE_LINES_SQL = """
 CREATE TABLE IF NOT EXISTS archive_lines (
@@ -446,7 +449,9 @@ CREATE TABLE IF NOT EXISTS archive_lines (
     evidence_chat_id INTEGER NOT NULL,
     game             TEXT,
     save_id          TEXT NOT NULL DEFAULT '',
-    save_name        TEXT NOT NULL DEFAULT ''
+    save_name        TEXT NOT NULL DEFAULT '',
+    from_session_id  INTEGER,
+    lasting          INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_archive_lines_session ON archive_lines(live_session_id);
 """.strip()

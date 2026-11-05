@@ -130,6 +130,16 @@ class ArchiveLine(BaseModel):
     game: Optional[str] = Field(default=None, description="写的是哪个游戏世界里的事；None 即与游戏世界无关")
     save_id: str = Field(default="", description="那件事发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
+    from_session_id: Optional[int] = Field(
+        default=None,
+        description="这件事出自哪一场（滚动接过来的行指向最初那一场）；None = 滚动之前的旧行，出自本行所在场次",
+    )
+    lasting: bool = Field(default=False, description="是否名字、关系、住处这类长期有效的事（滚动时先占位）")
+
+    @property
+    def origin_session_id(self) -> int:
+        """这件事出自哪一场：滚动接过来的行看 ``from_session_id``，旧行就是本行所在的那一场。"""
+        return int(self.from_session_id) if self.from_session_id is not None else int(self.live_session_id)
 
 
 class UnregisteredItem(BaseModel):
@@ -180,6 +190,10 @@ class PendingArchiveLine(BaseModel):
     game: Optional[str] = Field(default=None, description="写的是哪个游戏世界里的事；None 即与游戏世界无关")
     save_id: str = Field(default="", description="那件事发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
+    from_session_id: Optional[int] = Field(
+        default=None, description="这件事出自哪一场；None = 就是本场的事（写入时记成本场）"
+    )
+    lasting: bool = Field(default=False, description="是否名字、关系、住处这类长期有效的事")
 
 
 class CommitmentClosure(BaseModel):

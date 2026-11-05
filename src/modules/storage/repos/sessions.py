@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 from src.modules.storage.models.memory import CommitmentClosure, PendingArchiveLine, PendingCommitment
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
 from src.modules.storage.repos._base import BaseRepo
-from src.modules.storage.repos.archive import delete_archive_lines_by_session
+from src.modules.storage.repos.archive import delete_archive_lines_by_session, delete_archive_lines_from_session
 from src.modules.storage.repos.commitments import (
     delete_commitments_by_session,
     reopen_commitments_closed_by_session,
@@ -139,7 +139,8 @@ class SessionRepo(BaseRepo):
                     return result
                 result["changed"] = 1
                 if kind == SESSION_KIND_REHEARSAL:
-                    result["ledger_removed"] = delete_archive_lines_by_session(
+                    # 本场的档案连同滚动接进后面几场的副本一起删：彩排里的事不该留在正式的账上
+                    result["ledger_removed"] = delete_archive_lines_from_session(
                         conn, live_session_id=int(live_session_id)
                     ) + delete_commitments_by_session(conn, live_session_id=int(live_session_id))
                     # 彩排台词做出的了结也作废：被它了结的旧承诺放回未了结
@@ -219,9 +220,10 @@ class SessionRepo(BaseRepo):
                     "topics",
                     "game_events",
                     "timeline_summary",
-                    "archive_lines",
                 ):
                     conn.execute(f"DELETE FROM {table} WHERE live_session_id=?", (live_session_id,))  # noqa: S608 表名为代码内常量
+                # 档案连同滚动接进后面几场的副本一起删：删掉的场次里的事不该还留在后面的档案里
+                delete_archive_lines_from_session(conn, live_session_id=int(live_session_id))
                 cur = conn.execute("DELETE FROM live_sessions WHERE id=?", (live_session_id,))
                 return cur.rowcount > 0
 
@@ -370,7 +372,7 @@ class SessionRepo(BaseRepo):
                         continue
                     conn.execute(
                         "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id,"
-                        " game, save_id, save_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        " game, save_id, save_name, from_session_id, lasting) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             int(live_session_id),
                             line.text,
@@ -379,6 +381,9 @@ class SessionRepo(BaseRepo):
                             line.game,
                             line.save_id,
                             line.save_name,
+                            # 本场新写的行记成本场，滚动接过来的行记最初那一场
+                            int(line.from_session_id) if line.from_session_id is not None else int(live_session_id),
+                            1 if line.lasting else 0,
                         ),
                     )
                     existing_evidence.add(evidence_chat_id)

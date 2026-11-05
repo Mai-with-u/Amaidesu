@@ -960,6 +960,58 @@ async def test_delete_viewer_scrubs_commitments_archive_and_settle_report(tmp_pa
             await store.close()
 
 
+async def test_delete_viewer_scrubs_archive_copies_rolled_into_later_sessions(tmp_path: Path) -> None:
+    """滚动档案把 ta 出现过的那一场的行接进了后面几场：后面几场的副本里的昵称同样替换掉。"""
+    db_file = tmp_path / "data" / "amaidesu.db"
+    store = SQLiteDatabase(db_file)
+    await store.initialize()
+    privacy = PrivacyService(store.manager, db_path=db_file, key_path=tmp_path / "forget.key")
+    await privacy.initialize()
+    nickname = "滚动副本昵称"
+    try:
+        first = await store.sessions.insert_live_session(started_at_ms=1000, kind="live")
+        await store.sessions.close_live_session(live_session_id=first, ended_at_ms=2000)
+        later = await store.sessions.insert_live_session(started_at_ms=3000, kind="live")
+        await store.sessions.close_live_session(live_session_id=later, ended_at_ms=4000)
+        resolution = await store.viewers.resolve_viewer(
+            platform="bilibili",
+            id_kind="account",
+            external_id="UID_ROLL_888",
+            user_name=nickname,
+            timestamp_ms=1100,
+            name_match_window_ms=0,
+        )
+        await store.chat.insert_live_chat(
+            live_session_id=first,
+            timestamp_ms=1600,
+            sender_role="viewer",
+            sender_id="UID_ROLL_888",
+            sender_name=nickname,
+            content="第一场的弹幕",
+            message_type="danmaku",
+            viewer_id=resolution.viewer_id,
+            id_kind="account",
+        )
+        # 后面那一场 ta 没来，但档案里接着第一场的一行
+        await store.archive.insert_line(
+            live_session_id=later,
+            text=f"和{nickname}定了猫的名字",
+            quote=f"{nickname}说就叫团子",
+            evidence_chat_id=1,
+            from_session_id=first,
+        )
+
+        assert await privacy.delete_viewer(viewer_id=resolution.viewer_id, add_to_forget_list=True) is True
+
+        (row,) = await store.execute("SELECT text, quote FROM archive_lines WHERE live_session_id=?", (later,))
+        assert nickname not in row["text"] and nickname not in row["quote"]
+        assert "一位观众" in row["text"]
+    finally:
+        if store.initialized:
+            await privacy.close()
+            await store.close()
+
+
 async def test_delete_viewer_scrubs_game_creature_and_event_text(tmp_path: Path) -> None:
     """ta 出现过的场次里，游戏事件正文与生物死亡说明里的昵称换成代称；别的场次与名册名字不动。
 

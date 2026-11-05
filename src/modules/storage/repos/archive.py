@@ -1,11 +1,12 @@
 """ArchiveRepo —— 场次档案仓储（archive_lines）。
 
-每场正式场下播整理写 ≤8 行，标题加她播出原句的逐字片段，写完不改；运营者可以删单行。
-档案是「她记得自己上一场干了什么」的唯一来源：常驻简报取最近一个已整理场次的档案，
-回想工具按场次查更早的档案。
+每场正式场下播整理写一份滚动档案：本场新事加上一份档案里仍然成立的行，标题加她播出原句的
+逐字片段，写完不改；运营者可以删单行。档案是「她记得前几场干了什么」的唯一来源：常驻简报取
+最近一个已整理场次的档案，回想工具按场次查更早的档案。
 
-不存游戏列——游戏相关的行由标题自己写上游戏名；也不存碎片标记与场次序号，
-「上一场」由场次表的时间序决定。
+接过来的行记着出自哪一场（``from_session_id``），同一件事因此会出现在好几场的档案里：删场次、
+改彩排时连同这些副本一起删（:func:`delete_archive_lines_from_session`）；重新整理某一场只替换
+这一场自己的档案（:func:`delete_archive_lines_by_session`），不动它此前接进后面几场的副本。
 """
 
 from __future__ import annotations
@@ -18,7 +19,9 @@ from src.modules.storage.repos._base import BaseRepo
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
 # 档案行读面的列（与 ArchiveLine 字段一一对应）
-_ARCHIVE_COLUMNS = "id, live_session_id, text, quote, evidence_chat_id, game, save_id, save_name"
+_ARCHIVE_COLUMNS = (
+    "id, live_session_id, text, quote, evidence_chat_id, game, save_id, save_name, from_session_id, lasting"
+)
 
 
 def delete_archive_lines_by_session(conn: sqlite3.Connection, *, live_session_id: int) -> int:
@@ -28,6 +31,19 @@ def delete_archive_lines_by_session(conn: sqlite3.Connection, *, live_session_id
     只是它的事务包装。
     """
     cur = conn.execute("DELETE FROM archive_lines WHERE live_session_id=?", (int(live_session_id),))
+    return int(cur.rowcount or 0)
+
+
+def delete_archive_lines_from_session(conn: sqlite3.Connection, *, live_session_id: int) -> int:
+    """删除某一场的档案行，连同滚动接进后面几场、出自这一场的副本，返回删除条数。
+
+    场次改成彩排、删除场次时用：那一场里的事不该还留在后面几场的档案里。重新整理某一场
+    不用它（那一场此前接进后面几场的行仍是当时成立的事，只替换这一场自己的档案）。
+    """
+    cur = conn.execute(
+        "DELETE FROM archive_lines WHERE live_session_id=? OR from_session_id=?",
+        (int(live_session_id), int(live_session_id)),
+    )
     return int(cur.rowcount or 0)
 
 
@@ -44,6 +60,8 @@ class ArchiveRepo(BaseRepo):
         game: Optional[str] = None,
         save_id: str = "",
         save_name: str = "",
+        from_session_id: Optional[int] = None,
+        lasting: bool = False,
     ) -> int:
         """写一行档案，返回主键；标题或原话为空时不写（返回 0）。
 
@@ -58,8 +76,8 @@ class ArchiveRepo(BaseRepo):
         def _exec() -> int:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id, game, save_id, save_name)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id, game, save_id,"
+                    " save_name, from_session_id, lasting) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         int(live_session_id),
                         title,
@@ -68,6 +86,8 @@ class ArchiveRepo(BaseRepo):
                         game,
                         save_id or "",
                         save_name or "",
+                        int(from_session_id) if from_session_id is not None else None,
+                        1 if lasting else 0,
                     ),
                 )
                 return int(cur.lastrowid or 0)
@@ -112,6 +132,51 @@ class ArchiveRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def list_rolling_base(
+        self,
+        *,
+        before_started_at_ms: int,
+        kind: SessionKind = SESSION_KIND_LIVE,
+        max_legacy_sessions: int = 3,
+    ) -> List[ArchiveLine]:
+        """整理一场时要接着滚的上一份档案：开播早于 ``before_started_at_ms`` 的最近一份同类型档案。
+
+        上一份已经是滚动档案（有行记着出自哪一场）就只取它——它已经接住了更早的事。上一份还是
+        滚动之前的旧档案（每行都只有本场的事）时，往前再取几份旧档案，遇到滚动档案取完它就停，
+        至多 ``max_legacy_sessions`` 份：开始滚动的第一场要把前几场仍然成立的事一起接住，不然
+        升级前最后那一场如果是一场短的、乱的，更早的名字和住处就接不上了。
+        不看场次时长：滚动档案本身就带着前面的事，短场次的那一份照样是最新的底稿。
+        按场次从新到旧、每场内按写入顺序返回；同一句原话（证据台词行）只留最新那一份。
+        """
+
+        def _exec() -> List[ArchiveLine]:
+            with self._manager.transaction() as conn:
+                session_rows = conn.execute(
+                    "SELECT s.id FROM live_sessions s"
+                    " JOIN archive_lines a ON a.live_session_id = s.id"
+                    " WHERE s.kind=? AND s.started_at_ms < ?"
+                    " GROUP BY s.id ORDER BY s.started_at_ms DESC, s.id DESC LIMIT ?",
+                    (kind, int(before_started_at_ms), max(1, int(max_legacy_sessions))),
+                ).fetchall()
+                base: List[ArchiveLine] = []
+                seen: set[int] = set()
+                for session_row in session_rows:
+                    rows = conn.execute(
+                        f"SELECT {_ARCHIVE_COLUMNS} FROM archive_lines WHERE live_session_id=? ORDER BY id ASC",  # noqa: S608
+                        (int(session_row["id"]),),
+                    ).fetchall()
+                    lines = [ArchiveLine.model_validate(dict(row)) for row in rows]
+                    for line in lines:
+                        if int(line.evidence_chat_id) not in seen:
+                            seen.add(int(line.evidence_chat_id))
+                            base.append(line)
+                    # 遇到滚动档案就停：它已经接住了更早的事
+                    if any(line.from_session_id is not None for line in lines):
+                        break
+                return base
+
+        return await self._run_in_executor(_exec)
+
     async def list_archived_session_bounds(self, *, limit: int = 200) -> List[Tuple[int, int]]:
         """有档案行的场次与它的开播时刻（开播时刻倒序），供回想工具逐场检索。
 
@@ -151,4 +216,4 @@ class ArchiveRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
 
-__all__ = ["ArchiveRepo", "delete_archive_lines_by_session"]
+__all__ = ["ArchiveRepo", "delete_archive_lines_by_session", "delete_archive_lines_from_session"]

@@ -898,8 +898,19 @@ def _replace_nickname_in_sessions(
         conn.execute(
             f"UPDATE archive_lines SET"  # noqa: S608
             f" text = REPLACE(text, ?, ?), quote = REPLACE(quote, ?, ?)"
-            f" WHERE live_session_id IN ({sid_ph}) AND (text LIKE ? OR quote LIKE ?)",
-            [nickname, MASKED_VIEWER_LABEL, nickname, MASKED_VIEWER_LABEL, *session_ids, like_pat, like_pat],
+            # 滚动档案把旧行接进了后面几场：出自 ta 出现过的场次的副本一并改写
+            f" WHERE (live_session_id IN ({sid_ph}) OR from_session_id IN ({sid_ph}))"
+            f" AND (text LIKE ? OR quote LIKE ?)",
+            [
+                nickname,
+                MASKED_VIEWER_LABEL,
+                nickname,
+                MASKED_VIEWER_LABEL,
+                *session_ids,
+                *session_ids,
+                like_pat,
+                like_pat,
+            ],
         )
 
     if table_exists(conn, "commitments"):
