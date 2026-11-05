@@ -184,5 +184,12 @@ def test_player_body_language_notice_says_it_is_social_and_how_to_answer() -> No
     route = route_body_event("player_body_language")
     content = body_notice_content(route, "玩家 Alex（e4）看着你蹲起 4 下；他在你前方 3 格", history=[], queue=[])
     assert content.startswith("[互动] 玩家 Alex（e4）看着你蹲起 4 下；他在你前方 3 格。")
-    for phrase in ("不是打你", "body_language", "不打断手上的活", "player-body-language", "不用交付也不用上报"):
+    for phrase in (
+        "不是打你",
+        "body_language",
+        "不打断手上的活",
+        "player-body-language",
+        "回过一次就够了",
+        "不用交付也不用上报",
+    ):
         assert phrase in content
