@@ -48,6 +48,7 @@ def _settler(
         chat_repo=store.chat,
         commitments_repo=store.commitments,
         event_repo=store.events,
+        archive_repo=store.archive,
         llm_service=llm,
         prompt_manager=prompt_manager,
         game_names_provider=lambda: ["Minecraft"] if games is None else games,
@@ -386,6 +387,103 @@ async def test_dropped_speech_is_not_material(store: SQLiteDatabase, prompt_mana
     assert await settler.settle_session(session_id) is True
     prompt = llm.calls[0]["input"]
     assert "没送到观众面前的这句" not in prompt
+    assert await store.archive.list_lines(live_session_id=session_id) == []
+
+
+# ---------------------------------------------------------------------------
+# 滚动档案：接住上一份档案里仍然成立的事
+# ---------------------------------------------------------------------------
+
+
+async def _previous_archive(store: SQLiteDatabase) -> int:
+    """上一场（滚动之前的旧档案）：取了名、种了菜、炉子没点火。"""
+    previous = await _ended_session(store, started_at_ms=1_000)
+    for evidence, (title, quote) in enumerate(
+        (
+            ("Minecraft：女仆取名团子", "从今天起你就叫团子"),
+            ("Minecraft：菜地围好了", "菜地我自己围的"),
+            ("Minecraft：炉子还没点火", "炉子做好了还没点火"),
+        ),
+        start=901,
+    ):
+        await store.archive.insert_line(
+            live_session_id=previous, text=title, quote=quote, evidence_chat_id=evidence, game="minecraft"
+        )
+    return previous
+
+
+async def test_rolling_archive_keeps_what_still_holds_and_rewrites_what_changed(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """名字与菜地接过来（名字标长期），"还没点火"被这一场改写成新的一行；接过来的行记着出自上一场。"""
+    previous = await _previous_archive(store)
+    session_id = await _ended_session(store, started_at_ms=5_000_000)
+    await _speech(store, session_id, "炉子点上火了，海带烤上啦", timestamp_ms=5_000_100)
+
+    llm = _reply(
+        '{"keep": [{"old": 1, "lasting": true}, {"old": 2}],'
+        ' "archive": [{"line": 1, "title": "Minecraft：炉子点火烤海带", "quote": "炉子点上火了", "game": null}]}',
+        '{"commitments": []}',
+    )
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+
+    prompt = llm.calls[0]["input"]
+    assert "【上一份档案】" in prompt
+    assert "旧1 [上一场] Minecraft：女仆取名团子（原话「从今天起你就叫团子」；在 minecraft）" in prompt
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert [(line.text, line.origin_session_id, line.lasting) for line in lines] == [
+        ("Minecraft：炉子点火烤海带", session_id, False),
+        ("Minecraft：女仆取名团子", previous, True),
+        ("Minecraft：菜地围好了", previous, False),
+    ]
+    assert [line.quote for line in lines[1:]] == ["从今天起你就叫团子", "菜地我自己围的"], "接过来的行照旧带原话"
+
+
+async def test_rolling_archive_without_keep_carries_previous_unchanged(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """模型输出里没有 keep：上一份原样接住，宁可多带几行，也不因格式出岔子把前几场全忘掉；
+    keep 写了认不出的编号，那一条进整理报告。"""
+    await _previous_archive(store)
+    session_id = await _ended_session(store, started_at_ms=5_000_000)
+    await _speech(store, session_id, "今天就聊聊天", timestamp_ms=5_000_100)
+    settler = _settler(store, _reply('{"archive": []}', '{"commitments": []}'), prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+    carried = await store.archive.list_lines(live_session_id=session_id)
+    assert [line.text for line in carried] == [
+        "Minecraft：女仆取名团子",
+        "Minecraft：菜地围好了",
+        "Minecraft：炉子还没点火",
+    ]
+
+    later = await _ended_session(store, started_at_ms=9_000_000)
+    await _speech(store, later, "海带吃完了", timestamp_ms=9_000_100)
+    settler = _settler(
+        store, _reply('{"keep": [{"old": 1}, {"old": 7}], "archive": []}', '{"commitments": []}'), prompt_manager
+    )
+
+    assert await settler.settle_session(later) is True
+    assert [line.text for line in await store.archive.list_lines(live_session_id=later)] == ["Minecraft：女仆取名团子"]
+    row = await store.sessions.get_live_session(live_session_id=later)
+    assert row is not None and row.settle_report is not None and "接着记的旧行编号不存在" in row.settle_report
+
+
+async def test_rolling_archive_keep_that_is_not_a_list_fails_the_session(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """keep 不是列表按输出读不懂处理：整场不提交、重试次数加一，上一份档案不会被这一场顶掉。"""
+    await _previous_archive(store)
+    session_id = await _ended_session(store, started_at_ms=5_000_000)
+    await _speech(store, session_id, "今天就聊聊天", timestamp_ms=5_000_100)
+    settler = _settler(store, _reply('{"keep": "全部", "archive": []}'), prompt_manager)
+
+    assert await settler.settle_session(session_id) is False
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settled_at_ms is None and row.settle_attempts == 1
+    assert "keep 不是列表" in (row.settle_report or "")
     assert await store.archive.list_lines(live_session_id=session_id) == []
 
 

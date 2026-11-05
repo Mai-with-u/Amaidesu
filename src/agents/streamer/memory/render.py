@@ -49,8 +49,8 @@ __all__ = [
     "render_viewer_card",
 ]
 
-# 常驻简报：上一场档案行最多几条、不针对具体观众的承诺最多几条
-MAX_BRIEF_ARCHIVE_LINES = 8
+# 常驻简报：档案行最多几条（滚动档案一份的上限，整理写入用同一个数）、不针对具体观众的承诺最多几条
+MAX_BRIEF_ARCHIVE_LINES = 12
 MAX_BRIEF_COMMITMENTS = 5
 # 老观众在场一行最多几个人，超出的折成"等 N 位"
 MAX_PRESENCE_VIEWERS = 6

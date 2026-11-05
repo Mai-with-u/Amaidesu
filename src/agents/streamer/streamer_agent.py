@@ -444,6 +444,8 @@ class StreamerAgent(BaseAgent):
                 chat_repo=chat_repo,
                 commitments_repo=commitments_repo,
                 event_repo=event_repo,
+                # 滚动档案：整理时接住上一份档案里仍然成立的行
+                archive_repo=archive_repo,
                 llm_service=llm_manager,
                 prompt_manager=prompt_manager,
                 # 「她能做的事」是能力清单：启用的游戏 Agent 名，不含形象等非游戏工具面
