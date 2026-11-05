@@ -88,3 +88,34 @@ async def test_reconnect_provider_error_reports(registry: ToolRegistry) -> None:
     registry.register_provider(_SampleProvider())
     report = await ops.reconnect_provider("sample")
     assert report["ok"] is False and report["reason"] == "not_supported" and "不支持手动重连" in report["error"]
+
+
+class _FailingConnectProvider(_SampleProvider):
+    """覆写连接动作恒失败：disconnect 放行让默认组合走到 connect，connect 按 last_error 行为分支。"""
+
+    def __init__(self, name: str = "sample", *, record_error: str = "") -> None:
+        super().__init__(name)
+        self.record_error = record_error
+
+    async def disconnect(self) -> bool:
+        return True
+
+    async def connect(self) -> bool:
+        if self.record_error:
+            self.last_error = self.record_error
+        return False
+
+
+async def test_reconnect_failure_carries_provider_last_error(registry: ToolRegistry) -> None:
+    """重连失败报告携带 Provider 自记的失败原因，运营面不再只见泛化文案。"""
+    registry.register_provider(_FailingConnectProvider(record_error="transport=http 需要配置 url"))
+    report = await _ops(registry).reconnect_provider("sample")
+    assert report["ok"] is False and report["reason"] == "reconnect_failed"
+    assert "transport=http 需要配置 url" in report["error"]
+
+
+async def test_reconnect_failure_without_last_error_keeps_generic_text(registry: ToolRegistry) -> None:
+    """Provider 未记原因（last_error 空）时保持既有泛化文案。"""
+    registry.register_provider(_FailingConnectProvider(record_error=""))
+    report = await _ops(registry).reconnect_provider("sample")
+    assert report["ok"] is False and report["error"] == "重连失败: provider.reconnect 返回 False"

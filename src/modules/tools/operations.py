@@ -179,11 +179,15 @@ class ToolOperations:
                 "provider_id": provider_id,
             }
         if not ok:
-            logger.warning(f"Provider '{provider_id}' 手动重连失败（provider.reconnect 返回 False）")
+            # last_error 是连接失败时 Provider 自记的原因摘要（如 MCP 缺 url），带上免得运营面只见泛化失败
+            last_error = provider.last_error.strip()
+            suffix = f"（{last_error}）" if last_error else ""
+            logger.warning(f"Provider '{provider_id}' 手动重连失败（provider.reconnect 返回 False）{suffix}")
+            error = f"重连失败: {last_error}" if last_error else "重连失败: provider.reconnect 返回 False"
             return {
                 "ok": False,
                 "reason": "reconnect_failed",
-                "error": "重连失败: provider.reconnect 返回 False",
+                "error": error,
                 "provider_id": provider_id,
             }
 
