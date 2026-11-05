@@ -41,15 +41,14 @@ class _RemoteSkillsClient:
 
     async def read_resource(self, uri: str) -> Any:
         self.reads.append(uri)
-        return SimpleNamespace(
-            contents=[
-                SimpleNamespace(
-                    uri=uri,
-                    mimeType="text/markdown",
-                    text="---\nname: survival-opening\n---\n\nbody-of-survival-opening",
-                )
-            ]
-        )
+        # 与 fastmcp 的 Client.read_resource 同形：直接回内容项列表，不是带 contents 的整包结果
+        return [
+            SimpleNamespace(
+                uri=uri,
+                mimeType="text/markdown",
+                text="---\nname: survival-opening\n---\n\nbody-of-survival-opening",
+            )
+        ]
 
 
 async def test_remote_skills_are_listed_and_read_by_uri() -> None:

@@ -7,10 +7,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
+import pytest
+
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.state import MinecraftAgentState
 from src.modules.logging import get_logger
-from src.modules.skills import SkillLibrary
+from src.modules.mcp.client import McpClient
+from src.modules.skills import RemoteSkill, SkillLibrary
 
 
 def _support(
@@ -127,11 +130,10 @@ async def test_remote_skills_are_registered_from_the_client_and_dropped_when_dis
         ]
 
     async def read_resource(uri: str) -> Any:
-        return SimpleNamespace(
-            contents=[
-                SimpleNamespace(uri=uri, mimeType="text/markdown", text="---\nname: survival-opening\n---\nremote-body")
-            ]
-        )
+        # 与 fastmcp 的 Client.read_resource 同形：直接回内容项列表，不是带 contents 的整包结果
+        return [
+            SimpleNamespace(uri=uri, mimeType="text/markdown", text="---\nname: survival-opening\n---\nremote-body")
+        ]
 
     client = SimpleNamespace(list_resources=list_resources, read_resource=read_resource)
     support, _executed, _absorbed = _support(library, client=client)
@@ -150,3 +152,87 @@ async def test_remote_skills_are_registered_from_the_client_and_dropped_when_dis
     support_down._remote_skills_loaded = True
     support_down.drop_remote_if_disconnected()
     assert [entry.name for entry in library.catalog("minecraft")] == [], "连接断了远端技能撤下"
+
+
+async def test_remote_skill_body_is_read_through_the_real_mcp_sdk(loguru_capture: Any) -> None:
+    """进程内真 FastMCP 服务走一遍 resources/list → resources/read：正文要能读出来，只有二进制内容时说清原因。
+
+    SDK 的 read_resource 回的是内容项列表；替身若按"带 contents 的整包结果"造数据，
+    测试会一直是绿的而实机每次都报读不到正文，所以这里不经替身，用真 SDK 客户端。
+    """
+    from fastmcp import FastMCP  # 可选 SDK，服务在进程内运行，不连接游戏或调用模型
+
+    service = FastMCP("maicraft-skills")
+
+    @service.resource(
+        "skill://touhoulittlemaid/maid-getting-started/SKILL.md",
+        name="maid-getting-started",
+        description="女仆入门",
+        mime_type="text/markdown",
+    )
+    def maid_getting_started() -> str:
+        return "---\nname: maid-getting-started\n---\n\n# 女仆入门\nbody-of-maid-getting-started"
+
+    @service.resource("skill://building/packed-notes/SKILL.md", name="packed-notes", mime_type="text/markdown")
+    def packed_notes() -> bytes:
+        return b"packed"
+
+    client = McpClient(
+        "maicraft",
+        SimpleNamespace(timeout_seconds=1, request_timeout_ms=1000, transport="http"),
+        transport_factory=lambda: service,  # fastmcp 直接接受进程内 server 对象作为传输
+    )
+    library = SkillLibrary()
+    support, _executed, _absorbed = _support(library, client=client)
+    try:
+        assert await client.connect()
+        await support.ensure_remote_skills()
+        assert sorted(entry.name for entry in library.catalog("minecraft")) == ["maid-getting-started", "packed-notes"]
+
+        read = await support.read_skill("maid-getting-started")
+        assert read["success"] is True, read
+        assert read["content"] == "# 女仆入门\nbody-of-maid-getting-started", "去掉 frontmatter 后的正文"
+
+        packed = await support.read_skill("packed-notes")
+        assert packed["success"] is False and "没有文本正文" in packed["error"]
+        assert "BlobResourceContents" in packed["error"], "说清回来的是哪种内容"
+    finally:
+        await client.close()
+    warnings = [record["message"] for record in loguru_capture.records if record["level"] == "WARNING"]
+    assert any("packed-notes" in message and "没有文本正文" in message for message in warnings), (
+        "读失败留下带原因的日志"
+    )
+
+
+@pytest.mark.parametrize(
+    ("ready", "contents", "reason"),
+    [
+        (False, [], "没连上"),
+        (True, None, "读取出错"),
+        (True, [], "内容是空的"),
+    ],
+)
+async def test_remote_skill_read_failures_tell_the_reason_to_model_and_log(
+    loguru_capture: Any, ready: bool, contents: Optional[List[Any]], reason: str
+) -> None:
+    """远端技能读不到正文的每条路径：给模型的错误与日志都带上是哪种读不到。"""
+    reads: List[str] = []
+
+    async def read_resource(uri: str) -> Optional[List[Any]]:
+        reads.append(uri)
+        return contents
+
+    library = SkillLibrary()
+    uri = "skill://touhoulittlemaid/maid-getting-started/SKILL.md"
+    library.replace_remote(
+        "MaiCraft",
+        [RemoteSkill(name="maid-getting-started", description="", category="touhoulittlemaid", uri=uri)],
+    )
+    support, _executed, _absorbed = _support(library, ready=ready, client=SimpleNamespace(read_resource=read_resource))
+
+    result = await support.read_skill("maid-getting-started")
+
+    assert result["success"] is False and reason in result["error"]
+    assert reads == ([uri] if ready else []), "没连上时不发读取请求"
+    warnings = [record["message"] for record in loguru_capture.records if record["level"] == "WARNING"]
+    assert any(uri in message and reason in message for message in warnings), "每条失败路径都留下带原因的日志"

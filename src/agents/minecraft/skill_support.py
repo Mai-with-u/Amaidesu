@@ -204,11 +204,14 @@ class SkillSupport:
             return {"success": False, "error": "技能库未装配"}
         remote = self._skills.remote(name, self._agent_name)
         if remote is not None:
-            text = await self._read_remote_skill(remote.uri)
+            text, problem = await self._read_remote_skill(remote.uri)
             if text is None:
+                # 模型点名读一项随 Mod 发布的玩法技能却拿不到正文时，先把原因记进日志供复盘，
+                # 再照实告诉模型是哪种读不到，免得它把"没连上"当成"技能不存在"转去猜资料页
+                self._logger.warning(f"读取 MaiCraft 技能 {name!r}（{remote.uri}）失败：{problem}")
                 return {
                     "success": False,
-                    "error": f"读取技能 {name!r} 失败：MaiCraft 没有返回正文",
+                    "error": f"读取技能 {name!r} 失败：{problem}",
                     "available": [
                         entry.name for entry in self._skills.catalog(self._agent_name, self._skill_environment())
                     ],
@@ -222,19 +225,29 @@ class SkillSupport:
             }
         return self._skills.read(name, self._agent_name, self._skill_environment())
 
-    async def _read_remote_skill(self, uri: str) -> Optional[str]:
-        """按 skill:// 地址读一项技能的 SKILL.md；没连上、读失败、没有正文都返回 None。"""
+    async def _read_remote_skill(self, uri: str) -> tuple[Optional[str], str]:
+        """按 skill:// 地址读一项技能的 SKILL.md，返回 (正文, 读不到的原因)。
+
+        MCP 客户端的 ``read_resource`` 回的是内容项列表（文本项带 ``text``，二进制项带 ``blob``），
+        不是带 ``contents`` 的整包结果；取第一项有文本的内容当正文。读到正文时原因为空串，
+        没连上、读取出错、空内容、只有非文本内容各给一句原因。
+        """
         client = self._mcp_client()
         if client is None or not self._maicraft_ready():
-            return None
-        result = await client.read_resource(uri)
-        if result is None:
-            return None
-        for item in getattr(result, "contents", None) or []:
+            return None, "MaiCraft 没连上"
+        contents = await client.read_resource(uri)
+        if contents is None:
+            # 通道层已把未连接、超时或服务端报错的具体原因记成 McpClient 的 warning，这里只说结论
+            return None, "MaiCraft 读取出错（连接断开或服务端报错）"
+        items = list(contents)
+        for item in items:
             text = getattr(item, "text", None)
             if text:
-                return str(text)
-        return None
+                return str(text), ""
+        if not items:
+            return None, "MaiCraft 返回的内容是空的"
+        shapes = "、".join(f"{type(item).__name__}（mimeType={getattr(item, 'mimeType', None)}）" for item in items)
+        return None, f"MaiCraft 返回的 {len(items)} 项内容里没有文本正文：{shapes}"
 
     # ==================================================================
     # 开局代读

@@ -321,11 +321,14 @@ class McpClient:
 
         return unsubscribe
 
-    async def read_resource(self, uri: str) -> Any:
-        """读取资源内容（直通 fastmcp，返回 ReadResourceResult）。
+    async def read_resource(self, uri: str) -> Optional[List[Any]]:
+        """读取资源内容（直通 fastmcp 的 ``Client.read_resource``）。
 
         Returns:
-            fastmcp 原始结果；未连接/读取失败返回 None（由消费方兜底）
+            内容项列表（``TextResourceContents`` 带 ``text``、
+            ``BlobResourceContents`` 带 ``blob``）——fastmcp 已经拆掉了
+            ``ReadResourceResult`` 外壳，消费方直接遍历列表，不要再取 ``.contents``；
+            未连接/读取失败返回 None（原因已记 warning，由消费方兜底）
         """
         if not self._connected or self._client is None:
             logger.warning(f"MCP server '{self.name}' 未连接，read_resource 返回 None")
