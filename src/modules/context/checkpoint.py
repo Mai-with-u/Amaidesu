@@ -12,36 +12,39 @@ assistant 的工具调用与紧随其后的工具回执是一组，整组同进�
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Dict, Generic, List, Mapping, Optional, Sequence, TypeVar
+from typing import Any, Awaitable, Dict, Generic, List, Mapping, Optional, Sequence, Tuple, TypeVar
 
 from src.modules.logging import get_logger
 
-__all__ = ["group_messages", "fold_count", "BackgroundCheckpoint"]
+__all__ = ["group_messages", "group_spans", "fold_count", "BackgroundCheckpoint"]
 
 logger = get_logger("ContextCheckpoint")
 
 T = TypeVar("T")
 
 
-def group_messages(messages: Sequence[Mapping[str, Any]]) -> List[List[Mapping[str, Any]]]:
-    """把消息序列切成不可拆的组：工具调用与其回执捆绑，其余每条单独成组。
+def group_spans(messages: Sequence[Mapping[str, Any]]) -> List[Tuple[int, int]]:
+    """把消息序列切成不可拆的组，返回每组在原序列里的 ``[起, 止)`` 下标。
 
-    没有前置调用的连续回执（被截断的旧历史）自成一组，可以整体压掉。
+    工具调用与紧随其后的回执捆成一组，其余每条单独成组；没有前置调用的连续回执
+    （被截断的旧历史）自成一组，可以整体压掉。按下标返回，调用方能就地替换整组。
     """
-    groups: List[List[Mapping[str, Any]]] = []
+    spans: List[Tuple[int, int]] = []
     index = 0
     while index < len(messages):
         message = messages[index]
+        end = index + 1
         if message.get("tool_calls") or message.get("role") == "tool":
-            end = index + 1
             while end < len(messages) and messages[end].get("role") == "tool":
                 end += 1
-            groups.append(list(messages[index:end]))
-            index = end
-        else:
-            groups.append([message])
-            index += 1
-    return groups
+        spans.append((index, end))
+        index = end
+    return spans
+
+
+def group_messages(messages: Sequence[Mapping[str, Any]]) -> List[List[Mapping[str, Any]]]:
+    """把消息序列切成不可拆的组（切法见 ``group_spans``），每组是一段消息列表。"""
+    return [list(messages[start:end]) for start, end in group_spans(messages)]
 
 
 def fold_count(group_tokens: Sequence[int], *, keep_tokens: int, protect_last: int = 1) -> int:
