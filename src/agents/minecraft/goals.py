@@ -46,6 +46,7 @@ _GOAL_STALLED_KIND = "stalled"
 # 天色变了（天黑到了能睡的时间、天亮、开始下雨、雨停）只在变的那一刻来一条，也不带目标编号，同样交过去；
 # 计时到点（模型用 timer 设的"过 N 秒叫我"到了，消息带计时编号、备注、设了多少秒、此刻天色）不挂在任何目标上，
 # 也交过去，由游戏 Agent 叫醒模型。
+# 饿急了从别人家箱子拿了吃的也不带目标编号：交过去记一笔，主人回头来问时游戏 Agent 对得上号。
 _BODY_EVENT_KINDS = frozenset(
     {
         "temporary_task_started",
@@ -55,6 +56,7 @@ _BODY_EVENT_KINDS = frozenset(
         "follow_status",
         "sky_changed",
         "timer_due",
+        "others_food_taken",
     }
 )
 
@@ -122,6 +124,10 @@ class GoalWatch:
 
     def tracked_ids(self) -> List[int]:
         return sorted(self._goals)
+
+    def tracked_abilities(self) -> List[str]:
+        """在跟踪的目标各是哪种能力（死讯到时据此认出是不是自己在寻死）。"""
+        return [goal.ability for goal in self._goals.values()]
 
     def clear(self) -> None:
         """换了逻辑任务或连接重建：名单清空，游标保留（流没变时不重读旧事件）。"""

@@ -18,7 +18,7 @@ MaicraftAttentionCollector —— AI 玩家身体事件采集器
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 from src.agents.minecraft.attention_matrix import (
     KIND_TO_EVENT,
@@ -27,9 +27,13 @@ from src.agents.minecraft.attention_matrix import (
     summarize,
     without_coordinates,
 )
+from src.agents.minecraft.chosen_death import CHOSEN_DEATH_LINE, SuicideWatch
 from src.agents.minecraft.events_collector import MaicraftEventsCollector
+from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN, food_taken_of, spoken_line
+from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
+from src.modules.utils.time_utils import now_ms
 
 
 class MaicraftAttentionCollector(MaicraftEventsCollector):
@@ -42,9 +46,29 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
     )
     stream_label = "任务事件流"
 
+    def __init__(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        event_bus: Optional[EventBus] = None,
+        client_factory: Optional[Callable[..., Any]] = None,
+        clock: Callable[[], int] = now_ms,
+    ) -> None:
+        super().__init__(config=config, event_bus=event_bus, client_factory=client_factory)
+        self._clock = clock
+        # 正在跑的寻死目标：死讯落在它跑的时候，就是自己选的死（回家），不当出事讲
+        self._suicides = SuicideWatch(clock)
+
+    async def _teardown(self) -> None:
+        await super()._teardown()
+        self._suicides.clear()
+
     async def _forward(self, event: Dict[str, Any]) -> bool:
         """一条上游事件 → 一条叙事化 ``game.body.*`` 事件（步进完成转 ``game.milestone``）；其余处境变化返回 False。"""
         source_type = str(event.get("kind") or "")
+        # 目标的开始与结束不进叙事，但要先看一眼：寻死开始了就记下，死讯来时才认得出是不是自己要死的
+        self._suicides.observe(event)
+        if source_type == OTHERS_FOOD_TAKEN:
+            return await self._forward_food_taken(event)
         kind = classify(source_type)
         if kind is None:
             return False
@@ -60,16 +84,37 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
             await self.emit_event(KIND_TO_EVENT[kind], payload, source=self.name)
             self.logger.info(f"[进展事件] {payload.message}（{source_type}）")
             return True
+        summary = summarize(kind, source_type, str(event.get("message") or ""))
+        if kind == "died" and self._suicides.chosen():
+            # 寻死跑着的时候死的：开着死亡不掉落回重生点，是回家的办法，主播轻松带过，不当事故讲、不当伤心事记
+            summary = CHOSEN_DEATH_LINE
         payload = BodyEventPayload(
             game="minecraft",
             kind=kind,
-            summary=summarize(kind, source_type, str(event.get("message") or "")),
+            summary=summary,
             source_event_type=source_type,
             resolved=kind in RESOLVED_KINDS,
         )
         await self.emit_event(KIND_TO_EVENT[kind], payload, source=self.name)
         # 与日志同处落一条：事件面给程序看，日志给人复盘看。
         self.logger.info(f"[身体事件] {payload.summary}（{payload.source_event_type}）")
+        return True
+
+    async def _forward_food_taken(self, event: Dict[str, Any]) -> bool:
+        """拿了别人家的吃的：连同回应口径转给主播（主人来问时由主播在游戏聊天里认下）。
+
+        事件面还没有这一种的专名，走 ``unknown`` 并留上游种类；一句话由归属与 Mod 原话拼出，
+        保留主人名和区域名（对号要用），去掉坐标。
+        """
+        payload = BodyEventPayload(
+            game="minecraft",
+            kind="unknown",
+            summary=spoken_line(food_taken_of(event, self._clock())),
+            source_event_type=OTHERS_FOOD_TAKEN,
+            resolved=True,
+        )
+        await self.emit_event(KIND_TO_EVENT["unknown"], payload, source=self.name)
+        self.logger.info(f"[身体事件] {payload.summary}（{OTHERS_FOOD_TAKEN}）")
         return True
 
 

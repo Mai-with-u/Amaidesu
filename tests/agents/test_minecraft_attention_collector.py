@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 import pytest
 from pydantic import ValidationError
 
 from src.agents.minecraft.attention_collector import MaicraftAttentionCollector
 from src.agents.minecraft.attention_matrix import KIND_TO_EVENT, classify, summarize, without_coordinates
+from src.agents.minecraft.chosen_death import CHOSEN_DEATH_LINE
 from src.modules.agents.companions import build_companion_collectors, owner_of
 from src.modules.collectors.base import BaseCollector, CollectorState
 from src.modules.collectors.factory import SUPPORTED_COLLECTORS
@@ -39,13 +40,19 @@ def _event(cursor: int, kind: str, message: str = "", goal_id: int = -1) -> Dict
     return {"cursor": cursor, "kind": kind, "goal_id": goal_id, "message": message}
 
 
-def _collector(bus: _FakeEventBus) -> MaicraftAttentionCollector:
-    """接替身客户端的采集器（MCP 客户端经构造工厂注入）。"""
-    return MaicraftAttentionCollector(config={}, event_bus=bus, client_factory=fake_client_factory())  # type: ignore[arg-type]
+def _collector(bus: _FakeEventBus, clock: Optional[Callable[[], int]] = None) -> MaicraftAttentionCollector:
+    """接替身客户端的采集器（MCP 客户端经构造工厂注入；要控时间时注入时钟）。"""
+    if clock is None:
+        return MaicraftAttentionCollector(config={}, event_bus=bus, client_factory=fake_client_factory())  # type: ignore[arg-type]
+    return MaicraftAttentionCollector(  # type: ignore[arg-type]
+        config={}, event_bus=bus, client_factory=fake_client_factory(), clock=clock
+    )
 
 
-async def _primed(bus: _FakeEventBus, cursor: int = 5) -> tuple[MaicraftAttentionCollector, _FakeClient]:
-    collector = _collector(bus)
+async def _primed(
+    bus: _FakeEventBus, cursor: int = 5, clock: Optional[Callable[[], int]] = None
+) -> tuple[MaicraftAttentionCollector, _FakeClient]:
+    collector = _collector(bus, clock)
     assert await collector._ensure_ready() is True
     client = _FakeClient.instances[-1]
     client.pages.append(_page([], cursor=cursor))
@@ -336,6 +343,62 @@ async def test_finished_temporary_task_is_marked_resolved() -> None:
 
     name, payload = bus.events[0]
     assert name == CoreEvents.GAME_BODY_REFLEX_FINISHED and payload.resolved is True
+
+
+async def test_death_during_a_suicide_is_told_as_going_home() -> None:
+    """寻死跑着的时候死了：给主播的话换成"回家"，不当事故讲；寻死结束后再死照常讲。"""
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5)
+    client.pages.append(
+        _page(
+            [
+                _event(6, "started", "开始：maicraft:suicide（回家补满血）", goal_id=9),
+                _event(7, "character_died", "Alex被杀死了"),
+                _event(8, "finished", "目标完成", goal_id=9),
+                _event(9, "character_died", "Alex被僵尸杀死了"),
+            ],
+            cursor=9,
+        )
+    )
+
+    await collector._drain()
+
+    chosen, accident = [payload for name, payload in bus.events if name == CoreEvents.GAME_BODY_DIED]
+    assert chosen.summary == CHOSEN_DEATH_LINE and "不是出事" in chosen.summary
+    assert accident.summary != CHOSEN_DEATH_LINE and accident.summary.startswith("死了")
+
+
+async def test_stale_suicide_does_not_soften_a_later_death() -> None:
+    """寻死的结束事件漏读：记下的编号放久了作废，之后真出事照常讲。"""
+    bus = _FakeEventBus()
+    now = [0]
+    collector, client = await _primed(bus, cursor=5, clock=lambda: now[0])
+    client.pages.append(_page([_event(6, "started", "开始：maicraft:suicide", goal_id=9)], cursor=6))
+    await collector._drain()
+
+    now[0] = 11 * 60 * 1000
+    client.pages.append(_page([_event(7, "character_died", "Alex被苦力怕炸死了")], cursor=7))
+    await collector._drain()
+
+    [(_, payload)] = bus.events
+    assert payload.summary != CHOSEN_DEATH_LINE
+
+
+async def test_food_taken_from_others_reaches_the_streamer_with_how_to_answer() -> None:
+    """拿了别人家的吃的：转给主播一句话（主人名留着、坐标去掉）和主人来问时怎么接。"""
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5)
+    detail = {"whose": "player", "owner": "Steve", "at": {"x": 12, "y": 64, "z": -8}, "items": []}
+    event = _event(6, "others_food_taken", "饿到饱食度 3，从 Steve 家的箱子（12, 64, -8）拿了 2 个面包")
+    event["others_food_taken"] = detail
+    client.pages.append(_page([event], cursor=6))
+
+    await collector._drain()
+
+    [(name, payload)] = bus.events
+    assert name == CoreEvents.GAME_BODY_UNKNOWN and payload.source_event_type == "others_food_taken"
+    assert payload.summary.startswith("饿到饱食度 3，从 Steve 家的箱子拿了 2 个面包")
+    assert "Steve 来问，就大方认下是我拿的" in payload.summary and payload.resolved is True
 
 
 async def test_stream_change_resets_cursor_without_forwarding_history() -> None:

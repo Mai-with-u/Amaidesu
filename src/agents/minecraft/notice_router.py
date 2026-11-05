@@ -22,6 +22,8 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Literal, Optional
 
 from src.agents.minecraft.attention_matrix import classify, summarize
+from src.agents.minecraft.chosen_death import CHOSEN_DEATH_NOTICE
+from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN
 from src.agents.minecraft.repeated_notice import notice_present, repeat_reference
 
 __all__ = [
@@ -48,6 +50,10 @@ _BODY_NOTICE_TEMPLATES = {
         "[身体] {message}。Mod 会挂出一条死亡恢复决策等你回答，按问题里给的选项选（选重生才会复活）；"
         "目标保留着，复活后接着做。复活后先 maicraft_observe(what=self) 看一眼自己"
         "（位置变了，背包可能也变了），再决定要不要调整计划或上报主播。"
+    ),
+    OTHERS_FOOD_TAKEN: (
+        "[身体] {message}。饿急了拿的是别人家的吃的，已经记下，主播那边也知道了。"
+        "主人来问就大方认下是你拿的，可以俏皮一点；对方真生气了就道个歉、说回头补上。手上的活照常接着做。"
     ),
 }
 
@@ -132,6 +138,10 @@ _BODY_EVENT_ROUTES: Dict[str, BodyEventRoute] = {
         template=_BODY_NOTICE_TEMPLATES["character_died"],
         publish_material=True,
     ),
+    # 拿了别人家的吃的：任务进行中告诉模型（主人来问时认得出）；转告主播由注意流采集器出，这里不重复
+    OTHERS_FOOD_TAKEN: BodyEventRoute(
+        kind=OTHERS_FOOD_TAKEN, channel="inject_if_busy", template=_BODY_NOTICE_TEMPLATES[OTHERS_FOOD_TAKEN]
+    ),
     # 急事开始：任务进行中转告主播，开头点明是做事时碰上的
     "temporary_task_started": BodyEventRoute(
         kind="temporary_task_started", channel="attention_event", execution_context_prefix=True
@@ -146,8 +156,18 @@ _BODY_EVENT_ROUTES: Dict[str, BodyEventRoute] = {
 _UNKNOWN_KIND_ROUTE = BodyEventRoute(kind="", channel="attention_event")
 
 
-def route_body_event(kind: str) -> BodyEventRoute:
-    """按种类取路由；未知种类走 attention_event 兜底（不静默丢弃）。"""
+# 自己寻死时的死讯：通知模型这是回家的办法、照常选重生；不发主播素材——Mod 原话是一句死亡播报，
+# 主播那边由注意流采集器换成"回家"的说法，再发一份原话只会让她当成出事
+_CHOSEN_DEATH_ROUTE = BodyEventRoute(kind="character_died", channel="inject_if_busy", template=CHOSEN_DEATH_NOTICE)
+
+
+def route_body_event(kind: str, *, chosen_death: bool = False) -> BodyEventRoute:
+    """按种类取路由；未知种类走 attention_event 兜底（不静默丢弃）。
+
+    ``chosen_death``：死的时候手上正跑着寻死目标（自己选的死），死讯换成"回家"的路由。
+    """
+    if chosen_death and kind == "character_died":
+        return _CHOSEN_DEATH_ROUTE
     route = _BODY_EVENT_ROUTES.get(kind)
     if route is not None:
         return route

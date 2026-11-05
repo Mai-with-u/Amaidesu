@@ -25,6 +25,7 @@ from copy import deepcopy
 from typing import Any, Deque, Dict, Iterable, List, Literal, Optional, Tuple
 
 from src.agents.minecraft.attention_material import AttentionMaterialPublisher
+from src.agents.minecraft.chosen_death import is_suicide_ability
 from src.agents.minecraft.context import (
     FACTS_KEY,
     MinecraftHistoryCompactor,
@@ -60,6 +61,7 @@ from src.agents.minecraft.notice_router import (
     body_notice_content,
     route_body_event,
 )
+from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN, FoodTakenLog, food_taken_of
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
 from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
@@ -207,6 +209,8 @@ class MinecraftAgent(BaseAgent):
         # 生物名册：自己的生物与主播起过名的生物是谁、在不在身边、死没死（速览、起名与死讯共用这一份）
         self._creatures = CreatureBook()
         self._creature_repo = creature_repo
+        # 饿急了从别人家箱子拿过的吃的：按世界记最近几笔放进任务事实，主人回头来问时按名字、区域或位置对上号
+        self._food_taken = FoodTakenLog()
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
             state=self._mc_state,
@@ -873,6 +877,10 @@ class MinecraftAgent(BaseAgent):
         self._shown_context = {}
         self._mc_state.set_todos([])
         self._goal_ledger.clear_finished()
+        # 新任务只带系统说明和新指令：这个世界里拿过别人家的吃的另附一条事实，主人来问时一开工就认得出
+        taken = self._food_taken.view(self._creatures.world_key)
+        if taken:
+            messages.append({"role": "user", "content": "[拿过别人家的吃的]\n" + json_text(taken), FACTS_KEY: True})
 
     async def _end_without_tool_calls(
         self, messages: List[Dict[str, Any]], content: str, steps: int, reminded: bool
@@ -1084,7 +1092,14 @@ class MinecraftAgent(BaseAgent):
         self._batch_body_events.append(record)
         if len(self._batch_body_events) > MAX_BATCH_BODY_EVENTS:
             self._batch_body_events = self._batch_body_events[-MAX_BATCH_BODY_EVENTS:]
-        route = route_body_event(kind)
+        if kind == OTHERS_FOOD_TAKEN:
+            # 闲着时也要记：主人多半是过一阵才来问，那时候模型得从任务事实里认出是自己拿的
+            self._food_taken.record(self._creatures.world_key, food_taken_of(event, now_ms()))
+        # 死的时候手上正跑着寻死目标：是自己选的死（回重生点），通知换成"回家"的说法、不发主播素材
+        chosen_death = kind == "character_died" and any(
+            is_suicide_ability(ability) for ability in self._goals.tracked_abilities()
+        )
+        route = route_body_event(kind, chosen_death=chosen_death)
         if route.urgent_marker:
             # 急事收尾：撤离甩开追兵后人已不在原地，Mod 写"主任务停在半路等下一步指示"，紧接着把主任务挂成暂停。
             # 记下这句交给随后的暂停通知，游戏 Agent 才知道是撤离把角色带离了原地，不会猜成游戏重连。
@@ -1184,7 +1199,8 @@ class MinecraftAgent(BaseAgent):
 
     def _current_task_context(self) -> Dict[str, Any]:
         """恢复与集中整理都保留：原始指令、待办、笔记、在跑的目标与最近结束的目标，
-        以及主播给生物起的名字（有才带：主播说"带上阿缕"时，身体要认得出阿缕是哪一只）。"""
+        以及主播给生物起的名字（有才带：主播说"带上阿缕"时，身体要认得出阿缕是哪一只）
+        和这个世界里拿过别人家的吃的（有才带：主人来问时认得出是自己拿的）。"""
         context: Dict[str, Any] = {
             "original_instructions": list(self._task_instructions),
             "todo": self._mc_state.todo_doc()["todos"],
@@ -1196,6 +1212,10 @@ class MinecraftAgent(BaseAgent):
         named = self._creatures.named_view()
         if named:
             context["named_creatures"] = named
+        # 拿过别人家的吃的（有才带）：主播转来"谁拿了我的面包"时，按主人名、区域或箱子位置认出是自己拿的
+        taken = self._food_taken.view(self._creatures.world_key)
+        if taken:
+            context["others_food_taken"] = taken
         return context
 
     def _continue_task_context(self) -> Dict[str, Any]:

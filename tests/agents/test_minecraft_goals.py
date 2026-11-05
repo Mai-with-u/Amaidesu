@@ -175,6 +175,21 @@ async def test_a_due_timer_passes_through_to_the_body_callback() -> None:
     assert recorder.changed == [] and server.calls_to("goal") == []
 
 
+async def test_food_taken_from_others_passes_through_to_the_body_callback() -> None:
+    """饿急了从别人家箱子拿了吃的也不挂在目标上：连同明细交给身体回调，游戏 Agent 记一笔、主人来问时对得上号。"""
+    server, recorder = FakeMaicraft(), _Recorder()
+    watch = _watch(server, recorder)
+    await watch.step()
+    detail = {"whose": "player", "owner": "Alex", "at": {"x": 12, "y": 64, "z": -8}, "items": []}
+    server.body_event("others_food_taken", "饿到饱食度 3，从 Alex 家的箱子拿了 2 个面包", {"others_food_taken": detail})
+
+    await watch.step()
+
+    assert [event["kind"] for event in recorder.body] == ["others_food_taken"]
+    assert recorder.body[0]["others_food_taken"]["owner"] == "Alex"
+    assert recorder.changed == [] and server.calls_to("goal") == []
+
+
 async def test_after_a_world_change_missing_goals_are_reported_gone() -> None:
     """事件流换了：逐个查在跟踪的目标，查不到的如实说不在了。"""
     server, recorder = FakeMaicraft(), _Recorder()

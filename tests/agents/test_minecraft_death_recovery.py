@@ -51,6 +51,34 @@ async def test_character_death_tells_the_running_task_and_the_streamer() -> None
     await agent.stop()
 
 
+async def test_death_during_own_suicide_is_told_as_going_home() -> None:
+    """自己下的寻死目标还在跑时死了：通知写明是回重生点的办法、照样选重生，不再把死亡播报发给主播当素材。"""
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "等寻死回家"})])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "suicide", "purpose": "回家补满血"}})])
+
+    agent, llm, bus = await make_minecraft_agent(server, script)
+    agent.receive_delegation(instruction="回家歇会", task_id="d-1")
+    await _wait_until(lambda: agent.tracked_goal_ids == [1])
+    await _wait_until(lambda: agent.batch_active is False and len(llm.seen) == 2)
+
+    server.body_event("character_died", "Alex被杀死了")
+    await _wait_until(lambda: len(llm.seen) == 3)
+
+    woken = _texts(llm.seen[-1])
+    assert "[身体] Alex被杀死了" in woken and "回重生点的办法，不是出事" in woken
+    alerts = [
+        call.args[1].message
+        for call in bus.emit.await_args_list
+        if isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
+    ]
+    assert not any("被杀死了" in alert for alert in alerts), "主播那边由注意流说成回家，这里不再发死亡播报"
+    await agent.stop()
+
+
 async def test_a_death_recovery_question_wakes_the_task_to_answer_it() -> None:
     """角色死了：死亡通知说明要回答死亡恢复决策，决策提问带着选项唤醒任务，模型按选项回答。"""
     server = FakeMaicraft()

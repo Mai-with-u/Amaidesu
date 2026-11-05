@@ -28,6 +28,7 @@ def test_route_table_channels_and_dispositions() -> None:
         "timer_due": ("wake_even_idle", {}),
         "need_unhandled": ("inject_if_busy", {"dedup_content", "publish_material"}),
         "character_died": ("inject_if_busy", {"publish_material"}),
+        "others_food_taken": ("inject_if_busy", {}),
         "temporary_task_started": ("attention_event", {"execution_context_prefix"}),
         "temporary_task_finished": ("attention_event", {"urgent_marker", "already_resolved"}),
     }
@@ -41,6 +42,15 @@ def test_route_table_channels_and_dispositions() -> None:
         assert route.already_resolved == ("already_resolved" in flags)
         if channel in ("carry_sky", "wake_even_idle", "inject_if_busy"):
             assert route.template and "{message}" in route.template, f"{kind} 的通道需要文案模板"
+
+
+def test_chosen_death_routes_as_going_home_without_material() -> None:
+    """自己寻死时的死讯：通知写明是回家的办法、照样选重生，不再把死亡播报发成主播素材。"""
+    route = route_body_event("character_died", chosen_death=True)
+    assert route.channel == "inject_if_busy" and route.publish_material is False
+    content = body_notice_content(route, "Steve被杀死了", history=[], queue=[])
+    assert content.startswith("[身体] Steve被杀死了。") and "回重生点的办法，不是出事" in content
+    assert route_body_event("need_unhandled", chosen_death=True).kind == "need_unhandled", "别的种类不受影响"
 
 
 def test_unknown_kind_falls_back_to_attention_event() -> None:

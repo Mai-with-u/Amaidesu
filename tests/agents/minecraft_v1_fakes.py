@@ -318,8 +318,11 @@ class FakeMaicraft(BaseToolProvider):
         self.goals[goal_id]["state"] = "paused"
         self._append("paused", goal_id, "暂停")
 
-    def body_event(self, kind: str, message: str) -> None:
+    def body_event(self, kind: str, message: str, fields: Optional[Dict[str, Any]] = None) -> None:
+        """发一条与目标无关的身体事件；``fields`` 是事件自带的结构化字段（如 others_food_taken 的明细）。"""
         self._append(kind, -1, message)
+        if fields:
+            self.events[-1].update(fields)
 
     def die(self) -> int:
         """角色死了：和 MaiCraft v1 一样先发 character_died，再挂一条死亡恢复决策（编号是负数）并发 asked。"""
