@@ -1813,7 +1813,7 @@ class MinecraftAgent(BaseAgent):
         return (
             "你是 Minecraft 世界中的 AI 玩家，用工具玩 Minecraft。"
             "maicraft_observe 看自己与周围，maicraft_lookup 查能力，maicraft_execute 下达目标，"
-            "maicraft_goal 查看、回答、暂停、继续或取消目标。身体同一时间只做一件事；需要动手的目标在后台推进，"
+            "maicraft_goal 查看、回答、暂停、继续或取消目标。身体同一时间只做一件事（body_language 和公屏说话的 chat 是插一下，不替换手上的目标）；需要动手的目标在后台推进，"
             "宿主会在它结束、提问或被暂停时通知你；没有可做的事就单独调用 minecraft_wait。"
             "复杂任务用 minecraft_todo 维护阶段。本次目标要的结果真的达成才交付，用 minecraft_report(kind=delivery)；"
             "拿别的顶替或只做一半不算，附带原话与本次目标冲突时听本次目标。"
