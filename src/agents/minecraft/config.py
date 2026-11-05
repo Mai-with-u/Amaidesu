@@ -95,6 +95,27 @@ class MinecraftContextConfig(ContextBudgetConfig):
         return self
 
 
+class MinecraftPictureConfig(BaseConfig):
+    """游戏 Agent 看画面（observe 的 picture 视图）的额度：一张图一两百 KB，看多了费钱也拖慢。
+
+    超了额度不调 Mod，直接回一句改用结构化数据；Mod 自己只管同时一张、至少隔 1 秒。
+    """
+
+    max_per_task: int = Field(
+        default=6,
+        ge=0,
+        title="每个任务最多看几次",
+        description="同一个委派任务里最多看几次画面（0 = 不让看）；超了直接回一句改用结构化数据，不调 Mod",
+    )
+    min_interval_ms: int = Field(
+        default=10_000,
+        ge=0,
+        title="两次至少隔多久",
+        description="两次看画面之间至少隔多久（毫秒）；不够就先用结构化数据",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+
+
 class MinecraftConfig(BaseConfig):
     """MinecraftAgent 运行时配置
 
@@ -106,6 +127,7 @@ class MinecraftConfig(BaseConfig):
         events_wait_ms: 一次读事件流最多等多久；没有新事件就空手返回再等下一次。跟踪后台目标的读取
             与两个附属采集器（身体事件流、聊天流）共用。
         events_retry_interval_ms: 附属采集器连不上 Mod 或读失败后，隔多久重试（按倍数退避，最长 60 秒）。
+        picture: 看画面的额度（每个任务最多几次、两次至少隔多久）。
     """
 
     context: MinecraftContextConfig = Field(
@@ -133,6 +155,11 @@ class MinecraftConfig(BaseConfig):
         title="MCP 连接",
         description="连接游戏 Mod 的 MCP 服务地址（关闭后 Agent 降级运行）",
     )
+    picture: MinecraftPictureConfig = Field(
+        default_factory=MinecraftPictureConfig,
+        title="看画面",
+        description="游戏 Agent 看画面的次数与间隔（默认每个任务最多 6 次、两次至少隔 10 秒）",
+    )
 
 
-__all__ = ["MinecraftConfig", "MinecraftContextConfig"]
+__all__ = ["MinecraftConfig", "MinecraftContextConfig", "MinecraftPictureConfig"]

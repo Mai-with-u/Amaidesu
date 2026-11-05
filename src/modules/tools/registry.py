@@ -682,6 +682,11 @@ class ToolRegistry:
                 result_data: Dict[str, Any] = result.structured_content
             else:
                 result_data = {"content": result.content}
+            images = sum(1 for block in result.blocks if block.kind == "image")
+            if images:
+                # 图片内容块（如 MCP 工具另带的画面）只给模型看：事件与诊断记录里写一句带了几张图，
+                # 不抄 base64；结构化结果本身带着的字段照旧（新字典，不改写工具结果）
+                result_data = {**result_data, "attached_images": f"带了 {images} 张图（原图不进事件）"}
             payload = ToolResultPayload(
                 tool_name=result.tool_name,
                 round_id=invocation.round_id or None,

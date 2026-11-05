@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -19,12 +20,15 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
 from src.modules.skills import SkillLibrary
-from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
+from src.modules.tools.models import ResultBlock, ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.tools.registry import ToolRegistry
 
 # 只改记忆、只读分析的能力当场完成，其余在后台推进。
 _ASIDE_ABILITIES = frozenset({"maicraft:remember"})
+
+# observe(picture) 回的那张图（假 JPEG 的 base64）：够长，测试据此确认它没进历史和事件
+PICTURE_BASE64 = base64.b64encode(bytes([0xFF, 0xD8, 0xFF]) + b"minecraft-picture" * 200).decode("ascii")
 
 # make_minecraft_agent 的 llm 参数哨兵：显式传 None（不注入模型）与未传（按剧本建替身）要区分开
 _LLM_UNSET = object()
@@ -155,6 +159,24 @@ class FakeMaicraft(BaseToolProvider):
         # world_memory_error 非空时这一项读失败（如角色不在世界里），原因就是这句话
         self.world_memory_view: Dict[str, Any] = {"places": [], "regions": [], "records": []}
         self.world_memory_error = ""
+        # observe(picture)：和真实 Mod 一样回两个内容块——JSON 文字在前、JPEG 图在后（base64 不进 JSON）
+        self.picture_view: Dict[str, Any] = {
+            "picture": {"width": 1280, "height": 720, "format": "image/jpeg", "labeled": True, "menu_included": False},
+            "camera": {"direction": "前方", "compass": "北", "pitch": "平视", "first_person": True},
+            "in_picture": [
+                {"id": "b1", "block": "minecraft:chest", "at": [214, 560], "labeled": True},
+                {"id": "e1", "type": "minecraft:cow", "at": [902, 410], "labeled": True},
+                {
+                    "id": "e9",
+                    "type": "minecraft:item",
+                    "at": [930, 600],
+                    "labeled": False,
+                    "not_labeled_because": "太挤",
+                },
+            ],
+            "summary": "画面里看得见 3 个编号，标了 2 个。",
+        }
+        self.picture_image = PICTURE_BASE64
         self._next_id = 1
         self._new_event = asyncio.Event()
 
@@ -173,6 +195,18 @@ class FakeMaicraft(BaseToolProvider):
         arguments = dict(invocation.arguments or {})
         self.calls.append((name, arguments))
         reply = await getattr(self, f"_{name}")(arguments)
+        if name == "observe" and arguments.get("what") == "picture" and reply["ok"]:
+            # 真实 MCP 结果有两个内容块时宿主拿不到结构化结果，只有文字正文与内容块（宿主自己解析正文里的 JSON）
+            text = json.dumps(reply, ensure_ascii=False)
+            return ToolExecutionResult(
+                tool_name=invocation.tool_name,
+                success=True,
+                content=text,
+                blocks=[
+                    ResultBlock(kind="text", text=text),
+                    ResultBlock(kind="image", data=self.picture_image, mime_type="image/jpeg"),
+                ],
+            )
         if reply["ok"]:
             return ToolExecutionResult(tool_name=invocation.tool_name, success=True, structured_content=reply)
         return ToolExecutionResult(
@@ -190,6 +224,8 @@ class FakeMaicraft(BaseToolProvider):
 
     async def _observe(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         what = arguments.get("what", "scene")
+        if what == "picture":
+            return ok(dict(self.picture_view))
         if what == "world_memory":
             if self.world_memory_error:
                 return error("not_in_world", self.world_memory_error)
@@ -400,12 +436,19 @@ LlmScript = Callable[[List[Dict[str, Any]]], Response]
 
 
 class ScriptLlm:
-    """按剧本回复的模型替身：记下推理次数与每次看到的消息、拿到的工具清单。"""
+    """按剧本回复的模型替身：记下推理次数与每次看到的消息、拿到的工具清单。
 
-    def __init__(self, script: LlmScript) -> None:
+    ``visual`` 决定主模型能不能看图；``vision_reply`` 是视觉模型（看图转文字）的回答，
+    每次转文字的问题记在 ``vision_prompts``。回答为空串时按视觉模型没转出文字处理。
+    """
+
+    def __init__(self, script: LlmScript, *, visual: bool = False, vision_reply: str = "") -> None:
         self.script = script
+        self.visual = visual
+        self.vision_reply = vision_reply
         self.seen: List[List[Dict[str, Any]]] = []
         self.tools_given: List[List[Dict[str, Any]]] = []
+        self.vision_prompts: List[str] = []
 
     async def generate(self, messages: List[Dict[str, Any]], **kwargs: Any) -> Response:
         self.seen.append([dict(message) for message in messages])
@@ -415,9 +458,17 @@ class ScriptLlm:
         return self.script(messages)
 
     def is_profile_visual(self, profile: Optional[str]) -> bool:
-        """能力查询替身：剧本场景一律按非视觉。"""
+        """能力查询替身：按构造时给的 ``visual``（缺省非视觉）。"""
         del profile
-        return False
+        return self.visual
+
+    async def generate_vision(self, prompt: str, images: List[Any], **kwargs: Any) -> Response:
+        """视觉模型替身：记下问题，回 ``vision_reply``；为空串时回失败。"""
+        del images, kwargs
+        self.vision_prompts.append(prompt)
+        if not self.vision_reply:
+            return Response(success=False, content="", error="视觉模型没配")
+        return Response(success=True, content=self.vision_reply)
 
     def get_profile_context_window(self, profile: Optional[str]) -> int:
         """窗口查询替身：剧本场景按未配置（0），预算走保守窗口。"""

@@ -10,7 +10,7 @@ from loguru import logger
 from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.tools import ToolInvocation, ToolProvider, ToolRegistry, ToolSpec
-from src.modules.tools.models import ToolExecutionResult
+from src.modules.tools.models import ResultBlock, ToolExecutionResult
 from src.modules.tools.llm_defs import to_llm_definitions
 from src.modules.tools.operations import ToolOperations
 from src.modules.tools.registry import default_tool_registry, set_default_registry
@@ -188,6 +188,34 @@ async def test_invoke_emits_tool_result_event_with_arguments_and_image_intact() 
     assert (first.tool_name, first.status, first.result) == ("my_tool", "success", {"content": "ok"})
     assert first.arguments == {"city": "上海", "n": 3} and second.arguments == {}  # 缺省入参落空 dict，不落 None
     assert shot.result["image"] == image
+
+
+async def test_image_content_blocks_are_noted_but_never_copied_into_the_event() -> None:
+    """工具另带的图片内容块（MCP 的画面）只给模型看：事件里写一句带了几张图，不抄 base64，也不改写工具结果。"""
+    bus, registry, received = await _registry_with_bus()
+    picture = "B" * 4096
+    structured = {"ok": True}
+
+    async def with_picture(inv: ToolInvocation) -> ToolExecutionResult:
+        blocks = [ResultBlock(kind="text", text='{"ok": true}'), ResultBlock(kind="image", data=picture)]
+        return ToolExecutionResult(
+            tool_name=inv.tool_name,
+            success=True,
+            content='{"ok": true}',
+            blocks=blocks,
+            structured_content=structured if inv.arguments.get("structured") else None,
+        )
+
+    registry.register(ToolSpec(name="observe", description="d", kind="sync", provider="game"), with_picture)
+    await registry.invoke(ToolInvocation(tool_name="game_observe", arguments={}))
+    await registry.invoke(ToolInvocation(tool_name="game_observe", arguments={"structured": True}))
+    await bus.wait_until_drained()
+
+    text_only, with_structured = (payload for _, payload in received)
+    assert text_only.result == {"content": '{"ok": true}', "attached_images": "带了 1 张图（原图不进事件）"}
+    assert with_structured.result == {"ok": True, "attached_images": "带了 1 张图（原图不进事件）"}
+    assert structured == {"ok": True}, "事件用新字典，工具结果本身不变"
+    assert picture not in str([payload.model_dump() for _, payload in received])
 
 
 async def test_invoke_failure_is_broadcast_as_error_and_no_bus_is_silent() -> None:

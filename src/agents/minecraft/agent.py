@@ -82,6 +82,13 @@ from src.agents.minecraft.notice_router import (
     route_body_event,
 )
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN, FoodTakenLog, food_taken_of
+from src.agents.minecraft.picture import (
+    PICTURE_NOT_DESCRIBED,
+    PictureBudget,
+    is_picture_call,
+    picture_images,
+    picture_question,
+)
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.sparring import spar_outcome_line
@@ -98,6 +105,7 @@ from src.modules.context import (
     TokenCounter,
     TransientImages,
     absorb_result_images,
+    is_visual_caller,
 )
 from src.modules.llm.capabilities import ProfileVisualCapabilityLookup, validate_llm_capability
 from src.modules.events.event_bus import EventBus
@@ -117,6 +125,7 @@ from src.modules.tools.llm_defs import function_definition
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.utils.time_utils import now_ms
+from src.modules.vision.vlm_reader import LlmVisionTextReader
 
 from .config import MinecraftConfig
 
@@ -294,6 +303,13 @@ class MinecraftAgent(BaseAgent):
         self._fold_epoch = 0
         # 工具刚返回的截图：历史里只留文字回执，真图挂在下一次推理请求的尾部，用完即弃
         self._transient_images = TransientImages()
+        # 看画面的额度（每个任务几次、两次隔多久）与模型不能看图时转文字用的视觉模型
+        self._picture_budget = PictureBudget(
+            self._clock,
+            max_per_task=config.picture.max_per_task,
+            min_interval_ms=config.picture.min_interval_ms,
+        )
+        self._picture_reader = LlmVisionTextReader(llm_manager=llm_manager)
         # 相邻两次推理请求的历史只该在尾部追加；集中整理与开新任务之外的改写记告警
         self._prefix_guard = PrefixGuard("MinecraftAgent")
         # 委派账：批内追踪（两份任务号清单）与账面写入的单一管辖；批任务号
@@ -955,8 +971,9 @@ class MinecraftAgent(BaseAgent):
         """上一个任务已交付，新指令开新任务：历史、待办与目标记录重新开始。"""
         self._task_instructions.clear()
         messages[:] = [dict(system_message)]
-        # 上个任务最后看过还没来得及用的截图属于旧现场，新任务不带
+        # 上个任务最后看过还没来得及用的截图属于旧现场，新任务不带；看画面的次数与间隔也重新算
         self._transient_images.drain()
+        self._picture_budget.reset()
         self._prefix_guard.expect_rewrite("开新任务")
         self._context_compactor.checkpoints = 0
         # 上个任务的折叠块与请折叠的节奏都不带进新任务；后台还在写的折叠与集中整理当场作废，
@@ -1025,6 +1042,7 @@ class MinecraftAgent(BaseAgent):
         """串行执行单个工具调用：统一经 ToolRegistry（观测/停用/熔断复用既有机制）。
 
         MaiCraft 工具的观察就是它原样的 JSON 回复；连接失败等拿不到回复时写明原因。
+        看画面（observe 的 picture 视图）先过额度，拍成后图按模型能不能看图分路（见 ``_absorb_picture``）。
         registry 工具的观察走对话安全视图：base64 二进制载荷（截图等）属
         tool.result 事件的 UI 展示通道，在对话里以占位符出现。视觉调用方
         且工具结果带图时，图经 absorb_result_images 入库换句柄、登记到易逝图，
@@ -1032,6 +1050,12 @@ class MinecraftAgent(BaseAgent):
         """
         if self._tool_registry is None:
             return {"ok": False, "error": "工具执行失败：tool_registry 未注入", "tool": name}
+        picture_call = is_picture_call(name, arguments)
+        if picture_call:
+            # 看画面先过额度：这个任务看够了次数、离上一张太近，就不调 Mod，直接回一句改用结构化数据
+            refusal = self._picture_budget.refusal()
+            if refusal:
+                return {"ok": False, "error": {"code": "picture_limit", "message": refusal}}
         result = await self._tool_registry.invoke(
             ToolInvocation(
                 tool_name=name,
@@ -1042,7 +1066,10 @@ class MinecraftAgent(BaseAgent):
             )
         )
         if name.startswith(f"{PROVIDER}_"):
-            return reply_of(result).raw
+            reply = reply_of(result)
+            if picture_call and reply.ok:
+                return await self._absorb_picture(arguments, reply, result)
+            return reply.raw
         if result.success:
             data: Dict[str, Any] = (
                 dict(result.structured_content)
@@ -1056,6 +1083,36 @@ class MinecraftAgent(BaseAgent):
             absorb_result_images(self._transient_images, self._llm, MINECRAFT_PROFILE, name, result)
             return observation
         return {"ok": False, "error": result.error_message or "工具执行失败", "tool": name}
+
+    async def _absorb_picture(
+        self, arguments: Dict[str, Any], reply: MaicraftReply, result: ToolExecutionResult
+    ) -> Dict[str, Any]:
+        """拍成了一张画面：文字那一块照旧当观察，图按模型能不能看图分两路，额度记一次。
+
+        能看图：图入库换句柄，挂在下一次请求尾部看一眼就丢，历史里只有文字观察。
+        不能看图：按这次调用拼问题（看的是哪个编号、图上标了哪些编号），经视觉模型转成文字，
+        接在观察后面；转不出来（视觉模型没配、调用失败、图解不开）就照实说"画面没能转成文字"。
+        """
+        self._picture_budget.taken()
+        observation = dict(reply.raw)
+        if is_visual_caller(self._llm, MINECRAFT_PROFILE):
+            absorb_result_images(self._transient_images, self._llm, MINECRAFT_PROFILE, OBSERVE, result)
+            return observation
+        if not any(block.kind == "image" and block.data for block in result.blocks):
+            # 旧版 Mod 或这次没带图：只有文字那一块，原样当观察
+            return observation
+        # 带了图却一张都解不开时 images 为空，下面照"画面没能转成文字"如实说
+        images = picture_images(result)
+        question = picture_question(arguments, reply.data)
+        descriptions: List[str] = []
+        for image, mime_type in images:
+            text = await self._picture_reader.read(image, mime_type=mime_type, question=question)
+            if text:
+                descriptions.append(text)
+        if not descriptions:
+            self._logger.warning("画面没能转成文字：视觉模型没有返回内容，这一步只给文字那一块")
+        observation["picture_description"] = "\n".join(descriptions) or PICTURE_NOT_DESCRIBED
+        return observation
 
     async def _call_maicraft(self, name: str, arguments: Dict[str, Any]) -> MaicraftReply:
         """宿主自己读 MaiCraft（目标跟踪、看一眼）：直接经私有 provider，不进模型的工具记录。"""
