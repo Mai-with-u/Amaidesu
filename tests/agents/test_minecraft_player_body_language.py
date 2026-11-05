@@ -32,6 +32,11 @@ from src.agents.minecraft.player_body_language import spoken_fact, spoken_line
         ("玩家 Steve（e2）拍了你一下：空手，没伤到；他在你身后 1 格，看着你", "玩家 Steve 拍了我一下：空手，没伤到"),
         ("玩家 Alex（e4）这一分钟又蹲起 40 下、拍你 12 下", "玩家 Alex 这一分钟又蹲起 40 下、拍我 12 下"),
         ("玩家 Alex 对着橡木原木（b5）挥了 3 下；他在你右侧 4 格", "玩家 Alex 对着橡木原木挥了 3 下"),
+        # 挥向方块时 Mod 把方位写在括号里：格数去掉，括号开头的"你"也换成"我"
+        (
+            "玩家 Alex（e4）对着石头（你左前方 2 格）挥了 3 下；他在你前方 4 格",
+            "玩家 Alex 对着石头（我左前方）挥了 3 下",
+        ),
     ],
 )
 def test_spoken_fact_keeps_the_gestures_and_drops_where_he_stands(message: str, expected: str) -> None:
