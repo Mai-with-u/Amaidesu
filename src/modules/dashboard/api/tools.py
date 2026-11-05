@@ -215,7 +215,7 @@ async def control_tool_provider(
 
     try:
         change = build_provider_switch_change(
-            category, key, enable, safe_list_providers(tool_ops), _read_avatar_platform_doc
+            category, key, enable, safe_list_providers(tool_ops), _read_avatar_platform_doc, _get_tools_config(server)
         )
     except ProviderSwitchError as exc:
         status = 500 if isinstance(exc, SwitchAddressIncompleteError) else 400

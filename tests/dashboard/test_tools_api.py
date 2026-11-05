@@ -411,6 +411,13 @@ def test_control_rejects_non_switchable_member(tools_client: TestClient, member:
     assert resp.status_code == 400
 
 
+def test_control_mcp_server_enable_without_url_rejected(tools_client: TestClient) -> None:
+    """事故回归：仅写 enabled 的 MCP server 启用会落成必然连不上的条目（缺 url），现在启用被拒并带原因。"""
+    resp = tools_client.post("/api/v1/tools/categories/mcp/generic_mcp/control", json={"action": "enable"})
+    assert resp.status_code == 400
+    assert "url" in resp.json()["detail"]
+
+
 # POST /tools/{full_name}/control（工具级）
 
 

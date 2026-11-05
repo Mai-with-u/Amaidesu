@@ -70,6 +70,10 @@ class SwitchAddressIncompleteError(ProviderSwitchError):
     """注册表记录透出的开关地址声明缺 file 或 key。"""
 
 
+class McpServerAddressMissingError(ProviderSwitchError):
+    """全局 MCP server 未配置连接地址（http 传输缺 url / stdio 传输缺 command），启用被拒绝。"""
+
+
 class ProviderSwitchChange(NamedTuple):
     """一次提供者开关写回的统一形状：统一写管线的 API 键、目标值与响应话术主语。"""
 
@@ -87,12 +91,39 @@ def _update_list_membership(names: List[str], key: str, add: bool) -> List[str]:
     return [n for n in names if n != key]
 
 
+def _ensure_mcp_server_address_configured(tools_cfg: Dict[str, Any], key: str) -> None:
+    """启用全局 MCP server 前校验其连接地址已配置，缺则拒绝写回。
+
+    enabled=true 而 url（http 传输）/ command（stdio 传输）为空是"必然连不上"
+    的组合——Schema 允许空串占位，连接期才报错且运营面只见泛化失败文案；
+    本校验把这种条目挡在落盘前。transport 缺省按 Schema 默认 http 判。
+    """
+    mcp_section = tools_cfg.get(MCP_CATEGORY)
+    mcp_section = mcp_section if isinstance(mcp_section, dict) else {}
+    config_section = mcp_section.get("config")
+    config_section = config_section if isinstance(config_section, dict) else {}
+    servers = config_section.get("servers")
+    servers = servers if isinstance(servers, dict) else {}
+    server_cfg = servers.get(key)
+    server_cfg = server_cfg if isinstance(server_cfg, dict) else {}
+    transport = server_cfg.get("transport")
+    transport = transport if isinstance(transport, str) and transport else "http"
+    required_field = "url" if transport == "http" else "command"
+    if server_cfg.get(required_field):
+        return
+    raise McpServerAddressMissingError(
+        f"MCP server '{key}' 未配置连接地址（transport={transport} 需要 {required_field}）：先补齐再启用，"
+        "否则会落成必然连不上的条目"
+    )
+
+
 def build_provider_switch_change(
     category: str,
     key: str,
     enable: bool,
     provider_records: List[Dict[str, Any]],
     read_avatar_platform_doc: Callable[[], Dict[str, Any]],
+    tools_cfg: Dict[str, Any],
 ) -> ProviderSwitchChange:
     """解析提供者开关的写回地址并算出目标值。
 
@@ -102,7 +133,9 @@ def build_provider_switch_change(
       文件与键（``agents.minecraft.mcp.enabled`` → agents.toml）
     - avatar 平台成员：``avatar.platform.enabled`` 启用名单增删（文件根即
       AvatarRootConfig，无 avatar 前缀）
-    - mcp 全局 server：``tools.mcp.config.servers.<键>.enabled``
+    - mcp 全局 server：``tools.mcp.config.servers.<键>.enabled``；启用方向
+      先校验连接地址已配置（缺则抛 ``McpServerAddressMissingError``），
+      避免"enabled=true 而 url/command 为空"的必然连不上条目落盘
     - 分类级开关（键与分类名相同）：``tools.<分类>.enabled``；其余成员写
       ``tools.<分类>.<键>.enabled``
     - game / framework / memory 等随 Agent 分类与未知成员抛
@@ -113,6 +146,8 @@ def build_provider_switch_change(
             含 ``switch_config`` 声明）。
         read_avatar_platform_doc: avatar.toml 文档惰性读取器（仅 avatar
             分支调用，文件 I/O 留在调用方）。
+        tools_cfg: ``[tools]`` 段配置文档（仅 mcp 全局 server 分支调用，
+            供连接地址校验读取）。
     """
     if category in AGENT_CATEGORIES:
         raise ProviderNotSwitchableError("随 Agent 启用的工具分类不可开关（随 agents.enabled）")
@@ -134,6 +169,8 @@ def build_provider_switch_change(
         return ProviderSwitchChange(f"{scope}.{dotted_key}", enable, f"工具提供者 {category}.{key}")
 
     if category == MCP_CATEGORY:
+        if enable:
+            _ensure_mcp_server_address_configured(tools_cfg, key)
         return ProviderSwitchChange(
             f"tools.tools.{MCP_CATEGORY}.config.servers.{key}.enabled", enable, f"工具提供者 {category}.{key}"
         )

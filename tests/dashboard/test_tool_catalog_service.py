@@ -7,6 +7,7 @@ from typing import Any, Dict
 import pytest
 
 from src.modules.dashboard.services.tool_catalog import (
+    McpServerAddressMissingError,
     ProviderNotSwitchableError,
     SwitchAddressIncompleteError,
     UnknownProviderError,
@@ -16,7 +17,12 @@ from src.modules.dashboard.services.tool_catalog import (
 
 
 def _resolve(
-    category: str, key: str, enable: bool, records: list[dict] | None = None, avatar_doc: Dict[str, Any] | None = None
+    category: str,
+    key: str,
+    enable: bool,
+    records: list[dict] | None = None,
+    avatar_doc: Dict[str, Any] | None = None,
+    tools_cfg: Dict[str, Any] | None = None,
 ) -> tuple[str, Any, str]:
     change = build_provider_switch_change(
         category,
@@ -24,6 +30,7 @@ def _resolve(
         enable,
         records or [],
         lambda: avatar_doc if avatar_doc is not None else {"platform": {"enabled": ["vts"]}},
+        tools_cfg if tools_cfg is not None else {"mcp": {"config": {"servers": {}}}},
     )
     return change.api_key, change.value, change.subject
 
@@ -52,7 +59,42 @@ def test_unknown_member_raises() -> None:
 
 
 def test_mcp_server_writes_member_key() -> None:
-    assert _resolve("mcp", "generic_mcp", False)[:2] == (
+    tools_cfg: Dict[str, Any] = {
+        "mcp": {"config": {"servers": {"generic_mcp": {"enabled": False, "transport": "http", "url": "http://x/mcp"}}}}
+    }
+    assert _resolve("mcp", "generic_mcp", False, tools_cfg=tools_cfg)[:2] == (
+        "tools.tools.mcp.config.servers.generic_mcp.enabled",
+        False,
+    )
+
+
+def test_mcp_server_enable_with_url_passes_guard() -> None:
+    tools_cfg: Dict[str, Any] = {
+        "mcp": {"config": {"servers": {"generic_mcp": {"transport": "http", "url": "http://127.0.0.1:1/mcp"}}}}
+    }
+    assert _resolve("mcp", "generic_mcp", True, tools_cfg=tools_cfg)[:2] == (
+        "tools.tools.mcp.config.servers.generic_mcp.enabled",
+        True,
+    )
+
+
+def test_mcp_server_enable_stdio_with_command_passes_guard() -> None:
+    tools_cfg: Dict[str, Any] = {"mcp": {"config": {"servers": {"srv": {"transport": "stdio", "command": "npx"}}}}}
+    assert _resolve("mcp", "srv", True, tools_cfg=tools_cfg)[:2] == (
+        "tools.tools.mcp.config.servers.srv.enabled",
+        True,
+    )
+
+
+def test_mcp_server_enable_without_address_is_rejected() -> None:
+    # 启用方向缺连接地址一律拒绝：段不存在（默认 http 无 url）、url 空串；停用方向不受限
+    with pytest.raises(McpServerAddressMissingError):
+        _resolve("mcp", "generic_mcp", True)
+    empty_url: Dict[str, Any] = {"mcp": {"config": {"servers": {"generic_mcp": {"transport": "http", "url": ""}}}}}
+    with pytest.raises(McpServerAddressMissingError):
+        _resolve("mcp", "generic_mcp", True, tools_cfg=empty_url)
+    # 停用不需要连接地址，放行
+    assert _resolve("mcp", "generic_mcp", False, tools_cfg=empty_url)[:2] == (
         "tools.tools.mcp.config.servers.generic_mcp.enabled",
         False,
     )
