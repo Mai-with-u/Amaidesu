@@ -4,8 +4,9 @@ MaiCraft 在 ``events`` 每一页与 ``observe(self)`` 里都带 ``world``：``{
 不在世界里或还没认出时为 null。``id`` 同一个存档重进、重启游戏都不变，删档后同名重建、
 复制出来的存档都是新的；``name`` 只给人看。本模块把它读成三种状态：
 
-- 旧版 Mod：回复里根本没有 ``world`` 这个键——报不出存档，记忆与工作日志照旧不分存档；
-- 不明：``world`` 为 null（在主菜单、刚进世界还没认出），或还没读到过任何一页；
+- 旧版 Mod：还没见过带 ``world`` 键的事件页时，回复里根本没有这个键——报不出存档，记忆与工作日志照旧不分存档；
+- 不明：``world`` 为 null（在主菜单、刚进世界还没认出），或还没读到过任何一页；见过带这个键的页之后
+  某页又缺了它也算不明——MaiCraft 不在世界里时 ``world`` 是 null，Gson 默认不写 null 字段，整个键就没了；
 - 认出：``world.id`` 非空。
 
 "换了存档"只认"上一个认出的编号被另一个认出的编号取代"：回主菜单再进同一个存档不算换；
@@ -89,10 +90,15 @@ class WorldIdentity:
     def absorb(self, data: Mapping[str, Any]) -> Optional[WorldChange]:
         """喂入一页 ``events`` 的 data；认出了新的存档时返回变化。
 
-        是不是旧版 Mod 只由事件页判定：页里没有 ``world`` 键就是旧版，记一次、此后一直按
-        不分存档处理，直到某一页带上了这个键（Mod 升级后重连）。
+        是不是旧版 Mod 只由事件页判定：还没见过带 ``world`` 键的页时，页里没有这个键就是旧版，
+        记一次、此后一直按不分存档处理，直到某一页带上了这个键（Mod 升级后重连）。
+        见过带这个键的页之后再缺它，是 Mod 不在世界里、把 null 字段省掉了，按 null（不在世界里）处理。
         """
         if "world" not in data:
+            if self._legacy is False:
+                # 新版 Mod 回主菜单、崩溃重载世界的这一段，world 为 null 被 Gson 省掉：
+                # 记成不在世界里（存档不明），不退回旧版 Mod，重进世界后照常认出、照常判换没换
+                return self._take(None)
             if self._legacy is not True:
                 logger.info("MaiCraft 事件页里没有 world：按旧版 Mod 处理，记忆与工作日志不分存档")
             self._legacy = True

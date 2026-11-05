@@ -90,9 +90,38 @@ def test_observation_updates_save_but_never_decides_old_mod() -> None:
     assert identity.game_save() == GameSave(id="bbb", name="新的世界")
 
     # 事件页说没有 world 键才是旧版 Mod；之后 observe(self) 带着 world 也不翻回来
+    old_mod = WorldIdentity()
+    old_mod.absorb({"stream_id": "s"})
+    old_mod.absorb_observation(_world("bbb", "新的世界"))
+    assert old_mod.legacy and old_mod.game_save() is None
+
+
+def test_page_missing_world_after_seeing_it_means_not_in_world() -> None:
+    """见过带 world 的页之后，某页缺了这个键：MaiCraft 不在世界里时 world 为 null、Gson 不写 null 字段，
+    按不在世界里处理（存档不明），不退回旧版 Mod；重进同一个存档不算换，进别的存档照常算换。"""
+    identity = WorldIdentity()
+    identity.absorb(_world("aaa", "老家"))
+
+    assert identity.absorb({"stream_id": "s"}) is None
+    assert not identity.legacy
+    assert identity.game_save() == GameSave() and identity.save_fields() == ("", "")
+
+    assert identity.absorb(_world("aaa", "老家")) is None
+    assert identity.game_save() == GameSave(id="aaa", name="老家")
+
     identity.absorb({"stream_id": "s"})
-    identity.absorb_observation(_world("bbb", "新的世界"))
-    assert identity.legacy and identity.game_save() is None
+    change = identity.absorb(_world("bbb", "新的世界"))
+    assert change is not None and change.switched and change.before is not None
+    assert change.before.label() == "老家"
+
+
+def test_world_null_page_also_counts_as_seeing_the_key() -> None:
+    """头一页就带 world: null 也说明是新版 Mod：之后缺键同样按不在世界里，不当旧版。"""
+    identity = WorldIdentity()
+    identity.absorb({"world": None})
+
+    assert identity.absorb({"stream_id": "s"}) is None
+    assert not identity.legacy and identity.game_save() == GameSave()
 
 
 def test_world_ref_reading_tolerates_bad_shapes() -> None:
