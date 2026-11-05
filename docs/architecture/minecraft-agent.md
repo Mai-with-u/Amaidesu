@@ -89,7 +89,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 **对外工具**（经 ToolRegistry 注册、主播工具列表可见，不进玩家 LLM 工具列表）：
 - `framework_delegate`：跨 Agent 委派通道——把工作交给另一 Agent（指令只当自然语言，不给步骤）；BaseAgent 默认拒收，minecraft 实现接收入口（指令入队带任务号 + 唤醒）
 - `minecraft_get_work_log`：工作文档读服务——只读返回眼下这个存档的 `{todo, notebook, recent_reports}`；查任务进度用 `framework_task_status`
-- `minecraft_glance`：主播看一眼游戏——读一次 `observe(self)` 与 `observe(scene)`，只返回直播叙事用得上的事实（身体状态、背包物品与数量、身边 24 格内的生物与设施、时段天气）与身体手头的工作（待办、在跑的目标）。原始 `maicraft_*` 工具只对玩家自己可见
+- `minecraft_glance`：主播看一眼游戏——读一次 `observe(self)`、`observe(scene)` 与 `observe(world_memory)`，只返回直播叙事用得上的事实（身体状态、背包物品与数量、身边 24 格内的生物与设施、时段天气、记住的地点名——只列几个、不带坐标）与身体手头的工作（待办、在跑的目标）。原始 `maicraft_*` 工具只对玩家自己可见
 
 ## 事件契约（确定性系统事件，无 LLM 自觉汇报）
 

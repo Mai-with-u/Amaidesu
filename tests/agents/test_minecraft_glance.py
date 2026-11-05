@@ -1,4 +1,4 @@
-"""本文件测 MinecraftAgent 的看一眼主题：新任务开局宿主代读资料包、glance 现场视图与白话摘要、未连接时拒收委派。"""
+"""本文件测 MinecraftAgent 的看一眼主题：新任务开局宿主代读资料包、glance 现场视图与白话摘要、记住的地点名、未连接时拒收委派。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.agents.minecraft.glance import entity_label, glance_brief, glance_scene
+from src.agents.minecraft.glance import entity_label, glance_brief, glance_scene, glance_world_memory
 from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
 from src.modules.llm.payload import Response
 
@@ -204,6 +204,55 @@ def test_glance_without_mod_things_keeps_the_plain_view() -> None:
     view = glance_scene(MaicraftReply(ok=True, data=scene))
     assert view["entities"] == [{"type": "minecraft:cat", "owner": "你的", "distance": 3}]
     assert glance_brief(view) == "你的猫在身边。"
+
+
+def _place(name: str, dimension: str = "minecraft:overworld") -> Dict[str, Any]:
+    """observe(world_memory) 里的一个记住的地点：名字、带维度的位置、离角色多远。"""
+    return {"name": name, "position": {"x": 10, "y": 64, "z": -3, "dimension": dimension}, "distance": 12}
+
+
+async def test_glance_lists_remembered_place_names_but_keeps_them_out_of_the_brief() -> None:
+    """速览多一行记住的地点名：同一维度的排前面（Mod 的远近不分维度），不带坐标，也不进一句话现场。"""
+    server = FakeMaicraft()
+    # Mod 按水平距离排：下界那头按坐标算最近，排在第一个
+    server.world_memory_view["places"] = [
+        _place("下界传送门（下界侧）", "minecraft:the_nether"),
+        _place("家"),
+        _place("下界传送门（主世界侧）"),
+    ]
+    agent, llm, bus = await make_minecraft_agent(server, lambda messages: _resp("好"))
+
+    view = await agent._glance()
+
+    assert {"what": "world_memory"} in server.calls_to("observe")
+    assert view["remembered_places"] == "家、下界传送门（主世界侧）、下界传送门（下界侧）"
+    assert "传送门" not in view["brief"], "嘴只讲眼前的事，记住的地点不进一句话现场"
+    await agent.stop()
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        (
+            MaicraftReply(ok=True, data={"places": [_place(f"矿洞{index}") for index in range(1, 9)]}),
+            {"remembered_places": "矿洞1、矿洞2、矿洞3、矿洞4、矿洞5、矿洞6等共 8 处"},
+        ),
+        (
+            MaicraftReply(ok=True, data={"places": [_place("家"), _place(" 家 "), {"name": "  "}, "坏条目"]}),
+            {"remembered_places": "家"},
+        ),
+        (MaicraftReply(ok=True, data={"places": [], "regions": [], "records": []}), {}),
+        (MaicraftReply(ok=True, data={}), {}),
+        (
+            MaicraftReply(ok=False, error_code="not_in_world", error_message="角色不在世界里"),
+            {"remembered_places_error": "角色不在世界里"},
+        ),
+    ],
+    ids=["only_a_few_names", "skips_blank_and_duplicate_names", "nothing_remembered", "no_place_list", "read_failed"],
+)
+def test_glance_remembered_places_line(reply: MaicraftReply, expected: Dict[str, Any]) -> None:
+    """记住的地点那一行：最多列几个、多的说共几处；空名与重名不列；一个都没记过不写；读失败照实写原因。"""
+    assert glance_world_memory(reply, "minecraft:overworld") == expected
 
 
 @pytest.mark.parametrize(

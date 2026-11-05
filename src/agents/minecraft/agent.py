@@ -47,7 +47,7 @@ from src.agents.minecraft.context_fold import (
 from src.agents.minecraft.creature_book import CreatureBook, creature_from_record, creature_record
 from src.agents.minecraft.delegation_book import DelegationBook
 from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_label, pause_notice
-from src.agents.minecraft.glance import glance_brief, glance_scene, glance_self
+from src.agents.minecraft.glance import glance_brief, glance_scene, glance_self, glance_world_memory
 from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.interaction_throttle import InteractionThrottle, player_key_of
 from src.agents.minecraft.maicraft import (
@@ -1615,9 +1615,10 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
 
     async def _glance(self) -> Dict[str, Any]:
-        """主播看一眼：读一次自己与周围，只留直播叙事用得上的事实，再附上身体手头的工作。
+        """主播看一眼：读一次自己、周围与记住的地点，只留直播叙事用得上的事实，再附上身体手头的工作。
 
         结果最前面放一句话现场（``brief``）：主播的现场卡只放这一句白话，其余字段留给想细看时查。
+        记住的地点只进其余字段（地点名一行），不进一句话现场。
         """
         view: Dict[str, Any] = {}
         if not self._maicraft_ready():
@@ -1631,6 +1632,11 @@ class MinecraftAgent(BaseAgent):
             creatures = self._creatures.status_view()
             if creatures:
                 view["creatures"] = creatures
+            # 看自己 -> 看周围 -> 读世界记忆里记住的地点名：被问到"传送门在哪"时主播先知道记没记过，
+            # 和角色同一个维度的排前面，所以把看自己读到的维度一并交过去
+            memory = await self._call_maicraft(OBSERVE, {"what": "world_memory"})
+            dimension = str(view.get("body", {}).get("dimension") or "")
+            view.update(glance_world_memory(memory, dimension))
         view["work"] = self._glance_work()
         return {"tool": "glance", "brief": glance_brief(view), **view}
 

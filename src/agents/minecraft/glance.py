@@ -8,6 +8,10 @@
 身边的生物带上认得出它是谁的事实：驯服的是谁的、坐着没有、命名牌上的名字，以及模组报的身份
 （车万女仆的皮肤名、女仆墓碑上写的名字）。主播靠这些才分得清"跟着我的那只女仆"和路过的生物，
 看到墓碑也知道是谁的。观察编号只用来把模组的这些信息并到同一只实体上，不交给主播。
+
+另附一行记住的地点（``observe(world_memory)`` 里的地点名，只列几个、不带坐标）：被问到"传送门在哪"时，
+主播得先知道记没记过，才分得清是说"记过，我去看看"还是"还没记"；坐标与怎么去交给游戏 Agent 查。
+这一行不进一句话现场——嘴只讲眼前的事，不翻记忆。
 """
 
 from __future__ import annotations
@@ -31,6 +35,8 @@ __all__ = [
     "glance_brief",
     "glance_scene",
     "glance_self",
+    "glance_world_memory",
+    "REMEMBERED_PLACES_MAX",
 ]
 
 # 直播里说"身边"的范围：再远的生物与设施观众在画面里也看不清，主播提起来只会让人困惑。
@@ -38,6 +44,9 @@ NEARBY_BLOCKS = 24
 
 # 一句话现场的长度上限：它要塞进主播的现场卡，卡总共只有几百字
 BRIEF_MAX_CHARS = 300
+
+# 速览里最多列几个记住的地点：主播只需要知道"记过哪些"，速览每轮都进她的参考段，列全了会越攒越长
+REMEMBERED_PLACES_MAX = 6
 
 _DIMENSIONS: Dict[str, str] = {
     "minecraft:overworld": "主世界",
@@ -366,6 +375,39 @@ def glance_scene(reply: MaicraftReply, nicknames: Optional[Dict[str, str]] = Non
     if facilities:
         result["facilities"] = facilities
     return result
+
+
+def glance_world_memory(reply: MaicraftReply, dimension: str = "") -> Dict[str, Any]:
+    """记住的地点（``observe(world_memory)`` 的 ``places``）→ 一行地点名，最多 ``REMEMBERED_PLACES_MAX`` 个。
+
+    只给名字：被问到"传送门在哪"时，主播看这一行就知道记没记过；坐标、距离不给她（念出来没意思，
+    她也不用自己认路），要具体位置或要过去时，委派游戏 Agent 按地点名去查、去那里。
+    Mod 已按水平距离把近的排在前面，但这个距离不分维度（下界里的地点按坐标算也可能"很近"），
+    所以先把和角色同一个维度（``dimension``，取自看自己的结果）的挑到前面，各自保持 Mod 给的先后；
+    多出来的说"等共 N 处"。一个都没记过、或回复里没有地点清单时不写这一项；读取失败照实写出原因。
+    """
+    if not reply.ok:
+        return {"remembered_places_error": _failure(reply)}
+    places = reply.data.get("places")
+    if not isinstance(places, list):
+        return {}
+    named = [item for item in places if isinstance(item, dict) and str(item.get("name") or "").strip()]
+    # 同一维度的在前、别的维度（或没写维度的旧记录）在后：先后各按 Mod 给的远近
+    ordered = [item for item in named if _in_dimension(item, dimension)]
+    ordered += [item for item in named if not _in_dimension(item, dimension)]
+    names = list(dict.fromkeys(str(item["name"]).strip() for item in ordered))
+    if not names:
+        return {}
+    line = "、".join(names[:REMEMBERED_PLACES_MAX])
+    if len(names) > REMEMBERED_PLACES_MAX:
+        line += f"等共 {len(names)} 处"
+    return {"remembered_places": line}
+
+
+def _in_dimension(place: Dict[str, Any], dimension: str) -> bool:
+    """一个记住的地点是否和角色在同一个维度；不知道角色在哪个维度时一律不算。"""
+    position = place.get("position") if isinstance(place.get("position"), dict) else {}
+    return bool(dimension) and position.get("dimension") == dimension
 
 
 def _distant(entities: Any, counts: Any) -> List[str]:
