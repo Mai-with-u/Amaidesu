@@ -75,6 +75,7 @@ from src.agents.minecraft.notice_router import (
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN, FoodTakenLog, food_taken_of
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
 from src.agents.minecraft.skill_support import SkillSupport
+from src.agents.minecraft.sparring import spar_outcome_line
 from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
 from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
 from src.agents.minecraft.wake_queue import WakeQueue, opens_task
@@ -1115,6 +1116,11 @@ class MinecraftAgent(BaseAgent):
         if run.finished:
             self._goal_ledger.settle_finished(run)
             self._inject_wakeup_message(finish_notice(run, self_brief))
+            spar = spar_outcome_line(run)
+            if spar is not None:
+                # 切磋中他打中她的不进挨打事件，主播只知道有人约切磋、不知道打得怎样：收手时把输赢告诉主播，
+                # 不论这一场是在任务里打的还是闲着时接的
+                await self._emit_game_event("milestone", spar)
             return
         self._goal_ledger.note(run)
         if stalled:
