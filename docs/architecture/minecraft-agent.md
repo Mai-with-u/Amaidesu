@@ -84,7 +84,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 | `minecraft_wait` | 身体在执行后台目标、又没有可推进或可准备的事时单独调用，让出本轮等目标事件 |
 | `minecraft_report` | 上报通道（玩家→主播唯一发声出口）：delivery 交付总结 / escalation 升级决策 |
 | `minecraft_skill` | 按名读技能正文（装配了技能库时才有）。技能目录随系统提示词给出，由本地直播策略与 MaiCraft 的 `resources/list` 合并而成；玩法技能随 Mod 发布，目录里标着“来自 MaiCraft”，正文按 `skill://` 地址经 `resources/read` 读；MaiCraft 没连上时远端技能消失，本地策略照常可用 |
-| `maicraft_observe` / `maicraft_lookup` / `maicraft_execute` / `maicraft_goal` | MaiCraft v1 的工具，registry 动态发现（每任务重新拉取）；参数按 Mod 定义填写。`maicraft_events` 只给宿主读，不进 LLM 工具列表 |
+| `maicraft_observe` / `maicraft_lookup` / `maicraft_execute` / `maicraft_goal` | MaiCraft v1 的工具，registry 动态发现（每任务重新拉取）；参数按 Mod 定义填写。`maicraft_events` 只给宿主读，不进 LLM 工具列表；截桌面的 `vision_look_at_screen` 也不交给游戏 Agent 的模型（看游戏画面用 `observe(what=picture)`）。画面的文字那一块当观察进历史，图在模型能看图时只挂在下一次请求尾部，不能看图时经视觉模型转成文字接在观察后面；一个任务里看几次、两次隔多久按 `[agents.minecraft.picture]` 限，超了不调 Mod |
 
 **对外工具**（经 ToolRegistry 注册、主播工具列表可见，不进玩家 LLM 工具列表）：
 - `framework_delegate`：跨 Agent 委派通道——把工作交给另一 Agent（指令只当自然语言，不给步骤）；BaseAgent 默认拒收，minecraft 实现接收入口（指令入队带任务号 + 唤醒）

@@ -183,9 +183,16 @@ class FakeMaicraft(BaseToolProvider):
     # 工具清单与分发
 
     def list_tools(self) -> List[ToolSpec]:
+        # 和 MaicraftMcpProvider 一样每次列出时盖上只给 minecraft 的名单：注册表注册时会重新列一遍，
+        # 只在调用方拿到的那份副本上改名单不会进注册表
         return [
             ToolSpec(
-                name=name, description=name, parameters_schema={"type": "object"}, kind="sync", provider="maicraft"
+                name=name,
+                description=name,
+                parameters_schema={"type": "object"},
+                kind="sync",
+                provider="maicraft",
+                visible_to=["minecraft"],
             )
             for name in ("observe", "lookup", "execute", "goal", "events")
         ]

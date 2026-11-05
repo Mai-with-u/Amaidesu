@@ -125,11 +125,17 @@ from src.modules.tools.llm_defs import function_definition
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
 from src.modules.utils.time_utils import now_ms
+from src.modules.vision.look_at_screen import LOOK_AT_SCREEN_SPEC
 from src.modules.vision.vlm_reader import LlmVisionTextReader
 
 from .config import MinecraftConfig
 
 __all__ = ["MinecraftAgent"]
+
+# 可见名单里有、但不交给游戏 Agent 模型的工具：事件流只给宿主读；截桌面的工具截的是整块显示器
+# （直播时多半是 OBS 或控制台，还带着聊天栏和别的窗口），看游戏画面用 MaiCraft 的 observe(picture)。
+# 截桌面的工具本身和它的可见名单不动，文字冒险等别的 Agent 照用
+_NOT_FOR_MODEL = HOST_ONLY_TOOLS | {LOOK_AT_SCREEN_SPEC.full_name}
 
 # 游戏决策使用独立用途。
 MINECRAFT_PROFILE = "minecraft"
@@ -586,14 +592,12 @@ class MinecraftAgent(BaseAgent):
         )
 
     def _tool_definitions(self) -> List[Dict[str, Any]]:
-        """本批交给模型的工具：可见名单里的全部，减去只给宿主读的事件流；按名字排序，发送顺序稳定。"""
+        """本批交给模型的工具：可见名单里的全部，减去只给宿主读的事件流与截桌面的工具；按名字排序，发送顺序稳定。"""
         if self._tool_registry is None:
             self._logger.warning("任务执行无 tool_registry：工具列表为空")
             return []
         specs = [
-            spec
-            for spec in self._tool_registry.list_tools(for_agent=self.name)
-            if spec.full_name not in HOST_ONLY_TOOLS
+            spec for spec in self._tool_registry.list_tools(for_agent=self.name) if spec.full_name not in _NOT_FOR_MODEL
         ]
         # 定义形状由工具域的 LLM 转换层统一生成（llm_defs），附上下文计量归属
         return [

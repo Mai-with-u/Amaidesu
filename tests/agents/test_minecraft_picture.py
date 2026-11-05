@@ -1,9 +1,10 @@
 """本文件测 MinecraftAgent 的看画面主题：observe(picture) 的图怎么给模型、模型不能看图时转文字、
-一个任务里看画面的次数与间隔、图不进工具结果事件。"""
+一个任务里看画面的次数与间隔、图不进工具结果事件、截桌面的工具不给游戏 Agent、主播碰不到画面视图。"""
 
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any, Dict, Iterator, List
 
 import pytest
@@ -12,7 +13,10 @@ from src.agents.minecraft.config import MinecraftPictureConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.llm.payload import Response
+from src.modules.tools.models import ToolExecutionResult, ToolInvocation
+from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
+from src.modules.vision.look_at_screen import LOOK_AT_SCREEN_SPEC
 from src.modules.vision.image_store import VisionImageStore, set_image_store
 
 from .minecraft_v1_fakes import (
@@ -182,3 +186,39 @@ async def test_the_picture_tool_result_event_carries_text_and_a_note_but_no_base
     finally:
         await agent.stop()
         await bus.cleanup()
+
+
+async def _screen_stub(invocation: ToolInvocation) -> ToolExecutionResult:
+    return ToolExecutionResult(tool_name=invocation.tool_name, success=True, content="桌面")
+
+
+async def test_the_game_agent_does_not_get_the_desktop_screenshot_tool_but_others_still_do() -> None:
+    """截桌面的工具截到的多半是 OBS 或控制台：不交给游戏 Agent 的模型；它的可见名单不动，别的 Agent 照用。"""
+    registry = ToolRegistry()
+    registry.register_provider(make_provider_from_specs("vision", [(replace(LOOK_AT_SCREEN_SPEC), _screen_stub)]))
+    server = FakeMaicraft()
+    agent, llm, bus = await make_minecraft_agent(server, registry=registry)
+
+    agent.receive_delegation(instruction="看看周围", task_id="d-1")
+    await _wait_until(lambda: len(_reports(bus)) == 1)
+
+    given = {tool["name"] for tool in llm.tools_given[0]}
+    assert "vision_look_at_screen" not in given and "maicraft_observe" in given
+    for other in ("text_adv", "streamer"):
+        assert "vision_look_at_screen" in {spec.full_name for spec in registry.list_tools(for_agent=other)}
+    await agent.stop()
+
+
+async def test_the_streamer_never_reaches_the_picture_view() -> None:
+    """主播一直看着直播画面：她的速览只读结构化数据，MaiCraft 的工具（含画面视图）对她不可见。"""
+    server = FakeMaicraft()
+    registry = ToolRegistry()
+    agent, _llm, _bus = await make_minecraft_agent(server, registry=registry)
+
+    await agent._glance()
+
+    assert {arguments.get("what") for arguments in server.calls_to("observe")} <= {"self", "scene", "world_memory"}
+    streamer_tools = {spec.full_name for spec in registry.list_tools(for_agent="streamer")}
+    assert "maicraft_observe" not in streamer_tools and "minecraft_glance" in streamer_tools
+    await agent.stop()
+
