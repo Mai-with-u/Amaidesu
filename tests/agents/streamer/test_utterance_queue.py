@@ -12,6 +12,7 @@ from src.agents.streamer.utterance_queue import (
     DEFAULT_MAX_QUEUE,
     DEFAULT_RENDER_TIMEOUT_MS,
     QUEUE_ENGINE_ID,
+    SpeakCallable,
     UtteranceQueue,
 )
 from src.modules.events.event_bus import EventBus
@@ -544,5 +545,172 @@ async def test_dropped_events_only_fire_on_four_confirmed_undelivered_paths() ->
         failed_ids = {f.utterance_id for f in failed}
         assert {"ov_victim", "hang", "err"} <= failed_ids
         assert failed_ids.isdisjoint(set(by_id))
+    finally:
+        await queue.stop()
+
+
+# ---------------- 渲染超时熔断（连续超时不逐句空转） ----------------
+
+
+async def _make_hang_speak(hang_gate: asyncio.Event) -> SpeakCallable:
+    """一直卡到门开才返回的 speak 替身：渲染看门狗每句都会超时。"""
+
+    async def _hang(text: str, utterance_id: Optional[str]) -> None:
+        await hang_gate.wait()
+
+    return _hang
+
+
+async def test_fuse_opens_after_consecutive_render_timeouts(loguru_capture) -> None:
+    """连续渲染超时达阈值触发熔断：排队句不再等渲染看门狗、立即 failed，且告警一条。"""
+    bus = EventBus()
+    failed = _capture_failed(bus)
+    hang_gate = asyncio.Event()
+    queue = UtteranceQueue(
+        speak=await _make_hang_speak(hang_gate), event_bus=bus, max_queue=8, render_timeout_ms=150, clock=_Clock()
+    )
+    await queue.start()
+    try:
+        await queue.enqueue("hang_1", "超时1")
+        await queue.enqueue("hang_2", "超时2")
+        await queue.enqueue("hang_3", "超时3")
+        # 第 3 句触发熔断；此时再入队两句，验证熔断中排队句快速失败
+        await queue.enqueue("queued_1", "排队1")
+        await queue.enqueue("queued_2", "排队2")
+        await _wait_for(lambda: len(failed) == 5)
+        await bus.wait_until_drained()
+    finally:
+        hang_gate.set()
+        await queue.stop()
+
+    by_id = {payload.utterance_id: payload for payload in failed}
+    for uid in ("hang_1", "hang_2", "hang_3"):
+        assert "render_timeout" in by_id[uid].error_message
+        assert "render_timeout_fuse" not in by_id[uid].error_message
+    # 熔断后排队句不耗看门狗等待，原因注明熔断
+    for uid in ("queued_1", "queued_2"):
+        assert "render_timeout_fuse" in by_id[uid].error_message
+    # 进入熔断时告警一条（含连续超时句数）
+    fuse_logs = [record for record in loguru_capture.records if "触发熔断" in record["message"]]
+    assert len(fuse_logs) == 1
+
+
+async def test_fuse_fails_new_enqueued_utterances_immediately() -> None:
+    """熔断期间入队的 utterance 不等渲染看门狗、立即代发 failed。"""
+    bus = EventBus()
+    failed = _capture_failed(bus)
+    hang_gate = asyncio.Event()
+    queue = UtteranceQueue(
+        speak=await _make_hang_speak(hang_gate), event_bus=bus, max_queue=8, render_timeout_ms=150, clock=_Clock()
+    )
+    await queue.start()
+    try:
+        for i in range(3):
+            await queue.enqueue(f"hang_{i}", f"超时{i}")
+        await _wait_for(lambda: len(failed) == 3)
+        await queue.enqueue("during_fuse", "熔断中来一句")
+        await _wait_for(lambda: any(payload.utterance_id == "during_fuse" for payload in failed))
+        await bus.wait_until_drained()
+
+        payload = next(p for p in failed if p.utterance_id == "during_fuse")
+        assert "render_timeout_fuse" in payload.error_message
+    finally:
+        hang_gate.set()
+        await queue.stop()
+
+
+async def test_fuse_half_open_probe_success_recovers() -> None:
+    """熔断满半开间隔放行一句探路：探路成功则恢复正常播报、计数复位。"""
+    bus = EventBus()
+    failed = _capture_failed(bus)
+    calls: List[Optional[str]] = []
+
+    async def _fail_three_then_ok(text: str, utterance_id: Optional[str]) -> None:
+        calls.append(utterance_id)
+        if len(calls) <= 3:
+            await asyncio.sleep(5.0)
+
+    clock = _Clock()
+    queue = UtteranceQueue(speak=_fail_three_then_ok, event_bus=bus, max_queue=8, render_timeout_ms=150, clock=clock)
+    await queue.start()
+    try:
+        for i in range(3):
+            await queue.enqueue(f"hang_{i}", f"超时{i}")
+        await _wait_for(lambda: len(failed) == 3)
+
+        # 未满半开间隔：不放行探路，直接快速失败
+        await queue.enqueue("too_early", "间隔未满")
+        await _wait_for(lambda: any(p.utterance_id == "too_early" for p in failed))
+        assert "render_timeout_fuse" in next(p for p in failed if p.utterance_id == "too_early").error_message
+
+        # 拨过半开间隔：探路句正常渲染成功，熔断关闭，后续句子照常渲染
+        clock.now += 60_000
+        await queue.enqueue("probe", "探路句")
+        await queue.enqueue("after_probe", "恢复后一句")
+        await _wait_for(lambda: "after_probe" in calls)
+        await bus.wait_until_drained()
+        assert not any(p.utterance_id in ("probe", "after_probe") for p in failed)
+    finally:
+        await queue.stop()
+
+
+async def test_fuse_probe_failure_keeps_fuse() -> None:
+    """半开探路句仍渲染超时：保持熔断并刷新计时，后续句子继续快速失败。"""
+    bus = EventBus()
+    failed = _capture_failed(bus)
+    calls: List[Optional[str]] = []
+
+    async def _always_timeout(text: str, utterance_id: Optional[str]) -> None:
+        calls.append(utterance_id)
+        await asyncio.sleep(5.0)
+
+    clock = _Clock()
+    queue = UtteranceQueue(speak=_always_timeout, event_bus=bus, max_queue=8, render_timeout_ms=150, clock=clock)
+    await queue.start()
+    try:
+        for i in range(3):
+            await queue.enqueue(f"hang_{i}", f"超时{i}")
+        await _wait_for(lambda: len(failed) == 3)
+        await queue.enqueue("queued_during_fuse", "熔断中排队句")
+        await _wait_for(lambda: any(p.utterance_id == "queued_during_fuse" for p in failed))
+
+        # 拨过半开间隔放行探路句：探路句仍超时（走 render_timeout 路径），保持熔断
+        clock.now += 60_000
+        await queue.enqueue("probe_fail", "探路仍超时")
+        await _wait_for(lambda: "probe_fail" in calls and len(failed) == 5)
+        await queue.enqueue("still_fused", "仍在熔断")
+        await _wait_for(lambda: any(p.utterance_id == "still_fused" for p in failed))
+        await bus.wait_until_drained()
+        assert "render_timeout" in next(p for p in failed if p.utterance_id == "probe_fail").error_message
+        assert "render_timeout_fuse" in next(p for p in failed if p.utterance_id == "still_fused").error_message
+    finally:
+        await queue.stop()
+
+
+async def test_success_resets_consecutive_timeout_counter() -> None:
+    """未熔断时任何一句渲染成功即复位连续计数：2 超时 + 1 成功 + 2 超时不触发熔断。"""
+    bus = EventBus()
+    failed = _capture_failed(bus)
+    calls: List[Optional[str]] = []
+
+    async def _fail_all_but_one(text: str, utterance_id: Optional[str]) -> None:
+        calls.append(utterance_id)
+        if utterance_id != "ok":
+            await asyncio.sleep(5.0)
+
+    queue = UtteranceQueue(speak=_fail_all_but_one, event_bus=bus, max_queue=8, render_timeout_ms=150, clock=_Clock())
+    await queue.start()
+    try:
+        await queue.enqueue("t1", "超时1")
+        await queue.enqueue("t2", "超时2")
+        await queue.enqueue("ok", "成功句")
+        await queue.enqueue("t3", "超时3")
+        await queue.enqueue("t4", "超时4")
+        await _wait_for(lambda: len(failed) == 4)
+        await bus.wait_until_drained()
+        # 第 4 次超时只是普通超时失败（连续计数已在前一句成功时复位，远不到阈值），
+        # 若熔断已开，t4 会是 fuse 快速失败而非渲染超时
+        assert "render_timeout" in next(p for p in failed if p.utterance_id == "t4").error_message
+        assert "render_timeout_fuse" not in next(p for p in failed if p.utterance_id == "t4").error_message
     finally:
         await queue.stop()

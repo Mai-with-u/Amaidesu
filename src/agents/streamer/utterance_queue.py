@@ -56,6 +56,13 @@ DEFAULT_MAX_QUEUE = 3
 # 不是正常耗时的上限；超时取消时引擎侧会停止已提交的播放。
 DEFAULT_RENDER_TIMEOUT_MS = 60_000
 
+# 渲染超时熔断参数：连续 render_timeout 达到阈值即熔断——熔断期间不再启动
+# 渲染等待，队列内外的 utterance 立即代发 failed（字幕照常出字），避免渲染
+# 减速时段逐句各自耗满超时、观众长时间听不到语音。熔断后每隔半开间隔放行
+# 一句探路：成功即恢复正常，失败保持熔断并刷新计时。
+RENDER_FUSE_THRESHOLD = 3
+RENDER_FUSE_HALF_OPEN_MS = 60_000
+
 # 默认发言等播放的等待上限（毫秒）：覆盖"当前句剩余播放 + 队列积压数句"
 # 的最坏排空时间，量级对齐 render_timeout_ms；0 表示不限时（不推荐，
 # 引擎故障时决策循环会被无限拖住——引擎侧 fail 快速排空则不受影响）。
@@ -107,6 +114,11 @@ class UtteranceQueue:
       包裹，触发 TimeoutError 时取消当前任务、代发
       ``tts.utterance.failed``（``error_message`` 标注 ``render_timeout``）、
       记录 ERROR 并继续下一条。
+    - 连续渲染超时达到 ``RENDER_FUSE_THRESHOLD`` 次触发熔断：熔断期间不再启动
+      渲染等待，轮到的 utterance 立即代发 ``tts.utterance.failed``（``error_message``
+      标注 ``render_timeout_fuse``），避免减速时段逐句各自耗满超时、观众长时间
+      无语音；距最近一次渲染失败超过 ``RENDER_FUSE_HALF_OPEN_MS`` 放行一句探路，
+      成功即恢复正常，失败保持熔断并刷新计时。
     - speak 抛出其他异常时记录 ERROR（不重复打 traceback）并继续下一条：异常
       未带"引擎已报告失败"标记就代发 ``tts.utterance.failed``（``error_message``
       标注 ``speak_error``）；带了标记说明引擎已经发过，只计数不补发。
@@ -175,6 +187,11 @@ class UtteranceQueue:
         self._processing = False
         # "变闲"通知：wait_idle 等待方在此挂起，worker 完成一条后唤醒
         self._idle_cond = asyncio.Condition()
+
+        # 渲染超时熔断状态：连续超时计数、是否熔断、最近一次渲染失败时刻
+        self._consecutive_render_timeouts = 0
+        self._render_fused = False
+        self._last_render_failure_ms = 0
 
         # 统计（轻量自监控）
         self._total_enqueued = 0
@@ -518,14 +535,38 @@ class UtteranceQueue:
         异常只在引擎没报告过失败时代发（带"已报告"标记的不重复发）。
         """
         timeout_s = self._render_timeout_ms / 1000.0
+        # 熔断中：距最近一次渲染失败不满半开间隔，本句不启动渲染等待、立即代发
+        # failed；满了就放行这一句探路（正常走渲染），成败由下方超时/成功分支处置
+        if self._render_fused:
+            if self._clock() - self._last_render_failure_ms < RENDER_FUSE_HALF_OPEN_MS:
+                await self._emit_failed(
+                    item.utterance_id,
+                    item.text,
+                    "render_timeout_fuse: 连续渲染超时熔断中，本句未尝试渲染",
+                )
+                return
+            self._logger.info(f"熔断半开探路，放行一句尝试渲染: utterance_id={item.utterance_id}")
         try:
             await asyncio.wait_for(
                 self._speak(item.text, item.utterance_id),
                 timeout=timeout_s,
             )
             self._total_processed += 1
+            # 任何一句渲染成功都复位：连续计数清零，熔断关闭
+            self._consecutive_render_timeouts = 0
+            self._render_fused = False
         except asyncio.TimeoutError:
             self._total_timeouts += 1
+            self._consecutive_render_timeouts += 1
+            self._last_render_failure_ms = self._clock()
+            if not self._render_fused and self._consecutive_render_timeouts >= RENDER_FUSE_THRESHOLD:
+                self._render_fused = True
+                self._logger.error(
+                    f"连续 {self._consecutive_render_timeouts} 句渲染超时，触发熔断："
+                    f"后续 utterance 不再渲染、直接代发 failed，每 {RENDER_FUSE_HALF_OPEN_MS}ms 放行一句探路"
+                )
+            elif self._render_fused:
+                self._logger.error(f"熔断半开探路句仍渲染超时，保持熔断并刷新计时: utterance_id={item.utterance_id}")
             self._logger.error(
                 f"utterance 等待超时（>{self._render_timeout_ms}ms），放弃等待并继续下一条"
                 f"（引擎取消清理后不会发声）: utterance_id={item.utterance_id}"
@@ -558,4 +599,6 @@ __all__ = [
     "DEFAULT_MAX_QUEUE",
     "DEFAULT_RENDER_TIMEOUT_MS",
     "DEFAULT_WAIT_PLAYBACK_TIMEOUT_MS",
+    "RENDER_FUSE_THRESHOLD",
+    "RENDER_FUSE_HALF_OPEN_MS",
 ]
