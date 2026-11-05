@@ -7,7 +7,7 @@
 - 任务进行中：插进原任务的历史，原任务照常交付
 - 收工态不叫醒；肢体动作不记进随上报带给主播的身体事件
 - 按人节流：同一个人 20 秒内第二条不叫醒、到点合成一条再叫醒一次；两个人各计各的；
-  批次跑着时照常跟着下一步读；没有 player 字段的共用一个桶
+  正在干活的批次跑着时照常跟着下一步读，只回应互动的批次里再来的照样攒着；没有 player 字段的共用一个桶
 """
 
 from __future__ import annotations
@@ -270,15 +270,43 @@ class _GatedLlm(ScriptLlm):
         return self.script(messages)
 
 
-async def test_squats_arriving_while_a_batch_runs_are_read_with_its_next_step() -> None:
-    """批次正在跑时同一个人又蹲：不攒，照常跟着下一步一起读（本来就不多调模型）。"""
+async def test_squats_arriving_while_a_working_batch_runs_are_read_with_its_next_step() -> None:
+    """正在干活的批次跑着时同一个人连着蹲：不攒，照常跟着下一步一起读（本来就不多调模型）。"""
 
     def script(messages: List[Dict[str, Any]]) -> Response:
-        # 被 [互动] 叫醒 -> 先看一眼周围（批次接着跑）-> 下一步读到想着时新来的两段 -> 不调工具收尾
+        # 下砍树目标（想着的时候 Alex 连蹲两段）-> 下一步读到这两段，砍树还在跑就让出
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
+
+    server = FakeMaicraft()
+    now = [1000.0]
+    llm = _GatedLlm(script)
+    agent, _llm, _bus = await make_minecraft_agent(server, llm=llm, clock=lambda: now[0])
+    llm.gate.clear()
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: len(llm.seen) == 1 and agent.batch_active is True)
+
+    server.body_event("player_body_language", "玩家 Alex（e4）看着你蹲起 4 下；他在你前方 3 格", {"player": _ALEX})
+    now[0] += 3
+    server.body_event("player_body_language", "玩家 Alex（e4）原地跳了 2 下；他在你前方 3 格", {"player": _ALEX})
+    await _wait_until(lambda: len(agent.queued_messages) == 2)
+    assert agent.observation()["held_interactions"] == 0, "正在干活的批次跑着时不攒"
+
+    llm.gate.set()
+    await _wait_until(lambda: len(llm.seen) == 2 and agent.batch_active is False)
+    next_step = _texts(llm.seen[-1])
+    assert "玩家 Alex（e4）看着你蹲起 4 下" in next_step and "玩家 Alex（e4）原地跳了 2 下" in next_step
+    await agent.stop()
+
+
+async def test_squats_during_an_answer_only_batch_are_held_until_due() -> None:
+    """闲着时被 Alex 叫醒，只回应互动的那一批还在跑时他又蹲：这一条照样攒着；
+    那一批让出后正常结束，不再开第二批；20 秒到了才合成一条再叫醒一次。"""
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
         if "[互动]" in _texts(messages):
-            if not _called(messages, "maicraft_observe"):
-                return _resp(calls=[_call("maicraft_observe", {"what": "scene"})])
-            return _resp("回个招呼就好")
+            return _resp(calls=[_call("minecraft_wait", {"reason": "回过招呼了"})])
         return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
 
     llm = _GatedLlm(script)
@@ -287,14 +315,19 @@ async def test_squats_arriving_while_a_batch_runs_are_read_with_its_next_step() 
     server.body_event("player_body_language", "玩家 Alex（e4）看着你蹲起 4 下；他在你前方 3 格", {"player": _ALEX})
     await _wait_until(lambda: len(llm.seen) == 2 and agent.batch_active is True)
 
-    now[0] += 3
+    now[0] += 6
     server.body_event("player_body_language", "玩家 Alex（e4）看着你蹲起 3 下；他在你前方 3 格", {"player": _ALEX})
-    server.body_event("player_body_language", "玩家 Alex（e4）原地跳了 2 下；他在你前方 3 格", {"player": _ALEX})
-    await _wait_until(lambda: len(agent.queued_messages) == 2)
-    assert agent.observation()["held_interactions"] == 0, "批次跑着时不攒"
+    await _wait_until(lambda: agent.observation()["held_interactions"] == 1)
+    assert not agent.queued_messages, "只回应互动的批次里再来的不跟着读"
 
     llm.gate.set()
+    await _wait_until(lambda: agent.batch_active is False)
+    await asyncio.sleep(0.2)
+    assert len(llm.seen) == 2, "让出后不再开第二批"
+    assert agent.observation()["held_interactions"] == 1
+
+    now[0] += 14
     await _wait_until(lambda: len(llm.seen) == 3 and agent.batch_active is False)
-    next_step = _texts(llm.seen[-1])
-    assert "玩家 Alex（e4）看着你蹲起 3 下" in next_step and "玩家 Alex（e4）原地跳了 2 下" in next_step
+    assert "玩家 Alex（e4）看着你蹲起 3 下" in _texts(llm.seen[-1])
+    assert agent.observation()["held_interactions"] == 0
     await agent.stop()

@@ -716,6 +716,13 @@ class MinecraftAgent(BaseAgent):
     async def _run_task_batch(self) -> None:
         self._task_reported = False
         self._wait_requested = False
+        # 节流攒着的互动通知不等到点，跟着这一批一起读（"随下一次叫醒一起读"），读了就从此刻重新计时
+        for held in self._interaction_throttle.drain():
+            self._wake_queue.push_interaction(interaction_notice(held))
+        # 闲着（已交付或等主播定夺）时只因别的玩家冲角色做了动作被叫醒：这一批只回应互动，
+        # 回个动作就收尾；不续原任务，所以也不把原任务的事实再摊开一遍。批次一开头就定下来，
+        # 下面读能力清单等着的这段时间里再来的互动，也按只回应互动的批次处理（攒着，不跟着读）
+        self._interaction_only = (self._task_finished or self._task_suspended) and self._wake_queue.interaction_only()
         # 先读能力清单（开局资料与本地策略的环境都用它），再登记 MaiCraft 的玩法技能目录，最后写系统提示词。
         await self._skill_support.ensure_ability_listing()
         # 玩法技能由 MaiCraft 随包发布：目录也每次连接只读一次，正文在模型要读时才取。
@@ -728,12 +735,6 @@ class MinecraftAgent(BaseAgent):
             self._messages.append(dict(system_message))
         messages = self._messages
         close_interrupted_calls(messages)
-        # 闲着（已交付或等主播定夺）时只因别的玩家冲角色做了动作被叫醒：这一批只回应互动，
-        # 回个动作就收尾；不续原任务，所以也不把原任务的事实再摊开一遍
-        # 节流攒着的互动通知不等到点，跟着这一批一起读（"随下一次叫醒一起读"），读了就从此刻重新计时
-        for held in self._interaction_throttle.drain():
-            self._wake_queue.push_interaction(interaction_notice(held))
-        self._interaction_only = (self._task_finished or self._task_suspended) and self._wake_queue.interaction_only()
         if not self._interaction_only and not self._task_finished and self._task_instructions:
             # 后台目标有了结果先恢复原目标、待办与目标状态，再让模型解释这次通知。
             messages.append(
@@ -1236,13 +1237,17 @@ class MinecraftAgent(BaseAgent):
         """别的玩家冲角色做了肢体动作：按人节流后排成互动通知并叫醒 worker。
 
         任务进行中它是一条普通通知；闲着时它也开批，但那一批只回应互动（见 ``_interaction_only``）。
-        批次正在跑时照常跟着下一步一起读；没在跑时，同一个人 20 秒内叫醒过就先攒着，到点再合成一条叫醒。
+        正在干活的批次跑着时照常跟着下一步一起读；没在跑、或跑的只是回应互动的那一批时，同一个人 20 秒内
+        叫醒过就先攒着，到点再合成一条叫醒。
         收工态不排：下播后有人冲她蹲起没人看，开播时再冒出来只是过时的事。
         """
         if not self._live_active:
             self._logger.info(f"收工态不叫醒：{message[:60]}")
             return
-        ready = self._interaction_throttle.offer(player_key_of(event), message, reading_now=self._batch_active)
+        # 只有正在干活的批次才算"本来就要读"：只回应互动的那一批里再来的，照闲着时一样攒着，
+        # 否则他一直蹲，每来一条就把那一批续上一步、或回完又开一批，20 秒节流等于没有
+        reading_now = self._batch_active and not self._interaction_only
+        ready = self._interaction_throttle.offer(player_key_of(event), message, reading_now=reading_now)
         if ready is None:
             self._logger.info(f"同一个人刚叫醒过，先攒着不叫醒：{message[:60]}")
         else:
