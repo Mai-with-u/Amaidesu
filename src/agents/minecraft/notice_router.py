@@ -9,7 +9,7 @@ MinecraftAgent 把 Mod 的身体事件（生存急事、死亡、跟随、天色
 - ``carry_sky``：挂进消息队列不唤醒，队列里只留最新一条（天色）；
 - ``wake_even_idle``：排成闲着也开批的通知并唤醒（计时到点、Mod 决策）；
 - ``wake_for_interaction``：排成互动通知并唤醒（别的玩家冲角色做的肢体动作）——闲着也叫醒，
-  但不开任务、不续原任务，那一批回完就收尾，不兜底交付；
+  但不开任务、不续原任务，那一批回完就收尾，不兜底交付；同一个人隔一阵才叫醒一次（节流在 Agent）；
 - ``inject_if_busy``：任务进行中才注入唤醒（跟随、身体急事、死亡）；
 - ``attention_event``：任务进行中经注意流分类摘要转告主播，按（种类,原文）
   去重——未知种类也走这里。
@@ -21,7 +21,7 @@ MinecraftAgent 把 Mod 的身体事件（生存急事、死亡、跟随、天色
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
 from src.agents.minecraft.attention_matrix import classify, summarize
 from src.agents.minecraft.chosen_death import CHOSEN_DEATH_NOTICE
@@ -37,6 +37,7 @@ __all__ = [
     "LIVE_NOT_ACTIVE",
     "attention_notice",
     "body_notice_content",
+    "interaction_notice",
     "route_body_event",
 ]
 
@@ -193,6 +194,20 @@ def body_notice_content(route: BodyEventRoute, message: str, *, history: List[An
     if not route.dedup_content or not notice_present(content, history, queue):
         return content
     return repeat_reference(message)
+
+
+def interaction_notice(messages: Sequence[str]) -> str:
+    """互动通知交给模型的正文：一条就是那条 Mod 原话；节流攒下的几条合成一条，按先后列出。
+
+    同一个人叫醒过一次后，隔一阵内他再做的动作攒着不一条条叫醒；到点或别的事叫醒模型时一起交出去，
+    说清是攒下来的，模型看得出他是一直在重复，还是换了新花样。
+    """
+    if len(messages) == 1:
+        body = messages[0]
+    else:
+        listed = "\n".join(f"{index}. {message}" for index, message in enumerate(messages, 1))
+        body = f"这一阵攒下 {len(messages)} 段动作（同一个人隔一阵才叫醒你一次），按先后：\n{listed}\n以上"
+    return PLAYER_BODY_LANGUAGE_NOTICE.format(message=body)
 
 
 def attention_notice(route: BodyEventRoute, message: str) -> str:

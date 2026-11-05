@@ -6,18 +6,21 @@
 - 上报后等主播定夺：叫醒回应，等定夺的状态和委派账原样留着，不注入"继续原游戏任务"
 - 任务进行中：插进原任务的历史，原任务照常交付
 - 收工态不叫醒；肢体动作不记进随上报带给主播的身体事件
+- 按人节流：同一个人 20 秒内第二条不叫醒、到点合成一条再叫醒一次；两个人各计各的；
+  批次跑着时照常跟着下一步读；没有 player 字段的共用一个桶
 """
 
 from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from src.modules.llm.payload import Response
 
 from .minecraft_v1_fakes import (
     FakeMaicraft,
+    ScriptLlm,
     _call,
     _called,
     _reports,
@@ -172,4 +175,126 @@ async def test_a_squat_is_dropped_while_off_air() -> None:
     agent, llm, _bus = await make_minecraft_agent(FakeMaicraft(), lambda messages: _resp("好"), live=False)
     await agent._on_body_event({"kind": "player_body_language", "message": _SQUAT, "cursor": 1})
     assert not agent.queued_messages and llm.seen == []
+    await agent.stop()
+
+
+# 按人节流
+
+_ALEX = {"name": "Alex", "uuid": "00000000-0000-0000-0000-00000000a1ec", "id": "e4"}
+_STEVE = {"name": "Steve", "uuid": "00000000-0000-0000-0000-0000000005e7", "id": "e2"}
+
+
+def _reply_hi(messages: List[Dict[str, Any]]) -> Response:
+    """被 [互动] 叫醒就不调工具收尾（只回应互动的一批）；别的时候交付"看过周围了"。"""
+    if "[互动]" in _texts(messages):
+        return _resp("回个招呼就好")
+    return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
+
+
+async def _idle_agent(
+    script: Any = _reply_hi, llm: Optional[Any] = None
+) -> tuple[Any, Any, Any, FakeMaicraft, List[float]]:
+    """接上注入时钟、已交付闲着的游戏 Agent：返回 (agent, llm, bus, 替身服务器, 时钟)。"""
+    server = FakeMaicraft()
+    now = [1000.0]
+    if llm is None:
+        agent, llm, bus = await make_minecraft_agent(server, script, clock=lambda: now[0])
+    else:
+        agent, llm, bus = await make_minecraft_agent(server, llm=llm, clock=lambda: now[0])
+    agent.receive_delegation(instruction="看一眼周围", task_id="d-1")
+    await _wait_until(lambda: len(_reports(bus)) == 1 and agent.batch_active is False)
+    return agent, llm, bus, server, now
+
+
+async def test_the_same_player_wakes_once_and_the_held_squats_come_together_when_due() -> None:
+    """同一个人 20 秒内的第二、三条不叫醒，先攒着；到点合成一条，只再叫醒一次。"""
+    agent, llm, _bus, server, now = await _idle_agent()
+    server.body_event("player_body_language", "玩家 Alex（e4）看着你蹲起 4 下；他在你前方 3 格", {"player": _ALEX})
+    await _wait_until(lambda: len(llm.seen) == 2 and agent.batch_active is False)
+
+    now[0] += 5
+    server.body_event("player_body_language", "玩家 Alex（e4）看着你蹲起 3 下；他在你前方 3 格", {"player": _ALEX})
+    now[0] += 3
+    server.body_event("player_body_language", "玩家 Alex（e4）拿出铁剑；他在你前方 2 格", {"player": _ALEX})
+    await _wait_until(lambda: agent.observation()["held_interactions"] == 2)
+    assert len(llm.seen) == 2, "20 秒内同一个人不再叫醒"
+    assert not agent.queued_messages, "攒着的不进队列"
+
+    now[0] += 13
+    await _wait_until(lambda: len(llm.seen) == 3 and agent.batch_active is False)
+    woken = _texts(llm.seen[-1])
+    assert "这一阵攒下 2 段动作" in woken
+    assert "1. 玩家 Alex（e4）看着你蹲起 3 下" in woken and "2. 玩家 Alex（e4）拿出铁剑" in woken
+    assert agent.observation()["held_interactions"] == 0
+    await agent.stop()
+
+
+async def test_two_players_wake_her_independently() -> None:
+    """Alex 刚叫醒过，Steve 5 秒后冲她挥手照样叫醒：各计各的 20 秒。"""
+    agent, llm, _bus, server, now = await _idle_agent()
+    server.body_event("player_body_language", "玩家 Alex（e4）看着你蹲起 4 下；他在你前方 3 格", {"player": _ALEX})
+    await _wait_until(lambda: len(llm.seen) == 2 and agent.batch_active is False)
+
+    now[0] += 5
+    server.body_event("player_body_language", "玩家 Steve（e2）对着你挥了 2 下；他在你左侧 4 格", {"player": _STEVE})
+    await _wait_until(lambda: len(llm.seen) == 3 and agent.batch_active is False)
+    assert "玩家 Steve（e2）对着你挥了 2 下" in _texts(llm.seen[-1])
+    assert agent.observation()["held_interactions"] == 0
+    await agent.stop()
+
+
+async def test_squats_without_a_player_field_share_one_bucket() -> None:
+    """事件上没有 player 字段（认不出是谁）：所有人共用一个桶，20 秒内第二条照样攒着。"""
+    agent, llm, _bus, server, now = await _idle_agent()
+    server.body_event("player_body_language", "有玩家看着你蹲起 4 下；他在你前方 3 格")
+    await _wait_until(lambda: len(llm.seen) == 2 and agent.batch_active is False)
+
+    now[0] += 5
+    server.body_event("player_body_language", "另一个玩家对着你挥了 2 下；他在你左侧 4 格")
+    await _wait_until(lambda: agent.observation()["held_interactions"] == 1)
+    assert len(llm.seen) == 2
+    await agent.stop()
+
+
+class _GatedLlm(ScriptLlm):
+    """推理时能拦住的模型替身：门关着时停在"想"这一步，批次一直算在跑。"""
+
+    def __init__(self, script: Any) -> None:
+        super().__init__(script)
+        self.gate = asyncio.Event()
+        self.gate.set()
+
+    async def generate(self, messages: List[Dict[str, Any]], **kwargs: Any) -> Response:
+        self.seen.append([dict(message) for message in messages])
+        await self.gate.wait()
+        return self.script(messages)
+
+
+async def test_squats_arriving_while_a_batch_runs_are_read_with_its_next_step() -> None:
+    """批次正在跑时同一个人又蹲：不攒，照常跟着下一步一起读（本来就不多调模型）。"""
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        # 被 [互动] 叫醒 -> 先看一眼周围（批次接着跑）-> 下一步读到想着时新来的两段 -> 不调工具收尾
+        if "[互动]" in _texts(messages):
+            if not _called(messages, "maicraft_observe"):
+                return _resp(calls=[_call("maicraft_observe", {"what": "scene"})])
+            return _resp("回个招呼就好")
+        return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
+
+    llm = _GatedLlm(script)
+    agent, _llm, _bus, server, now = await _idle_agent(llm=llm)
+    llm.gate.clear()
+    server.body_event("player_body_language", "玩家 Alex（e4）看着你蹲起 4 下；他在你前方 3 格", {"player": _ALEX})
+    await _wait_until(lambda: len(llm.seen) == 2 and agent.batch_active is True)
+
+    now[0] += 3
+    server.body_event("player_body_language", "玩家 Alex（e4）看着你蹲起 3 下；他在你前方 3 格", {"player": _ALEX})
+    server.body_event("player_body_language", "玩家 Alex（e4）原地跳了 2 下；他在你前方 3 格", {"player": _ALEX})
+    await _wait_until(lambda: len(agent.queued_messages) == 2)
+    assert agent.observation()["held_interactions"] == 0, "批次跑着时不攒"
+
+    llm.gate.set()
+    await _wait_until(lambda: len(llm.seen) == 3 and agent.batch_active is False)
+    next_step = _texts(llm.seen[-1])
+    assert "玩家 Alex（e4）看着你蹲起 3 下" in next_step and "玩家 Alex（e4）原地跳了 2 下" in next_step
     await agent.stop()

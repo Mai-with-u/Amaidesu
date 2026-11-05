@@ -49,6 +49,7 @@ from src.agents.minecraft.delegation_book import DelegationBook
 from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_label, pause_notice
 from src.agents.minecraft.glance import glance_brief, glance_scene, glance_self
 from src.agents.minecraft.goals import GoalWatch
+from src.agents.minecraft.interaction_throttle import InteractionThrottle, player_key_of
 from src.agents.minecraft.maicraft import (
     AWAITING_ANSWER,
     EXECUTE,
@@ -70,6 +71,7 @@ from src.agents.minecraft.notice_router import (
     PROMPT_SOURCE_LABELS,
     attention_notice,
     body_notice_content,
+    interaction_notice,
     route_body_event,
 )
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN, FoodTakenLog, food_taken_of
@@ -261,6 +263,9 @@ class MinecraftAgent(BaseAgent):
         # 这一批是不是闲着时只因别的玩家冲角色做了动作被叫醒：是的话只回应互动，不开任务、不续任务、
         # 回完安静收尾（不兜底交付、不催促、不许上报），已交付或等定夺的状态原样留着
         self._interaction_only = False
+        # 互动叫醒按人节流：同一个玩家叫醒过一次，20 秒内他再来的肢体动作先攒着，到点合成一条再叫醒，
+        # 免得有人连着蹲就一分钟叫醒她十来次（每次都要调一次模型）
+        self._interaction_throttle = InteractionThrottle(self._clock)
         # 身体因模型调用失败而停下时的说法（主播看一眼时读到）；空串 = 没出故障。
         # 和"卡住了等主播拿主意"分开：出故障时重新派活不一定有用，主播不该以为身体在等她
         self._body_fault = ""
@@ -379,6 +384,8 @@ class MinecraftAgent(BaseAgent):
         self._creatures.end_session()
         dropped = len(self._message_queue)
         self._wake_queue.clear()
+        # 攒着的互动通知一并作废：下一场开播时冒出上一场的蹲起只是过时的事
+        self._interaction_throttle.clear()
         settled = self._delegations.settle_on_live_end()
         self._logger.info(
             f"场次已结束（id={payload.live_session_id}）：minecraft 收工"
@@ -723,6 +730,9 @@ class MinecraftAgent(BaseAgent):
         close_interrupted_calls(messages)
         # 闲着（已交付或等主播定夺）时只因别的玩家冲角色做了动作被叫醒：这一批只回应互动，
         # 回个动作就收尾；不续原任务，所以也不把原任务的事实再摊开一遍
+        # 节流攒着的互动通知不等到点，跟着这一批一起读（"随下一次叫醒一起读"），读了就从此刻重新计时
+        for held in self._interaction_throttle.drain():
+            self._wake_queue.push_interaction(interaction_notice(held))
         self._interaction_only = (self._task_finished or self._task_suspended) and self._wake_queue.interaction_only()
         if not self._interaction_only and not self._task_finished and self._task_instructions:
             # 后台目标有了结果先恢复原目标、待办与目标状态，再让模型解释这次通知。
@@ -1191,7 +1201,7 @@ class MinecraftAgent(BaseAgent):
         elif route.channel == "wake_even_idle":
             self._wake_even_idle(route.template.format(message=message))
         elif route.channel == "wake_for_interaction":
-            self._wake_for_interaction(route.template.format(message=message))
+            self._offer_interaction(event, message)
         elif route.channel == "inject_if_busy":
             if self._batch_active or not self._task_finished:
                 self._inject_wakeup_message(
@@ -1222,17 +1232,40 @@ class MinecraftAgent(BaseAgent):
         self._wake_queue.push_wake_even_idle(content)
         self._wake_event.set()
 
-    def _wake_for_interaction(self, content: str) -> None:
-        """排一条互动通知（别的玩家冲角色做了肢体动作）并叫醒 worker。
+    def _offer_interaction(self, event: Dict[str, Any], message: str) -> None:
+        """别的玩家冲角色做了肢体动作：按人节流后排成互动通知并叫醒 worker。
 
         任务进行中它是一条普通通知；闲着时它也开批，但那一批只回应互动（见 ``_interaction_only``）。
+        批次正在跑时照常跟着下一步一起读；没在跑时，同一个人 20 秒内叫醒过就先攒着，到点再合成一条叫醒。
         收工态不排：下播后有人冲她蹲起没人看，开播时再冒出来只是过时的事。
         """
         if not self._live_active:
-            self._logger.info(f"收工态不叫醒：{content[:60]}")
+            self._logger.info(f"收工态不叫醒：{message[:60]}")
             return
-        self._wake_queue.push_interaction(content)
+        ready = self._interaction_throttle.offer(player_key_of(event), message, reading_now=self._batch_active)
+        if ready is None:
+            self._logger.info(f"同一个人刚叫醒过，先攒着不叫醒：{message[:60]}")
+        else:
+            self._push_interaction(ready)
+        # 顺便看看别人有没有攒满 20 秒的
+        self._flush_due_interactions()
+
+    def _push_interaction(self, messages: List[str]) -> None:
+        """把一个人的一批肢体动作（一条，或攒下的几条合成一条）排成互动通知并叫醒 worker。"""
+        self._wake_queue.push_interaction(interaction_notice(messages))
         self._wake_event.set()
+
+    def _flush_due_interactions(self) -> None:
+        """攒着的互动通知到点（离那个人上次叫醒满 20 秒）的，各合成一条叫醒；收工态全部作废。
+
+        每读回一页事件（目标跟踪的长轮询每次返回，空闲时也最多隔一个等待时长）、每来一条互动都来看一次，
+        不另起定时器：到点时刻按注入的时钟判，攒着的最晚在到点后的下一页交出去，也会随别的叫醒提前读到。
+        """
+        if not self._live_active:
+            self._interaction_throttle.clear()
+            return
+        for messages in self._interaction_throttle.due():
+            self._push_interaction(messages)
 
     def _carry_sky_notice(self, content: str) -> None:
         """挂一条不唤醒模型的通知，队列里只留最新一条（天色用）。
@@ -1261,8 +1294,12 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
 
     async def _on_events_page(self, page: Any) -> None:
-        """GoalWatch 每读到一页：页里带着角色眼下在哪个存档（换存档时 Mod 会当场叫醒这次读取）。"""
+        """GoalWatch 每读到一页：页里带着角色眼下在哪个存档（换存档时 Mod 会当场叫醒这次读取）。
+
+        长轮询空闲时也按等待时长返回空页，所以这里也是攒着的互动通知到点检查的落脚处。
+        """
         await self._apply_world_change(self._world.absorb(page.world_fields))
+        self._flush_due_interactions()
 
     async def _apply_world_change(self, change: Optional[WorldChange]) -> None:
         """事件页或 observe(self) 认出了新的存档：切换工作文档；没变化什么也不做。"""
@@ -1897,7 +1934,7 @@ class MinecraftAgent(BaseAgent):
         return self._batch_active
 
     def observation(self) -> Dict[str, Any]:
-        """任务推进状态快照（只读观测面）：批状态、任务状态、身体故障说法与本批身体事件。"""
+        """任务推进状态快照（只读观测面）：批状态、任务状态、身体故障说法、本批身体事件与攒着的互动通知数。"""
         return {
             "batch_active": self._batch_active,
             "task_finished": self._task_finished,
@@ -1905,6 +1942,8 @@ class MinecraftAgent(BaseAgent):
             "task_instructions": list(self._task_instructions),
             "body_fault": self._body_fault,
             "batch_body_events": [dict(record) for record in self._batch_body_events],
+            # 节流攒着、还没交给模型的互动通知条数
+            "held_interactions": self._interaction_throttle.held_count(),
         }
 
     @property
