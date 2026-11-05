@@ -8,7 +8,8 @@
 
 - obtain 结束、``status=partial``、``problem.kind=WRONG_TIME`` 时，按 ``details.left_cooking`` 里带 ``timer_id``
   的那几台记下；计时挂满了没挂上（没有 ``timer_id``）的不记——到点没人叫，不能让模型以为会被叫醒而干等；
-- timer_due 到点（Mod 原话"计时 N 到点：…"）就划掉 N；
+- timer_due 到点就划掉那个计时：先认事件上的 ``timer_id`` 字段，旧版 Mod 没有这个字段时才从原话
+  "计时 N 到点：…"里认编号；
 - timer 能力的结果带着做完这次之后还挂着的全部计时（``details.pending``）：不在里面的都划掉
   （模型自己取消了，或 Mod 回炉提前取走时自己摘了计时）；
 - 换存档时 Mod 清空全部计时，这里也清空；新任务开始时，上个任务留下的也不再算这个任务在等；
@@ -41,7 +42,8 @@ _LEFT_COOKING_PROBLEM = "WRONG_TIME"
 _DEADLINE_FACTOR = 2.0
 _DEADLINE_SLACK_S = 120.0
 
-#: Mod 的到点原话开头："计时 7 到点：回 (10, 64, -3) 的熔炉取干海带 ×64（640 秒前设的；此刻白天）"
+#: Mod 的到点原话开头："计时 7 到点：回 (10, 64, -3) 的熔炉取干海带 ×64（640 秒前设的；此刻白天）"；
+#: 只给没带 timer_id 字段的旧版 Mod 兜底
 _TIMER_DUE_ID = re.compile(r"计时\s*(\d+)\s*到点")
 
 
@@ -109,11 +111,17 @@ class FurnaceWaits:
             deadline = now + ready * _DEADLINE_FACTOR + _DEADLINE_SLACK_S
             self._waits[timer_id] = FurnaceWait(timer_id, _note_of(cooking, timer_id), deadline)
 
-    def timer_due(self, message: str) -> None:
-        """计时到点：按 Mod 原话里的编号划掉那一台（不是回炉计时的编号不在册，什么也不做）。"""
-        matched = _TIMER_DUE_ID.search(message)
-        if matched is not None:
-            self._close(int(matched.group(1)))
+    def timer_due(self, event: Dict[str, Any]) -> None:
+        """计时到点：划掉那个计时（不是回炉计时的编号不在册，什么也不做）。
+
+        编号先认事件上的 ``timer_id`` 字段；旧版 Mod 没有这个字段，才从原话"计时 N 到点"里认。
+        """
+        timer_id = _int_of(event.get("timer_id"))
+        if timer_id is None:
+            matched = _TIMER_DUE_ID.search(str(event.get("message") or ""))
+            timer_id = int(matched.group(1)) if matched is not None else None
+        if timer_id is not None:
+            self._close(timer_id)
 
     def waiting(self) -> List[FurnaceWait]:
         """还在等、没过兜底期限的回炉计时：按计时编号排。"""

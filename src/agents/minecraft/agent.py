@@ -1277,8 +1277,8 @@ class MinecraftAgent(BaseAgent):
             if len(self._batch_body_events) > MAX_BATCH_BODY_EVENTS:
                 self._batch_body_events = self._batch_body_events[-MAX_BATCH_BODY_EVENTS:]
         if kind == TIMER_DUE:
-            # 回炉计时响了：那台炉子不再算在等，叫醒照常走路由表（到点通知里写着回哪台炉取什么）
-            self._furnace_waits.timer_due(message)
+            # 回炉计时响了：按事件上的计时编号划掉那台炉子，叫醒照常走路由表（到点通知里写着回哪台炉取什么）
+            self._furnace_waits.timer_due(event)
         if kind == OTHERS_FOOD_TAKEN:
             # 闲着时也要记：主人多半是过一阵才来问，那时候模型得从任务事实里认出是自己拿的
             self._food_taken.record(self._creatures.world_key, food_taken_of(event, now_ms()))

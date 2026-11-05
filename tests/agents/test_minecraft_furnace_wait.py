@@ -39,6 +39,8 @@ _LEFT_COOKING_PROBLEM = {
     "suggestion": "计时 7 到点会在事件里叫你（timer_due），到时再 obtain 干海带",
 }
 _TIMER_DUE = "计时 7 到点：回 (10, 64, -3) 的熔炉取干海带 ×64（600 秒前设的；此刻白天）"
+# 新版 Mod 在 timer_due 事件上平铺计时编号与备注，原话不变
+_TIMER_DUE_FIELDS = {"timer_id": 7, "note": "回 (10, 64, -3) 的熔炉取干海带 ×64"}
 
 
 def _finished(result: Dict[str, Any], ability: str = "maicraft:obtain", goal_id: int = 1) -> Any:
@@ -79,7 +81,7 @@ def test_left_cooking_timer_counts_as_waiting_until_it_fires() -> None:
     assert [wait.timer_id for wait in waits.waiting()] == [7]
     assert "(10, 64, -3)" in waits.waiting()[0].note and "minecraft:dried_kelp ×64" in waits.waiting()[0].note
 
-    waits.timer_due(_TIMER_DUE)
+    waits.timer_due({"message": _TIMER_DUE, **_TIMER_DUE_FIELDS})
     waits.absorb(run)
     assert waits.waiting() == [], "响过的计时不因模型回头读那个目标重新算在等"
 
@@ -130,12 +132,30 @@ def test_a_timer_that_never_fires_stops_counting_after_its_deadline() -> None:
     assert waits.take_overdue() == [], "每台只交出去一次"
 
 
+@pytest.mark.parametrize(
+    ("event", "still_waiting"),
+    [
+        ({"message": "计时 3 到点：看看天色", "timer_id": 7}, []),
+        ({"message": _TIMER_DUE}, []),
+        ({"message": "计时 3 到点：看看天色", "timer_id": 3}, [7]),
+        ({"message": "到点了", "timer_id": True}, [7]),
+    ],
+    ids=["field_wins_over_message", "old_mod_message_fallback", "other_timer", "bad_field_no_number"],
+)
+def test_timer_due_reads_the_timer_id_field_before_the_message(event: Dict[str, Any], still_waiting: List[int]) -> None:
+    """到点先认事件上的 timer_id 字段（和原话里的编号不一致时以字段为准）；旧版 Mod 没有字段才从原话认编号。"""
+    waits = FurnaceWaits(_Clock())
+    waits.absorb(_finished(_left_cooking(_FURNACE)))
+    waits.timer_due(event)
+    assert [wait.timer_id for wait in waits.waiting()] == still_waiting
+
+
 def test_switching_worlds_forgets_timers_and_their_numbers() -> None:
     """换存档：Mod 清空了计时，在等的清掉；新存档的计时编号可能从头数，响过的编号也不再挡着。"""
     waits = FurnaceWaits(_Clock())
     run = _finished(_left_cooking(_FURNACE))
     waits.absorb(run)
-    waits.timer_due(_TIMER_DUE)
+    waits.timer_due({"message": _TIMER_DUE, **_TIMER_DUE_FIELDS})
 
     waits.forget_world()
     waits.absorb(run)
@@ -220,7 +240,7 @@ async def test_left_cooking_is_waited_on_not_reported_and_resumes_on_the_timer(
         refusal = _last(llm.seen[-1])[1]
         assert "炉子在烧" in refusal and "不用上报" in refusal, "等待工具说清不是卡住了，免得模型转去上报阻塞"
 
-    server.body_event("timer_due", _TIMER_DUE)
+    server.body_event("timer_due", _TIMER_DUE, fields=_TIMER_DUE_FIELDS)
     await _wait_until(lambda: agent.tracked_goal_ids == [2])
     woken = _texts(llm.seen[-1])
     assert f"[计时] {_TIMER_DUE}" in woken and "再 obtain 同一样东西" in woken
