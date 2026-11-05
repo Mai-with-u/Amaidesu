@@ -80,7 +80,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 | 工具 | 说明 |
 |---|---|
 | `minecraft_todo` | 待办文档（read/write 全量读写，无 id）。任务分解与推进由 LLM 自主决策 |
-| `minecraft_notebook` | 工作笔记（read/write）。对话历史会整理、笔记不会——重要发现写这里；按存档分开，进程重启清空 |
+| `minecraft_notebook` | 工作笔记（read/write）。对话历史会整理、笔记不会——这一场的重要发现写这里；按存档分开，进程重启清空。长期要记的地点用 MaiCraft 的 `remember` 记成命名地点（按存档存在 Mod 的世界记忆里） |
 | `minecraft_wait` | 身体在执行后台目标、又没有可推进或可准备的事时单独调用，让出本轮等目标事件 |
 | `minecraft_report` | 上报通道（玩家→主播唯一发声出口）：delivery 交付总结 / escalation 升级决策 |
 | `minecraft_skill` | 按名读技能正文（装配了技能库时才有）。技能目录随系统提示词给出，由本地直播策略与 MaiCraft 的 `resources/list` 合并而成；玩法技能随 Mod 发布，目录里标着“来自 MaiCraft”，正文按 `skill://` 地址经 `resources/read` 读；MaiCraft 没连上时远端技能消失，本地策略照常可用 |

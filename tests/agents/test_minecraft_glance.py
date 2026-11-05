@@ -1,4 +1,5 @@
-"""本文件测 MinecraftAgent 的看一眼主题：新任务开局宿主代读资料包、glance 现场视图与白话摘要、记住的地点名、未连接时拒收委派。"""
+"""本文件测 MinecraftAgent 的看一眼与记地点主题：开局代读资料包、glance 现场视图与白话摘要、
+记住的地点名与记地点的提示词口径、未连接时拒收委派。"""
 
 from __future__ import annotations
 
@@ -10,7 +11,9 @@ import pytest
 
 from src.agents.minecraft.glance import entity_label, glance_brief, glance_scene, glance_world_memory
 from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
+from src.agents.minecraft.tools import STREAMER_GUIDE, build_notebook_spec
 from src.modules.llm.payload import Response
+from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 
 from .minecraft_v1_fakes import (
     FakeMaicraft,
@@ -253,6 +256,31 @@ async def test_glance_lists_remembered_place_names_but_keeps_them_out_of_the_bri
 def test_glance_remembered_places_line(reply: MaicraftReply, expected: Dict[str, Any]) -> None:
     """记住的地点那一行：最多列几个、多的说共几处；空名与重名不列；一个都没记过不写；读失败照实写原因。"""
     assert glance_world_memory(reply, "minecraft:overworld") == expected
+
+
+def test_streamer_guide_hands_place_memos_to_the_game_and_waits_for_the_receipt() -> None:
+    """主播的玩法说明：记地点交给游戏里记，手上有事就补一句、不撤手上的事；看到"已把「…」记在"才说记好了。
+
+    直播里让她记的下界传送门坐标没记上：她自己的记忆是下播后从说过的话里整理的，一串坐标留不下来。
+    """
+    assert "remembered_places" in STREAMER_GUIDE
+    assert "不要为它撤掉手上的事" in STREAMER_GUIDE
+    assert "已把「某某」记在" in STREAMER_GUIDE and "不说已经记好" in STREAMER_GUIDE
+
+
+def test_game_prompt_keeps_long_term_places_in_remember_not_the_notebook() -> None:
+    """游戏 Agent 提示词：长期地点用 remember（同名覆盖、带维度、必须给 y、同类地点分开起名），笔记重启就清空。"""
+    reset_prompt_manager()
+    try:
+        game = get_prompt_manager().render("amaidesu_minecraft_agent")
+    finally:
+        reset_prompt_manager()
+    assert "## 记住地点" in game and "进程一重启就清空" in game
+    assert "同名会覆盖" in game and "previous_position" in game
+    assert "minecraft:the_nether" in game and "缺 `y` 会被拒" in game
+    assert "下界传送门（主世界侧）" in game and "下界传送门（下界侧）" in game
+    notebook = build_notebook_spec().description
+    assert "重启就清空" in notebook and "remember" in notebook
 
 
 @pytest.mark.parametrize(
