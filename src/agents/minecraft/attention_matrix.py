@@ -6,7 +6,8 @@ MaiCraft v1 的事件流里大部分是目标运行的处境变化（开始、�
 的任务通道，主播的叙事不需要。和身体有关的有这几种：挨了一阵打（谁打的、几下、掉了多少血，
 一段只来一条、不分开始结束）、换了维度、生存需求插进来的临时任务开始与结束（自卫、夜里封顶自保、
 退离边沿）、角色自己处理不了的需求（饿了没吃上、封顶没封上）、角色死亡；装备用坏、探索途中的发现、
-跟随中的处境变化与天色变了（天黑、天亮、下雨、雨停）也是主播能讲的经历。`maicraft_attention` 采集器只把这些转成 `game.body.*` 事件，任务通道的事件留在上游。
+跟随中的处境变化与天色变了（天黑、天亮、下雨、雨停）也是主播能讲的经历；别的玩家冲角色做的肢体动作
+（蹲起、挥手、拍一下、扔东西过来）是有人找她玩，单独成一种，不和挨打混在一起。`maicraft_attention` 采集器只把这些转成 `game.body.*` 事件，任务通道的事件留在上游。
 
 事件流里剩余种类的去向三分（判据）：
 - 步进完成（`step_finished`）：主播可讲的进展——画面在动、Mod 自带结论句（如"采集完成：8 个
@@ -54,17 +55,22 @@ KIND_TO_EVENT: Dict[str, str] = {
     "discovered": CoreEvents.GAME_BODY_DISCOVERED,
     "follow_status": CoreEvents.GAME_BODY_FOLLOW_STATUS,
     "sky_changed": CoreEvents.GAME_BODY_SKY_CHANGED,
+    "player_body_language": CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE,
     # 步进完成不进身体事件通道，转 game.milestone（主播可讲的进展）
     "milestone": CoreEvents.GAME_MILESTONE,
 }
 
-#: 已经是"结局面"的种类（主播据此把措辞从"正在"改成"刚才"）
-RESOLVED_KINDS = frozenset({"attack_ended", "respawned", "reflex_finished"})
+#: 已经是"结局面"的种类（主播据此把措辞从"正在"改成"刚才"）；肢体动作是 Mod 等一段做完
+#: （1.5 秒没新动作）才发的，到主播这里已经是"刚才"
+RESOLVED_KINDS = frozenset({"attack_ended", "respawned", "reflex_finished", "player_body_language"})
 
 #: 事件种类 → 叙事种类。生存需求的临时任务就是"身体先停下手上的活处理急事"，对应本能接管。
 _SOURCE_KINDS: Dict[str, str] = {
     # 一阵挨打 Mod 只发一条（按来源归并，安静 5 秒或每 10 秒发一次），没有"打完了"那一条，所以只用 attacked。
+    # 别的玩家轻轻拍一下不进 hurt（Mod 把它算进肢体动作），所以 hurt 只剩真挨打。
     "hurt": "attacked",
+    # 别的玩家冲角色做的肢体动作：有人找她玩，不是挨打；一句话由注意流采集器按玩家互动的说法另拼
+    "player_body_language": "player_body_language",
     "dimension_changed": "dimension_changed",
     "temporary_task_started": "reflex_started",
     "temporary_task_finished": "reflex_finished",

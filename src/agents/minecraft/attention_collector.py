@@ -3,7 +3,8 @@ MaicraftAttentionCollector —— AI 玩家身体事件采集器
 
 上游是 MaiCraft v1 的事件流（``events`` 默认的 ``self``：角色身上发生的事）：挨了一阵打、换了维度、生存需求插进来的
 临时任务（自卫、夜里封顶自保、退离边沿）开始与结束、角色自己处理不了的需求、角色死亡，都写在这条流上。本采集器**常驻**带着游标长轮询，
-把其中的身体遭遇转成 ``game.body.*`` 事件；步进完成（主播可讲的进展）转成 ``game.milestone``；
+把其中的身体遭遇转成 ``game.body.*`` 事件（别的玩家冲角色做的肢体动作单独成一种，不当挨打讲）；
+步进完成（主播可讲的进展）转成 ``game.milestone``；
 目标运行的处境变化归游戏 Agent 的任务通道，不转。
 连接、长轮询与游标都在 :class:`MaicraftEventsCollector`，这里只管分类与转发。
 
@@ -30,6 +31,8 @@ from src.agents.minecraft.attention_matrix import (
 from src.agents.minecraft.chosen_death import CHOSEN_DEATH_LINE, SuicideWatch
 from src.agents.minecraft.events_collector import MaicraftEventsCollector
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN, food_taken_of, spoken_line
+from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
+from src.agents.minecraft.player_body_language import spoken_line as body_language_line
 from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
@@ -69,6 +72,8 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
         self._suicides.observe(event)
         if source_type == OTHERS_FOOD_TAKEN:
             return await self._forward_food_taken(event)
+        if source_type == PLAYER_BODY_LANGUAGE:
+            return await self._forward_body_language(event)
         kind = classify(source_type)
         if kind is None:
             return False
@@ -118,6 +123,24 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
         )
         await self.emit_event(KIND_TO_EVENT["unknown"], payload, source=self.name)
         self.logger.info(f"[身体事件] {payload.summary}（{OTHERS_FOOD_TAKEN}）")
+        return True
+
+    async def _forward_body_language(self, event: Dict[str, Any]) -> bool:
+        """别的玩家冲角色做了肢体动作：转给主播一句能顺口接的话，连同"这是在跟我玩、俏皮接、不提血量"的口径。
+
+        不走 :func:`summarize`：那套白话化会把带数字的分句整句去掉，"朝你扔了 3 个面包"会整句没了；
+        这里只去观察编号和方位距离，动作和送的东西照说。被拍一下也在这里，不当挨打讲。
+        """
+        # 叙事种类和 Mod 的事件种类同名
+        payload = BodyEventPayload(
+            game="minecraft",
+            kind=PLAYER_BODY_LANGUAGE,
+            summary=body_language_line(str(event.get("message") or "")),
+            source_event_type=PLAYER_BODY_LANGUAGE,
+            resolved=PLAYER_BODY_LANGUAGE in RESOLVED_KINDS,
+        )
+        await self.emit_event(KIND_TO_EVENT[PLAYER_BODY_LANGUAGE], payload, source=self.name)
+        self.logger.info(f"[身体事件] {payload.summary}（{PLAYER_BODY_LANGUAGE}）")
         return True
 
 

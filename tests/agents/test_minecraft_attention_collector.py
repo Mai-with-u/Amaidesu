@@ -241,6 +241,7 @@ def test_body_event_names_are_the_closed_kind_set() -> None:
         CoreEvents.GAME_BODY_DISCOVERED,
         CoreEvents.GAME_BODY_FOLLOW_STATUS,
         CoreEvents.GAME_BODY_SKY_CHANGED,
+        CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE,
         CoreEvents.GAME_MILESTONE,
     }
     for kind, event_name in KIND_TO_EVENT.items():
@@ -536,3 +537,33 @@ async def test_connect_failure_backs_off_up_to_cap(monkeypatch: pytest.MonkeyPat
             pass
 
     assert slept == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0, 60.0]
+
+
+async def test_player_body_language_reaches_the_streamer_as_play_not_as_an_attack() -> None:
+    """别的玩家冲角色蹲起、拍一下：单独成一种叙事转给主播，动作照说、方位去掉，口径是俏皮接、不提血量。"""
+    assert classify("player_body_language") == "player_body_language"
+    assert classify("hurt") == "attacked", "真挨打照旧归 attacked"
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5)
+    client.pages.append(
+        _page(
+            [
+                _event(
+                    6,
+                    "player_body_language",
+                    "玩家 Alex（e4）看着你蹲起 4 下，拿出铁剑，对着你挥了 2 下；他在你前方 3 格",
+                ),
+                _event(7, "player_body_language", "玩家 Steve（e2）拍了你一下：空手，没伤到；他在你身后 1 格"),
+            ],
+            cursor=7,
+        )
+    )
+
+    await collector._drain()
+
+    [(first_name, first), (second_name, second)] = bus.events
+    assert first_name == second_name == CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE
+    assert first.kind == "player_body_language" and first.source_event_type == "player_body_language"
+    assert first.summary.startswith("玩家 Alex 看着我蹲起 4 下，拿出铁剑，对着我挥了 2 下。")
+    assert "不提血量" in first.summary and first.resolved is True
+    assert second.summary.startswith("玩家 Steve 拍了我一下：空手，没伤到。")

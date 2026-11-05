@@ -129,7 +129,7 @@ class CoreEvents:
 
     # ========== v2 语义域事件（game.body.* AI 玩家身体事件） ==========
     # 上游是 MaiCraft 的任务事件流，由 maicraft_attention 采集器分类：
-    # 只把"值得向观众叙述的遭遇"转成下面 13 个事件，遥测（血量/坐标/游标）不入事件。
+    # 只把"值得向观众叙述的遭遇"转成下面 14 个事件，遥测（血量/坐标/游标）不入事件。
     # kind 是判别字段（与事件名末段一致），未知上游类型归 game.body.unknown 并留
     # source_event_type——所以事件面不随上游漂移。
     # 用三层名而非 "game.*"：单层通配是游戏 Agent 的低频里程碑通道（落 game_events、
@@ -150,6 +150,9 @@ class CoreEvents:
     GAME_BODY_DISCOVERED = "game.body.discovered"
     GAME_BODY_FOLLOW_STATUS = "game.body.follow_status"
     GAME_BODY_SKY_CHANGED = "game.body.sky_changed"
+    # 别的玩家冲 AI 玩家做的肢体动作（蹲起、挥手、拍一下、扔东西过来）：是有人找它玩，不是挨打；
+    # 和 Mod 的事件种类同名，两边搜同一个词就对得上
+    GAME_BODY_PLAYER_BODY_LANGUAGE = "game.body.player_body_language"
 
     # ========== v2 语义域事件（game.body.* 通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名：订阅方用它一站式

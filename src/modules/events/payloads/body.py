@@ -38,6 +38,7 @@ BodyKind = Literal[
     "discovered",
     "follow_status",
     "sky_changed",
+    "player_body_language",
 ]
 
 
@@ -54,6 +55,7 @@ BodyKind = Literal[
 @register_event(CoreEvents.GAME_BODY_DISCOVERED)
 @register_event(CoreEvents.GAME_BODY_FOLLOW_STATUS)
 @register_event(CoreEvents.GAME_BODY_SKY_CHANGED)
+@register_event(CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE)
 class BodyEventPayload(BasePayload):
     """AI 玩家身体事件（已分类、已叙事化）。
 
@@ -75,7 +77,7 @@ class BodyEventPayload(BasePayload):
     """
 
     # 判别字段：EventBus 在 emit 期校验"事件名末段 == 该字段值"，
-    # 九重注册共享一类，挂错事件名直接报错。
+    # 多个事件名注册共享一类，挂错事件名直接报错。
     # 必须标 ClassVar：否则 pydantic 会把它当成私有属性（ModelPrivateAttr），
     # 校验期取属性名会直接抛 TypeError。
     _DISCRIMINANT_FIELD: ClassVar[str] = "kind"
