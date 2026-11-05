@@ -484,11 +484,13 @@ def test_streamer_prompts_speak_as_one_streamer() -> None:
 
 
 def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
-    """发言交接契约：topic_summary/reply_guidance 是任务书不是台词草稿——客观状态 + 方向与她的态度 + 正误对照在场。
+    """发言交接契约：topic_summary/reply_guidance 是任务书不是台词草稿——客观状态 + 方向与她的态度；示例不在场。
 
     实测虚构剧情根因：planner 以主播身份写出带腔调的台词草稿，replyer 退化为扩写草稿——所以事实部分
     仍须客观、两段都禁第一人称与台词草稿。线上回放里有人味的台词又几乎都来自指引里写的态度
     （"带点疲惫的自嘲"），所以态度与语气正式归回复指引，但只针对已有事实、不夹带新事实。
+    去原文示例（2026-11-05 拍板）：正误对照保留形态描述，成品句不进场——实测成品句会被逐字
+    复读：场次 54 有 48/162 条指导语复读示范的"对 X 这件事"框架、31% 默认自嘲。
     """
     reset_prompt_manager()
     try:
@@ -505,10 +507,13 @@ def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
         reset_prompt_manager()
     assert "发言交接契约" in prompt and "任务书" in prompt and "不是台词草稿" in prompt
     assert "可核对的客观状态陈述" in prompt and "禁止第一人称叙事" in prompt
-    assert "reply_guidance = 方向 + 她的态度与语气" in prompt and "纯方向意图" not in prompt
+    assert "reply_guidance = 方向 + 她的态度" in prompt and "纯方向意图" not in prompt
+    assert "态度从事实本身推导" in prompt and "不连续几轮重复同一种态度" in prompt
     assert "态度只针对 `topic_summary` 里已有的事实" in prompt and "不写成她口吻的整句台词" in prompt
     assert "情绪类别和强度仍由 `streamer_reply` 的 emotion / intensity 字段给出" in prompt
-    assert "错误示范（reply_guidance）" in prompt and "正确示范（reply_guidance）" in prompt
+    assert "错误示范" in prompt and "正确示范" in prompt
+    # 示范只讲形态、不给成品句：成品句会被当模板逐字复读（场次 54 实测 48/162 条指导语复读示范框架、31% 默认自嘲）
+    assert "对又一次被水冲走" not in prompt and "自嘲、嫌弃、得意" not in prompt
 
 
 def test_planner_prompt_names_the_reply_tool_as_registered() -> None:
@@ -783,7 +788,7 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
         game_rules="",
     )
     assert "一轮只递一个点" in planner and "只写和这一个点有关的事实" in planner
-    assert "一句话以内" in planner and "五个点，表达引擎会一口气全讲完" in planner
+    assert "一句话以内" in planner and "指引里写几个点，她就会一口气讲几个点" in planner
 
     system = prompts.render(
         "amaidesu_replyer_system",

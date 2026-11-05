@@ -118,7 +118,7 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
         },
         "reply_guidance": {
             "type": "string",
-            "description": "回复指引：一件事、一个态度，一句话以内——说什么方向、对谁说、不提什么，以及她对这件事的态度与语气（可空；不写成台词）",
+            "description": "回复指引：一件事、一个态度，一句话以内——这轮让她对哪件事开口、她对这件事的态度（态度从事实与人设推导，不套定式）；需要她避开什么才写不提什么（可空；不写成台词）",
         },
         "topic_tag": {
             "type": "string",
