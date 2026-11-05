@@ -186,6 +186,33 @@ async def test_recall_searches_archive_lines_of_previous_session(store: SQLiteDa
     assert "「今天挖到钻石了」" in text
 
 
+async def test_recall_gives_a_rolled_line_once_dated_by_where_it_was_said(store: SQLiteDatabase) -> None:
+    """滚动档案把第一场的事接进了第二场：回想只给一条，时间按最初说它的那一场标（更早，不是上一场）。"""
+    first = await _session(store, started=1_000, ended=2_000)
+    second = await _session(store, started=3_000, ended=4_000)
+    current = await _session(store, started=5_000)
+    chat_id = await _streamer_says(store, first, "从今天起你就叫团子", 1_100)
+    await _streamer_says(store, second, "今天接着种菜", 3_100)
+    await store.archive.insert_line(
+        live_session_id=first, text="女仆取名团子", quote="从今天起你就叫团子", evidence_chat_id=chat_id
+    )
+    await store.archive.insert_line(
+        live_session_id=second,
+        text="女仆取名团子",
+        quote="从今天起你就叫团子",
+        evidence_chat_id=chat_id,
+        from_session_id=first,
+        lasting=True,
+    )
+    service = _service(store, current_session=current)
+
+    text = await service.recall("团子")
+
+    archive_hits = [line for line in _hit_lines(text) if "档案「女仆取名团子」" in line]
+    assert len(archive_hits) == 1
+    assert "上一场" not in archive_hits[0]
+
+
 # ---------------------------------------------------------------------------
 # 承诺
 # ---------------------------------------------------------------------------
