@@ -342,11 +342,14 @@ class FakeMaicraft(BaseToolProvider):
         *,
         self_brief: Optional[str] = None,
         attempts: Optional[List[Dict[str, Any]]] = None,
+        problem: Optional[Dict[str, Any]] = None,
+        details: Optional[Dict[str, Any]] = None,
     ) -> None:
         """目标结束：结果写进运行表、发 finished 事件。
 
         ``self_brief`` 是结束那一刻角色的一行自身摘要，和真实接口一样只在事件上；
-        ``attempts`` 给了就像真实接口那样折起来：默认结果里只留 ``folded`` 一项，按路径 ``/attempts`` 读回。
+        ``attempts`` 给了就像真实接口那样折起来：默认结果里只留 ``folded`` 一项，按路径 ``/attempts`` 读回；
+        ``problem`` / ``details`` 给了就原样写进结果（如 obtain 装好炉先走时的 WRONG_TIME 与 left_cooking）。
         """
         run = self.goals[goal_id]
         run["state"] = "finished"
@@ -357,6 +360,10 @@ class FakeMaicraft(BaseToolProvider):
             "changes": [{"kind": "item_gained", "what": "minecraft:oak_log", "count": 5}],
             "remaining": [],
         }
+        if problem is not None:
+            run["result"]["problem"] = problem
+        if details is not None:
+            run["result"]["details"] = details
         if attempts:
             self.folded_attempts[goal_id] = attempts
             run["result"]["folded"] = [

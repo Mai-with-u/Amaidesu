@@ -46,6 +46,7 @@ from src.agents.minecraft.context_fold import (
 )
 from src.agents.minecraft.creature_book import CreatureBook, creature_from_record, creature_record
 from src.agents.minecraft.delegation_book import DelegationBook
+from src.agents.minecraft.furnace_wait import TIMER_DUE, FurnaceWaits
 from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_label, pause_notice
 from src.agents.minecraft.glance import (
     RememberedPlacesCache,
@@ -261,6 +262,8 @@ class MinecraftAgent(BaseAgent):
         self._food_taken = FoodTakenLog()
         # 速览里记住的地点：最多 5 分钟真读一次世界记忆；记地点成功、换存档、连接变化时提前作废
         self._remembered_places = RememberedPlacesCache(self._clock)
+        # obtain 装好炉先走时自动挂的回炉计时：没响之前模型结束一轮算在等炉子，不催、不上报、不兜底交付
+        self._furnace_waits = FurnaceWaits(self._clock)
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
             state=self._mc_state,
@@ -990,6 +993,7 @@ class MinecraftAgent(BaseAgent):
         self._shown_context = {}
         self._mc_state.set_todos([])
         self._goal_ledger.clear_finished()
+        self._furnace_waits.clear()
         # 新任务只带系统说明和新指令：这个世界里拿过别人家的吃的另附一条事实，主人来问时一开工就认得出
         taken = self._food_taken.view(self._creatures.world_key)
         if taken:
@@ -1004,13 +1008,18 @@ class MinecraftAgent(BaseAgent):
             self._logger.info(f"回应互动后收尾（{steps} 步），任务状态原样留着")
             return False
         pending = self._goals.tracked_ids()
+        # obtain 装好炉先走、回炉计时还没响：东西在炉子里烧着，到点会叫醒模型回去取。
+        # 这时不调工具结束一轮和后台目标在跑一样是在等——不催、不挂起上报主播，也不兜底交付成"任务完成"
+        cooking = self._furnace_waits.waiting()
         actionable = self._goal_ledger.actionable_goal_ids()
-        if actionable or (not pending and self._unfinished_todos()):
+        if actionable or (not pending and not cooking and self._unfinished_todos()):
             return await self._continue_after_no_progress(
                 messages, reminded, "仍有目标在等你回答或被暂停，或还有未完成待办"
             )
         if pending:
             self._logger.info(f"任务批次自然终止（{steps} 步），{len(pending)} 个后台目标在跑，静默让出")
+        elif cooking:
+            self._logger.info(f"任务批次自然终止（{steps} 步），{len(cooking)} 台炉子在烧、到点会叫醒，静默让出")
         elif not self._task_reported:
             delivery = content.strip()
             await self._emit_report("delivery", delivery or "任务完成")
@@ -1146,6 +1155,8 @@ class MinecraftAgent(BaseAgent):
                 # 账面仍要记：先登记再写终态，直接写会因条目不存在而落空（终态变化广播不出来）。
                 self._goal_ledger.remember_finished(run)
                 self._goal_ledger.register_and_settle(run)
+                # 设、取消、列计时都当场返回，结果带着还挂着的全部计时：拿来对账回炉计时
+                self._furnace_waits.absorb(run)
                 return
             self._track_goal(run)
             return
@@ -1154,6 +1165,8 @@ class MinecraftAgent(BaseAgent):
             self._goal_ledger.forget(run.goal_id)
             self._goal_ledger.remember_finished(run)
             self._goal_ledger.update_task_ledger(run)
+            # 模型先于结束事件读到结束的 obtain：装好炉先走的回炉计时从这里记上（同一个计时只记一次）
+            self._furnace_waits.absorb(run)
             return
         if not self._goals.tracking(run.goal_id) and arguments.get("operation") == "resume":
             # 重启或重进世界后恢复的目标：模型明确解除暂停，从此由宿主跟踪。
@@ -1202,6 +1215,8 @@ class MinecraftAgent(BaseAgent):
         before = self._goal_ledger.note_of(run.goal_id)
         if run.finished:
             self._goal_ledger.settle_finished(run)
+            # obtain 装好炉先走（partial + WRONG_TIME）不是做不成：记下回炉计时，等它响之前结束一轮算在等炉子
+            self._furnace_waits.absorb(run)
             self._inject_wakeup_message(finish_notice(run, self_brief))
             spar = spar_outcome_line(run)
             if spar is not None:
@@ -1261,6 +1276,9 @@ class MinecraftAgent(BaseAgent):
             self._batch_body_events.append(record)
             if len(self._batch_body_events) > MAX_BATCH_BODY_EVENTS:
                 self._batch_body_events = self._batch_body_events[-MAX_BATCH_BODY_EVENTS:]
+        if kind == TIMER_DUE:
+            # 回炉计时响了：那台炉子不再算在等，叫醒照常走路由表（到点通知里写着回哪台炉取什么）
+            self._furnace_waits.timer_due(message)
         if kind == OTHERS_FOOD_TAKEN:
             # 闲着时也要记：主人多半是过一阵才来问，那时候模型得从任务事实里认出是自己拿的
             self._food_taken.record(self._creatures.world_key, food_taken_of(event, now_ms()))
@@ -1348,6 +1366,28 @@ class MinecraftAgent(BaseAgent):
         for messages in self._interaction_throttle.due():
             self._push_interaction(messages)
 
+    def _wake_for_overdue_furnaces(self) -> None:
+        """回炉计时过了兜底期限还没响：手上的任务还在等它时叫醒模型去看一眼炉子，免得一直空等。
+
+        计时可能随游戏重开被清掉、或回炉提前取走时被 Mod 摘掉，到点通知就不会来了。和攒着的互动通知一样，
+        每读回一页事件来看一次，不另起定时器；模型正在推理时先不动，等这一批结束后的下一页再看。
+        任务已交付或挂起等主播时只划掉不叫醒：交付过的不用回炉，挂起的由主播的新指令接着做。
+        """
+        if self._batch_active:
+            return
+        overdue = self._furnace_waits.take_overdue()
+        if not overdue:
+            return
+        notes = "；".join(wait.note for wait in overdue)
+        if self._task_finished or self._task_suspended or not self._live_active:
+            self._logger.info(f"回炉计时过了期限还没响，任务不在等它，只划掉：{notes}")
+            return
+        self._logger.warning(f"回炉计时过了期限还没响，叫醒模型去看一眼：{notes}")
+        self._inject_wakeup_message(
+            f"[系统] 炉子的回炉计时过了预计时间还没响：{notes}。计时可能随游戏重开被清掉了，"
+            "不会再叫你；去看一眼炉子，烧好了就再 obtain 同一样东西取回来，或按现场决定。"
+        )
+
     def _carry_sky_notice(self, content: str) -> None:
         """挂一条不唤醒模型的通知，队列里只留最新一条（天色用）。
 
@@ -1381,6 +1421,7 @@ class MinecraftAgent(BaseAgent):
         """
         await self._apply_world_change(self._world.absorb(page.world_fields))
         self._flush_due_interactions()
+        self._wake_for_overdue_furnaces()
 
     async def _apply_world_change(self, change: Optional[WorldChange]) -> None:
         """事件页或 observe(self) 认出了新的存档：切换工作文档；没变化什么也不做。"""
@@ -1402,6 +1443,8 @@ class MinecraftAgent(BaseAgent):
             return
         before, after = change.before.label(), change.after.label()
         self._logger.info(f"角色换了存档：「{before}」→「{after}」，工作文档已切换")
+        # 离开世界时 Mod 清空了全部计时，旧存档里在烧的炉子不会再叫醒，不再算在等
+        self._furnace_waits.forget_world()
         if not self._task_finished:
             self._inject_wakeup_message(
                 f"[系统] 角色进了另一个世界「{after}」（原来在「{before}」）。在「{before}」记的待办和工作笔记已经收起，"
@@ -1437,6 +1480,15 @@ class MinecraftAgent(BaseAgent):
                 "goals": self._goal_ledger.notes_for(actionable),
             }
         tracked = self._goals.tracked_ids()
+        cooking = self._furnace_waits.waiting()
+        if not tracked and cooking:
+            # 装好炉先走、炉子在烧：不是卡住了，不用让出也不用上报；手上有事接着做，没有就结束这一轮等计时叫醒
+            return {
+                "ok": False,
+                "error": "没有在跑的目标，炉子在烧（"
+                + "；".join(wait.note for wait in cooking)
+                + "）。这不是卡住了，不用让出也不用上报：手上有别的事接着做，没有就直接结束这一轮，到点会叫醒你回炉取",
+            }
         if not tracked:
             # 只设了计时、没有目标在跑：计时到点不管这一轮结没结束都会叫醒，说清这点，免得模型为等计时去上报阻塞。
             return {

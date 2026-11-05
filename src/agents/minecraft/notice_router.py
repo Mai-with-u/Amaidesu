@@ -77,9 +77,11 @@ _SKY_NOTICE = (
 # 计时到点：模型自己用 timer 设的"过 N 秒叫我"到了，Mod 那句话原样带上；
 # 计时到点就用掉了，还要再等得重新设，说清这一点免得模型以为它还挂着。
 # 不能像跟随那样只在任务进行中才叫：模型设完计时多半去干别的，只在任务中叫就永远等不到。
+# 计时有两种来源：模型自己用 timer 设的，和 obtain 装好炉先走时 Mod 自动挂的（备注写"回 (x, y, z) 的熔炉取某物 ×N"）；
+# 后一种到点就再 obtain 同一样东西，Mod 会先回那台炉取、原料还有就再装一炉
 _TIMER_NOTICE = (
-    "[计时] {message}。这是你自己用 timer 设的到点提醒：按备注去看一眼、做决定；"
-    "这个计时已经用掉了，还要再等就重新设一个。"
+    "[计时] {message}。这是你用 timer 设的、或 obtain 装好炉先走时自动挂的到点提醒：按备注去看一眼、做决定；"
+    "备注是回炉取东西的，就再 obtain 同一样东西取回来。这个计时已经用掉了，还要再等就重新设一个。"
 )
 
 # 游戏没连上时拒收委派的原因：经委派工具原样回给派活的一方，它据此等连上再派。
@@ -130,7 +132,7 @@ _BODY_EVENT_ROUTES: Dict[str, BodyEventRoute] = {
     PLAYER_BODY_LANGUAGE: BodyEventRoute(
         kind=PLAYER_BODY_LANGUAGE, channel="wake_for_interaction", template=PLAYER_BODY_LANGUAGE_NOTICE
     ),
-    # 计时到点：闲着也叫醒（模型给自己定的回头看一眼）
+    # 计时到点：闲着也叫醒（模型给自己定的回头看一眼，或回炉取烧好的东西）
     "timer_due": BodyEventRoute(kind="timer_due", channel="wake_even_idle", template=_TIMER_NOTICE),
     # 处理不了的需求：任务进行中通知模型；Mod 原话发主播素材（长文先概述）
     "need_unhandled": BodyEventRoute(
