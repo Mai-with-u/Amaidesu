@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import AsyncGenerator, Generator
 
@@ -386,7 +387,9 @@ async def test_discard_clamps_end_time_when_last_activity_precedes_start(store: 
 
     直写会撞库表 CHECK 约束（ended_at_ms >= started_at_ms）使整笔收尾 500。
     """
-    future_start = 1793880000000  # 晚于 updated_at_ms 的"未来"开播时刻
+    future_start = (
+        int(time.time() * 1000) + 3_600_000
+    )  # 真实时刻 +1 小时：晚于 updated_at_ms 的"未来"开播时刻（绝对写死会随钟表失效）
     dangling = await store.sessions.insert_live_session(started_at_ms=future_start, source="manual")
     await store.sessions.update_live_session_stats(
         live_session_id=dangling, heat=0, viewer_count=0, audience_total=0, updated_at_ms=future_start - 60_000
@@ -403,7 +406,7 @@ async def test_discard_clamps_end_time_when_last_activity_precedes_start(store: 
 
 async def test_close_after_resume_clamps_end_time_before_future_start(store: SQLiteDatabase, bus: EventBus) -> None:
     """续播后结账的钳制：开播时刻在未来、当下时刻早于它时以开播时刻封账，时长记 0。"""
-    future_start = 1793880000000
+    future_start = int(time.time() * 1000) + 3_600_000  # 真实时刻 +1 小时，保证测试运行时"当下早于开播"恒成立
     dangling = await store.sessions.insert_live_session(started_at_ms=future_start, source="manual")
     await store.chat.insert_live_chat(
         live_session_id=dangling, timestamp_ms=future_start, sender_role="viewer", content="hi", message_type="danmaku"
