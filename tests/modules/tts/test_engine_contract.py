@@ -42,6 +42,7 @@ class _Engine:
 
     name: str
     duration_ms: int | None  # started 事件里的时长：全量引擎是精确值，流式引擎是 None
+    finished_ms: int | None = None  # finished 事件里的时长；None 时沿用 duration_ms 的断言口径
     sent_text: Callable[[], str]  # synth_patches 之后可读：送进合成的文本（规范化后）
 
     def build(self, bus: EventBus | None, fail: bool) -> Any:
@@ -90,6 +91,7 @@ class _Voicebox(_Engine):
 
 class _GptSovits(_Engine):
     name, duration_ms = "gptsovits", None  # 流式引擎：合成未完，started 时长为 None
+    finished_ms = 64  # 两块 1024 样本 @ 32kHz，finished 按写往声卡的样本数精确计算
 
     def build(self, bus, fail):
         # api_v2 每请求必填参考音频，走合成路径要用已配置参考音频的引擎
@@ -151,8 +153,9 @@ async def test_utterance_events_started_then_finished(engine: _Engine, event_bus
     assert (started.utterance_id, started.speech_text, started.engine) == ("utt_1", "你好", engine.name)
     assert started.duration_ms == engine.duration_ms
     assert (finished.utterance_id, finished.engine) == ("utt_1", engine.name)
-    if engine.duration_ms is not None:
-        assert finished.duration_ms == engine.duration_ms
+    expected_finished = engine.finished_ms if engine.finished_ms is not None else engine.duration_ms
+    if expected_finished is not None:
+        assert finished.duration_ms == expected_finished
 
 
 @pytest.mark.parametrize("engine", ENGINES, ids=lambda e: e.name)

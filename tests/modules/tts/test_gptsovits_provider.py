@@ -15,7 +15,11 @@ from pydantic import ValidationError
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.utterance import UtteranceFailedPayload
+from src.modules.events.payloads.utterance import (
+    UtteranceFailedPayload,
+    UtteranceFinishedPayload,
+    UtteranceStartedPayload,
+)
 from src.modules.tts.backends.gptsovits.client import GPTSoVITSServiceError
 from src.modules.tts.backends.gptsovits.provider import DTYPE, GPTSoVITSProvider
 from src.modules.events.payloads.utterance import is_failure_reported
@@ -70,6 +74,34 @@ async def test_stream_lifecycle_start_then_writes_then_stop() -> None:
 
     # 先打开声卡（工作线程里），再用打开的流开始这一句，然后逐块写、收尾
     assert log == ["open", "start:声卡流:utt_order", "write:2048", "write:2048", "write:2048", "stop"]
+
+
+async def test_finished_duration_ms_computed_from_pcm_samples(event_bus: EventBus) -> None:
+    """finished 的 duration_ms = 写往声卡的 PCM 样本数 ÷ 采样率（事件契约要求）。"""
+    provider = GPTSoVITSProvider(config=dict(CONFIGURED), event_bus=event_bus)
+    captured = record_lifecycle(event_bus)
+    await _started(provider, _stream_client(b"\x00\x00" * 1600, b"\x00\x00" * 1600))
+    # 裸 PCM 块（无 RIFF 头）按原始 int16 解码：两块各 1600 样本，共 3200 样本 @ 32kHz = 100ms
+    await provider.handle_speech("你好", utterance_id="utt_duration")
+    await event_bus.cleanup()
+
+    (started, finished) = [p for name, p in captured if name != CoreEvents.TTS_UTTERANCE_FAILED]
+    assert isinstance(started, UtteranceStartedPayload) and started.duration_ms is None
+    assert isinstance(finished, UtteranceFinishedPayload) and finished.duration_ms == 100
+
+
+async def test_cancellation_mid_stream_emits_no_finished(event_bus: EventBus) -> None:
+    """中途取消（队列看门狗超时）不发 finished：未播完的发声没有播放完成时刻。"""
+    provider = GPTSoVITSProvider(config=dict(CONFIGURED), event_bus=event_bus)
+    captured = record_lifecycle(event_bus)
+    mgr = await _started(provider, _stream_client(b"c1", b"c2"))
+    mgr.write_chunk.side_effect = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.handle_speech("你好", utterance_id="utt_cancel")
+    await event_bus.cleanup()
+
+    assert [name for name, _ in captured] == [CoreEvents.TTS_UTTERANCE_STARTED]
 
 
 async def test_missing_reference_audio_fails_before_synthesis(event_bus: EventBus) -> None:

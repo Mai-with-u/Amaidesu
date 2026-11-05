@@ -22,6 +22,7 @@ from src.modules.logging import get_logger
 from ...common import (
     normalize_tts_text,
     build_stats_dict,
+    compute_duration_ms,
     prepare_speech_text,
     emit_utterance_failed,
     emit_utterance_finished,
@@ -221,8 +222,9 @@ class GPTSoVITSProvider:
             return
 
         # 流式引擎不走 common 编排骨架：started 须在合成前发布（duration=None）、
-        # finished 时长为整段估时、截断须先等在途写线程收敛再关流——事件时序
-        # 与截断语义同全量骨架本质不同（见 common.synthesize_play_and_notify 设计约束）。
+        # finished 时长按写往声卡的 PCM 样本数精确计算、截断须先等在途写线程收敛
+        # 再关流——事件时序与截断语义同全量骨架本质不同
+        # （见 common.synthesize_play_and_notify 设计约束）。
         # 流式引擎合成未完时 duration_ms 传 None；started 在首块 PCM 写声卡前发布。
         # 事件 speech_text 传规范化前原文：字幕是展示面，不随合成清洗改写
         await emit_utterance_started(
@@ -255,6 +257,9 @@ class GPTSoVITSProvider:
                 self.audio_manager.start_prepared_stream(stream, utterance_id=utterance_id)
 
                 chunk_index = 0
+                # 累计写往声卡的 PCM 样本数（单声道：ndarray.size 即样本数），
+                # finished 事件的 duration_ms 由"样本数 ÷ 采样率"精确计算
+                total_samples = 0
                 write_task: asyncio.Task | None = None
                 async for chunk in self._process_audio_stream(audio_stream):
                     if chunk is not None:
@@ -264,6 +269,7 @@ class GPTSoVITSProvider:
                         write_task = asyncio.create_task(asyncio.to_thread(self.audio_manager.write_chunk, chunk))
                         await write_task
                         chunk_index += 1
+                        total_samples += int(chunk.size)
 
                 # 收尾含预缓冲残余冲播（同样阻塞数秒），一并放工作线程
                 await asyncio.to_thread(self.audio_manager.stop_stream)
@@ -271,12 +277,11 @@ class GPTSoVITSProvider:
             self.logger.debug(f"TTS 播放完成: '{final_text[:30]}...'")
             self.render_count += 1
 
-            # 流式引擎 finished 时长按整段文本播完估时（精确分块时长需声卡反馈，YAGNI 不做）
             await emit_utterance_finished(
                 self.event_bus,
                 utterance_id=utterance_id,
                 engine=self.PROVIDER_NAME,
-                duration_ms=0,
+                duration_ms=compute_duration_ms(total_samples, self.sample_rate),
             )
 
         except asyncio.CancelledError:
