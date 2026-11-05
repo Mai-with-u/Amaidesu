@@ -463,8 +463,11 @@ class Planner:
         # 游戏聊天原话（非私聊）随本轮说话交给表达侧；私聊行只进本窗参考段
         fresh_game_chat = list(resolved_batch.fresh_chat)
         private_game_chat = list(resolved_batch.private_chat)
-        # 收播道别窗整窗豁免台词重合度检查（见 _round_bypass_topic_gate 声明处）
-        self._round_bypass_topic_gate = trigger_cause is not None and trigger_cause.kind is TriggerKind.SIGNOFF
+        # 收播道别窗与断线续播窗整窗豁免台词重合度检查（见 _round_bypass_topic_gate 声明处）
+        self._round_bypass_topic_gate = trigger_cause is not None and trigger_cause.kind in (
+            TriggerKind.SIGNOFF,
+            TriggerKind.RESUME,
+        )
         # 发言闸打回计数是本窗口径：由 Provider 检测 round_id 变化清零（每窗
         # 首次 reply 调用前生效，时序与本入口等价）
 
@@ -809,15 +812,22 @@ class Planner:
         组装失败时文本为 None，失败原因随 outcome.error 写进决策事件。
         """
         signoff_window = trigger_cause is not None and trigger_cause.kind is TriggerKind.SIGNOFF
+        resume_window = trigger_cause is not None and trigger_cause.kind is TriggerKind.RESUME
         lines: List[str] = []
-        if forced and not signoff_window:
-            # signoff 的 forced 只是闸门豁免语义（绕过台词重合度检查保住道别），不是
+        if forced and not (signoff_window or resume_window):
+            # signoff / resume 的 forced 只是闸门豁免语义（绕过台词重合度检查），不是
             # 付费/点名的强制回应情境，不按 forced_situation 措辞标注
             lines.append(forced_situation(batch))
         if signoff_window:
             lines.append(
                 "【情境】场次已结束（收播道别）：向观众道别收束本场；若收尾环节刚已道别过，"
                 "则简短收束即可，不必重复告别。"
+            )
+        elif resume_window:
+            lines.append(
+                "【情境】直播刚才因程序中断过，现在已恢复（断线续播）：用一句话自然接回直播"
+                "——告诉观众信号回来了、接着刚才的内容继续；不要重新自我介绍或重新开场，"
+                "也不必对中断过度道歉，按对话历史里刚才聊到的地方顺下去。"
             )
         elif proactive:
             # 主动窗不只来自冷场/定时：环节切换、游戏上报、游戏里有人说话也会唤醒，按实际可能来源说明

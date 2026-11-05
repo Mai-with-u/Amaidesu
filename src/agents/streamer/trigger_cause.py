@@ -48,6 +48,7 @@ class TriggerKind(str, Enum):
     RUNDOWN = "rundown"  # 流程单推进（环节切换 / 超时提醒 / 持续产出）
     GAME = "game"  # 游戏 Agent 待定夺
     SIGNOFF = "signoff"  # 收播道别
+    RESUME = "resume"  # 断线续播（中断场次接回后的接回发言窗）
     # 控制台调试类
     DASHBOARD_DEBUG = "dashboard_debug"  # 控制台手动决策测试
 
@@ -57,6 +58,7 @@ class TriggerSource(str, Enum):
 
     TICK = "tick"  # 后台 flush 循环 tick：批次聚合与主动发言判定的常规入口（默认）
     LIVE_END = "live_end"  # live.ended 回调：下播道别窗
+    LIVE_START = "live_start"  # live.started 回调：断线续播的接回发言窗
     DASHBOARD = "dashboard"  # Dashboard 调试门面：手动驱动一次决策
 
 
@@ -70,17 +72,19 @@ PROACTIVE_KINDS: frozenset[TriggerKind] = frozenset(
         TriggerKind.RUNDOWN,
         TriggerKind.GAME,
         TriggerKind.SIGNOFF,
+        TriggerKind.RESUME,
     }
 )
 
-#: 没有任何新外部输入的主动触发种类（流程单推进、定时、冷场、收播道别）：
-#: 这些决策窗不给手上的游戏活补充要求（Planner 豁免判断用）。
+#: 没有任何新外部输入的主动触发种类（流程单推进、定时、冷场、收播道别、
+#: 断线续播）：这些决策窗不给手上的游戏活补充要求（Planner 豁免判断用）。
 NO_INPUT_PROACTIVE_KINDS: frozenset[TriggerKind] = frozenset(
     {
         TriggerKind.RUNDOWN,
         TriggerKind.SCHEDULE,
         TriggerKind.COLD,
         TriggerKind.SIGNOFF,
+        TriggerKind.RESUME,
     }
 )
 

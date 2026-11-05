@@ -102,6 +102,7 @@ declare module 'vue' {
     PulseChart: typeof import('./src/components/dashboard/PulseChart.vue')['default']
     RecipeEditor: typeof import('./src/components/avatar-tuning/RecipeEditor.vue')['default']
     ReplayControlBar: typeof import('./src/components/live/ReplayControlBar.vue')['default']
+    ResidualSessionDialog: typeof import('./src/components/live/ResidualSessionDialog.vue')['default']
     RestartOverlay: typeof import('./src/components/layout/RestartOverlay.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']

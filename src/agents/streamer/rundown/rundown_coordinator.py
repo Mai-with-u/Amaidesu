@@ -163,6 +163,32 @@ class RundownCoordinator:
         """
         # 宿主停了又重新启动：变更恢复广播与落库
         self._stopped = False
+        rundown = await self._load_configured_rundown()
+        if await self._try_restore(rundown):
+            return
+        self._state.load(rundown)
+        self._logger.info(f"流程单已加载: id={rundown.rundown_id!r}, segments={len(rundown.segments)}")
+
+    async def resume_restore(self) -> bool:
+        """断线续播：按当前场次主键把实例快照还原进状态机。
+
+        供宿主在续播场（``live.started`` 带 ``resumed=True``）的开播回调里
+        调用：进程启动时 ``resolve_pk()`` 还是 None，:meth:`start` 里的崩溃
+        恢复必然落空走常规装载（armed）；用户拍板续播、场次接回之后再走本
+        方法，快照进度（跑到第几环节、计时锚点）原样还原，``begin`` 起算
+        被状态机结构化拒绝——中断的流程单接着跑，不从头来。
+
+        快照不存在（崩溃发生在流程单起算前）或损坏时返回 False，状态保持
+        启动时装载的 armed——宿主随后照常 ``begin``，退化为"从头起算"。
+        """
+        rundown = await self._load_configured_rundown()
+        restored = await self._try_restore(rundown)
+        if not restored:
+            self._logger.info("续播未恢复流程单快照（无快照或不匹配），保持常规装载")
+        return restored
+
+    async def _load_configured_rundown(self) -> Rundown:
+        """按配置读取当前流程单模板；未配置 / 不存在 / 读取失败回退内置默认。"""
         rundown_id = (self._config.rundown_id or "").strip()
         rundown: Optional[Rundown] = None
         if rundown_id and self._rundowns is not None:
@@ -175,10 +201,7 @@ class RundownCoordinator:
                 self._logger.warning(f"流程单 '{rundown_id}' 不存在，回退内置默认流程单")
         if rundown is None:
             rundown = DEFAULT_RUNDOWN
-        if await self._try_restore(rundown):
-            return
-        self._state.load(rundown)
-        self._logger.info(f"流程单已加载: id={rundown.rundown_id!r}, segments={len(rundown.segments)}")
+        return rundown
 
     async def stop(self) -> None:
         """宿主停止时收尾：先关闭变更旁路，再等已派出的广播与落库全部做完。

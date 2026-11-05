@@ -918,8 +918,14 @@ class StreamerAgent(BaseAgent):
         payload: LiveStartedPayload,
         source: str,
     ) -> None:
-        """live.started 回调：开播，放行主动发言，重置本场状态并拼第一份常驻简报。"""
+        """live.started 回调：开播，放行主动发言，重置本场状态并拼第一份常驻简报。
+
+        断线续播场（``resumed=True``）是新场开播的减法：不清场（当场的对话
+        历史在库里，按场次主键接着读）、先还原流程单实例快照让中断的进度
+        接着跑（还原失败退化为从头起算）、再排一轮接回发言告诉观众信号回来了。
+        """
         del event_name, source
+        resumed = payload.resumed
         # 开播计数先加：上一场的下播回调若还在等道别那一轮，跑完后据此知道已经换场、不再清场
         self._session_epoch += 1
         self._live_active = True
@@ -928,17 +934,26 @@ class StreamerAgent(BaseAgent):
         # 新场次。放在第一个 await 之前，新场次的第一轮决策开窗时读到的已经是空备忘录
         if self._mouth is not None:
             self._mouth.reset()
+        # 断线续播先把流程单实例快照还原进状态机（启动时装载的是 armed 空单，
+        # 那时场次还没接回、崩溃恢复必然落空）：还原成功后计时锚点非空，下面
+        # begin 被结构化拒绝，中断的流程单接着跑；还原失败（无快照/不匹配）
+        # 保持 armed，begin 照常起算，退化为从头跑
+        if resumed:
+            await self._rundown_coord.resume_restore()
         # 流程单开播起算：armed（已装载待开播）→ running，双锚点 = 开播时刻。
         # 已起算的场（崩溃恢复的进行中/已完成）被结构化拒绝，保持现态静默忽略；
         # begin 经 on_changed 置位 proactive pending——开场白信号在开播时刻才置
         reject = self._rundown_coord.begin(by="system")
         if reject is not None:
             self._logger.debug(f"开播起算流程单跳过（{reject.reason}）：流程单已在进行中")
-        # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史
-        await self._scope.begin_session()
-        # 手头的事、补充要求、已聊话题只属于上一场：开播清空，新的一场不从"两小时前在游戏里
-        # 开始做某事"接着说（上一场下播时游戏侧已结算委派）
-        self._planner.workbench.reset()
+        # 开播后对话改由 live_chat 记录；开播前的调试闲聊不混进这一场的历史。
+        # 续播场不清场：当场对话历史在库里按场次主键接着读，内存本来就空；手头的
+        # 事、补充要求、已聊话题同样只属于"上一场"，续播场没有上一场，一并保留
+        if not resumed:
+            await self._scope.begin_session()
+            # 手头的事、补充要求、已聊话题只属于上一场：开播清空，新的一场不从"两小时前在游戏里
+            # 开始做某事"接着说（上一场下播时游戏侧已结算委派）
+            self._planner.workbench.reset()
         # 按场次类型先拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗按表快照重渲。
         # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策窗自然重渲出
         # 新简报，这期间简报退化为更早一场的档案
@@ -951,7 +966,23 @@ class StreamerAgent(BaseAgent):
         # 游戏活动也随场次重置：游戏承诺卡只看这一场"正在玩"什么，上一场的事件不带过来
         self._game_activity_ms.clear()
         self._session_games.clear()
-        self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
+        if resumed:
+            self._logger.info(f"场次已续播（id={payload.live_session_id}）：中断场接回，主动发言放行")
+        else:
+            self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
+        if resumed:
+            # 断线续播的接回发言窗：说一句"信号回来了，接着继续"（TriggerKind.RESUME
+            # 情境文案管内容），不打断流程单、不重新开场。await 形态同道别窗：本回调
+            # 由事件总线的后台任务驱动，保证这一轮赶在事件面存活的窗口内完整走完
+            try:
+                await self._execute_round(
+                    [],
+                    forced=True,
+                    trigger_cause=TriggerCause(kind=TriggerKind.RESUME, source=TriggerSource.LIVE_START),
+                    proactive=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - 接回发言失败不挡续播链路
+                self._logger.exception(f"场次 {payload.live_session_id} 的续播接回那一轮出错: {exc}")
 
     async def _on_live_ended(
         self,

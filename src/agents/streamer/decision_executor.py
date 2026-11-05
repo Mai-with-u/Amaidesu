@@ -69,6 +69,7 @@ _TRIGGER_KIND_LABEL: Dict[TriggerKind, str] = {
     TriggerKind.RUNDOWN: "流程单推进",
     TriggerKind.GAME: "游戏 Agent 待定夺",
     TriggerKind.SIGNOFF: "收播道别",
+    TriggerKind.RESUME: "断线续播",
     TriggerKind.DASHBOARD_DEBUG: "控制台决策测试",
 }
 

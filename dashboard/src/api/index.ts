@@ -99,6 +99,7 @@ import type {
   TriggerProactiveRequest,
   TriggerProactiveResponse,
   LiveSessionListResponse,
+  SessionResidualResponse,
   SessionKind,
   SessionRundownExecutionResponse,
   SessionTimelineResponse,
@@ -257,10 +258,16 @@ export const agentsApi = {
     api.post<AgentDelegateResponse>(`/agents/${name}/delegate`, { instruction }),
   /** 硬取消：清除任务追踪、状态置为 cancelled、并通知 Agent 停止执行（任务未知/已终态 404） */
   cancelAgentTask: (name: string, taskId: string, reason?: string) =>
-    api.post<AgentCancelTaskResponse>(`/agents/${name}/tasks/${taskId}/cancel`, reason ? { reason } : {}),
+    api.post<AgentCancelTaskResponse>(
+      `/agents/${name}/tasks/${taskId}/cancel`,
+      reason ? { reason } : {},
+    ),
   /** 急停：停掉该 Agent 当前所有在跑目标并注入叫停理由（默认不撤委派单；不支持急停 409） */
   stopAgent: (name: string, reason = '', cancelDelegations = false) =>
-    api.post<AgentStopResponse>(`/agents/${name}/stop`, { reason, cancel_delegations: cancelDelegations }),
+    api.post<AgentStopResponse>(`/agents/${name}/stop`, {
+      reason,
+      cancel_delegations: cancelDelegations,
+    }),
   /** 备忘录/待办快照（只读观测：minecraft = notebook/todos/reports 三元组） */
   getAgentMemo: (name: string) => api.get<AgentMemoResponse>(`/agents/${name}/memo`),
 };
@@ -321,6 +328,10 @@ export const liveSessionsApi = {
   // 开场必须声明类型（正式 / 彩排）
   open: (payload: { kind: SessionKind; title?: string; component_plan?: ComponentRef[] }) =>
     api.post<SessionOpenResponse>('/live-sessions/open', payload),
+  // 待决残留场次（上次进程未正常退出留下的未结账场次，等用户续播或收尾）
+  listResidual: () => api.get<SessionResidualResponse>('/live-sessions/residual'),
+  resume: (id: number) => api.post<SessionActionResponse>(`/live-sessions/${id}/resume`),
+  discardResidual: (id: number) => api.post<SessionActionResponse>(`/live-sessions/${id}/discard`),
   close: (id: number) => api.post<SessionActionResponse>(`/live-sessions/${id}/close`),
   rename: (id: number, title?: string) =>
     api.patch<SessionActionResponse>(`/live-sessions/${id}`, { title }),

@@ -987,6 +987,12 @@ export interface LiveSessionListResponse {
   active_session_id: number | null;
 }
 
+/** 待决残留场次响应（GET /api/v1/live-sessions/residual） */
+export interface SessionResidualResponse {
+  /** 上次进程未正常退出留下的未结账场次（含行详情供续播弹窗展示） */
+  items: LiveSessionItem[];
+}
+
 /** 开启新场次响应（POST /api/v1/live-sessions/open） */
 export interface SessionOpenResponse {
   live_session_id: number;

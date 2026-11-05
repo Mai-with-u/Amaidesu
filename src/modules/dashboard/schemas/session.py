@@ -32,6 +32,12 @@ class SessionListResponse(BaseModel):
     active_session_id: Optional[int] = Field(default=None, description="当前进行中的显式场次主键")
 
 
+class SessionResidualResponse(BaseModel):
+    """待决残留场次响应（上次进程未正常退出留下的未结账场次，等用户续播或收尾）"""
+
+    items: List[SessionItem] = Field(default_factory=list, description="待决残留场次（含行详情供弹窗展示）")
+
+
 class ComponentRef(BaseModel):
     """组件引用（组 + 注册名）：开播意图清单的条目。"""
 

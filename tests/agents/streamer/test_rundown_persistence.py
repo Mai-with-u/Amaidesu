@@ -358,3 +358,50 @@ async def test_no_active_session_falls_back_to_load() -> None:
     instance_repo.snapshots.append(_snapshot("default_first_stream", 2))
     agent = await _make_restored_agent(session_manager=session, instance_repo=instance_repo)
     assert (agent._rundown_coord._state.status, agent._rundown_coord._state.index) == ("armed", 0)
+
+
+# ---------------------------------------------------------------------------
+# 断线续播（coordinator.resume_restore：启动恢复落空后，场次接回再还原快照）
+# ---------------------------------------------------------------------------
+
+
+async def test_resume_restore_recovers_snapshot_after_start() -> None:
+    """续播恢复：启动时无活跃场次、恢复落空（armed）；用户拍板续播、场次接回后
+    ``resume_restore`` 把快照进度还原进状态机（running + 快照游标）。"""
+    session = _StubSessionManager(None)
+    instance_repo = _StubInstanceRepo()
+    instance_repo.snapshots.append(_snapshot("default_first_stream", 2))
+    agent = await _make_restored_agent(session_manager=session, instance_repo=instance_repo)
+    assert (agent._rundown_coord._state.status, agent._rundown_coord._state.index) == ("armed", 0)
+
+    session.pk = 42  # 场次接回（manager.resume_session 之后 resolve_pk 返回主键）
+    assert await agent._rundown_coord.resume_restore() is True
+
+    state = agent._rundown_coord._state
+    assert (state.status, state.index, state.current_segment_id) == ("running", 2, "chat")
+
+
+async def test_resume_restore_then_begin_is_rejected() -> None:
+    """续播恢复成功后 ``begin`` 起算被状态机拒绝——中断的流程单接着跑，不从头来。"""
+    session = _StubSessionManager(None)
+    instance_repo = _StubInstanceRepo()
+    instance_repo.snapshots.append(_snapshot("default_first_stream", 2))
+    agent = await _make_restored_agent(session_manager=session, instance_repo=instance_repo)
+
+    session.pk = 42
+    assert await agent._rundown_coord.resume_restore() is True
+    reject = agent._rundown_coord.begin(by="system")
+    assert reject is not None and reject.reason == "already_begun", "快照已起算，不得重复起算"
+    assert (agent._rundown_coord._state.status, agent._rundown_coord._state.index) == ("running", 2)
+
+
+async def test_resume_restore_without_snapshot_keeps_armed() -> None:
+    """无快照（崩溃发生在流程单起算前）：恢复返回 False，保持 armed，宿主照常 begin 从头起算。"""
+    session = _StubSessionManager(None)
+    instance_repo = _StubInstanceRepo()  # 无快照
+    agent = await _make_restored_agent(session_manager=session, instance_repo=instance_repo)
+
+    session.pk = 42
+    assert await agent._rundown_coord.resume_restore() is False
+    assert (agent._rundown_coord._state.status, agent._rundown_coord._state.index) == ("armed", 0)
+    assert agent._rundown_coord.begin(by="system") is None, "无快照时 begin 正常起算（降级为从头跑）"

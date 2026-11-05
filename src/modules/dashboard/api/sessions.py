@@ -4,6 +4,9 @@
 与弹幕消息流 live_chat 无关，仅管理场次生命周期）：
 - ``GET  /sessions``           场次列表（倒序 + 消息数，供控制台场次侧边栏）
 - ``POST /sessions/open``      开启新场次（进行中场次先自动结束；可带组件期望运行全集做意图对齐）
+- ``GET  /sessions/residual``  待决残留场次列表（上次进程未正常退出留下的未结账场次）
+- ``POST /sessions/{id}/resume``   续播待决残留场次（断线续播；已有进行中场次时 409）
+- ``POST /sessions/{id}/discard``  收尾待决残留场次（补结束时间为最后活动时刻）
 - ``POST /sessions/{id}/close`` 结束指定场次（须为当前进行中场次）
 - ``PATCH /sessions/{id}``     重命名场次（title 空=清除标题）
 - ``PATCH /sessions/{id}/kind`` 更正已结束场次的类型（正式 / 彩排；进行中的场次 409）
@@ -19,7 +22,7 @@
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Annotated, Optional
+from typing import TYPE_CHECKING, Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -34,6 +37,7 @@ from src.modules.dashboard.schemas.session import (
     SessionOpenRequest,
     SessionOpenResponse,
     SessionRenameRequest,
+    SessionResidualResponse,
     SessionRundownExecutionResponse,
     SessionTimelineResponse,
 )
@@ -170,6 +174,76 @@ async def open_session(
             config_error=service_report.config_error,
         )
     return SessionOpenResponse(live_session_id=pk, plan_report=plan_report)
+
+
+@router.get("/residual", response_model=SessionResidualResponse)
+async def list_residual_sessions(
+    server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
+) -> SessionResidualResponse:
+    """待决残留场次列表：上次进程未正常退出留下的未结账场次，等用户续播或收尾。
+
+    行详情（标题/开始时刻/消息数）随条目回传，供续播弹窗展示"要接回的是哪一场"。
+    """
+    session_repo = server.session_repo
+    if session_repo is None:
+        raise HTTPException(status_code=503, detail="SessionRepo 未装配")
+    chat_repo = server.chat_repo
+    items: List[SessionItem] = []
+    for pk in manager.pending_residual_pks:
+        row = await session_repo.get_live_session(live_session_id=pk)
+        if row is None:
+            # 行已被并发删除：待决标记在删除路径同步移除，这里跳过防脏
+            continue
+        details = await chat_repo.count_session_details(live_session_id=pk) if chat_repo is not None else 0
+        items.append(
+            SessionItem(
+                live_session_id=row.id,
+                source=row.source or "manual",
+                kind=row.kind,
+                title=row.title,
+                room_id=row.stream_id or "",
+                platform=row.platform or "",
+                started_at_ms=int(row.started_at_ms),
+                ended_at_ms=None,
+                message_count=details,
+                is_active=False,
+            )
+        )
+    return SessionResidualResponse(items=items)
+
+
+@router.post("/{session_id}/resume", response_model=SessionActionResponse)
+async def resume_session(
+    session_id: int,
+    server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
+) -> SessionActionResponse:
+    """续播待决残留场次（断线续播）：接回为进行中场次并广播 live.started(resumed=True)。"""
+    if session_id not in manager.pending_residual_pks:
+        raise HTTPException(status_code=404, detail=f"场次 {session_id} 不是待决残留场次")
+    if manager.active_pk is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"已有进行中场次 {manager.active_pk}，先结束它才能续播残留场次 {session_id}",
+        )
+    resumed = await manager.resume_session(session_id)
+    if not resumed:
+        raise HTTPException(status_code=409, detail=f"场次 {session_id} 续播失败（行已被删除或收口）")
+    return SessionActionResponse(success=True, detail="场次已续播，直播从中断处继续")
+
+
+@router.post("/{session_id}/discard", response_model=SessionActionResponse)
+async def discard_residual_session(
+    session_id: int,
+    server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
+) -> SessionActionResponse:
+    """收尾待决残留场次：补结束时间为最后活动时刻（等价于旧版启动自动收口）。"""
+    discarded = await manager.discard_residual(session_id)
+    if not discarded:
+        raise HTTPException(status_code=404, detail=f"场次 {session_id} 不是待决残留场次")
+    return SessionActionResponse(success=True, detail="残留场次已收尾")
 
 
 @router.post("/{session_id}/close", response_model=SessionActionResponse)

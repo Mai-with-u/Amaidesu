@@ -21,6 +21,23 @@
   （空场次不留行）；
 - 场次可删除（级联清明细），调试产生的场次随手清理。
 
+## 中断残留场次：待决，不自动收口
+
+进程未正常退出（崩溃 / kill / 断电）会在库里留下未结账的"进行中"场次行。
+启动期把它们标为**待决残留**（``pending_residual_pks``），不补结束时间也不
+广播事件——收口还是续播交用户拍板（WebUI 弹窗），无人拍板就一直保持待决：
+
+- **续播**（``resume_session``）：把该行接回为本进程的进行中场次（纯内存
+  操作，行本来就是未结账态），广播 ``live.started(resumed=True)``——归属
+  解析、落库、主播对话历史全部接上，同一场直播不被切断；
+- **收尾**（``discard_residual``）：沿用收口语义补结束时间为最后活动时刻，
+  不广播事件（主播本进程从未在播这一场，不触发道别与收播整理）；
+- **开新场**（``open_session``）：待决残留自动收尾——用户用行动投了
+  "不续播"的票，残留行不该一直挂着。
+
+数据库零新增结构：待决态 = ``ended_at_ms IS NULL`` 的行 + 本进程内存中
+``_active_pk`` 尚未认领它，检测用现成的未结账查询。
+
 ## 场后发言归到最近一场已结束的场次
 
 一场直播结束到下一场开播之间，主播仍会说话（收播道别），观众仍会进房。
@@ -75,7 +92,9 @@ class LiveSessionManager:
     - 空显式场次在结账时整行丢弃；
     - 无显式场次期间 ``resolve_pk()`` 返回 ``None``，不创建任何兜底行；
     - ``resolve_attribution_pk()`` 在没有进行中场次时回退最近一场已结束的
-      场次（整行丢弃的空场次不在其列），一场都没有才返回 ``None``。
+      场次（整行丢弃的空场次不在其列），一场都没有才返回 ``None``；
+    - 待决残留场次不归属 ``resolve_pk`` / ``resolve_attribution_pk``（不落库），
+      续播或收尾后退出待决。
     """
 
     def __init__(
@@ -98,6 +117,10 @@ class LiveSessionManager:
         self._active_source: str = ""
         self._active_kind: Optional[SessionKind] = None
         self._lock = asyncio.Lock()
+        # 待决残留：上次进程未正常退出留下的未结账场次，等用户拍板续播或收尾。
+        # 生命周期：start() 检测填入 → resume_session/discard_residual/open_session
+        # （自动收尾）逐个移出；行被 delete_session 删除时同步移除
+        self._pending_residual_pks: List[int] = []
         # 归属回退用：最近一场已结束且行留存的场次主键（惰性装载后缓存）
         self._last_ended_pk: Optional[int] = None
         self._last_ended_loaded: bool = False
@@ -113,26 +136,31 @@ class LiveSessionManager:
     # -------------------- 生命周期 --------------------
 
     async def start(self) -> None:
-        """启动：收口上次残留的显式进行中场次。幂等。"""
+        """启动：检出上次未正常退出的残留场次，标为待决（不自动收口）。幂等。"""
         if self._started:
             return
 
-        # 残留收口：上次进程未正常退出的"进行中"显式场次，以最后活动
-        # 时刻封闭（没有可重建的真实结束边界）。本次进程不会自动开新场次；
-        # 无显式场次期间，``resolve_pk()`` 返回 None，下游落库路径据此跳过。
+        # 待决残留：上次进程未正常退出留下的"进行中"显式场次。不补结束时间、
+        # 不广播事件——收播还是续播交用户拍板（WebUI 弹窗）；无人拍板就保持
+        # 待决，期间 ``resolve_pk()`` 返回 None，下游落库路径照旧跳过。
         for row in await self._sessions.list_dangling_live_sessions():
-            ended = int(row.updated_at_ms or row.started_at_ms)
-            await self._sessions.close_live_session(live_session_id=row.id, ended_at_ms=ended)
+            self._pending_residual_pks.append(row.id)
             logger.warning(
-                f"收口上次残留的进行中场次: id={row.id} title={row.title!r} （ended_at_ms 补为最后活动时刻 {ended}）"
+                f"检出上次残留的进行中场次，待决（续播或收尾）: id={row.id} title={row.title!r}"
+                f" started_at_ms={row.started_at_ms}"
             )
+        if not self._pending_residual_pks:
+            logger.info("无残留场次")
 
         # 预热"最近一场已结束的场次"：场后发言的归属回退要用它。启动期先查
         # 一次库，避免第一条场后事件卡在归属解析的库查询上。
         await self._load_last_ended_pk()
 
         self._started = True
-        logger.info("LiveSessionManager 已启动（启动不自动开新场次；显式场次经 open_session 开启；无场次时消息不落库）")
+        logger.info(
+            "LiveSessionManager 已启动（启动不自动开新场次；显式场次经 open_session 开启；"
+            "无场次时消息不落库；残留场次待决经 resume_session / discard_residual 处置）"
+        )
 
     async def stop(self) -> None:
         """停止（进程退出收口由 run_shutdown 显式调 close_session，这里仅复位标记）。"""
@@ -160,6 +188,8 @@ class LiveSessionManager:
             if self._active_pk is not None:
                 # 顶替旧场次：标记 superseded，订阅方据此不把它当真下播（主播不道别）
                 await self._close_active(reason="开启新场次前自动结束", ended_at_ms=self._clock(), superseded=True)
+            # 开新场 = 用户用行动投了"不续播"的票：待决残留自动收尾，不留悬行
+            await self._discard_pending_residuals_locked(reason="开启新场次，残留场次自动收尾")
             started = self._clock()
             pk = await self._sessions.insert_live_session(
                 stream_id=room_id if room_id is not None else self._room_id,
@@ -199,6 +229,89 @@ class LiveSessionManager:
                 return False
             return await self._close_active(reason=reason, ended_at_ms=self._clock())
 
+    # -------------------- 断线续播（待决残留处置） --------------------
+
+    @property
+    def pending_residual_pks(self) -> List[int]:
+        """待决残留场次主键（上次进程未正常退出留下的未结账场次），等用户拍板。"""
+        return list(self._pending_residual_pks)
+
+    async def resume_session(self, live_session_id: int) -> bool:
+        """续播待决残留场次：接回为本进程的进行中场次，广播 ``live.started(resumed=True)``。
+
+        场次行本就是未结账态，接回是纯内存操作（``_active_pk`` 认领）——归属
+        解析、落库、主播对话历史全部接上，同一场直播不被切断。已有进行中场次
+        时拒绝（不变量：至多一个显式进行中场次）；不是待决残留时返回 False。
+        """
+        async with self._lock:
+            if live_session_id not in self._pending_residual_pks:
+                return False
+            if self._active_pk is not None:
+                logger.warning(f"续播拒绝: 场次 {live_session_id} 待续播，但已有进行中场次 {self._active_pk}")
+                return False
+            row = await self._sessions.get_live_session(live_session_id=live_session_id)
+            if row is None or row.ended_at_ms is not None:
+                # 行已被并发删除或收口：清掉过期待决标记，按不存在处理
+                self._pending_residual_pks.remove(live_session_id)
+                return False
+            self._active_pk = row.id
+            self._active_source = row.source or "manual"
+            self._active_kind = row.kind
+            self._pending_residual_pks.remove(row.id)
+            await self._event_bus.emit(
+                CoreEvents.LIVE_STARTED,
+                LiveStartedPayload(
+                    live_session_id=row.id,
+                    source=self._active_source,
+                    kind=row.kind,
+                    title=row.title,
+                    room_id=row.stream_id,
+                    platform=row.platform or self._platform,
+                    started_at_ms=int(row.started_at_ms),
+                    resumed=True,
+                ),
+                source="LiveSessionManager",
+            )
+            logger.info(f"场次已续播: id={row.id} title={row.title!r}（中断场接回，live.started 带 resumed=True）")
+            return True
+
+    async def discard_residual(self, live_session_id: int) -> bool:
+        """收尾待决残留场次：补结束时间为最后活动时刻，不广播事件。
+
+        主播本进程从未在播这一场，不触发道别与收播整理（与旧版启动自动收口
+        行为一致）。不是待决残留（已续播/已收尾/行已删）时返回 False。
+        """
+        async with self._lock:
+            return await self._discard_residual_locked(live_session_id=live_session_id, reason="用户选择收尾残留场次")
+
+    async def _discard_residual_locked(self, *, live_session_id: int, reason: str) -> bool:
+        """收尾待决残留（调用方持锁或已确认互斥）。"""
+        if live_session_id not in self._pending_residual_pks:
+            return False
+        row = await self._sessions.get_live_session(live_session_id=live_session_id)
+        if row is None or row.ended_at_ms is not None:
+            self._pending_residual_pks.remove(live_session_id)
+            return False
+        # 残留没有可重建的真实结束边界，以最后活动时刻封闭
+        started_at = int(row.started_at_ms)
+        ended = max(int(row.updated_at_ms or started_at), started_at)
+        if ended != int(row.updated_at_ms or started_at):
+            logger.warning(
+                f"残留场次 {live_session_id} 的最后活动时刻早于开播时刻"
+                f"（{row.updated_at_ms} < {started_at}，时钟回拨或脏数据），以开播时刻封账"
+            )
+        await self._sessions.close_live_session(live_session_id=live_session_id, ended_at_ms=ended)
+        self._pending_residual_pks.remove(live_session_id)
+        logger.warning(
+            f"残留场次已收尾: id={live_session_id} title={row.title!r}（ended_at_ms 补为最后活动时刻 {ended}；{reason}）"
+        )
+        return True
+
+    async def _discard_pending_residuals_locked(self, *, reason: str) -> None:
+        """收尾全部待决残留（调用方持锁）。开新场前自动调用：用户开了新场即放弃续播。"""
+        for pk in list(self._pending_residual_pks):
+            await self._discard_residual_locked(live_session_id=pk, reason=reason)
+
     async def _close_active(
         self, *, reason: str, ended_at_ms: int, superseded: bool = False, deleted: bool = False
     ) -> bool:
@@ -223,6 +336,13 @@ class LiveSessionManager:
             return False
         kind = row.kind
         started_at = int(row.started_at_ms)
+        if ended_at_ms < started_at:
+            # 结束早于开播（时钟回拨或开播时刻脏数据）：直写会撞库表 CHECK 约束
+            # 使整笔结账失败，钳到开播时刻封账（时长记 0）并留告警供核对
+            logger.warning(
+                f"场次 {pk} 的结束时刻早于开播时刻（{ended_at_ms} < {started_at}，时钟回拨或脏数据），以开播时刻封账"
+            )
+            ended_at_ms = started_at
         await self._sessions.close_live_session(live_session_id=pk, ended_at_ms=ended_at_ms)
 
         details = await self._chat.count_session_details(live_session_id=pk)
@@ -288,6 +408,9 @@ class LiveSessionManager:
                 # （主播照常道别，但道别句不落库）、不做收播整理
                 await self._close_active(reason="删除场次前自动结束", ended_at_ms=self._clock(), deleted=True)
             await self._sessions.delete_live_session(live_session_id=live_session_id)
+            if live_session_id in self._pending_residual_pks:
+                # 删掉的正是待决残留：待决标记同步移除，不再出现在续播弹窗里
+                self._pending_residual_pks.remove(live_session_id)
             if live_session_id == self._last_ended_pk:
                 # 删掉的正是"最近一场已结束的场次"——归属回退到更早的那场
                 await self._forget_last_ended()

@@ -258,20 +258,197 @@ async def test_delete_session_cascades_detail_rows(store: SQLiteDatabase, bus: E
     assert await manager.delete_session(pk) is False
 
 
-async def test_startup_closes_dangling_sessions(store: SQLiteDatabase, bus: EventBus) -> None:
-    """上次进程未正常退出的"进行中"显式场次，启动时以最后活动时刻收口。"""
+async def test_startup_marks_dangling_sessions_pending(store: SQLiteDatabase, bus: EventBus) -> None:
+    """上次进程未正常退出的"进行中"显式场次，启动时标为待决（不自动收口）。
+
+    收口还是续播交用户拍板：行保持未结账态、不广播事件；待决期间
+    ``resolve_pk()`` 返回 None，下游落库路径照旧跳过。
+    """
     dangling = await store.sessions.insert_live_session(started_at_ms=1_000, source="manual")
     await store.sessions.update_live_session_stats(
         live_session_id=dangling, heat=1, viewer_count=0, audience_total=0, updated_at_ms=9_000
     )
 
     manager = _make_manager(store, bus)
+    collector = _Collector(bus)
     await manager.start()
+    await bus.wait_until_drained()
+
+    assert manager.pending_residual_pks == [dangling]
+    row = await store.sessions.get_live_session(live_session_id=dangling)
+    assert row is not None
+    assert row.ended_at_ms is None, "待决残留不得被启动自动收口"
+    assert manager.active_pk is None
+    assert collector.started == [], "待决残留不广播 live.started"
+
+
+async def test_resume_pending_session_reactivates_it(store: SQLiteDatabase, bus: EventBus) -> None:
+    """续播待决残留：接回为进行中场次并广播 live.started(resumed=True)。"""
+    dangling = await store.sessions.insert_live_session(started_at_ms=1_000, source="manual")
+    await store.sessions.update_live_session_stats(
+        live_session_id=dangling, heat=1, viewer_count=0, audience_total=0, updated_at_ms=9_000
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=dangling, timestamp_ms=2_000, sender_role="viewer", content="断前的弹幕", message_type="danmaku"
+    )
+
+    manager = _make_manager(store, bus)
+    collector = _Collector(bus)
+    await manager.start()
+
+    assert await manager.resume_session(dangling) is True
+    await bus.wait_until_drained()
+
+    assert manager.active_pk == dangling
+    assert manager.active_kind == "live"
+    assert manager.pending_residual_pks == []
+    assert await manager.resolve_pk() == dangling
+    assert await manager.resolve_attribution_pk() == dangling
+    assert collector.started and collector.started[0].live_session_id == dangling
+    assert collector.started[0].resumed is True, "续播的 live.started 必须带 resumed 标记"
+    assert collector.started[0].started_at_ms == 1_000, "开播时刻取原行的开播时刻，不是续播时刻"
+    row = await store.sessions.get_live_session(live_session_id=dangling)
+    assert row is not None and row.ended_at_ms is None, "续播不写结束时间，行保持进行中"
+
+
+async def test_resume_then_close_settles_normally(store: SQLiteDatabase, bus: EventBus) -> None:
+    """续播后的场次走正常结账：close_session 补结束时间并广播 live.ended（真下播）。"""
+    dangling = await store.sessions.insert_live_session(started_at_ms=1_000, source="manual")
+    await store.chat.insert_live_chat(
+        live_session_id=dangling, timestamp_ms=2_000, sender_role="viewer", content="断前的弹幕", message_type="danmaku"
+    )
+    manager = _make_manager(store, bus)
+    collector = _Collector(bus)
+    await manager.start()
+
+    assert await manager.resume_session(dangling) is True
+    assert await manager.close_session() is True
+    await bus.wait_until_drained()
+
+    assert manager.active_pk is None
+    assert collector.ended and collector.ended[0].live_session_id == dangling
+    assert collector.ended[0].superseded is False, "续播后手动结账是真下播"
+
+
+async def test_resume_rejects_when_active_session_exists(store: SQLiteDatabase, bus: EventBus) -> None:
+    """已有进行中场次时拒绝续播（不变量：至多一个显式进行中场次）。
+
+    可达场景：两场残留同时待决，先续播一场、再续播另一场被拒——被拒的那场
+    保持待决，已续播的场不受影响。
+    """
+    first = await store.sessions.insert_live_session(started_at_ms=1_000, source="manual")
+    second = await store.sessions.insert_live_session(started_at_ms=2_000, source="manual")
+    manager = _make_manager(store, bus)
+    await manager.start()
+    assert manager.pending_residual_pks == [first, second]
+
+    assert await manager.resume_session(first) is True
+    assert await manager.resume_session(second) is False
+
+    assert manager.active_pk == first, "拒绝续播不得影响已在进行中的场次"
+    assert manager.pending_residual_pks == [second], "被拒的残留场次保持待决"
+
+
+async def test_resume_unknown_session_returns_false(store: SQLiteDatabase, bus: EventBus) -> None:
+    manager = _make_manager(store, bus)
+    await manager.start()
+    assert await manager.resume_session(4242) is False
+
+
+async def test_discard_pending_residual_backfills_end_time(store: SQLiteDatabase, bus: EventBus) -> None:
+    """收尾待决残留：补结束时间为最后活动时刻，不广播任何事件（本进程从未在播这场）。"""
+    dangling = await store.sessions.insert_live_session(started_at_ms=1_000, source="manual")
+    await store.sessions.update_live_session_stats(
+        live_session_id=dangling, heat=1, viewer_count=0, audience_total=0, updated_at_ms=9_000
+    )
+    manager = _make_manager(store, bus)
+    collector = _Collector(bus)
+    await manager.start()
+
+    assert await manager.discard_residual(dangling) is True
+    await bus.wait_until_drained()
+
+    assert manager.pending_residual_pks == []
+    assert manager.active_pk is None
+    row = await store.sessions.get_live_session(live_session_id=dangling)
+    assert row is not None and row.ended_at_ms == 9_000
+    assert collector.ended == [], "收尾残留不广播 live.ended（主播从未在播这一场）"
+
+
+async def test_discard_unknown_residual_returns_false(store: SQLiteDatabase, bus: EventBus) -> None:
+    manager = _make_manager(store, bus)
+    await manager.start()
+    assert await manager.discard_residual(4242) is False
+
+
+async def test_discard_clamps_end_time_when_last_activity_precedes_start(store: SQLiteDatabase, bus: EventBus) -> None:
+    """收尾钳制：残留行的最后活动时刻早于开播时刻（时钟回拨/脏数据）时以开播时刻封账。
+
+    直写会撞库表 CHECK 约束（ended_at_ms >= started_at_ms）使整笔收尾 500。
+    """
+    future_start = 1793880000000  # 晚于 updated_at_ms 的"未来"开播时刻
+    dangling = await store.sessions.insert_live_session(started_at_ms=future_start, source="manual")
+    await store.sessions.update_live_session_stats(
+        live_session_id=dangling, heat=0, viewer_count=0, audience_total=0, updated_at_ms=future_start - 60_000
+    )
+    manager = _make_manager(store, bus)
+    await manager.start()
+
+    assert await manager.discard_residual(dangling) is True
 
     row = await store.sessions.get_live_session(live_session_id=dangling)
     assert row is not None
-    assert row.ended_at_ms == 9_000
-    assert manager.active_pk is None
+    assert row.ended_at_ms == future_start, "结束时刻钳到开播时刻，不早于它"
+
+
+async def test_close_after_resume_clamps_end_time_before_future_start(store: SQLiteDatabase, bus: EventBus) -> None:
+    """续播后结账的钳制：开播时刻在未来、当下时刻早于它时以开播时刻封账，时长记 0。"""
+    future_start = 1793880000000
+    dangling = await store.sessions.insert_live_session(started_at_ms=future_start, source="manual")
+    await store.chat.insert_live_chat(
+        live_session_id=dangling, timestamp_ms=future_start, sender_role="viewer", content="hi", message_type="danmaku"
+    )
+    manager = _make_manager(store, bus)
+    collector = _Collector(bus)
+    await manager.start()
+
+    assert await manager.resume_session(dangling) is True
+    assert await manager.close_session() is True
+    await bus.wait_until_drained()
+
+    row = await store.sessions.get_live_session(live_session_id=dangling)
+    assert row is not None and row.ended_at_ms == future_start
+    assert collector.ended and collector.ended[0].duration_ms == 0, "钳制后时长记 0，不为负"
+
+
+async def test_open_session_auto_discards_pending_residuals(store: SQLiteDatabase, bus: EventBus) -> None:
+    """开新场 = 放弃续播：待决残留自动收尾，不留悬行。"""
+    dangling = await store.sessions.insert_live_session(started_at_ms=1_000, source="manual")
+    await store.sessions.update_live_session_stats(
+        live_session_id=dangling, heat=1, viewer_count=0, audience_total=0, updated_at_ms=9_000
+    )
+    manager = _make_manager(store, bus)
+    await manager.start()
+    assert manager.pending_residual_pks == [dangling]
+
+    new_pk = await manager.open_session(kind="live")
+
+    assert manager.pending_residual_pks == []
+    old_row = await store.sessions.get_live_session(live_session_id=dangling)
+    assert old_row is not None and old_row.ended_at_ms == 9_000
+    assert manager.active_pk == new_pk
+
+
+async def test_delete_pending_residual_removes_it_from_pending(store: SQLiteDatabase, bus: EventBus) -> None:
+    """删掉待决残留场次：待决标记同步移除，不再出现在续播弹窗里。"""
+    dangling = await store.sessions.insert_live_session(started_at_ms=1_000, source="manual")
+    manager = _make_manager(store, bus)
+    await manager.start()
+    assert manager.pending_residual_pks == [dangling]
+
+    assert await manager.delete_session(dangling) is True
+
+    assert manager.pending_residual_pks == []
 
 
 async def test_resolve_pk_after_close_returns_none(store: SQLiteDatabase, bus: EventBus) -> None:

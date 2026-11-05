@@ -9,6 +9,7 @@ import pytest
 import tomllib
 
 from src.modules.events.event_history import EventHistoryService, EventRecord
+from src.modules.session import LiveSessionManager
 
 BASE = 1_700_000_000_000
 
@@ -44,6 +45,54 @@ def _decision(pk: int, seq: int, ts: int, **data) -> EventRecord:
         data={"live_session_id": pk, "round_id": f"rnd_{seq}", **data},
         timestamp_ms=ts,
     )
+
+
+async def test_residual_resume_discard_and_conflict(api, event_bus, event_history, store) -> None:
+    """待决残留三端点：列表 / 续播（resumed 场次变为进行中）/ 收尾；已有进行中场次时续播 409。"""
+    # 先插两行残留再启动管理器：启动期检出待决
+    first = await store.sessions.insert_live_session(started_at_ms=BASE, source="manual")
+    second = await store.sessions.insert_live_session(started_at_ms=BASE + 1, source="manual")
+    manager = LiveSessionManager(store.sessions, store.chat, event_bus)
+    await manager.start()
+    client = await api(
+        event_bus=event_bus,
+        session_manager=manager,
+        event_history=event_history,
+        session_repo=store.sessions,
+        chat_repo=store.chat,
+    )
+
+    async def residual_ids() -> list:
+        body = (await client.get("/api/v1/live-sessions/residual")).json()
+        return [i["live_session_id"] for i in body["items"]]
+
+    assert await residual_ids() == [first, second]
+
+    # 非残留场次 404
+    assert (await client.post(f"/api/v1/live-sessions/{first + 999}/resume")).status_code == 404
+
+    # 续播第一场：变为进行中场次，从待决列表消失
+    resumed = await client.post(f"/api/v1/live-sessions/{first}/resume")
+    assert (resumed.status_code, resumed.json()["success"]) == (200, True)
+    assert (await client.get("/api/v1/live-sessions")).json()["active_session_id"] == first
+    assert await residual_ids() == [second]
+
+    # 已有进行中场次时续播第二场 409
+    conflict = await client.post(f"/api/v1/live-sessions/{second}/resume")
+    assert (conflict.status_code, conflict.json()["detail"]) == (
+        409,
+        f"已有进行中场次 {first}，先结束它才能续播残留场次 {second}",
+    )
+
+    # 收尾第二场：补结束时间归档，待决清空
+    discarded = await client.post(f"/api/v1/live-sessions/{second}/discard")
+    assert (discarded.status_code, discarded.json()["success"]) == (200, True)
+    assert await residual_ids() == []
+    row = await store.sessions.get_live_session(live_session_id=second)
+    assert row is not None and row.ended_at_ms is not None
+
+    # 收口：结束续播中的场次，避免 fixture 收尾告警
+    await client.post(f"/api/v1/live-sessions/{first}/close")
 
 
 async def test_open_list_close_flow(sessions_client) -> None:

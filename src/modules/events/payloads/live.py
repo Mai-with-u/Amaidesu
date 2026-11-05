@@ -7,8 +7,8 @@
 一房多场：房间是场次之上的静态属性）。由 LiveSessionManager 作为
 唯一发布方：
 
-- ``live.started``：显式场次开启（手动开启 / 模拟器回放自动开启）。
-  默认场次不复用：本事件只在显式 ``open_session`` 开启时发布一次。
+- ``live.started``：显式场次开启（手动开启 / 模拟器回放自动开启 / 断线续播）。
+  默认场次不复用：本事件只在显式 ``open_session`` 或 ``resume_session`` 时发布。
 - ``live.ended``：显式场次结束（手动结束 / 进程退出收口 / 回放结束 / 删除进行中场次前
   先结束）。
 
@@ -50,6 +50,9 @@ class LiveStartedPayload(BasePayload):
         room_id: 房间/频道标识（普通属性，可为空）
         platform: 平台标识（可为空）
         started_at_ms: 场次开始时刻（Unix 毫秒）
+        resumed: 断线续播标记（True=恢复上次中断的场次继续播，而非新开一场）。
+            订阅方据此跳过只属于"新场开播"的动作（如开场白、场内状态清零），
+            只恢复"正在直播"的活跃态
         timestamp_ms: 事件发布时间戳（Unix 毫秒）
     """
 
@@ -60,6 +63,14 @@ class LiveStartedPayload(BasePayload):
     room_id: str = Field(default="", description="房间/频道标识（普通属性，可为空）")
     platform: str = Field(default="", description="平台标识（可为空）")
     started_at_ms: int = Field(
+        default_factory=lambda: now_ms(),
+        description="场次开始时刻（Unix 毫秒）",
+    )
+    resumed: bool = Field(
+        default=False,
+        description="断线续播标记：True=恢复上次中断的场次继续播，订阅方跳过新场专属动作（开场白、清场）",
+    )
+    timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),
         description="场次开始时刻（Unix 毫秒）",
     )
