@@ -1,5 +1,6 @@
 """MinecraftAgent 局部工具（minecraft_report / minecraft_todo /
-minecraft_notebook / minecraft_wait / minecraft_get_work_log / minecraft_glance / minecraft_name_creature）
+minecraft_notebook / minecraft_wait / minecraft_get_work_log / minecraft_glance / minecraft_name_creature /
+minecraft_context_fold / minecraft_context_recall）
 
 工具归属约定（text_adv 同构）：
 - 局部工具（minecraft_todo / minecraft_notebook）= Agent 自己 LLM 用，驱动 ReAct 循环
@@ -15,6 +16,8 @@ minecraft_notebook / minecraft_wait / minecraft_get_work_log / minecraft_glance 
   minecraft_todo 自己做的事）
 - 局部上报（minecraft_report）= 玩家 Agent LLM 用：向主播交付总结（delivery）/
   升级决策（escalation）——玩家→主播唯一发声出口
+- 上下文折叠（minecraft_context_fold / minecraft_context_recall）= 玩家 Agent LLM 用：
+  折叠只在宿主的后台整理请求里由宿主解析执行，行动中调用一律不执行；取回读被折叠或收起的原文
 - provider="minecraft"（来源溯源：提供者=游戏 Agent 名全称，禁缩写）
 
 对外全名由 ``ToolSpec.full_name`` 派生（``minecraft_<工具名>``，provider 即模块名），
@@ -79,6 +82,14 @@ _LOCAL_VISIBLE_TO: Dict[str, List[str]] = {
     "glance": ["streamer"],
     "name_creature": ["streamer"],
     "skill": ["minecraft"],
+    "context_fold": ["minecraft"],
+    "context_recall": ["minecraft"],
+}
+
+# 行动中调用折叠工具时的回执：折叠只在宿主的后台整理请求里执行，行动路径上写摘要会让角色站着等
+_FOLD_REFUSED = {
+    "ok": False,
+    "error": "折叠由宿主在后台安排，行动中不执行；这一步继续推进任务，需要旧细节用 minecraft_context_recall 读",
 }
 
 
@@ -317,6 +328,65 @@ def build_wait_spec() -> ToolSpec:
     )
 
 
+def build_context_fold_spec() -> ToolSpec:
+    """``minecraft_context_fold`` 工具规格——只在宿主整理请求里用：把用完的历史区间折成摘要"""
+    return ToolSpec(
+        name="context_fold",
+        provider=PROVIDER_NAME,
+        kind="sync",
+        description=(
+            "只在收到【宿主整理请求】时使用：把已经用完的历史区间折成摘要，原文留在宿主那里，"
+            "之后可用 minecraft_context_recall 取回。行动中不要调用，调了也不执行。"
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "folds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "start": {
+                                "type": "string",
+                                "description": "起点的消息编号（如 m0012）或旧折叠块号（如 b3）",
+                            },
+                            "end": {"type": "string", "description": "终点的消息编号或旧折叠块号（含这一条）"},
+                            "summary": {"type": "string", "minLength": 1, "description": "替代这段原文的摘要"},
+                        },
+                        "required": ["start", "end", "summary"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["folds"],
+            "additionalProperties": False,
+        },
+    )
+
+
+def build_context_recall_spec() -> ToolSpec:
+    """``minecraft_context_recall`` 工具规格——读回被折叠或收起的历史原文"""
+    return ToolSpec(
+        name="context_recall",
+        provider=PROVIDER_NAME,
+        kind="sync",
+        description=(
+            "读回被折叠或收起的历史原文（历史里写着“已折叠 b3”或“原文已收起 b5”的那些）。"
+            "block 填块号读整块原文；query 填关键词（坐标、编号、物品名）在所有块里查，只返回命中的片段；"
+            "两个都填只在这一块里查。摘要够用就不必读。"
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "block": {"type": "string", "description": "块号，如 b3"},
+                "query": {"type": "string", "description": "要找的关键词"},
+            },
+            "additionalProperties": False,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Provider（注册到 ToolRegistry）
 # ---------------------------------------------------------------------------
@@ -394,6 +464,8 @@ class MinecraftToolProvider(GameToolProvider):
     skill_reader: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None
     # 角色眼下在哪个存档里：由 Agent 从 MaiCraft 报的世界身份读（未注入时按不分存档）
     save_reader: Optional[Callable[[], Optional[GameSave]]] = None
+    # 取回被折叠或收起的原文：由 Agent 按块号或关键词查自己的块库（未开后台折叠时不提供折叠与取回两个工具）
+    context_recall: Optional[Callable[[str, str], Dict[str, Any]]] = None
 
     @property
     def name(self) -> str:
@@ -418,6 +490,8 @@ class MinecraftToolProvider(GameToolProvider):
             specs.append(build_name_creature_spec())
         if self.skill_reader is not None:
             specs.append(build_skill_spec(PROVIDER_NAME))
+        if self.context_recall is not None:
+            specs.extend([build_context_fold_spec(), build_context_recall_spec()])
         # 逐 spec 盖可见名单（技能工具未注入读取器时本就不提供，名单映射无残留键）
         for spec in specs:
             spec.visible_to = list(_LOCAL_VISIBLE_TO[spec.name])
@@ -453,6 +527,10 @@ class MinecraftToolProvider(GameToolProvider):
         if self.skill_reader is not None:
             skill_spec = build_skill_spec(PROVIDER_NAME)
             handlers[skill_spec.full_name] = self._dict_handler(skill_spec, self._invoke_skill)
+        if self.context_recall is not None:
+            fold_spec, recall_spec = build_context_fold_spec(), build_context_recall_spec()
+            handlers[fold_spec.full_name] = self._dict_handler(fold_spec, self._invoke_context_fold)
+            handlers[recall_spec.full_name] = self._dict_handler(recall_spec, self._invoke_context_recall)
         return handlers
 
     def _dict_handler(
@@ -490,6 +568,14 @@ class MinecraftToolProvider(GameToolProvider):
     async def _invoke_skill(self, args: Dict[str, Any]) -> Dict[str, Any]:
         assert self.skill_reader is not None  # 处理器表按读取器在册建表
         return await self.skill_reader(str(args.get("name", "")))
+
+    async def _invoke_context_fold(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        del args
+        return dict(_FOLD_REFUSED)
+
+    async def _invoke_context_recall(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        assert self.context_recall is not None  # 处理器表按回调在册建表
+        return self.context_recall(str(args.get("block", "") or ""), str(args.get("query", "") or ""))
 
     async def _invoke_todo(self, args: Dict[str, Any]) -> Dict[str, Any]:
         action = str(args.get("action", ""))

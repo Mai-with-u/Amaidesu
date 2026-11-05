@@ -402,6 +402,8 @@ class ScriptLlm:
     async def generate(self, messages: List[Dict[str, Any]], **kwargs: Any) -> Response:
         self.seen.append([dict(message) for message in messages])
         self.tools_given.append(list(kwargs.get("tools") or []))
+        # 真实的模型调用总要等网络、让出事件循环；替身也让出一次，与推理并行的后台任务（如后台折叠）才推进得了
+        await asyncio.sleep(0)
         return self.script(messages)
 
     def is_profile_visual(self, profile: Optional[str]) -> bool:

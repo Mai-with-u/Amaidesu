@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.context import ContextBudgetConfig
@@ -54,6 +54,45 @@ class MinecraftContextConfig(ContextBudgetConfig):
         description="整理出的历史摘要的最大字符数",
         json_schema_extra={"x-ui-advanced": True},
     )
+    active_fold: bool = Field(
+        default=True,
+        title="后台折叠",
+        description="历史过了折叠线时，在后台请模型把已经用完的区间折成摘要，原文可取回；"
+        "到预算线时先收起旧记录、不让角色停下来等整理。关掉则回到只靠集中整理",
+    )
+    fold_ratio: float = Field(
+        default=0.4,
+        gt=0.0,
+        lt=1.0,
+        title="折叠线",
+        description="历史达到预算的这一比例时开始在后台请模型折叠，须低于提前整理线",
+    )
+    fold_keep_recent: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        title="折叠保留近期组数",
+        description="最近这么多组调用与回执不允许折叠或收起",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    fold_summary_max_chars: int = Field(
+        default=3000,
+        ge=200,
+        le=12000,
+        title="单段折叠摘要上限",
+        description="模型为一段区间写的折叠摘要的最大字符数",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+
+    @model_validator(mode="after")
+    def _check_fold_line(self) -> "MinecraftContextConfig":
+        """折叠线必须低于提前整理线：模型主动折叠是第一道，集中整理只在它跟不上时才出手。"""
+        if self.fold_ratio >= self.prepare_ratio:
+            raise ValueError(
+                f"fold_ratio={self.fold_ratio} 必须小于 prepare_ratio={self.prepare_ratio}："
+                "折叠线不低于提前整理线时，集中整理会抢在模型折叠之前把历史压掉"
+            )
+        return self
 
 
 class MinecraftConfig(BaseConfig):

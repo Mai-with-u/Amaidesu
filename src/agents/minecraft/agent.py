@@ -28,10 +28,20 @@ from src.agents.minecraft.attention_material import AttentionMaterialPublisher
 from src.agents.minecraft.chosen_death import is_suicide_ability
 from src.agents.minecraft.context import (
     FACTS_KEY,
+    INSTRUCTION_KEY,
     MinecraftHistoryCompactor,
     close_interrupted_calls,
+    is_pinned_message,
     json_text,
     strip_unsendable,
+)
+from src.agents.minecraft.context_fold import (
+    FOLD_GUIDE_FALLBACK,
+    RECALL_HINT,
+    RECALL_MAX_CHARS,
+    FoldProposal,
+    fold_lines,
+    propose_folds,
 )
 from src.agents.minecraft.creature_book import CreatureBook, creature_from_record, creature_record
 from src.agents.minecraft.delegation_book import DelegationBook
@@ -68,7 +78,15 @@ from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvide
 from src.agents.minecraft.wake_queue import WakeQueue, opens_task
 from src.agents.minecraft.world_identity import WorldChange, WorldIdentity, world_ref_of
 from src.modules.agents.base import AgentState, BaseAgent
-from src.modules.context import BackgroundCheckpoint, PrefixGuard, TransientImages, absorb_result_images
+from src.modules.context import (
+    BackgroundCheckpoint,
+    ContextFolds,
+    FoldPacer,
+    PrefixGuard,
+    TokenCounter,
+    TransientImages,
+    absorb_result_images,
+)
 from src.modules.llm.capabilities import ProfileVisualCapabilityLookup, validate_llm_capability
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -223,6 +241,7 @@ class MinecraftAgent(BaseAgent):
             creature_namer=self._name_creature,
             skill_reader=self._skill_support.read_skill if skill_library is not None else None,
             save_reader=self._world.game_save,
+            context_recall=self._recall_context if config.context.active_fold else None,
         )
 
         # 命令驱动运行骨架：worker 等命令信号，收到命令后持续推进当前游戏任务。
@@ -245,6 +264,14 @@ class MinecraftAgent(BaseAgent):
         # 最近一次完整进入历史的任务状态；唤醒续做只补交它之后的变化。
         self._shown_context: Dict[str, Any] = {}
         self._idle_prep: BackgroundCheckpoint[None] = BackgroundCheckpoint("minecraft 等待期间历史整理")
+        # 后台折叠：历史过了折叠线，另发一次与行动步同前缀的请求，请模型把用完的区间折成摘要，
+        # 原文进块库可取回；身体照常行动，写好的折叠在下一步开始前换上。开关关掉时不编号、不折叠
+        self._fold_enabled = config.context.active_fold
+        self._folds = ContextFolds(TokenCounter(), is_pinned=is_pinned_message, recall_hint=RECALL_HINT)
+        self._fold_pacer = FoldPacer()
+        self._fold_job: BackgroundCheckpoint[FoldProposal] = BackgroundCheckpoint("minecraft 后台折叠")
+        # 开新任务、重开对话时加一：在这之前发起的折叠提议对应的是已丢掉的历史，算完也不再套用
+        self._fold_epoch = 0
         # 工具刚返回的截图：历史里只留文字回执，真图挂在下一次推理请求的尾部，用完即弃
         self._transient_images = TransientImages()
         # 相邻两次推理请求的历史只该在尾部追加；集中整理与开新任务之外的改写记告警
@@ -460,6 +487,7 @@ class MinecraftAgent(BaseAgent):
         if self._event_bus is not None:
             self._event_bus.off(CoreEvents.GAME_CHAT_RECEIVED, self._on_game_chat)
         await self._idle_prep.cancel()
+        await self._fold_job.cancel()
         await self._goals.stop()
         for task in (self._worker_task,):
             if task is None:
@@ -717,7 +745,8 @@ class MinecraftAgent(BaseAgent):
                 # 是否开任务收在 WakeQueue.opens_task 一处：闲着也叫醒的通知（计时到点、Mod 挂出的决策）
                 # 轮到读时才看任务状态——已交付就和一条指令一样开新任务（计时的备注、要回答的决策就是
                 # 这次要做的事）；挂起着就接着原任务做，不记成原始指令；任务进行中只是一条普通通知。
-                if opens_task(queued, task_finished=self._task_finished):
+                opened = opens_task(queued, task_finished=self._task_finished)
+                if opened:
                     if self._task_finished:
                         self._start_new_task(messages, system_message)
                         opening_due = True
@@ -729,15 +758,23 @@ class MinecraftAgent(BaseAgent):
                     self._task_suspended = False
                 if task_id:
                     self._delegations.absorb(task_id)
-                messages.append({"role": "user", "content": content})
+                incoming: Dict[str, Any] = {"role": "user", "content": content}
+                if opened:
+                    # 开任务的原话是任务的依据：后台折叠与收起都不碰它
+                    incoming[INSTRUCTION_KEY] = True
+                messages.append(incoming)
             if opening_due:
                 opening_due = False
                 await self._skill_support.append_opening_bundle(messages)
             self._delegations.mark_running()
             steps += 1
 
+            # 先换上后台写好的折叠、给新消息编号，再看预算；过了折叠线就在后台请模型折叠，这一步照常行动
+            self._apply_ready_folds(messages, tool_defs)
+            self._number_messages(messages)
             if not await self._prepare_context(messages, tool_defs):
                 return
+            self._maybe_start_fold(messages, tool_defs)
             self._task_steps += 1
 
             on_delta = self._build_thinking_callback(mc_round, steps, mc_seq_box) if mc_round else None
@@ -867,8 +904,9 @@ class MinecraftAgent(BaseAgent):
             {"role": "user", "content": _RESTART_NOTICE},
         ]
         self._shown_context = deepcopy(facts)
-        # 丢掉的那段对话里看过的截图也一并作废
+        # 丢掉的那段对话里看过的截图也一并作废；在写的折叠提议对应的历史已经没了
         self._transient_images.drain()
+        self._fold_epoch += 1
         self._prefix_guard.expect_rewrite("对话发不出去，按任务事实重开")
 
     def _start_new_task(self, messages: List[Dict[str, Any]], system_message: Dict[str, Any]) -> None:
@@ -879,6 +917,10 @@ class MinecraftAgent(BaseAgent):
         self._transient_images.drain()
         self._prefix_guard.expect_rewrite("开新任务")
         self._context_compactor.checkpoints = 0
+        # 上个任务的折叠块与请折叠的节奏都不带进新任务；还在写的折叠提议算完也不再套用
+        self._folds.clear()
+        self._fold_pacer.reset()
+        self._fold_epoch += 1
         self._shown_context = {}
         self._mc_state.set_todos([])
         self._goal_ledger.clear_finished()
@@ -1268,8 +1310,15 @@ class MinecraftAgent(BaseAgent):
         return delta
 
     def _schedule_idle_compaction(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> None:
-        """让出等待时若历史已过提前整理线，就在后台整理；身体此刻本来就在等游戏结果。"""
-        if self._idle_prep.busy:
+        """让出等待时若历史已过提前整理线，就在后台整理；身体此刻本来就在等游戏结果。
+
+        后台折叠优先：写好的先换上，过了折叠线先请模型折；折叠还在写时不并行起集中整理，
+        两边同时改写历史会把彼此记下的位置对乱。
+        """
+        self._apply_ready_folds(messages, tools)
+        self._number_messages(messages)
+        self._maybe_start_fold(messages, tools)
+        if self._idle_prep.busy or self._fold_job.busy:
             return
         trigger = self._context_compactor.watermarks().prepare
         if self._context_compactor.measure(messages, tools) <= trigger:
@@ -1319,6 +1368,88 @@ class MinecraftAgent(BaseAgent):
         finally:
             self._task_steps += self._context_compactor.last_calls
         return True
+
+    def _number_messages(self, messages: List[Dict[str, Any]]) -> None:
+        """给还没发出过的新消息写上编号，模型折叠时用编号指定区间（关掉后台折叠时不编号）。"""
+        if self._fold_enabled:
+            self._folds.number(messages)
+
+    def _maybe_start_fold(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> None:
+        """历史过了折叠线、且距上次请模型又涨了一截时，在后台发一次整理请求；身体照常行动，不等它。
+
+        集中整理正在后台跑时不发：两边同时改写历史会把彼此记下的位置对乱。
+        """
+        if not self._fold_enabled or self._llm is None or self._fold_job.busy or self._idle_prep.busy:
+            return
+        config = self.typed_config.context
+        lines = fold_lines(self._context_compactor.watermarks().budget, config.fold_ratio)
+        tokens = self._context_compactor.measure(messages, tools)
+        if not self._fold_pacer.due(tokens, line=lines.line, growth=lines.growth):
+            return
+        # 发起即记基线：模型认为没东西可折时，要等历史再涨一截才再请
+        self._fold_pacer.settle(tokens)
+        ranges = self._folds.ranges(messages, keep_recent=config.fold_keep_recent, min_tokens=lines.min_range)
+        if not ranges:
+            return
+        work = propose_folds(
+            self._llm,
+            list(messages),
+            tools,
+            ranges,
+            tokens,
+            max_chars=config.fold_summary_max_chars,
+            profile=MINECRAFT_PROFILE,
+        )
+        self._fold_job.start(work, epoch=self._fold_epoch)
+        self._logger.info(f"历史 {tokens} token 过了折叠线 {lines.line}，后台请模型折叠（{len(ranges)} 段可折区间）")
+
+    def _apply_ready_folds(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> None:
+        """后台折叠写好了就换上；集中整理正在后台改写历史时先不换，等它结束。
+
+        提议基于发起时的那份历史算出：期间历史只在尾部追加，按编号重新定位即可；
+        对应的任务已结束、对话已重开的提议直接丢弃。
+        """
+        if not self._fold_enabled or self._idle_prep.busy:
+            return
+        epoch = self._fold_job.meta.get("epoch")
+        proposal = self._fold_job.take()
+        if proposal is None:
+            return
+        if epoch != self._fold_epoch:
+            self._logger.debug("后台折叠提议属于已结束的任务或已重开的对话，丢弃")
+            return
+        if proposal.error:
+            self._logger.warning(f"后台整理请求失败，历史不变：{proposal.error}")
+            return
+        if proposal.ignored:
+            self._logger.warning(f"后台整理请求里模型调了别的工具，已丢弃不执行：{'、'.join(proposal.ignored)}")
+        if not proposal.requests:
+            self._logger.info("后台整理请求：模型认为暂时没有可折的区间")
+            return
+        config = self.typed_config.context
+        lines = fold_lines(self._context_compactor.watermarks().budget, config.fold_ratio)
+        before = self._context_compactor.measure(messages, tools)
+        outcome = self._folds.apply(
+            messages,
+            proposal.requests,
+            keep_recent=config.fold_keep_recent,
+            min_tokens=lines.min_range,
+            max_summary_chars=config.fold_summary_max_chars,
+        )
+        for error in outcome.errors:
+            self._logger.warning(f"后台折叠有一段没套上：{error}")
+        if not outcome.blocks:
+            return
+        # 折叠就地改写了历史中段，下一次请求重算前缀是预期内的
+        self._prefix_guard.expect_rewrite("后台折叠")
+        after = self._context_compactor.measure(messages, tools)
+        self._fold_pacer.settle(after)
+        names = "、".join(block.block_id for block in outcome.blocks)
+        self._logger.info(f"后台折叠落地：{names}，历史 {before} -> {after} token")
+
+    def _recall_context(self, block: str, query: str) -> Dict[str, Any]:
+        """取回被折叠或收起的原文（minecraft_context_recall 的执行后端）。"""
+        return self._folds.recall(block=block, query=query, max_chars=RECALL_MAX_CHARS)
 
     def _build_thinking_callback(self, round_id: str, step: int, seq_box: List[int]) -> Any:
         """构造 LLM 层增量回调（duck-typed sink），只转发 reasoning 增量。"""
@@ -1549,10 +1680,21 @@ class MinecraftAgent(BaseAgent):
     def _system_message(self) -> Dict[str, Any]:
         """任务历史开头的系统消息；附技能目录时带计量标注，上下文面板据此把它记入技能段。"""
         catalog = self._skill_support.catalog_section()
-        message: Dict[str, Any] = {"role": "system", "content": self._system_prompt() + catalog}
+        message: Dict[str, Any] = {"role": "system", "content": self._system_prompt() + self._fold_guide() + catalog}
         if catalog:
             message["context_parts"] = [{"section": SECTION_SKILLS, "name": "技能目录", "text": catalog}]
         return message
+
+    def _fold_guide(self) -> str:
+        """开了后台折叠时系统提示词附上的说明：消息编号、折叠块与取回工具；模板不可用时用内建短说明。"""
+        if not self._fold_enabled:
+            return ""
+        if self._prompt is not None:
+            try:
+                return "\n\n" + self._prompt.render("amaidesu_minecraft_context_fold")
+            except Exception as exc:  # noqa: BLE001 - 渲染失败降级内建短说明
+                self._logger.warning(f"折叠说明提示词渲染失败，降级内建: {type(exc).__name__}: {exc}")
+        return "\n\n" + FOLD_GUIDE_FALLBACK
 
     def _system_prompt(self) -> str:
         """系统提示词：渲染 prompt_manager 模板（无则用内建兜底）。"""

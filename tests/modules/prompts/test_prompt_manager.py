@@ -142,6 +142,7 @@ def test_singleton_is_shared_resettable_auto_scans_and_loads_exactly_the_declare
             "warmup_message",
             "persona_generation",
             "amaidesu_minecraft_agent",
+            "amaidesu_minecraft_context_fold",
             "memory_archive_system",
             "memory_commitment_system",
             "memory_commitment_close_system",

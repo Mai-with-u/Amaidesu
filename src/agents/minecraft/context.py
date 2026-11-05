@@ -12,7 +12,7 @@ import asyncio
 import json
 import re
 from copy import deepcopy
-from typing import Any
+from typing import Any, Mapping
 
 from src.agents.minecraft.config import MinecraftContextConfig
 from src.modules.context import TokenCounter, Watermarks, resolve_watermarks
@@ -42,6 +42,8 @@ FACTS_KEY = "_minecraft_context_facts"
 SUMMARY_KEY = "_minecraft_context_summary"
 # 开局资料消息的内部标记：整理摘要时据此逐项省略超长的那一项
 OPENING_KEY = "_minecraft_opening"
+# 开任务的主播指令消息的内部标记：后台折叠与收起都不碰它，原话始终逐字留在历史里
+INSTRUCTION_KEY = "_minecraft_instruction"
 
 _OPENING_HEADER = "[开局资料] 宿主已代为读取下面几项，这些不是你发起的调用；仍有效时直接使用，不重复读取。"
 _OPENING_OMITTED = "这项开局资料太长，摘要不收原文；决策模型当时已经读过，后面要用就重新调用"
@@ -50,6 +52,14 @@ _UNSENDABLE_NOTE = (
     "[这里原有 {chars} 字连续 base64：二进制被当成文字带进了回执，整条请求发不出去，宿主已把它换成这句说明；"
     "要用里面的东西就换个方式查]"
 )
+
+
+def is_pinned_message(message: Mapping[str, Any]) -> bool:
+    """固定层消息：系统说明、任务事实、集中整理的摘要段与开任务的主播指令。
+
+    它们由代码维护或是任务的原始依据，后台折叠和收起都不能碰。
+    """
+    return message.get("role") == "system" or any(message.get(key) for key in (FACTS_KEY, SUMMARY_KEY, INSTRUCTION_KEY))
 
 
 def json_text(value: Any) -> str:
