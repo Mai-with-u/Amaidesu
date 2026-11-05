@@ -7,6 +7,11 @@
 - 注意流采集器不下目标，只读事件流：看到 ``suicide`` 目标开始（或接着推进）就记下它的编号，结束了划掉；
   死讯落在这段时间里就是自己要死的。结束事件万一漏读，记下的编号放久了也作废，免得以后真出事被当成回家。
 
+事件说的是哪个能力，新版 Mod 写在事件的 ``ability`` 字段里（``sequence`` 的一步记在整件 sequence 的编号上，
+字段写那一步自己的能力）；旧版 Mod 没有这个字段，才从消息开头"开始：/接着推进：<能力>"里解析。
+因为同一个 sequence 编号会先后推进不同的能力，寻死那一步做完、或同一编号接着推进的已是别的能力时也划掉，
+不让整件 sequence 剩下的路程都被当成在寻死。
+
 认出来以后，给主播的话和给模型的通知都换成"回家"的说法：主播轻松带过或开个玩笑，不当事故讲，
 也不当伤心事记进记忆；模型照常选重生，复活后接着做手上的事。
 """
@@ -19,6 +24,7 @@ __all__ = [
     "CHOSEN_DEATH_LINE",
     "CHOSEN_DEATH_NOTICE",
     "SuicideWatch",
+    "ability_of",
     "is_suicide_ability",
     "suicide_goal_of",
 ]
@@ -48,17 +54,42 @@ def is_suicide_ability(ability: str) -> bool:
     return name == "suicide" or name.endswith(":suicide")
 
 
-def suicide_goal_of(event: Dict[str, Any]) -> Optional[int]:
-    """一条目标开始或接着推进的事件，若推进的是 ``suicide``，返回它的目标编号；不是返回 None。"""
+def ability_of(event: Dict[str, Any]) -> Optional[str]:
+    """一条目标事件说的是哪个能力；读不出返回 None。
+
+    先读事件的 ``ability`` 字段（新版 Mod 在开始、接着推进、暂停、提问、停滞、结束、步进完成上都带）；
+    字段没有时（旧版 Mod）再从开始、接着推进那句话的开头"开始：maicraft:suicide（回家）"解析，
+    别的事件旧版 Mod 的消息里不写能力，就当读不出。
+    """
+    ability = event.get("ability")
+    if isinstance(ability, str) and ability.strip():
+        return ability.strip()
     if event.get("kind") not in ("started", "resumed"):
         return None
     message = str(event.get("message") or "")
     lead = next((lead for lead in _GOAL_LEADS if message.startswith(lead)), None)
-    goal_id = event.get("goal_id")
-    if lead is None or not isinstance(goal_id, int) or isinstance(goal_id, bool):
+    if lead is None:
         return None
-    ability = message[len(lead) :].split("（", 1)[0].split("(", 1)[0]
+    return message[len(lead) :].split("（", 1)[0].split("(", 1)[0] or None
+
+
+def suicide_goal_of(event: Dict[str, Any]) -> Optional[int]:
+    """一条目标开始或接着推进的事件，若推进的是 ``suicide``，返回它的目标编号；不是返回 None。"""
+    if event.get("kind") not in ("started", "resumed"):
+        return None
+    goal_id = _goal_id_of(event)
+    ability = ability_of(event)
+    if goal_id is None or ability is None:
+        return None
     return goal_id if is_suicide_ability(ability) else None
+
+
+def _goal_id_of(event: Dict[str, Any]) -> Optional[int]:
+    """事件挂在哪个目标编号上；没带或不是整数时为 None（布尔值不算编号）。"""
+    goal_id = event.get("goal_id")
+    if not isinstance(goal_id, int) or isinstance(goal_id, bool):
+        return None
+    return goal_id
 
 
 class SuicideWatch:
@@ -70,13 +101,23 @@ class SuicideWatch:
         self._running: Dict[int, int] = {}
 
     def observe(self, event: Dict[str, Any]) -> None:
-        """看一条事件：suicide 开始就记下，任何目标结束就划掉。"""
+        """看一条事件：suicide 开始或接着推进就记下；目标结束、寻死那一步做完、同一编号改推进别的能力就划掉。"""
         started = suicide_goal_of(event)
         if started is not None:
             self._running[started] = self._clock()
             return
-        goal_id = event.get("goal_id")
-        if event.get("kind") == "finished" and isinstance(goal_id, int):
+        goal_id = _goal_id_of(event)
+        if goal_id is None:
+            return
+        kind = event.get("kind")
+        ability = ability_of(event)
+        if kind == "finished":
+            self._running.pop(goal_id, None)
+        elif kind == "step_finished" and ability is not None and is_suicide_ability(ability):
+            # sequence 里寻死的那一步做完了：整件 sequence 还在跑，但后面的路程已经不是在寻死
+            self._running.pop(goal_id, None)
+        elif kind in ("started", "resumed") and ability is not None:
+            # 同一个编号接着推进的已是别的能力（sequence 走到了下一步）：先前记下的寻死不再算数
             self._running.pop(goal_id, None)
 
     def chosen(self) -> bool:
