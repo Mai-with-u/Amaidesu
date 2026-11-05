@@ -300,7 +300,10 @@ async def test_checkpoint_compares_old_doubts_with_current_decisions() -> None:
 
 @pytest.mark.parametrize("used_steps", [49, 50, 75])
 async def test_game_loop_summarizes_and_continues_past_fifty_steps(used_steps: int) -> None:
-    """长任务接近或超过五十步时仍可重写摘要，随后继续核验并交付原游戏目标。"""
+    """长任务接近或超过五十步时仍可重写摘要，随后继续核验并交付原游戏目标。
+
+    验证的是超预算时同步整理这条路：关掉后台折叠时走它（开着时超预算先收起旧记录，见下一条）。
+    """
     llm = MagicMock()
     llm.generate = AsyncMock(
         side_effect=[
@@ -309,7 +312,8 @@ async def test_game_loop_summarizes_and_continues_past_fifty_steps(used_steps: i
             Response(success=True, content="施工已核验，目标完成", finish_reason="stop"),
         ]
     )
-    agent = assemble_minecraft_agent(config=MinecraftConfig(context=MinecraftContextConfig(max_tokens=24000)), llm=llm)
+    context = MinecraftContextConfig(max_tokens=24000, active_fold=False)
+    agent = assemble_minecraft_agent(config=MinecraftConfig(context=context), llm=llm)
     agent._task_instructions = ["建好，保留原有约束"]
     agent._task_finished = False
     agent._task_steps = used_steps
@@ -319,6 +323,25 @@ async def test_game_loop_summarizes_and_continues_past_fifty_steps(used_steps: i
     assert agent._task_steps == used_steps + 3 and not agent._task_suspended
     assert agent._task_finished and llm.generate.await_count == 3
     assert agent._context_compactor.last_calls == 2
+
+
+async def test_over_budget_stows_oldest_records_instead_of_waiting_for_a_summary() -> None:
+    """开着后台折叠时超预算不等摘要：最老的大条回执当场换成占位、原文进块库，这一步直接行动、不调摘要模型。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(return_value=Response(success=True, content="施工已核验，目标完成", finish_reason="stop"))
+    agent = assemble_minecraft_agent(config=MinecraftConfig(context=MinecraftContextConfig(max_tokens=24000)), llm=llm)
+    agent._task_instructions = ["建好，保留原有约束"]
+    agent._task_finished = False
+    agent._messages = history()
+    agent._running = True
+    await agent._run_task_batch()
+    assert agent._task_finished and not agent._task_suspended
+    # 只有一次行动推理，没有摘要请求；进请求的历史已降到预算以下，最老的回执换成了可取回的占位
+    assert llm.generate.await_count == 1 and agent._context_compactor.last_calls == 0
+    sent = llm.generate.call_args[0][0]
+    assert tokens(sent) <= 24000
+    stowed = [message for message in sent if "[原文已收起" in str(message.get("content"))]
+    assert stowed and stowed[0]["role"] == "tool" and "minecraft_context_recall" in stowed[0]["content"]
 
 
 async def test_later_checkpoint_appends_segment_without_rewriting_earlier_one() -> None:

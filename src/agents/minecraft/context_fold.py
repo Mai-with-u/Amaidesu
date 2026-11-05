@@ -22,6 +22,7 @@ __all__ = [
     "RECALL_HINT",
     "RECALL_MAX_CHARS",
     "RECALL_TOOL",
+    "STOW_MIN_TOKENS",
     "FoldLines",
     "FoldProposal",
     "fold_lines",
@@ -42,6 +43,8 @@ FOLD_GUIDE_FALLBACK = (
 # 一次取回最多返回的原文字数：再长就让模型带关键词只看命中的片段
 RECALL_MAX_CHARS = 20_000
 
+# 到预算线收起旧记录时，单条至少这么大才收：更小的记录省下的还不如换上去的占位
+STOW_MIN_TOKENS = 500
 # 请过一次后，历史至少再涨预算的这一比例才再请：模型刚折完或说没东西可折时，马上再请只会白付输出
 _GROWTH_SHARE = 0.1
 # 单段区间至少占预算的这一比例才值得折（太小的区间省下的抵不过一次缓存失效），且不低于下限

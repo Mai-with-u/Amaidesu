@@ -154,6 +154,27 @@ async def test_background_checkpoint_cancel() -> None:
     assert not runner.busy and runner.meta == {}
 
 
+async def test_background_checkpoint_abandon_stops_late_rewrite() -> None:
+    """历史被整体换掉时同步作废在跑的准备：它之后不会再把旧结果写进新历史。"""
+    runner: BackgroundCheckpoint[None] = BackgroundCheckpoint("测试")
+    history = ["旧记录"]
+    gate = asyncio.Event()
+
+    async def rewrite_later() -> None:
+        await gate.wait()
+        history[:] = ["旧摘要"]
+
+    runner.start(rewrite_later(), covered=1)
+    # 零时长让出：让准备任务先跑到等待处，再模拟"开新任务"
+    await asyncio.sleep(0)
+    runner.abandon()
+    history[:] = ["新任务指令"]
+    gate.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert history == ["新任务指令"] and not runner.busy and runner.meta == {}
+
+
 # 前缀自检
 
 

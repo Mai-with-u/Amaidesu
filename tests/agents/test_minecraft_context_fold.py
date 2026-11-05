@@ -150,6 +150,37 @@ async def test_switch_off_keeps_history_untouched() -> None:
     assert not {"minecraft_context_fold", "minecraft_context_recall"} & names
 
 
+async def test_budget_line_stows_instead_of_waiting_and_original_comes_back() -> None:
+    """模型一直说无需整理、集中整理也写不出摘要：到预算线当场收起旧记录，任务照常交付，原文读得回来。"""
+    server = _big_server()
+    progress = {"steps": 0}
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if _is_fold_request(messages):
+            return _resp(content="无需整理")
+        if str(messages[0].get("content")).startswith("你在整理 Minecraft"):
+            # 集中整理的摘要请求：回一个工具调用，摘要必然失败；走同步整理的话任务会被挂起
+            return _resp(calls=[_call("maicraft_observe", {"what": "scene"}, "s1")])
+        progress["steps"] += 1
+        if _has_text(messages, '"block":"b') or _has_text(messages, '"block": "b') or progress["steps"] > 40:
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看完了"}, "d1")])
+        # 只认真实占位（块号后紧跟冒号）；系统提示词里举例的块号后面没有冒号
+        stowed = re.findall(r"\[原文已收起 (b\d+)：", "".join(str(message.get("content")) for message in messages))
+        if stowed:
+            return _resp(calls=[_call("minecraft_context_recall", {"block": stowed[0]}, "r1")])
+        return _resp(calls=[_call("maicraft_observe", {"what": "scene"}, f"c{progress['steps']}")])
+
+    agent, llm, bus = await make_minecraft_agent(server, script, config=_config())
+    try:
+        agent.receive_prompt(content="把周围看清楚", source="test")
+        await _wait_until(lambda: bool(_reports(bus)))
+    finally:
+        await agent.stop()
+    assert _reports(bus)[0].message == "看完了"
+    recalled = [message for message in llm.seen[-1] if message.get("tool_call_id") == "r1"]
+    assert recalled and "草草草" in str(recalled[0]["content"])
+
+
 def test_fold_line_must_stay_below_prepare_line() -> None:
     """折叠线不低于提前整理线时，集中整理会抢在模型折叠之前出手，配置期拦下。"""
     with pytest.raises(ValidationError):

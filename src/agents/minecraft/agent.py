@@ -39,6 +39,7 @@ from src.agents.minecraft.context_fold import (
     FOLD_GUIDE_FALLBACK,
     RECALL_HINT,
     RECALL_MAX_CHARS,
+    STOW_MIN_TOKENS,
     FoldProposal,
     fold_lines,
     propose_folds,
@@ -774,7 +775,9 @@ class MinecraftAgent(BaseAgent):
             self._number_messages(messages)
             if not await self._prepare_context(messages, tool_defs):
                 return
-            self._maybe_start_fold(messages, tool_defs)
+            if self._fold_enabled:
+                # 行动期间也在后台备好整理：先请模型折叠，跟不上时再起集中整理；角色都不用等
+                self._schedule_idle_compaction(messages, tool_defs)
             self._task_steps += 1
 
             on_delta = self._build_thinking_callback(mc_round, steps, mc_seq_box) if mc_round else None
@@ -904,9 +907,12 @@ class MinecraftAgent(BaseAgent):
             {"role": "user", "content": _RESTART_NOTICE},
         ]
         self._shown_context = deepcopy(facts)
-        # 丢掉的那段对话里看过的截图也一并作废；在写的折叠提议对应的历史已经没了
+        # 丢掉的那段对话里看过的截图也一并作废；在写的折叠提议与集中整理对应的历史已经没了，
+        # 当场作废：集中整理写完会就地改写历史，晚一步就把旧摘要写进重开后的对话
         self._transient_images.drain()
         self._fold_epoch += 1
+        self._fold_job.abandon()
+        self._idle_prep.abandon()
         self._prefix_guard.expect_rewrite("对话发不出去，按任务事实重开")
 
     def _start_new_task(self, messages: List[Dict[str, Any]], system_message: Dict[str, Any]) -> None:
@@ -917,10 +923,13 @@ class MinecraftAgent(BaseAgent):
         self._transient_images.drain()
         self._prefix_guard.expect_rewrite("开新任务")
         self._context_compactor.checkpoints = 0
-        # 上个任务的折叠块与请折叠的节奏都不带进新任务；还在写的折叠提议算完也不再套用
+        # 上个任务的折叠块与请折叠的节奏都不带进新任务；后台还在写的折叠与集中整理当场作废，
+        # 否则集中整理写完会把上个任务的摘要套到新任务的历史上
         self._folds.clear()
         self._fold_pacer.reset()
         self._fold_epoch += 1
+        self._fold_job.abandon()
+        self._idle_prep.abandon()
         self._shown_context = {}
         self._mc_state.set_todos([])
         self._goal_ledger.clear_finished()
@@ -1311,6 +1320,7 @@ class MinecraftAgent(BaseAgent):
 
     def _schedule_idle_compaction(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> None:
         """让出等待时若历史已过提前整理线，就在后台整理；身体此刻本来就在等游戏结果。
+        开了后台折叠时每步行动前也调一次：整理在后台写，角色照常行动。
 
         后台折叠优先：写好的先换上，过了折叠线先请模型折；折叠还在写时不并行起集中整理，
         两边同时改写历史会把彼此记下的位置对乱。
@@ -1332,18 +1342,21 @@ class MinecraftAgent(BaseAgent):
         try:
             if await self._context_compactor.compact(messages, tools, facts, trigger_tokens=trigger):
                 self._shown_context = deepcopy(facts)
-                # 整理就地改写了历史前段，醒来后的第一次请求重算前缀是预期内的
-                self._prefix_guard.expect_rewrite("等待期间集中整理")
+                # 整理就地改写了历史前段，之后的第一次请求重算前缀是预期内的
+                self._prefix_guard.expect_rewrite("后台集中整理")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 提前整理失败不影响任务，醒来后按正常预算处理
-            self._logger.warning(f"等待期间的历史整理未完成，原历史已保留：{exc}", exc=True)
+            self._logger.warning(f"后台的历史整理未完成，原历史已保留：{exc}", exc=True)
         finally:
             self._task_steps += self._context_compactor.last_calls
 
     async def _settle_idle_compaction(self, tools: List[Dict[str, Any]]) -> None:
-        """醒来时结清提前整理：已超预算就等它完成，否则放弃以便立刻处理新事实。"""
-        if not self._idle_prep.busy:
+        """醒来时结清提前整理：已超预算就等它完成，否则放弃以便立刻处理新事实。
+
+        开了后台折叠时两样都不做：让它在后台接着写，超预算由每步前的收起兜住，角色不用等它。
+        """
+        if not self._idle_prep.busy or self._fold_enabled:
             return
         if self._context_compactor.measure(self._messages, tools) > self._context_compactor.watermarks().budget:
             await self._idle_prep.wait()
@@ -1351,9 +1364,23 @@ class MinecraftAgent(BaseAgent):
         await self._idle_prep.cancel()
 
     async def _prepare_context(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> bool:
-        """历史超预算才整理；失败保留原件并挂起，避免无上下文地继续操作游戏。"""
-        if self._context_compactor.measure(messages, tools) <= self._context_compactor.watermarks().budget:
+        """历史超预算才整理；失败保留原件并挂起，避免无上下文地继续操作游戏。
+
+        开了后台折叠时先不等摘要：把最老的大条记录收起来（原文进块库可取回），不调模型、
+        瞬间降到回落线，这一步照常行动。收起后仍超预算（大头不在可收起的记录里）才走同步
+        整理；后台整理已经在跑就先等它做完，不并行起第二份改写。
+        """
+        marks = self._context_compactor.watermarks()
+        tokens = self._context_compactor.measure(messages, tools)
+        if tokens <= marks.budget:
             return True
+        if self._fold_enabled:
+            if self._stow_oldest(messages, tools, tokens):
+                return True
+            if self._idle_prep.busy:
+                await self._idle_prep.wait()
+                if self._context_compactor.measure(messages, tools) <= marks.budget:
+                    return True
         facts = self._current_task_context()
         try:
             if await self._context_compactor.compact(messages, tools, facts):
@@ -1368,6 +1395,30 @@ class MinecraftAgent(BaseAgent):
         finally:
             self._task_steps += self._context_compactor.last_calls
         return True
+
+    def _stow_oldest(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], tokens: int) -> bool:
+        """到了预算线又没有现成的摘要：收起最老的大条记录降到回落线，收起后不超预算返回 True。
+
+        收起只把正文换成一行占位，消息位置、编号和调用配对都不变；占位写着块号，模型要用
+        原文时自己读回。后台的折叠与集中整理照常进行，之后会把这些占位连同上下文压成摘要。
+        """
+        marks = self._context_compactor.watermarks()
+        saved = self._folds.stow(
+            messages,
+            keep_recent=self.typed_config.context.fold_keep_recent,
+            current_tokens=tokens,
+            target_tokens=marks.target,
+            min_tokens=STOW_MIN_TOKENS,
+        )
+        if saved <= 0:
+            return False
+        # 收起就地改写了历史中段，下一次请求重算前缀是预期内的
+        self._prefix_guard.expect_rewrite("收起旧记录")
+        after = self._context_compactor.measure(messages, tools)
+        self._logger.info(
+            f"历史 {tokens} token 到了预算线 {marks.budget}，不等摘要，先收起最老的记录：-> {after} token（原文可取回）"
+        )
+        return after <= marks.budget
 
     def _number_messages(self, messages: List[Dict[str, Any]]) -> None:
         """给还没发出过的新消息写上编号，模型折叠时用编号指定区间（关掉后台折叠时不编号）。"""

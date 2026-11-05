@@ -115,6 +115,17 @@ class BackgroundCheckpoint(Generic[T]):
         await asyncio.wait({task})
         return self.take()
 
+    def abandon(self) -> None:
+        """立刻放弃当前准备任务、不等它退出（同步可调）。
+
+        历史被整体换掉（开新任务、对话重开）时用：准备任务写完后会就地改写它当初拿到的
+        那个列表，晚一步作废就会把旧历史的摘要写进新历史。任务被取消后在下一次让出时退出。
+        """
+        task, self._task = self._task, None
+        self._meta = {}
+        if task is not None and not task.done():
+            task.cancel()
+
     async def cancel(self) -> None:
         """放弃当前准备任务（工作层被整体重置时，旧准备已失去意义）。"""
         task, self._task = self._task, None
