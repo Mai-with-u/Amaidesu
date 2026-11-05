@@ -5,6 +5,8 @@
 - ``MinecraftInstruction``（state.py）：玩家指令（委派或递话）——永远能开批，按任务号可撤。
 - ``WakeEvenIdle``（state.py）：闲着也要叫醒的通知（计时到点、Mod 挂出的决策）——能开批、
   不可按任务号撤（task_id 恒为空串）；轮到读时才按任务状态分流，见 ``opens_task``。
+- ``InteractionNotice``（state.py）：别的玩家冲角色做了肢体动作——闲着也能开批，但永远不开任务；
+  闲着时只因它开起来的那一批只回应互动（见 ``interaction_only``），回完安静收尾。
 - ``SkyNotice``：天色通知——不叫醒模型，随下一次唤醒捎带；新的天色来了就地替换，队列里只留最新一条。
 - 普通通知元组：后台事件的结果说明（目标结束、提问、暂停、取消通知等）——不能独立开批，
   已交付或挂起时在队列里等着，直到有指令或闲着也叫醒的通知把批开起来一起读。
@@ -18,12 +20,12 @@ from __future__ import annotations
 from collections import deque
 from typing import Deque, Iterator, NamedTuple, Optional, Tuple, Union
 
-from src.agents.minecraft.state import MinecraftInstruction, WakeEvenIdle
+from src.agents.minecraft.state import InteractionNotice, MinecraftInstruction, WakeEvenIdle
 
 __all__ = ["SkyNotice", "WakeQueue", "can_wake_idle", "opens_task"]
 
 # 队列项的统一形状：具名元组或普通二元组，末位总是给模型读的正文
-QueueItem = Union[MinecraftInstruction, WakeEvenIdle, "SkyNotice", Tuple[str, str]]
+QueueItem = Union[MinecraftInstruction, WakeEvenIdle, InteractionNotice, "SkyNotice", Tuple[str, str]]
 
 
 class SkyNotice(NamedTuple):
@@ -41,7 +43,7 @@ def opens_task(item: QueueItem, *, task_finished: bool) -> bool:
 
     玩家指令永远开任务；闲着也叫醒的通知排队时不定处理方式，轮到读的那一刻才看任务状态：
     已交付就和一条指令一样开新任务（计时的备注、要回答的决策就是这次要做的事），
-    挂起或进行中只是接着原任务读的一条通知。
+    挂起或进行中只是接着原任务读的一条通知。互动通知不论什么时候都不开任务：回一个动作不是一件要交付的活。
     """
     if isinstance(item, MinecraftInstruction):
         return True
@@ -51,9 +53,11 @@ def opens_task(item: QueueItem, *, task_finished: bool) -> bool:
 def can_wake_idle(item: QueueItem) -> bool:
     """闲着（已交付或挂起）时这条能不能独自开批。
 
-    与 ``opens_task`` 同源：把两种闲着状态各代入一次，任一成立即能叫醒——
-    玩家指令与闲着也叫醒的通知是仅有的两种。
+    开任务的那两种与 ``opens_task`` 同源：把两种闲着状态各代入一次，任一成立即能叫醒（玩家指令、闲着也叫醒的通知）；
+    另有互动通知，闲着也叫醒、但不开任务。
     """
+    if isinstance(item, InteractionNotice):
+        return True
     return opens_task(item, task_finished=True) or opens_task(item, task_finished=False)
 
 
@@ -82,8 +86,17 @@ class WakeQueue:
         return iter(self._items)
 
     def can_wake(self) -> bool:
-        """队列里有没有闲着也能开批的项（玩家指令或闲着也叫醒的通知）。"""
+        """队列里有没有闲着也能开批的项（玩家指令、闲着也叫醒的通知、互动通知）。"""
         return any(can_wake_idle(item) for item in self._items)
+
+    def interaction_only(self) -> bool:
+        """闲着时叫醒这一批的是不是只有互动通知：有互动通知，又没有玩家指令和闲着也叫醒的通知。
+
+        是的话这一批只回应互动（回个动作就收尾）；同批里有指令或计时到点、决策，就按它们照常开任务或续任务。
+        """
+        has_interaction = any(isinstance(item, InteractionNotice) for item in self._items)
+        others_wake = any(can_wake_idle(item) and not isinstance(item, InteractionNotice) for item in self._items)
+        return has_interaction and not others_wake
 
     # ---- 投递 ----
 
@@ -98,6 +111,10 @@ class WakeQueue:
     def push_wake_even_idle(self, content: str) -> None:
         """排一条闲着也要叫醒模型的通知（计时到点、Mod 挂出的决策）。"""
         self._items.append(WakeEvenIdle("", content))
+
+    def push_interaction(self, content: str) -> None:
+        """排一条互动通知（别的玩家冲角色做了肢体动作）：闲着也叫醒，但不开任务。"""
+        self._items.append(InteractionNotice("", content))
 
     # ---- 消费 ----
 

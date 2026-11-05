@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.agents.minecraft.state import MinecraftInstruction, WakeEvenIdle
+from src.agents.minecraft.state import InteractionNotice, MinecraftInstruction, WakeEvenIdle
 from src.agents.minecraft.wake_queue import SkyNotice, WakeQueue, can_wake_idle, opens_task
 
 
@@ -91,3 +91,29 @@ def test_can_wake_reports_whether_idle_agent_would_open_a_batch() -> None:
     assert not queue.can_wake()
     queue.push_wake_even_idle("计时到点")
     assert queue.can_wake()
+
+
+def test_interaction_wakes_an_idle_agent_but_never_opens_a_task() -> None:
+    """互动通知闲着也叫醒，但不论任务交没交付都不开任务：回一个动作不是一件要交付的活。"""
+    interaction = InteractionNotice("", "[互动] 玩家 Alex 看着你蹲起 4 下")
+    assert can_wake_idle(interaction)
+    assert not opens_task(interaction, task_finished=True)
+    assert not opens_task(interaction, task_finished=False)
+
+
+def test_interaction_only_holds_while_no_instruction_or_timer_is_queued() -> None:
+    """只有互动通知（夹着普通通知、天色）时这一批只回应互动；排进指令或计时到点，就照常开任务或续任务。"""
+    queue = WakeQueue()
+    assert not queue.interaction_only(), "空队列不是"
+    queue.push_notice("目标 3 结束了")
+    queue.replace_sky_notice("天黑了")
+    assert not queue.interaction_only() and not queue.can_wake()
+    queue.push_interaction("[互动] 玩家 Alex 看着你蹲起 4 下")
+    assert queue.interaction_only() and queue.can_wake()
+    queue.push_wake_even_idle("计时到点")
+    assert not queue.interaction_only(), "计时到点要照常开任务或续任务"
+
+    with_instruction = WakeQueue()
+    with_instruction.push_interaction("[互动] 玩家 Alex 看着你蹲起 4 下")
+    with_instruction.push_instruction("t1", "建房子")
+    assert not with_instruction.interaction_only()

@@ -29,6 +29,7 @@ def test_route_table_channels_and_dispositions() -> None:
         "need_unhandled": ("inject_if_busy", {"dedup_content", "publish_material"}),
         "character_died": ("inject_if_busy", {"publish_material"}),
         "others_food_taken": ("inject_if_busy", {}),
+        "player_body_language": ("wake_for_interaction", {}),
         "temporary_task_started": ("attention_event", {"execution_context_prefix"}),
         "temporary_task_finished": ("attention_event", {"urgent_marker", "already_resolved"}),
     }
@@ -40,7 +41,7 @@ def test_route_table_channels_and_dispositions() -> None:
         assert route.urgent_marker == ("urgent_marker" in flags)
         assert route.execution_context_prefix == ("execution_context_prefix" in flags)
         assert route.already_resolved == ("already_resolved" in flags)
-        if channel in ("carry_sky", "wake_even_idle", "inject_if_busy"):
+        if channel in ("carry_sky", "wake_even_idle", "wake_for_interaction", "inject_if_busy"):
             assert route.template and "{message}" in route.template, f"{kind} 的通道需要文案模板"
 
 
@@ -176,3 +177,12 @@ async def test_publisher_reads_llm_through_getter_each_time() -> None:
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert recorder.events[1]["message"] == "新实例的概述"
+
+
+def test_player_body_language_notice_says_it_is_social_and_how_to_answer() -> None:
+    """别的玩家冲角色做的动作：通知点明是在互动、可以用 body_language 回一个动作、插一下不打断手上的活、闲着时回完就收尾。"""
+    route = route_body_event("player_body_language")
+    content = body_notice_content(route, "玩家 Alex（e4）看着你蹲起 4 下；他在你前方 3 格", history=[], queue=[])
+    assert content.startswith("[互动] 玩家 Alex（e4）看着你蹲起 4 下；他在你前方 3 格。")
+    for phrase in ("不是打你", "body_language", "不打断手上的活", "player-body-language", "不用交付也不用上报"):
+        assert phrase in content

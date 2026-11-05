@@ -47,6 +47,7 @@ _GOAL_STALLED_KIND = "stalled"
 # 计时到点（模型用 timer 设的"过 N 秒叫我"到了，消息带计时编号、备注、设了多少秒、此刻天色）不挂在任何目标上，
 # 也交过去，由游戏 Agent 叫醒模型。
 # 饿急了从别人家箱子拿了吃的也不带目标编号：交过去记一笔，主人回头来问时游戏 Agent 对得上号。
+# 别的玩家冲角色做的肢体动作（蹲起、拍一下、扔东西过来）也不带目标编号：交过去，由游戏 Agent 叫醒模型回一个动作。
 _BODY_EVENT_KINDS = frozenset(
     {
         "temporary_task_started",
@@ -57,6 +58,7 @@ _BODY_EVENT_KINDS = frozenset(
         "sky_changed",
         "timer_due",
         "others_food_taken",
+        "player_body_language",
     }
 )
 

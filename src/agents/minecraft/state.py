@@ -42,6 +42,19 @@ class WakeEvenIdle(NamedTuple):
     content: str
 
 
+class InteractionNotice(NamedTuple):
+    """别的玩家冲角色做了肢体动作的通知：闲着也叫醒模型，但不开任务、不改任务状态。
+
+    蹲起、拍一下、扔东西过来是有人在跟她玩，回一个动作插一下就做完，不是一件要交付的活。
+    任务进行中它就是一条普通通知；闲着（已交付，或上报后等主播定夺）时它也叫醒，但那一批只回应互动：
+    不开新任务、不续原任务，回完就安静收尾，不兜底交付、不改等定夺的委派。要是照计时到点那样开新任务，
+    收尾时系统会兜底交付，别人蹲一下主播就念一遍。task_id 恒为空串，不参与按任务号撤单。
+    """
+
+    task_id: str
+    content: str
+
+
 @dataclass(slots=True)
 class TodoItem:
     """一条待办（全量文档元素）"""

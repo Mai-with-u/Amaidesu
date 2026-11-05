@@ -190,6 +190,21 @@ async def test_food_taken_from_others_passes_through_to_the_body_callback() -> N
     assert recorder.changed == [] and server.calls_to("goal") == []
 
 
+async def test_player_body_language_passes_through_to_the_body_callback() -> None:
+    """别的玩家冲角色做的肢体动作不挂在目标上：连同 player 字段交给身体回调，由游戏 Agent 叫醒模型回一个动作。"""
+    server, recorder = FakeMaicraft(), _Recorder()
+    watch = _watch(server, recorder)
+    await watch.step()
+    player = {"name": "Alex", "uuid": "00000000-0000-0000-0000-00000000a1ec", "id": "e4"}
+    server.body_event("player_body_language", "玩家 Alex（e4）看着你蹲起 4 下；他在你前方 3 格", {"player": player})
+
+    await watch.step()
+
+    assert [event["kind"] for event in recorder.body] == ["player_body_language"]
+    assert recorder.body[0]["player"]["name"] == "Alex"
+    assert recorder.changed == [] and server.calls_to("goal") == []
+
+
 async def test_after_a_world_change_missing_goals_are_reported_gone() -> None:
     """事件流换了：逐个查在跟踪的目标，查不到的如实说不在了。"""
     server, recorder = FakeMaicraft(), _Recorder()

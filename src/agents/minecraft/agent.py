@@ -73,6 +73,7 @@ from src.agents.minecraft.notice_router import (
     route_body_event,
 )
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN, FoodTakenLog, food_taken_of
+from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
 from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
@@ -256,6 +257,9 @@ class MinecraftAgent(BaseAgent):
         self._task_steps = 0
         self._task_finished = True
         self._task_suspended = False
+        # 这一批是不是闲着时只因别的玩家冲角色做了动作被叫醒：是的话只回应互动，不开任务、不续任务、
+        # 回完安静收尾（不兜底交付、不催促、不许上报），已交付或等定夺的状态原样留着
+        self._interaction_only = False
         # 身体因模型调用失败而停下时的说法（主播看一眼时读到）；空串 = 没出故障。
         # 和"卡住了等主播拿主意"分开：出故障时重新派活不一定有用，主播不该以为身体在等她
         self._body_fault = ""
@@ -699,6 +703,7 @@ class MinecraftAgent(BaseAgent):
             await self._run_task_batch()
         finally:
             self._batch_active = False
+            self._interaction_only = False
 
     async def _run_task_batch(self) -> None:
         self._task_reported = False
@@ -715,7 +720,10 @@ class MinecraftAgent(BaseAgent):
             self._messages.append(dict(system_message))
         messages = self._messages
         close_interrupted_calls(messages)
-        if not self._task_finished and self._task_instructions:
+        # 闲着（已交付或等主播定夺）时只因别的玩家冲角色做了动作被叫醒：这一批只回应互动，
+        # 回个动作就收尾；不续原任务，所以也不把原任务的事实再摊开一遍
+        self._interaction_only = (self._task_finished or self._task_suspended) and self._wake_queue.interaction_only()
+        if not self._interaction_only and not self._task_finished and self._task_instructions:
             # 后台目标有了结果先恢复原目标、待办与目标状态，再让模型解释这次通知。
             messages.append(
                 {
@@ -747,6 +755,9 @@ class MinecraftAgent(BaseAgent):
                 # 轮到读时才看任务状态——已交付就和一条指令一样开新任务（计时的备注、要回答的决策就是
                 # 这次要做的事）；挂起着就接着原任务做，不记成原始指令；任务进行中只是一条普通通知。
                 opened = opens_task(queued, task_finished=self._task_finished)
+                if opened or isinstance(queued, WakeEvenIdle):
+                    # 同一批里来了指令、计时到点或决策：照常开任务或续任务，不再只是回应互动
+                    self._interaction_only = False
                 if opened:
                     if self._task_finished:
                         self._start_new_task(messages, system_message)
@@ -767,7 +778,9 @@ class MinecraftAgent(BaseAgent):
             if opening_due:
                 opening_due = False
                 await self._skill_support.append_opening_bundle(messages)
-            self._delegations.mark_running()
+            if not self._interaction_only:
+                # 只回应互动的一批不碰委派账：等主播定夺的委派要一直显示在等定夺，不能被一次蹲起改回进行中
+                self._delegations.mark_running()
             steps += 1
 
             # 先换上后台写好的折叠、给新消息编号，再看预算；过了折叠线就在后台请模型折叠，这一步照常行动
@@ -942,6 +955,10 @@ class MinecraftAgent(BaseAgent):
         self, messages: List[Dict[str, Any]], content: str, steps: int, reminded: bool
     ) -> bool:
         """模型这一轮没调用工具：按终止语义收尾。返回 True 表示给过提醒、继续推进。"""
+        if self._interaction_only:
+            # 只回应互动的一批：回完就收尾，不兜底交付（不然别人蹲一下主播就念一遍），也不为原任务催促
+            self._logger.info(f"回应互动后收尾（{steps} 步），任务状态原样留着")
+            return False
         pending = self._goals.tracked_ids()
         actionable = self._goal_ledger.actionable_goal_ids()
         if actionable or (not pending and self._unfinished_todos()):
@@ -1144,10 +1161,13 @@ class MinecraftAgent(BaseAgent):
         """
         kind = str(event.get("kind") or "")
         message = str(event.get("message") or kind)
-        record = {"event_type": kind, "message": message, "cursor": event.get("cursor")}
-        self._batch_body_events.append(record)
-        if len(self._batch_body_events) > MAX_BATCH_BODY_EVENTS:
-            self._batch_body_events = self._batch_body_events[-MAX_BATCH_BODY_EVENTS:]
+        if kind != PLAYER_BODY_LANGUAGE:
+            # 别的玩家的肢体动作不记进随上报带给主播的身体事件：一个人连着蹲能来十几条，会把饿了、死了这些挤掉，
+            # 主播那边也已经由注意流采集器一条条知道了
+            record = {"event_type": kind, "message": message, "cursor": event.get("cursor")}
+            self._batch_body_events.append(record)
+            if len(self._batch_body_events) > MAX_BATCH_BODY_EVENTS:
+                self._batch_body_events = self._batch_body_events[-MAX_BATCH_BODY_EVENTS:]
         if kind == OTHERS_FOOD_TAKEN:
             # 闲着时也要记：主人多半是过一阵才来问，那时候模型得从任务事实里认出是自己拿的
             self._food_taken.record(self._creatures.world_key, food_taken_of(event, now_ms()))
@@ -1164,6 +1184,8 @@ class MinecraftAgent(BaseAgent):
             self._carry_sky_notice(route.template.format(message=message))
         elif route.channel == "wake_even_idle":
             self._wake_even_idle(route.template.format(message=message))
+        elif route.channel == "wake_for_interaction":
+            self._wake_for_interaction(route.template.format(message=message))
         elif route.channel == "inject_if_busy":
             if self._batch_active or not self._task_finished:
                 self._inject_wakeup_message(
@@ -1192,6 +1214,18 @@ class MinecraftAgent(BaseAgent):
             self._logger.info(f"收工态不叫醒：{content[:60]}")
             return
         self._wake_queue.push_wake_even_idle(content)
+        self._wake_event.set()
+
+    def _wake_for_interaction(self, content: str) -> None:
+        """排一条互动通知（别的玩家冲角色做了肢体动作）并叫醒 worker。
+
+        任务进行中它是一条普通通知；闲着时它也开批，但那一批只回应互动（见 ``_interaction_only``）。
+        收工态不排：下播后有人冲她蹲起没人看，开播时再冒出来只是过时的事。
+        """
+        if not self._live_active:
+            self._logger.info(f"收工态不叫醒：{content[:60]}")
+            return
+        self._wake_queue.push_interaction(content)
         self._wake_event.set()
 
     def _carry_sky_notice(self, content: str) -> None:
@@ -1258,7 +1292,17 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
 
     def _request_wait(self) -> Dict[str, Any]:
-        """只允许对在跑的目标让出；在等回答或被暂停的目标不会自己往下走。"""
+        """只允许对在跑的目标让出；在等回答或被暂停的目标不会自己往下走。
+
+        只回应互动的一批例外：回完动作就让出，不管原任务有没有在等回答的目标（那是闲下来之前就挂着的事）。
+        """
+        if self._interaction_only and not self._message_queue:
+            self._wait_requested = True
+            return {
+                "ok": True,
+                "waiting": True,
+                "resume_on": "回应完互动，回到原来的状态：主播发来新指令，或闲着也要叫醒的事",
+            }
         actionable = self._goal_ledger.actionable_goal_ids()
         if actionable:
             return {
@@ -1706,6 +1750,11 @@ class MinecraftAgent(BaseAgent):
 
     async def _handle_report(self, kind: str, content: str, scene: str) -> Optional[str]:
         """minecraft_report：交付门禁通过后发射 game.report。返回拒绝原因；None = 受理。"""
+        if self._interaction_only:
+            return (
+                "这一轮只是回应别的玩家冲你做的动作，不是一件要交付的活：不交付也不上报，主播那边已经知道了；"
+                "回完动作就单独调用 minecraft_wait 结束这一轮，要说话用 chat"
+            )
         running = self._goals.tracked_ids()
         if kind == "delivery" and running:
             return (

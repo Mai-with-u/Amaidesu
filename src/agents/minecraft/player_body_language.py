@@ -1,4 +1,4 @@
-"""别的玩家冲角色做的肢体动作：Mod 的 ``player_body_language`` 事件读成给主播的一句话。
+"""别的玩家冲角色做的肢体动作：Mod 的 ``player_body_language`` 事件读成给主播的一句话和给游戏 Agent 的通知。
 
 很多玩家不打字，用动作说话：蹲下站起是打招呼，拍一下是叫你，扔东西过来是送你的，蹲起再拿剑对着你挥是约切磋。
 Mod 只认 16 格内看得见、冲着角色做的，按人归成一段，在 ``topic=self`` 流里发一条（与目标无关，不带目标编号）。
@@ -9,6 +9,9 @@ Mod 只认 16 格内看得见、冲着角色做的，按人归成一段，在 ``
 
 主播这头要的是一句能顺口接的话：动作照说，观察编号和方位距离去掉，"你"换成"我"（主播读的是她自己的遭遇），
 后面附上口径——这是在跟她玩，不是打她，开心地俏皮接一句，不提血量。
+
+游戏 Agent 这头（:data:`PLAYER_BODY_LANGUAGE_NOTICE`）：别人在跟你互动，可以用 ``body_language`` 回一个动作，
+它插一下就做完，不打断手上的活；闲着时回完就收尾，不交付、不上报（主播已经从上面那句话知道了）。
 """
 
 from __future__ import annotations
@@ -16,10 +19,18 @@ from __future__ import annotations
 import re
 from typing import Final
 
-__all__ = ["PLAYER_BODY_LANGUAGE", "spoken_fact", "spoken_line"]
+__all__ = ["PLAYER_BODY_LANGUAGE", "PLAYER_BODY_LANGUAGE_NOTICE", "spoken_fact", "spoken_line"]
 
 #: Mod 事件种类：别的玩家冲角色做的肢体动作；给主播的叙事种类与它同名
 PLAYER_BODY_LANGUAGE: Final = "player_body_language"
+
+#: 给游戏 Agent 的通知模板（``{message}`` 是 Mod 原话）：点明是社交、怎么回、回完怎么收尾
+PLAYER_BODY_LANGUAGE_NOTICE = (
+    "[互动] {message}。这是别的玩家在用动作跟你打交道，不是打你：可以用 body_language 回一个动作，"
+    "它插一下就做完，不打断手上的活；这些动作多半是什么意思、怎么回，读技能 player-body-language。"
+    "手上有活就回完接着做；闲着时回完就结束这一轮（单独调用 minecraft_wait，或不调工具），"
+    "不用交付也不用上报，主播那边已经知道了。"
+)
 
 #: 括号里的观察编号（e4、b5 这类）：给游戏 Agent 指东西用的，主播念出来没有意义
 _OBSERVATION_IDS = re.compile(r"\s*[（(][a-z]\d+[）)]")

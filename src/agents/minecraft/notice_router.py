@@ -1,6 +1,6 @@
 """身体事件通知路由：每类事件走哪条通道、对模型说什么话，一处定义。
 
-MinecraftAgent 把 Mod 的身体事件（生存急事、死亡、跟随、天色、计时）转给
+MinecraftAgent 把 Mod 的身体事件（生存急事、死亡、跟随、天色、计时、别的玩家的肢体动作）转给
 模型与主播。"哪类事件唤醒谁、说什么"的知识收进本模块一张路由表：
 一行一个种类，通道与文案常量同处，Agent 的执行器只认通道、不认种类
 （Mod 加一种事件时只在这里加一行）。
@@ -8,6 +8,8 @@ MinecraftAgent 把 Mod 的身体事件（生存急事、死亡、跟随、天色
 通道（执行器在 Agent，持有消息队列与唤醒事件）：
 - ``carry_sky``：挂进消息队列不唤醒，队列里只留最新一条（天色）；
 - ``wake_even_idle``：排成闲着也开批的通知并唤醒（计时到点、Mod 决策）；
+- ``wake_for_interaction``：排成互动通知并唤醒（别的玩家冲角色做的肢体动作）——闲着也叫醒，
+  但不开任务、不续原任务，那一批回完就收尾，不兜底交付；
 - ``inject_if_busy``：任务进行中才注入唤醒（跟随、身体急事、死亡）；
 - ``attention_event``：任务进行中经注意流分类摘要转告主播，按（种类,原文）
   去重——未知种类也走这里。
@@ -24,6 +26,7 @@ from typing import Any, Dict, List, Literal, Optional
 from src.agents.minecraft.attention_matrix import classify, summarize
 from src.agents.minecraft.chosen_death import CHOSEN_DEATH_NOTICE
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN
+from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE, PLAYER_BODY_LANGUAGE_NOTICE
 from src.agents.minecraft.repeated_notice import notice_present, repeat_reference
 
 __all__ = [
@@ -106,7 +109,7 @@ class BodyEventRoute:
     """
 
     kind: str
-    channel: Literal["carry_sky", "wake_even_idle", "inject_if_busy", "attention_event"]
+    channel: Literal["carry_sky", "wake_even_idle", "wake_for_interaction", "inject_if_busy", "attention_event"]
     template: Optional[str] = None
     dedup_content: bool = False
     publish_material: bool = False
@@ -121,6 +124,11 @@ _BODY_EVENT_ROUTES: Dict[str, BodyEventRoute] = {
     "sky_changed": BodyEventRoute(kind="sky_changed", channel="carry_sky", template=_SKY_NOTICE),
     # 跟随：任务进行中才告诉模型，给观众的叙述由注意流采集器出
     "follow_status": BodyEventRoute(kind="follow_status", channel="inject_if_busy", template=_FOLLOW_NOTICE),
+    # 别的玩家冲角色做的肢体动作：闲着也叫醒模型回一个动作，但不开任务、不交付（不然别人蹲一下主播就念一遍）；
+    # 转告主播由注意流采集器出，这里不重复
+    PLAYER_BODY_LANGUAGE: BodyEventRoute(
+        kind=PLAYER_BODY_LANGUAGE, channel="wake_for_interaction", template=PLAYER_BODY_LANGUAGE_NOTICE
+    ),
     # 计时到点：闲着也叫醒（模型给自己定的回头看一眼）
     "timer_due": BodyEventRoute(kind="timer_due", channel="wake_even_idle", template=_TIMER_NOTICE),
     # 处理不了的需求：任务进行中通知模型；Mod 原话发主播素材（长文先概述）
