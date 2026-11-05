@@ -47,7 +47,13 @@ from src.agents.minecraft.context_fold import (
 from src.agents.minecraft.creature_book import CreatureBook, creature_from_record, creature_record
 from src.agents.minecraft.delegation_book import DelegationBook
 from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_label, pause_notice
-from src.agents.minecraft.glance import glance_brief, glance_scene, glance_self, glance_world_memory
+from src.agents.minecraft.glance import (
+    RememberedPlacesCache,
+    glance_brief,
+    glance_scene,
+    glance_self,
+    glance_world_memory,
+)
 from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.interaction_throttle import InteractionThrottle, player_key_of
 from src.agents.minecraft.maicraft import (
@@ -57,6 +63,7 @@ from src.agents.minecraft.maicraft import (
     OBSERVE,
     PAUSED,
     PROVIDER,
+    REMEMBER,
     GOAL,
     GoalRun,
     MaicraftReply,
@@ -237,6 +244,8 @@ class MinecraftAgent(BaseAgent):
         self._creature_repo = creature_repo
         # 饿急了从别人家箱子拿过的吃的：按世界记最近几笔放进任务事实，主人回头来问时按名字、区域或位置对上号
         self._food_taken = FoodTakenLog()
+        # 速览里记住的地点：最多 5 分钟真读一次世界记忆；记地点成功、换存档、连接变化时提前作废
+        self._remembered_places = RememberedPlacesCache(self._clock)
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
             state=self._mc_state,
@@ -448,6 +457,8 @@ class MinecraftAgent(BaseAgent):
         断开也刷新登记：provider 清单在断开路径已置空，refresh 把降级前的
         工具从注册表整体摘除，避免 Agent 调到必然失败的陈旧条目。
         """
+        # 断开或重连都可能换了一个 Mod 进程、进了另一个存档：记住的地点清单整份丢掉，连上后的速览重读
+        self._remembered_places.forget()
         if not connected:
             try:
                 self._tool_registry.refresh_provider_tools(self._mcp_provider)
@@ -1066,6 +1077,10 @@ class MinecraftAgent(BaseAgent):
             return
         if name == EXECUTE:
             if run.finished:
+                if run.ability == REMEMBER and run.result_status == "done":
+                    # 记地点、忘掉地点、圈地盘成功：世界记忆刚改过，下一次速览重读记住的地点，
+                    # 主播被问到"某处在哪"时才看得到刚记下的名字
+                    self._remembered_places.invalidate()
                 # 当场完成的目标（记地点、只读分析）没有后台过程，结果已经在回复里；
                 # 账面仍要记：先登记再写终态，直接写会因条目不存在而落空（终态变化广播不出来）。
                 self._goal_ledger.remember_finished(run)
@@ -1319,6 +1334,8 @@ class MinecraftAgent(BaseAgent):
         主播的时间线上记下"从「A」换到了「B」"、存储据此知道这一场后半段玩的是哪个存档。
         """
         self._mc_state.switch_world(change.after.id)
+        # 认出了（另一个）存档：手上记住的地点清单可能是别的存档的，整份丢掉，下一次速览按这个存档重读
+        self._remembered_places.forget()
         if not change.switched or change.before is None:
             self._logger.info(f"认出所在存档：「{change.after.label()}」")
             return
@@ -1632,13 +1649,37 @@ class MinecraftAgent(BaseAgent):
             creatures = self._creatures.status_view()
             if creatures:
                 view["creatures"] = creatures
-            # 看自己 -> 看周围 -> 读世界记忆里记住的地点名：被问到"传送门在哪"时主播先知道记没记过，
-            # 和角色同一个维度的排前面，所以把看自己读到的维度一并交过去
-            memory = await self._call_maicraft(OBSERVE, {"what": "world_memory"})
+            # 看自己 -> 看周围 -> 取记住的地点名（多数时候取缓存）：被问到"传送门在哪"时主播先知道记没记过，
+            # 和角色同一个维度的排前面，所以把这次看自己读到的维度一并交过去现排
+            memory = await self._read_remembered_places()
             dimension = str(view.get("body", {}).get("dimension") or "")
             view.update(glance_world_memory(memory, dimension))
         view["work"] = self._glance_work()
         return {"tool": "glance", "brief": glance_brief(view), **view}
+
+    async def _read_remembered_places(self) -> MaicraftReply:
+        """速览用的记住的地点清单：缓存没到期就用缓存，否则真读一次 ``observe(world_memory)``。
+
+        顺序：缓存还新鲜 -> 直接用；否则读世界记忆 -> 成功就记进缓存（回复里没有地点清单按一个都没记过）；
+        读失败时有这个存档的旧清单就接着用旧的（记个警告），连旧的都没有才把失败原样交给速览照实写。
+        返回值统一成 ``{"places": [...]}`` 形状的回复，交给 ``glance_world_memory`` 现排。
+        """
+        cached = self._remembered_places.fresh()
+        if cached is not None:
+            return MaicraftReply(ok=True, data={"places": cached})
+        # 读之前记下作废次数：读的途中刚记了地点或换了存档，这次读回的只给这一次速览用，不进缓存
+        generation = self._remembered_places.generation
+        reply = await self._call_maicraft(OBSERVE, {"what": "world_memory"})
+        if reply.ok:
+            raw = reply.data.get("places")
+            places = raw if isinstance(raw, list) else []
+            self._remembered_places.store(places, generation)
+            return MaicraftReply(ok=True, data={"places": places})
+        previous = self._remembered_places.last_known()
+        if previous is None:
+            return reply
+        self._logger.warning(f"读记住的地点失败，速览先用上次读到的清单：{reply.error_message or reply.error_code}")
+        return MaicraftReply(ok=True, data={"places": previous})
 
     async def _name_creature(self, who: str, nickname: str) -> Dict[str, Any]:
         """主播给游戏里的生物起名：先重读一次身边（起名对象以眼下为准），再在名册里登记。

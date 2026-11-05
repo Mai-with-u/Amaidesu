@@ -23,6 +23,9 @@ EXECUTE = "maicraft_execute"
 GOAL = "maicraft_goal"
 EVENTS = "maicraft_events"
 
+# 记地点能力在目标运行里的 ID：它当场改世界记忆，宿主据此作废速览里记住的地点的缓存。
+REMEMBER = "maicraft:remember"
+
 # 事件流只给宿主自己读：模型看到的是宿主整理后的通知，不需要自己长轮询。
 HOST_ONLY_TOOLS = frozenset({EVENTS})
 

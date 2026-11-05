@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .attention_matrix import biome_name, item_name
 from .maicraft import MaicraftReply
@@ -37,6 +37,8 @@ __all__ = [
     "glance_self",
     "glance_world_memory",
     "REMEMBERED_PLACES_MAX",
+    "REMEMBERED_PLACES_TTL_S",
+    "RememberedPlacesCache",
 ]
 
 # 直播里说"身边"的范围：再远的生物与设施观众在画面里也看不清，主播提起来只会让人困惑。
@@ -47,6 +49,10 @@ BRIEF_MAX_CHARS = 300
 
 # 速览里最多列几个记住的地点：主播只需要知道"记过哪些"，速览每轮都进她的参考段，列全了会越攒越长
 REMEMBERED_PLACES_MAX = 6
+
+# 记住的地点最多隔多久真读一次（秒）：Mod 读世界记忆要在游戏客户端线程上把几千条记录排序、拼成一大段，
+# 速览却十几秒就要一次、只用得上几个地点名；记地点、换存档、重连时另有作废，不靠这个时长兜
+REMEMBERED_PLACES_TTL_S = 300.0
 
 _DIMENSIONS: Dict[str, str] = {
     "minecraft:overworld": "主世界",
@@ -408,6 +414,64 @@ def _in_dimension(place: Dict[str, Any], dimension: str) -> bool:
     """一个记住的地点是否和角色在同一个维度；不知道角色在哪个维度时一律不算。"""
     position = place.get("position") if isinstance(place.get("position"), dict) else {}
     return bool(dimension) and position.get("dimension") == dimension
+
+
+class RememberedPlacesCache:
+    """速览里记住的地点的读取缓存：速览十几秒一次，世界记忆却难得变一回。
+
+    存的是 Mod 给的原始地点清单，不是排好的那一行字：同一维度排前面要按每次速览读到的维度现排。
+    清单到期（``ttl_s``）或被作废后，下一次速览才真读；什么时候作废由 Agent 定：
+
+    - ``invalidate``：游戏 Agent 记地点、忘掉地点成功了——清单旧了，但还是这个存档的，读失败时可以顶上；
+    - ``forget``：换了存档、MaiCraft 连接断开或重连——旧清单可能是另一个存档的，整份丢掉，免得串档。
+
+    时间经注入的单调时钟（秒）走，测试推进假时钟验证到期。
+    """
+
+    def __init__(self, clock: Callable[[], float], ttl_s: float = REMEMBERED_PLACES_TTL_S) -> None:
+        self._clock = clock
+        self._ttl_s = ttl_s
+        # 最后一次读到的地点清单；None = 这个存档还没读到过
+        self._places: Optional[List[Any]] = None
+        self._read_at = 0.0
+        self._stale = True
+        # 作废了几次：读世界记忆是异步的，读的途中作废过（刚记了地点、换了存档），读回来的可能是作废前的样子
+        self._generation = 0
+
+    @property
+    def generation(self) -> int:
+        """开始真读前记下它，读完交回 ``store``，用来认出读的途中作废过。"""
+        return self._generation
+
+    def fresh(self) -> Optional[List[Any]]:
+        """没到期、没被作废的清单；该真读一次了返回 None。"""
+        if self._places is None or self._stale or self._clock() - self._read_at >= self._ttl_s:
+            return None
+        return self._places
+
+    def last_known(self) -> Optional[List[Any]]:
+        """最后一次读到的清单，到期、作废了也给（读失败时顶上）；丢掉过或从没读到过为 None。"""
+        return self._places
+
+    def store(self, places: List[Any], generation: int) -> None:
+        """真读成功：记下清单与读的时刻，从此刻起算到期。
+
+        ``generation`` 是开始读之前的 ``generation``；读的途中作废过就不记——这份可能是记地点之前、
+        或上一个存档的样子，记下来会让主播五分钟里都看不到刚记的地点，甚至看到别的存档的。
+        """
+        if generation != self._generation:
+            return
+        self._places, self._read_at, self._stale = list(places), self._clock(), False
+
+    def invalidate(self) -> None:
+        """清单旧了：下一次速览重读，读失败时仍可用这份旧的。"""
+        self._stale = True
+        self._generation += 1
+
+    def forget(self) -> None:
+        """清单可能不是眼下这个存档的：整份丢掉，下一次速览重读，读失败也不拿它顶。"""
+        self._places, self._stale = None, True
+        self._generation += 1
 
 
 def _distant(entities: Any, counts: Any) -> List[str]:

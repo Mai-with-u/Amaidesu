@@ -9,7 +9,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.agents.minecraft.glance import entity_label, glance_brief, glance_scene, glance_world_memory
+from src.agents.minecraft.glance import (
+    REMEMBERED_PLACES_TTL_S,
+    RememberedPlacesCache,
+    entity_label,
+    glance_brief,
+    glance_scene,
+    glance_world_memory,
+)
 from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
 from src.agents.minecraft.tools import STREAMER_GUIDE, build_notebook_spec
 from src.modules.llm.payload import Response
@@ -256,6 +263,96 @@ async def test_glance_lists_remembered_place_names_but_keeps_them_out_of_the_bri
 def test_glance_remembered_places_line(reply: MaicraftReply, expected: Dict[str, Any]) -> None:
     """记住的地点那一行：最多列几个、多的说共几处；空名与重名不列；一个都没记过不写；读失败照实写原因。"""
     assert glance_world_memory(reply, "minecraft:overworld") == expected
+
+
+def test_remembered_places_cache_keeps_nothing_read_across_an_invalidation() -> None:
+    """读世界记忆是异步的：读的途中刚记了地点或换了存档，读回的那份不进缓存；忘掉后旧清单也不再顶。"""
+    cache = RememberedPlacesCache(lambda: 0.0)
+    before = cache.generation
+    cache.invalidate()  # 读的途中游戏 Agent 记了一个地点
+    cache.store([_place("家")], before)
+    assert cache.fresh() is None and cache.last_known() is None
+
+    cache.store([_place("家"), _place("矿洞口")], cache.generation)
+    assert cache.fresh() == [_place("家"), _place("矿洞口")]
+    cache.invalidate()
+    assert cache.fresh() is None and cache.last_known() == [_place("家"), _place("矿洞口")], "标旧后仍可顶上"
+    cache.forget()
+    assert cache.last_known() is None, "可能是别的存档的，整份丢掉"
+
+
+def _memory_reads(server: FakeMaicraft) -> int:
+    """宿主真读了几次世界记忆（速览缓存没命中的次数）。"""
+    return sum(1 for arguments in server.calls_to("observe") if arguments == {"what": "world_memory"})
+
+
+async def test_glance_reads_remembered_places_at_most_every_five_minutes() -> None:
+    """世界记忆整份读要在游戏客户端线程上排序拼装：速览连着看只真读一次，到 5 分钟才再读。"""
+    server = FakeMaicraft()
+    server.world_memory_view["places"] = [_place("家")]
+    now = [1000.0]
+    agent, _llm, _bus = await make_minecraft_agent(server, lambda messages: _resp("好"), clock=lambda: now[0])
+
+    assert (await agent._glance())["remembered_places"] == "家"
+    now[0] += REMEMBERED_PLACES_TTL_S - 1
+    assert (await agent._glance())["remembered_places"] == "家"
+    assert _memory_reads(server) == 1, "没到期就用缓存"
+
+    now[0] += 1
+    server.world_memory_view["places"] = [_place("家"), _place("矿洞口")]
+    assert (await agent._glance())["remembered_places"] == "家、矿洞口"
+    assert _memory_reads(server) == 2, "到 5 分钟重读"
+    await agent.stop()
+
+
+async def test_a_successful_remember_makes_the_next_glance_reread() -> None:
+    """游戏 Agent 记地点成功后世界记忆刚改过：下一次速览不等到期，马上重读，刚记的名字就在里面。"""
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if not any(message.get("role") == "tool" and "记住了" in str(message.get("content")) for message in messages):
+            return _resp(
+                calls=[_call("maicraft_execute", {"goal": {"ability": "remember", "parameters": {"name": "家"}}})]
+            )
+        return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "记好了，这里记成了家"})])
+
+    agent, _llm, bus = await make_minecraft_agent(server, script, clock=lambda: 1000.0)
+    assert "remembered_places" not in await agent._glance()
+
+    agent.receive_delegation(instruction="把这里记成「家」", task_id="d-1")
+    await _wait_until(lambda: len(_reports(bus)) == 1)
+    server.world_memory_view["places"] = [_place("家")]
+
+    assert (await agent._glance())["remembered_places"] == "家"
+    assert _memory_reads(server) == 2
+    await agent.stop()
+
+
+async def test_switching_saves_rereads_and_never_falls_back_to_the_other_save() -> None:
+    """换了存档：旧存档的地点清单整份丢掉马上重读；读失败时同一存档的旧清单可以顶上，别的存档的不行。"""
+    server = FakeMaicraft()
+    server.enter_world("id-home", "老家")
+    server.world_memory_view["places"] = [_place("家")]
+    now = [1000.0]
+    agent, _llm, _bus = await make_minecraft_agent(server, lambda messages: _resp("好"), clock=lambda: now[0])
+    assert (await agent._glance())["remembered_places"] == "家"
+    assert (await agent._glance())["remembered_places"] == "家"
+    assert _memory_reads(server) == 1
+
+    # 同一存档里到期重读却读失败：先用上次读到的清单
+    now[0] += REMEMBERED_PLACES_TTL_S
+    server.world_memory_error = "角色不在世界里"
+    assert (await agent._glance())["remembered_places"] == "家"
+
+    # 换到另一个存档，读又失败：老家的清单不拿来顶，照实写读失败
+    server.enter_world("id-new", "新的世界")
+    view = await agent._glance()
+    assert "remembered_places" not in view and view["remembered_places_error"] == "角色不在世界里"
+
+    server.world_memory_error = ""
+    server.world_memory_view["places"] = [_place("新家")]
+    assert (await agent._glance())["remembered_places"] == "新家"
+    await agent.stop()
 
 
 def test_streamer_guide_hands_place_memos_to_the_game_and_waits_for_the_receipt() -> None:

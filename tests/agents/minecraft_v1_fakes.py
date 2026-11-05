@@ -151,8 +151,10 @@ class FakeMaicraft(BaseToolProvider):
             "distant_entities": {"minecraft:bat": 12, "minecraft:squid": 30},
             "facilities": [{"id": "b1", "block": "minecraft:chest", "direction": "左侧", "distance": 4}],
         }
-        # observe(world_memory)：记住的地点、圈的地盘、容器等记录；默认什么都没记过
+        # observe(world_memory)：记住的地点、圈的地盘、容器等记录；默认什么都没记过。
+        # world_memory_error 非空时这一项读失败（如角色不在世界里），原因就是这句话
         self.world_memory_view: Dict[str, Any] = {"places": [], "regions": [], "records": []}
+        self.world_memory_error = ""
         self._next_id = 1
         self._new_event = asyncio.Event()
 
@@ -189,6 +191,8 @@ class FakeMaicraft(BaseToolProvider):
     async def _observe(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         what = arguments.get("what", "scene")
         if what == "world_memory":
+            if self.world_memory_error:
+                return error("not_in_world", self.world_memory_error)
             return ok(dict(self.world_memory_view))
         view = dict(self.self_view if what == "self" else self.scene_view)
         if what == "self" and self.reports_world:
