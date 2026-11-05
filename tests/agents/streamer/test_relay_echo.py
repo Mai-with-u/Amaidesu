@@ -415,6 +415,16 @@ def test_game_agent_labels_relay_sources() -> None:
     assert [item[1] for item in queued] == ["[运营原话]\n拉下停机开关", "[主播补充]\n停机开关别碰", "继续"]
 
 
+def test_delegate_rules_point_with_features_not_screen_positions() -> None:
+    """委派守则：她看的直播画面是几秒前的，游戏里的视角可能已经转开，指东西写特征和名字，不写画面方位。"""
+    reset_prompt_manager()
+    try:
+        rules = get_prompt_manager().render("amaidesu_planner_delegate_rules")
+    finally:
+        reset_prompt_manager()
+    assert "画面左边那个" in rules and "是谁的" in rules and "地点名" in rules
+
+
 def test_prompts_state_relay_and_completion_rules() -> None:
     """提示词写明：补充只写新要求、完成要收进背包、原话优先于转述、一次一个身体动作。
 

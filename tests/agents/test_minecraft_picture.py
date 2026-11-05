@@ -1,5 +1,5 @@
 """本文件测 MinecraftAgent 的看画面主题：observe(picture) 的图怎么给模型、模型不能看图时转文字、
-一个任务里看画面的次数与间隔、图不进工具结果事件、截桌面的工具不给游戏 Agent、主播碰不到画面视图。"""
+一个任务里看画面的次数与间隔、图不进工具结果事件、截桌面的工具不给游戏 Agent、主播碰不到画面视图、看画面的提示词口径。"""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from src.agents.minecraft.config import MinecraftPictureConfig
 from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.llm.payload import Response
+from src.modules.prompts import get_prompt_manager, reset_prompt_manager
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
@@ -222,3 +223,15 @@ async def test_the_streamer_never_reaches_the_picture_view() -> None:
     assert "maicraft_observe" not in streamer_tools and "minecraft_glance" in streamer_tools
     await agent.stop()
 
+
+def test_game_prompt_says_when_a_picture_is_worth_it_and_how_to_read_it() -> None:
+    """游戏 Agent 提示词：默认不看画面、要转头先暂停、退几步装下再拍；谁说了什么不从图里认。"""
+    reset_prompt_manager()
+    try:
+        game = get_prompt_manager().render("amaidesu_minecraft_agent")
+    finally:
+        reset_prompt_manager()
+    assert "## 看画面" in game and "**默认不看**" in game
+    assert "with_menu=true" in game and "unlabeled=true" in game and "step_back_blocks" in game
+    assert "maicraft_goal(operation=pause)" in game
+    assert "events(topic=chat)" in game and "截图里的聊天栏" not in game
