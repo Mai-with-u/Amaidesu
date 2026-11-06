@@ -537,6 +537,69 @@ async def test_speech_endpoint_requires_chat_repo(api) -> None:
     assert resp.status_code == 503
 
 
+async def test_cues_endpoint_lists_cards_with_titles_and_scores(api, store) -> None:
+    """按推送先后列出本场线索卡：条目写法、标题、来源、分数与用上时刻；条目删了标题留空。"""
+    from src.modules.storage.models.memory import NewCueLogEntry
+
+    pk = await _seed_session(store, BASE, BASE + 600_000)
+    line = await store.archive.insert_line(
+        live_session_id=pk, text="女仆取名团子", quote="就叫团子", evidence_chat_id=1
+    )
+    gone = await store.archive.insert_line(live_session_id=pk, text="答应画头像", quote="画头像", evidence_chat_id=2)
+    promise = await store.commitments.insert_commitment(what="给猫做个窝", quote="下次给猫做个窝")
+    assert line and gone and promise is not None
+    await store.memory_cue_log.insert_entries(
+        entries=[
+            NewCueLogEntry(
+                live_session_id=pk,
+                pushed_at_ms=BASE + 1_000,
+                card_kind="rule",
+                archive_line_id=line,
+                sources=["danmaku"],
+                detail={"keywords": ["团子"], "how": ["exact"]},
+            ),
+            NewCueLogEntry(
+                live_session_id=pk,
+                pushed_at_ms=BASE + 2_000,
+                card_kind="vector",
+                commitment_id=promise,
+                sources=["situation"],
+                detail={"cosine": 0.71, "rank": 1, "fused": 0.03},
+            ),
+            NewCueLogEntry(
+                live_session_id=pk, pushed_at_ms=BASE + 3_000, card_kind="joke", detail={"joke": "倒立洗头"}
+            ),
+            NewCueLogEntry(live_session_id=pk, pushed_at_ms=BASE + 4_000, card_kind="rule", archive_line_id=gone),
+        ]
+    )
+    await store.memory_cue_log.mark_used(live_session_id=pk, archive_line_ids=[line], used_at_ms=BASE + 5_000)
+    await store.archive.delete_line(line_id=gone)
+    client = await api(
+        memory_cue_log_repo=store.memory_cue_log, archive_repo=store.archive, commitments_repo=store.commitments
+    )
+
+    resp = await client.get("/api/v1/review/cues", params={"session_id": pk})
+
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert [(item["label"], item["title"], item["card_kind"]) for item in items] == [
+        (f"档#{line}", "女仆取名团子", "rule"),
+        (f"约#{promise}", "给猫做个窝", "vector"),
+        ("老梗「倒立洗头」", "", "joke"),
+    ], "指向的档案行删掉后，那条记录跟着删"
+    assert items[0]["used_at_ms"] == BASE + 5_000 and items[0]["sources"] == ["danmaku"]
+    assert items[1]["detail"] == {"cosine": 0.71, "rank": 1, "fused": 0.03} and items[1]["used_at_ms"] is None
+
+
+async def test_cues_endpoint_requires_cue_log_repo(api) -> None:
+    """未装配线索卡记录仓储时 503（极简启动形态）。"""
+    client = await api()
+
+    resp = await client.get("/api/v1/review/cues", params={"session_id": 1})
+
+    assert resp.status_code == 503
+
+
 async def test_delete_speech_removes_references_and_clears_quote(review_client, store) -> None:
     """删一句：台词行与引用它的档案行一起删；对它的承诺保留、原话清空。"""
     pk = await _seed_session(store, BASE, BASE + 600_000)

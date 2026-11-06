@@ -92,6 +92,7 @@ class DashboardServer:
         event_repo: Optional[Any] = None,
         commitments_repo: Optional[Any] = None,
         archive_repo: Optional[Any] = None,
+        memory_cue_log_repo: Optional[Any] = None,
         rundown_transition_repo: Optional[Any] = None,
         storage_db_path: Optional[Path] = None,
         task_tracker: Optional[Any] = None,
@@ -173,6 +174,8 @@ class DashboardServer:
         # 未注入（极简启动/测试）时这些端点返回 503
         self.commitments_repo = commitments_repo
         self.archive_repo = archive_repo
+        # 注入线索卡记录仓储让 /api/v1/review/cues 列出本场推过的线索卡；未注入时该端点返回 503
+        self.memory_cue_log_repo = memory_cue_log_repo
         # 注入 RundownTransitionRepo 让 /live-sessions/{id}/rundown-execution
         # 读流程单变更事实行；未注入（极简启动/测试）时该端点返回 503
         self.rundown_transition_repo = rundown_transition_repo

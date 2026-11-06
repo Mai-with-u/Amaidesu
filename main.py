@@ -936,6 +936,8 @@ async def create_app_components(
             # 记忆账本：承诺与场次档案（下播整理写入；WebUI 查看与纠错）
             commitments_repo=database.commitments,
             archive_repo=database.archive,
+            # 复盘页「本场线索卡」：被动想起推了什么、用上没有
+            memory_cue_log_repo=database.memory_cue_log,
             # 主播记忆页查看与编辑长期记忆文件（MEMORY.md）
             rundown_transition_repo=database.rundown_transitions,
             # 观众域查询接口：列表 / 档案 / 对话 / 贡献聚合直查存储层
@@ -1264,6 +1266,7 @@ async def _start_dashboard(
     event_repo=None,
     commitments_repo=None,
     archive_repo=None,
+    memory_cue_log_repo=None,
     rundown_transition_repo=None,
     storage_db_path=None,
     task_tracker=None,
@@ -1325,6 +1328,7 @@ async def _start_dashboard(
             # 记忆账本：承诺与场次档案的查看、纠错与整理状态
             commitments_repo=commitments_repo,
             archive_repo=archive_repo,
+            memory_cue_log_repo=memory_cue_log_repo,
             # 流程单执行面板读变更事实行
             rundown_transition_repo=rundown_transition_repo,
             storage_db_path=storage_db_path,

@@ -4,7 +4,7 @@
 不含任何判定逻辑——超阈染色是前端常量的职责，本层只算数。
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -57,6 +57,31 @@ class ReviewSpeechItem(BaseModel):
     dropped: bool = False
     """播放队列确知没送到观众面前（仍算发过，但不该当众承担）；删句同样可删。"""
     memory_refs: List[int] = Field(default_factory=list)
+
+
+class ReviewCueItem(BaseModel):
+    """复盘页「本场线索卡」一行：推给决策层的哪张卡、谁触发的、分数、她用上没有。"""
+
+    id: int
+    pushed_at_ms: int
+    card_kind: str
+    """viewer 对象开口 / game 游戏开着 / place 地点 / rule 规则 / vector 语义 / joke 老梗。"""
+    label: str
+    """条目写法：档#41 / 约#7 / 老梗「倒立洗头」。"""
+    title: str = ""
+    """档案行标题或承诺动作；条目已被删掉时为空串。"""
+    archive_line_id: Optional[int] = None
+    commitment_id: Optional[int] = None
+    sources: List[str] = Field(default_factory=list)
+    """命中它的来源：danmaku 观众弹幕 / place 游戏地点 / situation 游戏情境 / self 她的台词 / game 游戏开着。"""
+    detail: Dict[str, Any] = Field(default_factory=dict)
+    """分数明细：规则写触发词，语义写余弦、名次与融合分，地点写地点名与距离。"""
+    self_triggered: bool = False
+    used_at_ms: Optional[int] = None
+
+
+class ReviewCueItems(BaseModel):
+    items: List[ReviewCueItem] = Field(default_factory=list)
 
 
 class ReviewSpeechItems(BaseModel):

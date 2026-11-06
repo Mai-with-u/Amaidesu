@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional, Tuple
 
 from src.modules.llm.embedding import EmbeddingClient, EmbeddingError
 from src.modules.logging import get_logger
@@ -23,6 +23,14 @@ from src.modules.storage.repos.memory_index import INDEX_SOURCES, IndexSource, M
 from src.modules.utils.time_utils import now_ms
 
 from .textmatch import index_text
+
+# 日志里四类来源的叫法
+_SOURCE_LABELS: Dict[IndexSource, str] = {
+    "archive": "档案",
+    "commitment": "承诺",
+    "speech": "台词",
+    "event": "游戏事件",
+}
 
 logger = get_logger("MemoryIndexer")
 
@@ -113,48 +121,70 @@ class MemoryIndexer:
             self._wake.clear()
 
     async def run_once(self) -> None:
-        """跑一轮：四类来源先补全文，再（配置了且不在退避期时）补向量。"""
+        """跑一轮：四类来源先补全文，再（配置了且不在退避期时）补向量；这一轮补了多少记一行日志。"""
         now = self._clock()
+        full_text: Dict[IndexSource, int] = {}
         for source in INDEX_SOURCES:
-            await self._fill_full_text(source, now)
+            full_text[source] = await self._fill_full_text(source, now)
+        vectors: Dict[IndexSource, int] = {}
         if self._embedding is not None and now >= self._retry_at_ms:
             for source in INDEX_SOURCES:
-                if not await self._fill_vectors(self._embedding, source, now):
+                written, ok = await self._fill_vectors(self._embedding, source, now)
+                vectors[source] = written
+                if not ok:
                     break
         self._passes += 1
+        self._log_pass(full_text, vectors)
 
-    async def _fill_full_text(self, source: IndexSource, now: int) -> None:
-        """一类来源的全文：取缺的行、两字切分、写回；整批都被跳过（读写之间正文变了）就留到下一轮。"""
+    def _log_pass(self, full_text: Dict[IndexSource, int], vectors: Dict[IndexSource, int]) -> None:
+        """补了东西记 info（每类来源各几行）；什么都没补只记 debug，免得空转的轮次刷屏。"""
+        parts = [
+            f"{kind}：{'、'.join(f'{_SOURCE_LABELS[source]} {count}' for source, count in counts.items() if count)}"
+            for kind, counts in (("全文", full_text), ("向量", vectors))
+            if any(counts.values())
+        ]
+        if parts:
+            logger.info(f"记忆索引这一轮补了 {'；'.join(parts)}")
+        else:
+            logger.debug("记忆索引这一轮没有要补的")
+
+    async def _fill_full_text(self, source: IndexSource, now: int) -> int:
+        """一类来源的全文：取缺的行、两字切分、写回，返回写了几行；整批都被跳过（读写之间正文变了）就留到下一轮。"""
+        total = 0
         for _ in range(FULL_TEXT_MAX_BATCHES):
             docs = await self._repo.pending_full_text(source=source, now_ms=now, limit=FULL_TEXT_BATCH)
             if not docs:
-                return
+                return total
             written = await self._repo.write_full_text(
                 source=source, items=[(doc, index_text(doc.document)) for doc in docs]
             )
+            total += written
             if len(docs) < FULL_TEXT_BATCH or written == 0:
-                return
+                return total
+        return total
 
-    async def _fill_vectors(self, embedding: EmbeddingClient, source: IndexSource, now: int) -> bool:
-        """一类来源的向量；嵌入失败时登记退避并返回 False（这一轮其余来源的向量也不再请求）。"""
+    async def _fill_vectors(self, embedding: EmbeddingClient, source: IndexSource, now: int) -> Tuple[int, bool]:
+        """一类来源的向量，返回（写了几行, 嵌入是否正常）；嵌入失败时登记退避（这一轮其余来源的向量也不再请求）。"""
+        total = 0
         for _ in range(VECTOR_MAX_BATCHES):
             docs = await self._repo.pending_vectors(
                 source=source, model_key=embedding.model_key, now_ms=now, limit=self._vector_batch
             )
             if not docs:
-                return True
+                return total, True
             try:
                 vectors = await embedding.embed([doc.document for doc in docs])
             except EmbeddingError as exc:
                 self._arm_backoff(now, exc)
-                return False
+                return total, False
             self._failures = 0
             written = await self._repo.write_vectors(
                 source=source, model_key=embedding.model_key, items=list(zip(docs, vectors, strict=True))
             )
+            total += written
             if len(docs) < self._vector_batch or written == 0:
-                return True
-        return True
+                return total, True
+        return total, True
 
     def _arm_backoff(self, now: int, exc: EmbeddingError) -> None:
         """嵌入失败：连续失败次数加一，按次数翻倍定下次重试的时刻，记 warning。"""

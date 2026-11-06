@@ -27,6 +27,8 @@ from src.modules.dashboard.schemas.review import (
     ReviewExportManifest,
     ReviewSessionBrief,
     ReviewSpeechItem,
+    ReviewCueItem,
+    ReviewCueItems,
     ReviewSpeechItems,
     SessionReviewResponse,
     SpeechDeleteResponse,
@@ -186,6 +188,65 @@ async def session_speech(
             for row in rows
         ]
     )
+
+
+@router.get("/cues", response_model=ReviewCueItems)
+async def session_cues(
+    server: ServerDep,
+    session_id: Annotated[int, Query(gt=0, description="场次 id（live_sessions 主键）")],
+) -> ReviewCueItems:
+    """单场推过的线索卡（按推送先后）：被动想起与承诺卡推了什么、谁触发的、她用上没有。"""
+    repo = server.memory_cue_log_repo
+    if repo is None:
+        raise HTTPException(status_code=503, detail="线索卡记录仓储未装配")
+    entries = await repo.list_session_entries(live_session_id=session_id)
+    archive_titles = await _archive_titles(server, [entry.archive_line_id for entry in entries])
+    commitment_titles = await _commitment_titles(server, [entry.commitment_id for entry in entries])
+    items: List[ReviewCueItem] = []
+    for entry in entries:
+        if entry.archive_line_id is not None:
+            label, title = f"档#{entry.archive_line_id}", archive_titles.get(entry.archive_line_id, "")
+        elif entry.commitment_id is not None:
+            label, title = f"约#{entry.commitment_id}", commitment_titles.get(entry.commitment_id, "")
+        else:
+            label, title = f"老梗「{entry.detail.get('joke', '')}」", ""
+        items.append(
+            ReviewCueItem(
+                id=entry.id,
+                pushed_at_ms=entry.pushed_at_ms,
+                card_kind=entry.card_kind,
+                label=label,
+                title=title,
+                archive_line_id=entry.archive_line_id,
+                commitment_id=entry.commitment_id,
+                sources=list(entry.sources),
+                detail=dict(entry.detail),
+                self_triggered=entry.self_triggered,
+                used_at_ms=entry.used_at_ms,
+            )
+        )
+    return ReviewCueItems(items=items)
+
+
+async def _archive_titles(server: Any, ids: List[Optional[int]]) -> Dict[int, str]:
+    """线索卡指向的档案行标题；没装配档案仓储时为空（面板只显示编号）。"""
+    wanted = [int(item) for item in ids if item is not None]
+    if not wanted or server.archive_repo is None:
+        return {}
+    lines = await server.archive_repo.list_lines_by_ids(line_ids=wanted)
+    return {int(line.id): line.text for line in lines}
+
+
+async def _commitment_titles(server: Any, ids: List[Optional[int]]) -> Dict[int, str]:
+    """线索卡指向的承诺动作标题；没装配承诺仓储时为空（面板只显示编号）。"""
+    titles: Dict[int, str] = {}
+    if server.commitments_repo is None:
+        return titles
+    for commitment_id in dict.fromkeys(int(item) for item in ids if item is not None):
+        commitment = await server.commitments_repo.get_commitment(commitment_id=commitment_id)
+        if commitment is not None:
+            titles[commitment_id] = commitment.what
+    return titles
 
 
 @router.delete("/speech/{chat_id}", response_model=SpeechDeleteResponse)

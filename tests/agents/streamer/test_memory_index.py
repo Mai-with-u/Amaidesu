@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import pytest
 
@@ -66,7 +66,10 @@ async def test_first_pass_backfills_full_text_and_skips_vectors_without_embeddin
     assert indexer.semantic_note == "语义检索没开"
 
 
-async def test_vectors_follow_full_text_when_embedding_is_configured(store: SQLiteDatabase) -> None:
+async def test_vectors_follow_full_text_when_embedding_is_configured(
+    store: SQLiteDatabase, loguru_capture: Any
+) -> None:
+    """配了嵌入：全文补完接着补向量；每轮补了多少记一行，没东西补的轮次不记 info。"""
     clock = FakeClock()
     await _seed(store, clock)
     server = FakeEmbeddingServer()
@@ -76,6 +79,11 @@ async def test_vectors_follow_full_text_when_embedding_is_configured(store: SQLi
 
     await indexer.run_once()
     await indexer.run_once()
+
+    passes = [record["message"] for record in loguru_capture.records if "记忆索引这一轮补了" in record["message"]]
+    assert passes == [
+        "记忆索引这一轮补了 全文：档案 1、承诺 1、台词 1、游戏事件 1；向量：档案 1、承诺 1、台词 1、游戏事件 1"
+    ]
 
     for source in ("archive", "commitment", "speech", "event"):
         assert await _count(store, f"memory_vectors_{source}") == 1
