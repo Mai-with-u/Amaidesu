@@ -33,9 +33,7 @@ export function readRetention(config: Record<string, unknown> | undefined): Anno
 export function composeAnnouncement(options: AnnouncementOptions): string {
   const rawRetention = options.rawDays > 0 ? `最多 ${options.rawDays} 天` : '长期保存';
   const viewerRetention =
-    options.viewerAbsenceDays > 0
-      ? `（保留到最后一次来访后 ${options.viewerAbsenceDays} 天）`
-      : '';
+    options.viewerAbsenceDays > 0 ? `（保留到最后一次来访后 ${options.viewerAbsenceDays} 天）` : '';
   const residual =
     options.rawDays > 0
       ? `数据库备份里的残留最多保留 ${options.rawDays} 天；运行日志里可能仍有残留，可联系运营者处理。`

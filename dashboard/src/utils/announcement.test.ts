@@ -36,7 +36,11 @@ describe('composeAnnouncement', () => {
   });
 
   it('设了保留期时写具体天数，观众行附注缺席清理', () => {
-    const text = composeAnnouncement({ rawDays: 7, viewerAbsenceDays: 30, contact: 'QQ 群 123456' });
+    const text = composeAnnouncement({
+      rawDays: 7,
+      viewerAbsenceDays: 30,
+      contact: 'QQ 群 123456',
+    });
     expect(text).toContain('为互动会保存弹幕（最多 7 天）');
     expect(text).toContain('数据库备份里的残留最多保留 7 天');
     // 保留期不管运行日志：日志残留不承诺天数

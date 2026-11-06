@@ -140,11 +140,7 @@
                 恢复
               </el-button>
               <!-- 急停：危险样式区分于普通操作；点击弹出可选理由与撤单开关 -->
-              <el-button
-                type="danger"
-                :loading="emergencyStopLoading"
-                @click="openEmergencyStop"
-              >
+              <el-button type="danger" :loading="emergencyStopLoading" @click="openEmergencyStop">
                 急停
               </el-button>
               <!-- 重启/关机为低频高风险动作，收进下拉（点击后仍有确认框） -->
@@ -382,7 +378,9 @@
           width="420px"
           :close-on-click-modal="false"
         >
-          <p class="md-stop-hint">将立即叫停该 Agent 当前所有在跑动作，理由会转给 Agent 供其调整。</p>
+          <p class="md-stop-hint">
+            将立即叫停该 Agent 当前所有在跑动作，理由会转给 Agent 供其调整。
+          </p>
           <el-input
             v-model="emergencyStopReason"
             type="textarea"
@@ -605,7 +603,11 @@ async function confirmEmergencyStop(): Promise<void> {
   if (!name) return;
   emergencyStopLoading.value = true;
   try {
-    await agentsApi.stopAgent(name, emergencyStopReason.value, emergencyStopCancelDelegations.value);
+    await agentsApi.stopAgent(
+      name,
+      emergencyStopReason.value,
+      emergencyStopCancelDelegations.value,
+    );
     ElMessage.success('已叫停');
     emergencyStopVisible.value = false;
   } catch (error) {
