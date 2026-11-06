@@ -5,7 +5,12 @@
  * 也收在这里，行为由单元测试直接断言。
  */
 
-import type { CommitmentItem, CommitmentStatus, UnregisteredKind } from '@/types';
+import type {
+  CommitmentItem,
+  CommitmentStatus,
+  SnapshotChangeAction,
+  UnregisteredKind,
+} from '@/types';
 
 /** 挂了游戏的条目共有的三个字段（承诺与档案行都有） */
 export interface GameSaveFields {
@@ -87,6 +92,17 @@ export function commitmentQuoteState(
 /** 未登记条目类型 → 页面标签 */
 export function unregisteredKindLabel(kind: UnregisteredKind): string {
   return kind === 'commitment' ? '承诺' : '档案';
+}
+
+/** 档案快照改动 → 页面标签 */
+export function snapshotChangeLabel(action: SnapshotChangeAction): string {
+  const labels: Record<SnapshotChangeAction, string> = {
+    drop: '去掉',
+    replace: '替换',
+    evicted: '挤出',
+    refused: '没采纳',
+  };
+  return labels[action];
 }
 
 /** 整理状态标签：已整理 / 待整理 */

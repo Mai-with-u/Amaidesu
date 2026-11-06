@@ -10,6 +10,7 @@ import {
   settleAttemptsExhausted,
   settleAttemptsText,
   settleStateLabel,
+  snapshotChangeLabel,
   unregisteredKindLabel,
   validateCloseQuote,
 } from './ledgerView';
@@ -84,6 +85,13 @@ describe('整理状态展示', () => {
   it('未登记条目按类型区分承诺与档案', () => {
     expect(unregisteredKindLabel('commitment')).toBe('承诺');
     expect(unregisteredKindLabel('archive')).toBe('档案');
+  });
+
+  it('档案快照改动按操作给中文标签', () => {
+    expect(snapshotChangeLabel('drop')).toBe('去掉');
+    expect(snapshotChangeLabel('replace')).toBe('替换');
+    expect(snapshotChangeLabel('evicted')).toBe('挤出');
+    expect(snapshotChangeLabel('refused')).toBe('没采纳');
   });
 });
 

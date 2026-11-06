@@ -1483,11 +1483,25 @@ export interface UnregisteredItem {
   reason: string;
 }
 
-/** 一场的整理报告：失败原因，或成功时那些没能登记的条目 */
+/** 整理对档案快照的一处改动：去掉 / 换成本场新写的一行 / 超出上限被挤出 / 没采纳的操作 */
+export type SnapshotChangeAction = 'drop' | 'replace' | 'evicted' | 'refused';
+
+/** 整理对上一份档案快照做的一处改动，给运营者核对去掉的理由与证据 */
+export interface SnapshotChange {
+  action: SnapshotChangeAction;
+  /** 被动到的那一行旧档案的标题 */
+  what: string;
+  reason: string;
+  /** 本场作证据的那句台词原文（去掉、替换时） */
+  quote: string;
+}
+
+/** 一场的整理报告：失败原因，或成功时那些没能登记的条目与档案快照的改动 */
 export interface SettleReport {
   /** 整理失败的原因；成功时为 null */
   failure_reason: string | null;
   unregistered: UnregisteredItem[];
+  snapshot_changes: SnapshotChange[];
 }
 
 /** 一场正式场的整理状态（GET /api/v1/memory/settle） */

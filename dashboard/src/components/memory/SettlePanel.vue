@@ -73,6 +73,33 @@
           自动重试用满，这一场需要点「重新整理」才会再排进调度。
         </p>
         <div
+          v-if="row.settle_report && (row.settle_report.snapshot_changes ?? []).length > 0"
+          class="unregistered"
+        >
+          <div class="unregistered-title">
+            档案快照的改动（{{
+              row.settle_report.snapshot_changes.length
+            }}
+            处，去掉与替换要有本场台词作证据）
+          </div>
+          <div
+            v-for="(change, index) in row.settle_report.snapshot_changes"
+            :key="index"
+            class="unregistered-item"
+          >
+            <div class="unregistered-head">
+              <el-tag size="small" type="warning" effect="plain">{{
+                snapshotChangeLabel(change.action)
+              }}</el-tag>
+              <span class="unregistered-what">{{ change.what || '（没有标题）' }}</span>
+              <span class="unregistered-reason">{{ change.reason }}</span>
+            </div>
+            <blockquote v-if="change.quote" class="unregistered-quote">
+              “{{ change.quote }}”
+            </blockquote>
+          </div>
+        </div>
+        <div
           v-if="row.settle_report && row.settle_report.unregistered.length > 0"
           class="unregistered"
         >
@@ -127,6 +154,7 @@ import {
   settleAttemptsExhausted,
   settleAttemptsText,
   settleStateLabel,
+  snapshotChangeLabel,
   unregisteredKindLabel,
 } from './ledgerView';
 
