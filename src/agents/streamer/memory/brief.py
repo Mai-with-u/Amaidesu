@@ -157,17 +157,17 @@ async def _pending_commitments(
     commitments_repo: "CommitmentRepo",
     used: AbstractSet[int] = frozenset(),
 ) -> Tuple[Sequence[Commitment], int]:
-    """不针对具体观众、不挂游戏、本场还没点名用过的未了结承诺（最老的在前）与更多条数。
+    """不针对具体的人、不挂游戏、本场还没点名用过的未了结承诺（最老的在前）与更多条数。
 
-    对某位观众的承诺只经线索推送在 ta 开口时出现，挂游戏的只在该游戏开着时出现，
-    都不进常驻简报——否则她每场都对着全场念叨不在场的人。
+    对某位观众、某位游戏玩家的承诺只经线索推送在那个人开口时出现，挂游戏的只在该游戏开着时
+    出现，都不进常驻简报——否则她每场都对着全场念叨不在场的人。
     """
     try:
         rows = await commitments_repo.list_commitments(statuses=["open"], limit=_CANDIDATE_LIMIT)
     except Exception as exc:  # noqa: BLE001 - 读不到就当没有待办，简报少一段
         logger.warning(f"读未了结承诺失败（简报不带承诺段）: {exc}", exc=exc)
         return [], 0
-    candidates = [row for row in rows if row.viewer_id is None and not row.game and int(row.id) not in used]
+    candidates = [row for row in rows if not row.has_target and not row.game and int(row.id) not in used]
     # 仓储按新的在前给，简报要最老的在前
     candidates.reverse()
     taken = candidates[:MAX_BRIEF_COMMITMENTS]

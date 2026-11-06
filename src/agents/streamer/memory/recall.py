@@ -343,7 +343,8 @@ class MemoryRecallService:
         commitments: Dict[int, Any] = {}
         for commitment_id in ids["commitment"]:
             row = await self._commitments_repo.get_commitment(commitment_id=commitment_id)
-            if row is not None and row.viewer_id is None and row.status in ("open", "closed"):
+            # 对某位观众、某位玩家的承诺不经回想翻给全场
+            if row is not None and not row.has_target and row.status in ("open", "closed"):
                 commitments[commitment_id] = row
         events = await self._events_by_ids(ids.get("event", []))
         notes = await self._session_notes([row.live_session_id for row in speech.values()], context)

@@ -5,6 +5,7 @@
 - 新面孔、只在本场或彩排里有往来的不推
 - 同一位每场至多两次、隔十分钟；本场她已经回应过他就不再推（用上即停）
 - 推出去的卡记进线索卡记录，只记玩家编号
+- 答应过他的事写在他的卡尾；对玩家的承诺不进常驻简报、不当"游戏开着"的卡推给全场
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import AsyncIterator, Tuple
 
 import pytest
 
+from src.agents.streamer.memory.brief import build_brief
 from src.agents.streamer.memory.cues import PUSH_COOLDOWN_MS, MemoryCueProvider
 from src.modules.storage.database import SQLiteDatabase
 
@@ -161,3 +163,28 @@ async def test_cooldown_cap_and_stop_once_she_answered_him(store: SQLiteDatabase
     )
     answered = _provider(store, later, clock, current)
     assert (await answered.collect(batch=[], game_players=window)).card_count == 0
+
+
+async def test_promises_to_him_ride_on_his_card_only(store: SQLiteDatabase) -> None:
+    """答应过 Alex 的事：他露面时写在他的卡尾（没有别的往来也推），简报和游戏开着的卡都不提。"""
+    before, current = await _two_sessions(store)
+    alex = await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-a", name="Alex", live_session_id=before, at_ms=_NOW - 85_000_000
+    )
+    promise = await store.commitments.insert_commitment(
+        what="帮他修房子", quote="周末我帮你把房子修好", created_session_id=before, now_ms_value=_NOW - 84_000_000
+    )
+    assert promise is not None
+    with store.manager.transaction() as conn:
+        conn.execute("UPDATE commitments SET target_player_id=?, game='minecraft' WHERE id=?", (alex.id, promise))
+
+    brief = await build_brief(archive_repo=store.archive, commitments_repo=store.commitments)
+    assert "帮他修房子" not in brief.text and promise not in brief.commitment_ids
+    provider = _provider(store, current, _Clock(), before)
+    assert (await provider.collect(batch=[], open_games=["minecraft"])).card_count == 0, "游戏开着也不对全场推"
+
+    cues = await provider.collect(batch=[], open_games=["minecraft"], game_players=[("minecraft", "uuid-a")])
+    assert cues.card_count == 1
+    assert f"[玩家·Alex] Alex 在游戏里找你了。你答应过他：帮他修房子（约#{promise}）。" in cues.text
+    (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=current)
+    assert entry.detail == {"player_id": alex.id, "commitment_ids": [promise]}

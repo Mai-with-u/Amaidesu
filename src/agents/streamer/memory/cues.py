@@ -113,6 +113,8 @@ MIN_SESSIONS_FOR_PRESENCE = 3
 _MAX_COMMITMENTS_PER_VIEWER = 3
 # 挂在一个游戏上的未了结承诺最多看几条：别的存档里答应的不推，要往后多看几条才找得到眼下这个存档的
 _MAX_COMMITMENTS_PER_GAME = 20
+# 玩家卡尾至多写几条答应过他的事
+_MAX_PROMISES_PER_PLAYER = 2
 # 规则一路看她最近几句播出的台词
 RECENT_SPEECH_LINES = 3
 
@@ -591,6 +593,7 @@ class MemoryCueProvider:
 
         卡只推给这一窗找过她的那几位（按 UUID 对上，不会推错人）；同一位每场至多两次、隔十分钟，
         本场她已经回应过他（台词记下了回应对象）就不再推——认出来了，用上即停。新面孔没有往来，不推。
+        答应过他、还没了结的事（至多两条）写在卡尾：对玩家的承诺只在他露面时提。
         """
         if self._players is None or not game_players:
             return
@@ -605,19 +608,26 @@ class MemoryCueProvider:
             if self._skip(key, state, "本场说上话了" if player.id in replied else self._blocked(key, state)):
                 continue
             history = await self._players.list_history(player_id=player.id, exclude_session_id=session_id)
-            text = render_player_card(player, history, previous_session_id=state.previous_session_id)
+            promises = await self._open_commitments(player_id=int(player.id), limit=_MAX_PROMISES_PER_PLAYER)
+            # 别的存档里答应的照样提，但写明是在哪个存档答应的
+            notes = [(item, place_note(item.game, item.save_id, item.save_name, state.saves)) for item in promises]
+            text = render_player_card(player, history, previous_session_id=state.previous_session_id, promises=notes)
             if not text:
                 continue
-            card = _Card(key=key, text=text, kind="player", sources=(SOURCE_PLAYER,), detail={"player_id": player.id})
+            detail: Dict[str, Any] = {"player_id": player.id}
+            if promises:
+                detail["commitment_ids"] = [int(item.id) for item in promises]
+            card = _Card(key=key, text=text, kind="player", sources=(SOURCE_PLAYER,), detail=detail)
             self._push(state, card)
 
     async def _game_cards(self, open_games: Sequence[str], state: _Round) -> None:
-        """游戏开着：挂在这个游戏上、不针对具体观众的未了结承诺，每个游戏一张。"""
+        """游戏开着：挂在这个游戏上、不针对具体的人的未了结承诺，每个游戏一张。"""
         for game in open_games:
             if state.full:
                 return
             for commitment in await self._open_commitments(game=game, limit=_MAX_COMMITMENTS_PER_GAME):
-                if commitment.viewer_id is not None:
+                if commitment.has_target:
+                    # 对某位观众、某位玩家的只在那个人露面时提
                     continue
                 # 别的存档里答应的事不催她提起：眼前这个世界里没有那座房子
                 place = place_of(game, commitment.save_id, state.saves)
@@ -778,13 +788,13 @@ class MemoryCueProvider:
         return lines[0] if lines else None
 
     async def _recallable_commitment(self, commitment_id: int) -> Optional["Commitment"]:
-        """向量命中的承诺：只推未了结、不针对具体观众的（别人说的像，推对某位观众的会把 ta 的事翻给全场）。"""
+        """向量命中的承诺：只推未了结、不针对具体的人的（别人说的像，推对某人的会把 ta 的事翻给全场）。"""
         try:
             commitment = await self._commitments.get_commitment(commitment_id=commitment_id)
         except Exception as exc:  # noqa: BLE001 - 读不到就不推
             logger.warning(f"读承诺 {commitment_id} 失败（不推）: {exc}", exc=exc)
             return None
-        if commitment is None or commitment.status != "open" or commitment.viewer_id is not None:
+        if commitment is None or commitment.status != "open" or commitment.has_target:
             return None
         return commitment
 
@@ -869,14 +879,16 @@ class MemoryCueProvider:
         *,
         viewer_id: Optional[int] = None,
         game: Optional[str] = None,
+        player_id: Optional[int] = None,
         limit: int = _MAX_COMMITMENTS_PER_VIEWER,
     ) -> List[Any]:
-        """名下的未了结承诺（新的在前）；查不到就当没有。"""
+        """名下（某位观众、某位游戏玩家或某个游戏）的未了结承诺（新的在前）；查不到就当没有。"""
         try:
             return await self._commitments.list_commitments(
                 statuses=["open"],
                 viewer_id=viewer_id,
                 game=game,
+                target_player_id=player_id,
                 limit=limit,
             )
         except Exception as exc:  # noqa: BLE001 - 查不到这张卡，不挡本批其余线索

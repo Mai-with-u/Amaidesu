@@ -136,6 +136,11 @@ class Commitment(BaseModel):
         default=None, description="原话是她在游戏公屏打出去的那句时，指向那一行 game_chat"
     )
 
+    @property
+    def has_target(self) -> bool:
+        """是对某位观众或某位游戏玩家答应的：只在那个人露面时提，不进常驻简报、不对全场推。"""
+        return self.viewer_id is not None or self.target_player_id is not None
+
 
 class ArchiveLine(BaseModel):
     """``archive_lines`` 一行：场次档案里的一条，下次开播回想"上一场"时用。"""

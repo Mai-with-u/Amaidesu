@@ -127,8 +127,9 @@ class CommitmentRepo(BaseRepo):
         game: Optional[str] = None,
         limit: int = 200,
         offset: int = 0,
+        target_player_id: Optional[int] = None,
     ) -> List[Commitment]:
-        """按状态/对象/游戏筛选承诺，新的在前；没给的筛选项不过滤。"""
+        """按状态/对象（观众或游戏玩家）/游戏筛选承诺，新的在前；没给的筛选项不过滤。"""
         conditions: List[str] = []
         params: List[object] = []
         if statuses:
@@ -141,6 +142,9 @@ class CommitmentRepo(BaseRepo):
         if game is not None:
             conditions.append("game=?")
             params.append(game)
+        if target_player_id is not None:
+            conditions.append("target_player_id=?")
+            params.append(int(target_player_id))
         where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         params.extend([max(1, int(limit)), max(0, int(offset))])
 

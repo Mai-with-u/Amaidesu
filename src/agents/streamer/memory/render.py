@@ -164,13 +164,13 @@ def render_commitment_text(
     spoken: bool = False,
     is_previous: bool = False,
 ) -> str:
-    """一条承诺的正文：Planner 档给标题（不针对具体观众时加原话），说话档只给标题。"""
+    """一条承诺的正文：Planner 档给标题（不针对具体的人时加原话），说话档只给标题。"""
     what = (commitment.what or "").strip()
     if spoken:
         return what
     quote = (commitment.quote or "").strip()
     when = _when_word(is_previous=is_previous, spoken=False)
-    if quote and commitment.viewer_id is None:
+    if quote and not commitment.has_target:
         return f"你{when}说过「{quote}」"
     return what
 
@@ -435,14 +435,31 @@ def render_viewer_card(
 
 
 def render_player_card(
-    player: "GamePlayer", history: Sequence["PlayerInteraction"], *, previous_session_id: Optional[int] = None
+    player: "GamePlayer",
+    history: Sequence["PlayerInteraction"],
+    *,
+    previous_session_id: Optional[int] = None,
+    promises: Sequence[Tuple[Commitment, str]] = (),
 ) -> str:
-    """游戏玩家开口时的卡："这位是谁、和你有过什么"；以前没有往来的返回空串（新面孔不推卡）。
+    """游戏玩家开口时的卡："这位是谁、和你有过什么"；以前没有往来、也没答应过他什么的返回空串。
 
     卡面只写和她发生过的互动事实与他当时的名字：打过几次招呼、送过什么、切磋输赢、一起做过什么；
     不写他什么时间段上线、不写私聊、不写没批准的自述。最近一次往来在上一场时写"上一场"，其余写"之前"。
+    ``promises`` 是答应过他、还没了结的事（承诺, 在哪个存档答应的说明），带承诺编号写在卡尾：
+    对玩家的承诺不进常驻简报，只在他露面时由这张卡提醒。
     """
-    if not history:
+    promise_text = ""
+    if promises:
+        items = []
+        for commitment, place in promises:
+            note = (
+                f"{render_commitment_number(commitment.id)}；{place}"
+                if place
+                else render_commitment_number(commitment.id)
+            )
+            items.append(f"{(commitment.what or '').strip()}（{note}）")
+        promise_text = f"你答应过他：{'；'.join(items)}。"
+    if not history and not promise_text:
         return ""
     greets = [item for item in history if item.kind == "greet"]
     gifts = [str(item.fact.get("said") or "").strip() for item in history if item.kind == "gift"]
@@ -462,12 +479,16 @@ def render_player_card(
     together = [item for item in together if item][:2]
     if together:
         parts.append(f"一起做过：{'；'.join(together)}")
-    if not parts:
+    if not parts and not promise_text:
         return ""
-    when = "上一场" if previous_session_id is not None and history[0].live_session_id == previous_session_id else "之前"
+    past = ""
+    if parts:
+        latest = history[0].live_session_id
+        when = "上一场" if previous_session_id is not None and latest == previous_session_id else "之前"
+        past = f"{when}他{'、'.join(parts)}。"
     former = player.former_names()
     name = f"{player.name}（以前叫 {'、'.join(former[-2:])}）" if former else player.name
-    return f"[玩家·{player.name}] {name} 在游戏里找你了。{when}他{'、'.join(parts)}。认得出他就好，别念清单。"
+    return f"[玩家·{player.name}] {name} 在游戏里找你了。{past}{promise_text}认得出他就好，别念清单。"
 
 
 def render_presence_line(viewers: Sequence[Tuple[str, Optional[int]]], *, now_ms: int) -> str:
