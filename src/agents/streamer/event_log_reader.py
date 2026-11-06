@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 
@@ -37,6 +37,27 @@ class EventLogFileReader:
         每行是 EventRecord 的原始 dict（含 ``event_name`` / ``timestamp_ms`` /
         ``data`` 载荷字典）；``start_ms >= end_ms`` 返回空表。
         """
+        hits: List[Dict[str, Any]] = []
+        for hour_file in self._hour_files(start_ms, end_ms):
+            hits.extend(self._read_hour_file(hour_file, event_name=event_name, start_ms=start_ms, end_ms=end_ms))
+        hits.sort(key=lambda row: int(row.get("timestamp_ms", 0)))
+        return hits
+
+    def latest_record_ms(self, *, start_ms: int, end_ms: int) -> Optional[int]:
+        """``[start_ms, end_ms)`` 窗口内任意事件的最晚时刻；窗口内没有记录返回 None。
+
+        续播用它找上一进程最后一条落盘记录（崩溃不发 core.shutdown，这是能拿到的
+        最接近"进程结束"的时刻）。从最晚的小时文件往前找，第一个含窗口内记录的
+        文件里的最大时刻就是答案，不必把整段事件读进内存。
+        """
+        for hour_file in reversed(self._hour_files(start_ms, end_ms)):
+            rows = self._read_hour_file(hour_file, event_name=None, start_ms=start_ms, end_ms=end_ms)
+            if rows:
+                return max(int(row.get("timestamp_ms", 0)) for row in rows)
+        return None
+
+    def _hour_files(self, start_ms: int, end_ms: int) -> List[Path]:
+        """窗口覆盖到的小时文件（按日期、小时升序）；目录缺失或窗口为空时返回空表。"""
         if start_ms >= end_ms or not self._events_dir.is_dir():
             return []
         first_day = datetime.fromtimestamp(start_ms / 1000).date()
@@ -45,23 +66,19 @@ class EventLogFileReader:
             last_day = first_day + timedelta(days=_MAX_SCAN_DAYS)
             logger.warning(f"事件读取时间跨度超过 {_MAX_SCAN_DAYS} 天，扫描截断至该上界")
 
-        hits: List[Dict[str, Any]] = []
+        files: List[Path] = []
         day = first_day
         while day <= last_day:
             day_dir = self._events_dir / day.strftime("%Y-%m-%d")
             # 小时文件缺失属正常（安静小时无文件），天目录缺失同样静默跳过
             if day_dir.is_dir():
-                for hour_file in sorted(day_dir.glob("*.jsonl")):
-                    hits.extend(
-                        self._read_hour_file(hour_file, event_name=event_name, start_ms=start_ms, end_ms=end_ms)
-                    )
+                files.extend(sorted(day_dir.glob("*.jsonl")))
             day += timedelta(days=1)
-        hits.sort(key=lambda row: int(row.get("timestamp_ms", 0)))
-        return hits
+        return files
 
     @staticmethod
-    def _read_hour_file(path: Path, *, event_name: str, start_ms: int, end_ms: int) -> List[Dict[str, Any]]:
-        """解析单小时文件窗口内的指定事件行（升序）；损坏行跳过并计数。"""
+    def _read_hour_file(path: Path, *, event_name: Optional[str], start_ms: int, end_ms: int) -> List[Dict[str, Any]]:
+        """解析单小时文件窗口内的指定事件行（``event_name`` 为 None 时不限事件名）；损坏行跳过并计数。"""
         hits: List[Dict[str, Any]] = []
         malformed = 0
         try:
@@ -74,7 +91,7 @@ class EventLogFileReader:
                         row = json.loads(line)
                         if not isinstance(row, dict):
                             raise ValueError("记录行不是 JSON 对象")
-                        if str(row.get("event_name", "")) != event_name:
+                        if event_name is not None and str(row.get("event_name", "")) != event_name:
                             continue
                         ts = int(row.get("timestamp_ms", 0))
                         if not (start_ms <= ts < end_ms):

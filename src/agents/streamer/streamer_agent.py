@@ -59,7 +59,8 @@ from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KINDS, Ses
 from src.modules.utils.time_utils import now_ms
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.room_state import RoomStateWatchedPayload
-from src.modules.events.payloads.streamer import StreamerPromptReceivedPayload
+from src.modules.events.payloads.base import BasePayload
+from src.modules.events.payloads.streamer import StreamerPromptDeliveredPayload, StreamerPromptReceivedPayload
 from src.modules.vision.image_store import get_image_store
 
 from .rundown.rundown_coordinator import RundownCoordinator
@@ -114,6 +115,10 @@ _REMINDER_QUEUE_MAX = 5
 # 续播重放递话的回扫上界（毫秒）：在窗口内找"上一次 core.startup"确定上一进程
 # 窗口下界；找不到时退回扫描窗起点。正常重启间隔远小于该值，只是防扫描拖成灾
 _PROMPT_REPLAY_SCAN_MS = 24 * 60 * 60 * 1000
+
+# 续播只重放上一进程结束前这么久之内收到、又还没送进决策窗的递话（毫秒）：
+# 更早的运营指令多半已经过时，重放出来让她照着做比丢了更糟
+_PROMPT_REPLAY_RECENT_MS = 10 * 60 * 1000
 
 # 下播整理前、Agent 停止前等播放队列播完队尾的上限（毫秒）。她最后几句（道别、"下次继续……"）
 # 常排在队尾，先等它们播出去；TTS 卡住时等满这么久就照常往下走，不挡下播整理与停机
@@ -572,6 +577,9 @@ class StreamerAgent(BaseAgent):
         # 进程启动时刻（core.startup 到达即更新）：续播重放以它为界划上一进程窗口。
         # 构造时刻兜底——core.startup 在组件装配完成后才发，构造期先按本进程起步记
         self._startup_ms: int = now_ms()
+        # 本进程那条 core.startup 的事件 id：落盘记录与订阅者拿到的是同一个 id，
+        # 找"上一次启动"时据此排除本进程自己的记录（订阅者并发执行，记录器可能先落盘）
+        self._startup_event_id: str = ""
         # 诊断事件流读取器（续播重放递话/玩家聊天的数据源；默认指向项目根 logs/events）
         self._event_log_reader = EventLogFileReader(events_dir if events_dir is not None else Path("logs") / "events")
         # 续播窗口重放的玩家游戏发言（一次性缓冲：续播时装入，下个决策轮注入
@@ -985,9 +993,13 @@ class StreamerAgent(BaseAgent):
         payload: CoreStartupPayload,
         source: str,
     ) -> None:
-        """``core.startup`` 回调：更新本进程启动时刻（续播重放的进程窗口边界）。"""
+        """``core.startup`` 回调：更新本进程启动时刻（续播重放的进程窗口边界）。
+
+        启动事件的载荷不带时刻字段，按回调执行时的当前时刻记。
+        """
         del event_name, source
-        self._startup_ms = payload.timestamp_ms
+        self._startup_ms = now_ms()
+        self._startup_event_id = payload.id
 
     async def _on_live_started(
         self,
@@ -1045,9 +1057,11 @@ class StreamerAgent(BaseAgent):
         self._session_games.clear()
         if resumed:
             self._logger.info(f"场次已续播（id={payload.live_session_id}）：中断场接回，主动发言放行")
-            # 续播重放递话：上一进程窗口里运营留的言随重启丢了，从诊断事件流
+            # 先从诊断事件流划出上一进程的时间段，递话与玩家聊天的重放共用这一段
+            previous_window = self._previous_process_window()
+            # 续播重放递话：上一进程里还没送进决策窗的运营留言随重启丢了，从诊断事件流
             # 补进提醒队列——接回那一轮（或下一轮）以【运营提醒】送达，必达跨重启
-            self._replay_prompts_from_event_log()
+            self._replay_prompts_from_event_log(previous_window)
             # 续播窗口重放玩家聊天：断线期间玩家在游戏里说的话没有活过重启的
             # 事件通道，回读后暂存一次性缓冲，下个决策轮注入参考段（消费后不重复）
             self._load_resume_chat_replay()
@@ -1067,46 +1081,85 @@ class StreamerAgent(BaseAgent):
             except Exception as exc:  # noqa: BLE001 - 接回发言失败不挡续播链路
                 self._logger.exception(f"场次 {payload.live_session_id} 的续播接回那一轮出错: {exc}")
 
-    def _replay_prompts_from_event_log(self) -> None:
-        """续播重放递话：把上一进程窗口的递话补进提醒队列（同文不重放）。
+    def _previous_process_window(self) -> Optional[Tuple[int, int]]:
+        """上一进程在诊断事件流里的时间段：（它的 core.startup 时刻, 它最后一条记录的时刻）。
 
-        进程窗口以 core.startup 落盘记录为界：上一次 core.startup 之后 ~ 本次
-        进程启动（``_startup_ms``）之前落盘的 streamer.prompt_received，就是
-        重启期间被吞掉的运营留言。诊断流缺席（未落盘/被清理）或找不到上一次
-        启动记录时，回扫窗起点兜底为窗口下界。重放是尽力而为的补偿：目录缺失
-        降级为不重放，如实记日志，不抛错阻断续播。
+        起点是本进程启动前最近的一条 core.startup（本进程自己那条按事件 id 排除）；
+        回扫窗内找不到时退回回扫窗起点。终点取这段里最后一条落盘记录——崩溃不发
+        core.shutdown，这是能拿到的最接近"上一进程结束"的时刻；本进程装配期的
+        记录也落在 core.startup 之前，混进来时终点偏向本进程启动，重放窗口只会更窄。
+        诊断流缺席（目录缺失/没有记录）返回 None，重放降级为不做。
         """
-        replay_start_ms = self._startup_ms - _PROMPT_REPLAY_SCAN_MS
-        startups = self._event_log_reader.read_records(
-            event_name=CoreEvents.CORE_STARTUP,
-            start_ms=replay_start_ms,
-            end_ms=self._startup_ms,
-        )
-        prev_startup_ms = int(startups[-1]["timestamp_ms"]) if startups else replay_start_ms
-        records = self._event_log_reader.read_records(
-            event_name=CoreEvents.STREAMER_PROMPT_RECEIVED,
-            start_ms=prev_startup_ms,
-            end_ms=self._startup_ms,
-        )
-        if not records:
+        scan_start_ms = self._startup_ms - _PROMPT_REPLAY_SCAN_MS
+        startups = [
+            row
+            for row in self._event_log_reader.read_records(
+                event_name=CoreEvents.CORE_STARTUP,
+                start_ms=scan_start_ms,
+                end_ms=self._startup_ms,
+            )
+            if not self._startup_event_id or row.get("id") != self._startup_event_id
+        ]
+        prev_startup_ms = int(startups[-1]["timestamp_ms"]) if startups else scan_start_ms
+        prev_end_ms = self._event_log_reader.latest_record_ms(start_ms=prev_startup_ms, end_ms=self._startup_ms)
+        if prev_end_ms is None:
+            return None
+        return prev_startup_ms, prev_end_ms
+
+    def _replay_prompts_from_event_log(self, previous_window: Optional[Tuple[int, int]]) -> None:
+        """续播重放递话：上一进程结束前收到、却没来得及送进决策窗的递话补回提醒队列。
+
+        对账口径是"收到 − 已送达"：按时间先后走一遍 streamer.prompt_received 与
+        streamer.prompt_delivered，送达一条就划掉最早一条同文的收到记录，剩下的才是
+        重启时还压在队列里的。只看上一进程结束前 ``_PROMPT_REPLAY_RECENT_MS`` 之内收到的；
+        超过队列余量时留最新的几条，按收到先后入队；与当前队列或彼此同文的只补一次。
+        重放是尽力而为的补偿：诊断流缺席降级为不重放，不抛错阻断续播。
+        """
+        if previous_window is None:
             return
-        existing = set(self._reminder_queue)
-        replayed = 0
-        for row in records:
+        prev_startup_ms, prev_end_ms = previous_window
+        since_ms = max(prev_startup_ms, prev_end_ms - _PROMPT_REPLAY_RECENT_MS)
+        rows = [
+            row
+            for event_name in (CoreEvents.STREAMER_PROMPT_RECEIVED, CoreEvents.STREAMER_PROMPT_DELIVERED)
+            for row in self._event_log_reader.read_records(
+                event_name=event_name, start_ms=since_ms, end_ms=self._startup_ms
+            )
+        ]
+        # 收到与送达合在一起按时刻排：送达只能划掉它之前收到的那几条
+        rows.sort(key=lambda row: int(row.get("timestamp_ms", 0)))
+        pending: list[str] = []
+        for row in rows:
             data = row.get("data")
-            content = str(data.get("content", "")).strip() if isinstance(data, dict) else ""
-            # 同文去重：已在队列里的不重放（重启前刚送过、还没消费的情形）
-            if not content or content in existing:
+            if not isinstance(data, dict):
                 continue
-            if len(self._reminder_queue) >= _REMINDER_QUEUE_MAX:
-                self._logger.warning("续播重放递话时提醒队列已满，剩余递话不再重放")
+            if row.get("event_name") == CoreEvents.STREAMER_PROMPT_RECEIVED:
+                content = str(data.get("content", "")).strip()
+                if content:
+                    pending.append(content)
+                continue
+            for delivered in data.get("contents") or []:
+                delivered_text = str(delivered).strip()
+                if delivered_text in pending:
+                    pending.remove(delivered_text)
+        # 从最新往回挑，直到队列余量用完；同文只补一次，已在当前队列里的不补
+        room = _REMINDER_QUEUE_MAX - len(self._reminder_queue)
+        seen = set(self._reminder_queue)
+        chosen: list[str] = []
+        for content in reversed(pending):
+            if content in seen:
+                continue
+            seen.add(content)
+            if len(chosen) >= room:
+                self._logger.warning("续播重放递话时提醒队列余量不足，更早的几条递话不再重放")
                 break
-            self._reminder_queue.append(content)
-            existing.add(content)
-            replayed += 1
-        if replayed:
-            self._logger.info(f"续播重放：已把上一进程窗口的 {replayed} 条递话补进提醒队列")
-            self._flush_kick.set()
+            chosen.append(content)
+        if not chosen:
+            return
+        # 挑的时候是从新到旧，入队按收到先后
+        self._reminder_queue.extend(reversed(chosen))
+        self._logger.info(f"续播重放：已把上一进程没送出去的 {len(chosen)} 条递话补进提醒队列")
+        self._flush_kick.set()
 
     def _load_resume_chat_replay(self) -> None:
         """续播窗口重放玩家聊天：读回本进程启动前窗口内的玩家发言，存一次性缓冲。
@@ -1823,30 +1876,31 @@ class StreamerAgent(BaseAgent):
         return True
 
     def _emit_prompt_received(self, *, text: str, source: str) -> None:
-        """发递话到达事件（含全文原文，不截断；事件名注释见 events/names.py）。
+        """发递话到达事件（含全文原文，不截断；事件名注释见 events/names.py）。"""
+        self._emit_from_sync(
+            CoreEvents.STREAMER_PROMPT_RECEIVED, StreamerPromptReceivedPayload(content=text, source=source)
+        )
 
-        receive_prompt 是同步入口，派发任务挂到运行中的事件循环。"""
+    def _emit_from_sync(self, event_name: str, payload: BasePayload) -> None:
+        """从同步入口发事件：派发任务挂到运行中的事件循环（递话受理与取空都是同步调用）。"""
         if self._event_bus is None:
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            self._logger.warning("递话事件无运行中的事件循环可派发，本次未发 streamer.prompt_received", exc=True)
+            self._logger.warning(f"递话事件无运行中的事件循环可派发，本次未发 {event_name}", exc=True)
             return
-        loop.create_task(
-            self._event_bus.emit(
-                CoreEvents.STREAMER_PROMPT_RECEIVED,
-                StreamerPromptReceivedPayload(content=text, source=source),
-                source="StreamerAgent",
-            )
-        )
+        loop.create_task(self._event_bus.emit(event_name, payload, source="StreamerAgent"))
 
     def _drain_reminders(self) -> str:
         """取空提醒队列（决策执行器在决策窗入口调用；送达一次制）。"""
         if not self._reminder_queue:
             return ""
-        lines = [f"- {item}" for item in self._reminder_queue]
+        items = list(self._reminder_queue)
+        lines = [f"- {item}" for item in items]
         self._reminder_queue.clear()
+        # 送达留痕：决策窗一取走就记一条送达事件，续播重放据此只补重启时还没送出去的
+        self._emit_from_sync(CoreEvents.STREAMER_PROMPT_DELIVERED, StreamerPromptDeliveredPayload(contents=items))
         return "\n".join(lines)
 
     async def debug_test_decision(

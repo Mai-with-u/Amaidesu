@@ -118,6 +118,9 @@ class CoreEvents:
     # 本事件兼作续播重放的数据源——进程重启接回场次时，从诊断事件流文件回读
     # 上一进程窗口的递话补进提醒队列，重启不再吞掉运营留言。
     STREAMER_PROMPT_RECEIVED = "streamer.prompt_received"
+    # 递话送进决策窗即发一条（决策执行器开窗取空提醒队列的那一刻，载荷是这一窗取走的
+    # 全部递话原文）。续播重放按"收到 − 已送达"对账，只补重启时还没送出去的那几条。
+    STREAMER_PROMPT_DELIVERED = "streamer.prompt_delivered"
 
     # ========== v2 语义域事件（tool 异步工具结果通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名
