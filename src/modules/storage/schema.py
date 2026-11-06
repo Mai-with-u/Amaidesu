@@ -854,7 +854,8 @@ CREATE INDEX IF NOT EXISTS idx_viewer_candidates_reply_chat ON viewer_candidates
 # 公屏聊天落 game_chat（私聊不落；direction 是 player 玩家说的 / streamer 她说的 / other 认不出是谁说的，
 # 最后一种不存原话，只占一行位置），和弹幕一样受保留期管。玩家说的关于他自己的事列进 player_candidates
 # 待审，挂在他那句公屏聊天和她的回应（公屏那句或播出的台词）上。viewer_player_links 是运营者确认的
-# 观众与玩家对应，只用来连带删除，从不告诉她。玩家一行被删时，以上几张表与对他的承诺随外键一起删；
+# 观众与玩家对应，只用来连带删除，从不告诉她。forget_requested_at_ms 是他在游戏公屏发"忘了我"的时刻：
+# 和观众同一个宽限期，到期删这位玩家与关联观众，期间他发撤回短语就清掉。玩家一行被删时，以上几张表与对他的承诺随外键一起删；
 # 她回应他的台词留着，live_chat.reply_player_id 置空（这一列的索引由 v32 迁移建）。
 
 _GAME_PLAYERS_SQL = """
@@ -869,6 +870,7 @@ CREATE TABLE IF NOT EXISTS game_players (
     first_seen_ms    INTEGER NOT NULL,
     last_session_id  INTEGER REFERENCES live_sessions(id) ON DELETE SET NULL,
     last_seen_ms     INTEGER NOT NULL,
+    forget_requested_at_ms INTEGER,
     UNIQUE(game, uuid)
 );
 CREATE TABLE IF NOT EXISTS game_player_interactions (

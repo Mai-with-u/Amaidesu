@@ -27,7 +27,10 @@ from src.modules.storage.models.game_players import (
 )
 from src.modules.storage.repos._base import BaseRepo
 
-_PLAYER_COLUMNS = "id, game, uuid, name, names, saves, first_session_id, first_seen_ms, last_session_id, last_seen_ms"
+_PLAYER_COLUMNS = (
+    "id, game, uuid, name, names, saves, first_session_id, first_seen_ms, last_session_id, last_seen_ms,"
+    " forget_requested_at_ms"
+)
 _INTERACTION_COLUMNS = "id, player_id, live_session_id, save_id, save_name, kind, fact, at_ms"
 _CHAT_COLUMNS = "id, live_session_id, game, direction, player_id, content, save_id, save_name, at_ms"
 
@@ -59,6 +62,7 @@ def _player(row: Any) -> GamePlayer:
         first_seen_ms=int(row["first_seen_ms"]),
         last_session_id=row["last_session_id"],
         last_seen_ms=int(row["last_seen_ms"]),
+        forget_requested_at_ms=row["forget_requested_at_ms"],
     )
 
 
@@ -250,12 +254,16 @@ class GamePlayerRepo(BaseRepo):
         await self._run_in_executor(_exec)
 
     async def session_player_named(self, *, game: str, name: str, live_session_id: int) -> Optional[int]:
-        """本场见过的、此刻叫这个名字的玩家；正好一位时返回主键，没有或不止一位返回 None（不猜）。"""
+        """本场见过的、此刻叫这个名字的玩家；正好一位时返回主键，没有或不止一位返回 None（不猜）。
+
+        发过"忘了我"、还在宽限期里的玩家不算：他已经不想被记了。
+        """
 
         def _exec() -> Optional[int]:
             with self._manager.transaction() as conn:
                 rows = conn.execute(
-                    "SELECT id FROM game_players WHERE game=? AND name=? AND last_session_id=? LIMIT 2",
+                    "SELECT id FROM game_players WHERE game=? AND name=? AND last_session_id=?"
+                    " AND forget_requested_at_ms IS NULL LIMIT 2",
                     (game, name.strip(), int(live_session_id)),
                 ).fetchall()
                 return int(rows[0]["id"]) if len(rows) == 1 else None

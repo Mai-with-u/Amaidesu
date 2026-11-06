@@ -602,7 +602,8 @@ class MemoryCueProvider:
             if state.full:
                 return
             player = await self._players.find_player(game=game, uuid=uuid)
-            if player is None:
+            if player is None or player.forget_requested_at_ms is not None:
+                # 他发过"忘了我"、还在宽限期里：不再提起他
                 continue
             key: ItemKey = ("player", int(player.id))
             if self._skip(key, state, "本场说上话了" if player.id in replied else self._blocked(key, state)):

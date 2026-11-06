@@ -12,6 +12,7 @@
 
 没归属到场次的事件（没开播时）不落库：玩家记忆只记直播里她亲身经历、画面里看得到的事。
 UUID 在不记录名单里的玩家（被运营者删过、或连同观众一起删过）再出现也不记：他的话只占一行位置。
+玩家在公屏发"忘了我"、撤回短语，和观众同一套口令与宽限期，由隐私服务受理；命令那一句本身不存原话。
 """
 
 from __future__ import annotations
@@ -80,11 +81,9 @@ class GamePlayerLedger:
         if payload.live_session_id <= 0 or payload.kind != "player" or payload.private:
             return
         try:
-            if (
-                payload.sender_id
-                and payload.sender_online
-                and not await self._forgotten(payload.game, payload.sender_id)
-            ):
+            checked = bool(payload.sender_id and payload.sender_online)
+            # 核对过的玩家先过隐私口令：发"忘了我"、已在名单里的都不再记，命令那句也只占位
+            if checked and await self._player_chat_disposition(payload) == "normal":
                 player = await self.player_repo.meet_player(
                     game=payload.game,
                     uuid=payload.sender_id,
@@ -189,6 +188,22 @@ class GamePlayerLedger:
         return await self.player_repo.session_player_named(
             game=payload.game, name=payload.player_name, live_session_id=payload.live_session_id
         )
+
+    async def _player_chat_disposition(self, payload: GameChatPayload) -> str:
+        """一位核对过的玩家这句话的隐私处理结果；查不了时按正常处理（只少一道拦截，落库照常）。"""
+        if self._privacy is None:
+            return "normal"
+        try:
+            return await self._privacy.process_incoming_player_chat(
+                game=payload.game,
+                uuid=payload.sender_id,
+                name=payload.sender,
+                content=payload.content,
+                at_ms=payload.timestamp_ms,
+            )
+        except Exception as exc:  # noqa: BLE001 - 名单查不了不挡落库
+            logger.warning(f"玩家公屏消息的隐私处理失败，按正常处理: {exc}", exc=exc)
+            return "normal"
 
     async def _forgotten(self, game: str, uuid: str) -> bool:
         """这位玩家是否在不记录名单里；查不了时按没在处理（只是少一道拦截，落库照常）。"""

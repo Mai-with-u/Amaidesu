@@ -72,6 +72,9 @@ class GamePlayer(BaseModel):
     first_seen_ms: int = Field(..., description="第一次见到的时刻")
     last_session_id: Optional[int] = Field(default=None, description="最近一次见到他的场次；场次被删时为空")
     last_seen_ms: int = Field(..., description="最近一次见到的时刻")
+    forget_requested_at_ms: Optional[int] = Field(
+        default=None, description="他在游戏公屏发'忘了我'的时刻；宽限期内不再记他、不推他的卡，None 即没发过"
+    )
 
     def former_names(self) -> List[str]:
         """以前用过、和现在不同的名字（卡片写"以前叫某某"）。"""

@@ -188,3 +188,13 @@ async def test_promises_to_him_ride_on_his_card_only(store: SQLiteDatabase) -> N
     assert f"[玩家·Alex] Alex 在游戏里找你了。你答应过他：帮他修房子（约#{promise}）。" in cues.text
     (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=current)
     assert entry.detail == {"player_id": alex.id, "commitment_ids": [promise]}
+
+
+async def test_no_card_for_a_player_who_asked_to_be_forgotten(store: SQLiteDatabase) -> None:
+    """他在公屏发过"忘了我"、还在宽限期里：不再提起他。"""
+    before, current = await _two_sessions(store)
+    alex_id = await _old_friend(store, before, current)
+    with store.manager.transaction() as conn:
+        conn.execute("UPDATE game_players SET forget_requested_at_ms=? WHERE id=?", (_NOW, alex_id))
+    cues = await _provider(store, current, _Clock(), before).collect(batch=[], game_players=[("minecraft", "uuid-a")])
+    assert cues.card_count == 0

@@ -14,7 +14,8 @@
   替换为"一位观众"，最后执行 ``PRAGMA wal_checkpoint(TRUNCATE)``。过渡期的旧画像表与旧笔记目录已由 v25 迁移整体删除。
 - **游戏玩家**：删玩家时他的互动、公屏聊天、对他的承诺、待审自述随外键级联删掉，名字在他出现过的场次里换成
   "一位玩家"，UUID 的摘要（种类 ``<游戏>_uuid``）进不记录名单，之后他再出现也不再记。删观众、"忘了我"时，
-  运营者确认过的关联玩家一并删掉。
+  运营者确认过的关联玩家一并删掉。玩家在游戏公屏发"忘了我"也算：同一套口令、同一个宽限期，到期删这位
+  玩家以及运营者确认过的关联观众。
 """
 
 from __future__ import annotations
@@ -577,6 +578,13 @@ class PrivacyService:
         for vid in due_ids:
             if await self.delete_viewer(viewer_id=vid, add_to_forget_list=True, at_ms=current):
                 deleted_count += 1
+        # 在游戏公屏发过"忘了我"的玩家：同一个宽限期，连同运营者确认过的关联观众一起删
+        due_players = await run_in_executor(self._list_due_forget_player_ids_blocking, current, force_after_stream_end)
+        for player_id in due_players:
+            if await self.delete_player(
+                player_id=player_id, add_to_forget_list=True, with_linked_viewers=True, at_ms=current
+            ):
+                deleted_count += 1
         if deleted_count > 0:
             with self._state_lock:
                 self._deletions_executed += deleted_count
@@ -604,6 +612,30 @@ class PrivacyService:
                     (current_ms, GRACE_DELETE_MAX_MS),
                 ).fetchall()
             return [int(r["id"]) for r in rows]
+
+    def _list_due_forget_player_ids_blocking(self, current_ms: int, force_after_stream_end: bool) -> List[int]:
+        """宽限期满的玩家：发令后已有场次下播，或已满 24 小时（与观众同一个判据）。"""
+        with self._manager.transaction() as conn:
+            if not table_exists(conn, "game_players"):
+                return []
+            if force_after_stream_end:
+                rows = conn.execute(
+                    "SELECT id FROM game_players WHERE forget_requested_at_ms IS NOT NULL ORDER BY id ASC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id FROM game_players"
+                    " WHERE forget_requested_at_ms IS NOT NULL"
+                    "   AND ((? - forget_requested_at_ms) >= ?"
+                    "        OR EXISTS ("
+                    "            SELECT 1 FROM live_sessions ls"
+                    "            WHERE ls.ended_at_ms IS NOT NULL"
+                    "              AND ls.ended_at_ms >= game_players.forget_requested_at_ms"
+                    "        ))"
+                    " ORDER BY id ASC",
+                    (current_ms, GRACE_DELETE_MAX_MS),
+                ).fetchall()
+            return [int(row["id"]) for row in rows]
 
     async def retract_pending_forget(self, *, viewer_id: int) -> bool:
         """运营者撤回某位观众尚未执行的删除请求，并移出不记录名单。"""
@@ -662,6 +694,66 @@ class PrivacyService:
         if removed:
             logger.info(f"运营者已解除不记录名单条目（id_kind={id_kind}）")
         return removed
+
+    async def process_incoming_player_chat(
+        self, *, game: str, uuid: str, name: str, content: str, at_ms: Optional[int] = None
+    ) -> IncomingDisposition:
+        """游戏公屏上一位核对过的玩家说的话进落库器时的第一步：发"忘了我"、撤回，或已经在不记录名单里。
+
+        和观众同一套口令、同一个宽限期：发"忘了我"立即进不记录名单、停止记录，在他的玩家行记下时刻，
+        发令后第一次下播的清理（最迟 24 小时）删掉他和运营者确认过的关联观众；宽限期内发撤回短语就移出
+        名单、清掉时刻。返回值同观众：命令、撤回、在名单里、正常。
+        """
+        now = int(at_ms) if at_ms is not None else int(self._clock())
+        disposition, schedule_timer = await run_in_executor(
+            self._process_player_chat_blocking, game, uuid, name, content, now
+        )
+        if schedule_timer and not self._closed:
+            self._schedule_grace_fallback()
+        return disposition
+
+    def _process_player_chat_blocking(
+        self, game: str, uuid: str, name: str, content: str, at_ms: int
+    ) -> Tuple[IncomingDisposition, bool]:
+        digest = sqlite3.Binary(compute_forget_hash(self._require_key(), player_forget_kind(game), uuid))
+        if self.is_forget_command(content):
+            with self._manager.transaction(immediate=True) as conn:
+                conn.execute(
+                    "INSERT INTO forget_list(id_hash, at_ms) VALUES (?, ?)"
+                    " ON CONFLICT(id_hash) DO UPDATE SET at_ms = excluded.at_ms",
+                    (digest, at_ms),
+                )
+                marked = conn.execute(
+                    "UPDATE game_players SET forget_requested_at_ms = COALESCE(forget_requested_at_ms, ?)"
+                    " WHERE game = ? AND uuid = ?",
+                    (at_ms, game, uuid),
+                )
+            # 她这一场之后的台词里再提到他，落库前也遮掉
+            self.add_masked_name(name)
+            with self._state_lock:
+                self._forget_requests += 1
+            logger.info("已受理游戏玩家的遗忘命令（立即停止记录，下播后或 24h 内删除）")
+            return "forget_command", marked.rowcount > 0
+        if self.is_retract_command(content):
+            with self._manager.transaction(immediate=True) as conn:
+                cur = conn.execute(
+                    "UPDATE game_players SET forget_requested_at_ms = NULL"
+                    " WHERE game = ? AND uuid = ? AND forget_requested_at_ms IS NOT NULL",
+                    (game, uuid),
+                )
+                if cur.rowcount > 0:
+                    conn.execute("DELETE FROM forget_list WHERE id_hash = ?", (digest,))
+            if cur.rowcount > 0:
+                with self._state_lock:
+                    self._retractions += 1
+                logger.info("游戏玩家在宽限期内撤回遗忘请求（恢复记录）")
+                return "retracted", False
+        with self._manager.transaction() as conn:
+            hit = conn.execute("SELECT 1 FROM forget_list WHERE id_hash = ?", (digest,)).fetchone() is not None
+        if hit:
+            self.add_masked_name(name)
+            return "forget_listed", False
+        return "normal", False
 
     async def is_player_forgotten(self, *, game: str, uuid: str) -> bool:
         """某位游戏玩家的 UUID 是否在不记录名单里（删过、或他发过"忘了我"）：在的话他再出现也不记。"""

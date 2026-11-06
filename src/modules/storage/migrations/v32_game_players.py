@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS game_players (
     first_seen_ms    INTEGER NOT NULL,
     last_session_id  INTEGER REFERENCES live_sessions(id) ON DELETE SET NULL,
     last_seen_ms     INTEGER NOT NULL,
+    forget_requested_at_ms INTEGER,
     UNIQUE(game, uuid)
 )
 """,

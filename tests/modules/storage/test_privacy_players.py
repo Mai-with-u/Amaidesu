@@ -135,3 +135,73 @@ async def test_deleting_a_viewer_takes_the_confirmed_player_too(
     assert await store.game_players.get_player(player_id=ids["alex"]) is None, "确认过的关联玩家一并删"
     assert await store.game_players.get_player(player_id=stranger.id) is not None, "没关联的玩家不动"
     assert await privacy.is_player_forgotten(game="minecraft", uuid=_ALEX) is True
+
+
+async def _say(bus: EventBus, session_id: int, content: str, at_ms: int) -> None:
+    """Alex 在公屏说一句（核对过在线、带 UUID）。"""
+    await bus.emit(
+        CoreEvents.GAME_CHAT_RECEIVED,
+        GameChatPayload(
+            game="minecraft",
+            kind="player",
+            content=content,
+            sender="Alex",
+            sender_id=_ALEX,
+            sender_online=True,
+            live_session_id=session_id,
+            timestamp_ms=at_ms,
+        ),
+        source="test",
+    )
+    await bus.wait_until_drained()
+
+
+async def test_forget_me_typed_in_game_chat_has_the_same_grace_and_takes_linked_viewers(
+    wired: Tuple[SQLiteDatabase, PrivacyService],
+) -> None:
+    """玩家在公屏发"忘了我"：立即停止记录；宽限期内撤回就恢复；下播后清理删掉他和确认过的关联观众。"""
+    store, privacy = wired
+    ids = await _alex_scene(store)
+    bus = EventBus()
+    ledger = GamePlayerLedger(bus, store.game_players, privacy)
+    await ledger.start()
+    try:
+        await _say(bus, ids["session"], "忘了我", 5_000)
+        alex = await store.game_players.get_player(player_id=ids["alex"])
+        assert alex is not None and alex.forget_requested_at_ms == 5_000
+        await _say(bus, ids["session"], "我刚才说了什么", 5_100)
+        # 撤回：清掉标记、移出名单，他接下来的话照常记
+        await _say(bus, ids["session"], "算了", 5_200)
+        alex = await store.game_players.get_player(player_id=ids["alex"])
+        assert alex is not None and alex.forget_requested_at_ms is None
+        assert await privacy.is_player_forgotten(game="minecraft", uuid=_ALEX) is False
+        await _say(bus, ids["session"], "还是记着我吧", 5_300)
+        lines = await store.game_players.list_session_game_chat(live_session_id=ids["session"])
+        assert [(line.direction, line.content) for line in lines][-4:] == [
+            ("other", ""),
+            ("other", ""),
+            ("other", ""),
+            ("player", "还是记着我吧"),
+        ], "命令那句、宽限期里的话、撤回那句都只占位"
+
+        # 再发一次，这回不撤回；关联的观众一起删
+        viewer = await store.viewers.resolve_viewer(
+            platform="bilibili",
+            id_kind="account",
+            external_id="u_alex",
+            user_name="阿杰",
+            timestamp_ms=1_000,
+            name_match_window_ms=0,
+        )
+        await store.game_players.link_viewer(viewer_id=viewer.viewer_id, player_id=ids["alex"], at_ms=6_000)
+        await _say(bus, ids["session"], "忘了我吧", 6_100)
+    finally:
+        await ledger.stop()
+        await bus.cleanup()
+
+    assert await privacy.execute_due_forget_deletions(now_ms=6_200) == 0, "还没下播、没满 24 小时：不删"
+    await store.sessions.close_live_session(live_session_id=ids["session"], ended_at_ms=7_000)
+    assert await privacy.execute_due_forget_deletions(now_ms=7_100) == 1
+    assert await store.game_players.get_player(player_id=ids["alex"]) is None
+    assert await store.viewers.get_viewer(viewer_id=viewer.viewer_id) is None, "确认过的关联观众一起删"
+    assert await privacy.is_player_forgotten(game="minecraft", uuid=_ALEX) is True
