@@ -188,6 +188,8 @@ def _is_sensitive_field(key: str) -> bool:
 def mask_sensitive_values(config: dict, path_prefix: str = "") -> dict:
     """递归遍历 config，对敏感字段的标量值替换为"已设置"占位，返回新 dict（不修改原对象）。
 
+    没填的（空串或只有空白）原样返回空串：显示成"已设置"会让人以为密钥填好了。
+
     路径语义与 schema 字段的 dotted key 一致：dict 子段拼接到前缀后，
     list 子项不引入新的路径段（数组元素匿名）。
     """
@@ -201,7 +203,10 @@ def mask_sensitive_values(config: dict, path_prefix: str = "") -> dict:
         else:
             # 凭据均为字符串：数字/布尔值（如 token_budget_per_hour 预算参数）无论键名
             # 都不遮蔽——数字被替换成占位文本既不可读，还会撑爆前端的数字输入控件
-            masked[k] = SENSITIVE_PLACEHOLDER if isinstance(v, str) and _is_sensitive_field(full_key) else v
+            if isinstance(v, str) and _is_sensitive_field(full_key):
+                masked[k] = SENSITIVE_PLACEHOLDER if v.strip() else ""
+            else:
+                masked[k] = v
     return masked
 
 

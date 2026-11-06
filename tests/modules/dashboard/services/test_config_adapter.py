@@ -99,6 +99,13 @@ def test_masking_hits_nested_and_list_credentials_without_touching_budgets_or_th
     assert config["api_key"] == "sk-real"  # 返回新对象，原 dict 不变
 
 
+def test_mask_sensitive_values_leaves_empty_secrets_empty() -> None:
+    """没填的密钥原样回空串：显示成"已设置"会让人以为填好了。"""
+    masked = mask_sensitive_values({"api_key": "", "providers": [{"api_key": "  "}, {"api_key": "sk-1"}]})
+    assert masked["api_key"] == ""
+    assert masked["providers"] == [{"api_key": ""}, {"api_key": PLACEHOLDER}]
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [

@@ -45,12 +45,18 @@ _PROVIDER = {"name": "default", "client_type": "openai", "base_url": "https://x/
 _SILICONFLOW = {"name": "siliconflow", "client_type": "openai", "base_url": "https://api.siliconflow.cn/v1"}
 
 
-def test_get_config_merged_view_masks_secrets_and_hides_retired_limits(client) -> None:
-    config = client.get("/api/v1/config").json()["config"]
+def test_get_config_merged_view_masks_secrets_and_hides_retired_limits(mount, config_dir: Path) -> None:
+    model_toml = config_dir / "model.toml"
+    text = model_toml.read_text(encoding="utf-8-sig")
+    model_toml.write_text(text.replace('api_key = ""', 'api_key = "sk-real"', 1), encoding="utf-8")
+    service = ConfigService(base_dir=str(config_dir.parent))
+    service.initialize()
+    config = mount(config_service=service).get("/api/v1/config").json()["config"]
     for key in ("agents", "tools", "enabled", "llm_providers", "sqlite", "dashboard"):
         assert key in config, f"合并视图缺少键: {key}"
     assert config["dashboard"]["port"] == 60214
-    assert config["llm_providers"][0]["api_key"] == "已设置"  # 明文不下发
+    keys = [provider["api_key"] for provider in config["llm_providers"]]
+    assert sorted(keys) == ["", "已设置"], "填了的明文不下发；没填的回空串，不显示成已设置"
     planner = config["llm_profiles"]["planner"]
     assert "max_tokens" not in planner and "hard_timeout_ms" not in planner  # 退役的额度与时限不再可编辑
     assert isinstance(planner["temperature"], float)
