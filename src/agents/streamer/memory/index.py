@@ -41,9 +41,6 @@ FULL_TEXT_BATCH = 200
 FULL_TEXT_MAX_BATCHES = 20
 # 向量每类来源每轮至多请求几批（每批条数由嵌入配置的 batch_size 定）
 VECTOR_MAX_BATCHES = 10
-# 嵌入失败后的退避：从 30 秒起翻倍，封顶 10 分钟
-BACKOFF_BASE_MS = 30_000
-BACKOFF_MAX_MS = 600_000
 
 
 class MemoryIndexer:
@@ -65,8 +62,6 @@ class MemoryIndexer:
         self._clock = clock
         self._interval_s = max(interval_ms, 100) / 1000
         self._vector_batch = max(1, vector_batch)
-        self._failures = 0
-        self._retry_at_ms = 0
         self._passes = 0
         self._running = False
         self._task: Optional["asyncio.Task[None]"] = None
@@ -80,8 +75,8 @@ class MemoryIndexer:
     @property
     def semantic_note(self) -> str:
         """语义检索的状态说明：开着用什么模型、没开为什么、或正在退避。"""
-        if self._embedding is not None and self._failures:
-            return f"语义检索暂不可用：嵌入服务连续失败 {self._failures} 次，退避中"
+        if self._embedding is not None and self._embedding.failures:
+            return f"语义检索暂不可用：嵌入服务连续失败 {self._embedding.failures} 次，退避中"
         return self._embedding_note
 
     async def start(self) -> None:
@@ -127,7 +122,8 @@ class MemoryIndexer:
         for source in INDEX_SOURCES:
             full_text[source] = await self._fill_full_text(source, now)
         vectors: Dict[IndexSource, int] = {}
-        if self._embedding is not None and now >= self._retry_at_ms:
+        # 退避由嵌入客户端统一管（查询向量失败也算）：退避期间这一轮只补全文
+        if self._embedding is not None and not self._embedding.backing_off:
             for source in INDEX_SOURCES:
                 written, ok = await self._fill_vectors(self._embedding, source, now)
                 vectors[source] = written
@@ -164,7 +160,7 @@ class MemoryIndexer:
         return total
 
     async def _fill_vectors(self, embedding: EmbeddingClient, source: IndexSource, now: int) -> Tuple[int, bool]:
-        """一类来源的向量，返回（写了几行, 嵌入是否正常）；嵌入失败时登记退避（这一轮其余来源的向量也不再请求）。"""
+        """一类来源的向量，返回（写了几行, 嵌入是否正常）；嵌入失败时客户端已登记退避，这一轮其余来源的向量也不再请求。"""
         total = 0
         for _ in range(VECTOR_MAX_BATCHES):
             docs = await self._repo.pending_vectors(
@@ -175,9 +171,8 @@ class MemoryIndexer:
             try:
                 vectors = await embedding.embed([doc.document for doc in docs])
             except EmbeddingError as exc:
-                self._arm_backoff(now, exc)
+                logger.debug(f"这一轮的向量补算停在 {_SOURCE_LABELS[source]}：{exc}")
                 return total, False
-            self._failures = 0
             written = await self._repo.write_vectors(
                 source=source, model_key=embedding.model_key, items=list(zip(docs, vectors, strict=True))
             )
@@ -185,15 +180,6 @@ class MemoryIndexer:
             if len(docs) < self._vector_batch or written == 0:
                 return total, True
         return total, True
-
-    def _arm_backoff(self, now: int, exc: EmbeddingError) -> None:
-        """嵌入失败：连续失败次数加一，按次数翻倍定下次重试的时刻，记 warning。"""
-        self._failures += 1
-        backoff_ms = min(BACKOFF_BASE_MS * 2 ** (self._failures - 1), BACKOFF_MAX_MS)
-        self._retry_at_ms = now + backoff_ms
-        logger.warning(
-            f"语义索引暂不可用（连续失败 {self._failures} 次，{backoff_ms // 1000} 秒后重试；关键词检索照常）：{exc}"
-        )
 
 
 __all__ = ["MemoryIndexer"]

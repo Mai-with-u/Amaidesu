@@ -7,20 +7,27 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 import pytest
 from openai import AsyncOpenAI
 
 from src.modules.config.model_schemas import EmbeddingConfig, LLMProviderConfig
-from src.modules.llm.embedding import EmbeddingClient, EmbeddingError, build_embedding_client
+from src.modules.llm.embedding import BACKOFF_BASE_MS, EmbeddingClient, EmbeddingError, build_embedding_client
+from tests.helpers import FakeClock
 
 Handler = Callable[[Dict[str, Any]], httpx.Response]
 
 
-def _client(handler: Handler, *, requests: List[Dict[str, Any]], **config: Any) -> EmbeddingClient:
-    """建一个连着假服务端的客户端；每次请求的 JSON 体记进 ``requests``。"""
+def _client(
+    handler: Handler,
+    *,
+    requests: List[Dict[str, Any]],
+    clock: Optional[Callable[[], int]] = None,
+    **config: Any,
+) -> EmbeddingClient:
+    """建一个连着假服务端的客户端；每次请求的 JSON 体记进 ``requests``；``clock`` 给了就按它判退避期。"""
 
     def _route(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -33,7 +40,10 @@ def _client(handler: Handler, *, requests: List[Dict[str, Any]], **config: Any) 
         max_retries=0,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(_route)),
     )
-    return EmbeddingClient(sdk=sdk, config=EmbeddingConfig(model_identifier="bge-m3", provider="default", **config))
+    embedding = EmbeddingConfig(model_identifier="bge-m3", provider="default", **config)
+    if clock is None:
+        return EmbeddingClient(sdk=sdk, config=embedding)
+    return EmbeddingClient(sdk=sdk, config=embedding, clock=clock)
 
 
 def _vectors_reply(body: Dict[str, Any], *, width: int = 3, reverse: bool = True) -> httpx.Response:
@@ -127,3 +137,35 @@ def test_configured_builds_a_client_named_in_the_note() -> None:
     setup = build_embedding_client(embedding, providers)
     assert setup.client is not None and setup.client.model_key == "bge-m3@512"
     assert "bge-m3@512" in setup.note and "local" in setup.note
+
+
+async def test_failure_backs_off_without_sending_until_the_window_passes() -> None:
+    """失败后退避：退避期内不发请求、直接抛错；期满放行，再失败退避翻倍；成功一次清零。"""
+    clock = FakeClock()
+    requests: List[Dict[str, Any]] = []
+    down = {"value": True}
+
+    def _handler(body: Dict[str, Any]) -> httpx.Response:
+        if down["value"]:
+            return httpx.Response(503, json={"error": {"message": "busy"}})
+        return _vectors_reply(body)
+
+    client = _client(_handler, requests=requests, clock=clock.now_ms)
+
+    with pytest.raises(EmbeddingError, match="嵌入请求失败"):
+        await client.embed(["芝麻"])
+    assert (client.failures, client.backing_off) == (1, True)
+    with pytest.raises(EmbeddingError, match="退避中"):
+        await client.embed(["水渠"])
+    assert len(requests) == 1, "退避期内不发请求"
+
+    clock.tick(BACKOFF_BASE_MS)
+    with pytest.raises(EmbeddingError, match="嵌入请求失败"):
+        await client.embed(["水渠"])
+    clock.tick(BACKOFF_BASE_MS)
+    assert client.backing_off is True, "第二次失败退避翻倍"
+
+    down["value"] = False
+    clock.tick(BACKOFF_BASE_MS)
+    assert len(await client.embed(["甘蔗"])) == 1
+    assert (client.failures, client.backing_off, len(requests)) == (0, False, 3)

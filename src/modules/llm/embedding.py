@@ -5,14 +5,16 @@
 
 配置了才开：没填模型名、或引用的提供方没填密钥时 :func:`build_embedding_client` 不建客户端，
 只给一句"语义检索没开"的说明，调用方据此退回关键词与规则两路并写进日志和 WebUI。客户端自己不重试（SDK 的重试
-也关掉），失败一律抛 :class:`EmbeddingError` 带上原因，由索引任务决定退避多久再试——
-嵌入服务卡住时不能拖住任何一条直播通路。
+也关掉），失败一律抛 :class:`EmbeddingError` 带上原因——嵌入服务卡住时不能拖住任何一条直播通路。
+
+失败后按连续失败次数翻倍退避，退避期间不发请求、直接抛错。索引补算与查询向量用的是同一个
+客户端，也就共用这一套退避：服务端返回 503 时，弹幕查询不会接着一条条打过去，也不会抢索引的配额。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
 import httpx
 from openai import APIError, AsyncOpenAI
@@ -20,8 +22,13 @@ from openai import APIError, AsyncOpenAI
 from src.modules.config.model_schemas import EmbeddingConfig, LLMProviderConfig
 from src.modules.llm.clients.openai.compat import build_openai_compatible_client_config
 from src.modules.logging import get_logger
+from src.modules.utils.time_utils import now_ms
 
 logger = get_logger("EmbeddingClient")
+
+# 嵌入失败后的退避：从 30 秒起翻倍，封顶 10 分钟
+BACKOFF_BASE_MS = 30_000
+BACKOFF_MAX_MS = 600_000
 
 
 class EmbeddingError(Exception):
@@ -35,12 +42,25 @@ class EmbeddingClient:
     换维度后标识变了，索引任务据此整表重算，新旧向量不混用。
     """
 
-    def __init__(self, *, sdk: AsyncOpenAI, config: EmbeddingConfig) -> None:
+    def __init__(self, *, sdk: AsyncOpenAI, config: EmbeddingConfig, clock: Callable[[], int] = now_ms) -> None:
         self._sdk = sdk
         self._model = config.model_identifier
         self._dimensions = config.dimensions
         self._batch_size = config.batch_size
         self._timeout_s = config.timeout_ms / 1000
+        self._clock = clock
+        self._failures = 0
+        self._retry_at_ms = 0
+
+    @property
+    def failures(self) -> int:
+        """连续失败了几次（成功一次就清零）。"""
+        return self._failures
+
+    @property
+    def backing_off(self) -> bool:
+        """正在退避：这期间 :meth:`embed` 不发请求，直接抛 :class:`EmbeddingError`。"""
+        return self._failures > 0 and self._clock() < self._retry_at_ms
 
     @property
     def model_key(self) -> str:
@@ -54,10 +74,28 @@ class EmbeddingClient:
         """
         if any(not text.strip() for text in texts):
             raise ValueError("嵌入的文本不能为空")
+        if self.backing_off:
+            wait_s = max(0, self._retry_at_ms - self._clock()) // 1000
+            raise EmbeddingError(f"嵌入服务退避中（连续失败 {self._failures} 次，{wait_s} 秒后再试），这次没发请求")
         vectors: List[List[float]] = []
-        for start in range(0, len(texts), self._batch_size):
-            vectors.extend(await self._embed_batch(list(texts[start : start + self._batch_size])))
+        try:
+            for start in range(0, len(texts), self._batch_size):
+                vectors.extend(await self._embed_batch(list(texts[start : start + self._batch_size])))
+        except EmbeddingError as exc:
+            self._arm_backoff(exc)
+            raise
+        self._failures = 0
         return vectors
+
+    def _arm_backoff(self, exc: EmbeddingError) -> None:
+        """一次失败：连续失败次数加一，按次数翻倍定下次放行的时刻，记 warning（每次退避只记这一条）。"""
+        self._failures += 1
+        backoff_ms = min(BACKOFF_BASE_MS * 2 ** (self._failures - 1), BACKOFF_MAX_MS)
+        self._retry_at_ms = self._clock() + backoff_ms
+        logger.warning(
+            f"嵌入服务暂不可用（连续失败 {self._failures} 次，{backoff_ms // 1000} 秒后再试；"
+            f"这期间语义索引与查询向量都不发请求，关键词照常）：{exc}"
+        )
 
     async def _embed_batch(self, batch: List[str]) -> List[List[float]]:
         """一批文本一次请求；按返回里的序号排回原顺序，再核对条数与维度。"""

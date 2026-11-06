@@ -7,7 +7,8 @@ from typing import Any, AsyncIterator
 
 import pytest
 
-from src.agents.streamer.memory.index import BACKOFF_BASE_MS, MemoryIndexer
+from src.agents.streamer.memory.index import MemoryIndexer
+from src.modules.llm.embedding import BACKOFF_BASE_MS
 from src.modules.storage.database import SQLiteDatabase
 from tests.config.helpers import wait_until
 from tests.helpers import FakeClock
@@ -98,7 +99,7 @@ async def test_embedding_failure_backs_off_while_full_text_keeps_going(store: SQ
     server = FakeEmbeddingServer()
     server.fail = True
     indexer = MemoryIndexer(
-        repo=store.memory_index, embedding=server.client(), embedding_note="开着", clock=clock.now_ms
+        repo=store.memory_index, embedding=server.client(clock=clock.now_ms), embedding_note="开着", clock=clock.now_ms
     )
 
     await indexer.run_once()

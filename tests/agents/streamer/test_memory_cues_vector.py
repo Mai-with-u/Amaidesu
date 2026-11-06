@@ -13,6 +13,7 @@ import pytest
 from src.agents.streamer.memory.cues import MemoryCueProvider
 from src.agents.streamer.memory.index import MemoryIndexer
 from src.agents.streamer.memory.search import MemorySearch
+from src.modules.llm.embedding import BACKOFF_BASE_MS
 from src.modules.events.payloads.room import RoomMessageUser
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.privacy import PrivacyService
@@ -49,8 +50,10 @@ class _Memory:
     def __init__(self, store: SQLiteDatabase) -> None:
         self.store = store
         self.server = FakeEmbeddingServer()
-        self.search = MemorySearch(repo=store.memory_index, embedding=self.server.client())
         self.clock = FakeClock()
+        # 和生产装配一样：索引补算与检索共用一个嵌入客户端（也就共用一套退避）
+        self.client = self.server.client(clock=self.clock.now_ms)
+        self.search = MemorySearch(repo=store.memory_index, embedding=self.client)
         self.cat_line = 0
         self.water_line = 0
         self.cat_promise = 0
@@ -67,11 +70,14 @@ class _Memory:
         promise = await self.store.commitments.insert_commitment(what="给猫做个窝", quote="下次给猫做个窝")
         assert promise is not None
         self.cat_promise = promise
-        await MemoryIndexer(
-            repo=self.store.memory_index, embedding=self.server.client(), embedding_note="", clock=self.clock.now_ms
-        ).run_once()
+        await self.indexer().run_once()
         self.server.requests.clear()
         return self
+
+    def indexer(self) -> MemoryIndexer:
+        return MemoryIndexer(
+            repo=self.store.memory_index, embedding=self.client, embedding_note="", clock=self.clock.now_ms
+        )
 
     async def provider(self, session_id: int, *, privacy: Optional[PrivacyService] = None, **extra: Any):
         return MemoryCueProvider(
@@ -132,6 +138,7 @@ async def test_vector_not_ready_means_this_batch_goes_without(store: SQLiteDatab
     cues = await provider.collect(batch=[_danmaku("那只小猫咪最近好吗")])
 
     assert cues.archive_ids == () and cues.commitment_ids == ()
+    assert memory.server.requests == [], "没预取过的弹幕，组装时也不补发"
 
 
 async def test_quiet_viewers_commands_short_and_simulated_text_never_leave(
@@ -257,3 +264,30 @@ async def test_forget_listed_viewers_without_a_row_never_leave(
 
     assert memory.sent() == [], "不发给嵌入服务"
     assert cues.archive_ids == () and cues.commitment_ids == (), "规则与语义两路都不推"
+
+
+async def test_embedding_outage_sends_one_request_and_pauses_indexing_too(store: SQLiteDatabase) -> None:
+    """嵌入服务回 503：十条弹幕的预取加组装只发出第一条请求，之后退避；索引补算也跟着停，期满再恢复。"""
+    memory = await _Memory(store).seed()
+    session_id = await store.sessions.insert_live_session(started_at_ms=memory.clock.now_ms())
+    provider = await memory.provider(session_id)
+    memory.server.fail = True
+    batch = [_danmaku(f"第{index}只小猫咪最近好吗", message_id=f"m{index}") for index in range(10)]
+
+    for message in batch:
+        await provider.prefetch(message)
+        await memory.warm(message.content)
+    cues = await provider.collect(batch=batch)
+
+    assert len(memory.server.requests) == 1, "第一条失败后退避，后面九条的预取与组装都不再发"
+    assert cues.archive_ids == () and cues.commitment_ids == ()
+
+    # 索引补算共用这套退避：新承诺这一轮只进全文，不请求向量
+    await store.commitments.insert_commitment(what="给狗搭个窝", quote="下次给狗搭个窝")
+    await memory.indexer().run_once()
+    assert len(memory.server.requests) == 1
+
+    memory.server.fail = False
+    memory.clock.tick(BACKOFF_BASE_MS)
+    await memory.indexer().run_once()
+    assert memory.server.requests[-1] == ["给狗搭个窝\n下次给狗搭个窝"], "退避期满，索引照常补上"

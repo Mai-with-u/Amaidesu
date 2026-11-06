@@ -647,7 +647,9 @@ class MemoryCueProvider:
             queries.append((SOURCE_SITUATION, "", self._situation.pending))
         results = []
         for source, message_id, text in queries:
-            if not search.vector_ready(text):
+            # 弹幕的向量在到达时预取过一次，这里只看缓存，没算好就这一批不推、不补发；情境查询没有预取，
+            # 这里没算好就开始算，留给下一批
+            if not search.vector_ready(text, start=source == SOURCE_SITUATION):
                 if source == SOURCE_SITUATION:
                     self._situation.missed()
                 continue

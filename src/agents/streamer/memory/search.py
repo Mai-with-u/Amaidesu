@@ -78,7 +78,6 @@ class MemorySearch:
         self._embedding = embedding
         self._query_vectors: "OrderedDict[str, np.ndarray]" = OrderedDict()
         self._pending: Dict[str, "asyncio.Task[None]"] = {}
-        self._failing = False
 
     async def search(
         self,
@@ -193,14 +192,19 @@ class MemorySearch:
         """配了嵌入服务（语义一路能用；每次查询算不算得出向量另说）。"""
         return self._embedding is not None
 
-    def vector_ready(self, query: str) -> bool:
-        """这段查询文本的向量已经算好缓存着；没有就在后台开始算，这次返回 False（下一批多半能用）。"""
+    def vector_ready(self, query: str, *, start: bool = True) -> bool:
+        """这段查询文本的向量已经算好缓存着就返回 True。
+
+        没算好时 ``start`` 为真就在后台开始算（下一批多半能用）；为假只看缓存——弹幕到达时已经预取过
+        一次，组装时没算好（还在算、算失败、在退避）就这一批不用，不再补发。
+        """
         text = (query or "").strip()
         if not text or self._embedding is None:
             return False
         if text in self._query_vectors:
             return True
-        self._ensure_embedding_task(text)
+        if start:
+            self._ensure_embedding_task(text)
         return False
 
     def prefetch(self, query: str) -> None:
@@ -218,20 +222,24 @@ class MemorySearch:
             self._query_vectors.move_to_end(text)
             return cached
         task = self._ensure_embedding_task(text)
-        if wait_ms <= 0:
+        if task is None or wait_ms <= 0:
             return None
         done, _pending = await asyncio.wait({task}, timeout=wait_ms / 1000)
         return self._query_vectors.get(text) if done else None
 
-    def _ensure_embedding_task(self, text: str) -> "asyncio.Task[None]":
+    def _ensure_embedding_task(self, text: str) -> Optional["asyncio.Task[None]"]:
+        """同一段文本同时只算一次；嵌入客户端在退避时不开新任务（这期间只走关键词）。"""
         task = self._pending.get(text)
-        if task is None:
-            task = asyncio.create_task(self._embed_query(text))
-            self._pending[text] = task
+        if task is not None:
+            return task
+        if self._embedding is None or self._embedding.backing_off:
+            return None
+        task = asyncio.create_task(self._embed_query(text))
+        self._pending[text] = task
         return task
 
     async def _embed_query(self, text: str) -> None:
-        """算一条查询向量（单位化后缓存）；失败只在连续失败的第一次记 warning，免得每批刷屏。"""
+        """算一条查询向量（单位化后缓存）；失败的 warning 由嵌入客户端在登记退避时记，这里只记 debug。"""
         embedding = self._embedding
         if embedding is None:
             self._pending.pop(text, None)
@@ -239,13 +247,10 @@ class MemorySearch:
         try:
             (vector,) = await embedding.embed([text])
         except EmbeddingError as exc:
-            if not self._failing:
-                logger.warning(f"查询向量算不出来，这期间检索只走关键词：{exc}")
-            self._failing = True
+            logger.debug(f"查询向量算不出来，这一次只走关键词：{exc}")
             return
         finally:
             self._pending.pop(text, None)
-        self._failing = False
         array = np.asarray(vector, dtype=np.float32)
         norm = float(np.linalg.norm(array))
         self._query_vectors[text] = array / norm if norm else array

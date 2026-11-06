@@ -6,7 +6,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -246,11 +246,15 @@ class FakeEmbeddingServer:
         ]
         return httpx.Response(200, json={"object": "list", "data": data, "model": body["model"]})
 
-    def client(self) -> EmbeddingClient:
+    def client(self, clock: Optional[Callable[[], int]] = None) -> EmbeddingClient:
+        """连着这个假服务的嵌入客户端；``clock`` 给了就按它判退避期（测试推进假时钟走过退避）。"""
         sdk = AsyncOpenAI(
             api_key="sk-test",
             base_url="https://embed.example/v1",
             max_retries=0,
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(self.handle)),
         )
-        return EmbeddingClient(sdk=sdk, config=EmbeddingConfig(provider="p", model_identifier="toy"))
+        config = EmbeddingConfig(provider="p", model_identifier="toy")
+        if clock is None:
+            return EmbeddingClient(sdk=sdk, config=config)
+        return EmbeddingClient(sdk=sdk, config=config, clock=clock)
