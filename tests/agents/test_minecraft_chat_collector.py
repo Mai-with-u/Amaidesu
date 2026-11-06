@@ -254,12 +254,43 @@ async def test_player_and_system_messages_become_game_chat_events() -> None:
     assert (said.kind, said.sender, said.sender_id, said.content) == ("player", "Steve", _STEVE_ID, "麦麦你在干嘛")
     assert (joined.kind, joined.sender, joined.sender_id, joined.content) == ("system", "", "", "Alex 加入了游戏")
     assert long_one.truncated is True
+    # 旧版 Mod 没报在线核对、系统消息没有发言人：都按没核对过
+    assert (said.sender_online, joined.sender_online) == (False, False)
     assert client.read_calls[-1]["arguments"] == {
         "topic": "chat",
         "stream_id": "stream-A",
         "after_cursor": 3,
         "wait_ms": 25_000,
     }
+
+
+async def test_the_online_check_from_the_game_is_passed_on() -> None:
+    """Mod 核对过发言人此刻在线的照转；控制台、命令方块借名发的是 False，存储不为它建玩家。"""
+    collector, client, bus = await _primed()
+    checked = _chat(4, "来切磋")
+    checked["sender_online"] = True
+    borrowed = {"cursor": 5, "kind": "player", "sender": "Server", "sender_online": False, "text": "[Server] 重启"}
+    client.pages.append(events_page([checked, borrowed], cursor=5))
+
+    await collector._drain()
+
+    first, second = (payload for _, payload in bus.events)
+    assert (first.sender_id, first.sender_online) == (_STEVE_ID, True)
+    assert (second.sender, second.sender_id, second.sender_online) == ("Server", "", False)
+
+
+async def test_chat_carries_the_save_of_its_page() -> None:
+    """聊天带着这一页所在的存档：存储据此记在哪个存档见过这位玩家；旧版 Mod 的页没有 world，存档留空。"""
+    collector, client, bus = await _primed()
+    page = events_page([_chat(4, "来切磋")], cursor=4)
+    page["world"] = {"id": "aaa", "name": "老家", "source": "world_id_file"}
+    client.pages.append(page)
+    client.pages.append(events_page([_chat(5, "还在吗")], cursor=5))
+
+    await collector._drain()
+    await collector._drain()
+
+    assert [(payload.save_id, payload.save_name) for _, payload in bus.events] == [("aaa", "老家"), ("", "")]
 
 
 async def test_private_messages_are_forwarded_and_marked() -> None:

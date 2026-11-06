@@ -95,7 +95,7 @@ from src.agents.minecraft.picture import (
 )
 from src.agents.minecraft.place_marks import NearPlaceTracker, PlaceMark, place_change_of
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
-from src.agents.minecraft.player_interactions import SparOpponents, spar_interaction
+from src.agents.minecraft.player_interactions import SelfChatLog, SparOpponents, spar_interaction
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.sparring import spar_outcome_line
 from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
@@ -118,7 +118,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game import GamePayload
-from src.modules.events.payloads.game_chat import GameChatPayload
+from src.modules.events.payloads.game_chat import GameChatPayload, GameSelfChattedPayload
 from src.modules.events.payloads.game_place import GamePlacePayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
@@ -271,6 +271,8 @@ class MinecraftAgent(BaseAgent):
         self._remembered_places = RememberedPlacesCache(self._clock)
         # 按名字点了对手的切磋：下令时记下名字，收手时连同输赢发一条玩家互动给存储记账（不改怎么打）
         self._spar_opponents = SparOpponents()
+        # 她在游戏公屏打出去的话：交出去了就发一条给存储记进公屏聊天（认她在回应哪位玩家），不改怎么说
+        self._self_chats = SelfChatLog()
         # 最近一次速览看自己读到的（维度, x, z）与读到的时刻：主播要游戏情境时拿它和地点清单现算距离，不另读游戏
         self._last_position: Optional[Tuple[Tuple[str, float, float], float]] = None
         # 最近一次看周围时身边的玩家名：随游戏情境交给主播，主播发情境给外部服务前遮名用
@@ -279,6 +281,8 @@ class MinecraftAgent(BaseAgent):
         # 记地点成功是在同步的回执处理里认出来的，先连同当时的存档与时刻排进待发队列，回到异步处再发
         self._near_places = NearPlaceTracker(self._clock)
         self._pending_place_marks: List[GamePlacePayload] = []
+        # 当场就结束的公屏说话排在这里，回复记账之后发出（记账是同步的，发事件要等）
+        self._pending_self_chats: List[str] = []
         # obtain 装好炉先走时自动挂的回炉计时：没响之前模型结束一轮算在等炉子，不催、不上报、不兜底交付
         self._furnace_waits = FurnaceWaits(self._clock)
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
@@ -942,6 +946,7 @@ class MinecraftAgent(BaseAgent):
                     observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
                 self._absorb_reply(call.name, arguments, observation)
                 await self._flush_place_marks()
+                await self._flush_self_chats()
                 polling_only &= self._polls_running_goal(call.name, arguments)
                 messages.append(
                     {
@@ -1182,6 +1187,10 @@ class MinecraftAgent(BaseAgent):
                 self._goal_ledger.register_and_settle(run)
                 # 设、取消、列计时都当场返回，结果带着还挂着的全部计时：拿来对账回炉计时
                 self._furnace_waits.absorb(run)
+                # 当场就结束的公屏说话（关了逐字打字）：交出去的那句排进待发，调用方随后发给存储记进公屏聊天
+                message = self._self_chats.take(run)
+                if message:
+                    self._pending_self_chats.append(message)
                 return
             # 切磋下令时记下点名的对手：收手时按名字给存储记一笔互动
             self._spar_opponents.note(run.goal_id, arguments)
@@ -1251,6 +1260,7 @@ class MinecraftAgent(BaseAgent):
                 # 不论这一场是在任务里打的还是闲着时接的
                 await self._emit_game_event("milestone", spar)
             await self._emit_spar_interaction(run)
+            await self._emit_self_chat(run)
             return
         self._goal_ledger.note(run)
         if stalled:
@@ -2098,6 +2108,26 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
     # 事件上报（GamePayload(game="minecraft")）
     # ==================================================================
+
+    async def _emit_self_chat(self, run: GoalRun) -> None:
+        """公屏说话的目标结束、那句交出去了：发一条给存储记进公屏聊天，主播不订阅。"""
+        message = self._self_chats.take(run)
+        if message:
+            await self._send_self_chat(message)
+
+    async def _flush_self_chats(self) -> None:
+        """把回复记账时排下的公屏说话发出去（当场就结束的那种）。"""
+        while self._pending_self_chats:
+            await self._send_self_chat(self._pending_self_chats.pop(0))
+
+    async def _send_self_chat(self, message: str) -> None:
+        if self._event_bus is None:
+            return
+        save_id, save_name = self._world.save_fields()
+        await self.emit_event(
+            CoreEvents.GAME_SELF_CHATTED,
+            GameSelfChattedPayload(game="minecraft", message=message, save_id=save_id, save_name=save_name),
+        )
 
     async def _emit_spar_interaction(self, run: GoalRun) -> None:
         """切磋收手：按下令时点名的对手发一条玩家互动（谁赢、各打中几下），只给存储记账，主播不订阅。"""

@@ -15,6 +15,7 @@ import pytest
 from src.agents.minecraft.maicraft import GoalRun
 from src.agents.minecraft.sparring import spar_outcome_line
 from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.game_chat import GameSelfChattedPayload
 from src.modules.events.payloads.game_player import GamePlayerInteractedPayload
 from src.modules.llm.payload import Response
 
@@ -86,6 +87,12 @@ def _milestones(bus: Any) -> List[str]:
     ]
 
 
+def _self_chats(bus: Any) -> List[str]:
+    return [
+        call.args[1].message for call in bus.emit.await_args_list if isinstance(call.args[1], GameSelfChattedPayload)
+    ]
+
+
 def _interactions(bus: Any) -> List[GamePlayerInteractedPayload]:
     return [call.args[1] for call in bus.emit.await_args_list if isinstance(call.args[1], GamePlayerInteractedPayload)]
 
@@ -120,6 +127,30 @@ async def test_the_streamer_hears_how_the_spar_went_when_it_ends() -> None:
         "Alex",
         {"result": "won", "my_hits": 5, "their_hits": 3},
     )
+    await agent.stop()
+
+
+async def test_her_public_chat_goes_to_storage_when_it_was_sent() -> None:
+    """游戏 Agent 在公屏说的一句，目标结束、交出去了：发一条只落库的公屏说话事件；不发 milestone。"""
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if "结束了" in _texts(messages):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "说完了"})])
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "打字中"})])
+        goal = {"ability": "chat", "parameters": {"message": "Alex 来切磋吧"}}
+        return _resp(calls=[_call("maicraft_execute", {"goal": goal})])
+
+    agent, _llm, bus = await make_minecraft_agent(server, script)
+    agent.receive_delegation(instruction="在公屏约 Alex 切磋", task_id="d-1")
+    await _wait_until(lambda: agent.tracked_goal_ids == [1] and agent.batch_active is False)
+
+    server.finish(1, summary="说了", details={"message": "Alex 来切磋吧", "submitted": True})
+    await _wait_until(lambda: len(_reports(bus)) == 1)
+
+    assert _self_chats(bus) == ["Alex 来切磋吧"]
+    assert _milestones(bus) == [] and _interactions(bus) == []
     await agent.stop()
 
 

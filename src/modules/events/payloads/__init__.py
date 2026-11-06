@@ -52,7 +52,7 @@ from .core import (
     CoreStartupPayload,
 )
 from .game import GamePayload
-from .game_chat import GameChatPayload
+from .game_chat import GameChatPayload, GameSelfChattedPayload
 from .game_place import GamePlacePayload
 from .game_player import GamePlayerInteractedPayload
 from .live import (
@@ -110,6 +110,7 @@ __all__ = [
     # game.place.noted 游戏里的地点动静（只落库）
     "GamePlacePayload",
     "GamePlayerInteractedPayload",
+    "GameSelfChattedPayload",
     # game.body.* AI 玩家身体事件流
     "BodyEventPayload",
     # game.chat.* 游戏内聊天流

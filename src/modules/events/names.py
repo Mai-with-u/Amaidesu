@@ -70,6 +70,11 @@ class CoreEvents:
     # 不进对话时间线、不促发决策。三层名避开 game.* 单层通配，也不放在主播订阅的 game.chat.# 下。
     GAME_PLAYER_INTERACTED = "game.player.interacted"
 
+    # AI 玩家自己在游戏公屏打出去的一句话（交出去了的才算）。只给记忆落库：存储台账记进公屏聊天，
+    # 用来认"她在回应哪位玩家"、找她在公屏答应玩家的事；主播不订阅——那句话是她自己让游戏 Agent
+    # 说的，不进对话时间线、不促发决策。不放在主播订阅的 game.chat.# 下。
+    GAME_SELF_CHATTED = "game.self.chatted"
+
     # ========== 流程单（Rundown）子系统事件 ==========
     # 唯一发布者：``RundownState`` 变更边界。``rundown.changed`` 涵盖
     # load / goto / next（含 finish）/ pause / resume 五种状态变更；

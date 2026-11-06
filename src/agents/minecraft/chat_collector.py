@@ -84,11 +84,15 @@ class MaicraftChatCollector(MaicraftEventsCollector):
         if attributed is None:
             return False
         system = attributed.kind == "system"
+        # 这一页事件所在的存档：存储据此记"在哪个存档见过这位玩家"（旧版 Mod 与不明时为空串）
+        world = self._page_world
         payload = GameChatPayload(
             game="minecraft",
             kind="system" if system else "player",
             sender=attributed.sender,
             sender_id=attributed.sender_id,
+            # 游戏收到时核对过的"发言人此刻在线"：存储只为核对过的玩家建档，控制台、命令方块借名发的不认
+            sender_online=not system and event.get("sender_online") is True,
             content=attributed.content,
             truncated=event.get("truncated") is True,
             # 私聊只有玩家发得出来：系统消息即使带了标记也不算
@@ -96,6 +100,8 @@ class MaicraftChatCollector(MaicraftEventsCollector):
             note=attributed.note,
             mentions=mentions_of(event),
             message_key=str(event.get("translation_key") or ""),
+            save_id=world.id if world is not None else "",
+            save_name=world.name if world is not None else "",
         )
         await self.emit_event(CoreEvents.GAME_CHAT_RECEIVED, payload, source=self.name)
         return True

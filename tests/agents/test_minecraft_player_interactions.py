@@ -14,9 +14,15 @@ from typing import Any, Dict, Optional
 import pytest
 
 from src.agents.minecraft.maicraft import GoalRun
-from src.agents.minecraft.player_interactions import SparOpponents, body_language_interactions, spar_interaction
+from src.agents.minecraft.player_interactions import (
+    SelfChatLog,
+    SparOpponents,
+    body_language_interactions,
+    spar_interaction,
+)
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.game_chat import GameSelfChattedPayload
 from src.modules.events.payloads.game_player import GamePlayerInteractedPayload
 from tests.agents.streamer.helpers import make_streamer_agent
 
@@ -50,11 +56,33 @@ def test_without_a_uuid_nobody_is_recorded() -> None:
     assert body_language_interactions(_body("玩家 Alex 看着你蹲起 2 下", {"name": "Alex"})) == []
 
 
-def _run(goal_id: int, details: Optional[Dict[str, Any]]) -> GoalRun:
-    result = {"status": "done", "summary": "切磋结束", "details": details}
+def _run(goal_id: int, details: Optional[Dict[str, Any]], ability: str = "fight", state: str = "finished") -> GoalRun:
+    result = {"status": "done", "summary": "结束了", "details": details}
     return GoalRun(
-        goal_id=goal_id, ability="fight", purpose="", state="finished", question=None, result=result, doing="", data={}
+        goal_id=goal_id, ability=ability, purpose="", state=state, question=None, result=result, doing="", data={}
     )
+
+
+def test_her_public_chat_is_taken_once_when_it_went_out() -> None:
+    log = SelfChatLog()
+    sent = _run(1, {"message": "来就来", "submitted": True}, ability="maicraft:chat")
+    assert log.take(sent) == "来就来"
+    assert log.take(sent) == "", "回复和事件流两头都看到结束：只取一次"
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        _run(2, {"message": "来就来", "submitted": False}, ability="chat"),
+        _run(3, {"message": "过来", "submitted": True, "to": "e5", "delivered": True}, ability="chat"),
+        _run(4, {"message": "/time set day", "submitted": True}, ability="chat"),
+        _run(5, {"message": "来就来", "submitted": True}, ability="fight"),
+        _run(6, {"message": "来就来", "submitted": True}, ability="chat", state="running"),
+    ],
+    ids=["没交出去", "对生物说的", "游戏命令", "不是说话", "还没结束"],
+)
+def test_lines_that_did_not_go_to_public_chat_are_not_taken(run: GoalRun) -> None:
+    assert SelfChatLog().take(run) == ""
 
 
 def _spar_goal(target: Dict[str, Any], spar: Any = True) -> Dict[str, Any]:
@@ -103,6 +131,9 @@ async def test_interactions_never_reach_her_timeline_or_wake_her() -> None:
                 game="minecraft", kind=kind, player_uuid=_ALEX["uuid"], player_name="Alex"
             )
             await bus.emit(CoreEvents.GAME_PLAYER_INTERACTED, payload, source="TestGameAgent")
+        # 她自己在公屏打出去的话同样只落库：不当成别人的聊天回到她的时间线
+        said = GameSelfChattedPayload(game="minecraft", message="来就来")
+        await bus.emit(CoreEvents.GAME_SELF_CHATTED, said, source="TestGameAgent")
         await bus.wait_until_drained()
 
         assert agent._proactive_signals.game_pending is False

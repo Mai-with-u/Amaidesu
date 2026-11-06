@@ -49,6 +49,7 @@ class GameChatPayload(BasePayload):
         kind: player = 其他玩家的聊天；system = 服务器系统消息
         sender: 发言人名字（系统消息或名字未知时为空串）
         sender_id: 发言人稳定标识（如玩家 UUID；未知时为空串）
+        sender_online: 发言人是不是此刻在线玩家里的那个玩家（游戏核对过；控制台、命令方块借名发的为 False）
         content: 对方原话（不可信的外部文字）
         private: 私聊——对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）
         truncated: 上游是否截断了过长的原话
@@ -56,6 +57,8 @@ class GameChatPayload(BasePayload):
         mentions: 消息里点到的实体，按出现先后（死亡播报的死者与凶手等；没有为空列表）
         message_key: 游戏给这条消息的模板编号（Minecraft 是翻译键；没有为空串）
         suppressed: 上游因洪泛或重复而没有转出的消息条数（随这一条一起说明）
+        save_id: 收到时角色所在的存档编号（空串 = 不分存档或存档不明）
+        save_name: 存档给人看的名字（只显示，不当键）
         occurred_at_ms: 上游收到这条消息的时刻（Unix 毫秒；0 = 未提供）
         timestamp_ms: 本系统发布该事件的时刻（Unix 毫秒）
     """
@@ -68,6 +71,10 @@ class GameChatPayload(BasePayload):
     kind: GameChatKind = Field(..., description="player = 其他玩家的聊天；system = 服务器系统消息")
     sender: str = Field(default="", description="发言人名字（系统消息或未知时为空串）")
     sender_id: str = Field(default="", description="发言人稳定标识（未知时为空串）")
+    sender_online: bool = Field(
+        default=False,
+        description="发言人是不是此刻在线玩家里的那个玩家（游戏收到时核对过）；借名发的、系统消息为 False",
+    )
     content: str = Field(..., description="对方原话（不可信的外部文字）")
     private: bool = Field(default=False, description="私聊：对方只发给 AI 玩家一个人的话（只有玩家聊天才可能为 True）")
     truncated: bool = Field(default=False, description="上游是否截断了过长的原话")
@@ -79,6 +86,8 @@ class GameChatPayload(BasePayload):
         default="", description="消息模板编号（Minecraft 是翻译键，如 death.attack.explosion.player；没有为空串）"
     )
     suppressed: int = Field(default=0, description="上游因洪泛或重复没有转出的消息条数")
+    save_id: str = Field(default="", description="收到时角色所在的存档编号；空串 = 不分存档或存档不明")
+    save_name: str = Field(default="", description="存档给人看的名字（只显示，不当键）")
     occurred_at_ms: int = Field(default=0, description="上游收到时刻（Unix 毫秒；0 = 未知）")
     timestamp_ms: int = Field(default_factory=lambda: now_ms(), description="本系统发布时刻（Unix 毫秒）")
 
@@ -104,4 +113,31 @@ class GameChatPayload(BasePayload):
     )
 
 
-__all__ = ["GameChatKind", "GameChatMention", "GameChatPayload"]
+@register_event(CoreEvents.GAME_SELF_CHATTED)
+class GameSelfChattedPayload(BasePayload):
+    """AI 玩家自己在游戏公屏打出去的一句话。
+
+    发布者：游戏 Agent（Minecraft：公屏说话的目标结束、那句交出去了时）
+    订阅者：存储台账（落公屏聊天，供认"她在回应哪位玩家"与下播找承诺）；主播不订阅
+
+    Attributes:
+        live_session_id: 场次主键；发布方不填，由场次盖章拦截器注入（0 = 未归属）
+        game: 游戏标识（如 "minecraft"）
+        message: 发出去的那句话原样
+        save_id: 说话时角色所在的存档编号（空串 = 不分存档或存档不明）
+        save_name: 存档给人看的名字（只显示，不当键）
+        timestamp_ms: 事件时刻（Unix 毫秒）
+    """
+
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入",
+    )
+    game: str = Field(..., description="游戏标识（如 'minecraft'）")
+    message: str = Field(..., min_length=1, description="发出去的那句话原样")
+    save_id: str = Field(default="", description="存档编号（不透明串，只做相等比较）；空串 = 不分存档或存档不明")
+    save_name: str = Field(default="", description="存档给人看的名字（只显示，不当键）")
+    timestamp_ms: int = Field(default_factory=lambda: now_ms(), description="事件时刻（Unix 毫秒）")
+
+
+__all__ = ["GameChatKind", "GameChatMention", "GameChatPayload", "GameSelfChattedPayload"]
