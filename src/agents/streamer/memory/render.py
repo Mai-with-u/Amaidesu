@@ -49,7 +49,7 @@ __all__ = [
     "render_viewer_card",
 ]
 
-# 常驻简报：档案行最多几条（滚动档案一份的上限，整理写入用同一个数）、不针对具体观众的承诺最多几条
+# 常驻简报：档案行最多几条（一份快照的上限，整理写入用同一个数）、不针对具体观众的承诺最多几条
 MAX_BRIEF_ARCHIVE_LINES = 12
 MAX_BRIEF_COMMITMENTS = 5
 # 老观众在场一行最多几个人，超出的折成"等 N 位"
@@ -70,9 +70,9 @@ _SPOKEN_HEADER = "## 你想起来的事（只用这里写到的，不补细节�
 # 跨场只用这两个时间词
 _WHEN_PREVIOUS = "上一场"
 _WHEN_EARLIER = "之前"
-# 简报里滚动档案的两块抬头：上一场新写的、从更早几场接过来仍然成立的
+# 简报里档案快照的两块抬头：上一场新写的、从之前几场接住仍然成立的（只用"上一场""之前"两个时间词）
 _WHEN_PREVIOUS_HEADER = "上一场："
-_WHEN_EARLIER_HEADER = "之前几场还记着的事："
+_WHEN_EARLIER_HEADER = "之前："
 _SPOKEN_WHEN_PREVIOUS = "上次"
 _SPOKEN_WHEN_EARLIER = "之前"
 # 档案行与承诺的编号前缀（与她"说过的话""答应过的事"对应）
@@ -184,8 +184,8 @@ def render_archive_block(
 
 
 def _is_from(line: ArchiveLine, archive_session: Optional[int]) -> bool:
-    """这一行是不是档案所在那一场（上一场）新写的；滚动之前的旧行出自本行所在场次，也算。"""
-    return archive_session is None or line.origin_session_id == int(archive_session)
+    """这一行是不是上一场新写的（档案行所在场次就是写下它的那一场）。"""
+    return archive_session is None or int(line.live_session_id) == int(archive_session)
 
 
 def _render_other_save_line(*, game: str, save: GameSave, count: int, current: Mapping[str, GameSave]) -> str:
@@ -229,8 +229,8 @@ def render_brief(
     游戏：上一场那几行没标游戏，分不出是不是眼下这个世界的事，块尾注一句。存档没换、表没变时
     输出逐字节不变（前缀缓存照旧命中）。
 
-    档案是滚动的：上一场新写的行列在"上一场："下，从更早几场接过来、仍然成立的行列在
-    "之前几场还记着的事："下。"上一场"就是这份档案所在的那一场，按每行出自哪一场分。
+    档案行来自上一场的快照：上一场新写的行列在"上一场："下，从之前几场接住、仍然成立的行
+    列在"之前："下，按每行写在哪一场分（``previous_session_id`` 没给时取第一行的场次）。
     """
     sections: List[str] = []
     listed = [item for item in list(commitments)[:MAX_BRIEF_COMMITMENTS] if (item.what or "").strip()]
@@ -242,19 +242,18 @@ def render_brief(
         for line in archive_lines
         if line.evidence_chat_id is None or int(line.evidence_chat_id) not in promised_lines
     ][:MAX_BRIEF_ARCHIVE_LINES]
-    archive_session = shown_lines[0].live_session_id if shown_lines else None
+    archive_session = previous_session_id
+    if archive_session is None and shown_lines:
+        archive_session = shown_lines[0].live_session_id
     recent = [line for line in shown_lines if _is_from(line, archive_session)]
     earlier = [line for line in shown_lines if not _is_from(line, archive_session)]
-    blocks = [
-        [_WHEN_PREVIOUS_HEADER, *render_archive_block(recent, current_saves)],
-        [_WHEN_EARLIER_HEADER, *render_archive_block(earlier, current_saves)],
-    ]
-    blocks = [block for block in blocks if len(block) > 1]
-    # 上一场还没记存档的游戏：没标游戏的那几行里可能有它的事，分不出是不是眼下这个世界
-    if blocks and unsaved_games and any(not line.game for line in shown_lines):
+    recent_block = [_WHEN_PREVIOUS_HEADER, *render_archive_block(recent, current_saves)]
+    # 上一场还没记存档的游戏：上一场那几行没标游戏的里可能有它的事，分不出是不是眼下这个世界
+    if len(recent_block) > 1 and unsaved_games and any(not line.game for line in recent):
         for game in unsaved_games:
-            blocks[-1].append(f"（那场玩 {game} 时还没记存档，上面游戏里的事未必是现在这个存档的）")
-    sections.extend("\n".join(block) for block in blocks)
+            recent_block.append(f"（那场玩 {game} 时还没记存档，上面游戏里的事未必是现在这个存档的）")
+    blocks = [recent_block, [_WHEN_EARLIER_HEADER, *render_archive_block(earlier, current_saves)]]
+    sections.extend("\n".join(block) for block in blocks if len(block) > 1)
     pending: List[str] = []
     for commitment in listed:
         what = (commitment.what or "").strip()

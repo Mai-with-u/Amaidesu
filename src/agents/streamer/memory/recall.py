@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.storage.privacy import MIN_MASK_NAME_LEN, mask_names_in_text
@@ -365,9 +365,6 @@ class MemoryRecallService:
             sessions = list(reversed(sessions))
 
         hits: List[_RecallHit] = []
-        # 滚动档案把同一件事接进了好几场：同一句原话只给一条（扫到的第一份），时间按最初那一场标
-        started = dict(session_bounds)
-        seen: Set[int] = set()
         for session_id, last_ms in sessions:
             try:
                 lines = await self._archive_repo.list_lines(live_session_id=session_id)
@@ -380,11 +377,7 @@ class MemoryRecallService:
             for line in lines:
                 if not _matches_all_keywords(f"{line.text}\n{line.quote}", context.keywords):
                     continue
-                if int(line.evidence_chat_id) in seen:
-                    continue
-                seen.add(int(line.evidence_chat_id))
-                origin = line.origin_session_id
-                hits.append(self._archive_hit(line, origin, int(started.get(origin, last_ms)), context))
+                hits.append(self._archive_hit(line, session_id, int(last_ms), context))
             if len(hits) >= MAX_RESULTS:
                 break
         return hits

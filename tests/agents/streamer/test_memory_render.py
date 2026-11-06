@@ -85,8 +85,8 @@ def test_archive_block_renders_title_and_quote_and_caps_lines() -> None:
 def test_brief_has_archive_section_and_commitment_section() -> None:
     brief = render_brief(
         archive_lines=[_archive()],
-        commitments=[_commitment(cid=5, created_session_id=3, quote="等我把城堡屋顶盖完，第一个请大家来参观")],
-        previous_session_id=3,
+        commitments=[_commitment(cid=5, created_session_id=7, quote="等我把城堡屋顶盖完，第一个请大家来参观")],
+        previous_session_id=7,
     )
     assert brief.startswith("# 她记得的事")
     assert "上一场：" in brief
@@ -95,31 +95,23 @@ def test_brief_has_archive_section_and_commitment_section() -> None:
     assert "[约#5] 「等我把城堡屋顶盖完，第一个请大家来参观」（上一场）" in brief
 
 
-def test_brief_splits_rolling_archive_into_previous_and_earlier_blocks() -> None:
-    """滚动档案：上一场新写的列在"上一场："下，从更早几场接过来的列在"之前几场还记着的事："下。"""
+def test_brief_splits_snapshot_into_previous_and_earlier_blocks() -> None:
+    """快照里上一场新写的行列在"上一场："下，从之前几场接住的行列在"之前："下（按每行写在哪一场分）。"""
     lines = [
         ArchiveLine(
             id=1, live_session_id=9, text="Minecraft：炉子点火烤海带", quote="炉子点上火了", evidence_chat_id=11
         ),
-        ArchiveLine(
-            id=2,
-            live_session_id=9,
-            text="Minecraft：女仆取名团子",
-            quote="就叫团子",
-            evidence_chat_id=12,
-            from_session_id=4,
-            lasting=True,
-        ),
+        ArchiveLine(id=2, live_session_id=4, text="Minecraft：女仆取名团子", quote="就叫团子", evidence_chat_id=12),
     ]
 
     brief = render_brief(archive_lines=lines, previous_session_id=9)
 
     assert (
         "上一场：\n- Minecraft：炉子点火烤海带（你说过「炉子点上火了」）\n"
-        "之前几场还记着的事：\n- Minecraft：女仆取名团子（你说过「就叫团子」）"
+        "之前：\n- Minecraft：女仆取名团子（你说过「就叫团子」）"
     ) in brief
     only_earlier = render_brief(archive_lines=lines[1:], previous_session_id=9)
-    assert "上一场：" not in only_earlier and "之前几场还记着的事：" in only_earlier
+    assert "上一场：" not in only_earlier and "之前：\n- Minecraft：女仆取名团子" in only_earlier
 
 
 def test_brief_lists_one_thing_once_when_archive_and_commitment_share_a_line() -> None:

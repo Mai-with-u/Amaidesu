@@ -1,8 +1,8 @@
 """常驻简报：按台账快照渲染的一段记忆摘要。
 
-两段料：最近一个已整理、有档案行的同类型场次的档案；所有不针对具体观众、不挂游戏的
-未了结承诺（最老的在前，至多五条，多出来的折成一行指向回想工具）。档案是滚动的：那一场
-新写的事加上从更早几场接过来、仍然成立的事，简报分上一场之前几场还记着的事两块列。彩排场接彩排场、
+两段料：上一场（最近一个整理过、时长够的同类型场次）的档案快照——那一场新写的事加上从
+之前几场接住、仍然成立的事，分"上一场""之前"两块列；所有不针对具体观众、不挂游戏的
+未了结承诺（最老的在前，至多五条，多出来的折成一行指向回想工具）。彩排场接彩排场、
 正式场接正式场，调试场不会被当成正式直播的上一场；时长太短的场次（开错后马上重开的
 那一小段）也不算上一场，往前找，它登记的承诺照常进承诺段。本场台词已经点名用过的
 承诺不再进简报（与线索卡的"用上即停"同口径）：一件事一场提一次就够，不然她每个
@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, AbstractSet, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.logging import get_logger
-from src.modules.storage.models.memory import Commitment
+from src.modules.storage.models.memory import ArchiveLine, Commitment
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
@@ -71,12 +71,11 @@ async def build_brief(
     承诺不进这一份简报。``current_saves`` 是分存档的游戏眼下所在的存档；``event_repo`` 给了才查
     "上一场玩这些游戏时记没记下存档"（没记下的块尾注一句）。
     """
-    archive_lines = await _archive_lines(archive_repo, kind, min_session_ms)
+    previous_session_id, archive_lines = await _archive_lines(archive_repo, kind, min_session_ms)
     used: Set[int] = set()
     if chat_repo is not None and live_session_id is not None:
         used = await load_used_commitment_ids(chat_repo, int(live_session_id))
     taken, earlier = await _pending_commitments(commitments_repo, used)
-    previous_session_id = archive_lines[0].live_session_id if archive_lines else None
     saves = dict(current_saves or {})
     text = render_brief(
         archive_lines=archive_lines,
@@ -94,20 +93,18 @@ async def build_brief(
     )
 
 
-async def _archive_lines(archive_repo: "ArchiveRepo", kind: SessionKind, min_session_ms: int) -> List:
-    """最近一个已整理、有档案行、时长够的同类型场次的档案行；没有就空。"""
+async def _archive_lines(
+    archive_repo: "ArchiveRepo", kind: SessionKind, min_session_ms: int
+) -> Tuple[Optional[int], List[ArchiveLine]]:
+    """上一场的场次主键与它的快照各行（引用的档案行原样）；没有上一场或读不到时为 (None, [])。"""
     try:
-        session_id = await archive_repo.get_last_archived_session_id(kind=kind, min_duration_ms=min_session_ms)
+        snapshot = await archive_repo.latest_snapshot(kind=kind, min_duration_ms=min_session_ms)
     except Exception as exc:  # noqa: BLE001 - 读不到就当没有上一场，简报少一段
-        logger.warning(f"取上一场的编号失败（简报不带档案段）: {exc}", exc=exc)
-        return []
-    if session_id is None:
-        return []
-    try:
-        return await archive_repo.list_lines(live_session_id=int(session_id))
-    except Exception as exc:  # noqa: BLE001 - 同上
-        logger.warning(f"取上一场的档案行失败（简报不带档案段）: {exc}", exc=exc)
-        return []
+        logger.warning(f"取上一场的档案快照失败（简报不带档案段）: {exc}", exc=exc)
+        return None, []
+    if snapshot is None:
+        return None, []
+    return int(snapshot.owner_session_id), [item.line for item in snapshot.lines]
 
 
 async def _unsaved_games(

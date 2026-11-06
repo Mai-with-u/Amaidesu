@@ -27,6 +27,7 @@ from src.agents.streamer.memory.recall import (
     build_memory_recall_provider,
 )
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.models.memory import KeptSnapshotLine
 from src.modules.tools import ToolInvocation
 from src.modules.types.game_save import GameSave
 from tests.helpers import FakeClock
@@ -186,23 +187,24 @@ async def test_recall_searches_archive_lines_of_previous_session(store: SQLiteDa
     assert "「今天挖到钻石了」" in text
 
 
-async def test_recall_gives_a_rolled_line_once_dated_by_where_it_was_said(store: SQLiteDatabase) -> None:
-    """滚动档案把第一场的事接进了第二场：回想只给一条，时间按最初说它的那一场标（更早，不是上一场）。"""
+async def test_recall_gives_a_snapshot_row_once_dated_by_where_it_was_said(store: SQLiteDatabase) -> None:
+    """第二场的快照接住了第一场的一行：快照只引用原行，回想只给一条，时间按写下它的那一场标（之前）。"""
     first = await _session(store, started=1_000, ended=2_000)
     second = await _session(store, started=3_000, ended=4_000)
     current = await _session(store, started=5_000)
     chat_id = await _streamer_says(store, first, "从今天起你就叫团子", 1_100)
     await _streamer_says(store, second, "今天接着种菜", 3_100)
-    await store.archive.insert_line(
+    line_id = await store.archive.insert_line(
         live_session_id=first, text="女仆取名团子", quote="从今天起你就叫团子", evidence_chat_id=chat_id
     )
-    await store.archive.insert_line(
+    await store.sessions.apply_settlement(
         live_session_id=second,
-        text="女仆取名团子",
-        quote="从今天起你就叫团子",
-        evidence_chat_id=chat_id,
-        from_session_id=first,
-        lasting=True,
+        archive_lines=[],
+        commitments=[],
+        closures=[],
+        settled_at_ms=4_500,
+        now_ms_value=4_500,
+        snapshot_kept=[KeptSnapshotLine(archive_line_id=line_id, lasting=True, seen_at_ms=1_000)],
     )
     service = _service(store, current_session=current)
 
