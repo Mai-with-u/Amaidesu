@@ -36,7 +36,7 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, AbstractSet, Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from src.modules.context.tokens import TokenCounter
 from src.modules.logging import get_logger
@@ -57,7 +57,7 @@ from src.modules.storage.models.sessions import LiveSession
 from src.modules.storage.repos.sessions import MAX_SETTLE_ATTEMPTS
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE
-from src.agents.streamer.memory.render import memory_ref_numbers
+from src.agents.streamer.memory.render import memory_ref_numbers, render_commitment_number
 from src.agents.streamer.memory.rolling import plan_from_ops, render_base, select_snapshot
 from src.agents.streamer.memory.saves import SaveTimeline
 from src.modules.utils.time_utils import now_ms
@@ -794,8 +794,12 @@ class SessionSettler:
                 key="closed",
             )
         new_lines, archive_misses = self._validate_archive(archive_rows, material)
-        commitments, commitment_misses = self._validate_commitments(commitment_rows, material)
+        # 先认了结、再认新承诺：一行台词点名了某条旧承诺时，那条旧承诺本场有没有了结，
+        # 决定这一行里的新答应是"换了个做法"（照常登记）还是"又提了一遍旧事"（不登记、进报告）
         closures, closure_misses = self._validate_closures(closure_rows, material)
+        commitments, commitment_misses = self._validate_commitments(
+            commitment_rows, material, closed_ids={closure.commitment_id for closure in closures}
+        )
         selection = select_snapshot(
             [*new_lines, *plan.replacements], plan.kept, session_started_at_ms=material.started_at_ms
         )
@@ -910,9 +914,14 @@ class SessionSettler:
         return written, missed
 
     def _validate_commitments(
-        self, rows: List[Any], material: SettleMaterial
+        self, rows: List[Any], material: SettleMaterial, *, closed_ids: AbstractSet[int] = frozenset()
     ) -> Tuple[List[PendingCommitment], List[UnregisteredItem]]:
-        """新承诺的校验：逐字引文、所属游戏、对谁、不重复。"""
+        """新承诺的校验：逐字引文、所属游戏、对谁、不重复。
+
+        ``closed_ids`` 是本次整理了结的旧承诺编号。台词点名了某条旧承诺（记忆引用里有它的编号）时：
+        那条本场被了结了，这一行里的新答应多半是换了个做法（"画我画不了，下次用方块给你拼一幅"），
+        照常登记；没了结，就当她又提了一遍旧事，不新建，写进未登记清单，运营者在整理报告里看得见。
+        """
         written: List[PendingCommitment] = []
         missed: List[UnregisteredItem] = []
         open_ids = {int(row.id) for row in material.open_commitments}
@@ -958,8 +967,18 @@ class SessionSettler:
                     )
                 )
                 continue
-            if memory_ref_numbers(line.memory_refs):
-                logger.info(f"场次 {material.live_session_id}：第 {raw.get('line')} 行已经提到某条旧承诺，不新建")
+            referenced = memory_ref_numbers(line.memory_refs)
+            if referenced and not referenced & closed_ids:
+                # 点名的旧承诺本场都没了结：按又提起旧事处理，不新建；进报告而不是静默丢掉
+                named = "、".join(render_commitment_number(number) for number in sorted(referenced))
+                missed.append(
+                    UnregisteredItem(
+                        kind="commitment",
+                        what=what,
+                        quote=quote,
+                        reason=f"这一行提到了旧承诺 {named}，本场没有了结，按又提起旧事处理，未登记",
+                    )
+                )
                 continue
             if int(line.id) in used_lines:
                 missed.append(

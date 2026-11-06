@@ -403,6 +403,36 @@ async def test_memory_refs_line_is_not_registered_again(store: SQLiteDatabase, p
 
     assert await settler.settle_session(session_id) is True
     assert await store.commitments.count_commitments() == 0
+    # 不新建，但也不静默丢：整理报告里看得见是哪一行、因为点名了哪条旧承诺
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settle_report is not None
+    reasons = [item["reason"] for item in json.loads(row.settle_report)["unregistered"]]
+    assert reasons == ["这一行提到了旧承诺 约#5，本场没有了结，按又提起旧事处理，未登记"]
+
+
+async def test_new_way_on_a_line_naming_a_closed_commitment_is_registered(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """她当众说旧的做不到、改用新办法兑现：旧的那条本场了结，同一行里新答应的事照常登记。"""
+    session_id = await _ended_session(store)
+    old = await store.commitments.insert_commitment(what="画一张头像", quote="下次给你画张头像", now_ms_value=100)
+    assert old is not None
+    line = "头像我是真画不了，下次用方块给你拼一幅"
+    await _speech(store, session_id, line, memory_refs=f'["约#{old}"]')
+
+    llm = _reply(
+        '{"archive": []}',
+        '{"commitments": [{"line": 1, "quote": "下次用方块给你拼一幅", "what": "用方块拼一幅头像",'
+        ' "to": "everyone", "game": null, "same_as": null}]}',
+        '{"closed": [{"id": %d, "line": 1, "quote": "头像我是真画不了"}]}' % old,
+    )
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+    closed = await store.commitments.get_commitment(commitment_id=old)
+    assert closed is not None and closed.status == "closed"
+    opened = await store.commitments.list_commitments(statuses=["open"])
+    assert [item.what for item in opened] == ["用方块拼一幅头像"]
 
 
 async def test_dropped_speech_is_not_material(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
