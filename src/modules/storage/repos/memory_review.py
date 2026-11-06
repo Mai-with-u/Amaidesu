@@ -66,7 +66,7 @@ class SessionReviewState:
     pinned_count: int = 0
 
 
-def _record(
+def record_edit(
     conn: sqlite3.Connection,
     *,
     live_session_id: int,
@@ -95,7 +95,7 @@ def _line(conn: sqlite3.Connection, line_id: int) -> Any:
     return row
 
 
-def _stored_owner(conn: sqlite3.Connection) -> int:
+def stored_snapshot_owner(conn: sqlite3.Connection) -> int:
     """最新一份快照所在的场次；没有存下的快照就报 conflict。"""
     owner = newest_snapshot_owner(conn, SESSION_KIND_LIVE)
     if owner is None or not owner[1]:
@@ -110,7 +110,7 @@ def _snapshot_row(conn: sqlite3.Connection, owner: int, line_id: int) -> Optiona
     ).fetchone()
 
 
-def _insert_pinned(conn: sqlite3.Connection, *, owner: int, line_id: int, lasting: bool) -> None:
+def insert_pinned_line(conn: sqlite3.Connection, *, owner: int, line_id: int, lasting: bool) -> None:
     """把一行插进最新快照的最前面并标放回：常驻简报按位置列，满 12 行时它也排得上。"""
     top = conn.execute(
         "SELECT MIN(position) FROM archive_snapshot_lines WHERE live_session_id=?", (int(owner),)
@@ -191,7 +191,7 @@ class MemoryReviewRepo(BaseRepo):
                 if row["text"] == title:
                     return False
                 conn.execute("UPDATE archive_lines SET text=?, human_locked=1 WHERE id=?", (title, int(line_id)))
-                _record(
+                record_edit(
                     conn,
                     live_session_id=int(row["live_session_id"]),
                     target="archive_line",
@@ -211,7 +211,7 @@ class MemoryReviewRepo(BaseRepo):
         def _exec() -> None:
             with self._manager.transaction() as conn:
                 _line(conn, line_id)
-                owner = _stored_owner(conn)
+                owner = stored_snapshot_owner(conn)
                 current = _snapshot_row(conn, owner, line_id)
                 if current is None:
                     raise MemoryReviewError("conflict", "这一行不在最新一份快照里：先放回快照再标")
@@ -220,7 +220,7 @@ class MemoryReviewRepo(BaseRepo):
                     (1 if lasting else 0, int(owner), int(line_id)),
                 )
                 conn.execute("UPDATE archive_lines SET human_locked=1 WHERE id=?", (int(line_id),))
-                _record(
+                record_edit(
                     conn,
                     live_session_id=owner,
                     target="snapshot_line",
@@ -239,7 +239,7 @@ class MemoryReviewRepo(BaseRepo):
         def _exec() -> None:
             with self._manager.transaction() as conn:
                 row = _line(conn, line_id)
-                owner = _stored_owner(conn)
+                owner = stored_snapshot_owner(conn)
                 if _snapshot_row(conn, owner, line_id) is not None:
                     raise MemoryReviewError("conflict", "这一行已经在最新一份快照里了")
                 last = conn.execute(
@@ -247,8 +247,8 @@ class MemoryReviewRepo(BaseRepo):
                     " WHERE l.archive_line_id=? ORDER BY s.started_at_ms DESC, s.id DESC LIMIT 1",
                     (int(line_id),),
                 ).fetchone()
-                _insert_pinned(conn, owner=owner, line_id=int(line_id), lasting=bool(last[0]) if last else False)
-                _record(
+                insert_pinned_line(conn, owner=owner, line_id=int(line_id), lasting=bool(last[0]) if last else False)
+                record_edit(
                     conn,
                     live_session_id=owner,
                     target="snapshot_line",
@@ -306,15 +306,15 @@ class MemoryReviewRepo(BaseRepo):
                 ).fetchone()
                 if taken is not None:
                     raise MemoryReviewError("conflict", "这句台词已经写成一行档案了，改那一行的标题即可")
-                owner = _stored_owner(conn)
+                owner = stored_snapshot_owner(conn)
                 cur = conn.execute(
                     "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id, save_id, save_name,"
                     " keywords, place, human_locked) VALUES (?, ?, ?, ?, '', '', '[]', '', 1)",
                     (int(live_session_id), title, quote_text, int(evidence_chat_id)),
                 )
                 new_id = int(cur.lastrowid or 0)
-                _insert_pinned(conn, owner=owner, line_id=new_id, lasting=lasting)
-                _record(
+                insert_pinned_line(conn, owner=owner, line_id=new_id, lasting=lasting)
+                record_edit(
                     conn,
                     live_session_id=int(live_session_id),
                     target="archive_line",
@@ -338,7 +338,7 @@ class MemoryReviewRepo(BaseRepo):
                     return False
                 conn.execute("DELETE FROM archive_lines WHERE id=?", (int(line_id),))
                 # 被删的行连文本也不留：改动记录只记删了哪一行、什么时候删的
-                _record(
+                record_edit(
                     conn,
                     live_session_id=int(row[0]),
                     target="archive_line",
@@ -359,7 +359,7 @@ class MemoryReviewRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 _settled_live_session(conn, live_session_id)
                 conn.execute("UPDATE live_sessions SET reviewed_at_ms=? WHERE id=?", (int(at_ms), int(live_session_id)))
-                _record(
+                record_edit(
                     conn,
                     live_session_id=int(live_session_id),
                     target="session",
@@ -397,4 +397,7 @@ __all__ = [
     "MemoryReviewRepo",
     "ReviewSnapshotLine",
     "SessionReviewState",
+    "insert_pinned_line",
+    "record_edit",
+    "stored_snapshot_owner",
 ]

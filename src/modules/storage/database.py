@@ -48,6 +48,7 @@ from src.modules.storage.repos import (
     SessionRepo,
     SimRepo,
     TopicRepo,
+    ViewerCandidateRepo,
     ViewerIdentityRepo,
     ViewerRepo,
 )
@@ -140,6 +141,8 @@ class SQLiteDatabase:
         self.memory_cue_log = MemoryCueLogRepo(self._manager)
         # 记忆页人工审核（改标题、标稳定、放回、新增、删行、标已审，连同改动记录）
         self.memory_review = MemoryReviewRepo(self._manager)
+        # 观众候选：整理写进待审区，记忆页批准或驳回（批准前对她完全不可见）
+        self.viewer_candidates = ViewerCandidateRepo(self._manager)
 
     # -------------------- 属性 --------------------
 

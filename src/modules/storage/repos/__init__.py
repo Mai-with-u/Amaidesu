@@ -22,6 +22,7 @@ from src.modules.storage.repos.rundowns import RundownRepo
 from src.modules.storage.repos.sessions import SessionRepo
 from src.modules.storage.repos.sim import SimRepo
 from src.modules.storage.repos.topics import TopicRepo
+from src.modules.storage.repos.viewer_candidates import ViewerCandidateRepo
 from src.modules.storage.repos.viewer_identity import ViewerIdentityRepo
 from src.modules.storage.repos.viewers import ViewerRepo
 
@@ -42,6 +43,7 @@ __all__ = [
     "SessionRepo",
     "SimRepo",
     "TopicRepo",
+    "ViewerCandidateRepo",
     "ViewerIdentityRepo",
     "ViewerRepo",
 ]

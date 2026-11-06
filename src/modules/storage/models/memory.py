@@ -51,11 +51,13 @@ __all__ = [
     "KeptSnapshotLine",
     "NewCueLogEntry",
     "PendingArchiveLine",
+    "PendingViewerCandidate",
     "PendingCommitment",
     "SettleReport",
     "SnapshotChange",
     "SnapshotLine",
     "UnregisteredItem",
+    "ViewerCandidate",
     "ViewerName",
     "Viewer",
 ]
@@ -250,6 +252,36 @@ class PendingArchiveLine(BaseModel):
     in_snapshot: bool = Field(default=True, description="是否进本场快照；超出上限被挤出的照样写成本场档案行")
     keywords: List[str] = Field(default_factory=list, description="代码核过的触发词（至多 4 个）")
     place: str = Field(default="", description="代码核过的记住地点名；空串 = 不挂地点")
+
+
+class PendingViewerCandidate(BaseModel):
+    """整理校验通过、等着写进待审区的一条观众候选（批准前对她完全不可见）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = Field(..., description="viewer_defined 观众定下的 / claimed_missing 她说欠着的")
+    title: str = Field(..., description="标题（不写观众昵称；代码已截到上限）")
+    viewer_chat_id: Optional[int] = Field(
+        default=None, description="观众那条弹幕；她说欠着的一类只在她是回应某条弹幕时才有"
+    )
+    viewer_quote: str = Field(default="", description="那条弹幕的逐字片段")
+    reply_chat_id: int = Field(..., description="她那句回应（或说欠着的那句）的 live_chat 行")
+    reply_quote: str = Field(..., description="她那句台词的逐字片段")
+    game: Optional[str] = Field(default=None, description="关于哪个游戏世界的事；None 即与游戏无关")
+    save_id: str = Field(default="", description="那个存档的编号；空串 = 不分存档或存档不明")
+    save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
+
+
+class ViewerCandidate(PendingViewerCandidate):
+    """``viewer_candidates`` 一行：待审、已批或已驳回的观众候选。"""
+
+    id: int = Field(..., description="候选主键")
+    live_session_id: int = Field(..., description="列出它的场次")
+    status: str = Field(..., description="pending 待审 / approved 已批 / rejected 已驳回")
+    created_at_ms: int = Field(..., description="列出的时刻")
+    decided_at_ms: Optional[int] = Field(default=None, description="批准或驳回的时刻")
+    archive_line_id: Optional[int] = Field(default=None, description="批准后生成的档案行（观众定下的）")
+    commitment_id: Optional[int] = Field(default=None, description="批准后登记的承诺（她说欠着的）")
 
 
 class KeptSnapshotLine(BaseModel):
