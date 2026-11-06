@@ -41,7 +41,8 @@ def _write_snapshot(
 ) -> int:
     """在整理事务里写本场的快照：先登记"写过快照"（快照可以是空的），再按顺序写各行引用。
 
-    本场新写的行最近一次提起就是本场（记本场开播时刻）；接住的行只在原行还在时才引用。
+    本场新写的行最近一次提起就是本场（记本场开播时刻）；接住的行只在原行还在时才引用，
+    运营者放回的标记跟着接进新快照（否则下一场整理就把人放回的行当普通行挤掉）。
     返回写进快照的行数。
     """
     conn.execute(
@@ -61,8 +62,15 @@ def _write_snapshot(
     for item in kept:
         cur = conn.execute(
             "INSERT OR IGNORE INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting,"
-            " seen_at_ms) SELECT ?, id, ?, ?, ? FROM archive_lines WHERE id=?",
-            (int(live_session_id), position, 1 if item.lasting else 0, int(item.seen_at_ms), int(item.archive_line_id)),
+            " seen_at_ms, pinned) SELECT ?, id, ?, ?, ?, ? FROM archive_lines WHERE id=?",
+            (
+                int(live_session_id),
+                position,
+                1 if item.lasting else 0,
+                int(item.seen_at_ms),
+                1 if item.pinned else 0,
+                int(item.archive_line_id),
+            ),
         )
         position += max(0, int(cur.rowcount or 0))
     return position

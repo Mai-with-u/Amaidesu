@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 29
+SCHEMA_VERSION: int = 30
 
 
 # =============================================================================
@@ -77,6 +77,7 @@ SCHEMA_VERSION: int = 29
 # - memory_vectors_*        记忆检索的向量索引（档案行、承诺、台词、游戏事件各一张；派生物）
 # - memory_fts_*            记忆检索的全文索引（FTS5 虚表，同上四类；派生物）
 # - memory_cue_log          线索卡记录（推了哪张、谁触发的、用上没有）
+# - memory_edits            记忆页人工改动记录（审计，同时是整理评测的标准答案）
 # - timeline_summary        摘要层
 # - llm_usage               LLM 调用记录
 # - llm_requests            LLM 请求历史（完整请求/响应，dashboard 历史页数据源）
@@ -157,6 +158,9 @@ def build_schema_sql() -> str:
         # memory_cue_log —— 线索卡记录
         + _MEMORY_CUE_LOG_SQL
         + "\n"
+        # memory_edits —— 记忆页人工改动记录（排在档案行之后：删行触发器要引用它）
+        + _MEMORY_EDITS_SQL
+        + "\n"
         # timeline_summary —— 摘要层
         + _TIMELINE_SUMMARY_SQL
         + "\n"
@@ -209,6 +213,7 @@ def list_expected_tables() -> List[str]:
         "memory_fts_speech",
         "memory_fts_event",
         "memory_cue_log",
+        "memory_edits",
         "timeline_summary",
         "llm_usage",
         "llm_requests",
@@ -240,6 +245,7 @@ CREATE TABLE IF NOT EXISTS live_sessions (
     settled_at_ms   INTEGER,
     settle_attempts INTEGER NOT NULL DEFAULT 0,
     settle_report   TEXT,
+    reviewed_at_ms  INTEGER,
     CHECK (ended_at_ms IS NULL OR ended_at_ms >= started_at_ms)
 );
 """.strip()
@@ -463,6 +469,8 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 # 前几场仍然成立的事不复制进本场，由下面的快照引用原行。
 # keywords 是被动想起的触发词（JSON 字符串列表：名字、地名、物件名、梗的原词，至多 4 个，
 # 每个都在标题或原话里出现过）；place 是这件事挂在哪个记住的地点（地点名，只在 save_id 那个存档里成立）。
+# human_locked = 1 表示运营者在记忆页改过这一行的标题、稳定标记、触发词或地点，或这一行是运营者新增的：
+# 之后的整理不能去掉或替换它，只有人能动。原话与证据行永远不改，只能随删除一起删。
 
 _ARCHIVE_LINES_SQL = """
 CREATE TABLE IF NOT EXISTS archive_lines (
@@ -475,7 +483,8 @@ CREATE TABLE IF NOT EXISTS archive_lines (
     save_id          TEXT NOT NULL DEFAULT '',
     save_name        TEXT NOT NULL DEFAULT '',
     keywords         TEXT NOT NULL DEFAULT '[]',
-    place            TEXT NOT NULL DEFAULT ''
+    place            TEXT NOT NULL DEFAULT '',
+    human_locked     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_archive_lines_session ON archive_lines(live_session_id);
 """.strip()
@@ -487,7 +496,7 @@ CREATE INDEX IF NOT EXISTS idx_archive_lines_session ON archive_lines(live_sessi
 # 删观众时只改原行文本，快照照样看到遮过名的文本。archive_snapshots 记哪些场次写过快照
 # （快照可以是空的；没有这一行的已整理场次是滚动之前的旧场次）。lasting 标名字、住处、关系
 # 这类稳定的事；seen_at_ms 是最近一次写下或再提起这件事的那一场的开播时刻，超出上限时
-# 最久没被再提的先出。
+# 最久没被再提的先出。pinned = 1 是运营者放回快照或新增的行：取舍时排在稳定的事之前，整理不会挤掉。
 
 _ARCHIVE_SNAPSHOTS_SQL = """
 CREATE TABLE IF NOT EXISTS archive_snapshots (
@@ -500,6 +509,7 @@ CREATE TABLE IF NOT EXISTS archive_snapshot_lines (
     position        INTEGER NOT NULL,
     lasting         INTEGER NOT NULL DEFAULT 0,
     seen_at_ms      INTEGER NOT NULL,
+    pinned          INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (live_session_id, archive_line_id)
 );
 CREATE INDEX IF NOT EXISTS idx_archive_snapshot_lines_line ON archive_snapshot_lines(archive_line_id);
@@ -740,6 +750,32 @@ CREATE TABLE IF NOT EXISTS memory_cue_log (
     used_at_ms      INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_memory_cue_log_session ON memory_cue_log(live_session_id, pushed_at_ms);
+""".strip()
+
+
+# --- memory_edits —— 记忆页人工改动记录 ---
+# 运营者在记忆页的每次操作一行：哪一场的记忆、改的是档案行还是快照行还是整场、什么动作（改标题、
+# 标稳定、取消稳定、放回快照、新增、删除、标已审……动作名由仓储的封闭集合把关，表上不加约束，
+# 以后加动作不用重建表）、改前改后的文本、时刻。既是审计，也是整理评测的标准答案。
+# 与档案同寿命：场次被删时整场记录级联删除。archive_line_id 不挂外键：行被删（删单行、按句删台词、
+# 改彩排）时记录留着动作与时刻，改前改后的文本由触发器当场清空，不留被删的内容。
+
+_MEMORY_EDITS_SQL = """
+CREATE TABLE IF NOT EXISTS memory_edits (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id INTEGER NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+    target          TEXT NOT NULL,
+    archive_line_id INTEGER,
+    action          TEXT NOT NULL,
+    before_text     TEXT NOT NULL DEFAULT '',
+    after_text      TEXT NOT NULL DEFAULT '',
+    at_ms           INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_edits_session ON memory_edits(live_session_id, at_ms);
+CREATE INDEX IF NOT EXISTS idx_memory_edits_line ON memory_edits(archive_line_id);
+CREATE TRIGGER IF NOT EXISTS trg_memory_edits_line_deleted AFTER DELETE ON archive_lines BEGIN
+    UPDATE memory_edits SET before_text = '', after_text = '' WHERE archive_line_id = OLD.id;
+END;
 """.strip()
 
 

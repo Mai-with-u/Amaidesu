@@ -137,16 +137,20 @@ class ArchiveLine(BaseModel):
     game: Optional[str] = Field(default=None, description="写的是哪个游戏世界里的事；None 即与游戏世界无关")
     save_id: str = Field(default="", description="那件事发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
+    human_locked: bool = Field(
+        default=False, description="运营者改过或新增的行：之后的整理不能去掉或替换它，只有人能动"
+    )
 
 
 class SnapshotLine(BaseModel):
-    """快照里的一行：引用的档案行原样带出，加快照自己的两项标注。"""
+    """快照里的一行：引用的档案行原样带出，加快照自己的三项标注。"""
 
     model_config = ConfigDict(extra="forbid")
 
     line: ArchiveLine = Field(..., description="引用的档案行（标题、原话、证据、场次、存档原样）")
     lasting: bool = Field(default=False, description="是否名字、住处、关系这类稳定的事（超出上限时先留）")
     seen_at_ms: int = Field(..., description="最近一次写下或再提起这件事的那一场的开播时刻")
+    pinned: bool = Field(default=False, description="运营者放回快照或新增的行（取舍时排在稳定的事之前）")
 
 
 class ArchiveSnapshot(BaseModel):
@@ -239,6 +243,7 @@ class KeptSnapshotLine(BaseModel):
     archive_line_id: int = Field(..., description="引用的档案行主键")
     lasting: bool = Field(default=False, description="是否稳定的事")
     seen_at_ms: int = Field(..., description="最近一次写下或再提起它的那一场的开播时刻")
+    pinned: bool = Field(default=False, description="运营者放回或新增的行，接进新快照时照旧带着")
 
 
 class CommitmentClosure(BaseModel):

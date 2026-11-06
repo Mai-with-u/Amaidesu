@@ -45,6 +45,9 @@ class LiveSession(BaseModel):
     )
     settle_attempts: int = Field(default=0, description="自动重新整理已尝试的次数")
     settle_report: Optional[str] = Field(default=None, description="整理报告：失败原因或未登记清单（JSON 文本）")
+    reviewed_at_ms: Optional[int] = Field(
+        default=None, description="运营者在记忆页标已审的时刻（Unix epoch 毫秒）；None 即待审"
+    )
 
 
 class LiveSessionListItem(LiveSession):

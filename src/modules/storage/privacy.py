@@ -926,8 +926,34 @@ def _replace_nickname_in_sessions(
             ],
         )
 
+    _clear_memory_edits_with_nickname(conn, session_ids=session_ids, nickname=nickname)
     _replace_nickname_in_settle_reports(conn, session_ids=session_ids, nickname=nickname)
     _replace_nickname_in_game_data(conn, session_ids=session_ids, nickname=nickname)
+
+
+def _clear_memory_edits_with_nickname(
+    conn: sqlite3.Connection,
+    *,
+    session_ids: Sequence[int],
+    nickname: str,
+) -> None:
+    """记忆页改动记录里提到这个昵称的，改前改后的文本整段清空，动作与时刻留着。
+
+    删观众、"忘了我"走同一条路：改动记录只用于审计和评测，不值得为它保留观众相关的文字，
+    所以不做替换、直接清空。范围是 ta 出现过的场次的记录，加上改的是这些场次档案行的记录
+    （放回快照这类操作记在最新那一场，改的却是更早场次的行）。
+    """
+    if not nickname or not session_ids or not table_exists(conn, "memory_edits"):
+        return
+    sid_ph = ",".join("?" for _ in session_ids)
+    like_pat = f"%{nickname}%"
+    conn.execute(
+        "UPDATE memory_edits SET before_text = '', after_text = ''"  # noqa: S608 占位符由代码拼
+        f" WHERE (live_session_id IN ({sid_ph})"
+        f"        OR archive_line_id IN (SELECT id FROM archive_lines WHERE live_session_id IN ({sid_ph})))"
+        "   AND (before_text LIKE ? OR after_text LIKE ?)",
+        [*session_ids, *session_ids, like_pat, like_pat],
+    )
 
 
 def _replace_nickname_in_settle_reports(

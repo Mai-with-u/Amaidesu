@@ -23,11 +23,11 @@ from src.modules.storage.repos._base import BaseRepo
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
 # 档案行读面的列（与 ArchiveLine 字段一一对应）
-_ARCHIVE_COLUMNS = "id, live_session_id, text, quote, evidence_chat_id, game, save_id, save_name"
+_ARCHIVE_COLUMNS = "id, live_session_id, text, quote, evidence_chat_id, game, save_id, save_name, human_locked"
 # 快照读面：引用的档案行连同快照标注一起取
 _SNAPSHOT_COLUMNS = (
-    "a.id, a.live_session_id, a.text, a.quote, a.evidence_chat_id, a.game, a.save_id, a.save_name,"
-    " l.lasting AS snap_lasting, l.seen_at_ms AS snap_seen_at_ms"
+    "a.id, a.live_session_id, a.text, a.quote, a.evidence_chat_id, a.game, a.save_id, a.save_name, a.human_locked,"
+    " l.lasting AS snap_lasting, l.seen_at_ms AS snap_seen_at_ms, l.pinned AS snap_pinned"
 )
 # 旧场次现拼快照：连着往前至多取几场有档案行的旧场次，其中凑够几场时长够的就停
 # （升级前最后一场如果是开错重开的一小段，也能接到真正的上一场和再前一场）
@@ -103,7 +103,10 @@ def _stored_lines(conn: sqlite3.Connection, live_session_id: int) -> List[Snapsh
         data = dict(row)
         lasting = bool(data.pop("snap_lasting"))
         seen_at_ms = int(data.pop("snap_seen_at_ms"))
-        result.append(SnapshotLine(line=ArchiveLine.model_validate(data), lasting=lasting, seen_at_ms=seen_at_ms))
+        pinned = bool(data.pop("snap_pinned"))
+        result.append(
+            SnapshotLine(line=ArchiveLine.model_validate(data), lasting=lasting, seen_at_ms=seen_at_ms, pinned=pinned)
+        )
     return result
 
 

@@ -1034,6 +1034,81 @@ async def test_delete_viewer_masks_snapshot_lines_through_the_original_row(tmp_p
             await store.close()
 
 
+async def test_delete_viewer_clears_memory_edit_text_naming_them(tmp_path: Path) -> None:
+    """记忆页改动记录里提到 ta 昵称的，改前改后整段清空、动作留着；没提到 ta 的不动。
+
+    放回快照这类操作记在后面那一场（ta 没来），改的却是 ta 出现过那一场的档案行，也要清。
+    """
+    db_file = tmp_path / "data" / "amaidesu.db"
+    store = SQLiteDatabase(db_file)
+    await store.initialize()
+    privacy = PrivacyService(store.manager, db_path=db_file, key_path=tmp_path / "forget.key")
+    await privacy.initialize()
+    nickname = "改动记录昵称"
+    try:
+        first = await store.sessions.insert_live_session(started_at_ms=1000, kind="live")
+        await store.sessions.close_live_session(live_session_id=first, ended_at_ms=2000)
+        later = await store.sessions.insert_live_session(started_at_ms=50_000, kind="live")
+        await store.sessions.close_live_session(live_session_id=later, ended_at_ms=60_000)
+        resolution = await store.viewers.resolve_viewer(
+            platform="bilibili",
+            id_kind="account",
+            external_id="UID_EDIT_666",
+            user_name=nickname,
+            timestamp_ms=1100,
+            name_match_window_ms=0,
+        )
+        await store.chat.insert_live_chat(
+            live_session_id=first,
+            timestamp_ms=1600,
+            sender_role="viewer",
+            sender_id="UID_EDIT_666",
+            sender_name=nickname,
+            content="第一场的弹幕",
+            message_type="danmaku",
+            viewer_id=resolution.viewer_id,
+            id_kind="account",
+        )
+        line_id = await store.archive.insert_line(
+            live_session_id=first, text=f"和{nickname}定了猫名", quote="就叫团子", evidence_chat_id=1
+        )
+        edits = (
+            (first, line_id, "retitle", f"和{nickname}定了猫名", "猫取名团子"),
+            (later, line_id, "pin", "", f"和{nickname}定了猫名"),
+            (later, None, "mark_reviewed", "", ""),
+            (first, line_id, "mark_lasting", "猫取名团子", "猫取名团子（稳定）"),
+        )
+        for session_id, archive_line_id, action, before, after in edits:
+            await store.execute(
+                "INSERT INTO memory_edits(live_session_id, target, archive_line_id, action, before_text, after_text,"
+                " at_ms) VALUES (?, 'archive_line', ?, ?, ?, ?, 70000)",
+                (session_id, archive_line_id, action, before, after),
+            )
+
+        assert await privacy.delete_viewer(viewer_id=resolution.viewer_id, add_to_forget_list=True) is True
+
+        rows = [
+            (row["action"], row["before_text"], row["after_text"])
+            for row in await store.execute("SELECT action, before_text, after_text FROM memory_edits ORDER BY id")
+        ]
+        assert rows == [
+            ("retitle", "", ""),
+            ("pin", "", ""),
+            ("mark_reviewed", "", ""),
+            ("mark_lasting", "猫取名团子", "猫取名团子（稳定）"),
+        ]
+
+        await privacy.close()
+        await store.close()
+        for candidate in [db_file, Path(str(db_file) + "-wal")]:
+            if candidate.exists():
+                assert nickname.encode("utf-8") not in candidate.read_bytes(), f"{candidate.name} 残留昵称"
+    finally:
+        if store.initialized:
+            await privacy.close()
+            await store.close()
+
+
 async def test_delete_viewer_scrubs_game_creature_and_event_text(tmp_path: Path) -> None:
     """ta 出现过的场次里，游戏事件正文与生物死亡说明里的昵称换成代称；别的场次与名册名字不动。
 
