@@ -23,3 +23,9 @@ def test_template_no_action_tool_mention():
     for path in _TEMPLATE_PATHS:
         text = path.read_text(encoding="utf-8")
         assert "动作工具" not in text, f"{path.name} 含'动作工具'字样"
+
+
+def test_template_completion_fidelity_fence():
+    """输入段模板含完成度忠实围栏：交接稿里还在做的事不得演成做成了。"""
+    text = (_PROMPTS_DIR / "amaidesu_replyer.md").read_text(encoding="utf-8")
+    assert "完成与否以交接稿里的事实为准" in text and "事实不能演" in text
