@@ -188,6 +188,34 @@ async def test_promises_to_him_ride_on_his_card_only(store: SQLiteDatabase) -> N
     assert f"[玩家·Alex] Alex 在游戏里找你了。你答应过他：帮他修房子（约#{promise}）。" in cues.text
     (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=current)
     assert entry.detail == {"player_id": alex.id, "commitment_ids": [promise]}
+    # 卡尾印着的约#N 是本批能点名的编号，说话档按他的名字说"答应过谁"
+    assert (cues.commitment_ids, cues.labels) == ((promise,), {promise: "Alex"})
+
+
+async def test_a_promise_she_already_used_drops_off_his_card(store: SQLiteDatabase) -> None:
+    """本场已经点名用上的那件事不再写在他的卡上（用上即停）；卡上没别的往来就不推。"""
+    before, current = await _two_sessions(store)
+    alex = await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-a", name="Alex", live_session_id=before, at_ms=_NOW - 85_000_000
+    )
+    promise = await store.commitments.insert_commitment(
+        what="帮他修房子", quote="周末我帮你把房子修好", created_session_id=before, now_ms_value=_NOW - 84_000_000
+    )
+    assert promise is not None
+    with store.manager.transaction() as conn:
+        conn.execute("UPDATE commitments SET target_player_id=? WHERE id=?", (alex.id, promise))
+    await store.chat.insert_live_chat(
+        live_session_id=current,
+        timestamp_ms=_NOW + 1_000,
+        sender_role="assistant",
+        content="房子的事我记着呢",
+        message_type="speech",
+        memory_refs=f'["约#{promise}"]',
+    )
+
+    cues = await _provider(store, current, _Clock(), before).collect(batch=[], game_players=[("minecraft", "uuid-a")])
+
+    assert (cues.card_count, cues.commitment_ids) == (0, ())
 
 
 async def test_no_card_for_a_player_who_asked_to_be_forgotten(store: SQLiteDatabase) -> None:

@@ -189,6 +189,14 @@ class _Round:
     def ids(self, kind: str) -> Tuple[int, ...]:
         return tuple(int(card.key[1]) for card in self.cards if card.key[0] == kind)
 
+    def commitment_ids(self) -> Tuple[int, ...]:
+        """本批能点名的承诺编号：承诺卡的，加玩家卡尾写着的答应过他的事（卡上印着约#N，她点了要认）。"""
+        ids = list(self.ids("commitment"))
+        for card in self.cards:
+            if card.kind == "player":
+                ids.extend(int(item) for item in card.detail.get("commitment_ids", ()))
+        return tuple(dict.fromkeys(ids))
+
 
 def _label(key: ItemKey) -> str:
     """日志里认条目用的写法：约#7 / 档#41 / 老梗「倒立洗头」。"""
@@ -317,7 +325,7 @@ class MemoryCueProvider:
         await self._record_round(sid, state)
         return MemoryCues(
             text=text,
-            commitment_ids=state.ids("commitment"),
+            commitment_ids=state.commitment_ids(),
             card_count=len(state.cards),
             labels=dict(self._round_labels),
             archive_ids=state.ids("archive"),
@@ -609,7 +617,12 @@ class MemoryCueProvider:
             if self._skip(key, state, "本场说上话了" if player.id in replied else self._blocked(key, state)):
                 continue
             history = await self._players.list_history(player_id=player.id, exclude_session_id=session_id)
-            promises = await self._open_commitments(player_id=int(player.id), limit=_MAX_PROMISES_PER_PLAYER)
+            # 答应过他的事：本场已经点名用上的不再写（用上即停），其余至多两条
+            promises = [
+                item
+                for item in await self._open_commitments(player_id=int(player.id), limit=_MAX_PROMISES_PER_PLAYER)
+                if int(item.id) not in state.used
+            ]
             # 别的存档里答应的照样提，但写明是在哪个存档答应的
             notes = [(item, place_note(item.game, item.save_id, item.save_name, state.saves)) for item in promises]
             text = render_player_card(player, history, previous_session_id=state.previous_session_id, promises=notes)
@@ -618,6 +631,9 @@ class MemoryCueProvider:
             detail: Dict[str, Any] = {"player_id": player.id}
             if promises:
                 detail["commitment_ids"] = [int(item.id) for item in promises]
+                # 卡尾的约#N 她点了要认：说话档说"答应过 Alex"，不说成"答应过大家"
+                for item in promises:
+                    self._round_labels[int(item.id)] = player.name
             card = _Card(key=key, text=text, kind="player", sources=(SOURCE_PLAYER,), detail=detail)
             self._push(state, card)
 
