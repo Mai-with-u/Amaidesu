@@ -46,6 +46,8 @@ dependencies = [
     "pygetwindow>=0.0.9",
     "beautifulsoup4>=4.15.0",
     "tiktoken>=0.14.0",
+    # 主播记忆的触发词匹配：三个字以上的触发词按同音、拼音首字母也算提到（MIT）
+    "pypinyin>=0.55.0",
 ]
 
 [project.optional-dependencies]
