@@ -21,10 +21,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 from src.modules.logging import get_logger
 from src.modules.storage.models.memory import ArchiveLine
+from src.modules.storage.privacy import mask_names_in_text
 from src.modules.types.game_save import GameSave
 from src.modules.types.game_situation import GameSituation
 
@@ -92,6 +93,8 @@ VECTOR_MAX_QUERIES = 5
 SITUATION_QUERY_TRIES = 3
 # 委派原话截多长放进游戏情境查询
 _TASK_CHARS = 60
+# 情境查询里玩家名换成的叫法
+_PLAYER_LABEL = "玩家"
 
 # 老梗栏一行："倒立洗头/洗头挑战：她说过输了就倒立洗头"——冒号前是梗与别名，冒号后是说明
 _JOKE_HEAD = re.compile(r"[：:]")
@@ -257,7 +260,8 @@ class SituationQuery:
     """游戏情境查询：眼下的存档、走到跟前的记住的地点、手上在做的委派；三样变了才出一条新查询。
 
     查询文本在变的那一刻定下，算出向量、查过一次就清掉：同一个情境不反复推，压住"玩着就一直
-    想起"。算不出向量的，最多再等几批。
+    想起"。算不出向量的，最多再等几批。查询要发给嵌入服务：委派原话里已知的玩家名（身边的玩家、
+    发过弹幕的观众、游戏里说过话的人）换成"玩家"；地点名是她起的，照发。
     """
 
     def __init__(self) -> None:
@@ -280,21 +284,26 @@ class SituationQuery:
         situations: Mapping[str, GameSituation],
         current_saves: Mapping[str, GameSave],
         tasks: Mapping[str, str],
+        names: Iterable[str] = (),
     ) -> None:
-        """读这一批的情境；和上一批比变了，就定下一条新查询（没有地点也没有委派时不查）。"""
+        """读这一批的情境；和上一批比变了，就定下一条新查询（没有地点也没有委派时不查）。
+
+        ``names`` 是已知的玩家名：先遮名再截短，免得名字被截成半截漏出去。
+        """
+        known = list(names)
         key: List[Tuple[str, str, str, str]] = []
         parts: List[str] = []
         for game in sorted(set(situations) | set(tasks)):
             save = current_saves.get(game)
-            known = save is not None and save.known
+            save_known = save is not None and save.known
             situation = situations.get(game)
             near = ""
             if situation is not None and situation.age_ms <= SITUATION_STALE_MS:
                 near = next((place.name for place in situation.places if place.distance <= ARRIVE_WITHIN), "")
-            task = (tasks.get(game) or "").strip()[:_TASK_CHARS]
-            key.append((game, save.id if known and save is not None else "", near, task))
+            task = mask_names_in_text((tasks.get(game) or "").strip(), known, _PLAYER_LABEL)[:_TASK_CHARS]
+            key.append((game, save.id if save_known and save is not None else "", near, task))
             if near or task:
-                where = f" 存档「{save.label}」" if known and save is not None else ""
+                where = f" 存档「{save.label}」" if save_known and save is not None else ""
                 at = f" 在「{near}」附近" if near else ""
                 doing = f" 正在做：{task}" if task else ""
                 parts.append(f"{game}{where}{at}{doing}")

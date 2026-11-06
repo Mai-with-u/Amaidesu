@@ -1851,6 +1851,9 @@ class StreamerAgent(BaseAgent):
                     self._mouth.note_game(body)
             if payload.kind == "player":
                 self._proactive_signals.set_game()
+                # 游戏里说过话的人记成已知玩家名：游戏情境查询发给嵌入服务前把它换掉
+                if self._memory_cues is not None and payload.sender:
+                    self._memory_cues.note_name(payload.sender)
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏聊天失败: {exc}", exc=True)
 

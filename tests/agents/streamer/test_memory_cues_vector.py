@@ -292,3 +292,26 @@ async def test_embedding_outage_sends_one_request_and_pauses_indexing_too(store:
     memory.clock.tick(BACKOFF_BASE_MS)
     await memory.indexer().run_once()
     assert memory.server.requests[-1] == ["给狗搭个窝\n下次给狗搭个窝"], "退避期满，索引照常补上"
+
+
+async def test_situation_query_replaces_known_player_names(store: SQLiteDatabase) -> None:
+    """委派原话里已知的玩家名（身边的玩家、发过弹幕的观众、游戏里说过话的人）发出去前换成"玩家"；地点名照发。"""
+    memory = await _Memory(store).seed()
+    session_id = await store.sessions.insert_live_session(started_at_ms=memory.clock.now_ms())
+    provider = await memory.provider(session_id)
+    provider.note_name("Alex")
+    await provider.collect(batch=[_danmaku("晚上好")])
+    situation = {
+        "minecraft": GameSituation(places=(NearbyPlace(name="猫窝", distance=6),), players=("Steve",)),
+    }
+
+    await provider.collect(
+        batch=[],
+        current_saves=_SAVES,
+        situations=situation,
+        game_tasks={"minecraft": "帮阿杰、Steve 和 Alex 去猫窝砍树"},
+    )
+    expected = "minecraft 存档「新档」 在「猫窝」附近 正在做：帮玩家、玩家 和 玩家 去猫窝砍树"
+    await memory.warm(expected)
+
+    assert memory.sent() == [expected]

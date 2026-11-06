@@ -232,6 +232,9 @@ class MemoryCueProvider:
         self._arrivals = PlaceArrivals()
         self._situation = SituationQuery()
         self._session_id: Optional[int] = None
+        # 已知的玩家名（发过弹幕的观众、游戏里说过话的人、身边看到的玩家）：游戏情境查询发出去前遮名用。
+        # 不随换场清空：开播后第一批组装前就可能有人在游戏里说过话
+        self._known_names: Set[str] = set()
         # 条目 → 本场推送时刻列表
         self._push_at: Dict[ItemKey, List[int]] = {}
         # 本批推送的卡：编号 → 对方称呼（说话档据此说"答应过谁"）
@@ -284,7 +287,10 @@ class MemoryCueProvider:
             self._rule_cards(self._pool.match(await self._rule_texts(sid, batch, senders)), state)
         await self._game_cards(open_games, state)
         if self._vector_on():
-            self._situation.update(situations or {}, state.saves, game_tasks or {})
+            for situation in (situations or {}).values():
+                for player in situation.players:
+                    self.note_name(player)
+            self._situation.update(situations or {}, state.saves, game_tasks or {}, names=self._known_names)
             await self._vector_cards(batch, senders, state)
         # 老观众一行不再因为"本批有别人的卡"整行消失；只跳过这一批拿了自己卡的观众
         presence = await self._presence_line(sid, senders, state.carded_viewers)
@@ -313,6 +319,8 @@ class MemoryCueProvider:
         只发弹幕正文。不在直播、向量一路没开、模拟消息、遗忘与撤回命令、太短的弹幕、发过"忘了我"
         的观众（删除执行没执行、建没建过档都算），一律不发。
         """
+        user = getattr(message, "user", None)
+        self.note_name(str(getattr(user, "name", "") or ""))
         if not self._vector_on() or self._search is None:
             return
         if self._current_session_provider is None or self._current_session_provider() is None:
@@ -320,7 +328,6 @@ class MemoryCueProvider:
         content = self._query_text(message)
         if content is None or not query_worthy(content):
             return
-        user = getattr(message, "user", None)
         external_id = str(getattr(user, "id", "") or "").strip()
         if external_id:
             probe = _Sender(external_id=external_id, id_kind=str(getattr(user, "id_kind", "") or "account"))
@@ -331,6 +338,12 @@ class MemoryCueProvider:
             if _forgetting(probe):
                 return
         self._search.prefetch(content)
+
+    def note_name(self, name: str) -> None:
+        """记下一个玩家名（游戏里说过话的人）：之后的游戏情境查询里出现它就换成"玩家"。"""
+        cleaned = (name or "").strip()
+        if cleaned:
+            self._known_names.add(cleaned)
 
     def _vector_on(self) -> bool:
         return (
@@ -368,6 +381,7 @@ class MemoryCueProvider:
                 message_type=str(getattr(message, "message_type", "") or ""),
                 platform=str(getattr(message, "platform", "") or ""),
             )
+            self.note_name(sender.user_name)
             if self._viewers is not None:
                 await self._fill_viewer(sender, platform=str(getattr(message, "platform", "") or ""))
             sender.forget_listed = await self._on_forget_list(sender)
