@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 28
+SCHEMA_VERSION: int = 29
 
 
 # =============================================================================
@@ -74,6 +74,9 @@ SCHEMA_VERSION: int = 28
 # - forget_list             不记录名单（发过"忘了我"的观众外部 ID 密钥摘要）
 # - game_events             游戏里程碑事件
 # - game_creatures          游戏生物名册（游戏 Agent 记住的同伴：主播起的名字、死没死，按世界分开）
+# - memory_vectors_*        记忆检索的向量索引（档案行、承诺、台词、游戏事件各一张；派生物）
+# - memory_fts_*            记忆检索的全文索引（FTS5 虚表，同上四类；派生物）
+# - memory_cue_log          线索卡记录（推了哪张、谁触发的、用上没有）
 # - timeline_summary        摘要层
 # - llm_usage               LLM 调用记录
 # - llm_requests            LLM 请求历史（完整请求/响应，dashboard 历史页数据源）
@@ -148,6 +151,12 @@ def build_schema_sql() -> str:
         # game_creatures —— 游戏生物名册
         + _GAME_CREATURES_SQL
         + "\n"
+        # memory_vectors_* / memory_fts_* —— 记忆检索的派生索引（排在来源表之后：触发器要引用它们）
+        + _MEMORY_INDEX_SQL
+        + "\n"
+        # memory_cue_log —— 线索卡记录
+        + _MEMORY_CUE_LOG_SQL
+        + "\n"
         # timeline_summary —— 摘要层
         + _TIMELINE_SUMMARY_SQL
         + "\n"
@@ -191,6 +200,15 @@ def list_expected_tables() -> List[str]:
         "rundown_transitions",
         "game_events",
         "game_creatures",
+        "memory_vectors_archive",
+        "memory_vectors_commitment",
+        "memory_vectors_speech",
+        "memory_vectors_event",
+        "memory_fts_archive",
+        "memory_fts_commitment",
+        "memory_fts_speech",
+        "memory_fts_event",
+        "memory_cue_log",
         "timeline_summary",
         "llm_usage",
         "llm_requests",
@@ -414,6 +432,7 @@ CREATE TABLE IF NOT EXISTS forget_list (
 # 不存“谁改的”：模型只会插入新行、把 open 改成 closed，运营者改过的行模型不再碰。
 # save_id / save_name 是挂了游戏的承诺在哪个存档里答应的（整理时由代码按本场游戏事件判定，
 # 空串 = 不分存档或存档不明）：换了存档时，别的存档里的承诺不再当成眼前的事推给她。
+# keywords 是被动想起的触发词（JSON 字符串列表，同档案行）：观众提到这些词时把这条承诺推给她。
 
 _COMMITMENTS_SQL = """
 CREATE TABLE IF NOT EXISTS commitments (
@@ -430,7 +449,8 @@ CREATE TABLE IF NOT EXISTS commitments (
     close_chat_id      INTEGER,
     close_quote        TEXT,
     created_at_ms      INTEGER NOT NULL,
-    updated_at_ms      INTEGER NOT NULL
+    updated_at_ms      INTEGER NOT NULL,
+    keywords           TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 """.strip()
@@ -441,6 +461,8 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 # 也是回想工具的检索单元；game 是这一行写的是哪个游戏世界里的事（建筑、进度、地点；与世界无关为空），
 # save_id / save_name 是那个世界的存档（整理时由代码按本场游戏事件判定，空串 = 不分存档或存档不明）。
 # 前几场仍然成立的事不复制进本场，由下面的快照引用原行。
+# keywords 是被动想起的触发词（JSON 字符串列表：名字、地名、物件名、梗的原词，至多 4 个，
+# 每个都在标题或原话里出现过）；place 是这件事挂在哪个记住的地点（地点名，只在 save_id 那个存档里成立）。
 
 _ARCHIVE_LINES_SQL = """
 CREATE TABLE IF NOT EXISTS archive_lines (
@@ -451,7 +473,9 @@ CREATE TABLE IF NOT EXISTS archive_lines (
     evidence_chat_id INTEGER NOT NULL,
     game             TEXT,
     save_id          TEXT NOT NULL DEFAULT '',
-    save_name        TEXT NOT NULL DEFAULT ''
+    save_name        TEXT NOT NULL DEFAULT '',
+    keywords         TEXT NOT NULL DEFAULT '[]',
+    place            TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_archive_lines_session ON archive_lines(live_session_id);
 """.strip()
@@ -618,6 +642,104 @@ CREATE TABLE IF NOT EXISTS game_creatures (
     updated_at_ms    INTEGER NOT NULL,
     PRIMARY KEY (game, world_key, creature_key)
 );
+""".strip()
+
+
+# --- memory_vectors_* / memory_fts_* —— 记忆检索的派生索引 ---
+# 回想与被动想起按两路查：全文（FTS5，按两个字一组切开后的词元，BM25 排序）与向量（嵌入，余弦）。
+# 正本始终是档案行、承诺、她播出的台词、游戏里程碑与阶段汇报本身；这些表只是派生物，删掉随时能
+# 从正本重算。来源分四类，各一张向量表、一张全文表，行号就是来源行的主键：
+# - 向量表挂外键 ON DELETE CASCADE：删单行、按句删台词、删场次、改彩排时向量随来源行一起没，
+#   不用每条删除路径另写代码；model 不同（换了嵌入模型）或 text_hash 对不上（正文变了）就重算。
+# - 全文表是虚表、挂不了外键，改用触发器：来源行删掉时删同号全文行；正文被改（删观众替换昵称、
+#   台词被标成没播出）时连同向量一起删掉，由索引任务按新正文重算。
+# 触发器只看各表本来就有的正文列：旧库升级时先跑建表语句、后跑迁移，这里不能引用迁移才加的列。
+# 全文表另要打开 FTS5 自己的 secure-delete（迁移里设），否则删掉的词元会留在影子表里。
+
+_MEMORY_INDEX_SQL = """
+CREATE TABLE IF NOT EXISTS memory_vectors_archive (
+    archive_line_id INTEGER PRIMARY KEY REFERENCES archive_lines(id) ON DELETE CASCADE,
+    model           TEXT NOT NULL,
+    dim             INTEGER NOT NULL,
+    text_hash       TEXT NOT NULL,
+    vector          BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory_vectors_commitment (
+    commitment_id   INTEGER PRIMARY KEY REFERENCES commitments(id) ON DELETE CASCADE,
+    model           TEXT NOT NULL,
+    dim             INTEGER NOT NULL,
+    text_hash       TEXT NOT NULL,
+    vector          BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory_vectors_speech (
+    chat_id         INTEGER PRIMARY KEY REFERENCES live_chat(id) ON DELETE CASCADE,
+    model           TEXT NOT NULL,
+    dim             INTEGER NOT NULL,
+    text_hash       TEXT NOT NULL,
+    vector          BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memory_vectors_event (
+    event_id        INTEGER PRIMARY KEY REFERENCES game_events(id) ON DELETE CASCADE,
+    model           TEXT NOT NULL,
+    dim             INTEGER NOT NULL,
+    text_hash       TEXT NOT NULL,
+    vector          BLOB NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts_archive USING fts5(tokens);
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts_commitment USING fts5(tokens);
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts_speech USING fts5(tokens);
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts_event USING fts5(tokens);
+CREATE TRIGGER IF NOT EXISTS trg_memory_index_archive_deleted AFTER DELETE ON archive_lines BEGIN
+    DELETE FROM memory_fts_archive WHERE rowid = OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_memory_index_archive_edited AFTER UPDATE OF text, quote ON archive_lines BEGIN
+    DELETE FROM memory_fts_archive WHERE rowid = OLD.id;
+    DELETE FROM memory_vectors_archive WHERE archive_line_id = OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_memory_index_commitment_deleted AFTER DELETE ON commitments BEGIN
+    DELETE FROM memory_fts_commitment WHERE rowid = OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_memory_index_commitment_edited AFTER UPDATE OF what, quote ON commitments BEGIN
+    DELETE FROM memory_fts_commitment WHERE rowid = OLD.id;
+    DELETE FROM memory_vectors_commitment WHERE commitment_id = OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_memory_index_speech_deleted AFTER DELETE ON live_chat BEGIN
+    DELETE FROM memory_fts_speech WHERE rowid = OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_memory_index_speech_edited AFTER UPDATE OF content, dropped_at_ms ON live_chat BEGIN
+    DELETE FROM memory_fts_speech WHERE rowid = OLD.id;
+    DELETE FROM memory_vectors_speech WHERE chat_id = OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_memory_index_event_deleted AFTER DELETE ON game_events BEGIN
+    DELETE FROM memory_fts_event WHERE rowid = OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_memory_index_event_edited AFTER UPDATE OF message ON game_events BEGIN
+    DELETE FROM memory_fts_event WHERE rowid = OLD.id;
+    DELETE FROM memory_vectors_event WHERE event_id = OLD.id;
+END;
+""".strip()
+
+
+# --- memory_cue_log —— 线索卡记录 ---
+# 每批 Planner 前推出去的每张线索卡一行：哪一场、什么时候、什么卡、被哪几路命中（JSON 列表：观众弹幕、
+# 游戏地点、游戏情境、规则、她的台词……）、各路分数与触发词（JSON），她用上的时刻由"用上即停"回填。
+# 只记条目编号与分数，不记观众身份。条目被删时外键级联删掉对应记录；场次被删时整场记录一起删。
+# self_triggered = 只由她自己最近几句台词命中的卡（防止她自己越说越多，副作用指标单独统计它）。
+
+_MEMORY_CUE_LOG_SQL = """
+CREATE TABLE IF NOT EXISTS memory_cue_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id INTEGER NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+    pushed_at_ms    INTEGER NOT NULL,
+    card_kind       TEXT NOT NULL,
+    archive_line_id INTEGER REFERENCES archive_lines(id) ON DELETE CASCADE,
+    commitment_id   INTEGER REFERENCES commitments(id) ON DELETE CASCADE,
+    sources         TEXT NOT NULL DEFAULT '[]',
+    detail          TEXT NOT NULL DEFAULT '{}',
+    self_triggered  INTEGER NOT NULL DEFAULT 0,
+    used_at_ms      INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_memory_cue_log_session ON memory_cue_log(live_session_id, pushed_at_ms);
 """.strip()
 
 

@@ -47,6 +47,7 @@ from src.modules.storage.migrations import (
     v26_game_save_columns,
     v27_rolling_archive,
     v28_archive_snapshots,
+    v29_memory_index,
 )
 
 SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
@@ -78,6 +79,7 @@ SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     26: v26_game_save_columns.migrate,
     27: v27_rolling_archive.migrate,
     28: v28_archive_snapshots.migrate,
+    29: v29_memory_index.migrate,
 }
 
 __all__ = ["SCHEMA_MIGRATIONS"]
