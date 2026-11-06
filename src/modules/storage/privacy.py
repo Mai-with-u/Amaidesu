@@ -1172,11 +1172,12 @@ def _replace_nickname_in_sessions(
     )
 
     if table_exists(conn, "archive_lines"):
+        # 观众定下的那个词也换：别的观众拿 ta 的名字给东西起名（"给小猫取名阿杰"），批准后词抄在这一行上
         conn.execute(
             f"UPDATE archive_lines SET"  # noqa: S608
-            f" text = REPLACE(text, ?, ?), quote = REPLACE(quote, ?, ?)"
-            f" WHERE live_session_id IN ({sid_ph}) AND (text LIKE ? OR quote LIKE ?)",
-            [nickname, label, nickname, label, *session_ids, like_pat, like_pat],
+            f" text = REPLACE(text, ?, ?), quote = REPLACE(quote, ?, ?), viewer_word = REPLACE(viewer_word, ?, ?)"
+            f" WHERE live_session_id IN ({sid_ph}) AND (text LIKE ? OR quote LIKE ? OR viewer_word LIKE ?)",
+            [nickname, label, nickname, label, nickname, label, *session_ids, like_pat, like_pat, like_pat],
         )
         _scrub_archive_cues(conn, session_ids=session_ids, nickname=nickname)
 

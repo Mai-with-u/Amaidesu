@@ -340,6 +340,70 @@ async def test_forget_me_masks_candidates_naming_the_viewer_and_drops_their_own(
     assert (edit[0], edit[1], edit[2]) == ("reject", "", rejected.id)
 
 
+async def test_forget_me_masks_the_viewers_name_in_a_word_another_viewer_set(
+    store: SQLiteDatabase, tmp_path: Path
+) -> None:
+    """别的观众拿 ta 的名字给小猫起名、批准成了档案行：ta 被删后标题、原话、定下的词三列都不再有 ta 的名字。"""
+    session_id, said, reply, owed = await _settled_session(store)
+    named = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_ajie",
+        user_name="阿杰",
+        timestamp_ms=1_050,
+        name_match_window_ms=0,
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_400,
+        sender_role="viewer",
+        content="我来了",
+        message_type="danmaku",
+        viewer_id=named.viewer_id,
+    )
+    other = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_500,
+        sender_role="viewer",
+        content="小猫叫阿杰吧",
+        message_type="danmaku",
+    )
+    answer = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_600,
+        sender_role="assistant",
+        content="好，小猫就叫阿杰",
+        message_type="text",
+    )
+    _write(
+        store,
+        session_id,
+        [
+            PendingViewerCandidate(
+                kind="viewer_defined",
+                title="给小猫取名阿杰",
+                viewer_chat_id=other,
+                viewer_quote="小猫叫阿杰",
+                word="阿杰",
+                reply_chat_id=answer,
+                reply_quote="小猫就叫阿杰",
+            )
+        ],
+    )
+    (candidate,) = await store.viewer_candidates.list_candidates()
+    approved = await store.viewer_candidates.approve(candidate_id=candidate.id, at_ms=12_000)
+
+    privacy = PrivacyService(store.manager, db_path=store.db_path, key_path=tmp_path / "secrets" / "forget.key")
+    await privacy.initialize()
+    try:
+        assert await privacy.delete_viewer(viewer_id=named.viewer_id) is True
+    finally:
+        await privacy.close()
+
+    (line,) = await store.archive.list_lines_by_ids(line_ids=[approved.archive_line_id or 0])
+    assert (line.text, line.quote, line.viewer_word) == ("给小猫取名一位观众", "小猫就叫一位观众", "一位观众")
+
+
 async def test_forget_me_compares_percent_and_underscore_literally(store: SQLiteDatabase, tmp_path: Path) -> None:
     """名字里的 _、% 按原字比：删"阿_杰"不动写着"阿x杰"的别人的候选与改动记录。"""
     session_id, said, reply, owed = await _settled_session(store)
