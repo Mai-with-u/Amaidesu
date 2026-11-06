@@ -1,6 +1,6 @@
 ---
 name: memory_archive_system
-version: "1.8"
+version: "1.9"
 description: "下播整理的第一次调用：对上一份档案逐行挑留、去掉或替换（只挑不改写），再挑本场值得下次开播提起的新事，顺带列出观众定下、要人批准的候选（后台 settle 档位调用）"
 variables: []
 author: Amaidesu
@@ -50,6 +50,7 @@ tags: [streamer, memory, archive]
 有的事是观众定下、她当场接受了，却没自己复述一遍：观众给宠物、跟班、地点起的名字，观众提的设定、口味、称呼、规矩、梗，或者关于游戏世界的事（"那块地就叫 X"）。只看台词前写着"回复观众N「……」"的那几行：弹幕里定下了这件事，她那行明确接受了（"好，就叫这个""行，听你的"）。
 
 - 她在本场台词里自己把那个名字或设定说出来了的，照第二节写成新事，不要再列在这里；
+- 观众只是在问名字（"这个叫什么"）或请她起名，名字是她自己想的：不是观众定下的，不列；
 - 不收：观众自己的事（经历、住在哪、在哪上学、多大、联系方式）；观众在问她问题、她只是在答；她只是礼貌回应（"哈哈""谢谢"）或没有接受；
 - 标题写清定下了什么（"和观众一起给小羊取名雪球"），不写观众的昵称，也不写"观众N"这个代号。
 
@@ -59,7 +60,7 @@ tags: [streamer, memory, archive]
 
 只输出 JSON，不要解释，不要代码块标记：
 
-{"previous": [{"old": 2, "op": "keep", "line": 31}, {"old": 4, "op": "drop", "reason": "不成立：她说那块地已经不要了", "line": 52}, {"old": 6, "op": "replace", "line": 77, "title": "Minecraft：水车搭好了", "quote": "水车搭好啦", "game": "minecraft", "lasting": false, "keywords": ["水车"], "place": "河边营地"}], "archive": [{"line": 12, "title": "Minecraft：给小羊取名雪球", "quote": "这只羊就叫雪球", "game": "minecraft", "lasting": true, "keywords": ["雪球"], "place": ""}], "viewer_candidates": [{"line": 40, "title": "和观众一起把直播间的打卡口号定成「麦麦早」", "viewer_quote": "以后打卡就说麦麦早吧", "quote": "好呀就这么定了", "game": null}]}
+{"previous": [{"old": 2, "op": "keep", "line": 31}, {"old": 4, "op": "drop", "reason": "不成立：她说那块地已经不要了", "line": 52}, {"old": 6, "op": "replace", "line": 77, "title": "Minecraft：水车搭好了", "quote": "水车搭好啦", "game": "minecraft", "lasting": false, "keywords": ["水车"], "place": "河边营地"}], "archive": [{"line": 12, "title": "Minecraft：给小羊取名雪球", "quote": "这只羊就叫雪球", "game": "minecraft", "lasting": true, "keywords": ["雪球"], "place": ""}], "viewer_candidates": [{"line": 40, "title": "和观众一起把直播间的打卡口号定成「麦麦早」", "word": "麦麦早", "viewer_quote": "以后打卡就说麦麦早吧", "quote": "好呀就这么定了", "game": null}]}
 
 previous 每项：
 
@@ -86,6 +87,7 @@ viewer_candidates 每项（观众定下的事）：
 
 - line：她回复那条弹幕的那一行编号；
 - title：不超过 30 字，写清定下了什么，不写观众昵称或"观众N"；
+- word：观众定下的那个名字、梗词或设定里的关键词，两个字以上，从那条弹幕原文里直接照抄，title 里也要原样写上它。弹幕里找不到这个词的，不要列；
 - viewer_quote：那条弹幕里定下这件事的那一段，从"回复观众N「……」"的引号里直接照抄；
 - quote：她那一行里接受的那一段，直接照抄，不超过 80 字；
 - game：同新事。

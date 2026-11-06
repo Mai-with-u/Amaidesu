@@ -1266,10 +1266,11 @@ async def test_viewer_candidates_are_listed_from_her_replies_and_kept_out_of_mem
 
     llm = _reply(
         '{"archive": [], "viewer_candidates": ['
-        '{"line": 1, "title": "和观众3一起把打卡口号定成麦麦早", "viewer_quote": "打卡就说麦麦早", "quote": "就这么定了"},'
-        '{"line": 2, "title": "观众住哪", "viewer_quote": "我住在幸福小区三栋", "quote": "记住啦"},'
-        '{"line": 3, "title": "狗叫年糕", "viewer_quote": "叫它年糕", "quote": "年糕也行"},'
-        '{"line": 1, "title": "又列一遍", "viewer_quote": "麦麦早", "quote": "好呀"}]}',
+        '{"line": 1, "title": "和观众3一起把打卡口号定成麦麦早", "word": "麦麦早", "viewer_quote": "打卡就说麦麦早",'
+        ' "quote": "就这么定了"},'
+        '{"line": 2, "title": "观众住哪", "word": "幸福小区", "viewer_quote": "我住在幸福小区三栋", "quote": "记住啦"},'
+        '{"line": 3, "title": "狗叫年糕", "word": "年糕", "viewer_quote": "叫它年糕", "quote": "年糕也行"},'
+        '{"line": 1, "title": "又列一遍麦麦早", "word": "麦麦早", "viewer_quote": "麦麦早", "quote": "好呀"}]}',
         '{"commitments": []}',
     )
     assert await _settler(store, llm, prompt_manager).settle_session(session_id) is True
@@ -1292,6 +1293,41 @@ async def test_viewer_candidates_are_listed_from_her_replies_and_kept_out_of_mem
     assert "幸福小区" not in row.settle_report, "个人信息不写进报告"
 
 
+async def test_candidate_whose_name_is_not_in_the_danmaku_is_reported_not_listed(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """观众只问了"叫啥"、名字是她自己起的：名字不在那条弹幕里，代码不列，写进整理报告；
+    没写名字或梗词、名字不在标题里的同样不列。名字确实出自弹幕的照常列。"""
+    session_id = await _ended_session(store)
+    await _viewer_message(store, session_id, content="那只鸭子叫啥呀", message_id="m1")
+    await _speech(store, session_id, "它叫布丁，我刚想的", reply_to_message_id="m1", timestamp_ms=1_100)
+    await _viewer_message(store, session_id, content="鹦鹉就叫阿彩吧", message_id="m2")
+    await _speech(store, session_id, "行，听你的", reply_to_message_id="m2", timestamp_ms=1_200)
+    await _viewer_message(store, session_id, content="兔子叫棉花", message_id="m3")
+    await _speech(store, session_id, "可以呀", reply_to_message_id="m3", timestamp_ms=1_300)
+    await _viewer_message(store, session_id, content="仓鼠叫团团", message_id="m4")
+    await _speech(store, session_id, "好", reply_to_message_id="m4", timestamp_ms=1_400)
+    llm = _reply(
+        '{"archive": [], "viewer_candidates": ['
+        '{"line": 1, "title": "和观众一起给鸭子取名布丁", "word": "布丁", "viewer_quote": "鸭子叫啥", "quote": "它叫布丁"},'
+        '{"line": 2, "title": "和观众一起给鹦鹉取名阿彩", "word": "阿彩", "viewer_quote": "鹦鹉就叫阿彩", "quote": "听你的"},'
+        '{"line": 3, "title": "和观众一起给兔子取名", "word": "棉花", "viewer_quote": "兔子叫棉花", "quote": "可以呀"},'
+        '{"line": 4, "title": "和观众一起给仓鼠取名团团", "viewer_quote": "仓鼠叫团团", "quote": "好"}]}',
+        '{"commitments": []}',
+    )
+    assert await _settler(store, llm, prompt_manager).settle_session(session_id) is True
+
+    assert [item.title for item in await store.viewer_candidates.list_candidates()] == ["和观众一起给鹦鹉取名阿彩"]
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settle_report is not None
+    report = SettleReport.model_validate_json(row.settle_report)
+    assert [(item.what, item.reason) for item in report.unregistered if item.kind == "candidate"] == [
+        ("和观众一起给鸭子取名布丁", "名字或梗词「布丁」不在标题里，或不在第 1 行回复的那条弹幕原文里"),
+        ("和观众一起给兔子取名", "名字或梗词「棉花」不在标题里，或不在第 3 行回复的那条弹幕原文里"),
+        ("和观众一起给仓鼠取名团团", "没写观众定下的名字或梗词"),
+    ]
+
+
 async def test_rejected_candidates_and_archived_lines_are_not_listed_again(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
@@ -1302,8 +1338,8 @@ async def test_rejected_candidates_and_archived_lines_are_not_listed_again(
     await _speech(store, session_id, "芝麻好听", reply_to_message_id="m2", timestamp_ms=1_200)
     candidates = (
         '"viewer_candidates": ['
-        '{"line": 1, "title": "小羊取名雪球", "viewer_quote": "小羊叫雪球", "quote": "就叫雪球"},'
-        '{"line": 2, "title": "猫取名芝麻", "viewer_quote": "猫叫芝麻", "quote": "芝麻好听"}]'
+        '{"line": 1, "title": "小羊取名雪球", "word": "雪球", "viewer_quote": "小羊叫雪球", "quote": "就叫雪球"},'
+        '{"line": 2, "title": "猫取名芝麻", "word": "芝麻", "viewer_quote": "猫叫芝麻", "quote": "芝麻好听"}]'
     )
     llm = _reply(
         '{"archive": [{"line": 1, "title": "小羊取名雪球", "quote": "这只羊就叫雪球"}], ' + candidates + "}",

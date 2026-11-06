@@ -4,8 +4,11 @@
 
 - 证据：``line`` 必须是本场她播出、并且在回复一条真实观众弹幕（不是模拟观众）的那一行；
   ``viewer_quote`` 是那条弹幕的逐字片段，``quote`` 是她那行的逐字片段（压掉连续空白的写法也认）；
-- 个人信息：标题或两段引文里出现手机号、地址、学校、年龄、联系方式这类模式的，整条丢掉，只计数，
-  不把内容写进整理报告；
+- 名字或梗词：模型另写一个 ``word``（观众定下的那个名字、梗词或设定里的关键词），它必须在标题里原样出现、
+  也在那条弹幕原文里原样出现。观众只问了"叫啥"、名字是她自己起的，弹幕里就没有这个词，不算观众定下的；
+  对不上的不列，写进整理报告的未登记清单；
+- 个人信息：标题、名字或梗词、两段引文里出现手机号、地址、学校、年龄、联系方式这类模式的，整条丢掉，
+  只计数，不把内容写进整理报告；
 - 去重：和本场新写或上一份档案里的行同一句作证据、或归一化后标题相同的不列；和驳回过的候选同一条
   弹幕、或归一化后标题相同的不列；同一行台词只列一条；
 - 标题里模型写的观众代号（"观众3"）换成"观众"：代号只在这一场有意义。
@@ -42,6 +45,9 @@ MAX_VIEWER_CANDIDATES = 5
 MAX_CLAIMED_MISSING = 3
 _TITLE_CHARS = 30
 _QUOTE_CHARS = 80
+# 观众定下的那个名字或梗词：两个字以上（单字太容易碰巧出现在弹幕里）、不超过 16 字
+_WORD_MIN_CHARS = 2
+_WORD_CHARS = 16
 _VIEWER_CODE = re.compile(r"观众\s*\d+")
 # 观众个人信息的模式：手机号或长串数字、年龄、住址、学校、联系方式
 _PERSONAL = re.compile(
@@ -71,6 +77,17 @@ def _verbatim(quote: Any, content: Optional[str], limit: int) -> Optional[str]:
     if not text or len(text) > limit:
         return None
     return text if text in raw or text in " ".join(raw.split()) else None
+
+
+def _word_from_viewer(word: str, title: str, viewer_text: Optional[str]) -> bool:
+    """观众定下的名字或梗词核得上吗：长度合规、标题里原样出现、那条弹幕原文里也原样出现（压掉空白的写法也认）。
+
+    观众只问"那只猫叫啥"、她自己说"叫奶糖"，模型容易把它当成观众定下的；名字不在弹幕里，就是她自己起的。
+    """
+    if not (_WORD_MIN_CHARS <= len(word) <= _WORD_CHARS) or word not in title:
+        return False
+    raw = viewer_text or ""
+    return word in raw or word in " ".join(raw.split())
 
 
 def validate_viewer_candidates(
@@ -112,7 +129,8 @@ def validate_viewer_candidates(
             continue
         viewer_quote = _verbatim(raw.get("viewer_quote"), line.reply_content, _QUOTE_CHARS)
         reply_quote = _verbatim(quote, line.content, _QUOTE_CHARS)
-        if _PERSONAL.search(" ".join((title, str(raw.get("viewer_quote") or ""), quote))):
+        word = str(raw.get("word") or "").strip()
+        if _PERSONAL.search(" ".join((title, word, str(raw.get("viewer_quote") or ""), quote))):
             # 观众的个人信息不进待审区，也不把内容写进报告
             check.personal_dropped += 1
             continue
@@ -123,6 +141,21 @@ def validate_viewer_candidates(
                     what=title,
                     quote=quote,
                     reason=f"没有标题，或弹幕与她那句的原话不是第 {raw.get('line')} 行的逐字片段",
+                )
+            )
+            continue
+        if not _word_from_viewer(word, title, line.reply_content):
+            # 观众只问了名字、名字是她自己起的，或标题里没写那个词：不是观众定下的，不列，进报告给人看
+            check.missed.append(
+                UnregisteredItem(
+                    kind="candidate",
+                    what=title,
+                    quote=quote,
+                    reason=(
+                        f"名字或梗词「{word}」不在标题里，或不在第 {raw.get('line')} 行回复的那条弹幕原文里"
+                        if word
+                        else "没写观众定下的名字或梗词"
+                    ),
                 )
             )
             continue
