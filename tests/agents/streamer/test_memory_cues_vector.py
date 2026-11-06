@@ -218,3 +218,42 @@ async def test_vector_skips_what_it_must_not_push(store: SQLiteDatabase, change:
         assert cues.archive_ids == () and cues.commitment_ids == (memory.cat_promise,)
     else:
         assert cues.text == ""
+
+
+@pytest.mark.parametrize("who", ["deleted", "never_carded"])
+async def test_forget_listed_viewers_without_a_row_never_leave(
+    store: SQLiteDatabase, privacy: PrivacyService, who: str
+) -> None:
+    """不记录名单上、观众行已经没了的人：删除执行过的、没建过档就发"忘了我"的。
+
+    ta 的弹幕预取不发给嵌入服务，组装本批时规则与语义两路都不拿来查，不推卡。
+    """
+    memory = await _Memory(store).seed()
+    await store.execute("UPDATE archive_lines SET keywords=? WHERE id=?", ('["芝麻"]', memory.cat_line))
+    session_id = await store.sessions.insert_live_session(started_at_ms=memory.clock.now_ms())
+    if who == "deleted":
+        # 建过档的观众，删除执行时外部 ID 进了不记录名单，观众行没了
+        resolved = await store.viewers.resolve_viewer(
+            platform="bilibili",
+            id_kind="account",
+            external_id="u9",
+            user_name="小林",
+            timestamp_ms=memory.clock.now_ms(),
+            name_match_window_ms=0,
+        )
+        assert await privacy.delete_viewer(viewer_id=resolved.viewer_id, add_to_forget_list=True)
+    else:
+        # 第一次来就发"忘了我"：没有观众行，只有不记录名单
+        disposition = await privacy.process_incoming_viewer_message(
+            platform="bilibili", id_kind="account", external_id="u9", message_type="danmaku", content="忘了我吧"
+        )
+        assert disposition == "forget_command"
+    assert await store.viewers.find_viewer_id(platform="bilibili", external_id="u9") is None
+    provider = await memory.provider(session_id, privacy=privacy)
+    message = _danmaku("芝麻那只小猫咪最近好吗", external_id="u9")
+
+    await provider.prefetch(message)
+    cues = await provider.collect(batch=[message])
+
+    assert memory.sent() == [], "不发给嵌入服务"
+    assert cues.archive_ids == () and cues.commitment_ids == (), "规则与语义两路都不推"

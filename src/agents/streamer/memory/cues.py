@@ -125,6 +125,7 @@ class _Sender:
     """本批发言人解析出的观众信息（解析不到观众时 viewer_id 为空）。"""
 
     external_id: str = ""
+    id_kind: str = "account"
     user_name: str = ""
     content: str = ""
     message_id: str = ""
@@ -132,9 +133,16 @@ class _Sender:
     platform: str = ""
     viewer_id: Optional[int] = None
     forget_requested_at_ms: Optional[int] = None
+    # 外部 ID 在不记录名单里：发过"忘了我"（建没建过档都算），或观众行已按要求删掉
+    forget_listed: bool = False
     sessions_count: int = 0
     last_session_id: Optional[int] = None
     prev_seen_ms: Optional[int] = None
+
+
+def _forgetting(sender: _Sender) -> bool:
+    """发过"忘了我"的观众：观众行上有待删标记，或外部 ID 在不记录名单里。"""
+    return sender.forget_requested_at_ms is not None or sender.forget_listed
 
 
 @dataclass
@@ -303,7 +311,7 @@ class MemoryCueProvider:
         """一条弹幕到达就在后台算它的查询向量：攒批窗口几秒，组装线索时多半已经算好，决策不等它。
 
         只发弹幕正文。不在直播、向量一路没开、模拟消息、遗忘与撤回命令、太短的弹幕、发过"忘了我"
-        且删除还没执行的观众，一律不发。
+        的观众（删除执行没执行、建没建过档都算），一律不发。
         """
         if not self._vector_on() or self._search is None:
             return
@@ -314,10 +322,13 @@ class MemoryCueProvider:
             return
         user = getattr(message, "user", None)
         external_id = str(getattr(user, "id", "") or "").strip()
-        if self._viewers is not None and external_id:
-            probe = _Sender(external_id=external_id)
-            await self._fill_viewer(probe, platform=str(getattr(message, "platform", "") or ""))
-            if probe.forget_requested_at_ms is not None:
+        if external_id:
+            probe = _Sender(external_id=external_id, id_kind=str(getattr(user, "id_kind", "") or "account"))
+            # 先查不记录名单（删掉了的、没建过档的也在里面），再看观众行上的待删标记
+            probe.forget_listed = await self._on_forget_list(probe)
+            if not probe.forget_listed and self._viewers is not None:
+                await self._fill_viewer(probe, platform=str(getattr(message, "platform", "") or ""))
+            if _forgetting(probe):
                 return
         self._search.prefetch(content)
 
@@ -350,6 +361,7 @@ class MemoryCueProvider:
                 continue
             sender = _Sender(
                 external_id=external_id,
+                id_kind=str(getattr(user, "id_kind", "") or "account"),
                 user_name=str(getattr(user, "name", "") or ""),
                 content=str(getattr(message, "content", "") or ""),
                 message_id=str(getattr(message, "message_id", "") or ""),
@@ -358,6 +370,7 @@ class MemoryCueProvider:
             )
             if self._viewers is not None:
                 await self._fill_viewer(sender, platform=str(getattr(message, "platform", "") or ""))
+            sender.forget_listed = await self._on_forget_list(sender)
             if sender.viewer_id is not None:
                 if sender.viewer_id in seen:
                     continue
@@ -389,6 +402,22 @@ class MemoryCueProvider:
         sender.last_session_id = int(row.last_session_id) if row.last_session_id is not None else None
         sender.prev_seen_ms = row.prev_seen_ms
 
+    async def _on_forget_list(self, sender: _Sender) -> bool:
+        """这位发言人的外部 ID 在不记录名单里就返回 True；没有隐私服务时只能靠观众行上的标记。
+
+        查不了名单时按在名单里处理：宁可这条弹幕不拿来想起旧事，也不把可能要求过遗忘的人的话
+        发给嵌入服务。
+        """
+        if self._privacy is None or not sender.external_id:
+            return False
+        try:
+            return bool(
+                await self._privacy.is_external_id_forgotten(id_kind=sender.id_kind, external_id=sender.external_id)
+            )
+        except Exception as exc:  # noqa: BLE001 - 查不了名单就当在名单里，这条弹幕不进查询
+            logger.warning(f"线索推送查不记录名单失败（这条弹幕不拿来想起旧事）: {exc}", exc=exc)
+            return True
+
     async def _replied_viewer_ids(self, session_id: int) -> Set[int]:
         """本场她回应过的观众。
 
@@ -414,10 +443,10 @@ class MemoryCueProvider:
     def _query_messages(self, batch: Sequence[Any], senders: Sequence[_Sender]) -> List[Tuple[str, str]]:
         """本批能拿来想起旧事的弹幕（正文, 弹幕编号）：只看正文，不带昵称与外部 ID。
 
-        模拟消息不算（线索只认真观众）；遗忘与撤回命令本身不算；发过"忘了我"、删除还没执行的
-        观众，ta 的弹幕一律不算。
+        模拟消息不算（线索只认真观众）；遗忘与撤回命令本身不算；发过"忘了我"的观众（删除执行没执行、
+        建没建过档都算），ta 的弹幕一律不算。
         """
-        forgetting = {sender.external_id for sender in senders if sender.forget_requested_at_ms is not None}
+        forgetting = {sender.external_id for sender in senders if _forgetting(sender)}
         messages: List[Tuple[str, str]] = []
         for message in batch:
             content = self._query_text(message)
