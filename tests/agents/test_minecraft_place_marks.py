@@ -9,6 +9,8 @@ from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
 from src.agents.minecraft.place_marks import (
+    PLACE_LEAVE_BLOCKS,
+    PLACE_NEAR_BLOCKS,
     PLACE_NEAR_REFRESH_S,
     NearPlaceTracker,
     PlaceMark,
@@ -54,9 +56,34 @@ def test_near_tracker_notes_arrival_once_per_refresh_and_notes_leaving() -> None
     assert tracker.observe("a", _situation(("家", 3))) == [PlaceMark(kind="near", place="家", distance=3)]
     assert tracker.observe("a", _situation(("矿洞口", 20), ("家", 40))) == [
         PlaceMark(kind="near", place="矿洞口", distance=20)
-    ]
-    assert tracker.observe("a", _situation(("矿洞口", 25))) == [PlaceMark(kind="left", place="矿洞口")]
+    ], "家还在 48 格内，不算离开"
+    assert tracker.observe("a", _situation(("矿洞口", 25))) == [PlaceMark(kind="left", place="家")], (
+        "家不在清单里了算离开；矿洞口 25 格还没走出 48 格"
+    )
+    assert tracker.observe("a", _situation(("矿洞口", 49))) == [PlaceMark(kind="left", place="矿洞口")]
     assert tracker.observe("a", _situation()) == [], "已经离开了，不重复记"
+
+
+def test_near_tracker_does_not_flap_on_the_boundary_or_between_close_places() -> None:
+    """在 24 格边上进进出出、在两个挨着的地点之间来回走：同一个地点 5 分钟内最多记一条走近，48 格内不记离开。"""
+    now = [0.0]
+    tracker = NearPlaceTracker(lambda: now[0])
+    edge = [PLACE_NEAR_BLOCKS - 1, PLACE_NEAR_BLOCKS + 1] * 5
+    marks = [mark for distance in edge for mark in tracker.observe("a", _situation(("家", distance)))]
+    assert marks == [PlaceMark(kind="near", place="家", distance=PLACE_NEAR_BLOCKS - 1)]
+
+    walk = [(("家", 5), ("仓库", 20)), (("仓库", 5), ("家", 20))] * 4
+    marks = [mark for places in walk for mark in tracker.observe("a", _situation(*places))]
+    assert marks == [PlaceMark(kind="near", place="仓库", distance=5)], "家刚记过；仓库只记第一次"
+
+    assert tracker.observe("a", _situation(("家", PLACE_LEAVE_BLOCKS + 1))) == [
+        PlaceMark(kind="left", place="仓库"),
+        PlaceMark(kind="left", place="家"),
+    ], "走出 48 格（或不在清单里）才记离开"
+    assert tracker.observe("a", _situation(("家", PLACE_LEAVE_BLOCKS + 1))) == []
+    assert tracker.observe("a", _situation(("家", 3))) == [], "离开过也一样：家 5 分钟内记过，不再记"
+    now[0] += PLACE_NEAR_REFRESH_S
+    assert tracker.observe("a", _situation(("家", 3))) == [PlaceMark(kind="near", place="家", distance=3)]
 
 
 def test_near_tracker_does_not_note_leaving_a_place_of_the_previous_save() -> None:
