@@ -211,6 +211,9 @@ class SessionRepo(BaseRepo):
                     delete_session_index_rows(conn, live_session_id=int(live_session_id))
                     # 本场的观众候选也撤掉：台词行还在，外键级联管不到；批准出的承诺已随本场承诺删掉
                     conn.execute("DELETE FROM viewer_candidates WHERE live_session_id=?", (int(live_session_id),))
+                    # 彩排里和游戏玩家的互动、玩家的待审自述同样不进正式的记忆；人还认得，公屏聊天是原始记录照旧留着
+                    for table in ("game_player_interactions", "player_candidates"):
+                        conn.execute(f"DELETE FROM {table} WHERE live_session_id=?", (int(live_session_id),))  # noqa: S608 常量表名
                 elif row["settled_at_ms"] is not None and int(row["settled_at_ms"]) == int(row["ended_at_ms"]):
                     conn.execute(
                         "UPDATE live_sessions SET settled_at_ms=NULL, settle_attempts=0, settle_report=NULL WHERE id=?",
