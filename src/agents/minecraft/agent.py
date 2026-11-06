@@ -487,6 +487,8 @@ class MinecraftAgent(BaseAgent):
         if not connected:
             try:
                 self._tool_registry.refresh_provider_tools(self._mcp_provider)
+                count = len(list(self._mcp_provider.list_tools())) if self._mcp_provider is not None else 0
+                self._logger.info(f"Agent 私有 MCP 工具集已刷新（摘除，当前 {count} 个）")
             except Exception as exc:  # noqa: BLE001 - 刷新失败不影响连接态本身
                 self._logger.warning(f"Agent 私有 MCP 断开刷新失败: {type(exc).__name__}: {exc}")
             return

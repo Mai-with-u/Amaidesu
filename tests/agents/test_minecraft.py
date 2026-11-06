@@ -809,3 +809,20 @@ def test_tool_guide_tells_streamer_debug_panel_is_not_a_topic() -> None:
     guide = MinecraftToolProvider(state=MinecraftAgentState()).guide_for("streamer")
     assert "调试面板" in guide and "运营开着看" in guide
     assert "不是她按出来的" in guide and "不拿它当话题" in guide and "观众问起" in guide
+
+
+async def test_mcp_disconnection_refresh_logs_removal(loguru_capture: Any) -> None:
+    """断连换血成功路径必须有 INFO 日志（此前成功时零日志，2026-11-05 事故无法回查）。"""
+    _FakeMcpClient.constructed = []
+    registry = ToolRegistry()
+    agent = _mcp_agent(
+        True,
+        registry,
+        client_factory=_FakeMcpClient,
+        provider_factory=lambda **kwargs: _ZeroToolProvider(**kwargs),
+    )
+    await agent.start()  # 降级登记：provider 已注册进 registry，回调已接线
+    agent._on_mcp_connection_changed(False)  # 模拟断连跃迁（回调槽直调）
+    records = [r for r in loguru_capture.records if r["level"] == "INFO" and "摘除" in r["message"]]
+    assert records and "Agent 私有 MCP" in records[0]["message"]
+    await agent.stop()

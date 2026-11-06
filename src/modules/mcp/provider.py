@@ -121,10 +121,12 @@ class McpToolProvider(ConnectionToolProvider):
         if not self._client.connected:
             ok = await self._client.connect()
             if not ok:
-                # 原因已由 McpClient 记过（含同因去重）；此处只补"因此工具列表为空"这一后果
-                logger.debug(f"MCP Provider '{self.server_name}' 连接失败，工具列表为空")
+                # 原因已由 McpClient 记过（含同因去重）；此处补"工具缓存被清空"这一后果——
+                # specs 清空曾全程无日志，断连排查只能靠猜，故升为 INFO
+                reason = self._client.last_connect_error or "连接失败"
+                logger.info(f"MCP Provider '{self.server_name}' 连接失败，工具缓存已清空（原因: {reason}）")
                 self._specs = []
-                self.last_error = self._client.last_connect_error or "连接失败"
+                self.last_error = reason
                 return 0
         self.last_error = ""
         count = await self._sync_specs()
