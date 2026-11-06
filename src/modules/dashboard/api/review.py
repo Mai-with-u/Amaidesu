@@ -200,16 +200,17 @@ async def session_cues(
     if repo is None:
         raise HTTPException(status_code=503, detail="线索卡记录仓储未装配")
     entries = await repo.list_session_entries(live_session_id=session_id)
-    archive_titles = await _archive_titles(server, [entry.archive_line_id for entry in entries])
+    archive_lines = await _archive_lines(server, [entry.archive_line_id for entry in entries])
     commitment_titles = await _commitment_titles(server, [entry.commitment_id for entry in entries])
     items: List[ReviewCueItem] = []
     for entry in entries:
+        line = archive_lines.get(entry.archive_line_id) if entry.archive_line_id is not None else None
         if entry.archive_line_id is not None:
-            label, title = f"档#{entry.archive_line_id}", archive_titles.get(entry.archive_line_id, "")
+            label, title = f"档#{entry.archive_line_id}", line.text if line is not None else ""
         elif entry.commitment_id is not None:
             label, title = f"约#{entry.commitment_id}", commitment_titles.get(entry.commitment_id, "")
         else:
-            label, title = f"老梗「{entry.detail.get('joke', '')}」", ""
+            label, title = _joke_label(entry.detail), ""
         items.append(
             ReviewCueItem(
                 id=entry.id,
@@ -220,7 +221,7 @@ async def session_cues(
                 archive_line_id=entry.archive_line_id,
                 commitment_id=entry.commitment_id,
                 sources=list(entry.sources),
-                detail=dict(entry.detail),
+                detail=_cue_detail(entry.card_kind, entry.detail, line),
                 self_triggered=entry.self_triggered,
                 used_at_ms=entry.used_at_ms,
             )
@@ -228,13 +229,43 @@ async def session_cues(
     return ReviewCueItems(items=items)
 
 
-async def _archive_titles(server: Any, ids: List[Optional[int]]) -> Dict[int, str]:
-    """线索卡指向的档案行标题；没装配档案仓储时为空（面板只显示编号）。"""
+# 线索卡记录里不该有的原词键：早先的记录存过触发词、地点名与老梗原词，复盘时一律不往外给
+_RAW_WORD_KEYS = ("keywords", "place", "joke")
+
+
+def _joke_label(detail: Dict[str, Any]) -> str:
+    """老梗卡的条目写法：记录只存它在老梗栏里排第几条，不存梗的原词。"""
+    index = detail.get("joke_index")
+    return f"老梗第 {int(index) + 1} 条" if isinstance(index, int) else "老梗"
+
+
+def _cue_detail(card_kind: str, stored: Dict[str, Any], line: Optional[Any]) -> Dict[str, Any]:
+    """复盘给出的分数明细：触发词与地点名从档案行眼下的字段现查，行删了就不给。
+
+    记录本身只存编号和分数（第几个触发词、距离、余弦），删观众、删行之后复盘里看不到原词。
+    """
+    detail = {key: value for key, value in stored.items() if key not in _RAW_WORD_KEYS}
+    if line is None:
+        return detail
+    indexes = stored.get("keyword_index")
+    if isinstance(indexes, list):
+        words = [
+            line.keywords[index] for index in indexes if isinstance(index, int) and 0 <= index < len(line.keywords)
+        ]
+        if words:
+            detail["keywords"] = words
+    if card_kind == "place" and line.place:
+        detail["place"] = line.place
+    return detail
+
+
+async def _archive_lines(server: Any, ids: List[Optional[int]]) -> Dict[int, Any]:
+    """线索卡指向的档案行（标题、触发词、地点现查用）；没装配档案仓储时为空（面板只显示编号）。"""
     wanted = [int(item) for item in ids if item is not None]
     if not wanted or server.archive_repo is None:
         return {}
     lines = await server.archive_repo.list_lines_by_ids(line_ids=wanted)
-    return {int(line.id): line.text for line in lines}
+    return {int(line.id): line for line in lines}
 
 
 async def _commitment_titles(server: Any, ids: List[Optional[int]]) -> Dict[int, str]:

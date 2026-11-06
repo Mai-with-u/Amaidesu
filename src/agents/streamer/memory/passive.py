@@ -136,6 +136,8 @@ class PassiveHit:
     key: ItemKey
     sources: Set[str] = field(default_factory=set)
     keywords: List[str] = field(default_factory=list)
+    # 命中的触发词在条目触发词表里排第几（从 0 起）：线索卡记录只存这个，不存原词
+    keyword_indexes: List[int] = field(default_factory=list)
     hows: List[str] = field(default_factory=list)
     message_id: str = ""
     place: str = ""
@@ -159,6 +161,7 @@ class RulePool:
         self._clock = clock
         self._loaded_at: Optional[int] = None
         self._lines: Dict[int, ArchiveLine] = {}
+        self._entries: Dict[ItemKey, List[str]] = {}
         self._matcher: KeywordMatcher[ItemKey] = KeywordMatcher({})
 
     def reset(self) -> None:
@@ -183,10 +186,18 @@ class RulePool:
                 entries[("archive", int(line.id))] = list(line.keywords)
         for main, words in self._jokes.items():
             entries[("joke", main)] = words
+        self._entries = entries
         self._matcher = KeywordMatcher(entries)
 
     def archive_line(self, line_id: int) -> Optional[ArchiveLine]:
         return self._lines.get(int(line_id))
+
+    def joke_index(self, main: str) -> Optional[int]:
+        """老梗在老梗栏里排第几条（从 0 起）；不在栏里返回 None。"""
+        for index, name in enumerate(self._jokes):
+            if name == main:
+                return index
+        return None
 
     def lines_at(self, game: str, place: str, current_saves: Mapping[str, GameSave]) -> List[ArchiveLine]:
         """挂在这个游戏、这个地点上的档案行（新的在前）：只取眼下这个存档里的，或这个游戏不分存档。"""
@@ -209,6 +220,9 @@ class RulePool:
                 hit.sources.add(item.source)
                 if found.keyword not in hit.keywords:
                     hit.keywords.append(found.keyword)
+                    words = self._entries.get(found.key, [])
+                    if found.keyword in words:
+                        hit.keyword_indexes.append(words.index(found.keyword))
                 if found.how not in hit.hows:
                     hit.hows.append(found.how)
                 if item.source == SOURCE_DANMAKU and not hit.message_id:

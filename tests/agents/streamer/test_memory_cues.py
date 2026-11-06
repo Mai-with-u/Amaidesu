@@ -508,7 +508,8 @@ async def test_danmaku_keyword_pushes_archive_card_and_logs_it(store: SQLiteData
     assert cues.archive_ids == (line_id,) and cues.commitment_ids == ()
     (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
     assert (entry.card_kind, entry.archive_line_id, entry.sources) == ("rule", line_id, ["danmaku"])
-    assert entry.detail == {"keywords": ["团子"], "how": ["exact"]} and entry.self_triggered is False
+    # 记录只存第几个触发词与匹配方式，不存原词
+    assert entry.detail == {"keyword_index": [0], "how": ["exact"]} and entry.self_triggered is False
     assert "阿杰" not in str(entry.model_dump()) and "m7" not in str(entry.model_dump()), "记录不带观众身份"
 
 
@@ -608,7 +609,7 @@ async def test_walking_up_to_a_remembered_place_pushes_its_lines_once(store: SQL
     await provider.collect(batch=[], current_saves=saves, situations=near(90))
     assert (await provider.collect(batch=[], current_saves=saves, situations=near(5))).archive_ids == ()
     (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
-    assert (entry.card_kind, entry.sources, entry.detail) == ("place", ["place"], {"place": "北边农场", "distance": 12})
+    assert (entry.card_kind, entry.sources, entry.detail) == ("place", ["place"], {"distance": 12}), "记录不存地点名"
 
 
 async def test_inside_joke_card_only_when_a_viewer_brings_it_up(store: SQLiteDatabase) -> None:
@@ -622,4 +623,4 @@ async def test_inside_joke_card_only_when_a_viewer_brings_it_up(store: SQLiteDat
     cues = await provider.collect(batch=[_message(content="洗头挑战什么时候", message_id="m3")])
     assert "[老梗] 弹幕 m3 提到了「倒立洗头」" in cues.text
     (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
-    assert entry.card_kind == "joke" and entry.detail["joke"] == "倒立洗头"
+    assert entry.card_kind == "joke" and entry.detail == {"keyword_index": [1], "how": ["exact"], "joke_index": 0}

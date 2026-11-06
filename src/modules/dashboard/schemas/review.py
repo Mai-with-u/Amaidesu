@@ -67,7 +67,7 @@ class ReviewCueItem(BaseModel):
     card_kind: str
     """viewer 对象开口 / game 游戏开着 / place 地点 / rule 规则 / vector 语义 / joke 老梗。"""
     label: str
-    """条目写法：档#41 / 约#7 / 老梗「倒立洗头」。"""
+    """条目写法：档#41 / 约#7 / 老梗第 2 条。"""
     title: str = ""
     """档案行标题或承诺动作；条目已被删掉时为空串。"""
     archive_line_id: Optional[int] = None
@@ -75,7 +75,7 @@ class ReviewCueItem(BaseModel):
     sources: List[str] = Field(default_factory=list)
     """命中它的来源：danmaku 观众弹幕 / place 游戏地点 / situation 游戏情境 / self 她的台词 / game 游戏开着。"""
     detail: Dict[str, Any] = Field(default_factory=dict)
-    """分数明细：规则写触发词，语义写余弦、名次与融合分，地点写地点名与距离。"""
+    """分数明细：语义写余弦、名次与融合分，地点写距离；触发词与地点名按档案行眼下的字段现查，行删了就没有。"""
     self_triggered: bool = False
     used_at_ms: Optional[int] = None
 

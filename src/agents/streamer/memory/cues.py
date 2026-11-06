@@ -519,7 +519,7 @@ class MemoryCueProvider:
                 archive_line_id=int(card.key[1]) if card.key[0] == "archive" else None,
                 commitment_id=int(card.key[1]) if card.key[0] == "commitment" else None,
                 sources=list(card.sources),
-                detail=dict(card.detail, **({"joke": card.key[1]} if card.key[0] == "joke" else {})),
+                detail=dict(card.detail),
                 self_triggered=card.self_triggered,
             )
             for card in state.cards
@@ -588,7 +588,8 @@ class MemoryCueProvider:
                     is_previous=self._line_in_previous_session(line.live_session_id, state),
                     note=place_note(line.game, line.save_id, line.save_name, state.saves),
                 )
-                detail = {"place": place, "distance": distance}
+                # 线索卡记录不存地点名：复盘时从档案行眼下挂的地点现查，行删了就看不到
+                detail = {"distance": distance}
                 self._push(state, _Card(key=key, text=text, kind="place", sources=(SOURCE_PLACE,), detail=detail))
 
     def _rule_cards(self, hits: Sequence[PassiveHit], state: _Round) -> None:
@@ -601,7 +602,10 @@ class MemoryCueProvider:
             if not text:
                 continue
             kind = "joke" if hit.key[0] == "joke" else "rule"
-            detail = {"keywords": list(hit.keywords), "how": list(hit.hows)}
+            # 线索卡记录不存触发词原词（可能带观众昵称）：只存第几个触发词与匹配方式，复盘时从条目现查
+            detail: Dict[str, Any] = {"keyword_index": list(hit.keyword_indexes), "how": list(hit.hows)}
+            if hit.key[0] == "joke":
+                detail["joke_index"] = self._pool.joke_index(str(hit.key[1]))
             card = _Card(
                 key=hit.key,
                 text=text,

@@ -538,12 +538,21 @@ async def test_speech_endpoint_requires_chat_repo(api) -> None:
 
 
 async def test_cues_endpoint_lists_cards_with_titles_and_scores(api, store) -> None:
-    """按推送先后列出本场线索卡：条目写法、标题、来源、分数与用上时刻；条目删了标题留空。"""
+    """按推送先后列出本场线索卡：条目写法、标题、来源、分数与用上时刻；条目删了标题留空。
+
+    记录只存编号和分数：触发词、地点名按档案行眼下的字段现查；早先存进去的原词不往外给。
+    """
     from src.modules.storage.models.memory import NewCueLogEntry
 
     pk = await _seed_session(store, BASE, BASE + 600_000)
     line = await store.archive.insert_line(
-        live_session_id=pk, text="女仆取名团子", quote="就叫团子", evidence_chat_id=1
+        live_session_id=pk,
+        text="女仆取名团子",
+        quote="就叫团子",
+        evidence_chat_id=1,
+        keywords=["团子", "女仆"],
+        game="minecraft",
+        place="北边农场",
     )
     gone = await store.archive.insert_line(live_session_id=pk, text="答应画头像", quote="画头像", evidence_chat_id=2)
     promise = await store.commitments.insert_commitment(what="给猫做个窝", quote="下次给猫做个窝")
@@ -556,7 +565,7 @@ async def test_cues_endpoint_lists_cards_with_titles_and_scores(api, store) -> N
                 card_kind="rule",
                 archive_line_id=line,
                 sources=["danmaku"],
-                detail={"keywords": ["团子"], "how": ["exact"]},
+                detail={"keyword_index": [1], "how": ["exact"]},
             ),
             NewCueLogEntry(
                 live_session_id=pk,
@@ -566,10 +575,20 @@ async def test_cues_endpoint_lists_cards_with_titles_and_scores(api, store) -> N
                 sources=["situation"],
                 detail={"cosine": 0.71, "rank": 1, "fused": 0.03},
             ),
-            NewCueLogEntry(
-                live_session_id=pk, pushed_at_ms=BASE + 3_000, card_kind="joke", detail={"joke": "倒立洗头"}
-            ),
+            NewCueLogEntry(live_session_id=pk, pushed_at_ms=BASE + 3_000, card_kind="joke", detail={"joke_index": 1}),
             NewCueLogEntry(live_session_id=pk, pushed_at_ms=BASE + 4_000, card_kind="rule", archive_line_id=gone),
+            # 早先的记录：原词存在明细里
+            NewCueLogEntry(
+                live_session_id=pk,
+                pushed_at_ms=BASE + 5_000,
+                card_kind="place",
+                archive_line_id=line,
+                sources=["place"],
+                detail={"place": "阿杰家门口", "distance": 12},
+            ),
+            NewCueLogEntry(
+                live_session_id=pk, pushed_at_ms=BASE + 6_000, card_kind="joke", detail={"joke": "阿杰的猫"}
+            ),
         ]
     )
     await store.memory_cue_log.mark_used(live_session_id=pk, archive_line_ids=[line], used_at_ms=BASE + 5_000)
@@ -585,10 +604,15 @@ async def test_cues_endpoint_lists_cards_with_titles_and_scores(api, store) -> N
     assert [(item["label"], item["title"], item["card_kind"]) for item in items] == [
         (f"档#{line}", "女仆取名团子", "rule"),
         (f"约#{promise}", "给猫做个窝", "vector"),
-        ("老梗「倒立洗头」", "", "joke"),
+        ("老梗第 2 条", "", "joke"),
+        (f"档#{line}", "女仆取名团子", "place"),
+        ("老梗", "", "joke"),
     ], "指向的档案行删掉后，那条记录跟着删"
     assert items[0]["used_at_ms"] == BASE + 5_000 and items[0]["sources"] == ["danmaku"]
+    assert items[0]["detail"] == {"keyword_index": [1], "how": ["exact"], "keywords": ["女仆"]}
     assert items[1]["detail"] == {"cosine": 0.71, "rank": 1, "fused": 0.03} and items[1]["used_at_ms"] is None
+    assert items[3]["detail"] == {"distance": 12, "place": "北边农场"}, "地点名按档案行现查，记录里的原词不给"
+    assert items[4]["detail"] == {}
 
 
 async def test_cues_endpoint_requires_cue_log_repo(api) -> None:
