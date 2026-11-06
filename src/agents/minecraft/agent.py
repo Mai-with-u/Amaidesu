@@ -2110,7 +2110,7 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
 
     async def _emit_self_chat(self, run: GoalRun) -> None:
-        """公屏说话的目标结束、那句交出去了：发一条给存储记进公屏聊天，主播不订阅。"""
+        """公屏说话的目标结束、那句交出去了：发一条给存储记进公屏聊天，主播记进她的对话时间线。"""
         message = self._self_chats.take(run)
         if message:
             await self._send_self_chat(message)

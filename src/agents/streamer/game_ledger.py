@@ -140,6 +140,11 @@ class GameLedger:
         """委派行标签：``我在 <agent> 里开始做``；未指名执行者时为``我在游戏里开始做``。"""
         return f"我在 {agent} 里开始做" if agent else "我在游戏里开始做"
 
+    @staticmethod
+    def self_chat_label(game: str) -> str:
+        """她自己在游戏公屏说的话：``我在 <game> 公屏说``。"""
+        return f"我在 {game} 公屏说"
+
     # ==================== 入账 ====================
 
     def record_event(self, game: str, event_type: str, message: str, timestamp_ms: int) -> str:
@@ -197,6 +202,16 @@ class GameLedger:
             who=who,
             note=body if who else "",
         )
+
+    def record_self_chat(self, game: str, message: str, timestamp_ms: int) -> None:
+        """她自己在游戏公屏打出去的一句入账（原话照录）。
+
+        游戏里那一面会自己找玩家说话（问人要东西、打招呼），不入账的话她在直播里不知道自己
+        刚问过什么：玩家回"找到了"，她只能反问"找到啥了"。这一行是她自己的话，不算游戏聊天：
+        不交表达侧当别人刚说的话、不算谁开口、不促发决策。
+        """
+        label = self.self_chat_label(game)
+        self._stage(note_turn(label, message, timestamp_ms or now_ms()), label=label, body=message, game=game)
 
     def record_delegation(self, agent: str, instruction: str) -> TimelineTurn:
         """Planner 受理委派：构造"我在哪个游戏里开始做什么"的时间线行（直写时间线用）。"""

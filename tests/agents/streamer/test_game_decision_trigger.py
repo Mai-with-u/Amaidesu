@@ -12,7 +12,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
-from src.modules.events.payloads.game_chat import GameChatPayload
+from src.modules.events.payloads.game_chat import GameChatPayload, GameSelfChattedPayload
 from src.modules.events.payloads.game_place import GamePlacePayload
 from src.agents.streamer.trigger_cause import TriggerKind
 from tests.agents.streamer.helpers import make_streamer_agent
@@ -266,3 +266,41 @@ async def test_game_chat_remembers_who_spoke_for_the_window(live_agent) -> None:
     assert materials.game_batch.chat_speakers == (("minecraft", "uuid-a"), ("minecraft", "?"))
     # 冲她做动作的也算找过她：玩家卡据此推
     assert materials.game_batch.addressed_players == (("minecraft", "uuid-a"), ("minecraft", "uuid-s"))
+
+
+async def test_her_own_public_chat_enters_timeline_without_waking_her(live_agent) -> None:
+    """游戏那一面自己在公屏开口（第 58 场问人要蒲公英）：进时间线让她知道自己问过什么；不促发决策、不算别人的聊天。"""
+    agent, bus = live_agent
+    said = GameSelfChattedPayload(game="minecraft", message="你那儿还有蒲公英吗", timestamp_ms=1_000)
+    await bus.emit(CoreEvents.GAME_SELF_CHATTED, said, source="TestGameAgent")
+    await bus.wait_until_drained()
+
+    assert agent._proactive_signals.game_pending is False
+    materials = await agent._scope.open_window()
+    batch = materials.game_batch
+    assert [turn.content.split("] ", 1)[1] for turn in materials.timeline_notes] == ["你那儿还有蒲公英吗"]
+    assert "我在 minecraft 公屏说]" in materials.timeline_notes[0].content
+    # 她自己的话不交表达侧当"游戏里刚有人说的话"，也不算谁在公屏开口
+    assert batch.fresh_chat == () and batch.chat_speakers == () and batch.player_notes == ()
+
+
+async def test_player_chat_and_actions_reach_the_batch_with_names(live_agent) -> None:
+    """玩家在公屏说的话、冲她做的动作带着名字列进本窗的玩家条目；系统消息与没人做的遭遇不列。"""
+    agent, bus = live_agent
+    gift = _body(
+        "player_body_language",
+        "玩家 玩家甲 朝我扔了 1 个铁锭，落在我脚边。扔过来的多半是送我的",
+        player_uuid="uuid-甲",
+        player_name="玩家甲",
+    )
+    chat = GameChatPayload(game="minecraft", kind="player", sender="玩家甲", content="我勒个", timestamp_ms=1_000)
+    system = GameChatPayload(game="minecraft", kind="system", content="玩家甲被杀死了", timestamp_ms=1_000)
+    await bus.emit(CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE, gift, source="t")
+    await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, chat, source="maicraft_chat")
+    await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, system, source="maicraft_chat")
+    await bus.wait_until_drained()
+
+    notes = agent._scope.drain_window().player_notes
+    assert [(note.who, note.said) for note in notes] == [("玩家甲", False), ("玩家甲", True)]
+    assert notes[0].line.endswith("玩家 玩家甲 朝我扔了 1 个铁锭，落在我脚边")
+    assert notes[1].line.endswith("玩家 玩家甲：我勒个")

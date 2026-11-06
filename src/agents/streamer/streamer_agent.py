@@ -46,7 +46,7 @@ from src.modules.events.payloads.core import CoreStartupPayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.body import BodyEventPayload
-from src.modules.events.payloads.game_chat import GameChatPayload
+from src.modules.events.payloads.game_chat import GameChatPayload, GameSelfChattedPayload
 from src.modules.llm.embedding import EmbeddingSetup
 from src.modules.logging import get_logger
 from src.modules.utils.task_utils import spawn_background_task
@@ -1012,6 +1012,12 @@ class StreamerAgent(BaseAgent):
             self._on_game_chat,
             model_class=GameChatPayload,
         )
+        # 她自己在游戏公屏打出去的话（游戏那一面自己开口的也在内）：进时间线，她知道自己在游戏里说过什么
+        self._event_bus.on(
+            CoreEvents.GAME_SELF_CHATTED,
+            self._on_self_chatted,
+            model_class=GameSelfChattedPayload,
+        )
         # 场次边界事件：开播放行主动发言，下播收闸（开场白属于场次，不属于进程）
         self._event_bus.on(
             CoreEvents.LIVE_STARTED,
@@ -1890,6 +1896,19 @@ class StreamerAgent(BaseAgent):
                     self._memory_cues.note_name(payload.sender)
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏聊天失败: {exc}", exc=True)
+
+    async def _on_self_chatted(self, event_name: str, payload: GameSelfChattedPayload, source: str) -> None:
+        """``game.self.chatted`` 回调：她在游戏公屏说出去的一句入待入账队列，下个决策窗进时间线。
+
+        游戏那一面会自己找玩家搭话（第 58 场问人要蒲公英），不记下来的话玩家回一句"找到了"，
+        她在直播里接不上。这是她自己的话：不促发决策、不交表达侧当别人刚说的话。
+        """
+        del event_name, source
+        try:
+            self._note_game_activity(payload.game)
+            self._game_ledger.record_self_chat(payload.game, payload.message, payload.timestamp_ms or now_ms())
+        except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
+            self._logger.warning(f"收集她自己的公屏话失败: {exc}", exc=True)
 
     def _current_segment_title(self) -> str:
         """当前流程单环节的标题（嘴的现场卡用）；没有流程单为空。"""

@@ -139,7 +139,11 @@ def test_no_spar_record_without_an_opponent_or_a_fight() -> None:
 
 
 async def test_interactions_never_reach_her_timeline_or_wake_her() -> None:
-    """玩家互动只给存储记账：主播不订阅，不进时间线、不促发决策（同一个动作她已从叙事那条知道了）。"""
+    """玩家互动只给存储记账：主播不订阅，不进时间线、不促发决策（同一个动作她已从叙事那条知道了）。
+
+    她自己在公屏打出去的话另算：作为她自己说过的话进时间线（玩家回话时才接得上），但不促发决策，
+    也不当成别人的聊天、不算谁在公屏开口。
+    """
     bus = EventBus()
     agent = make_streamer_agent({"proactive": {"enabled": True}}, event_bus=bus)
     agent._subscribe_events()
@@ -150,13 +154,16 @@ async def test_interactions_never_reach_her_timeline_or_wake_her() -> None:
                 game="minecraft", kind=kind, player_uuid=_ALEX["uuid"], player_name="Alex"
             )
             await bus.emit(CoreEvents.GAME_PLAYER_INTERACTED, payload, source="TestGameAgent")
-        # 她自己在公屏打出去的话同样只落库：不当成别人的聊天回到她的时间线
+        # 她自己在公屏打出去的话：记成她自己说的，不当成别人的聊天、不叫醒她
         said = GameSelfChattedPayload(game="minecraft", message="来就来")
         await bus.emit(CoreEvents.GAME_SELF_CHATTED, said, source="TestGameAgent")
         await bus.wait_until_drained()
 
         assert agent._proactive_signals.game_pending is False
         materials = await agent._scope.open_window()
-        assert materials.timeline_notes == [] and materials.game_batch.events == ()
+        assert [note.content.split("] ", 1)[1] for note in materials.timeline_notes] == ["来就来"]
+        assert "我在 minecraft 公屏说" in materials.timeline_notes[0].content
+        batch = materials.game_batch
+        assert batch.fresh_chat == () and batch.chat_speakers == () and batch.player_notes == ()
     finally:
         await bus.cleanup()
