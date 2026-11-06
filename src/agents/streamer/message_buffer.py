@@ -32,6 +32,7 @@ class MessageBuffer:
         batch_window_ms: int = 3000,
         batch_max_size: int = 20,
         enable_idle_compensation: bool = True,
+        batch_max_wait_ms: int = 30_000,
     ) -> None:
         """初始化缓冲。
 
@@ -39,6 +40,7 @@ class MessageBuffer:
             batch_window_ms: 聚合时间窗口（毫秒），窗口到期后按策略决定是否刷新
             batch_max_size: 单批最多聚合的消息条数，达到即触发刷新
             enable_idle_compensation: 是否启用空窗补偿（窗口过期时按空窗时间折算等效消息数）
+            batch_max_wait_ms: 首条消息到达后的最长等待（毫秒），超过即放行，为空窗补偿设上界
         """
         self._messages: List[RoomMessagePayload] = []
         self._force: bool = False
@@ -48,6 +50,7 @@ class MessageBuffer:
         self._batch_window_ms = batch_window_ms
         self._batch_max_size = batch_max_size
         self._enable_idle_compensation = enable_idle_compensation
+        self._batch_max_wait_ms = batch_max_wait_ms
 
     # ==================== 写入 ====================
 
@@ -138,8 +141,9 @@ class MessageBuffer:
             3. 时间窗口未到期                            → 不触发
             4. 时间窗口到期 + 未启用空窗补偿              → reason="window_expired"
             5. 时间窗口到期 + 启用空窗补偿 + 无 avg 数据  → reason="window_expired"（降级）
-            6. 时间窗口到期 + 空窗折算 >= batch_max_size   → reason="idle_compensation"
-            7. 时间窗口到期 + 空窗折算 < batch_max_size    → 不触发（继续等待）
+            6. 首条到达已满 batch_max_wait_ms             → reason="window_expired"（封顶）
+            7. 时间窗口到期 + 空窗折算 >= batch_max_size   → reason="idle_compensation"
+            8. 时间窗口到期 + 空窗折算 < batch_max_size    → 不触发（继续等待）
 
         空窗补偿折算::
 
@@ -172,6 +176,11 @@ class MessageBuffer:
         if not self._enable_idle_compensation:
             return True, "window_expired"
         if avg_interval_ms is None or avg_interval_ms <= 0:
+            return True, "window_expired"
+
+        # 等待封顶：平均间隔随批内消息变稀而变大，补偿折算的放行点会不断后退，
+        # 首条到达满 batch_max_wait_ms 必须放行；复用 window_expired 以免下游 reason 枚举遗漏
+        if now_ms - self._first_arrival_ms >= self._batch_max_wait_ms:
             return True, "window_expired"
 
         # 空窗补偿折算

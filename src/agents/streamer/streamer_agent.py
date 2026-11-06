@@ -317,6 +317,7 @@ class StreamerAgent(BaseAgent):
             batch_window_ms=config.batch.batch_window_ms,
             batch_max_size=config.batch.batch_max_size,
             enable_idle_compensation=config.batch.enable_idle_compensation,
+            batch_max_wait_ms=config.batch.batch_max_wait_ms,
         )
         # 强制触发判定就是一次集合归属判定（消息类型 ∈ 强制名单），直接持有
         # 名单内联判定，不再为它单设类

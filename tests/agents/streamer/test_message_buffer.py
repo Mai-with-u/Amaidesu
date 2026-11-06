@@ -70,7 +70,12 @@ def test_add_force_flag_and_drain_resets_everything() -> None:
         ),
         # 折算封顶 batch_max_size-1，防止空批次触发：1 + min(99, 2) = 3 >= 3
         (
-            {"batch_window_ms": 1_000, "batch_max_size": 3, "enable_idle_compensation": True},
+            {
+                "batch_window_ms": 1_000,
+                "batch_max_size": 3,
+                "enable_idle_compensation": True,
+                "batch_max_wait_ms": 1_000_000,
+            },
             [(1_000, False)],
             100_000,
             1_000,
@@ -100,3 +105,28 @@ def test_render_batch_text() -> None:
     assert MessageBuffer.render_batch_text([]) == ""
     text = MessageBuffer.render_batch_text([_msg("hello"), _msg("world", message_type="super_chat")])
     assert "hello" in text and "world" in text
+
+
+def test_max_wait_forces_flush_when_idle_compensation_keeps_waiting() -> None:
+    """平均间隔很大时补偿折算不足，首条到达满 batch_max_wait_ms 仍强制放行。"""
+    buf = MessageBuffer(batch_window_ms=3_000, batch_max_size=20, batch_max_wait_ms=30_000)
+    buf.add(_msg("a"), arrival_ms=1_000)
+    buf.add(_msg("b"), arrival_ms=20_000)
+    flushed, reason = buf.should_flush(30_000, avg_interval_ms=60_000.0)
+    assert flushed is False and reason.startswith("waiting_idle")
+    assert buf.should_flush(31_000, avg_interval_ms=60_000.0) == (True, "window_expired")
+
+
+def test_max_wait_not_reached_keeps_compensation_behavior() -> None:
+    buf = MessageBuffer(batch_window_ms=3_000, batch_max_size=5, batch_max_wait_ms=30_000)
+    buf.add(_msg("a"), arrival_ms=1_000)
+    assert buf.should_flush(5_000, avg_interval_ms=1_000.0) == (True, "idle_compensation")
+    assert buf.should_flush(4_100, avg_interval_ms=10_000.0)[0] is False
+
+
+def test_max_wait_without_compensation_releases_at_window() -> None:
+    """关闭补偿时窗口到期即放行，早于封顶；封顶不改变该路径。"""
+    buf = MessageBuffer(batch_window_ms=3_000, enable_idle_compensation=False, batch_max_wait_ms=30_000)
+    buf.add(_msg("a"), arrival_ms=1_000)
+    assert buf.should_flush(4_000) == (True, "window_expired")
+    assert buf.should_flush(40_000) == (True, "window_expired")

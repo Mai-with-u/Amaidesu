@@ -231,6 +231,12 @@ class StreamerBatchConfig(BaseConfig):
         json_schema_extra={"x-ui-advanced": True},
     )
     enable_idle_compensation: bool = Field(title="是否启用空窗补偿", default=True, description="空窗补偿开关")
+    batch_max_wait_ms: int = Field(
+        title="单批最长等待",
+        default=30_000,
+        ge=1_000,
+        description="首条弹幕到达后最多等待多久必须放行本批（毫秒）；防止空窗补偿在弹幕稀疏时无限推迟放行",
+    )
 
 
 class StreamerForceConfig(BaseConfig):
