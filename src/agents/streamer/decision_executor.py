@@ -151,7 +151,7 @@ class DecisionRoundExecutor:
         self._window_opener = window_opener
         self._rundown_text_provider = rundown_text_provider
         self._reminders_provider = reminders_provider
-        # 续播重放玩家聊天的一次性来源（读取即清空——注入一次制；缺省 = 不注入）
+        # 续播重放玩家聊天（重启前她可能还没回的那几句）的一次性来源（读取即清空——注入一次制；缺省 = 不注入）
         self._resume_replay_provider = resume_replay_provider
         self._speech_allowed = speech_allowed
         # 决策轮次自增计数器（round_id 生成用；进程内单调）

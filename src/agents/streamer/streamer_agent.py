@@ -145,6 +145,25 @@ _CLOSING_SESSION: ContextVar[Optional[ClosingSession]] = ContextVar("streamer_cl
 # 道别那一轮能开口。与 _CLOSING_SESSION 同理放在上下文变量里，并发的轮次各看各的
 _ROUND_LIVE_EPOCH: ContextVar[Optional[int]] = ContextVar("streamer_round_live_epoch", default=None)
 
+
+def _game_chat_line(payload: GameChatPayload) -> str:
+    """游戏里别人说的一句话写成给决策看的一行：发言人 + 标注 + 原话 + 截断/刷屏说明。
+
+    实时入账与续播重放共用这一份写法，私聊、归属说明（如"没有发言人凭据"）等标注两边逐字一致。
+    """
+    speaker = "系统消息" if payload.kind == "system" else f"玩家 {payload.sender or '（名字未知）'}"
+    if payload.private:
+        # 私聊标在发言人后面：决策看到这是只发给我的话，不在直播里念出或转述
+        speaker += "（私聊，只发给我）"
+    if payload.note:
+        # 采集器的归属说明同样跟在发言人后面：模组借我名义发的机器消息不会被当成又一个玩家
+        speaker += f"（{payload.note}）"
+    note = "（原话过长已截断）" if payload.truncated else ""
+    if payload.suppressed:
+        note += f"（之前还有 {payload.suppressed} 条重复或刷屏的没转过来）"
+    return f"{speaker}：{payload.content}{note}"
+
+
 # ---------------------------------------------------------------------------
 # StreamerAgent
 # ---------------------------------------------------------------------------
@@ -582,8 +601,8 @@ class StreamerAgent(BaseAgent):
         self._startup_event_id: str = ""
         # 诊断事件流读取器（续播重放递话/玩家聊天的数据源；默认指向项目根 logs/events）
         self._event_log_reader = EventLogFileReader(events_dir if events_dir is not None else Path("logs") / "events")
-        # 续播窗口重放的玩家游戏发言（一次性缓冲：续播时装入，下个决策轮注入
-        # 【进程重启前漏掉的话】段后取空，不重复）
+        # 续播重放的玩家游戏发言（一次性缓冲：续播时装入重启前她可能还没回的那几句，
+        # 下个决策轮注入【重启前可能还没回的话】段后取空，不重复）
         self._resume_chat_replay: list[str] = []
 
         # 观众命令接线（最小接线：玩法待扩展）。enabled + 任一映射表非空才激活；
@@ -1062,9 +1081,9 @@ class StreamerAgent(BaseAgent):
             # 续播重放递话：上一进程里还没送进决策窗的运营留言随重启丢了，从诊断事件流
             # 补进提醒队列——接回那一轮（或下一轮）以【运营提醒】送达，必达跨重启
             self._replay_prompts_from_event_log(previous_window)
-            # 续播窗口重放玩家聊天：断线期间玩家在游戏里说的话没有活过重启的
-            # 事件通道，回读后暂存一次性缓冲，下个决策轮注入参考段（消费后不重复）
-            self._load_resume_chat_replay()
+            # 续播重放玩家聊天：上一进程最后一轮决策之后玩家在游戏里说的话她还没接，
+            # 随重启丢了；回读后暂存一次性缓冲，下个决策轮注入参考段（消费后不重复）
+            self._load_resume_chat_replay(previous_window)
         else:
             self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
         if resumed:
@@ -1161,39 +1180,70 @@ class StreamerAgent(BaseAgent):
         self._logger.info(f"续播重放：已把上一进程没送出去的 {len(chosen)} 条递话补进提醒队列")
         self._flush_kick.set()
 
-    def _load_resume_chat_replay(self) -> None:
-        """续播窗口重放玩家聊天：读回本进程启动前窗口内的玩家发言，存一次性缓冲。
+    def _load_resume_chat_replay(self, previous_window: Optional[Tuple[int, int]]) -> None:
+        """续播重放玩家聊天：只补上一进程里她还没接过的那段尾巴，存一次性缓冲。
 
-        窗口 = ``[本进程启动 - resume_replay_window_ms, 本进程启动)``，取自诊断
-        事件流的 game.chat.received（kind=player）。私聊不重放——当众念出私聊
-        是隐私事故，与实时路径（私聊只进本窗参考段且标注）同一纪律更从严。
+        上一进程活着的时候游戏聊天照常进决策窗、她基本都回过了；真正没接的，是上一进程
+        最后一轮走完的决策窗开窗之后才到的那几句。窗口 = 从那一刻（没有走完的轮次就从
+        上一进程启动）到本进程启动，且不早于上一进程结束前 ``resume_replay_window_ms``。
+        取自诊断事件流的 game.chat.received（kind=player），一行的写法与实时入账同一份
+        （含归属说明）。私聊不重放——当众念出私聊是隐私事故，比实时路径从严。
         诊断流缺席降级为不重放，不抛错阻断续播。
         """
         window_ms = self.typed_config.resume_replay_window_ms
-        if window_ms <= 0:
+        if window_ms <= 0 or previous_window is None:
             return
+        prev_startup_ms, prev_end_ms = previous_window
+        since_ms = max(prev_startup_ms, prev_end_ms - window_ms)
+        handled_ms = self._last_finished_round_open_ms(prev_startup_ms)
+        if handled_ms is not None:
+            since_ms = max(since_ms, handled_ms)
         records = self._event_log_reader.read_records(
             event_name=CoreEvents.GAME_CHAT_RECEIVED,
-            start_ms=self._startup_ms - window_ms,
+            start_ms=since_ms,
             end_ms=self._startup_ms,
         )
         lines: list[str] = []
         for row in records:
             data = row.get("data")
-            if not isinstance(data, dict) or data.get("kind") != "player":
+            if not isinstance(data, dict) or data.get("kind") != "player" or data.get("private"):
                 continue
-            if data.get("private"):
+            try:
+                payload = GameChatPayload.model_validate(data)
+            except ValueError as exc:
+                self._logger.debug(f"续播重放跳过一条无法解析的游戏聊天记录: {exc}", exc=True)
                 continue
-            content = str(data.get("content", "")).strip()
-            if not content:
+            if not payload.content.strip():
                 continue
-            sender = str(data.get("sender", "")).strip() or "（名字未知）"
             ts = int(row.get("timestamp_ms", 0))
             time_text = datetime.fromtimestamp(ts / 1000).strftime("%H:%M") if ts > 0 else "--:--"
-            lines.append(f"{time_text} 玩家 {sender}：{content}")
+            lines.append(f"{time_text} {_game_chat_line(payload)}")
         if lines:
             self._resume_chat_replay = lines
-            self._logger.info(f"续播重放：已暂存重启前窗口内的 {len(lines)} 条玩家发言，下个决策轮注入")
+            self._logger.info(f"续播重放：已暂存重启前她可能还没回的 {len(lines)} 条玩家发言，下个决策轮注入")
+
+    def _last_finished_round_open_ms(self, start_ms: int) -> Optional[int]:
+        """上一进程里最后一轮走完的决策窗是什么时候开的；一轮都没走完返回 None。
+
+        每轮开头发 streamer.stage(planning)、收尾发 streamer.stage(idle)，同一个
+        round_id；开窗那一刻账本里攒着的游戏聊天都被这一窗取走，这一轮走完就算她
+        看过了。只开了头、没等到收尾的那一轮（进程正好崩在里面）不算。
+        """
+        opened: dict[str, int] = {}
+        finished_open_ms: Optional[int] = None
+        for row in self._event_log_reader.read_records(
+            event_name=CoreEvents.STREAMER_STAGE, start_ms=start_ms, end_ms=self._startup_ms
+        ):
+            data = row.get("data")
+            round_id = str(data.get("round_id") or "") if isinstance(data, dict) else ""
+            if not round_id:
+                continue
+            # 先记下每轮开窗的时刻，等到同一轮的收尾记录才算走完
+            if data.get("stage") == "planning":
+                opened[round_id] = int(row.get("timestamp_ms", 0))
+            elif data.get("stage") == "idle" and round_id in opened:
+                finished_open_ms = max(finished_open_ms or 0, opened[round_id])
+        return finished_open_ms
 
     def _drain_resume_replay(self) -> str:
         """取空续播重放缓冲（决策执行器在决策窗入口调用；注入一次制）。"""
@@ -1730,17 +1780,7 @@ class StreamerAgent(BaseAgent):
         del event_name, source
         try:
             self._note_game_activity(payload.game)
-            speaker = "系统消息" if payload.kind == "system" else f"玩家 {payload.sender or '（名字未知）'}"
-            if payload.private:
-                # 私聊标在发言人后面：决策看到这是只发给我的话，不在直播里念出或转述
-                speaker += "（私聊，只发给我）"
-            if payload.note:
-                # 采集器的归属说明同样跟在发言人后面：模组借我名义发的机器消息不会被当成又一个玩家
-                speaker += f"（{payload.note}）"
-            note = "（原话过长已截断）" if payload.truncated else ""
-            if payload.suppressed:
-                note += f"（之前还有 {payload.suppressed} 条重复或刷屏的没转过来）"
-            body = f"{speaker}：{payload.content}{note}"
+            body = _game_chat_line(payload)
             if payload.private:
                 self._scope.record_private_chat(f"[{payload.game}] {body}")
             else:
