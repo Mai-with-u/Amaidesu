@@ -53,7 +53,7 @@ _MAX_ANNOUNCED_CHATS = 64
 
 
 def player_of(event: Dict[str, Any]) -> Tuple[str, str]:
-    """肢体动作事件上的玩家：(UUID, 名字)；没带结构化字段时都是空串。"""
+    """事件上挂的玩家（肢体动作是冲她做动作的人，跟随状况是她跟着的人）：(UUID, 名字)；没带时都是空串。"""
     player = event.get("player")
     if not isinstance(player, dict):
         return "", ""

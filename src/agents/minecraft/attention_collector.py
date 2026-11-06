@@ -98,12 +98,16 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
         if kind == "died" and self._suicides.chosen():
             # 寻死跑着的时候死的：开着死亡不掉落回重生点，是回家的办法，主播轻松带过，不当事故讲、不当伤心事记
             summary = CHOSEN_DEATH_LINE
+        # 事件上挂着玩家就原样带上（跟随状况跟的是玩家时有）：只透传，主播不据此推卡、说的话不变
+        player_uuid, player_name = player_of(event)
         payload = BodyEventPayload(
             game="minecraft",
             kind=kind,
             summary=summary,
             source_event_type=source_type,
             resolved=kind in RESOLVED_KINDS,
+            player_uuid=player_uuid,
+            player_name=player_name,
         )
         await self.emit_event(KIND_TO_EVENT[kind], payload, source=self.name)
         # 与日志同处落一条：事件面给程序看，日志给人复盘看。
@@ -134,6 +138,7 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
         这里只去观察编号和方位距离，动作和送的东西照说。被拍一下也在这里，不当挨打讲。
         """
         # 叙事种类和 Mod 的事件种类同名
+        player_uuid, player_name = player_of(event)
         payload = BodyEventPayload(
             game="minecraft",
             kind=PLAYER_BODY_LANGUAGE,
@@ -141,7 +146,8 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
             source_event_type=PLAYER_BODY_LANGUAGE,
             resolved=PLAYER_BODY_LANGUAGE in RESOLVED_KINDS,
             # 是谁冲她做的动作：主播据此推这位玩家的卡（"这位是谁、和你有过什么"），说什么由她自己定
-            player_uuid=player_of(event)[0],
+            player_uuid=player_uuid,
+            player_name=player_name,
         )
         await self.emit_event(KIND_TO_EVENT[PLAYER_BODY_LANGUAGE], payload, source=self.name)
         self.logger.info(f"[身体事件] {payload.summary}（{PLAYER_BODY_LANGUAGE}）")

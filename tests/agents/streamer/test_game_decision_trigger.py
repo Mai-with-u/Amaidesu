@@ -254,6 +254,12 @@ async def test_game_chat_remembers_who_spoke_for_the_window(live_agent) -> None:
         _body("player_body_language", "玩家 Steve 看着我蹲起 2 下", player_uuid="uuid-s"),
         source="TestCollector",
     )
+    # 她跟着的玩家只是透传：他没来找她，不算找过她、不推卡
+    await bus.emit(
+        CoreEvents.GAME_BODY_FOLLOW_STATUS,
+        _body("follow_status", "跟着人走时：他回到我身边了", player_uuid="uuid-f", player_name="Fay"),
+        source="TestCollector",
+    )
     await bus.wait_until_drained()
 
     materials = await agent._scope.open_window()

@@ -1828,8 +1828,9 @@ class StreamerAgent(BaseAgent):
                 payload.summary,
                 bool(getattr(payload, "resolved", False)),
                 payload.timestamp_ms or now_ms(),
-                # 冲她做肢体动作的玩家：本窗据此推他的玩家卡
-                player=payload.player_uuid,
+                # 只有冲她做肢体动作的玩家算找过她，本窗据此推他的玩家卡；跟随状况上挂的是她跟着的人，
+                # 他没来找她，不推卡、不算她在回应谁
+                player=payload.player_uuid if payload.kind == "player_body_language" else "",
             )
             if self._mouth is not None:
                 # 嘴开着：遭遇由嘴当场反应（几秒内出声），死亡也一样——不再为它专门唤醒 Planner，

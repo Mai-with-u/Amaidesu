@@ -569,6 +569,23 @@ async def test_player_body_language_reaches_the_streamer_as_play_not_as_an_attac
     assert second.summary.startswith("玩家 Steve 拍了我一下：空手，没伤到。")
 
 
+async def test_follow_status_passes_the_followed_player_through() -> None:
+    """跟随状况跟的是玩家时带着他：原样透传进身体事件，叙事那句不变，也不记玩家互动。"""
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5)
+    followed = _event(6, "follow_status", "跟丢了在找：他过了门")
+    followed["player"] = {"name": "Steve", "uuid": "uuid-steve"}
+    client.pages.append(_page([followed, _event(7, "follow_status", "跟着的羊走远了")], cursor=7))
+
+    await collector._drain()
+
+    [(name, steve), (_, sheep)] = bus.events
+    assert name == CoreEvents.GAME_BODY_FOLLOW_STATUS
+    assert (steve.player_uuid, steve.player_name) == ("uuid-steve", "Steve")
+    assert steve.summary == "跟着人走时：跟丢了在找，他过了门"
+    assert (sheep.player_uuid, sheep.player_name) == ("", ""), "跟的不是玩家时不挂"
+
+
 async def test_body_language_with_a_player_uuid_also_records_the_interaction() -> None:
     """带玩家 UUID 的肢体动作：叙事照发，后面再发打招呼与送东西两条玩家互动（只给存储记账）。"""
     bus = _FakeEventBus()
@@ -587,7 +604,7 @@ async def test_body_language_with_a_player_uuid_also_records_the_interaction() -
         CoreEvents.GAME_PLAYER_INTERACTED,
     ]
     # 叙事那条也带上是谁：主播据此推这位玩家的卡
-    assert bus.events[0][1].player_uuid == "uuid-alex"
+    assert (bus.events[0][1].player_uuid, bus.events[0][1].player_name) == ("uuid-alex", "Alex")
     greet, gift = bus.events[1][1], bus.events[2][1]
     assert (greet.kind, greet.player_uuid, greet.actions) == ("greet", "uuid-alex", ["扔东西"])
     assert (gift.kind, gift.fact) == ("gift", {"said": "朝我扔了 3 个面包"})
