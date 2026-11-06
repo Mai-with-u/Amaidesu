@@ -60,7 +60,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 33
+SCHEMA_VERSION: int = 34
 
 
 # =============================================================================
@@ -501,7 +501,8 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 # 之后的整理不能去掉或替换它，只有人能动。原话与证据行永远不改，只能随删除一起删。
 # source 是这一行的来源：streamer 是她自己说的（整理自动写、人新增的都是），viewer 是人批准的观众候选
 # （观众定下、她当场接受的事；原话仍是她那句回应）。viewer_chat_id 是观众来源的行挂着的那条弹幕，
-# 按外键级联：删观众、忘了我、按句删弹幕时这一行随之删除。viewer_chat_id 的索引由 v31 迁移建
+# 按外键级联：删观众、忘了我、按句删弹幕时这一行随之删除。viewer_word 是批准时从候选抄来的观众定下的
+# 那个词，渲染原话时这一段不遮成"那位观众"（她自己说的行为空）。viewer_chat_id 的索引由 v31 迁移建
 # （这一列是 v31 才补的，旧库执行建表汇总时它还不存在）。
 
 _ARCHIVE_LINES_SQL = """
@@ -518,7 +519,8 @@ CREATE TABLE IF NOT EXISTS archive_lines (
     place            TEXT NOT NULL DEFAULT '',
     human_locked     INTEGER NOT NULL DEFAULT 0,
     source           TEXT NOT NULL DEFAULT 'streamer',
-    viewer_chat_id   INTEGER REFERENCES live_chat(id) ON DELETE CASCADE
+    viewer_chat_id   INTEGER REFERENCES live_chat(id) ON DELETE CASCADE,
+    viewer_word      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_archive_lines_session ON archive_lines(live_session_id);
 """.strip()
@@ -822,6 +824,8 @@ END;
 # 与她那句回应（reply_chat_id），两条都按外键级联——删观众、忘了我、按句删弹幕或台词、删场次时候选
 # 随之删除。status 是 pending 待审 / approved 已批 / rejected 已驳回（驳回的留着，同一条以后不再列）；
 # 批准后生成的档案行或承诺记在 archive_line_id / commitment_id，那一行再被删时置空。待审的按时间过期。
+# word 是观众定下的那个名字或梗词（整理时核对过在标题与那条弹幕原文里都原样出现；她说欠着的一类为空）：
+# 批准来的档案行渲染时，她那句回应里和它相同的那一段不遮成"那位观众"。
 
 _VIEWER_CANDIDATES_SQL = """
 CREATE TABLE IF NOT EXISTS viewer_candidates (
@@ -840,7 +844,8 @@ CREATE TABLE IF NOT EXISTS viewer_candidates (
     created_at_ms   INTEGER NOT NULL,
     decided_at_ms   INTEGER,
     archive_line_id INTEGER REFERENCES archive_lines(id) ON DELETE SET NULL,
-    commitment_id   INTEGER REFERENCES commitments(id) ON DELETE SET NULL
+    commitment_id   INTEGER REFERENCES commitments(id) ON DELETE SET NULL,
+    word            TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_viewer_candidates_session ON viewer_candidates(live_session_id, status);
 CREATE INDEX IF NOT EXISTS idx_viewer_candidates_viewer_chat ON viewer_candidates(viewer_chat_id);

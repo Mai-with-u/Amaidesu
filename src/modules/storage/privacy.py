@@ -1262,10 +1262,12 @@ def _mask_candidates_with_nickname(
     pattern = _like_contains(nickname)
     conn.execute(
         "UPDATE viewer_candidates SET title = REPLACE(title, ?, ?),"  # noqa: S608 占位符由代码拼
-        " viewer_quote = REPLACE(viewer_quote, ?, ?), reply_quote = REPLACE(reply_quote, ?, ?)"
+        " viewer_quote = REPLACE(viewer_quote, ?, ?), reply_quote = REPLACE(reply_quote, ?, ?),"
+        " word = REPLACE(word, ?, ?)"
         f" WHERE live_session_id IN ({sid_ph})"
-        " AND (viewer_quote LIKE ? ESCAPE '\\' OR reply_quote LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')",
-        [nickname, label, nickname, label, nickname, label, *session_ids, pattern, pattern, pattern],
+        " AND (viewer_quote LIKE ? ESCAPE '\\' OR reply_quote LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\'"
+        " OR word LIKE ? ESCAPE '\\')",
+        [nickname, label] * 4 + [*session_ids, pattern, pattern, pattern, pattern],
     )
 
 

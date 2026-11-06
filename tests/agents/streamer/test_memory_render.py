@@ -123,7 +123,7 @@ def test_viewer_sourced_lines_say_they_were_decided_with_viewers_without_naming_
 
 
 def test_viewer_sourced_lines_replace_that_viewers_name_when_rendered() -> None:
-    """她当场点了那位观众的名：简报、线索卡、说话档里换成"那位观众"（现名、曾用名都换），别的名字不动。"""
+    """她当场点了那位观众的名：简报、线索卡里原话换成"那位观众"（现名、曾用名都换）；人批过的标题不换。"""
     line = ArchiveLine(
         id=44,
         live_session_id=7,
@@ -135,18 +135,43 @@ def test_viewer_sourced_lines_replace_that_viewers_name_when_rendered() -> None:
         source_viewer_names=["小鱼", "阿杰"],
     )
     assert render_archive_block([line]) == [
-        "- [档#44] 和那位观众一起给小羊取名雪球"
+        "- [档#44] 和小鱼一起给小羊取名雪球"
         "（你说过「那位观众说得对，就叫雪球，那位观众也同意」；和观众一起定的，不记得是哪一位，别点名）"
     ]
     card = render_archive_card(line, why="弹幕提到了雪球")
-    assert "阿杰" not in card and "小鱼" not in card and "那位观众说得对" in card
-    assert "和那位观众一起给小羊取名雪球" in render_spoken_archive(line)
+    assert "阿杰" not in card and "那位观众说得对" in card
+    assert "和小鱼一起给小羊取名雪球" in render_spoken_archive(line), "标题是运营者看过才批的，不换"
     # 名字只在渲染时换：模型序列化不带这些名字，库里原话不改
     assert "source_viewer_names" not in line.model_dump()
     assert line.quote == "阿杰说得对，就叫雪球，小鱼也同意"
     # 她自己说的行即使带了名字也不换（不会发生，防的是来源判错时误伤她自己的话）
     own = line.model_copy(update={"source": "streamer"})
     assert "阿杰说得对" in render_archive_card(own, why="弹幕提到了雪球")
+
+
+@pytest.mark.parametrize(
+    ("quote", "word", "shown"),
+    [
+        ("阿杰说得对，就叫团子", "团子", "那位观众说得对，就叫团子"),
+        ("团子说就叫小团子", "小团子", "那位观众说就叫小团子"),
+        ("团子说就叫小团子", "", "那位观众说就叫小那位观众"),
+    ],
+    ids=["名字撞上定下的词", "定下的词里含着名字", "早先没记下词的照旧全遮"],
+)
+def test_the_word_the_viewer_set_is_never_masked(quote: str, word: str, shown: str) -> None:
+    """观众的名字和起的名字撞上：原话里和定下的那个词相同的那一段照说，别处点到的名字照换。"""
+    line = ArchiveLine(
+        id=45,
+        live_session_id=7,
+        text="给小猫取名团子",
+        quote=quote,
+        evidence_chat_id=3,
+        source="viewer",
+        viewer_chat_id=9,
+        source_viewer_names=["团子", "阿杰"],
+        viewer_word=word,
+    )
+    assert render_archive_block([line])[0].startswith(f"- [档#45] 给小猫取名团子（你说过「{shown}」")
 
 
 def test_spoken_archive_gives_title_only() -> None:

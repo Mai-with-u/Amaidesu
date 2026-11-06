@@ -173,7 +173,14 @@ class ArchiveLine(BaseModel):
         exclude=True,
         description=(
             "观众来源的行：那条弹幕的发送者用过的名字（读的时候按弹幕查出来，不是库里的列）。"
-            '只给渲染用：简报、线索卡、说话档把这些名字换成"那位观众"，库里的原话不改'
+            '只给渲染用：简报、线索卡、说话档把原话里的这些名字换成"那位观众"，库里的原话不改'
+        ),
+    )
+    viewer_word: str = Field(
+        default="",
+        description=(
+            "观众来源的行：批准时从候选抄来的观众定下的名字或梗词；她自己说的行为空。"
+            '渲染原话时和它相同的那一段不换成"那位观众"——观众的名字和起的名字撞上时，起的名字照说'
         ),
     )
 
@@ -296,6 +303,9 @@ class PendingViewerCandidate(BaseModel):
         default=None, description="观众那条弹幕；她说欠着的一类只在她是回应某条弹幕时才有"
     )
     viewer_quote: str = Field(default="", description="那条弹幕的逐字片段")
+    word: str = Field(
+        default="", description="观众定下的那个名字或梗词（核对过在标题与弹幕里原样出现；她说欠着的一类为空）"
+    )
     reply_chat_id: int = Field(..., description="她那句回应（或说欠着的那句）的 live_chat 行")
     reply_quote: str = Field(..., description="她那句台词的逐字片段")
     game: Optional[str] = Field(default=None, description="关于哪个游戏世界的事；None 即与游戏无关")

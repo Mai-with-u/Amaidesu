@@ -222,6 +222,7 @@ async def test_viewer_line_reads_back_with_the_source_viewers_names(store: SQLit
                 title="猫叫团子",
                 viewer_chat_id=said,
                 viewer_quote="叫它团子",
+                word="团子",
                 reply_chat_id=reply,
                 reply_quote="阿杰说得对，就叫团子",
             )
@@ -235,6 +236,7 @@ async def test_viewer_line_reads_back_with_the_source_viewers_names(store: SQLit
 
     (by_id,) = await store.archive.list_lines_by_ids(line_ids=[line_id])
     assert (by_id.quote, sorted(by_id.source_viewer_names)) == ("阿杰说得对，就叫团子", ["阿杰", "阿杰在摸鱼"])
+    assert by_id.viewer_word == "团子", "批准时观众定下的词抄到档案行上，读档案不用回头查候选表"
     snapshot = await store.archive.get_snapshot(live_session_id=session_id)
     assert snapshot is not None
     named = {item.line.id: item.line.source_viewer_names for item in snapshot.lines}

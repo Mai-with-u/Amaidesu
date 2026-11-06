@@ -40,7 +40,7 @@ CLAIMED_MISSING = "claimed_missing"
 
 _COLUMNS = (
     "id, live_session_id, kind, title, viewer_chat_id, viewer_quote, reply_chat_id, reply_quote, game, save_id,"
-    " save_name, status, created_at_ms, decided_at_ms, archive_line_id, commitment_id"
+    " save_name, status, created_at_ms, decided_at_ms, archive_line_id, commitment_id, word"
 )
 
 
@@ -68,7 +68,7 @@ def replace_session_candidates(
         seen.add(int(item.reply_chat_id))
         conn.execute(
             "INSERT INTO viewer_candidates(live_session_id, kind, title, viewer_chat_id, viewer_quote, reply_chat_id,"
-            " reply_quote, game, save_id, save_name, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " reply_quote, game, save_id, save_name, created_at_ms, word) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 int(live_session_id),
                 item.kind,
@@ -81,6 +81,7 @@ def replace_session_candidates(
                 item.save_id,
                 item.save_name,
                 int(created_at_ms),
+                item.word,
             ),
         )
         written += 1
@@ -200,10 +201,11 @@ class ViewerCandidateRepo(BaseRepo):
                     ).fetchone()
                     if taken is not None:
                         raise MemoryReviewError("conflict", "她这句回应已经写成一行档案了")
+                    # 观众定下的那个词跟着抄到档案行上：渲染原话时这一段不遮，读档案也不用回头查候选表
                     cur = conn.execute(
                         "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id, game, save_id,"
-                        " save_name, keywords, place, human_locked, source, viewer_chat_id)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '', 1, 'viewer', ?)",
+                        " save_name, keywords, place, human_locked, source, viewer_chat_id, viewer_word)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '', 1, 'viewer', ?, ?)",
                         (
                             row["live_session_id"],
                             final,
@@ -213,6 +215,7 @@ class ViewerCandidateRepo(BaseRepo):
                             row["save_id"],
                             row["save_name"],
                             row["viewer_chat_id"],
+                            row["word"],
                         ),
                     )
                     line_id = int(cur.lastrowid or 0)

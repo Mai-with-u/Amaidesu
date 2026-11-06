@@ -1282,6 +1282,7 @@ async def test_viewer_candidates_are_listed_from_her_replies_and_kept_out_of_mem
         "打卡就说麦麦早",
         "就这么定了",
     ), "代号换成观众；同一行只列一条"
+    assert candidate.word == "麦麦早", "核对过的名字或梗词跟着候选存下，批准后渲染原话时这一段不遮"
     assert await store.archive.list_lines(live_session_id=session_id) == [], "批准前不进档案"
     row = await store.sessions.get_live_session(live_session_id=session_id)
     assert row is not None and row.settle_report is not None

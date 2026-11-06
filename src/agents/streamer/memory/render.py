@@ -109,20 +109,24 @@ def source_notes(line: ArchiveLine) -> List[str]:
 
 
 def _line_texts(line: ArchiveLine) -> Tuple[str, str]:
-    """档案行渲染用的标题与原话：观众来源的行把那位观众的名字换成"那位观众"。
+    """档案行渲染用的标题与原话：观众来源的行把原话里那位观众的名字换成"那位观众"。
 
-    她当场回应时常点名（"阿杰说得对，就叫团子"），标题也可能是人批准时写进了名字；原样进简报，
-    她就会当众说出是哪一位定的，和"不记得是哪一位"的注记自相矛盾。只在渲染这一刻换，库里不改。
+    她当场回应时常点名（"阿杰说得对，就叫团子"），原样进简报她就会当众说出是哪一位定的，和"不记得是
+    哪一位"的注记自相矛盾，所以原话里的名字在渲染这一刻换掉，库里不改。标题不换：它是运营者亲眼看过
+    才批的，留在标题里的名字说的是起的名字是什么，不是谁定的。原话里和观众定下的那个词相同的那一段
+    也不换——观众叫"团子"、定下"给小猫取名团子"时，换掉就成了"取名那位观众"。
     """
     title = (line.text or "").strip()
     quote = (line.quote or "").strip()
     if line.source != "viewer" or not line.source_viewer_names:
         return title, quote
     names = line.source_viewer_names
-    return (
-        mask_names_in_text(title, names, replacement=SOURCE_VIEWER_LABEL),
-        mask_names_in_text(quote, names, replacement=SOURCE_VIEWER_LABEL),
-    )
+    word = line.viewer_word
+    if not word:
+        return title, mask_names_in_text(quote, names, replacement=SOURCE_VIEWER_LABEL)
+    # 按定下的词切开、各段分别换名字再拼回：词本身原样留着，词以外点到的名字照换
+    pieces = [mask_names_in_text(piece, names, replacement=SOURCE_VIEWER_LABEL) for piece in quote.split(word)]
+    return title, word.join(pieces)
 
 
 def format_memory_refs(commitment_ids: Iterable[int]) -> str:

@@ -173,6 +173,8 @@ def validate_viewer_candidates(
                 title=title,
                 viewer_chat_id=int(line.reply_chat_id),
                 viewer_quote=viewer_quote,
+                # 核对过的名字或梗词跟着候选存下：批准后渲染原话时这一段不遮成"那位观众"
+                word=word,
                 reply_chat_id=int(line.id),
                 reply_quote=reply_quote,
                 game=game_name,
