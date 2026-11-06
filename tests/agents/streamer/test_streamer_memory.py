@@ -367,9 +367,12 @@ async def test_brief_marks_archive_line_cited_this_session(store: SQLiteDatabase
     assert f"- [档#{cited}] Minecraft：女仆取名团子（你说过「就叫团子」）（本场已提过）" in brief
     assert f"- [档#{other}] Minecraft：水车搭好了（你说过「水车搭好啦」）\n" in brief + "\n"
     assert set(agent.memory_brief_archive_ids) == {cited, other}
+    # 已提过的那一行另交给 Planner：没人问起时再点名，这句先退回
+    assert agent.memory_used_archive_ids == (cited,)
     session.active_pk = None
     await agent._refresh_memory_brief()
     assert "（本场已提过）" not in agent.memory_brief_text
+    assert agent.memory_used_archive_ids == ()
 
 
 async def test_brief_skips_false_start_session_but_keeps_its_commitment(store: SQLiteDatabase) -> None:

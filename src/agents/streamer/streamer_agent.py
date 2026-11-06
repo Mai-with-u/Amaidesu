@@ -404,6 +404,7 @@ class StreamerAgent(BaseAgent):
                 brief_provider=lambda: self._memory_brief_text,
                 brief_ids_provider=lambda: self._memory_brief_ids,
                 brief_archive_ids_provider=lambda: self._memory_brief_archive_ids,
+                used_archive_ids_provider=lambda: self._memory_used_archive_ids,
                 commitment_lookup=self._lookup_commitment,
                 archive_lookup=self._lookup_archive_line,
                 memory_cues_provider=self._collect_memory_cues,
@@ -537,6 +538,8 @@ class StreamerAgent(BaseAgent):
         self._memory_brief_ids: tuple[int, ...] = ()
         # 常驻简报里标着编号的档案行（点名档案行的合法名单之一）
         self._memory_brief_archive_ids: tuple[int, ...] = ()
+        # 本场已点名提过的档案行（随简报每窗重算）：Planner 拦住没人问起时的复提
+        self._memory_used_archive_ids: tuple[int, ...] = ()
         # 线索推送：每批按弹幕与开着的游戏算"这一批想起来的事"；状态只活在本场
         self._memory_cues: Optional[MemoryCueProvider] = memory_cues
         if memory_cues is None and commitments_repo is not None and chat_repo is not None:
@@ -1500,6 +1503,11 @@ class StreamerAgent(BaseAgent):
         """常驻简报里标着编号的档案行（Planner 点名的合法名单之一，观测与测试用）。"""
         return self._memory_brief_archive_ids
 
+    @property
+    def memory_used_archive_ids(self) -> Tuple[int, ...]:
+        """本场已点名提过的档案行（Planner 据此拦住没人问起时的复提；观测与测试用）。"""
+        return self._memory_used_archive_ids
+
     def _current_session_pk(self) -> Optional[int]:
         """进行中场次主键；收播道别那一轮取正在结束的那一场（无场次管理器或未开播为 None）。
 
@@ -1651,6 +1659,7 @@ class StreamerAgent(BaseAgent):
             self._memory_brief_text = ""
             self._memory_brief_ids = ()
             self._memory_brief_archive_ids = ()
+            self._memory_used_archive_ids = ()
             return
         resolved_kind = kind if kind is not None else self._current_session_kind()
         try:
@@ -1671,10 +1680,12 @@ class StreamerAgent(BaseAgent):
             self._memory_brief_text = ""
             self._memory_brief_ids = ()
             self._memory_brief_archive_ids = ()
+            self._memory_used_archive_ids = ()
             return
         self._memory_brief_text = brief.text
         self._memory_brief_ids = brief.commitment_ids
         self._memory_brief_archive_ids = brief.archive_ids
+        self._memory_used_archive_ids = brief.used_archive_ids
         if announce:
             await self._log_brief_summary(brief)
 

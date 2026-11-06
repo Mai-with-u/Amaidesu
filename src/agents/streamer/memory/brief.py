@@ -57,6 +57,8 @@ class MemoryBrief:
     text: str = ""
     commitment_ids: Tuple[int, ...] = field(default_factory=tuple)
     archive_ids: Tuple[int, ...] = field(default_factory=tuple)
+    # 本场台词已经点名用过的档案行（简报里标"（本场已提过）"的那些）：Planner 据此拦住主动复提
+    used_archive_ids: Tuple[int, ...] = field(default_factory=tuple)
     previous_session_id: Optional[int] = None
     archive_line_count: int = 0
 
@@ -99,6 +101,7 @@ async def build_brief(
         text=text,
         commitment_ids=tuple(int(item.id) for item in taken),
         archive_ids=tuple(brief_archive_ids(archive_lines, taken, saves)),
+        used_archive_ids=tuple(sorted(used_archive)),
         previous_session_id=int(previous_session_id) if previous_session_id is not None else None,
         archive_line_count=len(archive_lines),
     )

@@ -61,6 +61,7 @@ def _make_planner(
     brief_archive_ids_provider: Any | None = None,
     archive_lookup: Any | None = None,
     memory_cues_provider: Any | None = None,
+    used_archive_ids_provider: Any | None = None,
 ) -> tuple[Planner, MagicMock, MagicMock]:
     """mock LLM（generate）+ mock prompt_service；缺省真注册表 + 注册成功的 reply（reply 经 registry.invoke）。"""
     llm = MagicMock()
@@ -93,6 +94,7 @@ def _make_planner(
             brief_archive_ids_provider=brief_archive_ids_provider,
             archive_lookup=archive_lookup,
             memory_cues_provider=memory_cues_provider,
+            used_archive_ids_provider=used_archive_ids_provider,
         ),
     )
     return planner, llm, prompt
@@ -598,3 +600,51 @@ async def test_use_memory_accepts_archive_line_from_this_batch_cards() -> None:
 
     cues = SimpleNamespace(text="", archive_ids=(), labels={})
     assert (await planner.plan([_msg(mid="m2")])).memory_refs == [], "下一批没有这张卡、简报也没列，不认"
+
+
+def _reply_to(target: str, use_memory: str) -> list:
+    return [
+        _resp(
+            tool_calls=[
+                _tc(
+                    "streamer_reply",
+                    {
+                        "topic_summary": "t",
+                        "is_novel": True,
+                        "emotion": "happy",
+                        "intensity": 0.5,
+                        "use_memory": use_memory,
+                        "target": target,
+                    },
+                )
+            ]
+        )
+    ]
+
+
+async def test_archive_line_already_mentioned_is_bounced_unless_a_viewer_asked() -> None:
+    """第 58 场 14 条旧事里 8 条各提了两次，第二次都是没人问时主动点名：本场已提过的档案行，
+    没在回观众弹幕时这句先退回，她换个话题再说；回观众弹幕时照常点名。"""
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    plain = _resp(
+        tool_calls=[_tc("streamer_reply", {"topic_summary": "换个话题", "is_novel": True, "emotion": "happy"})]
+    )
+    planner, llm, _prompt = _make_planner(
+        [*_reply_with_memory("档#41"), plain, *_reply_to("m1", "档#41")],
+        reply_provider=provider,
+        brief_archive_ids_provider=lambda: [41],
+        archive_lookup=_archive_lookup,
+        used_archive_ids_provider=lambda: [41],
+    )
+
+    bounced = await planner.plan([], proactive=True)
+
+    assert bounced.replied is True and bounced.memory_refs == [] and bounced.steps == 2
+    # 同一窗的消息序列是追加写的：退回理由是第一句 reply 的工具结果
+    refusal = " ".join(str(message.get("content") or "") for message in llm.generate.await_args_list[1].args[0])
+    assert "档#41 这件事本场已经提过" in refusal and "把 target 指向那条弹幕再点名" in refusal
+    assert provider.invoke.await_count == 1, "退回的那句没交给表达侧"
+
+    asked = await planner.plan([_msg("上次那个女仆叫啥来着")])
+    assert asked.memory_refs == ["档#41"], "观众问起时照常点名"

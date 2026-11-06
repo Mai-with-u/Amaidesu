@@ -226,6 +226,8 @@ class PlannerEnv:
     brief_ids_provider: Optional[Callable[[], Sequence[int]]] = None
     # 常驻简报里标着编号的档案行（点名校验的合法名单之一）
     brief_archive_ids_provider: Optional[Callable[[], Sequence[int]]] = None
+    # 本场已点名提过的档案行：没在回观众弹幕时再点名，这句先退回
+    used_archive_ids_provider: Optional[Callable[[], Sequence[int]]] = None
     # 按编号取承诺（点名之后渲染说话档用；异步）
     commitment_lookup: Optional[Callable[[int], Any]] = None
     # 按编号取档案行（点名之后渲染说话档用；异步）
@@ -264,6 +266,15 @@ def _answers_danmaku(target: Any, danmaku: Sequence[Tuple[str, str]]) -> bool:
         return False
     message = canonical.normalize_message_id(target)
     return any(message == message_id or (text and target in text) for message_id, text in danmaku)
+
+
+def _repeated_memory_error(number: str) -> str:
+    """本场已提过的旧事被主动点名时退回给 Planner 的理由。"""
+    return (
+        f"{number} 这件事本场已经提过（简报里标着（本场已提过）），这句先不说：同一件旧事一场提一次就够，"
+        "再提观众听着就是车轱辘话。换个话题再调用 streamer_reply，或者这一轮不说；"
+        "观众问起这件事时，把 target 指向那条弹幕再点名。"
+    )
 
 
 def _held_reply_words(args: Dict[str, Any]) -> Dict[str, str]:
@@ -395,6 +406,7 @@ class Planner:
         self._brief_ids_provider = env.brief_ids_provider if env else None
         self._commitment_lookup = env.commitment_lookup if env else None
         self._brief_archive_ids_provider = env.brief_archive_ids_provider if env else None
+        self._used_archive_ids_provider = env.used_archive_ids_provider if env else None
         self._archive_lookup = env.archive_lookup if env else None
         self._memory_cues_provider = env.memory_cues_provider if env else None
         self._open_games_provider = env.open_games_provider if env else None
@@ -736,6 +748,24 @@ class Planner:
         label = self._memory_labels.get(commitment_id) or "大家"
         spoken = render_spoken_memory(target_label=label, commitment=commitment)
         return spoken, [render_commitment_number(commitment_id)]
+
+    def _repeated_archive_ref(self, args: Dict[str, Any]) -> str:
+        """use_memory 点名的是本场已提过的档案行时返回它的编号写法（档#N），否则空串。
+
+        承诺用上即从简报撤下，不在这里管；读不到已提过的名单时不拦，最多这一句又提一次。
+        """
+        if self._used_archive_ids_provider is None:
+            return ""
+        ref_text = _single_memory_ref(args.get("use_memory"), logger=self.logger)
+        parsed = _parse_memory_ref(ref_text) if ref_text is not None else None
+        if parsed is None or parsed[0] != MEMORY_REF_ARCHIVE:
+            return ""
+        try:
+            used = {int(item) for item in self._used_archive_ids_provider() or ()}
+        except Exception as exc:
+            self.logger.warning(f"读本场已提过的档案行失败（这一句不拦复提）: {exc}", exc=True)
+            return ""
+        return render_archive_number(parsed[1]) if parsed[1] in used else ""
 
     async def _resolve_archive_ref(self, line_id: int) -> Tuple[str, List[str]]:
         """点名一行档案：在本窗名单里、取得到这一行，台词拿到它的标题（不带编号与原话）。"""
@@ -1137,6 +1167,15 @@ class Planner:
         # 这句的回应目标对得上本窗一条弹幕（编号或原文）：对象是那位观众。即使本窗只有一位玩家在公屏开口，
         # 也不记成在回应他——否则答应观众的事会被整理记到玩家头上。对不上的（拿公屏原话当目标）照旧在回玩家
         answers_danmaku = _answers_danmaku(args.get("target"), self._round_danmaku)
+        # 本场已经提过的旧事又被点名、这句也不是在回观众弹幕：先退回，让她换个话题。
+        # 第 58 场 14 条旧事里 8 条各提了两次，第二次全是这样主动点名的
+        repeated = None if answers_danmaku else self._repeated_archive_ref(args)
+        if repeated:
+            return (
+                json.dumps({"ok": False, "error": _repeated_memory_error(repeated)}, ensure_ascii=False),
+                outcome,
+                False,
+            )
         try:
             remembered, memory_ids = await self._resolve_use_memory(args)
             attachment = ReplyRoundAttachment(
