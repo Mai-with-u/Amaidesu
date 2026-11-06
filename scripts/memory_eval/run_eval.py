@@ -504,8 +504,10 @@ def _commitment_row(record: OldCommitmentRecord, *, status: str) -> Commitment:
     )
 
 
-def _make_settler(record: EvalRecord, prompt_manager: PromptManager, llm: Any) -> SessionSettler:
-    """按一场用例构造生产整理器；仓储只回放用例里的旧承诺与游戏名。"""
+def _make_settler(
+    record: EvalRecord, prompt_manager: PromptManager, llm: Any, *, game_player_repo: Any = None
+) -> SessionSettler:
+    """按一场用例构造生产整理器；仓储只回放用例里的旧承诺与游戏名（游戏里的人那组另带玩家与公屏）。"""
     open_rows = [_commitment_row(item, status="open") for item in record.open_commitments]
     void_rows = [_commitment_row(item, status="void") for item in record.void_titles]
     void_rows.sort(key=lambda row: row.id, reverse=True)
@@ -523,6 +525,7 @@ def _make_settler(record: EvalRecord, prompt_manager: PromptManager, llm: Any) -
         event_repo=cast(Any, _EventsRepoStub(record.games)),
         game_names_provider=lambda: list(record.abilities),
         clock=lambda: 0,
+        game_player_repo=game_player_repo,
     )
 
 

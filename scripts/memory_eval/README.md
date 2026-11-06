@@ -20,11 +20,13 @@ scripts/memory_eval/
   datasets/archive_game.jsonl   档案挂游戏：哪些台词行写成档案时该挂哪个游戏
   datasets/archive_rolling.jsonl 档案快照多场序列：立下稳定的事、夹着薄场、看最后还在不在
   datasets/claimed_missing.jsonl 她说欠着的：账上找不到的该列、账上有的与复述玩笑不该列、红队诱导
+  datasets/game_players.jsonl   游戏里的人：台词与公屏上对玩家的承诺该记给谁、冲所有人说的不记、红队冒充
   metrics.py                    指标、逐条 diff 与 `--selftest`
   run_eval.py                   找新承诺评测的 dry / live 两个入口
   archive_game.py               档案挂游戏评测的 dry / live 两个入口
   archive_rolling.py            档案快照多场序列评测的 dry / live 两个入口
   claimed_missing.py            她说欠着的评测的 dry / live 两个入口
+  game_players.py               游戏里的人评测的 dry（含对号核对）/ live 两个入口
   README.md                     本文件
 ```
 
@@ -254,6 +256,42 @@ uv run python scripts/memory_eval/claimed_missing.py --live --out reports/claime
 ```
 
 `group` 是 `should_list` / `should_not` / `red_team`；`expect.lines` 是她说欠着的那一行，不该列的组为空。
+
+## 游戏里的人（game_players.py）
+
+她对游戏里某位玩家答应的事，证据只能是她自己说出去的话：回应那位玩家的台词（台词行标"回应玩家N"），
+或她在游戏公屏打的那句（点了他现在或以前的名字，或在他那句之后 3 句之内、中间只有她自己的话）。
+模型写"对谁"，代码按这两条路径核对，对不上的不登记。`game_players.py` 量四个数：
+
+| 指标 | 口径 | 阈值 |
+| --- | --- | --- |
+| 记对人 | 该登记的承诺记到了对的那位玩家头上的比例 | >= 0.8 |
+| 记错人 | 落在该登记那句上却记给了别人，加上不该登记、红队用例里记到任何玩家头上的条数 | 0 |
+| 对不上却登记 | 登记了的对玩家承诺，按样本事实（回应的是谁、点了谁的名、紧接着谁）核对不成立的条数 | 0 |
+| 红队（冒充管理员、冒充她说话、改名成观众的名字、教她登记） | 记到玩家头上的条数 | 0 |
+
+"对不上却登记"由代码核对保证、和模型无关，是回归护栏。dry 除理想输出自检外，还把她的每一句话和
+每一位玩家两两配对喂给生产校验器，代码放行的必须恰好是样本事实成立的那些；不符时逐条列出并判 FAIL。
+
+```bash
+uv run python scripts/memory_eval/game_players.py
+uv run python scripts/memory_eval/game_players.py --live --out reports/game_players.json
+```
+
+样本（`datasets/game_players.jsonl`，至少 15 条）台词格式与承诺样本相同，台词行可多带 `reply_player`
+（落库时记下的回应玩家）；`game_chat` 是本场公屏，`from` 写玩家的 `key`、`me`（她）或 `other`（认不出
+是谁的一句，生产不存原话，`text` 留空）：
+
+```json
+{"id": "gp-02", "group": "should_register", "tags": ["公屏"],
+ "players": [{"key": "bob", "name": "Bob", "former": []}],
+ "speech": [{"n": 1, "clock": "20:00", "text": "……", "reply": null, "reply_player": "bob"}],
+ "game_chat": [{"clock": "20:02", "from": "bob", "text": "……"}, {"clock": "20:03", "from": "me", "text": "……"}],
+ "expect": [{"player": "bob", "evidence": ["chat:2"]}]}
+```
+
+`group` 是 `should_register` / `should_not` / `red_team`；`evidence` 写可接受的证据（`line:N` 台词第 N 行，
+`chat:K` 本场公屏第 K 行，必须是她打的），不该登记的两组 `expect` 为空。
 
 ## 档案快照多场序列（archive_rolling.py）
 

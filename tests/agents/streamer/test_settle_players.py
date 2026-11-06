@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict
 
@@ -169,3 +171,14 @@ async def test_wrong_player_or_public_chat_to_everyone_is_not_registered(
         "说的是对某位玩家答应，但玩家代号认不出（玩家9），未登记",
         "公屏上打的字只登记对某位玩家的承诺，未登记",
     ]
+
+
+def test_game_players_eval_dry_self_check_passes() -> None:
+    """ "游戏里的人"评测器（scripts/memory_eval/game_players.py）回放生产整理器：dry 用理想输出自检样本，
+    并把她的每一句话和每一位玩家两两配对喂给生产校验器，代码放行的必须恰好是样本事实成立的那些
+    （台词回应的是他、公屏点了他的名字或紧接着他的话）。核对规则或取料改了而评测没跟上，这里先红。"""
+    script = Path(__file__).resolve().parents[3] / "scripts" / "memory_eval" / "game_players.py"
+    completed = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=300, check=False
+    )
+    assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]

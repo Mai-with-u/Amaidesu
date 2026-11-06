@@ -1216,12 +1216,13 @@ def test_memory_prompt_examples_stay_out_of_eval_datasets() -> None:
         for raw in dataset.read_text(encoding="utf-8").splitlines():
             if raw.strip():
                 record = json.loads(raw)
-                # 多场序列样本的台词按场次分开放
+                # 多场序列样本的台词按场次分开放；游戏里的人那份另有她在公屏打的字，同样不能撞例句
                 turns = [
                     *record.get("speech", []),
                     *(turn for session in record.get("sessions", []) for turn in session.get("speech", [])),
+                    *record.get("game_chat", []),
                 ]
-                speech.extend((dataset.stem, line["text"]) for line in turns)
+                speech.extend((dataset.stem, line["text"]) for line in turns if line["text"])
     shared: List[str] = []
     for prompt in sorted((root / "src" / "agents" / "streamer" / "prompts").glob("memory_*.md")):
         # 例句写在半角双引号里；JSON 示例里的键值带冒号或逗号，排除掉
