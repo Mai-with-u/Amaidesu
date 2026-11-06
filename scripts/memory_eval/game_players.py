@@ -54,6 +54,8 @@ _GAME = "minecraft"
 # 回放用的主键起点：玩家、公屏行和台词行（台词行主键就是行号）错开，报告里一眼分得清
 _PLAYER_ID_BASE = 100
 _CHAT_ID_BASE = 1000
+# 回放用的弹幕主键：和台词行号、公屏主键错开
+_VIEWER_CHAT_ID_BASE = 500
 # 样本公屏行的发言方：她自己、认不出是谁的一句；其余写玩家的 key
 _FROM_ME = "me"
 _FROM_OTHER = "other"
@@ -259,15 +261,18 @@ def _direction(speaker: str) -> Any:
 
 
 def prepare(case: PlayerCase, prompt_manager: PromptManager) -> base.PreparedCase:
-    """走生产取料与渲染，抓取承诺那次调用的提示词；台词行带上落库时记下的回应玩家。"""
+    """走生产取料与渲染，抓取承诺那次调用的提示词；台词行带上落库时记下的回应玩家，回复弹幕的行带上
+    弹幕主键（生产取料按弹幕表连出来，在回弹幕的行不算在回应玩家要靠它认）。"""
     llm = base._RecordingLLM()
     settler = base._make_settler(case.record, prompt_manager, llm, game_player_repo=_PlayersRepoStub(case))
-    speech = [
-        line.model_copy(update={"reply_player_id": case.players[case.reply_players[line.id]].id})
-        if line.id in case.reply_players
-        else line
-        for line in base._speech_lines(case.record)
-    ]
+    speech = []
+    for line in base._speech_lines(case.record):
+        update: dict[str, Any] = {}
+        if line.id in case.reply_players:
+            update["reply_player_id"] = case.players[case.reply_players[line.id]].id
+        if line.reply_viewer_id is not None:
+            update["reply_chat_id"] = _VIEWER_CHAT_ID_BASE + line.id
+        speech.append(line.model_copy(update=update) if update else line)
     material = asyncio.run(settler._collect_material(base._session_stub(), speech))
     asyncio.run(settler._extract(material))
     if len(llm.calls) < 2:
@@ -289,7 +294,9 @@ def _supported(case: PlayerCase, ref: str, key: str) -> bool:
     或往前 3 句之内遇到的第一句别人的话是他说的。与生产核对同一口径，但只读样本，不读代码算出的结果。"""
     kind, _, number = ref.partition(":")
     if kind == "line":
-        return case.reply_players.get(int(number)) == key
+        # 这一行在回一条弹幕时，对象是那位观众，不算在回应玩家（即使那一行也记了回应玩家）
+        replies_danmaku = case.record.speech[int(number) - 1].has_reply
+        return case.reply_players.get(int(number)) == key and not replies_danmaku
     index = int(number) - 1
     text = case.chat[index].text.lower()
     names = [name for name in case.players[key].names if len(name.strip()) >= _MIN_NAME_CHARS]

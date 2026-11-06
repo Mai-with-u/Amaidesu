@@ -449,6 +449,34 @@ async def test_her_line_answers_a_player_only_when_he_alone_spoke(speakers: tupl
     assert outcome.replied is True and outcome.reply_player == expected
 
 
+@pytest.mark.parametrize(
+    ("batch", "expected"),
+    [(True, ("", "")), (False, ("minecraft", "uuid-a"))],
+    ids=["点了要回的弹幕：对象是观众", "本窗没有弹幕：点的不是弹幕，照旧在回应玩家"],
+)
+async def test_her_line_answering_a_danmaku_is_not_recorded_as_answering_a_player(batch: bool, expected: tuple) -> None:
+    """这句点了要回的弹幕时，即使本窗只有一位玩家在公屏开口，也不记成在回应他。"""
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    reply = [
+        _resp(
+            tool_calls=[
+                _tc(
+                    "streamer_reply",
+                    {"topic_summary": "t", "is_novel": True, "emotion": "happy", "intensity": 0.5, "target": "m1"},
+                )
+            ]
+        )
+    ]
+    planner, _llm, _prompt = _make_planner(reply, reply_provider=provider)
+
+    outcome = await planner.plan(
+        [_msg()] if batch else [], game_batch=GameEventBatch(chat_speakers=(("minecraft", "uuid-a"),))
+    )
+
+    assert outcome.replied is True and outcome.reply_player == expected
+
+
 async def test_use_memory_accepts_single_item_list_and_renders_spoken_form() -> None:
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)

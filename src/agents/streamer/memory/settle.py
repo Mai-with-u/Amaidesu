@@ -353,6 +353,17 @@ def _place_of(row: Commitment) -> str:
     return f"；挂在 {row.game} 的存档「{save.label}」" if save.known else f"；挂在 {row.game}"
 
 
+def _reply_player_of(line: SettleSpeechLine) -> Optional[int]:
+    """这一行台词在回应的玩家；它在回一条弹幕时不算（对象是那位观众）。
+
+    台词落库时已经不再给回弹幕的行记回应玩家；升级前落库的行可能两样都记了，这里再挡一次，
+    答应观众的事不会因为那一窗恰好只有一位玩家开口就记到玩家头上。
+    """
+    if line.reply_player_id is None or line.reply_chat_id is not None:
+        return None
+    return int(line.reply_player_id)
+
+
 def _player_target(
     raw: Mapping[str, Any],
     line: Optional[SettleSpeechLine],
@@ -367,7 +378,7 @@ def _player_target(
     if player_id is None:
         return None, f"说的是对某位玩家答应，但玩家代号认不出（{str(raw.get('player') or '空')[:20]}），未登记"
     if line is not None:
-        if line.reply_player_id is None or int(line.reply_player_id) != player_id:
+        if _reply_player_of(line) != player_id:
             return None, "说的是对某位玩家答应，但这一行不是在回应这位玩家，未登记"
         return player_id, ""
     if chat is None or player_id not in material.players.targets.get(int(chat.id), frozenset()):
@@ -681,7 +692,8 @@ class SessionSettler:
             lines: List["GameChatLine"] = list(
                 await self._players.list_session_game_chat(live_session_id=int(session.id))
             )
-            spoken = [int(line.reply_player_id) for line in delivered if line.reply_player_id is not None]
+            # 台词里回应过的玩家（在回弹幕的行不算）先拿代号
+            spoken = [player for player in map(_reply_player_of, delivered) if player is not None]
             wanted = dict.fromkeys([*spoken, *(int(line.player_id) for line in lines if line.player_id is not None)])
             players: Dict[int, "GamePlayer"] = {}
             for player_id in wanted:
@@ -767,7 +779,9 @@ class SessionSettler:
                 reply_text = " ".join((line.reply_content or "").split())
                 reply_note = f"（回复{code}「{reply_text}」）"
             player_note = ""
-            player_code = (player_codes or {}).get(int(line.reply_player_id)) if line.reply_player_id else None
+            # 在回弹幕的行只标回复了哪位观众，不再标回应玩家
+            reply_player = _reply_player_of(line)
+            player_code = (player_codes or {}).get(reply_player) if reply_player is not None else None
             if player_code:
                 player_note = f"（回应{player_code}）"
             memory_note = ""

@@ -173,6 +173,44 @@ async def test_wrong_player_or_public_chat_to_everyone_is_not_registered(
     ]
 
 
+async def test_line_answering_a_danmaku_is_not_a_promise_to_the_player(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """升级前落库的行可能既回了弹幕、又记了回应玩家：不标"回应玩家"，模型写成对玩家答应也不登记。"""
+    ids = await _scene(store)
+    await store.chat.insert_live_chat(
+        live_session_id=ids["session"],
+        timestamp_ms=1_500,
+        sender_role="viewer",
+        content="主播下周带我们去末地",
+        message_type="danmaku",
+        message_id="m-end",
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=ids["session"],
+        timestamp_ms=1_600,
+        sender_role="assistant",
+        content="行啊，下周带你们去末地",
+        message_type="speech",
+        reply_to_message_id="m-end",
+        reply_player_id=ids["alex"],
+    )
+    llm = _reply(
+        '{"archive": []}',
+        '{"commitments": [{"line": 2, "quote": "下周带你们去末地", "what": "带 Alex 去末地", "to": "player",'
+        ' "player": "玩家1"}]}',
+    )
+    assert await _settler(store, llm, prompt_manager).settle_session(ids["session"]) is True
+
+    assert "（回应玩家1）：行啊" not in llm.calls[1]["input"]
+    assert await store.commitments.list_commitments() == []
+    session = await store.sessions.get_live_session(live_session_id=ids["session"])
+    assert session is not None and session.settle_report is not None
+    assert [item.reason for item in SettleReport.model_validate_json(session.settle_report).unregistered] == [
+        "说的是对某位玩家答应，但这一行不是在回应这位玩家，未登记"
+    ]
+
+
 def test_game_players_eval_dry_self_check_passes() -> None:
     """ "游戏里的人"评测器（scripts/memory_eval/game_players.py）回放生产整理器：dry 用理想输出自检样本，
     并把她的每一句话和每一位玩家两两配对喂给生产校验器，代码放行的必须恰好是样本事实成立的那些

@@ -200,7 +200,8 @@ class RoundOutcome:
     speech_gate_bounces: int = 0
     # 本轮点名的旧事编号（写法如 约#7、档#41；随 streamer.speech 落库，供"用上即停"与复盘核对）
     memory_refs: List[str] = field(default_factory=list)
-    # 本窗公屏聊天只来自一位核对过的玩家时是 (游戏, UUID)：这一窗说的话记成在回应他；否则两个空串
+    # 本窗公屏聊天只来自一位核对过的玩家、且这句不是在回一条弹幕时是 (游戏, UUID)：落库时记成在回应他；
+    # 否则两个空串
     reply_player: Tuple[str, str] = ("", "")
 
 
@@ -365,6 +366,8 @@ class Planner:
         self._round_game_events: List[str] = []
         # 本窗公屏聊天只来自一位核对过的玩家时是 (游戏, UUID)：这一窗说的话落库时记成在回应他
         self._round_reply_player: Tuple[str, str] = ("", "")
+        # 本窗有没有弹幕：她这句点了回应对象、本窗又有弹幕时，这句在回那条弹幕，不记成在回应玩家
+        self._round_has_danmaku = False
         # 本窗在游戏里开口或冲她做动作的玩家：线索推送据此推玩家卡
         self._round_game_players: Tuple[Tuple[str, str], ...] = ()
         # 本窗是否豁免发言闸的台词重合度检查（收播道别窗：道别话题常与收尾环节发言字面重合）
@@ -489,6 +492,7 @@ class Planner:
         self._round_facts_text = resolved_batch.facts_text
         self._round_game_events = list(resolved_batch.events)
         self._round_reply_player = sole_chat_player(resolved_batch.chat_speakers)
+        self._round_has_danmaku = bool(batch)
         self._round_game_players = resolved_batch.addressed_players
         self.workbench.begin_round()
         # 游戏聊天原话（非私聊）随本轮说话交给表达侧；私聊行只进本窗参考段
@@ -1160,6 +1164,9 @@ class Planner:
         emotion = payload.get("emotion") if isinstance(payload.get("emotion"), dict) else {}
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         reply_to = args.get("target")
+        # 这句点了要回的弹幕（本窗确有弹幕）：对象是那位观众。即使本窗只有一位玩家在公屏开口，也不记成在
+        # 回应他——否则答应观众的事会被整理记到玩家头上
+        answers_danmaku = isinstance(reply_to, str) and bool(reply_to) and self._round_has_danmaku
         outcome = replace(
             outcome,
             replied=True,
@@ -1173,7 +1180,7 @@ class Planner:
             topic_tag=str(args.get("topic_tag", "") or ""),
             reply_to=reply_to if isinstance(reply_to, str) and reply_to else None,
             memory_refs=memory_ids,
-            reply_player=self._round_reply_player,
+            reply_player=("", "") if answers_danmaku else self._round_reply_player,
         )
         # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到
         self.workbench.note_intent(
