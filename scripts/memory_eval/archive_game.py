@@ -376,6 +376,8 @@ def _run_live(args: argparse.Namespace, prompt_manager: PromptManager, records: 
         return 2
     print(f"== 档案挂游戏 live 模式：真调模型 {config.model} ==")
     client = OpenAI(api_key=config.api_key, base_url=config.base_url, timeout=config.timeout_s)
+    # 每条用例的"写档案"调用都把用量累加到同一本账上，整轮结束后打印并写进报告
+    usage = base.TokenUsage()
     results: list[ArchiveCaseResult] = []
     case_reports: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -388,7 +390,7 @@ def _run_live(args: argparse.Namespace, prompt_manager: PromptManager, records: 
         error: Optional[str] = None
         try:
             raw_output = base._call_model(
-                client, config=config, system=prepared.system_prompt, user=prepared.user_prompt
+                client, config=config, system=prepared.system_prompt, user=prepared.user_prompt, usage=usage
             )
             rows = parse_json_object(raw_output).get("archive") or []
             if not isinstance(rows, list):
@@ -431,11 +433,13 @@ def _run_live(args: argparse.Namespace, prompt_manager: PromptManager, records: 
             "prompt": {"template": base.PROMPT_TEMPLATES["archive"]},
             "metrics": asdict(metrics),
             "verdict": {"passed": not failures, "failures": failures},
+            "usage": asdict(usage),
             "errors": errors,
             "cases": case_reports,
         },
     )
     print("\n" + format_metrics(metrics))
+    print(usage.format())
     for result in results:
         for mismatch in result.mismatches:
             print(f"  - {mismatch}")

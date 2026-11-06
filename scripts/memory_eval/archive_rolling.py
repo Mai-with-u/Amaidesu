@@ -444,12 +444,15 @@ def format_metrics(metrics: RollingMetrics) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _live_answer(args: argparse.Namespace) -> Callable[[SessionCase, Dict[str, str]], Callable[[str, str], str]]:
+def _live_answer(
+    args: argparse.Namespace, usage: base.TokenUsage
+) -> Callable[[SessionCase, Dict[str, str]], Callable[[str, str], str]]:
     config = base._resolve_live_config(args)
     client = OpenAI(api_key=config.api_key, base_url=config.base_url, timeout=config.timeout_s)
 
+    # 每场整理里"写档案"那次调用都把用量累加到同一本账上，整轮结束后打印并写进报告
     def answer_for(_case: SessionCase, _keys: Dict[str, str]) -> Callable[[str, str], str]:
-        return lambda system, prompt: base._call_model(client, config=config, system=system, user=prompt)
+        return lambda system, prompt: base._call_model(client, config=config, system=system, user=prompt, usage=usage)
 
     return answer_for
 
@@ -459,8 +462,9 @@ def _run(args: argparse.Namespace, prompt_manager: PromptManager, records: List[
     if dry and len(records) < MIN_CASES:
         print(f"样本不足：{len(records)} < {MIN_CASES}", file=sys.stderr)
         return 1
+    usage = base.TokenUsage()
     try:
-        answer_for = _oracle if dry else _live_answer(args)
+        answer_for = _oracle if dry else _live_answer(args, usage)
     except ValueError as exc:
         print(f"live 参数错误：{exc}", file=sys.stderr)
         return 2
@@ -481,24 +485,27 @@ def _run(args: argparse.Namespace, prompt_manager: PromptManager, records: List[
     metrics = evaluate(results)
     failures = verdict_failures(metrics, dry=dry)
     print("\n" + format_metrics(metrics))
+    if not dry:
+        print(usage.format())
     if args.out is not None:
-        base._write_report(
-            args.out,
-            {
-                "mode": "dry" if dry else "live",
-                "generated_at": datetime.now().isoformat(timespec="seconds"),
-                "thresholds": {
-                    "forget_rate_max": FORGET_RATE_MAX,
-                    "byte_mismatch_max": BYTE_MISMATCH_MAX,
-                    "deleted_returned_max": DELETED_RETURNED_MAX,
-                    "unevidenced_lost_max": UNEVIDENCED_LOST_MAX,
-                    "wrongly_lasting_max": WRONGLY_LASTING_MAX,
-                },
-                "metrics": asdict(metrics),
-                "verdict": {"passed": not failures, "failures": failures},
-                "cases": [asdict(item) for item in results],
+        report: Dict[str, Any] = {
+            "mode": "dry" if dry else "live",
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "thresholds": {
+                "forget_rate_max": FORGET_RATE_MAX,
+                "byte_mismatch_max": BYTE_MISMATCH_MAX,
+                "deleted_returned_max": DELETED_RETURNED_MAX,
+                "unevidenced_lost_max": UNEVIDENCED_LOST_MAX,
+                "wrongly_lasting_max": WRONGLY_LASTING_MAX,
             },
-        )
+            "metrics": asdict(metrics),
+            "verdict": {"passed": not failures, "failures": failures},
+            "cases": [asdict(item) for item in results],
+        }
+        # dry 不调模型，没有用量可记；live 才把整轮 token 写进报告，改提示词时对照成本
+        if not dry:
+            report["usage"] = asdict(usage)
+        base._write_report(args.out, report)
         print(f"\n报告已写入 {args.out}")
     if not failures:
         print("\nPASS")

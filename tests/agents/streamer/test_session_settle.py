@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Iterator, List, Optional, Tuple
 
 import pytest
 
@@ -982,6 +985,117 @@ def test_archive_rolling_eval_dry_self_check_passes() -> None:
         [sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=300, check=False
     )
     assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
+
+
+# 假端点每次都回同一份空档案；用量取固定值，测试按它核对每次调用都记上了
+_FAKE_USAGE = {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
+
+
+class _FakeChatCompletionsHandler(BaseHTTPRequestHandler):
+    """本机假的 OpenAI 兼容端点：收到任何对话补全请求都回一份空档案，并带上 token 用量。"""
+
+    def do_POST(self) -> None:  # noqa: N802 - http.server 规定的方法名
+        # 先把请求体读完再回话，免得客户端在写请求时被提前断开
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        body = json.dumps(
+            {
+                "id": "fake",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "fake-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": '{"previous": [], "archive": []}'},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": _FAKE_USAGE,
+            }
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - 覆盖基类的同名参数
+        # 每次请求的访问日志对测试没有信息量，不往输出里打
+        return
+
+
+@pytest.fixture()
+def fake_model_endpoint() -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeChatCompletionsHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/v1"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _run_eval_live_once(script_name: str, base_url: str, out: Path) -> subprocess.CompletedProcess[str]:
+    script = Path(__file__).resolve().parents[3] / "scripts" / "memory_eval" / script_name
+    # 本机配了代理时，发往 127.0.0.1 的请求也绕开代理，直达假端点
+    env = {**os.environ, "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost"}
+    return subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--live",
+            "--limit",
+            "1",
+            "--out",
+            str(out),
+            "--model",
+            "fake-model",
+            "--api-key",
+            "fake-key",
+            "--base-url",
+            base_url,
+            "--timeout",
+            "30",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=300,
+        check=False,
+        env=env,
+    )
+
+
+def test_archive_rolling_eval_live_path_reaches_the_model(fake_model_endpoint: str, tmp_path: Path) -> None:
+    """档案快照多场序列评测器的 live 入口真能把请求发出去、把用量记下来。
+
+    它借用找承诺评测器的模型调用；那边改了调用参数而这边没跟上时，每场"写档案"都在发请求之前
+    抛错，被整理器记成整理失败——报告看起来像模型把稳定的事全忘了，门槛评测量到的就不是提示词。
+    dry 自检不走这条路，所以用本机假端点跑一条序列，只看请求到没到、用量记没记；假端点回的是空
+    档案，遗忘率本来就不达标，不看指标。"""
+    out = tmp_path / "rolling.json"
+    completed = _run_eval_live_once("archive_rolling.py", fake_model_endpoint, out)
+    assert out.exists(), completed.stdout[-3000:] + completed.stderr[-3000:]
+    report = json.loads(out.read_text(encoding="utf-8"))
+    settle_failures = [problem for case in report["cases"] for problem in case["problems"] if "整理失败" in problem]
+    assert settle_failures == []
+    usage = report["usage"]
+    assert usage["calls"] >= 1 and usage["missing_calls"] == 0
+    assert usage["total_tokens"] == _FAKE_USAGE["total_tokens"] * usage["calls"]
+
+
+def test_archive_game_eval_live_path_reaches_the_model(fake_model_endpoint: str, tmp_path: Path) -> None:
+    """档案挂游戏评测器的 live 入口同样借用找承诺评测器的模型调用，参数没跟上时每条用例都记成调用
+    失败，量出的游戏归属准确率是 0 而不是提示词的真实水平。"""
+    out = tmp_path / "game.json"
+    completed = _run_eval_live_once("archive_game.py", fake_model_endpoint, out)
+    assert out.exists(), completed.stdout[-3000:] + completed.stderr[-3000:]
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["errors"] == []
+    assert report["usage"]["calls"] == 1 and report["usage"]["missing_calls"] == 0
+    assert report["usage"]["total_tokens"] == _FAKE_USAGE["total_tokens"]
 
 
 # 例句与评测台词共用的连续字数达到这么多，就算"同一句"：短于它的多是"下次一定"这类说法标签，本来就该共用。
