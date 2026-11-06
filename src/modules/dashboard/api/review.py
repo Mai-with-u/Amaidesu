@@ -149,8 +149,12 @@ async def session_review(
     return await aggregator.build(session_rows)
 
 
-def _parse_memory_refs(text: Optional[str]) -> List[int]:
-    """memory_refs 列（JSON 数组文本）→ 编号列表；空值或坏数据按空处理。"""
+# 台词点名用上的记忆：约#N 是承诺，档#N 是档案行（主播写进 memory_refs 列的写法）
+_MEMORY_REF = re.compile(r"^\s*([约档])\s*#\s*(\d+)\s*$")
+
+
+def _parse_memory_refs(text: Optional[str]) -> List[str]:
+    """memory_refs 列（JSON 数组文本）→ ``约#7``、``档#41`` 这样的引用；空值、坏数据与认不出的条目按没有处理。"""
     if not text:
         return []
     try:
@@ -159,10 +163,11 @@ def _parse_memory_refs(text: Optional[str]) -> List[int]:
         return []
     if not isinstance(raw, list):
         return []
-    refs: List[int] = []
+    refs: List[str] = []
     for item in raw:
-        if isinstance(item, int) and not isinstance(item, bool):
-            refs.append(item)
+        matched = _MEMORY_REF.match(item) if isinstance(item, str) else None
+        if matched is not None:
+            refs.append(f"{matched.group(1)}#{int(matched.group(2))}")
     return refs
 
 

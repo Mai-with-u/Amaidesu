@@ -56,7 +56,8 @@ class ReviewSpeechItem(BaseModel):
     content: str
     dropped: bool = False
     """播放队列确知没送到观众面前（仍算发过，但不该当众承担）；删句同样可删。"""
-    memory_refs: List[int] = Field(default_factory=list)
+    memory_refs: List[str] = Field(default_factory=list)
+    """这句点名用上的记忆：``约#7`` 是承诺，``档#41`` 是档案行。"""
 
 
 class ReviewCueItem(BaseModel):

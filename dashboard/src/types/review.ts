@@ -122,8 +122,8 @@ export interface ReviewSpeechLine {
   content: string;
   /** 确知没送到观众面前（TTS 丢弃等）；仍列出以便运营者删除 */
   dropped: boolean;
-  /** 引用了这句的档案行 id（删台词时这些行一起删） */
-  memory_refs: number[];
+  /** 这句点名用上的记忆：约#7 是承诺，档#41 是档案行 */
+  memory_refs: string[];
 }
 
 /** 某一场的台词列表 */

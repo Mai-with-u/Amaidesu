@@ -515,7 +515,7 @@ async def _seed_speech(
 async def test_speech_endpoint_lists_utterances(review_client, store) -> None:
     """按时间正序返回逐句台词，带未送达标记与解析后的记忆引用编号。"""
     pk = await _seed_session(store, BASE, BASE + 600_000)
-    first = await _seed_speech(store, pk, BASE + 1_000, "第一句", memory_refs="[5, 7]")
+    first = await _seed_speech(store, pk, BASE + 1_000, "第一句", memory_refs='["约#7", "档#41", 5, "别的"]')
     dropped = await _seed_speech(store, pk, BASE + 2_000, "没送到", dropped_at_ms=BASE + 2_100)
     plain = await _seed_speech(store, pk, BASE + 3_000, "普通一句", memory_refs="不是 JSON")
 
@@ -523,7 +523,7 @@ async def test_speech_endpoint_lists_utterances(review_client, store) -> None:
     assert resp.status_code == 200
     items = resp.json()["items"]
     assert [item["chat_id"] for item in items] == [first, dropped, plain]
-    assert items[0]["memory_refs"] == [5, 7]
+    assert items[0]["memory_refs"] == ["约#7", "档#41"], "按主播写进去的写法解析，认不出的条目不给"
     assert items[1]["dropped"] is True
     assert items[2]["memory_refs"] == [] and items[2]["dropped"] is False
 
