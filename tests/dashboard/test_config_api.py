@@ -41,6 +41,8 @@ def _patch(client, key: str, value):
 
 
 _PROVIDER = {"name": "default", "client_type": "openai", "base_url": "https://x/v1"}
+# 嵌入默认引用硅基流动条目：整表提交时它排在最前，占位还原按索引对位不受影响
+_SILICONFLOW = {"name": "siliconflow", "client_type": "openai", "base_url": "https://api.siliconflow.cn/v1"}
 
 
 def test_get_config_merged_view_masks_secrets_and_hides_retired_limits(client) -> None:
@@ -117,19 +119,23 @@ def test_patch_meta_version_is_readonly_and_leaves_file_untouched(client, config
 
 def test_patch_list_placeholders(client, config_dir) -> None:
     """整列表回显：已有元素的"已设置"占位按索引还原为磁盘真实值；残留占位（新元素无对位）422 且不落盘。"""
-    assert _patch(client, "model.llm_providers", [{**_PROVIDER, "api_key": "sk-real"}]).status_code == 200
+    assert _patch(client, "model.llm_providers", [_SILICONFLOW, {**_PROVIDER, "api_key": "sk-real"}]).status_code == 200
 
-    echoed = _patch(client, "model.llm_providers", [{**_PROVIDER, "api_key": "已设置"}])
+    echoed = _patch(client, "model.llm_providers", [_SILICONFLOW, {**_PROVIDER, "api_key": "已设置"}])
     disk = (config_dir / "model.toml").read_text(encoding="utf-8-sig")
     assert echoed.status_code == 200 and "sk-real" in disk and "已设置" not in disk
 
     before = (config_dir / "model.toml").read_bytes()
-    residual = [{**_PROVIDER, "api_key": "sk-real"}, {**_PROVIDER, "name": "second", "api_key": "已设置"}]
+    residual = [
+        _SILICONFLOW,
+        {**_PROVIDER, "api_key": "sk-real"},
+        {**_PROVIDER, "name": "second", "api_key": "已设置"},
+    ]
     resp = _patch(client, "model.llm_providers", residual)
     assert resp.status_code == 422 and "占位" in resp.json()["detail"]
     assert (config_dir / "model.toml").read_bytes() == before
 
-    assert _patch(client, "model.llm_providers", [{**_PROVIDER, "api_key": "sk-new"}]).status_code == 200
+    assert _patch(client, "model.llm_providers", [_SILICONFLOW, {**_PROVIDER, "api_key": "sk-new"}]).status_code == 200
     assert "sk-new" in (config_dir / "model.toml").read_text(encoding="utf-8-sig")
 
 

@@ -308,8 +308,10 @@ def test_placeholder_refill_by_identity_then_position() -> None:
 
 
 def test_whole_list_submission_keeps_the_real_key_and_never_persists_the_placeholder(tmp_path) -> None:
+    # 最小文件没有硅基流动条目：关掉嵌入，免得默认的嵌入引用落空
     (tmp_path / "model.toml").write_text(
-        '[[llm_providers]]\nname = "default"\napi_key = "sk-real"\nbase_url = "u"\n', encoding="utf-8"
+        '[embedding]\nenabled = false\n\n[[llm_providers]]\nname = "default"\napi_key = "sk-real"\nbase_url = "u"\n',
+        encoding="utf-8",
     )
     service = _FakeConfigService({"llm_providers": [{"name": "default", "api_key": "sk-real", "base_url": "u"}]})
     outcome = asyncio.run(

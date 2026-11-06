@@ -1,4 +1,4 @@
-"""model.toml 的 ``[embedding]`` 段：纯新增段，旧文件加载时补默认值落盘；配置了才开。"""
+"""model.toml 的 ``[embedding]`` 段：默认指向硅基流动的 bge-m3，旧文件加载时补默认值落盘；密钥留空即不开。"""
 
 from __future__ import annotations
 
@@ -12,18 +12,21 @@ from src.modules.config.model_schemas import EmbeddingConfig, ModelRootConfig
 from src.modules.config.multi_file_loader import generate_default_configs, load_config_dir
 
 
-def test_default_is_not_configured_so_semantic_search_stays_off() -> None:
-    """默认不填模型名：语义检索不开，记忆检索只走关键词与规则。"""
-    assert ModelRootConfig().embedding.configured is False
-    assert EmbeddingConfig(model_identifier="BAAI/bge-m3", enabled=False).configured is False
-    assert EmbeddingConfig(model_identifier=" BAAI/bge-m3 ", provider=" default ").configured is True
+def test_default_points_at_siliconflow_bge_m3_with_an_empty_key() -> None:
+    """默认引用硅基流动条目与 bge-m3；那个条目密钥留空（是否真开由装配时看密钥定）。"""
+    config = ModelRootConfig()
+    assert (config.embedding.provider, config.embedding.model_identifier) == ("siliconflow", "BAAI/bge-m3")
+    (siliconflow,) = [item for item in config.llm_providers if item.name == "siliconflow"]
+    assert (siliconflow.base_url, siliconflow.api_key) == ("https://api.siliconflow.cn/v1", "")
+    assert EmbeddingConfig(enabled=False).configured is False
+    assert EmbeddingConfig(model_identifier=" ").configured is False
 
 
 def test_model_name_without_a_known_provider_fails_at_load() -> None:
     with pytest.raises(ValidationError, match="embedding.provider"):
         ModelRootConfig(embedding={"model_identifier": "BAAI/bge-m3", "provider": "nope"})
     # 没填模型名时 provider 留空也合法（不开语义检索）
-    assert ModelRootConfig(embedding={"provider": ""}).embedding.provider == ""
+    assert ModelRootConfig(embedding={"provider": "", "model_identifier": ""}).embedding.provider == ""
 
 
 def test_old_model_file_gets_the_section_written_back_on_load(tmp_path: Path) -> None:
@@ -37,7 +40,7 @@ def test_old_model_file_gets_the_section_written_back_on_load(tmp_path: Path) ->
 
     config, _report = load_config_dir(config_dir)
 
-    assert config["model"]["embedding"]["model_identifier"] == ""
+    assert config["model"]["embedding"]["model_identifier"] == "BAAI/bge-m3"
     written = tomlkit.loads(path.read_text(encoding="utf-8-sig"))
     assert written["embedding"]["enabled"] is True
-    assert written["embedding"]["model_identifier"] == ""
+    assert written["embedding"]["provider"] == "siliconflow"

@@ -3,8 +3,8 @@
 属于基础设施，和语音合成同类：由装配代码按 ``model.toml`` 的 ``[embedding]`` 段建出来，
 构造器注入给用到它的组件；不是工具，不进工具表，大模型也调不到它。
 
-配置了才开：没填模型名时 :func:`build_embedding_client` 不建客户端，只给一句"语义检索没开"
-的说明，调用方据此退回关键词与规则两路并写进日志和 WebUI。客户端自己不重试（SDK 的重试
+配置了才开：没填模型名、或引用的提供方没填密钥时 :func:`build_embedding_client` 不建客户端，
+只给一句"语义检索没开"的说明，调用方据此退回关键词与规则两路并写进日志和 WebUI。客户端自己不重试（SDK 的重试
 也关掉），失败一律抛 :class:`EmbeddingError` 带上原因，由索引任务决定退避多久再试——
 嵌入服务卡住时不能拖住任何一条直播通路。
 """
@@ -99,8 +99,9 @@ class EmbeddingSetup:
 def build_embedding_client(embedding: EmbeddingConfig, providers: Sequence[LLMProviderConfig]) -> EmbeddingSetup:
     """按 ``[embedding]`` 段建嵌入客户端；没配置就返回不带客户端的说明。
 
-    provider 引用的有效性由配置加载期校验保证；连接信息（地址、密钥、鉴权方式、默认 header）
-    与大模型客户端走同一套转换。
+    嵌入只是记忆检索的加分项：关着、没填模型、引用的 provider 不在、provider 没填密钥，
+    一律不建客户端、写明原因，检索退回关键词与规则，绝不因为嵌入挡住开播。
+    连接信息（地址、密钥、鉴权方式、默认 header）与大模型客户端走同一套转换。
     """
     if not embedding.enabled:
         return EmbeddingSetup(client=None, note="语义检索没开：model.toml 的 [embedding] 关着，只走关键词与规则")
@@ -109,6 +110,20 @@ def build_embedding_client(embedding: EmbeddingConfig, providers: Sequence[LLMPr
             client=None, note="语义检索没开：model.toml 的 [embedding] 没填嵌入模型，只走关键词与规则"
         )
     provider = _find_provider(providers, embedding.provider)
+    if provider is None:
+        # 加载期校验会拦住落空的引用；走到这里是装配方没经过校验（如直接传原始配置），照样不挡启动
+        return EmbeddingSetup(
+            client=None,
+            note=f"语义检索没开：嵌入未配置（llm_providers 里没有 {embedding.provider}），只走关键词与规则",
+        )
+    if provider.auth_type != "none" and not provider.api_key.strip():
+        return EmbeddingSetup(
+            client=None,
+            note=(
+                f"语义检索没开：嵌入未配置（model.toml 里 [[llm_providers]] 的 {provider.name} 没填 api_key），"
+                "只走关键词与规则"
+            ),
+        )
     connection = build_openai_compatible_client_config(provider.model_dump())
     sdk = AsyncOpenAI(
         api_key=connection.api_key or "sk-dummy",
@@ -124,12 +139,12 @@ def build_embedding_client(embedding: EmbeddingConfig, providers: Sequence[LLMPr
     return EmbeddingSetup(client=client, note=note)
 
 
-def _find_provider(providers: Sequence[LLMProviderConfig], name: str) -> LLMProviderConfig:
-    """按名字找 provider；配置加载期已校验过引用，这里找不到说明调用方绕过了校验。"""
+def _find_provider(providers: Sequence[LLMProviderConfig], name: str) -> Optional[LLMProviderConfig]:
+    """按名字找 provider，找不到返回 None。"""
     for provider in providers:
         if provider.name == name:
             return provider
-    raise ValueError(f"[embedding].provider={name!r} 不在 llm_providers 里")
+    return None
 
 
 __all__ = ["EmbeddingClient", "EmbeddingError", "EmbeddingSetup", "build_embedding_client"]

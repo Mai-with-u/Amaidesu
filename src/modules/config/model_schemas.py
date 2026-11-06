@@ -442,13 +442,20 @@ class LLMProfilesConfig(BaseConfig):
         }
 
 
+# 嵌入服务的默认服务商与模型：硅基流动的免费 bge-m3（1024 维，不支持截短维度）
+SILICONFLOW_PROVIDER_NAME = "siliconflow"
+SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
+DEFAULT_EMBEDDING_MODEL = "BAAI/bge-m3"
+
+
 class EmbeddingConfig(BaseConfig):
     """``[embedding]`` 嵌入服务：主播记忆的语义检索把文本变成向量用。
 
-    配置了才开：``model_identifier`` 为空就视为没配，记忆检索只走关键词与规则两路，日志和
-    WebUI 写明"语义检索没开"。连接信息复用 ``[[llm_providers]]`` 里的一个条目（地址、密钥、
-    鉴权方式），这里只填用哪个条目和模型名。她的台词与档案会发给这家服务商，和发给大模型
-    服务商是同一类外发；不想出本机就填本地端点。
+    配置了才开：默认指向硅基流动的 bge-m3，连接信息复用 ``[[llm_providers]]`` 里名为
+    ``siliconflow`` 的条目（地址、密钥、鉴权方式），这里只填用哪个条目和模型名。那个条目的
+    密钥留空、或这里的模型名留空，都视为"嵌入未配置"：记忆检索只走关键词与规则两路，日志
+    和 WebUI 写明。她的台词、档案、承诺与游戏进展会发给这家服务商，和发给大模型服务商是
+    同一类外发；不想出本机就填本地端点。
     """
 
     enabled: bool = Field(
@@ -457,12 +464,12 @@ class EmbeddingConfig(BaseConfig):
         description="总开关；开着但没填模型名时仍视为没配，语义检索不开",
     )
     provider: str = Field(
-        default="",
+        default=SILICONFLOW_PROVIDER_NAME,
         title="API 提供商",
         description="用 llm_providers 里哪个条目的地址与密钥（填 provider 名）",
     )
     model_identifier: str = Field(
-        default="",
+        default=DEFAULT_EMBEDDING_MODEL,
         title="嵌入模型",
         description="服务商那边的嵌入模型名（如 BAAI/bge-m3）；留空 = 不开语义检索",
     )
@@ -514,7 +521,11 @@ class ModelRootConfig(BaseConfig):
 
     meta: FileMetaConfig = Field(default_factory=FileMetaConfig, title="文件元数据", description="文件元数据")
     llm_providers: List[LLMProviderConfig] = Field(
-        default_factory=lambda: [LLMProviderConfig()],
+        # 第二个条目是嵌入服务默认用的硅基流动，密钥留空 = 嵌入未配置（不影响大模型调用）
+        default_factory=lambda: [
+            LLMProviderConfig(),
+            LLMProviderConfig(name=SILICONFLOW_PROVIDER_NAME, base_url=SILICONFLOW_BASE_URL),
+        ],
         title="API 提供商列表",
         description="API provider 列表（被 llm_models.api_provider 引用）",
     )
@@ -532,7 +543,7 @@ class ModelRootConfig(BaseConfig):
     embedding: EmbeddingConfig = Field(
         default_factory=EmbeddingConfig,
         title="嵌入服务",
-        description="主播记忆语义检索用的嵌入模型；没填模型名就不开，只走关键词与规则",
+        description="主播记忆语义检索用的嵌入模型；提供方密钥或模型名留空就不开，只走关键词与规则",
     )
 
     @model_validator(mode="after")
@@ -585,8 +596,11 @@ __all__ = [
     "LLMSelectionStrategy",
     "LLMProfileConfig",
     "LLMProfilesConfig",
+    "DEFAULT_EMBEDDING_MODEL",
     "EmbeddingConfig",
     "ModelRootConfig",
+    "SILICONFLOW_BASE_URL",
+    "SILICONFLOW_PROVIDER_NAME",
     # 向后兼容别名：旧测试 / 旧引用仍可访问 ModelConfig
     "ModelConfig",
 ]

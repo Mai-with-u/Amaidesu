@@ -87,7 +87,11 @@ class OpenAIClient(BaseLLMClient):
         client_config = build_openai_compatible_client_config(config)
         api_key = client_config.api_key or "sk-dummy"
         if not client_config.api_key or client_config.api_key == "your-api-key":
-            self.logger.warning("API Key 未配置，请在 config/model.toml 的 [[llm_providers]] 中设置")
+            # 点名是哪个 provider：只给嵌入用的条目（如硅基流动）空着密钥时，别让人误以为主模型的密钥丢了
+            self.logger.warning(
+                f"provider {config.get('name', 'default')!r} 的 API Key 未配置，"
+                "请在 config/model.toml 的 [[llm_providers]] 中设置"
+            )
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url=client_config.base_url,

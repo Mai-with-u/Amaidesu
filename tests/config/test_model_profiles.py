@@ -24,6 +24,8 @@ def _base_model_raw() -> dict:
     return {
         "llm_providers": [{"name": "p1", "client_type": "openai", "base_url": "https://api.test/v1", "api_key": "k"}],
         "llm_models": [{"name": "m1", "model_identifier": "id-1", "api_provider": "p1"}],
+        # 嵌入默认引用硅基流动条目；最小数据里没有那个条目，关掉嵌入免得引用落空
+        "embedding": {"enabled": False},
         "llm_profiles": {
             name: {"model_list": ["m1"]}
             for name in ("planner", "replyer", "summary", "minecraft", "vision", "simulator")
@@ -87,6 +89,8 @@ def test_reference_identity_fields_are_stripped_but_typing_and_references_still_
             "llm_providers": [
                 {"name": "deepseek", "client_type": "openai", "base_url": "https://api.test/v1", "api_key": "k"},
                 {"name": "dashscope ", "client_type": "openai", "base_url": "https://example/v1", "api_key": "k2"},
+                # WebUI 整表提交时带上文件里已有的硅基流动条目（嵌入默认引用它）
+                {"name": "siliconflow", "client_type": "openai", "base_url": "https://api.siliconflow.cn/v1"},
             ],
             "llm_models": [
                 {"name": "default", "model_identifier": "id-1", "api_provider": "deepseek"},

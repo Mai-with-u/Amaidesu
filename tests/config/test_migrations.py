@@ -217,6 +217,36 @@ def _check_profile_give_up(d: Path) -> None:
     assert profiles["summary"]["give_up_ms"] == 0  # 其余用途由漂移写回补通用默认：一直等
 
 
+def _seed_siliconflow(*, embedding: dict[str, str] | None) -> Callable[[Path], None]:
+    """拨回 model.toml 2.0.45：没有硅基流动条目；``embedding`` 给了就按它写一段（模拟之前版本落过盘）。"""
+
+    def _seed(d: Path) -> None:
+        doc = _rewound(d, "model.toml", "2.0.45")
+        providers = doc["llm_providers"]
+        for index in reversed(range(len(providers))):
+            if providers[index]["name"] == "siliconflow":
+                del providers[index]
+        del doc["embedding"]
+        if embedding is not None:
+            section = tomlkit.table()
+            for key, value in embedding.items():
+                section[key] = value
+            doc["embedding"] = section
+        write_doc(d, "model.toml", doc)
+
+    return _seed
+
+
+def _check_siliconflow(*, model: str, provider: str) -> Callable[[Path], None]:
+    def _check(d: Path) -> None:
+        doc = read_doc(d, "model.toml")
+        (entry,) = [item for item in doc["llm_providers"] if item["name"] == "siliconflow"]
+        assert (entry["base_url"], entry["api_key"]) == ("https://api.siliconflow.cn/v1", "")  # 密钥留空 = 嵌入未配置
+        assert (doc["embedding"]["provider"], doc["embedding"]["model_identifier"]) == (provider, model)
+
+    return _check
+
+
 def _check_profile_history_budget(d: Path) -> None:
     profiles = read_doc(d, "model.toml")["llm_profiles"]
     assert all(
@@ -447,6 +477,24 @@ CASES = [
     ),
     Case("profile-history-budget", ("model.toml",), _seed_profile_history_budget, _check_profile_history_budget),
     Case("profile-give-up", ("model.toml",), _seed_profile_give_up, _check_profile_give_up),
+    Case(
+        "siliconflow-embedding-new-section",
+        ("model.toml",),
+        _seed_siliconflow(embedding=None),
+        _check_siliconflow(model="BAAI/bge-m3", provider="siliconflow"),
+    ),
+    Case(
+        "siliconflow-embedding-old-empty-default",
+        ("model.toml",),
+        _seed_siliconflow(embedding={"provider": "", "model_identifier": ""}),
+        _check_siliconflow(model="BAAI/bge-m3", provider="siliconflow"),
+    ),
+    Case(
+        "siliconflow-embedding-user-choice-kept",
+        ("model.toml",),
+        _seed_siliconflow(embedding={"provider": "default", "model_identifier": "text-embedding-3-small"}),
+        _check_siliconflow(model="text-embedding-3-small", provider="default"),
+    ),
     Case("warudo-subtitle-keys", ("tools.toml", "avatar.toml"), _seed_warudo_subtitle, _check_warudo_subtitle),
     Case("vts-lipsync-to-avatar", ("tools.toml", "infra.toml"), _seed_vts_lipsync, _check_vts_lipsync),
     Case("avatar-platform-graduation", ("tools.toml",), _seed_avatar_platform, _check_avatar_platform),
@@ -518,6 +566,7 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "drop_bili_danmaku_message_config": ("case", "bili-danmaku-message-config"),
     "drop_profile_history_budget": ("case", "profile-history-budget"),
     "profile_give_up": ("case", "profile-give-up"),
+    "siliconflow_embedding": ("case", "siliconflow-embedding-new-section"),
     "widget_drop_html_page": ("case", "widget-html-page"),
     "maibot_sync_transcript_optional": ("case", "maibot-sync-transcript-optional"),
     "name_match_off_by_default": ("case", "name-match-old-default"),

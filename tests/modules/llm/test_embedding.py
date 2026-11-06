@@ -100,16 +100,29 @@ async def test_empty_text_is_rejected_without_a_request() -> None:
 
 
 def test_not_configured_builds_no_client_and_says_why() -> None:
-    providers = [LLMProviderConfig()]
-    setup = build_embedding_client(EmbeddingConfig(), providers)
-    assert setup.client is None and "没填嵌入模型" in setup.note
+    """模型名留空、段关着、引用的提供方没填密钥（默认的硅基流动就是这样）：都不建客户端，并说明原因。"""
+    providers = [LLMProviderConfig(), LLMProviderConfig(name="siliconflow", base_url="https://api.siliconflow.cn/v1")]
 
-    disabled = build_embedding_client(EmbeddingConfig(enabled=False, model_identifier="bge-m3"), providers)
+    no_model = build_embedding_client(EmbeddingConfig(model_identifier=""), providers)
+    assert no_model.client is None and "没填嵌入模型" in no_model.note
+
+    disabled = build_embedding_client(EmbeddingConfig(enabled=False), providers)
     assert disabled.client is None and "关着" in disabled.note
+
+    no_key = build_embedding_client(EmbeddingConfig(), providers)
+    assert no_key.client is None and "嵌入未配置" in no_key.note and "siliconflow" in no_key.note
+
+    # 装配方没经过加载期校验、引用的 provider 不在：同样不建客户端，不挡启动
+    missing = build_embedding_client(EmbeddingConfig(), [LLMProviderConfig()])
+    assert missing.client is None and "嵌入未配置" in missing.note
 
 
 def test_configured_builds_a_client_named_in_the_note() -> None:
-    providers = [LLMProviderConfig(), LLMProviderConfig(name="local", base_url="http://127.0.0.1:11434/v1")]
+    # 本地端点不需要密钥：鉴权方式填 none
+    providers = [
+        LLMProviderConfig(),
+        LLMProviderConfig(name="local", base_url="http://127.0.0.1:11434/v1", auth_type="none"),
+    ]
     embedding = EmbeddingConfig(provider="local", model_identifier="bge-m3", dimensions=512)
     setup = build_embedding_client(embedding, providers)
     assert setup.client is not None and setup.client.model_key == "bge-m3@512"

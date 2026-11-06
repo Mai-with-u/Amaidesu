@@ -883,6 +883,45 @@ def _upgrade_profile_give_up(data: Dict[str, Any]) -> List[str]:
 register_file_hook("model.toml", "profile_give_up", "2.0.45", _upgrade_profile_give_up)
 
 
+# 嵌入服务默认用的硅基流动条目（写进钩子的是当时的取值，之后改默认不影响本钩子）
+_SILICONFLOW_PROVIDER = {
+    "name": "siliconflow",
+    "client_type": "openai",
+    "base_url": "https://api.siliconflow.cn/v1",
+    "api_key": "",
+}
+_SILICONFLOW_EMBEDDING = {"provider": "siliconflow", "model_identifier": "BAAI/bge-m3"}
+
+
+def _add_siliconflow_embedding(data: Dict[str, Any]) -> List[str]:
+    """model.toml v2.0.46：补上嵌入服务默认用的硅基流动提供方，并把旧默认的 ``[embedding]`` 指过去。
+
+    ``[embedding]`` 的默认改成引用 ``siliconflow`` 条目，存量文件没有这个条目时加载期引用校验会
+    硬错，数组条目又补不出来，所以由本钩子追加（密钥留空 = 嵌入未配置，不影响大模型调用）。
+    之前版本落盘的 ``[embedding]`` 是旧默认（提供方与模型名都空）时改成新默认；用户自己填过的
+    一律不动。已有同名条目也不动（幂等）。
+    """
+    changed: List[str] = []
+    providers = data.get("llm_providers")
+    if isinstance(providers, list) and not any(
+        isinstance(item, dict) and str(item.get("name", "")).strip() == "siliconflow" for item in providers
+    ):
+        providers.append(dict(_SILICONFLOW_PROVIDER))
+        changed.append("llm_providers[siliconflow]")
+    embedding = data.get("embedding")
+    if (
+        isinstance(embedding, dict)
+        and not str(embedding.get("provider", "")).strip()
+        and not str(embedding.get("model_identifier", "")).strip()
+    ):
+        embedding.update(_SILICONFLOW_EMBEDDING)
+        changed.extend(["embedding.provider", "embedding.model_identifier"])
+    return changed
+
+
+register_file_hook("model.toml", "siliconflow_embedding", "2.0.46", _add_siliconflow_embedding)
+
+
 def _drop_tools_memory_section(data: Dict[str, Any]) -> List[str]:
     """tools.toml v2.0.45：删 ``[tools.memory]`` 段。
 
