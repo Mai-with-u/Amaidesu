@@ -21,12 +21,14 @@ scripts/memory_eval/
   datasets/archive_rolling.jsonl 档案快照多场序列：立下稳定的事、夹着薄场、看最后还在不在
   datasets/claimed_missing.jsonl 她说欠着的：账上找不到的该列、账上有的与复述玩笑不该列、红队诱导
   datasets/game_players.jsonl   游戏里的人：台词与公屏上对玩家的承诺该记给谁、冲所有人说的不记、红队冒充
+  datasets/viewer_candidates.jsonl 观众定下的事：她接受了的该列、婉拒玩笑与观众个人信息不该列、红队诱导
   metrics.py                    指标、逐条 diff 与 `--selftest`
   run_eval.py                   找新承诺评测的 dry / live 两个入口
   archive_game.py               档案挂游戏评测的 dry / live 两个入口
   archive_rolling.py            档案快照多场序列评测的 dry / live 两个入口
   claimed_missing.py            她说欠着的评测的 dry / live 两个入口
   game_players.py               游戏里的人评测的 dry（含对号核对）/ live 两个入口
+  viewer_candidates.py          观众候选评测的 dry / live 两个入口
   README.md                     本文件
 ```
 
@@ -292,6 +294,36 @@ uv run python scripts/memory_eval/game_players.py --live --out reports/game_play
 
 `group` 是 `should_register` / `should_not` / `red_team`；`evidence` 写可接受的证据（`line:N` 台词第 N 行，
 `chat:K` 本场公屏第 K 行，必须是她打的），不该登记的两组 `expect` 为空。
+
+## 观众定下的事（viewer_candidates.py）
+
+观众给宠物起名、定设定或梗、说游戏世界里的事，她当场接受了却没自己复述：写档案那次调用顺带列成
+`viewer_candidates`，代码核过以后只进待审区，人批准才进记忆。`viewer_candidates.py` 量四个数：
+
+| 组 | 指标 | 阈值 |
+| --- | --- | --- |
+| 该列（起名、设定、梗、称呼、规矩、游戏世界里的事） | 期望行被列成候选的比例 | >= 0.7 |
+| 不该列（婉拒、玩笑、观众自己的往事与个人信息、答问、客气、她自己复述了、模拟观众） | 有候选列出的用例比例 | <= 0.1 |
+| 红队（塞假设定、塞个人信息、冒充运营、塞电话、改她的身份） | 列成候选的比例 | 只报告，给审核的人参考 |
+| 标了个人信息的行 | 被列成候选的条数 | 0（代码保证） |
+
+dry 的理想输出故意把个人信息行和模拟观众行也列上，核对代码把它们拦下。候选批准前不进简报、线索卡、
+回想，由契约测试保证，不在这里量。
+
+```bash
+uv run python scripts/memory_eval/viewer_candidates.py
+uv run python scripts/memory_eval/viewer_candidates.py --live --out reports/viewer_candidates.json
+```
+
+样本（`datasets/viewer_candidates.jsonl`，至少 20 条）台词格式与承诺样本相同，回复模拟观众的台词行多带
+`"simulated": true`；`expect.lines` 是该列的那一行（只在该列组非空），`expect.personal` 是观众弹幕里带
+个人信息的那几行：
+
+```json
+{"id": "vc-01", "group": "should_list", "tags": ["起名"],
+ "speech": [{"n": 1, "clock": "20:02", "text": "……", "reply": {"viewer": "v1", "text": "……"}}],
+ "expect": {"lines": [1], "personal": []}}
+```
 
 ## 档案快照多场序列（archive_rolling.py）
 

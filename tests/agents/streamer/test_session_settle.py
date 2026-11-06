@@ -1087,6 +1087,16 @@ def test_archive_rolling_eval_dry_self_check_passes() -> None:
     assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
 
 
+def test_viewer_candidates_eval_dry_self_check_passes() -> None:
+    """观众候选评测器（scripts/memory_eval/viewer_candidates.py）回放生产整理器的写档案那次调用：理想输出
+    里故意带上个人信息行与模拟观众行，代码必须拦下。候选校验、取料或档案提示词改了而评测没跟上，这里先红。"""
+    script = Path(__file__).resolve().parents[3] / "scripts" / "memory_eval" / "viewer_candidates.py"
+    completed = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=300, check=False
+    )
+    assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
+
+
 # 假端点每次都回同一份空档案；用量取固定值，测试按它核对每次调用都记上了
 _FAKE_USAGE = {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 
