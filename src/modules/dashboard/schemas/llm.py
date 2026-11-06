@@ -240,6 +240,13 @@ class LLMRequestStatsBatchResponse(BaseModel):
     stats: Dict[str, LLMRequestStatsItem] = Field(default_factory=dict)
 
 
+class EmbeddingStatusResponse(BaseModel):
+    """语义检索眼下实际开没开：看启动时嵌入客户端建没建起来、是不是在退避，不看配置里的密钥字段。"""
+
+    ready: bool
+    text: str
+
+
 class LLMModelTestRequest(BaseModel):
     """模型连通性测试请求（模型注册表"测试"按钮数据面）
 

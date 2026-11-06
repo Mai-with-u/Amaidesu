@@ -198,12 +198,17 @@ export function apiKeySet(value: unknown): boolean {
   return String(value ?? '').trim() !== '';
 }
 
-/** [embedding] 一节眼下能不能用（与后端装配同一口径）：ready 为假时语义检索不开，只走关键词与规则 */
+/** 语义检索的一条状态：ready 为假时语义检索不开，只走关键词与规则 */
 export interface EmbeddingStatus {
   ready: boolean;
   text: string;
 }
 
+/**
+ * 页面上的 [embedding] 配置填齐了没有（与后端装配同一口径）。
+ *
+ * 只用来判断"改完要不要重启"：开没开以后端实际状态为准（见 embeddingTag），不看这里。
+ */
 export function embeddingStatus(
   embedding: { enabled: unknown; provider: unknown; model: unknown },
   providers: ConfigItem[],
@@ -221,7 +226,22 @@ export function embeddingStatus(
   if (!apiKeySet(entry.api_key)) {
     return { ready: false, text: `嵌入未配置：「${provider}」没填密钥，只走关键词与规则` };
   }
-  return { ready: true, text: `已配置：「${provider}」的 ${model}` };
+  return { ready: true, text: `配置已填齐：「${provider}」的 ${model}` };
+}
+
+/**
+ * 语义检索区的状态标签：以后端实际状态为准（嵌入客户端建没建起来、是不是在退避），不看密钥字段。
+ *
+ * 后端没开、页面上的配置却已填齐时补一句"重启后生效"：嵌入服务只在启动时读一次配置。
+ * 读不到后端状态（runtime 为 null）时如实说读不到，不拿配置猜。
+ */
+export function embeddingTag(
+  runtime: EmbeddingStatus | null,
+  configured: EmbeddingStatus,
+): EmbeddingStatus {
+  if (runtime === null) return { ready: false, text: '读不到语义检索的运行状态' };
+  if (runtime.ready || !configured.ready) return runtime;
+  return { ready: false, text: `${runtime.text}；配置已填齐，重启后生效` };
 }
 
 /** 单价显示：数值一律带 ¥ 前缀（0 也要显示，表示本地/免费），缺值显示 — */

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query
 
 from src.modules.dashboard.dependencies import get_dashboard_server
 from src.modules.dashboard.schemas.llm import (
+    EmbeddingStatusResponse,
     LLMContextBreakdownResponse,
     LLMHistoryListResponse,
     LLMHistoryStatisticsModelStats,
@@ -154,6 +155,26 @@ async def get_context_breakdown_by_request(request_id: str, server: ServerDep) -
     return build_context_breakdown_response(
         breakdown, model_name=model_name, row=row, context_windows=_context_windows_of(server)
     )
+
+
+@router.get("/embedding", response_model=EmbeddingStatusResponse)
+async def get_embedding_status(server: ServerDep) -> EmbeddingStatusResponse:
+    """语义检索眼下实际开没开（模型页语义检索区的状态标签）。
+
+    嵌入客户端只在启动时按 model.toml 建一次：建起来了、没在退避才算开着；没建起来时给装配时的
+    原因。改了配置要重启才生效，所以这里不看配置文件里的密钥字段。
+    """
+    setup = server.embedding_setup
+    if setup is None:
+        return EmbeddingStatusResponse(ready=False, text="语义检索没开：没有装配嵌入服务")
+    client = setup.client
+    if client is None:
+        return EmbeddingStatusResponse(ready=False, text=setup.note)
+    if client.failures:
+        return EmbeddingStatusResponse(
+            ready=False, text=f"语义检索暂不可用：嵌入服务连续失败 {client.failures} 次，退避中"
+        )
+    return EmbeddingStatusResponse(ready=True, text=setup.note)
 
 
 @router.get("/quota", response_model=Optional[ProviderQuota])

@@ -331,7 +331,7 @@
       </div>
     </section>
 
-    <!-- ── 第四层：语义检索（embedding）：引用一个提供商，状态与后端装配同口径 ── -->
+    <!-- ── 第四层：语义检索（embedding）：引用一个提供商，状态标签以后端实际状态为准 ── -->
     <section v-if="embeddingField" class="zone" :data-config-key="EMBEDDING_KEY">
       <div class="zone-head">
         <h2>语义检索</h2>
@@ -365,7 +365,7 @@
  * （同一条 store 更新路径），不 fork 第二条保存/脏跟踪路径；数组整值写回
  * （与 ArrayEditor 同机制），provider/model 改名经引用守护确认后级联更新引用方。
  */
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { ArrowDown, ArrowRight, Close, Connection, Delete, Plus } from '@element-plus/icons-vue';
 import FieldRenderer from './FieldRenderer.vue';
@@ -374,6 +374,7 @@ import { llmApi } from '@/api';
 import { confirmAction } from '@/utils/confirmAction';
 import { getApiErrorMessage } from '@/utils/apiError';
 import type { ConfigFieldSchema } from '@/types/settings';
+import type { EmbeddingRuntimeStatus } from '@/types';
 import {
   EMBEDDING_KEY,
   MODELS_KEY,
@@ -386,6 +387,7 @@ import {
   buildDefaultItem,
   danglingModelRefs,
   embeddingStatus,
+  embeddingTag,
   formatPrice,
   groupModelsByProvider,
   makeItemField,
@@ -522,14 +524,29 @@ function modelsOfProvider(providerName: string): { index: number; model: ConfigI
 }
 
 // ── 第四层：语义检索 ─────────────────────────────────────
+// 开没开看后端实际状态（启动时嵌入客户端建没建起来）；页面配置只用来提示"改完要重启"。
+// 进页面读一次：嵌入服务只在启动时读配置，页面开着期间不会自己变
+const embeddingRuntime = ref<EmbeddingRuntimeStatus | null>(null);
+onMounted(async () => {
+  try {
+    const { data } = await llmApi.getEmbeddingStatus();
+    embeddingRuntime.value = data;
+  } catch (error) {
+    console.warn(getApiErrorMessage(error, '读语义检索运行状态失败'));
+    embeddingRuntime.value = null;
+  }
+});
 const embeddingState = computed(() =>
-  embeddingStatus(
-    {
-      enabled: props.getValue(`${EMBEDDING_KEY}.enabled`),
-      provider: props.getValue(`${EMBEDDING_KEY}.provider`),
-      model: props.getValue(`${EMBEDDING_KEY}.model_identifier`),
-    },
-    providers.value,
+  embeddingTag(
+    embeddingRuntime.value,
+    embeddingStatus(
+      {
+        enabled: props.getValue(`${EMBEDDING_KEY}.enabled`),
+        provider: props.getValue(`${EMBEDDING_KEY}.provider`),
+        model: props.getValue(`${EMBEDDING_KEY}.model_identifier`),
+      },
+      providers.value,
+    ),
   ),
 );
 

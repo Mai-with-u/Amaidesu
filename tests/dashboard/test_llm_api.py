@@ -11,11 +11,12 @@ import pytest
 import src.modules.dashboard.api.llm as llm_api
 import src.modules.dashboard.services.llm_stats as llm_stats
 from src.modules.dashboard.dependencies import get_dashboard_server
+from src.modules.llm.embedding import EmbeddingError, EmbeddingSetup
 from src.modules.llm.quota import ProviderQuota, QuotaWindow
 from src.modules.llm.request_history_manager import RequestHistoryManager
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.repos.llm import LLMRequestInsert, LLMUsageInsert
-from tests.modules.llm.fakes import FakeLLMManager
+from tests.modules.llm.fakes import FakeEmbeddingServer, FakeLLMManager
 
 MODEL_A = "test-model-a"
 MODEL_B = "test-model-b"
@@ -346,3 +347,34 @@ async def test_quota_is_null_without_llm_manager_and_forwards_slashed_model_iden
     body = (await client.get("/api/v1/llm/quota", params={"model_name": "anthropic/claude-sonnet"})).json()
     assert received == ["anthropic/claude-sonnet"]
     assert (body["platform"], body["windows"][0]["amount"]) == ("openrouter", 12.5)
+
+
+@pytest.mark.parametrize(
+    ("setup", "ready", "text"),
+    [
+        (None, False, "语义检索没开：没有装配嵌入服务"),
+        ("unconfigured", False, "没填 api_key"),
+        ("ready", True, "语义检索开着"),
+        ("failing", False, "连续失败 1 次，退避中"),
+    ],
+)
+async def test_embedding_status_reports_what_actually_runs(api, setup: Any, ready: bool, text: str) -> None:
+    """语义检索区的状态看启动时嵌入客户端建没建起来、是不是在退避，不看配置里的密钥字段。"""
+    embedding_setup = None
+    if setup == "unconfigured":
+        embedding_setup = EmbeddingSetup(client=None, note="语义检索没开：嵌入未配置（siliconflow 没填 api_key）")
+    elif setup in ("ready", "failing"):
+        server = FakeEmbeddingServer()
+        client = server.client()
+        if setup == "failing":
+            server.fail = True
+            with pytest.raises(EmbeddingError):
+                await client.embed(["芝麻"])
+        embedding_setup = EmbeddingSetup(client=client, note="语义检索开着：嵌入模型 toy（provider p）")
+    client_http = await api(embedding_setup=embedding_setup)
+
+    resp = await client_http.get("/api/v1/llm/embedding")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ready"] is ready and text in body["text"]

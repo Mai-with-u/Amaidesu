@@ -938,6 +938,8 @@ async def create_app_components(
             archive_repo=database.archive,
             # 复盘页「本场线索卡」：被动想起推了什么、用上没有
             memory_cue_log_repo=database.memory_cue_log,
+            # 模型页语义检索区：嵌入客户端建没建起来、是不是在退避
+            embedding_setup=embedding_setup,
             # 主播记忆页查看与编辑长期记忆文件（MEMORY.md）
             rundown_transition_repo=database.rundown_transitions,
             # 观众域查询接口：列表 / 档案 / 对话 / 贡献聚合直查存储层
@@ -1267,6 +1269,7 @@ async def _start_dashboard(
     commitments_repo=None,
     archive_repo=None,
     memory_cue_log_repo=None,
+    embedding_setup=None,
     rundown_transition_repo=None,
     storage_db_path=None,
     task_tracker=None,
@@ -1329,6 +1332,7 @@ async def _start_dashboard(
             commitments_repo=commitments_repo,
             archive_repo=archive_repo,
             memory_cue_log_repo=memory_cue_log_repo,
+            embedding_setup=embedding_setup,
             # 流程单执行面板读变更事实行
             rundown_transition_repo=rundown_transition_repo,
             storage_db_path=storage_db_path,

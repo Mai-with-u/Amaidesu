@@ -14,6 +14,7 @@ import {
   buildDefaultItem,
   danglingModelRefs,
   embeddingStatus,
+  embeddingTag,
   diffCountAgainst,
   formatPrice,
   groupModelsByProvider,
@@ -220,7 +221,7 @@ describe('embeddingStatus', () => {
       false,
       '「siliconflow」没填密钥',
     ],
-    [{ enabled: true, provider: 'local', model: 'bge-m3' }, true, '已配置：「local」的 bge-m3'],
+    [{ enabled: true, provider: 'local', model: 'bge-m3' }, true, '配置已填齐：「local」的 bge-m3'],
   ])('%o → ready=%s', (embedding, ready, fragment) => {
     const status = embeddingStatus(embedding, providers);
     expect(status.ready).toBe(ready);
@@ -231,5 +232,31 @@ describe('embeddingStatus', () => {
     expect(
       embeddingStatus({ enabled: true, provider: 'siliconflow', model: 'x' }, providers).text,
     ).toContain('只走关键词与规则');
+  });
+});
+
+describe('embeddingTag', () => {
+  const running = {
+    ready: true,
+    text: '语义检索开着：嵌入模型 BAAI/bge-m3（provider siliconflow）',
+  };
+  const off = { ready: false, text: '语义检索没开：嵌入未配置（siliconflow 没填 api_key）' };
+  const filled = { ready: true, text: '配置已填齐：「siliconflow」的 BAAI/bge-m3' };
+  const missing = { ready: false, text: '嵌入未配置：「siliconflow」没填密钥，只走关键词与规则' };
+
+  it('以后端实际状态为准：后端开着就是开着，不看页面上的密钥字段', () => {
+    expect(embeddingTag(running, missing)).toEqual(running);
+    expect(embeddingTag(off, missing)).toEqual(off);
+  });
+
+  it('后端没开、页面配置已填齐：提示重启后生效', () => {
+    const tag = embeddingTag(off, filled);
+    expect(tag.ready).toBe(false);
+    expect(tag.text).toContain('没填 api_key');
+    expect(tag.text).toContain('重启后生效');
+  });
+
+  it('读不到后端状态时如实说读不到', () => {
+    expect(embeddingTag(null, filled)).toEqual({ ready: false, text: '读不到语义检索的运行状态' });
   });
 });

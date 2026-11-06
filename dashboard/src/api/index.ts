@@ -127,6 +127,7 @@ import type {
   AvatarTuningRecipe,
   AvatarTuningState,
   ExpressionSheetState,
+  EmbeddingRuntimeStatus,
 } from '@/types';
 
 const api = axios.create({
@@ -203,6 +204,8 @@ export const llmApi = {
   getProviderQuota: (modelName: string) =>
     api.get<LLMProviderQuota | null>('/llm/quota', { params: { model_name: modelName } }),
   getUsageSummary: () => api.get<LLMUsageSummary>('/llm/usage/summary'),
+  // 语义检索眼下实际开没开（模型页语义检索区的状态标签）；改了配置要重启才变
+  getEmbeddingStatus: () => api.get<EmbeddingRuntimeStatus>('/llm/embedding'),
   getUsageTrends: (days: number) =>
     api.get<LLMUsageTrendsResponse>('/llm/usage/trends', { params: { days } }),
   getHistory: (params: LLMHistoryQueryParams) =>

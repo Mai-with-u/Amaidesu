@@ -79,12 +79,13 @@ describe('ModelConfigPage 三层结构', () => {
     );
   });
 
-  it('第四层语义检索：[embedding] 子字段走 SubFieldGroup，状态标签与后端装配同口径', () => {
+  it('第四层语义检索：[embedding] 子字段走 SubFieldGroup，状态标签以后端实际状态为准', () => {
     expect(pageSource).toContain('<section v-if="embeddingField" class="zone"');
     expect(pageSource).toMatch(
       /<SubFieldGroup[\s\S]*?:fields="embeddingField\.children \?\? \[\]"/,
     );
-    expect(pageSource).toContain('embeddingStatus(');
+    expect(pageSource).toContain('llmApi.getEmbeddingStatus()');
+    expect(pageSource).toContain('embeddingTag(');
     expect(pageSource).toContain("embeddingState.ready ? 'success' : 'warning'");
   });
 

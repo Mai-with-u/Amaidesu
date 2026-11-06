@@ -291,3 +291,9 @@ export interface LLMModelTestResponse {
   /** 失败原因（平实中文 + 服务端响应体关键原文）；成功时为 null */
   error: string | null;
 }
+
+/** 语义检索眼下实际开没开（后端看启动时嵌入客户端建没建起来、是不是在退避） */
+export interface EmbeddingRuntimeStatus {
+  ready: boolean;
+  text: string;
+}
