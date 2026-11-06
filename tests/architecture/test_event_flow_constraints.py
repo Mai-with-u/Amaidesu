@@ -35,8 +35,9 @@ INPUT_EVENTS = {
     "room.message.partner_speech",
     "room.state.watched_count",
 }
-# Agent 域允许的非输入订阅：场次生命周期（主动发言闸门）、游戏事件族、工具结果
-AGENT_ALLOWED_PREFIXES = ("live.started", "live.ended", "game.", "tool.result.")
+# Agent 域允许的非输入订阅：场次生命周期（主动发言闸门）、游戏事件族、工具结果、
+# 进程启动（跨重启重放的窗口边界，如续播时回读上一进程窗口的递话）
+AGENT_ALLOWED_PREFIXES = ("live.started", "live.ended", "game.", "tool.result.", "core.startup")
 # Agent 域输出事件（决策 / 流程 / 发言 / 任务 / 控制面事实）——Tool 域不得订阅
 DECISION_EVENTS = {
     "rundown.changed",
@@ -132,7 +133,8 @@ def test_agent_domain_subscribes_only_to_input_and_infrastructure_events() -> No
         if s["event"] not in INPUT_EVENTS and not s["event"].startswith(AGENT_ALLOWED_PREFIXES)
     ]
     assert not violations, (
-        "Agent 域只允许订阅 room.message.* / room.state.* / live.* / game.* / tool.result.*：\n" + _describe(violations)
+        "Agent 域只允许订阅 room.message.* / room.state.* / live.* / game.* / tool.result.* / core.startup：\n"
+        + _describe(violations)
     )
 
 
