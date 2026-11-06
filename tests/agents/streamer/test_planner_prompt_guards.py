@@ -126,3 +126,12 @@ def test_prompt_template_reads_a_trailing_open_paren_as_a_joke(prompts: Any) -> 
 
     assert '句末单个"（"是语气，不是话没说完' in prompt
     assert '"那我家女仆（"意思是"那是我家的女仆啦"' in prompt
+
+
+def test_prompt_template_does_not_blame_present_players_for_protected_blocks(prompts: Any) -> None:
+    """被保护挡住时只说记录上不归她：第 58 场她说"这正门被人用两块橡木板钉死了……谁干的呀"，那其实是她自己的家。"""
+    prompt = _render_bare(prompts)
+
+    assert "被挡住时不怪到人头上" in prompt
+    assert '不让她追问"谁干的"，也不安到在场玩家头上' in prompt
+    assert '中性地问一句"这是谁放的呀"' in prompt
