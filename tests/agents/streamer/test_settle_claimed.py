@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -143,3 +145,13 @@ async def test_rejected_claims_are_not_listed_again_and_bad_field_does_not_fail_
     await store.sessions.requeue_settlement(live_session_id=session)
     llm = _reply('{"archive": []}', '{"commitments": [], "claimed_missing": "没有"}')
     assert await _settler(store, llm, prompt_manager).settle_session(session) is True
+
+
+def test_claimed_missing_eval_dry_self_check_passes() -> None:
+    """ "她说欠着的"评测器（scripts/memory_eval/claimed_missing.py）回放生产整理器：找承诺提示词、取料或
+    欠着的校验改了而评测没跟上，live 量出的列出率就不是生产的真实水平。dry 用理想输出过生产校验器。"""
+    script = Path(__file__).resolve().parents[3] / "scripts" / "memory_eval" / "claimed_missing.py"
+    completed = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=300, check=False
+    )
+    assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
