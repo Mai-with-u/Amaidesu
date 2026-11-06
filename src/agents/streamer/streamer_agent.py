@@ -501,6 +501,9 @@ class StreamerAgent(BaseAgent):
         self._flush_task: Optional[asyncio.Task] = None
         self._flush_lock = asyncio.Lock()
         self._running = False
+        # 递话/外部触发到达即唤醒位：receive_prompt 与 trigger_external_proactive
+        # 置位，flush 循环的等待立即醒来评估递话——递话不必陪弹幕批次等完整个 tick
+        self._flush_kick = asyncio.Event()
 
         # 场次进行位：live.started 置位 / live.ended 复位。主动发言的业务边界
         # = 场次——没开播只回弹幕不主动开题，开场白（rundown opening）等开播
@@ -1637,6 +1640,7 @@ class StreamerAgent(BaseAgent):
     def trigger_external_proactive(self, topic_hint: Optional[str] = None) -> None:
         """外部 API 触发主动发言（Dashboard / API 调用）。"""
         self._proactive_signals.set_external()
+        self._flush_kick.set()
         if topic_hint:
             self._logger.info(f"外部主动发言触发: {topic_hint}")
 
@@ -1659,6 +1663,8 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"提醒队列已满（{_REMINDER_QUEUE_MAX}），拒收递话（source={source or '未知'}）")
             return False
         self._reminder_queue.append(text)
+        # 到达即唤醒 flush 循环：递话不必陪弹幕批次等完当前 tick
+        self._flush_kick.set()
         self._logger.info(
             f"收到递话提醒（source={source or '未知'}，队列 "
             f"{len(self._reminder_queue)}/{_REMINDER_QUEUE_MAX}）：{text[:60]}"
@@ -1750,11 +1756,17 @@ class StreamerAgent(BaseAgent):
     # ==================================================================
 
     async def _flush_loop(self) -> None:
-        """后台循环：周期性检查缓冲并触发批次决策。"""
+        """后台循环：周期性检查缓冲并触发批次决策；递话/外部触发到达即提前唤醒。"""
         interval = max(self.typed_config.batch.tick_interval_ms / 1000.0, 0.05)
         try:
             while self._running:
-                await asyncio.sleep(interval)
+                # 唤醒位等待：有 kick 时立即醒来，否则照旧按 tick 间隔轮询
+                # （批次聚合窗口不受影响——唤醒只提前评估，不改变批次放行条件）
+                try:
+                    await asyncio.wait_for(self._flush_kick.wait(), timeout=interval)
+                except asyncio.TimeoutError:
+                    pass
+                self._flush_kick.clear()
                 try:
                     await self._maybe_flush()
                 except Exception as exc:
@@ -1773,52 +1785,66 @@ class StreamerAgent(BaseAgent):
             return
 
         async with self._flush_lock:
-            # buffer 空时 → 主动发言判定。递话必达优先于开播闸：下播后运营递话
-            # 仍须送达（TTS 管道不依赖场次），队列空且未开播才早退——早退不消费
-            # pending 信号，环节变更/游戏待定夺信号保留到开播后首个 tick 生效。
-            # 未开播的递话窗里环节/游戏 pending 不参与判定（不能在未开播时说
-            # 开场白/推进游戏），也因此不会被误消费。
-            if self._buffer.is_empty:
-                if not self._reminder_queue and not self._live_active:
+            # 递话评估移出判空闸：提醒队列非空时每个 tick 无条件走判定序——
+            # 弹幕批次滞留期间递话到达也照常成轮，批次原地不动继续等自己的
+            # 放行条件。
+            if self._reminder_queue:
+                await self._evaluate_proactive_round()
+                return
+
+            if not self._buffer.is_empty:
+                # 弹幕聚合 → 两阶段决策
+                now = now_ms()
+                avg_interval_ms = self._estimate_avg_interval_ms()
+                flush_due, flush_reason = self._buffer.should_flush(now, avg_interval_ms=avg_interval_ms)
+                if not flush_due:
                     return
-                # 读信号 → 下播折参 → 判定 → 确认消费的完整判定序收在
-                # ProactiveSignals.evaluate_tick 单点；Agent 只按结果执行。
-                reason = self._proactive_signals.evaluate_tick(
-                    live=self._live_active,
-                    trigger=self._proactive_trigger,
-                    room_state=self._room_state,
-                    now_ms=now_ms(),
-                    rundown_overdue=self._rundown_coord.is_overdue(),
-                    rundown_ready=self._rundown_coord.is_active(),
-                    # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
-                    # （送达在决策执行器取空队列处发生，任何决策窗都会消费）
-                    reminder_pending=bool(self._reminder_queue),
-                )
-                if reason is not None:
-                    self._stats.total_proactive += 1
-                    self._logger.info(f"主动发言触发: {reason.value}")
-                    await self._execute_round(
-                        [],
-                        forced=False,
-                        trigger_cause=TriggerCause(kind=reason),
-                        proactive=True,
-                    )
+
+                forced = self._buffer.force
+                batch = self._buffer.drain()
+                if not batch:
+                    return
+                self._stats.total_batches += 1
+
+                await self._execute_round(batch, forced=forced, trigger_cause=cause_for_batch_flush(flush_reason))
                 return
 
-            # 弹幕聚合 → 两阶段决策
-            now = now_ms()
-            avg_interval_ms = self._estimate_avg_interval_ms()
-            flush_due, flush_reason = self._buffer.should_flush(now, avg_interval_ms=avg_interval_ms)
-            if not flush_due:
+            # buffer 空：queue 空且未开播才早退——早退不消费 pending 信号，
+            # 环节变更/游戏待定夺信号保留到开播后首个 tick 生效。未开播的
+            # 递话窗里环节/游戏 pending 不参与判定（不能在未开播时说开场白/
+            # 推进游戏），也因此不会被误消费。
+            if not self._live_active:
                 return
+            await self._evaluate_proactive_round()
 
-            forced = self._buffer.force
-            batch = self._buffer.drain()
-            if not batch:
-                return
-            self._stats.total_batches += 1
+    async def _evaluate_proactive_round(self) -> None:
+        """一个 tick 的主动发言判定序：读信号 → 判定 → 命中即执行一轮主动决策。
 
-            await self._execute_round(batch, forced=forced, trigger_cause=cause_for_batch_flush(flush_reason))
+        读信号 → 下播折参 → 判定 → 确认消费的完整判定序收在
+        ProactiveSignals.evaluate_tick 单点；Agent 只按结果执行。
+        """
+        # 读信号 → 下播折参 → 判定 → 确认消费的完整判定序收在
+        # ProactiveSignals.evaluate_tick 单点；Agent 只按结果执行。
+        reason = self._proactive_signals.evaluate_tick(
+            live=self._live_active,
+            trigger=self._proactive_trigger,
+            room_state=self._room_state,
+            now_ms=now_ms(),
+            rundown_overdue=self._rundown_coord.is_overdue(),
+            rundown_ready=self._rundown_coord.is_active(),
+            # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
+            # （送达在决策执行器取空队列处发生，任何决策窗都会消费）
+            reminder_pending=bool(self._reminder_queue),
+        )
+        if reason is not None:
+            self._stats.total_proactive += 1
+            self._logger.info(f"主动发言触发: {reason.value}")
+            await self._execute_round(
+                [],
+                forced=False,
+                trigger_cause=TriggerCause(kind=reason),
+                proactive=True,
+            )
 
     async def _execute_round(
         self,

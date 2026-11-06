@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,8 +10,10 @@ import pytest
 from src.agents.streamer.planner import PlannerConfig, Planner
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.trigger_cause import TriggerKind
+from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.utils.time_utils import now_ms
 from tests.agents.streamer.helpers import make_streamer_agent
+from tests.config.helpers import wait_until
 
 
 def _agent(proactive: bool = True):
@@ -89,3 +92,74 @@ async def test_planner_reference_contains_reminder_section_only_when_present() -
     assert "【运营提醒】" in with_reminder and "上线新活动" in with_reminder
     without_reminder, _ = await planner._assemble_reference([], None, None, **common)
     assert "【运营提醒】" not in without_reminder
+
+
+async def test_reminder_round_immediate_while_batch_lingering() -> None:
+    """批次滞留期投递递话：下一轮 flush 评估（近即时）执行递话轮，批次原地不动。"""
+    agent = _agent()
+    agent._live_active = True
+    # 弹幕批次滞留：未到放行条件（消息入缓冲但不开窗）
+    await agent.handle_message(
+        RoomMessagePayload(
+            message_type="danmaku",
+            user=RoomMessageUser(id="u1", name="观众"),
+            content="还在攒批",
+            timestamp_ms=now_ms(),
+        )
+    )
+    # 防接龙间隔先立住：递话轮只认"过间隔"的催醒
+    agent._room_state.record_speech(now_ms())
+    agent.receive_prompt(content="批次没消化也先送这条", source="operator")
+    await agent._maybe_flush()
+
+    agent._rounds.execute.assert_not_awaited()  # 刚说过话，防接龙窗口内不促发
+    assert len(agent._reminder_queue) == 1, "队列保留待下一 tick 重试"
+
+    # 过防接龙间隔（回拨最后发言时刻）后的下一 tick：递话轮立即执行
+    agent._room_state.record_speech(now_ms() - 10 * 60 * 1000)
+    await agent._maybe_flush()
+    agent._rounds.execute.assert_awaited_once()
+    call = agent._rounds.execute.call_args
+    assert call.args[0] == [], "递话轮不带弹幕批次（批次仍在缓冲里原地等待）"
+    assert (call.kwargs["proactive"], call.kwargs["trigger_cause"].kind) == (True, TriggerKind.REMINDER)
+
+
+async def test_flush_loop_wakes_on_kick_without_waiting_full_tick() -> None:
+    """kick 唤醒位：置位后 flush 循环近即时醒来评估，不再等满一个 tick 间隔。"""
+    agent = make_streamer_agent({"proactive": {"enabled": True}, "batch": {"tick_interval_ms": 60_000}})
+    agent._rounds = AsyncMock()
+    agent._rounds.execute = AsyncMock(return_value={"success": True})
+    agent.receive_prompt(content="尽快送达", source="operator")
+    agent._running = True
+    agent._flush_task = asyncio.create_task(agent._flush_loop())
+    try:
+        await wait_until(lambda: agent._rounds.execute.await_count >= 1, what="kick 唤醒的递话轮执行")
+    finally:
+        agent._running = False
+        if agent._flush_task is not None:
+            agent._flush_task.cancel()
+            try:
+                await agent._flush_task
+            except asyncio.CancelledError:
+                pass
+    call = agent._rounds.execute.call_args
+    assert call.args[0] == []
+    assert (call.kwargs["proactive"], call.kwargs["trigger_cause"].kind) == (True, TriggerKind.REMINDER)
+
+
+async def test_no_reminder_flush_loop_polls_as_before() -> None:
+    """无递话时行为与现状一致：tick 到点才评估，未开播且队列空不触发任何决策。"""
+    agent = make_streamer_agent({"proactive": {"enabled": True}, "batch": {"tick_interval_ms": 50}})
+    agent._rounds = AsyncMock()
+    agent._rounds.execute = AsyncMock(return_value={"success": True})
+    agent._running = True
+    agent._flush_task = asyncio.create_task(agent._flush_loop())
+    await asyncio.sleep(0.15)
+    agent._running = False
+    if agent._flush_task is not None:
+        agent._flush_task.cancel()
+        try:
+            await agent._flush_task
+        except asyncio.CancelledError:
+            pass
+    agent._rounds.execute.assert_not_awaited()  # 未开播且无递话：轮询照旧，零决策
