@@ -2,8 +2,11 @@
 
 一条用例是几场连着的直播：前面一场立下稳定的事（给伙伴起的名字、住处、和观众定下的设定），
 中间夹着又薄又乱的短场（卡顿、重开、设备出岔子），最后看这些事还在不在快照里。同时检查：
-留在快照里的旧行逐字节不变（快照只引用原行）、运营者删掉的误记行不会再回来、被这一场改写或
-了结的事被换掉或去掉。
+留在快照里的旧行逐字节不变（快照只引用原行）、运营者删掉的误记行不会再回来、没有本场证据的
+旧行（一次性的小事也算）不会被丢、被这一场改写或了结的事被换掉或去掉。
+
+样本里可以写"手松的模型"会给的操作（``sloppy``：没指证据、或拿"一次性遭遇"当理由的去掉），
+dry 照样交给生产整理器，量的是代码兜底：这类去掉必须不被采纳，旧行照留。
 
 每条用例在临时目录里起一份真实的 SQLite 库，按场次写入台词、跑生产 SessionSettler（快照的
 写入与取舍都走生产代码），只有模型调用是替身：「写档案」那次调用 dry 用 expect 反推的理想
@@ -27,7 +30,7 @@ from datetime import datetime, timedelta
 from datetime import time as clock_time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 # 同目录的 run_eval 在导入时把仓库根插进 sys.path，必须先于 src 导入
 import run_eval as base
@@ -47,10 +50,12 @@ EMPTY_OTHER_REPLY = '{"commitments": [], "closed": []}'
 SESSION_START_CLOCK = clock_time(19, 50)
 SESSION_LENGTH_MS = 3 * 3_600_000
 
-# 阈值：稳定的事遗忘率（序列末尾不在快照里的比例）、留下的旧行字节变化数、删掉的误记行回来的条数
+# 阈值：稳定的事遗忘率（序列末尾不在快照里的比例）、留下的旧行字节变化数、删掉的误记行回来的条数、
+# 没有本场证据却被丢掉的旧行条数
 FORGET_RATE_MAX = 0.1
 BYTE_MISMATCH_MAX = 0
 DELETED_RETURNED_MAX = 0
+UNEVIDENCED_LOST_MAX = 0
 
 _BASE_ROW_RE = re.compile(r"^旧(\d+) \[[^\]]+\] .*?（原话「(.*?)」")
 
@@ -73,13 +78,18 @@ class SessionCase:
 
 @dataclass(frozen=True)
 class SequenceRecord:
-    """一条用例：连着的几场，与序列末尾该在、不该在快照里的事（按键名）。"""
+    """一条用例：连着的几场，与序列末尾该在、不该在快照里的事（按键名）。
+
+    ``present`` 是稳定的事（量遗忘率）；``kept`` 是哪一场都没有证据说它了结的旧行（多是一次性的
+    小事），进过快照的序列末尾也必须还在；模型当初就没把它写成档案的不算"被丢"，另行报告。
+    """
 
     case_id: str
     tags: Tuple[str, ...]
     sessions: Tuple[SessionCase, ...]
     present: Tuple[str, ...]
     absent: Tuple[str, ...]
+    kept: Tuple[str, ...] = ()
 
 
 def _parse_session(raw: Any, where: str) -> SessionCase:
@@ -126,6 +136,7 @@ def load_records() -> List[SequenceRecord]:
                 sessions=sessions,
                 present=tuple(str(key) for key in final.get("present", [])),
                 absent=tuple(str(key) for key in final.get("absent", [])),
+                kept=tuple(str(key) for key in final.get("kept", [])),
             )
         )
     return records
@@ -172,13 +183,19 @@ class SequenceResult:
     stale_removed: int = 0
     deleted_returned: int = 0
     byte_mismatches: int = 0
+    kept_total: int = 0
+    unevidenced_lost: List[str] = field(default_factory=list)
+    kept_unwritten: List[str] = field(default_factory=list)
     forgotten: List[str] = field(default_factory=list)
     problems: List[str] = field(default_factory=list)
     sessions: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def _oracle(case: SessionCase, key_quotes: Dict[str, str]) -> Callable[[str, str], str]:
-    """dry 的理想输出：新事照 expect 写；旧行操作按旧行清单里原话对上键名找编号。"""
+    """dry 的理想输出：新事照 expect 写；旧行操作按旧行清单里原话对上键名找编号。
+
+    ``sloppy`` 的操作（手松的模型会给的去掉）照原样给出，没写 line 的就不带 line。
+    """
 
     def answer(_system: str, prompt: str) -> str:
         numbers: Dict[str, int] = {}
@@ -192,7 +209,9 @@ def _oracle(case: SessionCase, key_quotes: Dict[str, str]) -> Callable[[str, str
             number = numbers.get(key_quotes.get(str(op["key"]), ""))
             if number is None:
                 continue
-            item: Dict[str, Any] = {"old": number, "op": op["op"], "line": op["line"]}
+            item: Dict[str, Any] = {"old": number, "op": op["op"]}
+            if "line" in op:
+                item["line"] = op["line"]
             if op["op"] == "drop":
                 item["reason"] = op["reason"]
             if op["op"] == "replace":
@@ -230,6 +249,8 @@ async def run_sequence(
     key_quotes: Dict[str, str] = {}
     row_keys: Dict[int, str] = {}
     originals: Dict[int, Tuple[Any, ...]] = {}
+    # 进过任何一场快照的键：没进过的是模型当初没写成档案，不算"被丢"
+    seen_keys: Set[str] = set()
     games = sorted({game for case in record.sessions for game in case.games})
     with tempfile.TemporaryDirectory(prefix="archive-rolling-") as folder:
         store = SQLiteDatabase(Path(folder) / "eval.db")
@@ -287,6 +308,7 @@ async def run_sequence(
                             await store.archive.delete_line(line_id=row_id)
                 snapshot = await store.archive.get_snapshot(live_session_id=session_id)
                 rows = snapshot.lines if snapshot is not None else []
+                seen_keys.update(key for key in (row_keys.get(item.line.id) for item in rows) if key is not None)
                 for item in rows:
                     if item.line.id in originals and originals[item.line.id] != _row_signature(item.line):
                         result.byte_mismatches += 1
@@ -312,6 +334,10 @@ async def run_sequence(
     result.stale_total = len(stale)
     result.stale_removed = sum(1 for key in stale if key not in final_keys)
     result.deleted_returned = sum(1 for key in record.absent if key in deleted and key in final_keys)
+    written = [key for key in record.kept if key in seen_keys]
+    result.kept_total = len(written)
+    result.unevidenced_lost = [key for key in written if key not in final_keys]
+    result.kept_unwritten = [key for key in record.kept if key not in seen_keys]
     return result
 
 
@@ -332,6 +358,9 @@ class RollingMetrics:
     stale_removed: int
     deleted_returned: int
     byte_mismatches: int
+    kept_total: int
+    unevidenced_lost: int
+    kept_unwritten: int
     problems: int
 
 
@@ -347,6 +376,9 @@ def evaluate(results: Sequence[SequenceResult]) -> RollingMetrics:
         stale_removed=sum(item.stale_removed for item in results),
         deleted_returned=sum(item.deleted_returned for item in results),
         byte_mismatches=sum(item.byte_mismatches for item in results),
+        kept_total=sum(item.kept_total for item in results),
+        unevidenced_lost=sum(len(item.unevidenced_lost) for item in results),
+        kept_unwritten=sum(len(item.kept_unwritten) for item in results),
         problems=sum(len(item.problems) for item in results),
     )
 
@@ -361,6 +393,10 @@ def verdict_failures(metrics: RollingMetrics, *, dry: bool) -> List[str]:
         failures.append(f"留下的旧行有 {metrics.byte_mismatches} 处字节变化")
     if metrics.deleted_returned > DELETED_RETURNED_MAX:
         failures.append(f"删掉的误记行回来了 {metrics.deleted_returned} 条")
+    if metrics.unevidenced_lost > UNEVIDENCED_LOST_MAX:
+        failures.append(f"没有本场证据的旧行被丢了 {metrics.unevidenced_lost} 条")
+    if dry and metrics.kept_unwritten:
+        failures.append(f"该留住的旧行有 {metrics.kept_unwritten} 条一开始就没写成档案")
     if dry and metrics.stale_removed != metrics.stale_total:
         failures.append(f"被改写或了结的事只换掉 {metrics.stale_removed}/{metrics.stale_total}")
     if metrics.problems:
@@ -376,6 +412,8 @@ def format_metrics(metrics: RollingMetrics) -> str:
             f"（阈值 ≤ {FORGET_RATE_MAX}）",
             f"被改写或了结的事换掉 {metrics.stale_removed}/{metrics.stale_total}（只报告，不设阈值）",
             f"删掉的误记行回来 {metrics.deleted_returned} 条（阈值 {DELETED_RETURNED_MAX}）",
+            f"没有本场证据的旧行被丢 {metrics.unevidenced_lost}/{metrics.kept_total} 条（阈值 {UNEVIDENCED_LOST_MAX}；"
+            f"另有 {metrics.kept_unwritten} 条模型当初没写成档案，不计入）",
             f"留下的旧行字节变化 {metrics.byte_mismatches} 处（阈值 {BYTE_MISMATCH_MAX}）",
         ]
     )
@@ -412,10 +450,11 @@ def _run(args: argparse.Namespace, prompt_manager: PromptManager, records: List[
         started = time.perf_counter()
         result = asyncio.run(run_sequence(record, prompt_manager, answer_for))
         results.append(result)
-        if args.verbose or result.forgotten or result.problems:
+        if args.verbose or result.forgotten or result.unevidenced_lost or result.problems:
             print(
                 f"  {record.case_id}：留住 {result.present_found}/{result.present_total}"
-                f"（忘了 {result.forgotten or '无'}），{int((time.perf_counter() - started) * 1000)} ms"
+                f"（忘了 {result.forgotten or '无'}；没证据被丢 {result.unevidenced_lost or '无'}），"
+                f"{int((time.perf_counter() - started) * 1000)} ms"
             )
             for problem in result.problems:
                 print(f"    - {problem}")
@@ -432,6 +471,7 @@ def _run(args: argparse.Namespace, prompt_manager: PromptManager, records: List[
                     "forget_rate_max": FORGET_RATE_MAX,
                     "byte_mismatch_max": BYTE_MISMATCH_MAX,
                     "deleted_returned_max": DELETED_RETURNED_MAX,
+                    "unevidenced_lost_max": UNEVIDENCED_LOST_MAX,
                 },
                 "metrics": asdict(metrics),
                 "verdict": {"passed": not failures, "failures": failures},

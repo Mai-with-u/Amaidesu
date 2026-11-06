@@ -238,6 +238,7 @@ PASS/FAIL，模型连接参数与 `run_eval.py` 一致。样本至少 12 条，�
 | 稳定的事遗忘率 | <= 0.1 | 序列末尾不在快照里的 `final.present` 键数 / `final.present` 键数 |
 | 留下的旧行字节变化 | 0 处 | 每场整理后，快照里出自更早场次的行与它刚写下时的标题、原话、证据、场次、存档逐项比对 |
 | 删掉的误记行回来 | 0 条 | 运营者在某场整理后删掉的行（`delete_after`），序列末尾又出现在快照里的条数 |
+| 没有本场证据的旧行被丢 | 0 条 | `final.kept` 里的键（哪一场都没有证据说它了结，多是一次性的小事）进过快照、序列末尾却不在的条数；模型当初就没写成档案的不计入，另行报告 |
 | 被改写或了结的事换掉 | 只报告 | `final.absent` 里不是运营者删的键，序列末尾确实不在快照里的比例 |
 
 ```bash
@@ -245,7 +246,7 @@ uv run python scripts/memory_eval/archive_rolling.py
 uv run python scripts/memory_eval/archive_rolling.py --live --out reports/archive_rolling.json
 ```
 
-dry 要求四项全部满分（样本、生产整理器与指标三者自洽），样本至少 6 条序列。样本
+dry 要求五项全部满分（样本、生产整理器与指标三者自洽），样本至少 6 条序列。样本
 （`datasets/archive_rolling.jsonl`）每行一条序列：
 
 ```json
@@ -254,14 +255,17 @@ dry 要求四项全部满分（样本、生产整理器与指标三者自洽）�
                "expect": {"archive": [{"key": "dog-name", "line": 1, "quote_contains": "……",
                                        "title": "……", "game": "minecraft", "lasting": true}],
                           "previous": [], "delete_after": []}}],
- "final": {"present": ["dog-name"], "absent": []}}
+ "final": {"present": ["dog-name"], "absent": [], "kept": ["coal"]}}
 ```
 
 - `key` 是用例内给一件事起的名字，档案行按"出自哪一场的哪一行台词"对回键名；
 - `expect.previous` 是理想输出对旧行的操作：`keep`（可带 `line` 表示又提起）、`drop`（带 `reason`
   与 `line`）、`replace`（带新行的 `line` / `quote_contains` / `title` / `game` / `lasting` 与 `new_key`）；
+- `expect.previous` 里标 `"sloppy": true` 的是手松的模型会给的去掉（没写 `line`，或理由是
+  "一次性遭遇"这类不属于了结 / 不成立 / 记错 / 被取代的），dry 照样交给生产整理器，必须不被采纳；
 - `delete_after` 是这一场整理完后运营者在记忆页删掉的行（按键名）；
-- `final.present` / `final.absent` 是序列末尾该在、不该在快照里的键。
+- `final.present` / `final.absent` 是序列末尾该在、不该在快照里的键；`final.kept` 是哪一场都没有
+  证据说它了结、序列末尾也必须还在的旧行（不计入遗忘率，单独计数）。
 
 台词同样受「提示词例句不得出现在评测台词里」的测试约束。
 
