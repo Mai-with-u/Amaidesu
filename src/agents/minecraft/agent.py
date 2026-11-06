@@ -92,6 +92,7 @@ from src.agents.minecraft.picture import (
     picture_images,
     picture_question,
 )
+from src.agents.minecraft.place_marks import NearPlaceTracker, PlaceMark, place_change_of
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.sparring import spar_outcome_line
@@ -116,6 +117,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_chat import GameChatPayload
+from src.modules.events.payloads.game_place import GamePlacePayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.logging import get_logger
@@ -267,6 +269,10 @@ class MinecraftAgent(BaseAgent):
         self._remembered_places = RememberedPlacesCache(self._clock)
         # 最近一次速览看自己读到的（维度, x, z）与读到的时刻：主播要游戏情境时拿它和地点清单现算距离，不另读游戏
         self._last_position: Optional[Tuple[Tuple[str, float, float], float]] = None
+        # 地点动静（记住、忘掉、走近、离开一个记住的地点）：只发给存储给下播整理认地点，不改怎么做事。
+        # 记地点成功是在同步的回执处理里认出来的，先连同当时的存档与时刻排进待发队列，回到异步处再发
+        self._near_places = NearPlaceTracker(self._clock)
+        self._pending_place_marks: List[GamePlacePayload] = []
         # obtain 装好炉先走时自动挂的回炉计时：没响之前模型结束一轮算在等炉子，不催、不上报、不兜底交付
         self._furnace_waits = FurnaceWaits(self._clock)
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
@@ -929,6 +935,7 @@ class MinecraftAgent(BaseAgent):
                 else:
                     observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
                 self._absorb_reply(call.name, arguments, observation)
+                await self._flush_place_marks()
                 polling_only &= self._polls_running_goal(call.name, arguments)
                 messages.append(
                     {
@@ -1159,6 +1166,10 @@ class MinecraftAgent(BaseAgent):
                     # 记地点、忘掉地点、圈地盘成功：世界记忆刚改过，下一次速览重读记住的地点，
                     # 主播被问到"某处在哪"时才看得到刚记下的名字
                     self._remembered_places.invalidate()
+                    # 记住或忘掉的是哪个地点：排进待发队列，下播整理据此知道本场记住了哪些地点
+                    change = place_change_of(arguments)
+                    if change is not None:
+                        self._queue_place_mark(change)
                 # 当场完成的目标（记地点、只读分析）没有后台过程，结果已经在回复里；
                 # 账面仍要记：先登记再写终态，直接写会因条目不存在而落空（终态变化广播不出来）。
                 self._goal_ledger.remember_finished(run)
@@ -1779,8 +1790,31 @@ class MinecraftAgent(BaseAgent):
             memory = await self._read_remembered_places()
             dimension = str(view.get("body", {}).get("dimension") or "")
             view.update(glance_world_memory(memory, dimension))
+            # 拿这次读到的位置和地点清单认"走近""离开"了哪个记住的地点（不多读游戏），连同待发的一起发出
+            for mark in self._near_places.observe(self._world.save_fields()[0], self._current_situation()):
+                self._queue_place_mark(mark)
+            await self._flush_place_marks()
         view["work"] = self._glance_work()
         return {"tool": "glance", "brief": glance_brief(view), **view}
+
+    def _queue_place_mark(self, mark: PlaceMark) -> None:
+        """一条地点动静连同此刻的存档与时刻排进待发队列（存档按认出动静的那一刻填，不按发出时）。"""
+        save_id, save_name = self._world.save_fields()
+        self._pending_place_marks.append(
+            GamePlacePayload(
+                game="minecraft",
+                kind=mark.kind,
+                place=mark.place,
+                distance=mark.distance,
+                save_id=save_id,
+                save_name=save_name,
+            )
+        )
+
+    async def _flush_place_marks(self) -> None:
+        """把待发的地点动静发出去：只有存储订阅，主播不收、不进她的时间线。"""
+        while self._pending_place_marks:
+            await self.emit_event(CoreEvents.GAME_PLACE_NOTED, self._pending_place_marks.pop(0))
 
     def _current_situation(self) -> Optional[GameSituation]:
         """游戏情境：最近一次速览读到的位置 + 速览缓存的地点清单，现算同一维度里最近的几个地点。
