@@ -53,6 +53,7 @@ from .core import (
 )
 from .game import GamePayload
 from .game_chat import GameChatPayload
+from .game_place import GamePlacePayload
 from .live import (
     LiveEndedPayload,
     LiveStartedPayload,
@@ -105,6 +106,8 @@ __all__ = [
     "RoomStateWatchedPayload",
     # game.* 游戏里程碑
     "GamePayload",
+    # game.place.noted 游戏里的地点动静（只落库）
+    "GamePlacePayload",
     # game.body.* AI 玩家身体事件流
     "BodyEventPayload",
     # game.chat.* 游戏内聊天流

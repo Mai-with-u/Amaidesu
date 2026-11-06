@@ -1,16 +1,31 @@
 """EventRepo —— 游戏事件记录仓储（game_events）。
 
 ``game_events``：游戏里程碑/安全阀/异常（StorageLedger 从 ``game.*``
-事件落库）。事件流的持久观察由业务表承担（消息流落 live_chat 等），
-本仓储不再承接事件历史副本。
+事件落库），以及地点动静（``game.place.noted`` 落成 ``place_*`` 类型的行）。
+事件流的持久观察由业务表承担（消息流落 live_chat 等），本仓储不再承接事件历史副本。
+
+地点动静只给下播整理认地点用：按场读游戏进展、按类型计数（复盘页）都不含它们，
+免得记地点、走近地点挤掉真正的游戏进展。
 """
 
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence, Set
 
-from src.modules.storage.models.events import GameEventRecord, GameEventTypeCount, GameSaveSpan, IndexedGameEvent
+from src.modules.storage.models.events import (
+    GameEventRecord,
+    GameEventTypeCount,
+    GamePlaceMark,
+    GameSaveSpan,
+    IndexedGameEvent,
+)
 from src.modules.storage.repos._base import BaseRepo
+
+# 地点动静落库时的类型前缀：place_remembered / place_forgotten / place_near / place_left
+PLACE_EVENT_PREFIX = "place_"
+PLACE_EVENT_TYPES = tuple(f"{PLACE_EVENT_PREFIX}{kind}" for kind in ("remembered", "forgotten", "near", "left"))
+# 读游戏进展、按类型计数时排除地点动静的条件（类型名是代码内常量，不来自外部输入）
+_NOT_PLACE_EVENT = "event_type NOT IN (" + ", ".join(f"'{event_type}'" for event_type in PLACE_EVENT_TYPES) + ")"
 
 
 class EventRepo(BaseRepo):
@@ -42,17 +57,71 @@ class EventRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def list_session_game_events(self, *, live_session_id: int, limit: int = 60) -> List[GameEventRecord]:
-        """取指定场次的游戏事件（时间正序，最多 ``limit`` 条最近的）——场次回顾的游戏进展原料。"""
+        """取指定场次的游戏事件（时间正序，最多 ``limit`` 条最近的）——场次回顾的游戏进展原料；不含地点动静。"""
         page_limit = max(1, min(int(limit), 500))
 
         def _exec() -> List[GameEventRecord]:
             with self._manager.transaction() as conn:
                 rows = conn.execute(
                     "SELECT game, event_type, message, scene, timestamp_ms, save_id, save_name FROM game_events"
-                    " WHERE live_session_id=? ORDER BY timestamp_ms DESC LIMIT ?",
+                    f" WHERE live_session_id=? AND {_NOT_PLACE_EVENT} ORDER BY timestamp_ms DESC LIMIT ?",  # noqa: S608
                     (int(live_session_id), page_limit),
                 ).fetchall()
                 return [GameEventRecord.model_validate(dict(row)) for row in reversed(rows)]
+
+        return await self._run_in_executor(_exec)
+
+    async def insert_place_mark(
+        self,
+        *,
+        live_session_id: int,
+        game: str,
+        kind: str,
+        place: str,
+        distance: Optional[int] = None,
+        timestamp_ms: int = 0,
+        save_id: str = "",
+        save_name: str = "",
+    ) -> int:
+        """记一条地点动静：类型写成 ``place_<种类>``，地点名进正文，走近时的距离（格）进场景列。"""
+        return await self.insert_game_event(
+            live_session_id=live_session_id,
+            game=game,
+            event_type=f"{PLACE_EVENT_PREFIX}{kind}",
+            message=place,
+            scene=str(int(distance)) if distance is not None else None,
+            timestamp_ms=timestamp_ms,
+            save_id=save_id,
+            save_name=save_name,
+        )
+
+    async def list_session_place_marks(self, *, live_session_id: int) -> List[GamePlaceMark]:
+        """取一场里的全部地点动静（时间正序）：下播整理认"这句话是在哪个地点说的"用。"""
+
+        def _exec() -> List[GamePlaceMark]:
+            placeholders = ",".join("?" for _ in PLACE_EVENT_TYPES)
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT game, event_type, message, scene, timestamp_ms, save_id, save_name FROM game_events"
+                    f" WHERE live_session_id=? AND event_type IN ({placeholders})"  # noqa: S608 占位符由代码按个数拼
+                    " ORDER BY timestamp_ms ASC, id ASC",
+                    (int(live_session_id), *PLACE_EVENT_TYPES),
+                ).fetchall()
+            marks: List[GamePlaceMark] = []
+            for row in rows:
+                scene = str(row["scene"] or "")
+                marks.append(
+                    GamePlaceMark(
+                        game=str(row["game"]),
+                        kind=str(row["event_type"])[len(PLACE_EVENT_PREFIX) :],
+                        place=str(row["message"]),
+                        distance=int(scene) if scene.isdigit() else None,
+                        timestamp_ms=int(row["timestamp_ms"]),
+                        save_id=str(row["save_id"] or ""),
+                        save_name=str(row["save_name"] or ""),
+                    )
+                )
+            return marks
 
         return await self._run_in_executor(_exec)
 
@@ -107,14 +176,15 @@ class EventRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def count_game_events_by_type(self, *, live_session_ids: List[int]) -> List[GameEventTypeCount]:
-        """按类型计数场次游戏事件（多场 IN 合并，复盘页游戏侧指标数据源）。"""
+        """按类型计数场次游戏事件（多场 IN 合并，复盘页游戏侧指标数据源）；不含地点动静。"""
 
         def _exec() -> List[GameEventTypeCount]:
             placeholders = ",".join("?" for _ in live_session_ids)
             with self._manager.transaction() as conn:
                 rows = conn.execute(
                     "SELECT event_type, COUNT(*) AS n FROM game_events"
-                    f" WHERE live_session_id IN ({placeholders}) GROUP BY event_type",  # noqa: S608 子句为代码内常量
+                    f" WHERE live_session_id IN ({placeholders}) AND {_NOT_PLACE_EVENT}"  # noqa: S608 子句为代码内常量
+                    " GROUP BY event_type",
                     [int(sid) for sid in live_session_ids],
                 ).fetchall()
                 return [GameEventTypeCount.model_validate(dict(row)) for row in rows]

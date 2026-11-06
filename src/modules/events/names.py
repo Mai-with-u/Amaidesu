@@ -60,6 +60,11 @@ class CoreEvents:
     # 同款先例见上方 game.body.* 族。
     GAME_STATE_CHANGED = "game.state.changed"
 
+    # 游戏里一个记住的地点的动静：记住、忘掉（世界记忆改了），速览时走近、离开（角色眼下在哪）。
+    # 只给下播整理认"这句话是在哪个地点说的"：存储台账显式订阅后落 game_events；主播不订阅——
+    # 不进对话时间线、不促发决策，免得她念叨"我记住了某某地方"。三层名避开 game.* 单层通配。
+    GAME_PLACE_NOTED = "game.place.noted"
+
     # ========== 流程单（Rundown）子系统事件 ==========
     # 唯一发布者：``RundownState`` 变更边界。``rundown.changed`` 涵盖
     # load / goto / next（含 finish）/ pause / resume 五种状态变更；

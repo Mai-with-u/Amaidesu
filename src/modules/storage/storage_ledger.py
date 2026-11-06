@@ -18,6 +18,8 @@ StorageLedger —— 直播间消息流落库器
   未命中台词行时记告警并统计本场缺失次数，在下播日志输出供观测。
 - 订阅 ``live.ended``：输出本场没送达标记未命中次数、清空本场内存遮名集合，并在未交由主播下播整理托管时触发到期清理。
 - 订阅 ``game.*``（milestone / attention_required / error），写入 game_events 表。
+- 订阅 ``game.place.noted``（记住、忘掉、走近、离开一个记住的地点），写成 game_events 里 ``place_*`` 类型的行，
+  只给下播整理认地点用。
 - 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环。
 """
 
@@ -30,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 from src.modules.config.storage_schemas import ViewerIdentityConfig
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.game_place import GamePlacePayload
 from src.modules.events.payloads.live import LiveEndedPayload
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
@@ -183,6 +186,15 @@ class StorageLedger:
         )
         self._subscriptions[_GAME_EVENT_WILDCARD] = game_handler
 
+        # 地点动静是三层名，单层 game.* 接不住：显式订阅，落成 place_* 类型的游戏事件行
+        place_handler = self._on_place_noted
+        self.event_bus.on(
+            CoreEvents.GAME_PLACE_NOTED,
+            place_handler,
+            model_class=GamePlacePayload,
+        )
+        self._subscriptions[CoreEvents.GAME_PLACE_NOTED] = place_handler
+
         ended_handler = self._on_live_ended
         self.event_bus.on(
             CoreEvents.LIVE_ENDED,
@@ -197,6 +209,7 @@ class StorageLedger:
             f" + {CoreEvents.STREAMER_SPEECH}"
             f" + {CoreEvents.TTS_UTTERANCE_DROPPED}"
             f" + {_GAME_EVENT_WILDCARD}"
+            f" + {CoreEvents.GAME_PLACE_NOTED}"
             f" + {CoreEvents.LIVE_ENDED}"
         )
 
@@ -607,6 +620,31 @@ class StorageLedger:
                 f"event_type={getattr(payload, 'event_type', '?')}）：{exc}",
                 exc=True,
             )
+
+    async def _on_place_noted(
+        self,
+        event_name: str,
+        payload: GamePlacePayload,
+        source: str,
+    ) -> None:
+        """``game.place.noted`` 回调：地点动静写入 game_events（类型 ``place_<种类>``）。"""
+        try:
+            live_pk = await self._resolve_live_pk(payload.live_session_id)
+            if live_pk is None:
+                logger.debug(f"地点动静无法归属场次，跳过落库（kind={payload.kind}）")
+                return
+            await self.event_repo.insert_place_mark(
+                live_session_id=live_pk,
+                game=payload.game,
+                kind=payload.kind,
+                place=payload.place,
+                distance=payload.distance,
+                timestamp_ms=payload.timestamp_ms,
+                save_id=payload.save_id,
+                save_name=payload.save_name,
+            )
+        except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
+            logger.error(f"StorageLedger 写入地点动静失败（kind={getattr(payload, 'kind', '?')}）：{exc}", exc=True)
 
     async def _resolve_viewer(self, payload: RoomMessagePayload) -> Optional[int]:
         try:

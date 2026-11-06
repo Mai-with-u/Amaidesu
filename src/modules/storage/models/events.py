@@ -17,7 +17,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
-__all__ = ["GameEventRecord", "GameEventTypeCount", "GameSaveSpan", "IndexedGameEvent"]
+__all__ = ["GameEventRecord", "GameEventTypeCount", "GamePlaceMark", "GameSaveSpan", "IndexedGameEvent"]
 
 
 class GameEventRecord(BaseModel):
@@ -46,6 +46,23 @@ class IndexedGameEvent(BaseModel):
     message: str = Field(..., description="事件描述正文")
     timestamp_ms: int = Field(..., description="事件时刻（Unix epoch 毫秒）")
     save_id: str = Field(default="", description="事件发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
+    save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
+
+
+class GamePlaceMark(BaseModel):
+    """一条地点动静（``game_events`` 里 ``place_*`` 类型的行）：哪个地点、什么动静、离多远、什么时候。
+
+    下播整理据此认出一句话是在哪个地点说的、本场记住了哪些地点。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    game: str = Field(..., description="游戏标识")
+    kind: str = Field(..., description="动静种类：remembered / forgotten / near / left")
+    place: str = Field(..., description="地点名")
+    distance: Optional[int] = Field(default=None, description="走近时的水平距离（格）；其余为 None")
+    timestamp_ms: int = Field(..., description="动静时刻（Unix epoch 毫秒）")
+    save_id: str = Field(default="", description="当时所在的存档编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
 
 

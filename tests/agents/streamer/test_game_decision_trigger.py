@@ -13,6 +13,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_chat import GameChatPayload
+from src.modules.events.payloads.game_place import GamePlacePayload
 from src.agents.streamer.trigger_cause import TriggerKind
 from tests.agents.streamer.helpers import make_streamer_agent
 
@@ -66,6 +67,19 @@ async def test_game_lines_carry_event_type_and_only_report_sets_pending() -> Non
     # 已入账的条目不再出现在下一窗批次里（追加一次，不逐窗重放）
     again = await agent._scope.open_window()
     assert again.game_batch.events == () and len(again.timeline_notes) == 2
+
+
+async def test_place_marks_never_reach_the_timeline_or_wake_her(live_agent) -> None:
+    """记住了地点、走近了地点只落库给整理用：主播不订阅，不进时间线、不促发决策，免得她念叨。"""
+    agent, bus = live_agent
+    for kind in ("remembered", "near", "left"):
+        payload = GamePlacePayload(game="minecraft", kind=kind, place="家", distance=3 if kind == "near" else None)
+        await bus.emit(CoreEvents.GAME_PLACE_NOTED, payload, source="TestGameAgent")
+    await bus.wait_until_drained()
+
+    assert agent._proactive_signals.game_pending is False
+    materials = await agent._scope.open_window()
+    assert materials.timeline_notes == [] and materials.game_batch.events == ()
 
 
 async def test_game_report_pending_is_consumed_only_while_live(live_agent) -> None:

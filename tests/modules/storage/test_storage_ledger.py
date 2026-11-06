@@ -10,6 +10,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.events.interceptors.session_stamp import SessionStampInterceptor
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.game_place import GamePlacePayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.session import LiveSessionManager
@@ -313,6 +314,30 @@ async def test_game_events_keep_save_reported_by_publisher(ledger, store: SQLite
 
     rows = await store.execute("SELECT save_id, save_name FROM game_events ORDER BY id")
     assert [(r["save_id"], r["save_name"]) for r in rows] == [("ab12", "新的世界"), ("", "")]
+
+
+async def test_place_marks_land_as_place_rows_and_stay_out_of_game_progress(
+    ledger, store: SQLiteDatabase, event_bus: EventBus
+) -> None:
+    """地点动静落成 place_* 行，只给下播整理认地点；按场读游戏进展、按类型计数都不含它们。"""
+    await _emit(event_bus, "game.milestone", _game("milestone", "灯塔盖好了", timestamp_ms=1_000))
+    near = GamePlacePayload(game="minecraft", kind="near", place="灯塔", distance=7, save_id="a", timestamp_ms=2_000)
+    await _emit(event_bus, CoreEvents.GAME_PLACE_NOTED, near)
+    await _emit(
+        event_bus,
+        CoreEvents.GAME_PLACE_NOTED,
+        GamePlacePayload(game="minecraft", kind="remembered", place="家", timestamp_ms=3_000),
+    )
+
+    marks = await store.events.list_session_place_marks(live_session_id=_FAKE_PK)
+    assert [(m.kind, m.place, m.distance, m.save_id) for m in marks] == [
+        ("near", "灯塔", 7, "a"),
+        ("remembered", "家", None, ""),
+    ]
+    progress = await store.events.list_session_game_events(live_session_id=_FAKE_PK)
+    assert [record.message for record in progress] == ["灯塔盖好了"]
+    counts = await store.events.count_game_events_by_type(live_session_ids=[_FAKE_PK])
+    assert [(count.event_type, count.n) for count in counts] == [("milestone", 1)]
 
 
 async def test_game_event_write_failure_is_swallowed(
