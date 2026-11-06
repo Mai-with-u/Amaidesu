@@ -850,7 +850,8 @@ CREATE INDEX IF NOT EXISTS idx_viewer_candidates_reply_chat ON viewer_candidates
 
 # --- game_players 等 —— 游戏里的人 ---
 # 她在游戏里遇到的别的玩家按"游戏 + UUID"认：同一个 UUID 改了名仍是同一行（names 记见过的名字，
-# JSON 列表），同名不同 UUID 是两行；saves 是见过他的存档（JSON 列表，每项 save_id / save_name）。
+# JSON 列表），同名不同 UUID 是两行；saves 是见过他的存档（JSON 列表，每项 save_id / save_name / online_mode，
+# 最后一项是那台服务器验不验账号 on / off / unknown，早先的项没有它按 unknown 读）。
 # 只自动记和她发生过的互动（game_player_interactions：打招呼按场合并计数，fact 是结构化事实的 JSON）；
 # 公屏聊天落 game_chat（私聊不落；direction 是 player 玩家说的 / streamer 她说的 / other 认不出是谁说的，
 # 最后一种不存原话，只占一行位置），和弹幕一样受保留期管。玩家说的关于他自己的事列进 player_candidates

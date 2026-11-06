@@ -91,6 +91,7 @@ class GamePlayerLedger:
                     live_session_id=payload.live_session_id,
                     save_id=payload.save_id,
                     save_name=payload.save_name,
+                    save_online_mode=payload.save_online_mode,
                     at_ms=payload.timestamp_ms,
                 )
                 await self.player_repo.add_game_chat(
@@ -182,6 +183,7 @@ class GamePlayerLedger:
                 live_session_id=payload.live_session_id,
                 save_id=payload.save_id,
                 save_name=payload.save_name,
+                save_online_mode=payload.save_online_mode,
                 at_ms=payload.timestamp_ms,
             )
             return player.id

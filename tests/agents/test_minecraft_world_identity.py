@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.maicraft import EventsPage, MaicraftReply, reply_of
 from src.agents.minecraft.state import MinecraftAgentState
-from src.agents.minecraft.world_identity import WorldIdentity, world_ref_of
+from src.agents.minecraft.world_identity import WorldIdentity, WorldRef, world_ref_of
 from src.modules.events.payloads.game import GamePayload
 from src.modules.tools.models import ToolInvocation
 from src.modules.types.game_save import GameSave
@@ -133,6 +133,19 @@ def test_world_ref_reading_tolerates_bad_shapes() -> None:
     assert ref is not None and ref.name == "新的 世界"
     nameless = world_ref_of({"id": "0123456789abcdef"})
     assert nameless is not None and nameless.label() == "编号 01234567"
+
+
+def test_online_mode_is_read_and_never_guessed() -> None:
+    """账号验证照报的读（on / off / unknown）；旧版 Mod 没报、报了认不得的值都按 unknown，不参与判换存档。"""
+    reads = [world_ref_of({"id": "w1", "online_mode": raw}) for raw in ("on", "off", "unknown", "OFF", None)]
+    assert [ref.online_mode for ref in reads if ref is not None] == ["on", "off", "unknown", "unknown", "unknown"]
+    assert world_ref_of({"id": "w1"}) == WorldRef(id="w1", online_mode="unknown")
+    identity = WorldIdentity()
+    assert identity.online_mode == "unknown"
+    assert identity.absorb({"world": {"id": "w1", "online_mode": "off"}}) is not None
+    assert identity.online_mode == "off"
+    assert identity.absorb({"world": {"id": "w1", "online_mode": "on"}}) is None, "同一个存档不算换"
+    assert identity.online_mode == "on"
 
 
 # ---------------------------------------------------------------------------

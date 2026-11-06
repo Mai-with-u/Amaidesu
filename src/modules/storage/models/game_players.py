@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.modules.types.game_save import OnlineMode
+
 __all__ = [
     "GAME_CHAT_OTHER",
     "GAME_CHAT_PLAYER",
@@ -55,6 +57,10 @@ class PlayerSave(BaseModel):
 
     save_id: str = Field(..., description="存档编号（游戏报的世界编号）")
     save_name: str = Field(default="", description="存档给人看的名字")
+    online_mode: OnlineMode = Field(
+        default="unknown",
+        description="这个存档的服务器验不验账号：off 时按名字认人，改名算新人，冒名认不出；unknown 没报",
+    )
 
 
 class GamePlayer(BaseModel):

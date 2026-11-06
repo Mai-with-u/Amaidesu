@@ -13,9 +13,21 @@
 
 from __future__ import annotations
 
+from typing import Any, Literal, get_args
+
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["GameSave"]
+__all__ = ["GameSave", "OnlineMode", "online_mode_of"]
+
+#: 存档所在的服务器验不验账号：on 验（玩家 UUID 跟着账号走，改名还是同一个人）；off 不验（UUID 由名字
+#: 算出，改名就成了另一个人，冒用名字也认不出）；unknown 没报（游戏版本太旧，或不在认得出的存档里）。
+#: 只给存储记"在哪个存档见过他"和运营者看，主播看不到。
+OnlineMode = Literal["on", "off", "unknown"]
+
+
+def online_mode_of(raw: Any) -> OnlineMode:
+    """读游戏报的账号验证状态；没报或报了认不得的值按 unknown，不猜。"""
+    return raw if isinstance(raw, str) and raw in get_args(OnlineMode) else "unknown"
 
 
 class GameSave(BaseModel):

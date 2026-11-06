@@ -2136,7 +2136,9 @@ class MinecraftAgent(BaseAgent):
             return
         save_id, save_name = self._world.save_fields()
         # 收手 -> 认对手（结果里的 UUID 优先）-> 记谁赢、各打中几下；按观察编号点的对手也靠结果认出
-        interaction = spar_interaction(run, named, save_id=save_id, save_name=save_name)
+        interaction = spar_interaction(
+            run, named, save_id=save_id, save_name=save_name, online_mode=self._world.online_mode
+        )
         if interaction is not None:
             await self.emit_event(CoreEvents.GAME_PLAYER_INTERACTED, interaction)
 

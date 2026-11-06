@@ -26,6 +26,7 @@ from src.modules.storage.models.game_players import (
     ViewerPlayerLink,
 )
 from src.modules.storage.repos._base import BaseRepo
+from src.modules.types.game_save import OnlineMode, online_mode_of
 
 _PLAYER_COLUMNS = (
     "id, game, uuid, name, names, saves, first_session_id, first_seen_ms, last_session_id, last_seen_ms,"
@@ -46,8 +47,13 @@ def _json_list(raw: Any) -> List[Any]:
 
 def _player(row: Any) -> GamePlayer:
     names = [str(name) for name in _json_list(row["names"]) if str(name)]
+    # 早先记下的存档没有账号验证一项：按 unknown 读
     saves = [
-        PlayerSave(save_id=str(item.get("save_id") or ""), save_name=str(item.get("save_name") or ""))
+        PlayerSave(
+            save_id=str(item.get("save_id") or ""),
+            save_name=str(item.get("save_name") or ""),
+            online_mode=online_mode_of(item.get("online_mode")),
+        )
         for item in _json_list(row["saves"])
         if isinstance(item, dict) and item.get("save_id")
     ]
@@ -106,11 +112,13 @@ class GamePlayerRepo(BaseRepo):
         live_session_id: int,
         save_id: str = "",
         save_name: str = "",
+        save_online_mode: OnlineMode = "unknown",
         at_ms: int,
     ) -> GamePlayer:
         """见到一位玩家：没见过就建一行；见过就更新名字、见过的名字与存档、最近一次见到的场次。
 
-        同一个 UUID 改了名仍是同一行，新名字追加进见过的名字；同名不同 UUID 是两行。
+        同一个 UUID 改了名仍是同一行，新名字追加进见过的名字；同名不同 UUID 是两行。存档连同那台服务器
+        验不验账号一起记，报了 on / off 的按最新的写，没报（unknown）不覆盖已知的。
         """
         uuid_key = uuid.strip().lower()
         shown = name.strip()
@@ -120,7 +128,11 @@ class GamePlayerRepo(BaseRepo):
                 row = _find_player_row(conn, game=game, uuid=uuid_key)
                 if row is None:
                     # 第一次见到：首次与最近一次都是这一场
-                    saves = [{"save_id": save_id, "save_name": save_name}] if save_id else []
+                    saves = (
+                        [{"save_id": save_id, "save_name": save_name, "online_mode": save_online_mode}]
+                        if save_id
+                        else []
+                    )
                     conn.execute(
                         "INSERT INTO game_players(game, uuid, name, names, saves, first_session_id, first_seen_ms,"
                         " last_session_id, last_seen_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -137,7 +149,7 @@ class GamePlayerRepo(BaseRepo):
                         ),
                     )
                 else:
-                    # 见过：改了名追加进见过的名字，新存档追加进见过的存档（存档名变了按最新的写）
+                    # 见过：改了名追加进见过的名字，新存档追加进见过的存档（存档名、账号验证变了按最新的写）
                     current = _player(row)
                     names = list(current.names)
                     if shown and shown not in names:
@@ -146,9 +158,13 @@ class GamePlayerRepo(BaseRepo):
                     if save_id:
                         known = next((item for item in saves if item["save_id"] == save_id), None)
                         if known is None:
-                            saves.append({"save_id": save_id, "save_name": save_name})
-                        elif save_name:
-                            known["save_name"] = save_name
+                            saves.append({"save_id": save_id, "save_name": save_name, "online_mode": save_online_mode})
+                        else:
+                            if save_name:
+                                known["save_name"] = save_name
+                            # 这次没报账号验证（旧版 Mod、刚进世界）不抹掉早先报过的
+                            if save_online_mode != "unknown":
+                                known["online_mode"] = save_online_mode
                     conn.execute(
                         "UPDATE game_players SET name=?, names=?, saves=?, last_session_id=?, last_seen_ms=?"
                         " WHERE id=?",

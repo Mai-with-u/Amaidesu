@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.agents.minecraft.maicraft import GoalRun
 from src.agents.minecraft.player_body_language import spoken_fact
 from src.modules.events.payloads.game_player import GamePlayerInteractedPayload
+from src.modules.types.game_save import OnlineMode
 
 __all__ = ["SelfChatLog", "SparOpponents", "body_language_interactions", "player_of", "spar_interaction"]
 
@@ -72,7 +73,7 @@ def _tossed(fact: str, name: str) -> str:
 
 
 def body_language_interactions(
-    event: Dict[str, Any], *, save_id: str = "", save_name: str = ""
+    event: Dict[str, Any], *, save_id: str = "", save_name: str = "", online_mode: OnlineMode = "unknown"
 ) -> List[GamePlayerInteractedPayload]:
     """一条肢体动作事件 → 打招呼一条，里面有朝她扔东西的再加送东西一条；没带玩家 UUID 的不记。"""
     uuid, name = player_of(event)
@@ -80,7 +81,14 @@ def body_language_interactions(
         return []
     message = str(event.get("message") or "")
     actions = [label for word, label in _ACTIONS if word in message]
-    common = {"game": "minecraft", "player_uuid": uuid, "player_name": name, "save_id": save_id, "save_name": save_name}
+    common = {
+        "game": "minecraft",
+        "player_uuid": uuid,
+        "player_name": name,
+        "save_id": save_id,
+        "save_name": save_name,
+        "save_online_mode": online_mode,
+    }
     found = [GamePlayerInteractedPayload(kind="greet", actions=actions, **common)]
     tossed = _tossed(spoken_fact(message), name)
     if tossed:
@@ -152,7 +160,7 @@ def _spar_opponent(spar: Dict[str, Any]) -> Tuple[str, str]:
 
 
 def spar_interaction(
-    run: GoalRun, named: str, *, save_id: str = "", save_name: str = ""
+    run: GoalRun, named: str, *, save_id: str = "", save_name: str = "", online_mode: OnlineMode = "unknown"
 ) -> Optional[GamePlayerInteractedPayload]:
     """一场切磋收手 → 一条切磋互动（谁赢、各打中几下）；不知道对手、没打起来或被取消的不记。
 
@@ -184,4 +192,5 @@ def spar_interaction(
         fact=fact,
         save_id=save_id,
         save_name=save_name,
+        save_online_mode=online_mode,
     )

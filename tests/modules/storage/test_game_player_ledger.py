@@ -51,7 +51,15 @@ def _chat(session_id: int, content: str, **kwargs: object) -> GameChatPayload:
 async def test_only_checked_players_get_a_record_and_others_only_hold_a_place(wired) -> None:
     store, bus, session_id = wired
     for payload in (
-        _chat(session_id, "来切磋", sender="Alex", sender_id=_ALEX, sender_online=True, save_id="w1"),
+        _chat(
+            session_id,
+            "来切磋",
+            sender="Alex",
+            sender_id=_ALEX,
+            sender_online=True,
+            save_id="w1",
+            save_online_mode="off",
+        ),
         # 控制台借名发的：没有 UUID，也没核对过
         _chat(session_id, "[Server] 重启", sender="Server"),
         # 有 UUID 但没核对过在线：不建玩家
@@ -72,6 +80,7 @@ async def test_only_checked_players_get_a_record_and_others_only_hold_a_place(wi
 
     (alex,) = await store.game_players.list_players()
     assert (alex.uuid, alex.name, [save.save_id for save in alex.saves]) == (_ALEX, "Alex", ["w1"])
+    assert alex.saves[0].online_mode == "off", "这台服务器验不验账号随存档记下"
     lines = await store.game_players.list_session_game_chat(live_session_id=session_id)
     assert [(line.direction, line.player_id, line.content) for line in lines] == [
         ("player", alex.id, "来切磋"),

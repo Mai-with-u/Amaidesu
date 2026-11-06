@@ -102,6 +102,8 @@ class MaicraftChatCollector(MaicraftEventsCollector):
             message_key=str(event.get("translation_key") or ""),
             save_id=world.id if world is not None else "",
             save_name=world.name if world is not None else "",
+            # 这台服务器验不验正版账号：存储记在"在哪个存档见过他"上，运营者据此知道认人能信几分
+            save_online_mode=world.online_mode if world is not None else "unknown",
         )
         await self.emit_event(CoreEvents.GAME_CHAT_RECEIVED, payload, source=self.name)
         return True

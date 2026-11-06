@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
+from src.modules.types.game_save import OnlineMode
 from src.modules.utils.time_utils import now_ms
 
 #: 消息来源种类：其他玩家的聊天 / 服务器系统消息
@@ -59,6 +60,7 @@ class GameChatPayload(BasePayload):
         suppressed: 上游因洪泛或重复而没有转出的消息条数（随这一条一起说明）
         save_id: 收到时角色所在的存档编号（空串 = 不分存档或存档不明）
         save_name: 存档给人看的名字（只显示，不当键）
+        save_online_mode: 存档所在服务器验不验账号（on / off / unknown）；存储记在"在哪个存档见过他"上
         occurred_at_ms: 上游收到这条消息的时刻（Unix 毫秒；0 = 未提供）
         timestamp_ms: 本系统发布该事件的时刻（Unix 毫秒）
     """
@@ -88,6 +90,9 @@ class GameChatPayload(BasePayload):
     suppressed: int = Field(default=0, description="上游因洪泛或重复没有转出的消息条数")
     save_id: str = Field(default="", description="收到时角色所在的存档编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="存档给人看的名字（只显示，不当键）")
+    save_online_mode: OnlineMode = Field(
+        default="unknown", description="存档所在服务器验不验账号：on 验 / off 不验（UUID 由名字算出）/ unknown 没报"
+    )
     occurred_at_ms: int = Field(default=0, description="上游收到时刻（Unix 毫秒；0 = 未知）")
     timestamp_ms: int = Field(default_factory=lambda: now_ms(), description="本系统发布时刻（Unix 毫秒）")
 

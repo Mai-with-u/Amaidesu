@@ -283,14 +283,17 @@ async def test_chat_carries_the_save_of_its_page() -> None:
     """聊天带着这一页所在的存档：存储据此记在哪个存档见过这位玩家；旧版 Mod 的页没有 world，存档留空。"""
     collector, client, bus = await _primed()
     page = events_page([_chat(4, "来切磋")], cursor=4)
-    page["world"] = {"id": "aaa", "name": "老家", "source": "world_id_file"}
+    page["world"] = {"id": "aaa", "name": "老家", "source": "world_id_file", "online_mode": "off"}
     client.pages.append(page)
     client.pages.append(events_page([_chat(5, "还在吗")], cursor=5))
 
     await collector._drain()
     await collector._drain()
 
-    assert [(payload.save_id, payload.save_name) for _, payload in bus.events] == [("aaa", "老家"), ("", "")]
+    assert [(payload.save_id, payload.save_name, payload.save_online_mode) for _, payload in bus.events] == [
+        ("aaa", "老家", "off"),
+        ("", "", "unknown"),
+    ]
 
 
 async def test_private_messages_are_forwarded_and_marked() -> None:

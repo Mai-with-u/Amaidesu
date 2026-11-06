@@ -39,10 +39,10 @@ def _body(message: str, player: Optional[Dict[str, Any]] = None) -> Dict[str, An
 
 def test_body_language_is_a_greeting_with_the_actions_seen() -> None:
     message = "玩家 Alex（e4）看着你蹲起 4 下，拿出铁剑，对着你挥了 2 下；他在你前方 3 格"
-    (greet,) = body_language_interactions(_body(message, _ALEX), save_id="w1", save_name="生存服")
+    (greet,) = body_language_interactions(_body(message, _ALEX), save_id="w1", save_name="生存服", online_mode="off")
     assert (greet.kind, greet.player_uuid, greet.player_name) == ("greet", _ALEX["uuid"], "Alex")
     assert greet.actions == ["蹲起", "挥手", "拿出东西"]
-    assert (greet.save_id, greet.save_name, greet.fact) == ("w1", "生存服", {})
+    assert (greet.save_id, greet.save_name, greet.save_online_mode, greet.fact) == ("w1", "生存服", "off", {})
 
 
 def test_tossing_something_to_her_is_also_a_gift() -> None:
@@ -117,9 +117,10 @@ def test_the_opponent_in_the_result_wins_over_the_name_she_called() -> None:
     """结果里带了 Mod 认出的对手：按他的 UUID 记，名字也用结果里的；按观察编号点的（没记名字）同样记。"""
     spar = {"ended_by": "me_at_line", "hits_taken": 4, "opponent": {"name": "Alex", "uuid": _ALEX["uuid"]}}
     for named in ("Alex_old", ""):
-        interaction = spar_interaction(_run(1, {"hits": 2, "spar": spar}), named)
+        interaction = spar_interaction(_run(1, {"hits": 2, "spar": spar}), named, save_id="w1", online_mode="on")
         assert interaction is not None
         assert (interaction.player_uuid, interaction.player_name) == (_ALEX["uuid"], "Alex")
+        assert (interaction.save_id, interaction.save_online_mode) == ("w1", "on")
         assert interaction.fact == {"result": "lost", "my_hits": 2, "their_hits": 4}
 
 

@@ -54,6 +54,33 @@ async def test_same_uuid_after_a_rename_is_the_same_player(store: SQLiteDatabase
     assert (renamed.first_session_id, renamed.last_session_id, renamed.last_seen_ms) == (first, second, 5_100)
 
 
+async def test_saves_keep_whether_the_server_checks_accounts(store: SQLiteDatabase) -> None:
+    """见过他的存档连同那台服务器验不验账号一起记：报了的按最新的写，没报（unknown）不抹掉已知的。"""
+    session_id = await _session(store)
+
+    async def meet(save_id: str, mode: str) -> list[tuple[str, str]]:
+        player = await store.game_players.meet_player(
+            game="minecraft",
+            uuid="uuid-a",
+            name="Alex",
+            live_session_id=session_id,
+            save_id=save_id,
+            save_online_mode=mode,  # type: ignore[arg-type]
+            at_ms=1_100,
+        )
+        return [(save.save_id, save.online_mode) for save in player.saves]
+
+    assert await meet("w1", "off") == [("w1", "off")]
+    assert await meet("w1", "unknown") == [("w1", "off")], "这次没报不抹掉早先报过的"
+    assert await meet("w2", "unknown") == [("w1", "off"), ("w2", "unknown")]
+    assert await meet("w2", "on") == [("w1", "off"), ("w2", "on")]
+    # 早先记下、没有账号验证一项的存档按 unknown 读
+    with store.manager.transaction() as conn:
+        conn.execute("UPDATE game_players SET saves=? WHERE uuid='uuid-a'", ('[{"save_id": "w3", "save_name": ""}]',))
+    (alex,) = await store.game_players.list_players()
+    assert [(save.save_id, save.online_mode) for save in alex.saves] == [("w3", "unknown")]
+
+
 async def test_same_name_with_another_uuid_is_another_player(store: SQLiteDatabase) -> None:
     session_id = await _session(store)
     one = await store.game_players.meet_player(

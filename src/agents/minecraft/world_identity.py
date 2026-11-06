@@ -1,8 +1,9 @@
 """角色眼下在哪个 Minecraft 存档里：从 MaiCraft 报的 ``world`` 认出存档，判定"换了存档"。
 
-MaiCraft 在 ``events`` 每一页与 ``observe(self)`` 里都带 ``world``：``{"id", "name", "source"}``，
+MaiCraft 在 ``events`` 每一页与 ``observe(self)`` 里都带 ``world``：``{"id", "name", "source", "online_mode"}``，
 不在世界里或还没认出时为 null。``id`` 同一个存档重进、重启游戏都不变，删档后同名重建、
-复制出来的存档都是新的；``name`` 只给人看。本模块把它读成三种状态：
+复制出来的存档都是新的；``name`` 只给人看；``online_mode`` 说这台服务器验不验正版账号（on / off / unknown），只给存储记"在哪个存档
+见过他"、给运营者看认人能信几分。本模块把它读成三种状态：
 
 - 旧版 Mod：还没见过带 ``world`` 键的事件页时，回复里根本没有这个键——报不出存档，记忆与工作日志照旧不分存档；
 - 不明：``world`` 为 null（在主菜单、刚进世界还没认出），或还没读到过任何一页；见过带这个键的页之后
@@ -19,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
 from src.modules.logging import get_logger
-from src.modules.types.game_save import GameSave
+from src.modules.types.game_save import GameSave, OnlineMode, online_mode_of
 
 __all__ = ["WorldChange", "WorldIdentity", "WorldRef", "world_ref_of"]
 
@@ -31,10 +32,11 @@ _NAME_MAX_CHARS = 32
 
 @dataclass(frozen=True)
 class WorldRef:
-    """一个认出的存档：编号只做相等比较，名字只显示。"""
+    """一个认出的存档：编号只做相等比较，名字只显示；账号验证状态只给存储记账，不参与比较存档换没换。"""
 
     id: str
     name: str = ""
+    online_mode: OnlineMode = "unknown"
 
     def label(self) -> str:
         """给人看的称呼：有名字用名字，没有名字用编号前几位。"""
@@ -63,7 +65,8 @@ def world_ref_of(raw: Any) -> Optional[WorldRef]:
         return None
     name = raw.get("name")
     clean_name = " ".join(name.split())[:_NAME_MAX_CHARS] if isinstance(name, str) else ""
-    return WorldRef(id=world_id.strip(), name=clean_name)
+    # 旧版 Mod 不报账号验证：按 unknown 记，不猜
+    return WorldRef(id=world_id.strip(), name=clean_name, online_mode=online_mode_of(raw.get("online_mode")))
 
 
 class WorldIdentity:
@@ -136,6 +139,11 @@ class WorldIdentity:
         if self._current is None:
             return GameSave()
         return GameSave(id=self._current.id, name=self._current.name)
+
+    @property
+    def online_mode(self) -> OnlineMode:
+        """眼下这个存档的服务器验不验账号；不明或旧版 Mod 为 unknown。"""
+        return self._current.online_mode if self._current is not None else "unknown"
 
     def save_fields(self) -> tuple[str, str]:
         """游戏事件载荷的存档两列（编号, 名字）；不明或旧版 Mod 为两个空串。"""

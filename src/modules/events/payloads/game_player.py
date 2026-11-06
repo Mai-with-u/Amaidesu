@@ -21,6 +21,7 @@ from pydantic import Field
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
 from src.modules.events.registry import register_event
+from src.modules.types.game_save import OnlineMode
 from src.modules.utils.time_utils import now_ms
 
 #: 互动种类：打招呼 / 送东西 / 切磋
@@ -44,6 +45,7 @@ class GamePlayerInteractedPayload(BasePayload):
         fact: 互动本身的事实（送东西：那句"朝你扔了 3 个面包"；切磋：谁赢、各打中几下）
         save_id: 互动发生时角色所在的存档编号（空串 = 不分存档或存档不明）
         save_name: 存档给人看的名字（只显示，不当键）
+        save_online_mode: 存档所在服务器验不验账号（on / off / unknown）；存储记在"在哪个存档见过他"上
         timestamp_ms: 事件时刻（Unix 毫秒）
     """
 
@@ -59,4 +61,7 @@ class GamePlayerInteractedPayload(BasePayload):
     fact: Dict[str, Any] = Field(default_factory=dict, description="互动本身的事实")
     save_id: str = Field(default="", description="存档编号（不透明串，只做相等比较）；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="存档给人看的名字（只显示，不当键）")
+    save_online_mode: OnlineMode = Field(
+        default="unknown", description="存档所在服务器验不验账号：on 验 / off 不验（UUID 由名字算出）/ unknown 没报"
+    )
     timestamp_ms: int = Field(default_factory=lambda: now_ms(), description="事件时刻（Unix 毫秒）")

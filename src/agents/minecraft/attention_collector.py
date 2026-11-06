@@ -155,7 +155,11 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
         # 主播不订阅，她当场说什么不变；没带 UUID 的认不出是谁，不记
         world = self._page_world
         for interaction in body_language_interactions(
-            event, save_id=world.id if world is not None else "", save_name=world.name if world is not None else ""
+            event,
+            save_id=world.id if world is not None else "",
+            save_name=world.name if world is not None else "",
+            # 这台服务器验不验正版账号：存储记在"在哪个存档见过他"上
+            online_mode=world.online_mode if world is not None else "unknown",
         ):
             await self.emit_event(CoreEvents.GAME_PLAYER_INTERACTED, interaction, source=self.name)
         return True
