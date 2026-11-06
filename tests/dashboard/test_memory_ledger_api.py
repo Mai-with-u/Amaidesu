@@ -341,3 +341,48 @@ async def test_candidates_list_masks_known_names_and_approve_or_reject(client, s
     after = (await client.get("/api/v1/memory/candidates", params={"status": "all"})).json()
     assert after["pending_count"] == 0
     assert sorted(item["status"] for item in after["items"]) == ["approved", "rejected"]
+
+
+async def test_claimed_missing_candidates_come_with_the_nearest_ledger_entries(client, store: SQLiteDatabase) -> None:
+    """她说欠着的候选旁附账上最接近的几条（未了结、已了结；判误记的不算），一条不沾就是空列表。"""
+    session_id = await _ended_session(store)
+    await _settled(store, session_id, [])
+    sing = await store.commitments.insert_commitment(what="给大家唱小幸运", quote="下次唱小幸运", now_ms_value=10)
+    draw = await store.commitments.insert_commitment(what="答应过要画的画", now_ms_value=11)
+    voided = await store.commitments.insert_commitment(what="唱小幸运给你听", now_ms_value=12)
+    await store.commitments.insert_commitment(what="修村口的桥", now_ms_value=13)
+    assert sing and draw and voided
+    assert await store.commitments.close_commitment(commitment_id=draw)
+    assert await store.commitments.void_commitment(commitment_id=voided)
+    lines = []
+    for index, content in enumerate(("上次答应过你们唱小幸运", "还欠大家一个开箱视频")):
+        lines.append(
+            await store.chat.insert_live_chat(
+                live_session_id=session_id,
+                timestamp_ms=1_100 + index,
+                sender_role="assistant",
+                content=content,
+                message_type="text",
+            )
+        )
+    with store.manager.transaction() as conn:
+        replace_session_candidates(
+            conn,
+            live_session_id=session_id,
+            candidates=[
+                PendingViewerCandidate(
+                    kind="claimed_missing", title="唱小幸运", reply_chat_id=lines[0], reply_quote="上次答应过你们唱小幸运"
+                ),
+                PendingViewerCandidate(
+                    kind="claimed_missing", title="开箱视频", reply_chat_id=lines[1], reply_quote="还欠大家一个开箱视频"
+                ),
+            ],
+            created_at_ms=2_000,
+        )
+
+    items = {item["title"]: item for item in (await client.get("/api/v1/memory/candidates")).json()["items"]}
+    assert [(near["id"], near["status"]) for near in items["唱小幸运"]["nearest_commitments"]] == [
+        (sing, "open"),
+        (draw, "closed"),
+    ]
+    assert items["开箱视频"]["nearest_commitments"] == []

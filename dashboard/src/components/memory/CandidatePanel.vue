@@ -51,6 +51,12 @@
           弹幕：“{{ item.viewer_quote }}”
         </blockquote>
         <blockquote class="candidate-quote">她：“{{ item.reply_quote }}”</blockquote>
+        <p
+          v-if="item.kind === 'claimed_missing' && item.status === 'pending'"
+          class="candidate-nearest"
+        >
+          {{ nearestCommitmentsText(item.nearest_commitments) }}
+        </p>
         <div v-if="item.status === 'pending'" class="candidate-actions">
           <el-checkbox v-if="item.kind === 'viewer_defined'" v-model="lasting[item.id]" size="small"
             >名字、住处、关系这类稳定的事</el-checkbox
@@ -107,6 +113,7 @@ import {
   ARCHIVE_TITLE_MAX_LENGTH,
   candidateKindLabel,
   candidateStatusLabel,
+  nearestCommitmentsText,
   validateArchiveTitle,
 } from './ledgerView';
 
@@ -304,6 +311,13 @@ defineExpose({ reload });
 }
 
 .candidate-quote.viewer {
+  color: var(--text-secondary);
+}
+
+/* 她说欠着的：账上最接近的几条，给审的人判断是漏登记还是她编的 */
+.candidate-nearest {
+  margin: 0;
+  font-size: 12px;
   color: var(--text-secondary);
 }
 

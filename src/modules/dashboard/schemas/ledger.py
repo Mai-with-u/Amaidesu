@@ -127,6 +127,14 @@ class SettleListResponse(BaseModel):
     items: List[SettleSessionItem] = Field(default_factory=list, description="最近的正式场，新的在前")
 
 
+class NearCommitment(BaseModel):
+    """账上和"她说欠着的"那件事最接近的一条承诺：审的人据此判断是漏登记还是她编的。"""
+
+    id: int = Field(description="承诺主键")
+    what: str = Field(description="动作标题")
+    status: str = Field(description="open 未了结 / closed 已了结")
+
+
 class CandidateItem(BaseModel):
     """观众候选的一行：观众定下的事或她说欠着的事，人批准才进记忆。"""
 
@@ -143,6 +151,9 @@ class CandidateItem(BaseModel):
     decided_at_ms: Optional[int] = Field(default=None, description="批准或驳回的时刻")
     archive_line_id: Optional[int] = Field(default=None, description="批准后生成的档案行")
     commitment_id: Optional[int] = Field(default=None, description="批准后登记的承诺")
+    nearest_commitments: List[NearCommitment] = Field(
+        default_factory=list, description="她说欠着的一类：账上（未了结、已了结）字面最接近的至多 3 条"
+    )
 
 
 class CandidateListResponse(BaseModel):

@@ -28,7 +28,8 @@
 本模块不做 SQL，读写全部经仓储；未注入仓储时端点返回 503。
 """
 
-from typing import TYPE_CHECKING, Annotated, Dict, List, NoReturn, Optional
+import re
+from typing import TYPE_CHECKING, Annotated, Dict, List, NoReturn, Optional, Sequence, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -48,6 +49,7 @@ from src.modules.dashboard.schemas.ledger import (
     CommitmentItem,
     CommitmentListResponse,
     LedgerMutationResponse,
+    NearCommitment,
     SettleListResponse,
     SettleSessionItem,
 )
@@ -95,6 +97,11 @@ _MASKED_VIEWER = "某位观众"
 
 # 列表筛选用：一次最多回多少条承诺
 _MAX_LIST_LIMIT = 500
+# "她说欠着的"候选旁至多列几条账上最接近的承诺；比对前去掉的空白与标点
+_NEAREST_LIMIT = 3
+# 至少重合几个相邻两字才算沾边：只重合"大家""上次"这类一个常用词的不列
+_NEAREST_MIN_OVERLAP = 2
+_NOT_WORD = re.compile(r"[\s\W_]+", re.UNICODE)
 # 整理状态页展示最近几场正式场
 _SETTLE_LIST_LIMIT = 20
 
@@ -407,8 +414,34 @@ async def resettle_session(
     return LedgerMutationResponse(success=True, detail="已排进下一次整理")
 
 
-def _candidate_item(row: ViewerCandidate, names: List[str]) -> CandidateItem:
-    """候选转响应行：弹幕原文里的已知观众昵称遮成"某位观众"。"""
+def _bigrams(text: str) -> Set[str]:
+    """字面相近的比对单位：去掉空白与标点后的相邻两字（单字文本取它自己）。"""
+    plain = _NOT_WORD.sub("", text or "").lower()
+    return {plain[index : index + 2] for index in range(len(plain) - 1)} or ({plain} if plain else set())
+
+
+def _nearest_commitments(text: str, rows: Sequence[Commitment]) -> List[NearCommitment]:
+    """账上和这句话字面最接近的几条承诺（相邻两字的重合度，从高到低，至多 3 条，不沾边的不列）。
+
+    只是给审的人看的参照：她说"上次答应过唱那首歌"，旁边摆着账上的"给大家唱歌"，就看得出是
+    漏登记还是同一件事换了说法；一条都不沾，多半是她顺着观众的话编的。
+    """
+    wanted = _bigrams(text)
+    scored = []
+    for row in rows:
+        have = _bigrams(f"{row.what} {row.quote}")
+        overlap = len(wanted & have)
+        if overlap >= _NEAREST_MIN_OVERLAP:
+            scored.append((overlap / max(1, len(wanted | have)), -int(row.id), row))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [NearCommitment(id=row.id, what=row.what, status=row.status) for _score, _id, row in scored[:_NEAREST_LIMIT]]
+
+
+def _candidate_item(row: ViewerCandidate, names: List[str], ledger: Sequence[Commitment] = ()) -> CandidateItem:
+    """候选转响应行：弹幕原文里的已知观众昵称遮成"某位观众"；待审的"她说欠着的"附上账上最接近的几条。"""
+    nearest: List[NearCommitment] = []
+    if row.kind == "claimed_missing" and row.status == "pending":
+        nearest = _nearest_commitments(f"{row.title} {row.reply_quote}", ledger)
     return CandidateItem(
         id=row.id,
         live_session_id=row.live_session_id,
@@ -423,7 +456,19 @@ def _candidate_item(row: ViewerCandidate, names: List[str]) -> CandidateItem:
         decided_at_ms=row.decided_at_ms,
         archive_line_id=row.archive_line_id,
         commitment_id=row.commitment_id,
+        nearest_commitments=nearest,
     )
+
+
+async def _ledger_for_claims(rows: Sequence[ViewerCandidate], commitments: "CommitmentRepo") -> List[Commitment]:
+    """有待审的"她说欠着的"时取账上的未了结与已了结承诺（判误记的不算"账上有"）；读失败只少参照。"""
+    if not any(row.kind == "claimed_missing" and row.status == "pending" for row in rows):
+        return []
+    try:
+        return await commitments.list_commitments(statuses=["open", "closed"], limit=_MAX_LIST_LIMIT)
+    except Exception as exc:  # noqa: BLE001 - 参照读不到时候选照常列
+        logger.warning(f"读承诺账给「她说欠着的」候选作参照失败: {exc}", exc=exc)
+        return []
 
 
 async def _known_names(viewers: Optional["ViewerRepo"]) -> List[str]:
@@ -441,16 +486,18 @@ async def _known_names(viewers: Optional["ViewerRepo"]) -> List[str]:
 async def list_candidates(
     candidates: CandidateRepoDep,
     viewers: ViewerRepoDep,  # noqa: B008 - FastAPI 依赖注入模式
+    commitments: CommitmentRepoDep,
     status: Annotated[str, Query(description="pending / approved / rejected / all")] = "pending",
 ) -> CandidateListResponse:
-    """观众候选列表（新的在前）与待审数。"""
+    """观众候选列表（新的在前）与待审数；待审的"她说欠着的"附上账上最接近的几条承诺。"""
     value = status.strip().lower()
     if value not in ("pending", "approved", "rejected", "all"):
         raise HTTPException(status_code=422, detail=f"未知的候选状态: {status}")
     rows = await candidates.list_candidates(status=None if value == "all" else value)
     names = await _known_names(viewers)
+    ledger = await _ledger_for_claims(rows, commitments)
     return CandidateListResponse(
-        items=[_candidate_item(row, names) for row in rows], pending_count=await candidates.count_pending()
+        items=[_candidate_item(row, names, ledger) for row in rows], pending_count=await candidates.count_pending()
     )
 
 

@@ -11,6 +11,7 @@ import type {
   CandidateStatus,
   CommitmentItem,
   CommitmentStatus,
+  NearCommitment,
   SettleSessionItem,
   SnapshotChangeAction,
   UnregisteredKind,
@@ -112,6 +113,16 @@ export function candidateStatusLabel(status: CandidateStatus): string {
     rejected: '已驳回',
   };
   return labels[status] ?? status;
+}
+
+/** "她说欠着的"旁边那一行：账上最接近的几条（约#N「标题」已了结）；一条不沾时提醒可能是她编的 */
+export function nearestCommitmentsText(nearest: NearCommitment[] | undefined): string {
+  if (!nearest || nearest.length === 0)
+    return '账上没有沾边的承诺：可能是漏登记，也可能是她顺着观众的话编的';
+  const items = nearest.map(
+    item => `约#${item.id}「${item.what}」${item.status === 'closed' ? '（已了结）' : ''}`,
+  );
+  return `账上最接近的：${items.join('、')}`;
 }
 
 /** 整理报告里观众候选的一句话：列了几条（分两类）、因个人信息丢了几条；都没有返回 null */

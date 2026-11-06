@@ -13,6 +13,7 @@ import {
   commitmentTargetLabel,
   gameSaveLabel,
   hasLaterSettledSession,
+  nearestCommitmentsText,
   pinnedOverflowHint,
   quoteFitsSpeech,
   reviewStateLabel,
@@ -182,5 +183,16 @@ describe('观众候选', () => {
     );
     expect(candidateReportText(undefined, undefined)).toBeNull();
     expect(candidateReportText({}, 0)).toBeNull();
+  });
+
+  it('她说欠着的：旁边列账上最接近的几条，一条不沾时提醒可能是编的', () => {
+    expect(
+      nearestCommitmentsText([
+        { id: 12, what: '给大家唱歌', status: 'open' },
+        { id: 5, what: '唱完那首歌', status: 'closed' },
+      ]),
+    ).toBe('账上最接近的：约#12「给大家唱歌」、约#5「唱完那首歌」（已了结）');
+    expect(nearestCommitmentsText([])).toContain('可能是她顺着观众的话编的');
+    expect(nearestCommitmentsText(undefined)).toContain('账上没有沾边的承诺');
   });
 });

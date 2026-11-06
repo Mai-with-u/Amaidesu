@@ -1506,6 +1506,13 @@ export type CandidateKind = 'viewer_defined' | 'claimed_missing';
 /** 观众候选状态：待审 / 已批 / 已驳回 */
 export type CandidateStatus = 'pending' | 'approved' | 'rejected';
 
+/** 账上和"她说欠着的"那件事字面最接近的一条承诺 */
+export interface NearCommitment {
+  id: number;
+  what: string;
+  status: CommitmentStatus;
+}
+
 /** 观众候选的一行：人批准才进记忆 */
 export interface CandidateItem {
   id: number;
@@ -1524,6 +1531,8 @@ export interface CandidateItem {
   decided_at_ms: number | null;
   archive_line_id: number | null;
   commitment_id: number | null;
+  /** 她说欠着的一类（待审时）：账上未了结、已了结里最接近的至多 3 条 */
+  nearest_commitments?: NearCommitment[];
 }
 
 /** 观众候选列表与待审数 */
