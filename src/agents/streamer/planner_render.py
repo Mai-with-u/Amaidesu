@@ -270,10 +270,15 @@ def superseded_by_game_report(intent: Intent, delegations: Dict[str, Delegation]
     )
 
 
+#: "更早聊过"一行最多列这么多个话题名（最近滑出的优先）：整场两三个小时也就几十个，再多就截掉最老的
+_EARLIER_TOPICS_MAX = 40
+
+
 def render_recent_intents(
     intents: Iterable[Intent],
     delegations: Dict[str, Delegation],
     current_ms: int,
+    earlier_topics: Optional[Dict[str, int]] = None,
 ) -> str:
     """我最近几轮想说的：由旧到新只列每轮的话题一句话，作为"已聊话题"清单供重叠判断。
 
@@ -287,6 +292,9 @@ def render_recent_intents(
     最新一条状态）——topic_summary 是客观状态陈述，游戏停滞时连续几十轮同义句，
     逐条渲染的清单本身会放大重复；聚合后一眼可见"这件事聊了多少轮、最近说到哪"。
     分组顺序按每组最近一次出现的时间由旧到新。无 topic_tag 的条目按原样逐条渲染。
+
+    ``earlier_topics`` 是本场更早聊过、已滑出最近几轮的话题名与轮数：最近几轮里没有的列成清单
+    最前面的一行"更早聊过"，只给名字和轮数——够她认出"这个段子早先讲过"，又不占多少字。
     """
     tagged_groups: Dict[str, List[Intent]] = {}
     untagged_lines: List[str] = []
@@ -299,7 +307,15 @@ def render_recent_intents(
             untagged_lines.append(line)
         else:
             tagged_groups.setdefault(tag, []).append(intent)
-    lines: List[str] = untagged_lines
+    lines: List[str] = []
+    earlier = [
+        f"{tag}（{count} 轮）" if count > 1 else tag
+        for tag, count in (earlier_topics or {}).items()
+        if tag not in tagged_groups
+    ][-_EARLIER_TOPICS_MAX:]
+    if earlier:
+        lines.append(f"- 更早聊过（只剩话题名）：{'、'.join(earlier)}")
+    lines.extend(untagged_lines)
     # dict 保持插入序（首次出现序），再按每组最近一次出现的时刻由旧到新排
     ordered_groups = sorted(tagged_groups.items(), key=lambda item: item[1][-1].at_ms)
     for tag, members in ordered_groups:

@@ -89,6 +89,9 @@ class DelegationWorkbench:
         # 最近几轮自己说出口的打算（话题 + 指引）。对话历史里只有最终台词，看不出
         # "我已经连着几轮在讲同一件事"——实测主播连续十分钟句句提掉血，每轮都把它当新消息开口
         self._recent_intents: Deque[Intent] = deque(maxlen=intents_max)
+        # 滑出上面那份的话题名与轮数（按最近一次滑出的先后排）：只留几十轮的话，同一个段子隔半小时
+        # 又能当新话题讲——第 58 场"拴绳背了一整场""空智能板"各讲了六七遍
+        self._earlier_topics: Dict[str, int] = {}
         # 最近几次给手上的游戏活补充过的要求（主播自己的原话，不含附带的来源对话）：
         # 看得到自己刚交代过什么，没有新要求时才不会把同样的话再补一遍
         self._recent_relays: Deque[Relay] = deque(maxlen=relays_max)
@@ -124,6 +127,11 @@ class DelegationWorkbench:
     def recent_intents(self) -> Deque[Intent]:
         """最近几轮说出口的打算（活引用）。"""
         return self._recent_intents
+
+    @property
+    def earlier_topics(self) -> Dict[str, int]:
+        """本场更早聊过、已滑出最近几轮的话题名 → 轮数（活引用；先滑出的在前）。"""
+        return self._earlier_topics
 
     @property
     def recent_relays(self) -> Deque[Relay]:
@@ -165,6 +173,7 @@ class DelegationWorkbench:
         touched = set(self._delegations) | {relay.agent for relay in self._recent_relays} | set(self._last_relay_ms)
         self._drop(touched - kept)
         self._recent_intents.clear()
+        self._earlier_topics.clear()
         self._round_receipts = []
 
     def forget_game(self, game: str) -> None:
@@ -185,7 +194,16 @@ class DelegationWorkbench:
         self._round_receipts.append((name, data))
 
     def note_intent(self, intent: Intent) -> None:
-        """记一轮说出口的打算（话说出口了才记；表达失败或被丢弃的不算）。"""
+        """记一轮说出口的打算（话说出口了才记；表达失败或被丢弃的不算）。
+
+        最近几轮放满时，最老那轮的话题名挪进"更早聊过"：清单只剩名字和轮数，整场都看得到。
+        """
+        full = self._recent_intents.maxlen is not None and len(self._recent_intents) >= self._recent_intents.maxlen
+        if full and self._recent_intents:
+            tag = self._recent_intents[0].topic_tag.strip()
+            if tag:
+                # 重新插入排到最后：按最近一次滑出的先后排
+                self._earlier_topics[tag] = self._earlier_topics.pop(tag, 0) + 1
         self._recent_intents.append(intent)
 
     def note_game_report(self, game: str, report_kind: str) -> None:

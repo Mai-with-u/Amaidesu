@@ -996,7 +996,13 @@ class Planner:
         if relays:
             # 补充过的要求紧跟在手头的事后面：同一件事已经交代过什么一眼可见，没有新要求就不再补
             lines.append(f"【我最近给手上的事补充过的要求】\n{relays}")
-        intents = render_recent_intents(self.workbench.recent_intents, self.workbench.delegations, current_ms)
+        intents = render_recent_intents(
+            self.workbench.recent_intents,
+            self.workbench.delegations,
+            current_ms,
+            # 滑出最近几轮的话题名也列上：同一个段子隔半小时别再当新话题讲
+            earlier_topics=self.workbench.earlier_topics,
+        )
         if intents:
             # 已聊话题清单 + 硬规则：复盘发现 46% 的决策窗里模型自己写"别复述"却做不到——
             # 把"重叠必须有新角度"写成显式注入规则，而不是靠模型自觉。新角度既认信息上的新，

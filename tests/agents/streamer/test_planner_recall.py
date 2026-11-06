@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.agents.streamer.delegation_workbench import DelegationWorkbench
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.planner_render import Delegation, Intent, render_recent_intents
 from src.agents.streamer.room_state import RoomState
@@ -375,3 +376,31 @@ def test_superseded_group_line_keeps_game_report_note() -> None:
     assert text == (
         "- 照明进度（1 轮，5 分钟前–5 分钟前）：床已经放好了（其中对游戏进展的说法已被游戏回执覆盖，以游戏记录为准）"
     )
+
+
+def test_topics_that_slid_out_stay_listed_by_name() -> None:
+    """滑出最近几轮的话题名留在最前面一行"更早聊过"：第 58 场"拴绳""空智能板"隔半小时就又当新话题讲。
+    最近几轮里还有的不重复列；轮数大于一才写出来。"""
+    current_ms = 100 * 60 * 1000
+    intents = [Intent(at_ms=current_ms - 60_000, topic_summary="门装好了", reply_guidance="", topic_tag="装门")]
+    earlier = {"拴绳没用上": 3, "智能板折腾": 1, "装门": 2}
+
+    lines = render_recent_intents(intents, _delegation_book(), current_ms, earlier_topics=earlier).splitlines()
+
+    assert lines == [
+        "- 更早聊过（只剩话题名）：拴绳没用上（3 轮）、智能板折腾",
+        "- 装门（1 轮，1 分钟前–1 分钟前）：门装好了",
+    ]
+
+
+def test_workbench_moves_tags_out_of_the_window_into_earlier_topics() -> None:
+    """最近几轮放满后，最老一轮的话题名挪进"更早聊过"，按最近一次滑出的先后排；开播清场时一起清掉。"""
+    workbench = DelegationWorkbench(MagicMock(), intents_max=2, relays_max=1)
+    for tag in ("拴绳", "智能板", "拴绳", "起名", "装门"):
+        workbench.note_intent(Intent(at_ms=0, topic_summary=tag, reply_guidance="", topic_tag=tag))
+
+    assert list(workbench.earlier_topics.items()) == [("智能板", 1), ("拴绳", 2)]
+    assert [intent.topic_tag for intent in workbench.recent_intents] == ["起名", "装门"]
+
+    workbench.reset()
+    assert workbench.earlier_topics == {}
