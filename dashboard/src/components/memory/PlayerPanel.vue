@@ -69,6 +69,7 @@
             :model-value="linkTargets[item.id] ?? null"
             placeholder="搜索观众昵称，确认就是这位玩家"
             @update:model-value="value => (linkTargets[item.id] = value)"
+            @select="viewer => (linkPicked[item.id] = viewer)"
           />
           <el-button
             size="small"
@@ -108,7 +109,7 @@
  */
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { PlayerItem, PlayerLinkedViewer } from '@/types';
+import type { PlayerItem, PlayerLinkedViewer, ViewerListItem } from '@/types';
 import { playersApi } from '@/api';
 import ViewerPicker from '@/components/viewers/ViewerPicker.vue';
 import { getApiErrorMessage } from '@/utils/apiError';
@@ -119,6 +120,7 @@ import {
   formerNamesText,
   interactionsText,
   linkedViewerLabel,
+  linkViewerWarning,
   matchesPlayerQuery,
 } from './playersView';
 
@@ -130,6 +132,8 @@ const actionError = ref('');
 const busyId = ref<number | null>(null);
 /** 每位玩家行里观众选择器选中的观众（点“确认关联”时交上去） */
 const linkTargets = reactive<Record<number, number | null>>({});
+/** 选择器选中的那位观众（昵称等）：确认对话框点名用 */
+const linkPicked = reactive<Record<number, ViewerListItem | null>>({});
 
 /** 按名字过滤后的列表：现名或曾用名命中都算 */
 const shown = computed(() => items.value.filter(item => matchesPlayerQuery(item, query.value)));
@@ -154,10 +158,12 @@ async function reload(): Promise<void> {
 async function link(item: PlayerItem): Promise<void> {
   const viewerId = linkTargets[item.id];
   if (!viewerId) return;
-  // 确认前讲清后果：之后删其中一方或一方发“忘了我”，另一方一起删
-  const warning =
-    `确认玩家「${item.name}」就是观众 #${viewerId}？之后删这位观众、或任何一方发“忘了我”，两边一起删除。` +
-    '她不会知道这层关系。';
+  // 确认前点名是哪位观众（昵称加编号）、讲清后果：之后删其中一方或一方发“忘了我”，另一方一起删
+  const picked = linkPicked[item.id];
+  const warning = linkViewerWarning(item, {
+    viewer_id: viewerId,
+    user_name: picked?.viewer_id === viewerId ? picked.user_name : '',
+  });
   if (!(await confirmAction(warning, '确认关联', { type: 'info' }))) return;
   await mutate(
     item,
@@ -166,6 +172,7 @@ async function link(item: PlayerItem): Promise<void> {
     '关联失败',
   );
   linkTargets[item.id] = null;
+  linkPicked[item.id] = null;
 }
 
 async function unlink(item: PlayerItem, viewer: PlayerLinkedViewer): Promise<void> {

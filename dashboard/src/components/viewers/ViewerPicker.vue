@@ -45,7 +45,11 @@ const props = withDefaults(
   { excludeId: null, placeholder: '搜索昵称或外部 ID 选择观众' },
 );
 
-const emit = defineEmits<{ 'update:modelValue': [value: number | null] }>();
+// select 带上选中的整条观众（昵称等），确认对话框要点名是谁；只要编号的用 v-model 即可
+const emit = defineEmits<{
+  'update:modelValue': [value: number | null];
+  select: [item: ViewerListItem | null];
+}>();
 
 const options = ref<ViewerListItem[]>([]);
 const loading = ref(false);
@@ -81,7 +85,9 @@ function search(query: string): void {
 }
 
 function onSelect(value: number | undefined | ''): void {
-  emit('update:modelValue', typeof value === 'number' ? value : null);
+  const id = typeof value === 'number' ? value : null;
+  emit('update:modelValue', id);
+  emit('select', id === null ? null : (options.value.find(item => item.viewer_id === id) ?? null));
 }
 </script>
 

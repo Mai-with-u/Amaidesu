@@ -4,7 +4,12 @@
  * 组件模板只消费这里的结果，行为由单元测试直接断言。
  */
 
-import type { PlayerInteractionKind, PlayerItem, PlayerLinkedViewer } from '@/types';
+import type {
+  PlayerInteractionKind,
+  PlayerItem,
+  PlayerLinkedViewer,
+  ViewerListItem,
+} from '@/types';
 
 /** 互动种类的展示顺序与说法：打招呼按场数计（一场只记一次），其余按条数计 */
 const INTERACTION_TEXT: ReadonlyArray<readonly [PlayerInteractionKind, (n: number) => string]> = [
@@ -44,6 +49,22 @@ export function matchesPlayerQuery(item: PlayerItem, query: string): boolean {
   const keyword = query.trim().toLowerCase();
   if (!keyword) return true;
   return [item.name, ...item.former_names].some(name => name.toLowerCase().includes(keyword));
+}
+
+/**
+ * 确认关联前的文案：点名是哪位玩家、哪位观众（昵称加编号，昵称读不到只写编号），讲清之后两边一起删。
+ */
+export function linkViewerWarning(
+  player: Pick<PlayerItem, 'name' | 'game'>,
+  viewer: Pick<ViewerListItem, 'viewer_id' | 'user_name'>,
+): string {
+  const who = viewer.user_name
+    ? `观众「${viewer.user_name}」（#${viewer.viewer_id}）`
+    : `观众 #${viewer.viewer_id}`;
+  return (
+    `确认玩家「${player.name}」（${player.game}）就是${who}？` +
+    '之后删这位观众、或任何一方发“忘了我”，两边一起删除。她不会知道这层关系。'
+  );
 }
 
 /** 删玩家前的确认文案：删什么、换成什么、关联的观众不动 */

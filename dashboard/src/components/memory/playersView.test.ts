@@ -5,6 +5,7 @@ import {
   formerNamesText,
   interactionsText,
   linkedViewerLabel,
+  linkViewerWarning,
   matchesPlayerQuery,
 } from './playersView';
 
@@ -65,5 +66,16 @@ describe('删玩家确认', () => {
     expect(text).toContain('一位玩家');
     expect(text).toContain('不记录名单');
     expect(text).toContain('关联的观众不动');
+  });
+});
+
+describe('确认关联的文案', () => {
+  it('确认关联点名玩家与观众昵称，昵称读不到只写编号', () => {
+    expect(linkViewerWarning(player(), { viewer_id: 12, user_name: '阿杰' })).toContain(
+      '确认玩家「Alex」（minecraft）就是观众「阿杰」（#12）？',
+    );
+    expect(linkViewerWarning(player(), { viewer_id: 12, user_name: '' })).toContain(
+      '就是观众 #12？',
+    );
   });
 });
