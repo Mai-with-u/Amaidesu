@@ -34,6 +34,7 @@ import asyncio
 import dataclasses
 from collections import deque
 from contextvars import ContextVar
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING, Sequence, Tuple
 
@@ -564,6 +565,9 @@ class StreamerAgent(BaseAgent):
         self._startup_ms: int = now_ms()
         # 诊断事件流读取器（续播重放递话/玩家聊天的数据源；默认指向项目根 logs/events）
         self._event_log_reader = EventLogFileReader(events_dir if events_dir is not None else Path("logs") / "events")
+        # 续播窗口重放的玩家游戏发言（一次性缓冲：续播时装入，下个决策轮注入
+        # 【进程重启前漏掉的话】段后取空，不重复）
+        self._resume_chat_replay: list[str] = []
 
         # 观众命令接线（最小接线：玩法待扩展）。enabled + 任一映射表非空才激活；
         # 两张映射表（委派指令 / 工具调用）合起来即白名单，限频窗口/次数 config 化。
@@ -593,6 +597,7 @@ class StreamerAgent(BaseAgent):
         # 走构造参数收取，两者写同一处状态）
         if round_executor is not None:
             round_executor.set_reminders_provider(self._drain_reminders)
+            round_executor.set_resume_replay_provider(self._drain_resume_replay)
         self._rounds = round_executor or DecisionRoundExecutor(
             planner=self._planner,
             speech=self._speech,
@@ -605,6 +610,7 @@ class StreamerAgent(BaseAgent):
             window_opener=self._scope.open_window,
             rundown_text_provider=self._rundown_coord.build_text,
             reminders_provider=self._drain_reminders,
+            resume_replay_provider=self._drain_resume_replay,
             speech_allowed=self._round_session_still_live,
             logger=self._logger,
         )
@@ -1033,6 +1039,9 @@ class StreamerAgent(BaseAgent):
             # 续播重放递话：上一进程窗口里运营留的言随重启丢了，从诊断事件流
             # 补进提醒队列——接回那一轮（或下一轮）以【运营提醒】送达，必达跨重启
             self._replay_prompts_from_event_log()
+            # 续播窗口重放玩家聊天：断线期间玩家在游戏里说的话没有活过重启的
+            # 事件通道，回读后暂存一次性缓冲，下个决策轮注入参考段（消费后不重复）
+            self._load_resume_chat_replay()
         else:
             self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
         if resumed:
@@ -1089,6 +1098,48 @@ class StreamerAgent(BaseAgent):
         if replayed:
             self._logger.info(f"续播重放：已把上一进程窗口的 {replayed} 条递话补进提醒队列")
             self._flush_kick.set()
+
+    def _load_resume_chat_replay(self) -> None:
+        """续播窗口重放玩家聊天：读回本进程启动前窗口内的玩家发言，存一次性缓冲。
+
+        窗口 = ``[本进程启动 - resume_replay_window_ms, 本进程启动)``，取自诊断
+        事件流的 game.chat.received（kind=player）。私聊不重放——当众念出私聊
+        是隐私事故，与实时路径（私聊只进本窗参考段且标注）同一纪律更从严。
+        诊断流缺席降级为不重放，不抛错阻断续播。
+        """
+        window_ms = self.typed_config.resume_replay_window_ms
+        if window_ms <= 0:
+            return
+        records = self._event_log_reader.read_records(
+            event_name=CoreEvents.GAME_CHAT_RECEIVED,
+            start_ms=self._startup_ms - window_ms,
+            end_ms=self._startup_ms,
+        )
+        lines: list[str] = []
+        for row in records:
+            data = row.get("data")
+            if not isinstance(data, dict) or data.get("kind") != "player":
+                continue
+            if data.get("private"):
+                continue
+            content = str(data.get("content", "")).strip()
+            if not content:
+                continue
+            sender = str(data.get("sender", "")).strip() or "（名字未知）"
+            ts = int(row.get("timestamp_ms", 0))
+            time_text = datetime.fromtimestamp(ts / 1000).strftime("%H:%M") if ts > 0 else "--:--"
+            lines.append(f"{time_text} 玩家 {sender}：{content}")
+        if lines:
+            self._resume_chat_replay = lines
+            self._logger.info(f"续播重放：已暂存重启前窗口内的 {len(lines)} 条玩家发言，下个决策轮注入")
+
+    def _drain_resume_replay(self) -> str:
+        """取空续播重放缓冲（决策执行器在决策窗入口调用；注入一次制）。"""
+        if not self._resume_chat_replay:
+            return ""
+        text = "\n".join(self._resume_chat_replay)
+        self._resume_chat_replay.clear()
+        return text
 
     async def _on_live_ended(
         self,

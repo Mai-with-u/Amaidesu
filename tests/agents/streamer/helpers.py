@@ -51,10 +51,15 @@ class FakeRoundExecutor:
         self.calls: List[Dict[str, Any]] = []
         self.drain_reminders: bool = False
         self._reminders_provider: Optional[Any] = None
+        self._resume_replay_provider: Optional[Any] = None
 
     def set_reminders_provider(self, fn: Callable[[], str]) -> None:
         """与真实 DecisionRoundExecutor 同签名的递话来源接线入口。"""
         self._reminders_provider = fn
+
+    def set_resume_replay_provider(self, fn: Callable[[], str]) -> None:
+        """与真实 DecisionRoundExecutor 同签名的续播重放来源接线入口。"""
+        self._resume_replay_provider = fn
 
     async def execute(
         self,

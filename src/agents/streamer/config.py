@@ -526,6 +526,13 @@ class StreamerConfig(BaseConfig):
         "省掉“先查一步再开口”的请求。按所接游戏配置，空 = 不调用",
         json_schema_extra={"x-ui-advanced": True},
     )
+    resume_replay_window_ms: int = Field(
+        title="续播重放玩家聊天的时间窗",
+        default=300_000,
+        ge=0,
+        description="断线续播时，从重启往前这么多毫秒内的游戏玩家发言会被补进下一轮决策参考"
+        "（【进程重启前漏掉的话】段，注入一次制）；0 = 关闭重放",
+    )
     speech_gate_window: int = Field(
         title="发言闸比对窗口条数",
         default=10,

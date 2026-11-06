@@ -422,6 +422,7 @@ class Planner:
         rundown_text: Optional[str] = None,
         game_batch: Optional[GameEventBatch] = None,
         reminders: str = "",
+        resume_replay: str = "",
         thinking: Optional[ThinkingStreamContext] = None,
         round_id: str = "",
         trigger_cause: Optional[TriggerCause] = None,
@@ -438,6 +439,8 @@ class Planner:
             game_batch: 本轮新入账的游戏事件批次（决策窗边界批量追加进时间线的那一批；
                 行文进状态事实块与新鲜语料，聊天原话随说话交给表达侧，私聊只进本窗参考段）。
             reminders: 运营递话留言（【运营提醒】段注入参考块；消费即送达）。
+            resume_replay: 续播重放的玩家游戏发言（【进程重启前漏掉的话】段注入
+                参考块；读取即清空，注入一次制）。
             thinking: 思考流上下文（可选；提供时每次 LLM 调用的 reasoning
                 增量经旁路通道外发）。
             round_id: 决策轮次 ID（工具调用经 ToolInvocation.round_id 透传到
@@ -496,6 +499,7 @@ class Planner:
             forced,
             proactive,
             reminders,
+            resume_replay=resume_replay,
             game_events=self._round_game_events,
             fresh_game_chat=fresh_game_chat,
             private_game_chat=private_game_chat,
@@ -796,6 +800,7 @@ class Planner:
         forced: bool,
         proactive: bool,
         reminders: str = "",
+        resume_replay: str = "",
         game_events: Optional[List[str]] = None,
         fresh_game_chat: Optional[List[str]] = None,
         private_game_chat: Optional[List[str]] = None,
@@ -883,6 +888,10 @@ class Planner:
                 "血量、数量、倒计时这类数值变化不算新角度）；清单里讲过的结论和打算不再复述。"
                 "拿不出新角度就换个话题，或者本轮沉默。"
             )
+        if resume_replay:
+            # 进程重启前漏掉的话：断线期间玩家在游戏里说的话没有活过重启的事件
+            # 通道，续播时从诊断事件流回读补进参考段（读取即清空，注入一次制）。
+            lines.append("【进程重启前漏掉的话】（程序中断期间游戏里玩家说的话）\n" + resume_replay)
         if reminders:
             # 运营提醒：后台递话，必达素材——不伪装观众弹幕、不进对话历史，
             # 仅进本轮参考块（消费即送达，由调用方在决策窗入口取空队列）。

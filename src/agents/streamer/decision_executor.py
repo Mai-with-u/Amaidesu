@@ -120,6 +120,7 @@ class DecisionRoundExecutor:
         window_opener: WindowOpener,
         rundown_text_provider: Callable[[], Optional[str]],
         reminders_provider: Optional[Callable[[], str]] = None,
+        resume_replay_provider: Optional[Callable[[], str]] = None,
         speech_allowed: Optional[Callable[[], bool]] = None,
         logger: Optional[ModuleLogger] = None,
     ) -> None:
@@ -151,6 +152,8 @@ class DecisionRoundExecutor:
         self._window_opener = window_opener
         self._rundown_text_provider = rundown_text_provider
         self._reminders_provider = reminders_provider
+        # 续播重放玩家聊天的一次性来源（读取即清空——注入一次制；缺省 = 不注入）
+        self._resume_replay_provider = resume_replay_provider
         self._speech_allowed = speech_allowed
         # 决策轮次自增计数器（round_id 生成用；进程内单调）
         self._round_seq: int = 0
@@ -158,6 +161,10 @@ class DecisionRoundExecutor:
     def set_reminders_provider(self, fn: Callable[[], str]) -> None:
         """接线运营递话来源：注入方经此方法提供取空动词，与构造参数通道同写一处。"""
         self._reminders_provider = fn
+
+    def set_resume_replay_provider(self, fn: Callable[[], str]) -> None:
+        """接线续播重放玩家聊天来源：注入方经此方法提供取空动词（构造参数通道同写一处）。"""
+        self._resume_replay_provider = fn
 
     async def execute(
         self,
@@ -292,6 +299,8 @@ class DecisionRoundExecutor:
 
         # 运营递话留言（读取即取空队列——送达一次制；缺省不注入）
         reminders = self._reminders_provider() if self._reminders_provider else ""
+        # 续播重放玩家聊天（读取即清空——注入一次制；缺省不注入）
+        resume_replay = self._resume_replay_provider() if self._resume_replay_provider else ""
 
         # Planner ReAct 决策（循环内完成查信息与 reply 调用；失败细节经
         # outcome.error 带出，供决策事件区分降级原因）
@@ -308,6 +317,7 @@ class DecisionRoundExecutor:
                 rundown_text=rundown_text,
                 game_batch=materials.game_batch,
                 reminders=reminders,
+                resume_replay=resume_replay,
                 thinking=thinking,
                 round_id=round_id,
                 trigger_cause=trigger_cause,
