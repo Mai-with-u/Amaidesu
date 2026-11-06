@@ -583,7 +583,7 @@ class ChatRepo(BaseRepo):
                 rows = conn.execute(
                     "SELECT c.id, c.timestamp_ms, c.content, c.dropped_at_ms, c.reply_to_message_id,"
                     " c.memory_refs, v.content AS reply_content, v.viewer_id AS reply_viewer_id,"
-                    " v.simulated AS reply_simulated, v.id AS reply_chat_id"
+                    " v.simulated AS reply_simulated, v.id AS reply_chat_id, c.reply_player_id"
                     " FROM live_chat c"
                     " LEFT JOIN live_chat v ON v.id = ("
                     "   SELECT MIN(v2.id) FROM live_chat v2"

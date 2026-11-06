@@ -462,7 +462,9 @@ CREATE TABLE IF NOT EXISTS forget_list (
 # 空串 = 不分存档或存档不明）：换了存档时，别的存档里的承诺不再当成眼前的事推给她。
 # keywords 是被动想起的触发词（JSON 字符串列表，同档案行）：观众提到这些词时把这条承诺推给她。
 # target_player_id 是对某位游戏玩家的承诺（→ game_players，玩家被删时承诺一起删）；对全体或对观众时为空。
-# 它的索引由 v32 迁移建（这一列是 v32 才补的，旧库执行建表汇总时它还不存在）。
+# evidence_game_chat_id 是她在游戏公屏打出去的那句（→ game_chat）：对玩家的承诺证据也可以是公屏上
+# 她自己打的字，这时 evidence_chat_id 为空；一句公屏只登记一条，重新整理时按它对齐编号。
+# 这两列的索引由 v32 迁移建（两列都是 v32 才补的，旧库执行建表汇总时它们还不存在）。
 
 _COMMITMENTS_SQL = """
 CREATE TABLE IF NOT EXISTS commitments (
@@ -481,7 +483,8 @@ CREATE TABLE IF NOT EXISTS commitments (
     created_at_ms      INTEGER NOT NULL,
     updated_at_ms      INTEGER NOT NULL,
     keywords           TEXT NOT NULL DEFAULT '[]',
-    target_player_id   INTEGER REFERENCES game_players(id) ON DELETE CASCADE
+    target_player_id   INTEGER REFERENCES game_players(id) ON DELETE CASCADE,
+    evidence_game_chat_id INTEGER REFERENCES game_chat(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 """.strip()

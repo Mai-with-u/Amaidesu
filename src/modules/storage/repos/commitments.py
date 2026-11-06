@@ -22,7 +22,8 @@ from src.modules.utils.time_utils import now_ms
 # 承诺行读面的列（与 Commitment 字段一一对应）
 _COMMITMENT_COLUMNS = (
     "id, what, quote, evidence_chat_id, viewer_id, game, save_id, save_name, status,"
-    " created_session_id, close_chat_id, close_quote, created_at_ms, updated_at_ms"
+    " created_session_id, close_chat_id, close_quote, created_at_ms, updated_at_ms,"
+    " target_player_id, evidence_game_chat_id"
 )
 
 

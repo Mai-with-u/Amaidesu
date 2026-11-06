@@ -305,6 +305,19 @@ class SessionRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def rejected_claim_keys(self) -> Tuple[List[int], List[str]]:
+        """驳回过的"她说欠着的"候选挂的那句台词与标题：整理时同一句或同样标题的不再列。"""
+
+        def _exec() -> Tuple[List[int], List[str]]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT reply_chat_id, title FROM viewer_candidates"
+                    " WHERE status='rejected' AND kind='claimed_missing'"
+                ).fetchall()
+            return [int(row[0]) for row in rows if row[0] is not None], [str(row[1]) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
     async def expire_viewer_candidates(self, *, now_ms_value: int) -> int:
         """删掉列出超过 14 天还没人审的观众候选（整理调度顺手做），返回删了几条。"""
 
@@ -449,13 +462,21 @@ class SessionRepo(BaseRepo):
                 kept_evidence = sorted(
                     {int(item.evidence_chat_id) for item in commitments if item.evidence_chat_id is not None}
                 )
-                stale_filter = ""
+                # 对玩家的承诺证据也可以是她打在游戏公屏上的那句：两种证据各自对齐
+                kept_game_evidence = sorted(
+                    {int(item.evidence_game_chat_id) for item in commitments if item.evidence_game_chat_id is not None}
+                )
+                keep_clauses: List[str] = []
                 if kept_evidence:
-                    placeholders = ",".join("?" for _ in kept_evidence)
-                    stale_filter = f" AND (evidence_chat_id IS NULL OR evidence_chat_id NOT IN ({placeholders}))"
+                    keep_clauses.append(f"COALESCE(evidence_chat_id IN ({','.join('?' for _ in kept_evidence)}), 0)")
+                if kept_game_evidence:
+                    keep_clauses.append(
+                        f"COALESCE(evidence_game_chat_id IN ({','.join('?' for _ in kept_game_evidence)}), 0)"
+                    )
+                stale_filter = f" AND NOT ({' OR '.join(keep_clauses)})" if keep_clauses else ""
                 conn.execute(
                     "DELETE FROM commitments WHERE created_session_id=? AND status='open'" + stale_filter,  # noqa: S608 占位符由代码生成
-                    (int(live_session_id), *kept_evidence),
+                    (int(live_session_id), *kept_evidence, *kept_game_evidence),
                 )
                 # 上一轮整理用本场台词了结的旧承诺先放回未了结，再按这一轮的结果重新了结
                 reopen_commitments_closed_by_session(
@@ -502,14 +523,19 @@ class SessionRepo(BaseRepo):
                     kept=snapshot_kept,
                 )
                 for item in commitments:
+                    # 证据是公屏那句的按公屏行对齐，其余按台词行对齐
+                    conflict_key = (
+                        "evidence_game_chat_id" if item.evidence_game_chat_id is not None else "evidence_chat_id"
+                    )
                     cur = conn.execute(
-                        "INSERT INTO commitments(what, quote, evidence_chat_id, viewer_id, game, save_id, save_name,"
-                        " created_session_id, created_at_ms, updated_at_ms)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                        # 同一句台词已登记过：本场仍未了结的那条原地更新（编号不变），
+                        "INSERT INTO commitments(what, quote, evidence_chat_id, evidence_game_chat_id, viewer_id,"
+                        " target_player_id, game, save_id, save_name, created_session_id, created_at_ms, updated_at_ms)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        # 同一句已登记过：本场仍未了结的那条原地更新（编号不变），
                         # 已了结、判误记或别处登记的不动
-                        " ON CONFLICT(evidence_chat_id) DO UPDATE SET"
+                        f" ON CONFLICT({conflict_key}) DO UPDATE SET"  # noqa: S608 冲突键取自两个代码内常量
                         " what=excluded.what, quote=excluded.quote, viewer_id=excluded.viewer_id,"
+                        " target_player_id=excluded.target_player_id,"
                         " game=excluded.game, save_id=excluded.save_id, save_name=excluded.save_name,"
                         " updated_at_ms=excluded.updated_at_ms"
                         " WHERE commitments.status='open'"
@@ -518,7 +544,9 @@ class SessionRepo(BaseRepo):
                             item.what,
                             item.quote,
                             item.evidence_chat_id,
+                            item.evidence_game_chat_id,
                             item.viewer_id,
+                            item.target_player_id,
                             item.game,
                             item.save_id,
                             item.save_name,

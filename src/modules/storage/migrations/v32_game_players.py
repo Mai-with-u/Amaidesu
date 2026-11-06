@@ -14,11 +14,13 @@ UUID 是两个人。只自动记和她发生过的互动（打招呼、送东西
   台词），三处被删时级联。
 - ``viewer_player_links``：运营者确认的"这位玩家是直播间的哪位观众"，只用来连带删除，从不告诉她。
 - ``commitments.target_player_id``：对某位游戏玩家的承诺，玩家被删时承诺一起删。
+- ``commitments.evidence_game_chat_id``：对玩家的承诺证据是她在游戏公屏打出去的那句时，指向那一行；
+  一句公屏只登记一条（唯一索引），重新整理时按它对齐编号。
 - ``live_chat.reply_player_id``：她这句台词在回应哪位玩家（这一窗只有一位玩家开过口时才记），
   玩家被删时置空。
 
-既有表新加的两列由这里补，它们的索引也只建在这里：启动时先执行建表汇总、后跑迁移，建表汇总执行
-那一刻旧库里还没有这两列。建表语句在这里留一份定稿副本：建表汇总以后改动，不影响这一版迁移做过的事。
+既有表新加的三列由这里补，它们的索引也只建在这里：启动时先执行建表汇总、后跑迁移，建表汇总执行
+那一刻旧库里还没有这三列。建表语句在这里留一份定稿副本：建表汇总以后改动，不影响这一版迁移做过的事。
 """
 
 from __future__ import annotations
@@ -30,11 +32,14 @@ from src.modules.storage.migrations._common import column_exists, table_exists
 # (表, 列, 列定义)：带外键的列只能以空值为默认补进来（SQLite 的限制），旧行正好都不挂玩家
 _NEW_COLUMNS = (
     ("commitments", "target_player_id", "INTEGER REFERENCES game_players(id) ON DELETE CASCADE"),
+    ("commitments", "evidence_game_chat_id", "INTEGER REFERENCES game_chat(id) ON DELETE SET NULL"),
     ("live_chat", "reply_player_id", "INTEGER REFERENCES game_players(id) ON DELETE SET NULL"),
 )
 
 _COLUMN_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_commitments_target_player ON commitments(target_player_id)",
+    # 一句公屏只登记一条承诺：整理落库按它做"同一句原地更新"的冲突键
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_commitments_evidence_game_chat ON commitments(evidence_game_chat_id)",
     "CREATE INDEX IF NOT EXISTS idx_live_chat_reply_player ON live_chat(reply_player_id)",
 )
 
@@ -115,7 +120,7 @@ CREATE TABLE IF NOT EXISTS viewer_player_links (
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    """原地修改、幂等：建玩家相关五张表 → 承诺与台词各补一列玩家引用及其索引。"""
+    """原地修改、幂等：建玩家相关五张表 → 承诺补玩家与公屏证据两列、台词补一列玩家引用，连同索引。"""
     for statement in _TABLES_SQL:
         conn.execute(statement)
     for table, column, definition in _NEW_COLUMNS:

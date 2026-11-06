@@ -129,6 +129,12 @@ class Commitment(BaseModel):
     close_quote: Optional[str] = Field(default=None, description="了结那句的原话片段")
     created_at_ms: int = Field(..., description="登记时刻（Unix epoch 毫秒）")
     updated_at_ms: int = Field(..., description="最近更新时刻（Unix epoch 毫秒）")
+    target_player_id: Optional[int] = Field(
+        default=None, description="对某位游戏玩家（game_players 主键）；None 即不是对玩家答应的"
+    )
+    evidence_game_chat_id: Optional[int] = Field(
+        default=None, description="原话是她在游戏公屏打出去的那句时，指向那一行 game_chat"
+    )
 
 
 class ArchiveLine(BaseModel):
@@ -240,6 +246,10 @@ class PendingCommitment(BaseModel):
     quote: str = Field(default="", description="她播出原句的逐字片段")
     evidence_chat_id: Optional[int] = Field(default=None, description="那句台词的 live_chat 行")
     viewer_id: Optional[int] = Field(default=None, description="对某位观众；None 即不针对具体人")
+    target_player_id: Optional[int] = Field(default=None, description="对某位游戏玩家；None 即不是对玩家答应的")
+    evidence_game_chat_id: Optional[int] = Field(
+        default=None, description="原话是她在游戏公屏打出去的那句时，那一行 game_chat（这时没有台词行）"
+    )
     game: Optional[str] = Field(default=None, description="挂在哪个游戏；None 即不挂")
     save_id: str = Field(default="", description="答应时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")

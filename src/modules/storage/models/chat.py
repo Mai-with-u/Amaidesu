@@ -213,6 +213,9 @@ class SettleSpeechLine(BaseModel):
     reply_chat_id: Optional[int] = Field(
         default=None, description="被回应那条弹幕的 live_chat 行（观众候选挂在它上面）"
     )
+    reply_player_id: Optional[int] = Field(
+        default=None, description="这句在回应哪位游戏玩家（那一窗只有他在游戏里开过口时才记）"
+    )
 
 
 class SpeechDeleteResult(BaseModel):

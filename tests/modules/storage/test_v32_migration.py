@@ -91,8 +91,12 @@ async def test_v31_database_upgrades_with_player_columns_and_tables(tmp_path: Pa
     await upgraded.initialize()
     try:
         assert await upgraded.get_schema_version() == SCHEMA_VERSION
-        (commitment,) = await upgraded.execute("SELECT what, target_player_id FROM commitments")
-        assert (commitment["what"], commitment["target_player_id"]) == ("下次带大家挖钻石", None)
+        (commitment,) = await upgraded.execute("SELECT what, target_player_id, evidence_game_chat_id FROM commitments")
+        assert (commitment["what"], commitment["target_player_id"], commitment["evidence_game_chat_id"]) == (
+            "下次带大家挖钻石",
+            None,
+            None,
+        )
         (line,) = await upgraded.execute("SELECT content, reply_player_id FROM live_chat")
         assert (line["content"], line["reply_player_id"]) == ("好呀", None)
         for table in _NEW_TABLES:
@@ -100,6 +104,7 @@ async def test_v31_database_upgrades_with_player_columns_and_tables(tmp_path: Pa
         commitment_indexes = {row["name"] for row in await upgraded.execute("PRAGMA index_list(commitments)")}
         chat_indexes = {row["name"] for row in await upgraded.execute("PRAGMA index_list(live_chat)")}
         assert "idx_commitments_target_player" in commitment_indexes
+        assert "idx_commitments_evidence_game_chat" in commitment_indexes
         assert "idx_live_chat_reply_player" in chat_indexes
     finally:
         await upgraded.close()

@@ -505,6 +505,46 @@ async def _settle_once(
     )
 
 
+async def test_commitment_to_a_player_from_game_chat_keeps_number_on_rerun(store: SQLiteDatabase) -> None:
+    """对玩家的承诺：证据是她打在游戏公屏上的那句，按公屏行对齐编号；不再认定才删。"""
+    session_id = await _ended_session(store)
+    alex = await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-a", name="Alex", live_session_id=session_id, at_ms=1100
+    )
+    said = await store.game_players.add_game_chat(
+        live_session_id=session_id, game="minecraft", direction="streamer", content="Alex 下次带你去挖矿", at_ms=1200
+    )
+
+    async def settle(commitments: list) -> dict:
+        # 每轮先排回整理队列，模拟运营者点「重新整理」
+        await store.sessions.requeue_settlement(live_session_id=session_id)
+        return await store.sessions.apply_settlement(
+            live_session_id=session_id,
+            archive_lines=[],
+            commitments=commitments,
+            closures=[],
+            settled_at_ms=9_999,
+            now_ms_value=9_999,
+        )
+
+    first = PendingCommitment(
+        what="带 Alex 去挖矿", quote="下次带你去挖矿", evidence_game_chat_id=said, target_player_id=alex.id
+    )
+    assert (await settle([first]))["commitments"] == 1
+    (row,) = await store.commitments.list_commitments(statuses=["open"])
+    assert (row.evidence_chat_id, row.evidence_game_chat_id, row.target_player_id) == (None, said, alex.id)
+
+    # 重跑仍认定同一句：编号不变、标题原地更新
+    renamed = first.model_copy(update={"what": "带他去挖矿"})
+    await settle([renamed])
+    (again,) = await store.commitments.list_commitments(statuses=["open"])
+    assert (again.id, again.what) == (row.id, "带他去挖矿")
+
+    # 不再认定：删掉
+    await settle([])
+    assert await store.commitments.list_commitments(statuses=["open"]) == []
+
+
 async def test_apply_settlement_rerun_replaces_archive_and_open_commitments(store: SQLiteDatabase) -> None:
     session_id = await _ended_session(store)
     first = await _settle_once(
