@@ -1,16 +1,23 @@
 """线索推送：每批 Planner 调用前，按线索找出这一批该想起来的事。
 
-线索只有两种（按优先级取，每批至多三张卡）：
+线索按优先级取，每批至多三张卡：
 
 1. 对象开口：本批发言人按外部 ID 精确解析出观众编号（只读，不建观众；有待执行删除请求
    的不算），名下有未了结承诺 → 推那张对 ta 的承诺卡，只给动作标题；
-2. 游戏开着：主播当前开着某个游戏，有挂这个游戏、不针对具体观众的未了结承诺 → 推游戏卡。
+2. 游戏地点（被动想起）：角色从远处走到某个记住的地点跟前 → 推挂在这个地点上的档案行；
+3. 规则（被动想起）：本批观众弹幕或她最近 3 句台词提到了档案行的触发词或老梗 → 推那一条；
+4. 游戏开着：主播当前开着某个游戏，有挂这个游戏、不针对具体观众的未了结承诺 → 推游戏卡。
    分存档的游戏只推眼下这个存档里答应的（别的存档里的事不催她提起），没记存档的照推、
    卡面注明不确定；对某位观众的卡照推，注明是在哪个存档里答应的（判定见 ``saves``）。
 
+地点与规则两路怎么找候选见 ``passive``；被动想起可在配置里整体关掉。
+
 限频与用上即停：同一张卡每场至多推两次、两次至少隔十分钟（计数在内存里，进程重启从零
-算）；本场台词的记忆引用里已经出现这张卡的编号，就是被用上了，本场不再推——这一条每批
-查一次库，进程重启也不丢。
+算）；本场台词的记忆引用里已经出现这张卡的编号（约#N 或 档#N），就是被用上了，本场不再推
+——这一条每批查一次库，进程重启也不丢。被动想起另有两条：常驻简报里已经列着的条目不推；
+只由她自己台词命中的（自触发）每条每场只推一次，免得她提一句、卡片推一张、她再接着说，
+越说越多。每推一张卡记一行线索卡记录（只记条目编号和分数，不记观众身份），检测到她用上时
+回填用上的时刻。
 
 另外两种输出不是卡而是提示行：老观众在场一行（本批开口、本场之前来过至少三场正式场、
 这一批没有承诺卡、她本场还没回应过、没有待删请求的观众合成一行），以及本批遗忘命令的
@@ -25,14 +32,31 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.logging import get_logger
+from src.modules.storage.models.memory import NewCueLogEntry
 from src.modules.types.game_save import GameSave
+from src.modules.types.game_situation import GameSituation
 from src.modules.utils.time_utils import now_ms
 
-from .brief import load_used_commitment_ids
+from .brief import load_used_refs
+from .passive import (
+    SOURCE_DANMAKU,
+    SOURCE_GAME,
+    SOURCE_PLACE,
+    SOURCE_SELF,
+    CueText,
+    ItemKey,
+    PassiveHit,
+    PlaceArrivals,
+    RulePool,
+)
 from .render import (
+    render_archive_card,
+    render_archive_number,
+    render_commitment_number,
     render_cue_block,
     render_forget_notice,
     render_game_card,
+    render_joke_card,
     render_presence_line,
     render_retract_notice,
     render_viewer_card,
@@ -41,11 +65,12 @@ from .saves import SavePlace, place_note, place_of
 
 if TYPE_CHECKING:
     from src.modules.storage.privacy import PrivacyService
-    from src.modules.storage.repos import ChatRepo, CommitmentRepo, ViewerRepo
+    from src.modules.storage.repos import ArchiveRepo, ChatRepo, CommitmentRepo, MemoryCueLogRepo, ViewerRepo
 
 __all__ = [
     "MAX_CARDS_PER_BATCH",
     "MAX_PUSHES_PER_CARD",
+    "MAX_SELF_PUSHES_PER_CARD",
     "MIN_SESSIONS_FOR_PRESENCE",
     "MemoryCueProvider",
     "MemoryCues",
@@ -53,9 +78,10 @@ __all__ = [
 
 logger = get_logger("MemoryCueProvider")
 
-# 一批最多推几张卡、同一张卡每场最多推几次
+# 一批最多推几张卡、同一张卡每场最多推几次（只由她自己台词触发的只推一次）
 MAX_CARDS_PER_BATCH = 3
 MAX_PUSHES_PER_CARD = 2
+MAX_SELF_PUSHES_PER_CARD = 1
 # 同一张卡两次推送的最小间隔
 PUSH_COOLDOWN_MS = 10 * 60 * 1000
 # 老观众在场一行的门槛：本场之前来过至少三场正式场
@@ -64,17 +90,20 @@ MIN_SESSIONS_FOR_PRESENCE = 3
 _MAX_COMMITMENTS_PER_VIEWER = 3
 # 挂在一个游戏上的未了结承诺最多看几条：别的存档里答应的不推，要往后多看几条才找得到眼下这个存档的
 _MAX_COMMITMENTS_PER_GAME = 20
+# 规则一路看她最近几句播出的台词
+RECENT_SPEECH_LINES = 3
 
 
 @dataclass(frozen=True)
 class MemoryCues:
-    """一批的线索结果：拼好的参考段文本 + 本批出现的承诺编号（供点名校验）。"""
+    """一批的线索结果：拼好的参考段文本 + 本批出现的承诺与档案行编号（供点名校验）。"""
 
     text: str = ""
     commitment_ids: Tuple[int, ...] = ()
     card_count: int = 0
     # 卡片编号 → 对方称呼（对某位观众的卡才有；说话档要拿它说"答应过谁"）
     labels: Dict[int, str] = field(default_factory=dict)
+    archive_ids: Tuple[int, ...] = ()
 
 
 @dataclass
@@ -94,8 +123,52 @@ class _Sender:
     prev_seen_ms: Optional[int] = None
 
 
+@dataclass
+class _Card:
+    """这一批推出去的一张卡：卡面、条目、卡类，以及写进线索卡记录的来源与分数。"""
+
+    key: ItemKey
+    text: str
+    kind: str
+    sources: Tuple[str, ...] = ()
+    detail: Dict[str, Any] = field(default_factory=dict)
+    self_triggered: bool = False
+
+
+@dataclass
+class _Round:
+    """一批线索的判定材料与结果：用过的、简报里列着的条目，眼下的存档，推了哪些、没推哪些。"""
+
+    used: Set[int]
+    used_archive: Set[int]
+    brief_commitments: Set[int]
+    brief_archive: Set[int]
+    saves: Mapping[str, GameSave]
+    previous_session_id: Optional[int]
+    cards: List[_Card] = field(default_factory=list)
+    carded_viewers: Set[int] = field(default_factory=set)
+    skipped: List[str] = field(default_factory=list)
+
+    @property
+    def full(self) -> bool:
+        return len(self.cards) >= MAX_CARDS_PER_BATCH
+
+    def ids(self, kind: str) -> Tuple[int, ...]:
+        return tuple(int(card.key[1]) for card in self.cards if card.key[0] == kind)
+
+
+def _label(key: ItemKey) -> str:
+    """日志里认条目用的写法：约#7 / 档#41 / 老梗「倒立洗头」。"""
+    kind, value = key
+    if kind == "commitment":
+        return render_commitment_number(int(value))
+    if kind == "archive":
+        return render_archive_number(int(value))
+    return f"老梗「{value}」"
+
+
 class MemoryCueProvider:
-    """按批计算线索；推送计数与回执追踪只活在本场，换场时清空。"""
+    """按批计算线索；推送计数、到过的地点与回执追踪只活在本场，换场时清空。"""
 
     def __init__(
         self,
@@ -107,11 +180,16 @@ class MemoryCueProvider:
         current_session_provider: Optional[Callable[[], Optional[int]]] = None,
         previous_session_provider: Optional[Callable[[], Awaitable[Optional[int]]]] = None,
         clock: Callable[[], int] = now_ms,
+        archive_repo: Optional["ArchiveRepo"] = None,
+        cue_log_repo: Optional["MemoryCueLogRepo"] = None,
+        inside_jokes: str = "",
+        passive_enabled: bool = True,
     ) -> None:
         """仓储与时钟注入；隐私服务缺失时不出回执行（看不见遗忘命令）。
 
-        ``previous_session_provider`` 给"上一场"的判定（承诺卡的时间词）：缺省时
-        承诺卡一律写"之前"，不冒险把三场前的承诺说成上一场。
+        ``previous_session_provider`` 给"上一场"的判定（承诺卡与档案卡的时间词）：缺省时
+        一律写"之前"，不冒险把三场前的事说成上一场。``archive_repo`` 缺失时被动想起没有档案卡；
+        ``cue_log_repo`` 缺失时只记日志；``passive_enabled`` 为假时地点与规则两路都不跑。
         """
         self._commitments = commitments_repo
         self._chat = chat_repo
@@ -120,9 +198,13 @@ class MemoryCueProvider:
         self._current_session_provider = current_session_provider
         self._previous_session_provider = previous_session_provider
         self._clock = clock
+        self._cue_log = cue_log_repo
+        self._passive_enabled = passive_enabled
+        self._pool = RulePool(archive_repo=archive_repo, inside_jokes=inside_jokes, clock=clock)
+        self._arrivals = PlaceArrivals()
         self._session_id: Optional[int] = None
-        # 承诺编号 → 本场推送时刻列表
-        self._push_at: dict[int, List[int]] = {}
+        # 条目 → 本场推送时刻列表
+        self._push_at: Dict[ItemKey, List[int]] = {}
         # 本批推送的卡：编号 → 对方称呼（说话档据此说"答应过谁"）
         self._round_labels: Dict[int, str] = {}
 
@@ -136,36 +218,59 @@ class MemoryCueProvider:
         batch: Sequence[Any],
         open_games: Sequence[str] = (),
         current_saves: Optional[Mapping[str, GameSave]] = None,
+        situations: Optional[Mapping[str, GameSituation]] = None,
+        brief_archive_ids: Sequence[int] = (),
+        brief_commitment_ids: Sequence[int] = (),
     ) -> MemoryCues:
         """算一批的线索：卡片、老观众在场一行、回执行合成一个块；没有线索返回空串。
 
         ``current_saves`` 是分存档的游戏眼下所在的存档：游戏卡只推这个存档里答应的。
+        ``situations`` 是各游戏角色离记住的地点多远（地点一路判到达用）；``brief_*_ids`` 是
+        常驻简报里列着的条目，被动想起不再推它们。
         """
         session_id = self._current_session_provider() if self._current_session_provider is not None else None
         if session_id is None:
             return MemoryCues()
-        self._reset_if_new_session(int(session_id))
+        sid = int(session_id)
+        self._reset_if_new_session(sid)
         senders = await self._resolve_senders(batch)
-        used = await self._used_commitment_ids(int(session_id))
-        previous_session_id = await self._previous_session_id()
-        cards, card_ids, carded_viewers = await self._collect_cards(
-            senders, used, open_games, previous_session_id, current_saves or {}
+        used, used_archive = await load_used_refs(self._chat, sid)
+        await self._mark_used(sid, used_archive, used)
+        state = _Round(
+            used=used,
+            used_archive=used_archive,
+            brief_commitments={int(item) for item in brief_commitment_ids},
+            brief_archive={int(item) for item in brief_archive_ids},
+            saves=dict(current_saves or {}),
+            previous_session_id=await self._previous_session_id(),
         )
+        self._round_labels = {}
+        # 对象开口 -> 游戏地点 -> 规则 -> 游戏开着：每一路只在前面没凑满三张时补
+        await self._viewer_cards(senders, state)
+        if self._passive_enabled:
+            await self._pool.refresh_if_stale()
+            self._place_cards(situations or {}, state)
+            self._rule_cards(self._pool.match(await self._rule_texts(sid, batch, senders)), state)
+        await self._game_cards(open_games, state)
         # 老观众一行不再因为"本批有别人的卡"整行消失；只跳过这一批拿了自己卡的观众
-        presence = await self._presence_line(int(session_id), senders, carded_viewers)
+        presence = await self._presence_line(sid, senders, state.carded_viewers)
         notices = self._command_notices(batch)
-        text = render_cue_block(cards=cards, presence=presence, notices=notices)
+        text = render_cue_block(cards=[card.text for card in state.cards], presence=presence, notices=notices)
+        await self._record_round(sid, state)
         return MemoryCues(
             text=text,
-            commitment_ids=tuple(card_ids),
-            card_count=len(cards),
+            commitment_ids=state.ids("commitment"),
+            card_count=len(state.cards),
             labels=dict(self._round_labels),
+            archive_ids=state.ids("archive"),
         )
 
     def reset(self) -> None:
-        """下播时清空本场状态（推送计数与回执追踪都只在本场内有效）。"""
+        """下播时清空本场状态（推送计数、到过的地点与回执追踪都只在本场内有效）。"""
         self._session_id = None
         self._push_at.clear()
+        self._arrivals.reset()
+        self._pool.reset()
 
     # ------------------------------------------------------------------
     # 取数
@@ -230,10 +335,6 @@ class MemoryCueProvider:
         sender.last_session_id = int(row.last_session_id) if row.last_session_id is not None else None
         sender.prev_seen_ms = row.prev_seen_ms
 
-    async def _used_commitment_ids(self, session_id: int) -> Set[int]:
-        """本场台词已经点名引用过的承诺编号（用上即停；与常驻简报同一份口径）。"""
-        return await load_used_commitment_ids(self._chat, session_id)
-
     async def _replied_viewer_ids(self, session_id: int) -> Set[int]:
         """本场她回应过的观众。
 
@@ -247,65 +348,254 @@ class MemoryCueProvider:
             return set()
         return {int(item) for item in ids}
 
+    async def _rule_texts(self, session_id: int, batch: Sequence[Any], senders: Sequence[_Sender]) -> List[CueText]:
+        """规则一路看的文本：本批能进查询的观众弹幕，加她最近几句播出的台词。"""
+        texts = [
+            CueText(source=SOURCE_DANMAKU, text=content, message_id=message_id)
+            for content, message_id in self._query_messages(batch, senders)
+        ]
+        texts.extend(CueText(source=SOURCE_SELF, text=line) for line in await self._recent_lines(session_id))
+        return texts
+
+    def _query_messages(self, batch: Sequence[Any], senders: Sequence[_Sender]) -> List[Tuple[str, str]]:
+        """本批能拿来想起旧事的弹幕（正文, 弹幕编号）：只看正文，不带昵称与外部 ID。
+
+        模拟消息不算（线索只认真观众）；遗忘与撤回命令本身不算；发过"忘了我"、删除还没执行的
+        观众，ta 的弹幕一律不算。
+        """
+        forgetting = {sender.external_id for sender in senders if sender.forget_requested_at_ms is not None}
+        messages: List[Tuple[str, str]] = []
+        for message in batch:
+            if bool(getattr(message, "simulated", False)):
+                continue
+            if str(getattr(message, "message_type", "") or "") != "danmaku":
+                continue
+            content = str(getattr(message, "content", "") or "").strip()
+            if not content:
+                continue
+            user = getattr(message, "user", None)
+            if str(getattr(user, "id", "") or "").strip() in forgetting:
+                continue
+            if self._privacy is not None and (
+                self._privacy.is_forget_command(content) or self._privacy.is_retract_command(content)
+            ):
+                continue
+            messages.append((content, str(getattr(message, "message_id", "") or "")))
+        return messages
+
+    async def _recent_lines(self, session_id: int) -> List[str]:
+        """她本场最近几句播出了的台词（确知没送达的不算）；读不到就当没有。"""
+        try:
+            rows = await self._chat.list_recent_live_chat(
+                live_session_id=session_id, limit=RECENT_SPEECH_LINES, sender_role="assistant"
+            )
+        except Exception as exc:  # noqa: BLE001 - 读不到她的台词，这一批规则只看弹幕
+            logger.warning(f"读她最近的台词失败（这一批规则只看弹幕）: {exc}", exc=exc)
+            return []
+        return [row.content for row in rows if row.dropped_at_ms is None and (row.content or "").strip()]
+
+    async def _mark_used(self, session_id: int, used_archive: Set[int], used: Set[int]) -> None:
+        """本场已被点名用上的条目：回填线索卡记录里用上的时刻（只回填还没回填的）。"""
+        if self._cue_log is None or not (used_archive or used):
+            return
+        try:
+            await self._cue_log.mark_used(
+                live_session_id=session_id,
+                archive_line_ids=used_archive,
+                commitment_ids=used,
+                used_at_ms=int(self._clock()),
+            )
+        except Exception as exc:  # noqa: BLE001 - 记录回填失败不挡推送，下一批再回填
+            logger.warning(f"回填线索卡用上时刻失败（下一批再试）: {exc}", exc=exc)
+
+    async def _record_round(self, session_id: int, state: _Round) -> None:
+        """这一批推了什么、没推什么记一行日志；推出去的卡写进线索卡记录。"""
+        if state.cards:
+            pushed = "、".join(
+                f"{_label(card.key)}（{card.kind}，来源 {'+'.join(card.sources) or '无'}）" for card in state.cards
+            )
+            skipped = f"；没推 {'、'.join(state.skipped)}" if state.skipped else ""
+            logger.info(f"线索推送：推了 {pushed}{skipped}")
+        elif state.skipped:
+            logger.debug(f"线索推送：没推 {'、'.join(state.skipped)}")
+        if self._cue_log is None or not state.cards:
+            return
+        now = int(self._clock())
+        entries = [
+            NewCueLogEntry(
+                live_session_id=session_id,
+                pushed_at_ms=now,
+                card_kind=card.kind,
+                archive_line_id=int(card.key[1]) if card.key[0] == "archive" else None,
+                commitment_id=int(card.key[1]) if card.key[0] == "commitment" else None,
+                sources=list(card.sources),
+                detail=dict(card.detail, **({"joke": card.key[1]} if card.key[0] == "joke" else {})),
+                self_triggered=card.self_triggered,
+            )
+            for card in state.cards
+        ]
+        try:
+            await self._cue_log.insert_entries(entries=entries)
+        except Exception as exc:  # noqa: BLE001 - 记录写不进去不挡推送，日志里仍看得到这一批
+            logger.warning(f"写线索卡记录失败（这一批只留日志）: {exc}", exc=exc)
+
     # ------------------------------------------------------------------
     # 卡片
     # ------------------------------------------------------------------
 
-    async def _collect_cards(
-        self,
-        senders: Sequence[_Sender],
-        used: Set[int],
-        open_games: Sequence[str],
-        previous_session_id: Optional[int],
-        current_saves: Mapping[str, GameSave],
-    ) -> Tuple[List[str], List[int], Set[int]]:
-        """按优先级凑卡片：先对象开口，再正在玩的游戏；每批至多三张。
-
-        第三个返回值是本批拿到"对 ta 的承诺卡"的观众编号：老观众在场一行只跳过这些人。
-        """
-        cards: List[str] = []
-        ids: List[int] = []
-        carded_viewers: Set[int] = set()
-        self._round_labels = {}
+    async def _viewer_cards(self, senders: Sequence[_Sender], state: _Round) -> None:
+        """对象开口：本批开口的观众名下有未了结承诺，推一张对 ta 的卡（每人一张）。"""
         for sender in senders:
-            if len(cards) >= MAX_CARDS_PER_BATCH:
-                return cards, ids, carded_viewers
+            if state.full:
+                return
             if sender.viewer_id is None or sender.forget_requested_at_ms is not None:
                 continue
             for commitment in await self._open_commitments(viewer_id=sender.viewer_id):
-                if not self._may_push(int(commitment.id), used):
+                key: ItemKey = ("commitment", int(commitment.id))
+                if self._blocked(key, state) is not None:
                     continue
-                cards.append(
-                    render_viewer_card(
-                        commitment,
-                        viewer_label=sender.user_name or "观众",
-                        message_id=sender.message_id,
-                        is_previous=self._registered_in_previous_session(commitment, previous_session_id),
-                        place=place_note(commitment.game, commitment.save_id, commitment.save_name, current_saves),
-                    )
+                text = render_viewer_card(
+                    commitment,
+                    viewer_label=sender.user_name or "观众",
+                    message_id=sender.message_id,
+                    is_previous=self._registered_in_previous_session(commitment, state.previous_session_id),
+                    place=place_note(commitment.game, commitment.save_id, commitment.save_name, state.saves),
                 )
-                ids.append(int(commitment.id))
-                carded_viewers.add(int(sender.viewer_id))
+                self._push(state, _Card(key=key, text=text, kind="viewer", sources=(SOURCE_DANMAKU,)))
+                state.carded_viewers.add(int(sender.viewer_id))
                 self._round_labels[int(commitment.id)] = sender.user_name or "观众"
-                self._record_push(int(commitment.id))
                 break
+
+    async def _game_cards(self, open_games: Sequence[str], state: _Round) -> None:
+        """游戏开着：挂在这个游戏上、不针对具体观众的未了结承诺，每个游戏一张。"""
         for game in open_games:
-            if len(cards) >= MAX_CARDS_PER_BATCH:
-                break
+            if state.full:
+                return
             for commitment in await self._open_commitments(game=game, limit=_MAX_COMMITMENTS_PER_GAME):
                 if commitment.viewer_id is not None:
                     continue
                 # 别的存档里答应的事不催她提起：眼前这个世界里没有那座房子
-                place = place_of(game, commitment.save_id, current_saves)
+                place = place_of(game, commitment.save_id, state.saves)
                 if place is SavePlace.OTHER:
                     continue
-                if not self._may_push(int(commitment.id), used):
+                key: ItemKey = ("commitment", int(commitment.id))
+                if self._blocked(key, state) is not None:
                     continue
-                cards.append(render_game_card(commitment, game=game, unsure_save=place is SavePlace.UNSURE))
-                ids.append(int(commitment.id))
-                self._record_push(int(commitment.id))
+                text = render_game_card(commitment, game=game, unsure_save=place is SavePlace.UNSURE)
+                self._push(state, _Card(key=key, text=text, kind="game", sources=(SOURCE_GAME,)))
                 break
-        return cards, ids, carded_viewers
+
+    def _place_cards(self, situations: Mapping[str, GameSituation], state: _Round) -> None:
+        """游戏地点：这一批刚走到某个记住的地点跟前，推挂在那里的档案行。"""
+        for game, place, distance in self._arrivals.update(situations, state.saves):
+            for line in self._pool.lines_at(game, place, state.saves):
+                key: ItemKey = ("archive", int(line.id))
+                if self._skip(key, state, self._passive_blocked(key, state)):
+                    continue
+                text = render_archive_card(
+                    line,
+                    why=f"你走到「{place}」附近了",
+                    is_previous=self._line_in_previous_session(line.live_session_id, state),
+                    note=place_note(line.game, line.save_id, line.save_name, state.saves),
+                )
+                detail = {"place": place, "distance": distance}
+                self._push(state, _Card(key=key, text=text, kind="place", sources=(SOURCE_PLACE,), detail=detail))
+
+    def _rule_cards(self, hits: Sequence[PassiveHit], state: _Round) -> None:
+        """规则：弹幕或她最近的台词提到了触发词；只由她自己台词命中的每条每场只推一次。"""
+        for hit in hits:
+            limit = MAX_SELF_PUSHES_PER_CARD if hit.self_only else MAX_PUSHES_PER_CARD
+            if self._skip(hit.key, state, self._passive_blocked(hit.key, state, limit=limit)):
+                continue
+            text = self._rule_card_text(hit, state)
+            if not text:
+                continue
+            kind = "joke" if hit.key[0] == "joke" else "rule"
+            detail = {"keywords": list(hit.keywords), "how": list(hit.hows)}
+            card = _Card(
+                key=hit.key,
+                text=text,
+                kind=kind,
+                sources=tuple(sorted(hit.sources)),
+                detail=detail,
+                self_triggered=hit.self_only,
+            )
+            self._push(state, card)
+
+    def _rule_card_text(self, hit: PassiveHit, state: _Round) -> str:
+        """规则命中的卡面；条目不在了、或是别的存档里的事（不催她提起）时返回空串。"""
+        kind, value = hit.key
+        if kind == "joke":
+            return render_joke_card(str(value), message_id=hit.message_id)
+        keyword = hit.keywords[0] if hit.keywords else ""
+        if SOURCE_DANMAKU in hit.sources:
+            who = f"弹幕 {hit.message_id} " if hit.message_id else "观众"
+            why = f"{who}提到「{keyword}」"
+        else:
+            why = f"你刚说到「{keyword}」"
+        line = self._pool.archive_line(int(value))
+        if line is None or self._skip(hit.key, state, self._other_save(line.game, line.save_id, state)):
+            return ""
+        return render_archive_card(
+            line,
+            why=why,
+            is_previous=self._line_in_previous_session(line.live_session_id, state),
+            note=place_note(line.game, line.save_id, line.save_name, state.saves),
+        )
+
+    # ------------------------------------------------------------------
+    # 推不推
+    # ------------------------------------------------------------------
+
+    def _blocked(self, key: ItemKey, state: _Round, *, limit: int = MAX_PUSHES_PER_CARD) -> Optional[str]:
+        """用上即停加限频：本场已用过、本批已推、推满或没到间隔都不推；返回原因，能推返回 None。"""
+        kind, value = key
+        if (kind == "commitment" and int(value) in state.used) or (
+            kind == "archive" and int(value) in state.used_archive
+        ):
+            return "本场用过"
+        if any(card.key == key for card in state.cards):
+            return "本批已推"
+        pushes = self._push_at.get(key, [])
+        if len(pushes) >= limit:
+            return "推满"
+        if pushes and int(self._clock()) - pushes[-1] < PUSH_COOLDOWN_MS:
+            return "冷却"
+        return None
+
+    def _passive_blocked(self, key: ItemKey, state: _Round, *, limit: int = MAX_PUSHES_PER_CARD) -> Optional[str]:
+        """被动想起另加两条：常驻简报里已经列着的不推；这一批已经凑满三张的不推。"""
+        kind, value = key
+        if (kind == "commitment" and int(value) in state.brief_commitments) or (
+            kind == "archive" and int(value) in state.brief_archive
+        ):
+            return "已在简报"
+        reason = self._blocked(key, state, limit=limit)
+        if reason is None and state.full:
+            return "每批上限"
+        return reason
+
+    @staticmethod
+    def _other_save(game: Optional[str], save_id: str, state: _Round) -> Optional[str]:
+        """别的存档里的事不催她提起（与游戏卡同口径）。"""
+        return "别的存档" if place_of(game, save_id, state.saves) is SavePlace.OTHER else None
+
+    @staticmethod
+    def _skip(key: ItemKey, state: _Round, reason: Optional[str]) -> bool:
+        """有原因就记下没推，返回 True。"""
+        if reason is None:
+            return False
+        state.skipped.append(f"{_label(key)}（{reason}）")
+        return True
+
+    def _push(self, state: _Round, card: _Card) -> None:
+        state.cards.append(card)
+        self._push_at.setdefault(card.key, []).append(int(self._clock()))
+
+    @staticmethod
+    def _line_in_previous_session(live_session_id: int, state: _Round) -> bool:
+        """档案行写在"上一场"才写"上一场"，其余写"之前"。"""
+        return state.previous_session_id is not None and int(live_session_id) == int(state.previous_session_id)
 
     @staticmethod
     def _registered_in_previous_session(commitment: Any, previous_session_id: Optional[int]) -> bool:
@@ -347,20 +637,6 @@ class MemoryCueProvider:
         except Exception as exc:  # noqa: BLE001 - 查不到这张卡，不挡本批其余线索
             logger.warning(f"读未了结承诺失败（本批少一张卡）: {exc}", exc=exc)
             return []
-
-    def _may_push(self, commitment_id: int, used: Set[int]) -> bool:
-        """用上即停加限频：本场已用过、推满两次或没到间隔都不推。"""
-        if commitment_id in used:
-            return False
-        pushes = self._push_at.get(int(commitment_id), [])
-        if len(pushes) >= MAX_PUSHES_PER_CARD:
-            return False
-        if pushes and int(self._clock()) - pushes[-1] < PUSH_COOLDOWN_MS:
-            return False
-        return True
-
-    def _record_push(self, commitment_id: int) -> None:
-        self._push_at.setdefault(int(commitment_id), []).append(int(self._clock()))
 
     # ------------------------------------------------------------------
     # 老观众在场一行与回执行

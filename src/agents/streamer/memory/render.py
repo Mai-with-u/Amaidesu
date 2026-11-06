@@ -36,6 +36,7 @@ __all__ = [
     "MAX_PRESENCE_VIEWERS",
     "PRESENCE_RECENT_MS",
     "render_archive_block",
+    "render_archive_card",
     "render_archive_number",
     "render_brief",
     "render_commitment_number",
@@ -44,6 +45,7 @@ __all__ = [
     "render_cue_header",
     "render_forget_notice",
     "render_game_card",
+    "render_joke_card",
     "render_presence_line",
     "render_retract_notice",
     "render_save_heads",
@@ -353,6 +355,28 @@ def render_game_card(commitment: Commitment, *, game: str, unsure_save: bool = F
         f"[{render_commitment_number(commitment.id)}·{game}] "
         f"你之前说过「{quote}」，截至上一场还没做。这件承诺挂在你玩的游戏 {game} 上；{unsure}时机对再提。"
     )
+
+
+def render_archive_card(line: ArchiveLine, *, why: str, is_previous: bool = False, note: str = "") -> str:
+    """档案卡（被动想起）：编号、时间词、标题与原话，末尾写为什么想起来。
+
+    ``note`` 是"在哪个存档里"一类的补充（见 ``saves.place_note``）；``why`` 写触发它的那件事
+    （弹幕提到了某个词、她刚说到、走到了某个地点）。
+    """
+    when = _when_word(is_previous=is_previous, spoken=False)
+    title = (line.text or "").strip()
+    quote = (line.quote or "").strip()
+    notes = [f"你说过「{quote}」"] if quote else []
+    if note:
+        notes.append(note)
+    body = f"{title}（{'；'.join(notes)}）" if notes else title
+    return f"[{render_archive_number(line.id)}·{when}] {body}。想起它是因为{why}。"
+
+
+def render_joke_card(joke: str, *, message_id: str = "") -> str:
+    """老梗卡：观众提到了老梗栏里的梗。梗本身已在老梗栏里，卡面只提醒"有人提了"。"""
+    who = f"弹幕 {message_id} " if message_id else "观众"
+    return f"[老梗] {who}提到了「{joke}」：老梗栏里有这个梗，接不接看眼前。"
 
 
 def render_viewer_card(

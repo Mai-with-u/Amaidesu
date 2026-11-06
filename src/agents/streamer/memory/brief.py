@@ -38,7 +38,7 @@ from .render import (
 if TYPE_CHECKING:
     from src.modules.storage.repos import ArchiveRepo, ChatRepo, CommitmentRepo, EventRepo
 
-__all__ = ["MemoryBrief", "build_brief", "load_used_commitment_ids", "load_used_refs"]
+__all__ = ["MemoryBrief", "build_brief", "load_used_refs"]
 
 logger = get_logger("MemoryBrief")
 
@@ -135,17 +135,11 @@ async def _unsaved_games(
     return [game for game in sorted(current) if game in games and game not in saved]
 
 
-async def load_used_commitment_ids(chat_repo: "ChatRepo", live_session_id: int) -> Set[int]:
-    """本场台词已经点名引用过的承诺编号（用上即停；确知没送达的台词不算）。
-
-    常驻简报与线索推送共用这一份口径。读不到就当没用上：最多这一窗多列一次，不挡决策。
-    """
-    commitments, _archive = await load_used_refs(chat_repo, live_session_id)
-    return commitments
-
-
 async def load_used_refs(chat_repo: "ChatRepo", live_session_id: int) -> Tuple[Set[int], Set[int]]:
-    """本场台词已经点名引用过的（承诺编号, 档案行编号）；读不到就当都没用上。"""
+    """本场台词已经点名引用过的（承诺编号, 档案行编号）：用上即停的口径，确知没送达的台词不算。
+
+    常驻简报与线索推送共用这一份。读不到就当都没用上：最多这一窗多列一次，不挡决策。
+    """
     try:
         raw_rows = await chat_repo.list_session_memory_refs(live_session_id=int(live_session_id))
     except Exception as exc:  # noqa: BLE001 - 查不到就当没用上，最多多提一次

@@ -17,6 +17,7 @@ from src.modules.events.payloads.room import RoomMessageUser
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.privacy import PrivacyService
 from src.modules.types.game_save import GameSave
+from src.modules.types.game_situation import GameSituation, NearbyPlace
 from tests.modules.storage.helpers import make_room_message
 
 _NOW = 1_000_000_000_000
@@ -103,6 +104,7 @@ def _provider(
     session_id: Optional[int],
     privacy: Optional[PrivacyService] = None,
     clock: Optional[_Clock] = None,
+    **extra: Any,
 ) -> MemoryCueProvider:
     return MemoryCueProvider(
         commitments_repo=store.commitments,
@@ -111,6 +113,7 @@ def _provider(
         privacy_service=privacy,
         current_session_provider=lambda: session_id,
         clock=clock or _Clock(),
+        **extra,
     )
 
 
@@ -450,3 +453,173 @@ async def test_viewer_card_says_which_save_the_promise_was_made_in(store: SQLite
 
     assert cues.card_count == 1
     assert "在 minecraft「老档」里，不是眼下这个存档" in cues.text
+
+
+# ---------------------------------------------------------------------------
+# 被动想起：规则与地点两路的档案卡、老梗卡
+# ---------------------------------------------------------------------------
+
+
+async def _old_line(store: SQLiteDatabase, text: str = "Minecraft：女仆取名团子", **extra: Any) -> int:
+    """一行之前正式场里的档案（默认带触发词"团子"）。"""
+    old_session = await store.sessions.insert_live_session(started_at_ms=_NOW - 86_400_000)
+    await store.sessions.close_live_session(live_session_id=old_session, ended_at_ms=_NOW - 80_000_000)
+    extra.setdefault("keywords", ["团子"])
+    line_id = await store.archive.insert_line(
+        live_session_id=old_session, text=text, quote="就叫团子吧", evidence_chat_id=1, **extra
+    )
+    assert line_id
+    return line_id
+
+
+async def _her_line(store: SQLiteDatabase, session_id: int, content: str, *, refs: str = "", at: int = _NOW) -> None:
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=at,
+        sender_role="assistant",
+        content=content,
+        message_type="speak",
+        utterance_id=f"utt_{at}_{content}",
+        memory_refs=refs or None,
+    )
+
+
+def _passive(store: SQLiteDatabase, session_id: int, clock: _Clock, **extra: Any) -> MemoryCueProvider:
+    return _provider(
+        store,
+        session_id=session_id,
+        clock=clock,
+        archive_repo=store.archive,
+        cue_log_repo=store.memory_cue_log,
+        **extra,
+    )
+
+
+async def test_danmaku_keyword_pushes_archive_card_and_logs_it(store: SQLiteDatabase) -> None:
+    """弹幕提到触发词：推那行档案（带 档#N，写为什么想起来），编号进点名名单，记一行线索卡记录。"""
+    session_id = await _session(store)
+    line_id = await _old_line(store)
+    clock = _Clock()
+
+    cues = await _passive(store, session_id, clock).collect(batch=[_message(content="团子今天乖不乖", message_id="m7")])
+
+    assert f"[档#{line_id}·之前] Minecraft：女仆取名团子（你说过「就叫团子吧」）" in cues.text
+    assert "想起它是因为弹幕 m7 提到「团子」" in cues.text
+    assert cues.archive_ids == (line_id,) and cues.commitment_ids == ()
+    (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
+    assert (entry.card_kind, entry.archive_line_id, entry.sources) == ("rule", line_id, ["danmaku"])
+    assert entry.detail == {"keywords": ["团子"], "how": ["exact"]} and entry.self_triggered is False
+    assert "阿杰" not in str(entry.model_dump()) and "m7" not in str(entry.model_dump()), "记录不带观众身份"
+
+
+async def test_archive_card_stops_once_she_used_it_and_backfills_the_log(store: SQLiteDatabase) -> None:
+    """档案卡被她点名用上（档#N 进了台词的记忆引用），本场不再推，记录回填用上的时刻。"""
+    session_id = await _session(store)
+    line_id = await _old_line(store)
+    clock = _Clock()
+    provider = _passive(store, session_id, clock)
+    assert (await provider.collect(batch=[_message(content="团子呢")])).archive_ids == (line_id,)
+
+    await _her_line(store, session_id, "团子在家看门呢", refs=f'["档#{line_id}"]', at=_NOW + 1_000)
+    clock.value += PUSH_COOLDOWN_MS + 1
+    cues = await provider.collect(batch=[_message(content="团子呢", message_id="m2")])
+
+    assert cues.archive_ids == () and "团子" not in cues.text
+    (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
+    assert entry.used_at_ms == clock.value
+
+
+async def test_self_triggered_card_pushes_once_per_session(store: SQLiteDatabase) -> None:
+    """只由她自己台词命中的卡（自触发）每条每场只推一次；观众弹幕命中的照旧两次。"""
+    session_id = await _session(store)
+    line_id = await _old_line(store)
+    clock = _Clock()
+    provider = _passive(store, session_id, clock)
+    await _her_line(store, session_id, "说起来团子最近怎么样了")
+
+    first = await provider.collect(batch=[])
+    assert first.archive_ids == (line_id,) and "想起它是因为你刚说到「团子」" in first.text
+    clock.value += PUSH_COOLDOWN_MS + 1
+    assert (await provider.collect(batch=[])).archive_ids == (), "自触发一场只推一次"
+
+    clock.value += PUSH_COOLDOWN_MS + 1
+    assert (await provider.collect(batch=[_message(content="团子！")])).archive_ids == (line_id,), "观众提到照推"
+    entries = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
+    assert [(entry.self_triggered, entry.sources) for entry in entries] == [
+        (True, ["self"]),
+        (False, ["danmaku", "self"]),
+    ]
+
+
+async def test_passive_skips_brief_lines_other_saves_and_quiet_viewers(
+    store: SQLiteDatabase, privacy: PrivacyService
+) -> None:
+    """简报里列着的不推；别的存档里的事不推；发过"忘了我"的观众与模拟消息不触发；开关关掉整路不跑。"""
+    session_id = await _session(store)
+    listed = await _old_line(store, "Minecraft：女仆取名团子")
+    other = await _old_line(store, "Minecraft：老档的小麦田", keywords=["小麦田"], game="minecraft", save_id="a")
+    unsure = await _old_line(store, "Minecraft：挖到钻石", keywords=["钻石"], game="minecraft")
+    await _viewer(store, external_id="u9", name="小林", forget_requested_at_ms=_NOW - 1)
+    saves = {"minecraft": GameSave(id="b", name="新档")}
+    provider = _passive(store, session_id, _Clock(), privacy=privacy)
+
+    cues = await provider.collect(
+        batch=[_message(content="团子 小麦田 钻石")], current_saves=saves, brief_archive_ids=[listed]
+    )
+    assert cues.archive_ids == (unsure,)
+    assert "在 minecraft 里，不确定是哪个存档" in cues.text
+    assert other not in cues.archive_ids
+
+    quiet = await _passive(store, session_id, _Clock(), privacy=privacy).collect(
+        batch=[
+            _message(external_id="u9", name="小林", content="钻石呢"),
+            _message(content="钻石呢", simulated=True),
+        ],
+        current_saves=saves,
+    )
+    assert quiet.archive_ids == ()
+
+    off = await _passive(store, session_id, _Clock(), passive_enabled=False).collect(
+        batch=[_message(content="钻石呢")], current_saves=saves
+    )
+    assert off.archive_ids == () and off.text == ""
+
+
+async def test_walking_up_to_a_remembered_place_pushes_its_lines_once(store: SQLiteDatabase) -> None:
+    """角色走进记住的地点 24 格内：推挂在那里、这个存档里的档案行；同一个地点一场只推一次。"""
+    session_id = await _session(store)
+    line_id = await _old_line(
+        store, "Minecraft：北边农场种下小麦", keywords=[], game="minecraft", save_id="b", place="北边农场"
+    )
+    await _old_line(store, "Minecraft：老档农场", keywords=[], game="minecraft", save_id="a", place="北边农场")
+    saves = {"minecraft": GameSave(id="b", name="新档")}
+    clock = _Clock()
+    provider = _passive(store, session_id, clock)
+
+    def near(distance: int) -> dict[str, GameSituation]:
+        return {"minecraft": GameSituation(places=(NearbyPlace(name="北边农场", distance=distance),))}
+
+    assert (await provider.collect(batch=[], current_saves=saves, situations=near(80))).archive_ids == ()
+    arrived = await provider.collect(batch=[], current_saves=saves, situations=near(12))
+    assert arrived.archive_ids == (line_id,)
+    assert "想起它是因为你走到「北边农场」附近了" in arrived.text and "就是眼下这个存档" in arrived.text
+
+    clock.value += PUSH_COOLDOWN_MS + 1
+    await provider.collect(batch=[], current_saves=saves, situations=near(90))
+    assert (await provider.collect(batch=[], current_saves=saves, situations=near(5))).archive_ids == ()
+    (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
+    assert (entry.card_kind, entry.sources, entry.detail) == ("place", ["place"], {"place": "北边农场", "distance": 12})
+
+
+async def test_inside_joke_card_only_when_a_viewer_brings_it_up(store: SQLiteDatabase) -> None:
+    """观众弹幕提到老梗栏里的梗或别名：推一张老梗卡；她自己说到不推（老梗栏写明别自己翻出来）。"""
+    session_id = await _session(store)
+    jokes = "倒立洗头/洗头挑战：她说过输了就倒立洗头"
+    await _her_line(store, session_id, "今天不搞倒立洗头")
+    provider = _passive(store, session_id, _Clock(), inside_jokes=jokes)
+
+    assert (await provider.collect(batch=[])).text == ""
+    cues = await provider.collect(batch=[_message(content="洗头挑战什么时候", message_id="m3")])
+    assert "[老梗] 弹幕 m3 提到了「倒立洗头」" in cues.text
+    (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
+    assert entry.card_kind == "joke" and entry.detail["joke"] == "倒立洗头"

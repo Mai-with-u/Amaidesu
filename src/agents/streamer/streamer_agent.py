@@ -55,6 +55,7 @@ from src.modules.tools.models import ToolInvocation
 from src.modules.tools.tasks import IN_PROGRESS_TASK_STATES
 from src.modules.tools.registry import ToolRegistry
 from src.modules.types.game_save import GameSave
+from src.modules.types.game_situation import GameSituation
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KINDS, SessionKind
 from src.modules.utils.time_utils import now_ms
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -530,6 +531,10 @@ class StreamerAgent(BaseAgent):
                 privacy_service=privacy_service,
                 current_session_provider=self._current_session_pk,
                 previous_session_provider=self._previous_session_id,
+                archive_repo=archive_repo,
+                cue_log_repo=memory_cue_log_repo,
+                inside_jokes=config.persona.inside_jokes,
+                passive_enabled=self.typed_config.memory_passive_recall_enabled,
             )
         # 回想工具：她说过的话、档案行、不针对具体人的承诺、本场观众弹幕
         self._memory_recall: Optional[MemoryRecallService] = None
@@ -1686,12 +1691,30 @@ class StreamerAgent(BaseAgent):
         return lines[0] if lines else None
 
     async def _collect_memory_cues(self, batch: List[Any], open_games: Sequence[str]) -> Any:
-        """本批线索：承诺卡、老观众在场一行、回执行；没启用线索推送时返回 None。"""
+        """本批线索：承诺卡、被动想起的档案卡与老梗卡、老观众在场一行、回执行；没启用线索推送时返回 None。
+
+        常驻简报里列着的条目交过去：同一件事简报里有了，卡片不再推一遍。
+        """
         if self._memory_cues is None:
             return None
         return await self._memory_cues.collect(
-            batch=list(batch), open_games=list(open_games or ()), current_saves=self._current_saves
+            batch=list(batch),
+            open_games=list(open_games or ()),
+            current_saves=self._current_saves,
+            situations=self._current_situations(),
+            brief_archive_ids=self._memory_brief_archive_ids,
+            brief_commitment_ids=self._memory_brief_ids,
         )
+
+    def _current_situations(self) -> Dict[str, GameSituation]:
+        """各游戏角色眼下离哪些记住的地点多远（只读游戏 Agent 的缓存）；读不到就当这一批没有。"""
+        if self._tool_registry is None:
+            return {}
+        try:
+            return self._tool_registry.current_situations(for_agent="streamer")
+        except Exception as exc:  # noqa: BLE001 - 读不到情境，这一批地点一路不判
+            self._logger.warning(f"读各游戏眼下的情境失败（这一批不判地点到达）: {exc}", exc=exc)
+            return {}
 
     async def _settle_ledger(self) -> None:
         """整理待整理的场次，把承诺与场次档案写进账本；没启用时直接返回。

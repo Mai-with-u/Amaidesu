@@ -134,6 +134,7 @@ class StreamerPersonaConfig(BaseConfig):
         title="老梗栏",
         default="",
         description="直播间老梗，一行一条（如「倒立洗头：她说过输了就倒立洗头，观众一直起哄」）；"
+        "冒号前可以用 / 写几个别名（如「倒立洗头/洗头挑战：…」），观众弹幕提到这些词时线索里会提醒她一句；"
         "只给决策侧做参考，观众提起时才接、别自己翻出来；别写观众昵称——删除函数管不到"
         "配置文本（留空 = 不带老梗栏）",
         json_schema_extra={"x-ui-widget": "textarea"},
@@ -578,6 +579,15 @@ class StreamerConfig(BaseConfig):
         description="常驻简报取「上一场」时，跳过时长不到这么久的场次，往前找（毫秒；默认 5 分钟，0 = 不跳过）。"
         "被跳过的场次档案仍可用回想工具查到，它登记的承诺照常进简报",
         json_schema_extra={"x-ui-advanced": True},
+    )
+
+    # 被动想起：每批决策前按观众弹幕、她最近的台词、走到记住的地点，把该想起的档案行与老梗推成线索卡，
+    # 不用等决策层自己想到去查；关掉后线索只剩对象开口与游戏开着两种承诺卡
+    memory_passive_recall_enabled: bool = Field(
+        title="被动想起",
+        default=True,
+        description="观众提到旧事的触发词、她走到记住的地点跟前时，自动把那件事推给决策层参考（推不推、提不提"
+        "仍由她定）；关掉后只在观众本人开口、游戏开着时推答应过的事",
     )
 
     # 子段
