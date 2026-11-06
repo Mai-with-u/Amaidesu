@@ -60,14 +60,15 @@ def test_or_query_quotes_every_word_so_operators_stay_literal() -> None:
     assert fts_or_query("，，😂") is None
 
 
-def test_lone_cjk_char_next_to_latin_needs_like_fallback() -> None:
-    """ "炸TNT"的"炸"在原文里被切进"续炸"，索引里没有单独的"炸"，按词查必漏。"""
-    conn = _fts_with(["继续炸tnt"])
-    assert conn.execute("SELECT COUNT(*) FROM memory_fts WHERE memory_fts MATCH ?", ('"炸"',)).fetchone()[0] == 0
+def test_single_cjk_char_queries_need_like_fallback() -> None:
+    """ "炸TNT"的"炸"、单独查的"猫"在原文里都被切进两字词，索引里没有单独一项，按词查必漏。"""
+    conn = _fts_with(["继续炸tnt", "家里有只黑猫"])
+    for lone in ('"炸"', '"猫"'):
+        assert conn.execute("SELECT COUNT(*) FROM memory_fts WHERE memory_fts MATCH ?", (lone,)).fetchone()[0] == 0
     assert needs_like_fallback("炸TNT") is True
+    assert needs_like_fallback("猫") is True
     assert needs_like_fallback("倒立洗头") is False
-    # 整段只有一个汉字时没有前后可粘，不算这个坑
-    assert needs_like_fallback("炸") is False
+    assert needs_like_fallback("tnt") is False
 
 
 @pytest.fixture()

@@ -8,9 +8,9 @@
   查不到，所以照开源项目 Hermes 的做法自己切：先按字母、数字的连续段切开，段里的汉字连续段
   切成相互重叠的两个字（"倒立洗头" → 倒立、立洗、洗头），只有一个字的汉字段保留这一个字，
   非汉字段原样保留；切好的词用空格连起来写进全文表，由 FTS5 自带的 unicode61 分词器建索引。
-- **单字汉字紧挨英文**（:func:`needs_like_fallback`）：查询"炸TNT"时"炸"是单独一个字的汉字段，
-  而原文"继续炸tnt"切出来是"继续""续炸""tnt"，索引里没有单独的"炸"，按词查会漏；
-  调用方遇到这种查询要退回 LIKE 子串扫描。
+- **单个汉字的查询词**（:func:`needs_like_fallback`）：查询"炸TNT"或只查一个"猫"时，"炸""猫"是
+  单独一个字的汉字段，而原文"继续炸tnt""黑猫"切出来是"继续""续炸""tnt""黑猫"，索引里没有
+  单独的"炸""猫"，按词查会漏；调用方遇到这种查询要退回 LIKE 子串扫描。
 - **触发词匹配**（:class:`KeywordMatcher`）：被动想起的规则一路。归一化后做子串匹配；三个字以上、
   全是汉字的触发词另加拼音层——同音（"到立洗头"算提到"倒立洗头"）和拼音首字母（弹幕里单独
   打出的"dlxt"）。两个字的触发词只做精确子串，不做同音：离线测下来误触发几乎全来自两字词的
@@ -113,16 +113,12 @@ def fts_or_query(text: str) -> Optional[str]:
 
 
 def needs_like_fallback(text: str) -> bool:
-    """查询里有单独一个字、又紧挨着字母或数字的汉字段（如"炸TNT"的"炸"）时为 True。
+    """查询里有只一个字的汉字段（"炸TNT"的"炸"、单独查的"猫"）时为 True。
 
-    这个字在原文里会和前后的汉字切进两字词，索引里没有它单独一项，按词查必漏，
+    这个字在原文里几乎总和前后的汉字切进两字词，索引里没有它单独一项，按词查必漏，
     调用方要改用 LIKE 子串扫描兜底。
     """
-    for run in _alnum_runs(text):
-        parts = _split_run(run)
-        if len(parts) > 1 and any(is_cjk and len(part) == 1 for part, is_cjk in parts):
-            return True
-    return False
+    return any(is_cjk and len(part) == 1 for run in _alnum_runs(text) for part, is_cjk in _split_run(run))
 
 
 @dataclass(frozen=True)

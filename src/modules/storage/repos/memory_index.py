@@ -235,7 +235,7 @@ class MemoryIndexRepo(BaseRepo):
     async def like_candidates(
         self, *, source: IndexSource, needle: str, limit: int, live_session_id: Optional[int] = None
     ) -> List[IndexCandidate]:
-        """子串兜底（单字汉字紧挨英文的查询词按词查必漏时用）：正文包含 ``needle`` 的行，新的在前。"""
+        """子串兜底（查询词里有单个汉字、按词查必漏时用）：正文包含 ``needle`` 的行，新的在前。"""
         spec = _SPECS[source]
         session_clause, session_params = _session_clause(spec, live_session_id)
         # LIKE 的通配符按字面量查：用 ! 作转义符（避开反斜杠在各层字符串里的转义）
