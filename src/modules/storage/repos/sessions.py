@@ -19,6 +19,7 @@ from src.modules.storage.models.memory import (
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.storage.repos.archive import delete_archive_lines_by_session, delete_snapshot
+from src.modules.storage.repos.memory_index import delete_session_index_rows
 from src.modules.storage.repos.commitments import (
     delete_commitments_by_session,
     reopen_commitments_closed_by_session,
@@ -204,6 +205,8 @@ class SessionRepo(BaseRepo):
                         "UPDATE live_sessions SET settled_at_ms=NULL, settle_attempts=0, settle_report=NULL WHERE id=?",
                         (int(live_session_id),),
                     )
+                    # 彩排的话观众没听过：本场台词与游戏事件的检索索引一起删（来源行不变，触发器管不到）
+                    delete_session_index_rows(conn, live_session_id=int(live_session_id))
                 elif row["settled_at_ms"] is not None and int(row["settled_at_ms"]) == int(row["ended_at_ms"]):
                     conn.execute(
                         "UPDATE live_sessions SET settled_at_ms=NULL, settle_attempts=0, settle_report=NULL WHERE id=?",

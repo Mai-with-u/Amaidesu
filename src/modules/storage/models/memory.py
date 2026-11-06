@@ -44,6 +44,7 @@ __all__ = [
     "ArchiveSnapshot",
     "Commitment",
     "CommitmentClosure",
+    "IndexDoc",
     "KeptSnapshotLine",
     "PendingArchiveLine",
     "PendingCommitment",
@@ -254,3 +255,12 @@ class CommitmentClosure(BaseModel):
     commitment_id: int = Field(..., description="被了结的承诺主键")
     close_chat_id: Optional[int] = Field(default=None, description="了结依据的台词行")
     close_quote: Optional[str] = Field(default=None, description="了结那句的原话片段")
+
+
+class IndexDoc(BaseModel):
+    """一条待建检索索引的来源行（档案行、承诺、台词或游戏事件）：主键与建索引用的正文。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: int = Field(..., description="来源行主键（也是全文表的 rowid）")
+    document: str = Field(..., description="建索引用的正文：档案行与承诺是标题加原话，台词与事件是正文本身")

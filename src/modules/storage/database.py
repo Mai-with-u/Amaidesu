@@ -39,6 +39,7 @@ from src.modules.storage.repos import (
     EventRepo,
     GameCreatureRepo,
     LLMRepo,
+    MemoryIndexRepo,
     RundownInstanceRepo,
     RundownRepo,
     RundownTransitionRepo,
@@ -131,6 +132,8 @@ class SQLiteDatabase:
         # 记忆账本：承诺与场次档案（下播整理写入；WebUI 查看、纠错与手建）
         self.commitments = CommitmentRepo(self._manager)
         self.archive = ArchiveRepo(self._manager)
+        # 记忆检索的派生索引（主播的索引任务补算，回想与被动想起查询）
+        self.memory_index = MemoryIndexRepo(self._manager)
 
     # -------------------- 属性 --------------------
 
