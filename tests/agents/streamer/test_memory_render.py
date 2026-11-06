@@ -16,6 +16,7 @@ from src.agents.streamer.memory.render import (
     memory_ref_archive_numbers,
     memory_ref_numbers,
     render_archive_block,
+    render_archive_card,
     render_archive_number,
     render_brief,
     render_commitment_number,
@@ -106,6 +107,19 @@ def test_memory_refs_keep_commitment_and_archive_numbers_apart() -> None:
     assert memory_ref_archive_numbers(raw) == {41, 7}
     assert memory_ref_archive_numbers(format_memory_refs([5])) == set()
     assert memory_ref_archive_numbers("不是 JSON") == set()
+
+
+def test_viewer_sourced_lines_say_they_were_decided_with_viewers_without_naming_anyone() -> None:
+    """人批准的观众候选写成的行：简报、线索卡、说话档都注明和观众一起定的，别点名是哪一位。"""
+    line = ArchiveLine(
+        id=43, live_session_id=7, text="和观众一起给小羊取名雪球", quote="就叫雪球", evidence_chat_id=3, source="viewer"
+    )
+    assert render_archive_block([line]) == [
+        "- [档#43] 和观众一起给小羊取名雪球（你说过「就叫雪球」；和观众一起定的，不记得是哪一位，别点名）"
+    ]
+    assert "和观众一起定的，不记得是哪一位，别点名" in render_archive_card(line, why="弹幕提到了雪球")
+    assert render_spoken_archive(line).endswith("和观众一起给小羊取名雪球（和观众一起定的，别说成是哪一位定的）。")
+    assert "观众" not in render_archive_card(_archive(), why="弹幕提到了水车"), "她自己说的不加注记"
 
 
 def test_spoken_archive_gives_title_only() -> None:

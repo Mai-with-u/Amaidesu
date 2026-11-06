@@ -244,6 +244,23 @@ async def test_recall_searches_archive_lines_of_previous_session(store: SQLiteDa
     assert "「今天挖到钻石了」" in text
 
 
+async def test_recall_says_a_viewer_sourced_line_was_decided_with_viewers(store: SQLiteDatabase) -> None:
+    """人批准的观众候选写成的行：回想结果注明和观众一起定的，别点名是哪一位。"""
+    first = await _session(store, started=1_000, ended=2_000)
+    current = await _session(store, started=3_000)
+    chat_id = await _streamer_says(store, first, "好，小羊就叫雪球", 1_100)
+    with store.manager.transaction() as conn:
+        conn.execute(
+            "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id, source)"
+            " VALUES (?, '和观众一起给小羊取名雪球', '小羊就叫雪球', ?, 'viewer')",
+            (first, chat_id),
+        )
+    service = await _service(store, current_session=current)
+
+    text = await service.recall("雪球")
+    assert "（档案「和观众一起给小羊取名雪球」）：「小羊就叫雪球」（和观众一起定的，不记得是哪一位，别点名）" in text
+
+
 async def test_recall_gives_a_snapshot_row_once_dated_by_where_it_was_said(store: SQLiteDatabase) -> None:
     """第二场的快照接住了第一场的一行：快照只引用原行，回想只给一条，时间按写下它的那一场标（之前）。"""
     first = await _session(store, started=1_000, ended=2_000)

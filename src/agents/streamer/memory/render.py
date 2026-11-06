@@ -53,6 +53,7 @@ __all__ = [
     "render_spoken_archive",
     "render_spoken_memory",
     "render_viewer_card",
+    "source_notes",
 ]
 
 # 常驻简报：档案行最多几条（一份快照的上限，整理写入用同一个数）、不针对具体观众的承诺最多几条
@@ -91,6 +92,13 @@ _ARCHIVE_PREFIX = "档"
 _COMMITMENT_PREFIX = "约"
 # 本场她已经点名用过的档案行：行留着（她知道的事实不能一场里忘掉），只提醒别再主动提
 _USED_THIS_SESSION = "（本场已提过）"
+# 人批准的观众候选写成的档案行：库里不记是哪位观众定的，提醒她只说"大家定的"，别编出一个具体的人
+VIEWER_SOURCE_NOTE = "和观众一起定的，不记得是哪一位，别点名"
+
+
+def source_notes(line: ArchiveLine) -> List[str]:
+    """档案行来源的注记：观众来源的行注明"和观众一起定的"，她自己说的不加。"""
+    return [VIEWER_SOURCE_NOTE] if line.source == "viewer" else []
 
 
 def format_memory_refs(commitment_ids: Iterable[int]) -> str:
@@ -202,6 +210,7 @@ def render_archive_block(
             )
             continue
         notes = [f"你说过「{quote}」"] if quote else []
+        notes.extend(source_notes(line))
         if place is SavePlace.UNSURE:
             notes.append(f"不确定是 {line.game} 哪个存档里的事")
         head = f"- [{render_archive_number(line.id)}] {title}"
@@ -369,6 +378,7 @@ def render_archive_card(line: ArchiveLine, *, why: str, is_previous: bool = Fals
     title = (line.text or "").strip()
     quote = (line.quote or "").strip()
     notes = [f"你说过「{quote}」"] if quote else []
+    notes.extend(source_notes(line))
     if note:
         notes.append(note)
     body = f"{title}（{'；'.join(notes)}）" if notes else title
@@ -479,7 +489,9 @@ def render_spoken_archive(line: ArchiveLine, *, is_previous: bool = False) -> st
     if not title:
         return ""
     when = _when_word(is_previous=is_previous, spoken=True)
-    return f"{_SPOKEN_HEADER}\n- {when}的事：{title}。"
+    # 说话档只给标题，观众来源的再注一句：说"大家定的"，别编出一个具体的人
+    source = "（和观众一起定的，别说成是哪一位定的）" if source_notes(line) else ""
+    return f"{_SPOKEN_HEADER}\n- {when}的事：{title}{source}。"
 
 
 def render_spoken_memory(*, target_label: str, commitment: Commitment, is_previous: bool = False) -> str:

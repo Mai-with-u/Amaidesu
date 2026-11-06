@@ -43,6 +43,7 @@ from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider
 from src.modules.types.game_save import GameSave
 from src.modules.utils.time_utils import now_ms
 
+from .render import source_notes
 from .saves import place_note, session_note
 from .search import MemorySearch, SearchHit
 
@@ -437,9 +438,10 @@ class MemoryRecallService:
         body = f"- {when} 你说（档案「{title}」）"
         if quote:
             body += f"：「{quote}」"
-        note = place_note(line.game, line.save_id, line.save_name, context.current_saves)
-        if note:
-            body += f"（{note}）"
+        # 观众来源的行注明和观众一起定的（不记得是哪一位）；存档注记照旧
+        notes = [*source_notes(line), place_note(line.game, line.save_id, line.save_name, context.current_saves)]
+        if any(notes):
+            body += f"（{'；'.join(item for item in notes if item)}）"
         return _RecallHit(timestamp_ms=timestamp_ms, text=body)
 
     def _commitment_hit(self, row: Any, context: _RecallContext) -> _RecallHit:
