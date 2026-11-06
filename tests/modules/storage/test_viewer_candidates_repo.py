@@ -246,11 +246,11 @@ async def test_viewer_line_reads_back_with_the_source_viewers_names(store: SQLit
     assert sorted(by_session["viewer"]) == ["阿杰", "阿杰在摸鱼"] and by_session["streamer"] == []
 
 
-async def test_forget_me_drops_candidates_naming_the_viewer_and_clears_their_edits(
+async def test_forget_me_masks_candidates_naming_the_viewer_and_drops_their_own(
     store: SQLiteDatabase, tmp_path: Path
 ) -> None:
-    """她回应别人时提到了被删的那位：候选挂的是别人的弹幕、外键删不到，删除函数整条删掉；
-    驳回过的也删，改动记录里它的标题清空、候选编号留着；没提到名字的候选不动。"""
+    """她回应别人时提到了被删的那位：候选挂的是别人的弹幕，不整条删，名字换成"一位观众"；驳回过的照旧
+    是驳回（同一条以后不再列），改动记录行留着、提到 ta 的文本清空。挂在 ta 自己弹幕上的整条删。"""
     session_id, said, reply, owed = await _settled_session(store)
     viewer = await store.viewers.resolve_viewer(
         platform="bilibili",
@@ -288,6 +288,32 @@ async def test_forget_me_drops_candidates_naming_the_viewer_and_clears_their_edi
             reply_quote="就叫团子",
         ),
     ]
+    # 阿杰自己的弹幕上挂着的一条：随 ta 的弹幕整条删
+    own = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_500,
+        sender_role="viewer",
+        content="狗就叫旺财",
+        message_type="danmaku",
+        viewer_id=viewer.viewer_id,
+    )
+    own_reply = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_600,
+        sender_role="assistant",
+        content="好，狗叫旺财",
+        message_type="text",
+    )
+    items.append(
+        PendingViewerCandidate(
+            kind="viewer_defined",
+            title="狗叫旺财",
+            viewer_chat_id=own,
+            viewer_quote="狗就叫旺财",
+            reply_chat_id=own_reply,
+            reply_quote="狗叫旺财",
+        )
+    )
     _write(store, session_id, items)
     rows = await store.viewer_candidates.list_candidates(status="pending")
     rejected = next(row for row in rows if row.title == "给阿杰讲鬼故事")
@@ -300,8 +326,55 @@ async def test_forget_me_drops_candidates_naming_the_viewer_and_clears_their_edi
     finally:
         await privacy.close()
 
-    left = await store.viewer_candidates.list_candidates(status=None)
-    assert [row.title for row in left] == ["狗叫豆豆"]
+    left = {row.id: row for row in await store.viewer_candidates.list_candidates(status=None)}
+    assert sorted((row.title, row.reply_quote, row.status) for row in left.values()) == [
+        ("狗叫豆豆", "就叫团子", "pending"),
+        ("猫叫团子", "一位观众也说就叫团子", "pending"),
+        ("给一位观众讲鬼故事", "欠大家一个鬼故事", "rejected"),
+    ], "挂在别人弹幕上的只换名字；挂在 ta 自己弹幕上的整条删"
+    assert rejected.id in left, "驳回过的留着，同一条以后不再列"
     with store.manager.transaction() as conn:
         edit = conn.execute("SELECT action, before_text, candidate_id FROM memory_edits").fetchone()
     assert (edit[0], edit[1], edit[2]) == ("reject", "", rejected.id)
+
+
+async def test_forget_me_compares_percent_and_underscore_literally(store: SQLiteDatabase, tmp_path: Path) -> None:
+    """名字里的 _、% 按原字比：删"阿_杰"不动写着"阿x杰"的别人的候选与改动记录。"""
+    session_id, said, reply, owed = await _settled_session(store)
+    viewer = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_underscore",
+        user_name="阿_杰",
+        timestamp_ms=1_050,
+        name_match_window_ms=0,
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_500,
+        sender_role="viewer",
+        content="我来了",
+        message_type="danmaku",
+        viewer_id=viewer.viewer_id,
+    )
+    _write(
+        store,
+        session_id,
+        [
+            PendingViewerCandidate(kind="claimed_missing", title="给阿x杰讲故事", reply_chat_id=owed, reply_quote="欠"),
+            PendingViewerCandidate(kind="claimed_missing", title="给阿_杰唱歌", reply_chat_id=reply, reply_quote="就"),
+        ],
+    )
+    row = next(item for item in await store.viewer_candidates.list_candidates(status="pending") if "x" in item.title)
+    await store.viewer_candidates.reject(candidate_id=row.id, at_ms=11_000)
+
+    privacy = PrivacyService(store.manager, db_path=store.db_path, key_path=tmp_path / "secrets" / "forget.key")
+    await privacy.initialize()
+    try:
+        assert await privacy.delete_viewer(viewer_id=viewer.viewer_id) is True
+    finally:
+        await privacy.close()
+
+    titles = sorted(item.title for item in await store.viewer_candidates.list_candidates(status=None))
+    assert titles == ["给一位观众唱歌", "给阿x杰讲故事"], "真提到 ta 的照换，只是像的不动"
+    assert [(edit[1], edit[2]) for edit in _edits(store)] == [("reject", "给阿x杰讲故事")]

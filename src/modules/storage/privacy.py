@@ -1205,7 +1205,7 @@ def _replace_nickname_in_sessions(
         )
 
     _clear_memory_edits_with_nickname(conn, session_ids=session_ids, nickname=nickname)
-    _drop_candidates_with_nickname(conn, session_ids=session_ids, nickname=nickname)
+    _mask_candidates_with_nickname(conn, session_ids=session_ids, nickname=nickname, label=label)
     _replace_nickname_in_settle_reports(conn, session_ids=session_ids, nickname=nickname, label=label)
     _replace_nickname_in_game_data(conn, session_ids=session_ids, nickname=nickname, label=label)
 
@@ -1241,21 +1241,31 @@ def _scrub_archive_cues(conn: sqlite3.Connection, *, session_ids: Sequence[int],
         )
 
 
-def _drop_candidates_with_nickname(conn: sqlite3.Connection, *, session_ids: Sequence[int], nickname: str) -> None:
-    """待审区里提到这个名字的候选整条删掉（弹幕那一段、她那句回应、标题任一处）。
+def _like_contains(text: str) -> str:
+    """LIKE 的"包含这段字"模式，配 ``ESCAPE '\\'`` 用：名字里的 ``%``、``_`` 按原字比，不当通配符。"""
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
-    她回应另一位观众时提到了被删、被忘的那位，候选挂的是别人的弹幕，外键级联删不到它；不删的话
-    批准后原话原样写进档案。不做替换：候选是待审的原样证据，换了字就不再是逐字原话。驳回过的
-    一并删（它们只用于"同一条以后不再列"），改动记录里它们的标题由触发器清空。
+
+def _mask_candidates_with_nickname(
+    conn: sqlite3.Connection, *, session_ids: Sequence[int], nickname: str, label: str
+) -> None:
+    """待审区里提到这个名字的候选：弹幕那一段、她那句回应、标题里的名字换成代称，候选本身留着。
+
+    挂在 ta 自己弹幕上的候选随 ta 的弹幕按外键整条删（删弹幕在这一步之后）；这里管的是挂在别人弹幕上、
+    只是提到了 ta 的——那是别人的数据，不因为撞上名字整条删，驳回过的也要留着，同一条以后才不会再列。
+    名字按子串换，和档案、承诺同一口径（隐私遮挡宁可多遮）；匹配时 ``%``、``_`` 按原字比。
     """
     if not nickname or not session_ids or not table_exists(conn, "viewer_candidates"):
         return
     sid_ph = ",".join("?" for _ in session_ids)
-    like_pat = f"%{nickname}%"
+    pattern = _like_contains(nickname)
     conn.execute(
-        f"DELETE FROM viewer_candidates WHERE live_session_id IN ({sid_ph})"  # noqa: S608 占位符由代码拼
-        " AND (viewer_quote LIKE ? OR reply_quote LIKE ? OR title LIKE ?)",
-        [*session_ids, like_pat, like_pat, like_pat],
+        "UPDATE viewer_candidates SET title = REPLACE(title, ?, ?),"  # noqa: S608 占位符由代码拼
+        " viewer_quote = REPLACE(viewer_quote, ?, ?), reply_quote = REPLACE(reply_quote, ?, ?)"
+        f" WHERE live_session_id IN ({sid_ph})"
+        " AND (viewer_quote LIKE ? ESCAPE '\\' OR reply_quote LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')",
+        [nickname, label, nickname, label, nickname, label, *session_ids, pattern, pattern, pattern],
     )
 
 
@@ -1274,13 +1284,14 @@ def _clear_memory_edits_with_nickname(
     if not nickname or not session_ids or not table_exists(conn, "memory_edits"):
         return
     sid_ph = ",".join("?" for _ in session_ids)
-    like_pat = f"%{nickname}%"
+    # 名字里的 %、_ 按原字比：不然"阿_杰"会把写着"阿x杰"的别人的改动记录也清空
+    pattern = _like_contains(nickname)
     conn.execute(
         "UPDATE memory_edits SET before_text = '', after_text = ''"  # noqa: S608 占位符由代码拼
         f" WHERE (live_session_id IN ({sid_ph})"
         f"        OR archive_line_id IN (SELECT id FROM archive_lines WHERE live_session_id IN ({sid_ph})))"
-        "   AND (before_text LIKE ? OR after_text LIKE ?)",
-        [*session_ids, *session_ids, like_pat, like_pat],
+        "   AND (before_text LIKE ? ESCAPE '\\' OR after_text LIKE ? ESCAPE '\\')",
+        [*session_ids, *session_ids, pattern, pattern],
     )
 
 
