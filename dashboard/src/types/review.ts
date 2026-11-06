@@ -93,7 +93,7 @@ export interface ReviewCueItem {
   pushed_at_ms: number;
   /** viewer 对象开口 / game 游戏开着 / place 地点 / rule 触发词 / vector 意思相近 / joke 老梗 */
   card_kind: string;
-  /** 条目写法：档#41 / 约#7 / 老梗「倒立洗头」 */
+  /** 条目写法：档#41 / 约#7 / 老梗第 2 条（记录不存梗的原词） */
   label: string;
   /** 档案行标题或承诺动作；条目已被删掉时为空串 */
   title: string;
@@ -101,7 +101,7 @@ export interface ReviewCueItem {
   commitment_id: number | null;
   /** 命中来源：danmaku 观众弹幕 / self 她的台词 / place 游戏地点 / situation 游戏情境 / game 游戏开着 */
   sources: string[];
-  /** 分数明细：触发词写 keywords/how，意思相近写 cosine/rank/fused，地点写 place/distance */
+  /** 分数明细：意思相近写 cosine/rank/fused，地点写 distance；触发词 keywords 与地点名 place 由后端按档案行现查，行删了就没有 */
   detail: Record<string, unknown>;
   /** 只由她自己的台词触发（防打转的统计口径） */
   self_triggered: boolean;
