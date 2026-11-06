@@ -1955,12 +1955,17 @@ class StreamerAgent(BaseAgent):
             return
 
         async with self._flush_lock:
-            # 递话评估移出判空闸：提醒队列非空时每个 tick 无条件走判定序——
+            # 递话评估移出判空闸：提醒队列非空时每个 tick 先走主动判定序——
             # 弹幕批次滞留期间递话到达也照常成轮，批次原地不动继续等自己的
-            # 放行条件。
+            # 放行条件。只有这一轮真的执行了才结束本 tick：递话被防接龙挡住时
+            # 接着看弹幕批次，到期就照常开窗，递话随这一窗送达（决策执行器在
+            # 任何决策窗入口都取空提醒队列）。否则她每说一句都刷新防接龙计时，
+            # 递话一直排着，弹幕回复和礼物感谢跟着停到防接龙放行为止
+            reminder_evaluated = False
             if self._reminder_queue:
-                await self._evaluate_proactive_round()
-                return
+                reminder_evaluated = True
+                if await self._evaluate_proactive_round():
+                    return
 
             if not self._buffer.is_empty:
                 # 弹幕聚合 → 两阶段决策
@@ -1985,13 +1990,17 @@ class StreamerAgent(BaseAgent):
             # 推进游戏），也因此不会被误消费。
             if not self._live_active:
                 return
+            # 本 tick 带着递话已经判过一次、没有触发：同样的信号再判一遍结果不变，不重复判
+            if reminder_evaluated:
+                return
             await self._evaluate_proactive_round()
 
-    async def _evaluate_proactive_round(self) -> None:
+    async def _evaluate_proactive_round(self) -> bool:
         """一个 tick 的主动发言判定序：读信号 → 判定 → 命中即执行一轮主动决策。
 
         读信号 → 下播折参 → 判定 → 确认消费的完整判定序收在
-        ProactiveSignals.evaluate_tick 单点；Agent 只按结果执行。
+        ProactiveSignals.evaluate_tick 单点；Agent 只按结果执行。返回这一轮
+        有没有真的执行（调用方据此决定本 tick 还要不要看弹幕批次）。
         """
         # 读信号 → 下播折参 → 判定 → 确认消费的完整判定序收在
         # ProactiveSignals.evaluate_tick 单点；Agent 只按结果执行。
@@ -2006,15 +2015,17 @@ class StreamerAgent(BaseAgent):
             # （送达在决策执行器取空队列处发生，任何决策窗都会消费）
             reminder_pending=bool(self._reminder_queue),
         )
-        if reason is not None:
-            self._stats.total_proactive += 1
-            self._logger.info(f"主动发言触发: {reason.value}")
-            await self._execute_round(
-                [],
-                forced=False,
-                trigger_cause=TriggerCause(kind=reason),
-                proactive=True,
-            )
+        if reason is None:
+            return False
+        self._stats.total_proactive += 1
+        self._logger.info(f"主动发言触发: {reason.value}")
+        await self._execute_round(
+            [],
+            forced=False,
+            trigger_cause=TriggerCause(kind=reason),
+            proactive=True,
+        )
+        return True
 
     async def _execute_round(
         self,

@@ -12,7 +12,7 @@ from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.trigger_cause import TriggerKind
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.utils.time_utils import now_ms
-from tests.agents.streamer.helpers import make_streamer_agent
+from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
 from tests.config.helpers import wait_until
 
 
@@ -145,6 +145,53 @@ async def test_flush_loop_wakes_on_kick_without_waiting_full_tick() -> None:
     call = agent._rounds.execute.call_args
     assert call.args[0] == []
     assert (call.kwargs["proactive"], call.kwargs["trigger_cause"].kind) == (True, TriggerKind.REMINDER)
+
+
+@pytest.mark.parametrize(
+    ("anti_chain_blocks", "batch_due", "expected_rounds"),
+    [
+        (True, True, ["batch"]),
+        (True, False, []),
+        (False, False, ["reminder"]),
+    ],
+    ids=["blocked_batch_due", "blocked_no_batch", "not_blocked"],
+)
+async def test_pending_reminder_does_not_starve_due_batch(
+    anti_chain_blocks: bool, batch_due: bool, expected_rounds: list[str]
+) -> None:
+    """有递话时一个 tick 的走向：递话被防接龙挡住时到期的弹幕批次照常成轮，递话随那一轮送出。
+
+    - 挡住 + 弹幕批次已到期：同一个 tick 里弹幕那一轮执行，开窗取走递话（不再陪防接龙干等）
+    - 挡住 + 没有弹幕：什么都不做，递话留在队列等下一 tick
+    - 没挡住：递话那一轮主动发言执行
+    """
+    executor = FakeRoundExecutor()
+    executor.drain_reminders = True  # 真实执行器在任何决策窗入口都取空提醒队列
+    # 单批上限 1 条：一条弹幕进缓冲即到期（batch_full），不靠真实时间流逝
+    agent = make_streamer_agent({"batch": {"batch_max_size": 1}}, round_executor=executor)
+    agent._live_active = True
+    if batch_due:
+        await agent.handle_message(
+            RoomMessagePayload(
+                message_type="danmaku",
+                user=RoomMessageUser(id="u1", name="观众"),
+                content="主播看这里",
+                timestamp_ms=now_ms(),
+            )
+        )
+    if anti_chain_blocks:
+        agent._room_state.record_speech(now_ms())  # 她刚开过口，防接龙间隔内
+    agent.receive_prompt(content="提醒一下今晚的抽奖", source="operator")
+    await agent._maybe_flush()
+
+    kinds = ["batch" if call["batch"] else "reminder" for call in executor.calls]
+    assert kinds == expected_rounds
+    if not expected_rounds:
+        assert "提醒一下今晚的抽奖" in agent._drain_reminders(), "被挡住的递话留在队列等下一 tick"
+        return
+    assert "提醒一下今晚的抽奖" in executor.window_reminders[0], "递话随本 tick 执行的那一轮送出"
+    if expected_rounds == ["reminder"]:
+        assert executor.calls[0]["trigger_cause"].kind is TriggerKind.REMINDER
 
 
 async def test_no_reminder_flush_loop_polls_as_before() -> None:

@@ -43,13 +43,17 @@ class FakeRoundExecutor:
 
     缺省不消费运营递话提醒队列（真实执行器在任何决策窗入口取空队列）；
     ``drain_reminders = True`` 后经 ``set_reminders_provider`` 接线注入的
-    取空动词取空，模拟正常送达。
+    取空动词取空，模拟正常送达，每轮取到的递话与续播重放文本按轮记进
+    ``window_reminders`` / ``window_resume_replay``（与 ``calls`` 一一对应）。
     """
 
     def __init__(self, result: Optional[Dict[str, Any]] = None) -> None:
         self.result: Dict[str, Any] = result if result is not None else {}
         self.calls: List[Dict[str, Any]] = []
         self.drain_reminders: bool = False
+        # 开窗取到的素材：打开 drain_reminders 后每轮记一条，测试据此看递话/重放随哪一轮送出
+        self.window_reminders: List[str] = []
+        self.window_resume_replay: List[str] = []
         self._reminders_provider: Optional[Any] = None
         self._resume_replay_provider: Optional[Any] = None
 
@@ -73,8 +77,10 @@ class FakeRoundExecutor:
         self.calls.append(
             {"batch": list(batch), "forced": forced, "trigger_cause": trigger_cause, "proactive": proactive, **kwargs}
         )
-        if self.drain_reminders and self._reminders_provider is not None:
-            self._reminders_provider()
+        # 与真实执行器同序：开窗时先取空提醒队列，再取空续播重放缓冲
+        if self.drain_reminders:
+            self.window_reminders.append(self._reminders_provider() if self._reminders_provider else "")
+            self.window_resume_replay.append(self._resume_replay_provider() if self._resume_replay_provider else "")
         return dict(self.result)
 
 
