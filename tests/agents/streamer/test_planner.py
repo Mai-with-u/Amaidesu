@@ -450,12 +450,24 @@ async def test_her_line_answers_a_player_only_when_he_alone_spoke(speakers: tupl
 
 
 @pytest.mark.parametrize(
-    ("batch", "expected"),
-    [(True, ("", "")), (False, ("minecraft", "uuid-a"))],
-    ids=["点了要回的弹幕：对象是观众", "本窗没有弹幕：点的不是弹幕，照旧在回应玩家"],
+    ("batch", "target", "expected"),
+    [
+        (True, "m1", ("", "")),
+        (True, "要不要一起", ("", "")),
+        (True, "Alex 说的房子", ("minecraft", "uuid-a")),
+        (False, "m1", ("minecraft", "uuid-a")),
+    ],
+    ids=[
+        "按编号点了本窗的弹幕：对象是观众",
+        "按原文片段点了本窗的弹幕：对象是观众",
+        "拿公屏原话当目标、对不上弹幕：照旧在回应玩家",
+        "本窗没有弹幕：点的不是弹幕，照旧在回应玩家",
+    ],
 )
-async def test_her_line_answering_a_danmaku_is_not_recorded_as_answering_a_player(batch: bool, expected: tuple) -> None:
-    """这句点了要回的弹幕时，即使本窗只有一位玩家在公屏开口，也不记成在回应他。"""
+async def test_her_line_answering_a_danmaku_is_not_recorded_as_answering_a_player(
+    batch: bool, target: str, expected: tuple
+) -> None:
+    """回应目标对得上本窗一条弹幕（编号或原文）时，即使本窗只有一位玩家在公屏开口，也不记成在回应他。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
     reply = [
@@ -463,7 +475,7 @@ async def test_her_line_answering_a_danmaku_is_not_recorded_as_answering_a_playe
             tool_calls=[
                 _tc(
                     "streamer_reply",
-                    {"topic_summary": "t", "is_novel": True, "emotion": "happy", "intensity": 0.5, "target": "m1"},
+                    {"topic_summary": "t", "is_novel": True, "emotion": "happy", "intensity": 0.5, "target": target},
                 )
             ]
         )
@@ -471,7 +483,8 @@ async def test_her_line_answering_a_danmaku_is_not_recorded_as_answering_a_playe
     planner, _llm, _prompt = _make_planner(reply, reply_provider=provider)
 
     outcome = await planner.plan(
-        [_msg()] if batch else [], game_batch=GameEventBatch(chat_speakers=(("minecraft", "uuid-a"),))
+        [_msg("主播要不要一起挖矿")] if batch else [],
+        game_batch=GameEventBatch(chat_speakers=(("minecraft", "uuid-a"),)),
     )
 
     assert outcome.replied is True and outcome.reply_player == expected
