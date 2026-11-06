@@ -2,53 +2,17 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List
+from typing import AsyncIterator
 
-import httpx
 import pytest
-from openai import AsyncOpenAI
 
 from src.agents.streamer.memory.index import MemoryIndexer
 from src.agents.streamer.memory.search import RRF_K, MemorySearch
-from src.modules.config.model_schemas import EmbeddingConfig
 from src.modules.llm.embedding import EmbeddingClient
 from src.modules.storage.database import SQLiteDatabase
 from tests.helpers import FakeClock
-
-# 假嵌入的"语义"：含哪个字就落在哪个方向上，其余落在第三个方向
-_AXES = (("猫", [1.0, 0.0, 0.0]), ("水", [0.0, 1.0, 0.0]))
-
-
-class _FakeEmbeddingServer:
-    def __init__(self) -> None:
-        self.requests: List[List[str]] = []
-        self.fail = False
-
-    def handle(self, request: httpx.Request) -> httpx.Response:
-        body: Dict[str, Any] = json.loads(request.content)
-        self.requests.append(list(body["input"]))
-        if self.fail:
-            return httpx.Response(503, json={"error": {"message": "忙"}})
-        data = [
-            {
-                "object": "embedding",
-                "index": i,
-                "embedding": next((v for ch, v in _AXES if ch in text), [0.0, 0.0, 1.0]),
-            }
-            for i, text in enumerate(body["input"])
-        ]
-        return httpx.Response(200, json={"object": "list", "data": data, "model": body["model"]})
-
-    def client(self) -> EmbeddingClient:
-        sdk = AsyncOpenAI(
-            api_key="sk-test",
-            base_url="https://embed.example/v1",
-            max_retries=0,
-            http_client=httpx.AsyncClient(transport=httpx.MockTransport(self.handle)),
-        )
-        return EmbeddingClient(sdk=sdk, config=EmbeddingConfig(provider="p", model_identifier="toy"))
+from tests.modules.llm.fakes import FakeEmbeddingServer
 
 
 @pytest.fixture()
@@ -133,7 +97,7 @@ async def test_vector_path_finds_paraphrases_and_hits_on_both_paths_rank_first(s
     paraphrase = await _say(store, clock, session_id, "芝麻是只黑猫")
     both = await _say(store, clock, session_id, "小猫咪趴在窝里")
     await _say(store, clock, session_id, "家门口挖了水渠")
-    server = _FakeEmbeddingServer()
+    server = FakeEmbeddingServer()
     embedding = server.client()
     await _index(store, clock, embedding)
     search = MemorySearch(repo=store.memory_index, embedding=embedding)
@@ -153,7 +117,7 @@ async def test_without_waiting_the_first_batch_is_keyword_only_and_the_vector_is
     clock = FakeClock()
     session_id = await _session(store, clock)
     paraphrase = await _say(store, clock, session_id, "芝麻是只黑猫")
-    server = _FakeEmbeddingServer()
+    server = FakeEmbeddingServer()
     embedding = server.client()
     await _index(store, clock, embedding)
     search = MemorySearch(repo=store.memory_index, embedding=embedding)
@@ -171,7 +135,7 @@ async def test_embedding_failure_falls_back_to_keywords(store: SQLiteDatabase) -
     session_id = await _session(store, clock)
     target = await _say(store, clock, session_id, "小猫咪趴在窝里")
     await _index(store, clock)
-    server = _FakeEmbeddingServer()
+    server = FakeEmbeddingServer()
     server.fail = True
     search = MemorySearch(repo=store.memory_index, embedding=server.client())
 

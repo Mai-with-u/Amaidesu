@@ -2,45 +2,16 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List
+from typing import AsyncIterator
 
-import httpx
 import pytest
-from openai import AsyncOpenAI
 
 from src.agents.streamer.memory.index import BACKOFF_BASE_MS, MemoryIndexer
-from src.modules.config.model_schemas import EmbeddingConfig
-from src.modules.llm.embedding import EmbeddingClient
 from src.modules.storage.database import SQLiteDatabase
 from tests.config.helpers import wait_until
 from tests.helpers import FakeClock
-
-
-class _FakeEmbeddingServer:
-    """进程内的假嵌入服务：记下每次请求的文本；``fail`` 为真时回 500。"""
-
-    def __init__(self) -> None:
-        self.requests: List[List[str]] = []
-        self.fail = False
-
-    def handle(self, request: httpx.Request) -> httpx.Response:
-        body: Dict[str, Any] = json.loads(request.content)
-        self.requests.append(list(body["input"]))
-        if self.fail:
-            return httpx.Response(500, json={"error": {"message": "嵌入服务挂了"}})
-        data = [{"object": "embedding", "index": i, "embedding": [1.0, float(i)]} for i in range(len(body["input"]))]
-        return httpx.Response(200, json={"object": "list", "data": data, "model": body["model"]})
-
-    def client(self) -> EmbeddingClient:
-        sdk = AsyncOpenAI(
-            api_key="sk-test",
-            base_url="https://embed.example/v1",
-            max_retries=0,
-            http_client=httpx.AsyncClient(transport=httpx.MockTransport(self.handle)),
-        )
-        return EmbeddingClient(sdk=sdk, config=EmbeddingConfig(provider="p", model_identifier="bge-m3"))
+from tests.modules.llm.fakes import FakeEmbeddingServer
 
 
 @pytest.fixture()
@@ -98,7 +69,7 @@ async def test_first_pass_backfills_full_text_and_skips_vectors_without_embeddin
 async def test_vectors_follow_full_text_when_embedding_is_configured(store: SQLiteDatabase) -> None:
     clock = FakeClock()
     await _seed(store, clock)
-    server = _FakeEmbeddingServer()
+    server = FakeEmbeddingServer()
     indexer = MemoryIndexer(
         repo=store.memory_index, embedding=server.client(), embedding_note="开着", clock=clock.now_ms
     )
@@ -116,7 +87,7 @@ async def test_vectors_follow_full_text_when_embedding_is_configured(store: SQLi
 async def test_embedding_failure_backs_off_while_full_text_keeps_going(store: SQLiteDatabase) -> None:
     clock = FakeClock()
     session_id = await _seed(store, clock)
-    server = _FakeEmbeddingServer()
+    server = FakeEmbeddingServer()
     server.fail = True
     indexer = MemoryIndexer(
         repo=store.memory_index, embedding=server.client(), embedding_note="开着", clock=clock.now_ms

@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+from openai import AsyncOpenAI
+
+from src.modules.config.model_schemas import EmbeddingConfig
 from src.modules.llm.clients.openai.client import OpenAIClient
+from src.modules.llm.embedding import EmbeddingClient
 from src.modules.llm.engine import LLMManager
 from src.modules.llm.payload import Response, Usage
 
@@ -209,3 +215,42 @@ class FakeLLMManager:
         if self._response is not None:
             return self._response
         return Response(success=True, content="fake-llm-reply", model="fake-model", usage=Usage(total_tokens=0))
+
+
+# 假嵌入的"语义"：含哪个字就落在哪个方向上，其余落在第三个方向
+EMBEDDING_AXES = (("猫", [1.0, 0.0, 0.0]), ("水", [0.0, 1.0, 0.0]))
+
+
+class FakeEmbeddingServer:
+    """进程内的假嵌入服务（OpenAI 兼容的 /embeddings）：记下每次请求的文本；``fail`` 为真时回 503。
+
+    向量按字落方向（见 ``EMBEDDING_AXES``）：检索与被动想起的测试靠它造出"意思相近"和"不相干"。
+    """
+
+    def __init__(self) -> None:
+        self.requests: List[List[str]] = []
+        self.fail = False
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        body: Dict[str, Any] = json.loads(request.content)
+        self.requests.append(list(body["input"]))
+        if self.fail:
+            return httpx.Response(503, json={"error": {"message": "嵌入服务忙"}})
+        data = [
+            {
+                "object": "embedding",
+                "index": i,
+                "embedding": next((vector for char, vector in EMBEDDING_AXES if char in text), [0.0, 0.0, 1.0]),
+            }
+            for i, text in enumerate(body["input"])
+        ]
+        return httpx.Response(200, json={"object": "list", "data": data, "model": body["model"]})
+
+    def client(self) -> EmbeddingClient:
+        sdk = AsyncOpenAI(
+            api_key="sk-test",
+            base_url="https://embed.example/v1",
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(self.handle)),
+        )
+        return EmbeddingClient(sdk=sdk, config=EmbeddingConfig(provider="p", model_identifier="toy"))
