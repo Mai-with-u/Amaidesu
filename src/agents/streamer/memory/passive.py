@@ -303,39 +303,59 @@ class SituationQuery:
 
 
 class PlaceArrivals:
-    """地点到达判定：每个（游戏, 存档, 地点）记上一次读到的距离，本场到过的地点不再算。"""
+    """地点到达判定：每个（游戏, 存档, 地点）记上一次读到的距离，本场到过的地点不再算。
+
+    只认"真的从 48 格外走进 24 格内"。之前在哪不清楚的——开播后、进程重启后、换存档后第一次读到——
+    只记下眼下的距离，不算到达：她几乎每场都从营地开播，第一次读到就算到达等于每场开头固定念一遍营地。
+    """
 
     def __init__(self) -> None:
         self._last: Dict[Tuple[str, str, str], int] = {}
         self._arrived: Set[Tuple[str, str, str]] = set()
+        # 每个游戏上一次有效读数：（存档编号, 那次列出的最远地点的距离）；没有就是之前在哪不清楚
+        self._previous: Dict[str, Tuple[str, int]] = {}
 
     def reset(self) -> None:
         self._last.clear()
         self._arrived.clear()
+        self._previous.clear()
 
     def update(
         self, situations: Mapping[str, GameSituation], current_saves: Mapping[str, GameSave]
     ) -> List[Tuple[str, str, int]]:
         """读一次各游戏的情境，返回这一批刚到达的（游戏, 地点, 距离）。
 
-        距离太旧的游戏这一批不判（也不更新记下的距离）；没出现在这次读数里的地点当"没读到"。
+        距离太旧的游戏这一批不判，之前记下的距离作废。读数只列最近的几个地点：上一次没列出的地点，
+        只有那次列到的最远一个也在 48 格外时才能断定它当时在 48 格外；否则当"之前在哪不清楚"。
         """
         arrivals: List[Tuple[str, str, int]] = []
         for game, situation in situations.items():
             if situation.age_ms > SITUATION_STALE_MS:
+                # 位置太旧：这段时间她可能走到了任何地方，之前记下的作废，下一次新读数只记下来
+                self._forget_game(game)
                 continue
             save = current_saves.get(game)
             save_id = save.id if save is not None and save.known else ""
+            previous = self._previous.get(game)
+            # 同一存档上一次读到过，且那次列出的最远地点都在 48 格外：没列出的地点当时一定更远
+            unlisted_was_far = previous is not None and previous[0] == save_id and previous[1] > LEAVE_BEYOND
             seen: Dict[Tuple[str, str, str], int] = {}
             for place in situation.places:
                 key = (game, save_id, place.name)
                 seen[key] = int(place.distance)
                 before = self._last.get(key)
-                came_in = place.distance <= ARRIVE_WITHIN and (before is None or before > LEAVE_BEYOND)
-                if came_in and key not in self._arrived:
+                was_far = before > LEAVE_BEYOND if before is not None else unlisted_was_far
+                if place.distance <= ARRIVE_WITHIN and was_far and key not in self._arrived:
                     self._arrived.add(key)
                     arrivals.append((game, place.name, int(place.distance)))
             for key in [key for key in self._last if key[0] == game and key not in seen]:
                 del self._last[key]
             self._last.update(seen)
+            self._previous[game] = (save_id, max((int(place.distance) for place in situation.places), default=0))
         return arrivals
+
+    def _forget_game(self, game: str) -> None:
+        """丢掉一个游戏记下的距离：之后第一次新读数当"之前在哪不清楚"。"""
+        self._previous.pop(game, None)
+        for key in [key for key in self._last if key[0] == game]:
+            del self._last[key]

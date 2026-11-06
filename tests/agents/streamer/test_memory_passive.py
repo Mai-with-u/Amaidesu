@@ -37,10 +37,12 @@ def test_inside_jokes_split_into_main_word_and_aliases() -> None:
 
 
 def test_arrival_needs_coming_in_from_far_and_counts_once_per_session() -> None:
-    """从 48 格外（或这场没读到过）进到 24 格内才算到达；同一个地点一场只算一次。"""
+    """从 48 格外进到 24 格内才算到达；之前在哪不清楚的第一次读数只记下来；同一个地点一场只算一次。"""
     arrivals = PlaceArrivals()
 
-    assert arrivals.update(_at(("营地", 10)), _SAVES) == [("minecraft", "营地", 10)], "这场第一次读到就在跟前"
+    assert arrivals.update(_at(("营地", 10)), _SAVES) == [], "开播第一次读到就在跟前：之前在哪不清楚，不算到达"
+    assert arrivals.update(_at(("营地", 60)), _SAVES) == []
+    assert arrivals.update(_at(("营地", 5)), _SAVES) == [("minecraft", "营地", 5)], "真的从 48 格外走回来"
     assert arrivals.update(_at(("营地", 60)), _SAVES) == []
     assert arrivals.update(_at(("营地", 5)), _SAVES) == [], "营地这场已经到过"
 
@@ -51,15 +53,38 @@ def test_arrival_needs_coming_in_from_far_and_counts_once_per_session() -> None:
     assert arrivals.update(_at(("北边农场", 3)), _SAVES) == [("minecraft", "北边农场", 3)]
 
     arrivals.reset()
+    assert arrivals.update(_at(("营地", 60)), _SAVES) == []
     assert arrivals.update(_at(("营地", 10)), _SAVES) == [("minecraft", "营地", 10)], "换场后重新算"
+
+
+def test_unlisted_places_count_as_far_only_when_the_whole_list_was_far() -> None:
+    """读数只列最近的几个：上一次没列出的地点，那次列到的最远一个也在 48 格外，才算它当时在 48 格外。"""
+    arrivals = PlaceArrivals()
+    assert arrivals.update(_at(("营地", 30), ("矿洞口", 40)), _SAVES) == []
+    assert arrivals.update(_at(("北边农场", 10)), _SAVES) == [], "上一次列到的最远才 40 格，农场当时在哪说不准"
+
+    arrivals.reset()
+    assert arrivals.update(_at(("营地", 100)), _SAVES) == []
+    assert arrivals.update(_at(("北边农场", 10)), _SAVES) == [("minecraft", "北边农场", 10)]
+
+    arrivals.reset()
+    assert arrivals.update(_at(), _SAVES) == []
+    assert arrivals.update(_at(("北边农场", 10)), _SAVES) == [], "上一次一个地点都没列（如在别的维度），不算走进来"
 
 
 def test_arrival_ignores_stale_positions_and_tells_saves_apart() -> None:
     """位置读到太久的这一批不判；换了存档，同名地点是另一个地方。"""
     arrivals = PlaceArrivals()
 
-    assert arrivals.update(_at(("营地", 10), age_ms=SITUATION_STALE_MS + 1), _SAVES) == []
+    assert arrivals.update(_at(("营地", 60), age_ms=SITUATION_STALE_MS + 1), _SAVES) == []
+    assert arrivals.update(_at(("营地", 10)), _SAVES) == [], "太旧的那次不算读到过"
+    assert arrivals.update(_at(("北边农场", 60)), _SAVES) == []
+    assert arrivals.update(_at(("北边农场", 60), age_ms=SITUATION_STALE_MS + 1), _SAVES) == []
+    assert arrivals.update(_at(("北边农场", 10)), _SAVES) == [], "中间位置太旧：之前记下的远处作废，不算走进来"
+    assert arrivals.update(_at(("营地", 60)), _SAVES) == []
     assert arrivals.update(_at(("营地", 10)), _SAVES) == [("minecraft", "营地", 10)]
 
     other_save = {"minecraft": GameSave(id="c", name="三号档")}
-    assert arrivals.update(_at(("营地", 10)), other_save) == [("minecraft", "营地", 10)]
+    assert arrivals.update(_at(("营地", 10)), other_save) == [], "换存档后第一次读到：只记下来"
+    assert arrivals.update(_at(("营地", 60)), other_save) == []
+    assert arrivals.update(_at(("营地", 10)), other_save) == [("minecraft", "营地", 10)], "同名地点是另一个地方"
