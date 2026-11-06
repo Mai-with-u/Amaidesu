@@ -33,7 +33,7 @@ from src.agents.minecraft.events_collector import MaicraftEventsCollector
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN, food_taken_of, spoken_line
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
 from src.agents.minecraft.player_body_language import spoken_line as body_language_line
-from src.agents.minecraft.player_interactions import body_language_interactions
+from src.agents.minecraft.player_interactions import body_language_interactions, player_of
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
@@ -140,6 +140,8 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
             summary=body_language_line(str(event.get("message") or "")),
             source_event_type=PLAYER_BODY_LANGUAGE,
             resolved=PLAYER_BODY_LANGUAGE in RESOLVED_KINDS,
+            # 是谁冲她做的动作：主播据此推这位玩家的卡（"这位是谁、和你有过什么"），说什么由她自己定
+            player_uuid=player_of(event)[0],
         )
         await self.emit_event(KIND_TO_EVENT[PLAYER_BODY_LANGUAGE], payload, source=self.name)
         self.logger.info(f"[身体事件] {payload.summary}（{PLAYER_BODY_LANGUAGE}）")

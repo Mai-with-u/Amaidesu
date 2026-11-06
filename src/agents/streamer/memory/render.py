@@ -19,12 +19,15 @@
 from __future__ import annotations
 
 import json
-from typing import AbstractSet, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, AbstractSet, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.storage.models.memory import ArchiveLine, Commitment
 from src.modules.types.game_save import GameSave
 
 from .saves import SavePlace, place_of
+
+if TYPE_CHECKING:
+    from src.modules.storage.models.game_players import GamePlayer, PlayerInteraction
 
 __all__ = [
     "MAX_BRIEF_ARCHIVE_LINES",
@@ -52,6 +55,7 @@ __all__ = [
     "render_save_heads",
     "render_spoken_archive",
     "render_spoken_memory",
+    "render_player_card",
     "render_viewer_card",
     "source_notes",
 ]
@@ -428,6 +432,42 @@ def render_viewer_card(
         f"{target}。你答应过 ta：{(commitment.what or '').strip()}（{detail}）。"
         "只提答应的事，别提当时的缘由。"
     )
+
+
+def render_player_card(
+    player: "GamePlayer", history: Sequence["PlayerInteraction"], *, previous_session_id: Optional[int] = None
+) -> str:
+    """游戏玩家开口时的卡："这位是谁、和你有过什么"；以前没有往来的返回空串（新面孔不推卡）。
+
+    卡面只写和她发生过的互动事实与他当时的名字：打过几次招呼、送过什么、切磋输赢、一起做过什么；
+    不写他什么时间段上线、不写私聊、不写没批准的自述。最近一次往来在上一场时写"上一场"，其余写"之前"。
+    """
+    if not history:
+        return ""
+    greets = [item for item in history if item.kind == "greet"]
+    gifts = [str(item.fact.get("said") or "").strip() for item in history if item.kind == "gift"]
+    spars = [str(item.fact.get("result") or "") for item in history if item.kind == "spar"]
+    together = [str(item.fact.get("title") or "").strip() for item in history if item.kind in ("together", "helped")]
+    parts: List[str] = []
+    if greets:
+        times = sum(int(item.fact.get("count") or 0) for item in greets)
+        parts.append(f"冲你打过 {times} 次招呼" if times > 1 else "冲你打过招呼")
+    gifts = [item for item in gifts if item][:2]
+    if gifts:
+        parts.append(f"送过你东西（{'；'.join(gifts)}）")
+    if spars:
+        won, lost = spars.count("won"), spars.count("lost")
+        score = "，".join(part for part in (f"你赢 {won} 局" if won else "", f"你输 {lost} 局" if lost else "") if part)
+        parts.append(f"和你切磋过 {len(spars)} 场" + (f"（{score}）" if score else ""))
+    together = [item for item in together if item][:2]
+    if together:
+        parts.append(f"一起做过：{'；'.join(together)}")
+    if not parts:
+        return ""
+    when = "上一场" if previous_session_id is not None and history[0].live_session_id == previous_session_id else "之前"
+    former = player.former_names()
+    name = f"{player.name}（以前叫 {'、'.join(former[-2:])}）" if former else player.name
+    return f"[玩家·{player.name}] {name} 在游戏里找你了。{when}他{'、'.join(parts)}。认得出他就好，别念清单。"
 
 
 def render_presence_line(viewers: Sequence[Tuple[str, Optional[int]]], *, now_ms: int) -> str:

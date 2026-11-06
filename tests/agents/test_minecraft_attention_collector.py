@@ -586,6 +586,8 @@ async def test_body_language_with_a_player_uuid_also_records_the_interaction() -
         CoreEvents.GAME_PLAYER_INTERACTED,
         CoreEvents.GAME_PLAYER_INTERACTED,
     ]
+    # 叙事那条也带上是谁：主播据此推这位玩家的卡
+    assert bus.events[0][1].player_uuid == "uuid-alex"
     greet, gift = bus.events[1][1], bus.events[2][1]
     assert (greet.kind, greet.player_uuid, greet.actions) == ("greet", "uuid-alex", ["扔东西"])
     assert (gift.kind, gift.fact) == ("gift", {"said": "朝我扔了 3 个面包"})

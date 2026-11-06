@@ -280,6 +280,23 @@ async def test_planner_hands_state_facts_to_reply_tool() -> None:
     assert not hasattr(provider, "_round_state_facts")
 
 
+def test_addressed_players_are_those_who_spoke_or_did_something_to_her() -> None:
+    """本窗找过她的玩家：公屏开口的、冲她做动作的，认得出是谁的才算；按先后去重。"""
+    ledger = GameLedger()
+    ledger.record_encounter(
+        "minecraft", "player_body_language", "玩家 Steve 看着我蹲起 2 下", True, _ts(20, 1), player="uuid-s"
+    )
+    ledger.record_chat("minecraft", "玩家 Alex：来切磋", _ts(20, 2), speaker="uuid-a")
+    ledger.record_chat("minecraft", "玩家 Server（没有发言人凭据）：重启", _ts(20, 3), speaker="?")
+    ledger.record_encounter("minecraft", "attacked", "被僵尸打了 2 下", False, _ts(20, 4))
+    ledger.record_chat("minecraft", "玩家 Steve：嗨", _ts(20, 5), speaker="uuid-s")
+
+    batch = ledger.drain()
+
+    assert batch.addressed_players == (("minecraft", "uuid-s"), ("minecraft", "uuid-a"))
+    assert batch.chat_speakers == (("minecraft", "uuid-a"), ("minecraft", "?"), ("minecraft", "uuid-s"))
+
+
 def test_chat_speakers_list_who_spoke_this_batch() -> None:
     """本批公屏聊天是谁说的：按先后去重；系统消息不算，认不出是谁的写 "?"。"""
     ledger = GameLedger()

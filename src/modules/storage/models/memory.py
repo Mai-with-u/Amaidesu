@@ -339,16 +339,20 @@ class NewCueLogEntry(BaseModel):
     live_session_id: int = Field(..., description="推在哪一场")
     pushed_at_ms: int = Field(..., description="推送时刻")
     card_kind: str = Field(
-        ..., description="卡类：viewer 对象开口 / game 游戏开着 / place 地点 / rule 规则 / vector 向量 / joke 老梗"
+        ...,
+        description="卡类：viewer 对象开口 / player 游戏玩家开口 / game 游戏开着 / place 地点 / rule 规则"
+        " / vector 向量 / joke 老梗",
     )
     archive_line_id: Optional[int] = Field(default=None, description="指向的档案行（档案卡才有）")
     commitment_id: Optional[int] = Field(default=None, description="指向的承诺（承诺卡才有）")
     sources: List[str] = Field(
         default_factory=list,
-        description="命中它的全部来源：danmaku 观众弹幕 / place 游戏地点 / situation 游戏情境 / self 她的台词",
+        description="命中它的全部来源：danmaku 观众弹幕 / player 游戏玩家开口 / place 游戏地点"
+        " / situation 游戏情境 / self 她的台词",
     )
     detail: Dict[str, Any] = Field(
-        default_factory=dict, description="分数明细：规则写命中的触发词，向量写余弦、名次与融合分，地点写地点名与距离"
+        default_factory=dict,
+        description="分数明细：规则写命中的触发词，向量写余弦、名次与融合分，地点写地点名与距离，玩家卡写玩家编号",
     )
     self_triggered: bool = Field(default=False, description="来源只有她自己的台词（防打转的统计口径）")
 

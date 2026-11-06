@@ -63,8 +63,10 @@ class _PendingEntry:
     arrived_ms: int
     count: int = 1
     is_chat: bool = False  # 游戏聊天行：入账后其原话随本窗说话交给表达侧
-    # 聊天行是谁说的：核对过的玩家写 UUID，认不出是谁的玩家聊天写 "?"，系统消息与非聊天行为空
+    # 聊天行是谁说的：核对过的玩家写 UUID，认不出是谁的玩家聊天写 "?"，系统消息与非聊天行为空；
+    # 肢体动作遭遇行写冲她做动作的玩家 UUID
     speaker: str = ""
+    game: str = ""
 
 
 def sole_chat_player(speakers: Sequence[Tuple[str, str]]) -> Tuple[str, str]:
@@ -121,12 +123,17 @@ class GameLedger:
         self._stage(note_turn(label, message, timestamp_ms or now_ms()), label=label, body=message)
         return message
 
-    def record_encounter(self, game: str, kind: str, summary: str, resolved: bool, timestamp_ms: int) -> str:
-        """身体遭遇事件（game.body.*）入账，返回脱敏后的摘要供嘴部喂料复用。"""
+    def record_encounter(
+        self, game: str, kind: str, summary: str, resolved: bool, timestamp_ms: int, player: str = ""
+    ) -> str:
+        """身体遭遇事件（game.body.*）入账，返回脱敏后的摘要供嘴部喂料复用。
+
+        ``player`` 是冲她做肢体动作的那位玩家的 UUID（其余遭遇为空）：出账时列进本窗找过她的玩家。
+        """
         summary = sanitize_internal_terms(summary)
         body = f"{summary}（已结束）" if resolved else summary
         label = self.encounter_label(game, kind)
-        self._stage(note_turn(label, body, timestamp_ms or now_ms()), label=label, body=body)
+        self._stage(note_turn(label, body, timestamp_ms or now_ms()), label=label, body=body, speaker=player, game=game)
         return summary
 
     def record_chat(self, game: str, body: str, timestamp_ms: int, speaker: str = "") -> None:
@@ -136,14 +143,21 @@ class GameLedger:
         出账时列进本批的发言人，她这一窗说的话据此记下在回应哪位玩家。
         """
         self._stage(
-            note_turn(game, body, timestamp_ms or now_ms()), label=game, body=body, is_chat=True, speaker=speaker
+            note_turn(game, body, timestamp_ms or now_ms()),
+            label=game,
+            body=body,
+            is_chat=True,
+            speaker=speaker,
+            game=game,
         )
 
     def record_delegation(self, agent: str, instruction: str) -> TimelineTurn:
         """Planner 受理委派：构造"我在哪个游戏里开始做什么"的时间线行（直写时间线用）。"""
         return note_turn(self.delegation_label(agent), sanitize_internal_terms(instruction), now_ms())
 
-    def _stage(self, turn: TimelineTurn, *, label: str, body: str, is_chat: bool = False, speaker: str = "") -> None:
+    def _stage(
+        self, turn: TimelineTurn, *, label: str, body: str, is_chat: bool = False, speaker: str = "", game: str = ""
+    ) -> None:
         """入账暂存：同摘要落在折叠窗内时并入最近一条只记数，按上限裁剪。"""
         now = now_ms()
         if self._pending:
@@ -153,7 +167,14 @@ class GameLedger:
                 return
         self._pending.append(
             _PendingEntry(
-                turn=turn, label=label, body=body, base=turn.content, arrived_ms=now, is_chat=is_chat, speaker=speaker
+                turn=turn,
+                label=label,
+                body=body,
+                base=turn.content,
+                arrived_ms=now,
+                is_chat=is_chat,
+                speaker=speaker,
+                game=game,
             )
         )
         overflow = len(self._pending) - _PENDING_GAME_EVENTS_MAX
@@ -174,6 +195,7 @@ class GameLedger:
         events: List[str] = []
         fresh_chat: List[str] = []
         speakers: List[Tuple[str, str]] = []
+        addressed: List[Tuple[str, str]] = []
         state_lines: List[str] = []
         for item in staged:
             content = item.base if item.count == 1 else f"{item.base}（另 {item.count - 1} 次相同）"
@@ -184,6 +206,9 @@ class GameLedger:
                 fresh_chat.append(content)
                 if item.speaker and (item.label, item.speaker) not in speakers:
                     speakers.append((item.label, item.speaker))
+            # 本窗找过她的玩家：公屏开口的、冲她做动作的，认得出是谁的才算（玩家卡按这个推）
+            if item.speaker and item.speaker != "?" and (item.game, item.speaker) not in addressed:
+                addressed.append((item.game, item.speaker))
             if self._is_state_line(item.label, item.body):
                 state_lines.append(content)
         if len(state_lines) > _MAX_STATE_LINES:
@@ -192,6 +217,7 @@ class GameLedger:
             events=tuple(events),
             fresh_chat=tuple(fresh_chat),
             chat_speakers=tuple(speakers),
+            addressed_players=tuple(addressed),
             private_chat=tuple(private_chat),
             facts_text="\n".join(state_lines),
             timeline_turns=tuple(turns),

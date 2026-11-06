@@ -119,6 +119,7 @@ def instantiate_agent(
             memory_index_repo=deps.memory_index_repo,
             embedding_setup=deps.embedding_setup,
             memory_cue_log_repo=deps.memory_cue_log_repo,
+            game_player_repo=deps.game_player_repo,
             event_repo=deps.event_repo,
             privacy_service=deps.privacy_service,
             stream_ledger=deps.storage_ledger,

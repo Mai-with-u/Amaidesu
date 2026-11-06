@@ -539,7 +539,7 @@ async def test_use_memory_accepts_archive_line_from_this_batch_cards() -> None:
     """本批线索卡带来的档案行也能点名；不在简报也不在卡片里的编号按没填处理。"""
     cues = SimpleNamespace(text="【这一批想起来的事】\n- [档#41] 女仆取名团子", archive_ids=(41,), labels={})
 
-    async def cues_provider(batch: Any, open_games: Any) -> Any:
+    async def cues_provider(batch: Any, open_games: Any, game_players: Any) -> Any:
         return cues
 
     provider = MagicMock()

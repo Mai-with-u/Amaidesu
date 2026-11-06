@@ -46,6 +46,7 @@ from .passive import (
     SOURCE_DANMAKU,
     SOURCE_GAME,
     SOURCE_PLACE,
+    SOURCE_PLAYER,
     SOURCE_SELF,
     SOURCE_SITUATION,
     VECTOR_MAX_QUERIES,
@@ -67,6 +68,7 @@ from .render import (
     render_forget_notice,
     render_game_card,
     render_joke_card,
+    render_player_card,
     render_presence_line,
     render_recalled_commitment_card,
     render_retract_notice,
@@ -79,7 +81,14 @@ if TYPE_CHECKING:
     from src.modules.storage.privacy import PrivacyService
 
     from .search import MemorySearch
-    from src.modules.storage.repos import ArchiveRepo, ChatRepo, CommitmentRepo, MemoryCueLogRepo, ViewerRepo
+    from src.modules.storage.repos import (
+        ArchiveRepo,
+        ChatRepo,
+        CommitmentRepo,
+        GamePlayerRepo,
+        MemoryCueLogRepo,
+        ViewerRepo,
+    )
 
 __all__ = [
     "MAX_CARDS_PER_BATCH",
@@ -186,6 +195,9 @@ def _label(key: ItemKey) -> str:
         return render_commitment_number(int(value))
     if kind == "archive":
         return render_archive_number(int(value))
+    if kind == "player":
+        # 只记玩家编号，不写名字（日志与线索卡记录同口径）
+        return f"玩家#{int(value)}"
     return f"老梗「{value}」"
 
 
@@ -208,13 +220,14 @@ class MemoryCueProvider:
         passive_enabled: bool = True,
         search: Optional["MemorySearch"] = None,
         vector_enabled: bool = True,
+        game_player_repo: Optional["GamePlayerRepo"] = None,
     ) -> None:
         """仓储与时钟注入；隐私服务缺失时不出回执行（看不见遗忘命令）。
 
         ``previous_session_provider`` 给"上一场"的判定（承诺卡与档案卡的时间词）：缺省时
         一律写"之前"，不冒险把三场前的事说成上一场。``archive_repo`` 缺失时被动想起没有档案卡；
         ``cue_log_repo`` 缺失时只记日志；``passive_enabled`` 为假时被动想起三路都不跑；``search`` 缺失、
-        没配嵌入服务或 ``vector_enabled`` 为假时向量一路不跑。
+        没配嵌入服务或 ``vector_enabled`` 为假时向量一路不跑。``game_player_repo`` 缺失时没有玩家卡。
         """
         self._commitments = commitments_repo
         self._chat = chat_repo
@@ -228,6 +241,7 @@ class MemoryCueProvider:
         self._archive = archive_repo
         self._search = search
         self._vector_enabled = vector_enabled
+        self._players = game_player_repo
         self._pool = RulePool(archive_repo=archive_repo, inside_jokes=inside_jokes, clock=clock)
         self._arrivals = PlaceArrivals()
         self._situation = SituationQuery()
@@ -254,13 +268,14 @@ class MemoryCueProvider:
         brief_archive_ids: Sequence[int] = (),
         brief_commitment_ids: Sequence[int] = (),
         game_tasks: Optional[Mapping[str, str]] = None,
+        game_players: Sequence[Tuple[str, str]] = (),
     ) -> MemoryCues:
         """算一批的线索：卡片、老观众在场一行、回执行合成一个块；没有线索返回空串。
 
         ``current_saves`` 是分存档的游戏眼下所在的存档：游戏卡只推这个存档里答应的。
         ``situations`` 是各游戏角色离记住的地点多远（地点一路判到达用）；``brief_*_ids`` 是
         常驻简报里列着的条目，被动想起不再推它们；``game_tasks`` 是各游戏手上还在做的委派原话
-        （游戏情境查询用）。
+        （游戏情境查询用）；``game_players`` 是本窗在游戏里开口或冲她做动作的玩家，(游戏, UUID)。
         """
         session_id = self._current_session_provider() if self._current_session_provider is not None else None
         if session_id is None:
@@ -279,8 +294,9 @@ class MemoryCueProvider:
             previous_session_id=await self._previous_session_id(),
         )
         self._round_labels = {}
-        # 对象开口 -> 游戏地点 -> 规则 -> 游戏开着 -> 向量：每一路只在前面没凑满三张时补
+        # 对象开口（观众、游戏玩家） -> 游戏地点 -> 规则 -> 游戏开着 -> 向量：每一路只在前面没凑满三张时补
         await self._viewer_cards(senders, state)
+        await self._player_cards(sid, game_players, state)
         if self._passive_enabled:
             await self._pool.refresh_if_stale()
             self._place_cards(situations or {}, state)
@@ -569,6 +585,31 @@ class MemoryCueProvider:
                 state.carded_viewers.add(int(sender.viewer_id))
                 self._round_labels[int(commitment.id)] = sender.user_name or "观众"
                 break
+
+    async def _player_cards(self, session_id: int, game_players: Sequence[Tuple[str, str]], state: _Round) -> None:
+        """对象开口扩到游戏玩家：本窗在游戏里开口或冲她做动作的玩家，以前有往来的推一张"这位是谁、和你有过什么"。
+
+        卡只推给这一窗找过她的那几位（按 UUID 对上，不会推错人）；同一位每场至多两次、隔十分钟，
+        本场她已经回应过他（台词记下了回应对象）就不再推——认出来了，用上即停。新面孔没有往来，不推。
+        """
+        if self._players is None or not game_players:
+            return
+        replied = set(await self._players.replied_player_ids(live_session_id=session_id))
+        for game, uuid in game_players:
+            if state.full:
+                return
+            player = await self._players.find_player(game=game, uuid=uuid)
+            if player is None:
+                continue
+            key: ItemKey = ("player", int(player.id))
+            if self._skip(key, state, "本场说上话了" if player.id in replied else self._blocked(key, state)):
+                continue
+            history = await self._players.list_history(player_id=player.id, exclude_session_id=session_id)
+            text = render_player_card(player, history, previous_session_id=state.previous_session_id)
+            if not text:
+                continue
+            card = _Card(key=key, text=text, kind="player", sources=(SOURCE_PLAYER,), detail={"player_id": player.id})
+            self._push(state, card)
 
     async def _game_cards(self, open_games: Sequence[str], state: _Round) -> None:
         """游戏开着：挂在这个游戏上、不针对具体观众的未了结承诺，每个游戏一张。"""

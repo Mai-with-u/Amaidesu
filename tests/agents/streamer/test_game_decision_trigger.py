@@ -249,5 +249,14 @@ async def test_game_chat_remembers_who_spoke_for_the_window(live_agent) -> None:
         await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, payload, source="TestCollector")
         await bus.wait_until_drained()
 
+    await bus.emit(
+        CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE,
+        _body("player_body_language", "玩家 Steve 看着我蹲起 2 下", player_uuid="uuid-s"),
+        source="TestCollector",
+    )
+    await bus.wait_until_drained()
+
     materials = await agent._scope.open_window()
     assert materials.game_batch.chat_speakers == (("minecraft", "uuid-a"), ("minecraft", "?"))
+    # 冲她做动作的也算找过她：玩家卡据此推
+    assert materials.game_batch.addressed_players == (("minecraft", "uuid-a"), ("minecraft", "uuid-s"))

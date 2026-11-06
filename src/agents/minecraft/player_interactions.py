@@ -20,7 +20,7 @@ from src.agents.minecraft.maicraft import GoalRun
 from src.agents.minecraft.player_body_language import spoken_fact
 from src.modules.events.payloads.game_player import GamePlayerInteractedPayload
 
-__all__ = ["SelfChatLog", "SparOpponents", "body_language_interactions", "spar_interaction"]
+__all__ = ["SelfChatLog", "SparOpponents", "body_language_interactions", "player_of", "spar_interaction"]
 
 #: Mod 肢体动作原话里的固定说法 → 记账用的动作名（按出现与否计，次数看打招呼的条数）
 _ACTIONS: Tuple[Tuple[str, str], ...] = (
@@ -52,7 +52,7 @@ _MAX_PENDING_SPARS = 16
 _MAX_ANNOUNCED_CHATS = 64
 
 
-def _player_of(event: Dict[str, Any]) -> Tuple[str, str]:
+def player_of(event: Dict[str, Any]) -> Tuple[str, str]:
     """肢体动作事件上的玩家：(UUID, 名字)；没带结构化字段时都是空串。"""
     player = event.get("player")
     if not isinstance(player, dict):
@@ -75,7 +75,7 @@ def body_language_interactions(
     event: Dict[str, Any], *, save_id: str = "", save_name: str = ""
 ) -> List[GamePlayerInteractedPayload]:
     """一条肢体动作事件 → 打招呼一条，里面有朝她扔东西的再加送东西一条；没带玩家 UUID 的不记。"""
-    uuid, name = _player_of(event)
+    uuid, name = player_of(event)
     if not uuid:
         return []
     message = str(event.get("message") or "")

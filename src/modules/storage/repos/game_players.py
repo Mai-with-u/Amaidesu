@@ -303,6 +303,41 @@ class GamePlayerRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def list_history(
+        self, *, player_id: int, exclude_session_id: Optional[int] = None, limit: int = 50
+    ) -> List[PlayerInteraction]:
+        """玩家卡用的往来：正式场里和她的互动，最近的在前；不含 ``exclude_session_id`` 那一场（本场的她自己知道）。
+
+        彩排场的互动不算：彩排里的事不进正式的记忆。
+        """
+
+        def _exec() -> List[PlayerInteraction]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT i.id, i.player_id, i.live_session_id, i.save_id, i.save_name, i.kind, i.fact, i.at_ms"
+                    " FROM game_player_interactions i JOIN live_sessions s ON s.id = i.live_session_id"
+                    " WHERE i.player_id=? AND s.kind='live' AND i.live_session_id IS NOT ?"
+                    " ORDER BY i.at_ms DESC, i.id DESC LIMIT ?",
+                    (int(player_id), exclude_session_id, int(limit)),
+                ).fetchall()
+                return [_interaction(row) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def replied_player_ids(self, *, live_session_id: int) -> List[int]:
+        """本场她播出的台词里回应过的玩家（台词落库时记下的回应对象）。"""
+
+        def _exec() -> List[int]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT reply_player_id FROM live_chat WHERE live_session_id=? AND sender_role='assistant'"
+                    " AND reply_player_id IS NOT NULL AND dropped_at_ms IS NULL",
+                    (int(live_session_id),),
+                ).fetchall()
+                return [int(row["reply_player_id"]) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
     async def add_game_chat(
         self,
         *,

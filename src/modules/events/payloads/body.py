@@ -73,6 +73,7 @@ class BodyEventPayload(BasePayload):
         hits: 该次遭遇的命中次数（来自上游片段聚合；0 = 上游未提供）
         resolved: 该次遭遇是否已结束（供主播措辞滞后：已结束就不说"正在被攻击"）
         occurred_at_ms: 上游事实发生时刻（Unix 毫秒；0 = 未提供或无法解析）
+        player_uuid: 冲 AI 玩家做肢体动作的那位玩家的 UUID（只在 player_body_language 上有；主播据此推他的玩家卡）
         timestamp_ms: 本系统发布该事件的时刻（Unix 毫秒）
     """
 
@@ -94,6 +95,10 @@ class BodyEventPayload(BasePayload):
     hits: int = Field(default=0, description="该次遭遇的命中次数（0 = 上游未提供）")
     resolved: bool = Field(default=False, description="该次遭遇是否已结束")
     occurred_at_ms: int = Field(default=0, description="上游事实发生时刻（Unix 毫秒；0 = 未知）")
+    player_uuid: str = Field(
+        default="",
+        description="冲 AI 玩家做肢体动作的那位玩家的 UUID（只在 player_body_language 上有；认不出时为空串）",
+    )
     timestamp_ms: int = Field(default_factory=lambda: now_ms(), description="本系统发布时刻（Unix 毫秒）")
 
     model_config = ConfigDict(

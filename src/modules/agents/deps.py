@@ -56,6 +56,8 @@ class AgentDeps:
     embedding_setup: Optional[Any] = None
     # 线索卡记录仓储（被动想起每推一张卡记一行）
     memory_cue_log_repo: Optional[Any] = None
+    # 游戏里的人（主播的玩家卡读：玩家在游戏里开口或冲她做动作时，这位是谁、和她有过什么）
+    game_player_repo: Optional[Any] = None
     event_repo: Optional[Any] = None
     creature_repo: Optional[Any] = None
     privacy_service: Optional[Any] = None

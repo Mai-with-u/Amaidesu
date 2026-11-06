@@ -603,6 +603,8 @@ async def create_app_components(
             memory_index_repo=database.memory_index,
             embedding_setup=embedding_setup,
             memory_cue_log_repo=database.memory_cue_log,
+            # 游戏里的人：玩家在游戏里开口或冲她做动作时推他的玩家卡
+            game_player_repo=database.game_players,
             event_repo=database.events,
             # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
             privacy_service=privacy_service,
@@ -725,6 +727,8 @@ async def create_app_components(
                 memory_index_repo=database.memory_index,
                 embedding_setup=embedding_setup,
                 memory_cue_log_repo=database.memory_cue_log,
+                # 游戏里的人：玩家在游戏里开口或冲她做动作时推他的玩家卡
+                game_player_repo=database.game_players,
                 event_repo=database.events,
                 # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
                 privacy_service=privacy_service,

@@ -217,6 +217,7 @@ class StreamerAgent(BaseAgent):
         archive_repo: Optional[Any] = None,
         memory_index_repo: Optional[Any] = None,
         memory_cue_log_repo: Optional[Any] = None,
+        game_player_repo: Optional[Any] = None,
         embedding_setup: Optional[EmbeddingSetup] = None,
         event_repo: Optional[Any] = None,
         privacy_service: Optional[Any] = None,
@@ -260,6 +261,8 @@ class StreamerAgent(BaseAgent):
             memory_index_repo: 可选 ``MemoryIndexRepo``（记忆检索的派生索引）——注入时后台
                 索引任务把档案行、承诺、台词、游戏事件补进全文与向量索引；None 时不补算
             embedding_setup: 可选嵌入服务装配结果；None 或没配嵌入模型时索引只补全文
+            game_player_repo: 可选 ``GamePlayerRepo``（游戏里的人）——玩家在游戏里开口或冲她做动作时，
+                推一张"这位是谁、和你有过什么"的玩家卡；缺失时没有玩家卡。
             memory_cue_log_repo: 可选 ``MemoryCueLogRepo``（线索卡记录）——被动想起每推一张卡记一行，
                 复盘面板读；None 时只记日志
             event_repo: 可选 ``EventRepo``（游戏事件）——场次回顾的游戏进展原料；
@@ -543,6 +546,7 @@ class StreamerAgent(BaseAgent):
                 previous_session_provider=self._previous_session_id,
                 archive_repo=archive_repo,
                 cue_log_repo=memory_cue_log_repo,
+                game_player_repo=game_player_repo,
                 inside_jokes=config.persona.inside_jokes,
                 passive_enabled=self.typed_config.memory_passive_recall_enabled,
                 search=self._memory_search,
@@ -1702,10 +1706,13 @@ class StreamerAgent(BaseAgent):
         lines = await self._archive_repo.list_lines_by_ids(line_ids=[int(line_id)])
         return lines[0] if lines else None
 
-    async def _collect_memory_cues(self, batch: List[Any], open_games: Sequence[str]) -> Any:
-        """本批线索：承诺卡、被动想起的档案卡与老梗卡、老观众在场一行、回执行；没启用线索推送时返回 None。
+    async def _collect_memory_cues(
+        self, batch: List[Any], open_games: Sequence[str], game_players: Sequence[Tuple[str, str]] = ()
+    ) -> Any:
+        """本批线索：承诺卡、玩家卡、被动想起的档案卡与老梗卡、老观众在场一行、回执行；没启用线索推送时返回 None。
 
-        常驻简报里列着的条目交过去：同一件事简报里有了，卡片不再推一遍。
+        常驻简报里列着的条目交过去：同一件事简报里有了，卡片不再推一遍。``game_players`` 是本窗在游戏里
+        开口或冲她做动作的玩家，(游戏, UUID)：有往来的推一张"这位是谁、和你有过什么"。
         """
         if self._memory_cues is None:
             return None
@@ -1717,6 +1724,7 @@ class StreamerAgent(BaseAgent):
             brief_archive_ids=self._memory_brief_archive_ids,
             brief_commitment_ids=self._memory_brief_ids,
             game_tasks=self._game_tasks(),
+            game_players=list(game_players),
         )
 
     def _game_tasks(self) -> Dict[str, str]:
@@ -1817,6 +1825,8 @@ class StreamerAgent(BaseAgent):
                 payload.summary,
                 bool(getattr(payload, "resolved", False)),
                 payload.timestamp_ms or now_ms(),
+                # 冲她做肢体动作的玩家：本窗据此推他的玩家卡
+                player=payload.player_uuid,
             )
             if self._mouth is not None:
                 # 嘴开着：遭遇由嘴当场反应（几秒内出声），死亡也一样——不再为它专门唤醒 Planner，

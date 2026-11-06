@@ -47,6 +47,7 @@ __all__ = [
     "SOURCE_DANMAKU",
     "SOURCE_GAME",
     "SOURCE_PLACE",
+    "SOURCE_PLAYER",
     "SOURCE_SELF",
     "SOURCE_SITUATION",
     "SituationQuery",
@@ -60,8 +61,9 @@ __all__ = [
 
 logger = get_logger("MemoryCueProvider")
 
-# 命中来源：观众弹幕 / 她的台词 / 走到记住的地点 / 游戏情境查询 / 游戏开着
+# 命中来源：观众弹幕 / 她的台词 / 走到记住的地点 / 游戏情境查询 / 游戏开着 / 游戏玩家开口或冲她做动作
 SOURCE_DANMAKU = "danmaku"
+SOURCE_PLAYER = "player"
 SOURCE_SELF = "self"
 SOURCE_PLACE = "place"
 SOURCE_SITUATION = "situation"

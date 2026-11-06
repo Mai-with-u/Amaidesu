@@ -229,7 +229,7 @@ class PlannerEnv:
     # 按编号取档案行（点名之后渲染说话档用；异步）
     archive_lookup: Optional[Callable[[int], Any]] = None
     # 线索推送：按本批弹幕与当前开着的游戏算这一批想起来的事（异步）
-    memory_cues_provider: Optional[Callable[[List[Any], Sequence[str]], Any]] = None
+    memory_cues_provider: Optional[Callable[[List[Any], Sequence[str], Sequence[Tuple[str, str]]], Any]] = None
     # 已启用的游戏工具面（提示行只在这些游戏里取承诺卡；不表示主播正在玩哪一个）
     open_games_provider: Optional[Callable[[], Sequence[str]]] = None
     action_recorder: Optional[Callable[[str, str], None]] = None
@@ -365,6 +365,8 @@ class Planner:
         self._round_game_events: List[str] = []
         # 本窗公屏聊天只来自一位核对过的玩家时是 (游戏, UUID)：这一窗说的话落库时记成在回应他
         self._round_reply_player: Tuple[str, str] = ("", "")
+        # 本窗在游戏里开口或冲她做动作的玩家：线索推送据此推玩家卡
+        self._round_game_players: Tuple[Tuple[str, str], ...] = ()
         # 本窗是否豁免发言闸的台词重合度检查（收播道别窗：道别话题常与收尾环节发言字面重合）
         self._round_bypass_topic_gate: bool = False
         # 本场备忘录全文查询（经环境注入；空串 = 还没写过，段整段省略）
@@ -487,6 +489,7 @@ class Planner:
         self._round_facts_text = resolved_batch.facts_text
         self._round_game_events = list(resolved_batch.events)
         self._round_reply_player = sole_chat_player(resolved_batch.chat_speakers)
+        self._round_game_players = resolved_batch.addressed_players
         self.workbench.begin_round()
         # 游戏聊天原话（非私聊）随本轮说话交给表达侧；私聊行只进本窗参考段
         fresh_game_chat = list(resolved_batch.fresh_chat)
@@ -799,7 +802,7 @@ class Planner:
             except Exception as exc:
                 self.logger.warning(f"读当前开着的游戏失败（本批不出游戏承诺卡）: {exc}", exc=True)
         try:
-            return await self._memory_cues_provider(list(batch), open_games)
+            return await self._memory_cues_provider(list(batch), open_games, self._round_game_players)
         except Exception as exc:
             self.logger.warning(f"线索推送失败（本批不带提示行，不挡决策）: {exc}", exc=True)
             return None

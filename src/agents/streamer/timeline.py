@@ -179,6 +179,8 @@ class GameEventBatch:
     - ``fresh_chat``：本批里游戏聊天的非私聊行原话，随本轮说话交给表达侧。
     - ``chat_speakers``：本批游戏聊天是谁说的，(游戏, 玩家 UUID)，按先后去重；认不出是谁的玩家聊天
       写 "?"，系统消息不在内。只有一位玩家开口时，她这一窗说的话记下在回应他。
+    - ``addressed_players``：本窗找过她的玩家，(游戏, 玩家 UUID)：公屏开口的与冲她做肢体动作的，
+      认得出是谁的才在内。线索推送据此推"这位是谁、和你有过什么"的玩家卡。
     - ``private_chat``：私聊行。私聊不进时间线（表达侧与历史都看不到），
       只在本批交给决策层，且下一窗不再携带。
     - ``facts_text``：本批状态跃迁事实块（账本从结构化条目渲染，带原钟点标记）。
@@ -188,6 +190,7 @@ class GameEventBatch:
     events: Tuple[str, ...] = ()
     fresh_chat: Tuple[str, ...] = ()
     chat_speakers: Tuple[Tuple[str, str], ...] = ()
+    addressed_players: Tuple[Tuple[str, str], ...] = ()
     private_chat: Tuple[str, ...] = ()
     facts_text: str = ""
     timeline_turns: Tuple[TimelineTurn, ...] = ()
