@@ -29,9 +29,12 @@ class NearbyPlace(BaseModel):
 
 
 class GameSituation(BaseModel):
-    """角色眼下的情境：同一维度里最近的几个记住的地点，以及位置是多久前读到的。"""
+    """角色眼下的情境：同一维度里最近的几个记住的地点、位置是多久前读到的，以及身边看到的玩家名。"""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     places: Tuple[NearbyPlace, ...] = Field(default=(), description="同一维度的记住的地点，由近到远")
     age_ms: int = Field(default=0, ge=0, description="算距离用的角色位置是多久前读到的（毫秒）")
+    players: Tuple[str, ...] = Field(
+        default=(), description="最近一次看周围时身边的玩家名；主播把情境发给外部服务前用它遮名"
+    )

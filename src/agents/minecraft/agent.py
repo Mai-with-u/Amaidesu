@@ -54,6 +54,7 @@ from src.agents.minecraft.glance import (
     glance_scene,
     glance_self,
     glance_world_memory,
+    nearby_player_names,
     nearest_places,
     self_position,
 )
@@ -269,6 +270,8 @@ class MinecraftAgent(BaseAgent):
         self._remembered_places = RememberedPlacesCache(self._clock)
         # 最近一次速览看自己读到的（维度, x, z）与读到的时刻：主播要游戏情境时拿它和地点清单现算距离，不另读游戏
         self._last_position: Optional[Tuple[Tuple[str, float, float], float]] = None
+        # 最近一次看周围时身边的玩家名：随游戏情境交给主播，主播发情境给外部服务前遮名用
+        self._nearby_players: Tuple[str, ...] = ()
         # 地点动静（记住、忘掉、走近、离开一个记住的地点）：只发给存储给下播整理认地点，不改怎么做事。
         # 记地点成功是在同步的回执处理里认出来的，先连同当时的存档与时刻排进待发队列，回到异步处再发
         self._near_places = NearPlaceTracker(self._clock)
@@ -1772,6 +1775,7 @@ class MinecraftAgent(BaseAgent):
         view: Dict[str, Any] = {}
         if not self._maicraft_ready():
             self._last_position = None
+            self._nearby_players = ()
             view["unavailable"] = "游戏连接还没就绪，暂时看不到游戏里的情况"
         else:
             body = await self._call_maicraft(OBSERVE, {"what": "self"})
@@ -1781,6 +1785,7 @@ class MinecraftAgent(BaseAgent):
             self._last_position = (position, self._clock()) if position is not None else None
             # 先更新名册再写身边：起过名的按名字称呼，墓碑对到死者
             scene = await self._read_creatures(body)
+            self._nearby_players = nearby_player_names(scene)
             view.update(glance_scene(scene, self._creatures.nicknames_by_scene_id()))
             creatures = self._creatures.status_view()
             if creatures:
@@ -1828,7 +1833,7 @@ class MinecraftAgent(BaseAgent):
             return None
         where, read_at = position
         age_ms = max(0, int((self._clock() - read_at) * 1000))
-        return GameSituation(places=nearest_places(places, where), age_ms=age_ms)
+        return GameSituation(places=nearest_places(places, where), age_ms=age_ms, players=self._nearby_players)
 
     async def _read_remembered_places(self) -> MaicraftReply:
         """速览用的记住的地点清单：缓存没到期就用缓存，否则真读一次 ``observe(world_memory)``。

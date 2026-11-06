@@ -400,6 +400,7 @@ async def test_game_situation_reuses_the_glance_position_and_place_cache_without
     # 家在 (10, -3)，人在 (0.4, 0.2)：水平距离约 10.1 格
     assert situation.places == (NearbyPlace(name="家", distance=10),)
     assert situation.age_ms == 2500
+    assert situation.players == ("Steve",), "看周围时身边的玩家名随情境交出去（主播遮名用）"
     assert len(server.calls_to("observe")) == reads, "读情境不向游戏发请求"
 
     # 看自己没读到位置：旧位置清掉，不拿它配地点清单

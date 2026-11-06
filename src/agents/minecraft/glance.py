@@ -39,6 +39,7 @@ __all__ = [
     "glance_scene",
     "glance_self",
     "glance_world_memory",
+    "nearby_player_names",
     "REMEMBERED_PLACES_MAX",
     "REMEMBERED_PLACES_TTL_S",
     "RememberedPlacesCache",
@@ -351,6 +352,23 @@ def glance_self(reply: MaicraftReply) -> Dict[str, Any]:
             if isinstance(item, dict) and item.get("item")
         ]
     return result
+
+
+def nearby_player_names(reply: MaicraftReply) -> Tuple[str, ...]:
+    """这次看周围看到的玩家名（按出现先后、去重）；没读到周围时为空。
+
+    主播把游戏情境（委派原话等）发给外部服务前，用它把玩家名换成"玩家"。
+    """
+    if not reply.ok:
+        return ()
+    names: List[str] = []
+    for entity in reply.data.get("entities") or []:
+        if not isinstance(entity, dict) or entity.get("type") != "minecraft:player":
+            continue
+        name = str(entity.get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return tuple(names)
 
 
 def glance_scene(reply: MaicraftReply, nicknames: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
