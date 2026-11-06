@@ -96,3 +96,47 @@ def test_finished_tasks_come_from_event_history_terminal_states_only(client, his
 def test_tasks_503_without_tracker(mount, initialized_config) -> None:
     resp = mount(config_service=initialized_config).get("/api/v1/tasks")
     assert resp.status_code == 503 and "任务基建未装配" in resp.json()["detail"]
+
+
+def test_goal_snapshot_falls_back_to_purpose_for_instruction(
+    client, ledger: TaskLedger, history: EventHistoryService
+) -> None:
+    """游戏目标快照只有 purpose（Mod 契约键）：任务卡指令摘要回退显示 purpose。
+
+    两处投影都验：进行中取账本记录，已完结取事件环末态 payload；
+    委派快照 instruction 在场时优先，不受回退影响。
+    """
+    ledger.register(
+        task_id="goal_run_1", provider="maicraft", tool="maicraft_execute",
+        initiator="minecraft", executor="maicraft", status="running", source="provider",
+        snapshot={"purpose": "烤三块海带"},  # 游戏目标快照无 instruction 键
+    )  # fmt: skip
+    history.record(
+        _task_changed(
+            "goal_done",
+            "succeeded",
+            initiator="minecraft",
+            executor="maicraft",
+            source="provider",
+            summary="goal 完成",
+            snapshot={"purpose": "装一扇门"},
+        )
+    )
+    history.record(
+        _task_changed(
+            "deleg_done",
+            "succeeded",
+            initiator="operator",
+            executor="minecraft",
+            source="agent",
+            summary="delivery: 完成",
+            snapshot={"instruction": "建房子", "purpose": "不该被用到"},
+        )
+    )
+
+    body = client.get("/api/v1/tasks").json()
+    running = {card["task_id"]: card for card in body["running"]}
+    finished = {card["task_id"]: card for card in body["finished"]}
+    assert running["goal_run_1"]["instruction"] == "烤三块海带"
+    assert finished["goal_done"]["instruction"] == "装一扇门"
+    assert finished["deleg_done"]["instruction"] == "建房子"

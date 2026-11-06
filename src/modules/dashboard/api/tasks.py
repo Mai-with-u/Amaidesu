@@ -62,12 +62,18 @@ TaskTrackerDep = Annotated[
 ]
 
 
+def _instruction_summary(snapshot: Dict[str, Any]) -> str:
+    """任务卡指令摘要：委派快照用 instruction；游戏目标快照只有 purpose（Mod 契约键，
+    目的原文，见 src/agents/minecraft/goal_ledger.py 的 snapshot=run.data）。"""
+    return str(snapshot.get("instruction") or snapshot.get("purpose") or "")
+
+
 def _card_from_record(record: Any) -> TaskCard:
     """账本记录 → 进行中任务卡。"""
     snapshot = record.snapshot if isinstance(record.snapshot, dict) else {}
     return TaskCard(
         task_id=record.task_id,
-        instruction=str(snapshot.get("instruction", "") or ""),
+        instruction=_instruction_summary(snapshot),
         status=str(record.status),
         initiator=str(record.initiator),
         executor=str(record.executor),
@@ -108,7 +114,7 @@ def _finished_cards_from_history(server: "DashboardServer") -> List[TaskCard]:
         cards.append(
             TaskCard(
                 task_id=task_id,
-                instruction=str(snapshot.get("instruction", "") or ""),
+                instruction=_instruction_summary(snapshot),
                 status=status,
                 initiator=str(data.get("initiator", "") or ""),
                 executor=str(data.get("executor", "") or ""),
