@@ -234,7 +234,7 @@ def delegation_state_line(
     # 游戏侧进展备注（批内某个游戏目标收尾一步）：委派还在途，只是有一步到账
     progress_notes = (record.get("snapshot") or {}).get("game_progress_notes") or []
     if progress_notes:
-        return f"还在做，游戏那边有一步收尾了：{progress_notes[-1]}"
+        return f"还在做，游戏那边有一步收尾了：{sanitize_internal_terms(str(progress_notes[-1]))}"
     idle_ms = current_ms - int(record.get("updated_at_ms") or 0)
     if idle_ms >= _DELEG_STALL_HINT_MS:
         return f"还在做，账面已 {age_text(idle_ms)}没有新进展。"

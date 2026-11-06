@@ -105,3 +105,23 @@ async def test_delegation_render_without_task_id() -> None:
 
     assert "deleg_" not in text
     assert "开始做一个任务：挖 一个游戏任务 石料" in text
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # 第 58 场原样：进展备注的抬头与图纸编号都是游戏那一面的记账地址
+        (
+            "游戏目标 550（maicraft:design）done：读了 11 层方块，存成图纸 0a58eb9a-aedc-4dab-acd8-cebe2b32d50d",
+            "读了 11 层方块，存成图纸",
+        ),
+        ("游戏目标 568（maicraft:find）failed：这一片没有找到蒲公英", "这一片没有找到蒲公英"),
+        # 步骤括号里打头的能力名去掉，这一步在做什么留着
+        ("第 1 步（maicraft:obtain，从床边箱子取烤海带），拿到了", "第 1 步（从床边箱子取烤海带），拿到了"),
+        # 钟点、比分、没有逗号的括号不动
+        ("时间 12:30（下午），比分 3:2", None),
+        ("拿到了（minecraft:dirt）", None),
+    ],
+)
+def test_sanitize_goal_headers_ability_names_and_uuids(text: str, expected) -> None:
+    assert sanitize_internal_terms(text) == (text if expected is None else expected)

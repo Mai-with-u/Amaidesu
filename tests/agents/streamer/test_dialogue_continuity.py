@@ -903,6 +903,8 @@ def test_delegation_rendering_merges_machine_status_and_stall_age() -> None:
         }
     )
     assert "还在做，游戏那边有一步收尾了" in noted and "读了小屋成层图" in noted
+    # 备注抬头的目标编号与能力名不进主播上下文
+    assert "游戏目标" not in noted and "maicraft:design" not in noted
 
     # 账本等定夺：渲染停着等主意
     assert "停着等我和观众拿主意" in render(
