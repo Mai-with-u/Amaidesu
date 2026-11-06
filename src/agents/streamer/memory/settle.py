@@ -172,6 +172,20 @@ def parse_json_object(text: str) -> Dict[str, Any]:
     return data
 
 
+def close_user_prompt(material: SettleMaterial) -> str:
+    """了结那次调用的用户提示词：账上还没了结的承诺 + 本场台词 + 一句问法。
+
+    问法列全四种了结（做完了、不做了、坦白做不到、换个方式兑现），与了结系统提示词的口径一致：
+    只问"做完或不做了"的话，她当众说"那个我真弄不来"之后这条承诺了结不了，会一直留在简报里，
+    她要么反复道歉，要么硬说做完了。离线评测按同一个函数拼提示词，量的就是生产实际发出去的文字。
+    """
+    return (
+        f"【还没了结的承诺】\n{material.open_text}\n\n"
+        f"【本场她说的话】\n{material.speech_text}\n\n"
+        "请判断这些承诺里有哪些在这一场被她当众交代了结果：做完了、不做了、坦白做不到，或者换了个方式兑现。"
+    )
+
+
 def _clip(text: str, limit: int) -> str:
     """按字数截断（标题用；引文不截断，截过的引文已经不是逐字引文）。"""
     cleaned = (text or "").strip()
@@ -776,11 +790,7 @@ class SessionSettler:
         if material.open_commitments:
             closure_rows = await self._ask_for_list(
                 template=_CLOSE_TEMPLATE,
-                prompt=(
-                    f"【还没了结的承诺】\n{material.open_text}\n\n"
-                    f"【本场她说的话】\n{material.speech_text}\n\n"
-                    "请判断这些承诺里有哪些在这一场被她明确说做完了、或明确说不做了。"
-                ),
+                prompt=close_user_prompt(material),
                 key="closed",
             )
         new_lines, archive_misses = self._validate_archive(archive_rows, material)

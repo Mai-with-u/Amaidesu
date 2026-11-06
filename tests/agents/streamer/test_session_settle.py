@@ -161,6 +161,33 @@ async def test_settle_writes_archive_new_commitment_and_closure(
     assert [call["method"] for call in llm.calls] == ["generate", "generate", "generate"]
 
 
+async def test_close_call_asks_for_all_four_kinds_of_closure(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """了结那次调用的问法要列全四种了结，与了结系统提示词一致。
+
+    只问"做完了或不做了"时，她当众坦白"那个我真弄不来"的承诺了结不了，一直留在简报里。
+    """
+    session_id = await _ended_session(store)
+    old = await store.commitments.insert_commitment(what="画生日贺图", quote="下播给你画张生日贺图", now_ms_value=100)
+    assert old is not None
+    await _speech(store, session_id, "生日贺图那个我是真弄不来，跟你说声抱歉", timestamp_ms=1_100)
+
+    llm = _reply(
+        '{"archive": []}',
+        '{"commitments": []}',
+        '{"closed": [{"id": %d, "line": 1, "quote": "生日贺图那个我是真弄不来"}]}' % old,
+    )
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+    close_prompt = llm.calls[2]["input"]
+    for kind in ("做完了", "不做了", "坦白做不到", "换了个方式兑现"):
+        assert kind in close_prompt
+    closed = await store.commitments.get_commitment(commitment_id=old)
+    assert closed is not None and closed.status == "closed"
+
+
 async def test_material_numbers_lines_and_resolves_reply_target(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
