@@ -17,6 +17,7 @@ from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.migrations.v31_viewer_candidates import migrate as v31_migrate
 from src.modules.storage.privacy import PrivacyService
 from src.modules.storage.retention import RetentionService
+from src.modules.storage.schema import SCHEMA_VERSION
 
 # v30 形状的最小 DDL：只留迁移和外键用得到的几张表
 _V30_SCHEMA = """
@@ -99,6 +100,59 @@ def test_candidates_and_viewer_lines_follow_the_messages_they_hang_on(conn: sqli
     assert (
         conn.execute("SELECT COUNT(*) FROM viewer_candidates WHERE id IN (?, ?)", (pending, claimed)).fetchone()[0] == 0
     )
+
+
+# v30 时的档案表：没有来源与观众弹幕两列（直播机上已经开过几场的库就是这个形状）
+_V30_ARCHIVE_LINES = """
+CREATE TABLE archive_lines (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id  INTEGER NOT NULL,
+    text             TEXT NOT NULL,
+    quote            TEXT NOT NULL,
+    evidence_chat_id INTEGER NOT NULL,
+    game             TEXT,
+    save_id          TEXT NOT NULL DEFAULT '',
+    save_name        TEXT NOT NULL DEFAULT '',
+    keywords         TEXT NOT NULL DEFAULT '[]',
+    place            TEXT NOT NULL DEFAULT '',
+    human_locked     INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+
+async def test_v30_database_that_already_has_archive_lines_starts_after_upgrade(tmp_path: Path) -> None:
+    """档案表早就存在的旧库：启动先执行建表汇总、后跑迁移，不能因为新列的索引在列补上之前就建而起不来。"""
+    path = tmp_path / "data" / "v30.db"
+    fresh = SQLiteDatabase(path)
+    await fresh.initialize()
+    await fresh.close()
+    # 把档案表换回 v30 的形状、版本记录退回 30，模拟直播机上的库
+    raw = sqlite3.connect(path)
+    try:
+        raw.executescript(
+            "DROP TABLE viewer_candidates; DROP TABLE archive_lines;"
+            + _V30_ARCHIVE_LINES
+            + "DELETE FROM schema_migrations WHERE version > 30;"
+        )
+        raw.execute(
+            "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id) VALUES (1, '猫取名芝麻', '就叫芝麻', 2)"
+        )
+        raw.commit()
+    finally:
+        raw.close()
+
+    upgraded = SQLiteDatabase(path)
+    await upgraded.initialize()
+    try:
+        assert await upgraded.get_schema_version() == SCHEMA_VERSION
+        rows = await upgraded.execute("SELECT text, source, viewer_chat_id FROM archive_lines")
+        assert [(row["text"], row["source"], row["viewer_chat_id"]) for row in rows] == [
+            ("猫取名芝麻", "streamer", None)
+        ]
+        indexes = {row["name"] for row in await upgraded.execute("PRAGMA index_list(archive_lines)")}
+        assert "idx_archive_lines_viewer_chat" in indexes
+    finally:
+        await upgraded.close()
 
 
 @pytest.fixture()

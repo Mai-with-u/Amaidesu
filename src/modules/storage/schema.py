@@ -48,6 +48,9 @@
   条目）。``SQLiteDatabase`` 推进版本时从注册表按序执行；回调原地修改、幂等，
   用列存在性检查保证对新建库与已迁移库安全
 - ``build_schema_sql()`` 返回完整建表 DDL（IF NOT EXISTS 幂等，含最新列）
+- 启动时先执行建表汇总、再跑迁移：旧库里已经存在的表不会被重建，迁移才补上的列
+  在建表汇总执行那一刻还不存在。所以给既有表新加的列，索引和触发器只写在那一版
+  迁移里，不写进建表汇总（新库照样从版本 0 跑完整条迁移链，索引一样建得出来）
 - ``list_expected_tables()`` 返回启动自检必须存在的业务表名（缺一即拒启）
 - 私有表机制已废除：所有表都进 ``list_expected_tables()`` 统一闸门
 """
@@ -478,7 +481,8 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 # 之后的整理不能去掉或替换它，只有人能动。原话与证据行永远不改，只能随删除一起删。
 # source 是这一行的来源：streamer 是她自己说的（整理自动写、人新增的都是），viewer 是人批准的观众候选
 # （观众定下、她当场接受的事；原话仍是她那句回应）。viewer_chat_id 是观众来源的行挂着的那条弹幕，
-# 按外键级联：删观众、忘了我、按句删弹幕时这一行随之删除。
+# 按外键级联：删观众、忘了我、按句删弹幕时这一行随之删除。viewer_chat_id 的索引由 v31 迁移建
+# （这一列是 v31 才补的，旧库执行建表汇总时它还不存在）。
 
 _ARCHIVE_LINES_SQL = """
 CREATE TABLE IF NOT EXISTS archive_lines (
@@ -497,7 +501,6 @@ CREATE TABLE IF NOT EXISTS archive_lines (
     viewer_chat_id   INTEGER REFERENCES live_chat(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_archive_lines_session ON archive_lines(live_session_id);
-CREATE INDEX IF NOT EXISTS idx_archive_lines_viewer_chat ON archive_lines(viewer_chat_id);
 """.strip()
 
 
