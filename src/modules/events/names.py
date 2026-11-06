@@ -65,6 +65,11 @@ class CoreEvents:
     # 不进对话时间线、不促发决策，免得她念叨"我记住了某某地方"。三层名避开 game.* 单层通配。
     GAME_PLACE_NOTED = "game.place.noted"
 
+    # 别的玩家和 AI 玩家的一次互动（打招呼、送东西、切磋），按游戏给的 UUID 认人。只给记忆落库：
+    # 存储台账显式订阅后记进玩家表与互动表；主播不订阅——同一个动作她已从肢体动作那条叙事知道了，
+    # 不进对话时间线、不促发决策。三层名避开 game.* 单层通配，也不放在主播订阅的 game.chat.# 下。
+    GAME_PLAYER_INTERACTED = "game.player.interacted"
+
     # ========== 流程单（Rundown）子系统事件 ==========
     # 唯一发布者：``RundownState`` 变更边界。``rundown.changed`` 涵盖
     # load / goto / next（含 finish）/ pause / resume 五种状态变更；

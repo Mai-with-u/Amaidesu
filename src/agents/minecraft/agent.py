@@ -95,6 +95,7 @@ from src.agents.minecraft.picture import (
 )
 from src.agents.minecraft.place_marks import NearPlaceTracker, PlaceMark, place_change_of
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
+from src.agents.minecraft.player_interactions import SparOpponents, spar_interaction
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.sparring import spar_outcome_line
 from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
@@ -268,6 +269,8 @@ class MinecraftAgent(BaseAgent):
         self._food_taken = FoodTakenLog()
         # 速览里记住的地点：最多 5 分钟真读一次世界记忆；记地点成功、换存档、连接变化时提前作废
         self._remembered_places = RememberedPlacesCache(self._clock)
+        # 按名字点了对手的切磋：下令时记下名字，收手时连同输赢发一条玩家互动给存储记账（不改怎么打）
+        self._spar_opponents = SparOpponents()
         # 最近一次速览看自己读到的（维度, x, z）与读到的时刻：主播要游戏情境时拿它和地点清单现算距离，不另读游戏
         self._last_position: Optional[Tuple[Tuple[str, float, float], float]] = None
         # 最近一次看周围时身边的玩家名：随游戏情境交给主播，主播发情境给外部服务前遮名用
@@ -1180,6 +1183,8 @@ class MinecraftAgent(BaseAgent):
                 # 设、取消、列计时都当场返回，结果带着还挂着的全部计时：拿来对账回炉计时
                 self._furnace_waits.absorb(run)
                 return
+            # 切磋下令时记下点名的对手：收手时按名字给存储记一笔互动
+            self._spar_opponents.note(run.goal_id, arguments)
             self._track_goal(run)
             return
         if arguments.get("operation") in ("cancel",) or run.finished:
@@ -1245,6 +1250,7 @@ class MinecraftAgent(BaseAgent):
                 # 切磋中他打中她的不进挨打事件，主播只知道有人约切磋、不知道打得怎样：收手时把输赢告诉主播，
                 # 不论这一场是在任务里打的还是闲着时接的
                 await self._emit_game_event("milestone", spar)
+            await self._emit_spar_interaction(run)
             return
         self._goal_ledger.note(run)
         if stalled:
@@ -2092,6 +2098,16 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
     # 事件上报（GamePayload(game="minecraft")）
     # ==================================================================
+
+    async def _emit_spar_interaction(self, run: GoalRun) -> None:
+        """切磋收手：按下令时点名的对手发一条玩家互动（谁赢、各打中几下），只给存储记账，主播不订阅。"""
+        opponent = self._spar_opponents.pop(run.goal_id)
+        if self._event_bus is None or not opponent:
+            return
+        save_id, save_name = self._world.save_fields()
+        interaction = spar_interaction(run, opponent, save_id=save_id, save_name=save_name)
+        if interaction is not None:
+            await self.emit_event(CoreEvents.GAME_PLAYER_INTERACTED, interaction)
 
     async def _emit_game_event(
         self,

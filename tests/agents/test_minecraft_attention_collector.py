@@ -567,3 +567,25 @@ async def test_player_body_language_reaches_the_streamer_as_play_not_as_an_attac
     assert first.summary.startswith("玩家 Alex 看着我蹲起 4 下，拿出铁剑，对着我挥了 2 下。")
     assert "不提血量" in first.summary and first.resolved is True
     assert second.summary.startswith("玩家 Steve 拍了我一下：空手，没伤到。")
+
+
+async def test_body_language_with_a_player_uuid_also_records_the_interaction() -> None:
+    """带玩家 UUID 的肢体动作：叙事照发，后面再发打招呼与送东西两条玩家互动（只给存储记账）。"""
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5)
+    event = _event(
+        6, "player_body_language", "玩家 Alex（e4）朝你扔了 3 个面包（e9），落在你左侧 1 格；他在你左前方 2 格"
+    )
+    event["player"] = {"name": "Alex", "uuid": "uuid-alex", "id": "e4"}
+    client.pages.append(_page([event], cursor=6))
+
+    await collector._drain()
+
+    assert [name for name, _ in bus.events] == [
+        CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE,
+        CoreEvents.GAME_PLAYER_INTERACTED,
+        CoreEvents.GAME_PLAYER_INTERACTED,
+    ]
+    greet, gift = bus.events[1][1], bus.events[2][1]
+    assert (greet.kind, greet.player_uuid, greet.actions) == ("greet", "uuid-alex", ["扔东西"])
+    assert (gift.kind, gift.fact) == ("gift", {"said": "朝我扔了 3 个面包"})

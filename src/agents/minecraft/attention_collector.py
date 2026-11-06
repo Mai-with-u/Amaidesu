@@ -33,7 +33,9 @@ from src.agents.minecraft.events_collector import MaicraftEventsCollector
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN, food_taken_of, spoken_line
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
 from src.agents.minecraft.player_body_language import spoken_line as body_language_line
+from src.agents.minecraft.player_interactions import body_language_interactions
 from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.utils.time_utils import now_ms
@@ -141,6 +143,13 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
         )
         await self.emit_event(KIND_TO_EVENT[PLAYER_BODY_LANGUAGE], payload, source=self.name)
         self.logger.info(f"[身体事件] {payload.summary}（{PLAYER_BODY_LANGUAGE}）")
+        # 叙事发完再按事件上的玩家 UUID 记一笔互动（打招呼，扔给她东西的另记送东西）：只给存储记账，
+        # 主播不订阅，她当场说什么不变；没带 UUID 的认不出是谁，不记
+        world = self._page_world
+        for interaction in body_language_interactions(
+            event, save_id=world.id if world is not None else "", save_name=world.name if world is not None else ""
+        ):
+            await self.emit_event(CoreEvents.GAME_PLAYER_INTERACTED, interaction, source=self.name)
         return True
 
 

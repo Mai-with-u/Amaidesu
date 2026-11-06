@@ -15,6 +15,7 @@ import pytest
 from src.agents.minecraft.maicraft import GoalRun
 from src.agents.minecraft.sparring import spar_outcome_line
 from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.game_player import GamePlayerInteractedPayload
 from src.modules.llm.payload import Response
 
 from .minecraft_v1_fakes import FakeMaicraft, _call, _reports, _resp, _texts, _wait_until, make_minecraft_agent
@@ -85,6 +86,10 @@ def _milestones(bus: Any) -> List[str]:
     ]
 
 
+def _interactions(bus: Any) -> List[GamePlayerInteractedPayload]:
+    return [call.args[1] for call in bus.emit.await_args_list if isinstance(call.args[1], GamePlayerInteractedPayload)]
+
+
 async def test_the_streamer_hears_how_the_spar_went_when_it_ends() -> None:
     """游戏 Agent 下的切磋收手：发一条 milestone 告诉主播输赢；之后照常交付。"""
     server = FakeMaicraft()
@@ -108,6 +113,13 @@ async def test_the_streamer_hears_how_the_spar_went_when_it_ends() -> None:
     assert _milestones(bus) == [
         "切磋了一场：他先到了停手线，算我赢了；我打中他 5 下，他打中我 3 下。切磋是玩，输赢都俏皮带过，开心优先，不提血量"
     ]
+    # 下令时点名的对手连同输赢发一条玩家互动，只给存储记账
+    (spar,) = _interactions(bus)
+    assert (spar.kind, spar.player_name, spar.fact) == (
+        "spar",
+        "Alex",
+        {"result": "won", "my_hits": 5, "their_hits": 3},
+    )
     await agent.stop()
 
 
