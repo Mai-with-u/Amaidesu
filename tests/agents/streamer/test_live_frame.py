@@ -84,6 +84,8 @@ async def test_frame_rides_first_request_only(monkeypatch: pytest.MonkeyPatch) -
     assert note.startswith("【直播画面】") and "刚刚截取" in note
     # 聊天栏的字不当证据：截图上自己正在打的字曾被读成对方说的话
     assert "画面里聊天栏的字不算谁说过的话" in note and "以对话记录里的游戏聊天条目为准" in note
+    # 归属围栏：画面只有"此刻有什么"，不含"谁放的、何时放的"——既有建筑不得当成刚安排的活干出来了
+    assert "画面不能告诉你东西是谁放的、什么时候放的" in note and "只认游戏记录和查询结果" in note
 
 
 async def test_every_window_sees_frame_even_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
