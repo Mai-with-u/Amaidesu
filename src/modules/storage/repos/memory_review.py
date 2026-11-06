@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.storage.repos.archive import newest_snapshot_owner
@@ -85,7 +85,7 @@ def _record(
     )
 
 
-def _line(conn: sqlite3.Connection, line_id: int) -> sqlite3.Row:
+def _line(conn: sqlite3.Connection, line_id: int) -> Any:
     """取一行档案；不存在就报 not_found。"""
     row = conn.execute(
         "SELECT id, live_session_id, text, human_locked FROM archive_lines WHERE id=?", (int(line_id),)
@@ -103,7 +103,7 @@ def _stored_owner(conn: sqlite3.Connection) -> int:
     return owner[0]
 
 
-def _snapshot_row(conn: sqlite3.Connection, owner: int, line_id: int) -> Optional[sqlite3.Row]:
+def _snapshot_row(conn: sqlite3.Connection, owner: int, line_id: int) -> Optional[Any]:
     return conn.execute(
         "SELECT lasting, pinned FROM archive_snapshot_lines WHERE live_session_id=? AND archive_line_id=?",
         (int(owner), int(line_id)),
@@ -133,7 +133,7 @@ def _clean_title(text: str) -> str:
     return title
 
 
-def _settled_live_session(conn: sqlite3.Connection, live_session_id: int) -> sqlite3.Row:
+def _settled_live_session(conn: sqlite3.Connection, live_session_id: int) -> Any:
     """取一场已整理完的正式场；不存在报 not_found，彩排或还没整理完报 conflict。"""
     row = conn.execute(
         "SELECT id, kind, settled_at_ms FROM live_sessions WHERE id=?", (int(live_session_id),)
