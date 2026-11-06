@@ -15,6 +15,7 @@ export const MODEL_GROUP_KEY = 'model';
 export const PROVIDERS_KEY = 'model.llm_providers';
 export const MODELS_KEY = 'model.llm_models';
 export const PROFILES_CONTAINER_KEY = 'model.llm_profiles';
+export const EMBEDDING_KEY = 'model.embedding';
 
 /** 数组元素对象（provider / model 条目），字段名动态，宽松索引签名 */
 export type ConfigItem = Record<string, unknown>;
@@ -195,6 +196,32 @@ export function danglingModelRefs(modelList: string[], registeredNames: string[]
 /** provider 密钥状态：api_key 有非空值即视为已设置（占位符 sk-dummy 也按已设置呈现） */
 export function apiKeySet(value: unknown): boolean {
   return String(value ?? '').trim() !== '';
+}
+
+/** [embedding] 一节眼下能不能用（与后端装配同一口径）：ready 为假时语义检索不开，只走关键词与规则 */
+export interface EmbeddingStatus {
+  ready: boolean;
+  text: string;
+}
+
+export function embeddingStatus(
+  embedding: { enabled: unknown; provider: unknown; model: unknown },
+  providers: ConfigItem[],
+): EmbeddingStatus {
+  const provider = String(embedding.provider ?? '').trim();
+  const model = String(embedding.model ?? '').trim();
+  if (embedding.enabled === false) {
+    return { ready: false, text: '语义检索没开：总开关关着，只走关键词与规则' };
+  }
+  if (!model) return { ready: false, text: '语义检索没开：没填嵌入模型，只走关键词与规则' };
+  const entry = providers.find(item => String(item.name ?? '') === provider);
+  if (!entry) {
+    return { ready: false, text: `嵌入未配置：提供商接入里没有「${provider}」，只走关键词与规则` };
+  }
+  if (!apiKeySet(entry.api_key)) {
+    return { ready: false, text: `嵌入未配置：「${provider}」没填密钥，只走关键词与规则` };
+  }
+  return { ready: true, text: `已配置：「${provider}」的 ${model}` };
 }
 
 /** 单价显示：数值一律带 ¥ 前缀（0 也要显示，表示本地/免费），缺值显示 — */

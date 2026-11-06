@@ -13,6 +13,7 @@ import {
   applyProviderRenameToModels,
   buildDefaultItem,
   danglingModelRefs,
+  embeddingStatus,
   diffCountAgainst,
   formatPrice,
   groupModelsByProvider,
@@ -201,5 +202,34 @@ describe('modelUsageChips / danglingModelRefs / apiKeySet / formatPrice', () => 
     expect(formatPrice(0)).toBe('¥0');
     expect(formatPrice(undefined)).toBe('—');
     expect(formatPrice('')).toBe('—');
+  });
+});
+
+describe('embeddingStatus', () => {
+  const providers = [
+    { name: 'siliconflow', api_key: '' },
+    { name: 'local', api_key: 'sk-1' },
+  ];
+
+  it.each([
+    [{ enabled: false, provider: 'local', model: 'bge-m3' }, false, '总开关关着'],
+    [{ enabled: true, provider: 'local', model: '' }, false, '没填嵌入模型'],
+    [{ enabled: true, provider: 'nope', model: 'bge-m3' }, false, '没有「nope」'],
+    [
+      { enabled: true, provider: 'siliconflow', model: 'BAAI/bge-m3' },
+      false,
+      '「siliconflow」没填密钥',
+    ],
+    [{ enabled: true, provider: 'local', model: 'bge-m3' }, true, '已配置：「local」的 bge-m3'],
+  ])('%o → ready=%s', (embedding, ready, fragment) => {
+    const status = embeddingStatus(embedding, providers);
+    expect(status.ready).toBe(ready);
+    expect(status.text).toContain(fragment);
+  });
+
+  it('没配好时都写明只走关键词与规则', () => {
+    expect(
+      embeddingStatus({ enabled: true, provider: 'siliconflow', model: 'x' }, providers).text,
+    ).toContain('只走关键词与规则');
   });
 });

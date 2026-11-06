@@ -330,6 +330,27 @@
         </div>
       </div>
     </section>
+
+    <!-- ── 第四层：语义检索（embedding）：引用一个提供商，状态与后端装配同口径 ── -->
+    <section v-if="embeddingField" class="zone" :data-config-key="EMBEDDING_KEY">
+      <div class="zone-head">
+        <h2>语义检索</h2>
+        <span class="side">
+          <el-tag :type="embeddingState.ready ? 'success' : 'warning'" effect="plain">
+            {{ embeddingState.text }}
+          </el-tag>
+        </span>
+      </div>
+      <SubFieldGroup
+        :fields="embeddingField.children ?? []"
+        :get-value="getValue"
+        :get-original="getOriginal"
+        :update-value="updateValue"
+        :get-change-count="getChangeCount"
+        :show-advanced="showAdvanced"
+        layout="grid"
+      />
+    </section>
   </div>
 </template>
 
@@ -354,6 +375,7 @@ import { confirmAction } from '@/utils/confirmAction';
 import { getApiErrorMessage } from '@/utils/apiError';
 import type { ConfigFieldSchema } from '@/types/settings';
 import {
+  EMBEDDING_KEY,
   MODELS_KEY,
   PROVIDERS_KEY,
   PROFILES_CONTAINER_KEY,
@@ -363,6 +385,7 @@ import {
   applyProviderRenameToModels,
   buildDefaultItem,
   danglingModelRefs,
+  embeddingStatus,
   formatPrice,
   groupModelsByProvider,
   makeItemField,
@@ -388,6 +411,7 @@ const props = defineProps<{
 const providersField = computed(() => props.fields.find(f => f.key === PROVIDERS_KEY));
 const modelsField = computed(() => props.fields.find(f => f.key === MODELS_KEY));
 const profilesContainer = computed(() => props.fields.find(f => f.key === PROFILES_CONTAINER_KEY));
+const embeddingField = computed(() => props.fields.find(f => f.key === EMBEDDING_KEY));
 const providerItemFields = computed(() => providersField.value?.items?.fields ?? []);
 const modelItemFields = computed(() => modelsField.value?.items?.fields ?? []);
 
@@ -496,6 +520,18 @@ const grouped = computed(() => groupModelsByProvider(models.value, providers.val
 function modelsOfProvider(providerName: string): { index: number; model: ConfigItem }[] {
   return grouped.value.byProvider.get(providerName) ?? [];
 }
+
+// ── 第四层：语义检索 ─────────────────────────────────────
+const embeddingState = computed(() =>
+  embeddingStatus(
+    {
+      enabled: props.getValue(`${EMBEDDING_KEY}.enabled`),
+      provider: props.getValue(`${EMBEDDING_KEY}.provider`),
+      model: props.getValue(`${EMBEDDING_KEY}.model_identifier`),
+    },
+    providers.value,
+  ),
+);
 
 const profileEntries = computed(() =>
   (profilesContainer.value?.children ?? []).map(profile => {

@@ -79,6 +79,15 @@ describe('ModelConfigPage 三层结构', () => {
     );
   });
 
+  it('第四层语义检索：[embedding] 子字段走 SubFieldGroup，状态标签与后端装配同口径', () => {
+    expect(pageSource).toContain('<section v-if="embeddingField" class="zone"');
+    expect(pageSource).toMatch(
+      /<SubFieldGroup[\s\S]*?:fields="embeddingField\.children \?\? \[\]"/,
+    );
+    expect(pageSource).toContain('embeddingStatus(');
+    expect(pageSource).toContain("embeddingState.ready ? 'success' : 'warning'");
+  });
+
   it('页头全部展开/收起命令接入专用页', () => {
     expect(pageSource).toContain('expandCommand');
     expect(pageSource).toMatch(/watch\(\s*\(\) => props\.expandCommand\?\.seq/);
