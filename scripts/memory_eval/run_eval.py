@@ -390,6 +390,19 @@ class _UnusedRepo:
         raise RuntimeError(f"评测器不应访问 {self._name} 仓储的 {attr!r}")
 
 
+class _SessionsRepoStub(_UnusedRepo):
+    """场次仓储桩：用例里没有人驳回过的观众候选，整理按驳回记录去重那一道读到的恒为空。
+
+    其余访问照旧报错：生产取料方式变了要在评测器里显式回放，不能悄悄读到空。
+    """
+
+    def __init__(self) -> None:
+        super().__init__("sessions")
+
+    async def rejected_candidate_keys(self) -> tuple[list[int], list[str]]:
+        return [], []
+
+
 class _CommitmentsRepoStub:
     """回放用例中的旧承诺：未了结按登记顺序，判误记按最近在前（与生产查询同序）。"""
 
@@ -483,7 +496,7 @@ def _make_settler(record: EvalRecord, prompt_manager: PromptManager, llm: Any) -
     void_rows = [_commitment_row(item, status="void") for item in record.void_titles]
     void_rows.sort(key=lambda row: row.id, reverse=True)
     return SessionSettler(
-        sessions_repo=cast(Any, _UnusedRepo("sessions")),
+        sessions_repo=cast(Any, _SessionsRepoStub()),
         chat_repo=cast(Any, _UnusedRepo("chat")),
         commitments_repo=cast(Any, _CommitmentsRepoStub(open_rows, void_rows)),
         llm_service=llm,

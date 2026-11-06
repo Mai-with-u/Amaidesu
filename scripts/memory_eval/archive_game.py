@@ -176,7 +176,7 @@ def prepare_case(record: ArchiveRecord, prompt_manager: PromptManager) -> Prepar
     """按一场用例走生产取料与渲染，抓取第一次（写档案）调用的系统与用户提示词。"""
     llm = base._RecordingLLM()
     settler = SessionSettler(
-        sessions_repo=cast(Any, base._UnusedRepo("sessions")),
+        sessions_repo=cast(Any, base._SessionsRepoStub()),
         chat_repo=cast(Any, base._UnusedRepo("chat")),
         commitments_repo=cast(Any, base._CommitmentsRepoStub([], [])),
         llm_service=llm,
