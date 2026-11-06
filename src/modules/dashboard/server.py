@@ -93,6 +93,7 @@ class DashboardServer:
         commitments_repo: Optional[Any] = None,
         archive_repo: Optional[Any] = None,
         memory_cue_log_repo: Optional[Any] = None,
+        memory_review_repo: Optional[Any] = None,
         embedding_setup: Optional[Any] = None,
         rundown_transition_repo: Optional[Any] = None,
         storage_db_path: Optional[Path] = None,
@@ -177,6 +178,8 @@ class DashboardServer:
         self.archive_repo = archive_repo
         # 注入线索卡记录仓储让 /api/v1/review/cues 列出本场推过的线索卡；未注入时该端点返回 503
         self.memory_cue_log_repo = memory_cue_log_repo
+        # 记忆页人工审核：改标题、标稳定、放回、新增、标已审（未注入时这些端点返回 503）
+        self.memory_review_repo = memory_review_repo
         # 注入嵌入服务的装配结果让 /api/v1/llm/embedding 报语义检索实际开没开；未注入时报"没有装配"
         self.embedding_setup = embedding_setup
         # 注入 RundownTransitionRepo 让 /live-sessions/{id}/rundown-execution

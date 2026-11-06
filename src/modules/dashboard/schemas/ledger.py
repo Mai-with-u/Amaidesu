@@ -62,13 +62,46 @@ class ArchiveLineItem(BaseModel):
     game: Optional[str] = Field(default=None, description="写的是哪个游戏里的事；空 = 与游戏无关")
     save_id: str = Field(default="", description="那件事发生时角色所在的游戏存档编号；空 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示）")
+    human_locked: bool = Field(
+        default=False, description="人改过标题或稳定标记、或是人新增的：之后的整理不能去掉或替换"
+    )
+    in_snapshot: bool = Field(default=False, description="在最新一份快照里：下一场开播会记得")
+    lasting: bool = Field(default=False, description="最新快照里标的是名字、住处、关系这类稳定的事")
+    pinned: bool = Field(default=False, description="人放回或新增进最新快照的行：整理取舍时排最前、不挤掉")
 
 
 class ArchiveListResponse(BaseModel):
-    """某一场的档案行（按写入顺序）。"""
+    """某一场的档案行（按写入顺序），连同这一场的审核状态与最新一份快照的概况。"""
 
     live_session_id: int = Field(description="场次主键")
     items: List[ArchiveLineItem] = Field(default_factory=list, description="档案行")
+    reviewed_at_ms: Optional[int] = Field(default=None, description="标已审的时刻；空 = 待审")
+    settled: bool = Field(default=False, description="这一场整理完了没有（没整理完不能新增、标已审）")
+    snapshot_session_id: Optional[int] = Field(
+        default=None, description="最新一份快照所在的场次；空 = 还没有存下的快照（放回、标稳定、新增做不了）"
+    )
+    snapshot_pinned_count: int = Field(default=0, description="最新快照里人放回、新增的行数（超过 12 行要人去减）")
+
+
+class ArchiveTitleRequest(BaseModel):
+    """运营者改一行档案的标题。"""
+
+    text: str = Field(..., description="新标题（至多 30 字）")
+
+
+class ArchiveLastingRequest(BaseModel):
+    """运营者标或取消最新快照里一行是稳定的事。"""
+
+    lasting: bool = Field(..., description="是不是名字、住处、关系这类稳定的事")
+
+
+class ArchiveLineCreateRequest(BaseModel):
+    """运营者从这一场她播出的一句台词里截原话、写标题，新增一行档案。"""
+
+    evidence_chat_id: int = Field(..., description="原话所在的台词行")
+    quote: str = Field(..., description="从那句台词里逐字截取的原话（至多 80 字）")
+    text: str = Field(..., description="标题（至多 30 字）")
+    lasting: bool = Field(default=False, description="是不是名字、住处、关系这类稳定的事")
 
 
 class SettleSessionItem(BaseModel):
@@ -82,6 +115,7 @@ class SettleSessionItem(BaseModel):
     settle_attempts: int = Field(description="自动重试次数")
     settle_report: Optional[SettleReport] = Field(default=None, description="整理报告：失败原因或未登记清单")
     archive_count: int = Field(description="本场写了几行档案")
+    reviewed_at_ms: Optional[int] = Field(default=None, description="标已审的时刻；空 = 待审")
 
 
 class SettleListResponse(BaseModel):
@@ -89,6 +123,7 @@ class SettleListResponse(BaseModel):
 
     pending_count: int = Field(description="待整理（且自动重试没用完）的正式场数")
     max_attempts: int = Field(description="自动重试上限")
+    review_pending_count: int = Field(default=0, description="列出的场次里整理完了、还没标已审的场数")
     items: List[SettleSessionItem] = Field(default_factory=list, description="最近的正式场，新的在前")
 
 

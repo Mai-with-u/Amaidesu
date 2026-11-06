@@ -8,24 +8,34 @@
 - POST   /memory/commitments/{id}/close       标已了结（做完或放弃）
 - POST   /memory/commitments/{id}/void        判误记（留墓碑，之后不再重复登记）
 - DELETE /memory/commitments/{id}             彻底删除
-- GET    /memory/archive/{session_id}         某一场的档案行
+- GET    /memory/archive/{session_id}         某一场的档案行（连同审核状态、每行在不在最新快照里）
+- POST   /memory/archive/{session_id}/lines   从这一场她的台词里截原话新增一行（锁住、放进最新快照）
+- PUT    /memory/archive/lines/{line_id}/title    改标题（锁住）
+- PUT    /memory/archive/lines/{line_id}/lasting  标或取消稳定的事（锁住）
+- POST   /memory/archive/lines/{line_id}/pin      放回最新一份快照
 - DELETE /memory/archive/lines/{line_id}      删一行档案
-- GET    /memory/settle                       整理状态（最近的正式场与待整理数）
+- GET    /memory/settle                       整理状态（最近的正式场、待整理数与待审数）
+- POST   /memory/settle/{session_id}/reviewed 标已审
 - POST   /memory/settle/{session_id}/resettle 重新排进整理队列（清整理完成时刻与重试次数）
+
+人改过的行之后的整理不能去掉或替换，人放回、新增的行整理不挤掉；每次改动都记进改动记录。
 
 账本是"她说过什么"的证据面：原话片段由整理时逐字校验过，删掉台词行也不影响阅读。
 本模块不做 SQL，读写全部经仓储；未注入仓储时端点返回 503。
 """
 
-from typing import TYPE_CHECKING, Annotated, Dict, List, Optional
+from typing import TYPE_CHECKING, Annotated, Dict, List, NoReturn, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.modules.dashboard.dependencies import server_component
 from src.modules.logging import get_logger
 from src.modules.dashboard.schemas.ledger import (
+    ArchiveLastingRequest,
+    ArchiveLineCreateRequest,
     ArchiveLineItem,
     ArchiveListResponse,
+    ArchiveTitleRequest,
     CommitmentCloseRequest,
     CommitmentCreateRequest,
     CommitmentItem,
@@ -35,11 +45,13 @@ from src.modules.dashboard.schemas.ledger import (
     SettleSessionItem,
 )
 from src.modules.storage.models.memory import Commitment, SettleReport
+from src.modules.storage.repos.memory_review import MemoryReviewError
 from src.modules.storage.repos.sessions import MAX_SETTLE_ATTEMPTS
 from src.modules.types.session_kind import SESSION_KIND_LIVE
+from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
-    from src.modules.storage.repos import ArchiveRepo, CommitmentRepo, SessionRepo, ViewerRepo
+    from src.modules.storage.repos import ArchiveRepo, CommitmentRepo, MemoryReviewRepo, SessionRepo, ViewerRepo
 
 logger = get_logger("MemoryLedgerApi")
 
@@ -53,6 +65,13 @@ ArchiveRepoDep = Annotated["ArchiveRepo", Depends(server_component("archive_repo
 SessionRepoDep = Annotated["SessionRepo", Depends(server_component("session_repo", missing_detail="场次表不可用"))]
 # 观众昵称是展示用的加项：没有观众仓储时列表照常返回，只是不显示昵称
 ViewerRepoDep = Annotated[Optional["ViewerRepo"], Depends(server_component("viewer_repo", required=False))]
+# 记忆页人工审核：改动端点缺了它 503；档案列表缺了它只是不带审核状态
+ReviewRepoDep = Annotated[
+    "MemoryReviewRepo", Depends(server_component("memory_review_repo", missing_detail="记忆审核不可用"))
+]
+OptionalReviewRepoDep = Annotated[
+    Optional["MemoryReviewRepo"], Depends(server_component("memory_review_repo", required=False))
+]
 
 # 列表筛选用：一次最多回多少条承诺
 _MAX_LIST_LIMIT = 500
@@ -184,10 +203,20 @@ async def delete_commitment(commitment_id: int, commitments: CommitmentRepoDep) 
     return LedgerMutationResponse(success=True, detail="已删除")
 
 
+def _raise_review_error(exc: MemoryReviewError) -> NoReturn:
+    """审核操作做不了的原因转成状态码：不存在 404、状态不允许 409、填得不对 422。"""
+    status = {"not_found": 404, "conflict": 409, "invalid": 422}.get(exc.kind, 409)
+    raise HTTPException(status_code=status, detail=exc.message) from exc
+
+
 @router.get("/archive/{live_session_id}", response_model=ArchiveListResponse)
-async def list_archive_lines(live_session_id: int, archive: ArchiveRepoDep) -> ArchiveListResponse:
-    """某一场的档案行（写完不改，运营者可以删单行）。"""
+async def list_archive_lines(
+    live_session_id: int, archive: ArchiveRepoDep, review: OptionalReviewRepoDep
+) -> ArchiveListResponse:
+    """某一场的档案行，带上每行是不是人改过、在不在最新一份快照里，以及这一场审没审。"""
     rows = await archive.list_lines(live_session_id=int(live_session_id))
+    state = await review.session_state(live_session_id=int(live_session_id)) if review is not None else None
+    snapshot = state.snapshot_lines if state is not None else {}
     return ArchiveListResponse(
         live_session_id=int(live_session_id),
         items=[
@@ -200,16 +229,82 @@ async def list_archive_lines(live_session_id: int, archive: ArchiveRepoDep) -> A
                 game=row.game,
                 save_id=row.save_id,
                 save_name=row.save_name,
+                human_locked=row.human_locked,
+                in_snapshot=int(row.id) in snapshot,
+                lasting=snapshot[int(row.id)].lasting if int(row.id) in snapshot else False,
+                pinned=snapshot[int(row.id)].pinned if int(row.id) in snapshot else False,
             )
             for row in rows
         ],
+        reviewed_at_ms=state.reviewed_at_ms if state is not None else None,
+        settled=state is not None and state.settled_at_ms is not None,
+        snapshot_session_id=state.snapshot_session_id if state is not None else None,
+        snapshot_pinned_count=state.pinned_count if state is not None else 0,
     )
 
 
+@router.post("/archive/{live_session_id}/lines", response_model=LedgerMutationResponse)
+async def create_archive_line(
+    live_session_id: int, request: ArchiveLineCreateRequest, review: ReviewRepoDep
+) -> LedgerMutationResponse:
+    """整理漏写的事：从这一场她播出的台词里截一段逐字原话、写标题，新增一行并放进最新快照。"""
+    try:
+        await review.add_line(
+            live_session_id=int(live_session_id),
+            evidence_chat_id=int(request.evidence_chat_id),
+            quote=request.quote,
+            text=request.text,
+            lasting=bool(request.lasting),
+            at_ms=now_ms(),
+        )
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return LedgerMutationResponse(success=True, detail="已新增这一行，下一场开播会记得")
+
+
+@router.put("/archive/lines/{line_id}/title", response_model=LedgerMutationResponse)
+async def edit_archive_title(
+    line_id: int, request: ArchiveTitleRequest, review: ReviewRepoDep
+) -> LedgerMutationResponse:
+    """改一行档案的标题；改过的行之后的整理不能去掉或替换（原话不变）。"""
+    try:
+        changed = await review.edit_title(line_id=int(line_id), text=request.text, at_ms=now_ms())
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return LedgerMutationResponse(success=changed, detail="已改标题" if changed else "标题没变")
+
+
+@router.put("/archive/lines/{line_id}/lasting", response_model=LedgerMutationResponse)
+async def set_archive_lasting(
+    line_id: int, request: ArchiveLastingRequest, review: ReviewRepoDep
+) -> LedgerMutationResponse:
+    """标或取消最新快照里这一行是稳定的事；之后的整理按人标的算。"""
+    try:
+        await review.set_lasting(line_id=int(line_id), lasting=bool(request.lasting), at_ms=now_ms())
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return LedgerMutationResponse(success=True, detail="已标为稳定的事" if request.lasting else "已取消稳定的事")
+
+
+@router.post("/archive/lines/{line_id}/pin", response_model=LedgerMutationResponse)
+async def pin_archive_line(line_id: int, review: ReviewRepoDep) -> LedgerMutationResponse:
+    """把被挤出或被去掉的一行放回最新一份快照（排最前，整理不挤掉）。"""
+    try:
+        await review.pin_line(line_id=int(line_id), at_ms=now_ms())
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return LedgerMutationResponse(success=True, detail="已放回快照，下一场开播会记得")
+
+
 @router.delete("/archive/lines/{line_id}", response_model=LedgerMutationResponse)
-async def delete_archive_line(line_id: int, archive: ArchiveRepoDep) -> LedgerMutationResponse:
-    """删一行档案；场次复盘页与记忆页共用。"""
-    changed = await archive.delete_line(line_id=int(line_id))
+async def delete_archive_line(
+    line_id: int, archive: ArchiveRepoDep, review: OptionalReviewRepoDep
+) -> LedgerMutationResponse:
+    """删一行档案；场次复盘页与记忆页共用。装了审核仓储时连同改动记录一起写。"""
+    if review is not None:
+        changed = await review.delete_line(line_id=int(line_id), at_ms=now_ms())
+    else:
+        changed = await archive.delete_line(line_id=int(line_id))
     if not changed:
         raise HTTPException(status_code=404, detail=f"档案行不存在: {line_id}")
     return LedgerMutationResponse(success=True, detail="已删除这一行")
@@ -246,17 +341,36 @@ async def list_settle_state(sessions: SessionRepoDep, archive: ArchiveRepoDep) -
                 settle_attempts=int(row.settle_attempts),
                 settle_report=_parse_report(row.settle_report),
                 archive_count=len(lines),
+                reviewed_at_ms=row.reviewed_at_ms,
             )
         )
-    return SettleListResponse(pending_count=pending_count, max_attempts=MAX_SETTLE_ATTEMPTS, items=items)
+    return SettleListResponse(
+        pending_count=pending_count,
+        max_attempts=MAX_SETTLE_ATTEMPTS,
+        review_pending_count=sum(1 for item in items if item.settled_at_ms is not None and item.reviewed_at_ms is None),
+        items=items,
+    )
+
+
+@router.post("/settle/{live_session_id}/reviewed", response_model=LedgerMutationResponse)
+async def mark_session_reviewed(live_session_id: int, review: ReviewRepoDep) -> LedgerMutationResponse:
+    """把一场标成已审（只是状态，不改记忆）；还没整理完的场次不能标。"""
+    try:
+        await review.mark_reviewed(live_session_id=int(live_session_id), at_ms=now_ms())
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return LedgerMutationResponse(success=True, detail="已标为已审")
 
 
 @router.post("/settle/{live_session_id}/resettle", response_model=LedgerMutationResponse)
-async def resettle_session(live_session_id: int, sessions: SessionRepoDep) -> LedgerMutationResponse:
+async def resettle_session(
+    live_session_id: int, sessions: SessionRepoDep, review: OptionalReviewRepoDep
+) -> LedgerMutationResponse:
     """把一场重新排进整理队列：清掉整理完成时刻与重试次数（已整理过的场次也会真重跑）。
 
     失败场次与整理完但想重做的场次共用这一个出口；重跑时整场替换，不会写出重复行。
     不存在的场次返回 404；彩排场从不整理、进行中的场次还没内容可整理，都返回 409。
+    这一场有人改过的行、或它的快照里有人放回的行时也返回 409：整场替换会把人工改动冲掉。
     """
     session = await sessions.get_live_session(live_session_id=int(live_session_id))
     if session is None:
@@ -265,6 +379,8 @@ async def resettle_session(live_session_id: int, sessions: SessionRepoDep) -> Le
         raise HTTPException(status_code=409, detail="彩排场不整理，不能重新整理")
     if session.ended_at_ms is None:
         raise HTTPException(status_code=409, detail="场次还没结束，不能重新整理")
+    if review is not None and await review.count_human_edits(live_session_id=int(live_session_id)) > 0:
+        raise HTTPException(status_code=409, detail="这一场有人改过或放回的行，重新整理会整场替换、把人工改动冲掉")
     changed = await sessions.requeue_settlement(live_session_id=int(live_session_id))
     if not changed:
         raise HTTPException(status_code=409, detail="场次状态已变化，没能排进整理队列")
