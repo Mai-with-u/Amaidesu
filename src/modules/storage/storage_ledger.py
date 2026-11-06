@@ -88,7 +88,10 @@ class StorageLedger:
         self._retention = retention
         self._cleanup_on_live_ended = cleanup_on_live_ended
         # 游戏里的人：公屏聊天、她在公屏说的话、玩家互动落玩家表与公屏聊天表（随本落库器一起起停）
-        self._game_players = GamePlayerLedger(event_bus, game_player_repo) if game_player_repo is not None else None
+        # 游戏里的人：不记录名单里的玩家再出现也不记，名单查询走隐私服务
+        self._game_players = (
+            GamePlayerLedger(event_bus, game_player_repo, privacy) if game_player_repo is not None else None
+        )
         self._game_player_repo = game_player_repo
         self._dropped_miss_count = 0
         self._subscriptions: dict[str, Callable] = {}

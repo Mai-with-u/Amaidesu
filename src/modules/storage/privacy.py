@@ -12,6 +12,9 @@
 - **删除函数**：单一事务清除观众行、曾用名、弹幕、对 ta 的承诺、相同外部 ID 的模拟回放副本，清空付费三表的身份/留言/原始消息，
   按每个昵称的使用期找出重叠或出现过的场次，把这些场次的主播台词、档案、承诺、话题摘要、时间线摘要、整理报告、游戏事件正文与生物死亡说明里的昵称
   替换为"一位观众"，最后执行 ``PRAGMA wal_checkpoint(TRUNCATE)``。过渡期的旧画像表与旧笔记目录已由 v25 迁移整体删除。
+- **游戏玩家**：删玩家时他的互动、公屏聊天、对他的承诺、待审自述随外键级联删掉，名字在他出现过的场次里换成
+  "一位玩家"，UUID 的摘要（种类 ``<游戏>_uuid``）进不记录名单，之后他再出现也不再记。删观众、"忘了我"时，
+  运营者确认过的关联玩家一并删掉。
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ MIN_MASK_NAME_LEN: int = 2
 # 宽限删除最迟执行时限（发令后 24 小时）
 GRACE_DELETE_MAX_MS: int = 24 * 3_600_000
 MASKED_VIEWER_LABEL: str = "一位观众"
+MASKED_PLAYER_LABEL: str = "一位玩家"
 
 IncomingDisposition = Literal["forget_command", "retracted", "forget_listed", "normal"]
 
@@ -193,6 +197,11 @@ def compute_forget_hash(secret_key: bytes, id_kind: str, external_id: str) -> by
     """计算不记录名单摘要：``HMAC-SHA256(库外密钥, 种类|外部ID)``（不含应用编号）。"""
     payload = f"{id_kind}|{external_id}".encode("utf-8")
     return hmac.new(secret_key, payload, hashlib.sha256).digest()
+
+
+def player_forget_kind(game: str) -> str:
+    """游戏玩家在不记录名单里的种类：游戏名加 ``_uuid``（如 ``minecraft_uuid``），和观众的账号种类分开。"""
+    return f"{game}_uuid"
 
 
 @dataclass(frozen=True)
@@ -654,6 +663,57 @@ class PrivacyService:
             logger.info(f"运营者已解除不记录名单条目（id_kind={id_kind}）")
         return removed
 
+    async def is_player_forgotten(self, *, game: str, uuid: str) -> bool:
+        """某位游戏玩家的 UUID 是否在不记录名单里（删过、或他发过"忘了我"）：在的话他再出现也不记。"""
+        if not game or not uuid:
+            return False
+
+        def _exec() -> bool:
+            digest = compute_forget_hash(self._require_key(), player_forget_kind(game), uuid)
+            with self._manager.transaction() as conn:
+                return (
+                    conn.execute("SELECT 1 FROM forget_list WHERE id_hash = ?", (sqlite3.Binary(digest),)).fetchone()
+                    is not None
+                )
+
+        return await run_in_executor(_exec)
+
+    async def delete_player(
+        self,
+        *,
+        player_id: int,
+        add_to_forget_list: bool = True,
+        with_linked_viewers: bool = False,
+        at_ms: Optional[int] = None,
+    ) -> bool:
+        """删一位游戏玩家：他的互动、公屏聊天、对他的承诺、待审自述随外键级联删掉，名字换成"一位玩家"。
+
+        默认把他的 UUID 加进不记录名单，之后他再出现也不再记。``with_linked_viewers`` 为真时，运营者
+        确认过的关联观众一并删掉（他自己在游戏公屏发"忘了我"的情形，和观众同一个口径）。
+        """
+        stamp = int(at_ms) if at_ms is not None else int(self._clock())
+        linked = await run_in_executor(
+            self._delete_player_blocking, int(player_id), add_to_forget_list, with_linked_viewers, stamp
+        )
+        if linked is None:
+            return False
+        # 关联观众走完整的删观众路径（弹幕、对 ta 的承诺、昵称替换都在那里）
+        for viewer_id in linked:
+            await self.delete_viewer(viewer_id=viewer_id, add_to_forget_list=add_to_forget_list, at_ms=stamp)
+        logger.info(f"已删除游戏玩家 player_id={player_id}（连带关联观众 {len(linked)} 位）")
+        return True
+
+    def _delete_player_blocking(
+        self, player_id: int, add_to_forget_list: bool, with_linked_viewers: bool, at_ms: int
+    ) -> Optional[List[int]]:
+        secret_key = self._require_key() if add_to_forget_list else None
+        with self._manager.transaction(immediate=True) as conn:
+            linked = _linked_viewer_ids(conn, player_id) if with_linked_viewers else []
+            if not _delete_player_rows(conn, player_id=player_id, secret_key=secret_key, at_ms=at_ms):
+                return None
+        self._truncate_wal("删除游戏玩家")
+        return linked
+
     async def is_external_id_forgotten(self, *, id_kind: str, external_id: str) -> bool:
         """查询某个外部 ID 是否在不记录名单中。"""
         if id_kind not in ("account", "open") or not external_id:
@@ -783,6 +843,11 @@ class PrivacyService:
 
             _scrub_payment_tables_for_viewer(conn, viewer_ids=all_viewer_ids, external_ids=list(ext_ids))
 
+            # 运营者确认过"这位观众就是游戏里的某某"的，那位玩家一并删：他在游戏里的互动、公屏聊天、
+            # 对他的承诺随之级联；加不加进不记录名单跟这位观众一致
+            for player_id in _linked_player_ids(conn, all_viewer_ids):
+                _delete_player_rows(conn, player_id=player_id, secret_key=secret_key, at_ms=at_ms)
+
             if table_exists(conn, "commitments"):
                 conn.execute(
                     f"DELETE FROM commitments WHERE viewer_id IN ({vid_placeholders})",  # noqa: S608
@@ -797,18 +862,85 @@ class PrivacyService:
             conn.execute(f"DELETE FROM viewer_names WHERE viewer_id IN ({vid_placeholders})", all_viewer_ids)  # noqa: S608
             conn.execute(f"DELETE FROM viewers WHERE id IN ({vid_placeholders})", all_viewer_ids)  # noqa: S608
 
+        self._truncate_wal("删除观众")
+        return True
+
+    def _truncate_wal(self, what: str) -> None:
+        """删除后截断预写日志，让删掉的内容不再留在 -wal 文件里。"""
         conn = self._manager.connection()
         checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         # PRAGMA 首列是 busy：1 表示还有别的连接在用，删掉的内容可能仍留在 -wal 里
         if checkpoint and int(checkpoint[0]) != 0:
             logger.warning(
-                f"删除观众后截断预写日志未完成（busy={checkpoint[0]}）："
+                f"{what}后截断预写日志未完成（busy={checkpoint[0]}）："
                 "有其它连接占用数据库，已删内容可能暂留在 -wal，稍后随检查点落盘"
             )
-        return True
 
 
 # -------------------- 内部 SQL 辅助函数 --------------------
+
+
+def _linked_player_ids(conn: sqlite3.Connection, viewer_ids: Sequence[int]) -> List[int]:
+    """运营者确认过和这些观众是同一个人的游戏玩家。"""
+    if not viewer_ids or not table_exists(conn, "viewer_player_links"):
+        return []
+    placeholders = ",".join("?" for _ in viewer_ids)
+    rows = conn.execute(
+        f"SELECT DISTINCT player_id FROM viewer_player_links WHERE viewer_id IN ({placeholders})",  # noqa: S608
+        list(viewer_ids),
+    ).fetchall()
+    return [int(row["player_id"]) for row in rows]
+
+
+def _linked_viewer_ids(conn: sqlite3.Connection, player_id: int) -> List[int]:
+    """运营者确认过和这位玩家是同一个人的直播间观众。"""
+    rows = conn.execute("SELECT viewer_id FROM viewer_player_links WHERE player_id = ?", (player_id,)).fetchall()
+    return [int(row["viewer_id"]) for row in rows]
+
+
+def _player_sessions(conn: sqlite3.Connection, player_id: int) -> List[int]:
+    """这位玩家出现过的场次：和她有过互动、在公屏说过话、她的台词回应过他、首次与最近一次见到他。"""
+    rows = conn.execute(
+        "SELECT live_session_id FROM game_player_interactions WHERE player_id = ?"
+        " UNION SELECT live_session_id FROM game_chat WHERE player_id = ?"
+        " UNION SELECT live_session_id FROM live_chat WHERE reply_player_id = ?"
+        " UNION SELECT first_session_id FROM game_players WHERE id = ?"
+        " UNION SELECT last_session_id FROM game_players WHERE id = ?",
+        (player_id, player_id, player_id, player_id, player_id),
+    ).fetchall()
+    return sorted({int(row[0]) for row in rows if row[0] is not None})
+
+
+def _delete_player_rows(conn: sqlite3.Connection, *, player_id: int, secret_key: Optional[bytes], at_ms: int) -> bool:
+    """在调用方的事务里删一位玩家：先把他的名字在他出现过的场次里换成"一位玩家"，再删玩家行（其余级联）。
+
+    ``secret_key`` 给了才把 UUID 摘要加进不记录名单。名字替换与观众同一个范围和口径（台词、档案、承诺、
+    整理报告、游戏事件正文、她的公屏话），按名字从长到短替换；短于两个字的名字不替换，防误伤日常用字。
+    """
+    if not table_exists(conn, "game_players"):
+        return False
+    row = conn.execute("SELECT game, uuid, name, names FROM game_players WHERE id = ?", (player_id,)).fetchone()
+    if row is None:
+        return False
+    if secret_key is not None:
+        digest = compute_forget_hash(secret_key, player_forget_kind(str(row["game"])), str(row["uuid"]))
+        conn.execute(
+            "INSERT INTO forget_list(id_hash, at_ms) VALUES (?, ?)"
+            " ON CONFLICT(id_hash) DO UPDATE SET at_ms = excluded.at_ms",
+            (sqlite3.Binary(digest), at_ms),
+        )
+    try:
+        former = json.loads(row["names"] or "[]")
+    except (TypeError, ValueError) as exc:
+        logger.warning(f"玩家 {player_id} 的曾用名不是合法 JSON，只替换现在的名字：{exc}")
+        former = []
+    names = {str(row["name"] or "").strip(), *(str(name).strip() for name in former if isinstance(name, str))}
+    session_ids = _player_sessions(conn, player_id)
+    if session_ids:
+        for name in sorted((name for name in names if len(name) >= MIN_MASK_NAME_LEN), key=len, reverse=True):
+            _replace_nickname_in_sessions(conn, session_ids=session_ids, nickname=name, label=MASKED_PLAYER_LABEL)
+    conn.execute("DELETE FROM game_players WHERE id = ?", (player_id,))
+    return True
 
 
 def _find_viewer_row(
@@ -869,8 +1001,9 @@ def _replace_nickname_in_sessions(
     *,
     session_ids: Sequence[int],
     nickname: str,
+    label: str = MASKED_VIEWER_LABEL,
 ) -> None:
-    """在指定场次集合内把主播台词、话题、摘要、档案、承诺、整理报告与游戏侧文本里的昵称换成代称。
+    """在指定场次集合内把主播台词、话题、摘要、档案、承诺、整理报告与游戏侧文本里的名字换成代称 ``label``。
 
     整理报告是 JSON 文本，逐个文本字段替换后再序列化回去，保证 WebUI 还能解析；游戏侧
     自由文本（生物名/主人/死亡说明、游戏事件正文）不在场次集合里，按昵称全表替换。
@@ -881,17 +1014,17 @@ def _replace_nickname_in_sessions(
     conn.execute(
         f"UPDATE live_chat SET content = REPLACE(content, ?, ?)"  # noqa: S608
         f" WHERE live_session_id IN ({sid_ph}) AND sender_role = 'assistant' AND content LIKE ?",
-        [nickname, MASKED_VIEWER_LABEL, *session_ids, like_pat],
+        [nickname, label, *session_ids, like_pat],
     )
     conn.execute(
         f"UPDATE topics SET label = REPLACE(label, ?, ?)"  # noqa: S608
         f" WHERE live_session_id IN ({sid_ph}) AND label LIKE ?",
-        [nickname, MASKED_VIEWER_LABEL, *session_ids, like_pat],
+        [nickname, label, *session_ids, like_pat],
     )
     conn.execute(
         f"UPDATE timeline_summary SET summary = REPLACE(summary, ?, ?)"  # noqa: S608
         f" WHERE live_session_id IN ({sid_ph}) AND summary LIKE ?",
-        [nickname, MASKED_VIEWER_LABEL, *session_ids, like_pat],
+        [nickname, label, *session_ids, like_pat],
     )
 
     if table_exists(conn, "archive_lines"):
@@ -899,7 +1032,7 @@ def _replace_nickname_in_sessions(
             f"UPDATE archive_lines SET"  # noqa: S608
             f" text = REPLACE(text, ?, ?), quote = REPLACE(quote, ?, ?)"
             f" WHERE live_session_id IN ({sid_ph}) AND (text LIKE ? OR quote LIKE ?)",
-            [nickname, MASKED_VIEWER_LABEL, nickname, MASKED_VIEWER_LABEL, *session_ids, like_pat, like_pat],
+            [nickname, label, nickname, label, *session_ids, like_pat, like_pat],
         )
         _scrub_archive_cues(conn, session_ids=session_ids, nickname=nickname)
 
@@ -914,11 +1047,11 @@ def _replace_nickname_in_sessions(
             f"   AND (what LIKE ? OR quote LIKE ? OR close_quote LIKE ?)",
             [
                 nickname,
-                MASKED_VIEWER_LABEL,
+                label,
                 nickname,
-                MASKED_VIEWER_LABEL,
+                label,
                 nickname,
-                MASKED_VIEWER_LABEL,
+                label,
                 *session_ids,
                 *session_ids,
                 like_pat,
@@ -928,8 +1061,8 @@ def _replace_nickname_in_sessions(
         )
 
     _clear_memory_edits_with_nickname(conn, session_ids=session_ids, nickname=nickname)
-    _replace_nickname_in_settle_reports(conn, session_ids=session_ids, nickname=nickname)
-    _replace_nickname_in_game_data(conn, session_ids=session_ids, nickname=nickname)
+    _replace_nickname_in_settle_reports(conn, session_ids=session_ids, nickname=nickname, label=label)
+    _replace_nickname_in_game_data(conn, session_ids=session_ids, nickname=nickname, label=label)
 
 
 def _scrub_archive_cues(conn: sqlite3.Connection, *, session_ids: Sequence[int], nickname: str) -> None:
@@ -993,6 +1126,7 @@ def _replace_nickname_in_settle_reports(
     *,
     session_ids: Sequence[int],
     nickname: str,
+    label: str = MASKED_VIEWER_LABEL,
 ) -> None:
     """把场次整理报告 JSON 里的昵称换成代称，报告仍保持可解析。
 
@@ -1009,22 +1143,22 @@ def _replace_nickname_in_settle_reports(
         [*session_ids, like_pat],
     ).fetchall()
     for row in rows:
-        cleaned = _replace_nickname_in_report_json(str(row["settle_report"]), nickname)
+        cleaned = _replace_nickname_in_report_json(str(row["settle_report"]), nickname, label)
         conn.execute("UPDATE live_sessions SET settle_report=? WHERE id=?", (cleaned, int(row["id"])))
 
 
-def _replace_nickname_in_report_json(raw: str, nickname: str) -> str:
+def _replace_nickname_in_report_json(raw: str, nickname: str, label: str = MASKED_VIEWER_LABEL) -> str:
     """整理报告 JSON 的文本字段逐个替换昵称；读不懂时退回原文替换（至少不残留明文）。"""
     try:
         data = json.loads(raw)
     except (TypeError, ValueError):
-        return raw.replace(nickname, MASKED_VIEWER_LABEL)
+        return raw.replace(nickname, label)
     if not isinstance(data, dict):
-        return raw.replace(nickname, MASKED_VIEWER_LABEL)
+        return raw.replace(nickname, label)
     for key in ("failure_reason", "input_note"):
         value = data.get(key)
         if isinstance(value, str):
-            data[key] = value.replace(nickname, MASKED_VIEWER_LABEL)
+            data[key] = value.replace(nickname, label)
     # 未登记清单与档案快照改动清单的条目都带标题、原话与理由
     for list_key in ("unregistered", "snapshot_changes"):
         items = data.get(list_key)
@@ -1036,7 +1170,7 @@ def _replace_nickname_in_report_json(raw: str, nickname: str) -> str:
             for key in ("what", "quote", "reason"):
                 value = item.get(key)
                 if isinstance(value, str):
-                    item[key] = value.replace(nickname, MASKED_VIEWER_LABEL)
+                    item[key] = value.replace(nickname, label)
     return json.dumps(data, ensure_ascii=False)
 
 
@@ -1045,8 +1179,9 @@ def _replace_nickname_in_game_data(
     *,
     session_ids: Sequence[int],
     nickname: str,
+    label: str = MASKED_VIEWER_LABEL,
 ) -> None:
-    """游戏侧按场次记下的文本里的昵称换成代称：ta 出现过的场次里的游戏事件正文与生物死亡说明。
+    """游戏侧按场次记下的文本里的名字换成代称：ta 出现过的场次里的游戏事件正文、生物死亡说明与她打在公屏上的话。
 
     与台词替换同一个范围（ta 出现过、或昵称使用期重叠的场次）：全表按昵称替换会误改与
     ta 同名、却和 ta 无关的内容。生物名册里的名字、称呼与主人名不替换——名册跨场次、
@@ -1062,13 +1197,20 @@ def _replace_nickname_in_game_data(
         conn.execute(
             "UPDATE game_creatures SET death_note = REPLACE(death_note, ?, ?)"  # noqa: S608 常量列名
             f" WHERE died_session_id IN ({sid_ph}) AND death_note LIKE ?",
-            [nickname, MASKED_VIEWER_LABEL, *session_ids, like_pat],
+            [nickname, label, *session_ids, like_pat],
         )
     if table_exists(conn, "game_events"):
         conn.execute(
             "UPDATE game_events SET message = REPLACE(message, ?, ?)"  # noqa: S608 常量列名
             f" WHERE live_session_id IN ({sid_ph}) AND message LIKE ?",
-            [nickname, MASKED_VIEWER_LABEL, *session_ids, like_pat],
+            [nickname, label, *session_ids, like_pat],
+        )
+    if table_exists(conn, "game_chat"):
+        # 她在公屏打出去的话里点过的名字（玩家说的那几行随玩家删除级联掉）
+        conn.execute(
+            "UPDATE game_chat SET content = REPLACE(content, ?, ?)"  # noqa: S608 常量列名
+            f" WHERE live_session_id IN ({sid_ph}) AND direction = 'streamer' AND content LIKE ?",
+            [nickname, label, *session_ids, like_pat],
         )
 
 
@@ -1107,6 +1249,7 @@ def _scrub_payment_tables_for_viewer(
 __all__ = [
     "GRACE_DELETE_MAX_MS",
     "IncomingDisposition",
+    "MASKED_PLAYER_LABEL",
     "MASKED_VIEWER_LABEL",
     "MIN_MASK_NAME_LEN",
     "PrivacyService",
@@ -1114,4 +1257,5 @@ __all__ = [
     "compute_forget_hash",
     "mask_names_in_text",
     "matches_phrase_table",
+    "player_forget_kind",
 ]

@@ -11,6 +11,7 @@
   （切磋按名字点的对手）按"本场见过的、叫这个名字的只有一位"去对，对不上不记。
 
 没归属到场次的事件（没开播时）不落库：玩家记忆只记直播里她亲身经历、画面里看得到的事。
+UUID 在不记录名单里的玩家（被运营者删过、或连同观众一起删过）再出现也不记：他的话只占一行位置。
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from src.modules.storage.repos.game_players import GamePlayerRepo
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
+    from src.modules.storage.privacy import PrivacyService
 
 logger = get_logger("GamePlayerLedger")
 
@@ -38,9 +40,13 @@ logger = get_logger("GamePlayerLedger")
 class GamePlayerLedger:
     """游戏里的人落库器（订阅公屏聊天、她的公屏说话与玩家互动三条事件）。"""
 
-    def __init__(self, event_bus: "EventBus", player_repo: GamePlayerRepo) -> None:
+    def __init__(
+        self, event_bus: "EventBus", player_repo: GamePlayerRepo, privacy: Optional["PrivacyService"] = None
+    ) -> None:
+        """``privacy`` 缺失时不查不记录名单（极简装配与部分测试）。"""
         self.event_bus = event_bus
         self.player_repo = player_repo
+        self._privacy = privacy
         self._subscriptions: Dict[str, Callable] = {}
 
     async def start(self) -> None:
@@ -74,7 +80,11 @@ class GamePlayerLedger:
         if payload.live_session_id <= 0 or payload.kind != "player" or payload.private:
             return
         try:
-            if payload.sender_id and payload.sender_online:
+            if (
+                payload.sender_id
+                and payload.sender_online
+                and not await self._forgotten(payload.game, payload.sender_id)
+            ):
                 player = await self.player_repo.meet_player(
                     game=payload.game,
                     uuid=payload.sender_id,
@@ -95,7 +105,7 @@ class GamePlayerLedger:
                     at_ms=payload.timestamp_ms,
                 )
                 return
-            # 认不出是谁说的：只占一行位置，不存原话、不建玩家
+            # 认不出是谁说的、或者是不再记的玩家：只占一行位置，不存原话、不建玩家
             await self.player_repo.add_game_chat(
                 live_session_id=payload.live_session_id,
                 game=payload.game,
@@ -162,6 +172,8 @@ class GamePlayerLedger:
     async def _player_of(self, payload: GamePlayerInteractedPayload) -> Optional[int]:
         """互动对应的玩家主键：有 UUID 就建档或更新；只有名字的找本场见过的唯一同名玩家。"""
         if payload.player_uuid:
+            if await self._forgotten(payload.game, payload.player_uuid):
+                return None
             player = await self.player_repo.meet_player(
                 game=payload.game,
                 uuid=payload.player_uuid,
@@ -177,6 +189,16 @@ class GamePlayerLedger:
         return await self.player_repo.session_player_named(
             game=payload.game, name=payload.player_name, live_session_id=payload.live_session_id
         )
+
+    async def _forgotten(self, game: str, uuid: str) -> bool:
+        """这位玩家是否在不记录名单里；查不了时按没在处理（只是少一道拦截，落库照常）。"""
+        if self._privacy is None:
+            return False
+        try:
+            return await self._privacy.is_player_forgotten(game=game, uuid=uuid)
+        except Exception as exc:  # noqa: BLE001 - 名单查不了不挡落库
+            logger.warning(f"查玩家是否在不记录名单失败，按没在处理: {exc}", exc=exc)
+            return False
 
 
 __all__ = ["GamePlayerLedger"]
