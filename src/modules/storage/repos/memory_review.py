@@ -76,12 +76,13 @@ def record_edit(
     before: str,
     after: str,
     at_ms: int,
+    candidate_id: Optional[int] = None,
 ) -> None:
-    """写一行改动记录（与改动同一事务）。"""
+    """写一行改动记录（与改动同一事务）；批准、驳回候选时记下候选编号，不记观众身份。"""
     conn.execute(
-        "INSERT INTO memory_edits(live_session_id, target, archive_line_id, action, before_text, after_text, at_ms)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (int(live_session_id), target, archive_line_id, action, before, after, int(at_ms)),
+        "INSERT INTO memory_edits(live_session_id, target, archive_line_id, action, before_text, after_text, at_ms,"
+        " candidate_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (int(live_session_id), target, archive_line_id, action, before, after, int(at_ms), candidate_id),
     )
 
 

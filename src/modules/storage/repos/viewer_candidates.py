@@ -11,8 +11,10 @@
 - 驳回：留着这一行，同一条弹幕或同样的标题以后不再列（整理侧按 :meth:`rejected_keys` 去重）；
 - 过期：待审的只按时间过期（列出后 14 天），不按场数。
 
-批准、驳回都在同一事务里记一行 ``memory_edits``（``target = candidate``）。候选挂在两条台词记录上，
-删观众、忘了我、按句删、删场次时随外键级联删除。
+批准、驳回都在同一事务里记一行 ``memory_edits``（``target = candidate``，带候选编号，不带观众身份）。
+候选挂在两条台词记录上，删观众、忘了我、按句删、删场次时随外键级联删除；她回应别人时提到了被删、
+被忘的那位，候选的两段原话或标题里有那个名字的，删除函数整条删掉。候选被删时它的改动记录文本由
+触发器清空。
 """
 
 from __future__ import annotations
@@ -228,6 +230,7 @@ class ViewerCandidateRepo(BaseRepo):
                     before=str(row["title"]),
                     after=final,
                     at_ms=at_ms,
+                    candidate_id=int(candidate_id),
                 )
                 done = conn.execute(
                     f"SELECT {_COLUMNS} FROM viewer_candidates WHERE id=?",  # noqa: S608
@@ -256,6 +259,7 @@ class ViewerCandidateRepo(BaseRepo):
                     before=str(row["title"]),
                     after="",
                     at_ms=at_ms,
+                    candidate_id=int(candidate_id),
                 )
 
         await self._run_in_executor(_exec)

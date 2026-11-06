@@ -60,7 +60,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 32
+SCHEMA_VERSION: int = 33
 
 
 # =============================================================================
@@ -803,7 +803,8 @@ CREATE TABLE IF NOT EXISTS memory_edits (
     action          TEXT NOT NULL,
     before_text     TEXT NOT NULL DEFAULT '',
     after_text      TEXT NOT NULL DEFAULT '',
-    at_ms           INTEGER NOT NULL
+    at_ms           INTEGER NOT NULL,
+    candidate_id    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_memory_edits_session ON memory_edits(live_session_id, at_ms);
 CREATE INDEX IF NOT EXISTS idx_memory_edits_line ON memory_edits(archive_line_id);

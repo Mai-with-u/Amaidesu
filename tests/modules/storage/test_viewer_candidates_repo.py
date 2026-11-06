@@ -13,6 +13,7 @@ import pytest
 
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.memory import PendingArchiveLine, PendingViewerCandidate
+from src.modules.storage.privacy import PrivacyService
 from src.modules.storage.repos.memory_review import MemoryReviewError
 from src.modules.storage.repos.viewer_candidates import CANDIDATE_EXPIRE_MS, replace_session_candidates
 
@@ -170,3 +171,64 @@ async def test_pending_candidates_expire_after_fourteen_days_only(store: SQLiteD
     assert await store.viewer_candidates.expire_pending(now_ms_value=10_000 + CANDIDATE_EXPIRE_MS) == 0
     assert await store.viewer_candidates.expire_pending(now_ms_value=10_001 + CANDIDATE_EXPIRE_MS) == 1
     assert [item.status for item in await store.viewer_candidates.list_candidates(status=None)] == ["rejected"]
+
+
+async def test_forget_me_drops_candidates_naming_the_viewer_and_clears_their_edits(
+    store: SQLiteDatabase, tmp_path: Path
+) -> None:
+    """她回应别人时提到了被删的那位：候选挂的是别人的弹幕、外键删不到，删除函数整条删掉；
+    驳回过的也删，改动记录里它的标题清空、候选编号留着；没提到名字的候选不动。"""
+    session_id, said, reply, owed = await _settled_session(store)
+    viewer = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_ajie",
+        user_name="阿杰",
+        timestamp_ms=1_050,
+        name_match_window_ms=0,
+    )
+    naming = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_400,
+        sender_role="assistant",
+        content="阿杰也说就叫团子",
+        message_type="text",
+    )
+    items = [
+        PendingViewerCandidate(
+            kind="viewer_defined",
+            title="猫叫团子",
+            viewer_chat_id=said,
+            viewer_quote="叫它团子",
+            reply_chat_id=naming,
+            reply_quote="阿杰也说就叫团子",
+        ),
+        PendingViewerCandidate(
+            kind="claimed_missing", title="给阿杰讲鬼故事", reply_chat_id=owed, reply_quote="欠大家一个鬼故事"
+        ),
+        PendingViewerCandidate(
+            kind="viewer_defined",
+            title="狗叫豆豆",
+            viewer_chat_id=said,
+            viewer_quote="叫它团子",
+            reply_chat_id=reply,
+            reply_quote="就叫团子",
+        ),
+    ]
+    _write(store, session_id, items)
+    rows = await store.viewer_candidates.list_candidates(status="pending")
+    rejected = next(row for row in rows if row.title == "给阿杰讲鬼故事")
+    await store.viewer_candidates.reject(candidate_id=rejected.id, at_ms=11_000)
+
+    privacy = PrivacyService(store.manager, db_path=store.db_path, key_path=tmp_path / "secrets" / "forget.key")
+    await privacy.initialize()
+    try:
+        assert await privacy.delete_viewer(viewer_id=viewer.viewer_id) is True
+    finally:
+        await privacy.close()
+
+    left = await store.viewer_candidates.list_candidates(status=None)
+    assert [row.title for row in left] == ["狗叫豆豆"]
+    with store.manager.transaction() as conn:
+        edit = conn.execute("SELECT action, before_text, candidate_id FROM memory_edits").fetchone()
+    assert (edit[0], edit[1], edit[2]) == ("reject", "", rejected.id)

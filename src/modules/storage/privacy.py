@@ -1205,6 +1205,7 @@ def _replace_nickname_in_sessions(
         )
 
     _clear_memory_edits_with_nickname(conn, session_ids=session_ids, nickname=nickname)
+    _drop_candidates_with_nickname(conn, session_ids=session_ids, nickname=nickname)
     _replace_nickname_in_settle_reports(conn, session_ids=session_ids, nickname=nickname, label=label)
     _replace_nickname_in_game_data(conn, session_ids=session_ids, nickname=nickname, label=label)
 
@@ -1238,6 +1239,24 @@ def _scrub_archive_cues(conn: sqlite3.Connection, *, session_ids: Sequence[int],
             "UPDATE archive_lines SET keywords = ?, place = ? WHERE id = ?",
             (json.dumps(kept, ensure_ascii=False), place, int(row["id"])),
         )
+
+
+def _drop_candidates_with_nickname(conn: sqlite3.Connection, *, session_ids: Sequence[int], nickname: str) -> None:
+    """待审区里提到这个名字的候选整条删掉（弹幕那一段、她那句回应、标题任一处）。
+
+    她回应另一位观众时提到了被删、被忘的那位，候选挂的是别人的弹幕，外键级联删不到它；不删的话
+    批准后原话原样写进档案。不做替换：候选是待审的原样证据，换了字就不再是逐字原话。驳回过的
+    一并删（它们只用于"同一条以后不再列"），改动记录里它们的标题由触发器清空。
+    """
+    if not nickname or not session_ids or not table_exists(conn, "viewer_candidates"):
+        return
+    sid_ph = ",".join("?" for _ in session_ids)
+    like_pat = f"%{nickname}%"
+    conn.execute(
+        f"DELETE FROM viewer_candidates WHERE live_session_id IN ({sid_ph})"  # noqa: S608 占位符由代码拼
+        " AND (viewer_quote LIKE ? OR reply_quote LIKE ? OR title LIKE ?)",
+        [*session_ids, like_pat, like_pat, like_pat],
+    )
 
 
 def _clear_memory_edits_with_nickname(
