@@ -17,7 +17,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
-__all__ = ["GameEventRecord", "GameEventTypeCount", "GameSaveSpan"]
+__all__ = ["GameEventRecord", "GameEventTypeCount", "GameSaveSpan", "IndexedGameEvent"]
 
 
 class GameEventRecord(BaseModel):
@@ -29,6 +29,21 @@ class GameEventRecord(BaseModel):
     event_type: str = Field(..., description="事件类型（里程碑 / 安全阀 / 异常等）")
     message: str = Field(..., description="事件描述正文")
     scene: Optional[str] = Field(default=None, description="事件发生时的游戏场景；未记录为 None")
+    timestamp_ms: int = Field(..., description="事件时刻（Unix epoch 毫秒）")
+    save_id: str = Field(default="", description="事件发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
+    save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
+
+
+class IndexedGameEvent(BaseModel):
+    """按主键读回的一条游戏事件：检索命中后还原成行，回想工具据此渲染"哪一场、哪个存档"。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(..., description="game_events 主键")
+    live_session_id: int = Field(..., description="事件所属场次")
+    game: str = Field(..., description="产生事件的游戏标识")
+    event_type: str = Field(..., description="事件类型（里程碑 / 阶段汇报等）")
+    message: str = Field(..., description="事件描述正文")
     timestamp_ms: int = Field(..., description="事件时刻（Unix epoch 毫秒）")
     save_id: str = Field(default="", description="事件发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")

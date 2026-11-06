@@ -1,15 +1,16 @@
 """回想工具 ``memory_recall``：按关键词把她记得的事找回来。
 
 旧的记忆工具按固定键取数（往前第几场的回顾、某位观众的印象、本场备忘录），要求主播
-先知道该问哪一类；观众的问题通常只给得出一个词。本工具按关键词查四个来源，把内容连同
+先知道该问哪一类；观众的问题通常只给得出一个词。本工具按关键词查五个来源，把内容连同
 "什么时候、谁说的"一起摆出来：
 
 - 她已播出的台词（``live_chat`` 的 assistant 行；``dropped_at_ms`` 非空的不算说过）
 - 场次档案行（``archive_lines`` 的标题与原话都参与匹配）
 - 不针对具体观众的承诺（``commitments``；未了结与已了结都给，判误记的 ``void`` 不给）
+- 游戏里做到哪一步（``game_events`` 里的里程碑与阶段汇报；游戏聊天、肢体动作、安全阀不收）
 - 本场观众弹幕（``live_chat`` 的 viewer 行；不论 scope 都只查本场）
 
-匹配口径：台词、档案、承诺三类走混合检索（``search``：关键词按两字切分 + BM25，配置了嵌入
+匹配口径：台词、档案、承诺、游戏进展四类走混合检索（``search``：关键词按两字切分 + BM25，配置了嵌入
 服务再加语义一路，按名次融合），按相关度取最相关的 8 条，不要求每个词都出现；本场观众弹幕
 不进任何持久索引，照旧在本场里按"每个词都包含"查，补剩下的位置。选好的结果按时间排给她看，
 每条带位置（本场写"本场 HH:MM"，跨场写"上一场"或"之前"）与说话人（"你""观众"）。索引由后台
@@ -20,7 +21,7 @@
 ta 的发言和身份带到下一场；本场结果不替换。关键词恰好是某个已知昵称时直接丢掉该词，
 并在抬头说明，因为主播会拿观众名字当关键词试探"你还记得 ta 吗"。
 
-分存档的游戏：档案行与承诺挂了游戏的，逐条注明是在哪个存档里（是不是眼下这个）；她过去
+分存档的游戏：档案行、承诺与游戏进展挂了游戏的，逐条注明是在哪个存档里（是不是眼下这个）；她过去
 说过的话，那场只在别的存档里玩过时注明——翻出"屋顶盖好了"时看得出那是别的世界里的事
 （判定见 ``saves``）。
 
@@ -34,6 +35,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.storage.privacy import MIN_MASK_NAME_LEN, mask_names_in_text
+from src.modules.storage.repos.memory_index import INDEXED_GAME_EVENT_TYPES, IndexSource
 from src.modules.storage.repos.viewers import is_placeholder_name
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
@@ -69,8 +71,11 @@ MAX_RESULTS = 8
 _SEARCH_POOL = 24
 # 回想工具是她主动调的，查询向量没算好时可以等一小会儿（被动想起不等）
 RECALL_VECTOR_WAIT_MS = 1_500
-# 走混合检索的三类来源
-_RECALL_SOURCES = ("speech", "archive", "commitment")
+# 走混合检索的来源：游戏进展要有事件仓储才还原得出来，没接时不查
+_RECALL_SOURCES: Tuple[IndexSource, ...] = ("speech", "archive", "commitment")
+_RECALL_SOURCES_WITH_EVENTS: Tuple[IndexSource, ...] = (*_RECALL_SOURCES, "event")
+# 游戏进展在结果里怎么称呼（只收这两类，见索引仓储的白名单）
+_EVENT_LABELS = {"milestone": "里程碑", "report": "阶段汇报"}
 
 SCOPE_ALL = "all"
 SCOPE_THIS_STREAM = "this_stream"
@@ -83,7 +88,7 @@ CROSS_SESSION_MASK_LABEL = "某位观众"
 MEMORY_RECALL_SPEC = ToolSpec(
     name="recall",
     description=(
-        "回想过去的事：你说过的话、每场的档案、答应过的事、本场弹幕，按关键词找出最相关的几条"
+        "回想过去的事：你说过的话、每场的档案、答应过的事、游戏里做到哪一步、本场弹幕，按关键词找出最相关的几条"
         "（几个关键词用空格分开，不要求每个词都出现，越相关越靠前选）。问「上次那个事」"
         "「之前提到过什么」「我答应过什么」时用。不按观众名字查人——不知道某位观众是谁就问她本人。"
     ),
@@ -172,12 +177,13 @@ def _normalize_order(order: Optional[str]) -> str:
 
 
 class MemoryRecallService:
-    """``memory_recall`` 的业务实现：查四个来源、合并排序、渲染成给模型看的一段文本。
+    """``memory_recall`` 的业务实现：查五个来源、合并排序、渲染成给模型看的一段文本。
 
-    构造参数全由宿主注入：四个仓储（台词与弹幕、承诺、档案）、混合检索（没有时台词、档案、
-    承诺三类查不到，只剩本场弹幕）、可选的隐私服务与观众仓储（跨场遮名、昵称关键词识别）、
+    构造参数全由宿主注入：三个仓储（台词与弹幕、承诺、档案）、混合检索（没有时台词、档案、
+    承诺、游戏进展都查不到，只剩本场弹幕）、可选的隐私服务与观众仓储（跨场遮名、昵称关键词识别）、
     进行中场次回调（决定"本场"是第几场）与毫秒时钟（耗时日志）。
-    可选的游戏事件仓储与眼下存档回调给结果注明存档；缺了就不注。
+    可选的游戏事件仓储还原游戏进展、给台词注明那场的存档，眼下存档回调给结果注明存档；
+    缺了事件仓储就不查游戏进展、不注那场的存档。
     仓储都按鸭子类型取用，只依赖它们各自读面上的方法。
     """
 
@@ -290,22 +296,23 @@ class MemoryRecallService:
     async def _indexed_hits(
         self, query: str, context: _RecallContext, archive_bounds: Sequence[Tuple[int, int]]
     ) -> List[_RecallHit]:
-        """台词、档案行、承诺三类：按混合检索的相关度取，还原成行后渲染（按相关度先后）。
+        """台词、档案行、承诺、游戏进展四类：按混合检索的相关度取，还原成行后渲染（按相关度先后）。
 
         检索只给主键，这里按主键把行读回来再核一遍：没送到观众面前的台词、对某位观众的承诺
-        （原话可能夹着 ta 的私事）、判了误记的承诺都不给。scope=this_stream 时只查本场
-        （承诺按登记它的场次算）。档案行的时刻取写下它的那一场最后一条明细的时刻。
+        （原话可能夹着 ta 的私事）、判了误记的承诺、白名单以外的游戏事件都不给。scope=this_stream
+        时只查本场（承诺按登记它的场次算）。档案行的时刻取写下它的那一场最后一条明细的时刻。
         """
         if self._search is None:
             return []
+        sources = _RECALL_SOURCES_WITH_EVENTS if self._event_repo is not None else _RECALL_SOURCES
         found = await self._search.search(
             query,
-            sources=_RECALL_SOURCES,
+            sources=sources,
             live_session_id=context.current_session_id if context.scope == SCOPE_THIS_STREAM else None,
             limit=_SEARCH_POOL,
             wait_vector_ms=RECALL_VECTOR_WAIT_MS,
         )
-        ids: Dict[str, List[int]] = {source: [] for source in _RECALL_SOURCES}
+        ids: Dict[str, List[int]] = {source: [] for source in sources}
         for hit in found:
             ids[hit.source].append(hit.source_id)
         speech = {int(row.id): row for row in await self._chat_repo.list_speech_by_ids(chat_ids=ids["speech"])}
@@ -315,6 +322,7 @@ class MemoryRecallService:
             row = await self._commitments_repo.get_commitment(commitment_id=commitment_id)
             if row is not None and row.viewer_id is None and row.status in ("open", "closed"):
                 commitments[commitment_id] = row
+        events = await self._events_by_ids(ids.get("event", []))
         notes = await self._session_notes([row.live_session_id for row in speech.values()], context)
         last_ms = dict(archive_bounds)
         hits: List[_RecallHit] = []
@@ -327,7 +335,26 @@ class MemoryRecallService:
                 hits.append(self._archive_hit(line, session_id, int(last_ms.get(session_id, 0)), context))
             elif hit.source == "commitment" and hit.source_id in commitments:
                 hits.append(self._commitment_hit(commitments[hit.source_id], context))
+            elif hit.source == "event" and hit.source_id in events:
+                hits.append(self._event_hit(events[hit.source_id], context))
         return hits
+
+    async def _events_by_ids(self, event_ids: Sequence[int]) -> Dict[int, Any]:
+        """按主键读回游戏事件，只留里程碑与阶段汇报（索引已按白名单收，这里再核一遍）。"""
+        if self._event_repo is None or not event_ids:
+            return {}
+        rows = await self._event_repo.list_events_by_ids(event_ids=event_ids)
+        return {int(row.id): row for row in rows if row.event_type in INDEXED_GAME_EVENT_TYPES}
+
+    def _event_hit(self, row: Any, context: _RecallContext) -> _RecallHit:
+        """一条游戏进展渲染成「位置 + 游戏里（里程碑/阶段汇报）+ 正文」，挂了存档的注明是哪个存档。"""
+        session_id = int(row.live_session_id)
+        text = (
+            f"- {self._when(session_id, row.timestamp_ms, context)} 游戏里（{_EVENT_LABELS[row.event_type]}）："
+            f"{self._mask((row.message or '').strip(), session_id, context)}"
+        )
+        note = place_note(row.game, row.save_id, row.save_name, context.current_saves)
+        return _RecallHit(timestamp_ms=int(row.timestamp_ms), text=f"{text}（{note}）" if note else text)
 
     def _speech_hit(self, row: Any, notes: Mapping[int, str], context: _RecallContext) -> _RecallHit:
         """一句台词渲染成「位置 + 你说：原话」，那场只玩过别的存档时补一句注。"""

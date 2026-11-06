@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence, Set
 
-from src.modules.storage.models.events import GameEventRecord, GameEventTypeCount, GameSaveSpan
+from src.modules.storage.models.events import GameEventRecord, GameEventTypeCount, GameSaveSpan, IndexedGameEvent
 from src.modules.storage.repos._base import BaseRepo
 
 
@@ -53,6 +53,24 @@ class EventRepo(BaseRepo):
                     (int(live_session_id), page_limit),
                 ).fetchall()
                 return [GameEventRecord.model_validate(dict(row)) for row in reversed(rows)]
+
+        return await self._run_in_executor(_exec)
+
+    async def list_events_by_ids(self, *, event_ids: Sequence[int]) -> List[IndexedGameEvent]:
+        """按主键读回游戏事件（记忆检索命中后还原成行；顺序不保证，调用方按自己的名次排）。"""
+        ids = [int(event_id) for event_id in event_ids]
+        if not ids:
+            return []
+
+        def _exec() -> List[IndexedGameEvent]:
+            placeholders = ",".join("?" for _ in ids)
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT id, live_session_id, game, event_type, message, timestamp_ms, save_id, save_name"
+                    f" FROM game_events WHERE id IN ({placeholders})",  # noqa: S608 占位符由代码按个数拼
+                    ids,
+                ).fetchall()
+            return [IndexedGameEvent.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 

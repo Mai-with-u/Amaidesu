@@ -112,6 +112,7 @@ async def _service(store: SQLiteDatabase, *, current_session: Optional[int] = No
         viewer_repo=store.viewers,
         current_session_provider=lambda: current_session,
         clock=FakeClock().now_ms,
+        event_repo=store.events,
         search=MemorySearch(repo=store.memory_index, embedding=None),
     )
 
@@ -426,3 +427,62 @@ async def test_recall_marks_which_save_game_memories_belong_to(store: SQLiteData
     assert any("屋顶再加一层" in line and "在 minecraft 里，不确定是哪个存档" in line for line in lines)
     # 不分存档时一句都不注
     assert "存档" not in await (await _service(store)).recall("屋顶")
+
+
+# ---------------------------------------------------------------------------
+# 游戏进展
+# ---------------------------------------------------------------------------
+
+
+async def _game_event(store: SQLiteDatabase, pk: int, event_type: str, message: str, ts: int, save_id: str = "") -> int:
+    return await store.events.insert_game_event(
+        live_session_id=pk,
+        game="minecraft",
+        event_type=event_type,
+        message=message,
+        timestamp_ms=ts,
+        save_id=save_id,
+        save_name="老档" if save_id else "",
+    )
+
+
+async def test_recall_finds_game_milestones_and_reports_but_not_chat_or_alerts(store: SQLiteDatabase) -> None:
+    """里程碑与阶段汇报是"做到哪一步"的事实，查得到；游戏聊天、安全阀不进索引，查不到。"""
+    old = await _session(store, started=1_000, ended=2_000)
+    await _streamer_says(store, old, "今天先到这里", 1_900)  # 有台词的场次才认得出"上一场"
+    await _game_event(store, old, "milestone", "灯塔盖好了", 1_100)
+    await _game_event(store, old, "report", "灯塔地基打完，还差塔身", 1_200)
+    await _game_event(store, old, "chat", "玩家 某人：灯塔好丑", 1_300)
+    await _game_event(store, old, "attention_required", "灯塔附近卡住了", 1_400)
+    current = await _session(store, started=3_000)
+    service = await _service(store, current_session=current)
+
+    lines = _hit_lines(await service.recall("灯塔"))
+
+    assert "- 上一场 游戏里（里程碑）：灯塔盖好了" in lines
+    assert "- 上一场 游戏里（阶段汇报）：灯塔地基打完，还差塔身" in lines
+    assert len(lines) == 2
+
+
+async def test_recall_marks_the_save_of_game_progress_and_respects_this_stream(store: SQLiteDatabase) -> None:
+    old = await _session(store, started=1_000, ended=2_000)
+    await _streamer_says(store, old, "今天先到这里", 1_900)
+    await _game_event(store, old, "milestone", "灯塔盖好了", 1_100, save_id="a")
+    current = await _session(store, started=3_000)
+    await _game_event(store, current, "report", "开始在新档盖灯塔", 3_100, save_id="b")
+    await _index(store)
+    service = MemoryRecallService(
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
+        current_session_provider=lambda: current,
+        clock=FakeClock().now_ms,
+        event_repo=store.events,
+        saves_provider=lambda: {"minecraft": GameSave(id="b", name="新档")},
+        search=MemorySearch(repo=store.memory_index, embedding=None),
+    )
+
+    everything = _hit_lines(await service.recall("灯塔"))
+    assert "- 上一场 游戏里（里程碑）：灯塔盖好了（在 minecraft「老档」里，不是眼下这个存档）" in everything
+    this_stream = _hit_lines(await service.recall("灯塔", scope=SCOPE_THIS_STREAM))
+    assert len(this_stream) == 1 and "开始在新档盖灯塔" in this_stream[0] and "就是眼下这个存档" in this_stream[0]

@@ -105,6 +105,29 @@ async def test_list_archive_lines_by_ids_keeps_the_given_order(store: SQLiteData
     assert [line.id for line in lines] == [second, first]
 
 
+async def test_list_events_by_ids_reads_back_session_and_save(store: SQLiteDatabase) -> None:
+    """检索命中的游戏事件按主键读回：带场次与存档，查不到的主键跳过，空列表不查库。"""
+    pk = await _session(store, started=1_000)
+    event_id = await store.events.insert_game_event(
+        live_session_id=pk,
+        game="minecraft",
+        event_type="milestone",
+        message="灯塔盖好了",
+        timestamp_ms=1_100,
+        save_id="a",
+        save_name="老档",
+    )
+    (row,) = await store.events.list_events_by_ids(event_ids=[event_id, 999])
+    assert (row.id, row.live_session_id, row.event_type, row.message, row.save_name) == (
+        event_id,
+        pk,
+        "milestone",
+        "灯塔盖好了",
+        "老档",
+    )
+    assert await store.events.list_events_by_ids(event_ids=[]) == []
+
+
 async def test_search_recall_danmaku_treats_like_wildcards_literally(store: SQLiteDatabase) -> None:
     """关键词里的 % 与 _ 按字面匹配，不变成通配符。"""
     pk = await _session(store, started=1_000)
