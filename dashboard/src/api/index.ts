@@ -78,6 +78,8 @@ import type {
   PersonaListResponse,
   PersonaCreateResponse,
   PersonaOperationResponse,
+  PlayerLinkPayload,
+  PlayerListResponse,
   GiftListResponse,
   GiftCreateResponse,
   GiftOperationResponse,
@@ -591,6 +593,21 @@ export const ledgerApi = {
   // 重新整理：重试次数清零并清掉上次失败原因，下一次调度会再挑到这一场
   resettle: (liveSessionId: number) =>
     api.post<LedgerMutationResponse>(`/memory/settle/${liveSessionId}/resettle`),
+};
+
+// 游戏里的人（记忆页）
+//
+// 她在游戏里遇到过的玩家：列表带曾用名、互动条数和运营者确认过的关联观众。对号只由运营者
+// 确认，同名不会自动关联；关联只用来连带删除（删观众或 ta 发"忘了我"时一起删这位玩家），
+// 不告诉她。删玩家时他的互动、公屏聊天、对他的承诺一起删，UUID 进不记录名单。
+export const playersApi = {
+  list: (params?: { game?: string }) => api.get<PlayerListResponse>('/memory/players', { params }),
+  linkViewer: (playerId: number, payload: PlayerLinkPayload) =>
+    api.post<LedgerMutationResponse>(`/memory/players/${playerId}/links`, payload),
+  unlinkViewer: (playerId: number, viewerId: number) =>
+    api.delete<LedgerMutationResponse>(`/memory/players/${playerId}/links/${viewerId}`),
+  deletePlayer: (playerId: number) =>
+    api.delete<LedgerMutationResponse>(`/memory/players/${playerId}`),
 };
 
 // 场次复盘（只读聚合 + 本场台词 + 数据包导出）

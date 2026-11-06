@@ -1541,6 +1541,45 @@ export interface CandidateListResponse {
   pending_count: number;
 }
 
+/** 玩家的互动种类：打招呼（按场计）/ 送东西 / 切磋 / 一起做事 / 帮过忙 */
+export type PlayerInteractionKind = 'greet' | 'gift' | 'spar' | 'together' | 'helped';
+
+/** 运营者确认过和这位玩家是同一个人的直播间观众（只用来连带删除，从不告诉她） */
+export interface PlayerLinkedViewer {
+  viewer_id: number;
+  /** 观众当前昵称；读不到为空 */
+  user_name: string;
+  confirmed_at_ms: number;
+}
+
+/** 记忆页"游戏里的人"的一行：她在游戏里遇到过的一位玩家 */
+export interface PlayerItem {
+  id: number;
+  game: string;
+  /** 游戏给这个账号的 UUID（删玩家按它进不记录名单） */
+  uuid: string;
+  /** 最近一次见到时的名字 */
+  name: string;
+  former_names: string[];
+  first_seen_ms: number;
+  last_seen_ms: number;
+  /** 互动条数（按种类；没出现的种类就是 0） */
+  interactions: Partial<Record<PlayerInteractionKind, number>>;
+  linked_viewers: PlayerLinkedViewer[];
+  /** 他在公屏发"忘了我"的时刻；宽限期满后自动删除 */
+  forget_requested_at_ms: number | null;
+}
+
+/** 玩家列表（最近见到的在前） */
+export interface PlayerListResponse {
+  items: PlayerItem[];
+}
+
+/** 确认这位玩家是直播间的哪位观众 */
+export interface PlayerLinkPayload {
+  viewer_id: number;
+}
+
 /** 批准一条候选：可改标题；观众定下的可标稳定 */
 export interface CandidateApprovePayload {
   title?: string;

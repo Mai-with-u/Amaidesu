@@ -19,6 +19,9 @@
     <SettlePanel ref="settlePanel" @view-archive="openArchive" />
     <ArchivePanel ref="archivePanel" />
 
+    <!-- 游戏里的人：她遇到过的玩家，运营者确认对应的直播间观众、删玩家                -->
+    <PlayerPanel ref="playerPanel" />
+
     <!-- 直播间公告：按保留期配置拼出的观众告知文本，一键复制                  -->
     <AnnouncementPanel />
   </div>
@@ -34,7 +37,8 @@
  * 改由下播整理写进承诺账本与场次档案；三个面板各自在挂载时拉自己的数据，
  * 页头"刷新"一并重拉，整理状态面板的"查看该场档案"经 ref 调档案面板的
  * selectSession 切场，再把页面滚到档案面板。底部的直播间公告按保留期配置
- * 拼出观众告知文本，供运营者贴进直播间简介。
+ * 拼出观众告知文本，供运营者贴进直播间简介。档案下面是“游戏里的人”：她在游戏里遇到过的玩家，
+ * 运营者在这里确认玩家对应哪位观众、删玩家。
  */
 import { nextTick, ref } from 'vue';
 import AnnouncementPanel from '@/components/memory/AnnouncementPanel.vue';
@@ -42,8 +46,9 @@ import CandidatePanel from '@/components/memory/CandidatePanel.vue';
 import CommitmentPanel from '@/components/memory/CommitmentPanel.vue';
 import SettlePanel from '@/components/memory/SettlePanel.vue';
 import ArchivePanel from '@/components/memory/ArchivePanel.vue';
+import PlayerPanel from '@/components/memory/PlayerPanel.vue';
 
-/** 页头刷新按钮的 loading：三个面板都重拉完才停 */
+/** 页头刷新按钮的 loading：所有面板都重拉完才停 */
 const refreshing = ref(false);
 
 /** 账本三个面板：页面头"刷新"一并刷新；整理状态的"查看该场档案"跳到档案面板 */
@@ -51,8 +56,9 @@ const commitmentPanel = ref<InstanceType<typeof CommitmentPanel> | null>(null);
 const candidatePanel = ref<InstanceType<typeof CandidatePanel> | null>(null);
 const settlePanel = ref<InstanceType<typeof SettlePanel> | null>(null);
 const archivePanel = ref<InstanceType<typeof ArchivePanel> | null>(null);
+const playerPanel = ref<InstanceType<typeof PlayerPanel> | null>(null);
 
-/** 页面头"刷新"：三个账本面板一起重拉（面板各自带 loading 态） */
+/** 页面头"刷新"：账本面板与玩家面板一起重拉（面板各自带 loading 态） */
 async function reload(): Promise<void> {
   refreshing.value = true;
   try {
@@ -61,6 +67,7 @@ async function reload(): Promise<void> {
       candidatePanel.value?.reload(),
       settlePanel.value?.reload(),
       archivePanel.value?.reload(),
+      playerPanel.value?.reload(),
     ]);
   } finally {
     refreshing.value = false;
