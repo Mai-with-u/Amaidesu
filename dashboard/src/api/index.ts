@@ -90,6 +90,7 @@ import type {
   RundownMutateResponse,
   RundownTemplateResponse,
   ReviewSpeechDeleteResponse,
+  ReviewCueListResponse,
   ReviewSpeechListResponse,
   ProactiveToggleRequest,
   ProactiveToggleResponse,
@@ -586,6 +587,10 @@ export const reviewApi = {
     }),
   deleteSpeech: (chatId: number) =>
     api.delete<ReviewSpeechDeleteResponse>(`/review/speech/${chatId}`),
+  listCues: (sessionId: number) =>
+    api.get<ReviewCueListResponse>('/review/cues', {
+      params: { session_id: sessionId },
+    }),
   exportUrl: (ids: number[]): string => {
     const query = ids.length ? `?ids=${ids.join(',')}` : '';
     return `/api/v1/review/export${query}`;

@@ -1,7 +1,7 @@
 <!--
   SessionReview - 场次复盘页（只读聚合）
 
-  布局：场次档案（archive_lines，可删单行）→ 本场台词（逐句可删）→
+  布局：场次档案（archive_lines，可删单行）→ 本场台词（逐句可删）→ 本场线索卡（按来源筛）→
   信息 chips → 指标卡（超阈仅染色，沉默/最慢时延卡带"跳转时刻"深链进控制台回看）→
   流程单执行（单场）→ 观众构成 + 游戏明细（单场，明细逐条锚定跳转）→
   水位图 + LLM 用量表 → 深入入口（事件回看 / LLM 历史 · 本场预过滤）。全部数字来自后端结构化聚合
@@ -118,6 +118,59 @@
             <p v-else class="speech-empty">这一场还没有台词记录</p>
           </div>
         </template>
+      </section>
+
+      <!-- 本场线索卡（代码每批推给决策层的旧事：承诺卡与被动想起；用上 = 她点名说了这件事） -->
+      <section v-if="archiveSessionId !== null" class="panel cue-panel" aria-label="本场线索卡">
+        <div class="panel-title cue-panel-title">
+          <span>本场线索卡</span>
+          <span class="speech-hint">代码按线索推给决策层的旧事；"用上"是她点名说了这件事</span>
+        </div>
+        <el-radio-group
+          v-if="cueSourceOptions.length > 1"
+          v-model="cueSource"
+          size="small"
+          class="cue-filter"
+          aria-label="按来源筛选"
+        >
+          <el-radio-button value="">全部</el-radio-button>
+          <el-radio-button v-for="source in cueSourceOptions" :key="source" :value="source">
+            {{ cueSourceLabel(source) }}
+          </el-radio-button>
+        </el-radio-group>
+        <p v-if="cueError" class="speech-error">{{ cueError }}</p>
+        <div v-else v-loading="cueLoading" class="speech-lines">
+          <ul v-if="visibleCues.length > 0" class="speech-list">
+            <li v-for="cue in visibleCues" :key="cue.id" class="speech-item cue-item">
+              <span class="mono speech-time">{{ formatTimeHMS(cue.pushed_at_ms) }}</span>
+              <el-tag size="small" effect="plain">{{ cueKindLabel(cue.card_kind) }}</el-tag>
+              <router-link
+                v-if="cue.archive_line_id !== null || cue.commitment_id !== null"
+                class="link mono cue-label"
+                :to="{ name: 'memory' }"
+                >{{ cue.label }}</router-link
+              >
+              <span v-else class="mono cue-label">{{ cue.label }}</span>
+              <span class="speech-content" :class="{ 'is-dropped': cueItemGone(cue) }">
+                {{ cueItemGone(cue) ? '（条目已删掉）' : cue.title }}
+                <span class="cue-why">
+                  {{ cue.sources.map(cueSourceLabel).join(' + ') }}
+                  <template v-if="cueScoreText(cue)"> · {{ cueScoreText(cue) }}</template>
+                </span>
+              </span>
+              <el-tag v-if="cue.self_triggered" size="small" type="warning" effect="plain"
+                >自触发</el-tag
+              >
+              <el-tag v-if="cue.used_at_ms !== null" size="small" type="success" effect="plain">
+                {{ formatTimeHMS(cue.used_at_ms) }} 用上
+              </el-tag>
+              <el-tag v-else size="small" type="info" effect="plain">没用上</el-tag>
+            </li>
+          </ul>
+          <p v-else class="speech-empty">
+            {{ cues.length > 0 ? '这个来源没有推过卡' : '这一场没有推过线索卡' }}
+          </p>
+        </div>
       </section>
 
       <!-- 复盘报告（logs/reviews 可视化页，由直播复盘流程离线生成；仅单场次且有报告时渲染） -->
@@ -388,9 +441,11 @@ import { getApiErrorMessage } from '@/utils/apiError';
 import { confirmAction } from '@/utils/confirmAction';
 import ArchiveLineList from '@/components/memory/ArchiveLineList.vue';
 import { useArchiveLines } from '@/composables/useArchiveLines';
+import { useReviewCues } from '@/composables/useReviewCues';
 import { useReviewSpeech } from '@/composables/useReviewSpeech';
 import { compactNumber } from '@/utils/chartFormat';
 import { formatCost, formatDateTime, formatTimeHMS } from '@/utils/format';
+import { cueItemGone, cueKindLabel, cueScoreText, cueSourceLabel } from '@/utils/memoryCues';
 import {
   buildWaterlineData,
   consoleReplayLink,
@@ -438,6 +493,17 @@ const {
   remove: deleteSpeech,
 } = useReviewSpeech();
 
+/** 本场线索卡：只读，按来源本地筛选（切场复位为全部） */
+const {
+  items: cues,
+  visible: visibleCues,
+  loading: cueLoading,
+  error: cueError,
+  source: cueSource,
+  sourceOptions: cueSourceOptions,
+  load: loadCues,
+} = useReviewCues();
+
 const chartRef = ref<HTMLElement | null>(null);
 const palette = useChartPalette();
 
@@ -478,11 +544,12 @@ async function loadReview(): Promise<void> {
   }
   if (seq !== reviewSeq) return;
   archiveActionError.value = '';
-  // 单场语义的三块互不依赖：并行加载，互不阻塞
+  // 单场语义的几块互不依赖：并行加载，互不阻塞
   await Promise.all([
     loadRundown(),
     loadArchive(archiveSessionId.value),
     loadSpeech(archiveSessionId.value),
+    loadCues(archiveSessionId.value),
   ]);
 }
 
@@ -1072,6 +1139,22 @@ function exportPackage(): void {
 .speech-content.is-dropped {
   color: var(--text-secondary);
   text-decoration: line-through;
+}
+
+.cue-filter {
+  margin-bottom: 6px;
+}
+
+.cue-label {
+  flex: none;
+  font-size: 12px;
+}
+
+/* 来源与分数：跟在标题后面的弱化说明 */
+.cue-why {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .speech-empty {

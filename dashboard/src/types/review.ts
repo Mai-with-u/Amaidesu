@@ -87,6 +87,33 @@ export interface ReviewViewers {
   }>;
 }
 
+/** 本场推过的一张线索卡（GET /api/v1/review/cues，按推送先后） */
+export interface ReviewCueItem {
+  id: number;
+  pushed_at_ms: number;
+  /** viewer 对象开口 / game 游戏开着 / place 地点 / rule 触发词 / vector 意思相近 / joke 老梗 */
+  card_kind: string;
+  /** 条目写法：档#41 / 约#7 / 老梗「倒立洗头」 */
+  label: string;
+  /** 档案行标题或承诺动作；条目已被删掉时为空串 */
+  title: string;
+  archive_line_id: number | null;
+  commitment_id: number | null;
+  /** 命中来源：danmaku 观众弹幕 / self 她的台词 / place 游戏地点 / situation 游戏情境 / game 游戏开着 */
+  sources: string[];
+  /** 分数明细：触发词写 keywords/how，意思相近写 cosine/rank/fused，地点写 place/distance */
+  detail: Record<string, unknown>;
+  /** 只由她自己的台词触发（防打转的统计口径） */
+  self_triggered: boolean;
+  /** 检测到她点名用上的时刻；没用上为 null */
+  used_at_ms: number | null;
+}
+
+/** 某一场的线索卡列表 */
+export interface ReviewCueListResponse {
+  items: ReviewCueItem[];
+}
+
 /** 本场一句台词（GET /api/v1/review/speech，按时间正序） */
 export interface ReviewSpeechLine {
   /** 台词行主键（live_chat.id，删除接口按它定位） */
