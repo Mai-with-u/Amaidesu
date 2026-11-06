@@ -132,6 +132,13 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "要回应的弹幕 message_id 或片段（可空；面向全体时省略）",
         },
+        "to_player": {
+            "type": "string",
+            "description": (
+                "这句在回应游戏里的哪位玩家（可空）：谢他送的东西、接他在公屏说的话时，照游戏条目里写的名字抄；"
+                "回观众弹幕或面向全体时不填。"
+            ),
+        },
         "emotion": {
             "type": "string",
             "enum": [emotion.value for emotion in Emotion],

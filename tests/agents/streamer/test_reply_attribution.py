@@ -131,6 +131,19 @@ async def test_reply_to_player_replaces_the_no_target_line() -> None:
     assert f"{gift.line}\n{chat.line}\n" in section and "别说成来路不明" in section
 
 
+async def test_reply_to_keeps_the_planner_target_and_says_how_he_found_her() -> None:
+    """回应对象写在前面，Planner 另填的 target（公屏原话片段）照旧跟着；只冲她做了事、没开口的玩家
+    不说成"在公屏跟你说话"。"""
+    replyer, prompt = _replyer()
+    gift = PlayerNote(who="玩家乙", said=False, line="[00:10 minecraft 动作] 玩家 玩家乙 朝我扔了 3 个钻石")
+    plan = DecisionPlan(should_reply=True, target="钻石那事", topic_summary="谢玩家乙扔来的钻石")
+
+    await replyer.generate(plan, [], game_people=[gift], reply_to="玩家乙")
+
+    turn = _turn_kwargs(prompt)
+    assert turn["plan"].startswith("回应对象: 游戏里的玩家 玩家乙（他刚在游戏里找过你）\ntarget: 钻石那事\n")
+
+
 async def test_danmaku_target_wins_over_reply_to_and_people_section_omitted() -> None:
     """要回应的弹幕查到了：照旧给弹幕原文；没有玩家条目时整段省略，平常的决策窗不多占输入。"""
     replyer, prompt = _replyer()
@@ -182,8 +195,8 @@ def _planner(replyer: _CaptureReplyer, responses: List[Response]) -> Planner:
     )
 
 
-def _reply(target: Optional[str] = None) -> Response:
-    arguments: Dict[str, Any] = {"topic_summary": "接话", "is_novel": True}
+def _reply(target: Optional[str] = None, topic_summary: str = "接话") -> Response:
+    arguments: Dict[str, Any] = {"topic_summary": topic_summary, "is_novel": True}
     if target:
         arguments["target"] = target
     return Response(
@@ -221,7 +234,7 @@ async def test_sole_game_speaker_becomes_reply_to_unless_answering_danmaku(
     target: Optional[str], expected_reply_to: str
 ) -> None:
     replyer = _CaptureReplyer()
-    planner = _planner(replyer, [_reply(target)])
+    planner = _planner(replyer, [_reply(target, topic_summary="玩家甲在公屏感叹了一句")])
     chat = PlayerNote(who="玩家甲", said=True, line="[00:08 minecraft 公屏] 玩家 玩家甲：我勒个", timestamp_ms=now_ms())
     batch = [
         RoomMessagePayload(
@@ -295,7 +308,7 @@ async def test_s58_wolege_request_names_the_player_and_the_reply_target(prompts:
 
     # Planner 当晚没填 target（面向全体）：本窗只有玩家甲在公屏开口，回应对象就是他
     capture = _NoteCapture()
-    planner = _planner(capture, [_reply()])
+    planner = _planner(capture, [_reply(topic_summary=_S58_SUMMARY)])
     await planner.plan([], game_batch=batch)
     assert capture.calls and capture.calls[-1][1] == "玩家甲"
 

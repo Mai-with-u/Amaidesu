@@ -430,6 +430,20 @@ def _reply_with_memory(use_memory: Any) -> list:
     ]
 
 
+def _said(name: str) -> PlayerNote:
+    return PlayerNote(who=name, said=True, line=f"[00:10 minecraft 公屏] 玩家 {name}：要不要一起")
+
+
+def _reply_about_alex(target: str = "", to_player: str = "") -> list:
+    """一句在接 Alex 公屏话的回复（话题摘要点到他）；可另填 target 与 to_player。"""
+    args: dict = {"topic_summary": "接 Alex 在公屏说的话", "is_novel": True, "emotion": "happy", "intensity": 0.5}
+    if target:
+        args["target"] = target
+    if to_player:
+        args["to_player"] = to_player
+    return [_resp(tool_calls=[_tc("streamer_reply", args)])]
+
+
 @pytest.mark.parametrize(
     ("speakers", "expected"),
     [
@@ -441,12 +455,14 @@ def _reply_with_memory(use_memory: Any) -> list:
     ids=["只有一位玩家开口", "两位玩家开口", "有认不出的人插话", "没人开口"],
 )
 async def test_her_line_answers_a_player_only_when_he_alone_spoke(speakers: tuple, expected: tuple) -> None:
-    """本窗公屏聊天只来自一位核对过的玩家时，这一窗说的话记成在回应他；否则不猜。"""
+    """本窗公屏聊天只来自一位核对过的玩家、她这句又是在回他时，这一窗说的话记成在回应他；否则不猜。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
-    planner, _llm, _prompt = _make_planner(_reply_with_memory([]), reply_provider=provider)
+    planner, _llm, _prompt = _make_planner(_reply_about_alex(), reply_provider=provider)
+    names = {"uuid-a": "Alex", "uuid-b": "Steve"}
+    notes = tuple(_said(names[uuid]) for _game, uuid in speakers if uuid in names)
 
-    outcome = await planner.plan([_msg()], game_batch=GameEventBatch(chat_speakers=speakers))
+    outcome = await planner.plan([], game_batch=GameEventBatch(chat_speakers=speakers, player_notes=notes))
 
     assert outcome.replied is True and outcome.reply_player == expected
 
@@ -474,24 +490,60 @@ async def test_her_line_answering_a_danmaku_is_not_recorded_as_answering_a_playe
     """回应目标对得上本窗一条弹幕（编号或原文）时，即使本窗只有一位玩家在公屏开口，也不记成在回应他。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
-    reply = [
-        _resp(
-            tool_calls=[
-                _tc(
-                    "streamer_reply",
-                    {"topic_summary": "t", "is_novel": True, "emotion": "happy", "intensity": 0.5, "target": target},
-                )
-            ]
-        )
-    ]
-    planner, _llm, _prompt = _make_planner(reply, reply_provider=provider)
+    planner, _llm, _prompt = _make_planner(_reply_about_alex(target), reply_provider=provider)
 
     outcome = await planner.plan(
         [_msg("主播要不要一起挖矿")] if batch else [],
-        game_batch=GameEventBatch(chat_speakers=(("minecraft", "uuid-a"),)),
+        game_batch=GameEventBatch(chat_speakers=(("minecraft", "uuid-a"),), player_notes=(_said("Alex"),)),
     )
 
     assert outcome.replied is True and outcome.reply_player == expected
+
+
+async def test_reply_names_the_player_she_actually_answers_not_the_one_who_spoke() -> None:
+    """玩家乙扔来钻石、同一窗玩家甲在公屏说"晚上好"，她要谢乙：没点名、话题也没提到甲时不补成甲；
+    点名乙时回应对象就是乙。落库只记本窗唯一开口、又正是她在回的那位，乙不是开口的人，不记。"""
+    gift = PlayerNote(who="玩家乙", said=False, line="[00:10 minecraft 动作] 玩家 玩家乙 朝我扔了 3 个钻石")
+    hello = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 公屏] 玩家 玩家甲：晚上好")
+    batch = GameEventBatch(chat_speakers=(("minecraft", "uuid-甲"),), player_notes=(gift, hello))
+
+    for to_player, expected in (("", ""), ("玩家乙", "玩家乙"), ("玩家 玩家乙", "玩家乙"), ("编出来的人", "")):
+        provider = MagicMock()
+        provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+        args: dict = {"topic_summary": "谢玩家乙扔来的钻石", "is_novel": True, "emotion": "happy", "intensity": 0.5}
+        if to_player:
+            args["to_player"] = to_player
+        planner, _llm, _prompt = _make_planner(
+            [_resp(tool_calls=[_tc("streamer_reply", args)])], reply_provider=provider
+        )
+
+        outcome = await planner.plan([], game_batch=batch)
+
+        attachment = provider.invoke.await_args.args[0].attachment
+        assert attachment.reply_to == expected, to_player
+        assert outcome.reply_player == ("", ""), to_player
+
+
+async def test_sole_speaker_is_filled_in_only_when_the_topic_names_him() -> None:
+    """Planner 没点名时：话题摘要提到本窗唯一开口的玩家才补上他，没提到就不填。"""
+    hello = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 公屏] 玩家 玩家甲：晚上好")
+    batch = GameEventBatch(chat_speakers=(("minecraft", "uuid-甲"),), player_notes=(hello,))
+
+    for summary, expected, recorded in (
+        ("玩家甲来打招呼了", "玩家甲", ("minecraft", "uuid-甲")),
+        ("天黑了该回家了", "", ("", "")),
+    ):
+        provider = MagicMock()
+        provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+        args = {"topic_summary": summary, "is_novel": True, "emotion": "happy", "intensity": 0.5}
+        planner, _llm, _prompt = _make_planner(
+            [_resp(tool_calls=[_tc("streamer_reply", args)])], reply_provider=provider
+        )
+
+        outcome = await planner.plan([], game_batch=batch)
+
+        assert provider.invoke.await_args.args[0].attachment.reply_to == expected, summary
+        assert outcome.reply_player == recorded, summary
 
 
 async def test_use_memory_accepts_single_item_list_and_renders_spoken_form() -> None:

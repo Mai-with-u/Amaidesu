@@ -67,7 +67,13 @@ from src.agents.streamer.planner_render import (
     step_extra_messages,
     tool_call_parts,
 )
-from src.agents.streamer.game_ledger import GameLedger, keep_recent_notes, sole_chat_player, sole_speaker_name
+from src.agents.streamer.game_ledger import (
+    GameLedger,
+    answering_player,
+    keep_recent_notes,
+    sole_chat_player,
+    sole_speaker_name,
+)
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import GameEventBatch, PlayerNote
 from src.modules.context import TransientImages, absorb_result_images, is_visual_caller
@@ -804,6 +810,17 @@ class Planner:
             return None
         return parsed[1] if parsed[1] in used else None
 
+    def _reply_player_name(self, args: Dict[str, Any]) -> str:
+        """这句在回应游戏里的哪位玩家（口径见 :func:`answering_player`）；点名对不上时记一笔日志。"""
+        written = str(args.get("to_player") or "").strip()
+        # 本窗新到的加最近几分钟留着的都认：送礼常在上一窗入账、这一窗才谢
+        name = answering_player(
+            written, str(args.get("topic_summary") or ""), self._round_player_notes, self._recent_player_notes
+        )
+        if written and not name:
+            self.logger.info(f"to_player 写的「{written}」不在最近找她的玩家里，不填回应对象")
+        return name
+
     def _someone_asked(self, line_id: int, target: Any, answers_danmaku: bool) -> bool:
         """提过的旧事这一句再接算不算有人问起：四种情形任一成立就不退回。
 
@@ -1224,6 +1241,9 @@ class Planner:
         # 这句的回应目标对得上本窗一条弹幕（编号或原文）：对象是那位观众。即使本窗只有一位玩家在公屏开口，
         # 也不记成在回应他——否则答应观众的事会被整理记到玩家头上。对不上的（拿公屏原话当目标）照旧在回玩家
         answers_danmaku = _answers_danmaku(args.get("target"), self._round_danmaku)
+        # 回的是本场更早一窗的观众弹幕（上一窗问的、这一窗才回）同样是在回观众，不是在回游戏里的玩家
+        answers_viewer = answers_danmaku or _viewer_message_in(args.get("target"), self._round_history)
+        answering_player = "" if answers_viewer else self._reply_player_name(args)
         # 本场已经提过的旧事又被点名、又没人问起：先退回一次，让她换个话题。第 58 场 14 条旧事里
         # 8 条各提了两次，第二次全是冷场时主动点名的。每窗只退一次：退过还点名，就去掉点名照常说，
         # 免得一窗里接连被退、整窗哑掉（观众上一窗问的、这一窗才回时，原先就会被退到步数用完）
@@ -1259,8 +1279,8 @@ class Planner:
                 speech_history=speech_history,
                 # 最近几分钟玩家找她的条目：谁在公屏说了什么、谁冲她扔了什么，台词照这个归到人头上
                 game_people=list(self._recent_player_notes),
-                # 不在回弹幕、本窗只有一位玩家在公屏开口时，回应对象就是他（和落库记"回应哪位玩家"同一口径）
-                reply_to="" if answers_danmaku else sole_speaker_name(self._round_player_notes),
+                # 回应对象：Planner 在 to_player 点名的玩家；没点名时，本窗唯一在公屏开口、话题摘要里又提到的那位
+                reply_to=answering_player,
             )
             result = await self._tool_registry.invoke(
                 ToolInvocation(
@@ -1314,7 +1334,10 @@ class Planner:
             topic_tag=str(args.get("topic_tag", "") or ""),
             reply_to=reply_to if isinstance(reply_to, str) and reply_to else None,
             memory_refs=memory_ids,
-            reply_player=("", "") if answers_danmaku else self._round_reply_player,
+            # 落库的"回应哪位玩家"和交给表达侧的回应对象同一口径：回应的正是本窗唯一在公屏开口的那位才记
+            reply_player=self._round_reply_player
+            if answering_player and answering_player == sole_speaker_name(self._round_player_notes)
+            else ("", ""),
         )
         # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到
         self.workbench.note_intent(

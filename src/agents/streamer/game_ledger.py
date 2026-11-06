@@ -95,6 +95,28 @@ def sole_speaker_name(notes: Sequence[PlayerNote]) -> str:
     return next(iter(names)) if len(names) == 1 else ""
 
 
+def answering_player(
+    written: str,
+    topic_summary: str,
+    round_notes: Sequence[PlayerNote],
+    recent_notes: Sequence[PlayerNote] = (),
+) -> str:
+    """她这句在回应游戏里的哪位玩家：Planner 点名的（``written``）优先；没点名时，本窗唯一在公屏开口、
+    话题摘要里又提到的那位；都不成立时为空串。
+
+    只要不在回弹幕就填唯一开口的那位会张冠李戴：玩家乙扔来钻石、同一窗玩家甲在公屏说"晚上好"，她要谢乙时
+    会把礼谢给甲。点名的名字（"玩家甲"或"玩家 玩家甲"都认）要对得上本窗或最近几分钟找过她的玩家，对不上
+    按没点名处理：不让模型编出一个人来。
+    """
+    names = {note.who for note in (*round_notes, *recent_notes) if note.who}
+    text = written.strip()
+    if text:
+        bare = text.removeprefix("玩家").strip()
+        return text if text in names else bare if bare in names else ""
+    sole = sole_speaker_name(round_notes)
+    return sole if sole and sole in topic_summary else ""
+
+
 def sole_chat_player(speakers: Sequence[Tuple[str, str]]) -> Tuple[str, str]:
     """本窗公屏聊天只来自一位核对过的玩家时返回 (游戏, UUID)，否则为两个空串。
 

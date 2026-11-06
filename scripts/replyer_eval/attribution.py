@@ -37,7 +37,7 @@ for _path in (PROJECT_ROOT, PROJECT_ROOT / "scripts" / "memory_eval"):
 
 from openai import OpenAI  # noqa: E402
 from src.agents.minecraft.player_body_language import spoken_line  # noqa: E402
-from src.agents.streamer.game_ledger import GameLedger, keep_recent_notes, sole_speaker_name  # noqa: E402
+from src.agents.streamer.game_ledger import GameLedger, answering_player, keep_recent_notes  # noqa: E402
 from src.agents.streamer.plan import DecisionPlan  # noqa: E402
 from src.agents.streamer.replyer import Replyer  # noqa: E402
 from src.agents.streamer.timeline import PlayerNote, TimelineTurn, note_turn  # noqa: E402
@@ -71,6 +71,8 @@ class AttributionCase:
     topic_summary: str
     reply_guidance: str
     forbid: tuple[str, ...]
+    # Planner 点名在回应的玩家（可空）；空时按线上同一口径从话题摘要补
+    to_player: str = ""
 
 
 def _parse_case(line_number: int, raw: dict[str, Any]) -> AttributionCase:
@@ -99,6 +101,7 @@ def _parse_case(line_number: int, raw: dict[str, Any]) -> AttributionCase:
         topic_summary=str(plan.get("topic_summary") or ""),
         reply_guidance=str(plan.get("reply_guidance") or ""),
         forbid=forbid,
+        to_player=str(plan.get("to_player") or ""),
     )
 
 
@@ -158,7 +161,9 @@ def _people(case: AttributionCase) -> tuple[tuple[PlayerNote, ...], str]:
             )
     fresh_notes = fresh.drain().player_notes
     kept = keep_recent_notes(earlier.drain().player_notes, (), base._clock_to_ms(case.now))
-    return keep_recent_notes(kept, fresh_notes, base._clock_to_ms(case.now)), sole_speaker_name(fresh_notes)
+    recent = keep_recent_notes(kept, fresh_notes, base._clock_to_ms(case.now))
+    # 回应对象和线上 Planner 同一口径：点名的优先，没点名时话题摘要提到唯一开口的那位才补
+    return recent, answering_player(case.to_player, case.topic_summary, fresh_notes, recent)
 
 
 def prepare(case: AttributionCase) -> PreparedCase:

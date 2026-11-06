@@ -328,7 +328,13 @@ class Replyer:
         shown_speeches = [entry.content.strip() for entry in entries if entry.role == "assistant"]
         return self._prompt_service.render(
             _REPLYER_TEMPLATE,
-            plan=_render_plan_text(plan, target_text=target_text, reply_to=reply_to),
+            plan=_render_plan_text(
+                plan,
+                target_text=target_text,
+                reply_to=reply_to,
+                # 回应对象这一窗在公屏开过口：说"他刚在游戏公屏跟你说话"；只冲她做了事的说"刚在游戏里找过你"
+                reply_to_spoke=any(note.said and note.who == reply_to for note in game_people),
+            ),
             # 游戏里最近找她的人：玩家的话与举动单列、不截短，谁说的、谁做的一眼分清
             game_people_section=_game_people_section(game_people),
             dialogue_prompt="\n".join(dialogue_lines) or "（暂无聊天记录）",
@@ -593,19 +599,25 @@ def _unresolved_target(target: Optional[str]) -> str:
     return raw
 
 
-def _render_plan_text(plan: DecisionPlan, *, target_text: str = "", reply_to: str = "") -> str:
+def _render_plan_text(
+    plan: DecisionPlan, *, target_text: str = "", reply_to: str = "", reply_to_spoke: bool = True
+) -> str:
     """把 DecisionPlan 渲染为交接稿文本；查到要回应的原话时直接给原话，不再给消息 ID。
 
     原话找不到时按 :func:`_unresolved_target` 给出 target（昵称或片段照旧，ID 写法不给）。
-    没在回弹幕、这一窗只有一位玩家在游戏公屏开口时，target 一行换成回应对象：写明是哪位
-    玩家——不写的话，她会把这句公屏话安到聊天记录里刚点过名的女仆、宠物头上。
+    没在回弹幕、在回应游戏里的某位玩家时，先写回应对象：写明是哪位玩家——不写的话，她会把这句
+    公屏话安到聊天记录里刚点过名的女仆、宠物头上。Planner 另填了 target（如公屏原话片段）时照旧跟在后面。
     """
+    unresolved = _unresolved_target(plan.target)
     if target_text:
         target_line = f"target 原文: {target_text}\n"
     elif reply_to:
-        target_line = f"回应对象: 游戏里的玩家 {reply_to}（他刚在游戏公屏跟你说话）\n"
+        how = "他刚在游戏公屏跟你说话" if reply_to_spoke else "他刚在游戏里找过你"
+        target_line = f"回应对象: 游戏里的玩家 {reply_to}（{how}）\n"
+        if unresolved != _NO_TARGET:
+            target_line += f"target: {unresolved}\n"
     else:
-        target_line = f"target: {_unresolved_target(plan.target)}\n"
+        target_line = f"target: {unresolved}\n"
     return (
         f"{target_line}"
         f"topic_summary: {plan.topic_summary or '（无特定话题）'}\n"
