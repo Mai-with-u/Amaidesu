@@ -254,12 +254,15 @@ def _observation_error(observation: str) -> Optional[str]:
 def _answers_danmaku(target: Any, danmaku: Sequence[Tuple[str, str]]) -> bool:
     """这句的回应目标对不对得上本窗一条弹幕：编号相等，或那条弹幕原文等于、包含这段目标。
 
+    编号按 Planner 照抄的几种写法归一（``[id:m1]`` / ``id:m1`` / ``m1`` 都算 m1）：提示词让它
+    照着 ``[id:…]`` 抄，只比裸编号会把回弹幕的这句误记成在回应玩家。
     对不上的不算在回弹幕：她拿公屏上玩家的原话当回应目标时，这句在回玩家，不能因为本窗恰好也有
     弹幕就丢掉回应玩家，否则对他的承诺就平白落空。对不上时也不兜底到最后一条弹幕。
     """
     if not isinstance(target, str) or not target:
         return False
-    return any(target == message_id or (text and target in text) for message_id, text in danmaku)
+    message = canonical.normalize_message_id(target)
+    return any(message == message_id or (text and target in text) for message_id, text in danmaku)
 
 
 def _held_reply_words(args: Dict[str, Any]) -> Dict[str, str]:

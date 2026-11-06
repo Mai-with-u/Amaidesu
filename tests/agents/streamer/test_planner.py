@@ -453,12 +453,14 @@ async def test_her_line_answers_a_player_only_when_he_alone_spoke(speakers: tupl
     ("batch", "target", "expected"),
     [
         (True, "m1", ("", "")),
+        (True, "[id:m1]", ("", "")),
         (True, "要不要一起", ("", "")),
         (True, "Alex 说的房子", ("minecraft", "uuid-a")),
         (False, "m1", ("minecraft", "uuid-a")),
     ],
     ids=[
         "按编号点了本窗的弹幕：对象是观众",
+        "照提示词抄成 [id:…] 写法点了本窗的弹幕：对象是观众",
         "按原文片段点了本窗的弹幕：对象是观众",
         "拿公屏原话当目标、对不上弹幕：照旧在回应玩家",
         "本窗没有弹幕：点的不是弹幕，照旧在回应玩家",
