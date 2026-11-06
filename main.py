@@ -602,6 +602,7 @@ async def create_app_components(
             # 记忆检索索引：主播的索引任务后台补算；嵌入没配时只补全文
             memory_index_repo=database.memory_index,
             embedding_setup=embedding_setup,
+            memory_cue_log_repo=database.memory_cue_log,
             event_repo=database.events,
             # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
             privacy_service=privacy_service,
@@ -723,6 +724,7 @@ async def create_app_components(
                 archive_repo=database.archive,
                 memory_index_repo=database.memory_index,
                 embedding_setup=embedding_setup,
+                memory_cue_log_repo=database.memory_cue_log,
                 event_repo=database.events,
                 # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
                 privacy_service=privacy_service,

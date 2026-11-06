@@ -208,6 +208,7 @@ class StreamerAgent(BaseAgent):
         commitments_repo: Optional[Any] = None,
         archive_repo: Optional[Any] = None,
         memory_index_repo: Optional[Any] = None,
+        memory_cue_log_repo: Optional[Any] = None,
         embedding_setup: Optional[EmbeddingSetup] = None,
         event_repo: Optional[Any] = None,
         privacy_service: Optional[Any] = None,
@@ -250,6 +251,8 @@ class StreamerAgent(BaseAgent):
             memory_index_repo: 可选 ``MemoryIndexRepo``（记忆检索的派生索引）——注入时后台
                 索引任务把档案行、承诺、台词、游戏事件补进全文与向量索引；None 时不补算
             embedding_setup: 可选嵌入服务装配结果；None 或没配嵌入模型时索引只补全文
+            memory_cue_log_repo: 可选 ``MemoryCueLogRepo``（线索卡记录）——被动想起每推一张卡记一行，
+                复盘面板读；None 时只记日志
             event_repo: 可选 ``EventRepo``（游戏事件）——场次回顾的游戏进展原料；
                 None 时回顾少这一类原料
             context_assembler_config: 可选上下文组装器配置（[agents.streamer.context] 子段；
@@ -501,6 +504,8 @@ class StreamerAgent(BaseAgent):
 
         # 记忆检索索引：后台补算全文（必开）与向量（配置了嵌入服务才开）；整理写完时叫醒补一轮。
         # 混合检索与它共用同一个仓储和嵌入客户端，回想工具（以后还有被动想起）都走它
+        # 线索卡记录：被动想起推出去的每张卡、用上的时刻（交给线索推送写）
+        self._memory_cue_log_repo = memory_cue_log_repo
         self._memory_indexer: Optional[MemoryIndexer] = None
         self._memory_search: Optional[MemorySearch] = None
         if memory_index_repo is not None:

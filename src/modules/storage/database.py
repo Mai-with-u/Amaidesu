@@ -39,6 +39,7 @@ from src.modules.storage.repos import (
     EventRepo,
     GameCreatureRepo,
     LLMRepo,
+    MemoryCueLogRepo,
     MemoryIndexRepo,
     RundownInstanceRepo,
     RundownRepo,
@@ -134,6 +135,8 @@ class SQLiteDatabase:
         self.archive = ArchiveRepo(self._manager)
         # 记忆检索的派生索引（主播的索引任务补算，回想与被动想起查询）
         self.memory_index = MemoryIndexRepo(self._manager)
+        # 线索卡记录（被动想起推了哪张、谁触发的、用上没有；复盘面板读）
+        self.memory_cue_log = MemoryCueLogRepo(self._manager)
 
     # -------------------- 属性 --------------------
 

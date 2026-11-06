@@ -34,7 +34,7 @@
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -44,10 +44,12 @@ __all__ = [
     "ArchiveSnapshot",
     "Commitment",
     "CommitmentClosure",
+    "CueLogEntry",
     "IndexCandidate",
     "IndexDoc",
     "IndexVector",
     "KeptSnapshotLine",
+    "NewCueLogEntry",
     "PendingArchiveLine",
     "PendingCommitment",
     "SettleReport",
@@ -281,6 +283,35 @@ class IndexCandidate(BaseModel):
 
     source_id: int = Field(..., description="来源行主键")
     score: float = Field(default=0.0, description="这一路的分数，越大越相关")
+
+
+class NewCueLogEntry(BaseModel):
+    """一张推出去的线索卡（写进 ``memory_cue_log`` 的样子）：只有条目编号和分数，不带观众身份。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    live_session_id: int = Field(..., description="推在哪一场")
+    pushed_at_ms: int = Field(..., description="推送时刻")
+    card_kind: str = Field(
+        ..., description="卡类：viewer 对象开口 / game 游戏开着 / place 地点 / rule 规则 / vector 向量 / joke 老梗"
+    )
+    archive_line_id: Optional[int] = Field(default=None, description="指向的档案行（档案卡才有）")
+    commitment_id: Optional[int] = Field(default=None, description="指向的承诺（承诺卡才有）")
+    sources: List[str] = Field(
+        default_factory=list,
+        description="命中它的全部来源：danmaku 观众弹幕 / place 游戏地点 / situation 游戏情境 / self 她的台词",
+    )
+    detail: Dict[str, Any] = Field(
+        default_factory=dict, description="分数明细：规则写命中的触发词，向量写余弦、名次与融合分，地点写地点名与距离"
+    )
+    self_triggered: bool = Field(default=False, description="来源只有她自己的台词（防打转的统计口径）")
+
+
+class CueLogEntry(NewCueLogEntry):
+    """``memory_cue_log`` 一行：推出去的卡加主键与用上的时刻。"""
+
+    id: int = Field(..., description="记录主键")
+    used_at_ms: Optional[int] = Field(default=None, description="检测到她点名用上的时刻；没用上为空")
 
 
 class IndexVector(BaseModel):

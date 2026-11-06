@@ -54,6 +54,8 @@ class AgentDeps:
     # 记忆检索的派生索引仓储与嵌入服务装配结果（没配嵌入时客户端为空，只补全文索引）
     memory_index_repo: Optional[Any] = None
     embedding_setup: Optional[Any] = None
+    # 线索卡记录仓储（被动想起每推一张卡记一行）
+    memory_cue_log_repo: Optional[Any] = None
     event_repo: Optional[Any] = None
     creature_repo: Optional[Any] = None
     privacy_service: Optional[Any] = None

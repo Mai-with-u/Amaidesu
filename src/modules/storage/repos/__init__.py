@@ -13,6 +13,7 @@ from src.modules.storage.repos.commitments import CommitmentRepo
 from src.modules.storage.repos.events import EventRepo
 from src.modules.storage.repos.game_creatures import GameCreatureRepo
 from src.modules.storage.repos.llm import LLMRepo
+from src.modules.storage.repos.memory_cue_log import MemoryCueLogRepo
 from src.modules.storage.repos.memory_index import MemoryIndexRepo
 from src.modules.storage.repos.rundown_instances import RundownInstanceRepo
 from src.modules.storage.repos.rundown_transitions import RundownTransitionRepo
@@ -31,6 +32,7 @@ __all__ = [
     "EventRepo",
     "GameCreatureRepo",
     "LLMRepo",
+    "MemoryCueLogRepo",
     "MemoryIndexRepo",
     "RundownInstanceRepo",
     "RundownRepo",

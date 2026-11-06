@@ -274,6 +274,36 @@ class ArchiveRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def list_cue_lines(self, *, line_ids: Optional[Sequence[int]] = None, limit: int = 500) -> List[ArchiveLine]:
+        """被动想起能推的档案行：只取正式场的；新的在前。
+
+        给了 ``line_ids`` 就只在这些行里取（向量一路命中后核对用）；没给就取写了触发词或挂了地点的行
+        （规则与地点两路的候选池），至多 ``limit`` 行。
+        """
+        ids = [int(line_id) for line_id in dict.fromkeys(line_ids)] if line_ids is not None else None
+        if ids is not None and not ids:
+            return []
+
+        def _exec() -> List[ArchiveLine]:
+            columns = ", ".join(f"a.{name.strip()}" for name in _ARCHIVE_COLUMNS.split(","))
+            base = f"SELECT {columns} FROM archive_lines a JOIN live_sessions s ON s.id = a.live_session_id"  # noqa: S608
+            with self._manager.transaction() as conn:
+                if ids is not None:
+                    placeholders = ",".join("?" for _ in ids)
+                    rows = conn.execute(
+                        f"{base} WHERE s.kind=? AND a.id IN ({placeholders}) ORDER BY a.id DESC",
+                        (SESSION_KIND_LIVE, *ids),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        f"{base} WHERE s.kind=? AND (a.keywords NOT IN ('', '[]') OR a.place <> '')"
+                        " ORDER BY a.id DESC LIMIT ?",
+                        (SESSION_KIND_LIVE, int(limit)),
+                    ).fetchall()
+            return [archive_line_of(row) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
     async def get_last_archived_session_id(
         self, *, kind: SessionKind = SESSION_KIND_LIVE, min_duration_ms: int = 0
     ) -> Optional[int]:

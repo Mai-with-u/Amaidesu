@@ -54,6 +54,7 @@ class AgentManager:
         读取 / 后台维护 / 收播整理依赖它们。回退语义同 tool_registry
         ——Dashboard 动态启用不传时回退成员，避免 Agent 拿 None 降级）。
         embedding_setup: 嵌入服务装配结果（主播的记忆索引任务用；动态启用时同样回退到它）
+        memory_cue_log_repo: 线索卡记录仓储（主播的被动想起写；动态启用时同样回退到它）
         creature_repo: 构造时注入的默认生物名册仓储（Minecraft Agent 跨场次记得同伴）
         privacy_service: 删除/遮蔽服务（回忆工具与线索推送按它遮名、核对遗忘命令）
     """
@@ -73,6 +74,7 @@ class AgentManager:
         archive_repo: Optional[Any] = None,
         memory_index_repo: Optional[Any] = None,
         embedding_setup: Optional[Any] = None,
+        memory_cue_log_repo: Optional[Any] = None,
         event_repo: Optional[Any] = None,
         creature_repo: Optional[Any] = None,
         privacy_service: Optional[Any] = None,
@@ -95,6 +97,7 @@ class AgentManager:
         self._archive_repo = archive_repo
         self._memory_index_repo = memory_index_repo
         self._embedding_setup = embedding_setup
+        self._memory_cue_log_repo = memory_cue_log_repo
         self._event_repo = event_repo
         self._creature_repo = creature_repo
         self._privacy_service = privacy_service
@@ -237,6 +240,9 @@ class AgentManager:
             archive_repo=d.archive_repo if d.archive_repo is not None else self._archive_repo,
             memory_index_repo=(d.memory_index_repo if d.memory_index_repo is not None else self._memory_index_repo),
             embedding_setup=d.embedding_setup if d.embedding_setup is not None else self._embedding_setup,
+            memory_cue_log_repo=(
+                d.memory_cue_log_repo if d.memory_cue_log_repo is not None else self._memory_cue_log_repo
+            ),
             event_repo=d.event_repo if d.event_repo is not None else self._event_repo,
             creature_repo=d.creature_repo if d.creature_repo is not None else self._creature_repo,
             privacy_service=d.privacy_service if d.privacy_service is not None else self._privacy_service,

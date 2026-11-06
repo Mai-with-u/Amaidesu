@@ -65,7 +65,7 @@ def instantiate_agent(
       session_manager / rundown_repo / rundown_instance_repo /
       rundown_transition_repo / chat_repo / sessions_repo / topic_repo /
       viewer_repo / commitments_repo / archive_repo / memory_index_repo /
-      embedding_setup / event_repo /
+      embedding_setup / memory_cue_log_repo / event_repo /
       context_assembler_config / task_ledger（委派渲染的机器状态查询源）。
       仓储为 None 时对应能力降级（chat_repo 缺失 = 对话历史读取整体短路，
       Planner/Replyer 无历史上下文；承诺/档案仓储缺失 = 账本读写整体关闭；
@@ -118,6 +118,7 @@ def instantiate_agent(
             archive_repo=deps.archive_repo,
             memory_index_repo=deps.memory_index_repo,
             embedding_setup=deps.embedding_setup,
+            memory_cue_log_repo=deps.memory_cue_log_repo,
             event_repo=deps.event_repo,
             privacy_service=deps.privacy_service,
             stream_ledger=deps.storage_ledger,
