@@ -843,7 +843,39 @@ def _resolve_live_config(args: argparse.Namespace) -> LiveConfig:
     )
 
 
-def _call_model(client: OpenAI, *, config: LiveConfig, system: str, user: str) -> str:
+@dataclass
+class TokenUsage:
+    """一轮 live 里模型调用的 token 用量；端点不回报用量的调用记进 missing_calls，不算成 0。"""
+
+    calls: int = 0
+    missing_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    reasoning_tokens: int = 0
+    total_tokens: int = 0
+
+    def add(self, usage: Any) -> None:
+        # 每次调用都计数；端点没给 usage（部分中转站会省掉）时只记缺失，免得总量被悄悄低估
+        self.calls += 1
+        if usage is None:
+            self.missing_calls += 1
+            return
+        self.prompt_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
+        self.completion_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
+        self.total_tokens += int(getattr(usage, "total_tokens", 0) or 0)
+        # 思考型模型把内部推理算进输出，单列出来看提示词改动是不是让模型想得更久
+        details = getattr(usage, "completion_tokens_details", None)
+        self.reasoning_tokens += int(getattr(details, "reasoning_tokens", 0) or 0)
+
+    def format(self) -> str:
+        missing = f"，{self.missing_calls} 次没回报用量" if self.missing_calls else ""
+        return (
+            f"token 用量：{self.calls} 次调用，输入 {self.prompt_tokens}，输出 {self.completion_tokens}"
+            f"（其中推理 {self.reasoning_tokens}），合计 {self.total_tokens}{missing}"
+        )
+
+
+def _call_model(client: OpenAI, *, config: LiveConfig, system: str, user: str, usage: TokenUsage) -> str:
     response = client.chat.completions.create(
         model=config.model,
         messages=[
@@ -852,6 +884,8 @@ def _call_model(client: OpenAI, *, config: LiveConfig, system: str, user: str) -
         ],
         temperature=config.temperature,
     )
+    # 先记用量再判空：空回复同样花了 token
+    usage.add(response.usage)
     content = response.choices[0].message.content
     if not isinstance(content, str) or not content.strip():
         raise RuntimeError("模型返回空内容")
@@ -874,6 +908,7 @@ def _run_live(args: argparse.Namespace, prompt_manager: PromptManager, selected:
     results: list[eval_metrics.CaseResult] = []
     case_reports: list[dict[str, Any]] = []
     errors: list[str] = []
+    usage = TokenUsage()
     total = sum(len(records) for records in selected.values())
     index = 0
     for dataset in DATASET_NAMES:
@@ -890,7 +925,7 @@ def _run_live(args: argparse.Namespace, prompt_manager: PromptManager, selected:
             registered: tuple[eval_metrics.RegisteredCommitment, ...] = ()
             try:
                 raw_output = _call_model(
-                    client, config=config, system=prepared.system_prompt, user=prepared.user_prompt
+                    client, config=config, system=prepared.system_prompt, user=prepared.user_prompt, usage=usage
                 )
                 payload = parse_json_object(raw_output)
                 rows = payload.get("commitments")
@@ -955,6 +990,7 @@ def _run_live(args: argparse.Namespace, prompt_manager: PromptManager, selected:
             "system_chars": len(system_prompt),
         },
         "metrics": asdict(metrics),
+        "usage": asdict(usage),
         "verdict": {"passed": passed, "failures": failures},
         "diff": eval_metrics.format_diff(results),
         "errors": errors,
@@ -962,6 +998,7 @@ def _run_live(args: argparse.Namespace, prompt_manager: PromptManager, selected:
     }
     _write_report(args.out, report)
     print("\n" + eval_metrics.format_metrics(metrics))
+    print(usage.format())
     print("\n" + eval_metrics.format_diff(results))
     print(f"\n报告已写入 {args.out}")
     if passed:
