@@ -30,6 +30,7 @@ scripts/memory_eval/
   game_players.py               游戏里的人评测的 dry（含对号核对）/ live 两个入口
   viewer_candidates.py          观众候选评测的 dry / live 两个入口
   live_side_effects.py          直播库上复算唠叨指标（只读，只出编号和数字）与 `--selftest`
+  review_diff.py                人工改动统计：整理写的档案被人改了多少（只读）与 `--selftest`
   README.md                     本文件
 ```
 
@@ -345,6 +346,15 @@ uv run python scripts/memory_eval/viewer_candidates.py --live --out reports/view
 ```bash
 uv run python scripts/memory_eval/live_side_effects.py <直播库副本> --last 5
 uv run python scripts/memory_eval/live_side_effects.py --selftest
+```
+
+## 人工改动统计（review_diff.py）
+
+整理自动生效、不等人审，运营者在记忆页改过的地方就是整理写得不合人意的地方。脚本读 `memory_edits`，按场算：整理写了几行、标题被改的比例、被删的比例、被放回几行、人新增几行（漏写的事）、稳定标记改了几次、观众候选批准与驳回各几条，末行是几场合计。默认只出数字；`--show-text` 在屏幕上列出标题改前改后，供手工转写成虚构样本并进 archive 系列评测集，原文不落盘、不入库。
+
+```bash
+uv run python scripts/memory_eval/review_diff.py <直播库副本>
+uv run python scripts/memory_eval/review_diff.py --selftest
 ```
 
 ## 档案快照多场序列（archive_rolling.py）
