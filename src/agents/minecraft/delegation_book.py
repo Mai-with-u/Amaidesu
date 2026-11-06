@@ -80,16 +80,23 @@ class DelegationBook:
         self._finished_ids.clear()
 
     def hold(self, reason: str) -> None:
-        """委派停在待定夺：账面 ``waiting_for_decision``，追踪清单保留（批次重启时重写 running）。"""
+        """委派停在待定夺：账面 ``waiting_for_decision``，追踪清单保留（批次重启时重写 running）。
+
+        快照在既有记录上合并写入：受理时落下的 ``instruction`` 摘要必须保住，
+        整体替换会把仪表盘任务卡的指令摘要冲掉。记录已不存在（终态移除）
+        时按空快照起底，只写本次的待定夺标记。
+        """
         ledger = self._framework_ledger()
         if ledger is None:
             return
         for task_id in self._finished_ids:
+            record = ledger.get(task_id)
+            current_snapshot = dict(record.snapshot) if record is not None and isinstance(record.snapshot, dict) else {}
             ledger.update(
                 task_id,
                 "waiting_for_decision",
                 summary=reason,
-                snapshot={"waiting_for_instruction": True, "reason": reason},
+                snapshot={**current_snapshot, "waiting_for_instruction": True, "reason": reason},
             )
 
     def reject(self, task_id: str, *, summary: str) -> None:

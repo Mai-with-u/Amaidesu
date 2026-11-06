@@ -115,6 +115,40 @@ def test_hold_keeps_tracking_and_writes_waiting_snapshot() -> None:
     assert book.finished_ids == ("d-1",), "挂起保留清单，批重启时重写 running"
 
 
+def test_hold_merges_snapshot_and_keeps_instruction() -> None:
+    """待定夺快照在既有快照上合并：受理时写入的 instruction 摘要不被冲掉。"""
+    ledger = _FakeLedger()
+    book = _book(ledger)
+    book.absorb("d-1")
+    book.mark_running()
+    ledger.active["d-1"] = _FakeRecord(source="agent", executor="minecraft")
+    ledger.active["d-1"].snapshot = {"instruction": "建一座木头房子"}
+    ledger.updates.clear()
+
+    book.hold("escalation: 等主播定夺")
+    snapshot = ledger.updates[-1]["snapshot"]
+    assert snapshot == {
+        "instruction": "建一座木头房子",
+        "waiting_for_instruction": True,
+        "reason": "escalation: 等主播定夺",
+    }
+
+
+def test_hold_without_ledger_record_does_not_raise() -> None:
+    """账面记录已不在（终态移除）时挂起不炸：按空快照起底只写本次标记。"""
+    ledger = _FakeLedger()  # active 为空，get 返回 None
+    book = _book(ledger)
+    book.absorb("d-1")
+    book.mark_running()
+    ledger.updates.clear()
+
+    book.hold("escalation: 等主播")
+    assert ledger.updates[-1]["snapshot"] == {
+        "waiting_for_instruction": True,
+        "reason": "escalation: 等主播",
+    }
+
+
 def test_cancel_removes_from_tracking_and_writes_cancelled() -> None:
     ledger = _FakeLedger()
     book = _book(ledger)
