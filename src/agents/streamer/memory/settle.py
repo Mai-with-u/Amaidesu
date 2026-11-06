@@ -64,7 +64,6 @@ from src.agents.streamer.memory.saves import SaveTimeline
 from src.agents.streamer.memory.settle_cues import remembered_places, render_places, verified_keywords, verified_place
 from src.modules.utils.time_utils import now_ms
 
-from ..background import SUMMARY_PROFILE
 
 if TYPE_CHECKING:
     from src.modules.storage.repos.archive import ArchiveRepo
@@ -76,6 +75,9 @@ if TYPE_CHECKING:
 __all__ = ["MAX_ATTEMPTS", "SessionSettler", "SettleError", "parse_json_object"]
 
 logger = get_logger("SessionSettler")
+
+# 下播整理单独的模型档位：一场只调几次，可以单独换更强的模型而不影响直播里的话题总结
+SETTLE_PROFILE = "settle"
 
 # 三份系统提示词（正文见 src/agents/streamer/prompts/）
 _ARCHIVE_TEMPLATE = "memory_archive_system"
@@ -656,7 +658,7 @@ class SessionSettler:
         return "\n".join(lines), lines_by_number, note
 
     def _speech_token_budget(self) -> int:
-        """台词可用的 token 预算：按 summary profile 的上下文窗口换算，查不到按保守窗口。
+        """台词可用的 token 预算：按整理 profile 的上下文窗口换算，查不到按保守窗口。
 
         整理原料里台词占大头，其余（系统提示词、旧承诺清单、模型输出）留在剩余窗口里，
         所以只按窗口的一定比例给台词。
@@ -665,10 +667,10 @@ class SessionSettler:
         getter = getattr(self._llm, "get_profile_context_window", None)
         if callable(getter):
             try:
-                value = getter(SUMMARY_PROFILE)
+                value = getter(SETTLE_PROFILE)
                 window = int(value) if isinstance(value, int) and value > 0 else 0
             except Exception as exc:  # noqa: BLE001 - 查不到窗口按保守预算，整理照常进行
-                logger.warning(f"查询 {SUMMARY_PROFILE} 上下文窗口失败，按保守窗口换算台词预算: {exc}")
+                logger.warning(f"查询 {SETTLE_PROFILE} 上下文窗口失败，按保守窗口换算台词预算: {exc}")
         if window <= 0:
             window = _DEFAULT_CONTEXT_WINDOW
         return max(512, int(window * _SPEECH_WINDOW_RATIO))
@@ -846,7 +848,7 @@ class SessionSettler:
         """渲染系统提示词并调一次模型，返回解析出的 JSON 对象。"""
         system = self._prompt_manager.render(template)
         try:
-            response = await self._llm.generate(prompt, profile=SUMMARY_PROFILE, system=system)
+            response = await self._llm.generate(prompt, profile=SETTLE_PROFILE, system=system)
         except Exception as exc:  # noqa: BLE001 - 调用异常统一转成整理失败原因
             raise SettleError(f"模型调用失败：{exc}") from exc
         content = getattr(response, "content", None)

@@ -77,6 +77,7 @@ def test_model_config_three_layer_defaults() -> None:
         "planner",
         "replyer",
         "summary",
+        "settle",
         "minecraft",
         "minecraft_builder",
         "vision",

@@ -46,6 +46,7 @@ class ProfileNames:
     PLANNER = "planner"
     REPLYER = "replyer"
     SUMMARY = "summary"
+    SETTLE = "settle"
     MINECRAFT = "minecraft"
     MINECRAFT_BUILDER = "minecraft_builder"
     VISION = "vision"

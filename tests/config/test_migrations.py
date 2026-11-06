@@ -237,6 +237,36 @@ def _seed_siliconflow(*, embedding: dict[str, str] | None) -> Callable[[Path], N
     return _seed
 
 
+def _seed_settle_profile(*, existing: bool) -> Callable[[Path], None]:
+    """拨回 model.toml 2.0.46：没有整理用途；摘要用途是用户自己的模型。``existing`` 时先手写一段整理用途。"""
+
+    def _seed(d: Path) -> None:
+        doc = _rewound(d, "model.toml", "2.0.46")
+        profiles = doc["llm_profiles"]
+        profiles["summary"]["model_list"] = ["default"]
+        profiles["summary"]["slow_threshold_ms"] = 45_000
+        del profiles["settle"]
+        if existing:
+            section = tomlkit.table()
+            section["model_list"] = ["default"]
+            section["temperature"] = 0.1
+            profiles["settle"] = section
+        write_doc(d, "model.toml", doc)
+
+    return _seed
+
+
+def _check_settle_profile(*, temperature: float) -> Callable[[Path], None]:
+    def _check(d: Path) -> None:
+        settle = read_doc(d, "model.toml")["llm_profiles"]["settle"]
+        assert settle["model_list"] == ["default"]
+        assert settle["temperature"] == temperature
+        if temperature == 0.3:  # 照抄摘要用途：超时也一样（行为不变）
+            assert settle["slow_threshold_ms"] == 45_000
+
+    return _check
+
+
 def _check_siliconflow(*, model: str, provider: str) -> Callable[[Path], None]:
     def _check(d: Path) -> None:
         doc = read_doc(d, "model.toml")
@@ -495,6 +525,18 @@ CASES = [
         _seed_siliconflow(embedding={"provider": "default", "model_identifier": "text-embedding-3-small"}),
         _check_siliconflow(model="text-embedding-3-small", provider="default"),
     ),
+    Case(
+        "settle-profile-copied-from-summary",
+        ("model.toml",),
+        _seed_settle_profile(existing=False),
+        _check_settle_profile(temperature=0.3),
+    ),
+    Case(
+        "settle-profile-user-section-kept",
+        ("model.toml",),
+        _seed_settle_profile(existing=True),
+        _check_settle_profile(temperature=0.1),
+    ),
     Case("warudo-subtitle-keys", ("tools.toml", "avatar.toml"), _seed_warudo_subtitle, _check_warudo_subtitle),
     Case("vts-lipsync-to-avatar", ("tools.toml", "infra.toml"), _seed_vts_lipsync, _check_vts_lipsync),
     Case("avatar-platform-graduation", ("tools.toml",), _seed_avatar_platform, _check_avatar_platform),
@@ -567,6 +609,7 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "drop_profile_history_budget": ("case", "profile-history-budget"),
     "profile_give_up": ("case", "profile-give-up"),
     "siliconflow_embedding": ("case", "siliconflow-embedding-new-section"),
+    "settle_profile": ("case", "settle-profile-copied-from-summary"),
     "widget_drop_html_page": ("case", "widget-html-page"),
     "maibot_sync_transcript_optional": ("case", "maibot-sync-transcript-optional"),
     "name_match_off_by_default": ("case", "name-match-old-default"),

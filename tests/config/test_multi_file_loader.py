@@ -51,7 +51,7 @@ def test_generation_creates_every_file_with_expected_sections_and_baseline_versi
         config_dir, "model.toml"
     )  # 三层结构：providers / models / profiles，dict 形态的 profiles 按 key 展开为子表
     assert "[[llm_providers]]" in model and "[[llm_models]]" in model
-    for profile in ("planner", "replyer", "summary", "minecraft", "minecraft_builder", "vision", "simulator"):
+    for profile in ("planner", "replyer", "summary", "settle", "minecraft", "minecraft_builder", "vision", "simulator"):
         assert f"[llm_profiles.{profile}]" in model
 
     infra = _text(config_dir, "infra.toml")

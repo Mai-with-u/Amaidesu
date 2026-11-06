@@ -154,6 +154,7 @@ const PROFILE_LABELS: Record<string, string> = {
   planner: '决策 Profile',
   replyer: '表达 Profile',
   summary: '摘要 Profile',
+  settle: '下播整理 Profile',
   minecraft: '游戏 Profile',
   minecraft_builder: '建筑设计 Profile',
   vision: '视觉 Profile',

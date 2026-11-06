@@ -225,6 +225,7 @@ def test_profile_names_closed_set() -> None:
         ProfileNames.PLANNER,
         ProfileNames.REPLYER,
         ProfileNames.SUMMARY,
+        ProfileNames.SETTLE,
         ProfileNames.MINECRAFT,
         ProfileNames.MINECRAFT_BUILDER,
         ProfileNames.VISION,

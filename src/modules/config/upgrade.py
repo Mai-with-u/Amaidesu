@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Dict, List, Protocol
@@ -920,6 +921,26 @@ def _add_siliconflow_embedding(data: Dict[str, Any]) -> List[str]:
 
 
 register_file_hook("model.toml", "siliconflow_embedding", "2.0.46", _add_siliconflow_embedding)
+
+
+def _add_settle_profile(data: Dict[str, Any]) -> List[str]:
+    """model.toml v2.0.47：新增下播整理用途 ``[llm_profiles.settle]``，存量文件照抄摘要用途的整段。
+
+    下播整理原先用摘要用途的模型；新用途的通用默认引用 ``default`` 模型，存量文件不一定有它，
+    而且换了模型整理结果会变。所以存量文件照抄 ``summary`` 那一段（模型、超时、温度都一样），
+    行为不变；之后要换更强的模型只改这一段。已经有 ``settle`` 段的不动（幂等）。
+    """
+    profiles = data.get("llm_profiles")
+    if not isinstance(profiles, dict) or "settle" in profiles:
+        return []
+    summary = profiles.get("summary")
+    if not isinstance(summary, dict):
+        return []
+    profiles["settle"] = copy.deepcopy(dict(summary))
+    return ["llm_profiles.settle"]
+
+
+register_file_hook("model.toml", "settle_profile", "2.0.47", _add_settle_profile)
 
 
 def _drop_tools_memory_section(data: Dict[str, Any]) -> List[str]:

@@ -157,8 +157,9 @@ async def test_settle_writes_archive_new_commitment_and_closure(
     assert commitments[0].game == "Minecraft" and commitments[0].created_session_id == session_id
     closed = await store.commitments.get_commitment(commitment_id=old)
     assert closed is not None and closed.status == "closed" and closed.close_quote == "TNT 炸完啦"
-    # 三次调用各一份提示词，第三次只在本场之前有未了结承诺时才调
+    # 三次调用各一份提示词，第三次只在本场之前有未了结承诺时才调；都走单独的整理档位
     assert [call["method"] for call in llm.calls] == ["generate", "generate", "generate"]
+    assert {call["profile"] for call in llm.calls} == {"settle"}
 
 
 async def test_close_call_asks_for_all_four_kinds_of_closure(

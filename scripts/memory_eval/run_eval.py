@@ -987,7 +987,7 @@ def _run_live(args: argparse.Namespace, prompt_manager: PromptManager, selected:
             "base_url": config.base_url,
             "temperature": config.temperature,
             "timeout_s": config.timeout_s,
-            "profile_note": "对应生产整理第二次调用（summary 档位）的系统与用户提示词",
+            "profile_note": "对应生产整理第二次调用（settle 档位）的系统与用户提示词",
         },
         "prompt": {
             "template": PROMPT_TEMPLATES["commitment"],

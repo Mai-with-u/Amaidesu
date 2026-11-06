@@ -38,6 +38,7 @@ def test_profile_set_is_closed_and_unknown_keys_fail_with_the_key_name() -> None
         "planner",
         "replyer",
         "summary",
+        "settle",
         "minecraft",
         "minecraft_builder",
         "vision",

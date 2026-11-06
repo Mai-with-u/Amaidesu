@@ -334,6 +334,7 @@ _PROFILE_PRESETS: dict[str, dict[str, Any]] = {
     "planner": {"slow_threshold_ms": 15_000, "give_up_ms": 120_000, "temperature": 0.7},
     "replyer": {"slow_threshold_ms": 8_000, "give_up_ms": 60_000, "temperature": 0.2},
     "summary": {"slow_threshold_ms": 30_000, "temperature": 0.3},
+    "settle": {"slow_threshold_ms": 30_000, "temperature": 0.3},
     "minecraft": {"slow_threshold_ms": 15_000, "temperature": 0.2},
     "minecraft_builder": {
         "slow_threshold_ms": 15_000,
@@ -372,6 +373,11 @@ class LLMProfilesConfig(BaseConfig):
         default_factory=lambda: _seed_profile("summary"),
         title="摘要 Profile",
         description="摘要 profile（话题总结，长超时）",
+    )
+    settle: LLMProfileConfig = Field(
+        default_factory=lambda: _seed_profile("settle"),
+        title="下播整理 Profile",
+        description="下播整理 profile（每场收播后写承诺与档案，一场只调几次，可单独换更强的模型）",
     )
     minecraft: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("minecraft"),
@@ -417,6 +423,23 @@ class LLMProfilesConfig(BaseConfig):
                 "model_list": list(minecraft["model_list"]),
             },
         }
+
+    @model_validator(mode="before")
+    @classmethod
+    def seed_settle_models(cls, data: Any) -> Any:
+        """没写整理用途时照抄摘要用途整段：下播整理原先就用摘要的模型，换模型整理结果会变。
+
+        存量文件由 model.toml 2.0.47 的升级钩子落盘同样的内容；这里兜住没经过钩子的配置
+        （手写的片段、测试里的最小配置），免得引用不存在的 default 模型。
+        """
+        if not isinstance(data, dict) or "settle" in data:
+            return data
+        summary = data.get("summary", {})
+        if isinstance(summary, LLMProfileConfig):
+            summary = summary.model_dump()
+        if not isinstance(summary, dict) or not isinstance(summary.get("model_list"), list):
+            return data
+        return {**data, "settle": {**summary, "model_list": list(summary["model_list"])}}
 
     @model_validator(mode="before")
     @classmethod
