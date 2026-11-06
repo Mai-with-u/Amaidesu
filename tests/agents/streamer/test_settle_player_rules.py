@@ -51,6 +51,36 @@ def test_chat_targets_follow_window_and_names() -> None:
     assert targets[7] == frozenset(), "单字名不按点名认"
 
 
+def test_follow_needs_his_line_within_sixty_seconds() -> None:
+    """紧接着还要离他那句不超过 60 秒：隔了一分多钟、中间只有她自己的话，也不算在回他。"""
+    players = {1: _player(1, "Alex")}
+    lines = [
+        GameChatLine(
+            id=1, live_session_id=1, game="minecraft", direction="player", player_id=1, content="在吗", at_ms=0
+        ),
+        GameChatLine(id=2, live_session_id=1, game="minecraft", direction="streamer", content="在", at_ms=60_000),
+        GameChatLine(id=3, live_session_id=1, game="minecraft", direction="streamer", content="好", at_ms=60_001),
+    ]
+    targets = chat_targets(lines, players)
+    assert (targets[2], targets[3]) == (frozenset({1}), frozenset())
+
+
+def test_short_names_need_a_whole_word_match() -> None:
+    """三个字以上按子串认；两个字的名字前后不能紧挨字母、数字、下划线或汉字。"""
+    players = {1: _player(1, "Bo"), 2: _player(2, "小鱼"), 3: _player(3, "Alex")}
+    lines = [
+        _line(1, "streamer", "Bob 你好"),
+        _line(2, "streamer", "bo，明天见"),
+        _line(3, "streamer", "猫爱吃小鱼干"),
+        _line(4, "streamer", "在的，小鱼，等我一下"),
+        _line(5, "streamer", "alexander 来了"),
+    ]
+    targets = chat_targets(lines, players)
+    assert targets[1] == targets[3] == frozenset(), "两个字的名字撞上别的词不算点名"
+    assert (targets[2], targets[4]) == (frozenset({1}), frozenset({2}))
+    assert targets[5] == frozenset({3}), "三个字以上的名字照旧按子串认"
+
+
 def test_player_chat_codes_numbers_and_lookup() -> None:
     """代号先给台词里回应过的；公屏只给模型看她打的字和前面 3 句；编号与代号都能换回原行。"""
     players = {1: _player(1, "Alex", "Steve"), 2: _player(2, "Bob")}

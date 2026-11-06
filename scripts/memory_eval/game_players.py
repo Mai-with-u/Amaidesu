@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -61,7 +62,10 @@ _FROM_ME = "me"
 _FROM_OTHER = "other"
 # 紧接着他的话：往前几句之内、中间只有她自己的话（与生产核对同一口径，由样本事实独立复算）
 _FOLLOW_WINDOW = 3
+_FOLLOW_MAX_GAP_MS = 60_000
 _MIN_NAME_CHARS = 2
+# 三个字以上的名字按子串认，两个字的要整词出现
+_SUBSTRING_NAME_CHARS = 3
 
 
 @dataclass(frozen=True)
@@ -291,7 +295,8 @@ def prepare(case: PlayerCase, prompt_manager: PromptManager) -> base.PreparedCas
 
 def _supported(case: PlayerCase, ref: str, key: str) -> bool:
     """按样本事实复算"这句能不能算对他说的"：台词回应的就是他；公屏那句点了他（现在或以前的）名字，
-    或往前 3 句之内遇到的第一句别人的话是他说的。与生产核对同一口径，但只读样本，不读代码算出的结果。"""
+    或往前 3 句之内遇到的第一句别人的话是他说的、相隔不超过 60 秒。与生产核对同一口径，但只读样本，
+    不读代码算出的结果。"""
     kind, _, number = ref.partition(":")
     if kind == "line":
         # 这一行在回一条弹幕时，对象是那位观众，不算在回应玩家（即使那一行也记了回应玩家）
@@ -299,13 +304,17 @@ def _supported(case: PlayerCase, ref: str, key: str) -> bool:
         return case.reply_players.get(int(number)) == key and not replies_danmaku
     index = int(number) - 1
     text = case.chat[index].text.lower()
-    names = [name for name in case.players[key].names if len(name.strip()) >= _MIN_NAME_CHARS]
-    if any(name.lower() in text for name in names):
-        return True
+    names = [name.strip().lower() for name in case.players[key].names if len(name.strip()) >= _MIN_NAME_CHARS]
+    for name in names:
+        # 两个字的名字要整词出现：前后不紧挨字母、数字、下划线或汉字
+        whole = re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text) is not None
+        if name in text and (len(name) >= _SUBSTRING_NAME_CHARS or whole):
+            return True
     for back in range(index - 1, max(-1, index - _FOLLOW_WINDOW - 1), -1):
         if case.chat[back].speaker == _FROM_ME:
             continue
-        return case.chat[back].speaker == key
+        gap_ms = base._clock_to_ms(case.chat[index].clock) - base._clock_to_ms(case.chat[back].clock)
+        return case.chat[back].speaker == key and gap_ms <= _FOLLOW_MAX_GAP_MS
     return False
 
 

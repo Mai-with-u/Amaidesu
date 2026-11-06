@@ -3,7 +3,8 @@
 她答应某位玩家的事，证据二选一，都必须是她自己说出去的：
 
 - 她播出的那句台词，而且落库时记下了在回应哪位玩家（那一窗只有他一位在游戏里开过口）；
-- 她在游戏公屏打出去的那句：点了他的名字，或者在他上一句之后 3 句之内、中间没有别人说话。
+- 她在游戏公屏打出去的那句：点了他的名字（三个字以上的名字按子串认，两个字的要整词出现），或者在他
+  上一句之后 3 句之内、60 秒之内、中间没有别人说话。
 
 模型写的"对谁"必须按上面两条之一对上那位玩家，对不上的不登记、进未登记清单。和对观众的承诺
 同一个口径：宁可漏登记、让运营者在整理报告里看见，也不把答应 A 的事记到 B 头上。提示词里玩家
@@ -12,6 +13,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Set
 
@@ -24,6 +26,7 @@ from src.modules.storage.models.game_players import (
 
 __all__ = [
     "CHAT_NUMBER_PREFIX",
+    "FOLLOW_MAX_GAP_MS",
     "FOLLOW_WINDOW",
     "PLAYER_CODE_PREFIX",
     "PlayerChat",
@@ -35,10 +38,14 @@ PLAYER_CODE_PREFIX = "玩家"
 CHAT_NUMBER_PREFIX = "公屏#"
 # 她这句在他上一句之后几句之内（中间只能是她自己的话），才算接着他说
 FOLLOW_WINDOW = 3
+# 而且离他那句不超过这么久：隔久了多半已经换了话题，或者是在回别处的事
+FOLLOW_MAX_GAP_MS = 60_000
 # 公屏段至多给模型看多少行（她打的字连同前面几句）：刷屏的场次只留最后这些
 MAX_CHAT_LINES = 120
 # 短于这个长度的名字不按点名认：单字名太容易撞上普通的字
 _MIN_NAME_CHARS = 2
+# 至少这么长的名字按子串认；更短的（两个字）要整词出现，"小鱼"不认"小鱼干"、"Bo"不认"Bob"
+_SUBSTRING_NAME_CHARS = 3
 
 
 @dataclass(frozen=True)
@@ -87,11 +94,20 @@ def _names_of(player: GamePlayer) -> List[str]:
     return [name for name in names if len(name.strip()) >= _MIN_NAME_CHARS]
 
 
+def _mentions(content: str, name: str) -> bool:
+    """她这句（已转小写）点没点这个名字：三个字以上按子串认，两个字的前后不能紧挨着字母、数字、下划线或汉字。"""
+    key = name.strip().lower()
+    if len(key) >= _SUBSTRING_NAME_CHARS:
+        return key in content
+    return re.search(rf"(?<!\w){re.escape(key)}(?!\w)", content) is not None
+
+
 def chat_targets(lines: Sequence[GameChatLine], players: Mapping[int, GamePlayer]) -> Dict[int, FrozenSet[int]]:
     """她在公屏打的每一句能算作对谁说的：点了名的玩家，加上她紧接着回的那位。
 
-    点名：他现在或以前的名字出现在她这句里（不分大小写）。紧接着：从她这句往前数，3 句之内
-    遇到的第一句别人的话是他说的，中间只有她自己的话；先遇到认不出是谁的一句就不算接着谁。
+    点名：他现在或以前的名字出现在她这句里（不分大小写；两个字的名字要整词出现）。紧接着：从她这句
+    往前数，3 句之内遇到的第一句别人的话是他说的、离她这句不超过 60 秒，中间只有她自己的话；先遇到
+    认不出是谁的一句就不算接着谁。
     """
     targets: Dict[int, FrozenSet[int]] = {}
     for index, line in enumerate(lines):
@@ -101,14 +117,19 @@ def chat_targets(lines: Sequence[GameChatLine], players: Mapping[int, GamePlayer
         found: Set[int] = {
             player_id
             for player_id, player in players.items()
-            if any(name.lower() in content for name in _names_of(player))
+            if any(_mentions(content, name) for name in _names_of(player))
         }
         # 往前找她这句接着的是谁：跳过她自己的话，碰到第一句别人的话就停
         for back in range(index - 1, max(-1, index - FOLLOW_WINDOW - 1), -1):
             previous = lines[back]
             if previous.direction == GAME_CHAT_STREAMER:
                 continue
-            if previous.direction == GAME_CHAT_PLAYER and previous.player_id is not None:
+            # 他那句离她这句超过 60 秒：多半已经换了话题，不算接着他说
+            if (
+                previous.direction == GAME_CHAT_PLAYER
+                and previous.player_id is not None
+                and int(line.at_ms) - int(previous.at_ms) <= FOLLOW_MAX_GAP_MS
+            ):
                 found.add(int(previous.player_id))
             break
         targets[int(line.id)] = frozenset(found)
