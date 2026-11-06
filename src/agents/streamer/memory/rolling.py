@@ -6,12 +6,15 @@
 1. 上一份快照（:meth:`ArchiveRepo.snapshot_before`）编上"旧N"交给模型；
 2. 模型对旧行给出操作（没列出的行一律保留）：
    - 保留：可以注明本场哪一行又提到它（算"再提起"）、重标是否稳定的事；
-   - 去掉：必须写理由，并指出本场哪一行台词是证据，"这场没提到"不算理由；
+   - 去掉：必须写理由，并指出本场哪一行台词是证据，"这场没提到"不算理由；同一件事在上一份
+     里写了两行时，可以注明与哪一行重复（``same_as``）去掉其中一行：事实由留下的那一行接着；
+     那一行本场被替换或去掉了，这一行跟着它走（替换出的新行接着这件事，去掉用的是同一份证据）；
    - 替换：给本场一行台词里的逐字原话，过与新事同一个校验器，通过才换掉旧行；
    不合规的操作不采纳、旧行照留，连同理由写进整理报告；
 3. 代码按固定规则取舍（:func:`select_snapshot`），至多 :data:`MAX_SNAPSHOT_LINES` 行：
-   稳定的事按最近被提起的先后先占至多 :data:`MAX_LASTING_LINES` 行，其余（含本场新事）
-   按最近被提起的先后补满，挤出去的是最久没被再提的。模型不凭感觉删。
+   稳定的事先占至多 :data:`MAX_LASTING_LINES` 行（本场新写的在前，其余按最近被提起）→ 本场
+   其余新事 → 其余稳定的事 → 其余旧行（按最近被提起）。同一档里挤出去的是最久没被再提的。
+   模型不凭感觉删。
 
 模型输出里没有 ``previous``（或整个输出为空）时上一份原样保留；``previous`` 不是列表按整理
 失败处理，上一份快照同样原样留着。
@@ -50,8 +53,8 @@ logger = get_logger("RollingArchive")
 
 # 一份快照至多几行：整理写入与简报列出用同一个数
 MAX_SNAPSHOT_LINES = MAX_BRIEF_ARCHIVE_LINES
-# 稳定的事至多先占几行：名字、住处、关系不被新事挤掉，又给本场新事留足位置
-MAX_LASTING_LINES = 6
+# 稳定的事至多先占几行：名字、住处、关系不被新事和前几场的零碎进展挤掉，又给本场新事留出位置
+MAX_LASTING_LINES = 8
 # 交给模型的旧行至多几行（升级后第一次滚动会连着几场旧档案一起给）
 MAX_BASE_LINES = 24
 # 旧行编号前缀：与台词编号（#N）、承诺编号（约#N）分开，模型不会把它们混成一类
@@ -68,6 +71,7 @@ _REFUSED_UNKNOWN_OP = "看不懂的操作，旧行保留"
 _REFUSED_DROP_EVIDENCE = "去掉旧行要写理由并指出本场哪一行台词作证据，旧行保留"
 _REFUSED_NOT_MENTIONED = "这场没提到不算去掉的理由，旧行保留"
 _REFUSED_REPLACE = "替换的新行没通过校验，旧行保留"
+_REFUSED_SAME_AS = "注明重复的那一行编号不对，旧行保留"
 _EVICTED_OLD = f"超过 {MAX_SNAPSHOT_LINES} 行，最久没被再提的先出"
 _EVICTED_NEW = "本场新事超出上限：写成本场档案行，不进快照"
 
@@ -142,6 +146,8 @@ def plan_from_ops(
     updated: Dict[int, SnapshotLine] = {}
     removed: Set[int] = set()
     handled: Set[int] = set()
+    # (要去掉的行, 与它重复的行, 理由)：等别的操作都落地后再定，才知道那一行是留着还是本场被换掉了
+    duplicates: List[Tuple[int, int, str]] = []
     replacements: List[PendingArchiveLine] = []
     changes: List[SnapshotChange] = []
     misses: List[UnregisteredItem] = []
@@ -173,6 +179,14 @@ def plan_from_ops(
                 if evidence is not None
                 else item.seen_at_ms,
             )
+        elif op == "drop" and raw.get("same_as") is not None:
+            # 与另一行重复：事实由那一行留着，不需要本场证据
+            other = _as_old_number(raw.get("same_as"))
+            if other is None or not 1 <= other <= len(shown) or other == number:
+                changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_SAME_AS))
+            else:
+                reason = str(raw.get("reason") or "").strip() or f"与{_OLD_PREFIX}{other}重复"
+                duplicates.append((index, other - 1, reason))
         elif op == "drop":
             # 去掉：本场要有证据，且"这场没提到"不算理由
             reason = str(raw.get("reason") or "").strip()
@@ -199,6 +213,19 @@ def plan_from_ops(
                 changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_REPLACE))
         else:
             changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_UNKNOWN_OP))
+    for index, other, reason in duplicates:
+        if index in removed:
+            continue
+        removed.add(index)
+        if other in removed:
+            # 重复的那一行本场被替换或去掉了：这件事已由替换出的新行接着，或已由同一份证据了结
+            reason = f"{reason}（{_OLD_PREFIX}{other + 1}本场已被替换或去掉）"
+        else:
+            # 重复的两行里有一行标了稳定，留下的那一行也算稳定
+            survivor = updated.get(other, shown[other])
+            if updated.get(index, shown[index]).lasting and not survivor.lasting:
+                updated[other] = survivor.model_copy(update={"lasting": True})
+        changes.append(SnapshotChange(action="drop", what=shown[index].line.text, reason=reason))
     kept = [updated.get(index, item) for index, item in enumerate(shown) if index not in removed]
     return RollingPlan(kept=kept, replacements=replacements, changes=changes, misses=misses)
 
@@ -229,10 +256,16 @@ def select_snapshot(
     *,
     session_started_at_ms: int,
 ) -> SnapshotSelection:
-    """按固定规则凑本场快照：稳定的事按最近被提起先占至多 6 行，其余按最近被提起补满 12 行。
+    """按固定规则凑本场快照，至多 12 行，按下面四档依次放：
 
-    本场新写的行最近一次提起就是本场；同样新的按给出的先后（新事在前、接住的按原位置）。
-    被挤出的本场新事照样写成本场档案行（回想工具查得到），只是不进快照。
+    1. 稳定的事，至多 8 行：本场新写的在前，其余按最近被提起；
+    2. 本场其余新事（模型给出的先后）；
+    3. 其余稳定的事，按最近被提起；
+    4. 其余旧行，按最近被提起。
+
+    同样新的按给出的先后（新事在前、接住的按原位置）。前几场的零碎进展因此排在稳定的事后面，
+    同一档里挤出去的是最久没被再提的。被挤出的本场新事照样写成本场档案行（回想工具查得到），
+    只是不进快照。
     """
     entries = [
         _Entry(new=True, index=index, lasting=line.lasting, seen_at_ms=int(session_started_at_ms), order=index)
@@ -241,13 +274,15 @@ def select_snapshot(
         _Entry(new=False, index=index, lasting=item.lasting, seen_at_ms=item.seen_at_ms, order=len(new_lines) + index)
         for index, item in enumerate(kept)
     ]
-    lasting_first = sorted((entry for entry in entries if entry.lasting), key=lambda e: (-e.seen_at_ms, e.order))
-    chosen = lasting_first[:MAX_LASTING_LINES]
-    rest = sorted(
-        (entry for entry in entries if entry not in chosen),
-        key=lambda e: (-e.seen_at_ms, not e.lasting, e.order),
-    )
-    chosen.extend(rest[: max(0, MAX_SNAPSHOT_LINES - len(chosen))])
+    by_recency = sorted(entries, key=lambda e: (not e.new, -e.seen_at_ms, e.order))
+    lasting = [entry for entry in by_recency if entry.lasting]
+    ranked = [
+        *lasting[:MAX_LASTING_LINES],
+        *(entry for entry in by_recency if entry.new and not entry.lasting),
+        *lasting[MAX_LASTING_LINES:],
+        *(entry for entry in by_recency if not entry.new and not entry.lasting),
+    ]
+    chosen = ranked[:MAX_SNAPSHOT_LINES]
     chosen_new = {entry.index for entry in chosen if entry.new}
     chosen_kept = {entry.index for entry in chosen if not entry.new}
     lines = [line.model_copy(update={"in_snapshot": index in chosen_new}) for index, line in enumerate(new_lines)]

@@ -133,6 +133,31 @@ def test_replace_goes_through_the_validator_and_only_then_removes_the_old_row() 
     assert [item.what for item in plan.misses] == ["编出来的"]
 
 
+def test_duplicate_row_can_go_without_evidence_and_survivor_inherits_stable_flag() -> None:
+    """同一件事写了两行：注明与哪一行重复就能去掉一行（不需要本场证据），留下的那一行继承"稳定"；
+    重复的那一行本场被去掉了，这一行跟着去掉；注明与自己重复的不采纳。"""
+    base = [_old(1, lasting=True), _old(2), _old(3), _old(4)]
+
+    plan = _plan(
+        [
+            {"old": 1, "op": "drop", "same_as": 2},
+            {"old": 3, "op": "drop", "same_as": "旧4"},
+            {"old": 4, "op": "drop", "reason": "了结", "line": 1},
+            {"old": 2, "op": "drop", "same_as": 2},
+        ],
+        base,
+    )
+
+    assert [(item.line.id, item.lasting) for item in plan.kept] == [(2, True)]
+    assert [(change.action, change.what) for change in plan.changes] == [
+        ("drop", "旧事4"),
+        ("refused", "旧事2"),
+        ("drop", "旧事1"),
+        ("drop", "旧事3"),
+    ]
+    assert plan.changes[3].reason == "与旧4重复（旧4本场已被替换或去掉）"
+
+
 def test_unknown_numbers_repeated_rows_and_unknown_ops_are_refused() -> None:
     """认不出的编号、同一行第二个操作、看不懂的操作都不采纳，旧行照留。"""
     base = [_old(1)]
@@ -180,17 +205,30 @@ def test_over_the_cap_the_least_recently_mentioned_go_first_and_stable_facts_sta
     assert [change.what for change in selection.evicted] == [f"旧事{index}" for index in range(4, 9)]
 
 
-def test_stable_facts_take_at_most_six_rows_and_the_rest_compete_by_recency() -> None:
-    """稳定的事至多先占 6 行（最近被提起的先占），多出来的与其余行一起按最近被提起排；
-    本场新事比它们都新，超过上限的新事写成本场档案行但不进快照。"""
+def test_stable_facts_outrank_recent_odds_and_ends_and_overflow_competes_by_recency() -> None:
+    """11 件稳定的事、2 件本场新事、1 件上一场刚记的零碎进展：稳定的事先占 8 行（最近被提起的先占），
+    再放本场新事，再放多出来的稳定的事；零碎进展哪怕最近也排在最后被挤出，多出来的稳定的事里
+    最久没被再提的那件也挤出。"""
+    stable = [_old(index, lasting=True, seen=index * 100) for index in range(1, 12)]
+    recent_odds = _old(99, seen=8_000)
+
+    selection = select_snapshot(_new(2), [*stable, recent_odds], session_started_at_ms=_NOW)
+
+    assert [line.in_snapshot for line in selection.lines] == [True, True]
+    assert sorted(item.archive_line_id for item in selection.kept) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    assert [change.what for change in selection.evicted] == ["旧事1", "旧事99"]
+    assert MAX_LASTING_LINES == 8
+
+
+def test_new_events_beyond_room_stay_out_of_the_snapshot() -> None:
+    """8 件稳定的事占满 8 行后，本场 8 件新事只放得下 4 件：后面 4 件写成本场档案行但不进快照。"""
     stable = [_old(index, lasting=True, seen=index * 100) for index in range(1, 9)]
 
     selection = select_snapshot(_new(8), stable, session_started_at_ms=_NOW)
 
-    assert [item.archive_line_id for item in selection.kept] == [3, 4, 5, 6, 7, 8]
-    assert len(selection.kept) == MAX_LASTING_LINES
-    assert [line.in_snapshot for line in selection.lines] == [True] * 6 + [False] * 2
-    assert [change.what for change in selection.evicted] == ["新事506", "新事507", "旧事1", "旧事2"]
+    assert [item.archive_line_id for item in selection.kept] == list(range(1, 9))
+    assert [line.in_snapshot for line in selection.lines] == [True] * 4 + [False] * 4
+    assert [change.what for change in selection.evicted] == ["新事504", "新事505", "新事506", "新事507"]
 
 
 # ---------------------------------------------------------------------------
