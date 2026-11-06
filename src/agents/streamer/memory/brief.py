@@ -6,7 +6,8 @@
 正式场接正式场，调试场不会被当成正式直播的上一场；时长太短的场次（开错后马上重开的
 那一小段）也不算上一场，往前找，它登记的承诺照常进承诺段。本场台词已经点名用过的
 承诺不再进简报（与线索卡的"用上即停"同口径）：一件事一场提一次就够，不然她每个
-决策窗都看到它，会一整场围着它转。
+决策窗都看到它，会一整场围着它转。点名用过的档案行留着、末尾标"（本场已提过）"：
+档案行是她知道的事实，撤掉她会在同一场里忘掉刚说过的名字和住处。
 
 分存档的游戏（工具面报得出眼下在哪个存档）：简报开头写明眼下在哪个存档，上一场在别的
 存档里做的事折成一行，没记存档的游戏行注明不确定（判定见 ``saves``）。
@@ -26,12 +27,18 @@ from src.modules.storage.models.memory import ArchiveLine, Commitment
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
-from .render import MAX_BRIEF_COMMITMENTS, memory_ref_numbers, render_brief
+from .render import (
+    MAX_BRIEF_COMMITMENTS,
+    brief_archive_ids,
+    memory_ref_archive_numbers,
+    memory_ref_numbers,
+    render_brief,
+)
 
 if TYPE_CHECKING:
     from src.modules.storage.repos import ArchiveRepo, ChatRepo, CommitmentRepo, EventRepo
 
-__all__ = ["MemoryBrief", "build_brief", "load_used_commitment_ids"]
+__all__ = ["MemoryBrief", "build_brief", "load_used_commitment_ids", "load_used_refs"]
 
 logger = get_logger("MemoryBrief")
 
@@ -41,7 +48,7 @@ _CANDIDATE_LIMIT = 200
 
 @dataclass(frozen=True)
 class MemoryBrief:
-    """常驻简报的成品：一段文本 + 其中的承诺编号（点名的合法名单之一）。
+    """常驻简报的成品：一段文本 + 其中的承诺与档案行编号（点名的合法名单之一）。
 
     ``previous_session_id`` / ``archive_line_count`` 只供观测（开播日志与测试核对
     "上一场是谁、带了几行档案"）；文本本身仍是唯一注入面。
@@ -49,6 +56,7 @@ class MemoryBrief:
 
     text: str = ""
     commitment_ids: Tuple[int, ...] = field(default_factory=tuple)
+    archive_ids: Tuple[int, ...] = field(default_factory=tuple)
     previous_session_id: Optional[int] = None
     archive_line_count: int = 0
 
@@ -68,13 +76,14 @@ async def build_brief(
 
     ``min_session_ms``：时长不到它的场次不当"上一场"（开错后马上重开的那一小段），往前找。
     ``chat_repo`` 与 ``live_session_id`` 都给了（正在直播）才做"用上即停"：本场台词点名过的
-    承诺不进这一份简报。``current_saves`` 是分存档的游戏眼下所在的存档；``event_repo`` 给了才查
+    承诺不进这一份简报，点名过的档案行标"（本场已提过）"。``current_saves`` 是分存档的游戏眼下所在的存档；``event_repo`` 给了才查
     "上一场玩这些游戏时记没记下存档"（没记下的块尾注一句）。
     """
     previous_session_id, archive_lines = await _archive_lines(archive_repo, kind, min_session_ms)
     used: Set[int] = set()
+    used_archive: Set[int] = set()
     if chat_repo is not None and live_session_id is not None:
-        used = await load_used_commitment_ids(chat_repo, int(live_session_id))
+        used, used_archive = await load_used_refs(chat_repo, int(live_session_id))
     taken, earlier = await _pending_commitments(commitments_repo, used)
     saves = dict(current_saves or {})
     text = render_brief(
@@ -84,10 +93,12 @@ async def build_brief(
         earlier_commitment_count=earlier,
         current_saves=saves,
         unsaved_games=await _unsaved_games(event_repo, previous_session_id, saves),
+        used_archive_ids=used_archive,
     )
     return MemoryBrief(
         text=text,
         commitment_ids=tuple(int(item.id) for item in taken),
+        archive_ids=tuple(brief_archive_ids(archive_lines, taken, saves)),
         previous_session_id=int(previous_session_id) if previous_session_id is not None else None,
         archive_line_count=len(archive_lines),
     )
@@ -129,15 +140,23 @@ async def load_used_commitment_ids(chat_repo: "ChatRepo", live_session_id: int) 
 
     常驻简报与线索推送共用这一份口径。读不到就当没用上：最多这一窗多列一次，不挡决策。
     """
+    commitments, _archive = await load_used_refs(chat_repo, live_session_id)
+    return commitments
+
+
+async def load_used_refs(chat_repo: "ChatRepo", live_session_id: int) -> Tuple[Set[int], Set[int]]:
+    """本场台词已经点名引用过的（承诺编号, 档案行编号）；读不到就当都没用上。"""
     try:
         raw_rows = await chat_repo.list_session_memory_refs(live_session_id=int(live_session_id))
     except Exception as exc:  # noqa: BLE001 - 查不到就当没用上，最多多提一次
         logger.warning(f"读本场记忆引用失败（这一次不做用上即停）: {exc}", exc=exc)
-        return set()
-    used: Set[int] = set()
+        return set(), set()
+    commitments: Set[int] = set()
+    archive: Set[int] = set()
     for raw in raw_rows:
-        used.update(memory_ref_numbers(raw))
-    return used
+        commitments.update(memory_ref_numbers(raw))
+        archive.update(memory_ref_archive_numbers(raw))
+    return commitments, archive
 
 
 async def _pending_commitments(

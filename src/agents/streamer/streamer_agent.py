@@ -361,7 +361,9 @@ class StreamerAgent(BaseAgent):
                 elapsed_live_provider=self._rundown_coord.get_elapsed_live_ms,
                 brief_provider=lambda: self._memory_brief_text,
                 brief_ids_provider=lambda: self._memory_brief_ids,
+                brief_archive_ids_provider=lambda: self._memory_brief_archive_ids,
                 commitment_lookup=self._lookup_commitment,
+                archive_lookup=self._lookup_archive_line,
                 memory_cues_provider=self._collect_memory_cues,
                 open_games_provider=self._playing_games,
                 action_recorder=self._record_delegation,
@@ -487,6 +489,8 @@ class StreamerAgent(BaseAgent):
         # 常驻简报：按"上一场的档案 + 不针对人的未了结承诺"渲染，每窗按表快照重渲
         self._memory_brief_text: str = ""
         self._memory_brief_ids: tuple[int, ...] = ()
+        # 常驻简报里标着编号的档案行（点名档案行的合法名单之一）
+        self._memory_brief_archive_ids: tuple[int, ...] = ()
         # 线索推送：每批按弹幕与开着的游戏算"这一批想起来的事"；状态只活在本场
         self._memory_cues: Optional[MemoryCueProvider] = None
         if commitments_repo is not None and chat_repo is not None:
@@ -1330,6 +1334,11 @@ class StreamerAgent(BaseAgent):
         """常驻简报里出现的承诺编号（Planner 点名的合法名单之一，观测与测试用）。"""
         return self._memory_brief_ids
 
+    @property
+    def memory_brief_archive_ids(self) -> Tuple[int, ...]:
+        """常驻简报里标着编号的档案行（Planner 点名的合法名单之一，观测与测试用）。"""
+        return self._memory_brief_archive_ids
+
     def _current_session_pk(self) -> Optional[int]:
         """进行中场次主键；收播道别那一轮取正在结束的那一场（无场次管理器或未开播为 None）。
 
@@ -1480,6 +1489,7 @@ class StreamerAgent(BaseAgent):
         if self._commitments_repo is None or self._archive_repo is None:
             self._memory_brief_text = ""
             self._memory_brief_ids = ()
+            self._memory_brief_archive_ids = ()
             return
         resolved_kind = kind if kind is not None else self._current_session_kind()
         try:
@@ -1499,9 +1509,11 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"拼常驻简报失败（本场省略简报段）: {exc}", exc=exc)
             self._memory_brief_text = ""
             self._memory_brief_ids = ()
+            self._memory_brief_archive_ids = ()
             return
         self._memory_brief_text = brief.text
         self._memory_brief_ids = brief.commitment_ids
+        self._memory_brief_archive_ids = brief.archive_ids
         if announce:
             await self._log_brief_summary(brief)
 
@@ -1534,6 +1546,13 @@ class StreamerAgent(BaseAgent):
         if self._commitments_repo is None:
             return None
         return await self._commitments_repo.get_commitment(commitment_id=int(commitment_id))
+
+    async def _lookup_archive_line(self, line_id: int) -> Any:
+        """按编号取一行档案（Planner 点名后渲染说话档用）；取不到返回 None。"""
+        if self._archive_repo is None:
+            return None
+        lines = await self._archive_repo.list_lines_by_ids(line_ids=[int(line_id)])
+        return lines[0] if lines else None
 
     async def _collect_memory_cues(self, batch: List[Any], open_games: Sequence[str]) -> Any:
         """本批线索：承诺卡、老观众在场一行、回执行；没启用线索推送时返回 None。"""

@@ -1,5 +1,6 @@
 """Planner ReAct 循环：工具列表、reply 收尾 / 自然终止 / 超步、registry 路由与观察回灌、降级、上下文与记忆、消息构成"""
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,7 +10,7 @@ from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GameEventBatch
 from src.modules.llm.payload import Response, ToolCall
-from src.modules.storage.models.memory import Commitment
+from src.modules.storage.models.memory import ArchiveLine, Commitment
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
@@ -57,6 +58,9 @@ def _make_planner(
     brief_provider: Any | None = None,
     brief_ids_provider: Any | None = None,
     commitment_lookup: Any | None = None,
+    brief_archive_ids_provider: Any | None = None,
+    archive_lookup: Any | None = None,
+    memory_cues_provider: Any | None = None,
 ) -> tuple[Planner, MagicMock, MagicMock]:
     """mock LLM（generate）+ mock prompt_service；缺省真注册表 + 注册成功的 reply（reply 经 registry.invoke）。"""
     llm = MagicMock()
@@ -86,6 +90,9 @@ def _make_planner(
             brief_provider=brief_provider,
             brief_ids_provider=brief_ids_provider,
             commitment_lookup=commitment_lookup,
+            brief_archive_ids_provider=brief_archive_ids_provider,
+            archive_lookup=archive_lookup,
+            memory_cues_provider=memory_cues_provider,
         ),
     )
     return planner, llm, prompt
@@ -439,14 +446,14 @@ async def test_use_memory_accepts_single_item_list_and_renders_spoken_form() -> 
 
     outcome = await planner.plan([_msg()])
 
-    assert outcome.replied is True and outcome.memory_refs == [7]
+    assert outcome.replied is True and outcome.memory_refs == ["约#7"]
     attachment = provider.invoke.await_args.args[0].attachment
     assert "讲完鬼故事的结局" in attachment.remembered
     assert "约#7" not in attachment.remembered, "说话档不带编号"
 
 
 async def test_use_memory_rejects_archive_prefix_and_multi_values(loguru_capture: Any) -> None:
-    """档#7 是档案行编号，不能借承诺 7 的编号混进来；一次只能点名一条。"""
+    """档#7 是档案行编号，不能借承诺 7 的编号混进来；认不出的前缀不猜；一次只能点名一条。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
     commitments = {7: _commitment(), 8: _commitment(8)}
@@ -456,6 +463,7 @@ async def test_use_memory_rejects_archive_prefix_and_multi_values(loguru_capture
 
     responses = [
         *_reply_with_memory("档#7"),
+        *_reply_with_memory("话#7"),
         *_reply_with_memory(["约#7", "约#8"]),
         *_reply_with_memory(42),
     ]
@@ -467,11 +475,62 @@ async def test_use_memory_rejects_archive_prefix_and_multi_values(loguru_capture
         commitment_lookup=lookup,
     )
 
-    for _index in range(3):
+    for _index in range(4):
         outcome = await planner.plan([_msg()])
         assert outcome.memory_refs == []
 
     messages = [record["message"] for record in loguru_capture.records]
-    assert any("认不出" in message and "档#7" in message for message in messages)
+    assert any("档案行编号 7 不在本窗" in message for message in messages)
+    assert any("认不出" in message and "话#7" in message for message in messages)
     assert any("一次只能点名一条" in message for message in messages)
     assert any("类型认不出" in message for message in messages)
+
+
+_ARCHIVE_LINE = ArchiveLine(
+    id=41, live_session_id=3, text="Minecraft：女仆取名团子", quote="就叫团子", evidence_chat_id=5
+)
+
+
+async def _archive_lookup(line_id: int) -> Any:
+    return _ARCHIVE_LINE if line_id == _ARCHIVE_LINE.id else None
+
+
+async def test_use_memory_accepts_archive_line_in_the_brief() -> None:
+    """简报里标着 档#41 的行能点名：台词拿到这一行的标题（不带编号），编号写法随台词回传。"""
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    planner, _llm, _prompt = _make_planner(
+        _reply_with_memory("档#41"),
+        reply_provider=provider,
+        brief_archive_ids_provider=lambda: [41],
+        archive_lookup=_archive_lookup,
+    )
+
+    outcome = await planner.plan([_msg()])
+
+    assert outcome.replied is True and outcome.memory_refs == ["档#41"]
+    attachment = provider.invoke.await_args.args[0].attachment
+    assert "女仆取名团子" in attachment.remembered
+    assert "档#41" not in attachment.remembered and "就叫团子" not in attachment.remembered
+
+
+async def test_use_memory_accepts_archive_line_from_this_batch_cards() -> None:
+    """本批线索卡带来的档案行也能点名；不在简报也不在卡片里的编号按没填处理。"""
+    cues = SimpleNamespace(text="【这一批想起来的事】\n- [档#41] 女仆取名团子", archive_ids=(41,), labels={})
+
+    async def cues_provider(batch: Any, open_games: Any) -> Any:
+        return cues
+
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    planner, _llm, _prompt = _make_planner(
+        [*_reply_with_memory("档#41"), *_reply_with_memory("档#41")],
+        reply_provider=provider,
+        archive_lookup=_archive_lookup,
+        memory_cues_provider=cues_provider,
+    )
+
+    assert (await planner.plan([_msg()])).memory_refs == ["档#41"]
+
+    cues = SimpleNamespace(text="", archive_ids=(), labels={})
+    assert (await planner.plan([_msg(mid="m2")])).memory_refs == [], "下一批没有这张卡、简报也没列，不认"

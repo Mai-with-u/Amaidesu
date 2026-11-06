@@ -310,6 +310,40 @@ async def test_brief_drops_commitment_once_cited_in_this_session(store: SQLiteDa
     assert "下次接着救" in agent.memory_brief_text
 
 
+async def test_brief_marks_archive_line_cited_this_session(store: SQLiteDatabase) -> None:
+    """本场她点名提过的档案行留在简报里、末尾标"（本场已提过）"，编号仍可点名；没在直播时不标。"""
+    previous = await _ended_session(store, started=1_000)
+    cited = await store.archive.insert_line(
+        live_session_id=previous, text="Minecraft：女仆取名团子", quote="就叫团子", evidence_chat_id=1
+    )
+    other = await store.archive.insert_line(
+        live_session_id=previous, text="Minecraft：水车搭好了", quote="水车搭好啦", evidence_chat_id=2
+    )
+    assert cited is not None and other is not None
+    current = await store.sessions.insert_live_session(stream_id="room", platform="bilibili", started_at_ms=5_000_000)
+    session = ActiveSessionStub(active_pk=current)
+    agent = _build_agent(store, FakeLLMManager(), session_manager=session)
+    await store.chat.insert_live_chat(
+        live_session_id=current,
+        timestamp_ms=5_000_100,
+        sender_role="assistant",
+        content="团子今天也很乖",
+        message_type="speak",
+        utterance_id="utt_tuanzi",
+        memory_refs=f'["档#{cited}"]',
+    )
+
+    await agent._refresh_memory_brief()
+
+    brief = agent.memory_brief_text
+    assert f"- [档#{cited}] Minecraft：女仆取名团子（你说过「就叫团子」）（本场已提过）" in brief
+    assert f"- [档#{other}] Minecraft：水车搭好了（你说过「水车搭好啦」）\n" in brief + "\n"
+    assert set(agent.memory_brief_archive_ids) == {cited, other}
+    session.active_pk = None
+    await agent._refresh_memory_brief()
+    assert "（本场已提过）" not in agent.memory_brief_text
+
+
 async def test_brief_skips_false_start_session_but_keeps_its_commitment(store: SQLiteDatabase) -> None:
     """开错后马上重开：那一小段（1.5 分钟）也整理出了档案行和一条承诺。简报的"上一场"跳过它、
     取前面正经的那一场；它登记的承诺照常列着，时间词按"之前"写（不是简报里的那个上一场）。"""
@@ -544,4 +578,4 @@ async def test_brief_follows_the_save_the_game_reports(store: SQLiteDatabase) ->
     game.save = GameSave(id="a", name="老档")
     agent._sync_current_saves()
     await agent._refresh_memory_brief()
-    assert "- Minecraft：屋顶封好了（你说过「屋顶终于封好了」）" in agent.memory_brief_text
+    assert "] Minecraft：屋顶封好了（你说过「屋顶终于封好了」）" in agent.memory_brief_text

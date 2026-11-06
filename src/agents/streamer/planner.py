@@ -44,7 +44,12 @@ from pydantic import Field
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
 from src.agents.streamer.delegation_workbench import DelegationWorkbench, observation_data
-from src.agents.streamer.memory.render import memory_ref_numbers, render_spoken_memory
+from src.agents.streamer.memory.render import (
+    render_archive_number,
+    render_commitment_number,
+    render_spoken_archive,
+    render_spoken_memory,
+)
 from src.agents.streamer.persona_rules import boundaries_line
 from src.agents.streamer.plan import ReplyRoundAttachment, assistant_speech_lines
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
@@ -111,23 +116,28 @@ class PlannerConfig(BaseConfig):
     cold_silence_ms: int = Field(default=45_000, ge=0, title="冷场提示阈值（毫秒）")
 
 
-def _parse_commitment_ref(raw: Any) -> Optional[int]:
-    """点名编号解析：接受"约#7""#7""7"三种写法，其余返回 None。
+# 点名编号的两类：承诺（约#7）与档案行（档#41）——两个编号空间，同号不同义
+MEMORY_REF_COMMITMENT = "commitment"
+MEMORY_REF_ARCHIVE = "archive"
 
-    "档#41"是档案行编号，和承诺编号是两个空间，同号不同义，不能当成承诺 41。
-    """
+
+def _parse_memory_ref(raw: Any) -> Optional[Tuple[str, int]]:
+    """点名编号解析：承诺接受"约#7""#7""7"三种写法，档案行只认"档#41"；其余返回 None。"""
     if not isinstance(raw, str):
         return None
     text = raw.strip()
     if not text:
         return None
+    kind = MEMORY_REF_COMMITMENT
     if "#" in text:
         head, _sep, tail = text.rpartition("#")
-        if head.strip():
-            refs = memory_ref_numbers(json.dumps([text], ensure_ascii=False))
-            return int(next(iter(refs))) if len(refs) == 1 else None
+        head = head.strip()
+        if head.startswith("档"):
+            kind = MEMORY_REF_ARCHIVE
+        elif head and not head.startswith("约"):
+            return None
         text = tail.strip()
-    return int(text) if text.isdigit() else None
+    return (kind, int(text)) if text.isdigit() else None
 
 
 def _single_memory_ref(raw: Any, *, logger: Any) -> Optional[str]:
@@ -188,8 +198,8 @@ class RoundOutcome:
     reply_duration_ms: int = 0
     reply_failures: int = 0
     speech_gate_bounces: int = 0
-    # 本轮点名的旧事编号（随 streamer.speech 落库，供"用上即停"与复盘核对）
-    memory_refs: List[int] = field(default_factory=list)
+    # 本轮点名的旧事编号（写法如 约#7、档#41；随 streamer.speech 落库，供"用上即停"与复盘核对）
+    memory_refs: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -210,8 +220,12 @@ class PlannerEnv:
     brief_provider: Optional[Callable[[], str]] = None
     # 常驻简报里出现的承诺编号（点名校验的合法名单之一）
     brief_ids_provider: Optional[Callable[[], Sequence[int]]] = None
+    # 常驻简报里标着编号的档案行（点名校验的合法名单之一）
+    brief_archive_ids_provider: Optional[Callable[[], Sequence[int]]] = None
     # 按编号取承诺（点名之后渲染说话档用；异步）
     commitment_lookup: Optional[Callable[[int], Any]] = None
+    # 按编号取档案行（点名之后渲染说话档用；异步）
+    archive_lookup: Optional[Callable[[int], Any]] = None
     # 线索推送：按本批弹幕与当前开着的游戏算这一批想起来的事（异步）
     memory_cues_provider: Optional[Callable[[List[Any], Sequence[str]], Any]] = None
     # 已启用的游戏工具面（提示行只在这些游戏里取承诺卡；不表示主播正在玩哪一个）
@@ -353,11 +367,15 @@ class Planner:
         self._brief_provider = env.brief_provider if env else None
         self._brief_ids_provider = env.brief_ids_provider if env else None
         self._commitment_lookup = env.commitment_lookup if env else None
+        self._brief_archive_ids_provider = env.brief_archive_ids_provider if env else None
+        self._archive_lookup = env.archive_lookup if env else None
         self._memory_cues_provider = env.memory_cues_provider if env else None
         self._open_games_provider = env.open_games_provider if env else None
 
         # 本窗合法的点名编号与卡片称呼（每窗在 plan() 入口重算，这里给默认值）
         self._round_memory_ids: Set[int] = set()
+        # 本窗能点名的档案行：常驻简报里标着编号的加本批卡片里的
+        self._round_archive_ids: Set[int] = set()
         self._memory_labels: Dict[int, str] = {}
 
         self._assembler = PlannerAssembler()
@@ -489,6 +507,7 @@ class Planner:
         # 线索推送每批评一次：卡片与提示行进参考段，编号进本窗合法点名名单
         memory_cues = await self._collect_memory_cues(batch)
         self._round_memory_ids = self._round_commitment_ids(memory_cues)
+        self._round_archive_ids = self._round_archive_line_ids(memory_cues)
         self._memory_labels = dict(getattr(memory_cues, "labels", {}) or {})
 
         # 决策前自动读一次配置的只读参考工具（如游戏现场速览）：结果直接进参考段，
@@ -647,22 +666,24 @@ class Planner:
         # 超步：未完成说话即收场（压住过一句又没再开口时记成 reply_held）
         return replace(outcome, silent_reason="reply_held" if held_once else "max_steps")
 
-    async def _resolve_use_memory(self, args: Dict[str, Any]) -> Tuple[str, List[int]]:
+    async def _resolve_use_memory(self, args: Dict[str, Any]) -> Tuple[str, List[str]]:
         """解析 reply 的 use_memory：编号在本窗名单内才认，渲染成说话档交表达侧。
 
-        返回（说话档文本, 编号列表）。编号不在本窗常驻简报或本批卡片里、取不到那条承诺、
-        或没注入承诺查询时一律按没填处理并记日志——点名不打回，最多这句没用上旧事。
+        返回（说话档文本, 编号写法列表）。编号不在本窗常驻简报或本批卡片里、取不到那一条、
+        或没注入对应查询时一律按没填处理并记日志——点名不打回，最多这句没用上旧事。
         """
         raw = args.get("use_memory")
         ref_text = _single_memory_ref(raw, logger=self.logger)
         if ref_text is None:
             return "", []
-        commitment_id = _parse_commitment_ref(ref_text)
-        if commitment_id is None:
-            self.logger.warning(
-                f"use_memory 的编号认不出（{ref_text!r}）：只认 约#N / #N / N，档#N 是档案行编号不能点名"
-            )
+        parsed = _parse_memory_ref(ref_text)
+        if parsed is None:
+            self.logger.warning(f"use_memory 的编号认不出（{ref_text!r}）：只认 约#N / #N / N 与 档#N")
             return "", []
+        kind, number = parsed
+        if kind == MEMORY_REF_ARCHIVE:
+            return await self._resolve_archive_ref(number)
+        commitment_id = number
         if commitment_id not in self._round_memory_ids:
             self.logger.info(f"use_memory 的编号 {commitment_id} 不在本窗简报或卡片里，忽略")
             return "", []
@@ -679,7 +700,26 @@ class Planner:
             return "", []
         label = self._memory_labels.get(commitment_id) or "大家"
         spoken = render_spoken_memory(target_label=label, commitment=commitment)
-        return spoken, [commitment_id]
+        return spoken, [render_commitment_number(commitment_id)]
+
+    async def _resolve_archive_ref(self, line_id: int) -> Tuple[str, List[str]]:
+        """点名一行档案：在本窗名单里、取得到这一行，台词拿到它的标题（不带编号与原话）。"""
+        if line_id not in self._round_archive_ids:
+            self.logger.info(f"use_memory 的档案行编号 {line_id} 不在本窗简报或卡片里，忽略")
+            return "", []
+        if self._archive_lookup is None:
+            self.logger.debug("未注入档案行查询，use_memory 忽略")
+            return "", []
+        try:
+            line = await self._archive_lookup(line_id)
+        except Exception as exc:  # noqa: BLE001 - 取不到就当没填，台词照常生成
+            self.logger.warning(f"取档案行 {line_id} 失败，本轮不用旧事: {exc}", exc=True)
+            return "", []
+        if line is None:
+            self.logger.info(f"档案行 {line_id} 不在了，use_memory 忽略")
+            return "", []
+        spoken = render_spoken_archive(line)
+        return (spoken, [render_archive_number(line_id)]) if spoken else ("", [])
 
     # ==================== 提示词与上下文 ====================
 
@@ -768,6 +808,18 @@ class Planner:
             except Exception as exc:
                 self.logger.warning(f"读常驻简报的承诺编号失败（本窗只能点名本批卡片）: {exc}", exc=True)
         card_ids = getattr(cues, "commitment_ids", ()) if cues is not None else ()
+        ids.update(int(item) for item in card_ids)
+        return ids
+
+    def _round_archive_line_ids(self, cues: Any) -> Set[int]:
+        """本窗合法的档案行点名编号：常驻简报里标着编号的加本批卡片里的。"""
+        ids: Set[int] = set()
+        if self._brief_archive_ids_provider is not None:
+            try:
+                ids.update(int(item) for item in self._brief_archive_ids_provider() or ())
+            except Exception as exc:
+                self.logger.warning(f"读常驻简报的档案行编号失败（本窗只能点名本批卡片）: {exc}", exc=True)
+        card_ids = getattr(cues, "archive_ids", ()) if cues is not None else ()
         ids.update(int(item) for item in card_ids)
         return ids
 

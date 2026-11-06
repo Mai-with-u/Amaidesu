@@ -11,6 +11,10 @@ from src.agents.streamer.memory.render import (
     MAX_BRIEF_COMMITMENTS,
     MAX_PRESENCE_VIEWERS,
     PRESENCE_RECENT_MS,
+    brief_archive_ids,
+    format_memory_refs,
+    memory_ref_archive_numbers,
+    memory_ref_numbers,
     render_archive_block,
     render_archive_number,
     render_brief,
@@ -21,6 +25,7 @@ from src.agents.streamer.memory.render import (
     render_game_card,
     render_presence_line,
     render_retract_notice,
+    render_spoken_archive,
     render_spoken_memory,
     render_viewer_card,
 )
@@ -78,8 +83,36 @@ def test_archive_block_renders_title_and_quote_and_caps_lines() -> None:
     ]
     rendered = render_archive_block(lines)
     assert len(rendered) == MAX_BRIEF_ARCHIVE_LINES == 12, "一份滚动档案至多 12 行，简报照这个数列"
-    assert rendered[0] == "- 第 1 条（你说过「原话」）", "档案行不带编号：点名只认承诺编号"
+    assert rendered[0] == "- [档#1] 第 1 条（你说过「原话」）", "档案行带编号：要提这件事就点名"
     assert render_archive_block([_archive(text="", quote="")]) == []
+
+
+def test_archive_block_marks_lines_cited_this_session_and_keeps_them() -> None:
+    """本场点名用过的档案行留着、末尾标"（本场已提过）"：她知道的事实不能一场里忘掉。"""
+    lines = [_archive(line_id=41), _archive(line_id=42, text="Minecraft：女仆取名团子", quote="")]
+
+    rendered = render_archive_block(lines, used_ids={41})
+
+    assert rendered == [
+        "- [档#41] Minecraft：水车搭好了（你说过「水车搭好啦」）（本场已提过）",
+        "- [档#42] Minecraft：女仆取名团子",
+    ]
+
+
+def test_memory_refs_keep_commitment_and_archive_numbers_apart() -> None:
+    """记忆引用里约#与档#是两个编号空间，同号不同义。"""
+    raw = '["约#7", "档#41", "档#7", "乱写#3"]'
+    assert memory_ref_numbers(raw) == {7}
+    assert memory_ref_archive_numbers(raw) == {41, 7}
+    assert memory_ref_archive_numbers(format_memory_refs([5])) == set()
+    assert memory_ref_archive_numbers("不是 JSON") == set()
+
+
+def test_spoken_archive_gives_title_only() -> None:
+    """说话档只给标题：不带编号，不带原话（原话是 Planner 对口径用的）。"""
+    spoken = render_spoken_archive(_archive())
+    assert "水车搭好了" in spoken and "档#" not in spoken and "水车搭好啦" not in spoken
+    assert render_spoken_archive(_archive(text=" ")) == ""
 
 
 def test_brief_has_archive_section_and_commitment_section() -> None:
@@ -90,7 +123,7 @@ def test_brief_has_archive_section_and_commitment_section() -> None:
     )
     assert brief.startswith("# 她记得的事")
     assert "上一场：" in brief
-    assert "- Minecraft：水车搭好了（你说过「水车搭好啦」）" in brief and "档#" not in brief
+    assert "- [档#41] Minecraft：水车搭好了（你说过「水车搭好啦」）" in brief
     assert "还没兑现、你当众说过的事：" in brief
     assert "[约#5] 「等我把城堡屋顶盖完，第一个请大家来参观」（上一场）" in brief
 
@@ -107,11 +140,11 @@ def test_brief_splits_snapshot_into_previous_and_earlier_blocks() -> None:
     brief = render_brief(archive_lines=lines, previous_session_id=9)
 
     assert (
-        "上一场：\n- Minecraft：炉子点火烤海带（你说过「炉子点上火了」）\n"
-        "之前：\n- Minecraft：女仆取名团子（你说过「就叫团子」）"
+        "上一场：\n- [档#1] Minecraft：炉子点火烤海带（你说过「炉子点上火了」）\n"
+        "之前：\n- [档#2] Minecraft：女仆取名团子（你说过「就叫团子」）"
     ) in brief
     only_earlier = render_brief(archive_lines=lines[1:], previous_session_id=9)
-    assert "上一场：" not in only_earlier and "之前：\n- Minecraft：女仆取名团子" in only_earlier
+    assert "上一场：" not in only_earlier and "之前：\n- [档#2] Minecraft：女仆取名团子" in only_earlier
 
 
 def test_brief_lists_one_thing_once_when_archive_and_commitment_share_a_line() -> None:
@@ -135,6 +168,7 @@ def test_brief_lists_one_thing_once_when_archive_and_commitment_share_a_line() -
     assert "墓碑女仆救援留待下次" not in brief
     assert "墓碑归属悬念未解" in brief
     assert brief.count("下次接着救") == 1
+    assert brief_archive_ids([same_line, other_line], [promise]) == [2], "没列出的行不能点名"
 
 
 def test_brief_caps_commitments_and_points_to_recall_tool() -> None:
@@ -265,14 +299,17 @@ def test_brief_folds_other_save_lines_and_marks_unsure_ones() -> None:
         "眼下 minecraft 开着存档「新档」。",
         "上一场：",
         "- 还在 minecraft「老档」里做过 2 件事（现在开着「新档」，那边的建筑和进度这里没有；要细节用 memory_recall 查）",
-        "- 猜谜环节",
-        "- Minecraft：出生点旁边有村子",
-        "- Minecraft：挖到钻石（不确定是 minecraft 哪个存档里的事）",
+        "- [档#2] 猜谜环节",
+        "- [档#4] Minecraft：出生点旁边有村子",
+        "- [档#5] Minecraft：挖到钻石（不确定是 minecraft 哪个存档里的事）",
     ]
+    # 折起来的老档行不带编号，也不在点名名单里
+    assert brief_archive_ids(lines, current_saves={"minecraft": GameSave(id="b", name="新档")}) == [2, 4, 5]
     # 不分存档时与原来逐字节相同
     assert render_brief(archive_lines=lines) == render_brief(archive_lines=lines, current_saves={})
     plain = render_brief(archive_lines=lines)
-    assert "- Minecraft：北边的桥修好了" in plain and "做过 2 件事" not in plain
+    assert "- [档#1] Minecraft：北边的桥修好了" in plain and "做过 2 件事" not in plain
+    assert brief_archive_ids(lines) == [1, 2, 3, 4, 5]
 
 
 def test_brief_before_entering_a_save_folds_every_saved_line_and_notes_unsaved_session() -> None:

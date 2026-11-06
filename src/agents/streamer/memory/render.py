@@ -4,7 +4,7 @@
 
 | 成分 | Planner 档 | 说话档（Replyer） |
 |---|---|---|
-| 编号 | 承诺有（约#7），用于点名；档案行不带（档#41 只在 WebUI 给运营者看） | 没有 |
+| 编号 | 承诺（约#7）与档案行（档#41）都有，用于点名；别的存档折成的一行不带 | 没有 |
 | 时间 | 跨场只用"上一场""之前" | 跨场只用"上次""之前" |
 | 内容 | 不针对具体观众的承诺给标题加原话；对某位观众的承诺只给动作标题；档案给标题加原话 | 承诺只给动作标题；档案只给标题 |
 
@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import AbstractSet, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.storage.models.memory import ArchiveLine, Commitment
 from src.modules.types.game_save import GameSave
@@ -28,7 +28,9 @@ from .saves import SavePlace, place_of
 
 __all__ = [
     "MAX_BRIEF_ARCHIVE_LINES",
+    "brief_archive_ids",
     "format_memory_refs",
+    "memory_ref_archive_numbers",
     "memory_ref_numbers",
     "MAX_BRIEF_COMMITMENTS",
     "MAX_PRESENCE_VIEWERS",
@@ -45,6 +47,7 @@ __all__ = [
     "render_presence_line",
     "render_retract_notice",
     "render_save_heads",
+    "render_spoken_archive",
     "render_spoken_memory",
     "render_viewer_card",
 ]
@@ -82,6 +85,8 @@ _SPOKEN_WHEN_EARLIER = "之前"
 # 档案行与承诺的编号前缀（与她"说过的话""答应过的事"对应）
 _ARCHIVE_PREFIX = "档"
 _COMMITMENT_PREFIX = "约"
+# 本场她已经点名用过的档案行：行留着（她知道的事实不能一场里忘掉），只提醒别再主动提
+_USED_THIS_SESSION = "（本场已提过）"
 
 
 def format_memory_refs(commitment_ids: Iterable[int]) -> str:
@@ -92,6 +97,16 @@ def format_memory_refs(commitment_ids: Iterable[int]) -> str:
 
 def memory_ref_numbers(memory_refs: Optional[str]) -> Set[int]:
     """记忆引用文本里的承诺编号（形如 ["约#7"]；取不出就空集）。"""
+    return _ref_numbers(memory_refs, _COMMITMENT_PREFIX)
+
+
+def memory_ref_archive_numbers(memory_refs: Optional[str]) -> Set[int]:
+    """记忆引用文本里的档案行编号（形如 ["档#41"]；取不出就空集）。"""
+    return _ref_numbers(memory_refs, _ARCHIVE_PREFIX)
+
+
+def _ref_numbers(memory_refs: Optional[str], prefix: str) -> Set[int]:
+    """记忆引用文本（JSON 字符串列表）里某一类编号。"""
     if not memory_refs:
         return set()
     try:
@@ -105,7 +120,7 @@ def memory_ref_numbers(memory_refs: Optional[str]) -> Set[int]:
         if not isinstance(ref, str):
             continue
         head, _sep, tail = ref.partition("#")
-        if head.strip().startswith(_COMMITMENT_PREFIX) and tail.strip().isdigit():
+        if head.strip().startswith(prefix) and tail.strip().isdigit():
             numbers.add(int(tail.strip()))
     return numbers
 
@@ -116,7 +131,7 @@ def render_commitment_number(commitment_id: int) -> str:
 
 
 def render_archive_number(archive_line_id: int) -> str:
-    """档案行编号的写法（档#41）：运营者在 WebUI 里认行用，不进提示词。"""
+    """档案行编号的写法（档#41）：简报与线索卡里标着，Planner 用它点名；说话档不用编号。"""
     return f"{_ARCHIVE_PREFIX}#{int(archive_line_id)}"
 
 
@@ -145,12 +160,15 @@ def render_commitment_text(
 
 
 def render_archive_block(
-    lines: Sequence[ArchiveLine], current_saves: Optional[Mapping[str, GameSave]] = None
+    lines: Sequence[ArchiveLine],
+    current_saves: Optional[Mapping[str, GameSave]] = None,
+    used_ids: AbstractSet[int] = frozenset(),
 ) -> List[str]:
-    """上一场档案渲染成简报行（标题、她的原话）。
+    """上一场档案渲染成简报行（档#N、标题、她的原话）。
 
-    不带档案行编号：点名（use_memory）只认承诺编号，简报里标着档#N 只会让 Planner 照抄去点名、
-    再被拒绝；上一场的经过要提就直接写进交接稿。
+    每行带档案行编号，要提这件事就把编号写进 use_memory 点名。本场她已经点名用过的行
+    （``used_ids``）留着、末尾标"（本场已提过）"：档案行是她知道的事实，撤掉她会在同一场里
+    忘掉刚说过的名字和住处；标注只提醒她别再主动提。标注只在某一行第一次被用上时改一次文本。
 
     按游戏眼下所在的存档分（``current_saves``）：别的存档里的事每个存档折成一行，只说做过几件、
     细节去回想里查——逐行列出来，她会当成眼前这个世界里的建筑和进度；没记下存档的游戏行照列，
@@ -182,9 +200,45 @@ def render_archive_block(
         notes = [f"你说过「{quote}」"] if quote else []
         if place is SavePlace.UNSURE:
             notes.append(f"不确定是 {line.game} 哪个存档里的事")
-        head = f"- {title}"
-        rendered.append(f"{head}（{'；'.join(notes)}）" if notes else head)
+        head = f"- [{render_archive_number(line.id)}] {title}"
+        text = f"{head}（{'；'.join(notes)}）" if notes else head
+        rendered.append(f"{text}{_USED_THIS_SESSION}" if int(line.id) in used_ids else text)
     return rendered
+
+
+def brief_archive_ids(
+    archive_lines: Sequence[ArchiveLine],
+    commitments: Sequence[Commitment] = (),
+    current_saves: Optional[Mapping[str, GameSave]] = None,
+) -> List[int]:
+    """常驻简报里标着编号的档案行（Planner 点名的合法名单之一）：与 ``render_brief`` 同一口径。
+
+    别的存档里的行折成一行、不编号；和列出的承诺出自同一句台词的行不列。
+    """
+    current = current_saves or {}
+    return [
+        int(line.id)
+        for line in _shown_archive_lines(archive_lines, _listed_commitments(commitments))
+        if (line.text or "").strip() and place_of(line.game, line.save_id, current) is not SavePlace.OTHER
+    ]
+
+
+def _listed_commitments(commitments: Sequence[Commitment]) -> List[Commitment]:
+    """简报承诺段列出的那几条：至多 ``MAX_BRIEF_COMMITMENTS`` 条，没有标题的不列。"""
+    return [item for item in list(commitments)[:MAX_BRIEF_COMMITMENTS] if (item.what or "").strip()]
+
+
+def _shown_archive_lines(archive_lines: Sequence[ArchiveLine], listed: Sequence[Commitment]) -> List[ArchiveLine]:
+    """简报里列出的档案行：与列出的承诺出自同一句台词的只留承诺，至多 ``MAX_BRIEF_ARCHIVE_LINES`` 行。
+
+    同一件事在简报里出现两遍，她会当成两件事、一整场围着它转。
+    """
+    promised_lines = {int(item.evidence_chat_id) for item in listed if item.evidence_chat_id is not None}
+    return [
+        line
+        for line in archive_lines
+        if line.evidence_chat_id is None or int(line.evidence_chat_id) not in promised_lines
+    ][:MAX_BRIEF_ARCHIVE_LINES]
 
 
 def _is_from(line: ArchiveLine, archive_session: Optional[int]) -> bool:
@@ -222,6 +276,7 @@ def render_brief(
     earlier_commitment_count: int = 0,
     current_saves: Optional[Mapping[str, GameSave]] = None,
     unsaved_games: Sequence[str] = (),
+    used_archive_ids: AbstractSet[int] = frozenset(),
 ) -> str:
     """Planner 系统提示词末尾的常驻简报；两段都空时返回空串（整段省略）。
 
@@ -235,28 +290,22 @@ def render_brief(
 
     档案行来自上一场的快照：上一场新写的行列在"上一场："下，从之前几场接住、仍然成立的行
     列在"之前："下，按每行写在哪一场分（``previous_session_id`` 没给时取第一行的场次）。
+    ``used_archive_ids`` 是本场她已经点名用过的档案行，这些行末尾标"（本场已提过）"。
     """
     sections: List[str] = []
-    listed = [item for item in list(commitments)[:MAX_BRIEF_COMMITMENTS] if (item.what or "").strip()]
-    # 档案行与列出的承诺出自同一句台词时只留承诺那一条：同一件事在简报里出现两遍，
-    # 她会当成两件事、一整场围着它转
-    promised_lines = {int(item.evidence_chat_id) for item in listed if item.evidence_chat_id is not None}
-    shown_lines = [
-        line
-        for line in archive_lines
-        if line.evidence_chat_id is None or int(line.evidence_chat_id) not in promised_lines
-    ][:MAX_BRIEF_ARCHIVE_LINES]
+    listed = _listed_commitments(commitments)
+    shown_lines = _shown_archive_lines(archive_lines, listed)
     archive_session = previous_session_id
     if archive_session is None and shown_lines:
         archive_session = shown_lines[0].live_session_id
     recent = [line for line in shown_lines if _is_from(line, archive_session)]
     earlier = [line for line in shown_lines if not _is_from(line, archive_session)]
-    recent_block = [_WHEN_PREVIOUS_HEADER, *render_archive_block(recent, current_saves)]
+    recent_block = [_WHEN_PREVIOUS_HEADER, *render_archive_block(recent, current_saves, used_archive_ids)]
     # 上一场还没记存档的游戏：上一场那几行没标游戏的里可能有它的事，分不出是不是眼下这个世界
     if len(recent_block) > 1 and unsaved_games and any(not line.game for line in recent):
         for game in unsaved_games:
             recent_block.append(f"（那场玩 {game} 时还没记存档，上面游戏里的事未必是现在这个存档的）")
-    blocks = [recent_block, [_WHEN_EARLIER_HEADER, *render_archive_block(earlier, current_saves)]]
+    blocks = [recent_block, [_WHEN_EARLIER_HEADER, *render_archive_block(earlier, current_saves, used_archive_ids)]]
     sections.extend("\n".join(block) for block in blocks if len(block) > 1)
     pending: List[str] = []
     for commitment in listed:
@@ -383,6 +432,15 @@ def render_cue_block(
     if not body:
         return ""
     return _CUE_HEADER + "\n" + "\n".join(body)
+
+
+def render_spoken_archive(line: ArchiveLine, *, is_previous: bool = False) -> str:
+    """说话档：Planner 点名的那一行档案，交到 Replyer 手里（只给标题，不含编号与原话）。"""
+    title = (line.text or "").strip()
+    if not title:
+        return ""
+    when = _when_word(is_previous=is_previous, spoken=True)
+    return f"{_SPOKEN_HEADER}\n- {when}的事：{title}。"
 
 
 def render_spoken_memory(*, target_label: str, commitment: Commitment, is_previous: bool = False) -> str:
