@@ -31,6 +31,7 @@ scripts/memory_eval/
   viewer_candidates.py          观众候选评测的 dry / live 两个入口
   live_side_effects.py          直播库上复算唠叨指标（只读，只出编号和数字）与 `--selftest`
   review_diff.py                人工改动统计：整理写的档案被人改了多少（只读）与 `--selftest`
+  retrieval.py                  语义一路门槛核对：在真实库存下的向量上量原话命中与误推（只读）与 `--selftest`
   README.md                     本文件
 ```
 
@@ -355,6 +356,21 @@ uv run python scripts/memory_eval/live_side_effects.py --selftest
 ```bash
 uv run python scripts/memory_eval/review_diff.py <直播库副本>
 uv run python scripts/memory_eval/review_diff.py --selftest
+```
+
+## 语义门槛核对（retrieval.py）
+
+被动想起的语义一路要余弦过 `VECTOR_MIN_COSINE`（`src/agents/streamer/memory/passive.py`）才推。生产索引把档案行、承诺、她的台词、游戏事件的向量都存进了库，弹幕的查询向量不存；`--real` 只读打开一份直播库副本，不调嵌入服务，量三件事：
+
+- **原话命中**：每条档案行、承诺作证据的那句台词对它自己的余弦与排名（相当于"完整原话"一类，是上限）；
+- **她自己台词的误推**：其余台词对全部条目的最高余弦，按一组门槛算推出去的比例，以及误推 0.2%、2% 各要多高的门槛。这些台词里有一部分本来就在聊同一件事，量出来的是上界；
+- **游戏事件**：同样算一遍作参照；另列出这份库里推过的语义卡的余弦。
+
+换说法的查询（半截引用、谐音、拼音首字母、错别字、同义改写等九类）和日常弹幕负例要真调嵌入服务才能量，这份虚构评测集还没做；做之前门槛的取舍以 `--real` 的结果加测试直播的线索卡记录人工判断。输出只有分数与比例，报告不入库。
+
+```bash
+uv run python scripts/memory_eval/retrieval.py --real <直播库副本>
+uv run python scripts/memory_eval/retrieval.py --selftest
 ```
 
 ## 档案快照多场序列（archive_rolling.py）
