@@ -31,7 +31,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable, Iterable, List, Literal, Optional, Sequence, Set, Tuple
+from typing import Awaitable, Callable, Dict, Iterable, List, Literal, Optional, Sequence, Set, Tuple
 
 from src.modules.config.storage_schemas import DEFAULT_FORGET_PHRASES, DEFAULT_RETRACT_PHRASES
 from src.modules.logging import get_logger
@@ -244,6 +244,11 @@ class PrivacyService:
         self._state_lock = threading.Lock()
         # 本场发言过的不记录名单观众昵称（下播清空，落库前替换主播台词中的称呼）
         self._session_masked_names: Set[str] = set()
+        # 本场在公屏开过口的不记录名单玩家名（下播清空；她的台词与公屏话落库前换成"一位玩家"）
+        self._session_masked_player_names: Set[str] = set()
+        # 发"忘了我"时还没有玩家行的玩家（不记录名单摘要 → 发令时刻）：宽限期里撤回要认得出他。
+        # 只在内存里：进程重启后认不出，他就留在名单里（宁可多忘，不让别人删过的人借撤回恢复）
+        self._rowless_player_forgets: Dict[bytes, int] = {}
         # 本场触发过有效撤回的消息编号与发送者键，供稍后执行的 Planner 线索推送生成回执行
         self._session_retracted_msg_ids: Set[str] = set()
         self._session_retracted_senders: Set[Tuple[str, str, str]] = set()
@@ -360,18 +365,30 @@ class PrivacyService:
             with self._state_lock:
                 self._session_masked_names.add(text)
 
+    def add_masked_player_name(self, name: Optional[str]) -> None:
+        """把不记录名单玩家的名字加入本场遮名集合（2 字以上）：她之后的台词与公屏话里遮成"一位玩家"。"""
+        text = (name or "").strip()
+        if len(text) >= MIN_MASK_NAME_LEN:
+            with self._state_lock:
+                self._session_masked_player_names.add(text)
+
     def mask_speech(self, speech_text: str) -> str:
-        """主播台词落库前，将本场遮名集合里的昵称替换为"一位观众"。"""
+        """主播台词或她的公屏话落库前，把本场遮名集合里的观众昵称换成"一位观众"、玩家名换成"一位玩家"。"""
         with self._state_lock:
             names = list(self._session_masked_names)
-        if not names:
-            return speech_text
-        return mask_names_in_text(speech_text, names, replacement=MASKED_VIEWER_LABEL)
+            players = list(self._session_masked_player_names)
+        text = speech_text
+        if names:
+            text = mask_names_in_text(text, names, replacement=MASKED_VIEWER_LABEL)
+        if players:
+            text = mask_names_in_text(text, players, replacement=MASKED_PLAYER_LABEL)
+        return text
 
     def clear_session_masks(self) -> None:
         """下播时清空本场内存遮名集合与当场回执追踪。"""
         with self._state_lock:
             self._session_masked_names.clear()
+            self._session_masked_player_names.clear()
             self._session_retracted_msg_ids.clear()
             self._session_retracted_senders.clear()
             self._session_forget_senders.clear()
@@ -728,10 +745,13 @@ class PrivacyService:
                     " WHERE game = ? AND uuid = ?",
                     (at_ms, game, uuid),
                 )
-            # 她这一场之后的台词里再提到他，落库前也遮掉
-            self.add_masked_name(name)
+            # 她这一场之后的台词与公屏话里再提到他，落库前遮成"一位玩家"
+            self.add_masked_player_name(name)
             with self._state_lock:
                 self._forget_requests += 1
+                if marked.rowcount == 0:
+                    # 开口第一句就是"忘了我"：没有玩家行可以记时刻，记在内存里，宽限期内照样能撤回
+                    self._rowless_player_forgets[bytes(digest)] = at_ms
             logger.info("已受理游戏玩家的遗忘命令（立即停止记录，下播后或 24h 内删除）")
             return "forget_command", marked.rowcount > 0
         if self.is_retract_command(content):
@@ -741,19 +761,39 @@ class PrivacyService:
                     " WHERE game = ? AND uuid = ? AND forget_requested_at_ms IS NOT NULL",
                     (game, uuid),
                 )
-                if cur.rowcount > 0:
+                rowless = cur.rowcount == 0 and self._rowless_forget_pending(conn, bytes(digest), at_ms)
+                if cur.rowcount > 0 or rowless:
                     conn.execute("DELETE FROM forget_list WHERE id_hash = ?", (digest,))
-            if cur.rowcount > 0:
+            if cur.rowcount > 0 or rowless:
                 with self._state_lock:
                     self._retractions += 1
+                    self._rowless_player_forgets.pop(bytes(digest), None)
                 logger.info("游戏玩家在宽限期内撤回遗忘请求（恢复记录）")
                 return "retracted", False
         with self._manager.transaction() as conn:
             hit = conn.execute("SELECT 1 FROM forget_list WHERE id_hash = ?", (digest,)).fetchone() is not None
         if hit:
-            self.add_masked_name(name)
+            self.add_masked_player_name(name)
             return "forget_listed", False
         return "normal", False
+
+    def _rowless_forget_pending(self, conn: sqlite3.Connection, digest: bytes, now_ms: int) -> bool:
+        """没有玩家行的那位发过的"忘了我"还在宽限期里吗：发令后还没有场次下播、也没满 24 小时。
+
+        宽限期一过就不认（和有玩家行时到期删除同一个判据），名单里那一条从此留着。
+        """
+        with self._state_lock:
+            requested = self._rowless_player_forgets.get(digest)
+        if requested is None:
+            return False
+        ended = conn.execute(
+            "SELECT 1 FROM live_sessions WHERE ended_at_ms IS NOT NULL AND ended_at_ms >= ? LIMIT 1", (requested,)
+        ).fetchone()
+        if ended is not None or now_ms - requested >= GRACE_DELETE_MAX_MS:
+            with self._state_lock:
+                self._rowless_player_forgets.pop(digest, None)
+            return False
+        return True
 
     async def is_player_forgotten(self, *, game: str, uuid: str) -> bool:
         """某位游戏玩家的 UUID 是否在不记录名单里（删过、或他发过"忘了我"）：在的话他再出现也不记。"""
@@ -1028,11 +1068,23 @@ def _delete_player_rows(conn: sqlite3.Connection, *, player_id: int, secret_key:
         former = []
     names = {str(row["name"] or "").strip(), *(str(name).strip() for name in former if isinstance(name, str))}
     session_ids = _player_sessions(conn, player_id)
-    if session_ids:
-        for name in sorted((name for name in names if len(name) >= MIN_MASK_NAME_LEN), key=len, reverse=True):
+    for name in sorted((name for name in names if len(name) >= MIN_MASK_NAME_LEN), key=len, reverse=True):
+        if session_ids:
             _replace_nickname_in_sessions(conn, session_ids=session_ids, nickname=name, label=MASKED_PLAYER_LABEL)
+        # 她在公屏打出去的话：所有场次都换，不只他留过记录的那几场（她可能在他没开口的场次里点他的名）
+        _replace_name_in_her_game_chat(conn, nickname=name, label=MASKED_PLAYER_LABEL)
     conn.execute("DELETE FROM game_players WHERE id = ?", (player_id,))
     return True
+
+
+def _replace_name_in_her_game_chat(conn: sqlite3.Connection, *, nickname: str, label: str) -> None:
+    """把她所有公屏话里的这个名字换成代称（玩家说的那几行随玩家删除级联掉，不在这里）。"""
+    if not nickname or not table_exists(conn, "game_chat"):
+        return
+    conn.execute(
+        "UPDATE game_chat SET content = REPLACE(content, ?, ?) WHERE direction = 'streamer' AND content LIKE ?",
+        (nickname, label, f"%{nickname}%"),
+    )
 
 
 def _find_viewer_row(

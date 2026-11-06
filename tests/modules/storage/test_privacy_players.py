@@ -9,7 +9,7 @@ import pytest
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.game_chat import GameChatPayload
+from src.modules.events.payloads.game_chat import GameChatPayload, GameSelfChattedPayload
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.game_player_ledger import GamePlayerLedger
 from src.modules.storage.privacy import PrivacyService
@@ -204,4 +204,96 @@ async def test_forget_me_typed_in_game_chat_has_the_same_grace_and_takes_linked_
     assert await privacy.execute_due_forget_deletions(now_ms=7_100) == 1
     assert await store.game_players.get_player(player_id=ids["alex"]) is None
     assert await store.viewers.get_viewer(viewer_id=viewer.viewer_id) is None, "确认过的关联观众一起删"
+    assert await privacy.is_player_forgotten(game="minecraft", uuid=_ALEX) is True
+
+
+async def _she_types(bus: EventBus, session_id: int, message: str, at_ms: int) -> None:
+    """她在公屏打出去一句。"""
+    await bus.emit(
+        CoreEvents.GAME_SELF_CHATTED,
+        GameSelfChattedPayload(game="minecraft", message=message, live_session_id=session_id, timestamp_ms=at_ms),
+        source="test",
+    )
+    await bus.wait_until_drained()
+
+
+async def test_her_public_chat_drops_a_deleted_player_everywhere_and_stays_masked_later(
+    wired: Tuple[SQLiteDatabase, PrivacyService],
+) -> None:
+    """删玩家时她所有场次的公屏话都换名字（含他没留记录的场次）；之后的场次他再来，她打的字落库前也遮掉。"""
+    store, privacy = wired
+    ids = await _alex_scene(store)
+    quiet = await store.sessions.insert_live_session(started_at_ms=3_000, kind="live")
+    await store.game_players.add_game_chat(
+        live_session_id=quiet, game="minecraft", direction="streamer", content="Alex 今天没来呀", at_ms=3_010
+    )
+    assert await privacy.delete_player(player_id=ids["alex"]) is True
+    lines = await store.game_players.list_session_game_chat(live_session_id=quiet)
+    assert [line.content for line in lines] == ["一位玩家 今天没来呀"], "他没留记录的场次也换"
+
+    later = await store.sessions.insert_live_session(started_at_ms=9_000, kind="live")
+    bus = EventBus()
+    ledger = GamePlayerLedger(bus, store.game_players, privacy)
+    await ledger.start()
+    try:
+        await _say(bus, later, "我又回来了", 9_010)
+        await _she_types(bus, later, "Alex 你怎么又来了", 9_020)
+    finally:
+        await ledger.stop()
+        await bus.cleanup()
+    lines = await store.game_players.list_session_game_chat(live_session_id=later)
+    assert [(line.direction, line.content) for line in lines] == [
+        ("other", ""),
+        ("streamer", "一位玩家 你怎么又来了"),
+    ]
+
+
+async def test_forget_me_as_his_first_line_masks_her_chat_and_can_still_be_retracted(
+    wired: Tuple[SQLiteDatabase, PrivacyService],
+) -> None:
+    """开口第一句就是"忘了我"（还没有玩家行）：她打的字里遮掉他；宽限期内撤回照样恢复记录。"""
+    store, privacy = wired
+    session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    bus = EventBus()
+    ledger = GamePlayerLedger(bus, store.game_players, privacy)
+    await ledger.start()
+    try:
+        await _say(bus, session, "忘了我", 1_100)
+        await _she_types(bus, session, "好的 Alex，不记你", 1_200)
+        assert await privacy.is_player_forgotten(game="minecraft", uuid=_ALEX) is True
+        await _say(bus, session, "算了", 1_300)
+        await _say(bus, session, "还是记着吧", 1_400)
+    finally:
+        await ledger.stop()
+        await bus.cleanup()
+    assert await privacy.is_player_forgotten(game="minecraft", uuid=_ALEX) is False
+    lines = await store.game_players.list_session_game_chat(live_session_id=session)
+    assert [(line.direction, line.content) for line in lines] == [
+        ("other", ""),
+        ("streamer", "好的 一位玩家，不记你"),
+        ("other", ""),
+        ("player", "还是记着吧"),
+    ]
+    assert await store.game_players.find_player(game="minecraft", uuid=_ALEX) is not None
+
+
+async def test_rowless_forget_me_cannot_be_retracted_after_the_grace_period(
+    wired: Tuple[SQLiteDatabase, PrivacyService],
+) -> None:
+    """没有玩家行时发的"忘了我"，发令后已有场次下播就过了宽限期：撤回短语不再生效，他留在名单里。"""
+    store, privacy = wired
+    session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    assert (
+        await privacy.process_incoming_player_chat(
+            game="minecraft", uuid=_ALEX, name="Alex", content="忘了我", at_ms=1_100
+        )
+        == "forget_command"
+    )
+    await store.sessions.close_live_session(live_session_id=session, ended_at_ms=2_000)
+    assert (
+        await privacy.process_incoming_player_chat(
+            game="minecraft", uuid=_ALEX, name="Alex", content="算了", at_ms=3_000
+        )
+        == "forget_listed"
+    )
     assert await privacy.is_player_forgotten(game="minecraft", uuid=_ALEX) is True

@@ -118,16 +118,18 @@ class GamePlayerLedger:
             logger.error(f"公屏聊天落库失败（场次 {payload.live_session_id}）: {exc}", exc=exc)
 
     async def _on_self_chatted(self, event_name: str, payload: GameSelfChattedPayload, source: str) -> None:
-        """她在公屏打出去的一句：记成"她说的"。"""
+        """她在公屏打出去的一句：记成"她说的"，落库前和台词一样遮掉不记录名单里的名字。"""
         del event_name, source
         if payload.live_session_id <= 0:
             return
         try:
+            # 她点了发过"忘了我"、或被删过的人的名字：和台词同一个遮名集合，观众换成"一位观众"、玩家换成"一位玩家"
+            content = self._privacy.mask_speech(payload.message) if self._privacy is not None else payload.message
             await self.player_repo.add_game_chat(
                 live_session_id=payload.live_session_id,
                 game=payload.game,
                 direction=GAME_CHAT_STREAMER,
-                content=payload.message,
+                content=content,
                 save_id=payload.save_id,
                 save_name=payload.save_name,
                 at_ms=payload.timestamp_ms,
