@@ -185,8 +185,9 @@ data/
 logs/
 src/plugins/mock_danmaku/data/
 *.jsonl
-# 记忆评测的样本集是版本化资产，不是运行产物（*.jsonl 规则挡在上面）
+# 记忆评测与表达评测的样本集是版本化资产，不是运行产物（*.jsonl 规则挡在上面）
 !scripts/memory_eval/datasets/*.jsonl
+!scripts/replyer_eval/datasets/*.jsonl
 *.sqlite3
 MineLand/
 *.exe
