@@ -1184,8 +1184,10 @@ class StreamerAgent(BaseAgent):
         """续播重放玩家聊天：只补上一进程里她还没接过的那段尾巴，存一次性缓冲。
 
         上一进程活着的时候游戏聊天照常进决策窗、她基本都回过了；真正没接的，是上一进程
-        最后一轮走完的决策窗开窗之后才到的那几句。窗口 = 从那一刻（没有走完的轮次就从
-        上一进程启动）到本进程启动，且不早于上一进程结束前 ``resume_replay_window_ms``。
+        最后一轮台词确实播出了的决策开窗之后才到的那几句（界线取开窗时刻而不是她开口的
+        时刻：她回上一句时刚到的话还没进那一窗）。窗口 = 从那一刻到本进程启动，且不早于
+        上一进程结束前 ``resume_replay_window_ms``；这段里找不到这样的一轮时兜底为整段
+        ``resume_replay_window_ms``，那几句里可能有她已经回过的，提示词标题照实写明。
         取自诊断事件流的 game.chat.received（kind=player），一行的写法与实时入账同一份
         （含归属说明）。私聊不重放——当众念出私聊是隐私事故，比实时路径从严。
         诊断流缺席降级为不重放，不抛错阻断续播。
@@ -1195,9 +1197,16 @@ class StreamerAgent(BaseAgent):
             return
         prev_startup_ms, prev_end_ms = previous_window
         since_ms = max(prev_startup_ms, prev_end_ms - window_ms)
-        handled_ms = self._last_finished_round_open_ms(prev_startup_ms)
-        if handled_ms is not None:
-            since_ms = max(since_ms, handled_ms)
+        # 先划出上一进程最后几分钟，再在这段里找最后一轮台词播出过的决策开窗时刻：
+        # 找到了就只补它之后的尾巴；找不到就整段补，并记一笔兜底原因
+        aired_open_ms = self._last_aired_round_open_ms(since_ms)
+        if aired_open_ms is not None:
+            since_ms = max(since_ms, aired_open_ms)
+        else:
+            self._logger.info(
+                "续播重放：上一进程结束前这段里找不到台词播出过的决策轮（没开 TTS、没落盘或这段没开口），"
+                f"按结束前 {window_ms // 1000} 秒整段补玩家聊天，其中可能有她已经回过的"
+            )
         records = self._event_log_reader.read_records(
             event_name=CoreEvents.GAME_CHAT_RECEIVED,
             start_ms=since_ms,
@@ -1222,28 +1231,42 @@ class StreamerAgent(BaseAgent):
             self._resume_chat_replay = lines
             self._logger.info(f"续播重放：已暂存重启前她可能还没回的 {len(lines)} 条玩家发言，下个决策轮注入")
 
-    def _last_finished_round_open_ms(self, start_ms: int) -> Optional[int]:
-        """上一进程里最后一轮走完的决策窗是什么时候开的；一轮都没走完返回 None。
+    def _last_aired_round_open_ms(self, start_ms: int) -> Optional[int]:
+        """从 ``start_ms`` 到本进程启动，最后一轮台词确实播出了的决策是什么时候开窗的；没有返回 None。
 
-        每轮开头发 streamer.stage(planning)、收尾发 streamer.stage(idle)，同一个
-        round_id；开窗那一刻账本里攒着的游戏聊天都被这一窗取走，这一轮走完就算她
-        看过了。只开了头、没等到收尾的那一轮（进程正好崩在里面）不算。
+        一轮决策开头发 streamer.stage(planning)，开窗那一刻账本里攒着的游戏聊天都被这一窗
+        取走；收尾的 planner.decision 带这一轮台词的 utterance_id；TTS 开始出声时发同一个
+        utterance_id 的 tts.utterance.started。三者对上才算她看过这批话并且开口回了。
+        静默收场、模型出错、台词还没播进程就崩了的轮次都不算。播放可能早于决策记录落盘，
+        所以三类记录先全部收齐再对账，不依赖先后。
         """
         opened: dict[str, int] = {}
-        finished_open_ms: Optional[int] = None
+        utterance_round: dict[str, str] = {}
+        aired: set[str] = set()
         for row in self._event_log_reader.read_records(
-            event_name=CoreEvents.STREAMER_STAGE, start_ms=start_ms, end_ms=self._startup_ms
+            event_name=(CoreEvents.STREAMER_STAGE, CoreEvents.PLANNER_DECISION, CoreEvents.TTS_UTTERANCE_STARTED),
+            start_ms=start_ms,
+            end_ms=self._startup_ms,
         ):
             data = row.get("data")
-            round_id = str(data.get("round_id") or "") if isinstance(data, dict) else ""
-            if not round_id:
+            if not isinstance(data, dict):
                 continue
-            # 先记下每轮开窗的时刻，等到同一轮的收尾记录才算走完
-            if data.get("stage") == "planning":
+            event_name = row.get("event_name")
+            round_id = str(data.get("round_id") or "")
+            utterance_id = str(data.get("utterance_id") or "")
+            # 开窗记时刻 → 决策记录把台词挂到这一轮 → 播放记录说明这句真的出声了
+            if event_name == CoreEvents.STREAMER_STAGE and data.get("stage") == "planning" and round_id:
                 opened[round_id] = int(row.get("timestamp_ms", 0))
-            elif data.get("stage") == "idle" and round_id in opened:
-                finished_open_ms = max(finished_open_ms or 0, opened[round_id])
-        return finished_open_ms
+            elif event_name == CoreEvents.PLANNER_DECISION and round_id and utterance_id:
+                utterance_round[utterance_id] = round_id
+            elif event_name == CoreEvents.TTS_UTTERANCE_STARTED and utterance_id:
+                aired.add(utterance_id)
+        aired_opens = [
+            opened[round_id]
+            for utterance_id, round_id in utterance_round.items()
+            if utterance_id in aired and round_id in opened
+        ]
+        return max(aired_opens) if aired_opens else None
 
     def _drain_resume_replay(self) -> str:
         """取空续播重放缓冲（决策执行器在决策窗入口调用；注入一次制）。"""

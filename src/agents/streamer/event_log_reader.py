@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Collection, Dict, FrozenSet, List, Optional, Union
 
 from src.modules.logging import get_logger
 
@@ -31,15 +31,19 @@ class EventLogFileReader:
         """
         self._events_dir = Path(events_dir)
 
-    def read_records(self, *, event_name: str, start_ms: int, end_ms: int) -> List[Dict[str, Any]]:
+    def read_records(
+        self, *, event_name: Union[str, Collection[str]], start_ms: int, end_ms: int
+    ) -> List[Dict[str, Any]]:
         """读回 ``[start_ms, end_ms)`` 窗口内指定事件名的记录行（时间升序）。
 
         每行是 EventRecord 的原始 dict（含 ``event_name`` / ``timestamp_ms`` /
-        ``data`` 载荷字典）；``start_ms >= end_ms`` 返回空表。
+        ``data`` 载荷字典）；``start_ms >= end_ms`` 返回空表。``event_name`` 给一组
+        事件名时一趟读回这几类，按时间混排（要对照几类事件先后的调用方不必各扫一遍文件）。
         """
+        names = frozenset({event_name}) if isinstance(event_name, str) else frozenset(event_name)
         hits: List[Dict[str, Any]] = []
         for hour_file in self._hour_files(start_ms, end_ms):
-            hits.extend(self._read_hour_file(hour_file, event_name=event_name, start_ms=start_ms, end_ms=end_ms))
+            hits.extend(self._read_hour_file(hour_file, event_names=names, start_ms=start_ms, end_ms=end_ms))
         hits.sort(key=lambda row: int(row.get("timestamp_ms", 0)))
         return hits
 
@@ -51,7 +55,7 @@ class EventLogFileReader:
         文件里的最大时刻就是答案，不必把整段事件读进内存。
         """
         for hour_file in reversed(self._hour_files(start_ms, end_ms)):
-            rows = self._read_hour_file(hour_file, event_name=None, start_ms=start_ms, end_ms=end_ms)
+            rows = self._read_hour_file(hour_file, event_names=None, start_ms=start_ms, end_ms=end_ms)
             if rows:
                 return max(int(row.get("timestamp_ms", 0)) for row in rows)
         return None
@@ -77,8 +81,10 @@ class EventLogFileReader:
         return files
 
     @staticmethod
-    def _read_hour_file(path: Path, *, event_name: Optional[str], start_ms: int, end_ms: int) -> List[Dict[str, Any]]:
-        """解析单小时文件窗口内的指定事件行（``event_name`` 为 None 时不限事件名）；损坏行跳过并计数。"""
+    def _read_hour_file(
+        path: Path, *, event_names: Optional[FrozenSet[str]], start_ms: int, end_ms: int
+    ) -> List[Dict[str, Any]]:
+        """解析单小时文件窗口内的指定事件行（``event_names`` 为 None 时不限事件名）；损坏行跳过并计数。"""
         hits: List[Dict[str, Any]] = []
         malformed = 0
         try:
@@ -91,7 +97,7 @@ class EventLogFileReader:
                         row = json.loads(line)
                         if not isinstance(row, dict):
                             raise ValueError("记录行不是 JSON 对象")
-                        if event_name is not None and str(row.get("event_name", "")) != event_name:
+                        if event_names is not None and str(row.get("event_name", "")) not in event_names:
                             continue
                         ts = int(row.get("timestamp_ms", 0))
                         if not (start_ms <= ts < end_ms):

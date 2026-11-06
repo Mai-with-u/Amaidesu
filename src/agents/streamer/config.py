@@ -530,7 +530,7 @@ class StreamerConfig(BaseConfig):
         title="续播重放玩家聊天的时间窗",
         default=300_000,
         ge=0,
-        description="断线续播时，重启前她最后一轮决策之后到的游戏玩家发言会被补进下一轮决策参考"
+        description="断线续播时，重启前她最后一轮播出台词的决策之后到的游戏玩家发言会被补进下一轮决策参考"
         "（【重启前可能还没回的话】段，注入一次制），最多往前追溯到上一进程结束前这么多毫秒；0 = 关闭重放",
     )
     speech_gate_window: int = Field(

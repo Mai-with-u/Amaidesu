@@ -55,10 +55,27 @@ def _chat(events_dir: Path, ts_ms: int, content: str, **fields: object) -> None:
     _write_record(events_dir, event_name=CoreEvents.GAME_CHAT_RECEIVED, ts_ms=ts_ms, data=data)
 
 
-def _stage(events_dir: Path, ts_ms: int, stage: str, round_id: str) -> None:
+def _round(events_dir: Path, open_ms: int, round_id: str, *, utterance_id: str = "", aired: bool = False) -> None:
+    """上一进程里的一轮决策：开窗（planning）→ 决策记录（有台词时带 utterance_id）→ 可选的开始出声。"""
     _write_record(
-        events_dir, event_name=CoreEvents.STREAMER_STAGE, ts_ms=ts_ms, data={"stage": stage, "round_id": round_id}
+        events_dir,
+        event_name=CoreEvents.STREAMER_STAGE,
+        ts_ms=open_ms,
+        data={"stage": "planning", "round_id": round_id},
     )
+    _write_record(
+        events_dir,
+        event_name=CoreEvents.PLANNER_DECISION,
+        ts_ms=open_ms + 4000,
+        data={"round_id": round_id, "utterance_id": utterance_id or None},
+    )
+    if aired:
+        _write_record(
+            events_dir,
+            event_name=CoreEvents.TTS_UTTERANCE_STARTED,
+            ts_ms=open_ms + 5000,
+            data={"utterance_id": utterance_id, "speech_text": "台词", "engine": "test"},
+        )
 
 
 @pytest.fixture
@@ -96,44 +113,54 @@ async def _resume_and_collect_replay(bus: EventBus, events_dir: Path, *, window_
 
 
 async def test_replay_skips_answered_chat_and_keeps_unanswered_tail(resume_bus: EventBus, tmp_path: Path) -> None:
-    """最后一轮走完的决策窗开窗前的话她看过了不补；之后的尾巴补回，归属说明照实时路径保留。"""
+    """最后一轮台词播出过的决策开窗前的话她回过了不补；之后的尾巴补回，归属说明照实时路径保留。"""
     events_dir = tmp_path / "events"
     t_now = now_ms()
+    t_open = t_now - 3 * _MINUTE_MS
     _write_record(events_dir, event_name=CoreEvents.CORE_STARTUP, ts_ms=t_now - 60 * _MINUTE_MS, data={})
     _chat(events_dir, t_now - 4 * _MINUTE_MS, "重启前已经回过的话")
-    # 一轮走完的决策窗：开窗那一刻账本里的聊天都被取走看过了
-    _stage(events_dir, t_now - 3 * _MINUTE_MS, "planning", "rnd_1")
-    _stage(events_dir, t_now - 3 * _MINUTE_MS + 5000, "idle", "rnd_1")
-    _chat(events_dir, t_now - 150_000, "最后一轮之后才到的话")
-    # 只开了头、没等到收尾的一轮（进程崩在里面）：它取走的话她没来得及回，照样要补
-    _stage(events_dir, t_now - 2 * _MINUTE_MS, "planning", "rnd_2")
+    # 台词播出过的一轮：开窗那一刻账本里的聊天都被取走，她开口回了
+    _round(events_dir, t_open, "rnd_1", utterance_id="utt_1", aired=True)
+    # 她回上一句的时候刚到、还没进那一窗的话：界线按开窗时刻算，这句要补
+    _chat(events_dir, t_open + 2000, "她开口时刚到的话")
+    # 静默收场的一轮、台词没来得及播出的一轮都不算回过：它们取走的话照样要补
+    _chat(events_dir, t_now - 160_000, "静默那一轮取走的话")
+    _round(events_dir, t_now - 150_000, "rnd_2")
+    _chat(events_dir, t_now - 130_000, "没播出那一轮取走的话")
+    _round(events_dir, t_now - 120_000, "rnd_3", utterance_id="utt_3")
     _chat(events_dir, t_now - 90_000, "名字没核实的话", note=_UNVERIFIED_NOTE)
     _chat(events_dir, t_now - 80_000, "系统公告不算玩家的话", kind="system", sender="")
     _chat(events_dir, t_now - 70_000, "悄悄话", private=True)
 
     text = await _resume_and_collect_replay(resume_bus, events_dir)
 
-    assert "重启前已经回过的话" not in text, "最后一轮走完的决策窗已经看过的话不补"
-    assert re.search(r"^\d{2}:\d{2} 玩家 阿杰：最后一轮之后才到的话$", text, flags=re.M), "时间 + 发言者 + 原话"
+    assert "重启前已经回过的话" not in text, "最后一轮播出过台词的决策已经回过的话不补"
+    assert re.search(r"^\d{2}:\d{2} 玩家 阿杰：她开口时刚到的话$", text, flags=re.M), "时间 + 发言者 + 原话"
+    assert "静默那一轮取走的话" in text and "没播出那一轮取走的话" in text, "没开口回的轮次不算回过"
     assert f"玩家 阿杰（{_UNVERIFIED_NOTE}）：名字没核实的话" in text, "归属说明与实时路径逐字一致"
     assert "系统公告" not in text, "系统消息不重放"
     assert "悄悄话" not in text, "私聊不重放"
 
 
-async def test_replay_window_caps_tail_before_previous_process_end(resume_bus: EventBus, tmp_path: Path) -> None:
-    """上一进程一轮都没走完：仍只补它结束前 5 分钟内的话，更早的不补。"""
+async def test_replay_falls_back_to_window_when_no_aired_round(
+    resume_bus: EventBus, tmp_path: Path, loguru_capture
+) -> None:
+    """找不到台词播出过的一轮（这里是没开 TTS）：兜底补上一进程结束前 5 分钟的整段，记下兜底原因。"""
     events_dir = tmp_path / "events"
     t_now = now_ms()
     _write_record(events_dir, event_name=CoreEvents.CORE_STARTUP, ts_ms=t_now - 60 * _MINUTE_MS, data={})
     _chat(events_dir, t_now - 20 * _MINUTE_MS, "上一进程结束前很久的话")
+    _chat(events_dir, t_now - 12 * _MINUTE_MS, "开口之前的话")
+    _round(events_dir, t_now - 11 * _MINUTE_MS, "rnd_1", utterance_id="utt_1")
     _chat(events_dir, t_now - 10 * _MINUTE_MS, "上一进程最后几分钟的话")
-    # 上一进程最后一条记录：重放窗口按它往前算 5 分钟
+    # 上一进程最后一条记录：兜底窗口按它往前算 5 分钟
     _write_record(events_dir, event_name=CoreEvents.ROOM_STATE_WATCHED_COUNT, ts_ms=t_now - 8 * _MINUTE_MS, data={})
 
     text = await _resume_and_collect_replay(resume_bus, events_dir)
 
-    assert "上一进程最后几分钟的话" in text
+    assert "上一进程最后几分钟的话" in text and "开口之前的话" in text, "兜底按 5 分钟整段补，可能含她回过的"
     assert "上一进程结束前很久的话" not in text
+    assert any("找不到台词播出过的决策轮" in r["message"] for r in loguru_capture.records), "兜底原因写进日志"
 
 
 async def test_zero_window_disables_replay(resume_bus: EventBus, tmp_path: Path) -> None:
@@ -158,7 +185,7 @@ async def test_planner_reference_contains_replay_section_only_when_present() -> 
         [], None, None, resume_replay="12:30 玩家 阿杰：回来接着玩", **common
     )
     assert "【重启前可能还没回的话】" in with_replay and "回来接着玩" in with_replay
-    assert "回过的别再回" in with_replay, "标题如实说明：可能已经回过"
+    assert "也可能已经回过" in with_replay and "回过的别再回" in with_replay, "标题如实说明：可能已经回过"
     assert "程序中断期间" not in with_replay, "不再把重启前还活着时的话说成中断期间的话"
     without_replay, _ = await planner._assemble_reference([], None, None, **common)
     assert "【重启前可能还没回的话】" not in without_replay
