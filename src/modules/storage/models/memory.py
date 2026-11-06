@@ -19,6 +19,9 @@
 ``ArchiveLine`` —— ``archive_lines`` 一行：场次档案的标题与原话片段，
 下次开播回想「上一场」时用。
 
+``ArchiveSnapshot`` —— 一场整理后她该记得的事（滚动档案快照）：每行引用一条档案行，
+带"是否长期""最近一次写下或再提起是哪一场"两项快照自己的标注；原行一个字节都不动。
+
 ``SettleReport`` —— 一场整理的报告：失败原因，或成功时那些没能登记的条目
 与原料裁剪说明。
 
@@ -38,11 +41,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "ArchiveLine",
+    "ArchiveSnapshot",
     "Commitment",
     "CommitmentClosure",
+    "KeptSnapshotLine",
     "PendingArchiveLine",
     "PendingCommitment",
     "SettleReport",
+    "SnapshotChange",
+    "SnapshotLine",
     "UnregisteredItem",
     "ViewerName",
     "Viewer",
@@ -130,16 +137,30 @@ class ArchiveLine(BaseModel):
     game: Optional[str] = Field(default=None, description="写的是哪个游戏世界里的事；None 即与游戏世界无关")
     save_id: str = Field(default="", description="那件事发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
-    from_session_id: Optional[int] = Field(
-        default=None,
-        description="这件事出自哪一场（滚动接过来的行指向最初那一场）；None = 滚动之前的旧行，出自本行所在场次",
-    )
-    lasting: bool = Field(default=False, description="是否名字、关系、住处这类长期有效的事（滚动时先占位）")
 
-    @property
-    def origin_session_id(self) -> int:
-        """这件事出自哪一场：滚动接过来的行看 ``from_session_id``，旧行就是本行所在的那一场。"""
-        return int(self.from_session_id) if self.from_session_id is not None else int(self.live_session_id)
+
+class SnapshotLine(BaseModel):
+    """快照里的一行：引用的档案行原样带出，加快照自己的两项标注。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    line: ArchiveLine = Field(..., description="引用的档案行（标题、原话、证据、场次、存档原样）")
+    lasting: bool = Field(default=False, description="是否名字、住处、关系这类稳定的事（超出上限时先留）")
+    seen_at_ms: int = Field(..., description="最近一次写下或再提起这件事的那一场的开播时刻")
+
+
+class ArchiveSnapshot(BaseModel):
+    """一场整理后她该记得的事：``owner_session_id`` 那一场新写的行加接住的前几场的行。
+
+    ``stored`` 为 False 时是滚动之前的旧场次：没有存下的快照，由那一场与更早几场的档案行
+    现拼（升级后的第一次滚动从这里接起）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    owner_session_id: int = Field(..., description="快照属于哪一场（它的整理写下了这份快照）")
+    lines: List[SnapshotLine] = Field(default_factory=list, description="按快照位置排好的行")
+    stored: bool = Field(default=True, description="是否存下的快照；False = 由旧档案行现拼")
 
 
 class UnregisteredItem(BaseModel):
@@ -153,6 +174,19 @@ class UnregisteredItem(BaseModel):
     reason: str = Field(..., description="没登记的原因（代码给的固定措辞）")
 
 
+class SnapshotChange(BaseModel):
+    """整理对上一份快照做的一处改动，写进整理报告给运营者核对。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["drop", "replace", "evicted", "refused"] = Field(
+        ..., description="去掉 / 换成本场新写的一行 / 超出上限被挤出 / 模型要求了但没采纳"
+    )
+    what: str = Field(default="", description="被动到的那一行旧档案的标题")
+    reason: str = Field(default="", description="理由：模型给的（去掉、替换）或代码给的固定措辞")
+    quote: str = Field(default="", description="本场作证据的那句台词原文（去掉、替换时）")
+
+
 class SettleReport(BaseModel):
     """一场的整理报告：失败原因，或成功时那些没能登记的条目与原料裁剪说明。"""
 
@@ -162,6 +196,9 @@ class SettleReport(BaseModel):
     unregistered: List[UnregisteredItem] = Field(default_factory=list, description="没能登记、要人看一眼的条目")
     input_note: Optional[str] = Field(
         default=None, description="整理原料被裁剪的说明（台词超出模型窗口时）；未裁剪为 None"
+    )
+    snapshot_changes: List[SnapshotChange] = Field(
+        default_factory=list, description="这一场对档案快照的改动：去掉、替换、超上限挤出、没采纳的操作"
     )
 
 
@@ -190,10 +227,18 @@ class PendingArchiveLine(BaseModel):
     game: Optional[str] = Field(default=None, description="写的是哪个游戏世界里的事；None 即与游戏世界无关")
     save_id: str = Field(default="", description="那件事发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
-    from_session_id: Optional[int] = Field(
-        default=None, description="这件事出自哪一场；None = 就是本场的事（写入时记成本场）"
-    )
-    lasting: bool = Field(default=False, description="是否名字、关系、住处这类长期有效的事")
+    lasting: bool = Field(default=False, description="是否名字、住处、关系这类稳定的事（快照标注）")
+    in_snapshot: bool = Field(default=True, description="是否进本场快照；超出上限被挤出的照样写成本场档案行")
+
+
+class KeptSnapshotLine(BaseModel):
+    """整理决定接着记的一行旧快照：只引用原档案行，带更新后的快照标注。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    archive_line_id: int = Field(..., description="引用的档案行主键")
+    lasting: bool = Field(default=False, description="是否稳定的事")
+    seen_at_ms: int = Field(..., description="最近一次写下或再提起它的那一场的开播时刻")
 
 
 class CommitmentClosure(BaseModel):

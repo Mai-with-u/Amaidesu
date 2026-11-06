@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 27
+SCHEMA_VERSION: int = 28
 
 
 # =============================================================================
@@ -124,6 +124,9 @@ def build_schema_sql() -> str:
         # archive_lines —— 场次档案（每场几行，供下次开播回想上一场）
         + _ARCHIVE_LINES_SQL
         + "\n"
+        # archive_snapshots / archive_snapshot_lines —— 滚动档案快照（只引用档案行）
+        + _ARCHIVE_SNAPSHOTS_SQL
+        + "\n"
         # rundowns —— 流程单模板（元信息）
         + _RUNDOWNS_SQL
         + "\n"
@@ -179,6 +182,8 @@ def list_expected_tables() -> List[str]:
         "forget_list",
         "commitments",
         "archive_lines",
+        "archive_snapshots",
+        "archive_snapshot_lines",
         "rundowns",
         "rundown_segments",
         "rundown_instances",
@@ -432,13 +437,10 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 
 
 # --- archive_lines —— 场次档案 ---
-# 每场正式场下播后写一份滚动档案（≤12 行）：本场新事 + 上一份档案里仍然成立的行，标题加她播出
-# 原句的逐字片段，写完不改（运营者可删单行）。场次档案是她记得前几场干了什么的唯一来源，也是回想
-# 工具的检索单元；game 是这一行写的是哪个游戏世界里的事（建筑、进度、地点；与世界无关为空），
-# save_id / save_name 是那个世界的存档（整理时由代码按本场游戏事件判定，空串 = 不分存档或存档不明）；
-# from_session_id 是这件事出自哪一场（接过来的行指向最初那一场，空 = 滚动之前的旧行，出自本行所在
-# 场次），lasting 标名字、关系、住处这类长期有效的事。from_session_id 的索引由 v27 迁移建（老库先跑
-# 这段建表语句时还没有这一列）。
+# 每场正式场下播后写的本场新事（≤8 行），标题加她播出原句的逐字片段，写完不改（运营者可删单行）。
+# 也是回想工具的检索单元；game 是这一行写的是哪个游戏世界里的事（建筑、进度、地点；与世界无关为空），
+# save_id / save_name 是那个世界的存档（整理时由代码按本场游戏事件判定，空串 = 不分存档或存档不明）。
+# 前几场仍然成立的事不复制进本场，由下面的快照引用原行。
 
 _ARCHIVE_LINES_SQL = """
 CREATE TABLE IF NOT EXISTS archive_lines (
@@ -449,11 +451,34 @@ CREATE TABLE IF NOT EXISTS archive_lines (
     evidence_chat_id INTEGER NOT NULL,
     game             TEXT,
     save_id          TEXT NOT NULL DEFAULT '',
-    save_name        TEXT NOT NULL DEFAULT '',
-    from_session_id  INTEGER,
-    lasting          INTEGER NOT NULL DEFAULT 0
+    save_name        TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_archive_lines_session ON archive_lines(live_session_id);
+""".strip()
+
+
+# --- archive_snapshots / archive_snapshot_lines —— 滚动档案快照 ---
+# 每个整理过的正式场留一份快照：她下次开播该记得的事（≤12 行），每行引用一条 archive_lines，
+# 不复制——原行被删（删单行、按句删台词、改彩排、删场次）时外键级联撤掉所有快照里的引用，
+# 删观众时只改原行文本，快照照样看到遮过名的文本。archive_snapshots 记哪些场次写过快照
+# （快照可以是空的；没有这一行的已整理场次是滚动之前的旧场次）。lasting 标名字、住处、关系
+# 这类稳定的事；seen_at_ms 是最近一次写下或再提起这件事的那一场的开播时刻，超出上限时
+# 最久没被再提的先出。
+
+_ARCHIVE_SNAPSHOTS_SQL = """
+CREATE TABLE IF NOT EXISTS archive_snapshots (
+    live_session_id INTEGER PRIMARY KEY REFERENCES live_sessions(id) ON DELETE CASCADE,
+    written_at_ms   INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS archive_snapshot_lines (
+    live_session_id INTEGER NOT NULL REFERENCES archive_snapshots(live_session_id) ON DELETE CASCADE,
+    archive_line_id INTEGER NOT NULL REFERENCES archive_lines(id) ON DELETE CASCADE,
+    position        INTEGER NOT NULL,
+    lasting         INTEGER NOT NULL DEFAULT 0,
+    seen_at_ms      INTEGER NOT NULL,
+    PRIMARY KEY (live_session_id, archive_line_id)
+);
+CREATE INDEX IF NOT EXISTS idx_archive_snapshot_lines_line ON archive_snapshot_lines(archive_line_id);
 """.strip()
 
 
