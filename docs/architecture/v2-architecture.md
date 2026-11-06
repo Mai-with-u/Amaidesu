@@ -106,7 +106,7 @@ flowchart TB
 
 各层要点：
 
-- **主播 Agent**：`src/agents/streamer/`——弹幕窗 MessageBuffer 聚合，Planner 以 ReAct 循环决策（工具列表 = 全局 ToolRegistry + reply 局部工具，Planner LLM profile 代码硬编码 `planner`（高质量模型档），`planner_max_steps=8` 防失控）：查信息（游戏状态 / 自己说过的台词与场次档案 / 答应过的事，用 `memory_recall`）→ 调 `streamer_reply` 工具（spec 声明名 `reply`）提供情绪与强度 → Replyer 表达引擎生成纯文本 speech（含敏感词净化），由该工具组装情绪与元数据。Replyer 使用一条 system（人设在前、占大头：名字、性格、说话风格、口吻示例；后面是提炼过的说话规矩、AI 声明与不答应的事）与一条 user（更早一点她说过的话、最近几条聊天原文与本轮消息、游戏聊天、状态与流程单、交接稿），末尾为“现在，你说：”，不向模型发送 tools。**Planner 与 Replyer 都是内部件，两者都不注册为工具**（reply_tool 是 LLM 调用入口）。Rundown 流程单子系统以"备忘录 + 闹钟"给环节方向，推进权归 Agent 自身。
+- **主播 Agent**：`src/agents/streamer/`——弹幕窗 MessageBuffer 聚合，Planner 以 ReAct 循环决策（工具列表 = 全局 ToolRegistry + reply 局部工具，Planner LLM profile 代码硬编码 `planner`（高质量模型档），`planner_max_steps=8` 防失控）：查信息（游戏状态 / 自己说过的台词与场次档案 / 答应过的事，用 `memory_recall`）→ 调 `streamer_reply` 工具（spec 声明名 `reply`）提供情绪与强度 → Replyer 表达引擎生成纯文本 speech（含敏感词净化），由该工具组装情绪与元数据。Replyer 使用一条 system（人设在前、占大头：名字、性格、说话风格、口吻示例；后面是提炼过的说话规矩、AI 声明与不答应的事）与一条 user（更早一点她说过的话、最近几条聊天原文与本轮消息、游戏聊天、最近几分钟游戏里找她的玩家（谁说了什么、谁冲她做了什么，有才列）、状态与流程单、交接稿），末尾为“现在，你说：”，不向模型发送 tools。**Planner 与 Replyer 都是内部件，两者都不注册为工具**（reply_tool 是 LLM 调用入口）。Rundown 流程单子系统以"备忘录 + 闹钟"给环节方向，推进权归 Agent 自身。
 - **游戏代理**（`src/agents/<name>/`，如 minecraft / text_adv）：AI 玩家范式——感知（公用 `vision_look_at_screen` 快照）、推进（专属工具如 text_adv_advance）、循环内聚于一个自包含包。加游戏 = 加包 + 配置，框架零改动。
 - **工具层**：全部工具统一 ToolSpec 契约，两个来源——内置（进程内渲染/感知）、MCP（外部扩展）。同步调用结果直返，异步工具经 `tool.result.<name>` 事件回传。
 - **存储层**：SQLite 存储（具体表与字段以 schema_migrations 为唯一事实源）+ schema_migrations 版本化迁移；场次分正式与彩排，模拟观众只进彩排场，主播记忆按承诺账本与场次档案记录、只在正式场整理，对外同步只认正式场——模拟观众不是观众。

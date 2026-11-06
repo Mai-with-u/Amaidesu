@@ -25,6 +25,7 @@ from typing import Any, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.agents.streamer.timeline import PlayerNote
 from src.modules.tools.models import ToolCallAttachment
 from src.modules.types.emotion_vocab import Emotion
 
@@ -71,6 +72,10 @@ class ReplyRoundAttachment(ToolCallAttachment):
             未截窗口，闸按自家窗口参数截取）；与本窗批材料同源同生命周期，
             打回重试共用这一份。``None`` = 调用方未随单携带（裸调用，工具内
             兜底现读）；空列表 = 确认本窗前无台词（刚开播），空语料即放行
+        game_people: 最近几分钟游戏里玩家找她的条目（谁在公屏说了什么、谁冲她做了
+            什么，旧→新）——表达侧据此把话和举动归到对的人头上
+        reply_to: 回应对象的玩家名——不在回弹幕、本窗只有一位玩家在公屏开口时是他；
+            空串 = 没有特定玩家
     """
 
     thinking_callback: Optional[Any] = None
@@ -81,6 +86,8 @@ class ReplyRoundAttachment(ToolCallAttachment):
     speech_history: Optional[List[str]] = None
     #: Planner 点名的那条旧事（说话档写法，已去掉编号与原话）；空串 = 本轮没用旧事
     remembered: str = ""
+    game_people: List[PlayerNote] = field(default_factory=list)
+    reply_to: str = ""
 
 
 def assistant_speech_lines(history: Optional[List[Any]]) -> List[str]:

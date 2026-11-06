@@ -66,9 +66,9 @@ from src.agents.streamer.planner_render import (
     step_extra_messages,
     tool_call_parts,
 )
-from src.agents.streamer.game_ledger import GameLedger, sole_chat_player
+from src.agents.streamer.game_ledger import GameLedger, keep_recent_notes, sole_chat_player, sole_speaker_name
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
-from src.agents.streamer.timeline import GameEventBatch
+from src.agents.streamer.timeline import GameEventBatch, PlayerNote
 from src.modules.context import TransientImages, absorb_result_images, is_visual_caller
 from src.modules.llm.capabilities import ProfileVisualCapabilityLookup, validate_llm_capability
 from src.modules.agents.control import PROVIDER_NAME as FRAMEWORK_PROVIDER
@@ -381,6 +381,9 @@ class Planner:
         self._round_danmaku: Tuple[Tuple[str, str], ...] = ()
         # 本窗在游戏里开口或冲她做动作的玩家：线索推送据此推玩家卡
         self._round_game_players: Tuple[Tuple[str, str], ...] = ()
+        # 玩家找她的条目：本窗新到的（定回应对象）与最近几分钟的（交给表达侧，说清谁说的、谁做的）
+        self._round_player_notes: Tuple[PlayerNote, ...] = ()
+        self._recent_player_notes: Tuple[PlayerNote, ...] = ()
         # 本窗是否豁免发言闸的台词重合度检查（收播道别窗：道别话题常与收尾环节发言字面重合）
         self._round_bypass_topic_gate: bool = False
         # 本场备忘录全文查询（经环境注入；空串 = 还没写过，段整段省略）
@@ -507,6 +510,9 @@ class Planner:
             (str(getattr(msg, "message_id", "") or ""), str(getattr(msg, "content", "") or "")) for msg in batch
         )
         self._round_game_players = resolved_batch.addressed_players
+        # 玩家扔来东西常在上一窗入账、这一窗才接话：表达侧拿的是最近几分钟的，不只本窗
+        self._round_player_notes = resolved_batch.player_notes
+        self._recent_player_notes = keep_recent_notes(self._recent_player_notes, resolved_batch.player_notes, now_ms())
         self.workbench.begin_round()
         # 游戏聊天原话（非私聊）随本轮说话交给表达侧；私聊行只进本窗参考段
         fresh_game_chat = list(resolved_batch.fresh_chat)
@@ -1120,6 +1126,9 @@ class Planner:
                 False,
             )
         invoke_started_ms = now_ms()
+        # 这句的回应目标对得上本窗一条弹幕（编号或原文）：对象是那位观众。即使本窗只有一位玩家在公屏开口，
+        # 也不记成在回应他——否则答应观众的事会被整理记到玩家头上。对不上的（拿公屏原话当目标）照旧在回玩家
+        answers_danmaku = _answers_danmaku(args.get("target"), self._round_danmaku)
         try:
             remembered, memory_ids = await self._resolve_use_memory(args)
             attachment = ReplyRoundAttachment(
@@ -1137,6 +1146,10 @@ class Planner:
                 gate_exempt=self._round_bypass_topic_gate,
                 # 闸语料：本窗起点算好的已说台词，重试共用（None = 本窗无历史可查）
                 speech_history=speech_history,
+                # 最近几分钟玩家找她的条目：谁在公屏说了什么、谁冲她扔了什么，台词照这个归到人头上
+                game_people=list(self._recent_player_notes),
+                # 不在回弹幕、本窗只有一位玩家在公屏开口时，回应对象就是他（和落库记"回应哪位玩家"同一口径）
+                reply_to="" if answers_danmaku else sole_speaker_name(self._round_player_notes),
             )
             result = await self._tool_registry.invoke(
                 ToolInvocation(
@@ -1177,9 +1190,6 @@ class Planner:
         emotion = payload.get("emotion") if isinstance(payload.get("emotion"), dict) else {}
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         reply_to = args.get("target")
-        # 这句的回应目标对得上本窗一条弹幕（编号或原文）：对象是那位观众。即使本窗只有一位玩家在公屏开口，
-        # 也不记成在回应他——否则答应观众的事会被整理记到玩家头上。对不上的（拿公屏原话当目标）照旧在回玩家
-        answers_danmaku = _answers_danmaku(reply_to, self._round_danmaku)
         outcome = replace(
             outcome,
             replied=True,

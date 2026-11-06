@@ -409,6 +409,8 @@ class ReplyToolProvider(BaseToolProvider):
                 state_facts=materials.state_facts,
                 recent_speeches=speech_history,
                 remembered=materials.remembered,
+                game_people=list(materials.game_people),
+                reply_to=materials.reply_to,
             )
         except Exception as exc:
             self._logger.exception(f"reply_tool: Replyer.generate 抛出未捕获异常: {exc}")

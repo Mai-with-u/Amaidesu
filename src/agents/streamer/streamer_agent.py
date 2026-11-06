@@ -1831,6 +1831,8 @@ class StreamerAgent(BaseAgent):
                 # 只有冲她做肢体动作的玩家算找过她，本窗据此推他的玩家卡；跟随状况上挂的是她跟着的人，
                 # 他没来找她，不推卡、不算她在回应谁
                 player=payload.player_uuid if payload.kind == "player_body_language" else "",
+                # 冲她做动作的人的名字：表达侧据此说清是谁扔来的、谁拍的她，不说成凭空到手
+                who=payload.player_name if payload.kind == "player_body_language" else "",
             )
             if self._mouth is not None:
                 # 嘴开着：遭遇由嘴当场反应（几秒内出声），死亡也一样——不再为它专门唤醒 Planner，
@@ -1871,8 +1873,13 @@ class StreamerAgent(BaseAgent):
                 self._scope.record_private_chat(f"[{payload.game}] {body}")
             else:
                 # 记下这句是谁说的：本窗只有一位核对过的玩家开口时，她这一窗的话落库时记成在回应他
+                # 带上玩家名：表达侧据此分清这句是哪位玩家说的，不安到刚点过名的女仆、宠物头上
                 self._game_ledger.record_chat(
-                    payload.game, body, payload.timestamp_ms or now_ms(), speaker=_chat_speaker(payload)
+                    payload.game,
+                    body,
+                    payload.timestamp_ms or now_ms(),
+                    speaker=_chat_speaker(payload),
+                    who=payload.sender if payload.kind == "player" else "",
                 )
                 if self._mouth is not None:
                     self._mouth.note_game(body)

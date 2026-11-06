@@ -36,6 +36,7 @@ __all__ = [
     "CHAPTER_MESSAGE_TYPE",
     "GAME_MESSAGE_TYPE",
     "GameEventBatch",
+    "PlayerNote",
     "StreamerTimeline",
     "TimelineTurn",
     "note_turn",
@@ -171,6 +172,26 @@ def note_turn(label: str, body: str, timestamp_ms: int) -> TimelineTurn:
 
 
 @dataclass(frozen=True)
+class PlayerNote:
+    """游戏里一位玩家找她的一条：在公屏跟她说了什么，或冲她做了什么。
+
+    表达侧据此分清"谁说的话、谁做的事"：线上出过玩家扔来铁锭、交接稿却写成凭空到手，
+    以及玩家在公屏的感叹被她安到刚点过名的女仆头上。
+
+    - ``who``：玩家名（游戏里显示的那个名字）。
+    - ``said``：True 是在公屏说话，False 是冲她做的动作（扔东西、拍她、蹲起打招呼）。
+    - ``line``：给表达侧看的一行，``[HH:MM <游戏> 公屏] 玩家 X：原话`` 或
+      ``[HH:MM <游戏> 动作] 玩家 X 朝我扔了…``（动作只留事实，不带怎么接的口径）。
+    - ``timestamp_ms``：发生时刻，按它只留最近几分钟的。
+    """
+
+    who: str
+    said: bool
+    line: str
+    timestamp_ms: int = 0
+
+
+@dataclass(frozen=True)
 class GameEventBatch:
     """一个决策窗新入账的游戏事件批次（决策窗边界批量追加进时间线的那一批）。
 
@@ -185,6 +206,8 @@ class GameEventBatch:
       只在本批交给决策层，且下一窗不再携带。
     - ``facts_text``：本批状态跃迁事实块（账本从结构化条目渲染，带原钟点标记）。
     - ``timeline_turns``：本批待追加进时间线的条目（决策窗边界由持有方批量落账）。
+    - ``player_notes``：本批里玩家找她的条目（公屏说话与冲她做的动作，认得出名字的才在内），
+      Planner 留最近几分钟的交给表达侧，台词里说清是谁说的、谁做的。
     """
 
     events: Tuple[str, ...] = ()
@@ -194,6 +217,7 @@ class GameEventBatch:
     private_chat: Tuple[str, ...] = ()
     facts_text: str = ""
     timeline_turns: Tuple[TimelineTurn, ...] = ()
+    player_notes: Tuple[PlayerNote, ...] = ()
 
 
 class StreamerTimeline:

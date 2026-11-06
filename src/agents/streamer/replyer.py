@@ -23,7 +23,7 @@ from . import canonical
 from .persona_rules import boundaries_line
 from .plan import DecisionPlan
 from .speech_guard import WordFilter, apply_word_filter, fit_to_budget, strip_memory_numbers
-from .timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE
+from .timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE, PlayerNote
 
 # 默认人设兜底值（cold-start 兜底：构造 config 未提供对应字段时使用）
 #
@@ -51,6 +51,9 @@ _RECENT_SPEECH_LINES = 6
 # 单列她更早说过的话时用的小标题：这几句都滑出了聊天记录，比下面的记录早，标题点明时间，
 # 免得她以为这些话是接在最新弹幕后面说的
 _RECENT_SPEECH_HEADING = "## 更早一点你说过的话（比下面的聊天记录早）"
+
+# 游戏里最近找她的人那一段的标题：谁说的话、谁做的事以这一段为准
+_GAME_PEOPLE_HEADING = "## 游戏里最近找你的人（谁说的话、谁做的事以这里为准）"
 
 # 交接稿里没有特定回应对象时的 target 写法（Planner 没填，或填的消息 ID 查不到原话）
 _NO_TARGET = "（无特定目标，面向全体观众）"
@@ -164,6 +167,8 @@ class Replyer:
         state_facts: str = "",
         recent_speeches: Optional[Sequence[str]] = None,
         remembered: str = "",
+        game_people: Sequence[PlayerNote] = (),
+        reply_to: str = "",
     ) -> Optional[Dict[str, Any]]:
         """按一条 system 与一条 user 的复古布局请求纯文本台词。
 
@@ -174,6 +179,8 @@ class Replyer:
         游戏聊天、目标原文与流程单保持可见；不发送 tools 或 JSON 输出约束。
         ``state_facts`` 是状态跃迁事实块（客观事实底稿，规则式提取器产出），
         以"当前状态（客观事实）"分节进 user；空串时占位为"（无）"。
+        ``game_people`` 是最近几分钟游戏里玩家找她的条目，``reply_to`` 是这一句回应的玩家名
+        （没有特定玩家时为空），台词据此把话和举动归到对的人头上。
         返回台词与请求历史指针，供上层组装发声数据；失败或空台词返回 None。
         """
         # 防御：Planner 已裁决 should_reply=True 才会进入此处；False 直接放弃。
@@ -191,6 +198,8 @@ class Replyer:
             state_facts=state_facts,
             recent_speeches=recent_speeches,
             remembered=remembered,
+            game_people=game_people,
+            reply_to=reply_to,
         )
         messages: List[Dict[str, Any]] = [{"role": "user", "content": turn_input}]
 
@@ -299,6 +308,8 @@ class Replyer:
         state_facts: str = "",
         recent_speeches: Optional[Sequence[str]] = None,
         remembered: str = "",
+        game_people: Sequence[PlayerNote] = (),
+        reply_to: str = "",
     ) -> str:
         """她更早说过的话、最近几条聊天记录与本轮材料合并成一条 user。
 
@@ -317,7 +328,9 @@ class Replyer:
         shown_speeches = [entry.content.strip() for entry in entries if entry.role == "assistant"]
         return self._prompt_service.render(
             _REPLYER_TEMPLATE,
-            plan=_render_plan_text(plan, target_text=target_text),
+            plan=_render_plan_text(plan, target_text=target_text, reply_to=reply_to),
+            # 游戏里最近找她的人：玩家的话与举动单列、不截短，谁说的、谁做的一眼分清
+            game_people_section=_game_people_section(game_people),
             dialogue_prompt="\n".join(dialogue_lines) or "（暂无聊天记录）",
             recent_speech_section=_recent_speech_section(recent_speeches, shown_speeches),
             remembered_section=_remembered_section(remembered),
@@ -415,6 +428,24 @@ _THINK_UNCLOSED = re.compile(r"<think>.*", re.DOTALL)
 
 #: 口吻示例每行开头的列表记号：运营者写成列表时去掉，渲染时统一加
 _EXAMPLE_MARKS = "-*•· \t"
+
+
+def _game_people_section(game_people: Sequence[PlayerNote]) -> str:
+    """最近几分钟游戏里玩家找她的条目连同归因规矩：整段前面留一个空行，没有条目时为空串（整段省略）。
+
+    规矩只在有条目时出现，平常的决策窗不多占输入。几句规矩各对一种线上出过的错：交接稿里指她自己的
+    "她"被当成刚点过名的女仆，玩家的公屏话随之安到女仆头上；玩家扔来的东西说成天上掉的；玩家说她
+    "自家地板打洞"，她反过来劝玩家别打洞。
+    """
+    lines = [note.line for note in game_people if note.line]
+    if not lines:
+        return ""
+    return (
+        f"\n\n{_GAME_PEOPLE_HEADING}\n\n"
+        + "\n".join(lines)
+        + '\n交接稿里的"她"就是你。转述时说清是谁，不安到女仆、宠物或观众头上；上面写着是谁扔来、送来的，就别说成来路不明；'
+        "玩家公屏说的事多半说的是你，别安回他自己头上。"
+    )
 
 
 def _remembered_section(remembered: str) -> str:
@@ -562,13 +593,17 @@ def _unresolved_target(target: Optional[str]) -> str:
     return raw
 
 
-def _render_plan_text(plan: DecisionPlan, *, target_text: str = "") -> str:
+def _render_plan_text(plan: DecisionPlan, *, target_text: str = "", reply_to: str = "") -> str:
     """把 DecisionPlan 渲染为交接稿文本；查到要回应的原话时直接给原话，不再给消息 ID。
 
     原话找不到时按 :func:`_unresolved_target` 给出 target（昵称或片段照旧，ID 写法不给）。
+    没在回弹幕、这一窗只有一位玩家在游戏公屏开口时，target 一行换成回应对象：写明是哪位
+    玩家——不写的话，她会把这句公屏话安到聊天记录里刚点过名的女仆、宠物头上。
     """
     if target_text:
         target_line = f"target 原文: {target_text}\n"
+    elif reply_to:
+        target_line = f"回应对象: 游戏里的玩家 {reply_to}（他刚在游戏公屏跟你说话）\n"
     else:
         target_line = f"target: {_unresolved_target(plan.target)}\n"
     return (
