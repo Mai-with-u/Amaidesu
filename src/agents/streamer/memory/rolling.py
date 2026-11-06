@@ -16,9 +16,12 @@
    不合规的操作不采纳、旧行照留，连同理由写进整理报告——既没被合格地去掉、也没被替换的旧行
    一律留着，不靠提示词让模型自觉"宁多勿少"；
 3. 代码按固定规则取舍（:func:`select_snapshot`），至多 :data:`MAX_SNAPSHOT_LINES` 行：
-   稳定的事先占至多 :data:`MAX_LASTING_LINES` 行（本场新写的在前，其余按最近被提起）→ 本场
-   其余新事 → 其余稳定的事 → 其余旧行（按最近被提起）。同一档里挤出去的是最久没被再提的。
-   模型不凭感觉删。
+   运营者放回或新增的行（pinned）排第 0 档、一行不挤 → 稳定的事先占至多 :data:`MAX_LASTING_LINES`
+   行（本场新写的在前，其余按最近被提起）→ 本场其余新事 → 其余稳定的事 → 其余旧行（按最近被
+   提起）。同一档里挤出去的是最久没被再提的。模型不凭感觉删。
+
+人改过的行（``human_locked``）只有人能动：模型对它的去掉、替换、按重复去掉一律不采纳，记进整理
+报告；它是不是稳定的事也按人标的算，模型重标不算。
 
 模型输出里没有 ``previous``（或整个输出为空）时上一份原样保留；``previous`` 不是列表按整理
 失败处理，上一份快照同样原样留着。
@@ -78,6 +81,7 @@ _REFUSED_UNKNOWN_OP = "看不懂的操作，旧行保留"
 _REFUSED_DROP_EVIDENCE = "去掉旧行要写理由并指出本场哪一行台词作证据，旧行保留"
 _REFUSED_NOT_MENTIONED = "这场没提到不算去掉的理由，旧行保留"
 _REFUSED_DROP_KIND = "去掉的理由要以了结、不成立、记错或被取代开头，旧行保留"
+_REFUSED_HUMAN_LOCKED = "人改过的行只有人能动"
 _REFUSED_REPLACE = "替换的新行没通过校验，旧行保留"
 _REFUSED_SAME_AS = "注明重复的那一行编号不对，旧行保留"
 _REFUSED_SAME_AS_GONE = "注明重复的那一行也按重复去掉了，旧行保留"
@@ -180,15 +184,21 @@ def plan_from_ops(
         handled.add(index)
         op = str(raw.get("op") or "keep").strip().lower()
         evidence = line_of(raw.get("line"))
+        locked = bool(item.line.human_locked)
+        if op in ("drop", "replace") and locked:
+            # 人改过的行只有人能动：去掉、替换、按重复去掉都不采纳，旧行照留
+            changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_HUMAN_LOCKED))
+            continue
         if op == "keep":
-            # 保留：本场哪一行又提到它就算再提起；重标是否稳定的事
+            # 保留：本场哪一行又提到它就算再提起；重标是否稳定的事（人改过的行按人标的算）
             lasting = raw.get("lasting")
             updated[index] = SnapshotLine(
                 line=item.line,
-                lasting=lasting if isinstance(lasting, bool) else item.lasting,
+                lasting=lasting if isinstance(lasting, bool) and not locked else item.lasting,
                 seen_at_ms=max(item.seen_at_ms, int(session_started_at_ms))
                 if evidence is not None
                 else item.seen_at_ms,
+                pinned=item.pinned,
             )
         elif op == "drop" and raw.get("same_as") is not None:
             # 与另一行重复：事实由那一行留着，不需要本场证据
@@ -271,6 +281,7 @@ class _Entry:
     lasting: bool
     seen_at_ms: int
     order: int
+    pinned: bool = False
 
 
 def select_snapshot(
@@ -279,8 +290,9 @@ def select_snapshot(
     *,
     session_started_at_ms: int,
 ) -> SnapshotSelection:
-    """按固定规则凑本场快照，至多 12 行，按下面四档依次放：
+    """按固定规则凑本场快照，至多 12 行，按下面几档依次放：
 
+    0. 运营者放回或新增的行（pinned）：一行不挤，加起来超过 12 行时快照就超过 12 行（界面提示人去减）；
     1. 稳定的事，至多 8 行：本场新写的在前，其余按最近被提起；
     2. 本场其余新事（模型给出的先后）；
     3. 其余稳定的事，按最近被提起；
@@ -294,23 +306,34 @@ def select_snapshot(
         _Entry(new=True, index=index, lasting=line.lasting, seen_at_ms=int(session_started_at_ms), order=index)
         for index, line in enumerate(new_lines)
     ] + [
-        _Entry(new=False, index=index, lasting=item.lasting, seen_at_ms=item.seen_at_ms, order=len(new_lines) + index)
+        _Entry(
+            new=False,
+            index=index,
+            lasting=item.lasting,
+            seen_at_ms=item.seen_at_ms,
+            order=len(new_lines) + index,
+            pinned=item.pinned,
+        )
         for index, item in enumerate(kept)
     ]
     by_recency = sorted(entries, key=lambda e: (not e.new, -e.seen_at_ms, e.order))
-    lasting = [entry for entry in by_recency if entry.lasting]
+    # 放回快照 -> 稳定的事 -> 本场新事 -> 其余稳定的事 -> 其余旧行；放回的行不占稳定的事那 8 行
+    pinned = [entry for entry in by_recency if entry.pinned]
+    lasting = [entry for entry in by_recency if entry.lasting and not entry.pinned]
     ranked = [
         *lasting[:MAX_LASTING_LINES],
-        *(entry for entry in by_recency if entry.new and not entry.lasting),
+        *(entry for entry in by_recency if entry.new and not entry.lasting and not entry.pinned),
         *lasting[MAX_LASTING_LINES:],
-        *(entry for entry in by_recency if not entry.new and not entry.lasting),
+        *(entry for entry in by_recency if not entry.new and not entry.lasting and not entry.pinned),
     ]
-    chosen = ranked[:MAX_SNAPSHOT_LINES]
+    chosen = pinned + ranked[: max(0, MAX_SNAPSHOT_LINES - len(pinned))]
     chosen_new = {entry.index for entry in chosen if entry.new}
     chosen_kept = {entry.index for entry in chosen if not entry.new}
     lines = [line.model_copy(update={"in_snapshot": index in chosen_new}) for index, line in enumerate(new_lines)]
     kept_refs = [
-        KeptSnapshotLine(archive_line_id=int(item.line.id), lasting=item.lasting, seen_at_ms=item.seen_at_ms)
+        KeptSnapshotLine(
+            archive_line_id=int(item.line.id), lasting=item.lasting, seen_at_ms=item.seen_at_ms, pinned=item.pinned
+        )
         for index, item in enumerate(kept)
         if index in chosen_kept
     ]

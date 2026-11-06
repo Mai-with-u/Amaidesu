@@ -26,11 +26,13 @@ from src.modules.storage.models.memory import (
 _NOW = 9_000
 
 
-def _old(index: int, *, session: int = 1, lasting: bool = False, seen: int = 1_000, **extra: Any) -> SnapshotLine:
+def _old(
+    index: int, *, session: int = 1, lasting: bool = False, seen: int = 1_000, pinned: bool = False, **extra: Any
+) -> SnapshotLine:
     line = ArchiveLine(
         id=index, live_session_id=session, text=f"旧事{index}", quote=f"原话{index}", evidence_chat_id=index, **extra
     )
-    return SnapshotLine(line=line, lasting=lasting, seen_at_ms=seen)
+    return SnapshotLine(line=line, lasting=lasting, seen_at_ms=seen, pinned=pinned)
 
 
 def _new(count: int, *, lasting: bool = False, start: int = 500) -> List[PendingArchiveLine]:
@@ -287,6 +289,58 @@ def test_new_events_beyond_room_stay_out_of_the_snapshot() -> None:
     assert [item.archive_line_id for item in selection.kept] == list(range(1, 9))
     assert [line.in_snapshot for line in selection.lines] == [True] * 4 + [False] * 4
     assert [change.what for change in selection.evicted] == ["新事504", "新事505", "新事506", "新事507"]
+
+
+def test_pinned_rows_come_first_and_are_never_squeezed_out() -> None:
+    """运营者放回的行排第 0 档：哪怕最久没被再提也不被挤；不占稳定的事那 8 行；放回标记接进新快照。"""
+    pinned = [_old(index, seen=10, pinned=True) for index in (1, 2)]
+    stable = [_old(index, lasting=True, seen=index * 100) for index in range(3, 12)]
+
+    selection = select_snapshot(_new(2), [*pinned, *stable], session_started_at_ms=_NOW)
+
+    kept = {item.archive_line_id: item for item in selection.kept}
+    assert kept[1].pinned and kept[2].pinned, "放回的行一行不挤，标记照旧带着"
+    assert len(selection.lines) + len(selection.kept) == MAX_SNAPSHOT_LINES
+    assert [line.in_snapshot for line in selection.lines] == [True, True]
+    assert sorted(kept) == [1, 2, 4, 5, 6, 7, 8, 9, 10, 11], "稳定的事照样先占 8 行，最久没被再提的那件被挤"
+
+
+def test_more_pinned_rows_than_room_are_all_kept() -> None:
+    """放回的行加起来超过 12 行：全部留着（界面提示人去减），本场新事这次进不了快照。"""
+    pinned = [_old(index, pinned=True) for index in range(1, MAX_SNAPSHOT_LINES + 2)]
+
+    selection = select_snapshot(_new(1), pinned, session_started_at_ms=_NOW)
+
+    assert len(selection.kept) == MAX_SNAPSHOT_LINES + 1
+    assert [line.in_snapshot for line in selection.lines] == [False]
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        {"old": 1, "op": "drop", "reason": "了结：做完了", "line": 1},
+        {"old": 1, "op": "replace", "title": "团子会捡东西", "quote": "团子今天又帮我捡了", "line": 2},
+        {"old": 1, "op": "drop", "same_as": 2},
+    ],
+    ids=["drop", "replace", "same_as"],
+)
+def test_human_locked_rows_only_humans_can_remove(op: Dict[str, Any]) -> None:
+    """人改过的行，模型去掉、替换、按重复去掉都不采纳，理由写进整理报告；旧行照留。"""
+    base = [_old(1, human_locked=True), _old(2)]
+
+    plan = _plan([op], base)
+
+    assert [item.line.id for item in plan.kept] == [1, 2] and plan.replacements == []
+    assert [(change.action, change.reason) for change in plan.changes] == [("refused", "人改过的行只有人能动")]
+
+
+def test_human_locked_rows_keep_the_stable_flag_the_human_set() -> None:
+    """人标过稳定与否的行，模型重标不算；没锁的照模型重标；保留时放回标记照旧。"""
+    base = [_old(1, lasting=True, human_locked=True, pinned=True), _old(2)]
+
+    plan = _plan([{"old": 1, "op": "keep", "lasting": False}, {"old": 2, "op": "keep", "lasting": True}], base)
+
+    assert [(item.lasting, item.pinned) for item in plan.kept] == [(True, True), (True, False)]
 
 
 # ---------------------------------------------------------------------------

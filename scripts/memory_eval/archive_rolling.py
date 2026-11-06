@@ -168,8 +168,9 @@ class _ArchiveOnlyLLM:
 
 
 def _row_signature(line: ArchiveLine) -> Tuple[Any, ...]:
-    """快照要求一个字节都不变的那几项。"""
-    return (line.text, line.quote, line.evidence_chat_id, line.live_session_id, line.game, line.save_id, line.save_name)
+    """快照要求一个字节都不变的那几项；人改过标题的行（human_locked）标题由人定，不比。"""
+    title = None if line.human_locked else line.text
+    return (title, line.quote, line.evidence_chat_id, line.live_session_id, line.game, line.save_id, line.save_name)
 
 
 def _day_start_ms(days_ago: int) -> int:
