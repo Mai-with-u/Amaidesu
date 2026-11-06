@@ -6,6 +6,8 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from src.modules.types.game_save import OnlineMode
+
 
 class LinkedViewer(BaseModel):
     """运营者确认过和这位玩家是同一个人的直播间观众（只用来连带删除，从不告诉她）。"""
@@ -13,6 +15,16 @@ class LinkedViewer(BaseModel):
     viewer_id: int = Field(description="观众主键")
     user_name: str = Field(default="", description="观众当前昵称；读不到为空")
     confirmed_at_ms: int = Field(description="确认的时刻（Unix 毫秒）")
+
+
+class PlayerSaveItem(BaseModel):
+    """见过这位玩家的一个存档，连同那台服务器验不验正版账号。"""
+
+    save_id: str = Field(description="存档编号")
+    save_name: str = Field(default="", description="存档给人看的名字")
+    online_mode: OnlineMode = Field(
+        default="unknown", description="on 验账号 / off 不验（按名字认人，改名算新人，冒名认不出）/ unknown 没报"
+    )
 
 
 class PlayerItem(BaseModel):
@@ -23,6 +35,7 @@ class PlayerItem(BaseModel):
     uuid: str = Field(description="游戏给这个账号的 UUID（删玩家按它进不记录名单）")
     name: str = Field(description="最近一次见到时的名字")
     former_names: List[str] = Field(default_factory=list, description="以前用过的名字")
+    saves: List[PlayerSaveItem] = Field(default_factory=list, description="见过他的存档，按第一次见到的先后")
     first_seen_ms: int = Field(description="第一次见到的时刻")
     last_seen_ms: int = Field(description="最近一次见到的时刻")
     interactions: Dict[str, int] = Field(

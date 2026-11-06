@@ -49,6 +49,11 @@
         <p v-if="item.former_names.length > 0" class="player-meta">
           {{ formerNamesText(item.former_names) }}
         </p>
+        <p v-if="item.saves.length > 0" class="player-meta">{{ savesText(item.saves) }}</p>
+        <!-- 离线模式的存档：服务器不验正版账号，在那里认人只认得名字，标出来让运营者心里有数 -->
+        <p v-if="offlineSavesNote(item.saves)" class="player-meta offline-note">
+          {{ offlineSavesNote(item.saves) }}
+        </p>
         <p class="player-meta">{{ interactionsText(item.interactions) }}</p>
         <div class="player-links">
           <span class="links-label">关联观众</span>
@@ -103,7 +108,8 @@
  *
  * 对号只由运营者确认：从观众搜索里挑出一位，点确认才记下关联；关联只用来连带删除（删这位观众、
  * 或任何一方发“忘了我”时两边一起删），不会告诉她。删玩家会删掉他的互动、公屏聊天和对他的承诺，
- * 名字换成“一位玩家”，UUID 进不记录名单；在这里删玩家不动关联的观众。
+ * 名字换成“一位玩家”，UUID 进不记录名单；在这里删玩家不动关联的观众。见过他的存档里，服务器不验正版账号
+ * （离线模式）的单独标明：那里按名字认人，改名算新人，冒名认不出。
  *
  * 不含定时器 / 订阅 / WebSocket，无 keep-alive 生命周期语义。
  */
@@ -122,6 +128,8 @@ import {
   linkedViewerLabel,
   linkViewerWarning,
   matchesPlayerQuery,
+  offlineSavesNote,
+  savesText,
 } from './playersView';
 
 const items = ref<PlayerItem[]>([]);
@@ -315,6 +323,10 @@ defineExpose({ reload });
 
 .player-meta {
   margin: 0;
+}
+
+.offline-note {
+  color: var(--color-warning);
 }
 
 .link-picker {

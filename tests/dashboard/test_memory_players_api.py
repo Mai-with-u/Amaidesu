@@ -56,7 +56,16 @@ async def test_viewer_detail_names_the_linked_players(api, store: SQLiteDatabase
 async def test_list_link_unlink_and_delete_a_player(client, store: SQLiteDatabase, privacy: PrivacyService) -> None:
     session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
     repo = store.game_players
-    await repo.meet_player(game="minecraft", uuid="uuid-a", name="Steve", live_session_id=session, at_ms=1_010)
+    await repo.meet_player(
+        game="minecraft",
+        uuid="uuid-a",
+        name="Steve",
+        live_session_id=session,
+        save_id="w1",
+        save_name="测试服",
+        save_online_mode="off",
+        at_ms=1_010,
+    )
     alex = await repo.meet_player(game="minecraft", uuid="uuid-a", name="Alex", live_session_id=session, at_ms=1_020)
     await repo.record_greeting(player_id=alex.id, live_session_id=session, actions=["挥手"], at_ms=1_030)
     await repo.add_interaction(
@@ -78,6 +87,8 @@ async def test_list_link_unlink_and_delete_a_player(client, store: SQLiteDatabas
         {"greet": 1, "gift": 1},
         [],
     )
+    # 见过他的存档连同账号验证一起给面板：离线模式的存档要标明
+    assert item["saves"] == [{"save_id": "w1", "save_name": "测试服", "online_mode": "off"}]
 
     linked = await client.post(f"/api/v1/memory/players/{alex.id}/links", json={"viewer_id": viewer.viewer_id})
     assert linked.status_code == 200

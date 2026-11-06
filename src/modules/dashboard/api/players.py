@@ -23,6 +23,7 @@ from src.modules.dashboard.schemas.players import (
     PlayerLinkRequest,
     PlayerListResponse,
     PlayerMutationResponse,
+    PlayerSaveItem,
 )
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
@@ -65,7 +66,7 @@ async def list_players(
     viewers: ViewerRepoDep,  # noqa: B008 - FastAPI 依赖注入模式
     game: Annotated[Optional[str], Query(description="只看某个游戏")] = None,
 ) -> PlayerListResponse:
-    """玩家列表：最近见到的在前，带曾用名、互动条数与确认过的关联观众。"""
+    """玩家列表：最近见到的在前，带曾用名、见过他的存档（含服务器验不验账号）、互动条数与确认过的关联观众。"""
     rows = await players.list_players(game=game, limit=_MAX_PLAYERS)
     counts = await players.interaction_counts(player_ids=[row.id for row in rows])
     names: Dict[int, str] = {}
@@ -87,6 +88,11 @@ async def list_players(
                 uuid=row.uuid,
                 name=row.name,
                 former_names=row.former_names(),
+                # 见过他的存档连同账号验证：离线模式的存档面板上标明认人只认得名字
+                saves=[
+                    PlayerSaveItem(save_id=save.save_id, save_name=save.save_name, online_mode=save.online_mode)
+                    for save in row.saves
+                ],
                 first_seen_ms=row.first_seen_ms,
                 last_seen_ms=row.last_seen_ms,
                 interactions=counts.get(row.id, {}),

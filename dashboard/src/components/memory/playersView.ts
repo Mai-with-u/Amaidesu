@@ -8,6 +8,7 @@ import type {
   PlayerInteractionKind,
   PlayerItem,
   PlayerLinkedViewer,
+  PlayerSave,
   ViewerLinkedPlayer,
   ViewerListItem,
 } from '@/types';
@@ -35,6 +36,29 @@ export function interactionsText(counts: PlayerItem['interactions']): string {
 /** 曾用名："以前叫 Steve、Notch"；没改过名为空串（模板据此不渲染） */
 export function formerNamesText(names: readonly string[]): string {
   return names.length > 0 ? `以前叫 ${names.join('、')}` : '';
+}
+
+/** 离线模式（服务器不验正版账号）的后果：UUID 由名字算出，认人只认得名字 */
+export const OFFLINE_MODE_NOTE = '离线模式：按名字认人，改名算新人，冒名认不出';
+
+/** 存档的称呼：有名字用名字，没有名字用编号前 8 位 */
+function saveLabel(save: PlayerSave): string {
+  return save.save_name || `编号 ${save.save_id.slice(0, 8)}`;
+}
+
+/** 见过他的存档一行："见过他的存档：生存服、测试服"；没记下存档为空串（模板据此不渲染） */
+export function savesText(saves: readonly PlayerSave[]): string {
+  return saves.length > 0 ? `见过他的存档：${saves.map(saveLabel).join('、')}` : '';
+}
+
+/**
+ * 离线模式的存档那一句："「测试服」离线模式：按名字认人，改名算新人，冒名认不出"。
+ * 只点名 off 的存档，让运营者知道在那里认人能信几分；验账号的、没报的不写，一个都没有为空串。
+ */
+export function offlineSavesNote(saves: readonly PlayerSave[]): string {
+  const offline = saves.filter(save => save.online_mode === 'off');
+  if (offline.length === 0) return '';
+  return `${offline.map(save => `「${saveLabel(save)}」`).join('')}${OFFLINE_MODE_NOTE}`;
 }
 
 /** 关联观众的标签：有昵称写"昵称（#编号）"，昵称读不到只写编号 */

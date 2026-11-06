@@ -1564,6 +1564,13 @@ export interface PlayerLinkedViewer {
   confirmed_at_ms: number;
 }
 
+/** 见过这位玩家的一个存档；online_mode 是那台服务器验不验正版账号（off 时按名字认人） */
+export interface PlayerSave {
+  save_id: string;
+  save_name: string;
+  online_mode: 'on' | 'off' | 'unknown';
+}
+
 /** 记忆页"游戏里的人"的一行：她在游戏里遇到过的一位玩家 */
 export interface PlayerItem {
   id: number;
@@ -1573,6 +1580,8 @@ export interface PlayerItem {
   /** 最近一次见到时的名字 */
   name: string;
   former_names: string[];
+  /** 见过他的存档，按第一次见到的先后 */
+  saves: PlayerSave[];
   first_seen_ms: number;
   last_seen_ms: number;
   /** 互动条数（按种类；没出现的种类就是 0） */

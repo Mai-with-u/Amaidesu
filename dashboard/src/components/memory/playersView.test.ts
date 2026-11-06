@@ -8,6 +8,8 @@ import {
   linkedViewerLabel,
   linkViewerWarning,
   matchesPlayerQuery,
+  offlineSavesNote,
+  savesText,
 } from './playersView';
 
 function player(overrides: Partial<PlayerItem> = {}): PlayerItem {
@@ -17,6 +19,7 @@ function player(overrides: Partial<PlayerItem> = {}): PlayerItem {
     uuid: 'uuid-a',
     name: 'Alex',
     former_names: ['Steve'],
+    saves: [],
     first_seen_ms: 1_000,
     last_seen_ms: 2_000,
     interactions: {},
@@ -35,6 +38,24 @@ describe('互动条数', () => {
 
   it('一条都没有时说明还没有互动记录', () => {
     expect(interactionsText({})).toBe('还没有互动记录');
+  });
+});
+
+describe('见过他的存档', () => {
+  const saves = [
+    { save_id: 'aaaaaaaabbbb', save_name: '', online_mode: 'on' as const },
+    { save_id: 'w2', save_name: '测试服', online_mode: 'off' as const },
+    { save_id: 'w3', save_name: '老家', online_mode: 'unknown' as const },
+  ];
+
+  it('列出存档，没名字的用编号前 8 位；没记下存档为空', () => {
+    expect(savesText(saves)).toBe('见过他的存档：编号 aaaaaaaa、测试服、老家');
+    expect(savesText([])).toBe('');
+  });
+
+  it('只点名离线模式的存档，写清认人只认得名字；一个都没有为空', () => {
+    expect(offlineSavesNote(saves)).toBe('「测试服」离线模式：按名字认人，改名算新人，冒名认不出');
+    expect(offlineSavesNote(saves.filter(save => save.online_mode !== 'off'))).toBe('');
   });
 });
 
