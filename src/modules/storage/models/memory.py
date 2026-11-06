@@ -168,6 +168,14 @@ class ArchiveLine(BaseModel):
     viewer_chat_id: Optional[int] = Field(
         default=None, description="观众来源的行挂着的那条弹幕（live_chat 行）；她自己说的为空"
     )
+    source_viewer_names: List[str] = Field(
+        default_factory=list,
+        exclude=True,
+        description=(
+            "观众来源的行：那条弹幕的发送者用过的名字（读的时候按弹幕查出来，不是库里的列）。"
+            '只给渲染用：简报、线索卡、说话档把这些名字换成"那位观众"，库里的原话不改'
+        ),
+    )
 
 
 class SnapshotLine(BaseModel):

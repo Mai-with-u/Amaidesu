@@ -58,6 +58,56 @@ def archive_line_of(row: Any) -> ArchiveLine:
     return ArchiveLine.model_validate(data)
 
 
+def with_source_viewer_names(conn: sqlite3.Connection, lines: Sequence[ArchiveLine]) -> List[ArchiveLine]:
+    """观众来源的行带上那条弹幕的发送者用过的名字（弹幕上的名字、观众的现名与曾用名）。
+
+    她那句回应常常点了这位观众的名（"阿杰说得对，就叫团子"），原话逐字存着不改；渲染进简报、
+    线索卡、说话档时按这里带出的名字换成"那位观众"，她就不会当众说出是哪一位定的。
+    她自己说的行、弹幕已经不在的行（观众被删时这一行随外键一起删）不带。
+    """
+    chat_ids = sorted({int(line.viewer_chat_id) for line in lines if line.source == "viewer" and line.viewer_chat_id})
+    if not chat_ids:
+        return list(lines)
+    chat_ph = ",".join("?" for _ in chat_ids)
+    rows = conn.execute(
+        f"SELECT id, sender_name, viewer_id FROM live_chat WHERE id IN ({chat_ph})",  # noqa: S608 占位符由代码拼
+        chat_ids,
+    ).fetchall()
+    viewer_ids = sorted({int(row["viewer_id"]) for row in rows if row["viewer_id"] is not None})
+    names_by_viewer: Dict[int, Set[str]] = {}
+    if viewer_ids:
+        viewer_ph = ",".join("?" for _ in viewer_ids)
+        # 观众后来改了名、或这场之前用过别的名：现名与曾用名一起带上，她那句里点的可能是任何一个
+        for row in conn.execute(
+            f"SELECT viewer_id, user_name FROM viewer_names WHERE viewer_id IN ({viewer_ph})",  # noqa: S608
+            viewer_ids,
+        ).fetchall():
+            names_by_viewer.setdefault(int(row["viewer_id"]), set()).add(str(row["user_name"] or ""))
+        for row in conn.execute(
+            f"SELECT id, user_name FROM viewers WHERE id IN ({viewer_ph})",  # noqa: S608
+            viewer_ids,
+        ).fetchall():
+            names_by_viewer.setdefault(int(row["id"]), set()).add(str(row["user_name"] or ""))
+    names_by_chat: Dict[int, List[str]] = {}
+    for row in rows:
+        names = {str(row["sender_name"] or "")}
+        if row["viewer_id"] is not None:
+            names |= names_by_viewer.get(int(row["viewer_id"]), set())
+        names_by_chat[int(row["id"])] = sorted(name.strip() for name in names if name and name.strip())
+    return [
+        line.model_copy(update={"source_viewer_names": names_by_chat.get(int(line.viewer_chat_id), [])})
+        if line.source == "viewer" and line.viewer_chat_id
+        else line
+        for line in lines
+    ]
+
+
+def _with_snapshot_source_names(conn: sqlite3.Connection, items: Sequence[SnapshotLine]) -> List[SnapshotLine]:
+    """快照各行引用的档案行带上来源观众的名字（快照自己的三项标注不动）。"""
+    named = with_source_viewer_names(conn, [item.line for item in items])
+    return [item.model_copy(update={"line": line}) for item, line in zip(items, named, strict=True)]
+
+
 # 旧场次现拼快照：连着往前至多取几场有档案行的旧场次，其中凑够几场时长够的就停
 # （升级前最后一场如果是开错重开的一小段，也能接到真正的上一场和再前一场）
 LEGACY_SNAPSHOT_MAX_SESSIONS = 3
@@ -145,7 +195,7 @@ def _stored_lines(conn: sqlite3.Connection, live_session_id: int) -> List[Snapsh
         seen_at_ms = int(data.pop("snap_seen_at_ms"))
         pinned = bool(data.pop("snap_pinned"))
         result.append(SnapshotLine(line=archive_line_of(data), lasting=lasting, seen_at_ms=seen_at_ms, pinned=pinned))
-    return result
+    return _with_snapshot_source_names(conn, result)
 
 
 def _own_lines(conn: sqlite3.Connection, candidate: _Candidate) -> List[SnapshotLine]:
@@ -154,7 +204,8 @@ def _own_lines(conn: sqlite3.Connection, candidate: _Candidate) -> List[Snapshot
         f"SELECT {_ARCHIVE_COLUMNS} FROM archive_lines WHERE live_session_id=? ORDER BY id ASC",  # noqa: S608
         (candidate.session_id,),
     ).fetchall()
-    return [SnapshotLine(line=archive_line_of(item), seen_at_ms=candidate.started_at_ms) for item in rows]
+    own = [SnapshotLine(line=archive_line_of(item), seen_at_ms=candidate.started_at_ms) for item in rows]
+    return _with_snapshot_source_names(conn, own)
 
 
 def _legacy_snapshot(
@@ -265,7 +316,7 @@ class ArchiveRepo(BaseRepo):
                     f"SELECT {_ARCHIVE_COLUMNS} FROM archive_lines WHERE live_session_id=? ORDER BY id ASC",  # noqa: S608
                     (int(live_session_id),),
                 ).fetchall()
-                return [archive_line_of(row) for row in rows]
+                return with_source_viewer_names(conn, [archive_line_of(row) for row in rows])
 
         return await self._run_in_executor(_exec)
 
@@ -282,7 +333,8 @@ class ArchiveRepo(BaseRepo):
                     f"SELECT {_ARCHIVE_COLUMNS} FROM archive_lines WHERE id IN ({placeholders})",  # noqa: S608
                     ids,
                 ).fetchall()
-            by_id = {int(row["id"]): archive_line_of(row) for row in rows}
+                named = with_source_viewer_names(conn, [archive_line_of(row) for row in rows])
+            by_id = {int(line.id): line for line in named}
             return [by_id[line_id] for line_id in ids if line_id in by_id]
 
         return await self._run_in_executor(_exec)
@@ -313,7 +365,7 @@ class ArchiveRepo(BaseRepo):
                         " ORDER BY a.id DESC LIMIT ?",
                         (SESSION_KIND_LIVE, int(limit)),
                     ).fetchall()
-            return [archive_line_of(row) for row in rows]
+                return with_source_viewer_names(conn, [archive_line_of(row) for row in rows])
 
         return await self._run_in_executor(_exec)
 

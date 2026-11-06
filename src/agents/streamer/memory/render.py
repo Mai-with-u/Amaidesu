@@ -22,6 +22,7 @@ import json
 from typing import TYPE_CHECKING, AbstractSet, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.storage.models.memory import ArchiveLine, Commitment
+from src.modules.storage.privacy import mask_names_in_text
 from src.modules.types.game_save import GameSave
 
 from .saves import SavePlace, place_of
@@ -98,11 +99,30 @@ _COMMITMENT_PREFIX = "约"
 _USED_THIS_SESSION = "（本场已提过）"
 # 人批准的观众候选写成的档案行：库里不记是哪位观众定的，提醒她只说"大家定的"，别编出一个具体的人
 VIEWER_SOURCE_NOTE = "和观众一起定的，不记得是哪一位，别点名"
+# 观众来源的行里，那位观众的名字在渲染时换成的代称（库里的原话不改）
+SOURCE_VIEWER_LABEL = "那位观众"
 
 
 def source_notes(line: ArchiveLine) -> List[str]:
     """档案行来源的注记：观众来源的行注明"和观众一起定的"，她自己说的不加。"""
     return [VIEWER_SOURCE_NOTE] if line.source == "viewer" else []
+
+
+def _line_texts(line: ArchiveLine) -> Tuple[str, str]:
+    """档案行渲染用的标题与原话：观众来源的行把那位观众的名字换成"那位观众"。
+
+    她当场回应时常点名（"阿杰说得对，就叫团子"），标题也可能是人批准时写进了名字；原样进简报，
+    她就会当众说出是哪一位定的，和"不记得是哪一位"的注记自相矛盾。只在渲染这一刻换，库里不改。
+    """
+    title = (line.text or "").strip()
+    quote = (line.quote or "").strip()
+    if line.source != "viewer" or not line.source_viewer_names:
+        return title, quote
+    names = line.source_viewer_names
+    return (
+        mask_names_in_text(title, names, replacement=SOURCE_VIEWER_LABEL),
+        mask_names_in_text(quote, names, replacement=SOURCE_VIEWER_LABEL),
+    )
 
 
 def format_memory_refs(commitment_ids: Iterable[int]) -> str:
@@ -195,8 +215,8 @@ def render_archive_block(
     # 别的存档：(游戏, 存档编号) → [折成的那一行在 rendered 里的位置, 件数]；那一行放在第一件的位置
     folded: Dict[Tuple[str, str], List[int]] = {}
     for line in list(lines)[:MAX_BRIEF_ARCHIVE_LINES]:
-        title = (line.text or "").strip()
-        quote = (line.quote or "").strip()
+        # 观众来源的行：标题与原话里那位观众的名字换成"那位观众"
+        title, quote = _line_texts(line)
         if not title:
             continue
         place = place_of(line.game, line.save_id, current)
@@ -379,8 +399,8 @@ def render_archive_card(line: ArchiveLine, *, why: str, is_previous: bool = Fals
     （弹幕提到了某个词、她刚说到、走到了某个地点）。
     """
     when = _when_word(is_previous=is_previous, spoken=False)
-    title = (line.text or "").strip()
-    quote = (line.quote or "").strip()
+    # 观众来源的行：标题与原话里那位观众的名字换成"那位观众"
+    title, quote = _line_texts(line)
     notes = [f"你说过「{quote}」"] if quote else []
     notes.extend(source_notes(line))
     if note:
@@ -546,7 +566,8 @@ def render_cue_block(
 
 def render_spoken_archive(line: ArchiveLine, *, is_previous: bool = False) -> str:
     """说话档：Planner 点名的那一行档案，交到 Replyer 手里（只给标题，不含编号与原话）。"""
-    title = (line.text or "").strip()
+    # 观众来源的行：标题里那位观众的名字换成"那位观众"
+    title, _ = _line_texts(line)
     if not title:
         return ""
     when = _when_word(is_previous=is_previous, spoken=True)

@@ -122,6 +122,33 @@ def test_viewer_sourced_lines_say_they_were_decided_with_viewers_without_naming_
     assert "观众" not in render_archive_card(_archive(), why="弹幕提到了水车"), "她自己说的不加注记"
 
 
+def test_viewer_sourced_lines_replace_that_viewers_name_when_rendered() -> None:
+    """她当场点了那位观众的名：简报、线索卡、说话档里换成"那位观众"（现名、曾用名都换），别的名字不动。"""
+    line = ArchiveLine(
+        id=44,
+        live_session_id=7,
+        text="和小鱼一起给小羊取名雪球",
+        quote="阿杰说得对，就叫雪球，小鱼也同意",
+        evidence_chat_id=3,
+        source="viewer",
+        viewer_chat_id=9,
+        source_viewer_names=["小鱼", "阿杰"],
+    )
+    assert render_archive_block([line]) == [
+        "- [档#44] 和那位观众一起给小羊取名雪球"
+        "（你说过「那位观众说得对，就叫雪球，那位观众也同意」；和观众一起定的，不记得是哪一位，别点名）"
+    ]
+    card = render_archive_card(line, why="弹幕提到了雪球")
+    assert "阿杰" not in card and "小鱼" not in card and "那位观众说得对" in card
+    assert "和那位观众一起给小羊取名雪球" in render_spoken_archive(line)
+    # 名字只在渲染时换：模型序列化不带这些名字，库里原话不改
+    assert "source_viewer_names" not in line.model_dump()
+    assert line.quote == "阿杰说得对，就叫雪球，小鱼也同意"
+    # 她自己说的行即使带了名字也不换（不会发生，防的是来源判错时误伤她自己的话）
+    own = line.model_copy(update={"source": "streamer"})
+    assert "阿杰说得对" in render_archive_card(own, why="弹幕提到了雪球")
+
+
 def test_spoken_archive_gives_title_only() -> None:
     """说话档只给标题：不带编号，不带原话（原话是 Planner 对口径用的）。"""
     spoken = render_spoken_archive(_archive())

@@ -173,6 +173,76 @@ async def test_pending_candidates_expire_after_fourteen_days_only(store: SQLiteD
     assert [item.status for item in await store.viewer_candidates.list_candidates(status=None)] == ["rejected"]
 
 
+async def test_viewer_line_reads_back_with_the_source_viewers_names(store: SQLiteDatabase) -> None:
+    """批准后的观众来源行：按挂着的那条弹幕带出发送者的名字（弹幕上的名、现名），快照、按编号、线索池都带；
+    她自己说的行不带。原话照存不改。"""
+    session_id = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=600_000)
+    viewer = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_ajie",
+        user_name="阿杰",
+        timestamp_ms=1_050,
+        name_match_window_ms=0,
+    )
+    said = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_100,
+        sender_role="viewer",
+        sender_name="阿杰在摸鱼",
+        viewer_id=viewer.viewer_id,
+        content="叫它团子吧",
+        message_type="danmaku",
+    )
+    reply = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_200,
+        sender_role="assistant",
+        content="阿杰说得对，就叫团子",
+        message_type="text",
+    )
+    await store.sessions.apply_settlement(
+        live_session_id=session_id,
+        archive_lines=[PendingArchiveLine(text="挖到铁矿", quote="铁矿", evidence_chat_id=reply + 100)],
+        commitments=[],
+        closures=[],
+        settled_at_ms=9_999,
+        now_ms_value=9_999,
+    )
+    _write(
+        store,
+        session_id,
+        [
+            PendingViewerCandidate(
+                kind="viewer_defined",
+                title="猫叫团子",
+                viewer_chat_id=said,
+                viewer_quote="叫它团子",
+                reply_chat_id=reply,
+                reply_quote="阿杰说得对，就叫团子",
+            )
+        ],
+    )
+    (candidate,) = await store.viewer_candidates.list_candidates()
+    approved = await store.viewer_candidates.approve(
+        candidate_id=candidate.id, title="猫叫团子", lasting=True, at_ms=12_000
+    )
+    line_id = approved.archive_line_id or 0
+
+    (by_id,) = await store.archive.list_lines_by_ids(line_ids=[line_id])
+    assert (by_id.quote, sorted(by_id.source_viewer_names)) == ("阿杰说得对，就叫团子", ["阿杰", "阿杰在摸鱼"])
+    snapshot = await store.archive.get_snapshot(live_session_id=session_id)
+    assert snapshot is not None
+    named = {item.line.id: item.line.source_viewer_names for item in snapshot.lines}
+    assert sorted(named[line_id]) == ["阿杰", "阿杰在摸鱼"]
+    assert [names for line, names in named.items() if line != line_id] == [[]], "她自己说的行不带名字"
+    by_session = {
+        line.source: line.source_viewer_names for line in await store.archive.list_lines(live_session_id=session_id)
+    }
+    assert sorted(by_session["viewer"]) == ["阿杰", "阿杰在摸鱼"] and by_session["streamer"] == []
+
+
 async def test_forget_me_drops_candidates_naming_the_viewer_and_clears_their_edits(
     store: SQLiteDatabase, tmp_path: Path
 ) -> None:
