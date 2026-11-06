@@ -18,6 +18,7 @@ RoomMessagePayload 保留 ConnectedPayload / DisconnectedPayload 同构字段，
 - tool_result.py: 异步工具结果（tool.result.*，不绑定具体名）
 - utterance.py: TTS 一次发声实例生命周期（tts.utterance.*）
 - speech.py: 主播发言业务事实（streamer.speech）
+- streamer.py: 递话到达事实（streamer.prompt_received，兼作续播重放数据源）
 
 使用示例:
     from src.modules.events.payloads import RoomMessagePayload
@@ -71,6 +72,7 @@ from .room import (
 from .room_state import RoomStateWatchedPayload
 from .rundown import RundownChangedPayload
 from .speech import StreamerSpeechPayload
+from .streamer import StreamerPromptReceivedPayload
 from .tasks import TaskChangedPayload
 from .tool_health import ToolHealthPayload
 from .tool_result import ToolResultPayload
@@ -127,4 +129,6 @@ __all__ = [
     "UtteranceDroppedPayload",
     # streamer.speech 主播发言业务事实
     "StreamerSpeechPayload",
+    # streamer.prompt_received 递话到达事实
+    "StreamerPromptReceivedPayload",
 ]

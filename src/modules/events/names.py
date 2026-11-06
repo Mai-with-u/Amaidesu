@@ -107,6 +107,13 @@ class CoreEvents:
     # utterance_id 与 tts.utterance.* 共用同一关联键（编排层生成，全链路串联）。
     STREAMER_SPEECH = "streamer.speech"
 
+    # ========== v2 语义域事件（streamer 递话到达事实） ==========
+    # 主播 Agent 的 receive_prompt 受理递话成功即发一条（含全文原文，不截断——
+    # 应用日志只留 60 字符，全文以本事件为准）。与 agent.prompted（观测面）互补：
+    # 本事件兼作续播重放的数据源——进程重启接回场次时，从诊断事件流文件回读
+    # 上一进程窗口的递话补进提醒队列，重启不再吞掉运营留言。
+    STREAMER_PROMPT_RECEIVED = "streamer.prompt_received"
+
     # ========== v2 语义域事件（tool 异步工具结果通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名。emit 时使用具体名
     # 如 "tool.result.speak"/"tool.result.summarize_timeline"。
