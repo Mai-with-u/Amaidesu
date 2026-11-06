@@ -1233,3 +1233,81 @@ def test_memory_prompt_examples_stay_out_of_eval_datasets() -> None:
                 if any(run in text for run in runs)
             )
     assert shared == []
+
+
+# ---------------------------------------------------------------------------
+# 观众候选：观众定下、她当场接受的事，人批准才进记忆
+# ---------------------------------------------------------------------------
+
+
+async def test_viewer_candidates_are_listed_from_her_replies_and_kept_out_of_memory(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """档案那次调用顺带列候选：只认她回复真实观众弹幕的那几行，两段原话逐字核对；
+    含个人信息的整条丢掉只计数；候选进待审区，不进档案行，报告里记下列了几条。"""
+    session_id = await _ended_session(store)
+    named = await _viewer_message(store, session_id, content="以后打卡就说麦麦早吧", message_id="m1")
+    await _speech(store, session_id, "好呀就这么定了", reply_to_message_id="m1", timestamp_ms=1_100)
+    await _viewer_message(store, session_id, content="我住在幸福小区三栋", message_id="m2")
+    await _speech(store, session_id, "记住啦", reply_to_message_id="m2", timestamp_ms=1_200)
+    await _viewer_message(store, session_id, content="叫它年糕", message_id="m3", simulated=True)
+    await _speech(store, session_id, "年糕也行", reply_to_message_id="m3", timestamp_ms=1_300)
+
+    llm = _reply(
+        '{"archive": [], "viewer_candidates": ['
+        '{"line": 1, "title": "和观众3一起把打卡口号定成麦麦早", "viewer_quote": "打卡就说麦麦早", "quote": "就这么定了"},'
+        '{"line": 2, "title": "观众住哪", "viewer_quote": "我住在幸福小区三栋", "quote": "记住啦"},'
+        '{"line": 3, "title": "狗叫年糕", "viewer_quote": "叫它年糕", "quote": "年糕也行"},'
+        '{"line": 1, "title": "又列一遍", "viewer_quote": "麦麦早", "quote": "好呀"}]}',
+        '{"commitments": []}',
+    )
+    assert await _settler(store, llm, prompt_manager).settle_session(session_id) is True
+
+    (candidate,) = await store.viewer_candidates.list_candidates()
+    assert (candidate.title, candidate.viewer_chat_id, candidate.viewer_quote, candidate.reply_quote) == (
+        "和观众一起把打卡口号定成麦麦早",
+        named,
+        "打卡就说麦麦早",
+        "就这么定了",
+    ), "代号换成观众；同一行只列一条"
+    assert await store.archive.list_lines(live_session_id=session_id) == [], "批准前不进档案"
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settle_report is not None
+    report = SettleReport.model_validate_json(row.settle_report)
+    assert (report.candidates_listed, report.candidates_personal_dropped) == ({"viewer_defined": 1}, 1)
+    assert [item.reason for item in report.unregistered if item.kind == "candidate"] == [
+        "引用的不是她回复观众弹幕的那一行"
+    ], "模拟观众说的不算观众定下的"
+    assert "幸福小区" not in row.settle_report, "个人信息不写进报告"
+
+
+async def test_rejected_candidates_and_archived_lines_are_not_listed_again(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    session_id = await _ended_session(store)
+    await _viewer_message(store, session_id, content="小羊叫雪球", message_id="m1")
+    await _speech(store, session_id, "好，这只羊就叫雪球", reply_to_message_id="m1", timestamp_ms=1_100)
+    await _viewer_message(store, session_id, content="猫叫芝麻吧", message_id="m2")
+    await _speech(store, session_id, "芝麻好听", reply_to_message_id="m2", timestamp_ms=1_200)
+    candidates = (
+        '"viewer_candidates": ['
+        '{"line": 1, "title": "小羊取名雪球", "viewer_quote": "小羊叫雪球", "quote": "就叫雪球"},'
+        '{"line": 2, "title": "猫取名芝麻", "viewer_quote": "猫叫芝麻", "quote": "芝麻好听"}]'
+    )
+    llm = _reply(
+        '{"archive": [{"line": 1, "title": "小羊取名雪球", "quote": "这只羊就叫雪球"}], ' + candidates + "}",
+        '{"commitments": []}',
+    )
+    assert await _settler(store, llm, prompt_manager).settle_session(session_id) is True
+    (candidate,) = await store.viewer_candidates.list_candidates()
+    assert candidate.title == "猫取名芝麻", "她自己说出来、已经写成档案的不再列"
+    await store.viewer_candidates.reject(candidate_id=candidate.id, at_ms=8_000)
+
+    # 重新整理：驳回过的同一条弹幕不再列
+    await store.sessions.requeue_settlement(live_session_id=session_id)
+    llm = _reply('{"archive": [], ' + candidates.replace("小羊取名雪球", "给小羊起名雪球") + "}", '{"commitments": []}')
+    assert await _settler(store, llm, prompt_manager).settle_session(session_id) is True
+    assert [(item.title, item.status) for item in await store.viewer_candidates.list_candidates(status=None)] == [
+        ("给小羊起名雪球", "pending"),
+        ("猫取名芝麻", "rejected"),
+    ]

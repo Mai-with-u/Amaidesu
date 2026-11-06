@@ -8,18 +8,20 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from src.modules.storage.models.memory import (
     CommitmentClosure,
     KeptSnapshotLine,
     PendingArchiveLine,
     PendingCommitment,
+    PendingViewerCandidate,
 )
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.storage.repos.archive import delete_archive_lines_by_session, delete_snapshot, keywords_column
 from src.modules.storage.repos.memory_index import delete_session_index_rows
+from src.modules.storage.repos.viewer_candidates import CANDIDATE_EXPIRE_MS, replace_session_candidates
 from src.modules.storage.repos.commitments import (
     delete_commitments_by_session,
     reopen_commitments_closed_by_session,
@@ -288,6 +290,31 @@ class SessionRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def rejected_candidate_keys(self) -> Tuple[List[int], List[str]]:
+        """驳回过的观众候选挂的弹幕与标题：整理时同一条弹幕或同样标题的不再列。"""
+
+        def _exec() -> Tuple[List[int], List[str]]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT viewer_chat_id, title FROM viewer_candidates WHERE status='rejected'"
+                ).fetchall()
+            return [int(row[0]) for row in rows if row[0] is not None], [str(row[1]) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def expire_viewer_candidates(self, *, now_ms_value: int) -> int:
+        """删掉列出超过 14 天还没人审的观众候选（整理调度顺手做），返回删了几条。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "DELETE FROM viewer_candidates WHERE status='pending' AND created_at_ms < ?",
+                    (int(now_ms_value) - CANDIDATE_EXPIRE_MS,),
+                )
+            return int(cur.rowcount or 0)
+
+        return await self._run_in_executor(_exec)
+
     async def list_sessions_pending_settle(
         self, *, limit: int = 4, max_attempts: int = MAX_SETTLE_ATTEMPTS
     ) -> List[LiveSession]:
@@ -378,8 +405,9 @@ class SessionRepo(BaseRepo):
         now_ms_value: int,
         settle_report: Optional[str] = None,
         snapshot_kept: Sequence[KeptSnapshotLine] = (),
+        viewer_candidates: Sequence[PendingViewerCandidate] = (),
     ) -> Dict[str, int]:
-        """把一场的整理结果一次写进去：档案行、档案快照、新承诺、了结、整理完成时刻。
+        """把一场的整理结果一次写进去：档案行、档案快照、新承诺、了结、观众候选、整理完成时刻。
 
         整理必须整场原子提交：任何一步失败都回滚，不能让这一场留下半份结果。
         跨三张表的写操作只有这一处，事务边界放在场次仓储里，与删除场次的级联同一层。
@@ -399,7 +427,7 @@ class SessionRepo(BaseRepo):
         """
 
         def _exec() -> Dict[str, int]:
-            written = {"archive": 0, "snapshot": 0, "commitments": 0, "closed": 0, "claimed": 0}
+            written = {"archive": 0, "snapshot": 0, "commitments": 0, "closed": 0, "claimed": 0, "candidates": 0}
             with self._manager.transaction(immediate=True) as conn:
                 claim = conn.execute(
                     "UPDATE live_sessions SET settled_at_ms=?, settle_report=?"
@@ -456,6 +484,13 @@ class SessionRepo(BaseRepo):
                     written["archive"] += 1
                     if line.in_snapshot:
                         snapshot_new.append((int(cur.lastrowid or 0), bool(line.lasting)))
+                # 观众候选进待审区：本场待审的整份替换，已批、已驳回的不动（批准前对她不可见）
+                written["candidates"] = replace_session_candidates(
+                    conn,
+                    live_session_id=int(live_session_id),
+                    candidates=viewer_candidates,
+                    created_at_ms=int(settled_at_ms),
+                )
                 written["snapshot"] = _write_snapshot(
                     conn,
                     live_session_id=int(live_session_id),

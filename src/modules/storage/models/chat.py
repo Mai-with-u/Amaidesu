@@ -207,6 +207,9 @@ class SettleSpeechLine(BaseModel):
     reply_content: Optional[str] = Field(default=None, description="被回应那条弹幕的原文")
     reply_viewer_id: Optional[int] = Field(default=None, description="被回应弹幕的发言人（内部观众 ID）")
     reply_simulated: Optional[bool] = Field(default=None, description="被回应弹幕是否模拟观众发的")
+    reply_chat_id: Optional[int] = Field(
+        default=None, description="被回应那条弹幕的 live_chat 行（观众候选挂在它上面）"
+    )
 
 
 class SpeechDeleteResult(BaseModel):

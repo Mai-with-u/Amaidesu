@@ -189,7 +189,9 @@ class UnregisteredItem(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["commitment", "archive"] = Field(..., description="本要登记成什么（承诺 / 档案行）")
+    kind: Literal["commitment", "archive", "candidate"] = Field(
+        ..., description="本要登记成什么（承诺 / 档案行 / 观众候选）"
+    )
     what: str = Field(default="", description="模型给的标题（可能为空）")
     quote: str = Field(default="", description="模型引的原话（校验没过时也原样留着）")
     reason: str = Field(..., description="没登记的原因（代码给的固定措辞）")
@@ -220,6 +222,12 @@ class SettleReport(BaseModel):
     )
     snapshot_changes: List[SnapshotChange] = Field(
         default_factory=list, description="这一场对档案快照的改动：去掉、替换、超上限挤出、没采纳的操作"
+    )
+    candidates_listed: Dict[str, int] = Field(
+        default_factory=dict, description="这一场列进待审区的观众候选数（按类型：观众定下的 / 她说欠着的）"
+    )
+    candidates_personal_dropped: int = Field(
+        default=0, description="因含观众个人信息被代码丢掉的候选数（内容不写进报告）"
     )
 
 

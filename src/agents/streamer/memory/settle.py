@@ -50,6 +50,7 @@ from src.modules.storage.models.memory import (
     KeptSnapshotLine,
     PendingArchiveLine,
     PendingCommitment,
+    PendingViewerCandidate,
     SettleReport,
     SnapshotChange,
     UnregisteredItem,
@@ -61,6 +62,7 @@ from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.agents.streamer.memory.render import memory_ref_numbers, render_commitment_number
 from src.agents.streamer.memory.rolling import plan_from_ops, render_base, select_snapshot
 from src.agents.streamer.memory.saves import SaveTimeline
+from src.agents.streamer.memory.settle_candidates import CandidateCheck, taken_from, validate_viewer_candidates
 from src.agents.streamer.memory.settle_cues import remembered_places, render_places, verified_keywords, verified_place
 from src.modules.utils.time_utils import now_ms
 
@@ -155,6 +157,9 @@ class SettleOutcome:
     closures: List[CommitmentClosure] = field(default_factory=list)
     unregistered: List[UnregisteredItem] = field(default_factory=list)
     input_note: Optional[str] = None
+    # 观众候选（人批准才进记忆）与因个人信息丢掉的条数
+    viewer_candidates: List[PendingViewerCandidate] = field(default_factory=list)
+    candidates_personal_dropped: int = 0
 
 
 def parse_json_object(text: str) -> Dict[str, Any]:
@@ -396,6 +401,13 @@ class SessionSettler:
         for session in pending:
             if await self.settle_session(int(session.id)):
                 settled += 1
+        try:
+            # 待审的观众候选只按时间过期：列出后 14 天没人审就删
+            expired = await self._sessions.expire_viewer_candidates(now_ms_value=int(self._clock()))
+            if expired:
+                logger.info(f"删掉 {expired} 条过期没人审的观众候选")
+        except Exception as exc:  # noqa: BLE001 - 过期清理失败不挡整理，下次调度再删
+            logger.warning(f"清理过期观众候选失败: {exc}", exc=exc)
         if pending:
             logger.info(f"下播整理：待整理 {len(pending)} 场，成功 {settled} 场")
         return settled
@@ -483,12 +495,23 @@ class SessionSettler:
             await self._record_failure(session, f"整理异常：{exc}")
             return False
 
+        listed: Dict[str, int] = {}
+        for candidate in outcome.viewer_candidates:
+            listed[candidate.kind] = listed.get(candidate.kind, 0) + 1
         report = SettleReport(
             unregistered=outcome.unregistered,
             input_note=outcome.input_note,
             snapshot_changes=outcome.snapshot_changes,
+            candidates_listed=listed,
+            candidates_personal_dropped=outcome.candidates_personal_dropped,
         )
-        has_report = bool(outcome.unregistered or outcome.input_note or outcome.snapshot_changes)
+        has_report = bool(
+            outcome.unregistered
+            or outcome.input_note
+            or outcome.snapshot_changes
+            or listed
+            or outcome.candidates_personal_dropped
+        )
         now = int(self._clock())
         try:
             written = await self._sessions.apply_settlement(
@@ -500,6 +523,7 @@ class SessionSettler:
                 now_ms_value=now,
                 settle_report=report.model_dump_json() if has_report else None,
                 snapshot_kept=outcome.snapshot_kept,
+                viewer_candidates=outcome.viewer_candidates,
             )
         except Exception as exc:  # noqa: BLE001 - 写入失败按整理失败记账，事务已回滚
             logger.warning(f"场次 {live_session_id} 整理写入失败: {exc}", exc=exc)
@@ -514,7 +538,7 @@ class SessionSettler:
         logger.info(
             f"场次 {live_session_id} 整理完成：档案 {written.get('archive', 0)} 行、"
             f"新承诺 {written.get('commitments', 0)} 条、了结 {written.get('closed', 0)} 条、"
-            f"未登记 {len(outcome.unregistered)} 条"
+            f"未登记 {len(outcome.unregistered)} 条、观众候选 {written.get('candidates', 0)} 条"
         )
         return True
 
@@ -824,14 +848,44 @@ class SessionSettler:
         selection = select_snapshot(
             [*new_lines, *plan.replacements], plan.kept, session_started_at_ms=material.started_at_ms
         )
+        candidates = await self._check_candidates(archive_data.get("viewer_candidates"), material, selection.lines)
         return SettleOutcome(
             archive_lines=selection.lines,
             snapshot_kept=selection.kept,
             snapshot_changes=[*plan.changes, *selection.evicted],
             commitments=commitments,
             closures=closures,
-            unregistered=[*archive_misses, *plan.misses, *commitment_misses, *closure_misses],
+            unregistered=[*archive_misses, *plan.misses, *commitment_misses, *closure_misses, *candidates.missed],
             input_note=material.speech_note,
+            viewer_candidates=candidates.candidates,
+            candidates_personal_dropped=candidates.personal_dropped,
+        )
+
+    async def _check_candidates(
+        self, rows: Any, material: SettleMaterial, new_lines: List[PendingArchiveLine]
+    ) -> CandidateCheck:
+        """核对档案那次调用顺带列出的观众候选：和本场新写、上一份档案、驳回过的都去重。
+
+        驳回记录读不到时照常核对，只是少了这一道去重（下次整理还会再列，人再驳回一次即可）。
+        """
+        rejected_chats: List[int] = []
+        rejected_titles: List[str] = []
+        try:
+            rejected_chats, rejected_titles = await self._sessions.rejected_candidate_keys()
+        except Exception as exc:  # noqa: BLE001 - 去重依据读不到不挡整理
+            logger.warning(f"读驳回过的观众候选失败，本次不按驳回记录去重: {exc}", exc=exc)
+        base = material.previous.lines if material.previous is not None else []
+        new_evidence, new_titles = taken_from(new_lines)
+        old_evidence, old_titles = taken_from(base)
+        return validate_viewer_candidates(
+            rows,
+            line_of=lambda raw: self._line_of(raw, material),
+            game_of=lambda raw: _game_of(raw, material),
+            saves=material.saves,
+            taken_evidence=[*new_evidence, *old_evidence],
+            taken_titles=[*new_titles, *old_titles],
+            rejected_viewer_chats=rejected_chats,
+            rejected_titles=rejected_titles,
         )
 
     async def _ask_for_list(self, *, template: str, prompt: str, key: str) -> List[Any]:
