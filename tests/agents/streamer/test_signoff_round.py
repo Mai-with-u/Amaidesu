@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.agents.streamer.memory.index import MemoryIndexer
 from src.agents.streamer.planner import RoundOutcome
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.agents.streamer.utterance_queue import UtteranceQueue
@@ -204,7 +205,10 @@ async def _started_signoff_agent(
         # 下播整理走账本（承诺与场次档案）：接上仓储才会在道别后起一次 summary 档位整理
         commitments_repo=stack.store.commitments,
         archive_repo=stack.store.archive,
+        # 回想工具走混合检索：接上索引，并在启动前把已造好的档案补进索引（不和后台补算抢先后）
+        memory_index_repo=stack.store.memory_index,
     )
+    await MemoryIndexer(repo=stack.store.memory_index, embedding=None, embedding_note="").run_once()
     await agent.start()
     return agent
 

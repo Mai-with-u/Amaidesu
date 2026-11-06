@@ -77,54 +77,46 @@ async def _danmaku(store: SQLiteDatabase, pk: int, *, user_id: str, name: str, t
     )
 
 
-async def test_search_recall_speech_requires_every_keyword(store: SQLiteDatabase) -> None:
+async def test_list_speech_by_ids_keeps_the_given_order_and_only_aired_lines(store: SQLiteDatabase) -> None:
+    """回想按检索结果的先后还原台词；没送到观众面前的（dropped_at_ms 非空）不算说过。"""
     pk = await _session(store, started=1_000)
-    await _say(store, pk, "今天挖矿挖到钻石了", 1_100)
-    await _say(store, pk, "今天一直挖矿", 1_200)
-    await _say(store, pk, "钻石真好看", 1_300)
+    first = await _say(store, pk, "今天挖矿挖到钻石了", 1_100)
+    dropped = await _say(store, pk, "这句没送到观众面前", 1_200, dropped_at_ms=1_250)
+    second = await _say(store, pk, "钻石真好看", 1_300)
+    viewer = await _danmaku(store, pk, user_id="u1", name="老王", text="观众的弹幕", ts=1_400)
 
-    rows = await store.chat.search_recall_speech(keywords=["挖矿", "钻石"])
-    assert [row.content for row in rows] == ["今天挖矿挖到钻石了"]
+    rows = await store.chat.list_speech_by_ids(chat_ids=[second, dropped, first, viewer, 999])
 
-    rows = await store.chat.search_recall_speech(keywords=["挖矿"])
-    assert {row.content for row in rows} == {"今天挖矿挖到钻石了", "今天一直挖矿"}
+    assert [row.id for row in rows] == [second, first]
 
 
-async def test_search_recall_speech_only_counts_spoken_lines(store: SQLiteDatabase) -> None:
-    """dropped_at_ms 非空 = 确知没送到观众面前，不算说过的话。"""
+async def test_list_archive_lines_by_ids_keeps_the_given_order(store: SQLiteDatabase) -> None:
     pk = await _session(store, started=1_000)
-    await _say(store, pk, "这句没送到观众面前", 1_100, dropped_at_ms=1_150)
-    assert await store.chat.search_recall_speech(keywords=["没送到"]) == []
+    chat_id = await _say(store, pk, "从今天起你就叫团子", 1_100)
+    first = await store.archive.insert_line(
+        live_session_id=pk, text="取名团子", quote="就叫团子", evidence_chat_id=chat_id
+    )
+    second = await store.archive.insert_line(
+        live_session_id=pk, text="挖了水渠", quote="挖了水渠", evidence_chat_id=chat_id
+    )
 
-    await _say(store, pk, "这句说出来了", 1_200)
-    rows = await store.chat.search_recall_speech(keywords=["这句"])
-    assert [row.content for row in rows] == ["这句说出来了"]
+    lines = await store.archive.list_lines_by_ids(line_ids=[second, 999, first])
 
-
-async def test_search_recall_speech_session_filter_and_order(store: SQLiteDatabase) -> None:
-    first = await _session(store, started=1_000, ended=2_000)
-    second = await _session(store, started=3_000)
-    await _say(store, first, "上一场聊了挖矿", 1_100)
-    await _say(store, second, "本场继续挖矿", 3_100)
-    await _say(store, second, "本场又挖矿", 3_200)
-
-    newest = await store.chat.search_recall_speech(keywords=["挖矿"], live_session_id=second, newest_first=True)
-    assert [row.content for row in newest] == ["本场又挖矿", "本场继续挖矿"]
-
-    oldest = await store.chat.search_recall_speech(keywords=["挖矿"], newest_first=False)
-    assert [row.content for row in oldest] == ["上一场聊了挖矿", "本场继续挖矿", "本场又挖矿"]
+    assert [line.id for line in lines] == [second, first]
 
 
-async def test_search_recall_speech_treats_like_wildcards_literally(store: SQLiteDatabase) -> None:
+async def test_search_recall_danmaku_treats_like_wildcards_literally(store: SQLiteDatabase) -> None:
     """关键词里的 % 与 _ 按字面匹配，不变成通配符。"""
     pk = await _session(store, started=1_000)
-    await _say(store, pk, "进度 100% 了", 1_100)
-    await _say(store, pk, "进度 1000 了", 1_200)
-    assert [row.content for row in await store.chat.search_recall_speech(keywords=["100%"])] == ["进度 100% 了"]
+    await _danmaku(store, pk, user_id="u1", name="老王", text="进度 100% 了", ts=1_100)
+    await _danmaku(store, pk, user_id="u1", name="老王", text="进度 1000 了", ts=1_200)
+    rows = await store.chat.search_recall_danmaku(keywords=["100%"], live_session_id=pk)
+    assert [row.content for row in rows] == ["进度 100% 了"]
 
-    await _say(store, pk, "文件叫 a_b", 1_300)
-    await _say(store, pk, "文件叫 axb", 1_400)
-    assert [row.content for row in await store.chat.search_recall_speech(keywords=["a_b"])] == ["文件叫 a_b"]
+    await _danmaku(store, pk, user_id="u1", name="老王", text="文件叫 a_b", ts=1_300)
+    await _danmaku(store, pk, user_id="u1", name="老王", text="文件叫 axb", ts=1_400)
+    rows = await store.chat.search_recall_danmaku(keywords=["a_b"], live_session_id=pk)
+    assert [row.content for row in rows] == ["文件叫 a_b"]
 
 
 async def test_search_recall_danmaku_only_viewer_messages_of_the_session(store: SQLiteDatabase) -> None:

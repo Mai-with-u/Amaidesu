@@ -71,6 +71,7 @@ from .memory.brief import build_brief
 from .memory.cues import MemoryCueProvider
 from .memory.index import MemoryIndexer
 from .memory.recall import MemoryRecallService, build_memory_recall_provider
+from .memory.search import MemorySearch
 from .memory.settle import SessionSettler
 from .message_buffer import MessageBuffer
 from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
@@ -472,13 +473,16 @@ class StreamerAgent(BaseAgent):
                 min_session_ms=self.typed_config.memory_brief_min_session_ms,
             )
 
-        # 记忆检索索引：后台补算全文（必开）与向量（配置了嵌入服务才开）；整理写完时叫醒补一轮
+        # 记忆检索索引：后台补算全文（必开）与向量（配置了嵌入服务才开）；整理写完时叫醒补一轮。
+        # 混合检索与它共用同一个仓储和嵌入客户端，回想工具（以后还有被动想起）都走它
         self._memory_indexer: Optional[MemoryIndexer] = None
+        self._memory_search: Optional[MemorySearch] = None
         if memory_index_repo is not None:
             setup = embedding_setup or EmbeddingSetup(client=None, note="语义检索没开：没有装配嵌入服务")
             self._memory_indexer = MemoryIndexer(
                 repo=memory_index_repo, embedding=setup.client, embedding_note=setup.note
             )
+            self._memory_search = MemorySearch(repo=memory_index_repo, embedding=setup.client)
 
         # 常驻简报：按"上一场的档案 + 不针对人的未了结承诺"渲染，每窗按表快照重渲
         self._memory_brief_text: str = ""
@@ -506,6 +510,7 @@ class StreamerAgent(BaseAgent):
                 current_session_provider=self._current_session_pk,
                 event_repo=event_repo,
                 saves_provider=lambda: self._current_saves,
+                search=self._memory_search,
             )
         # 后台 flush 循环（Agent 主循环）
         self._flush_task: Optional[asyncio.Task] = None

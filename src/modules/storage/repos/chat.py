@@ -961,41 +961,26 @@ class ChatRepo(BaseRepo):
 
     # -------------------- 回想工具（memory_recall）的检索面 --------------------
 
-    async def search_recall_speech(
-        self,
-        *,
-        keywords: Sequence[str],
-        limit: int = 8,
-        live_session_id: Optional[int] = None,
-        newest_first: bool = True,
-    ) -> List[LiveChatMessage]:
-        """按关键词找她已播出的台词（回想工具用；多个关键词取交集）。
+    async def list_speech_by_ids(self, *, chat_ids: Sequence[int]) -> List[LiveChatMessage]:
+        """按主键取她播出了的台词（回想工具把检索结果还原成台词行用）。
 
-        只认已播出的台词：`sender_role='assistant'` 且 `dropped_at_ms IS NULL`
-        ——确知没送到观众面前的句子不算说过的话。`live_session_id` 给定时只查那一场，
-        缺省查全部历史。每个关键词一个 ``LIKE '%词%'``，一行要同时命中全部关键词；
-        关键词里的 `%` / `_` 按字面匹配（转义写法与观众搜索同口径）。
+        只认已播出的：`sender_role='assistant'` 且 `dropped_at_ms IS NULL`；主键不存在或
+        不是她播出的台词就不返回。按给定主键的先后排列。
         """
+        ids = [int(chat_id) for chat_id in dict.fromkeys(chat_ids)]
+        if not ids:
+            return []
 
         def _exec() -> List[LiveChatMessage]:
-            clauses = ["sender_role='assistant'", "dropped_at_ms IS NULL"]
-            params: List[Any] = []
-            if live_session_id is not None:
-                clauses.append("live_session_id=?")
-                params.append(int(live_session_id))
-            for keyword in keywords:
-                clauses.append("content LIKE ? ESCAPE '\\'")
-                params.append(_like_contains(keyword))
-            order = "DESC" if newest_first else "ASC"
-            params.append(max(1, int(limit)))
+            placeholders = ",".join("?" for _ in ids)
             with self._manager.transaction() as conn:
                 rows = conn.execute(
-                    "SELECT * FROM live_chat WHERE "
-                    + " AND ".join(clauses)  # noqa: S608 子句为代码内常量
-                    + f" ORDER BY timestamp_ms {order}, id {order} LIMIT ?",
-                    params,
+                    f"SELECT * FROM live_chat WHERE id IN ({placeholders})"  # noqa: S608 占位符由代码拼
+                    " AND sender_role='assistant' AND dropped_at_ms IS NULL",
+                    ids,
                 ).fetchall()
-                return [LiveChatMessage.model_validate(dict(row)) for row in rows]
+            by_id = {int(row["id"]): LiveChatMessage.model_validate(dict(row)) for row in rows}
+            return [by_id[chat_id] for chat_id in ids if chat_id in by_id]
 
         return await self._run_in_executor(_exec)
 

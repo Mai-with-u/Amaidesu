@@ -1,7 +1,8 @@
 """回想工具测试：memory_recall 的检索、排序、定位、遮名与异常降级。
 
 真库（临时 SQLite），时间全用固定毫秒戳（HH:MM 只做形状断言，不依赖真实时钟）。
-覆盖：多关键词取交集、newest / oldest 两向排序、scope 只查本场、只认已播出台词
+台词、档案、承诺走混合检索（这里不配嵌入服务，只有关键词一路），每个用例先把索引补算好再查。
+覆盖：按相关度选出最相关的几条、newest / oldest 两向排序、scope 只查本场、只认已播出台词
 （dropped_at_ms 带标记的不返回）、承诺状态与了结原话、不返回对具体观众的承诺与
 判误记的承诺、跨场结果遮名而本场不遮、关键词是昵称时忽略并在抬头提示、
 空结果与查询异常都给平实说明不抛。
@@ -16,6 +17,7 @@ from typing import Any, AsyncGenerator, Generator, List, Optional
 
 import pytest
 
+from src.agents.streamer.memory.index import MemoryIndexer
 from src.agents.streamer.memory.recall import (
     MEMORY_RECALL_PROVIDER_NAME,
     MEMORY_RECALL_TOOL_NAME,
@@ -26,6 +28,7 @@ from src.agents.streamer.memory.recall import (
     MemoryRecallService,
     build_memory_recall_provider,
 )
+from src.agents.streamer.memory.search import MemorySearch
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.memory import KeptSnapshotLine
 from src.modules.tools import ToolInvocation
@@ -94,7 +97,14 @@ async def _viewer_says(store: SQLiteDatabase, pk: int, *, user_id: str, name: st
     )
 
 
-def _service(store: SQLiteDatabase, *, current_session: Optional[int] = None) -> MemoryRecallService:
+async def _index(store: SQLiteDatabase) -> None:
+    """把库里该收的行补进检索索引（后台索引任务跑一轮的效果；用例里的时刻都早于假时钟 30 秒以上）。"""
+    await MemoryIndexer(repo=store.memory_index, embedding=None, embedding_note="", clock=FakeClock().now_ms).run_once()
+
+
+async def _service(store: SQLiteDatabase, *, current_session: Optional[int] = None) -> MemoryRecallService:
+    """先补算索引，再建一个接了混合检索的回想服务。"""
+    await _index(store)
     return MemoryRecallService(
         chat_repo=store.chat,
         commitments_repo=store.commitments,
@@ -102,6 +112,7 @@ def _service(store: SQLiteDatabase, *, current_session: Optional[int] = None) ->
         viewer_repo=store.viewers,
         current_session_provider=lambda: current_session,
         clock=FakeClock().now_ms,
+        search=MemorySearch(repo=store.memory_index, embedding=None),
     )
 
 
@@ -114,24 +125,28 @@ def _hit_lines(text: str) -> List[str]:
 # ---------------------------------------------------------------------------
 
 
-async def test_recall_finds_speech_by_intersected_keywords(store: SQLiteDatabase) -> None:
+async def test_recall_picks_the_most_relevant_eight_without_requiring_every_keyword(store: SQLiteDatabase) -> None:
+    """十句都提到挖矿，只有最早那句同时提到钻石：它最相关，一定在选出的 8 条里；只提钻石的也能查到。"""
     pk = await _session(store, started=1_000)
     await _streamer_says(store, pk, "今天挖矿挖到钻石了", 1_100)
-    await _streamer_says(store, pk, "今天一直挖矿", 1_200)
-    service = _service(store, current_session=pk)
+    for minute in range(10):
+        await _streamer_says(store, pk, f"第 {minute} 回接着挖矿", 1_200 + minute)
+    await _streamer_says(store, pk, "钻石真好看", 1_300)
+    service = await _service(store, current_session=pk)
 
     text = await service.recall("挖矿 钻石", SCOPE_ALL, ORDER_NEWEST)
+
     assert "【回想】关键词「挖矿 钻石」" in text
-    assert text.splitlines()[0].endswith("1 条")
+    assert text.splitlines()[0].endswith("8 条")
     assert "挖矿挖到钻石了" in text
-    assert "今天一直挖矿" not in text
+    assert "钻石真好看" in text, "不要求每个词都出现"
 
 
 async def test_recall_newest_and_oldest_order(store: SQLiteDatabase) -> None:
     pk = await _session(store, started=1_000)
     await _streamer_says(store, pk, "第一次提挖矿", 1_100)
     await _streamer_says(store, pk, "第二次提挖矿", 1_200)
-    service = _service(store, current_session=pk)
+    service = await _service(store, current_session=pk)
 
     newest = await service.recall("挖矿", SCOPE_ALL, ORDER_NEWEST)
     oldest = await service.recall("挖矿", SCOPE_ALL, ORDER_OLDEST)
@@ -145,7 +160,7 @@ async def test_recall_scope_this_stream_only_returns_current_session(store: SQLi
     await _streamer_says(store, first, "上一场聊到挖矿", 1_100)
     await _streamer_says(store, current, "本场也聊挖矿", 3_100)
     await _viewer_says(store, current, user_id="u1", name="路人甲", text="我问挖矿的事", ts=3_200)
-    service = _service(store, current_session=current)
+    service = await _service(store, current_session=current)
 
     this_stream = await service.recall("挖矿", SCOPE_THIS_STREAM, ORDER_NEWEST)
     assert "范围：本场" in this_stream
@@ -162,7 +177,7 @@ async def test_recall_scope_this_stream_only_returns_current_session(store: SQLi
 async def test_recall_does_not_return_dropped_speech(store: SQLiteDatabase) -> None:
     pk = await _session(store, started=1_000)
     await _streamer_says(store, pk, "这句没送到观众面前，提到挖矿", 1_100, dropped_at_ms=1_150)
-    service = _service(store, current_session=pk)
+    service = await _service(store, current_session=pk)
 
     text = await service.recall("挖矿")
     assert "这句没送到" not in text
@@ -179,7 +194,7 @@ async def test_recall_searches_archive_lines_of_previous_session(store: SQLiteDa
         quote="今天挖到钻石了",
         evidence_chat_id=chat_id,
     )
-    service = _service(store, current_session=current)
+    service = await _service(store, current_session=current)
 
     text = await service.recall("挖矿")
     assert "上一场" in text
@@ -206,7 +221,7 @@ async def test_recall_gives_a_snapshot_row_once_dated_by_where_it_was_said(store
         now_ms_value=4_500,
         snapshot_kept=[KeptSnapshotLine(archive_line_id=line_id, lasting=True, seen_at_ms=1_000)],
     )
-    service = _service(store, current_session=current)
+    service = await _service(store, current_session=current)
 
     text = await service.recall("团子")
 
@@ -230,7 +245,7 @@ async def test_recall_reports_commitment_status_and_close_quote(store: SQLiteDat
     )
     assert closed_id is not None
     await store.commitments.close_commitment(commitment_id=closed_id, close_quote="恐怖游戏玩过了，好吓人")
-    service = _service(store, current_session=pk)
+    service = await _service(store, current_session=pk)
 
     text = await service.recall("下次")
     assert "你答应过（未了结）下次带大家打末影龙" in text
@@ -248,7 +263,7 @@ async def test_recall_skips_viewer_specific_and_void_commitments(store: SQLiteDa
     void_id = await store.commitments.insert_commitment(what="明天讲鬼故事", quote="明天讲鬼故事", now_ms_value=1_600)
     assert void_id is not None
     await store.commitments.void_commitment(commitment_id=void_id)
-    service = _service(store, current_session=pk)
+    service = await _service(store, current_session=pk)
 
     no_viewer_commitment = await service.recall("盖房子")
     assert "给老王盖房子" not in no_viewer_commitment
@@ -270,7 +285,7 @@ async def test_recall_masks_names_across_sessions_but_not_this_stream(store: SQL
     current = await _session(store, started=3_000)
     await _streamer_says(store, first, "老王你上次说的挖矿我记着呢", 1_100)
     await _streamer_says(store, current, "老王你来了，接着挖矿", 3_100)
-    service = _service(store, current_session=current)
+    service = await _service(store, current_session=current)
 
     text = await service.recall("挖矿")
     assert "某位观众你上次说的挖矿我记着呢" in text  # 跨场结果遮名
@@ -282,7 +297,7 @@ async def test_recall_ignores_viewer_name_keywords_with_notice(store: SQLiteData
     await seed_viewer(store.viewers, platform="bilibili", user_id="u1", user_name="老王", timestamp_ms=900)
     pk = await _session(store, started=1_000)
     await _streamer_says(store, pk, "今天挖矿很顺利", 1_100)
-    service = _service(store, current_session=pk)
+    service = await _service(store, current_session=pk)
 
     text = await service.recall("老王 挖矿")
     assert "（回想工具不按观众名字查，已忽略 1 个名字）" in text
@@ -302,7 +317,7 @@ async def test_recall_ignores_viewer_name_keywords_with_notice(store: SQLiteData
 async def test_recall_returns_plain_note_when_nothing_matches(store: SQLiteDatabase) -> None:
     pk = await _session(store, started=1_000)
     await _streamer_says(store, pk, "今天挖矿很顺利", 1_100)
-    service = _service(store, current_session=pk)
+    service = await _service(store, current_session=pk)
 
     text = await service.recall("养猫")
     assert "0 条" in text
@@ -310,14 +325,14 @@ async def test_recall_returns_plain_note_when_nothing_matches(store: SQLiteDatab
 
 
 async def test_recall_this_stream_without_live_session_says_so(store: SQLiteDatabase) -> None:
-    service = _service(store, current_session=None)
+    service = await _service(store, current_session=None)
     text = await service.recall("挖矿", SCOPE_THIS_STREAM)
     assert "0 条" in text
     assert "现在不在直播" in text
 
 
 async def test_recall_empty_query_asks_for_keywords(store: SQLiteDatabase) -> None:
-    service = _service(store, current_session=None)
+    service = await _service(store, current_session=None)
     assert "想查什么" in await service.recall("  ")
 
 
@@ -350,7 +365,7 @@ async def test_recall_query_failure_returns_note_without_raising() -> None:
 async def test_provider_exposes_memory_recall_tool(store: SQLiteDatabase) -> None:
     pk = await _session(store, started=1_000)
     await _streamer_says(store, pk, "今天挖矿很顺利", 1_100)
-    provider = build_memory_recall_provider(_service(store, current_session=pk))
+    provider = build_memory_recall_provider(await _service(store, current_session=pk))
 
     assert provider.name == MEMORY_RECALL_PROVIDER_NAME
     assert {spec.full_name for spec in provider.list_tools()} == {MEMORY_RECALL_TOOL_NAME}
@@ -390,6 +405,7 @@ async def test_recall_marks_which_save_game_memories_belong_to(store: SQLiteData
         save_name="老档",
     )
     await store.commitments.insert_commitment(what="屋顶再加一层", quote="屋顶下次再加一层", game="minecraft")
+    await _index(store)
     service = MemoryRecallService(
         chat_repo=store.chat,
         commitments_repo=store.commitments,
@@ -398,6 +414,7 @@ async def test_recall_marks_which_save_game_memories_belong_to(store: SQLiteData
         clock=FakeClock().now_ms,
         event_repo=store.events,
         saves_provider=lambda: {"minecraft": GameSave(id="b", name="新档")},
+        search=MemorySearch(repo=store.memory_index, embedding=None),
     )
 
     lines = _hit_lines(await service.recall("屋顶"))
@@ -408,4 +425,4 @@ async def test_recall_marks_which_save_game_memories_belong_to(store: SQLiteData
     )
     assert any("屋顶再加一层" in line and "在 minecraft 里，不确定是哪个存档" in line for line in lines)
     # 不分存档时一句都不注
-    assert "存档" not in await _service(store).recall("屋顶")
+    assert "存档" not in await (await _service(store)).recall("屋顶")

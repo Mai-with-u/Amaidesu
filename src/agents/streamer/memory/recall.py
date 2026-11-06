@@ -9,9 +9,11 @@
 - 不针对具体观众的承诺（``commitments``；未了结与已了结都给，判误记的 ``void`` 不给）
 - 本场观众弹幕（``live_chat`` 的 viewer 行；不论 scope 都只查本场）
 
-匹配口径：每个关键词一个"包含"判断（``live_chat`` 走 SQL ``LIKE '%词%'``，档案与承诺
-在代码里做同一件事），一行要同时命中全部关键词（多词取交集）。结果按时间排序取前 8 条，
-每条带位置（本场写"本场 HH:MM"，跨场写"上一场"或"之前"）与说话人（"你""观众"）。
+匹配口径：台词、档案、承诺三类走混合检索（``search``：关键词按两字切分 + BM25，配置了嵌入
+服务再加语义一路，按名次融合），按相关度取最相关的 8 条，不要求每个词都出现；本场观众弹幕
+不进任何持久索引，照旧在本场里按"每个词都包含"查，补剩下的位置。选好的结果按时间排给她看，
+每条带位置（本场写"本场 HH:MM"，跨场写"上一场"或"之前"）与说话人（"你""观众"）。索引由后台
+任务补算，刚播出不满 30 秒的台词还查不到——那几句本来就在她眼前的对话里。
 
 不按名字查人：本场以外的结果里出现的已知观众昵称（``viewers`` 当前名与
 ``viewer_names`` 曾用名，2 字以上）一律替换成"某位观众"——跨场结果留下昵称等于把
@@ -22,8 +24,6 @@ ta 的发言和身份带到下一场；本场结果不替换。关键词恰好�
 说过的话，那场只在别的存档里玩过时注明——翻出"屋顶盖好了"时看得出那是别的世界里的事
 （判定见 ``saves``）。
 
-档案与承诺没有现成的检索方法：档案按场次逐场读回后在代码里做关键词交集（每场至多
-8 行，按排序方向读到够 8 条即停），承诺一次分页读全（账本行数少）。
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from src.modules.types.game_save import GameSave
 from src.modules.utils.time_utils import now_ms
 
 from .saves import place_note, session_note
+from .search import MemorySearch
 
 __all__ = [
     "MEMORY_RECALL_PROVIDER_NAME",
@@ -64,8 +65,12 @@ MEMORY_TOOL_CATEGORY = "memory"
 
 # 一次回想最多给几条
 MAX_RESULTS = 8
-# 承诺账本分页读的大小：账本行数少，读全才能按时间挑出最新或最老的一批
-_COMMITMENT_PAGE_SIZE = 200
+# 混合检索多取一些候选：对某位观众的承诺等会在还原时被筛掉，剩下的才取前 8 条
+_SEARCH_POOL = 24
+# 回想工具是她主动调的，查询向量没算好时可以等一小会儿（被动想起不等）
+RECALL_VECTOR_WAIT_MS = 1_500
+# 走混合检索的三类来源
+_RECALL_SOURCES = ("speech", "archive", "commitment")
 
 SCOPE_ALL = "all"
 SCOPE_THIS_STREAM = "this_stream"
@@ -78,16 +83,16 @@ CROSS_SESSION_MASK_LABEL = "某位观众"
 MEMORY_RECALL_SPEC = ToolSpec(
     name="recall",
     description=(
-        "回想过去的事：你说过的话、每场的档案、答应过的事、本场弹幕，按关键词全文查找"
-        "（几个关键词用空格分开，全部命中的才算）。问「上次那个事」「之前提到过什么」"
-        "「我答应过什么」时用。不按观众名字查人——不知道某位观众是谁就问她本人。"
+        "回想过去的事：你说过的话、每场的档案、答应过的事、本场弹幕，按关键词找出最相关的几条"
+        "（几个关键词用空格分开，不要求每个词都出现，越相关越靠前选）。问「上次那个事」"
+        "「之前提到过什么」「我答应过什么」时用。不按观众名字查人——不知道某位观众是谁就问她本人。"
     ),
     parameters_schema={
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "关键词，多个用空格分开（如「挖矿 钻石」）；词越多结果越少",
+                "description": "关键词，多个用空格分开（如「挖矿 钻石」）；按相关度选，词给得准结果更准",
             },
             "scope": {
                 "type": "string",
@@ -99,7 +104,7 @@ MEMORY_RECALL_SPEC = ToolSpec(
                 "type": "string",
                 "enum": [ORDER_NEWEST, ORDER_OLDEST],
                 "default": ORDER_NEWEST,
-                "description": "newest 从最近的开始取；oldest 从最早的开始取",
+                "description": "选出的结果怎么排：newest 最近的在前；oldest 最早的在前",
             },
         },
         "required": ["query"],
@@ -141,12 +146,6 @@ def _split_keywords(query: str) -> List[str]:
     return keywords
 
 
-def _matches_all_keywords(text: str, keywords: Sequence[str]) -> bool:
-    """档案与承诺的"每词子串、取交集"判定（与 live_chat 的 LIKE 一样不分英文大小写）。"""
-    haystack = (text or "").casefold()
-    return all(keyword.casefold() in haystack for keyword in keywords)
-
-
 def _clock_text(timestamp_ms: int) -> str:
     """毫秒时刻 → 本地 HH:MM（位置词只用到时分）。"""
     return datetime.fromtimestamp(max(0, int(timestamp_ms)) / 1000).strftime("%H:%M")
@@ -175,8 +174,9 @@ def _normalize_order(order: Optional[str]) -> str:
 class MemoryRecallService:
     """``memory_recall`` 的业务实现：查四个来源、合并排序、渲染成给模型看的一段文本。
 
-    构造参数全由宿主注入：四个仓储（台词与弹幕、承诺、档案）、可选的隐私服务与观众仓储
-    （跨场遮名、昵称关键词识别）、进行中场次回调（决定"本场"是第几场）与毫秒时钟（耗时日志）。
+    构造参数全由宿主注入：四个仓储（台词与弹幕、承诺、档案）、混合检索（没有时台词、档案、
+    承诺三类查不到，只剩本场弹幕）、可选的隐私服务与观众仓储（跨场遮名、昵称关键词识别）、
+    进行中场次回调（决定"本场"是第几场）与毫秒时钟（耗时日志）。
     可选的游戏事件仓储与眼下存档回调给结果注明存档；缺了就不注。
     仓储都按鸭子类型取用，只依赖它们各自读面上的方法。
     """
@@ -192,8 +192,10 @@ class MemoryRecallService:
         clock: Optional[Callable[[], int]] = None,
         event_repo: Any = None,
         saves_provider: Optional[Callable[[], Mapping[str, GameSave]]] = None,
+        search: Optional[MemorySearch] = None,
     ) -> None:
         self._chat_repo = chat_repo
+        self._search = search
         self._commitments_repo = commitments_repo
         self._archive_repo = archive_repo
         self._privacy_service = privacy_service
@@ -271,14 +273,10 @@ class MemoryRecallService:
             current_saves=self._current_saves(),
         )
 
-        hits: List[_RecallHit] = []
-        hits.extend(await self._speech_hits(context))
-        hits.extend(await self._danmaku_hits(context))
-        hits.extend(await self._archive_hits(context, archive_bounds))
-        hits.extend(await self._commitment_hits(context))
-        # 稳定排序：同一时刻的先后按来源收集顺序（台词 → 弹幕 → 档案 → 承诺）
+        # 检索结果按相关度排在前面，本场弹幕补剩下的位置；选好的再按时间排给她看
+        hits = (await self._indexed_hits(" ".join(effective), context, archive_bounds))[:MAX_RESULTS]
+        hits.extend((await self._danmaku_hits(context))[: MAX_RESULTS - len(hits)])
         hits.sort(key=lambda hit: hit.timestamp_ms, reverse=newest_first)
-        hits = hits[:MAX_RESULTS]
 
         lines = [self._header(raw_query, scope, order, len(hits))]
         if notice:
@@ -289,24 +287,56 @@ class MemoryRecallService:
             lines.extend(hit.text for hit in hits)
         return "\n".join(lines)
 
-    async def _speech_hits(self, context: _RecallContext) -> List[_RecallHit]:
-        """她已播出的台词；scope=this_stream 时只查本场。"""
-        rows = await self._chat_repo.search_recall_speech(
-            keywords=list(context.keywords),
-            limit=MAX_RESULTS,
+    async def _indexed_hits(
+        self, query: str, context: _RecallContext, archive_bounds: Sequence[Tuple[int, int]]
+    ) -> List[_RecallHit]:
+        """台词、档案行、承诺三类：按混合检索的相关度取，还原成行后渲染（按相关度先后）。
+
+        检索只给主键，这里按主键把行读回来再核一遍：没送到观众面前的台词、对某位观众的承诺
+        （原话可能夹着 ta 的私事）、判了误记的承诺都不给。scope=this_stream 时只查本场
+        （承诺按登记它的场次算）。档案行的时刻取写下它的那一场最后一条明细的时刻。
+        """
+        if self._search is None:
+            return []
+        found = await self._search.search(
+            query,
+            sources=_RECALL_SOURCES,
             live_session_id=context.current_session_id if context.scope == SCOPE_THIS_STREAM else None,
-            newest_first=context.newest_first,
+            limit=_SEARCH_POOL,
+            wait_vector_ms=RECALL_VECTOR_WAIT_MS,
         )
-        notes = await self._session_notes([row.live_session_id for row in rows], context)
+        ids: Dict[str, List[int]] = {source: [] for source in _RECALL_SOURCES}
+        for hit in found:
+            ids[hit.source].append(hit.source_id)
+        speech = {int(row.id): row for row in await self._chat_repo.list_speech_by_ids(chat_ids=ids["speech"])}
+        lines = {int(line.id): line for line in await self._archive_repo.list_lines_by_ids(line_ids=ids["archive"])}
+        commitments: Dict[int, Any] = {}
+        for commitment_id in ids["commitment"]:
+            row = await self._commitments_repo.get_commitment(commitment_id=commitment_id)
+            if row is not None and row.viewer_id is None and row.status in ("open", "closed"):
+                commitments[commitment_id] = row
+        notes = await self._session_notes([row.live_session_id for row in speech.values()], context)
+        last_ms = dict(archive_bounds)
         hits: List[_RecallHit] = []
-        for row in rows:
-            note = notes.get(row.live_session_id, "")
-            text = (
-                f"- {self._when(row.live_session_id, row.timestamp_ms, context)} 你说："
-                f"「{self._mask(row.content, row.live_session_id, context)}」"
-            )
-            hits.append(_RecallHit(timestamp_ms=int(row.timestamp_ms), text=f"{text}（{note}）" if note else text))
+        for hit in found:
+            if hit.source == "speech" and hit.source_id in speech:
+                hits.append(self._speech_hit(speech[hit.source_id], notes, context))
+            elif hit.source == "archive" and hit.source_id in lines:
+                line = lines[hit.source_id]
+                session_id = int(line.live_session_id)
+                hits.append(self._archive_hit(line, session_id, int(last_ms.get(session_id, 0)), context))
+            elif hit.source == "commitment" and hit.source_id in commitments:
+                hits.append(self._commitment_hit(commitments[hit.source_id], context))
         return hits
+
+    def _speech_hit(self, row: Any, notes: Mapping[int, str], context: _RecallContext) -> _RecallHit:
+        """一句台词渲染成「位置 + 你说：原话」，那场只玩过别的存档时补一句注。"""
+        note = notes.get(row.live_session_id, "")
+        text = (
+            f"- {self._when(row.live_session_id, row.timestamp_ms, context)} 你说："
+            f"「{self._mask(row.content, row.live_session_id, context)}」"
+        )
+        return _RecallHit(timestamp_ms=int(row.timestamp_ms), text=f"{text}（{note}）" if note else text)
 
     async def _session_notes(self, session_ids: Sequence[Optional[int]], context: _RecallContext) -> Dict[int, str]:
         """过去几场里，眼下分存档的游戏只在别的存档里玩过的，各给一句注（本场不注）。"""
@@ -348,40 +378,6 @@ class MemoryRecallService:
             for row in rows
         ]
 
-    async def _archive_hits(
-        self,
-        context: _RecallContext,
-        session_bounds: Sequence[Tuple[int, int]],
-    ) -> List[_RecallHit]:
-        """场次档案行：按场次逐场读回后在代码里做关键词交集。
-
-        档案表没有检索方法，只能按场次读；按排序方向从新到旧（或从旧到新）逐场扫，
-        收集到够 8 条就停——更晚的场次不可能再排进前 8 条。
-        """
-        sessions: List[Tuple[int, int]] = list(session_bounds)
-        if context.scope == SCOPE_THIS_STREAM:
-            sessions = [item for item in sessions if item[0] == context.current_session_id]
-        elif not context.newest_first:
-            sessions = list(reversed(sessions))
-
-        hits: List[_RecallHit] = []
-        for session_id, last_ms in sessions:
-            try:
-                lines = await self._archive_repo.list_lines(live_session_id=session_id)
-            except Exception as exc:  # noqa: BLE001 - 单场读失败只跳过这一场，不废掉整次回想
-                logger.warning(
-                    f"回想工具读取场次 {session_id} 的档案行失败（跳过这一场）: {type(exc).__name__}: {exc}",
-                    exc=True,
-                )
-                continue
-            for line in lines:
-                if not _matches_all_keywords(f"{line.text}\n{line.quote}", context.keywords):
-                    continue
-                hits.append(self._archive_hit(line, session_id, int(last_ms), context))
-            if len(hits) >= MAX_RESULTS:
-                break
-        return hits
-
     def _archive_hit(self, line: Any, session_id: int, timestamp_ms: int, context: _RecallContext) -> _RecallHit:
         """一行档案渲染成「位置 + 你说（档案「标题」）+ 她的原话」。"""
         when = self._when(session_id, timestamp_ms, context)
@@ -394,39 +390,6 @@ class MemoryRecallService:
         if note:
             body += f"（{note}）"
         return _RecallHit(timestamp_ms=timestamp_ms, text=body)
-
-    async def _commitment_hits(self, context: _RecallContext) -> List[_RecallHit]:
-        """不针对具体观众的承诺；分页读全后按关键词过滤，未了结与已了结都给。
-
-        ``scope=this_stream`` 时只留本场登记的（按承诺的 ``created_session_id`` 过滤），
-        与台词、弹幕、档案三路的范围语义一致；运营者手建（无场次）与往场承诺不返回。
-        """
-        matched: List[Any] = []
-        offset = 0
-        while True:
-            page = await self._commitments_repo.list_commitments(
-                statuses=["open", "closed"], limit=_COMMITMENT_PAGE_SIZE, offset=offset
-            )
-            if not page:
-                break
-            for row in page:
-                # 对某位观众的承诺不在这里给：原话可能夹着 ta 的私事
-                if row.viewer_id is not None:
-                    continue
-                if context.scope == SCOPE_THIS_STREAM and (
-                    row.created_session_id is None
-                    or context.current_session_id is None
-                    or int(row.created_session_id) != int(context.current_session_id)
-                ):
-                    continue
-                haystack = "\n".join([row.what or "", row.quote or "", row.close_quote or ""])
-                if _matches_all_keywords(haystack, context.keywords):
-                    matched.append(row)
-            offset += len(page)
-            if len(page) < _COMMITMENT_PAGE_SIZE:
-                break
-        matched.sort(key=lambda row: (int(row.created_at_ms), int(row.id)), reverse=context.newest_first)
-        return [self._commitment_hit(row, context) for row in matched[:MAX_RESULTS]]
 
     def _commitment_hit(self, row: Any, context: _RecallContext) -> _RecallHit:
         """一条承诺渲染成「位置 + 你答应过（状态）+ 标题与原话 / 了结原话」。"""

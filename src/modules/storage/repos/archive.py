@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any, List, Optional, Sequence, Set, Tuple
 
 from src.modules.storage.models.memory import ArchiveLine, ArchiveSnapshot, SnapshotLine
 from src.modules.storage.repos._base import BaseRepo
@@ -226,6 +226,24 @@ class ArchiveRepo(BaseRepo):
                     (int(live_session_id),),
                 ).fetchall()
                 return [ArchiveLine.model_validate(dict(row)) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def list_lines_by_ids(self, *, line_ids: Sequence[int]) -> List[ArchiveLine]:
+        """按主键取档案行（回想工具把检索结果还原成档案行用）；按给定主键的先后排列，不存在的跳过。"""
+        ids = [int(line_id) for line_id in dict.fromkeys(line_ids)]
+        if not ids:
+            return []
+
+        def _exec() -> List[ArchiveLine]:
+            placeholders = ",".join("?" for _ in ids)
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    f"SELECT {_ARCHIVE_COLUMNS} FROM archive_lines WHERE id IN ({placeholders})",  # noqa: S608
+                    ids,
+                ).fetchall()
+            by_id = {int(row["id"]): ArchiveLine.model_validate(dict(row)) for row in rows}
+            return [by_id[line_id] for line_id in ids if line_id in by_id]
 
         return await self._run_in_executor(_exec)
 
