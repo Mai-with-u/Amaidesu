@@ -71,6 +71,7 @@ describe('useArchiveLines', () => {
         settled: true,
         snapshot_session_id: 7,
         snapshot_pinned_count: 2,
+        snapshot_pinned_max: 4,
       },
     } as never);
     const state = useArchiveLines();
@@ -81,6 +82,7 @@ describe('useArchiveLines', () => {
       settled: true,
       snapshot_session_id: 7,
       snapshot_pinned_count: 2,
+      snapshot_pinned_max: 4,
     });
 
     listArchiveMock.mockReturnValueOnce(deferred().promise as never);

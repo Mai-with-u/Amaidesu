@@ -455,6 +455,7 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
             "settled",
             "snapshot_session_id",
             "snapshot_pinned_count",
+            "snapshot_pinned_max",
         ),
     ),
     (

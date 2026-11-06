@@ -39,11 +39,20 @@
               >{{ line.lasting ? '取消稳定' : '标稳定' }}</el-button
             >
             <el-button
-              v-else
+              v-if="line.in_snapshot && line.pinned"
+              link
+              size="small"
+              :disabled="!canEditSnapshot || busyLineId === line.id"
+              @click="emit('unpin', line)"
+              >取消放回</el-button
+            >
+            <el-button
+              v-if="!line.in_snapshot"
               link
               size="small"
               type="primary"
-              :disabled="!canEditSnapshot || busyLineId === line.id"
+              :disabled="!canEditSnapshot || pinFull || busyLineId === line.id"
+              :title="pinFull ? '放回的行满了：先取消一条放回' : undefined"
               @click="emit('pin', line)"
               >放回快照</el-button
             >
@@ -74,8 +83,9 @@
  * 由父组件决定删完怎么刷新。
  *
  * reviewable 时（记忆页）再标出每行在不在最新一份快照里、稳定与否、人放回或改过，并抛出改标题、
- * 标稳定、放回快照三个意图：在快照里的行可以标或取消稳定，不在的行可以放回。还没有存下的快照时
- * （canEditSnapshot 为假）这两样做不了，按钮置灰。
+ * 标稳定、放回快照、取消放回四个意图：在快照里的行可以标或取消稳定，人放回的行可以取消放回，不在的行
+ * 可以放回。还没有存下的快照时（canEditSnapshot 为假）这几样做不了，按钮置灰；放回满了（pinFull）
+ * 放回按钮置灰，要先取消一条。
  */
 import type { ArchiveLineItem } from '@/types';
 import { archiveLineTags, gameSaveLabel } from './ledgerView';
@@ -89,6 +99,8 @@ withDefaults(
     reviewable?: boolean;
     /** 有没有存下的最新快照（没有时标稳定、放回做不了） */
     canEditSnapshot?: boolean;
+    /** 放回的行满了没有（满了不能再放回，先取消一条） */
+    pinFull?: boolean;
     /** 正在删除的行 id（只对那一行转圈，不让整张表闪） */
     busyLineId?: number | null;
     emptyText?: string;
@@ -97,6 +109,7 @@ withDefaults(
     deletable: false,
     reviewable: false,
     canEditSnapshot: false,
+    pinFull: false,
     busyLineId: null,
     emptyText: '这一场还没有档案行',
   },
@@ -107,6 +120,7 @@ const emit = defineEmits<{
   'edit-title': [line: ArchiveLineItem];
   'toggle-lasting': [line: ArchiveLineItem];
   pin: [line: ArchiveLineItem];
+  unpin: [line: ArchiveLineItem];
 }>();
 </script>
 

@@ -232,6 +232,13 @@ async def test_review_actions_lock_pin_add_and_mark_reviewed(client, store: SQLi
     again = await client.post(f"/api/v1/memory/archive/lines/{dropped_id}/pin")
     assert again.status_code == 409
 
+    # 取消放回：还在快照里、不再标放回；不是放回的行再取消返回 409
+    assert (await client.post(f"/api/v1/memory/archive/lines/{dropped_id}/unpin")).status_code == 200
+    body = (await client.get(f"/api/v1/memory/archive/{first}")).json()
+    assert (body["snapshot_pinned_count"], body["snapshot_pinned_max"]) == (1, 4), "剩下新增的那一行"
+    assert [(i["in_snapshot"], i["pinned"]) for i in body["items"] if i["id"] == dropped_id] == [(True, False)]
+    assert (await client.post(f"/api/v1/memory/archive/lines/{dropped_id}/unpin")).status_code == 409
+
     settle = (await client.get("/api/v1/memory/settle")).json()
     assert settle["review_pending_count"] == 2
     assert (await client.post(f"/api/v1/memory/settle/{second}/reviewed")).status_code == 200

@@ -5,7 +5,9 @@
         <div class="panel-title">场次档案</div>
         <p class="panel-hint">
           每场正式场整理出的标题与原话，下一场开播回想“上一场”时用。整理自动生效，这里事后审：
-          改标题、标稳定会锁住这一行（之后的整理只能保留），漏掉的事可以放回快照或从台词里新增。
+          改标题、标稳定会锁住这一行（之后的整理不能改它、删它），漏掉的事可以放回快照或从台词里新增。
+          锁住但没放回的行，快照满 12 行时会按规则被挤出简报，不算删掉（还在档案里，回想查得到）；
+          要一直留在简报里就放回，放回至多 4 行，满了先取消一条。
         </p>
       </div>
       <div class="head-actions">
@@ -50,7 +52,8 @@
         <span class="grow" />
         <el-button
           size="small"
-          :disabled="!summary?.settled || summary.snapshot_session_id === null"
+          :disabled="!summary?.settled || summary.snapshot_session_id === null || pinFull"
+          :title="pinFull ? '新增的行也算放回：先取消一条放回' : undefined"
           @click="addOpen = true"
           >从台词新增一行</el-button
         >
@@ -66,8 +69,8 @@
       <p v-if="summary && summary.snapshot_session_id === null" class="panel-note">
         还没有存下的快照：放回、标稳定、新增要等下一场整理写出快照后再做。
       </p>
-      <p v-if="summary && pinnedOverflowHint(summary.snapshot_pinned_count)" class="panel-warning">
-        {{ pinnedOverflowHint(summary.snapshot_pinned_count) }}
+      <p v-if="pinnedHint" class="panel-warning">
+        {{ pinnedHint }}
       </p>
       <div v-loading="loading" class="archive-lines">
         <ArchiveLineList
@@ -75,12 +78,14 @@
           deletable
           reviewable
           :can-edit-snapshot="summary?.snapshot_session_id != null"
+          :pin-full="pinFull"
           :busy-line-id="busyLineId"
           :empty-text="emptyText"
           @delete="removeLine"
           @edit-title="editTitle"
           @toggle-lasting="toggleLasting"
           @pin="pinLine"
+          @unpin="unpinLine"
         />
       </div>
       <ArchiveLineAddDialog
@@ -117,7 +122,7 @@ import { formatDateTimeCn } from '@/utils/format';
 import { useArchiveLines } from '@/composables/useArchiveLines';
 import ArchiveLineAddDialog from './ArchiveLineAddDialog.vue';
 import ArchiveLineList from './ArchiveLineList.vue';
-import { pinnedOverflowHint, reviewStateLabel, validateArchiveTitle } from './ledgerView';
+import { isPinFull, pinnedFullHint, reviewStateLabel, validateArchiveTitle } from './ledgerView';
 
 const { lines, summary, loading, error, load } = useArchiveLines();
 const addOpen = ref(false);
@@ -129,6 +134,18 @@ const selectedId = ref<number | null>(null);
 const busyLineId = ref<number | null>(null);
 const sessionsError = ref('');
 const actionError = ref('');
+
+/** 放回满了没有：满了放回、新增都做不了，提示人先取消一条 */
+const pinFull = computed<boolean>(() =>
+  summary.value
+    ? isPinFull(summary.value.snapshot_pinned_count, summary.value.snapshot_pinned_max)
+    : false,
+);
+const pinnedHint = computed<string | null>(() =>
+  summary.value
+    ? pinnedFullHint(summary.value.snapshot_pinned_count, summary.value.snapshot_pinned_max)
+    : null,
+);
 
 /** 加载类错误（场次列表 / 档案行）：非空时列表不渲染，避免显示误导性的空态 */
 const loadError = computed(() => sessionsError.value || error.value);
@@ -253,6 +270,11 @@ async function toggleLasting(line: ArchiveLineItem): Promise<void> {
 
 async function pinLine(line: ArchiveLineItem): Promise<void> {
   await mutateLine(line, () => ledgerApi.pinArchiveLine(line.id), '放回快照失败');
+}
+
+/** 取消放回：这一行还在快照里，之后按规则取舍，快照满了可能被挤出简报 */
+async function unpinLine(line: ArchiveLineItem): Promise<void> {
+  await mutateLine(line, () => ledgerApi.unpinArchiveLine(line.id), '取消放回失败');
 }
 
 async function markReviewed(): Promise<void> {

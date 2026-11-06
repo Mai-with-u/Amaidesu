@@ -13,7 +13,7 @@ import pytest
 
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.memory import KeptSnapshotLine, PendingArchiveLine
-from src.modules.storage.repos.memory_review import MemoryReviewError
+from src.modules.storage.repos.memory_review import MAX_PINNED_LINES, MemoryReviewError
 
 
 @pytest.fixture()
@@ -131,6 +131,57 @@ async def test_pin_puts_an_evicted_line_first_in_the_newest_snapshot(store: SQLi
         await store.memory_review.pin_line(line_id=dropped_id, at_ms=11)
     assert again.value.kind == "conflict"
     assert await _edits(store) == [("snapshot_line", "pin", "", "挖到铁矿")]
+
+
+async def test_unpin_turns_a_pinned_row_back_into_a_normal_snapshot_row(store: SQLiteDatabase) -> None:
+    """取消放回：这一行还在快照里，只是不再标放回（之后按规则取舍），记一条改动记录；不是放回的行报 conflict。"""
+    _first, second, kept_id, dropped_id = await _two_sessions(store)
+    await store.memory_review.pin_line(line_id=dropped_id, at_ms=10)
+
+    await store.memory_review.unpin_line(line_id=dropped_id, at_ms=11)
+    state = await store.memory_review.session_state(live_session_id=second)
+    assert (state.snapshot_lines[dropped_id].pinned, state.pinned_count) == (False, 0)
+    for line_id in (dropped_id, kept_id):
+        with pytest.raises(MemoryReviewError) as refused:
+            await store.memory_review.unpin_line(line_id=line_id, at_ms=12)
+        assert refused.value.kind == "conflict"
+    assert await _edits(store) == [
+        ("snapshot_line", "pin", "", "挖到铁矿"),
+        ("snapshot_line", "unpin", "挖到铁矿", ""),
+    ]
+
+
+async def test_pinned_rows_are_capped_at_four_until_one_is_unpinned(store: SQLiteDatabase) -> None:
+    """放回与新增的行一份快照至多 4 行：满了再放回、再新增都报 conflict，取消一条后又能放回。"""
+    _first, second, _kept, dropped_id = await _two_sessions(store)
+    added = []
+    for index in range(MAX_PINNED_LINES):
+        said = await _speech(store, second, f"第{index}只羊叫小{index}号")
+        added.append(
+            await store.memory_review.add_line(
+                live_session_id=second,
+                evidence_chat_id=said,
+                quote=f"小{index}号",
+                text=f"羊{index}",
+                lasting=False,
+                at_ms=10,
+            )
+        )
+    assert (await store.memory_review.session_state(live_session_id=second)).pinned_count == MAX_PINNED_LINES
+
+    extra = await _speech(store, second, "狗叫豆豆")
+    with pytest.raises(MemoryReviewError) as full_add:
+        await store.memory_review.add_line(
+            live_session_id=second, evidence_chat_id=extra, quote="豆豆", text="狗叫豆豆", lasting=False, at_ms=11
+        )
+    with pytest.raises(MemoryReviewError) as full_pin:
+        await store.memory_review.pin_line(line_id=dropped_id, at_ms=12)
+    assert (full_add.value.kind, full_pin.value.kind) == ("conflict", "conflict")
+    assert "先取消一条放回" in full_pin.value.message
+
+    await store.memory_review.unpin_line(line_id=added[0], at_ms=13)
+    await store.memory_review.pin_line(line_id=dropped_id, at_ms=14)
+    assert (await store.memory_review.session_state(live_session_id=second)).pinned_count == MAX_PINNED_LINES
 
 
 async def test_add_line_takes_a_verbatim_quote_from_her_broadcast_speech(store: SQLiteDatabase) -> None:

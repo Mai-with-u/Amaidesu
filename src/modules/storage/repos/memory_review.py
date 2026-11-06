@@ -5,15 +5,20 @@
 - 改标题：改档案行的标题，置 ``human_locked``；
 - 标或取消稳定：改最新一份快照里这一行的 ``lasting``，置 ``human_locked``；
 - 放回快照：被挤出或被去掉的行插回最新一份快照的最前面，``pinned = 1``；
+- 取消放回：最新一份快照里人放回、新增的行改回普通行（还在快照里，之后按稳定与否、最近提起取舍）；
 - 新增一行：从某一场她播出的台词里截一段逐字原话、写标题，新建档案行（``human_locked = 1``），
   放进最新一份快照（``pinned = 1``）；
+
+放回与新增的行一份快照至多 :data:`MAX_PINNED_LINES` 行：放回只进不出的话越积越多，简报会被旧事占满；
+满了先取消一条才能再放回或新增。锁住但没放回的行，被 12 行上限挤出快照不算"去掉"——锁住只是模型
+不能改它的内容、不能删它；要不要一直留在简报里由放回决定，被挤出去的行还在档案里，回想照样查得到。
 - 删行：删档案行（外键级联撤出所有快照，检索索引由触发器一起删）；
 - 标已审：写场次的 ``reviewed_at_ms``，只是状态。
 
 人改过的行，之后的整理只能保留（去掉、替换都被拒绝）；放回、新增的行取舍时排第 0 档，整理不挤掉。
 每次操作在同一事务里写一行 ``memory_edits``（审计，同时是整理评测的标准答案）：``target`` 是
 ``archive_line``（档案行本身）、``snapshot_line``（最新快照里的那一行）或 ``session``（场次），
-``action`` 是 ``title`` / ``lasting`` / ``pin`` / ``add`` / ``delete`` / ``reviewed``。
+``action`` 是 ``title`` / ``lasting`` / ``pin`` / ``unpin`` / ``add`` / ``delete`` / ``reviewed``。
 
 "最新一份快照"是下一场整理拿来当基底的那一份：开播最晚的、写过快照或有档案行的正式场。它是滚动
 之前的旧场次（没存下快照）时，放回、标稳定、新增都做不了，等下一场整理写出快照再来。
@@ -32,6 +37,8 @@ from src.modules.types.session_kind import SESSION_KIND_LIVE
 # 和整理写的档案行同一上限：标题至多 30 字、原话至多 80 字
 MAX_REVIEW_TITLE_CHARS = 30
 MAX_REVIEW_QUOTE_CHARS = 80
+# 一份快照里人放回、新增的行至多几行（常驻简报 12 行，留够位置给她本场的新进展与稳定的事）
+MAX_PINNED_LINES = 4
 
 
 class MemoryReviewError(Exception):
@@ -62,7 +69,7 @@ class SessionReviewState:
     # 最新一份快照所在的场次；None = 还没有存下的快照（放回、标稳定、新增做不了）
     snapshot_session_id: Optional[int]
     snapshot_lines: Dict[int, ReviewSnapshotLine] = field(default_factory=dict)
-    # 最新快照里人放回、新增的行数：超过 12 行时界面提示人去减（整理不会替人挤掉）
+    # 最新快照里人放回、新增的行数：满 MAX_PINNED_LINES 行时界面提示先取消一条（整理不会替人挤掉）
     pinned_count: int = 0
 
 
@@ -134,6 +141,15 @@ def insert_snapshot_line(conn: sqlite3.Connection, *, owner: int, line_id: int, 
             1 if pinned else 0,
         ),
     )
+
+
+def _ensure_pin_room(conn: sqlite3.Connection, owner: int, what: str) -> None:
+    """最新快照里放回的行满了就报 conflict：要先取消一条放回，才能再放回或新增。"""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM archive_snapshot_lines WHERE live_session_id=? AND pinned=1", (int(owner),)
+    ).fetchone()
+    if int(row[0] or 0) >= MAX_PINNED_LINES:
+        raise MemoryReviewError("conflict", f"最新快照里放回的行已满 {MAX_PINNED_LINES} 行：先取消一条放回，再{what}")
 
 
 def _clean_title(text: str) -> str:
@@ -254,6 +270,8 @@ class MemoryReviewRepo(BaseRepo):
                 owner = stored_snapshot_owner(conn)
                 if _snapshot_row(conn, owner, line_id) is not None:
                     raise MemoryReviewError("conflict", "这一行已经在最新一份快照里了")
+                # 放回至多 4 行：满了先让人取消一条，不替人挑
+                _ensure_pin_room(conn, owner, "放回")
                 last = conn.execute(
                     "SELECT l.lasting FROM archive_snapshot_lines l JOIN live_sessions s ON s.id = l.live_session_id"
                     " WHERE l.archive_line_id=? ORDER BY s.started_at_ms DESC, s.id DESC LIMIT 1",
@@ -270,6 +288,36 @@ class MemoryReviewRepo(BaseRepo):
                     action="pin",
                     before="",
                     after=str(row["text"]),
+                    at_ms=at_ms,
+                )
+
+        await self._run_in_executor(_exec)
+
+    async def unpin_line(self, *, line_id: int, at_ms: int) -> None:
+        """取消放回：最新快照里人放回、新增的这一行改回普通行（还在快照里，之后的整理按规则取舍）。
+
+        锁住的标记不动：模型仍不能改它、删它；只是快照满 12 行时它可能被挤出简报（仍在档案里）。
+        """
+
+        def _exec() -> None:
+            with self._manager.transaction() as conn:
+                row = _line(conn, line_id)
+                owner = stored_snapshot_owner(conn)
+                current = _snapshot_row(conn, owner, line_id)
+                if current is None or not current["pinned"]:
+                    raise MemoryReviewError("conflict", "这一行不是最新快照里人放回或新增的行")
+                conn.execute(
+                    "UPDATE archive_snapshot_lines SET pinned=0 WHERE live_session_id=? AND archive_line_id=?",
+                    (int(owner), int(line_id)),
+                )
+                record_edit(
+                    conn,
+                    live_session_id=owner,
+                    target="snapshot_line",
+                    archive_line_id=int(line_id),
+                    action="unpin",
+                    before=str(row["text"]),
+                    after="",
                     at_ms=at_ms,
                 )
 
@@ -321,6 +369,8 @@ class MemoryReviewRepo(BaseRepo):
                 if taken is not None:
                     raise MemoryReviewError("conflict", "这句台词已经写成一行档案了，改那一行的标题即可")
                 owner = stored_snapshot_owner(conn)
+                # 新增的行也标放回：放回满了先让人取消一条
+                _ensure_pin_room(conn, owner, "新增")
                 cur = conn.execute(
                     "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id, save_id, save_name,"
                     " keywords, place, human_locked) VALUES (?, ?, ?, ?, '', '', '[]', '', 1)",
@@ -409,6 +459,7 @@ class MemoryReviewRepo(BaseRepo):
 
 
 __all__ = [
+    "MAX_PINNED_LINES",
     "MAX_REVIEW_QUOTE_CHARS",
     "MAX_REVIEW_TITLE_CHARS",
     "MemoryReviewError",

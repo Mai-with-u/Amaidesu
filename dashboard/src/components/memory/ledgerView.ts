@@ -151,7 +151,7 @@ export function snapshotChangeLabel(action: SnapshotChangeAction): string {
   return labels[action];
 }
 
-/** 常驻简报至多列 12 行档案：人放回、新增的行超过这个数，她本场的新进展会被挤出简报 */
+/** 常驻简报至多列 12 行档案：锁住但没放回的行满了会按规则被挤出简报（仍在档案里，回想查得到） */
 export const SNAPSHOT_BRIEF_LINES = 12;
 
 /** 档案行标题上限（与后端审核仓储一致，和整理写的行同一上限） */
@@ -192,10 +192,15 @@ export function archiveLineTags(
   return tags;
 }
 
-/** 放回、新增的行太多时的提示；没超过简报行数返回 null */
-export function pinnedOverflowHint(pinnedCount: number): string | null {
-  if (pinnedCount <= SNAPSHOT_BRIEF_LINES) return null;
-  return `最新快照里人放回、新增的行已有 ${pinnedCount} 行，超过常驻简报的 ${SNAPSHOT_BRIEF_LINES} 行：她本场的新进展会被挤出简报，删掉或合并一些。`;
+/** 放回是不是满了：满了不能再放回或新增，要先取消一条 */
+export function isPinFull(pinnedCount: number, pinnedMax: number): boolean {
+  return pinnedCount >= pinnedMax;
+}
+
+/** 放回满了时的提示；没满返回 null（升级前已经超过上限的快照照实报行数） */
+export function pinnedFullHint(pinnedCount: number, pinnedMax: number): string | null {
+  if (!isPinFull(pinnedCount, pinnedMax)) return null;
+  return `最新快照里放回的行已有 ${pinnedCount} 行（至多 ${pinnedMax} 行）：要再放回或新增一行，先在“下一场记得”的行里取消一条放回。`;
 }
 
 /** 审核状态标签：待审 / 已审 */

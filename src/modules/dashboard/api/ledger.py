@@ -12,7 +12,8 @@
 - POST   /memory/archive/{session_id}/lines   从这一场她的台词里截原话新增一行（锁住、放进最新快照）
 - PUT    /memory/archive/lines/{line_id}/title    改标题（锁住）
 - PUT    /memory/archive/lines/{line_id}/lasting  标或取消稳定的事（锁住）
-- POST   /memory/archive/lines/{line_id}/pin      放回最新一份快照
+- POST   /memory/archive/lines/{line_id}/pin      放回最新一份快照（一份快照至多 4 行）
+- POST   /memory/archive/lines/{line_id}/unpin    取消放回（改回普通行，还在快照里）
 - DELETE /memory/archive/lines/{line_id}      删一行档案
 - GET    /memory/settle                       整理状态（最近的正式场、待整理数与待审数）
 - POST   /memory/settle/{session_id}/reviewed 标已审
@@ -55,7 +56,7 @@ from src.modules.dashboard.schemas.ledger import (
 )
 from src.modules.storage.models.memory import Commitment, SettleReport, ViewerCandidate
 from src.modules.storage.privacy import mask_names_in_text
-from src.modules.storage.repos.memory_review import MemoryReviewError
+from src.modules.storage.repos.memory_review import MAX_PINNED_LINES, MemoryReviewError
 from src.modules.storage.repos.sessions import MAX_SETTLE_ATTEMPTS
 from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.modules.utils.time_utils import now_ms
@@ -267,6 +268,7 @@ async def list_archive_lines(
         settled=state is not None and state.settled_at_ms is not None,
         snapshot_session_id=state.snapshot_session_id if state is not None else None,
         snapshot_pinned_count=state.pinned_count if state is not None else 0,
+        snapshot_pinned_max=MAX_PINNED_LINES,
     )
 
 
@@ -321,6 +323,16 @@ async def pin_archive_line(line_id: int, review: ReviewRepoDep) -> LedgerMutatio
     except MemoryReviewError as exc:
         _raise_review_error(exc)
     return LedgerMutationResponse(success=True, detail="已放回快照，下一场开播会记得")
+
+
+@router.post("/archive/lines/{line_id}/unpin", response_model=LedgerMutationResponse)
+async def unpin_archive_line(line_id: int, review: ReviewRepoDep) -> LedgerMutationResponse:
+    """取消放回：这一行改回普通行，还在快照里；快照满 12 行时可能被挤出简报（仍在档案里，回想查得到）。"""
+    try:
+        await review.unpin_line(line_id=int(line_id), at_ms=now_ms())
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return LedgerMutationResponse(success=True, detail="已取消放回")
 
 
 @router.delete("/archive/lines/{line_id}", response_model=LedgerMutationResponse)

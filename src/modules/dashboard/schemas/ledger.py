@@ -80,7 +80,10 @@ class ArchiveListResponse(BaseModel):
     snapshot_session_id: Optional[int] = Field(
         default=None, description="最新一份快照所在的场次；空 = 还没有存下的快照（放回、标稳定、新增做不了）"
     )
-    snapshot_pinned_count: int = Field(default=0, description="最新快照里人放回、新增的行数（超过 12 行要人去减）")
+    snapshot_pinned_count: int = Field(default=0, description="最新快照里人放回、新增的行数")
+    snapshot_pinned_max: int = Field(
+        default=4, description="一份快照里人放回、新增的行至多几行；满了要先取消一条才能再放回或新增"
+    )
 
 
 class ArchiveTitleRequest(BaseModel):

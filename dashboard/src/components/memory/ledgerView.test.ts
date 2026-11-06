@@ -14,7 +14,8 @@ import {
   gameSaveLabel,
   hasLaterSettledSession,
   nearestCommitmentsText,
-  pinnedOverflowHint,
+  isPinFull,
+  pinnedFullHint,
   quoteFitsSpeech,
   reviewStateLabel,
   settleAttemptsExhausted,
@@ -144,9 +145,12 @@ describe('记忆页审核', () => {
     ).toEqual(['下一场记得', '稳定的事', '人放回的', '人改过']);
   });
 
-  it('放回、新增的行超过常驻简报的 12 行才提示', () => {
-    expect(pinnedOverflowHint(12)).toBeNull();
-    expect(pinnedOverflowHint(13)).toContain('13 行');
+  it('放回满 4 行才提示，要先取消一条', () => {
+    expect(isPinFull(3, 4)).toBe(false);
+    expect(pinnedFullHint(3, 4)).toBeNull();
+    expect(isPinFull(4, 4)).toBe(true);
+    expect(pinnedFullHint(4, 4)).toContain('取消一条放回');
+    expect(pinnedFullHint(6, 4)).toContain('6 行');
   });
 
   it('原话要是那句台词的逐字片段，连续空白压成一个空格的写法也认', () => {

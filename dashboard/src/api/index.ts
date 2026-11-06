@@ -578,6 +578,9 @@ export const ledgerApi = {
     api.put<LedgerMutationResponse>(`/memory/archive/lines/${lineId}/lasting`, { lasting }),
   pinArchiveLine: (lineId: number) =>
     api.post<LedgerMutationResponse>(`/memory/archive/lines/${lineId}/pin`),
+  // 取消放回：改回普通行，还在快照里，之后按规则取舍
+  unpinArchiveLine: (lineId: number) =>
+    api.post<LedgerMutationResponse>(`/memory/archive/lines/${lineId}/unpin`),
   createArchiveLine: (liveSessionId: number, payload: ArchiveLineCreatePayload) =>
     api.post<LedgerMutationResponse>(`/memory/archive/${liveSessionId}/lines`, payload),
   markReviewed: (liveSessionId: number) =>
