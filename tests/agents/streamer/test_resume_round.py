@@ -159,6 +159,9 @@ async def test_resume_round_reads_interrupted_history_and_lands_in_same_session(
     try:
         await stack.manager.resume_session(pk)
         await wait_until(lambda: len(stack.speeches) >= 1, what="接回发言的发言事件送达")
+        # 记账器与本测试的发言订阅并发处理同一条 streamer.speech：本测试的订阅只是记一笔，
+        # 记账器还要异步写库，看到发言事件时那一行未必已落库。先等写库落地再断言写进了哪一场
+        await wait_until(lambda: len(stack.writes.assistant_sessions) >= 1, what="记账器把接回句写库")
     finally:
         await agent.stop()
 
