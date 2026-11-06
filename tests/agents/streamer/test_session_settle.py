@@ -1370,6 +1370,50 @@ async def test_resettling_after_an_approval_carries_the_viewer_line_into_the_sna
     ], "批准过的同一句不再列成待审"
 
 
+@pytest.mark.parametrize("resettle", [False, True], ids=["下一场第一次整理", "同一场重新整理"])
+async def test_a_candidate_approved_while_the_model_runs_still_reaches_the_new_snapshot(
+    store: SQLiteDatabase, prompt_manager: PromptManager, resettle: bool
+) -> None:
+    """整理在调模型时人批准了一条候选：它插进了当时最新的那份快照，落库时同一事务里补进本场新快照最前面。"""
+    first_id = await _ended_session(store)
+    await _viewer_message(store, first_id, content="猫叫芝麻吧", message_id="m1")
+    await _speech(store, first_id, "芝麻好听", reply_to_message_id="m1", timestamp_ms=1_100)
+    await _speech(store, first_id, "今天挖到铁矿了", timestamp_ms=1_200)
+    candidate = (
+        '"viewer_candidates": [{"line": 1, "title": "猫取名芝麻", "word": "芝麻", "viewer_quote": "猫叫芝麻",'
+        ' "quote": "芝麻好听"}]'
+    )
+    archive = '{"archive": [{"line": 2, "title": "挖到铁矿", "quote": "挖到铁矿"}], ' + candidate + "}"
+    assert await _settler(store, _reply(archive, '{"commitments": []}'), prompt_manager).settle_session(first_id)
+    (pending,) = await store.viewer_candidates.list_candidates()
+
+    if resettle:
+        target = first_id
+        await store.sessions.requeue_settlement(live_session_id=first_id)
+    else:
+        target = await _ended_session(store, started_at_ms=5_000_000)
+        await _speech(store, target, "今天去钓鱼", timestamp_ms=5_000_100)
+    gate = asyncio.Event()
+    llm = FakeLLMManager(
+        responses=[Response(success=True, content=archive), Response(success=True, content='{"commitments": []}')],
+        gate=gate,
+    )
+    running = asyncio.create_task(_settler(store, llm, prompt_manager).settle_session(target))
+    await llm.gate_reached.wait()
+    # 模型还在跑：运营者批准了那条候选（插进当时最新的那份快照）
+    approved = await store.viewer_candidates.approve(candidate_id=pending.id, lasting=True, at_ms=8_000)
+    gate.set()
+    assert await running is True
+
+    snapshot = await store.archive.get_snapshot(live_session_id=target)
+    assert snapshot is not None
+    assert (snapshot.lines[0].line.id, snapshot.lines[0].lasting, snapshot.lines[0].pinned) == (
+        approved.archive_line_id,
+        True,
+        False,
+    ), "批准的那一行排在最前，稳定照批准时标的、不标放回"
+
+
 async def test_rejected_candidates_and_archived_lines_are_not_listed_again(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:

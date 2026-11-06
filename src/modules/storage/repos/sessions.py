@@ -19,7 +19,12 @@ from src.modules.storage.models.memory import (
 )
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
 from src.modules.storage.repos._base import BaseRepo
-from src.modules.storage.repos.archive import delete_archive_lines_by_session, delete_snapshot, keywords_column
+from src.modules.storage.repos.archive import (
+    delete_archive_lines_by_session,
+    delete_snapshot,
+    keywords_column,
+    newest_snapshot_owner,
+)
 from src.modules.storage.repos.memory_index import delete_session_index_rows
 from src.modules.storage.repos.viewer_candidates import CANDIDATE_EXPIRE_MS, replace_session_candidates
 from src.modules.storage.repos.commitments import (
@@ -34,6 +39,44 @@ from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KIND_REHEA
 MAX_SETTLE_ATTEMPTS = 3
 
 
+def _approved_unseen(
+    conn: sqlite3.Connection, *, live_session_id: int, seen_line_ids: Optional[Sequence[int]]
+) -> List[KeptSnapshotLine]:
+    """整理读原料之后才批准进最新快照的观众来源行，照它们在那份快照里的样子取出（按位置）。
+
+    批准总是把这一行插进当时最新的那份快照；整理读原料时它还不在，``seen_line_ids`` 里就没有它。
+    最新那份属于开播晚于本场的场次时，本场快照写出来也不是最新的，那份快照照旧留着这些行，不用补。
+    不传 ``seen_line_ids`` 的调用方不读原料，不补。
+    """
+    if seen_line_ids is None:
+        return []
+    owner = newest_snapshot_owner(conn)
+    if owner is None or not owner[1]:
+        return []
+    started = {
+        int(row[0]): int(row[1] or 0)
+        for row in conn.execute(
+            "SELECT id, started_at_ms FROM live_sessions WHERE id IN (?, ?)", (int(owner[0]), int(live_session_id))
+        ).fetchall()
+    }
+    if started.get(int(owner[0]), 0) > started.get(int(live_session_id), 0):
+        return []
+    seen = {int(item) for item in seen_line_ids}
+    rows = conn.execute(
+        "SELECT p.archive_line_id, p.lasting, p.seen_at_ms, p.pinned FROM archive_snapshot_lines p"
+        " JOIN archive_lines a ON a.id = p.archive_line_id"
+        " WHERE p.live_session_id=? AND a.source='viewer' ORDER BY p.position",
+        (int(owner[0]),),
+    ).fetchall()
+    return [
+        KeptSnapshotLine(
+            archive_line_id=int(row[0]), lasting=bool(row[1]), seen_at_ms=int(row[2] or 0), pinned=bool(row[3])
+        )
+        for row in rows
+        if int(row[0]) not in seen
+    ]
+
+
 def _write_snapshot(
     conn: sqlite3.Connection,
     *,
@@ -41,11 +84,13 @@ def _write_snapshot(
     written_at_ms: int,
     new_lines: Sequence[tuple[int, bool]],
     kept: Sequence[KeptSnapshotLine],
+    front: Sequence[KeptSnapshotLine] = (),
 ) -> int:
     """在整理事务里写本场的快照：先登记"写过快照"（快照可以是空的），再按顺序写各行引用。
 
-    本场新写的行最近一次提起就是本场（记本场开播时刻）；接住的行只在原行还在时才引用，
-    运营者放回的标记跟着接进新快照（否则下一场整理就把人放回的行当普通行挤掉）。
+    ``front`` 排在最前（整理调模型期间人批准的观众来源行，和批准时一样插在最前面），其后是本场新写的行，
+    最后是接住的旧行。本场新写的行最近一次提起就是本场（记本场开播时刻）；接住的行只在原行还在时
+    才引用，运营者放回的标记跟着接进新快照（否则下一场整理就把人放回的行当普通行挤掉）。
     返回写进快照的行数。
     """
     conn.execute(
@@ -55,6 +100,21 @@ def _write_snapshot(
     started = conn.execute("SELECT started_at_ms FROM live_sessions WHERE id=?", (int(live_session_id),)).fetchone()
     started_at_ms = int(started[0] or 0) if started else 0
     position = 0
+    # 批准 -> 插在最前：整理调模型期间人批准的行先占位置，和批准当时的样子一样
+    for item in front:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting,"
+            " seen_at_ms, pinned) SELECT ?, id, ?, ?, ?, ? FROM archive_lines WHERE id=?",
+            (
+                int(live_session_id),
+                position,
+                1 if item.lasting else 0,
+                int(item.seen_at_ms),
+                1 if item.pinned else 0,
+                int(item.archive_line_id),
+            ),
+        )
+        position += max(0, int(cur.rowcount or 0))
     for archive_line_id, lasting in new_lines:
         conn.execute(
             "INSERT INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting, seen_at_ms)"
@@ -422,6 +482,7 @@ class SessionRepo(BaseRepo):
         settle_report: Optional[str] = None,
         snapshot_kept: Sequence[KeptSnapshotLine] = (),
         viewer_candidates: Sequence[PendingViewerCandidate] = (),
+        seen_line_ids: Optional[Sequence[int]] = None,
     ) -> Dict[str, int]:
         """把一场的整理结果一次写进去：档案行、档案快照、新承诺、了结、观众候选、整理完成时刻。
 
@@ -438,7 +499,9 @@ class SessionRepo(BaseRepo):
 
         快照同一事务写：本场新写的行里 ``in_snapshot`` 的在前，``snapshot_kept`` 接住的旧行在后，
         按给定顺序编位置。接住的行只记引用；整理途中被运营者删掉的行就不再引用。重跑时本场旧
-        快照整份替换，所以本场此前做出的去掉、替换随之作废，基底仍是上一份快照。
+        快照整份替换，所以本场此前做出的去掉、替换随之作废，基底仍是上一份快照。整理调模型
+        这段时间里人批准的观众候选插进了当时最新的那份快照，整理读原料时没看到（不在
+        ``seen_line_ids`` 里）：同一事务里在删旧快照之前把它们读出来，写在本场快照最前面。
         返回各类写入条数（claimed = 1 表示这次真的抢到并写了）。
         """
 
@@ -453,6 +516,11 @@ class SessionRepo(BaseRepo):
                 if claim.rowcount <= 0:
                     return written
                 written["claimed"] = 1
+                # 读原料 -> 调模型 -> 落库这段时间里人批准的观众候选：批准时插进了当时最新的那份快照，
+                # 本场快照写出来成了最新的一份，不补上它们就从她的简报里消失。删旧快照前先读出来
+                approved_late = _approved_unseen(
+                    conn, live_session_id=int(live_session_id), seen_line_ids=seen_line_ids
+                )
                 # 重跑整场替换：旧档案行全清。本场登记、仍未了结的承诺按原话那句台词对齐：
                 # 这一轮还认定的保留原编号、只更新标题等字段（台词里点名过的编号不悬空，
                 # 线索推送的"用上即停"仍认得它）；这一轮不再认定的才删；运营者已了结或
@@ -530,6 +598,7 @@ class SessionRepo(BaseRepo):
                     written_at_ms=int(settled_at_ms),
                     new_lines=snapshot_new,
                     kept=snapshot_kept,
+                    front=approved_late,
                 )
                 for item in commitments:
                     # 证据是公屏那句的按公屏行对齐，其余按台词行对齐

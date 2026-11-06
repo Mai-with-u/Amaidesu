@@ -353,6 +353,12 @@ def _place_of(row: Commitment) -> str:
     return f"；挂在 {row.game} 的存档「{save.label}」" if save.known else f"；挂在 {row.game}"
 
 
+def _seen_line_ids(material: SettleMaterial) -> List[int]:
+    """整理读原料时看到的旧档案行：上一份快照的各行，加这一场接着带的观众来源行。"""
+    previous = material.previous.lines if material.previous is not None else []
+    return sorted({int(item.line.id) for item in (*previous, *material.carried)})
+
+
 def _reply_player_of(line: SettleSpeechLine) -> Optional[int]:
     """这一行台词在回应的玩家；它在回一条弹幕时不算（对象是那位观众）。
 
@@ -590,6 +596,8 @@ class SessionSettler:
                 settle_report=report.model_dump_json() if has_report else None,
                 snapshot_kept=outcome.snapshot_kept,
                 viewer_candidates=outcome.viewer_candidates,
+                # 读原料时看到的旧行：调模型期间人批准、插进最新快照的观众来源行不在其中，落库时补进本场快照
+                seen_line_ids=_seen_line_ids(material),
             )
         except Exception as exc:  # noqa: BLE001 - 写入失败按整理失败记账，事务已回滚
             logger.warning(f"场次 {live_session_id} 整理写入失败: {exc}", exc=exc)
