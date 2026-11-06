@@ -20,11 +20,13 @@ live.ended 之后、道别句播完才排进后台，一次整理待整理的场
 1. 场次档案：她的全部播出台词加游戏里的事，挑值得下次开播提起的至多 8 行新事；同时对上一份
    快照逐行挑留、去掉（要本场证据）或替换（要本场原话），代码再按固定规则凑成本场快照
    （只引用原行、至多 12 行，见 ``rolling``）；
-2. 找新承诺：她的全部台词（附被回应的弹幕）加她能做的事，找出当众答应过、还没兑现的事；
+2. 找新承诺：她的全部台词（附被回应的弹幕、回应的是哪位游戏玩家）、她在游戏公屏打的字加她能做的
+   事，找出当众答应过、还没兑现的事；顺带列出她说欠着、账上却找不到的事（只进待审区，人批准才登记）；
 3. 了结旧承诺：只在本场之前有未了结承诺时才调，判她说没说明白做完了或不做了。
 
 校验全部是代码：逐字引文（原话必须是所引那一行文本的逐字子串且不超过上限）、所属游戏
-（必须是本场玩过的）、对谁（对具体观众时那一行必须回应了真实观众的弹幕）、不重复（与
+（必须是本场玩过的）、对谁（对具体观众时那一行必须回应了真实观众的弹幕；对游戏玩家时要按
+台词记下的回应对象、或公屏上点名与紧接着回话对上那位玩家，见 ``settle_players``）、不重复（与
 已有承诺同一件事、或句子里已经提到某条承诺，都不新建）、只改未了结的承诺（运营者已判
 误记或已了结的不受她的话影响）。校验没通过的条目连同原话写进整理报告，由运营者判断
 要不要在 WebUI 手建。
@@ -36,7 +38,7 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, AbstractSet, Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, AbstractSet, Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 from src.modules.context.tokens import TokenCounter
 from src.modules.logging import get_logger
@@ -62,7 +64,13 @@ from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.agents.streamer.memory.render import memory_ref_numbers, render_commitment_number
 from src.agents.streamer.memory.rolling import plan_from_ops, render_base, select_snapshot
 from src.agents.streamer.memory.saves import SaveTimeline
-from src.agents.streamer.memory.settle_candidates import CandidateCheck, taken_from, validate_viewer_candidates
+from src.agents.streamer.memory.settle_candidates import (
+    CandidateCheck,
+    taken_from,
+    validate_claimed_missing,
+    validate_viewer_candidates,
+)
+from src.agents.streamer.memory.settle_players import PlayerChat, build_player_chat
 from src.agents.streamer.memory.settle_cues import remembered_places, render_places, verified_keywords, verified_place
 from src.modules.utils.time_utils import now_ms
 
@@ -71,7 +79,9 @@ if TYPE_CHECKING:
     from src.modules.storage.repos.archive import ArchiveRepo
     from src.modules.storage.repos.chat import ChatRepo
     from src.modules.storage.repos.commitments import CommitmentRepo
+    from src.modules.storage.models.game_players import GameChatLine, GamePlayer
     from src.modules.storage.repos.events import EventRepo
+    from src.modules.storage.repos.game_players import GamePlayerRepo
     from src.modules.storage.repos.sessions import SessionRepo
 
 __all__ = ["MAX_ATTEMPTS", "SessionSettler", "SettleError", "parse_json_object"]
@@ -104,8 +114,9 @@ MAX_ARCHIVE_LINES = 8
 # 逐字引文与标题的上限（超出的引文整条丢弃，超出的标题截断）
 MAX_QUOTE_CHARS = 80
 MAX_TITLE_CHARS = 30
-# 交给「找新承诺」的旧承诺标题上限：未了结的全给，判误记的只给最近的这些条
+# 交给「找新承诺」的旧承诺标题上限：未了结的全给，判误记、已了结的只给最近的这些条
 MAX_VOID_TITLES = 40
+MAX_CLOSED_TITLES = 40
 # 她能做的事里，不需要额外能力就能做的几件（游戏 Agent 名单由外面传进来）
 _BASE_ABILITIES = ("聊天", "讲故事", "陪观众说话")
 
@@ -144,6 +155,11 @@ class SettleMaterial:
     # 本场的地点动静与记住的地点：档案行的地点只能从这里挑，按地名或说话时在不在跟前核对
     place_marks: List[GamePlaceMark] = field(default_factory=list)
     places: List[str] = field(default_factory=list)
+    # 本场的游戏玩家：代号、她在公屏打的字、每一句能对上谁（对玩家的承诺按它核对）
+    players: PlayerChat = field(default_factory=PlayerChat)
+    # 已了结的旧承诺标题：找"她说欠着、账上却找不到的"时一并比对
+    closed_titles: List[Tuple[int, str]] = field(default_factory=list)
+    closed_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -208,6 +224,7 @@ def _clip(text: str, limit: int) -> str:
 # 其余取值（含缺失、空串）一律不登记——认不出是谁就不能写进承诺账本
 _TARGET_PERSON = frozenset({"person", "viewer", "观众"})
 _TARGET_EVERYONE = frozenset({"everyone", "all", "全体", "所有人", "大家"})
+_TARGET_PLAYER = frozenset({"player", "玩家"})
 
 
 def _select_speech_lines(*, costs: Sequence[int], key_flags: Sequence[bool], budget: int) -> List[int]:
@@ -333,6 +350,38 @@ def _place_of(row: Commitment) -> str:
     return f"；挂在 {row.game} 的存档「{save.label}」" if save.known else f"；挂在 {row.game}"
 
 
+def _player_target(
+    raw: Mapping[str, Any],
+    line: Optional[SettleSpeechLine],
+    chat: Optional["GameChatLine"],
+    material: SettleMaterial,
+) -> Tuple[Optional[int], str]:
+    """对玩家的承诺是对哪位：模型写的代号必须按两条证据路径之一对上，返回 (玩家主键, 对不上的原因)。
+
+    台词行：落库时记下的回应对象必须就是他。公屏那句：点了他的名字，或者紧接着他的话说的。
+    """
+    player_id = material.players.player_of(raw.get("player"))
+    if player_id is None:
+        return None, f"说的是对某位玩家答应，但玩家代号认不出（{str(raw.get('player') or '空')[:20]}），未登记"
+    if line is not None:
+        if line.reply_player_id is None or int(line.reply_player_id) != player_id:
+            return None, "说的是对某位玩家答应，但这一行不是在回应这位玩家，未登记"
+        return player_id, ""
+    if chat is None or player_id not in material.players.targets.get(int(chat.id), frozenset()):
+        return None, "公屏这句没点这位玩家的名字，也不是紧接着他的话说的，未登记"
+    return player_id, ""
+
+
+def _list_field(data: Mapping[str, Any], key: str) -> List[Any]:
+    """模型输出里取一个列表字段：缺失当空列表，不是列表按输出读不懂处理。"""
+    rows = data.get(key)
+    if rows is None:
+        return []
+    if not isinstance(rows, list):
+        raise SettleError(f"模型输出的 {key} 不是列表")
+    return rows
+
+
 def _has_value(raw: Any) -> bool:
     """模型是否真的填了这个字段（None、空串、纯空白与"无/none/null"一类写法都算没填）。
 
@@ -363,13 +412,15 @@ class SessionSettler:
         game_names_provider: Optional[Callable[[], Sequence[str]]] = None,
         min_session_ms: int = 0,
         clock: Callable[[], int] = now_ms,
+        game_player_repo: Optional["GamePlayerRepo"] = None,
     ) -> None:
         """仓储、模型与提示词由主播 Agent 构造时注入。
 
         event_repo 缺失时原料少游戏这一类，整理照常跑；archive_repo 缺失时没有上一份快照
         可接，本场快照只有本场的事；game_names_provider 返回当前对主播可见的游戏 Agent 名，
         用来写「她能做的事」；min_session_ms 与常驻简报的"上一场"时长下限同一个值，滚动之前
-        的旧场次现拼基底时用来数"时长够的场次"。
+        的旧场次现拼基底时用来数"时长够的场次"。game_player_repo 缺失时原料里没有游戏玩家与公屏，
+        对玩家的承诺一条也认不出（模型写了也进未登记）。
         """
         self._sessions = sessions_repo
         self._chat = chat_repo
@@ -379,6 +430,7 @@ class SessionSettler:
         self._llm = llm_service
         self._prompt_manager = prompt_manager
         self._game_names_provider = game_names_provider
+        self._players = game_player_repo
         self._min_session_ms = max(0, int(min_session_ms))
         self._clock = clock
         # 场次主键 → 在途整理任务：同一场的并发触发共享这个任务，只付一次模型调用
@@ -580,13 +632,16 @@ class SessionSettler:
     # ------------------------------------------------------------------
 
     async def _collect_material(self, session: LiveSession, delivered: List[SettleSpeechLine]) -> SettleMaterial:
-        """把一场的原料全取出来：她说的话、游戏（连同待过的存档）、她能做的事、旧承诺。"""
-        speech_text, lines_by_number, speech_note = self._render_speech(delivered)
+        """把一场的原料全取出来：她说的话、游戏（连同待过的存档）、游戏玩家与公屏、她能做的事、旧承诺。"""
+        # 先认本场的玩家：台词里"回应玩家N"的代号要和公屏段同一套
+        players = await self._load_players(session, delivered)
+        speech_text, lines_by_number, speech_note = self._render_speech(delivered, player_codes=players.codes)
         saves = await self._load_saves(session)
         games, games_text = await self._render_games(session, saves)
         game_agents = self._enabled_game_names()
         abilities_text = self._render_abilities(game_agents)
         open_commitments, open_text, void_titles, void_text = await self._load_commitments(session)
+        closed_titles = await self._load_closed_titles(session)
         previous = await self._load_previous(session)
         place_marks = await self._load_place_marks(session)
         return SettleMaterial(
@@ -608,7 +663,39 @@ class SessionSettler:
             started_at_ms=int(session.started_at_ms),
             place_marks=place_marks,
             places=remembered_places(place_marks),
+            players=players,
+            closed_titles=closed_titles,
+            closed_text="\n".join(f"#{commitment_id} 「{what}」" for commitment_id, what in closed_titles),
         )
+
+    async def _load_players(self, session: LiveSession, delivered: Sequence[SettleSpeechLine]) -> PlayerChat:
+        """本场的游戏玩家与公屏聊天；读不到就当没有（对玩家的承诺这一场认不出，其余照常整理）。"""
+        if self._players is None:
+            return PlayerChat()
+        try:
+            lines: List["GameChatLine"] = list(
+                await self._players.list_session_game_chat(live_session_id=int(session.id))
+            )
+            spoken = [int(line.reply_player_id) for line in delivered if line.reply_player_id is not None]
+            wanted = dict.fromkeys([*spoken, *(int(line.player_id) for line in lines if line.player_id is not None)])
+            players: Dict[int, "GamePlayer"] = {}
+            for player_id in wanted:
+                player = await self._players.get_player(player_id=player_id)
+                if player is not None:
+                    players[player_id] = player
+        except Exception as exc:  # noqa: BLE001 - 少了玩家只少一类承诺对象，整理照常跑
+            logger.warning(f"场次 {session.id} 读游戏玩家与公屏失败，这一场认不出对玩家的承诺: {exc}", exc=exc)
+            return PlayerChat()
+        return build_player_chat(speech_player_ids=spoken, lines=lines, players=players, clock_text=_clock_text)
+
+    async def _load_closed_titles(self, session: LiveSession) -> List[Tuple[int, str]]:
+        """最近已了结的承诺标题（旧的在前）：她说"上次答应过"时，账上了结过的也算对得上。"""
+        try:
+            rows = await self._commitments.list_commitments(statuses=["closed"], limit=MAX_CLOSED_TITLES)
+        except Exception as exc:  # noqa: BLE001 - 少一类比对原料：多列几条候选，人审时驳回即可
+            logger.warning(f"场次 {session.id} 读已了结承诺失败: {exc}", exc=exc)
+            return []
+        return [(int(row.id), row.what) for row in reversed(rows)]
 
     async def _load_place_marks(self, session: LiveSession) -> List[GamePlaceMark]:
         """本场的地点动静（记住、忘掉、走近、离开）；读不到就当没有，档案行只是不挂地点。"""
@@ -638,13 +725,14 @@ class SessionSettler:
             raise SettleError(f"取上一份档案快照失败：{exc}") from exc
 
     def _render_speech(
-        self, delivered: List[SettleSpeechLine]
+        self, delivered: List[SettleSpeechLine], *, player_codes: Optional[Mapping[int, str]] = None
     ) -> Tuple[str, Dict[int, SettleSpeechLine], Optional[str]]:
         """台词渲染成带编号的行；回应弹幕的把那句原文与发言人代号附在前面。
 
         编号是模型输出用来指回具体台词的键：整场台词超过模型窗口预算时只保留一部分，
         按保留顺序重新编号，台词行本身仍指向原行。返回的第三项是裁剪说明（未裁剪为 None），
         由调用方写进整理报告。同一观众整场用同一个代号，模特才能说清「对谁答应的」而不用昵称。
+        回应游戏玩家的那一句标"回应玩家N"，代号与公屏段同一套（``player_codes``，玩家主键 → 代号）。
         """
         codes: Dict[int, str] = {}
         bodies: List[str] = []
@@ -657,12 +745,17 @@ class SessionSettler:
                 code = codes.setdefault(int(reply_viewer_id), f"{_VIEWER_CODE_PREFIX}{len(codes) + 1}")
                 reply_text = " ".join((line.reply_content or "").split())
                 reply_note = f"（回复{code}「{reply_text}」）"
+            player_note = ""
+            player_code = (player_codes or {}).get(int(line.reply_player_id)) if line.reply_player_id else None
+            if player_code:
+                player_note = f"（回应{player_code}）"
             memory_note = ""
             used = sorted(memory_ref_numbers(line.memory_refs))
             if used:
                 memory_note = "（提到" + "、".join(f"约#{item}" for item in used) + "）"
-            bodies.append(f"{_clock_text(int(line.timestamp_ms))} 你{reply_note}：{content}{memory_note}")
-            key_flags.append(bool(reply_note) or bool(used))
+            bodies.append(f"{_clock_text(int(line.timestamp_ms))} 你{reply_note}{player_note}：{content}{memory_note}")
+            # 回应观众、回应玩家、引用记忆的行是关键行：台词超预算裁剪时优先保留
+            key_flags.append(bool(reply_note) or bool(player_note) or bool(used))
 
         counter = TokenCounter()
         costs = [counter.text(f"#{index} {body}") + _LINE_PREFIX_TOKENS for index, body in enumerate(bodies, start=1)]
@@ -819,18 +912,21 @@ class SessionSettler:
             )
         except ValueError as exc:
             raise SettleError(str(exc)) from exc
-        commitment_rows = await self._ask_for_list(
+        # 找承诺那次顺带列出"她说欠着、账上找不到的"：同一份原料，不多一次调用
+        commitment_data = await self._ask(
             template=_COMMITMENT_TEMPLATE,
             prompt=(
                 f"【她能做的事】\n{material.abilities_text}\n\n"
                 f"{material.games_text or '【本场没有玩游戏】'}\n\n"
                 f"【还没了结的承诺】\n{material.open_text or '没有'}\n\n"
+                f"【已了结的承诺】\n{material.closed_text or '没有'}\n\n"
                 f"【已判误记的承诺（这些话不是承诺）】\n{material.void_text or '没有'}\n\n"
                 f"【本场她说的话】\n{material.speech_text}\n\n"
-                "请找出这一场她新答应的、还没兑现的事。"
+                + (f"{material.players.text}\n\n" if material.players.text else "")
+                + "请找出这一场她新答应的、还没兑现的事。"
             ),
-            key="commitments",
         )
+        commitment_rows = _list_field(commitment_data, "commitments")
         closure_rows: List[Any] = []
         if material.open_commitments:
             closure_rows = await self._ask_for_list(
@@ -849,16 +945,65 @@ class SessionSettler:
             [*new_lines, *plan.replacements], plan.kept, session_started_at_ms=material.started_at_ms
         )
         candidates = await self._check_candidates(archive_data.get("viewer_candidates"), material, selection.lines)
+        claimed = await self._check_claimed(commitment_data.get("claimed_missing"), material, commitments, closures)
         return SettleOutcome(
             archive_lines=selection.lines,
             snapshot_kept=selection.kept,
             snapshot_changes=[*plan.changes, *selection.evicted],
             commitments=commitments,
             closures=closures,
-            unregistered=[*archive_misses, *plan.misses, *commitment_misses, *closure_misses, *candidates.missed],
+            unregistered=[
+                *archive_misses,
+                *plan.misses,
+                *commitment_misses,
+                *closure_misses,
+                *candidates.missed,
+                *claimed.missed,
+            ],
             input_note=material.speech_note,
-            viewer_candidates=candidates.candidates,
-            candidates_personal_dropped=candidates.personal_dropped,
+            viewer_candidates=[*candidates.candidates, *claimed.candidates],
+            candidates_personal_dropped=candidates.personal_dropped + claimed.personal_dropped,
+        )
+
+    async def _check_claimed(
+        self,
+        rows: Any,
+        material: SettleMaterial,
+        commitments: Sequence[PendingCommitment],
+        closures: Sequence[CommitmentClosure],
+    ) -> CandidateCheck:
+        """核对找承诺那次顺带列出的"她说欠着、账上却找不到的"，只进待审区，人批准才登记成承诺。
+
+        账上对得上的不列：未了结、已了结、本场新登记的标题，以及本场已经作了新承诺或了结证据的那几行。
+        字段不是列表时只告警、当没有：这一项是附带的，不该让整场整理失败。
+        """
+        if rows is None or rows == []:
+            return CandidateCheck()
+        if not isinstance(rows, list):
+            logger.warning(f"场次 {material.live_session_id}：模型输出的 claimed_missing 不是列表，这一项按没有处理")
+            return CandidateCheck()
+        rejected_lines: List[int] = []
+        rejected_titles: List[str] = []
+        try:
+            rejected_lines, rejected_titles = await self._sessions.rejected_claim_keys()
+        except Exception as exc:  # noqa: BLE001 - 去重依据读不到不挡整理
+            logger.warning(f"读驳回过的「她说欠着的」候选失败，本次不按驳回记录去重: {exc}", exc=exc)
+        return validate_claimed_missing(
+            rows,
+            line_of=lambda raw: self._line_of(raw, material),
+            game_of=lambda raw: _game_of(raw, material),
+            saves=material.saves,
+            ledger_titles=[
+                *(row.what for row in material.open_commitments),
+                *(what for _commitment_id, what in material.closed_titles),
+                *(item.what for item in commitments),
+            ],
+            taken_lines=[
+                *(item.evidence_chat_id for item in commitments if item.evidence_chat_id is not None),
+                *(closure.close_chat_id for closure in closures if closure.close_chat_id is not None),
+            ],
+            rejected_reply_chats=rejected_lines,
+            rejected_titles=rejected_titles,
         )
 
     async def _check_candidates(
@@ -890,13 +1035,7 @@ class SessionSettler:
 
     async def _ask_for_list(self, *, template: str, prompt: str, key: str) -> List[Any]:
         """一次调用取一个列表字段；字段缺失当空列表，不是列表就按输出读不懂处理。"""
-        data = await self._ask(template=template, prompt=prompt)
-        rows = data.get(key)
-        if rows is None:
-            return []
-        if not isinstance(rows, list):
-            raise SettleError(f"模型输出的 {key} 不是列表")
-        return rows
+        return _list_field(await self._ask(template=template, prompt=prompt), key)
 
     async def _ask(self, *, template: str, prompt: str) -> Dict[str, Any]:
         """渲染系统提示词并调一次模型，返回解析出的 JSON 对象。"""
@@ -914,9 +1053,10 @@ class SessionSettler:
     # 校验（全部是代码）
     # ------------------------------------------------------------------
 
-    def _verified_quote(self, line: SettleSpeechLine, quote: Any) -> Optional[str]:
+    def _verified_quote(self, line: Union[SettleSpeechLine, "GameChatLine"], quote: Any) -> Optional[str]:
         """逐字引文校验：原话必须是那一行文本的逐字子串、且不超过上限，否则返回 None。
 
+        对玩家的承诺引的可以是她在公屏打的那句（同样按它的原文核对）。
         给模型看的台词把连续空白压成了一个空格，模型照抄压缩后的文本也算逐字引文；
         原文与压缩文本两种口径都接受，否则换行/多空格的句子会被系统性地误判。
         """
@@ -1006,6 +1146,9 @@ class SessionSettler:
     ) -> Tuple[List[PendingCommitment], List[UnregisteredItem]]:
         """新承诺的校验：逐字引文、所属游戏、对谁、不重复。
 
+        对游戏玩家的承诺证据可以是台词行（记下了在回应他），也可以是她在公屏打的那句（``chat``），
+        对谁按 ``_player_target`` 核对；公屏那句只登记对玩家的承诺。
+
         ``closed_ids`` 是本次整理了结的旧承诺编号。台词点名了某条旧承诺（记忆引用里有它的编号）时：
         那条本场被了结了，这一行里的新答应多半是换了个做法（"画我画不了，下次用方块给你拼一幅"），
         照常登记；没了结，就当她又提了一遍旧事，不新建，写进未登记清单，运营者在整理报告里看得见。
@@ -1015,17 +1158,23 @@ class SessionSettler:
         open_ids = {int(row.id) for row in material.open_commitments}
         void_ids = {commitment_id for commitment_id, _what in material.void_titles}
         used_lines: Set[int] = set()
+        used_chats: Set[int] = set()
         for raw in rows:
             if not isinstance(raw, dict):
                 continue
             what = _clip(str(raw.get("what") or ""), MAX_TITLE_CHARS)
             quote = str(raw.get("quote") or "").strip()
             line = self._line_of(raw.get("line"), material)
-            if line is None:
+            # 没给台词行时看是不是她在游戏公屏打的那句（只用来登记对玩家的承诺）
+            chat = material.players.chat_line(raw.get("chat")) if line is None else None
+            if line is None and chat is None:
                 missed.append(
-                    UnregisteredItem(kind="commitment", what=what, quote=quote, reason="引用的不是本场她的台词")
+                    UnregisteredItem(
+                        kind="commitment", what=what, quote=quote, reason="引用的不是本场她的台词或她在公屏打的字"
+                    )
                 )
                 continue
+            where = f"第 {raw.get('line')} 行" if line is not None else f"公屏 {raw.get('chat')}"
             if not what:
                 missed.append(UnregisteredItem(kind="commitment", quote=quote, reason="没有动作标题"))
                 continue
@@ -1055,7 +1204,7 @@ class SessionSettler:
                     )
                 )
                 continue
-            referenced = memory_ref_numbers(line.memory_refs)
+            referenced = memory_ref_numbers(line.memory_refs) if line is not None else set()
             if referenced and not referenced & closed_ids:
                 # 点名的旧承诺本场都没了结：按又提起旧事处理，不新建；进报告而不是静默丢掉
                 named = "、".join(render_commitment_number(number) for number in sorted(referenced))
@@ -1068,7 +1217,7 @@ class SessionSettler:
                     )
                 )
                 continue
-            if int(line.id) in used_lines:
+            if (line is not None and int(line.id) in used_lines) or (chat is not None and int(chat.id) in used_chats):
                 missed.append(
                     UnregisteredItem(
                         kind="commitment",
@@ -1078,20 +1227,21 @@ class SessionSettler:
                     )
                 )
                 continue
-            verified = self._verified_quote(line, quote)
+            verified = self._verified_quote(line if line is not None else chat, quote)
             if verified is None:
                 missed.append(
                     UnregisteredItem(
                         kind="commitment",
                         what=what,
                         quote=quote,
-                        reason=f"原话不是第 {raw.get('line')} 行的逐字片段（或超过 {MAX_QUOTE_CHARS} 字）",
+                        reason=f"原话不是{where}的逐字片段（或超过 {MAX_QUOTE_CHARS} 字）",
                     )
                 )
                 continue
             target = str(raw.get("to") or "").strip().lower()
             viewer_id: Optional[int] = None
-            if target not in _TARGET_PERSON and target not in _TARGET_EVERYONE:
+            player_id: Optional[int] = None
+            if target not in _TARGET_PERSON and target not in _TARGET_EVERYONE and target not in _TARGET_PLAYER:
                 missed.append(
                     UnregisteredItem(
                         kind="commitment",
@@ -1101,7 +1251,15 @@ class SessionSettler:
                     )
                 )
                 continue
-            if target in _TARGET_PERSON:
+            if chat is not None and target not in _TARGET_PLAYER:
+                # 公屏上冲所有人说的话看不出是对哪位玩家，也不是播给观众的台词：不登记
+                missed.append(
+                    UnregisteredItem(
+                        kind="commitment", what=what, quote=quote, reason="公屏上打的字只登记对某位玩家的承诺，未登记"
+                    )
+                )
+                continue
+            if target in _TARGET_PERSON and line is not None:
                 reply_viewer_id = line.reply_viewer_id
                 if reply_viewer_id is None:
                     missed.append(
@@ -1124,21 +1282,37 @@ class SessionSettler:
                     )
                     continue
                 viewer_id = int(reply_viewer_id)
-            # 挂了游戏的，按答应那句话的时刻认是在哪个存档里答应的
-            game_name = _game_of(raw.get("game"), material)
-            save = material.saves.save_at(game_name, int(line.timestamp_ms))
+            if target in _TARGET_PLAYER:
+                player_id, reason = _player_target(raw, line, chat, material)
+                if player_id is None:
+                    missed.append(UnregisteredItem(kind="commitment", what=what, quote=quote, reason=reason))
+                    continue
+            if chat is not None:
+                # 公屏那句一定是在那个游戏、那个存档里打的：游戏与存档取它自己的
+                game_name: Optional[str] = _game_of(chat.game, material) or chat.game
+                save_id, save_name = chat.save_id, chat.save_name
+            else:
+                # 挂了游戏的，按答应那句话的时刻认是在哪个存档里答应的
+                game_name = _game_of(raw.get("game"), material)
+                save = material.saves.save_at(game_name, int(line.timestamp_ms))
+                save_id, save_name = save.id, save.name
             written.append(
                 PendingCommitment(
                     what=what,
                     quote=verified,
-                    evidence_chat_id=int(line.id),
+                    evidence_chat_id=int(line.id) if line is not None else None,
+                    evidence_game_chat_id=int(chat.id) if chat is not None else None,
                     viewer_id=viewer_id,
+                    target_player_id=player_id,
                     game=game_name,
-                    save_id=save.id,
-                    save_name=save.name,
+                    save_id=save_id,
+                    save_name=save_name,
                 )
             )
-            used_lines.add(int(line.id))
+            if line is not None:
+                used_lines.add(int(line.id))
+            if chat is not None:
+                used_chats.add(int(chat.id))
         return written, missed
 
     def _validate_closures(

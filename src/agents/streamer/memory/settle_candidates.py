@@ -10,6 +10,8 @@
   弹幕、或归一化后标题相同的不列；同一行台词只列一条；
 - 标题里模型写的观众代号（"观众3"）换成"观众"：代号只在这一场有意义。
 
+"她说欠着、账上却找不到的"（``claimed_missing``）走同一个待审区，口径见 ``validate_claimed_missing``。
+
 候选批准前对她完全不可见：这里只产出待写进待审区的条目，简报、线索卡、回想都不读候选表。
 """
 
@@ -24,10 +26,20 @@ from src.modules.storage.models.memory import PendingViewerCandidate, Unregister
 
 from .saves import SaveTimeline
 
-__all__ = ["MAX_VIEWER_CANDIDATES", "CandidateCheck", "normalize_title", "taken_from", "validate_viewer_candidates"]
+__all__ = [
+    "MAX_CLAIMED_MISSING",
+    "MAX_VIEWER_CANDIDATES",
+    "CandidateCheck",
+    "normalize_title",
+    "taken_from",
+    "validate_claimed_missing",
+    "validate_viewer_candidates",
+]
 
 # 一场至多列几条观众候选（只是候选，宁缺毋滥）
 MAX_VIEWER_CANDIDATES = 5
+# 一场至多列几条"她说欠着的"
+MAX_CLAIMED_MISSING = 3
 _TITLE_CHARS = 30
 _QUOTE_CHARS = 80
 _VIEWER_CODE = re.compile(r"观众\s*\d+")
@@ -127,6 +139,90 @@ def validate_viewer_candidates(
                 kind="viewer_defined",
                 title=title,
                 viewer_chat_id=int(line.reply_chat_id),
+                viewer_quote=viewer_quote,
+                reply_chat_id=int(line.id),
+                reply_quote=reply_quote,
+                game=game_name,
+                save_id=save.id,
+                save_name=save.name,
+            )
+        )
+    return check
+
+
+def validate_claimed_missing(
+    rows: List[Any],
+    *,
+    line_of: Callable[[Any], Optional[SettleSpeechLine]],
+    game_of: Callable[[Any], Optional[str]],
+    saves: SaveTimeline,
+    ledger_titles: Iterable[str],
+    taken_lines: Iterable[int],
+    rejected_reply_chats: Iterable[int],
+    rejected_titles: Iterable[str],
+) -> CandidateCheck:
+    """把模型列的"她说欠着、账上却找不到的"逐条核成待审候选，人批准才登记成承诺，代码从不自动登记。
+
+    她说"上次答应过你们……"，可能是账漏登记了，也可能是她顺着观众的话编的，代码分不出来，交给人判：
+
+    - 引文必须是本场她播出那一行的逐字片段；
+    - 账上对得上的不列：归一化后与 ``ledger_titles``（未了结、已了结、本场新登记）任一条相同，或者那一行
+      已经作了新承诺、了结的证据（``taken_lines``）；
+    - 驳回过的同一句台词、同样的标题不再列；一行台词至多一条，一场至多三条；
+    - 她当时在回一条真实观众弹幕的，候选挂上那条弹幕（删观众、忘了我时一起删）；弹幕里有个人信息时
+      只挂不抄原文；标题或她那句里有个人信息的整条丢掉，只计数。
+    """
+    check = CandidateCheck()
+    lines_taken: Set[int] = {int(item) for item in taken_lines} | {int(item) for item in rejected_reply_chats}
+    titles: Set[str] = {normalize_title(item) for item in ledger_titles} | {
+        normalize_title(item) for item in rejected_titles
+    }
+    titles.discard("")
+    for raw in rows:
+        if not isinstance(raw, dict) or len(check.candidates) >= MAX_CLAIMED_MISSING:
+            continue
+        title = _VIEWER_CODE.sub("观众", str(raw.get("what") or raw.get("title") or "").strip())[:_TITLE_CHARS]
+        quote = str(raw.get("quote") or "").strip()
+        line = line_of(raw.get("line"))
+        if line is None:
+            check.missed.append(
+                UnregisteredItem(kind="candidate", what=title, quote=quote, reason="她说欠着的：引用的不是本场她的台词")
+            )
+            continue
+        if _PERSONAL.search(" ".join((title, quote))):
+            check.personal_dropped += 1
+            continue
+        reply_quote = _verbatim(quote, line.content, _QUOTE_CHARS)
+        if not title or reply_quote is None:
+            check.missed.append(
+                UnregisteredItem(
+                    kind="candidate",
+                    what=title,
+                    quote=quote,
+                    reason=f"她说欠着的：没有标题，或原话不是第 {raw.get('line')} 行的逐字片段",
+                )
+            )
+            continue
+        key = normalize_title(title)
+        if int(line.id) in lines_taken or key in titles:
+            # 账上有、驳回过、或同一行已经列过：不是"找不到"，不列
+            continue
+        lines_taken.add(int(line.id))
+        titles.add(key)
+        viewer_chat_id: Optional[int] = None
+        viewer_quote = ""
+        if line.reply_chat_id is not None and not line.reply_simulated:
+            # 她在回一条真实观众弹幕：挂上那条弹幕，观众被删或说"忘了我"时候选一起删
+            viewer_chat_id = int(line.reply_chat_id)
+            viewer_text = " ".join((line.reply_content or "").split())[:_QUOTE_CHARS]
+            viewer_quote = "" if _PERSONAL.search(viewer_text) else viewer_text
+        game_name = game_of(raw.get("game"))
+        save = saves.save_at(game_name, int(line.timestamp_ms))
+        check.candidates.append(
+            PendingViewerCandidate(
+                kind="claimed_missing",
+                title=title,
+                viewer_chat_id=viewer_chat_id,
                 viewer_quote=viewer_quote,
                 reply_chat_id=int(line.id),
                 reply_quote=reply_quote,

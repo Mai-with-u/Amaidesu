@@ -262,7 +262,8 @@ class StreamerAgent(BaseAgent):
                 索引任务把档案行、承诺、台词、游戏事件补进全文与向量索引；None 时不补算
             embedding_setup: 可选嵌入服务装配结果；None 或没配嵌入模型时索引只补全文
             game_player_repo: 可选 ``GamePlayerRepo``（游戏里的人）——玩家在游戏里开口或冲她做动作时，
-                推一张"这位是谁、和你有过什么"的玩家卡；缺失时没有玩家卡。
+                推一张"这位是谁、和你有过什么"的玩家卡；下播整理按它核对对玩家的承诺。缺失时没有玩家卡，
+                对玩家的承诺也认不出。
             memory_cue_log_repo: 可选 ``MemoryCueLogRepo``（线索卡记录）——被动想起每推一张卡记一行，
                 复盘面板读；None 时只记日志
             event_repo: 可选 ``EventRepo``（游戏事件）——场次回顾的游戏进展原料；
@@ -514,6 +515,8 @@ class StreamerAgent(BaseAgent):
                 game_names_provider=self._enabled_game_names,
                 # 旧场次现拼基底时数"时长够的场次"，与简报的"上一场"同一个下限
                 min_session_ms=self.typed_config.memory_brief_min_session_ms,
+                # 游戏里的人：对玩家的承诺按台词记下的回应对象、公屏点名与紧接着回话核对
+                game_player_repo=game_player_repo,
             )
 
         # 记忆检索索引：后台补算全文（必开）与向量（配置了嵌入服务才开）；整理写完时叫醒补一轮。

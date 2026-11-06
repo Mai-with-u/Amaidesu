@@ -137,6 +137,8 @@ class EvalRecord:
     void_titles: tuple[OldCommitmentRecord, ...]
     expected: tuple[eval_metrics.ExpectedCommitment, ...]
     none: bool
+    # 已了结的旧承诺：找承诺那次一并比对"她说欠着、账上找不到的"（承诺样本集不带，欠着那组样本才带）
+    closed_commitments: tuple[OldCommitmentRecord, ...] = ()
 
     @property
     def line_texts(self) -> dict[int, str]:
@@ -402,19 +404,31 @@ class _SessionsRepoStub(_UnusedRepo):
     async def rejected_candidate_keys(self) -> tuple[list[int], list[str]]:
         return [], []
 
+    async def rejected_claim_keys(self) -> tuple[list[int], list[str]]:
+        # 用例里也没有人驳回过"她说欠着的"候选
+        return [], []
+
 
 class _CommitmentsRepoStub:
-    """回放用例中的旧承诺：未了结按登记顺序，判误记按最近在前（与生产查询同序）。"""
+    """回放用例中的旧承诺：未了结按登记顺序，判误记、已了结按最近在前（与生产查询同序）。"""
 
-    def __init__(self, open_rows: Sequence[Commitment], void_rows: Sequence[Commitment]) -> None:
+    def __init__(
+        self,
+        open_rows: Sequence[Commitment],
+        void_rows: Sequence[Commitment],
+        closed_rows: Sequence[Commitment] = (),
+    ) -> None:
         self._open = list(open_rows)
         self._void = list(void_rows)
+        self._closed = list(closed_rows)
 
     async def list_open_before_session(self, *, live_session_id: int, limit: int = 200) -> list[Commitment]:
         return list(self._open)[:limit]
 
     async def list_commitments(self, *, statuses: Sequence[str], limit: int) -> list[Commitment]:
-        return list(self._void)[:limit]
+        # 生产按状态分两次取：判误记的标题、已了结的标题
+        rows = [*(self._void if "void" in statuses else []), *(self._closed if "closed" in statuses else [])]
+        return rows[:limit]
 
 
 class _EventsRepoStub:
@@ -495,10 +509,15 @@ def _make_settler(record: EvalRecord, prompt_manager: PromptManager, llm: Any) -
     open_rows = [_commitment_row(item, status="open") for item in record.open_commitments]
     void_rows = [_commitment_row(item, status="void") for item in record.void_titles]
     void_rows.sort(key=lambda row: row.id, reverse=True)
+    closed_rows = sorted(
+        (_commitment_row(item, status="closed") for item in record.closed_commitments),
+        key=lambda row: row.id,
+        reverse=True,
+    )
     return SessionSettler(
         sessions_repo=cast(Any, _SessionsRepoStub()),
         chat_repo=cast(Any, _UnusedRepo("chat")),
-        commitments_repo=cast(Any, _CommitmentsRepoStub(open_rows, void_rows)),
+        commitments_repo=cast(Any, _CommitmentsRepoStub(open_rows, void_rows, closed_rows)),
         llm_service=llm,
         prompt_manager=prompt_manager,
         event_repo=cast(Any, _EventsRepoStub(record.games)),
