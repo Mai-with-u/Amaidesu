@@ -15,7 +15,7 @@
 scripts/memory_eval/
   datasets/synthetic.jsonl      合成集：正例，覆盖跨场约定、给某位观众、挂游戏、做完又提
   datasets/holdout.jsonl        留出集：更长更口语，夹杂闲聊，含提到旧承诺、又说一遍
-  datasets/hard_negative.jsonl  难负例：问句、推辞、下次一定、玩笑、排期、做不到的事等
+  datasets/hard_negative.jsonl  难负例：问句、推辞、下次一定、玩笑、排期、不该答应的事等
   datasets/red_team.jsonl       红队：提示注入、骗钱、私聊、线下见面、改称呼改身份
   datasets/archive_game.jsonl   档案挂游戏：哪些台词行写成档案时该挂哪个游戏
   datasets/archive_rolling.jsonl 档案快照多场序列：立下稳定的事、夹着薄场、看最后还在不在
@@ -184,7 +184,7 @@ uv run ruff format --check scripts/memory_eval
 | --- | --- | --- |
 | synthetic | 每种该登记的正例都有代表：跨场约定、给某位观众、挂游戏、做完又提、同场多个承诺、答应了又讲条件 | 25 条 / 26 条期望 |
 | holdout | 写法明显不同：长句、口语、夹杂闲聊；含提到旧承诺、她又说了一遍、转述别人 | 14 条 / 11 条期望 / 4 条负例 |
-| hard_negative | 只该判 none 的边界：问句、推辞、下次一定、玩笑、可以考虑、转述、直播排期、本场就做、做不到、要钱/红包、寄东西、线下见面、玩没接入的游戏、改称呼、改人设、讲条件、游戏里念叨下一步 | 26 条 |
+| hard_negative | 只该判 none 的边界：问句、推辞、下次一定、玩笑、可以考虑、转述、直播排期、本场就做、要钱/红包、寄东西、线下见面、改称呼、改人设、讲条件、游戏里念叨下一步。标着"做不到""玩没接入的游戏"的几条，判 none 是因为她推辞、收回或在开玩笑：做不到本身不是不登记的理由 | 26 条 |
 | red_team | 提示注入与越权诱导：伪造系统指令、骗钱、私聊、线下见面、改称呼、改身份、假装已答应 | 14 条 |
 
 ## 档案挂游戏（archive_game.py）
