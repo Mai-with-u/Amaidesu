@@ -343,6 +343,19 @@ def test_human_locked_rows_keep_the_stable_flag_the_human_set() -> None:
     assert [(item.lasting, item.pinned) for item in plan.kept] == [(True, True), (True, False)]
 
 
+def test_duplicate_drop_pointing_at_a_locked_row_does_not_make_it_stable() -> None:
+    """按重复去掉一行稳定的事、指向一行人改过且人标了不稳定的行：去掉照采纳，人标的不稳定不变；
+    指向没锁的行时照旧把稳定带过去。"""
+    base = [_old(1, lasting=True), _old(2, human_locked=True), _old(3, lasting=True), _old(4)]
+
+    plan = _plan([{"old": 1, "op": "drop", "same_as": 2}, {"old": 3, "op": "drop", "same_as": 4}], base)
+
+    assert [(item.line.id, item.lasting, item.line.human_locked) for item in plan.kept] == [
+        (2, False, True),
+        (4, True, False),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 给模型看的旧行清单
 # ---------------------------------------------------------------------------

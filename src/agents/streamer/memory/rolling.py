@@ -21,7 +21,8 @@
    提起）。同一档里挤出去的是最久没被再提的。模型不凭感觉删。
 
 人改过的行（``human_locked``）只有人能动：模型对它的去掉、替换、按重复去掉一律不采纳，记进整理
-报告；它是不是稳定的事也按人标的算，模型重标不算。
+报告；它是不是稳定的事也按人标的算，模型重标不算，别的行按重复去掉、指向它时也不替它改成稳定的事。
+只有"最近被提起"跟着本场台词证据更新：那是代码按播出的台词记的，不是人标的，也让它少被挤出去。
 
 模型输出里没有 ``previous``（或整个输出为空）时上一份原样保留；``previous`` 不是列表按整理
 失败处理，上一份快照同样原样留着。
@@ -254,9 +255,10 @@ def plan_from_ops(
             # 重复的那一行本场被替换或带证据去掉了：这件事已由替换出的新行接着，或已由同一份证据了结
             reason = f"{reason}（{_OLD_PREFIX}{other + 1}本场已被替换或去掉）"
         else:
-            # 重复的两行里有一行标了稳定，留下的那一行也算稳定
+            # 重复的两行里有一行标了稳定，留下的那一行也算稳定；留下的那一行是人改过的，
+            # 是不是稳定的事按人标的算，模型借"按重复去掉"也改不了它
             survivor = updated.get(other, shown[other])
-            if updated.get(index, shown[index]).lasting and not survivor.lasting:
+            if updated.get(index, shown[index]).lasting and not survivor.lasting and not survivor.line.human_locked:
                 updated[other] = survivor.model_copy(update={"lasting": True})
         changes.append(SnapshotChange(action="drop", what=shown[index].line.text, reason=reason))
     kept = [updated.get(index, item) for index, item in enumerate(shown) if index not in removed]
