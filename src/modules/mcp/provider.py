@@ -79,6 +79,8 @@ class McpToolProvider(ConnectionToolProvider):
         attention_read_tool: Optional[str] = None,
         attention_read_arguments: Optional[dict] = None,
         specs: Optional[List[ToolSpec]] = None,
+        recover_base_delay_ms: int = 5000,
+        recover_cap_delay_ms: int = 60000,
     ) -> None:
         self._client = client
         self.server_name = server_name
@@ -102,8 +104,12 @@ class McpToolProvider(ConnectionToolProvider):
         # switch_config 与回调槽同一约定：绑定处要等 setup() 拉到清单（或决定
         # 降级重试）后才能赋值，只能在构造之后声明，故为公开属性
         self.switch_config: Optional[Dict[str, str]] = None
-        # 降级恢复循环（start_recovery 启动；拉到工具即止，close 时取消）
+        # 降级恢复循环（start_recovery 启动；拉到工具即止，close 时取消）。
+        # 退避参数做成构造注入：断连路径（mark_disconnected）拉起循环时用默认
+        # 退避，绑定处可按 server 特性收紧，测试也能起快循环
         self._recover_task: Optional[asyncio.Task[None]] = None
+        self._recover_base_delay_ms = recover_base_delay_ms
+        self._recover_cap_delay_ms = recover_cap_delay_ms
 
     @property
     def name(self) -> str:
@@ -201,21 +207,53 @@ class McpToolProvider(ConnectionToolProvider):
         duration_ms = int(time.time() * 1000) - started_ms
         return mapper.to_result(result, tool_name=full_name, duration_ms=duration_ms)
 
-    def start_recovery(self, *, base_delay_ms: int = 5000, cap_delay_ms: int = 60000) -> None:
+    def start_recovery(
+        self,
+        *,
+        base_delay_ms: Optional[int] = None,
+        cap_delay_ms: Optional[int] = None,
+    ) -> None:
         """降级登记后的后台恢复：按退避间隔重试 ``setup``，拉到工具即止（幂等）。
 
-        恢复成功沿 ``setup`` 内的 ``mark_connected`` 回调绑定处补注册，
-        与初次装配、手动重连走同一个出口；``close`` 时随连接一并取消。
+        退避参数缺省取构造注入的默认值（``recover_base_delay_ms`` /
+        ``recover_cap_delay_ms``）。恢复成功沿 ``setup`` 内的 ``mark_connected``
+        回调绑定处补注册，与初次装配、手动重连走同一个出口；``close`` 时随
+        连接一并取消。
         """
         if self._recover_task is not None and not self._recover_task.done():
             return
-        backoff = ExponentialBackoff(base_delay_ms=base_delay_ms, cap_delay_ms=cap_delay_ms)
+        backoff = ExponentialBackoff(
+            base_delay_ms=base_delay_ms if base_delay_ms is not None else self._recover_base_delay_ms,
+            cap_delay_ms=cap_delay_ms if cap_delay_ms is not None else self._recover_cap_delay_ms,
+        )
         self._recover_task = asyncio.create_task(self._recover_loop(backoff), name=f"mcp-recover:{self.server_name}")
 
     @property
     def recovering(self) -> bool:
         """降级恢复循环是否仍在重试。"""
         return self._recover_task is not None and not self._recover_task.done()
+
+    def mark_disconnected(self) -> None:
+        """标记连接断开：摘除工具，且 specs 缓存为空时拉起后台恢复循环。
+
+        首次降级恢复成功后原恢复循环即退出；此后断连若只靠连接回调换血，
+        回调链失败后无人再重试——断开即重新 ``start_recovery`` 兜底（其内部
+        幂等，循环已在跑则不重复启动）。specs 非空（如手动重连的断开半步，
+        缓存还是旧清单）不拉起，交由重连后半步处置。
+
+        已知局限：不覆盖"client 自认在线、specs 缓存在、仅注册表被清空"的
+        形态——该形态没有断连信号，本路径收不到，只能靠工具刷新日志排查。
+        """
+        super().mark_disconnected()
+        if self._specs:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # 无事件循环时无法起后台任务（同步上下文里调用）；留给下一个有循环的跃迁点
+            logger.warning(f"MCP Provider '{self.server_name}' 断开但无事件循环，暂不启动后台恢复循环")
+            return
+        self.start_recovery()
 
     async def _recover_loop(self, backoff: ExponentialBackoff) -> None:
         while True:

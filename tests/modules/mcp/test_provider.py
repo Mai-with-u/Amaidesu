@@ -23,9 +23,11 @@ from tests.modules.mcp.fakes import (
 )
 
 
-def _provider(server: str = "serverA", provider: Optional[str] = None) -> tuple[FakeMcpClient, McpToolProvider]:
+def _provider(
+    server: str = "serverA", provider: Optional[str] = None, **extra: Any
+) -> tuple[FakeMcpClient, McpToolProvider]:
     client = FakeMcpClient(name=server, config=AnyConfig())
-    return client, McpToolProvider(client=client, server_name=server, provider=provider)
+    return client, McpToolProvider(client=client, server_name=server, provider=provider, **extra)
 
 
 async def test_setup_caches_specs_with_raw_names_and_derived_full_names() -> None:
@@ -346,3 +348,59 @@ async def test_close_cancels_recovery_loop() -> None:
     calls = client.connect_calls
     await asyncio.sleep(0.02)
     assert client.connect_calls == calls
+
+
+async def test_setup_failure_logs_cache_clearing(loguru_capture: Any) -> None:
+    """连接失败路径：工具缓存被清空必须有 INFO 日志（2026-11-05 事故 specs 清空全程无日志）。"""
+    client, prov = _provider()
+    client.set_connected(False)
+    client.next_connect_result = False
+    assert await prov.setup() == 0 and not prov.recovering  # 降级为 0 工具，缓存清空
+    info = [r for r in loguru_capture.records if r["level"] == "INFO" and "工具缓存已清空" in r["message"]]
+    assert info and "连接失败" in info[0]["message"]
+
+
+async def test_reconnect_with_empty_toolset_restarts_recovery() -> None:
+    """首次恢复成功后循环退出；此后断连且清单拉空，恢复循环应重新拉起。"""
+    client, prov = _provider(recover_base_delay_ms=1, recover_cap_delay_ms=2)
+    client.set_connected(False)
+    await prov.setup()  # 首次降级（specs 空），恢复循环由装配处拉起
+    client.set_tools([FakeTool("read_group", "读群")])
+    client.next_connect_result = True
+    assert await prov.reconnect() is True  # 手动重连恢复，specs 缓存换血成功
+
+    client.set_tools([])  # 再次断连：连接成功但 server 未暴露工具
+    client.next_connect_result = True
+    assert await prov.reconnect() is False
+    assert prov.recovering  # 清单拉空分支的断连路径已重新拉起后台恢复循环
+    client.set_tools([FakeTool("read_group", "读群")])
+    client.next_connect_result = True
+    await _wait_until(lambda: not prov.recovering)  # 工具回来了，循环自行收尾
+    assert [s.full_name for s in prov.list_tools()] == ["serverA_read_group"]
+
+
+async def test_mark_disconnected_with_empty_specs_never_duplicates_recovery_loop() -> None:
+    """specs 为空时断连拉起恢复循环；循环已在跑则不重复启动（恢复成功只回调一次）。"""
+    client, prov = _provider(recover_base_delay_ms=1, recover_cap_delay_ms=2)
+    client.set_connected(False)
+    await prov.setup()  # specs 空
+    fired: List[bool] = []
+    prov.on_connection_changed = fired.append
+    prov.mark_disconnected()  # 拉起恢复循环
+    prov.mark_disconnected()  # 再次断连：幂等，不起第二个循环
+    assert prov.recovering
+    client.set_tools([FakeTool("read_group", "读群")])
+    client.next_connect_result = True
+    await _wait_until(lambda: not prov.recovering)
+    assert [f for f in fired if f] == [True]  # 恢复成功只回调一次 True；两个循环的话会收到两次
+
+
+async def test_mark_disconnected_with_specs_keeps_recovery_idle() -> None:
+    """specs 缓存非空（手动重连的断开半步）不起恢复循环，交由重连后半步处置。"""
+    client, prov = _provider()
+    client.set_tools([FakeTool("read_group", "读群")])
+    assert await prov.setup() == 1
+    prov.mark_disconnected()
+    await asyncio.sleep(0.02)
+    assert not prov.recovering
+    await prov.close()
