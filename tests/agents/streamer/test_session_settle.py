@@ -974,6 +974,16 @@ def test_archive_game_eval_dry_self_check_passes() -> None:
     assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
 
 
+def test_archive_rolling_eval_dry_self_check_passes() -> None:
+    """档案快照多场序列评测器（scripts/memory_eval/archive_rolling.py）在真实库上跑生产整理器：快照的
+    写入、取舍或档案提示词改了而评测没跟上，live 量出的遗忘率就不是生产的真实水平。"""
+    script = Path(__file__).resolve().parents[3] / "scripts" / "memory_eval" / "archive_rolling.py"
+    completed = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=300, check=False
+    )
+    assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
+
+
 # 例句与评测台词共用的连续字数达到这么多，就算"同一句"：短于它的多是"下次一定"这类说法标签，本来就该共用。
 _SHARED_RUN_CHARS = 6
 

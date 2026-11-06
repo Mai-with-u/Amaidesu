@@ -29,6 +29,20 @@ uv run python scripts/memory_eval/run_eval.py --live --out reports/memory-live.j
 
 连接参数优先取命令行 `--model` / `--api-key` / `--base-url`，其次环境变量。报告写到 `reports/`（不入库），保留到本次发版结束；逐条 diff 里"漏登记"与"误登记"可以直接作为改提示词的依据。
 
+档案快照另跑一次多场序列评测，量几场下来稳定的事（名字、住处、和观众定下的设定）会不会被忘掉，连接参数同上：
+
+```powershell
+uv run python scripts/memory_eval/archive_rolling.py --live --out reports/archive-rolling-live.json
+```
+
+| 指标 | 阈值 |
+| --- | --- |
+| 稳定的事遗忘率 | ≤ 0.1 |
+| 留下的旧行字节变化 | 0 处 |
+| 删掉的误记行回来 | 0 条 |
+
+**遗忘率**是用例里前面几场立下的稳定的事，到序列最后一场整理完不在档案快照里的比例；中间夹着又薄又乱的短场，正是线上"几乎全部失忆"那一类情形。
+
 ## 2. 留出集必须由没看过提示词的人重写
 
 现有留出集与合成集出自同一作者、同一套口径，按方案只能当上限参考。门槛要求：找一位**没有看过 `src/agents/streamer/prompts/memory_*.md` 与校验规则**的同事，按 [样本格式](../../scripts/memory_eval/README.md#样本格式) 重写 `scripts/memory_eval/datasets/holdout.jsonl`（至少 10 条，覆盖长句、口语、闲聊中夹承诺、提旧承诺又说一遍、转述），写完再跑一次第 1 步。
@@ -99,7 +113,7 @@ LIMIT 10;
 
 四项全过才允许发版与升级直播机：
 
-- [ ] live 评测 PASS（召回、难负例、红队三项同时达标）
+- [ ] live 评测 PASS（召回、难负例、红队三项同时达标；档案快照多场序列的遗忘率、字节变化、误记回来三项同时达标）
 - [ ] 留出集已由没看过提示词的人重写并重跑
 - [ ] 隔离副本升级演练全部检查项通过，回滚步骤按 [直播运行手册](runbook.md#升级与回滚) 走过一遍
 - [ ] 至少 3 个真实正式场人工判误记，每场 ≤ 10%

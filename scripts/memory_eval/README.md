@@ -1,7 +1,8 @@
 # 下播整理「找新承诺」离线评测器
 
 评的是生产下播整理三个调用里的第二个：从本场台词找出她当众答应过、还没兑现的事。
-场次档案另有一个小评测器，只评档案行挂的游戏（见「档案挂游戏」一节）；旧承诺了结不在评测范围内。
+场次档案另有两个小评测器：档案行挂的游戏（见「档案挂游戏」一节），以及几场下来稳定的事有没有被
+忘掉（见「档案快照多场序列」一节）；旧承诺了结不在评测范围内。
 
 评测器不复制生产的取料、渲染与校验规则：三份系统提示词由生产 `PromptManager` 渲染，
 用户提示词与校验直接驱动生产的 `SessionSettler`，模型输出（或 dry 模式由 expect 反推的
@@ -17,9 +18,11 @@ scripts/memory_eval/
   datasets/hard_negative.jsonl  难负例：问句、推辞、下次一定、玩笑、排期、做不到的事等
   datasets/red_team.jsonl       红队：提示注入、骗钱、私聊、线下见面、改称呼改身份
   datasets/archive_game.jsonl   档案挂游戏：哪些台词行写成档案时该挂哪个游戏
+  datasets/archive_rolling.jsonl 档案快照多场序列：立下稳定的事、夹着薄场、看最后还在不在
   metrics.py                    指标、逐条 diff 与 `--selftest`
   run_eval.py                   找新承诺评测的 dry / live 两个入口
   archive_game.py               档案挂游戏评测的 dry / live 两个入口
+  archive_rolling.py            档案快照多场序列评测的 dry / live 两个入口
   README.md                     本文件
 ```
 
@@ -219,6 +222,48 @@ PASS/FAIL，模型连接参数与 `run_eval.py` 一致。样本至少 12 条，�
 
 样本台词与承诺样本一样受「提示词例句不得出现在评测台词里」的测试约束：写新样本时另编说法，
 不要照抄 `memory_archive_system.md` 里的例句。
+
+## 档案快照多场序列（archive_rolling.py）
+
+下次开播时她只能靠上一场的档案快照回想前几场：快照接住前几场仍然成立的事，加上这一场的新事。
+这个评测量的是几场连着播下来，稳定的事（给伙伴起的名字、住处、和观众定下的设定）会不会被忘掉，
+尤其是中间夹着又薄又乱的短场（卡顿、重开、设备出岔子）时。
+
+每条用例是几场连着的直播。评测器在临时目录里起一份真实的库，按场次写入台词，跑生产整理器
+（快照的写入与取舍都走生产代码）；只有「写档案」那次模型调用是替身（dry 用 expect 反推的理想
+输出，live 真调模型），找承诺与了结两次调用一律回空，不在评测范围内。
+
+| 指标 | 阈值 | 算法 |
+| --- | --- | --- |
+| 稳定的事遗忘率 | <= 0.1 | 序列末尾不在快照里的 `final.present` 键数 / `final.present` 键数 |
+| 留下的旧行字节变化 | 0 处 | 每场整理后，快照里出自更早场次的行与它刚写下时的标题、原话、证据、场次、存档逐项比对 |
+| 删掉的误记行回来 | 0 条 | 运营者在某场整理后删掉的行（`delete_after`），序列末尾又出现在快照里的条数 |
+| 被改写或了结的事换掉 | 只报告 | `final.absent` 里不是运营者删的键，序列末尾确实不在快照里的比例 |
+
+```bash
+uv run python scripts/memory_eval/archive_rolling.py
+uv run python scripts/memory_eval/archive_rolling.py --live --out reports/archive_rolling.json
+```
+
+dry 要求四项全部满分（样本、生产整理器与指标三者自洽），样本至少 6 条序列。样本
+（`datasets/archive_rolling.jsonl`）每行一条序列：
+
+```json
+{"id": "roll-01", "tags": ["稳定事实", "薄场"],
+ "sessions": [{"games": ["minecraft"], "speech": [{"n": 1, "clock": "20:05", "text": "……", "reply": null}],
+               "expect": {"archive": [{"key": "dog-name", "line": 1, "quote_contains": "……",
+                                       "title": "……", "game": "minecraft", "lasting": true}],
+                          "previous": [], "delete_after": []}}],
+ "final": {"present": ["dog-name"], "absent": []}}
+```
+
+- `key` 是用例内给一件事起的名字，档案行按"出自哪一场的哪一行台词"对回键名；
+- `expect.previous` 是理想输出对旧行的操作：`keep`（可带 `line` 表示又提起）、`drop`（带 `reason`
+  与 `line`）、`replace`（带新行的 `line` / `quote_contains` / `title` / `game` / `lasting` 与 `new_key`）；
+- `delete_after` 是这一场整理完后运营者在记忆页删掉的行（按键名）；
+- `final.present` / `final.absent` 是序列末尾该在、不该在快照里的键。
+
+台词同样受「提示词例句不得出现在评测台词里」的测试约束。
 
 ## dry 与 live 的区别
 
