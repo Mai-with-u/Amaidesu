@@ -17,6 +17,7 @@
 
     <div v-if="state" class="settle-summary">
       <span class="chip mono">待整理 {{ state.pending_count }}</span>
+      <span class="chip mono">待审 {{ state.review_pending_count }}</span>
       <span class="chip mono">自动重试上限 {{ state.max_attempts }} 次</span>
       <span class="chip mono">最近正式场 {{ state.items.length }}</span>
     </div>
@@ -34,6 +35,13 @@
           <el-tag size="small" :type="row.settled_at_ms !== null ? 'success' : 'warning'">{{
             settleStateLabel(row.settled_at_ms)
           }}</el-tag>
+          <el-tag
+            v-if="row.settled_at_ms !== null"
+            size="small"
+            effect="plain"
+            :type="row.reviewed_at_ms === null ? 'warning' : 'info'"
+            >{{ reviewStateLabel(row.reviewed_at_ms) }}</el-tag
+          >
           <span
             class="settle-attempts mono"
             :class="{ 'is-exhausted': isExhausted(row) }"
@@ -152,6 +160,7 @@ import {
   hasLaterSettledSession,
   settleAttemptsExhausted,
   settleAttemptsText,
+  reviewStateLabel,
   settleStateLabel,
   snapshotChangeLabel,
   unregisteredKindLabel,

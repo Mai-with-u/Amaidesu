@@ -4,7 +4,8 @@
       <div class="head-text">
         <div class="panel-title">场次档案</div>
         <p class="panel-hint">
-          每场正式场整理出的标题与原话，下一场开播回想“上一场”时用；删一行只影响这一份档案。
+          每场正式场整理出的标题与原话，下一场开播回想“上一场”时用。整理自动生效，这里事后审：
+          改标题、标稳定会锁住这一行（之后的整理只能保留），漏掉的事可以放回快照或从台词里新增。
         </p>
       </div>
       <div class="head-actions">
@@ -38,18 +39,55 @@
     <p v-if="loadError" class="panel-error">{{ loadError }}</p>
     <template v-else>
       <p v-if="actionError" class="panel-error">{{ actionError }}</p>
-      <p v-if="selectedId !== null" class="archive-summary mono">
-        {{ currentSessionLabel }} · {{ lines.length }} 行
+      <div v-if="selectedId !== null" class="archive-summary">
+        <span class="mono">{{ currentSessionLabel }} · {{ lines.length }} 行</span>
+        <el-tag
+          v-if="summary?.settled"
+          size="small"
+          :type="summary.reviewed_at_ms === null ? 'warning' : 'success'"
+          >{{ reviewStateLabel(summary.reviewed_at_ms) }}</el-tag
+        >
+        <span class="grow" />
+        <el-button
+          size="small"
+          :disabled="!summary?.settled || summary.snapshot_session_id === null"
+          @click="addOpen = true"
+          >从台词新增一行</el-button
+        >
+        <el-button
+          v-if="summary?.settled && summary.reviewed_at_ms === null"
+          size="small"
+          type="success"
+          :loading="reviewing"
+          @click="markReviewed"
+          >标已审</el-button
+        >
+      </div>
+      <p v-if="summary && summary.snapshot_session_id === null" class="panel-note">
+        还没有存下的快照：放回、标稳定、新增要等下一场整理写出快照后再做。
+      </p>
+      <p v-if="summary && pinnedOverflowHint(summary.snapshot_pinned_count)" class="panel-warning">
+        {{ pinnedOverflowHint(summary.snapshot_pinned_count) }}
       </p>
       <div v-loading="loading" class="archive-lines">
         <ArchiveLineList
           :items="lines"
           deletable
+          reviewable
+          :can-edit-snapshot="summary?.snapshot_session_id != null"
           :busy-line-id="busyLineId"
           :empty-text="emptyText"
           @delete="removeLine"
+          @edit-title="editTitle"
+          @toggle-lasting="toggleLasting"
+          @pin="pinLine"
         />
       </div>
+      <ArchiveLineAddDialog
+        v-model="addOpen"
+        :live-session-id="selectedId"
+        @created="refreshCurrent"
+      />
     </template>
   </section>
 </template>
@@ -63,19 +101,27 @@
  * 不靠 prop 监听：切场时清空旧行、丢弃先发后到的过期响应，错误态与空态分开。
  * 删除单行先二次确认，成功后原地重拉这一场的档案。
  *
+ * 人工审核（整理自动生效，这里事后改）：改标题、标或取消稳定、放回快照、从台词新增一行、标已审，
+ * 每样做完都原地重拉这一场；做不了的原因（还没存下快照、原话对不上等）由后端给，显示在面板顶部。
+ *
  * 加载状态机在 composables/useArchiveLines（与场次复盘页共用同一套切场语义）。
  */
 import { computed, onMounted, ref } from 'vue';
-import { ElMessage } from 'element-plus';
-import type { ArchiveLineItem, LiveSessionItem } from '@/types';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import type { AxiosResponse } from 'axios';
+import type { ArchiveLineItem, LedgerMutationResponse, LiveSessionItem } from '@/types';
 import { ledgerApi, liveSessionsApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { confirmAction } from '@/utils/confirmAction';
 import { formatDateTimeCn } from '@/utils/format';
 import { useArchiveLines } from '@/composables/useArchiveLines';
+import ArchiveLineAddDialog from './ArchiveLineAddDialog.vue';
 import ArchiveLineList from './ArchiveLineList.vue';
+import { pinnedOverflowHint, reviewStateLabel, validateArchiveTitle } from './ledgerView';
 
-const { lines, loading, error, load } = useArchiveLines();
+const { lines, summary, loading, error, load } = useArchiveLines();
+const addOpen = ref(false);
+const reviewing = ref(false);
 
 const sessions = ref<LiveSessionItem[]>([]);
 const sessionsLoading = ref(false);
@@ -160,6 +206,71 @@ async function removeLine(line: ArchiveLineItem): Promise<void> {
   }
 }
 
+/** 对一行做一次审核改动：转圈只转那一行，成功提示后端给的说明并重拉，失败把原因放到面板顶部 */
+async function mutateLine(
+  line: ArchiveLineItem,
+  action: () => Promise<AxiosResponse<LedgerMutationResponse>>,
+  fallback: string,
+): Promise<void> {
+  const target = selectedId.value;
+  if (target === null) return;
+  busyLineId.value = line.id;
+  actionError.value = '';
+  try {
+    const { data } = await action();
+    ElMessage.success(data.detail || '已保存');
+    await load(target, { clearLines: false });
+  } catch (err) {
+    actionError.value = getApiErrorMessage(err, fallback);
+  } finally {
+    busyLineId.value = null;
+  }
+}
+
+async function editTitle(line: ArchiveLineItem): Promise<void> {
+  let text = '';
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '改过标题的行之后的整理不能去掉或替换；原话不变，她会照着新标题说。',
+      '改标题',
+      {
+        confirmButtonText: '保存',
+        cancelButtonText: '取消',
+        inputValue: line.text,
+        inputValidator: (value: string) => validateArchiveTitle(value ?? '') ?? true,
+      },
+    );
+    text = (value ?? '').trim();
+  } catch {
+    return;
+  }
+  await mutateLine(line, () => ledgerApi.editArchiveTitle(line.id, text), '改标题失败');
+}
+
+async function toggleLasting(line: ArchiveLineItem): Promise<void> {
+  await mutateLine(line, () => ledgerApi.setArchiveLasting(line.id, !line.lasting), '标稳定失败');
+}
+
+async function pinLine(line: ArchiveLineItem): Promise<void> {
+  await mutateLine(line, () => ledgerApi.pinArchiveLine(line.id), '放回快照失败');
+}
+
+async function markReviewed(): Promise<void> {
+  const target = selectedId.value;
+  if (target === null) return;
+  reviewing.value = true;
+  actionError.value = '';
+  try {
+    await ledgerApi.markReviewed(target);
+    ElMessage.success('已标为已审');
+    await load(target, { clearLines: false });
+  } catch (err) {
+    actionError.value = getApiErrorMessage(err, '标已审失败');
+  } finally {
+    reviewing.value = false;
+  }
+}
+
 async function reload(): Promise<void> {
   actionError.value = '';
   await loadSessions();
@@ -239,9 +350,27 @@ defineExpose({ reload, selectSession });
 }
 
 .archive-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.archive-summary .grow {
+  flex: 1;
+}
+
+.panel-note {
   margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.panel-warning {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-warning);
 }
 
 .archive-lines {

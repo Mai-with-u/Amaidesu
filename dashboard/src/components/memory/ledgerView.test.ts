@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ARCHIVE_TITLE_MAX_LENGTH,
   CLOSE_QUOTE_MAX_LENGTH,
+  archiveLineTags,
   commitmentQuoteState,
   commitmentStatusLabel,
   commitmentStatusQuery,
@@ -8,11 +10,15 @@ import {
   commitmentTargetLabel,
   gameSaveLabel,
   hasLaterSettledSession,
+  pinnedOverflowHint,
+  quoteFitsSpeech,
+  reviewStateLabel,
   settleAttemptsExhausted,
   settleAttemptsText,
   settleStateLabel,
   snapshotChangeLabel,
   unregisteredKindLabel,
+  validateArchiveTitle,
   validateCloseQuote,
 } from './ledgerView';
 
@@ -117,5 +123,40 @@ describe('游戏与存档标签', () => {
     );
     expect(gameSaveLabel({ game: 'minecraft', save_id: '', save_name: '' })).toBe('minecraft');
     expect(gameSaveLabel({ game: null, save_id: '', save_name: '' })).toBeNull();
+  });
+});
+
+describe('记忆页审核', () => {
+  it('档案行标签：在不在快照里、稳定的事只在快照里才标、人放回与人改过各一个', () => {
+    const base = { in_snapshot: false, lasting: false, pinned: false, human_locked: false };
+    expect(archiveLineTags(base).map(tag => tag.label)).toEqual(['不在快照里']);
+    expect(archiveLineTags({ ...base, lasting: true }).map(tag => tag.label)).toEqual([
+      '不在快照里',
+    ]);
+    expect(
+      archiveLineTags({ in_snapshot: true, lasting: true, pinned: true, human_locked: true }).map(
+        tag => tag.label,
+      ),
+    ).toEqual(['下一场记得', '稳定的事', '人放回的', '人改过']);
+  });
+
+  it('放回、新增的行超过常驻简报的 12 行才提示', () => {
+    expect(pinnedOverflowHint(12)).toBeNull();
+    expect(pinnedOverflowHint(13)).toContain('13 行');
+  });
+
+  it('原话要是那句台词的逐字片段，连续空白压成一个空格的写法也认', () => {
+    expect(quoteFitsSpeech('就叫 团子', '以后这只猫就叫  团子了')).toBe(true);
+    expect(quoteFitsSpeech('这只猫', '以后这只猫就叫团子了')).toBe(true);
+    expect(quoteFitsSpeech('这只狗', '以后这只猫就叫团子了')).toBe(false);
+    expect(quoteFitsSpeech('  ', '以后这只猫就叫团子了')).toBe(false);
+  });
+
+  it('标题不能为空、不能超过上限；审核状态分待审与已审', () => {
+    expect(validateArchiveTitle(' 狼叫阿黄 ')).toBeNull();
+    expect(validateArchiveTitle('   ')).toBe('标题不能为空');
+    expect(validateArchiveTitle('长'.repeat(ARCHIVE_TITLE_MAX_LENGTH + 1))).toContain('最多');
+    expect(reviewStateLabel(null)).toBe('待审');
+    expect(reviewStateLabel(5)).toBe('已审');
   });
 });

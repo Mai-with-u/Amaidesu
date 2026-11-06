@@ -22,6 +22,10 @@ function line(id: number) {
     game: null,
     save_id: '',
     save_name: '',
+    human_locked: false,
+    in_snapshot: false,
+    lasting: false,
+    pinned: false,
   };
 }
 
@@ -56,6 +60,32 @@ describe('useArchiveLines', () => {
     expect(state.lines.value.map(item => item.id)).toEqual([1]);
     expect(state.loading.value).toBe(false);
     expect(state.error.value).toBe('');
+  });
+
+  it('审核状态与最新快照概况随行一起写入，切场时一起清空', async () => {
+    listArchiveMock.mockResolvedValueOnce({
+      data: {
+        live_session_id: 5,
+        items: [line(1)],
+        reviewed_at_ms: null,
+        settled: true,
+        snapshot_session_id: 7,
+        snapshot_pinned_count: 2,
+      },
+    } as never);
+    const state = useArchiveLines();
+    await state.load(5);
+    expect(state.summary.value).toEqual({
+      live_session_id: 5,
+      reviewed_at_ms: null,
+      settled: true,
+      snapshot_session_id: 7,
+      snapshot_pinned_count: 2,
+    });
+
+    listArchiveMock.mockReturnValueOnce(deferred().promise as never);
+    void state.load(6);
+    expect(state.summary.value).toBeNull();
   });
 
   it('切场先清空旧行，过期响应不覆盖后选的场次', async () => {

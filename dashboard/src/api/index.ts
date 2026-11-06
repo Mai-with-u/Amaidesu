@@ -17,6 +17,7 @@ import type {
   AgentState,
   AgentCancelTaskResponse,
   AgentStopResponse,
+  ArchiveLineCreatePayload,
   ArchiveListResponse,
   SystemStatusResponse,
   SystemHealthResponse,
@@ -564,6 +565,17 @@ export const ledgerApi = {
     api.get<ArchiveListResponse>(`/memory/archive/${liveSessionId}`),
   deleteArchiveLine: (lineId: number) =>
     api.delete<LedgerMutationResponse>(`/memory/archive/lines/${lineId}`),
+  // 记忆页审核：改标题、标稳定会锁住这一行（之后的整理只能保留）；放回、新增进最新一份快照
+  editArchiveTitle: (lineId: number, text: string) =>
+    api.put<LedgerMutationResponse>(`/memory/archive/lines/${lineId}/title`, { text }),
+  setArchiveLasting: (lineId: number, lasting: boolean) =>
+    api.put<LedgerMutationResponse>(`/memory/archive/lines/${lineId}/lasting`, { lasting }),
+  pinArchiveLine: (lineId: number) =>
+    api.post<LedgerMutationResponse>(`/memory/archive/lines/${lineId}/pin`),
+  createArchiveLine: (liveSessionId: number, payload: ArchiveLineCreatePayload) =>
+    api.post<LedgerMutationResponse>(`/memory/archive/${liveSessionId}/lines`, payload),
+  markReviewed: (liveSessionId: number) =>
+    api.post<LedgerMutationResponse>(`/memory/settle/${liveSessionId}/reviewed`),
   getSettleState: () => api.get<SettleListResponse>('/memory/settle'),
   // 重新整理：重试次数清零并清掉上次失败原因，下一次调度会再挑到这一场
   resettle: (liveSessionId: number) =>

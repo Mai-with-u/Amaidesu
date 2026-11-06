@@ -6,6 +6,7 @@
  */
 
 import type {
+  ArchiveLineItem,
   CommitmentItem,
   CommitmentStatus,
   SettleSessionItem,
@@ -104,6 +105,58 @@ export function snapshotChangeLabel(action: SnapshotChangeAction): string {
     refused: '没采纳',
   };
   return labels[action];
+}
+
+/** 常驻简报至多列 12 行档案：人放回、新增的行超过这个数，她本场的新进展会被挤出简报 */
+export const SNAPSHOT_BRIEF_LINES = 12;
+
+/** 档案行标题上限（与后端审核仓储一致，和整理写的行同一上限） */
+export const ARCHIVE_TITLE_MAX_LENGTH = 30;
+
+/** 新增档案行的原话上限（与后端审核仓储一致） */
+export const ARCHIVE_QUOTE_MAX_LENGTH = 80;
+
+/** 档案行标题校验：通过返回 null，否则返回提示文案（ElMessageBox 的 inputValidator 直接消费） */
+export function validateArchiveTitle(value: string): string | null {
+  const title = value.trim();
+  if (!title) return '标题不能为空';
+  return title.length <= ARCHIVE_TITLE_MAX_LENGTH ? null : `最多 ${ARCHIVE_TITLE_MAX_LENGTH} 字`;
+}
+
+/**
+ * 原话是不是那句台词的逐字片段：原文与连续空白压成一个空格后的写法都认（和后端、整理同一口径）。
+ */
+export function quoteFitsSpeech(quote: string, content: string): boolean {
+  const text = quote.trim();
+  if (!text) return false;
+  return content.includes(text) || content.split(/\s+/).join(' ').includes(text);
+}
+
+/** 档案行的标签：在不在最新快照里、稳定的事、人放回的、人改过的 */
+export function archiveLineTags(
+  line: Pick<ArchiveLineItem, 'in_snapshot' | 'lasting' | 'pinned' | 'human_locked'>,
+): { label: string; type: 'success' | 'info' | 'warning' | 'primary' }[] {
+  const tags: { label: string; type: 'success' | 'info' | 'warning' | 'primary' }[] = [];
+  tags.push(
+    line.in_snapshot
+      ? { label: '下一场记得', type: 'success' }
+      : { label: '不在快照里', type: 'info' },
+  );
+  if (line.in_snapshot && line.lasting) tags.push({ label: '稳定的事', type: 'primary' });
+  if (line.pinned) tags.push({ label: '人放回的', type: 'warning' });
+  if (line.human_locked) tags.push({ label: '人改过', type: 'warning' });
+  return tags;
+}
+
+/** 放回、新增的行太多时的提示；没超过简报行数返回 null */
+export function pinnedOverflowHint(pinnedCount: number): string | null {
+  if (pinnedCount <= SNAPSHOT_BRIEF_LINES) return null;
+  return `最新快照里人放回、新增的行已有 ${pinnedCount} 行，超过常驻简报的 ${SNAPSHOT_BRIEF_LINES} 行：她本场的新进展会被挤出简报，删掉或合并一些。`;
+}
+
+/** 审核状态标签：待审 / 已审 */
+export function reviewStateLabel(reviewedAtMs: number | null): string {
+  return reviewedAtMs === null ? '待审' : '已审';
 }
 
 /** 整理状态标签：已整理 / 待整理 */

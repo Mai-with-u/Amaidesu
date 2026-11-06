@@ -1463,12 +1463,38 @@ export interface ArchiveLineItem {
   save_id: string;
   /** 那个存档给人看的名字（只显示） */
   save_name: string;
+  /** 人改过标题或稳定标记、或是人新增的：之后的整理不能去掉或替换 */
+  human_locked: boolean;
+  /** 在最新一份快照里：下一场开播会记得 */
+  in_snapshot: boolean;
+  /** 最新快照里标的是名字、住处、关系这类稳定的事 */
+  lasting: boolean;
+  /** 人放回或新增进最新快照的行：整理取舍时排最前、不挤掉 */
+  pinned: boolean;
 }
 
-/** 某一场的档案行（按写入顺序） */
+/** 某一场的档案行（按写入顺序），连同这一场的审核状态与最新一份快照的概况 */
 export interface ArchiveListResponse {
   live_session_id: number;
   items: ArchiveLineItem[];
+  /** 标已审的时刻；null = 待审 */
+  reviewed_at_ms: number | null;
+  /** 这一场整理完了没有（没整理完不能新增、标已审） */
+  settled: boolean;
+  /** 最新一份快照所在的场次；null = 还没有存下的快照（放回、标稳定、新增做不了） */
+  snapshot_session_id: number | null;
+  /** 最新快照里人放回、新增的行数（超过 12 行要人去减） */
+  snapshot_pinned_count: number;
+}
+
+/** 从这一场她播出的一句台词里截原话、写标题，新增一行档案 */
+export interface ArchiveLineCreatePayload {
+  evidence_chat_id: number;
+  /** 从那句台词里逐字截取（至多 80 字） */
+  quote: string;
+  /** 标题（至多 30 字） */
+  text: string;
+  lasting: boolean;
 }
 
 /** 整理时没能登记的条目类型：承诺 / 档案行 */
@@ -1517,6 +1543,8 @@ export interface SettleSessionItem {
   settle_report: SettleReport | null;
   /** 本场写了几行档案 */
   archive_count: number;
+  /** 标已审的时刻；null = 待审 */
+  reviewed_at_ms: number | null;
 }
 
 /** 整理状态列表：待整理场数与最近的正式场整理状态 */
@@ -1525,6 +1553,8 @@ export interface SettleListResponse {
   pending_count: number;
   /** 自动重试上限 */
   max_attempts: number;
+  /** 列出的场次里整理完了、还没标已审的场数 */
+  review_pending_count: number;
   /** 最近的正式场，新的在前 */
   items: SettleSessionItem[];
 }

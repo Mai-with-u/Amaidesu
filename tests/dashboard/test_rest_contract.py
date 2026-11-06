@@ -446,6 +446,14 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
             "items.text",
             "items.quote",
             "items.evidence_chat_id",
+            "items.human_locked",
+            "items.in_snapshot",
+            "items.lasting",
+            "items.pinned",
+            "reviewed_at_ms",
+            "settled",
+            "snapshot_session_id",
+            "snapshot_pinned_count",
         ),
     ),
     (
@@ -463,6 +471,8 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
             "items.settle_report.failure_reason",
             "items.settle_report.unregistered.kind",
             "items.archive_count",
+            "items.reviewed_at_ms",
+            "review_pending_count",
         ),
     ),
     (
