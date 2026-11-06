@@ -16,7 +16,7 @@ import pytest
 from src.agents.streamer import canonical
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.planner_render import Delegation, Intent, Relay, render_delegations
-from src.agents.streamer.timeline import GameEventBatch
+from src.agents.streamer.timeline import GameEventBatch, PlayerNote
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider, build_reply_tool_spec
 from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind, TriggerSource
@@ -619,6 +619,27 @@ async def test_planner_reference_shows_private_game_chat_block() -> None:
     )
     assert "【私密游戏聊天】" in references[-1] and "悄悄跟你说个事" in references[-1]
     assert "游戏里有新动静" in references[-1]
+
+
+@pytest.mark.asyncio
+async def test_planner_reference_names_players_waiting_for_an_in_game_reply() -> None:
+    """本窗有玩家在公屏跟她说话：参考段点出是谁、提醒在游戏里回（第 58 场玩家问"你有皮革吗"，她只在直播里说）。
+    只冲她做动作、没开口的玩家不算；同一位玩家说了几句只点一次名。"""
+    llm = MagicMock()
+    planner = _planner(llm=llm)
+    references = _capture_references(planner, llm)
+    notes = (
+        PlayerNote(who="玩家甲", said=True, line="[22:44 minecraft 公屏] 玩家 玩家甲：那你有皮革吗"),
+        PlayerNote(who="玩家甲", said=True, line="[22:44 minecraft 公屏] 玩家 玩家甲：要做书"),
+        PlayerNote(who="玩家乙", said=False, line="[22:44 minecraft 动作] 玩家 玩家乙 看着我蹲起 2 下"),
+    )
+
+    await planner.plan([], proactive=True, game_batch=GameEventBatch(player_notes=notes))
+    await planner.plan([], proactive=True, game_batch=GameEventBatch(player_notes=notes[2:]))
+
+    assert "【游戏里有人在跟她说话】玩家 玩家甲（在游戏里，听不到直播）" in references[0]
+    assert "在游戏里回一句" in references[0] and "玩家乙" not in references[0]
+    assert "【游戏里有人在跟她说话】" not in references[1]
 
 
 # 提示词守则

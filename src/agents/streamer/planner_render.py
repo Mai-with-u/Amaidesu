@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from src.agents.streamer.planner_context import age_text
 from src.agents.streamer.scene_card import GoalLine, GoalStatus
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
+from src.agents.streamer.timeline import PlayerNote
 from src.modules.tools.conversation import to_conversation_view
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "forced_situation",
     "goal_lines",
     "render_delegations",
+    "render_game_speakers",
     "render_observation",
     "render_recent_intents",
     "render_recent_relays",
@@ -310,6 +312,27 @@ def render_recent_intents(
             line += "（其中对游戏进展的说法已被游戏回执覆盖，以游戏记录为准）"
         lines.append(line)
     return "\n".join(lines)
+
+
+def render_game_speakers(notes: Iterable[PlayerNote]) -> str:
+    """本窗在游戏公屏跟她说话的玩家：提醒在游戏里回一句；没人开口时为空串（整段省略）。
+
+    游戏里的玩家听不到直播：只在直播里接话，他看到的就是她不理人。守则写在【当前游戏的玩法】
+    里，但第 58 场玩家在游戏里问"你有皮革吗"，她只在直播里说了一句——规矩埋在长守则里，
+    这一窗点出是谁在等她回话。
+    """
+    names: List[str] = []
+    for note in notes:
+        if note.said and note.who and note.who not in names:
+            names.append(note.who)
+    if not names:
+        return ""
+    who = "、".join(f"玩家 {name}" for name in names)
+    return (
+        f"【游戏里有人在跟她说话】{who}（在游戏里，听不到直播）：问她事、跟她搭话的，"
+        "同一步按【当前游戏的玩法】里游戏聊天的办法在游戏里回一句——只在直播里接，对方看到的就是她不理人；"
+        "感叹、自言自语可以只在直播里接。"
+    )
 
 
 def render_recent_relays(relays: Iterable[Relay], current_ms: int) -> str:

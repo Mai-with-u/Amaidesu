@@ -58,6 +58,7 @@ from src.agents.streamer.planner_render import (
     assemble_request_messages,
     forced_situation,
     render_delegations,
+    render_game_speakers,
     render_observation,
     render_recent_intents,
     render_recent_relays,
@@ -944,6 +945,10 @@ class Planner:
             # 私密游戏聊天：只发给我一个人的话，不进对话历史（表达侧看不到），只在本窗参考段出现。
             # 决策据此安排回应，但原话与内容不能被当众念出或转述
             lines.append("【私密游戏聊天】（只发给我，不在直播里念出或转述）\n" + "\n".join(private_game_chat))
+        speakers = render_game_speakers(self._round_player_notes)
+        if speakers:
+            # 本窗有玩家在游戏公屏跟她说话：点出是谁在等她回话，回就在游戏里回（他听不到直播）
+            lines.append(speakers)
         if overview:
             # 本轮决策前自动读取的现场：已经足够时直接据此决定，不再调用同样的查询工具
             lines.append(f"【现场速览（本轮决策前自动读取）】\n{overview}")
