@@ -42,6 +42,7 @@ from src.modules.config.core_schemas import (
     DiagnosticsConfig,
     EventHistoryConfig,
 )
+from src.modules.config.model_schemas import EmbeddingConfig, LLMProviderConfig
 from src.modules.config.service import ConfigService
 from src.modules.config.storage_schemas import ViewerIdentityConfig
 from src.modules.dashboard.server import DashboardServer
@@ -62,6 +63,7 @@ from src.modules.events.interceptors import (
 )
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import CoreShutdownPayload, CoreStartupPayload
+from src.modules.llm.embedding import build_embedding_client
 from src.modules.llm.engine import LLMManager
 from src.modules.llm.request_history_manager import RequestHistoryManager
 from src.modules.logging import configure_from_config, get_logger
@@ -436,6 +438,14 @@ async def create_app_components(
     await llm_service.setup(config)
     logger.info("已创建 LLM 服务实例")
 
+    # --- 嵌入服务（主播记忆的语义检索）：配置了才开，没配时只走关键词与规则并写进日志 ---
+    embedding_setup = build_embedding_client(
+        EmbeddingConfig.model_validate(config.get("embedding") or {}),
+        [LLMProviderConfig.model_validate(item) for item in config.get("llm_providers") or []],
+    )
+    if embedding_setup.client is None:
+        logger.info(embedding_setup.note)
+
     # --- 上下文组装器配置归位至 [agents.streamer.context]；下游组装路径直接读 cfg.context ---
     # CoreService 构造走内置默认。
 
@@ -589,6 +599,9 @@ async def create_app_components(
             # 记忆账本两仓储（承诺与场次档案）：下播整理写入，WebUI 查看与纠错
             commitments_repo=database.commitments,
             archive_repo=database.archive,
+            # 记忆检索索引：主播的索引任务后台补算；嵌入没配时只补全文
+            memory_index_repo=database.memory_index,
+            embedding_setup=embedding_setup,
             event_repo=database.events,
             # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
             privacy_service=privacy_service,
@@ -708,6 +721,8 @@ async def create_app_components(
                 # 记忆账本两仓储 + 游戏事件查询（场次档案的游戏进展原料）
                 commitments_repo=database.commitments,
                 archive_repo=database.archive,
+                memory_index_repo=database.memory_index,
+                embedding_setup=embedding_setup,
                 event_repo=database.events,
                 # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
                 privacy_service=privacy_service,

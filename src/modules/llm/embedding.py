@@ -17,7 +17,7 @@ from typing import List, Optional, Sequence
 import httpx
 from openai import APIError, AsyncOpenAI
 
-from src.modules.config.model_schemas import EmbeddingConfig, LLMProviderConfig, ModelRootConfig
+from src.modules.config.model_schemas import EmbeddingConfig, LLMProviderConfig
 from src.modules.llm.clients.openai.compat import build_openai_compatible_client_config
 from src.modules.logging import get_logger
 
@@ -96,20 +96,19 @@ class EmbeddingSetup:
     note: str
 
 
-def build_embedding_client(config: ModelRootConfig) -> EmbeddingSetup:
+def build_embedding_client(embedding: EmbeddingConfig, providers: Sequence[LLMProviderConfig]) -> EmbeddingSetup:
     """按 ``[embedding]`` 段建嵌入客户端；没配置就返回不带客户端的说明。
 
     provider 引用的有效性由配置加载期校验保证；连接信息（地址、密钥、鉴权方式、默认 header）
     与大模型客户端走同一套转换。
     """
-    embedding = config.embedding
     if not embedding.enabled:
         return EmbeddingSetup(client=None, note="语义检索没开：model.toml 的 [embedding] 关着，只走关键词与规则")
     if not embedding.model_identifier:
         return EmbeddingSetup(
             client=None, note="语义检索没开：model.toml 的 [embedding] 没填嵌入模型，只走关键词与规则"
         )
-    provider = _find_provider(config.llm_providers, embedding.provider)
+    provider = _find_provider(providers, embedding.provider)
     connection = build_openai_compatible_client_config(provider.model_dump())
     sdk = AsyncOpenAI(
         api_key=connection.api_key or "sk-dummy",

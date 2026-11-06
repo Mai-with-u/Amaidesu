@@ -130,6 +130,45 @@ async def test_agent_registers_memory_recall_and_retired_tools_stay_gone(store: 
     assert not names & {"memory_recall_session", "memory_recall_viewer", "streamer_notebook"}
 
 
+async def test_agent_backfills_memory_index_on_start_and_stops_it(store: SQLiteDatabase) -> None:
+    """接了索引仓储的 Agent 启动后在后台补算索引；没配嵌入服务时只补全文。"""
+    previous_pk = await _ended_session(store, started=1_000)
+    await store.archive.insert_line(
+        live_session_id=previous_pk, text="猫取名芝麻", quote="就叫芝麻", evidence_chat_id=1
+    )
+    agent = make_streamer_agent(
+        {"background": {"enabled": False}, "mouth": {"enabled": False}},
+        llm=FakeLLMManager(),
+        tool_registry=ToolRegistry(),
+        archive_repo=store.archive,
+        memory_index_repo=store.memory_index,
+    )
+
+    async def _indexed() -> int:
+        (row,) = await store.execute("SELECT COUNT(*) FROM memory_fts_archive")
+        return int(row[0])
+
+    counts: List[int] = []
+
+    async def _poll() -> bool:
+        counts.append(await _indexed())
+        return counts[-1] == 1
+
+    await agent.start()
+    try:
+        # 条件轮询（同 wait_until 的做法，只是条件要异步查库）：成立即放行，上限 5 秒
+        for _ in range(250):
+            if await _poll():
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        await agent.stop()
+
+    assert counts[-1] == 1, "启动补算把上一场的档案行补进了全文索引"
+    (vectors,) = await store.execute("SELECT COUNT(*) FROM memory_vectors_archive")
+    assert int(vectors[0]) == 0, "没配嵌入服务时不补向量"
+
+
 async def test_refresh_brief_reads_previous_archive_and_pending_commitments(store: SQLiteDatabase) -> None:
     """常驻简报取上一场档案与不针对人、不挂游戏的未了结承诺。"""
     previous_pk = await _ended_session(store, started=1_000)

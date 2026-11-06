@@ -13,7 +13,7 @@ import httpx
 import pytest
 from openai import AsyncOpenAI
 
-from src.modules.config.model_schemas import EmbeddingConfig, LLMProviderConfig, ModelRootConfig
+from src.modules.config.model_schemas import EmbeddingConfig, LLMProviderConfig
 from src.modules.llm.embedding import EmbeddingClient, EmbeddingError, build_embedding_client
 
 Handler = Callable[[Dict[str, Any]], httpx.Response]
@@ -100,18 +100,17 @@ async def test_empty_text_is_rejected_without_a_request() -> None:
 
 
 def test_not_configured_builds_no_client_and_says_why() -> None:
-    setup = build_embedding_client(ModelRootConfig())
+    providers = [LLMProviderConfig()]
+    setup = build_embedding_client(EmbeddingConfig(), providers)
     assert setup.client is None and "没填嵌入模型" in setup.note
 
-    disabled = build_embedding_client(ModelRootConfig(embedding={"enabled": False, "model_identifier": "bge-m3"}))
+    disabled = build_embedding_client(EmbeddingConfig(enabled=False, model_identifier="bge-m3"), providers)
     assert disabled.client is None and "关着" in disabled.note
 
 
 def test_configured_builds_a_client_named_in_the_note() -> None:
-    config = ModelRootConfig(
-        llm_providers=[LLMProviderConfig(), LLMProviderConfig(name="local", base_url="http://127.0.0.1:11434/v1")],
-        embedding={"provider": "local", "model_identifier": "bge-m3", "dimensions": 512},
-    )
-    setup = build_embedding_client(config)
+    providers = [LLMProviderConfig(), LLMProviderConfig(name="local", base_url="http://127.0.0.1:11434/v1")]
+    embedding = EmbeddingConfig(provider="local", model_identifier="bge-m3", dimensions=512)
+    setup = build_embedding_client(embedding, providers)
     assert setup.client is not None and setup.client.model_key == "bge-m3@512"
     assert "bge-m3@512" in setup.note and "local" in setup.note

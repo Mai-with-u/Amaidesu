@@ -152,6 +152,8 @@ class MemoryIndexRepo(BaseRepo):
             f"SELECT t.id, {spec.document} AS document {_from(spec)}"  # noqa: S608 常量片段
             f" LEFT JOIN {spec.vectors} v ON v.{spec.key} = t.id"
             f" WHERE {spec.eligible}{_settled_clause(source)}"
+            # 空白正文算不出向量（服务端会拒），不排进队列，免得永远堵在队头
+            f" AND length(trim({spec.document})) > 0"
             " AND (v.model IS NULL OR v.model <> ?)"
             " ORDER BY t.id LIMIT ?"
         )

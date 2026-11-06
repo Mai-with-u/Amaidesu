@@ -44,6 +44,7 @@ from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayloa
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game_chat import GameChatPayload
+from src.modules.llm.embedding import EmbeddingSetup
 from src.modules.logging import get_logger
 from src.modules.utils.task_utils import spawn_background_task
 from src.modules.tools import ToolSpec
@@ -64,6 +65,7 @@ from .decision_executor import DecisionRoundExecutor
 from .session_scope import ClosingSession, SessionScope
 from .memory.brief import build_brief
 from .memory.cues import MemoryCueProvider
+from .memory.index import MemoryIndexer
 from .memory.recall import MemoryRecallService, build_memory_recall_provider
 from .memory.settle import SessionSettler
 from .message_buffer import MessageBuffer
@@ -171,6 +173,8 @@ class StreamerAgent(BaseAgent):
         viewer_repo: Optional[Any] = None,
         commitments_repo: Optional[Any] = None,
         archive_repo: Optional[Any] = None,
+        memory_index_repo: Optional[Any] = None,
+        embedding_setup: Optional[EmbeddingSetup] = None,
         event_repo: Optional[Any] = None,
         privacy_service: Optional[Any] = None,
         context_assembler_config: Optional[Any] = None,
@@ -208,6 +212,9 @@ class StreamerAgent(BaseAgent):
             viewer_repo: 可选 ``ViewerRepo``（观众统计仓储）——Planner 画像注入
                 时经它实时取观众昵称、观众画像按互动量筛候选、工具按昵称反查；
                 None 时注入行回退 platform/user_id、画像不更新
+            memory_index_repo: 可选 ``MemoryIndexRepo``（记忆检索的派生索引）——注入时后台
+                索引任务把档案行、承诺、台词、游戏事件补进全文与向量索引；None 时不补算
+            embedding_setup: 可选嵌入服务装配结果；None 或没配嵌入模型时索引只补全文
             event_repo: 可选 ``EventRepo``（游戏事件）——场次回顾的游戏进展原料；
                 None 时回顾少这一类原料
             context_assembler_config: 可选上下文组装器配置（[agents.streamer.context] 子段；
@@ -454,6 +461,14 @@ class StreamerAgent(BaseAgent):
                 min_session_ms=self.typed_config.memory_brief_min_session_ms,
             )
 
+        # 记忆检索索引：后台补算全文（必开）与向量（配置了嵌入服务才开）；整理写完时叫醒补一轮
+        self._memory_indexer: Optional[MemoryIndexer] = None
+        if memory_index_repo is not None:
+            setup = embedding_setup or EmbeddingSetup(client=None, note="语义检索没开：没有装配嵌入服务")
+            self._memory_indexer = MemoryIndexer(
+                repo=memory_index_repo, embedding=setup.client, embedding_note=setup.note
+            )
+
         # 常驻简报：按"上一场的档案 + 不针对人的未了结承诺"渲染，每窗按表快照重渲
         self._memory_brief_text: str = ""
         self._memory_brief_ids: tuple[int, ...] = ()
@@ -653,6 +668,10 @@ class StreamerAgent(BaseAgent):
                 label="StreamerAgent.recap_bootstrap",
             )
 
+        # 记忆检索索引：第一轮就是启动补算，在后台跑，不挡开播
+        if self._memory_indexer is not None:
+            await self._memory_indexer.start()
+
         # 启动流程单（fail-soft：加载失败降级为无流程单）
         await self._rundown_coord.start()
 
@@ -692,6 +711,10 @@ class StreamerAgent(BaseAgent):
             await self._background.stop()
         except Exception as exc:
             self._logger.warning(f"停止 BackgroundMaintainer 失败: {exc}")
+
+        # 停止记忆索引任务（没补完的行下次启动再补）
+        if self._memory_indexer is not None:
+            await self._memory_indexer.stop()
 
         # 停止 flush 循环
         if self._flush_task is not None and not self._flush_task.done():
@@ -1145,6 +1168,14 @@ class StreamerAgent(BaseAgent):
             return
         if not settled:
             self._logger.info(f"场次 {live_session_id} 的下播整理未完成（失败或跳过），照常执行下播清理")
+            return
+        # 本场新写的档案行与承诺马上补进索引，下一场开播就能查到
+        self._request_index_run()
+
+    def _request_index_run(self) -> None:
+        """整理写完后叫醒记忆索引任务补一轮（没装配索引时什么也不做）。"""
+        if self._memory_indexer is not None:
+            self._memory_indexer.request_run()
 
     # ==================================================================
     # 主播记忆：常驻简报 / 线索推送 / 回想工具 / 下播整理
@@ -1389,6 +1420,9 @@ class StreamerAgent(BaseAgent):
             await self._settler.settle_pending()
         except Exception as exc:  # noqa: BLE001 - 账本整理失败不能挡住收播与启动
             self._logger.warning(f"下播整理账本出错: {exc}", exc=exc)
+            return
+        # 补整理写下的档案行与承诺同样马上补进索引
+        self._request_index_run()
 
     async def _on_game_event(
         self,

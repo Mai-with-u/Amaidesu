@@ -51,6 +51,9 @@ class AgentDeps:
     viewer_repo: Optional[Any] = None
     commitments_repo: Optional[Any] = None
     archive_repo: Optional[Any] = None
+    # 记忆检索的派生索引仓储与嵌入服务装配结果（没配嵌入时客户端为空，只补全文索引）
+    memory_index_repo: Optional[Any] = None
+    embedding_setup: Optional[Any] = None
     event_repo: Optional[Any] = None
     creature_repo: Optional[Any] = None
     privacy_service: Optional[Any] = None
