@@ -7,6 +7,8 @@
 
 import type {
   ArchiveLineItem,
+  CandidateKind,
+  CandidateStatus,
   CommitmentItem,
   CommitmentStatus,
   SettleSessionItem,
@@ -93,7 +95,38 @@ export function commitmentQuoteState(
 
 /** 未登记条目类型 → 页面标签 */
 export function unregisteredKindLabel(kind: UnregisteredKind): string {
+  if (kind === 'candidate') return '观众候选';
   return kind === 'commitment' ? '承诺' : '档案';
+}
+
+/** 观众候选类型 → 页面标签 */
+export function candidateKindLabel(kind: CandidateKind): string {
+  return kind === 'claimed_missing' ? '她说欠着的' : '观众定下的';
+}
+
+/** 观众候选状态 → 页面标签 */
+export function candidateStatusLabel(status: CandidateStatus): string {
+  const labels: Record<CandidateStatus, string> = {
+    pending: '待审',
+    approved: '已批准',
+    rejected: '已驳回',
+  };
+  return labels[status] ?? status;
+}
+
+/** 整理报告里观众候选的一句话：列了几条（分两类）、因个人信息丢了几条；都没有返回 null */
+export function candidateReportText(
+  listed: Partial<Record<CandidateKind, number>> | undefined,
+  personalDropped: number | undefined,
+): string | null {
+  const parts: string[] = [];
+  const defined = listed?.viewer_defined ?? 0;
+  const claimed = listed?.claimed_missing ?? 0;
+  if (defined) parts.push(`观众定下的 ${defined} 条`);
+  if (claimed) parts.push(`她说欠着的 ${claimed} 条`);
+  const head = parts.length ? `列进待审区：${parts.join('、')}` : '';
+  const tail = personalDropped ? `含观众个人信息丢掉 ${personalDropped} 条` : '';
+  return [head, tail].filter(Boolean).join('；') || null;
 }
 
 /** 档案快照改动 → 页面标签 */

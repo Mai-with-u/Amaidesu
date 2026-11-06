@@ -15,6 +15,7 @@
 
     <!-- 承诺账本 / 下播整理 / 场次档案：下播整理产出的可纠错视图                  -->
     <CommitmentPanel ref="commitmentPanel" />
+    <CandidatePanel ref="candidatePanel" @changed="onCandidateDecided" />
     <SettlePanel ref="settlePanel" @view-archive="openArchive" />
     <ArchivePanel ref="archivePanel" />
 
@@ -27,7 +28,8 @@
 /**
  * 记忆账本页 —— 她答应过的事与每场干了什么的查看 / 纠错入口
  *
- * 页面只剩账本三块：承诺（未了结 / 已了结 / 误记）、下播整理状态与场次档案。
+ * 账本四块：承诺（未了结 / 已了结 / 误记）、观众候选（人批准才进记忆）、下播整理状态与场次档案。
+ * 批准一条候选会新增档案行或承诺，所以批准、驳回后连带重拉承诺与档案两个面板。
  * 旧版长期记忆（MEMORY.md）与常客画像两套接口在记忆重设计中下线，记忆内容
  * 改由下播整理写进承诺账本与场次档案；三个面板各自在挂载时拉自己的数据，
  * 页头"刷新"一并重拉，整理状态面板的"查看该场档案"经 ref 调档案面板的
@@ -36,6 +38,7 @@
  */
 import { nextTick, ref } from 'vue';
 import AnnouncementPanel from '@/components/memory/AnnouncementPanel.vue';
+import CandidatePanel from '@/components/memory/CandidatePanel.vue';
 import CommitmentPanel from '@/components/memory/CommitmentPanel.vue';
 import SettlePanel from '@/components/memory/SettlePanel.vue';
 import ArchivePanel from '@/components/memory/ArchivePanel.vue';
@@ -45,6 +48,7 @@ const refreshing = ref(false);
 
 /** 账本三个面板：页面头"刷新"一并刷新；整理状态的"查看该场档案"跳到档案面板 */
 const commitmentPanel = ref<InstanceType<typeof CommitmentPanel> | null>(null);
+const candidatePanel = ref<InstanceType<typeof CandidatePanel> | null>(null);
 const settlePanel = ref<InstanceType<typeof SettlePanel> | null>(null);
 const archivePanel = ref<InstanceType<typeof ArchivePanel> | null>(null);
 
@@ -54,12 +58,19 @@ async function reload(): Promise<void> {
   try {
     await Promise.all([
       commitmentPanel.value?.reload(),
+      candidatePanel.value?.reload(),
       settlePanel.value?.reload(),
       archivePanel.value?.reload(),
     ]);
   } finally {
     refreshing.value = false;
   }
+}
+
+/** 批准或驳回一条候选后：批准可能新增了承诺或档案行，两个面板跟着重拉 */
+function onCandidateDecided(): void {
+  void commitmentPanel.value?.reload();
+  void archivePanel.value?.reload();
 }
 
 /** 整理状态面板的"查看该场档案"：调档案面板切场并滚过去 */

@@ -19,6 +19,10 @@ import type {
   AgentStopResponse,
   ArchiveLineCreatePayload,
   ArchiveListResponse,
+  CandidateApprovePayload,
+  CandidateItem,
+  CandidateListResponse,
+  CandidateStatus,
   SystemStatusResponse,
   SystemHealthResponse,
   SystemHealthWallResponse,
@@ -576,6 +580,13 @@ export const ledgerApi = {
     api.post<LedgerMutationResponse>(`/memory/archive/${liveSessionId}/lines`, payload),
   markReviewed: (liveSessionId: number) =>
     api.post<LedgerMutationResponse>(`/memory/settle/${liveSessionId}/reviewed`),
+  // 观众候选审核区：批准前对她不可见；批准观众定下的写成档案行，她说欠着的登记成承诺
+  listCandidates: (status: CandidateStatus | 'all' = 'pending') =>
+    api.get<CandidateListResponse>('/memory/candidates', { params: { status } }),
+  approveCandidate: (candidateId: number, payload: CandidateApprovePayload = {}) =>
+    api.post<CandidateItem>(`/memory/candidates/${candidateId}/approve`, payload),
+  rejectCandidate: (candidateId: number) =>
+    api.post<LedgerMutationResponse>(`/memory/candidates/${candidateId}/reject`),
   getSettleState: () => api.get<SettleListResponse>('/memory/settle'),
   // 重新整理：重试次数清零并清掉上次失败原因，下一次调度会再挑到这一场
   resettle: (liveSessionId: number) =>

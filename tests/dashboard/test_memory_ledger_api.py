@@ -7,7 +7,8 @@ from typing import Any
 import pytest
 
 from src.modules.storage.database import SQLiteDatabase
-from src.modules.storage.models.memory import KeptSnapshotLine, PendingArchiveLine
+from src.modules.storage.models.memory import KeptSnapshotLine, PendingArchiveLine, PendingViewerCandidate
+from src.modules.storage.repos.viewer_candidates import replace_session_candidates
 
 
 @pytest.fixture
@@ -18,6 +19,7 @@ async def client(api, store: SQLiteDatabase):
         commitments_repo=store.commitments,
         archive_repo=store.archive,
         memory_review_repo=store.memory_review,
+        viewer_candidate_repo=store.viewer_candidates,
     )
 
 
@@ -262,3 +264,80 @@ async def test_review_writes_answer_503_without_the_review_repo(api, store: SQLi
     body = (await client.get(f"/api/v1/memory/archive/{session_id}")).json()
     assert body["items"][0]["in_snapshot"] is False and body["snapshot_session_id"] is None
     assert (await client.delete(f"/api/v1/memory/archive/lines/{line_id}")).status_code == 200
+
+
+async def test_candidates_list_masks_known_names_and_approve_or_reject(client, store: SQLiteDatabase) -> None:
+    """候选审核区：弹幕原文里的已知昵称遮成某位观众；批准观众定下的写成档案行，驳回的不再待审。"""
+    session_id = await _ended_session(store)
+    await _settled(store, session_id, [])
+    viewer = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_cand_1",
+        user_name="阿杰",
+        timestamp_ms=1_000,
+        name_match_window_ms=0,
+    )
+    said = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_100,
+        sender_role="viewer",
+        content="阿杰提议：小羊叫雪球",
+        message_type="danmaku",
+        viewer_id=viewer.viewer_id,
+    )
+    reply = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_200,
+        sender_role="assistant",
+        content="好，就叫雪球",
+        message_type="text",
+    )
+    other = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=1_300,
+        sender_role="assistant",
+        content="猫也起个名",
+        message_type="text",
+    )
+    with store.manager.transaction() as conn:
+        replace_session_candidates(
+            conn,
+            live_session_id=session_id,
+            candidates=[
+                PendingViewerCandidate(
+                    kind="viewer_defined",
+                    title="小羊取名雪球",
+                    viewer_chat_id=said,
+                    viewer_quote="阿杰提议：小羊叫雪球",
+                    reply_chat_id=reply,
+                    reply_quote="就叫雪球",
+                ),
+                PendingViewerCandidate(
+                    kind="viewer_defined", title="猫的名字", reply_chat_id=other, reply_quote="猫也起个名"
+                ),
+            ],
+            created_at_ms=2_000,
+        )
+
+    body = (await client.get("/api/v1/memory/candidates")).json()
+    assert body["pending_count"] == 2
+    named = next(item for item in body["items"] if item["title"] == "小羊取名雪球")
+    assert named["viewer_quote"] == "某位观众提议：小羊叫雪球"
+    assert (await client.get("/api/v1/memory/candidates", params={"status": "也许"})).status_code == 422
+
+    approved = await client.post(
+        f"/api/v1/memory/candidates/{named['id']}/approve", json={"title": "和观众一起给小羊取名雪球", "lasting": True}
+    )
+    assert approved.status_code == 200 and approved.json()["status"] == "approved"
+    lines = (await client.get(f"/api/v1/memory/archive/{session_id}")).json()["items"]
+    assert [(line["text"], line["pinned"], line["lasting"]) for line in lines] == [
+        ("和观众一起给小羊取名雪球", True, True)
+    ]
+
+    rest = next(item for item in body["items"] if item["title"] == "猫的名字")
+    assert (await client.post(f"/api/v1/memory/candidates/{rest['id']}/reject")).status_code == 200
+    assert (await client.post(f"/api/v1/memory/candidates/{rest['id']}/reject")).status_code == 409
+    after = (await client.get("/api/v1/memory/candidates", params={"status": "all"})).json()
+    assert after["pending_count"] == 0
+    assert sorted(item["status"] for item in after["items"]) == ["approved", "rejected"]

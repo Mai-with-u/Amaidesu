@@ -940,6 +940,8 @@ async def create_app_components(
             memory_cue_log_repo=database.memory_cue_log,
             # 记忆页人工审核：改标题、标稳定、放回快照、新增一行、标已审
             memory_review_repo=database.memory_review,
+            # 记忆页观众候选审核区：批准才进记忆
+            viewer_candidate_repo=database.viewer_candidates,
             # 模型页语义检索区：嵌入客户端建没建起来、是不是在退避
             embedding_setup=embedding_setup,
             # 主播记忆页查看与编辑长期记忆文件（MEMORY.md）
@@ -1272,6 +1274,7 @@ async def _start_dashboard(
     archive_repo=None,
     memory_cue_log_repo=None,
     memory_review_repo=None,
+    viewer_candidate_repo=None,
     embedding_setup=None,
     rundown_transition_repo=None,
     storage_db_path=None,
@@ -1336,6 +1339,7 @@ async def _start_dashboard(
             archive_repo=archive_repo,
             memory_cue_log_repo=memory_cue_log_repo,
             memory_review_repo=memory_review_repo,
+            viewer_candidate_repo=viewer_candidate_repo,
             embedding_setup=embedding_setup,
             # 流程单执行面板读变更事实行
             rundown_transition_repo=rundown_transition_repo,

@@ -127,6 +127,38 @@ class SettleListResponse(BaseModel):
     items: List[SettleSessionItem] = Field(default_factory=list, description="最近的正式场，新的在前")
 
 
+class CandidateItem(BaseModel):
+    """观众候选的一行：观众定下的事或她说欠着的事，人批准才进记忆。"""
+
+    id: int = Field(description="候选主键")
+    live_session_id: int = Field(description="列出它的场次")
+    kind: str = Field(description="viewer_defined 观众定下的 / claimed_missing 她说欠着的")
+    title: str = Field(description="标题（不写观众昵称）")
+    viewer_quote: str = Field(default="", description="观众那条弹幕里定下这件事的那一段（已知昵称已遮成某位观众）")
+    reply_quote: str = Field(description="她那句回应（或说欠着的那句）的逐字片段")
+    game: Optional[str] = Field(default=None, description="关于哪个游戏世界的事")
+    save_name: str = Field(default="", description="那个存档给人看的名字")
+    status: str = Field(description="pending 待审 / approved 已批 / rejected 已驳回")
+    created_at_ms: int = Field(description="列出的时刻（Unix 毫秒）")
+    decided_at_ms: Optional[int] = Field(default=None, description="批准或驳回的时刻")
+    archive_line_id: Optional[int] = Field(default=None, description="批准后生成的档案行")
+    commitment_id: Optional[int] = Field(default=None, description="批准后登记的承诺")
+
+
+class CandidateListResponse(BaseModel):
+    """观众候选列表与待审数（记忆页候选审核区）。"""
+
+    items: List[CandidateItem] = Field(default_factory=list, description="候选，新的在前")
+    pending_count: int = Field(description="还在待审的条数")
+
+
+class CandidateApproveRequest(BaseModel):
+    """批准一条候选：可以顺手改标题；观众定下的可以标成稳定的事。"""
+
+    title: Optional[str] = Field(default=None, description="改过的标题（至多 30 字）；空 = 用整理写的")
+    lasting: bool = Field(default=False, description="是不是名字、住处、关系这类稳定的事（只对观众定下的有用）")
+
+
 class LedgerMutationResponse(BaseModel):
     """账本上的写操作统一回执。"""
 

@@ -73,6 +73,22 @@
         <p v-if="row.settled_at_ms !== null" class="settle-meta mono">
           整理于 {{ formatDateTimeCn(row.settled_at_ms) }}
         </p>
+        <p
+          v-if="
+            candidateReportText(
+              row.settle_report?.candidates_listed,
+              row.settle_report?.candidates_personal_dropped,
+            )
+          "
+          class="settle-meta"
+        >
+          观众候选：{{
+            candidateReportText(
+              row.settle_report?.candidates_listed,
+              row.settle_report?.candidates_personal_dropped,
+            )
+          }}
+        </p>
         <p v-if="row.settle_report?.failure_reason" class="settle-failure">
           失败原因：{{ row.settle_report?.failure_reason }}
         </p>
@@ -157,6 +173,7 @@ import { getApiErrorMessage } from '@/utils/apiError';
 import { confirmAction } from '@/utils/confirmAction';
 import { formatDateTimeCn, formatRangeEnd } from '@/utils/format';
 import {
+  candidateReportText,
   hasLaterSettledSession,
   settleAttemptsExhausted,
   settleAttemptsText,

@@ -17,8 +17,12 @@
 - GET    /memory/settle                       整理状态（最近的正式场、待整理数与待审数）
 - POST   /memory/settle/{session_id}/reviewed 标已审
 - POST   /memory/settle/{session_id}/resettle 重新排进整理队列（清整理完成时刻与重试次数）
+- GET    /memory/candidates                   观众候选（待审 / 已批 / 已驳回）与待审数
+- POST   /memory/candidates/{id}/approve      批准（观众定下的写成档案行，她说欠着的登记成承诺）
+- POST   /memory/candidates/{id}/reject       驳回（同一条以后不再列）
 
 人改过的行之后的整理不能去掉或替换，人放回、新增的行整理不挤掉；每次改动都记进改动记录。
+观众候选批准前对她完全不可见；弹幕原文里的已知观众昵称按回想工具的口径遮成"某位观众"。
 
 账本是"她说过什么"的证据面：原话片段由整理时逐字校验过，删掉台词行也不影响阅读。
 本模块不做 SQL，读写全部经仓储；未注入仓储时端点返回 503。
@@ -36,6 +40,9 @@ from src.modules.dashboard.schemas.ledger import (
     ArchiveLineItem,
     ArchiveListResponse,
     ArchiveTitleRequest,
+    CandidateApproveRequest,
+    CandidateItem,
+    CandidateListResponse,
     CommitmentCloseRequest,
     CommitmentCreateRequest,
     CommitmentItem,
@@ -44,14 +51,22 @@ from src.modules.dashboard.schemas.ledger import (
     SettleListResponse,
     SettleSessionItem,
 )
-from src.modules.storage.models.memory import Commitment, SettleReport
+from src.modules.storage.models.memory import Commitment, SettleReport, ViewerCandidate
+from src.modules.storage.privacy import mask_names_in_text
 from src.modules.storage.repos.memory_review import MemoryReviewError
 from src.modules.storage.repos.sessions import MAX_SETTLE_ATTEMPTS
 from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
-    from src.modules.storage.repos import ArchiveRepo, CommitmentRepo, MemoryReviewRepo, SessionRepo, ViewerRepo
+    from src.modules.storage.repos import (
+        ArchiveRepo,
+        CommitmentRepo,
+        MemoryReviewRepo,
+        SessionRepo,
+        ViewerCandidateRepo,
+        ViewerRepo,
+    )
 
 logger = get_logger("MemoryLedgerApi")
 
@@ -72,6 +87,11 @@ ReviewRepoDep = Annotated[
 OptionalReviewRepoDep = Annotated[
     Optional["MemoryReviewRepo"], Depends(server_component("memory_review_repo", required=False))
 ]
+CandidateRepoDep = Annotated[
+    "ViewerCandidateRepo", Depends(server_component("viewer_candidate_repo", missing_detail="观众候选不可用"))
+]
+# 候选列表遮名的称呼：和回想工具跨场遮名同一个说法
+_MASKED_VIEWER = "某位观众"
 
 # 列表筛选用：一次最多回多少条承诺
 _MAX_LIST_LIMIT = 500
@@ -385,6 +405,82 @@ async def resettle_session(
     if not changed:
         raise HTTPException(status_code=409, detail="场次状态已变化，没能排进整理队列")
     return LedgerMutationResponse(success=True, detail="已排进下一次整理")
+
+
+def _candidate_item(row: ViewerCandidate, names: List[str]) -> CandidateItem:
+    """候选转响应行：弹幕原文里的已知观众昵称遮成"某位观众"。"""
+    return CandidateItem(
+        id=row.id,
+        live_session_id=row.live_session_id,
+        kind=row.kind,
+        title=row.title,
+        viewer_quote=mask_names_in_text(row.viewer_quote, names, replacement=_MASKED_VIEWER),
+        reply_quote=row.reply_quote,
+        game=row.game,
+        save_name=row.save_name,
+        status=row.status,
+        created_at_ms=row.created_at_ms,
+        decided_at_ms=row.decided_at_ms,
+        archive_line_id=row.archive_line_id,
+        commitment_id=row.commitment_id,
+    )
+
+
+async def _known_names(viewers: Optional["ViewerRepo"]) -> List[str]:
+    """已知观众昵称（遮名用）；没有观众仓储或读失败时不遮——候选原文本来就只截了定下那件事的一段。"""
+    if viewers is None:
+        return []
+    try:
+        return await viewers.list_known_names()
+    except Exception as exc:  # noqa: BLE001 - 遮名表读不到时列表照常返回
+        logger.warning(f"读已知观众昵称失败，候选原文不遮名: {exc}", exc=exc)
+        return []
+
+
+@router.get("/candidates", response_model=CandidateListResponse)
+async def list_candidates(
+    candidates: CandidateRepoDep,
+    viewers: ViewerRepoDep,  # noqa: B008 - FastAPI 依赖注入模式
+    status: Annotated[str, Query(description="pending / approved / rejected / all")] = "pending",
+) -> CandidateListResponse:
+    """观众候选列表（新的在前）与待审数。"""
+    value = status.strip().lower()
+    if value not in ("pending", "approved", "rejected", "all"):
+        raise HTTPException(status_code=422, detail=f"未知的候选状态: {status}")
+    rows = await candidates.list_candidates(status=None if value == "all" else value)
+    names = await _known_names(viewers)
+    return CandidateListResponse(
+        items=[_candidate_item(row, names) for row in rows], pending_count=await candidates.count_pending()
+    )
+
+
+@router.post("/candidates/{candidate_id}/approve", response_model=CandidateItem)
+async def approve_candidate(
+    candidate_id: int,
+    candidates: CandidateRepoDep,
+    viewers: ViewerRepoDep,  # noqa: B008 - FastAPI 依赖注入模式
+    request: Optional[CandidateApproveRequest] = None,
+) -> CandidateItem:
+    """批准：观众定下的写成一行观众来源的档案行并放进最新快照，她说欠着的登记成未了结承诺。"""
+    body = request or CandidateApproveRequest()
+    title = body.title if body.title is not None and body.title.strip() else None
+    try:
+        row = await candidates.approve(
+            candidate_id=int(candidate_id), title=title, lasting=body.lasting, at_ms=now_ms()
+        )
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return _candidate_item(row, await _known_names(viewers))
+
+
+@router.post("/candidates/{candidate_id}/reject", response_model=LedgerMutationResponse)
+async def reject_candidate(candidate_id: int, candidates: CandidateRepoDep) -> LedgerMutationResponse:
+    """驳回：留着这一条，同一条弹幕或同样的标题以后不再列。"""
+    try:
+        await candidates.reject(candidate_id=int(candidate_id), at_ms=now_ms())
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return LedgerMutationResponse(success=True, detail="已驳回，以后不再列这一条")
 
 
 __all__ = ["router"]

@@ -94,6 +94,7 @@ class DashboardServer:
         archive_repo: Optional[Any] = None,
         memory_cue_log_repo: Optional[Any] = None,
         memory_review_repo: Optional[Any] = None,
+        viewer_candidate_repo: Optional[Any] = None,
         embedding_setup: Optional[Any] = None,
         rundown_transition_repo: Optional[Any] = None,
         storage_db_path: Optional[Path] = None,
@@ -180,6 +181,8 @@ class DashboardServer:
         self.memory_cue_log_repo = memory_cue_log_repo
         # 记忆页人工审核：改标题、标稳定、放回、新增、标已审（未注入时这些端点返回 503）
         self.memory_review_repo = memory_review_repo
+        # 记忆页观众候选审核区：待审列表、批准、驳回（未注入时这些端点返回 503）
+        self.viewer_candidate_repo = viewer_candidate_repo
         # 注入嵌入服务的装配结果让 /api/v1/llm/embedding 报语义检索实际开没开；未注入时报"没有装配"
         self.embedding_setup = embedding_setup
         # 注入 RundownTransitionRepo 让 /live-sessions/{id}/rundown-execution

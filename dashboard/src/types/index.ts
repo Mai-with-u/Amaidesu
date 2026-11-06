@@ -1497,8 +1497,46 @@ export interface ArchiveLineCreatePayload {
   lasting: boolean;
 }
 
-/** 整理时没能登记的条目类型：承诺 / 档案行 */
-export type UnregisteredKind = 'commitment' | 'archive';
+/** 整理时没能登记的条目类型：承诺 / 档案行 / 观众候选 */
+export type UnregisteredKind = 'commitment' | 'archive' | 'candidate';
+
+/** 观众候选类型：观众定下的 / 她说欠着的 */
+export type CandidateKind = 'viewer_defined' | 'claimed_missing';
+
+/** 观众候选状态：待审 / 已批 / 已驳回 */
+export type CandidateStatus = 'pending' | 'approved' | 'rejected';
+
+/** 观众候选的一行：人批准才进记忆 */
+export interface CandidateItem {
+  id: number;
+  live_session_id: number;
+  kind: CandidateKind;
+  /** 标题（不写观众昵称） */
+  title: string;
+  /** 观众那条弹幕里定下这件事的那一段（已知昵称已遮成某位观众）；她说欠着的一类可能为空 */
+  viewer_quote: string;
+  /** 她那句回应（或说欠着的那句）的逐字片段 */
+  reply_quote: string;
+  game: string | null;
+  save_name: string;
+  status: CandidateStatus;
+  created_at_ms: number;
+  decided_at_ms: number | null;
+  archive_line_id: number | null;
+  commitment_id: number | null;
+}
+
+/** 观众候选列表与待审数 */
+export interface CandidateListResponse {
+  items: CandidateItem[];
+  pending_count: number;
+}
+
+/** 批准一条候选：可改标题；观众定下的可标稳定 */
+export interface CandidateApprovePayload {
+  title?: string;
+  lasting?: boolean;
+}
 
 /** 整理时看懂了却没能登记的条目：留原话给运营者判断要不要手建 */
 export interface UnregisteredItem {
@@ -1528,6 +1566,10 @@ export interface SettleReport {
   failure_reason: string | null;
   unregistered: UnregisteredItem[];
   snapshot_changes: SnapshotChange[];
+  /** 这一场列进待审区的观众候选数（按类型） */
+  candidates_listed?: Partial<Record<CandidateKind, number>>;
+  /** 因含观众个人信息被代码丢掉的候选数（内容不写进报告） */
+  candidates_personal_dropped?: number;
 }
 
 /** 一场正式场的整理状态（GET /api/v1/memory/settle） */
