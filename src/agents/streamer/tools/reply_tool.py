@@ -25,6 +25,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, ClassVar, Dict, Iterable, List, Optional
 
+from src.agents.streamer.speech_guard import strip_memory_numbers
 from src.agents.streamer.topic_gate import SpeechGate
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.planner import PlannerVerdictPayload
@@ -320,10 +321,17 @@ class ReplyToolProvider(BaseToolProvider):
         # 裁决时刻即时事实：reply 被调用即 Planner 已决定回应（表达生成之前）
         await self._emit_verdict(args, round_id=invocation.round_id)
 
-        topic_summary = str(args.get("topic_summary", "") or "")
-        reply_guidance = str(args.get("reply_guidance", "") or "")
+        # 房管写交接稿时可能照抄简报里的 档#N、约#N：交给说话侧之前去掉，她看不到编号就不会念出来
+        topic_summary, numbers_in_topic = strip_memory_numbers(str(args.get("topic_summary", "") or ""))
+        reply_guidance, numbers_in_guidance = strip_memory_numbers(str(args.get("reply_guidance", "") or ""))
         raw_target = args.get("target", None)
-        target = raw_target if isinstance(raw_target, str) else None
+        target: Optional[str] = None
+        numbers_in_target = 0
+        if isinstance(raw_target, str):
+            target, numbers_in_target = strip_memory_numbers(raw_target)
+        stripped = numbers_in_topic + numbers_in_guidance + numbers_in_target
+        if stripped:
+            self._logger.info(f"reply_tool: 交接稿里带了 {stripped} 处记忆编号，交给说话侧之前去掉了")
 
         # 新颖自检（第一道闸）：false 或未如实申报布尔值都立即打回，防绕过
         declared_novel = args.get("is_novel")

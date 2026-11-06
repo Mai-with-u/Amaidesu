@@ -22,7 +22,7 @@ from src.modules.logging import get_logger
 from . import canonical
 from .persona_rules import boundaries_line
 from .plan import DecisionPlan
-from .speech_guard import WordFilter, apply_word_filter, fit_to_budget
+from .speech_guard import WordFilter, apply_word_filter, fit_to_budget, strip_memory_numbers
 from .timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE
 
 # 默认人设兜底值（cold-start 兜底：构造 config 未提供对应字段时使用）
@@ -211,6 +211,10 @@ class Replyer:
             return None
 
         speech = _plain_text_speech(response.content)
+        # 交接稿里的编号已经洗过，她仍写出 档#N、约#N 说明有别的漏口：去掉并记警告，念出来观众听不懂
+        speech, numbers = strip_memory_numbers(speech)
+        if numbers:
+            self.logger.warning(f"Replyer 台词里出现 {numbers} 处记忆编号，已去掉: {speech[:50]!r}")
         if not speech:
             self.logger.warning("Replyer 返回空台词，本轮不发声")
             return None

@@ -283,3 +283,16 @@ async def test_word_filter_inside_the_replyer_drops_the_whole_line_or_keeps_the_
     replyer, _, _ = _replyer("这是脏话测试", word_filter=word_filter)
     result = await replyer.generate(_plan(), [])
     assert (result["speech"] if result else None) == speech
+
+
+async def test_memory_numbers_in_speech_are_removed_with_a_warning(loguru_capture: Any) -> None:
+    """交接稿洗过以后她仍写出 档#N、约#N：台词里去掉再出声，并记一条警告方便追查漏口。"""
+    replyer, _, _ = _replyer("上次说好的倒立洗头[档#12]，还有约#3那个猫窝")
+    result = await replyer.generate(_plan(), [])
+    assert result["speech"] == "上次说好的倒立洗头，还有那个猫窝"
+    assert any("记忆编号" in record["message"] for record in loguru_capture.records if record["level"] == "WARNING")
+
+
+async def test_speech_that_is_only_a_memory_number_becomes_silence() -> None:
+    replyer, _, _ = _replyer("[档#12]")
+    assert await replyer.generate(_plan(), []) is None

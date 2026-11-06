@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from src.agents.streamer.speech_guard import WordFilter, apply_word_filter, fit_to_budget, guard
+import pytest
+
+from src.agents.streamer.speech_guard import WordFilter, apply_word_filter, fit_to_budget, guard, strip_memory_numbers
 from src.agents.streamer.topic_gate import SpeechGate
 
 
@@ -39,3 +41,19 @@ def test_guard_truncates_to_budget_before_other_checks() -> None:
     assert verdict.text == fit_to_budget(long_text, 12)
     # 预算为 0 = 不截短
     assert guard(long_text, [], speech_max_chars=0, word_filter=None, gate=SpeechGate()).text == long_text
+
+
+@pytest.mark.parametrize(
+    ("text", "expected", "count"),
+    [
+        ("提一下[档#12]倒立洗头那件事", "提一下倒立洗头那件事", 1),
+        ("[档#12·上一场] 猜谜输了要倒立洗头", "猜谜输了要倒立洗头", 1),
+        ("顺着档#41和约#7往下说", "顺着和往下说", 2),
+        ("兑现承诺（约#3）给猫做窝", "兑现承诺给猫做窝", 1),
+        ("全角【档＃5】也算", "全角也算", 1),
+        ("没有编号的一句话", "没有编号的一句话", 0),
+        ("约定好了#1名", "约定好了#1名", 0),  # "约"后面不是紧跟井号，不是编号
+    ],
+)
+def test_strip_memory_numbers_removes_archive_and_commitment_numbers(text: str, expected: str, count: int) -> None:
+    assert strip_memory_numbers(text) == (expected, count)

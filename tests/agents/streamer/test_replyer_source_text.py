@@ -261,3 +261,35 @@ async def test_executor_splits_game_chat_view() -> None:
     kwargs = planner.plan.await_args.kwargs
     assert kwargs["game_batch"].events == ("[20:01 minecraft] 玩家 Steve：在吗",)
     assert kwargs["game_batch"].fresh_chat == ("[20:01 minecraft] 玩家 Steve：在吗",)
+
+
+class _PlanRecordingReplyer:
+    """表达层桩：记下 reply 工具交来的交接稿。"""
+
+    def __init__(self) -> None:
+        self.plans: List[DecisionPlan] = []
+
+    async def generate(self, **kwargs: Any) -> Dict[str, Any]:
+        self.plans.append(kwargs["plan"])
+        return {"speech": "说好的倒立洗头还欠着呢", "llm_request_id": None}
+
+
+async def test_reply_tool_strips_memory_numbers_from_the_handoff() -> None:
+    """房管照抄简报里的编号写进交接稿：交给说话侧之前去掉，她看不到就不会念出来。"""
+    replyer = _PlanRecordingReplyer()
+    provider = ReplyToolProvider(replyer=cast(Replyer, replyer))
+    arguments = {
+        "topic_summary": "[档#12·上一场] 倒立洗头",
+        "reply_guidance": "顺着档#12和约#3提一句，别展开",
+        "target": "约#3 的那位",
+        "is_novel": True,
+        "emotion": "happy",
+        "intensity": 0.5,
+    }
+    result = await provider.invoke(
+        ToolInvocation(tool_name="streamer_reply", arguments=arguments, source="planner-react")
+    )
+    assert result.success is True
+    (plan,) = replyer.plans
+    assert (plan.topic_summary, plan.reply_guidance, plan.target) == ("倒立洗头", "顺着和提一句，别展开", "的那位")
+    assert "#" not in str(result.structured_content["metadata"])
