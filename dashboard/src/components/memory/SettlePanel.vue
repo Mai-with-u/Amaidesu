@@ -89,6 +89,9 @@
             )
           }}
         </p>
+        <p v-if="sideEffectText(row.settle_report?.side_effects)" class="settle-meta">
+          唠叨指标：{{ sideEffectText(row.settle_report?.side_effects) }}
+        </p>
         <p v-if="row.settle_report?.failure_reason" class="settle-failure">
           失败原因：{{ row.settle_report?.failure_reason }}
         </p>
@@ -179,6 +182,7 @@ import {
   settleAttemptsText,
   reviewStateLabel,
   settleStateLabel,
+  sideEffectText,
   snapshotChangeLabel,
   unregisteredKindLabel,
 } from './ledgerView';

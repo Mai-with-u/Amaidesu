@@ -518,6 +518,8 @@ class StreamerAgent(BaseAgent):
                 min_session_ms=self.typed_config.memory_brief_min_session_ms,
                 # 游戏里的人：对玩家的承诺按台词记下的回应对象、公屏点名与紧接着回话核对
                 game_player_repo=game_player_repo,
+                # 唠叨指标里线索卡那几项：推了几张、用上几张、只由她自己的台词触发的几张
+                cue_log_repo=memory_cue_log_repo,
             )
 
         # 记忆检索索引：后台补算全文（必开）与向量（配置了嵌入服务才开）；整理写完时叫醒补一轮。

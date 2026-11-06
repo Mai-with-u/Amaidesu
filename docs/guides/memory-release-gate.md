@@ -70,6 +70,8 @@ uv run python scripts/memory_eval/game_players.py --live --out reports/game-play
 
 被动想起的语义阈值（余弦 0.65）还没有离线检索评测集校准；检索评测集做好之前，这一项按测试直播的线索卡记录人工看，不设自动门槛。
 
+**唠叨指标**（同一件旧事一场提几次、没人问时每小时主动提几次、半小时内绕回三次的条目、线索卡用上几张）每场整理时写进整理报告，记忆页整理面板显示，超过建议值的标"偏多"；还没有这一节的旧场次用 `scripts/memory_eval/live_side_effects.py` 在库副本上补算。前 3 场测试直播只报告、不拦发版，之后按实测数字定阈值再进门槛。
+
 ## 2. 留出集必须由没看过提示词的人重写
 
 现有留出集与合成集出自同一作者、同一套口径，按方案只能当上限参考。门槛要求：找一位**没有看过 `src/agents/streamer/prompts/memory_*.md` 与校验规则**的同事，按 [样本格式](../../scripts/memory_eval/README.md#样本格式) 重写 `scripts/memory_eval/datasets/holdout.jsonl`（至少 10 条，覆盖长句、口语、闲聊中夹承诺、提旧承诺又说一遍、转述），写完再跑一次第 1 步。

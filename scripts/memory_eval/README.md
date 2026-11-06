@@ -29,6 +29,7 @@ scripts/memory_eval/
   claimed_missing.py            她说欠着的评测的 dry / live 两个入口
   game_players.py               游戏里的人评测的 dry（含对号核对）/ live 两个入口
   viewer_candidates.py          观众候选评测的 dry / live 两个入口
+  live_side_effects.py          直播库上复算唠叨指标（只读，只出编号和数字）与 `--selftest`
   README.md                     本文件
 ```
 
@@ -325,6 +326,25 @@ uv run python scripts/memory_eval/viewer_candidates.py --live --out reports/view
 {"id": "vc-01", "group": "should_list", "tags": ["起名"],
  "speech": [{"n": 1, "clock": "20:02", "text": "……", "reply": {"viewer": "v1", "text": "……"}}],
  "expect": {"lines": [1], "personal": [], "words": {"1": "……"}}}
+```
+
+## 唠叨指标（live_side_effects.py）
+
+记忆每多记住一点，就要量一次她有没有因此更唠叨。指标和下播整理写进报告的是同一个函数（`src/agents/streamer/memory/side_effects.py`），这个脚本只是换个取料口：只读打开一份导出的直播库，按场复算，给还没有这一节报告的旧场次补基线。
+
+| 指标 | 建议值（只报告） |
+| --- | --- |
+| 同一条一场被点名的最多次数 | ≤ 3 |
+| 每条被点名次数的 95 分位 | ≤ 2 |
+| 没人问时主动点名（不在回应观众或玩家，前一分钟也没人提到同一条），每小时 | ≤ 4 |
+| 半小时内被点名三次及以上的条目 | 0 |
+| 同一位游戏玩家一场被推卡 | ≤ 2 |
+
+线索卡按卡类报推了几张、用上几张，以及只由她自己的台词触发的张数。输出只有编号和数字，报告不入库。
+
+```bash
+uv run python scripts/memory_eval/live_side_effects.py <直播库副本> --last 5
+uv run python scripts/memory_eval/live_side_effects.py --selftest
 ```
 
 ## 档案快照多场序列（archive_rolling.py）

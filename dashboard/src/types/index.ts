@@ -1639,6 +1639,37 @@ export interface SettleReport {
   candidates_listed?: Partial<Record<CandidateKind, number>>;
   /** 因含观众个人信息被代码丢掉的候选数（内容不写进报告） */
   candidates_personal_dropped?: number;
+  /** 这一场的唠叨指标；本场没点名旧事也没推卡时为 null */
+  side_effects?: SideEffectStats | null;
+}
+
+/** 一类线索卡这一场推了几张、她点名用上几张 */
+export interface CardKindStat {
+  pushed: number;
+  used: number;
+}
+
+/** 一场的唠叨指标：只有编号和数字，和召回成对看 */
+export interface SideEffectStats {
+  /** 台词点名旧事的次数（一句点两条算两次） */
+  mentions: number;
+  /** 被点名的不同条目数 */
+  items: number;
+  /** 同一条被点名最多的次数与那条的编号 */
+  max_per_item: number;
+  max_item: string;
+  p95_per_item: number;
+  /** 没人问时主动点名的次数与每小时次数 */
+  unprompted: number;
+  unprompted_per_hour: number;
+  /** 任意 30 分钟里被点名 3 次及以上的条目数 */
+  circling_items: number;
+  /** 线索卡按卡类推了几张、用上几张 */
+  cards: Record<string, CardKindStat>;
+  /** 只由她自己的台词触发的卡数 */
+  self_triggered_cards: number;
+  /** 同一位游戏玩家被推卡最多的张数 */
+  max_cards_per_player: number;
 }
 
 /** 一场正式场的整理状态（GET /api/v1/memory/settle） */

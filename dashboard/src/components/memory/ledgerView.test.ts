@@ -13,6 +13,7 @@ import {
   commitmentTargetLabel,
   gameSaveLabel,
   hasLaterSettledSession,
+  sideEffectText,
   nearestCommitmentsText,
   isPinFull,
   pinnedFullHint,
@@ -187,6 +188,36 @@ describe('观众候选', () => {
     );
     expect(candidateReportText(undefined, undefined)).toBeNull();
     expect(candidateReportText({}, 0)).toBeNull();
+  });
+
+  it('整理报告里的唠叨指标一句话：超过建议值的标偏多，没点名也没推卡不出这一句', () => {
+    const stats = {
+      mentions: 22,
+      items: 14,
+      max_per_item: 2,
+      max_item: '档#34',
+      p95_per_item: 2,
+      unprompted: 22,
+      unprompted_per_hour: 11.25,
+      circling_items: 0,
+      cards: { game: { pushed: 8, used: 4 }, vector: { pushed: 2, used: 0 } },
+      self_triggered_cards: 0,
+      max_cards_per_player: 0,
+    };
+    expect(sideEffectText(stats)).toBe(
+      '点名旧事 22 次、14 条，同一条最多 2 次；没人问时主动提 22 次（每小时 11.25 次）（偏多）；线索卡推了 10 张、用上 4 张',
+    );
+    expect(
+      sideEffectText({
+        ...stats,
+        mentions: 0,
+        cards: {},
+        max_cards_per_player: 3,
+        self_triggered_cards: 0,
+      }),
+    ).toBe('同一位玩家被推卡 3 张（偏多）');
+    expect(sideEffectText(null)).toBeNull();
+    expect(sideEffectText({ ...stats, mentions: 0, cards: {} })).toBeNull();
   });
 
   it('她说欠着的：旁边列账上最接近的几条，一条不沾时提醒可能是编的', () => {

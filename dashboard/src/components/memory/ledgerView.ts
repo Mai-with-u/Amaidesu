@@ -13,6 +13,7 @@ import type {
   CommitmentStatus,
   NearCommitment,
   SettleSessionItem,
+  SideEffectStats,
   SnapshotChangeAction,
   UnregisteredKind,
 } from '@/types';
@@ -138,6 +139,41 @@ export function candidateReportText(
   const head = parts.length ? `列进待审区：${parts.join('、')}` : '';
   const tail = personalDropped ? `含观众个人信息丢掉 ${personalDropped} 条` : '';
   return [head, tail].filter(Boolean).join('；') || null;
+}
+
+/** 唠叨指标的建议阈值：只在文案里标"偏多"，不拦人；前几场测试直播的实测出来后再定 */
+const NAGGING_LIMITS = { maxPerItem: 3, unpromptedPerHour: 4, cardsPerPlayer: 2 } as const;
+
+/** 整理报告里的唠叨指标一句话：同一件旧事提了几次、没人问时主动提几次、推的卡用上几张；都没有返回 null */
+export function sideEffectText(stats: SideEffectStats | null | undefined): string | null {
+  if (!stats) return null;
+  const over = (flag: boolean) => (flag ? '（偏多）' : '');
+  const parts: string[] = [];
+  if (stats.mentions) {
+    parts.push(
+      `点名旧事 ${stats.mentions} 次、${stats.items} 条，同一条最多 ${stats.max_per_item} 次` +
+        over(stats.max_per_item > NAGGING_LIMITS.maxPerItem),
+    );
+    parts.push(
+      `没人问时主动提 ${stats.unprompted} 次（每小时 ${stats.unprompted_per_hour} 次）` +
+        over(stats.unprompted_per_hour > NAGGING_LIMITS.unpromptedPerHour),
+    );
+    // 围着一件事绕：任意半小时里同一条提了三次，出现就算偏多
+    if (stats.circling_items) parts.push(`半小时内提了三次的 ${stats.circling_items} 条（偏多）`);
+  }
+  const cards = Object.values(stats.cards ?? {});
+  if (cards.length) {
+    const pushed = cards.reduce((sum, item) => sum + item.pushed, 0);
+    const used = cards.reduce((sum, item) => sum + item.used, 0);
+    const self = stats.self_triggered_cards
+      ? `，只由她自己的话触发 ${stats.self_triggered_cards} 张`
+      : '';
+    parts.push(`线索卡推了 ${pushed} 张、用上 ${used} 张${self}`);
+  }
+  if (stats.max_cards_per_player > NAGGING_LIMITS.cardsPerPlayer) {
+    parts.push(`同一位玩家被推卡 ${stats.max_cards_per_player} 张（偏多）`);
+  }
+  return parts.join('；') || null;
 }
 
 /** 档案快照改动 → 页面标签 */

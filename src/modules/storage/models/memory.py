@@ -236,6 +236,41 @@ class SnapshotChange(BaseModel):
     quote: str = Field(default="", description="本场作证据的那句台词原文（去掉、替换时）")
 
 
+class CardKindStat(BaseModel):
+    """某一类线索卡这一场推了几张、她点名用上几张。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pushed: int = Field(default=0, description="推出去的张数")
+    used: int = Field(default=0, description="其中她点名用上的张数")
+
+
+class SideEffectStats(BaseModel):
+    """一场的"别唠叨"指标：和"记得住"成对看，召回调高了，这几项不能跟着变差。
+
+    只有编号和数字，不带台词原文与观众身份：报告会在 WebUI 显示，也会被整场导出。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mentions: int = Field(default=0, description="本场台词点名旧事的次数（一句点两条算两次）")
+    items: int = Field(default=0, description="被点名的不同条目数")
+    max_per_item: int = Field(default=0, description="同一条被点名最多的次数")
+    max_item: str = Field(default="", description="被点名最多的那条的编号（档#N / 约#N），并列取先出现的")
+    p95_per_item: int = Field(default=0, description="每条被点名次数的 95 分位（只算被点过名的条目）")
+    unprompted: int = Field(
+        default=0, description="没人问时主动点名的次数：不在回应观众或玩家，前一分钟也没有人提到同一条"
+    )
+    unprompted_per_hour: float = Field(default=0.0, description="上一项按本场时长折成每小时几次")
+    circling_items: int = Field(default=0, description="在任意 30 分钟里被点名 3 次及以上的条目数（围着一件事绕）")
+    cards: Dict[str, CardKindStat] = Field(
+        default_factory=dict,
+        description="线索卡按卡类（viewer / player / game / place / rule / vector / joke）推了几张、用上几张",
+    )
+    self_triggered_cards: int = Field(default=0, description="只由她自己的台词触发的卡数（防打转的口径）")
+    max_cards_per_player: int = Field(default=0, description="同一位游戏玩家这一场被推卡最多的张数")
+
+
 class SettleReport(BaseModel):
     """一场的整理报告：失败原因，或成功时那些没能登记的条目与原料裁剪说明。"""
 
@@ -254,6 +289,10 @@ class SettleReport(BaseModel):
     )
     candidates_personal_dropped: int = Field(
         default=0, description="因含观众个人信息被代码丢掉的候选数（内容不写进报告）"
+    )
+    side_effects: Optional[SideEffectStats] = Field(
+        default=None,
+        description="这一场的唠叨指标（点名旧事几次、没人问时提几次、线索卡用上几张）；本场没点名也没推卡为 None",
     )
 
 

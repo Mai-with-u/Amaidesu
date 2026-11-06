@@ -19,7 +19,7 @@ from src.agents.streamer.memory.settle import MAX_ATTEMPTS, SessionSettler, Sett
 from src.modules.llm.payload import Response
 from src.modules.prompts import PromptManager
 from src.modules.storage.database import SQLiteDatabase
-from src.modules.storage.models.memory import SettleReport
+from src.modules.storage.models.memory import NewCueLogEntry, SettleReport
 from tests.modules.llm.fakes import FakeLLMManager
 
 
@@ -1444,3 +1444,50 @@ async def test_rejected_candidates_and_archived_lines_are_not_listed_again(
         ("给小羊起名雪球", "pending"),
         ("猫取名芝麻", "rejected"),
     ]
+
+
+async def test_report_carries_nagging_stats_from_named_memories_and_cards(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """唠叨指标和整理一起写进报告：同一条点了两次、没人问时主动提、推出去的卡用上几张。"""
+    session_id = await _ended_session(store)
+    promise = await store.commitments.insert_commitment(what="给小猫做个窝", quote="下次给小猫做个窝", now_ms_value=100)
+    assert promise is not None
+    refs = f'["约#{promise}"]'
+    await _speech(store, session_id, "小猫的窝还欠着呢", timestamp_ms=1_100, memory_refs=refs)
+    await _speech(store, session_id, "窝的事我记着呢", timestamp_ms=1_300, memory_refs=refs)
+    await store.memory_cue_log.insert_entries(
+        entries=[
+            NewCueLogEntry(
+                live_session_id=session_id,
+                pushed_at_ms=1_000,
+                card_kind="rule",
+                commitment_id=promise,
+                sources=["self"],
+                self_triggered=True,
+            )
+        ]
+    )
+    await store.memory_cue_log.mark_used(live_session_id=session_id, commitment_ids=[promise], used_at_ms=1_100)
+    llm = _reply('{"archive": []}', '{"commitments": []}', '{"closed": []}')
+    settler = SessionSettler(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
+        llm_service=llm,
+        prompt_manager=prompt_manager,
+        clock=lambda: 7_777,
+        cue_log_repo=store.memory_cue_log,
+    )
+
+    assert await settler.settle_session(session_id) is True
+
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settle_report is not None
+    stats = SettleReport.model_validate_json(row.settle_report).side_effects
+    assert stats is not None
+    # 两句都没在回应谁，那张卡又是她自己的台词触发的：两次都算没人问时主动提
+    assert (stats.mentions, stats.max_per_item, stats.max_item, stats.unprompted) == (2, 2, f"约#{promise}", 2)
+    assert stats.cards["rule"].pushed == 1 and stats.cards["rule"].used == 1
+    assert stats.self_triggered_cards == 1

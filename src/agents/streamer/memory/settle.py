@@ -49,11 +49,13 @@ from src.modules.storage.models.memory import (
     ArchiveSnapshot,
     Commitment,
     CommitmentClosure,
+    CueLogEntry,
     KeptSnapshotLine,
     PendingArchiveLine,
     PendingCommitment,
     PendingViewerCandidate,
     SettleReport,
+    SideEffectStats,
     SnapshotChange,
     SnapshotLine,
     UnregisteredItem,
@@ -65,6 +67,7 @@ from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.agents.streamer.memory.render import memory_ref_numbers, render_commitment_number
 from src.agents.streamer.memory.rolling import plan_from_ops, render_base, select_snapshot
 from src.agents.streamer.memory.saves import SaveTimeline
+from src.agents.streamer.memory.side_effects import compute_side_effects
 from src.agents.streamer.memory.settle_candidates import (
     CandidateCheck,
     taken_from,
@@ -83,6 +86,7 @@ if TYPE_CHECKING:
     from src.modules.storage.models.game_players import GameChatLine, GamePlayer
     from src.modules.storage.repos.events import EventRepo
     from src.modules.storage.repos.game_players import GamePlayerRepo
+    from src.modules.storage.repos.memory_cue_log import MemoryCueLogRepo
     from src.modules.storage.repos.sessions import SessionRepo
 
 __all__ = ["MAX_ATTEMPTS", "SessionSettler", "SettleError", "parse_json_object"]
@@ -433,6 +437,7 @@ class SessionSettler:
         min_session_ms: int = 0,
         clock: Callable[[], int] = now_ms,
         game_player_repo: Optional["GamePlayerRepo"] = None,
+        cue_log_repo: Optional["MemoryCueLogRepo"] = None,
     ) -> None:
         """仓储、模型与提示词由主播 Agent 构造时注入。
 
@@ -440,7 +445,8 @@ class SessionSettler:
         可接，本场快照只有本场的事；game_names_provider 返回当前对主播可见的游戏 Agent 名，
         用来写「她能做的事」；min_session_ms 与常驻简报的"上一场"时长下限同一个值，滚动之前
         的旧场次现拼基底时用来数"时长够的场次"。game_player_repo 缺失时原料里没有游戏玩家与公屏，
-        对玩家的承诺一条也认不出（模型写了也进未登记）。
+        对玩家的承诺一条也认不出（模型写了也进未登记）。cue_log_repo 缺失时唠叨指标只按台词
+        点名算，线索卡那几项为空。
         """
         self._sessions = sessions_repo
         self._chat = chat_repo
@@ -451,6 +457,7 @@ class SessionSettler:
         self._prompt_manager = prompt_manager
         self._game_names_provider = game_names_provider
         self._players = game_player_repo
+        self._cue_log = cue_log_repo
         self._min_session_ms = max(0, int(min_session_ms))
         self._clock = clock
         # 场次主键 → 在途整理任务：同一场的并发触发共享这个任务，只付一次模型调用
@@ -576,6 +583,8 @@ class SessionSettler:
             snapshot_changes=outcome.snapshot_changes,
             candidates_listed=listed,
             candidates_personal_dropped=outcome.candidates_personal_dropped,
+            # 唠叨指标和本场整理一起写：同一件旧事提了几次、没人问时主动提几次、推的卡用上几张
+            side_effects=await self._side_effects(session, delivered),
         )
         has_report = bool(
             outcome.unregistered
@@ -583,6 +592,7 @@ class SessionSettler:
             or outcome.snapshot_changes
             or listed
             or outcome.candidates_personal_dropped
+            or report.side_effects
         )
         now = int(self._clock())
         try:
@@ -615,6 +625,17 @@ class SessionSettler:
             f"未登记 {len(outcome.unregistered)} 条、观众候选 {written.get('candidates', 0)} 条"
         )
         return True
+
+    async def _side_effects(self, session: LiveSession, delivered: List[SettleSpeechLine]) -> Optional[SideEffectStats]:
+        """本场的唠叨指标；读线索卡记录失败时只按台词点名算，不拖累整理。"""
+        cards: List[CueLogEntry] = []
+        if self._cue_log is not None:
+            try:
+                cards = await self._cue_log.list_session_entries(live_session_id=int(session.id))
+            except Exception as exc:  # noqa: BLE001 - 指标是附带的，读不到卡照样整理
+                logger.warning(f"场次 {session.id} 读线索卡记录失败，唠叨指标不含线索卡: {exc}", exc=exc)
+        duration_ms = int(session.ended_at_ms or session.started_at_ms) - int(session.started_at_ms)
+        return compute_side_effects(delivered, cards, duration_ms=duration_ms)
 
     async def _mark_done(self, session: LiveSession, *, note: str) -> bool:
         """直接标成已整理（没有播出台词、不用调模型）。"""
