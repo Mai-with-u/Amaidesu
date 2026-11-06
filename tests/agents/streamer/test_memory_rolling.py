@@ -163,6 +163,57 @@ def test_duplicate_row_can_go_without_evidence_and_survivor_inherits_stable_flag
     assert plan.changes[3].reason == "与旧4重复（旧4本场已被替换或去掉）"
 
 
+def test_two_rows_naming_each_other_as_duplicates_keep_one() -> None:
+    """两行互相注明与对方重复：先落地的那条去掉一行，后一条不采纳，事实由留下的那一行接着、继承"稳定"。"""
+    base = [_old(1, lasting=True), _old(2)]
+
+    plan = _plan([{"old": 1, "op": "drop", "same_as": 2}, {"old": 2, "op": "drop", "same_as": 1}], base)
+
+    assert [(item.line.id, item.lasting) for item in plan.kept] == [(2, True)]
+    assert [(change.action, change.what, change.reason) for change in plan.changes] == [
+        ("drop", "旧事1", "与旧2重复"),
+        ("refused", "旧事2", "注明重复的那一行也按重复去掉了，旧行保留"),
+    ]
+
+
+def test_duplicates_in_a_cycle_never_remove_every_row() -> None:
+    """A→B→C→A 绕成一圈：前两条依次去掉，最后一条指向已按重复去掉的行，不采纳；圈里至少留下一行，
+    "稳定"沿着去掉的方向传给留下的那一行。"""
+    base = [_old(1, lasting=True), _old(2), _old(3)]
+
+    plan = _plan(
+        [
+            {"old": 1, "op": "drop", "same_as": 2},
+            {"old": 2, "op": "drop", "same_as": 3},
+            {"old": 3, "op": "drop", "same_as": 1},
+        ],
+        base,
+    )
+
+    assert [(item.line.id, item.lasting) for item in plan.kept] == [(3, True)]
+    assert [change.action for change in plan.changes] == ["drop", "drop", "refused"]
+
+
+def test_replacement_inherits_the_stable_flag_unless_the_model_says_otherwise() -> None:
+    """替换掉稳定的旧行时新行也算稳定；模型明确写 lasting:false 的照它；替换普通旧行的仍是普通行。"""
+    base = [_old(1, lasting=True), _old(2, lasting=True), _old(3)]
+
+    plan = _plan(
+        [
+            {"old": 1, "op": "replace", "line": 2, "title": "团子会捡东西", "quote": "帮我捡了一堆东西"},
+            {"old": 2, "op": "replace", "line": 2, "title": "团子又捡东西", "quote": "团子今天", "lasting": False},
+            {"old": 3, "op": "replace", "line": 1, "title": "菜地不要了", "quote": "那块菜地"},
+        ],
+        base,
+    )
+
+    assert [(line.text, line.lasting) for line in plan.replacements] == [
+        ("团子会捡东西", True),
+        ("团子又捡东西", False),
+        ("菜地不要了", False),
+    ]
+
+
 def test_unknown_numbers_repeated_rows_and_unknown_ops_are_refused() -> None:
     """认不出的编号、同一行第二个操作、看不懂的操作都不采纳，旧行照留。"""
     base = [_old(1)]

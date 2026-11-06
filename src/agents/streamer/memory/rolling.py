@@ -9,8 +9,10 @@
    - 去掉：理由要写明是了结、不成立、记错还是被取代，并指出本场哪一行台词是证据（代码核对
      这一行确实是本场播出的台词）；"这场没提到""一次性的事"都不算理由；同一件事在上一份
      里写了两行时，可以注明与哪一行重复（``same_as``）去掉其中一行：事实由留下的那一行接着；
-     那一行本场被替换或去掉了，这一行跟着它走（替换出的新行接着这件事，去掉用的是同一份证据）；
-   - 替换：给本场一行台词里的逐字原话，过与新事同一个校验器，通过才换掉旧行；
+     那一行本场被替换或带证据去掉了，这一行跟着它走（替换出的新行接着这件事，去掉用的是同一份
+     证据）；那一行自己也是按重复去掉的（互指、绕成一圈），这一条不采纳，免得几行一起没了；
+   - 替换：给本场一行台词里的逐字原话，过与新事同一个校验器，通过才换掉旧行；被换掉的是稳定的
+     事，新行也算稳定（模型明确写了不稳定的除外）；
    不合规的操作不采纳、旧行照留，连同理由写进整理报告——既没被合格地去掉、也没被替换的旧行
    一律留着，不靠提示词让模型自觉"宁多勿少"；
 3. 代码按固定规则取舍（:func:`select_snapshot`），至多 :data:`MAX_SNAPSHOT_LINES` 行：
@@ -77,6 +79,7 @@ _REFUSED_NOT_MENTIONED = "这场没提到不算去掉的理由，旧行保留"
 _REFUSED_DROP_KIND = "去掉的理由要写明是了结、不成立、记错还是被取代，旧行保留"
 _REFUSED_REPLACE = "替换的新行没通过校验，旧行保留"
 _REFUSED_SAME_AS = "注明重复的那一行编号不对，旧行保留"
+_REFUSED_SAME_AS_GONE = "注明重复的那一行也按重复去掉了，旧行保留"
 _EVICTED_OLD = f"超过 {MAX_SNAPSHOT_LINES} 行，最久没被再提的先出"
 _EVICTED_NEW = "本场新事超出上限：写成本场档案行，不进快照"
 
@@ -150,6 +153,8 @@ def plan_from_ops(
         raise ValueError("模型输出的 previous 不是列表")
     updated: Dict[int, SnapshotLine] = {}
     removed: Set[int] = set()
+    # 本场被替换或带证据去掉的行：按重复去掉的行只能"跟着"这些行走，不能跟着另一条重复去掉的行
+    settled: Set[int] = set()
     handled: Set[int] = set()
     # (要去掉的行, 与它重复的行, 理由)：等别的操作都落地后再定，才知道那一行是留着还是本场被换掉了
     duplicates: List[Tuple[int, int, str]] = []
@@ -203,6 +208,7 @@ def plan_from_ops(
                 changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_DROP_KIND))
             else:
                 removed.add(index)
+                settled.add(index)
                 changes.append(SnapshotChange(action="drop", what=title, reason=reason, quote=_evidence(evidence)))
         elif op == "replace":
             # 替换：新行带本场原话、过新事校验器，通过才换掉旧行
@@ -210,7 +216,12 @@ def plan_from_ops(
             misses.extend(missed)
             if written:
                 removed.add(index)
-                replacements.append(written[0])
+                settled.add(index)
+                replacement = written[0]
+                # 被换掉的是稳定的事（名字、住处换了说法仍是稳定的事），新行也算稳定；模型明确写了不稳定的照它
+                if item.lasting and raw.get("lasting") is not False and not replacement.lasting:
+                    replacement = replacement.model_copy(update={"lasting": True})
+                replacements.append(replacement)
                 changes.append(
                     SnapshotChange(
                         action="replace", what=title, reason=f"换成：{written[0].text}", quote=written[0].quote
@@ -223,9 +234,13 @@ def plan_from_ops(
     for index, other, reason in duplicates:
         if index in removed:
             continue
+        if other in removed and other not in settled:
+            # 那一行自己也是按重复去掉的（互指或绕成一圈）：再跟着去掉，几行会一起没了，这一行留着
+            changes.append(SnapshotChange(action="refused", what=shown[index].line.text, reason=_REFUSED_SAME_AS_GONE))
+            continue
         removed.add(index)
-        if other in removed:
-            # 重复的那一行本场被替换或去掉了：这件事已由替换出的新行接着，或已由同一份证据了结
+        if other in settled:
+            # 重复的那一行本场被替换或带证据去掉了：这件事已由替换出的新行接着，或已由同一份证据了结
             reason = f"{reason}（{_OLD_PREFIX}{other + 1}本场已被替换或去掉）"
         else:
             # 重复的两行里有一行标了稳定，留下的那一行也算稳定
