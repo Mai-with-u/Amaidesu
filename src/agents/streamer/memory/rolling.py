@@ -6,7 +6,7 @@
 1. 上一份快照（:meth:`ArchiveRepo.snapshot_before`）编上"旧N"交给模型；
 2. 模型对旧行给出操作（没列出的行一律保留）：
    - 保留：可以注明本场哪一行又提到它（算"再提起"）、重标是否稳定的事；
-   - 去掉：理由要写明是了结、不成立、记错还是被取代，并指出本场哪一行台词是证据（代码核对
+   - 去掉：理由要以了结、不成立、记错、被取代四类之一开头，并指出本场哪一行台词是证据（代码核对
      这一行确实是本场播出的台词）；"这场没提到""一次性的事"都不算理由；同一件事在上一份
      里写了两行时，可以注明与哪一行重复（``same_as``）去掉其中一行：事实由留下的那一行接着；
      那一行本场被替换或带证据去掉了，这一行跟着它走（替换出的新行接着这件事，去掉用的是同一份
@@ -67,7 +67,8 @@ _OLD_PREFIX = "旧"
 _EVIDENCE_CHARS = 80
 # 去掉旧行时不算理由的说法："这场没提到"不能把前几场的事清掉
 _NOT_A_REASON = ("没提", "未提", "没有提", "没再提")
-# 去掉旧行只认这四类理由：做完了、不成立了、当初记错了、被本场的新事取代了
+# 去掉旧行只认这四类理由：做完了、不成立了、当初记错了、被本场的新事取代了。理由必须以其中一类开头，
+# 只查包含的话"还没了结"这种恰恰相反的说法也能混过去
 _DROP_KINDS = ("了结", "不成立", "记错", "被取代")
 
 # 模型给错操作时写进整理报告的固定措辞（旧行一律照留）
@@ -76,7 +77,7 @@ _REFUSED_REPEATED = "同一行给了不止一个操作，只认第一个"
 _REFUSED_UNKNOWN_OP = "看不懂的操作，旧行保留"
 _REFUSED_DROP_EVIDENCE = "去掉旧行要写理由并指出本场哪一行台词作证据，旧行保留"
 _REFUSED_NOT_MENTIONED = "这场没提到不算去掉的理由，旧行保留"
-_REFUSED_DROP_KIND = "去掉的理由要写明是了结、不成立、记错还是被取代，旧行保留"
+_REFUSED_DROP_KIND = "去掉的理由要以了结、不成立、记错或被取代开头，旧行保留"
 _REFUSED_REPLACE = "替换的新行没通过校验，旧行保留"
 _REFUSED_SAME_AS = "注明重复的那一行编号不对，旧行保留"
 _REFUSED_SAME_AS_GONE = "注明重复的那一行也按重复去掉了，旧行保留"
@@ -204,7 +205,7 @@ def plan_from_ops(
                 changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_DROP_EVIDENCE))
             elif any(marker in reason for marker in _NOT_A_REASON):
                 changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_NOT_MENTIONED))
-            elif not any(kind in reason for kind in _DROP_KINDS):
+            elif not reason.startswith(_DROP_KINDS):
                 changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_DROP_KIND))
             else:
                 removed.add(index)
