@@ -118,3 +118,11 @@ def test_prompt_template_tells_planner_to_admit_not_to_invent_for_prelude_direct
     assert "历史开头的【前情目录】列着已移出上下文的段落" in prompt
     assert "坦白记不清、可以问问弹幕，别凭目录一行编细节" in prompt
     assert "拿不准就先用 `memory_recall` 查本场说过的话" in prompt
+
+
+def test_prompt_template_reads_a_trailing_open_paren_as_a_joke(prompts: Any) -> None:
+    """句末单个"（"是玩笑口气、不是话没说完：第 58 场她两回追问"括号一开就撒手"，没听懂"那我家女仆（"。"""
+    prompt = _render_bare(prompts)
+
+    assert '句末单个"（"是语气，不是话没说完' in prompt
+    assert '"那我家女仆（"意思是"那是我家的女仆啦"' in prompt
