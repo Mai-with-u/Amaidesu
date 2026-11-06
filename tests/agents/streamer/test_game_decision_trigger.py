@@ -205,3 +205,32 @@ async def test_private_game_chat_reaches_planner_batch_but_never_timeline(live_a
     assert batch.fresh_chat == (batch.events[0],)  # 私聊不算可交给表达侧的原话
     # 私聊只带一窗：下一窗不再携带
     assert agent._scope.drain_window().private_chat == ()
+
+
+class _NameBook:
+    """线索推送替身：只记下主播交来的已知玩家名。"""
+
+    def __init__(self) -> None:
+        self.names: list[str] = []
+
+    def note_name(self, name: str) -> None:
+        self.names.append(name)
+
+
+async def test_game_chat_speakers_become_known_names_for_masking() -> None:
+    """游戏里说过话的玩家记成已知名字：游戏情境查询发给嵌入服务前把它换成"玩家"；系统消息不算。"""
+    bus = EventBus()
+    book = _NameBook()
+    agent = make_streamer_agent({}, event_bus=bus, memory_cues=book)
+    agent._subscribe_events()
+    agent._live_active = True
+    try:
+        system = GameChatPayload(game="minecraft", kind="system", content="Alex 请求传送到你这里", timestamp_ms=1_000)
+        player = GameChatPayload(game="minecraft", kind="player", sender="Steve", content="在吗", timestamp_ms=1_000)
+        await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, system, source="maicraft_chat")
+        await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, player, source="maicraft_chat")
+        await bus.wait_until_drained()
+
+        assert book.names == ["Steve"]
+    finally:
+        await bus.cleanup()

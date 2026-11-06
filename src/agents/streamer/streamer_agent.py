@@ -226,6 +226,7 @@ class StreamerAgent(BaseAgent):
         reply_provider: Optional[ReplyToolProvider] = None,
         session_scope: Optional[SessionScope] = None,
         mouth: Optional[Mouth] = None,
+        memory_cues: Optional[MemoryCueProvider] = None,
         events_dir: Optional[Path] = None,
     ) -> None:
         """初始化主播 Agent。
@@ -307,6 +308,8 @@ class StreamerAgent(BaseAgent):
                 按内建依赖装配；注入时账本/时间线等以替身自带为准。
             mouth: 可选 ``Mouth`` 替身（嘴）。``None`` 且配置关闭时不构造；
                 注入时忽略配置直接使用替身。
+            memory_cues: 可选 ``MemoryCueProvider`` 替身（线索推送）。``None`` 时有承诺与对话仓储
+                就按内建依赖装配；注入时直接使用替身。
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
@@ -522,8 +525,8 @@ class StreamerAgent(BaseAgent):
         # 常驻简报里标着编号的档案行（点名档案行的合法名单之一）
         self._memory_brief_archive_ids: tuple[int, ...] = ()
         # 线索推送：每批按弹幕与开着的游戏算"这一批想起来的事"；状态只活在本场
-        self._memory_cues: Optional[MemoryCueProvider] = None
-        if commitments_repo is not None and chat_repo is not None:
+        self._memory_cues: Optional[MemoryCueProvider] = memory_cues
+        if memory_cues is None and commitments_repo is not None and chat_repo is not None:
             self._memory_cues = MemoryCueProvider(
                 commitments_repo=commitments_repo,
                 chat_repo=chat_repo,
