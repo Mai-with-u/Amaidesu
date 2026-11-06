@@ -29,6 +29,30 @@ async def test_players_answer_503_when_not_wired(api) -> None:
     assert resp.status_code == 503 and resp.json()["detail"]
 
 
+async def test_viewer_detail_names_the_linked_players(api, store: SQLiteDatabase, privacy: PrivacyService) -> None:
+    """观众详情带上确认过关联的游戏玩家：删除对话框据此点名会一并删掉谁。"""
+    client = await api(
+        viewer_repo=store.viewers, chat_repo=store.chat, game_player_repo=store.game_players, privacy_service=privacy
+    )
+    session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    alex = await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-a", name="Alex", live_session_id=session, at_ms=1_010
+    )
+    viewer = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="u_alex",
+        user_name="阿杰",
+        timestamp_ms=1_000,
+        name_match_window_ms=0,
+    )
+    assert (await client.get(f"/api/v1/viewers/{viewer.viewer_id}")).json()["linked_players"] == []
+
+    await store.game_players.link_viewer(viewer_id=viewer.viewer_id, player_id=alex.id, at_ms=2_000)
+    detail = (await client.get(f"/api/v1/viewers/{viewer.viewer_id}")).json()
+    assert detail["linked_players"] == [{"player_id": alex.id, "game": "minecraft", "name": "Alex"}]
+
+
 async def test_list_link_unlink_and_delete_a_player(client, store: SQLiteDatabase, privacy: PrivacyService) -> None:
     session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
     repo = store.game_players

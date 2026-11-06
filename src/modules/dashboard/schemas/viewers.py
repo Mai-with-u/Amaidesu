@@ -72,6 +72,14 @@ class ViewerBrief(BaseModel):
     user_name: str
 
 
+class ViewerLinkedPlayer(BaseModel):
+    """运营者在记忆页确认过和这位观众是同一个人的游戏玩家（删这位观众时一并删除，从不告诉她）。"""
+
+    player_id: int
+    game: str
+    name: str = Field(description="玩家最近一次见到时的名字")
+
+
 class ViewerDetailResponse(BaseModel):
     """单观众档案：viewers 观众行 + 用过的昵称 + 明细表聚合。"""
 
@@ -103,6 +111,9 @@ class ViewerDetailResponse(BaseModel):
         default=None, description="宽限删除请求时刻（毫秒）；非空表示待下播后删除"
     )
     forget_due_at_ms: Optional[int] = Field(default=None, description="宽限删除最迟执行时刻（发令后 24 小时，毫秒）")
+    linked_players: List[ViewerLinkedPlayer] = Field(
+        default_factory=list, description="确认过关联的游戏玩家：删这位观众时一并删除；没装配玩家记录时为空"
+    )
 
 
 class DialogueItem(BaseModel):

@@ -4,6 +4,7 @@ import {
   deletePlayerWarning,
   formerNamesText,
   interactionsText,
+  linkedPlayersDeleteNote,
   linkedViewerLabel,
   linkViewerWarning,
   matchesPlayerQuery,
@@ -69,7 +70,7 @@ describe('删玩家确认', () => {
   });
 });
 
-describe('确认关联的文案', () => {
+describe('确认关联与删观众的文案', () => {
   it('确认关联点名玩家与观众昵称，昵称读不到只写编号', () => {
     expect(linkViewerWarning(player(), { viewer_id: 12, user_name: '阿杰' })).toContain(
       '确认玩家「Alex」（minecraft）就是观众「阿杰」（#12）？',
@@ -77,5 +78,13 @@ describe('确认关联的文案', () => {
     expect(linkViewerWarning(player(), { viewer_id: 12, user_name: '' })).toContain(
       '就是观众 #12？',
     );
+  });
+
+  it('删观众时点名一并删掉的玩家，会不会再记跟着不记录名单的勾选走', () => {
+    const linked = [{ player_id: 3, game: 'minecraft', name: 'Alex' }];
+    expect(linkedPlayersDeleteNote([], true)).toBe('没有在记忆页确认过关联的游戏玩家。');
+    expect(linkedPlayersDeleteNote(linked, true)).toContain('「Alex」（minecraft）一并删除');
+    expect(linkedPlayersDeleteNote(linked, true)).toContain('不再记录');
+    expect(linkedPlayersDeleteNote(linked, false)).toContain('会重新记录');
   });
 });

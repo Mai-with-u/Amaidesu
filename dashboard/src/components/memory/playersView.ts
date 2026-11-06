@@ -8,6 +8,7 @@ import type {
   PlayerInteractionKind,
   PlayerItem,
   PlayerLinkedViewer,
+  ViewerLinkedPlayer,
   ViewerListItem,
 } from '@/types';
 
@@ -64,6 +65,23 @@ export function linkViewerWarning(
   return (
     `确认玩家「${player.name}」（${player.game}）就是${who}？` +
     '之后删这位观众、或任何一方发“忘了我”，两边一起删除。她不会知道这层关系。'
+  );
+}
+
+/**
+ * 删观众对话框里关联玩家那一句：点名一并删掉哪几位，以及之后会不会再记——跟着“加入不记录名单”那个勾选走。
+ */
+export function linkedPlayersDeleteNote(
+  players: readonly ViewerLinkedPlayer[],
+  addToForgetList: boolean,
+): string {
+  if (players.length === 0) return '没有在记忆页确认过关联的游戏玩家。';
+  const names = players.map(player => `「${player.name}」（${player.game}）`).join('、');
+  return (
+    `在记忆页确认过关联的游戏玩家${names}一并删除；` +
+    (addToForgetList
+      ? '他们的 UUID 也进不记录名单，之后再进游戏也不再记录。'
+      : '之后他们再进游戏会重新记录，她会当成第一次见面。')
   );
 }
 

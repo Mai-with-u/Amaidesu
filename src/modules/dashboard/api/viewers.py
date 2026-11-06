@@ -24,7 +24,7 @@ super_chats / guards）按内部观众 ID（``viewer_id``）的聚合查询，�
 页面如实呈现这些边界，不臆造数据。
 """
 
-from typing import TYPE_CHECKING, Annotated, Any, Optional
+from typing import TYPE_CHECKING, Annotated, Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -42,6 +42,7 @@ from src.modules.dashboard.schemas.viewers import (
     UnlinkRequest,
     ViewerDetailResponse,
     ViewerInsightsResponse,
+    ViewerLinkedPlayer,
     ViewerListResponse,
     ViewerSessionsResponse,
 )
@@ -59,12 +60,14 @@ from src.modules.dashboard.services.viewer_profiles import (
     require_privacy_service,
     require_viewer_repo,
 )
+from src.modules.logging import get_logger
 from src.modules.storage.repos.viewer_identity import ViewerIdentityError
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
 
 router = APIRouter()
+logger = get_logger("ViewersApi")
 
 # 类型别名，用于依赖注入
 ServerDep = Annotated["DashboardServer", Depends(get_dashboard_server)]
@@ -154,7 +157,25 @@ async def get_viewer(viewer_id: int, server: ServerDep) -> ViewerDetailResponse:
     )
     if detail is None:
         raise HTTPException(status_code=404, detail=f"观众不存在: #{viewer_id}")
-    return detail
+    # 删除对话框要点名会一并删掉哪几位游戏玩家：按运营者确认过的关联取
+    return detail.model_copy(update={"linked_players": await _linked_players(server, viewer_id)})
+
+
+async def _linked_players(server: "DashboardServer", viewer_id: int) -> List[ViewerLinkedPlayer]:
+    """这位观众确认过关联的游戏玩家；没装配玩家记录或读失败时为空（详情照常返回，删除仍会连带删）。"""
+    repo = getattr(server, "game_player_repo", None)
+    if repo is None:
+        return []
+    try:
+        players: List[ViewerLinkedPlayer] = []
+        for link in await repo.list_links(viewer_id=int(viewer_id)):
+            player = await repo.get_player(player_id=int(link.player_id))
+            if player is not None:
+                players.append(ViewerLinkedPlayer(player_id=int(player.id), game=player.game, name=player.name))
+        return players
+    except Exception as exc:  # noqa: BLE001 - 读不到关联只少一行说明，不挡观众详情
+        logger.warning(f"读观众 #{viewer_id} 关联的游戏玩家失败（删除对话框不点名）: {exc}", exc=exc)
+        return []
 
 
 @router.get("/{viewer_id}/messages", response_model=DialogueResponse)

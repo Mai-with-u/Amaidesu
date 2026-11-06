@@ -366,6 +366,9 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
             "sc_total_amount",
             "sc_total_count",
             "session_count",
+            "linked_players.player_id",
+            "linked_players.game",
+            "linked_players.name",
         ),
     ),
     (

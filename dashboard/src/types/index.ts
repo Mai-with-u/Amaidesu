@@ -1242,6 +1242,14 @@ export interface ViewerBrief {
 }
 
 /** 单观众档案（GET /api/v1/viewers/{viewerId}） */
+/** 确认过和这位观众是同一个人的游戏玩家（删观众时一并删除） */
+export interface ViewerLinkedPlayer {
+  player_id: number;
+  game: string;
+  /** 玩家最近一次见到时的名字 */
+  name: string;
+}
+
 export interface ViewerDetail {
   viewer_id: number;
   platform: string;
@@ -1276,6 +1284,8 @@ export interface ViewerDetail {
   sessions_count?: number;
   forget_requested_at_ms?: number | null;
   forget_due_at_ms?: number | null;
+  /** 确认过关联的游戏玩家：删这位观众时一并删除 */
+  linked_players?: ViewerLinkedPlayer[];
 }
 
 /** 对话交织行：viewer=观众消息 / reply=主播对其的回复 */

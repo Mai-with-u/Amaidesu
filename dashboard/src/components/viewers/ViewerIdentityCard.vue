@@ -136,11 +136,14 @@
         确定彻底删除「{{ detail.user_name || '（未留名）' }}」（#{{
           detail.viewer_id
         }}）的全部记录？ 其弹幕、曾用名、模拟回放副本及对 ta
-        的承诺将被删除，付费记录将清空身份与留言，主播在相关场次台词中叫过的昵称将替换为「一位观众」；在记忆页确认过关联的游戏玩家一并删除。此操作不可恢复。
+        的承诺将被删除，付费记录将清空身份与留言，主播在相关场次台词中叫过的昵称将替换为「一位观众」。此操作不可恢复。
       </p>
       <el-checkbox v-model="alsoAddToForgetList">
         同时将外部 ID 加入不记录名单（今后不再记录该观众）
       </el-checkbox>
+      <p class="delete-desc">
+        {{ linkedPlayersDeleteNote(detail.linked_players ?? [], alsoAddToForgetList) }}
+      </p>
       <template #footer>
         <el-button @click="deleteDialogVisible = false">取消</el-button>
         <el-button type="danger" :loading="busy" @click="confirmDeleteViewer">确认删除</el-button>
@@ -161,6 +164,7 @@ import { computed, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { viewersApi } from '@/api';
 import ViewerPicker from '@/components/viewers/ViewerPicker.vue';
+import { linkedPlayersDeleteNote } from '@/components/memory/playersView';
 import type { ViewerDetail } from '@/types';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { formatDateTimeCn } from '@/utils/format';
