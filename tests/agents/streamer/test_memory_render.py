@@ -146,6 +146,19 @@ def test_brief_caps_commitments_and_points_to_recall_tool() -> None:
     assert "另有 3 件，可以用 memory_recall 查" in capped
 
 
+def test_brief_commitment_section_ends_with_a_fixed_line_on_how_to_close() -> None:
+    """承诺段末尾固定一行：做不到的当众说清楚、没做的别说成做完了；只在有承诺段时出现，逐字不变。"""
+    one = render_brief(commitments=[_commitment(cid=5, quote="下次给大家唱首歌")])
+    more = render_brief(
+        commitments=[_commitment(cid=index, quote=f"第 {index} 件事") for index in range(1, 9)],
+        earlier_commitment_count=3,
+    )
+    hint = "（确实做不到的，找个合适的时机当众说清楚；没做的别说成做完了）"
+    assert one.endswith("\n" + hint) and more.endswith("另有 3 件，可以用 memory_recall 查\n" + hint)
+    assert one.count(hint) == 1
+    assert hint not in render_brief(archive_lines=[_archive()]), "没有承诺段时不出现"
+
+
 def test_brief_is_empty_without_material() -> None:
     assert render_brief() == ""
 

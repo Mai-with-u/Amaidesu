@@ -64,6 +64,10 @@ _CUE_HEADER = (
     "（代码按线索找的；不提也行。要用就把编号写进 streamer_reply 的 use_memory，一次一条；"
     "一句台词最多带一件旧事）"
 )
+_COMMITMENTS_HEADER = "还没兑现、你当众说过的事："
+# 承诺段末尾固定的一行：做不到的事给一条收场的路（当众说清楚，下播整理才认得出是了结），
+# 也防她为了交差说"画好了"。写"确实做不到"，免得她把做得到的事早早放弃。逐字节不变，前缀缓存照旧命中
+_COMMITMENTS_HINT = "（确实做不到的，找个合适的时机当众说清楚；没做的别说成做完了）"
 _PRESENCE_HEADER = "老观众在场（只知道 ta 常来、多久没来；ta 的往事你不记得，别编，想知道就问）："
 _SPOKEN_HEADER = "## 你想起来的事（只用这里写到的，不补细节；不说日期和次数）"
 
@@ -272,9 +276,10 @@ def render_brief(
         pending.append(f"{body}（{when}）")
     extra = max(0, int(earlier_commitment_count))
     if pending or extra:
-        block = ["还没兑现、你当众说过的事：", *pending]
+        block = [_COMMITMENTS_HEADER, *pending]
         if extra:
             block.append(f"- 另有 {extra} 件，可以用 memory_recall 查")
+        block.append(_COMMITMENTS_HINT)
         sections.append("\n".join(block))
     if not sections:
         return ""
