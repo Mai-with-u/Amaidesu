@@ -4,6 +4,7 @@
 - 各种收手方式说清输赢与各打中几下，口径写明俏皮带过、不提血量；血量数字不进这句话
 - 没打起来或被取消的、不是切磋的结果不说
 - 游戏 Agent 自己下的切磋结束时发一条 milestone 给主播，普通目标结束不发
+- 按观察编号点的对手：结果里带了 Mod 认出的对手，收手时按他的 UUID 记一笔切磋互动
 """
 
 from __future__ import annotations
@@ -126,6 +127,37 @@ async def test_the_streamer_hears_how_the_spar_went_when_it_ends() -> None:
         "spar",
         "Alex",
         {"result": "won", "my_hits": 5, "their_hits": 3},
+    )
+    await agent.stop()
+
+
+async def test_a_spar_called_by_observation_id_is_recorded_by_the_opponent_in_the_result() -> None:
+    """按观察编号点的对手下令时不知道是谁：收手时结果里 Mod 认出的对手带 UUID，按它记一笔切磋互动。"""
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if "结束了" in _texts(messages):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "切磋完了"})])
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp(calls=[_call("minecraft_wait", {"reason": "切磋中"})])
+        goal = {"ability": "fight", "target": {"kind": "seen", "id": "e4"}, "parameters": {"spar": True}}
+        return _resp(calls=[_call("maicraft_execute", {"goal": goal})])
+
+    agent, _llm, bus = await make_minecraft_agent(server, script)
+    agent.receive_delegation(instruction="和旁边那位切磋一下", task_id="d-1")
+    await _wait_until(lambda: agent.tracked_goal_ids == [1] and agent.batch_active is False)
+
+    server.finish(1, summary="切磋结束：他走开了")
+    details = _spar_details("they_left")
+    details["spar"]["opponent"] = {"name": "Alex", "uuid": "0f0e0d0c-1111-2222-3333-444455556666"}
+    server.goals[1]["result"]["details"] = details
+    await _wait_until(lambda: len(_reports(bus)) == 1)
+
+    (spar,) = _interactions(bus)
+    assert (spar.player_uuid, spar.player_name, spar.fact["result"]) == (
+        "0f0e0d0c-1111-2222-3333-444455556666",
+        "Alex",
+        "even",
     )
     await agent.stop()
 

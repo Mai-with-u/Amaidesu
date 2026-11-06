@@ -3,7 +3,8 @@
 覆盖：
 - 带玩家 UUID 的肢体动作记一次打招呼（连同做了哪几种动作），朝她扔东西的另记送东西（那半句话）
 - 没带 UUID 的认不出是谁，不记
-- 切磋只认下令时按名字点的对手，收手时按怎么收的手记谁赢、各打中几下；没打起来的不记
+- 切磋先认结果里 Mod 给的对手 UUID（按观察编号点的也认得出），旧版 Mod 不带时退回下令时按名字点的对手；
+  收手时按怎么收的手记谁赢、各打中几下；没打起来的不记
 - 采集器发完叙事再发互动；互动事件不进主播时间线、不促发决策
 """
 
@@ -110,6 +111,23 @@ def test_a_finished_spar_records_who_won_and_the_score(ended_by: str, result: st
     assert (interaction.kind, interaction.player_name, interaction.player_uuid) == ("spar", "Alex", "")
     assert interaction.fact == {"result": result, "my_hits": 5, "their_hits": 3}
     assert interaction.save_id == "w1"
+
+
+def test_the_opponent_in_the_result_wins_over_the_name_she_called() -> None:
+    """结果里带了 Mod 认出的对手：按他的 UUID 记，名字也用结果里的；按观察编号点的（没记名字）同样记。"""
+    spar = {"ended_by": "me_at_line", "hits_taken": 4, "opponent": {"name": "Alex", "uuid": _ALEX["uuid"]}}
+    for named in ("Alex_old", ""):
+        interaction = spar_interaction(_run(1, {"hits": 2, "spar": spar}), named)
+        assert interaction is not None
+        assert (interaction.player_uuid, interaction.player_name) == (_ALEX["uuid"], "Alex")
+        assert interaction.fact == {"result": "lost", "my_hits": 2, "their_hits": 4}
+
+
+def test_an_opponent_without_a_uuid_falls_back_to_the_name_she_called() -> None:
+    spar = {"ended_by": "they_left", "opponent": {"name": "Alex"}}
+    interaction = spar_interaction(_run(1, {"spar": spar}), "Alex")
+    assert interaction is not None and (interaction.player_uuid, interaction.player_name) == ("", "Alex")
+    assert spar_interaction(_run(1, {"spar": spar}), "") is None, "没 UUID 也没点名：不知道和谁打的"
 
 
 def test_no_spar_record_without_an_opponent_or_a_fight() -> None:

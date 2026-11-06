@@ -6,9 +6,9 @@
 - 肢体动作：Mod 的 ``player_body_language`` 事件另带结构化的 ``player``（``name``、``uuid``）。每条事件记一次
   打招呼，连同这一段里做了哪几种动作；里面有朝她扔东西的一段，再记一次送东西，事实是那半句话
   （"朝我扔了 3 个面包"）。动作只从 Mod 原话的固定说法里认，数量照原话留着，不另解析。
-- 切磋：``fight(spar=true)`` 下令时点了对手的名字，结果细节 ``spar`` 写着怎么收的手。下令那一刻记下
-  目标编号对应的名字，收手时连同输赢发出去；只认按名字点的对手（按观察编号点的不知道是谁），
-  UUID 由存储台账按"本场见过的、叫这个名字的只有一位"去对。
+- 切磋：``fight(spar=true)`` 的结果细节 ``spar`` 写着怎么收的手，Mod 认出了点名的玩家时还带
+  ``spar.opponent``（``name``、``uuid``）。收手时有它就按它的 UUID 记一笔，按观察编号点的对手也认得出；
+  旧版 Mod 不带它，退回下令那一刻按名字点的对手，由存储台账按"本场见过的、叫这个名字的只有一位"去对。
 """
 
 from __future__ import annotations
@@ -116,7 +116,7 @@ class SelfChatLog:
 
 
 class SparOpponents:
-    """下令切磋时记下目标编号对应的对手名字，收手时取出来。"""
+    """下令切磋时记下目标编号对应的对手名字，收手时取出来（旧版 Mod 的结果不带对手时才用它）。"""
 
     def __init__(self) -> None:
         self._names: Dict[int, str] = {}
@@ -143,13 +143,31 @@ class SparOpponents:
         return self._names.pop(goal_id, "")
 
 
+def _spar_opponent(spar: Dict[str, Any]) -> Tuple[str, str]:
+    """结果里 Mod 认出的对手：(UUID, 名字)；没带（旧版 Mod、没认出点名的玩家）时都是空串。"""
+    opponent = spar.get("opponent")
+    if not isinstance(opponent, dict):
+        return "", ""
+    return str(opponent.get("uuid") or "").strip(), str(opponent.get("name") or "").strip()
+
+
 def spar_interaction(
-    run: GoalRun, opponent: str, *, save_id: str = "", save_name: str = ""
+    run: GoalRun, named: str, *, save_id: str = "", save_name: str = ""
 ) -> Optional[GamePlayerInteractedPayload]:
-    """一场切磋收手 → 一条切磋互动（谁赢、各打中几下）；不知道对手、没打起来或被取消的不记。"""
+    """一场切磋收手 → 一条切磋互动（谁赢、各打中几下）；不知道对手、没打起来或被取消的不记。
+
+    对手先认结果里 Mod 给的 ``spar.opponent``（按 UUID 记，按观察编号点的也认得出）；没带时退回
+    下令那一刻按名字点的对手 ``named``，只有名字、由存储台账去对。
+    """
     details = (run.result or {}).get("details")
     spar = details.get("spar") if isinstance(details, dict) else None
-    if not opponent or not isinstance(spar, dict):
+    if not isinstance(spar, dict):
+        return None
+    uuid, name = _spar_opponent(spar)
+    # 打完一局：Mod 认出的对手优先；旧版 Mod 不带时用下令点的名字，两样都没有就不知道和谁打的
+    if not uuid:
+        name = named
+    if not uuid and not name:
         return None
     result = _SPAR_RESULTS.get(str(spar.get("ended_by") or ""))
     if result is None:
@@ -159,5 +177,11 @@ def spar_interaction(
         if isinstance(value, int) and not isinstance(value, bool):
             fact[key] = value
     return GamePlayerInteractedPayload(
-        game="minecraft", kind="spar", player_name=opponent, fact=fact, save_id=save_id, save_name=save_name
+        game="minecraft",
+        kind="spar",
+        player_uuid=uuid,
+        player_name=name or named,
+        fact=fact,
+        save_id=save_id,
+        save_name=save_name,
     )

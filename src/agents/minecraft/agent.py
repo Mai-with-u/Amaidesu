@@ -1192,7 +1192,7 @@ class MinecraftAgent(BaseAgent):
                 if message:
                     self._pending_self_chats.append(message)
                 return
-            # 切磋下令时记下点名的对手：收手时按名字给存储记一笔互动
+            # 切磋下令时记下点名的对手：旧版 Mod 的结果不带对手，收手时按这个名字给存储记一笔互动
             self._spar_opponents.note(run.goal_id, arguments)
             self._track_goal(run)
             return
@@ -2130,12 +2130,13 @@ class MinecraftAgent(BaseAgent):
         )
 
     async def _emit_spar_interaction(self, run: GoalRun) -> None:
-        """切磋收手：按下令时点名的对手发一条玩家互动（谁赢、各打中几下），只给存储记账，主播不订阅。"""
-        opponent = self._spar_opponents.pop(run.goal_id)
-        if self._event_bus is None or not opponent:
+        """切磋收手：按结果里 Mod 认出的对手（旧版 Mod 退回下令时点的名字）发一条玩家互动，只给存储记账，主播不订阅。"""
+        named = self._spar_opponents.pop(run.goal_id)
+        if self._event_bus is None:
             return
         save_id, save_name = self._world.save_fields()
-        interaction = spar_interaction(run, opponent, save_id=save_id, save_name=save_name)
+        # 收手 -> 认对手（结果里的 UUID 优先）-> 记谁赢、各打中几下；按观察编号点的对手也靠结果认出
+        interaction = spar_interaction(run, named, save_id=save_id, save_name=save_name)
         if interaction is not None:
             await self.emit_event(CoreEvents.GAME_PLAYER_INTERACTED, interaction)
 
