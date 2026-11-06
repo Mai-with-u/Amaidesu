@@ -82,6 +82,7 @@ _SILENT_REASON_LABEL: Dict[str, str] = {
     "assembler_failed": "上下文组装失败",
     "session_ended": "开窗时的场次已下播",
     "reply_held": "给游戏的安排被拒，那句话压住后没再开口",
+    "memory_repeat_held": "点名本场提过的旧事被退回后没再开口",
 }
 
 

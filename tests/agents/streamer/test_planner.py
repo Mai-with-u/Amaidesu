@@ -8,7 +8,7 @@ import pytest
 
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
-from src.agents.streamer.timeline import GameEventBatch
+from src.agents.streamer.timeline import GameEventBatch, PlayerNote
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.storage.models.memory import ArchiveLine, Commitment
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
@@ -622,29 +622,90 @@ def _reply_to(target: str, use_memory: str) -> list:
     ]
 
 
-async def test_archive_line_already_mentioned_is_bounced_unless_a_viewer_asked() -> None:
-    """第 58 场 14 条旧事里 8 条各提了两次，第二次都是没人问时主动点名：本场已提过的档案行，
-    没在回观众弹幕时这句先退回，她换个话题再说；回观众弹幕时照常点名。"""
+def _repeat_planner(responses: list, **kwargs: Any) -> tuple[Planner, MagicMock, MagicMock]:
+    """档#41 本场已提过、在简报里能点名的 Planner；返回（Planner, LLM, 表达侧桩）。"""
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
-    plain = _resp(
-        tool_calls=[_tc("streamer_reply", {"topic_summary": "换个话题", "is_novel": True, "emotion": "happy"})]
-    )
     planner, llm, _prompt = _make_planner(
-        [*_reply_with_memory("档#41"), plain, *_reply_to("m1", "档#41")],
+        responses,
         reply_provider=provider,
         brief_archive_ids_provider=lambda: [41],
         archive_lookup=_archive_lookup,
         used_archive_ids_provider=lambda: [41],
+        **kwargs,
     )
+    return planner, llm, provider
+
+
+_PLAIN_REPLY = _resp(
+    tool_calls=[_tc("streamer_reply", {"topic_summary": "换个话题", "is_novel": True, "emotion": "happy"})]
+)
+
+
+async def test_archive_line_already_mentioned_is_bounced_once_when_nobody_asked() -> None:
+    """第 58 场 14 条旧事里 8 条各提了两次，第二次都是冷场时主动点名：本场已提过的档案行，
+    没人问起时这句先退回一次，她换个话题再说；退回次数记进本窗收场。"""
+    planner, llm, provider = _repeat_planner([*_reply_with_memory("档#41"), _PLAIN_REPLY])
 
     bounced = await planner.plan([], proactive=True)
 
     assert bounced.replied is True and bounced.memory_refs == [] and bounced.steps == 2
+    assert bounced.memory_repeat_bounces == 1
     # 同一窗的消息序列是追加写的：退回理由是第一句 reply 的工具结果
     refusal = " ".join(str(message.get("content") or "") for message in llm.generate.await_args_list[1].args[0])
-    assert "档#41 这件事本场已经提过" in refusal and "把 target 指向那条弹幕再点名" in refusal
+    assert "档#41 这件事本场已经提过" in refusal and "这一窗只退这一次" in refusal
     assert provider.invoke.await_count == 1, "退回的那句没交给表达侧"
 
-    asked = await planner.plan([_msg("上次那个女仆叫啥来着")])
-    assert asked.memory_refs == ["档#41"], "观众问起时照常点名"
+
+async def test_second_mention_in_the_same_window_goes_out_without_the_memory() -> None:
+    """退过一次还点名同一条：去掉点名照常说出去，不再退——原先会一路退到步数用完、整窗不说话。"""
+    planner, _llm, provider = _repeat_planner([*_reply_with_memory("档#41"), *_reply_with_memory("档#41")])
+
+    outcome = await planner.plan([], proactive=True)
+
+    assert (outcome.replied, outcome.memory_refs, outcome.memory_repeat_bounces) == (True, [], 1)
+    assert "use_memory" not in provider.invoke.await_args.args[0].arguments
+    assert provider.invoke.await_args.args[0].attachment.remembered == ""
+
+
+async def test_window_that_goes_quiet_after_the_bounce_records_its_own_reason() -> None:
+    """退回之后这一窗没再开口：静默原因单独记，复盘分得清是被退回还是自然不说。"""
+    planner, _llm, _provider = _repeat_planner([*_reply_with_memory("档#41"), _resp(content="那就不说了")])
+
+    outcome = await planner.plan([], proactive=True)
+
+    assert (outcome.replied, outcome.silent_reason, outcome.memory_repeat_bounces) == (False, "memory_repeat_held", 1)
+
+
+async def test_viewer_question_from_the_previous_window_is_answered_with_the_memory() -> None:
+    """观众上一窗问"那个女仆叫啥"，这一窗冷场时才回、target 指着那条：那条已在历史里，算有人问，照常点名。"""
+    planner, _llm, _provider = _repeat_planner(_reply_to("m0", "档#41"))
+    history = [_history_msg("user", "那个女仆叫啥来着", message_id="m0")]
+
+    outcome = await planner.plan([], proactive=True, history=history)
+
+    assert (outcome.replied, outcome.memory_refs, outcome.memory_repeat_bounces) == (True, ["档#41"], 0)
+
+
+async def test_player_asking_in_game_chat_gets_the_memory() -> None:
+    """玩家在公屏问起旧事：本窗有玩家开口，算有人问，照常点名（和唠叨指标把回应玩家算作有人问同一口径）。"""
+    planner, _llm, _provider = _repeat_planner(_reply_with_memory("档#41"))
+    asked = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 公屏] 玩家 玩家甲：你那女仆叫啥")
+
+    outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(player_notes=(asked,)))
+
+    assert (outcome.replied, outcome.memory_refs, outcome.memory_repeat_bounces) == (True, ["档#41"], 0)
+
+
+async def test_card_pushed_by_someone_and_viewer_windows_are_not_bounced() -> None:
+    """本窗弹幕或玩家开口推上来的卡指向这一条、或本窗本身是观众发弹幕促发的：都算有人问。"""
+    asked_card = SimpleNamespace(text="", archive_ids=(41,), asked_archive_ids=(41,), labels={})
+
+    async def cues_provider(batch: Any, open_games: Any, game_players: Any) -> Any:
+        return asked_card
+
+    planner, _llm, _provider = _repeat_planner(_reply_with_memory("档#41"), memory_cues_provider=cues_provider)
+    assert (await planner.plan([], proactive=True)).memory_refs == ["档#41"]
+
+    planner, _llm, _provider = _repeat_planner(_reply_with_memory("档#41"))
+    assert (await planner.plan([_msg("主播今天玩啥")])).memory_refs == ["档#41"], "观众发弹幕促发的一窗"

@@ -506,6 +506,8 @@ async def test_danmaku_keyword_pushes_archive_card_and_logs_it(store: SQLiteData
     assert f"[档#{line_id}·之前] Minecraft：女仆取名团子（你说过「就叫团子吧」）" in cues.text
     assert "想起它是因为弹幕 m7 提到「团子」" in cues.text
     assert cues.archive_ids == (line_id,) and cues.commitment_ids == ()
+    # 观众弹幕推上来的：算有人提到，本场提过的旧事这一窗再点名不退回
+    assert cues.asked_archive_ids == (line_id,)
     (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
     assert (entry.card_kind, entry.archive_line_id, entry.sources) == ("rule", line_id, ["danmaku"])
     # 记录只存第几个触发词与匹配方式，不存原词
@@ -540,6 +542,7 @@ async def test_self_triggered_card_pushes_once_per_session(store: SQLiteDatabase
 
     first = await provider.collect(batch=[])
     assert first.archive_ids == (line_id,) and "想起它是因为你刚说到「团子」" in first.text
+    assert first.asked_archive_ids == (), "只由她自己的台词想起的不算有人提到"
     clock.value += PUSH_COOLDOWN_MS + 1
     assert (await provider.collect(batch=[])).archive_ids == (), "自触发一场只推一次"
 

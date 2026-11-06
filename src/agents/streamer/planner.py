@@ -199,6 +199,8 @@ class RoundOutcome:
     reply_duration_ms: int = 0
     reply_failures: int = 0
     speech_gate_bounces: int = 0
+    # 本窗因点名本场已提过的旧事被退回的次数（每窗至多一次）：复盘看得出这一窗为什么换了话题或没开口
+    memory_repeat_bounces: int = 0
     # 本轮点名的旧事编号（写法如 约#7、档#41；随 streamer.speech 落库，供"用上即停"与复盘核对）
     memory_refs: List[str] = field(default_factory=list)
     # 本窗公屏聊天只来自一位核对过的玩家、且这句的回应目标对不上本窗任何一条弹幕时是 (游戏, UUID)：落库时记成在回应他；
@@ -272,9 +274,24 @@ def _repeated_memory_error(number: str) -> str:
     """本场已提过的旧事被主动点名时退回给 Planner 的理由。"""
     return (
         f"{number} 这件事本场已经提过（简报里标着（本场已提过）），这句先不说：同一件旧事一场提一次就够，"
-        "再提观众听着就是车轱辘话。换个话题再调用 streamer_reply，或者这一轮不说；"
-        "观众问起这件事时，把 target 指向那条弹幕再点名。"
+        "再提观众听着就是车轱辘话。换个话题再调用 streamer_reply，或者这一轮不说。"
+        "观众或玩家问起这件事时照常点名。这一窗只退这一次：再点名这一条，会去掉点名照常说出去。"
     )
+
+
+def _viewer_message_in(target: Any, history: Sequence[Any]) -> bool:
+    """回应目标是不是本场更早的一条观众消息（上一窗问的、这一窗才回）：编号对得上历史里观众发的那一行。
+
+    游戏条目没有消息编号；只认观众发的（role 为 user），她自己的台词不算。
+    """
+    message_id = canonical.normalize_message_id(target) if isinstance(target, str) else ""
+    if not message_id:
+        return False
+    for turn in history:
+        role = getattr(getattr(turn, "role", ""), "value", getattr(turn, "role", ""))
+        if role == "user" and str(getattr(turn, "message_id", "") or "") == message_id:
+            return True
+    return False
 
 
 def _held_reply_words(args: Dict[str, Any]) -> Dict[str, str]:
@@ -394,6 +411,14 @@ class Planner:
         self._round_reply_player: Tuple[str, str] = ("", "")
         # 本窗的弹幕（编号, 原文）：她这句的回应目标对得上其中一条时，这句在回那条弹幕，不记成在回应玩家
         self._round_danmaku: Tuple[Tuple[str, str], ...] = ()
+        # 本窗交来的历史：回应目标是更早一窗的观众弹幕时，在这里查得到
+        self._round_history: List[Any] = []
+        # 本窗是不是观众发弹幕促发的（不是冷场、流程单这类主动窗）：有人在问，提过的旧事可以再接
+        self._round_viewers_asking: bool = False
+        # 本窗由观众弹幕或玩家开口推上来的档案行（线索卡来源里有人提到）
+        self._round_asked_archive_ids: Set[int] = set()
+        # 本窗是否已因点名提过的旧事退回过一次：每窗只退一次，第二次去掉点名照常说
+        self._round_memory_bounced: bool = False
         # 本窗在游戏里开口或冲她做动作的玩家：线索推送据此推玩家卡
         self._round_game_players: Tuple[Tuple[str, str], ...] = ()
         # 玩家找她的条目：本窗新到的（定回应对象）与最近几分钟的（交给表达侧，说清谁说的、谁做的）
@@ -525,6 +550,9 @@ class Planner:
         self._round_danmaku = tuple(
             (str(getattr(msg, "message_id", "") or ""), str(getattr(msg, "content", "") or "")) for msg in batch
         )
+        self._round_history = list(history or [])
+        self._round_viewers_asking = bool(self._round_danmaku) and not proactive
+        self._round_memory_bounced = False
         self._round_game_players = resolved_batch.addressed_players
         # 玩家扔来东西常在上一窗入账、这一窗才接话：表达侧拿的是最近几分钟的，不只本窗
         self._round_player_notes = resolved_batch.player_notes
@@ -555,6 +583,9 @@ class Planner:
         memory_cues = await self._collect_memory_cues(batch)
         self._round_memory_ids = self._round_commitment_ids(memory_cues)
         self._round_archive_ids = self._round_archive_line_ids(memory_cues)
+        self._round_asked_archive_ids = {
+            int(item) for item in (getattr(memory_cues, "asked_archive_ids", ()) if memory_cues is not None else ())
+        }
         self._memory_labels = dict(getattr(memory_cues, "labels", {}) or {})
 
         # 决策前自动读一次配置的只读参考工具（如游戏现场速览）：结果直接进参考段，
@@ -648,7 +679,7 @@ class Planner:
 
             # 自然终止：LLM 不再调用任何工具 = 本轮不说话
             if not tool_calls:
-                return replace(outcome, silent_reason="reply_held" if held_once else "natural")
+                return replace(outcome, silent_reason=self._silent_reason(held_once, "natural"))
 
             replied = False
             # 同一步里给游戏的安排（开始做事 / 补充要求）没送到时，记下是哪个调用和它的拒绝回执：这一步的话先不说
@@ -711,7 +742,13 @@ class Planner:
                     return outcome
 
         # 超步：未完成说话即收场（压住过一句又没再开口时记成 reply_held）
-        return replace(outcome, silent_reason="reply_held" if held_once else "max_steps")
+        return replace(outcome, silent_reason=self._silent_reason(held_once, "max_steps"))
+
+    def _silent_reason(self, held_once: bool, default: str) -> str:
+        """这一窗没开口的原因：被压住过一句、因提过的旧事被退回过，都单独记，复盘看得出不是自然不说。"""
+        if held_once:
+            return "reply_held"
+        return "memory_repeat_held" if self._round_memory_bounced else default
 
     async def _resolve_use_memory(self, args: Dict[str, Any]) -> Tuple[str, List[str]]:
         """解析 reply 的 use_memory：编号在本窗名单内才认，渲染成说话档交表达侧。
@@ -749,23 +786,37 @@ class Planner:
         spoken = render_spoken_memory(target_label=label, commitment=commitment)
         return spoken, [render_commitment_number(commitment_id)]
 
-    def _repeated_archive_ref(self, args: Dict[str, Any]) -> str:
-        """use_memory 点名的是本场已提过的档案行时返回它的编号写法（档#N），否则空串。
+    def _repeated_archive_id(self, args: Dict[str, Any]) -> Optional[int]:
+        """use_memory 点名的是本场已提过的档案行时返回它的编号，否则 None。
 
         承诺用上即从简报撤下，不在这里管；读不到已提过的名单时不拦，最多这一句又提一次。
         """
         if self._used_archive_ids_provider is None:
-            return ""
+            return None
         ref_text = _single_memory_ref(args.get("use_memory"), logger=self.logger)
         parsed = _parse_memory_ref(ref_text) if ref_text is not None else None
         if parsed is None or parsed[0] != MEMORY_REF_ARCHIVE:
-            return ""
+            return None
         try:
             used = {int(item) for item in self._used_archive_ids_provider() or ()}
         except Exception as exc:
             self.logger.warning(f"读本场已提过的档案行失败（这一句不拦复提）: {exc}", exc=True)
-            return ""
-        return render_archive_number(parsed[1]) if parsed[1] in used else ""
+            return None
+        return parsed[1] if parsed[1] in used else None
+
+    def _someone_asked(self, line_id: int, target: Any, answers_danmaku: bool) -> bool:
+        """提过的旧事这一句再接算不算有人问起：四种情形任一成立就不退回。
+
+        回本窗或本场更早的一条观众弹幕（观众上一窗问、这一窗才回）；本窗有玩家在公屏开口；
+        这一条是本窗观众弹幕或玩家开口推上来的线索卡；本窗本身是观众发弹幕促发的。
+        """
+        return (
+            answers_danmaku
+            or _viewer_message_in(target, self._round_history)
+            or any(note.said for note in self._round_player_notes)
+            or line_id in self._round_asked_archive_ids
+            or self._round_viewers_asking
+        )
 
     async def _resolve_archive_ref(self, line_id: int) -> Tuple[str, List[str]]:
         """点名一行档案：在本窗名单里、取得到这一行，台词拿到它的标题（不带编号与原话）。"""
@@ -1173,15 +1224,22 @@ class Planner:
         # 这句的回应目标对得上本窗一条弹幕（编号或原文）：对象是那位观众。即使本窗只有一位玩家在公屏开口，
         # 也不记成在回应他——否则答应观众的事会被整理记到玩家头上。对不上的（拿公屏原话当目标）照旧在回玩家
         answers_danmaku = _answers_danmaku(args.get("target"), self._round_danmaku)
-        # 本场已经提过的旧事又被点名、这句也不是在回观众弹幕：先退回，让她换个话题。
-        # 第 58 场 14 条旧事里 8 条各提了两次，第二次全是这样主动点名的
-        repeated = None if answers_danmaku else self._repeated_archive_ref(args)
-        if repeated:
-            return (
-                json.dumps({"ok": False, "error": _repeated_memory_error(repeated)}, ensure_ascii=False),
-                outcome,
-                False,
-            )
+        # 本场已经提过的旧事又被点名、又没人问起：先退回一次，让她换个话题。第 58 场 14 条旧事里
+        # 8 条各提了两次，第二次全是冷场时主动点名的。每窗只退一次：退过还点名，就去掉点名照常说，
+        # 免得一窗里接连被退、整窗哑掉（观众上一窗问的、这一窗才回时，原先就会被退到步数用完）
+        repeated = self._repeated_archive_id(args)
+        if repeated is not None and not self._someone_asked(repeated, args.get("target"), answers_danmaku):
+            number = render_archive_number(repeated)
+            if not self._round_memory_bounced:
+                self._round_memory_bounced = True
+                self.logger.info(f"{number} 本场已提过、没人问起，这句先退回")
+                return (
+                    json.dumps({"ok": False, "error": _repeated_memory_error(number)}, ensure_ascii=False),
+                    replace(outcome, memory_repeat_bounces=outcome.memory_repeat_bounces + 1),
+                    False,
+                )
+            self.logger.info(f"{number} 本窗已退回过一次，这句去掉点名照常说")
+            args = {key: value for key, value in args.items() if key != "use_memory"}
         try:
             remembered, memory_ids = await self._resolve_use_memory(args)
             attachment = ReplyRoundAttachment(

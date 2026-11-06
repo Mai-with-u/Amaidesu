@@ -129,6 +129,8 @@ class MemoryCues:
     # 卡片编号 → 对方称呼（对某位观众的卡才有；说话档要拿它说"答应过谁"）
     labels: Dict[int, str] = field(default_factory=dict)
     archive_ids: Tuple[int, ...] = ()
+    # 本批由观众弹幕或玩家开口推上来的档案行：本场提过的旧事有人提到了，再点名不退回
+    asked_archive_ids: Tuple[int, ...] = ()
 
 
 @dataclass
@@ -188,6 +190,14 @@ class _Round:
 
     def ids(self, kind: str) -> Tuple[int, ...]:
         return tuple(int(card.key[1]) for card in self.cards if card.key[0] == kind)
+
+    def asked_ids(self, kind: str) -> Tuple[int, ...]:
+        """本批由观众弹幕或游戏玩家开口推上来的卡指向的条目：有人提到了，本场提过也可以再接。"""
+        return tuple(
+            int(card.key[1])
+            for card in self.cards
+            if card.key[0] == kind and {SOURCE_DANMAKU, SOURCE_PLAYER}.intersection(card.sources)
+        )
 
     def commitment_ids(self) -> Tuple[int, ...]:
         """本批能点名的承诺编号：承诺卡的，加玩家卡尾写着的答应过他的事（卡上印着约#N，她点了要认）。"""
@@ -329,6 +339,7 @@ class MemoryCueProvider:
             card_count=len(state.cards),
             labels=dict(self._round_labels),
             archive_ids=state.ids("archive"),
+            asked_archive_ids=state.asked_ids("archive"),
         )
 
     def reset(self) -> None:
