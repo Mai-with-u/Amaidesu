@@ -1,6 +1,6 @@
 ---
 name: memory_archive_system
-version: "1.3"
+version: "1.4"
 description: "下播整理的第一次调用：对上一份档案逐行挑留、去掉或替换（只挑不改写），再挑本场值得下次开播提起的新事（后台 summary 档位调用）"
 variables: []
 author: Amaidesu
@@ -13,7 +13,7 @@ tags: [streamer, memory, archive]
 每行前面是编号"旧N"，方括号里是出自上一场还是之前。旧行的标题和原话由程序原样保留，你不能改它的措辞，只能对它做下面三种操作之一：
 
 - 保留：不写也是保留。这一场没提到的事不代表过时，一律保留；这一场又提到了、但没有变化的，写 {"old": N, "op": "keep", "line": 台词编号}，记下又提起它的那一行；
-- 去掉：只有这一场的台词明确说它做完了、不成立了、或当初记错了，才写 {"old": N, "op": "drop", "reason": "理由", "line": 台词编号}。line 是能证明这一点的那一行台词，没有这样的台词就不要去掉；"这场没提到"不是理由；
+- 去掉：只有这一场的台词明确说它做完了、不成立了、当初记错了，或被这一场的新事取代了，才写 {"old": N, "op": "drop", "reason": "了结：……", "line": 台词编号}。reason 以"了结""不成立""记错""被取代"之一开头，后面写这一行台词怎么证明；line 是能证明这一点的那一行台词，没有这样的台词就不要去掉。"这场没提到""一次性的事""不重要"都不是理由，程序不会采纳，旧行照留；
 - 替换：这一场里它的状态变了（搬了家、改了名、原来"还没点火"这一场点上了），写 {"old": N, "op": "replace", "line": 台词编号, "title": ..., "quote": ..., "game": ..., "lasting": ...}。新的标题和原话按这一场那一行台词写，原话直接照抄；旧行会被这一行换掉。
 
 写着别的存档（"在 minecraft「某个存档」"）而这一场没去那个世界的，那边的事没变，保留。拿不准的，保留。同一件事在上一份里写了两行（比如上一场和之前各记了一次），写 {"old": N, "op": "drop", "same_as": M} 去掉说得少的那一行 N，留下 M。
@@ -43,14 +43,14 @@ tags: [streamer, memory, archive]
 
 只输出 JSON，不要解释，不要代码块标记：
 
-{"previous": [{"old": 2, "op": "keep", "line": 31}, {"old": 4, "op": "drop", "reason": "她说那块地已经不要了", "line": 52}, {"old": 6, "op": "replace", "line": 77, "title": "Minecraft：水车搭好了", "quote": "水车搭好啦", "game": "minecraft", "lasting": false}], "archive": [{"line": 12, "title": "Minecraft：给小羊取名雪球", "quote": "这只羊就叫雪球", "game": "minecraft", "lasting": true}]}
+{"previous": [{"old": 2, "op": "keep", "line": 31}, {"old": 4, "op": "drop", "reason": "不成立：她说那块地已经不要了", "line": 52}, {"old": 6, "op": "replace", "line": 77, "title": "Minecraft：水车搭好了", "quote": "水车搭好啦", "game": "minecraft", "lasting": false}], "archive": [{"line": 12, "title": "Minecraft：给小羊取名雪球", "quote": "这只羊就叫雪球", "game": "minecraft", "lasting": true}]}
 
 previous 每项：
 
 - old：上一份档案里那一行的编号（"旧2"就填 2）；
 - op：keep / drop / replace，不写按 keep；
 - line：这一场台词前的编号（keep 时是又提到它的那一行，这一场没提到就不写；drop、replace 必须写，只有注明 same_as 的 drop 不用写）；
-- reason：drop 必须写，说清是了结了、不成立了还是记错了（注明 same_as 时可以不写）；
+- reason：drop 必须写，以"了结""不成立""记错""被取代"之一开头，再写证据台词怎么证明（注明 same_as 时可以不写）；
 - same_as：只在去掉重复的行时写，填留下的那一行的编号；
 - title、quote、game、lasting：replace 时与新事同样的写法。
 

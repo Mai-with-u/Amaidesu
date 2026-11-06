@@ -459,15 +459,15 @@ async def test_snapshot_keeps_old_rows_as_they_are_and_replaces_with_this_sessio
 async def test_dropping_an_old_row_needs_evidence_from_this_session(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
-    """没指证据的去掉、拿"这场没提到"当理由的去掉都不采纳，旧行照留；有本场证据的才去掉；
-    认不出的编号也只进整理报告。"""
+    """拿"一次性遭遇"当理由的去掉（哪怕指了本场台词）、拿"这场没提到"当理由的去掉都不采纳，
+    旧行照留；理由写明了结且有本场证据的才去掉；认不出的编号也只进整理报告。"""
     await _previous_archive(store)
     session_id = await _ended_session(store, started_at_ms=5_000_000)
     await _speech(store, session_id, "那个炉子我拆了，不要了", timestamp_ms=5_000_100)
     llm = _reply(
-        '{"previous": [{"old": 1, "op": "drop", "reason": "过时了"},'
+        '{"previous": [{"old": 1, "op": "drop", "reason": "一次性遭遇", "line": 1},'
         ' {"old": 2, "op": "drop", "reason": "这场没提到", "line": 1},'
-        ' {"old": 3, "op": "drop", "reason": "她说炉子拆了", "line": 1}, {"old": 9, "op": "drop"}],'
+        ' {"old": 3, "op": "drop", "reason": "了结：她说炉子拆了", "line": 1}, {"old": 9, "op": "drop"}],'
         ' "archive": []}',
         '{"commitments": []}',
     )

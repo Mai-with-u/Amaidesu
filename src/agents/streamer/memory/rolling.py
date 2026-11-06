@@ -6,11 +6,13 @@
 1. 上一份快照（:meth:`ArchiveRepo.snapshot_before`）编上"旧N"交给模型；
 2. 模型对旧行给出操作（没列出的行一律保留）：
    - 保留：可以注明本场哪一行又提到它（算"再提起"）、重标是否稳定的事；
-   - 去掉：必须写理由，并指出本场哪一行台词是证据，"这场没提到"不算理由；同一件事在上一份
+   - 去掉：理由要写明是了结、不成立、记错还是被取代，并指出本场哪一行台词是证据（代码核对
+     这一行确实是本场播出的台词）；"这场没提到""一次性的事"都不算理由；同一件事在上一份
      里写了两行时，可以注明与哪一行重复（``same_as``）去掉其中一行：事实由留下的那一行接着；
      那一行本场被替换或去掉了，这一行跟着它走（替换出的新行接着这件事，去掉用的是同一份证据）；
    - 替换：给本场一行台词里的逐字原话，过与新事同一个校验器，通过才换掉旧行；
-   不合规的操作不采纳、旧行照留，连同理由写进整理报告；
+   不合规的操作不采纳、旧行照留，连同理由写进整理报告——既没被合格地去掉、也没被替换的旧行
+   一律留着，不靠提示词让模型自觉"宁多勿少"；
 3. 代码按固定规则取舍（:func:`select_snapshot`），至多 :data:`MAX_SNAPSHOT_LINES` 行：
    稳定的事先占至多 :data:`MAX_LASTING_LINES` 行（本场新写的在前，其余按最近被提起）→ 本场
    其余新事 → 其余稳定的事 → 其余旧行（按最近被提起）。同一档里挤出去的是最久没被再提的。
@@ -63,6 +65,8 @@ _OLD_PREFIX = "旧"
 _EVIDENCE_CHARS = 80
 # 去掉旧行时不算理由的说法："这场没提到"不能把前几场的事清掉
 _NOT_A_REASON = ("没提", "未提", "没有提", "没再提")
+# 去掉旧行只认这四类理由：做完了、不成立了、当初记错了、被本场的新事取代了
+_DROP_KINDS = ("了结", "不成立", "记错", "被取代")
 
 # 模型给错操作时写进整理报告的固定措辞（旧行一律照留）
 _REFUSED_UNKNOWN_NUMBER = "旧行编号不存在"
@@ -70,6 +74,7 @@ _REFUSED_REPEATED = "同一行给了不止一个操作，只认第一个"
 _REFUSED_UNKNOWN_OP = "看不懂的操作，旧行保留"
 _REFUSED_DROP_EVIDENCE = "去掉旧行要写理由并指出本场哪一行台词作证据，旧行保留"
 _REFUSED_NOT_MENTIONED = "这场没提到不算去掉的理由，旧行保留"
+_REFUSED_DROP_KIND = "去掉的理由要写明是了结、不成立、记错还是被取代，旧行保留"
 _REFUSED_REPLACE = "替换的新行没通过校验，旧行保留"
 _REFUSED_SAME_AS = "注明重复的那一行编号不对，旧行保留"
 _EVICTED_OLD = f"超过 {MAX_SNAPSHOT_LINES} 行，最久没被再提的先出"
@@ -188,12 +193,14 @@ def plan_from_ops(
                 reason = str(raw.get("reason") or "").strip() or f"与{_OLD_PREFIX}{other}重复"
                 duplicates.append((index, other - 1, reason))
         elif op == "drop":
-            # 去掉：本场要有证据，且"这场没提到"不算理由
+            # 去掉：要有本场台词作证据、理由属于四类之一；"这场没提到""一次性的事"一律不采纳，旧行照留
             reason = str(raw.get("reason") or "").strip()
             if not reason or evidence is None:
                 changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_DROP_EVIDENCE))
             elif any(marker in reason for marker in _NOT_A_REASON):
                 changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_NOT_MENTIONED))
+            elif not any(kind in reason for kind in _DROP_KINDS):
+                changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_DROP_KIND))
             else:
                 removed.add(index)
                 changes.append(SnapshotChange(action="drop", what=title, reason=reason, quote=_evidence(evidence)))

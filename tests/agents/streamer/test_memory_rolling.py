@@ -92,8 +92,9 @@ def test_keep_marks_a_mention_and_retags_without_touching_the_row() -> None:
 
 
 def test_drop_needs_a_reason_and_evidence_and_not_mentioned_is_not_a_reason() -> None:
-    """去掉要写理由并指出本场证据；"这场没提到"不算理由；不采纳的旧行照留，理由进改动清单。"""
-    base = [_old(1), _old(2), _old(3), _old(4)]
+    """去掉要写理由并指出本场证据；理由要属于了结、不成立、记错、被取代四类，"这场没提到"
+    "一次性遭遇"都不算；不采纳的旧行照留，理由进改动清单。"""
+    base = [_old(1), _old(2), _old(3), _old(4), _old(5), _old(6)]
 
     plan = _plan(
         [
@@ -101,16 +102,20 @@ def test_drop_needs_a_reason_and_evidence_and_not_mentioned_is_not_a_reason() ->
             {"old": 2, "op": "drop", "line": 1},
             {"old": 3, "op": "drop", "reason": "这一场没再提起", "line": 1},
             {"old": 4, "op": "drop", "reason": "了结"},
+            {"old": 5, "op": "drop", "reason": "一次性遭遇，不用再记", "line": 1},
+            {"old": 6, "op": "drop", "reason": "被取代：她说换了一块地", "line": 1},
         ],
         base,
     )
 
-    assert [item.line.id for item in plan.kept] == [2, 3, 4]
-    assert [(change.action, change.what) for change in plan.changes] == [
-        ("drop", "旧事1"),
-        ("refused", "旧事2"),
-        ("refused", "旧事3"),
-        ("refused", "旧事4"),
+    assert [item.line.id for item in plan.kept] == [2, 3, 4, 5]
+    assert [(change.action, change.what, change.reason) for change in plan.changes] == [
+        ("drop", "旧事1", "了结"),
+        ("refused", "旧事2", "去掉旧行要写理由并指出本场哪一行台词作证据，旧行保留"),
+        ("refused", "旧事3", "这场没提到不算去掉的理由，旧行保留"),
+        ("refused", "旧事4", "去掉旧行要写理由并指出本场哪一行台词作证据，旧行保留"),
+        ("refused", "旧事5", "去掉的理由要写明是了结、不成立、记错还是被取代，旧行保留"),
+        ("drop", "旧事6", "被取代：她说换了一块地"),
     ]
     assert plan.changes[0].quote == "那块菜地我不要了"
 
