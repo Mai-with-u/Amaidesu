@@ -14,21 +14,48 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+from src.modules.logging import get_logger
 from src.modules.storage.models.memory import ArchiveLine, ArchiveSnapshot, SnapshotLine
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
+logger = get_logger("ArchiveRepo")
+
 # 档案行读面的列（与 ArchiveLine 字段一一对应）
-_ARCHIVE_COLUMNS = "id, live_session_id, text, quote, evidence_chat_id, game, save_id, save_name, human_locked"
+_ARCHIVE_COLUMNS = (
+    "id, live_session_id, text, quote, evidence_chat_id, game, save_id, save_name, human_locked, keywords, place"
+)
 # 快照读面：引用的档案行连同快照标注一起取
 _SNAPSHOT_COLUMNS = (
     "a.id, a.live_session_id, a.text, a.quote, a.evidence_chat_id, a.game, a.save_id, a.save_name, a.human_locked,"
-    " l.lasting AS snap_lasting, l.seen_at_ms AS snap_seen_at_ms, l.pinned AS snap_pinned"
+    " a.keywords, a.place, l.lasting AS snap_lasting, l.seen_at_ms AS snap_seen_at_ms, l.pinned AS snap_pinned"
 )
+
+
+def keywords_column(keywords: Sequence[str]) -> str:
+    """触发词写进库的样子：JSON 字符串列表（中文原样，不转义）。"""
+    return json.dumps([str(word) for word in keywords], ensure_ascii=False)
+
+
+def archive_line_of(row: Any) -> ArchiveLine:
+    """库里一行档案转成模型：触发词列是 JSON 文本，解不开的记一条警告、当没有触发词。"""
+    data: Dict[str, Any] = dict(row)
+    raw = data.get("keywords")
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) and raw else []
+    except json.JSONDecodeError as exc:
+        logger.warning(f"档案行 {data.get('id')} 的触发词不是合法 JSON（当没有触发词）：{exc}")
+        parsed = []
+    data["keywords"] = [str(word) for word in parsed] if isinstance(parsed, list) else []
+    data["place"] = str(data.get("place") or "")
+    return ArchiveLine.model_validate(data)
+
+
 # 旧场次现拼快照：连着往前至多取几场有档案行的旧场次，其中凑够几场时长够的就停
 # （升级前最后一场如果是开错重开的一小段，也能接到真正的上一场和再前一场）
 LEGACY_SNAPSHOT_MAX_SESSIONS = 3
@@ -104,9 +131,7 @@ def _stored_lines(conn: sqlite3.Connection, live_session_id: int) -> List[Snapsh
         lasting = bool(data.pop("snap_lasting"))
         seen_at_ms = int(data.pop("snap_seen_at_ms"))
         pinned = bool(data.pop("snap_pinned"))
-        result.append(
-            SnapshotLine(line=ArchiveLine.model_validate(data), lasting=lasting, seen_at_ms=seen_at_ms, pinned=pinned)
-        )
+        result.append(SnapshotLine(line=archive_line_of(data), lasting=lasting, seen_at_ms=seen_at_ms, pinned=pinned))
     return result
 
 
@@ -116,9 +141,7 @@ def _own_lines(conn: sqlite3.Connection, candidate: _Candidate) -> List[Snapshot
         f"SELECT {_ARCHIVE_COLUMNS} FROM archive_lines WHERE live_session_id=? ORDER BY id ASC",  # noqa: S608
         (candidate.session_id,),
     ).fetchall()
-    return [
-        SnapshotLine(line=ArchiveLine.model_validate(dict(item)), seen_at_ms=candidate.started_at_ms) for item in rows
-    ]
+    return [SnapshotLine(line=archive_line_of(item), seen_at_ms=candidate.started_at_ms) for item in rows]
 
 
 def _legacy_snapshot(
@@ -186,6 +209,8 @@ class ArchiveRepo(BaseRepo):
         game: Optional[str] = None,
         save_id: str = "",
         save_name: str = "",
+        keywords: Sequence[str] = (),
+        place: str = "",
     ) -> int:
         """写一行档案，返回主键；标题或原话为空时不写（返回 0）。
 
@@ -200,8 +225,8 @@ class ArchiveRepo(BaseRepo):
         def _exec() -> int:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id, game, save_id, save_name)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id, game, save_id, save_name,"
+                    " keywords, place) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         int(live_session_id),
                         title,
@@ -210,6 +235,8 @@ class ArchiveRepo(BaseRepo):
                         game,
                         save_id or "",
                         save_name or "",
+                        keywords_column(keywords),
+                        place or "",
                     ),
                 )
                 return int(cur.lastrowid or 0)
@@ -225,7 +252,7 @@ class ArchiveRepo(BaseRepo):
                     f"SELECT {_ARCHIVE_COLUMNS} FROM archive_lines WHERE live_session_id=? ORDER BY id ASC",  # noqa: S608
                     (int(live_session_id),),
                 ).fetchall()
-                return [ArchiveLine.model_validate(dict(row)) for row in rows]
+                return [archive_line_of(row) for row in rows]
 
         return await self._run_in_executor(_exec)
 
@@ -242,7 +269,7 @@ class ArchiveRepo(BaseRepo):
                     f"SELECT {_ARCHIVE_COLUMNS} FROM archive_lines WHERE id IN ({placeholders})",  # noqa: S608
                     ids,
                 ).fetchall()
-            by_id = {int(row["id"]): ArchiveLine.model_validate(dict(row)) for row in rows}
+            by_id = {int(row["id"]): archive_line_of(row) for row in rows}
             return [by_id[line_id] for line_id in ids if line_id in by_id]
 
         return await self._run_in_executor(_exec)

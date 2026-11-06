@@ -143,6 +143,10 @@ class ArchiveLine(BaseModel):
     human_locked: bool = Field(
         default=False, description="运营者改过或新增的行：之后的整理不能去掉或替换它，只有人能动"
     )
+    keywords: List[str] = Field(
+        default_factory=list, description="被动想起的触发词（名字、地名、物件名、梗的原词，至多 4 个）"
+    )
+    place: str = Field(default="", description="这件事挂在哪个记住的地点（地点名，只在 save_id 那个存档里成立）")
 
 
 class SnapshotLine(BaseModel):
@@ -236,6 +240,8 @@ class PendingArchiveLine(BaseModel):
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
     lasting: bool = Field(default=False, description="是否名字、住处、关系这类稳定的事（快照标注）")
     in_snapshot: bool = Field(default=True, description="是否进本场快照；超出上限被挤出的照样写成本场档案行")
+    keywords: List[str] = Field(default_factory=list, description="代码核过的触发词（至多 4 个）")
+    place: str = Field(default="", description="代码核过的记住地点名；空串 = 不挂地点")
 
 
 class KeptSnapshotLine(BaseModel):

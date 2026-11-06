@@ -907,6 +907,8 @@ async def test_delete_viewer_scrubs_commitments_archive_and_settle_report(tmp_pa
             text=f"{nickname}来互动",
             quote=f"欢迎{nickname}，晚上好",
             evidence_chat_id=int(speech),
+            keywords=[nickname, "晚上好"],
+            place=f"{nickname}的家",
         )
         settle_report = json.dumps(
             {
@@ -936,6 +938,9 @@ async def test_delete_viewer_scrubs_commitments_archive_and_settle_report(tmp_pa
         (archive_row,) = await store.execute("SELECT text, quote FROM archive_lines")
         assert archive_row["text"] == "一位观众来互动"
         assert archive_row["quote"] == "欢迎一位观众，晚上好"
+        # 触发词与地点名不换代称（换了会被日常弹幕误触发、也对不上游戏里的地名）：含昵称的去掉、清空
+        (line,) = await store.archive.list_lines(live_session_id=session_id)
+        assert (line.keywords, line.place) == (["晚上好"], "")
 
         (session_row,) = await store.execute("SELECT settle_report FROM live_sessions WHERE id=?", (session_id,))
         report = json.loads(session_row["settle_report"])

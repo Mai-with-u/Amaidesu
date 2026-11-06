@@ -441,6 +441,38 @@ async def test_apply_settlement_keeps_game_and_save_of_lines(store: SQLiteDataba
     assert row is not None and (row.save_id, row.save_name) == ("", "")
 
 
+async def test_archive_lines_keep_keywords_and_place_and_read_bad_keywords_as_none(store: SQLiteDatabase) -> None:
+    """整理写下的触发词与地点原样读回（快照里也一样）；触发词列坏了的当没有触发词，不拖垮读档案。"""
+    session_id = await _ended_session(store)
+    await store.sessions.apply_settlement(
+        live_session_id=session_id,
+        archive_lines=[
+            PendingArchiveLine(
+                text="Minecraft：灯塔盖好了",
+                quote="灯塔盖好啦",
+                evidence_chat_id=2,
+                game="minecraft",
+                keywords=["灯塔", "小百合"],
+                place="海边营地",
+            ),
+            PendingArchiveLine(text="和大家定了猫的名字", quote="就叫团子", evidence_chat_id=3),
+        ],
+        commitments=[],
+        closures=[],
+        settled_at_ms=9999,
+        now_ms_value=9999,
+    )
+
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert [(line.keywords, line.place) for line in lines] == [(["灯塔", "小百合"], "海边营地"), ([], "")]
+    snapshot = await store.archive.get_snapshot(live_session_id=session_id)
+    assert snapshot is not None and snapshot.lines[0].line.keywords == ["灯塔", "小百合"]
+
+    await store.execute("UPDATE archive_lines SET keywords = '不是 JSON' WHERE id = ?", (lines[0].id,))
+    (broken,) = await store.archive.list_lines_by_ids(line_ids=[lines[0].id])
+    assert (broken.keywords, broken.place) == ([], "海边营地")
+
+
 async def test_delete_live_session_cascades_archive_lines(store: SQLiteDatabase) -> None:
     session_id = await _ended_session(store)
     await store.archive.insert_line(live_session_id=session_id, text="档案", quote="档案", evidence_chat_id=1)

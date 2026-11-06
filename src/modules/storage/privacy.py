@@ -901,6 +901,7 @@ def _replace_nickname_in_sessions(
             f" WHERE live_session_id IN ({sid_ph}) AND (text LIKE ? OR quote LIKE ?)",
             [nickname, MASKED_VIEWER_LABEL, nickname, MASKED_VIEWER_LABEL, *session_ids, like_pat, like_pat],
         )
+        _scrub_archive_cues(conn, session_ids=session_ids, nickname=nickname)
 
     if table_exists(conn, "commitments"):
         conn.execute(
@@ -929,6 +930,37 @@ def _replace_nickname_in_sessions(
     _clear_memory_edits_with_nickname(conn, session_ids=session_ids, nickname=nickname)
     _replace_nickname_in_settle_reports(conn, session_ids=session_ids, nickname=nickname)
     _replace_nickname_in_game_data(conn, session_ids=session_ids, nickname=nickname)
+
+
+def _scrub_archive_cues(conn: sqlite3.Connection, *, session_ids: Sequence[int], nickname: str) -> None:
+    """档案行的触发词与地点名里出现这个昵称的：触发词整个去掉，地点名清空。
+
+    不替换成代称：触发词换成"某位观众"会被日常弹幕误触发，地点名改了也对不上游戏里记的名字，
+    留着只剩泄露。触发词列是 JSON 文本（引号等会被转义），所以解开后逐个比对，不靠 LIKE 判断。
+    """
+    if not nickname or not session_ids:
+        return
+    sid_ph = ",".join("?" for _ in session_ids)
+    rows = conn.execute(
+        f"SELECT id, keywords, place FROM archive_lines WHERE live_session_id IN ({sid_ph})"  # noqa: S608
+        " AND (keywords <> '[]' OR place <> '')",
+        [*session_ids],
+    ).fetchall()
+    for row in rows:
+        try:
+            words = json.loads(row["keywords"] or "[]")
+        except json.JSONDecodeError as exc:
+            logger.warning(f"档案行 {row['id']} 的触发词不是合法 JSON，整列清空：{exc}")
+            words = []
+        words = [str(word) for word in words] if isinstance(words, list) else []
+        kept = [word for word in words if nickname not in word]
+        place = "" if nickname in str(row["place"] or "") else str(row["place"] or "")
+        if kept == words and place == str(row["place"] or ""):
+            continue
+        conn.execute(
+            "UPDATE archive_lines SET keywords = ?, place = ? WHERE id = ?",
+            (json.dumps(kept, ensure_ascii=False), place, int(row["id"])),
+        )
 
 
 def _clear_memory_edits_with_nickname(

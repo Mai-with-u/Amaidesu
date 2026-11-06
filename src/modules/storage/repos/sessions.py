@@ -18,7 +18,7 @@ from src.modules.storage.models.memory import (
 )
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
 from src.modules.storage.repos._base import BaseRepo
-from src.modules.storage.repos.archive import delete_archive_lines_by_session, delete_snapshot
+from src.modules.storage.repos.archive import delete_archive_lines_by_session, delete_snapshot, keywords_column
 from src.modules.storage.repos.memory_index import delete_session_index_rows
 from src.modules.storage.repos.commitments import (
     delete_commitments_by_session,
@@ -437,7 +437,7 @@ class SessionRepo(BaseRepo):
                         continue
                     cur = conn.execute(
                         "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id,"
-                        " game, save_id, save_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        " game, save_id, save_name, keywords, place) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             int(live_session_id),
                             line.text,
@@ -446,6 +446,8 @@ class SessionRepo(BaseRepo):
                             line.game,
                             line.save_id,
                             line.save_name,
+                            keywords_column(line.keywords),
+                            line.place,
                         ),
                     )
                     existing_evidence.add(evidence_chat_id)
