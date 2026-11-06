@@ -16,6 +16,7 @@ from src.agents.streamer.memory.settle import MAX_ATTEMPTS, SessionSettler, Sett
 from src.modules.llm.payload import Response
 from src.modules.prompts import PromptManager
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.models.memory import SettleReport
 from tests.modules.llm.fakes import FakeLLMManager
 
 
@@ -391,12 +392,12 @@ async def test_dropped_speech_is_not_material(store: SQLiteDatabase, prompt_mana
 
 
 # ---------------------------------------------------------------------------
-# 滚动档案：接住上一份档案里仍然成立的事
+# 滚动档案快照：对上一份逐行挑留、去掉、替换，只引用原行
 # ---------------------------------------------------------------------------
 
 
 async def _previous_archive(store: SQLiteDatabase) -> int:
-    """上一场（滚动之前的旧档案）：取了名、种了菜、炉子没点火。"""
+    """上一场（滚动之前的旧场次）：取了名、种了菜、炉子没点火。"""
     previous = await _ended_session(store, started_at_ms=1_000)
     for evidence, (title, quote) in enumerate(
         (
@@ -412,17 +413,24 @@ async def _previous_archive(store: SQLiteDatabase) -> int:
     return previous
 
 
-async def test_rolling_archive_keeps_what_still_holds_and_rewrites_what_changed(
+def _snapshot_view(snapshot: Any) -> List[Tuple[int, str, bool]]:
+    return [(item.line.live_session_id, item.line.text, item.lasting) for item in snapshot.lines]
+
+
+async def test_snapshot_keeps_old_rows_as_they_are_and_replaces_with_this_sessions_quote(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
-    """名字与菜地接过来（名字标长期），"还没点火"被这一场改写成新的一行；接过来的行记着出自上一场。"""
+    """名字与菜地留下（名字重标稳定），"还没点火"换成这一场原话写的新行：快照引用上一场那两行本身，
+    本场名下只有替换出的新行；替换写进整理报告。"""
     previous = await _previous_archive(store)
+    before = await store.archive.list_lines(live_session_id=previous)
     session_id = await _ended_session(store, started_at_ms=5_000_000)
     await _speech(store, session_id, "炉子点上火了，海带烤上啦", timestamp_ms=5_000_100)
 
     llm = _reply(
-        '{"keep": [{"old": 1, "lasting": true}, {"old": 2}],'
-        ' "archive": [{"line": 1, "title": "Minecraft：炉子点火烤海带", "quote": "炉子点上火了", "game": null}]}',
+        '{"previous": [{"old": 1, "op": "keep", "lasting": true},'
+        ' {"old": 3, "op": "replace", "line": 1, "title": "Minecraft：炉子点火烤海带", "quote": "炉子点上火了"}],'
+        ' "archive": []}',
         '{"commitments": []}',
     )
     settler = _settler(store, llm, prompt_manager)
@@ -432,59 +440,87 @@ async def test_rolling_archive_keeps_what_still_holds_and_rewrites_what_changed(
     prompt = llm.calls[0]["input"]
     assert "【上一份档案】" in prompt
     assert "旧1 [上一场] Minecraft：女仆取名团子（原话「从今天起你就叫团子」；在 minecraft）" in prompt
-    lines = await store.archive.list_lines(live_session_id=session_id)
-    assert [(line.text, line.origin_session_id, line.lasting) for line in lines] == [
-        ("Minecraft：炉子点火烤海带", session_id, False),
-        ("Minecraft：女仆取名团子", previous, True),
-        ("Minecraft：菜地围好了", previous, False),
+    (replacement,) = await store.archive.list_lines(live_session_id=session_id)
+    assert (replacement.text, replacement.quote) == ("Minecraft：炉子点火烤海带", "炉子点上火了")
+    snapshot = await store.archive.get_snapshot(live_session_id=session_id)
+    assert _snapshot_view(snapshot) == [
+        (session_id, "Minecraft：炉子点火烤海带", False),
+        (previous, "Minecraft：女仆取名团子", True),
+        (previous, "Minecraft：菜地围好了", False),
     ]
-    assert [line.quote for line in lines[1:]] == ["从今天起你就叫团子", "菜地我自己围的"], "接过来的行照旧带原话"
+    assert [item.line for item in snapshot.lines[1:]] == before[:2], "留下的行一个字节都不变"
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    report = SettleReport.model_validate_json(row.settle_report or "{}")
+    assert [(change.action, change.what) for change in report.snapshot_changes] == [
+        ("replace", "Minecraft：炉子还没点火")
+    ]
 
 
-async def test_rolling_archive_without_keep_carries_previous_unchanged(
+async def test_dropping_an_old_row_needs_evidence_from_this_session(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
-    """模型输出里没有 keep：上一份原样接住，宁可多带几行，也不因格式出岔子把前几场全忘掉；
-    keep 写了认不出的编号，那一条进整理报告。"""
+    """没指证据的去掉、拿"这场没提到"当理由的去掉都不采纳，旧行照留；有本场证据的才去掉；
+    认不出的编号也只进整理报告。"""
     await _previous_archive(store)
     session_id = await _ended_session(store, started_at_ms=5_000_000)
-    await _speech(store, session_id, "今天就聊聊天", timestamp_ms=5_000_100)
-    settler = _settler(store, _reply('{"archive": []}', '{"commitments": []}'), prompt_manager)
+    await _speech(store, session_id, "那个炉子我拆了，不要了", timestamp_ms=5_000_100)
+    llm = _reply(
+        '{"previous": [{"old": 1, "op": "drop", "reason": "过时了"},'
+        ' {"old": 2, "op": "drop", "reason": "这场没提到", "line": 1},'
+        ' {"old": 3, "op": "drop", "reason": "她说炉子拆了", "line": 1}, {"old": 9, "op": "drop"}],'
+        ' "archive": []}',
+        '{"commitments": []}',
+    )
+
+    assert await _settler(store, llm, prompt_manager).settle_session(session_id) is True
+
+    snapshot = await store.archive.get_snapshot(live_session_id=session_id)
+    assert [item.line.text for item in snapshot.lines] == ["Minecraft：女仆取名团子", "Minecraft：菜地围好了"]
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    report = SettleReport.model_validate_json(row.settle_report or "{}")
+    assert [(change.action, change.what) for change in report.snapshot_changes] == [
+        ("refused", "Minecraft：女仆取名团子"),
+        ("refused", "Minecraft：菜地围好了"),
+        ("drop", "Minecraft：炉子还没点火"),
+        ("refused", "旧9"),
+    ]
+    assert report.snapshot_changes[2].quote == "那个炉子我拆了，不要了"
+
+
+async def test_thin_session_and_empty_output_keep_the_previous_snapshot(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """又薄又乱的一场，模型什么都没挑（输出里没有 previous）：上一份原样留着，一行都不少。"""
+    await _previous_archive(store)
+    session_id = await _ended_session(store, started_at_ms=5_000_000)
+    await _speech(store, session_id, "诶又卡了，我重开一下", timestamp_ms=5_000_100)
+    settler = _settler(store, _reply("{}", '{"commitments": []}'), prompt_manager)
 
     assert await settler.settle_session(session_id) is True
-    carried = await store.archive.list_lines(live_session_id=session_id)
-    assert [line.text for line in carried] == [
+    snapshot = await store.archive.get_snapshot(live_session_id=session_id)
+    assert [item.line.text for item in snapshot.lines] == [
         "Minecraft：女仆取名团子",
         "Minecraft：菜地围好了",
         "Minecraft：炉子还没点火",
     ]
-
-    later = await _ended_session(store, started_at_ms=9_000_000)
-    await _speech(store, later, "海带吃完了", timestamp_ms=9_000_100)
-    settler = _settler(
-        store, _reply('{"keep": [{"old": 1}, {"old": 7}], "archive": []}', '{"commitments": []}'), prompt_manager
-    )
-
-    assert await settler.settle_session(later) is True
-    assert [line.text for line in await store.archive.list_lines(live_session_id=later)] == ["Minecraft：女仆取名团子"]
-    row = await store.sessions.get_live_session(live_session_id=later)
-    assert row is not None and row.settle_report is not None and "接着记的旧行编号不存在" in row.settle_report
+    assert await store.archive.list_lines(live_session_id=session_id) == []
 
 
-async def test_rolling_archive_keep_that_is_not_a_list_fails_the_session(
+async def test_previous_that_is_not_a_list_fails_the_session(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
-    """keep 不是列表按输出读不懂处理：整场不提交、重试次数加一，上一份档案不会被这一场顶掉。"""
-    await _previous_archive(store)
+    """previous 不是列表按输出读不懂处理：整场不提交、重试次数加一，不写本场快照，简报仍读上一份。"""
+    previous = await _previous_archive(store)
     session_id = await _ended_session(store, started_at_ms=5_000_000)
     await _speech(store, session_id, "今天就聊聊天", timestamp_ms=5_000_100)
-    settler = _settler(store, _reply('{"keep": "全部", "archive": []}'), prompt_manager)
+    settler = _settler(store, _reply('{"previous": "全部", "archive": []}'), prompt_manager)
 
     assert await settler.settle_session(session_id) is False
     row = await store.sessions.get_live_session(live_session_id=session_id)
     assert row is not None and row.settled_at_ms is None and row.settle_attempts == 1
-    assert "keep 不是列表" in (row.settle_report or "")
-    assert await store.archive.list_lines(live_session_id=session_id) == []
+    assert "previous 不是列表" in (row.settle_report or "")
+    assert await store.archive.get_snapshot(live_session_id=session_id) is None
+    assert (await store.archive.latest_snapshot()).owner_session_id == previous
 
 
 # ---------------------------------------------------------------------------
@@ -955,7 +991,13 @@ def test_memory_prompt_examples_stay_out_of_eval_datasets() -> None:
     for dataset in sorted((root / "scripts" / "memory_eval" / "datasets").glob("*.jsonl")):
         for raw in dataset.read_text(encoding="utf-8").splitlines():
             if raw.strip():
-                speech.extend((dataset.stem, line["text"]) for line in json.loads(raw).get("speech", []))
+                record = json.loads(raw)
+                # 多场序列样本的台词按场次分开放
+                turns = [
+                    *record.get("speech", []),
+                    *(turn for session in record.get("sessions", []) for turn in session.get("speech", [])),
+                ]
+                speech.extend((dataset.stem, line["text"]) for line in turns)
     shared: List[str] = []
     for prompt in sorted((root / "src" / "agents" / "streamer" / "prompts").glob("memory_*.md")):
         # 例句写在半角双引号里；JSON 示例里的键值带冒号或逗号，排除掉

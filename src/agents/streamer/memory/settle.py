@@ -17,8 +17,9 @@ live.ended 之后、道别句播完才排进后台，一次整理待整理的场
 
 三次调用各只做一种判断
 ----------------------
-1. 场次档案：她的全部播出台词加游戏里的事，挑值得下次开播提起的至多 8 行新事；同时把上一份
-   档案里仍然成立的行接过来（滚动档案，取舍见 ``rolling``），一份至多 12 行；
+1. 场次档案：她的全部播出台词加游戏里的事，挑值得下次开播提起的至多 8 行新事；同时对上一份
+   快照逐行挑留、去掉（要本场证据）或替换（要本场原话），代码再按固定规则凑成本场快照
+   （只引用原行、至多 12 行，见 ``rolling``）；
 2. 找新承诺：她的全部台词（附被回应的弹幕）加她能做的事，找出当众答应过、还没兑现的事；
 3. 了结旧承诺：只在本场之前有未了结承诺时才调，判她说没说明白做完了或不做了。
 
@@ -42,12 +43,14 @@ from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
 from src.modules.storage.models.chat import SettleSpeechLine
 from src.modules.storage.models.memory import (
-    ArchiveLine,
+    ArchiveSnapshot,
     Commitment,
     CommitmentClosure,
+    KeptSnapshotLine,
     PendingArchiveLine,
     PendingCommitment,
     SettleReport,
+    SnapshotChange,
     UnregisteredItem,
 )
 from src.modules.storage.models.sessions import LiveSession
@@ -55,7 +58,7 @@ from src.modules.storage.repos.sessions import MAX_SETTLE_ATTEMPTS
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.agents.streamer.memory.render import memory_ref_numbers
-from src.agents.streamer.memory.rolling import keep_from_base, render_base, select_rolling
+from src.agents.streamer.memory.rolling import plan_from_ops, render_base, select_snapshot
 from src.agents.streamer.memory.saves import SaveTimeline
 from src.modules.utils.time_utils import now_ms
 
@@ -90,10 +93,8 @@ _EDGE_LINES_KEPT = 3
 _LINE_PREFIX_TOKENS = 4
 # 一次调度最多整理几场（启动补跑时可能有积压）
 MAX_SESSIONS_PER_RUN = 4
-# 一次整理最多写几行本场新事（模型多给了就只取前几行；连同接过来的行，一份档案的上限见 rolling）
+# 一次整理最多写几行本场新事（模型多给了就只取前几行；连同接住的行，一份快照的上限见 rolling）
 MAX_ARCHIVE_LINES = 8
-# 上一份还是滚动之前的旧档案时，往前至多取几份一起接（开始滚动的第一场）
-MAX_LEGACY_BASE_SESSIONS = 3
 # 逐字引文与标题的上限（超出的引文整条丢弃，超出的标题截断）
 MAX_QUOTE_CHARS = 80
 MAX_TITLE_CHARS = 30
@@ -129,9 +130,11 @@ class SettleMaterial:
     void_titles: List[Tuple[int, str]]
     open_text: str
     void_text: str
-    # 上一份档案（滚动底稿）与给模型看的旧行清单；没有上一份时都为空
-    previous_archive: List[ArchiveLine] = field(default_factory=list)
+    # 上一份快照（滚动基底）与给模型看的旧行清单；没有上一份时为 None 与空串
+    previous: Optional[ArchiveSnapshot] = None
     previous_text: str = ""
+    # 本场开播时刻：本场新写或再提起的行，"最近一次提起"记这个时刻
+    started_at_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -139,6 +142,8 @@ class SettleOutcome:
     """一场整理的结果：要写进去的行、没能登记的条目。"""
 
     archive_lines: List[PendingArchiveLine] = field(default_factory=list)
+    snapshot_kept: List[KeptSnapshotLine] = field(default_factory=list)
+    snapshot_changes: List[SnapshotChange] = field(default_factory=list)
     commitments: List[PendingCommitment] = field(default_factory=list)
     closures: List[CommitmentClosure] = field(default_factory=list)
     unregistered: List[UnregisteredItem] = field(default_factory=list)
@@ -330,13 +335,15 @@ class SessionSettler:
         event_repo: Optional["EventRepo"] = None,
         archive_repo: Optional["ArchiveRepo"] = None,
         game_names_provider: Optional[Callable[[], Sequence[str]]] = None,
+        min_session_ms: int = 0,
         clock: Callable[[], int] = now_ms,
     ) -> None:
         """仓储、模型与提示词由主播 Agent 构造时注入。
 
-        event_repo 缺失时原料少游戏这一类，整理照常跑；archive_repo 缺失时没有上一份档案
-        可接，本场档案只写本场的事；game_names_provider 返回当前对主播可见的游戏 Agent 名，
-        用来写「她能做的事」。
+        event_repo 缺失时原料少游戏这一类，整理照常跑；archive_repo 缺失时没有上一份快照
+        可接，本场快照只有本场的事；game_names_provider 返回当前对主播可见的游戏 Agent 名，
+        用来写「她能做的事」；min_session_ms 与常驻简报的"上一场"时长下限同一个值，滚动之前
+        的旧场次现拼基底时用来数"时长够的场次"。
         """
         self._sessions = sessions_repo
         self._chat = chat_repo
@@ -346,6 +353,7 @@ class SessionSettler:
         self._llm = llm_service
         self._prompt_manager = prompt_manager
         self._game_names_provider = game_names_provider
+        self._min_session_ms = max(0, int(min_session_ms))
         self._clock = clock
         # 场次主键 → 在途整理任务：同一场的并发触发共享这个任务，只付一次模型调用
         self._inflight: Dict[int, asyncio.Task[bool]] = {}
@@ -454,7 +462,12 @@ class SessionSettler:
             await self._record_failure(session, f"整理异常：{exc}")
             return False
 
-        report = SettleReport(unregistered=outcome.unregistered, input_note=outcome.input_note)
+        report = SettleReport(
+            unregistered=outcome.unregistered,
+            input_note=outcome.input_note,
+            snapshot_changes=outcome.snapshot_changes,
+        )
+        has_report = bool(outcome.unregistered or outcome.input_note or outcome.snapshot_changes)
         now = int(self._clock())
         try:
             written = await self._sessions.apply_settlement(
@@ -464,7 +477,8 @@ class SessionSettler:
                 closures=outcome.closures,
                 settled_at_ms=now,
                 now_ms_value=now,
-                settle_report=(report.model_dump_json() if (outcome.unregistered or outcome.input_note) else None),
+                settle_report=report.model_dump_json() if has_report else None,
+                snapshot_kept=outcome.snapshot_kept,
             )
         except Exception as exc:  # noqa: BLE001 - 写入失败按整理失败记账，事务已回滚
             logger.warning(f"场次 {live_session_id} 整理写入失败: {exc}", exc=exc)
@@ -528,7 +542,7 @@ class SessionSettler:
         game_agents = self._enabled_game_names()
         abilities_text = self._render_abilities(game_agents)
         open_commitments, open_text, void_titles, void_text = await self._load_commitments(session)
-        previous_archive = await self._load_previous_archive(session)
+        previous = await self._load_previous(session)
         return SettleMaterial(
             live_session_id=int(session.id),
             speech_text=speech_text,
@@ -543,26 +557,27 @@ class SessionSettler:
             void_titles=void_titles,
             open_text=open_text,
             void_text=void_text,
-            previous_archive=previous_archive,
-            previous_text=render_base(previous_archive),
+            previous=previous,
+            previous_text=render_base(previous),
+            started_at_ms=int(session.started_at_ms),
         )
 
-    async def _load_previous_archive(self, session: LiveSession) -> List[ArchiveLine]:
-        """本场要接着滚的上一份档案（开播早于本场的最近一份；开始滚动时连同更早几份旧档案）。
+    async def _load_previous(self, session: LiveSession) -> Optional[ArchiveSnapshot]:
+        """本场要接着滚的上一份快照（开播早于本场的最近一份；旧场次由几场旧档案现拼）。
 
-        读失败按整理失败处理、下次再试：没接住上一份就写，本场档案会顶掉前几场的事，
+        读失败按整理失败处理、下次再试：没接住上一份就写，本场快照会顶掉前几场的事，
         简报从此再也看不到它们。
         """
         if self._archive is None:
-            return []
+            return None
         try:
-            return await self._archive.list_rolling_base(
+            return await self._archive.snapshot_before(
                 before_started_at_ms=int(session.started_at_ms),
                 kind=SESSION_KIND_LIVE,
-                max_legacy_sessions=MAX_LEGACY_BASE_SESSIONS,
+                min_duration_ms=self._min_session_ms,
             )
-        except Exception as exc:  # noqa: BLE001 - 底稿读不到就不写，免得顶掉前几场的事
-            raise SettleError(f"取上一份档案失败：{exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - 基底读不到就不写，免得顶掉前几场的事
+            raise SettleError(f"取上一份档案快照失败：{exc}") from exc
 
     def _render_speech(
         self, delivered: List[SettleSpeechLine]
@@ -734,8 +749,15 @@ class SessionSettler:
             archive_rows = []
         if not isinstance(archive_rows, list):
             raise SettleError("模型输出的 archive 不是列表")
+        # 旧行只挑不改写：没列出的保留，去掉要本场证据，替换出的新行过同一个校验器
         try:
-            kept, keep_misses = keep_from_base(archive_data, material.previous_archive)
+            plan = plan_from_ops(
+                archive_data.get("previous"),
+                material.previous.lines if material.previous is not None else [],
+                session_started_at_ms=material.started_at_ms,
+                line_of=lambda raw: self._line_of(raw, material),
+                validate_new=lambda raw: self._validate_archive([raw], material),
+            )
         except ValueError as exc:
             raise SettleError(str(exc)) from exc
         commitment_rows = await self._ask_for_list(
@@ -764,11 +786,16 @@ class SessionSettler:
         new_lines, archive_misses = self._validate_archive(archive_rows, material)
         commitments, commitment_misses = self._validate_commitments(commitment_rows, material)
         closures, closure_misses = self._validate_closures(closure_rows, material)
+        selection = select_snapshot(
+            [*new_lines, *plan.replacements], plan.kept, session_started_at_ms=material.started_at_ms
+        )
         return SettleOutcome(
-            archive_lines=select_rolling(new_lines, kept),
+            archive_lines=selection.lines,
+            snapshot_kept=selection.kept,
+            snapshot_changes=[*plan.changes, *selection.evicted],
             commitments=commitments,
             closures=closures,
-            unregistered=[*archive_misses, *keep_misses, *commitment_misses, *closure_misses],
+            unregistered=[*archive_misses, *plan.misses, *commitment_misses, *closure_misses],
             input_note=material.speech_note,
         )
 
@@ -825,7 +852,8 @@ class SessionSettler:
         """本场新写的档案行的校验：逐字引文 + 至多 8 行；没通过的连同原话进未登记清单。
 
         挂的游戏与承诺同一口径；挂了游戏的，按那行台词的时刻认是在哪个存档里说的。
-        ``lasting`` 只认布尔真值（名字、关系、住处这类长期有效的事，滚动时先占位）。
+        ``lasting`` 只认布尔真值（名字、住处、关系这类稳定的事，快照取舍时先留）。
+        替换旧行的新行也走这里，与新事同一个口径。
         """
         written: List[PendingArchiveLine] = []
         missed: List[UnregisteredItem] = []

@@ -444,12 +444,14 @@ class StreamerAgent(BaseAgent):
                 chat_repo=chat_repo,
                 commitments_repo=commitments_repo,
                 event_repo=event_repo,
-                # 滚动档案：整理时接住上一份档案里仍然成立的行
+                # 滚动档案快照：整理时对上一份快照逐行挑留、去掉或替换，只引用原行
                 archive_repo=archive_repo,
                 llm_service=llm_manager,
                 prompt_manager=prompt_manager,
                 # 「她能做的事」是能力清单：启用的游戏 Agent 名，不含形象等非游戏工具面
                 game_names_provider=self._enabled_game_names,
+                # 旧场次现拼基底时数"时长够的场次"，与简报的"上一场"同一个下限
+                min_session_ms=self.typed_config.memory_brief_min_session_ms,
             )
 
         # 常驻简报：按"上一场的档案 + 不针对人的未了结承诺"渲染，每窗按表快照重渲
