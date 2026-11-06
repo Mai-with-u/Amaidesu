@@ -707,6 +707,65 @@ def _restore_masked(new_item: dict, old_item: Any) -> dict:
     return restored
 
 
+def _collect_mcp_servers(file_name: str, document: dict[str, Any]) -> list[tuple[str, Any]]:
+    """列出合并后文档里的 MCP server 条目：(文件内点分路径, 条目值)。
+
+    覆盖两处：tools.toml 的全局 MCP 注册表 ``tools.mcp.config.servers.<名>``，
+    agents.toml 各 Agent 私有的 ``agents.<名>.mcp``。
+    """
+    found: list[tuple[str, Any]] = []
+    if file_name == "tools.toml":
+        servers = _get_nested_value(document, "tools.mcp.config.servers")
+        if isinstance(servers, dict):
+            found.extend((f"tools.mcp.config.servers.{name}", cfg) for name, cfg in servers.items())
+    elif file_name == "agents.toml":
+        agents = document.get("agents")
+        if isinstance(agents, dict):
+            found.extend(
+                (f"agents.{name}.mcp", cfg["mcp"])
+                for name, cfg in agents.items()
+                if isinstance(cfg, dict) and "mcp" in cfg
+            )
+    return found
+
+
+def _paths_overlap(a: str, b: str) -> bool:
+    """两个点分路径是否一方是另一方的前缀（按段比较），即写其中一个会改动另一个。"""
+    a_parts, b_parts = a.split("."), b.split(".")
+    shorter = min(len(a_parts), len(b_parts))
+    return a_parts[:shorter] == b_parts[:shorter]
+
+
+def check_mcp_address_configured(file_name: str, updates: dict[str, Any], document: dict[str, Any]) -> None:
+    """拒绝把 MCP server 写成"已启用但未配置连接地址"。
+
+    Schema 允许地址为空串（表示未设置），单看字段都合法；但启用且无地址的
+    条目运行期必然连不上，因此在写盘前按合并后的值（文件现值 + 本次更新）
+    判定。只检查本次更新触及的条目，停用的条目放行。enabled 与 transport
+    缺省时按 Schema 默认值（启用、http）判定。
+
+    Raises:
+        ConfigValidationError: 本次更新触及的某个条目启用但缺少连接地址
+    """
+    for server_path, server_cfg in _collect_mcp_servers(file_name, document):
+        if not any(_paths_overlap(server_path, update_path) for update_path in updates):
+            continue
+        cfg = server_cfg if isinstance(server_cfg, dict) else {}
+        if not cfg.get("enabled", True):
+            continue
+        transport = cfg.get("transport")
+        transport = transport if isinstance(transport, str) and transport else "http"
+        required_field = "url" if transport == "http" else "command"
+        if cfg.get(required_field):
+            continue
+        raise ConfigValidationError(
+            file_name,
+            f"{server_path}.{required_field}",
+            f"MCP 连接 '{server_path}' 已启用但未配置连接地址（传输方式 {transport} 需要填写 {required_field}），"
+            "启用后必然连接失败。请先配置连接地址再启用，或保持停用（enabled = false）",
+        )
+
+
 async def write_config_updates(
     config_service: "ConfigService",
     config_dir: Path,
@@ -756,7 +815,8 @@ async def write_config_updates(
     # 事务前置：全部文件先校验，任一失败即整批拒绝（磁盘零写入）
     try:
         for file_name, updates in updates_by_file.items():
-            validate_config_updates(config_dir, file_name, updates)
+            merged = validate_config_updates(config_dir, file_name, updates)
+            check_mcp_address_configured(file_name, updates, merged.model_dump())
     except ConfigValidationError as e:
         return ConfigWriteResult(success=False, message=str(e))
 

@@ -98,18 +98,22 @@ def resolve_root_schema(scope: str) -> type[BaseConfig] | None:
     return _ROOT_SCHEMAS.get(file_name) if file_name else None
 
 
-def validate_config_updates(config_dir: Path, file_name: str, updates: dict[str, Any]) -> None:
+def validate_config_updates(config_dir: Path, file_name: str, updates: dict[str, Any]) -> BaseConfig:
     """校验键级变更并入后的文档（只校验不写盘）。
 
     供批量写入口做事务前置：全部文件校验通过后再逐文件落盘，
     保证"任一校验失败 → 磁盘零写入"。
+
+    Returns:
+        合并后文档的校验实例（已补默认值），供调用方做跨字段的附加校验
 
     Raises:
         ConfigValidationError: 合并后的文档未通过 Schema 校验
     """
     raw = _read_toml_dict(config_dir / file_name)
     _apply_updates_to_raw(raw, updates)
-    _validate_file(file_name, raw)
+    instance, _report = _validate_file(file_name, raw)
+    return instance
 
 
 def new_backup_batch_id(config_dir: Path) -> str:
