@@ -60,7 +60,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 31
+SCHEMA_VERSION: int = 32
 
 
 # =============================================================================
@@ -82,6 +82,11 @@ SCHEMA_VERSION: int = 31
 # - memory_cue_log          线索卡记录（推了哪张、谁触发的、用上没有）
 # - memory_edits            记忆页人工改动记录（审计，同时是整理评测的标准答案）
 # - viewer_candidates       观众候选（观众定下、她当场接受的事与她说欠着的承诺；人批准才进记忆）
+# - game_players            游戏里的人（按游戏给的 UUID 认出的别的玩家）
+# - game_player_interactions 和她的互动（打招呼、送东西、切磋、一起做的事、帮过忙）
+# - game_chat               公屏游戏聊天（私聊不落；认不出是谁说的只占位）
+# - player_candidates       玩家自述的待审候选（人批准才进记忆）
+# - viewer_player_links     运营者确认的观众与玩家对应（只用来连带删除）
 # - timeline_summary        摘要层
 # - llm_usage               LLM 调用记录
 # - llm_requests            LLM 请求历史（完整请求/响应，dashboard 历史页数据源）
@@ -168,6 +173,9 @@ def build_schema_sql() -> str:
         # viewer_candidates —— 观众候选（排在台词、档案行与承诺之后：外键要引用它们）
         + _VIEWER_CANDIDATES_SQL
         + "\n"
+        # game_players 等 —— 游戏里的人（排在场次、台词与观众之后：外键要引用它们）
+        + _GAME_PLAYERS_SQL
+        + "\n"
         # timeline_summary —— 摘要层
         + _TIMELINE_SUMMARY_SQL
         + "\n"
@@ -222,6 +230,11 @@ def list_expected_tables() -> List[str]:
         "memory_cue_log",
         "memory_edits",
         "viewer_candidates",
+        "game_players",
+        "game_player_interactions",
+        "game_chat",
+        "player_candidates",
+        "viewer_player_links",
         "timeline_summary",
         "llm_usage",
         "llm_requests",
@@ -277,7 +290,8 @@ CREATE TABLE IF NOT EXISTS live_chat (
     simulated        INTEGER NOT NULL DEFAULT 0,
     utterance_id     TEXT,
     dropped_at_ms    INTEGER,
-    memory_refs      TEXT
+    memory_refs      TEXT,
+    reply_player_id  INTEGER REFERENCES game_players(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_live_chat_session_ts ON live_chat(live_session_id, timestamp_ms);
 """.strip()
@@ -447,6 +461,8 @@ CREATE TABLE IF NOT EXISTS forget_list (
 # save_id / save_name 是挂了游戏的承诺在哪个存档里答应的（整理时由代码按本场游戏事件判定，
 # 空串 = 不分存档或存档不明）：换了存档时，别的存档里的承诺不再当成眼前的事推给她。
 # keywords 是被动想起的触发词（JSON 字符串列表，同档案行）：观众提到这些词时把这条承诺推给她。
+# target_player_id 是对某位游戏玩家的承诺（→ game_players，玩家被删时承诺一起删）；对全体或对观众时为空。
+# 它的索引由 v32 迁移建（这一列是 v32 才补的，旧库执行建表汇总时它还不存在）。
 
 _COMMITMENTS_SQL = """
 CREATE TABLE IF NOT EXISTS commitments (
@@ -464,7 +480,8 @@ CREATE TABLE IF NOT EXISTS commitments (
     close_quote        TEXT,
     created_at_ms      INTEGER NOT NULL,
     updated_at_ms      INTEGER NOT NULL,
-    keywords           TEXT NOT NULL DEFAULT '[]'
+    keywords           TEXT NOT NULL DEFAULT '[]',
+    target_player_id   INTEGER REFERENCES game_players(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 """.strip()
@@ -824,6 +841,81 @@ CREATE TABLE IF NOT EXISTS viewer_candidates (
 CREATE INDEX IF NOT EXISTS idx_viewer_candidates_session ON viewer_candidates(live_session_id, status);
 CREATE INDEX IF NOT EXISTS idx_viewer_candidates_viewer_chat ON viewer_candidates(viewer_chat_id);
 CREATE INDEX IF NOT EXISTS idx_viewer_candidates_reply_chat ON viewer_candidates(reply_chat_id);
+""".strip()
+
+
+# --- game_players 等 —— 游戏里的人 ---
+# 她在游戏里遇到的别的玩家按"游戏 + UUID"认：同一个 UUID 改了名仍是同一行（names 记见过的名字，
+# JSON 列表），同名不同 UUID 是两行；saves 是见过他的存档（JSON 列表，每项 save_id / save_name）。
+# 只自动记和她发生过的互动（game_player_interactions：打招呼按场合并计数，fact 是结构化事实的 JSON）；
+# 公屏聊天落 game_chat（私聊不落；direction 是 player 玩家说的 / streamer 她说的 / other 认不出是谁说的，
+# 最后一种不存原话，只占一行位置），和弹幕一样受保留期管。玩家说的关于他自己的事列进 player_candidates
+# 待审，挂在他那句公屏聊天和她的回应（公屏那句或播出的台词）上。viewer_player_links 是运营者确认的
+# 观众与玩家对应，只用来连带删除，从不告诉她。玩家一行被删时，以上几张表与对他的承诺随外键一起删；
+# 她回应他的台词留着，live_chat.reply_player_id 置空（这一列的索引由 v32 迁移建）。
+
+_GAME_PLAYERS_SQL = """
+CREATE TABLE IF NOT EXISTS game_players (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    game             TEXT NOT NULL,
+    uuid             TEXT NOT NULL,
+    name             TEXT NOT NULL,
+    names            TEXT NOT NULL DEFAULT '[]',
+    saves            TEXT NOT NULL DEFAULT '[]',
+    first_session_id INTEGER REFERENCES live_sessions(id) ON DELETE SET NULL,
+    first_seen_ms    INTEGER NOT NULL,
+    last_session_id  INTEGER REFERENCES live_sessions(id) ON DELETE SET NULL,
+    last_seen_ms     INTEGER NOT NULL,
+    UNIQUE(game, uuid)
+);
+CREATE TABLE IF NOT EXISTS game_player_interactions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id       INTEGER NOT NULL REFERENCES game_players(id) ON DELETE CASCADE,
+    live_session_id INTEGER NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+    save_id         TEXT NOT NULL DEFAULT '',
+    save_name       TEXT NOT NULL DEFAULT '',
+    kind            TEXT NOT NULL,
+    fact            TEXT NOT NULL DEFAULT '{}',
+    at_ms           INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_game_player_interactions_player ON game_player_interactions(player_id, at_ms);
+CREATE INDEX IF NOT EXISTS idx_game_player_interactions_session ON game_player_interactions(live_session_id, kind);
+CREATE TABLE IF NOT EXISTS game_chat (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id INTEGER NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+    game            TEXT NOT NULL,
+    direction       TEXT NOT NULL CHECK (direction IN ('player', 'streamer', 'other')),
+    player_id       INTEGER REFERENCES game_players(id) ON DELETE CASCADE,
+    content         TEXT NOT NULL DEFAULT '',
+    save_id         TEXT NOT NULL DEFAULT '',
+    save_name       TEXT NOT NULL DEFAULT '',
+    at_ms           INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_game_chat_session ON game_chat(live_session_id, at_ms);
+CREATE INDEX IF NOT EXISTS idx_game_chat_player ON game_chat(player_id);
+CREATE TABLE IF NOT EXISTS player_candidates (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id    INTEGER NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+    player_id          INTEGER NOT NULL REFERENCES game_players(id) ON DELETE CASCADE,
+    title              TEXT NOT NULL,
+    player_chat_id     INTEGER NOT NULL REFERENCES game_chat(id) ON DELETE CASCADE,
+    player_quote       TEXT NOT NULL,
+    reply_game_chat_id INTEGER REFERENCES game_chat(id) ON DELETE CASCADE,
+    reply_live_chat_id INTEGER REFERENCES live_chat(id) ON DELETE CASCADE,
+    reply_quote        TEXT NOT NULL,
+    status             TEXT NOT NULL DEFAULT 'pending',
+    created_at_ms      INTEGER NOT NULL,
+    decided_at_ms      INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_player_candidates_player ON player_candidates(player_id, status);
+CREATE INDEX IF NOT EXISTS idx_player_candidates_session ON player_candidates(live_session_id);
+CREATE TABLE IF NOT EXISTS viewer_player_links (
+    viewer_id       INTEGER NOT NULL REFERENCES viewers(id) ON DELETE CASCADE,
+    player_id       INTEGER NOT NULL REFERENCES game_players(id) ON DELETE CASCADE,
+    confirmed_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (viewer_id, player_id)
+);
+CREATE INDEX IF NOT EXISTS idx_viewer_player_links_player ON viewer_player_links(player_id);
 """.strip()
 
 
