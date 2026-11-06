@@ -946,6 +946,8 @@ async def create_app_components(
             memory_review_repo=database.memory_review,
             # 记忆页观众候选审核区：批准才进记忆
             viewer_candidate_repo=database.viewer_candidates,
+            # 记忆页"游戏里的人"：玩家列表、观众对号确认
+            game_player_repo=database.game_players,
             # 模型页语义检索区：嵌入客户端建没建起来、是不是在退避
             embedding_setup=embedding_setup,
             # 主播记忆页查看与编辑长期记忆文件（MEMORY.md）
@@ -1281,6 +1283,7 @@ async def _start_dashboard(
     memory_cue_log_repo=None,
     memory_review_repo=None,
     viewer_candidate_repo=None,
+    game_player_repo=None,
     embedding_setup=None,
     rundown_transition_repo=None,
     storage_db_path=None,
@@ -1346,6 +1349,7 @@ async def _start_dashboard(
             memory_cue_log_repo=memory_cue_log_repo,
             memory_review_repo=memory_review_repo,
             viewer_candidate_repo=viewer_candidate_repo,
+            game_player_repo=game_player_repo,
             embedding_setup=embedding_setup,
             # 流程单执行面板读变更事实行
             rundown_transition_repo=rundown_transition_repo,

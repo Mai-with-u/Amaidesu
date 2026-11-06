@@ -18,6 +18,7 @@ from src.modules.dashboard.api import (
     ledger,
     llm,
     logs,
+    players,
     review,
     rundown,
     rundowns,
@@ -78,6 +79,8 @@ def create_app() -> FastAPI:
 
     # 记忆账本：承诺与场次档案的查看、纠错与整理状态（旧画像与长期记忆端点不再存在）
     app.include_router(ledger.router, prefix="/api/v1/memory", tags=["Memory"])
+    # 游戏里的人：玩家列表、观众对号确认与删玩家
+    app.include_router(players.router, prefix="/api/v1/memory/players", tags=["Memory"])
 
     # 任务卡快照（进行中账本 + 已完结事件聚合，游戏 Agent 委派任务消费面）
     app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["Tasks"])

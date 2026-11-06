@@ -311,6 +311,27 @@ class GamePlayerRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def interaction_counts(self, *, player_ids: Sequence[int]) -> Dict[int, Dict[str, int]]:
+        """每位玩家各种互动的条数（打招呼按场合并，所以是打过招呼的场数）；给记忆页的玩家列表看。"""
+        ids = [int(item) for item in player_ids]
+        if not ids:
+            return {}
+
+        def _exec() -> Dict[int, Dict[str, int]]:
+            placeholders = ",".join("?" for _ in ids)
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT player_id, kind, COUNT(*) AS n FROM game_player_interactions"
+                    f" WHERE player_id IN ({placeholders}) GROUP BY player_id, kind",  # noqa: S608 占位符由代码生成
+                    ids,
+                ).fetchall()
+            counts: Dict[int, Dict[str, int]] = {}
+            for row in rows:
+                counts.setdefault(int(row["player_id"]), {})[str(row["kind"])] = int(row["n"])
+            return counts
+
+        return await self._run_in_executor(_exec)
+
     async def list_history(
         self, *, player_id: int, exclude_session_id: Optional[int] = None, limit: int = 50
     ) -> List[PlayerInteraction]:
