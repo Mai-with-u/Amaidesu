@@ -898,19 +898,8 @@ def _replace_nickname_in_sessions(
         conn.execute(
             f"UPDATE archive_lines SET"  # noqa: S608
             f" text = REPLACE(text, ?, ?), quote = REPLACE(quote, ?, ?)"
-            # 滚动档案把旧行接进了后面几场：出自 ta 出现过的场次的副本一并改写
-            f" WHERE (live_session_id IN ({sid_ph}) OR from_session_id IN ({sid_ph}))"
-            f" AND (text LIKE ? OR quote LIKE ?)",
-            [
-                nickname,
-                MASKED_VIEWER_LABEL,
-                nickname,
-                MASKED_VIEWER_LABEL,
-                *session_ids,
-                *session_ids,
-                like_pat,
-                like_pat,
-            ],
+            f" WHERE live_session_id IN ({sid_ph}) AND (text LIKE ? OR quote LIKE ?)",
+            [nickname, MASKED_VIEWER_LABEL, nickname, MASKED_VIEWER_LABEL, *session_ids, like_pat, like_pat],
         )
 
     if table_exists(conn, "commitments"):
@@ -978,8 +967,11 @@ def _replace_nickname_in_report_json(raw: str, nickname: str) -> str:
         value = data.get(key)
         if isinstance(value, str):
             data[key] = value.replace(nickname, MASKED_VIEWER_LABEL)
-    items = data.get("unregistered")
-    if isinstance(items, list):
+    # 未登记清单与档案快照改动清单的条目都带标题、原话与理由
+    for list_key in ("unregistered", "snapshot_changes"):
+        items = data.get(list_key)
+        if not isinstance(items, list):
+            continue
         for item in items:
             if not isinstance(item, dict):
                 continue

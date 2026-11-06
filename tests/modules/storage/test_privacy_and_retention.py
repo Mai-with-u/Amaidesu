@@ -21,6 +21,7 @@ from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import UtteranceDroppedPayload
 from src.modules.session import LiveSessionManager
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.models.memory import KeptSnapshotLine, PendingArchiveLine, SettleReport, SnapshotChange
 from src.modules.storage.privacy import GRACE_DELETE_MAX_MS, PrivacyService, matches_phrase_table
 from src.modules.storage.bootstrap import build_privacy_and_retention
 from src.modules.storage.retention import RetentionService
@@ -960,14 +961,15 @@ async def test_delete_viewer_scrubs_commitments_archive_and_settle_report(tmp_pa
             await store.close()
 
 
-async def test_delete_viewer_scrubs_archive_copies_rolled_into_later_sessions(tmp_path: Path) -> None:
-    """滚动档案把 ta 出现过的那一场的行接进了后面几场：后面几场的副本里的昵称同样替换掉。"""
+async def test_delete_viewer_masks_snapshot_lines_through_the_original_row(tmp_path: Path) -> None:
+    """后面那一场 ta 没来，但它的快照引用了 ta 出现过那一场的档案行：快照只引用原行，原行一改，
+    后面那一场的快照读到的也是替换后的文本；整理报告里档案快照改动清单的昵称同样替换。"""
     db_file = tmp_path / "data" / "amaidesu.db"
     store = SQLiteDatabase(db_file)
     await store.initialize()
     privacy = PrivacyService(store.manager, db_path=db_file, key_path=tmp_path / "forget.key")
     await privacy.initialize()
-    nickname = "滚动副本昵称"
+    nickname = "快照引用昵称"
     try:
         first = await store.sessions.insert_live_session(started_at_ms=1000, kind="live")
         await store.sessions.close_live_session(live_session_id=first, ended_at_ms=2000)
@@ -976,7 +978,7 @@ async def test_delete_viewer_scrubs_archive_copies_rolled_into_later_sessions(tm
         resolution = await store.viewers.resolve_viewer(
             platform="bilibili",
             id_kind="account",
-            external_id="UID_ROLL_888",
+            external_id="UID_SNAP_888",
             user_name=nickname,
             timestamp_ms=1100,
             name_match_window_ms=0,
@@ -985,27 +987,47 @@ async def test_delete_viewer_scrubs_archive_copies_rolled_into_later_sessions(tm
             live_session_id=first,
             timestamp_ms=1600,
             sender_role="viewer",
-            sender_id="UID_ROLL_888",
+            sender_id="UID_SNAP_888",
             sender_name=nickname,
             content="第一场的弹幕",
             message_type="danmaku",
             viewer_id=resolution.viewer_id,
             id_kind="account",
         )
-        # 后面那一场 ta 没来，但档案里接着第一场的一行
-        await store.archive.insert_line(
-            live_session_id=later,
-            text=f"和{nickname}定了猫的名字",
-            quote=f"{nickname}说就叫团子",
-            evidence_chat_id=1,
-            from_session_id=first,
+        await store.sessions.apply_settlement(
+            live_session_id=first,
+            archive_lines=[
+                PendingArchiveLine(text=f"和{nickname}定了猫的名字", quote=f"{nickname}说就叫团子", evidence_chat_id=1)
+            ],
+            commitments=[],
+            closures=[],
+            settled_at_ms=2500,
+            now_ms_value=2500,
         )
+        (named,) = await store.archive.list_lines(live_session_id=first)
+        report = SettleReport(
+            snapshot_changes=[SnapshotChange(action="drop", what=f"{nickname}的旧事", reason="了结", quote="不用了")]
+        )
+        await store.sessions.apply_settlement(
+            live_session_id=later,
+            archive_lines=[],
+            commitments=[],
+            closures=[],
+            settled_at_ms=4500,
+            now_ms_value=4500,
+            settle_report=report.model_dump_json(),
+            snapshot_kept=[KeptSnapshotLine(archive_line_id=named.id, seen_at_ms=1000)],
+        )
+        await store.execute("UPDATE live_sessions SET settle_report=? WHERE id=?", (report.model_dump_json(), first))
 
         assert await privacy.delete_viewer(viewer_id=resolution.viewer_id, add_to_forget_list=True) is True
 
-        (row,) = await store.execute("SELECT text, quote FROM archive_lines WHERE live_session_id=?", (later,))
-        assert nickname not in row["text"] and nickname not in row["quote"]
-        assert "一位观众" in row["text"]
+        snapshot = await store.archive.get_snapshot(live_session_id=later)
+        (item,) = snapshot.lines
+        assert nickname not in item.line.text and nickname not in item.line.quote
+        assert "一位观众" in item.line.text
+        cleaned = await store.sessions.get_live_session(live_session_id=first)
+        assert nickname not in (cleaned.settle_report or "")
     finally:
         if store.initialized:
             await privacy.close()

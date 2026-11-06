@@ -8,7 +8,9 @@ import pytest
 
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.memory import (
+    ArchiveSnapshot,
     CommitmentClosure,
+    KeptSnapshotLine,
     PendingArchiveLine,
     PendingCommitment,
 )
@@ -147,102 +149,173 @@ async def test_archive_lines_roundtrip_and_delete(store: SQLiteDatabase) -> None
     assert await store.archive.get_last_archived_session_id() is None
 
 
-async def test_rolling_base_seeds_from_several_old_archives_until_a_rolling_one(store: SQLiteDatabase) -> None:
-    """开始滚动的第一场：上一份是滚动之前的旧档案，往前多取几份一起接（至多 3 份），遇到滚动档案取完就停；
-    彩排场、开播晚于这一场的不算；同一句原话只留最新那一份。"""
-    rolling = await _ended_session(store, started_at_ms=1_000)
-    await store.archive.insert_line(
-        live_session_id=rolling, text="更早滚下来的", quote="更早", evidence_chat_id=1, from_session_id=rolling
-    )
-    old_a = await _ended_session(store, started_at_ms=2_000)
-    await store.archive.insert_line(live_session_id=old_a, text="召出女仆取名", quote="就叫团子", evidence_chat_id=2)
-    rehearsal = await _ended_session(store, kind="rehearsal", started_at_ms=3_000)
-    await store.archive.insert_line(live_session_id=rehearsal, text="彩排", quote="彩排", evidence_chat_id=3)
-    old_b = await _ended_session(store, started_at_ms=4_000)
-    await store.archive.insert_line(live_session_id=old_b, text="菜地围好了", quote="围好啦", evidence_chat_id=4)
-    await store.archive.insert_line(live_session_id=old_b, text="同一句原话", quote="就叫团子", evidence_chat_id=2)
-    current = await _ended_session(store, started_at_ms=5_000)
-    later = await _ended_session(store, started_at_ms=6_000)
-    await store.archive.insert_line(live_session_id=later, text="之后的场次", quote="之后", evidence_chat_id=5)
-
-    base = await store.archive.list_rolling_base(before_started_at_ms=5_000)
-
-    assert [(line.text, line.origin_session_id) for line in base] == [
-        ("菜地围好了", old_b),
-        ("同一句原话", old_b),
-        ("更早滚下来的", rolling),
-    ], "旧档案 old_b、old_a 与滚动档案共 3 份；old_a 那行与 old_b 同一句原话，只留最新的"
-    assert current not in {line.live_session_id for line in base}
-
-    only_two = await store.archive.list_rolling_base(before_started_at_ms=5_000, max_legacy_sessions=2)
-    assert [line.text for line in only_two] == ["菜地围好了", "同一句原话"]
-
-
-async def test_rolling_base_stops_at_the_latest_rolling_archive(store: SQLiteDatabase) -> None:
-    """上一份已经是滚动档案：它已经接住了更早的事，只取它；没有档案时为空。"""
-    assert await store.archive.list_rolling_base(before_started_at_ms=9_000) == []
-    old = await _ended_session(store, started_at_ms=1_000)
-    await store.archive.insert_line(live_session_id=old, text="旧档案", quote="旧", evidence_chat_id=1)
-    rolling = await _ended_session(store, started_at_ms=2_000)
-    await store.archive.insert_line(
-        live_session_id=rolling, text="接过来的", quote="旧", evidence_chat_id=1, from_session_id=old, lasting=True
-    )
-    await store.archive.insert_line(
-        live_session_id=rolling, text="本场的", quote="新", evidence_chat_id=2, from_session_id=rolling
-    )
-
-    base = await store.archive.list_rolling_base(before_started_at_ms=9_000)
-
-    assert [(line.text, line.origin_session_id, line.lasting) for line in base] == [
-        ("接过来的", old, True),
-        ("本场的", rolling, False),
-    ]
-
-
-async def test_rehearsal_and_deletion_also_remove_carried_copies(store: SQLiteDatabase) -> None:
-    """改成彩排、删场次：这一场的档案连同接进后面几场的副本一起删；重新整理只替换这一场自己的。"""
-    first = await _ended_session(store, started_at_ms=1_000)
-    await store.archive.insert_line(live_session_id=first, text="第一场的事", quote="第一场", evidence_chat_id=1)
-    second = await _ended_session(store, started_at_ms=2_000)
-    await store.archive.insert_line(
-        live_session_id=second, text="第一场的事", quote="第一场", evidence_chat_id=1, from_session_id=first
-    )
-    await store.archive.insert_line(
-        live_session_id=second, text="第二场的事", quote="第二场", evidence_chat_id=2, from_session_id=second
-    )
-    third = await _ended_session(store, started_at_ms=3_000)
-    await store.archive.insert_line(
-        live_session_id=third, text="第二场的事", quote="第二场", evidence_chat_id=2, from_session_id=second
-    )
-
-    # 整理第二场：只换第二场自己的档案，接进第三场的副本不动；本场新写的行记成本场，接过来的记原场
-    await store.sessions.apply_settlement(
-        live_session_id=second,
-        archive_lines=[
-            PendingArchiveLine(text="第二场重整", quote="重整", evidence_chat_id=9),
-            PendingArchiveLine(
-                text="第一场的事", quote="第一场", evidence_chat_id=1, from_session_id=first, lasting=True
-            ),
-        ],
+async def _settle_with_snapshot(
+    store: SQLiteDatabase,
+    session_id: int,
+    *,
+    new: list[PendingArchiveLine],
+    kept: list[KeptSnapshotLine] | None = None,
+    settled_at_ms: int = 9_999,
+) -> dict:
+    return await store.sessions.apply_settlement(
+        live_session_id=session_id,
+        archive_lines=new,
         commitments=[],
         closures=[],
-        settled_at_ms=9_999,
-        now_ms_value=9_999,
+        settled_at_ms=settled_at_ms,
+        now_ms_value=settled_at_ms,
+        snapshot_kept=kept or [],
     )
-    rewritten = await store.archive.list_lines(live_session_id=second)
-    assert [(line.text, line.origin_session_id, line.lasting) for line in rewritten] == [
-        ("第二场重整", second, False),
-        ("第一场的事", first, True),
-    ]
-    assert [line.text for line in await store.archive.list_lines(live_session_id=third)] == ["第二场的事"]
 
-    # 第一场改成彩排：它自己的档案和接进第二场的那行一起删
+
+def _snapshot_rows(snapshot: ArchiveSnapshot | None) -> list[tuple]:
+    assert snapshot is not None
+    return [
+        (item.line.id, item.line.live_session_id, item.line.text, item.lasting, item.seen_at_ms)
+        for item in snapshot.lines
+    ]
+
+
+async def test_snapshot_references_kept_rows_without_copying(store: SQLiteDatabase) -> None:
+    """第二场接住第一场的一行：快照引用第一场那一行本身，第二场名下只有它自己新写的行；
+    被挤出快照的新行照样写成本场档案行。"""
+    first = await _ended_session(store, started_at_ms=1_000)
+    await _settle_with_snapshot(
+        store,
+        first,
+        new=[
+            PendingArchiveLine(text="给狼取名", quote="就叫阿黄", evidence_chat_id=1, lasting=True),
+            PendingArchiveLine(text="挖到铁矿", quote="铁矿来了", evidence_chat_id=2),
+        ],
+    )
+    (named, mined) = await store.archive.list_lines(live_session_id=first)
+    second = await _ended_session(store, started_at_ms=2_000)
+
+    written = await _settle_with_snapshot(
+        store,
+        second,
+        new=[
+            PendingArchiveLine(text="盖好木屋", quote="木屋盖好了", evidence_chat_id=3),
+            PendingArchiveLine(text="挤出去的新事", quote="挤出去", evidence_chat_id=4, in_snapshot=False),
+        ],
+        kept=[KeptSnapshotLine(archive_line_id=named.id, lasting=True, seen_at_ms=1_000)],
+    )
+
+    own = await store.archive.list_lines(live_session_id=second)
+    assert [line.text for line in own] == ["盖好木屋", "挤出去的新事"]
+    assert written["snapshot"] == 2
+    assert _snapshot_rows(await store.archive.get_snapshot(live_session_id=second)) == [
+        (own[0].id, second, "盖好木屋", False, 2_000),
+        (named.id, first, "给狼取名", True, 1_000),
+    ]
+    assert _snapshot_rows(await store.archive.get_snapshot(live_session_id=first)) == [
+        (named.id, first, "给狼取名", True, 1_000),
+        (mined.id, first, "挖到铁矿", False, 1_000),
+    ]
+
+
+async def test_deleting_a_row_removes_it_from_every_snapshot(store: SQLiteDatabase) -> None:
+    """删单行、按句删台词、改彩排、删场次：被删的档案行从所有快照里撤掉，别的行不动。"""
+    first = await _ended_session(store, started_at_ms=1_000)
+    await _settle_with_snapshot(
+        store,
+        first,
+        new=[
+            PendingArchiveLine(text="甲", quote="甲", evidence_chat_id=1),
+            PendingArchiveLine(text="乙", quote="乙", evidence_chat_id=2),
+        ],
+    )
+    (line_a, line_b) = await store.archive.list_lines(live_session_id=first)
+    second = await _ended_session(store, started_at_ms=2_000)
+    await _settle_with_snapshot(
+        store,
+        second,
+        new=[PendingArchiveLine(text="丙", quote="丙", evidence_chat_id=3)],
+        kept=[
+            KeptSnapshotLine(archive_line_id=line_a.id, seen_at_ms=1_000),
+            KeptSnapshotLine(archive_line_id=line_b.id, seen_at_ms=1_000),
+        ],
+    )
+
+    assert await store.archive.delete_line(line_id=line_a.id)
+    snapshot = await store.archive.get_snapshot(live_session_id=second)
+    assert [item.line.text for item in snapshot.lines] == ["丙", "乙"]
+
     await store.sessions.set_live_session_kind_with_ledger(live_session_id=first, kind="rehearsal", updated_at_ms=1)
-    assert await store.archive.list_lines(live_session_id=first) == []
-    assert [line.text for line in await store.archive.list_lines(live_session_id=second)] == ["第二场重整"]
+    snapshot = await store.archive.get_snapshot(live_session_id=second)
+    assert [item.line.text for item in snapshot.lines] == ["丙"]
+    assert await store.archive.get_snapshot(live_session_id=first) is None
 
     assert await store.sessions.delete_live_session(live_session_id=second)
-    assert await store.archive.list_lines(live_session_id=third) == []
+    assert await store.archive.get_snapshot(live_session_id=second) is None
+
+
+async def test_resettle_replaces_own_snapshot_and_skips_rows_deleted_meanwhile(store: SQLiteDatabase) -> None:
+    """重新整理一场：本场旧快照整份替换（此前的去掉随之作废）；整理途中被删的行不再引用；空快照也算写过。"""
+    first = await _ended_session(store, started_at_ms=1_000)
+    await _settle_with_snapshot(store, first, new=[PendingArchiveLine(text="甲", quote="甲", evidence_chat_id=1)])
+    (line_a,) = await store.archive.list_lines(live_session_id=first)
+    second = await _ended_session(store, started_at_ms=2_000)
+    await _settle_with_snapshot(store, second, new=[])
+    empty = await store.archive.get_snapshot(live_session_id=second)
+    assert empty is not None and empty.lines == []
+
+    assert await store.sessions.requeue_settlement(live_session_id=second)
+    await _settle_with_snapshot(
+        store,
+        second,
+        new=[PendingArchiveLine(text="乙", quote="乙", evidence_chat_id=2)],
+        kept=[
+            KeptSnapshotLine(archive_line_id=line_a.id, seen_at_ms=1_000),
+            KeptSnapshotLine(archive_line_id=987_654, seen_at_ms=1_000),
+        ],
+    )
+
+    snapshot = await store.archive.get_snapshot(live_session_id=second)
+    assert [item.line.text for item in snapshot.lines] == ["乙", "甲"]
+
+
+async def test_snapshot_before_seeds_from_old_archives_and_stops_at_a_stored_one(store: SQLiteDatabase) -> None:
+    """滚动之前的旧场次现拼快照：它自己的行加往前几场的档案行，凑够两场时长够的就停（开错重开的一小段
+    不算），遇到存下的快照接上它就停；同一句原话只留最新的一行；彩排与开播晚于本场的不算。"""
+    stored = await _ended_session(store, started_at_ms=1_000, duration_ms=3_600_000)
+    await _settle_with_snapshot(store, stored, new=[PendingArchiveLine(text="存下的", quote="存", evidence_chat_id=1)])
+    old_a = await _ended_session(store, started_at_ms=4_000_000, duration_ms=3_600_000)
+    await store.archive.insert_line(live_session_id=old_a, text="召出女仆取名", quote="就叫团子", evidence_chat_id=2)
+    rehearsal = await _ended_session(store, kind="rehearsal", started_at_ms=8_000_000)
+    await store.archive.insert_line(live_session_id=rehearsal, text="彩排", quote="彩排", evidence_chat_id=3)
+    false_start = await _ended_session(store, started_at_ms=9_000_000, duration_ms=60_000)
+    await store.archive.insert_line(live_session_id=false_start, text="同一句原话", quote="团子", evidence_chat_id=2)
+    old_b = await _ended_session(store, started_at_ms=10_000_000, duration_ms=3_600_000)
+    await store.archive.insert_line(live_session_id=old_b, text="菜地围好了", quote="围好啦", evidence_chat_id=4)
+    later = await _ended_session(store, started_at_ms=20_000_000)
+    await store.archive.insert_line(live_session_id=later, text="之后的场次", quote="之后", evidence_chat_id=5)
+
+    seeded = await store.archive.snapshot_before(before_started_at_ms=15_000_000, min_duration_ms=300_000)
+    assert seeded is not None and seeded.owner_session_id == old_b and not seeded.stored
+    assert [(item.line.text, item.line.live_session_id, item.seen_at_ms) for item in seeded.lines] == [
+        ("菜地围好了", old_b, 10_000_000),
+        ("同一句原话", false_start, 9_000_000),
+    ], "old_b 与 old_a 凑够两场时长够的就停，其间开错重开的一小段照取；old_a 那行与它同一句原话只留新的"
+
+    reach_stored = await store.archive.snapshot_before(before_started_at_ms=5_000_000, min_duration_ms=300_000)
+    assert [item.line.text for item in reach_stored.lines] == ["召出女仆取名", "存下的"]
+    first_stored = await store.archive.snapshot_before(before_started_at_ms=2_000)
+    assert first_stored.stored and [item.line.text for item in first_stored.lines] == ["存下的"]
+    assert await store.archive.snapshot_before(before_started_at_ms=500) is None
+
+
+async def test_latest_snapshot_is_the_previous_long_enough_session(store: SQLiteDatabase) -> None:
+    """简报读的快照：最近一个时长够的场次（写过快照的空场次也算）；开错重开的一小段跳过。"""
+    real = await _ended_session(store, started_at_ms=1_000, duration_ms=3_600_000)
+    await _settle_with_snapshot(store, real, new=[])
+    false_start = await _ended_session(store, started_at_ms=4_000_000, duration_ms=60_000)
+    await store.archive.insert_line(live_session_id=false_start, text="开错的", quote="开错", evidence_chat_id=1)
+
+    snapshot = await store.archive.latest_snapshot(min_duration_ms=300_000)
+    assert snapshot is not None and snapshot.owner_session_id == real and snapshot.lines == []
+    assert await store.archive.get_last_archived_session_id(min_duration_ms=300_000) == real
+    assert (await store.archive.latest_snapshot()).owner_session_id == false_start
 
 
 async def test_last_archived_session_ignores_rehearsal_and_empty(store: SQLiteDatabase) -> None:
@@ -315,7 +388,7 @@ async def test_apply_settlement_writes_everything_in_one_call(store: SQLiteDatab
         settled_at_ms=9999,
         now_ms_value=9999,
     )
-    assert written == {"archive": 1, "commitments": 1, "closed": 1, "claimed": 1}
+    assert written == {"archive": 1, "snapshot": 1, "commitments": 1, "closed": 1, "claimed": 1}
     row = await store.sessions.get_live_session(live_session_id=session_id)
     assert row is not None and row.settled_at_ms == 9999
     assert len(await store.archive.list_lines(live_session_id=session_id)) == 1
@@ -410,7 +483,7 @@ async def test_apply_settlement_rerun_replaces_archive_and_open_commitments(stor
         commitment_what="旧承诺",
         commitment_evidence=3,
     )
-    assert first == {"archive": 1, "commitments": 1, "closed": 0, "claimed": 1}
+    assert first == {"archive": 1, "snapshot": 1, "commitments": 1, "closed": 0, "claimed": 1}
 
     closed = await store.commitments.insert_commitment(what="被运营者了结", created_session_id=session_id)
     assert closed is not None
@@ -425,7 +498,7 @@ async def test_apply_settlement_rerun_replaces_archive_and_open_commitments(stor
         commitment_what="新承诺",
         commitment_evidence=6,
     )
-    assert second == {"archive": 1, "commitments": 1, "closed": 0, "claimed": 1}
+    assert second == {"archive": 1, "snapshot": 1, "commitments": 1, "closed": 0, "claimed": 1}
 
     lines = await store.archive.list_lines(live_session_id=session_id)
     assert [line.text for line in lines] == ["新档案"], "重跑应整场替换档案行，不叠加到超过 8 行"
@@ -566,7 +639,7 @@ async def test_apply_settlement_refuses_rehearsal_session(store: SQLiteDatabase)
         commitment_evidence=3,
         settled_at_ms=1_500,
     )
-    assert written == {"archive": 0, "commitments": 0, "closed": 0, "claimed": 0}
+    assert written == {"archive": 0, "snapshot": 0, "commitments": 0, "closed": 0, "claimed": 0}
     row = await store.sessions.get_live_session(live_session_id=session_id)
     assert row is not None and row.settled_at_ms is None
     assert await store.archive.list_lines(live_session_id=session_id) == []

@@ -7,12 +7,18 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+import sqlite3
+from typing import Dict, List, Optional, Sequence
 
-from src.modules.storage.models.memory import CommitmentClosure, PendingArchiveLine, PendingCommitment
+from src.modules.storage.models.memory import (
+    CommitmentClosure,
+    KeptSnapshotLine,
+    PendingArchiveLine,
+    PendingCommitment,
+)
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
 from src.modules.storage.repos._base import BaseRepo
-from src.modules.storage.repos.archive import delete_archive_lines_by_session, delete_archive_lines_from_session
+from src.modules.storage.repos.archive import delete_archive_lines_by_session, delete_snapshot
 from src.modules.storage.repos.commitments import (
     delete_commitments_by_session,
     reopen_commitments_closed_by_session,
@@ -23,6 +29,43 @@ from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KIND_REHEA
 # 下播整理的自动重试上限：用满后不再自动补跑，等运营者在 WebUI 点「重新整理」把次数清零。
 # 定在存储层：整理执行器与 WebUI 的整理状态接口共用同一个数，不各写一份
 MAX_SETTLE_ATTEMPTS = 3
+
+
+def _write_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    live_session_id: int,
+    written_at_ms: int,
+    new_lines: Sequence[tuple[int, bool]],
+    kept: Sequence[KeptSnapshotLine],
+) -> int:
+    """在整理事务里写本场的快照：先登记"写过快照"（快照可以是空的），再按顺序写各行引用。
+
+    本场新写的行最近一次提起就是本场（记本场开播时刻）；接住的行只在原行还在时才引用。
+    返回写进快照的行数。
+    """
+    conn.execute(
+        "INSERT INTO archive_snapshots(live_session_id, written_at_ms) VALUES (?, ?)",
+        (int(live_session_id), int(written_at_ms)),
+    )
+    started = conn.execute("SELECT started_at_ms FROM live_sessions WHERE id=?", (int(live_session_id),)).fetchone()
+    started_at_ms = int(started[0] or 0) if started else 0
+    position = 0
+    for archive_line_id, lasting in new_lines:
+        conn.execute(
+            "INSERT INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting, seen_at_ms)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (int(live_session_id), int(archive_line_id), position, 1 if lasting else 0, started_at_ms),
+        )
+        position += 1
+    for item in kept:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting,"
+            " seen_at_ms) SELECT ?, id, ?, ?, ? FROM archive_lines WHERE id=?",
+            (int(live_session_id), position, 1 if item.lasting else 0, int(item.seen_at_ms), int(item.archive_line_id)),
+        )
+        position += max(0, int(cur.rowcount or 0))
+    return position
 
 
 class SessionRepo(BaseRepo):
@@ -139,8 +182,10 @@ class SessionRepo(BaseRepo):
                     return result
                 result["changed"] = 1
                 if kind == SESSION_KIND_REHEARSAL:
-                    # 本场的档案连同滚动接进后面几场的副本一起删：彩排里的事不该留在正式的账上
-                    result["ledger_removed"] = delete_archive_lines_from_session(
+                    # 本场写下的快照与档案行一起撤掉：档案行删掉后，后面几场快照里对它的引用由外键
+                    # 级联撤掉，彩排里的事不会留在正式的账上
+                    delete_snapshot(conn, live_session_id=int(live_session_id))
+                    result["ledger_removed"] = delete_archive_lines_by_session(
                         conn, live_session_id=int(live_session_id)
                     ) + delete_commitments_by_session(conn, live_session_id=int(live_session_id))
                     # 彩排台词做出的了结也作废：被它了结的旧承诺放回未了结
@@ -205,7 +250,8 @@ class SessionRepo(BaseRepo):
         """删除场次行并级联清除其明细数据。
 
         级联范围：live_chat / gifts / super_chats / guards / topics / game_events /
-        timeline_summary / archive_lines（均以 ``live_session_id`` 引用场次主键）。
+        timeline_summary / archive_lines（均以 ``live_session_id`` 引用场次主键）与本场写下的
+        档案快照；后面几场快照里对本场档案行的引用由外键级联撤掉。
         承诺不随场次删除：它自带原话，删掉场次后仍能照着标题与引文展示，只是点回原句
         时找不到台词行。
         """
@@ -220,10 +266,10 @@ class SessionRepo(BaseRepo):
                     "topics",
                     "game_events",
                     "timeline_summary",
+                    "archive_lines",
                 ):
                     conn.execute(f"DELETE FROM {table} WHERE live_session_id=?", (live_session_id,))  # noqa: S608 表名为代码内常量
-                # 档案连同滚动接进后面几场的副本一起删：删掉的场次里的事不该还留在后面的档案里
-                delete_archive_lines_from_session(conn, live_session_id=int(live_session_id))
+                delete_snapshot(conn, live_session_id=int(live_session_id))
                 cur = conn.execute("DELETE FROM live_sessions WHERE id=?", (live_session_id,))
                 return cur.rowcount > 0
 
@@ -318,8 +364,9 @@ class SessionRepo(BaseRepo):
         settled_at_ms: int,
         now_ms_value: int,
         settle_report: Optional[str] = None,
+        snapshot_kept: Sequence[KeptSnapshotLine] = (),
     ) -> Dict[str, int]:
-        """把一场的整理结果一次写进去：档案行、新承诺、了结、整理完成时刻。
+        """把一场的整理结果一次写进去：档案行、档案快照、新承诺、了结、整理完成时刻。
 
         整理必须整场原子提交：任何一步失败都回滚，不能让这一场留下半份结果。
         跨三张表的写操作只有这一处，事务边界放在场次仓储里，与删除场次的级联同一层。
@@ -331,11 +378,15 @@ class SessionRepo(BaseRepo):
         再写，重跑整场替换：不会越堆越多，上一轮认定、这一轮不再认定的了结也不会留在
         账上。本场登记的未了结承诺按原话那句台词对齐——这一轮还认定的保留原编号、原地
         更新，不再认定的才删；运营者已了结或判误记的承诺不受影响。
+
+        快照同一事务写：本场新写的行里 ``in_snapshot`` 的在前，``snapshot_kept`` 接住的旧行在后，
+        按给定顺序编位置。接住的行只记引用；整理途中被运营者删掉的行就不再引用。重跑时本场旧
+        快照整份替换，所以本场此前做出的去掉、替换随之作废，基底仍是上一份快照。
         返回各类写入条数（claimed = 1 表示这次真的抢到并写了）。
         """
 
         def _exec() -> Dict[str, int]:
-            written = {"archive": 0, "commitments": 0, "closed": 0, "claimed": 0}
+            written = {"archive": 0, "snapshot": 0, "commitments": 0, "closed": 0, "claimed": 0}
             with self._manager.transaction(immediate=True) as conn:
                 claim = conn.execute(
                     "UPDATE live_sessions SET settled_at_ms=?, settle_report=?"
@@ -349,6 +400,7 @@ class SessionRepo(BaseRepo):
                 # 这一轮还认定的保留原编号、只更新标题等字段（台词里点名过的编号不悬空，
                 # 线索推送的"用上即停"仍认得它）；这一轮不再认定的才删；运营者已了结或
                 # 判误记的一概不动
+                delete_snapshot(conn, live_session_id=int(live_session_id))
                 delete_archive_lines_by_session(conn, live_session_id=int(live_session_id))
                 kept_evidence = sorted(
                     {int(item.evidence_chat_id) for item in commitments if item.evidence_chat_id is not None}
@@ -366,13 +418,15 @@ class SessionRepo(BaseRepo):
                     conn, live_session_id=int(live_session_id), updated_at_ms=int(now_ms_value)
                 )
                 existing_evidence: set[int] = set()
+                # (档案行主键, 是否稳定的事)：本场新写、要进快照的行
+                snapshot_new: List[tuple[int, bool]] = []
                 for line in archive_lines:
                     evidence_chat_id = int(line.evidence_chat_id)
                     if evidence_chat_id in existing_evidence:
                         continue
-                    conn.execute(
+                    cur = conn.execute(
                         "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id,"
-                        " game, save_id, save_name, from_session_id, lasting) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        " game, save_id, save_name) VALUES (?, ?, ?, ?, ?, ?, ?)",
                         (
                             int(live_session_id),
                             line.text,
@@ -381,13 +435,19 @@ class SessionRepo(BaseRepo):
                             line.game,
                             line.save_id,
                             line.save_name,
-                            # 本场新写的行记成本场，滚动接过来的行记最初那一场
-                            int(line.from_session_id) if line.from_session_id is not None else int(live_session_id),
-                            1 if line.lasting else 0,
                         ),
                     )
                     existing_evidence.add(evidence_chat_id)
                     written["archive"] += 1
+                    if line.in_snapshot:
+                        snapshot_new.append((int(cur.lastrowid or 0), bool(line.lasting)))
+                written["snapshot"] = _write_snapshot(
+                    conn,
+                    live_session_id=int(live_session_id),
+                    written_at_ms=int(settled_at_ms),
+                    new_lines=snapshot_new,
+                    kept=snapshot_kept,
+                )
                 for item in commitments:
                     cur = conn.execute(
                         "INSERT INTO commitments(what, quote, evidence_chat_id, viewer_id, game, save_id, save_name,"
