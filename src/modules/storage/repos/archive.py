@@ -28,12 +28,14 @@ logger = get_logger("ArchiveRepo")
 
 # 档案行读面的列（与 ArchiveLine 字段一一对应）
 _ARCHIVE_COLUMNS = (
-    "id, live_session_id, text, quote, evidence_chat_id, game, save_id, save_name, human_locked, keywords, place"
+    "id, live_session_id, text, quote, evidence_chat_id, game, save_id, save_name, human_locked, keywords, place,"
+    " source, viewer_chat_id"
 )
 # 快照读面：引用的档案行连同快照标注一起取
 _SNAPSHOT_COLUMNS = (
     "a.id, a.live_session_id, a.text, a.quote, a.evidence_chat_id, a.game, a.save_id, a.save_name, a.human_locked,"
-    " a.keywords, a.place, l.lasting AS snap_lasting, l.seen_at_ms AS snap_seen_at_ms, l.pinned AS snap_pinned"
+    " a.keywords, a.place, a.source, a.viewer_chat_id,"
+    " l.lasting AS snap_lasting, l.seen_at_ms AS snap_seen_at_ms, l.pinned AS snap_pinned"
 )
 
 

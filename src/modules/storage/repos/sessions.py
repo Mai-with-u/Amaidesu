@@ -207,6 +207,8 @@ class SessionRepo(BaseRepo):
                     )
                     # 彩排的话观众没听过：本场台词与游戏事件的检索索引一起删（来源行不变，触发器管不到）
                     delete_session_index_rows(conn, live_session_id=int(live_session_id))
+                    # 本场的观众候选也撤掉：台词行还在，外键级联管不到；批准出的承诺已随本场承诺删掉
+                    conn.execute("DELETE FROM viewer_candidates WHERE live_session_id=?", (int(live_session_id),))
                 elif row["settled_at_ms"] is not None and int(row["settled_at_ms"]) == int(row["ended_at_ms"]):
                     conn.execute(
                         "UPDATE live_sessions SET settled_at_ms=NULL, settle_attempts=0, settle_report=NULL WHERE id=?",

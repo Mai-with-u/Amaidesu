@@ -149,6 +149,12 @@ class ArchiveLine(BaseModel):
         default_factory=list, description="被动想起的触发词（名字、地名、物件名、梗的原词，至多 4 个）"
     )
     place: str = Field(default="", description="这件事挂在哪个记住的地点（地点名，只在 save_id 那个存档里成立）")
+    source: str = Field(
+        default="streamer", description="来源：streamer 她自己说的（整理写、人新增）/ viewer 人批准的观众候选"
+    )
+    viewer_chat_id: Optional[int] = Field(
+        default=None, description="观众来源的行挂着的那条弹幕（live_chat 行）；她自己说的为空"
+    )
 
 
 class SnapshotLine(BaseModel):

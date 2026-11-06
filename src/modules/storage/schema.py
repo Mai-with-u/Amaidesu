@@ -57,7 +57,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 30
+SCHEMA_VERSION: int = 31
 
 
 # =============================================================================
@@ -78,6 +78,7 @@ SCHEMA_VERSION: int = 30
 # - memory_fts_*            记忆检索的全文索引（FTS5 虚表，同上四类；派生物）
 # - memory_cue_log          线索卡记录（推了哪张、谁触发的、用上没有）
 # - memory_edits            记忆页人工改动记录（审计，同时是整理评测的标准答案）
+# - viewer_candidates       观众候选（观众定下、她当场接受的事与她说欠着的承诺；人批准才进记忆）
 # - timeline_summary        摘要层
 # - llm_usage               LLM 调用记录
 # - llm_requests            LLM 请求历史（完整请求/响应，dashboard 历史页数据源）
@@ -161,6 +162,9 @@ def build_schema_sql() -> str:
         # memory_edits —— 记忆页人工改动记录（排在档案行之后：删行触发器要引用它）
         + _MEMORY_EDITS_SQL
         + "\n"
+        # viewer_candidates —— 观众候选（排在台词、档案行与承诺之后：外键要引用它们）
+        + _VIEWER_CANDIDATES_SQL
+        + "\n"
         # timeline_summary —— 摘要层
         + _TIMELINE_SUMMARY_SQL
         + "\n"
@@ -214,6 +218,7 @@ def list_expected_tables() -> List[str]:
         "memory_fts_event",
         "memory_cue_log",
         "memory_edits",
+        "viewer_candidates",
         "timeline_summary",
         "llm_usage",
         "llm_requests",
@@ -471,6 +476,9 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 # 每个都在标题或原话里出现过）；place 是这件事挂在哪个记住的地点（地点名，只在 save_id 那个存档里成立）。
 # human_locked = 1 表示运营者在记忆页改过这一行的标题、稳定标记、触发词或地点，或这一行是运营者新增的：
 # 之后的整理不能去掉或替换它，只有人能动。原话与证据行永远不改，只能随删除一起删。
+# source 是这一行的来源：streamer 是她自己说的（整理自动写、人新增的都是），viewer 是人批准的观众候选
+# （观众定下、她当场接受的事；原话仍是她那句回应）。viewer_chat_id 是观众来源的行挂着的那条弹幕，
+# 按外键级联：删观众、忘了我、按句删弹幕时这一行随之删除。
 
 _ARCHIVE_LINES_SQL = """
 CREATE TABLE IF NOT EXISTS archive_lines (
@@ -484,9 +492,12 @@ CREATE TABLE IF NOT EXISTS archive_lines (
     save_name        TEXT NOT NULL DEFAULT '',
     keywords         TEXT NOT NULL DEFAULT '[]',
     place            TEXT NOT NULL DEFAULT '',
-    human_locked     INTEGER NOT NULL DEFAULT 0
+    human_locked     INTEGER NOT NULL DEFAULT 0,
+    source           TEXT NOT NULL DEFAULT 'streamer',
+    viewer_chat_id   INTEGER REFERENCES live_chat(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_archive_lines_session ON archive_lines(live_session_id);
+CREATE INDEX IF NOT EXISTS idx_archive_lines_viewer_chat ON archive_lines(viewer_chat_id);
 """.strip()
 
 
@@ -776,6 +787,40 @@ CREATE INDEX IF NOT EXISTS idx_memory_edits_line ON memory_edits(archive_line_id
 CREATE TRIGGER IF NOT EXISTS trg_memory_edits_line_deleted AFTER DELETE ON archive_lines BEGIN
     UPDATE memory_edits SET before_text = '', after_text = '' WHERE archive_line_id = OLD.id;
 END;
+""".strip()
+
+
+# --- viewer_candidates —— 观众候选 ---
+# 下播整理列出的、要人批准才进记忆的两类事：viewer_defined 是观众定下、她当场接受却没复述的名字、设定、
+# 梗（标题不写昵称）；claimed_missing 是她说"上次答应过""欠着的"、承诺账上却找不到的事。批准前对她
+# 完全不可见：简报、线索卡、回想、检索索引都只读 archive_lines 与 commitments，不读这张表。
+# 每条挂在两条台词记录上：观众那条弹幕（viewer_chat_id；她说欠着的一类只在她是回应某条弹幕时才有）
+# 与她那句回应（reply_chat_id），两条都按外键级联——删观众、忘了我、按句删弹幕或台词、删场次时候选
+# 随之删除。status 是 pending 待审 / approved 已批 / rejected 已驳回（驳回的留着，同一条以后不再列）；
+# 批准后生成的档案行或承诺记在 archive_line_id / commitment_id，那一行再被删时置空。待审的按时间过期。
+
+_VIEWER_CANDIDATES_SQL = """
+CREATE TABLE IF NOT EXISTS viewer_candidates (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id INTEGER NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+    kind            TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    viewer_chat_id  INTEGER REFERENCES live_chat(id) ON DELETE CASCADE,
+    viewer_quote    TEXT NOT NULL DEFAULT '',
+    reply_chat_id   INTEGER NOT NULL REFERENCES live_chat(id) ON DELETE CASCADE,
+    reply_quote     TEXT NOT NULL,
+    game            TEXT,
+    save_id         TEXT NOT NULL DEFAULT '',
+    save_name       TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'pending',
+    created_at_ms   INTEGER NOT NULL,
+    decided_at_ms   INTEGER,
+    archive_line_id INTEGER REFERENCES archive_lines(id) ON DELETE SET NULL,
+    commitment_id   INTEGER REFERENCES commitments(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_viewer_candidates_session ON viewer_candidates(live_session_id, status);
+CREATE INDEX IF NOT EXISTS idx_viewer_candidates_viewer_chat ON viewer_candidates(viewer_chat_id);
+CREATE INDEX IF NOT EXISTS idx_viewer_candidates_reply_chat ON viewer_candidates(reply_chat_id);
 """.strip()
 
 
