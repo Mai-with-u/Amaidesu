@@ -16,7 +16,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+import math
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from src.modules.types.game_situation import NearbyPlace
 
 from .attention_matrix import biome_name, item_name
 from .maicraft import MaicraftReply
@@ -408,6 +411,47 @@ def glance_world_memory(reply: MaicraftReply, dimension: str = "") -> Dict[str, 
     if len(names) > REMEMBERED_PLACES_MAX:
         line += f"等共 {len(names)} 处"
     return {"remembered_places": line}
+
+
+# 游戏情境里最多列几个最近的记住的地点
+SITUATION_PLACES_MAX = 5
+
+
+def self_position(reply: MaicraftReply) -> Optional[Tuple[str, float, float]]:
+    """看自己的回复里角色的维度与水平坐标（x、z）；读失败或缺字段时为 None。"""
+    if not reply.ok:
+        return None
+    position = reply.data.get("position") if isinstance(reply.data.get("position"), dict) else {}
+    dimension = str(position.get("dimension") or "")
+    x, z = position.get("x"), position.get("z")
+    if not dimension or not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (x, z)):
+        return None
+    return dimension, float(x), float(z)
+
+
+def nearest_places(
+    places: List[Any], position: Tuple[str, float, float], limit: int = SITUATION_PLACES_MAX
+) -> Tuple[NearbyPlace, ...]:
+    """记住的地点里和角色同一维度的，按水平距离由近到远取前 ``limit`` 个（同名只留最近的）。
+
+    Mod 给的 ``distance`` 是读世界记忆那一刻的、而且不分维度；这里用角色眼下的位置现算，
+    别的维度、没写维度或坐标不全的旧记录一律不算。
+    """
+    dimension, x, z = position
+    best: Dict[str, float] = {}
+    for item in places:
+        if not isinstance(item, dict) or not _in_dimension(item, dimension):
+            continue
+        name = str(item.get("name") or "").strip()
+        where = item["position"]
+        px, pz = where.get("x"), where.get("z")
+        if not name or not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (px, pz)):
+            continue
+        distance = math.hypot(float(px) - x, float(pz) - z)
+        if name not in best or distance < best[name]:
+            best[name] = distance
+    ranked = sorted(best.items(), key=lambda pair: pair[1])[: max(0, limit)]
+    return tuple(NearbyPlace(name=name, distance=int(round(distance))) for name, distance in ranked)
 
 
 def _in_dimension(place: Dict[str, Any], dimension: str) -> bool:

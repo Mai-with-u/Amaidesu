@@ -44,6 +44,7 @@ from src.modules.tools.models import (
 from src.modules.tools.provider import BaseToolProvider, ToolProvider
 from src.modules.tools.tool_health_monitor import ToolCircuitBreaker, ToolHealthState
 from src.modules.types.game_save import GameSave
+from src.modules.types.game_situation import GameSituation
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -530,6 +531,29 @@ class ToolRegistry:
                 continue
             if isinstance(save, GameSave):
                 result[provider.name] = save
+        return result
+
+    def current_situations(self, for_agent: str) -> Dict[str, GameSituation]:
+        """对某 Agent 可见的各游戏眼下的情境（离哪些记住的地点多远）：提供者名 → ``GameSituation``。
+
+        与 ``current_saves`` 同一口径：只收给出了情境的提供者，没启用或全部工具不可见的不收；
+        情境由游戏 Agent 从已有缓存现算，读它不触发任何动作、不向游戏发请求。
+        单个提供者读取失败只记日志并跳过。
+        """
+        result: Dict[str, GameSituation] = {}
+        for provider in self._providers:
+            situation_fn = getattr(provider, "current_situation", None)
+            if not callable(situation_fn):
+                continue
+            if not self.list_tools(provider=provider.name, for_agent=for_agent):
+                continue
+            try:
+                situation = situation_fn()
+            except Exception as exc:  # noqa: BLE001 - 单个游戏读不到情境只当这次没有
+                logger.warning(f"Provider '{provider.name}' 当前情境读取失败（跳过）: {type(exc).__name__}: {exc}")
+                continue
+            if isinstance(situation, GameSituation):
+                result[provider.name] = situation
         return result
 
     def _is_visible_to(self, full_name: str, agent_name: str) -> bool:

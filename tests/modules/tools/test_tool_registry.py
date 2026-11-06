@@ -16,6 +16,7 @@ from src.modules.tools.operations import ToolOperations
 from src.modules.tools.registry import default_tool_registry, set_default_registry
 from src.modules.tools.provider import BaseToolProvider, make_provider_from_specs
 from src.modules.types.game_save import GameSave
+from src.modules.types.game_situation import GameSituation, NearbyPlace
 from tests.modules.tools.fakes import SavedGameProvider
 
 
@@ -450,6 +451,18 @@ def test_current_saves_collects_only_visible_save_aware_games(registry: ToolRegi
 
     assert saves == {"minecraft": GameSave(id="ab12", name="新的世界"), "lobby": GameSave()}
     assert saves["minecraft"].known and not saves["lobby"].known
+
+
+def test_current_situations_collects_only_visible_games_that_report_one(registry: ToolRegistry) -> None:
+    """只收给出了情境、对读者可见的游戏；报不出的、不可见的、读取失败的都不在结果里。"""
+    near_home = GameSituation(places=(NearbyPlace(name="家", distance=12),), age_ms=300)
+    registry.register_provider(SavedGameProvider("minecraft", GameSave(id="ab12"), situation=near_home))
+    registry.register_provider(SavedGameProvider("board", None))
+    registry.register_provider(_GuidedProvider("chess", "下棋"))
+    registry.register_provider(SavedGameProvider("hidden", situation=near_home, visible_to=["other"]))
+    registry.register_provider(SavedGameProvider("broken", situation=near_home, raise_on_situation=True))
+
+    assert registry.current_situations(for_agent="streamer") == {"minecraft": near_home}
 
 
 def test_guides_default_empty_for_plain_provider(registry: ToolRegistry) -> None:

@@ -22,6 +22,7 @@ from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.types.game_save import GameSave
+from src.modules.types.game_situation import GameSituation
 from src.modules.utils.time_utils import now_ms
 
 __all__ = [
@@ -172,6 +173,14 @@ class GameToolProvider(BaseToolProvider):
         默认 None：这个游戏不分存档，主播记忆照旧只按游戏区分。分存档的游戏覆写它：
         认出存档时给编号与名字，还没进世界或还没认出时给编号为空的 ``GameSave``。
         主播在开播与每个决策窗开窗前经注册表拉取，用来分清记忆里哪些是这个存档的事。
+        """
+        return None
+
+    def current_situation(self) -> Optional[GameSituation]:
+        """角色眼下离哪些记住的地点多远（同步读游戏 Agent 已有的缓存，不发请求）。
+
+        默认 None：这个游戏没有"记住的地点"。有的游戏覆写它，主播据此判断是不是走到了
+        某个记住的地点跟前，想起在那里发生过的事。
         """
         return None
 

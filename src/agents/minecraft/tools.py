@@ -43,6 +43,7 @@ from src.modules.tools.models import (
     ToolSpec,
 )
 from src.modules.types.game_save import GameSave
+from src.modules.types.game_situation import GameSituation
 
 from .maicraft import GOAL, MaicraftReply, goal_id_of_ledger, goal_run_of, ledger_status_of
 from .state import MinecraftAgentState
@@ -489,6 +490,8 @@ class MinecraftToolProvider(GameToolProvider):
     skill_reader: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None
     # 角色眼下在哪个存档里：由 Agent 从 MaiCraft 报的世界身份读（未注入时按不分存档）
     save_reader: Optional[Callable[[], Optional[GameSave]]] = None
+    # 角色眼下离哪些记住的地点多远：由 Agent 从速览已有的缓存现算（未注入时不报情境）
+    situation_reader: Optional[Callable[[], Optional[GameSituation]]] = None
     # 取回被折叠或收起的原文：由 Agent 按块号或关键词查自己的块库（未开后台折叠时不提供折叠与取回两个工具）
     context_recall: Optional[Callable[[str, str], Dict[str, Any]]] = None
 
@@ -499,6 +502,10 @@ class MinecraftToolProvider(GameToolProvider):
     def current_save(self) -> Optional[GameSave]:
         """眼下的存档（主播按它分清记忆里哪些是这个存档的事）；旧版 Mod 报不出存档时为 None。"""
         return self.save_reader() if self.save_reader is not None else None
+
+    def current_situation(self) -> Optional[GameSituation]:
+        """眼下离哪些记住的地点多远（主播据此判断是不是走到了某个地点跟前）；读缓存，不发请求。"""
+        return self.situation_reader() if self.situation_reader is not None else None
 
     def list_tools(self) -> Iterable[ToolSpec]:
         specs = [

@@ -16,11 +16,14 @@ from src.agents.minecraft.glance import (
     glance_brief,
     glance_scene,
     glance_world_memory,
+    nearest_places,
 )
 from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
 from src.agents.minecraft.tools import STREAMER_GUIDE, build_notebook_spec
 from src.modules.llm.payload import Response
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
+from src.modules.tools.registry import ToolRegistry
+from src.modules.types.game_situation import NearbyPlace
 
 from .minecraft_v1_fakes import (
     FakeMaicraft,
@@ -352,6 +355,57 @@ async def test_switching_saves_rereads_and_never_falls_back_to_the_other_save() 
     server.world_memory_error = ""
     server.world_memory_view["places"] = [_place("新家")]
     assert (await agent._glance())["remembered_places"] == "新家"
+    await agent.stop()
+
+
+_OVERWORLD = "minecraft:overworld"
+
+
+def test_nearest_places_counts_only_the_same_dimension_by_horizontal_distance() -> None:
+    """离记住的地点多远：只算同一维度，只看水平距离（高度不算），同名留最近的，坏记录跳过。"""
+    places = [
+        {"name": "矿洞口", "position": {"x": 30, "y": 12, "z": 40, "dimension": _OVERWORLD}, "distance": 1},
+        {"name": "家", "position": {"x": 3, "y": 200, "z": 4, "dimension": _OVERWORLD}},
+        {"name": "家", "position": {"x": 300, "y": 64, "z": 0, "dimension": _OVERWORLD}},
+        {"name": "传送门", "position": {"x": 1, "y": 64, "z": 1, "dimension": "minecraft:the_nether"}},
+        {"name": "旧记录", "position": {"x": 1, "z": 1}},
+        {"name": "坏坐标", "position": {"x": "a", "z": 1, "dimension": _OVERWORLD}},
+        "坏条目",
+    ]
+
+    assert nearest_places(places, (_OVERWORLD, 0.0, 0.0)) == (
+        NearbyPlace(name="家", distance=5),
+        NearbyPlace(name="矿洞口", distance=50),
+    )
+    assert nearest_places(places, (_OVERWORLD, 0.0, 0.0), limit=1) == (NearbyPlace(name="家", distance=5),)
+
+
+async def test_game_situation_reuses_the_glance_position_and_place_cache_without_reading_the_game() -> None:
+    """主播要游戏情境时只用速览已有的位置和地点缓存现算：不多读一次游戏；位置没读到就不报。"""
+    server = FakeMaicraft()
+    server.self_view["position"] = {"x": 0.4, "y": 64.0, "z": 0.2, "dimension": _OVERWORLD}
+    server.world_memory_view["places"] = [_place("家")]
+    now = [1000.0]
+    registry = ToolRegistry()
+    agent, _llm, _bus = await make_minecraft_agent(
+        server, lambda messages: _resp("好"), clock=lambda: now[0], registry=registry
+    )
+    assert "minecraft" not in registry.current_situations(for_agent="streamer"), "还没速览过，不知道人在哪"
+
+    await agent._glance()
+    reads = len(server.calls_to("observe"))
+    now[0] += 2.5
+    situation = registry.current_situations(for_agent="streamer")["minecraft"]
+
+    # 家在 (10, -3)，人在 (0.4, 0.2)：水平距离约 10.1 格
+    assert situation.places == (NearbyPlace(name="家", distance=10),)
+    assert situation.age_ms == 2500
+    assert len(server.calls_to("observe")) == reads, "读情境不向游戏发请求"
+
+    # 看自己没读到位置：旧位置清掉，不拿它配地点清单
+    del server.self_view["position"]
+    await agent._glance()
+    assert "minecraft" not in registry.current_situations(for_agent="streamer")
     await agent.stop()
 
 

@@ -54,6 +54,8 @@ from src.agents.minecraft.glance import (
     glance_scene,
     glance_self,
     glance_world_memory,
+    nearest_places,
+    self_position,
 )
 from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.interaction_throttle import InteractionThrottle, player_key_of
@@ -125,6 +127,7 @@ from src.modules.tools.conversation import to_conversation_view
 from src.modules.tools.llm_defs import function_definition
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.registry import ToolRegistry
+from src.modules.types.game_situation import GameSituation
 from src.modules.utils.time_utils import now_ms
 from src.modules.vision.look_at_screen import LOOK_AT_SCREEN_SPEC
 from src.modules.vision.vlm_reader import LlmVisionTextReader
@@ -262,6 +265,8 @@ class MinecraftAgent(BaseAgent):
         self._food_taken = FoodTakenLog()
         # 速览里记住的地点：最多 5 分钟真读一次世界记忆；记地点成功、换存档、连接变化时提前作废
         self._remembered_places = RememberedPlacesCache(self._clock)
+        # 最近一次速览看自己读到的（维度, x, z）与读到的时刻：主播要游戏情境时拿它和地点清单现算距离，不另读游戏
+        self._last_position: Optional[Tuple[Tuple[str, float, float], float]] = None
         # obtain 装好炉先走时自动挂的回炉计时：没响之前模型结束一轮算在等炉子，不催、不上报、不兜底交付
         self._furnace_waits = FurnaceWaits(self._clock)
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
@@ -273,6 +278,7 @@ class MinecraftAgent(BaseAgent):
             creature_namer=self._name_creature,
             skill_reader=self._skill_support.read_skill if skill_library is not None else None,
             save_reader=self._world.game_save,
+            situation_reader=self._current_situation,
             context_recall=self._recall_context if config.context.active_fold else None,
         )
 
@@ -1754,10 +1760,14 @@ class MinecraftAgent(BaseAgent):
         """
         view: Dict[str, Any] = {}
         if not self._maicraft_ready():
+            self._last_position = None
             view["unavailable"] = "游戏连接还没就绪，暂时看不到游戏里的情况"
         else:
             body = await self._call_maicraft(OBSERVE, {"what": "self"})
             view.update(glance_self(body))
+            # 顺手记下这次读到的位置（读失败就清掉），主播要游戏情境时用；不为它多读一次游戏
+            position = self_position(body)
+            self._last_position = (position, self._clock()) if position is not None else None
             # 先更新名册再写身边：起过名的按名字称呼，墓碑对到死者
             scene = await self._read_creatures(body)
             view.update(glance_scene(scene, self._creatures.nicknames_by_scene_id()))
@@ -1771,6 +1781,20 @@ class MinecraftAgent(BaseAgent):
             view.update(glance_world_memory(memory, dimension))
         view["work"] = self._glance_work()
         return {"tool": "glance", "brief": glance_brief(view), **view}
+
+    def _current_situation(self) -> Optional[GameSituation]:
+        """游戏情境：最近一次速览读到的位置 + 速览缓存的地点清单，现算同一维度里最近的几个地点。
+
+        主播判断"是不是走到了某个记住的地点跟前"用。只读已有的缓存，不向游戏发请求，也不缩短
+        地点缓存的有效期；位置没读到过、或地点清单被整份丢掉了（换存档、连接变化）时为 None。
+        """
+        position = self._last_position
+        places = self._remembered_places.last_known()
+        if position is None or places is None:
+            return None
+        where, read_at = position
+        age_ms = max(0, int((self._clock() - read_at) * 1000))
+        return GameSituation(places=nearest_places(places, where), age_ms=age_ms)
 
     async def _read_remembered_places(self) -> MaicraftReply:
         """速览用的记住的地点清单：缓存没到期就用缓存，否则真读一次 ``observe(world_memory)``。
