@@ -110,14 +110,22 @@ async def test_delegation_render_without_task_id() -> None:
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        # 第 58 场原样：进展备注的抬头与图纸编号都是游戏那一面的记账地址
+        # 第 58 场原样：编号、能力名与图纸编号去掉，结果换成中文留着
         (
             "游戏目标 550（maicraft:design）done：读了 11 层方块，存成图纸 0a58eb9a-aedc-4dab-acd8-cebe2b32d50d",
-            "读了 11 层方块，存成图纸",
+            "做完了：读了 11 层方块，存成图纸",
         ),
-        ("游戏目标 568（maicraft:find）failed：这一片没有找到蒲公英", "这一片没有找到蒲公英"),
+        # 没做成、做了一半、取消了的一步不能读成做成了
+        ("游戏目标 568（maicraft:find）failed：这一片没有找到蒲公英", "没做成：这一片没有找到蒲公英"),
+        ("游戏目标 570（maicraft:obtain）partial：拿到 3 个，还差 5 个", "做了一半：拿到 3 个，还差 5 个"),
+        ("游戏目标 571（maicraft:build）cancelled：主播叫停了", "取消了：主播叫停了"),
+        # 游戏那边没写结果时记成"结束"；查不到的目标写"不在了"
+        ("游戏目标 572（maicraft:move）结束：到了门口", "结束了：到了门口"),
+        ("游戏目标 573 不在了：换了世界", "这一步没了：换了世界"),
         # 步骤括号里打头的能力名去掉，这一步在做什么留着
         ("第 1 步（maicraft:obtain，从床边箱子取烤海带），拿到了", "第 1 步（从床边箱子取烤海带），拿到了"),
+        # 物品 ID 不是能力名：物品名留着
+        ("拿到了（minecraft:iron_ingot，6 个）", None),
         # 钟点、比分、没有逗号的括号不动
         ("时间 12:30（下午），比分 3:2", None),
         ("拿到了（minecraft:dirt）", None),

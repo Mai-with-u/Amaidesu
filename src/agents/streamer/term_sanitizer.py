@@ -13,6 +13,13 @@ import re
 
 __all__ = ["sanitize_internal_terms"]
 
+
+def _goal_result(match: "re.Match[str]") -> str:
+    """进展备注抬头 → 中文结果加冒号（"没做成："），编号与能力名不留。"""
+    status = match.group("status") or ""
+    return f"{_GOAL_RESULT_WORDS.get(status, _GOAL_RESULT_UNKNOWN)}："
+
+
 # 委派任务号（如 deleg_1791384781841_1）：数字段长度不定，按前缀整体匹配
 _TASK_ID_PATTERN = re.compile(r"deleg_[0-9]+(?:_[0-9]+)*")
 # 观测引用（如 obs_f794817a_fc2e9d31aabbccdd）：scope 与摘要段都是十六进制
@@ -21,13 +28,26 @@ _OBS_REF_PATTERN = re.compile(r"obs_[0-9a-f]{6,}(?:_[0-9a-f]{6,})*")
 # "simulated:" 是数据管道标记，物品本名保留给模型与观众
 _SIMULATED_PREFIX_PATTERN = re.compile(r"\bsimulated:")
 
-# 游戏侧进展备注的抬头（如"游戏目标 550（maicraft:design）done："）：目标编号、能力名、英文状态词
-# 都是游戏那一面的记账地址；状态由备注正文说清，抬头整段去掉
-_GOAL_HEADER_PATTERN = re.compile(
-    r"游戏目标\s*\d+\s*[（(][^）)]*[）)]\s*(?:done|failed|cancelled|stalled|succeeded)?\s*[：:]\s*"
-)
-# 步骤里打头的能力名（如"第 1 步（maicraft:obtain，从箱子取海带）"）：括号里只留这一步在做什么
-_STEP_ABILITY_PATTERN = re.compile(r"(?<=[（(])[a-z][a-z0-9_]*:[a-z][a-z0-9_]*[，,]\s*")
+# 游戏侧进展备注的抬头（如"游戏目标 550（maicraft:design）done："）：目标编号和能力名是游戏那一面的
+# 记账地址，去掉；结果留着、换成中文——整段删掉的话，没做成、取消了的一步读起来就像做成了
+_GOAL_HEADER_PATTERN = re.compile(r"游戏目标\s*\d+\s*[（(][^）)]*[）)]\s*(?P<status>[a-z_]+|结束)?\s*[：:]\s*")
+# 跟踪的目标查不到了（多半是换了世界）："游戏目标 12 不在了：原因"
+_GOAL_GONE_PATTERN = re.compile(r"游戏目标\s*\d+\s*不在了\s*[：:]\s*")
+# 目标结果 → 她看得懂的说法；Mod 的 done / partial / failed / cancelled 与委派账的 succeeded / stalled，
+# 没写结果（游戏那边记成"结束"）或不认识的一律说"结束了"
+_GOAL_RESULT_WORDS = {
+    "done": "做完了",
+    "succeeded": "做完了",
+    "partial": "做了一半",
+    "failed": "没做成",
+    "cancelled": "取消了",
+    "stalled": "停着没动",
+}
+_GOAL_RESULT_UNKNOWN = "结束了"
+_GOAL_GONE_WORDS = "这一步没了"
+# 步骤里打头的能力名（如"第 1 步（maicraft:obtain，从箱子取海带）"）：括号里只留这一步在做什么。
+# 只认能力的 maicraft: 前缀，物品 ID（"拿到了（minecraft:iron_ingot，6 个）"）不碰，否则物品名就没了
+_STEP_ABILITY_PATTERN = re.compile(r"(?<=[（(])maicraft:[a-z][a-z0-9_]*[，,]\s*")
 # 图纸、存档一类的 UUID（如"存成图纸 0a58eb9a-aedc-…"）：念出来是一串乱码
 _UUID_PATTERN = re.compile(r"\s*\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 
@@ -44,7 +64,8 @@ def sanitize_internal_terms(text: str) -> str:
     sanitized = _SIMULATED_PREFIX_PATTERN.sub("", sanitized)
     # 目标编号、能力名、UUID：第 58 场"游戏目标 550（maicraft:design）done：……存成图纸 0a58…"
     # 原样进了【我手头在游戏里做的事】，她跟着念了一晚上"又先量一遍、画图纸"
-    sanitized = _GOAL_HEADER_PATTERN.sub("", sanitized)
+    sanitized = _GOAL_HEADER_PATTERN.sub(_goal_result, sanitized)
+    sanitized = _GOAL_GONE_PATTERN.sub(f"{_GOAL_GONE_WORDS}：", sanitized)
     sanitized = _STEP_ABILITY_PATTERN.sub("", sanitized)
     sanitized = _UUID_PATTERN.sub("", sanitized)
     return sanitized
