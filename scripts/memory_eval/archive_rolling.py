@@ -3,7 +3,8 @@
 一条用例是几场连着的直播：前面一场立下稳定的事（给伙伴起的名字、住处、和观众定下的设定），
 中间夹着又薄又乱的短场（卡顿、重开、设备出岔子），最后看这些事还在不在快照里。同时检查：
 留在快照里的旧行逐字节不变（快照只引用原行）、运营者删掉的误记行不会再回来、没有本场证据的
-旧行（一次性的小事也算）不会被丢、被这一场改写或了结的事被换掉或去掉。
+旧行（一次性的小事也算）不会被丢、建造进度这类进展不被标成稳定的事（标了会挤掉前几场真正稳定的事）、
+被这一场改写或了结的事被换掉或去掉。
 
 样本里可以写"手松的模型"会给的操作（``sloppy``：没指证据、或拿"一次性遭遇"当理由的去掉），
 dry 照样交给生产整理器，量的是代码兜底：这类去掉必须不被采纳，旧行照留。
@@ -51,11 +52,12 @@ SESSION_START_CLOCK = clock_time(19, 50)
 SESSION_LENGTH_MS = 3 * 3_600_000
 
 # 阈值：稳定的事遗忘率（序列末尾不在快照里的比例）、留下的旧行字节变化数、删掉的误记行回来的条数、
-# 没有本场证据却被丢掉的旧行条数
+# 没有本场证据却被丢掉的旧行条数、进展被标成稳定的事的条数
 FORGET_RATE_MAX = 0.1
 BYTE_MISMATCH_MAX = 0
 DELETED_RETURNED_MAX = 0
 UNEVIDENCED_LOST_MAX = 0
+WRONGLY_LASTING_MAX = 0
 
 _BASE_ROW_RE = re.compile(r"^旧(\d+) \[[^\]]+\] .*?（原话「(.*?)」")
 
@@ -82,6 +84,7 @@ class SequenceRecord:
 
     ``present`` 是稳定的事（量遗忘率）；``kept`` 是哪一场都没有证据说它了结的旧行（多是一次性的
     小事），进过快照的序列末尾也必须还在；模型当初就没把它写成档案的不算"被丢"，另行报告。
+    ``not_lasting`` 是建造进度、家具、种地、做菜这类进展，任何一场的快照里都不该标成稳定的事。
     """
 
     case_id: str
@@ -90,6 +93,7 @@ class SequenceRecord:
     present: Tuple[str, ...]
     absent: Tuple[str, ...]
     kept: Tuple[str, ...] = ()
+    not_lasting: Tuple[str, ...] = ()
 
 
 def _parse_session(raw: Any, where: str) -> SessionCase:
@@ -137,6 +141,7 @@ def load_records() -> List[SequenceRecord]:
                 present=tuple(str(key) for key in final.get("present", [])),
                 absent=tuple(str(key) for key in final.get("absent", [])),
                 kept=tuple(str(key) for key in final.get("kept", [])),
+                not_lasting=tuple(str(key) for key in final.get("not_lasting", [])),
             )
         )
     return records
@@ -186,6 +191,8 @@ class SequenceResult:
     kept_total: int = 0
     unevidenced_lost: List[str] = field(default_factory=list)
     kept_unwritten: List[str] = field(default_factory=list)
+    not_lasting_total: int = 0
+    wrongly_lasting: List[str] = field(default_factory=list)
     forgotten: List[str] = field(default_factory=list)
     problems: List[str] = field(default_factory=list)
     sessions: List[Dict[str, Any]] = field(default_factory=list)
@@ -309,6 +316,11 @@ async def run_sequence(
                 snapshot = await store.archive.get_snapshot(live_session_id=session_id)
                 rows = snapshot.lines if snapshot is not None else []
                 seen_keys.update(key for key in (row_keys.get(item.line.id) for item in rows) if key is not None)
+                # 进展类的行在任何一场的快照里被标成稳定的事，都记一次（同一个键只记一次）
+                for item in rows:
+                    key = row_keys.get(item.line.id)
+                    if key in record.not_lasting and item.lasting and key not in result.wrongly_lasting:
+                        result.wrongly_lasting.append(key)
                 for item in rows:
                     if item.line.id in originals and originals[item.line.id] != _row_signature(item.line):
                         result.byte_mismatches += 1
@@ -338,6 +350,7 @@ async def run_sequence(
     result.kept_total = len(written)
     result.unevidenced_lost = [key for key in written if key not in final_keys]
     result.kept_unwritten = [key for key in record.kept if key not in seen_keys]
+    result.not_lasting_total = sum(1 for key in record.not_lasting if key in seen_keys)
     return result
 
 
@@ -361,6 +374,8 @@ class RollingMetrics:
     kept_total: int
     unevidenced_lost: int
     kept_unwritten: int
+    not_lasting_total: int
+    wrongly_lasting: int
     problems: int
 
 
@@ -379,6 +394,8 @@ def evaluate(results: Sequence[SequenceResult]) -> RollingMetrics:
         kept_total=sum(item.kept_total for item in results),
         unevidenced_lost=sum(len(item.unevidenced_lost) for item in results),
         kept_unwritten=sum(len(item.kept_unwritten) for item in results),
+        not_lasting_total=sum(item.not_lasting_total for item in results),
+        wrongly_lasting=sum(len(item.wrongly_lasting) for item in results),
         problems=sum(len(item.problems) for item in results),
     )
 
@@ -395,6 +412,8 @@ def verdict_failures(metrics: RollingMetrics, *, dry: bool) -> List[str]:
         failures.append(f"删掉的误记行回来了 {metrics.deleted_returned} 条")
     if metrics.unevidenced_lost > UNEVIDENCED_LOST_MAX:
         failures.append(f"没有本场证据的旧行被丢了 {metrics.unevidenced_lost} 条")
+    if metrics.wrongly_lasting > WRONGLY_LASTING_MAX:
+        failures.append(f"进展被标成稳定的事 {metrics.wrongly_lasting} 条")
     if dry and metrics.kept_unwritten:
         failures.append(f"该留住的旧行有 {metrics.kept_unwritten} 条一开始就没写成档案")
     if dry and metrics.stale_removed != metrics.stale_total:
@@ -414,6 +433,7 @@ def format_metrics(metrics: RollingMetrics) -> str:
             f"删掉的误记行回来 {metrics.deleted_returned} 条（阈值 {DELETED_RETURNED_MAX}）",
             f"没有本场证据的旧行被丢 {metrics.unevidenced_lost}/{metrics.kept_total} 条（阈值 {UNEVIDENCED_LOST_MAX}；"
             f"另有 {metrics.kept_unwritten} 条模型当初没写成档案，不计入）",
+            f"进展被标成稳定的事 {metrics.wrongly_lasting}/{metrics.not_lasting_total} 条（阈值 {WRONGLY_LASTING_MAX}）",
             f"留下的旧行字节变化 {metrics.byte_mismatches} 处（阈值 {BYTE_MISMATCH_MAX}）",
         ]
     )
@@ -472,6 +492,7 @@ def _run(args: argparse.Namespace, prompt_manager: PromptManager, records: List[
                     "byte_mismatch_max": BYTE_MISMATCH_MAX,
                     "deleted_returned_max": DELETED_RETURNED_MAX,
                     "unevidenced_lost_max": UNEVIDENCED_LOST_MAX,
+                    "wrongly_lasting_max": WRONGLY_LASTING_MAX,
                 },
                 "metrics": asdict(metrics),
                 "verdict": {"passed": not failures, "failures": failures},
