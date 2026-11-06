@@ -27,7 +27,7 @@ from src.modules.storage.repos._base import BaseRepo
 from src.modules.storage.repos.memory_review import (
     MAX_REVIEW_TITLE_CHARS,
     MemoryReviewError,
-    insert_pinned_line,
+    insert_snapshot_line,
     record_edit,
     stored_snapshot_owner,
 )
@@ -191,7 +191,8 @@ class ViewerCandidateRepo(BaseRepo):
                         raise MemoryReviewError("conflict", "这句台词已经登记过一条承诺了")
                     commitment_id = int(cur.lastrowid or 0)
                 else:
-                    # 观众定下的：原话是她那句回应的逐字片段，挂着那条弹幕；锁住并放进最新快照最前面
+                    # 观众定下的：原话是她那句回应的逐字片段，挂着那条弹幕；锁住（模型改不了、删不了），
+                    # 以普通行放进最新快照最前面，稳定与否照批准时人标的；不标放回，要一直留在简报里由人另外放回
                     owner = stored_snapshot_owner(conn)
                     taken = conn.execute(
                         "SELECT 1 FROM archive_lines WHERE live_session_id=? AND evidence_chat_id=?",
@@ -215,7 +216,7 @@ class ViewerCandidateRepo(BaseRepo):
                         ),
                     )
                     line_id = int(cur.lastrowid or 0)
-                    insert_pinned_line(conn, owner=owner, line_id=line_id, lasting=lasting)
+                    insert_snapshot_line(conn, owner=owner, line_id=line_id, lasting=lasting, pinned=False)
                 conn.execute(
                     "UPDATE viewer_candidates SET status='approved', title=?, decided_at_ms=?, archive_line_id=?,"
                     " commitment_id=? WHERE id=?",

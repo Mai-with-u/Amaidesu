@@ -331,8 +331,15 @@ async def test_candidates_list_masks_known_names_and_approve_or_reject(client, s
     )
     assert approved.status_code == 200 and approved.json()["status"] == "approved"
     lines = (await client.get(f"/api/v1/memory/archive/{session_id}")).json()["items"]
-    assert [(line["text"], line["pinned"], line["lasting"]) for line in lines] == [
-        ("和观众一起给小羊取名雪球", True, True)
+    assert [
+        (line["text"], line["in_snapshot"], line["pinned"], line["lasting"], line["human_locked"]) for line in lines
+    ] == [("和观众一起给小羊取名雪球", True, False, True, True)], (
+        "批准的以普通行放进快照：锁住、稳定照批准时标的、不标放回"
+    )
+    # 批准过候选的场次照样能重新整理：观众来源行重跑时留着，不算会被冲掉的人工改动
+    assert (await client.post(f"/api/v1/memory/settle/{session_id}/resettle")).status_code == 200
+    assert [line.text for line in await store.archive.list_lines(live_session_id=session_id)] == [
+        "和观众一起给小羊取名雪球"
     ]
 
     rest = next(item for item in body["items"] if item["title"] == "猫的名字")
@@ -371,7 +378,10 @@ async def test_claimed_missing_candidates_come_with_the_nearest_ledger_entries(c
             live_session_id=session_id,
             candidates=[
                 PendingViewerCandidate(
-                    kind="claimed_missing", title="唱小幸运", reply_chat_id=lines[0], reply_quote="上次答应过你们唱小幸运"
+                    kind="claimed_missing",
+                    title="唱小幸运",
+                    reply_chat_id=lines[0],
+                    reply_quote="上次答应过你们唱小幸运",
                 ),
                 PendingViewerCandidate(
                     kind="claimed_missing", title="开箱视频", reply_chat_id=lines[1], reply_quote="还欠大家一个开箱视频"

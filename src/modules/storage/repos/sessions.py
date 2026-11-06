@@ -431,8 +431,8 @@ class SessionRepo(BaseRepo):
         幂等：先用「settled_at_ms 为空且仍是正式场」抢占本场——同一场被两次整理同时
         挑中时只有一次写进去（begin immediate 把第二个写事务挡在对方提交之后，重读即
         看到已完成）；整理途中场次被改成彩排时，这里也写不进去。运营者重置进度后重跑
-        时，同一事务里先删掉本场旧档案行、把上一轮用本场台词了结的旧承诺放回未了结，
-        再写，重跑整场替换：不会越堆越多，上一轮认定、这一轮不再认定的了结也不会留在
+        时，同一事务里先删掉本场旧档案行（人批准的观众来源行留着）、把上一轮用本场台词了结的旧承诺
+        放回未了结，再写，重跑整场替换：不会越堆越多，上一轮认定、这一轮不再认定的了结也不会留在
         账上。本场登记的未了结承诺按原话那句台词对齐——这一轮还认定的保留原编号、原地
         更新，不再认定的才删；运营者已了结或判误记的承诺不受影响。
 
@@ -458,7 +458,10 @@ class SessionRepo(BaseRepo):
                 # 线索推送的"用上即停"仍认得它）；这一轮不再认定的才删；运营者已了结或
                 # 判误记的一概不动
                 delete_snapshot(conn, live_session_id=int(live_session_id))
-                delete_archive_lines_by_session(conn, live_session_id=int(live_session_id))
+                # 人批准的观众来源行不删：它们不是整理写的，整理器把它们接着带进重写的快照
+                conn.execute(
+                    "DELETE FROM archive_lines WHERE live_session_id=? AND source <> 'viewer'", (int(live_session_id),)
+                )
                 kept_evidence = sorted(
                     {int(item.evidence_chat_id) for item in commitments if item.evidence_chat_id is not None}
                 )
@@ -482,7 +485,13 @@ class SessionRepo(BaseRepo):
                 reopen_commitments_closed_by_session(
                     conn, live_session_id=int(live_session_id), updated_at_ms=int(now_ms_value)
                 )
-                existing_evidence: set[int] = set()
+                # 留下来的观众来源行占着它们那句台词：模型这一轮又用同一句写了一行的不再写，免得一件事两行
+                existing_evidence: set[int] = {
+                    int(row[0])
+                    for row in conn.execute(
+                        "SELECT evidence_chat_id FROM archive_lines WHERE live_session_id=?", (int(live_session_id),)
+                    ).fetchall()
+                }
                 # (档案行主键, 是否稳定的事)：本场新写、要进快照的行
                 snapshot_new: List[tuple[int, bool]] = []
                 for line in archive_lines:

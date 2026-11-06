@@ -1328,6 +1328,47 @@ async def test_candidate_whose_name_is_not_in_the_danmaku_is_reported_not_listed
     ]
 
 
+async def test_resettling_after_an_approval_carries_the_viewer_line_into_the_snapshot(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """批准过候选的场次重新整理：观众来源行留着、接着带进重写的快照（稳定照批准时标的、不标放回），
+    同一件事不再列成候选；模型这一轮又用同一句台词写的那一行不再写第二行。"""
+    session_id = await _ended_session(store)
+    await _viewer_message(store, session_id, content="猫叫芝麻吧", message_id="m1")
+    await _speech(store, session_id, "芝麻好听", reply_to_message_id="m1", timestamp_ms=1_100)
+    await _speech(store, session_id, "今天挖到铁矿了", timestamp_ms=1_200)
+    candidate = (
+        '"viewer_candidates": [{"line": 1, "title": "猫取名芝麻", "word": "芝麻", "viewer_quote": "猫叫芝麻",'
+        ' "quote": "芝麻好听"}]'
+    )
+    first = _reply(
+        '{"archive": [{"line": 2, "title": "挖到铁矿", "quote": "挖到铁矿"}], ' + candidate + "}",
+        '{"commitments": []}',
+    )
+    assert await _settler(store, first, prompt_manager).settle_session(session_id) is True
+    (pending,) = await store.viewer_candidates.list_candidates()
+    approved = await store.viewer_candidates.approve(candidate_id=pending.id, lasting=True, at_ms=8_000)
+
+    assert await store.memory_review.count_human_edits(live_session_id=session_id) == 0
+    await store.sessions.requeue_settlement(live_session_id=session_id)
+    again = _reply(
+        '{"archive": [{"line": 2, "title": "挖到铁矿", "quote": "挖到铁矿"},'
+        ' {"line": 1, "title": "猫叫芝麻", "quote": "芝麻好听"}], ' + candidate + "}",
+        '{"commitments": []}',
+    )
+    assert await _settler(store, again, prompt_manager).settle_session(session_id) is True
+
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert sorted((line.text, line.source) for line in lines) == [("挖到铁矿", "streamer"), ("猫取名芝麻", "viewer")]
+    snapshot = await store.archive.get_snapshot(live_session_id=session_id)
+    assert snapshot is not None
+    carried = {item.line.id: (item.lasting, item.pinned) for item in snapshot.lines}
+    assert carried[approved.archive_line_id or 0] == (True, False)
+    assert [(item.title, item.status) for item in await store.viewer_candidates.list_candidates(status=None)] == [
+        ("猫取名芝麻", "approved")
+    ], "批准过的同一句不再列成待审"
+
+
 async def test_rejected_candidates_and_archived_lines_are_not_listed_again(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:

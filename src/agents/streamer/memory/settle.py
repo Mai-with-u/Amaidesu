@@ -55,6 +55,7 @@ from src.modules.storage.models.memory import (
     PendingViewerCandidate,
     SettleReport,
     SnapshotChange,
+    SnapshotLine,
     UnregisteredItem,
 )
 from src.modules.storage.models.sessions import LiveSession
@@ -157,6 +158,8 @@ class SettleMaterial:
     places: List[str] = field(default_factory=list)
     # 本场的游戏玩家：代号、她在公屏打的字、每一句能对上谁（对玩家的承诺按它核对）
     players: PlayerChat = field(default_factory=PlayerChat)
+    # 重新整理这一场时留下的观众来源行（人批准的观众候选）：模型看不到、动不了，代码接着带进快照
+    carried: List[SnapshotLine] = field(default_factory=list)
     # 已了结的旧承诺标题：找"她说欠着、账上却找不到的"时一并比对
     closed_titles: List[Tuple[int, str]] = field(default_factory=list)
     closed_text: str = ""
@@ -643,6 +646,7 @@ class SessionSettler:
         open_commitments, open_text, void_titles, void_text = await self._load_commitments(session)
         closed_titles = await self._load_closed_titles(session)
         previous = await self._load_previous(session)
+        carried = await self._load_carried(session)
         place_marks = await self._load_place_marks(session)
         return SettleMaterial(
             live_session_id=int(session.id),
@@ -664,6 +668,7 @@ class SessionSettler:
             place_marks=place_marks,
             places=remembered_places(place_marks),
             players=players,
+            carried=carried,
             closed_titles=closed_titles,
             closed_text="\n".join(f"#{commitment_id} 「{what}」" for commitment_id, what in closed_titles),
         )
@@ -723,6 +728,22 @@ class SessionSettler:
             )
         except Exception as exc:  # noqa: BLE001 - 基底读不到就不写，免得顶掉前几场的事
             raise SettleError(f"取上一份档案快照失败：{exc}") from exc
+
+    async def _load_carried(self, session: LiveSession) -> List[SnapshotLine]:
+        """这一场重新整理时要接着带进快照的观众来源行；第一次整理时一条也没有。
+
+        读失败按整理失败处理、下次再试：没带上就写，人批准过的事会从她的简报里消失。
+        """
+        if self._archive is None:
+            return []
+        try:
+            return list(
+                await self._archive.carried_viewer_lines(
+                    live_session_id=int(session.id), started_at_ms=int(session.started_at_ms)
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - 读不到就不写，免得冲掉人批准过的事
+            raise SettleError(f"取人批准过的观众来源行失败：{exc}") from exc
 
     def _render_speech(
         self, delivered: List[SettleSpeechLine], *, player_codes: Optional[Mapping[int, str]] = None
@@ -941,8 +962,11 @@ class SessionSettler:
         commitments, commitment_misses = self._validate_commitments(
             commitment_rows, material, closed_ids={closure.commitment_id for closure in closures}
         )
+        # 人批准的观众来源行：重新整理时接着带进快照，和接住的旧行一起按规则取舍；基底里已有的不重复带
+        kept_ids = {int(item.line.id) for item in plan.kept}
+        carried = [item for item in material.carried if int(item.line.id) not in kept_ids]
         selection = select_snapshot(
-            [*new_lines, *plan.replacements], plan.kept, session_started_at_ms=material.started_at_ms
+            [*new_lines, *plan.replacements], [*plan.kept, *carried], session_started_at_ms=material.started_at_ms
         )
         candidates = await self._check_candidates(archive_data.get("viewer_candidates"), material, selection.lines)
         claimed = await self._check_claimed(commitment_data.get("claimed_missing"), material, commitments, closures)
@@ -1019,7 +1043,8 @@ class SessionSettler:
             rejected_chats, rejected_titles = await self._sessions.rejected_candidate_keys()
         except Exception as exc:  # noqa: BLE001 - 去重依据读不到不挡整理
             logger.warning(f"读驳回过的观众候选失败，本次不按驳回记录去重: {exc}", exc=exc)
-        base = material.previous.lines if material.previous is not None else []
+        # 去重依据：上一份档案、本场留下的观众来源行（重新整理时批准过的不再列）、本场新写的行
+        base = [*(material.previous.lines if material.previous is not None else []), *material.carried]
         new_evidence, new_titles = taken_from(new_lines)
         old_evidence, old_titles = taken_from(base)
         return validate_viewer_candidates(

@@ -111,8 +111,12 @@ def _snapshot_row(conn: sqlite3.Connection, owner: int, line_id: int) -> Optiona
     ).fetchone()
 
 
-def insert_pinned_line(conn: sqlite3.Connection, *, owner: int, line_id: int, lasting: bool) -> None:
-    """把一行插进最新快照的最前面并标放回：常驻简报按位置列，满 12 行时它也排得上。"""
+def insert_snapshot_line(conn: sqlite3.Connection, *, owner: int, line_id: int, lasting: bool, pinned: bool) -> None:
+    """把一行插进最新快照的最前面：常驻简报按位置列，满 12 行时它也排得上。
+
+    ``pinned`` 是人放回、新增的行（取舍时排第 0 档、不挤）；批准的观众候选以普通行插进来，
+    下一场整理按稳定与否、最近提起照常取舍。
+    """
     top = conn.execute(
         "SELECT MIN(position) FROM archive_snapshot_lines WHERE live_session_id=?", (int(owner),)
     ).fetchone()
@@ -120,8 +124,15 @@ def insert_pinned_line(conn: sqlite3.Connection, *, owner: int, line_id: int, la
     started = conn.execute("SELECT started_at_ms FROM live_sessions WHERE id=?", (int(owner),)).fetchone()
     conn.execute(
         "INSERT INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting, seen_at_ms, pinned)"
-        " VALUES (?, ?, ?, ?, ?, 1)",
-        (int(owner), int(line_id), position, 1 if lasting else 0, int(started[0] or 0) if started else 0),
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            int(owner),
+            int(line_id),
+            position,
+            1 if lasting else 0,
+            int(started[0] or 0) if started else 0,
+            1 if pinned else 0,
+        ),
     )
 
 
@@ -248,7 +259,9 @@ class MemoryReviewRepo(BaseRepo):
                     " WHERE l.archive_line_id=? ORDER BY s.started_at_ms DESC, s.id DESC LIMIT 1",
                     (int(line_id),),
                 ).fetchone()
-                insert_pinned_line(conn, owner=owner, line_id=int(line_id), lasting=bool(last[0]) if last else False)
+                insert_snapshot_line(
+                    conn, owner=owner, line_id=int(line_id), lasting=bool(last[0]) if last else False, pinned=True
+                )
                 record_edit(
                     conn,
                     live_session_id=owner,
@@ -314,7 +327,7 @@ class MemoryReviewRepo(BaseRepo):
                     (int(live_session_id), title, quote_text, int(evidence_chat_id)),
                 )
                 new_id = int(cur.lastrowid or 0)
-                insert_pinned_line(conn, owner=owner, line_id=new_id, lasting=lasting)
+                insert_snapshot_line(conn, owner=owner, line_id=new_id, lasting=lasting, pinned=True)
                 record_edit(
                     conn,
                     live_session_id=int(live_session_id),
@@ -374,16 +387,20 @@ class MemoryReviewRepo(BaseRepo):
         await self._run_in_executor(_exec)
 
     async def count_human_edits(self, *, live_session_id: int) -> int:
-        """这一场重新整理会冲掉的人工改动：本场人锁住的档案行，加上本场快照里人放回、新增的行。"""
+        """这一场重新整理会冲掉的人工改动：本场人锁住的档案行，加上本场快照里人放回、新增的行。
+
+        人批准的观众来源行不算：重新整理不删它们，整理器把它们接着带进重写的快照（放回标记跟着）。
+        """
 
         def _exec() -> int:
             with self._manager.transaction() as conn:
                 locked = conn.execute(
-                    "SELECT COUNT(*) FROM archive_lines WHERE live_session_id=? AND human_locked=1",
+                    "SELECT COUNT(*) FROM archive_lines WHERE live_session_id=? AND human_locked=1 AND source <> 'viewer'",
                     (int(live_session_id),),
                 ).fetchone()
                 pinned = conn.execute(
-                    "SELECT COUNT(*) FROM archive_snapshot_lines WHERE live_session_id=? AND pinned=1",
+                    "SELECT COUNT(*) FROM archive_snapshot_lines l JOIN archive_lines a ON a.id = l.archive_line_id"
+                    " WHERE l.live_session_id=? AND l.pinned=1 AND a.source <> 'viewer'",
                     (int(live_session_id),),
                 ).fetchone()
                 return int(locked[0] or 0) + int(pinned[0] or 0)
@@ -398,7 +415,7 @@ __all__ = [
     "MemoryReviewRepo",
     "ReviewSnapshotLine",
     "SessionReviewState",
-    "insert_pinned_line",
+    "insert_snapshot_line",
     "record_edit",
     "stored_snapshot_owner",
 ]

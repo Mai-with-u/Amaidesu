@@ -398,6 +398,7 @@ async def resettle_session(
     失败场次与整理完但想重做的场次共用这一个出口；重跑时整场替换，不会写出重复行。
     不存在的场次返回 404；彩排场从不整理、进行中的场次还没内容可整理，都返回 409。
     这一场有人改过的行、或它的快照里有人放回的行时也返回 409：整场替换会把人工改动冲掉。
+    人批准的观众来源行不拦：重新整理不删它们，整理器把它们接着带进重写的快照。
     """
     session = await sessions.get_live_session(live_session_id=int(live_session_id))
     if session is None:

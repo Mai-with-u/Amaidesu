@@ -339,6 +339,60 @@ class ArchiveRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def carried_viewer_lines(self, *, live_session_id: int, started_at_ms: int) -> List[SnapshotLine]:
+        """重新整理这一场时要接着带进快照的观众来源行（人批准的观众候选写成的行）。
+
+        整理重跑时这些行不删（它们不是整理写的），整理器把它们接着放进重写的快照。两类：这一场自己的
+        观众来源行；这一场现有快照里引用的观众来源行（批准时这一场是最新快照，别的场次的候选也插在
+        这里）。稳定与否、最近提起的时刻、是否放回照这一场现有快照里那一行；这一场快照里没有的，稳定
+        与否和最近提起照最近一份引用它的快照、不算放回；都没有就按不稳定、本场开播时刻算。
+        """
+
+        def _exec() -> List[SnapshotLine]:
+            columns = ", ".join(f"a.{name.strip()}" for name in _ARCHIVE_COLUMNS.split(","))
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    f"SELECT {columns} FROM archive_lines a WHERE a.source = 'viewer' AND (a.live_session_id = ?"  # noqa: S608
+                    " OR a.id IN (SELECT archive_line_id FROM archive_snapshot_lines WHERE live_session_id = ?))"
+                    " ORDER BY a.id ASC",
+                    (int(live_session_id), int(live_session_id)),
+                ).fetchall()
+                carried: List[SnapshotLine] = []
+                for row in rows:
+                    line = archive_line_of(row)
+                    own = conn.execute(
+                        "SELECT lasting, seen_at_ms, pinned FROM archive_snapshot_lines"
+                        " WHERE live_session_id = ? AND archive_line_id = ?",
+                        (int(live_session_id), int(line.id)),
+                    ).fetchone()
+                    if own is not None:
+                        carried.append(
+                            SnapshotLine(
+                                line=line,
+                                lasting=bool(own["lasting"]),
+                                seen_at_ms=int(own["seen_at_ms"]),
+                                pinned=bool(own["pinned"]),
+                            )
+                        )
+                        continue
+                    # 这一场的快照里没有它（批准时最新快照是更晚的一场）：稳定与否照最近一份引用它的快照
+                    latest = conn.execute(
+                        "SELECT l.lasting, l.seen_at_ms FROM archive_snapshot_lines l"
+                        " JOIN live_sessions s ON s.id = l.live_session_id WHERE l.archive_line_id = ?"
+                        " ORDER BY s.started_at_ms DESC, s.id DESC LIMIT 1",
+                        (int(line.id),),
+                    ).fetchone()
+                    carried.append(
+                        SnapshotLine(
+                            line=line,
+                            lasting=bool(latest["lasting"]) if latest is not None else False,
+                            seen_at_ms=int(latest["seen_at_ms"]) if latest is not None else int(started_at_ms),
+                        )
+                    )
+                return _with_snapshot_source_names(conn, carried)
+
+        return await self._run_in_executor(_exec)
+
     async def list_cue_lines(self, *, line_ids: Optional[Sequence[int]] = None, limit: int = 500) -> List[ArchiveLine]:
         """被动想起能推的档案行：只取正式场的；新的在前。
 

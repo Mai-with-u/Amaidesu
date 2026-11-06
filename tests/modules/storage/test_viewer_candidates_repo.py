@@ -111,7 +111,7 @@ async def test_settlement_rewrite_replaces_only_pending_candidates(store: SQLite
     assert await store.viewer_candidates.count_pending() == 1
 
 
-async def test_approving_a_viewer_defined_candidate_writes_a_pinned_viewer_line(store: SQLiteDatabase) -> None:
+async def test_approving_a_viewer_defined_candidate_writes_a_normal_viewer_line(store: SQLiteDatabase) -> None:
     session_id, said, reply, owed = await _settled_session(store)
     _write(store, session_id, _pending(said, reply, owed))
     candidate = next(item for item in await store.viewer_candidates.list_candidates() if item.kind == "viewer_defined")
@@ -135,8 +135,11 @@ async def test_approving_a_viewer_defined_candidate_writes_a_pinned_viewer_line(
         snapshot.lines[0].lasting,
     ) == (
         line.id,
+        False,
         True,
-        True,
+    ), "以普通行插在最前面：稳定照批准时标的，不标放回"
+    assert await store.memory_review.count_human_edits(live_session_id=session_id) == 0, (
+        "观众来源行重新整理时留着，不拦重新整理"
     )
     assert _edits(store) == [("candidate", "approve", "猫叫团子", "和观众一起给猫取名团子")]
 
