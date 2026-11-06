@@ -41,6 +41,7 @@ from src.modules.storage.repos import (
     LLMRepo,
     MemoryCueLogRepo,
     MemoryIndexRepo,
+    MemoryReviewRepo,
     RundownInstanceRepo,
     RundownRepo,
     RundownTransitionRepo,
@@ -137,6 +138,8 @@ class SQLiteDatabase:
         self.memory_index = MemoryIndexRepo(self._manager)
         # 线索卡记录（被动想起推了哪张、谁触发的、用上没有；复盘面板读）
         self.memory_cue_log = MemoryCueLogRepo(self._manager)
+        # 记忆页人工审核（改标题、标稳定、放回、新增、删行、标已审，连同改动记录）
+        self.memory_review = MemoryReviewRepo(self._manager)
 
     # -------------------- 属性 --------------------
 

@@ -95,6 +95,17 @@ def _candidates(conn: sqlite3.Connection, where: str, params: Tuple[Any, ...]) -
     ]
 
 
+def newest_snapshot_owner(
+    conn: sqlite3.Connection, kind: SessionKind = SESSION_KIND_LIVE
+) -> Optional[Tuple[int, bool]]:
+    """开播最晚的候选场次与它存没存下快照：下一场整理拿来当基底的就是这一份。
+
+    记忆页放回、标稳定、新增都改这一份；它是滚动之前的旧场次（没存下快照）时这些操作做不了。
+    """
+    found = _candidates(conn, "", (kind,))
+    return (found[0].session_id, found[0].stored) if found else None
+
+
 def delete_archive_lines_by_session(conn: sqlite3.Connection, *, live_session_id: int) -> int:
     """删除某一场的全部档案行，返回删除条数（场次改类型、删除场次、重新整理时用）。
 
@@ -416,4 +427,5 @@ __all__ = [
     "ArchiveRepo",
     "delete_archive_lines_by_session",
     "delete_snapshot",
+    "newest_snapshot_owner",
 ]
