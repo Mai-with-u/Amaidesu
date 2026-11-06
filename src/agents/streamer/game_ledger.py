@@ -63,6 +63,18 @@ class _PendingEntry:
     arrived_ms: int
     count: int = 1
     is_chat: bool = False  # 游戏聊天行：入账后其原话随本窗说话交给表达侧
+    # 聊天行是谁说的：核对过的玩家写 UUID，认不出是谁的玩家聊天写 "?"，系统消息与非聊天行为空
+    speaker: str = ""
+
+
+def sole_chat_player(speakers: Sequence[Tuple[str, str]]) -> Tuple[str, str]:
+    """本窗公屏聊天只来自一位核对过的玩家时返回 (游戏, UUID)，否则为两个空串。
+
+    有两位以上玩家开口、或有认不出是谁的人插话时，她这一窗说的话不算在回应某一位（不猜）。
+    """
+    if len(speakers) != 1 or speakers[0][1] == "?":
+        return "", ""
+    return speakers[0]
 
 
 class GameLedger:
@@ -117,15 +129,21 @@ class GameLedger:
         self._stage(note_turn(label, body, timestamp_ms or now_ms()), label=label, body=body)
         return summary
 
-    def record_chat(self, game: str, body: str, timestamp_ms: int) -> None:
-        """游戏聊天行入账（标签就是游戏名）；原话随本窗说话交给表达侧，行文不经脱敏。"""
-        self._stage(note_turn(game, body, timestamp_ms or now_ms()), label=game, body=body, is_chat=True)
+    def record_chat(self, game: str, body: str, timestamp_ms: int, speaker: str = "") -> None:
+        """游戏聊天行入账（标签就是游戏名）；原话随本窗说话交给表达侧，行文不经脱敏。
+
+        ``speaker`` 是这句是谁说的（核对过的玩家写 UUID，认不出是谁的玩家聊天写 "?"，系统消息为空）：
+        出账时列进本批的发言人，她这一窗说的话据此记下在回应哪位玩家。
+        """
+        self._stage(
+            note_turn(game, body, timestamp_ms or now_ms()), label=game, body=body, is_chat=True, speaker=speaker
+        )
 
     def record_delegation(self, agent: str, instruction: str) -> TimelineTurn:
         """Planner 受理委派：构造"我在哪个游戏里开始做什么"的时间线行（直写时间线用）。"""
         return note_turn(self.delegation_label(agent), sanitize_internal_terms(instruction), now_ms())
 
-    def _stage(self, turn: TimelineTurn, *, label: str, body: str, is_chat: bool = False) -> None:
+    def _stage(self, turn: TimelineTurn, *, label: str, body: str, is_chat: bool = False, speaker: str = "") -> None:
         """入账暂存：同摘要落在折叠窗内时并入最近一条只记数，按上限裁剪。"""
         now = now_ms()
         if self._pending:
@@ -134,7 +152,9 @@ class GameLedger:
                 last.count += 1
                 return
         self._pending.append(
-            _PendingEntry(turn=turn, label=label, body=body, base=turn.content, arrived_ms=now, is_chat=is_chat)
+            _PendingEntry(
+                turn=turn, label=label, body=body, base=turn.content, arrived_ms=now, is_chat=is_chat, speaker=speaker
+            )
         )
         overflow = len(self._pending) - _PENDING_GAME_EVENTS_MAX
         if overflow > 0:
@@ -153,6 +173,7 @@ class GameLedger:
         turns: List[TimelineTurn] = []
         events: List[str] = []
         fresh_chat: List[str] = []
+        speakers: List[Tuple[str, str]] = []
         state_lines: List[str] = []
         for item in staged:
             content = item.base if item.count == 1 else f"{item.base}（另 {item.count - 1} 次相同）"
@@ -161,6 +182,8 @@ class GameLedger:
             events.append(content)
             if item.is_chat:
                 fresh_chat.append(content)
+                if item.speaker and (item.label, item.speaker) not in speakers:
+                    speakers.append((item.label, item.speaker))
             if self._is_state_line(item.label, item.body):
                 state_lines.append(content)
         if len(state_lines) > _MAX_STATE_LINES:
@@ -168,6 +191,7 @@ class GameLedger:
         return GameEventBatch(
             events=tuple(events),
             fresh_chat=tuple(fresh_chat),
+            chat_speakers=tuple(speakers),
             private_chat=tuple(private_chat),
             facts_text="\n".join(state_lines),
             timeline_turns=tuple(turns),

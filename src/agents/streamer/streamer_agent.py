@@ -147,6 +147,13 @@ _CLOSING_SESSION: ContextVar[Optional[ClosingSession]] = ContextVar("streamer_cl
 _ROUND_LIVE_EPOCH: ContextVar[Optional[int]] = ContextVar("streamer_round_live_epoch", default=None)
 
 
+def _chat_speaker(payload: GameChatPayload) -> str:
+    """这句游戏聊天是谁说的：核对过在线的玩家写 UUID，认不出是谁的玩家聊天写 "?"，系统消息为空。"""
+    if payload.kind != "player":
+        return ""
+    return payload.sender_id if payload.sender_id and payload.sender_online else "?"
+
+
 def _game_chat_line(payload: GameChatPayload) -> str:
     """游戏里别人说的一句话写成给决策看的一行：发言人 + 标注 + 原话 + 截断/刷屏说明。
 
@@ -1849,7 +1856,10 @@ class StreamerAgent(BaseAgent):
             if payload.private:
                 self._scope.record_private_chat(f"[{payload.game}] {body}")
             else:
-                self._game_ledger.record_chat(payload.game, body, payload.timestamp_ms or now_ms())
+                # 记下这句是谁说的：本窗只有一位核对过的玩家开口时，她这一窗的话落库时记成在回应他
+                self._game_ledger.record_chat(
+                    payload.game, body, payload.timestamp_ms or now_ms(), speaker=_chat_speaker(payload)
+                )
                 if self._mouth is not None:
                     self._mouth.note_game(body)
             if payload.kind == "player":

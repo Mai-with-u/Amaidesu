@@ -381,6 +381,7 @@ class DecisionRoundExecutor:
             round_id=round_id,
             live_session_id=scope_pk if scope_pk is not None else 0,
             memory_refs=list(outcome.memory_refs),
+            reply_player=outcome.reply_player,
         )
         if speech_info is not None:
             result["speech"], result["emotion"], result["utterance_id"] = speech_info

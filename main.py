@@ -1061,6 +1061,8 @@ async def _start_storage_ledger(
             name_match_window_ms=name_match_window_ms,
             privacy=privacy,
             retention=retention,
+            # 游戏里的人：公屏聊天、她在公屏说的话、玩家互动随本落库器一起落库
+            game_player_repo=database.game_players,
         )
         if auto_start:
             await ledger.start()

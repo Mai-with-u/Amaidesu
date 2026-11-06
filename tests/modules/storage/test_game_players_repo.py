@@ -74,13 +74,13 @@ async def test_greetings_merge_into_one_row_per_session(store: SQLiteDatabase) -
         game="minecraft", uuid="uuid-a", name="Alex", live_session_id=first, at_ms=1_100
     )
     repo = store.game_players
-    await repo.record_greeting(player_id=alex.id, live_session_id=first, action="蹲起", count=2, at_ms=1_200)
-    await repo.record_greeting(player_id=alex.id, live_session_id=first, action="挥手", at_ms=1_300)
-    await repo.record_greeting(player_id=alex.id, live_session_id=second, action="挥手", at_ms=5_200)
+    await repo.record_greeting(player_id=alex.id, live_session_id=first, actions=["蹲起", "挥手"], at_ms=1_200)
+    await repo.record_greeting(player_id=alex.id, live_session_id=first, actions=["挥手", "挥手"], at_ms=1_300)
+    await repo.record_greeting(player_id=alex.id, live_session_id=second, at_ms=5_200)
     rows = await repo.list_interactions(player_id=alex.id)
     assert [(row.live_session_id, row.kind, row.fact) for row in rows] == [
-        (second, INTERACTION_GREET, {"count": 1, "actions": {"挥手": 1}}),
-        (first, INTERACTION_GREET, {"count": 3, "actions": {"蹲起": 2, "挥手": 1}}),
+        (second, INTERACTION_GREET, {"count": 1, "actions": {}}),
+        (first, INTERACTION_GREET, {"count": 2, "actions": {"蹲起": 1, "挥手": 2}}),
     ]
     assert rows[1].at_ms == 1_300
 
@@ -135,6 +135,23 @@ async def test_public_chat_keeps_who_said_it_and_unknown_speakers_only_hold_a_pl
         )
 
 
+async def test_a_name_finds_the_player_only_when_one_was_seen_this_session(store: SQLiteDatabase) -> None:
+    first = await _session(store)
+    second = await _session(store, 5_000)
+    alex = await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-a", name="Alex", live_session_id=second, at_ms=5_100
+    )
+    await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-s", name="Steve", live_session_id=first, at_ms=1_100
+    )
+    repo = store.game_players
+    assert await repo.session_player_named(game="minecraft", name="Alex", live_session_id=second) == alex.id
+    # 别的场次见过的不算；同名两位就不猜
+    assert await repo.session_player_named(game="minecraft", name="Steve", live_session_id=second) is None
+    await repo.meet_player(game="minecraft", uuid="uuid-a2", name="Alex", live_session_id=second, at_ms=5_200)
+    assert await repo.session_player_named(game="minecraft", name="Alex", live_session_id=second) is None
+
+
 async def test_operator_links_a_viewer_and_can_undo_it(store: SQLiteDatabase) -> None:
     session_id = await _session(store)
     alex = await store.game_players.meet_player(
@@ -163,7 +180,9 @@ async def test_turning_a_session_into_rehearsal_drops_its_interactions(store: SQ
     alex = await store.game_players.meet_player(
         game="minecraft", uuid="uuid-a", name="Alex", live_session_id=session_id, at_ms=1_100
     )
-    await store.game_players.record_greeting(player_id=alex.id, live_session_id=session_id, action="挥手", at_ms=1_200)
+    await store.game_players.record_greeting(
+        player_id=alex.id, live_session_id=session_id, actions=["挥手"], at_ms=1_200
+    )
     said = await store.game_players.add_game_chat(
         live_session_id=session_id,
         game="minecraft",

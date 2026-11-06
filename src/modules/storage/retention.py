@@ -4,7 +4,8 @@
 - 到期的"忘了我"宽限删除请求（始终检查，不受保留期为 0 影响）
 - ``raw_days > 0`` 时（从场次结束时刻算起）：
   1. 删除 ``live_chat`` 到期的观众行（保留主播台词行；人批准进记忆的观众候选挂着的那条弹幕也保留，
-     删了它档案行会随外键级联消失——保留期只清工作数据，不清记忆）
+     删了它档案行会随外键级联消失——保留期只清工作数据，不清记忆）；公屏游戏聊天同一口径，删到期场次里
+     玩家说的与认不出是谁的占位行，她自己在公屏说的留着
   2. 清空付费三表（``gifts`` / ``super_chats`` / ``guards``）到期行的观众身份、昵称、留言与原始消息，保留金额、类型、时刻
   3. 删除到期场次的话题与时间线摘要（``topics`` / ``timeline_summary``）
   4. 清空 ``llm_requests`` 到期行的响应正文与预览（保留 token/耗时/费用统计列）
@@ -133,6 +134,15 @@ class RetentionService:
                 f"      OR (live_session_id NOT IN ({orphan_session_sql}) AND timestamp_ms <= ?))"
                 # 批准进记忆的观众候选挂着的弹幕留着：删了它，那一行档案会被外键级联删掉
                 " AND id NOT IN (SELECT viewer_chat_id FROM archive_lines WHERE viewer_chat_id IS NOT NULL)",
+                (cutoff_ms, cutoff_ms),
+            )
+            chat_del += max(0, cur.rowcount)
+
+            # 公屏游戏聊天和弹幕一样是工作数据：到期场次里玩家说的、认不出是谁的占位行删掉，她说的留着
+            cur = conn.execute(
+                f"DELETE FROM game_chat WHERE direction <> 'streamer'"  # noqa: S608 常量 SQL 片段
+                f" AND (live_session_id IN ({expired_sessions_sql})"
+                f"      OR (live_session_id NOT IN ({orphan_session_sql}) AND at_ms <= ?))",
                 (cutoff_ms, cutoff_ms),
             )
             chat_del += max(0, cur.rowcount)

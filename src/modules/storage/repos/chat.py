@@ -59,6 +59,7 @@ class ChatRepo(BaseRepo):
         utterance_id: Optional[str] = None,
         dropped_at_ms: Optional[int] = None,
         memory_refs: Optional[str] = None,
+        reply_player_id: Optional[int] = None,
     ) -> int:
         """插入一条 live_chat 行，返回 lastrowid。
 
@@ -73,8 +74,8 @@ class ChatRepo(BaseRepo):
                     "INSERT INTO live_chat ("
                     "live_session_id, timestamp_ms, platform, sender_role, sender_id, sender_name,"
                     " content, message_type, message_id, reply_to_message_id, simulated, viewer_id, id_kind,"
-                    " utterance_id, dropped_at_ms, memory_refs"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " utterance_id, dropped_at_ms, memory_refs, reply_player_id"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         live_session_id,
                         timestamp_ms,
@@ -92,6 +93,7 @@ class ChatRepo(BaseRepo):
                         utterance_id,
                         dropped_at_ms,
                         memory_refs,
+                        reply_player_id,
                     ),
                 )
                 return int(cur.lastrowid or 0)

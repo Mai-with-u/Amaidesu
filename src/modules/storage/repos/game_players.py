@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from src.modules.storage.models.game_players import (
     GAME_CHAT_PLAYER,
@@ -204,13 +204,12 @@ class GamePlayerRepo(BaseRepo):
         *,
         player_id: int,
         live_session_id: int,
-        action: str,
-        count: int = 1,
+        actions: Sequence[str] = (),
         save_id: str = "",
         save_name: str = "",
         at_ms: int,
     ) -> None:
-        """记一次打招呼：同一位玩家一场合并成一行，按动作累加次数，时刻取最近的一次。"""
+        """记一次打招呼：同一位玩家一场合并成一行，次数加一，这一次做过的每种动作各加一，时刻取最近的一次。"""
 
         def _exec() -> None:
             with self._manager.transaction(immediate=True) as conn:
@@ -223,9 +222,10 @@ class GamePlayerRepo(BaseRepo):
                     fact: Dict[str, Any] = {"count": 0, "actions": {}}
                 else:
                     fact = _interaction(row).fact
-                actions = dict(fact.get("actions") or {})
-                actions[action] = int(actions.get(action) or 0) + int(count)
-                merged = {"count": int(fact.get("count") or 0) + int(count), "actions": actions}
+                done = dict(fact.get("actions") or {})
+                for action in dict.fromkeys(item for item in actions if item):
+                    done[action] = int(done.get(action) or 0) + 1
+                merged = {"count": int(fact.get("count") or 0) + 1, "actions": done}
                 payload = json.dumps(merged, ensure_ascii=False)
                 if row is None:
                     conn.execute(
@@ -248,6 +248,19 @@ class GamePlayerRepo(BaseRepo):
                     )
 
         await self._run_in_executor(_exec)
+
+    async def session_player_named(self, *, game: str, name: str, live_session_id: int) -> Optional[int]:
+        """本场见过的、此刻叫这个名字的玩家；正好一位时返回主键，没有或不止一位返回 None（不猜）。"""
+
+        def _exec() -> Optional[int]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT id FROM game_players WHERE game=? AND name=? AND last_session_id=? LIMIT 2",
+                    (game, name.strip(), int(live_session_id)),
+                ).fetchall()
+                return int(rows[0]["id"]) if len(rows) == 1 else None
+
+        return await self._run_in_executor(_exec)
 
     async def add_interaction(
         self,

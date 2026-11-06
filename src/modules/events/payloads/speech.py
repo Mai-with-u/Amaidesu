@@ -112,6 +112,14 @@ class StreamerSpeechPayload(BasePayload):
         default=None,
         description="本条发言点名引用的记忆编号列表（如 ['约#7']）；未引用记忆时为 None",
     )
+    reply_player_game: str = Field(
+        default="",
+        description="这条发言在回应的游戏玩家是哪个游戏的（本窗公屏聊天只来自一位核对过的玩家时才有）",
+    )
+    reply_player_uuid: str = Field(
+        default="",
+        description="这条发言在回应的游戏玩家的 UUID；本窗没人开口、两位以上开口或有认不出的人插话时为空",
+    )
     timestamp_ms: int = Field(
         default_factory=lambda: now_ms(),
         description="事件发布时间戳（Unix 毫秒）",

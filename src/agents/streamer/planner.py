@@ -66,7 +66,7 @@ from src.agents.streamer.planner_render import (
     step_extra_messages,
     tool_call_parts,
 )
-from src.agents.streamer.game_ledger import GameLedger
+from src.agents.streamer.game_ledger import GameLedger, sole_chat_player
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import GameEventBatch
 from src.modules.context import TransientImages, absorb_result_images, is_visual_caller
@@ -200,6 +200,8 @@ class RoundOutcome:
     speech_gate_bounces: int = 0
     # 本轮点名的旧事编号（写法如 约#7、档#41；随 streamer.speech 落库，供"用上即停"与复盘核对）
     memory_refs: List[str] = field(default_factory=list)
+    # 本窗公屏聊天只来自一位核对过的玩家时是 (游戏, UUID)：这一窗说的话记成在回应他；否则两个空串
+    reply_player: Tuple[str, str] = ("", "")
 
 
 @dataclass(frozen=True)
@@ -361,6 +363,8 @@ class Planner:
         # 随批次由账本产出；回执随本窗 ReAct 循环累积，reply 交接时合成全量
         self._round_facts_text = ""
         self._round_game_events: List[str] = []
+        # 本窗公屏聊天只来自一位核对过的玩家时是 (游戏, UUID)：这一窗说的话落库时记成在回应他
+        self._round_reply_player: Tuple[str, str] = ("", "")
         # 本窗是否豁免发言闸的台词重合度检查（收播道别窗：道别话题常与收尾环节发言字面重合）
         self._round_bypass_topic_gate: bool = False
         # 本场备忘录全文查询（经环境注入；空串 = 还没写过，段整段省略）
@@ -482,6 +486,7 @@ class Planner:
         resolved_batch = game_batch or GameEventBatch()
         self._round_facts_text = resolved_batch.facts_text
         self._round_game_events = list(resolved_batch.events)
+        self._round_reply_player = sole_chat_player(resolved_batch.chat_speakers)
         self.workbench.begin_round()
         # 游戏聊天原话（非私聊）随本轮说话交给表达侧；私聊行只进本窗参考段
         fresh_game_chat = list(resolved_batch.fresh_chat)
@@ -1165,6 +1170,7 @@ class Planner:
             topic_tag=str(args.get("topic_tag", "") or ""),
             reply_to=reply_to if isinstance(reply_to, str) and reply_to else None,
             memory_refs=memory_ids,
+            reply_player=self._round_reply_player,
         )
         # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到
         self.workbench.note_intent(

@@ -194,6 +194,44 @@ async def test_streamer_speech_persists_reply_link_and_replied_stat(
     assert len(await store.execute("SELECT * FROM viewers")) == 1
 
 
+async def test_streamer_speech_records_which_player_it_answers(event_bus: EventBus, store: SQLiteDatabase) -> None:
+    """发言事件带着本窗唯一开口的玩家 UUID：落库时按玩家表记成在回应他；玩家表里没有的不记。"""
+    session_id = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    alex = await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-a", name="Alex", live_session_id=session_id, at_ms=1_100
+    )
+    ledger = StorageLedger(
+        event_bus=event_bus,
+        chat_repo=store.chat,
+        viewer_repo=store.viewers,
+        event_repo=store.events,
+        session_manager=FakeSessionManager(active_pk=session_id),
+        game_player_repo=store.game_players,
+    )
+    await ledger.start()
+    try:
+        await _emit(
+            event_bus,
+            CoreEvents.STREAMER_SPEECH,
+            _speech("好呀 Alex", reply_player_game="minecraft", reply_player_uuid="uuid-a"),
+        )
+        await _emit(
+            event_bus,
+            CoreEvents.STREAMER_SPEECH,
+            _speech("你是谁", reply_player_game="minecraft", reply_player_uuid="uuid-nobody"),
+        )
+        await _emit(event_bus, CoreEvents.STREAMER_SPEECH, _speech("大家好"))
+    finally:
+        await ledger.stop()
+
+    rows = await store.execute("SELECT content, reply_player_id FROM live_chat ORDER BY id")
+    assert [(row["content"], row["reply_player_id"]) for row in rows] == [
+        ("好呀 Alex", alex.id),
+        ("你是谁", None),
+        ("大家好", None),
+    ]
+
+
 async def test_streamer_speech_insert_failure_is_swallowed(
     ledger, store: SQLiteDatabase, event_bus: EventBus, monkeypatch: pytest.MonkeyPatch
 ) -> None:

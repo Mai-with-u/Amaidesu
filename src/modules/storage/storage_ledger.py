@@ -38,8 +38,9 @@ from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import UtteranceDroppedPayload
 from src.modules.logging import get_logger
+from src.modules.storage.game_player_ledger import GamePlayerLedger
 from src.modules.storage.privacy import PrivacyService
-from src.modules.storage.repos import ChatRepo, EventRepo, ViewerRepo
+from src.modules.storage.repos import ChatRepo, EventRepo, GamePlayerRepo, ViewerRepo
 from src.modules.storage.retention import RetentionService
 
 if TYPE_CHECKING:
@@ -71,6 +72,7 @@ class StorageLedger:
         privacy: Optional[PrivacyService] = None,
         retention: Optional[RetentionService] = None,
         cleanup_on_live_ended: bool = True,
+        game_player_repo: Optional[GamePlayerRepo] = None,
     ) -> None:
         self.event_bus = event_bus
         self.chat_repo = chat_repo
@@ -85,6 +87,9 @@ class StorageLedger:
         self._privacy = privacy
         self._retention = retention
         self._cleanup_on_live_ended = cleanup_on_live_ended
+        # 游戏里的人：公屏聊天、她在公屏说的话、玩家互动落玩家表与公屏聊天表（随本落库器一起起停）
+        self._game_players = GamePlayerLedger(event_bus, game_player_repo) if game_player_repo is not None else None
+        self._game_player_repo = game_player_repo
         self._dropped_miss_count = 0
         self._subscriptions: dict[str, Callable] = {}
         self._started = False
@@ -203,6 +208,9 @@ class StorageLedger:
         )
         self._subscriptions[CoreEvents.LIVE_ENDED] = ended_handler
 
+        if self._game_players is not None:
+            await self._game_players.start()
+
         self._started = True
         logger.info(
             f"StorageLedger 已订阅 {_ROOM_MESSAGE_WILDCARD}"
@@ -221,6 +229,8 @@ class StorageLedger:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"取消订阅 {event_name} 失败: {exc}")
         self._subscriptions.clear()
+        if self._game_players is not None:
+            await self._game_players.stop()
         self._started = False
         logger.info("StorageLedger 已停止")
 
@@ -513,6 +523,7 @@ class StorageLedger:
                 return
             masked_text = self._privacy.mask_speech(payload.text) if self._privacy is not None else payload.text
             memory_refs_json = json.dumps(payload.memory_refs, ensure_ascii=False) if payload.memory_refs else None
+            reply_player_id = await self._reply_player_id(payload)
             await self.chat_repo.insert_live_chat(
                 live_session_id=live_pk,
                 timestamp_ms=payload.timestamp_ms,
@@ -525,6 +536,7 @@ class StorageLedger:
                 simulated=False,
                 utterance_id=payload.utterance_id or None,
                 memory_refs=memory_refs_json,
+                reply_player_id=reply_player_id,
             )
             if payload.target_user_id:
                 viewer_id = await self.viewer_repo.find_viewer_id(
@@ -544,6 +556,22 @@ class StorageLedger:
                 f"utterance_id={getattr(payload, 'utterance_id', '?')}）：{exc}",
                 exc=True,
             )
+
+    async def _reply_player_id(self, payload: StreamerSpeechPayload) -> Optional[int]:
+        """这句台词在回应的游戏玩家：本窗只有他一位开口时发言事件带着他的 UUID，按玩家表认出主键。
+
+        玩家表里还没有他（落库器还没写到、或已被删除）时不记，读失败也只记日志：台词照常落库。
+        """
+        if not payload.reply_player_uuid or self._game_player_repo is None:
+            return None
+        try:
+            player = await self._game_player_repo.find_player(
+                game=payload.reply_player_game, uuid=payload.reply_player_uuid
+            )
+        except Exception as exc:  # noqa: BLE001 - 认不出回应对象不挡台词落库
+            logger.warning(f"认台词在回应哪位玩家失败，这句不记对象: {exc}", exc=exc)
+            return None
+        return player.id if player is not None else None
 
     async def _on_utterance_dropped(
         self,

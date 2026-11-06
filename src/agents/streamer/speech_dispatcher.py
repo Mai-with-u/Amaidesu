@@ -273,6 +273,7 @@ class SpeechDispatcher:
         round_id: str = "",
         live_session_id: int = 0,
         memory_refs: Optional[Sequence[str]] = None,
+        reply_player: Tuple[str, str] = ("", ""),
     ) -> Optional[tuple]:
         """消费 reply 结构化结果并触发下游管线（决策循环安全：永不抛异常）。
 
@@ -289,6 +290,8 @@ class SpeechDispatcher:
                 观察器把发言卡与该轮思考过程成组）。
             memory_refs: 这句点名用了哪几条旧事（记忆编号文本，如 约#7；落库为
                 记忆引用列，供"用上即停"与复盘核对）。
+            reply_player: 本窗公屏聊天只来自一位核对过的玩家时是 (游戏, UUID)，落库时记成在回应他；
+                否则两个空串。
             live_session_id: 这句台词归属的场次主键。0（常规路径）= 交给场次
                 盖章拦截器按进行中场次补；收播道别那一轮场次已结账、拦截器解析
                 不到，由调用方给出刚结束那一场的编号——拦截器只补 0、不覆盖非 0
@@ -349,6 +352,7 @@ class SpeechDispatcher:
                     llm_request_id=reply_payload.get("llm_request_id"),
                     live_session_id=live_session_id,
                     memory_refs=list(memory_refs or ()),
+                    reply_player=reply_player,
                 )
                 self._schedule_subtitle_show(cleaned_speech, utterance_id)
                 self._notify_spoken(cleaned_speech)
@@ -530,6 +534,7 @@ class SpeechDispatcher:
         emotion_at_playback: bool = False,
         live_session_id: int = 0,
         memory_refs: Optional[List[str]] = None,
+        reply_player: Tuple[str, str] = ("", ""),
     ) -> None:
         """发布 ``streamer.speech`` 业务事件（同步 await 发出，保证先于轮末决策记录与空闲状态；失败不反噬决策循环）。
 
@@ -550,6 +555,8 @@ class SpeechDispatcher:
             llm_request_id=llm_request_id,
             emotion_at_playback=emotion_at_playback,
             memory_refs=list(memory_refs or ()),
+            reply_player_game=reply_player[0],
+            reply_player_uuid=reply_player[1],
         )
 
         try:

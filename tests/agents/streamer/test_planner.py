@@ -428,6 +428,27 @@ def _reply_with_memory(use_memory: Any) -> list:
     ]
 
 
+@pytest.mark.parametrize(
+    ("speakers", "expected"),
+    [
+        ((("minecraft", "uuid-a"),), ("minecraft", "uuid-a")),
+        ((("minecraft", "uuid-a"), ("minecraft", "uuid-b")), ("", "")),
+        ((("minecraft", "uuid-a"), ("minecraft", "?")), ("", "")),
+        ((), ("", "")),
+    ],
+    ids=["只有一位玩家开口", "两位玩家开口", "有认不出的人插话", "没人开口"],
+)
+async def test_her_line_answers_a_player_only_when_he_alone_spoke(speakers: tuple, expected: tuple) -> None:
+    """本窗公屏聊天只来自一位核对过的玩家时，这一窗说的话记成在回应他；否则不猜。"""
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    planner, _llm, _prompt = _make_planner(_reply_with_memory([]), reply_provider=provider)
+
+    outcome = await planner.plan([_msg()], game_batch=GameEventBatch(chat_speakers=speakers))
+
+    assert outcome.replied is True and outcome.reply_player == expected
+
+
 async def test_use_memory_accepts_single_item_list_and_renders_spoken_form() -> None:
     provider = MagicMock()
     provider.invoke = AsyncMock(return_value=_REPLY_RESULT)

@@ -234,3 +234,20 @@ async def test_game_chat_speakers_become_known_names_for_masking() -> None:
         assert book.names == ["Steve"]
     finally:
         await bus.cleanup()
+
+
+async def test_game_chat_remembers_who_spoke_for_the_window(live_agent) -> None:
+    """玩家聊天入账时记下是谁说的：核对过的写 UUID，没核对过的写 "?"，系统消息不算；本窗出账时一并列出。"""
+    agent, bus = live_agent
+    for payload in (
+        GameChatPayload(
+            game="minecraft", kind="player", sender="Alex", sender_id="uuid-a", sender_online=True, content="来切磋"
+        ),
+        GameChatPayload(game="minecraft", kind="player", sender="Server", content="[Server] 重启"),
+        GameChatPayload(game="minecraft", kind="system", content="Steve 加入了游戏"),
+    ):
+        await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, payload, source="TestCollector")
+        await bus.wait_until_drained()
+
+    materials = await agent._scope.open_window()
+    assert materials.game_batch.chat_speakers == (("minecraft", "uuid-a"), ("minecraft", "?"))
