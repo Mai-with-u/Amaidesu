@@ -7,6 +7,7 @@
 - ``[llm_profiles.<name>]``：用途 profile（planner / replyer / summary /
   minecraft / minecraft_builder / vision / simulator）；引用 model_list，由 LLMManager 做选择
   与故障切换
+- ``[embedding]``：主播记忆语义检索用的嵌入服务（引用一个 provider；没填模型名就不开）
 
 判据（谁改它的结构）：
 - provider / model 字段 = 平台 / API 提供商侧调整 → 改 providers/models 段
@@ -441,6 +442,63 @@ class LLMProfilesConfig(BaseConfig):
         }
 
 
+class EmbeddingConfig(BaseConfig):
+    """``[embedding]`` 嵌入服务：主播记忆的语义检索把文本变成向量用。
+
+    配置了才开：``model_identifier`` 为空就视为没配，记忆检索只走关键词与规则两路，日志和
+    WebUI 写明"语义检索没开"。连接信息复用 ``[[llm_providers]]`` 里的一个条目（地址、密钥、
+    鉴权方式），这里只填用哪个条目和模型名。她的台词与档案会发给这家服务商，和发给大模型
+    服务商是同一类外发；不想出本机就填本地端点。
+    """
+
+    enabled: bool = Field(
+        default=True,
+        title="启用",
+        description="总开关；开着但没填模型名时仍视为没配，语义检索不开",
+    )
+    provider: str = Field(
+        default="",
+        title="API 提供商",
+        description="用 llm_providers 里哪个条目的地址与密钥（填 provider 名）",
+    )
+    model_identifier: str = Field(
+        default="",
+        title="嵌入模型",
+        description="服务商那边的嵌入模型名（如 BAAI/bge-m3）；留空 = 不开语义检索",
+    )
+    dimensions: int = Field(
+        default=0,
+        ge=0,
+        title="向量维度",
+        description="请服务商截短到多少维；0 = 用模型默认维度（不支持截短的模型必须填 0）",
+    )
+    batch_size: int = Field(
+        default=32,
+        ge=1,
+        le=256,
+        title="每批条数",
+        description="一次请求最多送几段文本",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    timeout_ms: int = Field(
+        default=15000,
+        ge=1000,
+        title="超时（毫秒）",
+        description="单次请求的超时；超时按失败处理，由索引任务退避重试",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+
+    @field_validator("provider", "model_identifier", mode="before")
+    @classmethod
+    def _strip_ref_fields(cls, value: Any) -> Any:
+        return _strip_ref_name(value)
+
+    @property
+    def configured(self) -> bool:
+        """开着且填了模型名，才算配置了语义检索。"""
+        return self.enabled and bool(self.model_identifier)
+
+
 class ModelRootConfig(BaseConfig):
     """模型配置根类
 
@@ -471,6 +529,11 @@ class ModelRootConfig(BaseConfig):
         description=("用途 profile 封闭集合（包含游戏决策与独立的建筑设计用途）"),
         json_schema_extra={"x-ui-type": "object"},
     )
+    embedding: EmbeddingConfig = Field(
+        default_factory=EmbeddingConfig,
+        title="嵌入服务",
+        description="主播记忆语义检索用的嵌入模型；没填模型名就不开，只走关键词与规则",
+    )
 
     @model_validator(mode="after")
     def _validate_references(self) -> "ModelRootConfig":
@@ -496,6 +559,14 @@ class ModelRootConfig(BaseConfig):
                     f"未在 llm_providers 中找到（可用：{sorted(valid_provider_names)}）"
                 )
 
+        # 嵌入服务的 provider 引用校验：开着且填了模型名就必须指向已有条目（关着的段不生效，不校验）
+        embedding = self.embedding
+        if embedding.configured and embedding.provider not in valid_provider_names:
+            raise ValueError(
+                f"embedding.provider={embedding.provider!r} 未在 llm_providers 中找到"
+                f"（可用：{sorted(valid_provider_names)}）；不开语义检索就把 embedding.model_identifier 留空"
+            )
+
         # profile.model_list 引用校验（封闭集合容器 dump 为 用途名 → profile 配置 dict）
         for profile_name, profile_cfg in self.llm_profiles.model_dump().items():
             for model_name in profile_cfg["model_list"]:
@@ -514,6 +585,7 @@ __all__ = [
     "LLMSelectionStrategy",
     "LLMProfileConfig",
     "LLMProfilesConfig",
+    "EmbeddingConfig",
     "ModelRootConfig",
     # 向后兼容别名：旧测试 / 旧引用仍可访问 ModelConfig
     "ModelConfig",
