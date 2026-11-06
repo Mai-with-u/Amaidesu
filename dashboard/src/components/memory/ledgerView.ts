@@ -8,6 +8,7 @@
 import type {
   CommitmentItem,
   CommitmentStatus,
+  SettleSessionItem,
   SnapshotChangeAction,
   UnregisteredKind,
 } from '@/types';
@@ -118,4 +119,23 @@ export function settleAttemptsText(attempts: number, maxAttempts: number): strin
 /** 自动重试是否用满（用满后调度不再挑这一场，需要人工点"重新整理"） */
 export function settleAttemptsExhausted(attempts: number, maxAttempts: number): boolean {
   return maxAttempts > 0 && attempts >= maxAttempts;
+}
+
+/**
+ * 这一场之后是否已经有整理好的正式场。
+ *
+ * 有的话，重新整理这一场只重算它自己的档案快照：它原来的档案行会从之后几场的快照里撤掉，
+ * 新写的不会进去（之后几场不重放）。确认框据此提醒运营者，要把结果带到简报里，得按时间顺序
+ * 把之后几场也依次重新整理。
+ */
+export function hasLaterSettledSession(
+  row: Pick<SettleSessionItem, 'live_session_id' | 'started_at_ms'>,
+  items: readonly Pick<SettleSessionItem, 'live_session_id' | 'started_at_ms' | 'settled_at_ms'>[],
+): boolean {
+  return items.some(
+    item =>
+      item.live_session_id !== row.live_session_id &&
+      item.settled_at_ms !== null &&
+      item.started_at_ms > row.started_at_ms,
+  );
 }

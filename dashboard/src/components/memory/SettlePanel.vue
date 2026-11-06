@@ -4,8 +4,8 @@
       <div class="head-text">
         <div class="panel-title">下播整理</div>
         <p class="panel-hint">
-          每场正式场收播后，主播会把这一场整理成承诺与档案；失败的场次可重新排队整理。 列表只列最近
-          20 场正式场，待整理数含更早的场次。
+          每场正式场收播后，主播会把这一场整理成承诺与档案；失败或想重做的场次可重新排队整理。
+          列表只列最近 20 场正式场，待整理数含更早的场次。
         </p>
       </div>
       <div class="head-actions">
@@ -54,7 +54,6 @@
             >查看该场档案</el-button
           >
           <el-button
-            v-if="row.settled_at_ms === null"
             link
             size="small"
             type="warning"
@@ -77,9 +76,7 @@
           class="unregistered"
         >
           <div class="unregistered-title">
-            档案快照的改动（{{
-              row.settle_report.snapshot_changes.length
-            }}
+            档案快照的改动（{{ row.settle_report.snapshot_changes.length }}
             处，去掉与替换要有本场台词作证据）
           </div>
           <div
@@ -139,8 +136,9 @@
  *
  * 后端按场次给整理结果：已整理（settled_at_ms）或待整理，自动重试次数是否
  * 用满，失败原因，以及整理时看懂了却没能登记的条目（原话照原样显示，供运营者
- * 判断要不要手建）。"重新整理"只对还没整理的场次有意义：它把重试次数清零，
- * 下一次调度再挑到这一场；已整理的场次不给按钮（后端也不会再排）。
+ * 判断要不要手建）。"重新整理"清掉整理完成时刻与重试次数，下一次调度再挑到这一场；
+ * 已整理的场次也能重排（整场替换，不写重复行）。之后已有整理好的正式场时，确认框另外
+ * 说明：只重算这一场的档案快照，之后几场不重放，要带到简报里得按时间顺序依次重新整理。
  * "查看该场档案"通过 view-archive 事件交给记忆页切到档案面板。
  */
 import { onMounted, ref } from 'vue';
@@ -151,6 +149,7 @@ import { getApiErrorMessage } from '@/utils/apiError';
 import { confirmAction } from '@/utils/confirmAction';
 import { formatDateTimeCn, formatRangeEnd } from '@/utils/format';
 import {
+  hasLaterSettledSession,
   settleAttemptsExhausted,
   settleAttemptsText,
   settleStateLabel,
@@ -183,10 +182,17 @@ async function reload(): Promise<void> {
 
 async function resettle(row: SettleSessionItem): Promise<void> {
   const label = row.title || `场次 #${row.live_session_id}`;
+  // 之后已有整理好的正式场：重新整理只重算这一场的快照，之后几场不跟着重算，确认框要说清楚
+  const laterNote = hasLaterSettledSession(row, state.value?.items ?? [])
+    ? '这一场之后已经有整理好的正式场：重新整理只重算这一场自己的档案快照，这一场原来的档案行会' +
+      '从之后几场的快照里撤掉，新写的不会进去。要让结果带到下一场的简报里，得按时间顺序把之后几场' +
+      '也依次重新整理。'
+    : '';
   if (
     !(await confirmAction(
       `把「${label}」重新排进整理队列？重试次数清零、清掉上次的失败原因，下一次调度会重新整理这一场；` +
-        '该场已登记的档案行与本场尚未了结的承诺会被这次整理的结果替换，运营者已了结或判误记的承诺保留。',
+        '该场已登记的档案行与本场尚未了结的承诺会被这次整理的结果替换，运营者已了结或判误记的承诺保留。' +
+        laterNote,
       '重新整理',
     ))
   ) {

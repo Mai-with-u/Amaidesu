@@ -7,6 +7,7 @@ import {
   commitmentStatusTagType,
   commitmentTargetLabel,
   gameSaveLabel,
+  hasLaterSettledSession,
   settleAttemptsExhausted,
   settleAttemptsText,
   settleStateLabel,
@@ -85,6 +86,17 @@ describe('整理状态展示', () => {
   it('未登记条目按类型区分承诺与档案', () => {
     expect(unregisteredKindLabel('commitment')).toBe('承诺');
     expect(unregisteredKindLabel('archive')).toBe('档案');
+  });
+
+  it('之后已有整理好的正式场时才算"较早的一场"', () => {
+    const items = [
+      { live_session_id: 3, started_at_ms: 3_000, settled_at_ms: null },
+      { live_session_id: 2, started_at_ms: 2_000, settled_at_ms: 2_500 },
+      { live_session_id: 1, started_at_ms: 1_000, settled_at_ms: 1_500 },
+    ];
+    expect(hasLaterSettledSession(items[2], items)).toBe(true);
+    expect(hasLaterSettledSession(items[1], items)).toBe(false);
+    expect(hasLaterSettledSession(items[0], items)).toBe(false);
   });
 
   it('档案快照改动按操作给中文标签', () => {
