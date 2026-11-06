@@ -322,6 +322,48 @@ async def test_archive_and_commitments_carry_the_save_they_were_said_in(
     )
 
 
+async def test_archive_lines_get_checked_keywords_and_places(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """模型提名触发词与地点，代码核对：触发词要在标题或原话里；地点要说到了地名、或说话时就在那里。"""
+    session_id = await _ended_session(store)
+    for kind, place, at_ms in (
+        ("remembered", "海边营地", 1_050),
+        ("near", "海边营地", 1_100),
+        ("left", "海边营地", 1_400),
+    ):
+        await store.events.insert_place_mark(
+            live_session_id=session_id, game="Minecraft", kind=kind, place=place, timestamp_ms=at_ms
+        )
+    await _speech(store, session_id, "灯塔终于盖好了，晚上亮起来真好看", timestamp_ms=1_200)
+    await _speech(store, session_id, "回海边营地的路上捡到一只小猫", timestamp_ms=1_500)
+    await _speech(store, session_id, "这只猫就叫团子吧", timestamp_ms=1_600)
+    llm = _reply(
+        '{"archive": ['
+        '{"line": 1, "title": "Minecraft：灯塔盖好了", "quote": "灯塔终于盖好了", "game": "Minecraft",'
+        ' "keywords": ["灯塔", "晚上亮", "房子"], "place": "海边营地"},'
+        '{"line": 2, "title": "Minecraft：捡到小猫", "quote": "捡到一只小猫", "game": "Minecraft",'
+        ' "keywords": ["小猫"], "place": "海边营地"},'
+        '{"line": 3, "title": "Minecraft：猫叫团子", "quote": "这只猫就叫团子吧", "game": "Minecraft",'
+        ' "keywords": ["团子"], "place": "海边营地"}]}',
+        '{"commitments": []}',
+    )
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+
+    lines = await store.archive.list_lines(live_session_id=session_id)
+    assert [(line.text, line.keywords, line.place) for line in lines] == [
+        # 说这句话时就在营地跟前；"晚上亮"只在整句台词里、"房子"哪都没有，都不在标题和原话里，丢掉
+        ("Minecraft：灯塔盖好了", ["灯塔"], "海边营地"),
+        # 已经离开营地，但台词里说到了这个地名
+        ("Minecraft：捡到小猫", ["小猫"], "海边营地"),
+        # 已经离开、也没说到地名：不挂地点
+        ("Minecraft：猫叫团子", ["团子"], ""),
+    ]
+    assert "【本场记住的地点】\n海边营地" in llm.calls[0]["input"]
+
+
 async def test_commitment_to_person_without_reply_target_is_reported(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:

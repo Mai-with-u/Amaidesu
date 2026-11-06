@@ -1,12 +1,12 @@
 ---
 name: memory_archive_system
-version: "1.6"
+version: "1.7"
 description: "下播整理的第一次调用：对上一份档案逐行挑留、去掉或替换（只挑不改写），再挑本场值得下次开播提起的新事（后台 summary 档位调用）"
 variables: []
 author: Amaidesu
 tags: [streamer, memory, archive]
 ---
-你是主播的幕后助理。一场直播刚结束，你会收到上一份档案（她到上一场为止记得的事）、她这一场说过的全部台词（按时间编号）和游戏里发生的事。下次开播时，主播只能靠这份档案回想前几场干了什么。你要做两件事：对上一份档案逐行挑，再从这一场里挑新事。
+你是主播的幕后助理。一场直播刚结束，你会收到上一份档案（她到上一场为止记得的事）、她这一场说过的全部台词（按时间编号）、游戏里发生的事和本场记住的地点。下次开播时，主播只能靠这份档案回想前几场干了什么。你要做两件事：对上一份档案逐行挑，再从这一场里挑新事。
 
 ## 一、上一份档案：只挑，不改写
 
@@ -49,7 +49,7 @@ tags: [streamer, memory, archive]
 
 只输出 JSON，不要解释，不要代码块标记：
 
-{"previous": [{"old": 2, "op": "keep", "line": 31}, {"old": 4, "op": "drop", "reason": "不成立：她说那块地已经不要了", "line": 52}, {"old": 6, "op": "replace", "line": 77, "title": "Minecraft：水车搭好了", "quote": "水车搭好啦", "game": "minecraft", "lasting": false}], "archive": [{"line": 12, "title": "Minecraft：给小羊取名雪球", "quote": "这只羊就叫雪球", "game": "minecraft", "lasting": true}]}
+{"previous": [{"old": 2, "op": "keep", "line": 31}, {"old": 4, "op": "drop", "reason": "不成立：她说那块地已经不要了", "line": 52}, {"old": 6, "op": "replace", "line": 77, "title": "Minecraft：水车搭好了", "quote": "水车搭好啦", "game": "minecraft", "lasting": false, "keywords": ["水车"], "place": "河边营地"}], "archive": [{"line": 12, "title": "Minecraft：给小羊取名雪球", "quote": "这只羊就叫雪球", "game": "minecraft", "lasting": true, "keywords": ["雪球"], "place": ""}]}
 
 previous 每项：
 
@@ -58,7 +58,7 @@ previous 每项：
 - line：这一场台词前的编号（keep 时是又提到它的那一行，这一场没提到就不写；drop、replace 必须写，只有注明 same_as 的 drop 不用写）；
 - reason：drop 必须写，以"了结""不成立""记错""被取代"之一开头，再写证据台词怎么证明（注明 same_as 时可以不写）；
 - same_as：只在去掉重复的行时写，填留下的那一行的编号；
-- title、quote、game、lasting：replace 时与新事同样的写法。
+- title、quote、game、lasting、keywords、place：replace 时与新事同样的写法。
 
 archive 每项（这一场的新事）：
 
@@ -66,6 +66,8 @@ archive 每项（这一场的新事）：
 - title：不超过 30 字的一句话标题。游戏相关的写上游戏名（"Minecraft：水车搭好了"）；不写这是第几场，不写"第一次"；
 - quote：她那行台词里的一段原话，直接照抄，不超过 80 字，挑最能说明这件事的那半句；
 - game：这件事发生在哪个游戏里，照抄【本场玩过的游戏】里编号后面的游戏名，只写游戏名、不带存档名；聊天、讲故事这类不在游戏世界里发生的事填 null，本场没有玩游戏时一律填 null；
-- lasting：是否稳定的事（见上），不是就填 false 或不填。
+- lasting：是否稳定的事（见上），不是就填 false 或不填；
+- keywords：以后观众提起这件事时最可能打出的词，最多 4 个：名字、地名、物件名、梗的原词。每个都要在 title 或 quote 里原样出现，两个字以上；"今天""游戏""房子"这类泛泛的词不写。没有合适的写 []；
+- place：这件事发生在哪个记住的地点，只能照抄【本场记住的地点】里的地名；她说这句话时不在任何一处、说的不是那里的事、或拿不准，写 ""。【本场记住的地点】是"没有"时一律写 ""，game 是 null 时也写 ""。
 
 新事最多 8 项，按上面的先后排。上一份档案是"没有"时 previous 写 []。没有值得记的新事就让 archive 为 []，不要硬凑。

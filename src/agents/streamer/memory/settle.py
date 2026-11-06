@@ -42,6 +42,7 @@ from src.modules.context.tokens import TokenCounter
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
 from src.modules.storage.models.chat import SettleSpeechLine
+from src.modules.storage.models.events import GamePlaceMark
 from src.modules.storage.models.memory import (
     ArchiveSnapshot,
     Commitment,
@@ -60,6 +61,7 @@ from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.agents.streamer.memory.render import memory_ref_numbers, render_commitment_number
 from src.agents.streamer.memory.rolling import plan_from_ops, render_base, select_snapshot
 from src.agents.streamer.memory.saves import SaveTimeline
+from src.agents.streamer.memory.settle_cues import remembered_places, render_places, verified_keywords, verified_place
 from src.modules.utils.time_utils import now_ms
 
 from ..background import SUMMARY_PROFILE
@@ -135,6 +137,9 @@ class SettleMaterial:
     previous_text: str = ""
     # 本场开播时刻：本场新写或再提起的行，"最近一次提起"记这个时刻
     started_at_ms: int = 0
+    # 本场的地点动静与记住的地点：档案行的地点只能从这里挑，按地名或说话时在不在跟前核对
+    place_marks: List[GamePlaceMark] = field(default_factory=list)
+    places: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -557,6 +562,7 @@ class SessionSettler:
         abilities_text = self._render_abilities(game_agents)
         open_commitments, open_text, void_titles, void_text = await self._load_commitments(session)
         previous = await self._load_previous(session)
+        place_marks = await self._load_place_marks(session)
         return SettleMaterial(
             live_session_id=int(session.id),
             speech_text=speech_text,
@@ -574,7 +580,19 @@ class SessionSettler:
             previous=previous,
             previous_text=render_base(previous),
             started_at_ms=int(session.started_at_ms),
+            place_marks=place_marks,
+            places=remembered_places(place_marks),
         )
+
+    async def _load_place_marks(self, session: LiveSession) -> List[GamePlaceMark]:
+        """本场的地点动静（记住、忘掉、走近、离开）；读不到就当没有，档案行只是不挂地点。"""
+        if self._events is None:
+            return []
+        try:
+            return list(await self._events.list_session_place_marks(live_session_id=int(session.id)))
+        except Exception as exc:  # noqa: BLE001 - 少了地点只少一层标注，整理照常跑
+            logger.warning(f"场次 {session.id} 读地点动静失败，档案行不挂地点: {exc}", exc=exc)
+            return []
 
     async def _load_previous(self, session: LiveSession) -> Optional[ArchiveSnapshot]:
         """本场要接着滚的上一份快照（开播早于本场的最近一份；旧场次由几场旧档案现拼）。
@@ -755,6 +773,7 @@ class SessionSettler:
                 f"【上一份档案】\n{material.previous_text or '没有'}\n\n"
                 f"【本场她说的话】\n{material.speech_text}\n\n"
                 f"{material.games_text or '【本场没有玩游戏】'}\n\n"
+                f"{render_places(material.places)}\n\n"
                 "请写出这一场的档案。"
             ),
         )
@@ -867,6 +886,7 @@ class SessionSettler:
 
         挂的游戏与承诺同一口径；挂了游戏的，按那行台词的时刻认是在哪个存档里说的。
         ``lasting`` 只认布尔真值（名字、住处、关系这类稳定的事，快照取舍时先留）。
+        触发词与地点由代码核对（见 ``settle_cues``），对不上的丢掉、行照写；地点只给挂了游戏的行。
         替换旧行的新行也走这里，与新事同一个口径。
         """
         written: List[PendingArchiveLine] = []
@@ -900,6 +920,16 @@ class SessionSettler:
                 continue
             game_name = _game_of(raw.get("game"), material)
             save = material.saves.save_at(game_name, int(line.timestamp_ms))
+            place = ""
+            if game_name is not None:
+                place = verified_place(
+                    raw.get("place"),
+                    places=material.places,
+                    texts=(title, line.content or ""),
+                    marks=material.place_marks,
+                    at_ms=int(line.timestamp_ms),
+                    save_id=save.id,
+                )
             written.append(
                 PendingArchiveLine(
                     text=title,
@@ -909,6 +939,8 @@ class SessionSettler:
                     save_id=save.id,
                     save_name=save.name,
                     lasting=raw.get("lasting") is True,
+                    keywords=verified_keywords(raw.get("keywords"), title, verified),
+                    place=place,
                 )
             )
         return written, missed
