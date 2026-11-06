@@ -23,11 +23,11 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Sequence, Tuple
+from typing import Dict, List, Literal, Optional, Sequence, Tuple
 
 import numpy as np
 
-from src.modules.storage.models.memory import IndexDoc
+from src.modules.storage.models.memory import IndexCandidate, IndexDoc, IndexVector
 from src.modules.storage.repos._base import BaseRepo
 
 IndexSource = Literal["archive", "commitment", "speech", "event"]
@@ -53,6 +53,8 @@ class _Spec:
     eligible: str
     # 条件里要不要用到场次表
     joins_session: bool
+    # 来源行属于哪一场的列（只查本场时按它限定）
+    session_column: str = "live_session_id"
 
 
 _SPECS: Dict[IndexSource, _Spec] = {
@@ -73,6 +75,7 @@ _SPECS: Dict[IndexSource, _Spec] = {
         document="t.what || char(10) || t.quote",
         eligible="t.status <> 'void'",
         joins_session=False,
+        session_column="created_session_id",
     ),
     "speech": _Spec(
         table="live_chat",
@@ -115,6 +118,13 @@ def _settled_clause(source: IndexSource) -> str:
 
 def _settled_params(source: IndexSource, now_ms: int) -> Tuple[int, ...]:
     return (int(now_ms) - SPEECH_SETTLE_MS,) if source == "speech" else ()
+
+
+def _session_clause(spec: _Spec, live_session_id: Optional[int]) -> Tuple[str, Tuple[int, ...]]:
+    """只查某一场时的附加条件与参数；不限定时为空。"""
+    if live_session_id is None:
+        return "", ()
+    return f" AND t.{spec.session_column} = ?", (int(live_session_id),)
 
 
 def delete_session_index_rows(conn: sqlite3.Connection, *, live_session_id: int) -> None:
@@ -199,6 +209,69 @@ class MemoryIndexRepo(BaseRepo):
             for doc, vector in items
         ]
         return await self._run_in_executor(self._write_rows, sql, rows)
+
+    async def keyword_candidates(
+        self, *, source: IndexSource, match_query: str, limit: int, live_session_id: Optional[int] = None
+    ) -> List[IndexCandidate]:
+        """全文检索：按 FTS5 的 BM25 排序（分数取正，越大越相关），至多 ``limit`` 行。
+
+        查询时再按"该收"的条件核一遍（正式场、没标没播出、不是误记……），索引行即便因为
+        什么原因没删干净，也查不出彩排场的话。
+        """
+        spec = _SPECS[source]
+        session_clause, session_params = _session_clause(spec, live_session_id)
+        # FTS5 的 MATCH 与 bm25() 只认表名本身，不认别名
+        fts = spec.fts
+        sql = (
+            f"SELECT t.id, -bm25({fts}) AS score FROM {fts}"  # noqa: S608 常量片段
+            f" JOIN {spec.table} t ON t.id = {fts}.rowid"
+            + (" JOIN live_sessions s ON s.id = t.live_session_id" if spec.joins_session else "")
+            + f" WHERE {fts} MATCH ? AND {spec.eligible}{session_clause}"
+            f" ORDER BY bm25({fts}) LIMIT ?"
+        )
+        params = (match_query, *session_params, int(limit))
+        return await self._run_in_executor(self._read_candidates, sql, params)
+
+    async def like_candidates(
+        self, *, source: IndexSource, needle: str, limit: int, live_session_id: Optional[int] = None
+    ) -> List[IndexCandidate]:
+        """子串兜底（单字汉字紧挨英文的查询词按词查必漏时用）：正文包含 ``needle`` 的行，新的在前。"""
+        spec = _SPECS[source]
+        session_clause, session_params = _session_clause(spec, live_session_id)
+        # LIKE 的通配符按字面量查：用 ! 作转义符（避开反斜杠在各层字符串里的转义）
+        escaped = needle.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+        sql = (
+            f"SELECT t.id, 0.0 AS score {_from(spec)}"  # noqa: S608 常量片段
+            f" WHERE {spec.eligible}{session_clause} AND {spec.document} LIKE ? ESCAPE '!'"
+            " ORDER BY t.id DESC LIMIT ?"
+        )
+        params = (*session_params, f"%{escaped}%", int(limit))
+        return await self._run_in_executor(self._read_candidates, sql, params)
+
+    async def stored_vectors(
+        self, *, source: IndexSource, model_key: str, live_session_id: Optional[int] = None
+    ) -> List[IndexVector]:
+        """当前模型算的全部向量（同样按"该收"的条件核过），供检索算余弦。"""
+        spec = _SPECS[source]
+        session_clause, session_params = _session_clause(spec, live_session_id)
+        sql = (
+            f"SELECT t.id, v.vector {_from(spec)}"  # noqa: S608 常量片段
+            f" JOIN {spec.vectors} v ON v.{spec.key} = t.id"
+            f" WHERE v.model = ? AND {spec.eligible}{session_clause}"
+        )
+        params = (model_key, *session_params)
+
+        def _exec() -> List[IndexVector]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(sql, params).fetchall()
+            return [IndexVector(source_id=int(row[0]), vector=bytes(row[1])) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    def _read_candidates(self, sql: str, params: Tuple[object, ...]) -> List[IndexCandidate]:
+        with self._manager.transaction() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [IndexCandidate(source_id=int(row[0]), score=float(row[1] or 0.0)) for row in rows]
 
     def _write_rows(self, sql: str, rows: List[Tuple[object, ...]]) -> int:
         written = 0

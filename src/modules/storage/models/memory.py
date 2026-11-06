@@ -44,7 +44,9 @@ __all__ = [
     "ArchiveSnapshot",
     "Commitment",
     "CommitmentClosure",
+    "IndexCandidate",
     "IndexDoc",
+    "IndexVector",
     "KeptSnapshotLine",
     "PendingArchiveLine",
     "PendingCommitment",
@@ -264,3 +266,21 @@ class IndexDoc(BaseModel):
 
     source_id: int = Field(..., description="来源行主键（也是全文表的 rowid）")
     document: str = Field(..., description="建索引用的正文：档案行与承诺是标题加原话，台词与事件是正文本身")
+
+
+class IndexCandidate(BaseModel):
+    """检索的一条候选：来源行主键与这一路给的分数（全文是取正的 BM25，子串兜底为 0）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: int = Field(..., description="来源行主键")
+    score: float = Field(default=0.0, description="这一路的分数，越大越相关")
+
+
+class IndexVector(BaseModel):
+    """一条存下的向量：来源行主键与小端 float32 字节。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: int = Field(..., description="来源行主键")
+    vector: bytes = Field(..., description="小端 float32 向量字节")
