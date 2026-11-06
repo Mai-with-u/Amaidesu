@@ -52,6 +52,14 @@ class SearchHit:
     vector_score: Optional[float] = None
 
 
+@dataclass(frozen=True)
+class SearchResult:
+    """一次检索的结果与这一次语义一路有没有用上（没配嵌入、没算好、算失败都算没用上）。"""
+
+    hits: List[SearchHit]
+    vector_used: bool
+
+
 @dataclass
 class _Fused:
     """融合过程中的一条：累加的分数与各路的名次分数。"""
@@ -82,9 +90,24 @@ class MemorySearch:
         wait_vector_ms: int = 0,
     ) -> List[SearchHit]:
         """查一段文本，返回融合后最相关的 ``limit`` 条；``live_session_id`` 给了就只查那一场。"""
+        result = await self.search_detailed(
+            query, sources=sources, live_session_id=live_session_id, limit=limit, wait_vector_ms=wait_vector_ms
+        )
+        return result.hits
+
+    async def search_detailed(
+        self,
+        query: str,
+        *,
+        sources: Sequence[IndexSource] = INDEX_SOURCES,
+        live_session_id: Optional[int] = None,
+        limit: int = 8,
+        wait_vector_ms: int = 0,
+    ) -> SearchResult:
+        """同 ``search``，另外告诉调用方这一次语义一路有没有用上（回想工具据此提醒"只按字面查"）。"""
         text = (query or "").strip()
         if not text:
-            return []
+            return SearchResult(hits=[], vector_used=False)
         fused: Dict[Tuple[IndexSource, int], _Fused] = {}
         match_query = fts_or_query(text)
         needles = [term for term in text.split() if needs_like_fallback(term)]
@@ -111,7 +134,7 @@ class MemorySearch:
                     entry.score += 1 / (RRF_K + rank)
                     entry.vector = (rank, cosine)
         ranked = sorted(fused.items(), key=lambda item: item[1].score, reverse=True)[: max(0, limit)]
-        return [
+        hits = [
             SearchHit(
                 source=source,
                 source_id=source_id,
@@ -124,6 +147,7 @@ class MemorySearch:
             )
             for (source, source_id), entry in ranked
         ]
+        return SearchResult(hits=hits, vector_used=query_vector is not None and self._embedding is not None)
 
     async def _like_ids(self, source: IndexSource, needles: Sequence[str], live_session_id: Optional[int]) -> List[int]:
         """子串兜底这一路：几个需要兜底的词各查一遍，按先后合并去重。"""
@@ -214,4 +238,4 @@ class MemorySearch:
             self._query_vectors.popitem(last=False)
 
 
-__all__ = ["CANDIDATES_PER_PATH", "RRF_K", "MemorySearch", "SearchHit"]
+__all__ = ["CANDIDATES_PER_PATH", "RRF_K", "MemorySearch", "SearchHit", "SearchResult"]

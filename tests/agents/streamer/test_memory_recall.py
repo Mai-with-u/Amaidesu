@@ -21,14 +21,16 @@ from src.agents.streamer.memory.index import MemoryIndexer
 from src.agents.streamer.memory.recall import (
     MEMORY_RECALL_PROVIDER_NAME,
     MEMORY_RECALL_TOOL_NAME,
+    LITERAL_ONLY_NOTICE,
     ORDER_NEWEST,
     ORDER_OLDEST,
+    ORDER_RELEVANT,
     SCOPE_ALL,
     SCOPE_THIS_STREAM,
     MemoryRecallService,
     build_memory_recall_provider,
 )
-from src.agents.streamer.memory.search import MemorySearch
+from src.agents.streamer.memory.search import MemorySearch, SearchResult
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.memory import KeptSnapshotLine
 from src.modules.tools import ToolInvocation
@@ -153,6 +155,45 @@ async def test_recall_newest_and_oldest_order(store: SQLiteDatabase) -> None:
     oldest = await service.recall("挖矿", SCOPE_ALL, ORDER_OLDEST)
     assert "顺序：最新在前" in newest and "第二次提挖矿" in _hit_lines(newest)[0]
     assert "顺序：最早在前" in oldest and "第一次提挖矿" in _hit_lines(oldest)[0]
+
+
+async def test_recall_lists_the_most_relevant_first_by_default(store: SQLiteDatabase) -> None:
+    """默认相关在前：同时提到两个词的那句排第一，哪怕它是最早说的。"""
+    pk = await _session(store, started=1_000)
+    await _streamer_says(store, pk, "今天挖矿挖到钻石了", 1_100)
+    await _streamer_says(store, pk, "接着挖矿", 1_200)
+    await _streamer_says(store, pk, "又在挖矿", 1_300)
+    service = await _service(store, current_session=pk)
+
+    text = await service.recall("挖矿 钻石")
+
+    assert "顺序：相关在前" in text
+    assert "挖矿挖到钻石了" in _hit_lines(text)[0]
+    assert ORDER_RELEVANT == "relevant"
+
+
+async def test_recall_says_it_only_matched_literally_when_the_semantic_path_was_not_used(
+    store: SQLiteDatabase,
+) -> None:
+    """没配嵌入（或这次没算好）时抬头注明只按字面查；语义一路用上了就不注。"""
+    pk = await _session(store, started=1_000)
+    await _streamer_says(store, pk, "今天挖矿很顺利", 1_100)
+    literal = await (await _service(store, current_session=pk)).recall("挖矿")
+    assert LITERAL_ONLY_NOTICE in literal.splitlines()
+
+    class _SemanticSearch:
+        async def search_detailed(self, query: str, **_kwargs: Any) -> SearchResult:
+            return SearchResult(hits=[], vector_used=True)
+
+    semantic = MemoryRecallService(
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
+        current_session_provider=lambda: pk,
+        clock=FakeClock().now_ms,
+        search=_SemanticSearch(),  # type: ignore[arg-type]
+    )
+    assert LITERAL_ONLY_NOTICE not in await semantic.recall("挖矿")
 
 
 async def test_recall_scope_this_stream_only_returns_current_session(store: SQLiteDatabase) -> None:
@@ -375,7 +416,7 @@ async def test_provider_exposes_memory_recall_tool(store: SQLiteDatabase) -> Non
     assert result.success, result.error_message
     assert "今天挖矿很顺利" in result.content
     assert "范围：全部" in result.content  # 缺省 scope = all
-    assert "顺序：最新在前" in result.content  # 缺省 order = newest
+    assert "顺序：相关在前" in result.content  # 缺省 order = relevant
 
     # 空 query 走业务说明（不是执行失败）
     empty = await provider.invoke(ToolInvocation(tool_name=MEMORY_RECALL_TOOL_NAME, arguments={}))

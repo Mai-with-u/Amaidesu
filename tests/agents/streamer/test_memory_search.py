@@ -138,8 +138,10 @@ async def test_vector_path_finds_paraphrases_and_hits_on_both_paths_rank_first(s
     await _index(store, clock, embedding)
     search = MemorySearch(repo=store.memory_index, embedding=embedding)
 
-    hits = await search.search("小猫咪", sources=("speech",), wait_vector_ms=5_000)
+    result = await search.search_detailed("小猫咪", sources=("speech",), wait_vector_ms=5_000)
+    hits = result.hits
 
+    assert result.vector_used is True
     assert hits[0].source_id == both and hits[0].keyword_rank == 1 and hits[0].vector_rank is not None
     by_id = {hit.source_id: hit for hit in hits}
     assert by_id[paraphrase].keyword_rank is None and by_id[paraphrase].vector_score == pytest.approx(1.0)
@@ -173,6 +175,7 @@ async def test_embedding_failure_falls_back_to_keywords(store: SQLiteDatabase) -
     server.fail = True
     search = MemorySearch(repo=store.memory_index, embedding=server.client())
 
-    hits = await search.search("小猫咪", sources=("speech",), wait_vector_ms=5_000)
+    result = await search.search_detailed("小猫咪", sources=("speech",), wait_vector_ms=5_000)
 
-    assert [(hit.source_id, hit.vector_rank) for hit in hits] == [(target, None)]
+    assert [(hit.source_id, hit.vector_rank) for hit in result.hits] == [(target, None)]
+    assert result.vector_used is False, "嵌入失败这一次只走了关键词，调用方要能看出来"

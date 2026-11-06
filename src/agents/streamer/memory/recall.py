@@ -12,8 +12,9 @@
 
 匹配口径：台词、档案、承诺、游戏进展四类走混合检索（``search``：关键词按两字切分 + BM25，配置了嵌入
 服务再加语义一路，按名次融合），按相关度取最相关的 8 条，不要求每个词都出现；本场观众弹幕
-不进任何持久索引，照旧在本场里按"每个词都包含"查，补剩下的位置。选好的结果按时间排给她看，
-每条带位置（本场写"本场 HH:MM"，跨场写"上一场"或"之前"）与说话人（"你""观众"）。索引由后台
+不进任何持久索引，照旧在本场里按"每个词都包含"查，补剩下的位置。选好的结果默认最相关的在前，
+她也可以要求按时间排；语义一路这一次没用上（没配嵌入服务、没算好、算失败）时抬头注明只按字面查，
+让她知道换个说法也许查得到。每条带位置（本场写"本场 HH:MM"，跨场写"上一场"或"之前"）与说话人（"你""观众"）。索引由后台
 任务补算，刚播出不满 30 秒的台词还查不到——那几句本来就在她眼前的对话里。
 
 不按名字查人：本场以外的结果里出现的已知观众昵称（``viewers`` 当前名与
@@ -43,7 +44,7 @@ from src.modules.types.game_save import GameSave
 from src.modules.utils.time_utils import now_ms
 
 from .saves import place_note, session_note
-from .search import MemorySearch
+from .search import MemorySearch, SearchHit
 
 __all__ = [
     "MEMORY_RECALL_PROVIDER_NAME",
@@ -51,6 +52,7 @@ __all__ = [
     "MEMORY_RECALL_TOOL_NAME",
     "ORDER_NEWEST",
     "ORDER_OLDEST",
+    "ORDER_RELEVANT",
     "SCOPE_ALL",
     "SCOPE_THIS_STREAM",
     "MemoryRecallService",
@@ -79,8 +81,12 @@ _EVENT_LABELS = {"milestone": "里程碑", "report": "阶段汇报"}
 
 SCOPE_ALL = "all"
 SCOPE_THIS_STREAM = "this_stream"
+ORDER_RELEVANT = "relevant"
 ORDER_NEWEST = "newest"
 ORDER_OLDEST = "oldest"
+
+# 语义一路这一次没用上时写在抬头下面的提醒
+LITERAL_ONLY_NOTICE = "（语义检索暂不可用，这次只按字面查，换个说法也许查得到）"
 
 # 跨场结果里观众昵称统一换成这个代称（本场结果不替换）
 CROSS_SESSION_MASK_LABEL = "某位观众"
@@ -107,9 +113,9 @@ MEMORY_RECALL_SPEC = ToolSpec(
             },
             "order": {
                 "type": "string",
-                "enum": [ORDER_NEWEST, ORDER_OLDEST],
-                "default": ORDER_NEWEST,
-                "description": "选出的结果怎么排：newest 最近的在前；oldest 最早的在前",
+                "enum": [ORDER_RELEVANT, ORDER_NEWEST, ORDER_OLDEST],
+                "default": ORDER_RELEVANT,
+                "description": "选出的结果怎么排：relevant 最相关的在前（默认）；newest 最近的在前；oldest 最早的在前",
             },
         },
         "required": ["query"],
@@ -134,6 +140,7 @@ class _RecallContext:
 
     keywords: Sequence[str]
     scope: str
+    # 本场弹幕按这个方向取（相关在前时取最近的）
     newest_first: bool
     current_session_id: Optional[int]
     previous_session_id: Optional[int]
@@ -167,13 +174,22 @@ def _normalize_scope(scope: Optional[str]) -> str:
 
 
 def _normalize_order(order: Optional[str]) -> str:
-    """order 归一：只认 oldest，其余（含空值与未知值）按 newest 处理。"""
+    """order 归一：认 newest / oldest，其余（含空值与未知值）按 relevant 处理。"""
     value = (order or "").strip().lower()
-    if value == ORDER_OLDEST:
-        return ORDER_OLDEST
-    if value and value != ORDER_NEWEST:
-        logger.debug(f"memory_recall 收到未知 order={order!r}，按 {ORDER_NEWEST} 处理")
-    return ORDER_NEWEST
+    if value in (ORDER_NEWEST, ORDER_OLDEST):
+        return value
+    if value and value != ORDER_RELEVANT:
+        logger.debug(f"memory_recall 收到未知 order={order!r}，按 {ORDER_RELEVANT} 处理")
+    return ORDER_RELEVANT
+
+
+@dataclass(frozen=True)
+class _IndexedOutcome:
+    """混合检索这一次的结果：还原好的几条，与各路命中数（给完成日志看）。"""
+
+    hits: List[_RecallHit]
+    detail: str
+    vector_used: bool
 
 
 class MemoryRecallService:
@@ -211,13 +227,13 @@ class MemoryRecallService:
         self._event_repo = event_repo
         self._saves_provider = saves_provider
 
-    async def recall(self, query: str, scope: str = SCOPE_ALL, order: str = ORDER_NEWEST) -> str:
+    async def recall(self, query: str, scope: str = SCOPE_ALL, order: str = ORDER_RELEVANT) -> str:
         """执行一次回想，返回给模型看的文本；查询异常不抛，转成「没查到（原因）」。"""
         scope_value = _normalize_scope(scope)
         order_value = _normalize_order(order)
         started_ms = int(self._clock())
         try:
-            text = await self._recall(query, scope_value, order_value)
+            text, detail = await self._recall(query, scope_value, order_value)
         except Exception as exc:  # noqa: BLE001 - 工具边界：查询失败转成给模型的说明，不反噬决策轮
             logger.error(
                 f"memory_recall 查询失败（query={query!r}, scope={scope_value}, order={order_value}）:"
@@ -227,24 +243,24 @@ class MemoryRecallService:
             return f"没查到（{str(exc).strip() or type(exc).__name__}）"
         logger.info(
             f"memory_recall 完成：query={query!r} scope={scope_value} order={order_value}"
-            f" 耗时 {int(self._clock()) - started_ms}ms"
+            f"{' ' + detail if detail else ''} 耗时 {int(self._clock()) - started_ms}ms"
         )
         return text
 
-    async def _recall(self, query: str, scope: str, order: str) -> str:
-        """查询主体：解析关键词 → 查四个来源 → 排序取前 8 条 → 渲染抬头与正文。"""
+    async def _recall(self, query: str, scope: str, order: str) -> Tuple[str, str]:
+        """查询主体：解析关键词 → 查五个来源 → 取前 8 条排好 → 渲染抬头与正文；另返回给日志的命中数。"""
         newest_first = order != ORDER_OLDEST
         raw_query = (query or "").strip()
         keywords = _split_keywords(raw_query)
         if not keywords:
-            return "（想查什么？给一个或多个关键词，用空格分开，比如「挖矿 钻石」）"
+            return "（想查什么？给一个或多个关键词，用空格分开，比如「挖矿 钻石」）", ""
 
         current_session_id = self._current_session()
         if scope == SCOPE_THIS_STREAM and current_session_id is None:
             return (
                 f"{self._header(raw_query, scope, order, 0)}\n"
                 "（现在不在直播，没有「本场」可查；scope 用 all 可以查全部历史）"
-            )
+            ), ""
 
         names = await self._load_known_names()
         known = set(names)
@@ -260,7 +276,7 @@ class MemoryRecallService:
                     "（没有可用的关键词了，换成跟事情有关的关键词再试试）",
                 )
                 if line
-            )
+            ), ""
 
         session_bounds = await self._chat_repo.list_chat_session_bounds()
         # 档案按"有档案行的场次"检索：保留期清掉早年弹幕之后，档案仍然查得到
@@ -279,23 +295,28 @@ class MemoryRecallService:
             current_saves=self._current_saves(),
         )
 
-        # 检索结果按相关度排在前面，本场弹幕补剩下的位置；选好的再按时间排给她看
-        hits = (await self._indexed_hits(" ".join(effective), context, archive_bounds))[:MAX_RESULTS]
-        hits.extend((await self._danmaku_hits(context))[: MAX_RESULTS - len(hits)])
-        hits.sort(key=lambda hit: hit.timestamp_ms, reverse=newest_first)
+        # 检索结果按相关度排在前面，本场弹幕补剩下的位置；她要按时间看时再按时间排
+        indexed = await self._indexed_hits(" ".join(effective), context, archive_bounds)
+        hits = indexed.hits[:MAX_RESULTS]
+        danmaku = (await self._danmaku_hits(context))[: MAX_RESULTS - len(hits)]
+        hits.extend(danmaku)
+        if order != ORDER_RELEVANT:
+            hits.sort(key=lambda hit: hit.timestamp_ms, reverse=newest_first)
 
         lines = [self._header(raw_query, scope, order, len(hits))]
         if notice:
             lines.append(notice)
+        if self._search is not None and not indexed.vector_used:
+            lines.append(LITERAL_ONLY_NOTICE)
         if not hits:
             lines.append("（没找到相关的记忆，换个关键词再试试）")
         else:
             lines.extend(hit.text for hit in hits)
-        return "\n".join(lines)
+        return "\n".join(lines), f"{indexed.detail}、弹幕 {len(danmaku)}，给出 {len(hits)} 条"
 
     async def _indexed_hits(
         self, query: str, context: _RecallContext, archive_bounds: Sequence[Tuple[int, int]]
-    ) -> List[_RecallHit]:
+    ) -> _IndexedOutcome:
         """台词、档案行、承诺、游戏进展四类：按混合检索的相关度取，还原成行后渲染（按相关度先后）。
 
         检索只给主键，这里按主键把行读回来再核一遍：没送到观众面前的台词、对某位观众的承诺
@@ -303,15 +324,16 @@ class MemoryRecallService:
         时只查本场（承诺按登记它的场次算）。档案行的时刻取写下它的那一场最后一条明细的时刻。
         """
         if self._search is None:
-            return []
+            return _IndexedOutcome(hits=[], detail="没接混合检索", vector_used=False)
         sources = _RECALL_SOURCES_WITH_EVENTS if self._event_repo is not None else _RECALL_SOURCES
-        found = await self._search.search(
+        result = await self._search.search_detailed(
             query,
             sources=sources,
             live_session_id=context.current_session_id if context.scope == SCOPE_THIS_STREAM else None,
             limit=_SEARCH_POOL,
             wait_vector_ms=RECALL_VECTOR_WAIT_MS,
         )
+        found = result.hits
         ids: Dict[str, List[int]] = {source: [] for source in sources}
         for hit in found:
             ids[hit.source].append(hit.source_id)
@@ -337,7 +359,9 @@ class MemoryRecallService:
                 hits.append(self._commitment_hit(commitments[hit.source_id], context))
             elif hit.source == "event" and hit.source_id in events:
                 hits.append(self._event_hit(events[hit.source_id], context))
-        return hits
+        return _IndexedOutcome(
+            hits=hits, detail=_path_counts(found, result.vector_used), vector_used=result.vector_used
+        )
 
     async def _events_by_ids(self, event_ids: Sequence[int]) -> Dict[int, Any]:
         """按主键读回游戏事件，只留里程碑与阶段汇报（索引已按白名单收，这里再核一遍）。"""
@@ -475,7 +499,7 @@ class MemoryRecallService:
     def _header(self, query: str, scope: str, order: str, count: int) -> str:
         """一行工具抬头：关键词、范围、顺序、条数。"""
         scope_text = "本场" if scope == SCOPE_THIS_STREAM else "全部"
-        order_text = "最新在前" if order != ORDER_OLDEST else "最早在前"
+        order_text = {ORDER_RELEVANT: "相关在前", ORDER_NEWEST: "最新在前"}.get(order, "最早在前")
         return f"【回想】关键词「{query}」｜范围：{scope_text}｜顺序：{order_text}｜{count} 条"
 
     def _previous_session(
@@ -534,6 +558,15 @@ class MemoryRecallService:
         return int(value) if value is not None else None
 
 
+def _path_counts(found: Sequence[SearchHit], vector_used: bool) -> str:
+    """各路在候选里命中了几条（一条可以同时被几路找到），给完成日志看。"""
+    keyword = sum(1 for hit in found if hit.keyword_rank is not None)
+    like = sum(1 for hit in found if hit.like_rank is not None)
+    vector = sum(1 for hit in found if hit.vector_rank is not None)
+    vector_text = f"语义 {vector}" if vector_used else "语义没用上"
+    return f"候选 {len(found)}（关键词 {keyword}、子串 {like}、{vector_text}）"
+
+
 def build_memory_recall_provider(service: MemoryRecallService) -> ToolProvider:
     """组装回想工具 Provider（provider="memory"，工具全名 ``memory_recall``）。
 
@@ -546,7 +579,7 @@ def build_memory_recall_provider(service: MemoryRecallService) -> ToolProvider:
         return await service.recall(
             query=str(args.get("query", "") or ""),
             scope=str(args.get("scope", SCOPE_ALL) or SCOPE_ALL),
-            order=str(args.get("order", ORDER_NEWEST) or ORDER_NEWEST),
+            order=str(args.get("order", ORDER_RELEVANT) or ORDER_RELEVANT),
         )
 
     return make_provider_from_specs(
