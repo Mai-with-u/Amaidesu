@@ -188,6 +188,21 @@ class MemorySearch:
         order = np.argsort(-cosines)[:CANDIDATES_PER_PATH]
         return [(stored[int(index)].source_id, float(cosines[int(index)])) for index in order]
 
+    @property
+    def semantic_ready(self) -> bool:
+        """配了嵌入服务（语义一路能用；每次查询算不算得出向量另说）。"""
+        return self._embedding is not None
+
+    def vector_ready(self, query: str) -> bool:
+        """这段查询文本的向量已经算好缓存着；没有就在后台开始算，这次返回 False（下一批多半能用）。"""
+        text = (query or "").strip()
+        if not text or self._embedding is None:
+            return False
+        if text in self._query_vectors:
+            return True
+        self._ensure_embedding_task(text)
+        return False
+
     def prefetch(self, query: str) -> None:
         """提前在后台算查询向量（攒批窗口一开就调，组装上下文时多半已经算好）。"""
         text = (query or "").strip()

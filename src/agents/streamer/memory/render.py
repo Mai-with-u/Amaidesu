@@ -47,6 +47,7 @@ __all__ = [
     "render_game_card",
     "render_joke_card",
     "render_presence_line",
+    "render_recalled_commitment_card",
     "render_retract_notice",
     "render_save_heads",
     "render_spoken_archive",
@@ -371,6 +372,16 @@ def render_archive_card(line: ArchiveLine, *, why: str, is_previous: bool = Fals
         notes.append(note)
     body = f"{title}（{'；'.join(notes)}）" if notes else title
     return f"[{render_archive_number(line.id)}·{when}] {body}。想起它是因为{why}。"
+
+
+def render_recalled_commitment_card(commitment: Commitment, *, why: str, unsure_save: bool = False) -> str:
+    """按意思想起的承诺卡：不针对具体观众的未了结承诺，给原话，写为什么想起来。"""
+    quote = (commitment.quote or "").strip() or (commitment.what or "").strip()
+    unsure = "不确定是在哪个存档里答应的，先对一对眼前的世界；" if unsure_save else ""
+    return (
+        f"[{render_commitment_number(commitment.id)}] 你之前说过「{quote}」，还没做。"
+        f"想起它是因为{why}；{unsure}时机对再提。"
+    )
 
 
 def render_joke_card(joke: str, *, message_id: str = "") -> str:

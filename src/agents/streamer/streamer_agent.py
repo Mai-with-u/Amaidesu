@@ -535,6 +535,8 @@ class StreamerAgent(BaseAgent):
                 cue_log_repo=memory_cue_log_repo,
                 inside_jokes=config.persona.inside_jokes,
                 passive_enabled=self.typed_config.memory_passive_recall_enabled,
+                search=self._memory_search,
+                vector_enabled=self.typed_config.memory_passive_recall_vector_enabled,
             )
         # 回想工具：她说过的话、档案行、不针对具体人的承诺、本场观众弹幕
         self._memory_recall: Optional[MemoryRecallService] = None
@@ -1704,7 +1706,16 @@ class StreamerAgent(BaseAgent):
             situations=self._current_situations(),
             brief_archive_ids=self._memory_brief_archive_ids,
             brief_commitment_ids=self._memory_brief_ids,
+            game_tasks=self._game_tasks(),
         )
+
+    def _game_tasks(self) -> Dict[str, str]:
+        """各游戏手上还在做的委派（她交代的原话）：游戏情境查询用，换了委派就是情境变了。"""
+        return {
+            agent: delegation.instruction
+            for agent, delegation in self._planner.workbench.delegations.items()
+            if not delegation.report_kind and delegation.instruction
+        }
 
     def _current_situations(self) -> Dict[str, GameSituation]:
         """各游戏角色眼下离哪些记住的地点多远（只读游戏 Agent 的缓存）；读不到就当这一批没有。"""
@@ -1927,6 +1938,9 @@ class StreamerAgent(BaseAgent):
         forced = msg.message_type in self._force_message_types
         # 入缓冲
         self._buffer.add(msg, arrival_ms=now_ms(), forced=forced)
+        # 弹幕一到就在后台算它的查询向量：攒批窗口几秒，组装线索时多半已算好，决策不等它
+        if self._memory_cues is not None:
+            await self._memory_cues.prefetch(msg)
         if self._mouth is not None:
             sender = msg.user.name if msg.user is not None else ""
             self._mouth.note_viewer(sender or "观众", msg.content)

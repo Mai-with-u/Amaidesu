@@ -6,6 +6,9 @@
   台词。候选是写了触发词的档案行和老梗栏里的梗；承诺还没有触发词（找承诺的提示词还没改），只走
   向量一路。命中它的来源全记下：观众弹幕、她的台词；只有她的台词命中的叫"自触发"，推送侧按更严的
   条件处理。老梗只认观众弹幕——老梗栏写明了"观众提起时才接，别自己翻出来"。
+- **向量一路**：观众弹幕与游戏情境各自成一条查询（都不放她自己的台词——她的话触发语义联想会越说
+  越多），在档案行与承诺里找意思相近的：余弦够高、且融合后排进前 3 才算。游戏情境查询是"存档、走到
+  跟前的记住的地点、手上在做的委派"，三样变了才出一条新查询，查过一次就清掉。
 - **地点一路**：角色从 48 格外（或这场还没读到过）走进某个记住的地点 24 格内，且这份距离是
   最近读到的，就算"到了"。到了以后推挂在这个地点、这个存档里的档案行；每个地点每场只算一次到达
   （她大部分时间待在营地附近，按半径持续判断会让营地的事一场推好几遍）。
@@ -26,7 +29,8 @@ from src.modules.types.game_save import GameSave
 from src.modules.types.game_situation import GameSituation
 
 from .saves import SavePlace, place_of
-from .textmatch import KeywordMatcher
+from .search import SearchResult
+from .textmatch import KeywordMatcher, normalize
 
 if TYPE_CHECKING:
     from src.modules.storage.repos import ArchiveRepo
@@ -44,7 +48,13 @@ __all__ = [
     "SOURCE_PLACE",
     "SOURCE_SELF",
     "SOURCE_SITUATION",
+    "SituationQuery",
+    "VECTOR_MAX_QUERIES",
+    "VECTOR_MIN_COSINE",
+    "VECTOR_TOP",
     "parse_inside_jokes",
+    "query_worthy",
+    "vector_hits",
 ]
 
 logger = get_logger("MemoryCueProvider")
@@ -70,6 +80,19 @@ LINES_PER_PLACE = 2
 POOL_REFRESH_MS = 10 * 60 * 1000
 POOL_MAX_LINES = 500
 
+# 向量一路：余弦至少这么高、且融合后排进前几名才推。阈值是先定的，离线评测集做出来后按
+# "无关文本逐条误推不超过千分之二"校准
+VECTOR_MIN_COSINE = 0.65
+VECTOR_TOP = 3
+# 归一化后不到 4 个字的弹幕不拿去查（"哈哈哈""666"和什么都沾一点边）
+VECTOR_MIN_QUERY_CHARS = 4
+# 一批最多拿几条弹幕去查（取最新的几条）
+VECTOR_MAX_QUERIES = 5
+# 游戏情境查询算不出向量时，最多再等几批就放弃这一条
+SITUATION_QUERY_TRIES = 3
+# 委派原话截多长放进游戏情境查询
+_TASK_CHARS = 60
+
 # 老梗栏一行："倒立洗头/洗头挑战：她说过输了就倒立洗头"——冒号前是梗与别名，冒号后是说明
 _JOKE_HEAD = re.compile(r"[：:]")
 _JOKE_ALIASES = re.compile(r"[/／、|]")
@@ -87,6 +110,11 @@ def parse_inside_jokes(text: str) -> Dict[str, List[str]]:
         if words and words[0] not in jokes:
             jokes[words[0]] = words
     return jokes
+
+
+def query_worthy(text: str) -> bool:
+    """这条弹幕值得拿去做语义查询：归一化后至少 4 个字。"""
+    return len(normalize(text)) >= VECTOR_MIN_QUERY_CHARS
 
 
 @dataclass(frozen=True)
@@ -112,6 +140,9 @@ class PassiveHit:
     message_id: str = ""
     place: str = ""
     distance: Optional[int] = None
+    cosine: Optional[float] = None
+    vector_rank: Optional[int] = None
+    fused: Optional[float] = None
 
     @property
     def self_only(self) -> bool:
@@ -184,6 +215,91 @@ class RulePool:
                     hit.message_id = item.message_id
         # 观众弹幕命中的排在只由她自己台词命中的前面
         return sorted(hits.values(), key=lambda hit: hit.self_only)
+
+
+def vector_hits(results: Sequence[Tuple[str, str, SearchResult]]) -> List[PassiveHit]:
+    """各条查询（来源, 弹幕编号, 检索结果）合成候选：前几名里余弦够高的档案行与承诺。
+
+    同一条目被几条查询找到时合并来源、留最高的余弦；按余弦从高到低排。
+    """
+    hits: Dict[ItemKey, PassiveHit] = {}
+    for source, message_id, result in results:
+        for found in result.hits[:VECTOR_TOP]:
+            if found.source not in ("archive", "commitment"):
+                continue
+            if found.vector_score is None or found.vector_score < VECTOR_MIN_COSINE:
+                continue
+            key: ItemKey = (found.source, int(found.source_id))
+            hit = hits.setdefault(key, PassiveHit(key=key))
+            hit.sources.add(source)
+            if source == SOURCE_DANMAKU and not hit.message_id:
+                hit.message_id = message_id
+            if hit.cosine is None or found.vector_score > hit.cosine:
+                hit.cosine, hit.vector_rank, hit.fused = found.vector_score, found.vector_rank, found.score
+    return sorted(hits.values(), key=lambda hit: -(hit.cosine or 0.0))
+
+
+class SituationQuery:
+    """游戏情境查询：眼下的存档、走到跟前的记住的地点、手上在做的委派；三样变了才出一条新查询。
+
+    查询文本在变的那一刻定下，算出向量、查过一次就清掉：同一个情境不反复推，压住"玩着就一直
+    想起"。算不出向量的，最多再等几批。
+    """
+
+    def __init__(self) -> None:
+        self._key: Optional[Tuple[Tuple[str, str, str, str], ...]] = None
+        self._pending: Optional[str] = None
+        self._tries = 0
+
+    def reset(self) -> None:
+        self._key = None
+        self._pending = None
+        self._tries = 0
+
+    @property
+    def pending(self) -> Optional[str]:
+        """等着去查的那条情境查询；没有为 None。"""
+        return self._pending
+
+    def update(
+        self,
+        situations: Mapping[str, GameSituation],
+        current_saves: Mapping[str, GameSave],
+        tasks: Mapping[str, str],
+    ) -> None:
+        """读这一批的情境；和上一批比变了，就定下一条新查询（没有地点也没有委派时不查）。"""
+        key: List[Tuple[str, str, str, str]] = []
+        parts: List[str] = []
+        for game in sorted(set(situations) | set(tasks)):
+            save = current_saves.get(game)
+            known = save is not None and save.known
+            situation = situations.get(game)
+            near = ""
+            if situation is not None and situation.age_ms <= SITUATION_STALE_MS:
+                near = next((place.name for place in situation.places if place.distance <= ARRIVE_WITHIN), "")
+            task = (tasks.get(game) or "").strip()[:_TASK_CHARS]
+            key.append((game, save.id if known and save is not None else "", near, task))
+            if near or task:
+                where = f" 存档「{save.label}」" if known and save is not None else ""
+                at = f" 在「{near}」附近" if near else ""
+                doing = f" 正在做：{task}" if task else ""
+                parts.append(f"{game}{where}{at}{doing}")
+        frozen = tuple(key)
+        if frozen == self._key:
+            return
+        self._key = frozen
+        self._pending = "；".join(parts) or None
+        self._tries = 0
+
+    def done(self) -> None:
+        """查过了，清掉。"""
+        self._pending = None
+
+    def missed(self) -> None:
+        """这一批向量还没算好；等满几批还没好就放弃这一条。"""
+        self._tries += 1
+        if self._tries >= SITUATION_QUERY_TRIES:
+            self._pending = None
 
 
 class PlaceArrivals:

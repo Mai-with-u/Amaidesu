@@ -25,6 +25,7 @@ from src.modules.events.interceptors.session_stamp import SessionStampIntercepto
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.speech import StreamerSpeechPayload
+from src.modules.llm.embedding import EmbeddingSetup
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.session.manager import LiveSessionManager
 from src.modules.storage.database import SQLiteDatabase
@@ -36,7 +37,7 @@ from src.modules.utils.time_utils import now_ms
 from tests.agents.streamer.helpers import ActiveSessionStub, make_streamer_agent
 from tests.modules.tools.fakes import SavedGameProvider
 from tests.config.helpers import wait_until
-from tests.modules.llm.fakes import FakeLLMManager
+from tests.modules.llm.fakes import FakeEmbeddingServer, FakeLLMManager
 
 
 @pytest.fixture
@@ -167,6 +168,33 @@ async def test_agent_backfills_memory_index_on_start_and_stops_it(store: SQLiteD
     assert counts[-1] == 1, "启动补算把上一场的档案行补进了全文索引"
     (vectors,) = await store.execute("SELECT COUNT(*) FROM memory_vectors_archive")
     assert int(vectors[0]) == 0, "没配嵌入服务时不补向量"
+
+
+async def test_danmaku_arrival_prefetches_its_query_vector(store: SQLiteDatabase) -> None:
+    """弹幕一进主播 Agent 就在后台预取它的查询向量（只发弹幕正文）；没开播时不发。"""
+    server = FakeEmbeddingServer()
+    current = await store.sessions.insert_live_session(stream_id="room", platform="bilibili", started_at_ms=5_000_000)
+    session = ActiveSessionStub(active_pk=None)
+    agent = make_streamer_agent(
+        {"background": {"enabled": False}, "mouth": {"enabled": False}},
+        llm=FakeLLMManager(),
+        tool_registry=ToolRegistry(),
+        session_manager=session,
+        chat_repo=store.chat,
+        viewer_repo=store.viewers,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
+        memory_index_repo=store.memory_index,
+        embedding_setup=EmbeddingSetup(client=server.client(), note=""),
+    )
+    message = _danmaku_from_xiaoyu("那只小猫咪最近好吗", "m1")
+
+    await agent.handle_message(message)
+    session.active_pk = current
+    await agent.handle_message(message)
+    await wait_until(lambda: bool(server.requests), what="预取的查询向量请求发出")
+
+    assert server.requests == [["那只小猫咪最近好吗"]], "只发正文；没开播那一条不发"
 
 
 async def test_refresh_brief_reads_previous_archive_and_pending_commitments(store: SQLiteDatabase) -> None:

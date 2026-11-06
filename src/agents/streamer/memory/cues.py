@@ -9,8 +9,12 @@
 4. 游戏开着：主播当前开着某个游戏，有挂这个游戏、不针对具体观众的未了结承诺 → 推游戏卡。
    分存档的游戏只推眼下这个存档里答应的（别的存档里的事不催她提起），没记存档的照推、
    卡面注明不确定；对某位观众的卡照推，注明是在哪个存档里答应的（判定见 ``saves``）。
+5. 向量（被动想起）：本批观众弹幕或游戏情境的意思和某行档案、某条不针对具体观众的承诺相近 → 推那一条。
+   弹幕一到就在后台算查询向量（``prefetch``），这一批组装时算好了就用，没算好这一批不用，决策不等它；
+   只发弹幕正文，不发昵称和外部 ID，发过"忘了我"的观众的弹幕不发。
 
-地点与规则两路怎么找候选见 ``passive``；被动想起可在配置里整体关掉。
+地点、规则、向量三路怎么找候选见 ``passive``；被动想起可在配置里整体关掉，向量一路也可单独关掉
+（没配嵌入服务时自动不走）。
 
 限频与用上即停：同一张卡每场至多推两次、两次至少隔十分钟（计数在内存里，进程重启从零
 算）；本场台词的记忆引用里已经出现这张卡的编号（约#N 或 档#N），就是被用上了，本场不再推
@@ -43,11 +47,17 @@ from .passive import (
     SOURCE_GAME,
     SOURCE_PLACE,
     SOURCE_SELF,
+    SOURCE_SITUATION,
+    VECTOR_MAX_QUERIES,
+    VECTOR_TOP,
     CueText,
     ItemKey,
     PassiveHit,
     PlaceArrivals,
     RulePool,
+    SituationQuery,
+    query_worthy,
+    vector_hits,
 )
 from .render import (
     render_archive_card,
@@ -58,13 +68,17 @@ from .render import (
     render_game_card,
     render_joke_card,
     render_presence_line,
+    render_recalled_commitment_card,
     render_retract_notice,
     render_viewer_card,
 )
 from .saves import SavePlace, place_note, place_of
 
 if TYPE_CHECKING:
+    from src.modules.storage.models.memory import ArchiveLine, Commitment
     from src.modules.storage.privacy import PrivacyService
+
+    from .search import MemorySearch
     from src.modules.storage.repos import ArchiveRepo, ChatRepo, CommitmentRepo, MemoryCueLogRepo, ViewerRepo
 
 __all__ = [
@@ -184,12 +198,15 @@ class MemoryCueProvider:
         cue_log_repo: Optional["MemoryCueLogRepo"] = None,
         inside_jokes: str = "",
         passive_enabled: bool = True,
+        search: Optional["MemorySearch"] = None,
+        vector_enabled: bool = True,
     ) -> None:
         """仓储与时钟注入；隐私服务缺失时不出回执行（看不见遗忘命令）。
 
         ``previous_session_provider`` 给"上一场"的判定（承诺卡与档案卡的时间词）：缺省时
         一律写"之前"，不冒险把三场前的事说成上一场。``archive_repo`` 缺失时被动想起没有档案卡；
-        ``cue_log_repo`` 缺失时只记日志；``passive_enabled`` 为假时地点与规则两路都不跑。
+        ``cue_log_repo`` 缺失时只记日志；``passive_enabled`` 为假时被动想起三路都不跑；``search`` 缺失、
+        没配嵌入服务或 ``vector_enabled`` 为假时向量一路不跑。
         """
         self._commitments = commitments_repo
         self._chat = chat_repo
@@ -200,8 +217,12 @@ class MemoryCueProvider:
         self._clock = clock
         self._cue_log = cue_log_repo
         self._passive_enabled = passive_enabled
+        self._archive = archive_repo
+        self._search = search
+        self._vector_enabled = vector_enabled
         self._pool = RulePool(archive_repo=archive_repo, inside_jokes=inside_jokes, clock=clock)
         self._arrivals = PlaceArrivals()
+        self._situation = SituationQuery()
         self._session_id: Optional[int] = None
         # 条目 → 本场推送时刻列表
         self._push_at: Dict[ItemKey, List[int]] = {}
@@ -221,12 +242,14 @@ class MemoryCueProvider:
         situations: Optional[Mapping[str, GameSituation]] = None,
         brief_archive_ids: Sequence[int] = (),
         brief_commitment_ids: Sequence[int] = (),
+        game_tasks: Optional[Mapping[str, str]] = None,
     ) -> MemoryCues:
         """算一批的线索：卡片、老观众在场一行、回执行合成一个块；没有线索返回空串。
 
         ``current_saves`` 是分存档的游戏眼下所在的存档：游戏卡只推这个存档里答应的。
         ``situations`` 是各游戏角色离记住的地点多远（地点一路判到达用）；``brief_*_ids`` 是
-        常驻简报里列着的条目，被动想起不再推它们。
+        常驻简报里列着的条目，被动想起不再推它们；``game_tasks`` 是各游戏手上还在做的委派原话
+        （游戏情境查询用）。
         """
         session_id = self._current_session_provider() if self._current_session_provider is not None else None
         if session_id is None:
@@ -245,13 +268,16 @@ class MemoryCueProvider:
             previous_session_id=await self._previous_session_id(),
         )
         self._round_labels = {}
-        # 对象开口 -> 游戏地点 -> 规则 -> 游戏开着：每一路只在前面没凑满三张时补
+        # 对象开口 -> 游戏地点 -> 规则 -> 游戏开着 -> 向量：每一路只在前面没凑满三张时补
         await self._viewer_cards(senders, state)
         if self._passive_enabled:
             await self._pool.refresh_if_stale()
             self._place_cards(situations or {}, state)
             self._rule_cards(self._pool.match(await self._rule_texts(sid, batch, senders)), state)
         await self._game_cards(open_games, state)
+        if self._vector_on():
+            self._situation.update(situations or {}, state.saves, game_tasks or {})
+            await self._vector_cards(batch, senders, state)
         # 老观众一行不再因为"本批有别人的卡"整行消失；只跳过这一批拿了自己卡的观众
         presence = await self._presence_line(sid, senders, state.carded_viewers)
         notices = self._command_notices(batch)
@@ -271,6 +297,34 @@ class MemoryCueProvider:
         self._push_at.clear()
         self._arrivals.reset()
         self._pool.reset()
+        self._situation.reset()
+
+    async def prefetch(self, message: Any) -> None:
+        """一条弹幕到达就在后台算它的查询向量：攒批窗口几秒，组装线索时多半已经算好，决策不等它。
+
+        只发弹幕正文。不在直播、向量一路没开、模拟消息、遗忘与撤回命令、太短的弹幕、发过"忘了我"
+        且删除还没执行的观众，一律不发。
+        """
+        if not self._vector_on() or self._search is None:
+            return
+        if self._current_session_provider is None or self._current_session_provider() is None:
+            return
+        content = self._query_text(message)
+        if content is None or not query_worthy(content):
+            return
+        user = getattr(message, "user", None)
+        external_id = str(getattr(user, "id", "") or "").strip()
+        if self._viewers is not None and external_id:
+            probe = _Sender(external_id=external_id)
+            await self._fill_viewer(probe, platform=str(getattr(message, "platform", "") or ""))
+            if probe.forget_requested_at_ms is not None:
+                return
+        self._search.prefetch(content)
+
+    def _vector_on(self) -> bool:
+        return (
+            self._passive_enabled and self._vector_enabled and self._search is not None and self._search.semantic_ready
+        )
 
     # ------------------------------------------------------------------
     # 取数
@@ -366,22 +420,29 @@ class MemoryCueProvider:
         forgetting = {sender.external_id for sender in senders if sender.forget_requested_at_ms is not None}
         messages: List[Tuple[str, str]] = []
         for message in batch:
-            if bool(getattr(message, "simulated", False)):
-                continue
-            if str(getattr(message, "message_type", "") or "") != "danmaku":
-                continue
-            content = str(getattr(message, "content", "") or "").strip()
-            if not content:
+            content = self._query_text(message)
+            if content is None:
                 continue
             user = getattr(message, "user", None)
             if str(getattr(user, "id", "") or "").strip() in forgetting:
                 continue
-            if self._privacy is not None and (
-                self._privacy.is_forget_command(content) or self._privacy.is_retract_command(content)
-            ):
-                continue
             messages.append((content, str(getattr(message, "message_id", "") or "")))
         return messages
+
+    def _query_text(self, message: Any) -> Optional[str]:
+        """一条消息能拿来想起旧事时返回它的正文：真观众的弹幕、不是遗忘或撤回命令；否则 None。"""
+        if bool(getattr(message, "simulated", False)):
+            return None
+        if str(getattr(message, "message_type", "") or "") != "danmaku":
+            return None
+        content = str(getattr(message, "content", "") or "").strip()
+        if not content:
+            return None
+        if self._privacy is not None and (
+            self._privacy.is_forget_command(content) or self._privacy.is_retract_command(content)
+        ):
+            return None
+        return content
 
     async def _recent_lines(self, session_id: int) -> List[str]:
         """她本场最近几句播出了的台词（确知没送达的不算）；读不到就当没有。"""
@@ -542,6 +603,98 @@ class MemoryCueProvider:
             is_previous=self._line_in_previous_session(line.live_session_id, state),
             note=place_note(line.game, line.save_id, line.save_name, state.saves),
         )
+
+    async def _vector_cards(self, batch: Sequence[Any], senders: Sequence[_Sender], state: _Round) -> None:
+        """向量：本批弹幕（最新几条）与变了的游戏情境各查一次，向量没算好的这一批跳过。"""
+        search = self._search
+        if search is None:
+            return
+        queries: List[Tuple[str, str, str]] = [
+            (SOURCE_DANMAKU, message_id, content)
+            for content, message_id in self._query_messages(batch, senders)
+            if query_worthy(content)
+        ][-VECTOR_MAX_QUERIES:]
+        if self._situation.pending:
+            queries.append((SOURCE_SITUATION, "", self._situation.pending))
+        results = []
+        for source, message_id, text in queries:
+            if not search.vector_ready(text):
+                if source == SOURCE_SITUATION:
+                    self._situation.missed()
+                continue
+            try:
+                result = await search.search_detailed(text, sources=("archive", "commitment"), limit=VECTOR_TOP)
+            except Exception as exc:  # noqa: BLE001 - 这一条查不了就跳过，不挡这一批别的线索
+                logger.warning(f"被动想起的语义查询失败（这一条跳过）: {exc}", exc=exc)
+                continue
+            if source == SOURCE_SITUATION:
+                self._situation.done()
+            results.append((source, message_id, result))
+        for hit in vector_hits(results):
+            if self._skip(hit.key, state, self._passive_blocked(hit.key, state)):
+                continue
+            text = await self._vector_card_text(hit, state)
+            if not text:
+                continue
+            detail = {
+                "cosine": round(hit.cosine or 0.0, 4),
+                "rank": hit.vector_rank,
+                "fused": round(hit.fused or 0.0, 5),
+            }
+            self._push(
+                state, _Card(key=hit.key, text=text, kind="vector", sources=tuple(sorted(hit.sources)), detail=detail)
+            )
+
+    async def _vector_card_text(self, hit: PassiveHit, state: _Round) -> str:
+        """向量命中的卡面；不是正式场的档案行、不能推的承诺、别的存档里的事返回空串。"""
+        if SOURCE_DANMAKU in hit.sources:
+            why = f"弹幕 {hit.message_id} 说的像这件事" if hit.message_id else "观众说的像这件事"
+        else:
+            why = "眼下游戏里的情境像这件事"
+        kind, value = hit.key
+        if kind == "archive":
+            line = await self._cue_line(int(value))
+            if line is None:
+                self._skip(hit.key, state, "不是正式场的行")
+                return ""
+            if self._skip(hit.key, state, self._other_save(line.game, line.save_id, state)):
+                return ""
+            return render_archive_card(
+                line,
+                why=why,
+                is_previous=self._line_in_previous_session(line.live_session_id, state),
+                note=place_note(line.game, line.save_id, line.save_name, state.saves),
+            )
+        commitment = await self._recallable_commitment(int(value))
+        if commitment is None:
+            self._skip(hit.key, state, "不是未了结的公开承诺")
+            return ""
+        if self._skip(hit.key, state, self._other_save(commitment.game, commitment.save_id, state)):
+            return ""
+        place = place_of(commitment.game, commitment.save_id, state.saves)
+        return render_recalled_commitment_card(commitment, why=why, unsure_save=place is SavePlace.UNSURE)
+
+    async def _cue_line(self, line_id: int) -> Optional["ArchiveLine"]:
+        """向量命中的档案行再核一次：只推正式场的；读不到当没有。"""
+        if self._archive is None:
+            return None
+        try:
+            lines = await self._archive.list_cue_lines(line_ids=[line_id])
+        except Exception as exc:  # noqa: BLE001 - 核不了就不推这一行
+            logger.warning(f"核对档案行 {line_id} 失败（不推）: {exc}", exc=exc)
+            return None
+        return lines[0] if lines else None
+
+    async def _recallable_commitment(self, commitment_id: int) -> Optional["Commitment"]:
+        """向量命中的承诺：只推未了结、不针对具体观众的（别人说的像，推对某位观众的会把 ta 的事翻给全场）。"""
+        try:
+            commitment = await self._commitments.get_commitment(commitment_id=commitment_id)
+        except Exception as exc:  # noqa: BLE001 - 读不到就不推
+            logger.warning(f"读承诺 {commitment_id} 失败（不推）: {exc}", exc=exc)
+            return None
+        if commitment is None or commitment.status != "open" or commitment.viewer_id is not None:
+            return None
+        return commitment
 
     # ------------------------------------------------------------------
     # 推不推

@@ -589,6 +589,14 @@ class StreamerConfig(BaseConfig):
         description="观众提到旧事的触发词、她走到记住的地点跟前时，自动把那件事推给决策层参考（推不推、提不提"
         "仍由她定）；关掉后只在观众本人开口、游戏开着时推答应过的事",
     )
+    # 被动想起的语义一路：观众换个说法提旧事也能接上；要把弹幕正文与游戏情境发给嵌入服务算向量
+    memory_passive_recall_vector_enabled: bool = Field(
+        title="被动想起走语义",
+        default=True,
+        description="观众换个说法提到旧事、游戏里的情境和某件旧事意思相近时也推；只把弹幕正文与游戏情境发给"
+        "嵌入服务，不发昵称与观众编号。没配嵌入服务时自动只走触发词与地点",
+        json_schema_extra={"x-ui-advanced": True},
+    )
 
     # 子段
     persona: StreamerPersonaConfig = Field(
