@@ -65,9 +65,10 @@ PRESENCE_RECENT_MS = 3 * 24 * 60 * 60 * 1000
 
 # 两档共用的抬头与提示
 _BRIEF_HEADER = "# 她记得的事（内部参考；以眼前为准，用不上就不提）"
+# 线索块和常驻简报一样写明"以眼前为准"：卡片是代码按线索找的旧事，眼前的现场说了算
 _CUE_HEADER = (
     "【这一批想起来的事】"
-    "（代码按线索找的；不提也行。要用就把编号写进 streamer_reply 的 use_memory，一次一条；"
+    "（代码按线索找的，以眼前为准；不提也行。要用就把编号写进 streamer_reply 的 use_memory，一次一条；"
     "一句台词最多带一件旧事）"
 )
 _COMMITMENTS_HEADER = "还没兑现、你当众说过的事："
@@ -375,11 +376,14 @@ def render_archive_card(line: ArchiveLine, *, why: str, is_previous: bool = Fals
 
 
 def render_recalled_commitment_card(commitment: Commitment, *, why: str, unsure_save: bool = False) -> str:
-    """按意思想起的承诺卡：不针对具体观众的未了结承诺，给原话，写为什么想起来。"""
+    """按意思想起的承诺卡：不针对具体观众的未了结承诺，给原话，写为什么想起来。
+
+    承诺做没做是下播整理时判的，本场做了的还没记上——写"截至上一场还没做"，不替她断言眼下没做。
+    """
     quote = (commitment.quote or "").strip() or (commitment.what or "").strip()
     unsure = "不确定是在哪个存档里答应的，先对一对眼前的世界；" if unsure_save else ""
     return (
-        f"[{render_commitment_number(commitment.id)}] 你之前说过「{quote}」，还没做。"
+        f"[{render_commitment_number(commitment.id)}] 你之前说过「{quote}」，截至上一场还没做。"
         f"想起它是因为{why}；{unsure}时机对再提。"
     )
 

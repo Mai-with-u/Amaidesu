@@ -582,11 +582,13 @@ class MemoryCueProvider:
                 key: ItemKey = ("archive", int(line.id))
                 if self._skip(key, state, self._passive_blocked(key, state)):
                     continue
+                # 地点卡用提示语气，不替她断言眼下在哪：位置可能是几分钟前读到的，存档也只说"记录上"
+                same_save = place_of(line.game, line.save_id, state.saves) is SavePlace.SAME
                 text = render_archive_card(
                     line,
-                    why=f"你走到「{place}」附近了",
+                    why=f"游戏里的位置显示你可能走到了「{place}」附近",
                     is_previous=self._line_in_previous_session(line.live_session_id, state),
-                    note=place_note(line.game, line.save_id, line.save_name, state.saves),
+                    note="记录上和眼下是同一个存档" if same_save else "",
                 )
                 # 线索卡记录不存地点名：复盘时从档案行眼下挂的地点现查，行删了就看不到
                 detail = {"distance": distance}

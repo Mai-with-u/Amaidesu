@@ -122,6 +122,7 @@ async def test_danmaku_meaning_pushes_close_lines_once_its_vector_is_ready(store
 
     assert cues.archive_ids == (memory.cat_line,) and cues.commitment_ids == (memory.cat_promise,)
     assert "想起它是因为弹幕 m5 说的像这件事" in cues.text and "下次给猫做个窝" in cues.text
+    assert "截至上一场还没做" in cues.text, "做没做是下播整理判的，不替她断言眼下没做"
     assert "水车" not in cues.text
     entries = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
     assert {entry.card_kind for entry in entries} == {"vector"}

@@ -603,7 +603,8 @@ async def test_walking_up_to_a_remembered_place_pushes_its_lines_once(store: SQL
     assert (await provider.collect(batch=[], current_saves=saves, situations=near(80))).archive_ids == ()
     arrived = await provider.collect(batch=[], current_saves=saves, situations=near(12))
     assert arrived.archive_ids == (line_id,)
-    assert "想起它是因为你走到「北边农场」附近了" in arrived.text and "就是眼下这个存档" in arrived.text
+    assert "想起它是因为游戏里的位置显示你可能走到了「北边农场」附近" in arrived.text
+    assert "记录上和眼下是同一个存档" in arrived.text and "就是眼下这个存档" not in arrived.text, "提示语气，不断言"
 
     clock.value += PUSH_COOLDOWN_MS + 1
     await provider.collect(batch=[], current_saves=saves, situations=near(90))

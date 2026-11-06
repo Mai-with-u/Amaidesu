@@ -246,7 +246,7 @@ def test_cue_block_orders_cards_presence_and_notices_under_one_header() -> None:
         notices=[render_forget_notice(message_id="m815")],
     )
     lines = block.split("\n")
-    assert lines[0].startswith("【这一批想起来的事】")
+    assert lines[0].startswith("【这一批想起来的事】") and "以眼前为准" in lines[0], "和常驻简报一样以眼前为准"
     assert "[约#7·Minecraft] 卡" in lines[1]
     assert lines[2].startswith("老观众在场")
     assert lines[3].startswith("【已按")
