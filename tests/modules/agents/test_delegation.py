@@ -25,7 +25,7 @@ from src.modules.events.payloads import AgentPromptedPayload, LiveEndedPayload, 
 from src.modules.mcp.config import McpServerConfig
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
-from src.modules.tools.tasks import TaskLedger, TaskTracker
+from src.modules.tools.tasks import REPLY_NOTE_AT_KEY, REPLY_NOTE_KEY, TaskLedger, TaskTracker
 
 
 def _inv(tool: str, args: dict, source: str = "agent_a") -> ToolInvocation:
@@ -318,6 +318,26 @@ async def test_ledger_keeps_full_instruction_and_refusal_quotes_only_own_words(r
     assert refused.success is False and f"在途指令原文：「{own}」" in refused.error_message
     assert "观众甲" not in refused.error_message and "取舍规则" not in refused.error_message
     assert "own_words" not in refused.error_message, "原话不再当成已知进展列第二遍"
+
+
+async def test_in_flight_refusal_leaves_out_the_executor_reply_note(rig: _Rig) -> None:
+    """执行侧记在快照里的最近一句判断（没脱敏的推理原文加毫秒时刻）不进拒受理理由：
+    她重复派单被拒时只读到自己的原话与已知进展，不会把坐标、工具名念出来。"""
+    first = (await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "把门装上"})).structured_content[
+        "task_id"
+    ]
+    # 执行侧往快照补一条进展与一句判断：进展照带，判断不带
+    rig.ledger.update(first, "running", summary="开始", snapshot={"instruction": "把门装上", "goals": "门框已立好"})
+    rig.ledger.annotate(
+        first, {REPLY_NOTE_KEY: "先 maicraft_place(12, 64, -30) 再说", REPLY_NOTE_AT_KEY: 1793977796538}
+    )
+
+    refused = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "再装一次门"})
+
+    assert refused.success is False
+    assert "在途指令原文：「把门装上」" in refused.error_message and "门框已立好" in refused.error_message
+    assert "maicraft_place" not in refused.error_message and "1793977796538" not in refused.error_message
+    assert REPLY_NOTE_KEY not in refused.error_message
 
 
 async def test_in_flight_refusal_points_to_prompt_only_when_target_waits(rig: _Rig) -> None:

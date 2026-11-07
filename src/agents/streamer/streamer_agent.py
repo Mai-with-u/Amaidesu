@@ -52,7 +52,7 @@ from src.modules.logging import get_logger
 from src.modules.utils.task_utils import spawn_background_task
 from src.modules.tools import ToolSpec
 from src.modules.tools.models import ToolInvocation
-from src.modules.tools.tasks import IN_PROGRESS_TASK_STATES
+from src.modules.tools.tasks import IN_PROGRESS_TASK_STATES, REPLY_NOTE_AT_KEY, REPLY_NOTE_KEY
 from src.modules.tools.registry import ToolRegistry
 from src.modules.types.game_save import GameSave
 from src.modules.types.game_situation import GameSituation
@@ -2061,8 +2061,8 @@ class StreamerAgent(BaseAgent):
             if record is None or record.source != "agent" or record.executor != agent:
                 continue
             snapshot = record.snapshot or {}
-            text = str(snapshot.get("latest_reply") or "").strip()
-            at_ms = int(snapshot.get("latest_reply_at_ms") or 0)
+            text = str(snapshot.get(REPLY_NOTE_KEY) or "").strip()
+            at_ms = int(snapshot.get(REPLY_NOTE_AT_KEY) or 0)
             if text and at_ms >= latest[1]:
                 latest = (text, at_ms)
         return latest

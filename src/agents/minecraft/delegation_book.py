@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Any, List, Optional, Tuple
 
 from src.modules.logging import get_logger
+from src.modules.tools.tasks import REPLY_NOTE_AT_KEY, REPLY_NOTE_KEY
 
 __all__ = ["DelegationBook"]
 
@@ -78,7 +79,7 @@ class DelegationBook:
         if ledger is None or not content:
             return
         for task_id in self._finished_ids:
-            ledger.annotate(task_id, {"latest_reply": content, "latest_reply_at_ms": at_ms})
+            ledger.annotate(task_id, {REPLY_NOTE_KEY: content, REPLY_NOTE_AT_KEY: at_ms})
 
     # ----- 终态与中间态 -----
 

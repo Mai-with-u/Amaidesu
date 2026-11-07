@@ -33,13 +33,23 @@ from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.agents.delegation_text import own_words_of
-from src.modules.tools.tasks import TERMINAL_TASK_STATES, TaskLedger, TaskRecord
+from src.modules.tools.tasks import (
+    REPLY_NOTE_AT_KEY,
+    REPLY_NOTE_KEY,
+    TERMINAL_TASK_STATES,
+    TaskLedger,
+    TaskRecord,
+)
 from src.modules.utils.time_utils import now_ms
 
 logger = get_logger("AgentControl")
 
 # 提供者标识统一来源（ToolSpec.provider / 注册名前缀；主播 Planner 据此识别委派工具面）
 PROVIDER_NAME = "framework"
+
+# 在途拒受理时不当"已知进展"列出的快照字段：指令全文与原话另有一行；执行 Agent 最近那句判断是没脱敏的
+# 推理原文，不给发起方回读
+_NOT_PROGRESS_KEYS = frozenset({"instruction", "own_words", REPLY_NOTE_KEY, REPLY_NOTE_AT_KEY})
 
 
 def _emit_prompted(event_bus: Any, *, target: str, content: str, source: str) -> None:
@@ -230,8 +240,9 @@ class _DelegationCore:
             "同一目标同时只接一件事。",
             f"在途指令原文：「{instruction}」",
         ]
-        # 已知进展摘要有就带（批级关联/执行侧写入快照的额外字段），读不到不硬造
-        extras = {k: v for k, v in record.snapshot.items() if k not in ("instruction", "own_words")}
+        # 已知进展摘要有就带（批级关联/执行侧写入快照的额外字段），读不到不硬造。执行 Agent 最近那句判断
+        # 不带：那是没脱敏的推理原文加毫秒时刻，她常重复派单，每次被拒都读到，会把坐标、工具名念出来
+        extras = {k: v for k, v in record.snapshot.items() if k not in _NOT_PROGRESS_KEYS}
         if extras:
             lines.append(f"在途任务的已知进展：{extras}")
         # 出路按对方此刻的状态给：停着等主意时补充要求就是答复；还在做时别把人引去补充——
