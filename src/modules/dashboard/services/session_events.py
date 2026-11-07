@@ -58,6 +58,9 @@ _REPLAY_EXCLUDED = frozenset(
         CoreEvents.ROOM_STATE_WATCHED_COUNT,
         # 任务卡条/Agent 任务板是快照面板非时间线卡（实时亦然，对齐的是卡面）
         CoreEvents.TASK_CHANGED,
+        # 后台任务现状是底栏任务条与终态通知的数据源：载荷无场次归属字段，
+        # 按场次过滤不可达，且实时侧也不是时间线卡
+        CoreEvents.BACKGROUND_TASK_CHANGED,
         # 备忘录面板刷新触发，非时间线卡
         # 系统生命线：无场次归属字段，按场次过滤不可达，非时间线卡
         CoreEvents.CORE_STARTUP,
