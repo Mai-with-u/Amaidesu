@@ -590,7 +590,11 @@ function addFallback(
   profile: { key: string; modelListField?: ConfigFieldSchema; modelList: string[] },
   name: string,
 ) {
-  if (name === '' || profile.modelList.includes(name)) return;
+  if (name === '') return;
+  if (profile.modelList.includes(name)) {
+    ElMessage.warning(`「${name}」已在此用途的名单里（主模型或备选），无需重复添加`);
+    return;
+  }
   updateModelList(profile, [...profile.modelList, name]);
 }
 
