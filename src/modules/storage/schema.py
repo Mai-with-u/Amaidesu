@@ -60,7 +60,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 34
+SCHEMA_VERSION: int = 35
 
 
 # =============================================================================
@@ -647,7 +647,8 @@ CREATE INDEX IF NOT EXISTS idx_rundown_transitions_session ON rundown_transition
 
 # 游戏里程碑：save_id / save_name 是事件发生时角色所在的存档，由发布事件的游戏 Agent 或
 # 采集器自己填（空串 = 这个游戏不分存档，或当时还没认出存档）。下播整理按它判定档案行与
-# 承诺属于哪个存档，是"某一场玩过哪些存档"的唯一依据。
+# 承诺属于哪个存档，是"某一场玩过哪些存档"的唯一依据。initiator 只有委派账行（delegation_*）填：
+# 发起这件委派的 Agent 注册名（运营直派为 operator），续播只认领主播自己派的；其余行为空串。
 _GAME_EVENTS_SQL = """
 CREATE TABLE IF NOT EXISTS game_events (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -658,7 +659,8 @@ CREATE TABLE IF NOT EXISTS game_events (
     scene            TEXT,
     timestamp_ms     INTEGER NOT NULL,
     save_id          TEXT NOT NULL DEFAULT '',
-    save_name        TEXT NOT NULL DEFAULT ''
+    save_name        TEXT NOT NULL DEFAULT '',
+    initiator        TEXT NOT NULL DEFAULT ''
 );
 """.strip()
 

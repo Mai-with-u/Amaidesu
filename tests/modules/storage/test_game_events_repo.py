@@ -58,9 +58,17 @@ async def test_save_spans_follow_each_game_in_time_order(store: SQLiteDatabase) 
     ]
 
 
-async def _delegation(store: SQLiteDatabase, sid: int, task_id: str, kind: str, text: str, ts: int) -> None:
+async def _delegation(
+    store: SQLiteDatabase, sid: int, task_id: str, kind: str, text: str, ts: int, initiator: str = "streamer"
+) -> None:
     await store.events.insert_delegation_event(
-        live_session_id=sid, game="minecraft", task_id=task_id, kind=kind, text=text, timestamp_ms=ts
+        live_session_id=sid,
+        game="minecraft",
+        task_id=task_id,
+        kind=kind,
+        text=text,
+        timestamp_ms=ts,
+        initiator=initiator,
     )
 
 
@@ -69,13 +77,15 @@ async def test_session_delegations_pair_rows_across_sessions_and_keep_open_ones_
     before, live = await _session(store, 1_000), await _session(store, 2_000)
     await _delegation(store, before, "deleg_1", "accepted", "搭个棚子", 1_500)
     await _delegation(store, live, "deleg_1", "succeeded", "delivery: 棚子搭好了", 2_100)
-    await _delegation(store, live, "deleg_2", "accepted", "去砍树", 2_200)
+    await _delegation(store, live, "deleg_2", "accepted", "去砍树", 2_200, initiator="operator")
 
     records = await store.events.list_session_delegations(live_session_id=live)
 
-    assert [(r.task_id, r.live_session_id, r.instruction, r.status, r.started_ms, r.ended_ms) for r in records] == [
-        ("deleg_1", before, "搭个棚子", "succeeded", 1_500, 2_100),
-        ("deleg_2", live, "去砍树", "accepted", 2_200, 0),
+    assert [
+        (r.task_id, r.live_session_id, r.initiator, r.instruction, r.status, r.started_ms, r.ended_ms) for r in records
+    ] == [
+        ("deleg_1", before, "streamer", "搭个棚子", "succeeded", 1_500, 2_100),
+        ("deleg_2", live, "operator", "去砍树", "accepted", 2_200, 0),
     ]
 
 

@@ -20,8 +20,8 @@ StorageLedger —— 直播间消息流落库器
 - 订阅 ``game.*``（milestone / attention_required / error），写入 game_events 表。
 - 订阅 ``game.place.noted``（记住、忘掉、走近、离开一个记住的地点），写成 game_events 里 ``place_*`` 类型的行，
   只给下播整理认地点用。
-- 订阅 ``task.changed``，委派型任务的受理与终态写成 game_events 里 ``delegation_*`` 类型的行（指令全文、
-  终态摘要、时刻，按任务号配对）：下播整理拿它核对"她说做好了"，续播时据此认领重启前没了结的委派。
+- 订阅 ``task.changed``，委派型任务的受理与终态写成 game_events 里 ``delegation_*`` 类型的行（发起方、
+  发起方原话、终态摘要、时刻，按任务号配对）：下播整理拿它核对"她说做好了"，续播时据此认领重启前没了结的委派。
 - 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环。
 """
 
@@ -674,13 +674,14 @@ class StorageLedger:
     ) -> None:
         """``task.changed`` 回调：委派型任务的受理与终态写成 ``delegation_*`` 游戏事件行。
 
-        受理行正文是指令全文（来自受理时的快照），终态行正文是终态摘要；停滞提醒、
-        running 与等定夺这类过程变化不落，工具包自己跑的 provider 型任务也不落。
+        受理行正文只存发起方自己的原话（受理时快照里的 own_words）：账面的全文附着来源对话，里面有
+        观众昵称、弹幕原话与玩家公屏原话，落库后删观众、删玩家只换得掉名字、换不掉原话。终态行正文
+        是终态摘要；每行都记发起方。停滞提醒、running 与等定夺这类过程变化不落，provider 型任务也不落。
         """
         if payload.source != "agent" or payload.alert:
             return
         if payload.status == "accepted":
-            kind, text = "accepted", str((payload.snapshot or {}).get("instruction") or "")
+            kind, text = "accepted", str((payload.snapshot or {}).get("own_words") or "")
         elif payload.status in TERMINAL_TASK_STATES:
             kind, text = payload.status, payload.summary
         else:
@@ -697,6 +698,7 @@ class StorageLedger:
                 kind=kind,
                 text=text,
                 timestamp_ms=payload.timestamp_ms,
+                initiator=payload.initiator,
             )
         except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
             logger.error(

@@ -53,7 +53,10 @@ class DelegationRecord(BaseModel):
     live_session_id: int = Field(..., description="受理这件委派的场次（没有受理行时取了结那一行的场次）")
     task_id: str = Field(..., description="委派任务号")
     game: str = Field(..., description="执行的游戏 Agent 名")
-    instruction: str = Field(default="", description="委派指令全文（含附带的来源对话）；没有受理行时为空串")
+    initiator: str = Field(
+        default="", description="发起这件委派的 Agent 注册名（运营直派为 operator）；旧行或没有受理行时为空串"
+    )
+    instruction: str = Field(default="", description="发起方自己的原话（不含附带的来源对话）；没有受理行时为空串")
     status: str = Field(
         default="accepted",
         description=(

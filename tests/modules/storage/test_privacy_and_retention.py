@@ -652,6 +652,24 @@ async def test_retention_cleanup_respects_zero_defaults_and_cleans_expired_items
             " VALUES (?, '过期话题_EXPIRED_TOPIC', 'llm', 1.0, 0.0, 1000, 1)",
             (s_old,),
         )
+        # 委派账：到期场次的删掉，近期场次的留着；别的游戏事件不归保留期管
+        for sid, text in ((s_old, "过期委派原话_EXPIRED_DELEG"), (s_new, "近期委派原话")):
+            await store.events.insert_delegation_event(
+                live_session_id=sid,
+                game="minecraft",
+                task_id=f"deleg_{sid}",
+                kind="accepted",
+                text=text,
+                timestamp_ms=old_end if sid == s_old else recent_end,
+                initiator="streamer",
+            )
+        await store.events.insert_game_event(
+            live_session_id=s_old,
+            game="minecraft",
+            event_type="milestone",
+            message="过期场次的里程碑",
+            timestamp_ms=old_end,
+        )
         await store.execute(
             "INSERT INTO llm_requests(request_id, timestamp_ms, profile_name, model_name, response_content, prompt_tokens, preview_text)"
             " VALUES ('req_old', ?, 'planner', 'm', '过期模型响应_EXPIRED_LLM', 123, '过期预览_EXPIRED_PREV')",
@@ -702,6 +720,9 @@ async def test_retention_cleanup_respects_zero_defaults_and_cleans_expired_items
         assert res.chat_deleted == 1
         assert res.payments_scrubbed == 1
         assert res.summaries_deleted == 1
+        assert res.delegations_deleted == 1
+        kept_events = [row["message"] for row in await store.execute("SELECT message FROM game_events ORDER BY id")]
+        assert kept_events == ["近期委派原话", "过期场次的里程碑"]
         assert res.llm_bodies_scrubbed == 1
         # 到期的三类备份都删：普通整库备份、迁移前快照、迁移时移入的旧记忆目录
         assert res.backups_deleted == 3
@@ -738,6 +759,7 @@ async def test_retention_cleanup_respects_zero_defaults_and_cleans_expired_items
                     "过期SC留言_EXPIRED_SC",
                     "EXPIRED_RAW_JSON",
                     "过期话题_EXPIRED_TOPIC",
+                    "过期委派原话_EXPIRED_DELEG",
                     "过期模型响应_EXPIRED_LLM",
                     "过期预览_EXPIRED_PREV",
                     "U_ABSENT_40D",
@@ -1162,6 +1184,16 @@ async def test_delete_viewer_scrubs_game_creature_and_event_text(tmp_path: Path)
             " VALUES (?, 'minecraft', 'milestone', ?, 55000)",
             (other_session, f"{nickname}（猫）出门了"),
         )
+        # 委派账存的是她自己的原话，原话里点到 ta 的名字同样换掉
+        await store.events.insert_delegation_event(
+            live_session_id=session_id,
+            game="minecraft",
+            task_id="deleg_1",
+            kind="accepted",
+            text=f"给{nickname}盖个狗窝",
+            timestamp_ms=1300,
+            initiator="streamer",
+        )
 
         assert await privacy.delete_viewer(viewer_id=resolution.viewer_id, add_to_forget_list=True) is True
 
@@ -1172,7 +1204,7 @@ async def test_delete_viewer_scrubs_game_creature_and_event_text(tmp_path: Path)
         assert (wolf["name"], wolf["nickname"], wolf["owner"]) == (nickname, nickname, "主播"), "名册名字不动"
         assert cat["death_note"] == f"{nickname}掉进了岩浆", "别的场次的同名内容不误改"
         events = [row["message"] for row in await store.execute("SELECT message FROM game_events ORDER BY id")]
-        assert events == ["一位观众的狗生崽了", f"{nickname}（猫）出门了"]
+        assert events == ["一位观众的狗生崽了", f"{nickname}（猫）出门了", "给一位观众盖个狗窝"]
     finally:
         await privacy.close()
         await store.close()

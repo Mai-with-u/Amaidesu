@@ -8,7 +8,8 @@
 免得记地点、走近地点挤掉真正的游戏进展。
 
 委派账（``task.changed`` 里委派型任务的受理与终态）落成 ``delegation_*`` 类型的行：受理行正文是
-指令全文，终态行正文是终态摘要，两行的场景列都写任务号、按它配对。下播整理据此核对"她说做好了"，
+发起方自己的原话（附带的来源对话不存），终态行正文是终态摘要，两行的场景列都写任务号、按它配对，
+发起方列写是谁派的。下播整理据此核对"她说做好了"，
 续播时据此认出重启前还没了结的委派。它们同样不算游戏进展、不进按类型计数，也不进记忆检索
 （检索只收里程碑与阶段汇报）。
 """
@@ -58,15 +59,27 @@ class EventRepo(BaseRepo):
         timestamp_ms: int = 0,
         save_id: str = "",
         save_name: str = "",
+        initiator: str = "",
     ) -> int:
-        """插入一条 game_events 行，返回 lastrowid；``save_id`` 空串 = 不分存档或存档不明。"""
+        """插入一条 game_events 行，返回 lastrowid；``save_id`` 空串 = 不分存档或存档不明；
+        ``initiator`` 只有委派账行填（发起方），其余为空串。"""
 
         def _exec() -> int:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "INSERT INTO game_events (live_session_id, game, event_type, message, scene, timestamp_ms,"
-                    " save_id, save_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (live_session_id, game, event_type, message, scene, timestamp_ms, save_id or "", save_name or ""),
+                    " save_id, save_name, initiator) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        live_session_id,
+                        game,
+                        event_type,
+                        message,
+                        scene,
+                        timestamp_ms,
+                        save_id or "",
+                        save_name or "",
+                        initiator or "",
+                    ),
                 )
                 return int(cur.lastrowid or 0)
 
@@ -150,8 +163,10 @@ class EventRepo(BaseRepo):
         kind: str,
         text: str,
         timestamp_ms: int,
+        initiator: str = "",
     ) -> int:
-        """记一条委派账：类型 ``delegation_<kind>``，正文是指令全文（受理）或终态摘要，场景列写任务号。"""
+        """记一条委派账：类型 ``delegation_<kind>``，正文是发起方原话（受理）或终态摘要，场景列写任务号，
+        发起方列写是谁派的。"""
         return await self.insert_game_event(
             live_session_id=live_session_id,
             game=game,
@@ -159,6 +174,7 @@ class EventRepo(BaseRepo):
             message=text,
             scene=task_id,
             timestamp_ms=timestamp_ms,
+            initiator=initiator,
         )
 
     async def list_session_delegations(self, *, live_session_id: int) -> List[DelegationRecord]:
@@ -196,8 +212,16 @@ class EventRepo(BaseRepo):
                 for record in open_ones:
                     conn.execute(
                         "INSERT INTO game_events (live_session_id, game, event_type, message, scene, timestamp_ms,"
-                        " save_id, save_name) VALUES (?, ?, ?, ?, ?, ?, '', '')",
-                        (int(live_session_id), record.game, DELEGATION_INTERRUPTED, text, record.task_id, timestamp_ms),
+                        " save_id, save_name, initiator) VALUES (?, ?, ?, ?, ?, ?, '', '', ?)",
+                        (
+                            int(live_session_id),
+                            record.game,
+                            DELEGATION_INTERRUPTED,
+                            text,
+                            record.task_id,
+                            timestamp_ms,
+                            record.initiator,
+                        ),
                     )
                     update = {"status": "interrupted", "summary": text, "ended_ms": int(timestamp_ms)}
                     settled.append(record.model_copy(update=update))
@@ -301,7 +325,7 @@ def _delegations_of(conn: Any, *, live_session_id: int) -> List[DelegationRecord
     终态取最早写下的那一行：终态粘滞，之后再有（如续播认领与迟到的终态撞上）也以先到的为准。
     """
     rows = conn.execute(
-        "SELECT live_session_id, game, event_type, message, scene, timestamp_ms FROM game_events"
+        "SELECT live_session_id, game, event_type, message, scene, timestamp_ms, initiator FROM game_events"
         f" WHERE {_IS_DELEGATION_EVENT} AND scene IN ("  # noqa: S608 子句为代码内常量
         f"SELECT scene FROM game_events WHERE live_session_id=? AND {_IS_DELEGATION_EVENT})"
         " ORDER BY timestamp_ms ASC, id ASC",
@@ -312,12 +336,16 @@ def _delegations_of(conn: Any, *, live_session_id: int) -> List[DelegationRecord
         task_id = str(row["scene"] or "")
         kind = str(row["event_type"])[len(DELEGATION_EVENT_PREFIX) :]
         record = records.get(task_id) or DelegationRecord(
-            live_session_id=int(row["live_session_id"]), task_id=task_id, game=str(row["game"])
+            live_session_id=int(row["live_session_id"]),
+            task_id=task_id,
+            game=str(row["game"]),
+            initiator=str(row["initiator"] or ""),
         )
         if kind == "accepted":
             accepted = {
                 "live_session_id": int(row["live_session_id"]),
                 "instruction": str(row["message"] or ""),
+                "initiator": str(row["initiator"] or ""),
                 "started_ms": int(row["timestamp_ms"]),
             }
             record = record.model_copy(update=accepted)

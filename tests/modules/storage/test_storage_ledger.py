@@ -388,13 +388,15 @@ def _task(task_id: str, status: str, **kwargs: Any) -> TaskChangedPayload:
 async def test_delegation_accept_and_end_land_as_paired_rows_outside_game_progress(
     ledger, store: SQLiteDatabase, event_bus: EventBus
 ) -> None:
-    """委派的受理与终态各落一行、按任务号配成一条账；过程变化、停滞提醒与 provider 型任务不落；
+    """委派的受理与终态各落一行、按任务号配成一条账，记下发起方；受理行只存发起方原话，附带的来源对话
+    （观众昵称、弹幕原话）不落库；过程变化、停滞提醒与 provider 型任务不落；
     委派账不算游戏进展、不进按类型计数（不进记忆检索见记忆索引的白名单测试）。"""
-    instruction = "把营地的门装好" + "，门外垫平" * 60
+    own = "把营地的门装好" + "，门外垫平" * 60
+    instruction = f'[本次目标]\n{own}\n\n[来源对话：逐字引用]\n[{{"content": "观众甲: 要橡木门"}}]'
     await _emit(
         event_bus,
         CoreEvents.TASK_CHANGED,
-        _task("deleg_1", "accepted", snapshot={"instruction": instruction}, timestamp_ms=1_000),
+        _task("deleg_1", "accepted", snapshot={"instruction": instruction, "own_words": own}, timestamp_ms=1_000),
     )
     await _emit(
         event_bus,
@@ -419,7 +421,8 @@ async def test_delegation_accept_and_end_land_as_paired_rows_outside_game_progre
         "live_session_id": _FAKE_PK,
         "task_id": "deleg_1",
         "game": "minecraft",
-        "instruction": instruction,
+        "initiator": "streamer",
+        "instruction": own,
         "status": "undelivered",
         "summary": "停了但没交付结果；停下前最后一句：门装好了吧",
         "started_ms": 1_000,
@@ -429,6 +432,8 @@ async def test_delegation_accept_and_end_land_as_paired_rows_outside_game_progre
     assert [row.message for row in progress] == ["门装好了"]
     counts = await store.events.count_game_events_by_type(live_session_ids=[_FAKE_PK])
     assert [(count.event_type, count.n) for count in counts] == [("milestone", 1)]
+    stored = [row["message"] for row in await store.execute("SELECT message FROM game_events")]
+    assert not any("观众甲" in message for message in stored), "来源对话不落库"
 
 
 async def test_game_event_write_failure_is_swallowed(

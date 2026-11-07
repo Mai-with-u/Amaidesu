@@ -7,7 +7,8 @@
      删了它档案行会随外键级联消失——保留期只清工作数据，不清记忆）；公屏游戏聊天同一口径，删到期场次里
      玩家说的与认不出是谁的占位行，她自己在公屏说的留着
   2. 清空付费三表（``gifts`` / ``super_chats`` / ``guards``）到期行的观众身份、昵称、留言与原始消息，保留金额、类型、时刻
-  3. 删除到期场次的话题与时间线摘要（``topics`` / ``timeline_summary``）
+  3. 删除到期场次的话题与时间线摘要（``topics`` / ``timeline_summary``），以及委派账（``game_events`` 里
+     ``delegation_*`` 类型的行：她的原话与终态摘要，只给下播核对与续播认领用）
   4. 清空 ``llm_requests`` 到期行的响应正文与预览（保留 token/耗时/费用统计列）
   5. 删除 ``<db目录>/backups/`` 下最后修改时间早于截止时刻的整库备份文件与迁移前移入的
      旧记忆目录（``memory-pre-v*``）：迁移前快照与普通备份同一口径，都受使用者配置的保留期管理
@@ -25,6 +26,7 @@ from typing import Callable, List, Optional
 from src.modules.logging import get_logger
 from src.modules.storage.connection import SQLiteConnectionManager
 from src.modules.storage.privacy import PrivacyService
+from src.modules.storage.repos.events import DELEGATION_EVENT_PREFIX
 from src.modules.storage.run_in_executor import run_in_executor
 from src.modules.utils.time_utils import now_ms
 
@@ -41,6 +43,7 @@ class RetentionResult:
     chat_deleted: int = 0
     payments_scrubbed: int = 0
     summaries_deleted: int = 0
+    delegations_deleted: int = 0
     llm_bodies_scrubbed: int = 0
     backups_deleted: int = 0
     absent_viewers_deleted: int = 0
@@ -91,10 +94,10 @@ class RetentionService:
         if self._raw_days <= 0 and self._viewer_absence_days <= 0:
             return RetentionResult(forget_deleted=forget_deleted)
 
-        chat_del = pay_scrub = sum_del = llm_scrub = backups_del = 0
+        chat_del = pay_scrub = sum_del = deleg_del = llm_scrub = backups_del = 0
         if self._raw_days > 0:
             raw_cutoff = current - self._raw_days * _DAY_MS
-            chat_del, pay_scrub, sum_del, llm_scrub, backups_del = await run_in_executor(
+            chat_del, pay_scrub, sum_del, deleg_del, llm_scrub, backups_del = await run_in_executor(
                 self._cleanup_raw_blocking, raw_cutoff
             )
 
@@ -111,19 +114,20 @@ class RetentionService:
             chat_deleted=chat_del,
             payments_scrubbed=pay_scrub,
             summaries_deleted=sum_del,
+            delegations_deleted=deleg_del,
             llm_bodies_scrubbed=llm_scrub,
             backups_deleted=backups_del,
             absent_viewers_deleted=absent_del,
         )
-        if any((chat_del, pay_scrub, sum_del, llm_scrub, backups_del, absent_del)):
+        if any((chat_del, pay_scrub, sum_del, deleg_del, llm_scrub, backups_del, absent_del)):
             logger.info(
-                f"保留期清理完成: 弹幕={chat_del}, 付费脱敏={pay_scrub}, 话题摘要={sum_del}, "
+                f"保留期清理完成: 弹幕={chat_del}, 付费脱敏={pay_scrub}, 话题摘要={sum_del}, 委派账={deleg_del}, "
                 f"请求正文={llm_scrub}, 备份={backups_del}, 缺席观众={absent_del}"
             )
         return result
 
-    def _cleanup_raw_blocking(self, cutoff_ms: int) -> tuple[int, int, int, int, int]:
-        chat_del = pay_scrub = sum_del = llm_scrub = 0
+    def _cleanup_raw_blocking(self, cutoff_ms: int) -> tuple[int, int, int, int, int, int]:
+        chat_del = pay_scrub = sum_del = deleg_del = llm_scrub = 0
         expired_sessions_sql = "SELECT id FROM live_sessions WHERE ended_at_ms IS NOT NULL AND ended_at_ms <= ?"
         orphan_session_sql = "SELECT id FROM live_sessions"
 
@@ -193,6 +197,15 @@ class RetentionService:
             )
             sum_del += max(0, cur.rowcount)
 
+            # 委派账是工作数据：下播整理核对完、续播认领过就不再要，到期场次的随话题一起删
+            cur = conn.execute(
+                f"DELETE FROM game_events WHERE substr(event_type, 1, {len(DELEGATION_EVENT_PREFIX)}) = ?"  # noqa: S608
+                f" AND (live_session_id IN ({expired_sessions_sql})"
+                f"      OR (live_session_id NOT IN ({orphan_session_sql}) AND timestamp_ms <= ?))",
+                (DELEGATION_EVENT_PREFIX, cutoff_ms, cutoff_ms),
+            )
+            deleg_del += max(0, cur.rowcount)
+
             cur = conn.execute(
                 "UPDATE llm_requests SET response_content = NULL, preview_text = ''"
                 " WHERE timestamp_ms <= ? AND (response_content IS NOT NULL OR preview_text <> '')",
@@ -200,13 +213,13 @@ class RetentionService:
             )
             llm_scrub += max(0, cur.rowcount)
 
-        if any((chat_del, pay_scrub, sum_del, llm_scrub)):
+        if any((chat_del, pay_scrub, sum_del, deleg_del, llm_scrub)):
             conn = self._manager.connection()
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
         backups_del = self._delete_expired_backups(cutoff_ms)
 
-        return chat_del, pay_scrub, sum_del, llm_scrub, backups_del
+        return chat_del, pay_scrub, sum_del, deleg_del, llm_scrub, backups_del
 
     def _delete_expired_backups(self, cutoff_ms: int) -> int:
         """删除 backups/ 下到期的备份条目，返回删除数。
