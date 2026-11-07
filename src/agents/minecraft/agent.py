@@ -159,6 +159,11 @@ _FAULT_STUCK = "身体出故障了，动不了；重新派活也没用，得等�
 UNDELIVERED_REPORT_MESSAGE = "游戏那边停了，没交付结果，做没做完不确定"
 # 在做委派却没调交付就停下时先给模型的一次提醒：做完了交付、没做成报卡住，第二次还不交付才记停了没交付
 DELIVERY_REMINDER = "[还没交付] 做完了就用 minecraft_report 交付（delivery），没做成就报卡住（escalation）。"
+# 卡住时问主播的问题还没人答、被计时或决策叫醒接着做的这一批，停下前的提醒：还在等那个回答就直接停，不必重报
+DELIVERY_REMINDER_WHILE_WAITING = (
+    "[还没交付] 做完了就用 minecraft_report 交付（delivery）；遇到新的卡点就报卡住（escalation），换成新的问题；"
+    "还卡在原来那个问题上、等主播回答，就直接停下。"
+)
 # 对话发不出去、按任务事实重开时给模型的说明
 _RESTART_NOTICE = (
     "[系统] 上一段对话里有内容发不出去，已经整段丢掉。上面是原指令、待办与目标记录，下面是宿主刚读的现场；"
@@ -392,6 +397,9 @@ class MinecraftAgent(BaseAgent):
         self._task_reported = False
         # 这一批给过"还没交付"的提醒没有：自然停下先提醒一次，第二次还不交付才记停了没交付
         self._delivery_reminded = False
+        # 卡住时问主播的问题（等定夺的理由）；她的回答（递话或新委派）读到之前一直留着，空串 = 没有在等的问题。
+        # 计时到点、Mod 决策、连接恢复叫醒接着做的那一批没交付就停时，凭它重新挂回等定夺，不记成停了没交付
+        self._open_question = ""
         self._wait_requested = False
 
         # 平台暂停支持（AgentControl pause/resume 经 _on_pause/_on_resume 进入）
@@ -790,7 +798,8 @@ class MinecraftAgent(BaseAgent):
         1. LLM 调 minecraft_report(kind=delivery) → 停止（工具内交付门禁校验）
         2. LLM 调 minecraft_report(kind=escalation) → 停止，等主播
         3. 自然终止，无 report、无在跑的目标且待办完成 → 这一批在做委派就先提醒一次交付或报卡住，
-           再停才代发停了没交付、委派记 undelivered；不在做委派（交付后被计时、决策叫醒开的新任务）就安静收尾
+           再停才代发停了没交付、委派记 undelivered；卡住时问主播的问题还没人答就重新挂回等定夺；
+           不在做委派（交付后被计时、决策叫醒开的新任务）就安静收尾
         4. 自然终止，仅剩在跑的后台目标 → 静默让出，等目标事件唤醒
         5. 需要行动却在提醒后继续停顿 → 挂起，等待主播指令
         """
@@ -868,6 +877,8 @@ class MinecraftAgent(BaseAgent):
                     if self._task_finished:
                         self._start_new_task(messages, system_message)
                         opening_due = True
+                    # 读到主播的递话或新委派：卡住时问的那个问题算有人答了；开新任务时也不再有在等的问题
+                    self._open_question = ""
                     self._task_instructions.append(content)
                     self._task_finished = False
                     self._task_suspended = False
@@ -1097,9 +1108,17 @@ class MinecraftAgent(BaseAgent):
             # 在做委派却没调交付就停：先提醒一次做完就交付、没做成就报卡住，让它自己把结果交出来；
             # 停下前那句只是它自己的说法，不转给主播（免得她照着说成做好了）
             self._delivery_reminded = True
-            messages.append({"role": "user", "content": DELIVERY_REMINDER})
+            reminder = DELIVERY_REMINDER_WHILE_WAITING if self._open_question else DELIVERY_REMINDER
+            messages.append({"role": "user", "content": reminder})
             self._logger.info(f"在做委派却没交付就停（{steps} 步），先提醒一次交付或报卡住")
             return True
+        elif not self._task_reported and self._open_question:
+            # 卡住时问主播的问题还没人答（这一批是计时、决策或连接恢复叫醒接着做的）：她眼里最有用的仍是
+            # "等我拿主意"，重新挂回等定夺、账面回到 waiting_for_decision，不记成停了没交付——记成没交付她会
+            # 以为那件事结束了，就不去回答那个问题。不再发上报：问题她已经收到过一次
+            self._task_suspended = True
+            self._delegations.hold(self._open_question)
+            self._logger.info(f"任务批次自然终止（{steps} 步），卡住时问的问题还没人答，重新挂回等定夺")
         elif not self._task_reported:
             # 提醒过还是没调 minecraft_report 就停了：做完只认交付，这里不替它交付成"任务完成"。
             # 主播那边收到"停了没交付"，不会对观众说做好了；任务照旧算结束，下条指令开新任务。
@@ -2092,6 +2111,7 @@ class MinecraftAgent(BaseAgent):
     async def _suspend_with_report(self, reason: str) -> None:
         """角色已停止自动行动：主动上报待定夺，并保留原委派。"""
         self._task_suspended = True
+        self._open_question = reason
         self._delegations.hold(reason)
         await self._emit_report("escalation", reason)
 
@@ -2115,9 +2135,13 @@ class MinecraftAgent(BaseAgent):
         self._task_finished = kind == "delivery"
         self._task_suspended = kind == "escalation"
         if kind == "delivery":
+            # 交付了：卡住时问过的问题随这件事一起了结
+            self._open_question = ""
             self._delegations.finish("succeeded", summary=f"{kind}: {content}")
         else:
-            self._delegations.hold(f"{kind}: {content}")
+            # 报卡住：这次问的就是在等主播回答的问题（叫醒后遇到新卡点再报，就换成新的问题）
+            self._open_question = f"{kind}: {content}"
+            self._delegations.hold(self._open_question)
         return None
 
     # ==================================================================

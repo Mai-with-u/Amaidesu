@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
 
 
-from src.agents.minecraft.agent import MinecraftAgent
+from src.agents.minecraft.agent import DELIVERY_REMINDER, DELIVERY_REMINDER_WHILE_WAITING, MinecraftAgent
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response
 from src.modules.tools.registry import ToolRegistry
@@ -189,6 +189,74 @@ async def test_a_due_timer_resumes_a_task_suspended_for_the_streamer() -> None:
     woken = _texts(llm.seen[-1])
     assert "烧点铁锭" in woken and f"[计时] {_TIMER_DUE}" in woken
     assert agent.observation()["task_instructions"] == ["烧点铁锭"]
+    await agent.stop()
+
+
+def _escalated_ledger() -> tuple[TaskLedger, Any]:
+    """登记一件她派的委派（d-1），返回账本与收 task.changed 的替身总线。"""
+    ledger_bus = SimpleNamespace(emit=AsyncMock())
+    ledger = TaskLedger(event_bus=ledger_bus)
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+        snapshot={"instruction": "烧点铁锭"},
+    )
+    return ledger, ledger_bus
+
+
+async def test_a_timer_after_escalation_that_stops_unreported_goes_back_to_waiting() -> None:
+    """报卡住后计时到点、接着做的这一批提醒过还是没交付就停：问她的问题还没人答，重新挂回等定夺，
+    账面回到 waiting_for_decision、不记 undelivered，也不再发上报（问题她已经收到过）。"""
+    ledger, ledger_bus = _escalated_ledger()
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        # 报卡住 -> 计时到点被叫醒接着做 -> 只说一句就停 -> 被提醒 -> 还是只说一句
+        if "[计时]" in _texts(messages):
+            return _resp("炉子还在烧")
+        return _resp(calls=[_call("minecraft_report", {"kind": "escalation", "content": "缺燃料，要不要去砍树"})])
+
+    agent, llm, bus = await make_minecraft_agent(server, script, tracker=TaskTracker(ToolRegistry(), ledger))
+    agent.receive_delegation(instruction="烧点铁锭", task_id="d-1")
+    await _wait_until(lambda: agent.observation()["task_suspended"] and agent.batch_active is False)
+
+    server.body_event("timer_due", _TIMER_DUE)
+    await _wait_until(lambda: len(llm.seen) == 3 and agent.batch_active is False)
+
+    assert DELIVERY_REMINDER_WHILE_WAITING in _texts(llm.seen[-1]), "提醒里说明还在等回答就直接停"
+    assert [report.report_kind for report in _reports(bus)] == ["escalation"], "不代发停了没交付，也不重报卡住"
+    record = ledger.get("d-1")
+    assert record is not None and record.status == "waiting_for_decision"
+    assert record.snapshot["reason"] == "escalation: 缺燃料，要不要去砍树", "等的还是原来那个问题"
+    last = ledger_bus.emit.await_args_list[-1].args[1]
+    assert (last.status, last.summary) == ("waiting_for_decision", "escalation: 缺燃料，要不要去砍树")
+    assert agent.observation()["task_suspended"]
+    await agent.stop()
+
+
+async def test_a_task_stopping_after_my_answer_is_undelivered_not_waiting() -> None:
+    """报卡住后我回答了（递话），接着做的这一批提醒过还是没交付就停：问题已经答过，记停了没交付。"""
+    ledger, _ledger_bus = _escalated_ledger()
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if "去砍树吧" in _texts(messages):
+            return _resp("好的")
+        return _resp(calls=[_call("minecraft_report", {"kind": "escalation", "content": "缺燃料，要不要去砍树"})])
+
+    agent, llm, bus = await make_minecraft_agent(server, script, tracker=TaskTracker(ToolRegistry(), ledger))
+    agent.receive_delegation(instruction="烧点铁锭", task_id="d-1")
+    await _wait_until(lambda: agent.observation()["task_suspended"] and agent.batch_active is False)
+
+    agent.receive_prompt(content="去砍树吧", source="test")
+    await _wait_until(lambda: "d-1" not in ledger)
+
+    assert DELIVERY_REMINDER in _texts(llm.seen[-1])
+    assert [report.report_kind for report in _reports(bus)] == ["escalation", "undelivered"]
     await agent.stop()
 
 
