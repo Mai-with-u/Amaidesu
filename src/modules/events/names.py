@@ -89,6 +89,14 @@ class CoreEvents:
     # 过滤唤醒（跨 Agent 委派与回执型工具共用）。
     TASK_CHANGED = "task.changed"
 
+    # ========== v2 语义域事件（background 后台长任务可见性） ==========
+    # 唯一发布者：BackgroundTaskRegistry（``src/modules/background/``）——进程内
+    # "有开始、有结束、可报进度"的长任务（下播整理、记忆索引补算）在登记/更新
+    # 进度/注销时各发一条，载荷带该任务完整现状；终态任务随即从注册表移除，
+    # 历史由事件查看器与应用日志兜底。镜像 task.changed / rundown.changed 的
+    # 单事件 + 载荷判别惯例。
+    BACKGROUND_TASK_CHANGED = "background.task.changed"
+
     # ========== v2 语义域事件（planner 决策轮记录） ==========
     # 每轮两阶段决策结束发一条（成功/失败/静默全覆盖），观察器的
     # 决策卡数据源；round_id 为本轮弹幕批次/决策/发言/工具结果的共同关联键。

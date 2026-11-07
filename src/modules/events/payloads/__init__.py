@@ -45,6 +45,7 @@ RoomMessagePayload 保留 ConnectedPayload / DisconnectedPayload 同构字段，
 from src.modules.logging import get_logger
 
 from .agents import AgentPromptedPayload, AgentRepliedPayload
+from .background import BackgroundTaskChangedPayload
 from .body import BodyEventPayload
 from .core import (
     CoreErrorPayload,
@@ -124,6 +125,8 @@ __all__ = [
     "RundownChangedPayload",
     # task.* 异步任务生命周期
     "TaskChangedPayload",
+    # background.task.changed 进程内后台长任务
+    "BackgroundTaskChangedPayload",
     # tool.result.* 异步工具结果
     "ToolResultPayload",
     # tool.health.* 工具健康状态变更

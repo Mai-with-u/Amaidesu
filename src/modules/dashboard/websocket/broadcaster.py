@@ -23,6 +23,7 @@ dashboard/src/types/events.ts 双向对账）。
 - ``tts.utterance.started`` / ``tts.utterance.finished``（直通；
   前端按 utterance_id 关联到发言行显示播报态，不新增时间线行）
 - ``core.startup`` / ``core.shutdown`` / ``core.error``（直通）
+- ``background.task.changed``（直通；后台任务条与系统通知的数据源）
 - ``tool.result.#`` / ``tool.health.#`` 通配 → type 为具体事件名
 """
 
@@ -35,6 +36,7 @@ from src.modules.events.event_type_map import ROOM_MESSAGE_TYPE, ROOM_STATE_TYPE
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import (
     AgentPromptedPayload,
+    BackgroundTaskChangedPayload,
     AgentRepliedPayload,
     BodyEventPayload,
     CoreErrorPayload,
@@ -160,6 +162,8 @@ class EventBroadcaster:
         CoreEvents.GAME_CHAT_WILDCARD: (None, GameChatPayload),
         # 任务卡实时增量（进行中账本变化；已完结从事件环聚合）
         CoreEvents.TASK_CHANGED: (None, TaskChangedPayload),
+        # 后台任务可见性（底栏任务条/通知；终态事件前端摘行并弹提示）
+        CoreEvents.BACKGROUND_TASK_CHANGED: (None, BackgroundTaskChangedPayload),
         # 递话受理（运营/跨 Agent 留言送达目标；时间线递话行 + 最近递话数据源）
         CoreEvents.AGENT_PROMPTED: (None, AgentPromptedPayload),
         # Agent 每步响应事实（时间线响应卡数据源）

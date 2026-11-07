@@ -170,6 +170,39 @@ class MemoryIndexRepo(BaseRepo):
         params = (*_settled_params(source, now_ms), model_key, int(limit))
         return await self._run_in_executor(self._read_docs, sql, params)
 
+    async def pending_total(self, *, model_key: Optional[str], now_ms: int) -> int:
+        """全部来源"该收还没收"的行总数：至少缺一样（全文行或当前模型向量）的来源行数。
+
+        索引任务拿它判断要不要在后台任务面板登记补算（缺行数超门槛才登记，
+        归零即补齐）；``model_key`` 为 None（没配嵌入服务）时只数缺全文行的行。
+        补算中正文被改的行写回时会被条件拦下留在"缺"里，下一轮按新正文重算，
+        这里的计数口径与 ``pending_full_text`` / ``pending_vectors`` 一致。
+        """
+
+        def _count() -> int:
+            total = 0
+            with self._manager.transaction() as conn:
+                for source in INDEX_SOURCES:
+                    spec = _SPECS[source]
+                    # 缺向量的行只在正文非空时才算"还缺"：空白正文算不出向量（同 pending_vectors 的排除）
+                    vector_missing = ""
+                    params: List[object] = list(_settled_params(source, now_ms))
+                    if model_key is not None:
+                        vector_missing = (
+                            " OR (length(trim(" + spec.document + ")) > 0 AND (v.model IS NULL OR v.model <> ?))"
+                        )
+                        params.append(model_key)
+                    sql = (
+                        f"SELECT COUNT(*) {_from(spec)}"  # noqa: S608 常量片段
+                        + (f" LEFT JOIN {spec.vectors} v ON v.{spec.key} = t.id" if model_key is not None else "")
+                        + f" WHERE {spec.eligible}{_settled_clause(source)}"
+                        + f" AND (NOT EXISTS (SELECT 1 FROM {spec.fts} f WHERE f.rowid = t.id){vector_missing})"
+                    )
+                    total += int(conn.execute(sql, tuple(params)).fetchone()[0])
+            return total
+
+        return await self._run_in_executor(_count)
+
     def _read_docs(self, sql: str, params: Tuple[object, ...]) -> List[IndexDoc]:
         with self._manager.transaction() as conn:
             rows = conn.execute(sql, params).fetchall()

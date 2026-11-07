@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 from typing import Callable, Dict, Optional, Tuple
 
+from src.modules.background import BackgroundTaskRegistry
 from src.modules.llm.embedding import EmbeddingClient, EmbeddingError
 from src.modules.logging import get_logger
 from src.modules.storage.repos.memory_index import INDEX_SOURCES, IndexSource, MemoryIndexRepo
@@ -42,6 +43,16 @@ FULL_TEXT_MAX_BATCHES = 20
 # 向量每类来源每轮至多请求几批（每批条数由嵌入配置的 batch_size 定）
 VECTOR_MAX_BATCHES = 10
 
+# 缺行数超过这个门槛才登记进后台任务面板：平时每轮三五行的零星补漏不值得
+# 上面板（会不停闪进闪出），启动补算/换嵌入模型时的成百上千行缺才值得看见
+BACKFILL_ALERT_THRESHOLD = 100
+
+# 索引补算在后台任务登记处的任务号（进程内只有这一个补算任务）
+BACKFILL_TASK_ID = "memory-index-backfill"
+
+# 补算任务在后台任务面板上的标题
+BACKFILL_TASK_TITLE = "记忆索引补算"
+
 
 class MemoryIndexer:
     """记忆索引的后台补算任务（全文必开，向量配置了嵌入服务才开）。"""
@@ -55,13 +66,27 @@ class MemoryIndexer:
         clock: Callable[[], int] = now_ms,
         interval_ms: int = INDEX_INTERVAL_MS,
         vector_batch: int = 32,
+        task_registry: Optional[BackgroundTaskRegistry] = None,
+        alert_threshold: int = BACKFILL_ALERT_THRESHOLD,
     ) -> None:
+        """仓储与嵌入客户端由主播 Agent 构造时注入。
+
+        task_registry 是后台任务登记处：缺行总数超过 alert_threshold 时登记
+        "记忆索引补算"任务（进度=还缺 N 行），归零即注销；门槛以下的零星补漏
+        不登记，免得面板闪进闪出。缺省 None 时不登记，补算行为不变。
+        """
         self._repo = repo
         self._embedding = embedding
         self._embedding_note = embedding_note
         self._clock = clock
         self._interval_s = max(interval_ms, 100) / 1000
         self._vector_batch = max(1, vector_batch)
+        self._task_registry = task_registry
+        self._alert_threshold = max(1, int(alert_threshold))
+        # 补算任务当前是否登记在面板上（门槛以下只报进度不新建，归零即注销）
+        self._backfill_registered = False
+        self._task_registry = task_registry
+        self._alert_threshold = max(1, int(alert_threshold))
         self._passes = 0
         self._running = False
         self._task: Optional["asyncio.Task[None]"] = None
@@ -97,6 +122,11 @@ class MemoryIndexer:
                 await task
             except asyncio.CancelledError:
                 pass
+        if self._backfill_registered:
+            # 停机时补算不可能继续了：按失败注销，面板不留一个永远"进行中"的行
+            self._backfill_registered = False
+            if self._task_registry is not None:
+                await self._task_registry.finish(BACKFILL_TASK_ID, success=False, failure_reason="记忆索引任务已停机")
 
     def request_run(self) -> None:
         """叫醒后台立刻补一轮（下播整理写完时调用）。"""
@@ -107,8 +137,14 @@ class MemoryIndexer:
         while self._running:
             try:
                 await self.run_once()
-            except Exception as exc:  # noqa: BLE001 后台循环边界：一轮失败不能让索引永久停摆
+            except Exception as exc:  # noqa: BLE001 后台循环边界：一轮失败不能让索引永远停摆
                 logger.exception(f"记忆索引这一轮失败，下一轮重试：{exc}")
+                if self._task_registry is not None and self._backfill_registered:
+                    # 登记中的补算轮失败：按失败注销，下一轮缺行还在门槛上会重新登记
+                    self._backfill_registered = False
+                    await self._task_registry.finish(
+                        BACKFILL_TASK_ID, success=False, failure_reason=f"这一轮补算失败：{exc}"
+                    )
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=self._interval_s)
             except asyncio.TimeoutError:
@@ -117,6 +153,7 @@ class MemoryIndexer:
 
     async def run_once(self) -> None:
         """跑一轮：四类来源先补全文，再（配置了且不在退避期时）补向量；这一轮补了多少记一行日志。"""
+        await self._reconcile_backfill_task()
         now = self._clock()
         full_text: Dict[IndexSource, int] = {}
         for source in INDEX_SOURCES:
@@ -131,6 +168,33 @@ class MemoryIndexer:
                     break
         self._passes += 1
         self._log_pass(full_text, vectors)
+        await self._reconcile_backfill_task()
+
+    async def _reconcile_backfill_task(self) -> None:
+        """按当前缺行总数对齐后台任务面板：超门槛登记并报"还缺 N 行"，归零注销。
+
+        门槛以下的零星补漏不登记（面板不为三五行的缺闪进闪出）；已登记但缺行
+        落到门槛以下而未归零时保持登记继续报进度，直到归零（补算总要补完）。
+        登记处未装配时什么都不做，补算行为不变。
+        """
+        registry = self._task_registry
+        if registry is None:
+            return
+        model_key = self._embedding.model_key if self._embedding is not None else None
+        missing = await self._repo.pending_total(model_key=model_key, now_ms=self._clock())
+        if missing == 0:
+            if self._backfill_registered:
+                self._backfill_registered = False
+                await registry.finish(BACKFILL_TASK_ID, success=True)
+            return
+        if missing < self._alert_threshold and not self._backfill_registered:
+            return
+        progress_text = f"还缺 {missing} 行"
+        if self._backfill_registered:
+            await registry.update(BACKFILL_TASK_ID, progress_text)
+        else:
+            self._backfill_registered = True
+            await registry.begin(BACKFILL_TASK_ID, BACKFILL_TASK_TITLE, progress_text=progress_text)
 
     def _log_pass(self, full_text: Dict[IndexSource, int], vectors: Dict[IndexSource, int]) -> None:
         """补了东西记 info（每类来源各几行）；什么都没补只记 debug，免得空转的轮次刷屏。"""

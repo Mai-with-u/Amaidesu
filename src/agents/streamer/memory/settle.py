@@ -39,8 +39,23 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, AbstractSet, Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    AbstractSet,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 
+from src.modules.background import BackgroundTaskRegistry
 from src.modules.context.tokens import TokenCounter
 from src.modules.logging import get_logger
 from src.modules.prompts import PromptManager
@@ -144,6 +159,20 @@ _BASE_ABILITIES = ("聊天", "讲故事", "陪观众说话")
 
 # 说话人代号前缀；本场内按首次出现顺序编号，同一观众整场用同一个代号
 _VIEWER_CODE_PREFIX = "观众"
+
+# 后台任务面板里场次的星期叫法（strftime 的 %a 是英文短名，直接用中文）
+_WEEKDAY_NAMES = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+
+def _session_title(session: LiveSession) -> str:
+    """后台任务面板里一场整理的标题：开播时刻的人话形态（如 2026-11-06 周五 22:22）。"""
+    started = datetime.fromtimestamp(int(session.started_at_ms) / 1000)
+    return f"整理场次：{started.strftime('%Y-%m-%d')} {_WEEKDAY_NAMES[started.weekday()]} {started.strftime('%H:%M')}"
+
+
+def _task_id(live_session_id: int) -> str:
+    """一场整理在后台任务登记处的任务号（如 settle-58）。"""
+    return f"settle-{int(live_session_id)}"
 
 
 class SettleError(Exception):
@@ -488,6 +517,7 @@ class SessionSettler:
         archive_repo: Optional["ArchiveRepo"] = None,
         game_names_provider: Optional[Callable[[], Sequence[str]]] = None,
         min_session_ms: int = 0,
+        task_registry: Optional[BackgroundTaskRegistry] = None,
         clock: Callable[[], int] = now_ms,
         game_player_repo: Optional["GamePlayerRepo"] = None,
         cue_log_repo: Optional["MemoryCueLogRepo"] = None,
@@ -499,7 +529,8 @@ class SessionSettler:
         用来写「她能做的事」；min_session_ms 与常驻简报的"上一场"时长下限同一个值，滚动之前
         的旧场次现拼基底时用来数"时长够的场次"。game_player_repo 缺失时原料里没有游戏玩家与公屏，
         对玩家的承诺一条也认不出（模型写了也进未登记）。cue_log_repo 缺失时唠叨指标只按台词
-        点名算，线索卡那几项为空。
+        点名算，线索卡那几项为空；task_registry 是后台任务登记处（缺省 None
+        时整理不登记，前端面板看不到这次整理，其余行为一致）。
         """
         self._sessions = sessions_repo
         self._chat = chat_repo
@@ -512,6 +543,7 @@ class SessionSettler:
         self._players = game_player_repo
         self._cue_log = cue_log_repo
         self._min_session_ms = max(0, int(min_session_ms))
+        self._task_registry = task_registry
         self._clock = clock
         # 场次主键 → 在途整理任务：同一场的并发触发共享这个任务，只付一次模型调用
         self._inflight: Dict[int, asyncio.Task[bool]] = {}
@@ -596,6 +628,11 @@ class SessionSettler:
             return await self._settle_session_once(live_session_id)
         except Exception as exc:  # noqa: BLE001 - 整理失败只影响这一场，不能炸穿调度与等待方
             logger.warning(f"场次 {live_session_id} 整理异常: {exc}", exc=exc)
+            if self._task_registry is not None:
+                # 登记中的任务按失败注销；没登记过（前置检查就炸了）登记处会按未知号忽略
+                await self._task_registry.finish(
+                    _task_id(live_session_id), success=False, failure_reason=f"整理异常：{exc}"
+                )
             return False
 
     async def _settle_session_once(self, live_session_id: int) -> bool:
@@ -615,6 +652,10 @@ class SessionSettler:
             logger.debug(f"场次 {live_session_id} 已整理过，跳过重复整理")
             return False
 
+        if self._task_registry is not None:
+            # 前置检查全过、确定要跑模型了才登记：后台任务面板从此看得见这场整理
+            await self._task_registry.begin(_task_id(live_session_id), _session_title(session))
+
         try:
             speech = await self._chat.list_session_speech_for_settle(live_session_id=int(live_session_id))
         except Exception as exc:  # noqa: BLE001 - 取料失败按整理失败记账
@@ -624,9 +665,17 @@ class SessionSettler:
         if not delivered:
             return await self._mark_done(session, note="本场没有播出台词，不用整理")
 
+        registry = self._task_registry
+        current_task_id = _task_id(live_session_id)
+
+        async def report_progress(text: str) -> None:
+            if registry is not None:
+                await registry.update(current_task_id, text)
+
         try:
+            await report_progress("取料中")
             material = await self._collect_material(session, delivered)
-            outcome = await self._extract(material)
+            outcome = await self._extract(material, progress=report_progress)
         except SettleError as exc:
             await self._record_failure(session, str(exc))
             return False
@@ -661,6 +710,7 @@ class SessionSettler:
             or report.side_effects
         )
         now = int(self._clock())
+        await report_progress("写入整理结果")
         try:
             written = await self._sessions.apply_settlement(
                 live_session_id=int(live_session_id),
@@ -684,6 +734,12 @@ class SessionSettler:
         if not int(written.get("claimed", 0)):
             # 整理期间场次被改成彩排，或另一进程已先一步写完整理完成时刻：不算失败，也不清账
             logger.info(f"场次 {live_session_id} 的整理结果未写入（场次类型已改或已被别的整理抢先），不重复提交")
+            if registry is not None:
+                await registry.finish(
+                    current_task_id,
+                    success=False,
+                    failure_reason="整理结果未写入：场次类型已改或已被别的整理抢先",
+                )
             return False
 
         logger.info(
@@ -691,6 +747,8 @@ class SessionSettler:
             f"新承诺 {written.get('commitments', 0)} 条、了结 {written.get('closed', 0)} 条、"
             f"未登记 {len(outcome.unregistered)} 条、观众候选 {written.get('candidates', 0)} 条"
         )
+        if registry is not None:
+            await registry.finish(current_task_id, success=True)
         return True
 
     async def _side_effects(self, session: LiveSession, delivered: List[SettleSpeechLine]) -> Optional[SideEffectStats]:
@@ -721,13 +779,24 @@ class SessionSettler:
                 settle_report=None,
             )
             logger.info(f"场次 {session.id} {note}")
+            if self._task_registry is not None:
+                await self._task_registry.finish(_task_id(int(session.id)), success=bool(ok))
             return bool(ok)
         except Exception as exc:  # noqa: BLE001 - 落库失败下次调度会重来
             logger.warning(f"场次 {session.id} 标记整理完成失败: {exc}", exc=exc)
+            if self._task_registry is not None:
+                await self._task_registry.finish(
+                    _task_id(int(session.id)), success=False, failure_reason=f"标记整理完成失败：{exc}"
+                )
             return False
 
     async def _record_failure(self, session: LiveSession, reason: str) -> None:
-        """记一次失败：重试次数加一、写原因；次数用满后只告警不再自动补跑。"""
+        """记一次失败：重试次数加一、写原因；次数用满后只告警不再自动补跑。
+
+        这里也是后台任务面板"整理失败"的统一出口：登记中的任务在此按失败注销。
+        """
+        if self._task_registry is not None:
+            await self._task_registry.finish(_task_id(int(session.id)), success=False, failure_reason=reason)
         report = SettleReport(failure_reason=reason)
         try:
             attempts = await self._sessions.record_settle_failure(
@@ -1045,8 +1114,22 @@ class SessionSettler:
     # 三次模型调用
     # ------------------------------------------------------------------
 
-    async def _extract(self, material: SettleMaterial) -> SettleOutcome:
-        """跑三次调用并逐条校验；调用失败抛 SettleError（整场不提交）。"""
+    async def _extract(
+        self, material: SettleMaterial, *, progress: Optional[Callable[[str], Awaitable[None]]] = None
+    ) -> SettleOutcome:
+        """跑三次调用并逐条校验；调用失败抛 SettleError（整场不提交）。
+
+        ``progress`` 把"第 N 笔/共 M 笔"的进度报给后台任务面板（缺省 None 时不报，
+        离线评测脚本直接调本方法不带面板）。共几笔按有没有未了结的旧承诺定：
+        有两笔（档案、找新承诺）或三笔（加了结旧承诺）。
+        """
+        if progress is None:
+
+            async def progress(text: str) -> None:
+                return None
+
+        total_calls = 3 if material.open_commitments else 2
+        await progress(f"第 1 笔/共 {total_calls} 笔：整理本场档案")
         archive_data = await self._ask(
             template=_ARCHIVE_TEMPLATE,
             prompt=(
@@ -1076,6 +1159,7 @@ class SessionSettler:
             raise SettleError(str(exc)) from exc
         # 找承诺那次顺带列出"她说欠着、账上找不到的"与玩家自述：同一份原料，不多一次调用。
         # 输出断在最后的自述那段时只丢自述，承诺与"说欠着"照常用
+        await progress(f"第 2 笔/共 {total_calls} 笔：找新承诺")
         commitment_text = await self._ask_text(
             template=_COMMITMENT_TEMPLATE,
             prompt=(
@@ -1095,6 +1179,7 @@ class SessionSettler:
         commitment_rows = _list_field(commitment_data, "commitments")
         closure_rows: List[Any] = []
         if material.open_commitments:
+            await progress(f"第 3 笔/共 {total_calls} 笔：了结旧承诺")
             closure_rows = await self._ask_for_list(
                 template=_CLOSE_TEMPLATE,
                 prompt=close_user_prompt(material),

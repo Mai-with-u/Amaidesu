@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.modules.dashboard.api import (
     agents,
+    background,
     avatar,
     avatar_tuning,
     components,
@@ -70,6 +71,9 @@ def create_app() -> FastAPI:
 
     # 场次复盘只读聚合 + 数据包导出（services.session_review 承载口径）
     app.include_router(review.router, prefix="/api/v1/review", tags=["Review"])
+
+    # 后台任务可见性（底栏任务条刷新恢复：进行中任务清单；实时变化走 background.task.changed 推送）
+    app.include_router(background.router, prefix="/api/v1/background-tasks", tags=["BackgroundTasks"])
 
     # 观众统计只读端点（viewers 表最小消费面）
     app.include_router(viewers.router, prefix="/api/v1/viewers", tags=["Viewers"])

@@ -16,6 +16,10 @@ from typing import Any, Iterator, List, Optional, Tuple
 import pytest
 
 from src.agents.streamer.memory.settle import MAX_ATTEMPTS, SessionSettler, SettleError, parse_json_object
+from src.modules.background import BackgroundTaskRegistry
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.background import BackgroundTaskChangedPayload
 from src.modules.llm.payload import Response
 from src.modules.prompts import PromptManager
 from src.modules.storage.database import SQLiteDatabase
@@ -47,6 +51,7 @@ def _settler(
     *,
     games: Optional[List[str]] = None,
     cue_log_repo: Any = None,
+    task_registry: Optional[BackgroundTaskRegistry] = None,
 ) -> SessionSettler:
     return SessionSettler(
         sessions_repo=store.sessions,
@@ -57,6 +62,7 @@ def _settler(
         llm_service=llm,
         prompt_manager=prompt_manager,
         game_names_provider=lambda: ["Minecraft"] if games is None else games,
+        task_registry=task_registry,
         clock=lambda: 7_777,
         cue_log_repo=cue_log_repo,
     )
@@ -1523,3 +1529,71 @@ async def test_report_carries_nagging_stats_from_named_memories_and_cards(
     assert (stats.mentions, stats.max_per_item, stats.max_item, stats.unprompted) == (2, 2, f"约#{promise}", 2)
     assert stats.cards["rule"].pushed == 1 and stats.cards["rule"].used == 1
     assert stats.self_triggered_cards == 1
+
+
+# ---------------------------------------------------------------------------
+# 后台任务登记（底栏任务面板可见性）
+# ---------------------------------------------------------------------------
+
+
+def _registry_with_recorder() -> tuple[BackgroundTaskRegistry, EventBus, List[BackgroundTaskChangedPayload]]:
+    """装配登记处 + 真实 EventBus，收集全部 background.task.changed 载荷供断言。"""
+    bus = EventBus()
+    payloads: List[BackgroundTaskChangedPayload] = []
+
+    async def record(event_name: str, payload: BackgroundTaskChangedPayload, source: str) -> None:
+        payloads.append(payload)
+
+    bus.on(CoreEvents.BACKGROUND_TASK_CHANGED, record, model_class=BackgroundTaskChangedPayload)
+    return BackgroundTaskRegistry(bus), bus, payloads
+
+
+async def test_settle_reports_background_task_progress(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
+    """整理一场：登记 → 第 N 笔/共 M 笔进度 → 完成注销；载荷始终带该任务完整现状。"""
+    registry, bus, payloads = _registry_with_recorder()
+    session_id = await _ended_session(store)
+    old = await store.commitments.insert_commitment(what="画生日贺图", quote="下播给你画张生日贺图", now_ms_value=100)
+    assert old is not None
+    await _speech(store, session_id, "生日贺图那个我是真弄不来，跟你说声抱歉", timestamp_ms=1_100)
+    llm = _reply(
+        '{"archive": []}',
+        '{"commitments": []}',
+        '{"closed": [{"id": %d, "line": 1, "quote": "生日贺图那个我是真弄不来"}]}' % old,
+    )
+    settler = _settler(store, llm, prompt_manager, task_registry=registry)
+
+    assert await settler.settle_session(session_id) is True
+    await bus.wait_until_drained()
+
+    assert payloads[0].state == "running" and payloads[0].progress_text == ""
+    assert payloads[0].task_id == f"settle-{session_id}"
+    assert payloads[0].title.startswith("整理场次：")
+    texts = [payload.progress_text for payload in payloads]
+    assert any(text.startswith("第 2 笔/共 3 笔") for text in texts), texts
+    assert any(text.startswith("第 3 笔/共 3 笔") for text in texts), texts
+    assert payloads[-1].state == "finished" and payloads[-1].failure_reason is None
+    assert registry.snapshot() == []  # 终态任务不留行
+
+
+async def test_settle_failure_reports_failed_with_reason(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
+    """整理失败：面板按 failed 注销并带原因，登记处不留行（重试由下轮调度接管）。"""
+    registry, bus, payloads = _registry_with_recorder()
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
+    llm = _reply("这不是 JSON")
+    settler = _settler(store, llm, prompt_manager, task_registry=registry)
+
+    assert await settler.settle_session(session_id) is False
+    await bus.wait_until_drained()
+
+    assert payloads[-1].state == "failed"
+    assert payloads[-1].failure_reason is not None
+    assert registry.snapshot() == []
+
+
+async def test_settle_without_registry_runs_unchanged(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
+    """不装配登记处（None）时整理照常跑：可见性是可选增强，不挡主流程。"""
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
+    llm = _reply('{"archive": []}', '{"commitments": []}')
+    assert await _settler(store, llm, prompt_manager).settle_session(session_id) is True

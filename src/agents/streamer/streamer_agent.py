@@ -40,6 +40,8 @@ from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.agents.factory import AGENT_BINDINGS
+from src.modules.background import get_registry as get_task_registry
+from src.modules.background import setup_registry as setup_task_registry
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.core import CoreStartupPayload
@@ -498,6 +500,15 @@ class StreamerAgent(BaseAgent):
             prompt_manager=self._prompt,  # 摘要/画像系统提示词渲染（复用 Agent 持有的 PromptManager）
         )
 
+        # 后台任务登记处：进程级单例（下播整理与记忆索引补算共用一个面板数据源）。
+        # 没装配事件总线就发不出变更事件，登记口保持 None——整理与补算照常跑，
+        # 只是底栏任务面板看不见；已装配过则复用既有实例（查询端点读同一个单例）
+        if event_bus is not None:
+            task_registry = get_task_registry() or setup_task_registry(event_bus)
+        else:
+            # 总线都没装：注册不发事件也没有面板意义，登记口为 None
+            task_registry = get_task_registry()
+
         # 下播整理：每场正式直播结束后把承诺与场次档案写进账本（账本唯一写入入口）。
         # 四个仓储或模型任一缺失就整体关闭，账本保持为空
         self._settler: Optional[SessionSettler] = None
@@ -524,6 +535,8 @@ class StreamerAgent(BaseAgent):
                 game_player_repo=game_player_repo,
                 # 唠叨指标里线索卡那几项：推了几张、用上几张、只由她自己的台词触发的几张
                 cue_log_repo=memory_cue_log_repo,
+                # 后台任务面板：整理全程（取料/第 N 笔模型调用/写库）在这里可见
+                task_registry=task_registry,
             )
 
         # 记忆检索索引：后台补算全文（必开）与向量（配置了嵌入服务才开）；整理写完时叫醒补一轮。
@@ -535,7 +548,11 @@ class StreamerAgent(BaseAgent):
         if memory_index_repo is not None:
             setup = embedding_setup or EmbeddingSetup(client=None, note="语义检索没开：没有装配嵌入服务")
             self._memory_indexer = MemoryIndexer(
-                repo=memory_index_repo, embedding=setup.client, embedding_note=setup.note
+                repo=memory_index_repo,
+                embedding=setup.client,
+                embedding_note=setup.note,
+                # 缺行总数超过门槛的补算（启动补算/换嵌入模型）登记进后台任务面板
+                task_registry=task_registry,
             )
             self._memory_search = MemorySearch(repo=memory_index_repo, embedding=setup.client)
 
