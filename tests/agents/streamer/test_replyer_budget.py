@@ -172,6 +172,7 @@ async def _request(
     *,
     game_people: Sequence[PlayerNote] = (),
     game_chat: Optional[List[str]] = None,
+    reply_to: str = "",
 ) -> Tuple[str, str]:
     """长场里回应一条开场的弹幕：返回（system, user）两段正文。游戏聊天不给时用两句常见的公屏话。"""
     plan = DecisionPlan(
@@ -191,6 +192,7 @@ async def _request(
         state_facts="生命值偏低；背包里有铁矿、红石、青金石；脚下是深板岩层，东侧有岩浆湖",
         recent_speeches=assistant_speech_lines(history),
         game_people=list(game_people),
+        reply_to=reply_to,
     )
     call = llm.calls[-1]
     return call["system"], call["input"][0]["content"]
@@ -281,7 +283,7 @@ def _full_batch(stored: bool) -> Tuple[List[Any], List[Any]]:
 async def test_full_batch_with_player_notes_stays_within_budget(prompts: Any, count: int, case: str) -> None:
     """满批再加最近几分钟找她的玩家条目（每条 43 字的长公屏话，最多 6 条）：整份输入仍 ≤3,200（cl100k 口径）。
 
-    条目只留最近 3 条、较早的截短，和她更早说过的话合计至多 3 行；最新一条正是本窗公屏话时全文照给，
+    条目只留最近 3 条、较早的截短，和她更早说过的话合计至多 3 行；最新一条正是本窗公屏话时给到 40 字，
     游戏聊天一段不再重复它；她都回应过（标已接过、规矩多一句）时也不超。原样列出时 6 条长公屏话会让满批
     超出六百多。
     """
@@ -307,10 +309,53 @@ async def test_full_batch_with_player_notes_stays_within_budget(prompts: Any, co
     people = user.partition("## 游戏里最近找你的人")[2].partition("\n\n## ")[0]
     shown = [line for line in people.splitlines() if line.startswith("[22:4")]
     assert len(shown) == min(count, 3)
-    assert (shown[-1] == notes[-1].line) == newest_in_game_chat
+    # 本窗那一句给到 40 字（43 字的原话截掉最后几个字），较早的截到 18 字
+    assert (f"：{_LONG_PLAYER_CHAT[:40]}…" in shown[-1]) == newest_in_game_chat
     assert newest_chat not in user
     speech = user.partition("## 更早一点你说过的话")[2].partition("下面是之前的聊天记录")[0]
     assert len(shown) + sum(1 for line in speech.splitlines() if line.startswith("- ")) <= 3
+
+
+@pytest.mark.parametrize("reply_to", ["", "玩家3"])
+async def test_full_batch_with_several_players_speaking_in_one_window_stays_within_budget(
+    prompts: Any, reply_to: str
+) -> None:
+    """满批时同一窗里六位玩家各在公屏说一句 43 字的长话：整份输入仍 ≤3,200（cl100k 口径）。
+
+    她要接的那一句（回应对象说的，没有回应对象时是最新的）给到 40 字，同窗别的玩家截到 18 字；
+    条目只留最近 3 位，没进条目的公屏话只报句数。原样列出时会超出几百。
+    """
+    history, batch = _full_batch(stored=True)
+    notes = [
+        PlayerNote(
+            who=f"玩家{index}", said=True, line=f"[22:4{index} minecraft 公屏] 玩家 玩家{index}：{_LONG_PLAYER_CHAT}"
+        )
+        for index in range(6)
+    ]
+    chat = [f"[minecraft] 玩家 玩家{index}：{_LONG_PLAYER_CHAT}" for index in range(6)]
+
+    replyer, llm = _replyer(prompts)
+    system, user = await _request(replyer, llm, history, batch, game_people=notes, game_chat=chat, reply_to=reply_to)
+    assert _cl100k_tokens(system) + _cl100k_tokens(user) <= _INPUT_MAX
+    people = user.partition("## 游戏里最近找你的人")[2].partition("\n\n## ")[0]
+    long_lines = [line for line in people.splitlines() if f"：{_LONG_PLAYER_CHAT[:40]}…" in line]
+    focus = reply_to or "玩家5"
+    assert len(long_lines) == 1 and f"玩家 {focus}：" in long_lines[0], "只有她要接的那一句给得长"
+    game_chat = user.partition("## 游戏里刚有人说的话")[2].partition("\n\n")[2].partition("\n\n")[0]
+    assert game_chat == "（另有 3 句没列出；找你的人见下一段）"
+
+
+async def test_full_batch_with_long_game_chat_and_no_player_notes_stays_within_budget(prompts: Any) -> None:
+    """没有玩家条目、游戏聊天一段有六句长话：只留最近 3 句、每句截到 30 字，她更早说过的话让出 3 行，
+    整份输入仍 ≤3,200。"""
+    history, batch = _full_batch(stored=True)
+    chat = [f"[minecraft] 玩家 玩家{index}：{_LONG_PLAYER_CHAT}" for index in range(6)]
+    replyer, llm = _replyer(prompts)
+    system, user = await _request(replyer, llm, history, batch, game_chat=chat)
+    assert _cl100k_tokens(system) + _cl100k_tokens(user) <= _INPUT_MAX
+    assert user.count(f"：{_LONG_PLAYER_CHAT[:30]}…") == 3 and "玩家 玩家2：" not in user
+    speech = user.partition("## 更早一点你说过的话")[2].partition("下面是之前的聊天记录")[0]
+    assert sum(1 for line in speech.splitlines() if line.startswith("- ")) <= 3
 
 
 async def test_fallback_switch_brings_back_the_whole_history(prompts: Any) -> None:

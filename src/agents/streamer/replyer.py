@@ -55,9 +55,17 @@ _RECENT_SPEECH_HEADING = "## 更早一点你说过的话（比下面的聊天记
 # 游戏里最近找她的人那一段的标题：谁说的话、谁做的事以这一段为准
 _GAME_PEOPLE_HEADING = "## 游戏里最近找你的人（谁说的、谁做的以此为准）"
 # 玩家条目整段至多几条（最近的）、较早条目的正文至多几个字：满批时整份输入只剩个位数 token 的余量。
-# 本窗刚在公屏说的那句（游戏聊天里也有）全文照给：这是她要接的话，同一句从游戏聊天那一段拿掉
+# 本窗刚在公屏说的话（游戏聊天里也有）从游戏聊天那一段拿掉；其中她要接的那一句（回应对象说的，
+# 没有回应对象时是最新的一句）给得长一些，同窗别的玩家说的和较早条目一样截短——几位玩家同窗各说
+# 一句长话时，全文照给会让满批超预算
 _PEOPLE_LINES_MAX = 3
 _PEOPLE_NOTE_MAX_CHARS = 18
+_PEOPLE_FRESH_MAX_CHARS = 40
+# 游戏聊天一段：有玩家条目时，没进条目的公屏话（条目只留最近 3 条，多出来的、认不出是谁的）只报句数——
+# 满批加三条玩家条目时整份输入只剩个位数 token；没有玩家条目时留最近几句、每句截短，并和"更早一点你说过
+# 的话"合计至多 :data:`_RECENT_SPEECH_LINES` 行（游戏聊天占几行，她更早说过的话就少几行）
+_GAME_CHAT_LINES_MAX = 3
+_GAME_CHAT_LINE_MAX_CHARS = 30
 # 她已经回应过的条目：正文截得更短、行尾标"已接过"，她知道这件事接过了，换话题时不再谢一遍
 _PEOPLE_ANSWERED_MAX_CHARS = 10
 _ANSWERED_MARK = "（已接过）"
@@ -336,8 +344,10 @@ class Replyer:
         # 玩家条目截短封顶，本窗在公屏说的那句从游戏聊天一段拿掉（条目里已有、还带着是谁说的）。
         # 游戏聊天整段都挪进了条目时写"见下一段"：写"无"会和下一段里刚在公屏说的话对不上
         chat_before = list(game_chat or [])
-        people_lines, game_chat = _people_lines(game_people, chat_before)
-        chat_placeholder = "（见下一段）" if chat_before and not game_chat else "（无）"
+        people_lines, game_chat = _people_lines(game_people, chat_before, reply_to=reply_to)
+        game_chat_text = _game_chat_text(game_chat, has_people=bool(people_lines), had_chat=bool(chat_before))
+        # 没有玩家条目时游戏聊天列出几句，她更早说过的话就让出几行：满批时整份输入不超
+        chat_rows = 0 if people_lines else min(len(game_chat), _GAME_CHAT_LINES_MAX)
         # 玩家条目一段占的行数：条目本身，加上有已接过的条目时多出的那句规矩
         people_rows = len(people_lines) + (1 if _has_answered(people_lines) else 0)
         entries = self._dialogue_entries(full_history, batch)
@@ -359,7 +369,9 @@ class Replyer:
             recent_speech_section=_recent_speech_section(
                 recent_speeches,
                 shown_speeches,
-                max_lines=max(0, _PEOPLE_AND_SPEECH_LINES - people_rows) if people_lines else _RECENT_SPEECH_LINES,
+                max_lines=(
+                    max(0, _PEOPLE_AND_SPEECH_LINES - people_rows) if people_lines else _RECENT_SPEECH_LINES - chat_rows
+                ),
             ),
             remembered_section=_remembered_section(remembered),
             bot_name=self._bot_name,
@@ -368,7 +380,7 @@ class Replyer:
                 if batch
                 else "本轮没有新观众消息；有游戏聊天时按游戏情况说，否则这是主动发言。"
             ),
-            game_chat="\n".join(game_chat) if game_chat else chat_placeholder,
+            game_chat=game_chat_text,
             rundown=rundown_render,
             state_facts=state_facts.strip() or "（无）",
             # 长度预算先在提示里说清，多数台词一次就落在预算内；出口处还有截短兜底
@@ -464,23 +476,33 @@ def _note_body(line: str) -> str:
     return body if line.startswith("[") and separator else line
 
 
-def _people_lines(game_people: Sequence[PlayerNote], game_chat: Sequence[str]) -> Tuple[List[str], List[str]]:
+def _people_lines(
+    game_people: Sequence[PlayerNote], game_chat: Sequence[str], *, reply_to: str = ""
+) -> Tuple[List[str], List[str]]:
     """玩家条目渲染成行，并把已经在条目里的游戏聊天行拿掉：返回（条目行, 剩下的游戏聊天行）。
 
-    只留最近 :data:`_PEOPLE_LINES_MAX` 条；本窗刚在公屏说的那句全文照给（她要接的就是它），
-    其余条目正文截到 :data:`_PEOPLE_NOTE_MAX_CHARS` 字——满批时整份输入只剩个位数 token 的余量，
-    六条长公屏话原样列出会超出六百多。同一句不在两段里各出现一次。
+    只留最近 :data:`_PEOPLE_LINES_MAX` 条。本窗刚在公屏说的话里，她要接的那一句（``reply_to`` 那位说的，
+    没有时是最新的一句）正文至多 :data:`_PEOPLE_FRESH_MAX_CHARS` 字，其余条目截到
+    :data:`_PEOPLE_NOTE_MAX_CHARS` 字；没进条目的游戏聊天怎么写见 :func:`_game_chat_text`。
+    满批时整份输入只剩个位数 token 的余量，几位玩家同窗各说一句长话原样列出会超。同一句不在两段里各出现一次。
     """
     chat_bodies = {_note_body(line) for line in game_chat}
+    notes = [note for note in game_people if note.line][-_PEOPLE_LINES_MAX:]
+    fresh = [
+        not note.answered and note.said and any(_note_body(note.line).startswith(chat) for chat in chat_bodies)
+        for note in notes
+    ]
+    # 她要接的那一句：回应对象本窗说的最近一句；没有回应对象（或他本窗没开口）时取最新的一句本窗公屏话
+    focus = next((i for i in reversed(range(len(notes))) if fresh[i] and notes[i].who == reply_to), None)
+    if focus is None:
+        focus = next((i for i in reversed(range(len(notes))) if fresh[i]), None)
     lines: List[str] = []
     shown_chat: set[str] = set()
-    for note in [note for note in game_people if note.line][-_PEOPLE_LINES_MAX:]:
+    for index, note in enumerate(notes):
         body = _note_body(note.line)
-        fresh = not note.answered and note.said and any(body.startswith(chat) for chat in chat_bodies)
-        if fresh:
+        if fresh[index]:
+            # 本窗公屏话已经在条目里（带着是谁说的），游戏聊天一段不再重复
             shown_chat.update(chat for chat in chat_bodies if body.startswith(chat))
-            lines.append(note.line)
-            continue
         head = note.line[: len(note.line) - len(body)]
         # 公屏话截"玩家 X："之后的原话，动作条目截"玩家 X "之后的那件事：名字再长也不被截掉
         name, colon, said = body.partition("：")
@@ -491,12 +513,39 @@ def _people_lines(game_people: Sequence[PlayerNote], game_chat: Sequence[str]) -
             prefix, text = actor, body[len(actor) :]
         else:
             prefix, text = "", body
-        # 已接过的条目只留个大概（她回过了），行尾标出来
-        limit = _PEOPLE_ANSWERED_MAX_CHARS if note.answered else _PEOPLE_NOTE_MAX_CHARS
+        # 已接过的条目只留个大概（她回过了），行尾标出来；她要接的那一句给得长一些
+        if note.answered:
+            limit = _PEOPLE_ANSWERED_MAX_CHARS
+        elif index == focus:
+            limit = _PEOPLE_FRESH_MAX_CHARS
+        else:
+            limit = _PEOPLE_NOTE_MAX_CHARS
         clipped = text if len(text) <= limit else f"{text[:limit]}…"
         lines.append(f"{head}{prefix}{clipped}{_ANSWERED_MARK if note.answered else ''}")
     remaining = [line for line in game_chat if _note_body(line) not in shown_chat]
     return lines, remaining
+
+
+def _game_chat_text(remaining: Sequence[str], *, has_people: bool, had_chat: bool) -> str:
+    """游戏聊天一段的正文：有玩家条目时只报没列出的句数，没有时留最近几句、每句截短。
+
+    整段挪进了玩家条目时写"见下一段"：写"无"会和下一段里刚在公屏说的话对不上。
+    """
+    if has_people:
+        if remaining:
+            return f"（另有 {len(remaining)} 句没列出；找你的人见下一段）"
+        return "（见下一段）" if had_chat else "（无）"
+    if not remaining:
+        return "（无）"
+    return "\n".join(_clip_chat_line(line) for line in remaining[-_GAME_CHAT_LINES_MAX:])
+
+
+def _clip_chat_line(line: str) -> str:
+    """一句游戏聊天截短：说话人（冒号之前）留着，原话至多 :data:`_GAME_CHAT_LINE_MAX_CHARS` 字。"""
+    head, colon, said = line.partition("：")
+    if not colon:
+        return line if len(line) <= _GAME_CHAT_LINE_MAX_CHARS else f"{line[:_GAME_CHAT_LINE_MAX_CHARS]}…"
+    return f"{head}{colon}{said if len(said) <= _GAME_CHAT_LINE_MAX_CHARS else said[:_GAME_CHAT_LINE_MAX_CHARS] + '…'}"
 
 
 def _game_people_section(lines: Sequence[str]) -> str:
