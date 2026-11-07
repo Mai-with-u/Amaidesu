@@ -857,18 +857,15 @@ class Planner:
             return self._round_reply_player
         return "", ""
 
-    def _answers_someone(self, line_id: int, answers_viewer: bool, to_player: str, answering_player: str) -> bool:
+    def _answers_someone(self, line_id: int, answers_viewer: bool, answering_player: str) -> bool:
         """提过的旧事这一句再接算不算在回人：三种情形任一成立就不退回。
 
-        回的是本场的一条观众弹幕（本窗的，或观众上一窗问、这一窗才回的）；``to_player`` 点名了最近找过她的
-        一位玩家；这一条是本窗观众弹幕或玩家开口推上来的线索卡。只是本窗有弹幕、有玩家开口不算：热闹时段
-        几乎每窗都有，按这个放行，冷场时主动复提就拦不住了。
+        回的是本场的一条观众弹幕（本窗的，或观众上一窗问、这一窗才回的）；这句在回应游戏里的一位玩家
+        （``to_player`` 点名、对得上最近找过她的人，或没点名时话题摘要提到本窗唯一开口的那位——玩家在公屏
+        问起旧事、Planner 只在摘要里写了他，退回去她就换话题不答了）；这一条是本窗观众弹幕或玩家开口推上来
+        的线索卡。只是本窗有弹幕、有玩家开口不算：热闹时段几乎每窗都有，按这个放行，冷场时主动复提就拦不住了。
         """
-        return (
-            answers_viewer
-            or (bool(to_player.strip()) and bool(answering_player))
-            or line_id in self._round_asked_archive_ids
-        )
+        return answers_viewer or bool(answering_player) or line_id in self._round_asked_archive_ids
 
     async def _resolve_archive_ref(self, line_id: int) -> Tuple[str, List[str]]:
         """点名一行档案：在本窗名单里、取得到这一行，台词拿到它的标题（不带编号与原话）。"""
@@ -1297,9 +1294,7 @@ class Planner:
         # 8 条各提了两次，第二次全是冷场时主动点名的。每窗只退一次：退过还点名就照常说出去，免得一窗里
         # 接连被退、整窗哑掉；点名留着，这句照样记成提过、计进唠叨指标
         repeated = self._repeated_archive_id(args)
-        if repeated is not None and not self._answers_someone(
-            repeated, answers_viewer, str(args.get("to_player") or ""), answering_player
-        ):
+        if repeated is not None and not self._answers_someone(repeated, answers_viewer, answering_player):
             number = render_archive_number(repeated)
             if not self._round_memory_bounced:
                 self._round_memory_bounced = True

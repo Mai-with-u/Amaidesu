@@ -861,13 +861,15 @@ async def test_viewer_question_from_the_previous_window_is_answered_with_the_mem
 
 
 async def test_player_asking_in_game_chat_gets_the_memory_when_she_answers_him() -> None:
-    """玩家在公屏问起旧事、她 to_player 写他：这句在回他，照常点名（和唠叨指标把回应玩家算作有人问同一口径）。
+    """玩家在公屏问起旧事、她在回他：to_player 写他，或没写、话题摘要提到本窗唯一开口的他，都照常点名
+    （和唠叨指标把回应玩家算作有人问同一口径；只写在摘要里就退回的话，她会换话题不答）。
     to_player 写的人对不上最近找过她的玩家时不算。"""
     asked = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 公屏] 玩家 玩家甲：你那女仆叫啥")
 
-    planner, _llm, _provider = _repeat_planner(_reply_to("", "档#41", to_player="玩家甲"))
-    outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(player_notes=(asked,)))
-    assert (outcome.replied, outcome.memory_refs, outcome.memory_repeat_bounces) == (True, ["档#41"], 0)
+    for extra in ({"to_player": "玩家甲"}, {"topic_summary": "回玩家甲问的女仆名字"}):
+        planner, _llm, _provider = _repeat_planner(_reply_to("", "档#41", **extra))
+        outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(player_notes=(asked,)))
+        assert (outcome.replied, outcome.memory_refs, outcome.memory_repeat_bounces) == (True, ["档#41"], 0), extra
 
     planner, _llm, _provider = _repeat_planner([*_reply_to("", "档#41", to_player="玩家丙"), _PLAIN_REPLY])
     outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(player_notes=(asked,)))
