@@ -98,7 +98,7 @@ describe('useStartStream', () => {
     vi.clearAllMocks();
   });
 
-  /** 极简 localStorage 桩：node 测试环境无 localStorage（同 useConsoleViewMode.test.ts 手法） */
+  /** 极简 localStorage 桩：node 测试环境无 localStorage（同其它组合式的 localStorage 桩手法） */
   function storageStub(initial: Record<string, string> = {}): void {
     const map = new Map(Object.entries(initial));
     vi.stubGlobal('localStorage', {

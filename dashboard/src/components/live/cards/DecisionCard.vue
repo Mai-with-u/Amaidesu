@@ -7,17 +7,21 @@ import {
   isSilentDecision,
   plannerMsOf,
   rawOf,
-  relativeTime,
   replyMsOf,
   topicOf,
 } from '@/utils/liveFeed';
+import { formatTimeHMS } from '@/utils/format';
+import { ref } from 'vue';
 import { useTimelineCardHost } from './context';
+import CardMenu from './CardMenu.vue';
 import type { CardProps } from './registry';
 import CtxPill from './CtxPill.vue';
 
 defineProps<CardProps>();
 
 const host = useTimelineCardHost();
+/** 原始输出默认收起：模型原文只在排查解析问题时才看 */
+const showRaw = ref(false);
 </script>
 
 <template>
@@ -33,8 +37,6 @@ const host = useTimelineCardHost();
   >
     <div class="act-head">
       <span class="act-kind">决策</span>
-      <span class="d-internal" title="主播的内部盘算，不会作为台词念出来">内部</span>
-      <code v-if="entry.roundId" class="d-round mono">{{ entry.roundId }}</code>
       <span
         v-if="entry.badge"
         class="act-badge"
@@ -50,7 +52,7 @@ const host = useTimelineCardHost();
         测试
       </span>
       <span class="grow" />
-      <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+      <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
     </div>
     <div v-if="entry.replyTo" class="reply-quote">
       <template v-if="host.replyQuoteOf(entry)">
@@ -81,6 +83,9 @@ const host = useTimelineCardHost();
       </span>
       <details class="d-meta-more">
         <summary>诊断</summary>
+        <!-- 内部盘算与轮次标识是给调试看的机器信息，放在诊断里而不是卡头 -->
+        <span title="主播的内部盘算，不会作为台词念出来">内部盘算</span>
+        <code v-if="entry.roundId" class="mono">{{ entry.roundId }}</code>
         <span v-if="batchSizeOf(entry) > 0" class="mono">批次 {{ batchSizeOf(entry) }} 条</span>
         <span v-if="plannerMsOf(entry)" class="mono">决策 {{ plannerMsOf(entry) }}ms</span>
         <span v-if="replyMsOf(entry)" class="mono">生成 {{ replyMsOf(entry) }}ms</span>
@@ -100,35 +105,32 @@ const host = useTimelineCardHost();
         </span>
       </details>
       <CtxPill :entry="entry" />
-      <a
-        v-if="entry.llmRequestId"
-        class="d-link"
-        :href="`/llm/history?request_id=${encodeURIComponent(entry.llmRequestId)}`"
-        @click.stop.prevent="host.openLlmRequest(entry.llmRequestId)"
-      >
-        完整请求 ↗
-      </a>
-      <a
-        v-if="entry.llmRequestId"
-        class="d-link"
-        role="button"
-        tabindex="0"
-        :title="
-          host.isThinkingExpanded(entry)
-            ? '收起模型推理正文'
-            : '展开该请求的模型推理正文（LLM 请求历史）'
-        "
-        @keydown.enter.prevent="host.toggleThinking(entry)"
-        @keydown.space.prevent="host.toggleThinking(entry)"
-        @click.stop="host.toggleThinking(entry)"
-      >
-        {{ host.isThinkingExpanded(entry) ? '收起思考' : '思考' }}
-      </a>
-      <details v-if="rawOf(entry)" class="d-raw">
-        <summary @click.stop>原始输出</summary>
-        <pre class="mono">{{ rawOf(entry) }}</pre>
-      </details>
+      <CardMenu v-if="entry.llmRequestId || rawOf(entry)">
+        <a
+          v-if="entry.llmRequestId"
+          :href="`/llm/history?request_id=${encodeURIComponent(entry.llmRequestId)}`"
+          @click.prevent="host.openLlmRequest(entry.llmRequestId)"
+        >
+          完整请求 ↗
+        </a>
+        <button
+          v-if="entry.llmRequestId"
+          type="button"
+          :title="
+            host.isThinkingExpanded(entry)
+              ? '收起模型推理正文'
+              : '展开该请求的模型推理正文（LLM 请求历史）'
+          "
+          @click="host.toggleThinking(entry)"
+        >
+          {{ host.isThinkingExpanded(entry) ? '收起思考' : '思考' }}
+        </button>
+        <button v-if="rawOf(entry)" type="button" @click="showRaw = !showRaw">
+          {{ showRaw ? '收起原始输出' : '原始输出' }}
+        </button>
+      </CardMenu>
     </div>
+    <pre v-if="showRaw && rawOf(entry)" class="d-raw-body mono">{{ rawOf(entry) }}</pre>
     <div v-if="host.isThinkingExpanded(entry)" class="d-thinking">
       <pre v-if="host.reasoningOf(entry)" class="mono">{{ host.reasoningOf(entry) }}</pre>
       <span v-else-if="host.reasoningOf(entry) === ''" class="d-thinking-empty"

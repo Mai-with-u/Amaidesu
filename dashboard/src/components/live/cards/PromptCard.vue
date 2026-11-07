@@ -1,6 +1,6 @@
 <!-- 递话受理（agent.prompted）：运营/跨 Agent 留言送达目标 -->
 <script setup lang="ts">
-import { relativeTime } from '@/utils/liveFeed';
+import { formatTimeHMS } from '@/utils/format';
 import type { CardProps } from './registry';
 
 defineProps<CardProps>();
@@ -13,7 +13,7 @@ defineProps<CardProps>();
       <span class="prompt-source">{{ entry.actor }}</span>
       <span v-if="entry.note" class="prompt-target">发给 {{ entry.note }}</span>
       <span class="grow" />
-      <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+      <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
     </div>
     <p class="act-text">{{ entry.text }}</p>
   </div>

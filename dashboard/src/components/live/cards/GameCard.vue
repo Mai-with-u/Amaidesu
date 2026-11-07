@@ -1,6 +1,6 @@
 <!-- 游戏 Agent 上报（game.*）：游戏域色（粉）左边线，act 卡形态变体 -->
 <script setup lang="ts">
-import { relativeTime } from '@/utils/liveFeed';
+import { formatTimeHMS } from '@/utils/format';
 import type { CardProps } from './registry';
 
 defineProps<CardProps>();
@@ -14,7 +14,7 @@ defineProps<CardProps>();
         {{ entry.badge }}
       </span>
       <span class="grow" />
-      <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+      <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
     </div>
     <p class="act-text">{{ entry.text }}</p>
     <p v-if="entry.note" class="act-note is-game-note">{{ entry.note }}</p>

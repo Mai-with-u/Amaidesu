@@ -1,6 +1,6 @@
 <!-- 聊天气泡卡：弹幕 / 礼物 / SC / 上舰 / 游戏内聊天共用，chat--{kind} 修饰符区分配色 -->
 <script setup lang="ts">
-import { relativeTime } from '@/utils/liveFeed';
+import { formatTimeHMS } from '@/utils/format';
 import type { CardProps } from './registry';
 
 defineProps<CardProps>();
@@ -16,7 +16,7 @@ defineProps<CardProps>();
         <span v-if="entry.simulated" class="chip" title="来自控制台注入的模拟消息"> 模拟 </span>
         <span v-if="entry.money" class="money mono">{{ entry.money }}</span>
         <span class="grow" />
-        <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+        <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
       </div>
       <p class="say">{{ entry.text }}</p>
     </div>

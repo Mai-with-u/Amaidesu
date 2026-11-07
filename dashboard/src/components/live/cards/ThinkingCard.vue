@@ -1,7 +1,7 @@
 <!-- 思考行：ReAct 各步/生成段思考流（视图层合成条目）。默认折叠只留单行预览，
      流式期间预览实时增长；展开看全文 -->
 <script setup lang="ts">
-import { relativeTime } from '@/utils/liveFeed';
+import { formatTimeHMS } from '@/utils/format';
 import type { CardProps } from './registry';
 
 defineProps<CardProps>();
@@ -14,7 +14,7 @@ defineProps<CardProps>();
       <span class="think-label">{{ entry.actor }}</span>
       <span class="think-preview">{{ entry.text }}</span>
       <span class="grow" />
-      <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+      <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
     </summary>
     <pre class="think-body">{{ entry.text }}</pre>
   </details>

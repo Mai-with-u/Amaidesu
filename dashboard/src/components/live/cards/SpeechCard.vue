@@ -6,8 +6,9 @@ import { ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { debugApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
-import { relativeTime } from '@/utils/liveFeed';
+import { formatTimeHMS } from '@/utils/format';
 import { useTimelineCardHost } from './context';
+import CardMenu from './CardMenu.vue';
 import type { CardProps } from './registry';
 import CtxPill from './CtxPill.vue';
 
@@ -66,7 +67,7 @@ async function replay(entryText: string): Promise<void> {
         {{ replayFailed ? '重试' : '▶ 重播' }}
       </el-button>
       <span class="grow" />
-      <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+      <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
     </div>
     <div v-if="entry.replyTo" class="reply-quote">
       <template v-if="host.replyQuoteOf(entry)">
@@ -99,13 +100,11 @@ async function replay(entryText: string): Promise<void> {
         {{ host.modelNameOf(entry) }}
       </span>
       <CtxPill :entry="entry" />
-      <a
-        class="d-link"
-        :href="`/llm/history?request_id=${encodeURIComponent(entry.llmRequestId)}`"
-        @click.stop
-      >
-        完整请求 ↗
-      </a>
+      <CardMenu>
+        <a :href="`/llm/history?request_id=${encodeURIComponent(entry.llmRequestId)}`" @click.stop>
+          完整请求 ↗
+        </a>
+      </CardMenu>
     </div>
   </div>
 </template>

@@ -2,7 +2,7 @@
      单行形态一致，行文案拼装与修饰类按 kind 判别（判别知识内聚在此，不进外壳） -->
 <script setup lang="ts">
 import { computed } from 'vue';
-import { relativeTime } from '@/utils/liveFeed';
+import { formatTimeHMS } from '@/utils/format';
 import type { CardProps } from './registry';
 
 const props = defineProps<CardProps>();
@@ -47,7 +47,7 @@ const running = computed(() => props.entry.kind === 'stage' && props.entry.speak
     <span class="whisper-dot" aria-hidden="true" />
     <span class="whisper-text" :class="{ 'is-running': running }">{{ line }}</span>
     <span class="grow" />
-    <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+    <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
   </div>
 </template>
 

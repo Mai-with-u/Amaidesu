@@ -51,8 +51,6 @@ export interface TimelineCardHost {
   toggleThinking(entry: ShowEntry): void;
   reasoningOf: ReasoningOf;
   /** 会话模式过程条的展开态与切换（过程条卡） */
-  isChatGroupExpanded(id: string): boolean;
-  toggleChatGroup(id: string): void;
 }
 
 export const TIMELINE_CARD_HOST: InjectionKey<TimelineCardHost> = Symbol('timeline-card-host');

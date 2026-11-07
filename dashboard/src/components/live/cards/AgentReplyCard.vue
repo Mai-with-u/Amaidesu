@@ -1,7 +1,7 @@
 <!-- Agent 响应卡（agent.replied）：命令驱动型 Agent 每步的行动说明，
      决定卡同款胶囊（缓存/Token/模型/上下文，按 llm_request_id 懒取） -->
 <script setup lang="ts">
-import { relativeTime } from '@/utils/liveFeed';
+import { formatTimeHMS } from '@/utils/format';
 import { useTimelineCardHost } from './context';
 import type { CardProps } from './registry';
 import CtxPill from './CtxPill.vue';
@@ -25,7 +25,7 @@ function detailStepOf(entry: CardProps['entry']): number {
         >步骤 {{ detailStepOf(entry) }}</span
       >
       <span class="grow" />
-      <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+      <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
     </div>
     <p class="act-text">{{ entry.text }}</p>
     <div class="d-meta">

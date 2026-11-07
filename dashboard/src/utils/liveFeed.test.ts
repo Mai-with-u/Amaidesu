@@ -3,7 +3,7 @@
 // 覆盖三条主线：
 //   1. WS 事件 → ShowEntry 的映射规则（toEntry 及各 from* 分支、取值助手）
 //   2. 事件流折叠（buildLiveEntries 的轮回填/隐藏/限长）
-//   3. 视图层合成行（思考行归并、会话模式折叠 buildChatRows）
+//   3. 视图层合成行（思考行归并）
 
 import { describe, expect, it } from 'vitest';
 
@@ -12,17 +12,14 @@ import {
   MAX_ENTRIES,
   type FeedEvent,
   agentGroupOf,
-  buildChatRows,
   buildLiveEntries,
   buildThinkingRow,
   batchSizeOf,
   callerSourceLabel,
-  chatProcessSummary,
   decisionDetail,
   formatAmount,
   fromDecision,
   guidanceOf,
-  isChatProcessKind,
   isConversationEntry,
   isRoundLinkable,
   isSilentDecision,
@@ -666,62 +663,6 @@ describe('思考行合成与归并', () => {
   });
 });
 
-describe('buildChatRows 会话模式折叠', () => {
-  const danmaku = (id: string) => makeEntry({ id, kind: 'danmaku', tsMs: 1, text: id });
-  const speech = (id: string) => makeEntry({ id, kind: 'speech', tsMs: 1, text: id });
-  const tool = (id: string) => makeEntry({ id, kind: 'tool', tsMs: 1, text: id });
-  const stage = (id: string) => makeEntry({ id, kind: 'stage', tsMs: 1, text: id });
-
-  it('观众气泡按原序铺在发言前，过程行折叠成发言后的过程条', () => {
-    const rows = buildChatRows([danmaku('d1'), danmaku('d2'), tool('t1'), speech('s1')], new Set());
-    expect(rows.map(e => e.id)).toEqual(['d1', 'd2', 's1', 'chat-process:s1']);
-    expect(rows[3]).toMatchObject({ kind: 'process_group', text: '1 工具', note: '1' });
-  });
-
-  it('多类型过程行按出现顺序计数', () => {
-    const rows = buildChatRows(
-      [stage('t1'), stage('t2'), tool('t3'), speech('s1'), tool('t4'), speech('s2')],
-      new Set(),
-    );
-    expect(rows.map(e => e.id)).toEqual(['s1', 'chat-process:s1', 's2', 'chat-process:s2']);
-    expect(rows[1].text).toBe('2 阶段 · 1 工具');
-  });
-
-  it('展开的组把过程行按原时序铺回过程条之后', () => {
-    const rows = buildChatRows(
-      [tool('t1'), stage('t2'), speech('s1')],
-      new Set(['chat-process:s1']),
-    );
-    expect(rows.map(e => e.id)).toEqual(['s1', 'chat-process:s1', 't1', 't2']);
-  });
-
-  it('无发言的过程行自成静默组，绝不丢行', () => {
-    const rows = buildChatRows([danmaku('d1'), tool('t1'), stage('t2')], new Set());
-    expect(rows.map(e => e.id)).toEqual(['d1', 'chat-process:silent-1']);
-    expect(rows[1]).toMatchObject({ kind: 'process_group', text: '1 工具 · 1 阶段', note: '2' });
-  });
-
-  it('发言之后无发言衔接的尾部过程行自成静默组（组 id 不挂发言）', () => {
-    const rows = buildChatRows([speech('abc'), tool('t1')], new Set(['chat-process:abc']));
-    expect(rows.map(e => e.id)).toEqual(['abc', 'chat-process:silent-1']);
-    expect(rows[1]).toMatchObject({ kind: 'process_group', text: '1 工具', note: '1' });
-  });
-});
-
-describe('isChatProcessKind / chatProcessSummary', () => {
-  it('过程类型折叠、观众与发言不折叠', () => {
-    expect(isChatProcessKind('tool')).toBe(true);
-    expect(isChatProcessKind('thinking')).toBe(true);
-    expect(isChatProcessKind('danmaku')).toBe(false);
-    expect(isChatProcessKind('speech')).toBe(false);
-    expect(isChatProcessKind('super_chat')).toBe(false);
-  });
-
-  it('空过程列表摘要为空串', () => {
-    expect(chatProcessSummary([])).toBe('');
-  });
-});
-
 describe('isRoundLinkable', () => {
   /** 构造最小可用的行（仅用到 kind 与 roundId） */
   function row(kind: ShowEntry['kind'], roundId = ''): ShowEntry {
@@ -765,7 +706,6 @@ describe('递话行（agent.prompted）', () => {
       evt('agent.prompted', { target: 'minecraft', content: '注意东侧', source: 'streamer' }),
     );
     expect(entry!.actor).toBe('streamer');
-    expect(isChatProcessKind('prompt')).toBe(true);
   });
 });
 
@@ -791,11 +731,10 @@ describe('响应卡（agent.replied）', () => {
     expect(agentGroupOf(entry!)).toBe('game');
   });
 
-  it('正文为空回退事件摘要；会话模式折叠为过程行', () => {
+  it('正文为空回退事件摘要', () => {
     const entry = toEntry(evt('agent.replied', { agent: 'minecraft', content: '' }));
     expect(entry!.kind).toBe('agent_reply');
     expect(entry!.text).not.toBe('');
-    expect(isChatProcessKind('agent_reply')).toBe(true);
   });
 });
 
@@ -855,10 +794,6 @@ describe('core.* 系统事件 → system 行', () => {
     expect(down).not.toBeNull();
     expect(down!.text).toBe('服务已停止');
     expect(down!.badge).toBe('关闭');
-  });
-
-  it('system 行不属于会话过程行（会话模式不被折叠）', () => {
-    expect(isChatProcessKind('system')).toBe(false);
   });
 });
 
@@ -948,10 +883,9 @@ describe('game.body.* → 身体事件轻量行', () => {
     expect(entry).toMatchObject({ kind: 'game_body', badge: '未知', text: '未知遭遇' });
   });
 
-  it('不进简洁档（过程性动态，观众视角折叠）', () => {
+  it('不进简洁档（过程性动态）', () => {
     const entry = toEntry(evt('game.body.attacked', { kind: 'attacked', summary: 'x' }));
     expect(entry && isConversationEntry(entry)).toBe(false);
-    expect(entry && isChatProcessKind(entry.kind)).toBe(true);
   });
 });
 
@@ -973,7 +907,6 @@ describe('game.chat.received → 游戏内聊天行', () => {
       badge: '私聊',
     });
     expect(entry && agentGroupOf(entry)).toBe('game');
-    expect(entry && isChatProcessKind(entry.kind)).toBe(false);
   });
 
   it('系统消息：sender 为空回退"系统消息"，折叠数附注', () => {

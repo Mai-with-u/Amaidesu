@@ -22,19 +22,14 @@
         {{ simulatorChip.label }}
       </router-link>
       <!-- 累计观看人次：room.state 状态快照推送（值即当前状态，变化即重发）；仅完整档 -->
-      <span v-if="isFullMode && watchedLabel" class="watched-chip" title="本场累计观看人次">
+      <span v-if="watchedLabel" class="watched-chip" title="本场累计观看人次">
         累计观看 {{ watchedLabel }}
       </span>
       <span class="grow" />
-      <!-- 视图档位：完整=运营全量；简洁=纯浏览时间线（挂第二屏纯观看） -->
-      <el-radio-group v-model="viewMode" size="small" class="view-switch">
-        <el-radio-button value="full">完整</el-radio-button>
-        <el-radio-button value="simple">简洁</el-radio-button>
-      </el-radio-group>
     </header>
 
-    <!-- 状态条挂载区（完整档）：实时计分板 + TTS 台前水位 -->
-    <div v-if="isFullMode" class="console-strip">
+    <!-- 状态条：实时计分板 + TTS 台前水位 -->
+    <div class="console-strip">
       <ScoreboardStrip :active-session="activeSessionItem" />
       <TtsWaterLevel />
     </div>
@@ -45,10 +40,8 @@
         <header class="sessions-head">
           <h2 class="sessions-title">场次</h2>
           <span class="grow" />
-          <template v-if="isFullMode">
-            <el-button type="primary" @click="openStartStream">开播</el-button>
-            <el-button :disabled="!activeExplicitSession" @click="closeSession">下播</el-button>
-          </template>
+          <el-button type="primary" @click="openStartStream">开播</el-button>
+          <el-button :disabled="!activeExplicitSession" @click="closeSession">下播</el-button>
         </header>
         <div class="sessions-filters">
           <el-input v-model="sessionQuery" size="small" placeholder="搜索场次标题" clearable />
@@ -153,11 +146,7 @@
           <span v-else class="slate-idle">流程单未运行或未接入</span>
         </section>
 
-        <div
-          v-if="showTestModeNotice && isFullMode"
-          class="test-mode-notice"
-          title="正式直播请先在左侧开启场次"
-        >
+        <div v-if="showTestModeNotice" class="test-mode-notice" title="正式直播请先在左侧开启场次">
           测试模式：未开启场次，消息仅在内存中流转不落库
         </div>
 
@@ -170,57 +159,17 @@
             class="stage-bar"
             :class="{ 'is-paused': paused && sessionMode === 'live' && !replayActive }"
           >
-            <h2 class="stage-title">
-              {{
-                replayActive
-                  ? '回放调试'
-                  : sessionMode === 'live'
-                    ? '实时时间线'
-                    : `回看 · ${sessionTitle(selectedSession)}`
-              }}
-            </h2>
-            <span class="stage-hint">
-              {{
-                replayActive
-                  ? `回放 · ${sessionTitle(replaySession)}（实时新事件入缓冲不渲染）`
-                  : sessionMode === 'live'
-                    ? paused
-                      ? '已暂停 · 事件仍在后台累积'
-                      : '消息与决策按时间交织，最新在下方'
-                    : replayPruned
-                      ? '部分时段的事件诊断数据已清理，对应区间仅显示消息明细'
-                      : '历史回看（事件侧与实时同卡面：工具/决策/思考等）'
-              }}
-            </span>
+            <h2 class="stage-title">{{ stageTitle }}</h2>
+            <span class="stage-hint">{{ stageHint }}</span>
             <span class="grow" />
-            <!-- 来源过滤 chips：仅过滤 Agent 产生的卡（tool/speech/decision/verdict/stage/game），
-                观众消息与场次边界始终可见；实时与回看两模式通用 -->
-            <span class="agent-filter">
-              <el-check-tag
-                title="快捷键：1"
-                :checked="agentFilter === 'all'"
-                size="small"
-                @change="(checked: boolean) => handleAgentChip('all', checked)"
-              >
-                全部
-              </el-check-tag>
-              <el-check-tag
-                title="快捷键：2"
-                :checked="agentFilter === 'streamer'"
-                size="small"
-                @change="(checked: boolean) => handleAgentChip('streamer', checked)"
-              >
-                主播
-              </el-check-tag>
-              <el-check-tag
-                title="快捷键：3"
-                :checked="agentFilter === 'game'"
-                size="small"
-                @change="(checked: boolean) => handleAgentChip('game', checked)"
-              >
-                游戏 Agent
-              </el-check-tag>
-            </span>
+            <!-- 三档视图共用同一份条目流，只换组织方式与密度：
+                 观众视角=观众看到的单栏流；后台视角=两个 Agent 各自看到的双栏卡片；
+                 决策轨迹=一次请求一条记录的紧凑调试视图 -->
+            <el-radio-group v-model="stageView" size="small" class="stage-view-switch">
+              <el-radio-button value="audience">观众视角</el-radio-button>
+              <el-radio-button value="backstage">后台视角</el-radio-button>
+              <el-radio-button value="trajectory">决策轨迹</el-radio-button>
+            </el-radio-group>
             <!-- 回放调试入口：选历史场次 + 可选起始时刻，整条时间线切归档数据 -->
             <span v-if="!replayActive" class="replay-entry">
               <el-select
@@ -270,13 +219,10 @@
               @update:speed="replaySetSpeed"
               @exit="exitReplay"
             />
-            <template v-if="sessionMode === 'live' && isFullMode && !replayActive">
-              <!-- 显示模式：时间线=单列沿脊线；会话=观众左/主播右气泡对齐 -->
-              <el-radio-group v-model="displayMode" size="small">
-                <el-radio-button value="timeline">时间线</el-radio-button>
-                <el-radio-button value="chat">会话</el-radio-button>
-              </el-radio-group>
-              <span class="stage-count mono">{{ entries.length }} / {{ MAX_ENTRIES }}</span>
+            <template v-if="sessionMode === 'live' && !replayActive">
+              <span v-if="stageView === 'audience'" class="stage-count mono"
+                >{{ entries.length }} / {{ MAX_ENTRIES }}</span
+              >
               <el-button
                 :type="paused ? 'primary' : 'default'"
                 title="快捷键：空格"
@@ -295,8 +241,8 @@
               </el-button>
               <el-button :disabled="entries.length === 0" @click="clearTimeline"> 清空 </el-button>
             </template>
-            <!-- 回到实时只跟场次模式挂钩（回看态导航）；不能 v-else 接前一 template——
-                 那里复合了 isFullMode，简洁档实时态会误显本按钮 -->
+            <!-- 回到实时只跟场次模式挂钩（回看态导航）；不能 v-else 接前一 template，
+                 那个模板块还带着实时态条件 -->
             <el-button
               v-if="sessionMode !== 'live' && !replayActive"
               type="primary"
@@ -307,7 +253,12 @@
           </header>
 
           <div class="stage-body">
-            <div ref="scrollRef" class="stage-scroll" @scroll.passive="onScroll">
+            <div
+              ref="scrollRef"
+              class="stage-scroll"
+              :class="{ 'is-lanes': stageView === 'backstage' }"
+              @scroll.passive="onScroll"
+            >
               <!-- 回看向前翻页：置顶"加载更早"，与滚动容器同流（滚回顶部即见） -->
               <div
                 v-if="sessionMode === 'replay' && replayHasMore && !replayActive"
@@ -323,15 +274,34 @@
                 </el-button>
               </div>
               <FeedTimeline
-                :entries="displayEntries"
-                :layout="displayMode"
-                round-clickable
-                :simple="!isFullMode"
+                v-if="stageView === 'audience'"
+                :entries="audienceEntries"
+                :empty-text="audienceEmptyText"
+                :round-clickable="true"
+                :simple="true"
+                @round-click="onTimelineRoundClick"
+              />
+              <LiveLanes
+                v-else-if="stageView === 'backstage'"
+                :entries="allEntries"
+                :tasks="taskWindows"
                 :empty-text="timelineEmptyText"
-                :anchor-entry-id="anchoredId"
-                @round-click="jumpToAgentRound"
+              />
+              <RequestTimeline
+                v-else
+                :records="requestRecords"
+                :empty-text="timelineEmptyText"
+                :selected-id="selectedMessage?.id"
+                @select="openMessage"
               />
             </div>
+
+            <RequestDetail
+              v-if="stageView === 'trajectory' && selectedRecord && selectedMessage"
+              :record="selectedRecord"
+              :message="selectedMessage"
+              @close="closeMessage"
+            />
 
             <button
               v-if="unseen > 0 && sessionMode === 'live'"
@@ -346,9 +316,7 @@
           <!-- minecraft 目标的进行中任务卡条：发话→看任务→取消就地闭环。
                Agent 无任务记录、无进行中任务时整条隐藏，不占控制台空间 -->
           <div
-            v-if="
-              isFullMode && interventionTarget === MINECRAFT_AGENT_NAME && runningTasks.length > 0
-            "
+            v-if="interventionTarget === MINECRAFT_AGENT_NAME && runningTasks.length > 0"
             class="task-strip"
           >
             <ul class="task-strip-list">
@@ -375,16 +343,13 @@
 
           <!-- 游戏 Agent 备忘录/待办面板：minecraft 的待办 / 工作笔记 / 近期上报（纯观测只读）。
              只在实际时档 + 完整档显示（回看无快照语义、简洁档藏运营面） -->
-          <AgentMemoPanel
-            v-if="sessionMode === 'live' && isFullMode && !replayActive"
-            class="memo-panel-dock"
-          />
+          <AgentMemoPanel v-if="sessionMode === 'live' && !replayActive" class="memo-panel-dock" />
 
           <!-- 干预输入区：页级目标选择（主播 / minecraft；adv 不支持收话不出现）+
                共享输入条（Tab/Shift+Tab 切模式、Enter 发送、↑↓ 回溯历史）。
                模式与传输随目标切换，主播目标复用既有行为（昵称插槽、在途 chip）；
                强制回应为后台执行：发送后立即可继续输入，在途状态由状态 chip 承载 -->
-          <div v-if="sessionMode === 'live' && isFullMode && !replayActive" class="input-dock">
+          <div v-if="sessionMode === 'live' && !replayActive" class="input-dock">
             <div class="input-target">
               <span class="input-target-label">发给</span>
               <el-radio-group v-model="interventionTarget" size="small">
@@ -426,9 +391,6 @@
     <el-dialog v-model="showShortcuts" title="键盘快捷键" width="420px">
       <ul class="shortcut-list">
         <li><kbd>Space</kbd><span>暂停 / 继续时间线</span></li>
-        <li>
-          <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd><span>来源过滤：全部 / 主播 / 游戏 Agent</span>
-        </li>
         <li><kbd>F</kbd><span>回到实时（回看模式下）</span></li>
         <li><kbd>?</kbd><span>打开本帮助</span></li>
         <li>
@@ -454,9 +416,10 @@
  * 三区布局：
  * - 左侧场次侧边栏：当前进行中场次 + 历史场次（点击回看该场完整时间线），
  *   顶部提供开启/结束/删除开关（场次生命周期归 LiveSessionManager）
- * - 中部时间线：观众消息、主播发言、决策记录（planner.decision）、阶段状态
- *   （streamer.stage）、场次边界、节目单推进、里程碑；显示模式二选一——
- *   时间线（单列居左、靠样式区分）/ 会话（观众左、主播右气泡对齐）
+ * - 中部三档视图，同一份条目流的三种投影：观众视角（观众在直播间里看到的
+ *   单栏流）/ 后台视角（左列主播 Agent 看到的、右列游戏 Agent 看到的，两列
+ *   都是卡片，按流程单环节分节、可整节折叠）/ 决策轨迹（一次请求一条记录，
+ *   行内点开右侧详情）。三档只换组织方式与密度，不丢数据
  * - 顶栏：连接状态、决策管线阶段徽章、模拟器模式徽章
  *
  * 干预输入区（时间线底部）：页级目标选择（主播 / minecraft）+ 共享输入条。
@@ -466,8 +429,8 @@
  * 决策参考块，并顺带敲门催醒主播提前决策）；minecraft 目标递话/委派走 agents 域
  * 接口。目标→模式→传输的单一事实源在 useAgentIntervention。
  *
- * 时间线行点击深链：带轮次 ID 的决策/裁决/工具/发言行可点，跳 Agent 页对应
- * 决策轮（/agents?agent=&round=，契约见 useAgentDeepLink）。
+ * 决策轨迹的块头点击深链：跳 Agent 页对应决策轮（/agents?agent=&round=，
+ * 契约见 useAgentDeepLink）。
  *
  * 数据来源：
  * - 实时：events store（全局 WS + 游标回填，刷新/断线不丢时间线）+ 思考流旁路
@@ -478,12 +441,12 @@
  *   "思考"按 llm_request_id 从 LLM 请求历史懒取 reasoning_content
  * 渲染字段一律取自后端真实 Payload（src/modules/events/payloads/），不臆造字段。
  *
- * 视图档位（顶栏切换，useConsoleViewMode 持久化）：完整=运营全量；简洁=
- * 观众视角的纯浏览——藏起干预输入条/任务条/场次生命周期开关/暂停清空等
- * 操作件，时间线内容也过滤成对话流（发言/弹幕/礼物/场次边界，
- * 口径见 liveFeed.isConversationEntry），工具/决策/阶段等管线诊断卡整卡
- * 不出现、发言卡上的 LLM 统计胶囊一并隐藏（FeedTimeline simple 档）。
- * 实时与回看两种场次模式都适用。
+ * 三档视图（顶栏切换）是同一批条目的三种投影：观众视角=这场直播观众看到的内容
+ * （发言、弹幕、礼物、场次边界、公开游戏聊天；口径见 liveFeed.AUDIENCE_KINDS，
+ * 卡上的 LLM 统计胶囊由 FeedTimeline simple 档隐藏）；后台视角=两个 Agent 各自
+ * 看到的世界（双栏、各自滚动、点卡片让对侧跳到同一刻）；决策轨迹=一次 LLM 请求
+ * 一条记录，右侧详情栏看单行完整内容。运营操作件（开播/下播、干预输入条、
+ * 任务条、暂停清空）常驻，不再有独立的「完整/简洁」档位开关。
  *
  * 页面私有逻辑按块拆在 composables/live/：场次侧边栏（useLiveSessions）、
  * 思考流（useThinkingStream）、时间线内容合成（useLiveTimeline）、顶栏/环节
@@ -513,16 +476,22 @@ import { agentRoundLocation } from '@/composables/useAgentDeepLink';
 import { taskStatusText, useAgentTasks } from '@/composables/useAgentTasks';
 import { useTimelineScroll } from '@/composables/live/useTimelineScroll';
 import { useTimelineAnchor } from '@/composables/live/useTimelineAnchor';
-import { useConsoleViewMode } from '@/composables/live/useConsoleViewMode';
 import { useTimelineReplay } from '@/composables/live/useTimelineReplay';
 import ReplayControlBar from '@/components/live/ReplayControlBar.vue';
 import { confirmAction } from '@/utils/confirmAction';
 import { ElMessage } from 'element-plus';
 import { formatNumber } from '@/utils/format';
 import { waitFor } from '@/utils/waitFor';
-import { MAX_ENTRIES, isConversationEntry, relativeTime, type ShowEntry } from '@/utils/liveFeed';
+import { MAX_ENTRIES, relativeTime, type ShowEntry } from '@/utils/liveFeed';
 import type { LiveSessionItem } from '@/types';
-import FeedTimeline from '@/components/live/FeedTimeline.vue';
+import LiveLanes from '@/components/live/LiveLanes.vue';
+import RequestDetail from '@/components/live/RequestDetail.vue';
+import RequestTimeline from '@/components/live/RequestTimeline.vue';
+import { buildRequestRecords } from '@/utils/requestRecords';
+import { buildTaskWindows, taskFactOf } from '@/utils/liveLanes';
+import { isAudienceEntry } from '@/utils/liveFeed';
+import type { RequestMessage, RequestRecord } from '@/utils/requestRecords';
+import type { TaskFact, TaskWindow } from '@/utils/liveLanes';
 import AgentMemoPanel from '@/components/live/AgentMemoPanel.vue';
 import ScoreboardStrip from '@/components/live/ScoreboardStrip.vue';
 import TtsWaterLevel from '@/components/live/TtsWaterLevel.vue';
@@ -578,21 +547,110 @@ const { liveThinkingRows, thinkingHiddenBeforeMs } = useThinkingStream();
 
 const {
   paused,
-  displayMode,
   agentFilter,
-  handleAgentChip,
   entries,
+  allEntries,
   togglePause,
   clearTimeline: clearTimelineEntries,
   replayHasMore,
   replayPruned,
   replayLoadingMore,
+  replayRawItems,
   loadOlderReplay,
 } = useLiveTimeline({
   liveThinkingRows,
   thinkingHiddenBeforeMs,
   sessionMode,
   selectedSession,
+});
+
+/**
+ * 时间线三档视图，是同一份条目流的三种投影：
+ * - 观众视角：只留观众看得见的内容（弹幕、礼物、她的发言、游戏侧公开进展），单栏
+ * - 后台视角：左列主播 Agent 看到的、右列游戏 Agent 看到的，两列都是卡片
+ * - 决策轨迹：一次请求一条记录，输入/思考/调用/结果/发言各一行，点行看详情
+ */
+const stageView = ref<'audience' | 'backstage' | 'trajectory'>('audience');
+
+/**
+ * 游戏侧任务区间：`task.changed` 的受理与终态各一条，配成"这次工具调用从几点到几点"。
+ * 实时读事件缓冲，回看读归档条目（两边都是同一形状的载荷）。
+ */
+const taskFacts = computed<TaskFact[]>(() => {
+  // 看历史场次时条目来自归档，事件缓冲里没有那场的数据——按会话模式取源，不按回放调试取源
+  if (sessionMode.value !== 'live') {
+    return replayRawItems.value
+      .filter(item => item.event_type === EVENT.taskChanged && item.data)
+      .map(item => taskFactOf(item.data as Record<string, unknown>, item.ts_ms));
+  }
+  return eventsStore.events
+    .filter(event => event.type === EVENT.taskChanged)
+    .map(event => taskFactOf(event.data, event.timestamp_ms));
+});
+
+const taskWindows = computed<TaskWindow[]>(() => buildTaskWindows(taskFacts.value));
+
+/** 决策轨迹的记录：从同一份条目流折算，卡片视角将来复用同一份结构 */
+const requestRecords = computed(() => buildRequestRecords(allEntries.value));
+
+/**
+ * 轨迹行的详情面板。点同一行是开关，点另一行直接换内容——
+ * 面板在列表右侧而不是行下，切换查看时列表位置不动。
+ */
+const selectedMessage = ref<RequestMessage | null>(null);
+const selectedRecord = ref<RequestRecord | null>(null);
+
+function openMessage(record: RequestRecord, message: RequestMessage): void {
+  if (selectedMessage.value?.id === message.id) {
+    closeMessage();
+    return;
+  }
+  selectedRecord.value = record;
+  selectedMessage.value = message;
+}
+
+function closeMessage(): void {
+  selectedMessage.value = null;
+  selectedRecord.value = null;
+}
+
+/** 观众视角：只留观众看得见的内容（弹幕/礼物/她的发言/游戏公开进展/环节切换） */
+const audienceEntries = computed(() => displayEntries.value.filter(isAudienceEntry));
+
+const audienceEmptyText = computed<string>(() =>
+  sessionMode.value === 'replay'
+    ? '该场次没有观众可见的内容'
+    : '还没有观众可见的消息——弹幕、礼物与她的发言会出现在这里',
+);
+
+/** 区头标题：三档共用同一个滚动容器，标题按档位换名，避免"时间线"三字盖住整块内容 */
+const stageTitle = computed<string>(() => {
+  if (replayActive.value) return '回放调试';
+  if (sessionMode.value === 'live') {
+    if (stageView.value === 'trajectory') return '决策轨迹';
+    if (stageView.value === 'backstage') return '后台视角';
+    return '观众视角';
+  }
+  return `回看 · ${sessionTitle(selectedSession.value)}`;
+});
+
+/** 区头提示：每档说清自己在讲什么；暂停与数据清理的提示照旧 */
+const stageHint = computed<string>(() => {
+  if (replayActive.value) {
+    return `回放 · ${sessionTitle(replaySession.value)}（实时新事件入缓冲不渲染）`;
+  }
+  if (stageView.value === 'trajectory')
+    return '一次请求一条记录：输入、思考、调用、结果、发言各占一行；点任意一行看详情';
+  if (stageView.value === 'backstage')
+    return '左列主播 Agent 看到的、右列游戏 Agent 看到的，两列各自滚动；点卡片让对侧跳到同一刻';
+  if (sessionMode.value === 'live') {
+    return paused.value
+      ? '已暂停 · 事件仍在后台累积'
+      : '观众在直播间里看到的：弹幕、礼物、她的发言';
+  }
+  return replayPruned.value
+    ? '部分时段的事件诊断数据已清理，对应区间仅显示消息明细'
+    : '该场次观众看到的内容：弹幕、礼物、她的发言、游戏侧公开进展';
 });
 
 const { rundownBanner, stageChip, simulatorChip, loadSimulatorStatus } = useLiveStatus();
@@ -665,26 +723,16 @@ async function exitReplay(): Promise<void> {
   }
 }
 
-// 视图档位：完整=上图全量运营面；简洁=观众视角的纯浏览——除藏运营操作件外，
-// 时间线内容本身也过滤成对话流（发言/弹幕/礼物/场次边界），
-// 工具/决策/阶段等管线诊断卡整卡不出现
-const { viewMode, isFullMode } = useConsoleViewMode();
-
-/** 喂给时间线的展示条目：回放调试=归档前缀（组合式内已过 agentFilter，再过
- *  档位口径）；其余模式=实时/回看缓冲（完整档原样；简洁档按对话口径过滤，
- *  口径在 liveFeed.isConversationEntry） */
-const displayEntries = computed<ShowEntry[]>(() => {
-  if (replayActive.value) {
-    const prefix = replayVisibleEntries.value;
-    return isFullMode.value ? prefix : prefix.filter(isConversationEntry);
-  }
-  return isFullMode.value ? entries.value : entries.value.filter(isConversationEntry);
-});
+/** 喂给时间线的展示条目：回放调试=归档前缀，其余模式=实时/回看缓冲；
+ *  内容投影由上方三档视图各自决定（观众口径在 liveFeed.AUDIENCE_KINDS） */
+const displayEntries = computed<ShowEntry[]>(() =>
+  replayActive.value ? replayVisibleEntries.value : entries.value,
+);
 
 const timelineEmptyText = computed(() => {
   if (replayActive.value) return '该场次归档暂无条目';
   if (sessionMode.value === 'live') return '静候消息与决策——注入一条弹幕试试';
-  return isFullMode.value ? '该场次暂无可回看条目' : '简洁档只显示发言与弹幕——该场次暂无对话内容';
+  return '该场次暂无可回看条目';
 });
 
 const { scrollRef, unseen, onScroll, jumpToLatest, resetUnseen } =
@@ -692,7 +740,7 @@ const { scrollRef, unseen, onScroll, jumpToLatest, resetUnseen } =
 
 // 回看时刻锚定：复盘页指标卡深链（/live?session=&at=<ms>）跳入时自动向前
 // 翻页到目标时刻，滚动定位并短暂高亮（翻页上限与降级提示在组合式内）
-const { anchoredId, anchorAt } = useTimelineAnchor({
+const { anchorAt } = useTimelineAnchor({
   entries: displayEntries,
   hasMore: replayHasMore,
   loadingMore: replayLoadingMore,
@@ -743,10 +791,15 @@ watch(interventionTarget, target => {
 // 取消前的确认微流程与 Agent 任务板同源（useAgentTasks 收口）
 const { runningTasks, cancelTaskWithConfirm: cancelTask } = useAgentTasks(interventionTarget);
 
-/** 时间线行点击 → Agent 页对应决策轮（可点行已由 FeedTimeline 按轮次 ID 过滤） */
-function jumpToAgentRound(entry: ShowEntry): void {
-  if (!entry.roundId) return;
-  void router.push(agentRoundLocation(STREAMER_AGENT_NAME, entry.roundId));
+/** 卡片流行点击：带轮次 ID 的行跳 Agent 页对应决策轮 */
+function onTimelineRoundClick(entry: ShowEntry): void {
+  jumpToRoundId(entry.roundId);
+}
+
+/** 轨迹块头点入 Agent 页的对应决策轮 */
+function jumpToRoundId(roundId: string): void {
+  if (!roundId) return;
+  void router.push(agentRoundLocation(STREAMER_AGENT_NAME, roundId));
 }
 
 /** 清空时间线：条目与思考行水位归时间线块，未读计数归滚动块 */
@@ -766,7 +819,7 @@ async function clearTimeline(): Promise<void> {
 
 const nowTick = useNowTick();
 
-// 键盘快捷键：直播中双手常不在鼠标上，最小集覆盖暂停/过滤/回实时。
+// 键盘快捷键：直播中双手常不在鼠标上，最小集覆盖暂停与回实时。
 // keep-alive 页面用激活态挂摘，避免别的页面误触控制台快捷键。
 const showShortcuts = ref(false);
 
@@ -809,18 +862,6 @@ function onConsoleKeydown(e: KeyboardEvent): void {
     case ' ':
       e.preventDefault();
       togglePause();
-      break;
-    case '1':
-      e.preventDefault();
-      handleAgentChip('all', true);
-      break;
-    case '2':
-      e.preventDefault();
-      handleAgentChip('streamer', true);
-      break;
-    case '3':
-      e.preventDefault();
-      handleAgentChip('game', true);
       break;
   }
 }
@@ -1048,10 +1089,6 @@ onMounted(() => {
 }
 
 /* --- 视图档位切换 --- */
-.view-switch {
-  flex-shrink: 0;
-  align-self: center;
-}
 
 /* 双栏：场次侧边栏 + 主区                                        */
 .console-body {
@@ -1587,6 +1624,8 @@ onMounted(() => {
 .stage-body {
   position: relative;
   flex: 1;
+  display: flex;
+  min-width: 0;
   /* 时间线是本列主内容：备忘录面板与输入区把固定高度吃满后仍保底可读高度，
      不足的差额由可让位的备忘录面板（.memo-panel-dock）承担 */
   min-height: 120px;
@@ -1601,7 +1640,17 @@ onMounted(() => {
   background: linear-gradient(to bottom, var(--bg-card), transparent);
 }
 
+/* 后台视角：两列各自滚动，外层不再承担滚动，让出全部高度给双轨 */
+.stage-scroll.is-lanes {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
 .stage-scroll {
+  flex: 1;
+  min-width: 0;
   height: 100%;
   overflow-y: auto;
   padding: var(--spacing-md) var(--spacing-md) var(--spacing-lg);

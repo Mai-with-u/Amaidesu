@@ -18,7 +18,6 @@ import ChatBubbleCard from './ChatBubbleCard.vue';
 import DecisionCard from './DecisionCard.vue';
 import GameCard from './GameCard.vue';
 import MilestoneCard from './MilestoneCard.vue';
-import ProcessStripCard from './ProcessStripCard.vue';
 import PromptCard from './PromptCard.vue';
 import SpeechCard from './SpeechCard.vue';
 import ThinkingCard from './ThinkingCard.vue';
@@ -43,7 +42,6 @@ export const CARD_REGISTRY: Record<ShowEntry['kind'], Component> = {
   rundown: BeatCard,
   boundary: BeatCard,
   // 会话模式过程折叠条（合成条目）
-  process_group: ProcessStripCard,
   // 里程碑庆祝行
   milestone: MilestoneCard,
   // 安静单行族：阶段状态 / 进场 / 游戏身体事件 / TTS 失败 / 系统事件 / 工具健康

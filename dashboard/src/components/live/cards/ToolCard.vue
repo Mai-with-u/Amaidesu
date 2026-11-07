@@ -5,7 +5,9 @@
 import { ref } from 'vue';
 import { CopyDocument } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
-import { agentGroupOf, relativeTime } from '@/utils/liveFeed';
+import 'vue-json-pretty/lib/styles.css';
+import { formatTimeHMS } from '@/utils/format';
+import { agentGroupOf } from '@/utils/liveFeed';
 import { useTimelineCardHost } from './context';
 import type { CardProps } from './registry';
 
@@ -120,7 +122,7 @@ async function copyText(text: string): Promise<void> {
       >
         这轮决策 ↗
       </a>
-      <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+      <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
     </div>
     <!-- 参数药丸：入参轮廓一眼可扫；入参为空/非对象时回退纯文本正文 -->
     <div v-if="entry.argPills.length > 0" class="act-args">

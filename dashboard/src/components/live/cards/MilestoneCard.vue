@@ -1,6 +1,6 @@
 <!-- 里程碑：庆祝行（game.milestone） -->
 <script setup lang="ts">
-import { relativeTime } from '@/utils/liveFeed';
+import { formatTimeHMS } from '@/utils/format';
 import type { CardProps } from './registry';
 
 defineProps<CardProps>();
@@ -12,7 +12,7 @@ defineProps<CardProps>();
       <p class="milestone-text">{{ entry.text }}</p>
       <p v-if="entry.note" class="milestone-meta mono">{{ entry.note }}</p>
     </div>
-    <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+    <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
   </div>
 </template>
 

@@ -1,6 +1,6 @@
 <!-- 环节推进 / 场次边界：横贯分隔行（rundown / boundary 两类共用） -->
 <script setup lang="ts">
-import { relativeTime } from '@/utils/liveFeed';
+import { formatTimeHMS } from '@/utils/format';
 import type { CardProps } from './registry';
 
 defineProps<CardProps>();
@@ -16,7 +16,7 @@ defineProps<CardProps>();
       <span v-if="entry.note" class="beat-note">{{ entry.note }}</span>
     </span>
     <span class="beat-rule" aria-hidden="true" />
-    <time class="stamp mono">{{ relativeTime(nowMs, entry.tsMs) }}</time>
+    <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
   </div>
 </template>
 

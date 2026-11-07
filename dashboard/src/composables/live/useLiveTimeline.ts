@@ -23,7 +23,7 @@ import {
   type FeedEvent,
   type ShowEntry,
 } from '@/utils/liveFeed';
-import type { LiveSessionItem } from '@/types';
+import type { LiveSessionItem, SessionTimelineItem } from '@/types';
 
 export interface UseLiveTimelineOptions {
   /** 实时思考行（useThinkingStream.liveThinkingRows） */
@@ -51,7 +51,6 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
 
   /** 时间线显示模式：timeline=单列沿脊线；chat=会话模式（观众左/主播右气泡对齐，
    * 原独立会话调试页的显示形态） */
-  const displayMode = ref<'timeline' | 'chat'>('timeline');
 
   /** 来源过滤：实时模式下按 Agent 组别过滤展示条目（观众消息与场次边界不过滤——观众始终可见）；
    *  回看模式不生效（场次条目全量呈现） */
@@ -94,6 +93,8 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
   // 事件侧由后端从诊断文件 ∪ 环形缓冲收集，游标向前翻页加载更早条目
 
   const replayEntries = ref<ShowEntry[]>([]);
+  /** 回看原始明细（未映射）：原始事件流视图按原样呈现，不走卡片投影 */
+  const replayRawItems = ref<SessionTimelineItem[]>([]);
   const replayLoading = ref(false);
   /** 是否还有更早条目（后端 has_more，"加载更早"按钮的显示依据） */
   const replayHasMore = ref(false);
@@ -106,6 +107,7 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
     try {
       const response = await liveSessionsApi.timeline(item.live_session_id);
       replayEntries.value = buildReplayEntries(response.data.items);
+      replayRawItems.value = response.data.items;
       replayHasMore.value = response.data.has_more;
       replayPruned.value = response.data.events_pruned;
     } catch (error) {
@@ -138,6 +140,7 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
       });
       const older = buildReplayEntries(response.data.items);
       replayEntries.value = [...older, ...replayEntries.value];
+      replayRawItems.value = [...response.data.items, ...replayRawItems.value];
       replayHasMore.value = response.data.has_more;
       replayPruned.value = replayPruned.value || response.data.events_pruned;
     } catch (error) {
@@ -181,6 +184,13 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
     return filtered.slice(-MAX_ENTRIES);
   });
 
+  /** 未过滤条目：决策轨迹与原始事件流按全量口径呈现，来源过滤只作用于直播流 */
+  const allEntries = computed<ShowEntry[]>(() => {
+    if (sessionMode.value === 'replay') return replayEntries.value;
+    const thinkingRows = paused.value ? (frozenThinkingRows.value ?? []) : liveThinkingRows.value;
+    return mergeEntriesByTime(liveEntries.value, thinkingRows).slice(-MAX_ENTRIES);
+  });
+
   function togglePause(): void {
     const next = !paused.value;
     // 暂停沿锁存当前思考行，恢复沿放回实时流（事件条目的冻结由 watch 跳过重建实现）
@@ -205,10 +215,11 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
 
   return {
     paused,
-    displayMode,
     agentFilter,
     handleAgentChip,
     entries,
+    allEntries,
+    replayRawItems,
     togglePause,
     clearTimeline,
     replayHasMore,
