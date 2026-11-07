@@ -92,7 +92,7 @@ if TYPE_CHECKING:
     from src.modules.storage.repos.memory_cue_log import MemoryCueLogRepo
     from src.modules.storage.repos.sessions import SessionRepo
 
-__all__ = ["MAX_ATTEMPTS", "SessionSettler", "SettleError", "parse_json_object"]
+__all__ = ["MAX_ATTEMPTS", "SessionSettler", "SettleError", "parse_commitment_output", "parse_json_object"]
 
 logger = get_logger("SessionSettler")
 
@@ -210,6 +210,35 @@ def parse_json_object(text: str) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise SettleError("模型输出的不是 JSON 对象")
     return data
+
+
+# 承诺那次输出里排在最后的玩家自述字段：输出被截断时多半断在这一段
+_PLAYER_CANDIDATES_KEY = '"player_candidates"'
+
+
+def parse_commitment_output(text: str) -> Tuple[Dict[str, Any], bool]:
+    """承诺那次的输出：整段读不懂、而去掉最后的 ``player_candidates`` 后读得懂时，只丢自述、用前面的。
+
+    玩家自述排在输出最后，输出到长度上限被截断时多半断在这一段；它是附带的，不该让承诺与"她说欠着"
+    跟着整场重来、下次再白调一遍模型。断在自述之前的照旧算整场输出读不懂。
+    返回（解析出的对象, 自述是否因截断被丢掉）。
+    """
+    try:
+        return parse_json_object(text), False
+    except SettleError as exc:
+        cleaned = (text or "").strip()
+        start = cleaned.find("{")
+        cut = cleaned.find(_PLAYER_CANDIDATES_KEY)
+        if start < 0 or cut <= start:
+            raise
+        head = cleaned[start:cut].rstrip().rstrip(",")
+        try:
+            data = json.loads(f"{head}}}")
+        except json.JSONDecodeError:
+            raise exc from None
+        if not isinstance(data, dict):
+            raise exc from None
+        return data, True
 
 
 def close_user_prompt(material: SettleMaterial) -> str:
@@ -1005,8 +1034,9 @@ class SessionSettler:
             )
         except ValueError as exc:
             raise SettleError(str(exc)) from exc
-        # 找承诺那次顺带列出"她说欠着、账上找不到的"：同一份原料，不多一次调用
-        commitment_data = await self._ask(
+        # 找承诺那次顺带列出"她说欠着、账上找不到的"与玩家自述：同一份原料，不多一次调用。
+        # 输出断在最后的自述那段时只丢自述，承诺与"说欠着"照常用
+        commitment_text = await self._ask_text(
             template=_COMMITMENT_TEMPLATE,
             prompt=(
                 f"【她能做的事】\n{material.abilities_text}\n\n"
@@ -1019,6 +1049,9 @@ class SessionSettler:
                 + "请找出这一场她新答应的、还没兑现的事。"
             ),
         )
+        commitment_data, candidates_cut = parse_commitment_output(commitment_text)
+        if candidates_cut:
+            logger.warning(f"场次 {material.live_session_id}：找承诺那次的输出断在玩家自述那段，本场不出自述候选")
         commitment_rows = _list_field(commitment_data, "commitments")
         closure_rows: List[Any] = []
         if material.open_commitments:
@@ -1083,13 +1116,17 @@ class SessionSettler:
             decided, rejected_chats = await self._players.player_candidate_keys()
         except Exception as exc:  # noqa: BLE001 - 去重依据读不到不挡整理
             logger.warning(f"读审过的玩家自述失败，本次不按审过的记录去重: {exc}", exc=exc)
-        return validate_player_candidates(
-            rows,
-            players=material.players,
-            line_of=lambda raw: self._line_of(raw, material),
-            decided_titles=decided,
-            rejected_player_chats=rejected_chats,
-        )
+        try:
+            return validate_player_candidates(
+                rows,
+                players=material.players,
+                line_of=lambda raw: self._line_of(raw, material),
+                decided_titles=decided,
+                rejected_player_chats=rejected_chats,
+            )
+        except Exception as exc:  # noqa: BLE001 - 自述是附带的，核对出错只丢自述，整理照常写入
+            logger.warning(f"场次 {material.live_session_id} 核对玩家自述出错，本场不出自述候选: {exc}", exc=exc)
+            return PlayerCandidateCheck()
 
     async def _check_claimed(
         self,
@@ -1166,6 +1203,10 @@ class SessionSettler:
 
     async def _ask(self, *, template: str, prompt: str) -> Dict[str, Any]:
         """渲染系统提示词并调一次模型，返回解析出的 JSON 对象。"""
+        return parse_json_object(await self._ask_text(template=template, prompt=prompt))
+
+    async def _ask_text(self, *, template: str, prompt: str) -> str:
+        """渲染系统提示词并调一次模型，返回原文；调用失败或返回空内容时抛 SettleError。"""
         system = self._prompt_manager.render(template)
         try:
             response = await self._llm.generate(prompt, profile=SETTLE_PROFILE, system=system)
@@ -1174,7 +1215,7 @@ class SessionSettler:
         content = getattr(response, "content", None)
         if not getattr(response, "ok", False) or not content:
             raise SettleError("模型调用失败或返回空内容")
-        return parse_json_object(str(content))
+        return str(content)
 
     # ------------------------------------------------------------------
     # 校验（全部是代码）

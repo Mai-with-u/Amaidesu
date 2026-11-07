@@ -41,7 +41,9 @@ async def store(tmp_path: Path) -> AsyncIterator[SQLiteDatabase]:
         await db.close()
 
 
-def _settler(store: SQLiteDatabase, llm: Any, prompt_manager: PromptManager) -> SessionSettler:
+def _settler(
+    store: SQLiteDatabase, llm: Any, prompt_manager: PromptManager, *, game_player_repo: Any = None
+) -> SessionSettler:
     return SessionSettler(
         sessions_repo=store.sessions,
         chat_repo=store.chat,
@@ -52,7 +54,7 @@ def _settler(store: SQLiteDatabase, llm: Any, prompt_manager: PromptManager) -> 
         prompt_manager=prompt_manager,
         game_names_provider=lambda: ["minecraft"],
         clock=lambda: 7_777,
-        game_player_repo=store.game_players,
+        game_player_repo=game_player_repo or store.game_players,
     )
 
 
@@ -237,6 +239,80 @@ async def test_decided_statements_are_not_listed_again_and_pending_ones_expire(
     assert await store.game_players.expire_player_candidates(now_ms_value=1_000 + 14 * _DAY_MS) == 0
     assert await store.game_players.expire_player_candidates(now_ms_value=1_001 + 14 * _DAY_MS) == 1
     assert [row["status"] for row in await _candidates(store)] == ["approved", "rejected"]
+
+
+class _BrokenDecidedKeys:
+    """审过的自述记录里读出坏行（标题清单是空值）：核对自述算到它就出错；其余照用真的玩家台账。"""
+
+    def __init__(self, repo: Any, player_id: int) -> None:
+        self._repo = repo
+        self._player_id = player_id
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._repo, name)
+
+    async def player_candidate_keys(self) -> Any:
+        return {self._player_id: None}, []
+
+
+async def _settled_cleanly(store: SQLiteDatabase, session_id: int) -> None:
+    """整理照常写完：完成时刻写上、不记失败。"""
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settled_at_ms == 7_777 and row.settle_attempts == 0
+
+
+_PROMISE = {
+    "line": 1,
+    "chat": None,
+    "quote": "改天去看看",
+    "what": "改天去看风车房",
+    "to": "everyone",
+    "player": None,
+    "game": None,
+    "same_as": None,
+}
+
+
+async def test_self_statement_check_failure_drops_only_self_statements(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """核对玩家自述时出错：只丢自述，承诺照常登记、整理照常写完，不让整场记失败、下次再白调一遍模型。"""
+    ids = await _scene(store)
+    reply = json.dumps(
+        {"commitments": [_PROMISE], "claimed_missing": [], "player_candidates": _rows()}, ensure_ascii=False
+    )
+    broken = _BrokenDecidedKeys(store.game_players, ids["jia"])
+    settler = _settler(store, _reply('{"archive": []}', reply), prompt_manager, game_player_repo=broken)
+
+    assert await settler.settle_session(ids["session"]) is True
+
+    await _settled_cleanly(store, ids["session"])
+    assert await _candidates(store) == []
+    assert [item.what for item in await store.commitments.list_commitments(statuses=["open"])] == ["改天去看风车房"]
+
+
+async def test_output_cut_off_in_self_statements_keeps_the_rest(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """找承诺那次的输出到长度上限、断在最后的自述那段：只丢自述，前面的承诺照常登记、整理照常写完。
+    断在自述之前的仍算整场输出读不懂。"""
+    ids = await _scene(store)
+    full = json.dumps(
+        {"commitments": [_PROMISE], "claimed_missing": [], "player_candidates": _rows()}, ensure_ascii=False
+    )
+    cut = full[: full.index("河边盖了个风车房")]
+
+    assert await _settler(store, _reply('{"archive": []}', cut), prompt_manager).settle_session(ids["session"]) is True
+
+    await _settled_cleanly(store, ids["session"])
+    assert await _candidates(store) == []
+    assert [item.what for item in await store.commitments.list_commitments(statuses=["open"])] == ["改天去看风车房"]
+
+    early = full[: full.index("改天去看风车房")]
+    assert await store.sessions.requeue_settlement(live_session_id=ids["session"]) is True
+    assert (
+        await _settler(store, _reply('{"archive": []}', early), prompt_manager).settle_session(ids["session"]) is False
+    )
 
 
 def test_player_candidates_eval_dry_self_check_passes() -> None:
