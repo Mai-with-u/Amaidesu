@@ -7,6 +7,8 @@
 - GET    /memory/players/candidates              玩家自述列表（按状态筛）与待审数
 - POST   /memory/players/candidates/{id}/approve 批准（可改标题）：只进这位玩家的玩家卡
 - POST   /memory/players/candidates/{id}/reject  驳回：同一句他的话、同样的标题以后不再列
+- POST   /memory/players/candidates/{id}/revoke  撤销批准：撤下玩家卡、回到待审
+- DELETE /memory/players/candidates/{id}         删掉这一条（哪种状态都行）
 
 对号只由运营者确认，同名、名字像、同时出现都不自动关联；关联只用来连带删除（删观众、"忘了我"时
 一起删这位玩家）和给运营者看清楚，从不告诉她。删玩家时他的互动、公屏聊天、对他的承诺随之删除，
@@ -177,6 +179,26 @@ async def reject_player_candidate(candidate_id: int, players: PlayerRepoDep) -> 
     except MemoryReviewError as exc:
         _raise_review_error(exc)
     return PlayerMutationResponse(success=True, detail="已驳回，以后不再列这一条")
+
+
+@router.post("/candidates/{candidate_id}/revoke", response_model=PlayerCandidateItem)
+async def revoke_player_candidate(candidate_id: int, players: PlayerRepoDep) -> PlayerCandidateItem:
+    """撤销批准：批错了的自述撤下他的玩家卡、回到待审，可以改了标题再批或驳回。"""
+    try:
+        row = await players.revoke_player_candidate(candidate_id=int(candidate_id), at_ms=now_ms())
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return await _candidate_item(players, row)
+
+
+@router.delete("/candidates/{candidate_id}", response_model=PlayerMutationResponse)
+async def delete_player_candidate(candidate_id: int, players: PlayerRepoDep) -> PlayerMutationResponse:
+    """删掉这一条：批准过的随之撤下玩家卡；驳回过的删了以后同一句话可能再被列出。"""
+    try:
+        await players.delete_player_candidate(candidate_id=int(candidate_id), at_ms=now_ms())
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return PlayerMutationResponse(success=True, detail="已删掉这一条")
 
 
 @router.post("/{player_id}/links", response_model=PlayerMutationResponse)

@@ -319,3 +319,55 @@ async def test_approving_a_self_statement_checks_the_title(store: SQLiteDatabase
             )
         assert invalid.value.kind == "invalid"
     assert await store.game_players.count_pending_player_candidates() == 1
+
+
+async def test_a_wrongly_approved_self_statement_can_be_revoked_or_deleted(store: SQLiteDatabase) -> None:
+    """批错了：撤销批准撤下玩家卡、回到待审（期限从撤销时重算）；删掉这一条哪种状态都行；动作都记进改动记录，不带文本。"""
+    session = await _session(store)
+    repo = store.game_players
+    player = await repo.meet_player(
+        game="minecraft", uuid="uuid-jia", name="玩家甲", live_session_id=session, at_ms=1_010
+    )
+    chat = await repo.add_game_chat(
+        live_session_id=session,
+        game="minecraft",
+        direction=GAME_CHAT_PLAYER,
+        content="我是服主",
+        player_id=player.id,
+        at_ms=1_100,
+    )
+    with store.manager.transaction() as conn:
+        cur = conn.execute(
+            "INSERT INTO player_candidates(live_session_id, player_id, title, player_chat_id, player_quote,"
+            " reply_quote, created_at_ms) VALUES (?, ?, '他是服主', ?, '我是服主', '好的', 2000)",
+            (session, player.id, chat),
+        )
+        candidate_id = int(cur.lastrowid or 0)
+
+    with pytest.raises(MemoryReviewError) as not_approved:
+        await repo.revoke_player_candidate(candidate_id=candidate_id, at_ms=2_500)
+    assert not_approved.value.kind == "conflict"
+    await repo.decide_player_candidate(candidate_id=candidate_id, approve=True, at_ms=3_000)
+    assert [item.title for item in await repo.approved_statements(player_id=player.id)] == ["他是服主"]
+
+    revoked = await repo.revoke_player_candidate(candidate_id=candidate_id, at_ms=4_000)
+    assert (revoked.status, revoked.decided_at_ms, revoked.created_at_ms) == ("pending", None, 4_000)
+    assert await repo.approved_statements(player_id=player.id) == [], "撤下玩家卡"
+    assert await repo.expire_player_candidates(now_ms_value=2_001 + 14 * 24 * 60 * 60 * 1000) == 0, "期限从撤销时重算"
+
+    await repo.delete_player_candidate(candidate_id=candidate_id, at_ms=5_000)
+    assert await repo.list_player_candidates() == []
+    with pytest.raises(MemoryReviewError) as gone:
+        await repo.delete_player_candidate(candidate_id=candidate_id, at_ms=6_000)
+    assert gone.value.kind == "not_found"
+    with store.manager.transaction() as conn:
+        edits = [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT target, action, candidate_id, before_text, after_text FROM memory_edits ORDER BY id"
+            )
+        ]
+    assert edits == [
+        ("player_candidate", action, candidate_id, "", "")
+        for action in ("player_approve", "player_revoke", "player_delete")
+    ]

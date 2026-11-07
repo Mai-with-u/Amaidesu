@@ -8,6 +8,10 @@
 玩家自述（``player_candidates``）由下播整理在整理事务里写进待审区（:func:`replace_session_player_candidates`），
 本场待审的整份替换；已批、已驳回的不动，驳回的留作去重依据。待审的列出后 14 天没人审就删，和观众候选同一个期限。
 人在记忆页批准（可以先改标题）或驳回；批准过的只进这位玩家的玩家卡（他在游戏里找她时推），不进常驻简报。
+批错了可以撤销批准（回到待审，期限从撤销时重算），哪种状态的都可以整条删掉。批准、驳回、撤销、删除
+各在同一事务里记一行 ``memory_edits``（``target = player_candidate``，动作带 ``player_`` 前缀，和观众候选的
+批准驳回分开数）：只记动作、候选编号与时刻，不记标题和原话——自述会随删玩家、按句删、公屏过期被级联删掉，
+改动记录里留着文本就删不干净。
 
 谁能建玩家（有 UUID、在线核对过、不在忘记名单上）由调用方判断；仓储只管读写。
 """
@@ -33,7 +37,7 @@ from src.modules.storage.models.game_players import (
     ViewerPlayerLink,
 )
 from src.modules.storage.repos._base import BaseRepo
-from src.modules.storage.repos.memory_review import MAX_REVIEW_TITLE_CHARS, MemoryReviewError
+from src.modules.storage.repos.memory_review import MAX_REVIEW_TITLE_CHARS, MemoryReviewError, record_edit
 from src.modules.storage.repos.viewer_candidates import CANDIDATE_EXPIRE_MS
 from src.modules.types.game_save import OnlineMode, online_mode_of
 
@@ -141,6 +145,32 @@ def replace_session_player_candidates(
         )
         written += 1
     return written
+
+
+def _candidate_row(conn: sqlite3.Connection, candidate_id: int) -> Any:
+    """取一条玩家自述；不存在报 ``not_found``。"""
+    row = conn.execute(
+        f"SELECT {_CANDIDATE_COLUMNS} FROM player_candidates WHERE id=?",  # noqa: S608 常量列清单
+        (int(candidate_id),),
+    ).fetchone()
+    if row is None:
+        raise MemoryReviewError("not_found", f"玩家自述不存在: {candidate_id}")
+    return row
+
+
+def _log_candidate_edit(conn: sqlite3.Connection, row: Any, action: str, at_ms: int) -> None:
+    """玩家自述的审核动作记一行改动记录：只记动作、候选编号与时刻，不记标题和原话（见模块说明）。"""
+    record_edit(
+        conn,
+        live_session_id=int(row["live_session_id"]),
+        target="player_candidate",
+        archive_line_id=None,
+        action=action,
+        before="",
+        after="",
+        at_ms=int(at_ms),
+        candidate_id=int(row["id"]),
+    )
 
 
 def _find_player_row(conn: sqlite3.Connection, *, game: str, uuid: str) -> Any:
@@ -546,12 +576,7 @@ class GamePlayerRepo(BaseRepo):
 
         def _exec() -> PlayerCandidate:
             with self._manager.transaction(immediate=True) as conn:
-                row = conn.execute(
-                    f"SELECT {_CANDIDATE_COLUMNS} FROM player_candidates WHERE id=?",  # noqa: S608 常量列清单
-                    (int(candidate_id),),
-                ).fetchone()
-                if row is None:
-                    raise MemoryReviewError("not_found", f"玩家自述不存在: {candidate_id}")
+                row = _candidate_row(conn, candidate_id)
                 if row["status"] != "pending":
                     raise MemoryReviewError("conflict", "这条玩家自述已经审过了")
                 final = (title if title is not None else str(row["title"])).strip()
@@ -568,13 +593,47 @@ class GamePlayerRepo(BaseRepo):
                         int(candidate_id),
                     ),
                 )
-                updated = conn.execute(
-                    f"SELECT {_CANDIDATE_COLUMNS} FROM player_candidates WHERE id=?",  # noqa: S608 常量列清单
-                    (int(candidate_id),),
-                ).fetchone()
+                _log_candidate_edit(conn, row, "player_approve" if approve else "player_reject", at_ms)
+                updated = _candidate_row(conn, candidate_id)
             return PlayerCandidate.model_validate(dict(updated))
 
         return await self._run_in_executor(_exec)
+
+    async def revoke_player_candidate(self, *, candidate_id: int, at_ms: int) -> PlayerCandidate:
+        """撤销批准：批错了的自述撤下玩家卡、回到待审，14 天期限从撤销这一刻重算。
+
+        只有已批准的能撤：不存在报 ``not_found``，不是已批准报 ``conflict``。
+        """
+
+        def _exec() -> PlayerCandidate:
+            with self._manager.transaction(immediate=True) as conn:
+                row = _candidate_row(conn, candidate_id)
+                if row["status"] != "approved":
+                    raise MemoryReviewError("conflict", "只有批准过的玩家自述才能撤销批准")
+                # 回到待审：撤下玩家卡，人可以改了标题再批或驳回；期限从撤销时重算，免得一撤就过期被删
+                conn.execute(
+                    "UPDATE player_candidates SET status='pending', decided_at_ms=NULL, created_at_ms=? WHERE id=?",
+                    (int(at_ms), int(candidate_id)),
+                )
+                _log_candidate_edit(conn, row, "player_revoke", at_ms)
+                updated = _candidate_row(conn, candidate_id)
+            return PlayerCandidate.model_validate(dict(updated))
+
+        return await self._run_in_executor(_exec)
+
+    async def delete_player_candidate(self, *, candidate_id: int, at_ms: int) -> None:
+        """删掉一条玩家自述（哪种状态都行）：批准过的随之撤下玩家卡；驳回过的删了以后同一句话可能再被列出。
+
+        不存在报 ``not_found``。
+        """
+
+        def _exec() -> None:
+            with self._manager.transaction(immediate=True) as conn:
+                row = _candidate_row(conn, candidate_id)
+                _log_candidate_edit(conn, row, "player_delete", at_ms)
+                conn.execute("DELETE FROM player_candidates WHERE id=?", (int(candidate_id),))
+
+        await self._run_in_executor(_exec)
 
     async def approved_statements(self, *, player_id: int, limit: int = 2) -> List[PlayerStatement]:
         """玩家卡用：批准过的他的自述，最近批准的在前，带他说那句时所在的存档。

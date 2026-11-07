@@ -62,12 +62,32 @@
             >批准</el-button
           >
         </div>
-        <p v-else class="candidate-meta mono">
-          {{ candidateStatusLabel(item.status) }}
-          <template v-if="item.decided_at_ms !== null">
-            · {{ formatDateTimeCn(item.decided_at_ms) }}</template
+        <div v-else class="candidate-actions">
+          <span class="candidate-meta mono">
+            {{ candidateStatusLabel(item.status) }}
+            <template v-if="item.decided_at_ms !== null">
+              · {{ formatDateTimeCn(item.decided_at_ms) }}</template
+            >
+          </span>
+          <span class="grow" />
+          <el-button
+            v-if="item.status === 'approved'"
+            size="small"
+            :loading="busyId === item.id"
+            :disabled="busyId !== null && busyId !== item.id"
+            @click="revoke(item)"
+            >撤销批准</el-button
           >
-        </p>
+          <el-button
+            size="small"
+            type="danger"
+            plain
+            :loading="busyId === item.id"
+            :disabled="busyId !== null && busyId !== item.id"
+            @click="remove(item)"
+            >删除这一条</el-button
+          >
+        </div>
       </li>
       <li v-if="!loading && !loadError && items.length === 0" class="empty-hint">
         {{ status === 'pending' ? '没有待审的玩家自述' : '没有记录' }}
@@ -82,7 +102,8 @@
  *
  * 下播整理从她接住的那几句公屏里列出候选（他那句原话 + 她回他的那句），代码核过对象与原话。
  * 批准（标题可以先改）后只在这位玩家在游戏里找她时写在玩家卡上，不进开播简报；驳回的以后不再列。
- * 自述挂在他那句公屏上：删除这位玩家或他发“忘了我”时一起删掉。
+ * 自述挂在他那句公屏上：删除这位玩家或他发“忘了我”时一起删掉。批错了可以撤销批准（回到待审），
+ * 哪种状态的都可以整条删掉。
  *
  * 不含定时器 / 订阅 / WebSocket，无 keep-alive 生命周期语义。
  */
@@ -140,6 +161,21 @@ async function reject(item: PlayerCandidateItem): Promise<void> {
     '已驳回，以后不再列这一条',
     '驳回失败',
   );
+}
+
+async function revoke(item: PlayerCandidateItem): Promise<void> {
+  const warning = `撤销后「${item.title}」从 ${item.player_name || '这位玩家'} 的玩家卡上撤下，回到待审，可以改了标题再批或驳回。`;
+  if (!(await confirmAction(warning, '撤销批准', { type: 'warning' }))) return;
+  await mutate(item, () => playersApi.revokeCandidate(item.id), '已撤销，回到待审', '撤销失败');
+}
+
+async function remove(item: PlayerCandidateItem): Promise<void> {
+  const warning =
+    item.status === 'rejected'
+      ? `删掉「${item.title}」：删了以后同一句话下次整理可能再被列出。`
+      : `删掉「${item.title}」：批准过的会从玩家卡上撤下，删了不能恢复。`;
+  if (!(await confirmAction(warning, '删除这一条', { type: 'warning' }))) return;
+  await mutate(item, () => playersApi.deleteCandidate(item.id), '已删掉', '删除失败');
 }
 
 async function mutate(

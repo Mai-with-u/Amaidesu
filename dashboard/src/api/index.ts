@@ -620,6 +620,11 @@ export const playersApi = {
     api.post<PlayerCandidateItem>(`/memory/players/candidates/${candidateId}/approve`, payload),
   rejectCandidate: (candidateId: number) =>
     api.post<LedgerMutationResponse>(`/memory/players/candidates/${candidateId}/reject`),
+  // 批错了：撤销批准回到待审，或整条删掉
+  revokeCandidate: (candidateId: number) =>
+    api.post<PlayerCandidateItem>(`/memory/players/candidates/${candidateId}/revoke`),
+  deleteCandidate: (candidateId: number) =>
+    api.delete<LedgerMutationResponse>(`/memory/players/candidates/${candidateId}`),
 };
 
 // 场次复盘（只读聚合 + 本场台词 + 数据包导出）

@@ -155,3 +155,35 @@ async def test_review_player_self_statements(client, store: SQLiteDatabase) -> N
     assert (await client.get("/api/v1/memory/players/candidates", params={"status": "bad"})).status_code == 422
     approved_only = (await client.get("/api/v1/memory/players/candidates", params={"status": "approved"})).json()
     assert [item["id"] for item in approved_only["items"]] == [ids[0]] and approved_only["pending_count"] == 0
+
+
+async def test_revoke_or_delete_a_self_statement(client, store: SQLiteDatabase) -> None:
+    """批错了的自述：撤销批准回到待审（没批准的撤销 409），删掉这一条（不存在 404）。"""
+    session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    repo = store.game_players
+    player = await repo.meet_player(
+        game="minecraft", uuid="uuid-jia", name="玩家甲", live_session_id=session, at_ms=1_010
+    )
+    said = await repo.add_game_chat(
+        live_session_id=session,
+        game="minecraft",
+        direction="player",
+        content="我是服主",
+        player_id=player.id,
+        at_ms=1_100,
+    )
+    with store.manager.transaction() as conn:
+        cur = conn.execute(
+            "INSERT INTO player_candidates(live_session_id, player_id, title, player_chat_id, player_quote,"
+            " reply_quote, created_at_ms) VALUES (?, ?, '他是服主', ?, '我是服主', '好的', 2000)",
+            (session, player.id, said),
+        )
+        candidate_id = int(cur.lastrowid or 0)
+
+    assert (await client.post(f"/api/v1/memory/players/candidates/{candidate_id}/revoke")).status_code == 409
+    assert (await client.post(f"/api/v1/memory/players/candidates/{candidate_id}/approve")).status_code == 200
+    revoked = await client.post(f"/api/v1/memory/players/candidates/{candidate_id}/revoke")
+    assert revoked.status_code == 200 and revoked.json()["status"] == "pending"
+    assert (await client.delete(f"/api/v1/memory/players/candidates/{candidate_id}")).status_code == 200
+    assert (await client.delete(f"/api/v1/memory/players/candidates/{candidate_id}")).status_code == 404
+    assert (await client.get("/api/v1/memory/players/candidates", params={"status": "all"})).json()["items"] == []
