@@ -49,6 +49,8 @@ _WILDCARD_TO_PREFIX = {
 }
 
 # 对应物表：实时订阅词汇里不属于回看时间线卡面的条目（每族一句理由）。
+# 注意 task.changed **不在此列**：它本身不出卡，但任务是观察面推导「游戏侧记录」
+# （任务区间、终态、时长）的唯一数据源，回看必须收进归档才能复现那层分组。
 # 注意 room.message 先折叠为诊断 record type "room.message" 再比对。
 _REPLAY_EXCLUDED = frozenset(
     {
@@ -56,8 +58,6 @@ _REPLAY_EXCLUDED = frozenset(
         ROOM_MESSAGE_TYPE,
         # 顶栏数值快照非时间线卡（回看顶栏走 REST 会话数据）
         CoreEvents.ROOM_STATE_WATCHED_COUNT,
-        # 任务卡条/Agent 任务板是快照面板非时间线卡（实时亦然，对齐的是卡面）
-        CoreEvents.TASK_CHANGED,
         # 后台任务现状是底栏任务条与终态通知的数据源：载荷无场次归属字段，
         # 按场次过滤不可达，且实时侧也不是时间线卡
         CoreEvents.BACKGROUND_TASK_CHANGED,
@@ -158,12 +158,19 @@ class SessionEventReader:
         ``before_timestamp_ms`` 游标只保留严格早于该时刻的记录（向前翻页）。
         环形缓冲与文件两侧按记录 id 去重（id 为空的记录退回
         ``type@timestamp_ms`` 键），当前运行中的事件两侧并存时不重复。
+
+        记录时刻晚于场次结束时刻的一律丢弃：场次关闭后写入的条目仍可能带着
+        该场次的 id（收尾事件、或诊断文件在同一小时段落盘的后继条目），不过
+        滤会让回看尾部混入关闭之后的事件。
         """
         merged: dict[str, EventRecord] = {}
+        window_end_ms = ended_at_ms if ended_at_ms is not None else now_ms()
 
         if self.event_history is not None:
             # 环形缓冲容量即上限：按场过滤后全量取出，与文件侧去重合并
             for record in self.event_history.get_by_session(live_session_id, limit=10_000):
+                if record.timestamp_ms > window_end_ms:
+                    continue
                 if self._in_window(record, before_timestamp_ms):
                     merged[self._dedupe_key(record)] = record
 
@@ -174,6 +181,7 @@ class SessionEventReader:
                 started_at_ms=started_at_ms,
                 ended_at_ms=ended_at_ms,
                 before_timestamp_ms=before_timestamp_ms,
+                window_end_ms=window_end_ms,
             )
             for record in records:
                 merged[self._dedupe_key(record)] = record
@@ -204,13 +212,13 @@ class SessionEventReader:
         started_at_ms: int,
         ended_at_ms: Optional[int],
         before_timestamp_ms: Optional[int],
+        window_end_ms: int,
     ) -> tuple[List[EventRecord], bool]:
         events_dir = self.events_dir
         if events_dir is None or not events_dir.is_dir():
             # 诊断根目录都不存在：视为全部缺失（降级信号），非错误
             return [], True
 
-        window_end_ms = ended_at_ms if ended_at_ms is not None else now_ms()
         first_day = datetime.fromtimestamp(started_at_ms / 1000).date()
         last_day = datetime.fromtimestamp(window_end_ms / 1000).date()
         if (last_day - first_day).days > _MAX_SCAN_DAYS:
@@ -231,6 +239,7 @@ class SessionEventReader:
                             hour_file,
                             live_session_id=live_session_id,
                             before_timestamp_ms=before_timestamp_ms,
+                            window_end_ms=window_end_ms,
                         )
                     )
             day += timedelta(days=1)
@@ -244,6 +253,7 @@ class SessionEventReader:
         *,
         live_session_id: int,
         before_timestamp_ms: Optional[int],
+        window_end_ms: int,
     ) -> List[EventRecord]:
         records: List[EventRecord] = []
         malformed = 0
@@ -260,7 +270,10 @@ class SessionEventReader:
                         data = row.get("data")
                         if not isinstance(data, dict) or data.get("live_session_id") != live_session_id:
                             continue
-                        if before_timestamp_ms is not None and int(row.get("timestamp_ms", 0)) >= before_timestamp_ms:
+                        timestamp_ms = int(row.get("timestamp_ms", 0))
+                        if timestamp_ms > window_end_ms:
+                            continue
+                        if before_timestamp_ms is not None and timestamp_ms >= before_timestamp_ms:
                             continue
                         if not is_replay_event_type(str(row.get("type", ""))):
                             continue

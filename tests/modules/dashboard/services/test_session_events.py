@@ -51,8 +51,10 @@ def _collect(reader: SessionEventReader, **kwargs):
 def test_replay_whitelist_covers_exact_names_and_dynamic_prefixes() -> None:
     for name in ("planner.decision", "game.milestone", "tool.result.maicraft_observe"):
         assert is_replay_event_type(name)
-    for name in ("room.message.danmaku", "room.state.watched_count", "task.changed", "core.startup"):
+    for name in ("room.message.danmaku", "room.state.watched_count", "core.startup"):
         assert not is_replay_event_type(name)
+    # 任务状态本身不出卡，但游戏侧记录（任务区间/终态）要靠它在回看里复现
+    assert is_replay_event_type("task.changed")
 
 
 def test_replay_vocabulary_is_derived_from_live_subscription_vocabulary() -> None:
@@ -78,6 +80,8 @@ def test_replay_vocabulary_is_derived_from_live_subscription_vocabulary() -> Non
             "tts.utterance.started",
             "tts.utterance.finished",
             "tts.utterance.failed",
+            # 任务区间数据源（不出卡，供游戏侧记录分组）
+            "task.changed",
         }
     )
     expected_prefixes = ("game.body.", "game.chat.", "tool.health.", "tool.result.")
@@ -113,7 +117,7 @@ def test_collect_drops_other_sessions_and_events_outside_the_whitelist(tmp_path)
         [
             _record("planner.decision", _ms(1)),
             _record("planner.decision", _ms(1) + 10, session_id=8),  # 他场
-            _record("task.changed", _ms(2)),  # 非卡面
+            _record("task.changed", _ms(2)),  # 不出卡，但是游戏侧记录的区间数据源
             _record("room.state.watched_count", _ms(3)),  # 非卡面
             _record("tool.result.minecraft_glance", _ms(4)),  # 动态族
         ],
@@ -121,7 +125,29 @@ def test_collect_drops_other_sessions_and_events_outside_the_whitelist(tmp_path)
 
     window = _collect(SessionEventReader(events_dir=tmp_path / "events"))
 
-    assert [r.type for r in window.records] == ["planner.decision", "tool.result.minecraft_glance"]
+    assert [r.type for r in window.records] == [
+        "planner.decision",
+        "task.changed",
+        "tool.result.minecraft_glance",
+    ]
+
+
+def test_collect_drops_records_after_the_session_window(tmp_path) -> None:
+    """场次关闭后仍带该场 id 的记录（收尾事件 / 同日后继条目）不得混进回看尾部。"""
+    late_ms = int(datetime(2026, 10, 11, 23, 30, 0).timestamp() * 1000)
+    history = EventHistoryService(max_events=100)
+    history.record(_record("planner.decision", late_ms, record_id="late-buffer"))
+    _write_hour_file(
+        tmp_path / "events",
+        [
+            _record("planner.decision", _ms(1), record_id="in-window"),
+            _record("planner.verdict", late_ms, record_id="late-file"),
+        ],
+    )
+
+    window = _collect(SessionEventReader(event_history=history, events_dir=tmp_path / "events"))
+
+    assert [r.id for r in window.records] == ["in-window"]
 
 
 def test_collect_skips_malformed_lines_and_cursor_keeps_strictly_older(tmp_path) -> None:
