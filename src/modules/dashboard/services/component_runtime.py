@@ -74,6 +74,9 @@ class ComponentRuntimeContext:
     event_bus: Optional[Any] = None
     llm_manager: Optional[Any] = None
     prompt_manager: Optional[Any] = None
+    # 任务跟踪器：动态启用的 Agent 和配置启动的一样拿到它（游戏 Agent 据此追踪委派任务号、写委派终态，
+    # 主播据此读委派还在不在做）；缺了它，看板里启用的游戏 Agent 不追踪委派
+    task_tracker: Optional[Any] = None
 
     @classmethod
     def from_server(cls, server: Any) -> "ComponentRuntimeContext":
@@ -84,6 +87,7 @@ class ComponentRuntimeContext:
             event_bus=getattr(server, "event_bus", None),
             llm_manager=getattr(server, "llm_manager", None),
             prompt_manager=getattr(server, "prompt_manager", None),
+            task_tracker=getattr(server, "task_tracker", None),
         )
 
 
@@ -167,6 +171,9 @@ async def start_instance(
                 llm_manager=ctx.llm_manager,
                 prompt_manager=ctx.prompt_manager,
                 event_bus=ctx.event_bus,
+                # 与启动装配一致：跟踪器和它的记录表一起给，记录表就是跟踪器那一份
+                task_tracker=ctx.task_tracker,
+                task_ledger=ctx.task_tracker.ledger if ctx.task_tracker is not None else None,
             ),
         )
         if ok:

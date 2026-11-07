@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 from src.agents.streamer.replyer import Replyer
@@ -205,6 +206,21 @@ def test_restart_agent_passes_fresh_config_and_shared_managers() -> None:
     call = manager.enable_calls[0]
     assert call["config"] == {"persona": {"bot_name": "新名字"}}  # 重建用磁盘新配置，不是记住的旧入参
     assert call["deps"].llm_manager is llm and call["deps"].prompt_manager is prompts  # 共享服务原样透传
+
+
+def test_dynamic_enable_passes_the_task_tracker_like_startup() -> None:
+    """看板里启用、重建的 Agent 和配置启动的一样拿到任务跟踪器与它的记录表：游戏 Agent 才追踪委派任务号。"""
+    tracker = SimpleNamespace(ledger=object())
+    server = SimpleNamespace(agent_manager=_FakeAgentManager(), task_tracker=tracker)
+    ctx = ComponentRuntimeContext.from_server(server)
+    assert ctx.task_tracker is tracker
+    ctx.agent_manager.register("minecraft", object())
+
+    result = asyncio.run(restart_component(ctx, "agents", "minecraft", {}))
+
+    assert result.success and result.created
+    deps = ctx.agent_manager.enable_calls[0]["deps"]
+    assert deps.task_tracker is tracker and deps.task_ledger is tracker.ledger
 
 
 def test_restart_reports_stop_failure_and_keeps_old_instance() -> None:
