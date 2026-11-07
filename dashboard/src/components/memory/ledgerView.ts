@@ -128,16 +128,18 @@ export function nearestCommitmentsText(nearest: NearCommitment[] | undefined): s
 
 /** 整理报告里观众候选的一句话：列了几条（分两类）、因个人信息丢了几条；都没有返回 null */
 export function candidateReportText(
-  listed: Partial<Record<CandidateKind, number>> | undefined,
+  listed: Partial<Record<CandidateKind | 'player_self', number>> | undefined,
   personalDropped: number | undefined,
 ): string | null {
   const parts: string[] = [];
   const defined = listed?.viewer_defined ?? 0;
   const claimed = listed?.claimed_missing ?? 0;
+  const players = listed?.player_self ?? 0;
   if (defined) parts.push(`观众定下的 ${defined} 条`);
   if (claimed) parts.push(`她说欠着的 ${claimed} 条`);
+  if (players) parts.push(`玩家自述 ${players} 条`);
   const head = parts.length ? `列进待审区：${parts.join('、')}` : '';
-  const tail = personalDropped ? `含观众个人信息丢掉 ${personalDropped} 条` : '';
+  const tail = personalDropped ? `含个人信息丢掉 ${personalDropped} 条` : '';
   return [head, tail].filter(Boolean).join('；') || null;
 }
 

@@ -517,6 +517,21 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
         ),
     ),
     (
+        "playersApi.listCandidates → GET /memory/players/candidates",
+        players_schemas.PlayerCandidateListResponse,
+        (
+            "items.id",
+            "items.player_name",
+            "items.title",
+            "items.player_quote",
+            "items.reply_quote",
+            "items.reply_in",
+            "items.status",
+            "items.decided_at_ms",
+            "pending_count",
+        ),
+    ),
+    (
         "simulatorApi.listPersonas → GET /simulator/personas",
         simulator_schemas.PersonaListResponse,
         (

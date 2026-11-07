@@ -10,6 +10,7 @@ import {
   matchesPlayerQuery,
   offlineSavesNote,
   savesText,
+  playerReplyWhere,
 } from './playersView';
 
 function player(overrides: Partial<PlayerItem> = {}): PlayerItem {
@@ -107,5 +108,12 @@ describe('确认关联与删观众的文案', () => {
     expect(linkedPlayersDeleteNote(linked, true)).toContain('「Alex」（minecraft）一并删除');
     expect(linkedPlayersDeleteNote(linked, true)).toContain('不再记录');
     expect(linkedPlayersDeleteNote(linked, false)).toContain('会重新记录');
+  });
+});
+
+describe('玩家自述', () => {
+  it('她回他的那句在哪儿说的：公屏或直播里', () => {
+    expect(playerReplyWhere({ reply_in: 'game_chat' })).toBe('公屏');
+    expect(playerReplyWhere({ reply_in: 'speech' })).toBe('直播里');
   });
 });

@@ -1,8 +1,8 @@
-"""记忆页"游戏里的人"的请求与响应模型：玩家列表、观众对号确认与删玩家。"""
+"""记忆页"游戏里的人"的请求与响应模型：玩家列表、观众对号确认、删玩家与玩家自述审核。"""
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -64,3 +64,32 @@ class PlayerMutationResponse(BaseModel):
 
     success: bool = Field(description="是否成功")
     detail: str = Field(default="", description="给运营者看的一句说明")
+
+
+class PlayerCandidateItem(BaseModel):
+    """玩家自述的一行：他在公屏说的关于他自己的事、她当场接住了，人批准才进他的玩家卡。"""
+
+    id: int = Field(description="候选主键")
+    live_session_id: int = Field(description="列出它的场次")
+    player_id: int = Field(description="说这件事的玩家")
+    player_name: str = Field(default="", description="这位玩家最近一次见到时的名字；读不到为空")
+    title: str = Field(description="标题（用'他'指他）")
+    player_quote: str = Field(description="他那句公屏的逐字片段")
+    reply_quote: str = Field(description="她回他的那句的逐字片段")
+    reply_in: Literal["game_chat", "speech"] = Field(description="她在哪儿回的：game_chat 游戏公屏 / speech 直播里")
+    status: str = Field(description="pending 待审 / approved 已批 / rejected 已驳回")
+    created_at_ms: int = Field(description="列出的时刻（Unix 毫秒）")
+    decided_at_ms: Optional[int] = Field(default=None, description="批准或驳回的时刻")
+
+
+class PlayerCandidateListResponse(BaseModel):
+    """玩家自述列表与待审数（记忆页玩家自述审核区）。"""
+
+    items: List[PlayerCandidateItem] = Field(default_factory=list, description="自述，新的在前")
+    pending_count: int = Field(description="还在待审的条数")
+
+
+class PlayerCandidateApproveRequest(BaseModel):
+    """批准一条玩家自述：可以顺手改标题。"""
+
+    title: Optional[str] = Field(default=None, description="改过的标题（至多 30 字）；空 = 用整理写的")

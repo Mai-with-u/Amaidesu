@@ -5,6 +5,7 @@
  */
 
 import type {
+  PlayerCandidateItem,
   PlayerInteractionKind,
   PlayerItem,
   PlayerLinkedViewer,
@@ -116,4 +117,9 @@ export function deletePlayerWarning(item: PlayerItem): string {
     '她的台词、档案和游戏记录里他的名字（含以前的名字）换成“一位玩家”；' +
     'UUID 进不记录名单，之后他再出现也不再记。关联的观众不动。此操作不可恢复。'
   );
+}
+
+/** 玩家自述里她回他的那句在哪儿说的："公屏"或"直播里" */
+export function playerReplyWhere(item: Pick<PlayerCandidateItem, 'reply_in'>): string {
+  return item.reply_in === 'game_chat' ? '公屏' : '直播里';
 }

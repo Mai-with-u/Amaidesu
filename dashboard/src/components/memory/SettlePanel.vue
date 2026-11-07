@@ -82,7 +82,7 @@
           "
           class="settle-meta"
         >
-          观众候选：{{
+          待审候选：{{
             candidateReportText(
               row.settle_report?.candidates_listed,
               row.settle_report?.candidates_personal_dropped,

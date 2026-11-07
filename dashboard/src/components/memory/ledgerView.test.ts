@@ -181,7 +181,10 @@ describe('观众候选', () => {
 
   it('整理报告里的候选一句话：分两类列数，个人信息只报条数；都没有不出这一句', () => {
     expect(candidateReportText({ viewer_defined: 2 }, 1)).toBe(
-      '列进待审区：观众定下的 2 条；含观众个人信息丢掉 1 条',
+      '列进待审区：观众定下的 2 条；含个人信息丢掉 1 条',
+    );
+    expect(candidateReportText({ claimed_missing: 1, player_self: 2 }, 0)).toBe(
+      '列进待审区：她说欠着的 1 条、玩家自述 2 条',
     );
     expect(candidateReportText({ viewer_defined: 1, claimed_missing: 1 }, 0)).toBe(
       '列进待审区：观众定下的 1 条、她说欠着的 1 条',

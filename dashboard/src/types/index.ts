@@ -1596,6 +1596,32 @@ export interface PlayerListResponse {
   items: PlayerItem[];
 }
 
+/** 玩家自述的一行：他在公屏说的关于他自己的事、她当场接住了，人批准才进他的玩家卡 */
+export interface PlayerCandidateItem {
+  id: number;
+  live_session_id: number;
+  player_id: number;
+  /** 这位玩家最近一次见到时的名字；读不到为空 */
+  player_name: string;
+  /** 标题（用"他"指他） */
+  title: string;
+  /** 他那句公屏的逐字片段 */
+  player_quote: string;
+  /** 她回他的那句的逐字片段 */
+  reply_quote: string;
+  /** 她在哪儿回的：游戏公屏 / 直播里 */
+  reply_in: 'game_chat' | 'speech';
+  status: CandidateStatus;
+  created_at_ms: number;
+  decided_at_ms: number | null;
+}
+
+/** 玩家自述列表与待审数 */
+export interface PlayerCandidateListResponse {
+  items: PlayerCandidateItem[];
+  pending_count: number;
+}
+
 /** 确认这位玩家是直播间的哪位观众 */
 export interface PlayerLinkPayload {
   viewer_id: number;
@@ -1636,7 +1662,8 @@ export interface SettleReport {
   unregistered: UnregisteredItem[];
   snapshot_changes: SnapshotChange[];
   /** 这一场列进待审区的观众候选数（按类型） */
-  candidates_listed?: Partial<Record<CandidateKind, number>>;
+  /** 列进待审区的条数：观众候选按类型，玩家自述记在 player_self */
+  candidates_listed?: Partial<Record<CandidateKind | 'player_self', number>>;
   /** 因含观众个人信息被代码丢掉的候选数（内容不写进报告） */
   candidates_personal_dropped?: number;
   /** 这一场的唠叨指标；本场没点名旧事也没推卡时为 null */

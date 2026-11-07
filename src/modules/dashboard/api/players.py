@@ -4,6 +4,9 @@
 - POST   /memory/players/{id}/links              确认"这位玩家是直播间的哪位观众"
 - DELETE /memory/players/{id}/links/{viewer_id}  取消关联
 - DELETE /memory/players/{id}                    删玩家
+- GET    /memory/players/candidates              玩家自述列表（按状态筛）与待审数
+- POST   /memory/players/candidates/{id}/approve 批准（可改标题）：只进这位玩家的玩家卡
+- POST   /memory/players/candidates/{id}/reject  驳回：同一句他的话、同样的标题以后不再列
 
 对号只由运营者确认，同名、名字像、同时出现都不自动关联；关联只用来连带删除（删观众、"忘了我"时
 一起删这位玩家）和给运营者看清楚，从不告诉她。删玩家时他的互动、公屏聊天、对他的承诺随之删除，
@@ -12,13 +15,16 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Dict, List, Optional
+from typing import TYPE_CHECKING, Annotated, Dict, List, NoReturn, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.modules.dashboard.dependencies import server_component
 from src.modules.dashboard.schemas.players import (
     LinkedViewer,
+    PlayerCandidateApproveRequest,
+    PlayerCandidateItem,
+    PlayerCandidateListResponse,
     PlayerItem,
     PlayerLinkRequest,
     PlayerListResponse,
@@ -26,6 +32,8 @@ from src.modules.dashboard.schemas.players import (
     PlayerSaveItem,
 )
 from src.modules.logging import get_logger
+from src.modules.storage.models.game_players import PlayerCandidate
+from src.modules.storage.repos.memory_review import MemoryReviewError
 from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
@@ -101,6 +109,74 @@ async def list_players(
             )
         )
     return PlayerListResponse(items=items)
+
+
+async def _candidate_item(players: "GamePlayerRepo", row: PlayerCandidate) -> PlayerCandidateItem:
+    """自述转响应行：带上这位玩家现在的名字（审核的人要知道是谁说的）。"""
+    player = await players.get_player(player_id=row.player_id)
+    return PlayerCandidateItem(
+        id=row.id,
+        live_session_id=row.live_session_id,
+        player_id=row.player_id,
+        player_name=player.name if player is not None else "",
+        title=row.title,
+        player_quote=row.player_quote,
+        reply_quote=row.reply_quote,
+        reply_in="game_chat" if row.reply_game_chat_id is not None else "speech",
+        status=row.status,
+        created_at_ms=row.created_at_ms,
+        decided_at_ms=row.decided_at_ms,
+    )
+
+
+def _raise_review_error(exc: MemoryReviewError) -> NoReturn:
+    """审核做不了的原因转成状态码：不存在 404、已经审过 409、标题填得不对 422。"""
+    status = {"not_found": 404, "conflict": 409, "invalid": 422}.get(exc.kind, 409)
+    raise HTTPException(status_code=status, detail=exc.message) from exc
+
+
+@router.get("/candidates", response_model=PlayerCandidateListResponse)
+async def list_player_candidates(
+    players: PlayerRepoDep,
+    status: Annotated[str, Query(description="pending / approved / rejected / all")] = "pending",
+) -> PlayerCandidateListResponse:
+    """玩家自述列表（新的在前）与待审数。"""
+    value = status.strip().lower()
+    if value not in ("pending", "approved", "rejected", "all"):
+        raise HTTPException(status_code=422, detail=f"未知的自述状态: {status}")
+    rows = await players.list_player_candidates(status=None if value == "all" else value)
+    return PlayerCandidateListResponse(
+        items=[await _candidate_item(players, row) for row in rows],
+        pending_count=await players.count_pending_player_candidates(),
+    )
+
+
+@router.post("/candidates/{candidate_id}/approve", response_model=PlayerCandidateItem)
+async def approve_player_candidate(
+    candidate_id: int,
+    players: PlayerRepoDep,
+    request: Optional[PlayerCandidateApproveRequest] = None,
+) -> PlayerCandidateItem:
+    """批准：之后他在游戏里找她时，这件事写在他的玩家卡上；不进开播简报。"""
+    body = request or PlayerCandidateApproveRequest()
+    title = body.title if body.title is not None and body.title.strip() else None
+    try:
+        row = await players.decide_player_candidate(
+            candidate_id=int(candidate_id), approve=True, title=title, at_ms=now_ms()
+        )
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return await _candidate_item(players, row)
+
+
+@router.post("/candidates/{candidate_id}/reject", response_model=PlayerMutationResponse)
+async def reject_player_candidate(candidate_id: int, players: PlayerRepoDep) -> PlayerMutationResponse:
+    """驳回：留着这一条，同一句他的话、同样的标题以后不再列。"""
+    try:
+        await players.decide_player_candidate(candidate_id=int(candidate_id), approve=False, at_ms=now_ms())
+    except MemoryReviewError as exc:
+        _raise_review_error(exc)
+    return PlayerMutationResponse(success=True, detail="已驳回，以后不再列这一条")
 
 
 @router.post("/{player_id}/links", response_model=PlayerMutationResponse)

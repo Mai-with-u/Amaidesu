@@ -78,6 +78,8 @@ import type {
   PersonaListResponse,
   PersonaCreateResponse,
   PersonaOperationResponse,
+  PlayerCandidateItem,
+  PlayerCandidateListResponse,
   PlayerLinkPayload,
   PlayerListResponse,
   GiftListResponse,
@@ -611,6 +613,13 @@ export const playersApi = {
     api.delete<LedgerMutationResponse>(`/memory/players/${playerId}/links/${viewerId}`),
   deletePlayer: (playerId: number) =>
     api.delete<LedgerMutationResponse>(`/memory/players/${playerId}`),
+  // 玩家自述审核：批准前她看不到；批准后只进这位玩家的玩家卡，不进开播简报
+  listCandidates: (status: CandidateStatus | 'all' = 'pending') =>
+    api.get<PlayerCandidateListResponse>('/memory/players/candidates', { params: { status } }),
+  approveCandidate: (candidateId: number, payload: { title?: string } = {}) =>
+    api.post<PlayerCandidateItem>(`/memory/players/candidates/${candidateId}/approve`, payload),
+  rejectCandidate: (candidateId: number) =>
+    api.post<LedgerMutationResponse>(`/memory/players/candidates/${candidateId}/reject`),
 };
 
 // 场次复盘（只读聚合 + 本场台词 + 数据包导出）
