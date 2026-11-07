@@ -157,6 +157,8 @@ _FAULT_RETRY = "身体出故障了，暂时动不了；再派一次活它会重�
 _FAULT_STUCK = "身体出故障了，动不了；重新派活也没用，得等后台修好"
 # 模型没交付就停下时代发给主播的那句：只说停了、没交付，做没做完不替它下结论
 UNDELIVERED_REPORT_MESSAGE = "游戏那边停了，没交付结果，做没做完不确定"
+# 在做委派却没调交付就停下时先给模型的一次提醒：做完了交付、没做成报卡住，第二次还不交付才记停了没交付
+DELIVERY_REMINDER = "[还没交付] 做完了就用 minecraft_report 交付（delivery），没做成就报卡住（escalation）。"
 # 对话发不出去、按任务事实重开时给模型的说明
 _RESTART_NOTICE = (
     "[系统] 上一段对话里有内容发不出去，已经整段丢掉。上面是原指令、待办与目标记录，下面是宿主刚读的现场；"
@@ -388,6 +390,8 @@ class MinecraftAgent(BaseAgent):
         # 挂在消息队列里、还没被模型读到的那条天色通知由 WakeQueue 簿记：新的天色来了就把它换掉，
         # 队列里只留最新一条。
         self._task_reported = False
+        # 这一批给过"还没交付"的提醒没有：自然停下先提醒一次，第二次还不交付才记停了没交付
+        self._delivery_reminded = False
         self._wait_requested = False
 
         # 平台暂停支持（AgentControl pause/resume 经 _on_pause/_on_resume 进入）
@@ -785,8 +789,8 @@ class MinecraftAgent(BaseAgent):
         批次终止语义（全部系统可判定）：
         1. LLM 调 minecraft_report(kind=delivery) → 停止（工具内交付门禁校验）
         2. LLM 调 minecraft_report(kind=escalation) → 停止，等主播
-        3. 自然终止，无 report、无在跑的目标且待办完成 → 这一批在做委派就代发停了没交付、委派记 undelivered；
-           不在做委派（交付后被计时、决策叫醒开的新任务）就安静收尾
+        3. 自然终止，无 report、无在跑的目标且待办完成 → 这一批在做委派就先提醒一次交付或报卡住，
+           再停才代发停了没交付、委派记 undelivered；不在做委派（交付后被计时、决策叫醒开的新任务）就安静收尾
         4. 自然终止，仅剩在跑的后台目标 → 静默让出，等目标事件唤醒
         5. 需要行动却在提醒后继续停顿 → 挂起，等待主播指令
         """
@@ -804,6 +808,7 @@ class MinecraftAgent(BaseAgent):
 
     async def _run_task_batch(self) -> None:
         self._task_reported = False
+        self._delivery_reminded = False
         self._wait_requested = False
         # 节流攒着的互动通知不等到点，跟着这一批一起读（"随下一次叫醒一起读"），读了就从此刻重新计时
         for held in self._interaction_throttle.drain():
@@ -962,9 +967,12 @@ class MinecraftAgent(BaseAgent):
                 )
 
             if not tool_calls:
+                delivery_reminded = self._delivery_reminded
                 if not await self._end_without_tool_calls(messages, response.content or "", steps, action_reminded):
                     return
-                action_reminded = True
+                if self._delivery_reminded == delivery_reminded:
+                    # 这次给的是"任务尚需行动"的提醒；"还没交付"的提醒另记一处，不占掉它
+                    action_reminded = True
                 continue
 
             polling_only = True
@@ -1085,8 +1093,15 @@ class MinecraftAgent(BaseAgent):
             # 没有可结算的委派，安静收尾；代发"停了没交付"会把已经交付的那件改写成没交付
             self._task_finished = True
             self._logger.info(f"任务批次自然终止（{steps} 步），这一批不在做委派，安静收尾")
+        elif not self._task_reported and not self._delivery_reminded:
+            # 在做委派却没调交付就停：先提醒一次做完就交付、没做成就报卡住，让它自己把结果交出来；
+            # 停下前那句只是它自己的说法，不转给主播（免得她照着说成做好了）
+            self._delivery_reminded = True
+            messages.append({"role": "user", "content": DELIVERY_REMINDER})
+            self._logger.info(f"在做委派却没交付就停（{steps} 步），先提醒一次交付或报卡住")
+            return True
         elif not self._task_reported:
-            # 模型没调 minecraft_report 就停了：做完只认交付，这里不替它交付成"任务完成"。
+            # 提醒过还是没调 minecraft_report 就停了：做完只认交付，这里不替它交付成"任务完成"。
             # 主播那边收到"停了没交付"，不会对观众说做好了；任务照旧算结束，下条指令开新任务。
             # 模型停下前的最后一句只写进账面摘要（看板与下播核对查得到），不当交付结果发给主播
             last_words = content.strip()

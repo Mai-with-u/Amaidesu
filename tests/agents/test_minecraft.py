@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.minecraft.agent import UNDELIVERED_REPORT_MESSAGE, MinecraftAgent
+from src.agents.minecraft.agent import DELIVERY_REMINDER, UNDELIVERED_REPORT_MESSAGE, MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.state import MinecraftAgentState
 from src.agents.minecraft.tools import MinecraftToolProvider
@@ -205,7 +205,8 @@ async def test_natural_termination_without_a_delegation_ends_quietly(start_agent
 
 
 async def test_natural_termination_settles_delegation_as_undelivered_not_succeeded() -> None:
-    """委派的活没交付就停了：账面终态记"停了没交付"，不记成功；模型停下前那句只进账面摘要。"""
+    """委派的活没交付就停了：先提醒一次交付或报卡住，再停才记"停了没交付"、不记成功；
+    模型停下前那句只进账面摘要，不转给主播。"""
 
     ledger_bus = SimpleNamespace(emit=AsyncMock())
     ledger = TaskLedger(event_bus=ledger_bus)
@@ -218,12 +219,14 @@ async def test_natural_termination_settles_delegation_as_undelivered_not_succeed
         source="agent",
         snapshot={"instruction": "把门装上"},
     )
-    agent, _llm_fake, bus = await make_minecraft_agent(
+    agent, llm, bus = await make_minecraft_agent(
         FakeMaicraft(), lambda _messages: v1_resp("门装好了吧应该"), tracker=TaskTracker(ToolRegistry(), ledger)
     )
     assert agent.receive_delegation(instruction="把门装上", task_id="d-1") is None
     await _wait_until(lambda: "d-1" not in ledger)
     await _wait_until(lambda: ledger_bus.emit.await_count >= 1)
+
+    assert len(llm.seen) == 2 and _reminded(llm.seen[1]) and not _reminded(llm.seen[0]), "停下先提醒一次再记"
 
     ended = ledger_bus.emit.await_args_list[-1].args[1]
     assert (ended.task_id, ended.status) == ("d-1", "undelivered")
@@ -231,6 +234,41 @@ async def test_natural_termination_settles_delegation_as_undelivered_not_succeed
     [report] = _game_events(bus, "report")
     assert (report.report_kind, report.delegation_ids) == ("undelivered", ["d-1"]), "上报点名是哪件委派"
     assert report.message == UNDELIVERED_REPORT_MESSAGE and "门装好了" not in report.message
+    await agent.stop()
+
+
+def _reminded(messages: List[Dict[str, Any]]) -> bool:
+    """这段历史里有没有"还没交付"的提醒（开着折叠时消息会带编号，按内容包含判断）。"""
+    return any(DELIVERY_REMINDER in str(message.get("content") or "") for message in messages)
+
+
+async def test_delivery_reminder_lets_the_task_deliver_itself() -> None:
+    """委派的活做完却只说了句话就停：提醒一次后模型自己交付，账面记成功，不代发"停了没交付"。"""
+    ledger_bus = SimpleNamespace(emit=AsyncMock())
+    ledger = TaskLedger(event_bus=ledger_bus)
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+        snapshot={"instruction": "把门装上"},
+    )
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        # 装完门只说了句话 -> 被提醒交付 -> 交付
+        if _reminded(messages):
+            return v1_resp(calls=[_tool_call("minecraft_report", {"kind": "delivery", "content": "门装好了"})])
+        return v1_resp("门装好了")
+
+    agent, llm, bus = await make_minecraft_agent(FakeMaicraft(), script, tracker=TaskTracker(ToolRegistry(), ledger))
+    assert agent.receive_delegation(instruction="把门装上", task_id="d-1") is None
+    await _wait_until(lambda: "d-1" not in ledger)
+
+    assert ledger_bus.emit.await_args_list[-1].args[1].status == "succeeded"
+    assert [report.report_kind for report in _game_events(bus, "report")] == ["delivery"]
+    assert len(llm.seen) == 2
     await agent.stop()
 
 
