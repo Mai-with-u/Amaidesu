@@ -93,6 +93,11 @@ def test_step_and_judgement_from_before_this_task_are_left_out() -> None:
     text = render_game_now({"minecraft": stopped}, None, GameNow(agents={"minecraft": fresh}), "", _NOW)
     assert "停了，没交付结果，做没做完不确定" in text and "做完了" not in text and "此刻那一步" not in text
 
+    # 续播认领的：重启前被打断，做到哪不确定（和前段委派状态同一句）
+    cut = _delegation(report_kind="interrupted", reported_ms=_NOW)
+    text = render_game_now({"minecraft": cut}, None, GameNow(agents={"minecraft": fresh}), "", _NOW)
+    assert "重启前在做这件事，被打断了，做到哪不确定" in text and "此刻那一步" not in text
+
 
 def test_state_matches_the_delegation_line_when_stuck_or_idle() -> None:
     """卡住的活不写成"还在做"了事：停着没动静、账面多久没进展，和前段委派状态同一句，她才会去拿主意。"""

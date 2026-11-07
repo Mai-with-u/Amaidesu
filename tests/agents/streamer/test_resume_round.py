@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.agents.streamer.planner_render import compose_delegate_instruction
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.interceptors.session_stamp import SessionStampInterceptor
@@ -132,7 +133,7 @@ async def _interrupted_session_with_chat(store: SQLiteDatabase) -> int:
     return pk
 
 
-async def _started_agent(stack: _LiveStack, llm: Any) -> StreamerAgent:
+async def _started_agent(stack: _LiveStack, llm: Any, **kwargs: Any) -> StreamerAgent:
     agent = make_streamer_agent(
         {"background": {"enabled": False}, "mouth": {"enabled": False}},
         llm=llm,
@@ -141,6 +142,7 @@ async def _started_agent(stack: _LiveStack, llm: Any) -> StreamerAgent:
         tool_registry=ToolRegistry(),
         chat_repo=stack.store.chat,
         session_manager=stack.manager,
+        **kwargs,
     )
     await agent.start()
     return agent
@@ -173,6 +175,38 @@ async def test_resume_round_reads_interrupted_history_and_lands_in_same_session(
     assert stack.writes.assistant_sessions == [pk], "记账器把接回句写进续播场"
     row = await stack.store.sessions.get_live_session(live_session_id=pk)
     assert row is not None and row.ended_at_ms is None, "续播不写结束时间"
+
+
+async def test_resume_claims_unfinished_delegation_as_interrupted(live_stack: _LiveStack) -> None:
+    """续播认领：重启前受理、没了结的委派在库里记成被打断；接回那一轮手头的事写着它被打断了、做到哪不确定，
+    只显示她自己的原话，附带的观众原话不重复进来。重启前已经了结的委派不动。"""
+    planner_requests: List[str] = []
+    stack = live_stack
+    pk = await _interrupted_session_with_chat(stack.store)
+    composed = compose_delegate_instruction("把营地的门装好", [{"role": "user", "content": "阿杰: 门要木门"}])
+    for task_id, kind, text, ts in (
+        ("deleg_done", "accepted", "搭个棚子", 1_100),
+        ("deleg_done", "succeeded", "delivery: 棚子搭好了", 1_200),
+        ("deleg_open", "accepted", composed, 1_500),
+    ):
+        await stack.store.events.insert_delegation_event(
+            live_session_id=pk, game="minecraft", task_id=task_id, kind=kind, text=text, timestamp_ms=ts
+        )
+    await stack.manager.start()  # 进程启动：检出残留场次为待决
+    agent = await _started_agent(stack, _routed_llm(planner_requests), event_repo=stack.store.events)
+    try:
+        await stack.manager.resume_session(pk)
+        await wait_until(lambda: len(planner_requests) >= 1, what="接回那一轮决策")
+    finally:
+        await agent.stop()
+
+    work = planner_requests[0].split("【我手头在游戏里做的事】", 1)[1].split("【", 1)[0]
+    assert "开始做一个任务：把营地的门装好" in work and "重启前在做这件事，被打断了，做到哪不确定" in work
+    assert "门要木门" not in work and "[来源对话" not in work
+    records = {r.task_id: r for r in await stack.store.events.list_session_delegations(live_session_id=pk)}
+    assert records["deleg_open"].status == "interrupted"
+    assert records["deleg_open"].summary == "重启前在做，被打断了，做到哪不确定"
+    assert records["deleg_done"].status == "succeeded", "重启前已了结的委派不动"
 
 
 async def test_plain_open_session_schedules_no_resume_round(live_stack: _LiveStack) -> None:

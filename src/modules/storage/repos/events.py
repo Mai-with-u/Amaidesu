@@ -175,12 +175,14 @@ class EventRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def settle_interrupted_delegations(
-        self, *, live_session_id: int, text: str, timestamp_ms: int
+        self, *, live_session_id: int, text: str, timestamp_ms: int, accepted_before_ms: int
     ) -> List[DelegationRecord]:
         """续播认领：这一场经手过、到现在还没有终态的委派，各记一条被打断的终态，返回记好之后的样子。
 
         重启后任务账本是空的，游戏那边也不会接着做原来的活；不在库里了结，下播整理会把它
-        当成还在做，主播也不知道手上那件事已经断了。查与写在同一个事务里，重复认领不会重复记。
+        当成还在做，主播也不知道手上那件事已经断了。只认 ``accepted_before_ms``（本进程启动时刻）
+        之前受理的：新进程里刚受理的那件还活着，不能当成被打断。查与写在同一个事务里，
+        重复认领不会重复记。
         """
 
         def _exec() -> List[DelegationRecord]:
@@ -188,7 +190,7 @@ class EventRepo(BaseRepo):
                 open_ones = [
                     record
                     for record in _delegations_of(conn, live_session_id=int(live_session_id))
-                    if record.status == "accepted"
+                    if record.status == "accepted" and record.started_ms < accepted_before_ms
                 ]
                 settled: List[DelegationRecord] = []
                 for record in open_ones:

@@ -217,6 +217,25 @@ class DelegationWorkbench:
             delegation.report_kind = report_kind
             delegation.reported_ms = now_ms()
 
+    def restore_interrupted(self, agent: str, *, instruction: str, task_id: str, at_ms: int) -> None:
+        """续播认领：重启前 ``agent`` 手上那件委派被打断了，记回手头的事并标成被打断。
+
+        重启后内存里的手头的事是空的：不记回来，她不知道手上那件事断了，会接着说"还在做"，
+        观众问起也答不上；记成被打断，参考段写着做到哪不确定，她可以重新派或者如实说。
+        这一刻手上已经有更晚开始的事就不覆盖。
+        """
+        current = self._delegations.get(agent)
+        if current is not None and current.at_ms > at_ms:
+            return
+        self._delegations[agent] = Delegation(
+            agent=agent,
+            instruction=instruction,
+            task_id=task_id,
+            at_ms=at_ms,
+            report_kind="interrupted",
+            reported_ms=now_ms(),
+        )
+
     def current_goals(self) -> List[GoalLine]:
         """手上的事（嘴的现场卡用）：每个游戏最近一次开始做的事、原话（已脱敏）与进展。"""
         return goal_lines(self._delegations)
