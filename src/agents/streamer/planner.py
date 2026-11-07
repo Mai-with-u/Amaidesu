@@ -285,7 +285,8 @@ def _repeated_memory_error(number: str) -> str:
     return (
         f"{number} 这件事本场已经提过（简报里标着（本场已提过）），这句先不说：同一件旧事一场提一次就够，"
         "再提观众听着就是车轱辘话。换个话题再调用 streamer_reply，或者这一轮不说。"
-        "观众或玩家问起这件事时照常点名。这一窗只退这一次：再点名这一条，会去掉点名照常说出去。"
+        "观众或玩家问起这件事时照常点名：回观众时 target 指向那条弹幕，回玩家时 to_player 写他。"
+        "这一窗只退这一次：再点名这一条会照常说出去。"
     )
 
 
@@ -423,11 +424,9 @@ class Planner:
         self._round_danmaku: Tuple[Tuple[str, str], ...] = ()
         # 本窗交来的历史：回应目标是更早一窗的观众弹幕时，在这里查得到
         self._round_history: List[Any] = []
-        # 本窗是不是观众发弹幕促发的（不是冷场、流程单这类主动窗）：有人在问，提过的旧事可以再接
-        self._round_viewers_asking: bool = False
         # 本窗由观众弹幕或玩家开口推上来的档案行（线索卡来源里有人提到）
         self._round_asked_archive_ids: Set[int] = set()
-        # 本窗是否已因点名提过的旧事退回过一次：每窗只退一次，第二次去掉点名照常说
+        # 本窗是否已因点名提过的旧事退回过一次：每窗只退一次，第二次照常说（点名留着，照样记成提过）
         self._round_memory_bounced: bool = False
         # 本窗在游戏里开口或冲她做动作的玩家：线索推送据此推玩家卡
         self._round_game_players: Tuple[Tuple[str, str], ...] = ()
@@ -576,7 +575,6 @@ class Planner:
             (str(getattr(msg, "message_id", "") or ""), str(getattr(msg, "content", "") or "")) for msg in batch
         )
         self._round_history = list(history or [])
-        self._round_viewers_asking = bool(self._round_danmaku) and not proactive
         self._round_memory_bounced = False
         self._round_game_players = resolved_batch.addressed_players
         # 玩家扔来东西常在上一窗入账、这一窗才接话：表达侧拿的是最近几分钟的，不只本窗
@@ -840,18 +838,17 @@ class Planner:
             self.logger.info(f"to_player 写的「{written}」不在最近找她的玩家里，不填回应对象")
         return name
 
-    def _someone_asked(self, line_id: int, target: Any, answers_danmaku: bool) -> bool:
-        """提过的旧事这一句再接算不算有人问起：四种情形任一成立就不退回。
+    def _answers_someone(self, line_id: int, answers_viewer: bool, to_player: str, answering_player: str) -> bool:
+        """提过的旧事这一句再接算不算在回人：三种情形任一成立就不退回。
 
-        回本窗或本场更早的一条观众弹幕（观众上一窗问、这一窗才回）；本窗有玩家在公屏开口；
-        这一条是本窗观众弹幕或玩家开口推上来的线索卡；本窗本身是观众发弹幕促发的。
+        回的是本场的一条观众弹幕（本窗的，或观众上一窗问、这一窗才回的）；``to_player`` 点名了最近找过她的
+        一位玩家；这一条是本窗观众弹幕或玩家开口推上来的线索卡。只是本窗有弹幕、有玩家开口不算：热闹时段
+        几乎每窗都有，按这个放行，冷场时主动复提就拦不住了。
         """
         return (
-            answers_danmaku
-            or _viewer_message_in(target, self._round_history)
-            or any(note.said for note in self._round_player_notes)
+            answers_viewer
+            or (bool(to_player.strip()) and bool(answering_player))
             or line_id in self._round_asked_archive_ids
-            or self._round_viewers_asking
         )
 
     async def _resolve_archive_ref(self, line_id: int) -> Tuple[str, List[str]]:
@@ -1277,11 +1274,13 @@ class Planner:
         # 回的是本场更早一窗的观众弹幕（上一窗问的、这一窗才回）同样是在回观众，不是在回游戏里的玩家
         answers_viewer = answers_danmaku or _viewer_message_in(args.get("target"), self._round_history)
         answering_player = "" if answers_viewer else self._reply_player_name(args)
-        # 本场已经提过的旧事又被点名、又没人问起：先退回一次，让她换个话题。第 58 场 14 条旧事里
-        # 8 条各提了两次，第二次全是冷场时主动点名的。每窗只退一次：退过还点名，就去掉点名照常说，
-        # 免得一窗里接连被退、整窗哑掉（观众上一窗问的、这一窗才回时，原先就会被退到步数用完）
+        # 本场已经提过的旧事又被点名、这句又不是在回人：先退回一次，让她换个话题。第 58 场 14 条旧事里
+        # 8 条各提了两次，第二次全是冷场时主动点名的。每窗只退一次：退过还点名就照常说出去，免得一窗里
+        # 接连被退、整窗哑掉；点名留着，这句照样记成提过、计进唠叨指标
         repeated = self._repeated_archive_id(args)
-        if repeated is not None and not self._someone_asked(repeated, args.get("target"), answers_danmaku):
+        if repeated is not None and not self._answers_someone(
+            repeated, answers_viewer, str(args.get("to_player") or ""), answering_player
+        ):
             number = render_archive_number(repeated)
             if not self._round_memory_bounced:
                 self._round_memory_bounced = True
@@ -1291,8 +1290,7 @@ class Planner:
                     replace(outcome, memory_repeat_bounces=outcome.memory_repeat_bounces + 1),
                     False,
                 )
-            self.logger.info(f"{number} 本窗已退回过一次，这句去掉点名照常说")
-            args = {key: value for key, value in args.items() if key != "use_memory"}
+            self.logger.info(f"{number} 本窗已退回过一次，这句照常说（点名留着，照样记成提过）")
         try:
             remembered, memory_ids = await self._resolve_use_memory(args)
             attachment = ReplyRoundAttachment(
