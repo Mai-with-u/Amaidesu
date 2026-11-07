@@ -149,7 +149,9 @@ class ArchiveLine(BaseModel):
 
     id: int = Field(..., description="档案行主键（自增）")
     live_session_id: int = Field(..., description="所属场次主键")
-    text: str = Field(..., description="标题（≤30 字；游戏相关的写上游戏名）")
+    text: str = Field(
+        ..., description="标题（≤30 字；游戏相关的写上游戏名；没核实到的完成说法另加'她说'与'游戏记录里没核实到'）"
+    )
     quote: str = Field(..., description="她播出原句的逐字片段（≤80 字）")
     evidence_chat_id: int = Field(..., description="原话所在的 live_chat 行")
     game: Optional[str] = Field(default=None, description="写的是哪个游戏世界里的事；None 即与游戏世界无关")
@@ -289,6 +291,10 @@ class SettleReport(BaseModel):
     )
     candidates_personal_dropped: int = Field(
         default=0, description="因含观众个人信息被代码丢掉的候选数（内容不写进报告）"
+    )
+    unverified_claims: int = Field(
+        default=0,
+        description="写进档案、标了'游戏记录里没核实到'的完成说法几条（她说游戏里做成了，记录里对不上）",
     )
     side_effects: Optional[SideEffectStats] = Field(
         default=None,

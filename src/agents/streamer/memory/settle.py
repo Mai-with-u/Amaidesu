@@ -78,7 +78,15 @@ from src.agents.streamer.memory.settle_candidates import (
     validate_viewer_candidates,
 )
 from src.agents.streamer.memory.settle_players import PlayerChat, build_player_chat
-from src.agents.streamer.memory.settle_proof import GameRecord, game_records, is_done_claim, proof_for, render_records
+from src.agents.streamer.memory.settle_proof import (
+    UNVERIFIED_MARK,
+    GameRecord,
+    game_records,
+    is_done_claim,
+    mark_unverified,
+    proof_for,
+    render_records,
+)
 from src.agents.streamer.memory.settle_cues import remembered_places, render_places, verified_keywords, verified_place
 from src.modules.utils.time_utils import now_ms
 
@@ -120,10 +128,11 @@ _LINE_PREFIX_TOKENS = 4
 MAX_SESSIONS_PER_RUN = 4
 # 一次整理最多写几行本场新事（模型多给了就只取前几行；连同接住的行，一份快照的上限见 rolling）
 MAX_ARCHIVE_LINES = 8
-# 完成说法没核实到时进整理报告的原因
-_UNPROVEN_REASON = "说游戏里做成了，游戏记录里没核实到：没引记录，或引的记录没做成、不是这个游戏、晚于她这句"
-# 核对完成说法时读的游戏事件至多几条（最近的）：比给模型看的关键事件多，一场里早些时候做成的也查得到
-_RECORD_EVENTS_MAX = 200
+# 了结时说做完了、游戏记录里没核实到：承诺不了结，进整理报告的原因
+_UNPROVEN_REASON = "说游戏里的事做完了，游戏记录里没核实到：没引记录，或引的记录都没做成、不是这个游戏、晚于她这句"
+# 核对完成说法时读的游戏事件至多几条：取读口的上限，要的是全本场（第 58 场连同急事插曲一百二十来条），
+# 少了就是长场前半段做成的事查不到
+_RECORD_EVENTS_MAX = 500
 # 逐字引文与标题的上限（超出的引文整条丢弃，超出的标题截断）
 MAX_QUOTE_CHARS = 80
 MAX_TITLE_CHARS = 30
@@ -637,6 +646,8 @@ class SessionSettler:
             snapshot_changes=outcome.snapshot_changes,
             candidates_listed=listed,
             candidates_personal_dropped=outcome.candidates_personal_dropped,
+            # 本场写进档案、标了"游戏记录里没核实到"的完成说法几条：人审时一眼看得见
+            unverified_claims=sum(1 for line in outcome.archive_lines if line.text.endswith(UNVERIFIED_MARK)),
             # 唠叨指标和本场整理一起写：同一件旧事提了几次、没人问时主动提几次、推的卡用上几张
             side_effects=await self._side_effects(session, delivered),
         )
@@ -646,6 +657,7 @@ class SessionSettler:
             or outcome.snapshot_changes
             or listed
             or outcome.candidates_personal_dropped
+            or report.unverified_claims
             or report.side_effects
         )
         now = int(self._clock())
@@ -1311,10 +1323,12 @@ class SessionSettler:
                 )
                 continue
             game_name = _game_of(raw.get("game"), material)
-            # 游戏里做成了什么：要有一条不晚于她这句的游戏记录撑着，嘴上说做好了不算（没核实到的不写进档案）
-            if game_name is not None and not self._proven(raw, f"{title} {verified}", material, game_name, line):
-                missed.append(UnregisteredItem(kind="archive", what=title, quote=verified, reason=_UNPROVEN_REASON))
-                continue
+            # 游戏里做成了什么：要有一条不晚于她这句的游戏记录撑着，嘴上说做好了不算。没核实到的照写，
+            # 写成"她说……（游戏记录里没核实到）"、不当稳定的事：顺手做成却没留下记录的事不被略掉，
+            # 下一场她也知道这只是自己说过的话
+            unverified = game_name is not None and not self._proven(
+                raw, f"{title} {verified}", material, game_name, line
+            )
             save = material.saves.save_at(game_name, int(line.timestamp_ms))
             place = ""
             if game_name is not None:
@@ -1328,13 +1342,13 @@ class SessionSettler:
                 )
             written.append(
                 PendingArchiveLine(
-                    text=title,
+                    text=mark_unverified(title) if unverified else title,
                     quote=verified,
                     evidence_chat_id=int(line.id),
                     game=game_name,
                     save_id=save.id,
                     save_name=save.name,
-                    lasting=raw.get("lasting") is True,
+                    lasting=raw.get("lasting") is True and not unverified,
                     keywords=verified_keywords(raw.get("keywords"), title, verified),
                     place=place,
                 )

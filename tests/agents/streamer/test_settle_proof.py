@@ -1,6 +1,7 @@
-"""下播整理核对"她说做好了"：游戏记录编号列给模型，档案与了结里的完成说法要引一条撑着它的记录，代码核对。
+"""下播整理核对"她说做好了"：游戏记录编号列给模型，档案与了结里的完成说法要引撑着它的记录，代码核对。
 
-她嘴上说"门装好了"不等于游戏里真装好了；没核实到的完成说法写进档案，下一场她就带着一件没发生的事开播。
+她嘴上说"门装好了"不等于游戏里真装好了；没核实到的完成说法当事实写进档案，下一场她就带着一件没发生的事
+开播。所以没核实到的写成"她说……（游戏记录里没核实到）"，了结不认。
 """
 
 from __future__ import annotations
@@ -13,7 +14,13 @@ from typing import Any, AsyncIterator, Dict, List
 import pytest
 
 from src.agents.streamer.memory.settle import SessionSettler
-from src.agents.streamer.memory.settle_proof import game_records, is_done_claim, proof_for, render_records
+from src.agents.streamer.memory.settle_proof import (
+    game_records,
+    is_done_claim,
+    mark_unverified,
+    proof_for,
+    render_records,
+)
 from src.modules.llm.payload import Response
 from src.modules.prompts import PromptManager
 from src.modules.storage.database import SQLiteDatabase
@@ -91,6 +98,53 @@ def test_proof_must_exist_prove_match_the_game_and_not_come_later() -> None:
         assert proof_for(ref, records, game="minecraft", at_ms=at_ms) is None
 
 
+def test_several_refs_pass_when_any_one_holds() -> None:
+    """evidence 引了几条（顿号、空格隔开或 JSON 列表）时有一条撑得住就算；都撑不住才算没核实到。"""
+    records = game_records(
+        [_event("milestone", "火把插好了", 10 * _MINUTE), _event("report", "钻石挖到了", _MINUTE // 2, game="other")],
+        [_delegation("succeeded", instruction="把门装上", summary="门装好了", ended_ms=_MINUTE)],
+    )
+    at_ms = 5 * _MINUTE
+
+    for ref in ("记录#1、记录#2", "记录#3 记录#2", ["记录#1", "#2"], "#1，2"):
+        held = proof_for(ref, records, game="minecraft", at_ms=at_ms)
+        assert held is not None and held.number == 2, ref
+    assert proof_for("记录#1、记录#3", records, game="minecraft", at_ms=at_ms) is None, "一条别的游戏、一条晚于她那句"
+    assert proof_for("记录#1（23:10 交付）", records, game="other", at_ms=at_ms) is None, "认不出的那截不当编号"
+
+
+def test_long_session_keeps_every_record_and_folds_consecutive_steps() -> None:
+    """记录不截最近几条：长场前半段做成的也引得到。条数多时同一次执行里连续的几步并成一行，
+    时刻取第一步（核对按它），显示成时段；夹着上报、步号从头开始，就是另一次执行。"""
+    events = [_event("report", "开场先把正门装好了", _MINUTE)]
+    for run in range(40):
+        start = (10 + run * 5) * _MINUTE
+        for step in range(1, 4):
+            message = f"第 {step} 步（maicraft:obtain，第{run}次），拿到了 1 个 minecraft:dirt"
+            events.append(_event("milestone", message, start + step * _MINUTE))
+    events.append(_event("report", "最后把窗台的花种下了", 300 * _MINUTE))
+
+    records = game_records(events, [])
+
+    assert len(records) == 42, "开场那条上报 + 40 次执行各并成一行 + 收尾那条上报"
+    assert records[0].text == "开场先把正门装好了" and records[-1].text == "最后把窗台的花种下了"
+    folded = records[1]
+    assert (folded.at_ms, folded.until_ms) == (11 * _MINUTE, 13 * _MINUTE) and folded.proves
+    assert folded.text.startswith("连续 3 步：第 1 步（第0次），拿到了 1 个 dirt；第 2 步")
+    assert "maicraft:" not in folded.text and "minecraft:" not in folded.text
+    assert "- 记录#2 " in render_records(records) and "–" in render_records(records).splitlines()[2]
+    assert proof_for("记录#1", records, game="minecraft", at_ms=2 * _MINUTE) is not None, "开场做成的还引得到"
+    assert proof_for("记录#2", records, game="minecraft", at_ms=11 * _MINUTE) is not None, "并成一行按第一步核对"
+
+    few = game_records(events[:7], [])
+    assert [record.until_ms for record in few] == [0] * 7, "条数不多时一步一行，不并"
+
+
+def test_unverified_claim_reads_as_her_words() -> None:
+    assert mark_unverified("Minecraft：门口种了一排花") == "Minecraft：她说门口种了一排花（游戏记录里没核实到）"
+    assert mark_unverified("窗台的花摆好了") == "她说窗台的花摆好了（游戏记录里没核实到）"
+
+
 # ---------------------------------------------------------------------------
 # 接进整理
 # ---------------------------------------------------------------------------
@@ -162,12 +216,13 @@ def _archive(line: int, title: str, quote: str, evidence: Any) -> Dict[str, Any]
 async def test_done_claims_need_a_game_record_in_archive_and_closures(
     store: SQLiteDatabase, prompt_manager: PromptManager
 ) -> None:
-    """引了交付了的委派的留下；引没交付的、引比她那句晚的、没引的完成说法不写进档案、不了结，进整理报告；
-    不是完成说法的、说做不到的照常。模型在档案与了结两次调用里都看得到编了号的游戏记录。"""
+    """引了交付了的委派的照常写；引没交付的、引比她那句晚的完成说法写成"她说……（游戏记录里没核实到）"、
+    不算稳定的事，整理报告记下条数；了结时没核实到的不了结、进未登记清单。不是完成说法的、说做不到的照常。
+    模型在档案与了结两次调用里都看得到编了号的游戏记录。"""
     ids = await _scene(store)
     archive = [
         _archive(1, "Minecraft：营地正门装好", "门装好啦", "记录#1"),
-        _archive(2, "Minecraft：门口种了一排花", "花都种好了", "记录#2"),
+        {**_archive(2, "Minecraft：门口种了一排花", "花都种好了", "记录#2"), "lasting": True},
         _archive(3, "Minecraft：火把插好", "火把也插好了", "记录#3"),
         _archive(4, "Minecraft：海带还没烤完", "海带还没烤完", None),
     ]
@@ -200,7 +255,18 @@ async def test_done_claims_need_a_game_record_in_archive_and_closures(
     for call in (llm.calls[0], llm.calls[2]):
         assert "- 记录#1 " in call["input"] and "委派「把营地的门装上」交付了：正门装好了" in call["input"]
     lines = await store.archive.list_lines(live_session_id=ids["session"])
-    assert [line.text for line in lines] == ["Minecraft：营地正门装好", "Minecraft：海带还没烤完"]
+    assert sorted(line.text for line in lines) == sorted(
+        [
+            "Minecraft：营地正门装好",
+            "Minecraft：她说门口种了一排花（游戏记录里没核实到）",
+            "Minecraft：她说火把插好（游戏记录里没核实到）",
+            "Minecraft：海带还没烤完",
+        ]
+    )
+    snapshot = await store.archive.get_snapshot(live_session_id=ids["session"])
+    assert snapshot is not None
+    marked = [item.lasting for item in snapshot.lines if "没核实到" in item.line.text]
+    assert marked == [False, False], "模型标了稳定也不算：没核实到的不当稳定的事"
     statuses: Dict[int, str] = {}
     for key in ("door", "flower", "song"):
         row = await store.commitments.get_commitment(commitment_id=ids[key])
@@ -211,4 +277,4 @@ async def test_done_claims_need_a_game_record_in_archive_and_closures(
     assert session is not None and session.settle_report is not None
     report = SettleReport.model_validate_json(session.settle_report)
     unproven: List[str] = [item.what for item in report.unregistered if "游戏记录里没核实到" in item.reason]
-    assert unproven == ["Minecraft：门口种了一排花", "Minecraft：火把插好", f"了结 #{ids['flower']}"]
+    assert unproven == [f"了结 #{ids['flower']}"] and report.unverified_claims == 2

@@ -1666,6 +1666,8 @@ export interface SettleReport {
   candidates_listed?: Partial<Record<CandidateKind | 'player_self', number>>;
   /** 因含观众个人信息被代码丢掉的候选数（内容不写进报告） */
   candidates_personal_dropped?: number;
+  /** 写进档案、标了“游戏记录里没核实到”的完成说法几条（她说游戏里做成了，记录里对不上） */
+  unverified_claims?: number;
   /** 这一场的唠叨指标；本场没点名旧事也没推卡时为 null */
   side_effects?: SideEffectStats | null;
 }

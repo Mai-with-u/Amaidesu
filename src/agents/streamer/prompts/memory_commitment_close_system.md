@@ -1,6 +1,6 @@
 ---
 name: memory_commitment_close_system
-version: "1.2"
+version: "1.3"
 description: "下播整理的第三次调用：判断本场她有没有明确说某条旧承诺做完了、做不到或不做了（后台 summary 档位调用）"
 variables: []
 author: Amaidesu
@@ -33,6 +33,6 @@ tags: [streamer, memory, commitment]
 - id：被了结的承诺编号；
 - line：依据出自她的哪一行台词，填台词前的编号——就是她说做完了、做不到、不做了或者说明换了做法的那一行；
 - quote：那一行里的原话，直接照抄，不超过 80 字；
-- evidence：她说游戏里的事做完了时，撑着它的那条游戏记录编号（"记录#7"）；说做不到、不做了，或者没有【游戏记录】时写 null。
+- evidence：她说游戏里的事做完了时，撑着它的游戏记录编号（"记录#7"，几条一起撑着就用顿号隔开）；说做不到、不做了，或者没有【游戏记录】时写 null。
 
 没有任何一条了结就输出 {"closed": []}。

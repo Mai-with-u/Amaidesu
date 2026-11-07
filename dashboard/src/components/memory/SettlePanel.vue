@@ -89,6 +89,13 @@
             )
           }}
         </p>
+        <!-- 她说游戏里做成了、记录里对不上的那几行照写进档案但打了标记：数目单列，审的人先看这几行 -->
+        <p v-if="row.settle_report?.unverified_claims" class="settle-meta">
+          没核实到的完成说法：{{
+            row.settle_report.unverified_claims
+          }}
+          行（已写进档案，标了“游戏记录里没核实到”）
+        </p>
         <p v-if="sideEffectText(row.settle_report?.side_effects)" class="settle-meta">
           唠叨指标：{{ sideEffectText(row.settle_report?.side_effects) }}
         </p>
