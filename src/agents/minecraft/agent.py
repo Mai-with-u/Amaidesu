@@ -159,6 +159,9 @@ _FAULT_STUCK = "身体出故障了，动不了；重新派活也没用，得等�
 UNDELIVERED_REPORT_MESSAGE = "游戏那边停了，没交付结果，做没做完不确定"
 # 在做委派却没调交付就停下时先给模型的一次提醒：做完了交付、没做成报卡住，第二次还不交付才记停了没交付
 DELIVERY_REMINDER = "[还没交付] 做完了就用 minecraft_report 交付（delivery），没做成就报卡住（escalation）。"
+# 同一个问题没人答、接着做又挂回等定夺满这么多次后，计时到点不再叫醒续原任务，只等主播回答：
+# 每次叫醒至少两次模型调用，模型每批都给自己挂计时的话会一直周期性空转
+MAX_REHOLDS_PER_QUESTION = 2
 # 卡住时问主播的问题还没人答、被计时或决策叫醒接着做的这一批，停下前的提醒：还在等那个回答就直接停，不必重报
 DELIVERY_REMINDER_WHILE_WAITING = (
     "[还没交付] 做完了就用 minecraft_report 交付（delivery）；遇到新的卡点就报卡住（escalation），换成新的问题；"
@@ -400,6 +403,8 @@ class MinecraftAgent(BaseAgent):
         # 卡住时问主播的问题（等定夺的理由）；她的回答（递话或新委派）读到之前一直留着，空串 = 没有在等的问题。
         # 计时到点、Mod 决策、连接恢复叫醒接着做的那一批没交付就停时，凭它重新挂回等定夺，不记成停了没交付
         self._open_question = ""
+        # 这个问题没人答、接着做又挂回等定夺了几次（换问题或有人答了清零）
+        self._open_question_reholds = 0
         self._wait_requested = False
 
         # 平台暂停支持（AgentControl pause/resume 经 _on_pause/_on_resume 进入）
@@ -878,7 +883,7 @@ class MinecraftAgent(BaseAgent):
                         self._start_new_task(messages, system_message)
                         opening_due = True
                     # 读到主播的递话或新委派：卡住时问的那个问题算有人答了；开新任务时也不再有在等的问题
-                    self._open_question = ""
+                    self._set_open_question("")
                     self._task_instructions.append(content)
                     self._task_finished = False
                     self._task_suspended = False
@@ -1117,8 +1122,12 @@ class MinecraftAgent(BaseAgent):
             # "等我拿主意"，重新挂回等定夺、账面回到 waiting_for_decision，不记成停了没交付——记成没交付她会
             # 以为那件事结束了，就不去回答那个问题。不再发上报：问题她已经收到过一次
             self._task_suspended = True
+            self._open_question_reholds += 1
             self._delegations.hold(self._open_question)
-            self._logger.info(f"任务批次自然终止（{steps} 步），卡住时问的问题还没人答，重新挂回等定夺")
+            self._logger.info(
+                f"任务批次自然终止（{steps} 步），卡住时问的问题还没人答，重新挂回等定夺"
+                f"（第 {self._open_question_reholds} 次）"
+            )
         elif not self._task_reported:
             # 提醒过还是没调 minecraft_report 就停了：做完只认交付，这里不替它交付成"任务完成"。
             # 主播那边收到"停了没交付"，不会对观众说做好了；任务照旧算结束，下条指令开新任务。
@@ -1409,7 +1418,14 @@ class MinecraftAgent(BaseAgent):
         if route.channel == "carry_sky":
             self._carry_sky_notice(route.template.format(message=message))
         elif route.channel == "wake_even_idle":
-            self._wake_even_idle(route.template.format(message=message))
+            notice = route.template.format(message=message)
+            if kind == TIMER_DUE and self._live_active and self._only_waiting_for_answer():
+                # 同一个问题已挂回等定夺满上限：到点不再叫醒续原任务，记成普通通知，主播回答时一起读。
+                # Mod 挂出的决策照旧叫醒——没人回答，角色就一直停在死亡屏幕
+                self._wake_queue.push_notice(notice)
+                self._logger.info(f"卡住时问的问题已挂回 {self._open_question_reholds} 次，计时到点只记下、不续原任务")
+            else:
+                self._wake_even_idle(notice)
         elif route.channel == "wake_for_interaction":
             self._offer_interaction(event, message)
         elif route.channel == "inject_if_busy":
@@ -2108,10 +2124,23 @@ class MinecraftAgent(BaseAgent):
     # 上报
     # ==================================================================
 
+    def _set_open_question(self, question: str) -> None:
+        """换上（或清掉）在等主播回答的问题：挂回等定夺的次数跟着清零，新问题重新算。"""
+        self._open_question = question
+        self._open_question_reholds = 0
+
+    def _only_waiting_for_answer(self) -> bool:
+        """同一个问题没人答、已挂回等定夺满上限：这时计时到点不再续原任务，只等主播回答。"""
+        return (
+            self._task_suspended
+            and bool(self._open_question)
+            and self._open_question_reholds >= MAX_REHOLDS_PER_QUESTION
+        )
+
     async def _suspend_with_report(self, reason: str) -> None:
         """角色已停止自动行动：主动上报待定夺，并保留原委派。"""
         self._task_suspended = True
-        self._open_question = reason
+        self._set_open_question(reason)
         self._delegations.hold(reason)
         await self._emit_report("escalation", reason)
 
@@ -2136,11 +2165,11 @@ class MinecraftAgent(BaseAgent):
         self._task_suspended = kind == "escalation"
         if kind == "delivery":
             # 交付了：卡住时问过的问题随这件事一起了结
-            self._open_question = ""
+            self._set_open_question("")
             self._delegations.finish("succeeded", summary=f"{kind}: {content}")
         else:
             # 报卡住：这次问的就是在等主播回答的问题（叫醒后遇到新卡点再报，就换成新的问题）
-            self._open_question = f"{kind}: {content}"
+            self._set_open_question(f"{kind}: {content}")
             self._delegations.hold(self._open_question)
         return None
 

@@ -224,7 +224,10 @@ async def test_natural_termination_settles_delegation_as_undelivered_not_succeed
     )
     assert agent.receive_delegation(instruction="把门装上", task_id="d-1") is None
     await _wait_until(lambda: "d-1" not in ledger)
-    await _wait_until(lambda: ledger_bus.emit.await_count >= 1)
+    # 账本变化事件是后台发的：等到了结那条发出来再看
+    await _wait_until(
+        lambda: ledger_bus.emit.await_count >= 1 and ledger_bus.emit.await_args.args[1].status == "undelivered"
+    )
 
     assert len(llm.seen) == 2 and _reminded(llm.seen[1]) and not _reminded(llm.seen[0]), "停下先提醒一次再记"
 
@@ -264,9 +267,13 @@ async def test_delivery_reminder_lets_the_task_deliver_itself() -> None:
 
     agent, llm, bus = await make_minecraft_agent(FakeMaicraft(), script, tracker=TaskTracker(ToolRegistry(), ledger))
     assert agent.receive_delegation(instruction="把门装上", task_id="d-1") is None
-    await _wait_until(lambda: "d-1" not in ledger)
+    # 账本变化事件是后台发的：等到了结那条发出来再看
+    await _wait_until(
+        lambda: "d-1" not in ledger
+        and ledger_bus.emit.await_count >= 1
+        and ledger_bus.emit.await_args.args[1].status == "succeeded"
+    )
 
-    assert ledger_bus.emit.await_args_list[-1].args[1].status == "succeeded"
     assert [report.report_kind for report in _game_events(bus, "report")] == ["delivery"]
     assert len(llm.seen) == 2
     await agent.stop()

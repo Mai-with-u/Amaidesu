@@ -128,9 +128,12 @@ async def test_a_task_woken_after_delivery_that_stops_unreported_leaves_the_deli
 
     agent, llm, bus = await make_minecraft_agent(server, script, tracker=TaskTracker(ToolRegistry(), ledger))
     agent.receive_delegation(instruction="烧点铁锭", task_id="d-1")
-    await _wait_until(lambda: "d-1" not in ledger and agent.batch_active is False)
-    settled = [call.args[1].status for call in ledger_bus.emit.await_args_list]
-    assert settled[-1] == "succeeded"
+    await _wait_until(
+        lambda: "d-1" not in ledger
+        and agent.batch_active is False
+        and _ledger_statuses(ledger_bus)[-1:] == ["succeeded"]
+    )
+    settled = _ledger_statuses(ledger_bus)
 
     server.body_event("timer_due", _TIMER_DUE)
     await _wait_until(lambda: len(llm.seen) == 2 and agent.batch_active is False)
@@ -192,6 +195,11 @@ async def test_a_due_timer_resumes_a_task_suspended_for_the_streamer() -> None:
     await agent.stop()
 
 
+def _ledger_statuses(ledger_bus: Any) -> List[str]:
+    """已发出的账本变化事件里的状态，按发出先后。账本是在后台发这些事件的，断言前先等到想要的那条发出来。"""
+    return [call.args[1].status for call in ledger_bus.emit.await_args_list]
+
+
 def _escalated_ledger() -> tuple[TaskLedger, Any]:
     """登记一件她派的委派（d-1），返回账本与收 task.changed 的替身总线。"""
     ledger_bus = SimpleNamespace(emit=AsyncMock())
@@ -225,7 +233,11 @@ async def test_a_timer_after_escalation_that_stops_unreported_goes_back_to_waiti
     await _wait_until(lambda: agent.observation()["task_suspended"] and agent.batch_active is False)
 
     server.body_event("timer_due", _TIMER_DUE)
-    await _wait_until(lambda: len(llm.seen) == 3 and agent.batch_active is False)
+    await _wait_until(
+        lambda: len(llm.seen) == 3
+        and agent.batch_active is False
+        and _ledger_statuses(ledger_bus)[-2:] == ["running", "waiting_for_decision"]
+    )
 
     assert DELIVERY_REMINDER_WHILE_WAITING in _texts(llm.seen[-1]), "提醒里说明还在等回答就直接停"
     assert [report.report_kind for report in _reports(bus)] == ["escalation"], "不代发停了没交付，也不重报卡住"
@@ -235,6 +247,42 @@ async def test_a_timer_after_escalation_that_stops_unreported_goes_back_to_waiti
     last = ledger_bus.emit.await_args_list[-1].args[1]
     assert (last.status, last.summary) == ("waiting_for_decision", "escalation: 缺燃料，要不要去砍树")
     assert agent.observation()["task_suspended"]
+    await agent.stop()
+
+
+async def test_timers_stop_resuming_after_the_same_question_is_held_twice() -> None:
+    """同一个问题没人答、接着做又挂回等定夺满两次后：计时到点不再续原任务（不再调模型），这条到点留在队列里，
+    主播回答时一起读到。"""
+    ledger, _ledger_bus = _escalated_ledger()
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        # 报卡住 -> 计时两次，每次只说一句、提醒后还是停 -> 第三次到点不再叫醒 -> 主播回答后交付
+        if "去砍树吧" in _texts(messages):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "砍了树，铁锭烧好了"})])
+        if "[计时]" in _texts(messages):
+            return _resp("炉子还在烧")
+        return _resp(calls=[_call("minecraft_report", {"kind": "escalation", "content": "缺燃料，要不要去砍树"})])
+
+    agent, llm, bus = await make_minecraft_agent(server, script, tracker=TaskTracker(ToolRegistry(), ledger))
+    agent.receive_delegation(instruction="烧点铁锭", task_id="d-1")
+    await _wait_until(lambda: agent.observation()["task_suspended"] and agent.batch_active is False)
+    for calls in (3, 5):
+        server.body_event("timer_due", _TIMER_DUE)
+        await _wait_until(
+            lambda expected=calls: (
+                len(llm.seen) == expected and agent.observation()["task_suspended"] and not agent.batch_active
+            )
+        )
+
+    server.body_event("timer_due", "计时 4 到点：再看一眼炉子")
+    await _wait_until(lambda: any("计时 4 到点" in str(item[1]) for item in agent.queued_messages))
+    assert len(llm.seen) == 5 and agent.batch_active is False, "第三次到点不再续原任务"
+
+    agent.receive_prompt(content="去砍树吧", source="test")
+    await _wait_until(lambda: "d-1" not in ledger)
+    assert "计时 4 到点" in _texts(llm.seen[-1]), "到点那条随主播的回答一起读到"
+    assert [report.report_kind for report in _reports(bus)] == ["escalation", "delivery"]
     await agent.stop()
 
 
