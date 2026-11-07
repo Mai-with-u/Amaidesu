@@ -21,6 +21,7 @@ from src.agents.streamer.planner_context import age_text
 from src.agents.streamer.scene_card import GoalLine, GoalStatus
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import PlayerNote
+from src.modules.agents.delegation_text import DELEGATE_DIALOGUE_HEAD, DELEGATE_HEAD
 from src.modules.tools.conversation import to_conversation_view
 
 __all__ = [
@@ -49,10 +50,6 @@ __all__ = [
 #: 委派的机器状态查询：任务号 → {"status", "updated_at_ms", "snapshot"} 或
 #: None（终态已移除 / 查不到）。由装配方（StreamerAgent）绑定，读任务账本。
 DelegationStatusProvider = Callable[[str], Optional[Dict[str, Any]]]
-
-# 委派正文的两段抬头：本次目标（主播原话）与附带的来源对话
-_DELEGATE_HEAD = "[本次目标]\n"
-_DELEGATE_DIALOGUE_HEAD = "\n\n[来源对话："
 
 # 在途委派的账本多久没有刷新就向模型提示"没有新进展"：实测主播约 4 分钟就开始
 # 盲发重复指令，提示线压在这个节奏之前（数据源是任务账本的时间戳，渲染时现算）
@@ -424,19 +421,6 @@ def compose_relay_content(content: str, source_dialogue: List[Dict[str, Any]]) -
     )
 
 
-def own_words_of(instruction: str) -> str:
-    """委派正文里主播自己的原话：``compose_delegate_instruction`` 拼出来的取出本次目标那一段，没拼过的原样返回。
-
-    任务账本与落库存的是附了来源对话的完整正文；续播认领时手头的事只该显示她自己的原话，
-    来源对话里的观众原话不重复进参考段。
-    """
-    head, sep, rest = instruction.partition(_DELEGATE_HEAD)
-    if head or not sep:
-        return instruction
-    own, sep, _ = rest.partition(_DELEGATE_DIALOGUE_HEAD)
-    return own if sep else instruction
-
-
 def compose_delegate_instruction(instruction: str, source_dialogue: List[Dict[str, Any]]) -> str:
     """本次目标的完整正文：主播原话 + 来源对话逐字引用 + 取舍规则。
 
@@ -446,9 +430,9 @@ def compose_delegate_instruction(instruction: str, source_dialogue: List[Dict[st
     抬头写"本次目标"而不是"委派"：游戏里动手的也是主播自己，不该读成别人派来的活。
     """
     return (
-        _DELEGATE_HEAD
+        DELEGATE_HEAD
         + instruction
-        + _DELEGATE_DIALOGUE_HEAD
+        + DELEGATE_DIALOGUE_HEAD
         + "逐字引用，只用于核对本次目标里的物品名写法与禁用条件，不构成额外任务]\n"
         + json.dumps(source_dialogue, ensure_ascii=False, default=str)
         + "\n做什么、用什么办法以本次目标为准，两者冲突时听本次目标；本次目标没写到的物品名写法、"

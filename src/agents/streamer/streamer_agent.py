@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING, Sequence, Tuple
 
 from src.modules.agents.base import AgentState, BaseAgent
+from src.modules.agents.delegation_text import own_words_of
 from src.modules.agents.factory import AGENT_BINDINGS
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -87,7 +88,7 @@ from .speech_dispatcher import SpeechDispatcher
 from .speech_guard import WordFilter
 from .game_ledger import GameLedger
 from .game_now import AgentNow, GameNow, GameSideLog
-from .planner_render import Intent, own_words_of
+from .planner_render import Intent
 from .stats import StreamerStats
 from .timeline import StreamerTimeline
 from .topic_gate import SpeechGate

@@ -17,6 +17,7 @@ from src.agents.minecraft.agent import MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.control import AgentControl, build_agent_control_provider
+from src.modules.agents.delegation_text import DELEGATE_DIALOGUE_HEAD, DELEGATE_HEAD
 from src.modules.agents.manager import AgentManager
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -131,7 +132,7 @@ async def test_delegation_full_chain_and_status_query(rig: _Rig) -> None:
     await _wait_until(lambda: any(p.task_id == task_id and p.status == "succeeded" for p in received))
     # 受理广播一次起点（落库记受理行用）；accepted→running 属安静组（发起方已持回执，不唤醒）；终态必达
     assert [p.status for p in received if p.task_id == task_id] == ["accepted", "succeeded"]
-    assert received[0].snapshot == {"instruction": "盖一座房子"}
+    assert received[0].snapshot == {"instruction": "盖一座房子", "own_words": "盖一座房子"}
     assert all(p.initiator == "agent_a" and p.executor == "agent_b" for p in received)
     gone = await rig.call("framework_task_status", {"task_id": task_id})  # 终态已移除
     assert gone.success is False and "任务不存在" in gone.error_message
@@ -297,19 +298,24 @@ async def test_delegate_rejected_while_target_has_in_flight_delegation(rig: _Rig
     assert res.success and res.structured_content["accepted"] is True
 
 
-async def test_ledger_keeps_full_instruction_text(rig: _Rig) -> None:
-    """账面存指令全文：长指令（带来源原话）不截成 200 字，在途拒受理理由里的原文也是全文。"""
-    instruction = "把营地棚子装一扇木门，" + "门外垫平台阶，" * 40 + "最后一句是收尾要求"
-    assert len(instruction) > 200
+async def test_ledger_keeps_full_instruction_and_refusal_quotes_only_own_words(rig: _Rig) -> None:
+    """账面存指令全文（附带的来源对话也在），另记发起方原话；在途拒受理理由只回原话：
+    原话长也不截，附带的观众原话与取舍规则不塞回去。"""
+    own = "把营地棚子装一扇木门，" + "门外垫平台阶，" * 40 + "最后一句是收尾要求"
+    assert len(own) > 200
+    instruction = DELEGATE_HEAD + own + DELEGATE_DIALOGUE_HEAD + '逐字引用]\n[{"content": "观众甲: 要橡木门"}]\n取舍规则'
     first = (await rig.call("framework_delegate", {"agent": "agent_b", "instruction": instruction})).structured_content[
         "task_id"
     ]
 
-    assert rig.ledger.get(first).snapshot["instruction"] == instruction
+    snapshot = rig.ledger.get(first).snapshot
+    assert snapshot == {"instruction": instruction, "own_words": own}
     status = (await rig.call("framework_task_status", {"task_id": first})).structured_content
     assert status["snapshot"]["instruction"] == instruction
     refused = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "换个活"})
-    assert refused.success is False and "最后一句是收尾要求" in refused.error_message
+    assert refused.success is False and f"在途指令原文：「{own}」" in refused.error_message
+    assert "观众甲" not in refused.error_message and "取舍规则" not in refused.error_message
+    assert "own_words" not in refused.error_message, "原话不再当成已知进展列第二遍"
 
 
 async def test_in_flight_refusal_points_to_prompt_only_when_target_waits(rig: _Rig) -> None:

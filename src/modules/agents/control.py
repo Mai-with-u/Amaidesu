@@ -32,6 +32,7 @@ from src.modules.events.payloads.agents import AgentPromptedPayload
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
+from src.modules.agents.delegation_text import own_words_of
 from src.modules.tools.tasks import TERMINAL_TASK_STATES, TaskLedger, TaskRecord
 from src.modules.utils.time_utils import now_ms
 
@@ -213,9 +214,16 @@ class _DelegationCore:
 
     @staticmethod
     def _in_flight_refusal_message(record: TaskRecord) -> str:
-        """构造在途拒受理的失败理由：在途任务号 + 指令原文 + 受理距今时长 + 已知进展。"""
+        """构造在途拒受理的失败理由：在途任务号 + 发起方原话 + 受理距今时长 + 已知进展。
+
+        原话只给发起方自己说的那段：她常重复派单，每次被拒都把整段来源对话与取舍规则塞回去，
+        上千字的旧弹幕还会被当成"在途指令原文"读回来。
+        """
         waited_ms = max(now_ms() - record.created_at_ms, 0)
-        instruction = str(record.snapshot.get("instruction", "") or "（快照无指令原文）")
+        snapshot = record.snapshot
+        instruction = str(
+            snapshot.get("own_words") or own_words_of(str(snapshot.get("instruction") or "")) or "（快照无指令原文）"
+        )
         lines = [
             f"受理失败：目标 '{record.executor}' 手上已有一件事没做完"
             f"（任务号 {record.task_id}，已受理 {waited_ms // 1000} 秒），"
@@ -223,7 +231,7 @@ class _DelegationCore:
             f"在途指令原文：「{instruction}」",
         ]
         # 已知进展摘要有就带（批级关联/执行侧写入快照的额外字段），读不到不硬造
-        extras = {k: v for k, v in record.snapshot.items() if k not in ("instruction",)}
+        extras = {k: v for k, v in record.snapshot.items() if k not in ("instruction", "own_words")}
         if extras:
             lines.append(f"在途任务的已知进展：{extras}")
         # 出路按对方此刻的状态给：停着等主意时补充要求就是答复；还在做时别把人引去补充——
@@ -266,8 +274,8 @@ class _DelegationCore:
                 ok=False, error="refused", message=f"受理失败：目标 '{executor}' 拒收（{rejected}）"
             )
         # 受理成功：登记 agent 型任务（执行 Agent 唯一写入；循环不代写）。
-        # 账面存指令全文：主播递话补充、下播核对"她说做好了"都要拿原话比对，截过的半句对不上；
-        # 要截短的只有显示处（看板任务卡按行数截）
+        # 账面存指令全文（游戏侧与看板要用，截过的半句对不上），另记发起方自己的原话：
+        # 拒受理理由回给发起方、落库留给下播核对与续播认领的都只用原话，附带的来源对话不外传
         self._task_ledger.register(
             task_id=task_id,
             provider="framework",
@@ -276,7 +284,7 @@ class _DelegationCore:
             executor=executor,
             status="accepted",
             source="agent",
-            snapshot={"instruction": instruction},
+            snapshot={"instruction": instruction, "own_words": own_words_of(instruction)},
         )
         logger.info(f"委派受理: {initiator} -> {executor}（task_id={task_id}）")
         return _DelegationOutcome(ok=True, task_id=task_id, executor=executor)
