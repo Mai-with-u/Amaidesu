@@ -222,7 +222,7 @@ async def test_turning_a_session_into_rehearsal_drops_its_interactions(store: SQ
     with store.manager.transaction() as conn:
         conn.execute(
             "INSERT INTO player_candidates(live_session_id, player_id, title, player_chat_id, player_quote,"
-            " reply_quote, created_at_ms) VALUES (?, ?, '他是这服服主', ?, '我是这服服主', '好的', 1_400)",
+            " reply_quote, created_at_ms) VALUES (?, ?, '他是这服服主', ?, '我是这服服主', '好的', 1400)",
             (session_id, alex.id, said),
         )
     await store.sessions.set_live_session_kind_with_ledger(
