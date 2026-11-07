@@ -32,6 +32,7 @@ __all__ = [
     "PlayerCandidate",
     "PlayerInteraction",
     "PlayerSave",
+    "PlayerStatement",
     "ViewerPlayerLink",
 ]
 
@@ -146,6 +147,19 @@ class PlayerCandidate(PendingPlayerCandidate):
     status: str = Field(..., description="pending 待审 / approved 已批 / rejected 已驳回")
     created_at_ms: int = Field(..., description="列出的时刻")
     decided_at_ms: Optional[int] = Field(default=None, description="批准或驳回的时刻")
+
+
+class PlayerStatement(BaseModel):
+    """批准过的一条玩家自述：玩家卡上"他跟你说过"那几条，带他说那句时所在的存档。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(..., description="候选主键")
+    title: str = Field(..., description="标题")
+    game: str = Field(..., description="他那句公屏所在的游戏")
+    save_id: str = Field(default="", description="他说那句时所在的存档；不明为空")
+    save_name: str = Field(default="", description="存档给人看的名字")
+    decided_at_ms: int = Field(..., description="批准的时刻")
 
 
 class ViewerPlayerLink(BaseModel):

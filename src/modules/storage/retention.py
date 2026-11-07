@@ -142,7 +142,9 @@ class RetentionService:
             cur = conn.execute(
                 f"DELETE FROM game_chat WHERE direction <> 'streamer'"  # noqa: S608 常量 SQL 片段
                 f" AND (live_session_id IN ({expired_sessions_sql})"
-                f"      OR (live_session_id NOT IN ({orphan_session_sql}) AND at_ms <= ?))",
+                f"      OR (live_session_id NOT IN ({orphan_session_sql}) AND at_ms <= ?))"
+                # 批准进玩家卡的自述挂着的他那句留着：删了它，那条自述会被外键级联删掉
+                " AND id NOT IN (SELECT player_chat_id FROM player_candidates WHERE status = 'approved')",
                 (cutoff_ms, cutoff_ms),
             )
             chat_del += max(0, cur.rowcount)

@@ -15,6 +15,7 @@ from src.modules.storage.models.game_players import (
     INTERACTION_GIFT,
     INTERACTION_GREET,
 )
+from src.modules.storage.repos.memory_review import MemoryReviewError
 
 
 @pytest.fixture()
@@ -232,3 +233,89 @@ async def test_turning_a_session_into_rehearsal_drops_its_interactions(store: SQ
     assert await store.execute("SELECT id FROM player_candidates") == []
     assert await store.game_players.get_player(player_id=alex.id) is not None
     assert len(await store.game_players.list_session_game_chat(live_session_id=session_id)) == 1
+
+
+async def test_self_statements_are_approved_or_rejected_once_and_only_approved_ones_reach_the_card(
+    store: SQLiteDatabase,
+) -> None:
+    """玩家自述：批准可以改标题、驳回留着；审过的不能再审；玩家卡只读批准过的，最近批准的在前，带存档。"""
+    session = await _session(store)
+    repo = store.game_players
+    player = await repo.meet_player(
+        game="minecraft", uuid="uuid-jia", name="玩家甲", live_session_id=session, at_ms=1_010
+    )
+    ids = []
+    for index, (content, title) in enumerate(
+        (("我在雪山脚下挖了基地", "他在雪山脚下有基地"), ("我的猫叫团子", "他的猫叫团子"), ("我爱钓鱼", "他爱钓鱼"))
+    ):
+        chat = await repo.add_game_chat(
+            live_session_id=session,
+            game="minecraft",
+            direction=GAME_CHAT_PLAYER,
+            content=content,
+            player_id=player.id,
+            save_id="w1",
+            save_name="生存一档",
+            at_ms=1_100 + index,
+        )
+        with store.manager.transaction() as conn:
+            cur = conn.execute(
+                "INSERT INTO player_candidates(live_session_id, player_id, title, player_chat_id, player_quote,"
+                " reply_quote, created_at_ms) VALUES (?, ?, ?, ?, ?, '真好', ?)",
+                (session, player.id, title, chat, content, 2_000 + index),
+            )
+            ids.append(int(cur.lastrowid or 0))
+
+    assert await repo.count_pending_player_candidates() == 3
+    first = await repo.decide_player_candidate(
+        candidate_id=ids[0], approve=True, at_ms=3_000, title="他的基地在雪山脚下"
+    )
+    assert (first.status, first.title, first.decided_at_ms) == ("approved", "他的基地在雪山脚下", 3_000)
+    await repo.decide_player_candidate(candidate_id=ids[1], approve=True, at_ms=3_100)
+    rejected = await repo.decide_player_candidate(candidate_id=ids[2], approve=False, at_ms=3_200)
+    assert (rejected.status, rejected.title) == ("rejected", "他爱钓鱼")
+
+    with pytest.raises(MemoryReviewError) as conflict:
+        await repo.decide_player_candidate(candidate_id=ids[0], approve=False, at_ms=4_000)
+    assert conflict.value.kind == "conflict"
+    with pytest.raises(MemoryReviewError) as missing:
+        await repo.decide_player_candidate(candidate_id=999, approve=True, at_ms=4_000)
+    assert missing.value.kind == "not_found"
+
+    assert await repo.count_pending_player_candidates() == 0
+    assert [item.status for item in await repo.list_player_candidates(status="approved")] == ["approved", "approved"]
+    statements = await repo.approved_statements(player_id=player.id)
+    assert [(item.title, item.save_id, item.save_name) for item in statements] == [
+        ("他的猫叫团子", "w1", "生存一档"),
+        ("他的基地在雪山脚下", "w1", "生存一档"),
+    ]
+
+
+async def test_approving_a_self_statement_checks_the_title(store: SQLiteDatabase) -> None:
+    """批准时改的标题不能为空、不能超过 30 字；没过的保持待审。"""
+    session = await _session(store)
+    player = await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-yi", name="玩家乙", live_session_id=session, at_ms=1_010
+    )
+    chat = await store.game_players.add_game_chat(
+        live_session_id=session,
+        game="minecraft",
+        direction=GAME_CHAT_PLAYER,
+        content="叫我小乙",
+        player_id=player.id,
+        at_ms=1_100,
+    )
+    with store.manager.transaction() as conn:
+        cur = conn.execute(
+            "INSERT INTO player_candidates(live_session_id, player_id, title, player_chat_id, player_quote,"
+            " reply_quote, created_at_ms) VALUES (?, ?, '他希望被叫作小乙', ?, '叫我小乙', '好', 2000)",
+            (session, player.id, chat),
+        )
+        candidate_id = int(cur.lastrowid or 0)
+    for title in ("  ", "长" * 31):
+        with pytest.raises(MemoryReviewError) as invalid:
+            await store.game_players.decide_player_candidate(
+                candidate_id=candidate_id, approve=True, at_ms=3_000, title=title
+            )
+        assert invalid.value.kind == "invalid"
+    assert await store.game_players.count_pending_player_candidates() == 1

@@ -17,7 +17,9 @@ import pytest
 
 from src.agents.streamer.memory.brief import build_brief
 from src.agents.streamer.memory.cues import PUSH_COOLDOWN_MS, MemoryCueProvider
+from src.agents.streamer.memory.render import render_player_card
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.models.game_players import GamePlayer
 
 _NOW = 1_000_000_000_000
 
@@ -226,3 +228,53 @@ async def test_no_card_for_a_player_who_asked_to_be_forgotten(store: SQLiteDatab
         conn.execute("UPDATE game_players SET forget_requested_at_ms=? WHERE id=?", (_NOW, alex_id))
     cues = await _provider(store, current, _Clock(), before).collect(batch=[], game_players=[("minecraft", "uuid-a")])
     assert cues.card_count == 0
+
+
+async def test_approved_self_statements_ride_on_his_card_only(store: SQLiteDatabase) -> None:
+    """他说过、人批准过的自述写在他的卡上（没有别的往来也推）；待审的不写，简报不提。"""
+    before, current = await _two_sessions(store)
+    repo = store.game_players
+    alex = await repo.meet_player(
+        game="minecraft", uuid="uuid-a", name="Alex", live_session_id=before, at_ms=_NOW - 85_000_000
+    )
+    ids = []
+    for content, title in (("我在雪山脚下挖了基地", "他的基地在雪山脚下"), ("我的猫叫团子", "他的猫叫团子")):
+        chat = await repo.add_game_chat(
+            live_session_id=before,
+            game="minecraft",
+            direction="player",
+            content=content,
+            player_id=alex.id,
+            save_id="w1",
+            save_name="生存一档",
+            at_ms=_NOW - 84_000_000,
+        )
+        with store.manager.transaction() as conn:
+            cur = conn.execute(
+                "INSERT INTO player_candidates(live_session_id, player_id, title, player_chat_id, player_quote,"
+                " reply_quote, created_at_ms) VALUES (?, ?, ?, ?, ?, '真好', ?)",
+                (before, alex.id, title, chat, content, _NOW - 80_000_000),
+            )
+            ids.append(int(cur.lastrowid or 0))
+    await repo.decide_player_candidate(candidate_id=ids[0], approve=True, at_ms=_NOW - 70_000_000)
+
+    brief = await build_brief(archive_repo=store.archive, commitments_repo=store.commitments)
+    assert "雪山脚下" not in brief.text, "自述不进常驻简报"
+    cues = await _provider(store, current, _Clock(), before).collect(batch=[], game_players=[("minecraft", "uuid-a")])
+    assert cues.card_count == 1
+    # 这一场没报存档（不分存档）时不加"在哪个存档"的注；分存档时的注与答应过他的事同一个说法
+    assert "[玩家·Alex] Alex 在游戏里找你了。他跟你说过：他的基地在雪山脚下。认得出他就好" in cues.text
+    assert "团子" not in cues.text, "没批准的不写"
+    (entry,) = await store.memory_cue_log.list_session_entries(live_session_id=current)
+    assert entry.detail == {"player_id": alex.id, "statement_ids": [ids[0]]}
+
+
+def test_self_statements_from_another_save_say_where() -> None:
+    """别的存档里说的照样提，但写明在哪个存档：那座房子不一定在眼下这个世界里。"""
+    player = GamePlayer(
+        id=1, game="minecraft", uuid="uuid-a", name="Alex", names=["Alex"], first_seen_ms=0, last_seen_ms=0
+    )
+    text = render_player_card(
+        player, [], statements=[("他的基地在雪山脚下", "在 minecraft「生存一档」里，不是眼下这个存档")]
+    )
+    assert "他跟你说过：他的基地在雪山脚下（在 minecraft「生存一档」里，不是眼下这个存档）。" in text

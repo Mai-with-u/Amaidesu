@@ -115,6 +115,8 @@ _MAX_COMMITMENTS_PER_VIEWER = 3
 _MAX_COMMITMENTS_PER_GAME = 20
 # 玩家卡尾至多写几条答应过他的事
 _MAX_PROMISES_PER_PLAYER = 2
+# 玩家卡上至多写几条他说过、人批准过的自述
+_MAX_STATEMENTS_PER_PLAYER = 2
 # 规则一路看她最近几句播出的台词
 RECENT_SPEECH_LINES = 3
 
@@ -612,7 +614,8 @@ class MemoryCueProvider:
 
         卡只推给这一窗找过她的那几位（按 UUID 对上，不会推错人）；同一位每场至多两次、隔十分钟，
         本场她已经回应过他（台词记下了回应对象）就不再推——认出来了，用上即停。新面孔没有往来，不推。
-        答应过他、还没了结的事（至多两条）写在卡尾：对玩家的承诺只在他露面时提。
+        人批准过的他的自述（至多两条）写成"他跟你说过"；答应过他、还没了结的事（至多两条）写在卡尾：
+        这两样都只在他露面时提，不进常驻简报。
         """
         if self._players is None or not game_players:
             return
@@ -636,10 +639,21 @@ class MemoryCueProvider:
             ]
             # 别的存档里答应的照样提，但写明是在哪个存档答应的
             notes = [(item, place_note(item.game, item.save_id, item.save_name, state.saves)) for item in promises]
-            text = render_player_card(player, history, previous_session_id=state.previous_session_id, promises=notes)
+            # 他自己说过、人批准过的事：同样写明是在哪个存档说的
+            statements = await self._players.approved_statements(
+                player_id=int(player.id), limit=_MAX_STATEMENTS_PER_PLAYER
+            )
+            said = [
+                (item.title, place_note(item.game, item.save_id, item.save_name, state.saves)) for item in statements
+            ]
+            text = render_player_card(
+                player, history, previous_session_id=state.previous_session_id, promises=notes, statements=said
+            )
             if not text:
                 continue
             detail: Dict[str, Any] = {"player_id": player.id}
+            if statements:
+                detail["statement_ids"] = [int(item.id) for item in statements]
             if promises:
                 detail["commitment_ids"] = [int(item.id) for item in promises]
                 # 卡尾的约#N 她点了要认：说话档说"答应过 Alex"，不说成"答应过大家"

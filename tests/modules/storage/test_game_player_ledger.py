@@ -147,3 +147,47 @@ async def test_public_chat_expires_with_the_session_but_her_lines_stay(wired, tm
     assert result.chat_deleted == 2
     # 人还认得：保留期只清聊天这类工作数据
     assert len(await store.game_players.list_players()) == 1
+
+
+async def test_retention_keeps_the_line_an_approved_self_statement_hangs_on(wired, tmp_path: Path) -> None:
+    """批准进玩家卡的自述挂着他那句公屏：保留期到了那句留着，自述不被级联删；待审的随那句一起删。"""
+    store, bus, session_id = wired
+    await store.sessions.close_live_session(live_session_id=session_id, ended_at_ms=2_000)
+    player = await store.game_players.meet_player(
+        game="minecraft", uuid=_ALEX, name="玩家甲", live_session_id=session_id, at_ms=1_100
+    )
+    approved_line = await store.game_players.add_game_chat(
+        live_session_id=session_id,
+        game="minecraft",
+        direction="player",
+        content="我住在雪山脚下",
+        player_id=player.id,
+        at_ms=1_200,
+    )
+    pending_line = await store.game_players.add_game_chat(
+        live_session_id=session_id,
+        game="minecraft",
+        direction="player",
+        content="我的猫叫团子",
+        player_id=player.id,
+        at_ms=1_300,
+    )
+    with store.manager.transaction() as conn:
+        for chat_id, status in ((approved_line, "approved"), (pending_line, "pending")):
+            conn.execute(
+                "INSERT INTO player_candidates(live_session_id, player_id, title, player_chat_id, player_quote,"
+                " reply_quote, status, created_at_ms) VALUES (?, ?, '他说的事', ?, '原话', '回他', ?, 1500)",
+                (session_id, player.id, chat_id, status),
+            )
+
+    privacy = PrivacyService(store.manager, db_path=store.db_path, key_path=tmp_path / "secrets" / "forget.key")
+    await privacy.initialize()
+    try:
+        retention = RetentionService(store.manager, privacy, db_path=store.db_path, raw_days=1, clock=lambda: 10**12)
+        await retention.run_cleanup()
+    finally:
+        await privacy.close()
+
+    lines = await store.game_players.list_session_game_chat(live_session_id=session_id)
+    assert [line.id for line in lines] == [approved_line]
+    assert [item.player_chat_id for item in await store.game_players.list_player_candidates()] == [approved_line]

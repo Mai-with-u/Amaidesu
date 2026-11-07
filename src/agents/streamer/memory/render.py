@@ -464,11 +464,14 @@ def render_player_card(
     *,
     previous_session_id: Optional[int] = None,
     promises: Sequence[Tuple[Commitment, str]] = (),
+    statements: Sequence[Tuple[str, str]] = (),
 ) -> str:
-    """游戏玩家开口时的卡："这位是谁、和你有过什么"；以前没有往来、也没答应过他什么的返回空串。
+    """游戏玩家开口时的卡："这位是谁、和你有过什么"；以前没有往来、没答应过他什么、他也没说过什么的返回空串。
 
     卡面只写和她发生过的互动事实与他当时的名字：打过几次招呼、送过什么、切磋输赢、一起做过什么；
-    不写他什么时间段上线、不写私聊、不写没批准的自述。最近一次往来在上一场时写"上一场"，其余写"之前"。
+    不写他什么时间段上线、不写私聊。最近一次往来在上一场时写"上一场"，其余写"之前"。
+    ``statements`` 是人批准过的他的自述（标题, 在哪个存档说的说明），写成"他跟你说过"：没批准的不写，
+    自述也不进常驻简报，只在他找她时由这张卡提起。
     ``promises`` 是答应过他、还没了结的事（承诺, 在哪个存档答应的说明），带承诺编号写在卡尾：
     对玩家的承诺不进常驻简报，只在他露面时由这张卡提醒。
     """
@@ -483,7 +486,10 @@ def render_player_card(
             )
             items.append(f"{(commitment.what or '').strip()}（{note}）")
         promise_text = f"你答应过他：{'；'.join(items)}。"
-    if not history and not promise_text:
+    # 他自己说过的事：别的存档里说的照样提，但写明是在哪个存档说的（那座房子不一定在眼下这个世界里）
+    said = "；".join(f"{title}（{place}）" if place else title for title, place in statements if title.strip())
+    said_text = f"他跟你说过：{said}。" if said else ""
+    if not history and not promise_text and not said_text:
         return ""
     greets = [item for item in history if item.kind == "greet"]
     gifts = [str(item.fact.get("said") or "").strip() for item in history if item.kind == "gift"]
@@ -503,7 +509,7 @@ def render_player_card(
     together = [item for item in together if item][:2]
     if together:
         parts.append(f"一起做过：{'；'.join(together)}")
-    if not parts and not promise_text:
+    if not parts and not promise_text and not said_text:
         return ""
     past = ""
     if parts:
@@ -512,7 +518,7 @@ def render_player_card(
         past = f"{when}他{'、'.join(parts)}。"
     former = player.former_names()
     name = f"{player.name}（以前叫 {'、'.join(former[-2:])}）" if former else player.name
-    return f"[玩家·{player.name}] {name} 在游戏里找你了。{past}{promise_text}认得出他就好，别念清单。"
+    return f"[玩家·{player.name}] {name} 在游戏里找你了。{past}{said_text}{promise_text}认得出他就好，别念清单。"
 
 
 def render_presence_line(viewers: Sequence[Tuple[str, Optional[int]]], *, now_ms: int) -> str:

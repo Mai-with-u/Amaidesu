@@ -7,6 +7,7 @@
 
 玩家自述（``player_candidates``）由下播整理在整理事务里写进待审区（:func:`replace_session_player_candidates`），
 本场待审的整份替换；已批、已驳回的不动，驳回的留作去重依据。待审的列出后 14 天没人审就删，和观众候选同一个期限。
+人在记忆页批准（可以先改标题）或驳回；批准过的只进这位玩家的玩家卡（他在游戏里找她时推），不进常驻简报。
 
 谁能建玩家（有 UUID、在线核对过、不在忘记名单上）由调用方判断；仓储只管读写。
 """
@@ -25,11 +26,14 @@ from src.modules.storage.models.game_players import (
     GameChatLine,
     GamePlayer,
     PendingPlayerCandidate,
+    PlayerCandidate,
     PlayerInteraction,
     PlayerSave,
+    PlayerStatement,
     ViewerPlayerLink,
 )
 from src.modules.storage.repos._base import BaseRepo
+from src.modules.storage.repos.memory_review import MAX_REVIEW_TITLE_CHARS, MemoryReviewError
 from src.modules.storage.repos.viewer_candidates import CANDIDATE_EXPIRE_MS
 from src.modules.types.game_save import OnlineMode, online_mode_of
 
@@ -39,6 +43,10 @@ _PLAYER_COLUMNS = (
 )
 _INTERACTION_COLUMNS = "id, player_id, live_session_id, save_id, save_name, kind, fact, at_ms"
 _CHAT_COLUMNS = "id, live_session_id, game, direction, player_id, content, save_id, save_name, at_ms"
+_CANDIDATE_COLUMNS = (
+    "id, live_session_id, player_id, title, player_chat_id, player_quote, reply_game_chat_id, reply_live_chat_id,"
+    " reply_quote, status, created_at_ms, decided_at_ms"
+)
 
 
 def _json_list(raw: Any) -> List[Any]:
@@ -499,6 +507,91 @@ class GamePlayerRepo(BaseRepo):
                     (int(now_ms_value) - CANDIDATE_EXPIRE_MS,),
                 )
             return int(cur.rowcount or 0)
+
+        return await self._run_in_executor(_exec)
+
+    async def list_player_candidates(self, *, status: Optional[str] = None, limit: int = 200) -> List[PlayerCandidate]:
+        """玩家自述列表（新的在前）；``status`` 为 None 时不分状态。"""
+
+        def _exec() -> List[PlayerCandidate]:
+            where = "WHERE status=?" if status is not None else ""
+            params: List[Any] = [status] if status is not None else []
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    f"SELECT {_CANDIDATE_COLUMNS} FROM player_candidates {where}"  # noqa: S608 常量列清单与条件
+                    " ORDER BY created_at_ms DESC, id DESC LIMIT ?",
+                    [*params, int(limit)],
+                ).fetchall()
+            return [PlayerCandidate.model_validate(dict(row)) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def count_pending_player_candidates(self) -> int:
+        """还在待审的玩家自述条数。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                return int(conn.execute("SELECT COUNT(*) FROM player_candidates WHERE status='pending'").fetchone()[0])
+
+        return await self._run_in_executor(_exec)
+
+    async def decide_player_candidate(
+        self, *, candidate_id: int, approve: bool, at_ms: int, title: Optional[str] = None
+    ) -> PlayerCandidate:
+        """批准或驳回一条待审的玩家自述；批准时可以改标题。
+
+        不存在报 ``not_found``、已经审过报 ``conflict``、标题为空或超长报 ``invalid``（:class:`MemoryReviewError`）。
+        批准过的只进这位玩家的玩家卡；驳回的留着，同一句他的话、同样的标题以后不再列。
+        """
+
+        def _exec() -> PlayerCandidate:
+            with self._manager.transaction(immediate=True) as conn:
+                row = conn.execute(
+                    f"SELECT {_CANDIDATE_COLUMNS} FROM player_candidates WHERE id=?",  # noqa: S608 常量列清单
+                    (int(candidate_id),),
+                ).fetchone()
+                if row is None:
+                    raise MemoryReviewError("not_found", f"玩家自述不存在: {candidate_id}")
+                if row["status"] != "pending":
+                    raise MemoryReviewError("conflict", "这条玩家自述已经审过了")
+                final = (title if title is not None else str(row["title"])).strip()
+                if approve and not final:
+                    raise MemoryReviewError("invalid", "标题不能为空")
+                if approve and len(final) > MAX_REVIEW_TITLE_CHARS:
+                    raise MemoryReviewError("invalid", f"标题至多 {MAX_REVIEW_TITLE_CHARS} 字")
+                conn.execute(
+                    "UPDATE player_candidates SET status=?, title=?, decided_at_ms=? WHERE id=?",
+                    (
+                        "approved" if approve else "rejected",
+                        final if approve else str(row["title"]),
+                        int(at_ms),
+                        int(candidate_id),
+                    ),
+                )
+                updated = conn.execute(
+                    f"SELECT {_CANDIDATE_COLUMNS} FROM player_candidates WHERE id=?",  # noqa: S608 常量列清单
+                    (int(candidate_id),),
+                ).fetchone()
+            return PlayerCandidate.model_validate(dict(updated))
+
+        return await self._run_in_executor(_exec)
+
+    async def approved_statements(self, *, player_id: int, limit: int = 2) -> List[PlayerStatement]:
+        """玩家卡用：批准过的他的自述，最近批准的在前，带他说那句时所在的存档。
+
+        只认正式场列出的（彩排场的候选随场次改类型时已删）。
+        """
+
+        def _exec() -> List[PlayerStatement]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT c.id, c.title, g.game, g.save_id, g.save_name, c.decided_at_ms"
+                    " FROM player_candidates c JOIN game_chat g ON g.id = c.player_chat_id"
+                    " WHERE c.player_id=? AND c.status='approved'"
+                    " ORDER BY c.decided_at_ms DESC, c.id DESC LIMIT ?",
+                    (int(player_id), int(limit)),
+                ).fetchall()
+            return [PlayerStatement.model_validate(dict(row)) for row in rows]
 
         return await self._run_in_executor(_exec)
 
