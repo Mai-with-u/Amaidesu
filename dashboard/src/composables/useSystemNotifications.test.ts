@@ -13,6 +13,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { ElNotification } from 'element-plus';
 import { useSystemNotifications } from '@/composables/useSystemNotifications';
 import { useWebSocketStore } from '@/stores';
+import { ledgerApi } from '@/api';
 import type { WebSocketMessage, WsMessageType } from '@/types';
 
 vi.mock('@/api/websocket', () => ({
@@ -25,6 +26,12 @@ vi.mock('@/api/websocket', () => ({
     connect: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn(),
     isConnected: vi.fn(() => false),
+  },
+}));
+
+vi.mock('@/api', () => ({
+  ledgerApi: {
+    getSettleState: vi.fn(),
   },
 }));
 
@@ -72,7 +79,17 @@ function event(type: string, data: Record<string, unknown>): WebSocketMessage {
 beforeEach(() => {
   vi.useFakeTimers();
   notifyMock.mockClear();
+  vi.mocked(ledgerApi.getSettleState).mockReset();
+  vi.mocked(ledgerApi.getSettleState).mockResolvedValue({
+    data: { pending_count: 0, max_attempts: 3, review_pending_count: 0, items: [] },
+  } as never);
 });
+
+/** 让挂起的 promise 微任务跑完 */
+async function flushPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -187,6 +204,27 @@ describe('useSystemNotifications', () => {
     const { feed } = mountComposable();
     feed(event('room.message.danmaku', { message: '不该弹' }));
     feed(event('tool.result.speak', { message: '不该弹' }));
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it('live.started 且有待整理场次 → warning 通知，说明主播记忆是旧一场的', async () => {
+    vi.mocked(ledgerApi.getSettleState).mockResolvedValue({
+      data: { pending_count: 2, max_attempts: 3, review_pending_count: 0, items: [] },
+    } as never);
+    const { feed } = mountComposable();
+    feed(event('live.started', { live_session_id: 59 }));
+    await flushPromises();
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const call = notifyMock.mock.calls[0]?.[0] as { title: string; message: string; type: string };
+    expect(call.type).toBe('warning');
+    expect(call.message).toContain('2 场待整理');
+    expect(call.message).toContain('旧一场');
+  });
+
+  it('live.started 且无待整理场次 → 不弹窗', async () => {
+    const { feed } = mountComposable();
+    feed(event('live.started', { live_session_id: 60 }));
+    await flushPromises();
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
