@@ -211,8 +211,8 @@ class RoundOutcome:
     memory_repeat_bounces: int = 0
     # 本轮点名的旧事编号（写法如 约#7、档#41；随 streamer.speech 落库，供"用上即停"与复盘核对）
     memory_refs: List[str] = field(default_factory=list)
-    # 本窗公屏聊天只来自一位核对过的玩家、且这句的回应目标对不上本窗任何一条弹幕时是 (游戏, UUID)：落库时记成在回应他；
-    # 否则两个空串
+    # 这句在回应游戏里的哪位玩家，(游戏, UUID)：落库时记成在回应他，口径见 Planner._reply_player_identity；
+    # 记不下时两个空串
     reply_player: Tuple[str, str] = ("", "")
 
 
@@ -838,6 +838,25 @@ class Planner:
             self.logger.info(f"to_player 写的「{written}」不在最近找她的玩家里，不填回应对象")
         return name
 
+    def _reply_player_identity(self, to_player: str, answering_player: str) -> Tuple[str, str]:
+        """这句落库时记成在回应哪位玩家，(游戏, UUID)；记不下时两个空串。
+
+        Planner 在 ``to_player`` 点了名、对得上最近找过她的玩家：按他的条目记（她谢送礼的乙，同窗甲在公屏
+        开口也记成回应乙，否则她接住乙的那句进不了玩家自述候选）；他的条目认不出是谁（没有 UUID）时不记。
+        没点名时，回应的正是本窗唯一在公屏开口的那位才记。
+        """
+        if not answering_player:
+            return "", ""
+        if to_player.strip():
+            # 最近的条目在后：同名的取最新那条
+            for note in reversed((*self._recent_player_notes, *self._round_player_notes)):
+                if note.who == answering_player and note.uuid:
+                    return note.game, note.uuid
+            return "", ""
+        if answering_player == sole_speaker_name(self._round_player_notes):
+            return self._round_reply_player
+        return "", ""
+
     def _answers_someone(self, line_id: int, answers_viewer: bool, to_player: str, answering_player: str) -> bool:
         """提过的旧事这一句再接算不算在回人：三种情形任一成立就不退回。
 
@@ -1365,10 +1384,8 @@ class Planner:
             topic_tag=str(args.get("topic_tag", "") or ""),
             reply_to=reply_to if isinstance(reply_to, str) and reply_to else None,
             memory_refs=memory_ids,
-            # 落库的"回应哪位玩家"和交给表达侧的回应对象同一口径：回应的正是本窗唯一在公屏开口的那位才记
-            reply_player=self._round_reply_player
-            if answering_player and answering_player == sole_speaker_name(self._round_player_notes)
-            else ("", ""),
+            # 落库的"回应哪位玩家"和交给表达侧的回应对象同一口径：点了名的按他记，没点名时是本窗唯一开口的那位
+            reply_player=self._reply_player_identity(str(args.get("to_player") or ""), answering_player),
         )
         # 话说出口了、回应的是游戏里的某位玩家：他到此为止找她的条目标"已接过"，
         # 后面几窗换话题时表达侧不再把同一份礼谢一遍、同一句话接一遍

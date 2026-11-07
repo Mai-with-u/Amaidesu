@@ -55,6 +55,18 @@ def test_ledger_lists_player_chat_and_actions_with_names() -> None:
         "[23:21 minecraft 公屏] 玩家 玩家甲：我勒个",
     ]
     assert [(note.who, note.said) for note in notes] == [("玩家甲", False), ("玩家甲", True)]
+    # 带着他是谁：她点名回应他时据此落库
+    assert {(note.game, note.uuid) for note in notes} == {("minecraft", "uuid-甲")}
+
+
+def test_player_note_without_a_verified_uuid_carries_no_identity() -> None:
+    """认不出是谁的玩家（UUID 写 "?"）：条目照列，但不带身份，落库不记成在回应谁。"""
+    ledger = GameLedger()
+    ledger.record_chat("minecraft", "玩家 玩家丙：hi", _ts(20, 1), speaker="?", who="玩家丙")
+
+    (note,) = ledger.drain().player_notes
+
+    assert (note.who, note.game, note.uuid) == ("玩家丙", "", "")
 
 
 def test_repeated_player_chat_folds_into_one_note_with_count() -> None:

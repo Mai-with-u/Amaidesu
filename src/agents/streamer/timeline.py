@@ -185,6 +185,8 @@ class PlayerNote:
     - ``timestamp_ms``：发生时刻，按它只留最近几分钟的。
     - ``answered``：她已经回应过这位玩家（回应对象是他的那句说出口了），这一条在他那句之前到的。
       最近几分钟的条目会连着交给后面几窗，表达侧据此标"已接过"，换了话题不再把同一份礼谢一遍。
+    - ``game`` / ``uuid``：这位玩家在哪个游戏、核对过的 UUID（认不出是谁的为空串）。Planner 点名回应他时，
+      她这句落库记成在回应他——谢的是送礼的乙，同窗甲在公屏开口也不影响。
     """
 
     who: str
@@ -192,6 +194,8 @@ class PlayerNote:
     line: str
     timestamp_ms: int = 0
     answered: bool = False
+    game: str = ""
+    uuid: str = ""
 
 
 @dataclass(frozen=True)

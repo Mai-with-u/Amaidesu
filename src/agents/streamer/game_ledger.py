@@ -336,7 +336,16 @@ class GameLedger:
         kind = "公屏" if item.is_chat else "动作"
         note = item.note if item.count == 1 else f"{item.note}（另 {item.count - 1} 次相同）"
         line = note_turn(f"{item.game} {kind}".strip(), note, item.turn.timestamp_ms).content
-        return PlayerNote(who=item.who, said=item.is_chat, line=line, timestamp_ms=item.turn.timestamp_ms)
+        # 带上他是谁（游戏与 UUID）：她点名回应他时据此落库；认不出是谁的（UUID 写 "?"）留空
+        uuid = item.speaker if item.speaker != "?" else ""
+        return PlayerNote(
+            who=item.who,
+            said=item.is_chat,
+            line=line,
+            timestamp_ms=item.turn.timestamp_ms,
+            game=item.game if uuid else "",
+            uuid=uuid,
+        )
 
     @staticmethod
     def _is_state_line(label: str, body: str) -> bool:

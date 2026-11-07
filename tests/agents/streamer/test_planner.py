@@ -503,12 +503,26 @@ async def test_her_line_answering_a_danmaku_is_not_recorded_as_answering_a_playe
 
 async def test_reply_names_the_player_she_actually_answers_not_the_one_who_spoke() -> None:
     """玩家乙扔来钻石、同一窗玩家甲在公屏说"晚上好"，她要谢乙：没点名、话题也没提到甲时不补成甲；
-    点名乙时回应对象就是乙。落库只记本窗唯一开口、又正是她在回的那位，乙不是开口的人，不记。"""
-    gift = PlayerNote(who="玩家乙", said=False, line="[00:10 minecraft 动作] 玩家 玩家乙 朝我扔了 3 个钻石")
-    hello = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 公屏] 玩家 玩家甲：晚上好")
+    点名乙时回应对象就是乙，落库也记成在回应乙（否则她接住乙的那句进不了玩家自述候选）；
+    点的名对不上找过她的人时都不填。"""
+    gift = PlayerNote(
+        who="玩家乙",
+        said=False,
+        line="[00:10 minecraft 动作] 玩家 玩家乙 朝我扔了 3 个钻石",
+        game="minecraft",
+        uuid="uuid-乙",
+    )
+    hello = PlayerNote(
+        who="玩家甲", said=True, line="[00:10 minecraft 公屏] 玩家 玩家甲：晚上好", game="minecraft", uuid="uuid-甲"
+    )
     batch = GameEventBatch(chat_speakers=(("minecraft", "uuid-甲"),), player_notes=(gift, hello))
 
-    for to_player, expected in (("", ""), ("玩家乙", "玩家乙"), ("玩家 玩家乙", "玩家乙"), ("编出来的人", "")):
+    for to_player, expected, recorded in (
+        ("", "", ("", "")),
+        ("玩家乙", "玩家乙", ("minecraft", "uuid-乙")),
+        ("玩家 玩家乙", "玩家乙", ("minecraft", "uuid-乙")),
+        ("编出来的人", "", ("", "")),
+    ):
         provider = MagicMock()
         provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
         args: dict = {"topic_summary": "谢玩家乙扔来的钻石", "is_novel": True, "emotion": "happy", "intensity": 0.5}
@@ -522,7 +536,32 @@ async def test_reply_names_the_player_she_actually_answers_not_the_one_who_spoke
 
         attachment = provider.invoke.await_args.args[0].attachment
         assert attachment.reply_to == expected, to_player
-        assert outcome.reply_player == ("", ""), to_player
+        assert outcome.reply_player == recorded, to_player
+
+
+async def test_thanks_in_a_later_window_is_recorded_for_the_named_player() -> None:
+    """乙的礼上一窗入账、这一窗才谢：点名乙时按最近几分钟留着的条目记成在回应乙；
+    乙认不出是谁（条目没有 UUID）时回应对象照填，落库不记。"""
+    for uuid, recorded in (("uuid-乙", ("minecraft", "uuid-乙")), ("", ("", ""))):
+        gift = PlayerNote(
+            who="玩家乙",
+            said=False,
+            line="[00:10 minecraft 动作] 玩家 玩家乙 朝我扔了 3 个钻石",
+            timestamp_ms=now_ms(),
+            game="minecraft" if uuid else "",
+            uuid=uuid,
+        )
+        provider = MagicMock()
+        provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+        planner, _llm, _prompt = _make_planner(
+            [_resp("先看看"), _resp(tool_calls=[_tc("streamer_reply", _THANKS)])], reply_provider=provider
+        )
+        await planner.plan([], game_batch=GameEventBatch(player_notes=(gift,)))
+
+        outcome = await planner.plan([], game_batch=GameEventBatch())
+
+        assert provider.invoke.await_args.args[0].attachment.reply_to == "玩家乙", uuid
+        assert outcome.reply_player == recorded, uuid
 
 
 def _gift_and_hello() -> GameEventBatch:
