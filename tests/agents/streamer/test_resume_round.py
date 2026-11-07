@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.planner_render import compose_delegate_instruction
+from src.agents.streamer.delegation_workbench import PLANNER_CALL_SOURCE
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.interceptors.session_stamp import SessionStampInterceptor
@@ -116,9 +116,14 @@ def _routed_llm(planner_requests: List[str]) -> MagicMock:
     return llm
 
 
-async def _interrupted_session_with_chat(store: SQLiteDatabase) -> int:
+async def _interrupted_session_with_chat(store: SQLiteDatabase, kind: str = "live") -> int:
     """一场崩溃时留下的进行中场次（未结账行 + 断前的观众弹幕）。"""
-    pk = await store.sessions.insert_live_session(stream_id="room", platform="bilibili", started_at_ms=1_000)
+    pk = await store.sessions.insert_live_session(
+        stream_id="room",
+        platform="bilibili",
+        started_at_ms=1_000,
+        kind=kind,  # type: ignore[arg-type]
+    )
     await store.chat.insert_live_chat(
         live_session_id=pk,
         timestamp_ms=2_000,
@@ -177,20 +182,25 @@ async def test_resume_round_reads_interrupted_history_and_lands_in_same_session(
     assert row is not None and row.ended_at_ms is None, "续播不写结束时间"
 
 
-async def test_resume_claims_unfinished_delegation_as_interrupted(live_stack: _LiveStack) -> None:
-    """续播认领：重启前受理、没了结的委派在库里记成被打断；接回那一轮手头的事写着它被打断了、做到哪不确定，
-    只显示她自己的原话，附带的观众原话不重复进来。重启前已经了结的委派不动。"""
+@pytest.mark.parametrize("kind", ["live", "rehearsal"])
+async def test_resume_restores_only_my_unfinished_delegation_of_this_session(live_stack: _LiveStack, kind: str) -> None:
+    """续播认领（正式场与彩排场一样）：这一场重启前我派的、没交付完的那件记回手头的事，写着被打断了、
+    做到哪不确定；运营直派的调试指令、别的场次的委派、已经交付的都不记回来。主播侧只读委派账，不写库。"""
     planner_requests: List[str] = []
     stack = live_stack
-    pk = await _interrupted_session_with_chat(stack.store)
-    composed = compose_delegate_instruction("把营地的门装好", [{"role": "user", "content": "阿杰: 门要木门"}])
-    for task_id, kind, text, ts in (
-        ("deleg_done", "accepted", "搭个棚子", 1_100),
-        ("deleg_done", "succeeded", "delivery: 棚子搭好了", 1_200),
-        ("deleg_open", "accepted", composed, 1_500),
-    ):
+    earlier = await stack.store.sessions.insert_live_session(stream_id="room", platform="bilibili", started_at_ms=500)
+    await stack.store.sessions.close_live_session(live_session_id=earlier, ended_at_ms=900)
+    pk = await _interrupted_session_with_chat(stack.store, kind=kind)
+    rows = (
+        (pk, "minecraft", "deleg_done", "accepted", "搭个棚子", 1_100, PLANNER_CALL_SOURCE),
+        (pk, "minecraft", "deleg_done", "succeeded", "delivery: 棚子搭好了", 1_200, PLANNER_CALL_SOURCE),
+        (pk, "minecraft", "deleg_open", "accepted", "把营地的门装好", 1_500, PLANNER_CALL_SOURCE),
+        (pk, "text_adv", "deleg_debug", "accepted", "运营调试：读一遍存档", 1_600, "operator"),
+        (earlier, "game_2048", "deleg_old", "accepted", "上一场没玩完的 2048", 600, PLANNER_CALL_SOURCE),
+    )
+    for sid, game, task_id, kind_, text, ts, initiator in rows:
         await stack.store.events.insert_delegation_event(
-            live_session_id=pk, game="minecraft", task_id=task_id, kind=kind, text=text, timestamp_ms=ts
+            live_session_id=sid, game=game, task_id=task_id, kind=kind_, text=text, timestamp_ms=ts, initiator=initiator
         )
     await stack.manager.start()  # 进程启动：检出残留场次为待决
     agent = await _started_agent(stack, _routed_llm(planner_requests), event_repo=stack.store.events)
@@ -202,11 +212,11 @@ async def test_resume_claims_unfinished_delegation_as_interrupted(live_stack: _L
 
     work = planner_requests[0].split("【我手头在游戏里做的事】", 1)[1].split("【", 1)[0]
     assert "开始做一个任务：把营地的门装好" in work and "重启前在做这件事，被打断了，做到哪不确定" in work
-    assert "门要木门" not in work and "[来源对话" not in work
-    records = {r.task_id: r for r in await stack.store.events.list_session_delegations(live_session_id=pk)}
-    assert records["deleg_open"].status == "interrupted"
-    assert records["deleg_open"].summary == "重启前在做，被打断了，做到哪不确定"
-    assert records["deleg_done"].status == "succeeded", "重启前已了结的委派不动"
+    assert "运营调试" not in work and "2048" not in work and "搭个棚子" not in work
+    statuses = {r.task_id: r.status for r in await stack.store.events.list_session_delegations(live_session_id=pk)}
+    assert statuses == {"deleg_done": "succeeded", "deleg_open": "accepted", "deleg_debug": "accepted"}, (
+        "主播侧不写委派账：被打断的终态由存储落库器在启动时记"
+    )
 
 
 async def test_plain_open_session_schedules_no_resume_round(live_stack: _LiveStack) -> None:

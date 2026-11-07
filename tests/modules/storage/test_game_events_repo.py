@@ -89,25 +89,27 @@ async def test_session_delegations_pair_rows_across_sessions_and_keep_open_ones_
     ]
 
 
-async def test_resume_settles_open_delegations_as_interrupted_once(store: SQLiteDatabase) -> None:
-    """续播认领：重启前受理、还没了结的各记一条被打断的终态并返回；已了结的不动；
-    本进程启动后才受理的不算被打断；再认领一次不重复记。"""
-    sid = await _session(store, 1_000)
+async def test_startup_settles_every_open_delegation_as_interrupted_once(store: SQLiteDatabase) -> None:
+    """启动收尾：库里截止时刻前受理、还没了结的委派（不论哪一场、谁派的）各记一条被打断的终态，记在它受理的
+    那一场；已了结的不动；截止时刻之后受理的不算；再收尾一次不重复记。"""
+    old, sid = await _session(store, 500), await _session(store, 1_000)
+    await _delegation(store, old, "deleg_0", "accepted", "上一场没做完的", 600, initiator="operator")
     await _delegation(store, sid, "deleg_1", "accepted", "把门装好", 1_100)
     await _delegation(store, sid, "deleg_1", "cancelled", "被取消（source=operator）", 1_200)
     await _delegation(store, sid, "deleg_2", "accepted", "去挖铁矿", 1_300)
-    await _delegation(store, sid, "deleg_3", "accepted", "重启后刚派的", 4_500)
+    await _delegation(store, sid, "deleg_3", "accepted", "启动后刚派的", 4_500)
 
     settled = await store.events.settle_interrupted_delegations(
-        live_session_id=sid, text="重启前在做，被打断了，做到哪不确定", timestamp_ms=5_000, accepted_before_ms=4_000
+        text="重启前在做，被打断了，做到哪不确定", timestamp_ms=5_000, accepted_before_ms=4_000
     )
 
-    assert [(r.task_id, r.instruction, r.status, r.ended_ms) for r in settled] == [
-        ("deleg_2", "去挖铁矿", "interrupted", 5_000)
+    assert [(r.task_id, r.live_session_id, r.initiator, r.status, r.ended_ms) for r in settled] == [
+        ("deleg_0", old, "operator", "interrupted", 5_000),
+        ("deleg_2", sid, "streamer", "interrupted", 5_000),
     ]
-    again = await store.events.settle_interrupted_delegations(
-        live_session_id=sid, text="x", timestamp_ms=6_000, accepted_before_ms=4_000
-    )
+    again = await store.events.settle_interrupted_delegations(text="x", timestamp_ms=6_000, accepted_before_ms=4_000)
     assert again == []
     statuses = {r.task_id: r.status for r in await store.events.list_session_delegations(live_session_id=sid)}
     assert statuses == {"deleg_1": "cancelled", "deleg_2": "interrupted", "deleg_3": "accepted"}
+    [old_record] = await store.events.list_session_delegations(live_session_id=old)
+    assert (old_record.status, old_record.summary) == ("interrupted", "重启前在做，被打断了，做到哪不确定")

@@ -191,21 +191,21 @@ class EventRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
     async def settle_interrupted_delegations(
-        self, *, live_session_id: int, text: str, timestamp_ms: int, accepted_before_ms: int
+        self, *, text: str, timestamp_ms: int, accepted_before_ms: int
     ) -> List[DelegationRecord]:
-        """续播认领：这一场经手过、到现在还没有终态的委派，各记一条被打断的终态，返回记好之后的样子。
+        """进程启动时收尾：``accepted_before_ms`` 之前受理、到现在还没有终态的委派，各记一条被打断的终态。
 
-        重启后任务账本是空的，游戏那边也不会接着做原来的活；不在库里了结，下播整理会把它
-        当成还在做，主播也不知道手上那件事已经断了。只认 ``accepted_before_ms``（本进程启动时刻）
-        之前受理的：新进程里刚受理的那件还活着，不能当成被打断。查与写在同一个事务里，
-        重复认领不会重复记。
+        任务账本只在内存里，进程一重启就空了，游戏那边也不会接着做原来的活：库里还挂着受理的委派
+        只可能是上一个进程留下的。不论这一场随后续播、直接开新场还是手动收尾残留场，它们都不会
+        再有终态；不在这里了结，下播整理会一直当它还在做。被打断的那一行记在它受理的那一场里，
+        返回记好之后的样子。查与写在同一个事务里，重复收尾不会重复记。
         """
 
         def _exec() -> List[DelegationRecord]:
             with self._manager.transaction() as conn:
                 open_ones = [
                     record
-                    for record in _delegations_of(conn, live_session_id=int(live_session_id))
+                    for record in _delegations_of(conn, live_session_id=None)
                     if record.status == "accepted" and record.started_ms < accepted_before_ms
                 ]
                 settled: List[DelegationRecord] = []
@@ -214,7 +214,7 @@ class EventRepo(BaseRepo):
                         "INSERT INTO game_events (live_session_id, game, event_type, message, scene, timestamp_ms,"
                         " save_id, save_name, initiator) VALUES (?, ?, ?, ?, ?, ?, '', '', ?)",
                         (
-                            int(live_session_id),
+                            record.live_session_id,
                             record.game,
                             DELEGATION_INTERRUPTED,
                             text,
@@ -319,18 +319,25 @@ class EventRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
 
-def _delegations_of(conn: Any, *, live_session_id: int) -> List[DelegationRecord]:
-    """按任务号把受理行与终态行配成一条委派（同一连接内读，供读取与续播认领共用）。
+def _delegations_of(conn: Any, *, live_session_id: Optional[int]) -> List[DelegationRecord]:
+    """按任务号把受理行与终态行配成一条委派（同一连接内读，供读取与启动收尾共用）。
 
-    终态取最早写下的那一行：终态粘滞，之后再有（如续播认领与迟到的终态撞上）也以先到的为准。
+    ``live_session_id`` 给了只取这一场经手过的任务号，None 取库里全部委派账（启动收尾用：
+    委派账行不多，一次扫完在内存里配对，比逐条关联子查询省）。终态取最早写下的那一行：
+    终态粘滞，之后再有（如启动收尾与迟到的终态撞上）也以先到的为准。
     """
-    rows = conn.execute(
-        "SELECT live_session_id, game, event_type, message, scene, timestamp_ms, initiator FROM game_events"
-        f" WHERE {_IS_DELEGATION_EVENT} AND scene IN ("  # noqa: S608 子句为代码内常量
-        f"SELECT scene FROM game_events WHERE live_session_id=? AND {_IS_DELEGATION_EVENT})"
-        " ORDER BY timestamp_ms ASC, id ASC",
-        (live_session_id,),
-    ).fetchall()
+    columns = "SELECT live_session_id, game, event_type, message, scene, timestamp_ms, initiator FROM game_events"
+    if live_session_id is None:
+        rows = conn.execute(
+            f"{columns} WHERE {_IS_DELEGATION_EVENT} ORDER BY timestamp_ms ASC, id ASC"  # noqa: S608 子句为代码内常量
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"{columns} WHERE {_IS_DELEGATION_EVENT} AND scene IN ("  # noqa: S608 子句为代码内常量
+            f"SELECT scene FROM game_events WHERE live_session_id=? AND {_IS_DELEGATION_EVENT})"
+            " ORDER BY timestamp_ms ASC, id ASC",
+            (live_session_id,),
+        ).fetchall()
     records: Dict[str, DelegationRecord] = {}
     for row in rows:
         task_id = str(row["scene"] or "")

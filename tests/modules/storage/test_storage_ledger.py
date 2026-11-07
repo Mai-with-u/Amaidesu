@@ -436,6 +436,24 @@ async def test_delegation_accept_and_end_land_as_paired_rows_outside_game_progre
     assert not any("观众甲" in message for message in stored), "来源对话不落库"
 
 
+async def test_startup_marks_leftover_open_delegations_interrupted(make_ledger, store: SQLiteDatabase) -> None:
+    """上一个进程留下的、还挂着受理的委派：落库器一启动就记成被打断（续播、开新场、收尾残留场都一样）。"""
+    await store.events.insert_delegation_event(
+        live_session_id=_FAKE_PK,
+        game="minecraft",
+        task_id="deleg_left",
+        kind="accepted",
+        text="把门装好",
+        timestamp_ms=1_000,
+        initiator="planner-react",
+    )
+    ledger = make_ledger()
+    await ledger.start()
+
+    [record] = await store.events.list_session_delegations(live_session_id=_FAKE_PK)
+    assert (record.status, record.summary) == ("interrupted", "重启前在做，被打断了，做到哪不确定")
+
+
 async def test_game_event_write_failure_is_swallowed(
     ledger, store: SQLiteDatabase, event_bus: EventBus, monkeypatch: pytest.MonkeyPatch
 ) -> None:

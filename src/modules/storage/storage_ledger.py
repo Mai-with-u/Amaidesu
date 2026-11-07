@@ -22,6 +22,8 @@ StorageLedger —— 直播间消息流落库器
   只给下播整理认地点用。
 - 订阅 ``task.changed``，委派型任务的受理与终态写成 game_events 里 ``delegation_*`` 类型的行（发起方、
   发起方原话、终态摘要、时刻，按任务号配对）：下播整理拿它核对"她说做好了"，续播时据此认领重启前没了结的委派。
+- 启动时把库里还挂着受理的委派一律记成被打断（上一个进程留下的，不会再有终态）：续播、直接开新场、
+  手动收尾残留场都一样，下播整理不会把它们当成还在做。委派账只由本落库器写，主播侧只读。
 - 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环。
 """
 
@@ -46,6 +48,7 @@ from src.modules.storage.privacy import PrivacyService
 from src.modules.storage.repos import ChatRepo, EventRepo, GamePlayerRepo, ViewerRepo
 from src.modules.storage.retention import RetentionService
 from src.modules.tools.tasks import TERMINAL_TASK_STATES
+from src.modules.utils.time_utils import now_ms
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -59,6 +62,8 @@ _ROOM_MESSAGE_WILDCARD = CoreEvents.ROOM_MESSAGE_WILDCARD
 _GAME_EVENT_WILDCARD = "game.*"
 _VIEWER_MESSAGE_TYPES = frozenset({"danmaku", "gift", "super_chat", "guard"})
 _DAY_MS = 86_400_000
+# 启动收尾给上一个进程留下、没了结的委派记的终态摘要（下播整理核对时读到）
+_INTERRUPTED_DELEGATION_SUMMARY = "重启前在做，被打断了，做到哪不确定"
 
 
 class StorageLedger:
@@ -226,6 +231,8 @@ class StorageLedger:
 
         if self._game_players is not None:
             await self._game_players.start()
+
+        await self._settle_interrupted_delegations()
 
         self._started = True
         logger.info(
@@ -665,6 +672,23 @@ class StorageLedger:
                 f"event_type={getattr(payload, 'event_type', '?')}）：{exc}",
                 exc=True,
             )
+
+    async def _settle_interrupted_delegations(self) -> None:
+        """启动收尾：库里还挂着受理的委派都是上一个进程留下的，一律记成被打断。
+
+        收尾失败只记日志：不挡落库器启动，这些委派留到下次启动再收。
+        """
+        current = now_ms()
+        try:
+            settled = await self.event_repo.settle_interrupted_delegations(
+                text=_INTERRUPTED_DELEGATION_SUMMARY, timestamp_ms=current, accepted_before_ms=current
+            )
+        except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
+            logger.error(f"StorageLedger 启动收尾没了结的委派失败：{exc}", exc=True)
+            return
+        if settled:
+            names = "、".join(f"{record.task_id}（场次 {record.live_session_id}）" for record in settled)
+            logger.info(f"启动收尾：上一个进程留下 {len(settled)} 件没了结的委派，记成被打断：{names}")
 
     async def _on_task_changed(
         self,

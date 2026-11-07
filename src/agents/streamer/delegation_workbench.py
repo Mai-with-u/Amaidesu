@@ -42,6 +42,8 @@ __all__ = ["DelegationWorkbench", "observation_data"]
 #: src.modules.agents.control 的注册面一致）
 FRAMEWORK_DELEGATE_TOOL: str = "framework_delegate"
 FRAMEWORK_PROMPT_TOOL: str = "framework_prompt"
+#: 经工作台受理的调用的来源名：受理核心把它记成委派的发起方，落库后续播据此认出"这件是我派的"
+PLANNER_CALL_SOURCE: str = "planner-react"
 
 
 def observation_data(result: ToolExecutionResult) -> Dict[str, Any]:
@@ -303,7 +305,7 @@ class DelegationWorkbench:
                 ToolInvocation(
                     tool_name=name,
                     arguments=args,
-                    source="planner-react",
+                    source=PLANNER_CALL_SOURCE,
                     round_id=round_id,
                     caller_profile=caller_profile,
                 )

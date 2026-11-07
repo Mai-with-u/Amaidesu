@@ -39,7 +39,6 @@ from pathlib import Path
 from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING, Sequence, Tuple
 
 from src.modules.agents.base import AgentState, BaseAgent
-from src.modules.agents.delegation_text import own_words_of
 from src.modules.agents.factory import AGENT_BINDINGS
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -77,6 +76,7 @@ from .memory.recall import MemoryRecallService, build_memory_recall_provider
 from .memory.search import MemorySearch
 from .memory.settle import SessionSettler
 from .message_buffer import MessageBuffer
+from .delegation_workbench import PLANNER_CALL_SOURCE
 from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
 from .planner import Planner, PlannerConfig, PlannerEnv
 from .proactive_trigger import ProactiveTrigger
@@ -119,9 +119,6 @@ _REMINDER_QUEUE_MAX = 5
 # 续播重放递话的回扫上界（毫秒）：在窗口内找"上一次 core.startup"确定上一进程
 # 窗口下界；找不到时退回扫描窗起点。正常重启间隔远小于该值，只是防扫描拖成灾
 _PROMPT_REPLAY_SCAN_MS = 24 * 60 * 60 * 1000
-
-# 续播认领时给重启前没了结的委派记的终态摘要（落库，下播整理核对时读到）
-_INTERRUPTED_DELEGATION_SUMMARY = "重启前在做，被打断了，做到哪不确定"
 
 # 续播只重放上一进程结束前这么久之内收到、又还没送进决策窗的递话（毫秒）：
 # 更早的运营指令多半已经过时，重放出来让她照着做比丢了更糟
@@ -1140,8 +1137,8 @@ class StreamerAgent(BaseAgent):
             # 续播接回已聊话题：本场前面几个进程里说出口的那几轮按先后重新记进打算账，
             # 早先讲过的段子（"更早聊过"）不随重启忘掉
             self._restore_spoken_topics(payload.live_session_id, payload.started_at_ms)
-            # 续播认领委派：重启前还没了结的委派在库里记成被打断，手头的事里标出来，接回那一轮就看得到
-            await self._claim_interrupted_delegations(payload.live_session_id)
+            # 续播认领委派：这一场重启前我派的、没交付完的那件记回手头的事并标成被打断，接回那一轮就看得到
+            await self._restore_interrupted_delegations(payload.live_session_id)
         else:
             self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
         if resumed:
@@ -1158,34 +1155,32 @@ class StreamerAgent(BaseAgent):
             except Exception as exc:  # noqa: BLE001 - 接回发言失败不挡续播链路
                 self._logger.exception(f"场次 {payload.live_session_id} 的续播接回那一轮出错: {exc}")
 
-    async def _claim_interrupted_delegations(self, live_session_id: int) -> None:
-        """续播认领：这一场重启前受理、还没了结的委派，在库里记成被打断，并记回手头的事。
+    async def _restore_interrupted_delegations(self, live_session_id: int) -> None:
+        """续播认领：这一场每个游戏里我最后派的那件，若是重启前受理、没交付完，就记回手头的事并标成被打断。
 
-        重启后任务账本是空的，游戏那边也不会接着做原来的活：不认领，下播整理会当它还在做，
-        她也以为手上那件事还在进行、一直等结果。认领后【我手头在游戏里做的事】里那件事写着
-        "重启前在做这件事，被打断了，做到哪不确定"。认领失败只省掉这一步，不挡续播。
+        重启后内存里的手头的事是空的，游戏那边也不会接着做原来的活：不记回来，她以为手上没事，
+        观众问起答不上；记回来，【我手头在游戏里做的事】写着"重启前在做这件事，被打断了，做到哪不确定"。
+        只读委派账：库里那件记成被打断由存储落库器在启动时写，这里不写库。两边不分先后：
+        库里已记成被打断的、还挂着受理的（落库器还没收尾）都算。只认我自己派的（运营在 WebUI
+        直派的调试指令不是她手头的事），也只看这一场（别的场次的事不带进来）。
+        认领失败只省掉这一步，不挡续播。
         """
         if self._event_repo is None or not live_session_id:
             return
         try:
-            # 只认本进程启动前受理的：启动后新受理的那件还在账本上活着
-            settled = await self._event_repo.settle_interrupted_delegations(
-                live_session_id=live_session_id,
-                text=_INTERRUPTED_DELEGATION_SUMMARY,
-                timestamp_ms=now_ms(),
-                accepted_before_ms=self._startup_ms,
-            )
+            records = await self._event_repo.list_session_delegations(live_session_id=live_session_id)
         except Exception as exc:  # noqa: BLE001 - 认领失败只少一条手头的事，不挡续播
-            self._logger.warning(f"续播认领重启前的委派失败（手头的事不标被打断）: {exc}", exc=exc)
+            self._logger.warning(f"续播读委派账失败（手头的事不标被打断）: {exc}", exc=exc)
             return
-        for record in settled:
+        # 按受理先后排好的：同一个游戏后派的覆盖先派的，留下每个游戏我最后派的那件
+        latest = {record.game: record for record in records if record.initiator == PLANNER_CALL_SOURCE}
+        for record in latest.values():
+            if record.started_ms >= self._startup_ms or record.status not in ("accepted", "interrupted"):
+                continue
             self._planner.workbench.restore_interrupted(
-                record.game,
-                instruction=own_words_of(record.instruction),
-                task_id=record.task_id,
-                at_ms=record.started_ms,
+                record.game, instruction=record.instruction, task_id=record.task_id, at_ms=record.started_ms
             )
-            self._logger.info(f"续播认领：{record.game} 重启前的委派 {record.task_id} 记成被打断")
+            self._logger.info(f"续播认领：{record.game} 重启前的委派 {record.task_id} 记回手头的事，标成被打断")
 
     def _previous_process_window(self) -> Optional[Tuple[int, int]]:
         """上一进程在诊断事件流里的时间段：（它的 core.startup 时刻, 它最后一条记录的时刻）。
