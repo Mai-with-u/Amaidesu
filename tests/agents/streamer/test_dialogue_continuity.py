@@ -15,7 +15,13 @@ import pytest
 
 from src.agents.streamer import canonical
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
-from src.agents.streamer.planner_render import Delegation, Intent, Relay, render_delegations
+from src.agents.streamer.planner_render import (
+    Delegation,
+    Intent,
+    Relay,
+    render_delegations,
+    superseded_by_game_report,
+)
 from src.agents.streamer.timeline import GameEventBatch, PlayerNote
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider, build_reply_tool_spec
@@ -445,7 +451,7 @@ async def test_planner_sees_what_it_is_doing_in_game_until_reported() -> None:
 
 async def test_game_report_only_settles_the_delegation_it_names() -> None:
     """游戏上报按任务号对上手头那件：上一件的迟到上报不改写新派的这件；停了没交付只认点名到这件的，
-    已经交付或卡住的不降级成"做没做完不确定"（交付后被计时叫醒的新任务停下，不能把做完的活改写掉）。"""
+    已经交付的不降级成"做没做完不确定"（交付后被计时叫醒的新任务停下，不能把做完的活改写掉）。"""
     accepted = ToolExecutionResult(
         tool_name="framework_delegate",
         success=True,
@@ -463,12 +469,47 @@ async def test_game_report_only_settles_the_delegation_it_names() -> None:
     workbench.note_game_report("minecraft", "undelivered")
     assert current.report_kind == "", "上一件的迟到交付、没点名哪件的停了没交付都不改写手头这件"
 
-    workbench.note_game_report("minecraft", "escalation", ["deleg_2"])
-    workbench.note_game_report("minecraft", "undelivered", ["deleg_2"])
-    assert current.report_kind == "escalation"
     workbench.note_game_report("minecraft", "delivery", ["deleg_2"])
     workbench.note_game_report("minecraft", "undelivered", ["deleg_2"])
     assert current.report_kind == "delivery"
+
+
+async def test_my_answer_clears_the_stuck_mark_so_later_reports_update_it() -> None:
+    """卡住等定夺后我递话回答了：卡住的标记清掉、回到还在做；游戏接着做又没交付就停，照常记成停了没交付，
+    不会一直显示"正等我和观众一起定夺"。卡住之前说的进展仍算被那次上报覆盖。"""
+    results = {
+        "framework_delegate": ToolExecutionResult(
+            tool_name="framework_delegate",
+            success=True,
+            structured_content={"accepted": True, "task_id": "deleg_1", "executor": "minecraft"},
+        ),
+        "framework_prompt": ToolExecutionResult(
+            tool_name="framework_prompt",
+            success=True,
+            structured_content={"delivered": True, "executor": "minecraft"},
+        ),
+    }
+    registry = ToolRegistry()
+
+    async def _invoke(invocation: ToolInvocation) -> ToolExecutionResult:
+        return results[invocation.tool_name]
+
+    specs = [ToolSpec(name=name, description="", kind="sync", provider="") for name in results]
+    registry.register_provider(make_provider_from_specs("", [(spec, _invoke) for spec in specs]))
+    planner = _planner(registry=registry)
+    workbench = planner.workbench
+    await workbench.handle("framework_delegate", {"agent": "minecraft", "instruction": "烧点铁锭"}, source_dialogue=[])
+    current = workbench.delegations["minecraft"]
+    workbench.note_game_report("minecraft", "escalation", ["deleg_1"])
+    stuck_ms = current.reported_ms
+    said_before = Intent(at_ms=stuck_ms, topic_summary="在烧铁锭", reply_guidance="")
+
+    await workbench.handle("framework_prompt", {"agent": "minecraft", "content": "去砍树吧"}, source_dialogue=[])
+    assert current.report_kind == "", "我答过了，不再是卡着等定夺"
+    assert superseded_by_game_report(said_before, workbench.delegations), "卡住之前说的进展仍算被覆盖"
+
+    workbench.note_game_report("minecraft", "undelivered", ["deleg_1"])
+    assert current.report_kind == "undelivered"
 
 
 def _render_planner_with_delegate_rules() -> str:

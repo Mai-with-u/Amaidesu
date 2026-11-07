@@ -212,8 +212,9 @@ class DelegationWorkbench:
         """游戏侧上报（交付/卡住待定夺/停了没交付）到达：把对应执行 Agent 手头那次委派标成已上报。
 
         游戏 Agent 以自己的注册名作为上报的 game 字段，按名字找到手头那件；上报带了任务号时还要
-        对得上——上一件的迟到上报不改写新派的这件。停了没交付只认点名到手头这件的，已经交付或
-        卡住的不降级：交付后被计时叫醒开的新任务停下，不能把做完的活改写成"不确定做没做完"。
+        对得上——上一件的迟到上报不改写新派的这件。停了没交付只认点名到手头这件的，已经交付的不降级：
+        交付后被计时叫醒开的新任务停下，不能把做完的活改写成"不确定做没做完"。卡住的标记在我递话回答后
+        就清掉（见递话回执），之后游戏接着做、没交付就停，照常记成停了没交付。
         """
         delegation = self._delegations.get(game)
         if delegation is None or report_kind not in {"delivery", "escalation", "undelivered"}:
@@ -221,7 +222,7 @@ class DelegationWorkbench:
         if delegation_ids and delegation.task_id not in delegation_ids:
             return
         if report_kind == "undelivered" and (
-            delegation.task_id not in delegation_ids or delegation.report_kind in {"delivery", "escalation"}
+            delegation.task_id not in delegation_ids or delegation.report_kind == "delivery"
         ):
             return
         delegation.report_kind = report_kind
@@ -402,10 +403,18 @@ class DelegationWorkbench:
                 self.logger.warning(f"委派记录写入时间线失败：{exc}", exc=True)
 
     def _settle_prompt(self, args: Dict[str, Any], own_relay: str, data: Dict[str, Any]) -> None:
-        """递话回执：delivered 且原话非空才记——被拒收的没交代到，不能当成"已经说过"。"""
+        """递话回执：delivered 且原话非空才记——被拒收的没交代到，不能当成"已经说过"。
+
+        手头那件正卡着等我拿主意时，这句递话就是我的回答（游戏 Agent 读到递话也按"有人答了"处理）：
+        卡住的标记清掉，回到"还在做"，之后交付或停了没交付照常更新；不清的话账面早已了结，她看到的
+        还是"正等我和观众一起定夺"，会一直说在等我们拿主意。上报时刻留着：卡住之前说的进展仍算被那次上报覆盖。
+        """
         if not (data.get("delivered") and own_relay.strip()):
             return
         agent = str(data.get("executor") or args.get("agent") or "")
         at_ms = now_ms()
         self._recent_relays.append(Relay(at_ms=at_ms, agent=agent, content=own_relay))
         self._last_relay_ms[agent] = at_ms
+        delegation = self._delegations.get(agent)
+        if delegation is not None and delegation.report_kind == "escalation":
+            delegation.report_kind = ""

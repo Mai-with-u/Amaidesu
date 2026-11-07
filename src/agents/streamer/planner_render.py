@@ -272,9 +272,12 @@ def render_delegations(
 
 def superseded_by_game_report(intent: Intent, delegations: Dict[str, Delegation]) -> bool:
     """该条目对游戏进展的说法是否已被后续回执覆盖：说出口的时刻落在某次
-    委派的"开始 → 已上报"区间内，即属于回执到达前的在途叙述。"""
+    委派的"开始 → 已上报"区间内，即属于回执到达前的在途叙述。
+
+    按"上报过没有"（有上报时刻）判，不看此刻的上报种类：卡住后我答过、标记清回"还在做"时，
+    卡住之前那些说法照样算被那次上报覆盖。"""
     return any(
-        delegation.report_kind != "" and delegation.at_ms <= intent.at_ms <= delegation.reported_ms
+        delegation.reported_ms > 0 and delegation.at_ms <= intent.at_ms <= delegation.reported_ms
         for delegation in delegations.values()
     )
 
