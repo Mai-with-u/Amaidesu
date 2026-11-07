@@ -88,6 +88,7 @@ from .speech_dispatcher import SpeechDispatcher
 from .speech_guard import WordFilter
 from .game_ledger import GameLedger
 from .game_now import AgentNow, GameNow, GameSideLog
+from .planner_render import Intent
 from .stats import StreamerStats
 from .timeline import StreamerTimeline
 from .topic_gate import SpeechGate
@@ -1139,6 +1140,9 @@ class StreamerAgent(BaseAgent):
             # 续播重放玩家聊天：上一进程最后一轮决策之后玩家在游戏里说的话她还没接，
             # 随重启丢了；回读后暂存一次性缓冲，下个决策轮注入参考段（消费后不重复）
             self._load_resume_chat_replay(previous_window)
+            # 续播接回已聊话题：本场前面几个进程里说出口的那几轮按先后重新记进打算账，
+            # 早先讲过的段子（"更早聊过"）不随重启忘掉
+            self._restore_spoken_topics(payload.live_session_id, payload.started_at_ms)
         else:
             self._logger.info(f"场次已开启（id={payload.live_session_id}）：主动发言放行")
         if resumed:
@@ -1234,6 +1238,45 @@ class StreamerAgent(BaseAgent):
         self._reminder_queue.extend(reversed(chosen))
         self._logger.info(f"续播重放：已把上一进程没送出去的 {len(chosen)} 条递话补进提醒队列")
         self._flush_kick.set()
+
+    def _restore_spoken_topics(self, live_session_id: int, started_at_ms: int) -> None:
+        """续播接回已聊话题：本场在前面几个进程里说出口的那几轮，按先后重新记进打算账。
+
+        已聊话题（最近几轮与"更早聊过"）只在内存里，程序重启后整份没了，续播场她会把这一场
+        早先讲过的段子又当新话题讲。本场每轮决策都写进了诊断事件流（planner.decision，带话题短名、
+        话题摘要、指引和说出口的台词），按场次编号挑出说出口的那几轮依次重放：最近几轮放满后更早的
+        自然挪进"更早聊过"，和没重启时同一套规则。开播时刻不早于本进程启动时（载荷没带原场次的
+        开播时刻）退回回扫窗起点。诊断流缺席或读不了时降级为不接回，不阻断续播。
+        """
+        start_ms = started_at_ms if 0 < started_at_ms < self._startup_ms else self._startup_ms - _PROMPT_REPLAY_SCAN_MS
+        try:
+            rows = self._event_log_reader.read_records(
+                event_name=CoreEvents.PLANNER_DECISION, start_ms=start_ms, end_ms=self._startup_ms
+            )
+        except Exception as exc:  # noqa: BLE001 - 接回是尽力而为，读不了诊断流就不接回
+            self._logger.warning(f"续播读不了诊断事件流，已聊话题不接回: {exc}", exc=True)
+            return
+        restored = 0
+        for row in rows:
+            data = row.get("data")
+            if not isinstance(data, dict) or data.get("live_session_id") != live_session_id:
+                continue
+            # 只接回说出口的那几轮：没开口、表达失败的不算聊过
+            speech = str(data.get("speech") or "").strip()
+            if not speech:
+                continue
+            self._planner.workbench.note_intent(
+                Intent(
+                    at_ms=int(row.get("timestamp_ms") or 0),
+                    topic_summary=str(data.get("topic_summary") or ""),
+                    reply_guidance=str(data.get("reply_guidance") or ""),
+                    topic_tag=str(data.get("topic_tag") or ""),
+                    speech=speech,
+                )
+            )
+            restored += 1
+        if restored:
+            self._logger.info(f"续播接回已聊话题：本场前面说出口的 {restored} 轮重新记进打算账")
 
     def _load_resume_chat_replay(self, previous_window: Optional[Tuple[int, int]]) -> None:
         """续播重放玩家聊天：只补上一进程里她还没接过的那段尾巴，存一次性缓冲。
