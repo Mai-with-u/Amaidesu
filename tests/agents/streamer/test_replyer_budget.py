@@ -277,12 +277,13 @@ def _full_batch(stored: bool) -> Tuple[List[Any], List[Any]]:
 
 
 @pytest.mark.parametrize("count", [1, 2, 3, 6])
-@pytest.mark.parametrize("case", ["older", "newest-in-game-chat"])
+@pytest.mark.parametrize("case", ["older", "newest-in-game-chat", "answered"])
 async def test_full_batch_with_player_notes_stays_within_budget(prompts: Any, count: int, case: str) -> None:
     """满批再加最近几分钟找她的玩家条目（每条 43 字的长公屏话，最多 6 条）：整份输入仍 ≤3,200（cl100k 口径）。
 
     条目只留最近 3 条、较早的截短，和她更早说过的话合计至多 3 行；最新一条正是本窗公屏话时全文照给，
-    游戏聊天一段不再重复它。原样列出时 6 条长公屏话会让满批超出六百多。
+    游戏聊天一段不再重复它；她都回应过（标已接过、规矩多一句）时也不超。原样列出时 6 条长公屏话会让满批
+    超出六百多。
     """
     history, batch = _full_batch(stored=True)
     notes = [
@@ -290,6 +291,7 @@ async def test_full_batch_with_player_notes_stays_within_budget(prompts: Any, co
             who=f"玩家{index}",
             said=True,
             line=f"[22:4{index} minecraft 公屏] 玩家 玩家{index}：{_LONG_PLAYER_CHAT}",
+            answered=case == "answered",
         )
         for index in range(count)
     ]

@@ -20,7 +20,7 @@ from src.agents.streamer.timeline import GameEventBatch, PlayerNote
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.tools.reply_tool import ReplyToolProvider, build_reply_tool_spec
 from src.agents.streamer.trigger_cause import TriggerCause, TriggerKind, TriggerSource
-from src.modules.events.payloads.live import LiveStartedPayload
+from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.storage.models.chat import LiveChatMessage
@@ -150,6 +150,28 @@ async def test_live_start_clears_previous_session_workbench() -> None:
     assert list(workbench.recent_intents) == []
     assert list(workbench.recent_relays) == []
     assert workbench.round_receipts == []
+
+
+async def test_live_start_and_end_clear_player_notes_left_over() -> None:
+    """上一场末尾游戏里找她的玩家条目还在保留期内：新一场开播清掉，下播也清掉——不在新场次开头接
+    上一场玩家的话、谢上一场送的礼。"""
+    agent = _agent([], None, "好")
+    note = PlayerNote(
+        who="玩家甲", said=False, line="[00:10 minecraft 动作] 玩家 玩家甲 朝我扔了 3 个钻石", timestamp_ms=now_ms()
+    )
+    planner = agent._planner
+
+    await planner.plan([], game_batch=GameEventBatch(player_notes=(note,)))
+    assert planner.recent_player_notes == (note,)
+    await agent._on_live_started(
+        "live.started", LiveStartedPayload(live_session_id=1, source="manual", started_at_ms=1), "test"
+    )
+    assert planner.recent_player_notes == ()
+
+    await planner.plan([], game_batch=GameEventBatch(player_notes=(note,)))
+    assert planner.recent_player_notes == (note,)
+    await agent._on_live_ended("live.ended", LiveEndedPayload(live_session_id=1, reason="手动结束"), "test")
+    assert planner.recent_player_notes == ()
 
 
 async def test_switching_save_forgets_only_that_games_work() -> None:

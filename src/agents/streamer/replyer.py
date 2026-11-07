@@ -58,6 +58,9 @@ _GAME_PEOPLE_HEADING = "## 游戏里最近找你的人（谁说的、谁做的�
 # 本窗刚在公屏说的那句（游戏聊天里也有）全文照给：这是她要接的话，同一句从游戏聊天那一段拿掉
 _PEOPLE_LINES_MAX = 3
 _PEOPLE_NOTE_MAX_CHARS = 18
+# 她已经回应过的条目：正文截得更短、行尾标"已接过"，她知道这件事接过了，换话题时不再谢一遍
+_PEOPLE_ANSWERED_MAX_CHARS = 10
+_ANSWERED_MARK = "（已接过）"
 # 有玩家条目时，玩家条目和"更早一点你说过的话"合计至多几行：玩家条目优先（同一位玩家送礼、跳、
 # 开口三件事要一起在），她更早说过的话用剩下的行数；没有玩家条目时那一段照常
 _PEOPLE_AND_SPEECH_LINES = 3
@@ -335,6 +338,8 @@ class Replyer:
         chat_before = list(game_chat or [])
         people_lines, game_chat = _people_lines(game_people, chat_before)
         chat_placeholder = "（见下一段）" if chat_before and not game_chat else "（无）"
+        # 玩家条目一段占的行数：条目本身，加上有已接过的条目时多出的那句规矩
+        people_rows = len(people_lines) + (1 if _has_answered(people_lines) else 0)
         entries = self._dialogue_entries(full_history, batch)
         dialogue_lines = [self._render_entry(entry) for entry in entries]
         shown_speeches = [entry.content.strip() for entry in entries if entry.role == "assistant"]
@@ -354,9 +359,7 @@ class Replyer:
             recent_speech_section=_recent_speech_section(
                 recent_speeches,
                 shown_speeches,
-                max_lines=max(0, _PEOPLE_AND_SPEECH_LINES - len(people_lines))
-                if people_lines
-                else _RECENT_SPEECH_LINES,
+                max_lines=max(0, _PEOPLE_AND_SPEECH_LINES - people_rows) if people_lines else _RECENT_SPEECH_LINES,
             ),
             remembered_section=_remembered_section(remembered),
             bot_name=self._bot_name,
@@ -473,7 +476,7 @@ def _people_lines(game_people: Sequence[PlayerNote], game_chat: Sequence[str]) -
     shown_chat: set[str] = set()
     for note in [note for note in game_people if note.line][-_PEOPLE_LINES_MAX:]:
         body = _note_body(note.line)
-        fresh = note.said and any(body.startswith(chat) for chat in chat_bodies)
+        fresh = not note.answered and note.said and any(body.startswith(chat) for chat in chat_bodies)
         if fresh:
             shown_chat.update(chat for chat in chat_bodies if body.startswith(chat))
             lines.append(note.line)
@@ -488,8 +491,10 @@ def _people_lines(game_people: Sequence[PlayerNote], game_chat: Sequence[str]) -
             prefix, text = actor, body[len(actor) :]
         else:
             prefix, text = "", body
-        clipped = text if len(text) <= _PEOPLE_NOTE_MAX_CHARS else f"{text[:_PEOPLE_NOTE_MAX_CHARS]}…"
-        lines.append(f"{head}{prefix}{clipped}")
+        # 已接过的条目只留个大概（她回过了），行尾标出来
+        limit = _PEOPLE_ANSWERED_MAX_CHARS if note.answered else _PEOPLE_NOTE_MAX_CHARS
+        clipped = text if len(text) <= limit else f"{text[:limit]}…"
+        lines.append(f"{head}{prefix}{clipped}{_ANSWERED_MARK if note.answered else ''}")
     remaining = [line for line in game_chat if _note_body(line) not in shown_chat]
     return lines, remaining
 
@@ -499,7 +504,8 @@ def _game_people_section(lines: Sequence[str]) -> str:
 
     规矩只在有条目时出现，平常的决策窗不多占输入。几句规矩各对一种线上出过的错：交接稿里指她自己的
     "她"被当成刚点过名的女仆，玩家的公屏话随之安到女仆头上；玩家扔来的东西说成天上掉的；玩家说她
-    "自家地板打洞"，她反过来劝玩家别打洞。
+    "自家地板打洞"，她反过来劝玩家别打洞。有她已回应过的条目时多一句：上一窗谢过的礼，这一窗换话题时
+    她又谢一遍。
     """
     if not lines:
         return ""
@@ -507,7 +513,15 @@ def _game_people_section(lines: Sequence[str]) -> str:
         '交接稿的"她"就是你；转述说清是谁，别安到女仆、宠物或观众头上；写明谁送的别说成来路不明；'
         "玩家公屏说的事多半在说你。"
     )
+    # 有已接过的条目时才多一句：没有时这一句白占输入
+    if _has_answered(lines):
+        rules += "标着已接过的你回过了，交接稿没提就别再说一遍。"
     return f"\n\n{_GAME_PEOPLE_HEADING}\n\n" + "\n".join(lines) + f"\n{rules}"
+
+
+def _has_answered(lines: Sequence[str]) -> bool:
+    """条目行里有没有她已回应过的（行尾标着已接过）。"""
+    return any(line.endswith(_ANSWERED_MARK) for line in lines)
 
 
 def _remembered_section(remembered: str) -> str:

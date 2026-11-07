@@ -89,6 +89,14 @@ def keep_recent_notes(kept: Sequence[PlayerNote], fresh: Sequence[PlayerNote], a
     return tuple(recent[-_PLAYER_NOTES_MAX:])
 
 
+def mark_answered(notes: Sequence[PlayerNote], who: str) -> Tuple[PlayerNote, ...]:
+    """她回应了这位玩家：他到此为止找她的条目都标成已接过，别的玩家的不动。
+
+    不标的话，上一窗已经谢过的礼还在"最近找你的人"里，这一窗她换个话题时会再谢一遍。
+    """
+    return tuple(replace(note, answered=True) if note.who == who and not note.answered else note for note in notes)
+
+
 def sole_speaker_name(notes: Sequence[PlayerNote]) -> str:
     """这些条目里在公屏开口的只有一位玩家时返回他的名字，否则空串（两位以上开口不猜在回谁）。"""
     names = {note.who for note in notes if note.said and note.who}

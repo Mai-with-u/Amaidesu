@@ -162,6 +162,24 @@ async def test_people_section_keeps_the_latest_three_and_moves_fresh_chat_out_of
     assert turn["game_chat"] == "（见下一段）"
 
 
+async def test_answered_notes_are_marked_and_get_one_more_rule() -> None:
+    """她已经回应过的条目截得更短、行尾标"已接过"，规矩多一句别再说一遍；没有已接过的条目时不多这一句。"""
+    replyer, prompt = _replyer()
+    gift = PlayerNote(
+        who="玩家乙", said=False, line="[00:10 minecraft 动作] 玩家 玩家乙 朝我扔了 3 个钻石，落在我脚边", answered=True
+    )
+    hello = PlayerNote(who="玩家甲", said=True, line="[00:11 minecraft 公屏] 玩家 玩家甲：晚上好")
+    plan = DecisionPlan(should_reply=True, topic_summary="聊挖矿")
+
+    await replyer.generate(plan, [], game_people=[gift, hello])
+    section = _turn_kwargs(prompt)["game_people_section"]
+    assert "[00:10 minecraft 动作] 玩家 玩家乙 朝我扔了 3 个钻石…（已接过）\n" in section
+    assert f"{hello.line}\n" in section and "标着已接过的你回过了" in section
+
+    await replyer.generate(plan, [], game_people=[hello])
+    assert "已接过" not in _turn_kwargs(prompt)["game_people_section"]
+
+
 async def test_reply_to_keeps_the_planner_target_and_says_how_he_found_her() -> None:
     """回应对象写在前面，Planner 另填的 target（公屏原话片段）照旧跟着；只冲她做了事、没开口的玩家
     不说成"在公屏跟你说话"。"""

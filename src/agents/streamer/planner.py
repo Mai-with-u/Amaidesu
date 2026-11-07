@@ -71,6 +71,7 @@ from src.agents.streamer.game_ledger import (
     GameLedger,
     answering_player,
     keep_recent_notes,
+    mark_answered,
     sole_chat_player,
     sole_speaker_name,
 )
@@ -453,6 +454,20 @@ class Planner:
         self._transient_images = TransientImages()
 
         self.logger = get_logger("Planner")
+
+    @property
+    def recent_player_notes(self) -> Tuple[PlayerNote, ...]:
+        """最近几分钟游戏里玩家找她的条目（旧→新，只读）：交给表达侧的就是这一份。"""
+        return self._recent_player_notes
+
+    def reset_player_notes(self) -> None:
+        """场次复位：清空玩家找她的条目，开播与下播各调一次。
+
+        条目按发生时刻留几分钟，同一进程里下播后紧接着开下一场时，上一场末尾的条目还没过期，
+        不清的话新一场开头她会接上一场的玩家的话、谢上一场送的礼。
+        """
+        self._round_player_notes = ()
+        self._recent_player_notes = ()
 
     @property
     def reply_provider(self) -> Any:
@@ -1339,6 +1354,10 @@ class Planner:
             if answering_player and answering_player == sole_speaker_name(self._round_player_notes)
             else ("", ""),
         )
+        # 话说出口了、回应的是游戏里的某位玩家：他到此为止找她的条目标"已接过"，
+        # 后面几窗换话题时表达侧不再把同一份礼谢一遍、同一句话接一遍
+        if answering_player:
+            self._recent_player_notes = mark_answered(self._recent_player_notes, answering_player)
         # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到
         self.workbench.note_intent(
             Intent(

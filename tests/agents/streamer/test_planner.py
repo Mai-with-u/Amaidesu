@@ -14,6 +14,7 @@ from src.modules.storage.models.memory import ArchiveLine, Commitment
 from src.modules.tools.models import ToolExecutionResult, ToolSpec
 from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
+from src.modules.utils.time_utils import now_ms
 
 
 def _tc(name: str, args: dict, call_id: str = "c1") -> ToolCall:
@@ -522,6 +523,85 @@ async def test_reply_names_the_player_she_actually_answers_not_the_one_who_spoke
         attachment = provider.invoke.await_args.args[0].attachment
         assert attachment.reply_to == expected, to_player
         assert outcome.reply_player == ("", ""), to_player
+
+
+def _gift_and_hello() -> GameEventBatch:
+    """玩家乙扔来钻石、玩家甲在公屏打招呼（时刻取现在：最近几分钟的条目才留到下一窗）。"""
+    at = now_ms()
+    gift = PlayerNote(
+        who="玩家乙", said=False, line="[00:10 minecraft 动作] 玩家 玩家乙 朝我扔了 3 个钻石", timestamp_ms=at
+    )
+    hello = PlayerNote(who="玩家甲", said=True, line="[00:10 minecraft 公屏] 玩家 玩家甲：晚上好", timestamp_ms=at)
+    return GameEventBatch(chat_speakers=(("minecraft", "uuid-甲"),), player_notes=(gift, hello))
+
+
+_THANKS = {
+    "topic_summary": "谢玩家乙扔来的钻石",
+    "to_player": "玩家乙",
+    "is_novel": True,
+    "emotion": "happy",
+    "intensity": 0.5,
+}
+_CHAT = {"topic_summary": "聊挖矿", "is_novel": True, "emotion": "happy", "intensity": 0.5}
+
+
+async def test_her_reply_marks_that_players_notes_answered_for_later_windows() -> None:
+    """她谢了玩家乙扔来的钻石：下一窗交给表达侧的条目里，乙的那条标成已接过，甲的不动——
+    换个话题时表达侧不再把同一份礼谢一遍。"""
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    planner, _llm, _prompt = _make_planner(
+        [_resp(tool_calls=[_tc("streamer_reply", _THANKS)]), _resp(tool_calls=[_tc("streamer_reply", _CHAT)])],
+        reply_provider=provider,
+    )
+
+    await planner.plan([], game_batch=_gift_and_hello())
+    first = provider.invoke.await_args.args[0].attachment.game_people
+    await planner.plan([], game_batch=GameEventBatch())
+    later = provider.invoke.await_args.args[0].attachment.game_people
+
+    assert [note.answered for note in first] == [False, False]
+    assert [(note.who, note.answered) for note in later] == [("玩家乙", True), ("玩家甲", False)]
+    assert planner.recent_player_notes == tuple(later)
+
+
+async def test_reply_that_did_not_go_out_leaves_notes_unanswered() -> None:
+    """谢乙的那句没说出口（表达侧失败）：乙的条目不标已接过，下一窗照样能谢。"""
+    failed = ToolExecutionResult(tool_name="streamer_reply", success=False, error_message="表达失败")
+    provider = MagicMock()
+    provider.invoke = AsyncMock(side_effect=[failed, _REPLY_RESULT])
+    planner, _llm, _prompt = _make_planner(
+        [
+            _resp(tool_calls=[_tc("streamer_reply", _THANKS)]),
+            _resp("先不说了"),
+            _resp(tool_calls=[_tc("streamer_reply", _CHAT)]),
+        ],
+        reply_provider=provider,
+    )
+
+    await planner.plan([], game_batch=_gift_and_hello())
+    await planner.plan([], game_batch=GameEventBatch())
+
+    later = provider.invoke.await_args.args[0].attachment.game_people
+    assert [note.answered for note in later] == [False, False]
+
+
+async def test_reset_player_notes_forgets_last_sessions_players() -> None:
+    """场次复位：留着的玩家条目清空，下一窗交给表达侧的是空的。"""
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    planner, _llm, _prompt = _make_planner(
+        [_resp(tool_calls=[_tc("streamer_reply", _THANKS)]), _resp(tool_calls=[_tc("streamer_reply", _CHAT)])],
+        reply_provider=provider,
+    )
+    await planner.plan([], game_batch=_gift_and_hello())
+    assert len(planner.recent_player_notes) == 2
+
+    planner.reset_player_notes()
+    await planner.plan([], game_batch=GameEventBatch())
+
+    assert planner.recent_player_notes == ()
+    assert provider.invoke.await_args.args[0].attachment.game_people == []
 
 
 async def test_sole_speaker_is_filled_in_only_when_the_topic_names_him() -> None:

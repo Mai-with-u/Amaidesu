@@ -183,12 +183,15 @@ class PlayerNote:
     - ``line``：给表达侧看的一行，``[HH:MM <游戏> 公屏] 玩家 X：原话`` 或
       ``[HH:MM <游戏> 动作] 玩家 X 朝我扔了…``（动作只留事实，不带怎么接的口径）。
     - ``timestamp_ms``：发生时刻，按它只留最近几分钟的。
+    - ``answered``：她已经回应过这位玩家（回应对象是他的那句说出口了），这一条在他那句之前到的。
+      最近几分钟的条目会连着交给后面几窗，表达侧据此标"已接过"，换了话题不再把同一份礼谢一遍。
     """
 
     who: str
     said: bool
     line: str
     timestamp_ms: int = 0
+    answered: bool = False
 
 
 @dataclass(frozen=True)
