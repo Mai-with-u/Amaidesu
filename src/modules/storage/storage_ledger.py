@@ -20,6 +20,8 @@ StorageLedger —— 直播间消息流落库器
 - 订阅 ``game.*``（milestone / attention_required / error），写入 game_events 表。
 - 订阅 ``game.place.noted``（记住、忘掉、走近、离开一个记住的地点），写成 game_events 里 ``place_*`` 类型的行，
   只给下播整理认地点用。
+- 订阅 ``task.changed``，委派型任务的受理与终态写成 game_events 里 ``delegation_*`` 类型的行（指令全文、
+  终态摘要、时刻，按任务号配对）：下播整理拿它核对"她说做好了"，续播时据此认领重启前没了结的委派。
 - 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环。
 """
 
@@ -36,12 +38,14 @@ from src.modules.events.payloads.game_place import GamePlacePayload
 from src.modules.events.payloads.live import LiveEndedPayload
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
+from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.events.payloads.utterance import UtteranceDroppedPayload
 from src.modules.logging import get_logger
 from src.modules.storage.game_player_ledger import GamePlayerLedger
 from src.modules.storage.privacy import PrivacyService
 from src.modules.storage.repos import ChatRepo, EventRepo, GamePlayerRepo, ViewerRepo
 from src.modules.storage.retention import RetentionService
+from src.modules.tools.tasks import TERMINAL_TASK_STATES
 
 if TYPE_CHECKING:
     from src.modules.events.event_bus import EventBus
@@ -203,6 +207,15 @@ class StorageLedger:
         )
         self._subscriptions[CoreEvents.GAME_PLACE_NOTED] = place_handler
 
+        # 委派账：受理与终态各落一行，进度变化（running / 等定夺）不落
+        task_handler = self._on_task_changed
+        self.event_bus.on(
+            CoreEvents.TASK_CHANGED,
+            task_handler,
+            model_class=TaskChangedPayload,
+        )
+        self._subscriptions[CoreEvents.TASK_CHANGED] = task_handler
+
         ended_handler = self._on_live_ended
         self.event_bus.on(
             CoreEvents.LIVE_ENDED,
@@ -221,6 +234,7 @@ class StorageLedger:
             f" + {CoreEvents.TTS_UTTERANCE_DROPPED}"
             f" + {_GAME_EVENT_WILDCARD}"
             f" + {CoreEvents.GAME_PLACE_NOTED}"
+            f" + {CoreEvents.TASK_CHANGED}"
             f" + {CoreEvents.LIVE_ENDED}"
         )
 
@@ -649,6 +663,44 @@ class StorageLedger:
             logger.error(
                 f"StorageLedger 写入游戏事件失败（event={event_name}, "
                 f"event_type={getattr(payload, 'event_type', '?')}）：{exc}",
+                exc=True,
+            )
+
+    async def _on_task_changed(
+        self,
+        event_name: str,
+        payload: TaskChangedPayload,
+        source: str,
+    ) -> None:
+        """``task.changed`` 回调：委派型任务的受理与终态写成 ``delegation_*`` 游戏事件行。
+
+        受理行正文是指令全文（来自受理时的快照），终态行正文是终态摘要；停滞提醒、
+        running 与等定夺这类过程变化不落，工具包自己跑的 provider 型任务也不落。
+        """
+        if payload.source != "agent" or payload.alert:
+            return
+        if payload.status == "accepted":
+            kind, text = "accepted", str((payload.snapshot or {}).get("instruction") or "")
+        elif payload.status in TERMINAL_TASK_STATES:
+            kind, text = payload.status, payload.summary
+        else:
+            return
+        try:
+            live_pk = await self._resolve_live_pk(payload.live_session_id)
+            if live_pk is None:
+                logger.debug(f"委派账无法归属场次，跳过落库（task_id={payload.task_id}, status={payload.status}）")
+                return
+            await self.event_repo.insert_delegation_event(
+                live_session_id=live_pk,
+                game=payload.executor,
+                task_id=payload.task_id,
+                kind=kind,
+                text=text,
+                timestamp_ms=payload.timestamp_ms,
+            )
+        except Exception as exc:  # noqa: BLE001 边界处吸收 + 日志
+            logger.error(
+                f"StorageLedger 写入委派账失败（task_id={payload.task_id}, status={payload.status}）：{exc}",
                 exc=True,
             )
 

@@ -17,6 +17,7 @@ from src.modules.storage.models.chat import (
     ViewerSessionParticipation,
 )
 from src.modules.storage.models.events import (
+    DelegationRecord,
     GameEventRecord,
     GameEventTypeCount,
     GamePlaceMark,
@@ -53,6 +54,7 @@ __all__ = [
     "SuperChatRecord",
     "ViewerSessionParticipation",
     # events 域
+    "DelegationRecord",
     "GameEventRecord",
     "GameSaveSpan",
     "GamePlaceMark",

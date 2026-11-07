@@ -107,6 +107,40 @@ async def test_state_transitions_drive_events_idempotently_and_remove_on_termina
     assert final.source == "provider"  # 事件带事实源归属，观察面据此推导任务归属
 
 
+async def test_register_broadcasts_accepted_only_for_delegations() -> None:
+    """委派登记广播一次 accepted（带指令快照，落库记起点用）；provider 型目标登记不广播。"""
+    bus = EventBus()
+    sent: List[TaskChangedPayload] = []
+
+    async def on_change(name: str, payload: TaskChangedPayload, source: str) -> None:
+        sent.append(payload)
+
+    bus.on(CoreEvents.TASK_CHANGED, on_change, TaskChangedPayload)
+    ledger = TaskLedger(event_bus=bus)
+    ledger.register(
+        task_id="deleg_1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+        snapshot={"instruction": "盖房子"},
+    )
+    ledger.register(
+        task_id="maicraft-goal-1",
+        provider="maicraft",
+        tool="goal",
+        initiator="minecraft",
+        executor="maicraft",
+        source="provider",
+    )
+    await _drain()
+    await bus.wait_until_drained()
+
+    assert [(payload.task_id, payload.status, payload.source) for payload in sent] == [("deleg_1", "accepted", "agent")]
+    assert sent[0].snapshot == {"instruction": "盖房子"} and sent[0].summary == "已受理"
+
+
 def test_ledger_write_rules_terminal_sticky_quiet_group_and_no_regression() -> None:
     ledger = _registered_ledger("t")
     assert ledger.update("t", "running", snapshot={"phase": 1}) is None  # accepted<->running 组内迁移静默

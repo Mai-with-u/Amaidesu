@@ -128,9 +128,10 @@ async def test_delegation_full_chain_and_status_query(rig: _Rig) -> None:
     assert status["snapshot"]["instruction"] == "盖一座房子"
 
     b.finish(rig.ledger)
-    await _wait_until(lambda: any(p.task_id == task_id for p in received))
-    # accepted→running 属安静组（发起方已持回执，不唤醒）；终态必达
-    assert [p.status for p in received if p.task_id == task_id] == ["succeeded"]
+    await _wait_until(lambda: any(p.task_id == task_id and p.status == "succeeded" for p in received))
+    # 受理广播一次起点（落库记受理行用）；accepted→running 属安静组（发起方已持回执，不唤醒）；终态必达
+    assert [p.status for p in received if p.task_id == task_id] == ["accepted", "succeeded"]
+    assert received[0].snapshot == {"instruction": "盖一座房子"}
     assert all(p.initiator == "agent_a" and p.executor == "agent_b" for p in received)
     gone = await rig.call("framework_task_status", {"task_id": task_id})  # 终态已移除
     assert gone.success is False and "任务不存在" in gone.error_message

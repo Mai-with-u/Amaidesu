@@ -13,6 +13,7 @@ from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_place import GamePlacePayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.events.payloads.speech import StreamerSpeechPayload
+from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.session import LiveSessionManager
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.storage_ledger import StorageLedger
@@ -374,6 +375,58 @@ async def test_place_marks_land_as_place_rows_and_stay_out_of_game_progress(
     ]
     progress = await store.events.list_session_game_events(live_session_id=_FAKE_PK)
     assert [record.message for record in progress] == ["灯塔盖好了"]
+    counts = await store.events.count_game_events_by_type(live_session_ids=[_FAKE_PK])
+    assert [(count.event_type, count.n) for count in counts] == [("milestone", 1)]
+
+
+def _task(task_id: str, status: str, **kwargs: Any) -> TaskChangedPayload:
+    kwargs.setdefault("source", "agent")
+    kwargs.setdefault("executor", "minecraft")
+    return TaskChangedPayload(task_id=task_id, status=status, initiator="streamer", **kwargs)
+
+
+async def test_delegation_accept_and_end_land_as_paired_rows_outside_game_progress(
+    ledger, store: SQLiteDatabase, event_bus: EventBus
+) -> None:
+    """委派的受理与终态各落一行、按任务号配成一条账；过程变化、停滞提醒与 provider 型任务不落；
+    委派账不算游戏进展、不进按类型计数（不进记忆检索见记忆索引的白名单测试）。"""
+    instruction = "把营地的门装好" + "，门外垫平" * 60
+    await _emit(
+        event_bus,
+        CoreEvents.TASK_CHANGED,
+        _task("deleg_1", "accepted", snapshot={"instruction": instruction}, timestamp_ms=1_000),
+    )
+    await _emit(
+        event_bus,
+        CoreEvents.TASK_CHANGED,
+        _task("deleg_1", "waiting_for_decision", summary="卡住了", timestamp_ms=1_500),
+    )
+    await _emit(
+        event_bus,
+        CoreEvents.TASK_CHANGED,
+        _task("deleg_1", "running", alert=True, summary="很久没进展", timestamp_ms=1_600),
+    )
+    await _emit(event_bus, CoreEvents.TASK_CHANGED, _task("goal-9", "succeeded", source="provider", timestamp_ms=1_700))
+    await _emit(
+        event_bus,
+        CoreEvents.TASK_CHANGED,
+        _task("deleg_1", "undelivered", summary="停了但没交付结果；停下前最后一句：门装好了吧", timestamp_ms=2_000),
+    )
+    await _emit(event_bus, "game.milestone", _game("milestone", "门装好了", timestamp_ms=1_800))
+
+    [record] = await store.events.list_session_delegations(live_session_id=_FAKE_PK)
+    assert record.model_dump() == {
+        "live_session_id": _FAKE_PK,
+        "task_id": "deleg_1",
+        "game": "minecraft",
+        "instruction": instruction,
+        "status": "undelivered",
+        "summary": "停了但没交付结果；停下前最后一句：门装好了吧",
+        "started_ms": 1_000,
+        "ended_ms": 2_000,
+    }
+    progress = await store.events.list_session_game_events(live_session_id=_FAKE_PK)
+    assert [row.message for row in progress] == ["门装好了"]
     counts = await store.events.count_game_events_by_type(live_session_ids=[_FAKE_PK])
     assert [(count.event_type, count.n) for count in counts] == [("milestone", 1)]
 

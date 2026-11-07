@@ -83,7 +83,9 @@ async def test_speech_index_takes_only_her_aired_lines_in_formal_sessions(store:
 async def test_game_event_index_is_a_whitelist_of_milestones_and_reports(store: SQLiteDatabase) -> None:
     live = await _session(store)
     kept = []
-    for event_type in ("milestone", "report", "attention_required", "error", "chat", "player_body_language"):
+    # 委派账（delegation_*）是给下播核对用的指令原文与终态，不是游戏里发生的事，同样不收
+    types = ("milestone", "report", "attention_required", "error", "chat", "player_body_language")
+    for event_type in (*types, "delegation_accepted", "delegation_succeeded"):
         event_id = await store.events.insert_game_event(
             live_session_id=live, game="minecraft", event_type=event_type, message=f"{event_type} 的正文"
         )

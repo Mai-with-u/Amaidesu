@@ -17,7 +17,14 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
-__all__ = ["GameEventRecord", "GameEventTypeCount", "GamePlaceMark", "GameSaveSpan", "IndexedGameEvent"]
+__all__ = [
+    "DelegationRecord",
+    "GameEventRecord",
+    "GameEventTypeCount",
+    "GamePlaceMark",
+    "GameSaveSpan",
+    "IndexedGameEvent",
+]
 
 
 class GameEventRecord(BaseModel):
@@ -32,6 +39,31 @@ class GameEventRecord(BaseModel):
     timestamp_ms: int = Field(..., description="事件时刻（Unix epoch 毫秒）")
     save_id: str = Field(default="", description="事件发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
+
+
+class DelegationRecord(BaseModel):
+    """一件委派从受理到了结的账（``game_events`` 里 ``delegation_*`` 行按任务号配对）。
+
+    下播整理拿它核对"她说做好了"：只有 ``status=succeeded`` 是游戏侧正式交付过的；
+    ``undelivered`` 是停了没交付，``interrupted`` 是重启打断、做到哪不确定。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    live_session_id: int = Field(..., description="受理这件委派的场次（没有受理行时取了结那一行的场次）")
+    task_id: str = Field(..., description="委派任务号")
+    game: str = Field(..., description="执行的游戏 Agent 名")
+    instruction: str = Field(default="", description="委派指令全文（含附带的来源对话）；没有受理行时为空串")
+    status: str = Field(
+        default="accepted",
+        description=(
+            "终态：accepted=还没了结；其余为任务账本终态（succeeded / undelivered / cancelled / failed / timeout）"
+            "或 interrupted（重启打断）"
+        ),
+    )
+    summary: str = Field(default="", description="终态摘要（交付内容、没交付时模型最后一句、撤单来源等）")
+    started_ms: int = Field(default=0, description="受理时刻（Unix epoch 毫秒）；没有受理行时为 0")
+    ended_ms: int = Field(default=0, description="了结时刻（Unix epoch 毫秒）；还没了结为 0")
 
 
 class IndexedGameEvent(BaseModel):

@@ -107,6 +107,10 @@ class TaskLedger:
       唤醒发起方）；决策点与终态才是唤醒级变化
     - 真变化（唤醒级迁移）：更新记录 + 发 ``task.changed``；终态写入在
       发事件后移除条目
+
+    登记（``register``）只对 agent 型（委派）广播一次 ``accepted``：落库据此记下
+    委派的起点与指令全文，下播整理与续播认领才有受理那一头可对；provider 型
+    目标由执行 Agent 自己挂、自己知道，登记不广播。
     """
 
     def __init__(self, event_bus: Optional["EventBus"] = None) -> None:
@@ -148,6 +152,20 @@ class TaskLedger:
             f"任务已登记: task_id={task_id} tool={tool} 发起方={initiator} "
             f"执行者={executor} source={source} status={status}"
         )
+        if source == "agent":
+            # 委派受理 → 广播起点（带指令全文的快照）→ 落库记下受理行，终态到了再配上终态行
+            self._emit_changed(
+                TaskChangedPayload(
+                    task_id=task_id,
+                    status=status,
+                    summary="已受理",
+                    initiator=initiator,
+                    executor=executor,
+                    source=source,
+                    snapshot=dict(record.snapshot),
+                    timestamp_ms=ts,
+                )
+            )
         return record
 
     def get(self, task_id: str) -> Optional[TaskRecord]:
