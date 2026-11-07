@@ -207,7 +207,7 @@ async def _viewer_line(store: SQLiteDatabase) -> Tuple[int, int, int, int]:
             conn.execute(
                 "INSERT INTO viewer_candidates(live_session_id, kind, title, viewer_chat_id, viewer_quote,"
                 " reply_chat_id, reply_quote, created_at_ms) VALUES (?, 'viewer_defined', '狗叫年糕', ?, '叫它团子',"
-                " ?, '好，团子', 1_500)",
+                " ?, '好，团子', 1500)",
                 (session_id, said, reply),
             ).lastrowid
             or 0
