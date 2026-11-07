@@ -454,6 +454,17 @@ async def test_startup_marks_leftover_open_delegations_interrupted(make_ledger, 
     assert (record.status, record.summary) == ("interrupted", "重启前在做，被打断了，做到哪不确定")
 
 
+async def test_undelivered_report_is_left_to_the_delegation_ledger(
+    ledger, store: SQLiteDatabase, event_bus: EventBus
+) -> None:
+    """ "停了没交付"的代发上报不落成游戏事件行（委派账里有终态行）；交付与卡住的上报照常落。"""
+    await _emit(event_bus, "game.report", _game("report", "游戏那边停了，没交付结果", report_kind="undelivered"))
+    await _emit(event_bus, "game.report", _game("report", "门装好了", report_kind="delivery"))
+
+    rows = await store.execute("SELECT event_type, message FROM game_events")
+    assert [(row["event_type"], row["message"]) for row in rows] == [("report", "门装好了")]
+
+
 async def test_game_event_write_failure_is_swallowed(
     ledger, store: SQLiteDatabase, event_bus: EventBus, monkeypatch: pytest.MonkeyPatch
 ) -> None:

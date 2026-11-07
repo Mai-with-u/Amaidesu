@@ -24,6 +24,8 @@ StorageLedger —— 直播间消息流落库器
   发起方原话、终态摘要、时刻，按任务号配对）：下播整理拿它核对"她说做好了"，续播时据此认领重启前没了结的委派。
 - 启动时把库里还挂着受理的委派一律记成被打断（上一个进程留下的，不会再有终态）：续播、直接开新场、
   手动收尾残留场都一样，下播整理不会把它们当成还在做。委派账只由本落库器写，主播侧只读。
+- 游戏 Agent 代发的"停了没交付"上报（``report_kind=undelivered``）不落成游戏事件行：同一件事委派账里
+  已有终态行，固定的那句落成阶段汇报会越积越多、进记忆检索污染回想。
 - 写入异常降级：单条失败 try/except 记 error 日志，不抛出、不影响主循环。
 """
 
@@ -651,6 +653,9 @@ class StorageLedger:
         source: str,
     ) -> None:
         """``game.*`` 通配回调：游戏里程碑/安全阀/异常写入 game_events 表。"""
+        if payload.event_type == "report" and payload.report_kind == "undelivered":
+            # 停了没交付：委派账里已有这件委派的终态行；固定那句落成阶段汇报会越积越多、污染回想
+            return
         try:
             live_pk = await self._resolve_live_pk(payload.live_session_id)
             if live_pk is None:
