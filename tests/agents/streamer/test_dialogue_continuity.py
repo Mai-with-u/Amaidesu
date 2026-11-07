@@ -824,10 +824,12 @@ def test_streamer_prompts_keep_rules(prompts) -> None:
 
 
 def test_planner_prompt_finds_material_instead_of_defaulting_to_silence(prompts: Any) -> None:
-    """开口不只看游戏进展：表达上的新也算增量，冷场时默认找话说，打算只讲一次，梗由她自己定。
+    """开口与沉默都过增量检验：表达上的新也算增量，冷场时默认找话说，打算只讲一次，梗由她自己定。
 
-    线上回放里 81 轮决策沉默了 51 轮，理由全是"游戏没新进展"；开口的 30 句里 27 句在复述同一个打算，
-    床名向零观众的房间讨了 7 次也没定下来。
+    两段矫枉叠加：线上回放曾 81 轮决策沉默 51 轮（理由全是"游戏没新进展"的敷衍）、开口的
+    30 句里 27 句复述同一个打算——为此立了"先找话、沉默要写理由"；后来反面失控（一场直播
+    347 轮决策开口 345 轮、三分之一的交接稿套同一态度模板）——为此把检讨式沉默说明改回
+    正常结局，但"没看过素材清单就说没进展"的敷衍仍然不算找过。
     """
     planner = prompts.render(
         "amaidesu_planner_react",
@@ -838,12 +840,15 @@ def test_planner_prompt_finds_material_instead_of_defaulting_to_silence(prompts:
         inside_jokes="",
         game_rules="",
     )
-    # 沉默不再是默认：复述才是失败，沉默要写理由，【冷场】时默认开口
-    assert "复述是失败的选择，沉默要有理由" in planner and "说明里写清为什么不说" in planner
+    # 开口与沉默都过增量检验：复述才是失败；沉默不写检讨，但敷衍理由不算找过
+    assert "开口与沉默都过增量检验，沉默是正常结局" in planner
+    assert "一句这轮在做什么或等什么" in planner and '"游戏没新进展"本身不算找过' in planner
     assert "参考段出现【冷场】行时" in planner
     assert "沉默是合格的选择" not in planner and "发言频率不设目标" not in planner
     # 增量分信息上的新与表达上的新，素材不只来自游戏
     assert "表达上的新" in planner and "可聊的素材不只来自游戏" in planner
+    # 态度没有固定菜单（"自嘲还是嘴硬"式二选一举例会被模型读成封闭选项）
+    assert "态度没有固定菜单" in planner and "自嘲还是嘴硬" not in planner
     # 打算只在定下、改主意或做完时讲
     assert "打算只讲一次" in planner
     # 梗由她自己当场定，可以回调不重演；空房间不求主意、不求起名
