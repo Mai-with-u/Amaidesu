@@ -18,7 +18,6 @@ import {
   formatTimeHM,
   formatTimeHMS,
   getLatencyClass,
-  getProfileNameLabel,
   getProfileNameTag,
   relativeAge,
   truncateText,
@@ -101,15 +100,8 @@ describe('profile 名映射', () => {
     expect(getProfileNameTag('minecraft')).toBe('info');
   });
 
-  it('映射之外的 profile 色回退 info、标签原样回退', () => {
+  it('映射之外的 profile 色回退 info', () => {
     expect(getProfileNameTag('nope')).toBe('info');
-    expect(getProfileNameLabel('nope')).toBe('nope');
-  });
-
-  it('已知 profile 映射到中文标签', () => {
-    expect(getProfileNameLabel('planner')).toBe('主 LLM');
-    expect(getProfileNameLabel('replyer')).toBe('回复');
-    expect(getProfileNameLabel('minecraft')).toBe('游戏');
   });
 });
 

@@ -22,7 +22,7 @@ import {
   modelNameReferences,
   modelUsageChips,
   parseArrayItemKey,
-  profileLabel,
+  profileName,
   providerNameReferences,
   uniqueName,
 } from './modelConfig';
@@ -168,10 +168,10 @@ describe('buildDefaultItem / uniqueName / diffCountAgainst', () => {
   });
 });
 
-describe('profileLabel', () => {
-  it('固定用途映射中文名，未知键回退短名', () => {
-    expect(profileLabel('model.llm_profiles.planner')).toBe('决策 Profile');
-    expect(profileLabel('model.llm_profiles.custom')).toBe('custom');
+describe('profileName', () => {
+  it('取出 profile 原名，不做中文映射', () => {
+    expect(profileName('model.llm_profiles.planner')).toBe('planner');
+    expect(profileName('model.llm_profiles.custom')).toBe('custom');
   });
 });
 
@@ -182,8 +182,8 @@ describe('modelUsageChips / danglingModelRefs / apiKeySet / formatPrice', () => 
   ];
 
   it('modelUsageChips 主模型显示用途名，备选追加·备选后缀', () => {
-    expect(modelUsageChips(entries, 'a')).toEqual(['决策 Profile', '表达 Profile']);
-    expect(modelUsageChips(entries, 'b')).toEqual(['决策 Profile·备选']);
+    expect(modelUsageChips(entries, 'a')).toEqual(['planner', 'replyer']);
+    expect(modelUsageChips(entries, 'b')).toEqual(['planner·备选']);
     expect(modelUsageChips(entries, 'c')).toEqual([]);
   });
 

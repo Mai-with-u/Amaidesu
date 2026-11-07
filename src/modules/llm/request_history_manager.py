@@ -300,3 +300,14 @@ class RequestHistoryManager:
         if repo is None:
             return []
         return await repo.llm_request_models()
+
+    async def get_available_profiles(self) -> List[str]:
+        """获取历史记录中出现过的用途名列表
+
+        Returns:
+            用途名列表（去重升序）；未接入存储返回空列表
+        """
+        repo = self._repo()
+        if repo is None:
+            return []
+        return await repo.llm_request_profiles()

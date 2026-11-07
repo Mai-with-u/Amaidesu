@@ -241,6 +241,14 @@ async def test_history_models_are_distinct_and_sorted(llm_client, store) -> None
     assert (await client.get("/api/v1/llm/history/models")).json() == ["a-model", "z-model"]
 
 
+async def test_history_profiles_are_distinct_and_sorted(llm_client, store) -> None:
+    """用途候选取历史里实际出现过的名字（去重升序）：早期记录里的旧用途名同样要能被筛到。"""
+    client = await llm_client()
+    for request_id, profile in (("p1", "planner"), ("p2", "llm_fast"), ("p3", "planner")):
+        await _seed_call(store, request_id, "a-model", profile_name=profile)
+    assert (await client.get("/api/v1/llm/history/profiles")).json() == ["llm_fast", "planner"]
+
+
 @pytest.mark.parametrize("windows", [None, {MODEL_A: 128_000, MODEL_B: 0}], ids=["no_llm_manager", "with_windows"])
 async def test_usage_context_window_and_latest_prompt(llm_client, store, windows) -> None:
     """窗口来自引擎装配索引（未注入或未配置为 0，前端据此隐藏水位）；水位分子是最新一条 prompt，不是累加。"""

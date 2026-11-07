@@ -7,10 +7,10 @@
         </template>
       </el-table-column>
 
-      <el-table-column prop="profile_name" label="用途" width="110">
+      <el-table-column prop="profile_name" label="用途" width="130">
         <template #default="{ row }">
           <el-tag size="small" effect="plain" :type="getProfileNameTag(row.profile_name)">
-            {{ getProfileNameLabel(row.profile_name) }}
+            {{ row.profile_name || 'unknown' }}
           </el-tag>
         </template>
       </el-table-column>
@@ -130,7 +130,6 @@ import {
   formatDateTime,
   formatLatency,
   formatNumber,
-  getProfileNameLabel,
   formatCost,
   getLatencyClass,
   getProfileNameTag,

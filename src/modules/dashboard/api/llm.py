@@ -271,6 +271,16 @@ async def get_available_models(server: ServerDep) -> List[str]:
     return await history_manager.get_available_models()
 
 
+@router.get("/history/profiles", response_model=List[str])
+async def get_available_profiles(server: ServerDep) -> List[str]:
+    """获取历史记录中出现过的用途名（去重升序；供筛选下拉全量候选项）
+
+    取历史里实际出现过的名字：早期记录里的旧用途名（现行封闭集合已不含）同样筛得到。
+    """
+    history_manager = server.request_history_manager
+    return await history_manager.get_available_profiles()
+
+
 @router.get("/history/statistics", response_model=LLMHistoryStatisticsResponse)
 async def get_statistics(
     server: ServerDep,

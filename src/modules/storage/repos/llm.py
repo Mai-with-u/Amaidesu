@@ -349,6 +349,17 @@ class LLMRepo(BaseRepo):
         )
         return [str(row["model_name"]) for row in rows]
 
+    async def llm_request_profiles(self) -> List[str]:
+        """列出请求历史中出现过的用途名（去重升序；空名不返回）。
+
+        取历史里实际出现过的名字，不取当前封闭集合：封闭集合只管现行配置，
+        早期记录里的旧用途名（如 llm / llm_fast）同样得能被筛到。
+        """
+        rows = await self._execute(
+            "SELECT DISTINCT profile_name FROM llm_requests WHERE profile_name != '' ORDER BY profile_name"
+        )
+        return [str(row["profile_name"]) for row in rows]
+
     async def llm_request_statistics(
         self,
         *,

@@ -135,19 +135,6 @@ export function getProfileNameTag(profileName: string): string {
   return tagMap[profileName] || 'info';
 }
 
-/** LLM 用途 profile 名 → 中文标签；映射之外的 profile 原样回退 */
-export function getProfileNameLabel(profileName: string): string {
-  const labelMap: Record<string, string> = {
-    planner: '主 LLM',
-    replyer: '回复',
-    summary: '摘要',
-    minecraft: '游戏',
-    vision: '视觉',
-    simulator: '模拟',
-  };
-  return labelMap[profileName] || profileName;
-}
-
 /**
  * 截断文本；空值返回 "-"。
  */

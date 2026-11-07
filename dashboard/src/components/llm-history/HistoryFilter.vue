@@ -21,19 +21,15 @@
           :model-value="queryParams.profile_name"
           placeholder="全部类型"
           clearable
-          style="width: 160px"
+          filterable
+          style="width: 180px"
           @update:model-value="handleProfileNameChange"
         >
-          <!-- 用途是后端封闭集合（9 个 profile），标签沿用既有中文 + 英文原文 -->
-          <el-option label="主 LLM" value="planner" />
-          <el-option label="回复" value="replyer" />
-          <el-option label="视觉" value="vision" />
-          <el-option label="游戏" value="minecraft" />
-          <el-option label="minecraft_builder" value="minecraft_builder" />
-          <el-option label="摘要" value="summary" />
-          <el-option label="下播整理" value="settle" />
-          <el-option label="模拟" value="simulator" />
-          <el-option label="tts" value="tts" />
+          <!-- 用途标签直接用 profile 原名：与 model.toml 的 [llm_profiles.<name>] 一致，
+               与复盘页口径相同；不再做中文映射，免得同一个用途出现多套名字。
+               候选项全量来自后端 distinct 查询（历史里实际出现过的用途名，
+               含早期记录里的旧用途名），下拉可输入筛选。 -->
+          <el-option v-for="name in availableProfiles" :key="name" :label="name" :value="name" />
         </el-select>
       </div>
 
@@ -83,6 +79,8 @@ import type { LLMHistoryQueryParams } from '@/types';
 interface Props {
   queryParams: LLMHistoryQueryParams;
   availableModels: string[];
+  /** 用途筛选候选：历史里出现过的用途名（去重升序） */
+  availableProfiles: string[];
   dateRange: [number, number] | null;
 }
 

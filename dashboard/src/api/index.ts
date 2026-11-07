@@ -221,6 +221,8 @@ export const llmApi = {
   getHistory: (params: LLMHistoryQueryParams) =>
     api.get<LLMHistoryResponse>('/llm/history', { params }),
   getHistoryModels: () => api.get<string[]>('/llm/history/models'),
+  /** 用途筛选候选：历史里出现过的用途名全量（去重升序） */
+  getHistoryProfiles: () => api.get<string[]>('/llm/history/profiles'),
   getStatistics: (params?: { start_time?: number; end_time?: number }) =>
     api.get<LLMHistoryStatistics>('/llm/history/statistics', { params }),
   getRequestById: (requestId: string) => api.get<LLMRequestHistory>(`/llm/history/${requestId}`),

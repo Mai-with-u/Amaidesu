@@ -149,22 +149,14 @@ export function uniqueName(existing: string[], base: string): string {
   }
 }
 
-/** profile 展示名：固定用途集合的中文名映射，未知键回退原名 */
-const PROFILE_LABELS: Record<string, string> = {
-  planner: '决策 Profile',
-  replyer: '表达 Profile',
-  summary: '摘要 Profile',
-  settle: '下播整理 Profile',
-  minecraft: '游戏 Profile',
-  minecraft_builder: '建筑设计 Profile',
-  vision: '视觉 Profile',
-  simulator: '模拟 Profile',
-  tts: '语音合成 Profile',
-};
-
-export function profileLabel(profileKey: string): string {
-  const short = profileKey.slice(PROFILES_CONTAINER_KEY.length + 1);
-  return PROFILE_LABELS[short] ?? short;
+/**
+ * 用途名：从配置键取出 profile 原名（`model.llm_profiles.planner` → `planner`）。
+ *
+ * 不做中文映射：用途名在全站保持原名，与 model.toml 的 `[llm_profiles.<name>]`
+ * 段名逐字一致，改配置时不用在两套名字之间翻译。
+ */
+export function profileName(profileKey: string): string {
+  return profileKey.slice(PROFILES_CONTAINER_KEY.length + 1);
 }
 
 /**
@@ -179,7 +171,7 @@ export function modelUsageChips(
   const chips: string[] = [];
   for (const entry of profileEntries) {
     if (!entry.modelList.includes(modelName)) continue;
-    const label = profileLabel(entry.key);
+    const label = profileName(entry.key);
     chips.push(entry.modelList[0] === modelName ? label : `${label}·备选`);
   }
   return chips;

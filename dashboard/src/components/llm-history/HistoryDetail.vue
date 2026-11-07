@@ -21,7 +21,7 @@
           </span>
           <span class="chip">
             <span class="chip-label">用途</span>
-            {{ getProfileNameLabel(detail.profile_name) }}
+            {{ detail.profile_name || 'unknown' }}
           </span>
           <span class="chip">
             <span class="chip-label">模型</span>
@@ -259,7 +259,6 @@ import {
   formatImageSize,
   formatLatency,
   formatNumber,
-  getProfileNameLabel,
 } from '@/utils/format';
 
 interface Props {

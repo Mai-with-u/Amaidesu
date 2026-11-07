@@ -14,7 +14,7 @@
           :data-config-key="profile.key"
         >
           <div class="use-name">
-            <span class="u-dot"></span>{{ profileLabel(profile.key) }}
+            <span class="u-dot"></span>{{ profileName(profile.key) }}
             <el-tag
               v-if="getChangeCount(`${profile.key}.model_list`) > 0"
               size="small"
@@ -392,7 +392,7 @@ import {
   groupModelsByProvider,
   makeItemField,
   modelUsageChips,
-  profileLabel,
+  profileName,
   providerNameReferences,
   uniqueName,
 } from '@/utils/modelConfig';

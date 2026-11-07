@@ -162,5 +162,6 @@ async def test_without_repo_queries_return_empty() -> None:
     assert (await manager.get_statistics())["total_requests"] == 0
     assert await manager.get_available_dates() == []
     assert await manager.get_available_models() == []
+    assert await manager.get_available_profiles() == []
     assert await manager.get_request_stats_by_ids(["req-cache"]) == {}
     assert (await manager.clear_history(confirm=True))["success"] is False

@@ -43,6 +43,7 @@
       v-model:query-params="queryParams"
       v-model:date-range="dateRange"
       :available-models="availableModels"
+      :available-profiles="availableProfiles"
       @reset="handleReset"
       @filter-change="debouncedFetchHistory"
     />
@@ -95,6 +96,8 @@ const totalRecords = ref(0);
 const detailVisible = ref(false);
 const currentDetail = ref<LLMRequestHistory | null>(null);
 const availableModels = ref<string[]>([]);
+/** 用途筛选候选：历史里出现过的用途名（去重升序，后端 distinct 查询给出） */
+const availableProfiles = ref<string[]>([]);
 // 统计视图数据：页头展示当前时间窗内的聚合指标（随筛选联动）
 const statistics = ref<LLMHistoryStatistics | null>(null);
 
@@ -198,6 +201,15 @@ async function fetchHistory() {
       }
     });
     availableModels.value = Array.from(models);
+
+    // 用途候选同理兜底：全量来自 /history/profiles，本页出现过的补进来
+    const profiles = new Set<string>(availableProfiles.value);
+    response.data.items.forEach(item => {
+      if (item.profile_name) {
+        profiles.add(item.profile_name);
+      }
+    });
+    availableProfiles.value = Array.from(profiles).sort();
   } catch (error) {
     ElMessage.error(getApiErrorMessage(error, '获取历史记录失败'));
   } finally {
@@ -294,8 +306,19 @@ async function fetchAvailableModels() {
   }
 }
 
+// 用途筛选候选：同样来自后端 distinct 查询（含早期记录里的旧用途名）
+async function fetchAvailableProfiles() {
+  try {
+    const response = await llmApi.getHistoryProfiles();
+    availableProfiles.value = response.data;
+  } catch {
+    // 候选拉取失败不打断主流程：fetchHistory 的页内提取会补齐当前页出现过的用途
+  }
+}
+
 onMounted(() => {
   void fetchAvailableModels();
+  void fetchAvailableProfiles();
   void openFromQuery();
 });
 

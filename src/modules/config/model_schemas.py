@@ -361,48 +361,39 @@ class LLMProfilesConfig(BaseConfig):
 
     planner: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("planner"),
-        title="决策 Profile",
-        description="决策 profile（思考与工具编排，温度偏高）",
+        description="planner：思考与工具编排，温度偏高",
     )
     replyer: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("replyer"),
-        title="表达 Profile",
-        description="表达 profile（主播回复生成，低温稳定）",
+        description="replyer：主播回复生成，低温稳定",
     )
     summary: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("summary"),
-        title="摘要 Profile",
-        description="摘要 profile（话题总结，长超时）",
+        description="summary：话题总结，长超时",
     )
     settle: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("settle"),
-        title="下播整理 Profile",
-        description="下播整理 profile（每场收播后写承诺与档案，一场只调几次，可单独换更强的模型）",
+        description="settle：每场收播后写承诺与档案，一场只调几次，可单独换更强的模型",
     )
     minecraft: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("minecraft"),
-        title="游戏 Profile",
-        description="游戏 Agent profile（Minecraft 决策循环）",
+        description="minecraft：游戏 Agent 的决策循环（Minecraft）",
     )
     minecraft_builder: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("minecraft_builder"),
-        title="建筑设计 Profile",
-        description="按需建筑设计 profile（独立于游戏决策的生成预算）",
+        description="minecraft_builder：按需建筑设计（独立于游戏决策的生成预算）",
     )
     vision: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("vision"),
-        title="视觉 Profile",
-        description="视觉 profile（屏幕/图像理解，少 token）",
+        description="vision：屏幕/图像理解，少 token",
     )
     simulator: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("simulator"),
-        title="模拟 Profile",
-        description="模拟 profile（虚拟用户消息生成，高温活跃）",
+        description="simulator：虚拟用户消息生成，高温活跃",
     )
     tts: LLMProfileConfig = Field(
         default_factory=lambda: _seed_profile("tts"),
-        title="语音合成 Profile",
-        description="语音合成 profile（omni_tts 引擎用，须指向带语音输出模态的模型）",
+        description="tts：omni_tts 引擎用（须指向带语音输出模态的模型）",
     )
 
     @model_validator(mode="before")
