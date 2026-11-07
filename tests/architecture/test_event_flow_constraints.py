@@ -38,9 +38,6 @@ INPUT_EVENTS = {
 # Agent 域允许的非输入订阅：场次生命周期（主动发言闸门）、游戏事件族、工具结果、
 # 进程启动（跨重启重放的窗口边界，如续播时回读上一进程窗口的递话）
 AGENT_ALLOWED_PREFIXES = ("live.started", "live.ended", "game.", "tool.result.", "core.startup")
-# 观测面事件对 Agent 域开放：agent.replied 是"游戏 Agent 每步说了什么"的观测通道（ADR-076），
-# 编排它的主播订阅它做参考段素材，是读对方公开观测、不是耦合内部决策；显式清单，新增须连同理由
-AGENT_ALLOWED_EVENTS = ("agent.replied",)
 # Agent 域输出事件（决策 / 流程 / 发言 / 任务 / 控制面事实）——Tool 域不得订阅
 DECISION_EVENTS = {
     "rundown.changed",
@@ -133,13 +130,11 @@ def test_agent_domain_subscribes_only_to_input_and_infrastructure_events() -> No
     violations = [
         s
         for s in _subscriptions("agent")
-        if s["event"] not in INPUT_EVENTS
-        and not s["event"].startswith(AGENT_ALLOWED_PREFIXES)
-        and s["event"] not in AGENT_ALLOWED_EVENTS
+        if s["event"] not in INPUT_EVENTS and not s["event"].startswith(AGENT_ALLOWED_PREFIXES)
     ]
     assert not violations, (
-        "Agent 域只允许订阅 room.message.* / room.state.* / live.* / game.* / tool.result.* / core.startup"
-        " / 观测面白名单（agent.replied，ADR-076）：\n" + _describe(violations)
+        "Agent 域只允许订阅 room.message.* / room.state.* / live.* / game.* / tool.result.* / core.startup：\n"
+        + _describe(violations)
     )
 
 
