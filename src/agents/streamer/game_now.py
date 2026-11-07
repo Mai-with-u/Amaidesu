@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Dict, List, Mapping, Optional, Tuple
+from typing import Deque, List, Mapping, Optional, Tuple
 
 from .planner_context import age_text
 from .planner_render import Delegation, DelegationStatusProvider, delegation_state_line
@@ -89,20 +89,14 @@ class GameNow:
 
 
 class GameSideLog:
-    """游戏那边的两样流水：游戏 Agent 每步说的判断（每个 Agent 只留最近一句）和她自己在游戏公屏说的话。
+    """游戏那边的流水：她自己在游戏公屏说的话。
 
-    主播 Agent 的内部件：事件回调写入，决策窗开窗时读；场次边界（开播、下播）清空。
+    主播 Agent 的内部件：事件回调写入，决策窗开窗时读；场次边界（开播、下播）清空。游戏 Agent 最近的判断
+    不在这里：它记在任务账本里那件委派的快照旁注上，主播每窗决策前读。
     """
 
     def __init__(self) -> None:
-        self._judgements: Dict[str, Tuple[str, int]] = {}
         self._self_chat: Deque[Tuple[int, str, str]] = deque(maxlen=_SELF_CHAT_BUFFER)
-
-    def note_judgement(self, agent: str, content: str, at_ms: int) -> None:
-        """游戏 Agent 这一步说的话：盖掉它上一句（只关心它最近怎么想）。"""
-        text = content.strip()
-        if agent and text:
-            self._judgements[agent] = (text, at_ms)
 
     def note_self_chat(self, game: str, message: str, at_ms: int) -> None:
         """她在游戏公屏打出去的一句。"""
@@ -110,18 +104,13 @@ class GameSideLog:
         if text:
             self._self_chat.append((at_ms, game, text))
 
-    def judgement(self, agent: str) -> Tuple[str, int]:
-        """这个游戏 Agent 最近说的一句判断与时刻；没说过为 ("", 0)。"""
-        return self._judgements.get(agent, ("", 0))
-
     def recent_self_chat(self, current_ms: int) -> Tuple[Tuple[int, str, str], ...]:
         """她最近五分钟在游戏公屏说过的话（旧→新）。"""
         floor = current_ms - _SELF_CHAT_WINDOW_MS
         return tuple(item for item in self._self_chat if item[0] >= floor)
 
     def reset(self) -> None:
-        """场次复位：上一场游戏那边的判断与她的公屏话不带进下一场。"""
-        self._judgements.clear()
+        """场次复位：上一场她的公屏话不带进下一场。"""
         self._self_chat.clear()
 
 

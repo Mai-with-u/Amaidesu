@@ -68,6 +68,18 @@ class DelegationBook:
             self._finished_ids.append(task_id)
         self._batch_ids.clear()
 
+    def note_reply(self, text: str, at_ms: int) -> None:
+        """这一步说的话记成名下在跑的委派的旁注（只留最近一句，带时刻）：主播每窗决策前读，标明不一定对。
+
+        走账本旁注，不算进展：每步推理都刷新进展的话，原地打转时停滞告警永远不响。
+        """
+        ledger = self._framework_ledger()
+        content = text.strip()
+        if ledger is None or not content:
+            return
+        for task_id in self._finished_ids:
+            ledger.annotate(task_id, {"latest_reply": content, "latest_reply_at_ms": at_ms})
+
     # ----- 终态与中间态 -----
 
     def finish(self, status: str, *, summary: str) -> None:

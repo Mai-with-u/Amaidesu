@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 from src.agents.minecraft.delegation_book import DelegationBook
+from src.modules.tools.tasks import TaskLedger
 
 
 class _FakeRecord:
@@ -44,6 +46,41 @@ class _FakeTracker:
 def _book(ledger: Optional[_FakeLedger] = None) -> DelegationBook:
     tracker = _FakeTracker(ledger) if ledger is not None else None
     return DelegationBook(task_tracker=tracker, agent_name="minecraft")
+
+
+def test_reply_is_noted_on_running_delegations_without_counting_as_progress() -> None:
+    """这一步说的话记成名下在跑的委派的旁注（最近一句盖掉上一句、带时刻），不刷新进展计时；
+    还没开跑的、空话不记；没接任务基建时什么都不做。"""
+    ledger = TaskLedger()
+    for task_id in ("d-1", "d-2"):
+        ledger.register(
+            task_id=task_id,
+            provider="framework",
+            tool="framework_delegate",
+            initiator="streamer",
+            executor="minecraft",
+            source="agent",
+            snapshot={"instruction": "把门装上"},
+        )
+    book = DelegationBook(task_tracker=SimpleNamespace(ledger=ledger), agent_name="minecraft")
+    book.absorb("d-1")
+    book.mark_running()
+    book.absorb("d-2")
+    before = ledger.get("d-1").updated_at_ms
+
+    book.note_reply("先补木板", 100)
+    book.note_reply("  门框左边差一格木板 ", 200)
+    book.note_reply("   ", 300)
+
+    record = ledger.get("d-1")
+    assert record.snapshot == {
+        "instruction": "把门装上",
+        "latest_reply": "门框左边差一格木板",
+        "latest_reply_at_ms": 200,
+    }
+    assert record.updated_at_ms == before
+    assert "latest_reply" not in ledger.get("d-2").snapshot, "还没开跑的委派不记"
+    _book().note_reply("没接任务基建", 1)
 
 
 def test_absorb_then_mark_running_writes_running_and_tracks_for_finish() -> None:

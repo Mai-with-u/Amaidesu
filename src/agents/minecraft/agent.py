@@ -943,6 +943,9 @@ class MinecraftAgent(BaseAgent):
             # 换到备用模型时思考由引擎丢弃，这里只管原样存
             messages.append(response_to_assistant_message(response))
 
+            # 中间工具调用步骤的正文记成名下委派的最近一句判断：主播每窗决策前从任务账本读，不靠订阅
+            if tool_calls and (response.content or "").strip():
+                self._delegations.note_reply(response.content or "", now_ms())
             # 中间工具调用步骤的正文进观察面响应卡；自然终止轮的正文由交付卡承载，不重复发。
             if tool_calls and (response.content or "").strip() and self._event_bus is not None:
                 await self.emit_event(

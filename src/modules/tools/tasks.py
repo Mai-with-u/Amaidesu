@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Mapping, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.tasks import TaskChangedPayload
@@ -175,6 +175,19 @@ class TaskLedger:
     def active_task_ids(self) -> List[str]:
         """进行中任务号列表（快照排序，供跟踪循环遍历）。"""
         return sorted(self._records.keys())
+
+    def annotate(self, task_id: str, notes: Mapping[str, Any]) -> bool:
+        """执行侧往快照里补旁注（如执行 Agent 最近说的一句判断）：合并进快照，不算进展。
+
+        不刷新 ``updated_at_ms``、不发事件：旁注不是任务往前走了。算成进展的话，执行 Agent 每推理一步就
+        顺延一次停滞告警，发起方看到的"多久没有新进展"也会被一句句推理盖住，原地打转就看不出来了。
+        未知或已终态移除的任务返回 False。
+        """
+        record = self._records.get(task_id)
+        if record is None:
+            return False
+        record.snapshot = {**record.snapshot, **dict(notes)}
+        return True
 
     def __contains__(self, task_id: object) -> bool:
         return task_id in self._records

@@ -166,6 +166,19 @@ def test_same_status_snapshot_change_refreshes_stall_clock_only_when_content_cha
     assert record.snapshot == {"progress": 2} and record.updated_at_ms >= before
 
 
+def test_annotation_merges_into_snapshot_without_counting_as_progress() -> None:
+    """旁注（执行 Agent 最近说的一句）合并进快照，不刷新停滞计时：每步推理都算进展的话，原地打转时告警永远不响。"""
+    ledger = _registered_ledger("t", status="running", snapshot={"progress": 1})
+    before = ledger.get("t").updated_at_ms
+
+    assert ledger.annotate("t", {"latest_reply": "门框差一格木板", "latest_reply_at_ms": 5}) is True
+
+    record = ledger.get("t")
+    assert record.snapshot == {"progress": 1, "latest_reply": "门框差一格木板", "latest_reply_at_ms": 5}
+    assert record.updated_at_ms == before
+    assert ledger.annotate("gone", {"latest_reply": "x"}) is False, "未知或已终态移除的任务不写"
+
+
 async def test_subscription_follows_task_lifetime_and_notify_wakes_step_without_poll() -> None:
     _, tracker, _, provider = _setup(states=[{"status": "succeeded"}])
     assert provider.subscribed == []  # 无任务不订阅

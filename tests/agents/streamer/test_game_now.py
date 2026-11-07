@@ -15,7 +15,6 @@ from src.agents.streamer.game_now import AgentNow, GameNow, GameSideLog, render_
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.planner_render import Delegation
 from src.agents.streamer.room_state import RoomState
-from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game_chat import GameSelfChattedPayload
 from src.modules.events.payloads.live import LiveStartedPayload
 from src.modules.llm.context_meter import get_encoding
@@ -170,17 +169,14 @@ def test_block_besides_overview_stays_within_600_tokens() -> None:
     assert text.count("「") == 3
 
 
-def test_side_log_keeps_last_judgement_and_five_minutes_of_self_chat() -> None:
+def test_side_log_keeps_five_minutes_of_self_chat() -> None:
     log = GameSideLog()
-    log.note_judgement("minecraft", "先补木板", _NOW - 2 * _MINUTE)
-    log.note_judgement("minecraft", "再装门", _NOW - _MINUTE)
     log.note_self_chat("minecraft", "老早说的", _NOW - 6 * _MINUTE)
     log.note_self_chat("minecraft", "门马上就好", _NOW - _MINUTE)
 
-    assert log.judgement("minecraft") == ("再装门", _NOW - _MINUTE)
     assert [text for _at, _game, text in log.recent_self_chat(_NOW)] == ["门马上就好"]
     log.reset()
-    assert log.judgement("minecraft") == ("", 0) and log.recent_self_chat(_NOW) == ()
+    assert log.recent_self_chat(_NOW) == ()
 
 
 async def test_planner_puts_the_block_last_with_the_overview_inside() -> None:
@@ -231,8 +227,8 @@ async def test_planner_puts_the_block_last_with_the_overview_inside() -> None:
 
 
 async def test_agent_feeds_step_judgement_and_self_chat_and_clears_them_at_live_start() -> None:
-    """主播 Agent 的读数：任务账本里游戏 Agent 自己发起、还在跑的最近一步的目的，它最近一句判断，
-    她近 5 分钟的公屏话；开播清掉上一场的判断和公屏话。"""
+    """主播 Agent 的读数：任务账本里游戏 Agent 自己发起、还在跑的最近一步的目的，它名下委派快照旁注里的
+    最近一句判断（每窗读账本，不订阅回复事件），她近 5 分钟的公屏话；开播清掉上一场的公屏话。"""
     ledger = TaskLedger()
     for task_id, purpose in (("goal_1", "挖石头"), ("goal_2", "去营地门口把门装上")):
         ledger.register(
@@ -253,21 +249,33 @@ async def test_agent_feeds_step_judgement_and_self_chat_and_clears_them_at_live_
         executor="minecraft",
         source="agent",
     )
+    # 别的游戏 Agent 名下的委派旁注不算它的
+    ledger.register(
+        task_id="deleg_2",
+        provider="other",
+        tool="delegate",
+        initiator="streamer",
+        executor="other_game",
+        source="agent",
+    )
+    ledger.annotate("deleg_1", {"latest_reply": "门框差一格木板", "latest_reply_at_ms": 20})
+    ledger.annotate("deleg_2", {"latest_reply": "别的游戏的话", "latest_reply_at_ms": 30})
     agent = make_streamer_agent(task_ledger=ledger, round_executor=FakeRoundExecutor({"speech": "好"}))
 
-    await agent._on_agent_replied(
-        "agent.replied", AgentRepliedPayload(agent="minecraft", content="门框差一格木板"), "test"
-    )
     await agent._on_self_chatted(
         "game.self.chatted", GameSelfChattedPayload(game="minecraft", message="门马上就好"), "test"
     )
     now = agent._game_now(["minecraft"])
 
     reading = now.agents["minecraft"]
-    assert reading.step == "去营地门口把门装上" and reading.judgement == "门框差一格木板"
+    assert reading.step == "去营地门口把门装上" and (reading.judgement, reading.judgement_at_ms) == (
+        "门框差一格木板",
+        20,
+    )
     assert [text for _at, _game, text in now.self_chat] == ["门马上就好"]
 
     started = LiveStartedPayload(live_session_id=1, source="manual", started_at_ms=1)
     await agent._on_live_started("live.started", started, "test")
     after = agent._game_now(["minecraft"])
-    assert after.agents["minecraft"].judgement == "" and after.self_chat == ()
+    # 判断挂在那件委派上：委派还在账上就还在，渲染时只认这件事开始之后说的
+    assert after.self_chat == ()

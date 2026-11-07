@@ -231,6 +231,38 @@ async def test_natural_termination_settles_delegation_as_undelivered_not_succeed
     await agent.stop()
 
 
+async def test_intermediate_reply_is_noted_on_the_running_delegation() -> None:
+    """委派在跑时中间步骤说的话记成这件委派的旁注：主播每窗决策前从任务账本读，不订阅回复事件。"""
+    ledger = TaskLedger(event_bus=SimpleNamespace(emit=AsyncMock()))
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+        snapshot={"instruction": "把门装上"},
+    )
+    seen: list[dict] = []
+
+    def script(messages: list[dict]) -> Response:
+        record = ledger.get("d-1")
+        seen.append(dict(record.snapshot) if record is not None else {})
+        if len(seen) == 1:
+            return v1_resp("门框左边差一格木板，先补上", [_tool_call("minecraft_todo", {"action": "read"})])
+        return v1_resp("门装好了吧应该")
+
+    agent, _llm_fake, _bus = await make_minecraft_agent(
+        FakeMaicraft(), script, tracker=TaskTracker(ToolRegistry(), ledger)
+    )
+    assert agent.receive_delegation(instruction="把门装上", task_id="d-1") is None
+    await _wait_until(lambda: "d-1" not in ledger)
+
+    assert "latest_reply" not in seen[0]
+    assert seen[1]["latest_reply"] == "门框左边差一格木板，先补上" and seen[1]["latest_reply_at_ms"] > 0
+    await agent.stop()
+
+
 async def test_echoed_reasoning_rides_along_in_task_history(start_agent) -> None:
     """模型开着回传开关时，上一步的思考随 assistant 消息进任务历史，下一步请求带着它。"""
     echo = Reasoning(text="先记待办再去挖", model="m")
