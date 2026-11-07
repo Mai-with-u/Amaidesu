@@ -631,6 +631,14 @@ function fromMilestone(event: FeedEvent, data: Record<string, unknown>): ShowEnt
   });
 }
 
+/** 游戏上报种类 → 徽标；没列出的种类按普通汇报显示 */
+const REPORT_BADGE: Record<string, string> = { escalation: '升级提醒', undelivered: '没交付' };
+/** 游戏上报种类 → 次要文案；没列出的种类按交付总结显示 */
+const REPORT_NOTE: Record<string, string> = {
+  escalation: '需要主播决策',
+  undelivered: '停了但没交付结果',
+};
+
 /** game.* 事件 → ShowEntry（GamePayload，event_type 判别）。
  *  非 game.* 事件返回 null；game.milestone 不走此函数（旧路径在 LiveObserver 本地维护） */
 export function toGameEntry(event: FeedEvent): ShowEntry | null {
@@ -638,9 +646,10 @@ export function toGameEntry(event: FeedEvent): ShowEntry | null {
   const data = isRecord(event.data) ? event.data : {};
   const eventType = str(data.event_type) || event.type.slice('game.'.length);
   const reportKind = str(data.report_kind);
-  // 按 event_type 决定徽标语义；report 在 escalation 时升级为"升级提醒"
+  // 按 event_type 决定徽标语义；report 在 escalation 时升级为"升级提醒"，
+  // undelivered 是游戏侧没交付就停了（系统代发），单列"没交付"，不混进交付汇报
   let badge = '';
-  if (eventType === 'report') badge = reportKind === 'escalation' ? '升级提醒' : '汇报';
+  if (eventType === 'report') badge = REPORT_BADGE[reportKind] ?? '汇报';
   else if (eventType === 'attention_required') badge = '需要关注';
   else if (eventType === 'error') badge = '游戏错误';
   else if (eventType === 'milestone') badge = '里程碑';
@@ -649,7 +658,7 @@ export function toGameEntry(event: FeedEvent): ShowEntry | null {
   const scene = str(data.scene);
   if (scene) noteParts.push(scene);
   if (eventType === 'report' && reportKind) {
-    noteParts.push(reportKind === 'escalation' ? '需要主播决策' : '交付总结');
+    noteParts.push(REPORT_NOTE[reportKind] ?? '交付总结');
   }
   return makeEntry({
     id: event.id,

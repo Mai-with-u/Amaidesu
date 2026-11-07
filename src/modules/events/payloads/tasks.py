@@ -24,7 +24,7 @@ class TaskChangedPayload(BasePayload):
     Attributes:
         task_id: 任务号（回执型工具受理时分配；全链路关联键）
         status: 新状态（accepted / running / waiting_for_decision /
-            succeeded / failed / cancelled / timeout）
+            succeeded / failed / cancelled / timeout / undelivered）
         summary: 人可读摘要（变化要点或终态结论）
         initiator: 发起方 Agent 注册名（有变化通知谁——唤醒过滤键）
         executor: 执行者（provider 型 = 提供者名；agent 型 = 执行 Agent 名）

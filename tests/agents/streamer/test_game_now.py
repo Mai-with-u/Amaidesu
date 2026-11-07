@@ -86,6 +86,11 @@ def test_step_and_judgement_from_before_this_task_are_left_out() -> None:
     text = render_game_now({"minecraft": done}, None, GameNow(agents={"minecraft": fresh}), "", _NOW)
     assert "（做完了）" in text and "此刻那一步" not in text
 
+    # 游戏那边没交付就停了：不说成做完了，此刻那一步也不再列
+    stopped = _delegation(report_kind="undelivered", reported_ms=_NOW)
+    text = render_game_now({"minecraft": stopped}, None, GameNow(agents={"minecraft": fresh}), "", _NOW)
+    assert "（停了，没交付结果）" in text and "做完了" not in text and "此刻那一步" not in text
+
 
 def test_block_is_empty_without_anything_and_overview_alone_still_shows() -> None:
     assert render_game_now({}, None, GameNow(), "", _NOW) == ""

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.minecraft.agent import MinecraftAgent
+from src.agents.minecraft.agent import UNDELIVERED_REPORT_MESSAGE, MinecraftAgent
 from src.agents.minecraft.config import MinecraftConfig
 from src.agents.minecraft.state import MinecraftAgentState
 from src.agents.minecraft.tools import MinecraftToolProvider
@@ -25,9 +25,11 @@ from src.modules.tools.models import ResultBlock, ToolExecutionResult, ToolInvoc
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.tools.operations import ToolOperations
 from src.modules.tools.registry import ToolRegistry
+from src.modules.tools.tasks import TaskLedger, TaskTracker
 from src.modules.vision.image_store import VisionImageStore, set_image_store
 
-from .minecraft_v1_fakes import assemble_minecraft_agent, fake_bus, make_minecraft_agent, offline_config
+from .minecraft_v1_fakes import FakeMaicraft, assemble_minecraft_agent, fake_bus, make_minecraft_agent, offline_config
+from .minecraft_v1_fakes import _resp as v1_resp
 
 
 def _ops(registry: ToolRegistry) -> ToolOperations:
@@ -180,8 +182,9 @@ async def test_emit_report_payload_and_snapshot() -> None:
     assert agent.get_state_snapshot()["recent_reports"][0]["kind"] == "delivery"
 
 
-async def test_natural_termination_falls_back_to_single_delivery_without_milestone(start_agent) -> None:
-    """自然终止且未 report：兜底包装终止文本为一次 delivery；todo 转 done 不发 milestone。"""
+async def test_natural_termination_reports_undelivered_instead_of_delivery(start_agent) -> None:
+    """自然终止且未 report：做完只认交付，系统只代发一次"停了没交付"，模型最后那句不当交付结果发给主播；
+    todo 转 done 不发 milestone。"""
 
     async def fake(messages, **kwargs):
         if not _has_tool_message(messages):
@@ -195,9 +198,37 @@ async def test_natural_termination_falls_back_to_single_delivery_without_milesto
     await _wait_until(lambda: agent._task_finished and _game_events(bus, "report"))
 
     reports = _game_events(bus, "report")
-    assert len(reports) == 1 and reports[0].report_kind == "delivery"
-    assert "钻石挖完了" in reports[0].message
+    assert len(reports) == 1 and reports[0].report_kind == "undelivered"
+    assert reports[0].message == UNDELIVERED_REPORT_MESSAGE and "钻石挖完了" not in reports[0].message
     assert _game_events(bus, "milestone") == []
+
+
+async def test_natural_termination_settles_delegation_as_undelivered_not_succeeded() -> None:
+    """委派的活没交付就停了：账面终态记"停了没交付"，不记成功；模型停下前那句只进账面摘要。"""
+
+    ledger_bus = SimpleNamespace(emit=AsyncMock())
+    ledger = TaskLedger(event_bus=ledger_bus)
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+        snapshot={"instruction": "把门装上"},
+    )
+    agent, _llm_fake, bus = await make_minecraft_agent(
+        FakeMaicraft(), lambda _messages: v1_resp("门装好了吧应该"), tracker=TaskTracker(ToolRegistry(), ledger)
+    )
+    assert agent.receive_delegation(instruction="把门装上", task_id="d-1") is None
+    await _wait_until(lambda: "d-1" not in ledger)
+    await _wait_until(lambda: ledger_bus.emit.await_count >= 1)
+
+    ended = ledger_bus.emit.await_args_list[-1].args[1]
+    assert (ended.task_id, ended.status) == ("d-1", "undelivered")
+    assert ended.summary == "停了但没交付结果；停下前最后一句：门装好了吧应该"
+    assert [report.report_kind for report in _game_events(bus, "report")] == ["undelivered"]
+    await agent.stop()
 
 
 async def test_echoed_reasoning_rides_along_in_task_history(start_agent) -> None:
@@ -269,7 +300,9 @@ async def test_continues_past_fifty_steps_until_delivery(start_agent) -> None:
         _resp(tool_calls=[_tool_call("minecraft_notebook", {"action": "write", "content": f"施工进展 {step}"})])
         for step in range(1, 61)
     ]
-    llm = _llm(AsyncMock(side_effect=steps + [_resp("施工验收完成")]))
+    # 最后一轮正式交付：做完只认交付，光说一句"完成"不算
+    delivery = _tool_call("minecraft_report", {"kind": "delivery", "content": "施工验收完成"})
+    llm = _llm(AsyncMock(side_effect=steps + [_resp(tool_calls=[delivery])]))
     bus = fake_bus()
     agent = await start_agent(llm, bus=bus, registry=ToolRegistry())
     agent.receive_prompt(content="完成施工并验收", source="test")

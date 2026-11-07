@@ -23,7 +23,8 @@
 
 状态词表：受理 ``accepted`` → 进行中 ``running``（含子态
 ``waiting_for_decision``，决策点等待）→ 终态 ``{succeeded / failed /
-cancelled / timeout}``。写入规则：终态粘滞（终态后的任何写入被忽略）；
+cancelled / timeout / undelivered}``。``undelivered`` 是执行 Agent 自己停了
+却没交付结果：委派只有走过交付才记 ``succeeded``，停下不等于做完。写入规则：终态粘滞（终态后的任何写入被忽略）；
 ``accepted`` 不可回退；同状态重复写入幂等（快照刷新、不重发事件）。
 
 红线：本模块只存发起方/执行者**名字字符串**（路由用）并经事件叫醒——
@@ -54,9 +55,11 @@ logger = get_logger("TaskTracker")
 # ---------------------------------------------------------------------------
 
 # 任务状态：受理 → 进行中（含决策点等待子态）→ 终态
-TaskStatus = Literal["accepted", "running", "waiting_for_decision", "succeeded", "failed", "cancelled", "timeout"]
+TaskStatus = Literal[
+    "accepted", "running", "waiting_for_decision", "succeeded", "failed", "cancelled", "timeout", "undelivered"
+]
 
-TERMINAL_TASK_STATES = frozenset({"succeeded", "failed", "cancelled", "timeout"})
+TERMINAL_TASK_STATES = frozenset({"succeeded", "failed", "cancelled", "timeout", "undelivered"})
 IN_PROGRESS_TASK_STATES = frozenset({"accepted", "running", "waiting_for_decision"})
 
 # 事实源归属：provider 型 = 跟踪循环写；agent 型 = 执行 Agent 写

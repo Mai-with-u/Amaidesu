@@ -154,6 +154,8 @@ _GAME = "minecraft"
 # 请求发不出去且换回执、重开对话都补救不了时，再派活也是同一个结果
 _FAULT_RETRY = "身体出故障了，暂时动不了；再派一次活它会重新试"
 _FAULT_STUCK = "身体出故障了，动不了；重新派活也没用，得等后台修好"
+# 模型没交付就停下时代发给主播的那句：只说停了、没交付，做没做完不替它下结论
+UNDELIVERED_REPORT_MESSAGE = "游戏那边停了，没交付结果，做没做完不确定"
 # 对话发不出去、按任务事实重开时给模型的说明
 _RESTART_NOTICE = (
     "[系统] 上一段对话里有内容发不出去，已经整段丢掉。上面是原指令、待办与目标记录，下面是宿主刚读的现场；"
@@ -1047,11 +1049,15 @@ class MinecraftAgent(BaseAgent):
         elif cooking:
             self._logger.info(f"任务批次自然终止（{steps} 步），{len(cooking)} 台炉子在烧、到点会叫醒，静默让出")
         elif not self._task_reported:
-            delivery = content.strip()
-            await self._emit_report("delivery", delivery or "任务完成")
+            # 模型没调 minecraft_report 就停了：做完只认交付，这里不替它交付成"任务完成"。
+            # 主播那边收到"停了没交付"，不会对观众说做好了；任务照旧算结束，下条指令开新任务。
+            # 模型停下前的最后一句只写进账面摘要（看板与下播核对查得到），不当交付结果发给主播
+            last_words = content.strip()
+            await self._emit_report("undelivered", UNDELIVERED_REPORT_MESSAGE)
             self._task_finished = True
-            self._delegations.finish("succeeded", summary=delivery or "任务完成")
-            self._logger.info(f"任务批次自然终止（{steps} 步），系统兜底交付")
+            summary = "停了但没交付结果" + (f"；停下前最后一句：{last_words}" if last_words else "")
+            self._delegations.finish("undelivered", summary=summary)
+            self._logger.info(f"任务批次自然终止（{steps} 步），没交付结果，账面记停了没交付")
         return False
 
     async def _continue_after_no_progress(self, messages: List[Dict[str, Any]], reminded: bool, reason: str) -> bool:
@@ -2148,7 +2154,7 @@ class MinecraftAgent(BaseAgent):
         message: str,
         *,
         scene: str = "",
-        report_kind: Optional[Literal["delivery", "escalation"]] = None,
+        report_kind: Optional[Literal["delivery", "escalation", "undelivered"]] = None,
         already_resolved: bool = False,
     ) -> None:
         """emit game.* 事件；叙事面事件带上本批任务期间的身体事件，主播据此讲"做着做着遇到了什么"。"""
@@ -2180,7 +2186,9 @@ class MinecraftAgent(BaseAgent):
         else:
             await self.emit_event(CoreEvents.GAME_ERROR, payload)
 
-    async def _emit_report(self, kind: Literal["delivery", "escalation"], message: str, *, scene: str = "") -> None:
+    async def _emit_report(
+        self, kind: Literal["delivery", "escalation", "undelivered"], message: str, *, scene: str = ""
+    ) -> None:
         await self._emit_game_event("report", message, scene=scene, report_kind=kind)
 
     async def emit_attention_required(self, message: str, *, scene: str = "") -> None:

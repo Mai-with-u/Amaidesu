@@ -9,7 +9,8 @@
 - GamePayload 低频、只发重大变化（挖到钻石 / 通关章节 / 安全阀偏差 / 异常 / 交付与升级）
 - 同一 ``GamePayload`` 类在 4 个事件名下复用，通过 ``event_type`` 字段判别
 - ``scene`` 字段携带场景信息（关卡坐标 / 区块名等自由文本），便于回顾
-- ``report_kind`` 仅 report 事件使用：delivery=交付总结 / escalation=升级决策
+- ``report_kind`` 仅 report 事件使用：delivery=交付总结 / escalation=升级决策 /
+  undelivered=游戏侧自己停了、没交付结果（系统代发，不算做完）
 - GameBoardStatePayload 每步落子即发，事件名 ``game.state.changed``（三层名
   避开存储台账的 ``game.*`` 单层通配），订阅者是 widget 呈现桥
 """
@@ -74,9 +75,12 @@ class GamePayload(BasePayload):
         description="存档编号（游戏给的不透明串，只做相等比较）；空串 = 这个游戏不分存档或当时还没认出存档",
     )
     save_name: str = Field(default="", description="存档给人看的名字（只显示，不当键）")
-    report_kind: Optional[Literal["delivery", "escalation"]] = Field(
+    report_kind: Optional[Literal["delivery", "escalation", "undelivered"]] = Field(
         default=None,
-        description="上报种类（仅 event_type='report' 时有值：delivery=交付总结 / escalation=升级决策）",
+        description=(
+            "上报种类（仅 event_type='report' 时有值：delivery=交付总结 / escalation=升级决策 / "
+            "undelivered=游戏侧停了却没交付结果，不算做完）"
+        ),
     )
     # 任务上下文（超集形状：四类事件共用，缺省即"本次与身体事件无关"）。
     # 身体事件来自 MaiCraft 的任务事件流（紧急反应/处理不了的需求），由游戏 Agent 观察后随上报携带；

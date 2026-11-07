@@ -63,7 +63,7 @@ class Delegation:
     instruction: str
     task_id: str
     at_ms: int
-    report_kind: str = ""  # delivery=已交付 / escalation=卡住待定夺；空=还在做
+    report_kind: str = ""  # delivery=已交付 / escalation=卡住待定夺 / undelivered=停了没交付；空=还在做
     reported_ms: int = 0
 
 
@@ -220,6 +220,9 @@ def delegation_state_line(
         return f"已在{age_text(current_ms - delegation.reported_ms)}做完，结果见游戏记录。"
     if delegation.report_kind == "escalation":
         return f"在{age_text(current_ms - delegation.reported_ms)}卡住了，正等我和观众一起定夺（见游戏记录）。"
+    if delegation.report_kind == "undelivered":
+        # 游戏侧没交付就停了：只认交付算做完，这里不能读成做好了
+        return f"游戏那边在{age_text(current_ms - delegation.reported_ms)}停了，没交付结果，做没做完不确定。"
     if record is None:
         if status_provider is None:
             # 未绑定机器账查询（缺 task_ledger 的装配）：维持只有交付语的渲染
@@ -384,6 +387,8 @@ def goal_lines(delegations: Dict[str, Delegation]) -> List[GoalLine]:
             status = "做完了"
         elif delegation.report_kind == "escalation":
             status = "卡住了"
+        elif delegation.report_kind == "undelivered":
+            status = "停了没交付"
         goals.append(
             GoalLine(
                 game=delegation.agent,

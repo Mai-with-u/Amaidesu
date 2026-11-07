@@ -484,6 +484,12 @@ describe('rundown.changed / game.*', () => {
       evt('game.report', { scene: '矿井', message: '卡住', report_kind: 'escalation' }),
     );
     expect(escalation).toMatchObject({ badge: '升级提醒', note: '矿井 · 需要主播决策' });
+
+    // 游戏侧没交付就停了：单列"没交付"，不显示成交付总结
+    const undelivered = toGameEntry(
+      evt('game.report', { message: '游戏那边停了，没交付结果', report_kind: 'undelivered' }),
+    );
+    expect(undelivered).toMatchObject({ badge: '没交付', note: '停了但没交付结果' });
   });
 
   it('toGameEntry：attention_required/error 徽标，error 标 failed；非 game.* 返回 null', () => {

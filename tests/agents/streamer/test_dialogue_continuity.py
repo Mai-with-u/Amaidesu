@@ -433,7 +433,11 @@ async def test_planner_sees_what_it_is_doing_in_game_until_reported() -> None:
     assert "[来源对话" not in references[-1]
     assert not any(word in work for word in ("交给", "身体", "委派"))
 
-    for kind, phrase in (("escalation", "卡住了，正等我和观众一起定夺"), ("delivery", "做完，结果见游戏记录")):
+    for kind, phrase in (
+        ("escalation", "卡住了，正等我和观众一起定夺"),
+        ("undelivered", "游戏那边在刚刚停了，没交付结果，做没做完不确定"),
+        ("delivery", "做完，结果见游戏记录"),
+    ):
         planner.workbench.note_game_report("minecraft", kind)
         await planner.plan([_msg("怎么样了", "m2")])
         assert phrase in references[-1]

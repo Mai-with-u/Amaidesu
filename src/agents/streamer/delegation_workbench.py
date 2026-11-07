@@ -207,12 +207,13 @@ class DelegationWorkbench:
         self._recent_intents.append(intent)
 
     def note_game_report(self, game: str, report_kind: str) -> None:
-        """游戏侧上报（交付/卡住待定夺）到达：把对应执行 Agent 手头那次委派标成已上报。
+        """游戏侧上报（交付/卡住待定夺/停了没交付）到达：把对应执行 Agent 手头那次委派标成已上报。
 
-        游戏 Agent 以自己的注册名作为上报的 game 字段，按名字对上即可。
+        游戏 Agent 以自己的注册名作为上报的 game 字段，按名字对上即可。停了没交付也标上：
+        这件事已经不在做了，不标的话她一直以为还在做，等不来结果也不会改派。
         """
         delegation = self._delegations.get(game)
-        if delegation is not None and report_kind in {"delivery", "escalation"}:
+        if delegation is not None and report_kind in {"delivery", "escalation", "undelivered"}:
             delegation.report_kind = report_kind
             delegation.reported_ms = now_ms()
 

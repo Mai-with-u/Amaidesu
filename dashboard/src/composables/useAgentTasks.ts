@@ -29,6 +29,8 @@ export const TASK_STATUS_TEXT: Record<string, string> = {
   failed: '失败',
   cancelled: '已取消',
   timeout: '已超时',
+  // 执行 Agent 自己停了却没交付结果：不算完成
+  undelivered: '停了没交付',
 };
 
 export function taskStatusText(status: string): string {

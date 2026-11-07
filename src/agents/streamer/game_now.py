@@ -155,11 +155,13 @@ def _task_state(
     record: Optional[Dict[str, Any]],
     status_provider: Optional[DelegationStatusProvider],
 ) -> str:
-    """手上的事的一句状态：做完了、卡住了等我拿主意、还在做。"""
+    """手上的事的一句状态：做完了、卡住了等我拿主意、停了没交付、还在做。"""
     if delegation.report_kind == "delivery":
         return "做完了"
     if delegation.report_kind == "escalation":
         return "卡住了，等我拿主意"
+    if delegation.report_kind == "undelivered":
+        return "停了，没交付结果"
     if record is None:
         # 没接任务账本的装配只知道派出去了；接了却查不到是账面已了结
         return "还在做" if status_provider is None else "账面上已了结"

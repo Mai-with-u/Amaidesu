@@ -949,7 +949,8 @@ onMounted(() => {
 
 .md-task-status.is-failed,
 .md-task-status.is-cancelled,
-.md-task-status.is-timeout {
+.md-task-status.is-timeout,
+.md-task-status.is-undelivered {
   background: var(--el-color-danger-light-9);
   color: var(--el-color-danger);
 }

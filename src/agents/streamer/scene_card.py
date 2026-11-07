@@ -27,7 +27,7 @@ __all__ = ["GoalLine", "GoalStatus", "SceneInputs", "brief_of", "build_scene_car
 #: 现场信息过了这么久就提醒"可能已经变了"：嘴据此少下断言
 STALE_SCENE_MS = 60_000
 
-GoalStatus = Literal["进行中", "做完了", "卡住了"]
+GoalStatus = Literal["进行中", "做完了", "卡住了", "停了没交付"]
 
 
 @dataclass(frozen=True)
