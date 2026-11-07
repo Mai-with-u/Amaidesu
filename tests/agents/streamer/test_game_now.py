@@ -128,9 +128,14 @@ def test_readings_drop_coordinates_ids_and_tool_names() -> None:
         "把花放到东窗内侧地板上（留 z=56 给蒲公英）": "把花放到东窗内侧地板上（留那里给蒲公英）",
         "游戏目标 456（maicraft:travel）done：走到了目的地，实测位置 (-334, 64, 58)": "做完了：走到了目的地，实测位置",
         "读了 3 层方块，存成图纸 325B3760-3717-4A91-9449-8C8BE7034C0D": "读了 3 层方块，存成图纸",
-        '先 maicraft_goal(action="cancel", goal_id=568) 再去打 e12（b5）': "先再去打那个",
+        '先 maicraft_goal(action="cancel", goal_id=568) 再去打 e12（b5）': "先再去打 e12",
         "goal_id=568 已取消，用 minecraft_glance 看一眼": "已取消，用看一眼",
         "拿到 6 个 minecraft:oak_log": "拿到 6 个 minecraft:oak_log",
+        # 数量、物品名、版本号照留：只认游戏那一面的工具前缀，括号里只去观察编号的形状
+        "放了 oak_planks (12 个)": "放了 oak_planks (12 个)",
+        "先拿 oak_log (16)": "先拿 oak_log (16)",
+        "铁锭(x3)": "铁锭(x3)",
+        "v2 版": "v2 版",
     }
     assert {raw: scrub_game_readings(raw) for raw in cases} == cases
 

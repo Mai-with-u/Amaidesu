@@ -55,13 +55,15 @@ _DROP_BEFORE = set("上下里内外旁边前后，。；：、,.;:！？!?)）�
 _UUID = re.compile(r"\s*[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
 # 目标、任务编号的键值写法："goal_id=568" "task_id: deleg_1"
 _ID_FIELD = re.compile(r"\s*(?<![A-Za-z0-9_])(?:goal|task)_id\s*[=:：]\s*[\w-]+")
-# 工具调用写法："maicraft_goal(action='cancel')"；物品 ID（"minecraft:oak_log"）冒号后的不碰
-_TOOL_CALL = re.compile(r"\s*(?<![A-Za-z0-9_:])[a-z][a-z0-9]*(?:_[a-z0-9]+)+\s*\([^()]*\)")
+# 工具调用写法："maicraft_goal(action='cancel')"：只认游戏那一面的工具前缀。别的"下划线名字 + 括号"多是
+# 物品名带数量（"oak_planks (12 个)" "oak_log (16)"），照留；物品 ID（"minecraft:oak_log"）冒号后的不碰
+_TOOL_CALL = re.compile(r"\s*(?<![A-Za-z0-9_:])(?:maicraft|minecraft)_[a-z0-9_]*\s*\([^()]*\)")
 # 游戏那一面的能力、工具名（"maicraft_execute" "minecraft_glance"）：念给观众没有意义
 _TOOL_NAME = re.compile(r"\s*(?<![A-Za-z0-9_:])(?:maicraft|minecraft)_[a-z][a-z0-9_]*")
-# 观察编号："(e12)" 整个括号去掉，单独写的 "e12" "b5" 换成"那个"（x、y、z 打头的是坐标轴，上面已处理）
-_OBSERVATION_IN_BRACKETS = re.compile(r"\s*[（(][a-z]\d{1,4}[)）]")
-_OBSERVATION = re.compile(r"(?<![A-Za-z0-9_#-])[a-w]\d{1,4}(?![A-Za-z0-9_])")
+# 观察编号：只去括号里"一个字母加数字"这种形状（"(e12)" "（b5）"），整个括号去掉。x、y、z 打头的多是数量
+# （"铁锭(x3)"），纯数字、"N 个"是数量，都照留；括号外裸写的不碰——第 58 场的读数里一处也没有，
+# 换掉只会误伤"v2 版"这类写法
+_OBSERVATION_IN_BRACKETS = re.compile(r"\s*[（(][a-w]\d{1,4}[)）]")
 # 去掉东西后剩下的空括号、悬空的顿号，以及汉字之间多出来的空白
 _EMPTY_BRACKETS = re.compile(r"[（(][\s、，,]*[)）]")
 _CJK_GAP = re.compile(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])")
@@ -196,14 +198,14 @@ def scrub_game_readings(text: str) -> str:
 
     先过通用的内部术语脱敏（目标编号、能力名、任务号），再去掉坐标（前面是"在、到、回"这类字时换成
     "那里"，后面紧跟方位字、标点或句末时直接去掉，其余换成"那里"）、单轴写法（"y=68"）、UUID、
-    目标编号的键值写法、工具调用与工具名、观察编号，最后收拾空括号与汉字之间多出来的空白。
+    目标编号的键值写法、游戏那一面的工具调用与工具名、括号里的观察编号，最后收拾空括号与汉字之间多出来的
+    空白。数量（"(12 个)" "(16)" "(x3)"）、物品名、版本号照留。
     """
     cleaned = sanitize_internal_terms(text or "")
     for pattern in (_COORDINATE, _AXIS):
         cleaned = pattern.sub(_place_or_drop, cleaned)
     for pattern in (_UUID, _ID_FIELD, _TOOL_CALL, _TOOL_NAME, _OBSERVATION_IN_BRACKETS):
         cleaned = pattern.sub("", cleaned)
-    cleaned = _OBSERVATION.sub("那个", cleaned)
     cleaned = _EMPTY_BRACKETS.sub("", cleaned)
     return _CJK_GAP.sub("", " ".join(cleaned.split()))
 
