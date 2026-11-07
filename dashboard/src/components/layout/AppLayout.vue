@@ -61,6 +61,9 @@
         <slot />
       </el-main>
     </el-container>
+
+    <!-- 后台任务底栏：进程内在跑长任务的常驻状态条（进行中可见 / 进度可见） -->
+    <BackgroundTaskBar />
   </el-container>
 
   <!-- 重启全屏遮罩（fixed定位，放在最外层） -->
@@ -81,6 +84,7 @@ import { confirmAction } from '@/utils/confirmAction';
 import Sidebar from './Sidebar.vue';
 import RestartOverlay from './RestartOverlay.vue';
 import AlertBell from './AlertBell.vue';
+import BackgroundTaskBar from './BackgroundTaskBar.vue';
 import { useThemeStore, useWebSocketStore } from '@/stores';
 import { useAppRestartStore } from '@/stores/appRestart';
 import { storeToRefs } from 'pinia';
@@ -90,7 +94,7 @@ const themeStore = useThemeStore();
 const wsStore = useWebSocketStore();
 const { isConnected } = storeToRefs(wsStore);
 
-// 系统级事件（core.error / core.startup / core.shutdown）右上角显式通知
+// 系统级事件（core.error / 后台任务终态）右上角显式通知
 useSystemNotifications();
 
 // ---- 重启（流程与遮罩状态在全局 appRestart store，任何页面可触发） ----

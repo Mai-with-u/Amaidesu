@@ -1,8 +1,8 @@
 // useSystemNotifications.ts 系统事件通知组合式的测试
 //
-// 覆盖：三类 core.* 事件 → ElNotification 类型与正文、相同正文 60 秒去重、
-// 全局滑动窗口每分钟 5 条上限（超限静默丢弃 + 抑制计数随下一条可见通知提示）、
-// 作用域销毁后退订（卸载后不再弹窗）。
+// 覆盖：core.error → 错误通知、background.task.changed 终态两态 → 成功/失败
+// 通知、相同正文 60 秒去重、全局滑动窗口每分钟 5 条上限（超限静默丢弃 +
+// 抑制计数随下一条可见通知提示）、作用域销毁后退订（卸载后不再弹窗）。
 // 惯例：vi.mock 掉 @/api/websocket 的 wsClient 与 element-plus，经真实
 // websocket store 的 subscribe 捕获 handler，直接投喂消息驱动。
 
@@ -94,13 +94,62 @@ describe('useSystemNotifications', () => {
     expect(params.message).toContain('B 站应用启动失败');
   });
 
-  it('core.startup / core.shutdown → success / warning 通知', () => {
+  it('core.startup / core.shutdown 不再订阅：收到也不弹窗', () => {
     const { feed } = mountComposable();
     feed(event('core.startup', { message: 'Amaidesu 组件装配完成' }));
     feed(event('core.shutdown', { message: 'Amaidesu 正在关闭' }));
-    expect(notifyMock).toHaveBeenCalledTimes(2);
-    expect(notifyMock.mock.calls[0]?.[0]).toMatchObject({ title: '服务已启动', type: 'success' });
-    expect(notifyMock.mock.calls[1]?.[0]).toMatchObject({ title: '服务已关闭', type: 'warning' });
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it('background.task.changed failed → error 通知，正文含标题与失败原因', () => {
+    const { feed } = mountComposable();
+    feed(
+      event('background.task.changed', {
+        task_id: 'settle-58',
+        title: '整理场次：58',
+        state: 'failed',
+        progress_text: '',
+        started_at_ms: 1_706_745_600_000,
+        failure_reason: '模型调用超时',
+      }),
+    );
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const call = notifyMock.mock.calls[0]?.[0] as { title: string; message: string };
+    expect(call).toMatchObject({ type: 'error', duration: 8000 });
+    expect(call.title).toContain('整理场次：58');
+    expect(call.message).toContain('模型调用超时');
+  });
+
+  it('background.task.changed finished → success 通知，正文含用时', () => {
+    const { feed } = mountComposable();
+    feed(
+      event('background.task.changed', {
+        task_id: 'settle-58',
+        title: '整理场次：58',
+        state: 'finished',
+        progress_text: '完成',
+        started_at_ms: Date.now() - 150_000,
+      }),
+    );
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const call = notifyMock.mock.calls[0]?.[0] as { title: string; message: string };
+    expect(call).toMatchObject({ type: 'success', duration: 8000 });
+    expect(call.title).toContain('整理场次：58');
+    expect(call.message).toContain('2:30');
+  });
+
+  it('background.task.changed running → 不弹窗（在跑状态由底栏展示）', () => {
+    const { feed } = mountComposable();
+    feed(
+      event('background.task.changed', {
+        task_id: 'settle-58',
+        title: '整理场次：58',
+        state: 'running',
+        progress_text: '第 1 笔/共 3 笔',
+        started_at_ms: Date.now(),
+      }),
+    );
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it('相同正文 60 秒窗口内只弹一次', () => {

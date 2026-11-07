@@ -1,10 +1,17 @@
 /**
  * 系统级事件 → WebUI 右上角显式通知（运营触达面）。
  *
- * 订阅 core.error（错误告警）/ core.shutdown（服务关闭）/ core.startup（服务启动）
- * 三类系统事件，经共享 wsClient 派发 ElNotification（约 8 秒自动消失）。
+ * 订阅两类事件，经共享 wsClient 派发 ElNotification（约 8 秒自动消失）：
+ * - core.error（错误告警）——唯一真实发布者是低频的采集器连接失败
+ * - background.task.changed（后台任务终态）——任务失败弹错误通知
+ *   （标题+失败原因）、任务完成弹成功通知（标题+用时）；running 载荷
+ *   不弹（在跑状态由底栏 BackgroundTaskBar 常驻展示，无需打扰）
  * 连接与重连完全交给 websocket store（不自绘重连循环）；本组合式只做
  * 消息过滤、节流与弹窗。
+ *
+ * 不再订阅 core.startup / core.shutdown：两者与浏览器连接时机结构性错配
+ * （启动事件早于浏览器连上、关闭事件与断连同时发生），订阅以来从未真正
+ * 弹出过——通知面只保留能到达浏览器的源。
  *
  * 节流规则（防错误风暴刷屏）：
  * - 相同正文 60 秒窗口内只弹一次（去重）
@@ -17,9 +24,11 @@
  */
 
 import { onScopeDispose } from 'vue';
+import { formatElapsedMs } from '@/utils/format';
 import { ElNotification } from 'element-plus';
 import { useWebSocketStore } from '@/stores';
 import { EVENT } from '@/types/events';
+import type { BackgroundTask } from '@/types/events';
 import type { WebSocketMessage } from '@/types';
 
 /** 相同正文去重窗口（毫秒） */
@@ -89,13 +98,14 @@ export function useSystemNotifications(): void {
       return;
     }
 
-    if (msg.type === EVENT.coreShutdown) {
-      notify('warning', '服务已关闭', messageText(msg.data) || 'Amaidesu 正在关闭');
-      return;
-    }
-
-    if (msg.type === EVENT.coreStartup) {
-      notify('success', '服务已启动', messageText(msg.data) || 'Amaidesu 已就绪');
+    if (msg.type === EVENT.backgroundTaskChanged) {
+      const task = msg.data as unknown as BackgroundTask;
+      const elapsed = formatElapsedMs(Date.now() - task.started_at_ms);
+      if (task.state === 'failed') {
+        notify('error', `后台任务失败：${task.title}`, task.failure_reason || '未提供失败原因');
+      } else if (task.state === 'finished') {
+        notify('success', `后台任务完成：${task.title}`, `用时 ${elapsed}`);
+      }
     }
   }
 

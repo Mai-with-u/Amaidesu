@@ -138,6 +138,7 @@ import type {
   ExpressionSheetState,
   EmbeddingRuntimeStatus,
 } from '@/types';
+import type { BackgroundTask } from '@/types/events';
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -288,6 +289,15 @@ export const agentsApi = {
 // 任务卡快照（进行中任务列表 + 已完结事件聚合）
 export const tasksApi = {
   listTasks: () => api.get<TaskSnapshotResponse>('/tasks'),
+};
+
+// 后台任务（底栏数据面：后端进程内在跑长任务的只读快照）
+//
+// `GET /background-tasks`：返回注册表当前全部任务行（终态任务已从注册表
+// 移除，不会出现在响应里）；运行中变化经 `background.task.changed` WS 事件
+// 增量推送，本查询口只在页面加载时恢复状态用。
+export const backgroundTasksApi = {
+  list: () => api.get<BackgroundTask[]>('/background-tasks'),
 };
 
 // Simulator 控制面（观众模拟器：generate 生成 / replay 回放）

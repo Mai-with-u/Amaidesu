@@ -52,6 +52,9 @@ const EVENT = {
   coreStartup: 'core.startup',
   coreShutdown: 'core.shutdown',
   coreError: 'core.error',
+
+  // —— 直通：后台任务 ——
+  backgroundTaskChanged: 'background.task.changed',
 } as const;
 
 export { EVENT };
@@ -69,6 +72,27 @@ export type ToolResultEvent = `${typeof EVENT_FAMILY.toolResult}${string}`;
 export type ToolHealthEvent = `${typeof EVENT_FAMILY.toolHealth}${string}`;
 export type GameBodyEvent = `${typeof EVENT_FAMILY.gameBody}${string}`;
 export type GameChatEvent = `${typeof EVENT_FAMILY.gameChat}${string}`;
+
+/** 后台任务状态（running=在跑；finished/failed=终态，收到即从面板移除） */
+export type BackgroundTaskState = 'running' | 'finished' | 'failed';
+
+/**
+ * 后台任务一行（background.task.changed 载荷 / GET /api/v1/background-tasks 行）。
+ * 发布方 = 后端 BackgroundTaskRegistry；finished/failed 事件照发，随后该任务从
+ * 注册表移除（前端收到终态后把行从列表去掉，终态提示走通知）。
+ */
+export interface BackgroundTask {
+  task_id: string;
+  /** 给人看的标题，如「整理场次：2026-11-06 周五 22:22」 */
+  title: string;
+  state: BackgroundTaskState;
+  /** 自由文本进度，如「第 2 笔/共 3 笔」「还缺 320 行」 */
+  progress_text: string;
+  /** 任务开始时刻（Unix 毫秒） */
+  started_at_ms: number;
+  /** 失败原因，仅 state=failed 时带 */
+  failure_reason?: string;
+}
 
 /** 总线事件 type 全集（WS kind="event"：折叠族 + 直通精确名 + 通配族具体名） */
 export type EventName =
