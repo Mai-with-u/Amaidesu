@@ -593,15 +593,16 @@ async def make_minecraft_agent(
 MAID_SKIN = {"skin_id": "touhou_little_maid:winefox_momo", "skin_name": "莫莫酒狐"}
 
 
-def maid_entity(scene_id: str = "e3", distance: int = 2, owner: str = "你的") -> Dict[str, Any]:
-    """一只女仆实体（默认是角色自己的、在身后两格）。"""
+def maid_entity(scene_id: str = "e3", distance: int = 2, owner: str = "你的", tamer: str = "") -> Dict[str, Any]:
+    """一只女仆实体（默认是角色自己的、在身后两格）；``tamer`` 给了才带驯服者（新版 Mod 才有这一项）。"""
+    traits = {"驯服": owner, **({"驯服者": tamer} if tamer else {})}
     return {
         "id": scene_id,
         "type": "touhou_little_maid:maid",
         "direction": "后方",
         "distance": distance,
         "hostile": False,
-        "traits": {"驯服": owner},
+        "traits": traits,
     }
 
 

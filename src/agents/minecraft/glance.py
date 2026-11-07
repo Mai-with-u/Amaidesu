@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.modules.types.game_situation import NearbyPlace
@@ -127,6 +128,12 @@ _TRAIT_OWNER = "驯服"
 _TRAIT_SITTING = "坐着"
 #: 驯服关系里表示"是角色自己的"那个说法
 OWNER_SELF = "你的"
+#: 驯服关系里表示"不是自家人的"那个说法：知道驯服者时直接写成"谁的"
+_OWNER_OTHERS = "别人的"
+#: 实体特征里的驯服者：只在"自家人的""别人的"时给，玩家在线写玩家名，不在线或还没同步时写 UUID
+_TRAIT_TAMER = "驯服者"
+#: 玩家 UUID 的常见写法（8-4-4-4-12 位十六进制）：UUID 是给模型认人用的，主播看到会照着念出来
+_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 #: 生物名册里一只生物此刻的状态：在身边（近处）、在附近（列出来了但不在身边范围内）、这次没看到、死了
 STATUS_NEARBY = "在身边"
@@ -172,15 +179,28 @@ def kind_of(entity: Dict[str, Any]) -> str:
     return str(entity.get("kind") or _mob_name(str(entity.get("type") or "")))
 
 
+def _owner_words(owner: str, tamer: str) -> str:
+    """驯服关系的说法：知道是哪个玩家驯服的，就把名字写进去。
+
+    "别人的" → "玩家甲的"；"自家人的" → "自家人玩家甲的"（自家人这层留着）；"你的"和不知道驯服者的照旧。
+    """
+    if not tamer or not owner or owner == OWNER_SELF:
+        return owner
+    if owner == _OWNER_OTHERS:
+        return f"{tamer}的"
+    return f"{owner.removesuffix('的')}{tamer}的"
+
+
 def entity_label(entity: Dict[str, Any]) -> str:
     """一只身边的实体 → 主播叫得出的称呼：主播起的名字在前，括号里是认出它的事实。
 
     例："阿缕（你的女仆，莫莫酒狐皮肤，坐着）""你的狼（叫小白）""女仆墓碑（上面写着莫莫酒狐）"。
-    驯服关系写成"你的 / 自家人的 / 别人的"放在种类前面；没起名时种类就是称呼本身。
+    驯服关系写成"你的 / 自家人的 / 别人的"放在种类前面，知道驯服者名字时写成"玩家甲的狼""自家人玩家甲的女仆"，
+    主播在游戏里说"他的狗""我家女仆"时接得上；没起名时种类就是称呼本身。
     墓碑带的名字是死者的："阿缕的女仆墓碑（上面写着莫莫酒狐）"。
     """
     kind = kind_of(entity)
-    owner = str(entity.get("owner") or "")
+    owner = _owner_words(str(entity.get("owner") or ""), str(entity.get("tamer") or ""))
     whose = f"{owner}{kind}" if owner else kind
     facts: List[str] = []
     if entity.get("name"):
@@ -599,6 +619,10 @@ def described_entity(entity: Dict[str, Any], things: Dict[str, Dict[str, Any]]) 
         described["grave_of"] = thing["maid_name"]
     if traits.get(_TRAIT_OWNER):
         described["owner"] = traits[_TRAIT_OWNER]
+    tamer = str(traits.get(_TRAIT_TAMER) or "").strip()
+    if tamer and not _UUID.fullmatch(tamer):
+        # 驯服者是玩家名才记（主播的称呼里写成"玩家甲的狼"）；是 UUID 的不记，称呼退回"别人的狼"
+        described["tamer"] = tamer
     if traits.get(_TRAIT_SITTING) == "是":
         described["sitting"] = True
     for key in ("direction", "distance", "hostile"):

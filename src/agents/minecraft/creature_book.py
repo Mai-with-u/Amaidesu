@@ -82,6 +82,8 @@ class Creature:
     name: str = ""
     skin: str = ""
     owner: str = ""
+    # 驯服它的玩家名（速览里最近一次给出的）：只用来称呼"玩家甲的女仆"，不落库、不算身份
+    tamer: str = ""
     nickname: str = ""
     uuid: str = ""
     status: str = STATUS_AWAY
@@ -105,6 +107,7 @@ class Creature:
                 "type": self.type,
                 "kind": self.kind,
                 "owner": self.owner,
+                "tamer": self.tamer,
                 "name": self.name,
                 "skin": self.skin,
                 "nickname": self.nickname if with_nickname else "",
@@ -342,6 +345,8 @@ class CreatureBook:
         creature.name = str(entity.get("name") or "")
         creature.skin = str(described.get("skin") or creature.skin)
         creature.owner = str(described.get("owner") or creature.owner)
+        # 驯服者这次报的是 UUID（玩家不在线）就留着上次认出的名字，称呼不来回跳
+        creature.tamer = str(described.get("tamer") or creature.tamer)
         creature.uuid = str(entity.get("uuid") or creature.uuid)
         creature.status = STATUS_NEARBY if _close(entity) else STATUS_AROUND
         creature.last_seen_ms = now_ms

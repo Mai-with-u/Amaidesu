@@ -79,6 +79,21 @@ def test_two_matching_creatures_pick_your_own_or_ask_which_one() -> None:
     assert unsure.named is None and "分不清是哪一只" in unsure.reason and "在左侧" in unsure.reason
 
 
+def test_naming_someone_elses_maid_by_who_tamed_it_keeps_the_identity() -> None:
+    """速览写成"玩家甲的女仆"时，主播照这个称呼起名找得到那一只；名册里驯服关系与身份不变（仍是"别人的"），
+    称呼带上驯服者；驯服者不落库。"""
+    book = CreatureBook()
+    theirs = maid_entity("e4", distance=5, owner="别人的", tamer="玩家甲")
+    book.observe(scene_with(maid_entity(), theirs, maids=[{"id": "e3", **MAID_SKIN}, {"id": "e4", **MAID_SKIN}]), 1_000)
+
+    named = book.name("玩家甲的女仆", "小红").named
+    assert named is not None and named.owner == "别人的"
+    assert named.label() == "小红（玩家甲的女仆，莫莫酒狐皮肤）"
+    assert creature_record(named).owner == "别人的" and not hasattr(creature_record(named), "tamer")
+    restored = creature_from_record(creature_record(named))
+    assert restored.label() == "小红（别人的女仆，莫莫酒狐皮肤）", "重启后要等再看到它才知道驯服者"
+
+
 def test_out_of_sight_is_a_state_not_an_event() -> None:
     """离开视野只改状态：起过名的在速览里说一句"这会儿没在身边"，没起名的不提。"""
     book = CreatureBook()

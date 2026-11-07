@@ -203,6 +203,57 @@ def test_glance_tells_whose_creature_and_whose_grave_it_is() -> None:
     )
 
 
+def test_glance_names_who_tamed_someone_elses_pet() -> None:
+    """新版 Mod 给了驯服者的玩家名：别人的宠物写成"玩家甲的狼"，自家人的写成"自家人玩家乙的女仆"，
+    两层都在；驯服者是 UUID（玩家不在线、还没同步）的不记，称呼照旧，UUID 不进速览。"""
+    scene = _maid_scene()
+    wolf = scene["entities"][2]
+    wolf["traits"] = {"驯服": "别人的", "驯服者": "玩家甲"}
+    scene["entities"].append(
+        {
+            "id": "e5",
+            "type": "minecraft:cat",
+            "distance": 6,
+            "hostile": False,
+            "traits": {"驯服": "自家人的", "驯服者": "玩家乙"},
+        }
+    )
+    scene["entities"].append(
+        {
+            "id": "e6",
+            "type": "minecraft:parrot",
+            "distance": 7,
+            "hostile": False,
+            "traits": {"驯服": "别人的", "驯服者": "0f8a3c2e-1b4d-4e6f-9a7b-2c3d4e5f6a7b"},
+        }
+    )
+    view = glance_scene(MaicraftReply(ok=True, data=scene))
+
+    seen = {entity["type"]: entity for entity in view["entities"]}
+    wolf_seen, cat, parrot = seen["minecraft:wolf"], seen["minecraft:cat"], seen["minecraft:parrot"]
+    assert (wolf_seen["owner"], wolf_seen["tamer"]) == ("别人的", "玩家甲")
+    assert (cat["owner"], cat["tamer"]) == ("自家人的", "玩家乙")
+    assert "tamer" not in parrot, "UUID 不记"
+    brief = glance_brief(view)
+    assert "玩家甲的狼（叫小白）" in brief and "自家人玩家乙的猫" in brief
+    assert "0f8a3c2e" not in brief and "0f8a3c2e" not in str(view), "UUID 不进主播看的速览"
+    assert entity_label(parrot).startswith("别人的"), "驯服者是 UUID 的退回原来的说法"
+    assert entity_label({"type": "minecraft:wolf", "owner": "你的", "tamer": "玩家甲"}) == "你的狼", "你的不受影响"
+
+
+def test_glance_without_a_tamer_reads_exactly_as_before() -> None:
+    """旧版 Mod（没有驯服者这一项）与驯服者只给了 UUID 的：条目与白话摘要一字不差。"""
+    old = glance_scene(MaicraftReply(ok=True, data=_maid_scene()))
+    with_uuid = _maid_scene()
+    with_uuid["entities"][2]["traits"] = {"驯服": "别人的", "驯服者": "0F8A3C2E-1B4D-4E6F-9A7B-2C3D4E5F6A7B"}
+    uuid_view = glance_scene(MaicraftReply(ok=True, data=with_uuid))
+
+    assert uuid_view == old
+    assert glance_brief(old) == (
+        "你的女仆（莫莫酒狐皮肤，坐着）在身边。身边还有女仆墓碑（上面写着莫莫酒狐）、别人的狼（叫小白）、羊。"
+    )
+
+
 def test_glance_label_puts_the_nickname_first() -> None:
     """主播起过名的生物：名字当称呼，"你的女仆"和皮肤退到括号里当说明。"""
     maid = {"type": "touhou_little_maid:maid", "kind": "女仆", "skin": "莫莫酒狐", "owner": "你的"}
