@@ -45,7 +45,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 |---|------|------|
 | 1 | LLM 调 `minecraft_report(kind=delivery)` | 还有目标在跑或待办没完成时拒绝交付，返回错误观察；通过门禁后停止 |
 | 2 | LLM 调 `minecraft_report(kind=escalation)` | 停止；委派状态置为 `waiting_for_decision`，等递话唤醒 / 恢复续跑 / 硬取消时清除 |
-| 3 | 自然终止，无 report、无在跑的目标且待办完成 | 系统兜底交付，并结算原委派任务 |
+| 3 | 自然终止，无 report、无在跑的目标且待办完成 | 不算做完：系统代发一条 `report_kind=undelivered`（停了没交付），原委派记终态 `undelivered`；模型最后那句只进账面摘要 |
 | 4 | 自然终止或 `minecraft_wait`，仅剩在跑的目标 | 静默让出回合，等目标事件唤醒 |
 | 5 | 有目标在等回答、被暂停或待办没推进，提醒后仍不行动 | 挂起并上报 escalation，保留原任务等继续指令 |
 
@@ -95,7 +95,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 | 事件 | 触发 |
 |---|---|
-| `game.report` | LLM 调 `minecraft_report`（delivery/escalation）或批次终止系统兜底交付；kind 见 `GamePayload.report_kind` |
+| `game.report` | LLM 调 `minecraft_report`（delivery/escalation），或批次自然终止时系统代发停了没交付（undelivered）；kind 见 `GamePayload.report_kind` |
 | `game.attention_required` | 身体处理不了的生存需求、角色死亡；任务期间身体先处理了一件急事（每批每件各一次）。只叙事、不打断任务 |
 | `game.error` | 工具执行异常 / LLM 调用失败 / 无 LLM fail-fast |
 

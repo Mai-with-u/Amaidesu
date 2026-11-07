@@ -285,7 +285,7 @@ class MinecraftAgent(BaseAgent):
         self._pending_place_marks: List[GamePlacePayload] = []
         # 当场就结束的公屏说话排在这里，回复记账之后发出（记账是同步的，发事件要等）
         self._pending_self_chats: List[str] = []
-        # obtain 装好炉先走时自动挂的回炉计时：没响之前模型结束一轮算在等炉子，不催、不上报、不兜底交付
+        # obtain 装好炉先走时自动挂的回炉计时：没响之前模型结束一轮算在等炉子，不催、不上报、不代发停了没交付
         self._furnace_waits = FurnaceWaits(self._clock)
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
@@ -312,7 +312,7 @@ class MinecraftAgent(BaseAgent):
         self._task_finished = True
         self._task_suspended = False
         # 这一批是不是闲着时只因别的玩家冲角色做了动作被叫醒：是的话只回应互动，不开任务、不续任务、
-        # 回完安静收尾（不兜底交付、不催促、不许上报），已交付或等定夺的状态原样留着
+        # 回完安静收尾（不代发停了没交付、不催促、不许上报），已交付或等定夺的状态原样留着
         self._interaction_only = False
         # 互动叫醒按人节流：同一个玩家叫醒过一次，20 秒内他再来的肢体动作先攒着，到点合成一条再叫醒，
         # 免得有人连着蹲就一分钟叫醒她十来次（每次都要调一次模型）
@@ -757,7 +757,7 @@ class MinecraftAgent(BaseAgent):
         批次终止语义（全部系统可判定）：
         1. LLM 调 minecraft_report(kind=delivery) → 停止（工具内交付门禁校验）
         2. LLM 调 minecraft_report(kind=escalation) → 停止，等主播
-        3. 自然终止，无 report、无在跑的目标且待办完成 → 系统兜底交付
+        3. 自然终止，无 report、无在跑的目标且待办完成 → 代发停了没交付，委派记 undelivered
         4. 自然终止，仅剩在跑的后台目标 → 静默让出，等目标事件唤醒
         5. 需要行动却在提醒后继续停顿 → 挂起，等待主播指令
         """
@@ -1032,12 +1032,12 @@ class MinecraftAgent(BaseAgent):
     ) -> bool:
         """模型这一轮没调用工具：按终止语义收尾。返回 True 表示给过提醒、继续推进。"""
         if self._interaction_only:
-            # 只回应互动的一批：回完就收尾，不兜底交付（不然别人蹲一下主播就念一遍），也不为原任务催促
+            # 只回应互动的一批：回完就收尾，不代发停了没交付（不然别人蹲一下主播就念一遍），也不为原任务催促
             self._logger.info(f"回应互动后收尾（{steps} 步），任务状态原样留着")
             return False
         pending = self._goals.tracked_ids()
         # obtain 装好炉先走、回炉计时还没响：东西在炉子里烧着，到点会叫醒模型回去取。
-        # 这时不调工具结束一轮和后台目标在跑一样是在等——不催、不挂起上报主播，也不兜底交付成"任务完成"
+        # 这时不调工具结束一轮和后台目标在跑一样是在等——不催、不挂起上报主播，也不代发成"停了没交付"
         cooking = self._furnace_waits.waiting()
         actionable = self._goal_ledger.actionable_goal_ids()
         if actionable or (not pending and not cooking and self._unfinished_todos()):
