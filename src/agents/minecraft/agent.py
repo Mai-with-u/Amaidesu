@@ -785,7 +785,8 @@ class MinecraftAgent(BaseAgent):
         批次终止语义（全部系统可判定）：
         1. LLM 调 minecraft_report(kind=delivery) → 停止（工具内交付门禁校验）
         2. LLM 调 minecraft_report(kind=escalation) → 停止，等主播
-        3. 自然终止，无 report、无在跑的目标且待办完成 → 代发停了没交付，委派记 undelivered
+        3. 自然终止，无 report、无在跑的目标且待办完成 → 这一批在做委派就代发停了没交付、委派记 undelivered；
+           不在做委派（交付后被计时、决策叫醒开的新任务）就安静收尾
         4. 自然终止，仅剩在跑的后台目标 → 静默让出，等目标事件唤醒
         5. 需要行动却在提醒后继续停顿 → 挂起，等待主播指令
         """
@@ -1079,6 +1080,11 @@ class MinecraftAgent(BaseAgent):
             self._logger.info(f"任务批次自然终止（{steps} 步），{len(pending)} 个后台目标在跑，静默让出")
         elif cooking:
             self._logger.info(f"任务批次自然终止（{steps} 步），{len(cooking)} 台炉子在烧、到点会叫醒，静默让出")
+        elif not self._task_reported and not self._delegations.finished_ids:
+            # 这一批不在做哪件委派（交付后被计时到点、Mod 挂出的决策叫醒开的新任务，或没经委派的指令）：
+            # 没有可结算的委派，安静收尾；代发"停了没交付"会把已经交付的那件改写成没交付
+            self._task_finished = True
+            self._logger.info(f"任务批次自然终止（{steps} 步），这一批不在做委派，安静收尾")
         elif not self._task_reported:
             # 模型没调 minecraft_report 就停了：做完只认交付，这里不替它交付成"任务完成"。
             # 主播那边收到"停了没交付"，不会对观众说做好了；任务照旧算结束，下条指令开新任务。
@@ -2188,6 +2194,7 @@ class MinecraftAgent(BaseAgent):
         report_kind: Optional[Literal["delivery", "escalation", "undelivered"]] = None,
         already_resolved: bool = False,
         include_body_events: bool = True,
+        delegation_ids: Tuple[str, ...] = (),
     ) -> None:
         """emit game.* 事件；叙事面事件带上本批任务期间的身体事件，主播据此讲"做着做着遇到了什么"。
 
@@ -2210,6 +2217,7 @@ class MinecraftAgent(BaseAgent):
             report_kind=report_kind,
             already_resolved=already_resolved,
             body_events=body_events,
+            delegation_ids=list(delegation_ids),
         )
         if event_type == "report":
             self._mc_state.add_report(report_kind or "", message, scene)
@@ -2224,7 +2232,10 @@ class MinecraftAgent(BaseAgent):
     async def _emit_report(
         self, kind: Literal["delivery", "escalation", "undelivered"], message: str, *, scene: str = ""
     ) -> None:
-        await self._emit_game_event("report", message, scene=scene, report_kind=kind)
+        # 上报带上这一批在做的委派任务号：主播侧按它对上手头那件，对不上的不改写
+        await self._emit_game_event(
+            "report", message, scene=scene, report_kind=kind, delegation_ids=self._delegations.finished_ids
+        )
 
     async def emit_attention_required(self, message: str, *, scene: str = "") -> None:
         await self._emit_game_event("attention_required", message, scene=scene)

@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Set, Tuple
 
 from src.agents.streamer.planner_render import (
     Delegation,
@@ -208,16 +208,24 @@ class DelegationWorkbench:
                 self._earlier_topics[tag] = self._earlier_topics.pop(tag, 0) + 1
         self._recent_intents.append(intent)
 
-    def note_game_report(self, game: str, report_kind: str) -> None:
+    def note_game_report(self, game: str, report_kind: str, delegation_ids: Sequence[str] = ()) -> None:
         """游戏侧上报（交付/卡住待定夺/停了没交付）到达：把对应执行 Agent 手头那次委派标成已上报。
 
-        游戏 Agent 以自己的注册名作为上报的 game 字段，按名字对上即可。停了没交付也标上：
-        这件事已经不在做了，不标的话她一直以为还在做，等不来结果也不会改派。
+        游戏 Agent 以自己的注册名作为上报的 game 字段，按名字找到手头那件；上报带了任务号时还要
+        对得上——上一件的迟到上报不改写新派的这件。停了没交付只认点名到手头这件的，已经交付或
+        卡住的不降级：交付后被计时叫醒开的新任务停下，不能把做完的活改写成"不确定做没做完"。
         """
         delegation = self._delegations.get(game)
-        if delegation is not None and report_kind in {"delivery", "escalation", "undelivered"}:
-            delegation.report_kind = report_kind
-            delegation.reported_ms = now_ms()
+        if delegation is None or report_kind not in {"delivery", "escalation", "undelivered"}:
+            return
+        if delegation_ids and delegation.task_id not in delegation_ids:
+            return
+        if report_kind == "undelivered" and (
+            delegation.task_id not in delegation_ids or delegation.report_kind in {"delivery", "escalation"}
+        ):
+            return
+        delegation.report_kind = report_kind
+        delegation.reported_ms = now_ms()
 
     def restore_interrupted(self, agent: str, *, instruction: str, task_id: str, at_ms: int) -> None:
         """续播认领：重启前 ``agent`` 手上那件委派被打断了，记回手头的事并标成被打断。

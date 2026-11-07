@@ -82,6 +82,11 @@ class GamePayload(BasePayload):
             "undelivered=游戏侧停了却没交付结果，不算做完）"
         ),
     )
+    # 上报针对哪件委派：主播侧按任务号对上手头那件，上一件的迟到上报、交付后被叫醒的新任务都不会改写它
+    delegation_ids: List[str] = Field(
+        default_factory=list,
+        description="这条上报针对的委派任务号（游戏 Agent 这一批在做的委派）；空 = 不针对哪件委派",
+    )
     # 任务上下文（超集形状：四类事件共用，缺省即"本次与身体事件无关"）。
     # 身体事件来自 MaiCraft 的任务事件流（紧急反应/处理不了的需求），由游戏 Agent 观察后随上报携带；
     # 主播据此说"你在进行 xx 任务的时候遭遇了僵尸的攻击"，而不必自己去猜时间与结局。

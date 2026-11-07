@@ -1892,7 +1892,9 @@ class StreamerAgent(BaseAgent):
             if payload.event_type == "report":
                 self._proactive_signals.set_game()
                 # 游戏里做完或卡住待定夺：【我手头在游戏里做的事】里那件事随之标成已上报
-                self._planner.workbench.note_game_report(payload.game, payload.report_kind or "")
+                self._planner.workbench.note_game_report(
+                    payload.game, payload.report_kind or "", payload.delegation_ids
+                )
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集游戏事件失败: {exc}", exc=True)
 

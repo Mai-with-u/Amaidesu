@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any, Dict, List
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 
 from src.agents.minecraft.agent import MinecraftAgent
 from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response
+from src.modules.tools.registry import ToolRegistry
+from src.modules.tools.tasks import TaskLedger, TaskTracker
 
 from .minecraft_v1_fakes import (
     FakeMaicraft,
@@ -98,6 +101,44 @@ async def test_a_due_timer_wakes_an_idle_agent_as_a_new_task() -> None:
     assert "看一眼周围" not in woken, "交付过的任务不再续，由到点开新任务"
     assert "[开局资料]" in woken, "新任务照常附上开局资料"
     assert _alerts(bus) == [], "计时到点是模型自己的事，不上报主播"
+    await agent.stop()
+
+
+async def test_a_task_woken_after_delivery_that_stops_unreported_leaves_the_delivery_alone() -> None:
+    """交付后计时到点开的新任务，模型取完东西只说了句话就停：这一批不在做委派，不代发"停了没交付"，
+    已经交付的那件委派账面不被改写。"""
+    ledger_bus = SimpleNamespace(emit=AsyncMock())
+    ledger = TaskLedger(event_bus=ledger_bus)
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+        snapshot={"instruction": "烧点铁锭"},
+    )
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        # 交付 -> 闲着 -> 计时到点被叫醒（新任务）-> 取完铁锭只说一句就停
+        if "[计时]" in _texts(messages):
+            return _resp("铁锭拿到了")
+        return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "铁锭在炉子里烧着"})])
+
+    agent, llm, bus = await make_minecraft_agent(server, script, tracker=TaskTracker(ToolRegistry(), ledger))
+    agent.receive_delegation(instruction="烧点铁锭", task_id="d-1")
+    await _wait_until(lambda: "d-1" not in ledger and agent.batch_active is False)
+    settled = [call.args[1].status for call in ledger_bus.emit.await_args_list]
+    assert settled[-1] == "succeeded"
+
+    server.body_event("timer_due", _TIMER_DUE)
+    await _wait_until(lambda: len(llm.seen) == 2 and agent.batch_active is False)
+
+    [delivery] = _reports(bus)
+    assert (delivery.report_kind, delivery.delegation_ids) == ("delivery", ["d-1"])
+    assert [call.args[1].status for call in ledger_bus.emit.await_args_list] == settled, "交付过的委派账面不再改"
+    assert agent.observation()["task_finished"]
     await agent.stop()
 
 

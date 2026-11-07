@@ -182,24 +182,25 @@ async def test_emit_report_payload_and_snapshot() -> None:
     assert agent.get_state_snapshot()["recent_reports"][0]["kind"] == "delivery"
 
 
-async def test_natural_termination_reports_undelivered_instead_of_delivery(start_agent) -> None:
-    """自然终止且未 report：做完只认交付，系统只代发一次"停了没交付"，模型最后那句不当交付结果发给主播；
-    todo 转 done 不发 milestone。"""
+async def test_natural_termination_without_a_delegation_ends_quietly(start_agent) -> None:
+    """不经委派的指令自然终止且未 report：没有可结算的委派，不代发"停了没交付"，模型最后那句也不当交付结果
+    发给主播；todo 转 done 不发 milestone。"""
 
     async def fake(messages, **kwargs):
         if not _has_tool_message(messages):
             done = {"action": "write", "todos": [{"content": "挖钻石", "status": "done"}]}
             return _resp(tool_calls=[_tool_call("minecraft_todo", done)])
+        stopped.append(True)
         return _resp("钻石挖完了，共 5 颗。")
 
+    stopped: List[bool] = []
     bus = fake_bus()
     agent = await start_agent(_llm(fake), bus=bus, registry=ToolRegistry())
     agent.receive_prompt(content="挖 3 个钻石", source="test")
-    await _wait_until(lambda: agent._task_finished and _game_events(bus, "report"))
+    await _wait_until(lambda: bool(stopped) and not agent.batch_active)
 
-    reports = _game_events(bus, "report")
-    assert len(reports) == 1 and reports[0].report_kind == "undelivered"
-    assert reports[0].message == UNDELIVERED_REPORT_MESSAGE and "钻石挖完了" not in reports[0].message
+    assert agent.observation()["task_finished"]
+    assert _game_events(bus, "report") == []
     assert _game_events(bus, "milestone") == []
 
 
@@ -227,7 +228,9 @@ async def test_natural_termination_settles_delegation_as_undelivered_not_succeed
     ended = ledger_bus.emit.await_args_list[-1].args[1]
     assert (ended.task_id, ended.status) == ("d-1", "undelivered")
     assert ended.summary == "停了但没交付结果；停下前最后一句：门装好了吧应该"
-    assert [report.report_kind for report in _game_events(bus, "report")] == ["undelivered"]
+    [report] = _game_events(bus, "report")
+    assert (report.report_kind, report.delegation_ids) == ("undelivered", ["d-1"]), "上报点名是哪件委派"
+    assert report.message == UNDELIVERED_REPORT_MESSAGE and "门装好了" not in report.message
     await agent.stop()
 
 
@@ -473,8 +476,10 @@ async def test_agent_reusable_after_goal_completes(start_agent) -> None:
     agent.receive_prompt(content="第一个任务", source="test")
     await _wait_until(lambda: calls == 1)
     agent.receive_prompt(content="第二个任务", source="test")
-    await _wait_until(lambda: calls == 2)
-    assert len(agent.get_state_snapshot()["recent_reports"]) >= 2
+    await _wait_until(lambda: calls == 2 and not agent.batch_active)
+    # 不经委派的指令说完就收尾（没有可结算的委派，不代发上报）；下条指令照常开新任务
+    assert agent.observation()["task_instructions"] == ["第二个任务"]
+    assert agent.get_state_snapshot()["recent_reports"] == []
 
 
 @pytest.mark.parametrize("error", [None, "rate limit"], ids=["no_llm", "llm_failure"])

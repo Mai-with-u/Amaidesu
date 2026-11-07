@@ -198,10 +198,10 @@ async def test_the_game_agent_does_not_get_the_desktop_screenshot_tool_but_other
     registry = ToolRegistry()
     registry.register_provider(make_provider_from_specs("vision", [(replace(LOOK_AT_SCREEN_SPEC), _screen_stub)]))
     server = FakeMaicraft()
-    agent, llm, bus = await make_minecraft_agent(server, registry=registry)
+    agent, llm, _bus = await make_minecraft_agent(server, registry=registry)
 
     agent.receive_delegation(instruction="看看周围", task_id="d-1")
-    await _wait_until(lambda: len(_reports(bus)) == 1)
+    await _wait_until(lambda: len(llm.tools_given) >= 1 and not agent.batch_active)
 
     given = {tool["name"] for tool in llm.tools_given[0]}
     assert "vision_look_at_screen" not in given and "maicraft_observe" in given

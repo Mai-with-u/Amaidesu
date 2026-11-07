@@ -434,13 +434,41 @@ async def test_planner_sees_what_it_is_doing_in_game_until_reported() -> None:
     assert not any(word in work for word in ("交给", "身体", "委派"))
 
     for kind, phrase in (
-        ("escalation", "卡住了，正等我和观众一起定夺"),
         ("undelivered", "游戏那边在刚刚停了，没交付结果，做没做完不确定"),
+        ("escalation", "卡住了，正等我和观众一起定夺"),
         ("delivery", "做完，结果见游戏记录"),
     ):
-        planner.workbench.note_game_report("minecraft", kind)
+        planner.workbench.note_game_report("minecraft", kind, ["deleg_1"])
         await planner.plan([_msg("怎么样了", "m2")])
         assert phrase in references[-1]
+
+
+async def test_game_report_only_settles_the_delegation_it_names() -> None:
+    """游戏上报按任务号对上手头那件：上一件的迟到上报不改写新派的这件；停了没交付只认点名到这件的，
+    已经交付或卡住的不降级成"做没做完不确定"（交付后被计时叫醒的新任务停下，不能把做完的活改写掉）。"""
+    accepted = ToolExecutionResult(
+        tool_name="framework_delegate",
+        success=True,
+        structured_content={"accepted": True, "task_id": "deleg_2", "executor": "minecraft"},
+    )
+    planner = _planner(registry=_delegation_registry(accepted))
+    await planner.workbench.handle(
+        "framework_delegate", {"agent": "minecraft", "instruction": "把门装好"}, source_dialogue=[]
+    )
+    workbench = planner.workbench
+    current = workbench.delegations["minecraft"]
+    assert current.task_id == "deleg_2"
+
+    workbench.note_game_report("minecraft", "delivery", ["deleg_1"])
+    workbench.note_game_report("minecraft", "undelivered")
+    assert current.report_kind == "", "上一件的迟到交付、没点名哪件的停了没交付都不改写手头这件"
+
+    workbench.note_game_report("minecraft", "escalation", ["deleg_2"])
+    workbench.note_game_report("minecraft", "undelivered", ["deleg_2"])
+    assert current.report_kind == "escalation"
+    workbench.note_game_report("minecraft", "delivery", ["deleg_2"])
+    workbench.note_game_report("minecraft", "undelivered", ["deleg_2"])
+    assert current.report_kind == "delivery"
 
 
 def _render_planner_with_delegate_rules() -> str:
