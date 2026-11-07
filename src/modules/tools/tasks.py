@@ -157,20 +157,20 @@ class TaskLedger:
             f"任务已登记: task_id={task_id} tool={tool} 发起方={initiator} "
             f"执行者={executor} source={source} status={status}"
         )
-        if source == "agent":
-            # 委派受理 → 广播起点（带指令全文的快照）→ 落库记下受理行，终态到了再配上终态行
-            self._emit_changed(
-                TaskChangedPayload(
-                    task_id=task_id,
-                    status=status,
-                    summary="已受理",
-                    initiator=initiator,
-                    executor=executor,
-                    source=source,
-                    snapshot=dict(record.snapshot),
-                    timestamp_ms=ts,
-                )
+        # 两种来源都播报受理：委派型的受理是"派活"，provider 型的受理就是这次工具调用
+        # 真正开始的时刻。没有这条起点，观察面只拿得到终态回执，任务区间与时长无从谈起。
+        self._emit_changed(
+            TaskChangedPayload(
+                task_id=task_id,
+                status=status,
+                summary="已受理",
+                initiator=initiator,
+                executor=executor,
+                source=source,
+                snapshot=dict(record.snapshot),
+                timestamp_ms=ts,
             )
+        )
         return record
 
     def get(self, task_id: str) -> Optional[TaskRecord]:

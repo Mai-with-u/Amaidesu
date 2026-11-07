@@ -100,15 +100,16 @@ async def test_state_transitions_drive_events_idempotently_and_remove_on_termina
         await tracker.step()
     await _drain()
 
-    assert [p.status for p in received] == ["waiting_for_decision", "succeeded"]  # 组内迁移静默 + 幂等不重发
+    # 受理先播报一条起点（区间与时长靠它），组内迁移静默、同状态幂等，终态一条
+    assert [p.status for p in received] == ["accepted", "waiting_for_decision", "succeeded"]
     assert "t1" not in ledger
     final = received[-1]
     assert final.snapshot == {"done": True} and (final.initiator, final.executor) == ("minecraft", "game")
     assert final.source == "provider"  # 事件带事实源归属，观察面据此推导任务归属
 
 
-async def test_register_broadcasts_accepted_only_for_delegations() -> None:
-    """委派登记广播一次 accepted（带指令快照，落库记起点用）；provider 型目标登记不广播。"""
+async def test_register_broadcasts_accepted_for_both_sources() -> None:
+    """两种来源的登记都广播一次 accepted：委派型的起点是"派活"，provider 型的就是这次工具调用开始。"""
     bus = EventBus()
     sent: List[TaskChangedPayload] = []
 
@@ -137,7 +138,10 @@ async def test_register_broadcasts_accepted_only_for_delegations() -> None:
     await _drain()
     await bus.wait_until_drained()
 
-    assert [(payload.task_id, payload.status, payload.source) for payload in sent] == [("deleg_1", "accepted", "agent")]
+    assert [(payload.task_id, payload.status, payload.source) for payload in sent] == [
+        ("deleg_1", "accepted", "agent"),
+        ("maicraft-goal-1", "accepted", "provider"),
+    ]
     assert sent[0].snapshot == {"instruction": "盖房子"} and sent[0].summary == "已受理"
 
 
