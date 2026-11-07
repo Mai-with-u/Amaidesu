@@ -5,22 +5,27 @@
 手头的事一段又看不到游戏那边此刻在做哪一步。这一块把此刻能核对的读数收到一处、放在参考段最后，
 每窗重建、不进对话历史，下一窗整块换掉。只给 Planner，表达侧不看。
 
-读数各有来处：手上的事取 Planner 的委派账；此刻那一步取任务账本里游戏 Agent 自己发起、还在跑的
+读数各有来处：手上那件事的状态与前段【我手头在游戏里做的事】同一口径（委派状态行：停着、账面多久
+没进展都照写），委派原话只在前段写一遍；此刻那一步取任务账本里游戏 Agent 自己发起、还在跑的
 最近一步的目的；最近几步结果取委派快照里游戏侧的进展备注；游戏那边的判断取游戏 Agent 每步说的
 最近一句（它自己的推理，不一定对）；她在游戏公屏说过的话取她自己打出去的那几句。
+
+这些读数是游戏那一面写给自己看的，常带坐标、编号和工具名（"贴着 (-354,71,57) 的北面补上屋面缺格"）：
+这一块里一律过滤，坐标换成"那里"或去掉，编号与工具名去掉——她照着念出来，观众只听到一串数字。
 """
 
 from __future__ import annotations
 
+import re
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, List, Mapping, Optional, Tuple
+from typing import Deque, Dict, List, Mapping, Optional, Tuple
 
 from .planner_context import age_text
-from .planner_render import Delegation, DelegationStatusProvider
+from .planner_render import Delegation, DelegationStatusProvider, delegation_state_line
 from .term_sanitizer import sanitize_internal_terms
 
-__all__ = ["AgentNow", "GameNow", "GameSideLog", "render_game_now"]
+__all__ = ["AgentNow", "GameNow", "GameSideLog", "render_game_now", "scrub_game_readings"]
 
 # 她在游戏公屏说过的话只看最近这么久、至多列几句、每句至多几个字
 _SELF_CHAT_WINDOW_MS = 5 * 60 * 1000
@@ -28,13 +33,38 @@ _SELF_CHAT_LINES_MAX = 3
 _SELF_CHAT_MAX_CHARS = 24
 # 公屏话缓冲上限（条）：五分钟里她说不了这么多，只防无限增长
 _SELF_CHAT_BUFFER = 20
-# 手上的事、此刻那一步、每步结果、游戏那边的判断各自至多几个字：除现场速览外整块封顶约 600 token
+# 手上那件事的状态、此刻那一步、每步结果、游戏那边的判断各自至多几个字：除现场速览外整块封顶约 600 token
 # （现场速览按原样挪进来，第 58 场中位约 960 token，它的大小归游戏侧的看一眼工具管）
-_TASK_MAX_CHARS = 40
+_STATE_MAX_CHARS = 40
 _STEP_MAX_CHARS = 40
 _RESULT_MAX_CHARS = 30
 _RESULTS_MAX = 3
 _JUDGEMENT_MAX_CHARS = 48
+
+# 委派状态行里带着最近一步结果时的开头：这一块下面另有"最近几步结果"一行，状态里不再重复那一步
+_PROGRESS_STATE_PREFIX = "还在做，游戏那边有一步有结果了"
+
+# 坐标：括号里两到三个整数（"(-354,71,57)" "(-352,56~57)" "（-353, 56/57）"），连同两边的空白
+_COORDINATE = re.compile(r"\s*[（(]\s*-?\d+(?:\s*[,，]\s*-?\d+(?:\s*[~/～]\s*-?\d+)?){1,2}\s*[)）]\s*")
+# 单轴写法："y=68" "x=-350" "z=56"
+_AXIS = re.compile(r"\s*(?<![A-Za-z0-9_])[xyzXYZ]\s*[=＝]\s*-?\d+(?:\s*[~/～]\s*-?\d+)?\s*")
+# 坐标前是这些字时换成"那里"（"苦力怕在那里""箱子在那里和那里"）；后面紧跟方位字或标点、句末时直接去掉（"地板上""缺格。"）
+_PLACE_WORDS = ("在", "到", "往", "去", "回", "贴着", "靠着", "从", "靠近", "于", "朝", "和", "与", "或")
+_DROP_BEFORE = set("上下里内外旁边前后，。；：、,.;:！？!?)）」\"'")
+# UUID（图纸、存档、实体编号；大小写都有）
+_UUID = re.compile(r"\s*[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
+# 目标、任务编号的键值写法："goal_id=568" "task_id: deleg_1"
+_ID_FIELD = re.compile(r"\s*(?<![A-Za-z0-9_])(?:goal|task)_id\s*[=:：]\s*[\w-]+")
+# 工具调用写法："maicraft_goal(action='cancel')"；物品 ID（"minecraft:oak_log"）冒号后的不碰
+_TOOL_CALL = re.compile(r"\s*(?<![A-Za-z0-9_:])[a-z][a-z0-9]*(?:_[a-z0-9]+)+\s*\([^()]*\)")
+# 游戏那一面的能力、工具名（"maicraft_execute" "minecraft_glance"）：念给观众没有意义
+_TOOL_NAME = re.compile(r"\s*(?<![A-Za-z0-9_:])(?:maicraft|minecraft)_[a-z][a-z0-9_]*")
+# 观察编号："(e12)" 整个括号去掉，单独写的 "e12" "b5" 换成"那个"（x、y、z 打头的是坐标轴，上面已处理）
+_OBSERVATION_IN_BRACKETS = re.compile(r"\s*[（(][a-z]\d{1,4}[)）]")
+_OBSERVATION = re.compile(r"(?<![A-Za-z0-9_#-])[a-w]\d{1,4}(?![A-Za-z0-9_])")
+# 去掉东西后剩下的空括号、悬空的顿号，以及汉字之间多出来的空白
+_EMPTY_BRACKETS = re.compile(r"[（(][\s、，,]*[)）]")
+_CJK_GAP = re.compile(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])")
 
 _HEADING = "【游戏那边此刻】（每轮重读；游戏里做到哪、背包里有什么、房子什么样，以这一块为准）"
 _OVERVIEW_HEADING = "【现场速览（本轮决策前自动读取）】"
@@ -131,43 +161,27 @@ def _delegation_rows(
     """一件手上的事的几行读数：做什么、做到哪一步、最近几步的结果、游戏那边怎么想。"""
     record = status_provider(delegation.task_id) if status_provider is not None and delegation.task_id else None
     game = f"在 {delegation.agent} 里" if delegation.agent else "在游戏里"
-    task = _clip(sanitize_internal_terms(delegation.instruction), _TASK_MAX_CHARS)
-    rows = [f"- {game}手上的事：{task}（{_task_state(delegation, record, status_provider)}）"]
+    notes = ((record or {}).get("snapshot") or {}).get("game_progress_notes") or []
+    # 状态与前段【我手头在游戏里做的事】同一句（停着没动静、账面多久没进展都照写），委派原话不再写第二遍；
+    # 状态里带着的那一步结果下面"最近几步结果"一行另有，这里只留开头
+    state = delegation_state_line(delegation, status_provider, current_ms)
+    if notes and state.startswith(_PROGRESS_STATE_PREFIX):
+        state = f"{_PROGRESS_STATE_PREFIX}（见下面最近几步结果）。"
+    rows = [f"- {game}手上那件事（原话见前面）：{_clip(scrub_game_readings(state), _STATE_MAX_CHARS)}"]
     # 此刻那一步只认这件事开始之后、还在跑的那一步：上一件事留下的步骤不算
     if reading.step and delegation.report_kind == "" and reading.step_at_ms >= delegation.at_ms:
-        step = _clip(sanitize_internal_terms(reading.step), _STEP_MAX_CHARS)
+        step = _clip(scrub_game_readings(reading.step), _STEP_MAX_CHARS)
         rows.append(f"  此刻那一步：{step}（{age_text(current_ms - reading.step_at_ms)}开始）")
     # 最近几步结果：游戏侧进展备注经脱敏换成中文结果（做完了 / 做了一半 / 没做成 / 取消了）
-    notes = ((record or {}).get("snapshot") or {}).get("game_progress_notes") or []
-    results = [_clip(sanitize_internal_terms(str(note)), _RESULT_MAX_CHARS) for note in list(notes)[-_RESULTS_MAX:]]
+    results = [_clip(scrub_game_readings(str(note)), _RESULT_MAX_CHARS) for note in list(notes)[-_RESULTS_MAX:]]
     if results:
         rows.append("  最近几步结果：" + "；".join(results))
     # 游戏那边的判断：它自己的推理，可能看错，标明不一定对；这件事开始之前说的不算
     if reading.judgement and reading.judgement_at_ms >= delegation.at_ms:
         first = next((line.strip() for line in reading.judgement.splitlines() if line.strip()), "")
-        judgement = _clip(sanitize_internal_terms(first), _JUDGEMENT_MAX_CHARS)
+        judgement = _clip(scrub_game_readings(first), _JUDGEMENT_MAX_CHARS)
         rows.append(f"  游戏那边的判断（不一定对）：{judgement}（{age_text(current_ms - reading.judgement_at_ms)}）")
     return rows
-
-
-def _task_state(
-    delegation: Delegation,
-    record: Optional[Dict[str, Any]],
-    status_provider: Optional[DelegationStatusProvider],
-) -> str:
-    """手上的事的一句状态：做完了、卡住了等我拿主意、停了没交付、还在做。"""
-    if delegation.report_kind == "delivery":
-        return "做完了"
-    if delegation.report_kind == "escalation":
-        return "卡住了，等我拿主意"
-    if delegation.report_kind == "undelivered":
-        return "停了，没交付结果"
-    if record is None:
-        # 没接任务账本的装配只知道派出去了；接了却查不到是账面已了结
-        return "还在做" if status_provider is None else "账面上已了结"
-    if record.get("status") == "waiting_for_decision":
-        return "停着等我拿主意"
-    return "还在做"
 
 
 def _self_chat_row(lines: Tuple[Tuple[int, str, str], ...], current_ms: int) -> str:
@@ -176,7 +190,7 @@ def _self_chat_row(lines: Tuple[Tuple[int, str, str], ...], current_ms: int) -> 
     if not recent:
         return ""
     said = "；".join(
-        f"「{_clip(sanitize_internal_terms(text), _SELF_CHAT_MAX_CHARS)}」（{age_text(current_ms - at_ms)}）"
+        f"「{_clip(scrub_game_readings(text), _SELF_CHAT_MAX_CHARS)}」（{age_text(current_ms - at_ms)}）"
         for at_ms, _game, text in recent
     )
     return f"- 我近 5 分钟在游戏公屏说过：{said}"
@@ -186,3 +200,32 @@ def _clip(text: str, limit: int) -> str:
     """截到至多 ``limit`` 个字，截掉时补省略号；换行折成空格（每项一行）。"""
     flat = " ".join(text.split())
     return flat if len(flat) <= limit else f"{flat[:limit]}…"
+
+
+def scrub_game_readings(text: str) -> str:
+    """游戏那一面写给自己看的读数 → 她能直接看懂、不会照念出数字的说法。
+
+    先过通用的内部术语脱敏（目标编号、能力名、任务号），再去掉坐标（前面是"在、到、回"这类字时换成
+    "那里"，后面紧跟方位字、标点或句末时直接去掉，其余换成"那里"）、单轴写法（"y=68"）、UUID、
+    目标编号的键值写法、工具调用与工具名、观察编号，最后收拾空括号与汉字之间多出来的空白。
+    """
+    cleaned = sanitize_internal_terms(text or "")
+    for pattern in (_COORDINATE, _AXIS):
+        cleaned = pattern.sub(_place_or_drop, cleaned)
+    for pattern in (_UUID, _ID_FIELD, _TOOL_CALL, _TOOL_NAME, _OBSERVATION_IN_BRACKETS):
+        cleaned = pattern.sub("", cleaned)
+    cleaned = _OBSERVATION.sub("那个", cleaned)
+    cleaned = _EMPTY_BRACKETS.sub("", cleaned)
+    return _CJK_GAP.sub("", " ".join(cleaned.split()))
+
+
+def _place_or_drop(match: "re.Match[str]") -> str:
+    """一处坐标换成"那里"还是直接去掉：看前面是不是"在、到"这类字、后面是不是方位字或标点。"""
+    before = match.string[: match.start()].rstrip()
+    after = match.string[match.end() :]
+    if before.endswith(_PLACE_WORDS):
+        return "那里"
+    if not after or after[0] in _DROP_BEFORE:
+        # 两边都是字母数字时留一个空格，免得前后两个英文词粘在一起
+        return " " if before[-1:].isascii() and before[-1:].isalnum() and after[:1].isalnum() else ""
+    return "那里"

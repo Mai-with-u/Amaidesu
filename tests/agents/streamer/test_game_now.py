@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.game_now import AgentNow, GameNow, GameSideLog, render_game_now
+from src.agents.streamer.game_now import AgentNow, GameNow, GameSideLog, render_game_now, scrub_game_readings
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.planner_render import Delegation
 from src.agents.streamer.room_state import RoomState
@@ -40,13 +40,15 @@ def _delegation(**overrides: Any) -> Delegation:
     return Delegation(**fields)
 
 
-def _record(notes: List[str], status: str = "running") -> Any:
-    """委派在任务账本里的机器状态：快照带游戏侧进展备注。"""
-    return lambda _task_id: {"status": status, "updated_at_ms": _NOW, "snapshot": {"game_progress_notes": notes}}
+def _record(notes: List[str], status: str = "running", **snapshot: Any) -> Any:
+    """委派在任务账本里的机器状态：快照带游戏侧进展备注（另可带停滞标记等）。"""
+    data = {"game_progress_notes": notes, **snapshot}
+    return lambda _task_id: {"status": status, "updated_at_ms": _NOW, "snapshot": data}
 
 
 def test_block_lists_task_step_results_judgement_chat_then_overview() -> None:
-    """一件手上的事的几行读数在前，她近 5 分钟的公屏话随后，现场速览放在最后；结果换成中文、内部编号脱掉。"""
+    """一件手上的事的几行读数在前，她近 5 分钟的公屏话随后，现场速览放在最后；结果换成中文、内部编号脱掉。
+    委派原话只在前段写一遍，这里不重复；状态里那一步结果下面另有一行，不写两遍。"""
     reading = AgentNow(
         step="去营地门口把门装上",
         step_at_ms=_NOW - 2 * _MINUTE,
@@ -63,7 +65,7 @@ def test_block_lists_task_step_results_judgement_chat_then_overview() -> None:
 
     assert text.splitlines() == [
         "【游戏那边此刻】（每轮重读；游戏里做到哪、背包里有什么、房子什么样，以这一块为准）",
-        "- 在 minecraft 里手上的事：把营地的门装好（还在做）",
+        "- 在 minecraft 里手上那件事（原话见前面）：还在做，游戏那边有一步有结果了（见下面最近几步结果）。",
         "  此刻那一步：去营地门口把门装上（2 分钟前开始）",
         "  最近几步结果：没做成：这一片没有找到蒲公英；做了一半：拿到 3 个，还差 5 个",
         "  游戏那边的判断（不一定对）：门框左边差一格木板（刚刚）",
@@ -84,12 +86,59 @@ def test_step_and_judgement_from_before_this_task_are_left_out() -> None:
     fresh = AgentNow(step="装门", step_at_ms=_NOW - _MINUTE)
     done = _delegation(report_kind="delivery", reported_ms=_NOW)
     text = render_game_now({"minecraft": done}, None, GameNow(agents={"minecraft": fresh}), "", _NOW)
-    assert "（做完了）" in text and "此刻那一步" not in text
+    assert "做完，结果见游戏记录" in text and "此刻那一步" not in text
 
     # 游戏那边没交付就停了：不说成做完了，此刻那一步也不再列
     stopped = _delegation(report_kind="undelivered", reported_ms=_NOW)
     text = render_game_now({"minecraft": stopped}, None, GameNow(agents={"minecraft": fresh}), "", _NOW)
-    assert "（停了，没交付结果）" in text and "做完了" not in text and "此刻那一步" not in text
+    assert "停了，没交付结果，做没做完不确定" in text and "做完了" not in text and "此刻那一步" not in text
+
+
+def test_state_matches_the_delegation_line_when_stuck_or_idle() -> None:
+    """卡住的活不写成"还在做"了事：停着没动静、账面多久没进展，和前段委派状态同一句，她才会去拿主意。"""
+    stalled = _record([], stalled_goals={"g1": "找蒲公英"})
+    text = render_game_now({"minecraft": _delegation()}, stalled, GameNow(), "", _NOW)
+    assert "：还在做，但游戏说有的目标停着没动静（找蒲公英）。" in text
+    assert "把营地的门装好" not in text, "委派原话留在前段，不再写第二遍"
+
+    idle = lambda _task_id: {"status": "running", "updated_at_ms": _NOW - 12 * _MINUTE, "snapshot": {}}  # noqa: E731
+    text = render_game_now({"minecraft": _delegation()}, idle, GameNow(), "", _NOW)
+    assert "：还在做，账面已 12 分钟前没有新进展。" in text
+    waiting = render_game_now(
+        {"minecraft": _delegation()}, _record([], status="waiting_for_decision"), GameNow(), "", _NOW
+    )
+    assert "停着等我和观众拿主意" in waiting
+
+
+def test_readings_drop_coordinates_ids_and_tool_names() -> None:
+    """游戏那一面的读数带坐标、编号、工具名（第 58 场的目的与判断句式）：坐标换成"那里"或去掉，其余去掉。"""
+    cases = {
+        "贴着 (-354,71,57) 的北面补上屋面缺格 (-354,71,56)": "贴着那里的北面补上屋面缺格",
+        "在棚底正中地板 (-352,68,55) 上插一支火把": "在棚底正中地板上插一支火把",
+        "挖掉 (-349,70,56) 多的一层土": "挖掉那里多的一层土",
+        "苦力怕在 (-363, 65, 60)。先走到它附近再动手。": "苦力怕在那里。先走到它附近再动手。",
+        "就差屋面中间 2 格（(-354,71,56)、(-352,71,56)）。": "就差屋面中间 2 格。",
+        "床在 (-352,56~57)、箱子在 (-353,56/57) 和 (-350,57)，都坐在 y=68 的平台上": (
+            "床在那里、箱子在那里和那里，都坐在那里的平台上"
+        ),
+        "把花放到东窗内侧地板上（留 z=56 给蒲公英）": "把花放到东窗内侧地板上（留那里给蒲公英）",
+        "游戏目标 456（maicraft:travel）done：走到了目的地，实测位置 (-334, 64, 58)": "做完了：走到了目的地，实测位置",
+        "读了 3 层方块，存成图纸 325B3760-3717-4A91-9449-8C8BE7034C0D": "读了 3 层方块，存成图纸",
+        '先 maicraft_goal(action="cancel", goal_id=568) 再去打 e12（b5）': "先再去打那个",
+        "goal_id=568 已取消，用 minecraft_glance 看一眼": "已取消，用看一眼",
+        "拿到 6 个 minecraft:oak_log": "拿到 6 个 minecraft:oak_log",
+    }
+    assert {raw: scrub_game_readings(raw) for raw in cases} == cases
+
+    reading = AgentNow(
+        step="贴着 (-354,71,57) 的北面补上屋面缺格",
+        step_at_ms=_NOW - _MINUTE,
+        judgement="苦力怕在 (-363, 65, 60)。先走到它附近再动手。",
+        judgement_at_ms=_NOW - _MINUTE,
+    )
+    notes = ["游戏目标 456（maicraft:travel）done：实测位置 (-334, 64, 58)"]
+    text = render_game_now({"minecraft": _delegation()}, _record(notes), GameNow({"minecraft": reading}), "", _NOW)
+    assert "(" not in text.split("【现场速览", 1)[0] and "maicraft" not in text
 
 
 def test_block_is_empty_without_anything_and_overview_alone_still_shows() -> None:
