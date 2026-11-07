@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List
 
 from src.agents.minecraft.maicraft import goal_run_of
+from src.modules.events.payloads.game import GamePayload
 from src.modules.llm.payload import Response
 
 from .minecraft_v1_fakes import (
@@ -18,12 +19,26 @@ def _script_good(messages: List) -> Response:
     return _resp("好")
 
 
+def _receipts(bus: Any) -> List[GamePayload]:
+    """发给主播的叫停回执（attention_required 游戏事件）。"""
+    return [
+        call.args[1]
+        for call in bus.emit.await_args_list
+        if isinstance(call.args[1], GamePayload) and call.args[1].event_type == "attention_required"
+    ]
+
+
 async def test_cancel_task_now_stops_tracked_goals_at_the_mod_first() -> None:
     """急取消：逐个向游戏直连发目标取消（Mod 立刻停手），随后账面写 cancelled + 注入停手通知。"""
     server = FakeMaicraft()
-    agent, _llm, _bus = await make_minecraft_agent(server, _script_good)
-    for goal_id in (1, 2):
-        server.goals[goal_id] = {"goal_id": goal_id, "ability": "maicraft:gather", "state": "running"}
+    agent, _llm, bus = await make_minecraft_agent(server, _script_good)
+    for goal_id, purpose in ((1, "砍树"), (2, "")):
+        server.goals[goal_id] = {
+            "goal_id": goal_id,
+            "ability": "maicraft:gather",
+            "purpose": purpose,
+            "state": "running",
+        }
         run = goal_run_of(server.goals[goal_id])
         assert run is not None
         agent._track_goal(run)
@@ -34,13 +49,16 @@ async def test_cancel_task_now_stops_tracked_goals_at_the_mod_first() -> None:
     cancels = server.calls_to("goal")
     assert {"operation": "cancel", "goal_id": 1} in cancels
     assert {"operation": "cancel", "goal_id": 2} in cancels
+    receipt = _receipts(bus)[-1]
+    assert receipt.message == "操作员撤掉了游戏里手上的活：在跑的目标都停下了（砍树、gather）"
+    assert receipt.body_events == [], "回执只讲叫停结果，不带路上的身体事件"
     await agent.stop()
 
 
 async def test_cancel_task_now_tolerates_single_goal_failure() -> None:
-    """单个目标直连取消失败（游戏侧目标已不在）只跳过，不阻断其余目标、不抛异常。"""
+    """单个目标直连取消失败（游戏侧目标已不在）只跳过，不阻断其余目标、不抛异常；回执点名哪个没停下。"""
     server = FakeMaicraft()
-    agent, _llm, _bus = await make_minecraft_agent(server, _script_good)
+    agent, _llm, bus = await make_minecraft_agent(server, _script_good)
     for goal_id in (1, 2):
         run = goal_run_of({"goal_id": goal_id, "ability": "maicraft:gather", "state": "running"})
         assert run is not None
@@ -49,14 +67,16 @@ async def test_cancel_task_now_tolerates_single_goal_failure() -> None:
 
     assert await agent.cancel_task_now("deleg_1", source="operator") is True
     assert len(server.calls_to("goal")) == 2, "两个目标都尝试过直连取消"
+    receipt = _receipts(bus)[-1].message
+    assert "gather没停下（没有编号为 1 的目标）" in receipt and "可能还在做" in receipt
     await agent.stop()
 
 
 async def test_stop_actions_injects_reason_and_keeps_delegations_by_default() -> None:
     """急停：直连取消所有在跑目标 + 注入带理由原文的叫停通知；默认不动委派单。"""
     server = FakeMaicraft()
-    agent, _llm, _bus = await make_minecraft_agent(server, _script_good)
-    server.goals[7] = {"goal_id": 7, "ability": "maicraft:gather", "state": "running"}
+    agent, _llm, bus = await make_minecraft_agent(server, _script_good)
+    server.goals[7] = {"goal_id": 7, "ability": "maicraft:gather", "purpose": "挖铁矿", "state": "running"}
     run = goal_run_of(server.goals[7])
     assert run is not None
     agent._track_goal(run)
@@ -68,6 +88,9 @@ async def test_stop_actions_injects_reason_and_keeps_delegations_by_default() ->
     contents = [item[1] for item in agent._wake_queue if isinstance(item, tuple)]
     assert any("操作员叫停了当前动作" in content and "别再挖了，来门口接待" in content for content in contents)
     assert agent._delegations.tracked_ids() == ("deleg_9",), "默认不撤委派单"
+    assert _receipts(bus)[-1].message == (
+        "操作员急停了游戏里的动作：在跑的目标都停下了（挖铁矿）；手上的活没撤，账面还在，等下一步安排"
+    )
     await agent.stop()
 
 
@@ -85,10 +108,11 @@ async def test_stop_actions_without_reason_uses_plain_notice() -> None:
 async def test_stop_actions_with_cancel_delegations_revokes_tracked_delegations() -> None:
     """急停带撤单开关：名下委派单一并撤（账面 cancelled + 出追踪清单）。"""
     server = FakeMaicraft()
-    agent, _llm, _bus = await make_minecraft_agent(server, _script_good)
+    agent, _llm, bus = await make_minecraft_agent(server, _script_good)
     agent._delegations.absorb("deleg_9")
 
     assert await agent.stop_actions("", cancel_delegations=True) is True
 
     assert agent._delegations.tracked_ids() == ()
+    assert _receipts(bus)[-1].message == "操作员急停了游戏里的动作：叫停时没有在跑的目标；手上的活一并撤了"
     await agent.stop()

@@ -131,6 +131,10 @@ class GoalWatch:
     def tracked_ids(self) -> List[int]:
         return sorted(self._goals)
 
+    def tracked_goals(self) -> List[TrackedGoal]:
+        """在跟踪的目标（按编号排）：急停逐个叫停时要知道每个在做什么，回执才说得出哪个没停下。"""
+        return [self._goals[goal_id] for goal_id in sorted(self._goals)]
+
     def tracked_abilities(self) -> List[str]:
         """在跟踪的目标各是哪种能力（死讯到时据此认出是不是自己在寻死）。"""
         return [goal.ability for goal in self._goals.values()]

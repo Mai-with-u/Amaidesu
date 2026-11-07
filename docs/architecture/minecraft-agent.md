@@ -96,7 +96,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 | 事件 | 触发 |
 |---|---|
 | `game.report` | LLM 调 `minecraft_report`（delivery/escalation），或批次自然终止时系统代发停了没交付（undelivered）；kind 见 `GamePayload.report_kind` |
-| `game.attention_required` | 身体处理不了的生存需求、角色死亡；任务期间身体先处理了一件急事（每批每件各一次）。只叙事、不打断任务 |
+| `game.attention_required` | 身体处理不了的生存需求、角色死亡；任务期间身体先处理了一件急事（每批每件各一次）。只叙事、不打断任务。急停与撤单之后也发一条叫停回执：哪些目标停下了、哪个没停下（附原因）、手上的活撤没撤 |
 | `game.error` | 工具执行异常 / LLM 调用失败 / 无 LLM fail-fast |
 
 事件 payload 复用 `GamePayload`（`game="minecraft"`），叙事面事件带上本批任务期间的身体事件；上报同时进内存 `recent_reports`（保留最近 10 条）。

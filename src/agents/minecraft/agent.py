@@ -99,6 +99,7 @@ from src.agents.minecraft.player_interactions import SelfChatLog, SparOpponents,
 from src.agents.minecraft.skill_support import SkillSupport
 from src.agents.minecraft.sparring import spar_outcome_line
 from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
+from src.agents.minecraft.stop_receipt import GoalStopOutcome, cancel_receipt, stop_goal_label, stop_receipt
 from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
 from src.agents.minecraft.wake_queue import WakeQueue, opens_task
 from src.agents.minecraft.world_identity import WorldChange, WorldIdentity, world_ref_of
@@ -693,44 +694,71 @@ class MinecraftAgent(BaseAgent):
         self._logger.info(f"MinecraftAgent 任务已取消（task_id={task_id}, source={source or '未知'}）")
         return True
 
-    async def _cancel_tracked_goals(self) -> None:
+    async def _cancel_tracked_goals(self) -> GoalStopOutcome:
         """逐个向游戏直连取消在跑目标：让 Mod 立刻停手，不等游戏 Agent 下一轮推理。
 
-        单个目标取消失败（游戏没连上、目标已结束）只记 warning，不阻断其余目标；
+        单个目标取消失败（游戏没连上、目标已结束）记 warning，不阻断其余目标；
         取消成功后目标结束事件经事件流回来，跟踪名单与账面由既有路径收尾。
+        返回每个目标停没停（没停下的附原因），叫停回执据此告诉主播哪个目标可能还在做。
         """
-        for goal_id in list(self._goals.tracked_ids()):
+        outcome = GoalStopOutcome()
+        for goal in self._goals.tracked_goals():
+            label = stop_goal_label(goal.ability, goal.purpose)
             try:
-                reply = await self._call_maicraft(GOAL, {"operation": "cancel", "goal_id": goal_id})
+                reply = await self._call_maicraft(GOAL, {"operation": "cancel", "goal_id": goal.goal_id})
             except Exception as exc:  # noqa: BLE001 - 单个目标失败不阻断其余目标
-                self._logger.warning(f"直连取消游戏目标 {goal_id} 异常：{exc}", exc=True)
+                self._logger.warning(f"直连取消游戏目标 {goal.goal_id} 异常：{exc}", exc=True)
+                outcome.not_stopped.append((label, f"取消时出错：{type(exc).__name__}"))
                 continue
             if not reply.ok:
-                self._logger.warning(
-                    f"直连取消游戏目标 {goal_id} 未成功：{reply.error_message or reply.error_code or '未知原因'}"
-                )
+                why = reply.error_message or reply.error_code or "未知原因"
+                self._logger.warning(f"直连取消游戏目标 {goal.goal_id} 未成功：{why}")
+                outcome.not_stopped.append((label, why))
+                continue
+            outcome.stopped.append(label)
+        return outcome
 
     async def cancel_task_now(self, task_id: str, source: str = "", reason: str = "") -> bool:
-        """急取消（运营 REST 用）：先经直连通道让游戏立刻停手，再走 cancel_task 记账与通知。"""
-        await self._cancel_tracked_goals()
-        return self.cancel_task(task_id, source=source, reason=reason)
+        """急取消（运营 REST 与主播撤单用）：先经直连通道让游戏立刻停手，再走 cancel_task 记账与通知。
+
+        叫停目标 → 撤单记账 → 发回执：撤没撤成、哪些目标停下了、哪个没停下，进主播时间线。
+        """
+        outcome = await self._cancel_tracked_goals()
+        cancelled = self.cancel_task(task_id, source=source, reason=reason)
+        await self._emit_stop_receipt(cancel_receipt(outcome, cancelled=cancelled, by_operator=source == "operator"))
+        return cancelled
 
     async def stop_actions(self, reason: str = "", *, cancel_delegations: bool = False) -> bool:
         """急停：直连取消所有在跑游戏目标并注入叫停理由，游戏 Agent 下一轮读到后调整。
 
         默认不撤委派单（角色停手但任务账不动）；``cancel_delegations`` 为真时
         连名下委派单一起撤（复用 cancel_task 的记账与通知路径）。
+        做完照旧的停手与记账后发一条回执给主播：哪些目标停下了、哪个没停下、手上的活撤没撤。
         """
-        await self._cancel_tracked_goals()
+        outcome = await self._cancel_tracked_goals()
+        held = self._delegations.tracked_ids()
         if cancel_delegations:
-            for task_id in self._delegations.tracked_ids():
+            for task_id in held:
                 self.cancel_task(task_id, source="operator")
         notice = "[系统] 操作员叫停了当前动作。"
         if reason:
             notice = f"[系统] 操作员叫停了当前动作。理由：{reason}"
         self._inject_wakeup_message(notice)
         self._logger.info(f"MinecraftAgent 急停（cancel_delegations={cancel_delegations}）：{reason[:60]}")
+        await self._emit_stop_receipt(
+            stop_receipt(outcome, held_delegations=len(held), cancel_delegations=cancel_delegations)
+        )
         return True
+
+    async def _emit_stop_receipt(self, receipt: str) -> None:
+        """叫停回执作为 attention_required 发给主播：只是叫停的结果，不带本批路上碰到的身体事件。
+
+        回执发不出去只记日志：停手与记账已经做完，不能因为回执失败让撤单或急停报错。
+        """
+        try:
+            await self._emit_game_event("attention_required", receipt, include_body_events=False)
+        except Exception as exc:  # noqa: BLE001 - 回执是旁路通知，失败不影响已完成的叫停
+            self._logger.warning(f"叫停回执发送失败：{exc}", exc=True)
 
     async def _worker(self) -> None:
         """命令工作协程：等待命令信号 → 执行目标任务 → 回到等待（空闲零消耗）。"""
@@ -2156,12 +2184,16 @@ class MinecraftAgent(BaseAgent):
         scene: str = "",
         report_kind: Optional[Literal["delivery", "escalation", "undelivered"]] = None,
         already_resolved: bool = False,
+        include_body_events: bool = True,
     ) -> None:
-        """emit game.* 事件；叙事面事件带上本批任务期间的身体事件，主播据此讲"做着做着遇到了什么"。"""
+        """emit game.* 事件；叙事面事件带上本批任务期间的身体事件，主播据此讲"做着做着遇到了什么"。
+
+        ``include_body_events`` 为假时不带（叫停回执只讲叫停的结果，带上会让她把路上的事再讲一遍）。
+        """
         if self._event_bus is None:
             return
         body_events: List[Dict[str, Any]] = []
-        if event_type in ("report", "attention_required"):
+        if include_body_events and event_type in ("report", "attention_required"):
             body_events = [dict(item) for item in self._batch_body_events]
         # 事件发生时所在的存档由本 Agent 自己填（旧版 Mod 与不明时为空串）
         save_id, save_name = self._world.save_fields()
