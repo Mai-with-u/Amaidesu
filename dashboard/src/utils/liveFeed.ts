@@ -991,6 +991,19 @@ export function mergeEntriesByTime(entries: ShowEntry[], thinkingRows: ShowEntry
   return merged;
 }
 
+/**
+ * 新增条目数：以上一帧末条 id 为锚，找不到锚点则视为全新。
+ *
+ * 两处贴底跟随共用同一口径——单列时间线（页面级滚动容器）与双轨后台视角
+ * （每列各有滚动容器）都要靠它判断"来了多少新东西"。
+ */
+export function countAddedEntries(next: ShowEntry[], prev: ShowEntry[]): number {
+  const anchor = prev.length > 0 ? prev[prev.length - 1].id : null;
+  if (!anchor) return next.length;
+  const index = next.findIndex(entry => entry.id === anchor);
+  return index === -1 ? next.length : next.length - 1 - index;
+}
+
 // 相对时间标签
 
 /**

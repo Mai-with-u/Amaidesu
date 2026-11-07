@@ -15,7 +15,7 @@
 
 import { nextTick, onMounted, onScopeDispose, ref, watch, type Ref } from 'vue';
 import { useScrollFollow } from '@/composables/useScrollFollow';
-import type { ShowEntry } from '@/utils/liveFeed';
+import { countAddedEntries, type ShowEntry } from '@/utils/liveFeed';
 
 /** 用户向上滚动后不贴底跟随的宽限时长：须盖过后台标签页的滚动事件分发延迟 */
 const SCROLL_UP_GRACE_MS = 2000;
@@ -56,16 +56,8 @@ export function useTimelineScroll(entries: Ref<ShowEntry[]>) {
     unseen.value = 0;
   }
 
-  /** 新增条目数：以上一帧末条 id 为锚，找不到锚点则视为全新 */
-  function countAdded(next: ShowEntry[], prev: ShowEntry[]): number {
-    const anchor = prev.length > 0 ? prev[prev.length - 1].id : null;
-    if (!anchor) return next.length;
-    const index = next.findIndex(entry => entry.id === anchor);
-    return index === -1 ? next.length : next.length - 1 - index;
-  }
-
   watch(entries, async (next, prev) => {
-    const added = countAdded(next, prev ?? []);
+    const added = countAddedEntries(next, prev ?? []);
     await nextTick();
     if (atBottom.value && followAllowed()) {
       scrollToBottom();

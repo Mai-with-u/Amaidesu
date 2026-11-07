@@ -283,6 +283,7 @@
               />
               <LiveLanes
                 v-else-if="stageView === 'backstage'"
+                ref="lanesRef"
                 :entries="allEntries"
                 :tasks="taskWindows"
                 :empty-text="timelineEmptyText"
@@ -303,13 +304,8 @@
               @close="closeMessage"
             />
 
-            <button
-              v-if="unseen > 0 && sessionMode === 'live'"
-              type="button"
-              class="jump"
-              @click="jumpToLatest"
-            >
-              {{ unseen >= 99 ? '99+' : unseen }} 条新内容 · 回到最新 ↓
+            <button v-if="showJumpToLatest" type="button" class="jump" @click="jumpToLatest">
+              {{ jumpToLatestLabel }}
             </button>
           </div>
 
@@ -735,8 +731,41 @@ const timelineEmptyText = computed(() => {
   return '该场次暂无可回看条目';
 });
 
-const { scrollRef, unseen, onScroll, jumpToLatest, resetUnseen } =
-  useTimelineScroll(displayEntries);
+const {
+  scrollRef,
+  unseen,
+  onScroll,
+  jumpToLatest: jumpToLatestOuter,
+  resetUnseen,
+} = useTimelineScroll(displayEntries);
+
+/**
+ * "回到最新"按钮：后台视角滚的是双轨两列（这一档外层容器不滚），
+ * 其余视角滚外层时间线。待看条数同理分两处取——后台视角看两列各自
+ * 落下的内容，其余视角看外层流的未读计数。
+ */
+const lanesRef = ref<InstanceType<typeof LiveLanes> | null>(null);
+
+const newContentCount = computed<number>(() =>
+  stageView.value === 'backstage' ? (lanesRef.value?.pendingCount ?? 0) : unseen.value,
+);
+
+const showJumpToLatest = computed<boolean>(
+  () => sessionMode.value === 'live' && newContentCount.value > 0,
+);
+
+const jumpToLatestLabel = computed<string>(() => {
+  const count = newContentCount.value >= 99 ? '99+' : String(newContentCount.value);
+  return `${count} 条新内容 · 回到最新 ↓`;
+});
+
+function jumpToLatest(): void {
+  if (stageView.value === 'backstage') {
+    lanesRef.value?.scrollToLatest();
+    return;
+  }
+  jumpToLatestOuter();
+}
 
 // 回看时刻锚定：复盘页指标卡深链（/live?session=&at=<ms>）跳入时自动向前
 // 翻页到目标时刻，滚动定位并短暂高亮（翻页上限与降级提示在组合式内）

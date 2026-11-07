@@ -14,11 +14,12 @@
      （framework_delegate / framework_prompt）→ 游戏 Agent 的回报，靠卡片上的
      「派活 → 游戏 · 回报 N 条」「← 派活：<指令>」标记表达，点标记跳到对侧那张卡。 -->
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 
 import { CARD_REGISTRY } from './cards/registry';
 import { useCardHost } from './cards/useCardHost';
 import '@/components/live/cards/cards-shared.css';
+import { useLaneScroll } from '@/composables/live/useLaneScroll';
 import {
   buildLaneSections,
   delegationOfReply,
@@ -86,45 +87,22 @@ function sideCounts(section: LaneSection): { lane: LaneId; label: string; count:
 
 // ---------------------------------------------------------------------------
 // 独立滚动：两列各有自己的滚动位置，各自贴底跟随
+// （跟随机制在 useLaneScroll：换批条目即跟随，不按长度判断）
 // ---------------------------------------------------------------------------
 
-const stageCol = ref<HTMLElement | null>(null);
-const gameCol = ref<HTMLElement | null>(null);
+const {
+  stageCol,
+  gameCol,
+  columnOf,
+  onScroll: onLaneScroll,
+  stopFollowing,
+  scrollToLatest,
+  pendingCount,
+} = useLaneScroll(computed(() => props.entries));
 
-function columnOf(lane: LaneId): HTMLElement | null {
-  return lane === 'stage' ? stageCol.value : gameCol.value;
-}
-
-/** 该列是否贴着底部（120px 容差）：只有贴底时才自动跟随，用户往上翻就停下 */
-function isNearBottom(element: HTMLElement): boolean {
-  return element.scrollHeight - element.scrollTop - element.clientHeight < 120;
-}
-
-const followStage = ref(true);
-const followGame = ref(true);
-
-function onScroll(lane: LaneId): void {
-  const element = columnOf(lane);
-  if (!element) return;
-  const near = isNearBottom(element);
-  if (lane === 'stage') followStage.value = near;
-  else followGame.value = near;
-}
-
-function scrollToBottom(lane: LaneId): void {
-  const element = columnOf(lane);
-  if (element) element.scrollTop = element.scrollHeight;
-}
-
-// 直播追加内容时跟随到底部；用户已上翻则不动（回看态加载更早同理不打断阅读）
-watch(
-  () => props.entries.length,
-  async () => {
-    await nextTick();
-    if (followStage.value) scrollToBottom('stage');
-    if (followGame.value) scrollToBottom('game');
-  },
-);
+// 页面的"回到最新"按钮驱动的是双轨（这一档外层容器不滚）：暴露两列回到底部
+// 的动作与落下的新内容条数
+defineExpose({ scrollToLatest, pendingCount });
 
 // ---------------------------------------------------------------------------
 // 按需对齐：点一张卡 → 对侧列滚到同一时刻；对侧没有内容时什么也不做
@@ -155,9 +133,8 @@ function reveal(lane: LaneId, card: HTMLElement | null): void {
   if (!column || !card) return;
   const top = card.offsetTop - column.clientHeight / 2 + card.offsetHeight / 2;
   column.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
-  // 用户明确选择了看这一刻，对侧不再继续贴底跟随
-  if (lane === 'stage') followStage.value = false;
-  else followGame.value = false;
+  // 用户明确选择了看这一刻，该列不再继续贴底跟随
+  stopFollowing(lane);
   card.classList.add('is-flash');
   globalThis.setTimeout(() => card.classList.remove('is-flash'), 1200);
 }
@@ -260,7 +237,7 @@ function focusDelegate(entry: ShowEntry): void {
     <p v-if="sections.length === 0" class="lanes-empty">{{ emptyText }}</p>
 
     <template v-else>
-      <div ref="stageCol" class="lane-col lane-stage" @scroll.passive="onScroll('stage')">
+      <div ref="stageCol" class="lane-col lane-stage" @scroll.passive="onLaneScroll('stage')">
         <p class="lane-hint">
           主播 Agent 看到的<span class="lane-tip">点卡片 → 对侧跳到同一刻</span>
         </p>
@@ -299,7 +276,7 @@ function focusDelegate(entry: ShowEntry): void {
         </section>
       </div>
 
-      <div ref="gameCol" class="lane-col lane-game" @scroll.passive="onScroll('game')">
+      <div ref="gameCol" class="lane-col lane-game" @scroll.passive="onLaneScroll('game')">
         <p class="lane-hint">
           游戏 Agent 看到的<span class="lane-tip">点卡片 → 对侧跳到同一刻</span>
         </p>
