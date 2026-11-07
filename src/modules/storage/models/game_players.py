@@ -28,6 +28,8 @@ __all__ = [
     "GameChatDirection",
     "GameChatLine",
     "GamePlayer",
+    "PendingPlayerCandidate",
+    "PlayerCandidate",
     "PlayerInteraction",
     "PlayerSave",
     "ViewerPlayerLink",
@@ -116,6 +118,34 @@ class GameChatLine(BaseModel):
     save_id: str = Field(default="", description="在哪个存档；不明为空")
     save_name: str = Field(default="", description="存档给人看的名字")
     at_ms: int = Field(..., description="收到或发出的时刻")
+
+
+class PendingPlayerCandidate(BaseModel):
+    """整理校验通过、等着写进待审区的一条玩家自述（批准前对她完全不可见）。
+
+    挂在他那句公屏聊天和她的回应上：回应是她在公屏打的那句（``reply_game_chat_id``）或播出的那句台词
+    （``reply_live_chat_id``），两者恰有一个。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    player_id: int = Field(..., description="说这件事的玩家")
+    title: str = Field(..., description="标题（玩家代号已换成「他」；代码已截到上限）")
+    player_chat_id: int = Field(..., description="他那句公屏聊天（game_chat 行）")
+    player_quote: str = Field(..., description="他那句的逐字片段")
+    reply_game_chat_id: Optional[int] = Field(default=None, description="她在公屏回他的那句；回应是台词时为空")
+    reply_live_chat_id: Optional[int] = Field(default=None, description="她播出的那句回应台词；回应在公屏时为空")
+    reply_quote: str = Field(..., description="她那句回应的逐字片段")
+
+
+class PlayerCandidate(PendingPlayerCandidate):
+    """``player_candidates`` 一行：待审、已批或已驳回的玩家自述。"""
+
+    id: int = Field(..., description="候选主键")
+    live_session_id: int = Field(..., description="列出它的场次")
+    status: str = Field(..., description="pending 待审 / approved 已批 / rejected 已驳回")
+    created_at_ms: int = Field(..., description="列出的时刻")
+    decided_at_ms: Optional[int] = Field(default=None, description="批准或驳回的时刻")
 
 
 class ViewerPlayerLink(BaseModel):

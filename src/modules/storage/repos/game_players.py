@@ -5,6 +5,9 @@
 公屏聊天只落公屏（私聊不进），认不出是谁说的只占一行位置、不存原话。观众与玩家的对应只由运营者
 确认后写入，只用来连带删除。
 
+玩家自述（``player_candidates``）由下播整理在整理事务里写进待审区（:func:`replace_session_player_candidates`），
+本场待审的整份替换；已批、已驳回的不动，驳回的留作去重依据。待审的列出后 14 天没人审就删，和观众候选同一个期限。
+
 谁能建玩家（有 UUID、在线核对过、不在忘记名单上）由调用方判断；仓储只管读写。
 """
 
@@ -12,7 +15,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from src.modules.storage.models.game_players import (
     GAME_CHAT_PLAYER,
@@ -21,11 +24,13 @@ from src.modules.storage.models.game_players import (
     GameChatDirection,
     GameChatLine,
     GamePlayer,
+    PendingPlayerCandidate,
     PlayerInteraction,
     PlayerSave,
     ViewerPlayerLink,
 )
 from src.modules.storage.repos._base import BaseRepo
+from src.modules.storage.repos.viewer_candidates import CANDIDATE_EXPIRE_MS
 from src.modules.types.game_save import OnlineMode, online_mode_of
 
 _PLAYER_COLUMNS = (
@@ -91,6 +96,43 @@ def _interaction(row: Any) -> PlayerInteraction:
 
 def _chat(row: Any) -> GameChatLine:
     return GameChatLine.model_validate(dict(row))
+
+
+def replace_session_player_candidates(
+    conn: sqlite3.Connection,
+    *,
+    live_session_id: int,
+    candidates: Sequence[PendingPlayerCandidate],
+    created_at_ms: int,
+) -> int:
+    """在整理事务里写本场的玩家自述：先删本场还在待审的，再写这一轮的；返回写了几条。
+
+    已批、已驳回的不动（驳回的留作去重依据）。同一句他的话只写一条。
+    """
+    conn.execute("DELETE FROM player_candidates WHERE live_session_id=? AND status='pending'", (int(live_session_id),))
+    written = 0
+    seen: set[int] = set()
+    for item in candidates:
+        if int(item.player_chat_id) in seen:
+            continue
+        seen.add(int(item.player_chat_id))
+        conn.execute(
+            "INSERT INTO player_candidates(live_session_id, player_id, title, player_chat_id, player_quote,"
+            " reply_game_chat_id, reply_live_chat_id, reply_quote, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                int(live_session_id),
+                int(item.player_id),
+                item.title,
+                int(item.player_chat_id),
+                item.player_quote,
+                item.reply_game_chat_id,
+                item.reply_live_chat_id,
+                item.reply_quote,
+                int(created_at_ms),
+            ),
+        )
+        written += 1
+    return written
 
 
 def _find_player_row(conn: sqlite3.Connection, *, game: str, uuid: str) -> Any:
@@ -426,6 +468,40 @@ class GamePlayerRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def player_candidate_keys(self) -> Tuple[Dict[int, List[str]], List[int]]:
+        """整理去重用：每位玩家已批、已驳回的自述标题，以及驳回过的他那句公屏。
+
+        批准过的同一件事不再列；驳回过的同一句话、同样的标题以后也不再列。
+        """
+
+        def _exec() -> Tuple[Dict[int, List[str]], List[int]]:
+            titles: Dict[int, List[str]] = {}
+            rejected: List[int] = []
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT player_id, title, player_chat_id, status FROM player_candidates WHERE status<>'pending'"
+                ).fetchall()
+            for row in rows:
+                titles.setdefault(int(row["player_id"]), []).append(str(row["title"]))
+                if row["status"] == "rejected":
+                    rejected.append(int(row["player_chat_id"]))
+            return titles, rejected
+
+        return await self._run_in_executor(_exec)
+
+    async def expire_player_candidates(self, *, now_ms_value: int) -> int:
+        """删掉列出超过 14 天还没人审的玩家自述（整理调度顺手做），返回删了几条。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "DELETE FROM player_candidates WHERE status='pending' AND created_at_ms < ?",
+                    (int(now_ms_value) - CANDIDATE_EXPIRE_MS,),
+                )
+            return int(cur.rowcount or 0)
+
+        return await self._run_in_executor(_exec)
+
     async def link_viewer(self, *, viewer_id: int, player_id: int, at_ms: int) -> None:
         """运营者确认"这位玩家是直播间的哪位观众"：记一行关联（已有就更新确认时刻）。"""
 
@@ -478,4 +554,4 @@ class GamePlayerRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
 
-__all__ = ["GamePlayerRepo"]
+__all__ = ["GamePlayerRepo", "replace_session_player_candidates"]

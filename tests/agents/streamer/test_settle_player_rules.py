@@ -104,3 +104,33 @@ def test_player_chat_codes_numbers_and_lookup() -> None:
         speech_player_ids=[], lines=[_line(1, "player", "hi", 2)], players=players, clock_text=str
     )
     assert (empty.codes, empty.text) == ({}, ""), "她没回应玩家、也没在公屏打字：这一段不出现"
+
+
+def test_line_she_answered_on_stream_is_shown_and_found_by_quote() -> None:
+    """她没在公屏打字、只在直播里回应了他：他在那之前 3 分钟内的最后一句也给模型看，能按引文找回。"""
+    players = {1: _player(1, "Alex")}
+    lines = [
+        GameChatLine(
+            id=1, live_session_id=1, game="minecraft", direction="player", player_id=1, content="早先那句", at_ms=0
+        ),
+        GameChatLine(
+            id=2,
+            live_session_id=1,
+            game="minecraft",
+            direction="player",
+            player_id=1,
+            content="我在河边盖了个风车房",
+            at_ms=1_000,
+        ),
+    ]
+    chat = build_player_chat(
+        speech_player_ids=[1], lines=lines, players=players, clock_text=lambda ms: "20:00", speech_replies=[(1, 61_000)]
+    )
+    assert "玩家1：我在河边盖了个风车房" in chat.text and "早先那句" not in chat.text, "只给被接住的最后一句"
+    assert chat.player_line(1, "风车房", before_ms=61_000) is lines[1]
+    assert chat.player_line(1, "风车房", before_ms=500) is None, "她回应之后他才说的，不算她接住的"
+    assert chat.player_line(1, "早先那句", before_ms=61_000) is None, "没给模型看的那句引不到"
+    late = build_player_chat(
+        speech_player_ids=[1], lines=lines, players=players, clock_text=str, speech_replies=[(1, 1_000 + 180_001)]
+    )
+    assert "风车房" not in late.text, "隔了 3 分钟以上不算她在接这句"

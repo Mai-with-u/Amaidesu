@@ -1256,11 +1256,22 @@ def _mask_candidates_with_nickname(
     挂在 ta 自己弹幕上的候选随 ta 的弹幕按外键整条删（删弹幕在这一步之后）；这里管的是挂在别人弹幕上、
     只是提到了 ta 的——那是别人的数据，不因为撞上名字整条删，驳回过的也要留着，同一条以后才不会再列。
     名字按子串换，和档案、承诺同一口径（隐私遮挡宁可多遮）；匹配时 ``%``、``_`` 按原字比。
+    玩家自述同理：他自己的候选随他的玩家行级联删，别的玩家的自述里提到这个名字的只换名字。
     """
-    if not nickname or not session_ids or not table_exists(conn, "viewer_candidates"):
+    if not nickname or not session_ids:
         return
     sid_ph = ",".join("?" for _ in session_ids)
     pattern = _like_contains(nickname)
+    if table_exists(conn, "player_candidates"):
+        conn.execute(
+            "UPDATE player_candidates SET title = REPLACE(title, ?, ?),"  # noqa: S608 占位符由代码拼
+            " player_quote = REPLACE(player_quote, ?, ?), reply_quote = REPLACE(reply_quote, ?, ?)"
+            f" WHERE live_session_id IN ({sid_ph})"
+            " AND (player_quote LIKE ? ESCAPE '\\' OR reply_quote LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')",
+            [nickname, label] * 3 + [*session_ids, pattern, pattern, pattern],
+        )
+    if not table_exists(conn, "viewer_candidates"):
+        return
     conn.execute(
         "UPDATE viewer_candidates SET title = REPLACE(title, ?, ?),"  # noqa: S608 占位符由代码拼
         " viewer_quote = REPLACE(viewer_quote, ?, ?), reply_quote = REPLACE(reply_quote, ?, ?),"

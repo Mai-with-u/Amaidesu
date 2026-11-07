@@ -297,3 +297,40 @@ async def test_rowless_forget_me_cannot_be_retracted_after_the_grace_period(
         == "forget_listed"
     )
     assert await privacy.is_player_forgotten(game="minecraft", uuid=_ALEX) is True
+
+
+async def test_deleting_a_player_masks_his_name_in_other_players_self_statements(
+    wired: Tuple[SQLiteDatabase, PrivacyService],
+) -> None:
+    """玩家甲的自述里提到了玩家乙：删乙时只把名字换成"一位玩家"，甲的候选本身留着；乙自己的候选随他删。"""
+    store, privacy = wired
+    session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+    repo = store.game_players
+    jia = await repo.meet_player(game="minecraft", uuid="uuid-jia", name="玩家甲", live_session_id=session, at_ms=1_010)
+    yi = await repo.meet_player(game="minecraft", uuid="uuid-yi", name="玩家乙", live_session_id=session, at_ms=1_020)
+    said = await repo.add_game_chat(
+        live_session_id=session,
+        game="minecraft",
+        direction="player",
+        content="我和玩家乙一起盖的塔",
+        player_id=jia.id,
+        at_ms=1_030,
+    )
+    his = await repo.add_game_chat(
+        live_session_id=session, game="minecraft", direction="player", content="我住山顶", player_id=yi.id, at_ms=1_040
+    )
+    with store.manager.transaction() as conn:
+        for player_id, chat_id, title, quote in (
+            (jia.id, said, "他和玩家乙一起盖了塔", "和玩家乙一起盖的塔"),
+            (yi.id, his, "他的家在山顶", "山顶"),
+        ):
+            conn.execute(
+                "INSERT INTO player_candidates(live_session_id, player_id, title, player_chat_id, player_quote,"
+                " reply_quote, created_at_ms) VALUES (?, ?, ?, ?, ?, '真厉害', 1050)",
+                (session, player_id, title, chat_id, quote),
+            )
+
+    assert await privacy.delete_player(player_id=yi.id) is True
+    with store.manager.transaction() as conn:
+        rows = [tuple(row) for row in conn.execute("SELECT player_id, title, player_quote FROM player_candidates")]
+    assert rows == [(jia.id, "他和一位玩家一起盖了塔", "和一位玩家一起盖的塔")]

@@ -9,13 +9,16 @@
 模型写的"对谁"必须按上面两条之一对上那位玩家，对不上的不登记、进未登记清单。和对观众的承诺
 同一个口径：宁可漏登记、让运营者在整理报告里看见，也不把答应 A 的事记到 B 头上。提示词里玩家
 只用本场代号（玩家1、玩家2），名字写在代号旁边，供模型对照她台词里的称呼。
+
+同一段公屏也是玩家自述候选的原料：她播出的台词在回应某位玩家时，他在那之前 3 分钟内说的最后一句
+也给模型看，候选引他的原话要能在给模型看的那几行里找回来（``PlayerChat.player_line``）。
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Set
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.storage.models.game_players import (
     GAME_CHAT_PLAYER,
@@ -29,6 +32,7 @@ __all__ = [
     "FOLLOW_MAX_GAP_MS",
     "FOLLOW_WINDOW",
     "PLAYER_CODE_PREFIX",
+    "REPLY_LOOKBACK_MS",
     "PlayerChat",
     "build_player_chat",
     "chat_targets",
@@ -40,6 +44,8 @@ CHAT_NUMBER_PREFIX = "公屏#"
 FOLLOW_WINDOW = 3
 # 而且离他那句不超过这么久：隔久了多半已经换了话题，或者是在回别处的事
 FOLLOW_MAX_GAP_MS = 60_000
+# 她播出的台词在回应某位玩家时，往前找他说的最后一句最远找多久：再早多半是别的话题
+REPLY_LOOKBACK_MS = 180_000
 # 公屏段至多给模型看多少行（她打的字连同前面几句）：刷屏的场次只留最后这些
 MAX_CHAT_LINES = 120
 # 短于这个长度的名字不按点名认：单字名太容易撞上普通的字
@@ -60,6 +66,8 @@ class PlayerChat:
     lines_by_number: Dict[int, GameChatLine] = field(default_factory=dict)
     # 她那一行（game_chat 主键）→ 代码认得出的对象玩家：点了名的、或者她紧接着回的那位
     targets: Dict[int, FrozenSet[int]] = field(default_factory=dict)
+    # 给模型看了的玩家原话（按时间先后）：玩家自述候选引的他那句只能是这几行之一
+    player_lines: Tuple[GameChatLine, ...] = ()
 
     def player_of(self, raw: Any) -> Optional[int]:
         """模型写的玩家代号换成玩家主键；"玩家1"、"1" 都认，认不出返回 None。"""
@@ -86,6 +94,23 @@ class PlayerChat:
                 text = text[len(prefix) :]
                 break
         return self.lines_by_number.get(int(text)) if text.isdigit() else None
+
+    def player_line(self, player_id: int, quote: str, *, before_ms: int) -> Optional[GameChatLine]:
+        """他在 ``before_ms`` 之前说的、原文含这段引文的最后一句（压掉连续空白的写法也认）；找不到返回 None。
+
+        只在给模型看了的那几行里找：模型没见过的话，不能算它引的。
+        """
+        text = (quote or "").strip()
+        if not text:
+            return None
+        found: Optional[GameChatLine] = None
+        for line in self.player_lines:
+            if line.player_id != player_id or int(line.at_ms) > before_ms:
+                continue
+            raw = line.content or ""
+            if text in raw or text in " ".join(raw.split()):
+                found = line
+        return found
 
 
 def _names_of(player: GamePlayer) -> List[str]:
@@ -136,12 +161,25 @@ def chat_targets(lines: Sequence[GameChatLine], players: Mapping[int, GamePlayer
     return targets
 
 
-def _shown_indices(lines: Sequence[GameChatLine]) -> List[int]:
-    """给模型看哪几行：她打的每一句，连同它前面 3 句（判断她在回谁要看得到）；超出上限只留最后的。"""
+def _shown_indices(lines: Sequence[GameChatLine], speech_replies: Sequence[Tuple[int, int]] = ()) -> List[int]:
+    """给模型看哪几行：她打的每一句，连同它前面 3 句（判断她在回谁要看得到）；超出上限只留最后的。
+
+    她播出的台词在回应某位玩家（``speech_replies`` 是"玩家主键, 台词时刻"）时，他在那之前 3 分钟内说的
+    最后一句也给模型看：她在直播里接住的那句话，判断他说了什么关于自己的事要看得到原话。
+    """
     shown: Set[int] = set()
     for index, line in enumerate(lines):
         if line.direction == GAME_CHAT_STREAMER:
             shown.update(range(max(0, index - FOLLOW_WINDOW), index + 1))
+    for player_id, at_ms in speech_replies:
+        # 从后往前找他在这句台词之前说的最后一句，隔太久的不算她在接这句
+        for index in range(len(lines) - 1, -1, -1):
+            line = lines[index]
+            if line.direction != GAME_CHAT_PLAYER or line.player_id != player_id or int(line.at_ms) > at_ms:
+                continue
+            if at_ms - int(line.at_ms) <= REPLY_LOOKBACK_MS:
+                shown.add(index)
+            break
     return sorted(shown)[-MAX_CHAT_LINES:]
 
 
@@ -151,12 +189,14 @@ def build_player_chat(
     lines: Sequence[GameChatLine],
     players: Mapping[int, GamePlayer],
     clock_text: Callable[[int], str],
+    speech_replies: Sequence[Tuple[int, int]] = (),
 ) -> PlayerChat:
     """拼出整理原料里和玩家有关的那一段。
 
     ``speech_player_ids`` 是她台词里回应过的玩家（按台词先后），``lines`` 是本场全部公屏聊天
     （按时间先后，含认不出是谁的占位行），``players`` 是这些玩家的当前记录。代号先给台词里回应
     过的、再给公屏上出现的；玩家记录读不到（已被删）的不给代号，他的话按认不出是谁处理。
+    ``speech_replies`` 是回应玩家的那几句台词（玩家主键与台词时刻），他被接住的那句公屏一并给模型看。
     """
     codes: Dict[int, str] = {}
 
@@ -167,7 +207,7 @@ def build_player_chat(
 
     for player_id in speech_player_ids:
         code_of(player_id)
-    shown = _shown_indices(lines)
+    shown = _shown_indices(lines, speech_replies)
     for index in shown:
         if lines[index].direction == GAME_CHAT_PLAYER:
             code_of(lines[index].player_id)
@@ -176,6 +216,7 @@ def build_player_chat(
 
     rendered: List[str] = []
     numbered: Dict[int, GameChatLine] = {}
+    quoted: List[GameChatLine] = []
     for index in shown:
         line = lines[index]
         clock = clock_text(int(line.at_ms))
@@ -187,6 +228,7 @@ def build_player_chat(
             rendered.append(f"{CHAT_NUMBER_PREFIX}{number} {clock} 你：{content}")
         elif code is not None:
             rendered.append(f"    {clock} {code}：{content}")
+            quoted.append(line)
         else:
             rendered.append(f"    {clock} （认不出是谁的一句）")
 
@@ -204,4 +246,5 @@ def build_player_chat(
         text="\n\n".join(parts),
         lines_by_number=numbered,
         targets=chat_targets(lines, known),
+        player_lines=tuple(quoted),
     )

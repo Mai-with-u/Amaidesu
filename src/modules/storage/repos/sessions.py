@@ -10,6 +10,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from src.modules.storage.models.game_players import PendingPlayerCandidate
 from src.modules.storage.models.memory import (
     CommitmentClosure,
     KeptSnapshotLine,
@@ -25,6 +26,7 @@ from src.modules.storage.repos.archive import (
     keywords_column,
     newest_snapshot_owner,
 )
+from src.modules.storage.repos.game_players import replace_session_player_candidates
 from src.modules.storage.repos.memory_index import delete_session_index_rows
 from src.modules.storage.repos.viewer_candidates import CANDIDATE_EXPIRE_MS, replace_session_candidates
 from src.modules.storage.repos.commitments import (
@@ -483,8 +485,9 @@ class SessionRepo(BaseRepo):
         snapshot_kept: Sequence[KeptSnapshotLine] = (),
         viewer_candidates: Sequence[PendingViewerCandidate] = (),
         seen_line_ids: Optional[Sequence[int]] = None,
+        player_candidates: Sequence[PendingPlayerCandidate] = (),
     ) -> Dict[str, int]:
-        """把一场的整理结果一次写进去：档案行、档案快照、新承诺、了结、观众候选、整理完成时刻。
+        """把一场的整理结果一次写进去：档案行、档案快照、新承诺、了结、观众候选、玩家自述、整理完成时刻。
 
         整理必须整场原子提交：任何一步失败都回滚，不能让这一场留下半份结果。
         跨三张表的写操作只有这一处，事务边界放在场次仓储里，与删除场次的级联同一层。
@@ -506,7 +509,15 @@ class SessionRepo(BaseRepo):
         """
 
         def _exec() -> Dict[str, int]:
-            written = {"archive": 0, "snapshot": 0, "commitments": 0, "closed": 0, "claimed": 0, "candidates": 0}
+            written = {
+                "archive": 0,
+                "snapshot": 0,
+                "commitments": 0,
+                "closed": 0,
+                "claimed": 0,
+                "candidates": 0,
+                "player_candidates": 0,
+            }
             with self._manager.transaction(immediate=True) as conn:
                 claim = conn.execute(
                     "UPDATE live_sessions SET settled_at_ms=?, settle_report=?"
@@ -590,6 +601,13 @@ class SessionRepo(BaseRepo):
                     conn,
                     live_session_id=int(live_session_id),
                     candidates=viewer_candidates,
+                    created_at_ms=int(settled_at_ms),
+                )
+                # 玩家自述同样进待审区：本场待审的整份替换，批准前对她不可见
+                written["player_candidates"] = replace_session_player_candidates(
+                    conn,
+                    live_session_id=int(live_session_id),
+                    candidates=player_candidates,
                     created_at_ms=int(settled_at_ms),
                 )
                 written["snapshot"] = _write_snapshot(

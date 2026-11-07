@@ -388,7 +388,15 @@ async def test_apply_settlement_writes_everything_in_one_call(store: SQLiteDatab
         settled_at_ms=9999,
         now_ms_value=9999,
     )
-    assert written == {"archive": 1, "snapshot": 1, "commitments": 1, "closed": 1, "claimed": 1, "candidates": 0}
+    assert written == {
+        "archive": 1,
+        "snapshot": 1,
+        "commitments": 1,
+        "closed": 1,
+        "claimed": 1,
+        "candidates": 0,
+        "player_candidates": 0,
+    }
     row = await store.sessions.get_live_session(live_session_id=session_id)
     assert row is not None and row.settled_at_ms == 9999
     assert len(await store.archive.list_lines(live_session_id=session_id)) == 1
@@ -555,7 +563,15 @@ async def test_apply_settlement_rerun_replaces_archive_and_open_commitments(stor
         commitment_what="旧承诺",
         commitment_evidence=3,
     )
-    assert first == {"archive": 1, "snapshot": 1, "commitments": 1, "closed": 0, "claimed": 1, "candidates": 0}
+    assert first == {
+        "archive": 1,
+        "snapshot": 1,
+        "commitments": 1,
+        "closed": 0,
+        "claimed": 1,
+        "candidates": 0,
+        "player_candidates": 0,
+    }
 
     closed = await store.commitments.insert_commitment(what="被运营者了结", created_session_id=session_id)
     assert closed is not None
@@ -570,7 +586,15 @@ async def test_apply_settlement_rerun_replaces_archive_and_open_commitments(stor
         commitment_what="新承诺",
         commitment_evidence=6,
     )
-    assert second == {"archive": 1, "snapshot": 1, "commitments": 1, "closed": 0, "claimed": 1, "candidates": 0}
+    assert second == {
+        "archive": 1,
+        "snapshot": 1,
+        "commitments": 1,
+        "closed": 0,
+        "claimed": 1,
+        "candidates": 0,
+        "player_candidates": 0,
+    }
 
     lines = await store.archive.list_lines(live_session_id=session_id)
     assert [line.text for line in lines] == ["新档案"], "重跑应整场替换档案行，不叠加到超过 8 行"
@@ -711,7 +735,15 @@ async def test_apply_settlement_refuses_rehearsal_session(store: SQLiteDatabase)
         commitment_evidence=3,
         settled_at_ms=1_500,
     )
-    assert written == {"archive": 0, "snapshot": 0, "commitments": 0, "closed": 0, "claimed": 0, "candidates": 0}
+    assert written == {
+        "archive": 0,
+        "snapshot": 0,
+        "commitments": 0,
+        "closed": 0,
+        "claimed": 0,
+        "candidates": 0,
+        "player_candidates": 0,
+    }
     row = await store.sessions.get_live_session(live_session_id=session_id)
     assert row is not None and row.settled_at_ms is None
     assert await store.archive.list_lines(live_session_id=session_id) == []

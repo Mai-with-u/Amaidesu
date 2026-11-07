@@ -21,7 +21,8 @@ live.ended 之后、道别句播完才排进后台，一次整理待整理的场
    快照逐行挑留、去掉（要本场证据）或替换（要本场原话），代码再按固定规则凑成本场快照
    （只引用原行、至多 12 行，见 ``rolling``）；
 2. 找新承诺：她的全部台词（附被回应的弹幕、回应的是哪位游戏玩家）、她在游戏公屏打的字加她能做的
-   事，找出当众答应过、还没兑现的事；顺带列出她说欠着、账上却找不到的事（只进待审区，人批准才登记）；
+   事，找出当众答应过、还没兑现的事；顺带列出她说欠着、账上却找不到的事（只进待审区，人批准才登记），
+   以及游戏玩家在公屏说的关于他自己、她当场接住了的事（玩家自述，进另一张待审表）；
 3. 了结旧承诺：只在本场之前有未了结承诺时才调，判她说没说明白做完了或不做了。
 
 校验全部是代码：逐字引文（原话必须是所引那一行文本的逐字子串且不超过上限）、所属游戏
@@ -70,8 +71,10 @@ from src.agents.streamer.memory.saves import SaveTimeline
 from src.agents.streamer.memory.side_effects import compute_side_effects
 from src.agents.streamer.memory.settle_candidates import (
     CandidateCheck,
+    PlayerCandidateCheck,
     taken_from,
     validate_claimed_missing,
+    validate_player_candidates,
     validate_viewer_candidates,
 )
 from src.agents.streamer.memory.settle_players import PlayerChat, build_player_chat
@@ -83,7 +86,7 @@ if TYPE_CHECKING:
     from src.modules.storage.repos.archive import ArchiveRepo
     from src.modules.storage.repos.chat import ChatRepo
     from src.modules.storage.repos.commitments import CommitmentRepo
-    from src.modules.storage.models.game_players import GameChatLine, GamePlayer
+    from src.modules.storage.models.game_players import GameChatLine, GamePlayer, PendingPlayerCandidate
     from src.modules.storage.repos.events import EventRepo
     from src.modules.storage.repos.game_players import GamePlayerRepo
     from src.modules.storage.repos.memory_cue_log import MemoryCueLogRepo
@@ -180,9 +183,11 @@ class SettleOutcome:
     closures: List[CommitmentClosure] = field(default_factory=list)
     unregistered: List[UnregisteredItem] = field(default_factory=list)
     input_note: Optional[str] = None
-    # 观众候选（人批准才进记忆）与因个人信息丢掉的条数
+    # 观众候选（人批准才进记忆）与因个人信息丢掉的条数（含玩家自述）
     viewer_candidates: List[PendingViewerCandidate] = field(default_factory=list)
     candidates_personal_dropped: int = 0
+    # 玩家自述（人批准才进那位玩家的玩家卡）
+    player_candidates: List["PendingPlayerCandidate"] = field(default_factory=list)
 
 
 def parse_json_object(text: str) -> Dict[str, Any]:
@@ -487,6 +492,14 @@ class SessionSettler:
                 logger.info(f"删掉 {expired} 条过期没人审的观众候选")
         except Exception as exc:  # noqa: BLE001 - 过期清理失败不挡整理，下次调度再删
             logger.warning(f"清理过期观众候选失败: {exc}", exc=exc)
+        if self._players is not None:
+            try:
+                # 玩家自述同一个期限：列出后 14 天没人审就删
+                expired = await self._players.expire_player_candidates(now_ms_value=int(self._clock()))
+                if expired:
+                    logger.info(f"删掉 {expired} 条过期没人审的玩家自述")
+            except Exception as exc:  # noqa: BLE001 - 过期清理失败不挡整理，下次调度再删
+                logger.warning(f"清理过期玩家自述失败: {exc}", exc=exc)
         if pending:
             logger.info(f"下播整理：待整理 {len(pending)} 场，成功 {settled} 场")
         return settled
@@ -577,6 +590,8 @@ class SessionSettler:
         listed: Dict[str, int] = {}
         for candidate in outcome.viewer_candidates:
             listed[candidate.kind] = listed.get(candidate.kind, 0) + 1
+        if outcome.player_candidates:
+            listed["player_self"] = len(outcome.player_candidates)
         report = SettleReport(
             unregistered=outcome.unregistered,
             input_note=outcome.input_note,
@@ -608,6 +623,7 @@ class SessionSettler:
                 viewer_candidates=outcome.viewer_candidates,
                 # 读原料时看到的旧行：调模型期间人批准、插进最新快照的观众来源行不在其中，落库时补进本场快照
                 seen_line_ids=_seen_line_ids(material),
+                player_candidates=outcome.player_candidates,
             )
         except Exception as exc:  # noqa: BLE001 - 写入失败按整理失败记账，事务已回滚
             logger.warning(f"场次 {live_session_id} 整理写入失败: {exc}", exc=exc)
@@ -729,8 +745,11 @@ class SessionSettler:
             lines: List["GameChatLine"] = list(
                 await self._players.list_session_game_chat(live_session_id=int(session.id))
             )
-            # 台词里回应过的玩家（在回弹幕的行不算）先拿代号
-            spoken = [player for player in map(_reply_player_of, delivered) if player is not None]
+            # 台词里回应过的玩家（在回弹幕的行不算）先拿代号；回应时刻用来把他被接住的那句公屏也给模型看
+            replies = [
+                (player, int(line.timestamp_ms)) for line in delivered if (player := _reply_player_of(line)) is not None
+            ]
+            spoken = [player for player, _at_ms in replies]
             wanted = dict.fromkeys([*spoken, *(int(line.player_id) for line in lines if line.player_id is not None)])
             players: Dict[int, "GamePlayer"] = {}
             for player_id in wanted:
@@ -740,7 +759,9 @@ class SessionSettler:
         except Exception as exc:  # noqa: BLE001 - 少了玩家只少一类承诺对象，整理照常跑
             logger.warning(f"场次 {session.id} 读游戏玩家与公屏失败，这一场认不出对玩家的承诺: {exc}", exc=exc)
             return PlayerChat()
-        return build_player_chat(speech_player_ids=spoken, lines=lines, players=players, clock_text=_clock_text)
+        return build_player_chat(
+            speech_player_ids=spoken, lines=lines, players=players, clock_text=_clock_text, speech_replies=replies
+        )
 
     async def _load_closed_titles(self, session: LiveSession) -> List[Tuple[int, str]]:
         """最近已了结的承诺标题（旧的在前）：她说"上次答应过"时，账上了结过的也算对得上。"""
@@ -1021,6 +1042,7 @@ class SessionSettler:
         )
         candidates = await self._check_candidates(archive_data.get("viewer_candidates"), material, selection.lines)
         claimed = await self._check_claimed(commitment_data.get("claimed_missing"), material, commitments, closures)
+        player_check = await self._check_player_candidates(commitment_data.get("player_candidates"), material)
         return SettleOutcome(
             archive_lines=selection.lines,
             snapshot_kept=selection.kept,
@@ -1034,10 +1056,39 @@ class SessionSettler:
                 *closure_misses,
                 *candidates.missed,
                 *claimed.missed,
+                *player_check.missed,
             ],
             input_note=material.speech_note,
             viewer_candidates=[*candidates.candidates, *claimed.candidates],
-            candidates_personal_dropped=candidates.personal_dropped + claimed.personal_dropped,
+            candidates_personal_dropped=(
+                candidates.personal_dropped + claimed.personal_dropped + player_check.personal_dropped
+            ),
+            player_candidates=player_check.candidates,
+        )
+
+    async def _check_player_candidates(self, rows: Any, material: SettleMaterial) -> PlayerCandidateCheck:
+        """核对找承诺那次顺带列出的玩家自述：只进待审表，人批准才进那位玩家的玩家卡。
+
+        本场没有游戏玩家与公屏原料时不核对（模型没见过他们的话）；字段不是列表时只告警、当没有：
+        这一项是附带的，不该让整场整理失败。批准、驳回记录读不到时照常核对，只是少了这一道去重。
+        """
+        if rows is None or rows == [] or self._players is None or not material.players.codes:
+            return PlayerCandidateCheck()
+        if not isinstance(rows, list):
+            logger.warning(f"场次 {material.live_session_id}：模型输出的 player_candidates 不是列表，这一项按没有处理")
+            return PlayerCandidateCheck()
+        decided: Dict[int, List[str]] = {}
+        rejected_chats: List[int] = []
+        try:
+            decided, rejected_chats = await self._players.player_candidate_keys()
+        except Exception as exc:  # noqa: BLE001 - 去重依据读不到不挡整理
+            logger.warning(f"读审过的玩家自述失败，本次不按审过的记录去重: {exc}", exc=exc)
+        return validate_player_candidates(
+            rows,
+            players=material.players,
+            line_of=lambda raw: self._line_of(raw, material),
+            decided_titles=decided,
+            rejected_player_chats=rejected_chats,
         )
 
     async def _check_claimed(
