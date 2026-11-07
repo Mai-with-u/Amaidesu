@@ -344,8 +344,17 @@ class Replyer:
         # 玩家条目截短封顶，本窗在公屏说的那句从游戏聊天一段拿掉（条目里已有、还带着是谁说的）。
         # 游戏聊天整段都挪进了条目时写"见下一段"：写"无"会和下一段里刚在公屏说的话对不上
         chat_before = list(game_chat or [])
-        people_lines, game_chat = _people_lines(game_people, chat_before, reply_to=reply_to)
-        game_chat_text = _game_chat_text(game_chat, has_people=bool(people_lines), had_chat=bool(chat_before))
+        # 交接稿的 target 不是弹幕、而是指着一句游戏聊天（那句的原文片段或说话人）：那一句的原话一定给到，
+        # 哪怕说话人认不出、或是挤不进条目的第 4 位玩家；回应对象（to_player）的条目同样一定在
+        unresolved = _unresolved_target(plan.target)
+        pinned_chat = "" if target_text or unresolved == _NO_TARGET else _chat_line_for(unresolved, chat_before)
+        people_lines, game_chat = _people_lines(game_people, chat_before, reply_to=reply_to, pinned_chat=pinned_chat)
+        game_chat_text = _game_chat_text(
+            game_chat,
+            has_people=bool(people_lines),
+            had_chat=bool(chat_before),
+            pinned=pinned_chat if pinned_chat in game_chat else "",
+        )
         # 没有玩家条目时游戏聊天列出几句，她更早说过的话就让出几行：满批时整份输入不超
         chat_rows = 0 if people_lines else min(len(game_chat), _GAME_CHAT_LINES_MAX)
         # 玩家条目一段占的行数：条目本身，加上有已接过的条目时多出的那句规矩
@@ -477,25 +486,36 @@ def _note_body(line: str) -> str:
 
 
 def _people_lines(
-    game_people: Sequence[PlayerNote], game_chat: Sequence[str], *, reply_to: str = ""
+    game_people: Sequence[PlayerNote],
+    game_chat: Sequence[str],
+    *,
+    reply_to: str = "",
+    pinned_chat: str = "",
 ) -> Tuple[List[str], List[str]]:
     """玩家条目渲染成行，并把已经在条目里的游戏聊天行拿掉：返回（条目行, 剩下的游戏聊天行）。
 
-    只留最近 :data:`_PEOPLE_LINES_MAX` 条。本窗刚在公屏说的话里，她要接的那一句（``reply_to`` 那位说的，
-    没有时是最新的一句）正文至多 :data:`_PEOPLE_FRESH_MAX_CHARS` 字，其余条目截到
-    :data:`_PEOPLE_NOTE_MAX_CHARS` 字；没进条目的游戏聊天怎么写见 :func:`_game_chat_text`。
-    满批时整份输入只剩个位数 token 的余量，几位玩家同窗各说一句长话原样列出会超。同一句不在两段里各出现一次。
+    只留最近 :data:`_PEOPLE_LINES_MAX` 条，回应对象的条目被挤出去时换回来（见 :func:`_pick_notes`）。
+    本窗刚在公屏说的话里，她要接的那一句正文至多 :data:`_PEOPLE_FRESH_MAX_CHARS` 字，其余条目截到
+    :data:`_PEOPLE_NOTE_MAX_CHARS` 字。要接的那一句：交接稿 target 指着的那句（``pinned_chat``）在条目里就是它，
+    不在条目里（游戏聊天一段单列）时条目都截短；没有时是回应对象说的，再没有是最新的一句。
+    没进条目的游戏聊天怎么写见 :func:`_game_chat_text`。满批时整份输入只剩个位数 token 的余量，
+    几位玩家同窗各说一句长话原样列出会超。同一句不在两段里各出现一次。
     """
     chat_bodies = {_note_body(line) for line in game_chat}
-    notes = [note for note in game_people if note.line][-_PEOPLE_LINES_MAX:]
+    notes = _pick_notes([note for note in game_people if note.line], reply_to)
     fresh = [
         not note.answered and note.said and any(_note_body(note.line).startswith(chat) for chat in chat_bodies)
         for note in notes
     ]
-    # 她要接的那一句：回应对象本窗说的最近一句；没有回应对象（或他本窗没开口）时取最新的一句本窗公屏话
-    focus = next((i for i in reversed(range(len(notes))) if fresh[i] and notes[i].who == reply_to), None)
-    if focus is None:
-        focus = next((i for i in reversed(range(len(notes))) if fresh[i]), None)
+    newest_fresh = list(reversed(range(len(notes))))
+    if pinned_chat:
+        pinned_body = _note_body(pinned_chat)
+        focus = next((i for i in newest_fresh if fresh[i] and _note_body(notes[i].line).startswith(pinned_body)), None)
+    else:
+        # 回应对象本窗说的最近一句；没有回应对象（或他本窗没开口）时取最新的一句本窗公屏话
+        focus = next((i for i in newest_fresh if fresh[i] and notes[i].who == reply_to), None)
+        if focus is None:
+            focus = next((i for i in newest_fresh if fresh[i]), None)
     lines: List[str] = []
     shown_chat: set[str] = set()
     for index, note in enumerate(notes):
@@ -526,26 +546,53 @@ def _people_lines(
     return lines, remaining
 
 
-def _game_chat_text(remaining: Sequence[str], *, has_people: bool, had_chat: bool) -> str:
+def _pick_notes(notes: Sequence[PlayerNote], reply_to: str) -> List[PlayerNote]:
+    """玩家条目留最近 :data:`_PEOPLE_LINES_MAX` 条；回应对象的条目都被挤出去时，换掉最早的一条、留下他最新的
+    那条（仍按先后排）：交接稿要她回他，表达侧却看不到他说了什么、做了什么，只能瞎接。"""
+    picked = list(notes[-_PEOPLE_LINES_MAX:])
+    if not reply_to or any(note.who == reply_to for note in picked):
+        return picked
+    his = next((note for note in reversed(notes[:-_PEOPLE_LINES_MAX]) if note.who == reply_to), None)
+    return picked if his is None else [his, *picked[1:]]
+
+
+def _chat_line_for(target: str, game_chat: Sequence[str]) -> str:
+    """交接稿 target 指着的那句游戏聊天：target 是那句的原文片段或说话人名字，取含它的最新一句；对不上为空串。"""
+    text = target.strip()
+    if len(text) < 2:
+        return ""
+    return next((line for line in reversed(game_chat) if text in line), "")
+
+
+def _game_chat_text(remaining: Sequence[str], *, has_people: bool, had_chat: bool, pinned: str = "") -> str:
     """游戏聊天一段的正文：有玩家条目时只报没列出的句数，没有时留最近几句、每句截短。
 
+    交接稿 target 指着的那句（``pinned``，没进条目的）一定列出：有条目时单列在句数前面、给到
+    :data:`_PEOPLE_FRESH_MAX_CHARS` 字；没有条目时它比最近几句早就换掉其中最早的一句。
     整段挪进了玩家条目时写"见下一段"：写"无"会和下一段里刚在公屏说的话对不上。
     """
     if has_people:
-        if remaining:
-            return f"（另有 {len(remaining)} 句没列出；找你的人见下一段）"
+        rest = [line for line in remaining if line != pinned]
+        parts = [_clip_chat_line(pinned, _PEOPLE_FRESH_MAX_CHARS)] if pinned else []
+        if rest:
+            parts.append(f"（另有 {len(rest)} 句没列出；找你的人见下一段）")
+        if parts:
+            return "\n".join(parts)
         return "（见下一段）" if had_chat else "（无）"
     if not remaining:
         return "（无）"
-    return "\n".join(_clip_chat_line(line) for line in remaining[-_GAME_CHAT_LINES_MAX:])
+    shown = list(remaining[-_GAME_CHAT_LINES_MAX:])
+    if pinned and pinned not in shown:
+        shown = [pinned, *shown[1:]]
+    return "\n".join(_clip_chat_line(line) for line in shown)
 
 
-def _clip_chat_line(line: str) -> str:
-    """一句游戏聊天截短：说话人（冒号之前）留着，原话至多 :data:`_GAME_CHAT_LINE_MAX_CHARS` 字。"""
+def _clip_chat_line(line: str, limit: int = _GAME_CHAT_LINE_MAX_CHARS) -> str:
+    """一句游戏聊天截短：说话人（冒号之前）留着，原话至多 ``limit`` 字。"""
     head, colon, said = line.partition("：")
     if not colon:
-        return line if len(line) <= _GAME_CHAT_LINE_MAX_CHARS else f"{line[:_GAME_CHAT_LINE_MAX_CHARS]}…"
-    return f"{head}{colon}{said if len(said) <= _GAME_CHAT_LINE_MAX_CHARS else said[:_GAME_CHAT_LINE_MAX_CHARS] + '…'}"
+        return line if len(line) <= limit else f"{line[:limit]}…"
+    return f"{head}{colon}{said if len(said) <= limit else said[:limit] + '…'}"
 
 
 def _game_people_section(lines: Sequence[str]) -> str:

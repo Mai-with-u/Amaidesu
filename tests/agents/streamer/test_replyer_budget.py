@@ -173,11 +173,15 @@ async def _request(
     game_people: Sequence[PlayerNote] = (),
     game_chat: Optional[List[str]] = None,
     reply_to: str = "",
+    target: str = "m0",
 ) -> Tuple[str, str]:
-    """长场里回应一条开场的弹幕：返回（system, user）两段正文。游戏聊天不给时用两句常见的公屏话。"""
+    """长场里回应一条开场的弹幕：返回（system, user）两段正文。游戏聊天不给时用两句常见的公屏话。
+
+    ``target`` 换成游戏聊天的原文片段或说话人时，是在回游戏里的那句话。
+    """
     plan = DecisionPlan(
         should_reply=True,
-        target="m0",
+        target=target,
         topic_summary="阿杰问她今天能不能挖到钻石；她已经挖到深板岩层，旁边有岩浆湖",
         reply_guidance="嘴硬说今天一定挖到，带点心虚",
     )
@@ -343,6 +347,69 @@ async def test_full_batch_with_several_players_speaking_in_one_window_stays_with
     assert len(long_lines) == 1 and f"玩家 {focus}：" in long_lines[0], "只有她要接的那一句给得长"
     game_chat = user.partition("## 游戏里刚有人说的话")[2].partition("\n\n")[2].partition("\n\n")[0]
     assert game_chat == "（另有 3 句没列出；找你的人见下一段）"
+
+
+_STRANGER_CHAT = "我刚在村子东边找到一个废弃矿井里面全是蜘蛛网和箱子要不要一起去看看"
+
+
+def _six_players() -> Tuple[List[PlayerNote], List[str]]:
+    """同一窗六位玩家各在公屏说一句长话：条目与游戏聊天各六行。"""
+    notes = [
+        PlayerNote(
+            who=f"玩家{index}", said=True, line=f"[22:4{index} minecraft 公屏] 玩家 玩家{index}：{_LONG_PLAYER_CHAT}"
+        )
+        for index in range(6)
+    ]
+    return notes, [f"[minecraft] 玩家 玩家{index}：{_LONG_PLAYER_CHAT}" for index in range(6)]
+
+
+def _section(user: str, heading: str) -> str:
+    """user 里某一段的正文（标题行之后、下一个空行之前）。"""
+    return user.partition(heading)[2].partition("\n\n")[2].partition("\n\n")[0]
+
+
+async def test_player_she_is_told_to_answer_is_listed_even_when_crowded_out(prompts: Any) -> None:
+    """交接稿要她回第 1 位开口的玩家（to_player），可条目只留最近 3 位：换掉最早的一条留下他的，
+    他那句给到 40 字，满批仍 ≤3,200。原先他只剩一个句数，表达侧看不到他说了什么。"""
+    history, batch = _full_batch(stored=True)
+    notes, chat = _six_players()
+    replyer, llm = _replyer(prompts)
+
+    system, user = await _request(
+        replyer, llm, history, batch, game_people=notes, game_chat=chat, reply_to="玩家0", target=""
+    )
+
+    assert _cl100k_tokens(system) + _cl100k_tokens(user) <= _INPUT_MAX
+    people = [line for line in user.partition("## 游戏里最近找你的人")[2].splitlines() if "公屏]" in line]
+    assert [line.split("玩家 ", 1)[1].split("：", 1)[0] for line in people] == ["玩家0", "玩家4", "玩家5"]
+    assert f"玩家 玩家0：{_LONG_PLAYER_CHAT[:40]}…" in people[0]
+
+
+async def test_game_chat_line_the_target_points_at_is_listed_in_full(prompts: Any) -> None:
+    """交接稿 target 指着一句认不出是谁说的公屏话（原文片段）：那句单列在游戏聊天一段、给到 40 字，
+    条目都截短，其余只报句数；满批仍 ≤3,200。没有玩家条目时它也挤进列出的那几句。"""
+    history, batch = _full_batch(stored=True)
+    notes, chat = _six_players()
+    stranger = f"[minecraft] 玩家 路人：{_STRANGER_CHAT}"
+    replyer, llm = _replyer(prompts)
+
+    system, user = await _request(
+        replyer, llm, history, batch, game_people=notes, game_chat=[stranger, *chat], target=_STRANGER_CHAT[:8]
+    )
+
+    assert _cl100k_tokens(system) + _cl100k_tokens(user) <= _INPUT_MAX
+    game_chat = _section(user, "## 游戏里刚有人说的话")
+    assert game_chat.splitlines() == [
+        f"[minecraft] 玩家 路人：{_STRANGER_CHAT[:40]}" + ("…" if len(_STRANGER_CHAT) > 40 else ""),
+        "（另有 3 句没列出；找你的人见下一段）",
+    ]
+    assert f"：{_LONG_PLAYER_CHAT[:40]}" not in user, "她要接的是路人那句，条目都截短"
+
+    replyer, llm = _replyer(prompts)
+    system, user = await _request(replyer, llm, history, batch, game_chat=chat, target="玩家0")
+    assert _cl100k_tokens(system) + _cl100k_tokens(user) <= _INPUT_MAX
+    shown = _section(user, "## 游戏里刚有人说的话").splitlines()
+    assert len(shown) == 3 and "玩家 玩家0：" in shown[0] and "玩家 玩家5：" in shown[-1]
 
 
 async def test_full_batch_with_long_game_chat_and_no_player_notes_stays_within_budget(prompts: Any) -> None:
