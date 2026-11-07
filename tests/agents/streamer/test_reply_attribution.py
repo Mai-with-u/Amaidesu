@@ -115,9 +115,13 @@ def _turn_kwargs(prompt: MagicMock) -> Dict[str, Any]:
 
 
 async def test_reply_to_player_replaces_the_no_target_line() -> None:
-    """没在回弹幕、有回应对象时，target 一行换成是哪位玩家；玩家条目逐行给出、不截短。"""
+    """没在回弹幕、有回应对象时，target 一行换成是哪位玩家；玩家条目逐行给出，较早的长条目只截名字之后的那件事。"""
     replyer, prompt = _replyer()
-    gift = PlayerNote(who="玩家甲", said=False, line="[23:19 minecraft 动作] " + "玩家 玩家甲 朝我扔了铁锭" * 10)
+    gift = PlayerNote(
+        who="玩家甲",
+        said=False,
+        line="[23:19 minecraft 动作] 玩家 玩家甲 看着我空出手，朝我扔了 8 个卷心菜，落在我脚边，朝我扔了 17 个卷心菜种子",
+    )
     chat = PlayerNote(who="玩家甲", said=True, line="[00:08 minecraft 公屏] 玩家 玩家甲：我勒个")
     plan = DecisionPlan(should_reply=True, topic_summary="玩家甲在公屏发了一句「我勒个」")
 
@@ -127,8 +131,35 @@ async def test_reply_to_player_replaces_the_no_target_line() -> None:
     assert turn["plan"].startswith("回应对象: 游戏里的玩家 玩家甲（他刚在游戏公屏跟你说话）\n")
     assert "target" not in turn["plan"]
     section = turn["game_people_section"]
-    assert section.startswith("\n\n## 游戏里最近找你的人（谁说的话、谁做的事以这里为准）\n\n")
-    assert f"{gift.line}\n{chat.line}\n" in section and "别说成来路不明" in section
+    assert section.startswith("\n\n## 游戏里最近找你的人（谁说的、谁做的以此为准）\n\n")
+    clipped = "[23:19 minecraft 动作] 玩家 玩家甲 看着我空出手，朝我扔了 8 个卷心菜…"
+    assert f"{clipped}\n{chat.line}\n" in section and "别说成来路不明" in section
+
+
+async def test_people_section_keeps_the_latest_three_and_moves_fresh_chat_out_of_game_chat() -> None:
+    """玩家条目只留最近 3 条：本窗刚在公屏说的那句全文照给，游戏聊天一段不再重复（整段挪走时写"见下一段"，
+    不写"无"）；更早的长公屏话截到名字之后 18 个字。"""
+    replyer, prompt = _replyer()
+    said = "我刚在你家门口放了一箱子东西你记得去拿啊里面有铁锭有面包"
+    older = [
+        PlayerNote(who=name, said=True, line=f"[00:0{index} minecraft 公屏] 玩家 {name}：{said}")
+        for index, name in enumerate(("玩家甲", "玩家乙", "玩家丙", "玩家丁"))
+    ]
+    fresh = PlayerNote(who="玩家戊", said=True, line=f"[00:09 minecraft 公屏] 玩家 玩家戊：{said}")
+    plan = DecisionPlan(should_reply=True, topic_summary="接玩家戊在公屏说的话")
+
+    await replyer.generate(
+        plan, [], game_chat=[f"[minecraft] 玩家 玩家戊：{said}"], game_people=[*older, fresh], reply_to="玩家戊"
+    )
+
+    turn = _turn_kwargs(prompt)
+    lines = turn["game_people_section"].strip().splitlines()[2:-1]
+    assert lines == [
+        f"[00:02 minecraft 公屏] 玩家 玩家丙：{said[:18]}…",
+        f"[00:03 minecraft 公屏] 玩家 玩家丁：{said[:18]}…",
+        fresh.line,
+    ]
+    assert turn["game_chat"] == "（见下一段）"
 
 
 async def test_reply_to_keeps_the_planner_target_and_says_how_he_found_her() -> None:
@@ -331,12 +362,12 @@ async def test_s58_wolege_request_names_the_player_and_the_reply_target(prompts:
     text = llm.calls[-1]["input"][0]["content"]
 
     # 说话人：玩家甲，在游戏公屏；回应对象：游戏里的玩家甲，原来的"无特定目标"一行换掉
-    people = text.split("## 游戏里最近找你的人（谁说的话、谁做的事以这里为准）", 1)[1]
+    people = text.split("## 游戏里最近找你的人（谁说的、谁做的以此为准）", 1)[1]
     assert re.search(r"\[\d\d:\d\d minecraft 公屏\] 玩家 玩家甲：我勒个", people)
     assert re.search(r"\[\d\d:\d\d minecraft 动作\] 玩家 玩家甲 看着我空出手，朝我扔了 8 个卷心菜", people)
     assert "回应对象: 游戏里的玩家 玩家甲（他刚在游戏公屏跟你说话）" in text
     assert "无特定目标" not in text
-    assert '交接稿里的"她"就是你' in text and "不安到女仆、宠物或观众头上" in text
+    assert '交接稿的"她"就是你' in text and "别安到女仆、宠物或观众头上" in text
     # 输入里每一处"我勒个"都记在玩家甲名下，没有一处和女仆连在一起
     wolege = [line for line in text.splitlines() if "我勒个" in line and "「我勒个」" not in line]
     assert wolege and all("玩家甲" in line and "小白" not in line for line in wolege)

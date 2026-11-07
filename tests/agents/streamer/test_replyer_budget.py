@@ -13,14 +13,14 @@ token 口径在每条用例里写明，两种：
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterator, List, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import pytest
 
 from src.agents.streamer.config import StreamerBatchConfig, StreamerPersonaConfig
 from src.agents.streamer.plan import DecisionPlan, assistant_speech_lines
 from src.agents.streamer.replyer import Replyer
-from src.agents.streamer.timeline import CHAPTER_MESSAGE_TYPE, TimelineTurn, note_turn
+from src.agents.streamer.timeline import CHAPTER_MESSAGE_TYPE, PlayerNote, TimelineTurn, note_turn
 from src.modules.events.payloads.room import RoomMessageUser
 from src.modules.llm.context_meter import get_encoding
 from src.modules.llm.payload import Response
@@ -63,6 +63,9 @@ _AJIE = RoomMessageUser(id="u_ajie", name="阿杰")
 
 # 满批用的一条长弹幕：38 个汉字，后面再接两位序号，凑满 40 字
 _LONG_DANMAKU = "主播这个洞也太深了吧下面是不是有岩浆小心别掉下去我刚看到左边好像有钻石快去挖"
+
+# 玩家条目用的一句长公屏话（43 字）：比常见的长，量的是条目段最占地方的时候
+_LONG_PLAYER_CHAT = "我刚在你家门口放了一箱子东西你记得去拿啊里面有铁锭有面包还有一把附魔的钻石镐别弄丢了"
 
 
 def _cl100k_tokens(text: str) -> int:
@@ -161,8 +164,16 @@ def _replyer(prompts: Any, **config: Any) -> Tuple[Replyer, FakeLLMManager]:
     return Replyer(config={**_PERSONA, **config}, llm_service=llm, prompt_service=prompts), llm
 
 
-async def _request(replyer: Replyer, llm: FakeLLMManager, history: List[Any], batch: List[Any]) -> Tuple[str, str]:
-    """长场里回应一条开场的弹幕：返回（system, user）两段正文。"""
+async def _request(
+    replyer: Replyer,
+    llm: FakeLLMManager,
+    history: List[Any],
+    batch: List[Any],
+    *,
+    game_people: Sequence[PlayerNote] = (),
+    game_chat: Optional[List[str]] = None,
+) -> Tuple[str, str]:
+    """长场里回应一条开场的弹幕：返回（system, user）两段正文。游戏聊天不给时用两句常见的公屏话。"""
     plan = DecisionPlan(
         should_reply=True,
         target="m0",
@@ -174,9 +185,12 @@ async def _request(replyer: Replyer, llm: FakeLLMManager, history: List[Any], ba
         batch,
         history=history,
         rundown="当前环节：挖矿冲钻石（第 2/3 环节，已进行 25 分钟）。方向：边挖边和弹幕聊，挖到钻石就收尾进下一环节。",
-        game_chat=["[minecraft] 玩家 Steve：麦麦你在哪一层", "[minecraft] 玩家 Alex：我在你上面"],
+        game_chat=game_chat
+        if game_chat is not None
+        else ["[minecraft] 玩家 Steve：麦麦你在哪一层", "[minecraft] 玩家 Alex：我在你上面"],
         state_facts="生命值偏低；背包里有铁矿、红石、青金石；脚下是深板岩层，东侧有岩浆湖",
         recent_speeches=assistant_speech_lines(history),
+        game_people=list(game_people),
     )
     call = llm.calls[-1]
     return call["system"], call["input"][0]["content"]
@@ -238,14 +252,7 @@ async def test_full_batch_stays_within_budget(prompts: Any, stored: bool) -> Non
     已落库（正常开场次）与还没落库（没开场次、调试注入）两种都量。记录总行数不超过本批条数，
     本批每一条都看得到；她更早说过的话单列在记录前面，标题点明比记录早。
     """
-    batch_size = StreamerBatchConfig().batch_max_size
-    history = _session(500)
-    batch: List[Any] = []
-    for index in range(batch_size):
-        content = f"{_LONG_DANMAKU}{index:02d}"
-        batch.append(make_room_message(message_id=f"b{index}", content=content, user=_AJIE))
-        if stored:
-            history.append(TimelineTurn(role="user", content=content, sender_name="阿杰", message_id=f"b{index}"))
+    history, batch = _full_batch(stored)
     assert all(len(item.content) == 40 for item in batch)
 
     replyer, llm = _replyer(prompts)
@@ -255,6 +262,53 @@ async def test_full_batch_stays_within_budget(prompts: Any, stored: bool) -> Non
     dialogue = user.partition("请注意区分：\n")[2].partition("\n\n## 游戏里刚有人说的话")[0]
     assert dialogue.splitlines() == [f"阿杰说：{item.content}" for item in batch]
     assert user.index("## 更早一点你说过的话（比下面的聊天记录早）") < user.index("下面是之前的聊天记录")
+
+
+def _full_batch(stored: bool) -> Tuple[List[Any], List[Any]]:
+    """500 条的长场加满满一批弹幕（单批条数上限的默认值，每条 40 字）：返回（历史, 本批）。"""
+    history = _session(500)
+    batch: List[Any] = []
+    for index in range(StreamerBatchConfig().batch_max_size):
+        content = f"{_LONG_DANMAKU}{index:02d}"
+        batch.append(make_room_message(message_id=f"b{index}", content=content, user=_AJIE))
+        if stored:
+            history.append(TimelineTurn(role="user", content=content, sender_name="阿杰", message_id=f"b{index}"))
+    return history, batch
+
+
+@pytest.mark.parametrize("count", [1, 2, 3, 6])
+@pytest.mark.parametrize("case", ["older", "newest-in-game-chat"])
+async def test_full_batch_with_player_notes_stays_within_budget(prompts: Any, count: int, case: str) -> None:
+    """满批再加最近几分钟找她的玩家条目（每条 43 字的长公屏话，最多 6 条）：整份输入仍 ≤3,200（cl100k 口径）。
+
+    条目只留最近 3 条、较早的截短，和她更早说过的话合计至多 3 行；最新一条正是本窗公屏话时全文照给，
+    游戏聊天一段不再重复它。原样列出时 6 条长公屏话会让满批超出六百多。
+    """
+    history, batch = _full_batch(stored=True)
+    notes = [
+        PlayerNote(
+            who=f"玩家{index}",
+            said=True,
+            line=f"[22:4{index} minecraft 公屏] 玩家 玩家{index}：{_LONG_PLAYER_CHAT}",
+        )
+        for index in range(count)
+    ]
+    newest_in_game_chat = case == "newest-in-game-chat"
+    newest_chat = f"[minecraft] 玩家 玩家{count - 1}：{_LONG_PLAYER_CHAT}"
+
+    replyer, llm = _replyer(prompts)
+    system, user = await _request(
+        replyer, llm, history, batch, game_people=notes, game_chat=[newest_chat] if newest_in_game_chat else None
+    )
+
+    assert _cl100k_tokens(system) + _cl100k_tokens(user) <= _INPUT_MAX
+    people = user.partition("## 游戏里最近找你的人")[2].partition("\n\n## ")[0]
+    shown = [line for line in people.splitlines() if line.startswith("[22:4")]
+    assert len(shown) == min(count, 3)
+    assert (shown[-1] == notes[-1].line) == newest_in_game_chat
+    assert newest_chat not in user
+    speech = user.partition("## 更早一点你说过的话")[2].partition("下面是之前的聊天记录")[0]
+    assert len(shown) + sum(1 for line in speech.splitlines() if line.startswith("- ")) <= 3
 
 
 async def test_fallback_switch_brings_back_the_whole_history(prompts: Any) -> None:

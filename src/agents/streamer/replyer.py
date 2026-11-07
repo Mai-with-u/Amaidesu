@@ -53,7 +53,14 @@ _RECENT_SPEECH_LINES = 6
 _RECENT_SPEECH_HEADING = "## 更早一点你说过的话（比下面的聊天记录早）"
 
 # 游戏里最近找她的人那一段的标题：谁说的话、谁做的事以这一段为准
-_GAME_PEOPLE_HEADING = "## 游戏里最近找你的人（谁说的话、谁做的事以这里为准）"
+_GAME_PEOPLE_HEADING = "## 游戏里最近找你的人（谁说的、谁做的以此为准）"
+# 玩家条目整段至多几条（最近的）、较早条目的正文至多几个字：满批时整份输入只剩个位数 token 的余量。
+# 本窗刚在公屏说的那句（游戏聊天里也有）全文照给：这是她要接的话，同一句从游戏聊天那一段拿掉
+_PEOPLE_LINES_MAX = 3
+_PEOPLE_NOTE_MAX_CHARS = 18
+# 有玩家条目时，玩家条目和"更早一点你说过的话"合计至多几行：玩家条目优先（同一位玩家送礼、跳、
+# 开口三件事要一起在），她更早说过的话用剩下的行数；没有玩家条目时那一段照常
+_PEOPLE_AND_SPEECH_LINES = 3
 
 # 交接稿里没有特定回应对象时的 target 写法（Planner 没填，或填的消息 ID 查不到原话）
 _NO_TARGET = "（无特定目标，面向全体观众）"
@@ -323,6 +330,11 @@ class Replyer:
         # 要回应的那条原话在截取之前按整份历史查：被回应的弹幕可能已滑出最近几条
         target_message = canonical.find_target_message(plan.target, batch, full_history)
         target_text = _strip_id_tag(target_message, canonical.normalize_message_id(plan.target or ""))
+        # 玩家条目截短封顶，本窗在公屏说的那句从游戏聊天一段拿掉（条目里已有、还带着是谁说的）。
+        # 游戏聊天整段都挪进了条目时写"见下一段"：写"无"会和下一段里刚在公屏说的话对不上
+        chat_before = list(game_chat or [])
+        people_lines, game_chat = _people_lines(game_people, chat_before)
+        chat_placeholder = "（见下一段）" if chat_before and not game_chat else "（无）"
         entries = self._dialogue_entries(full_history, batch)
         dialogue_lines = [self._render_entry(entry) for entry in entries]
         shown_speeches = [entry.content.strip() for entry in entries if entry.role == "assistant"]
@@ -335,10 +347,17 @@ class Replyer:
                 # 回应对象这一窗在公屏开过口：说"他刚在游戏公屏跟你说话"；只冲她做了事的说"刚在游戏里找过你"
                 reply_to_spoke=any(note.said and note.who == reply_to for note in game_people),
             ),
-            # 游戏里最近找她的人：玩家的话与举动单列、不截短，谁说的、谁做的一眼分清
-            game_people_section=_game_people_section(game_people),
+            # 游戏里最近找她的人：玩家的话与举动单列，谁说的、谁做的一眼分清（较早的截短、整段封顶）
+            game_people_section=_game_people_section(people_lines),
             dialogue_prompt="\n".join(dialogue_lines) or "（暂无聊天记录）",
-            recent_speech_section=_recent_speech_section(recent_speeches, shown_speeches),
+            # 有玩家条目时，她更早说过的话只用玩家条目一段剩下的行数：玩家条目从这一段让出预算，整份输入不超
+            recent_speech_section=_recent_speech_section(
+                recent_speeches,
+                shown_speeches,
+                max_lines=max(0, _PEOPLE_AND_SPEECH_LINES - len(people_lines))
+                if people_lines
+                else _RECENT_SPEECH_LINES,
+            ),
             remembered_section=_remembered_section(remembered),
             bot_name=self._bot_name,
             turn_context=(
@@ -346,7 +365,7 @@ class Replyer:
                 if batch
                 else "本轮没有新观众消息；有游戏聊天时按游戏情况说，否则这是主动发言。"
             ),
-            game_chat="\n".join(game_chat) if game_chat else "（无）",
+            game_chat="\n".join(game_chat) if game_chat else chat_placeholder,
             rundown=rundown_render,
             state_facts=state_facts.strip() or "（无）",
             # 长度预算先在提示里说清，多数台词一次就落在预算内；出口处还有截短兜底
@@ -436,22 +455,59 @@ _THINK_UNCLOSED = re.compile(r"<think>.*", re.DOTALL)
 _EXAMPLE_MARKS = "-*•· \t"
 
 
-def _game_people_section(game_people: Sequence[PlayerNote]) -> str:
+def _note_body(line: str) -> str:
+    """条目行去掉行首 ``[时刻 游戏 公屏]`` 之后的部分（"玩家 X：原话"），和游戏聊天行比对用。"""
+    head, separator, body = line.partition("] ")
+    return body if line.startswith("[") and separator else line
+
+
+def _people_lines(game_people: Sequence[PlayerNote], game_chat: Sequence[str]) -> Tuple[List[str], List[str]]:
+    """玩家条目渲染成行，并把已经在条目里的游戏聊天行拿掉：返回（条目行, 剩下的游戏聊天行）。
+
+    只留最近 :data:`_PEOPLE_LINES_MAX` 条；本窗刚在公屏说的那句全文照给（她要接的就是它），
+    其余条目正文截到 :data:`_PEOPLE_NOTE_MAX_CHARS` 字——满批时整份输入只剩个位数 token 的余量，
+    六条长公屏话原样列出会超出六百多。同一句不在两段里各出现一次。
+    """
+    chat_bodies = {_note_body(line) for line in game_chat}
+    lines: List[str] = []
+    shown_chat: set[str] = set()
+    for note in [note for note in game_people if note.line][-_PEOPLE_LINES_MAX:]:
+        body = _note_body(note.line)
+        fresh = note.said and any(body.startswith(chat) for chat in chat_bodies)
+        if fresh:
+            shown_chat.update(chat for chat in chat_bodies if body.startswith(chat))
+            lines.append(note.line)
+            continue
+        head = note.line[: len(note.line) - len(body)]
+        # 公屏话截"玩家 X："之后的原话，动作条目截"玩家 X "之后的那件事：名字再长也不被截掉
+        name, colon, said = body.partition("：")
+        actor = f"玩家 {note.who} "
+        if colon:
+            prefix, text = f"{name}{colon}", said
+        elif note.who and body.startswith(actor):
+            prefix, text = actor, body[len(actor) :]
+        else:
+            prefix, text = "", body
+        clipped = text if len(text) <= _PEOPLE_NOTE_MAX_CHARS else f"{text[:_PEOPLE_NOTE_MAX_CHARS]}…"
+        lines.append(f"{head}{prefix}{clipped}")
+    remaining = [line for line in game_chat if _note_body(line) not in shown_chat]
+    return lines, remaining
+
+
+def _game_people_section(lines: Sequence[str]) -> str:
     """最近几分钟游戏里玩家找她的条目连同归因规矩：整段前面留一个空行，没有条目时为空串（整段省略）。
 
     规矩只在有条目时出现，平常的决策窗不多占输入。几句规矩各对一种线上出过的错：交接稿里指她自己的
     "她"被当成刚点过名的女仆，玩家的公屏话随之安到女仆头上；玩家扔来的东西说成天上掉的；玩家说她
     "自家地板打洞"，她反过来劝玩家别打洞。
     """
-    lines = [note.line for note in game_people if note.line]
     if not lines:
         return ""
-    return (
-        f"\n\n{_GAME_PEOPLE_HEADING}\n\n"
-        + "\n".join(lines)
-        + '\n交接稿里的"她"就是你。转述时说清是谁，不安到女仆、宠物或观众头上；上面写着是谁扔来、送来的，就别说成来路不明；'
-        "玩家公屏说的事多半说的是你，别安回他自己头上。"
+    rules = (
+        '交接稿的"她"就是你；转述说清是谁，别安到女仆、宠物或观众头上；写明谁送的别说成来路不明；'
+        "玩家公屏说的事多半在说你。"
     )
+    return f"\n\n{_GAME_PEOPLE_HEADING}\n\n" + "\n".join(lines) + f"\n{rules}"
 
 
 def _remembered_section(remembered: str) -> str:
@@ -537,7 +593,12 @@ def _clip_game_note(content: str) -> str:
     return f"{head}{separator}{body[:_GAME_NOTE_MAX_CHARS]}…"
 
 
-def _recent_speech_section(recent_speeches: Optional[Sequence[str]], shown_speeches: Sequence[str]) -> str:
+def _recent_speech_section(
+    recent_speeches: Optional[Sequence[str]],
+    shown_speeches: Sequence[str],
+    *,
+    max_lines: int = _RECENT_SPEECH_LINES,
+) -> str:
     """她最近说过的几句里、聊天记录里已经看不到的那些，单列成"更早一点你说过的话"一段。
 
     取发言闸同一份语料的最近几句（旧→新）；已经在聊天记录里的那几句不再重复列，
@@ -549,7 +610,7 @@ def _recent_speech_section(recent_speeches: Optional[Sequence[str]], shown_speec
     recent = [line.strip() for line in recent_speeches or () if isinstance(line, str) and line.strip()]
     visible = Counter(shown_speeches)
     missing: List[str] = []
-    for line in recent[-_RECENT_SPEECH_LINES:]:
+    for line in recent[-max_lines:] if max_lines > 0 else []:
         if visible[line] > 0:
             visible[line] -= 1
             continue
