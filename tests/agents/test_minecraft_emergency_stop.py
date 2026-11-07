@@ -50,13 +50,14 @@ async def test_cancel_task_now_stops_tracked_goals_at_the_mod_first() -> None:
     assert {"operation": "cancel", "goal_id": 1} in cancels
     assert {"operation": "cancel", "goal_id": 2} in cancels
     receipt = _receipts(bus)[-1]
-    assert receipt.message == "操作员撤掉了游戏里手上的活：在跑的目标都停下了（砍树、gather）"
+    assert receipt.message == "游戏里手上的活被撤掉了：在跑的目标都停下了（砍树、gather）"
     assert receipt.body_events == [], "回执只讲叫停结果，不带路上的身体事件"
     await agent.stop()
 
 
 async def test_cancel_task_now_tolerates_single_goal_failure() -> None:
-    """单个目标直连取消失败（游戏侧目标已不在）只跳过，不阻断其余目标、不抛异常；回执点名哪个没停下。"""
+    """单个目标直连取消失败（游戏侧目标已不在）只跳过，不阻断其余目标、不抛异常；回执点名哪个没停住，
+    Mod 的原始报错不进回执（她可能照着念）。"""
     server = FakeMaicraft()
     agent, _llm, bus = await make_minecraft_agent(server, _script_good)
     for goal_id in (1, 2):
@@ -68,7 +69,7 @@ async def test_cancel_task_now_tolerates_single_goal_failure() -> None:
     assert await agent.cancel_task_now("deleg_1", source="operator") is True
     assert len(server.calls_to("goal")) == 2, "两个目标都尝试过直连取消"
     receipt = _receipts(bus)[-1].message
-    assert "gather没停下（没有编号为 1 的目标）" in receipt and "可能还在做" in receipt
+    assert "gather没停住，可能还在做" in receipt and "没有编号为 1 的目标" not in receipt
     await agent.stop()
 
 
@@ -89,7 +90,7 @@ async def test_stop_actions_injects_reason_and_keeps_delegations_by_default() ->
     assert any("操作员叫停了当前动作" in content and "别再挖了，来门口接待" in content for content in contents)
     assert agent._delegations.tracked_ids() == ("deleg_9",), "默认不撤委派单"
     assert _receipts(bus)[-1].message == (
-        "操作员急停了游戏里的动作：在跑的目标都停下了（挖铁矿）；手上的活没撤，账面还在，等下一步安排"
+        "游戏里的动作被叫停了：在跑的目标都停下了（挖铁矿）；手上的活还留着，等下一步安排"
     )
     await agent.stop()
 
@@ -114,5 +115,5 @@ async def test_stop_actions_with_cancel_delegations_revokes_tracked_delegations(
     assert await agent.stop_actions("", cancel_delegations=True) is True
 
     assert agent._delegations.tracked_ids() == ()
-    assert _receipts(bus)[-1].message == "操作员急停了游戏里的动作：叫停时没有在跑的目标；手上的活一并撤了"
+    assert _receipts(bus)[-1].message == "游戏里的动作被叫停了：当时没有在跑的目标；手上的活也撤了"
     await agent.stop()

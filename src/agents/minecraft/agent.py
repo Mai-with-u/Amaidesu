@@ -703,7 +703,7 @@ class MinecraftAgent(BaseAgent):
 
         单个目标取消失败（游戏没连上、目标已结束）记 warning，不阻断其余目标；
         取消成功后目标结束事件经事件流回来，跟踪名单与账面由既有路径收尾。
-        返回每个目标停没停（没停下的附原因），叫停回执据此告诉主播哪个目标可能还在做。
+        返回每个目标停没停，叫停回执据此告诉主播哪个目标可能还在做；没停住的原因（Mod 原始报错）只进日志。
         """
         outcome = GoalStopOutcome()
         for goal in self._goals.tracked_goals():
@@ -712,12 +712,12 @@ class MinecraftAgent(BaseAgent):
                 reply = await self._call_maicraft(GOAL, {"operation": "cancel", "goal_id": goal.goal_id})
             except Exception as exc:  # noqa: BLE001 - 单个目标失败不阻断其余目标
                 self._logger.warning(f"直连取消游戏目标 {goal.goal_id} 异常：{exc}", exc=True)
-                outcome.not_stopped.append((label, f"取消时出错：{type(exc).__name__}"))
+                outcome.not_stopped.append(label)
                 continue
             if not reply.ok:
                 why = reply.error_message or reply.error_code or "未知原因"
                 self._logger.warning(f"直连取消游戏目标 {goal.goal_id} 未成功：{why}")
-                outcome.not_stopped.append((label, why))
+                outcome.not_stopped.append(label)
                 continue
             outcome.stopped.append(label)
         return outcome
