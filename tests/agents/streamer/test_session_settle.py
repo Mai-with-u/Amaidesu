@@ -46,6 +46,7 @@ def _settler(
     prompt_manager: PromptManager,
     *,
     games: Optional[List[str]] = None,
+    cue_log_repo: Any = None,
 ) -> SessionSettler:
     return SessionSettler(
         sessions_repo=store.sessions,
@@ -57,6 +58,7 @@ def _settler(
         prompt_manager=prompt_manager,
         game_names_provider=lambda: ["Minecraft"] if games is None else games,
         clock=lambda: 7_777,
+        cue_log_repo=cue_log_repo,
     )
 
 
@@ -668,6 +670,35 @@ async def test_session_without_speech_is_settled_without_model_call(
     assert llm.calls == []
     row = await store.sessions.get_live_session(live_session_id=session_id)
     assert row is not None and row.settled_at_ms == 7_777
+
+
+class _BrokenCueLog:
+    """线索卡记录里读出坏行（不是线索卡的东西）：唠叨指标算到它就出错。"""
+
+    async def list_session_entries(self, *, live_session_id: int) -> List[Any]:
+        return [object()]
+
+
+async def test_side_effect_metrics_failure_does_not_block_settling(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """唠叨指标算出错：本场整理照常写入（档案落库、整理完成时刻写上），报告里只是没有这一节，不记失败。"""
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "下次接着讲那个鬼故事的结局", timestamp_ms=1_100)
+    llm = _reply(
+        '{"archive": [{"line": 1, "title": "答应了讲鬼故事的结局", "quote": "下次接着讲那个鬼故事的结局"}]}',
+        '{"commitments": []}',
+    )
+    settler = _settler(store, llm, prompt_manager, cue_log_repo=_BrokenCueLog())
+
+    assert await settler.settle_session(session_id) is True
+
+    row = await store.sessions.get_live_session(live_session_id=session_id)
+    assert row is not None and row.settled_at_ms == 7_777 and row.settle_attempts == 0
+    assert row.settle_report is None
+    assert [line.text for line in await store.archive.list_lines(live_session_id=session_id)] == [
+        "答应了讲鬼故事的结局"
+    ]
 
 
 async def test_rehearsal_session_is_not_settled(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:

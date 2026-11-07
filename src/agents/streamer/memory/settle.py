@@ -627,7 +627,11 @@ class SessionSettler:
         return True
 
     async def _side_effects(self, session: LiveSession, delivered: List[SettleSpeechLine]) -> Optional[SideEffectStats]:
-        """本场的唠叨指标；读线索卡记录失败时只按台词点名算，不拖累整理。"""
+        """本场的唠叨指标；读线索卡记录失败时只按台词点名算，算的时候出错就不给这一节，都不拖累整理。
+
+        指标是附带的：档案、承诺、了结已经由模型产出，指标算错（线索卡记录里有坏行之类）不能让这一场
+        整理整个记失败、下次再白调一遍模型。
+        """
         cards: List[CueLogEntry] = []
         if self._cue_log is not None:
             try:
@@ -635,7 +639,11 @@ class SessionSettler:
             except Exception as exc:  # noqa: BLE001 - 指标是附带的，读不到卡照样整理
                 logger.warning(f"场次 {session.id} 读线索卡记录失败，唠叨指标不含线索卡: {exc}", exc=exc)
         duration_ms = int(session.ended_at_ms or session.started_at_ms) - int(session.started_at_ms)
-        return compute_side_effects(delivered, cards, duration_ms=duration_ms)
+        try:
+            return compute_side_effects(delivered, cards, duration_ms=duration_ms)
+        except Exception as exc:  # noqa: BLE001 - 指标算不出来，本场报告不含这一节，整理照常写入
+            logger.warning(f"场次 {session.id} 唠叨指标没算出来，本场报告不含这一节: {exc}", exc=exc)
+            return None
 
     async def _mark_done(self, session: LiveSession, *, note: str) -> bool:
         """直接标成已整理（没有播出台词、不用调模型）。"""
