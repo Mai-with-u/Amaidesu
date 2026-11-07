@@ -40,17 +40,17 @@ def _planner(
     reply_ok: bool = True,
     config: Optional[PlannerConfig] = None,
 ) -> Planner:
-    """真注册表 + 可切换成败的 reply；上下文组装器关闭，只看情境段。"""
+    """真注册表 + 可切换成败的 reply（说出口的台词就是这轮的话题）；上下文组装器关闭，只看情境段。"""
     registry = ToolRegistry()
-    reply_result = ToolExecutionResult(
-        tool_name="streamer_reply",
-        success=reply_ok,
-        structured_content={"speech": "说了", "emotion": {"name": "happy"}, "metadata": {}} if reply_ok else None,
-        error_message=None if reply_ok else "Replyer 返回 None",
-    )
 
-    async def _reply(_invocation: Any) -> ToolExecutionResult:
-        return reply_result
+    async def _reply(invocation: Any) -> ToolExecutionResult:
+        speech = str(invocation.arguments.get("topic_summary") or "")
+        return ToolExecutionResult(
+            tool_name="streamer_reply",
+            success=reply_ok,
+            structured_content={"speech": speech, "emotion": {"name": "happy"}, "metadata": {}} if reply_ok else None,
+            error_message=None if reply_ok else "Replyer 返回 None",
+        )
 
     spec = ToolSpec(name="reply", description="主播发言出口", kind="sync", provider="streamer")
     registry.register_provider(make_provider_from_specs("streamer", [(spec, _reply)]))
@@ -97,8 +97,9 @@ async def test_spoken_intents_listed_oldest_first() -> None:
     # 新角度也认表达上的新；讲过的打算单独点名不再复述，拿不出新角度先换话题
     assert "新态度、新联想、相关旧事" in text and "讲过的结论和打算不再复述" in text
     assert "拿不出新角度就换个话题" in text
+    # 每行写她当时说的那句，不写当时游戏里的状态快照
     section = _topic_lines(text)
-    assert section == ["- 刚刚 话题：报平安：满血了", "- 刚刚 话题：还是满血"]
+    assert section == ["- 刚刚：当时说「报平安：满血了」", "- 刚刚：当时说「还是满血」"]
 
 
 async def test_intents_keep_only_configured_count() -> None:
@@ -197,8 +198,8 @@ async def test_intent_outside_delegation_window_is_not_superseded() -> None:
     section = _topic_lines(text)
     assert len(section) == 2
     assert all("已被游戏回执覆盖" not in line for line in section)
-    assert "话题：和观众打了个招呼" in section[0]
-    assert "话题：包里攒了 19 块圆石" in section[1]
+    assert "：（当时）和观众打了个招呼" in section[0]
+    assert "：（当时）包里攒了 19 块圆石" in section[1]
 
 
 async def test_delivered_relay_records_own_words_without_source() -> None:
@@ -270,7 +271,7 @@ def test_tagged_intents_merge_into_one_line() -> None:
 
     text = render_recent_intents(intents, _delegation_book(), current_ms)
 
-    assert text == "- 照明进度（3 轮，17 分钟前–2 分钟前）：门已装好，还差夜里验收"
+    assert text == "- 照明进度（3 轮，17 分钟前–2 分钟前）：（当时）门已装好，还差夜里验收"
 
 
 def test_different_tags_render_as_separate_lines() -> None:
@@ -289,8 +290,8 @@ def test_different_tags_render_as_separate_lines() -> None:
     lines = render_recent_intents(intents, _delegation_book(), current_ms).splitlines()
 
     assert lines == [
-        "- 照明进度（1 轮，7 分钟前–7 分钟前）：开始找羊",
-        "- 女仆妖精（2 轮，9 分钟前–1 分钟前）：玩家又被打了一下",
+        "- 照明进度（1 轮，7 分钟前–7 分钟前）：（当时）开始找羊",
+        "- 女仆妖精（2 轮，9 分钟前–1 分钟前）：（当时）玩家又被打了一下",
     ]
 
 
@@ -304,7 +305,7 @@ def test_untagged_intents_render_verbatim() -> None:
 
     text = render_recent_intents(intents, _delegation_book(), current_ms)
 
-    assert text == "- 3 分钟前 话题：报平安：满血了\n- 1 分钟前 话题：还是满血"
+    assert text == "- 3 分钟前：（当时）报平安：满血了\n- 1 分钟前：（当时）还是满血"
 
 
 def test_mixed_tagged_and_untagged_keep_every_topic() -> None:
@@ -318,8 +319,8 @@ def test_mixed_tagged_and_untagged_keep_every_topic() -> None:
     lines = render_recent_intents(intents, _delegation_book(), current_ms).splitlines()
 
     assert lines == [
-        "- 4 分钟前 话题：旧数据没短名",
-        "- 照明进度（1 轮，2 分钟前–2 分钟前）：第一轮进展",
+        "- 4 分钟前：（当时）旧数据没短名",
+        "- 照明进度（1 轮，2 分钟前–2 分钟前）：（当时）第一轮进展",
     ]
 
 
@@ -345,7 +346,7 @@ async def test_reply_topic_tag_flows_into_intent() -> None:
     await planner.plan([], proactive=True)
     text = await _reference(planner)
 
-    assert "- 照明进度（2 轮，刚刚–刚刚）：屋里五个点全亮" in _topic_lines(text)[0]
+    assert "- 照明进度（2 轮，刚刚–刚刚）：当时说「屋里五个点全亮」" in _topic_lines(text)[0]
 
 
 def test_superseded_group_line_keeps_game_report_note() -> None:
@@ -374,7 +375,7 @@ def test_superseded_group_line_keeps_game_report_note() -> None:
     text = render_recent_intents(intents, delegations, current_ms)
 
     assert text == (
-        "- 照明进度（1 轮，5 分钟前–5 分钟前）：床已经放好了（其中对游戏进展的说法已被游戏回执覆盖，以游戏记录为准）"
+        "- 照明进度（1 轮，5 分钟前–5 分钟前）：（当时）床已经放好了（其中对游戏进展的说法已被游戏回执覆盖，以游戏记录为准）"
     )
 
 
@@ -389,7 +390,7 @@ def test_topics_that_slid_out_stay_listed_by_name() -> None:
 
     assert lines == [
         "- 更早聊过（只剩话题名）：拴绳没用上（3 轮）、智能板折腾",
-        "- 装门（1 轮，1 分钟前–1 分钟前）：门装好了",
+        "- 装门（1 轮，1 分钟前–1 分钟前）：（当时）门装好了",
     ]
 
 

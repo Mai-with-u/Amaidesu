@@ -275,13 +275,26 @@ def superseded_by_game_report(intent: Intent, delegations: Dict[str, Delegation]
 _EARLIER_TOPICS_MAX = 40
 
 
+def _said_then(intent: Intent) -> str:
+    """一轮的"当时的说法"：她说出口的那句原话；没留原话（旧数据）时用话题摘要，并标明是当时。
+
+    话题摘要写的是那一刻游戏里的状态快照。第 58 场每行一份十几二十分钟前的"最新状态"，几十行摆在
+    清单里盖过了这一轮新读的现场，她跟着旧快照把"楼上有平台"说成"就一层"。判断"这话说过没有"
+    要的是她当时说了什么，不是当时游戏里是什么样。
+    """
+    speech = intent.speech.strip()
+    if speech:
+        return f"当时说「{speech}」"
+    return f"（当时）{intent.topic_summary or '（无）'}"
+
+
 def render_recent_intents(
     intents: Iterable[Intent],
     delegations: Dict[str, Delegation],
     current_ms: int,
     earlier_topics: Optional[Dict[str, int]] = None,
 ) -> str:
-    """我最近几轮想说的：由旧到新只列每轮的话题一句话，作为"已聊话题"清单供重叠判断。
+    """我最近几轮说过的：由旧到新列每轮她当时说的那句，作为"已聊话题"清单供重叠判断。
 
     指引全文不在此重复注入——那轮说出口的原话（指引的最终落点）已在对话历史
     assistant 消息里，同一信息双份会让每轮参考段平白多出几百字。游戏回执到达前
@@ -290,9 +303,10 @@ def render_recent_intents(
     "刚刚"的矛盾说法里任选一条播报。
 
     带 topic_tag 的条目按话题聚合：同一话题只输出一行（话题名、轮数、时间跨度、
-    最新一条状态）——topic_summary 是客观状态陈述，游戏停滞时连续几十轮同义句，
-    逐条渲染的清单本身会放大重复；聚合后一眼可见"这件事聊了多少轮、最近说到哪"。
-    分组顺序按每组最近一次出现的时间由旧到新。无 topic_tag 的条目按原样逐条渲染。
+    最近一轮她当时说的那句）——游戏停滞时连续几十轮同义句，逐条渲染的清单本身会放大重复；
+    聚合后一眼可见"这件事聊了多少轮、最近说到哪"。每行只写当时的说法，不写当时的游戏状态：
+    游戏此刻的样子以本轮新读的现场为准。分组顺序按每组最近一次出现的时间由旧到新。
+    无 topic_tag 的条目逐条渲染。
 
     ``earlier_topics`` 是本场更早聊过、已滑出最近几轮的话题名与轮数：最近几轮里没有的列成清单
     最前面的一行"更早聊过"，只给名字和轮数——够她认出"这个段子早先讲过"，又不占多少字。
@@ -302,7 +316,7 @@ def render_recent_intents(
     for intent in intents:
         tag = intent.topic_tag.strip()
         if not tag:
-            line = f"- {age_text(current_ms - intent.at_ms)} 话题：{intent.topic_summary or '（无）'}"
+            line = f"- {age_text(current_ms - intent.at_ms)}：{_said_then(intent)}"
             if superseded_by_game_report(intent, delegations):
                 line += "（其中对游戏进展的说法已被游戏回执覆盖，以游戏记录为准）"
             untagged_lines.append(line)
@@ -322,7 +336,7 @@ def render_recent_intents(
     for tag, members in ordered_groups:
         first, last = members[0], members[-1]
         span = f"{age_text(current_ms - first.at_ms)}–{age_text(current_ms - last.at_ms)}"
-        line = f"- {tag}（{len(members)} 轮，{span}）：{last.topic_summary or '（无）'}"
+        line = f"- {tag}（{len(members)} 轮，{span}）：{_said_then(last)}"
         # 聚合行取的是最新一条 topic_summary，同样可能落在游戏回执到达前的在途叙述；
         # 不标会让模型拿过时猜测当权威事实播报（判定与标注口径同逐条渲染路径）
         if superseded_by_game_report(last, delegations):
