@@ -303,7 +303,9 @@ async def test_ledger_keeps_full_instruction_and_refusal_quotes_only_own_words(r
     原话长也不截，附带的观众原话与取舍规则不塞回去。"""
     own = "把营地棚子装一扇木门，" + "门外垫平台阶，" * 40 + "最后一句是收尾要求"
     assert len(own) > 200
-    instruction = DELEGATE_HEAD + own + DELEGATE_DIALOGUE_HEAD + '逐字引用]\n[{"content": "观众甲: 要橡木门"}]\n取舍规则'
+    instruction = (
+        DELEGATE_HEAD + own + DELEGATE_DIALOGUE_HEAD + '逐字引用]\n[{"content": "观众甲: 要橡木门"}]\n取舍规则'
+    )
     first = (await rig.call("framework_delegate", {"agent": "agent_b", "instruction": instruction})).structured_content[
         "task_id"
     ]
