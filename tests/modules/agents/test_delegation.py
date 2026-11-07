@@ -296,6 +296,21 @@ async def test_delegate_rejected_while_target_has_in_flight_delegation(rig: _Rig
     assert res.success and res.structured_content["accepted"] is True
 
 
+async def test_ledger_keeps_full_instruction_text(rig: _Rig) -> None:
+    """账面存指令全文：长指令（带来源原话）不截成 200 字，在途拒受理理由里的原文也是全文。"""
+    instruction = "把营地棚子装一扇木门，" + "门外垫平台阶，" * 40 + "最后一句是收尾要求"
+    assert len(instruction) > 200
+    first = (await rig.call("framework_delegate", {"agent": "agent_b", "instruction": instruction})).structured_content[
+        "task_id"
+    ]
+
+    assert rig.ledger.get(first).snapshot["instruction"] == instruction
+    status = (await rig.call("framework_task_status", {"task_id": first})).structured_content
+    assert status["snapshot"]["instruction"] == instruction
+    refused = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "换个活"})
+    assert refused.success is False and "最后一句是收尾要求" in refused.error_message
+
+
 async def test_in_flight_refusal_points_to_prompt_only_when_target_waits(rig: _Rig) -> None:
     """拒绝理由的出路按对方状态给：停着等主意时指向补充要求；还在做时让主播直接说话。
 

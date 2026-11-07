@@ -265,7 +265,9 @@ class _DelegationCore:
             return _DelegationOutcome(
                 ok=False, error="refused", message=f"受理失败：目标 '{executor}' 拒收（{rejected}）"
             )
-        # 受理成功：登记 agent 型任务（执行 Agent 唯一写入；循环不代写）
+        # 受理成功：登记 agent 型任务（执行 Agent 唯一写入；循环不代写）。
+        # 账面存指令全文：主播递话补充、下播核对"她说做好了"都要拿原话比对，截过的半句对不上；
+        # 要截短的只有显示处（看板任务卡按行数截）
         self._task_ledger.register(
             task_id=task_id,
             provider="framework",
@@ -274,7 +276,7 @@ class _DelegationCore:
             executor=executor,
             status="accepted",
             source="agent",
-            snapshot={"instruction": instruction[:200]},
+            snapshot={"instruction": instruction},
         )
         logger.info(f"委派受理: {initiator} -> {executor}（task_id={task_id}）")
         return _DelegationOutcome(ok=True, task_id=task_id, executor=executor)
