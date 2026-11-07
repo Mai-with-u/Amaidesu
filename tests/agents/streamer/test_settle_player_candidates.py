@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List
 
@@ -235,3 +237,13 @@ async def test_decided_statements_are_not_listed_again_and_pending_ones_expire(
     assert await store.game_players.expire_player_candidates(now_ms_value=1_000 + 14 * _DAY_MS) == 0
     assert await store.game_players.expire_player_candidates(now_ms_value=1_001 + 14 * _DAY_MS) == 1
     assert [row["status"] for row in await _candidates(store)] == ["approved", "rejected"]
+
+
+def test_player_candidates_eval_dry_self_check_passes() -> None:
+    """玩家自述评测器（scripts/memory_eval/player_candidates.py）回放生产整理器的找承诺那次调用：理想输出
+    过生产校验必须一条不差，该列的那句他的话必须出现在公屏段里。取料或核对规则改了而评测没跟上，这里先红。"""
+    script = Path(__file__).resolve().parents[3] / "scripts" / "memory_eval" / "player_candidates.py"
+    completed = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=300, check=False
+    )
+    assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
