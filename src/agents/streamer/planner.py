@@ -67,6 +67,7 @@ from src.agents.streamer.planner_render import (
     step_extra_messages,
     tool_call_parts,
 )
+from src.agents.streamer.game_now import GameNow, render_game_now
 from src.agents.streamer.game_ledger import (
     GameLedger,
     answering_player,
@@ -247,6 +248,8 @@ class PlannerEnv:
     open_games_provider: Optional[Callable[[], Sequence[str]]] = None
     action_recorder: Optional[Callable[[str, str], None]] = None
     delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
+    # 游戏那边此刻的读数（此刻那一步、游戏那边的判断、她近几分钟的公屏话），按手上的事所在的 Agent 查
+    game_now_provider: Optional[Callable[[Sequence[str]], GameNow]] = None
 
 
 def _observation_error(observation: str) -> Optional[str]:
@@ -442,6 +445,7 @@ class Planner:
         self._archive_lookup = env.archive_lookup if env else None
         self._memory_cues_provider = env.memory_cues_provider if env else None
         self._open_games_provider = env.open_games_provider if env else None
+        self._game_now_provider = env.game_now_provider if env else None
 
         # 本窗合法的点名编号与卡片称呼（每窗在 plan() 入口重算，这里给默认值）
         self._round_memory_ids: Set[int] = set()
@@ -1062,9 +1066,6 @@ class Planner:
         if speakers:
             # 本窗有玩家在游戏公屏跟她说话：点出是谁在等她回话，回就在游戏里回（他听不到直播）
             lines.append(speakers)
-        if overview:
-            # 本轮决策前自动读取的现场：已经足够时直接据此决定，不再调用同样的查询工具
-            lines.append(f"【现场速览（本轮决策前自动读取）】\n{overview}")
         state_facts = self._round_facts_text
         if state_facts:
             # 状态跃迁事实块：只收本轮新入账批次里的死亡/重生/任务开始结束/交付类条目，
@@ -1112,10 +1113,13 @@ class Planner:
             # 仅进本轮参考块（消费即送达，由调用方在决策窗入口取空队列）。
             lines.append(f"【运营提醒】{reminders}")
         situation_text = "\n".join(lines)
+        # 游戏那边此刻（含本轮决策前自动读取的现场速览）整块放在参考段最后：新读数离决策最近，
+        # 不被前面已聊话题里的旧说法盖住；每窗重建，不进对话历史
+        game_now_text = self._render_game_now(overview, current_ms)
 
         if not self._context_enabled:
-            # 裸消息路径：跳过环境快照与记忆召回，仅保留情境标注与私密聊天等本窗素材
-            return situation_text, None
+            # 裸消息路径：跳过环境快照与记忆召回，仅保留情境标注、私密聊天与游戏那边此刻等本窗素材
+            return "\n\n".join(block for block in (situation_text, game_now_text) if block), None
 
         duration_so_far_ms = 0
         if self._elapsed_live_provider is not None:
@@ -1145,8 +1149,22 @@ class Planner:
             return None, f"assembler_failed: {e}"
 
         cue_text = (getattr(memory_cues, "text", "") or "").strip() if memory_cues is not None else ""
-        parts = [block for block in (situation_text, assembled_text, cue_text) if block]
+        parts = [block for block in (situation_text, assembled_text, cue_text, game_now_text) if block]
         return "\n\n".join(parts), None
+
+    def _render_game_now(self, overview: str, current_ms: int) -> str:
+        """【游戏那边此刻】一块：手上的事各自的读数、她近几分钟的公屏话，最后是现场速览。
+
+        读数取不到（没接环境、读的时候出错）时只给委派账与现场速览，不挡这一窗决策。
+        """
+        delegations = self.workbench.delegations
+        now = GameNow()
+        if self._game_now_provider is not None:
+            try:
+                now = self._game_now_provider(list(delegations))
+            except Exception as exc:  # noqa: BLE001 - 读数缺一块不挡决策
+                self.logger.warning(f"读游戏那边此刻失败，这一块只给委派与现场速览: {exc}", exc=True)
+        return render_game_now(delegations, self.workbench.delegation_status_provider, now, overview, current_ms)
 
     def _build_dialogue_messages(
         self,

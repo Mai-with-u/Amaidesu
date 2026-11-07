@@ -42,6 +42,7 @@ from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.agents.factory import AGENT_BINDINGS
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.core import CoreStartupPayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.game import GamePayload
@@ -86,6 +87,7 @@ from .scene_card import brief_of
 from .speech_dispatcher import SpeechDispatcher
 from .speech_guard import WordFilter
 from .game_ledger import GameLedger
+from .game_now import AgentNow, GameNow, GameSideLog
 from .stats import StreamerStats
 from .timeline import StreamerTimeline
 from .topic_gate import SpeechGate
@@ -411,6 +413,7 @@ class StreamerAgent(BaseAgent):
                 open_games_provider=self._playing_games,
                 action_recorder=self._record_delegation,
                 delegation_status_provider=self._delegation_machine_status if task_ledger is not None else None,
+                game_now_provider=self._game_now,
             )
             if config.live_frame.enabled:
                 planner_env = dataclasses.replace(
@@ -638,6 +641,8 @@ class StreamerAgent(BaseAgent):
         # 续播重放的玩家游戏发言（一次性缓冲：续播时装入重启前她可能还没回的那几句，
         # 下个决策轮注入【重启前可能还没回的话】段后取空，不重复）
         self._resume_chat_replay: list[str] = []
+        # 游戏那边的流水：游戏 Agent 每步说的最近一句判断、她自己在游戏公屏说的话（【游戏那边此刻】用，场次边界清空）
+        self._game_side = GameSideLog()
 
         # 观众命令接线（最小接线：玩法待扩展）。enabled + 任一映射表非空才激活；
         # 两张映射表（委派指令 / 工具调用）合起来即白名单，限频窗口/次数 config 化。
@@ -1023,6 +1028,12 @@ class StreamerAgent(BaseAgent):
             self._on_self_chatted,
             model_class=GameSelfChattedPayload,
         )
+        # 游戏 Agent 每步说的话（它自己的推理）：只留最近一句，下一窗放进【游戏那边此刻】并标明不一定对
+        self._event_bus.on(
+            CoreEvents.AGENT_REPLIED,
+            self._on_agent_replied,
+            model_class=AgentRepliedPayload,
+        )
         # 场次边界事件：开播放行主动发言，下播收闸（开场白属于场次，不属于进程）
         self._event_bus.on(
             CoreEvents.LIVE_STARTED,
@@ -1043,7 +1054,8 @@ class StreamerAgent(BaseAgent):
         )
         self._logger.info(
             "StreamerAgent 已订阅 room.message.danmaku|gift|super_chat|guard|enter / room.state.watched_count"
-            " / game.* / game.body.* / game.chat.* / live.started|ended / core.startup"
+            " / game.* / game.body.* / game.chat.* / game.self.chatted / agent.replied / live.started|ended"
+            " / core.startup"
         )
 
     async def _on_core_startup(
@@ -1102,8 +1114,9 @@ class StreamerAgent(BaseAgent):
             # 手头的事、补充要求、已聊话题只属于上一场：开播清空，新的一场不从"两小时前在游戏里
             # 开始做某事"接着说（上一场下播时游戏侧已结算委派）
             self._planner.workbench.reset()
-            # 游戏里找她的玩家条目同样只属于上一场：留几分钟的那份不带进新场次
+            # 游戏里找她的玩家条目、游戏那边的流水同样只属于上一场：留几分钟的那份不带进新场次
             self._planner.reset_player_notes()
+            self._game_side.reset()
         # 按场次类型先拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗按表快照重渲。
         # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策窗自然重渲出
         # 新简报，这期间简报退化为更早一场的档案
@@ -1384,8 +1397,9 @@ class StreamerAgent(BaseAgent):
             # 下播即结束这一场的对话记忆，下播后的调试对话重新从空白开始记
             # （道别句已带着这一场的编号落库，随场次留档，不再留在内存对话里）
             await self._scope.end_session()
-            # 道别说完再清玩家条目：下播后的调试对话不接着这一场的玩家说
+            # 道别说完再清玩家条目与游戏那边的流水：下播后的调试对话不接着这一场的玩家和游戏说
             self._planner.reset_player_notes()
+            self._game_side.reset()
         # 收播收尾：排进后台，依次是"等队尾台词播完 → 本场整理（有上限）→ 记账器清理"。
         # 场次行已删或将删时不整理（空场次没东西可整理，用户删掉的场次本意是清掉它），
         # 但后面的清理照跑：待删观众与保留期清理不依赖场次行。
@@ -1923,9 +1937,60 @@ class StreamerAgent(BaseAgent):
         del event_name, source
         try:
             self._note_game_activity(payload.game)
-            self._game_ledger.record_self_chat(payload.game, payload.message, payload.timestamp_ms or now_ms())
+            at_ms = payload.timestamp_ms or now_ms()
+            self._game_ledger.record_self_chat(payload.game, payload.message, at_ms)
+            # 同一句也记进游戏那边的流水：【游戏那边此刻】列她近五分钟在公屏说过什么
+            self._game_side.note_self_chat(payload.game, payload.message, at_ms)
         except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
             self._logger.warning(f"收集她自己的公屏话失败: {exc}", exc=True)
+
+    async def _on_agent_replied(self, event_name: str, payload: AgentRepliedPayload, source: str) -> None:
+        """``agent.replied`` 回调：游戏 Agent 这一步说的话记成它最近的判断，下一窗给 Planner 看。
+
+        这是游戏那一面自己的推理（"门在左边，先拆一格墙出去"），可能看错，所以只进【游戏那边此刻】并标明
+        不一定对；不进对话时间线、不促发决策。自己发的不算。
+        """
+        del event_name, source
+        if payload.agent == self.name:
+            return
+        try:
+            self._game_side.note_judgement(payload.agent, payload.content, payload.timestamp_ms or now_ms())
+        except Exception as exc:  # noqa: BLE001 - 收集失败不阻断
+            self._logger.warning(f"收集游戏那边的判断失败: {exc}", exc=True)
+
+    def _game_now(self, agents: Sequence[str]) -> GameNow:
+        """游戏那边此刻的读数（Planner 每窗拼【游戏那边此刻】用）：各 Agent 此刻那一步与最近的判断，加她的公屏话。"""
+        current = now_ms()
+        readings: Dict[str, AgentNow] = {}
+        for agent in agents:
+            step, step_at_ms = self._latest_game_step(agent)
+            judgement, judged_at_ms = self._game_side.judgement(agent)
+            readings[agent] = AgentNow(
+                step=step, step_at_ms=step_at_ms, judgement=judgement, judgement_at_ms=judged_at_ms
+            )
+        return GameNow(agents=readings, self_chat=self._game_side.recent_self_chat(current))
+
+    def _latest_game_step(self, agent: str) -> Tuple[str, int]:
+        """这个游戏 Agent 此刻在做的那一步：任务账本里它自己发起、还在跑的最近一步的目的与开始时刻。
+
+        只认它自己发起、自己驱动的那几步（provider 型）；它接下的委派不是"一步"。目的取执行侧快照里约定的
+        ``purpose``（这一步要干什么），没写目的的那一步不报。没接任务账本或没有在跑的一步时为 ("", 0)。
+        """
+        if self._task_ledger is None:
+            return "", 0
+        latest = None
+        for task_id in self._task_ledger.active_task_ids():
+            record = self._task_ledger.get(task_id)
+            if record is None or record.source != "provider" or record.initiator != agent:
+                continue
+            if record.status not in IN_PROGRESS_TASK_STATES:
+                continue
+            # 同一毫秒登记的几步取后登记的那一步（账本按登记先后列）
+            if latest is None or record.created_at_ms >= latest.created_at_ms:
+                latest = record
+        if latest is None:
+            return "", 0
+        return str((latest.snapshot or {}).get("purpose") or "").strip(), latest.created_at_ms
 
     def _current_segment_title(self) -> str:
         """当前流程单环节的标题（嘴的现场卡用）；没有流程单为空。"""

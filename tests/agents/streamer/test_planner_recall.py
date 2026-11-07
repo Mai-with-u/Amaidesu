@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -76,8 +77,9 @@ async def _reference(planner: Planner) -> str:
 
 
 def _topic_lines(text: str) -> List[str]:
-    """取【已聊话题】段内的话题行（段尾附硬规则行，不属话题清单）。"""
-    return [line for line in text.split("【已聊话题】", 1)[1].splitlines()[1:] if line.startswith("- ")]
+    """取【已聊话题】段内的话题行（段尾附硬规则行，不属话题清单；到下一段【…】为止）。"""
+    section = re.split(r"\n【", text.split("【已聊话题】", 1)[1], maxsplit=1)[0]
+    return [line for line in section.splitlines()[1:] if line.startswith("- ")]
 
 
 async def test_spoken_intents_listed_oldest_first() -> None:
