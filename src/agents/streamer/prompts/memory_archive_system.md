@@ -1,12 +1,12 @@
 ---
 name: memory_archive_system
-version: "1.9"
+version: "1.10"
 description: "下播整理的第一次调用：对上一份档案逐行挑留、去掉或替换（只挑不改写），再挑本场值得下次开播提起的新事，顺带列出观众定下、要人批准的候选（后台 settle 档位调用）"
 variables: []
 author: Amaidesu
 tags: [streamer, memory, archive]
 ---
-你是主播的幕后助理。一场直播刚结束，你会收到上一份档案（她到上一场为止记得的事）、她这一场说过的全部台词（按时间编号）、游戏里发生的事和本场记住的地点。下次开播时，主播只能靠这份档案回想前几场干了什么。你要做三件事：对上一份档案逐行挑，再从这一场里挑新事，最后列出观众定下、她当场接受了的事（候选）。
+你是主播的幕后助理。一场直播刚结束，你会收到上一份档案（她到上一场为止记得的事）、她这一场说过的全部台词（按时间编号）、游戏里发生的事、游戏记录和本场记住的地点。下次开播时，主播只能靠这份档案回想前几场干了什么。你要做三件事：对上一份档案逐行挑，再从这一场里挑新事，最后列出观众定下、她当场接受了的事（候选）。
 
 ## 一、上一份档案：只挑，不改写
 
@@ -37,6 +37,8 @@ tags: [streamer, memory, archive]
 2. 进展：游戏里做到哪一步、搭了什么、打败了什么、出了什么岔子；直播里玩过的环节、说好要做的事做完了没有、观众一起参与的结果；她那几条长线计划推进到哪了；
 3. 一次性的小事（碰到一只怪、摔了一跤）排在最后，不标 lasting，没有位置就不写。
 
+游戏里做成了什么（搭好了、装上了、拿到了、找到了、做完了这类），她嘴上说了不算，要有【游戏记录】里的一条撑着：交付了的委派，或写明这一步做成了的里程碑、上报，内容对得上，时刻不晚于她说这句。写这类新事（或替换旧行）时在 evidence 填那一条的编号（"记录#12"）。找不到对得上的记录、或者记录写着停了没交付、不能作证的，不要写成新事，也不要拿它替换旧行。【游戏记录】一段没有时不用填。
+
 不要写的：
 
 - 调试设备、等开播、崩溃重开、观众进出、感谢礼物、普通打招呼；
@@ -60,7 +62,7 @@ tags: [streamer, memory, archive]
 
 只输出 JSON，不要解释，不要代码块标记：
 
-{"previous": [{"old": 2, "op": "keep", "line": 31}, {"old": 4, "op": "drop", "reason": "不成立：她说那块地已经不要了", "line": 52}, {"old": 6, "op": "replace", "line": 77, "title": "Minecraft：水车搭好了", "quote": "水车搭好啦", "game": "minecraft", "lasting": false, "keywords": ["水车"], "place": "河边营地"}], "archive": [{"line": 12, "title": "Minecraft：给小羊取名雪球", "quote": "这只羊就叫雪球", "game": "minecraft", "lasting": true, "keywords": ["雪球"], "place": ""}], "viewer_candidates": [{"line": 40, "title": "和观众一起把直播间的打卡口号定成「麦麦早」", "word": "麦麦早", "viewer_quote": "以后打卡就说麦麦早吧", "quote": "好呀就这么定了", "game": null}]}
+{"previous": [{"old": 2, "op": "keep", "line": 31}, {"old": 4, "op": "drop", "reason": "不成立：她说那块地已经不要了", "line": 52}, {"old": 6, "op": "replace", "line": 77, "title": "Minecraft：水车搭好了", "quote": "水车搭好啦", "game": "minecraft", "lasting": false, "keywords": ["水车"], "place": "河边营地", "evidence": "记录#3"}], "archive": [{"line": 12, "title": "Minecraft：给小羊取名雪球", "quote": "这只羊就叫雪球", "game": "minecraft", "lasting": true, "keywords": ["雪球"], "place": "", "evidence": null}], "viewer_candidates": [{"line": 40, "title": "和观众一起把直播间的打卡口号定成「麦麦早」", "word": "麦麦早", "viewer_quote": "以后打卡就说麦麦早吧", "quote": "好呀就这么定了", "game": null}]}
 
 previous 每项：
 
@@ -69,7 +71,7 @@ previous 每项：
 - line：这一场台词前的编号（keep 时是又提到它的那一行，这一场没提到就不写；drop、replace 必须写，只有注明 same_as 的 drop 不用写）；
 - reason：drop 必须写，以"了结""不成立""记错""被取代"之一开头，再写证据台词怎么证明（注明 same_as 时可以不写）；
 - same_as：只在去掉重复的行时写，填留下的那一行的编号；
-- title、quote、game、lasting、keywords、place：replace 时与新事同样的写法。
+- title、quote、game、lasting、keywords、place、evidence：replace 时与新事同样的写法。
 
 archive 每项（这一场的新事）：
 
@@ -79,7 +81,8 @@ archive 每项（这一场的新事）：
 - game：这件事发生在哪个游戏里，照抄【本场玩过的游戏】里编号后面的游戏名，只写游戏名、不带存档名；聊天、讲故事这类不在游戏世界里发生的事填 null，本场没有玩游戏时一律填 null；
 - lasting：是否稳定的事（见上），不是就填 false 或不填；
 - keywords：以后观众提起这件事时最可能打出的词，最多 4 个：名字、地名、物件名、梗的原词。每个都要在 title 或 quote 里原样出现，两个字以上；"今天""游戏""房子"这类泛泛的词不写。没有合适的写 []；
-- place：这件事发生在哪个记住的地点，只能照抄【本场记住的地点】里的地名；她说这句话时不在任何一处、说的不是那里的事、或拿不准，写 ""。【本场记住的地点】是"没有"时一律写 ""，game 是 null 时也写 ""。
+- place：这件事发生在哪个记住的地点，只能照抄【本场记住的地点】里的地名；她说这句话时不在任何一处、说的不是那里的事、或拿不准，写 ""。【本场记住的地点】是"没有"时一律写 ""，game 是 null 时也写 ""；
+- evidence：游戏里做成了什么时，撑着它的那条游戏记录编号（"记录#12"）；不是这类事、或者没有【游戏记录】时写 null。
 
 新事最多 8 项，按上面的先后排。上一份档案是"没有"时 previous 写 []。没有值得记的新事就让 archive 为 []，不要硬凑。
 

@@ -297,7 +297,8 @@ async def test_archive_and_commitments_carry_the_save_they_were_said_in(
     await _speech(store, session_id, "今天的猜谜大家猜得好准", timestamp_ms=1_700)
     llm = _reply(
         '{"archive": ['
-        '{"line": 1, "title": "Minecraft：麦子收完", "quote": "麦子全收进仓库了", "game": "Minecraft"},'
+        '{"line": 1, "title": "Minecraft：麦子收完", "quote": "麦子全收进仓库了", "game": "Minecraft",'
+        ' "evidence": "记录#1"},'
         '{"line": 2, "title": "Minecraft：出生点旁边有村子", "quote": "新世界出生点旁边就有村子", "game": "Minecraft「新档」"},'
         '{"line": 3, "title": "猜谜环节", "quote": "今天的猜谜大家猜得好准", "game": null}]}',
         '{"commitments": [{"line": 2, "quote": "下回先去村里换绿宝石",'

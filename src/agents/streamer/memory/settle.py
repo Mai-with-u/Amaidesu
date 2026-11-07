@@ -78,6 +78,7 @@ from src.agents.streamer.memory.settle_candidates import (
     validate_viewer_candidates,
 )
 from src.agents.streamer.memory.settle_players import PlayerChat, build_player_chat
+from src.agents.streamer.memory.settle_proof import GameRecord, game_records, is_done_claim, proof_for, render_records
 from src.agents.streamer.memory.settle_cues import remembered_places, render_places, verified_keywords, verified_place
 from src.modules.utils.time_utils import now_ms
 
@@ -119,6 +120,10 @@ _LINE_PREFIX_TOKENS = 4
 MAX_SESSIONS_PER_RUN = 4
 # 一次整理最多写几行本场新事（模型多给了就只取前几行；连同接住的行，一份快照的上限见 rolling）
 MAX_ARCHIVE_LINES = 8
+# 完成说法没核实到时进整理报告的原因
+_UNPROVEN_REASON = "说游戏里做成了，游戏记录里没核实到：没引记录，或引的记录没做成、不是这个游戏、晚于她这句"
+# 核对完成说法时读的游戏事件至多几条（最近的）：比给模型看的关键事件多，一场里早些时候做成的也查得到
+_RECORD_EVENTS_MAX = 200
 # 逐字引文与标题的上限（超出的引文整条丢弃，超出的标题截断）
 MAX_QUOTE_CHARS = 80
 MAX_TITLE_CHARS = 30
@@ -170,6 +175,10 @@ class SettleMaterial:
     # 已了结的旧承诺标题：找"她说欠着、账上却找不到的"时一并比对
     closed_titles: List[Tuple[int, str]] = field(default_factory=list)
     closed_text: str = ""
+    # 本场游戏记录（交付了的委派、做成了的里程碑与上报，编了号）：档案写"做成了什么"、了结说"做完了"
+    # 都要引一条，代码按它核对；没有任何记录时无从核对，不拦
+    game_records: List[GameRecord] = field(default_factory=list)
+    records_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -251,7 +260,8 @@ def close_user_prompt(material: SettleMaterial) -> str:
     return (
         f"【还没了结的承诺】\n{material.open_text}\n\n"
         f"【本场她说的话】\n{material.speech_text}\n\n"
-        "请判断这些承诺里有哪些在这一场被她当众交代了结果：做完了、不做了、坦白做不到，或者换了个方式兑现。"
+        + (f"{material.records_text}\n\n" if material.records_text else "")
+        + "请判断这些承诺里有哪些在这一场被她当众交代了结果：做完了、不做了、坦白做不到，或者换了个方式兑现。"
     )
 
 
@@ -741,6 +751,7 @@ class SessionSettler:
         previous = await self._load_previous(session)
         carried = await self._load_carried(session)
         place_marks = await self._load_place_marks(session)
+        records = await self._load_game_records(session)
         return SettleMaterial(
             live_session_id=int(session.id),
             speech_text=speech_text,
@@ -764,7 +775,23 @@ class SessionSettler:
             carried=carried,
             closed_titles=closed_titles,
             closed_text="\n".join(f"#{commitment_id} 「{what}」" for commitment_id, what in closed_titles),
+            game_records=records,
+            records_text=render_records(records),
         )
+
+    async def _load_game_records(self, session: LiveSession) -> List[GameRecord]:
+        """本场的游戏记录：了结了的委派与里程碑、上报；读不到就当没有（完成说法这一场不核对，其余照常整理）。"""
+        if self._events is None:
+            return []
+        try:
+            events = await self._events.list_session_game_events(
+                live_session_id=int(session.id), limit=_RECORD_EVENTS_MAX
+            )
+            delegations = await self._events.list_session_delegations(live_session_id=int(session.id))
+        except Exception as exc:  # noqa: BLE001 - 少了核对依据不挡整理
+            logger.warning(f"场次 {session.id} 读游戏记录失败，本场不核对完成说法: {exc}", exc=exc)
+            return []
+        return game_records(events, delegations)
 
     async def _load_players(self, session: LiveSession, delivered: Sequence[SettleSpeechLine]) -> PlayerChat:
         """本场的游戏玩家与公屏聊天；读不到就当没有（对玩家的承诺这一场认不出，其余照常整理）。"""
@@ -1014,7 +1041,8 @@ class SessionSettler:
                 f"【上一份档案】\n{material.previous_text or '没有'}\n\n"
                 f"【本场她说的话】\n{material.speech_text}\n\n"
                 f"{material.games_text or '【本场没有玩游戏】'}\n\n"
-                f"{render_places(material.places)}\n\n"
+                + (f"{material.records_text}\n\n" if material.records_text else "")
+                + f"{render_places(material.places)}\n\n"
                 "请写出这一场的档案。"
             ),
         )
@@ -1283,6 +1311,10 @@ class SessionSettler:
                 )
                 continue
             game_name = _game_of(raw.get("game"), material)
+            # 游戏里做成了什么：要有一条不晚于她这句的游戏记录撑着，嘴上说做好了不算（没核实到的不写进档案）
+            if game_name is not None and not self._proven(raw, f"{title} {verified}", material, game_name, line):
+                missed.append(UnregisteredItem(kind="archive", what=title, quote=verified, reason=_UNPROVEN_REASON))
+                continue
             save = material.saves.save_at(game_name, int(line.timestamp_ms))
             place = ""
             if game_name is not None:
@@ -1483,13 +1515,23 @@ class SessionSettler:
                 used_chats.add(int(chat.id))
         return written, missed
 
+    @staticmethod
+    def _proven(raw: Dict[str, Any], text: str, material: SettleMaterial, game: str, line: SettleSpeechLine) -> bool:
+        """这一条站得住：不是完成说法，或引的游戏记录撑得住它；本场没有游戏记录时无从核对，算站得住。"""
+        if not material.game_records or not is_done_claim(text):
+            return True
+        return (
+            proof_for(raw.get("evidence"), material.game_records, game=game, at_ms=int(line.timestamp_ms)) is not None
+        )
+
     def _validate_closures(
         self, rows: List[Any], material: SettleMaterial
     ) -> Tuple[List[CommitmentClosure], List[UnregisteredItem]]:
         """了结的校验：只能了结本场之前就有的未了结承诺，且引文逐字。"""
         written: List[CommitmentClosure] = []
         missed: List[UnregisteredItem] = []
-        open_ids = {int(row.id) for row in material.open_commitments}
+        open_by_id = {int(row.id): row for row in material.open_commitments}
+        open_ids = set(open_by_id)
         closed_ids: Set[int] = set()
         for raw in rows:
             if not isinstance(raw, dict):
@@ -1536,6 +1578,15 @@ class SessionSettler:
                         what=f"了结 #{commitment_id}",
                         quote=quote,
                         reason="原话不是所引那一行的逐字片段",
+                    )
+                )
+                continue
+            # 挂了游戏的承诺说"做完了"：同样要有游戏记录撑着；说做不到、不做了的不用
+            game = open_by_id[int(commitment_id)].game
+            if game and not self._proven(raw, verified, material, game, line):
+                missed.append(
+                    UnregisteredItem(
+                        kind="commitment", what=f"了结 #{commitment_id}", quote=verified, reason=_UNPROVEN_REASON
                     )
                 )
                 continue

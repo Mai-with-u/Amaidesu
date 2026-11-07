@@ -437,8 +437,12 @@ class _EventsRepoStub:
     def __init__(self, games: Sequence[str]) -> None:
         self._records = [SimpleNamespace(game=game, message="") for game in games]
 
-    async def list_session_game_events(self, *, live_session_id: int) -> list[Any]:
-        return list(self._records)
+    async def list_session_game_events(self, *, live_session_id: int, limit: int = 60) -> list[Any]:
+        return list(self._records)[-limit:]
+
+    async def list_session_delegations(self, *, live_session_id: int) -> list[Any]:
+        # 用例不带委派与里程碑：本场没有游戏记录，完成说法无从核对、不拦；核对由单元测试覆盖
+        return []
 
     async def list_session_save_spans(self, *, live_session_id: int) -> list[Any]:
         # 用例不带存档：挂游戏的条目认不出存档，与旧版游戏的生产口径一致；存档归属由单元测试覆盖
