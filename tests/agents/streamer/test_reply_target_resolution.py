@@ -6,7 +6,7 @@ from typing import List, Optional
 
 import pytest
 
-from src.agents.streamer.decision_executor import resolve_reply_target_user
+from src.agents.streamer.decision_executor import resolve_reply_message_id, resolve_reply_target_user
 from src.agents.streamer.planner import RoundOutcome
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 
@@ -37,3 +37,32 @@ _BATCH: List[RoomMessagePayload] = [
 )
 def test_resolve_reply_target_user(plan: RoundOutcome, batch: list, expected: Optional[str]) -> None:
     assert resolve_reply_target_user(plan, batch) == expected
+
+
+def _msg_named(text: str, user_id: str, name: str, message_id: str) -> RoomMessagePayload:
+    user = RoomMessageUser(id=user_id, name=name)
+    return RoomMessagePayload(message_type="danmaku", user=user, content=text, message_id=message_id)
+
+
+_BATCH_DUP: List[RoomMessagePayload] = [
+    _msg_named("第一条", "dave", "该死的断触", "d1"),
+    _msg_named("第二条", "dave", "该死的断触", "d2"),
+    _msg_named("你好呀主播", "bob", "user_bob", "m2"),
+]
+
+
+@pytest.mark.parametrize(
+    ("plan", "batch", "expected"),
+    [
+        (RoundOutcome(target="m1"), _BATCH, "m1"),  # target 恰为批内 message_id
+        (RoundOutcome(reply_to="[id:m2]"), _BATCH, "m2"),  # [id:…] 引用写法
+        (RoundOutcome(reply_to="[id:m3"), _BATCH, "m3"),  # 截断的引用写法
+        (RoundOutcome(reply_to="user_bob: 你好呀主播"), _BATCH, "m2"),  # 用户名精确匹配且仅一条
+        (RoundOutcome(reply_to="该死的断触: 你好呀主播"), _BATCH_DUP, None),  # 该用户本轮两条，宁缺毋假
+        (RoundOutcome(target="不存在的id"), _BATCH, None),  # 解析不中不落假键
+        (RoundOutcome(target=None), _BATCH, None),
+        (RoundOutcome(target="m1"), [], None),
+    ],
+)
+def test_resolve_reply_message_id(plan: RoundOutcome, batch: list, expected: Optional[str]) -> None:
+    assert resolve_reply_message_id(plan, batch) == expected
