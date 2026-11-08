@@ -14,6 +14,7 @@ import { useEventsStore } from '@/stores';
 import { liveSessionsApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { buildReplayEntries } from '@/utils/replayFeed';
+import type { SegmentBoundary } from '@/utils/liveLanes';
 import {
   MAX_ENTRIES,
   agentGroupOf,
@@ -101,20 +102,47 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
   /** 诊断天目录缺失（被清理）：回看头部降级提示的数据源 */
   const replayPruned = ref(false);
   const replayLoadingMore = ref(false);
+  /**
+   * 本场流程单的环节执行事实（环节名 + 起止时刻）：回看窗口落在某环节内时，
+   * 用它判断窗口内容属于哪个环节。空数组表示查过但没有环节事实。
+   */
+  const replaySegmentBoundaries = ref<SegmentBoundary[]>([]);
+
+  /**
+   * 环节执行事实：接口不可用或本场没有流程单事实时返回空数组，不影响时间线
+   * 本身的加载（缺这份事实只影响分节头的命名，不影响内容展示）。
+   */
+  async function loadSegmentBoundaries(sessionId: number): Promise<SegmentBoundary[]> {
+    try {
+      const response = await liveSessionsApi.rundownExecution(sessionId);
+      return response.data.segments.map(segment => ({
+        title: segment.seg_title,
+        startMs: segment.entered_at_ms,
+        endMs: segment.left_at_ms,
+      }));
+    } catch {
+      return [];
+    }
+  }
 
   async function loadReplayTimeline(item: LiveSessionItem): Promise<void> {
     replayLoading.value = true;
     try {
-      const response = await liveSessionsApi.timeline(item.live_session_id);
+      const [response, boundaries] = await Promise.all([
+        liveSessionsApi.timeline(item.live_session_id),
+        loadSegmentBoundaries(item.live_session_id),
+      ]);
       replayEntries.value = buildReplayEntries(response.data.items);
       replayRawItems.value = response.data.items;
       replayHasMore.value = response.data.has_more;
       replayPruned.value = response.data.events_pruned;
+      replaySegmentBoundaries.value = boundaries;
     } catch (error) {
       ElMessage.error(getApiErrorMessage(error, '回看加载失败'));
       replayEntries.value = [];
       replayHasMore.value = false;
       replayPruned.value = false;
+      replaySegmentBoundaries.value = [];
     } finally {
       replayLoading.value = false;
     }
@@ -225,6 +253,7 @@ export function useLiveTimeline(options: UseLiveTimelineOptions) {
     replayHasMore,
     replayPruned,
     replayLoadingMore,
+    replaySegmentBoundaries,
     loadOlderReplay,
   };
 }

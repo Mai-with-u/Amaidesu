@@ -286,6 +286,7 @@
                 ref="lanesRef"
                 :entries="allEntries"
                 :tasks="taskWindows"
+                :boundaries="laneBoundaries"
                 :empty-text="timelineEmptyText"
               />
               <RequestTimeline
@@ -552,6 +553,7 @@ const {
   replayPruned,
   replayLoadingMore,
   replayRawItems,
+  replaySegmentBoundaries,
   loadOlderReplay,
 } = useLiveTimeline({
   liveThinkingRows,
@@ -559,6 +561,14 @@ const {
   sessionMode,
   selectedSession,
 });
+
+/**
+ * 双轨分节的环节边界：回看时按场次查流程单执行事实（环节名 + 起止时刻），
+ * 用来判断窗口起点所在环节；实时模式没有这个信息渠道，不传。
+ */
+const laneBoundaries = computed(() =>
+  sessionMode.value === 'replay' ? replaySegmentBoundaries.value : undefined,
+);
 
 /**
  * 时间线三档视图，是同一份条目流的三种投影：

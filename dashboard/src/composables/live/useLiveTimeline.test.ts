@@ -35,6 +35,7 @@ vi.mock('@/api', async importOriginal => ({
     close: vi.fn(),
     remove: vi.fn(),
     timeline: vi.fn(),
+    rundownExecution: vi.fn(),
   },
 }));
 
@@ -44,6 +45,7 @@ vi.mock('element-plus', () => ({
 }));
 
 const timelineMock = vi.mocked(liveSessionsApi.timeline);
+const rundownExecutionMock = vi.mocked(liveSessionsApi.rundownExecution);
 
 function event(
   id: string,
@@ -90,6 +92,7 @@ describe('useLiveTimeline', () => {
     sessionMode = ref('live');
     selectedSession = ref(null);
     timelineMock.mockResolvedValue({ data: { live_session_id: 1, items: [] } } as never);
+    rundownExecutionMock.mockResolvedValue({ data: { segments: [] } } as never);
   });
 
   afterEach(() => {
@@ -218,5 +221,67 @@ describe('useLiveTimeline', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(ElMessage.error).toHaveBeenCalledWith('gone');
     expect(composable.entries.value).toEqual([]);
+  });
+
+  it('回看加载环节执行事实：环节名与起止时刻透出给分节头', async () => {
+    const composable = mount();
+    const replayItem: LiveSessionItem = {
+      live_session_id: 7,
+      source: 'manual',
+      kind: 'live',
+      title: '回看场',
+      room_id: 'room',
+      platform: 'simulator',
+      started_at_ms: 1,
+      ended_at_ms: 2,
+      message_count: 0,
+      is_active: false,
+    };
+    rundownExecutionMock.mockResolvedValueOnce({
+      data: {
+        segments: [
+          { seg_id: 's1', seg_title: '开场交代', entered_at_ms: 100, left_at_ms: 900 },
+          { seg_id: 's2', seg_title: '打怪', entered_at_ms: 900, left_at_ms: null },
+        ],
+      },
+    } as never);
+    sessionMode.value = 'replay';
+    selectedSession.value = replayItem;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(rundownExecutionMock).toHaveBeenCalledWith(7);
+    expect(composable.replaySegmentBoundaries.value).toEqual([
+      { title: '开场交代', startMs: 100, endMs: 900 },
+      { title: '打怪', startMs: 900, endMs: null },
+    ]);
+  });
+
+  it('环节执行事实接口失败时降级为空边界，不影响时间线加载', async () => {
+    const composable = mount();
+    const replayItem: LiveSessionItem = {
+      live_session_id: 8,
+      source: 'manual',
+      kind: 'live',
+      title: '回看场',
+      room_id: 'room',
+      platform: 'simulator',
+      started_at_ms: 1,
+      ended_at_ms: 2,
+      message_count: 1,
+      is_active: false,
+    };
+    rundownExecutionMock.mockRejectedValueOnce(new Error('down'));
+    timelineMock.mockResolvedValueOnce({
+      data: {
+        live_session_id: 8,
+        items: [{ kind: 'danmaku', ts_ms: 100, user_name: '小明', content: '回放弹幕' }],
+      },
+    } as never);
+    sessionMode.value = 'replay';
+    selectedSession.value = replayItem;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(composable.replaySegmentBoundaries.value).toEqual([]);
+    expect(composable.entries.value).toHaveLength(1);
   });
 });

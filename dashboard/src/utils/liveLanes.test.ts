@@ -101,6 +101,37 @@ describe('buildLaneSections', () => {
     expect(section.stage.map(entry => entry.id)).toEqual(['r1', 's1']);
     expect(section.game.map(entry => entry.id)).toEqual(['g1']);
   });
+
+  it('窗口里有流程单条目时头桶沿用"开场前"（向后兼容）', () => {
+    const entries = [
+      entryOf({ id: 'd1', tsMs: 1_000, kind: 'danmaku', actor: '观众甲', text: '在吗' }),
+      entryOf({ id: 'r1', tsMs: 2_000, kind: 'rundown', actor: '流程单', text: '打怪' }),
+    ];
+    const sections = buildLaneSections(entries, [{ title: '打怪', startMs: 500, endMs: 9_000 }]);
+
+    expect(sections.map(section => section.title)).toEqual(['开场前', '打怪']);
+  });
+
+  it('窗口里没有流程单条目时按窗口起点所在环节取名', () => {
+    const entries = [
+      entryOf({ id: 's1', tsMs: 3_000, kind: 'speech', actor: '主播', text: '话' }),
+      entryOf({ id: 's2', tsMs: 4_000, kind: 'speech', actor: '主播', text: '话' }),
+    ];
+    const sections = buildLaneSections(entries, [
+      { title: '开场交代', startMs: 0, endMs: 2_000 },
+      { title: '打怪', startMs: 2_000, endMs: null },
+    ]);
+
+    expect(sections).toHaveLength(1);
+    expect(sections[0]!.title).toBe('打怪');
+  });
+
+  it('查不到环节边界时用中性文案"更早内容"（实时模式无边界信息渠道时沿用"开场前"）', () => {
+    const entries = [entryOf({ id: 's1', tsMs: 3_000, kind: 'speech', actor: '主播', text: '话' })];
+
+    expect(buildLaneSections(entries, [])[0]!.title).toBe('更早内容');
+    expect(buildLaneSections(entries)[0]!.title).toBe('开场前');
+  });
 });
 
 describe('派活生命期', () => {

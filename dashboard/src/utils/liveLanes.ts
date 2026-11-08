@@ -19,7 +19,7 @@ export type LaneId = 'stage' | 'game';
 /** 一个环节段：标题来自流程单环节名，段内含两条轨道的条目 */
 export interface LaneSection {
   key: string;
-  /** 环节名；首个环节之前的内容归入「开场前」 */
+  /** 环节名；无环节信息可依时用「开场前」或「更早内容」 */
   title: string;
   /** 段头提示（如「环节 2/5」），无则空串 */
   note: string;
@@ -27,6 +27,22 @@ export interface LaneSection {
   endMs: number;
   stage: ShowEntry[];
   game: ShowEntry[];
+}
+
+/**
+ * 环节边界：环节名 + 该环节的起止时刻。
+ *
+ * 回看时"首个流程单条目之前的桶"不能一律叫「开场前」——加载窗口可能落在
+ * 流程单的中间甚至末尾，此时窗口起点所在的环节才是这段内容的真实归属。
+ * 边界来自环节执行事实（见回看数据加载），实时模式不传（无此需求）。
+ */
+export interface SegmentBoundary {
+  /** 环节名；空串表示未命名 */
+  title: string;
+  /** 进入该环节的时刻 */
+  startMs: number;
+  /** 离开该环节的时刻；空表示直到场次结束仍停留在该环节 */
+  endMs: number | null;
 }
 
 /** 游戏侧工具：工具条目没有独立通道字段，只能看调用来源（游戏 Agent 命名下发） */
@@ -52,23 +68,63 @@ export function laneOf(entry: ShowEntry): LaneId {
 }
 
 /**
+ * 头桶（首个流程单条目之前的桶）的标题。
+ *
+ * 头桶是"窗口起点到首个流程单条目之前"的那段内容，它属于哪个环节，看窗口起点
+ * 落在哪个环节里：
+ *
+ * - 窗口里有流程单条目：这段内容确实在窗口内第一个环节切换之前，沿用旧文案
+ *   「开场前」；
+ * - 窗口里没有流程单条目（回看锚点落在最后一次切换之后，整段内容都堆在头桶
+ *   里），但查得到环节边界（回看按场次查到的环节执行事实）：落在某个环节内
+ *   就用该环节名；
+ * - 查不到环节边界（回看查过但本场没有环节事实）：用中性文案「更早内容」。
+ *
+ * `boundaries` 为 undefined 表示"没有环节边界这个信息渠道"（实时模式），沿用旧
+ * 文案「开场前」。
+ */
+function headTitleOf(
+  entries: ShowEntry[],
+  boundaries: SegmentBoundary[] | undefined,
+  windowStartMs: number,
+): string {
+  if (entries.some(entry => entry.kind === 'rundown')) return '开场前';
+  if (boundaries === undefined) return '开场前';
+  const hit = boundaries
+    .filter(
+      item => item.startMs <= windowStartMs && (item.endMs === null || windowStartMs <= item.endMs),
+    )
+    // 同一环节可能多次进入（回跳），取最近一次进入的那段
+    .sort((a, b) => b.startMs - a.startMs)[0];
+  if (!hit) return '更早内容';
+  return hit.title || '未命名环节';
+}
+
+/**
  * 条目 → 环节段。切段点是流程单条目（`rundown.changed`）：它自带环节名与序号，
- * 是运行期给的真实边界。第一条流程单之前的内容归入「开场前」段（空段不产出）。
+ * 是运行期给的真实边界。第一条流程单之前的内容归入头段（空段不产出）。
  *
  * 入参需按时间升序（调用方已排序）。
+ *
+ * `boundaries` 是回看时按场次查到的环节执行事实（环节名 + 起止时刻）。窗口里
+ * 没有任何流程单条目时，整段内容只能靠它判断属于哪个环节。
  */
-export function buildLaneSections(entries: ShowEntry[]): LaneSection[] {
+export function buildLaneSections(
+  entries: ShowEntry[],
+  boundaries?: SegmentBoundary[],
+): LaneSection[] {
   const sections: LaneSection[] = [];
   const push = (section: LaneSection): void => {
     if (section.stage.length === 0 && section.game.length === 0) return;
     sections.push(section);
   };
+  const windowStartMs = entries[0]?.tsMs ?? 0;
   let current: LaneSection = {
     key: 'head',
-    title: '开场前',
+    title: headTitleOf(entries, boundaries, windowStartMs),
     note: '',
-    startMs: entries[0]?.tsMs ?? 0,
-    endMs: entries[0]?.tsMs ?? 0,
+    startMs: windowStartMs,
+    endMs: windowStartMs,
     stage: [],
     game: [],
   };

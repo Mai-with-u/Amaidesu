@@ -27,6 +27,7 @@ import {
   taskOfEntry,
   type LaneId,
   type LaneSection,
+  type SegmentBoundary,
   type TaskWindow,
 } from '@/utils/liveLanes';
 import type { ShowEntry } from '@/utils/liveFeed';
@@ -39,11 +40,17 @@ const props = withDefaults(
     emptyText?: string;
     /** 任务区间（task.changed 的受理 + 终态）：游戏列据此把一次工具调用的前后收成一组 */
     tasks?: TaskWindow[];
+    /**
+     * 环节边界（环节名 + 起止时刻）：回看窗口内没有流程单条目时，用它判断
+     * 窗口内容属于哪个环节。undefined 表示没有这个信息渠道（实时模式），
+     * 空数组表示本场查不到环节事实。
+     */
+    boundaries?: SegmentBoundary[] | undefined;
   }>(),
-  { emptyText: '暂无内容', tasks: () => [] },
+  { emptyText: '暂无内容', tasks: () => [], boundaries: undefined },
 );
 
-const sections = computed<LaneSection[]>(() => buildLaneSections(props.entries));
+const sections = computed<LaneSection[]>(() => buildLaneSections(props.entries, props.boundaries));
 const windows = computed(() => delegationWindows(props.entries));
 
 // 相对时间标签（"12s 前"）每秒刷新；卡片 props 恒为 entry + nowMs
