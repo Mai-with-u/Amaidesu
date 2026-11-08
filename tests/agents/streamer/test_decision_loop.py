@@ -27,7 +27,11 @@ from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
 
 
 def _danmaku(text: str = "主播好可爱", message_id: str | None = None) -> RoomMessagePayload:
-    fields: Dict[str, Any] = {"message_type": "danmaku", "user": RoomMessageUser(id="u1", name="观众A"), "content": text}
+    fields: Dict[str, Any] = {
+        "message_type": "danmaku",
+        "user": RoomMessageUser(id="u1", name="观众A"),
+        "content": text,
+    }
     if message_id is not None:
         fields["message_id"] = message_id
     return RoomMessagePayload(**fields)

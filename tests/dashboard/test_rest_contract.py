@@ -405,7 +405,19 @@ REST_CONTRACT: list[tuple[str, type[BaseModel], tuple[str, ...]]] = [
     (
         "clipsApi.getConfig → GET /clips/config",
         clips_schemas.ClipConfigResponse,
-        ("assembled", "config", "config.enabled", "config.recording_dir", "config.ffmpeg_path", "config.output_dir", "config.llm_profile", "config.reencode", "config.min_segment_seconds", "config.max_segment_seconds", "recording_dir_exists"),
+        (
+            "assembled",
+            "config",
+            "config.enabled",
+            "config.recording_dir",
+            "config.ffmpeg_path",
+            "config.output_dir",
+            "config.llm_profile",
+            "config.reencode",
+            "config.min_segment_seconds",
+            "config.max_segment_seconds",
+            "recording_dir_exists",
+        ),
     ),
     (
         "clipsApi.saveConfig → POST /clips/config",
