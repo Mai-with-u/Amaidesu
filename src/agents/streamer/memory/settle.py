@@ -36,6 +36,7 @@ live.ended 之后、道别句播完才排进后台，一次整理待整理的场
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -179,6 +180,9 @@ _MATERIAL_STEPS: Tuple[str, ...] = (
 # 单步取料超过这个毫秒数就记一条告警：这一步可能卡住（表锁、大表扫描、远端存储慢），
 # 面板文案只能报"正在做第几步"，步骤名与已等待时长由日志给出
 _SLOW_MATERIAL_STEP_MS = 60_000
+# 模型整理阶段刷新面板进度文案的间隔（秒）：文案只报已过秒数与最近一次输出的时刻，
+# 不报百分比——模型不给进度，报百分比就是编的
+_LIVENESS_REFRESH_INTERVAL_S = 2.0
 
 T = TypeVar("T")
 
@@ -254,6 +258,13 @@ class SettleOutcome:
     candidates_personal_dropped: int = 0
     # 玩家自述（人批准才进那位玩家的玩家卡）
     player_candidates: List["PendingPlayerCandidate"] = field(default_factory=list)
+
+
+@dataclass
+class _LivenessState:
+    """一次模型调用期间的活性记录：最近一次收到输出增量的时刻（毫秒；0 表示还没收到）。"""
+
+    last_activity_ms: int = 0
 
 
 def parse_json_object(text: str) -> Dict[str, Any]:
@@ -1174,8 +1185,10 @@ class SessionSettler:
 
         ``progress`` 把"第 N 笔/共 M 笔"的进度报给后台任务面板（缺省 None 时不报，
         离线评测脚本直接调本方法不带面板）。共几笔按有没有未了结的旧承诺定：
-        有两笔（档案、找新承诺）或三笔（加了结旧承诺）。
+        有两笔（档案、找新承诺）或三笔（加了结旧承诺）。模型调用期间另有刷新协程
+        报"模型整理中（已 N 秒）"与"模型输出中（最后活动 Xs 前）"。
         """
+        live = progress is not None
         if progress is None:
 
             async def progress(text: str) -> None:
@@ -1183,15 +1196,20 @@ class SessionSettler:
 
         total_calls = 3 if material.open_commitments else 2
         await progress(f"第 1 笔/共 {total_calls} 笔：整理本场档案")
-        archive_data = await self._ask(
-            template=_ARCHIVE_TEMPLATE,
-            prompt=(
-                f"【上一份档案】\n{material.previous_text or '没有'}\n\n"
-                f"【本场她说的话】\n{material.speech_text}\n\n"
-                f"{material.games_text or '【本场没有玩游戏】'}\n\n"
-                + (f"{material.records_text}\n\n" if material.records_text else "")
-                + f"{render_places(material.places)}\n\n"
-                "请写出这一场的档案。"
+        archive_data = await self._call_with_liveness(
+            progress=progress,
+            live=live,
+            call=lambda on_delta: self._ask(
+                template=_ARCHIVE_TEMPLATE,
+                prompt=(
+                    f"【上一份档案】\n{material.previous_text or '没有'}\n\n"
+                    f"【本场她说的话】\n{material.speech_text}\n\n"
+                    f"{material.games_text or '【本场没有玩游戏】'}\n\n"
+                    + (f"{material.records_text}\n\n" if material.records_text else "")
+                    + f"{render_places(material.places)}\n\n"
+                    "请写出这一场的档案。"
+                ),
+                on_delta=on_delta,
             ),
         )
         archive_rows = archive_data.get("archive")
@@ -1213,17 +1231,22 @@ class SessionSettler:
         # 找承诺那次顺带列出"她说欠着、账上找不到的"与玩家自述：同一份原料，不多一次调用。
         # 输出断在最后的自述那段时只丢自述，承诺与"说欠着"照常用
         await progress(f"第 2 笔/共 {total_calls} 笔：找新承诺")
-        commitment_text = await self._ask_text(
-            template=_COMMITMENT_TEMPLATE,
-            prompt=(
-                f"【她能做的事】\n{material.abilities_text}\n\n"
-                f"{material.games_text or '【本场没有玩游戏】'}\n\n"
-                f"【还没了结的承诺】\n{material.open_text or '没有'}\n\n"
-                f"【已了结的承诺】\n{material.closed_text or '没有'}\n\n"
-                f"【已判误记的承诺（这些话不是承诺）】\n{material.void_text or '没有'}\n\n"
-                f"【本场她说的话】\n{material.speech_text}\n\n"
-                + (f"{material.players.text}\n\n" if material.players.text else "")
-                + "请找出这一场她新答应的、还没兑现的事。"
+        commitment_text = await self._call_with_liveness(
+            progress=progress,
+            live=live,
+            call=lambda on_delta: self._ask_text(
+                template=_COMMITMENT_TEMPLATE,
+                prompt=(
+                    f"【她能做的事】\n{material.abilities_text}\n\n"
+                    f"{material.games_text or '【本场没有玩游戏】'}\n\n"
+                    f"【还没了结的承诺】\n{material.open_text or '没有'}\n\n"
+                    f"【已了结的承诺】\n{material.closed_text or '没有'}\n\n"
+                    f"【已判误记的承诺（这些话不是承诺）】\n{material.void_text or '没有'}\n\n"
+                    f"【本场她说的话】\n{material.speech_text}\n\n"
+                    + (f"{material.players.text}\n\n" if material.players.text else "")
+                    + "请找出这一场她新答应的、还没兑现的事。"
+                ),
+                on_delta=on_delta,
             ),
         )
         commitment_data, candidates_cut = parse_commitment_output(commitment_text)
@@ -1233,10 +1256,15 @@ class SessionSettler:
         closure_rows: List[Any] = []
         if material.open_commitments:
             await progress(f"第 3 笔/共 {total_calls} 笔：了结旧承诺")
-            closure_rows = await self._ask_for_list(
-                template=_CLOSE_TEMPLATE,
-                prompt=close_user_prompt(material),
-                key="closed",
+            closure_rows = await self._call_with_liveness(
+                progress=progress,
+                live=live,
+                call=lambda on_delta: self._ask_for_list(
+                    template=_CLOSE_TEMPLATE,
+                    prompt=close_user_prompt(material),
+                    key="closed",
+                    on_delta=on_delta,
+                ),
             )
         new_lines, archive_misses = self._validate_archive(archive_rows, material)
         # 先认了结、再认新承诺：一行台词点名了某条旧承诺时，那条旧承诺本场有没有了结，
@@ -1375,19 +1403,85 @@ class SessionSettler:
             rejected_titles=rejected_titles,
         )
 
-    async def _ask_for_list(self, *, template: str, prompt: str, key: str) -> List[Any]:
+    async def _call_with_liveness(
+        self,
+        *,
+        progress: Callable[[str], Awaitable[None]],
+        live: bool,
+        call: Callable[[Optional[Callable[[str, str], None]]], Awaitable[T]],
+    ) -> T:
+        """跑一次模型调用，调用期间持续刷新面板进度文案。
+
+        ``call`` 收到增量回调（可能为 None）后发起调用。模型不给进度，只给"还在跑"
+        与"最近一次输出是什么时候"两件事，因此文案写成"模型整理中（已 N 秒）"或
+        "模型输出中（最后活动 Xs 前）"，不给百分比——报了也是编的。
+        """
+        if not live:
+            return await call(None)
+        state = _LivenessState()
+        ticker = asyncio.create_task(self._tick_liveness(state, progress))
+        try:
+            return await call(self._delta_recorder(state))
+        finally:
+            ticker.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await ticker
+
+    def _delta_recorder(self, state: _LivenessState) -> Callable[[str, str], None]:
+        """模型输出增量回调：只记下"刚刚出过字"这一个事实，文案由刷新协程写。"""
+
+        def _on_delta(kind: str, text_delta: str) -> None:
+            if not text_delta:
+                return
+            state.last_activity_ms = int(self._clock())
+
+        return _on_delta
+
+    async def _tick_liveness(self, state: _LivenessState, progress: Callable[[str], Awaitable[None]]) -> None:
+        """周期刷新模型整理阶段的进度文案。
+
+        刷新节奏按真实时间走（面板要看的是"过了多久"），文案里的秒数按注入时钟算，
+        这样测试能把时间流逝握在手里。
+        """
+        started_ms = int(self._clock())
+        while True:
+            now_ms = int(self._clock())
+            if state.last_activity_ms:
+                idle_s = max(0, (now_ms - state.last_activity_ms) // 1000)
+                text = f"模型输出中（最后活动 {idle_s}s 前）"
+            else:
+                elapsed_s = max(0, (now_ms - started_ms) // 1000)
+                text = f"模型整理中（已 {elapsed_s} 秒）"
+            await progress(text)
+            await asyncio.sleep(_LIVENESS_REFRESH_INTERVAL_S)
+
+    async def _ask_for_list(
+        self, *, template: str, prompt: str, key: str, on_delta: Optional[Callable[[str, str], None]] = None
+    ) -> List[Any]:
         """一次调用取一个列表字段；字段缺失当空列表，不是列表就按输出读不懂处理。"""
-        return _list_field(await self._ask(template=template, prompt=prompt), key)
+        return _list_field(await self._ask(template=template, prompt=prompt, on_delta=on_delta), key)
 
-    async def _ask(self, *, template: str, prompt: str) -> Dict[str, Any]:
+    async def _ask(
+        self, *, template: str, prompt: str, on_delta: Optional[Callable[[str, str], None]] = None
+    ) -> Dict[str, Any]:
         """渲染系统提示词并调一次模型，返回解析出的 JSON 对象。"""
-        return parse_json_object(await self._ask_text(template=template, prompt=prompt))
+        return parse_json_object(await self._ask_text(template=template, prompt=prompt, on_delta=on_delta))
 
-    async def _ask_text(self, *, template: str, prompt: str) -> str:
-        """渲染系统提示词并调一次模型，返回原文；调用失败或返回空内容时抛 SettleError。"""
+    async def _ask_text(
+        self, *, template: str, prompt: str, on_delta: Optional[Callable[[str, str], None]] = None
+    ) -> str:
+        """渲染系统提示词并调一次模型，返回原文；调用失败或返回空内容时抛 SettleError。
+
+        ``on_delta`` 非 None 时模型走流式传输，边生成边回调输出增量；整理阶段据此
+        判断模型还在动（客户端不支持流式时自动降级为一次性调用，回调不触发）。
+        没有回调时不下发这个参数，调用方不必支持流式。
+        """
         system = self._prompt_manager.render(template)
         try:
-            response = await self._llm.generate(prompt, profile=SETTLE_PROFILE, system=system)
+            if on_delta is None:
+                response = await self._llm.generate(prompt, profile=SETTLE_PROFILE, system=system)
+            else:
+                response = await self._llm.generate(prompt, profile=SETTLE_PROFILE, system=system, on_delta=on_delta)
         except Exception as exc:  # noqa: BLE001 - 调用异常统一转成整理失败原因
             raise SettleError(f"模型调用失败：{exc}") from exc
         content = getattr(response, "content", None)

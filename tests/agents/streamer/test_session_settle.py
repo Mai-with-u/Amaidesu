@@ -1604,6 +1604,24 @@ async def test_settle_without_registry_runs_unchanged(store: SQLiteDatabase, pro
 # ---------------------------------------------------------------------------
 
 
+class _SlowLLM(FakeLLMManager):
+    """应答前先让出事件循环的假模型：整理阶段的刷新协程因此有机会写出进度文案。
+
+    ``emit_delta`` 为真时顺带回调一次输出增量，模拟模型边生成边吐字。
+    """
+
+    def __init__(self, *contents: str, emit_delta: bool = False) -> None:
+        super().__init__(responses=[Response(success=True, content=content) for content in contents])
+        self._emit_delta = emit_delta
+
+    async def generate(self, input: Any, **kwargs: Any) -> Response:
+        on_delta = kwargs.get("on_delta")
+        if on_delta is not None and self._emit_delta:
+            on_delta("content", "整理中")
+        await asyncio.sleep(0.01)
+        return await super().generate(input, **kwargs)
+
+
 class _JumpingClock:
     """每次取时刻都往前跳一截的假时钟：用来造出"某一步等了很久"。"""
 
@@ -1654,3 +1672,33 @@ async def test_settle_warns_when_material_step_is_slow(
 
     warnings = [r["message"] for r in loguru_capture.records if r["level"] == "WARNING"]
     assert any("读游戏玩家与公屏" in message and "61000" in message for message in warnings), warnings
+
+
+async def test_settle_reports_model_stage_elapsed(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
+    """模型整理期间面板报已过秒数（不给百分比）：模型不提供进度，报百分比是编的。"""
+    registry, bus, payloads = _registry_with_recorder()
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
+    llm = _SlowLLM('{"archive": []}', '{"commitments": []}')
+    settler = _settler(store, llm, prompt_manager, task_registry=registry)
+
+    assert await settler.settle_session(session_id) is True
+    await bus.wait_until_drained()
+
+    texts = [payload.progress_text for payload in payloads]
+    assert "模型整理中（已 0 秒）" in texts, texts
+
+
+async def test_settle_reports_model_output_activity(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
+    """模型出过字后面板改报最近活动时间：说明这一场还在吐字，不是在原地卡住。"""
+    registry, bus, payloads = _registry_with_recorder()
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
+    llm = _SlowLLM('{"archive": []}', '{"commitments": []}', emit_delta=True)
+    settler = _settler(store, llm, prompt_manager, task_registry=registry)
+
+    assert await settler.settle_session(session_id) is True
+    await bus.wait_until_drained()
+
+    texts = [payload.progress_text for payload in payloads]
+    assert "模型输出中（最后活动 0s 前）" in texts, texts
