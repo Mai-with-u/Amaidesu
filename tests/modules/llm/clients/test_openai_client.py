@@ -11,9 +11,22 @@ import pytest
 from openai import APIStatusError
 
 from src.modules.llm.clients.openai.client import OpenAIClient
-from src.modules.llm.errors import FatalError, LLMInterruptedError, RetryableError
+from src.modules.llm.errors import FatalError, LLMInterruptedError, LLMTimeoutError, RetryableError
 from src.modules.llm.payload import GenerateRequest, ImagePart, Message, ToolCall, ToolSpec, Usage
-from tests.modules.llm.fakes import FakeStream, SDK_PATH, chunk, make_openai_client, sdk_reply, tool_delta, usage
+from src.modules.llm.stall import DEFAULT_STALL_TIMEOUT_MS, StreamStallGuard
+from tests.helpers import FakeClock
+from tests.modules.llm.fakes import (
+    ClockAdvancingStream,
+    FakeStream,
+    HangingStream,
+    SDK_PATH,
+    chunk,
+    fake_stall_waiter,
+    make_openai_client,
+    sdk_reply,
+    tool_delta,
+    usage,
+)
 
 
 def _request(*parts: Any, **fields: Any) -> GenerateRequest:
@@ -212,6 +225,67 @@ async def test_empty_completed_stream_is_left_to_engine_retry(finish_reason: str
     message = str(error.value)
     assert f"finish_reason={finish_reason}" in message and "completion_tokens=4096" in message
     assert "reasoning_chars=6" in message and "考虑当前任务" not in message
+
+
+# 流式停滞判据：连续一段时间内没有任何输出块即判定上游挂死
+
+
+def _stall_client(clock: FakeClock) -> tuple[OpenAIClient, MagicMock]:
+    """带假时钟与假等待的客户端（时间流逝不靠真实等待）。"""
+    return make_openai_client(
+        stall_guard_factory=lambda: StreamStallGuard(
+            DEFAULT_STALL_TIMEOUT_MS, clock=clock.now_ms, wait=fake_stall_waiter(clock)
+        )
+    )
+
+
+async def test_streaming_stall_fails_the_request_without_resending() -> None:
+    """上游挂死（连接还在但不再产出输出块）：按失败交回上层，不降级非流式重发。"""
+    clock = FakeClock()
+    client, sdk = _stall_client(clock)
+    stream = HangingStream()
+    sdk.chat.completions.create.return_value = stream
+
+    with pytest.raises(LLMTimeoutError, match="停滞"):
+        await client.generate(_request("hello"), model="test-model", on_delta=lambda kind, text: None)
+
+    assert sdk.chat.completions.create.await_count == 1
+    assert stream.closed
+
+
+async def test_streaming_keeps_going_while_output_keeps_arriving() -> None:
+    """慢而活的流：块间隔没超过停滞上限就不算挂死（整段耗时可以远超上限）。"""
+    clock = FakeClock()
+    started_at = clock.now_ms()
+    client, sdk = _stall_client(clock)
+    sdk.chat.completions.create.return_value = ClockAdvancingStream(
+        [chunk(reasoning="想"), chunk(content="你"), chunk(content="好")], clock, gap_ms=20_000
+    )
+
+    result = await client.generate(_request("hello"), model="test-model", on_delta=lambda kind, text: None)
+
+    assert result.content == "你好"
+    assert clock.now_ms() - started_at == 60_000  # 整段 60 秒，但没有任何一段间隔超过 30 秒
+
+
+async def test_streaming_tool_call_fragments_count_as_output() -> None:
+    """工具调用参数碎片也是模型在产出：只有碎片时不算停滞。"""
+    clock = FakeClock()
+    client, sdk = _stall_client(clock)
+    sdk.chat.completions.create.return_value = ClockAdvancingStream(
+        [
+            chunk(tool_calls=[tool_delta(0, call_id="call_1", name="reply")]),
+            chunk(tool_calls=[tool_delta(0, arguments='{"speech": "大家好"}')]),
+        ],
+        clock,
+        gap_ms=20_000,
+    )
+
+    result = await client.generate(
+        _request("hello", tools=[ToolSpec(name="w")]), model="test-model", on_delta=lambda kind, text: None
+    )
+
+    assert result.tool_calls[0].name == "reply"
 
 
 # 中立 payload → OpenAI 协议翻译

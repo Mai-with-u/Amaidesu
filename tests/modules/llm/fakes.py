@@ -6,7 +6,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -17,6 +17,8 @@ from src.modules.llm.clients.openai.client import OpenAIClient
 from src.modules.llm.embedding import EmbeddingClient
 from src.modules.llm.engine import LLMManager
 from src.modules.llm.payload import Response, Usage
+from src.modules.llm.stall import StreamStallGuard
+from tests.helpers import FakeClock
 
 SDK_PATH = "src.modules.llm.clients.openai.client.AsyncOpenAI"
 
@@ -73,7 +75,11 @@ def tool_delta(index, name=None, arguments=None, call_id=None):
     return SimpleNamespace(index=index, id=call_id, function=SimpleNamespace(name=name, arguments=arguments))
 
 
-def make_openai_client(config: dict[str, object] | None = None) -> tuple[OpenAIClient, MagicMock]:
+def make_openai_client(
+    config: dict[str, object] | None = None,
+    *,
+    stall_guard_factory: Callable[[], StreamStallGuard] | None = None,
+) -> tuple[OpenAIClient, MagicMock]:
     """真实 OpenAIClient + SDK 替身（create 缺省返回 sdk_reply()）。"""
     merged: dict[str, object] = {"api_key": "test-key", "base_url": "https://api.example.com/v1", "model": "test-model"}
     merged.update(config or {})
@@ -82,8 +88,64 @@ def make_openai_client(config: dict[str, object] | None = None) -> tuple[OpenAIC
         sdk.chat.completions.create = AsyncMock(return_value=sdk_reply())
         sdk.close = AsyncMock()
         openai_class.return_value = sdk
-        client = OpenAIClient(merged)
+        client = OpenAIClient(merged, stall_guard_factory=stall_guard_factory)
     return client, sdk
+
+
+class HangingStream:
+    """模拟挂死的流：连接还在，但再也不吐出任何输出块。"""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self._never = asyncio.Event()
+
+    def __aiter__(self) -> "HangingStream":
+        return self
+
+    async def __anext__(self) -> Any:
+        await self._never.wait()
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class ClockAdvancingStream:
+    """模拟慢而活的流：每吐一块就把假时钟往前推（表示距上一次输出的间隔）。"""
+
+    def __init__(self, chunks: List[Any], clock: FakeClock, gap_ms: int) -> None:
+        self._chunks = list(chunks)
+        self._clock = clock
+        self._gap_ms = gap_ms
+        self.closed = False
+
+    def __aiter__(self) -> "ClockAdvancingStream":
+        return self
+
+    async def __anext__(self) -> Any:
+        if not self._chunks:
+            raise StopAsyncIteration
+        self._clock.tick(self._gap_ms)
+        return self._chunks.pop(0)
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def fake_stall_waiter(clock: FakeClock) -> Callable[[Awaitable[Any], float], Awaitable[Any]]:
+    """假等待：让 awaitable 跑一步；没就绪就判定超时（推进假时钟，不做真实等待）。"""
+
+    async def wait(awaitable: Awaitable[Any], timeout_s: float) -> Any:
+        task = asyncio.ensure_future(awaitable)
+        await asyncio.sleep(0)
+        if task.done():
+            return task.result()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        clock.tick(int(timeout_s * 1000))
+        raise asyncio.TimeoutError
+
+    return wait
 
 
 @asynccontextmanager

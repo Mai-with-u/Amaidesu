@@ -40,6 +40,7 @@ from src.modules.llm.payload import (
     Usage,
 )
 from src.modules.llm.reasoning import ReasoningParseMode, split_reasoning
+from src.modules.llm.stall import StreamStallGuard
 from src.modules.logging import get_logger
 
 # 具体的 SDK 异常集合：Client 翻译处只捕获这些类型并翻译为分类异常
@@ -81,7 +82,13 @@ class OpenAIClient(BaseLLMClient):
     retry），model 由每次调用通过 ``model`` 参数传入。
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        *,
+        stall_guard_factory: Optional[Callable[[], StreamStallGuard]] = None,
+    ) -> None:
+        """``stall_guard_factory``：构造流式停滞守卫的工厂（测试注入可控时钟的守卫）。"""
         super().__init__(config)
         self.logger = get_logger(self.__class__.__name__)
         client_config = build_openai_compatible_client_config(config)
@@ -102,6 +109,8 @@ class OpenAIClient(BaseLLMClient):
         )
         # provider 级默认（profile 显式给值时覆盖）
         self.temperature = config.get("temperature", 0.2)
+        # 流式停滞守卫的构造入口：缺省用真实时钟与真实等待
+        self._stall_guard_factory = stall_guard_factory or StreamStallGuard
         self.logger.info(f"OpenAI 客户端初始化完成 (端点: {client_config.base_url})")
 
     def _infer_mime_from_bytes(self, data: bytes) -> str:
@@ -657,7 +666,10 @@ class OpenAIClient(BaseLLMClient):
             request_params["tools"] = self._normalize_tool_definitions(tools)
             request_params["tool_choice"] = "auto"
 
-        stream = await self.client.chat.completions.create(**request_params)
+        # 停滞守卫：连续一段时间内没有任何输出块即判定上游挂死，按失败交回上层。
+        # 计时从请求发出算起——建连阶段同样不产出任何输出块。
+        guard = self._stall_guard_factory()
+        stream = await guard.wait_for(self.client.chat.completions.create(**request_params))
         content_parts: List[str] = []
         reasoning_parts: List[str] = []
         # index -> {"id": str, "name": str, "arguments": list[str]}（arguments 碎片按序拼接）
@@ -666,8 +678,13 @@ class OpenAIClient(BaseLLMClient):
         usage_raw: Optional[str] = None
         model_name: Optional[str] = None
         finish_reason: Optional[str] = None
+        iterator = stream.__aiter__()
         try:
-            async for chunk in stream:
+            while True:
+                try:
+                    chunk = await guard.wait_for(iterator.__anext__())
+                except StopAsyncIteration:
+                    break
                 if interrupt_flag is not None and interrupt_flag.is_set():
                     # 中断不构成完整响应，不能把已经接收的部分参数交给工具执行器。
                     raise asyncio.CancelledError
@@ -691,7 +708,8 @@ class OpenAIClient(BaseLLMClient):
                 if content_piece:
                     content_parts.append(content_piece)
                     on_delta("content", content_piece)
-                for tc_delta in getattr(delta, "tool_calls", None) or []:
+                tool_deltas = getattr(delta, "tool_calls", None) or []
+                for tc_delta in tool_deltas:
                     state = tool_states.setdefault(tc_delta.index, {"id": "", "name": "", "arguments": []})
                     if tc_delta.id:
                         state["id"] = tc_delta.id
@@ -700,6 +718,9 @@ class OpenAIClient(BaseLLMClient):
                         state["name"] = fn.name
                     if fn is not None and fn.arguments:
                         state["arguments"].append(fn.arguments)
+                if reasoning_piece or content_piece or tool_deltas:
+                    # 有输出：停滞计时归零（工具调用参数碎片同样是模型在产出）
+                    guard.note_output()
         finally:
             try:
                 await stream.aclose()
