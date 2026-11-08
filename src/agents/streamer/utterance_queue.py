@@ -43,6 +43,7 @@ from typing import Awaitable, Callable, Deque, Optional
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.core import CoreErrorPayload
 from src.modules.events.payloads.utterance import UtteranceDroppedPayload, UtteranceFailedPayload, is_failure_reported
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
@@ -62,6 +63,10 @@ DEFAULT_RENDER_TIMEOUT_MS = 60_000
 # 一句探路：成功即恢复正常，失败保持熔断并刷新计时。
 RENDER_FUSE_THRESHOLD = 3
 RENDER_FUSE_HALF_OPEN_MS = 60_000
+
+# 同类运行故障告警的最小重发间隔（毫秒）：5 分钟窗口内只发布第一条 core.error，
+# 持续故障不把 WebUI 告警刷屏；窗口判定用注入时钟，测试可控
+ERROR_ALERT_THROTTLE_MS = 5 * 60 * 1000
 
 # 默认发言等播放的等待上限（毫秒）：覆盖"当前句剩余播放 + 队列积压数句"
 # 的最坏排空时间，量级对齐 render_timeout_ms；0 表示不限时（不推荐，
@@ -192,6 +197,8 @@ class UtteranceQueue:
         self._consecutive_render_timeouts = 0
         self._render_fused = False
         self._last_render_failure_ms = 0
+        # 上一次熔断告警（core.error）的发布时刻（毫秒）；0 = 从未发布过
+        self._last_fuse_alert_ms = 0
 
         # 统计（轻量自监控）
         self._total_enqueued = 0
@@ -467,6 +474,31 @@ class UtteranceQueue:
         except Exception as exc:  # noqa: BLE001 - 旁路回调失败不挡播放
             self._logger.warning(f"开播回调失败（已忽略）: utterance_id={item.utterance_id}, err={exc}", exc=True)
 
+    async def _emit_fuse_alert(self) -> None:
+        """熔断触发旁路告警：发 core.error 让 WebUI 弹窗提示观众听不到语音。
+
+        同一来源 5 分钟窗口内只发第一条（节流判定用注入时钟）；事件总线未
+        注入或发布异常时只记日志，不影响队列继续运转。
+        """
+        now = self._clock()
+        if now - self._last_fuse_alert_ms < ERROR_ALERT_THROTTLE_MS:
+            self._logger.debug("熔断告警处于节流窗口内，跳过发布")
+            return
+        self._last_fuse_alert_ms = now
+        message = (
+            f"语音合成连续失败已熔断，观众听不到语音；每 {RENDER_FUSE_HALF_OPEN_MS // 1000}s 自动探路，恢复后自动续播"
+        )
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.emit(
+                CoreEvents.CORE_ERROR,
+                CoreErrorPayload(message=message, data={"source": "tts"}),
+                source="streamer_agent.utterance_queue",
+            )
+        except Exception as exc:  # noqa: BLE001 - 告警是旁路，不阻断队列
+            self._logger.warning(f"发布熔断告警失败（已忽略）: err={exc}")
+
     async def _emit_failed(self, utterance_id: str, text: str, error_message: str) -> None:
         """这句到不了引擎，代发 ``tts.utterance.failed`` 让字幕兜底出字。
 
@@ -565,6 +597,7 @@ class UtteranceQueue:
                     f"连续 {self._consecutive_render_timeouts} 句渲染超时，触发熔断："
                     f"后续 utterance 不再渲染、直接代发 failed，每 {RENDER_FUSE_HALF_OPEN_MS}ms 放行一句探路"
                 )
+                await self._emit_fuse_alert()
             elif self._render_fused:
                 self._logger.error(f"熔断半开探路句仍渲染超时，保持熔断并刷新计时: utterance_id={item.utterance_id}")
             self._logger.error(

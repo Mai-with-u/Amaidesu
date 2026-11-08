@@ -43,6 +43,9 @@ from src.modules.llm.bootstrap import (
     resolve_profile_name,
     validate_profile_binding,
 )
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.core import CoreErrorPayload
 from src.modules.llm.call_observer import CallObserver
 from src.modules.llm.clients import resolve_client_method
 from src.modules.llm.errors import (
@@ -68,9 +71,14 @@ from src.modules.llm.payload import (
 )
 from src.modules.logging import get_logger
 from src.modules.storage.repos import LLMRepo
+from src.modules.utils.time_utils import now_ms
 from src.modules.vision.image_store import get_image_store
 
 __all__ = ["ClientFactory", "LLMManager", "RetryConfig", "inline_payload_spans"]
+
+# 同类运行故障告警的最小重发间隔（毫秒）：5 分钟窗口内只发布第一条 core.error，
+# 持续故障不把 WebUI 告警刷屏；窗口判定用注入时钟，测试可控
+ERROR_ALERT_THROTTLE_MS = 5 * 60 * 1000
 
 # provider 客户端构造工厂：接收 provider 配置 dict，返回客户端实例。
 # 缺省路径走 clients 调度表按 client_type 构造；测试注入替身客户端用。
@@ -436,10 +444,22 @@ class LLMManager:
         diagnostics_writer: Optional[DiagnosticsWriter] = None,
         client_factory: Optional[ClientFactory] = None,
         give_up_timer: Optional[Callable[[int], Awaitable[None]]] = None,
+        event_bus: Optional[EventBus] = None,
+        clock: Optional[Callable[[], int]] = None,
     ) -> None:
-        """``give_up_timer``：按毫秒等一段时间的协程函数（放弃等待计时用；测试注入可控的计时）。"""
+        """``give_up_timer``：按毫秒等一段时间的协程函数（放弃等待计时用；测试注入可控的计时）。
+
+        ``event_bus``：发布 core.error 运行告警用（可选；未注入时告警旁路静默关闭）。
+        LLMManager 与 EventBus 同级、不经 Agent 构造，装配侧拿到总线后调
+        :meth:`attach_event_bus` 挂载即可。``clock``：当前时刻（Unix 毫秒），
+        告警节流窗口判定用，测试可注入。
+        """
         self.logger = get_logger("LLMManager")
         self._give_up_timer = give_up_timer or _sleep_ms
+        self._event_bus = event_bus
+        self._clock = clock or now_ms
+        # 上一次"全部模型失败"告警的发布时刻（毫秒）；0 = 从未发布过
+        self._last_all_failed_alert_ms: int = 0
         # provider 客户端构造工厂：缺省 None 走 clients 调度表，行为与未注入时一致
         self._client_factory = client_factory
         # provider_name -> provider 配置 + 客户端实例（共享连接）
@@ -473,6 +493,41 @@ class LLMManager:
         self._rng: Optional[random.Random] = None
 
     # === setup / 生命周期 ===
+
+    def attach_event_bus(self, event_bus: EventBus) -> None:
+        """挂载事件总线（运行告警 core.error 的发布通道）。
+
+        LLMManager 由组合根直接构造、先于事件总线存在时用；重复挂载不覆盖
+        已有总线，幂等。
+        """
+        if self._event_bus is None:
+            self._event_bus = event_bus
+
+    async def _emit_all_failed_alert(
+        self, profile_name: str, attempted_models: List[str], last_error: Optional[str]
+    ) -> None:
+        """ "全部模型失败"旁路告警：发 core.error 让 WebUI 弹窗可见。
+
+        同一来源 5 分钟窗口内只发第一条（节流判定用注入时钟）；事件总线未
+        挂载或发布异常时只记日志，不影响调用方拿到的失败响应。
+        """
+        now = self._clock()
+        if now - self._last_all_failed_alert_ms < ERROR_ALERT_THROTTLE_MS:
+            self.logger.debug(f"全部模型失败告警处于节流窗口内，跳过发布: profile={profile_name}")
+            return
+        self._last_all_failed_alert_ms = now
+        message = f"LLM 全部模型失败：profile={profile_name} 模型={attempted_models}，最后错误={last_error}"
+        self.logger.error(f"发布 core.error 运行告警: {message}")
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.emit(
+                CoreEvents.CORE_ERROR,
+                CoreErrorPayload(message=message, data={"source": "llm", "profile": profile_name}),
+                source="llm_manager",
+            )
+        except Exception as exc:  # noqa: BLE001 - 告警是旁路，不阻断原失败路径
+            self.logger.warning(f"发布 LLM 全部模型失败告警失败（已忽略）: profile={profile_name}, err={exc}")
 
     async def setup(self, config: Dict[str, Any]) -> None:
         """从三层配置（providers / models / profiles）初始化 LLM 运行时。
@@ -847,6 +902,7 @@ class LLMManager:
         self.logger.error(
             f"[LLM 全部失败] profile={profile_name} 尝试模型 {attempted_models} 均失败，最后错误={last_error}"
         )
+        await self._emit_all_failed_alert(profile_name, attempted_models, last_error)
         result = Response(
             success=False,
             content=None,

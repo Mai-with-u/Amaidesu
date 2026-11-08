@@ -10,8 +10,11 @@ import pytest
 
 from src.modules.config.model_schemas import LLMProfilesConfig
 from src.modules.llm.bootstrap import KNOWN_PROFILE_NAMES, ProfileNames, validate_profile_binding
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.core import CoreErrorPayload
 from src.modules.llm.clients import _CLIENT_DISPATCH
-from src.modules.llm.engine import LLMManager, RetryConfig
+from src.modules.llm.engine import ERROR_ALERT_THROTTLE_MS, LLMManager, RetryConfig
 from src.modules.llm.payload import Response, Usage
 
 
@@ -289,3 +292,82 @@ async def test_profile_capabilities_visual_and_context_window() -> None:
     assert [manager.is_profile_visual(p) for p in ("planner", "replyer", "no-such")] == [True, False, False]
     windows = [manager.get_profile_context_window(p) for p in ("planner", "replyer", "summary", "no-such")]
     assert windows == [128_000, 1_000_000, 0, 0]
+
+
+# ---------------- 运行告警：全部模型失败旁路发布 core.error ----------------
+
+
+def _capture_core_error(bus: EventBus) -> list[CoreErrorPayload]:
+    """收集 core.error 告警（后台扇出，断言前先 wait_until_drained）。"""
+    alerts: list[CoreErrorPayload] = []
+
+    async def _capture(event_name: str, payload: CoreErrorPayload, source: str) -> None:
+        alerts.append(payload)
+
+    bus.on(CoreEvents.CORE_ERROR, _capture, model_class=CoreErrorPayload)
+    return alerts
+
+
+async def _setup_with_alert_channel(config: dict, backend: MagicMock, bus: EventBus, clock: Any) -> LLMManager:
+    """装配接了告警通道（event_bus + 注入时钟）的引擎。"""
+    manager = LLMManager(event_bus=bus, clock=clock.now_ms)
+    manager._retry_config = RetryConfig(max_retries=0)
+    with patch.dict(_CLIENT_DISPATCH, {"openai": MagicMock(return_value=backend)}):
+        await manager.setup(config)
+    return manager
+
+
+async def test_all_models_failed_emits_core_error_alert(event_bus: EventBus, fake_clock: Any) -> None:
+    """全部模型失败：发布一条 core.error，message 写清 profile、尝试过的模型与原因。"""
+    config = _config({"m1": "id-m1"}, {"planner": ["m1"]})
+    alerts = _capture_core_error(event_bus)
+
+    async def always_fail(**kwargs):
+        raise Exception("HTTP 402 insufficient balance")
+
+    manager = await _setup_with_alert_channel(config, _backend(always_fail), event_bus, fake_clock)
+    response = await manager.generate("Test", profile="planner")
+    await event_bus.wait_until_drained()
+
+    assert response.success is False
+    assert len(alerts) == 1
+    message = alerts[0].message or ""
+    assert "全部模型失败" in message and "planner" in message and "m1" in message and "402" in message
+
+
+async def test_all_models_failed_alert_throttled_within_window(event_bus: EventBus, fake_clock: Any) -> None:
+    """同类告警 5 分钟窗口内只发布第一条；拨过窗口后再次全部失败才发第二条。"""
+    config = _config({"m1": "id-m1"}, {"planner": ["m1"]})
+    alerts = _capture_core_error(event_bus)
+
+    async def always_fail(**kwargs):
+        raise Exception("upstream down")
+
+    manager = await _setup_with_alert_channel(config, _backend(always_fail), event_bus, fake_clock)
+    assert (await manager.generate("Test", profile="planner")).success is False
+    assert (await manager.generate("Test", profile="planner")).success is False
+    await event_bus.wait_until_drained()
+    assert len(alerts) == 1
+
+    fake_clock.tick(ERROR_ALERT_THROTTLE_MS)
+    assert (await manager.generate("Test", profile="planner")).success is False
+    await event_bus.wait_until_drained()
+    assert len(alerts) == 2
+
+
+async def test_failover_backup_success_does_not_alert(event_bus: EventBus, fake_clock: Any) -> None:
+    """单模型失败但备胎接住：不发 core.error（只有全部模型失败才告警）。"""
+    config = _config({"m1": "id-m1", "m2": "id-m2"}, {"planner": ["m1", "m2"]})
+    alerts = _capture_core_error(event_bus)
+
+    async def first_fails(**kwargs):
+        if kwargs["model"] == "id-m1":
+            raise Exception("upstream error")
+        return _ok("success from m2", model="id-m2")
+
+    manager = await _setup_with_alert_channel(config, _backend(first_fails), event_bus, fake_clock)
+    response = await manager.generate("Test", profile="planner")
+    await event_bus.wait_until_drained()
+
+    assert response.success is True and response.model == "m2"
+    assert alerts == []

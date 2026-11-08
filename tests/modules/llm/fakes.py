@@ -153,6 +153,11 @@ class FakeLLMManager:
         self.calls: List[Dict[str, Any]] = []
         self._gate = gate
         self.gate_reached = asyncio.Event()
+        self.event_bus: Any = None
+
+    def attach_event_bus(self, event_bus: Any) -> None:
+        """与真实 LLMManager 对齐的挂载出口（Agent 构造期会调用）；替身只记录不使用。"""
+        self.event_bus = event_bus
 
     # === 三个调用入口（与 LLMManager 对外契约同名同返回）===
 

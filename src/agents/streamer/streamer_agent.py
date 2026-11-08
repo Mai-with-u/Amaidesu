@@ -330,6 +330,10 @@ class StreamerAgent(BaseAgent):
         super().__init__(event_bus=event_bus)
         self.typed_config = config
         self._llm = llm_manager
+        # LLMManager 先于事件总线由组合根构造，挂载点在 Agent 侧：总线到手后
+        # 递给它，"全部模型失败"才能旁路发布 core.error 告警（幂等，不覆盖已有总线）
+        if llm_manager is not None and event_bus is not None:
+            llm_manager.attach_event_bus(event_bus)
         self._prompt = prompt_manager
         self._event_bus = event_bus
         self._tool_registry = tool_registry

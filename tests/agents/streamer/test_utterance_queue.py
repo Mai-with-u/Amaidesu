@@ -17,6 +17,7 @@ from src.agents.streamer.utterance_queue import (
 )
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.core import CoreErrorPayload
 from src.modules.events.payloads.utterance import UtteranceDroppedPayload, UtteranceFailedPayload
 from src.modules.tts.common import emit_utterance_failed
 
@@ -712,5 +713,69 @@ async def test_success_resets_consecutive_timeout_counter() -> None:
         # 若熔断已开，t4 会是 fuse 快速失败而非渲染超时
         assert "render_timeout" in next(p for p in failed if p.utterance_id == "t4").error_message
         assert "render_timeout_fuse" not in next(p for p in failed if p.utterance_id == "t4").error_message
+    finally:
+        await queue.stop()
+
+
+# ---------------- 熔断触发旁路发布 core.error 告警 ----------------
+
+
+def _capture_core_error(bus: EventBus) -> list[CoreErrorPayload]:
+    """收集 core.error 告警（后台扇出，断言前先 wait_until_drained）。"""
+    alerts: list[CoreErrorPayload] = []
+
+    async def _capture(event_name: str, payload: CoreErrorPayload, source: str) -> None:
+        alerts.append(payload)
+
+    bus.on(CoreEvents.CORE_ERROR, _capture, model_class=CoreErrorPayload)
+    return alerts
+
+
+async def test_fuse_open_emits_core_error_alert_with_throttle() -> None:
+    """熔断触发发一条 core.error（message 写明观众听不到语音与自动恢复）；
+    5 分钟窗口内再次熔断不重发，拨过窗口后才发第二条。"""
+    bus = EventBus()
+    failed = _capture_failed(bus)
+    alerts = _capture_core_error(bus)
+    calls: List[Optional[str]] = []
+
+    async def _timeout_unless_probe(text: str, utterance_id: Optional[str]) -> None:
+        calls.append(utterance_id)
+        if utterance_id not in ("probe_1", "probe_2"):
+            await asyncio.sleep(5.0)
+
+    clock = _Clock()
+    queue = UtteranceQueue(speak=_timeout_unless_probe, event_bus=bus, max_queue=8, render_timeout_ms=150, clock=clock)
+    await queue.start()
+    try:
+        # 第一次熔断：告警一条
+        for i in range(3):
+            await queue.enqueue(f"t1_{i}", f"超时{i}")
+        await _wait_for(lambda: len(failed) == 3)
+        await bus.wait_until_drained()
+        assert len(alerts) == 1
+        message = alerts[0].message or ""
+        assert "熔断" in message and "观众听不到语音" in message and "恢复" in message
+
+        # 拨过半开间隔，探路成功恢复 → 再次熔断：距首条告警 < 5 分钟，不重发
+        clock.now += 60_000
+        await queue.enqueue("probe_1", "探路句")
+        await _wait_for(lambda: "probe_1" in calls)
+        for i in range(3):
+            await queue.enqueue(f"t2_{i}", f"再超时{i}")
+        await _wait_for(lambda: len(failed) == 6)
+        await bus.wait_until_drained()
+        assert len(alerts) == 1
+
+        # 再次恢复后拨过 5 分钟节流窗口 → 第三次熔断重发一条
+        clock.now += 60_000
+        await queue.enqueue("probe_2", "探路句2")
+        await _wait_for(lambda: "probe_2" in calls)
+        clock.now += 5 * 60_000
+        for i in range(3):
+            await queue.enqueue(f"t3_{i}", f"三超时{i}")
+        await _wait_for(lambda: len(failed) == 9)
+        await bus.wait_until_drained()
+        assert len(alerts) == 2
     finally:
         await queue.stop()
