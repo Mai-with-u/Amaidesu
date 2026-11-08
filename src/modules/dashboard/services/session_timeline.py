@@ -1,7 +1,8 @@
 """场次时间线装配
 
 单场时间线回看的条目装配：明细行（消息/发言/礼物/SC）的 kind 映射 +
-发言双源去重（与 ``streamer.speech`` 事件成对的明细行让位）+ 事件记录
+双源去重（与 ``streamer.speech`` 事件成对的发言明细行让位；与
+``room.message.*`` 事件按 message_id 成对的观众消息明细行让位）+ 事件记录
 （已由 SessionEventReader 收集：环形缓冲 ∪ 诊断文件、去重、白名单过滤）
 合并排序与游标分页。纯数据变换，不含 HTTP 语义与 IO。
 """
@@ -19,6 +20,10 @@ _KIND_MAP = {"gift_row": "gift", "super_chat_row": "super_chat"}
 # 发言双源去重的时刻容差：明细行 ts 即事件载荷 timestamp_ms（同源写两处），
 # 正常完全相等，窗口只为容忍落库与落盘的写时刻漂移
 _SPEECH_DEDUPE_WINDOW_MS = 5_000
+
+# 观众消息明细行 kind（= live_chat message_type）全集：这些行与事件侧
+# ``room.message.*`` 事件同源写两处，回看按 message_id 精确相等配对去重
+_VIEWER_MESSAGE_KINDS = {"danmaku", "gift", "super_chat", "guard", "enter"}
 
 
 def _drop_duplicated_speech_rows(
@@ -56,6 +61,38 @@ def _drop_duplicated_speech_rows(
     return kept
 
 
+def _drop_duplicated_viewer_rows(
+    detail_rows: List[Dict[str, Any]],
+    event_records: List[Any],
+) -> List[Dict[str, Any]]:
+    """丢弃与观众消息事件成对的明细行（message_id 精确相等配对去重）。
+
+    同一条观众消息既落 live_chat 明细行又发 ``room.message.*`` 事件（诊断文件
+    里折叠为单一 record type ``room.message``）：命中即以事件侧为准，避免回看
+    模式同一句话出两张卡；未命中的明细行（诊断流被清理、事件缺失）保留，作为
+    明细行视图的兜底。匹配键：message_id 精确相等，两侧缺 message_id 的不参与
+    配对（不按文本猜，语义与发言去重的"宁缺毋假"对齐）。
+    """
+    event_message_ids: set = set()
+    for record in event_records:
+        if record.type == "room.message" or record.type.startswith("room.message."):
+            data = record.data if isinstance(record.data, dict) else {}
+            message_id = data.get("message_id")
+            if isinstance(message_id, str) and message_id:
+                event_message_ids.add(message_id)
+    if not event_message_ids:
+        return detail_rows
+    return [
+        row
+        for row in detail_rows
+        if not (
+            row.get("kind") in _VIEWER_MESSAGE_KINDS
+            and row.get("message_id")
+            and row["message_id"] in event_message_ids
+        )
+    ]
+
+
 def build_timeline_items(
     detail_rows: List[Dict[str, Any]],
     event_records: List[Any],
@@ -71,10 +108,12 @@ def build_timeline_items(
 
     礼物/SC 明细行与消息事件同义，统一映射为前端卡片 kind；发言明细行与
     ``streamer.speech`` 事件成对的只保留事件（见
-    ``_drop_duplicated_speech_rows``）；事件记录的超长字符串在返回侧截断
-    （不改落盘文件）。入参均不被修改。
+    ``_drop_duplicated_speech_rows``）；观众消息明细行与 ``room.message.*``
+    事件按 message_id 成对的只保留事件（见 ``_drop_duplicated_viewer_rows``）；
+    事件记录的超长字符串在返回侧截断（不改落盘文件）。入参均不被修改。
     """
     detail_rows = _drop_duplicated_speech_rows(detail_rows, event_records)
+    detail_rows = _drop_duplicated_viewer_rows(detail_rows, event_records)
     items: List[Dict[str, Any]] = []
     for row in detail_rows:
         entry = dict(row)
