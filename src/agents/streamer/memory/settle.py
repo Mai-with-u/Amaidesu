@@ -52,6 +52,7 @@ from typing import (
     Sequence,
     Set,
     Tuple,
+    TypeVar,
     Union,
 )
 
@@ -162,6 +163,24 @@ _VIEWER_CODE_PREFIX = "观众"
 
 # 后台任务面板里场次的星期叫法（strftime 的 %a 是英文短名，直接用中文）
 _WEEKDAY_NAMES = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+# 取料步骤清单：面板进度文案按这个顺序报"取料 k/N：步骤名"，慢步告警也按它点名
+_MATERIAL_STEPS: Tuple[str, ...] = (
+    "读游戏玩家与公屏",
+    "读游戏存档段",
+    "读游戏事件",
+    "读未了结与误记承诺",
+    "读已了结承诺",
+    "读上一份档案快照",
+    "读人批准的观众来源行",
+    "读本场地点动静",
+    "读本场游戏记录",
+)
+# 单步取料超过这个毫秒数就记一条告警：这一步可能卡住（表锁、大表扫描、远端存储慢），
+# 面板文案只能报"正在做第几步"，步骤名与已等待时长由日志给出
+_SLOW_MATERIAL_STEP_MS = 60_000
+
+T = TypeVar("T")
 
 
 def _session_title(session: LiveSession) -> str:
@@ -674,7 +693,7 @@ class SessionSettler:
 
         try:
             await report_progress("取料中")
-            material = await self._collect_material(session, delivered)
+            material = await self._collect_material(session, delivered, progress=report_progress)
             outcome = await self._extract(material, progress=report_progress)
         except SettleError as exc:
             await self._record_failure(session, str(exc))
@@ -818,21 +837,34 @@ class SessionSettler:
     # 取料
     # ------------------------------------------------------------------
 
-    async def _collect_material(self, session: LiveSession, delivered: List[SettleSpeechLine]) -> SettleMaterial:
-        """把一场的原料全取出来：她说的话、游戏（连同待过的存档）、游戏玩家与公屏、她能做的事、旧承诺。"""
+    async def _collect_material(
+        self,
+        session: LiveSession,
+        delivered: List[SettleSpeechLine],
+        *,
+        progress: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> SettleMaterial:
+        """把一场的原料全取出来：她说的话、游戏（连同待过的存档）、游戏玩家与公屏、她能做的事、旧承诺。
+
+        ``progress`` 报取料进度：每步开始时报"取料 k/N：步骤名"（k 是已完成的步数，
+        N 是取料步骤总数），运营者据此区分"在干活"与"卡死"。缺省 None 时不报
+        （离线评测脚本直接调本方法）。
+        """
         # 先认本场的玩家：台词里"回应玩家N"的代号要和公屏段同一套
-        players = await self._load_players(session, delivered)
+        players = await self._material_step(0, self._load_players(session, delivered), progress)
+        saves = await self._material_step(1, self._load_saves(session), progress)
+        games, games_text = await self._material_step(2, self._render_games(session, saves), progress)
+        open_commitments, open_text, void_titles, void_text = await self._material_step(
+            3, self._load_commitments(session), progress
+        )
+        closed_titles = await self._material_step(4, self._load_closed_titles(session), progress)
+        previous = await self._material_step(5, self._load_previous(session), progress)
+        carried = await self._material_step(6, self._load_carried(session), progress)
+        place_marks = await self._material_step(7, self._load_place_marks(session), progress)
+        records = await self._material_step(8, self._load_game_records(session), progress)
         speech_text, lines_by_number, speech_note = self._render_speech(delivered, player_codes=players.codes)
-        saves = await self._load_saves(session)
-        games, games_text = await self._render_games(session, saves)
         game_agents = self._enabled_game_names()
         abilities_text = self._render_abilities(game_agents)
-        open_commitments, open_text, void_titles, void_text = await self._load_commitments(session)
-        closed_titles = await self._load_closed_titles(session)
-        previous = await self._load_previous(session)
-        carried = await self._load_carried(session)
-        place_marks = await self._load_place_marks(session)
-        records = await self._load_game_records(session)
         return SettleMaterial(
             live_session_id=int(session.id),
             speech_text=speech_text,
@@ -859,6 +891,27 @@ class SessionSettler:
             game_records=records,
             records_text=render_records(records),
         )
+
+    async def _material_step(
+        self,
+        index: int,
+        awaitable: Awaitable[T],
+        progress: Optional[Callable[[str], Awaitable[None]]],
+    ) -> T:
+        """跑一步取料：先报进度，跑完计时；单步超时记一条告警。
+
+        进度文案里的步数是"已完成几步"，步骤名取自 ``_MATERIAL_STEPS``，
+        两处写的是同一份清单，面板上的 k/N 因此总与实际步骤对得上。
+        """
+        name = _MATERIAL_STEPS[index]
+        if progress is not None:
+            await progress(f"取料 {index}/{len(_MATERIAL_STEPS)}：{name}")
+        started = int(self._clock())
+        result = await awaitable
+        elapsed_ms = int(self._clock()) - started
+        if elapsed_ms > _SLOW_MATERIAL_STEP_MS:
+            logger.warning(f"取料步骤「{name}」已等待 {elapsed_ms} 毫秒，超过 {_SLOW_MATERIAL_STEP_MS} 毫秒")
+        return result
 
     async def _load_game_records(self, session: LiveSession) -> List[GameRecord]:
         """本场的游戏记录：了结了的委派与里程碑、上报；读不到就当没有（完成说法这一场不核对，其余照常整理）。"""

@@ -1597,3 +1597,60 @@ async def test_settle_without_registry_runs_unchanged(store: SQLiteDatabase, pro
     await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
     llm = _reply('{"archive": []}', '{"commitments": []}')
     assert await _settler(store, llm, prompt_manager).settle_session(session_id) is True
+
+
+# ---------------------------------------------------------------------------
+# 取料进度与模型整理阶段的活性信号
+# ---------------------------------------------------------------------------
+
+
+class _JumpingClock:
+    """每次取时刻都往前跳一截的假时钟：用来造出"某一步等了很久"。"""
+
+    def __init__(self, step_ms: int) -> None:
+        self._step_ms = step_ms
+        self._calls = 0
+
+    def __call__(self) -> int:
+        self._calls += 1
+        return 7_777 + self._calls * self._step_ms
+
+
+async def test_settle_reports_material_step_progress(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
+    """取料逐步报进度：面板能看到"取料 k/N：步骤名"，据此区分在干活与卡住。"""
+    registry, bus, payloads = _registry_with_recorder()
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
+    llm = _reply('{"archive": []}', '{"commitments": []}')
+    settler = _settler(store, llm, prompt_manager, task_registry=registry)
+
+    assert await settler.settle_session(session_id) is True
+    await bus.wait_until_drained()
+
+    texts = [payload.progress_text for payload in payloads]
+    assert "取料 0/9：读游戏玩家与公屏" in texts, texts
+    assert "取料 8/9：读本场游戏记录" in texts, texts
+
+
+async def test_settle_warns_when_material_step_is_slow(
+    store: SQLiteDatabase, prompt_manager: PromptManager, loguru_capture: Any
+) -> None:
+    """单步取料等太久：日志点名步骤与已等待时长，运营者据此定位卡住的步骤。"""
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
+    llm = _reply('{"archive": []}', '{"commitments": []}')
+    settler = SessionSettler(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        event_repo=store.events,
+        archive_repo=store.archive,
+        llm_service=llm,
+        prompt_manager=prompt_manager,
+        clock=_JumpingClock(61_000),
+    )
+
+    assert await settler.settle_session(session_id) is True
+
+    warnings = [r["message"] for r in loguru_capture.records if r["level"] == "WARNING"]
+    assert any("读游戏玩家与公屏" in message and "61000" in message for message in warnings), warnings
