@@ -29,3 +29,9 @@ def test_template_completion_fidelity_fence():
     """输入段模板含完成度忠实围栏：交接稿里还在做的事不得演成做成了。"""
     text = (_PROMPTS_DIR / "amaidesu_replyer.md").read_text(encoding="utf-8")
     assert "完成与否以交接稿里的事实为准" in text and "事实不能演" in text
+
+
+def test_template_viewer_message_reconciliation_fence():
+    """输入段模板含观众消息对账围栏：交接稿引用的观众消息须能在本轮消息批找到原文。"""
+    text = (_PROMPTS_DIR / "amaidesu_replyer.md").read_text(encoding="utf-8")
+    assert "必须能在本轮消息批里找到原文" in text and "不接那个话头" in text
