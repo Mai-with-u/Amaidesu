@@ -105,6 +105,8 @@ class DashboardServer:
         diagnostics_writer: Optional["DiagnosticsWriter"] = None,
         request_history_manager: Optional[RequestHistoryManager] = None,
         avatar_tracking: Optional[Any] = None,
+        clipping_service: Optional[Any] = None,
+        clipping_factory: Optional[Any] = None,
     ) -> None:
         self.event_bus = event_bus
         self.collector_manager = collector_manager
@@ -198,6 +200,10 @@ class DashboardServer:
         # 注入面捕合成器让形象调校页（/api/v1/avatar/tuning）实时调表情配方、
         # 眼神目标与平台校准；未装配（[tracking] 关着、极简启动/测试）时该组端点返回 503
         self.avatar_tracking = avatar_tracking
+        # 直播切片编排（[clipping] 未启用时 None，切片 API 端点 503）
+        self.clipping_service = clipping_service
+        # 运行期装配工厂：切片页保存配置后免重启重建 ClippingService（依赖与启动期同源）
+        self.clipping_factory = clipping_factory
         # 注入诊断落盘器让场次回看事件侧能读到 logs/events 诊断流；
         # 未注入（极简启动/测试）时回看事件侧只有内存环形缓冲
         self.diagnostics_writer = diagnostics_writer

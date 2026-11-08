@@ -12,6 +12,7 @@ from src.modules.dashboard.api import (
     background,
     avatar,
     avatar_tuning,
+    clips,
     components,
     config,
     debug,
@@ -71,6 +72,9 @@ def create_app() -> FastAPI:
 
     # 场次复盘只读聚合 + 数据包导出（services.session_review 承载口径）
     app.include_router(review.router, prefix="/api/v1/review", tags=["Review"])
+
+    # 直播切片（录播匹配 / AI 选段 / 段编辑 / ffmpeg 切割受理）
+    app.include_router(clips.router, prefix="/api/v1/clips", tags=["Clips"])
 
     # 后台任务可见性（底栏任务条刷新恢复：进行中任务清单；实时变化走 background.task.changed 推送）
     app.include_router(background.router, prefix="/api/v1/background-tasks", tags=["BackgroundTasks"])

@@ -61,6 +61,7 @@ from src.modules.events.interceptors import (
     SessionStampInterceptor,
     SimilarFilterInterceptor,
 )
+from src.modules.clipping import ClippingConfigSchema, ClippingService
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import CoreShutdownPayload, CoreStartupPayload
 from src.modules.llm.embedding import build_embedding_client
@@ -336,6 +337,7 @@ class AppComponents:
     task_tracker: Optional[TaskTracker]
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder]
     maibot_sync_reporter: Optional[LiveStatusReporter]
+    clipping_service: Optional["ClippingService"] = None
     # 与 MaiBot 共享的长期笔记（开了 [maibot_sync] 共享笔记才有；关停时停后台补发、关连接）
     # 面捕合成器（形象逐帧驱动；关停时在工具 Provider 收尾之后、事件总线清理之前停）
     avatar_tracking: Optional[TrackingRuntime] = None
@@ -482,6 +484,11 @@ async def create_app_components(
     # 第 ① 段只接线订阅：心跳随 live.started 才起，第 ② 段 Agent 启动补写回顾发出的
     # streamer.recap.written 也能接住（整场记录随回顾一起补推）
     maibot_sync_reporter = _build_maibot_sync_reporter(event_bus, config, database=database)
+
+    # --- 直播切片（[clipping]）：AI 选段 + ffmpeg 切割（enabled 且配了录播目录才订阅下播事件）---
+    clipping_service = _build_clipping_service(
+        event_bus=event_bus, config=config, database=database, llm_service=llm_service
+    )
 
     # --- CollectorManager ---
     # 采集器配置位于 collectors.toml：根键 = enabled 名单 + 各采集器同名子段
@@ -936,6 +943,8 @@ async def create_app_components(
             # 场次复盘聚合/导出的数据源：game_events 计数与 db 快照副本路径
             event_repo=database.events,
             storage_db_path=database.db_path,
+            # 直播切片编排（WebUI 切片页业务面）
+            clipping_service=clipping_service,
             # 复盘总结面板读 session_recaps；流程单执行面板读变更事实行
             # 记忆账本：承诺与场次档案（下播整理写入；WebUI 查看与纠错）
             commitments_repo=database.commitments,
@@ -957,6 +966,8 @@ async def create_app_components(
             chat_repo=database.chat,
             # 模拟域仓储：模拟器页"启用"按钮运行期装配 SimulatorService 的数据源
             sim_repo=database.sim,
+            # 切片运行期装配工厂需要完整库门面（多仓储同源）
+            database=database,
             # 观众画像仓储：/api/v1/memory/* 管理接口与主播 Agent 共用同一张表
             # 观众身份人工处理：待确认页、合并与取消关联
             viewer_identity_repo=database.viewer_identity,
@@ -1007,6 +1018,7 @@ async def create_app_components(
         task_tracker=task_tracker if agents_config else None,
         tts_diagnostics_recorder=tts_diagnostics_recorder,
         maibot_sync_reporter=maibot_sync_reporter,
+        clipping_service=clipping_service,
         avatar_tracking=avatar_tracking,
         privacy_service=privacy_service,
         retention_service=retention_service,
@@ -1129,6 +1141,29 @@ def _build_maibot_sync_reporter(
         pushed += " / 整场记录"
     logger.info(f"直播近况同步已接线：{pushed} → {sync_config.url}")
     return reporter
+
+
+def _build_clipping_service(
+    *,
+    event_bus: EventBus,
+    config: Dict[str, Any],
+    database: SQLiteDatabase,
+    llm_service: Optional[LLMManager],
+) -> Optional["ClippingService"]:
+    """按 ``[clipping]`` 装配直播切片编排；未启用时不装配，启用但缺录播目录时装配降级（只在日志说明）。"""
+    raw = config.get("clipping", {}) if isinstance(config, dict) else {}
+    clipping_config = ClippingConfigSchema(**raw) if isinstance(raw, dict) else ClippingConfigSchema()
+    if not clipping_config.enabled:
+        logger.debug("[clipping].enabled=false，零装配切片功能")
+        return None
+    service = ClippingService(
+        event_bus=event_bus,
+        database=database,
+        llm_manager=llm_service,
+        config=clipping_config,
+    )
+    service.start()  # 未配置录播目录时只在日志说明，不订阅
+    return service
 
 
 def _streamer_name(config: Dict[str, Any]) -> str:
@@ -1293,6 +1328,8 @@ async def _start_dashboard(
     request_history_manager=None,
     avatar_tracking: Optional[TrackingRuntime] = None,
     sim_repo=None,
+    clipping_service=None,
+    database=None,
 ):
     """启动 DashboardServer（仅作为 WebUI observer，不参与决策数据流）。"""
     try:
@@ -1315,6 +1352,22 @@ async def _start_dashboard(
             await service.setup(config_service, auto_start=False)
             return service
 
+        # 运行期装配工厂：切片页保存配置后免重启重建 ClippingService（依赖与
+        # 启动期装配同源；按 config_service 里的最新 [clipping] 构造并启动订阅）
+        async def _assemble_clipping() -> "ClippingService":
+            raw = config_service.get_section("clipping", {}) or {}
+            fresh_config = ClippingConfigSchema(**raw) if isinstance(raw, dict) else ClippingConfigSchema()
+            if database is None:
+                raise RuntimeError("切片运行期装配缺数据库门面（_start_dashboard 未注入 database）")
+            rebuilt = ClippingService(
+                event_bus=event_bus,
+                database=database,
+                llm_manager=llm_service,
+                config=fresh_config,
+            )
+            rebuilt.start()
+            return rebuilt
+
         dashboard_server = DashboardServer(
             event_bus=event_bus,
             config_service=config_service,
@@ -1325,6 +1378,9 @@ async def _start_dashboard(
             tool_operations=tool_operations,
             llm_manager=llm_service,
             request_history_manager=request_history_manager,
+            # 直播切片编排（WebUI 切片页的业务面；未启用为 None，端点 503）
+            clipping_service=clipping_service,
+            clipping_factory=_assemble_clipping,
             prompt_manager=get_prompt_manager(),
             log_streamer=log_streamer,
             simulator_service=simulator_service,
@@ -1478,6 +1534,7 @@ async def run_shutdown(
     task_tracker: Optional[TaskTracker] = components.task_tracker
     tts_diagnostics_recorder: Optional[TtsDiagnosticsRecorder] = components.tts_diagnostics_recorder
     maibot_sync_reporter: Optional[LiveStatusReporter] = components.maibot_sync_reporter
+    clipping_service: Optional["ClippingService"] = components.clipping_service
 
     _saw_cancelled = False
 
@@ -1604,6 +1661,9 @@ async def run_shutdown(
     # 等到处理完，"已下播"近况才推得出去；之后再退订、停心跳、关连接
     if maibot_sync_reporter is not None:
         await safe_log(maibot_sync_reporter.stop(), "LiveStatusReporter.stop")
+    # 切片编排：摘除下播事件订阅（EventBus.off 幂等；在途切割任务随进程收口终止）
+    if clipping_service is not None:
+        await safe_log(clipping_service.stop_async(), "ClippingService.stop")
     logger.info("正在清理 LLMManager...")
     if llm_service is not None:
         await safe_log(llm_service.cleanup(), "LLMManager.cleanup")
