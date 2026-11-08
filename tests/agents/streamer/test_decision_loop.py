@@ -7,7 +7,7 @@ replyer 响应正文即台词（纯文本契约）。
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
