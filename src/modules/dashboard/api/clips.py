@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated, TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import FileResponse, JSONResponse
 
 from src.modules.clipping.config_schema import ClippingConfigSchema
@@ -327,7 +327,7 @@ async def preview_status(path: str, service: ClippingDep) -> dict:
 
 
 @router.get("/preview/range")
-async def preview_range_file(path: str, start_s: float, duration_s: float, service: ClippingDep):
+async def preview_range_file(path: str, start_s: float, duration_s: float, service: ClippingDep) -> Response:
     """段级预览：只重封装请求的那几分钟（流复制秒级），整场未转换完也能立刻看。
 
     整场缓存就绪时直接回整场文件（可自由拖动）；否则现切现转并缓存复用。
@@ -350,7 +350,7 @@ async def preview_range_file(path: str, start_s: float, duration_s: float, servi
 
 
 @router.get("/preview")
-async def preview_file(path: str, service: ClippingDep):
+async def preview_file(path: str, service: ClippingDep) -> Response:
     """预览视频文件：mp4 直服（支持 Range 拖动）；flv/mkv 等容器 202 转换中。
 
     缓存就绪前返回 202 JSON（前端轮询本端点直到 200）；首次请求顺带触发后台
