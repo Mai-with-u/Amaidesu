@@ -102,6 +102,21 @@ describe('useLiveStatus', () => {
     });
   });
 
+  it('rundown.changed：流程单走完（index 达到 total）时显示"流程单完成"', () => {
+    const { rundownBanner } = mount();
+    const store = useEventsStore();
+    store.events = [
+      event('1', 'rundown.changed', 1000, { index: 3, total: 4, segment_title: '收尾' }),
+      event('2', 'rundown.changed', 2000, { index: 4, total: 4, segment_title: '' }),
+    ];
+    expect(rundownBanner.value).toMatchObject({
+      order: 4,
+      label: '流程单完成',
+      actionLabel: 'Agent 切换',
+      changedAtMs: 2000,
+    });
+  });
+
   it('streamer.stage：未知阶段透传原文，running 随 agent_state', () => {
     const { stageChip } = mount();
     const store = useEventsStore();

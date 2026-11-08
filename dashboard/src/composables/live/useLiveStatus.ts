@@ -36,9 +36,12 @@ export function useLiveStatus() {
       const by = typeof data.by === 'string' ? data.by : 'agent';
       const changedAtMs = typeof data.at_ms === 'number' ? data.at_ms : null;
       const index = typeof data.index === 'number' ? data.index : 0;
+      const total = typeof data.total === 'number' ? data.total : 0;
+      // 流程单走完：下标到达环节总数，此时没有当前环节（事件载荷的 segment_title 为空）
+      const finished = total > 0 && index >= total;
       return {
-        order: index + 1,
-        label: str(data.segment_title) || '未命名环节',
+        order: finished ? total : index + 1,
+        label: finished ? '流程单完成' : str(data.segment_title) || '未命名环节',
         actionLabel: by === 'human' ? '手动切换' : by === 'system' ? '系统切换' : 'Agent 切换',
         note: '',
         startLabel: '',
