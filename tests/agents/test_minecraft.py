@@ -128,7 +128,9 @@ async def test_work_log_returns_todo_notebook_and_recent_reports_ring() -> None:
 
     d = (await reg.invoke(_invocation("minecraft_get_work_log", {}))).structured_content
     assert d["recent_reports"] == [{"kind": "delivery", "content": "挖到钻石了！", "scene": "y=-12"}]
-    assert d["notebook"] == "矿脉在 Y=12" and "todo" in d
+    # 笔记正文后面接着一段现查的快照（此处没接游戏，写明当前不可用）
+    assert d["notebook"].startswith("矿脉在 Y=12") and "当前不可用" in d["notebook"]
+    assert "todo" in d
 
     for i in range(15):
         state.add_report("delivery", f"上报 {i}")

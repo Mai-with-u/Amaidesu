@@ -232,6 +232,19 @@ def biome_name(raw_id: str) -> str:
     return _BIOMES.get(_plain_id(raw_id), _plain_id(raw_id))
 
 
+#: 常见维度的中文名（表里没有的按"没认出维度"处理，调用方据此不写维度）
+_DIMENSIONS: Dict[str, str] = {
+    "minecraft:overworld": "主世界",
+    "minecraft:the_nether": "下界",
+    "minecraft:the_end": "末地",
+}
+
+
+def dimension_name(raw_id: str) -> str:
+    """维度 ID → 中文名；表里没有的返回空串。"""
+    return _DIMENSIONS.get(raw_id, "")
+
+
 def _health_words(remaining: float) -> str:
     """还剩多少血 → 处境白话（满血 20 点）；血还多时不值一提，返回空串。"""
     if remaining <= 4:

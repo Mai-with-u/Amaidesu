@@ -47,6 +47,7 @@ from src.modules.types.game_situation import GameSituation
 
 from .maicraft import GOAL, MaicraftReply, goal_id_of_ledger, goal_run_of, ledger_status_of
 from .state import MinecraftAgentState
+from .work_log_snapshot import unavailable_snapshot
 
 logger = get_logger("MinecraftTools")
 
@@ -60,6 +61,8 @@ STREAMER_GUIDE = (
     "游戏里的身体自己拆解、动手，做完或卡住再以游戏记录上报；中途要改要求用 framework_prompt。"
     "想看一眼现场（身体状态、背包、身边的生物与设施）用 minecraft_glance；"
     "想看待办、笔记和近期上报用 minecraft_get_work_log。"
+    "工作文档里笔记正文后面带着一段现查的当前状态快照（位置、装备、背包、血量）："
+    "背包存量、装备、位置以快照为准，笔记正文里的同类数字只是当时记下的历史，别当现状念。"
     "给游戏里的生物起了名（“就叫你阿缕吧”），同一步用 minecraft_name_creature 登记，不登记的名字下一轮就对不上是哪一只；"
     "速览里出现“你的女仆（莫莫酒狐皮肤）”这类还没起名的、而她已经这样叫过它时，补登记一次。"
     "速览里的 creatures 记着同伴（自己的生物、起过名的生物）此刻怎样：写着已死的就是死了，"
@@ -265,6 +268,8 @@ def build_get_work_log_spec() -> ToolSpec:
             "todo（待办与进度）/ notebook（工作笔记）/ "
             "recent_reports（近期上报：交付与升级记录）。"
             "面向直播叙事——主播不需要自己记录游戏细节，按需查询即可。"
+            "笔记正文后面附着一段现查的当前状态快照（位置/装备/背包/血量）："
+            "背包存量、装备、位置以快照为准，笔记正文里的同类数字一律当历史参考。"
             "本工具不查异步任务记录表；查任务进度用 framework_task_status。"
         ),
         parameters_schema={"type": "object", "properties": {}, "required": []},
@@ -497,6 +502,8 @@ class MinecraftToolProvider(GameToolProvider):
     save_reader: Optional[Callable[[], Optional[GameSave]]] = None
     # 角色眼下离哪些记住的地点多远：由 Agent 从速览已有的缓存现算（未注入时不报情境）
     situation_reader: Optional[Callable[[], Optional[GameSituation]]] = None
+    # 读工作文档时附一段现查的当前状态快照：由 Agent 现查一次身体现状（未注入时按不可用处理）
+    snapshot_reader: Optional[Callable[[], Awaitable[str]]] = None
     # 取回被折叠或收起的原文：由 Agent 按块号或关键词查自己的块库（未开后台折叠时不提供折叠与取回两个工具）
     context_recall: Optional[Callable[[str, str], Dict[str, Any]]] = None
 
@@ -637,7 +644,26 @@ class MinecraftToolProvider(GameToolProvider):
         return {"success": False, "error": f"未知 action: {action!r}"}
 
     async def _invoke_get_work_log(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        return {"tool": "get_work_log", **self.state.to_dict()}
+        """工作文档 + 现查的当前状态快照。
+
+        快照现查一次就够：笔记里的背包、装备、位置、血量是模型写下那一刻的旧数字，
+        读文档的人以快照为准。
+        """
+        docs = self.state.to_dict()
+        snapshot = await self._read_snapshot()
+        notebook = str(docs.get("notebook") or "")
+        docs["notebook"] = f"{notebook}\n\n{snapshot}" if notebook else snapshot
+        return {"tool": "get_work_log", **docs}
+
+    async def _read_snapshot(self) -> str:
+        """现查一次身体现状写成快照段；查不到就写明当前不可用，不中断读取。"""
+        if self.snapshot_reader is None:
+            return unavailable_snapshot()
+        try:
+            return await self.snapshot_reader()
+        except Exception as exc:  # noqa: BLE001 - 快照失败不该挡住工作文档的读取
+            logger.warning(f"当前状态快照读取失败: {type(exc).__name__}: {exc}")
+            return unavailable_snapshot(f"读取失败：{exc}")
 
     async def _invoke_report(self, args: Dict[str, Any]) -> Dict[str, Any]:
         kind = str(args.get("kind", ""))

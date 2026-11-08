@@ -102,6 +102,7 @@ from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
 from src.agents.minecraft.stop_receipt import GoalStopOutcome, cancel_receipt, stop_goal_label, stop_receipt
 from src.agents.minecraft.tools import MaicraftMcpProvider, MinecraftToolProvider
 from src.agents.minecraft.wake_queue import WakeQueue, opens_task
+from src.agents.minecraft.work_log_snapshot import build_snapshot, unavailable_snapshot
 from src.agents.minecraft.world_identity import WorldChange, WorldIdentity, world_ref_of
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.context import (
@@ -308,6 +309,7 @@ class MinecraftAgent(BaseAgent):
             skill_reader=self._skill_support.read_skill if skill_library is not None else None,
             save_reader=self._world.game_save,
             situation_reader=self._current_situation,
+            snapshot_reader=self._state_snapshot,
             context_recall=self._recall_context if config.context.active_fold else None,
         )
 
@@ -1874,6 +1876,17 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
     # 主播看一眼
     # ==================================================================
+
+    async def _state_snapshot(self) -> str:
+        """读工作文档时附的当前状态快照：现查一次身体现状（位置/装备/背包/血量）。
+
+        笔记里的这些数字是模型写下那一刻的旧值，读文档的人以这里现查到的为准。
+        游戏没连上或读取失败就写明当前不可用，不中断读取。
+        """
+        if not self._maicraft_ready():
+            return unavailable_snapshot()
+        reply = await self._call_maicraft(OBSERVE, {"what": "self"})
+        return build_snapshot(reply)
 
     async def _glance(self) -> Dict[str, Any]:
         """主播看一眼：读一次自己、周围与记住的地点，只留直播叙事用得上的事实，再附上身体手头的工作。

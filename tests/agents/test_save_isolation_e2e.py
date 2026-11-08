@@ -139,7 +139,8 @@ async def test_memories_follow_the_save_through_a_round_trip(tmp_path: Path) -> 
         assert "眼下 minecraft 开着存档「新的世界」。" in brief and "出生点旁边就有村子" in brief
         assert "还在 minecraft「老家」里做过 1 件事" in brief
         assert cards == (emerald,)
-        assert (await _work_log(registry))["notebook"] == ""
+        # 工作文档里的笔记正文后面接着一段现查的快照：新世界的笔记是空的，只剩快照
+        assert (await _work_log(registry))["notebook"].startswith("【当前状态快照】")
         assert "阿缕" not in (await mc._glance())["brief"]
         assert "minecraft" in streamer._planner.workbench.delegations
         # 主播在新世界里叫停了那件事，账面结算
@@ -154,7 +155,7 @@ async def test_memories_follow_the_save_through_a_round_trip(tmp_path: Path) -> 
         brief, cards = await _streamer_view(streamer)
         assert "屋顶终于封好了" in brief and "还在 minecraft「新的世界」里做过 1 件事" in brief
         assert cards == (bridge,)
-        assert (await _work_log(registry))["notebook"] == "北边的桥还差三格"
+        assert (await _work_log(registry))["notebook"].startswith("北边的桥还差三格")
         assert "阿缕（你的女仆，莫莫酒狐皮肤）在身边" in (await mc._glance())["brief"]
         assert "minecraft" not in streamer._planner.workbench.delegations
     finally:
