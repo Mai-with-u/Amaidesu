@@ -151,6 +151,7 @@ def test_singleton_is_shared_resettable_auto_scans_and_loads_exactly_the_declare
             "screen_vlm_system",
             "screen_vlm_prompt",
             "text_adv_vlm_question",
+            "segment_selection_system",
         }
         reset_prompt_manager()
         assert get_prompt_manager() is not first  # 重置后是新实例
