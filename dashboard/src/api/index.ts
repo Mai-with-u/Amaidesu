@@ -138,6 +138,15 @@ import type {
   ExpressionSheetState,
   EmbeddingRuntimeStatus,
 } from '@/types';
+import type {
+  ClipConfig,
+  ClipConfigApplyResult,
+  ClipConfigState,
+  ClippedSessionItem,
+  ClipSegment,
+  RecordingFileInfo,
+  UnmatchedFileInfo,
+} from '@/types/clips';
 import type { BackgroundTask } from '@/types/events';
 
 const api = axios.create({
@@ -667,6 +676,54 @@ export const reviewApi = {
     const query = ids.length ? `?ids=${ids.join(',')}` : '';
     return `/api/v1/review/export${query}`;
   },
+};
+
+// 直播切片：录播匹配 / AI 选段 / 段增删改查 / ffmpeg 切割受理。
+// `POST .../select` 同步等 AI 选段结果（耗时在 LLM 调用）；`POST .../cut`
+// 只受理任务，进度看后台任务条，逐段状态回填到段列表。
+export const clipsApi = {
+  // 配置读写：保存即免重启生效（后端写盘 + 运行期重装配），无需去设置页重启
+  getConfig: () => api.get<ClipConfigState>('/clips/config'),
+  saveConfig: (config: ClipConfig) => api.post<ClipConfigApplyResult>('/clips/config', config),
+  listSessions: () => api.get<{ sessions: ClippedSessionItem[] }>('/clips/sessions'),
+  listRecordings: (sessionId: number) =>
+    api.get<{
+      live_session_id: number;
+      files: RecordingFileInfo[];
+      detached_files: RecordingFileInfo[];
+      unmatched_files: UnmatchedFileInfo[];
+    }>(`/clips/sessions/${sessionId}/recordings`),
+  // 归属人工覆盖（本地 JSON，不入库）：指派/移出/恢复自动匹配
+  assignRecording: (sessionId: number, path: string, startMs: number | null) =>
+    api.post<{ deleted: boolean }>(`/clips/sessions/${sessionId}/recordings/assign`, {
+      path,
+      start_ms: startMs,
+    }),
+  detachRecording: (sessionId: number, path: string) =>
+    api.post<{ deleted: boolean }>(`/clips/sessions/${sessionId}/recordings/detach`, { path }),
+  restoreRecording: (sessionId: number, path: string) =>
+    api.post<{ deleted: boolean }>(`/clips/sessions/${sessionId}/recordings/restore`, { path }),
+  // 容器元数据里的录制时刻（指派对话框的取时来源）；WebUI 改名（归属覆盖随新路径迁移）
+  creationTime: (path: string) =>
+    api.get<{ creation_time_ms: number | null }>('/clips/recordings/creation-time', { params: { path } }),
+  renameRecording: (path: string, newName: string) =>
+    api.post<{ path: string }>('/clips/recordings/rename', { path, new_name: newName }),
+  select: (sessionId: number) =>
+    api.post<{ suggestion_count: number }>(`/clips/sessions/${sessionId}/select`),
+  listSegments: (sessionId: number) =>
+    api.get<{ live_session_id: number; segments: ClipSegment[] }>(`/clips/sessions/${sessionId}/segments`),
+  createSegment: (sessionId: number, body: { start_ms: number; end_ms: number; title: string }) =>
+    api.post<{ segment: ClipSegment | null }>(`/clips/sessions/${sessionId}/segments`, body),
+  updateSegment: (segmentId: number, body: Partial<{ start_ms: number; end_ms: number; title: string; status: string }>) =>
+    api.put<{ segment: ClipSegment | null }>(`/clips/segments/${segmentId}`, body),
+  deleteSegment: (segmentId: number) => api.delete<{ deleted: boolean }>(`/clips/segments/${segmentId}`),
+  cut: (sessionId: number, segmentIds: number[]) =>
+    api.post<{ accepted: number }>(`/clips/sessions/${sessionId}/cut`, { segment_ids: segmentIds }),
+  // 预览：status 轻量轮询就绪态；文件本体走 <video> 直连 /clips/preview（不走 axios，免超时）
+  previewStatus: (path: string) =>
+    api.get<{ ready: boolean; converting: boolean }>('/clips/preview/status', { params: { path } }),
+  preparePreviews: (paths: string[]) =>
+    api.post<{ started: number }>('/clips/preview/prepare', { paths }),
 };
 
 export default api;

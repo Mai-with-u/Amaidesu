@@ -66,7 +66,7 @@ describe('侧边栏导航信息架构', () => {
 
   it('直播主循环条目连续排在首位，观众归档案侧', () => {
     expect(groupEntries().get('直播中')).toEqual(['/', '/live', '/outline']);
-    expect(groupEntries().get('档案与复盘')).toEqual(['/review', '/memory', '/viewers']);
+    expect(groupEntries().get('档案与复盘')).toEqual(['/review', '/clips', '/memory', '/viewers']);
   });
 
   it('调试组收齐把自己系统调到预期状态的手段', () => {
@@ -85,6 +85,7 @@ describe('侧边栏导航信息架构', () => {
       { path: '/live', label: '直播控制台' },
       { path: '/outline', label: '流程单工作台' },
       { path: '/review', label: '场次复盘' },
+      { path: '/clips', label: '直播切片' },
       { path: '/memory', label: '记忆账本' },
       { path: '/viewers', label: '观众' },
       { path: '/collectors', label: '采集器' },

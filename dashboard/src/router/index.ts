@@ -15,6 +15,12 @@ const router = createRouter({
       component: () => import('@/views/SessionReview.vue'),
     },
     {
+      // 直播切片（录播匹配 + AI 选段 + ffmpeg 切割）
+      path: '/clips',
+      name: 'clips',
+      component: () => import('@/views/Clips.vue'),
+    },
+    {
       path: '/collectors',
       name: 'collectors',
       component: () => import('@/views/Collectors.vue'),

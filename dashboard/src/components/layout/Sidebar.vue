@@ -33,6 +33,10 @@
             <el-icon><DataAnalysis /></el-icon>
             <span>场次复盘</span>
           </el-menu-item>
+          <el-menu-item index="/clips">
+            <el-icon><VideoPlay /></el-icon>
+            <span>直播切片</span>
+          </el-menu-item>
           <el-menu-item index="/memory">
             <el-icon><Avatar /></el-icon>
             <span>记忆账本</span>
@@ -147,6 +151,7 @@ import {
   User,
   Avatar,
   Memo,
+  VideoPlay,
 } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/stores';
 import ChangelogDialog from './ChangelogDialog.vue';

@@ -115,6 +115,7 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     ScoreboardStrip: typeof import('./src/components/live/ScoreboardStrip.vue')['default']
+    SegmentTimeline: typeof import('./src/components/clips/SegmentTimeline.vue')['default']
     SettlePanel: typeof import('./src/components/memory/SettlePanel.vue')['default']
     Sidebar: typeof import('./src/components/layout/Sidebar.vue')['default']
     SpeakTest: typeof import('./src/components/avatar-tuning/SpeakTest.vue')['default']
