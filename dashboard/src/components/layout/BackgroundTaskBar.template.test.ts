@@ -46,3 +46,16 @@ describe('后台任务底栏挂载关系', () => {
     expect(sfcSource).not.toMatch(/subscribe\(/);
   });
 });
+
+describe('整理任务的模型调用入口', () => {
+  it('任务行给出跳转模型调用历史的链接', () => {
+    expect(sfcSource).toContain('to="/llm/history?profile=settle"');
+    expect(sfcSource).toContain('查看模型调用');
+  });
+
+  it('只给下播整理的任务行这个链接（按任务号前缀判断）', () => {
+    expect(sfcSource).toContain('isSettleTask');
+    expect(sfcSource).toContain("startsWith('settle-')");
+    expect(sfcSource).toContain('v-if="isSettleTask(task)"');
+  });
+});
