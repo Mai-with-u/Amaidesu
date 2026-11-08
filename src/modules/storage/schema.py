@@ -60,7 +60,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 36
+SCHEMA_VERSION: int = 37
 
 
 # =============================================================================
@@ -92,6 +92,7 @@ SCHEMA_VERSION: int = 36
 # - llm_requests            LLM 请求历史（完整请求/响应，dashboard 历史页数据源）
 # - sim_personas            模拟器常驻观众人设（运行时数据，WebUI 管理）
 # - sim_gifts               模拟器礼物目录（运行时数据，WebUI 管理）
+# - clip_segments           切片段（AI 提议 + 运营手调的时段，含切割状态与产物路径）
 # - rundowns                流程单模板（元信息行）
 # - rundown_segments        流程单环节行（凡环节皆行，seq 定序）
 # - rundown_instances       流程单实例头（每场一行，崩溃恢复 + 时点快照）
@@ -191,6 +192,9 @@ def build_schema_sql() -> str:
         # sim_gifts —— 模拟器礼物目录
         + _SIM_GIFTS_SQL
         + "\n"
+        # clip_segments —— 切片段（排在 live_sessions 之后：外键要引用它）
+        + _CLIP_SEGMENTS_SQL
+        + "\n"
         # schema_migrations —— 版本管理
         + _SCHEMA_MIGRATIONS_SQL
     )
@@ -240,6 +244,7 @@ def list_expected_tables() -> List[str]:
         "llm_requests",
         "sim_personas",
         "sim_gifts",
+        "clip_segments",
         "schema_migrations",
     ]
 
@@ -1034,6 +1039,27 @@ CREATE TABLE IF NOT EXISTS llm_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_llm_requests_ts ON llm_requests(timestamp_ms);
 CREATE INDEX IF NOT EXISTS idx_llm_requests_model ON llm_requests(model_name);
+""".strip()
+
+
+_CLIP_SEGMENTS_SQL = """
+CREATE TABLE IF NOT EXISTS clip_segments (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id INTEGER NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+    origin          TEXT NOT NULL DEFAULT 'manual' CHECK (origin IN ('ai', 'manual')),
+    start_ms        INTEGER NOT NULL,
+    end_ms          INTEGER NOT NULL,
+    title           TEXT NOT NULL DEFAULT '',
+    reason          TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'suggested'
+                    CHECK (status IN ('suggested', 'confirmed', 'cutting', 'done', 'failed', 'dismissed')),
+    output_path     TEXT NOT NULL DEFAULT '',
+    error_message   TEXT NOT NULL DEFAULT '',
+    created_at_ms   INTEGER NOT NULL,
+    updated_at_ms   INTEGER NOT NULL,
+    CHECK (end_ms >= start_ms)
+);
+CREATE INDEX IF NOT EXISTS idx_clip_segments_session ON clip_segments(live_session_id, start_ms);
 """.strip()
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.storage.repos.archive import ArchiveRepo
 from src.modules.storage.repos.chat import ChatRepo
+from src.modules.storage.repos.clips import ClipRepo
 from src.modules.storage.repos.commitments import CommitmentRepo
 from src.modules.storage.repos.events import EventRepo
 from src.modules.storage.repos.game_creatures import GameCreatureRepo
@@ -31,6 +32,7 @@ __all__ = [
     "ArchiveRepo",
     "BaseRepo",
     "ChatRepo",
+    "ClipRepo",
     "CommitmentRepo",
     "EventRepo",
     "GameCreatureRepo",

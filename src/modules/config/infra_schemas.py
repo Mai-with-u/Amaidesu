@@ -20,6 +20,7 @@ from src.modules.config.core_schemas import (
 from src.modules.config.file_meta import FileMetaConfig
 from src.modules.config.schemas.base import BaseConfig
 from src.modules.config.schemas.logging import LoggingConfig
+from src.modules.clipping.config_schema import ClippingConfigSchema
 from src.modules.maibot_sync.config_schema import MaiBotSyncConfigSchema
 from src.modules.simulator.config_schema import SimulatorConfigSchema
 
@@ -39,6 +40,7 @@ class InfraRootConfig(BaseConfig):
     - ``[diagnostics]`` — 本地诊断记录落盘（LLM 正文/事件流/TTS 记录）
     - ``[simulator]``   — 模拟直播间
     - ``[maibot_sync]`` — 直播近况同步给 MaiBot 适配器插件
+    - ``[clipping]``    — 直播自动切片（录播目录/ffmpeg 路径/输出目录）
     """
 
     __file_name__ = "infra.toml"
@@ -95,6 +97,13 @@ class InfraRootConfig(BaseConfig):
         default_factory=SimulatorConfigSchema,
         title="模拟直播间配置",
         description="模拟直播间配置（人设/礼物数据位于 SQLite 的 sim_personas/sim_gifts 表）",
+    )
+    # clipping 段插在 maibot_sync 之前：生成文件里 [maibot_sync] 保持最后一个段
+    # （tests/config/test_memory_retire_migration.py 的种子按"文件尾=该段"追加键）
+    clipping: ClippingConfigSchema = Field(
+        default_factory=ClippingConfigSchema,
+        title="直播切片",
+        description="下播后 AI 基于场次时间线提议切片时段，运营在 WebUI 微调后调用本机 ffmpeg 切出片段",
     )
     maibot_sync: MaiBotSyncConfigSchema = Field(
         default_factory=MaiBotSyncConfigSchema,

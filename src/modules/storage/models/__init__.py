@@ -16,6 +16,11 @@ from src.modules.storage.models.chat import (
     SuperChatRecord,
     ViewerSessionParticipation,
 )
+from src.modules.storage.models.clipping import (
+    ClipSegment,
+    ClipSegmentUpdate,
+    NewClipSegment,
+)
 from src.modules.storage.models.events import (
     DelegationRecord,
     GameEventRecord,
@@ -53,6 +58,10 @@ __all__ = [
     "SessionSpeechMoment",
     "SuperChatRecord",
     "ViewerSessionParticipation",
+    # clipping 域
+    "ClipSegment",
+    "ClipSegmentUpdate",
+    "NewClipSegment",
     # events 域
     "DelegationRecord",
     "GameEventRecord",

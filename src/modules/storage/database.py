@@ -35,6 +35,7 @@ from src.modules.storage.migrations import SCHEMA_MIGRATIONS
 from src.modules.storage.repos import (
     ArchiveRepo,
     ChatRepo,
+    ClipRepo,
     CommitmentRepo,
     EventRepo,
     GameCreatureRepo,
@@ -146,6 +147,8 @@ class SQLiteDatabase:
         self.viewer_candidates = ViewerCandidateRepo(self._manager)
         # 游戏里的人：按 UUID 认出的玩家、和她的互动、公屏聊天、运营者确认的观众关联
         self.game_players = GamePlayerRepo(self._manager)
+        # 切片段：AI 提议 + 运营手调的切片时段（WebUI 切片页与切割器读写）
+        self.clips = ClipRepo(self._manager)
 
     # -------------------- 属性 --------------------
 
