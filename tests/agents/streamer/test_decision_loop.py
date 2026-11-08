@@ -26,8 +26,11 @@ from tests.agents.streamer.helpers import FakeRoundExecutor, make_streamer_agent
 # 可用，rundown/game 只能直打组件；信号状态断言同理。接缝补齐后清除。
 
 
-def _danmaku(text: str = "主播好可爱") -> RoomMessagePayload:
-    return RoomMessagePayload(message_type="danmaku", user=RoomMessageUser(id="u1", name="观众A"), content=text)
+def _danmaku(text: str = "主播好可爱", message_id: str | None = None) -> RoomMessagePayload:
+    fields: Dict[str, Any] = {"message_type": "danmaku", "user": RoomMessageUser(id="u1", name="观众A"), "content": text}
+    if message_id is not None:
+        fields["message_id"] = message_id
+    return RoomMessagePayload(**fields)
 
 
 def _planner_step(*tool_calls: ToolCall) -> Response:
@@ -82,8 +85,8 @@ class _Rig:
     def calls(self, profile: str) -> list:
         return [c for c in self.llm.generate.await_args_list if c.kwargs.get("profile") == profile]
 
-    async def emit(self, text: str = "主播好可爱") -> None:
-        await self.bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, _danmaku(text), source="bilibili")
+    async def emit(self, text: str = "主播好可爱", message_id: str | None = None) -> None:
+        await self.bus.emit(CoreEvents.ROOM_MESSAGE_DANMAKU, _danmaku(text, message_id=message_id), source="bilibili")
 
     async def wait_decision(self) -> PlannerDecisionPayload:
         await asyncio.wait_for(self.decided.wait(), timeout=3)
@@ -150,8 +153,9 @@ async def test_decision_events_pair_stages_and_planner_failure_is_still_reported
 
 
 async def test_reply_target_flows_into_decision_event(rig_factory) -> None:
+    """target 为批内弹幕的真 message_id 时，决策事件回带同一 id（与落库同口径）。"""
     rig = await rig_factory([_planner_step(_reply_call(target="msg_abc", call_id="call_r2"))])
-    await rig.emit()
+    await rig.emit(message_id="msg_abc")
     assert (await rig.wait_decision()).reply_to_message_id == "msg_abc"
 
 
