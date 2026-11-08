@@ -1,7 +1,8 @@
 /**
  * 系统级事件 → WebUI 右上角显式通知（运营触达面）。
  *
- * 订阅三类事件，经共享 wsClient 派发 ElNotification（约 8 秒自动消失）：
+ * 订阅三类事件，经共享 wsClient 派发 ElNotification（error/warning 不自动
+ * 消失、需手动关闭；success 等信息类约 8 秒自动消失）：
  * - core.error（错误告警）——唯一真实发布者是低频的采集器连接失败
  * - background.task.changed（后台任务终态）——任务失败弹错误通知
  *   （标题+失败原因）、任务完成弹成功通知（标题+用时）；running 载荷
@@ -41,8 +42,8 @@ const DEDUP_WINDOW_MS = 60_000;
 const MAX_PER_WINDOW = 5;
 /** 全局滑动窗口宽度（毫秒） */
 const RATE_WINDOW_MS = 60_000;
-/** 通知自动消失时长（毫秒） */
-const NOTIFICATION_DURATION_MS = 8000;
+  /** 通知自动消失时长（毫秒）：信息/成功类用；error/warning 不自动消失（见 notify） */
+  const NOTIFICATION_DURATION_MS = 8000;
 
 /** 提取 payload 的人类可读正文（core.* 载荷的 message 字段） */
 function messageText(data: Record<string, unknown>): string {
@@ -76,7 +77,9 @@ export function useSystemNotifications(): void {
       title,
       message: text,
       type: kind,
-      duration: NOTIFICATION_DURATION_MS,
+      // 错误/警告类必须手动关闭（duration 0）：故障持续期间自动消失会让
+      // 运营者错过告警；信息/成功类保持自动消失
+      duration: kind === 'error' || kind === 'warning' ? 0 : NOTIFICATION_DURATION_MS,
     });
   }
 

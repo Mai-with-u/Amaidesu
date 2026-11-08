@@ -106,7 +106,8 @@ describe('useSystemNotifications', () => {
     );
     expect(notifyMock).toHaveBeenCalledTimes(1);
     const call = notifyMock.mock.calls[0]?.[0];
-    expect(call).toMatchObject({ title: '系统错误', type: 'error', duration: 8000 });
+    // error 级不自动消失（duration 0），故障持续期间运营者不会错过告警
+    expect(call).toMatchObject({ title: '系统错误', type: 'error', duration: 0 });
     const params = call as { message: string };
     expect(params.message).toContain('B 站应用启动失败');
   });
@@ -132,7 +133,7 @@ describe('useSystemNotifications', () => {
     );
     expect(notifyMock).toHaveBeenCalledTimes(1);
     const call = notifyMock.mock.calls[0]?.[0] as { title: string; message: string };
-    expect(call).toMatchObject({ type: 'error', duration: 8000 });
+    expect(call).toMatchObject({ type: 'error', duration: 0 });
     expect(call.title).toContain('整理场次：58');
     expect(call.message).toContain('模型调用超时');
   });
@@ -215,8 +216,10 @@ describe('useSystemNotifications', () => {
     feed(event('live.started', { live_session_id: 59 }));
     await flushPromises();
     expect(notifyMock).toHaveBeenCalledTimes(1);
-    const call = notifyMock.mock.calls[0]?.[0] as { title: string; message: string; type: string };
+    const call = notifyMock.mock.calls[0]?.[0] as { title: string; message: string; type: string; duration: number };
     expect(call.type).toBe('warning');
+    // warning 级同样不自动消失（duration 0），需手动关闭
+    expect(call.duration).toBe(0);
     expect(call.message).toContain('2 场待整理');
     expect(call.message).toContain('旧一场');
   });
