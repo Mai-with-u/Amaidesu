@@ -328,16 +328,18 @@ class LLMProfileConfig(BaseConfig):
         return value
 
 
-#: 放弃等待时长只给直播里"晚了就没用"的两个用途设：台词正常十几秒内出，决策正常半分钟内出
-#: （实测最长约 36 秒），上限各留几倍余量，只拦真正卡住的请求
+#: 放弃等待时长给直播里"晚了就没用"的用途设：台词正常十几秒内出，决策正常半分钟内出
+#: （实测最长约 36 秒），游戏里的长计划与建造动辄一两分钟（实测最长约 95 秒），
+#: 上限各留几倍余量，只拦真正卡住的请求
 _PROFILE_PRESETS: dict[str, dict[str, Any]] = {
     "planner": {"slow_threshold_ms": 15_000, "give_up_ms": 120_000, "temperature": 0.7},
     "replyer": {"slow_threshold_ms": 8_000, "give_up_ms": 60_000, "temperature": 0.2},
     "summary": {"slow_threshold_ms": 30_000, "temperature": 0.3},
     "settle": {"slow_threshold_ms": 30_000, "temperature": 0.3},
-    "minecraft": {"slow_threshold_ms": 15_000, "temperature": 0.2},
+    "minecraft": {"slow_threshold_ms": 15_000, "give_up_ms": 120_000, "temperature": 0.2},
     "minecraft_builder": {
         "slow_threshold_ms": 15_000,
+        "give_up_ms": 120_000,
         "temperature": 0.5,
     },
     "vision": {"slow_threshold_ms": 10_000, "temperature": 0.3},

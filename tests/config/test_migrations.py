@@ -217,6 +217,27 @@ def _check_profile_give_up(d: Path) -> None:
     assert profiles["summary"]["give_up_ms"] == 0  # 其余用途由漂移写回补通用默认：一直等
 
 
+def _seed_minecraft_give_up(value: int) -> Callable[[Path], None]:
+    """拨回 model.toml 2.0.47：游戏两档的放弃等待时长是通用默认 0（一直等）。"""
+
+    def _seed(d: Path) -> None:
+        doc = _rewound(d, "model.toml", "2.0.47")
+        for name in ("minecraft", "minecraft_builder"):
+            doc["llm_profiles"][name]["give_up_ms"] = value
+        write_doc(d, "model.toml", doc)
+
+    return _seed
+
+
+def _check_minecraft_give_up(expected: int) -> Callable[[Path], None]:
+    def _check(d: Path) -> None:
+        profiles = read_doc(d, "model.toml")["llm_profiles"]
+        assert profiles["minecraft"]["give_up_ms"] == expected
+        assert profiles["minecraft_builder"]["give_up_ms"] == expected
+
+    return _check
+
+
 def _seed_siliconflow(*, embedding: dict[str, str] | None) -> Callable[[Path], None]:
     """拨回 model.toml 2.0.45：没有硅基流动条目；``embedding`` 给了就按它写一段（模拟之前版本落过盘）。"""
 
@@ -526,6 +547,18 @@ CASES = [
         _check_siliconflow(model="text-embedding-3-small", provider="default"),
     ),
     Case(
+        "minecraft-give-up-old-default",
+        ("model.toml",),
+        _seed_minecraft_give_up(0),
+        _check_minecraft_give_up(120_000),
+    ),
+    Case(
+        "minecraft-give-up-user-value-kept",
+        ("model.toml",),
+        _seed_minecraft_give_up(300_000),
+        _check_minecraft_give_up(300_000),  # hook 只改写仍是旧默认 0 的值，用户自己写过的原样保留
+    ),
+    Case(
         "settle-profile-copied-from-summary",
         ("model.toml",),
         _seed_settle_profile(existing=False),
@@ -610,6 +643,7 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
     "profile_give_up": ("case", "profile-give-up"),
     "siliconflow_embedding": ("case", "siliconflow-embedding-new-section"),
     "settle_profile": ("case", "settle-profile-copied-from-summary"),
+    "minecraft_give_up": ("case", "minecraft-give-up-old-default"),
     "widget_drop_html_page": ("case", "widget-html-page"),
     "maibot_sync_transcript_optional": ("case", "maibot-sync-transcript-optional"),
     "name_match_off_by_default": ("case", "name-match-old-default"),

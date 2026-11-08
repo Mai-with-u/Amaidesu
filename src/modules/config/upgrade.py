@@ -943,6 +943,32 @@ def _add_settle_profile(data: Dict[str, Any]) -> List[str]:
 register_file_hook("model.toml", "settle_profile", "2.0.47", _add_settle_profile)
 
 
+# 游戏两档的放弃等待时长（写进钩子的是当时的取值，之后改默认不影响本钩子）
+_MINECRAFT_GIVE_UP_MS = 120_000
+
+
+def _upgrade_minecraft_give_up(data: Dict[str, Any]) -> List[str]:
+    """model.toml v2.0.48：给游戏两档补上放弃等待时长。
+
+    这两档原先默认一直等：游戏里的长计划和建造动辄一两分钟，等得起；
+    但上游挂死时整轮会一直占着，上层迟迟拿不到结果。存量文件里这两档的值是
+    通用默认 0（一直等），改成上限值；用户自己写过的其他值不动（幂等）。
+    """
+    profiles = data.get("llm_profiles")
+    if not isinstance(profiles, dict):
+        return []
+    changed: List[str] = []
+    for name in ("minecraft", "minecraft_builder"):
+        profile = profiles.get(name)
+        if isinstance(profile, dict) and profile.get("give_up_ms", 0) == 0:
+            profile["give_up_ms"] = _MINECRAFT_GIVE_UP_MS
+            changed.append(f"llm_profiles.{name}.give_up_ms")
+    return changed
+
+
+register_file_hook("model.toml", "minecraft_give_up", "2.0.48", _upgrade_minecraft_give_up)
+
+
 def _drop_tools_memory_section(data: Dict[str, Any]) -> List[str]:
     """tools.toml v2.0.45：删 ``[tools.memory]`` 段。
 
