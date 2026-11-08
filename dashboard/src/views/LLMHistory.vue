@@ -159,6 +159,13 @@ if (queryModelName) {
   queryParams.model_name = queryModelName;
 }
 
+// 直达筛选：外部页面经 ?profile= 跳入时预置用途（profile）筛选，同样在
+// setup 期首拉之前写入
+const queryProfile = String(route.query.profile ?? '').trim();
+if (queryProfile) {
+  queryParams.profile_name = queryProfile;
+}
+
 // 直达筛选：场次复盘页经 ?start_time=&end_time=（Unix 毫秒）跳入时预置时间窗，
 // 同步到日期选择器（ui 显示与查询口径一致），同样在 setup 期首拉之前写入
 const queryStartTime = Number(route.query.start_time ?? '');
