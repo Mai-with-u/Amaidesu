@@ -51,10 +51,13 @@ _TRANSLATABLE_SDK_ERRORS = (APITimeoutError, APIConnectionError, RateLimitError,
 # 中立 ToolSpec 允许 parameters=None（"无参数"），由本适配层负责补齐协议形态
 _EMPTY_OBJECT_SCHEMA: Dict[str, Any] = {"type": "object", "properties": {}}
 
-# 非 SDK 契约路径的刻意兜底（流式降级 / 流关闭清理）：
-# 兼容端点的失败形态无法枚举，这些位置任何异常都不得逃出流式降级语义；
-# 错误翻译路径不走此处——那里对 SDK 异常类型的捕获是具体的
-_LEGACY_FALLBACK_ERRORS = (Exception,)
+# 流式降级重发的适用范围：只留传输层故障（连接失败 / 读超时）——换个请求形态
+# （不发 stream）也许能成。服务端明确拒绝（4xx/5xx）重发同一份请求只是再浪费
+# 一次上游请求，那类失败在流式路径内就按语义分类，直接交回上层
+_STREAM_FALLBACK_ERRORS = (APIConnectionError, APITimeoutError)
+
+# 流关闭清理的兜底：关流失败不影响已收到的内容，记日志即可
+_STREAM_CLOSE_ERRORS = (Exception,)
 
 # 错误消息携带的服务端响应体长度上限：足够容纳拒绝原因原文，
 # 又不撑爆决策卡与日志里的单行展示
@@ -543,7 +546,8 @@ class OpenAIClient(BaseLLMClient):
 
         on_delta 非 None 时走流式传输：SSE 逐帧接收、边收边回调，流结束后
         组装完整 Response 返回（传输层流式、语义层整段）。
-        流式请求建立失败时自动降级为非流式一次性调用（回调不触发）。
+        流式请求因传输层故障（连接失败 / 读超时）失败时降级为非流式一次性调用
+        （回调不触发）；服务端明确拒绝时按错误分类直接上抛，不重发。
         """
         use_streaming = on_delta is not None and self.config.get("supports_streaming", True)
         if request_extra and use_streaming:
@@ -566,7 +570,7 @@ class OpenAIClient(BaseLLMClient):
             except LLMError:
                 # 完整收流后的内容校验已完成错误分类，统一交给 Engine 重试，避免每轮再加一次非流式请求。
                 raise
-            except _LEGACY_FALLBACK_ERRORS as e:
+            except _STREAM_FALLBACK_ERRORS as e:
                 self.logger.warning(f"流式请求失败，降级为非流式: {e}")
                 # 落到下方非流式路径
 
@@ -657,8 +661,8 @@ class OpenAIClient(BaseLLMClient):
             # 流式与普通调用采用同样的优先级，不能把零温度误判成缺省。
             "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
-            # usage 随末帧返回；不支持该参数的兼容端点会在 create 阶段抛错，
-            # 由调用方（chat）降级为非流式路径兜底
+            # usage 随末帧返回；端点不认这个参数时会在 create 阶段被明确拒绝，
+            # 那属于不可恢复失败（重发同一份请求仍会被拒），不做非流式降级
             "stream_options": {"include_usage": True},
         }
         self._apply_reasoning_effort_and_extra_body(request_params, reasoning_effort)
@@ -669,7 +673,6 @@ class OpenAIClient(BaseLLMClient):
         # 停滞守卫：连续一段时间内没有任何输出块即判定上游挂死，按失败交回上层。
         # 计时从请求发出算起——建连阶段同样不产出任何输出块。
         guard = self._stall_guard_factory()
-        stream = await guard.wait_for(self.client.chat.completions.create(**request_params))
         content_parts: List[str] = []
         reasoning_parts: List[str] = []
         # index -> {"id": str, "name": str, "arguments": list[str]}（arguments 碎片按序拼接）
@@ -678,8 +681,10 @@ class OpenAIClient(BaseLLMClient):
         usage_raw: Optional[str] = None
         model_name: Optional[str] = None
         finish_reason: Optional[str] = None
-        iterator = stream.__aiter__()
+        stream = None
         try:
+            stream = await guard.wait_for(self.client.chat.completions.create(**request_params))
+            iterator = stream.__aiter__()
             while True:
                 try:
                     chunk = await guard.wait_for(iterator.__anext__())
@@ -721,11 +726,16 @@ class OpenAIClient(BaseLLMClient):
                 if reasoning_piece or content_piece or tool_deltas:
                     # 有输出：停滞计时归零（工具调用参数碎片同样是模型在产出）
                     guard.note_output()
+        except APIStatusError as e:
+            # 服务端明确拒绝：按语义分类（4xx → FatalError，重试无意义）后上抛。
+            # 重发同一份请求只是再浪费一次上游请求，不做非流式降级。
+            raise self._translate_sdk_error(e) from e
         finally:
-            try:
-                await stream.aclose()
-            except _LEGACY_FALLBACK_ERRORS as e:
-                self.logger.debug(f"关闭流失败（已忽略）: {e}")
+            if stream is not None:
+                try:
+                    await stream.aclose()
+                except _STREAM_CLOSE_ERRORS as e:
+                    self.logger.debug(f"关闭流失败（已忽略）: {e}")
 
         raw_content = "".join(content_parts)
         native_reasoning = "".join(reasoning_parts) or None

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from openai import APIStatusError
+from openai import APIConnectionError, APIStatusError
 
 from src.modules.llm.clients.openai.client import OpenAIClient
 from src.modules.llm.errors import FatalError, LLMInterruptedError, LLMTimeoutError, RetryableError
@@ -27,6 +27,19 @@ from tests.modules.llm.fakes import (
     tool_delta,
     usage,
 )
+
+
+def _connection_error() -> APIConnectionError:
+    """模拟传输层故障：连接失败。"""
+    request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+    return APIConnectionError(message="Connection error.", request=request)
+
+
+def _status_error(status: int) -> APIStatusError:
+    """模拟服务端明确拒绝：带响应体的状态错误。"""
+    body = {"error": {"message": "rejected"}}
+    response = httpx.Response(status, json=body, request=httpx.Request("POST", "https://api.example.com/v1/x"))
+    return APIStatusError(f"Error code: {status}", response=response, body=body)
 
 
 def _request(*parts: Any, **fields: Any) -> GenerateRequest:
@@ -198,15 +211,27 @@ async def test_streaming_accumulates_tool_call_fragments_without_emitting_them()
     assert result.tool_calls == [ToolCall(id="call_1", name="reply", arguments={"speech": "大家好"})]
 
 
-async def test_streaming_create_error_falls_back_to_non_streaming() -> None:
-    """流式 create 失败（如端点不支持 stream_options）→ 降级非流式，不产生增量。"""
+async def test_streaming_connection_error_falls_back_to_non_streaming() -> None:
+    """流式请求因传输层故障失败（连接断了）→ 降级非流式重发一次，不产生增量。"""
     client, sdk = make_openai_client()
-    sdk.chat.completions.create.side_effect = [Exception("stream_options is not supported"), sdk_reply(content="fb")]
+    sdk.chat.completions.create.side_effect = [_connection_error(), sdk_reply(content="fb")]
     received = []
     result = await client.generate(
         _request("hello"), model="test-model", on_delta=lambda kind, text: received.append((kind, text))
     )
     assert (result.content, received, sdk.chat.completions.create.await_count) == ("fb", [], 2)
+
+
+@pytest.mark.parametrize("status", [400, 401, 402])
+async def test_streaming_status_error_is_not_resent(status: int) -> None:
+    """服务端明确拒绝（重试无意义）→ 只发一次请求，按不可恢复失败上抛。"""
+    client, sdk = make_openai_client()
+    sdk.chat.completions.create.side_effect = _status_error(status)
+
+    with pytest.raises(FatalError, match=f"HTTP {status}"):
+        await client.generate(_request("hello"), model="test-model", on_delta=lambda kind, text: None)
+
+    assert sdk.chat.completions.create.await_count == 1
 
 
 @pytest.mark.parametrize("finish_reason", ["stop", "length"])
