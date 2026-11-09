@@ -138,7 +138,7 @@ def test_prompt_template_keeps_evaluation_out_of_topic_summary(prompts: Any) -> 
 
     assert "也不做定性评价" in prompt
     assert "「白忙」「白找」「冤」「狼狈」「白转」「白搭」这类评价词不写进事实段" in prompt
-    assert "评价与态度全部留给 `reply_guidance` 从裸事实推导" in prompt
+    assert "它们会把处境先框成一种态度" in prompt
 
 
 def test_prompt_template_does_not_blame_present_players_for_protected_blocks(prompts: Any) -> None:

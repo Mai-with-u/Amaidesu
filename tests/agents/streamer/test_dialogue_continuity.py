@@ -600,12 +600,12 @@ def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
         )
     finally:
         reset_prompt_manager()
-    assert "发言交接契约" in prompt and "任务书" in prompt and "不是台词草稿" in prompt
+    assert "发言交接契约" in prompt and "不是台词草稿" in prompt
     assert "可核对的客观状态陈述" in prompt and "禁止第一人称叙事" in prompt
-    assert "reply_guidance = 方向 + 她的态度" in prompt and "纯方向意图" not in prompt
-    assert "态度从事实本身推导" in prompt and "不连续几轮重复同一种态度" in prompt
-    assert "态度只针对 `topic_summary` 里已有的事实" in prompt and "不写成她口吻的整句台词" in prompt
-    assert "情绪类别和强度仍由 `streamer_reply` 的 emotion / intensity 字段给出" in prompt
+    assert "reply_guidance = 方向 +（需要时）一句场景说明" in prompt and "纯方向意图" not in prompt
+    # 态度腔调的硬性要求已撤：事件本身带情绪属性才写一句客观的场景说明，表达层自己管怎么说
+    assert "态度从事实本身推导" not in prompt and "不写成她口吻的整句台词" in prompt
+    assert "emotion 填这件事的场景情绪，没有场景情绪就填 neutral" in prompt
     assert "错误示范" in prompt and "正确示范" in prompt
     # 示范只讲形态、不给成品句：成品句会被当模板逐字复读（场次 54 实测 48/162 条指导语复读示范框架、31% 默认自嘲）
     assert "对又一次被水冲走" not in prompt and "自嘲、嫌弃、得意" not in prompt
@@ -904,9 +904,11 @@ def test_replyer_prompts_speak_like_a_streamer_not_a_group_member(prompts: Any) 
     assert "起名" not in turn
     # 打算只在定下、改主意或做完时讲，平时不复述
     assert "聊天记录里你已经说过的就不再复述" in turn and "日常且简短" not in turn
-    # 像张嘴说话一样回一句（可以带语气词和改口），长度预算写在提示里；任务书点到的不用都说
-    assert "像张嘴说话一样回一句，可以有语气词、改口和半句话，不分段，不重复你刚说过的内容。整句不超过 40 字。" in turn
-    assert "挑最想说的那一件" in turn
+    # 说话的形状是开放的：一句话可以只是反应本身、说一半、没有结论；长度预算写在提示里
+    assert "一句话可以只是对这件事的反应本身，可以说一半，可以没有结论" in turn
+    assert "不分段" in turn and "整句不超过 40 字。" in turn
+    # 交接稿是她此刻的想法，不是上级任务书；腔调词（自嘲、得意这类）不出现在指引契约里
+    assert "你此刻的想法" in turn and "不是别人交给你的任务" in turn
 
 
 def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None:
@@ -954,7 +956,7 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
         length_rule="",
     )
     assert "✗ 写稿" in turn and "✓ 说话" in turn and "不分段" in turn
-    assert "交接稿是任务书" in turn and "不是台词草稿" in turn
+    assert "你此刻的想法" in turn and "禁止逐句扩写" in turn
 
 
 def test_prompts_forbid_inventing_off_game_life_events(prompts: Any) -> None:
