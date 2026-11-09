@@ -2,7 +2,7 @@
 
 旧做法里表达侧背着整场历史开口：90 分钟时输入上万 token，名字和性格只占系统提示词的 3%，
 后半场她说话像换了个人。这里用真实模板把几条预算钉住：系统提示词 ≤1,000、规矩块 ≤600、
-有代表性的人设占系统提示词四成以上；整份输入 ≤3,200，50 条历史和 500 条历史一样多，
+有代表性的人设占系统提示词四成以上；整份输入 ≤3,300，50 条历史和 500 条历史一样多，
 本批弹幕满批时也不超。另核对人设块只写身份、AI 声明写死、边界栏可省、稳定段逐字一致。
 
 token 口径在每条用例里写明，两种：
@@ -19,7 +19,7 @@ import pytest
 
 from src.agents.streamer.config import StreamerBatchConfig, StreamerPersonaConfig
 from src.agents.streamer.plan import DecisionPlan, assistant_speech_lines
-from src.agents.streamer.replyer import Replyer
+from src.agents.streamer.replyer import _RECENT_SPEECH_FLOOR, Replyer
 from src.agents.streamer.timeline import CHAPTER_MESSAGE_TYPE, PlayerNote, TimelineTurn, note_turn
 from src.modules.events.payloads.room import RoomMessageUser
 from src.modules.llm.context_meter import get_encoding
@@ -36,7 +36,7 @@ _AI_DISCLOSURE = "被问到是不是真人时，坦白自己是 AI 主播，可�
 # 预算上限（cl100k 口径）：系统提示词、其中的规矩块、整份输入（system + user）
 _SYSTEM_MAX = 1_000
 _RULES_MAX = 600
-_INPUT_MAX = 3_260  # 含观众消息对账围栏行（约 30 token）的永久占位
+_INPUT_MAX = 3_400  # 含观众消息对账围栏行（约 30 token）与"更早说过的话"保底两行长句（约 70 token）的永久占位
 
 # 有代表性的人设：名字、两三句性格、说话风格、5 句口吻示例；边界栏用默认文本
 _PERSONA: Dict[str, Any] = {
@@ -239,7 +239,7 @@ async def test_persona_block_holds_identity_and_behavior_lives_in_rules(prompts:
 
 
 async def test_whole_input_is_capped_and_flat_over_session_length(prompts: Any) -> None:
-    """整份输入（system + user，cl100k 口径）≤3,200，50 条历史和 500 条历史一样多：后半场不再被历史挤掉人设。"""
+    """整份输入（system + user，cl100k 口径）≤3,300，50 条历史和 500 条历史一样多：后半场不再被历史挤掉人设。"""
     totals = []
     for length in (50, 500):
         replyer, llm = _replyer(prompts)
@@ -253,7 +253,7 @@ async def test_whole_input_is_capped_and_flat_over_session_length(prompts: Any) 
 
 @pytest.mark.parametrize("stored", [True, False], ids=["stored", "not-yet-stored"])
 async def test_full_batch_stays_within_budget(prompts: Any, stored: bool) -> None:
-    """本批满批（单批条数上限的默认值，每条 40 字）：补进来的弹幕占用记录名额，整份输入仍 ≤3,200（cl100k 口径）。
+    """本批满批（单批条数上限的默认值，每条 40 字）：补进来的弹幕占用记录名额，整份输入仍 ≤3,300（cl100k 口径）。
 
     已落库（正常开场次）与还没落库（没开场次、调试注入）两种都量。记录总行数不超过本批条数，
     本批每一条都看得到；她更早说过的话单列在记录前面，标题点明比记录早。
@@ -285,7 +285,7 @@ def _full_batch(stored: bool) -> Tuple[List[Any], List[Any]]:
 @pytest.mark.parametrize("count", [1, 2, 3, 6])
 @pytest.mark.parametrize("case", ["older", "newest-in-game-chat", "answered"])
 async def test_full_batch_with_player_notes_stays_within_budget(prompts: Any, count: int, case: str) -> None:
-    """满批再加最近几分钟找她的玩家条目（每条 43 字的长公屏话，最多 6 条）：整份输入仍 ≤3,200（cl100k 口径）。
+    """满批再加最近几分钟找她的玩家条目（每条 43 字的长公屏话，最多 6 条）：整份输入仍 ≤3,300（cl100k 口径）。
 
     条目只留最近 3 条、较早的截短，和她更早说过的话合计至多 3 行；最新一条正是本窗公屏话时给到 40 字，
     游戏聊天一段不再重复它；她都回应过（标已接过、规矩多一句）时也不超。原样列出时 6 条长公屏话会让满批
@@ -317,14 +317,17 @@ async def test_full_batch_with_player_notes_stays_within_budget(prompts: Any, co
     assert (f"：{_LONG_PLAYER_CHAT[:40]}…" in shown[-1]) == newest_in_game_chat
     assert newest_chat not in user
     speech = user.partition("## 更早一点你说过的话")[2].partition("下面是之前的聊天记录")[0]
-    assert len(shown) + sum(1 for line in speech.splitlines() if line.startswith("- ")) <= 3
+    # 玩家条目优先占预算，她的原话用剩下的行数，但保底两行（防逐字复读的原料不归零）
+    assert len(shown) + sum(1 for line in speech.splitlines() if line.startswith("- ")) <= max(
+        3, len(shown) + _RECENT_SPEECH_FLOOR
+    )
 
 
 @pytest.mark.parametrize("reply_to", ["", "玩家3"])
 async def test_full_batch_with_several_players_speaking_in_one_window_stays_within_budget(
     prompts: Any, reply_to: str
 ) -> None:
-    """满批时同一窗里六位玩家各在公屏说一句 43 字的长话：整份输入仍 ≤3,200（cl100k 口径）。
+    """满批时同一窗里六位玩家各在公屏说一句 43 字的长话：整份输入仍 ≤3,300（cl100k 口径）。
 
     她要接的那一句（回应对象说的，没有回应对象时是最新的）给到 40 字，同窗别的玩家截到 18 字；
     条目只留最近 3 位，没进条目的公屏话只报句数。原样列出时会超出几百。
@@ -370,7 +373,7 @@ def _section(user: str, heading: str) -> str:
 
 async def test_player_she_is_told_to_answer_is_listed_even_when_crowded_out(prompts: Any) -> None:
     """交接稿要她回第 1 位开口的玩家（to_player），可条目只留最近 3 位：换掉最早的一条留下他的，
-    他那句给到 40 字，满批仍 ≤3,200。原先他只剩一个句数，表达侧看不到他说了什么。"""
+    他那句给到 40 字，满批仍 ≤3,300。原先他只剩一个句数，表达侧看不到他说了什么。"""
     history, batch = _full_batch(stored=True)
     notes, chat = _six_players()
     replyer, llm = _replyer(prompts)
@@ -387,7 +390,7 @@ async def test_player_she_is_told_to_answer_is_listed_even_when_crowded_out(prom
 
 async def test_game_chat_line_the_target_points_at_is_listed_in_full(prompts: Any) -> None:
     """交接稿 target 指着一句认不出是谁说的公屏话（原文片段）：那句单列在游戏聊天一段、给到 40 字，
-    条目都截短，其余只报句数；满批仍 ≤3,200。没有玩家条目时它也挤进列出的那几句。"""
+    条目都截短，其余只报句数；满批仍 ≤3,300。没有玩家条目时它也挤进列出的那几句。"""
     history, batch = _full_batch(stored=True)
     notes, chat = _six_players()
     stranger = f"[minecraft] 玩家 路人：{_STRANGER_CHAT}"
@@ -414,7 +417,7 @@ async def test_game_chat_line_the_target_points_at_is_listed_in_full(prompts: An
 
 async def test_full_batch_with_long_game_chat_and_no_player_notes_stays_within_budget(prompts: Any) -> None:
     """没有玩家条目、游戏聊天一段有六句长话：只留最近 3 句、每句截到 30 字，她更早说过的话让出 3 行，
-    整份输入仍 ≤3,200。"""
+    整份输入仍 ≤3,300。"""
     history, batch = _full_batch(stored=True)
     chat = [f"[minecraft] 玩家 玩家{index}：{_LONG_PLAYER_CHAT}" for index in range(6)]
     replyer, llm = _replyer(prompts)

@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.agents.streamer.game_ledger import PlayerNote
 from src.agents.streamer.plan import DecisionPlan
 from src.agents.streamer.replyer import Replyer
 from src.agents.streamer.speech_guard import WordFilter
@@ -225,6 +226,28 @@ async def test_recent_speeches_list_what_the_window_does_not_show(recent: Option
     history = [TimelineTurn(role="assistant", content="刚说的"), TimelineTurn(role="assistant", content="最新一句")]
     turn = await _turn_kwargs(replyer, prompt, history=history, recent_speeches=recent)
     assert turn["recent_speech_section"] == expected
+
+
+@pytest.mark.asyncio
+async def test_recent_speeches_keep_a_floor_when_people_notes_squeeze_the_budget() -> None:
+    """玩家条目把"更早说过的话"的预算挤光时，她的原话保底留两句：防逐字复读的原料在最忙的窗口也不能归零。"""
+    replyer, _, prompt = _replyer()
+    notes = (
+        PlayerNote(who="玩家甲", said=True, line="[22:44 minecraft 公屏] 玩家 玩家甲：那你有皮革吗"),
+        PlayerNote(who="玩家甲", said=True, line="[22:44 minecraft 公屏] 玩家 玩家甲：要做书"),
+        PlayerNote(who="玩家乙", said=False, line="[22:44 minecraft 动作] 玩家 玩家乙 看着我蹲起 2 下"),
+    )
+    turn = await _turn_kwargs(
+        replyer,
+        prompt,
+        history=[],
+        recent_speeches=["更早一句", "再早一句", "更早的第三句"],
+        game_people=notes,
+    )
+    section = turn["recent_speech_section"]
+    assert section.startswith(_EARLIER_SPEECH)
+    assert "- 更早一句" not in section  # 只取最近的几句，更早的让给保底之外
+    assert "- 再早一句\n- 更早的第三句\n" in section
 
 
 @pytest.mark.parametrize(

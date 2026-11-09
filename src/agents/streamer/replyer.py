@@ -47,6 +47,10 @@ _DEFAULT_HISTORY_ITEMS = 14
 # "更早一点你说过的话"最多从这么多句里挑：与本窗历史同一份语料，取最近的几句，
 # 让她开口前看清哪些话刚说过（聊天记录里已经看得到的那几句不重复列）
 _RECENT_SPEECH_LINES = 6
+# 这一段的保底行数：游戏聊天与玩家条目把预算挤光时也至少留两句——她刚说过的话是
+# 防逐字复读的唯一原料，最忙的窗口（玩家连续在公屏说话、游戏事件刷屏）恰恰是
+# 复读风险最高的窗口，那一段不能被挤没了
+_RECENT_SPEECH_FLOOR = 2
 
 # 单列她更早说过的话时用的小标题：这几句都滑出了聊天记录，比下面的记录早，标题点明时间，
 # 免得她以为这些话是接在最新弹幕后面说的
@@ -62,15 +66,17 @@ _PEOPLE_LINES_MAX = 3
 _PEOPLE_NOTE_MAX_CHARS = 18
 _PEOPLE_FRESH_MAX_CHARS = 40
 # 游戏聊天一段：有玩家条目时，没进条目的公屏话（条目只留最近 3 条，多出来的、认不出是谁的）只报句数——
-# 满批加三条玩家条目时整份输入只剩个位数 token；没有玩家条目时留最近几句、每句截短，并和"更早一点你说过
-# 的话"合计至多 :data:`_RECENT_SPEECH_LINES` 行（游戏聊天占几行，她更早说过的话就少几行）
+# 满批加三条玩家条目时整份输入贴近上限；没有玩家条目时留最近几句、每句截短，并和"更早一点你说过
+# 的话"合计至多 :data:`_RECENT_SPEECH_LINES` 行（游戏聊天占几行，她更早说过的话就少几行，
+# 她的原话另有 :data:`_RECENT_SPEECH_FLOOR` 行保底，由输入上限里的固定占位承担）
 _GAME_CHAT_LINES_MAX = 3
 _GAME_CHAT_LINE_MAX_CHARS = 30
 # 她已经回应过的条目：正文截得更短、行尾标"已接过"，她知道这件事接过了，换话题时不再谢一遍
 _PEOPLE_ANSWERED_MAX_CHARS = 10
 _ANSWERED_MARK = "（已接过）"
 # 有玩家条目时，玩家条目和"更早一点你说过的话"合计至多几行：玩家条目优先（同一位玩家送礼、跳、
-# 开口三件事要一起在），她更早说过的话用剩下的行数；没有玩家条目时那一段照常
+# 开口三件事要一起在），她更早说过的话用剩下的行数，但保底留 _RECENT_SPEECH_FLOOR 行；
+# 没有玩家条目时那一段照常（游戏聊天占几行让几行，同样不破保底）
 _PEOPLE_AND_SPEECH_LINES = 3
 
 # 交接稿里没有特定回应对象时的 target 写法（Planner 没填，或填的消息 ID 查不到原话）
@@ -374,12 +380,19 @@ class Replyer:
             # 游戏里最近找她的人：玩家的话与举动单列，谁说的、谁做的一眼分清（较早的截短、整段封顶）
             game_people_section=_game_people_section(people_lines),
             dialogue_prompt="\n".join(dialogue_lines) or "（暂无聊天记录）",
-            # 有玩家条目时，她更早说过的话只用玩家条目一段剩下的行数：玩家条目从这一段让出预算，整份输入不超
+            # 有玩家条目时，她更早说过的话只用玩家条目一段剩下的行数：玩家条目从这一段让出预算，
+            # 但她的原话保底留两句（防逐字复读的原料，最忙时也不能归零）；满批时整份输入略超的
+            # 余量由这一段的两行短句兜住
             recent_speech_section=_recent_speech_section(
                 recent_speeches,
                 shown_speeches,
-                max_lines=(
-                    max(0, _PEOPLE_AND_SPEECH_LINES - people_rows) if people_lines else _RECENT_SPEECH_LINES - chat_rows
+                max_lines=max(
+                    _RECENT_SPEECH_FLOOR,
+                    (
+                        max(0, _PEOPLE_AND_SPEECH_LINES - people_rows)
+                        if people_lines
+                        else _RECENT_SPEECH_LINES - chat_rows
+                    ),
                 ),
             ),
             remembered_section=_remembered_section(remembered),
