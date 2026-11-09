@@ -23,7 +23,9 @@
 
 状态词表：受理 ``accepted`` → 进行中 ``running``（含子态
 ``waiting_for_decision``，决策点等待）→ 终态 ``{succeeded / failed /
-cancelled / timeout / undelivered}``。``undelivered`` 是执行 Agent 自己停了
+cancelled / timeout / undelivered}``。委派另有两个进行中状态：``queued`` 是目标
+手上有事、这件在委派队列里排着还没送到执行方；``suspended`` 是急件插队时
+在途那件被暂放（进度保留，急件做完接着做）。两者都占账，必须走到终态。``undelivered`` 是执行 Agent 自己停了
 却没交付结果：委派只有走过交付才记 ``succeeded``，停下不等于做完。写入规则：终态粘滞（终态后的任何写入被忽略）；
 ``accepted`` 不可回退；同状态重复写入幂等（快照刷新、不重发事件）。
 
@@ -56,14 +58,25 @@ logger = get_logger("TaskTracker")
 
 # 任务状态：受理 → 进行中（含决策点等待子态）→ 终态
 TaskStatus = Literal[
-    "accepted", "running", "waiting_for_decision", "succeeded", "failed", "cancelled", "timeout", "undelivered"
+    "accepted",
+    "running",
+    "waiting_for_decision",
+    "queued",
+    "suspended",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "timeout",
+    "undelivered",
 ]
 
 TERMINAL_TASK_STATES = frozenset({"succeeded", "failed", "cancelled", "timeout", "undelivered"})
-IN_PROGRESS_TASK_STATES = frozenset({"accepted", "running", "waiting_for_decision"})
+IN_PROGRESS_TASK_STATES = frozenset({"accepted", "running", "waiting_for_decision", "queued", "suspended"})
+# 已送到执行方、执行方手上正在办的状态（排队中的还没送到，不算）：委派队列判"目标忙不忙"用
+DELIVERED_TASK_STATES = frozenset({"accepted", "running", "waiting_for_decision", "suspended"})
 
 # 执行 Agent 最近说的一句判断与时刻（账本旁注，见 annotate）：发起方每窗决策前读它当参考；
-# 它是没脱敏的推理原文（坐标、工具名都在里面），不算进展，也不进在途拒受理理由
+# 它是没脱敏的推理原文（坐标、工具名都在里面），不算进展，也不进拒受理与队列清单理由
 REPLY_NOTE_KEY = "latest_reply"
 REPLY_NOTE_AT_KEY = "latest_reply_at_ms"
 
@@ -133,6 +146,7 @@ class TaskLedger:
         status: TaskStatus = "accepted",
         source: TaskSource,
         snapshot: Optional[Dict[str, Any]] = None,
+        summary: str = "已受理",
     ) -> TaskRecord:
         """登记新任务（重复 task_id 幂等：保留先登记，返回既有记录）。"""
         existing = self._records.get(task_id)
@@ -163,7 +177,7 @@ class TaskLedger:
             TaskChangedPayload(
                 task_id=task_id,
                 status=status,
-                summary="已受理",
+                summary=summary,
                 initiator=initiator,
                 executor=executor,
                 source=source,
@@ -231,12 +245,15 @@ class TaskLedger:
         # 转入进行中不值得唤醒发起方——决策点（waiting_for_decision）与终态
         # 才是唤醒级变化（对齐 maicraft 既有行为：pending/running 不注入）
         _quiet_group = {"accepted", "running"}
-        if record.status in _quiet_group and status in _quiet_group:
+        # 排队那件轮到送达（queued -> accepted）同样静默：入队时已经广播过一次排队，
+        # 送达之后执行方开跑才是下一步；按"回退到受理"拦掉的话，排队的单永远送不出去
+        delivered_from_queue = record.status == "queued" and status == "accepted"
+        if delivered_from_queue or (record.status in _quiet_group and status in _quiet_group):
             record.status = status
             if snapshot is not None:
                 record.snapshot = dict(snapshot)
             record.updated_at_ms = now_ms()
-            logger.debug(f"任务 {task_id} 组内迁移 {record.status} -> {status}（静默，不发事件）")
+            logger.debug(f"任务 {task_id} 静默迁移到 {status}（不发事件）")
             return None
 
         if status == "accepted" and record.status in IN_PROGRESS_TASK_STATES:
@@ -589,6 +606,7 @@ __all__ = [
     "TaskStatus",
     "TERMINAL_TASK_STATES",
     "IN_PROGRESS_TASK_STATES",
+    "DELIVERED_TASK_STATES",
     "REPLY_NOTE_KEY",
     "REPLY_NOTE_AT_KEY",
     "TaskSource",
