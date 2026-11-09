@@ -14,7 +14,7 @@ import type { ComponentListResponse, ComponentSummary, RundownListResponse } fro
 
 vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
-  ElMessageBox: { prompt: vi.fn() },
+  ElMessageBox: { prompt: vi.fn(), alert: vi.fn().mockResolvedValue(undefined) },
 }));
 
 // useLiveSessions（defaultSessionTitle 来源）传递依赖 websocket store，
@@ -37,12 +37,18 @@ vi.mock('@/api', async importOriginal => ({
   componentApi: { getAll: vi.fn() },
   liveSessionsApi: { open: vi.fn() },
   rundownApi: { listRundowns: vi.fn(), activate: vi.fn() },
+  configApi: { getConfig: vi.fn(), saveBatch: vi.fn() },
+  systemApi: { fetchSystemHealth: vi.fn() },
 }));
 
 const getAllMock = vi.mocked(componentApi.getAll);
 const openMock = vi.mocked(liveSessionsApi.open);
 const listRundownsMock = vi.mocked(rundownApi.listRundowns);
 const activateMock = vi.mocked(rundownApi.activate);
+const { configApi, systemApi } = await import('@/api');
+const getConfigMock = vi.mocked(configApi.getConfig);
+const saveBatchMock = vi.mocked(configApi.saveBatch);
+const healthMock = vi.mocked(systemApi.fetchSystemHealth);
 
 const STORAGE_KEY = 'amaidesu.startStream.plan.v1';
 
@@ -87,10 +93,27 @@ function rundownsResponse(): RundownListResponse {
   };
 }
 
+function healthItem(state: 'ok' | 'offline' | 'disabled' | 'unknown'): never {
+  return {
+    name: 'gptsovits',
+    state,
+    detail: '',
+    last_error: '',
+    supports_reconnect: false,
+  } as never;
+}
+
 describe('useStartStream', () => {
   beforeEach(() => {
     getAllMock.mockResolvedValue({ data: componentsResponse() } as never);
     listRundownsMock.mockResolvedValue({ data: rundownsResponse() } as never);
+    getConfigMock.mockResolvedValue({
+      data: { config: { tts: { enabled: true } } },
+    } as never);
+    healthMock.mockResolvedValue({
+      data: { status: 'ok', timestamp_ms: 0, checked_at_ms: 0, domains: { tts: [healthItem('ok')] } },
+    } as never);
+    saveBatchMock.mockResolvedValue({ data: {} } as never);
   });
 
   afterEach(() => {
@@ -268,5 +291,64 @@ describe('useStartStream', () => {
 
     await stream.load(false); // 重新打开：手动选择清空，回到跟随推断
     expect(stream.kind.value).toBe(stream.danmaku.value ? 'live' : 'rehearsal');
+  });
+
+  it('TTS 探针：服务不可达只落提示不拦开播；配置或健康面读不到按缺席降级', async () => {
+    storageStub();
+    healthMock.mockResolvedValue({
+      data: { status: 'ok', timestamp_ms: 0, checked_at_ms: 0, domains: { tts: [healthItem('offline')] } },
+    } as never);
+    const stream = await mounted();
+    expect(stream.ttsEngineReady.value).toBe(true);
+    expect(stream.ttsNotice.value).toContain('不会出声');
+    openMock.mockResolvedValue({
+      data: { live_session_id: 1, plan_report: { items: [], config_error: '' } },
+    } as never);
+    expect(await stream.submit()).toBe(true); // 提示不拦开播
+
+    healthMock.mockRejectedValue(new Error('health down'));
+    const degraded = await mounted();
+    expect(degraded.ttsEngineReady.value).toBe(false);
+    expect(degraded.ttsNotice.value).toBe('');
+  });
+
+  it('TTS 开关：打开且引擎未装配 → 写盘 + 拦开播；引擎已装配不拦', async () => {
+    storageStub();
+    healthMock.mockResolvedValue({
+      data: { status: 'ok', timestamp_ms: 0, checked_at_ms: 0, domains: { tts: [healthItem('disabled')] } },
+    } as never);
+    const stream = await mounted();
+    expect(stream.ttsEnabled.value).toBe(true);
+    // 先关再开：模拟引导里重新打开开关
+    await stream.toggleTts(false);
+    await stream.toggleTts(true);
+    expect(saveBatchMock).toHaveBeenLastCalledWith([{ key: 'infra.tts.enabled', value: true }]);
+    expect(stream.ttsRestartBlock.value).toBe(true);
+    openMock.mockResolvedValue({
+      data: { live_session_id: 1, plan_report: { items: [], config_error: '' } },
+    } as never);
+    expect(await stream.submit()).toBe(false);
+    expect(stream.submitError.value).toContain('重启');
+    expect(openMock).not.toHaveBeenCalled();
+
+    // 引擎已装配：打开开关不拦
+    healthMock.mockResolvedValue({
+      data: { status: 'ok', timestamp_ms: 0, checked_at_ms: 0, domains: { tts: [healthItem('ok')] } },
+    } as never);
+    const ready = await mounted();
+    await ready.toggleTts(false);
+    await ready.toggleTts(true);
+    expect(ready.ttsRestartBlock.value).toBe(false);
+    expect(await ready.submit()).toBe(true);
+  });
+
+  it('TTS 开关：写盘失败回滚开关并提示，不进拦截态', async () => {
+    storageStub();
+    saveBatchMock.mockRejectedValue(new Error('写盘失败'));
+    const stream = await mounted();
+    await stream.toggleTts(false);
+    expect(stream.ttsEnabled.value).toBe(true); // 回滚
+    expect(stream.ttsNotice.value).toBe('写盘失败');
+    expect(stream.ttsRestartBlock.value).toBe(false);
   });
 });

@@ -76,6 +76,26 @@
         </div>
       </div>
 
+      <!-- TTS 开播期可见性：探针失败只提示不拦开播；引导里打开开关且引擎未装配则拦开播 -->
+      <div class="ss-group">
+        <div class="ss-group-title">语音合成（TTS）</div>
+        <div class="ss-row">
+          <el-checkbox
+            :model-value="ttsEnabled"
+            :disabled="ttsSaving"
+            @update:model-value="onToggleTts($event as boolean)"
+          >
+            语音合成（TTS）
+          </el-checkbox>
+          <span
+            class="ss-run-dot"
+            :class="{ 'is-on': ttsEngineReady }"
+            :title="ttsEngineReady ? '语音引擎已装配' : '语音引擎未装配（改开关需重启进程生效）'"
+          />
+        </div>
+        <p v-if="ttsNotice" class="ss-tts-notice">{{ ttsNotice }}</p>
+      </div>
+
       <div class="ss-group">
         <div class="ss-group-title">流程单</div>
         <div class="ss-row">
@@ -178,6 +198,11 @@ const {
   selectedRundownId,
   danmaku,
   hasActiveSessionHint,
+  ttsEnabled,
+  ttsEngineReady,
+  ttsNotice,
+  ttsSaving,
+  toggleTts,
   labelOf,
   DANMAKU_VARIANTS,
   DANMAKU_LABELS,
@@ -230,6 +255,10 @@ function actionLabel(action: 'start' | 'stop' | 'skip'): string {
 function onVisibleChange(visible: boolean): void {
   if (submitting.value) return;
   emit('update:modelValue', visible);
+}
+
+function onToggleTts(enabled: boolean): void {
+  void toggleTts(enabled);
 }
 
 async function onSubmit(): Promise<void> {
@@ -362,6 +391,12 @@ async function onSubmit(): Promise<void> {
 .ss-report-hint {
   margin-top: 6px;
   color: var(--el-text-color-secondary);
+}
+
+.ss-tts-notice {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--color-warning);
 }
 
 .ss-submit-error {

@@ -7,12 +7,15 @@
  * 主播不受清单影响。上次意图存 localStorage 作下次默认勾选（前端便利，不入
  * 配置契约面）。场次类型（正式 / 彩排）每次开播都要明确：默认跟随弹幕接入——
  * 接了 B 站弹幕算正式，没接算彩排；手动选过就以手动为准，且不存进上次意图，
- * 免得一次彩排让下次正式开播默认成彩排。不含定时器/订阅/WebSocket，无
- * keep-alive 生命周期语义。
+ * 免得一次彩排让下次正式开播默认成彩排。TTS 开播期可见性：弹窗打开时经
+ * 配置快照 + 健康墙 tts 域做一次探针（服务不可达只提示不拦开播）；引导里
+ * 的 TTS 开关写 infra.toml，打开后引擎未装配则拦开播（需重启进程）。不含
+ * 定时器/订阅/WebSocket，无 keep-alive 生命周期语义。
  */
 
 import { computed, ref } from 'vue';
-import { componentApi, liveSessionsApi, rundownApi } from '@/api';
+import { ElMessageBox } from 'element-plus';
+import { componentApi, configApi, liveSessionsApi, rundownApi, systemApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
 import { defaultSessionTitle } from '@/composables/live/useLiveSessions';
 import type {
@@ -120,6 +123,18 @@ export function useStartStream() {
 
   const hasActiveSessionHint = ref(false);
 
+  // ---- TTS 开播期可见性 ----
+  /** TTS 基础设施开关（infra.toml [tts].enabled；配置读不到按开） */
+  const ttsEnabled = ref(true);
+  /** 当前进程语音引擎是否已装配（健康墙 tts 域有 ok/offline 条目即装配在位） */
+  const ttsEngineReady = ref(false);
+  /** TTS 探针/开关的提示文案（只提示不拦开播；空串=无提示） */
+  const ttsNotice = ref('');
+  /** 引导里打开 TTS 后引擎仍未装配 → 拦开播（infra 段变更需重启进程） */
+  const ttsRestartBlock = ref(false);
+  /** TTS 开关写盘进行中（防连点重复提交） */
+  const ttsSaving = ref(false);
+
   /** 手动选过的场次类型；null = 未手动选，跟随弹幕接入推断 */
   const kindOverride = ref<SessionKind | null>(null);
   /** 本次场次类型：手动选过以手动为准，否则接了 B 站弹幕算正式、没接算彩排 */
@@ -205,7 +220,7 @@ export function useStartStream() {
     return (DANMAKU_VARIANTS as readonly string[]).includes(name);
   }
 
-  /** 弹窗打开时拉取数据（组件清单为主，流程单库失败不阻塞） */
+  /** 弹窗打开时拉取数据（组件清单为主，流程单库失败不阻塞）；顺带做 TTS 探针 */
   async function load(activeSessionExists: boolean): Promise<void> {
     loading.value = true;
     loadError.value = '';
@@ -214,6 +229,8 @@ export function useStartStream() {
     title.value = defaultSessionTitle();
     kindOverride.value = null;
     hasActiveSessionHint.value = activeSessionExists;
+    ttsNotice.value = '';
+    ttsRestartBlock.value = false;
     try {
       const [componentsRes, rundownRes] = await Promise.all([
         componentApi.getAll(),
@@ -244,10 +261,70 @@ export function useStartStream() {
     } finally {
       loading.value = false;
     }
+    await probeTts();
+  }
+
+  /** TTS 探针：配置开关状态取自配置快照，引擎装配/连接态取自健康墙 tts 域。
+
+   * 探针失败只落 ttsNotice 提示，不拦开播（S3 定案）；配置/健康面读不到按
+   * 缺席降级，同样不拦。 */
+  async function probeTts(): Promise<void> {
+    const [configRes, healthRes] = await Promise.all([
+      configApi.getConfig().catch(() => null),
+      systemApi.fetchSystemHealth().catch(() => null),
+    ]);
+    const ttsSection = configRes?.data.config?.tts;
+    ttsEnabled.value =
+      typeof ttsSection === 'object' && ttsSection !== null && 'enabled' in ttsSection
+        ? Boolean((ttsSection as { enabled: unknown }).enabled)
+        : true;
+    const ttsItems = healthRes?.data.domains?.tts ?? [];
+    ttsEngineReady.value = ttsItems.some(i => i.state === 'ok' || i.state === 'offline');
+    if (ttsEnabled.value && ttsEngineReady.value && ttsItems.some(i => i.state === 'offline')) {
+      ttsNotice.value = 'TTS 服务当前不可达（引擎未连接）：仍可开播，但开播后她不会出声';
+    }
+  }
+
+  /** 引导里的 TTS 开关：写 infra.toml（经配置管线）；打开后引擎未装配则拦开播 */
+  async function toggleTts(enabled: boolean): Promise<void> {
+    if (ttsSaving.value) return;
+    ttsSaving.value = true;
+    ttsRestartBlock.value = false;
+    const previous = ttsEnabled.value;
+    ttsEnabled.value = enabled;
+    try {
+      await configApi.saveBatch([{ key: 'infra.tts.enabled', value: enabled }]);
+    } catch (error) {
+      ttsEnabled.value = previous;
+      ttsNotice.value = getApiErrorMessage(error, 'TTS 开关保存失败');
+      ttsSaving.value = false;
+      return;
+    }
+    ttsSaving.value = false;
+    if (enabled && !ttsEngineReady.value) {
+      // 引擎未装配：infra 段变更不走组件对齐，必须重启进程才生效——拦住不让开播，
+      // 防"以为开了声其实没声"就开场
+      ttsRestartBlock.value = true;
+      ttsNotice.value = '';
+      ElMessageBox.alert(
+        'TTS 开关属基础设施段，需重启进程后才生效；重启前不能开播。',
+        '需重启进程',
+        { confirmButtonText: '知道了' },
+      ).catch(() => {});
+    } else {
+      ttsNotice.value = enabled
+        ? 'TTS 已开启：当前进程语音引擎已装配，本次开播可正常出声'
+        : 'TTS 已关闭：本场直播她不会出声';
+    }
   }
 
   /** 提交开播：必要时先切流程单，再单请求开场次 + 意图对齐。返回是否干净成功 */
   async function submit(): Promise<boolean> {
+    if (ttsRestartBlock.value) {
+      // 引导里打开的 TTS 引擎仍未装配，后端 open 也会 409——前端先拦，文案可读
+      submitError.value = 'TTS 开关刚在引导里打开，需重启进程后才生效；请重启后再开播';
+      return false;
+    }
     submitting.value = true;
     submitError.value = '';
     report.value = null;
@@ -310,6 +387,12 @@ export function useStartStream() {
     selectedKeys,
     danmaku,
     hasActiveSessionHint,
+    ttsEnabled,
+    ttsEngineReady,
+    ttsNotice,
+    ttsSaving,
+    ttsRestartBlock,
+    toggleTts,
     labelOf,
     DANMAKU_VARIANTS,
     DANMAKU_LABELS,

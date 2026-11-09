@@ -130,6 +130,23 @@ async def list_sessions(
     )
 
 
+def _ensure_tts_assembled(server: "DashboardServer") -> None:
+    """开播前 TTS 装配校验：配置已启用但引擎未装配 → 409 拦下。
+
+    TTS 开关属 infra 段（进程启动时装配引擎，不走组件对齐），开播引导里
+    新打开开关后引擎仍在缺席态——此时开播"以为开了声其实没声"，必须重启
+    进程后才放行。
+    """
+    svc = server.config_service
+    section = svc.get_file_section("infra", {}) if svc is not None else {}
+    tts_cfg = section.get("tts") if isinstance(section, dict) else None
+    if isinstance(tts_cfg, dict) and bool(tts_cfg.get("enabled", True)) and server.tts_engine is None:
+        raise HTTPException(
+            status_code=409,
+            detail="TTS 已在配置中启用，但语音引擎未装配（TTS 开关属基础设施段，需重启进程才生效）；请重启后再开播",
+        )
+
+
 @router.post("/open", response_model=SessionOpenResponse)
 async def open_session(
     request: SessionOpenRequest,
@@ -143,7 +160,10 @@ async def open_session(
     请求带 ``component_plan`` 时，场次开启后把组件运行态与配置态对齐到该
     期望运行全集（开播引导弹窗的意图应用）；对齐失败不回滚场次，逐项
     结果随响应 ``plan_report`` 回传。
+    开场前做 TTS 装配校验（``_ensure_tts_assembled``）：配置启用而引擎缺席
+    的场次开出来就是无声直播，直接 409。
     """
+    _ensure_tts_assembled(server)
     pk = await manager.open_session(
         kind=request.kind,
         title=request.title,
