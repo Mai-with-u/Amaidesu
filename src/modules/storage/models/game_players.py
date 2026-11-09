@@ -119,6 +119,7 @@ class GameChatLine(BaseModel):
     save_id: str = Field(default="", description="在哪个存档；不明为空")
     save_name: str = Field(default="", description="存档给人看的名字")
     at_ms: int = Field(..., description="收到或发出的时刻")
+    message_id: str = Field(default="", description="采集时发的消息号；她自己说的、旧行为空")
 
 
 class PendingPlayerCandidate(BaseModel):

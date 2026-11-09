@@ -112,3 +112,57 @@ async def test_evidence_row_deletion_nulls_reference(tmp_path: Path) -> None:
         assert fact.quote == "我负责挖矿"
     finally:
         await db.close()
+
+
+_V37_GAME_CHAT = """
+CREATE TABLE game_chat (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id INTEGER NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+    game            TEXT NOT NULL,
+    direction       TEXT NOT NULL CHECK (direction IN ('player', 'streamer', 'other')),
+    player_id       INTEGER REFERENCES game_players(id) ON DELETE CASCADE,
+    content         TEXT NOT NULL DEFAULT '',
+    save_id         TEXT NOT NULL DEFAULT '',
+    save_name       TEXT NOT NULL DEFAULT '',
+    at_ms           INTEGER NOT NULL
+);
+"""
+
+
+async def test_old_game_chat_gains_message_id_column_and_index(tmp_path: Path) -> None:
+    """v37 形状的公屏表（没有消息号列）：升级后补列与索引、旧行补空串，重复执行不再变。"""
+    path = tmp_path / "data" / "v37.db"
+    fresh = SQLiteDatabase(path)
+    await fresh.initialize()
+    await fresh.close()
+    raw = sqlite3.connect(path)
+    try:
+        raw.executescript("PRAGMA foreign_keys=OFF; DROP TABLE game_chat;" + _V37_GAME_CHAT)
+        raw.execute("INSERT INTO live_sessions(started_at_ms, kind, updated_at_ms) VALUES (1, 'live', 1)")
+        raw.execute(
+            "INSERT INTO game_chat(live_session_id, game, direction, content, at_ms) VALUES (1, 'mc', 'other', '', 5)"
+        )
+        raw.commit()
+    finally:
+        raw.close()
+    _to_v37(path)
+
+    upgraded = SQLiteDatabase(path)
+    await upgraded.initialize()
+    try:
+        assert await upgraded.get_schema_version() == SCHEMA_VERSION
+        (row,) = await upgraded.execute("SELECT message_id FROM game_chat")
+        assert row["message_id"] == ""
+        indexes = {r["name"] for r in await upgraded.execute("PRAGMA index_list(game_chat)")}
+        assert "idx_game_chat_message" in indexes
+    finally:
+        await upgraded.close()
+
+    conn = sqlite3.connect(path)
+    try:
+        v38_migrate(conn)
+        v38_migrate(conn)
+        columns = [r[1] for r in conn.execute("PRAGMA table_info(game_chat)")]
+        assert columns.count("message_id") == 1
+    finally:
+        conn.close()

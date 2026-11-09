@@ -10,10 +10,14 @@ MaicraftChatCollector —— 游戏内聊天采集器
 没有发言人 UUID 的"玩家消息"名字只是聊天栏上显示的：按 ``chat_attribution`` 给 Mod 判成借角色名义发的
 机器消息与无凭据的发言附一句说明给主播；消息里点到的实体与模板编号原样转出，游戏 Agent 据此认死讯。
 首次接入只对齐游标、不补发历史；Mod 换世界换了流编号后，同样只对齐游标。
+
+每条转出的消息带一个随机短串消息号：主播决策层按它指认"依据的是哪一句"，落库时一并记下。不用进程内
+计数器：断线续播后同一场接着发号，计数从头会与旧号相撞。
 """
 
 from __future__ import annotations
 
+import secrets
 from typing import Any, Callable, Dict, Optional
 
 from src.agents.minecraft.chat_attribution import attribute_chat, line_speaker, mentions_of
@@ -104,9 +108,15 @@ class MaicraftChatCollector(MaicraftEventsCollector):
             save_name=world.name if world is not None else "",
             # 这台服务器验不验正版账号：存储记在"在哪个存档见过他"上，运营者据此知道认人能信几分
             save_online_mode=world.online_mode if world is not None else "unknown",
+            message_id=new_message_id(),
         )
         await self.emit_event(CoreEvents.GAME_CHAT_RECEIVED, payload, source=self.name)
         return True
 
 
-__all__ = ["MaicraftChatCollector"]
+def new_message_id() -> str:
+    """一条公屏消息的消息号：8 位十六进制随机串（一场几百句，撞号可忽略；工具按"恰好命中一行"兜底）。"""
+    return secrets.token_hex(4)
+
+
+__all__ = ["MaicraftChatCollector", "new_message_id"]

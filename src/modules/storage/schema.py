@@ -913,7 +913,8 @@ CREATE TABLE IF NOT EXISTS game_chat (
     content         TEXT NOT NULL DEFAULT '',
     save_id         TEXT NOT NULL DEFAULT '',
     save_name       TEXT NOT NULL DEFAULT '',
-    at_ms           INTEGER NOT NULL
+    at_ms           INTEGER NOT NULL,
+    message_id      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_game_chat_session ON game_chat(live_session_id, at_ms);
 CREATE INDEX IF NOT EXISTS idx_game_chat_player ON game_chat(player_id);
@@ -947,6 +948,8 @@ CREATE INDEX IF NOT EXISTS idx_viewer_player_links_player ON viewer_player_links
 # 一行 = 一条"当前游戏环境里人与人怎么相处"的可核对事实，与承诺账本同构：行级状态、证据可核、
 # 人工锁。六类：setting 环境形态 / members 成员关系 / sharing 共享惯例 / works 进行中的事 /
 # her_role 她的角色 / open_question 待弄清。
+# 依据行按消息号查回：模型填它看得见的消息号（弹幕 live_chat.message_id；公屏 game_chat.message_id，
+# 采集时发的随机短串，由 v38 迁移给 game_chat 补列与 (live_session_id, message_id) 索引），工具查回行号写进证据列。
 # text 是一句事实陈述，不带评价词；quote 是依据的原文片段——非空时必须是对应聊天行的逐字子串，
 # 空引文行只允许 her_role 与 open_question 两类（归纳类，且只有下播整理能产出）。
 # evidence_chat_id → live_chat（弹幕出处）、evidence_game_chat_id → game_chat（游戏公屏出处），

@@ -61,6 +61,7 @@ class GameChatPayload(BasePayload):
         save_id: 收到时角色所在的存档编号（空串 = 不分存档或存档不明）
         save_name: 存档给人看的名字（只显示，不当键）
         save_online_mode: 存档所在服务器验不验账号（on / off / unknown）；存储记在"在哪个存档见过他"上
+        message_id: 消息号（采集时发的随机短串；决策层按它指认这一句，未发号为空串）
         occurred_at_ms: 上游收到这条消息的时刻（Unix 毫秒；0 = 未提供）
         timestamp_ms: 本系统发布该事件的时刻（Unix 毫秒）
     """
@@ -92,6 +93,10 @@ class GameChatPayload(BasePayload):
     save_name: str = Field(default="", description="存档给人看的名字（只显示，不当键）")
     save_online_mode: OnlineMode = Field(
         default="unknown", description="存档所在服务器验不验账号：on 验 / off 不验（UUID 由名字算出）/ unknown 没报"
+    )
+    message_id: str = Field(
+        default="",
+        description="消息号：采集时发的随机短串，主播决策层视野里这一行末尾的 [id:…]，落库时记进 game_chat（未发号为空串）",
     )
     occurred_at_ms: int = Field(default=0, description="上游收到时刻（Unix 毫秒；0 = 未知）")
     timestamp_ms: int = Field(default_factory=lambda: now_ms(), description="本系统发布时刻（Unix 毫秒）")

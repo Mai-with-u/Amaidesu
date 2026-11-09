@@ -322,3 +322,34 @@ def test_chat_speakers_list_who_spoke_this_batch() -> None:
 )
 def test_sole_chat_player_only_when_one_checked_player_spoke(speakers: tuple, expected: tuple) -> None:
     assert sole_chat_player(speakers) == expected
+
+
+def test_chat_message_id_only_reaches_decision_view() -> None:
+    """公屏消息号挂在决策层看的时间线行末尾（折叠行带第一条的号）；交给表达侧的原话不带号。"""
+    from src.agents.streamer import canonical
+
+    ledger = GameLedger()
+    ledger.record_chat("minecraft", "玩家 Alex：来切磋", _ts(20, 1), speaker="uuid-a", who="Alex", message_id="a1b2")
+    ledger.record_chat("minecraft", "玩家 Alex：来切磋", _ts(20, 1), speaker="uuid-a", who="Alex", message_id="c3d4")
+
+    batch = ledger.drain()
+
+    (turn,) = batch.timeline_turns
+    assert turn.message_id == "a1b2"
+    decision_line = canonical.turn_to_message(turn)["content"]
+    assert decision_line.endswith("（另 1 次相同） [id:a1b2]")
+    assert batch.events == (decision_line,)
+    assert all("[id:" not in line for line in batch.fresh_chat)
+    assert all("[id:" not in note.line for note in batch.player_notes)
+
+
+def test_replyer_dialogue_strips_game_chat_message_id() -> None:
+    """表达侧聊天记录里的公屏行与弹幕行同一办法剥掉消息号。"""
+    from src.agents.streamer.replyer import _history_entry, _strip_id_tag
+
+    ledger = GameLedger()
+    ledger.record_chat("minecraft", "玩家 Alex：嗨", _ts(20, 1), speaker="uuid-a", who="Alex", message_id="e5f6")
+    (turn,) = ledger.drain().timeline_turns
+    entry = _history_entry(turn)
+    assert "[id:e5f6]" in entry.content
+    assert "[id:" not in _strip_id_tag(entry.content, entry.message_id)

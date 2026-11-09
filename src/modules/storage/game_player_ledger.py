@@ -103,6 +103,7 @@ class GamePlayerLedger:
                     save_id=payload.save_id,
                     save_name=payload.save_name,
                     at_ms=payload.timestamp_ms,
+                    message_id=payload.message_id,
                 )
                 return
             # 认不出是谁说的、或者是不再记的玩家：只占一行位置，不存原话、不建玩家
@@ -114,6 +115,8 @@ class GamePlayerLedger:
                 save_id=payload.save_id,
                 save_name=payload.save_name,
                 at_ms=payload.timestamp_ms,
+                # 占位行也记号：决策层引到这一句时能说清"没有存原话"，而不是"查不到"
+                message_id=payload.message_id,
             )
         except Exception as exc:  # noqa: BLE001 - 落库失败不挡聊天流
             logger.error(f"公屏聊天落库失败（场次 {payload.live_session_id}）: {exc}", exc=exc)

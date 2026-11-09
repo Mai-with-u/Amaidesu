@@ -2012,6 +2012,7 @@ class StreamerAgent(BaseAgent):
                     payload.timestamp_ms or now_ms(),
                     speaker=_chat_speaker(payload),
                     who=payload.sender if payload.kind == "player" else "",
+                    message_id=payload.message_id,
                 )
                 if self._mouth is not None:
                     self._mouth.note_game(body)

@@ -77,6 +77,8 @@ class _PendingEntry:
     # 玩家找她的条目：玩家名与给表达侧看的那句（聊天是"玩家 X：原话"，动作是去掉怎么接口径的事实）
     who: str = ""
     note: str = ""
+    # 公屏消息号：只挂在决策层看的时间线行末尾（``[id:…]``），折叠比较与交给表达侧的原话都不带它
+    message_id: str = ""
 
 
 def keep_recent_notes(kept: Sequence[PlayerNote], fresh: Sequence[PlayerNote], at_ms: int) -> Tuple[PlayerNote, ...]:
@@ -215,12 +217,16 @@ class GameLedger:
         )
         return summary
 
-    def record_chat(self, game: str, body: str, timestamp_ms: int, speaker: str = "", who: str = "") -> None:
+    def record_chat(
+        self, game: str, body: str, timestamp_ms: int, speaker: str = "", who: str = "", message_id: str = ""
+    ) -> None:
         """游戏聊天行入账（标签就是游戏名）；原话随本窗说话交给表达侧，行文不经脱敏。
 
         ``speaker`` 是这句是谁说的（核对过的玩家写 UUID，认不出是谁的玩家聊天写 "?"，系统消息为空）：
         出账时列进本批的发言人，她这一窗说的话据此记下在回应哪位玩家。
         ``who`` 是玩家名（系统消息为空）：有名字时这一行列进玩家找她的条目。
+        ``message_id`` 是采集时发的消息号：出账时挂在时间线行末尾 ``[id:…]`` 并记在行上，决策层据此指认这一句；
+        交给表达侧的原话与玩家条目不带号，表达侧聊天记录按行上的消息号剥掉标签（与弹幕同一办法）。
         """
         self._stage(
             note_turn(game, body, timestamp_ms or now_ms()),
@@ -231,6 +237,7 @@ class GameLedger:
             game=game,
             who=who,
             note=body if who else "",
+            message_id=message_id,
         )
 
     def record_self_chat(self, game: str, message: str, timestamp_ms: int) -> None:
@@ -258,6 +265,7 @@ class GameLedger:
         game: str = "",
         who: str = "",
         note: str = "",
+        message_id: str = "",
     ) -> None:
         """入账暂存：同摘要落在折叠窗内时并入最近一条只记数，按上限裁剪。"""
         now = now_ms()
@@ -278,6 +286,7 @@ class GameLedger:
                 game=game,
                 who=who,
                 note=note,
+                message_id=message_id,
             )
         )
         overflow = len(self._pending) - _PENDING_GAME_EVENTS_MAX
@@ -304,8 +313,12 @@ class GameLedger:
         for item in staged:
             content = item.base if item.count == 1 else f"{item.base}（另 {item.count - 1} 次相同）"
             turn = item.turn if content == item.turn.content else replace(item.turn, content=content)
+            if item.message_id:
+                # 消息号记在行上：canonical 映射给决策层的这一行末尾挂 [id:…]（折叠的行带第一条的号），
+                # 表达侧聊天记录按行上的号剥掉标签；交给表达侧的原话（fresh_chat）本来就不带号
+                turn = replace(turn, message_id=item.message_id)
             turns.append(turn)
-            events.append(content)
+            events.append(f"{content} [id:{item.message_id}]" if item.message_id else content)
             if item.is_chat:
                 fresh_chat.append(content)
                 if item.speaker and (item.label, item.speaker) not in speakers:

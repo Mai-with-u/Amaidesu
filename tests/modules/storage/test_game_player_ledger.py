@@ -191,3 +191,19 @@ async def test_retention_keeps_the_line_an_approved_self_statement_hangs_on(wire
     lines = await store.game_players.list_session_game_chat(live_session_id=session_id)
     assert [line.id for line in lines] == [approved_line]
     assert [item.player_chat_id for item in await store.game_players.list_player_candidates()] == [approved_line]
+
+
+async def test_chat_rows_keep_message_id_including_placeholders(wired) -> None:
+    """玩家原话行与占位行都记下采集时的消息号。"""
+    store, bus, session_id = wired
+    for payload in (
+        _chat(session_id, "来切磋", sender="Alex", sender_id=_ALEX, sender_online=True, message_id="m1"),
+        _chat(session_id, "[Server] 重启", sender="Server", message_id="m2"),
+    ):
+        await bus.emit(CoreEvents.GAME_CHAT_RECEIVED, payload, source="test")
+        await bus.wait_until_drained()
+    lines = await store.game_players.list_session_game_chat(live_session_id=session_id)
+    assert [(line.direction, line.content, line.message_id) for line in lines] == [
+        ("player", "来切磋", "m1"),
+        ("other", "", "m2"),
+    ]

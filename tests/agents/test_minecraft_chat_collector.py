@@ -305,3 +305,16 @@ async def test_private_messages_are_forwarded_and_marked() -> None:
     # 私聊照转并标出来，主播据此不在直播里念；空白消息不转，游标照样往后走。
     assert [(payload.content, payload.private) for _, payload in bus.events] == [("悄悄跟你说", True)]
     assert collector._cursor == 5
+
+
+async def test_each_forwarded_line_gets_its_own_message_id() -> None:
+    """每条转出的公屏消息带随机短串消息号，两条不同。"""
+    collector, client, bus = await _primed()
+    lines = [
+        {"cursor": 4, "kind": "player", "sender": "Steve", "sender_online": True, "text": "一"},
+        {"cursor": 5, "kind": "player", "sender": "Steve", "sender_online": True, "text": "二"},
+    ]
+    client.pages.append(events_page(lines, cursor=5))
+    await collector._drain()
+    ids = [payload.message_id for _, payload in bus.events]
+    assert len(ids) == 2 and all(ids) and ids[0] != ids[1]

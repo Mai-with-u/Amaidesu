@@ -46,7 +46,7 @@ _PLAYER_COLUMNS = (
     " forget_requested_at_ms"
 )
 _INTERACTION_COLUMNS = "id, player_id, live_session_id, save_id, save_name, kind, fact, at_ms"
-_CHAT_COLUMNS = "id, live_session_id, game, direction, player_id, content, save_id, save_name, at_ms"
+_CHAT_COLUMNS = "id, live_session_id, game, direction, player_id, content, save_id, save_name, at_ms, message_id"
 _CANDIDATE_COLUMNS = (
     "id, live_session_id, player_id, title, player_chat_id, player_quote, reply_game_chat_id, reply_live_chat_id,"
     " reply_quote, status, created_at_ms, decided_at_ms"
@@ -474,8 +474,13 @@ class GamePlayerRepo(BaseRepo):
         save_id: str = "",
         save_name: str = "",
         at_ms: int,
+        message_id: str = "",
     ) -> int:
-        """落一条公屏聊天。玩家说的必须挂玩家；认不出是谁说的不存原话，只占位。"""
+        """落一条公屏聊天。玩家说的必须挂玩家；认不出是谁说的不存原话，只占位。
+
+        ``message_id`` 是采集时发的消息号（主播视野里这一行末尾的 ``[id:…]``）；占位行也记号，
+        登记社交事实时引到它能说清"这句没有存原话"。她自己说的话没有号。
+        """
         if direction == GAME_CHAT_PLAYER and player_id is None:
             raise ValueError("玩家说的公屏聊天必须挂玩家")
         text = content if direction != "other" else ""
@@ -485,8 +490,8 @@ class GamePlayerRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "INSERT INTO game_chat(live_session_id, game, direction, player_id, content, save_id, save_name,"
-                    " at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (int(live_session_id), game, direction, owner, text, save_id, save_name, int(at_ms)),
+                    " at_ms, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (int(live_session_id), game, direction, owner, text, save_id, save_name, int(at_ms), message_id),
                 )
                 return int(cur.lastrowid or 0)
 
