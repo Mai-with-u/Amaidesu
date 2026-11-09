@@ -101,7 +101,7 @@ async def test_turn_prompt_states_the_budget() -> None:
     turn_kwargs = {call.args[0]: call.kwargs for call in replyer._prompt_service.render.call_args_list}[
         "amaidesu_replyer"
     ]
-    assert turn_kwargs["length_rule"] == "整句不超过 40 字。"
+    assert turn_kwargs["length_rule"] == "不超过 40 字，可以是一两句。"
 
 
 def test_streamer_wires_speech_budget_into_replyer() -> None:

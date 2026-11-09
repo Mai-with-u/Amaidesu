@@ -11,7 +11,7 @@
         planner_recent_intents_max,
         planner_recent_relays_max,
     )
-    speech_gate_window, speech_gate_ratio, speech_max_chars, replyer_history_items
+    speech_max_chars, replyer_history_items
 
     [agents.streamer.persona]
     (
@@ -287,7 +287,7 @@ class StreamerProactiveConfig(BaseConfig):
         title="环节内持续产出间隔",
         default=30_000,
         ge=5_000,
-        description="环节供能期间给主播开口机会的节奏；只供机会不保证发言，质量由发言自检与重合度闸把关",
+        description="环节供能期间给主播开口机会的节奏；只供机会不保证发言，质量由发言自检把关",
     )
 
 
@@ -534,29 +534,13 @@ class StreamerConfig(BaseConfig):
         description="断线续播时，重启前她最后一轮播出台词的决策之后到的游戏玩家发言会被补进下一轮决策参考"
         "（【重启前可能还没回的话】段，注入一次制），最多往前追溯到上一进程结束前这么多毫秒；0 = 关闭重放",
     )
-    speech_gate_window: int = Field(
-        title="发言闸比对窗口条数",
-        default=10,
-        ge=0,
-        description="reply 生成台词后，与最近这么多条已说发言做重合度比对（0 = 关闭该检查）",
-        json_schema_extra={"x-ui-advanced": True},
-    )
-    speech_gate_ratio: float = Field(
-        title="发言闸判重阈值",
-        default=0.5,
-        gt=0.0,
-        le=1.0,
-        description="台词对最近发言的字符重合度达到该值即打回（场次 31 真实发言回放定标："
-        "正常发言上限约 0.42，复读对落在 0.53）",
-        json_schema_extra={"x-ui-advanced": True},
-    )
     # 一句台词的长度上限：提示词里的"一两句"是软要求，换了几种模型都照样写成一大段，
-    # 所以在表达引擎出口再卡一道——超出先让模型重说成一句，仍超就截到预算内最后一个完整句子
+    # 所以在表达引擎出口再卡一道——超出先让模型重说短一点，仍超就截到预算内最后一个完整句子
     speech_max_chars: int = Field(
         title="台词长度预算",
-        default=40,
+        default=60,
         ge=0,
-        description="一句台词最多多少字；超出时先让模型重说成一句，仍超就截到预算内最后一个完整句子（0 = 不限制）",
+        description="一句台词最多多少字；超出时先让模型重说短一点，仍超就截到预算内最后一个完整句子（0 = 不限制）",
         json_schema_extra={"x-ui-advanced": True},
     )
     # 表达侧只看最近几条：Replyer 背着整场历史开口，后半场历史挤掉人设、说话像换了个人；

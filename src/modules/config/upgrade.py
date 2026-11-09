@@ -1168,8 +1168,22 @@ register_file_hook("agents.toml", "drop_streamer_memory_section", "2.0.51", _dro
 # 场次回顾推送都随旧记忆一起停用（回顾已由记忆账本取代），配置键留着只会让人以为还能打开。
 _drop_maibot_sync_share_notes = drop_section_keys("maibot_sync", ("share_notes", "send_recap"))
 
-# 生产钩子登记：infra.toml v2.0.45（[maibot_sync].share_notes 删键）
+# 生产钩子登记：infra.toml v2.0.45（[maibot_sync] 删键）
 register_file_hook("infra.toml", "drop_maibot_sync_share_notes", "2.0.45", _drop_maibot_sync_share_notes)
+
+# agents.toml v2.0.52：台词重合度闸退役 + 台词长度预算 40 → 60。
+# ① 台词重合度闸（比对窗口与判重阈值）失去消费者，整键删除；
+# ② 长度预算默认值放宽到 60 字：存量文件里落盘值恰为旧默认 40 的改写为 60，
+#    用户显式设成别的值的原样保留。
+_upgrade_streamer_speech_gate_and_budget = chain(
+    drop_section_keys("agents.streamer", ("speech_gate_window", "speech_gate_ratio")),
+    swap_default("agents.streamer.speech_max_chars", 40, 60),
+)
+
+# 生产钩子登记：agents.toml v2.0.52（台词重合度闸退役 + 长度预算放宽到 60 字）
+register_file_hook(
+    "agents.toml", "retire_speech_gate_and_widen_budget", "2.0.52", _upgrade_streamer_speech_gate_and_budget
+)
 
 
 __all__ = [

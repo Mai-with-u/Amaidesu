@@ -272,7 +272,7 @@ class Mouth:
             bot_name=self._persona.get("bot_name", "麦麦"),
             personality=self._persona.get("personality", ""),
             style_constraints=self._persona.get("style_constraints", ""),
-            max_chars=str(self._speech_max_chars or 40),
+            max_chars=str(self._speech_max_chars or 60),
             emotions="、".join(emotion.value for emotion in Emotion),
             boundaries_rule=self._boundaries_rule(),
         )

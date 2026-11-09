@@ -719,6 +719,10 @@ HOOK_COVERAGE: dict[str, tuple[str, str]] = {
         "test",
         "test_memory_retire_migration.py#test_maibot_sync_share_notes_removed_and_written_back",
     ),
+    "retire_speech_gate_and_widen_budget": (
+        "test",
+        "test_speech_gate_retire_migration.py#test_gate_keys_removed_and_old_default_budget_rewritten",
+    ),
 }
 
 

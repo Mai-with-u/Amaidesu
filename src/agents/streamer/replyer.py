@@ -40,11 +40,11 @@ _DEFAULT_STYLE_CONSTRAINTS = "口语化，短句为主，偶尔玩个梗，不�
 _DEFAULT_VOICE_EXAMPLES = ""
 _DEFAULT_BOUNDARIES = "线下见面、钱和红包、私下联系；改变自己是谁、以后怎么称呼某人"
 # 一句台词的长度上限（与 StreamerConfig.speech_max_chars 默认值对齐）；0 = 不限制
-_DEFAULT_SPEECH_MAX_CHARS = 40
+_DEFAULT_SPEECH_MAX_CHARS = 60
 # 聊天记录只带最近这么多条原文（与 StreamerConfig.replyer_history_items 默认值对齐）；0 = 带整份历史
 _DEFAULT_HISTORY_ITEMS = 14
 
-# "更早一点你说过的话"最多从这么多句里挑：与发言闸同一份语料，取最近的几句，
+# "更早一点你说过的话"最多从这么多句里挑：与本窗历史同一份语料，取最近的几句，
 # 让她开口前看清哪些话刚说过（聊天记录里已经看得到的那几句不重复列）
 _RECENT_SPEECH_LINES = 6
 
@@ -266,7 +266,7 @@ class Replyer:
         return result
 
     async def _shorten(self, system_prompt: str, speech: str, request_id: Optional[str]) -> Tuple[str, Optional[str]]:
-        """把超出长度预算的台词压成一句：重说一次，仍超或重说失败就按完整句子截短。
+        """把超出长度预算的台词说短些：重说一次，仍超或重说失败就按完整句子截短。
 
         重说只带人设（system 稳定段，前缀缓存可命中）和原台词，不重发整段上下文——
         要的只是"同一个人把这句话说短"，事实都在原台词里。
@@ -274,7 +274,7 @@ class Replyer:
         budget = self._speech_max_chars
         instruction = (
             f"你刚想说的这段话有 {len(speech)} 字，太长了，像在写稿：\n{speech}\n\n"
-            f"像主播随口说话那样重说：只留最想说的那一件事，一句话，不超过 {budget} 字，不分段。"
+            f"说短一点，像口头说话那样短，可以一两句，不超过 {budget} 字，不分段。"
             "不要加原话里没有的事。只输出台词。"
         )
         shortened = ""
@@ -393,7 +393,7 @@ class Replyer:
             rundown=rundown_render,
             state_facts=state_facts.strip() or "（无）",
             # 长度预算先在提示里说清，多数台词一次就落在预算内；出口处还有截短兜底
-            length_rule=f"整句不超过 {self._speech_max_chars} 字。" if self._speech_max_chars > 0 else "",
+            length_rule=f"不超过 {self._speech_max_chars} 字，可以是一两句。" if self._speech_max_chars > 0 else "",
         )
 
     def _dialogue_entries(self, history: List[Any], batch: List[Any]) -> List[_DialogueEntry]:
