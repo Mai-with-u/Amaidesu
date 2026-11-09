@@ -23,6 +23,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Set, Tu
 from src.agents.streamer.planner_render import (
     Delegation,
     Intent,
+    QueuedDelegation,
     Relay,
     compose_delegate_instruction,
     compose_relay_content,
@@ -88,6 +89,10 @@ class DelegationWorkbench:
         # 每个执行 Agent 最近一次受理的委派：原话、时间、身体是否已上报。实测半小时委派
         # 27 次、目标来回反转——主播看不到身体手上正做着什么，就会把每条弹幕都改派成新目标
         self._delegations: Dict[str, Delegation] = {}
+        # 排进委派队列、还没送到的委派镜像（按执行者分）：受理回执带 queued 时记进来，
+        # 账本状态走到 queued 之外（送达开跑/了结/被撤）时由 settle_queue 对账后挪走。
+        # 队列本体在委派受理核心（src/modules/agents/control.py），这里只是她看得见的影子
+        self._queued: Dict[str, List[QueuedDelegation]] = {}
         # 最近几轮自己说出口的打算（话题 + 指引）。对话历史里只有最终台词，看不出
         # "我已经连着几轮在讲同一件事"——实测主播连续十分钟句句提掉血，每轮都把它当新消息开口
         self._recent_intents: Deque[Intent] = deque(maxlen=intents_max)
@@ -146,6 +151,11 @@ class DelegationWorkbench:
         return self._round_receipts
 
     @property
+    def queued_delegations(self) -> Dict[str, List[QueuedDelegation]]:
+        """排着还没送到的委派镜像（活引用，渲染层只读消费）。"""
+        return self._queued
+
+    @property
     def delegation_status_provider(self) -> Optional[Callable[[str], Optional[Dict[str, Any]]]]:
         """委派的机器状态查询（渲染手头的事时合并任务账本事实）。"""
         return self._delegation_status_provider
@@ -170,6 +180,8 @@ class DelegationWorkbench:
         开场先碰一次壁。原地删改而不是换新容器：渲染层持有的是活引用。
         """
         kept = {agent for agent, delegation in self._delegations.items() if self._in_flight(delegation)}
+        # 排队镜像整个清掉：下播时排着的单已被强制结算成 cancelled，新的一场从空白排起
+        self._queued.clear()
         for agent in sorted(kept):
             self.logger.info(f"开播时 {agent} 手上的委派账面还在做，保留：{self._delegations[agent].instruction}")
         touched = set(self._delegations) | {relay.agent for relay in self._recent_relays} | set(self._last_relay_ms)
@@ -189,6 +201,7 @@ class DelegationWorkbench:
         if delegation is not None and self._in_flight(delegation):
             self.logger.info(f"{game} 换了存档，手上的委派账面还在做，保留：{delegation.instruction}")
             return
+        self._queued.pop(game, None)
         self._drop({game})
 
     def note_receipt(self, name: str, data: Dict[str, Any]) -> None:
@@ -246,6 +259,40 @@ class DelegationWorkbench:
             report_kind="interrupted",
             reported_ms=now_ms(),
         )
+
+    def settle_queue(self) -> None:
+        """排队镜像对账（渲染前调）：按任务账本把走到 queued 之外的单挪走。
+
+        - 账面已了结（终态移除查不到，含下播结算与被撤）：从镜像清掉——结果走
+          受理回执与 task.changed，不留在"排着"的清单里
+        - 已送达开跑（accepted/running/suspended）：挪进手头的事（"还在做"从现在算）
+        - 还在排队（queued）：留着，排位照旧
+        没装账本查询时不动镜像（降级装配下排队镜像只增不减，接受这条已知边界）。
+        """
+        if self._delegation_status_provider is None:
+            return
+        for agent in list(self._queued):
+            remaining: List[QueuedDelegation] = []
+            for entry in self._queued[agent]:
+                record = self._delegation_status_provider(entry.task_id)
+                if record is None:
+                    self.logger.info(
+                        f"排队件 {entry.task_id} 已了结（被撤或终态），从排队清单移除：{entry.instruction}"
+                    )
+                    continue
+                status = record.get("status")
+                if status == "queued":
+                    remaining.append(entry)
+                    continue
+                # 送达了：成为手头正在做的那件
+                self.logger.info(f"排队件 {entry.task_id} 已送达 {agent}，挪进手头的事：{entry.instruction}")
+                self._delegations[agent] = Delegation(
+                    agent=agent, instruction=entry.instruction, task_id=entry.task_id, at_ms=now_ms()
+                )
+            if remaining:
+                self._queued[agent] = remaining
+            else:
+                self._queued.pop(agent, None)
 
     def current_goals(self) -> List[GoalLine]:
         """手上的事（嘴的现场卡用）：每个游戏最近一次开始做的事、原话（已脱敏）与进展。"""
@@ -389,10 +436,25 @@ class DelegationWorkbench:
 
     def _settle_delegate(self, args: Dict[str, Any], own_instruction: str, data: Dict[str, Any]) -> None:
         """委派受理回执：accepted 才替换同一执行者手上的旧目标——只保留最近一次，
-        状态从"还在做"重新开始；并把"我开始做什么"记进时间线。"""
+        状态从"还在做"重新开始；并把"我开始做什么"记进时间线。
+
+        目标忙时回执带 queued：这件没开始做，记进排队镜像（不替换手头的目标——
+        手上正做着的是另一件），等账本显示送达开跑再挪进手头的事。
+        """
         if not data.get("accepted"):
             return
         agent = str(data.get("executor") or args.get("agent") or "")
+        if data.get("queued"):
+            self._queued.setdefault(agent, []).append(
+                QueuedDelegation(
+                    agent=agent,
+                    instruction=own_instruction,
+                    task_id=str(data.get("task_id") or ""),
+                    at_ms=now_ms(),
+                    urgent=bool(args.get("urgent", False)),
+                )
+            )
+            return
         self._delegations[agent] = Delegation(
             agent=agent, instruction=own_instruction, task_id=str(data.get("task_id") or ""), at_ms=now_ms()
         )

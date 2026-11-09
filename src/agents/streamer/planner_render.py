@@ -27,6 +27,8 @@ from src.modules.tools.conversation import to_conversation_view
 __all__ = [
     "Delegation",
     "DelegationStatusProvider",
+    "QueuedDelegation",
+    "render_delegation_queue",
     "Intent",
     "Relay",
     "assemble_request_messages",
@@ -67,6 +69,22 @@ class Delegation:
     # delivery=已交付 / escalation=卡住待定夺 / undelivered=停了没交付 / interrupted=重启前被打断；空=还在做
     report_kind: str = ""
     reported_ms: int = 0
+
+
+@dataclass
+class QueuedDelegation:
+    """一件排进委派队列、还没送到执行方的委派：交给谁、主播自己的原话、何时排的。
+
+    队列本体在委派受理核心（src/modules/agents/control.py，Amaidesu 侧机制）；
+    这里只是工作台持有的镜像，渲染【委派队列】与判"排到第几位"用。任务账本
+    状态走到 queued 之外（送达开跑/了结）时由工作台按账本对账后挪走。
+    """
+
+    agent: str
+    instruction: str
+    task_id: str
+    at_ms: int
+    urgent: bool = False
 
 
 @dataclass(frozen=True)
@@ -235,6 +253,8 @@ def delegation_state_line(
         return "账面上已了结这次委派，结果见游戏记录。"
     if record.get("status") == "waiting_for_decision":
         return f"停着等我和观众拿主意（{age_text(current_ms - int(record.get('updated_at_ms') or 0))}前记的）。"
+    if record.get("status") == "suspended":
+        return "有急事插队，这件暂时挂起（进度保留），急事办完接着做。"
     stalled = (record.get("snapshot") or {}).get("stalled_goals") or {}
     if stalled:
         names = "、".join(sorted({str(name) for name in stalled.values()}))
@@ -267,6 +287,25 @@ def render_delegations(
         # 同一执行者手上只保留最近一次委派，注入前转成人类可读描述；原话同样脱敏
         head = f"{age_text(current_ms - delegation.at_ms)}{game}开始做一个任务：{sanitize_internal_terms(delegation.instruction)}"
         rows.append(f"- {head}\n  {delegation_state_line(delegation, status_provider, current_ms)}")
+    return "\n".join(rows)
+
+
+def render_delegation_queue(queued: Dict[str, List["QueuedDelegation"]], current_ms: int) -> str:
+    """委派队列：排着还没送到的委派，一件一行（由旧到新；急件标出）。
+
+    用第一人称视角的事实陈述：排队是她自己安排的结果，看到的顺序要和受理回执
+    说的排位一致，她才不会再派一遍。执行方手上正在做的那件在【我手头在游戏里做的事】，
+    被急件暂放的也在那里（状态行注明挂起），这里只列还没送到的。
+    """
+    rows: List[str] = []
+    for entries in queued.values():
+        for index, entry in enumerate(entries, start=1):
+            mark = "急件，插队" if entry.urgent else "排队"
+            head = (
+                f"{age_text(current_ms - entry.at_ms)}{mark}给 {entry.agent}（第 {index} 件）："
+                f"{sanitize_internal_terms(entry.instruction)}"
+            )
+            rows.append(f"- {head}（还没开始做，轮到时自动送达）")
     return "\n".join(rows)
 
 

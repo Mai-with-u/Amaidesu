@@ -59,6 +59,7 @@ from src.agents.streamer.planner_render import (
     assemble_request_messages,
     forced_situation,
     render_delegations,
+    render_delegation_queue,
     render_game_speakers,
     render_observation,
     render_recent_intents,
@@ -1093,11 +1094,18 @@ class Planner:
             # 状态跃迁事实块：只收本轮新入账批次里的死亡/重生/任务开始结束/交付类条目，
             # 供客观核对——叙事讲经历，这里只列可核对的状态
             lines.append(f"【当前状态（客观事实）】\n{state_facts}")
+        # 排队镜像先对账：账本显示已送达的挪进手头的事、已了结的移出，【委派队列】不再列旧账
+        self.workbench.settle_queue()
         work = render_delegations(self.workbench.delegations, self.workbench.delegation_status_provider, current_ms)
         if work:
             # 我手头在游戏里做的事：最近一次开始做的原话与进展。看得到自己在忙什么，
             # 观众补充或催促时才会补充要求，而不是每条弹幕都换一个新目标
             lines.append(f"【我手头在游戏里做的事】\n{work}")
+        queue = render_delegation_queue(self.workbench.queued_delegations, current_ms)
+        if queue:
+            # 委派队列：排着还没送到的委派一件一行。看得到自己排了几件，才不会把
+            # 排着的每件都当成没派出去再派一遍（s39/40 委派堆积的复发形态）
+            lines.append(f"【委派队列】\n{queue}")
         relays = render_recent_relays(self.workbench.recent_relays, current_ms)
         if relays:
             # 补充过的要求紧跟在手头的事后面：同一件事已经交代过什么一眼可见，没有新要求就不再补
