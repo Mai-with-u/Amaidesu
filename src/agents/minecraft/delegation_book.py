@@ -37,6 +37,9 @@ class DelegationBook:
         self._agent_name = agent_name
         self._batch_ids: List[str] = []
         self._finished_ids: List[str] = []
+        # 被急件暂放的委派（进度保留，急件办完接着做）：与在办的分开记，
+        # 批终态只写在办的，暂放的等恢复；账面状态由委派受理核心写 suspended
+        self._suspended_ids: List[str] = []
 
     def _framework_ledger(self) -> Optional[Any]:
         return getattr(self._task_tracker, "ledger", None)
@@ -53,8 +56,34 @@ class DelegationBook:
         return tuple(self._finished_ids)
 
     def tracked_ids(self) -> Tuple[str, ...]:
-        """名下仍在追踪的委派任务号（待开跑 + 已入账 running；只读快照，急停撤单用）。"""
-        return tuple(self._batch_ids) + tuple(self._finished_ids)
+        """名下仍在追踪的委派任务号（待开跑 + 已入账 running + 暂放中；只读快照，急停撤单用）。"""
+        return tuple(self._batch_ids) + tuple(self._finished_ids) + tuple(self._suspended_ids)
+
+    def suspend(self, reason: str) -> int:
+        """急件插队：在办的委派挪进暂放清单（账面状态由委派受理核心写）。返回挪了几件。"""
+        suspended = len(self._finished_ids)
+        self._suspended_ids.extend(self._finished_ids)
+        self._finished_ids.clear()
+        if suspended:
+            logger.info(f"{self._agent_name} 名下 {suspended} 件在办委派暂放（{reason}）")
+        return suspended
+
+    def suspended_ids(self) -> Tuple[str, ...]:
+        """暂放中的委派任务号（只读快照）。"""
+        return tuple(self._suspended_ids)
+
+    def resume_suspended(self) -> int:
+        """急件办完：暂放的委派恢复在办（账面重写 running），回到批终态追踪清单。返回恢复几件。"""
+        ledger = self._framework_ledger()
+        resumed = self._suspended_ids
+        self._suspended_ids = []
+        if ledger is not None:
+            for task_id in resumed:
+                ledger.update(task_id, "running", summary="急事办完，恢复暂放的原任务")
+        if resumed:
+            logger.info(f"{self._agent_name} 恢复暂放的委派 {len(resumed)} 件")
+        self._finished_ids.extend(resumed)
+        return len(resumed)
 
     def mark_running(self) -> None:
         """批次开跑：本批吸收的委派写 running 并入终态追踪清单；上批留下的恢复原任务。"""
@@ -64,6 +93,8 @@ class DelegationBook:
             return
         for task_id in self._finished_ids:
             ledger.update(task_id, "running", summary="执行 Agent 已恢复原任务")
+        # 被急件暂放的不在这里恢复：急件那一批开跑时恢复的话，急件交付会把暂放的也写成终态；
+        # 恢复只在急件那一批收场之后（见 resume_suspended 的调用方）
         for task_id in self._batch_ids:
             ledger.update(task_id, "running", summary="执行 Agent 已开始处理")
             self._finished_ids.append(task_id)
@@ -120,12 +151,14 @@ class DelegationBook:
 
     def cancel(self, task_id: str, *, summary: str) -> bool:
         """撤单：在追踪清单内则移除并账面 cancelled；不在清单（未被本 Agent 吸收）返回 False。"""
-        if task_id not in self._batch_ids and task_id not in self._finished_ids:
+        if task_id not in self._batch_ids and task_id not in self._finished_ids and task_id not in self._suspended_ids:
             return False
         if task_id in self._batch_ids:
             self._batch_ids.remove(task_id)
         if task_id in self._finished_ids:
             self._finished_ids.remove(task_id)
+        if task_id in self._suspended_ids:
+            self._suspended_ids.remove(task_id)
         ledger = self._framework_ledger()
         if ledger is not None:
             ledger.update(task_id, "cancelled", summary=summary)
@@ -157,4 +190,5 @@ class DelegationBook:
         # 追踪清单随账面清空：跨场不再有可"重写 running"的旧任务
         self._batch_ids.clear()
         self._finished_ids.clear()
+        self._suspended_ids.clear()
         return settled

@@ -370,6 +370,9 @@ class MinecraftAgent(BaseAgent):
         )
         # 最近一条身体急事收尾的那句话与收到的时刻：紧接着到的暂停通知带上它，说清主任务为什么停在半路。
         self._urgent_before_pause: Optional[tuple[str, float]] = None
+        # 急件插队时被本 Agent 暂停的目标号：交付门禁豁免这些目标（它们不是本件事的活），
+        # 批结束后恢复它们并清空
+        self._preempt_paused: set[int] = set()
 
         # Agent 私有 MCP（_on_start 装配；构造注入实例或工厂时按注入装配）
         self._mcp_client: Optional[Any] = mcp_client
@@ -769,6 +772,59 @@ class MinecraftAgent(BaseAgent):
         )
         return True
 
+    async def suspend_current(self) -> bool:
+        """急件插队：暂放手头的活（Mod 目标暂停、进度保留），稍后接续——不是取消。
+
+        在跑的游戏目标逐个用 Mod 的暂停动词停下；名下在办委派挪进暂放清单（账面
+        suspended 由委派受理核心写）。任何目标没停成功都返回 False（急件降级置顶排队，
+        不做"一半暂停"的嵌套态）。
+        批结束后的恢复见 ``_resume_preempted``。
+        """
+        if not self._live_active:
+            return False
+        paused: List[int] = []
+        for goal in list(self._goals.tracked_goals()):
+            try:
+                reply = await self._call_maicraft(GOAL, {"operation": "pause", "goal_id": goal.goal_id})
+            except Exception as exc:  # noqa: BLE001 - 单个目标暂停失败即放弃本次插队
+                self._logger.warning(f"急件插队：目标 {goal.goal_id} 暂停失败：{exc}", exc=True)
+                return False
+            if not reply.ok:
+                self._logger.warning(
+                    f"急件插队：目标 {goal.goal_id} 暂停未成功：{reply.error_message or reply.error_code or '未知原因'}"
+                )
+                return False
+            paused.append(goal.goal_id)
+        self._preempt_paused.update(paused)
+        # 在办的委派挪进暂放清单：没有在跑目标也要挪（委派可能还没开跑成目标），
+        # 不挪的话急件批收尾会把暂放的当成在办的一起写终态
+        self._delegations.suspend("急事插队，暂放手头的活")
+        self._logger.info(f"急件插队：暂停了 {len(paused)} 个在跑目标（{', '.join(str(g) for g in paused)}）")
+        return True
+
+    async def _resume_preempted(self) -> None:
+        """急事办完（或这一批收场）：恢复被插队暂停的目标与暂放的委派。
+
+        没有插队过的痕迹时不做任何事。收工态不恢复（下播结算会把暂放的一并收掉）；
+        恢复失败只记日志，目标等下一轮决策或既有卡住上报路径兜底。
+        """
+        if not self._preempt_paused and not self._delegations.suspended_ids():
+            return
+        self._delegations.resume_suspended()
+        if self._live_active and self._preempt_paused:
+            for goal_id in sorted(self._preempt_paused):
+                try:
+                    reply = await self._call_maicraft(GOAL, {"operation": "resume", "goal_id": goal_id})
+                except Exception as exc:  # noqa: BLE001 - 单个目标恢复失败不挡其余目标
+                    self._logger.warning(f"恢复被插队暂停的目标 {goal_id} 异常：{exc}", exc=True)
+                    continue
+                if not reply.ok:
+                    self._logger.warning(
+                        f"恢复被插队暂停的目标 {goal_id} 未成功：{reply.error_message or reply.error_code or '未知原因'}"
+                    )
+            self._inject_wakeup_message("[系统] 急事办完了，之前为急事暂放的目标已恢复运行；手头接着照原任务推进。")
+        self._preempt_paused.clear()
+
     async def _emit_stop_receipt(self, receipt: str) -> None:
         """叫停回执作为 attention_required 发给主播：只是叫停的结果，不带本批路上碰到的身体事件。
 
@@ -797,6 +853,9 @@ class MinecraftAgent(BaseAgent):
             except Exception as exc:  # noqa: BLE001 - 任务失败不杀死 worker
                 self._logger.exception(f"任务执行异常: {exc}")
                 await self.emit_error(f"任务执行异常: {exc}")
+            finally:
+                # 这一批收场即恢复急件插队时暂放的活：急事办完（交付/上报/停步）都算办完
+                await self._resume_preempted()
 
     async def _run_task(self) -> None:
         """执行单个任务批，直到批次终止语义命中。
@@ -1080,6 +1139,7 @@ class MinecraftAgent(BaseAgent):
         self._mc_state.set_todos([])
         self._goal_ledger.clear_finished()
         self._furnace_waits.clear()
+        self._preempt_paused.clear()
         # 新任务只带系统说明和新指令：这个世界里拿过别人家的吃的另附一条事实，主人来问时一开工就认得出
         taken = self._food_taken.view(self._creatures.world_key)
         if taken:
@@ -2164,7 +2224,7 @@ class MinecraftAgent(BaseAgent):
                 "这一轮只是回应别的玩家冲你做的动作，不是一件要交付的活：不交付也不上报，主播那边已经知道了；"
                 "回完动作就单独调用 minecraft_wait 结束这一轮，要说话用 chat"
             )
-        running = self._goals.tracked_ids()
+        running = [goal_id for goal_id in self._goals.tracked_ids() if goal_id not in self._preempt_paused]
         if kind == "delivery" and running:
             return (
                 f"还有 {len(running)} 个目标在跑（{', '.join(str(goal_id) for goal_id in running)}），不能交付——"
