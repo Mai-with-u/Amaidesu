@@ -851,9 +851,9 @@ def test_planner_prompt_finds_material_instead_of_defaulting_to_silence(prompts:
     assert "态度没有固定菜单" in planner and "自嘲还是嘴硬" not in planner
     # 打算只在定下、改主意或做完时讲
     assert "打算只讲一次" in planner
-    # 梗由她自己当场定，可以回调不重演；空房间不求主意、不求起名
+    # 梗由她自己当场定，可以回调不重演；空房间不发起要人接话的互动
     assert "由她自己拍板，可以回调不重演" in planner and "不交给观众去定" in planner
-    assert "也不向观众求主意、求起名" in planner
+    assert "房间安静时不发起要人接话的互动" in planner
     # 交接稿不转述任务系统内部的东西，免得被原样念给观众
     assert "不转述任务系统内部的东西" in planner
 
@@ -895,8 +895,10 @@ def test_replyer_prompts_speak_like_a_streamer_not_a_group_member(prompts: Any) 
         bot_name="麦麦",
         length_rule="整句不超过 40 字。",
     )
-    # 没人发弹幕时不向空气求助，起名这类事自己当场定（每轮回复要求里写明，系统提示词只留规矩精华）
-    assert "不要空手提问" in turn and "起名这类事自己当场定下来" in turn
+    # 主动发言先有自己的内容、反应和态度讲出来（不向空气求助的禁令已撤）
+    assert "先有自己的内容，反应和态度要讲出来" in turn
+    assert "不要空手提问" not in turn
+    assert "起名这类事自己当场定下来" in turn
     # 打算只在定下、改主意或做完时讲，平时不复述
     assert "聊天记录里你已经说过的就不再复述" in turn and "日常且简短" not in turn
     # 像张嘴说话一样回一句（可以带语气词和改口），长度预算写在提示里；任务书点到的不用都说

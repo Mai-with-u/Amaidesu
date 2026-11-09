@@ -147,7 +147,7 @@ def test_prompt_template_does_not_blame_present_players_for_protected_blocks(pro
 
     assert "被挡住时不怪到人头上" in prompt
     assert '不让她追问"谁干的"，也不安到在场玩家头上' in prompt
-    assert '中性地问一句"这是谁放的呀"' in prompt
+    assert "中性地问是谁放的" in prompt
 
 
 def test_prompt_template_restates_player_request_before_state(prompts: Any) -> None:
