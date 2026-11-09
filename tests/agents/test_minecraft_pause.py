@@ -28,7 +28,7 @@ def _pause_script(messages: List[Dict[str, Any]]) -> Response:
     if "被暂停了" in _texts(messages):
         return _resp(calls=[_call("minecraft_report", {"kind": "escalation", "content": "主任务停在半路"})])
     if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-        return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+        return _resp("等目标事件通知")
     return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
 

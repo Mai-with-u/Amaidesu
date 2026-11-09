@@ -168,7 +168,6 @@ def test_switching_worlds_forgets_timers_and_their_numbers() -> None:
 
 
 _OBTAIN = _call("maicraft_execute", {"goal": {"ability": "obtain", "purpose": "烤干海带"}})
-_WAIT = _call("minecraft_wait", {"reason": "等它做完"})
 _DELIVERY = _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "64 个干海带都拿到了"})])
 
 
@@ -195,14 +194,14 @@ def _furnace_script(*, with_todo: bool, tries_wait: bool) -> Any:
                 return _resp("装好炉了，约 10 分钟后回来取。")
             if '"status": "done"' in text:
                 return _DELIVERY
-            return _resp(calls=[_WAIT]) if '"running"' in text else _resp(calls=[_OBTAIN])
+            return _resp("等目标事件通知") if '"running"' in text else _resp(calls=[_OBTAIN])
         if "结束了：done" in text:
             # 拿够了：有待办先把它勾掉再交付（还有没做完的待办时交付会被拒）
             return todo("done") if with_todo else _DELIVERY
         if "[计时]" in text:
             return _resp(calls=[_OBTAIN])
         if "结束了：partial" in text:
-            return _resp(calls=[_WAIT]) if tries_wait else _resp("装好炉了，约 10 分钟后回来取。")
+            return _resp("炉子在烧，等计时叫我") if tries_wait else _resp("装好炉了，约 10 分钟后回来取。")
         return todo("in_progress") if with_todo else _resp(calls=[_OBTAIN])
 
     return script
@@ -236,9 +235,6 @@ async def test_left_cooking_is_waited_on_not_reported_and_resumes_on_the_timer(
     assert _reports(bus) == [], "装好炉先走不是做不成：不升级上报，也不兜底交付"
     assert "[任务尚需行动]" not in seen, "在等炉子不算没推进"
     assert not agent.observation()["task_finished"] and not agent.observation()["task_suspended"]
-    if tries_wait:
-        refusal = _last(llm.seen[-1])[1]
-        assert "炉子在烧" in refusal and "不用上报" in refusal, "等待工具说清不是卡住了，免得模型转去上报阻塞"
 
     server.body_event("timer_due", _TIMER_DUE, fields=_TIMER_DUE_FIELDS)
     await _wait_until(lambda: agent.tracked_goal_ids == [2])
@@ -262,7 +258,7 @@ async def test_a_furnace_timer_that_never_fires_wakes_the_task_after_its_deadlin
     def script(messages: List[Dict[str, Any]]) -> Response:
         role, text = _last(messages)
         if role == "tool":
-            return _resp(calls=[_WAIT])
+            return _resp("等目标事件通知")
         if "过了预计时间还没响" in text:
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "回炉看过了"})])
         if "结束了：partial" in text:

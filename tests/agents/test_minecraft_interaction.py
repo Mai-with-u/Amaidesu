@@ -43,7 +43,7 @@ def _answer_squat(messages: List[Dict[str, Any]]) -> Response:
     """被 [互动] 叫醒就蹲回去，蹲起在跑就让出；别的时候交付"看过周围了"。"""
     if "[互动]" in _texts(messages):
         if _tool_said(messages, "running"):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "蹲回去了"})])
+            return _resp("等目标事件通知")
         if not _called(messages, "maicraft_execute"):
             return _resp(calls=[_call("maicraft_execute", _BODY_LANGUAGE)])
     return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
@@ -148,7 +148,7 @@ async def test_a_squat_during_a_running_task_cuts_into_its_history() -> None:
         if "砍了 5 块原木" in _texts(messages):
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "砍到 5 块原木了"})])
         if _tool_said(messages, "running"):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等着"})])
+            return _resp("等目标事件通知")
         if "[互动]" in _texts(messages) and _texts(messages).count("maicraft:body_language") == 0:
             return _resp(calls=[_call("maicraft_execute", _BODY_LANGUAGE)])
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
@@ -276,7 +276,7 @@ async def test_squats_arriving_while_a_working_batch_runs_are_read_with_its_next
     def script(messages: List[Dict[str, Any]]) -> Response:
         # 下砍树目标（想着的时候 Alex 连蹲两段）-> 下一步读到这两段，砍树还在跑就让出
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
     server = FakeMaicraft()
@@ -306,7 +306,7 @@ async def test_squats_during_an_answer_only_batch_are_held_until_due() -> None:
 
     def script(messages: List[Dict[str, Any]]) -> Response:
         if "[互动]" in _texts(messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "回过招呼了"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看过周围了"})])
 
     llm = _GatedLlm(script)

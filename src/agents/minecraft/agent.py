@@ -48,6 +48,7 @@ from src.agents.minecraft.creature_book import CreatureBook, creature_from_recor
 from src.agents.minecraft.delegation_book import DelegationBook
 from src.agents.minecraft.furnace_wait import TIMER_DUE, FurnaceWaits
 from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_label, pause_notice
+from src.agents.minecraft.wait_progress import WaitProgress
 from src.agents.minecraft.glance import (
     RememberedPlacesCache,
     glance_brief,
@@ -303,7 +304,6 @@ class MinecraftAgent(BaseAgent):
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
             state=self._mc_state,
             report_callback=self._handle_report,
-            wait_callback=self._request_wait,
             glance_reader=self._glance,
             skill_reader=self._skill_support.read_skill if skill_library is not None else None,
             save_reader=self._world.game_save,
@@ -409,7 +409,9 @@ class MinecraftAgent(BaseAgent):
         self._open_question = ""
         # 这个问题没人答、接着做又挂回等定夺了几次（换问题或有人答了清零）
         self._open_question_reholds = 0
-        self._wait_requested = False
+        # 挂起站桩的无进展监视：话轮结束仍有目标在跑时开始计时，超限叫醒重新评估
+        self._wait_progress = WaitProgress(self._clock)
+        self._stall_alerted = False
 
         # 平台暂停支持（AgentControl pause/resume 经 _on_pause/_on_resume 进入）
         self._paused = asyncio.Event()
@@ -883,7 +885,8 @@ class MinecraftAgent(BaseAgent):
     async def _run_task_batch(self) -> None:
         self._task_reported = False
         self._delivery_reminded = False
-        self._wait_requested = False
+        self._wait_progress.resume()
+        self._stall_alerted = False
         # 节流攒着的互动通知不等到点，跟着这一批一起读（"随下一次叫醒一起读"），读了就从此刻重新计时
         for held in self._interaction_throttle.drain():
             self._wake_queue.push_interaction(interaction_notice(held))
@@ -1055,13 +1058,7 @@ class MinecraftAgent(BaseAgent):
             for call in tool_calls:
                 await self._paused.wait()
                 arguments = call.arguments if isinstance(call.arguments, dict) else {}
-                if call.name == "minecraft_wait" and len(tool_calls) != 1:
-                    observation: Dict[str, Any] = {
-                        "ok": False,
-                        "error": "minecraft_wait 必须单独调用；先完成本轮其他动作",
-                    }
-                else:
-                    observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
+                observation = await self._execute_tool(call.name, arguments, round_id=mc_round)
                 self._absorb_reply(call.name, arguments, observation)
                 await self._flush_place_marks()
                 await self._flush_self_chats()
@@ -1077,21 +1074,19 @@ class MinecraftAgent(BaseAgent):
             if self._task_reported:
                 self._logger.info(f"LLM 已上报，任务批次结束（{steps} 步）")
                 return
-            if self._wait_requested and not self._message_queue:
-                self._schedule_idle_compaction(messages, tool_defs)
-                return
-            self._wait_requested = False
             if polling_only and not self._message_queue:
-                # 一整轮只在查还在跑的目标：第一次提醒用 minecraft_wait 等，第二次直接替它让出。
-                if polling_reminded and self._request_wait().get("waiting"):
-                    self._logger.info("连续轮询在跑的目标，已并入 minecraft_wait，等目标事件唤醒")
+                # 一整轮只在查还在跑的目标：第一次提醒别反复查，第二次直接替它让出（等目标事件唤醒）。
+                if polling_reminded:
+                    self._logger.info("连续轮询在跑的目标，已替它让出，等目标事件唤醒")
+                    self._wait_progress.stand(self._goals.tracked_ids())
+                    self._stall_alerted = False
                     self._schedule_idle_compaction(messages, tool_defs)
                     return
                 messages.append(
                     {
                         "role": "user",
                         "content": "[系统] 这一轮只在查询还在跑的目标。宿主盯着事件流，目标有结果、提问或被暂停时会通知你；"
-                        "有可推进或可提前准备的事就去做，没有就单独调用 minecraft_wait。",
+                        "有可推进或可提前准备的事就去做，没有就结束这一轮（不调工具），等通知。",
                     }
                 )
                 polling_reminded = True
@@ -1162,6 +1157,9 @@ class MinecraftAgent(BaseAgent):
                 messages, reminded, "仍有目标在等你回答或被暂停，或还有未完成待办"
             )
         if pending:
+            # 让出等目标事件：开始站桩计时（30 秒无进展看门狗会叫醒重新评估）
+            self._wait_progress.stand(pending)
+            self._stall_alerted = False
             self._logger.info(f"任务批次自然终止（{steps} 步），{len(pending)} 个后台目标在跑，静默让出")
         elif cooking:
             self._logger.info(f"任务批次自然终止（{steps} 步），{len(cooking)} 台炉子在烧、到点会叫醒，静默让出")
@@ -1395,6 +1393,7 @@ class MinecraftAgent(BaseAgent):
         并转发"有目标停着没动静"给主播；不另唤醒模型（Mod 节流过，模型侧由任务账本
         的停滞告警兜底）。
         """
+        self._wait_progress.note_progress()
         before = self._goal_ledger.note_of(run.goal_id)
         if run.finished:
             self._goal_ledger.settle_finished(run)
@@ -1443,6 +1442,7 @@ class MinecraftAgent(BaseAgent):
 
     async def _on_goal_gone(self, goal_id: int, reason: str) -> None:
         """在跟踪的目标查不到了（多半是换了世界）：如实告诉任务，不让它挂着等不来的结果。"""
+        self._wait_progress.note_progress()
         self._goal_ledger.mark_gone(goal_id, reason)
         self._inject_wakeup_message(f"[系统] 目标 {goal_id} 不在了：{reason}。按现场重新决定下一步。")
 
@@ -1464,6 +1464,7 @@ class MinecraftAgent(BaseAgent):
         if kind == TIMER_DUE:
             # 回炉计时响了：按事件上的计时编号划掉那台炉子，叫醒照常走路由表（到点通知里写着回哪台炉取什么）
             self._furnace_waits.timer_due(event)
+            self._wait_progress.note_progress()
         if kind == OTHERS_FOOD_TAKEN:
             # 闲着时也要记：主人多半是过一阵才来问，那时候模型得从任务事实里认出是自己拿的
             self._food_taken.record(self._creatures.world_key, food_taken_of(event, now_ms()))
@@ -1614,6 +1615,33 @@ class MinecraftAgent(BaseAgent):
         await self._apply_world_change(self._world.absorb(page.world_fields))
         self._flush_due_interactions()
         self._wake_for_overdue_furnaces()
+        await self._wake_if_suspension_stalled()
+
+    async def _wake_if_suspension_stalled(self) -> None:
+        """挂起站桩的无进展看门狗：超限叫醒模型重新评估（继续等/取消/换事做），不自动取消目标。
+
+        只在"有在跑目标的挂起"上计时（炉子在烧的等待有自己的精确计时叫醒，不归它管）；
+        叫醒走普通通知——挂起态任务未结束，通知能续批；批在跑时静默跳过（站桩只存在于
+        批结束之后，这里再挡一道防唤醒错时机）。
+        """
+        if self._batch_active or self._stall_alerted:
+            return
+        if not self._wait_progress.standing or not self._wait_progress.due():
+            return
+        goal_ids = self._wait_progress.goal_ids
+        stalled_s = self._wait_progress.stalled_seconds()
+        self._stall_alerted = True
+        self._logger.warning(f"挂起无进展唤醒：目标 {goal_ids} 已 {stalled_s:.0f} 秒没有任何进展，叫醒重新评估")
+        await self._emit_game_event(
+            "no_progress",
+            f"挂起的目标 {goal_ids} 已 {stalled_s:.0f} 秒没有任何进展，叫醒重新评估",
+            include_body_events=False,
+        )
+        self._inject_wakeup_message(
+            f"[系统] 挂起的目标（{', '.join(str(g) for g in goal_ids)}）已 {stalled_s:.0f} 秒没有任何进展。"
+            "请重新评估：目标还在正常推进就结束这一轮继续等（不调工具，宿主会重新挂起计时）；"
+            "卡住了就取消它（maicraft_goal operation=cancel）或换个办法。"
+        )
 
     async def _apply_world_change(self, change: Optional[WorldChange]) -> None:
         """事件页或 observe(self) 认出了新的存档：切换工作文档；没变化什么也不做。"""
@@ -1651,51 +1679,6 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
     # 等待、任务状态与历史整理
     # ==================================================================
-
-    def _request_wait(self) -> Dict[str, Any]:
-        """只允许对在跑的目标让出；在等回答或被暂停的目标不会自己往下走。
-
-        只回应互动的一批例外：回完动作就让出，不管原任务有没有在等回答的目标（那是闲下来之前就挂着的事）。
-        """
-        if self._interaction_only and not self._message_queue:
-            self._wait_requested = True
-            return {
-                "ok": True,
-                "waiting": True,
-                "resume_on": "回应完互动，回到原来的状态：主播发来新指令，或闲着也要叫醒的事",
-            }
-        actionable = self._goal_ledger.actionable_goal_ids()
-        if actionable:
-            return {
-                "ok": False,
-                "error": "有目标在等你回答或被暂停了，等待不会推进；先处理它们",
-                "goals": self._goal_ledger.notes_for(actionable),
-            }
-        tracked = self._goals.tracked_ids()
-        cooking = self._furnace_waits.waiting()
-        if not tracked and cooking:
-            # 装好炉先走、炉子在烧：不是卡住了，不用让出也不用上报；手上有事接着做，没有就结束这一轮等计时叫醒
-            return {
-                "ok": False,
-                "error": "没有在跑的目标，炉子在烧（"
-                + "；".join(wait.note for wait in cooking)
-                + "）。这不是卡住了，不用让出也不用上报：手上有别的事接着做，没有就直接结束这一轮，到点会叫醒你回炉取",
-            }
-        if not tracked:
-            # 只设了计时、没有目标在跑：计时到点不管这一轮结没结束都会叫醒，说清这点，免得模型为等计时去上报阻塞。
-            return {
-                "ok": False,
-                "error": "没有在跑的目标；继续推进待办，或上报阻塞。只在等计时不用让出：到点会叫醒你，这一轮结束了也会叫",
-            }
-        if self._message_queue:
-            return {"ok": True, "waiting": False, "reason": "已有新消息，请处理最新事实"}
-        self._wait_requested = True
-        return {
-            "ok": True,
-            "waiting": True,
-            "goals": self._goal_ledger.notes_for(tracked),
-            "resume_on": "目标结束、提问、被暂停、计时到点，或主播发来新指令",
-        }
 
     def _unfinished_todos(self) -> bool:
         return any(todo.status != "done" for todo in self._mc_state.todos)
@@ -2203,7 +2186,7 @@ class MinecraftAgent(BaseAgent):
         if self._interaction_only:
             return (
                 "这一轮只是回应别的玩家冲你做的动作，不是一件要交付的活：不交付也不上报，主播那边已经知道了；"
-                "回完动作就单独调用 minecraft_wait 结束这一轮，要说话用 chat"
+                "回完动作就结束这一轮（不调工具），要说话用 chat"
             )
         running = [goal_id for goal_id in self._goals.tracked_ids() if goal_id not in self._preempt_paused]
         if kind == "delivery" and running:
@@ -2262,7 +2245,7 @@ class MinecraftAgent(BaseAgent):
             "你是 Minecraft 世界中的 AI 玩家，用工具玩 Minecraft。"
             "maicraft_observe 看自己与周围，maicraft_lookup 查能力，maicraft_execute 下达目标，"
             "maicraft_goal 查看、回答、暂停、继续或取消目标。身体同一时间只做一件事（body_language 和公屏说话的 chat 是插一下，不替换手上的目标）；需要动手的目标在后台推进，"
-            "宿主会在它结束、提问或被暂停时通知你；没有可做的事就单独调用 minecraft_wait。"
+            "宿主会在它结束、提问或被暂停时通知你；没有可做的事就结束这一轮（不调工具），等通知。"
             "复杂任务用 minecraft_todo 维护阶段。本次目标要的结果真的达成才交付，用 minecraft_report(kind=delivery)；"
             "拿别的顶替或只做一半不算，附带原话与本次目标冲突时听本次目标。"
             "卡住时读清失败原因、对症改一处、再换实质不同的办法；至少试过两种办法再用 "
@@ -2309,7 +2292,7 @@ class MinecraftAgent(BaseAgent):
 
     async def _emit_game_event(
         self,
-        event_type: Literal["milestone", "report", "attention_required", "error"],
+        event_type: Literal["milestone", "report", "attention_required", "error", "suspend_no_progress"],
         message: str,
         *,
         scene: str = "",
@@ -2348,6 +2331,8 @@ class MinecraftAgent(BaseAgent):
             await self.emit_event(CoreEvents.GAME_ATTENTION_REQUIRED, payload)
         elif event_type == "milestone":
             await self.emit_event(CoreEvents.GAME_MILESTONE, payload)
+        elif event_type == "no_progress":
+            await self.emit_event(CoreEvents.GAME_SUSPEND_NO_PROGRESS, payload)
         else:
             await self.emit_event(CoreEvents.GAME_ERROR, payload)
 

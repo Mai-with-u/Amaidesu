@@ -45,7 +45,7 @@ def test_parameters_must_come_from_the_signature() -> None:
     assert "参数被拒收先对照签名查字段名" in game
 
 
-def test_host_side_wait_tool_is_still_described() -> None:
-    """宿主自己的 minecraft_wait（让出一轮）是另一回事，提示词里仍然在。"""
+def test_removed_wait_tool_is_not_taught_anywhere() -> None:
+    """minecraft_wait 已移除：游戏侧提示词不得再教它（话轮结束即让出，无需工具）。"""
     game = _game_prompt()
-    assert "minecraft_wait" in game
+    assert "minecraft_wait" not in game

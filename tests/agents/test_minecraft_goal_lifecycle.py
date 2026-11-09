@@ -47,7 +47,7 @@ async def test_a_background_goal_wakes_the_task_with_its_result() -> None:
             and "running" in str(message.get("content"))
             for message in messages
         ):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
     agent, llm, bus = await make_minecraft_agent(server, script)
@@ -82,7 +82,7 @@ async def test_the_finish_notice_carries_the_self_brief_and_how_to_read_folded_e
             # 读通知里说的折起来那段：试过的办法。
             return _resp(calls=[_call("maicraft_goal", {"operation": "get", "goal_id": 1, "path": "/attempts"})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
     agent, llm, bus = await make_minecraft_agent(server, script)
@@ -127,7 +127,7 @@ async def test_delivery_is_refused_while_a_goal_is_still_running() -> None:
             return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
         if not _called(messages, "minecraft_report"):
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "做完了"})])
-        return _resp(calls=[_call("minecraft_wait", {"reason": "等目标"})])
+        return _resp("等目标事件通知")
 
     agent, llm, bus = await make_minecraft_agent(server, script)
     agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
@@ -139,8 +139,8 @@ async def test_delivery_is_refused_while_a_goal_is_still_running() -> None:
     await agent.stop()
 
 
-async def test_a_question_wakes_the_task_and_waiting_is_refused_until_answered() -> None:
-    """目标提问：唤醒任务并说清怎么回答；没回答之前不允许让出等待。"""
+async def test_a_question_wakes_the_task_and_gets_answered_before_yielding() -> None:
+    """目标提问：唤醒任务并说清怎么回答；提问没答之前模型不该结束轮次干等。"""
     server = FakeMaicraft()
     answered: List[bool] = []
 
@@ -149,12 +149,10 @@ async def test_a_question_wakes_the_task_and_waiting_is_refused_until_answered()
         if "结束了" in text:
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "存好了"})])
         if "在等你回答" in text and not answered:
-            if any("等待不会推进" in str(message.get("content")) for message in messages):
-                answered.append(True)
-                return _resp(calls=[_call("maicraft_goal", {"operation": "answer", "goal_id": 1, "answer": "b6"})])
-            return _resp(calls=[_call("minecraft_wait", {"reason": "先等等"})])
+            answered.append(True)
+            return _resp(calls=[_call("maicraft_goal", {"operation": "answer", "goal_id": 1, "answer": "b6"})])
         if "goal_id" in text and "running" in text:
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等存东西"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "deposit"}})])
 
     agent, llm, bus = await make_minecraft_agent(server, script)
@@ -204,7 +202,7 @@ async def test_goals_are_mirrored_into_the_shared_task_ledger() -> None:
         if "结束了" in _texts(messages):
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "好了"})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
 
     agent, llm, bus = await make_minecraft_agent(server, script, tracker=tracker)
@@ -345,7 +343,7 @@ async def test_a_failed_goal_notes_the_batch_delegations_without_settling() -> N
         if "结束了" in last:
             return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
 
     agent, llm, bus = await make_minecraft_agent(server, script, tracker=tracker)
@@ -392,7 +390,7 @@ async def test_a_stalled_goal_lands_in_ledgers_and_reaches_the_streamer() -> Non
 
     def script(messages: List[Dict[str, Any]]) -> Response:
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
 
     agent, llm, bus = await make_minecraft_agent(server, script, tracker=tracker)

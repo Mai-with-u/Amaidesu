@@ -93,7 +93,7 @@ async def test_agent_keeps_takes_in_task_facts_while_not_thinking() -> None:
 
     def script(messages: List[Dict[str, Any]]) -> Response:
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
     agent, llm, _ = await make_minecraft_agent(server, script)

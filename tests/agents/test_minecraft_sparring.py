@@ -106,7 +106,7 @@ async def test_the_streamer_hears_how_the_spar_went_when_it_ends() -> None:
         if "结束了" in _texts(messages):
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "和 Alex 切磋完了"})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "切磋中"})])
+            return _resp("等目标事件通知")
         goal = {"ability": "fight", "target": {"kind": "player", "name": "Alex"}, "parameters": {"spar": True}}
         return _resp(calls=[_call("maicraft_execute", {"goal": goal})])
 
@@ -139,7 +139,7 @@ async def test_a_spar_called_by_observation_id_is_recorded_by_the_opponent_in_th
         if "结束了" in _texts(messages):
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "切磋完了"})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "切磋中"})])
+            return _resp("等目标事件通知")
         goal = {"ability": "fight", "target": {"kind": "seen", "id": "e4"}, "parameters": {"spar": True}}
         return _resp(calls=[_call("maicraft_execute", {"goal": goal})])
 
@@ -170,7 +170,7 @@ async def test_her_public_chat_goes_to_storage_when_it_was_sent() -> None:
         if "结束了" in _texts(messages):
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "说完了"})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "打字中"})])
+            return _resp("等目标事件通知")
         goal = {"ability": "chat", "parameters": {"message": "Alex 来切磋吧"}}
         return _resp(calls=[_call("maicraft_execute", {"goal": goal})])
 
@@ -193,7 +193,7 @@ async def test_an_ordinary_goal_ending_sends_no_spar_line() -> None:
         if "结束了" in _texts(messages):
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "砍到了"})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
 
     agent, _llm, bus = await make_minecraft_agent(server, script)

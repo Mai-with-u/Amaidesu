@@ -1,5 +1,5 @@
 """MinecraftAgent 局部工具（minecraft_report / minecraft_todo /
-minecraft_notebook / minecraft_wait / minecraft_get_work_log / minecraft_glance /
+minecraft_notebook / minecraft_get_work_log / minecraft_glance /
 minecraft_context_fold / minecraft_context_recall）
 
 工具归属约定（text_adv 同构）：
@@ -95,7 +95,6 @@ _LOCAL_VISIBLE_TO: Dict[str, List[str]] = {
     "todo": ["minecraft"],
     "notebook": ["minecraft"],
     "report": ["minecraft"],
-    "wait": ["minecraft"],
     "get_work_log": ["streamer"],
     "glance": ["streamer"],
     "skill": ["minecraft"],
@@ -313,28 +312,6 @@ def build_glance_spec() -> ToolSpec:
     )
 
 
-def build_wait_spec() -> ToolSpec:
-    """``minecraft_wait`` 工具规格——让出本轮，等后台目标的真实进展"""
-    return ToolSpec(
-        name="wait",
-        provider=PROVIDER_NAME,
-        kind="sync",
-        description=(
-            "身体正在执行后台目标、而你既没有可推进也没有可提前准备的事时，单独调用本工具让出本轮。"
-            "宿主盯着事件流：目标做完、失败、提问、被暂停，或主播发来新指令时，原任务带着最新结果继续。"
-            "不要用 maicraft_goal 反复查同一个目标来等结果。目标在等你回答问题或已被暂停时先处理它们，等不来结果。"
-        ),
-        parameters_schema={
-            "type": "object",
-            "properties": {
-                "reason": {"type": "string", "minLength": 1, "description": "说明在等哪个目标的什么结果"},
-            },
-            "required": ["reason"],
-            "additionalProperties": False,
-        },
-    )
-
-
 def build_context_fold_spec() -> ToolSpec:
     """``minecraft_context_fold`` 工具规格——只在宿主整理请求里用：把用完的历史区间折成摘要"""
     return ToolSpec(
@@ -460,8 +437,6 @@ class MinecraftToolProvider(GameToolProvider):
 
     state: MinecraftAgentState
     report_callback: Optional[ReportCallback] = None
-    # 等待只改变本玩家的调度状态，真正盯后台目标的是宿主的事件跟踪。
-    wait_callback: Optional[Callable[[], Dict[str, Any]]] = None
     # 主播看一眼：由 Agent 读观察并精简成叙事视图（未注入时不提供该工具）
     glance_reader: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None
     # 按名读技能正文：由 Agent 按自己的受众名筛本地策略，远端玩法技能按地址去 MaiCraft 读（未注入技能库时不提供该工具）；
@@ -495,8 +470,6 @@ class MinecraftToolProvider(GameToolProvider):
             build_get_work_log_spec(),
             build_report_spec(),
         ]
-        if self.wait_callback is not None:
-            specs.append(build_wait_spec())
         if self.glance_reader is not None:
             specs.append(build_glance_spec())
         if self.skill_reader is not None:
@@ -526,9 +499,6 @@ class MinecraftToolProvider(GameToolProvider):
             ),
             build_report_spec().full_name: self._dict_handler(build_report_spec(), self._invoke_report),
         }
-        if self.wait_callback is not None:
-            wait_spec = build_wait_spec()
-            handlers[wait_spec.full_name] = self._dict_handler(wait_spec, self._invoke_wait)
         if self.glance_reader is not None:
             glance_spec = build_glance_spec()
             handlers[glance_spec.full_name] = self._dict_handler(glance_spec, self._invoke_glance)
@@ -558,11 +528,6 @@ class MinecraftToolProvider(GameToolProvider):
             )
 
         return handle
-
-    async def _invoke_wait(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        del args
-        assert self.wait_callback is not None  # 处理器表按回调在册建表
-        return self.wait_callback()
 
     async def _invoke_glance(self, args: Dict[str, Any]) -> Dict[str, Any]:
         del args
@@ -651,7 +616,6 @@ __all__ = [
     "build_get_work_log_spec",
     "build_glance_spec",
     "build_report_spec",
-    "build_wait_spec",
     "PROVIDER_NAME",
     "ReportCallback",
 ]

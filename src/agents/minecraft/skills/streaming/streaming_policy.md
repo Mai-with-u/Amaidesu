@@ -37,7 +37,7 @@ tags: [直播, 上报, 节奏]
 - `minecraft_todo`：本批的待办，自己维护；不要把它当给主播看的进度。
 - `minecraft_notebook`：跨批要记住的现场信息（选址、材料缺口、下一步）；玩法技能里的阶段不用抄进来。背包里现在有多少、身上穿的装备、身体此刻在哪、血量多少这类当下会变的数字不写进笔记，要这些当场 observe 一次就有。
 - `minecraft_report`：对主播说话的唯一出口；交付与上报都走它。
-- `minecraft_wait`：让出本轮，等后台目标的真实进展；手上没有可推进也没有可提前准备的事时才用它。
+- 结束这一轮：手上没有可推进也没有可提前准备的事时，不调任何工具直接结束，宿主发现有目标在跑就挂起等事件唤醒。
 - `minecraft_skill`：按名读技能正文；标着“来自 MaiCraft”的正文经 `resources/read` 取，连不上 Mod 时读不到。
 - MaiCraft 的工具在本机叫 `maicraft_observe`、`maicraft_lookup`、`maicraft_execute`、`maicraft_goal`、`maicraft_events`；技能正文里写的 `observe`、`lookup`、`execute`、`goal`、`events` 就是它们。
 

@@ -29,6 +29,7 @@ from src.modules.utils.time_utils import now_ms
 @register_event(CoreEvents.GAME_ATTENTION_REQUIRED)
 @register_event(CoreEvents.GAME_ERROR)
 @register_event(CoreEvents.GAME_REPORT)
+@register_event(CoreEvents.GAME_SUSPEND_NO_PROGRESS)
 class GamePayload(BasePayload):
     """
     游戏事件 Payload（统一形状 + event_type 判别）
@@ -38,6 +39,7 @@ class GamePayload(BasePayload):
     - ``game.attention_required`` — 安全阀偏差报告（"我先回血再去挖钻石"）
     - ``game.error`` — 游戏异常
     - ``game.report`` — 游戏 Agent 主动向派发方上报（交付总结 / 升级决策）
+    - ``game.suspend.no_progress`` — 挂起等目标事件的无进展看门狗（站桩超上限叫醒重新评估）
 
     发布者：游戏 Agent（BaseAgent 事件上报面）
     订阅者：主播 Planner（监听重大变化做决策）
@@ -46,7 +48,7 @@ class GamePayload(BasePayload):
         live_session_id: 场次主键（int）。发布方不填（保持默认 0），
           由场次盖章拦截器注入当前场次的存储主键；0 表示未归属
         game: 游戏标识（如 "minecraft"/"stardew_valley"）
-        event_type: 事件类型 Literal（与 4 个事件名一一对应）
+        event_type: 事件类型 Literal（与 5 个事件名一一对应）
         message: 人类可读的描述（"挖到钻石了！" / "生命值低于 30%"）
         scene: 场景信息（关卡坐标 / 区块名等自由文本，留空表示无场景上下文）
         report_kind: 上报种类（仅 event_type="report" 时有值）
@@ -62,9 +64,9 @@ class GamePayload(BasePayload):
         description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入",
     )
     game: str = Field(..., description="游戏标识（如 'minecraft'/'stardew_valley'）")
-    event_type: Literal["milestone", "attention_required", "error", "report"] = Field(
+    event_type: Literal["milestone", "attention_required", "error", "report", "no_progress"] = Field(
         ...,
-        description="事件类型。4 类与 game.* 四事件名一一对应，通配订阅 game.* 时按此分发",
+        description="事件类型。5 类与 game.* 五事件名一一对应，通配订阅 game.* 时按此分发",
     )
     message: str = Field(..., description="人类可读的描述")
     scene: str = Field(default="", description="场景信息（关卡坐标/区块名等自由文本）")

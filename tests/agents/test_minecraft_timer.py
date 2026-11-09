@@ -34,7 +34,7 @@ async def test_sky_changes_ride_along_with_the_next_wakeup_instead_of_waking_the
         if "结束了" in _texts(messages):
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "砍到 5 块原木了"})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
     agent, llm, bus = await make_minecraft_agent(server, script)
@@ -154,7 +154,7 @@ async def test_a_due_timer_during_a_running_task_is_a_plain_notice() -> None:
         if "结束了" in _texts(messages):
             return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "砍到 5 块原木了"})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
     agent, llm, bus = await make_minecraft_agent(server, script)

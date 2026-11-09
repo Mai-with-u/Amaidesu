@@ -463,8 +463,9 @@ def test_template_states_how_to_play_with_maicraft_v1() -> None:
         prompt = assemble_minecraft_agent(prompt_manager=get_prompt_manager())._system_prompt()
     finally:
         reset_prompt_manager()
-    for tool in ("maicraft_observe", "maicraft_lookup", "maicraft_execute", "maicraft_goal", "minecraft_wait"):
+    for tool in ("maicraft_observe", "maicraft_lookup", "maicraft_execute", "maicraft_goal"):
         assert tool in prompt
+    assert "minecraft_wait" not in prompt, "wait 工具已移除：话轮结束即让出，不再教这个调用"
     assert "maicraft_events" not in prompt, "事件流只给宿主读"
     assert "身体同一时间只做一件事" in prompt and "[开局资料]" in prompt
     assert "error.fields" in prompt and "unconfirmed" in prompt

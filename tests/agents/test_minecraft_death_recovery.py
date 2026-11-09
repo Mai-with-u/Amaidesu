@@ -27,7 +27,7 @@ async def test_character_death_tells_the_running_task_and_the_streamer() -> None
 
     def script(messages: List[Dict[str, Any]]) -> Response:
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
     agent, llm, bus = await make_minecraft_agent(server, script)
@@ -57,7 +57,7 @@ async def test_death_during_own_suicide_is_told_as_going_home() -> None:
 
     def script(messages: List[Dict[str, Any]]) -> Response:
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等寻死回家"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "suicide", "purpose": "回家补满血"}})])
 
     agent, llm, bus = await make_minecraft_agent(server, script)
@@ -88,11 +88,11 @@ async def test_a_death_recovery_question_wakes_the_task_to_answer_it() -> None:
         # 答过就让出：决策提问一直留在历史里，若照着它一直答，替身模型与替身 Mod 都不让出事件循环，
         # 任务循环会空转到上下文超预算才停，测试等条件的轮询一直轮不上。
         if _called(messages, "maicraft_goal"):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+            return _resp("等目标事件通知")
         if "Mod 挂出的决策" in _texts(messages):
             return _resp(calls=[_call("maicraft_goal", {"operation": "answer", "goal_id": -1, "answer": "respawn"})])
         if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
-            return _resp(calls=[_call("minecraft_wait", {"reason": "等砍树"})])
+            return _resp("等目标事件通知")
         return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "砍树"}})])
 
     agent, llm, bus = await make_minecraft_agent(server, script)

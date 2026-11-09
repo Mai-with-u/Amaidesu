@@ -46,10 +46,10 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 | 1 | LLM 调 `minecraft_report(kind=delivery)` | 还有目标在跑或待办没完成时拒绝交付，返回错误观察；通过门禁后停止 |
 | 2 | LLM 调 `minecraft_report(kind=escalation)` | 停止；委派状态置为 `waiting_for_decision`，等递话唤醒 / 恢复续跑 / 硬取消时清除 |
 | 3 | 自然终止，无 report、无在跑的目标且待办完成 | 不算做完：系统代发一条 `report_kind=undelivered`（停了没交付），原委派记终态 `undelivered`；模型最后那句只进账面摘要 |
-| 4 | 自然终止或 `minecraft_wait`，仅剩在跑的目标 | 静默让出回合，等目标事件唤醒 |
+| 4 | 自然终止（不调工具结束话轮），仅剩在跑的目标 | 静默让出回合，等目标事件唤醒 |
 | 5 | 有目标在等回答、被暂停或待办没推进，提醒后仍不行动 | 挂起并上报 escalation，保留原任务等继续指令 |
 
-一整轮只在查询还在跑的目标（`maicraft_goal` get/list）时，先提醒用 `minecraft_wait`；连续第二轮直接并入等待，不再推理。带 `path` 的 get 是在读结束了的目标里折起来的证据，不算查询。
+一整轮只在查询还在跑的目标（`maicraft_goal` get/list）时，先提醒结束这一轮等通知；连续第二轮直接替它让出，不再推理。带 `path` 的 get 是在读结束了的目标里折起来的证据，不算查询。
 
 ### 后台目标跟踪（events → 唤醒）
 
@@ -81,7 +81,6 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 |---|---|
 | `minecraft_todo` | 待办文档（read/write 全量读写，无 id）。任务分解与推进由 LLM 自主决策 |
 | `minecraft_notebook` | 工作笔记（read/write）。对话历史会整理、笔记不会——这一场的重要发现写这里；按存档分开，进程重启清空。长期要记的地点用 MaiCraft 的 `remember` 记成命名地点（按存档存在 Mod 的世界记忆里） |
-| `minecraft_wait` | 身体在执行后台目标、又没有可推进或可准备的事时单独调用，让出本轮等目标事件 |
 | `minecraft_report` | 上报通道（玩家→主播唯一发声出口）：delivery 交付总结 / escalation 升级决策 |
 | `minecraft_skill` | 按名读技能正文（装配了技能库时才有）。技能目录随系统提示词给出，由本地直播策略与 MaiCraft 的 `resources/list` 合并而成；玩法技能随 Mod 发布，目录里标着“来自 MaiCraft”，正文按 `skill://` 地址经 `resources/read` 读；MaiCraft 没连上时远端技能消失，本地策略照常可用 |
 | `maicraft_observe` / `maicraft_lookup` / `maicraft_execute` / `maicraft_goal` | MaiCraft v1 的工具，registry 动态发现（每任务重新拉取）；参数按 Mod 定义填写。`maicraft_events` 只给宿主读，不进 LLM 工具列表；截桌面的 `vision_look_at_screen` 也不交给游戏 Agent 的模型（看游戏画面用 `observe(what=picture)`）。画面的文字那一块当观察进历史，图在模型能看图时只挂在下一次请求尾部，不能看图时经视觉模型转成文字接在观察后面；一个任务里看几次、两次隔多久按 `[agents.minecraft.picture]` 限，超了不调 Mod |

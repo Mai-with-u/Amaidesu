@@ -75,6 +75,11 @@ class CoreEvents:
     # 玩家搭话，她得知道自己刚问过什么），不促发决策。不放在主播订阅的 game.chat.# 下，免得被当成别人的聊天。
     GAME_SELF_CHATTED = "game.self.chatted"
 
+    # 游戏 Agent 挂起等目标事件时的无进展看门狗：站桩超过上限（默认 30 秒）没有任何目标状态
+    # 变化，叫醒模型重新评估（继续等/取消/换事做）。发布者：游戏 Agent（宿主侧看门狗）。
+    # 复盘哨兵据此统计"长挂站桩次数与合计时长"——这是发呆治理的验收指标。
+    GAME_SUSPEND_NO_PROGRESS = "game.suspend.no_progress"
+
     # ========== 流程单（Rundown）子系统事件 ==========
     # 唯一发布者：``RundownState`` 变更边界。``rundown.changed`` 涵盖
     # load / goto / next（含 finish）/ pause / resume 五种状态变更；
