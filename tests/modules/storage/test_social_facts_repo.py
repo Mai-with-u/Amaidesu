@@ -146,3 +146,47 @@ async def test_insert_facts_batch_skips_invalid_rows(store) -> None:
     assert len(written) == 1
     rows = await store.social_facts.list_active_facts(game="minecraft")
     assert [fact.text for fact in rows] == ["在刷铁机"]
+
+
+async def test_count_facts_by_kind_filters_by_save(store) -> None:
+    await store.social_facts.insert_fact(
+        kind="works", text="本存档的事", quote="本存档", game="minecraft", save_id="w1"
+    )
+    await store.social_facts.insert_fact(kind="works", text="别的存档", quote="别的", game="minecraft", save_id="w2")
+    await store.social_facts.insert_fact(kind="setting", text="整游戏", quote="整游戏", game="minecraft", save_id="")
+    counts = await store.social_facts.count_facts_by_kind(game="minecraft", save_id="w1")
+    assert counts == {"works": 1, "setting": 1}
+
+
+async def test_rehearsal_kind_change_removes_facts_and_reopens_superseded(store) -> None:
+    """改成彩排：本场登记的事实删掉，被它们取代的旧行恢复现行，别场的行不动。"""
+    earlier = await store.sessions.insert_live_session(started_at_ms=1000)
+    rehearsal = await store.sessions.insert_live_session(started_at_ms=5000)
+    await store.sessions.close_live_session(live_session_id=rehearsal, ended_at_ms=9000)
+    old_id = await store.social_facts.insert_fact(
+        kind="works", text="在刷铁机", quote="刷铁机", game="minecraft", created_session_id=earlier
+    )
+    untouched = await store.social_facts.insert_fact(
+        kind="members", text="Alex 在帮忙", quote="帮忙", game="minecraft", created_session_id=earlier
+    )
+    new_id = await store.social_facts.insert_fact(
+        kind="works",
+        text="改去挖钻石",
+        quote="挖钻石",
+        game="minecraft",
+        supersedes_id=old_id,
+        created_session_id=rehearsal,
+        updated_session_id=rehearsal,
+    )
+    assert new_id is not None
+
+    result = await store.sessions.set_live_session_kind_with_ledger(
+        live_session_id=rehearsal, kind="rehearsal", updated_at_ms=9999
+    )
+    assert result["ledger_removed"] >= 1
+    assert await store.social_facts.get_fact(fact_id=new_id) is None
+    old = await store.social_facts.get_fact(fact_id=old_id)
+    assert old is not None
+    assert (old.status, old.superseded_by, old.updated_session_id, old.updated_at_ms) == ("active", None, earlier, 9999)
+    kept = await store.social_facts.get_fact(fact_id=untouched)
+    assert kept is not None and kept.status == "active"

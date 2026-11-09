@@ -28,6 +28,10 @@ from src.modules.storage.repos.archive import (
 )
 from src.modules.storage.repos.game_players import replace_session_player_candidates
 from src.modules.storage.repos.memory_index import delete_session_index_rows
+from src.modules.storage.repos.social_facts import (
+    delete_social_facts_by_session,
+    reopen_social_facts_superseded_by_session,
+)
 from src.modules.storage.repos.viewer_candidates import CANDIDATE_EXPIRE_MS, replace_session_candidates
 from src.modules.storage.repos.commitments import (
     delete_commitments_by_session,
@@ -258,12 +262,21 @@ class SessionRepo(BaseRepo):
                     # 本场写下的快照与档案行一起撤掉：档案行删掉后，后面几场快照里对它的引用由外键
                     # 级联撤掉，彩排里的事不会留在正式的账上
                     delete_snapshot(conn, live_session_id=int(live_session_id))
-                    result["ledger_removed"] = delete_archive_lines_by_session(
-                        conn, live_session_id=int(live_session_id)
-                    ) + delete_commitments_by_session(conn, live_session_id=int(live_session_id))
-                    # 彩排台词做出的了结也作废：被它了结的旧承诺放回未了结
-                    result["reopened"] = reopen_commitments_closed_by_session(
+                    # 被本场社交事实取代的旧行先恢复现行：删掉本场行之后取代关系就认不出了
+                    reopened_facts = reopen_social_facts_superseded_by_session(
                         conn, live_session_id=int(live_session_id), updated_at_ms=int(updated_at_ms)
+                    )
+                    result["ledger_removed"] = (
+                        delete_archive_lines_by_session(conn, live_session_id=int(live_session_id))
+                        + delete_commitments_by_session(conn, live_session_id=int(live_session_id))
+                        + delete_social_facts_by_session(conn, live_session_id=int(live_session_id))
+                    )
+                    # 彩排台词做出的了结也作废：被它了结的旧承诺放回未了结
+                    result["reopened"] = (
+                        reopen_commitments_closed_by_session(
+                            conn, live_session_id=int(live_session_id), updated_at_ms=int(updated_at_ms)
+                        )
+                        + reopened_facts
                     )
                     conn.execute(
                         "UPDATE live_sessions SET settled_at_ms=NULL, settle_attempts=0, settle_report=NULL WHERE id=?",

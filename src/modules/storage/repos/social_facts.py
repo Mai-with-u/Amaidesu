@@ -36,7 +36,7 @@ from src.modules.storage.models.social_facts import (
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.utils.time_utils import now_ms
 
-__all__ = ["SocialFactRepo"]
+__all__ = ["SocialFactRepo", "delete_social_facts_by_session", "reopen_social_facts_superseded_by_session"]
 
 # 读面列（与 SocialFact 字段一一对应）
 _SOCIAL_FACT_COLUMNS = (
@@ -175,13 +175,16 @@ class SocialFactRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def count_facts_by_kind(self, *, game: Optional[str] = None) -> Dict[str, int]:
-        """现行事实按类计数（防刷屏上限判定与工具回执用）。"""
+    async def count_facts_by_kind(self, *, game: Optional[str] = None, save_id: Optional[str] = None) -> Dict[str, int]:
+        """现行事实按类计数（防刷屏上限判定与工具回执用）；存档口径与 ``list_active_facts`` 一致。"""
         conditions: List[str] = ["status='active'"]
         params: List[object] = []
         if game is not None:
             conditions.append("game=?")
             params.append(game)
+        if save_id is not None:
+            conditions.append("(save_id=? OR save_id='')")
+            params.append(save_id)
         where_clause = " AND ".join(conditions)
 
         def _exec() -> Dict[str, int]:
@@ -281,4 +284,22 @@ def delete_social_facts_by_session(conn: sqlite3.Connection, *, live_session_id:
     模块级函数供跨表事务内的调用方复用同一条删除语句。
     """
     cur = conn.execute("DELETE FROM game_social_facts WHERE created_session_id=?", (int(live_session_id),))
+    return int(cur.rowcount or 0)
+
+
+def reopen_social_facts_superseded_by_session(
+    conn: sqlite3.Connection, *, live_session_id: int, updated_at_ms: int
+) -> int:
+    """把"被这一场登记的新行取代"的旧行恢复成现行，返回条数（场次改成彩排时用）。
+
+    必须在删掉这一场的行之前调用：superseded_by 的外键是 ON DELETE SET NULL，先删就认不出
+    哪些旧行是被这一场取代的。恢复后的旧行最近更新场次回到它自己的登记场次。
+    """
+    cur = conn.execute(
+        "UPDATE game_social_facts SET status='active', superseded_by=NULL,"
+        " updated_session_id=created_session_id, updated_at_ms=?"
+        " WHERE status='superseded'"
+        " AND superseded_by IN (SELECT id FROM game_social_facts WHERE created_session_id=?)",
+        (int(updated_at_ms), int(live_session_id)),
+    )
     return int(cur.rowcount or 0)
