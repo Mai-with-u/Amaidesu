@@ -36,8 +36,8 @@ from .minecraft_collector_fakes import events_page as _page
 from .minecraft_collector_fakes import fake_client_factory
 
 
-def _event(cursor: int, kind: str, message: str = "", goal_id: int = -1) -> Dict[str, Any]:
-    return {"cursor": cursor, "kind": kind, "goal_id": goal_id, "message": message}
+def _event(cursor: int, kind: str, message: str = "", goal_id: int = -1, **extra: Any) -> Dict[str, Any]:
+    return {"cursor": cursor, "kind": kind, "goal_id": goal_id, "message": message, **extra}
 
 
 def _collector(bus: _FakeEventBus, clock: Optional[Callable[[], int]] = None) -> MaicraftAttentionCollector:
@@ -307,6 +307,36 @@ async def test_incremental_read_forwards_only_body_encounters() -> None:
     second = client.read_calls[-1]["arguments"]
     assert second == {"stream_id": "stream-A", "after_cursor": 5, "wait_ms": 25_000}
     assert collector._cursor == 8
+
+
+async def test_hurt_carries_the_attacker_through_to_the_payload() -> None:
+    """Mod 在 hurt 事件上铺的攻击者字段透传进 attacked 的 attacker；没带时保持空串。"""
+    bus = _FakeEventBus()
+    collector, client = await _primed(bus, cursor=5)
+    client.pages.append(
+        _page(
+            [
+                _event(
+                    6,
+                    "hurt",
+                    "被骷髅（e3）射中 3 下，掉了 6 点血，还剩 8 点",
+                    attacker="minecraft:skeleton",
+                    attacker_name="骷髅",
+                    attacker_entity_id=3,
+                ),
+                _event(7, "hurt", "摔了 2 下，掉了 4.4 点血，还剩 17.4 点"),
+            ],
+            cursor=7,
+        )
+    )
+
+    await collector._drain()
+
+    assert [name for name, _ in bus.events] == [CoreEvents.GAME_BODY_ATTACKED, CoreEvents.GAME_BODY_ATTACKED]
+    with_attacker, without = bus.events[0][1], bus.events[1][1]
+    assert with_attacker.attacker == "minecraft:skeleton"
+    assert with_attacker.summary == "被骷髅射中好几下，血快没了" or "骷髅" in with_attacker.summary
+    assert without.attacker == ""
 
 
 async def test_step_finished_forwards_to_milestone_without_coordinates() -> None:

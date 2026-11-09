@@ -100,12 +100,16 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
             summary = CHOSEN_DEATH_LINE
         # 事件上挂着玩家就原样带上（跟随状况跟的是玩家时有）：只透传，主播不据此推卡、说的话不变
         player_uuid, player_name = player_of(event)
+        # Mod 在 hurt 事件上直接铺的攻击者字段原样透传（attacker 是攻击者实体类型 ID，如 minecraft:zombie）；
+        # 没攻击者的伤（摔落、溺水）与没带这字段的旧事件为空串
+        attacker = str(event.get("attacker") or "")
         payload = BodyEventPayload(
             game="minecraft",
             kind=kind,
             summary=summary,
             source_event_type=source_type,
             resolved=kind in RESOLVED_KINDS,
+            attacker=attacker,
             player_uuid=player_uuid,
             player_name=player_name,
         )
