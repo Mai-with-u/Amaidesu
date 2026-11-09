@@ -1,4 +1,4 @@
-"""五个 TTS 引擎的共同契约：utterance 生命周期事件、失败上抛、TTSProvider 协议、已退役的工具化入口"""
+"""六个 TTS 引擎的共同契约：utterance 生命周期事件、失败上抛、TTSProvider 协议、已退役的工具化入口"""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 from src.modules.tts.backends.gptsovits.provider import DTYPE, GPTSoVITSProvider
 from src.modules.tts.backends.minimax.provider import MiniMaxTTSProvider
 from src.modules.tts.backends.omni.provider import OmniTTSProvider
+from src.modules.tts.backends.openai.provider import OpenAITTSProvider
 from src.modules.tts.backends.voicebox.provider import VoiceboxProvider
 from src.modules.tts.protocol import TTSProvider as TTSProviderDirect
 from src.modules.tts.protocol import TtsObservation
@@ -147,7 +148,28 @@ class _Minimax(_Engine):
         self.sent_text = lambda: client.stream_synthesize.call_args.args[0]
 
 
-ENGINES = [_Edge(), _Voicebox(), _GptSovits(), _Omni(), _Minimax()]
+class _OpenAI(_Engine):
+    name, duration_ms = "openai_tts", None  # 流式引擎：合成未完，started 时长为 None
+    finished_ms = 85  # 两块各 1024 样本 @ 24kHz，finished 按写往声卡的样本数精确计算
+
+    def build(self, bus, fail):
+        config = {"type": "openai_tts", "api_key": "sk-test", "voice": "alloy"}
+        return OpenAITTSProvider(config=config, event_bus=bus)
+
+    def synth_patches(self, provider, stack, fail):
+        async def _gen(_text: str):
+            if fail:
+                raise RuntimeError("boom")
+            yield b"\x00\x00" * 1024
+            yield b"\x00\x00" * 1024
+
+        client = MagicMock()
+        client.stream_synthesize = MagicMock(side_effect=lambda text: _gen(text))
+        stack.enter_context(patch.object(provider, "client", new=client))
+        self.sent_text = lambda: client.stream_synthesize.call_args.args[0]
+
+
+ENGINES = [_Edge(), _Voicebox(), _GptSovits(), _Omni(), _Minimax(), _OpenAI()]
 
 
 async def _speak(
@@ -225,6 +247,7 @@ def _instances() -> list[Any]:
         VoiceboxProvider(config={}),
         OmniTTSProvider(config={}, llm_service=object()),  # llm_service 是 Omni 的构造硬前置
         MiniMaxTTSProvider(config={}),
+        OpenAITTSProvider(config={}),
     ]
 
 
@@ -239,7 +262,7 @@ def test_engine_conforms_to_protocol_and_has_no_retired_entrypoints(provider: An
 
 @pytest.mark.parametrize("provider", _instances(), ids=lambda p: type(p).__name__)
 def test_engine_conforms_to_observation_protocol(provider: Any) -> None:
-    """观测面契约：五个引擎都满足 TtsObservation（dashboard 只读依赖按它收窄）。"""
+    """观测面契约：六个引擎都满足 TtsObservation（dashboard 只读依赖按它收窄）。"""
     assert isinstance(provider, TtsObservation)
 
 

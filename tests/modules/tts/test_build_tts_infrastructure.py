@@ -12,6 +12,7 @@ from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 from src.modules.tts.backends.gptsovits.provider import GPTSoVITSProvider
 from src.modules.tts.backends.minimax.provider import MiniMaxTTSProvider
 from src.modules.tts.backends.omni.provider import OmniTTSProvider
+from src.modules.tts.backends.openai.provider import OpenAITTSProvider
 from src.modules.tts.backends.voicebox.provider import VoiceboxProvider
 
 
@@ -55,8 +56,15 @@ def test_known_providers_construct_with_sub_config() -> None:
     )
     assert isinstance(minimax, MiniMaxTTSProvider) and (minimax.api_key, minimax.voice_id) == ("mk", "v")
 
-    assert all(isinstance(p, TTSProvider) for p in (edge, gsv, vb, omni, minimax))
-    assert assembly._KNOWN_PROVIDERS == frozenset({"edge_tts", "gptsovits", "voicebox", "omni_tts", "minimax_tts"})
+    openai = build_tts_infrastructure(
+        {"enabled": True, "provider": "openai_tts", "openai_tts": {"api_key": "sk", "voice": "nova"}}
+    )
+    assert isinstance(openai, OpenAITTSProvider) and (openai.api_key, openai.voice) == ("sk", "nova")
+
+    assert all(isinstance(p, TTSProvider) for p in (edge, gsv, vb, omni, minimax, openai))
+    assert assembly._KNOWN_PROVIDERS == frozenset(
+        {"edge_tts", "gptsovits", "voicebox", "omni_tts", "minimax_tts", "openai_tts"}
+    )
 
 
 def test_sub_config_missing_or_not_a_dict_uses_schema_defaults_and_bus_is_injected() -> None:
