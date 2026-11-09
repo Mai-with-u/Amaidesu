@@ -673,8 +673,8 @@ def test_planner_prompt_only_reports_progress_with_evidence() -> None:
     # 实播中主播三次说"吃鸡蛋回血"，游戏侧却明确上报过身上没有能吃的东西：消耗与放置类断言同样要有凭据
     assert "消耗与放置的断言同样只说有凭据的" in prompt and "照实说没吃成、没放成即可" in prompt
     # 实播中游戏侧里程碑记录拿不到床，主播却说"床终于摆进屋里了""品红床总算做出来了"：
-    # 完成断言的换皮说法（做出来/摆进去/总算成了）同样要成功记录作凭
-    assert '"做出来了""摆进屋里""总算成了""这条路跑通了"' in prompt and "必须以游戏记录里的成功回报为凭" in prompt
+    # 不论用什么说法宣布做成了，都要成功记录作凭；不列说法清单，免得清单外的说法显得可以放行
+    assert "不论用什么说法，都要以游戏记录里的成功回报为凭" in prompt and "摆进屋里" not in prompt
     # 实播中身体侧上报"32 格内没有能睡的床"，主播却说"木屋附近根本没床"：限定性失败消息不得升格为无条件判断
     assert "转述保留原有限定" in prompt and '不说"根本没床"' in prompt
     # 实播中同一张床被反复改名六次、悬念自相矛盾：玩笑桥段一次成立不反复重演
@@ -824,12 +824,10 @@ def test_streamer_prompts_keep_rules(prompts) -> None:
 
 
 def test_planner_prompt_finds_material_instead_of_defaulting_to_silence(prompts: Any) -> None:
-    """开口与沉默都过增量检验：表达上的新也算增量，冷场时默认找话说，打算只讲一次，梗由她自己定。
+    """开口与沉默都过增量检验：增量只认事实上的新，素材清单只在冷场时用，打算只讲一次，梗由她自己定。
 
-    两段矫枉叠加：线上回放曾 81 轮决策沉默 51 轮（理由全是"游戏没新进展"的敷衍）、开口的
-    30 句里 27 句复述同一个打算——为此立了"先找话、沉默要写理由"；后来反面失控（一场直播
-    347 轮决策开口 345 轮、三分之一的交接稿套同一态度模板）——为此把检讨式沉默说明改回
-    正常结局，但"没看过素材清单就说没进展"的敷衍仍然不算找过。
+    同一件事换态度、换情绪再讲一度被当成"表达上的新"放行，实播里"菜"被换态度讲了上百次：
+    复述的合法通道就此关掉。素材清单平时也会被翻出来凑话，现在只在冷场行出现时才用。
     """
     planner = prompts.render(
         "amaidesu_planner_react",
@@ -842,11 +840,14 @@ def test_planner_prompt_finds_material_instead_of_defaulting_to_silence(prompts:
     )
     # 开口与沉默都过增量检验：复述才是失败；沉默不写检讨，但敷衍理由不算找过
     assert "开口与沉默都过增量检验，沉默是正常结局" in planner
-    assert "一句这轮在做什么或等什么" in planner and '"游戏没新进展"本身不算找过' in planner
+    assert "拿不出事实上的新，这一轮就不开口" in planner
+    assert "一句这轮在做什么或等什么" in planner and "观察到的东西不必说出口" not in planner
     assert "参考段出现【冷场】行时" in planner
     assert "沉默是合格的选择" not in planner and "发言频率不设目标" not in planner
-    # 增量分信息上的新与表达上的新，素材不只来自游戏
-    assert "表达上的新" in planner and "可聊的素材不只来自游戏" in planner
+    # 增量只认事实上的新：换态度、换说法再讲同一件事是复述；素材清单只在冷场时用
+    assert "增量只认事实上的新" in planner and "表达上的新" not in planner and "新联想" not in planner
+    assert "换个态度、换种情绪再讲一遍是复述" in planner
+    assert "可聊的素材不只来自游戏，只在冷场时用" in planner and "不翻素材找话题" in planner
     # 态度没有固定菜单（"自嘲还是嘴硬"式二选一举例会被模型读成封闭选项）
     assert "态度没有固定菜单" in planner and "自嘲还是嘴硬" not in planner
     # 打算只在定下、改主意或做完时讲
