@@ -391,6 +391,11 @@ class ConfigService:
         config_dir = Path(self.base_dir) / "config"
         multi_config, _drift = load_config_dir(config_dir)
 
+        # 按文件视图必须与拍平视图一起刷新：热更新只前进 _main_config 时，
+        # get_file_section 的消费方会读到开服旧值（B 道开播守卫曾因此把刚
+        # 关掉的开关当成还开着）。重载是两份缓存唯一的共同前进点。
+        self._file_sections = dict(multi_config)
+
         return _flatten_multi_config(multi_config)
 
     async def _handle_reload(

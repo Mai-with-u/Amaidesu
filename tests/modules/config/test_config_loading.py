@@ -23,6 +23,27 @@ def test_agents_enabled_list_keeps_the_users_choice(tmp_path) -> None:
     assert _service(tmp_path).get_section("agents", {}).get("enabled") == ["streamer", "minecraft"]
 
 
+async def test_reload_advances_per_file_view_together_with_flat_view(tmp_path) -> None:
+    """热更新后按文件视图必须与拍平视图一起前进。
+
+    回归：_file_sections 曾只在 initialize 填充、reload 不刷新，get_file_section
+    的消费方读到开服旧值——开播守卫把刚关掉的 TTS 开关当成还开着（恒拦）。
+    """
+    service = _service(tmp_path)
+    assert service.get_file_section("infra", {})["tts"]["enabled"] is True
+    assert service.get_section("tts", {})["enabled"] is True
+
+    # 外部改盘（真实路径：保存管线写盘后走 reload_config 重载）
+    infra = tmp_path / "config" / "infra.toml"
+    text = infra.read_text(encoding="utf-8-sig")
+    infra.write_text(text.replace("enabled = true", "enabled = false", 1), encoding="utf-8")
+
+    await service.reload_config(changed_scopes=["infra"])
+
+    assert service.get_section("tts", {})["enabled"] is False
+    assert service.get_file_section("infra", {})["tts"]["enabled"] is False
+
+
 def test_schemas_all_exports_are_defined() -> None:
     assert "list_all_providers" not in schemas.__all__  # __all__ 里的名称必须实际定义
     assert all(hasattr(schemas, name) for name in schemas.__all__)
