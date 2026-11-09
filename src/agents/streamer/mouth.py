@@ -11,10 +11,9 @@
   理直气壮地编现场。嘴不带任何记忆：长期笔记和备忘录都不给，几秒内的一句反应用不上，带上只会让她在
   急事里翻旧账、拖长输入。
 - 兜底：输出一到三行"情绪：台词"或"[沉默]"——情绪在一次反应里转了（先吓一跳再松口气）就拆成
-  几行，每行一个情绪；没写情绪的行沿用上一行的。台词按句累计截到长度预算、过敏感词过滤、几行拼起来
-  和她最近说过的话比重合度，重复的直接丢弃不重试。出声走发声分发器的反应通道：前一句没播完最多等一会
-  儿，等不到整段作废；后面几行排在第一行后面，形象等轮到那句播放时再切表情。第一句真轮到播放时记一条
-  日志，写明生成、等前一句、从事件到开始播各用了多久。
+  几行，每行一个情绪；没写情绪的行沿用上一行的。台词按句累计截到长度预算、过敏感词过滤。出声走发声
+  分发器的反应通道：前一句没播完最多等一会儿，等不到整段作废；后面几行排在第一行后面，形象等轮到那句
+  播放时再切表情。第一句真轮到播放时记一条日志，写明生成、等前一句、从事件到开始播各用了多久。
 
 嘴只说话，不做事：委派、流程单、查询仍归 Planner。
 """
@@ -35,9 +34,8 @@ from src.modules.utils.time_utils import now_ms
 from .config import StreamerMouthConfig
 from .persona_rules import boundaries_line
 from .scene_card import GoalLine, SceneInputs, build_scene_card
-from .speech_guard import WordFilter, apply_word_filter, fit_to_budget, guard
+from .speech_guard import WordFilter, fit_to_budget, guard
 from .tools.reply_tool import coerce_emotion
-from .topic_gate import SpeechGate
 
 __all__ = ["MOUTH_TEMPLATE", "Mouth", "SCENE_CHANGING_BODY_KINDS", "Trigger", "URGENT_BODY_KINDS", "URGENT_GAME_TYPES"]
 
@@ -99,7 +97,6 @@ class Mouth:
         room_state: Any,
         persona: Dict[str, str],
         speech_max_chars: int,
-        gate: SpeechGate,
         word_filter: Optional[WordFilter],
         goals_provider: Callable[[], Sequence[GoalLine]],
         segment_provider: Callable[[], str],
@@ -117,7 +114,6 @@ class Mouth:
         self._room_state = room_state
         self._persona = persona
         self._speech_max_chars = speech_max_chars
-        self._gate = gate
         self._word_filter = word_filter
         self._goals_provider = goals_provider
         self._segment_provider = segment_provider
@@ -372,12 +368,11 @@ class Mouth:
         return segments
 
     def _guard(self, segments: List[Tuple[Emotion, str]]) -> List[Tuple[Emotion, str]]:
-        """长度按句累计到预算、敏感词过滤、整段和她最近说过的话比重合度；不过关返回空列表（直接丢弃不重试）。
+        """长度按句累计到预算、敏感词过滤；不过关返回空列表（直接丢弃不重试）。
 
         长度：第一句照常按预算截（截不出完整句时整句保留）；后面的句子放得下才要，放不下整句
-        不要，不截成半句。敏感词逐句净化，命中"整条丢弃"就整段丢。重合度按几句拼起来比——拆成
-        几行不该让复读漏网。判定与词汇定义收拢在 speech_guard（与 Replyer 同源），这里只保留嘴
-        自己的丢弃日志。
+        不要，不截成半句——跨行预算是嘴自己的算法，逐行出口检查交给 speech_guard 的
+        :func:`guard`（此处不截短，只查敏感词）。命中"整条丢弃"就整段丢。
         """
         budget = self._speech_max_chars
         kept: List[Tuple[Emotion, str]] = []
@@ -388,21 +383,10 @@ class Mouth:
                     line = fit_to_budget(line, budget)
                 elif used + len(line) > budget:
                     break
-            filtered = apply_word_filter(line, self._word_filter)
-            if filtered is None:
+            verdict = guard(line, speech_max_chars=0, word_filter=self._word_filter)
+            if verdict.text is None:
                 self._logger.info("嘴的台词命中敏感词，整段丢弃")
                 return []
-            kept.append((emotion, filtered))
-            used += len(filtered)
-        joined = "".join(line for _, line in kept)
-        verdict = guard(
-            joined,
-            [record.text for record in self._records if record.kind == "speech"],
-            speech_max_chars=0,
-            word_filter=None,
-            gate=self._gate,
-        )
-        if verdict.text is None:
-            self._logger.info(f"嘴的台词和最近说过的重复（重合度 {verdict.ratio:.2f}），丢弃: {joined}")
-            return []
+            kept.append((emotion, verdict.text))
+            used += len(verdict.text)
         return kept

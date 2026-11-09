@@ -12,11 +12,9 @@
 - kind: ``"sync"``（gather 等齐结果；Replyer 是一次性 LLM 调用，不是 fire-and-forget）
 - provider: ``"streamer"``（主播 Agent 自有工具；全名 streamer_reply）
 - arguments: ``{topic_summary, emotion, intensity, is_novel, reply_guidance?, topic_tag?, target?}``
-- 发言闸门：``is_novel=false`` 立即打回；生成后的成品台词对最近发言做
-  bigram 包含率检查（topic_gate 纯函数），超阈值同样打回——每个决策窗
-  最多打回 1 次后引导沉默（计数在检测到新决策窗 round_id 时清零）
-- 她已说过的台词（发言闸语料）先交表达侧，聊天记录里看不到的那几句单列成"更早一点你说过的话"，
-  生成后再拿同一份查重
+- 新颖自检：``is_novel=false`` 或未如实申报布尔值立即打回——她说出的内容有没有新东西，
+  由她自己在调用前如实申报
+- 她已说过的台词先交表达侧，聊天记录里看不到的那几句单列成"更早一点你说过的话"
 - 失败兜底：ToolExecutionResult(success=False, error_message=...)
 """
 
@@ -26,7 +24,6 @@ import inspect
 from typing import Any, ClassVar, Dict, Iterable, List, Optional
 
 from src.agents.streamer.speech_guard import strip_memory_numbers
-from src.agents.streamer.topic_gate import SpeechGate
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.planner import PlannerVerdictPayload
 from src.modules.logging import get_logger
@@ -204,34 +201,13 @@ class ReplyToolProvider(BaseToolProvider):
         history_provider: Optional[Any] = None,
         rundown_text_provider: Optional[Any] = None,
         event_bus: Optional[Any] = None,
-        gate: Optional[SpeechGate] = None,
     ) -> None:
         self._replyer = replyer
         self._history_provider = history_provider
         self._rundown_text_provider = rundown_text_provider
-        # 台词重合度闸：判定与阈值收敛在 SpeechGate（与嘴共用同一份语义）；
-        # 未注入时按默认窗口与阈值自建（裸调用/测试场景）
-        self._gate = gate if gate is not None else SpeechGate()
-        # 本决策窗内台词重合度检查已打回的次数（检测到新决策窗 round_id 即清零；
-        # 打回 1 次后仍重复即引导本轮沉默，不再给重试机会）
-        self._gate_bounces: int = 0
-        # 上次 reply 调用所在的决策窗（round_id 每决策窗唯一且同窗不变，由
-        # decision_executor 单调自增生成）；变化即新窗，打回计数随之清零
-        self._gate_round_id: str = ""
         # 可选 EventBus：reply 调用入口发布 planner.verdict（裁决时刻即时事实）
         self._event_bus = event_bus
         self._logger = get_logger("ReplyTool")
-
-    def _advance_gate_round(self, round_id: str) -> None:
-        """检测决策窗切换：round_id 变化即新窗，清零台词重合度打回计数。
-
-        时序与原"Planner 每窗 plan() 入口清零"等价——清零发生在新窗首次
-        reply 调用前；round_id 为空串（无窗关联的裸调用）视为同一无窗上下文，
-        不触发清零。
-        """
-        if round_id and round_id != self._gate_round_id:
-            self._gate_round_id = round_id
-            self._gate_bounces = 0
 
     async def _emit_verdict(self, args: Dict[str, Any], round_id: str) -> None:
         """发布 ``planner.verdict``（裁决时刻即时事实；观测旁路，失败不阻断）。
@@ -324,10 +300,6 @@ class ReplyToolProvider(BaseToolProvider):
 
         args = invocation.arguments or {}
 
-        # 决策窗切换检测：round_id 变化即新窗，清零台词重合度打回计数
-        # （时序等价于"每窗入口清零"——生效在新窗首次 reply 调用前）
-        self._advance_gate_round(invocation.round_id)
-
         # 裁决时刻即时事实：reply 被调用即 Planner 已决定回应（表达生成之前）
         await self._emit_verdict(args, round_id=invocation.round_id)
 
@@ -343,10 +315,10 @@ class ReplyToolProvider(BaseToolProvider):
         if stripped:
             self._logger.info(f"reply_tool: 交接稿里带了 {stripped} 处记忆编号，交给说话侧之前去掉了")
 
-        # 新颖自检（第一道闸）：false 或未如实申报布尔值都立即打回，防绕过
+        # 新颖自检：false 或未如实申报布尔值都立即打回，防绕过
         declared_novel = args.get("is_novel")
         if not isinstance(declared_novel, bool):
-            self._logger.info("发言闸打回：is_novel=未申报 结果=bounce 重合度=未检查")
+            self._logger.info("新颖自检打回：is_novel=未申报")
             return ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=False,
@@ -355,7 +327,7 @@ class ReplyToolProvider(BaseToolProvider):
                 ),
             )
         if not declared_novel:
-            self._logger.info("发言闸打回：is_novel=false 结果=bounce 重合度=未检查")
+            self._logger.info("新颖自检打回：is_novel=false")
             return ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=False,
@@ -399,10 +371,9 @@ class ReplyToolProvider(BaseToolProvider):
                 error_message=f"reply_tool 依赖解析失败: {type(exc).__name__}: {exc}",
             )
 
-        # 她已经说过的台词（发言闸语料，旧→新）：Planner 路径在窗起点算好随单携带；
+        # 她已经说过的台词（旧→新）：Planner 路径在窗起点算好随单携带；
         # 裸调用（无 attachment 语料）时从刚读到的历史里现取，读失败（None）按空语料处理。
-        # 同一份语料先交表达侧：聊天记录里看不到的那几句单列成"更早一点你说过的话"让她别再说一遍；
-        # 生成后再拿同一份语料查重
+        # 同一份语料先交表达侧：聊天记录里看不到的那几句单列成"更早一点你说过的话"让她别再说一遍
         speech_history = materials.speech_history
         if speech_history is None:
             speech_history = assistant_speech_lines(history)
@@ -436,39 +407,6 @@ class ReplyToolProvider(BaseToolProvider):
                 success=False,
                 error_message="Replyer 返回 None（LLM 失败 / 空台词 / word_filter 丢弃）",
             )
-
-        # 台词级重合度检查（第二道闸，生成后）：成品台词对最近发言的包含率超阈值即打回；
-        # 每个决策窗打回 1 次后仍重复，改引导本轮沉默（计数在检测到新决策窗 round_id 时清零）
-        speech = str(result.get("speech") or "")
-        if materials.gate_exempt:
-            self._logger.info("发言闸豁免：is_novel=true 结果=pass 重合度=未检查")
-        else:
-            verdict = self._gate.verdict(speech, speech_history)
-            if not verdict.passed:
-                retry_exhausted = self._gate_bounces >= 1
-                self._gate_bounces += 1
-                self._logger.info(
-                    f"发言闸打回：is_novel=true 结果=bounce 重合度={verdict.ratio:.2f}"
-                    f"（本窗第 {self._gate_bounces} 次）"
-                )
-                if retry_exhausted:
-                    error_message = (
-                        f"重试后的台词仍与最近发言大面积重复（重合度 {verdict.ratio:.0%}）。"
-                        "本轮请保持沉默：不再调用任何工具，直接结束。"
-                    )
-                else:
-                    error_message = (
-                        f"台词与最近发言大面积重复（重合度 {verdict.ratio:.0%}；换皮措辞、数值变化不算新内容）——"
-                        "要么换个新角度拿出真内容重新调用（新进展，或她对这件事的新态度、新联想），要么本轮别发言。"
-                    )
-                return ToolExecutionResult(
-                    tool_name=invocation.tool_name,
-                    success=False,
-                    error_message=error_message,
-                    # 打回计数随失败结果回传（Planner 观测口径；新颖自检打回不计此数）
-                    structured_content={"speech_gate_bounces": self._gate_bounces},
-                )
-            self._logger.info(f"发言闸放行：is_novel=true 结果=pass 重合度={verdict.ratio:.2f}")
 
         return ToolExecutionResult(
             tool_name=invocation.tool_name,

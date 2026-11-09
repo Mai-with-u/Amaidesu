@@ -12,7 +12,6 @@ from src.agents.streamer.config import StreamerMouthConfig, StreamerPersonaConfi
 from src.agents.streamer.mouth import Mouth, Trigger
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.scene_card import GoalLine
-from src.agents.streamer.topic_gate import SpeechGate
 from src.modules.events.payloads.body import BodyEventPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
@@ -93,7 +92,6 @@ def _mouth(
             "boundaries": boundaries,
         },
         speech_max_chars=40,
-        gate=SpeechGate(window=10, ratio=0.5),
         word_filter=None,
         goals_provider=lambda: [GoalLine(game="minecraft", instruction="回到基地家中", started_ms=NOW - 120_000)],
         segment_provider=lambda: "互动闲聊",
@@ -231,15 +229,6 @@ async def test_not_live_or_stale_trigger_says_nothing(prompts: Any) -> None:
     assert await _mouth(llm, speech, prompts, live=False).react_once([_trigger()]) is None
     assert await _mouth(llm, speech, prompts).react_once([_trigger(at_ms=NOW - 25_000)]) is None
     assert llm.calls == []
-
-
-async def test_repeat_of_her_own_line_is_dropped(prompts: Any) -> None:
-    """和她最近说过的话大面积重复：直接丢弃，不重试。"""
-    llm, speech = _LLM("scared：哇！谁炸我？！"), _Speech()
-    mouth = _mouth(llm, speech, prompts)
-    mouth.note_speech("哇！谁炸我？！", NOW - 40_000)
-
-    assert await mouth.react_once([_trigger()]) is None and speech.calls == []
 
 
 async def test_output_without_emotion_falls_back_to_neutral_and_long_line_is_cut(prompts: Any) -> None:

@@ -1,14 +1,12 @@
 """台词出口守卫：一句台词能不能出声的裁决规则单点收拢。
 
-三检齐备——长度预算（截到预算内最后一个完整句子）、敏感词净化（替换或
-整条丢弃）、重合度闸（对最近已说发言的 bigram 包含率，判定委托
-:class:`SpeechGate`）。词汇定义与判定分支集中在本模块单一实现；
+两检齐备——长度预算（截到预算内最后一个完整句子）、敏感词净化（替换或
+整条丢弃）。词汇定义与判定分支集中在本模块单一实现；
 各调用点按自身语义组合取用：
 
 - Replyer：长度预算先走 LLM 重说（表达策略，留在 Replyer 内部），
-  截短兜底用 :func:`fit_to_budget`；出口只做敏感词净化（无重合度闸）。
-- Mouth：三检按"截短 → 净化 → 重合度"顺序全跑，任一不过整句丢弃。
-- reply 工具：只用重合度闸（打回重试的回执机制留在工具内）。
+  截短兜底用 :func:`fit_to_budget`；出口只做敏感词净化。
+- Mouth：按"截短 → 净化"顺序全跑，不过关整句丢弃。
 - 记忆编号（档#N、约#N）：reply 工具交接前洗交接稿，Replyer 生成后洗台词。
 
 各检既可整体取用（:func:`guard`），也可单独取用（:func:`apply_word_filter`）。
@@ -18,9 +16,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
-
-from .topic_gate import SpeechGate
+from typing import List, Optional, Tuple
 
 __all__ = [
     "GuardVerdict",
@@ -187,7 +183,7 @@ def apply_word_filter(text: str, word_filter: Optional[WordFilter]) -> Optional[
 
 
 # ============================================================================
-# 三检整体取用（出口守卫）
+# 两检整体取用（出口守卫）
 # ============================================================================
 
 
@@ -196,36 +192,27 @@ class GuardVerdict:
     """一句台词过出口守卫的结果。
 
     ``text`` 为放行的台词（可能经长度截短与敏感词替换）；未过守卫时为 None。
-    ``reason`` 说明裁决去向：``passed`` / ``word_filter``（敏感词整条丢弃）/
-    ``duplicate``（与最近发言大面积重合）。``ratio`` 仅 duplicate 时有意义，
-    供打回话术与观测。
+    ``reason`` 说明裁决去向：``passed`` / ``word_filter``（敏感词整条丢弃）。
     """
 
     text: Optional[str]
     reason: str
-    ratio: float = 0.0
 
 
 def guard(
     text: str,
-    recent_speeches: Sequence[str],
     *,
     speech_max_chars: int,
     word_filter: Optional[WordFilter],
-    gate: SpeechGate,
 ) -> GuardVerdict:
-    """一句台词的完整出口裁决：长度预算 → 敏感词 → 重合度，任一不过整句不放行。
+    """一句台词的完整出口裁决：长度预算 → 敏感词，任一不过整句不放行。
 
     长度预算 ``speech_max_chars`` 为 0 时不截短；``word_filter`` 为 None 时
-    不净化；重合度判定委托注入的 :class:`SpeechGate`（窗口与阈值同源配置）。
+    不净化。
     """
     if speech_max_chars > 0:
         text = fit_to_budget(text, speech_max_chars)
     filtered = apply_word_filter(text, word_filter)
     if filtered is None:
         return GuardVerdict(text=None, reason="word_filter")
-    text = filtered
-    verdict = gate.verdict(text, recent_speeches)
-    if not verdict.passed:
-        return GuardVerdict(text=None, reason="duplicate", ratio=verdict.ratio)
-    return GuardVerdict(text=text, reason="passed")
+    return GuardVerdict(text=filtered, reason="passed")

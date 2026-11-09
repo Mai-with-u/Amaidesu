@@ -66,12 +66,10 @@ class ReplyRoundAttachment(ToolCallAttachment):
         game_chat: 本窗新到的游戏聊天原话——玩家在游戏里搭话促发的一轮弹幕批
             是空的，没有它表达侧只能看到转述
         state_facts: 本窗状态跃迁事实块——表达侧的客观事实底稿
-        gate_exempt: 本窗是否豁免台词重合度检查（收播道别窗：道别话题与
-            收尾环节发言字面重合是常态）
-        speech_history: 发言闸比对语料——本窗开始前主播已说过的台词（旧→新，
-            未截窗口，闸按自家窗口参数截取）；与本窗批材料同源同生命周期，
-            打回重试共用这一份。``None`` = 调用方未随单携带（裸调用，工具内
-            兜底现读）；空列表 = 确认本窗前无台词（刚开播），空语料即放行
+        speech_history: 本窗开始前主播已说过的台词（旧→新，未截窗口）——表达侧
+            据此看见自己刚说过什么，聊天记录里看不到的那几句单列成"更早一点你说过的话"；
+            与本窗批材料同源同生命周期。``None`` = 调用方未随单携带（裸调用，工具内
+            兜底现读）；空列表 = 确认本窗前无台词（刚开播）
         game_people: 最近几分钟游戏里玩家找她的条目（谁在公屏说了什么、谁冲她做了
             什么，旧→新）——表达侧据此把话和举动归到对的人头上
         reply_to: 回应对象的玩家名——不在回弹幕、本窗只有一位玩家在公屏开口时是他；
@@ -82,7 +80,6 @@ class ReplyRoundAttachment(ToolCallAttachment):
     round_batch: List[Any] = field(default_factory=list)
     game_chat: List[str] = field(default_factory=list)
     state_facts: str = ""
-    gate_exempt: bool = False
     speech_history: Optional[List[str]] = None
     #: Planner 点名的那条旧事（说话档写法，已去掉编号与原话）；空串 = 本轮没用旧事
     remembered: str = ""
@@ -91,7 +88,7 @@ class ReplyRoundAttachment(ToolCallAttachment):
 
 
 def assistant_speech_lines(history: Optional[List[Any]]) -> List[str]:
-    """历史里主播已说过的台词原文（旧→新）——发言闸的比对语料。
+    """历史里主播已说过的台词原文（旧→新）——表达侧"她刚说过什么"的语料。
 
     历史里自己说过的话才是观众听过的内容。决策窗起点由 Planner 从本窗
     历史算一次，随 attachment 交 reply 工具（见 ``ReplyRoundAttachment.speech_history``）。

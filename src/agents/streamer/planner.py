@@ -208,7 +208,6 @@ class RoundOutcome:
     reply_payload: Optional[Dict[str, Any]] = None
     reply_duration_ms: int = 0
     reply_failures: int = 0
-    speech_gate_bounces: int = 0
     # 本窗因点名本场已提过的旧事被退回的次数（每窗至多一次）：复盘看得出这一窗为什么换了话题或没开口
     memory_repeat_bounces: int = 0
     # 本轮点名的旧事编号（写法如 约#7、档#41；随 streamer.speech 落库，供"用上即停"与复盘核对）
@@ -440,8 +439,6 @@ class Planner:
         # 玩家找她的条目：本窗新到的（定回应对象）与最近几分钟的（交给表达侧，说清谁说的、谁做的）
         self._round_player_notes: Tuple[PlayerNote, ...] = ()
         self._recent_player_notes: Tuple[PlayerNote, ...] = ()
-        # 本窗是否豁免发言闸的台词重合度检查（收播道别窗：道别话题常与收尾环节发言字面重合）
-        self._round_bypass_topic_gate: bool = False
         # 本场备忘录全文查询（经环境注入；空串 = 还没写过，段整段省略）
         self._brief_provider = env.brief_provider if env else None
         self._brief_ids_provider = env.brief_ids_provider if env else None
@@ -570,7 +567,7 @@ class Planner:
             RoundOutcome：replied / speech / emotion / target / reply_to /
             topic_summary / reply_guidance / silent_reason / steps / tool_trace /
             error / raw_content / llm_request_id / reply_payload /
-            reply_duration_ms / reply_failures / speech_gate_bounces——字段语义见类型注释。
+            reply_duration_ms / reply_failures——字段语义见类型注释。
         """
         # 上一窗没来得及看的截图属于旧画面，新的决策窗不带
         self._transient_images.drain()
@@ -594,13 +591,6 @@ class Planner:
         # 游戏聊天原话（非私聊）随本轮说话交给表达侧；私聊行只进本窗参考段
         fresh_game_chat = list(resolved_batch.fresh_chat)
         private_game_chat = list(resolved_batch.private_chat)
-        # 收播道别窗与断线续播窗整窗豁免台词重合度检查（见 _round_bypass_topic_gate 声明处）
-        self._round_bypass_topic_gate = trigger_cause is not None and trigger_cause.kind in (
-            TriggerKind.SIGNOFF,
-            TriggerKind.RESUME,
-        )
-        # 发言闸打回计数是本窗口径：由 Provider 检测 round_id 变化清零（每窗
-        # 首次 reply 调用前生效，时序与本入口等价）
 
         outcome = RoundOutcome()
 
@@ -663,8 +653,8 @@ class Planner:
             and not (reminders or "").strip()
             and not fresh_game_chat
         )
-        # 发言闸语料：本窗历史里的已说台词，窗起点算一次随单携带（reply 工具
-        # 不再为查重单独读历史——读是纯读，无决策窗出账副作用）
+        # 她本窗说过的台词：本窗历史里的已说台词，窗起点算一次随单携带
+        # （reply 工具不再为取这份语料单独读历史——读是纯读，无决策窗出账副作用）
         speech_history = assistant_speech_lines(history)
 
         # 直播画面只挂在本窗第一次请求的尾部：后续 ReAct 步骤靠模型第一步的判断继续
@@ -1049,8 +1039,8 @@ class Planner:
         resume_window = trigger_cause is not None and trigger_cause.kind is TriggerKind.RESUME
         lines: List[str] = []
         if forced and not (signoff_window or resume_window):
-            # signoff / resume 的 forced 只是闸门豁免语义（绕过台词重合度检查），不是
-            # 付费/点名的强制回应情境，不按 forced_situation 措辞标注
+            # signoff / resume 是流程自身触发的收尾轮与接回轮，不是观众付费或点名的
+            # 强制回应情境，不按 forced_situation 措辞标注
             lines.append(forced_situation(batch))
         if signoff_window:
             lines.append(
@@ -1310,12 +1300,11 @@ class Planner:
 
         统一调用路径：reply 与其他工具一样经 ``registry.invoke``（观测/停用/
         熔断复用既有机制，tool.result 事件照发）。本窗交接材料（thinking 回调/
-        弹幕批/游戏聊天/状态事实块/闸豁免/闸语料）打包进 ``ReplyRoundAttachment``、
+        弹幕批/游戏聊天/状态事实块/她刚说过的台词）打包进 ``ReplyRoundAttachment``、
         随 ``ToolInvocation.attachment`` 传入——材料生命周期 = 调用生命周期，
         调用即弃，无跨轮残留。
-        发言闸（新颖自检 + 台词级重合度检查）在 reply 工具内部执行：打回以
-        工具错误形态回到 ReAct 循环；收播道别窗整窗豁免——道别话题与收尾
-        环节发言字面重合是常态，闸会系统性误杀道别。
+        新颖自检（``is_novel`` 申报）在 reply 工具内部执行：打回以工具错误
+        形态回到 ReAct 循环。
         """
         if self._tool_registry is None:
             return (
@@ -1358,9 +1347,7 @@ class Planner:
                 game_chat=list(game_chat or []),
                 # 状态跃迁事实块：表达侧的客观事实底稿（含本轮观察工具回执要点）
                 state_facts=GameLedger.compose_facts(self._round_facts_text, self.workbench.round_receipts),
-                # 道别窗豁免台词重合度检查
-                gate_exempt=self._round_bypass_topic_gate,
-                # 闸语料：本窗起点算好的已说台词，重试共用（None = 本窗无历史可查）
+                # 她本窗开始前说过的台词：表达侧据此看见自己刚说过什么（None = 本窗无历史可查）
                 speech_history=speech_history,
                 # 最近几分钟玩家找她的条目：谁在公屏说了什么、谁冲她扔了什么，台词照这个归到人头上
                 game_people=list(self._recent_player_notes),
@@ -1391,14 +1378,9 @@ class Planner:
         outcome = replace(outcome, reply_duration_ms=outcome.reply_duration_ms + now_ms() - invoke_started_ms)
 
         if not result.success:
-            updates: Dict[str, Any] = {"reply_failures": outcome.reply_failures + 1}
-            # 发言闸打回也是工具失败的一种：计数随失败结果的 structured_content 回传供观测
-            bounce_payload = result.structured_content
-            if isinstance(bounce_payload, dict) and isinstance(bounce_payload.get("speech_gate_bounces"), int):
-                updates["speech_gate_bounces"] = bounce_payload["speech_gate_bounces"]
             return (
                 json.dumps({"ok": False, "error": result.error_message or "reply 失败"}, ensure_ascii=False),
-                replace(outcome, **updates),
+                replace(outcome, reply_failures=outcome.reply_failures + 1),
                 False,
             )
 

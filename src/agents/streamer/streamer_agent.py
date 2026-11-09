@@ -94,7 +94,6 @@ from .game_now import AgentNow, GameNow, GameSideLog
 from .planner_render import Intent
 from .stats import StreamerStats
 from .timeline import StreamerTimeline
-from .topic_gate import SpeechGate
 from .trigger_cause import TriggerCause, TriggerKind, TriggerSource, cause_for_batch_flush
 from .tools.reply_tool import ReplyToolProvider
 from .command.router import CommandRouter
@@ -723,9 +722,6 @@ class StreamerAgent(BaseAgent):
             logger=self._logger,
         )
 
-        # 发言重合度闸：reply 工具与嘴共用同一份判定语义（窗口与阈值同源配置）
-        self._speech_gate = SpeechGate(window=config.speech_gate_window, ratio=config.speech_gate_ratio)
-
         # 嘴（Agent 内部件，代码直连）：游戏里出事时不经 Planner 当场出一句短反应。
         # 注入替身优先；开关关闭时不构造，关闭与替身缺席路径行为一致（不说话）
         self._mouth: Optional[Mouth] = None
@@ -746,7 +742,6 @@ class StreamerAgent(BaseAgent):
                     "boundaries": config.persona.boundaries,
                 },
                 speech_max_chars=config.speech_max_chars,
-                gate=self._speech_gate,
                 word_filter=self._word_filter,
                 goals_provider=self._planner.workbench.current_goals,
                 segment_provider=self._current_segment_title,
@@ -945,7 +940,8 @@ class StreamerAgent(BaseAgent):
           进 ToolRegistry，与其他工具同一路径被 Planner 调用；可见性随
           Provider 注册/摘除进出名单（Agent 启动即注册，无需二次开关）。
         - ``memory_recall``：回想工具（provider="memory"，名单 ``["streamer"]``），
-          台词/承诺/档案三个仓储都注入时才注册；没注册时 Planner 的提示词里也不会出现它。
+          台词/承诺/档案三个仓储都注入时才注册；没注册时工具面里没有它，
+          提示词里关于回想工具的条款照常渲染。
         """
 
         # reply tool（构造注入的替身复用不重建；缺省时构造——注册与 Planner 侧引用共用同一实例）
@@ -956,7 +952,6 @@ class StreamerAgent(BaseAgent):
                 history_provider=self._read_history_sync,
                 rundown_text_provider=self._rundown_coord.build_text_sync,
                 event_bus=self._event_bus,
-                gate=self._speech_gate,
             )
         # Planner 的 reply 调用经 registry；Provider 经 PlannerEnv 工厂迟解析，
         # 仅供引用/诊断（材料走 attachment）
