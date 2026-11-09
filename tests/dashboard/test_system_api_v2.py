@@ -157,13 +157,31 @@ def test_health_wall_shape_and_unknown_placeholder(mount, config_service: Config
     client = _health_client(mount, config_service)
     body = client.get("/api/v1/system/health").json()
     assert body["status"] == "ok" and isinstance(body["checked_at_ms"], int)
-    assert set(body["domains"]) == {"tts", "avatar", "obs", "maibot", "tools_providers", "collectors", "agents"}
-    assert body["domains"]["tts"][0]["state"] == "unknown"
+    assert set(body["domains"]) == {
+        "tts",
+        "vision",
+        "llm",
+        "avatar",
+        "obs",
+        "maibot",
+        "tools_providers",
+        "collectors",
+        "agents",
+    }
+    # TTS 域按装配表逐引擎列出：默认档（gptsovits）引擎未装配 → unknown 占位；
+    # 其余引擎未选为当前引擎 → disabled（配置上就没开，非故障）
+    tts_by_name = {item["name"]: item for item in body["domains"]["tts"]}
+    assert tts_by_name["gptsovits"]["state"] == "unknown"
+    assert all(
+        item["state"] == "disabled" and item["detail"] == "未选为当前引擎"
+        for name, item in tts_by_name.items()
+        if name != "gptsovits"
+    )
     assert body["domains"]["maibot"][0]["state"] == "unknown"
     for domain_items in body["domains"].values():
         for item in domain_items:
             assert set(item) == {"name", "state", "detail", "last_error", "supports_reconnect"}
-            assert item["state"] in {"ok", "degraded", "offline", "unknown"}
+            assert item["state"] in {"ok", "degraded", "offline", "unknown", "disabled"}
 
 
 def test_health_wall_tts_and_provider_states(mount, config_service: ConfigService) -> None:
@@ -185,9 +203,18 @@ def test_health_wall_tts_and_provider_states(mount, config_service: ConfigServic
     )
     domains = client.get("/api/v1/system/health").json()["domains"]
 
-    assert domains["tts"] == [
-        {"name": "tts", "state": "ok", "detail": "引擎 GPTSoVITS", "last_error": "", "supports_reconnect": False}
-    ]
+    # 激活引擎（默认档 gptsovits）透传 get_stats 连接态；其余引擎未选 → disabled
+    tts_by_name = {item["name"]: item for item in domains["tts"]}
+    assert tts_by_name["gptsovits"] == {
+        "name": "gptsovits",
+        "state": "ok",
+        "detail": "当前引擎 GPTSoVITS",
+        "last_error": "",
+        "supports_reconnect": False,
+    }
+    assert all(
+        item["state"] == "disabled" for name, item in tts_by_name.items() if name != "gptsovits"
+    )
 
     avatar = {item["name"]: item for item in domains["avatar"]}
     assert avatar["vts"]["state"] == "ok" and avatar["vts"]["supports_reconnect"] is True
@@ -203,8 +230,11 @@ def test_health_wall_tts_and_provider_states(mount, config_service: ConfigServic
 
 
 def test_health_wall_tts_without_connection_info(mount, config_service: ConfigService) -> None:
+    """激活引擎的 stats 缺连接态字段时按 unknown 占位，不硬造连接状态。"""
     client = _health_client(mount, config_service, tts_engine=_FakeTtsEngine({"name": "X"}))
-    assert client.get("/api/v1/system/health").json()["domains"]["tts"][0]["state"] == "unknown"
+    tts_by_name = {item["name"]: item for item in client.get("/api/v1/system/health").json()["domains"]["tts"]}
+    assert tts_by_name["gptsovits"]["state"] == "unknown"
+    assert all(item["state"] == "disabled" for name, item in tts_by_name.items() if name != "gptsovits")
 
 
 def test_health_wall_domain_probe_failure_degrades(mount, config_service: ConfigService, monkeypatch) -> None:
