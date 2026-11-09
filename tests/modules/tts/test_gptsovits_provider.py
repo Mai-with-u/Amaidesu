@@ -120,6 +120,62 @@ async def test_missing_reference_audio_fails_before_synthesis(event_bus: EventBu
     assert is_failure_reported(raised.value)
 
 
+async def test_cancellation_while_waiting_for_lock_keeps_cancelled_error() -> None:
+    """等锁期取消（如调试试播占锁时看门狗超时）原样抛 CancelledError。
+
+    回归锚：write_task 曾在锁内才初始化，取消落在等锁 / 发请求 / 开声卡
+    阶段时取消分支引用未绑定名字，CancelledError 被替换成 UnboundLocalError，
+    编排队列的取消语义随之错乱。
+    """
+    provider = GPTSoVITSProvider(config=dict(CONFIGURED))
+    mgr = await _started(provider, _stream_client())
+    await provider.tts_lock.acquire()  # 模拟调试面板试播占锁
+    try:
+        task = asyncio.create_task(provider.handle_speech("你好", utterance_id="utt_wait_cancel"))
+        for _ in range(20):
+            await asyncio.sleep(0)  # 让任务推进到等锁挂起点（零真实时间，纯调度让出）
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        provider.tts_lock.release()
+    mgr.stop_stream.assert_called_with(discard_pending=True)  # 取消收尾照常执行
+
+
+async def test_mid_stream_failure_closes_audio_stream_and_discards_pending(event_bus: EventBus) -> None:
+    """声卡已开后流式迭代中途失败：关流并丢弃预缓冲（资源泄漏回归锚）。
+
+    回归锚：失败分支曾不关流——声卡句柄泄漏、口型分接会话残留、断流巡检
+    以"播放中断流"误报合成失败。stop_stream(discard_pending=True) 使失败
+    半句不冲播，与取消语义一致。
+    """
+    provider = GPTSoVITSProvider(config=dict(CONFIGURED), event_bus=event_bus)
+    captured = record_lifecycle(event_bus)
+    mgr = make_audio_manager()
+
+    def _dying_stream(**_kwargs: Any) -> Any:
+        def _gen() -> Any:
+            yield b"c1"
+            raise RuntimeError("stream died mid-iteration")
+
+        return _gen()
+
+    client = MagicMock(tts_stream=MagicMock(side_effect=_dying_stream))
+    await _started(provider, client, mgr)
+
+    async def decode(chunk: bytes, dtype: Any = None) -> np.ndarray:
+        return np.arange(1024, dtype=DTYPE)
+
+    with patch("src.modules.tts.wav_decoder.decode_wav_chunk", new=decode):
+        with pytest.raises(RuntimeError, match="stream died"):
+            await provider.handle_speech("你好", utterance_id="utt_mid_fail")
+    await event_bus.cleanup()
+
+    mgr.stop_stream.assert_called_with(discard_pending=True)
+    (failed,) = [p for name, p in captured if name == CoreEvents.TTS_UTTERANCE_FAILED]
+    assert isinstance(failed, UtteranceFailedPayload) and "stream died" in failed.error_message
+
+
 async def test_service_unreachable_reports_short_message_without_transport_noise(event_bus: EventBus) -> None:
     provider = GPTSoVITSProvider(config=dict(CONFIGURED), event_bus=event_bus)
     captured = record_lifecycle(event_bus)

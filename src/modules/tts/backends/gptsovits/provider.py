@@ -235,6 +235,10 @@ class GPTSoVITSProvider:
             duration_ms=None,
         )
 
+        # 在途写线程句柄：取消分支要等它收敛，初始化必须在 try 之前——
+        # 取消可能落在等锁 / 发请求 / 开声卡任一阶段（如调试试播占锁期间
+        # 看门狗超时），若在锁内才初始化，取消分支会引用未绑定名字
+        write_task: asyncio.Task | None = None
         try:
             if not (self.ref_audio_path and self.prompt_text):
                 raise RuntimeError(
@@ -260,7 +264,6 @@ class GPTSoVITSProvider:
                 # 累计写往声卡的 PCM 样本数（单声道：ndarray.size 即样本数），
                 # finished 事件的 duration_ms 由"样本数 ÷ 采样率"精确计算
                 total_samples = 0
-                write_task: asyncio.Task | None = None
                 async for chunk in self._process_audio_stream(audio_stream):
                     if chunk is not None:
                         # 写声卡放工作线程：预缓冲冲入与背压会阻塞 write 达
@@ -298,7 +301,11 @@ class GPTSoVITSProvider:
             self.logger.warning(f"TTS 渲染被取消（已截断播放）: utterance_id={utterance_id}")
             raise
         except GPTSoVITSServiceError as e:
-            # 服务未启动等环境故障是预期内的：简短告警即可，不打全量 traceback
+            # 服务未启动等环境故障是预期内的：简短告警即可，不打全量 traceback。
+            # 失败路径同样关流：声卡已开后流式中断时，不关会泄漏声卡句柄并残留
+            # 口型分接会话与断流巡检（stop_stream 幂等，声卡未开时早退无害）；
+            # 丢弃预缓冲，失败半句不冲播
+            self.audio_manager.stop_stream(discard_pending=True)
             self.error_count += 1
             self.logger.warning(f"TTS 渲染失败: {e}（本条放弃，等待服务恢复）")
             # 先发 failed 让字幕出字再上抛；cause=e 给异常打"已报告"标记，队列兜底不再补发第二条
@@ -312,6 +319,8 @@ class GPTSoVITSProvider:
             )
             raise
         except Exception as e:
+            # 同上：失败路径必须关流（声卡已开后流式迭代中途失败落在本分支）
+            self.audio_manager.stop_stream(discard_pending=True)
             self.error_count += 1
             self.logger.exception(f"TTS 渲染失败: {e}")
             # 同上：事件发出后给异常打"已报告"标记，避免队列再补发一条重复的 failed
