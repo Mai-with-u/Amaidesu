@@ -148,3 +148,26 @@ def test_prompt_template_does_not_blame_present_players_for_protected_blocks(pro
     assert "被挡住时不怪到人头上" in prompt
     assert '不让她追问"谁干的"，也不安到在场玩家头上' in prompt
     assert '中性地问一句"这是谁放的呀"' in prompt
+
+
+def test_prompt_template_restates_player_request_before_state(prompts: Any) -> None:
+    """玩家托付或问句触发的轮次，话题摘要第一句先复述谁要什么：诉求框定逐轮漂移时，纸面上先露出来。"""
+    prompt = _render_bare(prompts)
+
+    assert "摘要先复述诉求" in prompt
+    assert "第一句先写清谁要什么" in prompt
+    assert "再写她的状态" in prompt
+
+
+def test_delegate_rules_asks_back_when_request_target_is_unclear() -> None:
+    """诉求对象说不清时先反问确认，不按主播自己的库存或状态替对方回答；歧义澄清落在委派规则，不重复写。"""
+    reset_prompt_manager()
+    try:
+        rules = get_prompt_manager().render("amaidesu_planner_delegate_rules")
+    finally:
+        reset_prompt_manager()
+
+    assert "玩家托付里诉求归谁说不准时" in rules
+    assert "先在游戏聊天里反问确认" in rules
+    assert "不按主播自己的库存或状态替对方回答" in rules
+    assert "托付有歧义时先反问" not in rules
