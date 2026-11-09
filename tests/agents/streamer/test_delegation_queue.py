@@ -141,3 +141,15 @@ def test_delegate_rules_state_queue_and_obedience_table() -> None:
     assert "付费过的观众代价让位" in rules
     assert "战斗、受伤、逃生**不归这套**" in rules and "不要为此发急件" in rules
     assert "同一时刻最多一件急事在办" in rules
+
+
+def test_delegate_rules_split_one_done_condition_per_order() -> None:
+    """一单只有一个"怎样算做完"，几件事分开派；作废规则只落在决策提示词，不在这里重复。"""
+    reset_prompt_manager()
+    try:
+        rules = get_prompt_manager().render("amaidesu_planner_delegate_rules")
+    finally:
+        reset_prompt_manager()
+    assert "一单一件事" in rules and '一单只能有一个"怎样算做完"' in rules
+    assert "不构成把它们打包成一单的理由" in rules and "记忆本子里并列的几件旧账同样拆开派" in rules
+    assert "按作废处理" not in rules

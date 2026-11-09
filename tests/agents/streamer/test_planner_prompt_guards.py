@@ -171,3 +171,14 @@ def test_delegate_rules_asks_back_when_request_target_is_unclear() -> None:
     assert "先在游戏聊天里反问确认" in rules
     assert "不按主播自己的库存或状态替对方回答" in rules
     assert "托付有歧义时先反问" not in rules
+
+
+def test_prompt_template_treats_retraction_as_cancellation(prompts: Any) -> None:
+    """有人更正或宣布不用做了：撤对应的单或补进在途单、记一条取代旧行的事实、口头认账——不当闲聊带过。"""
+    prompt = _render_bare(prompts)
+
+    assert "有人更正或宣布不用做了，按作废处理" in prompt
+    assert "被作废的事对应哪一单就撤哪一单" in prompt and "`framework_task_cancel`" in prompt
+    assert "口头认账" in prompt
+    # 社交事实工具未定上线，规则先不点名它
+    assert "streamer_social_fact" not in prompt
