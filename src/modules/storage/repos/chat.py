@@ -793,6 +793,34 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def list_viewers_with_payment_history(self, *, viewer_ids: Sequence[int]) -> List[int]:
+        """查这些观众里哪些在付费三表（礼物/SC/上舰）留过记录。
+
+        判定口径 = 三表任一有该观众的行（不看金额、不看币种）——"这个人付过
+        费"是社交判断的事实底座，银瓜子免费礼物同样说明他与房间有来往。
+        入参为空时返回空表，不查库。
+        """
+
+        def _exec() -> List[int]:
+            ids = sorted({int(v) for v in viewer_ids})
+            if not ids:
+                return []
+            placeholders = ",".join("?" * len(ids))
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    "SELECT viewer_id FROM gifts WHERE viewer_id IN ("  # noqa: S608 占位符由代码拼
+                    + placeholders
+                    + ") UNION SELECT viewer_id FROM super_chats WHERE viewer_id IN ("
+                    + placeholders
+                    + ") UNION SELECT viewer_id FROM guards WHERE viewer_id IN ("
+                    + placeholders
+                    + ")",
+                    ids + ids + ids,
+                ).fetchall()
+                return [int(row["viewer_id"]) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
     async def summarize_viewer_contributions(self, *, viewer_id: int) -> Dict[str, float]:
         """观众贡献汇总：礼物总件数、付费总额（金瓜子，含礼物/SC）与 SC 条数。
 

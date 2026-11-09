@@ -81,6 +81,7 @@ from .message_buffer import MessageBuffer
 from .delegation_workbench import PLANNER_CALL_SOURCE
 from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
 from .planner import Planner, PlannerConfig, PlannerEnv
+from .paid_viewers import PaidViewerLookup
 from .proactive_trigger import ProactiveTrigger
 from .proactive_signals import ProactiveSignals
 from .replyer import Replyer
@@ -361,6 +362,12 @@ class StreamerAgent(BaseAgent):
         self._sessions_repo = sessions_repo
         # 聊天仓储：开播日志统计"上一场播出了几句台词"用（None 时日志省略句数）
         self._chat_repo = chat_repo
+        # 付费史标注器：查本批观众在付费三表有无记录（观众仓储 + 聊天仓储都在才装）
+        self._paid_viewer_lookup = (
+            PaidViewerLookup(viewer_repo=viewer_repo, chat_repo=chat_repo)
+            if viewer_repo is not None and chat_repo is not None
+            else None
+        )
         # 账本两仓储（承诺 + 场次档案）：下播整理写入，常驻简报/线索卡/回想工具读取
         self._commitments_repo = commitments_repo
         self._archive_repo = archive_repo
@@ -421,6 +428,10 @@ class StreamerAgent(BaseAgent):
                 action_recorder=self._record_delegation,
                 delegation_status_provider=self._delegation_machine_status if task_ledger is not None else None,
                 game_now_provider=self._game_now,
+                # 付费史标注：查本批观众在付费三表有无记录，给决策侧的消息行加「（付费观众）」
+                paid_identities_provider=self._paid_viewer_lookup.paid_identities
+                if self._paid_viewer_lookup is not None
+                else None,
             )
             if config.live_frame.enabled:
                 planner_env = dataclasses.replace(

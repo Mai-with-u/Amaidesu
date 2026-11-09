@@ -37,12 +37,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 from functools import partial
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from pydantic import Field
 
 from src.modules.config.schemas.base import BaseConfig
 from src.agents.streamer import canonical
+from src.agents.streamer import paid_viewers
 from src.agents.streamer.delegation_workbench import DelegationWorkbench, observation_data
 from src.agents.streamer.memory.render import (
     render_archive_number,
@@ -250,6 +251,8 @@ class PlannerEnv:
     delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
     # 游戏那边此刻的读数（此刻那一步、游戏那边的判断、她近几分钟的公屏话），按手上的事所在的 Agent 查
     game_now_provider: Optional[Callable[[Sequence[str]], GameNow]] = None
+    # 本批付过费的观众身份键（异步；查付费三表）。None = 不标（查不到付费记录的能力缺席）
+    paid_identities_provider: Optional[Callable[[List[Any]], Awaitable[Set[str]]]] = None
 
 
 def _observation_error(observation: str) -> Optional[str]:
@@ -422,6 +425,9 @@ class Planner:
         self._round_reply_player: Tuple[str, str] = ("", "")
         # 本窗的弹幕（编号, 原文）：她这句的回应目标对得上其中一条时，这句在回那条弹幕，不记成在回应玩家
         self._round_danmaku: Tuple[Tuple[str, str], ...] = ()
+        # 本窗付过费的观众身份键集合：这些观众的弹幕行加「（付费观众）」标注，
+        # 她据此权衡"谁的要求优先满足"（事实基础，见 paid_viewers 模块）
+        self._round_paid_identities: Set[str] = set()
         # 本窗交来的历史：回应目标是更早一窗的观众弹幕时，在这里查得到
         self._round_history: List[Any] = []
         # 本窗由观众弹幕或玩家开口推上来的档案行（线索卡来源里有人提到）
@@ -445,6 +451,7 @@ class Planner:
         self._memory_cues_provider = env.memory_cues_provider if env else None
         self._open_games_provider = env.open_games_provider if env else None
         self._game_now_provider = env.game_now_provider if env else None
+        self._paid_identities_provider = env.paid_identities_provider if env else None
 
         # 本窗合法的点名编号与卡片称呼（每窗在 plan() 入口重算，这里给默认值）
         self._round_memory_ids: Set[int] = set()
@@ -575,6 +582,8 @@ class Planner:
             (str(getattr(msg, "message_id", "") or ""), str(getattr(msg, "content", "") or "")) for msg in batch
         )
         self._round_history = list(history or [])
+        # 本批付过费的观众：查一次（三表只读查询），标注挂在给决策侧的消息行上
+        self._round_paid_identities = await self._collect_paid_identities(batch)
         self._round_memory_bounced = False
         self._round_game_players = resolved_batch.addressed_players
         # 玩家扔来东西常在上一窗入账、这一窗才接话：表达侧拿的是最近几分钟的，不只本窗
@@ -636,7 +645,7 @@ class Planner:
         # 消息序列：[system] + 历史（user/assistant 原生消息）+ 本批（user）+ 参考段（user，序列尾）；
         # ReAct 循环的 assistant/tool 消息 append-only 追加在参考段之后，绝不插中间。
         messages = assemble_request_messages(
-            system_prompt, self._build_dialogue_messages(batch, history), reference_text
+            system_prompt, self._build_dialogue_messages(batch, history, mark_paid=True), reference_text
         )
         # 游戏委派保留当前来源原句，避免把具体物品名称或禁用条件只剩下一层口头概括。
         source_dialogue = [
@@ -1186,6 +1195,8 @@ class Planner:
         self,
         batch: List[Any],
         history: Optional[List[Any]],
+        *,
+        mark_paid: bool = False,
     ) -> List[Dict[str, Any]]:
         """历史 + 本批 → 原生消息序列（user=观众 / assistant=主播）。
 
@@ -1193,13 +1204,31 @@ class Planner:
         剔除——弹幕先落库再进入决策，窗口尾部会与本批重复（按消息 ID 精确
         匹配、原始文本兜底；仅剔尾部连续命中段，更早的同文历史保留为有效
         上下文）。去重在 canonical 化之前做：昵称渲染差异不影响判定。
+
+        ``mark_paid=True`` 时给付过费的观众行加「（付费观众）」标注——只在
+        给决策侧的请求里标（表达侧与委派上下文不需要这个事实）。
         """
-        batch_messages = [canonical.batch_item_to_message(msg) for msg in batch]
+        batch_messages = [
+            canonical.batch_item_to_message(
+                msg, paid=mark_paid and paid_viewers.identity_key(msg) in self._round_paid_identities
+            )
+            for msg in batch
+        ]
         if not history:
             return batch_messages
         # 历史已由时间线控制在预算内（超预算的旧段换成了前情提要），这里原样映射
         history_messages = [canonical.turn_to_message(turn) for turn in canonical.trim_batch_echo(history, batch)]
         return history_messages + batch_messages
+
+    async def _collect_paid_identities(self, batch: List[Any]) -> Set[str]:
+        """查本批付过费的观众身份键集合（查不到或没装依赖时为空集）。"""
+        if not batch or self._paid_identities_provider is None:
+            return set()
+        try:
+            return set(await self._paid_identities_provider(batch))
+        except Exception:
+            self.logger.warning("查本批观众付费记录失败，本批不加付费标注", exc=True)
+            return set()
 
     async def _read_reference_tools(self, round_id: str) -> str:
         """逐个调用配置的只读参考工具（无参数），按工具名列出结果；失败照实写出原因，不中断决策。"""

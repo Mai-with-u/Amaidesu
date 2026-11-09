@@ -34,7 +34,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 from src.modules.storage.models.memory import Viewer, ViewerName
 from src.modules.storage.repos._base import BaseRepo
@@ -296,6 +296,58 @@ class ViewerRepo(BaseRepo):
                     (platform, external_id, external_id),
                 ).fetchone()
                 return int(row["id"]) if row else None
+
+        return await self._run_in_executor(_exec)
+
+    async def find_viewer_id_by_identity(
+        self, *, platform: str, id_kind: IdKind, external_id: str, open_app_id: str = ""
+    ) -> Optional[int]:
+        """按"平台 + ID 种类 + 外部 ID"查观众 ID；只查不建，未命中返回 None。
+
+        与 ``find_viewer_id`` 的差别：按 ID 种类选列查（账号 ID 查 account_id、
+        开放平台 ID 查 open_id），不把两种 ID 混着比——混着比会把同平台下
+        恰好同串的账号 ID 与开放平台 ID 认成同一人。
+        """
+        found = await self.find_viewer_ids_by_identity(
+            platform=platform, id_kind=id_kind, external_ids=[external_id], open_app_id=open_app_id
+        )
+        return found.get(external_id)
+
+    async def find_viewer_ids_by_identity(
+        self, *, platform: str, id_kind: IdKind, external_ids: Sequence[str], open_app_id: str = ""
+    ) -> Dict[str, int]:
+        """批量按"平台 + ID 种类 + 外部 ID"查观众 ID；只查不建，未命中的不出现在结果里。
+
+        一次查询覆盖整批弹幕（每条消息一次查询会拖慢决策窗），账号 ID 查
+        account_id、开放平台 ID 查 open_id——两种 ID 不混着比。
+        """
+        ids = [str(x) for x in external_ids if str(x)]
+        if not ids:
+            return {}
+
+        def _exec() -> Dict[str, int]:
+            placeholders = ",".join("?" * len(ids))
+            with self._manager.transaction() as conn:
+                if id_kind == "account":
+                    rows = conn.execute(
+                        "SELECT account_id AS external_id, id FROM viewers"  # noqa: S608 占位符由代码拼
+                        f" WHERE platform=? AND account_id IN ({placeholders})",
+                        (platform, *ids),
+                    ).fetchall()
+                else:
+                    # 存量迁移来的行不知道应用（应用 ID 为空）也算命中
+                    rows = conn.execute(
+                        "SELECT open_id AS external_id, id FROM viewers"  # noqa: S608 占位符由代码拼
+                        f" WHERE platform=? AND open_id IN ({placeholders})"
+                        " AND (open_app_id=? OR open_app_id='') ORDER BY (open_app_id=?) DESC",
+                        (platform, *ids, open_app_id, open_app_id),
+                    ).fetchall()
+                found: Dict[str, int] = {}
+                for row in rows:
+                    external_id = str(row["external_id"])
+                    # 同串命中多行时取最先命中的（开放平台 ID 的应用优先级已由排序保证）
+                    found.setdefault(external_id, int(row["id"]))
+                return found
 
         return await self._run_in_executor(_exec)
 

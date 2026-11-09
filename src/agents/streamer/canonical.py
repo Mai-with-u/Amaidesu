@@ -19,6 +19,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
+from src.agents.streamer.paid_viewers import PAID_VIEWER_NOTE
 
 __all__ = [
     "ROLE_LABELS",
@@ -130,16 +131,23 @@ def turn_to_message(turn: Any) -> Dict[str, str]:
     }
 
 
-def batch_item_to_message(msg: Any) -> Dict[str, str]:
-    """弹幕批成员（RoomMessagePayload 鸭子类型）→ 消息 dict（与历史同形）。"""
+def batch_item_to_message(msg: Any, *, paid: bool = False) -> Dict[str, str]:
+    """弹幕批成员（RoomMessagePayload 鸭子类型）→ 消息 dict（与历史同形）。
+
+    ``paid=True`` 时在昵称后附「（付费观众）」标注——这位观众付过费，决策时
+    值得优先满足他的要求（判据见 ``paid_viewers`` 模块）。
+    """
     user = getattr(msg, "user", None)
     nickname = (getattr(user, "name", None) or getattr(user, "id", None)) if user is not None else None
     text = getattr(msg, "content", None) or str(msg)
+    display = _as_str(nickname) or "观众"
+    if paid:
+        display = f"{display}{PAID_VIEWER_NOTE}"
     return {
         "role": "user",
         "content": canonical_content(
             role="user",
-            nickname=_as_str(nickname) or "观众",
+            nickname=display,
             text=text if isinstance(text, str) else str(text),
             message_type=getattr(msg, "message_type", "danmaku") or "danmaku",
             message_id=_as_str(getattr(msg, "message_id", None)),
