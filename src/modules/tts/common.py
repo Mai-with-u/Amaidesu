@@ -1,7 +1,7 @@
 """TTS 引擎共享函数模块
 
-四个 TTS 引擎（Edge / GPTSoVITS / Omni / Voicebox）在播放时长计算与
-utterance 生命周期事件发布上存在重复逻辑，本模块集中收纳。
+各 TTS 引擎在播放时长计算与 utterance 生命周期事件发布上存在重复逻辑，
+本模块集中收纳。
 
 提供的能力：
 
@@ -243,7 +243,7 @@ def build_stats_dict(
 ) -> Dict[str, Any]:
     """构造统一的 Provider 状态统计 dict。
 
-    四个 TTS Provider 的 ``get_stats()`` 输出字段名一致，便于上层做横向聚合。
+    各 TTS Provider 的 ``get_stats()`` 输出字段名一致，便于上层做横向聚合。
     OmniTTS 多一个 ``buffer_size`` 字段，通过 ``extra`` 注入即可。
 
     Args:
@@ -290,7 +290,7 @@ async def emit_utterance_started(
         utterance_id: 一次发声实例的唯一 ID（None 时静默跳过）。
         speech_text: 本次发声的展示文本（规范化前原文，字幕等消费方按此
             展示；与送合成的规范化文本可不同）。
-        engine: TTS 引擎标识（"edge" / "gptsovits" / "omni" / "voicebox"）。
+        engine: TTS 引擎标识（引擎的 ``PROVIDER_NAME``）。
         duration_ms: 预计播放时长（毫秒）；全量引擎为合成后精确值；流式
             引擎合成未完时为 None。
     """

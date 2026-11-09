@@ -6,9 +6,9 @@
 
 - 装配入口 `build_tts_infrastructure`（`src/modules/tts/assembly.py`）：读 `infra.toml` 的 `[tts]` 段，按 `provider` 单选构造引擎实例注入 StreamerAgent。未知的引擎名记错误并回退 `edge_tts`；构造失败降级为无 TTS（发言照常生成、只不上声，字幕择流随之切换）。
 - 引擎契约 `TTSProvider`（`protocol.py`）：唯一业务入口是 `handle_speech(text, utterance_id)`——合成并播放，失败发布 `tts.utterance.failed`；首次调用前引擎自治完成 `setup()`（幂等），装配层不显式调它。
-- 每引擎一个包（`backends/edge|gptsovits|voicebox|omni|minimax/`）。新增引擎 = 加包 + 工厂名单登记 + 配置 schema 引用，框架零改动。
+- 每引擎一个包（`backends/edge|gptsovits|voicebox|omni|minimax|openai/`）。新增引擎 = 加包 + 工厂名单登记 + 配置 schema 引用，框架零改动。
 
-## 五引擎
+## 六引擎
 
 | 引擎 | 形态 | 连接目标 | 流式 | 预热 |
 |------|------|---------|------|------|
@@ -17,8 +17,11 @@
 | voicebox | 本地 HTTP 服务，音色 = `profile_id` 克隆 | 默认端口 17493 | SSE 轮询 | 无 |
 | omni_tts | 全模态大模型（经 LLM profile 调音频端点） | model.toml 档位指向的端点 | 否（全量收齐后播放） | 无 |
 | minimax_tts | MiniMax 云端合成（T2A 接口，密钥段内自持） | `base_url`（默认国内站，国际站账号改官方域名同路径） | 是（SSE 分块 hex 音频，`bytes.fromhex` 解码即裸 PCM） | 无（云服务无冷启动惩罚） |
+| openai_tts | OpenAI 官方语音合成（`/v1/audio/speech`，密钥段内自持） | `base_url`（默认官方端点，可整体替换为兼容网关） | 是（响应体即裸 PCM 24kHz 字节流，`np.frombuffer` 直接得样本） | 无（云服务无冷启动惩罚） |
 
-> omni_tts 尚未经过实战调通验证；直播实战常用的是 edge_tts 与 gptsovits。minimax_tts 已过真机冒烟（密钥真实合成：流式 5 块、首块延迟约 0.5s），直播实战待用。
+> omni_tts 尚未经过实战调通验证；直播实战常用的是 edge_tts 与 gptsovits。minimax_tts 已过真机冒烟（密钥真实合成：流式 5 块、首块延迟约 0.5s），直播实战待用。openai_tts 与 omni_tts 同属"云端语音模型"但走不同端点：omni_tts 经 LLM 的 chat 模态音频输出（复用 model.toml 的 profile 与密钥），openai_tts 走专用 speech 端点，模型 / 音色 / 风格提示都是该端点自己的词表。openai_tts 的验证到"链路级"为止：用本地 aiohttp 服务冒充 speech 端点，跑通了真实 HTTP 请求、chunked 流式读取、样本拼接、事件派发全链路（`tests/modules/tts/test_openai_client_http.py`），但仍未拿真实密钥对 api.openai.com 冒烟，音色听感与真实首块延迟未验证。
+>
+> 该端点自身有生命周期风险：OpenAI 已把 tts-1 / tts-1-hd / gpt-4o-mini-tts 系列标记为弃用并于 2027-01-06 关停，官方引导新集成改走 Realtime API（不支持 `/v1/audio/speech`）。关停前本引擎照常可用，届时需要换端点或换引擎。
 
 GSV 的服务部署、参考音频与多音字维护见 [GPT-SoVITS 语音服务部署](../guides/gptsovits.md)。
 
@@ -41,7 +44,7 @@ Replyer 产出 speech
 
 ## 配置面
 
-`infra.toml` 的 `[tts]`：`enabled` 总开关、`provider` 单选、队列与超时参数、`wait_playback`，以及五个引擎同名子段（gptsovits 的合成调参、omni 的 `llm_profile` 与必填 `voice`、minimax 的 `api_key`/`group_id`/`voice_id` 等）。键全集以 `core_schemas.py` 的 TTS schema 为准。
+`infra.toml` 的 `[tts]`：`enabled` 总开关、`provider` 单选、队列与超时参数、`wait_playback`，以及六个引擎同名子段（gptsovits 的合成调参、omni 的 `llm_profile` 与必填 `voice`、minimax 的 `api_key`/`group_id`/`voice_id`、openai 的 `api_key`/`model`/`voice`/`instructions` 等）。键全集以 `core_schemas.py` 的 TTS schema 为准。
 
 ## 相关决策
 

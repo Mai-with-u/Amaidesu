@@ -1,7 +1,8 @@
 """TTS 基础设施模块
 
-四个 TTS 引擎 Provider（Edge TTS / GPT-SoVITS / Omni TTS / Voicebox）构成
-配置驱动的语音合成基础设施。其调用方为 ``src.agents.streamer.utterance_queue``
+配置驱动的语音合成基础设施：每个引擎一个 Provider（Edge TTS / GPT-SoVITS /
+Voicebox / Omni TTS / MiniMax / OpenAI），引擎名单的唯一事实源是
+``assembly.py`` 的装配表键集。其调用方为 ``src.agents.streamer.utterance_queue``
 （位于 StreamerAgent 包内），由编排层在配置开启时确定性调用（不经 Agent
 工具调用路径）；装配入口 ``build_tts_infrastructure`` 由本模块对外暴露。
 
@@ -33,7 +34,9 @@ from .common import (
 )
 from .backends.edge.provider import EdgeTTSProvider, create_edge_tts_provider
 from .backends.gptsovits.provider import GPTSoVITSProvider, create_gptsovits_provider
+from .backends.minimax.provider import MiniMaxTTSProvider, create_minimax_tts_provider
 from .backends.omni.provider import OmniTTSProvider, create_omni_tts_provider
+from .backends.openai.provider import OpenAITTSProvider, create_openai_tts_provider
 from .protocol import TTSProvider, TtsObservation
 from .backends.voicebox.provider import VoiceboxProvider, create_voicebox_provider
 from .wav_decoder import decode_wav_chunk, extract_pcm_from_wav
@@ -42,14 +45,18 @@ __all__ = [
     # Provider 类
     "EdgeTTSProvider",
     "GPTSoVITSProvider",
+    "MiniMaxTTSProvider",
     "OmniTTSProvider",
+    "OpenAITTSProvider",
     "VoiceboxProvider",
     "TTSProvider",
     "TtsObservation",
     # 工厂函数
     "create_edge_tts_provider",
     "create_gptsovits_provider",
+    "create_minimax_tts_provider",
     "create_omni_tts_provider",
+    "create_openai_tts_provider",
     "create_voicebox_provider",
     # 装配入口
     "build_tts_infrastructure",

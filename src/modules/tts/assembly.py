@@ -18,7 +18,8 @@
   到 ``edge_tts``（装配兜底）
 - **已知 provider**——``edge_tts`` / ``gptsovits`` / ``voicebox`` /
   ``omni_tts``（全模态大模型语音合成，OpenAI 兼容线协议）/
-  ``minimax_tts``（MiniMax 云端语音合成，T2A 接口流式形态）；其余名字一律
+  ``minimax_tts``（MiniMax 云端语音合成，T2A 接口流式形态）/
+  ``openai_tts``（OpenAI 语音合成，``/v1/audio/speech`` 端点）；其余名字一律
   视作未知
 """
 
@@ -32,6 +33,7 @@ from .backends.edge.provider import create_edge_tts_provider
 from .backends.gptsovits.provider import create_gptsovits_provider
 from .backends.minimax.provider import create_minimax_tts_provider
 from .backends.omni.provider import create_omni_tts_provider
+from .backends.openai.provider import create_openai_tts_provider
 from .protocol import TTSProvider
 from .backends.voicebox.provider import create_voicebox_provider
 
@@ -94,6 +96,16 @@ def _assemble_minimax_tts(
     return create_minimax_tts_provider(config, event_bus=event_bus, audio_sink=audio_sink)
 
 
+def _assemble_openai_tts(
+    config: Dict[str, Any],
+    event_bus: Optional["EventBus"],
+    audio_sink: Optional[Any],
+    llm_service: Optional[Any],
+) -> TTSProvider:
+    """openai_tts 装配行：不消费 LLM 服务（密钥段内自持）。"""
+    return create_openai_tts_provider(config, event_bus=event_bus, audio_sink=audio_sink)
+
+
 # provider 名 → 装配适配行（见上方 _assemble_*）；本映射只是注册关系。
 _PROVIDER_FACTORIES = {
     "edge_tts": _assemble_edge_tts,
@@ -101,6 +113,7 @@ _PROVIDER_FACTORIES = {
     "voicebox": _assemble_voicebox,
     "omni_tts": _assemble_omni_tts,
     "minimax_tts": _assemble_minimax_tts,
+    "openai_tts": _assemble_openai_tts,
 }
 
 # TTS 引擎名单的唯一事实源 = 装配表键集：schema 的候选选项（读侧注入）与
@@ -116,6 +129,7 @@ _PROVIDER_DESCRIPTIONS = {
     "voicebox": "Voicebox TTS",
     "omni_tts": "全模态大模型语音合成（OpenAI 兼容）",
     "minimax_tts": "MiniMax 云端语音合成（流式）",
+    "openai_tts": "OpenAI 语音合成（speech 端点，流式）",
 }
 
 

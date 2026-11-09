@@ -475,6 +475,48 @@ class MiniMaxTTSParams(BaseConfig):
     )
 
 
+class OpenAITTSParams(BaseConfig):
+    """OpenAI 语音合成引擎参数（``[tts.openai_tts]`` 段；``/v1/audio/speech`` 端点）"""
+
+    base_url: str = Field(
+        default="https://api.openai.com/v1/audio/speech",
+        title="接口地址",
+        description="语音合成端点完整地址（默认 OpenAI 官方端点；指向兼容代理或自建网关时整体替换）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    api_key: str = Field(
+        default="",
+        title="API 密钥",
+        description="OpenAI API 密钥（本引擎独立持有，与 LLM 提供商密钥互不相干；留空合成会报错提示）",
+    )
+    model: str = Field(
+        default="gpt-4o-mini-tts",
+        title="合成模型",
+        description="合成模型（gpt-4o-mini-tts 支持 instructions 风格提示；"
+        "tts-1 / tts-1-hd 音质档不同且忽略 instructions）",
+    )
+    voice: str = Field(
+        default="alloy",
+        title="音色",
+        description="内置音色名（alloy/ash/ballad/coral/echo/fable/onyx/nova/sage/shimmer/verse/marin/cedar；"
+        "可用集合随模型而变）",
+    )
+    instructions: str = Field(
+        default="",
+        title="风格提示",
+        description="语气与表达方式提示（语速、情绪、口音等；仅 gpt-4o-mini-tts 生效，tts-1 系列忽略；留空不携带）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    speed: float = Field(
+        default=1.0,
+        ge=0.25,
+        le=4.0,
+        title="语速",
+        description="语速（0.25~4，1 为原速）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+
+
 class TTSConfig(BaseConfig):
     """TTS 基础设施配置（``[tts]`` 段）
 
@@ -492,6 +534,8 @@ class TTSConfig(BaseConfig):
             语音 profile 调用带语音输出模态的模型；仅 provider=omni_tts 时生效）。
         minimax_tts: MiniMax 语音合成引擎参数（T2A 接口流式形态，密钥段内自持；
             仅 provider=minimax_tts 时生效）。
+        openai_tts: OpenAI 语音合成引擎参数（``/v1/audio/speech`` 端点，密钥段内
+            自持；仅 provider=openai_tts 时生效）。
     """
 
     enabled: bool = Field(
@@ -561,6 +605,11 @@ class TTSConfig(BaseConfig):
         default_factory=MiniMaxTTSParams,
         title="MiniMax TTS 参数",
         description="MiniMax 语音合成引擎参数（T2A 接口流式形态；仅 provider=minimax_tts 时生效）",
+    )
+    openai_tts: OpenAITTSParams = Field(
+        default_factory=OpenAITTSParams,
+        title="OpenAI TTS 参数",
+        description="OpenAI 语音合成引擎参数（/v1/audio/speech 端点；仅 provider=openai_tts 时生效）",
     )
 
 

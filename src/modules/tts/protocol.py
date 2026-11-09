@@ -1,8 +1,9 @@
 """TTS 引擎 Provider 协议（结构类型契约）
 
-四个 TTS 引擎 Provider（``EdgeTTSProvider`` / ``GPTSoVITSProvider`` /
-``VoiceboxProvider`` / ``OmniTTSProvider``）由装配层单选构造，注入
-``StreamerAgent`` 后由编排队列持有并直接调用其 ``handle_speech``。本
+各 TTS 引擎 Provider（``EdgeTTSProvider`` / ``GPTSoVITSProvider`` /
+``VoiceboxProvider`` / ``OmniTTSProvider`` / ``MiniMaxTTSProvider`` /
+``OpenAITTSProvider``，完整名单见 ``assembly.py`` 装配表）由装配层单选构造，
+注入 ``StreamerAgent`` 后由编排队列持有并直接调用其 ``handle_speech``。本
 ``Protocol`` 把这条 duck-typed 契约显式化（structural typing，**非
 ABC**），用于：
 
@@ -124,7 +125,7 @@ class TtsObservation(Protocol):
 
     回答"TTS 引擎怎么报告健康"——dashboard 等只读消费方只需引擎暴露
     ``get_stats()`` 统计摘要，不需要也不应该拿到 ``handle_speech`` 这
-    样的合成入口。四个引擎 Provider 均天然满足本协议（``TTSProvider``
+    样的合成入口。全部引擎 Provider 均天然满足本协议（``TTSProvider``
     的成员集是它的超集），装配缺席时消费方拿到 ``None`` 自行降级。
 
     与 ``TTSProvider`` 的分工：``TTSProvider`` 是装配边界的完整执行
