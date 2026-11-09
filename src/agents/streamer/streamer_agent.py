@@ -96,6 +96,7 @@ from .stats import StreamerStats
 from .timeline import StreamerTimeline
 from .trigger_cause import TriggerCause, TriggerKind, TriggerSource, cause_for_batch_flush
 from .tools.reply_tool import ReplyToolProvider
+from .tools.social_fact import SocialFactToolProvider, build_social_fact_tool_spec
 from .command.router import CommandRouter
 from .config import StreamerConfig
 from .event_log_reader import EventLogFileReader
@@ -223,6 +224,7 @@ class StreamerAgent(BaseAgent):
         memory_index_repo: Optional[Any] = None,
         memory_cue_log_repo: Optional[Any] = None,
         game_player_repo: Optional[Any] = None,
+        social_fact_repo: Optional[Any] = None,
         embedding_setup: Optional[EmbeddingSetup] = None,
         event_repo: Optional[Any] = None,
         privacy_service: Optional[Any] = None,
@@ -269,6 +271,8 @@ class StreamerAgent(BaseAgent):
             game_player_repo: 可选 ``GamePlayerRepo``（游戏里的人）——玩家在游戏里开口或冲她做动作时，
                 推一张"这位是谁、和你有过什么"的玩家卡；下播整理按它核对对玩家的承诺。缺失时没有玩家卡，
                 对玩家的承诺也认不出。
+            social_fact_repo: 可选 ``SocialFactRepo``（游戏社交事实）——注入时注册 ``streamer_social_fact``
+                工具、参考段常驻【游戏社交事实】、回想工具多查这一类；缺失时三处都没有。
             memory_cue_log_repo: 可选 ``MemoryCueLogRepo``（线索卡记录）——被动想起每推一张卡记一行，
                 复盘面板读；None 时只记日志
             event_repo: 可选 ``EventRepo``（游戏事件）——场次回顾的游戏进展原料；
@@ -370,6 +374,8 @@ class StreamerAgent(BaseAgent):
         # 账本两仓储（承诺 + 场次档案）：下播整理写入，常驻简报/线索卡/回想工具读取
         self._commitments_repo = commitments_repo
         self._archive_repo = archive_repo
+        # 游戏社交事实：场内工具登记、参考段每批现读、回想工具查（None 时三处都关）
+        self._social_fact_repo = social_fact_repo
         self._event_repo = event_repo
         # 隐私服务：线索推送要按配置的短语表判定"忘了我"与撤回（缺失时不出回执行）
         self._privacy_service = privacy_service
@@ -431,6 +437,8 @@ class StreamerAgent(BaseAgent):
                 paid_identities_provider=self._paid_viewer_lookup.paid_identities
                 if self._paid_viewer_lookup is not None
                 else None,
+                # 游戏社交事实：每批从库现读，参考段常驻【游戏社交事实】
+                social_facts_provider=self._load_social_facts if social_fact_repo is not None else None,
             )
             if config.live_frame.enabled:
                 planner_env = dataclasses.replace(
@@ -608,6 +616,7 @@ class StreamerAgent(BaseAgent):
                 event_repo=event_repo,
                 saves_provider=lambda: self._current_saves,
                 search=self._memory_search,
+                social_fact_repo=social_fact_repo,
             )
         # 后台 flush 循环（Agent 主循环）
         self._flush_task: Optional[asyncio.Task] = None
@@ -921,13 +930,15 @@ class StreamerAgent(BaseAgent):
         ``_on_start → _register_tools`` 才实例化；此时回退到工厂函数构造
         spec（同一套定义，无事实源漂移）。
         """
+        # 社交事实工具只在仓储注入时注册，声明口径同注册口径
+        extra = [build_social_fact_tool_spec()] if self._social_fact_repo is not None else []
         if self._reply_provider is not None:
-            return list(self._reply_provider.list_tools())
+            return [*self._reply_provider.list_tools(), *extra]
 
         # 预启动窗口：Provider 尚未构造（Agent 已 register 但未 start）
         from .tools.reply_tool import build_reply_tool_spec
 
-        return [build_reply_tool_spec()]
+        return [build_reply_tool_spec(), *extra]
 
     def _register_tools(self) -> None:
         """构造 reply Provider；reply / rundown_control / memory_* 注册进 ToolRegistry。
@@ -942,6 +953,8 @@ class StreamerAgent(BaseAgent):
         - ``memory_recall``：回想工具（provider="memory"，名单 ``["streamer"]``），
           台词/承诺/档案三个仓储都注入时才注册；没注册时工具面里没有它，
           提示词里关于回想工具的条款照常渲染。
+        - ``streamer_social_fact``：登记游戏社交事实（provider="streamer"，名单 ``["streamer"]``），
+          社交事实仓储注入时才注册；没注册时 Planner 的工具列表里没有它。
         """
 
         # reply tool（构造注入的替身复用不重建；缺省时构造——注册与 Planner 侧引用共用同一实例）
@@ -973,6 +986,17 @@ class StreamerAgent(BaseAgent):
                     registry=self._tool_registry,
                 )
                 registered += " / memory_recall"
+            if self._social_fact_repo is not None:
+                self.register_tool_provider(
+                    SocialFactToolProvider(
+                        repo=self._social_fact_repo,
+                        session_provider=self._current_session_pk,
+                        game_scope_provider=self._social_game_scope,
+                        on_written=self._wake_memory_indexer,
+                    ),
+                    registry=self._tool_registry,
+                )
+                registered += " / streamer_social_fact"
             self._logger.info(f"StreamerAgent 工具已注册：{registered}（名单 [streamer]）")
 
     # ==================================================================
@@ -1678,6 +1702,30 @@ class StreamerAgent(BaseAgent):
             if now - last_ms <= _GAME_ACTIVE_WINDOW_MS:
                 playing.add(game)
         return sorted(playing)
+
+    def _social_game_scope(self) -> Tuple[str, str, str]:
+        """弹幕作证的社交事实挂在哪：眼下在玩的第一个游戏与它的存档（没在玩游戏时游戏为空串）。"""
+        games = self._playing_games()
+        if not games:
+            return "", "", ""
+        save = self._current_saves.get(games[0])
+        return games[0], save.id if save is not None else "", save.name if save is not None else ""
+
+    async def _load_social_facts(self) -> List[Any]:
+        """参考段用的现行社交事实：眼下在玩的每个游戏，按它当前存档取（存档不明时取整个游戏）。"""
+        if self._social_fact_repo is None:
+            return []
+        facts: List[Any] = []
+        for game in self._playing_games():
+            save = self._current_saves.get(game)
+            save_id = save.id if save is not None and save.known else None
+            facts.extend(await self._social_fact_repo.list_active_facts(game=game, save_id=save_id))
+        return facts
+
+    async def _wake_memory_indexer(self) -> None:
+        """社交事实写成后叫醒索引任务补一轮（回想马上查得到）；没装索引时什么都不做。"""
+        if self._memory_indexer is not None:
+            self._memory_indexer.request_run()
 
     def _sync_current_saves(self) -> None:
         """从游戏工具面拉一次各游戏眼下所在的存档（只读，不触发游戏里的任何动作）。

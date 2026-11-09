@@ -64,7 +64,7 @@ def instantiate_agent(
     - streamer：thinking_sink / speech_config / tts_engine / subtitle_service /
       session_manager / rundown_repo / rundown_instance_repo /
       rundown_transition_repo / chat_repo / sessions_repo / topic_repo /
-      viewer_repo / commitments_repo / archive_repo / memory_index_repo /
+      viewer_repo / commitments_repo / archive_repo / social_fact_repo / memory_index_repo /
       embedding_setup / memory_cue_log_repo / event_repo /
       context_assembler_config / task_ledger（委派渲染的机器状态查询源）。
       仓储为 None 时对应能力降级（chat_repo 缺失 = 对话历史读取整体短路，
@@ -120,6 +120,7 @@ def instantiate_agent(
             embedding_setup=deps.embedding_setup,
             memory_cue_log_repo=deps.memory_cue_log_repo,
             game_player_repo=deps.game_player_repo,
+            social_fact_repo=deps.social_fact_repo,
             event_repo=deps.event_repo,
             privacy_service=deps.privacy_service,
             stream_ledger=deps.storage_ledger,

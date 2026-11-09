@@ -235,6 +235,8 @@ def list_expected_tables() -> List[str]:
         "memory_fts_commitment",
         "memory_fts_speech",
         "memory_fts_event",
+        "memory_vectors_social_fact",
+        "memory_fts_social_fact",
         "memory_cue_log",
         "memory_edits",
         "viewer_candidates",
@@ -958,6 +960,8 @@ CREATE INDEX IF NOT EXISTS idx_viewer_player_links_player ON viewer_player_links
 # 取代它的新行号——事实过时用取代表达，不物理删除。
 # human_locked = 1 表示运营者改过这一行：之后的整理与工具都不得改它或取代它，只能删。
 # save_id 是这个存档（Mod world.id）的编号，空串 = 该游戏不分环境、整游戏一本；save_name 是显示名。
+# 回想索引的第五类来源（memory_vectors_social_fact / memory_fts_social_fact）跟在本表后面建：外键与触发器要引用它；
+# 只收现行行，被取代的行由检索时的条件挡掉。
 
 _GAME_SOCIAL_FACTS_SQL = """
 CREATE TABLE IF NOT EXISTS game_social_facts (
@@ -980,6 +984,21 @@ CREATE TABLE IF NOT EXISTS game_social_facts (
 );
 CREATE INDEX IF NOT EXISTS idx_game_social_facts_scope ON game_social_facts(game, save_id, status);
 CREATE INDEX IF NOT EXISTS idx_game_social_facts_status ON game_social_facts(status);
+CREATE TABLE IF NOT EXISTS memory_vectors_social_fact (
+    social_fact_id  INTEGER PRIMARY KEY REFERENCES game_social_facts(id) ON DELETE CASCADE,
+    model           TEXT NOT NULL,
+    dim             INTEGER NOT NULL,
+    text_hash       TEXT NOT NULL,
+    vector          BLOB NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts_social_fact USING fts5(tokens);
+CREATE TRIGGER IF NOT EXISTS trg_memory_index_social_fact_deleted AFTER DELETE ON game_social_facts BEGIN
+    DELETE FROM memory_fts_social_fact WHERE rowid = OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_memory_index_social_fact_edited AFTER UPDATE OF text, quote ON game_social_facts BEGIN
+    DELETE FROM memory_fts_social_fact WHERE rowid = OLD.id;
+    DELETE FROM memory_vectors_social_fact WHERE social_fact_id = OLD.id;
+END;
 """.strip()
 
 

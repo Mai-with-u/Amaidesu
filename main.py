@@ -612,6 +612,8 @@ async def create_app_components(
             memory_cue_log_repo=database.memory_cue_log,
             # 游戏里的人：玩家在游戏里开口或冲她做动作时推他的玩家卡
             game_player_repo=database.game_players,
+            # 游戏社交事实：主播场内登记、参考段常驻、下播整理归纳
+            social_fact_repo=database.social_facts,
             event_repo=database.events,
             # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
             privacy_service=privacy_service,

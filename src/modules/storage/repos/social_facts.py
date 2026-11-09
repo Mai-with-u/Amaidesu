@@ -30,6 +30,7 @@ from typing import Dict, List, Optional, Sequence
 from src.modules.storage.models.social_facts import (
     QUOTE_OPTIONAL_KINDS,
     SOCIAL_FACT_KINDS,
+    EvidenceHit,
     NewSocialFact,
     SocialFact,
 )
@@ -172,6 +173,62 @@ class SocialFactRepo(BaseRepo):
                     params,
                 ).fetchall()
                 return [SocialFact.model_validate(dict(row)) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def find_evidence(self, *, live_session_id: int, message_id: str) -> List[EvidenceHit]:
+        """按"本场 + 消息号"找依据行：只在弹幕观众行与公屏非她本人的行里找（她自己的话不能给自己作证）。
+
+        返回全部命中（调用方按"恰好一行"判定）；公屏占位行（认不出是谁、没存原话）也在结果里，原文为空串。
+        """
+        mid = (message_id or "").strip()
+        if not mid:
+            return []
+
+        def _exec() -> List[EvidenceHit]:
+            with self._manager.transaction() as conn:
+                chats = conn.execute(
+                    "SELECT id, content FROM live_chat WHERE live_session_id=? AND message_id=? AND sender_role='viewer'",
+                    (int(live_session_id), mid),
+                ).fetchall()
+                games = conn.execute(
+                    "SELECT id, content, game, save_id, save_name FROM game_chat"
+                    " WHERE live_session_id=? AND message_id=? AND direction IN ('player', 'other')",
+                    (int(live_session_id), mid),
+                ).fetchall()
+            hits = [
+                EvidenceHit(source="chat", row_id=int(row["id"]), content=str(row["content"] or "")) for row in chats
+            ]
+            hits.extend(
+                EvidenceHit(
+                    source="game_chat",
+                    row_id=int(row["id"]),
+                    content=str(row["content"] or ""),
+                    game=str(row["game"] or ""),
+                    save_id=str(row["save_id"] or ""),
+                    save_name=str(row["save_name"] or ""),
+                )
+                for row in games
+            )
+            return hits
+
+        return await self._run_in_executor(_exec)
+
+    async def list_facts_by_ids(self, *, fact_ids: Sequence[int]) -> List[SocialFact]:
+        """按主键取多行（回想工具把检索结果还原成行用），按给定先后；不存在的跳过。"""
+        ids = [int(item) for item in dict.fromkeys(fact_ids)]
+        if not ids:
+            return []
+
+        def _exec() -> List[SocialFact]:
+            placeholders = ",".join("?" for _ in ids)
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    f"SELECT {_SOCIAL_FACT_COLUMNS} FROM game_social_facts WHERE id IN ({placeholders})",  # noqa: S608
+                    ids,
+                ).fetchall()
+            by_id = {int(row["id"]): SocialFact.model_validate(dict(row)) for row in rows}
+            return [by_id[item] for item in ids if item in by_id]
 
         return await self._run_in_executor(_exec)
 

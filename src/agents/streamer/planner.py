@@ -65,6 +65,7 @@ from src.agents.streamer.planner_render import (
     render_recent_intents,
     render_recent_relays,
     render_silence,
+    render_social_facts,
     reply_last,
     step_extra_messages,
     tool_call_parts,
@@ -253,6 +254,8 @@ class PlannerEnv:
     game_now_provider: Optional[Callable[[Sequence[str]], GameNow]] = None
     # 本批付过费的观众身份键（异步；查付费三表）。None = 不标（查不到付费记录的能力缺席）
     paid_identities_provider: Optional[Callable[[List[Any]], Awaitable[Set[str]]]] = None
+    # 现行游戏社交事实（异步，每批从库现读）。None = 能力缺席，参考段缺【游戏社交事实】
+    social_facts_provider: Optional[Callable[[], Awaitable[List[Any]]]] = None
 
 
 def _observation_error(observation: str) -> Optional[str]:
@@ -430,6 +433,8 @@ class Planner:
         self._round_paid_identities: Set[str] = set()
         # 本窗交来的历史：回应目标是更早一窗的观众弹幕时，在这里查得到
         self._round_history: List[Any] = []
+        # 本批的现行游戏社交事实（每批从库现读，参考段【游戏社交事实】渲染用）
+        self._round_social_facts: List[Any] = []
         # 本窗由观众弹幕或玩家开口推上来的档案行（线索卡来源里有人提到）
         self._round_asked_archive_ids: Set[int] = set()
         # 本窗是否已因点名提过的旧事退回过一次：每窗只退一次，第二次照常说（点名留着，照样记成提过）
@@ -441,6 +446,7 @@ class Planner:
         self._recent_player_notes: Tuple[PlayerNote, ...] = ()
         # 本场备忘录全文查询（经环境注入；空串 = 还没写过，段整段省略）
         self._brief_provider = env.brief_provider if env else None
+        self._social_facts_provider = env.social_facts_provider if env else None
         self._brief_ids_provider = env.brief_ids_provider if env else None
         self._commitment_lookup = env.commitment_lookup if env else None
         self._brief_archive_ids_provider = env.brief_archive_ids_provider if env else None
@@ -582,6 +588,8 @@ class Planner:
         self._round_history = list(history or [])
         # 本批付过费的观众：查一次（三表只读查询），标注挂在给决策侧的消息行上
         self._round_paid_identities = await self._collect_paid_identities(batch)
+        # 本批的现行社交事实从库现读（场内登记下一轮可见；读失败只少一段参考，不挡决策）
+        self._round_social_facts = await self._load_social_facts()
         self._round_memory_bounced = False
         self._round_game_players = resolved_batch.addressed_players
         # 玩家扔来东西常在上一窗入账、这一窗才接话：表达侧拿的是最近几分钟的，不只本窗
@@ -1090,6 +1098,11 @@ class Planner:
             # 状态跃迁事实块：只收本轮新入账批次里的死亡/重生/任务开始结束/交付类条目，
             # 供客观核对——叙事讲经历，这里只列可核对的状态
             lines.append(f"【当前状态（客观事实）】\n{state_facts}")
+        social_facts_text = render_social_facts(self._round_social_facts, current_ms, age_text)
+        if social_facts_text:
+            # 游戏社交事实：环境里人与人怎么相处的现行事实（登记下一轮可见）；
+            # 游戏里接话、安排给谁做什么时照这里的现状说
+            lines.append(social_facts_text)
         # 排队镜像先对账：账本显示已送达的挪进手头的事、已了结的移出，【委派队列】不再列旧账
         self.workbench.settle_queue()
         work = render_delegations(self.workbench.delegations, self.workbench.delegation_status_provider, current_ms)
@@ -1223,6 +1236,16 @@ class Planner:
         # 历史已由时间线控制在预算内（超预算的旧段换成了前情提要），这里原样映射
         history_messages = [canonical.turn_to_message(turn) for turn in canonical.trim_batch_echo(history, batch)]
         return history_messages + batch_messages
+
+    async def _load_social_facts(self) -> List[Any]:
+        """现行游戏社交事实（每批从库现读）；没接仓储或读失败时为空列表。"""
+        if self._social_facts_provider is None:
+            return []
+        try:
+            return list(await self._social_facts_provider())
+        except Exception as exc:  # noqa: BLE001 - 读不到只少这一段参考，不挡决策
+            self.logger.warning(f"读游戏社交事实失败（本批省略该段）: {exc}", exc=True)
+            return []
 
     async def _collect_paid_identities(self, batch: List[Any]) -> Set[str]:
         """查本批付过费的观众身份键集合（查不到或没装依赖时为空集）。"""

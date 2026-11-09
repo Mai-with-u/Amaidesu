@@ -31,6 +31,7 @@ _SOURCE_LABELS: Dict[IndexSource, str] = {
     "commitment": "承诺",
     "speech": "台词",
     "event": "游戏事件",
+    "social_fact": "游戏社交事实",
 }
 
 logger = get_logger("MemoryIndexer")

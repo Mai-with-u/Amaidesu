@@ -58,6 +58,8 @@ class AgentDeps:
     memory_cue_log_repo: Optional[Any] = None
     # 游戏里的人（主播的玩家卡读：玩家在游戏里开口或冲她做动作时，这位是谁、和她有过什么）
     game_player_repo: Optional[Any] = None
+    # 游戏社交事实（主播的社交事实工具、参考段与回想读写）
+    social_fact_repo: Optional[Any] = None
     event_repo: Optional[Any] = None
     creature_repo: Optional[Any] = None
     privacy_service: Optional[Any] = None

@@ -22,6 +22,7 @@ from src.agents.streamer.scene_card import GoalLine, GoalStatus
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import PlayerNote
 from src.modules.agents.delegation_text import DELEGATE_DIALOGUE_HEAD, DELEGATE_HEAD
+from src.modules.storage.models.social_facts import SocialFact
 from src.modules.tools.conversation import to_conversation_view
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     "goal_lines",
     "render_delegations",
     "render_game_speakers",
+    "render_social_facts",
     "render_observation",
     "render_recent_intents",
     "render_recent_relays",
@@ -393,6 +395,49 @@ def render_recent_intents(
             line += "（其中对游戏进展的说法已被游戏回执覆盖，以游戏记录为准）"
         lines.append(line)
     return "\n".join(lines)
+
+
+# 【游戏社交事实】整段至多注入这么几行（多的按取舍规则丢弃）
+_SOCIAL_FACTS_MAX = 12
+# 六类注入顺序：先"进行中的事"与"她的角色"（对说什么最有用），再其余各类；同类内由新到旧
+_SOCIAL_FACT_KIND_ORDER = ("works", "her_role", "members", "sharing", "setting", "open_question")
+_SOCIAL_FACT_KIND_LABELS = {
+    "setting": "环境形态",
+    "members": "成员关系",
+    "sharing": "共享惯例",
+    "works": "进行中的事",
+    "her_role": "她的角色",
+    "open_question": "待弄清",
+}
+
+
+def render_social_facts(facts: Iterable[SocialFact], current_ms: int, age_text_fn: Callable[[int], str]) -> str:
+    """【游戏社交事实】：现行事实按类分组，整段至多 12 行；没有现行事实时为空串（整段省略）。
+
+    取舍优先级：人工锁 > works / her_role > 最近更新；同类内由新到旧。全部从库现读（场内
+    登记下一轮就可见），每批重建、不进对话历史。
+    """
+    rows = [fact for fact in facts if fact.status == "active"]
+    if not rows:
+        return ""
+    rank = {kind: index for index, kind in enumerate(_SOCIAL_FACT_KIND_ORDER)}
+    rows.sort(
+        key=lambda fact: (
+            0 if fact.human_locked else 1,
+            rank.get(fact.kind, len(rank)),
+            -int(fact.updated_at_ms),
+        )
+    )
+    shown = rows[:_SOCIAL_FACTS_MAX]
+    lines: List[str] = []
+    last_kind = ""
+    for fact in shown:
+        if fact.kind != last_kind:
+            last_kind = fact.kind
+            lines.append(f"（{_SOCIAL_FACT_KIND_LABELS.get(fact.kind, fact.kind)}）")
+        mark = "★" if fact.human_locked else "-"
+        lines.append(f"{mark} {fact.text}（{age_text_fn(current_ms - int(fact.updated_at_ms))}记的）")
+    return "【游戏社交事实】\n" + "\n".join(lines)
 
 
 def render_game_speakers(notes: Iterable[PlayerNote]) -> str:

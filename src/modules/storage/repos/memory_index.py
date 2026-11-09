@@ -9,6 +9,7 @@
 - 承诺：运营者判了误记的不收；
 - 她的台词：只收正式场里她播出了的台词，并且要播出满 30 秒（没播出的标记可能晚到）；只取她自己说的
   正文，从不带上她回应的那条观众弹幕——观众的话进不了任何跨场记忆；
+- 游戏社交事实：只收现行行（被取代的不收）；
 - 游戏事件：白名单，只收里程碑与阶段汇报。安全阀、异常不是她该记得的事；游戏聊天、玩家肢体动作
   带着玩家原话与身份，不能经索引绕进她的记忆。
 
@@ -30,8 +31,8 @@ import numpy as np
 from src.modules.storage.models.memory import IndexCandidate, IndexDoc, IndexVector
 from src.modules.storage.repos._base import BaseRepo
 
-IndexSource = Literal["archive", "commitment", "speech", "event"]
-INDEX_SOURCES: Tuple[IndexSource, ...] = ("archive", "commitment", "speech", "event")
+IndexSource = Literal["archive", "commitment", "speech", "event", "social_fact"]
+INDEX_SOURCES: Tuple[IndexSource, ...] = ("archive", "commitment", "speech", "event", "social_fact")
 
 # 游戏事件白名单：只收里程碑与阶段汇报
 INDEXED_GAME_EVENT_TYPES: Tuple[str, ...] = ("milestone", "report")
@@ -96,6 +97,17 @@ _SPECS: Dict[IndexSource, _Spec] = {
         + ", ".join(f"'{event_type}'" for event_type in INDEXED_GAME_EVENT_TYPES)
         + ") AND s.kind = 'live'",
         joins_session=True,
+    ),
+    # 游戏社交事实：只收现行行（被取代的行不再是"现在成立"的事）
+    "social_fact": _Spec(
+        table="game_social_facts",
+        fts="memory_fts_social_fact",
+        vectors="memory_vectors_social_fact",
+        key="social_fact_id",
+        document="t.text || char(10) || t.quote",
+        eligible="t.status = 'active'",
+        joins_session=False,
+        session_column="created_session_id",
     ),
 }
 

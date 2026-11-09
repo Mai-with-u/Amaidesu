@@ -9,6 +9,7 @@
 - 不针对具体观众的承诺（``commitments``；未了结与已了结都给，判误记的 ``void`` 不给）
 - 游戏里做到哪一步（``game_events`` 里的里程碑与阶段汇报；游戏聊天、肢体动作、安全阀不收）
 - 本场观众弹幕（``live_chat`` 的 viewer 行；不论 scope 都只查本场）
+- 游戏社交事实（``game_social_facts`` 的现行行；接了社交事实仓储才查）
 
 匹配口径：台词、档案、承诺、游戏进展四类走混合检索（``search``：关键词按两字切分 + BM25，配置了嵌入
 服务再加语义一路，按名次融合），按相关度取最相关的 8 条，不要求每个词都出现；本场观众弹幕
@@ -77,6 +78,15 @@ RECALL_VECTOR_WAIT_MS = 1_500
 # 走混合检索的来源：游戏进展要有事件仓储才还原得出来，没接时不查
 _RECALL_SOURCES: Tuple[IndexSource, ...] = ("speech", "archive", "commitment")
 _RECALL_SOURCES_WITH_EVENTS: Tuple[IndexSource, ...] = (*_RECALL_SOURCES, "event")
+# 社交事实六类在回想结果里的叫法
+_SOCIAL_FACT_LABELS = {
+    "setting": "环境形态",
+    "members": "成员关系",
+    "sharing": "共享惯例",
+    "works": "进行中的事",
+    "her_role": "她的角色",
+    "open_question": "待弄清",
+}
 # 游戏进展在结果里怎么称呼（只收这两类，见索引仓储的白名单）
 _EVENT_LABELS = {"milestone": "里程碑", "report": "阶段汇报"}
 
@@ -216,8 +226,10 @@ class MemoryRecallService:
         event_repo: Any = None,
         saves_provider: Optional[Callable[[], Mapping[str, GameSave]]] = None,
         search: Optional[MemorySearch] = None,
+        social_fact_repo: Any = None,
     ) -> None:
         self._chat_repo = chat_repo
+        self._social_fact_repo = social_fact_repo
         self._search = search
         self._commitments_repo = commitments_repo
         self._archive_repo = archive_repo
@@ -327,6 +339,8 @@ class MemoryRecallService:
         if self._search is None:
             return _IndexedOutcome(hits=[], detail="没接混合检索", vector_used=False)
         sources = _RECALL_SOURCES_WITH_EVENTS if self._event_repo is not None else _RECALL_SOURCES
+        if self._social_fact_repo is not None:
+            sources = (*sources, "social_fact")
         result = await self._search.search_detailed(
             query,
             sources=sources,
@@ -347,6 +361,7 @@ class MemoryRecallService:
             if row is not None and not row.has_target and row.status in ("open", "closed"):
                 commitments[commitment_id] = row
         events = await self._events_by_ids(ids.get("event", []))
+        facts = await self._facts_by_ids(ids.get("social_fact", []))
         notes = await self._session_notes([row.live_session_id for row in speech.values()], context)
         last_ms = dict(archive_bounds)
         hits: List[_RecallHit] = []
@@ -361,6 +376,8 @@ class MemoryRecallService:
                 hits.append(self._commitment_hit(commitments[hit.source_id], context))
             elif hit.source == "event" and hit.source_id in events:
                 hits.append(self._event_hit(events[hit.source_id], context))
+            elif hit.source == "social_fact" and hit.source_id in facts:
+                hits.append(self._social_fact_hit(facts[hit.source_id], context))
         return _IndexedOutcome(
             hits=hits, detail=_path_counts(found, result.vector_used), vector_used=result.vector_used
         )
@@ -371,6 +388,21 @@ class MemoryRecallService:
             return {}
         rows = await self._event_repo.list_events_by_ids(event_ids=event_ids)
         return {int(row.id): row for row in rows if row.event_type in INDEXED_GAME_EVENT_TYPES}
+
+    async def _facts_by_ids(self, fact_ids: Sequence[int]) -> Dict[int, Any]:
+        """按主键读回社交事实，只留现行行（索引已按现行收，这里再核一遍）。"""
+        if self._social_fact_repo is None or not fact_ids:
+            return {}
+        rows = await self._social_fact_repo.list_facts_by_ids(fact_ids=fact_ids)
+        return {int(row.id): row for row in rows if row.status == "active"}
+
+    def _social_fact_hit(self, row: Any, context: _RecallContext) -> _RecallHit:
+        """一条社交事实渲染成「游戏里的人（类别）：事实」，挂了存档的注明是哪个存档。"""
+        session_id = int(row.created_session_id) if row.created_session_id is not None else None
+        label = _SOCIAL_FACT_LABELS.get(row.kind, row.kind)
+        text = f"- 游戏里的人（{label}）：{self._mask((row.text or '').strip(), session_id, context)}"
+        note = place_note(row.game, row.save_id, row.save_name, context.current_saves)
+        return _RecallHit(timestamp_ms=int(row.updated_at_ms), text=f"{text}（{note}）" if note else text)
 
     def _event_hit(self, row: Any, context: _RecallContext) -> _RecallHit:
         """一条游戏进展渲染成「位置 + 游戏里（里程碑/阶段汇报）+ 正文」，挂了存档的注明是哪个存档。"""

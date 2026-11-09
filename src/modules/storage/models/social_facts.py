@@ -18,6 +18,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
+    "EvidenceHit",
     "NewSocialFact",
     "SocialFact",
     "SocialFactKind",
@@ -66,6 +67,19 @@ class SocialFact(BaseModel):
     updated_session_id: Optional[int] = Field(default=None, description="最近更新场次")
     created_at_ms: int = Field(..., description="写入时刻（Unix epoch 毫秒）")
     updated_at_ms: int = Field(..., description="最近更新时刻（Unix epoch 毫秒）")
+
+
+class EvidenceHit(BaseModel):
+    """按"本场 + 消息号"查到的一条依据行：弹幕观众行（chat）或公屏非她本人的行（game_chat）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(..., description="chat = 弹幕观众行（live_chat）/ game_chat = 公屏玩家行或占位行")
+    row_id: int = Field(..., description="命中行的行号")
+    content: str = Field(default="", description="命中行原文；公屏占位行为空串（没有存原话）")
+    game: str = Field(default="", description="公屏行所在游戏；弹幕为空串")
+    save_id: str = Field(default="", description="公屏行所在存档；弹幕为空串")
+    save_name: str = Field(default="", description="公屏行所在存档显示名；弹幕为空串")
 
 
 class NewSocialFact(BaseModel):
