@@ -150,15 +150,8 @@ class TestStreamPrebuffer:
         assert big_manager._stream is None and big_manager.is_playing is False
 
 
-@pytest.mark.parametrize(
-    ("write_backpressure_s", "idle_s", "alerts"),
-    [(0.0, 3.0, True), (2.5, 0.5, False)],
-    ids=["real_gap", "backpressure_only"],
-)
-def test_supply_gap_alert_subtracts_write_backpressure(
-    sd, monkeypatch, write_backpressure_s: float, idle_s: float, alerts: bool
-) -> None:
-    """块间毛间隔同为 3s：上游真断供才告警；写等播放消费的背压（数据过剩）不能误报成断流。"""
+def test_oversized_block_gap_logs_debug_only(sd, monkeypatch) -> None:
+    """块间隔偏大只进诊断（debug）：逐句系统性触发，与听感断流无关，不进告警面"""
     clock = SimpleNamespace(t=1000.0)
     clock.monotonic = clock.perf_counter = lambda: clock.t
     monkeypatch.setattr(adm, "time", clock)  # 可控单调时钟
@@ -168,15 +161,116 @@ def test_supply_gap_alert_subtracts_write_backpressure(
     chunk = np.zeros(100, dtype=np.int16)
 
     manager.write_chunk(chunk)  # 块 1：预缓冲阈值为 0，立即开播，建立块间基线
-    sd.OutputStream.return_value.write.side_effect = lambda _chunk: setattr(clock, "t", clock.t + write_backpressure_s)
-    clock.t += 0.5
-    manager.write_chunk(chunk)  # 块 2：写入阻塞 write_backpressure_s（时钟随阻塞推进）
     manager.logger.reset_mock()
-    clock.t += idle_s
-    manager.write_chunk(chunk)  # 块 3：毛间隔 = 背压 + 空闲，净间隔 = 空闲
+    clock.t += 3.0
+    manager.write_chunk(chunk)  # 块 2：毛间隔 3s，净间隔同为 3s
 
-    warned = any("供给断流" in str(call) for call in manager.logger.warning.call_args_list)
-    assert warned is alerts
+    manager.logger.debug.assert_called_once()
+    assert "上游块间隔偏大" in str(manager.logger.debug.call_args)
+    manager.logger.warning.assert_not_called()
+
+
+class TestPlaybackStallDetection:
+    """播放中断流检测：utterance 播放会话进行中且超阈值无新音频块才告警
+
+    判定锚定"正在播放"而非"连接存活"：句间静默期没有播放会话，不告警；
+    正常播放块间隔远小于阈值，零告警。检测方法直接调用（注入时钟控时间，
+    不依赖后台巡检线程——stall_watchdog_enabled=False 关掉线程）。
+    """
+
+    THRESHOLD_MS = 5000
+
+    @pytest.fixture
+    def stall_setup(self, sd, monkeypatch) -> SimpleNamespace:
+        clock = SimpleNamespace(t=1000.0)
+        clock.monotonic = clock.perf_counter = lambda: clock.t
+        monkeypatch.setattr(adm, "time", clock)
+        manager = AudioDeviceManager(
+            sample_rate=32000,
+            channels=1,
+            dtype=np.int16,
+            prebuffer_seconds=0.0,
+            stall_threshold_ms=self.THRESHOLD_MS,
+            stall_watchdog_enabled=False,
+        )
+        manager.logger = MagicMock()
+        chunk = np.zeros(100, dtype=np.int16)
+        return SimpleNamespace(manager=manager, chunk=chunk, clock=clock, stream=sd.OutputStream.return_value)
+
+    def test_normal_playback_with_short_block_gaps_alerts_nothing(self, stall_setup) -> None:
+        """正常播放：块间隔远小于阈值（正常 <1s），整个播放会话零告警"""
+        m = stall_setup.manager
+        m.start_stream(utterance_id="normal")
+        for _ in range(5):
+            stall_setup.clock.t += 0.3  # 正常合成节奏：块间隔 <1s
+            m.write_chunk(stall_setup.chunk)
+        assert m.check_playback_stall() is False
+        m.logger.warning.assert_not_called()
+
+        m.stop_stream()  # 收尾不告警
+        m.logger.warning.assert_not_called()
+
+    def test_stale_stream_over_threshold_while_playing_alerts_once(self, stall_setup) -> None:
+        """播放中 >5s 无新块：warning 恰一条；后续巡检不重复；恢复到达后基线刷新"""
+        m = stall_setup.manager
+        m.start_stream(utterance_id="stall")
+        m.write_chunk(stall_setup.chunk)
+        m.logger.reset_mock()
+
+        stall_setup.clock.t += 6.0  # 超过阈值无任何新块（上游停供，写块不再被调）
+        assert m.check_playback_stall() is True
+        m.logger.warning.assert_called_once()
+        assert "播放中断流" in str(m.logger.warning.call_args)
+
+        stall_setup.clock.t += 3.0  # 已告警过：不重复刷屏
+        assert m.check_playback_stall() is False
+        m.logger.warning.assert_called_once()
+
+        stall_setup.clock.t += 0.1
+        m.write_chunk(stall_setup.chunk)  # 数据恢复到达：基线刷新，不再告警
+        assert m.check_playback_stall() is False
+        m.logger.warning.assert_called_once()
+
+        m.stop_stream()
+
+    def test_inter_sentence_silence_over_threshold_alerts_nothing(self, stall_setup) -> None:
+        """句间静默：播放会话已关停（stop_stream），无论过多久零告警"""
+        m = stall_setup.manager
+        m.start_stream(utterance_id="done")
+        m.write_chunk(stall_setup.chunk)
+        m.stop_stream()  # 句子播完，监控会话结束
+        m.logger.reset_mock()
+
+        stall_setup.clock.t += 30.0  # 句间静默远超阈值
+        assert m.check_playback_stall() is False
+        m.logger.warning.assert_not_called()
+
+    def test_whole_sentence_without_any_block_still_judged(self, stall_setup) -> None:
+        """整句一个块都没来也落在判定范围内（旧告警的盲区：写块不被调用即永不触发）"""
+        m = stall_setup.manager
+        m.start_stream(utterance_id="silent")
+        stall_setup.clock.t += 6.0  # 开播后无任何块到达
+        assert m.check_playback_stall() is True
+        assert "播放中断流" in str(m.logger.warning.call_args)
+        m.stop_stream()
+
+    def test_write_backpressure_does_not_trigger_false_stall_alert(self, stall_setup) -> None:
+        """写声卡背压（数据过剩等播放消费）从间隔中扣除，不误报成断流"""
+        m = stall_setup.manager
+        clock = stall_setup.clock
+        m.start_stream(utterance_id="backpressure")
+        m.write_chunk(stall_setup.chunk)  # 预缓冲阈值为 0：首块即开播
+        m.logger.reset_mock()
+
+        # 下一块写声卡阻塞 6s（时钟随阻塞推进）：阻塞期间上游送不进新块，
+        # 毛间隔超阈值，但全部是背压
+        stall_setup.stream.write.side_effect = lambda _chunk: setattr(clock, "t", clock.t + 6.0)
+        clock.t += 0.1
+        m.write_chunk(stall_setup.chunk)
+        assert m.check_playback_stall() is False
+        m.logger.warning.assert_not_called()
+
+        m.stop_stream()
 
 
 class TestSinkFeedAtSoundcardWrite:

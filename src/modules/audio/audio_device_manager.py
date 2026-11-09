@@ -8,8 +8,9 @@
 """
 
 import asyncio
+import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -50,6 +51,9 @@ class AudioDeviceManager:
         dtype: type = np.int16,
         sink: Optional[Any] = None,
         prebuffer_seconds: float = 2.5,
+        stall_threshold_ms: int = 5000,
+        stall_watchdog_enabled: bool = True,
+        clock: Optional[Callable[[], float]] = None,
     ) -> None:
         """
         初始化音频设备管理器
@@ -63,6 +67,13 @@ class AudioDeviceManager:
             prebuffer_seconds: 流式播放预缓冲秒数——声卡流攒够这么多音频才
                 开播，吸收上游合成/网络的短暂停顿；上游吞吐长期低于实时时
                 仍会欠载（那需要上游提速，缓冲无法根治）
+            stall_threshold_ms: 播放中断流判定阈值（毫秒）——播放会话进行中
+                且超过该时长没有收到任何新音频块即告警
+            stall_watchdog_enabled: 是否在播放会话期间启动后台巡检线程。
+                上游完全无数据时写块函数不会被调用，断流只能靠定时巡检发现；
+                测试关闭后改为直接调用检测方法，使时间推进完全可控
+            clock: 单调时钟（秒），缺省用 ``time.monotonic``；注入后断流
+                判定所依据的时间推进可由测试控制
         """
         self.logger = get_logger("AudioDeviceManager")
         self.sample_rate = sample_rate
@@ -88,6 +99,25 @@ class AudioDeviceManager:
         # 误报成断流（turbo 吞吐大于实时时背压为常态，实测每场 80+ 次假阳性）
         self._last_feed_monotonic: float | None = None
         self._last_write_block_sec: float = 0.0
+        # 播放中断流检测：utterance 播放会话进行中，若超过阈值没有任何新音频
+        # 块到达，判定上游供给已断（告警面）。该检测锚定"正在播放"而非
+        # "连接存活"——句间静默期没有播放会话，不告警。检测由独立看门狗线程
+        # 驱动（上游完全无数据时写块函数不会被调用，只能靠定时巡检）
+        self.stall_threshold_ms = stall_threshold_ms
+        self.stall_watchdog_enabled = stall_watchdog_enabled
+        self._clock: Optional[Callable[[], float]] = clock
+        # 断流判定基线：最近一块的到达时刻（会话开始时初始化为会话起点，
+        # 于是"整句一个块都没来"同样落在判定范围内）
+        self._last_block_monotonic: float | None = None
+        # 累计写声卡阻塞时长与其在"上一块到达时刻"的快照：判定断流时须扣除
+        # 这段背压（数据过剩造成的等待，不是上游断供）
+        self._backpressure_total: float = 0.0
+        self._backpressure_at_last_block: float = 0.0
+        self._stall_alerted: bool = False
+        self._playback_session_active: bool = False
+        self._stall_stop_event = threading.Event()
+        self._stall_watchdog: Optional[threading.Thread] = None
+        self._stall_poll_interval_s = 0.5
         # 分接递入时机 = 写声卡时刻：write 在声卡缓冲满时按实时阻塞（背压），
         # 紧贴 write 的递入因此跟随播放节奏。随"到达"递入则与听感脱节——
         # 合成停顿、整段突发都会让 sink 跳到句尾，短句句身整段被消费方
@@ -319,11 +349,85 @@ class AudioDeviceManager:
             self.is_playing = True
             # 分接：开播同步开 session（流式播法在写声卡时逐块递入）
             self._sink_start(utterance_id)
+            self._start_playback_session()
             self.logger.debug("流式播放已就绪（等待预缓冲）")
         except Exception as e:
             self.logger.error(f"启动流式播放失败: {e}")
             self._stream = None
             self._sink_stop()
+
+    # -----播放中断流检测（播放会话期间的上游供给监控）-----
+
+    def _now(self) -> float:
+        """当前单调时刻（秒）。注入时钟优先，缺省取系统单调时钟。"""
+        if self._clock is not None:
+            return self._clock()
+        return time.monotonic()
+
+    def _record_block_arrival(self) -> None:
+        """记录一个上游音频块的到达时刻（断流判定的基线）。"""
+        self._last_block_monotonic = self._now()
+        self._backpressure_at_last_block = self._backpressure_total
+
+    def _start_playback_session(self) -> None:
+        """开启播放会话监控：会话期间上游应有块持续到达。
+
+        基线取会话起点——上游整句一个块都不送时同样落在判定范围内
+        （这正是旧告警的盲区：写块函数不被调用，旧告警根本不会触发）。
+        """
+        self._playback_session_active = True
+        self._stall_alerted = False
+        self._backpressure_total = 0.0
+        self._record_block_arrival()
+        if not self.stall_watchdog_enabled:
+            return
+        self._stall_stop_event.clear()
+        self._stall_watchdog = threading.Thread(target=self._watchdog_loop, name="audio-stall-watchdog", daemon=True)
+        self._stall_watchdog.start()
+
+    def _stop_playback_session(self) -> None:
+        """关闭播放会话监控（句间静默期不判断流）。"""
+        self._playback_session_active = False
+        self._stall_stop_event.set()
+        watchdog = self._stall_watchdog
+        self._stall_watchdog = None
+        if watchdog is not None and watchdog is not threading.current_thread():
+            watchdog.join(timeout=1.0)
+
+    def _watchdog_loop(self) -> None:
+        """后台巡检：定时判定播放会话是否断流。
+
+        上游完全无数据时写块函数不会被调用，断流只能靠定时巡检发现——
+        这是旧告警在 s59 断流期零告警的根因。
+        """
+        while not self._stall_stop_event.wait(self._stall_poll_interval_s):
+            try:
+                self.check_playback_stall()
+            except Exception as e:  # noqa: BLE001 - 巡检线程不得因单次异常退出
+                self.logger.error(f"播放断流巡检异常: {e}")
+
+    def check_playback_stall(self) -> bool:
+        """检测播放中断流：播放会话进行中且超过阈值没有新音频块即告警。
+
+        判定锚定"正在播放"状态而非"连接存活"——句间静默期没有播放会话，
+        不产生告警。写声卡的背压时长（数据过剩造成的等待）从间隔中扣除，
+        否则数据过剩会被误报成上游断供。
+
+        Returns:
+            本次调用是否发出了告警。
+        """
+        if not self._playback_session_active or self._last_block_monotonic is None:
+            return False
+        idle_sec = (self._now() - self._last_block_monotonic) - (
+            self._backpressure_total - self._backpressure_at_last_block
+        )
+        if idle_sec * 1000 < self.stall_threshold_ms:
+            return False
+        if self._stall_alerted:
+            return False
+        self._stall_alerted = True
+        self.logger.warning(f"播放中断流：正在播放但已 {idle_sec:.1f}s 未收到新音频块（TTS 上游供给中断）")
+        return True
 
     def _flush_pending(self) -> None:
         """把预缓冲冲入声卡：首次冲入时启动流，随后逐块写入。"""
@@ -340,6 +444,7 @@ class AudioDeviceManager:
             self._sink_feed(chunk, self.sample_rate)
             self._stream.write(chunk)
         self._last_write_block_sec = time.perf_counter() - t0
+        self._backpressure_total += self._last_write_block_sec
         self._pending_chunks = []
         self._pending_samples = 0
 
@@ -363,11 +468,13 @@ class AudioDeviceManager:
             if self._last_feed_monotonic is not None:
                 net_gap = (now - self._last_feed_monotonic) - self._last_write_block_sec
                 if net_gap > 2.0:
-                    self.logger.warning(
-                        f"上游供给断流 {net_gap:.1f}s（已扣除写背压 {self._last_write_block_sec:.1f}s；"
-                        "欠载风险：声卡缓冲即将耗尽，若听感出现拉长尾音即此次断流所致）"
+                    # 块间隔偏大只作诊断信息：逐句系统性触发，与听感断流无关，
+                    # 不进告警面（真断流由播放中断流检测负责）
+                    self.logger.debug(
+                        f"上游块间隔偏大 {net_gap:.1f}s（已扣除写背压 {self._last_write_block_sec:.1f}s）"
                     )
             self._last_feed_monotonic = now
+            self._record_block_arrival()
             if not self._stream_started:
                 self._pending_chunks.append(chunk)
                 self._pending_samples += len(chunk)
@@ -378,6 +485,7 @@ class AudioDeviceManager:
                 t0 = time.perf_counter()
                 self._stream.write(chunk)
                 self._last_write_block_sec = time.perf_counter() - t0
+                self._backpressure_total += self._last_write_block_sec
         except Exception as e:
             self.logger.error(f"写入音频流失败: {e}")
 
@@ -410,6 +518,8 @@ class AudioDeviceManager:
             self.is_playing = False
             # 分接：播完同步收 session
             self._sink_stop()
+            # 播完即退出断流监控：句间静默期不判断流
+            self._stop_playback_session()
             self.logger.debug("流式播放已停止")
 
     def stop_audio(self) -> None:
