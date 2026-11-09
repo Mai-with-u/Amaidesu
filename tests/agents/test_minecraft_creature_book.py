@@ -18,7 +18,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.game_chat import GameChatMention, GameChatPayload
 from src.modules.storage.database import SQLiteDatabase
-from src.modules.tools.models import ToolInvocation
+from src.modules.storage.models.game_creatures import GameCreatureRecord
 
 from .minecraft_v1_fakes import (
     MAID_SKIN,
@@ -28,6 +28,21 @@ from .minecraft_v1_fakes import (
     scene_with,
     scene_with_maid,
 )
+
+
+#: 名册里那只女仆在没有 UUID 时的身份键：种类 + 皮肤 + 命名牌名（与观察时的拼法一致）
+_MAID_LOOK_KEY = "look:touhou_little_maid:maid|touhou_little_maid:winefox_momo|"
+
+
+def _named_maid_record() -> GameCreatureRecord:
+    """名册里带名字的女仆一行：经仓储写进库，游戏 Agent 装配时按世界编号读回。"""
+    return GameCreatureRecord(
+        creature_key=_MAID_LOOK_KEY,
+        type="touhou_little_maid:maid",
+        skin="莫莫酒狐",
+        owner="你的",
+        nickname="阿缕",
+    )
 
 
 def _with_grave() -> Dict[str, Any]:
@@ -150,7 +165,7 @@ def test_her_grave_confirms_the_death_and_is_called_by_her_name() -> None:
 
 
 def test_game_agent_and_streamer_are_told_about_names() -> None:
-    """游戏 Agent 拿到"名字 → 是哪一只、此刻怎样"，主播的玩法说明写明起名要登记、已死就是死了。"""
+    """游戏 Agent 拿到"名字 → 是哪一只、此刻怎样"，主播的玩法说明写明已死就是死了、不提登记名字。"""
     book = CreatureBook()
     book.observe(scene_with_maid(), 1_000)
     assert book.named_view() == {}
@@ -159,50 +174,51 @@ def test_game_agent_and_streamer_are_told_about_names() -> None:
     book.note_death("莫莫酒狐被苦力怕炸死了", 2_000)
     assert book.named_view() == {"阿缕": "你的女仆（莫莫酒狐皮肤），已死：被苦力怕炸死了"}
 
-    assert "minecraft_name_creature" in STREAMER_GUIDE and "已死的就是死了" in STREAMER_GUIDE
+    assert "已死的就是死了" in STREAMER_GUIDE and "登记" not in STREAMER_GUIDE
 
 
-async def test_replay_of_the_audit_timeline() -> None:
-    """按复盘时间线回放：21:40 起名 → 22:02:53 最后一次在身边 → 22:03:00 死讯 → 22:03:13 墓碑。
+async def test_replay_of_the_audit_timeline(db_path: Path) -> None:
+    """按复盘时间线回放：22:02:53 最后一次在身边 → 22:03:00 死讯 → 22:03:13 墓碑。
 
-    每个时刻主播的一句话现场与游戏进展事件都要说对：起名后用名字称呼，死讯当场成为一条进展，
-    之后的速览写明她死了、墓碑就在身边，不再有"阿缕在身后"可供误读。
+    名字经仓储预置进名册（起名登记入口已退役），Agent 装配时读回：速览按名字称呼，
+    死讯当场成为一条进展，之后的速览写明她死了、墓碑就在身边，不再有"阿缕在身后"可供误读。
     """
-    server = FakeMaicraft()
-    server.scene_view = scene_with_maid()
-    agent, _, bus = await make_minecraft_agent(server)
+    db = SQLiteDatabase(db_path)
+    await db.initialize()
+    try:
+        await db.game_creatures.save_creatures(game="minecraft", world_key="w1", creatures=[_named_maid_record()])
+        server = FakeMaicraft()
+        server.scene_view = scene_with_maid()
+        server.self_view["world_key"] = "w1"
+        agent, _, bus = await make_minecraft_agent(server, creature_repo=db.game_creatures)
 
-    brief = (await agent._glance())["brief"]
-    assert "你的女仆（莫莫酒狐皮肤）在身边" in brief
+        brief = (await agent._glance())["brief"]
+        assert "阿缕（你的女仆，莫莫酒狐皮肤）在身边" in brief
+        assert agent._current_task_context()["named_creatures"] == {"阿缕": "你的女仆（莫莫酒狐皮肤），在身边"}
 
-    result = await agent._tool_registry.invoke(
-        ToolInvocation(tool_name="minecraft_name_creature", arguments={"who": "你的女仆", "nickname": "阿缕"})
-    )
-    assert result.success and result.structured_content["named"] == "阿缕（你的女仆，莫莫酒狐皮肤）"
-    assert "阿缕（你的女仆，莫莫酒狐皮肤）在身边" in (await agent._glance())["brief"]
-    assert agent._current_task_context()["named_creatures"] == {"阿缕": "你的女仆（莫莫酒狐皮肤），在身边"}
+        death = GameChatPayload(game="minecraft", kind="system", content="莫莫酒狐被苦力怕炸死了")
+        await agent._on_game_chat(CoreEvents.GAME_CHAT_RECEIVED, death, "maicraft_chat")
+        milestones = [
+            call.args[1]
+            for call in bus.emit.await_args_list
+            if call.args[0] == CoreEvents.GAME_MILESTONE and isinstance(call.args[1], GamePayload)
+        ]
+        assert [payload.message for payload in milestones] == ["阿缕（你的女仆，莫莫酒狐皮肤）被苦力怕炸死了"]
 
-    death = GameChatPayload(game="minecraft", kind="system", content="莫莫酒狐被苦力怕炸死了")
-    await agent._on_game_chat(CoreEvents.GAME_CHAT_RECEIVED, death, "maicraft_chat")
-    milestones = [
-        call.args[1]
-        for call in bus.emit.await_args_list
-        if call.args[0] == CoreEvents.GAME_MILESTONE and isinstance(call.args[1], GamePayload)
-    ]
-    assert [payload.message for payload in milestones] == ["阿缕（你的女仆，莫莫酒狐皮肤）被苦力怕炸死了"]
+        server.scene_view = deepcopy(_with_grave())
+        view = await agent._glance()
+        assert "阿缕（你的女仆，莫莫酒狐皮肤）被苦力怕炸死了，墓碑就在身边" in view["brief"]
+        assert "阿缕的女仆墓碑（上面写着莫莫酒狐）" in view["brief"]
+        assert view["creatures"][0]["status"] == STATUS_DEAD and view["creatures"][0]["note"] == "被苦力怕炸死了"
 
-    server.scene_view = deepcopy(_with_grave())
-    view = await agent._glance()
-    assert "阿缕（你的女仆，莫莫酒狐皮肤）被苦力怕炸死了，墓碑就在身边" in view["brief"]
-    assert "阿缕的女仆墓碑（上面写着莫莫酒狐）" in view["brief"]
-    assert view["creatures"][0]["status"] == STATUS_DEAD and view["creatures"][0]["note"] == "被苦力怕炸死了"
-
-    player_chat = GameChatPayload(game="minecraft", kind="player", sender="Steve", content="莫莫酒狐被苦力怕炸死了")
-    await agent._on_game_chat(CoreEvents.GAME_CHAT_RECEIVED, player_chat, "maicraft_chat")
-    assert len([c for c in bus.emit.await_args_list if c.args[0] == CoreEvents.GAME_MILESTONE]) == 1, (
-        "玩家打的字不当死讯，同一次死也不重复发"
-    )
-    await agent.stop()
+        player_chat = GameChatPayload(game="minecraft", kind="player", sender="Steve", content="莫莫酒狐被苦力怕炸死了")
+        await agent._on_game_chat(CoreEvents.GAME_CHAT_RECEIVED, player_chat, "maicraft_chat")
+        assert len([c for c in bus.emit.await_args_list if c.args[0] == CoreEvents.GAME_MILESTONE]) == 1, (
+            "玩家打的字不当死讯，同一次死也不重复发"
+        )
+        await agent.stop()
+    finally:
+        await db.close()
 
 
 def test_a_death_is_mentioned_in_its_session_and_the_next_one_only() -> None:
@@ -258,9 +274,9 @@ async def test_names_survive_a_restart_and_stay_in_their_world(db_path: Path) ->
         server = FakeMaicraft()
         server.scene_view = scene_with_maid()
         server.self_view["world_key"] = "w1"
+        await db.game_creatures.save_creatures(game="minecraft", world_key="w1", creatures=[_named_maid_record()])
         agent, _, _ = await make_minecraft_agent(server, creature_repo=db.game_creatures)
-        await agent._glance()
-        assert (await agent._name_creature("你的女仆", "阿缕"))["success"]
+        assert "阿缕（你的女仆，莫莫酒狐皮肤）在身边" in (await agent._glance())["brief"]
         await agent.stop()
 
         again, _, _ = await make_minecraft_agent(server, creature_repo=db.game_creatures)
@@ -283,9 +299,9 @@ async def test_roster_follows_world_id_and_adopts_rows_under_old_key(db_path: Pa
         server = FakeMaicraft()
         server.scene_view = scene_with_maid()
         server.self_view["world_key"] = "old-hash"
+        await db.game_creatures.save_creatures(game="minecraft", world_key="old-hash", creatures=[_named_maid_record()])
         agent, _, _ = await make_minecraft_agent(server, creature_repo=db.game_creatures)
-        await agent._glance()
-        assert (await agent._name_creature("你的女仆", "阿缕"))["success"]
+        assert "阿缕（你的女仆，莫莫酒狐皮肤）在身边" in (await agent._glance())["brief"]
         await agent.stop()
 
         # Mod 升级：同一个世界有了世界编号，旧版本的数据在 old-hash 名下

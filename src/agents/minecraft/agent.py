@@ -276,7 +276,7 @@ class MinecraftAgent(BaseAgent):
             execute_tool=self._execute_tool,
             absorb_reply=self._absorb_reply,
         )
-        # 生物名册：自己的生物与主播起过名的生物是谁、在不在身边、死没死（速览、起名与死讯共用这一份）
+        # 生物名册：自己的生物与主播起过名的生物是谁、在不在身边、死没死（速览与死讯共用这一份）
         self._creatures = CreatureBook()
         self._creature_repo = creature_repo
         # 饿急了从别人家箱子拿过的吃的：按世界记最近几笔放进任务事实，主人回头来问时按名字、区域或位置对上号
@@ -305,7 +305,6 @@ class MinecraftAgent(BaseAgent):
             report_callback=self._handle_report,
             wait_callback=self._request_wait,
             glance_reader=self._glance,
-            creature_namer=self._name_creature,
             skill_reader=self._skill_support.read_skill if skill_library is not None else None,
             save_reader=self._world.game_save,
             situation_reader=self._current_situation,
@@ -2040,24 +2039,6 @@ class MinecraftAgent(BaseAgent):
             return reply
         self._logger.warning(f"读记住的地点失败，速览先用上次读到的清单：{reply.error_message or reply.error_code}")
         return MaicraftReply(ok=True, data={"places": previous})
-
-    async def _name_creature(self, who: str, nickname: str) -> Dict[str, Any]:
-        """主播给游戏里的生物起名：先重读一次身边（起名对象以眼下为准），再在名册里登记。
-
-        顺序：主播说"就叫你阿缕吧" → Planner 调起名工具 → 读一次身边 → 按速览里的称呼找到那只 → 登记；
-        找不到、分不清是哪只、名字被占了都不登记，原因原样回给主播。
-        """
-        if self._maicraft_ready():
-            await self._read_creatures(await self._call_maicraft(OBSERVE, {"what": "self"}))
-        result = self._creatures.name(who, nickname)
-        if result.named is None:
-            return {"success": False, "error": result.reason}
-        await self._save_creatures()
-        creature = result.named
-        if not creature.nickname:
-            return {"success": True, "named": creature.label(), "note": "不再用主播起的名字称呼它"}
-        self._logger.info(f"生物名册登记名字：{creature.label()}（身份 {creature.key}）")
-        return {"success": True, "named": creature.label(), "note": "以后现场速览里按这个名字称呼它"}
 
     async def _on_game_chat(self, event_name: str, payload: GameChatPayload, source: str) -> None:
         """``game.chat.received`` 回调：系统消息若是名册里某只的死讯，把她的死当成游戏进展发给主播。

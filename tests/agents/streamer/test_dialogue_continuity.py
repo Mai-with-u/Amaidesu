@@ -853,6 +853,8 @@ def test_planner_prompt_finds_material_instead_of_defaulting_to_silence(prompts:
     assert "打算只讲一次" in planner
     # 梗由她自己当场定，可以回调不重演；空房间不发起要人接话的互动
     assert "由她自己拍板，可以回调不重演" in planner and "不交给观众去定" in planner
+    # 起名环节退役：桥段示例与人设标签都不再点名
+    assert all(word not in planner for word in ("起名", "磨蹭"))
     assert "房间安静时不发起要人接话的互动" in planner
     # 交接稿不转述任务系统内部的东西，免得被原样念给观众
     assert "不转述任务系统内部的东西" in planner
@@ -898,7 +900,7 @@ def test_replyer_prompts_speak_like_a_streamer_not_a_group_member(prompts: Any) 
     # 主动发言先有自己的内容、反应和态度讲出来（不向空气求助的禁令已撤）
     assert "先有自己的内容，反应和态度要讲出来" in turn
     assert "不要空手提问" not in turn
-    assert "起名这类事自己当场定下来" in turn
+    assert "起名" not in turn
     # 打算只在定下、改主意或做完时讲，平时不复述
     assert "聊天记录里你已经说过的就不再复述" in turn and "日常且简短" not in turn
     # 像张嘴说话一样回一句（可以带语气词和改口），长度预算写在提示里；任务书点到的不用都说

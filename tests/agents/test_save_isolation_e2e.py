@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional, Tuple
 from src.agents.streamer.planner_render import Delegation
 from src.agents.streamer.streamer_agent import StreamerAgent
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.models.game_creatures import GameCreatureRecord
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.registry import ToolRegistry
 from src.modules.tools.tasks import TaskLedger
@@ -110,7 +111,20 @@ async def test_memories_follow_the_save_through_a_round_trip(tmp_path: Path) -> 
         assert "还在 minecraft「新的世界」里做过 1 件事" in brief and "出生点旁边就有村子" not in brief
         assert cards == (bridge,)
         mc._mc_state.set_notebook("北边的桥还差三格")
-        assert (await mc._name_creature("你的女仆", "阿缕"))["success"]
+        # 名册里那只叫阿缕的女仆经仓储预置（起名登记入口已退役），速览加载名册时读回
+        await db.game_creatures.save_creatures(
+            game="minecraft",
+            world_key="home",
+            creatures=[
+                GameCreatureRecord(
+                    creature_key="look:touhou_little_maid:maid|touhou_little_maid:winefox_momo|",
+                    type="touhou_little_maid:maid",
+                    skin="莫莫酒狐",
+                    owner="你的",
+                    nickname="阿缕",
+                )
+            ],
+        )
         # 主播在老家交代给 MC 的一件事（手头的事里的一条），任务账本上在跑
         ledger.register(
             task_id="d1",
