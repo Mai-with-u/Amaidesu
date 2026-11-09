@@ -37,6 +37,7 @@ def _render_channels(prompts: Any) -> Dict[str, str]:
             boundaries_rule="",
             inside_jokes="",
             game_rules="",
+            social_fact_step="",
         ),
         "replyer": prompts.render(
             "amaidesu_replyer_system",

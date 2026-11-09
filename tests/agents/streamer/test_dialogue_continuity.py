@@ -524,6 +524,7 @@ def _render_planner_with_delegate_rules() -> str:
         boundaries_rule="",
         inside_jokes="",
         game_rules=rules,
+        social_fact_step="",
     )
 
 
@@ -541,6 +542,7 @@ def test_planner_prompt_keeps_viewer_method_and_relays_instead_of_redelegating()
             boundaries_rule="",
             inside_jokes="",
             game_rules="",
+            social_fact_step="",
         )
     finally:
         reset_prompt_manager()
@@ -597,6 +599,7 @@ def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
             boundaries_rule="",
             inside_jokes="",
             game_rules="",
+            social_fact_step="",
         )
     finally:
         reset_prompt_manager()
@@ -624,6 +627,7 @@ def test_planner_prompt_names_the_reply_tool_as_registered() -> None:
             boundaries_rule="",
             inside_jokes="",
             game_rules="",
+            social_fact_step="",
         )
     finally:
         reset_prompt_manager()
@@ -644,6 +648,7 @@ def test_planner_prompt_knows_who_she_is_but_stays_the_room_manager() -> None:
             boundaries_rule="",
             inside_jokes="",
             game_rules="",
+            social_fact_step="",
         )
     finally:
         reset_prompt_manager()
@@ -665,6 +670,7 @@ def test_planner_prompt_only_reports_progress_with_evidence() -> None:
             boundaries_rule="",
             inside_jokes="",
             game_rules="",
+            social_fact_step="",
         )
     finally:
         reset_prompt_manager()
@@ -804,6 +810,7 @@ def test_streamer_prompts_keep_rules(prompts) -> None:
         boundaries_rule="",
         inside_jokes="",
         game_rules=rules,
+        social_fact_step="",
     )
     assert [rule for rule in _PLANNER_PROMPT_RULES if rule not in planner] == []
     assert "【身体" not in planner
@@ -837,6 +844,7 @@ def test_planner_prompt_finds_material_instead_of_defaulting_to_silence(prompts:
         boundaries_rule="",
         inside_jokes="",
         game_rules="",
+        social_fact_step="",
     )
     # 开口与沉默都过增量检验：复述才是失败；沉默不写检讨，但敷衍理由不算找过
     assert "开口与沉默都过增量检验，沉默是正常结局" in planner
@@ -925,6 +933,7 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
         boundaries_rule="",
         inside_jokes="",
         game_rules="",
+        social_fact_step="",
     )
     assert "一轮只递一个点" in planner and "只写和这一个点有关的事实" in planner
     assert "一句话以内" in planner and "指引里写几个点，她就会一口气讲几个点" in planner
@@ -970,6 +979,7 @@ def test_prompts_forbid_inventing_off_game_life_events(prompts: Any) -> None:
         boundaries_rule="",
         inside_jokes="",
         game_rules="",
+        social_fact_step="",
     )
     assert "游戏之外的事同样要有出处" in planner and "没有出处的现实生活经历一律不写" in planner
     assert "不能凭空给她多出一段现实生活里的经历" in planner

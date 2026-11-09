@@ -441,6 +441,7 @@ def test_prompts_state_relay_and_completion_rules() -> None:
             boundaries_rule="",
             inside_jokes="",
             game_rules=rules,
+            social_fact_step="",
         )
         game = get_prompt_manager().render("amaidesu_minecraft_agent")
     finally:

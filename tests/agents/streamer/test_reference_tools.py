@@ -97,6 +97,7 @@ def test_planner_prompt_mentions_overview() -> None:
             boundaries_rule="",
             inside_jokes="",
             game_rules="",
+            social_fact_step="",
         )
     finally:
         reset_prompt_manager()

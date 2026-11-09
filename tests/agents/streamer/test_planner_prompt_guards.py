@@ -10,8 +10,10 @@ import pytest
 from src.agents.streamer.config import StreamerPersonaConfig
 from src.agents.streamer.planner import Planner, PlannerConfig
 from src.agents.streamer.room_state import RoomState
+from src.agents.streamer.tools.social_fact import SocialFactToolProvider
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
+from src.modules.tools.registry import ToolRegistry
 from tests.modules.llm.fakes import FakeLLMManager
 
 #: 三条说话通路（Planner、Replyer、嘴）共用的 AI 声明口径，Planner 这条接在它后面补"交接稿要让她这样答"
@@ -59,6 +61,7 @@ def _render_bare(prompts: Any) -> str:
         boundaries_rule="",
         inside_jokes="",
         game_rules="",
+        social_fact_step="",
     )
 
 
@@ -180,5 +183,52 @@ def test_prompt_template_treats_retraction_as_cancellation(prompts: Any) -> None
     assert "有人更正或宣布不用做了，按作废处理" in prompt
     assert "被作废的事对应哪一单就撤哪一单" in prompt and "`framework_task_cancel`" in prompt
     assert "口头认账" in prompt
-    # 社交事实工具未定上线，规则先不点名它
+    # 直接渲染（变量为空，即工具没注册的口径）：规则不点名社交事实工具
     assert "streamer_social_fact" not in prompt
+
+
+def _registry(with_social_fact: bool) -> ToolRegistry:
+    registry = ToolRegistry()
+    if with_social_fact:
+        registry.register_provider(
+            SocialFactToolProvider(repo=None, session_provider=lambda: None, game_scope_provider=lambda: ("", "", ""))
+        )
+    return registry
+
+
+def _planner(prompts: Any, registry: ToolRegistry) -> Planner:
+    return Planner(
+        config=PlannerConfig(),
+        llm_service=FakeLLMManager(),
+        prompt_service=prompts,
+        room_state=RoomState(),
+        tool_registry=registry,
+        behavior_style="积极互动",
+        bot_name="麦麦",
+        personality="嘴硬但心软",
+    )
+
+
+@pytest.mark.parametrize("registered", [True, False])
+def test_social_fact_tool_mentions_follow_registration(prompts: Any, registered: bool) -> None:
+    """作废条款里"记一条取代旧行的事实"一步，只在社交事实工具注册时出现。"""
+    planner = _planner(prompts, _registry(registered))
+    prompt, failure = planner._render_system_prompt()
+    assert failure is None and prompt is not None
+    step = "用 `streamer_social_fact` 把作废记成一条新事实，取代旧的那一行"
+    assert (step in prompt) is registered
+    assert ("streamer_social_fact" in prompt) is registered
+    # 这一步插在撤单、补单之后，口头认账之前
+    if registered:
+        assert prompt.index("补进那一单") < prompt.index(step) < prompt.index("口头认账")
+
+
+@pytest.mark.parametrize("registered", [True, False])
+async def test_proactive_action_options_mention_social_fact_only_when_registered(
+    prompts: Any, registered: bool
+) -> None:
+    """主动窗【情境】的行动选项里"记一笔游戏里的社交事实"只在工具注册时列出。"""
+    planner = _planner(prompts, _registry(registered))
+    text, failure = await planner._assemble_reference([], None, None, forced=False, proactive=True)
+    assert failure is None and text is not None
+    assert ("记一笔游戏里的社交事实（streamer_social_fact）" in text) is registered

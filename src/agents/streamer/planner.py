@@ -102,6 +102,12 @@ __all__ = ["Planner", "RoundOutcome"]
 PLANNER_PROFILE: str = "planner"
 
 
+#: 社交事实工具的全名：注册了才在提示词里点名它（作废条款与主动窗行动选项）
+SOCIAL_FACT_TOOL_NAME: str = "streamer_social_fact"
+
+#: 作废条款里"记一条取代旧行的社交事实"那一步（模板变量 social_fact_step；工具没注册时为空串）
+_SOCIAL_FACT_RETRACTION_STEP: str = "再用 `streamer_social_fact` 把作废记成一条新事实，取代旧的那一行。"
+
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。
 _DEFAULT_MAX_STEPS: int = 8
 
@@ -915,12 +921,17 @@ class Planner:
                     boundaries_rule=self._boundaries_rule(),
                     inside_jokes=self._inside_jokes_block(),
                     game_rules=self._render_game_rules(),
+                    social_fact_step=_SOCIAL_FACT_RETRACTION_STEP if self._social_fact_tool_ready() else "",
                 ),
                 None,
             )
         except Exception as e:
             self.logger.exception(f"渲染 Planner 系统提示词失败: {e}")
             return None, f"prompt_render_failed: {e}"
+
+    def _social_fact_tool_ready(self) -> bool:
+        """社交事实工具注册了没有：提示词里点名它的两处（作废条款、主动窗行动选项）只在注册时出现。"""
+        return self._tool_registry is not None and self._tool_registry.has(SOCIAL_FACT_TOOL_NAME)
 
     def _inside_jokes_block(self) -> str:
         """老梗栏渲染：运营者手写的老梗，抬头写明只在观众提起时才接；空串时整段省略。
@@ -1071,7 +1082,8 @@ class Planner:
                 "安排游戏里的活（framework_delegate 派单、framework_prompt 补要求、"
                 "framework_task_cancel 撤单）、查游戏那边的工作日志、"
                 "查自己记得的事（memory_recall）、"
-                "让形象动一下（avatar_act，不出声不占台词预算）；也可以什么都不做，等下一个事件。"
+                + ("记一笔游戏里的社交事实（streamer_social_fact）、" if self._social_fact_tool_ready() else "")
+                + "让形象动一下（avatar_act，不出声不占台词预算）；也可以什么都不做，等下一个事件。"
                 "这些只是此刻能做的几类，不限于此——手上有什么活、想做什么，就做什么。"
             )
         current_ms = now_ms()
