@@ -128,6 +128,19 @@ def test_prompt_template_reads_a_trailing_open_paren_as_a_joke(prompts: Any) -> 
     assert '"那我家女仆（"意思是"那是我家的女仆啦"' in prompt
 
 
+def test_prompt_template_keeps_evaluation_out_of_topic_summary(prompts: Any) -> None:
+    """事实段不写定性评价词：评价与态度全部留给 reply_guidance 按人设从裸事实推导。
+
+    事实段先把处境框成"白忙"，同一轮再"推导"态度，推导结果被框定锁死——
+    挫折事实经带评价的框定必然滑向自嘲。
+    """
+    prompt = _render_bare(prompts)
+
+    assert "也不做定性评价" in prompt
+    assert "「白忙」「白找」「冤」「狼狈」「白转」「白搭」这类评价词不写进事实段" in prompt
+    assert "评价与态度全部留给 `reply_guidance` 从裸事实推导" in prompt
+
+
 def test_prompt_template_does_not_blame_present_players_for_protected_blocks(prompts: Any) -> None:
     """被保护挡住时只说记录上不归她：第 58 场她说"这正门被人用两块橡木板钉死了……谁干的呀"，那其实是她自己的家。"""
     prompt = _render_bare(prompts)
