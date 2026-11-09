@@ -22,6 +22,7 @@ from src.modules.storage.repos.rundown_instances import RundownInstanceRepo
 from src.modules.storage.repos.rundown_transitions import RundownTransitionRepo
 from src.modules.storage.repos.rundowns import RundownRepo
 from src.modules.storage.repos.sessions import SessionRepo
+from src.modules.storage.repos.social_facts import SocialFactRepo
 from src.modules.storage.repos.sim import SimRepo
 from src.modules.storage.repos.topics import TopicRepo
 from src.modules.storage.repos.viewer_candidates import ViewerCandidateRepo
@@ -45,6 +46,7 @@ __all__ = [
     "RundownRepo",
     "RundownTransitionRepo",
     "SessionRepo",
+    "SocialFactRepo",
     "SimRepo",
     "TopicRepo",
     "ViewerCandidateRepo",

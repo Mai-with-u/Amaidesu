@@ -3,7 +3,8 @@
 
 本模块是全部 SQLite 表的**单一事实源**：26 张业务表（12 张核心直播表 +
 2 张模拟器运行时表 + 5 张流程单域表 + 1 张 LLM 请求历史表 +
-1 张游戏生物名册表 + 1 张不记录名单表 + 2 张记忆账本表）+ ``schema_migrations``。
+1 张游戏生物名册表 + 1 张不记录名单表 + 2 张记忆账本表 +
+1 张游戏社交事实表）+ ``schema_migrations``。
 任何建表 DDL 都必须落在这里，不允许业务模块自带 ``CREATE TABLE``——否则
 表结构游离于 ``SCHEMA_VERSION`` 版本管理之外，迁移机制无法覆盖。
 
@@ -60,7 +61,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 37
+SCHEMA_VERSION: int = 38
 
 
 # =============================================================================
@@ -177,6 +178,9 @@ def build_schema_sql() -> str:
         # game_players 等 —— 游戏里的人（排在场次、台词与观众之后：外键要引用它们）
         + _GAME_PLAYERS_SQL
         + "\n"
+        # game_social_facts —— 游戏社交事实（排在场次、台词与游戏公屏之后：外键要引用它们）
+        + _GAME_SOCIAL_FACTS_SQL
+        + "\n"
         # timeline_summary —— 摘要层
         + _TIMELINE_SUMMARY_SQL
         + "\n"
@@ -237,6 +241,7 @@ def list_expected_tables() -> List[str]:
         "game_players",
         "game_player_interactions",
         "game_chat",
+        "game_social_facts",
         "player_candidates",
         "viewer_player_links",
         "timeline_summary",
@@ -935,6 +940,43 @@ CREATE TABLE IF NOT EXISTS viewer_player_links (
     PRIMARY KEY (viewer_id, player_id)
 );
 CREATE INDEX IF NOT EXISTS idx_viewer_player_links_player ON viewer_player_links(player_id);
+""".strip()
+
+
+# --- game_social_facts —— 游戏社交事实 ---
+# 一行 = 一条"当前游戏环境里人与人怎么相处"的可核对事实，与承诺账本同构：行级状态、证据可核、
+# 人工锁。六类：setting 环境形态 / members 成员关系 / sharing 共享惯例 / works 进行中的事 /
+# her_role 她的角色 / open_question 待弄清。
+# text 是一句事实陈述，不带评价词；quote 是依据的原文片段——非空时必须是对应聊天行的逐字子串，
+# 空引文行只允许 her_role 与 open_question 两类（归纳类，且只有下播整理能产出）。
+# evidence_chat_id → live_chat（弹幕出处）、evidence_game_chat_id → game_chat（游戏公屏出处），
+# 两者都随来源行删除置空（ON DELETE SET NULL）：事实保留，证据可能查不回。
+# status 只有 active（现行，注入）与 superseded（被取代，留档备查不再注入）；superseded_by 回填
+# 取代它的新行号——事实过时用取代表达，不物理删除。
+# human_locked = 1 表示运营者改过这一行：之后的整理与工具都不得改它或取代它，只能删。
+# save_id 是这个存档（Mod world.id）的编号，空串 = 该游戏不分环境、整游戏一本；save_name 是显示名。
+
+_GAME_SOCIAL_FACTS_SQL = """
+CREATE TABLE IF NOT EXISTS game_social_facts (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    game                  TEXT NOT NULL,
+    save_id               TEXT NOT NULL DEFAULT '',
+    save_name             TEXT NOT NULL DEFAULT '',
+    kind                  TEXT NOT NULL,
+    text                  TEXT NOT NULL,
+    quote                 TEXT NOT NULL DEFAULT '',
+    evidence_chat_id      INTEGER REFERENCES live_chat(id) ON DELETE SET NULL,
+    evidence_game_chat_id INTEGER REFERENCES game_chat(id) ON DELETE SET NULL,
+    status                TEXT NOT NULL DEFAULT 'active',
+    superseded_by         INTEGER REFERENCES game_social_facts(id) ON DELETE SET NULL,
+    human_locked          INTEGER NOT NULL DEFAULT 0,
+    created_session_id    INTEGER,
+    updated_session_id    INTEGER,
+    created_at_ms         INTEGER NOT NULL,
+    updated_at_ms         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_game_social_facts_scope ON game_social_facts(game, save_id, status);
+CREATE INDEX IF NOT EXISTS idx_game_social_facts_status ON game_social_facts(status);
 """.strip()
 
 

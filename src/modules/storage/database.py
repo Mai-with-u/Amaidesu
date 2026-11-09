@@ -49,6 +49,7 @@ from src.modules.storage.repos import (
     RundownTransitionRepo,
     SessionRepo,
     SimRepo,
+    SocialFactRepo,
     TopicRepo,
     ViewerCandidateRepo,
     ViewerIdentityRepo,
@@ -149,6 +150,8 @@ class SQLiteDatabase:
         self.game_players = GamePlayerRepo(self._manager)
         # 切片段：AI 提议 + 运营手调的切片时段（WebUI 切片页与切割器读写）
         self.clips = ClipRepo(self._manager)
+        # 游戏社交事实：她与游戏里的人怎么相处的可核对事实（场内工具登记，下播整理归纳）
+        self.social_facts = SocialFactRepo(self._manager)
 
     # -------------------- 属性 --------------------
 

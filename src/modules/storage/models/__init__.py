@@ -43,6 +43,13 @@ from src.modules.storage.models.rundown import (
     RundownTransition,
 )
 from src.modules.storage.models.sessions import LiveSession, LiveSessionListItem
+from src.modules.storage.models.social_facts import (
+    SOCIAL_FACT_KINDS,
+    SOCIAL_FACT_STATUSES,
+    NewSocialFact,
+    SocialFact,
+    SocialFactKind,
+)
 from src.modules.storage.models.sim import SimGift, SimPersona
 from src.modules.storage.models.topics import TimelineSummaryEntry
 from src.modules.storage.models.viewer_identity import PendingViewerSummary
@@ -84,6 +91,12 @@ __all__ = [
     # sessions 域
     "LiveSession",
     "LiveSessionListItem",
+    # social_facts 域
+    "SOCIAL_FACT_KINDS",
+    "SOCIAL_FACT_STATUSES",
+    "NewSocialFact",
+    "SocialFact",
+    "SocialFactKind",
     # sim 域
     "SimGift",
     "SimPersona",

@@ -1073,8 +1073,21 @@ def _delete_player_rows(conn: sqlite3.Connection, *, player_id: int, secret_key:
             _replace_nickname_in_sessions(conn, session_ids=session_ids, nickname=name, label=MASKED_PLAYER_LABEL)
         # 她在公屏打出去的话：所有场次都换，不只他留过记录的那几场（她可能在他没开口的场次里点他的名）
         _replace_name_in_her_game_chat(conn, nickname=name, label=MASKED_PLAYER_LABEL)
+        # 游戏社交事实：含他名字的行按同样的文本匹配口径换成代称（事实行不按场次维度，全表换）
+        _replace_name_in_social_facts(conn, nickname=name, label=MASKED_PLAYER_LABEL)
     conn.execute("DELETE FROM game_players WHERE id = ?", (player_id,))
     return True
+
+
+def _replace_name_in_social_facts(conn: sqlite3.Connection, *, nickname: str, label: str) -> None:
+    """把游戏社交事实正文与引文里的这个名字换成代称（玩家被删后事实行留着，名字不留着）。"""
+    if not nickname or not table_exists(conn, "game_social_facts"):
+        return
+    conn.execute(
+        "UPDATE game_social_facts SET text = REPLACE(text, ?, ?), quote = REPLACE(quote, ?, ?)"
+        " WHERE text LIKE ? OR quote LIKE ?",
+        (nickname, label, nickname, label, f"%{nickname}%", f"%{nickname}%"),
+    )
 
 
 def _replace_name_in_her_game_chat(conn: sqlite3.Connection, *, nickname: str, label: str) -> None:
