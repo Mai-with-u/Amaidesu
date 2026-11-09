@@ -404,6 +404,77 @@ class OmniTTSParams(BaseConfig):
     )
 
 
+class MiniMaxTTSParams(BaseConfig):
+    """MiniMax 语音合成引擎参数（``[tts.minimax_tts]`` 段；T2A 接口流式形态）"""
+
+    base_url: str = Field(
+        default="https://api.minimax.cn/v1/t2a_v2",
+        title="接口地址",
+        description="MiniMax T2A 合成接口完整地址（实测国内站域名，国际站账号改 api.minimax.io 同路径）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    api_key: str = Field(
+        default="",
+        title="API 密钥",
+        description="MiniMax 平台 API 密钥（本引擎独立持有，与 LLM 提供商密钥互不相干；留空合成会报错提示）",
+    )
+    group_id: str = Field(
+        default="",
+        title="账号组 ID",
+        description="MiniMax 控制台的 GroupId（实测仅凭 API 密钥即可调用；部分账号要求时填写，随请求以查询参数携带）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    model: str = Field(
+        default="speech-02-hd",
+        title="合成模型",
+        description="合成模型（speech-02-hd 音质优先 / speech-02-turbo 延迟优先等档位）",
+    )
+    voice_id: str = Field(
+        default="",
+        title="音色 ID",
+        description="音色（MiniMax 系统音色或克隆音色的 voice_id，留空合成会报错提示）",
+    )
+    speed: float = Field(
+        default=1.0,
+        ge=0.5,
+        le=2.0,
+        title="语速",
+        description="语速（0.5~2，1 为原速）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    vol: float = Field(
+        default=1.0,
+        gt=0,
+        le=10.0,
+        title="音量",
+        description="音量（0~10，1 为原音量）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    pitch: int = Field(
+        default=0,
+        ge=-12,
+        le=12,
+        title="音调",
+        description="音调偏移（-12~12，0 为原音调）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    emotion: str = Field(
+        default="",
+        pattern=r"^(|happy|sad|angry|fearful|disgusted|surprised|calm|fluent|whisper)$",
+        title="情绪",
+        description="情绪预设（happy/sad/angry/fearful/disgusted/surprised/calm/fluent/whisper；留空交由模型按文本自定）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    sample_rate: int = Field(
+        default=24000,
+        ge=8000,
+        le=48000,
+        title="采样率",
+        description="输出采样率（官方支持 8000/16000/22050/24000/32000/44100；播放与时长计算用）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+
+
 class TTSConfig(BaseConfig):
     """TTS 基础设施配置（``[tts]`` 段）
 
@@ -419,6 +490,8 @@ class TTSConfig(BaseConfig):
         voicebox: Voicebox 引擎参数（仅 provider=voicebox 时生效；需填写 profile_id）。
         omni_tts: 全模态大模型 TTS 引擎参数（OpenAI 兼容线协议，经 LLMManager
             语音 profile 调用带语音输出模态的模型；仅 provider=omni_tts 时生效）。
+        minimax_tts: MiniMax 语音合成引擎参数（T2A 接口流式形态，密钥段内自持；
+            仅 provider=minimax_tts 时生效）。
     """
 
     enabled: bool = Field(
@@ -483,6 +556,11 @@ class TTSConfig(BaseConfig):
         default_factory=OmniTTSParams,
         title="全模态大模型 TTS 参数",
         description="全模态大模型 TTS 引擎参数（OpenAI 兼容线协议；仅 provider=omni_tts 时生效）",
+    )
+    minimax_tts: MiniMaxTTSParams = Field(
+        default_factory=MiniMaxTTSParams,
+        title="MiniMax TTS 参数",
+        description="MiniMax 语音合成引擎参数（T2A 接口流式形态；仅 provider=minimax_tts 时生效）",
     )
 
 

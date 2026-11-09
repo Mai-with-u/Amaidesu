@@ -6,9 +6,9 @@
 
 - 装配入口 `build_tts_infrastructure`（`src/modules/tts/assembly.py`）：读 `infra.toml` 的 `[tts]` 段，按 `provider` 单选构造引擎实例注入 StreamerAgent。未知的引擎名记错误并回退 `edge_tts`；构造失败降级为无 TTS（发言照常生成、只不上声，字幕择流随之切换）。
 - 引擎契约 `TTSProvider`（`protocol.py`）：唯一业务入口是 `handle_speech(text, utterance_id)`——合成并播放，失败发布 `tts.utterance.failed`；首次调用前引擎自治完成 `setup()`（幂等），装配层不显式调它。
-- 每引擎一个包（`backends/edge|gptsovits|voicebox|omni/`）。新增引擎 = 加包 + 工厂名单登记 + 配置 schema 引用，框架零改动。
+- 每引擎一个包（`backends/edge|gptsovits|voicebox|omni|minimax/`）。新增引擎 = 加包 + 工厂名单登记 + 配置 schema 引用，框架零改动。
 
-## 四引擎
+## 五引擎
 
 | 引擎 | 形态 | 连接目标 | 流式 | 预热 |
 |------|------|---------|------|------|
@@ -16,8 +16,9 @@
 | gptsovits | 本地 GPT-SoVITS api_v2 服务 | `host:port`（默认 127.0.0.1:9880） | 是（streaming_mode 0–3 档） | 有（合成一句"预热。"触发首次推理，日志「GPT-SoVITS 预热完成，首句合成已是热态」） |
 | voicebox | 本地 HTTP 服务，音色 = `profile_id` 克隆 | 默认端口 17493 | SSE 轮询 | 无 |
 | omni_tts | 全模态大模型（经 LLM profile 调音频端点） | model.toml 档位指向的端点 | 否（全量收齐后播放） | 无 |
+| minimax_tts | MiniMax 云端合成（T2A 接口，密钥段内自持） | `base_url`（默认国内站，国际站账号改官方域名同路径） | 是（SSE 分块 hex 音频，`bytes.fromhex` 解码即裸 PCM） | 无（云服务无冷启动惩罚） |
 
-> omni_tts 尚未经过实战调通验证；直播实战常用的是 edge_tts 与 gptsovits。
+> omni_tts 尚未经过实战调通验证；直播实战常用的是 edge_tts 与 gptsovits。minimax_tts 已过真机冒烟（密钥真实合成：流式 5 块、首块延迟约 0.5s），直播实战待用。
 
 GSV 的服务部署、参考音频与多音字维护见 [GPT-SoVITS 语音服务部署](../guides/gptsovits.md)。
 
@@ -40,7 +41,7 @@ Replyer 产出 speech
 
 ## 配置面
 
-`infra.toml` 的 `[tts]`：`enabled` 总开关、`provider` 单选、队列与超时参数、`wait_playback`，以及四个引擎同名子段（gptsovits 的合成调参、omni 的 `llm_profile` 与必填 `voice` 等）。键全集以 `core_schemas.py` 的 TTS schema 为准。
+`infra.toml` 的 `[tts]`：`enabled` 总开关、`provider` 单选、队列与超时参数、`wait_playback`，以及五个引擎同名子段（gptsovits 的合成调参、omni 的 `llm_profile` 与必填 `voice`、minimax 的 `api_key`/`group_id`/`voice_id` 等）。键全集以 `core_schemas.py` 的 TTS schema 为准。
 
 ## 相关决策
 

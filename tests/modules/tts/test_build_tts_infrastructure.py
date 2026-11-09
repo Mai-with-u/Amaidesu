@@ -1,4 +1,4 @@
-"""build_tts_infrastructure 装配入口：enabled 门控、四个引擎构造、未知引擎回退、构造失败与契约不符的 fail-soft"""
+"""build_tts_infrastructure 装配入口：enabled 门控、五个引擎构造、未知引擎回退、构造失败与契约不符的 fail-soft"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from src.modules.events.event_bus import EventBus
 from src.modules.tts import TTSProvider, assembly, build_tts_infrastructure
 from src.modules.tts.backends.edge.provider import EdgeTTSProvider
 from src.modules.tts.backends.gptsovits.provider import GPTSoVITSProvider
+from src.modules.tts.backends.minimax.provider import MiniMaxTTSProvider
 from src.modules.tts.backends.omni.provider import OmniTTSProvider
 from src.modules.tts.backends.voicebox.provider import VoiceboxProvider
 
@@ -48,8 +49,14 @@ def test_known_providers_construct_with_sub_config() -> None:
         {"enabled": True, "provider": "omni_tts", "omni_tts": {"voice": "Chelsie"}}, llm_service=llm
     )
     assert isinstance(omni, OmniTTSProvider) and omni._llm is llm and omni.voice == "Chelsie"
-    assert all(isinstance(p, TTSProvider) for p in (edge, gsv, vb, omni))
-    assert assembly._KNOWN_PROVIDERS == frozenset({"edge_tts", "gptsovits", "voicebox", "omni_tts"})
+
+    minimax = build_tts_infrastructure(
+        {"enabled": True, "provider": "minimax_tts", "minimax_tts": {"api_key": "mk", "voice_id": "v"}}
+    )
+    assert isinstance(minimax, MiniMaxTTSProvider) and (minimax.api_key, minimax.voice_id) == ("mk", "v")
+
+    assert all(isinstance(p, TTSProvider) for p in (edge, gsv, vb, omni, minimax))
+    assert assembly._KNOWN_PROVIDERS == frozenset({"edge_tts", "gptsovits", "voicebox", "omni_tts", "minimax_tts"})
 
 
 def test_sub_config_missing_or_not_a_dict_uses_schema_defaults_and_bus_is_injected() -> None:
