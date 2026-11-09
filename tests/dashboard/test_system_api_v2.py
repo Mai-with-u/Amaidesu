@@ -212,9 +212,7 @@ def test_health_wall_tts_and_provider_states(mount, config_service: ConfigServic
         "last_error": "",
         "supports_reconnect": False,
     }
-    assert all(
-        item["state"] == "disabled" for name, item in tts_by_name.items() if name != "gptsovits"
-    )
+    assert all(item["state"] == "disabled" for name, item in tts_by_name.items() if name != "gptsovits")
 
     avatar = {item["name"]: item for item in domains["avatar"]}
     assert avatar["vts"]["state"] == "ok" and avatar["vts"]["supports_reconnect"] is True

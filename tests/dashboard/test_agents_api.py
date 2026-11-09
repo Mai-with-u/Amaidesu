@@ -190,9 +190,7 @@ def test_stop_agent_with_optional_reason(client, manager: AgentManager) -> None:
     assert ghost.status_code == 404 and "ghost" in ghost.json()["detail"]
 
 
-def test_delegate_registers_ledger_and_busy_target_queues(
-    client, manager: AgentManager, ledger: TaskLedger
-) -> None:
+def test_delegate_registers_ledger_and_busy_target_queues(client, manager: AgentManager, ledger: TaskLedger) -> None:
     body = client.post("/api/v1/agents/sample_agent/delegate", json={"instruction": "去挖矿"}).json()
     assert (body["accepted"], body["executor"]) == (True, "sample_agent")
     task_id = body["task_id"]
