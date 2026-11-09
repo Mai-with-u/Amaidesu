@@ -19,7 +19,7 @@
 | minimax_tts | MiniMax 云端合成（T2A 接口，密钥段内自持） | `base_url`（默认国内站，国际站账号改官方域名同路径） | 是（SSE 分块 hex 音频，`bytes.fromhex` 解码即裸 PCM） | 无（云服务无冷启动惩罚） |
 | openai_tts | OpenAI 官方语音合成（`/v1/audio/speech`，密钥段内自持） | `base_url`（默认官方端点，可整体替换为兼容网关） | 是（响应体即裸 PCM 24kHz 字节流，`np.frombuffer` 直接得样本） | 无（云服务无冷启动惩罚） |
 
-> omni_tts 尚未经过实战调通验证；直播实战常用的是 edge_tts 与 gptsovits。minimax_tts 已过真机冒烟（密钥真实合成：流式 5 块、首块延迟约 0.5s），直播实战待用。openai_tts 与 omni_tts 同属"云端语音模型"但走不同端点：omni_tts 经 LLM 的 chat 模态音频输出（复用 model.toml 的 profile 与密钥），openai_tts 走专用 speech 端点，模型 / 音色 / 风格提示都是该端点自己的词表。openai_tts 的验证到"链路级"为止：用本地 aiohttp 服务冒充 speech 端点，跑通了真实 HTTP 请求、chunked 流式读取、样本拼接、事件派发全链路（`tests/modules/tts/test_openai_client_http.py`），但仍未拿真实密钥对 api.openai.com 冒烟，音色听感与真实首块延迟未验证。
+> omni_tts 尚未经过实战调通验证；直播实战常用的是 edge_tts 与 gptsovits。minimax_tts 已过真机冒烟（密钥真实合成：流式 5 块、首块延迟约 0.5s），直播实战待用。openai_tts 与 omni_tts 同属"云端语音模型"但走不同端点：omni_tts 经 LLM 的 chat 模态音频输出（复用 model.toml 的 profile 与密钥），openai_tts 走专用 speech 端点，模型 / 音色 / 风格提示都是该端点自己的词表。openai_tts 的验证分两级：链路级用本地 aiohttp 服务冒充 speech 端点，跑通了真实 HTTP 请求、chunked 流式读取、样本拼接、事件派发全链路（`tests/modules/tts/test_openai_client_http.py`）；真机级用一个自建 OpenAI 兼容网关真实合成过一次（4.52 秒音频、48 个流式分块、首块 9.1s），核对过基频中位数 274Hz 与 95% 能量滚降 1132Hz，确认该网关按 24kHz 裸 PCM 返回、与官方规范一致。仍未验证的部分：官方 api.openai.com 本身（没拿官方密钥冒烟）、音色听感、云端首块延迟——网关首块 9.1s 是后端本地 GPT-SoVITS 推理耗时，不代表云端表现。
 >
 > 该端点自身有生命周期风险：OpenAI 已把 tts-1 / tts-1-hd / gpt-4o-mini-tts 系列标记为弃用并于 2027-01-06 关停，官方引导新集成改走 Realtime API（不支持 `/v1/audio/speech`）。关停前本引擎照常可用，届时需要换端点或换引擎。
 
