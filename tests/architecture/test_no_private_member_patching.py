@@ -34,8 +34,8 @@ ALLOWED_PRIVATE_PATCHES: dict[str, str] = {
     # agents/test_minecraft_attention_collector.py：采集器内部就绪检查，无公有接缝
     "agents/test_minecraft_attention_collector.py:534": "collector._ensure_ready",
     # dashboard/test_system_api_v2.py：系统信息装配的内部聚合项与 changelog 路径常量
-    "dashboard/test_system_api_v2.py:213": "system_api._build_component_items",
-    "dashboard/test_system_api_v2.py:232": "system_api._CHANGELOG_PATH",
+    "dashboard/test_system_api_v2.py:243": "system_api._build_component_items",
+    "dashboard/test_system_api_v2.py:262": "system_api._CHANGELOG_PATH",
     # integration/*_wiring.py：入口模块的模块级路径常量，接线测试需重定向工作目录
     # （main 域另有会话占用，待协调后修接缝）
     "integration/test_dashboard_wiring.py:45": "main._BASE_DIR",

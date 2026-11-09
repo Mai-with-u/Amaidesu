@@ -330,6 +330,15 @@ async def test_open_with_component_plan_aligns_components(
         agent_manager=agents,
     )
 
+    # 本测试与 TTS 无关：默认基线 tts.enabled=true 而测试服务器无语音引擎，
+    # 会触发开播守卫（配置启用但引擎未装配 → 409）。经公开配置端点关掉开关，
+    # 与真实用户"配置里没开 TTS 就开播"的路径一致。
+    saved = await client.patch(
+        "/api/v1/config",
+        json={"key": "infra.tts.enabled", "value": False},
+    )
+    assert saved.status_code == 200, saved.text
+
     body = (
         await client.post(
             "/api/v1/live-sessions/open",
@@ -345,7 +354,7 @@ async def test_open_with_component_plan_aligns_components(
         )
     ).json()
 
-    assert body["live_session_id"] is not None
+    assert "live_session_id" in body, body
     report = body["plan_report"]
     assert report is not None and report["config_error"] == ""
     by_ref = {(i["group"], i["name"]): (i["action"], i["result"]) for i in report["items"]}

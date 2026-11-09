@@ -11,13 +11,13 @@ from src.modules.dashboard.api.sessions import _ensure_tts_assembled
 
 
 class FakeConfigService:
-    """配置服务替身：infra 段按需返回。"""
+    """配置服务替身：拍平视图的 tts 段按需返回（守卫读 get_section）。"""
 
-    def __init__(self, infra: Dict[str, Any]) -> None:
-        self._infra = infra
+    def __init__(self, tts: Dict[str, Any]) -> None:
+        self._tts = tts
 
-    def get_file_section(self, file_stem: str, default: Any = None) -> Dict[str, Any]:
-        return self._infra if file_stem == "infra" else (default if default is not None else {})
+    def get_section(self, section: str, default: Any = None) -> Dict[str, Any]:
+        return self._tts if section == "tts" else (default if default is not None else {})
 
 
 class FakeServer:
@@ -29,7 +29,7 @@ class FakeServer:
 
 
 def test_open_blocked_when_tts_enabled_but_engine_missing() -> None:
-    server = FakeServer(FakeConfigService({"tts": {"enabled": True, "provider": "gptsovits"}}), None)
+    server = FakeServer(FakeConfigService({"enabled": True, "provider": "gptsovits"}), None)
     with pytest.raises(HTTPException) as exc_info:
         _ensure_tts_assembled(server)
     assert exc_info.value.status_code == 409
@@ -37,12 +37,12 @@ def test_open_blocked_when_tts_enabled_but_engine_missing() -> None:
 
 
 def test_open_allowed_when_engine_assembled() -> None:
-    server = FakeServer(FakeConfigService({"tts": {"enabled": True}}), object())
+    server = FakeServer(FakeConfigService({"enabled": True}), object())
     _ensure_tts_assembled(server)  # 不抛即通过
 
 
 def test_open_allowed_when_tts_disabled() -> None:
-    server = FakeServer(FakeConfigService({"tts": {"enabled": False}}), None)
+    server = FakeServer(FakeConfigService({"enabled": False}), None)
     _ensure_tts_assembled(server)  # 配置上就没开，不拦
 
 

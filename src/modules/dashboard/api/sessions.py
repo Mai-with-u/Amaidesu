@@ -138,8 +138,12 @@ def _ensure_tts_assembled(server: "DashboardServer") -> None:
     进程后才放行。
     """
     svc = server.config_service
-    section = svc.get_file_section("infra", {}) if svc is not None else {}
-    tts_cfg = section.get("tts") if isinstance(section, dict) else None
+    if svc is None:
+        return  # 极简启动无配置服务，TTS 语义缺席，不拦
+    # 读拍平视图（get_section）而非 get_file_section：后者走 _file_sections
+    # 缓存（仅 initialize 时填充，热更新后不刷新），守卫会把刚关掉的开关
+    # 当成还开着；get_section 读的 _main_config 在每次写盘后随 reload 刷新。
+    tts_cfg = svc.get_section("tts", {})
     if isinstance(tts_cfg, dict) and bool(tts_cfg.get("enabled", True)) and server.tts_engine is None:
         raise HTTPException(
             status_code=409,
