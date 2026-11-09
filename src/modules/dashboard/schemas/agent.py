@@ -113,11 +113,13 @@ class AgentDelegateRequest(BaseModel):
 
 
 class AgentDelegateResponse(BaseModel):
-    """运营直派受理回执"""
+    """运营直派受理回执（目标忙时排进委派队列：queued 为真，queue_position 从 1 起）"""
 
     accepted: bool
     task_id: str
     executor: str
+    queued: bool = False
+    queue_position: int = 0
 
 
 class MemoTodoItem(BaseModel):

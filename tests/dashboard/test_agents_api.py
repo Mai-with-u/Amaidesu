@@ -190,7 +190,7 @@ def test_stop_agent_with_optional_reason(client, manager: AgentManager) -> None:
     assert ghost.status_code == 404 and "ghost" in ghost.json()["detail"]
 
 
-def test_delegate_registers_ledger_and_refusal_is_not_recorded(
+def test_delegate_registers_ledger_and_busy_target_queues(
     client, manager: AgentManager, ledger: TaskLedger
 ) -> None:
     body = client.post("/api/v1/agents/sample_agent/delegate", json={"instruction": "去挖矿"}).json()
@@ -200,10 +200,18 @@ def test_delegate_registers_ledger_and_refusal_is_not_recorded(
     record = ledger.get(task_id)
     assert (record.initiator, record.executor, record.snapshot["instruction"]) == ("operator", "sample_agent", "去挖矿")
 
+    # 目标忙（第一件在途）：普通件不再拒收，入委派队列排队（受理即入账）
     _agent(manager).accept_delegate = False
-    refused = client.post("/api/v1/agents/sample_agent/delegate", json={"instruction": "再去挖矿"})
-    assert refused.status_code == 409 and "受理失败" in refused.json()["detail"]
-    assert ledger.active_task_ids() == [task_id], "拒收不登记账本"
+    queued = client.post("/api/v1/agents/sample_agent/delegate", json={"instruction": "再去挖矿"}).json()
+    assert queued.get("queued") is True, queued
+    queued_id = queued["task_id"]
+    record2 = ledger.get(queued_id)
+    assert (record2.initiator, record2.executor, record2.snapshot["instruction"]) == (
+        "operator",
+        "sample_agent",
+        "再去挖矿",
+    )
+    assert ledger.active_task_ids() == [task_id, queued_id], "排队件与在途件同账进行中"
 
 
 def test_endpoints_return_503_without_agent_manager(mount, initialized_config) -> None:

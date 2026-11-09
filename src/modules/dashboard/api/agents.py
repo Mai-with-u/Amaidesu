@@ -300,8 +300,8 @@ async def delegate_to_agent(
     """给指定 Agent 派一项新工作（与 LLM 工具委派同一张任务账本，任务卡可见）。
 
     发起方记 "operator"、source 记 "agent"（执行 Agent 是账面唯一写者）。
-    受理回执 200 {accepted, task_id, executor}；Agent 不在名册 404；
-    目标拒收 409；任务基建未装配 503。
+    受理回执 200 {accepted, task_id, executor, queued, queue_position}（目标忙时排进
+    委派队列，queued 为真）；Agent 不在名册 404；目标拒收或队列满员 409；任务基建未装配 503。
     """
     result = await control.delegate(name, request.instruction)
     if not result["ok"]:
@@ -311,4 +311,6 @@ async def delegate_to_agent(
         accepted=bool(result["accepted"]),
         task_id=str(result["task_id"]),
         executor=str(result["executor"]),
+        queued=bool(result.get("queued", False)),
+        queue_position=int(result.get("queue_position", 0)),
     )
