@@ -217,8 +217,8 @@ class UnregisteredItem(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["commitment", "archive", "candidate"] = Field(
-        ..., description="本要登记成什么（承诺 / 档案行 / 观众候选）"
+    kind: Literal["commitment", "archive", "candidate", "social_fact"] = Field(
+        ..., description="本要登记成什么（承诺 / 档案行 / 观众候选 / 游戏社交事实或玩家互动）"
     )
     what: str = Field(default="", description="模型给的标题（可能为空）")
     quote: str = Field(default="", description="模型引的原话（校验没过时也原样留着）")

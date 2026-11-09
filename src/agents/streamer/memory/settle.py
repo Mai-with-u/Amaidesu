@@ -15,7 +15,7 @@ live.ended 之后、道别句播完才排进后台，一次整理待整理的场
 同一个在途任务，只调一次模型；存储侧再用「整理完成时刻为空」抢占，两个进程同时跑也只
 有一个写事务成功。
 
-三次调用各只做一种判断
+每次调用各只做一种判断
 ----------------------
 1. 场次档案：她的全部播出台词加游戏里的事，挑值得下次开播提起的至多 8 行新事；同时对上一份
    快照逐行挑留、去掉（要本场证据）或替换（要本场原话），代码再按固定规则凑成本场快照
@@ -23,7 +23,10 @@ live.ended 之后、道别句播完才排进后台，一次整理待整理的场
 2. 找新承诺：她的全部台词（附被回应的弹幕、回应的是哪位游戏玩家）、她在游戏公屏打的字加她能做的
    事，找出当众答应过、还没兑现的事；顺带列出她说欠着、账上却找不到的事（只进待审区，人批准才登记），
    以及游戏玩家在公屏说的关于他自己、她当场接住了的事（玩家自述，进另一张待审表）；
-3. 了结旧承诺：只在本场之前有未了结承诺时才调，判她说没说明白做完了或不做了。
+3. 了结旧承诺：只在本场之前有未了结承诺时才调，判她说没说明白做完了或不做了；
+4. 更新游戏社交事实：只在接了社交事实仓储、本场有玩家公屏、互动或现有事实时才调；原料是紧凑集
+   （玩家公屏、互动记录、游戏记录、记住的地点、现有事实），归纳她的角色与待弄清、补漏、修正场内
+   写歪的行，顺带记下有原话作证的一起做的事与帮过忙（见 ``settle_social``）。
 
 校验全部是代码：逐字引文（原话必须是所引那一行文本的逐字子串且不超过上限）、所属游戏
 （必须是本场玩过的）、对谁（对具体观众时那一行必须回应了真实观众的弹幕；对游戏玩家时要按
@@ -95,6 +98,7 @@ from src.agents.streamer.memory.settle_candidates import (
     validate_viewer_candidates,
 )
 from src.agents.streamer.memory.settle_players import PlayerChat, build_player_chat
+from src.agents.streamer.memory.settle_social import SocialMaterial, build_social_material, validate_social_output
 from src.agents.streamer.memory.settle_proof import (
     UNVERIFIED_MARK,
     GameRecord,
@@ -112,11 +116,18 @@ if TYPE_CHECKING:
     from src.modules.storage.repos.archive import ArchiveRepo
     from src.modules.storage.repos.chat import ChatRepo
     from src.modules.storage.repos.commitments import CommitmentRepo
-    from src.modules.storage.models.game_players import GameChatLine, GamePlayer, PendingPlayerCandidate
+    from src.modules.storage.models.game_players import (
+        GameChatLine,
+        GamePlayer,
+        PendingPlayerCandidate,
+        PendingPlayerInteraction,
+    )
+    from src.modules.storage.models.social_facts import NewSocialFact
     from src.modules.storage.repos.events import EventRepo
     from src.modules.storage.repos.game_players import GamePlayerRepo
     from src.modules.storage.repos.memory_cue_log import MemoryCueLogRepo
     from src.modules.storage.repos.sessions import SessionRepo
+    from src.modules.storage.repos.social_facts import SocialFactRepo
 
 __all__ = ["MAX_ATTEMPTS", "SessionSettler", "SettleError", "parse_commitment_output", "parse_json_object"]
 
@@ -129,6 +140,7 @@ SETTLE_PROFILE = "settle"
 _ARCHIVE_TEMPLATE = "memory_archive_system"
 _COMMITMENT_TEMPLATE = "memory_commitment_system"
 _CLOSE_TEMPLATE = "memory_commitment_close_system"
+_SOCIAL_TEMPLATE = "memory_social_fact_system"
 
 # 自动重试上限：用满后不再补跑，等运营者在 WebUI 点「重新整理」。
 # 与存储层共用同一个数（WebUI 整理状态接口读它做展示与重置口径），不各写一份
@@ -176,6 +188,7 @@ _MATERIAL_STEPS: Tuple[str, ...] = (
     "读人批准的观众来源行",
     "读本场地点动静",
     "读本场游戏记录",
+    "读游戏社交事实",
 )
 # 单步取料超过这个毫秒数就记一条告警：这一步可能卡住（表锁、大表扫描、远端存储慢），
 # 面板文案只能报"正在做第几步"，步骤名与已等待时长由日志给出
@@ -240,6 +253,8 @@ class SettleMaterial:
     # 都要引一条，代码按它核对；没有任何记录时无从核对，不拦
     game_records: List[GameRecord] = field(default_factory=list)
     records_text: str = ""
+    # 第四次调用（更新游戏社交事实）的紧凑原料；没接仓储或没有可据以更新的原料时为空
+    social: SocialMaterial = field(default_factory=SocialMaterial)
 
 
 @dataclass(frozen=True)
@@ -258,6 +273,9 @@ class SettleOutcome:
     candidates_personal_dropped: int = 0
     # 玩家自述（人批准才进那位玩家的玩家卡）
     player_candidates: List["PendingPlayerCandidate"] = field(default_factory=list)
+    # 第四次调用核过的社交事实与互动（一起做的事、帮过忙）
+    social_facts: List["NewSocialFact"] = field(default_factory=list)
+    player_interactions: List["PendingPlayerInteraction"] = field(default_factory=list)
 
 
 @dataclass
@@ -551,6 +569,7 @@ class SessionSettler:
         clock: Callable[[], int] = now_ms,
         game_player_repo: Optional["GamePlayerRepo"] = None,
         cue_log_repo: Optional["MemoryCueLogRepo"] = None,
+        social_fact_repo: Optional["SocialFactRepo"] = None,
     ) -> None:
         """仓储、模型与提示词由主播 Agent 构造时注入。
 
@@ -559,7 +578,7 @@ class SessionSettler:
         用来写「她能做的事」；min_session_ms 与常驻简报的"上一场"时长下限同一个值，滚动之前
         的旧场次现拼基底时用来数"时长够的场次"。game_player_repo 缺失时原料里没有游戏玩家与公屏，
         对玩家的承诺一条也认不出（模型写了也进未登记）。cue_log_repo 缺失时唠叨指标只按台词
-        点名算，线索卡那几项为空；task_registry 是后台任务登记处（缺省 None
+        点名算，线索卡那几项为空；social_fact_repo 缺失时不跑第四次调用（不更新游戏社交事实）；task_registry 是后台任务登记处（缺省 None
         时整理不登记，前端面板看不到这次整理，其余行为一致）。
         """
         self._sessions = sessions_repo
@@ -572,6 +591,7 @@ class SessionSettler:
         self._game_names_provider = game_names_provider
         self._players = game_player_repo
         self._cue_log = cue_log_repo
+        self._social_facts = social_fact_repo
         self._min_session_ms = max(0, int(min_session_ms))
         self._task_registry = task_registry
         self._clock = clock
@@ -755,6 +775,8 @@ class SessionSettler:
                 # 读原料时看到的旧行：调模型期间人批准、插进最新快照的观众来源行不在其中，落库时补进本场快照
                 seen_line_ids=_seen_line_ids(material),
                 player_candidates=outcome.player_candidates,
+                social_facts=outcome.social_facts,
+                player_interactions=outcome.player_interactions,
             )
         except Exception as exc:  # noqa: BLE001 - 写入失败按整理失败记账，事务已回滚
             logger.warning(f"场次 {live_session_id} 整理写入失败: {exc}", exc=exc)
@@ -775,7 +797,8 @@ class SessionSettler:
         logger.info(
             f"场次 {live_session_id} 整理完成：档案 {written.get('archive', 0)} 行、"
             f"新承诺 {written.get('commitments', 0)} 条、了结 {written.get('closed', 0)} 条、"
-            f"未登记 {len(outcome.unregistered)} 条、观众候选 {written.get('candidates', 0)} 条"
+            f"未登记 {len(outcome.unregistered)} 条、观众候选 {written.get('candidates', 0)} 条、"
+            f"社交事实 {written.get('social_facts', 0)} 条、互动 {written.get('interactions', 0)} 条"
         )
         if registry is not None:
             await registry.finish(current_task_id, success=True)
@@ -901,6 +924,9 @@ class SessionSettler:
             closed_text="\n".join(f"#{commitment_id} 「{what}」" for commitment_id, what in closed_titles),
             game_records=records,
             records_text=render_records(records),
+            social=await self._material_step(
+                9, self._load_social(session, games, saves, records, remembered_places(place_marks)), progress
+            ),
         )
 
     async def _material_step(
@@ -923,6 +949,49 @@ class SessionSettler:
         if elapsed_ms > _SLOW_MATERIAL_STEP_MS:
             logger.warning(f"取料步骤「{name}」已等待 {elapsed_ms} 毫秒，超过 {_SLOW_MATERIAL_STEP_MS} 毫秒")
         return result
+
+    async def _load_social(
+        self,
+        session: LiveSession,
+        games: Sequence[str],
+        saves: SaveTimeline,
+        records: Sequence[GameRecord],
+        places: Sequence[str],
+    ) -> SocialMaterial:
+        """第四次调用的紧凑原料；没接仓储时为空，读不到时也为空（这一场不更新社交事实，其余照常整理）。"""
+        if self._social_facts is None:
+            return SocialMaterial()
+        try:
+            chat_lines: List["GameChatLine"] = []
+            interactions: List[Any] = []
+            names: Dict[int, str] = {}
+            if self._players is not None:
+                chat_lines = list(await self._players.list_session_game_chat(live_session_id=int(session.id)))
+                interactions = list(await self._players.list_session_interactions(live_session_id=int(session.id)))
+                wanted = {int(line.player_id) for line in chat_lines if line.player_id is not None}
+                wanted |= {int(item.player_id) for item in interactions}
+                for player_id in sorted(wanted):
+                    player = await self._players.get_player(player_id=player_id)
+                    if player is not None:
+                        names[player_id] = player.name
+            facts: List[Any] = []
+            for game in games:
+                facts.extend(await self._social_facts.list_active_facts(game=game))
+        except Exception as exc:  # noqa: BLE001 - 少了这份原料只是这一场不更新社交事实
+            logger.warning(f"场次 {session.id} 读游戏社交事实原料失败，这一场不更新社交事实: {exc}", exc=exc)
+            return SocialMaterial()
+        return build_social_material(
+            chat_lines=chat_lines,
+            interactions=interactions,
+            facts=facts,
+            player_names=names,
+            records_text=render_records(list(records)),
+            places_text=render_places(list(places)),
+            games=games,
+            saves=saves,
+            started_at_ms=int(session.started_at_ms),
+            clock_text=_clock_text,
+        )
 
     async def _load_game_records(self, session: LiveSession) -> List[GameRecord]:
         """本场的游戏记录：了结了的委派与里程碑、上报；读不到就当没有（完成说法这一场不核对，其余照常整理）。"""
@@ -1181,7 +1250,7 @@ class SessionSettler:
     async def _extract(
         self, material: SettleMaterial, *, progress: Optional[Callable[[str], Awaitable[None]]] = None
     ) -> SettleOutcome:
-        """跑三次调用并逐条校验；调用失败抛 SettleError（整场不提交）。
+        """跑三到四次调用并逐条校验；调用失败抛 SettleError（整场不提交）。
 
         ``progress`` 把"第 N 笔/共 M 笔"的进度报给后台任务面板（缺省 None 时不报，
         离线评测脚本直接调本方法不带面板）。共几笔按有没有未了结的旧承诺定：
@@ -1194,7 +1263,7 @@ class SessionSettler:
             async def progress(text: str) -> None:
                 return None
 
-        total_calls = 3 if material.open_commitments else 2
+        total_calls = (3 if material.open_commitments else 2) + (0 if material.social.empty else 1)
         await progress(f"第 1 笔/共 {total_calls} 笔：整理本场档案")
         archive_data = await self._call_with_liveness(
             progress=progress,
@@ -1266,6 +1335,25 @@ class SessionSettler:
                     on_delta=on_delta,
                 ),
             )
+        social_check = None
+        if not material.social.empty:
+            await progress(f"第 {total_calls} 笔/共 {total_calls} 笔：更新游戏社交事实")
+            social_data = await self._call_with_liveness(
+                progress=progress,
+                live=live,
+                call=lambda on_delta: self._ask(
+                    template=_SOCIAL_TEMPLATE,
+                    prompt=(
+                        f"{material.social.text}\n\n"
+                        "场内已登记的条目只做应答与了结，不新建：同一件事已经有一行时，变了就取代那一行。\n"
+                        "请更新这个游戏环境的社交事实。"
+                    ),
+                    on_delta=on_delta,
+                ),
+            )
+            social_check = validate_social_output(
+                social_data, material.social, live_session_id=material.live_session_id
+            )
         new_lines, archive_misses = self._validate_archive(archive_rows, material)
         # 先认了结、再认新承诺：一行台词点名了某条旧承诺时，那条旧承诺本场有没有了结，
         # 决定这一行里的新答应是"换了个做法"（照常登记）还是"又提了一遍旧事"（不登记、进报告）
@@ -1296,6 +1384,7 @@ class SessionSettler:
                 *candidates.missed,
                 *claimed.missed,
                 *player_check.missed,
+                *(social_check.missed if social_check is not None else []),
             ],
             input_note=material.speech_note,
             viewer_candidates=[*candidates.candidates, *claimed.candidates],
@@ -1303,6 +1392,8 @@ class SessionSettler:
                 candidates.personal_dropped + claimed.personal_dropped + player_check.personal_dropped
             ),
             player_candidates=player_check.candidates,
+            social_facts=social_check.facts if social_check is not None else [],
+            player_interactions=social_check.interactions if social_check is not None else [],
         )
 
     async def _check_player_candidates(self, rows: Any, material: SettleMaterial) -> PlayerCandidateCheck:

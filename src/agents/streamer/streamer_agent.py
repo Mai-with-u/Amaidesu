@@ -557,6 +557,8 @@ class StreamerAgent(BaseAgent):
                 game_player_repo=game_player_repo,
                 # 唠叨指标里线索卡那几项：推了几张、用上几张、只由她自己的台词触发的几张
                 cue_log_repo=memory_cue_log_repo,
+                # 第四次调用：更新游戏社交事实（没接仓储时不跑）
+                social_fact_repo=social_fact_repo,
                 # 后台任务面板：整理全程（取料/第 N 笔模型调用/写库）在这里可见
                 task_registry=task_registry,
             )

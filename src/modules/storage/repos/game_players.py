@@ -407,6 +407,20 @@ class GamePlayerRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def list_session_interactions(self, *, live_session_id: int) -> List[PlayerInteraction]:
+        """一场里记下的全部互动（下播整理给模型看"本场互动记录新增行"用），按时间先后。"""
+
+        def _exec() -> List[PlayerInteraction]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    f"SELECT {_INTERACTION_COLUMNS} FROM game_player_interactions"  # noqa: S608 常量列清单
+                    " WHERE live_session_id=? ORDER BY at_ms, id",
+                    (int(live_session_id),),
+                ).fetchall()
+                return [_interaction(row) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
     async def interaction_counts(self, *, player_ids: Sequence[int]) -> Dict[int, Dict[str, int]]:
         """每位玩家各种互动的条数（打招呼按场合并，所以是打过招呼的场数）；给记忆页的玩家列表看。"""
         ids = [int(item) for item in player_ids]

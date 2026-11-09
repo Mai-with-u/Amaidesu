@@ -37,7 +37,12 @@ from src.modules.storage.models.social_facts import (
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.utils.time_utils import now_ms
 
-__all__ = ["SocialFactRepo", "delete_social_facts_by_session", "reopen_social_facts_superseded_by_session"]
+__all__ = [
+    "SocialFactRepo",
+    "delete_social_facts_by_session",
+    "insert_social_fact_row",
+    "reopen_social_facts_superseded_by_session",
+]
 
 # 读面列（与 SocialFact 字段一一对应）
 _SOCIAL_FACT_COLUMNS = (
@@ -73,58 +78,25 @@ class SocialFactRepo(BaseRepo):
         ``superseded_by``。旧行是人工锁、状态不是 active、或 kind 与新行
         不同类时，整条登记不落库（返回 None）。
         """
-        fact_text = (text or "").strip()
-        fact_quote = (quote or "").strip()
-        if not fact_text or kind not in SOCIAL_FACT_KINDS:
-            return None
-        if not fact_quote and kind not in QUOTE_OPTIONAL_KINDS:
-            # 非归纳类必须带可核对的原文依据
-            return None
+        fact = NewSocialFact(
+            kind=kind,
+            text=text,
+            quote=quote,
+            game=game or "",
+            save_id=save_id or "",
+            save_name=save_name or "",
+            evidence_chat_id=evidence_chat_id,
+            evidence_game_chat_id=evidence_game_chat_id,
+            supersedes_id=supersedes_id,
+            human_locked=int(human_locked),
+            created_session_id=created_session_id,
+            updated_session_id=updated_session_id,
+        )
         ts = int(now_ms_value if now_ms_value is not None else now_ms())
 
         def _exec() -> Optional[int]:
             with self._manager.transaction() as conn:
-                if supersedes_id is not None:
-                    old = conn.execute(
-                        "SELECT id, kind, status, human_locked FROM game_social_facts WHERE id=?",
-                        (int(supersedes_id),),
-                    ).fetchone()
-                    if old is None:
-                        return None
-                    if int(old["human_locked"]) != 0 or str(old["status"]) != "active":
-                        # 人工锁或已失效的行不得被取代
-                        return None
-                    if str(old["kind"]) != kind:
-                        # 取代只在同类之间发生（不同类的事实各自独立）
-                        return None
-                cur = conn.execute(
-                    "INSERT INTO game_social_facts(game, save_id, save_name, kind, text, quote,"
-                    " evidence_chat_id, evidence_game_chat_id, status, superseded_by, human_locked,"
-                    " created_session_id, updated_session_id, created_at_ms, updated_at_ms)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?, ?, ?, ?)",
-                    (
-                        game or "",
-                        save_id or "",
-                        save_name or "",
-                        kind,
-                        fact_text,
-                        fact_quote,
-                        evidence_chat_id,
-                        evidence_game_chat_id,
-                        int(human_locked),
-                        created_session_id,
-                        updated_session_id,
-                        ts,
-                        ts,
-                    ),
-                )
-                new_id = int(cur.lastrowid or 0)
-                if supersedes_id is not None:
-                    conn.execute(
-                        "UPDATE game_social_facts SET status='superseded', superseded_by=?, updated_at_ms=? WHERE id=?",
-                        (new_id, ts, int(supersedes_id)),
-                    )
-                return new_id
+                return insert_social_fact_row(conn, fact=fact, now_ms_value=ts)
 
         return await self._run_in_executor(_exec)
 
@@ -360,3 +332,67 @@ def reopen_social_facts_superseded_by_session(
         (int(updated_at_ms), int(live_session_id)),
     )
     return int(cur.rowcount or 0)
+
+
+def insert_social_fact_row(
+    conn: sqlite3.Connection, *, fact: NewSocialFact, now_ms_value: int, skip_duplicate: bool = False
+) -> Optional[int]:
+    """在调用方的事务里登记一条事实（可同时取代旧行），返回新行号；不满足存储层约束时返回 None。
+
+    约束：kind 是六类之一、正文非空；非归纳类必须带引文；取代目标须存在、现行、同类、没被运营者锁定。
+    ``skip_duplicate`` 为真时，同一游戏同一存档里已有同类同句的现行行就不再写（下播整理重跑时防重复）。
+    """
+    fact_text = (fact.text or "").strip()
+    fact_quote = (fact.quote or "").strip()
+    if not fact_text or fact.kind not in SOCIAL_FACT_KINDS:
+        return None
+    if not fact_quote and fact.kind not in QUOTE_OPTIONAL_KINDS:
+        # 非归纳类必须带可核对的原文依据
+        return None
+    if fact.supersedes_id is not None:
+        old = conn.execute(
+            "SELECT kind, status, human_locked FROM game_social_facts WHERE id=?", (int(fact.supersedes_id),)
+        ).fetchone()
+        if old is None or int(old["human_locked"]) != 0 or str(old["status"]) != "active":
+            # 不存在、人工锁或已失效的行不得被取代
+            return None
+        if str(old["kind"]) != fact.kind:
+            # 取代只在同类之间发生（不同类的事实各自独立）
+            return None
+    if skip_duplicate:
+        same = conn.execute(
+            "SELECT 1 FROM game_social_facts WHERE status='active' AND game=? AND save_id=? AND kind=? AND text=?",
+            (fact.game or "", fact.save_id or "", fact.kind, fact_text),
+        ).fetchone()
+        if same is not None:
+            return None
+    ts = int(now_ms_value)
+    cur = conn.execute(
+        "INSERT INTO game_social_facts(game, save_id, save_name, kind, text, quote,"
+        " evidence_chat_id, evidence_game_chat_id, status, superseded_by, human_locked,"
+        " created_session_id, updated_session_id, created_at_ms, updated_at_ms)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?, ?, ?, ?)",
+        (
+            fact.game or "",
+            fact.save_id or "",
+            fact.save_name or "",
+            fact.kind,
+            fact_text,
+            fact_quote,
+            fact.evidence_chat_id,
+            fact.evidence_game_chat_id,
+            int(fact.human_locked),
+            fact.created_session_id,
+            fact.updated_session_id,
+            ts,
+            ts,
+        ),
+    )
+    new_id = int(cur.lastrowid or 0)
+    if fact.supersedes_id is not None:
+        conn.execute(
+            "UPDATE game_social_facts SET status='superseded', superseded_by=?, updated_session_id=?,"
+            " updated_at_ms=? WHERE id=?",
+            (new_id, fact.updated_session_id, ts, int(fact.supersedes_id)),
+        )
+    return new_id

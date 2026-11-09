@@ -23,7 +23,7 @@ from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, Optional,
 
 from src.agents.streamer.memory.settle_candidates import _verbatim
 from src.modules.logging import get_logger
-from src.modules.storage.models.social_facts import SOCIAL_FACT_KINDS
+from src.modules.storage.models.social_facts import MAX_ACTIVE_FACTS_PER_KIND, SOCIAL_FACT_KINDS
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
 from src.modules.tools.provider import BaseToolProvider
@@ -34,8 +34,8 @@ __all__ = [
     "build_social_fact_tool_spec",
 ]
 
-# 每一类在一个存档里至多几行现行事实（防刷屏；参考段总共只注入 12 行）
-MAX_FACTS_PER_KIND = 4
+# 每一类在一个存档里至多几行现行事实（与下播整理同一个数）
+MAX_FACTS_PER_KIND = MAX_ACTIVE_FACTS_PER_KIND
 # 一句事实与引文的长度上限
 _TEXT_MAX_CHARS = 60
 _QUOTE_MAX_CHARS = 80

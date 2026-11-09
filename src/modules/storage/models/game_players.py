@@ -29,6 +29,7 @@ __all__ = [
     "GameChatLine",
     "GamePlayer",
     "PendingPlayerCandidate",
+    "PendingPlayerInteraction",
     "PlayerCandidate",
     "PlayerInteraction",
     "PlayerSave",
@@ -138,6 +139,19 @@ class PendingPlayerCandidate(BaseModel):
     reply_game_chat_id: Optional[int] = Field(default=None, description="她在公屏回他的那句；回应是台词时为空")
     reply_live_chat_id: Optional[int] = Field(default=None, description="她播出的那句回应台词；回应在公屏时为空")
     reply_quote: str = Field(..., description="她那句回应的逐字片段")
+
+
+class PendingPlayerInteraction(BaseModel):
+    """下播整理校验通过、等着写进互动表的一次"一起做的事"或"帮过忙"（有公屏原话作依据才有）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    player_id: int = Field(..., description="哪位玩家")
+    kind: str = Field(..., description="together 一起做的事 / helped 帮过忙")
+    fact: Dict[str, Any] = Field(default_factory=dict, description="结构化事实：做了什么、依据原话")
+    save_id: str = Field(default="", description="在哪个存档；不明为空")
+    save_name: str = Field(default="", description="存档给人看的名字")
+    at_ms: int = Field(..., description="依据那句公屏的时刻")
 
 
 class PlayerCandidate(PendingPlayerCandidate):

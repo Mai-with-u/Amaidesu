@@ -396,6 +396,8 @@ async def test_apply_settlement_writes_everything_in_one_call(store: SQLiteDatab
         "claimed": 1,
         "candidates": 0,
         "player_candidates": 0,
+        "social_facts": 0,
+        "interactions": 0,
     }
     row = await store.sessions.get_live_session(live_session_id=session_id)
     assert row is not None and row.settled_at_ms == 9999
@@ -571,6 +573,8 @@ async def test_apply_settlement_rerun_replaces_archive_and_open_commitments(stor
         "claimed": 1,
         "candidates": 0,
         "player_candidates": 0,
+        "social_facts": 0,
+        "interactions": 0,
     }
 
     closed = await store.commitments.insert_commitment(what="被运营者了结", created_session_id=session_id)
@@ -594,6 +598,8 @@ async def test_apply_settlement_rerun_replaces_archive_and_open_commitments(stor
         "claimed": 1,
         "candidates": 0,
         "player_candidates": 0,
+        "social_facts": 0,
+        "interactions": 0,
     }
 
     lines = await store.archive.list_lines(live_session_id=session_id)
@@ -743,6 +749,8 @@ async def test_apply_settlement_refuses_rehearsal_session(store: SQLiteDatabase)
         "claimed": 0,
         "candidates": 0,
         "player_candidates": 0,
+        "social_facts": 0,
+        "interactions": 0,
     }
     row = await store.sessions.get_live_session(live_session_id=session_id)
     assert row is not None and row.settled_at_ms is None

@@ -7,10 +7,17 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from src.modules.storage.models.game_players import PendingPlayerCandidate
+from src.modules.storage.models.game_players import (
+    INTERACTION_HELPED,
+    INTERACTION_TOGETHER,
+    PendingPlayerCandidate,
+    PendingPlayerInteraction,
+)
+from src.modules.storage.models.social_facts import NewSocialFact
 from src.modules.storage.models.memory import (
     CommitmentClosure,
     KeptSnapshotLine,
@@ -30,6 +37,7 @@ from src.modules.storage.repos.game_players import replace_session_player_candid
 from src.modules.storage.repos.memory_index import delete_session_index_rows
 from src.modules.storage.repos.social_facts import (
     delete_social_facts_by_session,
+    insert_social_fact_row,
     reopen_social_facts_superseded_by_session,
 )
 from src.modules.storage.repos.viewer_candidates import CANDIDATE_EXPIRE_MS, replace_session_candidates
@@ -499,6 +507,8 @@ class SessionRepo(BaseRepo):
         viewer_candidates: Sequence[PendingViewerCandidate] = (),
         seen_line_ids: Optional[Sequence[int]] = None,
         player_candidates: Sequence[PendingPlayerCandidate] = (),
+        social_facts: Sequence[NewSocialFact] = (),
+        player_interactions: Sequence[PendingPlayerInteraction] = (),
     ) -> Dict[str, int]:
         """把一场的整理结果一次写进去：档案行、档案快照、新承诺、了结、观众候选、玩家自述、整理完成时刻。
 
@@ -518,6 +528,8 @@ class SessionRepo(BaseRepo):
         快照整份替换，所以本场此前做出的去掉、替换随之作废，基底仍是上一份快照。整理调模型
         这段时间里人批准的观众候选插进了当时最新的那份快照，整理读原料时没看到（不在
         ``seen_line_ids`` 里）：同一事务里在删旧快照之前把它们读出来，写在本场快照最前面。
+        游戏社交事实（下播整理第四调的归纳、补漏与修正）同一事务写：与现行行同类同句的不重复写，取代按
+        存储层约束（运营者锁定的不动）。一起做的事、帮过忙两类互动只由整理写，重跑时本场这两类整份替换。
         返回各类写入条数（claimed = 1 表示这次真的抢到并写了）。
         """
 
@@ -530,6 +542,8 @@ class SessionRepo(BaseRepo):
                 "claimed": 0,
                 "candidates": 0,
                 "player_candidates": 0,
+                "social_facts": 0,
+                "interactions": 0,
             }
             with self._manager.transaction(immediate=True) as conn:
                 claim = conn.execute(
@@ -665,6 +679,29 @@ class SessionRepo(BaseRepo):
                         ),
                     )
                     written["commitments"] += max(0, int(cur.rowcount or 0))
+                for fact in social_facts:
+                    if insert_social_fact_row(conn, fact=fact, now_ms_value=int(now_ms_value), skip_duplicate=True):
+                        written["social_facts"] += 1
+                # 一起做的事与帮过忙只由整理写：重跑时本场这两类整份替换
+                conn.execute(
+                    "DELETE FROM game_player_interactions WHERE live_session_id=? AND kind IN (?, ?)",
+                    (int(live_session_id), INTERACTION_TOGETHER, INTERACTION_HELPED),
+                )
+                for interaction in player_interactions:
+                    conn.execute(
+                        "INSERT INTO game_player_interactions(player_id, live_session_id, save_id, save_name, kind,"
+                        " fact, at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            int(interaction.player_id),
+                            int(live_session_id),
+                            interaction.save_id,
+                            interaction.save_name,
+                            interaction.kind,
+                            json.dumps(interaction.fact, ensure_ascii=False),
+                            int(interaction.at_ms),
+                        ),
+                    )
+                    written["interactions"] += 1
                 for closure in closures:
                     cur = conn.execute(
                         "UPDATE commitments SET status='closed', close_chat_id=?, close_quote=?,"

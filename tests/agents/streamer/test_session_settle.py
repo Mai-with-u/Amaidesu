@@ -1646,8 +1646,9 @@ async def test_settle_reports_material_step_progress(store: SQLiteDatabase, prom
     await bus.wait_until_drained()
 
     texts = [payload.progress_text for payload in payloads]
-    assert "取料 0/9：读游戏玩家与公屏" in texts, texts
-    assert "取料 8/9：读本场游戏记录" in texts, texts
+    assert "取料 0/10：读游戏玩家与公屏" in texts, texts
+    assert "取料 8/10：读本场游戏记录" in texts, texts
+    assert "取料 9/10：读游戏社交事实" in texts, texts
 
 
 async def test_settle_warns_when_material_step_is_slow(

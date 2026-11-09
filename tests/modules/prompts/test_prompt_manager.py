@@ -146,6 +146,7 @@ def test_singleton_is_shared_resettable_auto_scans_and_loads_exactly_the_declare
             "memory_archive_system",
             "memory_commitment_system",
             "memory_commitment_close_system",
+            "memory_social_fact_system",
             "summary_system",
             "chapter_system",
             "screen_vlm_system",

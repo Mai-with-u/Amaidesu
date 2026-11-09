@@ -24,6 +24,8 @@ __all__ = [
     "SocialFactKind",
     "SOCIAL_FACT_KINDS",
     "SOCIAL_FACT_STATUSES",
+    "MAX_ACTIVE_FACTS_PER_KIND",
+    "QUOTE_OPTIONAL_KINDS",
 ]
 
 # 六类事实（英文小写枚举）：环境形态 / 成员关系 / 共享惯例 / 进行中的事 /
@@ -44,6 +46,9 @@ SOCIAL_FACT_STATUSES: tuple[str, ...] = ("active", "superseded")
 
 # 空引文行只允许这两类（归纳类）：其余四类必须有可核对的原文依据
 QUOTE_OPTIONAL_KINDS: tuple[str, ...] = ("her_role", "open_question")
+
+# 每一类在一个游戏存档里至多几行现行事实（防刷屏；场内工具与下播整理共用，参考段总共只注入 12 行）
+MAX_ACTIVE_FACTS_PER_KIND = 4
 
 
 class SocialFact(BaseModel):
