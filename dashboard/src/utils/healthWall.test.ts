@@ -22,11 +22,17 @@ function item(partial: Partial<SystemHealthItem>): SystemHealthItem {
 }
 
 describe('worstHealthState', () => {
-  it('按 offline > degraded > unknown > ok 取最差', () => {
+  it('按 offline > degraded > unknown > disabled > ok 取最差', () => {
     expect(worstHealthState([item({ state: 'ok' }), item({ state: 'degraded' })])).toBe('degraded');
     expect(worstHealthState([item({ state: 'ok' }), item({ state: 'offline' })])).toBe('offline');
     expect(worstHealthState([item({ state: 'ok' }), item({ state: 'unknown' })])).toBe('unknown');
+    expect(worstHealthState([item({ state: 'ok' }), item({ state: 'disabled' })])).toBe('disabled');
+    expect(worstHealthState([item({ state: 'disabled' }), item({ state: 'offline' })])).toBe('offline');
     expect(worstHealthState([])).toBe('unknown');
+  });
+
+  it('全为 disabled 的组取 disabled（未启用是灰档，不冒充探不到的 unknown）', () => {
+    expect(worstHealthState([item({ state: 'disabled' }), item({ state: 'disabled' })])).toBe('disabled');
   });
 });
 
@@ -36,11 +42,15 @@ describe('summarizeDomains', () => {
       agents: [item({ name: 'streamer' })],
       custom_domain: [],
       tts: [item({ name: 'tts', state: 'offline' })],
+      vision: [item({ name: 'live_frame' })],
+      llm: [item({ name: 'planner' })],
     });
-    expect(groups.map(g => g.domain)).toEqual(['tts', 'agents', 'custom_domain']);
+    expect(groups.map(g => g.domain)).toEqual(['tts', 'vision', 'llm', 'agents', 'custom_domain']);
     expect(groups[0].label).toBe(HEALTH_DOMAIN_LABELS.tts);
     expect(groups[0].worst).toBe('offline');
-    expect(groups[2].label).toBe('custom_domain');
+    expect(groups[1].label).toBe(HEALTH_DOMAIN_LABELS.vision);
+    expect(groups[2].label).toBe(HEALTH_DOMAIN_LABELS.llm);
+    expect(groups[4].label).toBe('custom_domain');
   });
 
   it('响应缺失时产出空列表（组件据此不铺空卡）', () => {

@@ -387,6 +387,14 @@ class BaseAgent(abc.ABC):
             self._registered_providers.append((provider, registry))
         return count
 
+    def registered_tool_providers(self) -> list[Any]:
+        """本 Agent 登记进 ToolRegistry 的工具提供者对象（只读快照）。
+
+        连接健康墙的 Agent 依赖聚合读此口径：Agent 依赖哪些外部连接
+        由其登记的提供者名单表达（如游戏 Agent 的 MCP 提供者），无需
+        各 Agent 包另维护一份依赖映射。"""
+        return [provider for provider, _ in self._registered_providers]
+
     def unregister_tool_providers(self) -> int:
         """从 registry 摘除本 Agent 登记的全部 provider（stop/清理路径调用；幂等）。"""
         removed = 0

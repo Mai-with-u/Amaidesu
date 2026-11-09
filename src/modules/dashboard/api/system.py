@@ -21,6 +21,7 @@ from src.modules.dashboard.schemas.system import (
 )
 from src.modules.dashboard.utils.component_helper import build_config_view, get_v2_component_list
 from src.modules.logging import get_logger
+from src.modules.tts.assembly import TTS_PROVIDER_NAMES
 from src.modules.tts.protocol import TtsObservation
 from src.modules.utils.time_utils import now_ms
 
@@ -157,13 +158,15 @@ def _build_health_domains(
     """按域聚合连接态；每域独立兜底，探查异常降级为该域一个 unknown 项。"""
     builders = {
         # TTS 域只依赖观测接口依赖（endpoint 注入），不读 server.tts_engine
-        "tts": lambda s: _build_tts_items(tts_observation),
+        "tts": lambda s: _build_tts_items(s, tts_observation),
+        "vision": _build_vision_items,
+        "llm": _build_llm_items,
         "avatar": lambda s: _build_provider_items(s, {"avatar"}),
         "obs": lambda s: _build_provider_items(s, {"studio"}),
         "maibot": _build_maibot_items,
         "tools_providers": lambda s: _build_provider_items(s, None),
         "collectors": lambda s: _build_component_items(s, "collectors"),
-        "agents": lambda s: _build_component_items(s, "agents"),
+        "agents": lambda s: _build_component_items(s, "agents", tts_observation),
     }
     domains: Dict[str, Any] = {}
     for domain, build in builders.items():
@@ -175,27 +178,150 @@ def _build_health_domains(
     return domains
 
 
-def _build_tts_items(engine: Optional[TtsObservation]) -> list[DomainHealthItem]:
-    """TTS 域：透传引擎 ``get_stats()``（与 /debug/tts/status 同数据源）。
+#: 健康墙状态严重度（Agent 依赖聚合取最差的口径；与前端 healthWall.ts 的
+#: STATE_SEVERITY 同序）：ok < disabled < unknown < degraded < offline
+_STATE_SEVERITY: Dict[str, int] = {"ok": 0, "disabled": 1, "unknown": 2, "degraded": 3, "offline": 4}
 
-    ``engine`` 按观测面协议 ``TtsObservation`` 收窄；未装配（None，未配
-    置或极简启动）降级为 unknown 项。
+
+def _file_section(server: "DashboardServer", file_stem: str) -> Dict[str, Any]:
+    """只读取一个配置文件的段集合；配置服务缺席或读取失败返回空 dict（调用方按缺席降级）。"""
+    svc = server.config_service
+    if svc is None:
+        return {}
+    try:
+        section = svc.get_file_section(file_stem, {})
+    except Exception:
+        logger.warning(f"读取 {file_stem} 配置失败，健康墙按缺席降级", exc=True)
+        return {}
+    return section if isinstance(section, dict) else {}
+
+
+def _build_tts_items(server: "DashboardServer", engine: Optional[TtsObservation]) -> list[DomainHealthItem]:
+    """TTS 域：多引擎逐条列出，只标当前激活引擎的连接态。
+
+    条目口径（装配表 ``TTS_PROVIDER_NAMES`` 为引擎名单唯一事实源）：
+    总开关未开 / 未选为当前引擎 → disabled（配置上就没开，非故障）；
+    激活引擎透传 ``get_stats()``（与 /debug/tts/status 同数据源），
+    引擎未装配降级 unknown。
     """
-    if engine is None:
-        return [
-            DomainHealthItem(
-                name="tts",
-                state="unknown",
-                detail="TTS 引擎未装配（未配置或极简启动）",
-            )
-        ]
-    stats = dict(engine.get_stats())
-    connected = stats.get("is_connected")
-    if isinstance(connected, bool):
-        state = "ok" if connected else "offline"
-        detail = f"引擎 {stats.get('name', '')}".strip()
-        return [DomainHealthItem(name="tts", state=state, detail=detail)]
-    return [DomainHealthItem(name="tts", state="unknown", detail="引擎未暴露连接态")]
+    tts_cfg = _file_section(server, "infra").get("tts")
+    tts_cfg = tts_cfg if isinstance(tts_cfg, dict) else {}
+    enabled = bool(tts_cfg.get("enabled", True))
+    active = str(tts_cfg.get("provider", "") or "")
+    stats: Dict[str, Any] = dict(engine.get_stats()) if engine is not None else {}
+    items: list[DomainHealthItem] = []
+    for name in TTS_PROVIDER_NAMES:
+        if not enabled:
+            items.append(DomainHealthItem(name=name, state="disabled", detail="TTS 总开关未开"))
+        elif name != active:
+            items.append(DomainHealthItem(name=name, state="disabled", detail="未选为当前引擎"))
+        elif engine is None:
+            items.append(DomainHealthItem(name=name, state="unknown", detail="引擎未装配（未配置或极简启动）"))
+        elif not isinstance(stats.get("is_connected"), bool):
+            items.append(DomainHealthItem(name=name, state="unknown", detail="引擎未暴露连接态"))
+        else:
+            connected = bool(stats.get("is_connected"))
+            state = "ok" if connected else "offline"
+            detail = f"当前引擎 {stats.get('name', name)}".strip()
+            items.append(DomainHealthItem(name=name, state=state, detail=detail))
+    return items
+
+
+def _build_vision_items(server: "DashboardServer") -> list[DomainHealthItem]:
+    """视觉域两条目：画面采集（live_frame 采集器连接态）+ 视觉感知链路可用性。
+
+    感知链路口径 = "决策请求挂最新直播画面"的三个前置：live_frame 采集器
+    启用、主播配置开挂帧（agents.streamer.live_frame.enabled）、决策主模型
+    支持视觉（model.toml 模型注册表 visual 标记）。任一前置缺失是配置上
+    没开（disabled），不是故障；模型配置读不到按 unknown 降级。
+    """
+    grouped = get_v2_component_list(build_config_view(server), server)
+    collectors = {str(c.name): c for c in grouped.get("collectors", [])}
+    frame = collectors.get("live_frame")
+    if frame is None:
+        frame_state, frame_detail = "unknown", "live_frame 不在采集器清单"
+    elif not bool(getattr(frame, "is_enabled", False)):
+        frame_state, frame_detail = "disabled", "采集器未启用（collectors.toml）"
+    elif not bool(getattr(frame, "is_started", False)):
+        frame_state, frame_detail = "degraded", "已启用但未启动"
+    else:
+        frame_state, frame_detail = "ok", "运行中"
+    items = [DomainHealthItem(name="live_frame", state=frame_state, detail=frame_detail)]  # type: ignore[arg-type]
+    items.append(DomainHealthItem(name="vision_perception", state=_vision_perception_state(server, frame_state)))  # type: ignore[arg-type]
+    return items
+
+
+def _vision_perception_state(server: "DashboardServer", frame_state: str) -> str:
+    """视觉感知条目状态：按"画面源 → 挂帧开关 → 主模型视觉能力"链路逐环判定。"""
+    if frame_state in {"unknown", "disabled"}:
+        return "disabled"
+    main_config = server.config_service.main_config if server.config_service else {}
+    agents_section = main_config.get("agents") if isinstance(main_config, dict) else {}
+    streamer_cfg = agents_section.get("streamer") if isinstance(agents_section, dict) else {}
+    live_frame_cfg = streamer_cfg.get("live_frame") if isinstance(streamer_cfg, dict) else {}
+    if isinstance(live_frame_cfg, dict) and live_frame_cfg.get("enabled") is False:
+        return "disabled"  # 画面有源但主播配置没开挂帧
+    model_section = _file_section(server, "model")
+    profiles = model_section.get("llm_profiles")
+    if not isinstance(profiles, dict):
+        return "unknown"  # 模型配置读不到，链路能力不可判
+    planner_cfg = profiles.get("planner")
+    planner_models = planner_cfg.get("model_list") if isinstance(planner_cfg, dict) else None
+    if not isinstance(planner_models, list) or not planner_models:
+        return "unknown"
+    primary = _entries_by_name(model_section, "llm_models").get(str(planner_models[0]))
+    if not isinstance(primary, dict):
+        return "unknown"
+    return "ok" if bool(primary.get("visual", False)) else "disabled"
+
+
+def _entries_by_name(section: Dict[str, Any], key: str) -> Dict[str, Dict[str, Any]]:
+    """把配置里的命名条目段收拢为 name → 条目（TOML 数组表与 dict 表两种形态都认）。"""
+    raw = section.get(key)
+    if isinstance(raw, dict):
+        return {str(k): v for k, v in raw.items() if isinstance(v, dict)}
+    if isinstance(raw, list):
+        return {str(m.get("name", "")): m for m in raw if isinstance(m, dict)}
+    return {}
+
+
+def _build_llm_items(server: "DashboardServer") -> list[DomainHealthItem]:
+    """LLM 服务域：各用途档（profile）的主/备模型配置解析状态。
+
+    只读 model.toml 配置做解析（引用的模型是否注册、服务商密钥是否填写），
+    不发真实 API 探测——余额耗尽/端点不可达类故障要探活须复用既有低频
+    机制，健康墙的只读快照不制造额外请求。主模型未注册或其密钥未配置
+    该档不可用；备模型缺位只降级（failover 少一条退路）。
+    """
+    model_section = _file_section(server, "model")
+    profiles = model_section.get("llm_profiles")
+    if not isinstance(profiles, dict) or not profiles:
+        return [DomainHealthItem(name="llm", state="unknown", detail="模型配置不可读")]
+    model_by_name = _entries_by_name(model_section, "llm_models")
+    provider_by_name = _entries_by_name(model_section, "llm_providers")
+    items: list[DomainHealthItem] = []
+    for profile_name, profile in profiles.items():
+        if not isinstance(profile, dict):
+            continue
+        model_list = profile.get("model_list")
+        if not isinstance(model_list, list) or not model_list:
+            items.append(DomainHealthItem(name=str(profile_name), state="unknown", detail="未配置模型名单"))
+            continue
+        primary, backups = str(model_list[0]), [str(m) for m in model_list[1:]]
+        missing_backups = [m for m in backups if m not in model_by_name]
+        primary_model = model_by_name.get(primary)
+        if primary_model is None:
+            state, detail = "offline", f"主模型 {primary} 未注册"
+        else:
+            provider_cfg = provider_by_name.get(str(primary_model.get("api_provider", "")), {})
+            if isinstance(provider_cfg, dict) and not str(provider_cfg.get("api_key", "") or "").strip():
+                state, detail = "disabled", f"服务商 {primary_model.get('api_provider', '')} 密钥未配置"
+            elif missing_backups:
+                state, detail = "degraded", f"备模型未注册：{'、'.join(missing_backups)}"
+            else:
+                state, detail = "ok", f"主 {primary}" + (f" / 备 {'、'.join(backups)}" if backups else "")
+        items.append(DomainHealthItem(name=str(profile_name), state=state, detail=detail))  # type: ignore[arg-type]
+    return items
 
 
 def _build_maibot_items(server: "DashboardServer") -> list[DomainHealthItem]:
@@ -268,11 +394,16 @@ def _provider_connected(provider: Any) -> bool | None:
     return connected if isinstance(connected, bool) else None
 
 
-def _build_component_items(server: "DashboardServer", group: str) -> list[DomainHealthItem]:
+def _build_component_items(
+    server: "DashboardServer",
+    group: str,
+    tts_observation: Optional[TtsObservation] = None,
+) -> list[DomainHealthItem]:
     """采集器 / Agent 域：按组件清单逐项映射运行态。
 
-    state 口径：已启动 → ok；已启用未启动 → degraded；配置未启用 → offline
-    （停用是用户选择，但健康墙回答的是"现在跑没跑"，detail 说明原因）。
+    state 口径：已启动 → ok；已启用未启动 → degraded；配置未启用 →
+    disabled（停用是用户选择，配置上就没开，非故障）。Agent 条目额外
+    聚合其依赖的最差状态（``_agent_dependency_state``）。
     """
     grouped = get_v2_component_list(build_config_view(server), server)
     items: list[DomainHealthItem] = []
@@ -285,9 +416,45 @@ def _build_component_items(server: "DashboardServer", group: str) -> list[Domain
         elif enabled:
             state, detail = "degraded", "已启用但未启动"
         else:
-            state, detail = "offline", "配置未启用"
+            state, detail = "disabled", "配置未启用"
+        if group == "agents":
+            state, detail = _apply_agent_dependencies(server, name, state, detail, tts_observation)
         items.append(DomainHealthItem(name=name, state=state, detail=detail))  # type: ignore[arg-type]
     return items
+
+
+def _apply_agent_dependencies(
+    server: "DashboardServer",
+    name: str,
+    state: str,
+    detail: str,
+    tts_observation: Optional[TtsObservation],
+) -> tuple[str, str]:
+    """把 Agent 依赖的最差状态聚合进条目。
+
+    依赖映射来源：Agent 经 ``BaseAgent.register_tool_provider`` 登记进共享
+    ToolRegistry 的提供者名单（游戏 Agent 的私有 MCP 提供者在此列，游戏
+    通用——新游戏 Agent 登记后自动纳入，不写死具体游戏）；主播 Agent 另
+    依赖 TTS 引擎（基础设施，不经注册表，按观测接口读连接态）。只看
+    明确断开的依赖（offline）：连接不可见（unknown）的本地提供者不抬高
+    条目严重度。Agent 自身配置未启用（disabled）时不被依赖状态覆盖。
+    """
+    if state == "disabled":
+        return state, detail
+    broken: list[str] = []
+    manager = server.agent_manager
+    agent = manager.get_agent_by_name(name) if manager is not None else None
+    if agent is not None:
+        for provider in agent.registered_tool_providers():
+            if _provider_connected(provider) is False:
+                broken.append(str(getattr(provider, "name", "") or "?"))
+    if name == "streamer" and tts_observation is not None:
+        stats = tts_observation.get_stats()
+        if stats.get("is_connected") is False:
+            broken.append("tts")
+    if not broken:
+        return state, detail
+    return "offline", f"{detail}；依赖未连接：{'、'.join(broken)}"
 
 
 @router.get("/changelog", response_model=ChangelogResponse)

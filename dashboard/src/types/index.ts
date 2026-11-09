@@ -64,7 +64,7 @@ export interface SystemHealthResponse {
 /** 连接健康墙单项：一个可观测组件的连接态快照（GET /system/health）。 */
 export interface SystemHealthItem {
   name: string;
-  state: 'ok' | 'degraded' | 'offline' | 'unknown';
+  state: 'ok' | 'degraded' | 'offline' | 'unknown' | 'disabled';
   detail: string;
   last_error: string;
   supports_reconnect: boolean;

@@ -231,6 +231,9 @@ onMounted(() => {
 .health-dot.is-unknown {
   background: var(--text-placeholder);
 }
+.health-dot.is-disabled {
+  background: var(--border-color);
+}
 .grow {
   flex: 1;
 }

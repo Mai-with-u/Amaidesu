@@ -11,9 +11,11 @@ import type { SystemHealthItem, SystemHealthWallResponse } from '@/types';
 
 export type HealthState = SystemHealthItem['state'];
 
-/** 域展示顺序：直播表达链路（语音/形象/OBS）在前，基础设施在后 */
+/** 域展示顺序：直播表达链路（语音/视觉/形象/OBS）在前，基础设施在后 */
 export const HEALTH_DOMAIN_ORDER = [
   'tts',
+  'vision',
+  'llm',
   'avatar',
   'obs',
   'maibot',
@@ -25,6 +27,8 @@ export const HEALTH_DOMAIN_ORDER = [
 /** 域名 → 运营可读标题 */
 export const HEALTH_DOMAIN_LABELS: Record<string, string> = {
   tts: '语音合成（TTS）',
+  vision: '视觉',
+  llm: 'LLM 服务',
   avatar: '虚拟形象平台',
   obs: 'OBS',
   maibot: 'MaiBot 桥接',
@@ -39,18 +43,22 @@ export const HEALTH_STATE_CLASS: Record<HealthState, string> = {
   degraded: 'degraded',
   offline: 'offline',
   unknown: 'unknown',
+  disabled: 'disabled',
 };
 
+// disabled = 未启用（配置上就没开，非故障），严重度只高于 ok：
+// 整域全为未启用时显示灰档，不冒充"探不到"（unknown）
 const STATE_SEVERITY: Record<HealthState, number> = {
   ok: 0,
-  unknown: 1,
-  degraded: 2,
-  offline: 3,
+  disabled: 1,
+  unknown: 2,
+  degraded: 3,
+  offline: 4,
 };
 
 /** 一组条目的最差状态（空组按 unknown，避免空卡片误报正常） */
 export function worstHealthState(items: SystemHealthItem[]): HealthState {
-  let worst: HealthState = 'unknown';
+  let worst: HealthState = items.length ? 'ok' : 'unknown';
   for (const item of items) {
     if (STATE_SEVERITY[item.state] > STATE_SEVERITY[worst]) worst = item.state;
   }
