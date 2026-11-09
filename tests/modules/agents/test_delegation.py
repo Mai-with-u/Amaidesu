@@ -269,37 +269,59 @@ async def test_prompt_target_resolution_matches_delegate(rig: _Rig) -> None:
     assert len(rig.ledger) == 0
 
 
-# 在途拒受理：目标名下有未终态委派单即拒（队列深度 = 1），framework_prompt 不受此限
+# 委派队列：目标忙时普通件自动排队（上限 5，满员拒收附清单）；急件插队/置顶；
+# 在途件走到终态时按序送达。framework_prompt 不受队列影响
 
 
-async def test_delegate_rejected_while_target_has_in_flight_delegation(rig: _Rig) -> None:
-    first = (
-        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
-    ).structured_content["task_id"]
+async def test_busy_target_queues_normal_delegation_and_delivers_on_terminal(rig: _Rig) -> None:
+    """目标忙时新普通件不拒收：入队带排位，在途件终态后按序送达。"""
+    b = _agent(rig, "agent_b")
+    await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
 
-    # 不判语义相同：指令不同的新单同样拒，理由带在途任务号 + 指令原文 + 受理时长
     res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "再去挖个矿"})
-    assert res.success is False
-    assert first in res.error_message and "盖一座房子" in res.error_message and "秒" in res.error_message
-    assert len(rig.ledger) == 1  # 拒单不登记
-
-    # 拒绝理由带已知进展（快照里除指令外的字段有就带）
-    rig.ledger.update(first, "running", summary="开始", snapshot={"instruction": "盖一座房子", "goals": "地基已挖好"})
-    res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "换个活"})
-    assert res.success is False and "地基已挖好" in res.error_message
+    assert res.success and res.structured_content["accepted"] is True
+    assert res.structured_content["queued"] is True and res.structured_content["queue_position"] == 1
+    queued_id = res.structured_content["task_id"]
+    assert rig.ledger.get(queued_id).status == "queued"
+    assert len(b.received) == 1, "排队的还没送到执行方"
 
     # 在途不拦递话：补充要求的合法通道照常
     res = await rig.call("framework_prompt", {"agent": "agent_b", "content": "屋顶用石砖"})
-    assert res.success and len(rig.ledger) == 1
+    assert res.success and rig.ledger.get(queued_id).status == "queued"
 
-    # 终态后放行新单
-    _agent(rig, "agent_b").finish(rig.ledger)
-    res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "再来一件"})
-    assert res.success and res.structured_content["accepted"] is True
+    # 在途件终态：排队件自动送达（账面转回受理态，执行方开跑再写 running）
+    b.finish(rig.ledger)
+    await _wait_until(lambda: len(b.received) == 2)
+    assert b.received[-1] == (queued_id, "再去挖个矿")
+    assert rig.ledger.get(queued_id).status == "accepted"
 
 
-async def test_ledger_keeps_full_instruction_and_refusal_quotes_only_own_words(rig: _Rig) -> None:
-    """账面存指令全文（附带的来源对话也在），另记发起方原话；在途拒受理理由只回原话：
+async def test_queue_full_refusal_lists_queue_and_progress(rig: _Rig) -> None:
+    """队列排满后普通件拒收：理由带在途那件的原话与已知进展 + 全部队列清单，不带执行侧判断原文。"""
+    first = (
+        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
+    ).structured_content["task_id"]
+    rig.ledger.update(first, "running", summary="开始", snapshot={"instruction": "盖一座房子", "goals": "地基已挖好"})
+    rig.ledger.annotate(
+        first, {REPLY_NOTE_KEY: "先 maicraft_place(12, 64, -30) 再说", REPLY_NOTE_AT_KEY: 1793977796538}
+    )
+
+    for index in range(5):
+        res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": f"排队第{index}件"})
+        assert res.success and res.structured_content["queue_position"] == index + 1
+
+    refused = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "第6件排不进"})
+    assert refused.success is False and refused.failure_kind == "business"
+    assert "排满 5 件" in refused.error_message
+    assert "地基已挖好" in refused.error_message  # 在途已知进展照带
+    assert "排队第0件" in refused.error_message and "排队第4件" in refused.error_message  # 清单带各条原话
+    assert "maicraft_place" not in refused.error_message and "1793977796538" not in refused.error_message
+    assert "own_words" not in refused.error_message
+    assert len(rig.ledger) == 6  # 拒单不登记（1 在途 + 5 排队）
+
+
+async def test_ledger_keeps_full_instruction_and_queue_lists_only_own_words(rig: _Rig) -> None:
+    """账面存指令全文（附带的来源对话也在），另记发起方原话；队列清单与拒收理由只回原话：
     原话长也不截，附带的观众原话与取舍规则不塞回去。"""
     own = "把营地棚子装一扇木门，" + "门外垫平台阶，" * 40 + "最后一句是收尾要求"
     assert len(own) > 200
@@ -314,50 +336,145 @@ async def test_ledger_keeps_full_instruction_and_refusal_quotes_only_own_words(r
     assert snapshot == {"instruction": instruction, "own_words": own}
     status = (await rig.call("framework_task_status", {"task_id": first})).structured_content
     assert status["snapshot"]["instruction"] == instruction
-    refused = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "换个活"})
-    assert refused.success is False and f"在途指令原文：「{own}」" in refused.error_message
-    assert "观众甲" not in refused.error_message and "取舍规则" not in refused.error_message
-    assert "own_words" not in refused.error_message, "原话不再当成已知进展列第二遍"
+    queued = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "换个活"})
+    assert queued.success, "目标忙时改排队，不再是拒收"
 
-
-async def test_in_flight_refusal_leaves_out_the_executor_reply_note(rig: _Rig) -> None:
-    """执行侧记在快照里的最近一句判断（没脱敏的推理原文加毫秒时刻）不进拒受理理由：
-    她重复派单被拒时只读到自己的原话与已知进展，不会把坐标、工具名念出来。"""
-    first = (await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "把门装上"})).structured_content[
-        "task_id"
-    ]
-    # 执行侧往快照补一条进展与一句判断：进展照带，判断不带
-    rig.ledger.update(first, "running", summary="开始", snapshot={"instruction": "把门装上", "goals": "门框已立好"})
-    rig.ledger.annotate(
-        first, {REPLY_NOTE_KEY: "先 maicraft_place(12, 64, -30) 再说", REPLY_NOTE_AT_KEY: 1793977796538}
-    )
-
-    refused = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "再装一次门"})
-
+    for index in range(4):  # 排满触发拒收理由，核对清单只回原话
+        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": f"凑数{index}"})
+    refused = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "挤一挤"})
     assert refused.success is False
-    assert "在途指令原文：「把门装上」" in refused.error_message and "门框已立好" in refused.error_message
-    assert "maicraft_place" not in refused.error_message and "1793977796538" not in refused.error_message
-    assert REPLY_NOTE_KEY not in refused.error_message
+    assert f"「{own}」" in refused.error_message
+    assert "观众甲" not in refused.error_message and "取舍规则" not in refused.error_message
+    assert "own_words" not in refused.error_message
 
 
-async def test_in_flight_refusal_points_to_prompt_only_when_target_waits(rig: _Rig) -> None:
-    """拒绝理由的出路按对方状态给：停着等主意时指向补充要求；还在做时让主播直接说话。
-
-    实测委派拒绝说"用 framework_prompt 调整"，补充要求又被空窗闸门拦下说"直接说话"，两边互相指成死结。
-    """
+async def test_waiting_in_flight_still_queues_and_full_refusal_lists_it(rig: _Rig) -> None:
+    """等定夺的在途不拦排队；队列满时的拒收理由照常带在途那件与队列清单。"""
     first = (
         await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "把女仆救回来"})
     ).structured_content["task_id"]
-
-    rig.ledger.update(first, "running", summary="还在做")
-    busy = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "放一只新女仆"})
-    assert busy.success is False
-    assert "没有就直接说话" in busy.error_message and "停着等你拿主意" not in busy.error_message
-
     rig.ledger.update(first, "waiting_for_decision", summary="卡住了，等主播拿主意")
-    waiting = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "放一只新女仆"})
-    assert waiting.success is False
-    assert "停着等你拿主意：用 framework_prompt 把决定补给它" in waiting.error_message
+
+    busy = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "放一只新女仆"})
+    assert busy.success and busy.structured_content["queued"] is True, "等定夺也算忙，普通件排队"
+
+    for index in range(4):
+        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": f"凑数{index}"})
+    full = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "挤一挤"})
+    assert full.success is False
+    assert "排满 5 件" in full.error_message and "把女仆救回来" in full.error_message
+
+
+class _SelectiveAgent(_StubAgent):
+    """只对特定指令拒收的桩：排队的件送达被拒时，账面当场转 failed 不留孤儿。"""
+
+    def __init__(self, name: str, *, refuse_when: str) -> None:
+        super().__init__(name)
+        self._refuse_when = refuse_when
+
+    def receive_delegation(self, *, instruction: str, task_id: str):
+        if self._refuse_when in instruction:
+            return f"做不了：{self._refuse_when}"
+        return super().receive_delegation(instruction=instruction, task_id=task_id)
+
+
+async def test_queued_delivery_refusal_becomes_failed_terminal(rig: _Rig) -> None:
+    """排队件送达被目标拒收：账面当场转 failed 带原因，不留排不到终态的孤儿条目。"""
+    rig = _Rig(_StubAgent("agent_a"), _SelectiveAgent("agent_b", refuse_when="旧楼"))
+    await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
+    queued = (
+        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "把旧楼拆了"})
+    ).structured_content["task_id"]
+    assert rig.ledger.get(queued).status == "queued"
+
+    _agent(rig, "agent_b").finish(rig.ledger)  # 在途件终态 → 出队送达 → 被拒
+    await _wait_until(lambda: rig.ledger.get(queued) is None)
+    assert len(rig.ledger) == 0
+
+
+async def test_cancelled_queued_entry_is_skipped_on_drain(rig: _Rig) -> None:
+    """排队件被撤（账面已了结）后出队时跳过，队列里的下一件照常送达。"""
+    b = _agent(rig, "agent_b")
+    await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
+    first_queued = (
+        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "排第一的活"})
+    ).structured_content["task_id"]
+    second_queued = (
+        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "排第二的活"})
+    ).structured_content["task_id"]
+
+    # 排队件撤单：不经执行 Agent（它从没见过这条指令），账面直接 cancelled
+    res = await rig.call("framework_task_cancel", {"task_id": first_queued}, source="streamer")
+    assert res.success and res.structured_content["cancelled"] is True
+    assert rig.ledger.get(first_queued) is None
+
+    b.finish(rig.ledger)  # 在途件终态 → 出队：撤掉的跳过，第二件送达
+    await _wait_until(lambda: len(b.received) == 2)
+    assert b.received[-1] == (second_queued, "排第二的活")
+
+
+class _SuspendableAgent(_StubAgent):
+    """支持暂放手头的活的桩（覆写了 suspend_current 协议）。"""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.suspend_calls = 0
+
+    async def suspend_current(self) -> bool:
+        self.suspend_calls += 1
+        return True
+
+
+async def test_urgent_preempts_suspensible_target_and_marks_in_flight_suspended(rig: _Rig) -> None:
+    """急件抢占：目标支持暂放时在途单转 suspended、急件立刻派（不在队列里）。"""
+    rig.manager.unregister("agent_b")
+    target = _SuspendableAgent("agent_b")
+    rig.manager.register(target)
+
+    first = (
+        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
+    ).structured_content["task_id"]
+    res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "救火", "urgent": True})
+    assert res.success and res.structured_content.get("queued") is None, "急件不在队列里，立刻派"
+    urgent_id = res.structured_content["task_id"]
+    assert target.suspend_calls == 1
+    assert rig.ledger.get(first).status == "suspended"
+    assert rig.ledger.get(urgent_id).snapshot.get("urgent") is True
+    assert len(target.received) == 2 and target.received[-1] == (urgent_id, "救火")
+
+
+async def test_urgent_downgrades_to_queue_top_when_target_cannot_suspend(rig: _Rig) -> None:
+    """目标不支持暂放（默认协议返回 False）：急件降级置顶排队，不嵌套挂起。"""
+    b = _agent(rig, "agent_b")
+    await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
+
+    res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "救火", "urgent": True})
+    assert res.success and res.structured_content["queued"] is True and res.structured_content["queue_position"] == 1
+    urgent_id = res.structured_content["task_id"]
+    assert rig.ledger.get(urgent_id).status == "queued"
+
+    # 普通件排在急件后面
+    normal = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "普通件"})
+    assert normal.structured_content["queue_position"] == 2
+
+    # 在途件终态：急件先送达，普通件继续等
+    b.finish(rig.ledger)
+    await _wait_until(lambda: len(b.received) == 2)
+    assert b.received[-1] == (urgent_id, "救火")
+    assert rig.ledger.get(normal.structured_content["task_id"]).status == "queued"
+
+
+async def test_second_urgent_queues_instead_of_nesting_suspend(rig: _Rig) -> None:
+    """同一时刻最多一件急事在办：在途已是急件时第二件急件置顶排队，不再挂起。"""
+    rig.manager.unregister("agent_b")
+    target = _SuspendableAgent("agent_b")
+    rig.manager.register(target)
+
+    await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "救火一号", "urgent": True})
+    res = await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "救火二号", "urgent": True})
+    assert res.success and res.structured_content["queued"] is True
+    assert res.structured_content["queue_position"] == 1
+    assert target.suspend_calls == 0, "急件不打断急件"
 
 
 async def test_in_flight_gate_is_per_target(rig: _Rig) -> None:
@@ -371,34 +488,37 @@ async def test_in_flight_gate_is_per_target(rig: _Rig) -> None:
 
 
 async def test_rest_delegate_shares_acceptance_gate_and_ledger(rig: _Rig) -> None:
-    """REST 直派过同一道在途门：目标在途拒收（refused，REST 侧映射 409），放行后同账面登记。"""
+    """REST 直派过同一套受理分支：目标忙时排队（回执带排位），队列满拒收（refused，REST 侧映射 409）。"""
     control = AgentControl(rig.manager, rig.ledger, event_bus=rig.bus)
-    first = (
-        await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
-    ).structured_content["task_id"]
+    await rig.call("framework_delegate", {"agent": "agent_b", "instruction": "盖一座房子"})
 
     res = await control.delegate("agent_b", "再去挖个矿", initiator="operator")
-    assert res["ok"] is False and res["error"] == "refused"
-    assert first in res["message"] and "盖一座房子" in res["message"]
-    assert len(rig.ledger) == 1  # 拒单不登记
+    assert res["ok"] is True and res["queued"] is True and res["queue_position"] == 1
+    assert len(rig.ledger) == 2
+    # 排队件的账面条目与 LLM 工具委派同形（source="agent"、tool="framework_delegate"），发起方记运营
+    record = rig.ledger.get(res["task_id"])
+    assert record is not None
+    assert (record.initiator, record.executor, record.source, record.tool, record.status) == (
+        "operator",
+        "agent_b",
+        "agent",
+        "framework_delegate",
+        "queued",
+    )
+
+    for index in range(4):  # 排到第 5 位，下一件满员
+        await control.delegate("agent_b", f"凑数{index}", initiator="operator")
+    full = await control.delegate("agent_b", "挤一挤", initiator="operator")
+    assert full["ok"] is False and full["error"] == "refused"
+    assert "排满 5 件" in full["message"]
 
     # 目标不存在：not_found（REST 侧映射 404）
     missing = await control.delegate("ghost", "试试")
     assert missing["ok"] is False and missing["error"] == "not_found"
 
-    # 在途解除后放行：账面条目与 LLM 工具委派同形（source="agent"、tool="framework_delegate"）
-    _agent(rig, "agent_b").finish(rig.ledger)
-    res = await control.delegate("agent_b", "再来一件", initiator="operator")
-    assert res["ok"] is True and res["accepted"] is True and res["executor"] == "agent_b"
-    record = rig.ledger.get(res["task_id"])
-    assert record is not None
-    assert (record.initiator, record.executor, record.source, record.tool) == (
-        "operator",
-        "agent_b",
-        "agent",
-        "framework_delegate",
-    )
-    assert _agent(rig, "agent_b").received[-1] == (res["task_id"], "再来一件")
+    # 运营撤排队件：不经执行 Agent，账面直接 cancelled
+    cancelled = await control.cancel_task("agent_b", res["task_id"])
+    assert cancelled == {"ok": True, "cancelled": True} and rig.ledger.get(res["task_id"]) is None
 
 
 async def test_rest_delegate_reports_missing_ledger_as_no_ledger(rig: _Rig) -> None:
@@ -471,7 +591,7 @@ class _McRig(_Rig):
         super().__init__(self.minecraft)
         # 复用上面 _Rig 构造出的 bus/registry/ledger 会与 Agent 持有的不一致，这里改为沿用 Agent 的那一套
         self.bus, self.registry, self.ledger = bus, registry, ledger
-        registry.register_provider(build_agent_control_provider(self.manager, ledger))
+        registry.register_provider(build_agent_control_provider(self.manager, ledger, event_bus=bus))
 
     async def delegate(self, instruction: str = "建一座木头房子") -> str:
         res = await self.call(
@@ -619,6 +739,52 @@ async def test_live_ended_settles_suspended_delegations(mc: _McRig) -> None:
     # task.changed 经后台任务调度广播，轮询等最新一条落到 cancelled
     await _wait_until(lambda: bool(changed) and changed[-1].status == "cancelled")
     assert "下播自动收尾" in changed[-1].summary
+
+
+async def test_live_ended_settles_queued_delegations(mc: _McRig) -> None:
+    """下播强制结算：排队中（还没送到执行方）的委派同样置 cancelled，不跨场残留。"""
+    await mc.delegate()
+    res = await mc.call("framework_delegate", {"agent": "minecraft", "instruction": "排着的活"}, source="streamer")
+    assert res.success and res.structured_content["queued"] is True
+    queued_id = res.structured_content["task_id"]
+    assert mc.ledger.get(queued_id).status == "queued"
+
+    await mc.minecraft._on_live_ended(
+        CoreEvents.LIVE_ENDED,
+        LiveEndedPayload(live_session_id=1, reason="手动下播"),
+        source="LiveSessionManager",
+    )
+    await _wait_until(lambda: mc.ledger.get(queued_id) is None)
+    assert mc.ledger.get(queued_id) is None, "排队条目已随下播强制结算移除"
+
+
+async def test_minecraft_urgent_preempts_then_resumes_parked_delegation(mc: _McRig) -> None:
+    """急件抢占全链路（真实 minecraft Agent）：急件立刻派、在途转 suspended；
+    急件交付后批收尾恢复暂放的（账面重写 running），原任务照常走到终态。"""
+    first = await mc.delegate()
+    mc.absorb_into_batch()
+    assert mc.ledger.get(first).status == "running"
+
+    res = await mc.call(
+        "framework_delegate", {"agent": "minecraft", "instruction": "急事：先去救火", "urgent": True}, source="streamer"
+    )
+    assert res.success and res.structured_content.get("queued") is None, "支持暂放：急件立刻派，不排队"
+    urgent = res.structured_content["task_id"]
+    assert mc.ledger.get(first).status == "suspended"
+    assert mc.minecraft._delegations.suspended_ids() == (first,)
+
+    # 急件进批开跑并交付：只结算急件，暂放的那件不跟着写终态
+    mc.absorb_into_batch()
+    await mc.minecraft._handle_report("delivery", "火灭了", scene="0,0,0")
+    assert mc.ledger.get(urgent) is None
+    assert mc.ledger.get(first) is not None
+
+    # 批收尾：恢复暂放的委派
+    await mc.minecraft._resume_preempted()
+    assert mc.minecraft._delegations.suspended_ids() == ()
+    assert mc.ledger.get(first).status == "running", "暂放的委派已恢复"
+    await mc.minecraft._handle_report("delivery", "房子也建好了", scene="0,0,0")
+    assert mc.ledger.get(first) is None
 
 
 # ---------------------------------------------------------------------------

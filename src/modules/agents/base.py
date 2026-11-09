@@ -286,6 +286,16 @@ class BaseAgent(abc.ABC):
         logger.debug(f"Agent '{self.name or type(self).__name__}' 拒收急停（未实现急停入口）")
         return False
 
+    async def suspend_current(self) -> bool:
+        """暂放手头的活（急件抢占协议；**默认不支持**，返回 False）。
+
+        语义：不是取消——把手头正在做的事暂放（进度保留），稍后接着做；
+        在途委派的账面状态由委派受理核心写成 suspended。实现了本方法的
+        Agent 才能被急件插队：没实现的，急件在委派队列里置顶排队。
+        """
+        logger.debug(f"Agent '{self.name or type(self).__name__}' 不支持暂放手头的活（未实现 suspend_current）")
+        return False
+
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """任务变化通知钩子（``task.changed``，仅发起方是自己时被调）。
 
