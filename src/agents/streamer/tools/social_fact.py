@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, Optional, Tuple
 
-from src.agents.streamer.memory.settle_candidates import _verbatim
+from src.agents.streamer.memory.textmatch import verbatim_quote
 from src.modules.logging import get_logger
 from src.modules.storage.models.social_facts import MAX_ACTIVE_FACTS_PER_KIND, SOCIAL_FACT_KINDS
 from src.modules.tools import ToolInvocation, ToolSpec
@@ -187,7 +187,7 @@ class SocialFactToolProvider(BaseToolProvider):
             return self._bounce(
                 tool_name, f"消息号 {message_id} 这句没有存原话（认不出是谁说的），无法核对，换一句作依据"
             )
-        verified = _verbatim(quote, hit.content, _QUOTE_MAX_CHARS)
+        verified = verbatim_quote(quote, hit.content, _QUOTE_MAX_CHARS)
         if verified is None:
             return self._bounce(
                 tool_name, f"quote 不是消息号 {message_id} 那句话里一字不差的片段（或超过 {_QUOTE_MAX_CHARS} 字）"

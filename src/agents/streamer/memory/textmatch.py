@@ -15,6 +15,8 @@
   全是汉字的触发词另加拼音层——同音（"到立洗头"算提到"倒立洗头"）和拼音首字母（弹幕里单独
   打出的"dlxt"）。两个字的触发词只做精确子串，不做同音：离线测下来误触发几乎全来自两字词的
   同音（"倒立"撞上"道理"，"联机"撞上"连击"）。
+- **逐字引文校验**（:func:`verbatim_quote`）：下播整理与场内登记共用的证据核对——引文必须是原文里
+  一字不差的片段，防凭空引证。
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Generic, Hashable, List, Literal, Mapping, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Generic, Hashable, List, Literal, Mapping, Optional, Sequence, Tuple, TypeVar
 
 from pypinyin import Style, lazy_pinyin
 
@@ -52,6 +54,19 @@ def _fold(text: str) -> str:
 def normalize(text: str) -> str:
     """匹配前统一文本：全角转半角、转小写、去表情文字，再去掉空格、标点和 emoji（只留字母、数字、文字）。"""
     return "".join(ch for ch in _fold(text) if ch.isalnum())
+
+
+def verbatim_quote(quote: Any, content: Optional[str], limit: int) -> Optional[str]:
+    """逐字引文校验：引文须是原文里一字不差的片段（压掉连续空白的写法也认）。
+
+    空、超长（超过 ``limit`` 字）或对不上原文时返回 None，调用方据此打回；
+    对上时返回引文本身，供落库与展示统一用校验后的写法。
+    """
+    text = str(quote or "").strip()
+    raw = content or ""
+    if not text or len(text) > limit:
+        return None
+    return text if text in raw or text in " ".join(raw.split()) else None
 
 
 def _alnum_runs(text: str) -> List[str]:
@@ -218,4 +233,5 @@ __all__ = [
     "index_text",
     "needs_like_fallback",
     "normalize",
+    "verbatim_quote",
 ]

@@ -44,7 +44,7 @@ from src.modules.storage.models.social_facts import (
 )
 
 from .saves import SaveTimeline
-from .settle_candidates import _verbatim
+from .textmatch import verbatim_quote
 
 __all__ = [
     "MAX_FACTS_PER_KIND",
@@ -230,7 +230,7 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
             continue
         verified = ""
         if line is not None:
-            checked = _verbatim(quote, line.content, _QUOTE_MAX_CHARS)
+            checked = verbatim_quote(quote, line.content, _QUOTE_MAX_CHARS)
             if checked is None:
                 _miss(check, text, quote, f"原话不是{_CHAT_PREFIX}{chat_number}那句一字不差的片段")
                 continue
@@ -302,7 +302,7 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
         if player_id is None or line is None or line.player_id != player_id:
             _miss(check, what, quote, "互动要引那位玩家自己在公屏说的一句")
             continue
-        verified = _verbatim(quote, line.content, _QUOTE_MAX_CHARS)
+        verified = verbatim_quote(quote, line.content, _QUOTE_MAX_CHARS)
         if verified is None:
             _miss(check, what, quote, f"原话不是{_CHAT_PREFIX}{chat_number}那句一字不差的片段")
             continue

@@ -33,6 +33,7 @@ from src.modules.storage.models.memory import PendingViewerCandidate, Unregister
 
 from .saves import SaveTimeline
 from .settle_players import PlayerChat
+from .textmatch import verbatim_quote
 
 __all__ = [
     "MAX_CLAIMED_MISSING",
@@ -90,15 +91,6 @@ class PlayerCandidateCheck:
     personal_dropped: int = 0
 
 
-def _verbatim(quote: Any, content: Optional[str], limit: int) -> Optional[str]:
-    """逐字片段校验：原文与压掉连续空白的写法都认；空、超长或对不上返回 None。"""
-    text = str(quote or "").strip()
-    raw = content or ""
-    if not text or len(text) > limit:
-        return None
-    return text if text in raw or text in " ".join(raw.split()) else None
-
-
 def _word_from_speaker(word: str, title: str, source_text: Optional[str]) -> bool:
     """说话人定下的名字或梗词核得上吗：长度合规、标题里原样出现、他那句原文里也原样出现（压掉空白的写法也认）。
 
@@ -148,8 +140,8 @@ def validate_viewer_candidates(
                 UnregisteredItem(kind="candidate", what=title, quote=quote, reason="引用的不是她回复观众弹幕的那一行")
             )
             continue
-        viewer_quote = _verbatim(raw.get("viewer_quote"), line.reply_content, _QUOTE_CHARS)
-        reply_quote = _verbatim(quote, line.content, _QUOTE_CHARS)
+        viewer_quote = verbatim_quote(raw.get("viewer_quote"), line.reply_content, _QUOTE_CHARS)
+        reply_quote = verbatim_quote(quote, line.content, _QUOTE_CHARS)
         word = str(raw.get("word") or "").strip()
         if _PERSONAL.search(" ".join((title, word, str(raw.get("viewer_quote") or ""), quote))):
             # 观众的个人信息不进待审区，也不把内容写进报告
@@ -248,7 +240,7 @@ def validate_claimed_missing(
         if _PERSONAL.search(" ".join((title, quote))):
             check.personal_dropped += 1
             continue
-        reply_quote = _verbatim(quote, line.content, _QUOTE_CHARS)
+        reply_quote = verbatim_quote(quote, line.content, _QUOTE_CHARS)
         if not title or reply_quote is None:
             check.missed.append(
                 UnregisteredItem(
@@ -374,8 +366,8 @@ def validate_player_candidates(
         game_chat_id, live_chat_id, reply_at_ms, reply_text = reply
         # 他那句只在给模型看过、早于她这句回应的公屏里找：她接住的只能是他先说的话
         his_line = players.player_line(player_id, str(raw.get("player_quote") or ""), before_ms=reply_at_ms)
-        player_quote = _verbatim(raw.get("player_quote"), his_line.content if his_line else None, _QUOTE_CHARS)
-        reply_quote = _verbatim(quote, reply_text, _QUOTE_CHARS)
+        player_quote = verbatim_quote(raw.get("player_quote"), his_line.content if his_line else None, _QUOTE_CHARS)
+        reply_quote = verbatim_quote(quote, reply_text, _QUOTE_CHARS)
         if not title or his_line is None or player_quote is None or reply_quote is None:
             check.missed.append(
                 UnregisteredItem(
