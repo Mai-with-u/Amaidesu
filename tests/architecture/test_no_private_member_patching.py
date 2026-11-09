@@ -47,10 +47,10 @@ ALLOWED_PRIVATE_PATCHES: dict[str, str] = {
     "modules/collectors/test_collector_framework.py:233": "console_mod._stdin_interactive",
     # modules/tts/test_engine_contract.py：voicebox 私有四步生成流程
     # （voicebox 生产包未获清理授权，edge 侧已改公有 synthesize 接缝）
-    # 行号随时长接线测试在 _Engine 前部加字段整体下移一行（2026-11-05）
-    "modules/tts/test_engine_contract.py:85": "provider._create_generation",
-    "modules/tts/test_engine_contract.py:87": "provider._wait_for_completion",
-    "modules/tts/test_engine_contract.py:88": "provider._download_audio",
+    # 行号随契约条目增删整体平移（本次：新增 minimax 契约条目 +1 行）
+    "modules/tts/test_engine_contract.py:86": "provider._create_generation",
+    "modules/tts/test_engine_contract.py:88": "provider._wait_for_completion",
+    "modules/tts/test_engine_contract.py:89": "provider._download_audio",
 }
 
 

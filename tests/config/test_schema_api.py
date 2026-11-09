@@ -121,4 +121,4 @@ def test_tts_provider_options_injected_from_assembly() -> None:
     tts_schema = ConfigSchemaGenerator.generate_config_schema(InfraRootConfig)["nested"]["tts"]
     provider = next(f for f in tts_schema["fields"] if f["name"] == "provider")
     assert provider.get("options") == list(TTS_PROVIDER_NAMES)
-    assert set(provider["options"]) == {"edge_tts", "gptsovits", "voicebox", "omni_tts"}
+    assert set(provider["options"]) == {"edge_tts", "gptsovits", "voicebox", "omni_tts", "minimax_tts"}
