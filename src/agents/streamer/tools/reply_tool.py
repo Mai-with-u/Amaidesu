@@ -108,10 +108,9 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
         "is_novel": {
             "type": "boolean",
             "description": (
-                "新颖自检（必填）：填 true 前先确认本条有增量——常见的是信息上的新"
-                "（如新事实/新进展/新互动对象）或表达上的新"
-                "（如她对已知的事有新态度、新联想、新玩笑，或扯出相关旧事）；"
-                "以下只是常见情形，不是清单，任何别的实质推进也算；拿不准时按没有增量处理——"
+                "新颖自检（必填）：填 true 前先确认本条有增量——增量只认事实上的新："
+                "新事件、新进展、新的互动对象、新信息；同一件事换个说法、换个态度或换种情绪再讲，不算新；"
+                "拿不准时按没有增量处理——"
                 "这里宁严勿松，打回重说的代价只是一轮，复述漏出去观众是直接听到的。"
                 "数值变化、把说过的结论或打算换个说法再讲都不算。"
                 "没有就如实填 false——工具会拒收并让你换内容或本轮别发言。"
@@ -142,7 +141,10 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
         "emotion": {
             "type": "string",
             "enum": [emotion.value for emotion in Emotion],
-            "description": "Planner 决定本句台词的情绪，结合消息和回复指引选择",
+            "description": (
+                "Planner 决定本句台词的情绪，结合消息和回复指引选择——值域是场景情绪或 neutral："
+                "这轮有明确的场景情绪就填对应的那一种，没有就填 neutral，不为凑表情硬安一个"
+            ),
         },
         "intensity": {
             "type": "number",
@@ -331,7 +333,7 @@ class ReplyToolProvider(BaseToolProvider):
             return ToolExecutionResult(
                 tool_name=invocation.tool_name,
                 success=False,
-                error_message="你自评这是重复——要么换个新角度拿出真内容重新调用（新进展，或她对这件事的新态度、新联想），要么本轮别发言",
+                error_message="你自评这是重复——要么拿出观众没听过的新内容重新调用（新进展、新互动这类事实层的新），要么本轮别发言",
             )
 
         # 本窗弹幕批随 attachment 传入；主动发言或脱离 Planner 调用时为空列表

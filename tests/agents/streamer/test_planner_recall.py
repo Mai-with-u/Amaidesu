@@ -95,10 +95,13 @@ async def test_spoken_intents_listed_oldest_first() -> None:
     text = await _reference(planner)
 
     assert "【已聊话题】" in text
-    assert "硬规则" in text and "实质性新角度" in text
-    # 新角度也认表达上的新；讲过的打算单独点名不再复述，拿不出新角度先换话题
-    assert "新态度、新联想、相关旧事" in text and "讲过的结论和打算不再复述" in text
-    assert "拿不出新角度就换个话题" in text
+    # 与模板逐字一致的核心句：增量封闭定义只认事实上的新，换态度换说法不算；
+    # 讲过的打算单独点名不再复述，拿不出就换话题或不开口
+    assert "必须有事实上的新东西才开口（新事件、新进展、新的互动对象、新信息）" in text
+    assert "只是换个态度、换个说法不算" in text
+    assert "血量、数量、倒计时这类数值变化不算新东西" in text
+    assert "讲过的结论和打算不再复述" in text
+    assert "拿不出就换话题，或者干脆不开口" in text
     # 每行写她当时说的那句，不写当时游戏里的状态快照
     section = _topic_lines(text)
     assert section == ["- 刚刚：当时说「报平安：满血了」", "- 刚刚：当时说「还是满血」"]
