@@ -116,7 +116,7 @@ async def test_fourth_call_updates_facts_and_interactions(store, prompt_manager)
         "facts": [
             {
                 "kind": "works",
-                "text": "Alex 改去挖钻石",
+                "text": "玩家1 改去挖钻石",
                 "chat": "公屏#1",
                 "quote": "我去挖钻石",
                 "supersedes": env["old"],
@@ -125,7 +125,13 @@ async def test_fourth_call_updates_facts_and_interactions(store, prompt_manager)
             {"kind": "members", "text": "凭空的关系", "chat": None, "quote": "", "supersedes": None},
         ],
         "interactions": [
-            {"player": "玩家1", "kind": "together", "what": "一起去下界", "chat": "公屏#2", "quote": "一起去下界"},
+            {
+                "player": "玩家1",
+                "kind": "together",
+                "what": "玩家1 一起去下界",
+                "chat": "公屏#2",
+                "quote": "一起去下界",
+            },
             {"player": "玩家1", "kind": "helped", "what": "帮忙", "chat": "公屏#2", "quote": "没说过的话"},
         ],
     }
@@ -138,6 +144,8 @@ async def test_fourth_call_updates_facts_and_interactions(store, prompt_manager)
     assert "好呀" not in str(social_call["input"])
 
     active = await store.social_facts.list_active_facts(game="minecraft")
+    # 模型写的玩家代号在落库前还原回真名：代号只在这一个调用里有效，
+    # 真名才能被下一次直播认出、被"忘了我"的删除按名字匹配到
     assert sorted(fact.text for fact in active) == ["Alex 改去挖钻石", "她陪 Alex 跑腿"]
     works = next(fact for fact in active if fact.kind == "works")
     assert works.evidence_game_chat_id == env["first_chat"]
@@ -145,7 +153,7 @@ async def test_fourth_call_updates_facts_and_interactions(store, prompt_manager)
     assert old is not None and old.status == "superseded"
 
     interactions = await store.game_players.list_session_interactions(live_session_id=env["session"])
-    assert [(item.kind, item.fact.get("what")) for item in interactions] == [("together", "一起去下界")]
+    assert [(item.kind, item.fact.get("what")) for item in interactions] == [("together", "Alex 一起去下界")]
 
     session = await store.sessions.get_live_session(live_session_id=env["session"])
     assert session is not None and session.settle_report

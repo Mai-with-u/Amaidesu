@@ -85,6 +85,8 @@ class SocialMaterial:
     chat_by_number: Dict[int, GameChatLine] = field(default_factory=dict)
     # 玩家主键 → 本次调用里的代号
     player_codes: Dict[int, str] = field(default_factory=dict)
+    # 玩家主键 → 现在的名字（代号还原回真名用；读不到的玩家不在表里）
+    player_names: Dict[int, str] = field(default_factory=dict)
     # 给模型看过的现行事实（行号 → 行）
     facts: Dict[int, SocialFact] = field(default_factory=dict)
     # 没引公屏的归纳行挂在哪：(游戏, 存档编号, 存档名)
@@ -94,6 +96,15 @@ class SocialMaterial:
     def empty(self) -> bool:
         """没有任何能据以更新的原料（没有玩家公屏、没有互动、没有现有事实）时为真，第四次调用不必跑。"""
         return not self.text
+
+    def restore_names(self, text: str) -> str:
+        """把模型写的玩家代号换回真名：代号只在这一个调用里有效，落库的正文得让下一次直播认得出是谁，
+        也只有真名才能被"忘了我"的删除按名字匹配到。"""
+        for player_id, code in self.player_codes.items():
+            name = self.player_names.get(player_id)
+            if name:
+                text = text.replace(code, name)
+        return text
 
 
 @dataclass
@@ -179,6 +190,7 @@ def build_social_material(
         text="\n\n".join(parts),
         chat_by_number=chat_by_number,
         player_codes=codes,
+        player_names={int(pid): str(name) for pid, name in player_names.items() if name},
         facts={int(fact.id): fact for fact in active},
         default_scope=scope,
     )
@@ -270,7 +282,7 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
         check.facts.append(
             NewSocialFact(
                 kind=kind,
-                text=text,
+                text=material.restore_names(text),
                 quote=verified,
                 game=scope[0],
                 save_id=scope[1],
@@ -310,7 +322,7 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
             PendingPlayerInteraction(
                 player_id=player_id,
                 kind=kind,
-                fact={"what": what, "quote": verified},
+                fact={"what": material.restore_names(what), "quote": verified},
                 save_id=line.save_id,
                 save_name=line.save_name,
                 at_ms=int(line.at_ms),
