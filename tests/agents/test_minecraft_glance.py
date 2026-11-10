@@ -96,8 +96,9 @@ async def test_glance_shows_body_nearby_things_and_running_goals() -> None:
     # 一句话现场排在最前面：主播的现场卡只放这一句白话，不带数字和坐标
     assert list(view)[:2] == ["tool", "brief"]
     assert view["brief"] == (
-        "在主世界的森林。白天，晴。血是满的，有点饿。手上拿着石斧。背包里有oak_log。"
+        "在主世界的森林。白天，晴。血是满的，有点饿。手上拿着石斧。"
         "身边还有牛。附近有箱子。远处还有鱿鱼、蝙蝠、玩家。手上在砍树，眼下走向树。"
+        "背包里有oak_log。"
     )
     await agent.stop()
 
@@ -117,11 +118,79 @@ def test_glance_brief_is_plain_speech_without_numbers() -> None:
     }
     brief = glance_brief(view)
     assert brief == (
-        "在下界的灵魂沙峡谷，泡在水里。血快没了，很饿。背包里有create:wrench、钻石镐。"
+        "在下界的灵魂沙峡谷，泡在水里。血快没了，很饿。"
         "身边有骷髅在左后方，是敌对的。身边还有狼（叫小白）。附近有床。手上：卡住了，正等我拿主意。"
+        "背包里有create:wrench、钻石镐。"
     )
     assert not any(char.isdigit() for char in brief)
     assert glance_brief({"unavailable": "游戏连接还没就绪", "work": {"state": "空闲"}}) == "游戏连接还没就绪"
+
+
+def test_glance_brief_lists_the_whole_bag_without_saying_and() -> None:
+    """背包清单全量列完：说个"等"字，"包里没有某样东西"这件事就没了，模型只能照自己想的样子补上去。
+
+    第 63 场主播说"蒲公英攥手里了"，当轮背包清单里并没有蒲公英——清单前五项之外的内容全被"等"字吞掉了。
+    """
+    items = [
+        "minecraft:stone_shovel ×1",
+        "minecraft:bucket ×1",
+        "minecraft:stone_pickaxe ×1",
+        "minecraft:torch ×1",
+        "minecraft:wooden_hoe ×1",
+        "minecraft:iron_sword ×1",
+        "minecraft:stone_axe ×1",
+        "minecraft:baked_potato ×3",
+        "minecraft:wooden_sword ×1",
+        "minecraft:wheat_seeds ×5",
+        "minecraft:bowl ×2",
+        "minecraft:oak_log ×16",
+        "minecraft:oak_sapling ×1",
+        "minecraft:stick ×9",
+        "minecraft:stone_sword ×1",
+        "minecraft:coal ×7",
+        "minecraft:clay_ball ×4",
+        "minecraft:crafting_table ×1",
+    ]
+    brief = glance_brief({"body": {}, "inventory": items})
+
+    bag = brief[brief.index("背包里有") :]
+    assert bag == (
+        "背包里有石锹、bucket、石镐、torch、木锄、铁剑、石斧、baked_potato、木剑、wheat_seeds、bowl、"
+        "oak_log、oak_sapling、stick、石剑、coal、clay_ball、crafting_table。"
+    ), "十八项全列出来，不留'等'字"
+    assert "等" not in bag
+    assert "dandelion" not in brief, "包里没有的东西不许出现在清单里"
+
+
+def test_glance_brief_names_mod_items_in_both_chinese_and_english() -> None:
+    """模组物品中文名与英文原名对不上时两栏并出：只给英文原名，模型会照字面直译成"智能板"这类别的名字。"""
+    brief = glance_brief(
+        {
+            "body": {"held": "touhou_little_maid:smart_slab_empty"},
+            "inventory": [
+                "touhou_little_maid:smart_slab_empty ×1",
+                "minecraft:bucket ×1",
+                "farmersdelight:cabbage_seeds ×3",
+            ],
+        }
+    )
+
+    assert "手上拿着魂符（smart_slab_empty）" in brief
+    assert "魂符（smart_slab_empty）、bucket、farmersdelight:cabbage_seeds" in brief
+    assert "智能板" not in brief, "不写模型自己直译出来的错名字"
+
+
+def test_glance_brief_keeps_the_original_name_of_items_without_a_chinese_name() -> None:
+    """一眼能对上的物品不翻：原名留着，模型自己会叫；翻出来的名字对不上东西才双列。"""
+    brief = glance_brief(
+        {
+            "body": {"held": "minecraft:iron_pickaxe"},
+            "inventory": ["minecraft:bucket ×1", "minecraft:iron_pickaxe ×1", "minecraft:oak_log ×12"],
+        }
+    )
+
+    assert "手上拿着铁镐" in brief, "通用叫法照旧"
+    assert "背包里有bucket、铁镐、oak_log。" in brief
 
 
 def test_glance_distant_entities_only_counts_what_is_known_to_be_far() -> None:

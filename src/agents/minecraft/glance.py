@@ -50,7 +50,8 @@ __all__ = [
 # 直播里说"身边"的范围：再远的生物与设施观众在画面里也看不清，主播提起来只会让人困惑。
 NEARBY_BLOCKS = 24
 
-# 一句话现场的长度上限：它要塞进主播的现场卡，卡总共只有几百字
+# 现场描述的长度上限：它要塞进主播的现场卡，卡总共只有几百字。
+# 背包清单不在此限内——它必须全量列完，截断等于把"包里没有某样东西"藏起来。
 BRIEF_MAX_CHARS = 300
 
 # 速览里最多列几个记住的地点：主播只需要知道"记过哪些"，速览每轮都进她的参考段，列全了会越攒越长
@@ -165,6 +166,27 @@ _BLOCKS: Dict[str, str] = {
     "smithing_table": "锻造台",
 }
 
+#: 物品的中文名：只收"照英文原名直译会叫成别的名字"的条目，自定义模组物品为主。
+#: 名字取游戏自己的物品注册名（玩家在游戏里看到的那个名字），照英文原名直译会对不上同一件东西——
+#: 魂符的英文原名 smart_slab 直译成"智能板"，模型与观众说的就不是同一件物品了。
+#: 差别小的（bucket 这类，一眼能对上的）不收，原名留着，模型自己会叫。
+_MOD_ITEM_NAMES: Dict[str, str] = {
+    "touhou_little_maid:smart_slab_init": "魂符",
+    "touhou_little_maid:smart_slab_empty": "魂符",
+    "touhou_little_maid:smart_slab_has_maid": "魂符",
+    "touhou_little_maid:cchess": "中国象棋",
+    "touhou_little_maid:wchess": "国际象棋",
+    "touhou_little_maid:keyboard": "电子琴",
+    "touhou_little_maid:scarecrow": "麻石狐像",
+    "touhou_little_maid:garage_kit": "手办",
+    "touhou_little_maid:hakurei_gohei": "博丽的御币",
+    "touhou_little_maid:sanae_gohei": "风祝的御币",
+    "touhou_little_maid:broom": "魔理沙的扫帚",
+    "touhou_little_maid:chair_show": "坐垫显示器",
+    "touhou_little_maid:maid_beacon": "神社庭灯",
+    "touhou_little_maid:power_point": "P点",
+}
+
 #: 模组报的东西（``observe(scene)`` 的 ``mod_things`` 分类）里和实体同号的那几类：分类 → 主播的叫法
 _ENTITY_THING_KINDS: Dict[str, str] = {
     "maid": "女仆",
@@ -269,18 +291,35 @@ def entity_label(entity: Dict[str, Any]) -> str:
     return f"{whose}（{'，'.join(facts)}）" if facts else whose
 
 
-def _list_words(names: List[str], limit: int) -> str:
-    """去重后取前几个，用顿号连起来；多出来的说"等"。"""
+def _list_words(names: List[str], limit: Optional[int] = None) -> str:
+    """去重后用顿号连起来；限了数量就在多出来的后面说"等"，不限就全列。"""
     unique = list(dict.fromkeys(name for name in names if name))
+    if limit is None:
+        return "、".join(unique)
     head = "、".join(unique[:limit])
     return f"{head}等" if len(unique) > limit else head
 
 
-def glance_brief(view: Dict[str, Any]) -> str:
-    """一句话现场：把速览里的事实写成主播一眼读得懂的白话，不带数字、坐标和观察编号。
+def _item_label(raw_id: str) -> str:
+    """一件物品在速览里的叫法：中文名与英文原名对不上时两栏并出，其余用通用叫法。
 
-    主播的现场卡只放这一句（几千字的速览原文塞不下，也会被逐字念出来）。物品与模组生物认不出中文名时
-    保留 ID 去掉原版命名空间，主播说话时自己换成叫法；上游没给的事就不写，不猜。
+    例："魂符（smart_slab_empty）"——只给英文原名，模型会照字面直译成"智能板"这类别的名字；
+    只给中文名，模型与观众对不上说的是哪件东西。其余物品沿用通用叫法（铁镐、bucket）。
+    """
+    chinese = _MOD_ITEM_NAMES.get(raw_id)
+    if chinese is None:
+        return item_name(raw_id)
+    return f"{chinese}（{raw_id.split(':')[-1]}）"
+
+
+def glance_brief(view: Dict[str, Any]) -> str:
+    """一句话现场：把速览里的事实写成主播读得懂的白话，不带数字、坐标和观察编号。
+
+    主播的现场卡只放这一句（几千字的速览原文塞不下，也会被逐字念出来）。物品叫法：中文名与英文原名
+    对得上就用通用叫法，对不上就两栏并出（见 :func:`_item_label`）。上游没给的事就不写，不猜。
+
+    背包清单全量列完、不说"等"：包里有没有某样东西，只有列全了才看得出来；说个"等"字，
+    模型就看不见"没有"这件事，会照自己想的样子补上去。
     """
     if view.get("unavailable"):
         return str(view["unavailable"])
@@ -302,12 +341,9 @@ def glance_brief(view: Dict[str, Any]) -> str:
     if state:
         sentences.append(state)
     if body.get("held"):
-        sentences.append(f"手上拿着{item_name(str(body['held']))}")
+        sentences.append(f"手上拿着{_item_label(str(body['held']))}")
     if body.get("control"):
         sentences.append(str(body["control"]))
-    inventory = [str(entry).split(" ×", 1)[0] for entry in view.get("inventory") or []]
-    if inventory:
-        sentences.append("背包里有" + _list_words([item_name(item) for item in inventory], 5))
     entities = [entity for entity in view.get("entities") or [] if isinstance(entity, dict) and entity.get("type")]
     hostile = [entity for entity in entities if entity.get("hostile") is True]
     if hostile:
@@ -350,6 +386,11 @@ def glance_brief(view: Dict[str, Any]) -> str:
         if len(brief) + len(sentence) + 1 > BRIEF_MAX_CHARS:
             break
         brief += sentence + "。"
+    inventory = [str(entry).split(" ×", 1)[0] for entry in view.get("inventory") or []]
+    if inventory:
+        # 背包清单排在最后、全量列完：它是唯一能证明"包里没有某样东西"的地方，
+        # 截断了模型就只能靠猜。上面的长度上限管不到它——宁可长，也不能少列。
+        brief += "背包里有" + _list_words([_item_label(item) for item in inventory]) + "。"
     return brief
 
 
