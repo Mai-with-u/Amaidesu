@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from src.modules.storage.models.game_players import (
     GAME_CHAT_PLAYER,
+    GAME_CHAT_STREAMER,
     INTERACTION_HELPED,
     INTERACTION_TOGETHER,
     GameChatLine,
@@ -58,6 +59,8 @@ __all__ = [
 MAX_FACTS_PER_KIND = MAX_ACTIVE_FACTS_PER_KIND
 # 一场至多给模型看多少句玩家公屏（刷屏的场次只留最后这些）
 _MAX_PLAYER_LINES = 120
+# 公屏对话双侧行的总量上限：她的行进对话流后行数随场次增长，截到最近的这些行
+_MAX_DIALOG_LINES = 160
 _TEXT_MAX_CHARS = 60
 _QUOTE_MAX_CHARS = 80
 _WHAT_MAX_CHARS = 30
@@ -133,7 +136,12 @@ def build_social_material(
     started_at_ms: int,
     clock_text: Callable[[int], str],
 ) -> SocialMaterial:
-    """拼第四次调用的原料。``player_names`` 是玩家主键 → 现在的名字（读不到的玩家不给代号）。"""
+    """拼第四次调用的原料。``player_names`` 是玩家主键 → 现在的名字（读不到的玩家不给代号）。
+
+    公屏按时间序双侧行编排：玩家的行带编号（作证据），她的行标"她"不带编号（引不了，
+    证据必须是别人的话）——只给玩家的行，一句回答看不出是在回答什么（她问小百合去哪了、
+    玩家答"在菜地旁边"，模型会把这句回答嫁接到别的话题上编出缝合事实）。
+    """
     spoken = [
         line
         for line in chat_lines
@@ -150,12 +158,24 @@ def build_social_material(
 
     chat_by_number: Dict[int, GameChatLine] = {}
     chat_rows: List[str] = []
-    for line in spoken:
-        number = len(chat_by_number) + 1
-        chat_by_number[number] = line
-        chat_rows.append(
-            f"{_CHAT_PREFIX}{number} {clock_text(int(line.at_ms))} {code_of(int(line.player_id or 0))}：{_clip(line.content)}"
-        )
+    if spoken:
+        window_start, window_end = int(spoken[0].at_ms), int(spoken[-1].at_ms)
+        dialog = [
+            line
+            for line in chat_lines
+            if (line.content or "").strip()
+            and line.direction in (GAME_CHAT_PLAYER, GAME_CHAT_STREAMER)
+            and window_start <= int(line.at_ms) <= window_end
+        ][-_MAX_DIALOG_LINES:]
+        for line in dialog:
+            clock = clock_text(int(line.at_ms))
+            content = _clip(line.content)
+            if line.direction == GAME_CHAT_PLAYER and line.player_id is not None:
+                number = len(chat_by_number) + 1
+                chat_by_number[number] = line
+                chat_rows.append(f"{_CHAT_PREFIX}{number} {clock} {code_of(int(line.player_id or 0))}：{content}")
+            else:
+                chat_rows.append(f"{clock} 她：{content}")
     interaction_rows = [
         f"- {clock_text(int(item.at_ms))} {code_of(item.player_id)}：{_INTERACTION_LABELS.get(item.kind, item.kind)}"
         for item in interactions
@@ -169,7 +189,7 @@ def build_social_material(
     parts = [
         "【现有的社交事实】\n" + ("\n".join(fact_rows) if fact_rows else "没有"),
         "【游戏里的玩家】\n" + (roster or "没有"),
-        "【本场玩家在游戏公屏说的话】\n" + ("\n".join(chat_rows) if chat_rows else "没有"),
+        "【本场游戏公屏对话】（她的行没有编号，引证据只引玩家行）\n" + ("\n".join(chat_rows) if chat_rows else "没有"),
         "【本场记下的互动】\n" + ("\n".join(interaction_rows) if interaction_rows else "没有"),
     ]
     if records_text:

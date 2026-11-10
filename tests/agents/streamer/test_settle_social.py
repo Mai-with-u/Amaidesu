@@ -87,6 +87,15 @@ async def _scene(store: SQLiteDatabase) -> Dict[str, int]:
     await store.game_players.add_game_chat(
         live_session_id=session,
         game="minecraft",
+        direction="streamer",
+        content="那我等你钻石回来一起做个剑",
+        player_id=None,
+        at_ms=1_250,
+        message_id="g1b",
+    )
+    await store.game_players.add_game_chat(
+        live_session_id=session,
+        game="minecraft",
         direction="player",
         content="我们一起去下界吧",
         player_id=player.id,
@@ -142,6 +151,12 @@ async def test_fourth_call_updates_facts_and_interactions(store, prompt_manager)
     social_call = llm.calls[-1]
     assert "刷铁机修好了" in str(social_call["input"]) and f"事实#{env['old']}" in str(social_call["input"])
     assert "好呀" not in str(social_call["input"])
+    # 公屏按时间序双侧行编排：她的公屏行标"她"插在对话流里（回答才看得出是在回答什么），
+    # 但没有编号——证据编号只发给玩家的行
+    social_input = str(social_call["input"])
+    her_row = social_input.index("她：那我等你钻石回来一起做个剑")
+    player_row = social_input.index("公屏#2")
+    assert her_row < player_row and "公屏#" not in social_input[her_row:player_row]
 
     active = await store.social_facts.list_active_facts(game="minecraft")
     # 模型写的玩家代号在落库前还原回真名：代号只在这一个调用里有效，
