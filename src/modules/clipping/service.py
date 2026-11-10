@@ -154,8 +154,11 @@ class ClippingService:
         """stop() 的异步壳（关闭链统一 await 形态）。"""
         self.stop()
 
-    async def _on_live_ended(self, payload: LiveEndedPayload) -> None:
-        """下播后自动选段（fire-and-forget；空场次已被丢弃，不处理）。"""
+    async def _on_live_ended(self, event_name: str, payload: LiveEndedPayload, source: str) -> None:
+        """下播后自动选段（fire-and-forget；空场次已被丢弃，不处理）。
+
+        事件总线统一按 (事件名, 载荷, 事件源) 三参调用订阅者，本方法签名与之对齐。
+        """
         if payload.empty_discarded:
             return
         spawn_background_task(
@@ -168,7 +171,7 @@ class ClippingService:
     async def _auto_select(self, live_session_id: int) -> None:
         """自动选段：匹配到录播文件才跑 AI 选段。"""
         try:
-            files, _ = self._scan_and_match_one(live_session_id)
+            files, _ = await self._scan_and_match_one(live_session_id)
             if not files:
                 logger.info(f"场次 {live_session_id} 下播，但录播目录里没有匹配到文件，跳过自动选段")
                 return
