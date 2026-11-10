@@ -32,6 +32,7 @@ from src.modules.agents.companions import companion_names, register_companions
 from src.modules.agents.deps import AgentDeps
 from src.modules.agents.factory import AGENT_BINDINGS, instantiate_agent
 from src.modules.agents.manager import AgentManager
+from src.modules.audio.sink import FanOutAudioSink
 from src.modules.avatar.act_tool import AvatarActProvider
 from src.modules.avatar.tracking import TrackingConfig, TrackingRuntime
 from src.modules.collectors.factory import instantiate_collector
@@ -638,12 +639,28 @@ async def create_app_components(
             except Exception as exc:
                 logger.warning(f"口型分析器构造失败（口型不分接）: {type(exc).__name__}: {exc}")
 
+        # 句间隙检测分接（字幕拆句的信号源，src/modules/tts 自治件）：
+        # 与口型分析器并列扇出到播放器分接；构造失败只降级不阻断装配。
+        sentence_boundary_sink = None
+        try:
+            from src.modules.tts.silence_watch import SentenceBoundarySink
+
+            sentence_boundary_sink = SentenceBoundarySink(event_bus)
+            logger.info("句间隙检测分接已构造（字幕拆句信号源）")
+        except Exception as exc:
+            logger.warning(f"句间隙检测分接构造失败（字幕不拆句）: {type(exc).__name__}: {exc}")
+
+        # 播放器只挂一个分接，多个消费者（口型分析、句间隙检测）经扇出合并；
+        # 都没装配时为 None（不分接）。
+        audio_sinks = [sink for sink in (lipsync_analyzer, sentence_boundary_sink) if sink is not None]
+        audio_sink = FanOutAudioSink(audio_sinks) if audio_sinks else None
+
         # TTS 引擎实例（基础设施，不经 ToolRegistry）：按 [tts] 段装配；
-        # 失败 / 关闭时返回 None，StreamerAgent 走 TTS 关闭路径。口型分析器经
-        # 构造链注入播放器分接（播放器对所有 sink 调用 fail-soft）；
+        # 失败 / 关闭时返回 None，StreamerAgent 走 TTS 关闭路径。分接消费者经
+        # 构造链注入播放器（播放器对所有 sink 调用 fail-soft）；
         # LLMManager 经签名透传（仅 omni_tts 引擎消费）。
         tts_engine = build_tts_infrastructure(
-            tts_section, event_bus=event_bus, audio_sink=lipsync_analyzer, llm_service=llm_service
+            tts_section, event_bus=event_bus, audio_sink=audio_sink, llm_service=llm_service
         )
 
         # 面捕合成器（avatar 共享件，调参 [avatar.tracking]；拍平后顶层键 tracking）：

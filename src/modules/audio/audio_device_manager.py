@@ -246,6 +246,7 @@ class AudioDeviceManager:
         audio_array: np.ndarray,
         samplerate: Optional[int] = None,
         device_index: Optional[int] = None,
+        utterance_id: str = "",
     ) -> None:
         """
         播放音频
@@ -254,6 +255,8 @@ class AudioDeviceManager:
             audio_array: 音频数据数组
             samplerate: 采样率（默认使用 self.sample_rate）
             device_index: 设备索引（默认使用 self.output_device_index）
+            utterance_id: 本次发声实例 ID，随分接会话递给 sink
+                （流式播法的 start_prepared_stream 同样递入；缺省空串）
         """
         if not DEPENDENCIES_OK:
             self.logger.error("音频依赖缺失")
@@ -267,7 +270,7 @@ class AudioDeviceManager:
         self.logger.debug(f"开始播放音频 (设备索引: {device_index}, 采样率: {samplerate})...")
 
         # 分接：开播同步开 session（全量播法按播放节奏逐片递入）
-        self._sink_start()
+        self._sink_start(utterance_id)
 
         try:
             # 停止现有播放

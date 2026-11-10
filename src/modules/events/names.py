@@ -127,6 +127,10 @@ class CoreEvents:
     TTS_UTTERANCE_FAILED = "tts.utterance.failed"
     # 播放队列确知这句没送到观众面前（关停清队、停机拒收、段落插断、过期作废），且未出字幕
     TTS_UTTERANCE_DROPPED = "tts.utterance.dropped"
+    # 播放音频里检出一句发声后的静音间隙（≥200ms，播放路径边播边检测）：
+    # 字幕 follower 据此把上屏文本切到下一段。segment_index 是本次发声内
+    # 第几个间隙（从 1 起计），只作对账辅助——消费方按"收到即切下一段"行事。
+    TTS_UTTERANCE_SENTENCE_BOUNDARY = "tts.utterance.sentence_boundary"
 
     # ========== v2 语义域事件（streamer 主播发言业务事实） ==========
     # 主播 Agent 已生成一条发言的业务事实：与 TTS 启用与否正交，下游消费者

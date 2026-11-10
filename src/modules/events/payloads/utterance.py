@@ -2,7 +2,8 @@
 事件 Payload 定义：tts.utterance.* 一次发声实例生命周期
 
 定义 ``tts.utterance.started`` / ``tts.utterance.finished`` /
-``tts.utterance.failed`` / ``tts.utterance.dropped`` 四个事件的 Payload。
+``tts.utterance.failed`` / ``tts.utterance.dropped`` /
+``tts.utterance.sentence_boundary`` 五个事件的 Payload。
 
 按契约：
 - ``utterance_id`` 为全链路关联键（编排层生成），串联 reply 记录、TTS 事件、
@@ -166,6 +167,36 @@ class UtteranceDroppedPayload(BasePayload):
     )
 
 
+@register_event(CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY)
+class UtteranceSentenceBoundaryPayload(BasePayload):
+    """播放音频越过一句发声后的静音间隙事件 Payload。
+
+    事件名：``tts.utterance.sentence_boundary`` —— 播放路径边播边检测静音，
+    检出 ≥ 阈值（约 200ms）的间隙且此前确有发声时发布。发布时刻 = 间隙在
+    声卡上被写出的时刻，与观众听到的停顿天然同步。
+    订阅者：字幕 follower（把上屏文本切到下一段）。
+    终点广播，消费者不得触发新决策。
+
+    Attributes:
+        utterance_id: 一次发声实例的唯一 ID（与 started 事件对应）。
+        segment_index: 本次发声内检出的第几个间隙（从 1 起递增）；只作日志
+            对账辅助，消费方按"收到即切下一段"行事，不依赖该值。
+        live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）。
+        timestamp_ms: 事件发布时间戳（Unix 毫秒），用于日志/排序。
+    """
+
+    utterance_id: str = Field(..., description="一次发声实例的唯一 ID（与 started 事件对应）")
+    segment_index: int = Field(..., ge=1, description="本次发声内检出的第几个句间隙（从 1 起递增）")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
+    timestamp_ms: int = Field(
+        default_factory=lambda: now_ms(),
+        description="事件发布时间戳（Unix 毫秒）",
+    )
+
+
 # ---------------------------------------------------------------------------
 # 失败"已报告"标记
 # ---------------------------------------------------------------------------
@@ -201,6 +232,7 @@ __all__ = [
     "UtteranceFinishedPayload",
     "UtteranceFailedPayload",
     "UtteranceDroppedPayload",
+    "UtteranceSentenceBoundaryPayload",
     "FAILURE_REPORTED_ATTR",
     "mark_failure_reported",
     "is_failure_reported",

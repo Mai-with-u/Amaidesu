@@ -18,9 +18,11 @@ TTS 播放路径上"复制一份音频"的接收方契约：播放器在开播/�
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Callable, Iterable, List, Protocol, runtime_checkable
 
 import numpy as np
+
+from src.modules.logging import get_logger
 
 
 @runtime_checkable
@@ -44,4 +46,34 @@ class AudioSink(Protocol):
         ...
 
 
-__all__ = ["AudioSink"]
+class FanOutAudioSink:
+    """把同一份音频分接扇出给多个接收方；单个接收方的异常只记日志不传染。
+
+    播放器只挂一个 sink，而分接消费者可以有多个（口型分析、句间隙检测等）：
+    本类实现 ``AudioSink`` 会话形状，把每次 ``start`` / ``feed`` / ``stop``
+    依次递给全部成员——任一成员抛异常被就地捕获记日志，其余成员照常收到
+    递入，播放本身不受影响。
+    """
+
+    def __init__(self, sinks: Iterable[Any], logger_name: str = "AudioSinkFanOut") -> None:
+        self._sinks: List[Any] = list(sinks)
+        self.logger = get_logger(logger_name)
+
+    def _fan_out(self, method_name: str, call: Callable[[Any], None]) -> None:
+        for sink in self._sinks:
+            try:
+                call(sink)
+            except Exception as e:  # noqa: BLE001 - 装饰性路径边界
+                self.logger.warning(f"音频分接 {method_name} 异常（已忽略）: sink={type(sink).__name__}, err={e}")
+
+    def start(self, utterance_id: str = "") -> None:
+        self._fan_out("start", lambda sink: sink.start(utterance_id))
+
+    def feed(self, chunk: "np.ndarray", sample_rate: int) -> None:
+        self._fan_out("feed", lambda sink: sink.feed(chunk, sample_rate))
+
+    def stop(self) -> None:
+        self._fan_out("stop", lambda sink: sink.stop())
+
+
+__all__ = ["AudioSink", "FanOutAudioSink"]

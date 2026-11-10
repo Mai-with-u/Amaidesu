@@ -172,7 +172,7 @@ async def synthesize_play_and_notify(
             duration_ms=duration_ms,
         )
 
-        await provider.audio_manager.play_audio(audio_array, samplerate=samplerate)
+        await provider.audio_manager.play_audio(audio_array, samplerate=samplerate, utterance_id=utterance_id or "")
         provider.render_count += 1
 
         await emit_utterance_finished(
