@@ -22,6 +22,9 @@ Voicebox / Omni TTS / MiniMax / OpenAI），引擎名单的唯一事实源是
   各 Provider 的 ``ConfigSchema`` 用于配置补全，不与工具注册耦合。
 - 装配自治：``build_tts_infrastructure`` 在本包内（``src/modules/tts/``）
   构造选中引擎实例供组合根注入。
+- **装配矛盾态告警**：配置说开启语音、引擎却没构造出来时，由
+  ``TtsEngineMissingAlert`` 发 ``core.error`` 进运营告警通道（有意关闭
+  不是矛盾态，不报）。
 """
 
 from .assembly import build_tts_infrastructure
@@ -39,6 +42,7 @@ from .backends.omni.provider import OmniTTSProvider, create_omni_tts_provider
 from .backends.openai.provider import OpenAITTSProvider, create_openai_tts_provider
 from .protocol import TTSProvider, TtsObservation
 from .backends.voicebox.provider import VoiceboxProvider, create_voicebox_provider
+from .engine_missing_alert import TtsEngineMissingAlert
 from .wav_decoder import decode_wav_chunk, extract_pcm_from_wav
 
 __all__ = [
@@ -60,6 +64,8 @@ __all__ = [
     "create_voicebox_provider",
     # 装配入口
     "build_tts_infrastructure",
+    # 装配矛盾态告警
+    "TtsEngineMissingAlert",
     # 共享辅助
     "compute_duration_ms",
     "build_stats_dict",

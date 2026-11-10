@@ -85,7 +85,7 @@ from src.modules.storage.privacy import PrivacyService
 from src.modules.storage.retention import RetentionService
 from src.modules.subtitle import build_subtitle_infrastructure
 from src.modules.subtitle.backends import DashboardBackend
-from src.modules.tts import TTSProvider, build_tts_infrastructure
+from src.modules.tts import TTSProvider, TtsEngineMissingAlert, build_tts_infrastructure
 from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools import TaskLedger, TaskTracker, ToolHealthMonitor, ToolOperations, ToolRegistry
 from src.modules.tools.tasks import resolve_tasks_config
@@ -543,6 +543,9 @@ async def create_app_components(
         tts_section = {}
     tts_enabled = bool(tts_section.get("enabled", False))
     tts_provider = str(tts_section.get("provider", "edge_tts") or "edge_tts")
+    # TTS 引擎缺席告警器：配置说开启、引擎却没造出来时发 core.error 进运营
+    # 告警通道（同来源同类 5 分钟窗内一条，节流状态随实例跨调用保留）
+    tts_engine_missing_alert = TtsEngineMissingAlert(event_bus=event_bus)
     if tts_enabled:
         logger.info(f"[tts] 基础设施启用：provider='{tts_provider}'（引擎将直接注入 StreamerAgent）")
     else:
@@ -661,6 +664,15 @@ async def create_app_components(
         # LLMManager 经签名透传（仅 omni_tts 引擎消费）。
         tts_engine = build_tts_infrastructure(
             tts_section, event_bus=event_bus, audio_sink=audio_sink, llm_service=llm_service
+        )
+        # 配置说开启语音、引擎却没造出来 = 配置与实际不一致：这场直播全程只
+        # 有字幕没有声音，而字幕照常出字，运营者从直播画面上看不出来。发
+        # core.error 进运营告警通道（WebUI 通知与告警收件箱）。有意关闭
+        # （配置 enabled=false）不是矛盾态，不报。
+        await tts_engine_missing_alert.report_missing_engine(
+            config_enabled=tts_enabled,
+            engine=tts_engine,
+            provider=tts_provider,
         )
 
         # 面捕合成器（avatar 共享件，调参 [avatar.tracking]；拍平后顶层键 tracking）：

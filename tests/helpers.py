@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, List
 
+from src.modules.events.event_bus import EventBus
+from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.core import CoreErrorPayload
 from src.modules.llm.payload import Response
 
 
@@ -43,3 +46,17 @@ def llm_response(**fields: Any) -> Response:
     即 AttributeError；替身一律经这里构造真 Response，字段形状与生产契约同源。
     """
     return Response(**fields)
+
+
+def record_core_error(bus: EventBus) -> List[CoreErrorPayload]:
+    """订阅 ``core.error``（系统级告警事件）并按到达序记录告警载荷。
+
+    事件总线后台扇出，断言前先 ``await bus.wait_until_drained()``。
+    """
+    alerts: List[CoreErrorPayload] = []
+
+    async def _capture(event_name: str, payload: CoreErrorPayload, source: str) -> None:
+        alerts.append(payload)
+
+    bus.on(CoreEvents.CORE_ERROR, _capture, model_class=CoreErrorPayload)
+    return alerts
