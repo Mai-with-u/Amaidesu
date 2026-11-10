@@ -557,15 +557,16 @@ class RememberedPlacesCache:
 
 
 def _distant(entities: Any, counts: Any) -> List[str]:
-    """身边范围外的生物，按种类报只数，写成 ``种类 ×只数``；敌对的排前面，其余多的在前。
+    """身边范围外的生物，按种类报只数，写成 ``种类 ×只数``，多的在前；敌对生物不进远处清单。
 
     远处的生物来自两处：Mod 不论远近逐只列出的（敌对的、盯着角色的、有名字的、玩家），
-    以及它对远处不相干的生物只按种类计数的 ``distant_entities``。主播只需要"远处还有一只苦力怕、
-    一群鱿鱼"这种程度，用不上逐只的方位距离，所以两处合在一起按种类数。
+    以及它对远处不相干的生物只按种类计数的 ``distant_entities``。主播只需要"远处有一群鱿鱼"
+    这种程度，用不上逐只的方位距离，所以两处合在一起按种类数。
+    敌对生物不进远处清单：远处条目只有种类×只数，没有距离与动向，提了也做不成事，只会喂出
+    提完就没有下文的断头提及；近处威胁由"身边有……是敌对的"一句与挨打事件承载。
     有名字的（玩家、起了名的生物）把名字带在种类后面，主播才能叫得出是谁。
     """
     tally: Dict[str, int] = {}
-    hostile: set[str] = set()
     if isinstance(entities, list):
         for item in entities:
             if not isinstance(item, dict) or not item.get("type"):
@@ -574,16 +575,16 @@ def _distant(entities: Any, counts: Any) -> List[str]:
             # 没有距离的不知道远近，身边和远处都不算；身边范围内的已经在 entities 里逐只给了
             if not isinstance(distance, (int, float)) or distance <= NEARBY_BLOCKS:
                 continue
+            # 敌对生物不进远处清单，近处威胁由身边敌对句与挨打事件承载
+            if item.get("hostile") is True:
+                continue
             kind = f"{item['type']}（{item['name']}）" if item.get("name") else str(item["type"])
             tally[kind] = tally.get(kind, 0) + 1
-            if item.get("hostile") is True:
-                hostile.add(kind)
     if isinstance(counts, dict):
         for kind, count in counts.items():
             if isinstance(count, int) and not isinstance(count, bool) and count > 0:
                 tally[str(kind)] = tally.get(str(kind), 0) + count
-    # 远处的敌对生物是直播里值得提的事，放在一群鱿鱼、蝙蝠前面
-    ordered = sorted(tally.items(), key=lambda pair: (pair[0] not in hostile, -pair[1], pair[0]))
+    ordered = sorted(tally.items(), key=lambda pair: (-pair[1], pair[0]))
     return [f"{kind} ×{count}" for kind, count in ordered]
 
 

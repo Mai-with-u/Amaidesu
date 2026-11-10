@@ -85,11 +85,10 @@ async def test_glance_shows_body_nearby_things_and_running_goals() -> None:
     assert view["inventory"] == ["minecraft:oak_log ×6"]
     assert [entity["type"] for entity in view["entities"]] == ["minecraft:cow"], "远处的苦力怕不算身边"
     assert view["distant_entities"] == [
-        "minecraft:creeper ×1",
         "minecraft:squid ×30",
         "minecraft:bat ×12",
         "minecraft:player（Steve） ×1",
-    ], "远处的按种类计数：逐只列出的与只计数的合在一起，敌对的在前，玩家带名字"
+    ], "远处的按种类计数：逐只列出的与只计数的合在一起，敌对的不列，玩家带名字"
     assert view["facilities"][0]["block"] == "minecraft:chest"
     assert view["work"]["goals"] == [
         {"ability": "maicraft:gather", "purpose": "砍树", "state": "running", "doing": "走向树"}
@@ -98,7 +97,7 @@ async def test_glance_shows_body_nearby_things_and_running_goals() -> None:
     assert list(view)[:2] == ["tool", "brief"]
     assert view["brief"] == (
         "在主世界的森林。白天，晴。血是满的，有点饿。手上拿着石斧。背包里有oak_log。"
-        "身边还有牛。附近有箱子。远处还有苦力怕、鱿鱼、蝙蝠等。手上在砍树，眼下走向树。"
+        "身边还有牛。附近有箱子。远处还有鱿鱼、蝙蝠、玩家。手上在砍树，眼下走向树。"
     )
     await agent.stop()
 
@@ -126,7 +125,7 @@ def test_glance_brief_is_plain_speech_without_numbers() -> None:
 
 
 def test_glance_distant_entities_only_counts_what_is_known_to_be_far() -> None:
-    """远处计数只收确实在远处的：没距离的不算，坏计数不算，远处什么都没有时不写这一栏。"""
+    """远处计数只收确实在远处的：没距离的不算，坏计数不算，敌对的不算，远处什么都没有时不写这一栏。"""
     scene = {
         "entities": [
             {"type": "minecraft:zombie", "distance": 30, "hostile": True},
@@ -137,11 +136,42 @@ def test_glance_distant_entities_only_counts_what_is_known_to_be_far() -> None:
         "distant_entities": {"minecraft:squid": 3, "minecraft:bat": 0, "minecraft:cod": "很多", "minecraft:fox": True},
     }
     view = glance_scene(MaicraftReply(ok=True, data=scene))
-    assert view["distant_entities"] == ["minecraft:zombie ×2", "minecraft:squid ×3"]
+    assert view["distant_entities"] == ["minecraft:squid ×3"]
     assert [entity["type"] for entity in view["entities"]] == ["minecraft:pig"]
 
     nearby_only = glance_scene(MaicraftReply(ok=True, data={"entities": [{"type": "minecraft:pig", "distance": 10}]}))
     assert "distant_entities" not in nearby_only, "远处没有东西不写这一栏，上游没给也不写"
+
+
+def test_glance_distant_drops_hostile_but_keeps_passive_and_nearby_hostile_line() -> None:
+    """逐只列出（带 hostile 标记）的远处敌对生物不进远处清单：剔除后整栏不写、摘要没有"远处还有"；
+    被动生物照常出现；身边敌对那句（含方位）不受影响，威胁信息仍由它承载。
+    只按种类计数的 distant_entities 没有 hostile 标记，剔除不了——这类敌对要出清单得 Mod 侧加标记。"""
+    scene = {
+        "entities": [{"type": "minecraft:pillager", "direction": "左后方", "distance": 40, "hostile": True}],
+        "distant_entities": {},
+    }
+    view = glance_scene(MaicraftReply(ok=True, data=scene))
+    assert "distant_entities" not in view, "远处只有敌对生物时这一栏不写"
+    assert "远处还有" not in glance_brief(view)
+
+    nearby = {**scene, "entities": [{**scene["entities"][0], "distance": 6, "direction": "左后方"}]}
+    assert glance_brief(glance_scene(MaicraftReply(ok=True, data=nearby))) == "身边有掠夺者在左后方，是敌对的。", (
+        "身边敌对句不受远处清单剔除影响"
+    )
+
+    mixed = glance_scene(
+        MaicraftReply(
+            ok=True,
+            data={
+                **scene,
+                "entities": [*scene["entities"], {"type": "minecraft:sheep", "distance": 45, "hostile": False}],
+                "distant_entities": {"minecraft:squid": 5},
+            },
+        )
+    )
+    assert mixed["distant_entities"] == ["minecraft:squid ×5", "minecraft:sheep ×1"], "被动生物照常进远处清单"
+    assert "远处还有鱿鱼" in glance_brief(mixed)
 
 
 def _maid_scene() -> Dict[str, Any]:
