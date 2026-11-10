@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from collections import deque
-from typing import Any, ClassVar, Deque, Dict, Iterable, List, Optional
+from typing import Any, Callable, ClassVar, Deque, Dict, Iterable, List, Optional
 
 from src.modules.agents.base import BaseAgent
 from src.modules.agents.game_tools import business_fail_result
@@ -52,6 +52,15 @@ PROVIDER_NAME = "framework"
 
 # 委派队列深度上限（每个执行者一条队列）：超出后普通件拒收并附当前队列清单
 _DELEGATION_QUEUE_LIMIT = 5
+
+# 在途委派看门狗：已送达且账面停在 accepted 的单超时未终态时升级通知发起方，由发起方
+# 决断（继续等/催办/撤单），框架不自动撤单。背景：委派队列只在在途单走到终态时投递
+# 下一件，在途单被实质放弃（执行方被别的事拉走、从没开跑）却永不终态，会把排队件堵死。
+# 只计 accepted：queued 是排队（没送到，不受执行方牵连）、suspended 是急件抢占的
+# 有意挂起（发起方可见），均不计超时；转 running 即执行方已接手，accepted 窗口结束。
+_DELEGATION_WATCHDOG_TIMEOUT_MS = 600_000
+# 同一单升级次数上限（每次升级重置计时窗口，可再超时再升级）：防发起方始终不决断时无限打扰
+_DELEGATION_WATCHDOG_MAX_ESCALATIONS = 2
 
 # 拒受理/队列清单里不当"已知进展"列出的快照字段：指令全文与原话另有一行；执行 Agent 最近那句判断是没脱敏的
 # 推理原文，不给发起方回读
@@ -190,6 +199,21 @@ class _QueueEntry:
     enqueued_at_ms: int
 
 
+@dataclass(slots=True)
+class _WatchdogEntry:
+    """在途委派看门狗的计时条目（只记已送达且账面停在 accepted 的委派单）。
+
+    ``timer_base_ms`` 是当前计时窗口起点：送达受理时起算，每次升级后重置、
+    挂起恢复（suspended 转 accepted）时重置；``suspended`` 为真表示急件抢占
+    挂起中（planner 可见的有意状态），挂起期间暂停计时。
+    ``escalations`` 是已升级次数，到达上限后不再升级。
+    """
+
+    timer_base_ms: int
+    escalations: int = 0
+    suspended: bool = False
+
+
 class _DelegationCore:
     """委派受理核心：目标解析 → 忙闲三分支 → 目标接收入口 → 账面登记。
 
@@ -206,24 +230,129 @@ class _DelegationCore:
     急件置顶排队。在途单已是急件时不再嵌套挂起，第二件急件同样置顶排队
     （同一时刻最多一件急事在办）。排队的单在目标名下在途件走到终态时按序送达
     （订阅 task.changed 触发）；送达被目标拒收当场转 failed 带原因，不留孤儿条目。
+
+    在途单看门狗：accepted 的委派单超时未终态时升级通知发起方（见模块级
+    ``_DELEGATION_WATCHDOG_TIMEOUT_MS`` 注释），检查搭在既有事件驱动点上
+    （task.changed 回调与受理入口），不另起定时器循环——检查节拍跟随任务
+    活动走，长时间无任何任务事件的静默期不检查，是有意的取舍。
     """
 
     def __init__(
-        self, manager: AgentManager, task_ledger: Optional[TaskLedger], event_bus: Optional[Any] = None
+        self,
+        manager: AgentManager,
+        task_ledger: Optional[TaskLedger],
+        event_bus: Optional[Any] = None,
+        clock: Optional[Callable[[], int]] = None,
     ) -> None:
         self._manager = manager
         self._task_ledger = task_ledger
         # 每个执行者一条队列（注册名 → 排队条目，队首先送达）
         self._queues: Dict[str, Deque[_QueueEntry]] = {}
+        # 在途单看门狗计时（task_id → 计时条目）；``clock`` 保留给测试注入假时钟
+        self._watchdog: Dict[str, _WatchdogEntry] = {}
+        self._clock = clock or now_ms
         if event_bus is not None and task_ledger is not None:
             event_bus.on(CoreEvents.TASK_CHANGED, self._on_task_changed, model_class=TaskChangedPayload)
 
     async def _on_task_changed(self, event_name: str, payload: TaskChangedPayload, source: str) -> None:
-        """task.changed 回调：目标名下在途件走到终态时，把排队的下一件送达。"""
+        """task.changed 回调：维护看门狗计时；目标名下在途件走到终态时，把排队的下一件送达。"""
         del event_name, source
+        self._watchdog_observe(payload)
+        self._watchdog_check()
         if payload.source != "agent" or payload.status not in TERMINAL_TASK_STATES:
             return
         await self._drain_queue(payload.executor)
+
+    # -------------------- 在途委派看门狗 --------------------
+
+    def _watchdog_start(self, task_id: str) -> None:
+        """送达受理成功：看门狗开始计时（直派与排队送达两个受理点共用）。"""
+        self._watchdog[task_id] = _WatchdogEntry(timer_base_ms=self._clock())
+
+    def _watchdog_observe(self, payload: TaskChangedPayload) -> None:
+        """随 task.changed 观察计时中的单，按状态迁移维护计时条目。
+
+        终态：出看门狗（队列投递随之恢复，不再升级）。suspended：急件抢占
+        的有意挂起，暂停计时。挂起恢复回 accepted：重置计时窗口再计。
+        转 running / waiting_for_decision：执行方已接手开跑，"受理未开跑"
+        的窗口结束，出看门狗（后续停滞归执行方上报与通用停滞告警管）。
+        """
+        entry = self._watchdog.get(payload.task_id)
+        if entry is None:
+            return
+        if payload.status in TERMINAL_TASK_STATES:
+            self._watchdog.pop(payload.task_id, None)
+        elif payload.status == "suspended":
+            entry.suspended = True
+        elif payload.status == "accepted":
+            if entry.suspended:  # 挂起恢复：重置计时窗口
+                entry.suspended = False
+                entry.timer_base_ms = self._clock()
+        else:
+            self._watchdog.pop(payload.task_id, None)
+
+    def _watchdog_check(self) -> None:
+        """检查全部计时中的单：超时未终态的升级通知发起方，账面已变的对账清理。
+
+        以账面为准对账（accepted→running 这类组内静默迁移不发事件，靠这里
+        认出并出看门狗）；同一单每个超时窗口只升级一次（升级即重置窗口），
+        累计升级到上限后停手。升级只通知、不撤单、不代写账面状态——决断权
+        在发起方。
+        """
+        if not self._watchdog or self._task_ledger is None:
+            return
+        now = self._clock()
+        for task_id, entry in list(self._watchdog.items()):
+            record = self._task_ledger.get(task_id)
+            if record is None:
+                self._watchdog.pop(task_id, None)  # 已终态移除或被撤
+                continue
+            if record.status == "suspended":
+                entry.suspended = True  # 挂起事件漏观测时的对账兜底：暂停计时
+                continue
+            if record.status != "accepted":
+                self._watchdog.pop(task_id, None)  # 执行方已接手（running 等）：窗口结束
+                continue
+            if entry.suspended:
+                # 挂起已恢复回 accepted（恢复事件没观测到时的对账兜底）：重置窗口
+                entry.suspended = False
+                entry.timer_base_ms = now
+                continue
+            waited_ms = now - entry.timer_base_ms
+            if waited_ms < _DELEGATION_WATCHDOG_TIMEOUT_MS:
+                continue
+            if entry.escalations >= _DELEGATION_WATCHDOG_MAX_ESCALATIONS:
+                continue
+            entry.escalations += 1
+            entry.timer_base_ms = now
+            self._watchdog_escalate(record, entry.escalations, waited_ms)
+
+    def _watchdog_escalate(self, record: TaskRecord, escalations: int, waited_ms: int) -> None:
+        """升级一件超时的在途单：把单号、原话摘要与已耗时报给发起方，请求决断。
+
+        升级通道跟随现状复用既有面：发起方实现递话入口就走 ``receive_prompt``
+        （下个决策窗必达）；发起方不在名册或拒收（如提醒队列满）时降级为
+        账本停滞告警（task.changed alert 载荷，看板可见），不新增事件名。
+        """
+        waited_min = waited_ms // 60_000
+        summary = (
+            f"[委派看门狗] 委派 {record.task_id}「{self._quote_own_words(record.snapshot)}」"
+            f"已受理 {waited_min} 分钟无终态（第 {escalations}/{_DELEGATION_WATCHDOG_MAX_ESCALATIONS} 次升级），"
+            "请决断：继续等待、递话催办，或用 framework_task_cancel 撤单"
+        )
+        initiator = self._manager.get_agent_by_name(record.initiator)
+        receive = getattr(initiator, "receive_prompt", None) if initiator is not None else None
+        if callable(receive) and receive(content=summary, source="委派看门狗"):
+            logger.warning(
+                f"委派在途超时升级（已经递话送达发起方 '{record.initiator}'）: "
+                f"task_id={record.task_id}，已 {waited_min} 分钟无终态"
+            )
+            return
+        logger.warning(
+            f"委派在途超时升级（发起方 '{record.initiator}' 无递话入口或拒收，降级账本告警）: "
+            f"task_id={record.task_id}，已 {waited_min} 分钟无终态"
+        )
+        self._task_ledger.alert_stall(record.task_id, summary=summary)
 
     async def _drain_queue(self, executor: str) -> None:
         """按序送达 ``executor`` 的排队件：队首已不在账（被撤/终态）就跳过；
@@ -262,6 +391,7 @@ class _DelegationCore:
                 ok=False, error="refused", message=f"受理失败：目标 '{target.name}' 拒收（{rejected}）"
             )
         self._task_ledger.update(entry.task_id, "accepted", summary="轮到执行，已送达目标")
+        self._watchdog_start(entry.task_id)
         logger.info(f"排队件送达: {entry.initiator} -> {target.name}（task_id={entry.task_id}）")
         return _DelegationOutcome(ok=True, task_id=entry.task_id, executor=target.name)
 
@@ -387,6 +517,8 @@ class _DelegationCore:
         - 目标忙 + 急件：在途件是普通件且目标暂放成功 → 在途转 suspended、急件立刻派；
           否则急件置顶排队
 
+        受理入口也是看门狗的检查点：每次新的委派活动顺带核对一遍在途单计时。
+
         直派时任务号先生成再交目标接收（拒收则不登记，不留孤儿 accepted 条目）；
         受理失败（本方法返回的 refusal）与任务失败（执行中写入记录表的 failed
         终态）严格分开——回执只承诺"目标已接收或已排上"，不承诺"能干成"。
@@ -395,6 +527,7 @@ class _DelegationCore:
         executor = target.name
         delivered = self._delivered_delegation(executor)
         waiting = self._live_queue(executor)
+        self._watchdog_check()
         if delivered is None and not waiting:
             return self._deliver_new(target, instruction, initiator, urgent=urgent)
         if urgent:
@@ -461,6 +594,7 @@ class _DelegationCore:
             snapshot=self._snapshot(instruction, urgent=urgent),
         )
         logger.info(f"委派受理: {initiator} -> {executor}（task_id={task_id}{'，急件' if urgent else ''}）")
+        self._watchdog_start(task_id)
         return _DelegationOutcome(ok=True, task_id=task_id, executor=executor)
 
     def _enqueue(self, target: BaseAgent, instruction: str, initiator: str, *, urgent: bool) -> _DelegationOutcome:
@@ -569,11 +703,12 @@ class AgentControl:
         manager: AgentManager,
         task_ledger: Optional[TaskLedger] = None,
         event_bus: Optional[Any] = None,
+        clock: Optional[Callable[[], int]] = None,
     ) -> None:
         self._manager = manager
         self._task_ledger = task_ledger
         self._event_bus = event_bus
-        self._delegation = _DelegationCore(manager, task_ledger, event_bus)
+        self._delegation = _DelegationCore(manager, task_ledger, event_bus, clock)
 
     async def pause(self, name: str) -> bool:
         agent = self._manager.get_agent_by_name(name)
@@ -731,13 +866,14 @@ class AgentControlProvider(BaseToolProvider):
     manager: AgentManager
     task_ledger: Optional[TaskLedger] = None
     event_bus: Optional[Any] = None
+    clock: Optional[Callable[[], int]] = None  # 保留给测试注入假时钟（委派看门狗计时用）
     _delegation: _DelegationCore = field(init=False, repr=False)  # 委派受理核心（与控制面直调共用）
 
     # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
     category: ClassVar[str] = "framework"
 
     def __post_init__(self) -> None:
-        self._delegation = _DelegationCore(self.manager, self.task_ledger, self.event_bus)
+        self._delegation = _DelegationCore(self.manager, self.task_ledger, self.event_bus, self.clock)
 
     @property
     def name(self) -> str:
@@ -1077,9 +1213,10 @@ def build_agent_control_provider(
     manager: AgentManager,
     task_ledger: Optional[TaskLedger] = None,
     event_bus: Optional[Any] = None,
+    clock: Optional[Callable[[], int]] = None,
 ) -> AgentControlProvider:
     """工厂：构造一个 AgentControlProvider 绑定 manager（+ 任务记录表供委派）。"""
-    return AgentControlProvider(manager=manager, task_ledger=task_ledger, event_bus=event_bus)
+    return AgentControlProvider(manager=manager, task_ledger=task_ledger, event_bus=event_bus, clock=clock)
 
 
 __all__ = [

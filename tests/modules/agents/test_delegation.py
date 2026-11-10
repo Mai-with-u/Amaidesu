@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Callable, List
+from typing import Any, Callable, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -840,3 +840,173 @@ async def test_framework_guide_lists_delegable_agents_or_stays_silent(rig: _Rig)
 
     silent = _Rig(_StubAgent("solo"), _RemoteStubAgent())
     assert silent.registry._providers[0].guide_for("solo") == ""  # noqa: SLF001
+
+
+# -------------------- 在途委派看门狗 --------------------
+
+
+class _SuspendableStubAgent(_StubAgent):
+    """支持暂放的最小桩（急件抢占协议）：记下暂放调用次数。"""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.suspend_calls = 0
+
+    async def suspend_current(self) -> bool:
+        self.suspend_calls += 1
+        return True
+
+
+class _MutePromptStubAgent(_StubAgent):
+    """拒收递话的桩（BaseAgent 默认拒收形态）：看门狗对它降级账本告警。"""
+
+    def receive_prompt(self, *, content: str, source: str = "") -> bool:
+        return False
+
+
+def _watch_rig(clock: Any, *agents: BaseAgent) -> tuple[AgentControl, TaskLedger, EventBus]:
+    """看门狗测试夹具：AgentControl 直连（绕开 registry），时间用注入假时钟。"""
+    bus = EventBus(enable_stats=False)
+    ledger = TaskLedger(event_bus=bus)
+    manager = AgentManager()
+    for agent in agents:
+        manager.register(agent)
+    control = AgentControl(manager, ledger, bus, clock=clock.now_ms)
+    return control, ledger, bus
+
+
+async def _fire_probe_event(ledger: TaskLedger, bus: EventBus, probe_id: str) -> None:
+    """登记一件无关任务触发 task.changed：看门狗的检查搭在该事件驱动点上。"""
+    ledger.register(
+        task_id=probe_id,
+        provider="probe",
+        tool="probe_tool",
+        initiator="probe_initiator",
+        executor="probe_executor",
+        source="provider",
+    )
+    # register 经外层 create_task 才把派发任务挂进总线：先让出一拍再等排空，
+    # 否则 wait_until_drained 在后台任务集合还是空时就立即返回
+    for _ in range(2):
+        await asyncio.sleep(0)
+    await bus.wait_until_drained()
+
+
+async def test_watchdog_escalates_timed_out_accepted_delegation_to_initiator(fake_clock: Any) -> None:
+    """在途单超 10 分钟无终态：升级通知发起方（带单号与已耗时），不自动撤单。"""
+    initiator = _StubAgent("agent_a")
+    control, ledger, bus = _watch_rig(fake_clock, initiator, _StubAgent("agent_b"))
+
+    outcome = await control.delegate(name="agent_b", instruction="捡一朵蒲公英", initiator="agent_a")
+    assert outcome["ok"] and not outcome.get("queued")
+    task_id = outcome["task_id"]
+
+    fake_clock.tick(9 * 60_000)
+    await _fire_probe_event(ledger, bus, "probe_1")
+    assert initiator.prompts_received == []  # 未到窗口不升级
+
+    fake_clock.tick(2 * 60_000)
+    await _fire_probe_event(ledger, bus, "probe_2")
+    assert len(initiator.prompts_received) == 1
+    content, source = initiator.prompts_received[0]
+    assert task_id in content and "蒲公英" in content and "11 分钟" in content
+    assert source == "委派看门狗"
+    record = ledger.get(task_id)
+    assert record is not None and record.status == "accepted"  # 不自动撤单，账面不代写
+
+
+async def test_watchdog_escalates_once_per_window_with_cap(fake_clock: Any) -> None:
+    """同一窗口只升级一次（升级即重置计时）；累计升到 2 次后停手。"""
+    initiator = _StubAgent("agent_a")
+    control, ledger, bus = _watch_rig(fake_clock, initiator, _StubAgent("agent_b"))
+    outcome = await control.delegate(name="agent_b", instruction="修好风车", initiator="agent_a")
+    task_id = outcome["task_id"]
+
+    fake_clock.tick(11 * 60_000)
+    await _fire_probe_event(ledger, bus, "probe_1")
+    assert len(initiator.prompts_received) == 1  # 第 1 次升级
+
+    fake_clock.tick(5 * 60_000)
+    await _fire_probe_event(ledger, bus, "probe_2")
+    assert len(initiator.prompts_received) == 1  # 窗口已重置，不重复升级
+
+    fake_clock.tick(7 * 60_000)
+    await _fire_probe_event(ledger, bus, "probe_3")
+    assert len(initiator.prompts_received) == 2  # 再满一个窗口：第 2 次升级
+
+    fake_clock.tick(12 * 60_000)
+    await _fire_probe_event(ledger, bus, "probe_4")
+    assert len(initiator.prompts_received) == 2  # 次数上限已到：不再升级
+    assert sum(task_id in text for text, _ in initiator.prompts_received) == 2
+
+
+async def test_watchdog_skips_queued_and_stops_after_terminal(fake_clock: Any) -> None:
+    """排队件不计超时（queue 不进看门狗）；在途单走到终态后不再升级。"""
+    initiator = _StubAgent("agent_a")
+    executor = _StubAgent("agent_b")
+    control, ledger, bus = _watch_rig(fake_clock, initiator, executor)
+
+    first = await control.delegate(name="agent_b", instruction="先做的活", initiator="agent_a")
+    assert first["ok"] and not first.get("queued")
+    first_id = first["task_id"]
+    queued = await control.delegate(name="agent_b", instruction="排队的活", initiator="agent_a")
+    assert queued["ok"] and queued.get("queued")
+    queued_id = queued["task_id"]
+
+    fake_clock.tick(30 * 60_000)
+    await _fire_probe_event(ledger, bus, "probe_1")
+    escalated_ids = {tid for tid in (first_id, queued_id) for text, _ in initiator.prompts_received if tid in text}
+    assert first_id in escalated_ids  # 在途那件照常升级
+    assert queued_id not in escalated_ids  # 排队件不受执行方牵连，不计时
+
+    ledger.update(first_id, "succeeded", summary="做完了")
+    await bus.wait_until_drained()
+    fake_clock.tick(11 * 60_000)
+    await _fire_probe_event(ledger, bus, "probe_2")
+    assert len(initiator.prompts_received) == 1  # 终态后不再升级；排队件已送达开跑（新窗口未满）
+
+
+async def test_watchdog_pauses_during_suspension_and_drops_after_resume(fake_clock: Any) -> None:
+    """急件抢占挂起期间暂停计时；恢复（转 running）后出看门狗，不再升级。"""
+    initiator = _StubAgent("agent_a")
+    executor = _SuspendableStubAgent("agent_b")
+    control, ledger, bus = _watch_rig(fake_clock, initiator, executor)
+
+    preempted = await control.delegate(name="agent_b", instruction="被抢占的活", initiator="agent_a")
+    assert preempted["ok"]
+    urgent = await control.delegate(name="agent_b", instruction="很急的事", initiator="agent_a", urgent=True)
+    assert urgent["ok"] and not urgent.get("queued")  # 目标支持暂放：急件直派，在途件转 suspended
+    preempted_id = preempted["task_id"]
+    assert ledger.get(preempted_id).status == "suspended"
+
+    fake_clock.tick(40 * 60_000)
+    await _fire_probe_event(ledger, bus, "probe_1")
+    assert not [text for text, _ in initiator.prompts_received if preempted_id in text]  # 挂起中不计时
+    assert len(initiator.prompts_received) == 1  # 急件自己超时照常升级（1 次，窗口重置）
+
+    ledger.update(preempted_id, "running", summary="急事办完，恢复暂放的原任务")
+    await bus.wait_until_drained()
+    fake_clock.tick(20 * 60_000)
+    await _fire_probe_event(ledger, bus, "probe_2")
+    assert not [text for text, _ in initiator.prompts_received if preempted_id in text]  # 恢复后出看门狗
+
+
+async def test_watchdog_falls_back_to_ledger_alert_when_initiator_refuses_prompt(fake_clock: Any) -> None:
+    """发起方拒收递话：降级为账本停滞告警（task.changed alert 载荷），不新增事件名。"""
+    initiator = _MutePromptStubAgent("agent_a")
+    control, ledger, bus = _watch_rig(fake_clock, initiator, _StubAgent("agent_b"))
+    alerts: List[TaskChangedPayload] = []
+
+    async def _spy(event_name: str, payload: TaskChangedPayload, source: str) -> None:
+        del event_name, source
+        if payload.alert:
+            alerts.append(payload)
+
+    bus.on(CoreEvents.TASK_CHANGED, _spy, model_class=TaskChangedPayload)
+    outcome = await control.delegate(name="agent_b", instruction="捡一朵蒲公英", initiator="agent_a")
+    task_id = outcome["task_id"]
+
+    fake_clock.tick(11 * 60_000)
+    await _fire_probe_event(ledger, bus, "probe_1")
+    assert initiator.prompts_received == []
+    assert [a for a in alerts if a.task_id == task_id and a.alert and "11 分钟" in a.summary]
