@@ -13,6 +13,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.utterance import (
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
+    UtterancePlaybackStartedPayload,
     UtteranceSentenceBoundaryPayload,
     UtteranceStartedPayload,
 )
@@ -105,6 +106,10 @@ def _boundary(utterance_id: str, segment_index: int) -> UtteranceSentenceBoundar
     return UtteranceSentenceBoundaryPayload(utterance_id=utterance_id, segment_index=segment_index)
 
 
+def _playback_started(utterance_id: str) -> UtterancePlaybackStartedPayload:
+    return UtterancePlaybackStartedPayload(utterance_id=utterance_id)
+
+
 async def _start(bus: EventBus, text: str, utterance_id: str = "utt_p1", duration_ms: int | None = None) -> None:
     await _emit(
         bus,
@@ -121,14 +126,17 @@ async def _finish(bus: EventBus, utterance_id: str = "utt_p1") -> None:
     )
 
 
-async def test_started_shows_first_segment_and_arms_fallback_timer() -> None:
+async def test_started_shows_first_segment_and_waits_for_playback() -> None:
     clock, sched = FakeClock(), FakeScheduler()
     bus, svc = EventBus(), _service()
     bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
     await _start(bus, "第一段。第二段。第三段")
     svc.show.assert_awaited_once_with("第一段", "utt_p1")
-    # 无 duration_ms（流式）：按每字 250ms 估算；"第二段"3 字 → 750ms
-    assert sched.delays() == [750]
+    # 估算定时不起跑：等真正出声（播放开始事件）再排，字幕不跑在声音前面
+    assert sched.pending() == []
+    clock.tick(10_000)  # 合成迟迟不回也照旧：字幕停在第一段，不会先行切完
+    assert svc.show.await_count == 1
+    assert sched.pending() == []
 
 
 async def test_boundary_event_switches_segment_and_cancels_timer() -> None:
@@ -136,6 +144,7 @@ async def test_boundary_event_switches_segment_and_cancels_timer() -> None:
     bus, svc = EventBus(), _service()
     bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
     await _start(bus, "第一段。第二段。第三段")
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
     svc.show.reset_mock()
     await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 1))
     svc.show.assert_awaited_once_with("第二段", "utt_p1")
@@ -159,6 +168,7 @@ async def test_fallback_timer_switches_without_boundary_event() -> None:
     bus, svc = EventBus(), _service()
     bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
     await _start(bus, "第一段。第二段")
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
     assert sched.fire_next() is not None  # 检测不工作：估算定时到点照切
     await _pump()
     svc.show.assert_awaited_with("第二段", "utt_p1")
@@ -171,6 +181,7 @@ async def test_duration_estimates_by_char_proportion() -> None:
     # 全文 6 字、总时长 6000ms：首段 2 字 → 2000ms；切到第二段（2 字）后
     # 剩余窗口 4000ms、剩余 4 字 → 再 2000ms
     await _start(bus, "一二。三四。五六", duration_ms=6000)
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
     assert sched.delays()[0] == 2000
     clock.tick(2000)
     await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 1))
@@ -182,6 +193,7 @@ async def test_event_beats_timer_no_double_switch() -> None:
     bus, svc = EventBus(), _service()
     bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
     await _start(bus, "第一段。第二段。第三段")
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
     await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 1))
     # 事件切段后原定时已取消：定时触发不到已被跳过的段
     assert len(sched.pending()) == 1
@@ -189,6 +201,58 @@ async def test_event_beats_timer_no_double_switch() -> None:
     await _pump()
     calls = [call.args[0] for call in svc.show.await_args_list]
     assert calls == ["第一段", "第二段", "第三段"]  # 无重复切段
+
+
+# ---------------- 播放开始起跑估算时钟 ----------------
+
+
+async def test_playback_started_arms_estimation_clock_at_audio_start() -> None:
+    # 缺陷场景：流式引擎 started 在合成前发布，估算若从 started 起跑会在出声前
+    # 跑完；起跑锚定 playback_started（首块写声卡），任何合成延迟下估算都与听感对齐
+    clock, sched = FakeClock(), FakeScheduler()
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
+    await _start(bus, "第一段。第二段。第三段")
+    clock.tick(3000)  # 合成首块延迟 3s，音频此刻才真正出声
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
+    # 估算此刻才起跑："第二段" 3 字 × 250ms，与观众听到首声同步计数
+    assert sched.delays() == [750]
+    assert len(sched.pending()) == 1
+
+
+async def test_playback_started_ignored_for_other_utterance() -> None:
+    clock, sched = FakeClock(), FakeScheduler()
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
+    await _start(bus, "第一段。第二段", utterance_id="utt_a")
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_other"))
+    assert sched.delays() == []  # 非本句的播放开始事件：不起跑估算
+    assert sched.pending() == []
+
+
+async def test_playback_started_without_session_or_after_finish_is_ignored() -> None:
+    clock, sched = FakeClock(), FakeScheduler()
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
+    await _start(bus, "整句无句末标点")  # 单段无分段会话
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
+    assert sched.pending() == []
+    await _start(bus, "第一段。第二段", utterance_id="utt_b")
+    await _finish(bus, utterance_id="utt_b")
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_b"))
+    assert sched.pending() == []  # finished 后迟到的播放开始事件不再建定时
+
+
+async def test_duration_window_counts_from_playback_start() -> None:
+    # 全量引擎（duration_ms 可用）：窗口从出声时刻起算——started 后等待合成的
+    # 时间不吞掉播放窗口（从 started 起跑的旧口径下此处只剩 1000ms × 2/4 = 500ms）
+    clock, sched = FakeClock(), FakeScheduler()
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
+    await _start(bus, "一二。三四", duration_ms=6000)
+    clock.tick(5000)  # started 后 5s 音频才出声
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
+    assert sched.pending()[0]["delay_ms"] == 3000  # 完整窗口 6000ms × 首段 2/4 字
 
 
 async def test_finished_clears_and_late_boundary_is_ignored() -> None:
@@ -230,13 +294,14 @@ async def test_new_started_replaces_previous_session() -> None:
     assert calls == ["旧句一", "新句一"]
 
 
-async def test_single_segment_started_keeps_legacy_behavior() -> None:
+async def test_single_segment_shows_full_text_without_schedule() -> None:
     clock, sched = FakeClock(), FakeScheduler()
     bus, svc = EventBus(), _service()
     bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
     await _start(bus, "整句无句末标点")
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
     svc.show.assert_awaited_once_with("整句无句末标点", "utt_p1")
-    assert sched.pending() == []  # 单段无兜底定时
+    assert sched.pending() == []  # 单段无分段会话，出声信号也不建定时
 
 
 @pytest.mark.parametrize("enabled", [True, False])

@@ -2,9 +2,17 @@
 
 字幕"一源 → 三面"的播放对齐模式：TTS 引擎在位时，字幕跟随
 ``tts.utterance.*`` 生命周期——``started`` 把 speech_text 按句末标点切段、
-先显示第一段，随后把上屏文本切到下一段；``failed`` 照常显示该句全文
+先显示第一段，出声后再把上屏文本切到下一段；``failed`` 照常显示该句全文
 （无声音也要给文本，原文由 ``speech_text`` 必选字段承载，不分段）；
 ``finished`` 清空。与实际播放对齐：队列丢最旧的台词自然不显示。
+
+估算时钟的零点锚在"真正出声"：``started`` 只切段并显示第一段，估算兜底
+定时**不起跑**——``tts.utterance.playback_started``（首个音频块写进声卡，
+播放路径分接发布）到达才把零点锚到该时刻并起跑估算。流式引擎的 started
+在合成前发布，从 started 到真正出声隔着整段合成首块延迟，先行起跑会让
+估算跑在出声之前（字幕播完声音才响）；等出声再起跑则任何延迟下估算都与
+听感对齐。播放路径未挂分接（或整句无声）时该事件缺席，估算不起跑、字幕
+停在第一段，由 ``failed``（显全文）与 ``finished``（清空）兜底收尾。
 
 段切换的信号有两路，任一路先到即切：
 
@@ -34,6 +42,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.utterance import (
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
+    UtterancePlaybackStartedPayload,
     UtteranceSentenceBoundaryPayload,
     UtteranceStartedPayload,
 )
@@ -134,8 +143,8 @@ class _PlaybackSubtitleController:
         if len(segments) == 1:
             return
         self._session = _SegmentSchedule(payload.utterance_id, segments, payload.duration_ms)
+        # 估算定时此刻不起跑：等 playback_started 把零点锚到真正出声再排
         self._started_ms = self._now_ms()
-        self._arm_fallback_timer()
 
     async def on_failed(self, payload: UtteranceFailedPayload) -> None:
         # 运行期逐句降级：合成失败该句照常显示全文（无声音也要给文本），不分段
@@ -152,6 +161,16 @@ class _PlaybackSubtitleController:
             return  # 无会话 / 已结束 utterance 的迟到事件：丢弃
         self._disarm_timer()
         await self._advance(session)
+
+    async def on_playback_started(self, payload: UtterancePlaybackStartedPayload) -> None:
+        session = self._session
+        if session is None or payload.utterance_id != session.utterance_id:
+            return  # 无会话 / 已结束 utterance 的迟到事件：丢弃
+        # 估算时钟零点 = 真正出声时刻：合成首块延迟不计入估算窗口，
+        # 此刻才起跑兜底估算；句边界事件其后仍优先接管
+        self._started_ms = self._now_ms()
+        self._disarm_timer()
+        self._arm_fallback_timer()
 
     def _arm_fallback_timer(self) -> None:
         """按当前会话重排兜底定时；已耗尽段时不再建。"""
@@ -239,15 +258,21 @@ def bind_playback_subtitle(
     async def on_boundary(event_name: str, payload: UtteranceSentenceBoundaryPayload, source: str) -> None:
         await controller.on_boundary(payload)
 
+    async def on_playback_started(event_name: str, payload: UtterancePlaybackStartedPayload, source: str) -> None:
+        await controller.on_playback_started(payload)
+
     event_bus.on(CoreEvents.TTS_UTTERANCE_STARTED, on_started, model_class=UtteranceStartedPayload)
     event_bus.on(CoreEvents.TTS_UTTERANCE_FAILED, on_failed, model_class=UtteranceFailedPayload)
     event_bus.on(CoreEvents.TTS_UTTERANCE_FINISHED, on_finished, model_class=UtteranceFinishedPayload)
     event_bus.on(CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, on_boundary, model_class=UtteranceSentenceBoundaryPayload)
-    logger.debug(
-        "已订阅 tts.utterance.* → 字幕跟随播放（started 分段显示，句边界事件与估算定时双路切换，"
-        "failed 显示全文，finished 清空）"
+    event_bus.on(
+        CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, on_playback_started, model_class=UtterancePlaybackStartedPayload
     )
-    return (on_started, on_failed, on_finished, on_boundary)
+    logger.debug(
+        "已订阅 tts.utterance.* → 字幕跟随播放（started 分段显示第一段，playback_started 锚定出声时刻"
+        "起跑估算，句边界事件与估算定时双路切换，failed 显示全文，finished 清空）"
+    )
+    return (on_started, on_failed, on_finished, on_boundary, on_playback_started)
 
 
 def unbind_playback_subtitle(
@@ -264,6 +289,7 @@ def unbind_playback_subtitle(
             CoreEvents.TTS_UTTERANCE_FAILED,
             CoreEvents.TTS_UTTERANCE_FINISHED,
             CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY,
+            CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED,
         ),
         handlers,
         strict=True,

@@ -13,9 +13,12 @@ TTS 音频写到声卡的同一时刻顺带算窗口能量：检出 ≥ 阈值�
   RMS → 有声/静音判定），返回"本块内是否跨过句间隙"。无副作用，异常
   由调用方兜底。
 - :class:`SentenceBoundarySink`：``AudioSink`` 协议形状的分接接收方。
-  ``feed`` 是同步接口（不得拖慢播放），检出边界后经 ``call_soon_threadsafe``
-  把事件发布调度回事件循环异步执行——流式播法的 ``feed`` 在工作线程被调，
-  事件总线只能在事件循环线程上操作。检测与发布的任何异常都就地吞掉记
+  ``feed`` 是同步接口（不得拖慢播放），除逐块检测外还承担两个发布职责，
+  都经 ``call_soon_threadsafe`` 把事件发布调度回事件循环异步执行——流式
+  播法的 ``feed`` 在工作线程被调，事件总线只能在事件循环线程上操作。
+  其一：本次发声首个音频块递入即发 ``tts.utterance.playback_started``
+  （真正出声时刻，字幕估算时钟的锚点）；其二：检出句间隙发
+  ``tts.utterance.sentence_boundary``。检测与发布的任何异常都就地吞掉记
   日志，绝不影响音频播放本身。
 
 会话形状（``start → feed×N → stop``）即 utterance 生命周期：start 复位
@@ -32,7 +35,10 @@ import numpy as np
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.utterance import UtteranceSentenceBoundaryPayload
+from src.modules.events.payloads.utterance import (
+    UtterancePlaybackStartedPayload,
+    UtteranceSentenceBoundaryPayload,
+)
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
@@ -141,10 +147,11 @@ class SilenceGapDetector:
 
 
 class SentenceBoundarySink:
-    """音频分接接收方（``AudioSink`` 会话形状）：播放时顺带检句间隙并发事件。
+    """音频分接接收方（``AudioSink`` 会话形状）：报出声时刻、顺带检句间隙发事件。
 
-    一次发言 = 一次 ``start → feed×N → stop``。``feed`` 同步、非阻塞：只算
-    检测器，检出后把事件发布调度回事件循环，不在播放线程上做任何慢操作。
+    一次发言 = 一次 ``start → feed×N → stop``。``feed`` 同步、非阻塞：首个
+    块先报 ``playback_started``（真正出声，只报一次），再算检测器、检出后把
+    事件发布调度回事件循环，不在播放线程上做任何慢操作。
     """
 
     def __init__(
@@ -159,6 +166,7 @@ class SentenceBoundarySink:
         self.logger = get_logger(logger_name)
         self._utterance_id: str = ""
         self._segment_index = 0
+        self._playback_started_sent = False
         # feed 可能从播放工作线程被调（流式写块走线程池），事件发布须回到
         # 事件循环线程：start 时（必在循环线程）捕获循环引用
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -169,16 +177,21 @@ class SentenceBoundarySink:
             self._detector.reset()
             self._utterance_id = utterance_id
             self._segment_index = 0
+            self._playback_started_sent = False
             self._loop = asyncio.get_running_loop()
         except Exception as exc:  # noqa: BLE001 - 装饰性路径边界
             self.logger.warning(f"句间隙检测会话启动异常（本句不检测）: {exc}")
             self._utterance_id = ""
 
     def feed(self, chunk: "np.ndarray", sample_rate: int) -> None:
-        """递入一个音频块（同步、非阻塞）；检出间隙即调度句边界事件发布。"""
+        """递入一个音频块（同步、非阻塞）；首块报出声时刻，检出间隙报句边界。"""
         if not self._utterance_id:
             return
         try:
+            if not self._playback_started_sent:
+                # 出声事实先于检测发布：检测器失效不抹掉"音频确实开播了"
+                self._playback_started_sent = True
+                self._schedule_playback_started()
             if self._detector.feed(chunk, sample_rate):
                 self._segment_index += 1
                 self._schedule_emit()
@@ -190,6 +203,7 @@ class SentenceBoundarySink:
         self._detector.reset()
         self._utterance_id = ""
         self._segment_index = 0
+        self._playback_started_sent = False
         self._loop = None
 
     def _schedule_emit(self) -> None:
@@ -201,9 +215,21 @@ class SentenceBoundarySink:
         segment_index = self._segment_index
         loop.call_soon_threadsafe(self._spawn_emit, utterance_id, segment_index)
 
+    def _schedule_playback_started(self) -> None:
+        """把播放开始事件发布调度回事件循环线程（feed 可能在工作线程）。"""
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        utterance_id = self._utterance_id
+        loop.call_soon_threadsafe(self._spawn_playback_started_emit, utterance_id)
+
     def _spawn_emit(self, utterance_id: str, segment_index: int) -> None:
         """在事件循环线程创建发布任务（call_soon_threadsafe 的回调面）。"""
         asyncio.get_running_loop().create_task(self._emit(utterance_id, segment_index))
+
+    def _spawn_playback_started_emit(self, utterance_id: str) -> None:
+        """在事件循环线程创建播放开始发布任务（call_soon_threadsafe 的回调面）。"""
+        asyncio.get_running_loop().create_task(self._emit_playback_started(utterance_id))
 
     async def _emit(self, utterance_id: str, segment_index: int) -> None:
         """发布句边界事件；发布失败只记日志（字幕还有兜底定时，不致命）。"""
@@ -218,6 +244,19 @@ class SentenceBoundarySink:
             await self._event_bus.emit(CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, payload, source="tts")
         except Exception as exc:  # noqa: BLE001 - 装饰性路径边界
             self.logger.warning(f"句边界事件发布异常（已忽略）: utterance_id={utterance_id}, err={exc}")
+
+    async def _emit_playback_started(self, utterance_id: str) -> None:
+        """发布播放开始事件；发布失败只记日志（字幕估算时钟停在 started 锚点）。"""
+        if self._event_bus is None:
+            return
+        try:
+            payload = UtterancePlaybackStartedPayload(
+                utterance_id=utterance_id,
+                timestamp_ms=now_ms(),
+            )
+            await self._event_bus.emit(CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, payload, source="tts")
+        except Exception as exc:  # noqa: BLE001 - 装饰性路径边界
+            self.logger.warning(f"播放开始事件发布异常（已忽略）: utterance_id={utterance_id}, err={exc}")
 
 
 __all__ = [

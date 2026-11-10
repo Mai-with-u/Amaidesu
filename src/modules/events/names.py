@@ -118,10 +118,11 @@ class CoreEvents:
     # ========== v2 语义域事件（tts 一次发声实例生命周期） ==========
     # 由 TTS 工具自身发布（已持有 event_bus 的 create_xxx_provider 既有签名）。
     # 三个事件描述"同一次发声实例"在不同时间点的状态，ut utterance_id 串联为全链路关联键。
-    # started 触发于"开始出声"时刻：流式引擎=首块 PCM 写声卡，全量引擎=play_audio 调用。
+    # started 触发于"开始出声"时刻：流式引擎=合成开始前发布（首块 PCM 尚未在手，
+    # duration_ms=None），全量引擎=play_audio 调用。
     # finished 触发于播放完成时刻（百毫秒级精度，硬件声卡缓冲残余不在信号内）。
     # failed 触发于合成或播放失败时刻。
-    # 这三个事件是终点广播：消费者不得触发新决策（防环约束）。
+    # 这些事件是终点广播：消费者不得触发新决策（防环约束）。
     TTS_UTTERANCE_STARTED = "tts.utterance.started"
     TTS_UTTERANCE_FINISHED = "tts.utterance.finished"
     TTS_UTTERANCE_FAILED = "tts.utterance.failed"
@@ -131,6 +132,11 @@ class CoreEvents:
     # 字幕 follower 据此把上屏文本切到下一段。segment_index 是本次发声内
     # 第几个间隙（从 1 起计），只作对账辅助——消费方按"收到即切下一段"行事。
     TTS_UTTERANCE_SENTENCE_BOUNDARY = "tts.utterance.sentence_boundary"
+    # 首个音频块写进声卡（真正出声）的时刻，由播放路径分接在首次递入时发布。
+    # 流式引擎的 started 在合成前发布，从 started 到真正出声隔着整段合成首块
+    # 延迟——字幕 follower 把分段估算时钟的零点锚到本事件，估算节奏不再跑在
+    # 出声之前。播放路径未挂分接时本事件缺席（消费方须自带兜底）。
+    TTS_UTTERANCE_PLAYBACK_STARTED = "tts.utterance.playback_started"
 
     # ========== v2 语义域事件（streamer 主播发言业务事实） ==========
     # 主播 Agent 已生成一条发言的业务事实：与 TTS 启用与否正交，下游消费者

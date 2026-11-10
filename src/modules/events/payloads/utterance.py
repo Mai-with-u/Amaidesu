@@ -3,15 +3,18 @@
 
 定义 ``tts.utterance.started`` / ``tts.utterance.finished`` /
 ``tts.utterance.failed`` / ``tts.utterance.dropped`` /
-``tts.utterance.sentence_boundary`` 五个事件的 Payload。
+``tts.utterance.sentence_boundary`` / ``tts.utterance.playback_started``
+六个事件的 Payload。
 
 按契约：
 - ``utterance_id`` 为全链路关联键（编排层生成），串联 reply 记录、TTS 事件、
   字幕、存储等通道，便于事后聚合与对账。
-- 三个事件分别描述"开始出声 / 播放完成 / 失败"三个状态点；
+- 各事件描述"开始出声 / 播放完成 / 失败"等状态点；
   ``tts.utterance.*`` 是终点广播，消费者不得触发新决策（防环约束）。
-- ``started`` 时机：流式引擎 = 首块 PCM 写声卡；全量引擎 = ``play_audio`` 调用。
-  此时 ``duration_ms`` 对全量引擎为精确合成时长；对流式引擎合成未完时为 None。
+- ``started`` 时机：流式引擎 = 合成开始前发布（首块 PCM 尚未在手，
+  ``duration_ms`` 为 None）；全量引擎 = ``play_audio`` 调用，此时
+  ``duration_ms`` 为精确合成时长。流式引擎"真正出声"（首块写进声卡）
+  的时刻由 ``playback_started`` 承载。
 - ``finished`` 时机：播放完成时刻（百毫秒级精度，不含硬件声卡缓冲残余）。
   ``duration_ms`` 由 PCM 样本数除以采样率精确计算得到。
 - ``failed`` 时机：合成或播放过程中任何阶段失败。
@@ -197,6 +200,35 @@ class UtteranceSentenceBoundaryPayload(BasePayload):
     )
 
 
+@register_event(CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED)
+class UtterancePlaybackStartedPayload(BasePayload):
+    """播放真正开始（首个音频块写进声卡）事件 Payload。
+
+    事件名：``tts.utterance.playback_started`` —— 播放路径分接在本次发声的
+    首个音频块递入声卡写出时发布，与观众听到首声的时刻一致。发布者只认
+    "块已写出"这一播放事实，与合成成败、检测器状态无关。
+    订阅者：字幕 follower（把分段估算时钟的零点从 started 重锚到此，估算
+    节奏不再跑在真正出声之前）。
+    播放路径未挂分接时本事件缺席，消费方须自带兜底。
+    终点广播，消费者不得触发新决策。
+
+    Attributes:
+        utterance_id: 一次发声实例的唯一 ID（与 started 事件对应）。
+        live_session_id: 场次主键（发布方不填，由场次盖章拦截器注入；0=未归属）。
+        timestamp_ms: 事件发布时间戳（Unix 毫秒），用于日志/排序。
+    """
+
+    utterance_id: str = Field(..., description="一次发声实例的唯一 ID（与 started 事件对应）")
+    live_session_id: int = Field(
+        default=0,
+        description="场次主键（live_sessions.id）；发布方不填，由场次盖章拦截器注入；0=未归属",
+    )
+    timestamp_ms: int = Field(
+        default_factory=lambda: now_ms(),
+        description="事件发布时间戳（Unix 毫秒）",
+    )
+
+
 # ---------------------------------------------------------------------------
 # 失败"已报告"标记
 # ---------------------------------------------------------------------------
@@ -233,6 +265,7 @@ __all__ = [
     "UtteranceFailedPayload",
     "UtteranceDroppedPayload",
     "UtteranceSentenceBoundaryPayload",
+    "UtterancePlaybackStartedPayload",
     "FAILURE_REPORTED_ATTR",
     "mark_failure_reported",
     "is_failure_reported",

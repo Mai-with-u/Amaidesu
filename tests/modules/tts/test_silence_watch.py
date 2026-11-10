@@ -11,7 +11,10 @@ import pytest
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.utterance import UtteranceSentenceBoundaryPayload
+from src.modules.events.payloads.utterance import (
+    UtterancePlaybackStartedPayload,
+    UtteranceSentenceBoundaryPayload,
+)
 from src.modules.tts.silence_watch import (
     DEFAULT_MIN_GAP_MS,
     SilenceGapDetector,
@@ -134,10 +137,15 @@ class _ExplodingDetector(SilenceGapDetector):
 
 
 async def _feed_and_pump(
-    bus: EventBus, sink: SentenceBoundarySink, pieces: List["np.ndarray"], *, started: bool = True
+    bus: EventBus,
+    sink: SentenceBoundarySink,
+    pieces: List["np.ndarray"],
+    *,
+    started: bool = True,
+    utterance_id: str = "utt_x",
 ) -> None:
     if started:
-        sink.start("utt_x")
+        sink.start(utterance_id)
     for data in pieces:
         sink.feed(data, SAMPLE_RATE)
     if started:
@@ -150,45 +158,78 @@ async def _feed_and_pump(
         await bus.wait_until_drained()
 
 
-async def _collect_events() -> tuple[EventBus, SentenceBoundarySink, List[UtteranceSentenceBoundaryPayload]]:
+async def _collect_events(
+    detector: SilenceGapDetector | None = None,
+) -> tuple[
+    EventBus,
+    SentenceBoundarySink,
+    List[UtteranceSentenceBoundaryPayload],
+    List[UtterancePlaybackStartedPayload],
+]:
     bus = EventBus()
-    received: List[UtteranceSentenceBoundaryPayload] = []
+    boundaries: List[UtteranceSentenceBoundaryPayload] = []
+    playback_starts: List[UtterancePlaybackStartedPayload] = []
 
-    async def capture(event_name: str, payload: UtteranceSentenceBoundaryPayload, source: str) -> None:
-        received.append(payload)
+    async def capture_boundary(event_name: str, payload: UtteranceSentenceBoundaryPayload, source: str) -> None:
+        boundaries.append(payload)
 
-    bus.on(CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, capture, model_class=UtteranceSentenceBoundaryPayload)
-    return bus, SentenceBoundarySink(bus), received
+    async def capture_playback_started(event_name: str, payload: UtterancePlaybackStartedPayload, source: str) -> None:
+        playback_starts.append(payload)
+
+    bus.on(CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, capture_boundary, model_class=UtteranceSentenceBoundaryPayload)
+    bus.on(
+        CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED,
+        capture_playback_started,
+        model_class=UtterancePlaybackStartedPayload,
+    )
+    return bus, SentenceBoundarySink(bus, detector=detector), boundaries, playback_starts
 
 
 async def test_sink_emits_boundary_events_with_utterance_id() -> None:
-    bus, sink, received = await _collect_events()
+    bus, sink, received, _ = await _collect_events()
     await _feed_and_pump(bus, sink, _utterance_pieces())
     assert [(p.utterance_id, p.segment_index) for p in received] == [("utt_x", 1), ("utt_x", 2)]
 
 
+async def test_sink_emits_playback_started_once_on_first_feed() -> None:
+    bus, sink, _, playback_starts = await _collect_events()
+    await _feed_and_pump(bus, sink, _utterance_pieces())
+    # 首块递入即报一次（哪怕首块是开头静音：块已写进声卡），后续块不重复报
+    assert [p.utterance_id for p in playback_starts] == ["utt_x"]
+
+
+async def test_sink_playback_started_rearms_per_session() -> None:
+    bus, sink, _, playback_starts = await _collect_events()
+    await _feed_and_pump(bus, sink, _utterance_pieces(), utterance_id="utt_a")
+    await _feed_and_pump(bus, sink, _utterance_pieces(), utterance_id="utt_b")
+    assert [p.utterance_id for p in playback_starts] == ["utt_a", "utt_b"]
+
+
 async def test_sink_without_utterance_id_emits_nothing() -> None:
-    bus, sink, received = await _collect_events()
+    bus, sink, received, playback_starts = await _collect_events()
     await _feed_and_pump(bus, sink, _utterance_pieces(), started=False)
     assert received == []
+    assert playback_starts == []
 
 
 async def test_sink_detector_exception_does_not_break_feed() -> None:
-    bus = EventBus()
-    received: List[UtteranceSentenceBoundaryPayload] = []
-    sink = SentenceBoundarySink(bus, detector=_ExplodingDetector())
-    # 检测器恒抛异常：feed 不向播放路径传播异常，也不发事件
+    # 检测器恒抛异常：feed 不向播放路径传播异常、不发句边界；
+    # 出声事实不依赖检测器，playback_started 照发
+    bus, sink, received, playback_starts = await _collect_events(detector=_ExplodingDetector())
     await _feed_and_pump(bus, sink, _utterance_pieces())
     assert received == []
+    assert [p.utterance_id for p in playback_starts] == ["utt_x"]
 
 
 async def test_sink_stop_resets_session_state() -> None:
-    bus, sink, received = await _collect_events()
+    bus, sink, received, playback_starts = await _collect_events()
     await _feed_and_pump(bus, sink, _utterance_pieces())
     assert len(received) == 2
+    assert len(playback_starts) == 1
     # stop 后迟到 feed（旧 utterance 的块）不再触发事件
     await _feed_and_pump(bus, sink, _utterance_pieces(), started=False)
     assert len(received) == 2
+    assert len(playback_starts) == 1
 
 
 async def test_sink_emit_failure_is_swallowed() -> None:
@@ -196,7 +237,7 @@ async def test_sink_emit_failure_is_swallowed() -> None:
     bus.emit = AsyncMock(side_effect=RuntimeError("bus down"))
     sink = SentenceBoundarySink(bus)
     await _feed_and_pump(bus, sink, [_voiced_ms(300), _silence_ms(300)])
-    bus.emit.assert_awaited_once()  # 发布确有发生，异常被 _emit 自身吞掉
+    assert bus.emit.await_count == 2  # 播放开始与句边界两次发布都确有发生，异常被各自 _emit 吞掉
 
 
 async def test_sink_event_bus_none_still_feeds() -> None:
