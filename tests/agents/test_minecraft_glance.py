@@ -146,7 +146,7 @@ def test_glance_distant_entities_only_counts_what_is_known_to_be_far() -> None:
 def test_glance_distant_drops_hostile_but_keeps_passive_and_nearby_hostile_line() -> None:
     """逐只列出（带 hostile 标记）的远处敌对生物不进远处清单：剔除后整栏不写、摘要没有"远处还有"；
     被动生物照常出现；身边敌对那句（含方位）不受影响，威胁信息仍由它承载。
-    只按种类计数的 distant_entities 没有 hostile 标记，剔除不了——这类敌对要出清单得 Mod 侧加标记。"""
+    只按种类计数的 distant_entities 没有敌对标记，由原版敌对生物名单过滤（见计数通道的独立用例）。"""
     scene = {
         "entities": [{"type": "minecraft:pillager", "direction": "左后方", "distance": 40, "hostile": True}],
         "distant_entities": {},
@@ -172,6 +172,30 @@ def test_glance_distant_drops_hostile_but_keeps_passive_and_nearby_hostile_line(
     )
     assert mixed["distant_entities"] == ["minecraft:squid ×5", "minecraft:sheep ×1"], "被动生物照常进远处清单"
     assert "远处还有鱿鱼" in glance_brief(mixed)
+
+
+def test_glance_distant_counts_drop_hostile_kinds_by_name_list() -> None:
+    """计数通道的敌对种类键按原版敌对生物名单剔除：Mod 对未逐只列出的实体只给计数、无敌对标记，Amaidesu 侧按名单过滤。
+
+    带命名空间（minecraft:zombie）与裸键（zombie）都剔；鱿鱼、蝙蝠等被动键照常进远处清单。"""
+    scene = {
+        "entities": [],
+        "distant_entities": {
+            "minecraft:zombie": 3,
+            "zombie": 2,
+            "minecraft:creeper": 1,
+            "minecraft:squid": 30,
+            "bat": 12,
+        },
+    }
+    view = glance_scene(MaicraftReply(ok=True, data=scene))
+    assert view["distant_entities"] == ["minecraft:squid ×30", "bat ×12"], "敌对种类剔除，被动种类照常"
+    assert "远处还有鱿鱼、蝙蝠" in glance_brief(view)
+
+    only_hostile = glance_scene(
+        MaicraftReply(ok=True, data={"entities": [], "distant_entities": {"minecraft:zombie": 3}})
+    )
+    assert "distant_entities" not in only_hostile, "计数里只剩敌对种类时这一栏不写"
 
 
 def _maid_scene() -> Dict[str, Any]:

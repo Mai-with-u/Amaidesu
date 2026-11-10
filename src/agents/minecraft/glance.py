@@ -26,6 +26,7 @@ from .attention_matrix import biome_name, item_name
 from .maicraft import MaicraftReply
 
 __all__ = [
+    "HOSTILE_KINDS",
     "NEARBY_BLOCKS",
     "OWNER_SELF",
     "described_entity",
@@ -102,6 +103,53 @@ _MOBS: Dict[str, str] = {
     "bat": "蝙蝠",
     "player": "玩家",
 }
+
+#: 原版敌对生物的裸名（去命名空间后的 ID）：含永远敌对的与受激才敌对的（末影人、猪灵、蜘蛛等），拿不准的敌对家族从宽收进来。
+#: 计数通道（``distant_entities``）里 Mod 对未逐只列出的实体只给种类计数、无敌对标记，Amaidesu 无从靠标记识别，
+#: 只能按这份名单过滤计数键；名单外的模组敌对会漏网（接受），Mod 给计数加敌对标记是将来更优解。
+HOSTILE_KINDS: frozenset[str] = frozenset(
+    {
+        "blaze",
+        "bogged",
+        "breeze",
+        "cave_spider",
+        "creaking",
+        "creeper",
+        "drowned",
+        "elder_guardian",
+        "ender_dragon",
+        "enderman",
+        "endermite",
+        "evoker",
+        "ghast",
+        "giant",
+        "guardian",
+        "hoglin",
+        "husk",
+        "illusioner",
+        "magma_cube",
+        "phantom",
+        "piglin",
+        "piglin_brute",
+        "pillager",
+        "ravager",
+        "shulker",
+        "silverfish",
+        "skeleton",
+        "slime",
+        "stray",
+        "vex",
+        "vindicator",
+        "warden",
+        "wither",
+        "wither_skeleton",
+        "witch",
+        "zoglin",
+        "zombie",
+        "zombie_villager",
+        "zombified_piglin",
+    }
+)
 
 #: 常见设施方块的中文名
 _BLOCKS: Dict[str, str] = {
@@ -564,6 +612,8 @@ def _distant(entities: Any, counts: Any) -> List[str]:
     这种程度，用不上逐只的方位距离，所以两处合在一起按种类数。
     敌对生物不进远处清单：远处条目只有种类×只数，没有距离与动向，提了也做不成事，只会喂出
     提完就没有下文的断头提及；近处威胁由"身边有……是敌对的"一句与挨打事件承载。
+    逐只列出的靠 Mod 的敌对标记剔除；计数通道没有标记，按原版敌对生物名单（``HOSTILE_KINDS``）
+    过滤种类键，名单外的模组敌对漏网（接受）。
     有名字的（玩家、起了名的生物）把名字带在种类后面，主播才能叫得出是谁。
     """
     tally: Dict[str, int] = {}
@@ -583,6 +633,9 @@ def _distant(entities: Any, counts: Any) -> List[str]:
     if isinstance(counts, dict):
         for kind, count in counts.items():
             if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+                # 计数键是带命名空间的种类 ID（如 minecraft:zombie），去掉命名空间后查敌对名单
+                if str(kind).rsplit(":", 1)[-1] in HOSTILE_KINDS:
+                    continue
                 tally[str(kind)] = tally.get(str(kind), 0) + count
     ordered = sorted(tally.items(), key=lambda pair: (-pair[1], pair[0]))
     return [f"{kind} ×{count}" for kind, count in ordered]
