@@ -342,6 +342,43 @@ describe('useStartStream', () => {
     expect(await ready.submit()).toBe(true);
   });
 
+  it('TTS 开关：关闭且引擎已装配 → 写盘 + 提示重启才停止出声，不拦开播；引擎未装配才是已关闭', async () => {
+    // 引擎已装配（进程内引擎仍在跑）：写盘摘不掉它，提示需重启，如实不给"不会出声"承诺
+    storageStub();
+    healthMock.mockResolvedValue({
+      data: {
+        status: 'ok',
+        timestamp_ms: 0,
+        checked_at_ms: 0,
+        domains: { tts: [healthItem('ok')] },
+      },
+    } as never);
+    const ready = await mounted();
+    await ready.toggleTts(false);
+    expect(saveBatchMock).toHaveBeenLastCalledWith([{ key: 'infra.tts.enabled', value: false }]);
+    expect(ready.ttsNotice.value).toContain('重启');
+    expect(ready.ttsNotice.value).not.toContain('不会出声');
+    expect(ready.ttsRestartBlock.value).toBe(false);
+    openMock.mockResolvedValue({
+      data: { live_session_id: 1, plan_report: { items: [], config_error: '' } },
+    } as never);
+    expect(await ready.submit()).toBe(true); // 关方向不拦开播（重启前她仍会出声，开麦不属事故）
+
+    // 引擎未装配（进程本就没引擎）：关闭即刻成立，才是"不会出声"
+    healthMock.mockResolvedValue({
+      data: {
+        status: 'ok',
+        timestamp_ms: 0,
+        checked_at_ms: 0,
+        domains: { tts: [healthItem('disabled')] },
+      },
+    } as never);
+    const bare = await mounted();
+    await bare.toggleTts(false);
+    expect(bare.ttsNotice.value).toBe('TTS 已关闭：本场直播她不会出声');
+    expect(bare.ttsRestartBlock.value).toBe(false);
+  });
+
   it('TTS 开关：写盘失败回滚开关并提示，不进拦截态', async () => {
     storageStub();
     saveBatchMock.mockRejectedValue(new Error('写盘失败'));

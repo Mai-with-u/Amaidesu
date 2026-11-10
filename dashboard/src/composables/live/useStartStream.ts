@@ -9,8 +9,9 @@
  * 接了 B 站弹幕算正式，没接算彩排；手动选过就以手动为准，且不存进上次意图，
  * 免得一次彩排让下次正式开播默认成彩排。TTS 开播期可见性：弹窗打开时经
  * 配置快照 + 健康墙 tts 域做一次探针（服务不可达只提示不拦开播）；引导里
- * 的 TTS 开关写 infra.toml，打开后引擎未装配则拦开播（需重启进程）。不含
- * 定时器/订阅/WebSocket，无 keep-alive 生命周期语义。
+ * 的 TTS 开关写 infra.toml；infra 段变更不走组件对齐，两个方向都要重启进程
+ * 才生效——打开后引擎未装配则拦开播，关闭后引擎仍在装配则提示重启前她仍会
+ * 出声。不含定时器/订阅/WebSocket，无 keep-alive 生命周期语义。
  */
 
 import { computed, ref } from 'vue';
@@ -308,6 +309,15 @@ export function useStartStream() {
       ttsNotice.value = '';
       ElMessageBox.alert(
         'TTS 开关属基础设施段，需重启进程后才生效；重启前不能开播。',
+        '需重启进程',
+        { confirmButtonText: '知道了' },
+      ).catch(() => {});
+    } else if (!enabled && ttsEngineReady.value) {
+      // 引擎仍在装配：infra 段不热应用，写盘摘不掉运行中的引擎——重启前她仍会出声，
+      // 不给"本场不会出声"的承诺
+      ttsNotice.value = 'TTS 开关已写入配置：当前进程语音引擎仍在运行，重启进程后才会停止出声';
+      ElMessageBox.alert(
+        'TTS 开关属基础设施段，需重启进程后才会停止出声；重启前她仍会出声。',
         '需重启进程',
         { confirmButtonText: '知道了' },
       ).catch(() => {});

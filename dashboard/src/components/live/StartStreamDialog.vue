@@ -90,7 +90,9 @@
           <span
             class="ss-run-dot"
             :class="{ 'is-on': ttsEngineReady }"
-            :title="ttsEngineReady ? '语音引擎已装配' : '语音引擎未装配（改开关需重启进程生效）'"
+            :title="
+              ttsEngineReady ? '语音引擎已装配' : '语音引擎未装配（打开开关需重启进程才生效）'
+            "
           />
         </div>
         <p v-if="ttsNotice" class="ss-tts-notice">{{ ttsNotice }}</p>
