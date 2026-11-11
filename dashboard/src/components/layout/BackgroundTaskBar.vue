@@ -15,19 +15,25 @@
           </span>
         </button>
       </template>
-      <!-- 任务清单浮层：行 = 标题 / 进度文本 / 已跑时长（共享时钟逐秒刷新） -->
+      <!-- 任务清单浮层：行 = 标题 / 进度文本 / 已跑时长（共享时钟逐秒刷新）；
+           模型调用期间另带实时输出预览（后端流式增量随事件刷新） -->
       <div class="task-list">
         <div v-for="task in tasks" :key="task.task_id" class="task-row">
-          <span class="task-title" :title="task.title">{{ task.title }}</span>
-          <span class="task-progress">{{ task.progress_text }}</span>
-          <span class="task-elapsed">{{ formatElapsedMs(now - task.started_at_ms) }}</span>
-          <router-link
-            v-if="isSettleTask(task)"
-            class="task-llm-link"
-            to="/llm/history?profile=settle"
-          >
-            查看模型调用
-          </router-link>
+          <div class="task-line">
+            <span class="task-title" :title="task.title">{{ task.title }}</span>
+            <span class="task-progress">{{ task.progress_text }}</span>
+            <span class="task-elapsed">{{ formatElapsedMs(now - task.started_at_ms) }}</span>
+            <router-link
+              v-if="isSettleTask(task)"
+              class="task-llm-link"
+              to="/llm/history?profile=settle"
+            >
+              查看模型调用
+            </router-link>
+          </div>
+          <div v-if="task.output_tail" class="task-output" :title="task.output_tail">
+            正在写：{{ task.output_tail }}
+          </div>
         </div>
       </div>
     </el-popover>
@@ -39,7 +45,8 @@
  * 后台任务底栏：常驻 AppLayout 的状态条（常驻底栏，所有页面可见）。
  *
  * 左侧摘要 = 在跑任务数 + 首个任务标题与进度文本，点开向上弹浮层看全部
- * 任务行；下播整理的任务行另给一个「查看模型调用」入口，跳到按 settle
+ * 任务行；模型调用期间任务行下带实时输出预览（后端随事件带最近输出的文字尾巴）。
+ * 下播整理的任务行另给一个「查看模型调用」入口，跳到按 settle
  * 档位筛选的模型调用历史。任务收到终态事件即从列表消失（完成/失败的提醒走右上角通知，
  * 见 useSystemNotifications）。数据面（订阅 background.task.changed +
  * 挂载恢复）在 useBackgroundTasks；本组件只做呈现。
@@ -116,6 +123,12 @@ function isSettleTask(task: BackgroundTask): boolean {
 
 .task-row {
   display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.task-line {
+  display: flex;
   align-items: center;
   gap: var(--spacing-md);
 }
@@ -149,5 +162,16 @@ function isSettleTask(task: BackgroundTask): boolean {
 
 .task-llm-link:hover {
   text-decoration: underline;
+}
+
+/* 模型调用期间的实时输出预览：最近输出的文字尾巴，随事件刷新（非调用期间不渲染） */
+.task-output {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--text-secondary);
+  word-break: break-all;
+  line-height: 1.4;
 }
 </style>

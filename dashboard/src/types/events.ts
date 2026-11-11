@@ -92,6 +92,10 @@ export interface BackgroundTask {
   started_at_ms: number;
   /** 失败原因，仅 state=failed 时带 */
   failure_reason?: string;
+  /** 当前这笔模型调用已输出的正文字数（仅流式调用期间大于 0，其他阶段缺省 0） */
+  output_chars?: number;
+  /** 当前这笔模型调用最近输出的文字尾巴（浮层实时预览用，非模型调用期间为空） */
+  output_tail?: string;
 }
 
 /** 总线事件 type 全集（WS kind="event"：折叠族 + 直通精确名 + 通配族具体名） */

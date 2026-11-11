@@ -122,9 +122,20 @@ describe('useBackgroundTasks', () => {
     const { tasksRef, feed } = await mount();
     feed(taskEvent(taskRow({ progress_text: '第 1 笔/共 3 笔' })));
     expect(tasksRef.tasks.value.map(t => t.task_id)).toEqual(['settle-58']);
-    feed(taskEvent(taskRow({ progress_text: '第 2 笔/共 3 笔' })));
+    feed(
+      taskEvent(
+        taskRow({
+          progress_text: '第 2 笔/共 3 笔 · 模型输出中（已 3 字，最后活动 0s 前）',
+          output_chars: 3,
+          output_tail: '整理中',
+        }),
+      ),
+    );
     expect(tasksRef.tasks.value).toHaveLength(1);
-    expect(tasksRef.tasks.value[0]?.progress_text).toBe('第 2 笔/共 3 笔');
+    expect(tasksRef.tasks.value[0]?.progress_text).toBe('第 2 笔/共 3 笔 · 模型输出中（已 3 字，最后活动 0s 前）');
+    // 模型调用期间的输出信号原样透传，浮层据此画实时输出预览
+    expect(tasksRef.tasks.value[0]?.output_chars).toBe(3);
+    expect(tasksRef.tasks.value[0]?.output_tail).toBe('整理中');
     // 第二个任务排在后面：列表顺序 = 登记先后
     feed(
       taskEvent(

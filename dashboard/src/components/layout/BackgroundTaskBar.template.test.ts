@@ -59,3 +59,11 @@ describe('整理任务的模型调用入口', () => {
     expect(sfcSource).toContain('v-if="isSettleTask(task)"');
   });
 });
+
+describe('模型调用的实时输出预览', () => {
+  it('模型调用期间任务行下渲染输出尾巴预览', () => {
+    expect(sfcSource).toContain('v-if="task.output_tail"');
+    expect(sfcSource).toContain('正在写：');
+    expect(sfcSource).toContain('task.output_tail');
+  });
+});
