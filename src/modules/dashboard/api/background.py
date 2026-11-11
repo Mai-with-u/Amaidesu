@@ -31,6 +31,8 @@ async def list_background_tasks() -> BackgroundTaskListResponse:
             state=info.state,
             progress_text=info.progress_text,
             started_at_ms=info.started_at_ms,
+            output_chars=info.output_chars,
+            output_tail=info.output_tail,
         )
         for info in registry.snapshot()
     ]

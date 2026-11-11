@@ -28,13 +28,19 @@ logger = get_logger("BackgroundTaskRegistry")
 
 @dataclass
 class BackgroundTaskInfo:
-    """一条在途任务的现状（登记处的内存行，也是查询口的响应行）。"""
+    """一条在途任务的现状（登记处的内存行，也是查询口的响应行）。
+
+    output_chars / output_tail 只在模型调用期间非零/非空（流式输出字数与文字尾巴），
+    其他阶段的进度更新不携带，保持 0 与空串。
+    """
 
     task_id: str
     title: str
     state: BackgroundTaskState
     progress_text: str
     started_at_ms: int
+    output_chars: int = 0
+    output_tail: str = ""
 
 
 class BackgroundTaskRegistry:
@@ -58,13 +64,26 @@ class BackgroundTaskRegistry:
         self._tasks[task_id] = info
         await self._emit(info)
 
-    async def update(self, task_id: str, progress_text: str) -> None:
-        """更新一条在途任务的进度文本并广播 running。"""
+    async def update(
+        self,
+        task_id: str,
+        progress_text: str,
+        *,
+        output_chars: int = 0,
+        output_tail: str = "",
+    ) -> None:
+        """更新一条在途任务的进度文本并广播 running。
+
+        模型调用期间（唯一知道输出增量的场景）顺带带上已输出字数与文字尾巴，
+        面板据此显示实时输出预览；其他阶段不传，默认值把上一次的尾巴清掉。
+        """
         info = self._tasks.get(task_id)
         if info is None:
             logger.warning(f"任务 {task_id} 未登记就报进度，忽略（progress_text={progress_text}）")
             return
         info.progress_text = progress_text
+        info.output_chars = output_chars
+        info.output_tail = output_tail
         await self._emit(info)
 
     async def finish(self, task_id: str, *, success: bool, failure_reason: Optional[str] = None) -> None:
@@ -99,6 +118,8 @@ class BackgroundTaskRegistry:
                     progress_text=info.progress_text,
                     started_at_ms=info.started_at_ms,
                     failure_reason=failure_reason,
+                    output_chars=info.output_chars,
+                    output_tail=info.output_tail,
                 ),
                 source="BackgroundTaskRegistry",
             )

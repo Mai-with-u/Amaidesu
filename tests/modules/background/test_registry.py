@@ -46,6 +46,24 @@ async def test_begin_update_finish_broadcast_full_state() -> None:
     assert registry.snapshot() == []
 
 
+async def test_update_carries_output_signal_and_plain_update_clears_it() -> None:
+    """模型调用期间的 update 带输出字数与文字尾巴；不带信号的 update 把上一次的清掉。"""
+    registry, bus, payloads = _registry_with_recorder()
+
+    await registry.begin("settle-58", "整理场次：2026-11-06 周五 22:22")
+    await registry.update("settle-58", "第 2 笔/共 3 笔 · 模型输出中（已 3 字）", output_chars=3, output_tail="整理中")
+    assert [(row.output_chars, row.output_tail) for row in registry.snapshot()] == [(3, "整理中")]
+
+    await registry.update("settle-58", "写入整理结果")
+    await registry.finish("settle-58", success=True)
+    await bus.wait_until_drained()
+
+    assert payloads[1].output_chars == 3 and payloads[1].output_tail == "整理中"
+    assert payloads[2].output_chars == 0 and payloads[2].output_tail == ""
+    # 终态载荷同样不带残留的输出信号
+    assert payloads[-1].output_chars == 0 and payloads[-1].output_tail == ""
+
+
 async def test_finish_failure_carries_reason() -> None:
     """失败注销：state=failed 且带原因；成功路径不带原因。"""
     registry, bus, payloads = _registry_with_recorder()

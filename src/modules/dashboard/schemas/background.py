@@ -15,6 +15,8 @@ class BackgroundTaskItem(BaseModel):
     state: Literal["running", "finished", "failed"] = Field(..., description="任务状态（查询口只见 running）")
     progress_text: str = Field(default="", description="进度自由文本（如 第 2 笔/共 3 笔）")
     started_at_ms: int = Field(..., description="任务开始时刻（Unix 毫秒）")
+    output_chars: int = Field(default=0, description="当前这笔模型调用已输出的正文字数（仅流式调用期间大于 0）")
+    output_tail: str = Field(default="", description="当前这笔模型调用最近输出的文字尾巴（非模型调用期间为空）")
 
 
 class BackgroundTaskListResponse(BaseModel):

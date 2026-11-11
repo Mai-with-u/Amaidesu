@@ -53,6 +53,7 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Protocol,
     Sequence,
     Set,
     Tuple,
@@ -193,9 +194,11 @@ _MATERIAL_STEPS: Tuple[str, ...] = (
 # 单步取料超过这个毫秒数就记一条告警：这一步可能卡住（表锁、大表扫描、远端存储慢），
 # 面板文案只能报"正在做第几步"，步骤名与已等待时长由日志给出
 _SLOW_MATERIAL_STEP_MS = 60_000
-# 模型整理阶段刷新面板进度文案的间隔（秒）：文案只报已过秒数与最近一次输出的时刻，
+# 模型整理阶段刷新面板进度文案的间隔（秒）：文案只报已过秒数、已输出字数与最近一次输出的时刻，
 # 不报百分比——模型不给进度，报百分比就是编的
 _LIVENESS_REFRESH_INTERVAL_S = 2.0
+# 浮层实时输出预览带的文字尾巴长度（字符）：最近输出过长的正文只留末端，预览滚动刷新
+_OUTPUT_TAIL_CHARS = 80
 
 T = TypeVar("T")
 
@@ -282,11 +285,28 @@ class SettleOutcome:
     mentioned_commitment_ids: List[int] = field(default_factory=list)
 
 
+class ProgressReporter(Protocol):
+    """整理进度上报口（后台任务面板用）：text 必带；模型调用期间另带输出信号。
+
+    output_chars / output_tail 只由模型调用的刷新协程填（流式正文字数与文字尾巴），
+    其余上报点走默认值，把上一次调用留下的尾巴清掉。
+    """
+
+    async def __call__(self, text: str, *, output_chars: int = 0, output_tail: str = "") -> None: ...
+
+
 @dataclass
 class _LivenessState:
-    """一次模型调用期间的活性记录：最近一次收到输出增量的时刻（毫秒；0 表示还没收到）。"""
+    """一次模型调用期间的活性记录：最近一次收到输出增量的时刻（毫秒；0 表示还没收到）。
+
+    reasoning_chars / content_chars 分别累计思考与正文的流式增量字数，content_tail 滚动
+    保留正文末端若干字符——字数与尾巴是模型不给总量时仅有的真实进度信号。
+    """
 
     last_activity_ms: int = 0
+    reasoning_chars: int = 0
+    content_chars: int = 0
+    content_tail: str = ""
 
 
 def parse_json_object(text: str) -> Dict[str, Any]:
@@ -722,9 +742,9 @@ class SessionSettler:
         registry = self._task_registry
         current_task_id = _task_id(live_session_id)
 
-        async def report_progress(text: str) -> None:
+        async def report_progress(text: str, *, output_chars: int = 0, output_tail: str = "") -> None:
             if registry is not None:
-                await registry.update(current_task_id, text)
+                await registry.update(current_task_id, text, output_chars=output_chars, output_tail=output_tail)
 
         try:
             await report_progress("取料中")
@@ -881,7 +901,7 @@ class SessionSettler:
         session: LiveSession,
         delivered: List[SettleSpeechLine],
         *,
-        progress: Optional[Callable[[str], Awaitable[None]]] = None,
+        progress: Optional[ProgressReporter] = None,
     ) -> SettleMaterial:
         """把一场的原料全取出来：她说的话、游戏（连同待过的存档）、游戏玩家与公屏、她能做的事、旧承诺。
 
@@ -941,7 +961,7 @@ class SessionSettler:
         self,
         index: int,
         awaitable: Awaitable[T],
-        progress: Optional[Callable[[str], Awaitable[None]]],
+        progress: Optional[ProgressReporter],
     ) -> T:
         """跑一步取料：先报进度，跑完计时；单步超时记一条告警。
 
@@ -1255,25 +1275,25 @@ class SessionSettler:
     # 三次模型调用
     # ------------------------------------------------------------------
 
-    async def _extract(
-        self, material: SettleMaterial, *, progress: Optional[Callable[[str], Awaitable[None]]] = None
-    ) -> SettleOutcome:
+    async def _extract(self, material: SettleMaterial, *, progress: Optional[ProgressReporter] = None) -> SettleOutcome:
         """跑三到四次调用并逐条校验；调用失败抛 SettleError（整场不提交）。
 
         ``progress`` 把"第 N 笔/共 M 笔"的进度报给后台任务面板（缺省 None 时不报，
         离线评测脚本直接调本方法不带面板）。共几笔按有没有未了结的旧承诺定：
-        有两笔（档案、找新承诺）或三笔（加了结旧承诺）。模型调用期间另有刷新协程
-        报"模型整理中（已 N 秒）"与"模型输出中（最后活动 Xs 前）"。
+        有两笔（档案、找新承诺）或三笔（加了结旧承诺）。模型调用期间刷新协程把
+        步骤标签与"模型整理中/思考中/输出中"的活性文案合成后上报。
         """
         live = progress is not None
         if progress is None:
 
-            async def progress(text: str) -> None:
+            async def progress(text: str, *, output_chars: int = 0, output_tail: str = "") -> None:
                 return None
 
         total_calls = (3 if material.open_commitments else 2) + (0 if material.social.empty else 1)
-        await progress(f"第 1 笔/共 {total_calls} 笔：整理本场档案")
+        archive_label = f"第 1 笔/共 {total_calls} 笔：整理本场档案"
+        await progress(archive_label)
         archive_data = await self._call_with_liveness(
+            label=archive_label,
             progress=progress,
             live=live,
             call=lambda on_delta: self._ask(
@@ -1307,8 +1327,10 @@ class SessionSettler:
             raise SettleError(str(exc)) from exc
         # 找承诺那次顺带列出"她说欠着、账上找不到的"与玩家自述：同一份原料，不多一次调用。
         # 输出断在最后的自述那段时只丢自述，承诺与"说欠着"照常用
-        await progress(f"第 2 笔/共 {total_calls} 笔：找新承诺")
+        commitment_label = f"第 2 笔/共 {total_calls} 笔：找新承诺"
+        await progress(commitment_label)
         commitment_text = await self._call_with_liveness(
+            label=commitment_label,
             progress=progress,
             live=live,
             call=lambda on_delta: self._ask_text(
@@ -1332,8 +1354,10 @@ class SessionSettler:
         commitment_rows = _list_field(commitment_data, "commitments")
         closure_rows: List[Any] = []
         if material.open_commitments:
-            await progress(f"第 3 笔/共 {total_calls} 笔：了结旧承诺")
+            closure_label = f"第 3 笔/共 {total_calls} 笔：了结旧承诺"
+            await progress(closure_label)
             closure_rows = await self._call_with_liveness(
+                label=closure_label,
                 progress=progress,
                 live=live,
                 call=lambda on_delta: self._ask_for_list(
@@ -1345,8 +1369,10 @@ class SessionSettler:
             )
         social_check = None
         if not material.social.empty:
-            await progress(f"第 {total_calls} 笔/共 {total_calls} 笔：更新游戏社交事实")
+            social_label = f"第 {total_calls} 笔/共 {total_calls} 笔：更新游戏社交事实"
+            await progress(social_label)
             social_data = await self._call_with_liveness(
+                label=social_label,
                 progress=progress,
                 live=live,
                 call=lambda on_delta: self._ask(
@@ -1513,53 +1539,67 @@ class SessionSettler:
     async def _call_with_liveness(
         self,
         *,
-        progress: Callable[[str], Awaitable[None]],
+        label: str,
+        progress: ProgressReporter,
         live: bool,
         call: Callable[[Optional[Callable[[str, str], None]]], Awaitable[T]],
     ) -> T:
         """跑一次模型调用，调用期间持续刷新面板进度文案。
 
-        ``call`` 收到增量回调（可能为 None）后发起调用。模型不给进度，只给"还在跑"
-        与"最近一次输出是什么时候"两件事，因此文案写成"模型整理中（已 N 秒）"或
-        "模型输出中（最后活动 Xs 前）"，不给百分比——报了也是编的。
+        ``call`` 收到增量回调（可能为 None）后发起调用。模型不给总量，只给"还在跑"、
+        "最近一次输出是什么时候"与"已输出多少字"三件事，文案因此写成
+        "第 N 笔/共 M 笔：步骤 · 模型输出中（已 N 字，最后活动 Xs 前）"的形态，
+        不给百分比——报了也是编的。调用结束后把文案还原成纯步骤标签：字数与
+        输出尾巴只属于调用期间，不能留着一句不再刷新的活性时间戳冒充还在跑。
         """
         if not live:
             return await call(None)
         state = _LivenessState()
-        ticker = asyncio.create_task(self._tick_liveness(state, progress))
+        ticker = asyncio.create_task(self._tick_liveness(state, progress, label))
         try:
             return await call(self._delta_recorder(state))
         finally:
             ticker.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await ticker
+            await progress(label)
 
     def _delta_recorder(self, state: _LivenessState) -> Callable[[str, str], None]:
-        """模型输出增量回调：只记下"刚刚出过字"这一个事实，文案由刷新协程写。"""
+        """模型输出增量回调：记下"刚刚出过字"与累计字数、正文尾巴，文案由刷新协程写。"""
 
         def _on_delta(kind: str, text_delta: str) -> None:
             if not text_delta:
                 return
             state.last_activity_ms = int(self._clock())
+            if kind == "content":
+                state.content_chars += len(text_delta)
+                state.content_tail = (state.content_tail + text_delta)[-_OUTPUT_TAIL_CHARS:]
+            elif kind == "reasoning":
+                state.reasoning_chars += len(text_delta)
 
         return _on_delta
 
-    async def _tick_liveness(self, state: _LivenessState, progress: Callable[[str], Awaitable[None]]) -> None:
-        """周期刷新模型整理阶段的进度文案。
+    async def _tick_liveness(self, state: _LivenessState, progress: ProgressReporter, label: str) -> None:
+        """周期刷新模型整理阶段的进度文案：步骤标签打头，模型阶段与真实信号跟后。
 
-        刷新节奏按真实时间走（面板要看的是"过了多久"），文案里的秒数按注入时钟算，
-        这样测试能把时间流逝握在手里。
+        阶段文案按收到的增量分流：出过正文报"模型输出中（已 N 字）"，只出过思考报
+        "模型思考中（已 N 字）"，什么都没出报"模型整理中（已 N 秒）"。刷新节奏按真实
+        时间走（面板要看的是"过了多久"），文案里的秒数按注入时钟算，这样测试能把
+        时间流逝握在手里。
         """
         started_ms = int(self._clock())
         while True:
             now_ms = int(self._clock())
-            if state.last_activity_ms:
-                idle_s = max(0, (now_ms - state.last_activity_ms) // 1000)
-                text = f"模型输出中（最后活动 {idle_s}s 前）"
+            idle_s = max(0, (now_ms - state.last_activity_ms) // 1000) if state.last_activity_ms else 0
+            if state.content_chars:
+                phase = f"模型输出中（已 {state.content_chars} 字，最后活动 {idle_s}s 前）"
+            elif state.reasoning_chars:
+                phase = f"模型思考中（已 {state.reasoning_chars} 字，最后活动 {idle_s}s 前）"
             else:
                 elapsed_s = max(0, (now_ms - started_ms) // 1000)
-                text = f"模型整理中（已 {elapsed_s} 秒）"
-            await progress(text)
+                phase = f"模型整理中（已 {elapsed_s} 秒）"
+            tail = " ".join(state.content_tail.split())
+            await progress(f"{label} · {phase}", output_chars=state.content_chars, output_tail=tail)
             await asyncio.sleep(_LIVENESS_REFRESH_INTERVAL_S)
 
     async def _ask_for_list(

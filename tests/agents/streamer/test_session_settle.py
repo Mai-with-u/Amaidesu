@@ -1607,17 +1607,21 @@ async def test_settle_without_registry_runs_unchanged(store: SQLiteDatabase, pro
 class _SlowLLM(FakeLLMManager):
     """应答前先让出事件循环的假模型：整理阶段的刷新协程因此有机会写出进度文案。
 
-    ``emit_delta`` 为真时顺带回调一次输出增量，模拟模型边生成边吐字。
+    ``emit_delta`` 为真时顺带回调一次正文增量，``emit_reasoning`` 为真时回调一次
+    思考增量，模拟模型边生成边吐字。
     """
 
-    def __init__(self, *contents: str, emit_delta: bool = False) -> None:
+    def __init__(self, *contents: str, emit_delta: bool = False, emit_reasoning: bool = False) -> None:
         super().__init__(responses=[Response(success=True, content=content) for content in contents])
         self._emit_delta = emit_delta
+        self._emit_reasoning = emit_reasoning
 
     async def generate(self, input: Any, **kwargs: Any) -> Response:
         on_delta = kwargs.get("on_delta")
         if on_delta is not None and self._emit_delta:
             on_delta("content", "整理中")
+        if on_delta is not None and self._emit_reasoning:
+            on_delta("reasoning", "想一想")
         await asyncio.sleep(0.01)
         return await super().generate(input, **kwargs)
 
@@ -1676,7 +1680,7 @@ async def test_settle_warns_when_material_step_is_slow(
 
 
 async def test_settle_reports_model_stage_elapsed(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
-    """模型整理期间面板报已过秒数（不给百分比）：模型不提供进度，报百分比是编的。"""
+    """模型整理期间面板报步骤标签加已过秒数（不给百分比）：模型不提供进度，报百分比是编的。"""
     registry, bus, payloads = _registry_with_recorder()
     session_id = await _ended_session(store)
     await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
@@ -1687,11 +1691,11 @@ async def test_settle_reports_model_stage_elapsed(store: SQLiteDatabase, prompt_
     await bus.wait_until_drained()
 
     texts = [payload.progress_text for payload in payloads]
-    assert "模型整理中（已 0 秒）" in texts, texts
+    assert "第 1 笔/共 2 笔：整理本场档案 · 模型整理中（已 0 秒）" in texts, texts
 
 
 async def test_settle_reports_model_output_activity(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
-    """模型出过字后面板改报最近活动时间：说明这一场还在吐字，不是在原地卡住。"""
+    """模型出过字后面板改报输出字数与最近活动时间：说明这一场还在吐字，不是在原地卡住。"""
     registry, bus, payloads = _registry_with_recorder()
     session_id = await _ended_session(store)
     await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
@@ -1702,4 +1706,46 @@ async def test_settle_reports_model_output_activity(store: SQLiteDatabase, promp
     await bus.wait_until_drained()
 
     texts = [payload.progress_text for payload in payloads]
-    assert "模型输出中（最后活动 0s 前）" in texts, texts
+    assert "第 1 笔/共 2 笔：整理本场档案 · 模型输出中（已 3 字，最后活动 0s 前）" in texts, texts
+    # 输出信号随载荷一起走：面板浮层拿字数与文字尾巴画实时预览
+    carried = [payload for payload in payloads if payload.output_tail]
+    assert carried, texts
+    assert all(payload.output_chars == 3 and payload.output_tail == "整理中" for payload in carried)
+
+
+async def test_settle_reports_reasoning_phase(store: SQLiteDatabase, prompt_manager: PromptManager) -> None:
+    """只出思考没出正文时面板报思考字数：思考也在推进，不算卡住；尾巴仍为空（正文才有预览）。"""
+    registry, bus, payloads = _registry_with_recorder()
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
+    llm = _SlowLLM('{"archive": []}', '{"commitments": []}', emit_reasoning=True)
+    settler = _settler(store, llm, prompt_manager, task_registry=registry)
+
+    assert await settler.settle_session(session_id) is True
+    await bus.wait_until_drained()
+
+    texts = [payload.progress_text for payload in payloads]
+    assert "第 1 笔/共 2 笔：整理本场档案 · 模型思考中（已 3 字，最后活动 0s 前）" in texts, texts
+    assert all(payload.output_chars == 0 and payload.output_tail == "" for payload in payloads)
+
+
+async def test_settle_resets_panel_to_step_label_after_each_call(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """每笔调用结束后文案还原成纯步骤标签：过期的活性时间戳与输出尾巴不冒充还在跑。"""
+    registry, bus, payloads = _registry_with_recorder()
+    session_id = await _ended_session(store)
+    await _speech(store, session_id, "下次接着讲那个鬼故事的结局")
+    llm = _SlowLLM('{"archive": []}', '{"commitments": []}', emit_delta=True)
+    settler = _settler(store, llm, prompt_manager, task_registry=registry)
+
+    assert await settler.settle_session(session_id) is True
+    await bus.wait_until_drained()
+
+    texts = [payload.progress_text for payload in payloads]
+    # 调用前与调用后各报一次纯步骤标签（活性文案都带" · 模型…"后缀，不会撞这两个精确值）
+    assert texts.count("第 1 笔/共 2 笔：整理本场档案") >= 2, texts
+    assert texts.count("第 2 笔/共 2 笔：找新承诺") >= 2, texts
+    # 还原载荷不带上一笔调用留下的输出信号
+    reset_payloads = [payload for payload in payloads if payload.progress_text == "第 2 笔/共 2 笔：找新承诺"]
+    assert all(payload.output_chars == 0 and payload.output_tail == "" for payload in reset_payloads)

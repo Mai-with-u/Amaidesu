@@ -32,6 +32,8 @@ class BackgroundTaskChangedPayload(BasePayload):
         progress_text: 进度自由文本（如 "第 2 笔/共 3 笔" / "还缺 320 行"）
         started_at_ms: 开始时刻（Unix 毫秒）
         failure_reason: 失败原因（仅 failed 时带）
+        output_chars: 当前这笔模型调用已输出的正文字数（仅模型调用期间大于 0）
+        output_tail: 当前这笔模型调用最近输出的文字尾巴（浮层实时预览用，非模型调用期间为空）
     """
 
     task_id: str = Field(..., description="任务号（登记方自定，同一任务的历次变化用它关联）")
@@ -40,6 +42,8 @@ class BackgroundTaskChangedPayload(BasePayload):
     progress_text: str = Field(default="", description="进度自由文本（不造百分比，怎么自然怎么写）")
     started_at_ms: int = Field(..., description="任务开始时刻（Unix 毫秒）")
     failure_reason: Optional[str] = Field(default=None, description="失败原因（仅 failed 时带）")
+    output_chars: int = Field(default=0, description="当前这笔模型调用已输出的正文字数（仅流式调用期间大于 0）")
+    output_tail: str = Field(default="", description="当前这笔模型调用最近输出的文字尾巴（非模型调用期间为空）")
 
 
 __all__ = ["BackgroundTaskChangedPayload", "BackgroundTaskState"]
