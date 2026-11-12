@@ -118,6 +118,9 @@ class FakeMaicraft(BaseToolProvider):
         self.calls: List[tuple[str, Dict[str, Any]]] = []
         # 角色所在的存档：reports_world 为 False 时扮演旧版 Mod（回复里没有 world 键）
         self.reports_world = False
+        # 公屏说话是否当场交出去（关了逐字打字）：True 时 execute 直接回结束与 submitted 细节，
+        # False 时照要动手的目标回 running，测试用 finish 推进（打字中途被打断即交不出去）
+        self.chat_instant = True
         self.world: Optional[Dict[str, Any]] = None
         self._streams = 1
         self.self_view: Dict[str, Any] = {
@@ -282,6 +285,19 @@ class FakeMaicraft(BaseToolProvider):
                 "changes": [],
                 "remaining": [],
                 "details": details,
+            }
+        elif ability.endswith(":chat") and self.chat_instant:
+            # 公屏说话当场交出去（关了逐字打字）：细节照真实接口写 submitted 与原话；
+            # 以 / 开头是游戏命令、带 target 是对某人说，都不算交进公屏
+            message = str((goal.get("parameters") or {}).get("message") or "")
+            public = bool(message) and not message.startswith("/") and not goal.get("target")
+            run["state"] = "finished"
+            run["result"] = {
+                "status": "done" if public else "failed",
+                "summary": "说了这句话" if public else "没有交进公屏",
+                "changes": [],
+                "remaining": [],
+                "details": {"submitted": public, "message": message},
             }
         self.goals[goal_id] = run
         return ok(dict(run))

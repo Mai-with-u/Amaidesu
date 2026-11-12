@@ -165,6 +165,8 @@ async def test_a_spar_called_by_observation_id_is_recorded_by_the_opponent_in_th
 async def test_her_public_chat_goes_to_storage_when_it_was_sent() -> None:
     """游戏 Agent 在公屏说的一句，目标结束、交出去了：发一条只落库的公屏说话事件；不发 milestone。"""
     server = FakeMaicraft()
+    # 逐字打字开着：chat 是要跑一会儿的目标，结束由 finish 推进
+    server.chat_instant = False
 
     def script(messages: List[Dict[str, Any]]) -> Response:
         if "结束了" in _texts(messages):

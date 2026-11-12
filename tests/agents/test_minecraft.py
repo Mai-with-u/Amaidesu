@@ -18,6 +18,7 @@ from src.modules.agents.factory import instantiate_agent
 from src.modules.events.event_bus import EventBus
 from src.modules.events.payloads.agents import AgentRepliedPayload
 from src.modules.events.payloads.game import GamePayload
+from src.modules.events.payloads.game_chat import GameSelfChattedPayload
 from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.llm.payload import Reasoning, Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
@@ -926,6 +927,81 @@ def test_tool_guide_tells_streamer_debug_panel_is_not_a_topic() -> None:
     guide = MinecraftToolProvider(state=MinecraftAgentState()).guide_for("streamer")
     assert "调试面板" in guide and "运营开着看" in guide
     assert "不是她按出来的" in guide and "不拿它当话题" in guide and "观众问起" in guide
+
+
+# ---------------------------------------------------------------------------
+# minecraft_chat_send：主播直发公屏（复用 chat 能力执行器，不进本 Agent 决策循环）
+# ---------------------------------------------------------------------------
+
+
+def test_chat_send_spec_visible_to_streamer_only() -> None:
+    """注入直发执行器后规格在册、只给主播、处理器在表；没注入执行器则工具不提供。"""
+
+    async def sender(text: str) -> Dict[str, Any]:
+        return {"success": True, "message": text}
+
+    provider = MinecraftToolProvider(state=MinecraftAgentState(), chat_sender=sender)
+    specs = {spec.full_name: spec for spec in provider.list_tools()}
+    assert specs["minecraft_chat_send"].visible_to == ["streamer"]
+    assert "minecraft_chat_send" in provider.tool_handlers()
+    bare = MinecraftToolProvider(state=MinecraftAgentState())
+    assert "minecraft_chat_send" not in {spec.full_name for spec in bare.list_tools()}
+    assert "minecraft_chat_send" not in bare.tool_handlers()
+
+
+def test_tool_guide_names_chat_send_for_streamer() -> None:
+    """玩法说明点名直发公屏工具：说一句话走直发、做动作仍走委派。"""
+    guide = MinecraftToolProvider(state=MinecraftAgentState()).guide_for("streamer")
+    assert "minecraft_chat_send" in guide and "委派" in guide
+
+
+async def test_send_streamer_chat_emits_self_chatted() -> None:
+    """直发成功：chat 能力交出去后发 GAME_SELF_CHATTED，落库口径与她自己说话一致。"""
+    agent, _llm, bus = await make_minecraft_agent(server=FakeMaicraft(), llm=None)
+    try:
+        result = await agent._send_streamer_chat("  来啦 ")
+        assert result == {"success": True, "message": "来啦"}
+        chatted = [
+            call.args[1] for call in bus.emit.await_args_list if isinstance(call.args[1], GameSelfChattedPayload)
+        ]
+        assert [payload.message for payload in chatted] == ["来啦"]
+    finally:
+        await agent.stop()
+
+
+@pytest.mark.parametrize("text", ["", "   ", "/give @s diamond"])
+async def test_send_streamer_chat_rejects_non_text(text: str) -> None:
+    """空话与以 / 开头的游戏命令直接拒绝，不向游戏下发目标。"""
+    server = FakeMaicraft()
+    agent, _llm, _bus = await make_minecraft_agent(server=server, llm=None)
+    try:
+        result = await agent._send_streamer_chat(text)
+        assert result["success"] is False and result["error"]
+        assert server.calls_to("execute") == []
+    finally:
+        await agent.stop()
+
+
+async def test_send_streamer_chat_reports_connection_failure() -> None:
+    """游戏没连上：返回错误，不假装已发送、不发事件。"""
+    bus = fake_bus()
+    agent = assemble_minecraft_agent(bus=bus, llm=None)
+    result = await agent._send_streamer_chat("来啦")
+    assert result["success"] is False and "来啦" not in json.dumps(result)
+    assert not [c for c in bus.emit.await_args_list if isinstance(c.args[1], GameSelfChattedPayload)]
+
+
+async def test_send_streamer_chat_reports_unconfirmed_send() -> None:
+    """游戏侧没有回报交出去（逐字打字没打完这类）：报错误，不发 GAME_SELF_CHATTED。"""
+    server = FakeMaicraft()
+    server.chat_instant = False
+    agent, _llm, bus = await make_minecraft_agent(server=server, llm=None)
+    try:
+        result = await agent._send_streamer_chat("来啦")
+        assert result["success"] is False and "未确认" in result["error"]
+        assert not [c for c in bus.emit.await_args_list if isinstance(c.args[1], GameSelfChattedPayload)]
+    finally:
+        await agent.stop()
 
 
 async def test_mcp_disconnection_refresh_logs_removal(loguru_capture: Any) -> None:

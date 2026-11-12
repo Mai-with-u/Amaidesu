@@ -1,6 +1,6 @@
 """MinecraftAgent 局部工具（minecraft_report / minecraft_todo /
 minecraft_notebook / minecraft_get_work_log / minecraft_glance /
-minecraft_context_fold / minecraft_context_recall）
+minecraft_chat_send / minecraft_context_fold / minecraft_context_recall）
 
 工具归属约定（text_adv 同构）：
 - 局部工具（minecraft_todo / minecraft_notebook）= Agent 自己 LLM 用，驱动 ReAct 循环
@@ -8,6 +8,9 @@ minecraft_context_fold / minecraft_context_recall）
 - 对外工作文档读取（minecraft_get_work_log）= 主播经 ToolRegistry 调，只读——叙事素材通道
 - 主播看一眼（minecraft_glance）= 主播经 ToolRegistry 调，只读——身体现状与周边的精简叙事视图，
   代替原始观察（原始观察的几何与证据是给游戏 Agent 规划用的）
+- 主播直发公屏（minecraft_chat_send）= 主播经 ToolRegistry 调——把主播拟好的一句话
+  经本 Agent 的 chat 能力执行器直接发进游戏公屏（只动手脚，不进本 Agent 的
+  ReAct 决策循环）；仅文本输出，永不扩展为身体动作
 - 跨 Agent 派活走框架委派原语（framework_delegate；原 minecraft_send_prompt
   已退役，职能并入 Agent 的接收委派入口）——主播是玩家 Agent 的用户：
   派发/调整任务、回答问题、补充要求；系统不代写 todo（目标分解是 LLM 用
@@ -59,6 +62,9 @@ STREAMER_GUIDE = (
     "游戏里的身体自己拆解、动手，做完或卡住再以游戏记录上报；中途要改要求用 framework_prompt。"
     "想看一眼现场（身体状态、背包、身边的生物与设施）用 minecraft_glance；"
     "想看待办、笔记和近期上报用 minecraft_get_work_log。"
+    "要在游戏公屏上以她的名义说一句话（回应游戏里的玩家、打招呼这类），"
+    "用 minecraft_chat_send 直接发送，这句话不经过游戏里的身体、不占用她手上的活；"
+    "要她在游戏里做什么仍走委派。"
     "工作文档里笔记正文后面带着一段现查的当前状态快照（位置、装备、背包、血量）："
     "背包存量、装备、位置以快照为准，笔记正文里的同类数字只是当时记下的历史，别当现状念。"
     "速览里的 creatures 记着同伴（自己的生物、起过名的生物）此刻怎样：写着已死的就是死了，"
@@ -97,6 +103,7 @@ _LOCAL_VISIBLE_TO: Dict[str, List[str]] = {
     "report": ["minecraft"],
     "get_work_log": ["streamer"],
     "glance": ["streamer"],
+    "chat_send": ["streamer"],
     "skill": ["minecraft"],
     "context_fold": ["minecraft"],
     "context_recall": ["minecraft"],
@@ -309,6 +316,39 @@ def build_glance_spec() -> ToolSpec:
     )
 
 
+def build_chat_send_spec() -> ToolSpec:
+    """``minecraft_chat_send`` 工具规格——主播直发游戏公屏（复用本 Agent 的 chat 能力执行器）
+
+    身体所有权闸门：只发文本，永不扩展为身体动作——游戏里的身体归本 Agent 决策循环管，
+    这个工具只是主播借她的账号说一句话。
+    """
+    return ToolSpec(
+        name="chat_send",
+        description=(
+            "把一句话发进游戏公屏聊天，游戏里的玩家看到的是她在说话。"
+            "只发文本，不做任何游戏内动作，也不影响游戏里正在进行的事；"
+            "游戏侧没有确认交出去时返回错误，不当作已发送。"
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "要发进游戏公屏的一句话"},
+            },
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        kind="sync",
+        provider=PROVIDER_NAME,
+        output_schema={
+            "type": "object",
+            "properties": {
+                "success": {"type": "boolean"},
+                "message": {"type": "string"},
+            },
+        },
+    )
+
+
 def build_context_fold_spec() -> ToolSpec:
     """``minecraft_context_fold`` 工具规格——只在宿主整理请求里用：把用完的历史区间折成摘要"""
     return ToolSpec(
@@ -436,6 +476,8 @@ class MinecraftToolProvider(GameToolProvider):
     report_callback: Optional[ReportCallback] = None
     # 主播看一眼：由 Agent 读观察并精简成叙事视图（未注入时不提供该工具）
     glance_reader: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None
+    # 主播直发公屏：由 Agent 复用自己的 chat 能力执行器并确认交出去（未注入时不提供该工具）
+    chat_sender: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None
     # 按名读技能正文：由 Agent 按自己的受众名筛本地策略，远端玩法技能按地址去 MaiCraft 读（未注入技能库时不提供该工具）；
     # 远端技能要经 MCP 的 resources/read 取正文，所以读取器是异步的。
     skill_reader: Optional[Callable[[str], Awaitable[Dict[str, Any]]]] = None
@@ -471,6 +513,8 @@ class MinecraftToolProvider(GameToolProvider):
         ]
         if self.glance_reader is not None:
             specs.append(build_glance_spec())
+        if self.chat_sender is not None:
+            specs.append(build_chat_send_spec())
         if self.skill_reader is not None:
             specs.append(build_skill_spec(PROVIDER_NAME))
         if self.context_recall is not None:
@@ -501,6 +545,9 @@ class MinecraftToolProvider(GameToolProvider):
         if self.glance_reader is not None:
             glance_spec = build_glance_spec()
             handlers[glance_spec.full_name] = self._dict_handler(glance_spec, self._invoke_glance)
+        if self.chat_sender is not None:
+            chat_send_spec = build_chat_send_spec()
+            handlers[chat_send_spec.full_name] = self._dict_handler(chat_send_spec, self._invoke_chat_send)
         if self.skill_reader is not None:
             skill_spec = build_skill_spec(PROVIDER_NAME)
             handlers[skill_spec.full_name] = self._dict_handler(skill_spec, self._invoke_skill)
@@ -532,6 +579,10 @@ class MinecraftToolProvider(GameToolProvider):
         del args
         assert self.glance_reader is not None  # 处理器表按读取器在册建表
         return await self.glance_reader()
+
+    async def _invoke_chat_send(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        assert self.chat_sender is not None  # 处理器表按回调在册建表
+        return await self.chat_sender(str(args.get("text", "")))
 
     async def _invoke_skill(self, args: Dict[str, Any]) -> Dict[str, Any]:
         assert self.skill_reader is not None  # 处理器表按读取器在册建表
@@ -626,6 +677,7 @@ __all__ = [
     "build_notebook_spec",
     "build_get_work_log_spec",
     "build_glance_spec",
+    "build_chat_send_spec",
     "build_report_spec",
     "PROVIDER_NAME",
     "ReportCallback",

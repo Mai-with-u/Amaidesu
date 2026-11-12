@@ -316,6 +316,7 @@ class MinecraftAgent(BaseAgent):
             state=self._mc_state,
             report_callback=self._handle_report,
             glance_reader=self._glance,
+            chat_sender=self._send_streamer_chat,
             skill_reader=self._skill_support.read_skill if skill_library is not None else None,
             save_reader=self._world.game_save,
             situation_reader=self._current_situation,
@@ -2492,6 +2493,31 @@ class MinecraftAgent(BaseAgent):
             CoreEvents.GAME_SELF_CHATTED,
             GameSelfChattedPayload(game="minecraft", message=message, save_id=save_id, save_name=save_name),
         )
+
+    async def _send_streamer_chat(self, text: str) -> Dict[str, Any]:
+        """minecraft_chat_send 的执行器：主播直发公屏，不经本 Agent 的 ReAct 决策循环。
+
+        与她自己说话共用同一条执行路径（``maicraft_execute`` 的 chat 能力，只动手脚、
+        大脑不醒）与同一落库口径：确认交出去后发 GAME_SELF_CHATTED，存储记进
+        公屏聊天（direction=streamer），主播下一轮上下文看得到自己说过什么。
+        游戏侧没有回报交出去（没结束、被取消、打成了对某人的私聊）一律报错误，
+        不当作已发送；以 ``/`` 开头是游戏命令，这个工具只发文本，直接拒绝。
+        """
+        message = text.strip()
+        if not message:
+            return {"success": False, "error": "chat_send 需要 text 字符串"}
+        if message.startswith("/"):
+            return {"success": False, "error": "chat_send 只发公屏文本，不执行游戏命令"}
+        reply = await self._call_maicraft(EXECUTE, {"goal": {"ability": "chat", "parameters": {"message": message}}})
+        if not reply.ok:
+            return {"success": False, "error": f"游戏没有受理发送：{reply.error_message}"}
+        run = goal_run_of(reply.data)
+        details = (run.result or {}).get("details") if run is not None else None
+        submitted = isinstance(details, dict) and details.get("submitted") is True and "to" not in details
+        if run is None or not run.finished or not submitted:
+            return {"success": False, "error": "发送未确认：游戏侧没有回报这句话已交出去"}
+        await self._send_self_chat(message)
+        return {"success": True, "message": message}
 
     async def _emit_spar_interaction(self, run: GoalRun) -> None:
         """切磋收手：按结果里 Mod 认出的对手（旧版 Mod 退回下令时点的名字）发一条玩家互动，只给存储记账，主播不订阅。"""
