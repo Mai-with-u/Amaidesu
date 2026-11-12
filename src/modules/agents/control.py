@@ -595,201 +595,84 @@ class DelegationCore:
     # -------------------- 送达、收手与待办推进 --------------------
 
     @staticmethod
-    def _delivered_delegation(self, executor: str) -> Optional[TaskRecord]:
-        """查目标 Agent 名下已送达、未终态的委派单（排队的还没送到，不算）。"""
-        if self._task_ledger is None:
-            return None
-        for task_id in self._task_ledger.active_task_ids():
-            record = self._task_ledger.get(task_id)
-            if (
-                record is not None
-                and record.tool == "framework_delegate"
-                and record.executor == executor
-                and record.status in DELIVERED_TASK_STATES
-            ):
-                return record
-        return None
+    def _delivery_text(instruction: str, *, was_shelved: bool, progress: str) -> str:
+        """构造送往执行者的指令文本：搁下过的件按新任务重送达，附上之前做到哪。"""
+        if was_shelved:
+            return compose_redelivery(instruction, progress)
+        return instruction
 
-    @staticmethod
-    def _quote_own_words(snapshot: Dict[str, Any]) -> str:
-        """取快照里发起方自己的原话（附带的来源对话与取舍规则不外传）。"""
-        return str(
-            snapshot.get("own_words") or own_words_of(str(snapshot.get("instruction") or "")) or "（快照无指令原文）"
-        )
-
-    def _live_queue(self, executor: str) -> List[_QueueEntry]:
-        """``executor`` 队列里账面仍在排队的条目（被撤/已了结的不算，顺带清掉）。"""
-        queue = self._queues.get(executor)
-        if not queue:
-            return []
-        alive = []
-        for entry in queue:
-            record = self._task_ledger.get(entry.task_id) if self._task_ledger is not None else None
-            if record is not None and record.status == "queued":
-                alive.append(entry)
-        if len(alive) != len(queue):
-            queue.clear()
-            queue.extend(alive)
-        return alive
-
-    def queued_entries(self, executor: str) -> List[_QueueEntry]:
-        """``executor`` 当前排着的委派（队首在前；只读快照）。"""
-        return list(self._live_queue(executor))
-
-    def _queue_full_message(self, executor: str, delivered: Optional[TaskRecord], entries: List[_QueueEntry]) -> str:
-        """满员拒收理由：在途那件 + 当前队列清单（各条原话与排了多久），并给出路。
-
-        原话只给发起方自己说的那段：每次被拒都把整段来源对话与取舍规则塞回去，
-        上千字的旧弹幕会被当成"指令原文"读回来。
-        """
-        current_ms = now_ms()
-        lines = [f"受理失败：目标 '{executor}' 的委派队列已排满 {_DELEGATION_QUEUE_LIMIT} 件，这件没排进去。"]
-        if delivered is not None:
-            lines.append(self._delivered_line(delivered, current_ms))
-        lines.append("排队中（按送达先后）：")
-        for index, entry in enumerate(entries, start=1):
-            mark = "急件，" if entry.urgent else ""
-            waited_s = max(current_ms - entry.enqueued_at_ms, 0) // 1000
-            lines.append(f"{index}. 「{entry.own_words}」（{mark}任务号 {entry.task_id}，排了 {waited_s} 秒）")
-        lines.append(
-            "等前面的做完再派，不要重复派同一件事；不要的那件可以用 framework_task_cancel 撤掉腾位置；"
-            "真是急事才用 urgent=true 插队。"
-        )
-        return "\n".join(lines)
-
-    @staticmethod
-    def _delivered_line(record: TaskRecord, current_ms: int) -> str:
-        """在途那件的一行说明：原话 + 受理距今 + 已知进展（执行 Agent 最近那句判断不带）。"""
-        waited_s = max(current_ms - record.created_at_ms, 0) // 1000
-        state = "被急件暂放中" if record.status == "suspended" else "在做"
-        line = (
-            f"{state}：「{_DelegationCore._quote_own_words(record.snapshot)}」"
-            f"（任务号 {record.task_id}，已受理 {waited_s} 秒）"
-        )
-        # 已知进展摘要有就带（批级关联/执行侧写入快照的额外字段），读不到不硬造。执行 Agent 最近那句判断
-        # 不带：那是没脱敏的推理原文加毫秒时刻，会把坐标、工具名念出来
-        extras = {
-            k: v for k, v in record.snapshot.items() if k not in _NOT_PROGRESS_KEYS and k not in _QUEUE_SNAPSHOT_KEYS
-        }
-        if extras:
-            line += f"；已知进展：{extras}"
-        return line
-
-    async def accept(
-        self, target: BaseAgent, instruction: str, initiator: str, *, urgent: bool = False
-    ) -> _DelegationOutcome:
-        """接单：忙闲三分支 → 目标接收入口 → 受理成功登记记录表。
-
-        - 目标闲着（名下没有已送达的在途件、队列也空）：直派，与原路径一致
-        - 目标忙 + 普通件：入队（满员拒收附队列清单）
-        - 目标忙 + 急件：在途件是普通件且目标暂放成功 → 在途转 suspended、急件立刻派；
-          否则急件置顶排队
-
-        受理入口也是看门狗的检查点：每次新的委派活动顺带核对一遍在途单计时。
-
-        直派时任务号先生成再交目标接收（拒收则不登记，不留孤儿 accepted 条目）；
-        受理失败（本方法返回的 refusal）与任务失败（执行中写入记录表的 failed
-        终态）严格分开——回执只承诺"目标已接收或已排上"，不承诺"能干成"。
-        不判新单与在途语义是否相同（必达机制不押 LLM 判断）。framework_prompt 不受队列影响。
-        """
-        executor = target.name
-        delivered = self._delivered_delegation(executor)
-        waiting = self._live_queue(executor)
-        self._watchdog_check()
-        if delivered is None and not waiting:
-            return self._deliver_new(target, instruction, initiator, urgent=urgent)
-        if urgent:
-            if delivered is None:
-                # 手上空着、只是队列里还有没送出的：急件直接派，不用等
-                return self._deliver_new(target, instruction, initiator, urgent=True)
-            preemptable = delivered.status != "suspended" and not delivered.snapshot.get("urgent")
-            if preemptable and await self._suspend_current(target, delivered):
-                return self._deliver_new(target, instruction, initiator, urgent=True)
-            return self._enqueue(target, instruction, initiator, urgent=True)
-        if len(waiting) >= _DELEGATION_QUEUE_LIMIT:
-            logger.info(f"委派拒受理（队列满 {_DELEGATION_QUEUE_LIMIT} 件）: {initiator} -> {executor}")
-            return _DelegationOutcome(
-                ok=False, error="refused", message=self._queue_full_message(executor, delivered, waiting)
-            )
-        outcome = self._enqueue(target, instruction, initiator, urgent=False)
-        if delivered is None:
-            # 手上空着却有排队件（上一件终态与出队之间的空当）：顺手送出队首
-            await self._drain_queue(executor)
-        return outcome
-
-    async def _suspend_current(self, target: BaseAgent, delivered: TaskRecord) -> bool:
-        """请目标暂放手头的活（可选协议 ``suspend_current``）；成功则在途单记 suspended。"""
-        try:
-            suspended = bool(await target.suspend_current())
-        except Exception as exc:  # noqa: BLE001 - 暂放失败按不支持处理，急件降级置顶排队
-            logger.warning(f"目标 '{target.name}' 暂放手头的活失败，急件改为置顶排队: {exc}", exc=True)
-            return False
-        if not suspended:
-            logger.info(f"目标 '{target.name}' 不支持或没能暂放手头的活，急件改为置顶排队")
-            return False
-        self._task_ledger.update(
-            delivered.task_id, "suspended", summary="有急事插队，这件先暂放（进度保留），急事做完接着做"
-        )
-        logger.info(f"急件插队：'{target.name}' 手头的 {delivered.task_id} 已暂放")
-        return True
-
-    def _deliver_new(self, target: BaseAgent, instruction: str, initiator: str, *, urgent: bool) -> _DelegationOutcome:
-        """直派一件新委派：生成任务号 → 目标接收入口 → 受理成功登记记录表。"""
-        executor = target.name
-        task_id = _generate_task_id()
+    def _call_receive(self, target: BaseAgent, *, instruction: str, task_id: str) -> Optional[str]:
         receive = getattr(target, "receive_delegation", None)
         if not callable(receive):
-            return _DelegationOutcome(
-                ok=False, error="refused", message=f"受理失败：目标 '{executor}' 未实现接收入口（默认拒收）"
-            )
-        rejected = receive(instruction=instruction, task_id=task_id)
-        if rejected:
-            logger.info(f"delegate: Agent '{executor}' 拒收委派（{rejected}）")
-            return _DelegationOutcome(
-                ok=False, error="refused", message=f"受理失败：目标 '{executor}' 拒收（{rejected}）"
-            )
-        # 受理成功：登记 agent 型任务（执行 Agent 唯一写入；循环不代写）。
-        # 账面存指令全文（游戏侧与看板要用，截过的半句对不上），另记发起方自己的原话：
-        # 拒受理理由回给发起方、落库留给下播核对与续播认领的都只用原话，附带的来源对话不外传
-        self._task_ledger.register(
-            task_id=task_id,
-            provider="framework",
-            tool="framework_delegate",
-            initiator=initiator,
-            executor=executor,
-            status="accepted",
-            source="agent",
-            snapshot=self._snapshot(instruction, urgent=urgent),
-        )
-        logger.info(f"委派受理: {initiator} -> {executor}（task_id={task_id}{'，急件' if urgent else ''}）")
-        self._watchdog_start(task_id)
-        return _DelegationOutcome(ok=True, task_id=task_id, executor=executor)
+            return f"目标 '{target.name}' 未实现接收入口（默认拒收）"
+        return receive(instruction=instruction, task_id=task_id)
 
-    def _enqueue(self, target: BaseAgent, instruction: str, initiator: str, *, urgent: bool) -> _DelegationOutcome:
-        """排进目标的委派队列：急件置顶、普通件排尾；账面先登记受理再转 queued。
+    async def _release_in_hand(self, target: BaseAgent, item: BoardItem, *, reason: str) -> Optional[str]:
+        """让执行者对当前【在做】收手；异常记日志并按不支持（None）处理。"""
+        try:
+            return await target.release_delegation(item.task_id, reason=reason)
+        except Exception as exc:  # noqa: BLE001 - 收手异常不崩受理链路
+            logger.warning(f"目标 '{target.name}' 收手异常（task_id={item.task_id}）: {exc}", exc=True)
+            return None
 
-        先以 accepted 登记：落库据此记下受理行（下播核对与重启收尾才认得这件——重启时
-        还排着的单与在途单同样被标成被打断），随后转 queued 广播一次排队。
-        """
+    async def _drain_queue(self, executor: str) -> None:
+        async with self._lock_of(executor):
+            await self._drain_unlocked(executor)
+
+    async def _drain_unlocked(self, executor: str) -> None:
+        """执行者手上空着时，把待办里排最前且未标 held 的那件送达（搁下过的件带进度按新任务送达）。"""
+        if self._task_ledger is None:
+            return
+        while True:
+            board = read_board(self._task_ledger, executor)
+            if board.in_hand is not None:
+                return
+            nxt = board.next_ready()
+            if nxt is None:
+                return
+            target = self._manager.get_agent_by_name(executor)
+            if target is None:
+                self._task_ledger.update(nxt.task_id, "failed", summary=f"送达失败：执行者 '{executor}' 不在名册")
+                continue
+            text = self._delivery_text(
+                nxt.instruction, was_shelved=nxt.shelved or nxt.deliveries > 0, progress=nxt.shelved_progress
+            )
+            rejected = self._call_receive(target, instruction=text, task_id=nxt.task_id)
+            if rejected:
+                logger.info(f"待办件送达被拒（task_id={nxt.task_id}, executor={executor}）：{rejected}")
+                self._task_ledger.update(nxt.task_id, "failed", summary=f"送达被目标拒收：{rejected}")
+                continue
+            ts = self._clock()
+            snap = {
+                **nxt.snapshot,
+                DELIVERIES_KEY: nxt.deliveries + 1,
+                DELIVERED_AT_KEY: ts,
+                HELD_KEY: False,
+            }
+            summary = "搁下的事重新送达执行" if nxt.shelved else "轮到执行，已送达目标"
+            self._task_ledger.update(nxt.task_id, "accepted", snapshot=snap, summary=summary)
+            self._clear_held_flags(executor, except_task_id=nxt.task_id)
+            self._watchdog_track(executor, nxt.task_id, ts)
+            logger.info(f"待办件送达: {nxt.record.initiator} -> {executor}（task_id={nxt.task_id}，{summary}）")
+            return
+
+    def _deliver_fresh(self, target: BaseAgent, instruction: str, initiator: str) -> _DelegationOutcome:
+        """直接送达一件全新委派并登记为【在做】。"""
+        assert self._task_ledger is not None
         executor = target.name
         task_id = _generate_task_id()
-        entry = _QueueEntry(
-            task_id=task_id,
-            instruction=instruction,
-            own_words=own_words_of(instruction),
-            initiator=initiator,
-            urgent=urgent,
-            enqueued_at_ms=now_ms(),
-        )
-        queue = self._queues.setdefault(executor, deque())
-        if urgent:
-            # 急件置顶，但排在已有急件之后：急件之间仍按先来后到
-            index = sum(1 for item in queue if item.urgent)
-            queue.insert(index, entry)
-        else:
-            queue.append(entry)
-        position = list(queue).index(entry) + 1
-        snapshot = self._snapshot(instruction, urgent=urgent)
+        rejected = self._call_receive(target, instruction=instruction, task_id=task_id)
+        if rejected:
+            logger.info(f"delegate: Agent '{executor}' 拒收委派（{rejected}）")
+            msg = rejected if rejected.startswith("受理失败") else f"受理失败：目标 '{executor}' 拒收（{rejected}）"
+            return _DelegationOutcome(ok=False, error="refused", message=msg)
+        ts = self._clock()
+        snapshot: Dict[str, Any] = {
+            "instruction": instruction,
+            "own_words": own_words_of(instruction),
+            DELIVERIES_KEY: 1,
+            DELIVERED_AT_KEY: ts,
+        }
         self._task_ledger.register(
             task_id=task_id,
             provider="framework",
@@ -800,47 +683,347 @@ class DelegationCore:
             source="agent",
             snapshot=snapshot,
         )
+        self._clear_held_flags(executor, except_task_id=task_id)
+        self._watchdog_track(executor, task_id, ts)
+        logger.info(f"委派受理（在做）: {initiator} -> {executor}（task_id={task_id}）")
+        return _DelegationOutcome(
+            ok=True, task_id=task_id, executor=executor, item=IN_HAND_LABEL, own_words=own_words_of(instruction)
+        )
+
+    def _deliver_backlog_item(self, target: BaseAgent, picked: BoardItem) -> _DelegationOutcome:
+        """把待办里选中的 ``picked`` 送达执行者并转为【在做】。"""
+        assert self._task_ledger is not None
+        executor = target.name
+        text = self._delivery_text(
+            picked.instruction,
+            was_shelved=picked.shelved or picked.deliveries > 0,
+            progress=picked.shelved_progress,
+        )
+        rejected = self._call_receive(target, instruction=text, task_id=picked.task_id)
+        if rejected:
+            logger.info(f"待办提拔送达被拒（task_id={picked.task_id}, executor={executor}）：{rejected}")
+            return _DelegationOutcome(
+                ok=False, error="refused", message=f"受理失败：目标 '{executor}' 拒收（{rejected}）"
+            )
+        ts = self._clock()
+        snap = {
+            **picked.snapshot,
+            DELIVERIES_KEY: picked.deliveries + 1,
+            DELIVERED_AT_KEY: ts,
+            HELD_KEY: False,
+        }
+        self._task_ledger.update(picked.task_id, "accepted", snapshot=snap, summary="从待办提上来开始做")
+        self._clear_held_flags(executor, except_task_id=picked.task_id)
+        self._watchdog_track(executor, picked.task_id, ts)
+        logger.info(f"待办提拔为在做: {executor}（task_id={picked.task_id}）")
+        return _DelegationOutcome(
+            ok=True, task_id=picked.task_id, executor=executor, item=IN_HAND_LABEL, own_words=picked.own_words
+        )
+
+    def _enqueue_fresh(
+        self, target: BaseAgent, instruction: str, initiator: str, *, front: bool = False
+    ) -> _DelegationOutcome:
+        """把一件新委派排进待办（front=True 排到最前，否则排到末尾）。"""
+        assert self._task_ledger is not None
+        executor = target.name
+        task_id = _generate_task_id()
+        ts = self._clock()
+        no = self._alloc_backlog_no(executor)
+        seq = self._next_head_seq() if front else self._next_tail_seq()
+        base_snapshot: Dict[str, Any] = {
+            "instruction": instruction,
+            "own_words": own_words_of(instruction),
+            BACKLOG_NO_KEY: no,
+            BACKLOG_SEQ_KEY: seq,
+            DELIVERIES_KEY: 0,
+        }
+        self._task_ledger.register(
+            task_id=task_id,
+            provider="framework",
+            tool="framework_delegate",
+            initiator=initiator,
+            executor=executor,
+            status="accepted",
+            source="agent",
+            snapshot=base_snapshot,
+        )
+        queued_snapshot = {**base_snapshot, QUEUED_AT_KEY: ts}
+        board_preview = read_board(self._task_ledger, executor)
+        position = 1 if front else len(board_preview.backlog) + 1
         self._task_ledger.update(
             task_id,
             "queued",
-            summary=f"目标手上有事，排在委派队列第 {position} 位{'（急件置顶）' if urgent else ''}",
-            snapshot={**snapshot, "queued_at_ms": entry.enqueued_at_ms},
+            summary=f"目标手上有事，排进待办（待办{no}，第 {position} 位）",
+            snapshot=queued_snapshot,
         )
-        logger.info(
-            f"委派入队: {initiator} -> {executor}（task_id={task_id}，第 {position} 位{'，急件' if urgent else ''}）"
+        board_after = read_board(self._task_ledger, executor)
+        actual_pos = next((idx for idx, b in enumerate(board_after.backlog, start=1) if b.task_id == task_id), position)
+        label = f"{BACKLOG_LABEL_PREFIX}{no}"
+        logger.info(f"委派入待办: {initiator} -> {executor}（task_id={task_id}, {label}, 第 {actual_pos} 位）")
+        return _DelegationOutcome(
+            ok=True,
+            task_id=task_id,
+            executor=executor,
+            item=label,
+            own_words=own_words_of(instruction),
+            queued=True,
+            queue_position=actual_pos,
         )
-        return _DelegationOutcome(ok=True, task_id=task_id, executor=executor, queued=True, queue_position=position)
 
-    @staticmethod
-    def _snapshot(instruction: str, *, urgent: bool) -> Dict[str, Any]:
-        """受理快照：指令全文 + 发起方原话；急件另记标记（不嵌套挂起的判据）。"""
-        snapshot: Dict[str, Any] = {"instruction": instruction, "own_words": own_words_of(instruction)}
-        if urgent:
-            snapshot["urgent"] = True
-        return snapshot
+    def _shelve_record(self, item: BoardItem, *, progress: str, held: bool) -> str:
+        """把一件在做单放回待办最前，保留做到哪了；返回它的待办短编号。"""
+        assert self._task_ledger is not None
+        executor = item.record.executor
+        ts = self._clock()
+        no = self._alloc_backlog_no(executor, existing=item.backlog_no)
+        seq = self._next_head_seq()
+        snap = {
+            **item.snapshot,
+            BACKLOG_NO_KEY: no,
+            BACKLOG_SEQ_KEY: seq,
+            QUEUED_AT_KEY: ts,
+            SHELVED_AT_KEY: ts,
+            SHELVED_PROGRESS_KEY: progress,
+            HELD_KEY: held,
+        }
+        note = progress or "未记具体进展"
+        self._task_ledger.update(item.task_id, "queued", snapshot=snap, summary=f"先搁下回待办，做到：{note}")
+        return f"{BACKLOG_LABEL_PREFIX}{no}"
 
-    def cancel_queued(self, task_id: str, *, source: str = "") -> bool:
-        """撤一件还在排队、没送到执行方的委派：出队 + 账面 cancelled。
+    def _settle_old_in_hand(self, item: BoardItem, *, current: str, progress: str, held_if_shelved: bool) -> None:
+        """按 ``current``（done / shelve / drop）把已收手的旧在做单落账。"""
+        assert self._task_ledger is not None
+        if current == "done":
+            detail = f"：{progress}" if progress else ""
+            self._task_ledger.update(item.task_id, "closed_by_initiator", summary=f"发起方认定已完成结单{detail}")
+        elif current == "drop":
+            detail = f"：{progress}" if progress else ""
+            self._task_ledger.update(item.task_id, "cancelled", summary=f"换活作废不做了{detail}")
+        else:
+            self._shelve_record(item, progress=progress, held=held_if_shelved)
 
-        排队件执行方从没见过，撤它不经执行 Agent；已送达的单仍走执行 Agent 的
-        取消入口（单写者规则）。账面不是 queued 返回 False。别的入口登记的排队件
-        也能撤：账面转 cancelled 后，持有它的队列出队时会跳过。
-        """
+    def _rollback_in_hand(self, target: BaseAgent, old_item: BoardItem, progress: str, reject_reason: str) -> str:
+        """新件送达被拒收时，把刚收手的旧件连同收手进度一并送回执行者；连送回都被拒则搁回待办最前保底不丢。"""
+        assert self._task_ledger is not None
+        executor = target.name
+        # 旧件在第 1 步已经调过 release_delegation 清了在途目标和历史：不论进度是否为空，
+        # 一律按重送达格式把"做到哪了"与核对现场提示拼进指令，不让执行侧从零盲做
+        restore_text = compose_redelivery(old_item.instruction, progress or old_item.shelved_progress)
+        rollback_rejected = self._call_receive(target, instruction=restore_text, task_id=old_item.task_id)
+        if not rollback_rejected:
+            ts = self._clock()
+            snap = {
+                **old_item.snapshot,
+                DELIVERIES_KEY: max(1, old_item.deliveries),
+                DELIVERED_AT_KEY: ts,
+            }
+            if progress:
+                snap[SHELVED_PROGRESS_KEY] = progress
+            self._task_ledger.update(old_item.task_id, "accepted", snapshot=snap, summary="新件被拒，恢复原在做委派")
+            self._watchdog_track(executor, old_item.task_id, ts)
+            logger.info(f"新件被拒收，已将原委派 {old_item.task_id} 送回 '{executor}' 继续做")
+            return f"受理失败：目标 '{executor}' 拒收新委派（{reject_reason}）；原【{IN_HAND_LABEL}】「{old_item.own_words}」已送回继续执行。"
+        label = self._shelve_record(old_item, progress=progress, held=False)
+        self._watchdog.pop(executor, None)
+        logger.warning(
+            f"新件被拒收且原委派 {old_item.task_id} 送回也被拒（{rollback_rejected}），已搁回 {label} 保底不丢"
+        )
+        return (
+            f"受理失败：目标 '{executor}' 拒收新委派（{reject_reason}），"
+            f"原委派送回也未接（{rollback_rejected}），已放回【{label}】最前等待连接恢复。"
+        )
+
+    # -------------------- 公开受理入口：delegate 与 settle --------------------
+
+    async def accept(
+        self,
+        target: BaseAgent,
+        instruction: str,
+        initiator: str,
+        *,
+        item_ref: str = "",
+        when_busy: str = "queue",
+        current: str = "",
+        progress: str = "",
+        urgent: bool = False,
+    ) -> _DelegationOutcome:
+        """接单主入口（按执行者加锁串行）：闲时直派 / 忙时排待办 / 忙时收手结旧换新。"""
         if self._task_ledger is None:
-            return False
-        record = self._task_ledger.get(task_id)
-        if record is None or record.status != "queued":
-            return False
-        queue = self._queues.get(record.executor)
-        if queue:
-            remaining = [entry for entry in queue if entry.task_id != task_id]
-            queue.clear()
-            queue.extend(remaining)
-        self._task_ledger.update(
-            task_id, "cancelled", summary=f"排队中被撤（还没送到执行方，source={source or '未知'}）"
-        )
-        logger.info(f"委派排队件被撤: {task_id}（source={source or '未知'}）")
-        return True
+            return _DelegationOutcome(
+                ok=False, error="no_ledger", message="任务基建未装配（task_ledger 未注入），委派不可用"
+            )
+        executor = target.name
+        # 兼容 urgent=True：等价于换成这件 + 在做的先搁下
+        mode = when_busy.strip() or "queue"
+        old_outcome = current.strip()
+        if urgent:
+            if not when_busy.strip() or mode == "queue":
+                mode = "replace"
+            if not old_outcome:
+                old_outcome = "shelve"
+        if mode not in _VALID_WHEN_BUSY:
+            return _DelegationOutcome(
+                ok=False,
+                error="refused",
+                message=f"受理失败：when_busy 只能是 'queue' 或 'replace'（收到 '{mode}'）",
+            )
+
+        self.check_watchdog()
+        async with self._lock_of(executor):
+            board = read_board(self._task_ledger, executor)
+            picked: Optional[BoardItem] = None
+            if item_ref.strip():
+                picked = find_item(board, item_ref)
+                if picked is None:
+                    lines = self._board_summary_lines(executor, board)
+                    return _DelegationOutcome(
+                        ok=False,
+                        error="refused",
+                        message=f"受理失败：在 '{executor}' 的看板上找不到 '{item_ref}'。\n" + "\n".join(lines),
+                    )
+                if picked.in_hand:
+                    return _DelegationOutcome(
+                        ok=False,
+                        error="refused",
+                        message=(
+                            f"受理失败：「{picked.own_words}」已经在【{IN_HAND_LABEL}】了，不用再派；"
+                            "补充同一件事的要求用 framework_prompt，结单用 framework_task_settle。"
+                        ),
+                    )
+
+            # 分支 1：目标手上没有【在做】
+            if board.in_hand is None:
+                if picked is not None:
+                    return self._deliver_backlog_item(target, picked)
+                if mode == "queue" and board.next_ready() is not None:
+                    if len(board.backlog) >= _DELEGATION_QUEUE_LIMIT:
+                        return _DelegationOutcome(
+                            ok=False, error="refused", message=self._queue_full_message(executor, board)
+                        )
+                    outcome = self._enqueue_fresh(target, instruction, initiator, front=False)
+                    await self._drain_unlocked(executor)
+                    return outcome
+                return self._deliver_fresh(target, instruction, initiator)
+
+            # 分支 2：目标手上有【在做】且选排后面（queue）
+            if mode == "queue":
+                if picked is not None:
+                    snap = {**picked.snapshot, BACKLOG_SEQ_KEY: self._next_head_seq(), HELD_KEY: False}
+                    self._task_ledger.update(picked.task_id, "queued", snapshot=snap, summary="提到待办最前")
+                    return _DelegationOutcome(
+                        ok=True,
+                        task_id=picked.task_id,
+                        executor=executor,
+                        item=picked.label,
+                        own_words=picked.own_words,
+                        queued=True,
+                        queue_position=1,
+                    )
+                if len(board.backlog) >= _DELEGATION_QUEUE_LIMIT:
+                    logger.info(f"委派拒受理（待办满 {_DELEGATION_QUEUE_LIMIT} 件）: {initiator} -> {executor}")
+                    return _DelegationOutcome(
+                        ok=False, error="refused", message=self._queue_full_message(executor, board)
+                    )
+                return self._enqueue_fresh(target, instruction, initiator, front=False)
+
+            # 分支 3：目标手上有【在做】且选换成这件（replace）——必须同时交代在做那件怎么结
+            in_hand = board.in_hand
+            if old_outcome not in _VALID_OUTCOMES:
+                return _DelegationOutcome(
+                    ok=False,
+                    error="refused",
+                    message=(
+                        f"受理失败：目标 '{executor}' 手上有【{IN_HAND_LABEL}】「{in_hand.own_words}」。"
+                        "选 when_busy='replace' 换活时必须用 current 交代在做那件："
+                        "'done'（做完了）/ 'shelve'（先搁下）/ 'drop'（不做了）；"
+                        "若不打断手上的事，改用 when_busy='queue' 排进待办。"
+                    ),
+                )
+
+            released = await self._release_in_hand(target, in_hand, reason=f"换做新委派（原件 {old_outcome}）")
+            if released is None:
+                # 执行者不支持收手：搁下语义降级为新件置顶排进待办最前；结单/作废试硬取消兜底
+                if old_outcome == "shelve":
+                    if picked is not None:
+                        snap = {**picked.snapshot, BACKLOG_SEQ_KEY: self._next_head_seq(), HELD_KEY: False}
+                        self._task_ledger.update(
+                            picked.task_id, "queued", snapshot=snap, summary="目标不支持收手，提到待办最前"
+                        )
+                        return _DelegationOutcome(
+                            ok=True,
+                            task_id=picked.task_id,
+                            executor=executor,
+                            item=picked.label,
+                            queued=True,
+                            queue_position=1,
+                        )
+                    logger.info(f"目标 '{executor}' 不支持收手，换活降级为置顶待办")
+                    return self._enqueue_fresh(target, instruction, initiator, front=True)
+                cancelled = await target.cancel_task_now(in_hand.task_id, source=initiator, reason=progress)
+                if not cancelled:
+                    return _DelegationOutcome(
+                        ok=False,
+                        error="refused",
+                        message=f"受理失败：目标 '{executor}' 不支持中途收手，无法替换当前【{IN_HAND_LABEL}】",
+                    )
+                released = ""
+
+            merged_progress = _merge_progress(progress, released)
+            # 先试送达新件：新件若被拒收，立即把刚收手的旧件原样送回执行者
+            if picked is not None:
+                new_text = self._delivery_text(
+                    picked.instruction,
+                    was_shelved=picked.shelved or picked.deliveries > 0,
+                    progress=picked.shelved_progress,
+                )
+                new_task_id = picked.task_id
+            else:
+                new_text = instruction
+                new_task_id = _generate_task_id()
+
+            rejected = self._call_receive(target, instruction=new_text, task_id=new_task_id)
+            if rejected:
+                msg = self._rollback_in_hand(target, in_hand, merged_progress, rejected)
+                return _DelegationOutcome(ok=False, error="refused", message=msg)
+
+            # 新件已送达：先按 current 结掉或搁下旧件，再把新件落账为唯一【在做】
+            self._settle_old_in_hand(in_hand, current=old_outcome, progress=merged_progress, held_if_shelved=False)
+            ts = self._clock()
+            if picked is not None:
+                snap = {
+                    **picked.snapshot,
+                    DELIVERIES_KEY: picked.deliveries + 1,
+                    DELIVERED_AT_KEY: ts,
+                    HELD_KEY: False,
+                }
+                self._task_ledger.update(
+                    picked.task_id, "accepted", snapshot=snap, summary="替换原任务，从待办提为在做"
+                )
+            else:
+                self._task_ledger.register(
+                    task_id=new_task_id,
+                    provider="framework",
+                    tool="framework_delegate",
+                    initiator=initiator,
+                    executor=executor,
+                    status="accepted",
+                    source="agent",
+                    snapshot={
+                        "instruction": instruction,
+                        "own_words": own_words_of(instruction),
+                        DELIVERIES_KEY: 1,
+                        DELIVERED_AT_KEY: ts,
+                    },
+                )
+            self._clear_held_flags(executor, except_task_id=new_task_id)
+            self._watchdog_track(executor, new_task_id, ts)
+            logger.info(
+                f"委派换活成功: {initiator} -> {executor}（旧 {in_hand.task_id} -> {old_outcome}，新 {new_task_id} 在做）"
+            )
+            new_own = picked.own_words if picked is not None else own_words_of(instruction)
+            return _DelegationOutcome(
+                ok=True, task_id=new_task_id, executor=executor, item=IN_HAND_LABEL, own_words=new_own
+            )
 
     async def delegate(
         self,
@@ -849,9 +1032,13 @@ class DelegationCore:
         instruction: str,
         caller: str,
         roster: Optional[Dict[str, str]] = None,
+        item_ref: str = "",
+        when_busy: str = "queue",
+        current: str = "",
+        progress: str = "",
         urgent: bool = False,
     ) -> _DelegationOutcome:
-        """受理一次委派（两条入口的完整前置序列）：基建在位 → 解析目标 → 接单。"""
+        """受理一次委派（完整前置序列）：基建在位 → 解析目标 → 接单。"""
         if self._task_ledger is None:
             return _DelegationOutcome(
                 ok=False, error="no_ledger", message="任务基建未装配（task_ledger 未注入），委派不可用"
@@ -860,7 +1047,19 @@ class DelegationCore:
         if failure is not None:
             return failure
         assert target is not None  # 解析成功时必有实例（类型收窄）
-        return await self.accept(target, instruction, caller or "unknown", urgent=urgent)
+        return await self.accept(
+            target,
+            instruction,
+            caller or "unknown",
+            item_ref=item_ref,
+            when_busy=when_busy,
+            current=current,
+            progress=progress,
+            urgent=urgent,
+        )
+
+# 兼容内部别名
+_DelegationCore = DelegationCore
 
 
 class AgentControl:
