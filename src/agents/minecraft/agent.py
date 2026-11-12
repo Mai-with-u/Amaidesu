@@ -179,6 +179,14 @@ _RESTART_NOTICE = (
     "按这些接着做，之前看过的东西要用就重新查。"
 )
 
+
+def _sections_unknown_to_mod(reply: MaicraftReply) -> bool:
+    """Mod 是不是把 ``sections`` 当未知参数拒收了：旧版 Mod 认不出新参数按 ``invalid_parameter`` 退回，
+    错误明细里点名了字段；别的失败（不在世界里、回包超限等）不在此列，不做退回重试。
+    """
+    return reply.error_code == "invalid_parameter" and "sections" in json.dumps(reply.raw)
+
+
 # 只读查询目标的操作：一整轮都在查还在跑的目标、没做别的，就是在轮询等结果。
 _GOAL_POLLING_OPERATIONS = frozenset({"get", "list"})
 
@@ -2263,16 +2271,21 @@ class MinecraftAgent(BaseAgent):
     async def _read_remembered_places(self) -> MaicraftReply:
         """速览用的记住的地点清单：缓存没到期就用缓存，否则真读一次 ``observe(world_memory)``。
 
-        顺序：缓存还新鲜 -> 直接用；否则读世界记忆 -> 成功就记进缓存（回复里没有地点清单按一个都没记过）；
-        读失败时有这个存档的旧清单就接着用旧的（记个警告），连旧的都没有才把失败原样交给速览照实写。
-        返回值统一成 ``{"places": [...]}`` 形状的回复，交给 ``glance_world_memory`` 现排。
+        顺序：缓存还新鲜 -> 直接用；否则读世界记忆的 places 一节 -> 成功就记进缓存（回复里没有地点清单
+        按一个都没记过）；读失败时有这个存档的旧清单就接着用旧的（记个警告，并把清单的岁数交给渲染层
+        标陈旧度），连旧的都没有才把失败原样交给速览照实写。返回值统一成 ``{"places": [...]}`` 形状的
+        回复，交给 ``glance_world_memory`` 现排。
         """
         cached = self._remembered_places.fresh()
         if cached is not None:
             return MaicraftReply(ok=True, data={"places": cached})
         # 读之前记下作废次数：读的途中刚记了地点或换了存档，这次读回的只给这一次速览用，不进缓存
         generation = self._remembered_places.generation
-        reply = await self._call_maicraft(OBSERVE, {"what": "world_memory"})
+        # 只要 places 一节：整份倾倒里的容器与资源记录随游玩无界增长，会顶到 Mod 单回包上限被整包退回
+        reply = await self._call_maicraft(OBSERVE, {"what": "world_memory", "sections": ["places"]})
+        if not reply.ok and _sections_unknown_to_mod(reply):
+            # 旧版 Mod 把 sections 当未知参数拒收：退回三节全给的旧问法
+            reply = await self._call_maicraft(OBSERVE, {"what": "world_memory"})
         if reply.ok:
             raw = reply.data.get("places")
             places = raw if isinstance(raw, list) else []
@@ -2282,7 +2295,7 @@ class MinecraftAgent(BaseAgent):
         if previous is None:
             return reply
         self._logger.warning(f"读记住的地点失败，速览先用上次读到的清单：{reply.error_message or reply.error_code}")
-        return MaicraftReply(ok=True, data={"places": previous})
+        return MaicraftReply(ok=True, data={"places": previous, "places_age_s": self._remembered_places.read_age_s()})
 
     async def _on_game_chat(self, event_name: str, payload: GameChatPayload, source: str) -> None:
         """``game.chat.received`` 回调：系统消息若是名册里某只的死讯，把她的死当成游戏进展发给主播。

@@ -522,12 +522,16 @@ def glance_world_memory(reply: MaicraftReply, dimension: str = "") -> Dict[str, 
     Mod 已按水平距离把近的排在前面，但这个距离不分维度（下界里的地点按坐标算也可能"很近"），
     所以先把和角色同一个维度（``dimension``，取自看自己的结果）的挑到前面，各自保持 Mod 给的先后；
     多出来的说"等共 N 处"。一个都没记过、或回复里没有地点清单时不写这一项；读取失败照实写出原因。
+
+    回复带 ``places_age_s``（这次速览没能刷新、退回来用的是几分钟前读到的旧清单）时在行尾标上陈旧度；
+    新鲜读取不带这个键、也就不标。
     """
     if not reply.ok:
         return {"remembered_places_error": _failure(reply)}
     places = reply.data.get("places")
     if not isinstance(places, list):
         return {}
+    age_s = reply.data.get("places_age_s")
     named = [item for item in places if isinstance(item, dict) and str(item.get("name") or "").strip()]
     # 同一维度的在前、别的维度（或没写维度的旧记录）在后：先后各按 Mod 给的远近
     ordered = [item for item in named if _in_dimension(item, dimension)]
@@ -538,6 +542,9 @@ def glance_world_memory(reply: MaicraftReply, dimension: str = "") -> Dict[str, 
     line = "、".join(names[:REMEMBERED_PLACES_MAX])
     if len(names) > REMEMBERED_PLACES_MAX:
         line += f"等共 {len(names)} 处"
+    if isinstance(age_s, (int, float)) and not isinstance(age_s, bool):
+        minutes = max(1, round(float(age_s) / 60))
+        line += f"（这份清单是 {minutes} 分钟前读到的，之后刷新没成功过）"
     return {"remembered_places": line}
 
 
@@ -624,6 +631,15 @@ class RememberedPlacesCache:
     def last_known(self) -> Optional[List[Any]]:
         """最后一次读到的清单，到期、作废了也给（读失败时顶上）；丢掉过或从没读到过为 None。"""
         return self._places
+
+    def read_age_s(self) -> Optional[float]:
+        """此刻距最后一次真读过去了几秒；从没读到过（或已整份丢掉）为 None。
+
+        速览拿旧清单顶上时用它标陈旧度，让观众知道这行地点是多久以前看到的。
+        """
+        if self._places is None:
+            return None
+        return max(0.0, self._clock() - self._read_at)
 
     def store(self, places: List[Any], generation: int) -> None:
         """真读成功：记下清单与读的时刻，从此刻起算到期。

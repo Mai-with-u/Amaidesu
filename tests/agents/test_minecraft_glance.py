@@ -413,7 +413,7 @@ async def test_glance_lists_remembered_place_names_but_keeps_them_out_of_the_bri
 
     view = await agent._glance()
 
-    assert {"what": "world_memory"} in server.calls_to("observe")
+    assert {"what": "world_memory", "sections": ["places"]} in server.calls_to("observe")
     assert view["remembered_places"] == "家、下界传送门（主世界侧）、下界传送门（下界侧）"
     assert "传送门" not in view["brief"], "嘴只讲眼前的事，记住的地点不进一句话现场"
     await agent.stop()
@@ -436,11 +436,27 @@ async def test_glance_lists_remembered_place_names_but_keeps_them_out_of_the_bri
             MaicraftReply(ok=False, error_code="not_in_world", error_message="角色不在世界里"),
             {"remembered_places_error": "角色不在世界里"},
         ),
+        (
+            MaicraftReply(ok=True, data={"places": [_place("家")], "places_age_s": 300.0}),
+            {"remembered_places": "家（这份清单是 5 分钟前读到的，之后刷新没成功过）"},
+        ),
+        (MaicraftReply(ok=True, data={"places_age_s": 120.0}), {}),
     ],
-    ids=["only_a_few_names", "skips_blank_and_duplicate_names", "nothing_remembered", "no_place_list", "read_failed"],
+    ids=[
+        "only_a_few_names",
+        "skips_blank_and_duplicate_names",
+        "nothing_remembered",
+        "no_place_list",
+        "read_failed",
+        "stale_list_is_annotated",
+        "stale_age_without_places",
+    ],
 )
 def test_glance_remembered_places_line(reply: MaicraftReply, expected: Dict[str, Any]) -> None:
-    """记住的地点那一行：最多列几个、多的说共几处；空名与重名不列；一个都没记过不写；读失败照实写原因。"""
+    """记住的地点那一行：最多列几个、多的说共几处；空名与重名不列；一个都没记过不写；读失败照实写原因。
+
+    带了 ``places_age_s``（这次用的是退回来的旧清单）时在行尾标上陈旧度；没带（新鲜读取）不标。
+    """
     assert glance_world_memory(reply, "minecraft:overworld") == expected
 
 
@@ -461,8 +477,10 @@ def test_remembered_places_cache_keeps_nothing_read_across_an_invalidation() -> 
 
 
 def _memory_reads(server: FakeMaicraft) -> int:
-    """宿主真读了几次世界记忆（速览缓存没命中的次数）。"""
-    return sum(1 for arguments in server.calls_to("observe") if arguments == {"what": "world_memory"})
+    """宿主真读了几次世界记忆的 places 节（速览缓存没命中的次数）。"""
+    return sum(
+        1 for arguments in server.calls_to("observe") if arguments == {"what": "world_memory", "sections": ["places"]}
+    )
 
 
 async def test_glance_reads_remembered_places_at_most_every_five_minutes() -> None:
@@ -518,10 +536,10 @@ async def test_switching_saves_rereads_and_never_falls_back_to_the_other_save() 
     assert (await agent._glance())["remembered_places"] == "家"
     assert _memory_reads(server) == 1
 
-    # 同一存档里到期重读却读失败：先用上次读到的清单
+    # 同一存档里到期重读却读失败：先用上次读到的清单，并在地点行标上这份清单有多旧
     now[0] += REMEMBERED_PLACES_TTL_S
     server.world_memory_error = "角色不在世界里"
-    assert (await agent._glance())["remembered_places"] == "家"
+    assert (await agent._glance())["remembered_places"] == "家（这份清单是 5 分钟前读到的，之后刷新没成功过）"
 
     # 换到另一个存档，读又失败：老家的清单不拿来顶，照实写读失败
     server.enter_world("id-new", "新的世界")
@@ -530,7 +548,34 @@ async def test_switching_saves_rereads_and_never_falls_back_to_the_other_save() 
 
     server.world_memory_error = ""
     server.world_memory_view["places"] = [_place("新家")]
-    assert (await agent._glance())["remembered_places"] == "新家"
+    assert (await agent._glance())["remembered_places"] == "新家", "新鲜读取不带陈旧度标注"
+    await agent.stop()
+
+
+class _ModWithoutSections(FakeMaicraft):
+    """旧版 Mod：不认识 observe 的 sections 参数，按未知字段退 invalid_parameter（新版按节取，旧版全给）。"""
+
+    async def _observe(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        if "sections" in arguments:
+            return {
+                "ok": False,
+                "error": {
+                    "code": "invalid_parameter",
+                    "message": "参数有 1 处问题",
+                    "fields": [{"field": "sections", "problem": "没有字段 sections", "advice": "可用的字段：what、id"}],
+                },
+            }
+        return await super()._observe(arguments)
+
+
+async def test_glance_falls_back_to_the_whole_memory_on_an_old_mod() -> None:
+    """连着旧版 Mod（不认识 sections）时退回整份倾倒的旧问法，地点行照常给出。"""
+    server = _ModWithoutSections()
+    server.world_memory_view["places"] = [_place("家")]
+    agent, _llm, _bus = await make_minecraft_agent(server, lambda messages: _resp("好"))
+
+    assert (await agent._glance())["remembered_places"] == "家"
+    assert {"what": "world_memory"} in server.calls_to("observe"), "sections 被拒后退回不带它的旧问法"
     await agent.stop()
 
 
