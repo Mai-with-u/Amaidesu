@@ -398,6 +398,8 @@ class SessionRepo(BaseRepo):
                     "game_events",
                     "timeline_summary",
                     "archive_lines",
+                    "memory_corrections",
+                    "settle_checkpoints",
                 ):
                     conn.execute(f"DELETE FROM {table} WHERE live_session_id=?", (live_session_id,))  # noqa: S608 表名为代码内常量
                 delete_snapshot(conn, live_session_id=int(live_session_id))
@@ -481,6 +483,78 @@ class SessionRepo(BaseRepo):
                     (SESSION_KIND_LIVE, max(0, int(max_attempts))),
                 ).fetchone()
                 return int(row[0]) if row else 0
+
+        return await self._run_in_executor(_exec)
+
+    async def count_sessions_failed_settle(self, *, max_attempts: int = MAX_SETTLE_ATTEMPTS) -> int:
+        """自动重试用尽、停在未整理的正式场数（首页与记忆页告警计数用）。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM live_sessions"
+                    " WHERE ended_at_ms IS NOT NULL AND settled_at_ms IS NULL"
+                    "   AND kind=? AND settle_attempts>=?",
+                    (SESSION_KIND_LIVE, max(0, int(max_attempts))),
+                ).fetchone()
+                return int(row[0]) if row else 0
+
+        return await self._run_in_executor(_exec)
+
+    async def get_settle_checkpoint(
+        self,
+        *,
+        live_session_id: int,
+        step: str,
+    ) -> Optional[Tuple[str, str]]:
+        """读取某场某一步的整理断点（返回 (fingerprint, output_json)；不存在返回 None）。"""
+
+        def _exec() -> Optional[Tuple[str, str]]:
+            with self._manager.transaction() as conn:
+                row = conn.execute(
+                    "SELECT fingerprint, output_json FROM settle_checkpoints WHERE live_session_id=? AND step=?",
+                    (int(live_session_id), str(step)),
+                ).fetchone()
+                if row is None:
+                    return None
+                return str(row[0]), str(row[1])
+
+        return await self._run_in_executor(_exec)
+
+    async def save_settle_checkpoint(
+        self,
+        *,
+        live_session_id: int,
+        step: str,
+        fingerprint: str,
+        output_json: str,
+        saved_at_ms: int,
+    ) -> None:
+        """写入或覆盖某场某一步已完成校验的模型输出断点，供中断重启后续跑复用。"""
+
+        def _exec() -> None:
+            with self._manager.transaction(immediate=True) as conn:
+                conn.execute(
+                    "INSERT INTO settle_checkpoints(live_session_id, step, fingerprint, output_json, saved_at_ms)"
+                    " VALUES (?, ?, ?, ?, ?)"
+                    " ON CONFLICT(live_session_id, step) DO UPDATE SET"
+                    " fingerprint=excluded.fingerprint, output_json=excluded.output_json,"
+                    " saved_at_ms=excluded.saved_at_ms",
+                    (int(live_session_id), str(step), str(fingerprint), str(output_json), int(saved_at_ms)),
+                )
+
+        await self._run_in_executor(_exec)
+
+    async def clear_settle_checkpoints(self, *, live_session_id: int) -> int:
+        """清除某场全部整理断点（整场成功落库或运营重排时调用）。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "DELETE FROM settle_checkpoints WHERE live_session_id=?",
+                    (int(live_session_id),),
+                )
+                return max(0, int(cur.rowcount or 0))
 
         return await self._run_in_executor(_exec)
 
@@ -755,6 +829,10 @@ class SessionRepo(BaseRepo):
                     live_session_id=int(live_session_id),
                     updated_at_ms=int(now_ms_value),
                 )
+                conn.execute(
+                    "DELETE FROM settle_checkpoints WHERE live_session_id=?",
+                    (int(live_session_id),),
+                )
             return written
 
         return await self._run_in_executor(_exec)
@@ -791,6 +869,11 @@ class SessionRepo(BaseRepo):
                     " WHERE id=? AND ended_at_ms IS NOT NULL AND kind=?",
                     (int(live_session_id), SESSION_KIND_LIVE),
                 )
+                if cur.rowcount > 0:
+                    conn.execute(
+                        "DELETE FROM settle_checkpoints WHERE live_session_id=?",
+                        (int(live_session_id),),
+                    )
                 return cur.rowcount > 0
 
         return await self._run_in_executor(_exec)

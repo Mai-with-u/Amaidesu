@@ -970,9 +970,10 @@ class StreamerAgent(BaseAgent):
     async def _cancel_memory_tasks(self) -> None:
         """取消在跑的记忆整理任务并等它们退出。
 
-        被取消的整理没记完成，下次启动的补写从头再走一遍，已做完的步骤各自跳过；
-        已交给线程池的单条写库无法中途打断，由它在自己的线程里写完。
+        停机退出时若有尚未跑完的下播整理任务，显式记录 warning 提示哪些场次未完成：
+        已完成的模型调用步骤均已落入 settle_checkpoints，下次启动时从中断那一步接着跑。
         """
+        inflight_sessions = self._settler.inflight_session_ids() if self._settler is not None else []
         cancelled = 0
         while self._memory_tasks:
             tasks = list(self._memory_tasks)
@@ -981,8 +982,13 @@ class StreamerAgent(BaseAgent):
                     cancelled += 1
             # 任务完成先经回调移出集合，gather 返回时已退出的任务必已出集合
             await asyncio.gather(*tasks, return_exceptions=True)
-        if cancelled:
-            self._logger.info(f"停止时取消了 {cancelled} 个记忆整理任务（没做完的整理下次启动补完）")
+        if inflight_sessions:
+            joined = "、".join(f"#{sid}" for sid in inflight_sessions)
+            self._logger.warning(
+                f"进程退出时场次 {joined} 的下播记忆整理尚未跑完；已完成步骤断点已落库，下次启动将从断点续跑"
+            )
+        elif cancelled:
+            self._logger.info(f"停止时取消了 {cancelled} 个记忆整理任务（没做完的整理下次启动从断点补完）")
 
     def _delegation_machine_status(self, task_id: str) -> Optional[Dict[str, Any]]:
         """委派任务在任务账本里的机器状态（planner 委派渲染的保底事实源，只读查询）。

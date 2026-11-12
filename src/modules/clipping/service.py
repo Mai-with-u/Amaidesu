@@ -38,9 +38,15 @@ from src.modules.logging import get_logger
 from src.modules.storage.database import SQLiteDatabase
 from src.modules.storage.models.clipping import ClipSegment, NewClipSegment
 from src.modules.storage.repos.clips import ClipRepo
+from src.modules.storage.repos.sessions import MAX_SETTLE_ATTEMPTS
+from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.modules.utils.task_utils import spawn_background_task
 
 logger = get_logger("ClippingService")
+
+# 下播自动选段排队等本场记忆整理跑完的上限与轮询间隔（秒）：切片排在下播整理之后，避免抢占同一模型配额
+_WAIT_SETTLE_MAX_S = 600.0
+_WAIT_SETTLE_POLL_S = 1.0
 
 # ffmpeg 日志目录（项目 logs/ 下，与其他诊断产物同级）
 _FFMPEG_LOG_DIR = Path("logs") / "clipping"
@@ -169,16 +175,53 @@ class ClippingService:
         )
 
     async def _auto_select(self, live_session_id: int) -> None:
-        """自动选段：匹配到录播文件才跑 AI 选段。"""
+        """自动选段：匹配到录播文件后，先等该场下播整理跑完，再排跑 AI 选段。"""
         try:
             files, _ = await self._scan_and_match_one(live_session_id)
             if not files:
                 logger.info(f"场次 {live_session_id} 下播，但录播目录里没有匹配到文件，跳过自动选段")
                 return
+            await self.wait_for_session_settle(live_session_id)
             count = await self.select_segments(live_session_id=live_session_id)
             logger.info(f"场次 {live_session_id} 下播自动选段完成，AI 提议 {count} 段")
         except Exception as exc:  # noqa: BLE001 - 自动选段失败不影响下播流程，记日志即可
             logger.error(f"场次 {live_session_id} 下播自动选段失败：{exc}", exc=exc)
+
+    async def wait_for_session_settle(
+        self,
+        live_session_id: int,
+        *,
+        poll_s: float = _WAIT_SETTLE_POLL_S,
+        max_wait_s: float = _WAIT_SETTLE_MAX_S,
+    ) -> None:
+        """若该场下播整理正在跑或刚进入收尾等待，等它结束再开始切片选段（防切片抢在档案整理前）。"""
+        settle_task_id = f"settle:{int(live_session_id)}"
+        # 让同批 live.ended 订阅者（如道别轮与收播整理登记）先获得调度机会
+        await asyncio.sleep(0)
+        elapsed = 0.0
+        grace_polls = 3
+        step = max(poll_s, 0.001)
+        while elapsed < max_wait_s:
+            registry = self._task_registry or get_registry()
+            in_registry = registry is not None and any(t.task_id == settle_task_id for t in registry.snapshot())
+            if in_registry:
+                await asyncio.sleep(poll_s)
+                elapsed += step
+                continue
+            session = await self._database.sessions.get_live_session(live_session_id=int(live_session_id))
+            if (
+                session is None
+                or session.kind != SESSION_KIND_LIVE
+                or session.settled_at_ms is not None
+                or session.settle_attempts >= MAX_SETTLE_ATTEMPTS
+            ):
+                return
+            # 场次尚未整理完但任务尚未登记进面板（可能正在跑道别轮或等队尾播完）：短暂礼让几次，若仍未启动整理则不死等
+            if grace_polls <= 0:
+                return
+            grace_polls -= 1
+            await asyncio.sleep(poll_s)
+            elapsed += step
 
     # ---------- 场次 × 录播文件 ----------
 
