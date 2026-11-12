@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from src.agents.streamer.talk.deck import DEFAULT_PRESET_COUNT, TalkCardStore, TopicDeck, render_cards
 from src.agents.streamer.talk.profile import (
     MAX_PROFILE_CHARS,
     PERSONA_PROFILE_TEMPLATE_MD,
@@ -12,8 +13,16 @@ from src.agents.streamer.talk.profile import (
     parse_persona_profile_toml,
     resolve_profile_path,
 )
+from src.agents.streamer.talk.workbench import MAX_ROUNDS_PER_BEAT, MAX_WORKBENCH_CHARS, TalkWorkbench
 
 __all__ = [
+    "DEFAULT_PRESET_COUNT",
+    "MAX_ROUNDS_PER_BEAT",
+    "MAX_WORKBENCH_CHARS",
+    "TalkCardStore",
+    "TalkWorkbench",
+    "TopicDeck",
+    "render_cards",
     "MAX_PROFILE_CHARS",
     "OutfitEntry",
     "PERSONA_PROFILE_TEMPLATE_MD",
