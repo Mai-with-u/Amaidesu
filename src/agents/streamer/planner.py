@@ -51,6 +51,7 @@ from src.agents.streamer.memory.render import (
     render_spoken_archive,
     render_spoken_memory,
 )
+from src.agents.streamer.mouth_reconcile import ReconcileVerdict
 from src.agents.streamer.persona_rules import boundaries_line
 from src.agents.streamer.plan import ReplyRoundAttachment, assistant_speech_lines
 from src.agents.streamer.planner_context import AssemblerInputs, EnvironmentBlock, PlannerAssembler, age_text
@@ -222,6 +223,8 @@ class RoundOutcome:
     # 这句在回应游戏里的哪位玩家，(游戏, UUID)：落库时记成在回应他，口径见 Planner._reply_player_identity；
     # 记不下时两个空串
     reply_player: Tuple[str, str] = ("", "")
+    # 出声前最后一次与嘴核对的时刻（Unix 毫秒，0 表示未核对）：执行器在等播放槽位后只补查这一刻之后的新嘴话
+    mouth_checked_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -264,6 +267,14 @@ class PlannerEnv:
     social_facts_provider: Optional[Callable[[], Awaitable[List[Any]]]] = None
     # 开播【上次收尾】（异步，开播头两窗或第一件委派受理前返回确定性交接块；其余窗返回 None）
     opening_wrapup_provider: Optional[Callable[[], Awaitable[Optional[Any]]]] = None
+    # 本场最近已说台词（含嘴与决策，旧→新）：补齐尚未落库或无库路径下的嘴台词，让表达侧立即可见
+    recent_speeches_provider: Optional[Callable[[], Sequence[str]]] = None
+    # 出声前与嘴对账（候选台词, 起始时刻 -> 裁决）：本轮开窗后嘴说过话或命中已欢迎名单时做核对
+    mouth_reconciler: Optional[Callable[[str, int], Awaitable[ReconcileVerdict]]] = None
+    # 对账判定矛盾作废、需要退回 Planner 重想一步时，拉取本窗开窗后的最新现场快照（嘴说的话、新游戏事件、一句话现场）
+    fresh_context_since: Optional[Callable[[int], Awaitable[Dict[str, Any]]]] = None
+    # 可注入时钟（缺省为真实毫秒时钟）
+    clock: Callable[[], int] = now_ms
 
 
 def _observation_error(observation: str) -> Optional[str]:
@@ -301,6 +312,15 @@ def _repeated_memory_error(number: str) -> str:
         "再提观众听着就是车轱辘话。换个话题再调用 streamer_reply，或者这一轮不说。"
         "观众或玩家问起这件事时照常点名：回观众时 target 指向那条弹幕，回玩家时 to_player 写他。"
         "这一窗只退这一次：再点名这一条会照常说出去。"
+    )
+
+
+def _mouth_contradicted_error(reason: str) -> str:
+    """构思期间现场已变且嘴已先回应、原台词与最新情况矛盾时退回给 Planner 重想一步的理由。"""
+    return (
+        f"刚才构思这句台词期间游戏现场已变化且嘴已经先回应（{reason}），这句原话已过时未播出。"
+        "请结合返回字段里的最新现场决定：还有新的话要补充就按新情况重新调用 streamer_reply，"
+        "没有要补充的就直接结束本轮不说话。"
     )
 
 
@@ -447,6 +467,9 @@ class Planner:
         self._round_asked_archive_ids: Set[int] = set()
         # 本窗是否已因点名提过的旧事退回过一次：每窗只退一次，第二次照常说（点名留着，照样记成提过）
         self._round_memory_bounced: bool = False
+        # 本窗开窗时刻（毫秒）与是否已因嘴带来的新事实推翻退回过一次（每窗最多退一次重想）
+        self._round_started_ms: int = 0
+        self._round_mouth_bounced: bool = False
         # 本窗在游戏里开口或冲她做动作的玩家：线索推送据此推玩家卡
         self._round_game_players: Tuple[Tuple[str, str], ...] = ()
         # 玩家找她的条目：本窗新到的（定回应对象）与最近几分钟的（交给表达侧，说清谁说的、谁做的）
@@ -456,6 +479,10 @@ class Planner:
         self._brief_provider = env.brief_provider if env else None
         self._social_facts_provider = env.social_facts_provider if env else None
         self._opening_wrapup_provider = env.opening_wrapup_provider if env else None
+        self._recent_speeches_provider = env.recent_speeches_provider if env else None
+        self._mouth_reconciler = env.mouth_reconciler if env else None
+        self._fresh_context_since = env.fresh_context_since if env else None
+        self._clock: Callable[[], int] = env.clock if env else now_ms
         self._brief_ids_provider = env.brief_ids_provider if env else None
         self._commitment_lookup = env.commitment_lookup if env else None
         self._brief_archive_ids_provider = env.brief_archive_ids_provider if env else None
@@ -600,6 +627,8 @@ class Planner:
         # 本批的现行社交事实从库现读（场内登记下一轮可见；读失败只少一段参考，不挡决策）
         self._round_social_facts = await self._load_social_facts()
         self._round_memory_bounced = False
+        self._round_started_ms = self._clock()
+        self._round_mouth_bounced = False
         self._round_game_players = resolved_batch.addressed_players
         # 玩家扔来东西常在上一窗入账、这一窗才接话：表达侧拿的是最近几分钟的，不只本窗
         self._round_player_notes = resolved_batch.player_notes
@@ -674,9 +703,8 @@ class Planner:
             and not (reminders or "").strip()
             and not fresh_game_chat
         )
-        # 她本窗说过的台词：本窗历史里的已说台词，窗起点算一次随单携带
-        # （reply 工具不再为取这份语料单独读历史——读是纯读，无决策窗出账副作用）
-        speech_history = assistant_speech_lines(history)
+        # 她本窗说过的台词：本窗历史里的已说台词并上实时口头流水（尚未落库的嘴反应立即可见）
+        speech_history = self._collect_speech_history(history)
 
         # 直播画面只挂在本窗第一次请求的尾部：后续 ReAct 步骤靠模型第一步的判断继续
         frame_tail = self._live_frame_message()
@@ -725,7 +753,7 @@ class Planner:
             if not tool_calls:
                 return replace(outcome, silent_reason=self._silent_reason(held_once, "natural"))
 
-            replied = False
+            stop_round = False
             # 同一步里给游戏的安排（开始做事 / 补充要求）没送到时，记下是哪个调用和它的拒绝回执：这一步的话先不说
             arrangement_failed = ""
             arrangement_refusal = ""
@@ -755,7 +783,7 @@ class Planner:
                         ensure_ascii=False,
                     )
                 elif name == "streamer_reply":
-                    observation, outcome, replied = await self._invoke_reply(
+                    observation, outcome, stop_round = await self._invoke_reply(
                         args,
                         outcome,
                         batch=batch,
@@ -782,17 +810,48 @@ class Planner:
                         "content": observation,
                     }
                 )
-                if replied:
+                if stop_round:
                     return outcome
 
         # 超步：未完成说话即收场（压住过一句又没再开口时记成 reply_held）
         return replace(outcome, silent_reason=self._silent_reason(held_once, "max_steps"))
 
     def _silent_reason(self, held_once: bool, default: str) -> str:
-        """这一窗没开口的原因：被压住过一句、因提过的旧事被退回过，都单独记，复盘看得出不是自然不说。"""
+        """这一窗没开口的原因：被压住过一句、被嘴的新事实推翻作废过、因提过的旧事被退回过，都单独记。"""
         if held_once:
             return "reply_held"
+        if self._round_mouth_bounced:
+            return "mouth_superseded"
         return "memory_repeat_held" if self._round_memory_bounced else default
+
+    def _collect_speech_history(self, history: Optional[List[Any]]) -> Optional[List[str]]:
+        """合成本窗表达侧可见的已说台词（历史中的台词 + 实时口头流水里尚未入历史的近期台词）。"""
+        base = assistant_speech_lines(history)
+        if self._recent_speeches_provider is None:
+            return base
+        try:
+            extra = [str(item).strip() for item in (self._recent_speeches_provider() or ()) if str(item).strip()]
+        except Exception as exc:  # noqa: BLE001 - 外部流水异常不挡表达
+            self.logger.warning(f"读本场已说台词流水失败，退回历史列表: {exc}", exc=True)
+            return base
+        if not extra:
+            return base
+        merged = list(base or [])
+        for line in extra:
+            if line not in merged[-8:]:
+                merged.append(line)
+        return merged
+
+    async def _load_fresh_context(self, since_ms: int) -> Dict[str, Any]:
+        """拉取本窗开窗后新到达的嘴台词、游戏事件与最新现场说明，附在退回观察里供 Planner 重想。"""
+        if self._fresh_context_since is None:
+            return {}
+        try:
+            data = await self._fresh_context_since(since_ms)
+            return dict(data) if isinstance(data, dict) else {}
+        except Exception as exc:  # noqa: BLE001 - 补拉新现场失败时不阻断退回本身
+            self.logger.warning(f"拉取对账最新现场失败: {exc}", exc=True)
+            return {}
 
     async def _resolve_use_memory(self, args: Dict[str, Any]) -> Tuple[str, List[str]]:
         """解析 reply 的 use_memory：编号在本窗名单内才认，渲染成说话档交表达侧。
@@ -1446,7 +1505,49 @@ class Planner:
                 False,
             )
 
-        payload = result.structured_content if isinstance(result.structured_content, dict) else {}
+        payload = dict(result.structured_content) if isinstance(result.structured_content, dict) else {}
+        raw_speech = str(payload.get("speech") or "").strip()
+        checked_ms = self._clock()
+        if raw_speech and self._mouth_reconciler is not None:
+            # 出声前第一道关口：对照本轮开窗后嘴说出口的话及本场已欢迎名单，拦住重复欢迎、重复反应与相邻矛盾
+            verdict = await self._mouth_reconciler(raw_speech, self._round_started_ms)
+            if verdict.action == "duplicate":
+                self.logger.info(f"Planner 台词已被嘴覆盖或属重复欢迎，本轮不再出声: {raw_speech!r}")
+                return (
+                    json.dumps({"ok": True, "speech_delivered": False, "covered_by_mouth": True}, ensure_ascii=False),
+                    replace(outcome, replied=False, silent_reason="mouth_covered", mouth_checked_ms=checked_ms),
+                    True,
+                )
+            if verdict.action == "contradicted":
+                if not self._round_mouth_bounced and outcome.steps < self.max_steps:
+                    self._round_mouth_bounced = True
+                    fresh_ctx = await self._load_fresh_context(self._round_started_ms)
+                    self._round_started_ms = checked_ms
+                    self.logger.info(
+                        f"Planner 台词与本窗嘴/新事件矛盾（{verdict.reason}），退回按新现场重想一步: {raw_speech!r}"
+                    )
+                    return (
+                        json.dumps(
+                            {
+                                "ok": False,
+                                "error": _mouth_contradicted_error(verdict.reason),
+                                "superseded_speech": raw_speech,
+                                **fresh_ctx,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        outcome,
+                        False,
+                    )
+                self.logger.info(f"Planner 台词与最新现场矛盾且本窗不再重想，静默作废: {raw_speech!r}")
+                return (
+                    json.dumps({"ok": False, "error": verdict.reason or "台词已过时"}, ensure_ascii=False),
+                    replace(outcome, replied=False, silent_reason="mouth_superseded", mouth_checked_ms=checked_ms),
+                    True,
+                )
+            if verdict.action == "trim":
+                payload = {**payload, "speech": verdict.speech}
+
         emotion = payload.get("emotion") if isinstance(payload.get("emotion"), dict) else {}
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         reply_to = args.get("target")
@@ -1465,6 +1566,7 @@ class Planner:
             memory_refs=memory_ids,
             # 落库的"回应哪位玩家"和交给表达侧的回应对象同一口径：点了名的按他记，没点名时是本窗唯一开口的那位
             reply_player=self._reply_player_identity(str(args.get("to_player") or ""), answering_player),
+            mouth_checked_ms=checked_ms,
         )
         # 话说出口了、回应的是游戏里的某位玩家：他到此为止找她的条目标"已接过"，
         # 后面几窗换话题时表达侧不再把同一份礼谢一遍、同一句话接一遍

@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Coroutine, Dict, Optional, Sequence, Tuple, List
+from typing import Any, Awaitable, Callable, Coroutine, Dict, List, Optional, Sequence, Tuple
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -101,6 +101,7 @@ class SpeechDispatcher:
         # 每句话发出后的回调（嘴用它记下她说过的每句话，Planner 的与嘴自己的都算）。
         # 代码直连而不是订阅 streamer.speech：Agent 不订阅自己的输出事件
         self._spoken_listener: Optional[Callable[[str, int], None]] = None
+        self._source_spoken_listeners: List[Callable[[str, int, str], None]] = []
         # 空档占位：一路发言等到嘴空、到它那句排进播放队列之间，别的发言都当嘴还忙。
         # 不占位的话，Planner 那句和嘴的反应同时等到空档时都会放行，嘴那句被挤到后面晚十几秒才出声
         self._slot_claimed = False
@@ -137,14 +138,23 @@ class SpeechDispatcher:
         """挂上"每句话发出后"的回调：参数是台词与发出时刻（Unix 毫秒）；传 None 摘掉。"""
         self._spoken_listener = listener
 
-    def _notify_spoken(self, text: str) -> None:
+    def add_spoken_listener(self, listener: Callable[[str, int, str], None]) -> None:
+        """追加带出口来源（``"planner"`` / ``"mouth"``）的已发声回调，供对账流水与已欢迎表同步记账。"""
+        self._source_spoken_listeners.append(listener)
+
+    def _notify_spoken(self, text: str, *, source: str = "planner") -> None:
+        ts = now_ms()
         listener = self._spoken_listener
-        if listener is None:
-            return
-        try:
-            listener(text, now_ms())
-        except Exception as exc:  # noqa: BLE001 - 旁路记录失败不挡发言
-            self._logger.warning(f"发言回调失败（已忽略）: {exc}", exc=True)
+        if listener is not None:
+            try:
+                listener(text, ts)
+            except Exception as exc:  # noqa: BLE001 - 旁路记录失败不挡发言
+                self._logger.warning(f"发言回调失败（已忽略）: {exc}", exc=True)
+        for source_listener in self._source_spoken_listeners:
+            try:
+                source_listener(text, ts, source)
+            except Exception as exc:  # noqa: BLE001 - 旁路记录失败不挡发言
+                self._logger.warning(f"带来源发言回调失败（已忽略）: {exc}", exc=True)
 
     # -----只读状态（观察面 / 测试）-----
 
@@ -274,6 +284,7 @@ class SpeechDispatcher:
         live_session_id: int = 0,
         memory_refs: Optional[Sequence[str]] = None,
         reply_player: Tuple[str, str] = ("", ""),
+        before_emit: Optional[Callable[[str], Awaitable[Optional[str]]]] = None,
     ) -> Optional[tuple]:
         """消费 reply 结构化结果并触发下游管线（决策循环安全：永不抛异常）。
 
@@ -340,6 +351,12 @@ class SpeechDispatcher:
         if cleaned_speech:
             claimed = await self._wait_for_playback_slot()
             try:
+                # 占住播放空档后、真正发出业务事件前做最后一道核对：拦截等前一句播放期间被嘴抢先说完或推翻的旧话
+                if before_emit is not None:
+                    revised = await before_emit(cleaned_speech)
+                    cleaned_speech = revised.strip() if isinstance(revised, str) else ""
+                    if not cleaned_speech:
+                        return None
                 utterance_id = self._next_utterance_id()
                 await self._emit_streamer_speech(
                     utterance_id,
@@ -355,7 +372,7 @@ class SpeechDispatcher:
                     reply_player=reply_player,
                 )
                 self._schedule_subtitle_show(cleaned_speech, utterance_id)
-                self._notify_spoken(cleaned_speech)
+                self._notify_spoken(cleaned_speech, source="planner")
                 if self._tts_enabled and self._utterance_queue is not None:
                     await self._utterance_queue.enqueue(utterance_id, cleaned_speech)
             finally:
@@ -425,7 +442,7 @@ class SpeechDispatcher:
             )
             # 字幕直出模式下整段一次显示（跟随播放模式由 tts 事件逐句驱动，这里不出字）
             self._schedule_subtitle_show(text + "".join(line for line, _ in follow), utterance_id)
-            self._notify_spoken(text)
+            self._notify_spoken(text, source="mouth")
             if playing:
                 assert queue is not None  # noqa: S101 playing 已判定
                 # 已经发出业务事件，就不再设过期：记录里有的台词一定要出声
@@ -442,7 +459,7 @@ class SpeechDispatcher:
                         llm_request_id=llm_request_id,
                         emotion_at_playback=True,
                     )
-                    self._notify_spoken(line)
+                    self._notify_spoken(line, source="mouth")
                     await queue.enqueue(follow_id, line, priority=priority, segment=segment)
             elif on_started is not None:
                 on_started()

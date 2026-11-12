@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Tuple
 
 from src.modules.events.event_bus import EventBus
@@ -31,6 +32,7 @@ from src.modules.utils.time_utils import now_ms
 
 from src.agents.streamer import canonical
 
+from .mouth_reconcile import ReconcileVerdict
 from .planner import Planner, RoundOutcome
 from .proactive_trigger import ProactiveTrigger
 from .room_state import RoomState
@@ -90,6 +92,8 @@ _SILENT_REASON_LABEL: Dict[str, str] = {
     "session_ended": "开窗时的场次已下播",
     "reply_held": "给游戏的安排被拒，那句话压住后没再开口",
     "memory_repeat_held": "点名本场提过的旧事被退回后没再开口",
+    "mouth_covered": "想说的内容刚才嘴已经替她说过，本轮不再重复",
+    "mouth_superseded": "构思期间现场已变且嘴已先回应，旧台词作废",
 }
 
 
@@ -129,6 +133,8 @@ class DecisionRoundExecutor:
         reminders_provider: Optional[Callable[[], str]] = None,
         resume_replay_provider: Optional[Callable[[], str]] = None,
         speech_allowed: Optional[Callable[[], bool]] = None,
+        mouth_reconciler: Optional[Callable[[str, int], Awaitable[ReconcileVerdict]]] = None,
+        on_mouth_superseded: Optional[Callable[[], None]] = None,
         logger: Optional[ModuleLogger] = None,
     ) -> None:
         """决策窗材料的取用契约：
@@ -162,6 +168,8 @@ class DecisionRoundExecutor:
         # 续播重放玩家聊天（重启前她可能还没回的那几句）的一次性来源（读取即清空——注入一次制；缺省 = 不注入）
         self._resume_replay_provider = resume_replay_provider
         self._speech_allowed = speech_allowed
+        self._mouth_reconciler = mouth_reconciler
+        self._on_mouth_superseded = on_mouth_superseded
         # 决策轮次自增计数器（round_id 生成用；进程内单调）
         self._round_seq: int = 0
 
@@ -298,6 +306,7 @@ class DecisionRoundExecutor:
 
         # 开决策窗：出账 + 读历史 + 本窗批次 + 时间线 notes 一次取齐（顺序不变量
         # 在 SessionScope.open_window 内化——出账的时间线行必先进本轮投影）
+        window_opened_ms = now_ms()
         materials = await self._window_opener(scope_pk=scope_pk)
         history = materials.history
 
@@ -367,6 +376,8 @@ class DecisionRoundExecutor:
             if outcome.error:
                 self._stats.planner_failures += 1
                 result["error"] = f"planner_failed: {outcome.error}"
+            if outcome.silent_reason == "mouth_superseded" and self._on_mouth_superseded is not None:
+                self._on_mouth_superseded()
             result["total_duration_ms"] = now_ms() - started_ms
             return result, outcome
 
@@ -381,6 +392,23 @@ class DecisionRoundExecutor:
             result["total_duration_ms"] = now_ms() - started_ms
             return result, outcome
 
+        # 出声前第二道关口：台词生成完后等 TTS 播放空档的十几秒里，嘴可能刚插话回应了新事件或欢迎了同一个人；
+        # 占住播放槽位后、发出 streamer.speech 前补核对这期间的新嘴话，重复或矛盾即撤回
+        veto_reason: Optional[str] = None
+        check_since_ms = outcome.mouth_checked_ms or window_opened_ms
+        reconciler = self._mouth_reconciler
+
+        async def _before_emit(candidate_speech: str) -> Optional[str]:
+            nonlocal veto_reason
+            assert reconciler is not None  # noqa: S101
+            verdict = await reconciler(candidate_speech, check_since_ms)
+            if verdict.action == "pass":
+                return candidate_speech
+            if verdict.action == "trim":
+                return verdict.speech
+            veto_reason = "mouth_superseded" if verdict.action == "contradicted" else "mouth_covered"
+            return None
+
         # reply 已在 Planner ReAct 循环内经 reply 工具完成（Planner 阶段耗时含
         # 表达生成）；此处仅把产出送发言管线（speech → TTS / emotion → VTS）。
         # await 保证 streamer.speech 先于本轮 planner.decision 与 idle 状态发出
@@ -392,7 +420,19 @@ class DecisionRoundExecutor:
             live_session_id=scope_pk if scope_pk is not None else 0,
             memory_refs=list(outcome.memory_refs),
             reply_player=outcome.reply_player,
+            before_emit=_before_emit if reconciler is not None else None,
         )
+        if veto_reason is not None:
+            self._logger.info(f"等播放空档期间嘴已先开口，出声前撤回本轮台词（{veto_reason}）: round_id={round_id}")
+            self._stats.total_no_action += 1
+            result["silent_reason"] = veto_reason
+            result["plan"]["should_reply"] = False
+            result["plan"]["silent_reason"] = veto_reason
+            outcome = replace(outcome, replied=False, silent_reason=veto_reason, speech=None)
+            if veto_reason == "mouth_superseded" and self._on_mouth_superseded is not None:
+                self._on_mouth_superseded()
+            result["total_duration_ms"] = now_ms() - started_ms
+            return result, outcome
         if speech_info is not None:
             result["speech"], result["emotion"], result["utterance_id"] = speech_info
 

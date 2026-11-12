@@ -36,7 +36,7 @@ from collections import deque
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Coroutine, Dict, Iterable, List, Optional, TYPE_CHECKING, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Coroutine, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.agents.factory import AGENT_BINDINGS
@@ -81,6 +81,7 @@ from .memory.settle import SessionSettler
 from .message_buffer import MessageBuffer
 from .delegation_workbench import PLANNER_CALL_SOURCE
 from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
+from .mouth_reconcile import ReconcileVerdict, SpokenLog, extract_player_join_name, reconcile_with_mouth
 from .planner import Planner, PlannerConfig, PlannerEnv
 from .paid_viewers import PaidViewerLookup
 from .proactive_trigger import ProactiveTrigger
@@ -400,8 +401,9 @@ class StreamerAgent(BaseAgent):
         # 强制触发判定就是一次集合归属判定（消息类型 ∈ 强制名单），直接持有
         # 名单内联判定，不再为它单设类
         self._force_message_types = frozenset(config.force.force_message_types)
-        # 房间态势（纯规则滑动窗口）
+        # 房间态势（纯规则滑动窗口）与本场口头流水（区分嘴与决策出口，出声前对账与现场卡共用）
         self._room_state = RoomState()
+        self._spoken_log = SpokenLog()
 
         # 流程单（Rundown）子系统：备忘录 + 闹钟（推进权归 Agent）。
         # 状态机与仓储/总线/场次解析的粘合收拢在协调器内（依赖全构造注入，
@@ -445,6 +447,10 @@ class StreamerAgent(BaseAgent):
                 social_facts_provider=self._load_social_facts if social_fact_repo is not None else None,
                 # 开播【上次收尾】：头两窗或第一件委派受理前从确定性账面拼装上一场收工实况
                 opening_wrapup_provider=self._consume_opening_wrapup if sessions_repo is not None else None,
+                # 嘴与决策双向对账：表达侧可见实时口头流水，出声前核对本轮嘴说的话并在矛盾时补最新现场
+                recent_speeches_provider=self._spoken_log.recent_texts,
+                mouth_reconciler=self._reconcile_with_mouth,
+                fresh_context_since=self._fresh_context_since_open,
             )
             if config.live_frame.enabled:
                 planner_env = dataclasses.replace(
@@ -737,6 +743,8 @@ class StreamerAgent(BaseAgent):
             reminders_provider=self._drain_reminders,
             resume_replay_provider=self._drain_resume_replay,
             speech_allowed=self._round_session_still_live,
+            mouth_reconciler=self._reconcile_with_mouth,
+            on_mouth_superseded=self._on_mouth_superseded,
             logger=self._logger,
         )
 
@@ -766,10 +774,11 @@ class StreamerAgent(BaseAgent):
                 scene_reader=self._read_scene_brief,
                 is_live=lambda: self._live_active,
                 profile=_PROFILE_REPLYER,
+                recent_speeches_provider=self._spoken_log.recent_texts,
+                on_mouth_spoken=self._on_mouth_spoken,
             )
-        if self._mouth is not None:
-            # 她说过的每句话（Planner 的与嘴自己的）经发声分发器直连记进嘴的最近记录，嘴才不会重复自己
-            self._speech.bind_spoken_listener(self._mouth.note_speech)
+        # 她说过的每句话（Planner 的与嘴自己的）经发声分发器直连记进本场口头流水、核销已欢迎名单并同步给嘴
+        self._speech.add_spoken_listener(self._on_speech_emitted)
 
         self._logger.info(
             f"StreamerAgent 已构造 "
@@ -1176,6 +1185,8 @@ class StreamerAgent(BaseAgent):
             # 游戏里找她的玩家条目、游戏那边的流水同样只属于上一场：留几分钟的那份不带进新场次
             self._planner.reset_player_notes()
             self._game_side.reset()
+            self._room_state.reset_session()
+            self._spoken_log.reset()
         # 按场次类型先拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗按表快照重渲。
         # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策窗自然重渲出
         # 新简报，这期间简报退化为更早一场的档案
@@ -1531,6 +1542,8 @@ class StreamerAgent(BaseAgent):
             # 道别说完再清玩家条目与游戏那边的流水：下播后的调试对话不接着这一场的玩家和游戏说
             self._planner.reset_player_notes()
             self._game_side.reset()
+            self._room_state.reset_session()
+            self._spoken_log.reset()
         # 收播收尾：排进后台，依次是"等队尾台词播完 → 本场整理（有上限）→ 记账器清理"。
         # 场次行已删或将删时不整理（空场次没东西可整理，用户删掉的场次本意是清掉它），
         # 但后面的清理照跑：待删观众与保留期清理不依赖场次行。
@@ -2111,6 +2124,11 @@ class StreamerAgent(BaseAgent):
                 )
                 if self._mouth is not None:
                     self._mouth.note_game(body)
+                if payload.kind != "player":
+                    # 公屏系统消息里的玩家加入提示（如"系统消息：玩家甲加入了游戏"）：登记待欢迎名，防嘴与决策重复欢迎
+                    joined_player = extract_player_join_name(payload.content) or extract_player_join_name(body)
+                    if joined_player:
+                        self._room_state.record_player_join(joined_player)
             if payload.kind == "player":
                 self._proactive_signals.set_game()
                 # 游戏里说过话的人记成已知玩家名：游戏情境查询发给嵌入服务前把它换掉
@@ -2210,6 +2228,46 @@ class StreamerAgent(BaseAgent):
             if brief:
                 return brief
         return ""
+
+    def _on_speech_emitted(self, text: str, at_ms: int, source: str) -> None:
+        """发声分发器每播出一句台词（决策环节或嘴）后同步记入本场口头流水、核销已欢迎名单并喂给嘴。"""
+        resolved_source: Literal["mouth", "planner"] = "mouth" if source == "mouth" else "planner"
+        self._spoken_log.record(text, at_ms, source=resolved_source)
+        self._room_state.note_spoken(text)
+        if self._mouth is not None:
+            self._mouth.note_speech(text, at_ms)
+
+    def _on_mouth_spoken(self, text: str, at_ms: int, trigger_text: str) -> None:
+        """嘴发声完成后补记触发由头，让决策环节出声前核对时知道嘴刚才接的是哪件事。"""
+        self._spoken_log.record(text, at_ms, source="mouth", trigger=trigger_text)
+
+    async def _reconcile_with_mouth(self, candidate: str, since_ms: int) -> ReconcileVerdict:
+        """决策台词出声前核对：剥掉本场重复欢迎，并对照 ``since_ms`` 之后嘴说出口的话及新到游戏事件裁决。"""
+        return await reconcile_with_mouth(
+            candidate,
+            mouth_entries=self._spoken_log.mouth_since(since_ms),
+            new_game_lines=self._game_ledger.pending_lines(),
+            welcomed_names=self._room_state.welcomed_names,
+            llm_service=self._llm,
+            profile=_PROFILE_REPLYER,
+        )
+
+    async def _fresh_context_since_open(self, since_ms: int) -> Dict[str, Any]:
+        """决策台词因与嘴或新现场矛盾退回重想时，附上本窗开窗后嘴说的话、待入账新事件与最新一句话现场。"""
+        ctx: Dict[str, Any] = {
+            "mouth_just_said": [entry.text for entry in self._spoken_log.mouth_since(since_ms)],
+            "latest_game_events": self._game_ledger.pending_lines()[-8:],
+        }
+        scene = await self._read_scene_brief()
+        if scene:
+            ctx["latest_scene"] = scene
+        return ctx
+
+    def _on_mouth_superseded(self) -> None:
+        """出声前因现场已变撤回过时台词后：若账本已有新游戏事件待出账，置位主动信号唤醒下一轮评估。"""
+        if self._game_ledger.pending_lines():
+            self._proactive_signals.set_game()
+            self._flush_kick.set()
 
     def _latest_live_frame(self) -> Optional[Any]:
         """最新一帧直播画面（图像暂存 latest 槽位快照；从未采样过为 None）。"""
