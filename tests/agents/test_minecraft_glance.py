@@ -246,13 +246,15 @@ def test_glance_distant_drops_hostile_but_keeps_passive_and_nearby_hostile_line(
 def test_glance_distant_counts_drop_hostile_kinds_by_name_list() -> None:
     """计数通道的敌对种类键按原版敌对生物名单剔除：Mod 对未逐只列出的实体只给计数、无敌对标记，Amaidesu 侧按名单过滤。
 
-    带命名空间（minecraft:zombie）与裸键（zombie）都剔；鱿鱼、蝙蝠等被动键照常进远处清单。"""
+    带命名空间（minecraft:zombie）与裸键（zombie）都剔；鱿鱼、蝙蝠等被动键照常进远处清单。
+    场 65 实证裸名 spider 漏网（夜间敌对的普通蜘蛛只进计数通道），同样要剔。"""
     scene = {
         "entities": [],
         "distant_entities": {
             "minecraft:zombie": 3,
             "zombie": 2,
             "minecraft:creeper": 1,
+            "minecraft:spider": 5,
             "minecraft:squid": 30,
             "bat": 12,
         },

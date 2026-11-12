@@ -137,6 +137,7 @@ HOSTILE_KINDS: frozenset[str] = frozenset(
         "shulker",
         "silverfish",
         "skeleton",
+        "spider",
         "slime",
         "stray",
         "vex",
