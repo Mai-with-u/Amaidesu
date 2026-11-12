@@ -16,12 +16,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Set, Tuple
 
 __all__ = [
     "GuardVerdict",
+    "VERBATIM_MIN_TOKENS",
+    "VERBATIM_RATIO",
+    "VerbatimRepeat",
     "WordFilter",
     "apply_word_filter",
+    "find_verbatim_repeat",
     "fit_to_budget",
     "guard",
     "strip_memory_numbers",
@@ -180,6 +184,92 @@ def apply_word_filter(text: str, word_filter: Optional[WordFilter]) -> Optional[
     if dropped and word_filter.drop_on_match:
         return None
     return cleaned
+
+
+# ============================================================================
+# 近逐字复读
+# ============================================================================
+
+#: 参与比对的最短长度（按"字"算：一个汉字算一个，一串连着的英文数字算一个）。
+#: 短句天然会撞（"真是哭笑不得"六个字隔几分钟又说一遍不算复读），够长才谈得上"把那句话又说了一遍"
+VERBATIM_MIN_TOKENS: int = 10
+
+#: 判定为近逐字的重合比例下限：新句子的相邻两字组合里，有这么大比例在更早的某一句里原样出现。
+#: 四场直播 1067 句台词逐句对本场更早的全部台词回放：唯一的真复读（30 字隔 157 秒重讲）是 1.00，
+#: 其余最高 0.67（只是共用了"西边那几棵橡树"这样一个短语），0.7 到 1.0 之间是空的；
+#: 取 0.9 时只拦到那一句，误拦为零
+VERBATIM_RATIO: float = 0.9
+
+# 一个"字"：一串连着的英文数字整体算一个（玩家名、观众名十几个字母，按字母算会把
+# "谢啦 + 名字"这种只是点了同一个人的句子算成九成重合），其余每个文字各算一个；标点与空白不算
+_TOKEN = re.compile(r"[a-z0-9]+|[^\W_]")
+# 断句：句末标点或换行。逗号不断——"嘴上说不坐船，手倒是很诚实"是一句话
+_SENTENCE_BREAK = re.compile(r"[。！？!?…~～；;\n]+")
+
+
+@dataclass(frozen=True, slots=True)
+class VerbatimRepeat:
+    """命中的一处近逐字复读：新台词里的哪一句、和更早的哪一条几乎一样、重合比例。"""
+
+    sentence: str
+    earlier: str
+    ratio: float
+
+
+def _tokens(text: str) -> List[str]:
+    return _TOKEN.findall((text or "").lower())
+
+
+def _pairs(tokens: Sequence[str]) -> Set[Tuple[str, str]]:
+    """相邻两字的组合集合：语序打乱就对不上，只有照原样说才会大面积重合。"""
+    return set(zip(tokens, tokens[1:], strict=False))
+
+
+def _spoken_sentences(text: str) -> List[str]:
+    return [part.strip() for part in _SENTENCE_BREAK.split(text or "") if part.strip()]
+
+
+def find_verbatim_repeat(speech: str, earlier_lines: Sequence[str]) -> Optional[VerbatimRepeat]:
+    """这句新台词是不是把更早说过的某句话几乎原样又说了一遍；是就返回重合最高的那一处，否则 None。
+
+    只拦近逐字，不管"换个说法再讲"——那要看内容有没有新东西，归决策环节的增量检验；字面比对
+    测不出换说法的复读，中等阈值又会误拦一半正常台词，所以这里阈值取到只剩"照原样重说"。
+
+    比对两层，都是"新的被旧的包含"这个方向（新句里的相邻两字组合有多少在旧句里原样出现）：
+
+    - 整条对整条：新台词整条够长，且几乎整个出现在更早的某一条里；
+    - 逐句对逐句：新台词里够长的一句，几乎原样出现在更早某一条的某一句里——她以后连着讲几句
+      成一段时，段里夹一句旧话照样拦得到，而整段的重合比例会被别的句子稀释。
+
+    新台词自己的几句之间不互相比：同一段话里的承接句本来就会接着上一句的词往下说。
+    ``earlier_lines`` 由调用方给（旧→新），同一次生成拆出来先说出口的几句不要放进来。
+    """
+    whole = _tokens(speech)
+    candidates: List[Tuple[str, Set[Tuple[str, str]], bool]] = []
+    sentences = _spoken_sentences(speech)
+    if len(sentences) > 1 and len(whole) >= VERBATIM_MIN_TOKENS:
+        # 多句成段时先保留整段对整段：两句短话合起来原样复述过一整段时也能认出
+        candidates.append((speech.strip(), _pairs(whole), True))
+    for sentence in sentences:
+        tokens = _tokens(sentence)
+        if len(tokens) >= VERBATIM_MIN_TOKENS:
+            candidates.append((sentence, _pairs(tokens), False))
+    if not candidates:
+        return None
+    best: Optional[VerbatimRepeat] = None
+    for earlier in earlier_lines:
+        earlier_whole = _pairs(_tokens(earlier))
+        if not earlier_whole:
+            continue
+        earlier_sentences = [_pairs(_tokens(sentence)) for sentence in _spoken_sentences(earlier)]
+        for text, pairs, is_whole in candidates:
+            # 整条只和整条比；单句和旧台词的每一句比（旧台词只有一句时就是它整条）
+            references = [earlier_whole] if is_whole else earlier_sentences
+            ratio = max((len(pairs & reference) / len(pairs) for reference in references if reference), default=0.0)
+            # 同样高的取更晚说的那条：打回时给她看的是离现在最近的那次
+            if ratio >= VERBATIM_RATIO and (best is None or ratio >= best.ratio):
+                best = VerbatimRepeat(sentence=text, earlier=earlier.strip(), ratio=ratio)
+    return best
 
 
 # ============================================================================

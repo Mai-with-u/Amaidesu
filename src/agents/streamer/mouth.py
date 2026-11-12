@@ -34,7 +34,7 @@ from src.modules.utils.time_utils import now_ms
 from .config import StreamerMouthConfig
 from .persona_rules import boundaries_line
 from .scene_card import GoalLine, SceneInputs, build_scene_card
-from .speech_guard import WordFilter, fit_to_budget, guard
+from .speech_guard import VerbatimRepeat, WordFilter, find_verbatim_repeat, fit_to_budget, guard
 from .tools.reply_tool import coerce_emotion
 
 __all__ = ["MOUTH_TEMPLATE", "Mouth", "SCENE_CHANGING_BODY_KINDS", "Trigger", "URGENT_BODY_KINDS", "URGENT_GAME_TYPES"]
@@ -56,7 +56,9 @@ _MAX_REACTION_AGE_MS = 20_000
 #: 反应插到其他待播台词前面的优先级
 _PRIORITY = 5
 _SILENCE = "[沉默]"
-_EMOTION_LINE = re.compile(r"^\s*([A-Za-z_]+)\s*[：:]\s*(.+)$")
+# 行首英文情绪标签（允许空格、连字符、下划线与可选外层括号，如 "so happy："、"[scared]:"）：
+# 合法枚举值按枚举走，其余不合法标签连同冒号一并剥除，防止把情绪标签当成台词念给观众听
+_EMOTION_LINE = re.compile(r"^\s*[\[【(]?\s*([A-Za-z][A-Za-z _-]{0,30}?)\s*[\]】)]?\s*[：:]\s*(.*)$")
 #: 一次反应最多拆成几行（每行一个情绪）：再多就成了讲一段，那是 Planner 的活
 _MAX_LINES = 3
 #: 整行都包在括号里的是旁白或动作说明（"（挠头）"），不是要念出来的话
@@ -215,7 +217,9 @@ class Mouth:
 
         await self._refresh_scene(force=any(trigger.refresh_scene for trigger in fresh))
         started = self._clock()
-        response = await self._llm.generate(self._messages(fresh), system=self._system_prompt(), profile=self._profile)
+        messages = self._messages(fresh)
+        system_prompt = self._system_prompt()
+        response = await self._llm.generate(messages, system=system_prompt, profile=self._profile)
         generated = self._clock()
         if not response.ok:
             self._logger.warning(f"嘴生成失败: {response.error or 'unknown'}")
@@ -227,6 +231,22 @@ class Mouth:
         segments = self._guard(segments)
         if not segments:
             return None
+        # 出口命中本场近逐字复读时，不直接吞掉整句：先把撞车原话退给表达模型换个说法重说一次，
+        # 模型决定沉默或重说后仍撞车才放弃出声
+        earlier_lines = self._earlier_speeches()
+        repeat = find_verbatim_repeat("\n".join(line for _, line in segments), earlier_lines)
+        if repeat is not None:
+            segments, response, generated = await self._rephrase_verbatim(
+                messages=messages,
+                system_prompt=system_prompt,
+                first_raw=response.content or "",
+                repeat=repeat,
+                earlier_lines=earlier_lines,
+                fallback_response=response,
+                fallback_generated=generated,
+            )
+            if not segments:
+                return None
         text = "".join(line for _, line in segments)
         (first_emotion, first_text), rest = segments[0], segments[1:]
         event_at = min(trigger.at_ms for trigger in fresh)
@@ -361,11 +381,63 @@ class Mouth:
                 break
             match = _EMOTION_LINE.match(line)
             if match:
-                current, _note = coerce_emotion(match.group(1))
+                current, note = coerce_emotion(match.group(1))
+                if note:
+                    self._logger.debug(f"嘴情绪标签收敛（标签已剥除不念）: {note}")
                 line = match.group(2).strip()
             if line and not _STAGE_DIRECTION.match(line):
                 segments.append((current, line))
         return segments
+
+    def _earlier_speeches(self) -> List[str]:
+        """本场已说出口的台词（旧→新），供近逐字复读闸比对。"""
+        return [record.text for record in self._records if record.kind == "speech" and record.text.strip()]
+
+    async def _rephrase_verbatim(
+        self,
+        *,
+        messages: List[Dict[str, str]],
+        system_prompt: str,
+        first_raw: str,
+        repeat: VerbatimRepeat,
+        earlier_lines: Sequence[str],
+        fallback_response: Any,
+        fallback_generated: int,
+    ) -> Tuple[List[Tuple[Emotion, str]], Any, int]:
+        """初稿与更早台词近逐字重合时，退回给表达模型换一句不同的短反应重说一次。"""
+        self._logger.info(f"嘴初稿命中近逐字复读（重合度 {repeat.ratio:.2f}），打回换说法重说: {repeat.sentence!r}")
+        retry_prompt = (
+            f"刚才想说的「{repeat.sentence}」你前面已经几乎原样说过了（前面说的是「{repeat.earlier}」）。"
+            f"对这次的由头换个不同的切入点重说一句，别重复刚才那句；实在没别的好说就只输出{_SILENCE}"
+        )
+        retry_messages = [
+            *messages,
+            {"role": "assistant", "content": first_raw},
+            {"role": "user", "content": retry_prompt},
+        ]
+        try:
+            retried = await self._llm.generate(retry_messages, system=system_prompt, profile=self._profile)
+        except Exception as exc:  # noqa: BLE001 - 重说异常不炸主循环，按放弃这句处理
+            self._logger.warning(f"嘴近逐字重说调用异常，放弃本句: {exc}", exc=True)
+            return [], fallback_response, fallback_generated
+        generated = self._clock()
+        if not retried.ok:
+            self._logger.warning(f"嘴近逐字重说失败，放弃本句: {retried.error or 'unknown'}")
+            return [], retried, generated
+        segments = self._parse(retried.content or "")
+        if not segments:
+            self._logger.info("嘴近逐字打回后改选沉默")
+            return [], retried, generated
+        segments = self._guard(segments)
+        if not segments:
+            return [], retried, generated
+        still_repeat = find_verbatim_repeat("\n".join(line for _, line in segments), earlier_lines)
+        if still_repeat is not None:
+            self._logger.info(
+                f"嘴重说后仍近逐字复读（重合度 {still_repeat.ratio:.2f}），放弃本句: {still_repeat.sentence!r}"
+            )
+            return [], retried, generated
+        return segments, retried, generated
 
     def _guard(self, segments: List[Tuple[Emotion, str]]) -> List[Tuple[Emotion, str]]:
         """长度按句累计到预算、敏感词过滤；不过关返回空列表（直接丢弃不重试）。

@@ -319,3 +319,24 @@ async def test_memory_numbers_in_speech_are_removed_with_a_warning(loguru_captur
 async def test_speech_that_is_only_a_memory_number_becomes_silence() -> None:
     replyer, _, _ = _replyer("[档#12]")
     assert await replyer.generate(_plan(), []) is None
+
+
+async def test_replyer_verbatim_repeat_rephrases_once_and_delivers_new_wording() -> None:
+    """第 63 场 23:44:08 回归：初稿与更早台词近逐字重合时，打回让表达层重说一次，不丢整句。"""
+    earlier = "嘴上说不坐船，手倒是很诚实，橡木船都快拼一半了，我这不是打自己脸嘛。"
+    fresh = "这工作台怎么在水边死活摆不下去，看来船还真没那么好搓。"
+    llm = MagicMock()
+    llm.generate = AsyncMock(
+        side_effect=[
+            Response(success=True, content=earlier, request_id="req_draft"),
+            Response(success=True, content=fresh, request_id="req_rephrase"),
+        ]
+    )
+    prompt = MagicMock()
+    prompt.render = MagicMock(return_value="PROMPT")
+    replyer = Replyer(config={"speech_max_chars": 60}, llm_service=llm, prompt_service=prompt)
+
+    result = await replyer.generate(_plan(), [], recent_speeches=[earlier])
+
+    assert result == {"speech": fresh, "llm_request_id": "req_rephrase"}
+    assert llm.generate.await_count == 2

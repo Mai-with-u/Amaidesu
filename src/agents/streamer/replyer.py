@@ -21,8 +21,15 @@ from src.modules.logging import get_logger
 
 from . import canonical
 from .persona_rules import boundaries_line
-from .plan import DecisionPlan
-from .speech_guard import WordFilter, apply_word_filter, fit_to_budget, strip_memory_numbers
+from .plan import DecisionPlan, assistant_speech_lines
+from .speech_guard import (
+    VerbatimRepeat,
+    WordFilter,
+    apply_word_filter,
+    find_verbatim_repeat,
+    fit_to_budget,
+    strip_memory_numbers,
+)
 from .timeline import CHAPTER_MESSAGE_TYPE, GAME_MESSAGE_TYPE, PlayerNote
 
 # 默认人设兜底值（cold-start 兜底：构造 config 未提供对应字段时使用）
@@ -257,6 +264,23 @@ class Replyer:
         if self._speech_max_chars > 0 and len(speech) > self._speech_max_chars:
             speech, request_id = await self._shorten(system_prompt, speech, request_id)
 
+        # 近逐字复读机械兜底：初稿把更早某句话几乎原样又说了一遍时，打回让表达层换个说法重说一次，
+        # 不直接吞掉这轮发言；重说仍撞车才退回给决策层换话题
+        earlier_lines = list(recent_speeches) if recent_speeches is not None else assistant_speech_lines(history)
+        repeat = find_verbatim_repeat(speech, earlier_lines)
+        if repeat is not None:
+            rephrased, request_id = await self._rephrase_verbatim(
+                system_prompt=system_prompt,
+                turn_input=turn_input,
+                draft=speech,
+                repeat=repeat,
+                earlier_lines=earlier_lines,
+                request_id=request_id,
+            )
+            if not rephrased:
+                return None
+            speech = rephrased
+
         result = {
             "speech": speech,
             "llm_request_id": request_id,
@@ -301,6 +325,52 @@ class Replyer:
             f"台词超出长度预算（{len(speech)} 字 > {budget}）：重说后 {len(shortened) or '失败'}，最终 {len(fitted)} 字"
         )
         return fitted, request_id
+
+    async def _rephrase_verbatim(
+        self,
+        *,
+        system_prompt: str,
+        turn_input: str,
+        draft: str,
+        repeat: VerbatimRepeat,
+        earlier_lines: Sequence[str],
+        request_id: Optional[str],
+    ) -> Tuple[str, Optional[str]]:
+        """初稿命中近逐字复读时，带着本轮输入与撞车初稿让表达模型换个说法重说一次。"""
+        self.logger.info(f"Replyer 初稿命中近逐字复读（重合度 {repeat.ratio:.2f}），打回重说: {repeat.sentence!r}")
+        budget_note = f"，不超过 {self._speech_max_chars} 字" if self._speech_max_chars > 0 else ""
+        retry_prompt = (
+            f"刚才这句「{repeat.sentence}」你前面已经几乎一字不差地说过了（前面说的是「{repeat.earlier}」）。"
+            f"顺着上面的本次回复要求，换一个不一样的切入点和措辞重新说{budget_note}，不要加交接稿里没有的事。"
+            "只输出台词。"
+        )
+        retry_messages = [
+            {"role": "user", "content": turn_input},
+            {"role": "assistant", "content": draft},
+            {"role": "user", "content": retry_prompt},
+        ]
+        try:
+            response = await self._llm_service.generate(retry_messages, system=system_prompt, profile=self.profile)
+        except Exception as exc:
+            self.logger.warning(f"Replyer 近逐字重说异常，放弃本句: {exc}", exc=True)
+            return "", request_id
+        if not response.ok:
+            self.logger.warning(f"Replyer 近逐字重说失败，放弃本句: {response.error or 'unknown'}")
+            return "", request_id
+        request_id = response.request_id or request_id
+        rephrased, _ = strip_memory_numbers(_plain_text_speech(response.content))
+        if not rephrased:
+            self.logger.warning("Replyer 近逐字重说返回空台词，放弃本句")
+            return "", request_id
+        if self._speech_max_chars > 0 and len(rephrased) > self._speech_max_chars:
+            rephrased = fit_to_budget(rephrased, self._speech_max_chars)
+        still_repeat = find_verbatim_repeat(rephrased, earlier_lines)
+        if still_repeat is not None:
+            self.logger.info(
+                f"Replyer 重说后仍近逐字复读（重合度 {still_repeat.ratio:.2f}），退回决策层: {still_repeat.sentence!r}"
+            )
+            return "", request_id
+        return rephrased, request_id
 
     # ==================== prompt 渲染（人设注入核心） ====================
 

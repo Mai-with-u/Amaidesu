@@ -612,6 +612,14 @@ def test_planner_prompt_hands_over_objective_brief_not_draft() -> None:
     assert "错误示范" in prompt and "正确示范" in prompt
     # 示范只讲形态、不给成品句：成品句会被当模板逐字复读（场次 54 实测 48/162 条指导语复读示范框架、31% 默认自嘲）
     assert "对又一次被水冲走" not in prompt and "自嘲、嫌弃、得意" not in prompt
+    # 工具参数描述与提示词契约对齐：reply_guidance 是方向 + 可选场景说明，不再要 Planner 替她定态度
+    props = build_reply_tool_spec().parameters_schema["properties"]
+    guidance_desc = props["reply_guidance"]["description"]
+    assert "方向 +（需要时）一句场景说明" in guidance_desc
+    assert "一个态度" not in guidance_desc and "不替她定态度" in guidance_desc
+    # is_novel 工具描述包含【冷场】例外，与提示词"可聊的素材……只在冷场时用"一致，不逼模型撒谎
+    novel_desc = props["is_novel"]["description"]
+    assert "【冷场】" in novel_desc and "冷场可聊素材" in novel_desc
 
 
 def test_planner_prompt_names_the_reply_tool_as_registered() -> None:

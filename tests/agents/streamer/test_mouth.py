@@ -386,3 +386,45 @@ async def test_follow_up_lines_that_overflow_the_budget_are_dropped_whole(prompt
 
     assert await mouth.react_once([_trigger()]) == "哇！什么东西？！"
     assert speech.calls[0]["follow_ups"] == []
+
+
+@pytest.mark.parametrize(
+    ("raw_line", "expected_emotion", "expected_text"),
+    [
+        # 第 65 场 21:49:52 回归：模型输出带空格的非法情绪名 "so happy："，标签连同冒号剥除，不念出来
+        ("so happy：回来啦，还是这边舒坦～", "neutral", "回来啦，还是这边舒坦～"),
+        # 带连字符或外层括号的标签同样剥除；合法枚举或已知近义词按枚举走
+        ("[very-happy]：总算缓过来了！", "neutral", "总算缓过来了！"),
+        ("[cheerful]: 捡到好东西啦！", "happy", "捡到好东西啦！"),
+    ],
+)
+async def test_invalid_or_spaced_emotion_prefix_is_stripped_not_spoken(
+    prompts: Any, raw_line: str, expected_emotion: str, expected_text: str
+) -> None:
+    """不合法或带空格的情绪标签连同冒号剥掉，不作为台词念出来；情绪收敛到现有枚举。"""
+    llm, speech = _LLM(raw_line), _Speech()
+    mouth = _mouth(llm, speech, prompts)
+
+    spoken = await mouth.react_once([_trigger()])
+
+    assert spoken == expected_text
+    assert "happy" not in spoken.lower() and "：" not in spoken
+    assert speech.calls[0]["emotion"] == expected_emotion
+
+
+async def test_mouth_verbatim_repeat_triggers_rephrase_instead_of_dropping(prompts: Any) -> None:
+    """嘴初稿命中本场近逐字复读时，打回让表达模型换个说法重说一次，不直接把整句吞掉。"""
+    earlier = "好家伙，连打我好几下，先别管树苗了，吃我一剑！"
+    llm = _LLM(
+        f"angry：{earlier}",
+        "scared：又从背后偷袭我，这只蜘蛛没完了是吧！",
+    )
+    speech = _Speech()
+    mouth = _mouth(llm, speech, prompts)
+    mouth.note_speech(earlier, NOW - 40_000)
+
+    spoken = await mouth.react_once([_trigger()])
+
+    assert spoken == "又从背后偷袭我，这只蜘蛛没完了是吧！"
+    assert len(llm.calls) == 2
+    assert len(speech.calls) == 1
