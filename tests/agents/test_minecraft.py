@@ -943,3 +943,66 @@ async def test_mcp_disconnection_refresh_logs_removal(loguru_capture: Any) -> No
     records = [r for r in loguru_capture.records if r["level"] == "INFO" and "摘除" in r["message"]]
     assert records and "Agent 私有 MCP" in records[0]["message"]
     await agent.stop()
+
+
+class _RecoverableMcpProvider(_ZeroToolProvider):
+    """启动时 0 工具降级，后续恢复连上暴露 maicraft 工具并触发连接态回调。"""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._tools: list[ToolSpec] = []
+
+    def list_tools(self):
+        return list(self._tools)
+
+    def simulate_first_connect(self) -> None:
+        # 模拟启动期连接失败后首次在后台连上 Mod，暴露工具并经连接回调通知绑定方
+        self._recovering = False
+        self._tools = [
+            ToolSpec(
+                name=tool_name,
+                description=tool_name,
+                parameters_schema={"type": "object"},
+                kind="sync",
+                provider=self.name,
+                visible_to=["minecraft"],
+            )
+            for tool_name in ("observe", "lookup", "execute", "goal", "events")
+        ]
+        if self.on_connection_changed is not None:
+            self.on_connection_changed(True)
+
+
+async def test_mcp_first_late_connect_refreshes_registry_for_minecraft() -> None:
+    """启动期私有 MCP 连接失败、随后首次后台连上时，必须把 maicraft 工具补注册进注册表。"""
+    _FakeMcpClient.constructed = []
+    registry = ToolRegistry()
+    holder: list[_RecoverableMcpProvider] = []
+
+    def _make_provider(**kwargs: Any) -> _RecoverableMcpProvider:
+        prov = _RecoverableMcpProvider(**kwargs)
+        holder.append(prov)
+        return prov
+
+    agent = _mcp_agent(
+        True,
+        registry,
+        client_factory=_FakeMcpClient,
+        provider_factory=_make_provider,
+    )
+    await agent.start()
+    try:
+        # 刚启动时 0 工具降级登记，模型工具表里没有 maicraft_*
+        assert registry.list_tools(provider="maicraft") == []
+        assert not any(t["name"].startswith("maicraft_") for t in agent._tool_definitions())
+
+        # 后台首次恢复连接：工具必须立刻补注册到注册表且对 minecraft 可见（除宿主专用的 events）
+        holder[0].simulate_first_connect()
+        registered = {spec.full_name for spec in registry.list_tools(for_agent="minecraft")}
+        assert {"maicraft_observe", "maicraft_lookup", "maicraft_execute", "maicraft_goal"} <= registered
+        model_tools = {t["name"] for t in agent._tool_definitions()}
+        assert {"maicraft_observe", "maicraft_lookup", "maicraft_execute", "maicraft_goal"} <= model_tools
+        assert "maicraft_events" not in model_tools
+        assert any("连接已恢复" in content for _, content in agent.queued_messages)
+    finally:
+        await agent.stop()

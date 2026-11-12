@@ -381,7 +381,6 @@ class MinecraftAgent(BaseAgent):
         self._mcp_provider: Optional[Any] = mcp_provider
         self._mcp_client_factory = mcp_client_factory
         self._mcp_provider_factory = mcp_provider_factory
-        self._mcp_ready_once = False
         self._goals = GoalWatch(
             call=self._call_maicraft,
             connected=self._maicraft_ready,
@@ -508,8 +507,6 @@ class MinecraftAgent(BaseAgent):
             )
         )
         self._mcp_provider = prov
-        self._mcp_provider = prov
-        prov.on_connection_changed = self._on_mcp_connection_changed
         prov.switch_config = {"file": "agents.toml", "key": "agents.minecraft.mcp.enabled"}
         try:
             count = await prov.setup()
@@ -521,14 +518,18 @@ class MinecraftAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001 - 注册异常兜底
             self._logger.warning(f"Agent 私有 MCP 注册失败: {type(exc).__name__}: {exc}")
             return
+        # 登记进注册表之后再挂连接态回调：初次 setup 已由上面 register_tool_provider 入账；
+        # 此后无论启动期失败后的首次后台恢复、中途断线重连还是手动重连，连上都走 refresh 换血补注册
+        prov.on_connection_changed = self._on_mcp_connection_changed
         self.register_mcp_client(client)
         if count > 0:
+            self._logger.info(f"Agent 私有 MCP 已就绪：{count} 个工具")
             return
         self._logger.warning("Agent 私有 MCP 连接失败或 server 未暴露工具，已降级登记（0 工具），后台退避重试装配")
         prov.start_recovery()
 
     def _on_mcp_connection_changed(self, connected: bool) -> None:
-        """私有 MCP 连接态跃迁：断开摘除工具；连上按首次装配或恢复分流收尾。
+        """私有 MCP 连接态跃迁：断开摘除工具；连上（首次恢复或重连）刷新补注册工具表并唤醒任务。
 
         断开也刷新登记：provider 清单在断开路径已置空，refresh 把降级前的
         工具从注册表整体摘除，避免 Agent 调到必然失败的陈旧条目。
@@ -545,10 +546,6 @@ class MinecraftAgent(BaseAgent):
             return
         prov = self._mcp_provider
         count = len(list(prov.list_tools())) if prov is not None else 0
-        if not self._mcp_ready_once:
-            self._mcp_ready_once = True
-            self._logger.info(f"Agent 私有 MCP 已就绪：{count} 个工具")
-            return
         self._logger.info(f"Agent 私有 MCP 装配恢复：{count} 个工具")
         try:
             report = self._tool_registry.refresh_provider_tools(prov)
@@ -643,9 +640,7 @@ class MinecraftAgent(BaseAgent):
         # 可见名单随各 spec 声明（MinecraftToolProvider.list_tools 逐 spec 盖）；
         # 没有技能库时技能工具本就不提供，名单不残留。
         self.register_tool_provider(self._tool_provider, registry=self._tool_registry)
-        self._logger.info(
-            "MinecraftAgent 工具已注册：minecraft_todo / notebook / report / wait / get_work_log / glance"
-        )
+        self._logger.info("MinecraftAgent 工具已注册：minecraft_todo / notebook / report / get_work_log / glance")
 
     def _tool_definitions(self) -> List[Dict[str, Any]]:
         """本批交给模型的工具：可见名单里的全部，减去只给宿主读的事件流与截桌面的工具；按名字排序，发送顺序稳定。"""
