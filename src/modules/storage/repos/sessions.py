@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from src.modules.storage.models.game_players import (
     INTERACTION_HELPED,
@@ -344,6 +344,35 @@ class SessionRepo(BaseRepo):
                     "ORDER BY ended_at_ms DESC, id DESC LIMIT 1"
                 ).fetchone()
                 return int(row[0]) if row else None
+
+        return await self._run_in_executor(_exec)
+
+    async def latest_ended_session(
+        self,
+        *,
+        kind: SessionKind = SESSION_KIND_LIVE,
+        min_duration_ms: int = 0,
+        exclude_session_id: Optional[int] = None,
+    ) -> Optional[LiveSession]:
+        """取最近一场已结束且时长达标的同类型场次（不论下播整理完没有）。
+
+        供开播【上次收尾】与回想"上一场"共用：开错马上重开的极短场次按 ``min_duration_ms`` 跳过；
+        上一场即使还在整理或整理失败，也能拿到它的账面记录拼出开场交接。
+        """
+        threshold = max(0, int(min_duration_ms))
+
+        def _exec() -> Optional[LiveSession]:
+            where = "WHERE kind=? AND ended_at_ms IS NOT NULL AND (ended_at_ms - started_at_ms) >= ?"
+            params: List[Any] = [kind, threshold]
+            if exclude_session_id is not None:
+                where += " AND id <> ?"
+                params.append(int(exclude_session_id))
+            with self._manager.transaction() as conn:
+                row = conn.execute(
+                    f"SELECT * FROM live_sessions {where} ORDER BY started_at_ms DESC, id DESC LIMIT 1",  # noqa: S608
+                    params,
+                ).fetchone()
+                return LiveSession.model_validate(dict(row)) if row is not None else None
 
         return await self._run_in_executor(_exec)
 
