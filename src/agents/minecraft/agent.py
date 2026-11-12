@@ -49,7 +49,7 @@ from src.agents.minecraft.creature_book import CreatureBook, creature_from_recor
 from src.agents.minecraft.delegation_book import DelegationBook
 from src.agents.minecraft.furnace_wait import TIMER_DUE, FurnaceWaits
 from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_label, pause_notice
-from src.agents.minecraft.wait_progress import WaitProgress
+from src.agents.minecraft.wait_progress import Coords, WaitProgress, self_coords, watchdog_wakeup_notice
 from src.agents.minecraft.glance import (
     RememberedPlacesCache,
     glance_brief,
@@ -291,6 +291,8 @@ class MinecraftAgent(BaseAgent):
         self._self_chats = SelfChatLog()
         # 最近一次速览看自己读到的（维度, x, z）与读到的时刻：主播要游戏情境时拿它和地点清单现算距离，不另读游戏
         self._last_position: Optional[Tuple[Tuple[str, float, float], float]] = None
+        # 最近一次 observe(self) 读到的三维坐标：站桩开始时作位移基线；目标结束或换存档时清掉，不拿旧坐标充新进展
+        self._last_self_coords: Optional[Coords] = None
         # 最近一次看周围时身边的玩家名：随游戏情境交给主播，主播发情境给外部服务前遮名用
         self._nearby_players: Tuple[str, ...] = ()
         # 地点动静（记住、忘掉、走近、离开一个记住的地点）：只发给存储给下播整理认地点，不改怎么做事。
@@ -470,6 +472,8 @@ class MinecraftAgent(BaseAgent):
         self._wake_queue.clear()
         # 攒着的互动通知一并作废：下一场开播时冒出上一场的蹲起只是过时的事
         self._interaction_throttle.clear()
+        self._wait_progress.reset()
+        self._last_self_coords = None
         settled = self._delegations.settle_on_live_end()
         self._logger.info(
             f"场次已结束（id={payload.live_session_id}）：minecraft 收工"
@@ -1077,8 +1081,7 @@ class MinecraftAgent(BaseAgent):
                 # 一整轮只在查还在跑的目标：第一次提醒别反复查，第二次直接替它让出（等目标事件唤醒）。
                 if polling_reminded:
                     self._logger.info("连续轮询在跑的目标，已替它让出，等目标事件唤醒")
-                    self._wait_progress.stand(self._goals.tracked_ids())
-                    self._stall_alerted = False
+                    await self._stand_for_goals(self._goals.tracked_ids())
                     self._schedule_idle_compaction(messages, tool_defs)
                     return
                 messages.append(
@@ -1133,6 +1136,7 @@ class MinecraftAgent(BaseAgent):
         self._mc_state.set_todos([])
         self._goal_ledger.clear_finished()
         self._furnace_waits.clear()
+        self._wait_progress.reset()
         self._preempt_paused.clear()
         # 新任务只带系统说明和新指令：这个世界里拿过别人家的吃的另附一条事实，主人来问时一开工就认得出
         taken = self._food_taken.view(self._creatures.world_key)
@@ -1157,9 +1161,8 @@ class MinecraftAgent(BaseAgent):
                 messages, reminded, "仍有目标在等你回答或被暂停，或还有未完成待办"
             )
         if pending:
-            # 让出等目标事件：开始站桩计时（30 秒无进展看门狗会叫醒重新评估）
-            self._wait_progress.stand(pending)
-            self._stall_alerted = False
+            # 让出等目标事件：记录此刻位置与目标动作基线，开始站桩监视（超限且无位移/步数进展才叫醒核对）
+            await self._stand_for_goals(pending)
             self._logger.info(f"任务批次自然终止（{steps} 步），{len(pending)} 个后台目标在跑，静默让出")
         elif cooking:
             self._logger.info(f"任务批次自然终止（{steps} 步），{len(cooking)} 台炉子在烧、到点会叫醒，静默让出")
@@ -1309,10 +1312,23 @@ class MinecraftAgent(BaseAgent):
         return reply_of(result)
 
     def _absorb_reply(self, name: str, arguments: Dict[str, Any], observation: Dict[str, Any]) -> None:
-        """从 execute / task 的回复里认出目标运行：没结束的开始跟踪，状态变化记下，结束的收起。"""
-        if name not in (EXECUTE, GOAL) or observation.get("ok") is not True:
+        """从 observe / execute / goal 的回复里同步坐标基线与目标运行：没结束的开始跟踪，状态变化记下，结束的收起。"""
+        if observation.get("ok") is not True:
             return
         data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        if name == OBSERVE and arguments.get("what") == "self":
+            coords = self_coords(data)
+            if coords is not None:
+                self._last_self_coords = coords
+            return
+        if name not in (EXECUTE, GOAL):
+            return
+        if name == GOAL and arguments.get("operation") == "list":
+            for item in data.get("goals") or []:
+                listed = goal_run_of(item) if isinstance(item, dict) else None
+                if listed is not None and not listed.finished and self._goals.tracking(listed.goal_id):
+                    self._goal_ledger.note(listed)
+            return
         run = goal_run_of(data)
         if run is None:
             return
@@ -1330,8 +1346,9 @@ class MinecraftAgent(BaseAgent):
                 # 账面仍要记：先登记再写终态，直接写会因条目不存在而落空（终态变化广播不出来）。
                 self._goal_ledger.remember_finished(run)
                 self._goal_ledger.register_and_settle(run)
-                # 设、取消、列计时都当场返回，结果带着还挂着的全部计时：拿来对账回炉计时
+                # 设、取消、列计时都当场返回，结果带着还挂着的全部计时：同步回炉计时与看门狗的自设计时器
                 self._furnace_waits.absorb(run)
+                self._wait_progress.absorb_timer(run, arguments)
                 # 当场就结束的公屏说话（关了逐字打字）：交出去的那句排进待发，调用方随后发给存储记进公屏聊天
                 message = self._self_chats.take(run)
                 if message:
@@ -1393,9 +1410,12 @@ class MinecraftAgent(BaseAgent):
         并转发"有目标停着没动静"给主播；不另唤醒模型（Mod 节流过，模型侧由任务账本
         的停滞告警兜底）。
         """
-        self._wait_progress.note_progress()
+        if not stalled:
+            self._wait_progress.note_progress()
         before = self._goal_ledger.note_of(run.goal_id)
         if run.finished:
+            # 目标结束时角色可能已走远，旧坐标不再给后续新目标充当站桩基线
+            self._last_self_coords = None
             self._goal_ledger.settle_finished(run)
             # obtain 装好炉先走（partial + WRONG_TIME）不是做不成：记下回炉计时，等它响之前结束一轮算在等炉子
             self._furnace_waits.absorb(run)
@@ -1462,9 +1482,9 @@ class MinecraftAgent(BaseAgent):
             if len(self._batch_body_events) > MAX_BATCH_BODY_EVENTS:
                 self._batch_body_events = self._batch_body_events[-MAX_BATCH_BODY_EVENTS:]
         if kind == TIMER_DUE:
-            # 回炉计时响了：按事件上的计时编号划掉那台炉子，叫醒照常走路由表（到点通知里写着回哪台炉取什么）
+            # 回炉计时与自设计时器响了：划掉到点的计时并记一次进展，叫醒照常走路由表
             self._furnace_waits.timer_due(event)
-            self._wait_progress.note_progress()
+            self._wait_progress.timer_due(event)
         if kind == OTHERS_FOOD_TAKEN:
             # 闲着时也要记：主人多半是过一阵才来问，那时候模型得从任务事实里认出是自己拿的
             self._food_taken.record(self._creatures.world_key, food_taken_of(event, now_ms()))
@@ -1617,31 +1637,85 @@ class MinecraftAgent(BaseAgent):
         self._wake_for_overdue_furnaces()
         await self._wake_if_suspension_stalled()
 
+    def _tracked_goal_doings(self, goal_ids: Optional[Iterable[int]] = None) -> Dict[int, str]:
+        """在跟踪目标此刻的动作描述（含暂停态标记），供看门狗判进展与生成中性核对文案。"""
+        ids = list(goal_ids) if goal_ids is not None else self._goals.tracked_ids()
+        doings: Dict[int, str] = {}
+        for gid in ids:
+            note = self._goal_ledger.note_of(gid)
+            doing = str(note.get("doing") or "").strip()
+            if note.get("state") == PAUSED and "已暂停" not in doing:
+                doing = f"{doing}（已暂停）" if doing else "已暂停"
+            if doing:
+                doings[gid] = doing
+        return doings
+
+    async def _stand_for_goals(self, goal_ids: List[int]) -> None:
+        """进入站桩等待：若上一目标结束后还没重读过自身坐标，先读一次作位移锚点再开始计时。"""
+        if self._last_self_coords is None and self._maicraft_ready():
+            body = await self._call_maicraft(OBSERVE, {"what": "self"})
+            if body.ok:
+                self._last_self_coords = self_coords(body.data)
+        self._wait_progress.stand(
+            goal_ids,
+            initial_pos=self._last_self_coords,
+            initial_doings=self._tracked_goal_doings(goal_ids),
+        )
+        self._stall_alerted = False
+
+    async def _probe_standing_progress(self) -> Dict[int, str]:
+        """站桩到阈值前向本地 MaiCraft 核对一次当前位置与目标动作：长途游泳或步数推进在此直接刷新计时。"""
+        if not self._maicraft_ready():
+            return self._tracked_goal_doings(self._wait_progress.goal_ids)
+        coords: Optional[Coords] = None
+        body = await self._call_maicraft(OBSERVE, {"what": "self"})
+        if body.ok:
+            coords = self_coords(body.data)
+            if coords is not None:
+                self._last_self_coords = coords
+        goals_reply = await self._call_maicraft(GOAL, {"operation": "list"})
+        if goals_reply.ok:
+            tracked = set(self._wait_progress.goal_ids)
+            for item in goals_reply.data.get("goals") or []:
+                run = goal_run_of(item) if isinstance(item, dict) else None
+                if run is None or run.goal_id not in tracked:
+                    continue
+                if run.finished or run.state == AWAITING_ANSWER:
+                    # 目标刚结束或刚挂出提问，事件流下一页即送达：先记一次进展，不抢发无进展唤醒
+                    self._wait_progress.note_progress()
+                else:
+                    self._goal_ledger.note(run)
+        doings = self._tracked_goal_doings(self._wait_progress.goal_ids)
+        self._wait_progress.observe_state(coords, doings)
+        return doings
+
     async def _wake_if_suspension_stalled(self) -> None:
-        """挂起站桩的无进展看门狗：超限叫醒模型重新评估（继续等/取消/换事做），不自动取消目标。
+        """挂起站桩的无进展看门狗：核对位移、目标步数与自设计时器后仍无进展才叫醒，按同目标指数退避。
 
         只在"有在跑目标的挂起"上计时（炉子在烧的等待有自己的精确计时叫醒，不归它管）；
-        叫醒走普通通知——挂起态任务未结束，通知能续批；批在跑时静默跳过（站桩只存在于
-        批结束之后，这里再挡一道防唤醒错时机）。
+        到阈值时先向本地 MaiCraft 读一次当前坐标与目标 doing——游泳赶路、连续作业步进会直接刷新计时，
+        不白叫一次大模型；确无进展且未被自设计时器礼让时才发中性核对提示，不默认导向取消。
         """
-        if self._batch_active or self._stall_alerted:
+        if self._batch_active or self._stall_alerted or not self._wait_progress.past_limit():
             return
-        if not self._wait_progress.standing or not self._wait_progress.due():
+        doings = await self._probe_standing_progress()
+        if not self._wait_progress.standing or not self._wait_progress.due(doings):
             return
         goal_ids = self._wait_progress.goal_ids
         stalled_s = self._wait_progress.stalled_seconds()
+        self._wait_progress.note_alert()
+        next_limit_s = self._wait_progress.current_limit_s
         self._stall_alerted = True
-        self._logger.warning(f"挂起无进展唤醒：目标 {goal_ids} 已 {stalled_s:.0f} 秒没有任何进展，叫醒重新评估")
+        self._logger.warning(
+            f"挂起无进展唤醒：目标 {goal_ids} 已 {stalled_s:.0f} 秒没有任何进展，叫醒核对现场"
+            f"（同目标下次上限 {next_limit_s:.0f}s）"
+        )
         await self._emit_game_event(
             "no_progress",
-            f"挂起的目标 {goal_ids} 已 {stalled_s:.0f} 秒没有任何进展，叫醒重新评估",
+            f"挂起的目标 {goal_ids} 已 {stalled_s:.0f} 秒没有任何进展，叫醒核对现场",
             include_body_events=False,
         )
-        self._inject_wakeup_message(
-            f"[系统] 挂起的目标（{', '.join(str(g) for g in goal_ids)}）已 {stalled_s:.0f} 秒没有任何进展。"
-            "请重新评估：目标还在正常推进就结束这一轮继续等（不调工具，宿主会重新挂起计时）；"
-            "卡住了就取消它（maicraft_goal operation=cancel）或换个办法。"
-        )
+        self._inject_wakeup_message(watchdog_wakeup_notice(goal_ids, stalled_s, doings=doings))
 
     async def _apply_world_change(self, change: Optional[WorldChange]) -> None:
         """事件页或 observe(self) 认出了新的存档：切换工作文档；没变化什么也不做。"""
@@ -1663,8 +1737,10 @@ class MinecraftAgent(BaseAgent):
             return
         before, after = change.before.label(), change.after.label()
         self._logger.info(f"角色换了存档：「{before}」→「{after}」，工作文档已切换")
-        # 离开世界时 Mod 清空了全部计时，旧存档里在烧的炉子不会再叫醒，不再算在等
+        # 离开世界时 Mod 清空了全部计时，旧存档里在烧的炉子与自设计时器不会再叫醒，坐标基线也作废
         self._furnace_waits.forget_world()
+        self._wait_progress.clear_timers()
+        self._last_self_coords = None
         if not self._task_finished:
             self._inject_wakeup_message(
                 f"[系统] 角色进了另一个世界「{after}」（原来在「{before}」）。在「{before}」记的待办和工作笔记已经收起，"
@@ -1987,9 +2063,14 @@ class MinecraftAgent(BaseAgent):
         else:
             body = await self._call_maicraft(OBSERVE, {"what": "self"})
             view.update(glance_self(body))
-            # 顺手记下这次读到的位置（读失败就清掉），主播要游戏情境时用；不为它多读一次游戏
+            # 顺手记下这次读到的位置（读失败就清掉），主播要游戏情境时用；站桩中顺带喂给看门狗作位移进展
             position = self_position(body)
             self._last_position = (position, self._clock()) if position is not None else None
+            coords = self_coords(body.data) if body.ok else None
+            if coords is not None:
+                self._last_self_coords = coords
+                if self._wait_progress.standing:
+                    self._wait_progress.observe_state(coords, self._tracked_goal_doings())
             # 先更新名册再写身边：起过名的按名字称呼，墓碑对到死者
             scene = await self._read_creatures(body)
             self._nearby_players = nearby_player_names(scene)
@@ -2417,7 +2498,7 @@ class MinecraftAgent(BaseAgent):
         return self._batch_active
 
     def observation(self) -> Dict[str, Any]:
-        """任务推进状态快照（只读观测面）：批状态、任务状态、身体故障说法、本批身体事件与攒着的互动通知数。"""
+        """任务推进状态快照（只读观测面）：批状态、任务状态、站桩计时、身体故障说法、本批身体事件与攒着的互动通知数。"""
         return {
             "batch_active": self._batch_active,
             "task_finished": self._task_finished,
@@ -2427,6 +2508,9 @@ class MinecraftAgent(BaseAgent):
             "batch_body_events": [dict(record) for record in self._batch_body_events],
             # 节流攒着、还没交给模型的互动通知条数
             "held_interactions": self._interaction_throttle.held_count(),
+            "standing": self._wait_progress.standing,
+            "stalled_seconds": self._wait_progress.stalled_seconds(),
+            "stall_limit_seconds": self._wait_progress.current_limit_s,
         }
 
     @property

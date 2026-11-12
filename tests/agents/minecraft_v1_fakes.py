@@ -178,6 +178,8 @@ class FakeMaicraft(BaseToolProvider):
         }
         self.picture_image = PICTURE_BASE64
         self._next_id = 1
+        self._next_timer_id = 1
+        self.timers: Dict[int, Dict[str, Any]] = {}
         self._new_event = asyncio.Event()
 
     # 工具清单与分发
@@ -257,6 +259,30 @@ class FakeMaicraft(BaseToolProvider):
         if ability in _ASIDE_ABILITIES:
             run["state"] = "finished"
             run["result"] = {"status": "done", "summary": "记住了「家」", "changes": [], "remaining": []}
+        elif ability == "maicraft:timer":
+            params = goal.get("parameters") if isinstance(goal.get("parameters"), dict) else {}
+            op = str(params.get("operation") or "set")
+            details: Dict[str, Any] = {}
+            if op == "set":
+                tid = self._next_timer_id
+                self._next_timer_id += 1
+                rem = float(params.get("after_seconds") or 60)
+                note = str(params.get("note") or "")
+                self.timers[tid] = {"timer_id": tid, "remaining_seconds": rem, "note": note}
+                details["timer_id"] = tid
+            elif op == "cancel":
+                tid_arg = params.get("timer_id")
+                if isinstance(tid_arg, int):
+                    self.timers.pop(tid_arg, None)
+            details["pending"] = [dict(item) for item in self.timers.values()]
+            run["state"] = "finished"
+            run["result"] = {
+                "status": "done",
+                "summary": f"当前挂着 {len(self.timers)} 个计时",
+                "changes": [],
+                "remaining": [],
+                "details": details,
+            }
         self.goals[goal_id] = run
         return ok(dict(run))
 
