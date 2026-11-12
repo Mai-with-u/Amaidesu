@@ -84,7 +84,7 @@ async def get_system_status(server: ServerDep) -> SystemStatusResponse:
 
 def _build_llm_fatal_faults(server: "DashboardServer") -> list[LLMFatalFaultItem]:
     """只读读取 LLMManager 当前尚未解除的用途档致命故障（余额/鉴权/连不上）。"""
-    llm = server.llm_manager
+    llm = getattr(server, "llm_manager", None)
     if llm is None or not hasattr(llm, "fatal_faults"):
         return []
     try:
