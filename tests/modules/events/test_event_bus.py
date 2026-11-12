@@ -162,3 +162,16 @@ async def test_tool_health_wildcard_matches_concrete_emit(event_bus: EventBus) -
     await _settle(event_bus)
     ((name, received),) = seen
     assert (name, received.tool_name, received.state) == ("tool.health.maicraft_speak", "maicraft_speak", "open")
+
+
+async def test_wait_until_drained_does_not_spin_when_late_emit_finishes_in_same_turn() -> None:
+    """第一批等待期间由 create_task 调度的第二批 emit 若在同一事件循环轮次内提前跑完，
+    wait_until_drained 不得在其 done_callback 执行前陷入同步死循环。"""
+    bus = EventBus(enable_stats=False)
+    handler, seen = _recorder(SimpleTestEvent)
+    bus.on("test.event", handler, SimpleTestEvent)
+
+    await bus.emit("test.event", SimpleTestEvent(id=1), source="test")
+    asyncio.get_running_loop().create_task(bus.emit("test.event", SimpleTestEvent(id=2), source="test"))
+    await asyncio.wait_for(bus.wait_until_drained(), timeout=1.0)
+    assert [p.id for _, p in seen] == [1, 2]

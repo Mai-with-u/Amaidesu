@@ -22,12 +22,13 @@
   循环不代写
 
 状态词表：受理 ``accepted`` → 进行中 ``running``（含子态
-``waiting_for_decision``，决策点等待）→ 终态 ``{succeeded / failed /
-cancelled / timeout / undelivered}``。委派另有两个进行中状态：``queued`` 是目标
-手上有事、这件在委派队列里排着还没送到执行方；``suspended`` 是急件插队时
-在途那件被暂放（进度保留，急件做完接着做）。两者都占账，必须走到终态。``undelivered`` 是执行 Agent 自己停了
-却没交付结果：委派只有走过交付才记 ``succeeded``，停下不等于做完。写入规则：终态粘滞（终态后的任何写入被忽略）；
-``accepted`` 不可回退；同状态重复写入幂等（快照刷新、不重发事件）。
+``waiting_for_decision``，决策点等待）→ 终态 ``{succeeded / closed_by_initiator /
+failed / cancelled / timeout / undelivered}``。委派另有一个进行中状态 ``queued``：目标
+手上有在做的事，这件在待办里（从没送达过还没开工的，或做过一段后先搁下放回的），占账且必须走到终态。
+``undelivered`` 是执行 Agent 自己停了却没交付结果：委派只有走过交付才记 ``succeeded``，
+停下不等于做完。``closed_by_initiator`` 是发起方认定这件做完了、执行 Agent 并没有交付：
+和 ``succeeded`` 分开记，事后核对"说做完了"的凭据时分得出是谁认定的。
+写入规则：终态粘滞（终态后的任何写入被忽略）；``accepted`` 不可回退；同状态重复写入幂等（快照刷新、不重发事件）。
 
 红线：本模块只存发起方/执行者**名字字符串**（路由用）并经事件叫醒——
 不 import Agent 层、不感知 LLM/Config；任务事实源是记录表查询，事件
@@ -37,8 +38,9 @@ cancelled / timeout / undelivered}``。委派另有两个进行中状态：``que
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Callable, Collection, Deque, Dict, List, Literal, Mapping, Optional
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.tasks import TaskChangedPayload
@@ -62,18 +64,18 @@ TaskStatus = Literal[
     "running",
     "waiting_for_decision",
     "queued",
-    "suspended",
     "succeeded",
+    "closed_by_initiator",
     "failed",
     "cancelled",
     "timeout",
     "undelivered",
 ]
 
-TERMINAL_TASK_STATES = frozenset({"succeeded", "failed", "cancelled", "timeout", "undelivered"})
-IN_PROGRESS_TASK_STATES = frozenset({"accepted", "running", "waiting_for_decision", "queued", "suspended"})
-# 已送到执行方、执行方手上正在办的状态（排队中的还没送到，不算）：委派队列判"目标忙不忙"用
-DELIVERED_TASK_STATES = frozenset({"accepted", "running", "waiting_for_decision", "suspended"})
+TERMINAL_TASK_STATES = frozenset({"succeeded", "closed_by_initiator", "failed", "cancelled", "timeout", "undelivered"})
+IN_PROGRESS_TASK_STATES = frozenset({"accepted", "running", "waiting_for_decision", "queued"})
+# 已送到执行方、执行方手上正在做的状态（待办里的还没轮到，不算）：每个执行者任何时刻至多一件
+DELIVERED_TASK_STATES = frozenset({"accepted", "running", "waiting_for_decision"})
 
 # 执行 Agent 最近说的一句判断与时刻（账本旁注，见 annotate）：发起方每窗决策前读它当参考；
 # 它是没脱敏的推理原文（坐标、工具名都在里面），不算进展，也不进拒受理与队列清单理由
@@ -82,6 +84,23 @@ REPLY_NOTE_AT_KEY = "latest_reply_at_ms"
 
 # 事实源归属：provider 型 = 跟踪循环写；agent 型 = 执行 Agent 写
 TaskSource = Literal["provider", "agent"]
+
+# 终态移除后保留的最近 provider 目标结果上限（条）：供观察方跨委派核对最近几步到底成没成
+_RECENT_PROVIDER_OUTCOMES_MAX = 30
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderTaskOutcome:
+    """最近结束的一条 provider 型任务结果（终态移除主表条目后保留在有界环形缓冲供查询）。"""
+
+    task_id: str
+    initiator: str
+    provider: str
+    status: TaskStatus
+    result_status: str = ""
+    purpose: str = ""
+    summary: str = ""
+    at_ms: int = 0
 
 
 @dataclass(slots=True)
@@ -134,6 +153,7 @@ class TaskLedger:
     def __init__(self, event_bus: Optional["EventBus"] = None) -> None:
         self._event_bus = event_bus
         self._records: Dict[str, TaskRecord] = {}
+        self._recent_provider_outcomes: Deque[ProviderTaskOutcome] = deque(maxlen=_RECENT_PROVIDER_OUTCOMES_MAX)
 
     def register(
         self,
@@ -279,6 +299,20 @@ class TaskLedger:
         )
 
         if status in TERMINAL_TASK_STATES:
+            if record.source == "provider":
+                snap = record.snapshot or {}
+                self._recent_provider_outcomes.append(
+                    ProviderTaskOutcome(
+                        task_id=task_id,
+                        initiator=record.initiator,
+                        provider=record.provider,
+                        status=status,
+                        result_status=str(snap.get("result_status") or "").strip(),
+                        purpose=str(snap.get("purpose") or "").strip(),
+                        summary=summary.strip(),
+                        at_ms=record.updated_at_ms,
+                    )
+                )
             # 终态：先移除条目再广播（订阅方拿到的即最终快照）
             del self._records[task_id]
             logger.info(f"任务终态: task_id={task_id} status={status}（条目已移除，执行者={record.executor}）")
@@ -287,6 +321,29 @@ class TaskLedger:
 
         self._emit_changed(payload)
         return payload
+
+    def recent_provider_outcomes(
+        self,
+        *,
+        since_ms: int = 0,
+        initiators: Optional[Collection[str]] = None,
+    ) -> List[ProviderTaskOutcome]:
+        """按结单先后（旧→新）查询最近结束的 provider 型任务结果。"""
+        allowed = set(initiators) if initiators is not None else None
+        return [
+            item
+            for item in self._recent_provider_outcomes
+            if item.at_ms >= since_ms and (allowed is None or item.initiator in allowed)
+        ]
+
+    def clear_provider_outcomes(self, initiator: Optional[str] = None) -> None:
+        """清空保留的近期 provider 任务结果（场次复位全清；某个游戏换存档时只清该发起方）。"""
+        if initiator is None:
+            self._recent_provider_outcomes.clear()
+            return
+        kept = [item for item in self._recent_provider_outcomes if item.initiator != initiator]
+        self._recent_provider_outcomes.clear()
+        self._recent_provider_outcomes.extend(kept)
 
     def alert_stall(self, task_id: str, *, summary: str) -> None:
         """发停滞告警（状态不变；``payload.alert=True`` 标记唤醒类通知）。
@@ -613,6 +670,7 @@ __all__ = [
     "REPLY_NOTE_KEY",
     "REPLY_NOTE_AT_KEY",
     "TaskSource",
+    "ProviderTaskOutcome",
     "TaskRecord",
     "TaskLedger",
     "TaskTracker",

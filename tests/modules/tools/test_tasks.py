@@ -227,4 +227,6 @@ def test_task_changed_event_constant_payload_shape_and_terminal_vocabulary() -> 
         "minecraft",
     )
     assert data["source"] == "" and data["snapshot"] == {"inner_task_id": "m-7"}  # 嵌套委派快照带内层任务号
-    assert TERMINAL_TASK_STATES == frozenset({"succeeded", "failed", "cancelled", "timeout", "undelivered"})
+    assert TERMINAL_TASK_STATES == frozenset(
+        {"succeeded", "closed_by_initiator", "failed", "cancelled", "timeout", "undelivered"}
+    )

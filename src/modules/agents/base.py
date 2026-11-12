@@ -286,15 +286,17 @@ class BaseAgent(abc.ABC):
         logger.debug(f"Agent '{self.name or type(self).__name__}' 拒收急停（未实现急停入口）")
         return False
 
-    async def suspend_current(self) -> bool:
-        """暂放手头的活（急件抢占协议；**默认不支持**，返回 False）。
+    async def release_delegation(self, task_id: str, *, reason: str = "") -> Optional[str]:
+        """对正在做的委派收手（换活、先搁下或发起方结单时调用；**默认不支持**，返回 None）。
 
-        语义：不是取消——把手头正在做的事暂放（进度保留），稍后接着做；
-        在途委派的账面状态由委派受理核心写成 suspended。实现了本方法的
-        Agent 才能被急件插队：没实现的，急件在委派队列里置顶排队。
+        语义：停掉本任务正在跑的外部动作，把 ``task_id`` 从本 Agent 的未读队列与在办追踪清单里摘除，
+        **不写任务账本终态**——账面接下来记认定完成、放回待办还是作废取消，或新件被拒收时把旧件
+        原样送回，统一由委派受理核心写。返回一句简短的"做到哪了"（空串表示还没做出可见进展）；
+        返回 ``None`` 表示本 Agent 不支持收手或该任务不在手上。
         """
-        logger.debug(f"Agent '{self.name or type(self).__name__}' 不支持暂放手头的活（未实现 suspend_current）")
-        return False
+        del task_id, reason
+        logger.debug(f"Agent '{self.name or type(self).__name__}' 不支持委派收手（未实现 release_delegation）")
+        return None
 
     def on_task_notification(self, payload: TaskChangedPayload) -> None:
         """任务变化通知钩子（``task.changed``，仅发起方是自己时被调）。

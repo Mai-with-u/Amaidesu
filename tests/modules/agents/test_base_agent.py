@@ -207,7 +207,7 @@ async def test_agent_control_provider_exposes_roster_only_for_receiving_agents(s
     mgr.register(sample_agent)  # 未覆写接收入口 → 不进任何名册
     bare = build_agent_control_provider(mgr)
     assert isinstance(bare, ToolProvider)
-    assert {s.name for s in bare.list_tools()} == {"delegate", "prompt", "task_status", "task_cancel"}
+    assert {s.name for s in bare.list_tools()} == {"delegate", "prompt", "task_status", "task_settle"}
     assert (
         "enum"
         not in next(s for s in bare.list_tools() if s.name == "delegate").parameters_schema["properties"]["agent"]
@@ -229,7 +229,7 @@ async def test_agent_control_provider_exposes_roster_only_for_receiving_agents(s
         "framework_delegate",
         "framework_prompt",
         "framework_task_status",
-        "framework_task_cancel",
+        "framework_task_settle",
     } <= names and removed.isdisjoint(names)
     for tool in ("delegate", "prompt"):
         spec = next(s for s in provider.list_tools() if s.name == tool)

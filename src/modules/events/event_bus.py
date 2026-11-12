@@ -294,9 +294,14 @@ class EventBus:
         ``_background_tasks``，循环持续收集直到集合清空）。
         """
         while self._background_tasks:
-            # 复制快照后等待；done_callback（从集合移除）先于 gather 的
-            # 唤醒回调注册，因此 gather 返回时已完成任务必已出集合
-            await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
+            # 只对尚未完成的任务调 gather：若上一轮等待期间新入集的任务已在同一循环轮次内跑完、
+            # 其 done_callback 尚排在就绪队列末尾未执行，对全 done 任务调 gather 不会让出事件循环，
+            # 会导致同步死循环；此时显式让出一拍让就绪队列里的移除回调与级联派发落定。
+            pending = [t for t in self._background_tasks if not t.done()]
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            else:
+                await asyncio.sleep(0)
 
     def _collect_handlers(self, event_name: str) -> List[HandlerWrapper]:
         """
