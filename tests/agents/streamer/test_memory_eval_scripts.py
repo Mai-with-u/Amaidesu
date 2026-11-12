@@ -35,3 +35,18 @@ def test_retrieval_threshold_script_self_check_passes() -> None:
         check=False,
     )
     assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
+
+
+def test_zatsudan_eval_script_self_check_passes() -> None:
+    """scripts/zatsudan_eval.py 读 live_chat / rundown_transitions / llm_requests 出杂谈体检表：
+    表结构或列名改了而脚本没跟上，钩子率、空转次数这些成对指标就会悄悄算错。"""
+    script = Path(__file__).resolve().parents[3] / "scripts" / "zatsudan_eval.py"
+    completed = subprocess.run(
+        [sys.executable, str(script), "--selftest"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
