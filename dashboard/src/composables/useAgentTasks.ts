@@ -25,7 +25,10 @@ export const TASK_STATUS_TEXT: Record<string, string> = {
   accepted: '已受理',
   running: '进行中',
   waiting_for_decision: '待定夺',
+  queued: '待办',
   succeeded: '已完成',
+  // 主播认定这件已做完结单（执行侧未主动交付）：与游戏侧正式交付分开展示
+  closed_by_initiator: '认定完成',
   failed: '失败',
   cancelled: '已取消',
   timeout: '已超时',

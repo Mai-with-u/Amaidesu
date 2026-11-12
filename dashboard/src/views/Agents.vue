@@ -283,6 +283,7 @@
                       </el-button>
                     </div>
                     <p class="md-task-instruction">{{ task.instruction || '（无指令摘要）' }}</p>
+                    <p v-if="task.summary" class="md-task-instruction">{{ task.summary }}</p>
                     <span class="md-task-time mono">{{ relativeTime(task.updated_at_ms) }}</span>
                   </li>
                 </ul>
@@ -942,7 +943,8 @@ onMounted(() => {
   color: var(--el-color-warning);
 }
 
-.md-task-status.is-succeeded {
+.md-task-status.is-succeeded,
+.md-task-status.is-closed_by_initiator {
   background: var(--el-color-success-light-9);
   color: var(--el-color-success);
 }

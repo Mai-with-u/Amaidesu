@@ -101,6 +101,7 @@ class DashboardServer:
         talk_card_repo: Optional[Any] = None,
         storage_db_path: Optional[Path] = None,
         task_tracker: Optional[Any] = None,
+        delegation_core: Optional[Any] = None,
         subtitle_service: Optional[Any] = None,
         tts_engine: Optional[Any] = None,
         diagnostics_writer: Optional["DiagnosticsWriter"] = None,
@@ -123,6 +124,7 @@ class DashboardServer:
                 agent_manager,
                 task_tracker.ledger if task_tracker is not None else None,
                 event_bus=event_bus,
+                delegation_core=delegation_core,
             )
             if agent_manager is not None
             else None

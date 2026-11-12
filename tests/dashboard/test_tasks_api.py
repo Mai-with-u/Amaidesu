@@ -140,3 +140,49 @@ def test_goal_snapshot_falls_back_to_purpose_for_instruction(
     assert running["goal_run_1"]["instruction"] == "烤三块海带"
     assert finished["goal_done"]["instruction"] == "装一扇门"
     assert finished["deleg_done"]["instruction"] == "建房子"
+
+
+def test_delegation_cards_prefer_own_words_and_distinguish_queued_and_initiator_closed(
+    client, ledger: TaskLedger, history: EventHistoryService
+) -> None:
+    """委派卡片优先展示 own_words（不把附带来源对话整段搬上看板），待办区分未开工与搁下，主播结单进已完结区。"""
+    ledger.register(
+        task_id="deleg_q1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="planner-react",
+        executor="minecraft",
+        status="queued",
+        source="agent",
+        snapshot={"instruction": "[本次目标]\n开一块菜地\n\n[来源对话：…]", "own_words": "开一块菜地"},
+    )
+    ledger.register(
+        task_id="deleg_q2",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="planner-react",
+        executor="minecraft",
+        status="queued",
+        source="agent",
+        snapshot={"own_words": "建木屋", "shelved_at_ms": 1_760_000_000_000, "shelved_progress": "地基铺好了"},
+    )
+    history.record(
+        _task_changed(
+            "deleg_closed",
+            "closed_by_initiator",
+            initiator="planner-react",
+            executor="minecraft",
+            source="agent",
+            summary="发起方认定已完成：四格树苗已栽满",
+            snapshot={"own_words": "栽四棵树苗"},
+        )
+    )
+
+    body = client.get("/api/v1/tasks").json()
+    running = {card["task_id"]: card for card in body["running"]}
+    finished = {card["task_id"]: card for card in body["finished"]}
+    assert running["deleg_q1"]["instruction"] == "开一块菜地"
+    assert running["deleg_q1"]["summary"] == "还没开工"
+    assert running["deleg_q2"]["summary"] == "搁下了，做到：地基铺好了"
+    assert finished["deleg_closed"]["status"] == "closed_by_initiator"
+    assert finished["deleg_closed"]["instruction"] == "栽四棵树苗"

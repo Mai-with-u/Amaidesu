@@ -63,18 +63,28 @@ TaskTrackerDep = Annotated[
 
 
 def _instruction_summary(snapshot: Dict[str, Any]) -> str:
-    """任务卡指令摘要：委派快照用 instruction；游戏目标快照只有 purpose（Mod 契约键，
-    目的原文，见 src/agents/minecraft/goal_ledger.py 的 snapshot=run.data）。"""
-    return str(snapshot.get("instruction") or snapshot.get("purpose") or "")
+    """任务卡指令摘要：委派快照优先用发起方原话 own_words（不含附带的来源对话），
+    无则回退 instruction；游戏目标快照只有 purpose（Mod 契约键，目的原文，
+    见 src/agents/minecraft/goal_ledger.py 的 snapshot=run.data）。"""
+    return str(snapshot.get("own_words") or snapshot.get("instruction") or snapshot.get("purpose") or "")
+
+
+def _queued_summary(snapshot: Dict[str, Any]) -> str:
+    """待办卡片的处境说明：区分从没送达过的与做过一段后搁下的。"""
+    if int(snapshot.get("shelved_at_ms") or 0) > 0:
+        progress = str(snapshot.get("shelved_progress") or "").strip() or "未记进展"
+        return f"搁下了，做到：{progress}"
+    return "还没开工"
 
 
 def _card_from_record(record: Any) -> TaskCard:
     """账本记录 → 进行中任务卡。"""
     snapshot = record.snapshot if isinstance(record.snapshot, dict) else {}
+    status = str(record.status)
     return TaskCard(
         task_id=record.task_id,
         instruction=_instruction_summary(snapshot),
-        status=str(record.status),
+        status=status,
         initiator=str(record.initiator),
         executor=str(record.executor),
         owner_agent=owner_agent_of(
@@ -82,6 +92,7 @@ def _card_from_record(record: Any) -> TaskCard:
             initiator=str(record.initiator),
             executor=str(record.executor),
         ),
+        summary=_queued_summary(snapshot) if status == "queued" else "",
         created_at_ms=int(record.created_at_ms),
         updated_at_ms=int(record.updated_at_ms),
     )

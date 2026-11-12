@@ -217,6 +217,8 @@ describe('useAgentTasks', () => {
   it('taskStatusText：已知状态映射，未知原样返回', () => {
     expect(taskStatusText('running')).toBe('进行中');
     expect(taskStatusText('waiting_for_decision')).toBe('待定夺');
+    expect(taskStatusText('queued')).toBe('待办');
+    expect(taskStatusText('closed_by_initiator')).toBe('认定完成');
     expect(taskStatusText('undelivered')).toBe('停了没交付');
     expect(taskStatusText('mystery')).toBe('mystery');
   });

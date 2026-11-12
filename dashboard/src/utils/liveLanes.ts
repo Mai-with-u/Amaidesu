@@ -225,6 +225,7 @@ export interface TaskWindow {
 
 const TERMINAL_STATUS_LABEL: Record<string, string> = {
   succeeded: '完成',
+  closed_by_initiator: '认定完成',
   failed: '失败',
   cancelled: '取消',
   timeout: '超时',
