@@ -1818,7 +1818,9 @@ class MinecraftAgent(BaseAgent):
         await self._apply_world_change(self._world.absorb(page.world_fields))
         self._flush_due_interactions()
         self._wake_for_overdue_furnaces()
-        await self._wake_if_suspension_stalled()
+        # 本页自带新事件时紧接着就会逐条消费目标与身体变化，不在消费前抢跑无进展看门狗
+        if not getattr(page, "events", None):
+            await self._wake_if_suspension_stalled()
 
     def _tracked_goal_doings(self, goal_ids: Optional[Iterable[int]] = None) -> Dict[int, str]:
         """在跟踪目标此刻的动作描述（含暂停态标记），供看门狗判进展与生成中性核对文案。"""
@@ -1863,8 +1865,10 @@ class MinecraftAgent(BaseAgent):
                 run = goal_run_of(item) if isinstance(item, dict) else None
                 if run is None or run.goal_id not in tracked:
                     continue
-                if run.finished or run.state == AWAITING_ANSWER:
-                    # 目标刚结束或刚挂出提问，事件流下一页即送达：先记一次进展，不抢发无进展唤醒
+                prev_state = self._goal_ledger.note_of(run.goal_id).get("state")
+                if run.finished or run.state == AWAITING_ANSWER or (prev_state is not None and run.state != prev_state):
+                    # 目标刚结束、挂出提问或切换了暂停态，事件流下一页即送达：先记一次进展礼让事件流，
+                    # 不抢先覆盖账面 state，免得吞掉 _on_goal_changed 的状态边沿通知（如 pause_notice）
                     self._wait_progress.note_progress()
                 else:
                     self._goal_ledger.note(run)
