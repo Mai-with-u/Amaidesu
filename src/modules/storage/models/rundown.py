@@ -51,16 +51,23 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+SegmentMode = Literal["play", "talk"]
+
 
 __all__ = [
+    "SegmentMode",
     "RundownSegment",
     "Rundown",
     "RundownInstance",
+    "RundownInstanceSegment",
     "RundownTransition",
+    "DEBUT_ZATSUDAN_RUNDOWN",
+    "GAME_OPENING_TALK_RUNDOWN",
+    "RUNDOWN_PRESETS",
     "DEFAULT_RUNDOWN",
 ]
 
@@ -95,6 +102,31 @@ class RundownSegment(BaseModel):
         default=None,
         description="备注（可选）；导演直录内容（如参考开场白），直接注入上下文",
     )
+    mode: Optional[SegmentMode] = Field(
+        default=None,
+        description="环节说话模式（可选：play=游戏短促表达，talk=杂谈连贯展开；None=随当前游戏在线态自动判定）",
+    )
+    beats: List[str] = Field(
+        default_factory=list,
+        description="本环节提纲要点列表（按序展开；未超时且仍有未聊要点时拦截普通 Agent next）",
+    )
+
+    @field_validator("beats", mode="before")
+    @classmethod
+    def _normalize_beats(cls, value: object) -> List[str]:
+        """兼容旧数据 None 输入，并清理空白提纲项。"""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("beats 必须为字符串列表")
+        cleaned: List[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError("beats 元素必须为字符串")
+            stripped = item.strip()
+            if stripped:
+                cleaned.append(stripped)
+        return cleaned
 
     @field_validator("title")
     @classmethod
@@ -163,49 +195,160 @@ class Rundown(BaseModel):
 # 虚拟存在，不写库——用户在 WebUI 建立第一份流程单后自然替代。
 
 
-DEFAULT_RUNDOWN: Rundown = Rundown(
+DEBUT_ZATSUDAN_RUNDOWN: Rundown = Rundown(
     rundown_id="default_first_stream",
-    title="初次直播",
+    title="纯杂谈自我介绍出道回",
     segments=[
         RundownSegment(
             id="opening",
-            title="开场问候",
+            title="初见破冰与舞台亮相",
             task_description=(
-                "用友善、轻松的语气向首次进入直播间的观众打招呼，"
-                "说明这是首播，预告接下来会自我介绍，欢迎大家在弹幕互动。\n"
-                "要点：问好、说明首播、欢迎弹幕"
+                "站在镜头前热情向进场的观众打招呼，确认声音和画面清楚，"
+                "聊聊头一回正式登台亮相的心情，并预告今晚会聊身世、舞台形象与提问箱。"
             ),
-            expected_ms=180_000,  # 约 3 分钟
+            expected_ms=240_000,  # 4 分钟
+            min_duration_ms=150_000,  # 最少 2.5 分钟
+            mode="talk",
+            beats=[
+                "打招呼并确认直播间声音画面正常",
+                "分享第一次正式站上舞台亮相的心情",
+                "简短预告今晚自我介绍与提问箱互动安排",
+            ],
         ),
         RundownSegment(
-            id="self_intro",
-            title="自我介绍",
+            id="origin",
+            title="四亿年身世揭秘",
             task_description=(
-                "围绕自己的角色定位、开播初衷、未来内容规划展开，让观众快速了解主播是谁、为什么开播、接下来打算做什么。\n"
-                "要点：角色身份、开播初衷、未来内容方向"
+                "按设定档案把自己的奇妙来历绘声绘色讲清楚：远古萨卡班甲鱼与橙子意外混合、"
+                "靠维生素 C 抗氧化活过四亿年、2011 年苹果压过橙子后化身 AI 虚拟主播的历史恩怨，"
+                "坦荡俏皮地聊自己是 AI 主播这件事。"
             ),
-            expected_ms=600_000,  # 约 10 分钟
+            expected_ms=420_000,  # 7 分钟
+            min_duration_ms=300_000,  # 最少 5 分钟
+            mode="talk",
+            beats=[
+                "萨卡班甲鱼意外混入橙子的诞生来历",
+                "靠橙子维生素 C 抗氧化活过四亿年的保鲜秘诀",
+                "2011 年苹果风头压过橙子后化身 AI 的历史恩怨",
+                "大方俏皮地聊作为 AI 虚拟主播与人类打交道的感受",
+            ],
         ),
         RundownSegment(
-            id="chat",
-            title="互动闲聊",
+            id="outfit",
+            title="形象与身上机关导览",
             task_description=(
-                "欢迎观众弹幕提问与闲聊，主动抛出话题制造氛围；保持对话流动，不主导话题而是呼应观众。\n"
-                "要点：回应弹幕、抛出互动话题、维持氛围"
+                "带观众从上到下看清当前舞台形象的标志性细节，可偶尔配合歪头、眨眼等肢体动作展示，"
+                "把潜水艇形态留下的特征与身上的小机关逐个聊透。"
             ),
-            expected_ms=1_200_000,  # 约 20 分钟
+            expected_ms=360_000,  # 6 分钟
+            min_duration_ms=240_000,  # 最少 4 分钟
+            mode="talk",
+            beats=[
+                "头顶与潜水艇形态同款的两片绿叶发饰、橙色波浪短卷发与蓝紫眼睛",
+                "脸颊上的绿色四叶草身份印花与脖子上挂着的白橙耳机",
+                "腰侧调节麦麦参数的圆盘旋钮机关（配合肢体小动作展示）",
+            ],
+        ),
+        RundownSegment(
+            id="stories",
+            title="直播日常与翻车名场面",
+            task_description=(
+                "聊聊平时在直播间爱玩什么、自己对橙子与游戏的偏好；若有往场记忆或话题卡里的真实趣事"
+                "就拿出来自嘲分享，没有往场记录时聊对接下来直播探险的期待。"
+            ),
+            expected_ms=420_000,  # 7 分钟
+            min_duration_ms=300_000,  # 最少 5 分钟
+            mode="talk",
+            beats=[
+                "平时直播喜欢折腾的内容与自己的喜好执念",
+                "分享记忆或话题匣里的真实趣事与翻车瞬间（无旧记录时聊直播期待）",
+                "聊聊在直播间和大家相处的风格与约定",
+            ],
+        ),
+        RundownSegment(
+            id="qna",
+            title="棉花糖提问箱与快问快答",
+            task_description=(
+                "优先回应现场观众刚发的弹幕提问并顺势追问互动；弹幕安静的空隙从容抽取棉花糖提问箱"
+                "或二选一态度话题卡自问自答，保持节奏热闹不冷场。"
+            ),
+            expected_ms=600_000,  # 10 分钟
+            min_duration_ms=420_000,  # 最少 7 分钟
+            mode="talk",
+            beats=[
+                "开场招呼大家现场发弹幕提问，或抽出第一张提问箱卡片破冰",
+                "围绕观众提问或抽中的棉花糖与态度卡展开问答",
+                "挑一两个有趣问题做收束总结并感谢大家投递问题",
+            ],
         ),
         RundownSegment(
             id="closing",
-            title="收尾预告",
-            task_description=(
-                "感谢今晚陪伴的观众，简短预告下次直播内容与下播时间，自然结束本次首播。\n"
-                "要点：感谢观众、预告下次直播、道别"
-            ),
-            expected_ms=300_000,  # 约 5 分钟
+            title="未来约定与下播道别",
+            task_description=("回顾今晚出道回聊得最开心的片段，预告平时直播的内容安排，感谢陪伴的观众并自然道晚安。"),
+            expected_ms=240_000,  # 4 分钟
+            min_duration_ms=120_000,  # 最少 2 分钟
+            mode="talk",
+            beats=[
+                "回顾今天自我介绍与互动里印象最深的话题",
+                "预告后续日常直播安排并与观众定下再见面的约定",
+                "向直播间观众致谢并道晚安",
+            ],
         ),
     ],
 )
+
+# 默认流程单即纯杂谈出道回模板（6 段合计 38 分钟）
+DEFAULT_RUNDOWN: Rundown = DEBUT_ZATSUDAN_RUNDOWN
+
+# 日常游戏场预设：开场先聊 5 分钟热身杂谈，再切入主线游玩，收尾回杂谈总结道别
+GAME_OPENING_TALK_RUNDOWN: Rundown = Rundown(
+    rundown_id="preset_game_with_talk",
+    title="带开场杂谈的日常游戏场",
+    segments=[
+        RundownSegment(
+            id="opening_talk",
+            title="开场闲聊热身",
+            task_description=(
+                "先不急着埋头干活，面向镜头和刚进场的观众打招呼唠几句，"
+                "聊聊上次直播留下的印象或弹幕近况，再自然引出今晚准备玩的目标。"
+            ),
+            expected_ms=300_000,  # 5 分钟
+            min_duration_ms=180_000,  # 最少 3 分钟
+            mode="talk",
+            beats=[
+                "向直播间观众问好并呼应刚进场的朋友",
+                "顺口回顾一点上次留下的印象或抽一张轻快话题热身",
+                "交代今晚游戏里打算挑战的目标并准备开工",
+            ],
+        ),
+        RundownSegment(
+            id="main_play",
+            title="主线游玩推进",
+            task_description="边玩游戏边和直播间观众及联机伙伴自然互动，把关键进展与突发状况变成有看头的现场反应。",
+            expected_ms=3_600_000,  # 60 分钟
+            min_duration_ms=600_000,  # 最少 10 分钟
+            mode="play",
+            beats=[],
+        ),
+        RundownSegment(
+            id="closing",
+            title="收尾闲聊与下播道别",
+            task_description="停下手头杂活，和观众一起回顾今晚最好玩或最翻车的一幕，预告下次安排并道晚安。",
+            expected_ms=300_000,  # 5 分钟
+            min_duration_ms=120_000,  # 最少 2 分钟
+            mode="talk",
+            beats=[
+                "回顾今晚最值得记住的名场面或成果",
+                "回应弹幕告别、预告下次直播并道晚安",
+            ],
+        ),
+    ],
+)
+
+RUNDOWN_PRESETS: Dict[str, Rundown] = {
+    "debut_zatsudan": DEBUT_ZATSUDAN_RUNDOWN,
+    "game_with_opening_talk": GAME_OPENING_TALK_RUNDOWN,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +368,13 @@ class RundownInstanceSegment(BaseModel):
     expected_ms: int = Field(..., description="预期停留时长（毫秒）")
     min_duration_ms: Optional[int] = Field(default=None, description="最少停留时长（毫秒，可选）")
     notes: Optional[str] = Field(default=None, description="备注（可选）")
+    mode: Optional[SegmentMode] = Field(default=None, description="环节说话模式（可选）")
+    beats: List[str] = Field(default_factory=list, description="环节提纲要点列表")
+
+    @field_validator("beats", mode="before")
+    @classmethod
+    def _normalize_instance_beats(cls, value: object) -> List[str]:
+        return RundownSegment._normalize_beats(value)
 
 
 class RundownInstance(BaseModel):

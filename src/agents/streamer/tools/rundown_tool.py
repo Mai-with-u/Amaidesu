@@ -53,10 +53,17 @@ _PARAMETERS_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "goto 的目标环节 id（action=goto 时必填；可从情境注入的后续环节列表取得）",
         },
+        "force": {
+            "type": "boolean",
+            "description": (
+                "action=next 时可选：当前环节仍有未聊提纲要点，但确因特殊情况需要提前切入下一环节时置 true"
+                "（默认 false；最少停留时长 min_duration_ms 未到时仍不可跳过）"
+            ),
+        },
         "segment": {
             "type": "object",
             "description": "action=append 时必填：新环节定义（seg_id / title / task_description /"
-            " expected_ms 必填，min_duration_ms / notes 可选）",
+            " expected_ms 必填，min_duration_ms / notes / mode / beats 可选）",
             "properties": {
                 "seg_id": {"type": "string", "description": "新环节唯一标识（与现有环节 id 不得重复）"},
                 "title": {"type": "string", "description": "环节标题（非空）"},
@@ -64,6 +71,16 @@ _PARAMETERS_SCHEMA: dict[str, Any] = {
                 "expected_ms": {"type": "integer", "description": "预期停留时长（毫秒，至少 60000）"},
                 "min_duration_ms": {"type": "integer", "description": "最少停留时长（毫秒，可选）"},
                 "notes": {"type": "string", "description": "备注（可选）"},
+                "mode": {
+                    "type": "string",
+                    "enum": ["play", "talk"],
+                    "description": "环节说话模式（可选：play=游戏短促表达，talk=杂谈展开）",
+                },
+                "beats": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "本环节提纲要点列表（可选）",
+                },
             },
             "required": ["seg_id", "title", "task_description", "expected_ms"],
         },
@@ -135,6 +152,7 @@ class RundownControlProvider:
                 by="agent",
                 segment_id=str(args.get("segment_id", "") or "") or None,
                 payload=args.get("segment"),
+                force=bool(args.get("force", False)),
             )
         except Exception as exc:
             self._logger.warning(f"rundown_control 执行异常: {exc}", exc=True)
@@ -182,4 +200,7 @@ class RundownControlProvider:
             data["available_segment_ids"] = reject.available_ids
         if reject.remaining_ms:
             data["remaining_ms"] = reject.remaining_ms
+        if reject.remaining_beats:
+            data["remaining_beats"] = reject.remaining_beats
+            data["hint"] = "当前环节仍有未聊提纲要点，请先围绕剩余要点继续展开；仅在特殊情况确需跳过时传 force=true"
         return json.dumps(data, ensure_ascii=False)

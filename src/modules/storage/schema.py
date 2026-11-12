@@ -61,7 +61,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 40
+SCHEMA_VERSION: int = 41
 
 
 # =============================================================================
@@ -604,6 +604,8 @@ CREATE TABLE IF NOT EXISTS rundown_segments (
     expected_ms      INTEGER NOT NULL,
     min_duration_ms  INTEGER,
     notes            TEXT,
+    mode             TEXT CHECK (mode IS NULL OR mode IN ('play', 'talk')),
+    beats_json       TEXT NOT NULL DEFAULT '[]',
     UNIQUE(rundown_id, seg_id)
 );
 CREATE INDEX IF NOT EXISTS idx_rundown_segments_rundown ON rundown_segments(rundown_id, seq);
@@ -641,6 +643,8 @@ CREATE TABLE IF NOT EXISTS rundown_instance_segments (
     expected_ms      INTEGER NOT NULL,
     min_duration_ms  INTEGER,
     notes            TEXT,
+    mode             TEXT CHECK (mode IS NULL OR mode IN ('play', 'talk')),
+    beats_json       TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY(live_session_id, seq)
 );
 """.strip()

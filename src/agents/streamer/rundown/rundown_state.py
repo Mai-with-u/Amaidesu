@@ -18,14 +18,14 @@
   ``RundownReject``（含可用 id 列表 / 剩余等待 ms）——调用方拿到后注入
   Agent 上下文自纠。
 - **可注入时钟**：方法 ``now_ms`` 参数 > ``clock()`` > 真实 ``now_ms``。
-- **不持久化**：运行进度随进程失活而丢，重启即从头读流程单。
-- **依赖注入**：``emit`` / ``on_changed`` / ``clock`` 均关键字参数可空，
+- **纯内存状态机**：本类自身不直连数据库，运行进度快照与变更事实行由外层 ``RundownCoordinator`` 异步写穿持久化并支持崩溃恢复。
+- **依赖注入**：``emit`` / ``on_changed`` / ``clock`` / ``remaining_beats_fn`` 均关键字参数可空，
   全部 fail-soft（None → no-op）；不依赖 ProactiveTrigger / 工具 / 配置 / Dashboard。
 
 不在此处
 - 调度循环（节奏提醒由 ProactiveTrigger 的 ``rundown_overdue`` 触发源承担）
 - 工具调用接口（控制动作经 ``RundownControlTool`` 触达）
-- 持久化（不设运行进度表，重启从头读）
+- 数据库 IO（落库与恢复由 ``RundownCoordinator`` 承担）
 - EventBus 订阅（仅 `` emit ``，不订阅）
 """
 
@@ -60,14 +60,17 @@ class RundownReject:
 
     Attributes:
         reason: 人类可读原因码（如 ``"unknown_segment_id"`` / ``"min_duration_not_met"`` /
-            ``"already_done"`` / ``"not_running"`` / ``"not_paused"`` / ``"blank_title_target"``）
+            ``"unspoken_beats_remaining"`` / ``"already_done"`` / ``"not_running"`` /
+            ``"not_paused"`` / ``"blank_title_target"``）
         available_ids: 当前流程单的全部环节 id（未知 id 拒绝时填充）
         remaining_ms: 距 ``min_duration_ms`` 还差多少 ms（``min_duration`` 拒绝时填充）
+        remaining_beats: 当前环节尚未展开聊过的提纲要点列表（``unspoken_beats_remaining`` 拒绝时填充）
     """
 
     reason: str
     available_ids: List[str] = field(default_factory=list)
     remaining_ms: int = 0
+    remaining_beats: List[str] = field(default_factory=list)
 
 
 def _blank_title_reject(segment: RundownSegment) -> Optional[RundownReject]:
@@ -142,6 +145,7 @@ def _format_duration_ms(ms: int) -> str:
 EmitFn = Callable[[str, Any], None]
 ChangedFn = Callable[[str, str], None]
 ClockFn = Callable[[], int]
+RemainingBeatsFn = Callable[[str, List[str]], List[str]]
 
 
 class RundownState:
@@ -166,6 +170,7 @@ class RundownState:
         emit: Optional[EmitFn] = None,
         on_changed: Optional[ChangedFn] = None,
         clock: Optional[ClockFn] = None,
+        remaining_beats_fn: Optional[RemainingBeatsFn] = None,
     ) -> None:
         """Args:
         emit: 同步事件回调 ``(event_name: str, payload) -> None``，
@@ -176,6 +181,8 @@ class RundownState:
             ``None`` 表示不通知（fail-soft）。
         clock: 可选时钟回调（无参 → int 毫秒）。优先级：方法参数 ``now_ms``
             > ``clock()`` > 真实 ``now_ms``。``None`` 表示使用真实时钟。
+        remaining_beats_fn: 可选的剩余未聊提纲要点查询回调 ``(segment_id, beats) -> unspoken``，
+            装配话头工作台时注入；未注入时回退使用本类内置完成索引表。
         """
         self.rundown: Optional[Rundown] = None
         self.index: int = -1
@@ -188,11 +195,60 @@ class RundownState:
         # 不随 goto/next/renew 的环节切换清零——整场进度口径据此扣除暂停
         self._accumulated_session_pause_ms: int = 0
         self._transitions: Deque[Dict[str, Any]] = deque(maxlen=TRANSITIONS_MAXLEN)
+        self._completed_beats: Dict[str, set[int]] = {}
 
         self._clock: Optional[ClockFn] = clock
         self._emit: Optional[EmitFn] = emit
         self._on_changed: Optional[ChangedFn] = on_changed
+        self._remaining_beats_fn: Optional[RemainingBeatsFn] = remaining_beats_fn
         self._logger = get_logger("RundownState")
+
+    def set_remaining_beats_provider(self, fn: Optional[RemainingBeatsFn]) -> None:
+        """设置或替换当前环节未聊提纲要点的查询回调（供话头工作台接线）。"""
+        self._remaining_beats_fn = fn
+
+    def mark_beat_done(self, beat_index: Optional[int] = None) -> None:
+        """内置提纲要点完成标记：未传下标时按序将当前环节首个未完成要点记为已聊。"""
+        seg = self.current_segment
+        if seg is None or not seg.beats:
+            return
+        done = self._completed_beats.setdefault(seg.id, set())
+        if beat_index is not None:
+            if 0 <= beat_index < len(seg.beats):
+                done.add(beat_index)
+            return
+        for idx in range(len(seg.beats)):
+            if idx not in done:
+                done.add(idx)
+                return
+
+    def _get_remaining_beats(self, seg: RundownSegment) -> List[str]:
+        """查询指定环节尚未展开聊过的提纲要点列表。"""
+        if not seg.beats:
+            return []
+        if self._remaining_beats_fn is not None:
+            try:
+                return list(self._remaining_beats_fn(seg.id, list(seg.beats)))
+            except Exception as exc:
+                self._logger.warning(f"查询剩余提纲要点回调异常，降级放行: {exc}", exc=True)
+                return []
+        done = self._completed_beats.get(seg.id, set())
+        return [beat for idx, beat in enumerate(seg.beats) if idx not in done]
+
+    def _unspoken_beats_reject(self, *, by: str, force: bool, now: int) -> Optional[RundownReject]:
+        """防早退护栏：Agent 普通 next 在环节未超时且仍有未聊 beats 时结构化拒绝。"""
+        if by not in _MIN_GUARD_BY or force:
+            return None
+        seg = self.current_segment
+        if seg is None or not seg.beats:
+            return None
+        # 环节停留已达或超出预期时长时不再拦阻，避免超时仍无法收尾切换
+        if self._segment_elapsed_ms(now) >= seg.expected_ms:
+            return None
+        unspoken = self._get_remaining_beats(seg)
+        if unspoken:
+            return RundownReject(reason="unspoken_beats_remaining", remaining_beats=unspoken)
+        return None
 
     # ------------------------------------------------------------------
     # 时钟与派生状态
@@ -313,6 +369,7 @@ class RundownState:
         self.paused_at_ms = None
         self._accumulated_pause_ms = 0
         self._accumulated_session_pause_ms = 0
+        self._completed_beats.clear()
 
         first = rundown.segments[0]
         self._apply_change(
@@ -395,9 +452,10 @@ class RundownState:
         self._settle_pause_if_paused(now)
         self.index = target_idx
         self.segment_started_at_ms = now
-        # 跳到目标后清空暂停计时（目标段是新一段计时）
+        # 跳到目标后清空暂停计时与目标段提纲进度（目标段是新一段计时）
         self.paused_at_ms = None
         self._accumulated_pause_ms = 0
+        self._completed_beats.pop(target_seg.id, None)
 
         self._apply_change(
             action="goto",
@@ -412,6 +470,7 @@ class RundownState:
         self,
         *,
         by: str,
+        force: bool = False,
         now_ms: Optional[int] = None,
     ) -> Optional[RundownReject]:
         """顺序推进到下一环节。
@@ -419,6 +478,8 @@ class RundownState:
         - 若当前为末段（``index == total - 1``）：finish——``index = total``，
           发 ``rundown.changed``（``segment_id=""``，``index == total``）。
         - 若已 done（``index >= total``）：结构化拒绝。
+        - Agent 调用且 ``force=False`` 时，若当前环节未超时且仍有未聊提纲要点，
+          返回 ``unspoken_beats_remaining`` 结构化拒绝并附剩余要点。
         - 其他：推进到 ``index + 1``，发事件。
         """
         if by not in _VALID_BY:
@@ -435,6 +496,10 @@ class RundownState:
 
         if self.index >= total:
             return RundownReject(reason="already_done")
+
+        reject = self._unspoken_beats_reject(by=by, force=force, now=now)
+        if reject is not None:
+            return reject
         if self.index == total - 1:
             # finish：游标推到 total（status 派生为 done），发完成事件；
             # armed 态先隐含起算（单环节单直接被推完的边角）；
@@ -464,6 +529,7 @@ class RundownState:
         self.segment_started_at_ms = now
         self.paused_at_ms = None
         self._accumulated_pause_ms = 0
+        self._completed_beats.pop(target_seg.id, None)
         self._apply_change(
             action="next",
             segment_id=target_seg.id,
@@ -566,6 +632,7 @@ class RundownState:
         self.paused_at_ms = None
         self._accumulated_pause_ms = 0
         self._accumulated_session_pause_ms = 0
+        self._completed_beats.clear()
         self._apply_change(
             action="restart",
             segment_id=first.id,
@@ -947,6 +1014,8 @@ class RundownState:
                 "expected_ms": seg.expected_ms,
                 "elapsed_ms": elapsed,
                 "remaining_ms": remaining,
+                "mode": seg.mode,
+                "beats": list(seg.beats),
             }
 
         return {
@@ -1016,6 +1085,9 @@ class RundownState:
             )
         if seg.task_description:
             lines.append(f"目标：{seg.task_description}")
+        if seg.beats:
+            beats_text = "；".join(f"{idx + 1}. {item}" for idx, item in enumerate(seg.beats))
+            lines.append(f"本节提纲：{beats_text}")
         if seg.notes:
             lines.append(f"备注：{seg.notes}")
         upcoming = self.rundown.segments[self.index + 1 :]

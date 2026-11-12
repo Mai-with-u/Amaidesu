@@ -54,10 +54,24 @@ def _rundown_with_min_duration() -> Rundown:
     )
 
 
-def _provider(rundown: Rundown = DEFAULT_RUNDOWN) -> tuple[RundownControlProvider, _FakeClock]:
+def _plain_rundown() -> Rundown:
+    """不含最少停留与提纲护栏的四段流程单，用于验证工具通道本身的推进语义。"""
+    return Rundown(
+        rundown_id="plain_tool_rd",
+        title="基础工具测试单",
+        segments=[
+            RundownSegment(id="opening", title="开场问候", task_description="打招呼", expected_ms=180_000),
+            RundownSegment(id="self_intro", title="自我介绍", task_description="介绍自己", expected_ms=600_000),
+            RundownSegment(id="chat", title="互动闲聊", task_description="回应弹幕", expected_ms=1_200_000),
+            RundownSegment(id="closing", title="收尾预告", task_description="道别", expected_ms=300_000),
+        ],
+    )
+
+
+def _provider(rundown: Rundown | None = None) -> tuple[RundownControlProvider, _FakeClock]:
     clock = _FakeClock()
     state = RundownState(clock=clock)
-    state.load(rundown, now_ms=clock.now)
+    state.load(rundown or _plain_rundown(), now_ms=clock.now)
     state.begin(by="system", now_ms=clock.now)  # 工具用例需要 running 语义：load 后显式起算
     return RundownControlProvider(state), clock
 
@@ -162,8 +176,9 @@ def test_structured_rejections_are_fed_back_instead_of_raising() -> None:
 
 
 def test_renew_resets_the_segment_timer_and_is_rejected_after_completion() -> None:
-    provider, clock = _provider()
-    first = DEFAULT_RUNDOWN.segments[0]
+    plain_rd = _plain_rundown()
+    provider, clock = _provider(plain_rd)
+    first = plain_rd.segments[0]
     clock.advance(first.expected_ms + 60_000)
     assert provider._state.get_current_remaining_ms(now_ms=clock.now) == 0
 
@@ -172,7 +187,7 @@ def test_renew_resets_the_segment_timer_and_is_rejected_after_completion() -> No
     assert renewed["ok"] is True and renewed["rundown"]["status"] == "running"
     assert (current["remaining_ms"], current["elapsed_ms"]) == (first.expected_ms, 0)  # 剩余时长回到完整周期
 
-    for _ in range(len(DEFAULT_RUNDOWN.segments)):
+    for _ in range(len(plain_rd.segments)):
         _call(provider, action="next")
     done = _call(provider, action="renew")
     assert (done["ok"], done["reason"]) == (False, "already_done")
@@ -287,3 +302,42 @@ def test_append_missing_or_malformed_segment_rejected() -> None:
     )
     assert dup["ok"] is False and dup["reason"] == "duplicate_segment_id"
     assert "opening" in dup["available_segment_ids"]
+
+
+def test_unspoken_beats_guardrail_blocks_agent_next_until_done_overdue_or_forced() -> None:
+    """防早退护栏：未超时且有未聊提纲要点时拦截普通 Agent next，支持 force=True、超时放行与导演免检。"""
+    provider, clock = _provider(DEFAULT_RUNDOWN)
+    first_seg = DEFAULT_RUNDOWN.segments[0]
+    assert first_seg.min_duration_ms is not None
+
+    # 最少停留未到时先命中最少停留守卫
+    early = _call(provider, action="next", force=True)
+    assert (early["ok"], early["reason"]) == (False, "min_duration_not_met")
+
+    # 跨过最少停留但尚未超时，仍有未聊提纲要点时拦截普通 next 并列出剩余要点
+    clock.advance(first_seg.min_duration_ms + 1_000)
+    blocked = _call(provider, action="next")
+    assert (blocked["ok"], blocked["reason"]) == (False, "unspoken_beats_remaining")
+    assert blocked["remaining_beats"] == first_seg.beats
+
+    # 标记第一条要点已聊，剩余要点随之缩减但仍拦截
+    provider._state.mark_beat_done()
+    still_blocked = _call(provider, action="next")
+    assert still_blocked["ok"] is False
+    assert still_blocked["remaining_beats"] == first_seg.beats[1:]
+
+    # 传 force=True 可在特殊情况下跳过当前环节剩余未聊要点
+    forced = _call(provider, action="next", force=True)
+    assert forced["ok"] is True
+    assert forced["rundown"]["current"]["id"] == "origin"
+
+    # 第二环节：导演手动切换不受最少停留与未聊要点护栏限制
+    assert provider._state.next(by="human", now_ms=clock.now) is None
+    assert provider._state.current_segment_id == "outfit"
+
+    # 第三环节：停留达到预期时长（超时）后，即使仍有未聊要点也自动放行
+    outfit_seg = DEFAULT_RUNDOWN.segments[2]
+    clock.advance(outfit_seg.expected_ms)
+    overdue_ok = _call(provider, action="next")
+    assert overdue_ok["ok"] is True
+    assert overdue_ok["rundown"]["current"]["id"] == "stories"

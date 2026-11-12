@@ -127,6 +127,7 @@ def dispatch_rundown_control(
     by: str,
     segment_id: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
+    force: bool = False,
     now_ms: Optional[int] = None,
 ) -> DispatchOutcome:
     """执行流程单控制动作并统一翻译状态机拒绝（所有通道的唯一分发入口）。
@@ -156,7 +157,7 @@ def dispatch_rundown_control(
     elif action == "renew":
         reject = state.renew(by=by, now_ms=now_ms)
     elif action == "next":
-        reject = state.next(by=by, now_ms=now_ms)
+        reject = state.next(by=by, force=force, now_ms=now_ms)
     elif action == "restart":
         # 整场重开是导演通道（Agent 工具不暴露 restart）
         reject = state.restart(by=by, now_ms=now_ms)

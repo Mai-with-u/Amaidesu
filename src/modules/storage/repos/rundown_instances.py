@@ -7,10 +7,12 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional
 
 from src.modules.storage.models.rundown import RundownInstance, RundownInstanceSegment
 from src.modules.storage.repos._base import BaseRepo
+from src.modules.storage.repos.rundowns import _parse_beats_json
 from src.modules.utils.time_utils import now_ms
 
 
@@ -39,6 +41,8 @@ class RundownInstanceRepo(BaseRepo):
                     expected_ms=int(row["expected_ms"]),
                     min_duration_ms=row["min_duration_ms"],
                     notes=row["notes"],
+                    mode=row.get("mode"),
+                    beats=_parse_beats_json(row.get("beats_json")),
                 )
                 for row in segment_rows
             ],
@@ -56,7 +60,7 @@ class RundownInstanceRepo(BaseRepo):
                 if header is None:
                     return None
                 segment_rows = conn.execute(
-                    "SELECT seq, seg_id, title, task_description, expected_ms, min_duration_ms, notes"
+                    "SELECT seq, seg_id, title, task_description, expected_ms, min_duration_ms, notes, mode, beats_json"
                     " FROM rundown_instance_segments WHERE live_session_id=? ORDER BY seq ASC",
                     (live_session_id,),
                 ).fetchall()
@@ -106,8 +110,8 @@ class RundownInstanceRepo(BaseRepo):
                 )
                 conn.executemany(
                     "INSERT INTO rundown_instance_segments ("
-                    "live_session_id, seq, seg_id, title, task_description, expected_ms, min_duration_ms, notes"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "live_session_id, seq, seg_id, title, task_description, expected_ms, min_duration_ms, notes, mode, beats_json"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [
                         (
                             snapshot.live_session_id,
@@ -118,6 +122,8 @@ class RundownInstanceRepo(BaseRepo):
                             seg.expected_ms,
                             seg.min_duration_ms,
                             seg.notes,
+                            seg.mode,
+                            json.dumps(seg.beats, ensure_ascii=False),
                         )
                         for seg in snapshot.segments
                     ],

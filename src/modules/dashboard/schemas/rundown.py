@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -50,6 +50,8 @@ class RundownSegmentView(BaseModel):
     expected_ms: int = 0
     min_duration_ms: Optional[int] = None
     notes: Optional[str] = None
+    mode: Optional[Literal["play", "talk"]] = None
+    beats: List[str] = Field(default_factory=list)
 
 
 class RundownConfigView(BaseModel):
@@ -121,6 +123,21 @@ class RundownTemplateResponse(BaseModel):
     definition: Optional[RundownDefinition] = None
 
 
+class RundownPresetItem(BaseModel):
+    """内置流程单预设条目（供编排页一键导入，如纯杂谈出道回、带开场杂谈的游戏场）。"""
+
+    key: str
+    definition: RundownDefinition
+
+
+class RundownPresetsResponse(BaseModel):
+    """``GET /api/v1/rundowns/presets`` 响应。"""
+
+    success: bool
+    message: str = ""
+    presets: List[RundownPresetItem] = Field(default_factory=list)
+
+
 class RundownMutateResponse(BaseModel):
     """流程单库写操作的统一响应（upsert / delete / duplicate / activate）。"""
 
@@ -138,6 +155,8 @@ __all__ = [
     "RundownInsertPayload",
     "RundownListResponse",
     "RundownMutateResponse",
+    "RundownPresetItem",
+    "RundownPresetsResponse",
     "RundownSegmentView",
     "RundownStateResponse",
     "RundownTemplateResponse",

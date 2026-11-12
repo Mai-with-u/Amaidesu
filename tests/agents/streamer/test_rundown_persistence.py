@@ -157,8 +157,9 @@ async def test_persist_inserts_transition_and_upserts_instance() -> None:
     # armed 态（load 只装载不起算）不写实例快照：锚点未起算无从落列
     assert len(instance_repo.snapshots) == 0
 
-    # 真实驱动状态机：armed 态 goto 隐含起算，桥读到的当前环节是 self_intro
-    assert state.goto("self_intro", by="human", now_ms=1_000_000) is None
+    # 真实驱动状态机：armed 态 goto 隐含起算，桥读到的当前环节是第二段 origin
+    second_seg = DEFAULT_RUNDOWN.segments[1]
+    assert state.goto(second_seg.id, by="human", now_ms=1_000_000) is None
     await _drain(agent)
 
     # 变更事实行：payload 字段原样 + 当前环节 expected_ms；非 append 行无描述
@@ -167,19 +168,20 @@ async def test_persist_inserts_transition_and_upserts_instance() -> None:
     assert row.action == "goto"
     assert (row.live_session_id, row.seg_id, row.seg_index, row.by, row.at_ms) == (
         42,
-        "self_intro",
+        second_seg.id,
         1,
         "human",
         1_000_000,
     )
-    assert row.expected_ms == 600_000
+    assert row.expected_ms == second_seg.expected_ms
     assert row.task_description is None
 
-    # 实例写穿：头字段来自 export_progress（起算后非空），环节行全量
+    # 实例写穿：头字段来自 export_progress（起算后非空），环节行全量且带 mode 与 beats
     assert len(instance_repo.snapshots) == 1
     snap = instance_repo.snapshots[-1]
     assert (snap.live_session_id, snap.template_id, snap.seg_index) == (42, "default_first_stream", 1)
     assert [s.seg_id for s in snap.segments] == [s.id for s in DEFAULT_RUNDOWN.segments]
+    assert (snap.segments[1].mode, snap.segments[1].beats) == (second_seg.mode, second_seg.beats)
 
 
 async def test_persist_append_row_carries_task_description() -> None:
@@ -191,17 +193,15 @@ async def test_persist_append_row_carries_task_description() -> None:
     await _drain(agent)
 
     # append 行从 state 取新环节描述（payload.segment_id 指向 state 中的新环节）
+    second_seg = DEFAULT_RUNDOWN.segments[1]
     agent._rundown_coord._emit_rundown_changed(
-        "rundown.changed", _payload("append", seg_id="self_intro", index=1, by="agent")
+        "rundown.changed", _payload("append", seg_id=second_seg.id, index=1, by="agent")
     )
     await _drain(agent)
     row = transition_repo.rows[-1]
     assert row.action == "append"
     # append 行从 state 取新环节描述
-    assert (
-        row.task_description
-        == "围绕自己的角色定位、开播初衷、未来内容规划展开，让观众快速了解主播是谁、为什么开播、接下来打算做什么。\n要点：角色身份、开播初衷、未来内容方向"
-    )
+    assert row.task_description == second_seg.task_description
 
 
 async def test_persist_failures_are_isolated_and_soft() -> None:
@@ -228,7 +228,7 @@ async def test_stop_waits_inflight_persist_then_drops_later_changes() -> None:
     # 嘴停下时引起一次流程单变更：代表停止途中还在收尾的决策轮改了流程单
     mouth.stop = AsyncMock(
         side_effect=lambda: agent._rundown_coord._emit_rundown_changed(
-            "rundown.changed", _payload("next", seg_id="self_intro", index=1)
+            "rundown.changed", _payload("next", seg_id=DEFAULT_RUNDOWN.segments[1].id, index=1)
         )
     )
     agent._rundown_coord._state.load(DEFAULT_RUNDOWN, now_ms=1_000_000)
@@ -293,7 +293,7 @@ async def test_restore_recovers_cursor_from_snapshot() -> None:
     agent = await _make_restored_agent(session_manager=session, instance_repo=instance_repo)
 
     state = agent._rundown_coord._state
-    assert (state.status, state.index, state.current_segment_id) == ("running", 2, "chat")
+    assert (state.status, state.index, state.current_segment_id) == ("running", 2, DEFAULT_RUNDOWN.segments[2].id)
     # 恢复清单来自实例快照（防模板漂移），模板标题保留
     assert state.rundown.title == DEFAULT_RUNDOWN.title
     assert [s.id for s in state.rundown.segments] == [s.id for s in DEFAULT_RUNDOWN.segments]
@@ -303,11 +303,14 @@ async def test_restore_recovers_cursor_from_snapshot() -> None:
 async def test_restore_uses_snapshot_segments_including_appended() -> None:
     session = _StubSessionManager(42)
     instance_repo = _StubInstanceRepo()
-    appended = RundownInstanceSegment(seq=4, seg_id="bonus", title="加场", task_description="x", expected_ms=120_000)
+    base_len = len(DEFAULT_RUNDOWN.segments)
+    appended = RundownInstanceSegment(
+        seq=base_len, seg_id="bonus", title="加场", task_description="x", expected_ms=120_000
+    )
     instance_repo.snapshots.append(
         _snapshot(
             "default_first_stream",
-            4,
+            base_len,
             segments=[
                 *(
                     RundownInstanceSegment(
@@ -327,7 +330,7 @@ async def test_restore_uses_snapshot_segments_including_appended() -> None:
 
     state = agent._rundown_coord._state
     # 快照含 Agent 追加环节且 seg_index 指向它 → 续命态还原
-    assert (state.status, state.index, state.current_segment_id) == ("running", 4, "bonus")
+    assert (state.status, state.index, state.current_segment_id) == ("running", base_len, "bonus")
 
 
 async def test_no_snapshot_falls_back_to_load() -> None:
@@ -378,7 +381,7 @@ async def test_resume_restore_recovers_snapshot_after_start() -> None:
     assert await agent._rundown_coord.resume_restore() is True
 
     state = agent._rundown_coord._state
-    assert (state.status, state.index, state.current_segment_id) == ("running", 2, "chat")
+    assert (state.status, state.index, state.current_segment_id) == ("running", 2, DEFAULT_RUNDOWN.segments[2].id)
 
 
 async def test_resume_restore_then_begin_is_rejected() -> None:

@@ -45,6 +45,8 @@ def build_rundown_view(state: RundownState, *, now_ms: Optional[int] = None) -> 
             "expected_ms": seg.expected_ms,
             "min_duration_ms": seg.min_duration_ms,
             "notes": seg.notes,
+            "mode": seg.mode,
+            "beats": list(seg.beats),
         }
         for seg in rundown.segments
     ]
@@ -71,6 +73,8 @@ def _human_message(outcome_result: Any) -> str:
     reject = outcome_result.reject
     if reject.reason == "min_duration_not_met":
         return f"当前环节最少停留未到（还需约 {max(1, round(reject.remaining_ms / 1000))} 秒）"
+    if reject.reason == "unspoken_beats_remaining":
+        return f"当前环节尚有未聊提纲要点：{', '.join(reject.remaining_beats)}"
     if reject.reason == "unknown_segment_id":
         return f"环节不存在（可用: {', '.join(reject.available_ids)}）"
     static_messages = {

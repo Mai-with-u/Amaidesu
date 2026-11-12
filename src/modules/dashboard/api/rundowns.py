@@ -37,12 +37,14 @@ from src.modules.dashboard.schemas.rundown import (
     RundownDefinition,
     RundownListResponse,
     RundownMutateResponse,
+    RundownPresetItem,
+    RundownPresetsResponse,
     RundownSegmentView,
     RundownTemplateResponse,
 )
 from src.modules.dashboard.services.config_adapter import apply_config_updates
 from src.modules.dashboard.utils.component_helper import config_dir as resolve_config_dir
-from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown
+from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, RUNDOWN_PRESETS, Rundown
 
 if TYPE_CHECKING:
     from src.modules.dashboard.server import DashboardServer
@@ -142,6 +144,19 @@ async def get_rundown_template(server: ServerDep) -> RundownTemplateResponse:
     """内置默认流程单（新建预填模板；虚拟存在不写库）。"""
     del server  # 配置无关的静态模板，占位参数保持依赖注入形态一致
     return RundownTemplateResponse(success=True, definition=_definition_from_rundown(DEFAULT_RUNDOWN))
+
+
+@router.get("/presets", response_model=RundownPresetsResponse)
+async def list_rundown_presets(server: ServerDep) -> RundownPresetsResponse:
+    """返回全部内置流程单预设（纯杂谈自我介绍出道回、带 5 分钟开场杂谈的游戏场）。"""
+    del server
+    return RundownPresetsResponse(
+        success=True,
+        presets=[
+            RundownPresetItem(key=key, definition=_definition_from_rundown(preset))
+            for key, preset in RUNDOWN_PRESETS.items()
+        ],
+    )
 
 
 @router.post("", response_model=RundownMutateResponse)

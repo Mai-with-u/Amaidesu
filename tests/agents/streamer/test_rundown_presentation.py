@@ -36,6 +36,8 @@ def test_build_view_shape() -> None:
             "expected_ms",
             "min_duration_ms",
             "notes",
+            "mode",
+            "beats",
         }
 
 
@@ -176,7 +178,7 @@ def test_insert_inserts_after_current_and_next_lands_on_it() -> None:
         state, "insert", payload={"title": "应急话题", "content": "聊聊最近的趣事"}
     )
     assert success is True and message == "已执行"
-    assert snapshot is not None and snapshot["total"] == 5
+    assert snapshot is not None and snapshot["total"] == len(DEFAULT_RUNDOWN.segments) + 1
     # 游标不动，插入环节在 index+1；下一次 next 落到它
     assert [s["id"] for s in build_rundown_view(state)["segments"]][1].startswith("insert-")
     assert state.next(by="human") is None
@@ -190,7 +192,7 @@ def test_insert_missing_title_rejected() -> None:
         assert success is False and "title" in message
         assert snapshot is None
     # 拒绝不变更
-    assert len(state.rundown.segments) == 4
+    assert len(state.rundown.segments) == len(DEFAULT_RUNDOWN.segments)
 
 
 def test_insert_rejected_without_rundown_and_when_done() -> None:
@@ -199,7 +201,7 @@ def test_insert_rejected_without_rundown_and_when_done() -> None:
 
     state = _loaded_state()
     assert apply_rundown_control(state, "insert", payload={"title": "话题"})[0] is True
-    for _ in range(5):
+    for _ in range(len(DEFAULT_RUNDOWN.segments) + 1):
         apply_rundown_control(state, "next")
     success, message, snapshot = apply_rundown_control(state, "insert", payload={"title": "话题"})
     assert success is False and message == "流程单已完成"

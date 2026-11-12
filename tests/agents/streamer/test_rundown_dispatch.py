@@ -17,16 +17,28 @@ from src.agents.streamer.rundown.dispatch import (
     dispatch_rundown_control,
 )
 from src.agents.streamer.rundown.rundown_state import RundownState
-from src.modules.storage.models.rundown import DEFAULT_RUNDOWN, Rundown, RundownSegment
+from src.modules.storage.models.rundown import Rundown, RundownSegment
 
 # 固定时钟：remaining_ms 等派生量按起算零流逝计算，断言不随机器速度漂移
 _TEST_NOW_MS = 1_700_000_000_000
 
 
-def _loaded_state() -> RundownState:
+def _ungated_rundown() -> Rundown:
+    """不含最少停留与提纲护栏的双段流程单，专用于验证通道与动作分发语义。"""
+    return Rundown(
+        rundown_id="dispatch_rd",
+        title="分发测试流程单",
+        segments=[
+            RundownSegment(id="opening", title="开场", task_description="开场", expected_ms=180_000),
+            RundownSegment(id="chat", title="闲聊", task_description="闲聊", expected_ms=600_000),
+        ],
+    )
+
+
+def _loaded_state(rundown: Rundown | None = None) -> RundownState:
     """已起算（running）的状态：load 只装载结构，分发用例需计时语义故显式 begin。"""
     state = RundownState()
-    state.load(DEFAULT_RUNDOWN)
+    state.load(rundown or _ungated_rundown())
     state.begin(by="system")
     return state
 
@@ -58,7 +70,7 @@ def test_goto_requires_segment_id_and_reports_unknown_id_via_state_reject() -> N
     outcome = dispatch_rundown_control(state, "goto", by="agent", segment_id="nope")
     assert outcome.success is False
     assert outcome.reject is not None and outcome.reject.reason == "unknown_segment_id"
-    assert outcome.reject.available_ids == [seg.id for seg in DEFAULT_RUNDOWN.segments]
+    assert outcome.reject.available_ids == ["opening", "chat"]
 
 
 def test_insert_builds_one_off_segment_with_server_generated_id() -> None:
@@ -80,7 +92,7 @@ def test_insert_without_blank_free_title_is_param_rejected(payload: Any) -> None
     outcome = dispatch_rundown_control(state, "insert", by="human", payload=payload)
     assert (outcome.success, outcome.error_code) == (False, "missing_insert_title")
     assert outcome.reject is None
-    assert len(state.rundown.segments) == 4  # 拒绝不变更
+    assert len(state.rundown.segments) == 2  # 拒绝不变更
 
 
 def test_insert_by_agent_hits_state_actor_whitelist_as_value_error() -> None:
@@ -100,7 +112,7 @@ def test_append_unified_validation_covers_every_actor() -> None:
     )
     assert (below.success, below.error_code) == (False, "append_expected_ms_below_min")
     assert below.error_detail == repr(30_000)
-    assert len(state.rundown.segments) == 4  # 拒绝不变更
+    assert len(state.rundown.segments) == 2  # 拒绝不变更
 
     missing = dispatch_rundown_control(state, "append", by="agent", payload=None)
     assert (missing.success, missing.error_code) == (False, "append_segment_not_object")

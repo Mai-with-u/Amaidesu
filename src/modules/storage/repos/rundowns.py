@@ -9,12 +9,31 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any, Dict, List, Optional
 
+from src.modules.logging import get_logger
 from src.modules.storage.models.rundown import Rundown, RundownSegment
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.utils.time_utils import now_ms
+
+logger = get_logger("RundownRepo")
+
+
+def _parse_beats_json(raw: Any) -> List[str]:
+    """安全解析数据库列中的提纲要点 JSON 列表；异常脏行记录告警并降级为空列表。"""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(x) for x in raw if str(x).strip()]
+    try:
+        parsed = json.loads(str(raw))
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed if isinstance(x, str) and x.strip()]
+    except Exception as exc:
+        logger.warning(f"解析 beats_json 失败，降级为空列表: raw={raw!r}", exc=exc)
+    return []
 
 
 class RundownRepo(BaseRepo):
@@ -32,6 +51,8 @@ class RundownRepo(BaseRepo):
             seg.expected_ms,
             seg.min_duration_ms,
             seg.notes,
+            seg.mode,
+            json.dumps(seg.beats, ensure_ascii=False),
         )
 
     @classmethod
@@ -45,6 +66,8 @@ class RundownRepo(BaseRepo):
                 expected_ms=int(row["expected_ms"]),
                 min_duration_ms=row["min_duration_ms"],
                 notes=row["notes"],
+                mode=row.get("mode"),
+                beats=_parse_beats_json(row.get("beats_json")),
             )
             for row in segment_rows
         ]
@@ -55,7 +78,7 @@ class RundownRepo(BaseRepo):
         """一次取多个流程单的环节行，按 ``(rundown_id, seq)`` 分组（组内 seq 升序）。"""
         placeholders = ",".join("?" for _ in rundown_ids)
         rows = conn.execute(
-            f"SELECT rundown_id, seq, seg_id, title, task_description, expected_ms, min_duration_ms, notes"  # noqa: S608 子句为代码内常量
+            f"SELECT rundown_id, seq, seg_id, title, task_description, expected_ms, min_duration_ms, notes, mode, beats_json"  # noqa: S608 子句为代码内常量
             f" FROM rundown_segments WHERE rundown_id IN ({placeholders}) ORDER BY rundown_id ASC, seq ASC",
             rundown_ids,
         ).fetchall()
@@ -85,8 +108,8 @@ class RundownRepo(BaseRepo):
                 conn.execute("DELETE FROM rundown_segments WHERE rundown_id=?", (rundown.rundown_id,))
                 conn.executemany(
                     "INSERT INTO rundown_segments ("
-                    "rundown_id, seq, seg_id, title, task_description, expected_ms, min_duration_ms, notes"
-                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "rundown_id, seq, seg_id, title, task_description, expected_ms, min_duration_ms, notes, mode, beats_json"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [
                         self._segment_row_params(rundown.rundown_id, seq, seg)
                         for seq, seg in enumerate(rundown.segments)
@@ -104,7 +127,7 @@ class RundownRepo(BaseRepo):
                 if header is None:
                     return None
                 segment_rows = conn.execute(
-                    "SELECT seq, seg_id, title, task_description, expected_ms, min_duration_ms, notes"
+                    "SELECT seq, seg_id, title, task_description, expected_ms, min_duration_ms, notes, mode, beats_json"
                     " FROM rundown_segments WHERE rundown_id=? ORDER BY seq ASC",
                     (rundown_id,),
                 ).fetchall()

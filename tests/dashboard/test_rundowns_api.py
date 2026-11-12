@@ -149,9 +149,16 @@ def test_list_degrades_without_repo_and_returns_definitions_with_current_id(make
 
 
 def test_template_is_the_builtin_default_rundown(make_client) -> None:
-    body = make_client().get("/api/v1/rundowns/template").json()
+    client = make_client()
+    body = client.get("/api/v1/rundowns/template").json()
     assert body["success"] is True and body["definition"]["rundown_id"] == "default_first_stream"
-    assert len(body["definition"]["segments"]) >= 1
+    assert len(body["definition"]["segments"]) == 6
+    assert body["definition"]["segments"][0]["mode"] == "talk"
+    assert len(body["definition"]["segments"][0]["beats"]) >= 2
+
+    presets = client.get("/api/v1/rundowns/presets").json()
+    assert presets["success"] is True
+    assert {item["key"] for item in presets["presets"]} == {"debut_zatsudan", "game_with_opening_talk"}
 
 
 def test_upsert_create_generates_id_and_rejects_duplicate_segment_ids(make_client, repo: FakeRundownRepo) -> None:

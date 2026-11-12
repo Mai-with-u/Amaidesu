@@ -122,6 +122,19 @@ class RundownCoordinator:
         segment = self._state.current_segment
         return segment.title if segment is not None else ""
 
+    def current_segment(self) -> Optional[RundownSegment]:
+        """当前环节完整定义（供话头工作台读取提纲要点与模式）；无当前环节返回 None。"""
+        return self._state.current_segment
+
+    def current_segment_mode(self) -> Optional[str]:
+        """当前环节显式配置的说话模式（'play' / 'talk' / None）。"""
+        segment = self._state.current_segment
+        return segment.mode if segment is not None else None
+
+    def set_remaining_beats_provider(self, fn: Optional[Callable[[str, list[str]], list[str]]]) -> None:
+        """向底层状态机注册未聊提纲要点查询回调（供防早退护栏使用）。"""
+        self._state.set_remaining_beats_provider(fn)
+
     def get_elapsed_live_ms(self, *, now_ms: Optional[int] = None) -> Optional[int]:
         """整场已播时长（未加载/未起算为 ``None``；口径见 ``RundownState``）。"""
         return self._state.get_elapsed_live_ms(now_ms=now_ms)
@@ -139,7 +152,7 @@ class RundownCoordinator:
 
         done 仍供能：流程单内容排完不是停止内容推进的理由——Agent 按既定节奏
         获得开口机会，凭情境（完成文案 + 弹幕）自由互动。paused 不供能（导演
-        明确叫停）。供能不等于发言：is_novel 自检与台词重合度闸把关质量。
+        明确叫停）。供能不等于发言：由发言新颖度自检把关质量。
         """
         return self._state.status in ("running", "done")
 
@@ -256,6 +269,8 @@ class RundownCoordinator:
                         expected_ms=s.expected_ms,
                         min_duration_ms=s.min_duration_ms,
                         notes=s.notes,
+                        mode=s.mode,
+                        beats=list(s.beats),
                     )
                     for s in snapshot.segments
                 ]
@@ -366,6 +381,8 @@ class RundownCoordinator:
                                         expected_ms=seg.expected_ms,
                                         min_duration_ms=seg.min_duration_ms,
                                         notes=seg.notes,
+                                        mode=seg.mode,
+                                        beats=list(seg.beats),
                                     )
                                     for i, seg in enumerate(state_rundown.segments)
                                 ],
