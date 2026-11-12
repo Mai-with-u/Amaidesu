@@ -11,7 +11,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.streamer.game_now import AgentNow, GameNow, GameSideLog, render_game_now, scrub_game_readings
+from src.agents.streamer.game_now import (
+    AgentNow,
+    GameNow,
+    GameSideLog,
+    GoalResultLine,
+    render_game_now,
+    scrub_game_readings,
+)
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.planner_render import Delegation
 from src.agents.streamer.room_state import RoomState
@@ -199,6 +206,21 @@ def test_block_besides_overview_stays_within_600_tokens() -> None:
     assert len(encoding.encode(text)) <= 600
     assert text.count("「") == 3
 
+    # 带满 5 条近期目标成败记录时同样守住 600 token 上限
+    goals = tuple(
+        GoalResultLine(at_ms=_NOW - idx * 5000, game="minecraft", outcome="没成", purpose=long, summary=long)
+        for idx in range(6)
+    )
+    text_with_goals = render_game_now(
+        {"minecraft": _delegation(instruction=long)},
+        _record(notes),
+        GameNow({"minecraft": reading}, chat, goals),
+        "",
+        _NOW,
+    )
+    assert len(encoding.encode(text_with_goals)) <= 600
+    assert "近期目标成败（只认成了算做完）" in text_with_goals
+
 
 def test_side_log_keeps_five_minutes_of_self_chat() -> None:
     log = GameSideLog()
@@ -310,3 +332,51 @@ async def test_agent_feeds_step_judgement_and_self_chat_and_clears_them_at_live_
     after = agent._game_now(["minecraft"])
     # 判断挂在那件委派上：委派还在账上就还在，渲染时只认这件事开始之后说的
     assert after.self_chat == ()
+
+
+async def test_agent_records_provider_goal_outcomes_across_delegations() -> None:
+    """A4 近期目标成败清单：provider 目标终态（成了/做了一半/没成）记入账本缓冲，委派终态移除后仍可供每窗查询核对。"""
+    ledger = TaskLedger()
+    ledger.register(
+        task_id="maicraft-goal-11",
+        provider="maicraft",
+        tool="maicraft_execute",
+        initiator="minecraft",
+        executor="maicraft",
+        source="provider",
+        snapshot={"purpose": "平地取土"},
+    )
+    ledger.update(
+        "maicraft-goal-11",
+        "succeeded",
+        snapshot={"purpose": "平地取土", "result_status": "done"},
+        summary="在营地旁挖了 12 块泥土",
+    )
+    ledger.register(
+        task_id="maicraft-goal-12",
+        provider="maicraft",
+        tool="maicraft_execute",
+        initiator="minecraft",
+        executor="maicraft",
+        source="provider",
+        snapshot={"purpose": "前往树场"},
+    )
+    ledger.update(
+        "maicraft-goal-12",
+        "failed",
+        snapshot={"purpose": "前往树场", "result_status": "failed"},
+        summary="走不到目标 (-350, 64, 58)",
+    )
+
+    agent = make_streamer_agent(task_ledger=ledger, round_executor=FakeRoundExecutor({"speech": "好"}))
+    t0 = now_ms()
+    now = agent._game_now([])
+    rendered = render_game_now({}, None, now, "", t0)
+    assert "近期目标成败（只认成了算做完）" in rendered
+    assert "成了：平地取土→在营地旁挖了 12 块泥土" in rendered
+    assert "没成：前往树场→走不到目标" in rendered
+    assert "-350" not in rendered
+
+    started = LiveStartedPayload(live_session_id=2, source="manual", started_at_ms=t0 + 1)
+    await agent._on_live_started("live.started", started, "test")
+    assert agent._game_now([]).goal_results == ()

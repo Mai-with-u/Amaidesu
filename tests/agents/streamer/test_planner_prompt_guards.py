@@ -4,16 +4,23 @@
 from __future__ import annotations
 
 from typing import Any, Iterator
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.agents.streamer.config import StreamerPersonaConfig
-from src.agents.streamer.planner import Planner, PlannerConfig
+from src.agents.streamer.game_now import GameNow, GoalResultLine
+from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
 from src.agents.streamer.room_state import RoomState
+from src.agents.streamer.timeline import GameEventBatch, PlayerNote
 from src.agents.streamer.tools.social_fact import SocialFactToolProvider
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
+from src.modules.tools.models import ToolExecutionResult, ToolSpec
+from src.modules.tools.provider import make_provider_from_specs
 from src.modules.tools.registry import ToolRegistry
+from src.modules.utils.time_utils import now_ms
 from tests.modules.llm.fakes import FakeLLMManager
 
 #: 三条说话通路（Planner、Replyer、嘴）共用的 AI 声明口径，Planner 这条接在它后面补"交接稿要让她这样答"
@@ -181,7 +188,7 @@ def test_prompt_template_treats_retraction_as_cancellation(prompts: Any) -> None
     prompt = _render_bare(prompts)
 
     assert "有人更正或宣布不用做了，按作废处理" in prompt
-    assert "被作废的事对应哪一单就撤哪一单" in prompt and "`framework_task_cancel`" in prompt
+    assert "被作废的事对应哪一单就撤哪一单" in prompt and "`framework_task_settle`" in prompt
     assert "口头认账" in prompt
     # 直接渲染（变量为空，即工具没注册的口径）：规则不点名社交事实工具
     assert "streamer_social_fact" not in prompt
@@ -232,3 +239,201 @@ async def test_proactive_action_options_mention_social_fact_only_when_registered
     text, failure = await planner._assemble_reference([], None, None, forced=False, proactive=True)
     assert failure is None and text is not None
     assert ("记一笔游戏里的社交事实（streamer_social_fact）" in text) is registered
+
+
+async def test_a3_and_a4_pit_trap_checks_own_recent_digging_and_explosions_before_answering(prompts: Any) -> None:
+    """A3 + A4 补 1 回归（第 61 场 21:45 '还有陷阱' / 第 65 场 22:41 '卡住了'）：
+    玩家甲在公屏说'这边还有陷阱''还有陷阱 2 号'或指出卡住时，【游戏那边此刻】呈现近期挖掘与失败记录，
+    系统提示词明确要求先对照自己最近挖过什么、哪里爆炸过、哪步没成，是自己造成的就认下来去处理，不反问'在哪儿'。"""
+    ts = now_ms()
+    captured_messages: list[list[dict]] = []
+    invoked: list[tuple[str, dict]] = []
+
+    async def _generate(messages: list[dict], **_: Any) -> Response:
+        captured_messages.append([dict(m) for m in messages])
+        return Response(
+            success=True,
+            tool_calls=[
+                ToolCall(
+                    id="d1",
+                    name="framework_delegate",
+                    arguments={"agent": "minecraft", "instruction": "回营地把刚才挖土留下的坑填平"},
+                ),
+                ToolCall(
+                    id="r1",
+                    name="streamer_reply",
+                    arguments={
+                        "topic_summary": "玩家甲提醒营地边有陷阱坑，游戏记录显示她刚才在营地边挖过泥土且有爆炸坑，现去回填",
+                        "reply_guidance": "爽快认下坑是自己挖材料留下的并说这就去填平",
+                        "topic_tag": "营地填坑",
+                        "to_player": "玩家甲",
+                        "emotion": "neutral",
+                        "intensity": 0.4,
+                    },
+                ),
+            ],
+        )
+
+    async def _tool_handler(inv: Any) -> ToolExecutionResult:
+        invoked.append((inv.tool_name, dict(inv.arguments)))
+        if inv.tool_name == "framework_delegate":
+            return ToolExecutionResult(
+                tool_name=inv.tool_name,
+                success=True,
+                structured_content={"accepted": True, "task_id": "deleg_fill", "executor": "minecraft"},
+            )
+        return ToolExecutionResult(
+            tool_name=inv.tool_name,
+            success=True,
+            structured_content={
+                "speech": "哎那几个坑是我刚刨土留下的，我去填上！",
+                "emotion": {"name": "neutral"},
+                "metadata": {},
+            },
+        )
+
+    registry = ToolRegistry()
+    specs = [
+        ToolSpec(name="framework_delegate", description="", kind="sync", provider=""),
+        ToolSpec(name="streamer_reply", description="", kind="sync", provider=""),
+    ]
+    registry.register_provider(make_provider_from_specs("", [(s, _tool_handler) for s in specs]))
+    llm = MagicMock()
+    llm.generate = AsyncMock(side_effect=_generate)
+
+    game_now = GameNow(
+        goal_results=(
+            GoalResultLine(
+                at_ms=ts - 60_000, game="minecraft", outcome="成了", purpose="就地挖取泥土", summary="挖了 16 块泥土"
+            ),
+            GoalResultLine(
+                at_ms=ts - 20_000, game="minecraft", outcome="没成", purpose="走回工作台", summary="走不到目标"
+            ),
+        )
+    )
+    planner = Planner(
+        config=PlannerConfig(planner_max_steps=2),
+        llm_service=llm,
+        prompt_service=prompts,
+        room_state=RoomState(),
+        tool_registry=registry,
+        behavior_style="积极互动",
+        bot_name="麦麦",
+        personality="活泼",
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock(), game_now_provider=lambda _a: game_now),
+    )
+
+    chat_line = "[21:45 minecraft 公屏] 玩家 玩家甲：这边还有陷阱，还有陷阱 2 号"
+    outcome = await planner.plan(
+        [],
+        proactive=True,
+        game_batch=GameEventBatch(
+            events=("[21:43 遭遇·minecraft·attacked] 营地旁发生爆炸（已结束）", chat_line),
+            fresh_chat=(chat_line,),
+            player_notes=(PlayerNote(who="玩家甲", said=True, line=chat_line, timestamp_ms=ts),),
+        ),
+    )
+
+    assert outcome.replied is True
+    system_text = captured_messages[0][0]["content"]
+    ref_text = captured_messages[0][-1]["content"]
+    assert "有人说附近有陷阱、地上全是坑" in system_text and "不要反问在哪儿" in system_text
+    assert "有人指出她卡住了、过载了" in system_text and "不许只盯着此刻子动作硬顶说没卡住" in system_text
+    assert "成了：就地挖取泥土→挖了 16 块泥土" in ref_text and "没成：走回工作台→走不到目标" in ref_text
+    assert [name for name, _ in invoked] == ["framework_delegate", "streamer_reply"]
+
+
+async def test_a4_why_not_use_capability_checks_game_records_instead_of_fabricating_excuses(prompts: Any) -> None:
+    """A4 补 5 回归（第 59 场 20:46 '怎么不用连锁'）：
+    玩家甲或观众乙问'为什么不用某种做法/连锁'且当前速览无记录时，系统守则要求先查游戏记录，
+    记录里没有就说去看看并向游戏那边查问核实，绝不现编缺少条件或资格的理由。"""
+    captured_system: list[str] = []
+    invoked_tools: list[str] = []
+
+    async def _generate(messages: list[dict], **_: Any) -> Response:
+        if not captured_system:
+            captured_system.append(messages[0]["content"])
+            return Response(
+                success=True,
+                tool_calls=[ToolCall(id="q1", name="minecraft_get_work_log", arguments={})],
+            )
+        return Response(
+            success=True,
+            tool_calls=[
+                ToolCall(
+                    id="p1",
+                    name="framework_prompt",
+                    arguments={"agent": "minecraft", "content": "核对挖石时连锁破坏能不能用上"},
+                ),
+                ToolCall(
+                    id="r1",
+                    name="streamer_reply",
+                    arguments={
+                        "topic_summary": "观众乙问为什么挖矿不用连锁，工作文档里暂未写明原因，已安排在游戏里核对试一下",
+                        "reply_guidance": "应一声说这就看看连锁怎么没连上，不编造装备缺词条之类的理由",
+                        "topic_tag": "核对连锁挖矿",
+                        "target": "m_chain",
+                        "emotion": "neutral",
+                        "intensity": 0.3,
+                    },
+                ),
+            ],
+        )
+
+    async def _tool_handler(inv: Any) -> ToolExecutionResult:
+        invoked_tools.append(inv.tool_name)
+        if inv.tool_name == "minecraft_get_work_log":
+            return ToolExecutionResult(
+                tool_name=inv.tool_name,
+                success=True,
+                structured_content={"todos": "挖圆石", "notebook": "暂无连锁记录"},
+            )
+        if inv.tool_name == "framework_prompt":
+            return ToolExecutionResult(
+                tool_name=inv.tool_name,
+                success=True,
+                structured_content={"delivered": True, "executor": "minecraft"},
+            )
+        return ToolExecutionResult(
+            tool_name=inv.tool_name,
+            success=True,
+            structured_content={
+                "speech": "咦我看看，刚光顾着往下刨了，我试下连锁！",
+                "emotion": {"name": "neutral"},
+                "metadata": {},
+            },
+        )
+
+    registry = ToolRegistry()
+    specs = [
+        ToolSpec(name="minecraft_get_work_log", description="", kind="sync", provider=""),
+        ToolSpec(name="framework_prompt", description="", kind="sync", provider=""),
+        ToolSpec(name="streamer_reply", description="", kind="sync", provider=""),
+    ]
+    registry.register_provider(make_provider_from_specs("", [(s, _tool_handler) for s in specs]))
+    llm = MagicMock()
+    llm.generate = AsyncMock(side_effect=_generate)
+
+    planner = Planner(
+        config=PlannerConfig(planner_max_steps=3),
+        llm_service=llm,
+        prompt_service=prompts,
+        room_state=RoomState(),
+        tool_registry=registry,
+        behavior_style="积极互动",
+        bot_name="麦麦",
+        personality="活泼",
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock()),
+    )
+    danmaku = RoomMessagePayload(
+        content="怎么不用连锁挖呀",
+        message_id="m_chain",
+        message_type="danmaku",
+        user=RoomMessageUser(id="u_viewer_b", name="观众乙"),
+    )
+    outcome = await planner.plan([danmaku])
+
+    assert outcome.replied is True
+    assert "有人问她为什么不用某种做法或能力时" in captured_system[0]
+    assert "不许凭猜测现编缺少某样条件或资格之类的理由" in captured_system[0]
+    assert invoked_tools == ["minecraft_get_work_log", "framework_prompt", "streamer_reply"]
