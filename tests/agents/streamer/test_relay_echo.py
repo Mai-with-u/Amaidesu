@@ -453,4 +453,5 @@ def test_prompts_state_relay_and_completion_rules() -> None:
     assert "error.fields" in game
     # 卡住等我拿主意时空窗也补；游戏里回话用 minecraft_chat_send 直发、像玩家打字那样短，游戏侧照发不加工
     assert "停着等我拿主意" in planner and "minecraft_chat_send" in planner
-    assert "把「」里那句原样发出去" in game and "不把要问的事列成清单或编号" in game
+    # 游戏侧不再代打主播的公屏话：她自己直连发送，游戏 Agent 只管行动与自己想说的话
+    assert "她自己直连发送" in game and "不把要问的事列成清单或编号" in game
