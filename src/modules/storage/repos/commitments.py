@@ -13,17 +13,18 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import List, Optional
+from typing import List, Optional, Sequence, Tuple
 
 from src.modules.storage.models.memory import Commitment
 from src.modules.storage.repos._base import BaseRepo
+from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 from src.modules.utils.time_utils import now_ms
 
 # 承诺行读面的列（与 Commitment 字段一一对应）
 _COMMITMENT_COLUMNS = (
     "id, what, quote, evidence_chat_id, viewer_id, game, save_id, save_name, status,"
     " created_session_id, close_chat_id, close_quote, created_at_ms, updated_at_ms,"
-    " target_player_id, evidence_game_chat_id"
+    " target_player_id, evidence_game_chat_id, last_mentioned_session_id, close_source"
 )
 
 
@@ -38,17 +39,47 @@ def delete_commitments_by_session(conn: sqlite3.Connection, *, live_session_id: 
 
 
 def reopen_commitments_closed_by_session(conn: sqlite3.Connection, *, live_session_id: int, updated_at_ms: int) -> int:
-    """把"由这一场的台词了结"的承诺放回未了结，返回条数（重新整理、改成彩排时用）。
+    """把"由这一场的台词或场内更正了结/作废"的承诺放回未了结，返回条数（重新整理、改成彩排时用）。
 
-    了结记录只存了结那句台词的明细编号（close_chat_id）；运营者在 WebUI 手动了结的
-    没有这个编号，不受影响。这一场的整理结果要整场替换或作废时，它了结掉的旧承诺
-    也要还原：否则重新整理不再认定的了结、彩排台词做出的了结会一直留在账上。
+    运营者在 WebUI 手动了结或判误记的行（``close_source='human'`` 或无来源编号）不受影响。
+    这一场的整理结果要整场替换或作废时，它了结掉的旧承诺也要还原：否则重新整理不再认定的了结、
+    彩排做出的了结会一直留在账上。
     """
     cur = conn.execute(
-        "UPDATE commitments SET status='open', close_chat_id=NULL, close_quote=NULL, updated_at_ms=?"
-        " WHERE status='closed'"
-        " AND close_chat_id IN (SELECT id FROM live_chat WHERE live_session_id=?)",
-        (int(updated_at_ms), int(live_session_id)),
+        "UPDATE commitments SET status='open', close_chat_id=NULL, close_quote=NULL, close_source='', updated_at_ms=?"
+        " WHERE ("
+        "   (status='closed' AND close_chat_id IN (SELECT id FROM live_chat WHERE live_session_id=?))"
+        "   OR (close_source='correction' AND EXISTS ("
+        "       SELECT 1 FROM memory_corrections mc"
+        "       WHERE mc.commitment_id = commitments.id AND mc.live_session_id=? AND mc.reverted_at_ms IS NULL"
+        "   ))"
+        " )",
+        (int(updated_at_ms), int(live_session_id), int(live_session_id)),
+    )
+    return int(cur.rowcount or 0)
+
+
+def touch_commitments_mentioned(
+    conn: sqlite3.Connection,
+    *,
+    commitment_ids: Sequence[int],
+    live_session_id: int,
+    updated_at_ms: int,
+) -> int:
+    """推进一批未了结承诺的最近提起场次；仅当本场不早于既有记录场次时更新（防止补整理旧场往回拨）。"""
+    ids = sorted({int(item) for item in commitment_ids})
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    cur = conn.execute(
+        f"UPDATE commitments SET last_mentioned_session_id=?, updated_at_ms=?"  # noqa: S608 占位符由代码生成
+        f" WHERE status='open' AND id IN ({placeholders})"
+        " AND ("
+        "   last_mentioned_session_id IS NULL"
+        "   OR COALESCE((SELECT s.started_at_ms FROM live_sessions s WHERE s.id = commitments.last_mentioned_session_id), 0)"
+        "      <= COALESCE((SELECT cur.started_at_ms FROM live_sessions cur WHERE cur.id = ?), 0)"
+        " )",
+        (int(live_session_id), int(updated_at_ms), *ids, int(live_session_id)),
     )
     return int(cur.rowcount or 0)
 
@@ -84,8 +115,8 @@ class CommitmentRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "INSERT INTO commitments(what, quote, evidence_chat_id, viewer_id, game, save_id, save_name,"
-                    " created_session_id, created_at_ms, updated_at_ms)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    " created_session_id, last_mentioned_session_id, created_at_ms, updated_at_ms)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     " ON CONFLICT(evidence_chat_id) DO NOTHING",
                     (
                         text,
@@ -95,6 +126,7 @@ class CommitmentRepo(BaseRepo):
                         game,
                         save_id or "",
                         save_name or "",
+                        created_session_id,
                         created_session_id,
                         ts,
                         ts,
@@ -165,6 +197,7 @@ class CommitmentRepo(BaseRepo):
         commitment_id: int,
         close_chat_id: Optional[int] = None,
         close_quote: Optional[str] = None,
+        close_source: str = "human",
         updated_at_ms: Optional[int] = None,
     ) -> bool:
         """把一条未了结的承诺记成已了结；运营者已处理过的（closed / void）不受影响。
@@ -177,25 +210,79 @@ class CommitmentRepo(BaseRepo):
         def _exec() -> bool:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "UPDATE commitments SET status='closed', close_chat_id=?, close_quote=?, updated_at_ms=?"
+                    "UPDATE commitments SET status='closed', close_chat_id=?, close_quote=?, close_source=?, updated_at_ms=?"
                     " WHERE id=? AND status='open'",
-                    (close_chat_id, (close_quote or None), ts, int(commitment_id)),
+                    (close_chat_id, (close_quote or None), str(close_source or ""), ts, int(commitment_id)),
                 )
                 return cur.rowcount > 0
 
         return await self._run_in_executor(_exec)
 
-    async def void_commitment(self, *, commitment_id: int, updated_at_ms: Optional[int] = None) -> bool:
-        """运营者判误记：转 void 留一行墓碑（保住「别再登记回来」的判据）。"""
+    async def void_commitment(
+        self,
+        *,
+        commitment_id: int,
+        close_source: str = "human",
+        updated_at_ms: Optional[int] = None,
+    ) -> bool:
+        """运营者（或场内更正）判误记：转 void 留一行墓碑（保住「别再登记回来」的判据）。"""
         ts = int(updated_at_ms if updated_at_ms is not None else now_ms())
 
         def _exec() -> bool:
             with self._manager.transaction() as conn:
                 cur = conn.execute(
-                    "UPDATE commitments SET status='void', updated_at_ms=? WHERE id=?",
-                    (ts, int(commitment_id)),
+                    "UPDATE commitments SET status='void', close_source=?, updated_at_ms=? WHERE id=?",
+                    (str(close_source or ""), ts, int(commitment_id)),
                 )
                 return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
+    async def touch_mentioned(
+        self,
+        *,
+        commitment_ids: Sequence[int],
+        live_session_id: int,
+        updated_at_ms: Optional[int] = None,
+    ) -> int:
+        """推进一批未了结承诺的最近提起场次，返回更新条数。"""
+        ts = int(updated_at_ms if updated_at_ms is not None else now_ms())
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                return touch_commitments_mentioned(
+                    conn,
+                    commitment_ids=commitment_ids,
+                    live_session_id=int(live_session_id),
+                    updated_at_ms=ts,
+                )
+
+        return await self._run_in_executor(_exec)
+
+    async def recent_ended_session_bounds(
+        self,
+        *,
+        kind: SessionKind = SESSION_KIND_LIVE,
+        min_duration_ms: int = 0,
+        exclude_session_id: Optional[int] = None,
+        limit: int = 3,
+    ) -> List[Tuple[int, int]]:
+        """最近几个已完结且时长达标的同类型场次 ``(id, started_at_ms)``（新到旧，供承诺过期判定用）。"""
+        where = "WHERE kind=? AND ended_at_ms IS NOT NULL AND (ended_at_ms - started_at_ms) >= ?"
+        params: List[object] = [kind, max(0, int(min_duration_ms))]
+        if exclude_session_id is not None:
+            where += " AND id <> ?"
+            params.append(int(exclude_session_id))
+        params.append(max(1, int(limit)))
+
+        def _exec() -> List[Tuple[int, int]]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    f"SELECT id, started_at_ms FROM live_sessions {where}"  # noqa: S608 条件由固定片段拼成
+                    " ORDER BY started_at_ms DESC, id DESC LIMIT ?",
+                    params,
+                ).fetchall()
+                return [(int(row[0]), int(row[1])) for row in rows]
 
         return await self._run_in_executor(_exec)
 
@@ -276,4 +363,9 @@ class CommitmentRepo(BaseRepo):
         return await self._run_in_executor(_exec)
 
 
-__all__ = ["CommitmentRepo", "delete_commitments_by_session", "reopen_commitments_closed_by_session"]
+__all__ = [
+    "CommitmentRepo",
+    "delete_commitments_by_session",
+    "reopen_commitments_closed_by_session",
+    "touch_commitments_mentioned",
+]

@@ -44,6 +44,7 @@ from src.modules.storage.repos.viewer_candidates import CANDIDATE_EXPIRE_MS, rep
 from src.modules.storage.repos.commitments import (
     delete_commitments_by_session,
     reopen_commitments_closed_by_session,
+    touch_commitments_mentioned,
 )
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SESSION_KIND_REHEARSAL, SessionKind
 
@@ -538,6 +539,7 @@ class SessionRepo(BaseRepo):
         player_candidates: Sequence[PendingPlayerCandidate] = (),
         social_facts: Sequence[NewSocialFact] = (),
         player_interactions: Sequence[PendingPlayerInteraction] = (),
+        mentioned_commitment_ids: Sequence[int] = (),
     ) -> Dict[str, int]:
         """把一场的整理结果一次写进去：档案行、档案快照、新承诺、了结、观众候选、玩家自述、整理完成时刻。
 
@@ -573,6 +575,7 @@ class SessionRepo(BaseRepo):
                 "player_candidates": 0,
                 "social_facts": 0,
                 "interactions": 0,
+                "mentioned": 0,
             }
             with self._manager.transaction(immediate=True) as conn:
                 claim = conn.execute(
@@ -681,14 +684,16 @@ class SessionRepo(BaseRepo):
                     )
                     cur = conn.execute(
                         "INSERT INTO commitments(what, quote, evidence_chat_id, evidence_game_chat_id, viewer_id,"
-                        " target_player_id, game, save_id, save_name, created_session_id, created_at_ms, updated_at_ms)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        " target_player_id, game, save_id, save_name, created_session_id, last_mentioned_session_id,"
+                        " created_at_ms, updated_at_ms)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                         # 同一句已登记过：本场仍未了结的那条原地更新（编号不变），
                         # 已了结、判误记或别处登记的不动
                         f" ON CONFLICT({conflict_key}) DO UPDATE SET"  # noqa: S608 冲突键取自两个代码内常量
                         " what=excluded.what, quote=excluded.quote, viewer_id=excluded.viewer_id,"
                         " target_player_id=excluded.target_player_id,"
                         " game=excluded.game, save_id=excluded.save_id, save_name=excluded.save_name,"
+                        " last_mentioned_session_id=excluded.last_mentioned_session_id,"
                         " updated_at_ms=excluded.updated_at_ms"
                         " WHERE commitments.status='open'"
                         " AND commitments.created_session_id=excluded.created_session_id",
@@ -702,6 +707,7 @@ class SessionRepo(BaseRepo):
                             item.game,
                             item.save_id,
                             item.save_name,
+                            int(live_session_id),
                             int(live_session_id),
                             int(now_ms_value),
                             int(now_ms_value),
@@ -733,7 +739,7 @@ class SessionRepo(BaseRepo):
                     written["interactions"] += 1
                 for closure in closures:
                     cur = conn.execute(
-                        "UPDATE commitments SET status='closed', close_chat_id=?, close_quote=?,"
+                        "UPDATE commitments SET status='closed', close_chat_id=?, close_quote=?, close_source='settle',"
                         " updated_at_ms=? WHERE id=? AND status='open'",
                         (
                             closure.close_chat_id,
@@ -743,6 +749,12 @@ class SessionRepo(BaseRepo):
                         ),
                     )
                     written["closed"] += max(0, int(cur.rowcount or 0))
+                written["mentioned"] = touch_commitments_mentioned(
+                    conn,
+                    commitment_ids=mentioned_commitment_ids,
+                    live_session_id=int(live_session_id),
+                    updated_at_ms=int(now_ms_value),
+                )
             return written
 
         return await self._run_in_executor(_exec)

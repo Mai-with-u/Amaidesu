@@ -61,7 +61,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 38
+SCHEMA_VERSION: int = 39
 
 
 # =============================================================================
@@ -181,6 +181,12 @@ def build_schema_sql() -> str:
         # game_social_facts —— 游戏社交事实（排在场次、台词与游戏公屏之后：外键要引用它们）
         + _GAME_SOCIAL_FACTS_SQL
         + "\n"
+        # memory_corrections —— 场内更正（排在场次、档案行、承诺与游戏公屏之后：外键要引用它们）
+        + _MEMORY_CORRECTIONS_SQL
+        + "\n"
+        # settle_checkpoints —— 下播整理模型调用断点缓存
+        + _SETTLE_CHECKPOINTS_SQL
+        + "\n"
         # timeline_summary —— 摘要层
         + _TIMELINE_SUMMARY_SQL
         + "\n"
@@ -244,6 +250,8 @@ def list_expected_tables() -> List[str]:
         "game_player_interactions",
         "game_chat",
         "game_social_facts",
+        "memory_corrections",
+        "settle_checkpoints",
         "player_candidates",
         "viewer_player_links",
         "timeline_summary",
@@ -496,7 +504,9 @@ CREATE TABLE IF NOT EXISTS commitments (
     updated_at_ms      INTEGER NOT NULL,
     keywords           TEXT NOT NULL DEFAULT '[]',
     target_player_id   INTEGER REFERENCES game_players(id) ON DELETE CASCADE,
-    evidence_game_chat_id INTEGER REFERENCES game_chat(id) ON DELETE SET NULL
+    evidence_game_chat_id INTEGER REFERENCES game_chat(id) ON DELETE SET NULL,
+    last_mentioned_session_id INTEGER,
+    close_source       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status);
 """.strip()
@@ -999,6 +1009,50 @@ CREATE TRIGGER IF NOT EXISTS trg_memory_index_social_fact_edited AFTER UPDATE OF
     DELETE FROM memory_fts_social_fact WHERE rowid = OLD.id;
     DELETE FROM memory_vectors_social_fact WHERE social_fact_id = OLD.id;
 END;
+""".strip()
+
+
+# --- memory_corrections —— 场内更正 ---
+# 主播在决策环节（或运营递话）对本场简报某行档案或某条惦记承诺做出的当场纠正：
+# target_kind 取 archive / commitment / general（运营递话无特定目标时常驻本场）。
+# verdict 取 done（做完了）/ invalid（不成立了）/ wrong（记错了）/ note（运营补充纠正）。
+# evidence_kind 取 game_receipt / player_chat / operator / self_seen；引用玩家公屏时挂外键，
+# 删玩家随级联删除。更正只在本场生效；下播整理将其作为必须处理的输入，人工可在 WebUI 撤回。
+_MEMORY_CORRECTIONS_SQL = """
+CREATE TABLE IF NOT EXISTS memory_corrections (
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    live_session_id        INTEGER NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+    target_kind            TEXT NOT NULL CHECK (target_kind IN ('archive', 'commitment', 'general')),
+    archive_line_id        INTEGER REFERENCES archive_lines(id) ON DELETE CASCADE,
+    commitment_id          INTEGER REFERENCES commitments(id) ON DELETE CASCADE,
+    verdict                TEXT NOT NULL CHECK (verdict IN ('done', 'invalid', 'wrong', 'note')),
+    summary                TEXT NOT NULL,
+    evidence_kind          TEXT NOT NULL CHECK (evidence_kind IN ('game_receipt', 'player_chat', 'operator', 'self_seen')),
+    evidence_quote         TEXT NOT NULL DEFAULT '',
+    evidence_game_chat_id  INTEGER REFERENCES game_chat(id) ON DELETE CASCADE,
+    source                 TEXT NOT NULL CHECK (source IN ('streamer', 'operator')),
+    prev_commitment_status TEXT NOT NULL DEFAULT '',
+    created_at_ms          INTEGER NOT NULL,
+    reverted_at_ms         INTEGER,
+    settled_disposition    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_memory_corrections_session ON memory_corrections(live_session_id, created_at_ms);
+""".strip()
+
+
+# --- settle_checkpoints —— 下播整理模型调用断点缓存 ---
+# 下播整理每完成一次模型调用且 JSON 解析通过就落一行，键为 (live_session_id, step)。
+# 重启续跑时对比输入摘要 fingerprint，一致则直接复用 output_json，避免整场从头白调模型；
+# 整场提交成功同事务清掉，删观众或删玩家时整表清空。
+_SETTLE_CHECKPOINTS_SQL = """
+CREATE TABLE IF NOT EXISTS settle_checkpoints (
+    live_session_id INTEGER NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+    step            TEXT NOT NULL,
+    fingerprint     TEXT NOT NULL,
+    output_json     TEXT NOT NULL,
+    saved_at_ms     INTEGER NOT NULL,
+    PRIMARY KEY (live_session_id, step)
+);
 """.strip()
 
 

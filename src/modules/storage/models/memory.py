@@ -135,6 +135,12 @@ class Commitment(BaseModel):
     evidence_game_chat_id: Optional[int] = Field(
         default=None, description="原话是她在游戏公屏打出去的那句时，指向那一行 game_chat"
     )
+    last_mentioned_session_id: Optional[int] = Field(
+        default=None, description="最近一次被提起的场次号（初始为登记场次，再提起时推进）"
+    )
+    close_source: str = Field(
+        default="", description="了结或作废来源：空串 未了结 / settle 下播整理 / correction 场内更正 / human 人工操作"
+    )
 
     @property
     def has_target(self) -> bool:

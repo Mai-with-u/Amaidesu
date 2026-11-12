@@ -57,6 +57,7 @@ from src.modules.storage.migrations import (
     v36_delegation_own_words,
     v37_clip_segments,
     v38_game_social_facts,
+    v39_memory_zones_lifecycle,
 )
 
 SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
@@ -98,6 +99,7 @@ SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     36: v36_delegation_own_words.migrate,
     37: v37_clip_segments.migrate,
     38: v38_game_social_facts.migrate,
+    39: v39_memory_zones_lifecycle.migrate,
 }
 
 __all__ = ["SCHEMA_MIGRATIONS"]
