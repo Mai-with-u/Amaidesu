@@ -320,14 +320,65 @@ class OpenAIClient(BaseLLMClient):
             result["content"] = tag + (content if isinstance(content, str) else "")
 
     @classmethod
-    def _request_to_openai_messages(cls, request: GenerateRequest) -> List[Dict[str, Any]]:
-        """GenerateRequest → OpenAI messages 列表（system 置于首条）"""
+    def _request_to_openai_messages(
+        cls,
+        request: GenerateRequest,
+        *,
+        fill_empty_reasoning: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """GenerateRequest → OpenAI messages 列表（system 置于首条）。
+
+        ``fill_empty_reasoning``：当前调用处于原生字段思考模式且开启回传时，历史里由别的模型
+        （故障切换期间）生成的工具调用步已被引擎剥去外源思考，线协议仍要求 ``assistant`` 工具调用
+        消息携带 ``reasoning_content`` 键（可为空串），缺失会被服务端 400 拒收。
+        """
         messages: List[Dict[str, Any]] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
         for message in request.messages:
-            messages.extend(cls._message_to_openai(message))
+            for wire in cls._message_to_openai(message):
+                if fill_empty_reasoning and wire.get("role") == "assistant" and wire.get("tool_calls"):
+                    wire.setdefault("reasoning_content", "")
+                messages.append(wire)
         return messages
+
+    def _needs_empty_reasoning_field(self, request: GenerateRequest, model: str) -> bool:
+        """当前请求在跨模型切换后是否需要给缺思考的工具调用步补空 ``reasoning_content``。
+
+        触发条件：模型开启了思考回传，解析模式不是关闭或标签内嵌，也不是严格禁未知字段的官方 OpenAI 端点；
+        且满足任一思考态判据——本段历史已有该模型的原生字段思考、解析模式显式设为 ``native``、
+        ``extra_body`` 启用了 ``thinking``，或 DeepSeek / Kimi / 智谱类端点处于推理模型或开启了 ``reasoning_effort``。
+        """
+        if not request.reasoning_echo:
+            return False
+        mode = ReasoningParseMode(self.config.get("reasoning_parse_mode", "auto"))
+        if mode in (ReasoningParseMode.NONE, ReasoningParseMode.THINK_TAG):
+            return False
+        base_url = str(self.config.get("base_url") or "").lower()
+        if "api.openai.com" in base_url:
+            return False
+        if any(
+            msg.role == "assistant" and msg.reasoning is not None and msg.reasoning.format == "field"
+            for msg in request.messages
+        ):
+            return True
+        if mode is ReasoningParseMode.NATIVE:
+            return True
+        extra_body = self.config.get("extra_body")
+        thinking_extra = (
+            isinstance(extra_body, dict)
+            and isinstance(extra_body.get("thinking"), dict)
+            and extra_body["thinking"].get("type") not in ("disabled", False)
+        )
+        if thinking_extra:
+            return True
+        has_effort = bool(isinstance(request.reasoning_effort, str) and request.reasoning_effort)
+        target = f"{model.lower()} {base_url}"
+        if "reasoner" in model.lower():
+            return True
+        if any(vendor in target for vendor in ("deepseek", "moonshot", "kimi", "bigmodel", "zhipu", "glm")):
+            return has_effort or "thinking" in model.lower()
+        return False
 
     @staticmethod
     def _tool_spec_to_openai(spec: ToolSpec) -> Dict[str, Any]:
@@ -457,8 +508,9 @@ class OpenAIClient(BaseLLMClient):
         默认值定序写进 ``request``，这里不再有自己的兜底分支。
         """
         tools = [self._tool_spec_to_openai(t) for t in request.tools] or None
+        fill_empty = self._needs_empty_reasoning_field(request, model)
         return await self._chat_impl(
-            self._request_to_openai_messages(request),
+            self._request_to_openai_messages(request, fill_empty_reasoning=fill_empty),
             model=model,
             temperature=request.temperature,
             reasoning_effort=request.reasoning_effort,

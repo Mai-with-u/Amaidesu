@@ -193,6 +193,85 @@ async def test_malformed_history_reasoning_is_dropped_instead_of_failing_the_req
     assert response.success and _sent_reasoning(vendor.calls[0][1]) is None
 
 
+async def test_cross_model_failover_backfills_empty_reasoning_content_for_thinking_endpoint() -> None:
+    """故障切换期间备用模型产出的工具调用步，切回开启思考的主模型时补空 reasoning_content，避免 400，且不泄露备用模型思考。"""
+    client, sdk = make_openai_client({"base_url": "https://api.deepseek.com/v1", "api_key": "sk-test"})
+    sdk.chat.completions.create.return_value = sdk_reply(content="继续推进")
+
+    with patch.dict(_CLIENT_DISPATCH, {"deepseek_wire": lambda _cfg: client}):
+        manager = LLMManager()
+        await manager.setup(
+            {
+                "llm_providers": [
+                    {
+                        "name": "ds",
+                        "client_type": "deepseek_wire",
+                        "base_url": "https://api.deepseek.com/v1",
+                        "api_key": "k",
+                    }
+                ],
+                "llm_models": [
+                    {
+                        "name": "deepseek-flash",
+                        "model_identifier": "deepseek-chat",
+                        "api_provider": "ds",
+                        "reasoning_echo": True,
+                    },
+                ],
+                "llm_profiles": {
+                    "planner": {"model_list": ["deepseek-flash"], "reasoning_effort": "high"},
+                },
+            }
+        )
+
+    # 历史里夹着一步备用模型（MiniMax）的工具调用与一步完全无思考的工具调用，外加普通纯文本历史回合
+    call_1 = {"id": "c1", "type": "function", "function": {"name": "look", "arguments": "{}"}}
+    call_2 = {"id": "c2", "type": "function", "function": {"name": "act", "arguments": "{}"}}
+    history = [
+        {"role": "user", "content": "上一轮问候"},
+        {"role": "assistant", "content": "上一轮纯文本回复"},
+        {"role": "user", "content": "看看周围"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [call_1],
+            "reasoning": Reasoning(text="备用模型思考", format="field", model="MiniMax-M3.1-Flash").model_dump(),
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "草地"},
+        {"role": "assistant", "content": "", "tool_calls": [call_2]},
+        {"role": "tool", "tool_call_id": "c2", "content": "完成"},
+    ]
+    response = await manager.generate(history, profile="planner")
+    assert response.success
+
+    sent_messages = sdk.chat.completions.create.await_args.kwargs["messages"]
+    plain_assistant = sent_messages[1]
+    tool_assistant_1 = sent_messages[3]
+    tool_assistant_2 = sent_messages[5]
+    # 普通纯文本历史回合不补字段；两个工具调用步都补了空串，且不带备用模型的思考原文
+    assert "reasoning_content" not in plain_assistant
+    assert tool_assistant_1["reasoning_content"] == ""
+    assert tool_assistant_2["reasoning_content"] == ""
+
+    # 官方 OpenAI 端点即使开了 reasoning_effort 也不补未知的 reasoning_content 字段
+    strict_client, strict_sdk = make_openai_client({"base_url": "https://api.openai.com/v1", "api_key": "sk-test"})
+    strict_sdk.chat.completions.create.return_value = sdk_reply(content="ok")
+    await strict_client.generate(
+        GenerateRequest(
+            messages=[
+                Message(role="user", parts=["hi"]),
+                Message(role="assistant", parts=[""], tool_calls=[ToolCall(id="c1", name="look")]),
+                Message(role="tool", parts=["done"], tool_call_id="c1"),
+            ],
+            reasoning_effort="high",
+            reasoning_echo=True,
+        ),
+        model="gpt-5",
+    )
+    strict_sent = strict_sdk.chat.completions.create.await_args.kwargs["messages"]
+    assert "reasoning_content" not in strict_sent[1]
+
+
 def test_token_counter_counts_reasoning_kept_in_history() -> None:
     """存进历史的思考会随请求发出，上下文预算要照实算上。"""
     counter = TokenCounter()

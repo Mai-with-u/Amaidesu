@@ -162,6 +162,8 @@ class GenerateRequest(BaseModel):
     temperature: Optional[float] = None
     strict_tool_arguments: bool = False
     reasoning_effort: Optional[str] = None
+    # 当前调用模型是否开启了思考回传：适配端据此决定跨模型切换后缺思考的工具调用步是否补空字段
+    reasoning_echo: bool = True
     # 系统提示词中单独计量的片段（如技能目录），只供上下文分段统计
     system_parts: List[ContextPart] = Field(default_factory=list)
 

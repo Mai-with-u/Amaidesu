@@ -218,21 +218,24 @@ def _reasoning_from_protocol(raw: Any) -> Optional[Reasoning]:
 
 
 def _request_for_model(request: GenerateRequest, model: _ResolvedModel) -> GenerateRequest:
-    """按这次要调用的模型筛掉不该发的思考。
+    """按这次要调用的模型筛掉不该发的思考，并写入该模型的思考回传开关。
 
     模型关着回传开关时全部不发；开着时只发它自己产出的思考，换到备用模型时
     别的模型的思考不发——对方认不出这段思考，可能报错也可能被带偏。不改调用方
     的请求对象：故障切换时下一个模型拿到的仍是完整历史，重新按自己筛一遍。
     """
-    if not any(message.reasoning is not None for message in request.messages):
+    has_reasoning = any(message.reasoning is not None for message in request.messages)
+    if not has_reasoning and request.reasoning_echo == model.reasoning_echo:
         return request
+    if not has_reasoning:
+        return request.model_copy(update={"reasoning_echo": model.reasoning_echo})
     messages = [
         message
         if message.reasoning is None or (model.reasoning_echo and message.reasoning.model == model.model_name)
         else message.model_copy(update={"reasoning": None})
         for message in request.messages
     ]
-    return request.model_copy(update={"messages": messages})
+    return request.model_copy(update={"messages": messages, "reasoning_echo": model.reasoning_echo})
 
 
 def _echo_reasoning(response: Response, model: _ResolvedModel) -> Optional[Reasoning]:
