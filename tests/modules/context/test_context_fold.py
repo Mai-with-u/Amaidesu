@@ -261,3 +261,13 @@ def test_pacer_waits_for_line_and_growth() -> None:
     assert pacer.due(1200, line=1000, growth=200)
     pacer.reset()
     assert pacer.due(1000, line=1000, growth=200)
+
+
+def test_pacer_baseline_follows_history_down() -> None:
+    """历史被别的途径压小后，再涨一截从压小后的体积起算：不必涨回压小前的高位。"""
+    pacer = FoldPacer()
+    pacer.settle(129_000)
+    # 集中整理把历史压到 4 万：还没到折叠线，不请
+    assert not pacer.due(40_000, line=80_000, growth=20_000)
+    # 涨过折叠线、比压小后的体积多出一截：该请了（按旧基线要等到 14.9 万）
+    assert pacer.due(81_000, line=80_000, growth=20_000)

@@ -103,14 +103,22 @@ class FoldPacer:
     """决定什么时候请模型来折：越过折叠线、且距上次发起又涨了一截才再请。
 
     每请一次都要模型写摘要；历史刚折完、或模型认为没东西可折时立刻再请，只会反复
-    白付输出费。基线在发起时和折叠落地后各记一次。
+    白付输出费。基线在发起时和折叠落地后各记一次；历史被别的途径压小（集中整理、
+    收起、对话重开）时基线跟着降到当前体积，"又涨了一截"从压小后的体积起算。
     """
 
     def __init__(self) -> None:
         self._baseline = 0
 
     def due(self, tokens: int, *, line: int, growth: int) -> bool:
-        """历史到了折叠线、且比上次基线多出 ``growth`` 才该再请。"""
+        """历史到了折叠线、且比上次基线多出 ``growth`` 才该再请。
+
+        历史比基线还小：说明上次记基线之后被别的途径压小过，先把基线降到当前体积。
+        不降的话，基线停在压小前的高位，历史要涨回那个高位再多一截才会再请——
+        集中整理的触发线往往比那更低，折叠就再也轮不上了。
+        """
+        if tokens < self._baseline:
+            self._baseline = tokens
         return tokens >= line and tokens - self._baseline >= growth
 
     def settle(self, tokens: int) -> None:

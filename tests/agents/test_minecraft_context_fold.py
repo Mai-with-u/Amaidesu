@@ -185,3 +185,85 @@ def test_fold_line_must_stay_below_prepare_line() -> None:
     """折叠线不低于提前整理线时，集中整理会抢在模型折叠之前出手，配置期拦下。"""
     with pytest.raises(ValidationError):
         MinecraftContextConfig(fold_ratio=0.7, prepare_ratio=0.7, target_ratio=0.6)
+
+
+def _running_goal(server: FakeMaicraft) -> int:
+    """还在跑的目标编号；没有时为 0。"""
+    return next((goal_id for goal_id, run in server.goals.items() if run["state"] == "running"), 0)
+
+
+async def test_wakeups_do_not_cut_foldable_range_and_state_is_restated() -> None:
+    """一次次被叫醒续做：插进来的任务状态不把可折区间切碎，折掉之后宿主补一份完整的任务状态。"""
+    server = FakeMaicraft()
+    # 开局资料本身不大：可折的量要靠后面一轮轮叫醒攒出来，每一轮都不到单段下限
+    server.scene_view["summary"] = "前方：e1（minecraft:cow，6格）"
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if _is_fold_request(messages):
+            start, end = _listed_ranges(messages)[0]
+            fold = {"folds": [{"start": start, "end": end, "summary": "开局看过现场，之后一棵棵砍，都砍完了"}]}
+            return _resp(calls=[_call("minecraft_context_fold", fold, "f1")])
+        if _running_goal(server):
+            return _resp(content="等这棵砍完")
+        if _has_text(messages, "[当前任务状态]"):
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "砍完了"}, "d1")])
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}}, f"g{len(server.goals)}")])
+
+    # 预算 3 万：折叠线 12000，单段下限 1000；每轮叫醒只添几百字，要攒好几轮才过线
+    agent, llm, bus = await make_minecraft_agent(server, script, config=_config(max_tokens=30_000))
+    try:
+        agent.receive_prompt(content="一棵一棵砍，砍到我说停", source="test")
+        for _ in range(80):
+            await _wait_until(lambda: bool(_reports(bus)) or (not agent.batch_active and bool(_running_goal(server))))
+            if _reports(bus):
+                break
+            server.finish(_running_goal(server), summary="砍了一棵" + "木" * 100)
+        assert _reports(bus)
+    finally:
+        await agent.stop()
+
+    folds = [index for index, seen in enumerate(llm.seen) if _is_fold_request(seen)]
+    assert folds
+    request = llm.seen[folds[0]]
+    start, end = _listed_ranges(request)[0]
+    # 列出的那一段跨过了好几次叫醒：终点之前已经有不止三条任务状态
+    end_at = next(index for index, message in enumerate(request) if str(message.get("content")).startswith(f"[{end}]"))
+    states_before_end = [m for m in request[:end_at] if "[继续原游戏任务]" in str(m.get("content"))]
+    assert len(states_before_end) >= 3
+    # 任务状态消息有编号（不算固定层），开任务的原话仍然不编号
+    assert all(re.match(r"\[m\d+\] \[继续原游戏任务\]", str(m["content"])) for m in states_before_end)
+    # 折掉之后的请求里有一份完整的任务状态，带着原话
+    restated = [
+        message
+        for seen in llm.seen[folds[0] + 1 :]
+        for message in seen
+        if "[当前任务状态]" in str(message.get("content"))
+    ]
+    assert restated and "一棵一棵砍，砍到我说停" in str(restated[0]["content"])
+
+
+async def test_fold_resumes_after_background_compaction() -> None:
+    """模型先说无需整理、历史涨到提前整理线由后台集中整理压小：之后历史再过折叠线，照样再请模型折叠。"""
+    server = _big_server()
+    progress = {"steps": 0, "compacted": False, "fold_after": False}
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if str(messages[0].get("content")).startswith("你在整理 Minecraft"):
+            progress["compacted"] = True
+            return _resp(content="看过很多次现场，前方一直是牛")
+        if _is_fold_request(messages):
+            progress["fold_after"] = progress["fold_after"] or progress["compacted"]
+            return _resp(content="无需整理")
+        progress["steps"] += 1
+        if progress["fold_after"] or progress["steps"] > 60:
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "看完了"}, "d1")])
+        return _resp(calls=[_call("maicraft_observe", {"what": "scene"}, f"c{progress['steps']}")])
+
+    agent, llm, bus = await make_minecraft_agent(server, script, config=_config())
+    try:
+        agent.receive_prompt(content="把周围看清楚", source="test")
+        await _wait_until(lambda: bool(_reports(bus)))
+    finally:
+        await agent.stop()
+    # 集中整理确实在后台跑过，而且它之后又发过整理请求（没被跑完的那次整理一直占着位置）
+    assert progress["compacted"] and progress["fold_after"]

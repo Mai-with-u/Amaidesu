@@ -44,6 +44,11 @@ SUMMARY_KEY = "_minecraft_context_summary"
 OPENING_KEY = "_minecraft_opening"
 # 开任务的主播指令消息的内部标记：后台折叠与收起都不碰它，原话始终逐字留在历史里
 INSTRUCTION_KEY = "_minecraft_instruction"
+# 任务状态消息的内部标记：每次被叫醒续做时交给模型的任务状态（完整一份，或相对上一份的变化）。
+# 它不属于固定层：代码随时能重出一份完整的，所以后台折叠与收起都可以碰它，碰了之后由宿主紧跟着
+# 补一份完整的。当成固定层的话，每次叫醒插进来的这一条会把可折区间切成一小段一小段，
+# 段段都够不上折叠下限，后台折叠就再也发不起来
+STATE_KEY = "_minecraft_task_state"
 
 _OPENING_HEADER = "[开局资料] 宿主已代为读取下面几项，这些不是你发起的调用；仍有效时直接使用，不重复读取。"
 _OPENING_OMITTED = "这项开局资料太长，摘要不收原文；决策模型当时已经读过，后面要用就重新调用"
@@ -314,11 +319,13 @@ class MinecraftHistoryCompactor:
                 f"直接输出中文短摘要，目标不超过 {min(2000, self._config.summary_max_chars // 2)} 字符，不调用工具。"
             ),
         }
-        # 旧事实已由 fixed 更新，避免模型把重复索引再次写成越来越长的摘要；保留下来的旧摘要段不再重写。
+        # 旧事实与旧的任务状态已由 fixed 更新，避免模型把重复索引再次写成越来越长的摘要；保留下来的旧摘要段不再重写。
         source = [
             deepcopy(message)
             for message in messages[1:cut]
-            if not message.get(FACTS_KEY) and (fold_summaries or not message.get(SUMMARY_KEY))
+            if not message.get(FACTS_KEY)
+            and not message.get(STATE_KEY)
+            and (fold_summaries or not message.get(SUMMARY_KEY))
         ]
         # 压缩旧片段时也提供最新决策与回执作对照；索引无需重抄，旧摘要不能复活已解决的问题。
         current = {key: value for key, value in facts.items() if key != "observations"}

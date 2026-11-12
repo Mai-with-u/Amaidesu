@@ -29,6 +29,7 @@ from src.agents.minecraft.chosen_death import is_suicide_ability
 from src.agents.minecraft.context import (
     FACTS_KEY,
     INSTRUCTION_KEY,
+    STATE_KEY,
     MinecraftHistoryCompactor,
     close_interrupted_calls,
     is_pinned_message,
@@ -346,6 +347,8 @@ class MinecraftAgent(BaseAgent):
         self._fold_job: BackgroundCheckpoint[FoldProposal] = BackgroundCheckpoint("minecraft 后台折叠")
         # 开新任务、重开对话时加一：在这之前发起的折叠提议对应的是已丢掉的历史，算完也不再套用
         self._fold_epoch = 0
+        # 上次过了折叠线却没有够大的可折区间时的历史体积：只用来限日志频率，涨够一截才再记一次
+        self._fold_no_range_logged = 0
         # 工具刚返回的截图：历史里只留文字回执，真图挂在下一次推理请求的尾部，用完即弃
         self._transient_images = TransientImages()
         # 看画面的额度（每个任务几次、两次隔多久）与模型不能看图时转文字用的视觉模型
@@ -908,11 +911,12 @@ class MinecraftAgent(BaseAgent):
         close_interrupted_calls(messages)
         if not self._interaction_only and not self._task_finished and self._task_instructions:
             # 后台目标有了结果先恢复原目标、待办与目标状态，再让模型解释这次通知。
+            # 这条是任务状态、不算固定层：每次叫醒都插一条，当成固定层会把可折区间切碎（见 STATE_KEY）
             messages.append(
                 {
                     "role": "user",
                     "content": "[继续原游戏任务]\n" + json_text(self._continue_task_context()),
-                    FACTS_KEY: True,
+                    STATE_KEY: True,
                 }
             )
 
@@ -1126,6 +1130,7 @@ class MinecraftAgent(BaseAgent):
         # 否则集中整理写完会把上个任务的摘要套到新任务的历史上
         self._folds.clear()
         self._fold_pacer.reset()
+        self._fold_no_range_logged = 0
         self._fold_epoch += 1
         self._fold_job.abandon()
         self._idle_prep.abandon()
@@ -1800,6 +1805,7 @@ class MinecraftAgent(BaseAgent):
         原文时自己读回。后台的折叠与集中整理照常进行，之后会把这些占位连同上下文压成摘要。
         """
         marks = self._context_compactor.watermarks()
+        states = self._state_texts(messages)
         saved = self._folds.stow(
             messages,
             keep_recent=self.typed_config.context.fold_keep_recent,
@@ -1811,6 +1817,8 @@ class MinecraftAgent(BaseAgent):
             return False
         # 收起就地改写了历史中段，下一次请求重算前缀是预期内的
         self._prefix_guard.expect_rewrite("收起旧记录")
+        # 收起的记录里有任务状态：紧跟着补一份完整的，模型手上始终有一份没被收起的
+        self._restate_if_swallowed(messages, states)
         after = self._context_compactor.measure(messages, tools)
         self._logger.info(
             f"历史 {tokens} token 到了预算线 {marks.budget}，不等摘要，先收起最老的记录：-> {after} token（原文可取回）"
@@ -1834,11 +1842,20 @@ class MinecraftAgent(BaseAgent):
         tokens = self._context_compactor.measure(messages, tools)
         if not self._fold_pacer.due(tokens, line=lines.line, growth=lines.growth):
             return
-        # 发起即记基线：模型认为没东西可折时，要等历史再涨一截才再请
-        self._fold_pacer.settle(tokens)
         ranges = self._folds.ranges(messages, keep_recent=config.fold_keep_recent, min_tokens=lines.min_range)
         if not ranges:
+            # 过了折叠线却没有够大的可折区间：这次不请，也不动基线——动了基线就等于"请过了"，
+            # 历史要再涨一截才会重新看，期间有了可折区间也发不起来。日志按涨幅限频，留给复盘看
+            if tokens - self._fold_no_range_logged >= lines.growth:
+                self._fold_no_range_logged = tokens
+                self._logger.info(
+                    f"历史 {tokens} token 过了折叠线 {lines.line}，但没有够大的可折区间"
+                    f"（单段至少 {lines.min_range} token），这次不请模型折叠"
+                )
             return
+        # 发起即记基线：模型认为没东西可折时，要等历史再涨一截才再请
+        self._fold_pacer.settle(tokens)
+        self._fold_no_range_logged = 0
         work = propose_folds(
             self._llm,
             list(messages),
@@ -1857,7 +1874,12 @@ class MinecraftAgent(BaseAgent):
         提议基于发起时的那份历史算出：期间历史只在尾部追加，按编号重新定位即可；
         对应的任务已结束、对话已重开的提议直接丢弃。
         """
-        if not self._fold_enabled or self._idle_prep.busy:
+        if not self._fold_enabled:
+            return
+        # 后台集中整理跑完了就取走、腾出位置：占位只在"还在跑"时才该挡住折叠。不取的话，跑完的那次
+        # 一直算"忙"，折叠和下一次后台整理都被它挡住，历史只能涨到预算线再同步整理（角色站着等）
+        self._idle_prep.take()
+        if self._idle_prep.busy:
             return
         epoch = self._fold_job.meta.get("epoch")
         proposal = self._fold_job.take()
@@ -1877,6 +1899,7 @@ class MinecraftAgent(BaseAgent):
         config = self.typed_config.context
         lines = fold_lines(self._context_compactor.watermarks().budget, config.fold_ratio)
         before = self._context_compactor.measure(messages, tools)
+        states = self._state_texts(messages)
         outcome = self._folds.apply(
             messages,
             proposal.requests,
@@ -1890,10 +1913,35 @@ class MinecraftAgent(BaseAgent):
             return
         # 折叠就地改写了历史中段，下一次请求重算前缀是预期内的
         self._prefix_guard.expect_rewrite("后台折叠")
+        # 折掉的区间里有任务状态：紧跟着补一份完整的，再量体积、记基线
+        self._restate_if_swallowed(messages, states)
         after = self._context_compactor.measure(messages, tools)
         self._fold_pacer.settle(after)
         names = "、".join(block.block_id for block in outcome.blocks)
         self._logger.info(f"后台折叠落地：{names}，历史 {before} -> {after} token")
+
+    @staticmethod
+    def _state_texts(messages: List[Dict[str, Any]]) -> List[Any]:
+        """历史里各条任务状态消息此刻的正文：折叠、收起前后各取一次，对不上就是有任务状态被碰了。"""
+        return [message.get("content") for message in messages if message.get(STATE_KEY)]
+
+    def _restate_if_swallowed(self, messages: List[Dict[str, Any]], before: List[Any]) -> None:
+        """折叠或收起碰了任务状态消息时，在历史尾部补一份完整的任务状态。
+
+        任务状态平时只交付变化，"没变的部分"指向更早的那几条；那几条被折掉或收起后，模型手上
+        就没有完整的任务状态了。补的这一份照当前事实现出（不是把旧的还原回去），之后的续做
+        仍然只交付相对它的变化。只回应互动的一批、任务已经交付时不补，下次续做时再给完整的。
+        """
+        if self._state_texts(messages) == before:
+            return
+        if self._interaction_only or self._task_finished or not self._task_instructions:
+            self._shown_context = {}
+            return
+        facts = self._current_task_context()
+        messages.append({"role": "user", "content": "[当前任务状态]\n" + json_text(facts), STATE_KEY: True})
+        self._shown_context = deepcopy(facts)
+        # 新补的这条在发出前就编号，之后不再改它的正文
+        self._number_messages(messages)
 
     def _recall_context(self, block: str, query: str) -> Dict[str, Any]:
         """取回被折叠或收起的原文（minecraft_context_recall 的执行后端）。"""
