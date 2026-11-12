@@ -357,6 +357,8 @@ def _selftest() -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="杂谈体检：成对输出正指标与副作用指标")
     parser.add_argument("--db", type=Path, help="Amaidesu SQLite 库路径")
     parser.add_argument("--session", type=int, help="场次 id（不给取最近一场）")
