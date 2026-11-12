@@ -32,6 +32,7 @@ from src.modules.types.emotion_vocab import Emotion
 from src.modules.utils.time_utils import now_ms
 
 from .config import StreamerMouthConfig
+from .mouth_reconcile import strip_duplicate_greetings
 from .persona_rules import boundaries_line
 from .scene_card import GoalLine, SceneInputs, build_scene_card
 from .speech_guard import VerbatimRepeat, WordFilter, find_verbatim_repeat, fit_to_budget, guard
@@ -106,6 +107,8 @@ class Mouth:
         is_live: Callable[[], bool],
         profile: str = "replyer",
         clock: Callable[[], int] = now_ms,
+        recent_speeches_provider: Optional[Callable[[], Sequence[str]]] = None,
+        on_mouth_spoken: Optional[Callable[[str, int, str], None]] = None,
     ) -> None:
         """依赖全部构造注入：LLM、提示词、发声分发器（``dispatch_reaction``）、房间态势（``last_speech_ms`` /
         ``activity_line`` / ``record_speech``），以及现场卡各段的数据来源。"""
@@ -123,10 +126,14 @@ class Mouth:
         self._is_live = is_live
         self._profile = profile
         self._clock = clock
+        self._recent_speeches_provider = recent_speeches_provider
+        self._on_mouth_spoken = on_mouth_spoken
         self._logger = get_logger("StreamerAgent.Mouth")
 
         # 最近记录多留一些：游戏条目多时她说过的话也不至于被挤出去
         self._records: Deque[_Record] = deque(maxlen=max(30, config.history_items * 3))
+        # 单独保留最近说过的台词：高频身体/游戏事件刷屏时，她刚说过的话仍保底留在现场卡与复读闸里
+        self._speeches: Deque[str] = deque(maxlen=20)
         self._pending: List[Trigger] = []
         self._wake = asyncio.Event()
         self._task: Optional[asyncio.Task[None]] = None
@@ -141,7 +148,10 @@ class Mouth:
         self._records.append(_Record(at_ms or self._clock(), "viewer", text, sender))
 
     def note_speech(self, text: str, at_ms: Optional[int] = None) -> None:
-        self._records.append(_Record(at_ms or self._clock(), "speech", text))
+        ts = at_ms or self._clock()
+        self._records.append(_Record(ts, "speech", text))
+        if text and text.strip():
+            self._speeches.append(text.strip())
 
     def note_game(self, text: str, at_ms: Optional[int] = None) -> None:
         self._records.append(_Record(at_ms or self._clock(), "game", text))
@@ -156,6 +166,7 @@ class Mouth:
     def reset(self) -> None:
         """场次边界：清掉上一场的记录、由头、冷却与现场，开播后从头记。"""
         self._records.clear()
+        self._speeches.clear()
         self._pending.clear()
         self._last_reacted.clear()
         self._scene_brief, self._scene_at_ms = "", 0
@@ -271,7 +282,14 @@ class Mouth:
         )
         if utterance_id is None:
             return None
-        self._room_state.record_speech(self._clock())
+        spoken_at = self._clock()
+        self._room_state.record_speech(spoken_at)
+        if hasattr(self._room_state, "note_spoken"):
+            self._room_state.note_spoken(text)
+        if self._on_mouth_spoken is not None:
+            trigger_summary = self._trigger_text(fresh)
+            for _, seg_line in segments:
+                self._on_mouth_spoken(seg_line, spoken_at, trigger_summary)
         return text
 
     def _log_started(self, text: str, trigger_text: str, generate_ms: int, event_at_ms: int, ready_at_ms: int) -> None:
@@ -348,8 +366,9 @@ class Mouth:
             goals=goals,
             recent_events=[(record.at_ms, record.text) for record in self._records if record.kind == "game"],
             segment_title=segment,
-            room_activity=self._room_state.activity_line(),
-            recent_speeches=[record.text for record in self._records if record.kind == "speech"],
+            # 观众进房名单只由决策环节负责欢迎；嘴不读进房名单，免得因游戏小事开口时顺嘴二次欢迎
+            room_activity=self._room_state.activity_line(include_enters=False),
+            recent_speeches=self._earlier_speeches(),
         )
 
     async def _refresh_scene(self, *, force: bool) -> None:
@@ -390,8 +409,22 @@ class Mouth:
         return segments
 
     def _earlier_speeches(self) -> List[str]:
-        """本场已说出口的台词（旧→新），供近逐字复读闸比对。"""
-        return [record.text for record in self._records if record.kind == "speech" and record.text.strip()]
+        """本场最近已说出口的台词（含决策环节与嘴自己，旧→新），不被高频游戏事件挤掉。"""
+        merged: List[str] = []
+        if self._recent_speeches_provider is not None:
+            try:
+                for item in self._recent_speeches_provider():
+                    cleaned = (item or "").strip()
+                    if cleaned and (not merged or merged[-1] != cleaned):
+                        merged.append(cleaned)
+            except Exception as exc:  # noqa: BLE001 - 外部台词源异常时退回本地记录
+                self._logger.warning(f"读本场已说台词失败，退回本地记录: {exc}", exc=True)
+        for source in (self._speeches, (record.text for record in self._records if record.kind == "speech")):
+            for item in source:
+                cleaned = (item or "").strip()
+                if cleaned and cleaned not in merged[-6:]:
+                    merged.append(cleaned)
+        return merged[-20:]
 
     async def _rephrase_verbatim(
         self,
@@ -447,11 +480,17 @@ class Mouth:
         :func:`guard`（此处不截短，只查敏感词）。命中"整条丢弃"就整段丢。
         """
         budget = self._speech_max_chars
+        welcomed = getattr(self._room_state, "welcomed_names", ())
         kept: List[Tuple[Emotion, str]] = []
         used = 0
-        for index, (emotion, line) in enumerate(segments):
+        for emotion, raw_line in segments:
+            # 已被任一出口欢迎过的人，嘴不再顺嘴欢迎第二遍；只剩欢迎语的行直接略过
+            line, stripped_greeting = strip_duplicate_greetings(raw_line, welcomed)
+            if stripped_greeting and not line:
+                self._logger.info(f"嘴的台词仅含重复欢迎，已剥除: {raw_line!r}")
+                continue
             if budget > 0:
-                if index == 0:
+                if not kept:
                     line = fit_to_budget(line, budget)
                 elif used + len(line) > budget:
                     break

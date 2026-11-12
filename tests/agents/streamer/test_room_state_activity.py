@@ -145,3 +145,25 @@ def test_streamer_wires_proactive_cold_timeout_into_planner() -> None:
     """冷场提示复用主动发言的冷场阈值，同一个"多久算冷"只配一处。"""
     agent = make_streamer_agent({"proactive": {"cold_timeout_ms": 30_000}})
     assert agent._planner._cold_silence_ms == 30_000
+
+
+def test_welcomed_viewer_leaves_enter_list_and_is_not_re_added_until_session_reset() -> None:
+    """第 65 场进房 8 分钟二次欢迎回归：观众一旦在台词里被点名欢迎，立即从待欢迎名单核销；
+    嘴调用 include_enters=False 时不读进房名单；下一场 reset_session 后才重新欢迎。"""
+    state = RoomState()
+    state.record_enter("u_b", "观众乙", now_ms=1_000_000)
+    assert "观众乙" in state.activity_line(now_ms=1_010_000)
+    assert "观众乙" not in state.activity_line(now_ms=1_010_000, include_enters=False)
+
+    state.note_spoken("欢迎观众乙进来坐呀，今天咱们接着造水车。")
+    assert "观众乙" in state.welcomed_names
+    assert "观众乙" not in state.activity_line(now_ms=1_480_000)
+
+    # 同场内 40 分钟后再次进房也不再列入待欢迎名单
+    state.record_enter("u_b", "观众乙", now_ms=3_500_000)
+    assert "观众乙" not in state.activity_line(now_ms=3_500_000)
+
+    # 新场次重置后恢复可欢迎
+    state.reset_session()
+    state.record_enter("u_b", "观众乙", now_ms=4_000_000)
+    assert "观众乙" in state.activity_line(now_ms=4_000_000)

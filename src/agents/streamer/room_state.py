@@ -20,10 +20,12 @@
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import FrozenSet, List, Optional, Set, Tuple
 
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.utils.time_utils import now_ms as _real_now_ms
+
+from .mouth_reconcile import is_greeting_sentence, mentions_name
 
 __all__ = ["RoomStateSnapshot", "RoomState"]
 
@@ -142,6 +144,11 @@ class RoomState:
         self._audience_samples: List[Tuple[int, int]] = []
         # 进房记录 (ts, user_id, 昵称)：room.message.enter 驱动，欢迎话术的原料
         self._enters: List[Tuple[int, str, str]] = []
+        # 本场待欢迎的游戏上线玩家昵称：收到"某某加入了游戏"时记下，任一出口欢迎过后转入已欢迎表
+        self._pending_join_names: Set[str] = set()
+        # 本场已欢迎表（两条出口共享读写）：已被任一出口点名欢迎过的观众或上线玩家不再重复欢迎
+        self._welcomed_ids: Set[str] = set()
+        self._welcomed_names: Set[str] = set()
 
     # ------------------------------------------------------------------
     # 时钟注入
@@ -280,14 +287,18 @@ class RoomState:
     # ------------------------------------------------------------------
 
     def record_enter(self, user_id: str, user_name: str, *, now_ms: Optional[int] = None) -> None:
-        """记录一位观众进房（内存态；同一观众在限频窗口内重复进房不重复记）。
+        """记录一位观众进房（内存态；本场已欢迎过或限频窗口内重复进房的不重复记）。
 
         Args:
-            user_id: 观众唯一 ID（限频的判定键）
+            user_id: 观众唯一 ID（限频与本场已欢迎的判定键）
             user_name: 昵称（activity_line 点名用）
             now_ms: 进房时刻（Unix 毫秒）；None 时使用真实时钟
         """
         ts = self._resolve_now(now_ms)
+        if user_id and user_id in self._welcomed_ids:
+            return
+        if user_name and any(user_name.lower() == existing.lower() for existing in self._welcomed_names):
+            return
         for entry_ts, entry_id, _ in reversed(self._enters):
             if entry_id == user_id:
                 if ts - entry_ts < ENTER_DEDUP_MS:
@@ -299,9 +310,64 @@ class RoomState:
         while self._enters and self._enters[0][0] < cutoff:
             self._enters.pop(0)
 
+    def record_player_join(self, player_name: str) -> None:
+        """登记一位刚加入游戏的玩家：任一出口随后欢迎过他即写入本场已欢迎表，防另一出口再次欢迎。"""
+        name = (player_name or "").strip()
+        if not name:
+            return
+        if any(name.lower() == existing.lower() for existing in self._welcomed_names):
+            return
+        self._pending_join_names.add(name)
+
+    def mark_welcomed(self, *, user_id: str = "", user_name: str = "") -> None:
+        """显式把一位观众或玩家记入本场已欢迎表。"""
+        if user_id and user_id.strip():
+            self._welcomed_ids.add(user_id.strip())
+        if user_name and user_name.strip():
+            self._welcomed_names.add(user_name.strip())
+            self._pending_join_names.discard(user_name.strip())
+
+    def note_spoken(self, text: str) -> None:
+        """任一出口（决策环节或嘴）说出一句台词后核销已欢迎名单。
+
+        进房名单里的观众只要在台词里被点到名，就视为已接过他进房，从待欢迎名单移入本场已欢迎表；
+        刚上线进游戏的玩家在台词里收到欢迎语时同样移入本场已欢迎表，另一出口不再重复欢迎。
+        """
+        spoken = (text or "").strip()
+        if not spoken:
+            return
+        for _, uid, uname in self._enters:
+            if uname and mentions_name(uname, spoken):
+                self.mark_welcomed(user_id=uid, user_name=uname)
+        for pname in list(self._pending_join_names):
+            if is_greeting_sentence(spoken, pname) or ("欢迎" in spoken and mentions_name(pname, spoken)):
+                self.mark_welcomed(user_name=pname)
+
+    @property
+    def welcomed_names(self) -> FrozenSet[str]:
+        """本场已被欢迎过的昵称只读集合（供出声前剥除重复欢迎句）。"""
+        return frozenset(self._welcomed_names)
+
+    def reset_session(self) -> None:
+        """场次边界清空本场进房与已欢迎记录，下一场重新欢迎。"""
+        self._enters.clear()
+        self._pending_join_names.clear()
+        self._welcomed_ids.clear()
+        self._welcomed_names.clear()
+
+    def _is_welcomed(self, user_id: str, user_name: str) -> bool:
+        if user_id and user_id in self._welcomed_ids:
+            return True
+        lowered = (user_name or "").lower()
+        return bool(lowered and any(lowered == item.lower() for item in self._welcomed_names))
+
     def _recent_enter_names(self, now_ms: int) -> List[str]:
-        """渲染窗口内最近进房的观众昵称（按进房先后，最多 ENTER_RENDER_CAP 位）。"""
-        names = [name for ts, _, name in self._enters if ts >= now_ms - ENTER_WINDOW_MS]
+        """渲染窗口内最近进房且本场尚未欢迎过的观众昵称（按进房先后，最多 ENTER_RENDER_CAP 位）。"""
+        names = [
+            name
+            for ts, uid, name in self._enters
+            if ts >= now_ms - ENTER_WINDOW_MS and not self._is_welcomed(uid, name)
+        ]
         return names[-ENTER_RENDER_CAP:]
 
     # ------------------------------------------------------------------
@@ -338,14 +404,13 @@ class RoomState:
             return None
         return samples[-1][1] - samples[0][1]
 
-    def activity_line(self, *, now_ms: Optional[int] = None) -> str:
+    def activity_line(self, *, now_ms: Optional[int] = None, include_enters: bool = True) -> str:
         """房间活跃度一句话（planner 参考段用，校准互动密度与发言策略）。
 
         事实陈述不带指令：近 10 分钟新增观看（累计口径的窗口增量；推送样本
-        不足时如实说未知）+ 近 1 分钟弹幕量与热度等级 + 近 10 分钟进房的
-        观众名单（限频去重后取最近几位，欢迎话术的点名原料）。全部有源：
-        观看增量来自 ``room.state.watched_count`` 推送，弹幕量来自滑动窗口，
-        进房名单来自 ``room.message.enter``。
+        不足时如实说未知）+ 近 1 分钟弹幕量与热度等级 + 近 10 分钟进房且尚未欢迎的
+        观众名单。``include_enters=False`` 时不附进房名单——进房欢迎只由决策环节负责，
+        嘴不读进房名单，避免几分钟后因游戏小事开口时顺嘴二次欢迎。
         """
         ts = self._resolve_now(now_ms)
         self._trim(ts)
@@ -354,7 +419,7 @@ class RoomState:
             audience_text = "近 10 分钟新增观看未知（推送样本不足）"
         else:
             audience_text = f"近 10 分钟新增观看 {increment}"
-        enter_names = self._recent_enter_names(ts)
+        enter_names = self._recent_enter_names(ts) if include_enters else []
         enter_text = f"；近 10 分钟进房：{'、'.join(enter_names)}" if enter_names else ""
         return f"{audience_text}；近 1 分钟弹幕 {len(self._window)} 条（热度 {self._compute_heat(ts)}）{enter_text}"
 

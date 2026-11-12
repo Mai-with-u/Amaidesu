@@ -428,3 +428,32 @@ async def test_mouth_verbatim_repeat_triggers_rephrase_instead_of_dropping(promp
     assert spoken == "又从背后偷袭我，这只蜘蛛没完了是吧！"
     assert len(llm.calls) == 2
     assert len(speech.calls) == 1
+
+
+async def test_mouth_hides_room_enters_and_keeps_planner_speeches_under_event_flood(prompts: Any) -> None:
+    """嘴的现场卡不带直播间进房名单（欢迎归决策环节），且高频游戏事件刷满 _records 后仍看得见刚说过的台词。"""
+    llm, speech = _LLM("scared：先把盾举起来！"), _Speech()
+    mouth = _mouth(llm, speech, prompts)
+    mouth._room_state.record_enter("u_b", "观众乙", now_ms=NOW - 5_000)
+    mouth.note_speech("刚才已经把工作台挪到屋里角落了。", NOW - 25_000)
+    for idx in range(40):
+        mouth.note_game(f"远处史莱姆跳动第 {idx} 次", NOW - 20_000 + idx * 100)
+
+    await mouth.react_once([_trigger()])
+
+    card_msg = llm.calls[0]["messages"][-1]["content"]
+    assert "观众乙" not in card_msg
+    assert "刚才已经把工作台挪到屋里角落了" in card_msg
+
+
+async def test_mouth_strips_duplicate_greeting_for_already_welcomed_player(prompts: Any) -> None:
+    """本场已被决策环节欢迎过的玩家，嘴反应时若顺嘴再欢迎一遍则剥掉重复欢迎，只留对当下遭遇的反应。"""
+    llm = _LLM("happy：欢迎玩家甲上线！这苦力怕怎么贴脸炸我呀！")
+    speech = _Speech()
+    mouth = _mouth(llm, speech, prompts)
+    mouth._room_state.mark_welcomed(user_name="玩家甲")
+
+    spoken = await mouth.react_once([_trigger()])
+
+    assert spoken == "这苦力怕怎么贴脸炸我呀！"
+    assert "欢迎" not in spoken

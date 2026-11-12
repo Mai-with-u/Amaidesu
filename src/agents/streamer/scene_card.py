@@ -156,8 +156,11 @@ def build_scene_card(
             events, speeches = max(2, events - 1), max(2, speeches - 1)
         elif keep_room:
             keep_room = False
-        elif events > 0 or speeches > 0:
-            events, speeches = max(0, events - 1), max(0, speeches - 1)
+        elif events > 0:
+            # 刚发生的事让完之前，她刚说过的话至少保底留两句（防嘴看不到决策刚说的话而复读或撞车）
+            events -= 1
+        elif speeches > 0:
+            speeches -= 1
         else:
             # 只剩必保的三段仍超长：整张截断，保住开头的现状
             return _clip(card, max_chars)
