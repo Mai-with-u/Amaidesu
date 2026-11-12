@@ -7,12 +7,16 @@ from typing import Optional
 import pytest
 
 from src.agents.streamer.memory.render import (
+    BRIEF_ZONES,
+    BriefZoneOutput,
+    BriefZoneSpec,
     MAX_BRIEF_ARCHIVE_LINES,
     MAX_BRIEF_COMMITMENTS,
     MAX_PRESENCE_VIEWERS,
     PRESENCE_RECENT_MS,
     brief_archive_ids,
     format_memory_refs,
+    is_naming_title,
     memory_ref_archive_numbers,
     memory_ref_numbers,
     render_archive_block,
@@ -30,7 +34,7 @@ from src.agents.streamer.memory.render import (
     render_spoken_memory,
     render_viewer_card,
 )
-from src.modules.storage.models.memory import ArchiveLine, Commitment
+from src.modules.storage.models.memory import ArchiveLine, Commitment, SnapshotLine
 from src.modules.types.game_save import GameSave
 
 _NOW = 10_000_000_000
@@ -182,35 +186,50 @@ def test_spoken_archive_gives_title_only() -> None:
 
 
 def test_brief_has_archive_section_and_commitment_section() -> None:
+    game_event = ArchiveLine(
+        id=41, live_session_id=7, text="Minecraft：水车搭好了", quote="水车搭好啦", evidence_chat_id=3, game="minecraft"
+    )
     brief = render_brief(
-        archive_lines=[_archive()],
+        archive_lines=[game_event],
         commitments=[_commitment(cid=5, created_session_id=7, quote="等我把城堡屋顶盖完，第一个请大家来参观")],
         previous_session_id=7,
     )
     assert brief.startswith("# 她记得的事")
-    assert "上一场：" in brief
-    assert "- [档#41] Minecraft：水车搭好了（你说过「水车搭好啦」）" in brief
-    assert "还没兑现、你当众说过的事：" in brief
+    assert "【最近几场】\n上一场：\n- [档#41] Minecraft：水车搭好了（你说过「水车搭好啦」）" in brief
+    assert "【还惦记的事】（想做再做的事，不用赶）：" in brief
     assert "[约#5] 「等我把城堡屋顶盖完，第一个请大家来参观」（上一场）" in brief
 
 
 def test_brief_splits_snapshot_into_previous_and_earlier_blocks() -> None:
-    """快照里上一场新写的行列在"上一场："下，从之前几场接住的行列在"之前："下（按每行写在哪一场分）。"""
+    """【最近几场】里上一场新写的行列在"上一场："下，从之前几场接住的普通事件列在"再往前："下。"""
     lines = [
         ArchiveLine(
-            id=1, live_session_id=9, text="Minecraft：炉子点火烤海带", quote="炉子点上火了", evidence_chat_id=11
+            id=1,
+            live_session_id=9,
+            text="Minecraft：炉子点火烤海带",
+            quote="炉子点上火了",
+            evidence_chat_id=11,
+            game="minecraft",
         ),
-        ArchiveLine(id=2, live_session_id=4, text="Minecraft：女仆取名团子", quote="就叫团子", evidence_chat_id=12),
+        ArchiveLine(
+            id=2,
+            live_session_id=4,
+            text="Minecraft：村边钓了一桶鳕鱼",
+            quote="钓了一桶鳕鱼",
+            evidence_chat_id=12,
+            game="minecraft",
+        ),
     ]
 
     brief = render_brief(archive_lines=lines, previous_session_id=9)
 
     assert (
+        "【最近几场】\n"
         "上一场：\n- [档#1] Minecraft：炉子点火烤海带（你说过「炉子点上火了」）\n"
-        "之前：\n- [档#2] Minecraft：女仆取名团子（你说过「就叫团子」）"
+        "再往前：\n- [档#2] Minecraft：村边钓了一桶鳕鱼（你说过「钓了一桶鳕鱼」）"
     ) in brief
     only_earlier = render_brief(archive_lines=lines[1:], previous_session_id=9)
-    assert "上一场：" not in only_earlier and "之前：\n- [档#2] Minecraft：女仆取名团子" in only_earlier
+    assert "上一场：" not in only_earlier and "再往前：\n- [档#2] Minecraft：村边钓了一桶鳕鱼" in only_earlier
 
 
 def test_brief_lists_one_thing_once_when_archive_and_commitment_share_a_line() -> None:
@@ -243,7 +262,7 @@ def test_brief_caps_commitments_and_points_to_recall_tool() -> None:
     listed = brief.count("- [约#")
     assert listed == MAX_BRIEF_COMMITMENTS
     capped = render_brief(commitments=commitments, earlier_commitment_count=3)
-    assert "另有 3 件，可以用 memory_recall 查" in capped
+    assert "另有 3 件搁了很久，可以用 memory_recall 查" in capped
 
 
 def test_brief_commitment_section_ends_with_a_fixed_line_on_how_to_close() -> None:
@@ -254,7 +273,7 @@ def test_brief_commitment_section_ends_with_a_fixed_line_on_how_to_close() -> No
         earlier_commitment_count=3,
     )
     hint = "（确实做不到的，找个合适的时机当众说清楚；没做的别说成做完了）"
-    assert one.endswith("\n" + hint) and more.endswith("另有 3 件，可以用 memory_recall 查\n" + hint)
+    assert one.endswith("\n" + hint) and more.endswith("另有 3 件搁了很久，可以用 memory_recall 查\n" + hint)
     assert one.count(hint) == 1
     assert hint not in render_brief(archive_lines=[_archive()]), "没有承诺段时不出现"
 
@@ -351,7 +370,7 @@ def _game_line(
 
 
 def test_brief_folds_other_save_lines_and_marks_unsure_ones() -> None:
-    """上一场在老档里做的事折成一行；本存档的、没挂游戏的照列；没记存档的游戏行注明不确定；开头写眼下在哪。"""
+    """别的存档里的事按存档号折成一行；本存档游戏事件进【最近几场】；不挂游戏的进【直播间里的事】跨存档保留。"""
     lines = [
         _game_line("Minecraft：北边的桥修好了", game="minecraft", save_id="a", save_name="老档", chat_id=1),
         _game_line("猜谜环节", game=None, chat_id=2),
@@ -363,19 +382,173 @@ def test_brief_folds_other_save_lines_and_marks_unsure_ones() -> None:
 
     assert brief.splitlines()[1:] == [
         "眼下 minecraft 开着存档「新档」。",
-        "上一场：",
         "- 还在 minecraft「老档」里做过 2 件事（现在开着「新档」，那边的建筑和进度这里没有；要细节用 memory_recall 查）",
-        "- [档#2] 猜谜环节",
+        "【最近几场】",
+        "上一场：",
         "- [档#4] Minecraft：出生点旁边有村子",
         "- [档#5] Minecraft：挖到钻石（不确定是 minecraft 哪个存档里的事）",
+        "【直播间里的事】",
+        "- [档#2] 猜谜环节（上一场）",
     ]
-    # 折起来的老档行不带编号，也不在点名名单里
-    assert brief_archive_ids(lines, current_saves={"minecraft": GameSave(id="b", name="新档")}) == [2, 4, 5]
-    # 不分存档时与原来逐字节相同
+    # 折起来的老档行不带编号，也不在点名名单里；【最近几场】在前、【直播间里的事】在后
+    assert brief_archive_ids(lines, current_saves={"minecraft": GameSave(id="b", name="新档")}) == [4, 5, 2]
+    # 不分存档时与空 current_saves 逐字节相同
     assert render_brief(archive_lines=lines) == render_brief(archive_lines=lines, current_saves={})
     plain = render_brief(archive_lines=lines)
     assert "- [档#1] Minecraft：北边的桥修好了" in plain and "做过 2 件事" not in plain
-    assert brief_archive_ids(lines) == [1, 2, 3, 4, 5]
+    assert brief_archive_ids(lines) == [1, 3, 4, 5, 2]
+
+
+def test_same_save_id_with_multiple_names_folds_into_one_line_with_latest_name() -> None:
+    """同一个存档号历史上有过多个名字时，全简报归并成一行并采用最新非空名字，不拆成两个世界。"""
+    snap = [
+        SnapshotLine(
+            line=ArchiveLine(
+                id=10,
+                live_session_id=59,
+                text="Minecraft：小狗取名豆包",
+                quote="就叫豆包",
+                evidence_chat_id=10,
+                game="minecraft",
+                save_id="ff165d15",
+                save_name="麦窝",
+            ),
+            lasting=True,
+            seen_at_ms=1_000,
+        ),
+        SnapshotLine(
+            line=ArchiveLine(
+                id=20,
+                live_session_id=63,
+                text="Minecraft：树场栽好一棵橡树苗",
+                quote="栽上一棵",
+                evidence_chat_id=20,
+                game="minecraft",
+                save_id="ff165d15",
+                save_name="麦麦小窝 MaiCraft",
+            ),
+            lasting=False,
+            seen_at_ms=2_000,
+        ),
+        SnapshotLine(
+            line=ArchiveLine(
+                id=30,
+                live_session_id=63,
+                text="聊了怕打雷的往事",
+                quote="小时候怕打雷",
+                evidence_chat_id=30,
+                game=None,
+            ),
+            lasting=False,
+            seen_at_ms=2_000,
+        ),
+    ]
+    brief = render_brief(
+        snapshot_lines=snap,
+        previous_session_id=63,
+        current_saves={"minecraft": GameSave(id="new99999", name="新的世界")},
+    )
+    assert brief.count("还在 minecraft") == 1
+    assert "还在 minecraft「麦麦小窝 MaiCraft」里做过 2 件事" in brief
+    assert "「麦窝」" not in brief
+    # 换到新世界后【直播间里的事】照样带着，不会整份简报只剩折叠句
+    assert "【直播间里的事】\n- [档#30] 聊了怕打雷的往事（你说过「小时候怕打雷」；上一场）" in brief
+
+
+def test_world_zone_packs_names_into_rows_and_omits_quotes_on_lasting_facts() -> None:
+    """【这个世界里】名字类每 6 个压成一行名字表（最多两行），其余稳定每条一行不带原话，且不占事件名额。"""
+    assert is_naming_title("Minecraft：小狗取名豆包")
+    assert is_naming_title("黑沙地名为「火山平原」")
+    assert is_naming_title("Minecraft：树场封号「麦麦一号」")
+    assert not is_naming_title("和观众定下打怪口号")
+    assert not is_naming_title("小狗被打了会大叫")
+    assert not is_naming_title("Minecraft：崖边小石屋当家")
+
+    names = [
+        SnapshotLine(
+            line=ArchiveLine(
+                id=index,
+                live_session_id=58,
+                text=f"Minecraft：宠物{index}取名团子{index}",
+                quote=f"原话{index}",
+                evidence_chat_id=index,
+                game="minecraft",
+                save_id="w1",
+                save_name="麦窝",
+            ),
+            lasting=True,
+            seen_at_ms=1_000 + index,
+        )
+        for index in range(1, 8)
+    ]
+    home = SnapshotLine(
+        line=ArchiveLine(
+            id=99,
+            live_session_id=58,
+            text="Minecraft：重生点定在营地",
+            quote="以后都在营地复活",
+            evidence_chat_id=99,
+            game="minecraft",
+            save_id="w1",
+            save_name="麦窝",
+        ),
+        lasting=True,
+        seen_at_ms=2_000,
+    )
+    brief = render_brief(
+        snapshot_lines=[*names, home],
+        previous_session_id=63,
+        current_saves={"minecraft": GameSave(id="w1", name="麦窝")},
+        used_archive_ids={2},
+    )
+    assert "【这个世界里】" in brief
+    assert "- 起了名的：[档#1] Minecraft：宠物1取名团子1；[档#2] Minecraft：宠物2取名团子2（本场已提过）" in brief
+    assert "- 起了名的（续）：[档#7] Minecraft：宠物7取名团子7" in brief
+    assert "- [档#99] Minecraft：重生点定在营地" in brief
+    assert "原话1" not in brief and "以后都在营地复活" not in brief
+    assert brief_archive_ids(
+        snapshot_lines=[*names, home],
+        previous_session_id=63,
+        current_saves={"minecraft": GameSave(id="w1", name="麦窝")},
+    ) == [1, 2, 3, 4, 5, 6, 7, 99]
+
+
+def test_stale_snapshot_and_zone_extension_point() -> None:
+    """最近一场没整理完时不冒充紧邻的上一场；新增自定义分区不用改 render_brief 与点名骨架。"""
+    snap = [
+        SnapshotLine(
+            line=ArchiveLine(
+                id=7,
+                live_session_id=59,
+                text="Minecraft：修好了木桥",
+                quote="桥通啦",
+                evidence_chat_id=7,
+                game="minecraft",
+            ),
+            lasting=False,
+            seen_at_ms=5_000,
+        )
+    ]
+    custom_zone = BriefZoneSpec(
+        key="self_facts",
+        header="【关于你自己】",
+        render=lambda _ctx: BriefZoneOutput(lines=("- [档#888] 怕打雷",), archive_ids=(888,)),
+    )
+    brief = render_brief(
+        snapshot_lines=snap,
+        previous_session_id=59,
+        previous_is_stale=True,
+        zones=(*BRIEF_ZONES, custom_zone),
+    )
+    assert "上次已整理的那场（上一场还没整理完）：" in brief
+    assert "【关于你自己】\n- [档#888] 怕打雷" in brief
+    ids = brief_archive_ids(
+        snapshot_lines=snap,
+        previous_session_id=59,
+        previous_is_stale=True,
+        zones=(*BRIEF_ZONES, custom_zone),
+    )
+    assert ids == [7, 888]
 
 
 def test_brief_before_entering_a_save_folds_every_saved_line_and_notes_unsaved_session() -> None:

@@ -21,24 +21,58 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, AbstractSet, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
-from src.modules.storage.models.memory import ArchiveLine, Commitment
+from src.modules.storage.models.memory import ArchiveLine, Commitment, SnapshotLine
 from src.modules.storage.privacy import mask_names_in_text
 from src.modules.types.game_save import GameSave
 
-from .saves import SavePlace, place_of
+from .saves import SavePlace, canonical_save_names, place_of
+from .zones import (
+    MAX_BRIEF_COMMITMENTS,
+    MAX_RECENT_EARLIER_LINES,
+    MAX_RECENT_PREVIOUS_LINES,
+    MAX_ROOM_LINES,
+    MAX_WORLD_LINES,
+    MAX_WORLD_NAMES,
+    WORLD_NAMES_PER_ROW,
+    BriefRenderContext,
+    BriefZoneOutput,
+    BriefZoneSpec,
+    is_from_session,
+    is_naming_title,
+    name_table_row_count,
+    select_recent_zone_items,
+    select_room_zone_items,
+    select_world_zone_items,
+)
 
 if TYPE_CHECKING:
     from src.modules.storage.models.game_players import GamePlayer, PlayerInteraction
 
 __all__ = [
+    "BRIEF_ZONES",
+    "BriefRenderContext",
+    "BriefZoneOutput",
+    "BriefZoneSpec",
+    "COMMITMENTS_ZONE",
     "MAX_BRIEF_ARCHIVE_LINES",
-    "brief_archive_ids",
-    "format_memory_refs",
-    "memory_ref_archive_numbers",
-    "memory_ref_numbers",
     "MAX_BRIEF_COMMITMENTS",
     "MAX_PRESENCE_VIEWERS",
+    "MAX_RECENT_EARLIER_LINES",
+    "MAX_RECENT_PREVIOUS_LINES",
+    "MAX_ROOM_LINES",
+    "MAX_WORLD_LINES",
+    "MAX_WORLD_NAMES",
     "PRESENCE_RECENT_MS",
+    "RECENT_ZONE",
+    "ROOM_ZONE",
+    "WORLD_NAMES_PER_ROW",
+    "WORLD_ZONE",
+    "brief_archive_ids",
+    "format_memory_refs",
+    "is_naming_title",
+    "memory_ref_archive_numbers",
+    "memory_ref_numbers",
+    "name_table_row_count",
     "render_archive_block",
     "render_archive_card",
     "render_archive_number",
@@ -50,20 +84,19 @@ __all__ = [
     "render_forget_notice",
     "render_game_card",
     "render_joke_card",
+    "render_player_card",
     "render_presence_line",
     "render_recalled_commitment_card",
     "render_retract_notice",
     "render_save_heads",
     "render_spoken_archive",
     "render_spoken_memory",
-    "render_player_card",
     "render_viewer_card",
     "source_notes",
 ]
 
-# 常驻简报：档案行最多几条（一份快照的上限，整理写入用同一个数）、不针对具体观众的承诺最多几条
+# 单块档案列表的兼容默认上限（供 render_archive_block 单独渲染时截断；常驻简报按 zones 各区名额计）
 MAX_BRIEF_ARCHIVE_LINES = 12
-MAX_BRIEF_COMMITMENTS = 5
 # 老观众在场一行最多几个人，超出的折成"等 N 位"
 MAX_PRESENCE_VIEWERS = 6
 # 档位词分界：三天内来过写"前几天刚来过"，否则写"有阵子没来"
@@ -77,7 +110,11 @@ _CUE_HEADER = (
     "（代码按线索找的，以眼前为准；不提也行。要用就把编号写进 streamer_reply 的 use_memory，一次一条；"
     "一句台词最多带一件旧事）"
 )
-_COMMITMENTS_HEADER = "还没兑现、你当众说过的事："
+# 各分区抬头：新增分区只需往 BRIEF_ZONES 加一项，渲染骨架不动
+_WORLD_ZONE_HEADER = "【这个世界里】"
+_RECENT_ZONE_HEADER = "【最近几场】"
+_ROOM_ZONE_HEADER = "【直播间里的事】"
+_COMMITMENTS_HEADER = "【还惦记的事】（想做再做的事，不用赶）："
 # 承诺段末尾固定的一行：做不到的事给一条收场的路（当众说清楚，下播整理才认得出是了结），
 # 也防她为了交差说"画好了"。写"确实做不到"，免得她把做得到的事早早放弃。逐字节不变，前缀缓存照旧命中
 _COMMITMENTS_HINT = "（确实做不到的，找个合适的时机当众说清楚；没做的别说成做完了）"
@@ -87,9 +124,10 @@ _SPOKEN_HEADER = "## 你想起来的事（只用这里写到的，不补细节�
 # 跨场只用这两个时间词
 _WHEN_PREVIOUS = "上一场"
 _WHEN_EARLIER = "之前"
-# 简报里档案快照的两块抬头：上一场新写的、从之前几场接住仍然成立的（只用"上一场""之前"两个时间词）
+# 【最近几场】里两拨事件的小抬头；最近一场还没整理完时如实说明快照截在更早那一场，不冒充紧邻的上一场
 _WHEN_PREVIOUS_HEADER = "上一场："
-_WHEN_EARLIER_HEADER = "之前："
+_WHEN_STALE_PREVIOUS_HEADER = "上次已整理的那场（上一场还没整理完）："
+_WHEN_EARLIER_HEADER = "再往前："
 _SPOKEN_WHEN_PREVIOUS = "上次"
 _SPOKEN_WHEN_EARLIER = "之前"
 # 档案行与承诺的编号前缀（与她"说过的话""答应过的事"对应）
@@ -199,28 +237,78 @@ def render_commitment_text(
     return what
 
 
+def _canonical_names_for(lines: Sequence[ArchiveLine]) -> Dict[Tuple[str, str], str]:
+    """按场次与行号从旧到新归并同一 ``(game, save_id)`` 的存档名，取最后一次非空的名字。"""
+    ordered = sorted(lines, key=lambda item: (int(item.live_session_id), int(item.id)))
+    return canonical_save_names((item.game, item.save_id, item.save_name) for item in ordered)
+
+
+def _format_event_line(
+    line: ArchiveLine,
+    *,
+    current_saves: Mapping[str, GameSave],
+    used_ids: AbstractSet[int],
+    when_label: str = "",
+) -> str:
+    """渲染单条普通事件档案行：带编号、标题、原话及必要的来源/存档/时间注记。"""
+    title, quote = _line_texts(line)
+    if not title:
+        return ""
+    place = place_of(line.game, line.save_id, current_saves)
+    notes = [f"你说过「{quote}」"] if quote else []
+    notes.extend(source_notes(line))
+    if place is SavePlace.UNSURE and line.game:
+        notes.append(f"不确定是 {line.game} 哪个存档里的事")
+    if when_label:
+        notes.append(when_label)
+    head = f"- [{render_archive_number(line.id)}] {title}"
+    text = f"{head}（{'；'.join(notes)}）" if notes else head
+    return f"{text}{_USED_THIS_SESSION}" if int(line.id) in used_ids else text
+
+
+def _format_lasting_item(
+    line: ArchiveLine,
+    *,
+    current_saves: Mapping[str, GameSave],
+    used_ids: AbstractSet[int],
+    bullet: bool = True,
+) -> str:
+    """渲染单条稳定的事：只给编号与标题（及必要的来源/存档不明注记），不带原话以节省常驻预算。"""
+    title, _quote = _line_texts(line)
+    if not title:
+        return ""
+    place = place_of(line.game, line.save_id, current_saves)
+    notes = list(source_notes(line))
+    if place is SavePlace.UNSURE and line.game:
+        notes.append(f"不确定是 {line.game} 哪个存档里的事")
+    prefix = "- " if bullet else ""
+    head = f"{prefix}[{render_archive_number(line.id)}] {title}"
+    text = f"{head}（{'；'.join(notes)}）" if notes else head
+    return f"{text}{_USED_THIS_SESSION}" if int(line.id) in used_ids else text
+
+
 def render_archive_block(
     lines: Sequence[ArchiveLine],
     current_saves: Optional[Mapping[str, GameSave]] = None,
     used_ids: AbstractSet[int] = frozenset(),
 ) -> List[str]:
-    """上一场档案渲染成简报行（档#N、标题、她的原话）。
+    """单块档案行渲染成简报行（档#N、标题、她的原话；别的存档按存档号归并折成一行）。
 
     每行带档案行编号，要提这件事就把编号写进 use_memory 点名。本场她已经点名用过的行
     （``used_ids``）留着、末尾标"（本场已提过）"：档案行是她知道的事实，撤掉她会在同一场里
     忘掉刚说过的名字和住处；标注只提醒她别再主动提。标注只在某一行第一次被用上时改一次文本。
 
-    按游戏眼下所在的存档分（``current_saves``）：别的存档里的事每个存档折成一行，只说做过几件、
-    细节去回想里查——逐行列出来，她会当成眼前这个世界里的建筑和进度；没记下存档的游戏行照列，
-    注明不确定是哪个存档。
+    按游戏眼下所在的存档分（``current_saves``）：别的存档里的事按 ``(game, save_id)`` 归并名字并
+    每个存档折成一行，只说做过几件、细节去回想里查；没记下存档的游戏行照列，注明不确定是哪个存档。
     """
     current = current_saves or {}
+    limited = list(lines)[:MAX_BRIEF_ARCHIVE_LINES]
+    save_names = _canonical_names_for(limited)
     rendered: List[str] = []
     # 别的存档：(游戏, 存档编号) → [折成的那一行在 rendered 里的位置, 件数]；那一行放在第一件的位置
     folded: Dict[Tuple[str, str], List[int]] = {}
-    for line in list(lines)[:MAX_BRIEF_ARCHIVE_LINES]:
-        # 观众来源的行：标题与原话里那位观众的名字换成"那位观众"
-        title, quote = _line_texts(line)
+    for line in limited:
+        title, _quote = _line_texts(line)
         if not title:
             continue
         place = place_of(line.game, line.save_id, current)
@@ -230,61 +318,255 @@ def render_archive_block(
                 folded[key] = [len(rendered), 0]
                 rendered.append("")
             folded[key][1] += 1
+            resolved_name = save_names.get(key, line.save_name)
             rendered[folded[key][0]] = _render_other_save_line(
                 game=line.game,
-                save=GameSave(id=line.save_id, name=line.save_name),
+                save=GameSave(id=line.save_id, name=resolved_name),
                 count=folded[key][1],
                 current=current,
             )
             continue
-        notes = [f"你说过「{quote}」"] if quote else []
-        notes.extend(source_notes(line))
-        if place is SavePlace.UNSURE:
-            notes.append(f"不确定是 {line.game} 哪个存档里的事")
-        head = f"- [{render_archive_number(line.id)}] {title}"
-        text = f"{head}（{'；'.join(notes)}）" if notes else head
-        rendered.append(f"{text}{_USED_THIS_SESSION}" if int(line.id) in used_ids else text)
+        rendered.append(_format_event_line(line, current_saves=current, used_ids=used_ids))
     return rendered
 
 
-def brief_archive_ids(
+def _render_world_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
+    """【这个世界里】：当前游戏世界的稳定事实——名字压成一两行名字表，其余每条一行、不带原话。"""
+    naming, others = select_world_zone_items(ctx)
+    if not naming and not others:
+        return BriefZoneOutput()
+    lines: List[str] = []
+    cited: List[int] = []
+    for start in range(0, len(naming), WORLD_NAMES_PER_ROW):
+        chunk = naming[start : start + WORLD_NAMES_PER_ROW]
+        parts: List[str] = []
+        for item in chunk:
+            formatted = _format_lasting_item(
+                item.line, current_saves=ctx.current_saves, used_ids=ctx.used_archive_ids, bullet=False
+            )
+            if formatted:
+                parts.append(formatted)
+                cited.append(int(item.line.id))
+        if parts:
+            prefix = "- 起了名的：" if start == 0 else "- 起了名的（续）："
+            lines.append(prefix + "；".join(parts))
+    for item in others:
+        formatted = _format_lasting_item(
+            item.line, current_saves=ctx.current_saves, used_ids=ctx.used_archive_ids, bullet=True
+        )
+        if formatted:
+            lines.append(formatted)
+            cited.append(int(item.line.id))
+    return BriefZoneOutput(lines=tuple(lines), archive_ids=tuple(cited))
+
+
+def _render_recent_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
+    """【最近几场】：当前游戏世界的普通事件——上一场至多 6 行，再往前两场按最近被提起合计至多 6 行。"""
+    prev_items, earlier_items = select_recent_zone_items(ctx)
+    if not prev_items and not earlier_items:
+        return BriefZoneOutput()
+    lines: List[str] = []
+    cited: List[int] = []
+    if prev_items:
+        lines.append(_WHEN_STALE_PREVIOUS_HEADER if ctx.previous_is_stale else _WHEN_PREVIOUS_HEADER)
+        for item in prev_items:
+            formatted = _format_event_line(item.line, current_saves=ctx.current_saves, used_ids=ctx.used_archive_ids)
+            if formatted:
+                lines.append(formatted)
+                cited.append(int(item.line.id))
+    if earlier_items:
+        lines.append(_WHEN_EARLIER_HEADER)
+        for item in earlier_items:
+            formatted = _format_event_line(item.line, current_saves=ctx.current_saves, used_ids=ctx.used_archive_ids)
+            if formatted:
+                lines.append(formatted)
+                cited.append(int(item.line.id))
+    return BriefZoneOutput(lines=tuple(lines), archive_ids=tuple(cited))
+
+
+def _render_room_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
+    """【直播间里的事】：不挂游戏的行，换任何游戏存档照样带着（稳定设定在前，最近聊过的事在后）。"""
+    ranked = select_room_zone_items(ctx)
+    if not ranked:
+        return BriefZoneOutput()
+    lines: List[str] = []
+    cited: List[int] = []
+    has_prev = False
+    for item in ranked:
+        is_prev = is_from_session(item.line, ctx.archive_session_id)
+        if is_prev:
+            has_prev = True
+        if item.lasting:
+            formatted = _format_lasting_item(
+                item.line, current_saves=ctx.current_saves, used_ids=ctx.used_archive_ids, bullet=True
+            )
+        else:
+            when = _WHEN_PREVIOUS if is_prev and not ctx.previous_is_stale else _WHEN_EARLIER
+            formatted = _format_event_line(
+                item.line, current_saves=ctx.current_saves, used_ids=ctx.used_archive_ids, when_label=when
+            )
+        if formatted:
+            lines.append(formatted)
+            cited.append(int(item.line.id))
+    if lines and has_prev and ctx.unsaved_games:
+        for game in ctx.unsaved_games:
+            lines.append(f"（那场玩 {game} 时还没记存档，上面游戏里的事未必是现在这个存档的）")
+    return BriefZoneOutput(lines=tuple(lines), archive_ids=tuple(cited))
+
+
+def _render_commitments_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
+    """【还惦记的事】：最近三场内提起过的未了结承诺（想做再做的事），更早搁下的只给一句总数。"""
+    pending: List[str] = []
+    for commitment in ctx.commitments:
+        what = (commitment.what or "").strip()
+        quote = (commitment.quote or "").strip()
+        is_previous = (
+            not ctx.previous_is_stale
+            and ctx.archive_session_id is not None
+            and commitment.created_session_id is not None
+            and int(commitment.created_session_id) == int(ctx.archive_session_id)
+        )
+        when = _when_word(is_previous=is_previous, spoken=False)
+        body = (
+            f"- [{render_commitment_number(commitment.id)}] 「{quote}」"
+            if quote
+            else f"- [{render_commitment_number(commitment.id)}] {what}"
+        )
+        pending.append(f"{body}（{when}）")
+    extra = max(0, int(ctx.earlier_commitment_count))
+    if not pending and not extra:
+        return BriefZoneOutput()
+    lines = [*pending]
+    if extra:
+        lines.append(f"- 另有 {extra} 件搁了很久，可以用 memory_recall 查")
+    lines.append(_COMMITMENTS_HINT)
+    return BriefZoneOutput(lines=tuple(lines))
+
+
+WORLD_ZONE = BriefZoneSpec(key="world", header=_WORLD_ZONE_HEADER, render=_render_world_zone)
+RECENT_ZONE = BriefZoneSpec(key="recent", header=_RECENT_ZONE_HEADER, render=_render_recent_zone)
+ROOM_ZONE = BriefZoneSpec(key="room", header=_ROOM_ZONE_HEADER, render=_render_room_zone)
+COMMITMENTS_ZONE = BriefZoneSpec(key="commitments", header=_COMMITMENTS_HEADER, render=_render_commitments_zone)
+
+# 常驻简报的有序分区表：新增分区（如后续表达层"关于她自己"区）只需在此追加一项，不动下方渲染骨架
+BRIEF_ZONES: Tuple[BriefZoneSpec, ...] = (
+    WORLD_ZONE,
+    RECENT_ZONE,
+    ROOM_ZONE,
+    COMMITMENTS_ZONE,
+)
+
+
+def _coerce_snapshot_lines(
     archive_lines: Sequence[ArchiveLine],
+    snapshot_lines: Sequence[SnapshotLine],
+) -> List[SnapshotLine]:
+    """优先采用带稳定/再提起标注的 ``snapshot_lines``；仅传 ``archive_lines`` 时按普通事件行包装兼容。"""
+    if snapshot_lines:
+        return list(snapshot_lines)
+    return [SnapshotLine(line=line, lasting=False, seen_at_ms=int(line.live_session_id)) for line in archive_lines]
+
+
+def _build_render_context(
+    *,
+    archive_lines: Sequence[ArchiveLine] = (),
+    snapshot_lines: Sequence[SnapshotLine] = (),
+    commitments: Sequence[Commitment] = (),
+    previous_session_id: Optional[int] = None,
+    previous_is_stale: bool = False,
+    earliest_recent_ms: int = 0,
+    earlier_commitment_count: int = 0,
+    current_saves: Optional[Mapping[str, GameSave]] = None,
+    unsaved_games: Sequence[str] = (),
+    used_archive_ids: AbstractSet[int] = frozenset(),
+) -> BriefRenderContext:
+    """把简报原始输入归一化为各分区共享的只读上下文（同句台词既写档案又记承诺时只留承诺）。"""
+    listed = _listed_commitments(commitments)
+    promised_lines = {int(item.evidence_chat_id) for item in listed if item.evidence_chat_id is not None}
+    raw_items = _coerce_snapshot_lines(archive_lines, snapshot_lines)
+    filtered = [
+        item
+        for item in raw_items
+        if item.line.evidence_chat_id is None or int(item.line.evidence_chat_id) not in promised_lines
+    ]
+    archive_session = previous_session_id
+    if archive_session is None and filtered:
+        archive_session = max(int(item.line.live_session_id) for item in filtered)
+    return BriefRenderContext(
+        snapshot_lines=tuple(filtered),
+        commitments=tuple(listed),
+        earlier_commitment_count=int(earlier_commitment_count),
+        archive_session_id=archive_session,
+        previous_is_stale=bool(previous_is_stale),
+        earliest_recent_ms=int(earliest_recent_ms),
+        current_saves=dict(current_saves or {}),
+        unsaved_games=tuple(unsaved_games),
+        used_archive_ids=used_archive_ids,
+    )
+
+
+def _render_folded_other_saves(ctx: BriefRenderContext) -> List[str]:
+    """别的存档里的记忆按 ``(game, save_id)`` 全简报归并成每个存档一行，名字取最后一次非空记录。"""
+    if not ctx.current_saves:
+        return []
+    save_names = _canonical_names_for([item.line for item in ctx.snapshot_lines])
+    counts: Dict[Tuple[str, str], int] = {}
+    order: List[Tuple[str, str]] = []
+    fallback_names: Dict[Tuple[str, str], str] = {}
+    for item in ctx.snapshot_lines:
+        line = item.line
+        title, _quote = _line_texts(line)
+        if not title or not line.game:
+            continue
+        if place_of(line.game, line.save_id, ctx.current_saves) is not SavePlace.OTHER:
+            continue
+        key = (line.game, line.save_id)
+        if key not in counts:
+            counts[key] = 0
+            order.append(key)
+        counts[key] += 1
+        fallback_names[key] = line.save_name
+    return [
+        _render_other_save_line(
+            game=game,
+            save=GameSave(id=save_id, name=save_names.get((game, save_id), fallback_names[(game, save_id)])),
+            count=counts[(game, save_id)],
+            current=ctx.current_saves,
+        )
+        for game, save_id in order
+    ]
+
+
+def brief_archive_ids(
+    archive_lines: Sequence[ArchiveLine] = (),
     commitments: Sequence[Commitment] = (),
     current_saves: Optional[Mapping[str, GameSave]] = None,
+    *,
+    snapshot_lines: Sequence[SnapshotLine] = (),
+    previous_session_id: Optional[int] = None,
+    previous_is_stale: bool = False,
+    earliest_recent_ms: int = 0,
+    zones: Sequence[BriefZoneSpec] = BRIEF_ZONES,
 ) -> List[int]:
-    """常驻简报里标着编号的档案行（Planner 点名的合法名单之一）：与 ``render_brief`` 同一口径。
-
-    别的存档里的行折成一行、不编号；和列出的承诺出自同一句台词的行不列。
-    """
-    current = current_saves or {}
-    return [
-        int(line.id)
-        for line in _shown_archive_lines(archive_lines, _listed_commitments(commitments))
-        if (line.text or "").strip() and place_of(line.game, line.save_id, current) is not SavePlace.OTHER
-    ]
+    """常驻简报里标着编号的档案行（Planner 点名的合法名单之一）：与 ``render_brief`` 跑同一套分区表。"""
+    ctx = _build_render_context(
+        archive_lines=archive_lines,
+        snapshot_lines=snapshot_lines,
+        commitments=commitments,
+        previous_session_id=previous_session_id,
+        previous_is_stale=previous_is_stale,
+        earliest_recent_ms=earliest_recent_ms,
+        current_saves=current_saves,
+    )
+    cited: List[int] = []
+    for zone in zones:
+        cited.extend(zone.render(ctx).archive_ids)
+    return cited
 
 
 def _listed_commitments(commitments: Sequence[Commitment]) -> List[Commitment]:
     """简报承诺段列出的那几条：至多 ``MAX_BRIEF_COMMITMENTS`` 条，没有标题的不列。"""
     return [item for item in list(commitments)[:MAX_BRIEF_COMMITMENTS] if (item.what or "").strip()]
-
-
-def _shown_archive_lines(archive_lines: Sequence[ArchiveLine], listed: Sequence[Commitment]) -> List[ArchiveLine]:
-    """简报里列出的档案行：与列出的承诺出自同一句台词的只留承诺，至多 ``MAX_BRIEF_ARCHIVE_LINES`` 行。
-
-    同一件事在简报里出现两遍，她会当成两件事、一整场围着它转。
-    """
-    promised_lines = {int(item.evidence_chat_id) for item in listed if item.evidence_chat_id is not None}
-    return [
-        line
-        for line in archive_lines
-        if line.evidence_chat_id is None or int(line.evidence_chat_id) not in promised_lines
-    ][:MAX_BRIEF_ARCHIVE_LINES]
-
-
-def _is_from(line: ArchiveLine, archive_session: Optional[int]) -> bool:
-    """这一行是不是上一场新写的（档案行所在场次就是写下它的那一场）。"""
-    return archive_session is None or int(line.live_session_id) == int(archive_session)
 
 
 def _render_other_save_line(*, game: str, save: GameSave, count: int, current: Mapping[str, GameSave]) -> str:
@@ -312,68 +594,44 @@ def render_save_heads(current_saves: Mapping[str, GameSave]) -> List[str]:
 def render_brief(
     *,
     archive_lines: Sequence[ArchiveLine] = (),
+    snapshot_lines: Sequence[SnapshotLine] = (),
     commitments: Sequence[Commitment] = (),
     previous_session_id: Optional[int] = None,
+    previous_is_stale: bool = False,
+    earliest_recent_ms: int = 0,
     earlier_commitment_count: int = 0,
     current_saves: Optional[Mapping[str, GameSave]] = None,
     unsaved_games: Sequence[str] = (),
     used_archive_ids: AbstractSet[int] = frozenset(),
+    zones: Sequence[BriefZoneSpec] = BRIEF_ZONES,
 ) -> str:
-    """Planner 系统提示词末尾的常驻简报；两段都空时返回空串（整段省略）。
+    """Planner 系统提示词末尾的常驻简报；所有分区与别的存档折叠行都空时返回空串（整段省略）。
 
-    上一场 = 最近一个已整理、有档案行的正式场；承诺只放不针对具体观众、不挂游戏的
-    open 条，最老的在前至多 5 条，更多的折成一行指向回想工具。
-
-    ``current_saves`` 是分存档的游戏眼下所在的存档：简报开头写明，上一场的游戏行按它分
-    （见 :func:`render_archive_block`）。``unsaved_games`` 是上一场玩过、但那时还没记存档的
-    游戏：上一场那几行没标游戏，分不出是不是眼下这个世界的事，块尾注一句。存档没换、表没变时
-    输出逐字节不变（前缀缓存照旧命中）。
-
-    档案行来自上一场的快照：上一场新写的行列在"上一场："下，从之前几场接住、仍然成立的行
-    列在"之前："下，按每行写在哪一场分（``previous_session_id`` 没给时取第一行的场次）。
-    ``used_archive_ids`` 是本场她已经点名用过的档案行，这些行末尾标"（本场已提过）"。
+    按 ``zones`` 定义的分区顺序渲染（默认依次为【这个世界里】【最近几场】【直播间里的事】【还惦记的事】），
+    每个分区各自计额、空区自动省略；别的存档里的记忆按 ``(game, save_id)`` 归并名字并折成每个存档一行。
+    存档没换、表没变时输出逐字节不变，前缀缓存照旧命中。
     """
-    sections: List[str] = []
-    listed = _listed_commitments(commitments)
-    shown_lines = _shown_archive_lines(archive_lines, listed)
-    archive_session = previous_session_id
-    if archive_session is None and shown_lines:
-        archive_session = shown_lines[0].live_session_id
-    recent = [line for line in shown_lines if _is_from(line, archive_session)]
-    earlier = [line for line in shown_lines if not _is_from(line, archive_session)]
-    recent_block = [_WHEN_PREVIOUS_HEADER, *render_archive_block(recent, current_saves, used_archive_ids)]
-    # 上一场还没记存档的游戏：上一场那几行没标游戏的里可能有它的事，分不出是不是眼下这个世界
-    if len(recent_block) > 1 and unsaved_games and any(not line.game for line in recent):
-        for game in unsaved_games:
-            recent_block.append(f"（那场玩 {game} 时还没记存档，上面游戏里的事未必是现在这个存档的）")
-    blocks = [recent_block, [_WHEN_EARLIER_HEADER, *render_archive_block(earlier, current_saves, used_archive_ids)]]
-    sections.extend("\n".join(block) for block in blocks if len(block) > 1)
-    pending: List[str] = []
-    for commitment in listed:
-        what = (commitment.what or "").strip()
-        quote = (commitment.quote or "").strip()
-        is_previous = (
-            previous_session_id is not None
-            and commitment.created_session_id is not None
-            and int(commitment.created_session_id) == int(previous_session_id)
-        )
-        when = _when_word(is_previous=is_previous, spoken=False)
-        body = (
-            f"- [{render_commitment_number(commitment.id)}] 「{quote}」"
-            if quote
-            else f"- [{render_commitment_number(commitment.id)}] {what}"
-        )
-        pending.append(f"{body}（{when}）")
-    extra = max(0, int(earlier_commitment_count))
-    if pending or extra:
-        block = [_COMMITMENTS_HEADER, *pending]
-        if extra:
-            block.append(f"- 另有 {extra} 件，可以用 memory_recall 查")
-        block.append(_COMMITMENTS_HINT)
-        sections.append("\n".join(block))
-    if not sections:
+    ctx = _build_render_context(
+        archive_lines=archive_lines,
+        snapshot_lines=snapshot_lines,
+        commitments=commitments,
+        previous_session_id=previous_session_id,
+        previous_is_stale=previous_is_stale,
+        earliest_recent_ms=earliest_recent_ms,
+        earlier_commitment_count=earlier_commitment_count,
+        current_saves=current_saves,
+        unsaved_games=unsaved_games,
+        used_archive_ids=used_archive_ids,
+    )
+    folded_other_saves = _render_folded_other_saves(ctx)
+    rendered_zones: List[str] = []
+    for zone in zones:
+        output = zone.render(ctx)
+        if output.lines:
+            rendered_zones.append("\n".join([zone.header, *output.lines]) if zone.header else "\n".join(output.lines))
+    if not folded_other_saves and not rendered_zones:
         return ""
-    return "\n".join([_BRIEF_HEADER, *render_save_heads(current_saves or {}), *sections])
+    return "\n".join([_BRIEF_HEADER, *render_save_heads(ctx.current_saves), *folded_other_saves, *rendered_zones])
 
 
 def render_cue_header() -> str:
