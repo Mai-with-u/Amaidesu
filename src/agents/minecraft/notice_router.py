@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Literal, Optional, Sequence
 from src.agents.minecraft.attention_matrix import classify, summarize
 from src.agents.minecraft.chosen_death import CHOSEN_DEATH_NOTICE
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN
+from src.agents.minecraft.others_things import OTHERS_THINGS_TOUCHED
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE, PLAYER_BODY_LANGUAGE_NOTICE
 from src.agents.minecraft.repeated_notice import notice_present, repeat_reference
 
@@ -58,6 +59,10 @@ _BODY_NOTICE_TEMPLATES = {
     OTHERS_FOOD_TAKEN: (
         "[身体] {message}。饿急了拿的是别人家的吃的，已经记下，主播那边也知道了。"
         "主人来问就大方认下是你拿的，可以俏皮一点；对方真生气了就道个歉、说回头补上。手上的活照常接着做。"
+    ),
+    OTHERS_THINGS_TOUCHED: (
+        "[身体] {message}。刚才动了别人放的容器或方块，已记进任务事实、主播那边也知道了。"
+        "接下来能用自家或无主材料的优先用自家的，非必要不再多动别人的；交付时顺带如实提一句。手上的活照常接着做。"
     ),
 }
 
@@ -149,9 +154,14 @@ _BODY_EVENT_ROUTES: Dict[str, BodyEventRoute] = {
         template=_BODY_NOTICE_TEMPLATES["character_died"],
         publish_material=True,
     ),
-    # 拿了别人家的吃的：任务进行中告诉模型（主人来问时认得出）；转告主播由注意流采集器出，这里不重复
+    # 拿了别人家的吃的 / 动了别人放的东西：任务进行中告诉模型（主人来问时认得出）；转告主播由注意流采集器出，这里不重复
     OTHERS_FOOD_TAKEN: BodyEventRoute(
         kind=OTHERS_FOOD_TAKEN, channel="inject_if_busy", template=_BODY_NOTICE_TEMPLATES[OTHERS_FOOD_TAKEN]
+    ),
+    OTHERS_THINGS_TOUCHED: BodyEventRoute(
+        kind=OTHERS_THINGS_TOUCHED,
+        channel="inject_if_busy",
+        template=_BODY_NOTICE_TEMPLATES[OTHERS_THINGS_TOUCHED],
     ),
     # 急事开始：任务进行中转告主播，开头点明是做事时碰上的
     "temporary_task_started": BodyEventRoute(

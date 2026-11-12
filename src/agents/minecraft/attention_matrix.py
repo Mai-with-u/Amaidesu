@@ -77,8 +77,9 @@ _SOURCE_KINDS: Dict[str, str] = {
     "need_unhandled": "need_unhandled",
     # 角色血量见底进了死亡流程：Mod 只发这一条，重生后接着做原来的目标，不另发重生事件。
     "character_died": "died",
-    # 步进完成是主播可讲的进展（画面在动、自带结论句），转 milestone 通道
+    # 步进完成与开出稀罕战利品都是主播当场可讲的进展（画面有货、自带结论句），转 milestone 通道
     "step_finished": "milestone",
+    "rare_loot_found": "milestone",
     # 装备用坏、探索发现、跟随处境变化、天色变化都有稳定语义，各自成一种叙事；
     # 上游再加新种类仍归 unknown 兜底
     "gear_broken": "gear_broken",
@@ -324,7 +325,11 @@ def plain_detail(message: str) -> str:
     return "，".join(dict.fromkeys(kept))
 
 
-# 一个分句里出现"x, y, z"三个整数就是坐标：整句去掉，不在半句话里留下"停在了"这种残片。
+# 括号里的三维坐标（"（-311, 59, 73）"）附在动作分句中间时，只剥掉括号坐标，不把整句"打开战利品箱……开出了海洋之心"误杀。
+_PARENTHESIZED_COORDINATES = re.compile(
+    r"\s*[（(]\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*[)）]"
+)
+# 一个分句里裸写出现"x, y, z"三个整数就是坐标遥测分句：整句去掉，不在半句话里留下"停在了"这种残片。
 _COORDINATES = re.compile(r"-?\d+\s*,\s*-?\d+\s*,\s*-?\d+")
 # 括号里的观察编号（e12、b5 这类）是给游戏 Agent 指东西用的，念给观众没有意义，去掉括号连同编号。
 _OBSERVATION_IDS = re.compile(r"\s*[（(][a-z]\d+[）)]")
@@ -343,8 +348,8 @@ def classify(source_event_type: str) -> Optional[str]:
 
 
 def without_coordinates(text: str) -> str:
-    """去掉带坐标的分句与括号里的观察编号，其余原样保留（"被威胁，插入自卫：打点在 3, 64, 9" → "被威胁，插入自卫"）。"""
-    plain = _OBSERVATION_IDS.sub("", str(text or ""))
+    """去掉括号里的坐标与观察编号，并删掉裸写坐标的分句（"被威胁，插入自卫：打点在 3, 64, 9" → "被威胁，插入自卫"）。"""
+    plain = _PARENTHESIZED_COORDINATES.sub("", _OBSERVATION_IDS.sub("", str(text or "")))
     clauses = [clause.strip() for clause in _CLAUSE_BREAK.split(plain)]
     return "，".join(clause for clause in clauses if clause and not _COORDINATES.search(clause))
 

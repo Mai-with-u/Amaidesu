@@ -31,6 +31,13 @@ from src.agents.minecraft.attention_matrix import (
 from src.agents.minecraft.chosen_death import CHOSEN_DEATH_LINE, SuicideWatch
 from src.agents.minecraft.events_collector import MaicraftEventsCollector
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN, food_taken_of, spoken_line
+from src.agents.minecraft.others_things import (
+    OTHERS_THINGS_TOUCHED,
+    others_things_of,
+)
+from src.agents.minecraft.others_things import (
+    spoken_line as others_things_line,
+)
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
 from src.agents.minecraft.player_body_language import spoken_line as body_language_line
 from src.agents.minecraft.player_interactions import body_language_interactions, player_of
@@ -74,6 +81,8 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
         self._suicides.observe(event)
         if source_type == OTHERS_FOOD_TAKEN:
             return await self._forward_food_taken(event)
+        if source_type == OTHERS_THINGS_TOUCHED:
+            return await self._forward_others_things(event)
         if source_type == PLAYER_BODY_LANGUAGE:
             return await self._forward_body_language(event)
         kind = classify(source_type)
@@ -133,6 +142,23 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
         )
         await self.emit_event(KIND_TO_EVENT["unknown"], payload, source=self.name)
         self.logger.info(f"[身体事件] {payload.summary}（{OTHERS_FOOD_TAKEN}）")
+        return True
+
+    async def _forward_others_things(self, event: Dict[str, Any]) -> bool:
+        """动了别人放的容器或方块：把拿/存/拆/改的事实与俏皮认账口径转给主播，并挂放置者身份。"""
+        entry = others_things_of(event, self._clock())
+        owner_name = "" if entry.owner == "一位不在线的玩家" else entry.owner
+        payload = BodyEventPayload(
+            game="minecraft",
+            kind="unknown",
+            summary=others_things_line(entry),
+            source_event_type=OTHERS_THINGS_TOUCHED,
+            resolved=True,
+            player_uuid=entry.owner_uuid,
+            player_name=owner_name,
+        )
+        await self.emit_event(KIND_TO_EVENT["unknown"], payload, source=self.name)
+        self.logger.info(f"[身体事件] {payload.summary}（{OTHERS_THINGS_TOUCHED}）")
         return True
 
     async def _forward_body_language(self, event: Dict[str, Any]) -> bool:

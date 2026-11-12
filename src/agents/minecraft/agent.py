@@ -51,7 +51,14 @@ from src.agents.minecraft.context_fold import (
 from src.agents.minecraft.creature_book import CreatureBook, creature_from_record, creature_record
 from src.agents.minecraft.delegation_book import DelegationBook
 from src.agents.minecraft.furnace_wait import TIMER_DUE, FurnaceWaits
-from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_failure_line, goal_label, pause_notice
+from src.agents.minecraft.goal_ledger import (
+    GoalLedger,
+    finish_notice,
+    goal_failure_line,
+    goal_label,
+    pause_notice,
+    use_air_misuse_hint,
+)
 from src.agents.minecraft.wait_progress import Coords, WaitProgress, self_coords, watchdog_wakeup_notice
 from src.agents.minecraft.glance import (
     RememberedPlacesCache,
@@ -92,6 +99,7 @@ from src.agents.minecraft.notice_router import (
     route_body_event,
 )
 from src.agents.minecraft.others_food import OTHERS_FOOD_TAKEN, FoodTakenLog, food_taken_of
+from src.agents.minecraft.others_things import OTHERS_THINGS_TOUCHED, OthersThingsLog, others_things_of
 from src.agents.minecraft.picture import (
     PICTURE_NOT_DESCRIBED,
     PictureBudget,
@@ -314,6 +322,8 @@ class MinecraftAgent(BaseAgent):
         self._current_session_id: Optional[int] = None
         # 饿急了从别人家箱子拿过的吃的：按世界记最近几笔放进任务事实，主人回头来问时按名字、区域或位置对上号
         self._food_taken = FoodTakenLog()
+        # 从别人放的容器里取放或拆改了别人放的方块：按世界记最近几笔放进任务事实，交付或被问起时如实认账
+        self._others_things = OthersThingsLog()
         # 速览里记住的地点：最多 5 分钟真读一次世界记忆；记地点成功、换存档、连接变化时提前作废
         self._remembered_places = RememberedPlacesCache(self._clock)
         # 按名字点了对手的切磋：下令时记下名字，收手时连同输赢发一条玩家互动给存储记账（不改怎么打）
@@ -1187,10 +1197,13 @@ class MinecraftAgent(BaseAgent):
         self._furnace_waits.clear()
         self._wait_progress.reset()
         self._preempt_paused.clear()
-        # 新任务只带系统说明和新指令：这个世界里拿过别人家的吃的另附一条事实，主人来问时一开工就认得出
+        # 新任务只带系统说明和新指令：这个世界里拿过别人家的吃的、动过别人放的东西另附事实，主人来问时一开工就认得出
         taken = self._food_taken.view(self._creatures.world_key)
         if taken:
             messages.append({"role": "user", "content": "[拿过别人家的吃的]\n" + json_text(taken), FACTS_KEY: True})
+        touched = self._others_things.view(self._creatures.world_key)
+        if touched:
+            messages.append({"role": "user", "content": "[动过别人放的东西]\n" + json_text(touched), FACTS_KEY: True})
 
     async def _end_without_tool_calls(
         self, messages: List[Dict[str, Any]], content: str, steps: int, reminded: bool
@@ -1435,10 +1448,15 @@ class MinecraftAgent(BaseAgent):
                     change = place_change_of(arguments)
                     if change is not None:
                         self._queue_place_mark(change)
-                # 当场完成的目标（记地点、只读分析）没有后台过程，结果已经在回复里；
+                # 当场完成的目标（记地点、只读分析、瞬发失败）没有后台过程，结果已经在回复里；
                 # 账面仍要记：先登记再写终态，直接写会因条目不存在而落空（终态变化广播不出来）。
                 self._goal_ledger.remember_finished(run)
                 self._goal_ledger.register_and_settle(run)
+                misuse_hint = use_air_misuse_hint(run)
+                if misuse_hint:
+                    notes = list(observation.get("notes") or [])
+                    notes.append(misuse_hint)
+                    observation["notes"] = notes
                 # 设、取消、列计时都当场返回，结果带着还挂着的全部计时：同步回炉计时与看门狗的自设计时器
                 self._furnace_waits.absorb(run)
                 self._wait_progress.absorb_timer(run, arguments)
@@ -1586,6 +1604,9 @@ class MinecraftAgent(BaseAgent):
         if kind == OTHERS_FOOD_TAKEN:
             # 闲着时也要记：主人多半是过一阵才来问，那时候模型得从任务事实里认出是自己拿的
             self._food_taken.record(self._creatures.world_key, food_taken_of(event, now_ms()))
+        if kind == OTHERS_THINGS_TOUCHED:
+            # 闲着时（如生存临时任务）动了别人放的容器或方块同样入账，后续任务或认账都能查到
+            self._others_things.record(self._creatures.world_key, others_things_of(event, now_ms()))
         # 死的时候手上正跑着寻死目标：是自己选的死（回重生点），通知换成"回家"的说法、不发主播素材
         chosen_death = kind == "character_died" and any(
             is_suicide_ability(ability) for ability in self._goals.tracked_abilities()
@@ -1931,10 +1952,13 @@ class MinecraftAgent(BaseAgent):
         named = self._creatures.named_view()
         if named:
             context["named_creatures"] = named
-        # 拿过别人家的吃的（有才带）：主播转来"谁拿了我的面包"时，按主人名、区域或箱子位置认出是自己拿的
+        # 拿过别人家的吃的、动过别人放的东西（有才带）：主播转来询问时，按主人名或位置认出是自己动的
         taken = self._food_taken.view(self._creatures.world_key)
         if taken:
             context["others_food_taken"] = taken
+        touched = self._others_things.view(self._creatures.world_key)
+        if touched:
+            context["others_things_touched"] = touched
         return context
 
     def _continue_task_context(self) -> Dict[str, Any]:

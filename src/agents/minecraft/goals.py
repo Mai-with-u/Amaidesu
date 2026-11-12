@@ -58,6 +58,7 @@ _BODY_EVENT_KINDS = frozenset(
         "sky_changed",
         "timer_due",
         "others_food_taken",
+        "others_things_touched",
         "player_body_language",
     }
 )

@@ -31,7 +31,15 @@ from src.modules.tools.tasks import TERMINAL_TASK_STATES
 from .context import json_text
 from .maicraft import AWAITING_ANSWER, EXECUTE, PROVIDER, PAUSED, GoalRun, ledger_status_of, ledger_task_id
 
-__all__ = ["GoalLedger", "finish_notice", "goal_failure_line", "goal_label", "pause_notice"]
+__all__ = [
+    "GoalLedger",
+    "finish_notice",
+    "goal_failure_line",
+    "goal_label",
+    "is_use_on_air_misuse",
+    "pause_notice",
+    "use_air_misuse_hint",
+]
 
 logger = get_logger("MinecraftGoalLedger")
 
@@ -53,6 +61,32 @@ def goal_label(run: GoalRun) -> str:
     return f"{run.ability}，{run.purpose}" if run.purpose else run.ability
 
 
+def is_use_on_air_misuse(run: GoalRun) -> bool:
+    """判定是否属于"对着空气用了物品未生效"的用法错误（协议第 6 节：不是物品或账号用不了）。
+
+    满足三要素：能力是 ``use``、结果 ``status=="failed"``、``details.used_on=="air"`` 且
+    ``problem.kind=="not_possible_here"``（大小写容忍）。
+    """
+    if run.ability not in ("use", "maicraft:use") or run.result_status != "failed":
+        return False
+    res = run.result if isinstance(run.result, dict) else {}
+    details = res.get("details") if isinstance(res.get("details"), dict) else {}
+    problem = res.get("problem") if isinstance(res.get("problem"), dict) else {}
+    return details.get("used_on") == "air" and str(problem.get("kind") or "").lower() == "not_possible_here"
+
+
+def use_air_misuse_hint(run: GoalRun) -> str:
+    """给游戏 Agent 的用法纠正说明：命中对空使用未生效时返回明确指引，其余返回空串。"""
+    if not is_use_on_air_misuse(run):
+        return ""
+    return (
+        "【宿主判定】这次是对着空气用了手上的物品（used_on=air），是用错了对象或少了朝向面——"
+        '放在脚下地面上请传 target={"kind": "here"} 并配 parameters.face="up"，'
+        '对指定方块用给 b# 或坐标（放顶面配 face="up"），对生物用给 e#。'
+        "不是这件物品坏了，也不是这个账号或权限放不出来，改对 target/face 再用即可。"
+    )
+
+
 def finish_notice(run: GoalRun, self_brief: str) -> str:
     """目标结束的通知：达成情况、结束那一刻角色怎样、结果，以及折起来的大块证据怎么读回。
 
@@ -72,9 +106,11 @@ def finish_notice(run: GoalRun, self_brief: str) -> str:
         )
     else:
         label = "结果"
+    misuse = use_air_misuse_hint(run)
+    tail = f" {misuse}" if misuse else ""
     return (
         f"[系统] 目标 {run.goal_id}（{goal_label(run)}）结束了：{run.result_status}。"
-        f"{body}{label}：{json_text(run.result)}"
+        f"{body}{label}：{json_text(run.result)}{tail}"
     )
 
 
@@ -89,6 +125,9 @@ def goal_failure_line(run: GoalRun) -> str:
     status = run.result_status
     if status not in ("failed", "partial"):
         return ""
+    if is_use_on_air_misuse(run):
+        # 场 65 魂符教训：对着空气用没生效是用错了对象，明说点空了，避免主播误读成"这个号放不出来"
+        return f"{goal_label(run)}对着空气用没生效（用法不对，得对着脚下地面或目标方块用，不是东西用不了）"
     label = "没做成" if status == "failed" else "只做了一半"
     summary = (run.summary or "").strip()
     body = f"：{summary}" if summary else ""
