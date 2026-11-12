@@ -124,6 +124,9 @@ def test_tools_tasks_defaults_and_bounds() -> None:
     assert isinstance(ToolsRootConfig().tools, ToolsConfig)
     tasks = ToolsConfig().tasks
     assert isinstance(tasks, ToolsTasksConfig) and (tasks.poll_interval_ms, tasks.wait_timeout_ms) == (2000, 1_800_000)
+    # 决断兜底阈值是纯新增字段（默认 3）：排队/等定夺的委派第 3 次告警仍无决断即自动撤单
+    assert tasks.stall_auto_cancel_alerts == 3
+    assert ToolsTasksConfig().model_validate({"stall_auto_cancel_alerts": 5}).stall_auto_cancel_alerts == 5
     assert ToolsConfig.model_fields["tasks"].json_schema_extra.get("x-ui-type") == "object"
     for bad in ({"poll_interval_ms": 50}, {"wait_timeout_ms": 500}):
         with pytest.raises(ValidationError):

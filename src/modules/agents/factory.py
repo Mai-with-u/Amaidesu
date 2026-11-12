@@ -131,6 +131,7 @@ def instantiate_agent(
             session_manager=deps.session_manager,
             thinking_sink=deps.thinking_sink,
             task_ledger=deps.task_ledger,
+            stall_auto_cancel_alerts=deps.stall_auto_cancel_alerts,
         )
 
     if name == "minecraft":

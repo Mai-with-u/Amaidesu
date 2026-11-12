@@ -713,7 +713,7 @@ async def create_app_components(
         # 记录表挂事件总线（task.changed 广播）；跟踪循环与 Agent 生命周期同步启停。
         _tools_cfg_tmp = (config.get("tools") or {}) if isinstance(config, dict) else {}
         task_ledger = TaskLedger(event_bus=event_bus)
-        tasks_poll_ms, tasks_wait_ms = resolve_tasks_config(
+        tasks_poll_ms, tasks_wait_ms, stall_auto_cancel_alerts = resolve_tasks_config(
             _tools_cfg_tmp if isinstance(_tools_cfg_tmp, dict) else None,
         )
         task_tracker = TaskTracker(
@@ -747,6 +747,7 @@ async def create_app_components(
                 tool_registry=tool_registry,
                 thinking_sink=thinking_hub,
                 speech_config=_speech_cfg,
+                stall_auto_cancel_alerts=stall_auto_cancel_alerts,
                 tts_engine=tts_engine,
                 # 字幕服务永远传入；跟随播放 vs 直出由 SpeechDispatcher 构造期择流
                 subtitle_service=subtitle_service,

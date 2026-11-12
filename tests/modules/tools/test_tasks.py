@@ -204,9 +204,15 @@ async def test_subscription_follows_task_lifetime_and_notify_wakes_step_without_
 
 
 def test_resolve_tasks_config_fills_defaults_per_key() -> None:
-    assert resolve_tasks_config({"tasks": {"poll_interval_ms": 500, "wait_timeout_ms": 60000}}) == (500, 60000)
-    assert resolve_tasks_config({"tasks": {"poll_interval_ms": 1500}}) == (1500, 1_800_000)  # 只给一项，另一项回落默认
-    assert resolve_tasks_config(None) == (2000, 1_800_000)
+    assert resolve_tasks_config({"tasks": {"poll_interval_ms": 500, "wait_timeout_ms": 60000}}) == (500, 60000, 3)
+    assert resolve_tasks_config({"tasks": {"poll_interval_ms": 1500}}) == (
+        1500,
+        1_800_000,
+        3,
+    )  # 只给一项，其余回落默认
+    assert resolve_tasks_config(None) == (2000, 1_800_000, 3)
+    # 决断兜底阈值可配：排队/等定夺的委派第 N 次告警仍无决断即自动撤单
+    assert resolve_tasks_config({"tasks": {"stall_auto_cancel_alerts": 5}}) == (2000, 1_800_000, 5)
 
 
 def test_task_changed_event_constant_payload_shape_and_terminal_vocabulary() -> None:

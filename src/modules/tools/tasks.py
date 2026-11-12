@@ -582,12 +582,14 @@ class TaskTracker:
 # ---------------------------------------------------------------------------
 
 
-def resolve_tasks_config(tools_cfg: Optional[Dict[str, Any]]) -> tuple[int, int]:
-    """解析任务基建节拍配置：``(poll_interval_ms, wait_timeout_ms)``。
+def resolve_tasks_config(tools_cfg: Optional[Dict[str, Any]]) -> tuple[int, int, int]:
+    """解析任务基建配置：``(poll_interval_ms, wait_timeout_ms, stall_auto_cancel_alerts)``。
 
-    读取顺序：``[tools.tasks]`` 正式段 → 默认 ``(2000, 1800000)``。
+    读取顺序：``[tools.tasks]`` 正式段 → 默认 ``(2000, 1800000, 3)``。
     节拍只认本模块自己的段：游戏 Agent 的执行节奏是它自己的事，
     框架不读任何游戏 Agent 的配置段（换游戏与框架无关）。
+    ``stall_auto_cancel_alerts`` 是主播侧决断兜底的告警次数阈值：排队 /
+    停着等定夺的委派连续收到这么多次停滞告警仍无决断即自动撤单。
     """
     tools = tools_cfg if isinstance(tools_cfg, dict) else {}
 
@@ -599,7 +601,8 @@ def resolve_tasks_config(tools_cfg: Optional[Dict[str, Any]]) -> tuple[int, int]
 
     poll = _pick(tasks.get("poll_interval_ms"), 2000)
     wait_timeout = _pick(tasks.get("wait_timeout_ms"), 1_800_000)
-    return poll, wait_timeout
+    stall_auto_cancel_alerts = _pick(tasks.get("stall_auto_cancel_alerts"), 3)
+    return poll, wait_timeout, stall_auto_cancel_alerts
 
 
 __all__ = [

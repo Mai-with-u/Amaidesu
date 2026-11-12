@@ -39,6 +39,9 @@ class AgentDeps:
     tool_registry: Optional[ToolRegistry] = None
     thinking_sink: Optional[Any] = None
     speech_config: Optional[Dict[str, Any]] = None
+    # 委派停滞告警的决断兜底阈值（[tools.tasks].stall_auto_cancel_alerts；
+    # 传给 StreamerAgent：排队/等定夺的委派第 N 次告警仍无决断即自动撤单）
+    stall_auto_cancel_alerts: int = 3
     tts_engine: Optional[Any] = None
     subtitle_service: Optional[Any] = None
     session_manager: Optional[Any] = None

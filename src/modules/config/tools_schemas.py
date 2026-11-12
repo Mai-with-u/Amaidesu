@@ -132,6 +132,7 @@ class ToolsTasksConfig(BaseConfig):
     提供执行委派原语的节拍配置：
     - ``poll_interval_ms``：跟踪循环轮询节拍（毫秒）
     - ``wait_timeout_ms``：等待任务完成的最长时长（毫秒）
+    - ``stall_auto_cancel_alerts``：主播侧决断兜底的停滞告警次数阈值
 
     段定义与运行期消费分离：本任务负责段定义；端到端消费断言随工具线任务合流
     由其覆盖（本任务交付即定义完成，消费侧硬错残留由工具线在合流日清理）。
@@ -149,6 +150,16 @@ class ToolsTasksConfig(BaseConfig):
         ge=1000,
         title="等待超时",
         description="异步任务最长等待时长（毫秒）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    stall_auto_cancel_alerts: int = Field(
+        default=3,
+        ge=1,
+        title="停滞告警自动撤单阈值",
+        description=(
+            "排队或停着等定夺的委派连续收到这么多次停滞告警仍无决断（无撤单/无改单/无账面变化）"
+            "时自动撤单；运行中的任务不受影响"
+        ),
         json_schema_extra={"x-ui-advanced": True},
     )
 

@@ -80,6 +80,7 @@ from .memory.search import MemorySearch
 from .memory.settle import SessionSettler
 from .message_buffer import MessageBuffer
 from .delegation_workbench import PLANNER_CALL_SOURCE
+from .delegation_stall_watch import DelegationStallWatch
 from .mouth import SCENE_CHANGING_BODY_KINDS, URGENT_BODY_KINDS, URGENT_GAME_TYPES, Mouth
 from .mouth_reconcile import ReconcileVerdict, SpokenLog, extract_player_join_name, reconcile_with_mouth
 from .planner import Planner, PlannerConfig, PlannerEnv
@@ -104,6 +105,7 @@ from .config import StreamerConfig
 from .event_log_reader import EventLogFileReader
 
 if TYPE_CHECKING:
+    from src.modules.events.payloads.tasks import TaskChangedPayload
     from src.modules.subtitle import SubtitleService
     from src.modules.tts import TTSProvider
 
@@ -237,6 +239,7 @@ class StreamerAgent(BaseAgent):
         session_manager: Optional[Any] = None,
         thinking_sink: Optional[Any] = None,
         task_ledger: Optional[Any] = None,
+        stall_auto_cancel_alerts: int = 3,
         stream_ledger: Optional[Any] = None,
         planner: Optional[Planner] = None,
         round_executor: Optional[DecisionRoundExecutor] = None,
@@ -654,6 +657,10 @@ class StreamerAgent(BaseAgent):
         # 一次性主动触发信号（外部点播/流程单环节/游戏待定夺）：状态与
         # 消费纪律一处声明（game/rundown 确认消费、external 读即消费）
         self._proactive_signals = ProactiveSignals()
+
+        # 委派停滞告警的决断兜底：同一委派告警计数，第 N 次仍无决断判自动撤单
+        # （N 来自 [tools.tasks].stall_auto_cancel_alerts，经装配透传）
+        self._stall_watch = DelegationStallWatch(auto_cancel_alerts=stall_auto_cancel_alerts)
 
         # 统计（决策循环各分支增量；对外经 get_statistics 导出）
         self._stats = StreamerStats()
@@ -2035,6 +2042,67 @@ class StreamerAgent(BaseAgent):
             live_session_id=session_pk,
             current_saves=self._current_saves,
         )
+
+    def on_task_notification(self, payload: TaskChangedPayload) -> None:
+        """任务变化通知（``task.changed``，仅发起方是自己时被调）：停滞告警送进决策窗并履行决断义务。
+
+        数据面修复（场 65 实证）：基类默认只记日志，停滞告警进不了决策上下文，
+        告警发了主播也做不出决断（全场 11 次告警零反应）。这里把 alert 类告警
+        （``payload.alert=True``）记进游戏账本当决策窗必读材料（委派原话、已停
+        多久、第几次告警，形态同遭遇 / 递话类注入）并置位待定夺信号唤醒决策；
+        同一委派按决断兜底计数，排队 / 停着等定夺的第 N 次告警仍无决断时自动
+        撤单并补一条场记事实（"这件事我喊停了"），主播下一窗顺带交代。非告警
+        的变化只喂给决断兜底对账（终态出册、真变化重置计数）。
+        """
+        if not getattr(payload, "alert", False):
+            self._stall_watch.note_change(payload)
+            return
+        outcome = self._stall_watch.note_alert(payload)
+        if outcome is None:
+            return
+        try:
+            self._game_ledger.record_event(
+                outcome.executor, "task_alert", outcome.material, payload.timestamp_ms or now_ms()
+            )
+            if outcome.auto_cancel:
+                self._game_ledger.record_event(
+                    outcome.executor,
+                    "auto_cancel",
+                    f"派去 {outcome.executor} 的委派「{outcome.own_words}」一直没进展也没人撤，我把它喊停了，"
+                    "待会儿跟观众交代一下这件事",
+                    now_ms(),
+                )
+        except Exception as exc:  # noqa: BLE001 - 入账失败不阻断撤单兜底
+            self._logger.warning(f"停滞告警材料入账失败（task_id={payload.task_id}）: {exc}", exc=exc)
+        self._proactive_signals.set_game()
+        if outcome.auto_cancel:
+            spawn_background_task(
+                self._cancel_stalled_delegation(str(payload.task_id)),
+                logger=self._logger,
+                tasks=self._memory_tasks,
+                label="StreamerAgent.stall_auto_cancel",
+            )
+
+    async def _cancel_stalled_delegation(self, task_id: str) -> None:
+        """决断兜底的自动撤单：走 framework_task_cancel（排队的队列直撤，其余经执行方停手）。"""
+        if self._tool_registry is None:
+            self._logger.warning(f"停滞决断兜底跳过撤单（task_id={task_id}）：工具注册表未注入")
+            return
+        try:
+            result = await self._tool_registry.invoke(
+                ToolInvocation(
+                    tool_name="framework_task_cancel",
+                    arguments={"task_id": task_id},
+                    source="streamer_stall_watch",
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - 撤单失败只记日志，账面等下一轮告警重判
+            self._logger.warning(f"停滞决断兜底自动撤单失败（task_id={task_id}）: {exc}", exc=exc)
+            return
+        if result.success:
+            self._logger.info(f"停滞决断兜底已自动撤单: task_id={task_id}")
+        else:
+            self._logger.warning(f"停滞决断兜底自动撤单被拒（task_id={task_id}）: {result.error_message}")
 
     def _record_delegation(self, agent: str, instruction: str) -> None:
         """Planner 受理委派后回调：把"我在哪个游戏里开始做什么"按此刻进时间线。
