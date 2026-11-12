@@ -182,6 +182,10 @@ _RESTART_NOTICE = (
 # 只读查询目标的操作：一整轮都在查还在跑的目标、没做别的，就是在轮询等结果。
 _GOAL_POLLING_OPERATIONS = frozenset({"get", "list"})
 
+# 委派自动收账的成功目标状态：批内目标回执全是 done 才算整单做成；
+# 其余非 cancelled 的终态（failed / partial / gone）都算没做成
+_AUTO_FINISH_DONE_STATUS = "done"
+
 
 class MinecraftAgent(BaseAgent):
     """Minecraft 游戏 Agent（AI 玩家，普通 ReAct Agent）
@@ -1165,6 +1169,9 @@ class MinecraftAgent(BaseAgent):
         self, messages: List[Dict[str, Any]], content: str, steps: int, reminded: bool
     ) -> bool:
         """模型这一轮没调用工具：按终止语义收尾。返回 True 表示给过提醒、继续推进。"""
+        # 批次收口先看账面事实：活已经全做完只是没交付的，自动收账（场 65 的委派滞留 running 兜底），
+        # 收完账走既有的安静收尾；账面已终态时这里是空操作，不影响交付路径
+        self._maybe_auto_finish_delegations()
         if self._interaction_only:
             # 只回应互动的一批：回完就收尾，不代发停了没交付（不然别人蹲一下主播就念一遍），也不为原任务催促
             self._logger.info(f"回应互动后收尾（{steps} 步），任务状态原样留着")
@@ -1219,6 +1226,45 @@ class MinecraftAgent(BaseAgent):
             self._delegations.finish("undelivered", summary=summary)
             self._logger.info(f"任务批次自然终止（{steps} 步），没交付结果，账面记停了没交付")
         return False
+
+    def _maybe_auto_finish_delegations(self) -> None:
+        """批内目标全部终态且待办清空时，给在途委派自动写终态（执行方零交付的账面兜底）。
+
+        场 65 实证：执行方做完委派的活后可以不调 minecraft_report 交付，委派账面停在
+        running，串行队列只认在途单终态投递下一件，后面的排队件永远送不出去。这里按
+        账面事实兜底：本批目标全部终态、待办清空、没有在等的回炉计时，就把本批委派写
+        成终态，摘要用目标回执的干巴原文。批级局限：一个委派拆多目标时自动终态是粗粒
+        度兜底——批内任一目标没做成即整单 failed，精确语义仍以 LLM 的交付语为准。
+
+        判定挂在批次收口（``_end_without_tool_calls`` 入口，模型停止参与之时）而非目标
+        终态那一刻：目标刚收尾时不知道模型是否还要下达下一个目标，收口时点上的"全部终
+        态"才是这一批真的做完了。目标里有 cancelled 的不自动收账：取消是执行方自己的
+        决断，整单成败它最清楚，交给交付 / 报卡住 / 停了没交付的既有路径收场。LLM 的
+        交付上报保留且幂等：账面已终态时 ``DelegationBook.finish`` 空清单即空操作，先
+        于本兜底发生的交付照常写终态、发上报，晚到的交付不重复写、叙述通路照常。
+        """
+        if self._task_reported or self._task_suspended:
+            return
+        if [goal_id for goal_id in self._goals.tracked_ids() if goal_id not in self._preempt_paused]:
+            return
+        if self._unfinished_todos() or self._furnace_waits.waiting():
+            return
+        finished = self._delegations.finished_ids
+        if not finished:
+            return
+        results = self._goal_ledger.recent_finished()
+        if not results:
+            return
+        statuses = {str(entry.get("status")) for entry in results}
+        if "cancelled" in statuses:
+            return
+        status = "succeeded" if statuses <= {_AUTO_FINISH_DONE_STATUS} else "failed"
+        summary = "执行方未交付上报，按批内目标回执自动收账：" + "；".join(
+            f"目标 {entry.get('goal_id')}（{entry.get('ability')}）{entry.get('status')}：{entry.get('summary')}"
+            for entry in results
+        )
+        self._delegations.finish(status, summary=summary)
+        self._logger.info(f"批内目标全部终态且无待办，本批 {len(finished)} 件委派自动记 {status}")
 
     async def _continue_after_no_progress(self, messages: List[Dict[str, Any]], reminded: bool, reason: str) -> bool:
         """先带着当前目标状态提示模型推进；仍不行动就挂起上报，等主播指令。"""

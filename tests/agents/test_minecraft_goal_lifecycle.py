@@ -501,3 +501,165 @@ async def test_task_changed_without_alert_or_from_other_initiator_stays_silent()
     finally:
         await agent.stop()
         await bus.cleanup()
+
+
+async def test_all_batch_goals_terminal_settles_delegation_without_delivery() -> None:
+    """场 65 兜底：执行方做完没交付，批内目标全部终态且待办清空 → 委派账自动写终态。
+
+    串行队列只认在途单终态才投递下一件：委派滞留 running 时后面的排队件永远送不出去。
+    自动终态用目标回执的干巴原文当摘要；LLM 的交付上报是第一语义，先于它发生时
+    晚到的交付幂等（不重复写终态、上报照发）。
+    """
+    server = FakeMaicraft()
+    ledger = TaskLedger()
+    ledger_bus = SimpleNamespace(emit=AsyncMock())
+    ledger._event_bus = ledger_bus
+    tracker = TaskTracker(ToolRegistry(), ledger)
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp("等目标事件通知")
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
+
+    agent, llm, bus = await make_minecraft_agent(server, script, tracker=tracker)
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+        snapshot={"instruction": "去砍点木头"},
+    )
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: "maicraft-goal-1" in ledger)
+    await _wait_until(lambda: agent.batch_active is False)
+
+    server.finish(1, status="done", summary="砍了 5 块原木")
+    await _wait_until(lambda: "d-1" not in ledger, timeout=15.0)
+    changed = [
+        call.args[1]
+        for call in ledger_bus.emit.await_args_list
+        if call.args and getattr(call.args[1], "task_id", "") == "d-1"
+    ]
+    assert changed and changed[-1].status == "succeeded"
+    assert "砍了 5 块原木" in changed[-1].summary, "摘要用目标回执原文"
+    assert _reports(bus) == [], "自动收账不代发交付上报，LLM 没说过交付"
+    await agent.stop()
+
+
+async def test_a_failed_goal_in_the_batch_settles_the_delegation_as_failed() -> None:
+    """粗粒度映射：批内任一目标没做成（failed/partial/gone）→ 委派自动记 failed。"""
+    server = FakeMaicraft()
+    ledger = TaskLedger()
+    ledger_bus = SimpleNamespace(emit=AsyncMock())
+    ledger._event_bus = ledger_bus
+    tracker = TaskTracker(ToolRegistry(), ledger)
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp("等目标事件通知")
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
+
+    agent, llm, bus = await make_minecraft_agent(server, script, tracker=tracker)
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+    )
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: "maicraft-goal-1" in ledger)
+    await _wait_until(lambda: agent.batch_active is False)
+
+    server.finish(1, status="partial", summary="只砍到 2 块")
+    await _wait_until(lambda: "d-1" not in ledger, timeout=15.0)
+    changed = [
+        call.args[1]
+        for call in ledger_bus.emit.await_args_list
+        if call.args and getattr(call.args[1], "task_id", "") == "d-1"
+    ]
+    assert changed and changed[-1].status == "failed"
+    await agent.stop()
+
+
+async def test_a_cancelled_goal_leaves_the_settlement_to_the_existing_paths() -> None:
+    """批内目标有 cancelled 的不自动收账：取消是执行方自己的决断，成败交给既有路径收场。"""
+    server = FakeMaicraft()
+    ledger = TaskLedger()
+    ledger_bus = SimpleNamespace(emit=AsyncMock())
+    ledger._event_bus = ledger_bus
+    tracker = TaskTracker(ToolRegistry(), ledger)
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp("等目标事件通知")
+        return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
+
+    agent, llm, bus = await make_minecraft_agent(server, script, tracker=tracker)
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+    )
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: "maicraft-goal-1" in ledger)
+    await _wait_until(lambda: agent.batch_active is False)
+
+    server.finish(1, status="cancelled", summary="不砍了")
+    await _wait_until(lambda: "maicraft-goal-1" not in ledger, timeout=15.0)
+    # 不自动收账：走"停了没交付"的既有路径收场（不记成成功或失败）
+    await _wait_until(lambda: "d-1" not in ledger, timeout=15.0)
+    changed = [
+        call.args[1]
+        for call in ledger_bus.emit.await_args_list
+        if call.args and getattr(call.args[1], "task_id", "") == "d-1"
+    ]
+    assert changed and changed[-1].status == "undelivered"
+    await agent.stop()
+
+
+async def test_unfinished_todos_block_the_auto_settlement() -> None:
+    """批内还有未完成待办不算做完：不自动收账，走挂起等定夺的既有路径。"""
+    server = FakeMaicraft()
+    ledger = TaskLedger()
+    ledger_bus = SimpleNamespace(emit=AsyncMock())
+    ledger._event_bus = ledger_bus
+    tracker = TaskTracker(ToolRegistry(), ledger)
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if _called(messages, "minecraft_todo"):
+            return _resp("等目标事件通知")
+        if any(message.get("role") == "tool" and "running" in str(message.get("content")) for message in messages):
+            return _resp("等目标事件通知")
+        return _resp(
+            calls=[
+                _call("minecraft_todo", {"action": "write", "todos": [{"content": "砍木头", "status": "pending"}]}),
+                _call("maicraft_execute", {"goal": {"ability": "gather"}}),
+            ]
+        )
+
+    agent, llm, bus = await make_minecraft_agent(server, script, tracker=tracker)
+    ledger.register(
+        task_id="d-1",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+        source="agent",
+    )
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: "maicraft-goal-1" in ledger)
+    await _wait_until(lambda: agent.batch_active is False)
+
+    server.finish(1, status="done", summary="砍了 5 块原木")
+    # 目标终态但待办没做完：不自动收账，挂起等主播定夺（账面不动终态）
+    await _wait_until(
+        lambda: ledger.get("d-1") is not None and ledger.get("d-1").status == "waiting_for_decision", timeout=15.0
+    )
+    await agent.stop()
