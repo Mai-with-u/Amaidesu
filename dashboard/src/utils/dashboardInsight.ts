@@ -249,3 +249,49 @@ export function formatUptime(ms: number): string {
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
 }
+
+export interface MemoryReminderInput {
+  runningCount?: number;
+  pendingCount?: number;
+  failedCount?: number;
+  candidatePendingCount?: number;
+  reviewPendingCount?: number;
+}
+
+export interface MemoryReminderLine {
+  tone: 'warn' | 'info';
+  text: string;
+}
+
+/**
+ * 拼装首页记忆待办一行提醒（B3 + D2-5）：
+ * 汇总在途整理/待整理场次、重试失败停摆场次、待审观众与玩家候选、待人工复核场次；
+ * 全部为 0 时返回 null（首页完全不显示）。
+ */
+export function buildMemoryReminderLine(input: MemoryReminderInput): MemoryReminderLine | null {
+  const running = Math.max(0, input.runningCount ?? 0);
+  const pending = Math.max(0, input.pendingCount ?? 0);
+  const failed = Math.max(0, input.failedCount ?? 0);
+  const candidates = Math.max(0, input.candidatePendingCount ?? 0);
+  const reviews = Math.max(0, input.reviewPendingCount ?? 0);
+
+  const parts: string[] = [];
+  if (running > 0) {
+    parts.push(`${running} 场下播记忆正在整理（未跑完前尽量别重启）`);
+  } else if (pending > 0) {
+    parts.push(`${pending} 场下播记忆待整理`);
+  }
+  if (failed > 0) {
+    parts.push(`${failed} 场整理失败停在未整理`);
+  }
+  if (candidates > 0) {
+    parts.push(`${candidates} 条记忆候选待审`);
+  }
+  if (reviews > 0) {
+    parts.push(`${reviews} 场档案待人工复核`);
+  }
+  if (parts.length === 0) return null;
+  const tone: 'warn' | 'info' = failed > 0 || running > 0 ? 'warn' : 'info';
+  return { tone, text: parts.join(' · ') };
+}
+

@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Annotated, Dict, List, NoReturn, Optional, Seq
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from src.modules.background import get_registry as get_task_registry
 from src.modules.dashboard.dependencies import server_component
 from src.modules.logging import get_logger
 from src.modules.dashboard.schemas.ledger import (
@@ -368,6 +369,11 @@ def _parse_report(raw: Optional[str]) -> Optional[SettleReport]:
 async def list_settle_state(sessions: SessionRepoDep, archive: ArchiveRepoDep) -> SettleListResponse:
     """最近正式场的整理状态与待整理场数；失败原因与未登记清单在这里给页面看。"""
     pending_count = await sessions.count_sessions_pending_settle(max_attempts=MAX_SETTLE_ATTEMPTS)
+    failed_count = await sessions.count_sessions_failed_settle(max_attempts=MAX_SETTLE_ATTEMPTS)
+    task_reg = get_task_registry()
+    running_count = (
+        sum(1 for t in task_reg.snapshot() if str(t.task_id).startswith("settle:")) if task_reg is not None else 0
+    )
     rows = await sessions.list_live_sessions(kind=SESSION_KIND_LIVE, limit=_SETTLE_LIST_LIMIT)
     items: List[SettleSessionItem] = []
     for row in rows:
@@ -389,6 +395,8 @@ async def list_settle_state(sessions: SessionRepoDep, archive: ArchiveRepoDep) -
         )
     return SettleListResponse(
         pending_count=pending_count,
+        failed_count=failed_count,
+        running_count=running_count,
         max_attempts=MAX_SETTLE_ATTEMPTS,
         review_pending_count=sum(1 for item in items if item.settled_at_ms is not None and item.reviewed_at_ms is None),
         items=items,

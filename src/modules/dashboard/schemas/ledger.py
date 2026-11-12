@@ -126,6 +126,8 @@ class SettleListResponse(BaseModel):
     """整理状态列表：待整理场数与最近的正式场整理状态。"""
 
     pending_count: int = Field(description="待整理（且自动重试没用完）的正式场数")
+    failed_count: int = Field(default=0, description="自动重试用尽、停在未整理的正式场数")
+    running_count: int = Field(default=0, description="当前正在跑下播整理的场数")
     max_attempts: int = Field(description="自动重试上限")
     review_pending_count: int = Field(default=0, description="列出的场次里整理完了、还没标已审的场数")
     items: List[SettleSessionItem] = Field(default_factory=list, description="最近的正式场，新的在前")

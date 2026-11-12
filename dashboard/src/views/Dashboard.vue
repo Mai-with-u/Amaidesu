@@ -66,6 +66,19 @@
       </div>
     </header>
 
+    <!-- 记忆整理与审核一行提醒（无待办不占位置） -->
+    <section
+      v-if="memoryReminder"
+      class="memory-reminder-strip"
+      :class="`is-${memoryReminder.tone}`"
+      aria-label="记忆待办提醒"
+    >
+      <span class="memory-reminder-tag">记忆台账</span>
+      <span class="memory-reminder-text">{{ memoryReminder.text }}</span>
+      <span class="grow" />
+      <a class="card-link" href="/memory" @click.prevent="router.push('/memory')">去记忆页处理</a>
+    </section>
+
     <!-- 主网格：直播对话流（hero） + 主播体征 / 活动脉搏（右列） -->
     <section class="main-grid">
       <article class="card feed-card">
@@ -184,8 +197,10 @@ import { useSystemStore, useEventsStore } from '@/stores';
 import {
   rundownApi,
   componentApi,
+  ledgerApi,
   liveSessionsApi,
   llmApi,
+  playersApi,
   streamerApi,
   toolsApi,
   viewersApi,
@@ -195,6 +210,7 @@ import type {
   LiveSessionListResponse,
   LLMHistoryStatistics,
   LLMUsageSummary,
+  SettleListResponse,
   StreamerStatusResponse,
   ToolEntry,
 } from '@/types';
@@ -206,6 +222,7 @@ import { useChartPalette } from '@/composables/useECharts';
 import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
 import {
   buildFatalFaultAlerts,
+  buildMemoryReminderLine,
   buildPulse,
   bufferCounts,
   formatUptime,
@@ -249,6 +266,18 @@ async function onProactiveToggle(value: string | number | boolean) {
 const viewerCount = ref<number>(0);
 const rundownState = ref<RundownStateResponse | null>(null);
 const sessions = ref<LiveSessionListResponse | null>(null);
+const settleState = ref<SettleListResponse | null>(null);
+const pendingCandidateTotal = ref<number>(0);
+
+const memoryReminder = computed(() =>
+  buildMemoryReminderLine({
+    runningCount: settleState.value?.running_count ?? 0,
+    pendingCount: settleState.value?.pending_count ?? 0,
+    failedCount: settleState.value?.failed_count ?? 0,
+    candidatePendingCount: pendingCandidateTotal.value,
+    reviewPendingCount: settleState.value?.review_pending_count ?? 0,
+  }),
+);
 
 const streamerAvailable = computed(() => streamerStatus.value?.available === true);
 
@@ -452,6 +481,23 @@ async function refreshSnapshot(): Promise<void> {
   } catch {
     // 观众接口失败时保留旧值（显示 0）
   }
+
+  // 记忆台账与候选待办计数（未装配返回 503 时静默略过，不影响首页）
+  const [settleRes, viewerCandRes, playerCandRes] = await Promise.allSettled([
+    ledgerApi.getSettleState(),
+    ledgerApi.listCandidates('pending'),
+    playersApi.listCandidates('pending'),
+  ]);
+  if (settleRes.status === 'fulfilled') {
+    settleState.value = settleRes.value.data;
+  }
+  const viewerPending =
+    viewerCandRes.status === 'fulfilled' ? viewerCandRes.value.data.pending_count : 0;
+  const playerPending =
+    playerCandRes.status === 'fulfilled' ? playerCandRes.value.data.pending_count : 0;
+  if (viewerCandRes.status === 'fulfilled' || playerCandRes.status === 'fulfilled') {
+    pendingCandidateTotal.value = viewerPending + playerPending;
+  }
 }
 
 useKeepAlivePolling(() => void refreshSnapshot(), 12000);
@@ -587,6 +633,38 @@ onDeactivated(() => {
 .fatal-fault-models {
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+/* 记忆整理与审核一行提醒 */
+.memory-reminder-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-lg);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-md);
+  flex-wrap: wrap;
+}
+.memory-reminder-strip.is-warn {
+  background: var(--color-warning-bg);
+  border-color: var(--color-warning);
+}
+.memory-reminder-tag {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+.memory-reminder-strip.is-warn .memory-reminder-tag {
+  background: var(--color-warning);
+  color: #fff;
+}
+.memory-reminder-text {
+  font-size: 13px;
+  color: var(--text-primary);
 }
 
 /* 行 1：结论条 */

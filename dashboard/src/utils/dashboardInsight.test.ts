@@ -14,6 +14,7 @@ import {
   PULSE_BUCKET_MS,
   type CollectorSummary,
   buildFatalFaultAlerts,
+  buildMemoryReminderLine,
   bufferCounts,
   buildPulse,
   formatUptime,
@@ -316,3 +317,42 @@ describe('formatUptime 时长格式化', () => {
     expect(formatUptime(ms)).toBe(text);
   });
 });
+
+describe('buildMemoryReminderLine 首页记忆提醒行', () => {
+  it('全部为 0 时返回 null', () => {
+    expect(buildMemoryReminderLine({})).toBeNull();
+    expect(
+      buildMemoryReminderLine({
+        runningCount: 0,
+        pendingCount: 0,
+        failedCount: 0,
+        candidatePendingCount: 0,
+        reviewPendingCount: 0,
+      }),
+    ).toBeNull();
+  });
+
+  it('有失败场次、待审候选与待复核场次时合成一行 warn 提醒', () => {
+    const line = buildMemoryReminderLine({
+      failedCount: 1,
+      candidatePendingCount: 4,
+      reviewPendingCount: 3,
+    });
+    expect(line).toEqual({
+      tone: 'warn',
+      text: '1 场整理失败停在未整理 · 4 条记忆候选待审 · 3 场档案待人工复核',
+    });
+  });
+
+  it('仅有待审候选与待复核时为 info 语气', () => {
+    const line = buildMemoryReminderLine({
+      candidatePendingCount: 2,
+      reviewPendingCount: 1,
+    });
+    expect(line).toEqual({
+      tone: 'info',
+      text: '2 条记忆候选待审 · 1 场档案待人工复核',
+    });
+  });
+});
+

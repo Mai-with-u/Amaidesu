@@ -1777,6 +1777,10 @@ export interface SettleSessionItem {
 export interface SettleListResponse {
   /** 待整理（且自动重试没用完）的正式场数 */
   pending_count: number;
+  /** 自动重试用尽、停在未整理的正式场数 */
+  failed_count?: number;
+  /** 当前正在跑下播整理的场数 */
+  running_count?: number;
   /** 自动重试上限 */
   max_attempts: number;
   /** 列出的场次里整理完了、还没标已审的场数 */

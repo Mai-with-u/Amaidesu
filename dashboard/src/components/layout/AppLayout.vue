@@ -89,10 +89,12 @@ import { useThemeStore, useWebSocketStore } from '@/stores';
 import { useAppRestartStore } from '@/stores/appRestart';
 import { storeToRefs } from 'pinia';
 import { useSystemNotifications } from '@/composables/useSystemNotifications';
+import { useBackgroundTasks } from '@/composables/useBackgroundTasks';
 
 const themeStore = useThemeStore();
 const wsStore = useWebSocketStore();
 const { isConnected } = storeToRefs(wsStore);
+const { tasks: runningTasks } = useBackgroundTasks();
 
 // 系统级事件（core.error / 后台任务终态）右上角显式通知
 useSystemNotifications();
@@ -109,14 +111,15 @@ const {
 } = storeToRefs(appRestart);
 
 async function handleRestart() {
-  const ok = await confirmAction(
-    '重启后服务将短暂不可用，WebSocket 会自动重连。确定要重启吗？',
-    '重启服务',
-    {
-      confirmButtonText: '确认重启',
-      confirmButtonClass: 'el-button--danger',
-    },
-  );
+  const settleTasks = runningTasks.value.filter(t => t.task_id.startsWith('settle:'));
+  const message =
+    settleTasks.length > 0
+      ? `当前有 ${settleTasks.length} 场下播记忆整理尚未跑完（已完成步骤会按断点保存，重启后接着跑）。确定现在重启服务吗？`
+      : '重启后服务将短暂不可用，WebSocket 会自动重连。确定要重启吗？';
+  const ok = await confirmAction(message, '重启服务', {
+    confirmButtonText: '确认重启',
+    confirmButtonClass: 'el-button--danger',
+  });
   if (!ok) return;
   void appRestart.beginRestart();
 }
