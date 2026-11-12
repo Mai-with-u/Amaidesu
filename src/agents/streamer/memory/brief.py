@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, AbstractSet, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.logging import get_logger
-from src.modules.storage.models.memory import ArchiveLine, Commitment
+from src.modules.storage.models.memory import Commitment, SnapshotLine
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
@@ -81,7 +81,14 @@ async def build_brief(
     承诺不进这一份简报，点名过的档案行标"（本场已提过）"。``current_saves`` 是分存档的游戏眼下所在的存档；``event_repo`` 给了才查
     "上一场玩这些游戏时记没记下存档"（没记下的块尾注一句）。
     """
-    previous_session_id, archive_lines = await _archive_lines(archive_repo, kind, min_session_ms)
+    previous_session_id, snapshot_lines = await _snapshot_lines(archive_repo, kind, min_session_ms)
+    previous_is_stale, earliest_recent_ms = await _recent_window(
+        archive_repo,
+        kind=kind,
+        min_session_ms=min_session_ms,
+        live_session_id=live_session_id,
+        snapshot_owner_id=previous_session_id,
+    )
     used: Set[int] = set()
     used_archive: Set[int] = set()
     if chat_repo is not None and live_session_id is not None:
@@ -89,9 +96,11 @@ async def build_brief(
     taken, earlier = await _pending_commitments(commitments_repo, used)
     saves = dict(current_saves or {})
     text = render_brief(
-        archive_lines=archive_lines,
+        snapshot_lines=snapshot_lines,
         commitments=taken,
         previous_session_id=previous_session_id,
+        previous_is_stale=previous_is_stale,
+        earliest_recent_ms=earliest_recent_ms,
         earlier_commitment_count=earlier,
         current_saves=saves,
         unsaved_games=await _unsaved_games(event_repo, previous_session_id, saves),
@@ -100,17 +109,26 @@ async def build_brief(
     return MemoryBrief(
         text=text,
         commitment_ids=tuple(int(item.id) for item in taken),
-        archive_ids=tuple(brief_archive_ids(archive_lines, taken, saves)),
+        archive_ids=tuple(
+            brief_archive_ids(
+                commitments=taken,
+                current_saves=saves,
+                snapshot_lines=snapshot_lines,
+                previous_session_id=previous_session_id,
+                previous_is_stale=previous_is_stale,
+                earliest_recent_ms=earliest_recent_ms,
+            )
+        ),
         used_archive_ids=tuple(sorted(used_archive)),
         previous_session_id=int(previous_session_id) if previous_session_id is not None else None,
-        archive_line_count=len(archive_lines),
+        archive_line_count=len(snapshot_lines),
     )
 
 
-async def _archive_lines(
+async def _snapshot_lines(
     archive_repo: "ArchiveRepo", kind: SessionKind, min_session_ms: int
-) -> Tuple[Optional[int], List[ArchiveLine]]:
-    """上一场的场次主键与它的快照各行（引用的档案行原样）；没有上一场或读不到时为 (None, [])。"""
+) -> Tuple[Optional[int], List[SnapshotLine]]:
+    """上一场的场次主键与它的快照各行（带稳定、再提起与人放回标注）；没有上一场或读不到时为 (None, [])。"""
     try:
         snapshot = await archive_repo.latest_snapshot(kind=kind, min_duration_ms=min_session_ms)
     except Exception as exc:  # noqa: BLE001 - 读不到就当没有上一场，简报少一段
@@ -118,7 +136,37 @@ async def _archive_lines(
         return None, []
     if snapshot is None:
         return None, []
-    return int(snapshot.owner_session_id), [item.line for item in snapshot.lines]
+    return int(snapshot.owner_session_id), list(snapshot.lines)
+
+
+async def _recent_window(
+    archive_repo: "ArchiveRepo",
+    *,
+    kind: SessionKind,
+    min_session_ms: int,
+    live_session_id: Optional[int],
+    snapshot_owner_id: Optional[int],
+) -> Tuple[bool, int]:
+    """算两件事：快照所属场次是不是落后于最近已结束场次（中间有场次没整理完），以及最近三场的开播时刻下界。"""
+    finder = getattr(archive_repo, "recent_ended_session_bounds", None)
+    if finder is None or snapshot_owner_id is None:
+        return False, 0
+    try:
+        bounds = await finder(
+            kind=kind,
+            min_duration_ms=min_session_ms,
+            exclude_session_id=live_session_id,
+            limit=3,
+        )
+    except Exception as exc:  # noqa: BLE001 - 查不到场次边界时不挡简报，按未落后、不限三场渲染
+        logger.warning(f"查最近已结束场次边界失败（简报按常规上一场渲染）: {exc}", exc=exc)
+        return False, 0
+    if not bounds:
+        return False, 0
+    latest_ended_id = int(bounds[0][0])
+    stale = latest_ended_id != int(snapshot_owner_id)
+    earliest_ms = int(bounds[2][1]) if len(bounds) >= 3 else 0
+    return stale, earliest_ms
 
 
 async def _unsaved_games(

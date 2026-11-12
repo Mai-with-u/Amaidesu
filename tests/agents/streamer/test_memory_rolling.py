@@ -35,9 +35,13 @@ def _old(
     return SnapshotLine(line=line, lasting=lasting, seen_at_ms=seen, pinned=pinned)
 
 
-def _new(count: int, *, lasting: bool = False, start: int = 500) -> List[PendingArchiveLine]:
+def _new(
+    count: int, *, lasting: bool = False, start: int = 500, game: Optional[str] = None, prefix: str = "新事"
+) -> List[PendingArchiveLine]:
     return [
-        PendingArchiveLine(text=f"新事{index}", quote=f"新{index}", evidence_chat_id=index, lasting=lasting)
+        PendingArchiveLine(
+            text=f"{prefix}{index}", quote=f"新{index}", evidence_chat_id=index, lasting=lasting, game=game
+        )
         for index in range(start, start + count)
     ]
 
@@ -252,61 +256,92 @@ def test_everything_fits_new_rows_first_then_kept_in_place() -> None:
 
 
 def test_over_the_cap_the_least_recently_mentioned_go_first_and_stable_facts_stay() -> None:
-    """一场新事写满 8 行，上一份有 3 件稳定的事和 6 件普通的事：稳定的先留，普通旧事里最久没被再提的
-    先被挤出；挤出的写进改动清单。"""
-    stable = [_old(index, lasting=True, seen=1_000) for index in (1, 2, 3)]
-    plain = [_old(index, seen=1_000 + index * 100) for index in range(4, 10)]
+    """分区各自计额：游戏世界里 10 件取名（稳定）全留，且完全不占用最近事件名额；
+    本场 6 件新事件全留，前几场 8 件普通旧事按最近被提起保留最近 6 件，最久没提的 2 件先挤出。"""
+    names = [
+        SnapshotLine(
+            line=ArchiveLine(
+                id=index,
+                live_session_id=1,
+                text=f"Minecraft：宠物{index}取名豆{index}",
+                quote=f"原话{index}",
+                evidence_chat_id=index,
+                game="minecraft",
+            ),
+            lasting=True,
+            seen_at_ms=1_000,
+        )
+        for index in range(1, 11)
+    ]
+    plain = [_old(index, seen=1_000 + index * 100, game="minecraft") for index in range(11, 19)]
 
-    selection = select_snapshot(_new(8), [*stable, *plain], session_started_at_ms=_NOW)
+    selection = select_snapshot(_new(6, game="minecraft"), [*names, *plain], session_started_at_ms=_NOW)
 
     assert all(line.in_snapshot for line in selection.lines)
-    assert [item.archive_line_id for item in selection.kept] == [1, 2, 3, 9]
-    assert len(selection.lines) + len(selection.kept) == MAX_SNAPSHOT_LINES
-    assert [change.what for change in selection.evicted] == [f"旧事{index}" for index in range(4, 9)]
+    kept_ids = [item.archive_line_id for item in selection.kept]
+    # 10 条取名全在 + 前几场 8 条普通事件里最近被提起的 6 条（13..18）全在
+    assert kept_ids == [*range(1, 11), 13, 14, 15, 16, 17, 18]
+    assert [change.what for change in selection.evicted] == ["旧事11", "旧事12"]
 
 
-def test_stable_facts_outrank_recent_odds_and_ends_and_overflow_competes_by_recency() -> None:
-    """11 件稳定的事、2 件本场新事、1 件上一场刚记的零碎进展：稳定的事先占 8 行（最近被提起的先占），
-    再放本场新事，再放多出来的稳定的事；零碎进展哪怕最近也排在最后被挤出，多出来的稳定的事里
-    最久没被再提的那件也挤出。"""
-    stable = [_old(index, lasting=True, seen=index * 100) for index in range(1, 12)]
-    recent_odds = _old(99, seen=8_000)
+def test_world_lasting_quota_reserves_rows_for_name_table_and_evicts_oldest_overflow() -> None:
+    """【这个世界里】总展示名额 12 行：7 条取名占 2 行名字表后，其余稳定事实最多留 10 条（最久没提的挤出）。"""
+    names = [
+        SnapshotLine(
+            line=ArchiveLine(
+                id=index,
+                live_session_id=1,
+                text=f"Minecraft：地点{index}取名坡{index}",
+                quote=f"原{index}",
+                evidence_chat_id=index,
+                game="minecraft",
+            ),
+            lasting=True,
+            seen_at_ms=500,
+        )
+        for index in range(1, 8)
+    ]
+    other_stable = [_old(index, lasting=True, seen=index * 100, game="minecraft") for index in range(20, 32)]
 
-    selection = select_snapshot(_new(2), [*stable, recent_odds], session_started_at_ms=_NOW)
+    selection = select_snapshot(_new(2, game="minecraft"), [*names, *other_stable], session_started_at_ms=_NOW)
 
     assert [line.in_snapshot for line in selection.lines] == [True, True]
-    assert sorted(item.archive_line_id for item in selection.kept) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-    assert [change.what for change in selection.evicted] == ["旧事1", "旧事99"]
-    assert MAX_LASTING_LINES == 8
+    kept_ids = {item.archive_line_id for item in selection.kept}
+    assert set(range(1, 8)).issubset(kept_ids)
+    # 12 条非名字稳定里挤掉最老的 2 条（20、21），保留 22..31 共 10 条
+    assert kept_ids == {*range(1, 8), *range(22, 32)}
+    assert [change.what for change in selection.evicted] == ["旧事20", "旧事21"]
+    assert MAX_LASTING_LINES == 12
 
 
-def test_new_events_beyond_room_stay_out_of_the_snapshot() -> None:
-    """8 件稳定的事占满 8 行后，本场 8 件新事只放得下 4 件：后面 4 件写成本场档案行但不进快照。"""
-    stable = [_old(index, lasting=True, seen=index * 100) for index in range(1, 9)]
+def test_new_events_beyond_zone_quota_stay_out_of_the_snapshot() -> None:
+    """本场游戏普通新事名额为 6 行：模型写了 8 行新事时，前 6 行进快照，后 2 行只落档案行不进快照；
+    不挂游戏的直播间记忆独立计额，不被游戏事件挤掉。"""
+    room_old = [_old(90, lasting=False, seen=2_000, game=None)]
 
-    selection = select_snapshot(_new(8), stable, session_started_at_ms=_NOW)
+    selection = select_snapshot(_new(8, game="minecraft"), room_old, session_started_at_ms=_NOW)
 
-    assert [item.archive_line_id for item in selection.kept] == list(range(1, 9))
-    assert [line.in_snapshot for line in selection.lines] == [True] * 4 + [False] * 4
-    assert [change.what for change in selection.evicted] == ["新事504", "新事505", "新事506", "新事507"]
+    assert [item.archive_line_id for item in selection.kept] == [90]
+    assert [line.in_snapshot for line in selection.lines] == [True] * 6 + [False] * 2
+    assert [change.what for change in selection.evicted] == ["新事506", "新事507"]
 
 
 def test_pinned_rows_come_first_and_are_never_squeezed_out() -> None:
-    """运营者放回的行排第 0 档：哪怕最久没被再提也不被挤；不占稳定的事那 8 行；放回标记接进新快照。"""
-    pinned = [_old(index, seen=10, pinned=True) for index in (1, 2)]
-    stable = [_old(index, lasting=True, seen=index * 100) for index in range(3, 12)]
+    """运营者放回的行排第 0 档：哪怕最久没被再提也不被挤；不占分区名额；放回标记接进新快照。"""
+    pinned = [_old(index, seen=10, pinned=True, game="minecraft") for index in (1, 2)]
+    stable = [_old(index, lasting=True, seen=index * 100, game="minecraft") for index in range(3, 16)]
 
-    selection = select_snapshot(_new(2), [*pinned, *stable], session_started_at_ms=_NOW)
+    selection = select_snapshot(_new(2, game="minecraft"), [*pinned, *stable], session_started_at_ms=_NOW)
 
     kept = {item.archive_line_id: item for item in selection.kept}
     assert kept[1].pinned and kept[2].pinned, "放回的行一行不挤，标记照旧带着"
-    assert len(selection.lines) + len(selection.kept) == MAX_SNAPSHOT_LINES
     assert [line.in_snapshot for line in selection.lines] == [True, True]
-    assert sorted(kept) == [1, 2, 4, 5, 6, 7, 8, 9, 10, 11], "稳定的事照样先占 8 行，最久没被再提的那件被挤"
+    # 13 条非名字稳定里留 12 条（4..15），最久没提的 3 被挤出，放回的 1、2 不占这 12 条
+    assert sorted(kept) == [1, 2, *range(4, 16)]
 
 
 def test_more_pinned_rows_than_room_are_all_kept() -> None:
-    """放回的行加起来超过 12 行：全部留着（界面提示人去减），本场新事这次进不了快照。"""
+    """放回的行加起来超过总安全上限：全部留着（界面提示人去减），本场新事这次进不了快照。"""
     pinned = [_old(index, pinned=True) for index in range(1, MAX_SNAPSHOT_LINES + 2)]
 
     selection = select_snapshot(_new(1), pinned, session_started_at_ms=_NOW)
@@ -369,12 +404,14 @@ def test_render_base_marks_previous_and_earlier_rows_with_save_and_stable_flag()
             _old(1, session=2, game="minecraft", save_id="abcdef1234", save_name="新的世界"),
             _old(2, session=1, lasting=True, game="minecraft", save_id="abcdef1234"),
             _old(3, session=1),
+            _old(4, session=1, game="minecraft", save_id="9988776655"),
         ],
     )
 
     assert render_base(snapshot).splitlines() == [
         "旧1 [上一场] 旧事1（原话「原话1」；在 minecraft「新的世界」）",
-        "旧2 [之前] 旧事2（原话「原话2」；在 minecraft「abcdef12」；稳定）",
+        "旧2 [之前] 旧事2（原话「原话2」；在 minecraft「新的世界」；稳定）",
         "旧3 [之前] 旧事3（原话「原话3」）",
+        "旧4 [之前] 旧事4（原话「原话4」；在 minecraft「99887766」）",
     ]
     assert render_base(None) == ""

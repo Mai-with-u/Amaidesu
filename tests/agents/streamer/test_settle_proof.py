@@ -70,6 +70,7 @@ def test_records_list_finished_delegations_and_successful_steps_in_time_order() 
         [
             _delegation("succeeded", instruction="把门装上", summary="delivery: 正门装好了", ended_ms=5 * _MINUTE),
             _delegation("undelivered", instruction="种一排花", summary="停了但没交付结果", ended_ms=4 * _MINUTE),
+            _delegation("closed_by_initiator", instruction="铺木地板", summary="做完了", ended_ms=6 * _MINUTE),
             _delegation("accepted", instruction="去挖铁", summary="", ended_ms=0),
         ],
     )
@@ -78,6 +79,7 @@ def test_records_list_finished_delegations_and_successful_steps_in_time_order() 
         (1, "里程碑", "第 1 步（maicraft:obtain），拿到了 1 个熔炉", True),
         (2, "委派", "委派「种一排花」停了没交付，不能作证", False),
         (3, "委派", "委派「把门装上」交付了：正门装好了", True),
+        (4, "委派", "委派「铺木地板」她认定做完了，游戏那边没交付，不能作证", False),
     ]
     assert render_records(records).splitlines()[1].startswith("- 记录#1 ") and render_records([]) == ""
 

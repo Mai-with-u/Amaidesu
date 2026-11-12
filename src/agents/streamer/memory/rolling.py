@@ -44,11 +44,21 @@ from src.modules.storage.models.memory import (
     UnregisteredItem,
 )
 
-from .render import MAX_BRIEF_ARCHIVE_LINES
+from .saves import canonical_save_names
+from .zones import (
+    MAX_RECENT_EARLIER_LINES,
+    MAX_RECENT_PREVIOUS_LINES,
+    MAX_ROOM_LINES,
+    MAX_WORLD_LINES,
+    MAX_WORLD_NAMES,
+    is_naming_title,
+    name_table_row_count,
+)
 
 __all__ = [
     "MAX_BASE_LINES",
     "MAX_LASTING_LINES",
+    "MAX_ROOM_LASTING_QUOTA",
     "MAX_SNAPSHOT_LINES",
     "RollingPlan",
     "SnapshotSelection",
@@ -59,12 +69,14 @@ __all__ = [
 
 logger = get_logger("RollingArchive")
 
-# 一份快照至多几行：整理写入与简报列出用同一个数
-MAX_SNAPSHOT_LINES = MAX_BRIEF_ARCHIVE_LINES
-# 稳定的事至多先占几行：名字、住处、关系不被新事和前几场的零碎进展挤掉，又给本场新事留出位置
-MAX_LASTING_LINES = 8
-# 交给模型的旧行至多几行（升级后第一次滚动会连着几场旧档案一起给）
-MAX_BASE_LINES = 24
+# 单存档或跨存档快照的总安全上限（各分区独立计额后再以此兜底，防止存档极多时快照无限膨胀）
+MAX_SNAPSHOT_LINES = 40
+# 单个游戏世界里稳定事实的展示行名额（名字表占 0～2 行，其余稳定占剩余名额，合计 ≤ 12）
+MAX_LASTING_LINES = MAX_WORLD_LINES
+# 不挂游戏的直播间稳定事实名额（与直播间普通事件 MAX_ROOM_LINES 分开计，互不挤占）
+MAX_ROOM_LASTING_QUOTA = 6
+# 交给模型的旧行至多几行（大于等于 MAX_SNAPSHOT_LINES，整份快照都能给模型核对；超出的尾部原样保留）
+MAX_BASE_LINES = 48
 # 旧行编号前缀：与台词编号（#N）、承诺编号（约#N）分开，模型不会把它们混成一类
 _OLD_PREFIX = "旧"
 # 证据台词进整理报告时的截断长度
@@ -86,25 +98,30 @@ _REFUSED_HUMAN_LOCKED = "人改过的行只有人能动"
 _REFUSED_REPLACE = "替换的新行没通过校验，旧行保留"
 _REFUSED_SAME_AS = "注明重复的那一行编号不对，旧行保留"
 _REFUSED_SAME_AS_GONE = "注明重复的那一行也按重复去掉了，旧行保留"
-_EVICTED_OLD = f"超过 {MAX_SNAPSHOT_LINES} 行，最久没被再提的先出"
-_EVICTED_NEW = "本场新事超出上限：写成本场档案行，不进快照"
+_EVICTED_OLD = "超出本分区快照名额，最久没被再提的先出"
+_EVICTED_NEW = "本场新事超出本分区名额：写成本场档案行，不进快照"
 
 
 def render_base(snapshot: Optional[ArchiveSnapshot]) -> str:
     """上一份快照渲染成给模型看的旧行清单；没有时为空串。
 
     每行：编号、出自上一场还是之前、标题、原话，挂着游戏的写上游戏与存档，稳定的事标出来。
-    "上一场"是这份快照所属的那一场，其余行出自更早的场次。
+    "上一场"是这份快照所属的那一场，其余行出自更早的场次。同一存档号出现过多个名字时按存档号归并成
+    最后一次非空名字，免得整理模型把改过名的同一个世界当成两个存档。
     """
     if snapshot is None:
         return ""
+    shown = snapshot.lines[:MAX_BASE_LINES]
+    ordered_lines = sorted((item.line for item in shown), key=lambda row: (int(row.live_session_id), int(row.id)))
+    save_names = canonical_save_names((row.game, row.save_id, row.save_name) for row in ordered_lines)
     rows: List[str] = []
-    for index, item in enumerate(snapshot.lines[:MAX_BASE_LINES], start=1):
+    for index, item in enumerate(shown, start=1):
         line = item.line
         when = "上一场" if int(line.live_session_id) == int(snapshot.owner_session_id) else "之前"
         notes = [f"原话「{line.quote}」"]
         if line.game:
-            save = line.save_name or (line.save_id[:8] if line.save_id else "")
+            resolved_name = save_names.get((line.game, line.save_id), line.save_name)
+            save = resolved_name or (line.save_id[:8] if line.save_id else "")
             notes.append(f"在 {line.game}「{save}」" if save else f"在 {line.game}")
         if item.lasting:
             notes.append("稳定")
@@ -153,8 +170,9 @@ def plan_from_ops(
     ``validate_new`` 是新事的校验器（替换出的新行与新事同一个口径）。
     """
     shown = list(base)[:MAX_BASE_LINES]
+    unshown_tail = list(base)[MAX_BASE_LINES:]
     if raw_ops is None:
-        return RollingPlan(kept=shown)
+        return RollingPlan(kept=[*shown, *unshown_tail])
     if not isinstance(raw_ops, list):
         raise ValueError("模型输出的 previous 不是列表")
     updated: Dict[int, SnapshotLine] = {}
@@ -261,7 +279,7 @@ def plan_from_ops(
             if updated.get(index, shown[index]).lasting and not survivor.lasting and not survivor.line.human_locked:
                 updated[other] = survivor.model_copy(update={"lasting": True})
         changes.append(SnapshotChange(action="drop", what=shown[index].line.text, reason=reason))
-    kept = [updated.get(index, item) for index, item in enumerate(shown) if index not in removed]
+    kept = [*(updated.get(index, item) for index, item in enumerate(shown) if index not in removed), *unshown_tail]
     return RollingPlan(kept=kept, replacements=replacements, changes=changes, misses=misses)
 
 
@@ -276,13 +294,16 @@ class SnapshotSelection:
 
 @dataclass(frozen=True)
 class _Entry:
-    """参与取舍的一行：本场新写的（new）或接住的（kept），连同它在各自列表里的下标。"""
+    """参与取舍的一行：本场新写的（new）或接住的（kept），连同所属游戏存档与是否名字类。"""
 
     new: bool
     index: int
     lasting: bool
     seen_at_ms: int
     order: int
+    game: Optional[str] = None
+    save_id: str = ""
+    is_name: bool = False
     pinned: bool = False
 
 
@@ -292,20 +313,28 @@ def select_snapshot(
     *,
     session_started_at_ms: int,
 ) -> SnapshotSelection:
-    """按固定规则凑本场快照，至多 12 行，按下面几档依次放：
+    """按分区各自的名额凑本场快照，让稳定取名、最近事件与直播间记忆互不抢位置：
 
-    0. 运营者放回或新增的行（pinned）：一行不挤，加起来超过 12 行时快照就超过 12 行（界面提示人去减）；
-    1. 稳定的事，至多 8 行：本场新写的在前，其余按最近被提起；
-    2. 本场其余新事（模型给出的先后）；
-    3. 其余稳定的事，按最近被提起；
-    4. 其余旧行，按最近被提起。
+    0. 运营者放回或新增的行（pinned）：排最前、一行不挤，且不占下面各区的名额；
+    1. 游戏世界稳定的事（按 ``(game, save_id)`` 各自计额）：名字类至多 12 条（渲染成 1～2 行名字表），
+       其余稳定（住处、关系、规矩）至多 ``12 - 名字表行数`` 条，本场新写在前、其余按最近被提起；
+    2. 游戏世界普通事件：本场新写的至多 6 行（按模型给出的先后），前几场接住的至多 6 行（按最近被提起）；
+    3. 直播间里的事（不挂游戏的行）：稳定的事至多 6 行，普通事件至多 6 行（本场新写在前、其余按最近被提起）。
 
-    同样新的按给出的先后（新事在前、接住的按原位置）。前几场的零碎进展因此排在稳定的事后面，
-    同一档里挤出去的是最久没被再提的。被挤出的本场新事照样写成本场档案行（回想工具查得到），
-    只是不进快照。
+    多存档累计超过总安全上限 ``MAX_SNAPSHOT_LINES`` 时，再按"稳定优先 → 本场新事 → 最近被提起"兜底裁剪。
+    被挤出的本场新事照样写成本场档案行（回想工具查得到），只是不进快照。
     """
     entries = [
-        _Entry(new=True, index=index, lasting=line.lasting, seen_at_ms=int(session_started_at_ms), order=index)
+        _Entry(
+            new=True,
+            index=index,
+            lasting=line.lasting,
+            seen_at_ms=int(session_started_at_ms),
+            order=index,
+            game=line.game,
+            save_id=line.save_id or "",
+            is_name=bool(line.game and line.lasting and is_naming_title(line.text)),
+        )
         for index, line in enumerate(new_lines)
     ] + [
         _Entry(
@@ -314,21 +343,46 @@ def select_snapshot(
             lasting=item.lasting,
             seen_at_ms=item.seen_at_ms,
             order=len(new_lines) + index,
+            game=item.line.game,
+            save_id=item.line.save_id or "",
+            is_name=bool(item.line.game and item.lasting and is_naming_title(item.line.text)),
             pinned=item.pinned,
         )
         for index, item in enumerate(kept)
     ]
     by_recency = sorted(entries, key=lambda e: (not e.new, -e.seen_at_ms, e.order))
-    # 放回快照 -> 稳定的事 -> 本场新事 -> 其余稳定的事 -> 其余旧行；放回的行不占稳定的事那 8 行
     pinned = [entry for entry in by_recency if entry.pinned]
-    lasting = [entry for entry in by_recency if entry.lasting and not entry.pinned]
-    ranked = [
-        *lasting[:MAX_LASTING_LINES],
-        *(entry for entry in by_recency if entry.new and not entry.lasting and not entry.pinned),
-        *lasting[MAX_LASTING_LINES:],
-        *(entry for entry in by_recency if not entry.new and not entry.lasting and not entry.pinned),
-    ]
-    chosen = pinned + ranked[: max(0, MAX_SNAPSHOT_LINES - len(pinned))]
+    unpinned = [entry for entry in by_recency if not entry.pinned]
+
+    bucketed: List[_Entry] = []
+    # 1. 游戏世界稳定的事：按 (game, save_id) 分世界，名字类与其余稳定各自计额，取名再多也不挤掉住处和事件
+    world_keys = list(dict.fromkeys((e.game, e.save_id) for e in unpinned if e.game and e.lasting))
+    for w_game, w_save in world_keys:
+        world_lasting = [e for e in unpinned if e.game == w_game and e.save_id == w_save and e.lasting]
+        names = [e for e in world_lasting if e.is_name][:MAX_WORLD_NAMES]
+        other_cap = max(0, MAX_LASTING_LINES - name_table_row_count(len(names)))
+        others = [e for e in world_lasting if not e.is_name][:other_cap]
+        bucketed.extend(names)
+        bucketed.extend(others)
+
+    # 2. 游戏世界普通事件：本场新事至多 6 行（保模型先后），前几场接住的至多 6 行（按最近被提起）
+    game_new_events = sorted(
+        (e for e in unpinned if e.game and not e.lasting and e.new),
+        key=lambda e: e.order,
+    )[:MAX_RECENT_PREVIOUS_LINES]
+    game_kept_events = [e for e in unpinned if e.game and not e.lasting and not e.new][:MAX_RECENT_EARLIER_LINES]
+    bucketed.extend(game_new_events)
+    bucketed.extend(game_kept_events)
+
+    # 3. 直播间里的事（不挂游戏）：稳定与普通事件分开计额，换任何游戏存档都不丢
+    room_lasting = [e for e in unpinned if not e.game and e.lasting][:MAX_ROOM_LASTING_QUOTA]
+    room_events = [e for e in unpinned if not e.game and not e.lasting][:MAX_ROOM_LINES]
+    bucketed.extend(room_lasting)
+    bucketed.extend(room_events)
+
+    # 多存档总行数超过安全上限时，稳定优先、本场新事其次、再按最近被提起兜底裁剪
+    safety_ranked = sorted(bucketed, key=lambda e: (not e.lasting, not e.new, -e.seen_at_ms, e.order))
+    chosen = pinned + safety_ranked[: max(0, MAX_SNAPSHOT_LINES - len(pinned))]
     chosen_new = {entry.index for entry in chosen if entry.new}
     chosen_kept = {entry.index for entry in chosen if not entry.new}
     lines = [line.model_copy(update={"in_snapshot": index in chosen_new}) for index, line in enumerate(new_lines)]
@@ -349,5 +403,5 @@ def select_snapshot(
         if index not in chosen_kept
     ]
     if evicted:
-        logger.info(f"档案快照超过 {MAX_SNAPSHOT_LINES} 行，挤出 {len(evicted)} 行（最久没被再提的先出）")
+        logger.info(f"档案快照按分区名额挤出 {len(evicted)} 行（最久没被再提的先出）")
     return SnapshotSelection(lines=lines, kept=kept_refs, evicted=evicted)

@@ -489,6 +489,40 @@ class ArchiveRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def recent_ended_session_bounds(
+        self,
+        *,
+        kind: SessionKind = SESSION_KIND_LIVE,
+        min_duration_ms: int = 0,
+        exclude_session_id: Optional[int] = None,
+        limit: int = 3,
+    ) -> List[Tuple[int, int]]:
+        """最近已结束且时长达标的同类型场次的 ``(场次主键, 开播时刻)``（从新到旧，不论整理完没有）。
+
+        用于常驻简报两处判定：一是核对当前拿到的快照是不是紧邻的上一场（若最近一场还没整理完，
+        快照来自更早的场次，简报不能把它标成"上一场"）；二是算出"最近三场"的开播时刻下界，
+        让【最近几场】的"再往前两场"只收最近三场内写下或被再提起过的事件。
+        """
+        cap = max(1, int(limit))
+        threshold = max(0, int(min_duration_ms))
+
+        def _exec() -> List[Tuple[int, int]]:
+            where = "WHERE kind=? AND ended_at_ms IS NOT NULL AND (ended_at_ms - started_at_ms) >= ?"
+            params: List[Any] = [kind, threshold]
+            if exclude_session_id is not None:
+                where += " AND id <> ?"
+                params.append(int(exclude_session_id))
+            params.append(cap)
+            with self._manager.transaction() as conn:
+                rows = conn.execute(
+                    f"SELECT id, started_at_ms FROM live_sessions {where}"  # noqa: S608 子句为代码内常量
+                    " ORDER BY started_at_ms DESC, id DESC LIMIT ?",
+                    params,
+                ).fetchall()
+                return [(int(row[0]), int(row[1] or 0)) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
     async def list_archived_session_bounds(self, *, limit: int = 200) -> List[Tuple[int, int]]:
         """有档案行的场次与它的开播时刻（开播时刻倒序），供回想工具逐场检索。
 
