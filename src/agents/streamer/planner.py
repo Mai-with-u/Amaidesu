@@ -262,6 +262,8 @@ class PlannerEnv:
     paid_identities_provider: Optional[Callable[[List[Any]], Awaitable[Set[str]]]] = None
     # 现行游戏社交事实（异步，每批从库现读）。None = 能力缺席，参考段缺【游戏社交事实】
     social_facts_provider: Optional[Callable[[], Awaitable[List[Any]]]] = None
+    # 开播【上次收尾】（异步，开播头两窗或第一件委派受理前返回确定性交接块；其余窗返回 None）
+    opening_wrapup_provider: Optional[Callable[[], Awaitable[Optional[Any]]]] = None
 
 
 def _observation_error(observation: str) -> Optional[str]:
@@ -453,6 +455,7 @@ class Planner:
         # 本场备忘录全文查询（经环境注入；空串 = 还没写过，段整段省略）
         self._brief_provider = env.brief_provider if env else None
         self._social_facts_provider = env.social_facts_provider if env else None
+        self._opening_wrapup_provider = env.opening_wrapup_provider if env else None
         self._brief_ids_provider = env.brief_ids_provider if env else None
         self._commitment_lookup = env.commitment_lookup if env else None
         self._brief_archive_ids_provider = env.brief_archive_ids_provider if env else None
@@ -618,7 +621,10 @@ class Planner:
             system_prompt = f"{system_prompt}\n\n{brief_text}"
         # 线索推送每批评一次：卡片与提示行进参考段，编号进本窗合法点名名单
         memory_cues = await self._collect_memory_cues(batch)
-        self._round_memory_ids = self._round_commitment_ids(memory_cues)
+        opening_wrapup = await self._load_opening_wrapup()
+        opening_wrapup_text = (getattr(opening_wrapup, "text", "") or "").strip() if opening_wrapup is not None else ""
+        opening_wrapup_ids = getattr(opening_wrapup, "commitment_ids", ()) if opening_wrapup is not None else ()
+        self._round_memory_ids = self._round_commitment_ids(memory_cues) | {int(item) for item in opening_wrapup_ids}
         self._round_archive_ids = self._round_archive_line_ids(memory_cues)
         self._round_asked_archive_ids = {
             int(item) for item in (getattr(memory_cues, "asked_archive_ids", ()) if memory_cues is not None else ())
@@ -636,6 +642,7 @@ class Planner:
             proactive,
             reminders,
             resume_replay=resume_replay,
+            opening_wrapup=opening_wrapup_text,
             game_events=self._round_game_events,
             fresh_game_chat=fresh_game_chat,
             private_game_chat=private_game_chat,
@@ -983,6 +990,16 @@ class Planner:
             self.logger.warning(f"线索推送失败（本批不带提示行，不挡决策）: {exc}", exc=True)
             return None
 
+    async def _load_opening_wrapup(self) -> Optional[Any]:
+        """开播头两窗（且本场尚未受理委派）读取【上次收尾】；其余窗返回 None，失败只告警不挡决策。"""
+        if self._opening_wrapup_provider is None:
+            return None
+        try:
+            return await self._opening_wrapup_provider()
+        except Exception as exc:  # noqa: BLE001 - 开场交接读不到只少这一块，不挡决策
+            self.logger.warning(f"读开播【上次收尾】失败（本窗省略该段）: {exc}", exc=True)
+            return None
+
     def _round_commitment_ids(self, cues: Any) -> Set[int]:
         """本窗合法的点名编号：常驻简报里的加本批卡片里的。"""
         ids: Set[int] = set()
@@ -1039,6 +1056,7 @@ class Planner:
         proactive: bool,
         reminders: str = "",
         resume_replay: str = "",
+        opening_wrapup: str = "",
         game_events: Optional[List[str]] = None,
         fresh_game_chat: Optional[List[str]] = None,
         private_game_chat: Optional[List[str]] = None,
@@ -1086,6 +1104,9 @@ class Planner:
                 + "让形象动一下（avatar_act，不出声不占台词预算）；也可以什么都不做，等下一个事件。"
                 "这些只是此刻能做的几类，不限于此——手上有什么活、想做什么，就做什么。"
             )
+        if opening_wrapup:
+            # 开播头两窗（或第一件委派受理前）注入确定性【上次收尾】，让主播开场知道上次停在哪、最后说了什么
+            lines.append(opening_wrapup)
         current_ms = now_ms()
         activity = self._room_state.activity_line()
         if activity:

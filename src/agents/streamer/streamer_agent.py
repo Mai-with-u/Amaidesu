@@ -74,6 +74,7 @@ from .session_scope import ClosingSession, SessionScope
 from .memory.brief import build_brief
 from .memory.cues import MemoryCueProvider
 from .memory.index import MemoryIndexer
+from .memory.last_wrapup import OPENING_WRAPUP_MAX_WINDOWS, build_last_wrapup
 from .memory.recall import MemoryRecallService, build_memory_recall_provider
 from .memory.search import MemorySearch
 from .memory.settle import SessionSettler
@@ -363,6 +364,9 @@ class StreamerAgent(BaseAgent):
         self._viewer_repo = viewer_repo
         # 场次表：下播整理按场次主键取台词与状态
         self._sessions_repo = sessions_repo
+        # 开播【上次收尾】注入闸门：新开场置位，头两窗或本场第一件委派受理后自动收闸
+        self._opening_wrapup_active: bool = False
+        self._opening_wrapup_windows: int = 0
         # 聊天仓储：开播日志统计"上一场播出了几句台词"用（None 时日志省略句数）
         self._chat_repo = chat_repo
         # 付费史标注器：查本批观众在付费三表有无记录（观众仓储 + 聊天仓储都在才装）
@@ -439,6 +443,8 @@ class StreamerAgent(BaseAgent):
                 else None,
                 # 游戏社交事实：每批从库现读，参考段常驻【游戏社交事实】
                 social_facts_provider=self._load_social_facts if social_fact_repo is not None else None,
+                # 开播【上次收尾】：头两窗或第一件委派受理前从确定性账面拼装上一场收工实况
+                opening_wrapup_provider=self._consume_opening_wrapup if sessions_repo is not None else None,
             )
             if config.live_frame.enabled:
                 planner_env = dataclasses.replace(
@@ -1137,6 +1143,10 @@ class StreamerAgent(BaseAgent):
         # 开播计数先加：上一场的下播回调若还在等道别那一轮，跑完后据此知道已经换场、不再清场
         self._session_epoch += 1
         self._live_active = True
+        # 新开场开启【上次收尾】头两窗闸门，放在第一个 await 之前，避免开窗循环抢在初始化前读到旧状态；
+        # 断线续播是同一场接回，不作为新开场重复灌上一场收尾
+        self._opening_wrapup_active = not resumed
+        self._opening_wrapup_windows = 0
         # 上一场的下播回调还在收尾（道别那一轮在等模型）时，内存里这份备忘录是上一场的
         # 工作笔记（每次写入都已落进上一场的场次行），不是开播前写下的：当场清掉、不带进
         # 新场次。放在第一个 await 之前，新场次的第一轮决策开窗时读到的已经是空备忘录
@@ -1459,6 +1469,7 @@ class StreamerAgent(BaseAgent):
         """live.ended 回调：下播，主动发言收闸，道别收束本场，后台跑这次的下播整理。"""
         del event_name, source
         self._live_active = False
+        self._opening_wrapup_active = False
         if self._mouth is not None:
             self._mouth.reset()
         self._logger.info("场次已结束：主动发言收闸")
@@ -1980,12 +1991,45 @@ class StreamerAgent(BaseAgent):
         """游戏账本入账面（game.* 回调写入口；持有者见 ``SessionScope.ledger``）。"""
         return self._scope.ledger
 
+    async def _consume_opening_wrapup(self) -> Optional[Any]:
+        """开播头两窗（且本场尚未受理任何委派）返回上一正式场的【上次收尾】；超出窗口或已派单后收闸。"""
+        if not self._opening_wrapup_active or self._sessions_repo is None:
+            return None
+        if self._opening_wrapup_windows >= OPENING_WRAPUP_MAX_WINDOWS:
+            self._opening_wrapup_active = False
+            return None
+        session_pk = self._current_session_pk()
+        if self._event_repo is not None and session_pk is not None:
+            try:
+                current_delegations = await self._event_repo.list_session_delegations(live_session_id=int(session_pk))
+            except Exception as exc:  # noqa: BLE001 - 查不到本场委派时照常按窗口计数决定
+                self._logger.warning(f"核对本场委派账失败（按窗口计数继续注入【上次收尾】）: {exc}", exc=exc)
+                current_delegations = []
+            if current_delegations:
+                self._opening_wrapup_active = False
+                return None
+        self._opening_wrapup_windows += 1
+        if self._opening_wrapup_windows >= OPENING_WRAPUP_MAX_WINDOWS:
+            self._opening_wrapup_active = False
+        return await build_last_wrapup(
+            sessions_repo=self._sessions_repo,
+            chat_repo=self._chat_repo,
+            event_repo=self._event_repo,
+            commitments_repo=self._commitments_repo,
+            kind=self._current_session_kind(),
+            min_session_ms=self.typed_config.memory_brief_min_session_ms,
+            live_session_id=session_pk,
+            current_saves=self._current_saves,
+        )
+
     def _record_delegation(self, agent: str, instruction: str) -> None:
         """Planner 受理委派后回调：把"我在哪个游戏里开始做什么"按此刻进时间线。
 
         委派行直写时间线，不进决策窗批次（批次只收三类游戏事件通道的条目）。
-        受理即算"开始玩这个游戏"：游戏承诺卡据此出现，不必等那个游戏报出第一个事件。
+        受理即算"开始玩这个游戏"：游戏承诺卡据此出现，不必等那个游戏报出第一个事件；
+        同时第一件委派已落地，开播【上次收尾】提前收闸不再注入。
         """
+        self._opening_wrapup_active = False
         self._note_game_activity(agent)
         self._scope.note_delegation(agent, instruction)
 
