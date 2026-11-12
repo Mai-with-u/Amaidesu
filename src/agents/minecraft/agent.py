@@ -217,6 +217,7 @@ class MinecraftAgent(BaseAgent):
         task_tracker: Optional[Any] = None,
         skill_library: Optional[SkillLibrary] = None,
         creature_repo: Optional[Any] = None,
+        work_docs_repo: Optional[Any] = None,
         clock: Optional[Callable[[], float]] = None,
         live_active: Optional[bool] = None,
         mcp_client: Optional[Any] = None,
@@ -241,6 +242,8 @@ class MinecraftAgent(BaseAgent):
                 ``resources/list`` 合并进来，正文按 ``skill://`` 地址读。
             creature_repo: 生物名册仓储（``list_creatures`` / ``save_creatures``）。注入时名册按世界
                 落库、跨场次记得主播起的名字与谁死了；None 时名册只在内存里，Agent 重建即丢。
+            work_docs_repo: 游戏工作文档仓储（``get_work_docs`` / ``save_work_docs``）。注入时工作笔记与待办
+                按（游戏，存档）落库、跨重启保留；None 时退化为纯内存文档。
             clock: 保留给测试注入假时钟的构造参数（统一构造签名）。
             live_active: 直播闸初始态。None = 生产默认（构造期按直播中，启动钩子落收工态，
                 等 live.started 恢复）；显式给值（测试用）则启动钩子不再改写。
@@ -284,6 +287,8 @@ class MinecraftAgent(BaseAgent):
         # 生物名册：自己的生物与主播起过名的生物是谁、在不在身边、死没死（速览与死讯共用这一份）
         self._creatures = CreatureBook()
         self._creature_repo = creature_repo
+        self._work_docs_repo = work_docs_repo
+        self._current_session_id: Optional[int] = None
         # 饿急了从别人家箱子拿过的吃的：按世界记最近几笔放进任务事实，主人回头来问时按名字、区域或位置对上号
         self._food_taken = FoodTakenLog()
         # 速览里记住的地点：最多 5 分钟真读一次世界记忆；记地点成功、换存档、连接变化时提前作废
@@ -316,6 +321,7 @@ class MinecraftAgent(BaseAgent):
             situation_reader=self._current_situation,
             snapshot_reader=self._state_snapshot,
             context_recall=self._recall_context if config.context.active_fold else None,
+            on_work_docs_changed=self._save_work_docs,
         )
 
         # 命令驱动运行骨架：worker 等命令信号，收到命令后持续推进当前游戏任务。
@@ -461,6 +467,7 @@ class MinecraftAgent(BaseAgent):
         """live.started 回调：开播，恢复接受委派。"""
         del event_name, source
         self._live_active = True
+        self._current_session_id = payload.live_session_id
         # 名册按场次决定已死的还提不提：死在上一场的，这一场是最后一次提起
         self._creatures.start_session(payload.live_session_id)
         await self._save_creatures()
@@ -470,6 +477,8 @@ class MinecraftAgent(BaseAgent):
         """live.ended 回调：收工即停，未处理消息一并丢弃，不留到下一场突然开跑。"""
         del event_name, source
         self._live_active = False
+        await self._save_work_docs()
+        self._current_session_id = None
         self._creatures.end_session()
         dropped = len(self._message_queue)
         self._wake_queue.clear()
@@ -971,6 +980,8 @@ class MinecraftAgent(BaseAgent):
                 messages.append(incoming)
             if opening_due:
                 opening_due = False
+                if self._mc_state.dirty:
+                    await self._save_work_docs()
                 await self._skill_support.append_opening_bundle(messages)
             if not self._interaction_only:
                 # 只回应互动的一批不碰委派账：等主播定夺的委派要一直显示在等定夺，不能被一次蹲起改回进行中
@@ -1139,7 +1150,7 @@ class MinecraftAgent(BaseAgent):
         self._fold_job.abandon()
         self._idle_prep.abandon()
         self._shown_context = {}
-        self._mc_state.set_todos([])
+        self._mc_state.clear_todos_for_new_task()
         self._goal_ledger.clear_finished()
         self._furnace_waits.clear()
         self._wait_progress.reset()
@@ -1260,6 +1271,8 @@ class MinecraftAgent(BaseAgent):
         )
         if name.startswith(f"{PROVIDER}_"):
             reply = reply_of(result)
+            if name == OBSERVE and arguments.get("what") == "self" and reply.ok:
+                await self._apply_world_change(self._world.absorb_observation(reply.data))
             if picture_call and reply.ok:
                 return await self._absorb_picture(arguments, reply, result)
             return reply.raw
@@ -1729,13 +1742,11 @@ class MinecraftAgent(BaseAgent):
             await self._on_world_identified(change)
 
     async def _on_world_identified(self, change: WorldChange) -> None:
-        """认出存档：进程启动后第一次认出只记下；从一个存档换到另一个时按以下顺序处理。
-
-        收起旧存档的待办、笔记与近期上报，换上新存档的一份（回到老存档会还原）→ 手上有任务时
-        告诉它这个任务是在旧存档里接的，先看眼前再决定继续还是上报 → 发一条换存档的里程碑，
-        主播的时间线上记下"从「A」换到了「B」"、存储据此知道这一场后半段玩的是哪个存档。
-        """
+        """认出存档：进程启动后第一次认出加载该存档持久化的笔记与待办；换存档时先落库旧存档再切到新存档。"""
+        if change.switched and change.before is not None and self._mc_state.dirty:
+            await self._save_work_docs_for(change.before.id, change.before.name)
         self._mc_state.switch_world(change.after.id)
+        await self._ensure_world_work_docs_loaded(change.after.id, change.after.name)
         # 认出了（另一个）存档：手上记住的地点清单可能是别的存档的，整份丢掉，下一次速览按这个存档重读
         self._remembered_places.forget()
         if not change.switched or change.before is None:
@@ -1766,6 +1777,54 @@ class MinecraftAgent(BaseAgent):
                 f"回到「{before}」会还原；手上这个任务是在「{before}」里接的，先看看眼前再决定继续做还是用 escalation 上报。"
             )
         await self._emit_game_event("milestone", f"从存档「{before}」换到了「{after}」")
+
+    async def _ensure_world_work_docs_loaded(self, save_id: str, save_name: str = "") -> None:
+        """当前存档首次认出时从仓储读取持久化的工作笔记与待办；认出前已有内存改动的顺手写回。"""
+        if not save_id or self._work_docs_repo is None:
+            return
+        if not self._mc_state.loaded_from_repo:
+            try:
+                record = await self._work_docs_repo.get_work_docs(game=_GAME, save_id=save_id)
+            except Exception as exc:  # noqa: BLE001 - 读库失败降级空文档，不阻断游戏循环
+                self._logger.warning(f"读存档工作文档失败（{save_id}），从空文档继续", exc=exc)
+                record = None
+            if record is not None:
+                from_last_session = (
+                    record.updated_session_id is None
+                    or self._current_session_id is None
+                    or record.updated_session_id != self._current_session_id
+                )
+                self._mc_state.apply_persisted_docs(
+                    notebook=record.notebook,
+                    todos=record.todos,
+                    from_last_session=from_last_session,
+                    keep_active_todos=not self._task_finished,
+                )
+            else:
+                self._mc_state.loaded_from_repo = True
+        if self._mc_state.dirty:
+            await self._save_work_docs_for(save_id, save_name)
+
+    async def _save_work_docs(self) -> None:
+        """把当前存档的工作笔记与待办写回仓储；还没认出存档或未装配仓储时只留在内存里。"""
+        save_id, save_name = self._world.save_fields()
+        await self._save_work_docs_for(save_id, save_name)
+
+    async def _save_work_docs_for(self, save_id: str, save_name: str = "") -> None:
+        if self._work_docs_repo is None or not save_id:
+            return
+        try:
+            await self._work_docs_repo.save_work_docs(
+                game=_GAME,
+                save_id=save_id,
+                save_name=save_name,
+                notebook=self._mc_state.notebook,
+                todos=self._mc_state.todo_doc()["todos"],
+                updated_session_id=self._current_session_id,
+            )
+            self._mc_state.dirty = False
+        except Exception as exc:  # noqa: BLE001 - 写库失败保留内存态，下次修改再试
+            self._logger.warning(f"写存档工作文档失败（{save_id}）", exc=exc)
 
     def _inject_wakeup_message(self, content: str) -> None:
         self._wake_queue.push_notice(content)

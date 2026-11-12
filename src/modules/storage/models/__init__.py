@@ -30,6 +30,7 @@ from src.modules.storage.models.events import (
     IndexedGameEvent,
 )
 from src.modules.storage.models.game_creatures import GameCreatureRecord
+from src.modules.storage.models.game_work_docs import GameWorkDocRecord
 from src.modules.storage.models.memory import (
     Viewer,
     ViewerName,
@@ -78,6 +79,8 @@ __all__ = [
     "GameEventTypeCount",
     # game_creatures 域
     "GameCreatureRecord",
+    # game_work_docs 域
+    "GameWorkDocRecord",
     # memory 域
     "Viewer",
     "ViewerName",

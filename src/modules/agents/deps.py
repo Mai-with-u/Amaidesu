@@ -62,6 +62,7 @@ class AgentDeps:
     social_fact_repo: Optional[Any] = None
     event_repo: Optional[Any] = None
     creature_repo: Optional[Any] = None
+    work_docs_repo: Optional[Any] = None
     privacy_service: Optional[Any] = None
     storage_ledger: Optional[Any] = None
     context_assembler_config: Optional[Any] = None

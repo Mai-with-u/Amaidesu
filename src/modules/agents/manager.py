@@ -58,6 +58,7 @@ class AgentManager:
         game_player_repo: 游戏里的人仓储（主播的玩家卡读；动态启用时同样回退到它）
         social_fact_repo: 游戏社交事实仓储（主播的社交事实工具、参考段与回想；动态启用时同样回退到它）
         creature_repo: 构造时注入的默认生物名册仓储（Minecraft Agent 跨场次记得同伴）
+        work_docs_repo: 构造时注入的默认游戏工作文档仓储（Minecraft Agent 跨重启按存档保留笔记与待办）
         privacy_service: 删除/遮蔽服务（回忆工具与线索推送按它遮名、核对遗忘命令）
     """
 
@@ -81,6 +82,7 @@ class AgentManager:
         social_fact_repo: Optional[Any] = None,
         event_repo: Optional[Any] = None,
         creature_repo: Optional[Any] = None,
+        work_docs_repo: Optional[Any] = None,
         privacy_service: Optional[Any] = None,
         storage_ledger: Optional[Any] = None,
         supervisor_config: Optional[AgentSupervisorConfig] = None,
@@ -106,6 +108,7 @@ class AgentManager:
         self._social_fact_repo = social_fact_repo
         self._event_repo = event_repo
         self._creature_repo = creature_repo
+        self._work_docs_repo = work_docs_repo
         self._privacy_service = privacy_service
         self._storage_ledger = storage_ledger
         self._lock = asyncio.Lock()
@@ -253,6 +256,7 @@ class AgentManager:
             social_fact_repo=d.social_fact_repo if d.social_fact_repo is not None else self._social_fact_repo,
             event_repo=d.event_repo if d.event_repo is not None else self._event_repo,
             creature_repo=d.creature_repo if d.creature_repo is not None else self._creature_repo,
+            work_docs_repo=d.work_docs_repo if d.work_docs_repo is not None else self._work_docs_repo,
             privacy_service=d.privacy_service if d.privacy_service is not None else self._privacy_service,
             storage_ledger=d.storage_ledger if d.storage_ledger is not None else self._storage_ledger,
         )

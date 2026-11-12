@@ -19,6 +19,10 @@ from typing import Any, Dict, List, NamedTuple
 
 # 近期上报保留条数（主播状态查询够用）
 MAX_REPORTS = 10
+# 工作笔记全文长度上限（字符）：跨重启按存档保留，写满时要求模型删掉已完成或失效的旧条目
+MAX_NOTEBOOK_CHARS = 2000
+# 新任务开局注入"上次在这个存档里的笔记"时的截断上限（字符）
+LAST_SESSION_NOTEBOOK_MAX_CHARS = 1200
 
 
 class MinecraftInstruction(NamedTuple):
@@ -70,18 +74,24 @@ class _WorldDocs:
     todos: List[TodoItem]
     notebook: str
     reports: List[Dict[str, str]]
+    notebook_from_last_session: bool = False
+    loaded_from_repo: bool = False
+    dirty: bool = False
 
 
 @dataclass(slots=True)
 class MinecraftAgentState:
-    """MinecraftAgent 内存状态
+    """MinecraftAgent 内存状态（配合仓储按存档跨重启持久化笔记与待办）
 
     Attributes:
         todos: 待办列表（minecraft_todo 全量文档）
-        notebook: 工作笔记全文（minecraft_notebook 全量文档）
+        notebook: 工作笔记全文（minecraft_notebook 全量文档，上限 MAX_NOTEBOOK_CHARS）
         reports: 近期上报（emit game.report 时同步；最多 MAX_REPORTS 条）
         world_id: 这三样属于哪个存档；空串 = 还没认出过存档（旧版 Mod 一直是空串）
         shelved: 收起来的别的存档的工作文档（存档编号 → 那一份）
+        notebook_from_last_session: 当前笔记是否读自上一场（本场尚未改写）
+        loaded_from_repo: 当前存档是否已从仓储加载过一次
+        dirty: 当前存档自上次写库后是否有未落库的内存改动
     """
 
     todos: List[TodoItem] = field(default_factory=list)
@@ -89,6 +99,9 @@ class MinecraftAgentState:
     reports: List[Dict[str, str]] = field(default_factory=list)
     world_id: str = ""
     shelved: Dict[str, _WorldDocs] = field(default_factory=dict)
+    notebook_from_last_session: bool = False
+    loaded_from_repo: bool = False
+    dirty: bool = False
 
     # ---- 存档 ----
 
@@ -104,10 +117,42 @@ class MinecraftAgentState:
         previous, self.world_id = self.world_id, world_id
         if not previous:
             return False
-        self.shelved[previous] = _WorldDocs(todos=self.todos, notebook=self.notebook, reports=self.reports)
+        self.shelved[previous] = _WorldDocs(
+            todos=self.todos,
+            notebook=self.notebook,
+            reports=self.reports,
+            notebook_from_last_session=self.notebook_from_last_session,
+            loaded_from_repo=self.loaded_from_repo,
+            dirty=self.dirty,
+        )
         docs = self.shelved.pop(world_id, None) or _WorldDocs(todos=[], notebook="", reports=[])
-        self.todos, self.notebook, self.reports = docs.todos, docs.notebook, docs.reports
+        self.todos = docs.todos
+        self.notebook = docs.notebook
+        self.reports = docs.reports
+        self.notebook_from_last_session = docs.notebook_from_last_session
+        self.loaded_from_repo = docs.loaded_from_repo
+        self.dirty = docs.dirty
         return True
+
+    def apply_persisted_docs(
+        self,
+        *,
+        notebook: str,
+        todos: List[Dict[str, Any]],
+        from_last_session: bool,
+        keep_active_todos: bool = False,
+    ) -> None:
+        """首次认出某个存档时把库里保存的笔记与待办装进当前存档（不覆盖进程内已写过的新内容）。"""
+        if self.loaded_from_repo:
+            return
+        if not self.notebook and notebook:
+            self.notebook = notebook[:MAX_NOTEBOOK_CHARS]
+            self.notebook_from_last_session = bool(from_last_session)
+        if not keep_active_todos and not self.todos and todos:
+            self.todos = [
+                TodoItem(content=str(t.get("content", "")), status=str(t.get("status", "pending"))) for t in todos
+            ]
+        self.loaded_from_repo = True
 
     # ---- todo 文档操作 ----
 
@@ -116,6 +161,13 @@ class MinecraftAgentState:
         self.todos = [
             TodoItem(content=str(t.get("content", "")), status=str(t.get("status", "pending"))) for t in todos
         ]
+        self.dirty = True
+
+    def clear_todos_for_new_task(self) -> None:
+        """新任务开局清空上一任务的阶段待办（原先已有待办时标脏以便同步落库）。"""
+        if self.todos:
+            self.todos = []
+            self.dirty = True
 
     def todo_doc(self) -> Dict[str, Any]:
         """导出待办文档（minecraft_todo read）。"""
@@ -124,8 +176,10 @@ class MinecraftAgentState:
     # ---- notebook 文档操作 ----
 
     def set_notebook(self, content: str) -> None:
-        """全量覆盖工作笔记（minecraft_notebook write）。"""
-        self.notebook = content
+        """全量覆盖工作笔记（minecraft_notebook write；本场新写后取消上一场标记）。"""
+        self.notebook = content[:MAX_NOTEBOOK_CHARS]
+        self.notebook_from_last_session = False
+        self.dirty = True
 
     def notebook_doc(self) -> Dict[str, Any]:
         """导出工作笔记文档（minecraft_notebook read）。"""
@@ -150,4 +204,10 @@ class MinecraftAgentState:
         }
 
 
-__all__ = ["MinecraftAgentState", "TodoItem", "MAX_REPORTS"]
+__all__ = [
+    "LAST_SESSION_NOTEBOOK_MAX_CHARS",
+    "MAX_NOTEBOOK_CHARS",
+    "MAX_REPORTS",
+    "MinecraftAgentState",
+    "TodoItem",
+]

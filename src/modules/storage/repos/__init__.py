@@ -14,6 +14,7 @@ from src.modules.storage.repos.commitments import CommitmentRepo
 from src.modules.storage.repos.events import EventRepo
 from src.modules.storage.repos.game_creatures import GameCreatureRepo
 from src.modules.storage.repos.game_players import GamePlayerRepo
+from src.modules.storage.repos.game_work_docs import GameWorkDocsRepo
 from src.modules.storage.repos.llm import LLMRepo
 from src.modules.storage.repos.memory_cue_log import MemoryCueLogRepo
 from src.modules.storage.repos.memory_index import MemoryIndexRepo
@@ -38,6 +39,7 @@ __all__ = [
     "EventRepo",
     "GameCreatureRepo",
     "GamePlayerRepo",
+    "GameWorkDocsRepo",
     "LLMRepo",
     "MemoryCueLogRepo",
     "MemoryIndexRepo",

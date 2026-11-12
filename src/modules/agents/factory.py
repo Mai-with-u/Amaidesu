@@ -153,6 +153,7 @@ def instantiate_agent(
             task_tracker=deps.task_tracker,
             skill_library=get_skill_library(),
             creature_repo=deps.creature_repo,
+            work_docs_repo=deps.work_docs_repo,
         )
 
     if name == "text_adv":

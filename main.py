@@ -623,8 +623,9 @@ async def create_app_components(
             privacy_service=privacy_service,
             # 存储账本：下播收尾由主播 Agent 编排（等道别与整理落库后再做清理）
             storage_ledger=storage_ledger,
-            # 生物名册（Minecraft Agent 跨场次记得主播起的名字与谁死了）
+            # 生物名册与工作文档（Minecraft Agent 跨场次记得主播起的名字、谁死了，以及各存档的笔记与待办）
             creature_repo=database.game_creatures,
+            work_docs_repo=database.game_work_docs,
             supervisor_config=supervisor_config,
         )
 
@@ -775,6 +776,7 @@ async def create_app_components(
                 # 存储账本：主播 Agent 据此编排下播收尾
                 storage_ledger=storage_ledger,
                 creature_repo=database.game_creatures,
+                work_docs_repo=database.game_work_docs,
                 # 组合根无独立 context 组装配置来源：显式 None（Planner 走内置默认）
                 context_assembler_config=None,
                 task_tracker=task_tracker,

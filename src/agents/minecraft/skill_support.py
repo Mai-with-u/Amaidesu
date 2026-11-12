@@ -21,7 +21,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
 from src.agents.minecraft.context import opening_message
 from src.agents.minecraft.maicraft import GOAL, LOOKUP, OBSERVE
-from src.agents.minecraft.state import MinecraftAgentState
+from src.agents.minecraft.state import LAST_SESSION_NOTEBOOK_MAX_CHARS, MinecraftAgentState
 from src.modules.logging import ModuleLogger
 from src.modules.skills import RemoteSkill, SkillEnvironment, SkillLibrary, render_catalog
 
@@ -256,16 +256,11 @@ class SkillSupport:
     async def append_opening_bundle(self, messages: List[Dict[str, Any]]) -> None:
         """新任务开局由宿主代读：自己、周围、能力清单、手上的目标，有笔记时附上笔记。
 
-        以一条紧跟任务指令的宿主消息放进历史，每项写明调用名、参数和回复；读取失败的那一项照实留下错误。
-        能力清单每次连接只读一次。
+        先执行现场四项代读（其中 ``observe(self)`` 会认出当前存档并把库里持久化的笔记加载到位），
+        再按笔记来源分路：若是上一场留在这个存档里的笔记，限长截断并标明"记于上一场"供核对；
+        若是本场刚写过的笔记，照旧经 ``minecraft_notebook(read)`` 附上。
         """
         reads: List[tuple[str, Dict[str, Any]]] = list(_OPENING_READS) if self._maicraft_ready() else []
-        if self._state.notebook:
-            reads.append(("minecraft_notebook", {"action": "read"}))
-        if not reads:
-            return
-        # 读自己 -> 读周围 -> 读能力清单（本次连接读过就复用）-> 读手上的目标 -> 有笔记再读笔记；
-        # 每项读完先吸收进目标跟踪状态，再一起拼成一条消息放在任务指令后面
         opened: List[tuple[str, Dict[str, Any], Dict[str, Any]]] = []
         for name, arguments in reads:
             if name == LOOKUP and self._ability_listing is not None:
@@ -276,4 +271,29 @@ class SkillSupport:
                     self._ability_listing = observation
             self._absorb_reply(name, arguments, observation)
             opened.append((name, arguments, observation))
-        messages.append(opening_message(opened))
+
+        last_session_part: Optional[str] = None
+        if self._state.notebook:
+            if self._state.notebook_from_last_session:
+                raw_note = self._state.notebook
+                if len(raw_note) > LAST_SESSION_NOTEBOOK_MAX_CHARS:
+                    clipped = (
+                        raw_note[:LAST_SESSION_NOTEBOOK_MAX_CHARS] + "…（已截断，完整内容可用 minecraft_notebook 读取）"
+                    )
+                else:
+                    clipped = raw_note
+                last_session_part = (
+                    "\n\n### 上次在这个存档里的笔记（记于上一场，仅供核对；与眼前现场不符的以现场观察为准）\n" + clipped
+                )
+            else:
+                nb_args = {"action": "read"}
+                observation = await self._execute_tool("minecraft_notebook", nb_args)
+                self._absorb_reply("minecraft_notebook", nb_args, observation)
+                opened.append(("minecraft_notebook", nb_args, observation))
+
+        if not opened and last_session_part is None:
+            return
+        msg = opening_message(opened)
+        if last_session_part is not None:
+            msg["content"].append({"type": "text", "text": last_session_part})
+        messages.append(msg)

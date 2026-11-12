@@ -61,7 +61,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 39
+SCHEMA_VERSION: int = 40
 
 
 # =============================================================================
@@ -163,6 +163,9 @@ def build_schema_sql() -> str:
         # game_creatures —— 游戏生物名册
         + _GAME_CREATURES_SQL
         + "\n"
+        # game_work_docs —— 游戏工作文档（笔记与待办，按游戏与存档落库）
+        + _GAME_WORK_DOCS_SQL
+        + "\n"
         # memory_vectors_* / memory_fts_* —— 记忆检索的派生索引（排在来源表之后：触发器要引用它们）
         + _MEMORY_INDEX_SQL
         + "\n"
@@ -233,6 +236,7 @@ def list_expected_tables() -> List[str]:
         "rundown_transitions",
         "game_events",
         "game_creatures",
+        "game_work_docs",
         "memory_vectors_archive",
         "memory_vectors_commitment",
         "memory_vectors_speech",
@@ -711,6 +715,21 @@ CREATE TABLE IF NOT EXISTS game_creatures (
     next_session_id  INTEGER,
     updated_at_ms    INTEGER NOT NULL,
     PRIMARY KEY (game, world_key, creature_key)
+);
+""".strip()
+
+
+# 游戏 Agent 的工作文档：按"游戏 + 存档编号"一存档一行，跨重启保留工作笔记全文与待办列表。
+_GAME_WORK_DOCS_SQL = """
+CREATE TABLE IF NOT EXISTS game_work_docs (
+    game               TEXT NOT NULL,
+    save_id            TEXT NOT NULL,
+    save_name          TEXT NOT NULL DEFAULT '',
+    notebook           TEXT NOT NULL DEFAULT '',
+    todos              TEXT NOT NULL DEFAULT '[]',
+    updated_session_id INTEGER REFERENCES live_sessions(id) ON DELETE SET NULL,
+    updated_at_ms      INTEGER NOT NULL,
+    PRIMARY KEY (game, save_id)
 );
 """.strip()
 

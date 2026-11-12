@@ -44,7 +44,7 @@ from src.modules.types.game_save import GameSave
 from src.modules.types.game_situation import GameSituation
 
 from .maicraft import GOAL, MaicraftReply, goal_id_of_ledger, goal_run_of, ledger_status_of
-from .state import MinecraftAgentState
+from .state import MAX_NOTEBOOK_CHARS, MinecraftAgentState
 from .work_log_snapshot import unavailable_snapshot
 
 logger = get_logger("MinecraftTools")
@@ -172,16 +172,13 @@ def build_todo_spec() -> ToolSpec:
 
 
 def build_notebook_spec() -> ToolSpec:
-    """``minecraft_notebook`` 工具规格——工作笔记（跨批次保留的内存态，LLM 自主沉淀）
-
-    笔记重启就清空：长期要记的地点引到 MaiCraft 的 remember（按存档存盘），笔记只放这一场的临时条目。
-    """
+    """``minecraft_notebook`` 工具规格——工作笔记（按存档跨重启持久化，上限 MAX_NOTEBOOK_CHARS）"""
     return ToolSpec(
         name="notebook",
         description=(
-            "工作笔记文档（全量读写，无 id）。你的跨批次工作记忆（只在内存里，进程一重启就清空）："
-            "记录这一场用得上的关键发现（配方结论/已完成事项/教训），"
-            "对话历史会被压缩、笔记不会——重要发现写这里，每轮可根据需要读回参考。"
+            f"工作笔记文档（全量读写，无 id，上限 {MAX_NOTEBOOK_CHARS} 字符，按存档跨重启保留）。"
+            "记录这个存档里后续还用得上的关键结论（工程进度/配方结论/已知限制），"
+            "对话历史会被压缩、笔记不会——重要发现写这里，写满时删掉已完成或失效的旧条目。"
             "只写跨批次之后还站得住的信息（计划、承诺、起过的名字、约定、结论这类）；"
             "背包里现在有多少、身上穿的装备、身体此刻在哪、血量多少这类当下会变的数字不写进笔记，"
             "要这些当场 observe 一次就有。"
@@ -450,6 +447,8 @@ class MinecraftToolProvider(GameToolProvider):
     snapshot_reader: Optional[Callable[[], Awaitable[str]]] = None
     # 取回被折叠或收起的原文：由 Agent 按块号或关键词查自己的块库（未开后台折叠时不提供折叠与取回两个工具）
     context_recall: Optional[Callable[[str, str], Dict[str, Any]]] = None
+    # 待办或工作笔记写入后的持久化回调（按游戏与当前存档落库）
+    on_work_docs_changed: Optional[Callable[[], Awaitable[None]]] = None
 
     @property
     def name(self) -> str:
@@ -555,6 +554,8 @@ class MinecraftToolProvider(GameToolProvider):
             if not isinstance(todos, list):
                 return {"success": False, "error": "write 需要 todos 列表"}
             self.state.set_todos(todos)
+            if self.on_work_docs_changed is not None:
+                await self.on_work_docs_changed()
             return {"success": True, "todos": self.state.todo_doc()["todos"]}
         return {"success": False, "error": f"未知 action: {action!r}"}
 
@@ -564,7 +565,17 @@ class MinecraftToolProvider(GameToolProvider):
             return {"tool": "notebook", **self.state.notebook_doc()}
         if action == "write":
             content = str(args.get("content", ""))
+            if len(content) > MAX_NOTEBOOK_CHARS:
+                return {
+                    "success": False,
+                    "error": (
+                        f"工作笔记超过 {MAX_NOTEBOOK_CHARS} 字符上限（本次提交 {len(content)} 字符）；"
+                        "请删掉已完成或失效的旧条目、只保留精简结论后再写"
+                    ),
+                }
             self.state.set_notebook(content)
+            if self.on_work_docs_changed is not None:
+                await self.on_work_docs_changed()
             return {"success": True, "content": self.state.notebook}
         return {"success": False, "error": f"未知 action: {action!r}"}
 
