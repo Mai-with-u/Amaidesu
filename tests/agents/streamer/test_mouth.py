@@ -243,6 +243,28 @@ async def test_output_without_emotion_falls_back_to_neutral_and_long_line_is_cut
     assert spoken == "掉水里了。" and speech.calls[0]["emotion"] == "neutral"
 
 
+async def test_made_up_multiword_emotion_prefix_is_stripped(prompts: Any) -> None:
+    """场 65 实例"so happy：回来啦"——自造的情绪名（含空格、不在枚举）同样按"情绪名：台词"形态剥除，前缀不漏进台词；情绪收敛为 neutral。"""
+    llm, speech = (
+        _LLM("so happy：回来啦，还是麦窝这边舒坦～"),
+        _Speech(),
+    )
+
+    spoken = await _mouth(llm, speech, prompts).react_once([_trigger()])
+
+    assert spoken == "回来啦，还是麦窝这边舒坦～" and speech.calls[0]["emotion"] == "neutral"
+
+
+async def test_chinese_prefixed_colon_line_is_kept_as_speech(prompts: Any) -> None:
+    """冒号前含中文的行不是"情绪名：台词"形态，整行照常念出来。"""
+    line = "大家：这话说的，我都不好意思了。"
+    llm, speech = _LLM(line), _Speech()
+
+    spoken = await _mouth(llm, speech, prompts).react_once([_trigger()])
+
+    assert spoken.startswith("大家：")
+
+
 async def test_scene_is_reread_only_when_stale_or_the_world_changed(prompts: Any) -> None:
     """一句话现场按间隔重读；死亡、重生、换维度时立即重读。"""
     llm, speech = _LLM("scared：哇！", "sad：唉。", "crying：没了……"), _Speech()
