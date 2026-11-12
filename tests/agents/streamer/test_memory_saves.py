@@ -6,7 +6,14 @@ from typing import Dict, Optional
 
 import pytest
 
-from src.agents.streamer.memory.saves import SavePlace, SaveTimeline, place_note, place_of, session_note
+from src.agents.streamer.memory.saves import (
+    SavePlace,
+    SaveTimeline,
+    canonical_save_names,
+    place_note,
+    place_of,
+    session_note,
+)
 from src.modules.storage.models.events import GameSaveSpan
 from src.modules.types.game_save import GameSave
 
@@ -84,3 +91,29 @@ def test_notes_say_which_save_and_whether_it_is_here() -> None:
     assert session_note([*only_old, _span("b", "新档", 1_600, 1_700)], _IN_B) == ""
     assert session_note([], _IN_B) == ""
     assert session_note(only_old, {}) == ""
+
+
+def test_canonical_save_names_merges_renamed_world_by_save_id() -> None:
+    """同一个存档号先后叫过不同名字：归并成最后一次非空名字，空名字不覆盖已有名字。"""
+    merged = canonical_save_names(
+        [
+            ("minecraft", "ff165d15", "麦窝"),
+            ("minecraft", "ff165d15", "麦麦小窝 MaiCraft"),
+            ("minecraft", "ff165d15", ""),
+            ("minecraft", "other123", "第二世界"),
+            (None, "ignored", "无游戏"),
+        ]
+    )
+    assert merged == {
+        ("minecraft", "ff165d15"): "麦麦小窝 MaiCraft",
+        ("minecraft", "other123"): "第二世界",
+    }
+
+
+def test_place_note_prefers_live_save_name_and_handles_not_in_world() -> None:
+    """眼下就在该存档时用眼下现名（不沿用旧记录上的旧名）；掉线未进存档时不说死成别的存档。"""
+    assert (
+        place_note("minecraft", "b", "旧名", {"minecraft": GameSave(id="b", name="新档")})
+        == "在 minecraft「新档」里，就是眼下这个存档"
+    )
+    assert place_note("minecraft", "a", "老档", _NOT_IN_WORLD) == "在 minecraft「老档」里（minecraft 眼下还没进存档）"

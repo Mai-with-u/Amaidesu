@@ -23,12 +23,12 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from src.modules.storage.models.events import GameSaveSpan
 from src.modules.types.game_save import GameSave
 
-__all__ = ["SavePlace", "SaveTimeline", "place_note", "place_of", "session_note"]
+__all__ = ["SavePlace", "SaveTimeline", "canonical_save_names", "place_note", "place_of", "session_note"]
 
 
 class SavePlace(Enum):
@@ -59,13 +59,41 @@ def place_of(game: Optional[str], save_id: str, current: Mapping[str, GameSave])
     return SavePlace.OTHER
 
 
+def canonical_save_names(items: Iterable[Tuple[Optional[str], str, str]]) -> Dict[Tuple[str, str], str]:
+    """同一存档号先后出现过多个名字时，按时间顺序归并成最后一次非空的名字。
+
+    同一个世界在服务器重命名或版本演进后可能留下不同的 ``save_name``，但 ``save_id`` 不变；
+    按 ``(game, save_id)`` 扫描从旧到新的 ``(game, save_id, save_name)``，让新名字覆盖旧名字、
+    空名字不冲掉已有名字，后续折叠行与整理基底统一显示归并后的名字，避免把同一个世界当成两个。
+    """
+    resolved: Dict[Tuple[str, str], str] = {}
+    for game, save_id, save_name in items:
+        if not game or not save_id:
+            continue
+        name = (save_name or "").strip()
+        if name:
+            resolved[(game, save_id)] = name
+        else:
+            resolved.setdefault((game, save_id), "")
+    return resolved
+
+
 def place_note(game: Optional[str], save_id: str, save_name: str, current: Mapping[str, GameSave]) -> str:
-    """给她看的一句"这是哪个存档里的事"；不分存档时为空串（不加注）。"""
+    """给她看的一句"这是哪个存档里的事"；不分存档时为空串（不加注）。
+
+    确认就是眼下存档且眼下存档有名字时，直接用眼下存档的现名，避免旧记录留着改名前的旧称呼；
+    眼下还没进存档（掉线或还在主菜单）时如实写"眼下还没进存档"，不写死成"不是眼下这个存档"，
+    免得角色短暂掉线时以为换了世界。
+    """
     place = place_of(game, save_id, current)
-    label = GameSave(id=save_id, name=save_name).label
+    now = current.get(game) if game else None
     if place is SavePlace.SAME:
+        label = now.label if now is not None and now.name else GameSave(id=save_id, name=save_name).label
         return f"在 {game}「{label}」里，就是眼下这个存档"
+    label = GameSave(id=save_id, name=save_name).label
     if place is SavePlace.OTHER:
+        if now is not None and not now.known:
+            return f"在 {game}「{label}」里（{game} 眼下还没进存档）"
         return f"在 {game}「{label}」里，不是眼下这个存档"
     if place is SavePlace.UNSURE:
         return f"在 {game} 里，不确定是哪个存档"
