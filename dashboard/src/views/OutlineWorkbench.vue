@@ -8,6 +8,7 @@
       </div>
       <div class="header-actions">
         <el-button :icon="Refresh" :loading="loadingState" @click="refresh"> 刷新 </el-button>
+        <el-button :icon="ChatLineSquare" @click="talkCardsOpen = true"> 提问箱 </el-button>
         <el-button type="primary" :icon="Files" :loading="libraryLoading" @click="openLibrary">
           流程单库
         </el-button>
@@ -302,6 +303,9 @@
       />
     </template>
 
+    <!-- 提问箱 / 话题卡抽屉：主播杂谈冷场时可抽的自备素材 -->
+    <TalkCardDrawer v-model="talkCardsOpen" />
+
     <!-- 环节详情抽屉 -->
     <el-drawer
       v-model="drawerOpen"
@@ -595,6 +599,7 @@
 import { computed, ref } from 'vue';
 import {
   ArrowRightBold,
+  ChatLineSquare,
   EditPen,
   Files,
   MagicStick,
@@ -610,8 +615,12 @@ import { useRundownState } from '@/composables/rundown/useRundownState';
 import { useRundownDisplay } from '@/composables/rundown/useRundownDisplay';
 import { useRundownLibrary } from '@/composables/rundown/useRundownLibrary';
 import { confirmAction } from '@/utils/confirmAction';
+import TalkCardDrawer from '@/components/rundown/TalkCardDrawer.vue';
 import { getApiErrorMessage } from '@/utils/apiError';
 import type { RundownSegmentView } from '@/types';
+
+// 提问箱抽屉开关（卡池数据由抽屉自己按打开时拉取）
+const talkCardsOpen = ref(false);
 
 // 装配：运行态 → 展示派生（消费 state/currentSegment）→ 库与编辑器（消费 state/fetchState）
 

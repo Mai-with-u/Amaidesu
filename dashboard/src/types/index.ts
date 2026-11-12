@@ -856,6 +856,10 @@ export interface RundownSegmentView {
   expected_ms: number;
   min_duration_ms: number | null;
   notes: string | null;
+  /** 说话模式：play 边玩边说 / talk 杂谈（空 = 按游戏在线状态自动判定） */
+  mode?: 'play' | 'talk' | null;
+  /** 本环节要聊的提纲要点（主播按点推进，没聊完时不会自己提前切环节） */
+  beats?: string[];
 }
 
 /** 流程单变更历史（最近 50 条，旧→新由后端保证）。 */
@@ -961,6 +965,45 @@ export interface RundownMutateResponse {
   success: boolean;
   message: string;
   rundown_id: string | null;
+}
+
+// 编排页提问箱 / 话题卡（`/api/v1/talk-cards*`）
+
+/** 话题卡种类：marshmallow 提问箱 / episode 往场趣事 / opinion 二选一态度。 */
+export type TalkCardKind = 'marshmallow' | 'episode' | 'opinion';
+
+/** 新建 / 导入话题卡的请求体。 */
+export interface NewTalkCard {
+  kind: TalkCardKind;
+  title: string;
+  body?: string;
+  asker?: string;
+  tags?: string[];
+  enabled?: boolean;
+}
+
+/** 落库后的话题卡（`used_in_session_id` 为空 = 没用过）。 */
+export interface TalkCard extends Required<NewTalkCard> {
+  id: number;
+  used_in_session_id: number | null;
+  used_at_ms: number | null;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+/** `GET /api/v1/talk-cards` 响应。 */
+export interface TalkCardListResponse {
+  success: boolean;
+  message: string;
+  cards: TalkCard[];
+}
+
+/** 话题卡写操作统一响应。 */
+export interface TalkCardMutateResponse {
+  success: boolean;
+  message: string;
+  cards: TalkCard[];
+  affected: number;
 }
 
 // 导出 settings / llm 子模块

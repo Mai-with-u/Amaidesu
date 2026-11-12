@@ -98,6 +98,10 @@ import type {
   RundownListResponse,
   RundownMutateResponse,
   RundownTemplateResponse,
+  NewTalkCard,
+  TalkCardKind,
+  TalkCardListResponse,
+  TalkCardMutateResponse,
   ReviewSpeechDeleteResponse,
   ReviewCueListResponse,
   ReviewSpeechListResponse,
@@ -563,6 +567,21 @@ export const rundownApi = {
     api.post<RundownMutateResponse>(`/rundowns/${rundownId}/duplicate`),
   activate: (rundownId: string) =>
     api.post<RundownMutateResponse>(`/rundowns/${rundownId}/activate`),
+};
+
+// 编排页提问箱 / 话题卡：主播杂谈冷场时抽来开话头的自备素材。
+// 导演直播中随时塞卡，她下一个冷场窗就能看到；reset-used 不带 ids 即复原全部已用标记。
+export const talkCardsApi = {
+  list: (kind?: TalkCardKind) =>
+    api.get<TalkCardListResponse>('/talk-cards', { params: kind ? { kind } : undefined }),
+  create: (card: NewTalkCard) => api.post<TalkCardMutateResponse>('/talk-cards', card),
+  importCards: (cards: NewTalkCard[]) =>
+    api.post<TalkCardMutateResponse>('/talk-cards/import', { cards }),
+  update: (id: number, patch: Partial<NewTalkCard>) =>
+    api.patch<TalkCardMutateResponse>(`/talk-cards/${id}`, patch),
+  remove: (id: number) => api.delete<TalkCardMutateResponse>(`/talk-cards/${id}`),
+  resetUsed: (ids?: number[]) =>
+    api.post<TalkCardMutateResponse>('/talk-cards/reset-used', ids ? { ids } : {}),
 };
 
 // 记忆账本（承诺 / 场次档案 / 下播整理状态）
