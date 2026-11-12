@@ -52,6 +52,7 @@ from src.modules.storage.repos import (
     SessionRepo,
     SimRepo,
     SocialFactRepo,
+    TalkCardRepo,
     TopicRepo,
     ViewerCandidateRepo,
     ViewerIdentityRepo,
@@ -139,6 +140,8 @@ class SQLiteDatabase:
         self.rundown_instances = RundownInstanceRepo(self._manager)
         self.rundown_transitions = RundownTransitionRepo(self._manager)
         self.topics = TopicRepo(self._manager)
+        # 话题卡（提问箱 / 往场趣事 / 二选一态度）：编排台维护，主播杂谈冷场时抽来开话头
+        self.talk_cards = TalkCardRepo(self._manager)
         # 记忆账本：承诺与场次档案（下播整理写入；WebUI 查看、纠错与手建）
         self.commitments = CommitmentRepo(self._manager)
         self.archive = ArchiveRepo(self._manager)

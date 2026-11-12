@@ -61,7 +61,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 41
+SCHEMA_VERSION: int = 42
 
 
 # =============================================================================
@@ -99,6 +99,7 @@ SCHEMA_VERSION: int = 41
 # - rundown_instances       流程单实例头（每场一行，崩溃恢复 + 时点快照）
 # - rundown_instance_segments 流程单实例环节快照行
 # - rundown_transitions     流程单变更事实行（append-only）
+# - talk_cards              话题卡（提问箱 / 往场趣事 / 二选一态度，杂谈冷场时的自备素材）
 # - schema_migrations       版本管理
 # =============================================================================
 
@@ -156,6 +157,9 @@ def build_schema_sql() -> str:
         + "\n"
         # rundown_transitions —— 流程单变更事实行
         + _RUNDOWN_TRANSITIONS_SQL
+        + "\n"
+        # talk_cards —— 话题卡（杂谈自备素材）
+        + _TALK_CARDS_SQL
         + "\n"
         # game_events —— 游戏里程碑
         + _GAME_EVENTS_SQL
@@ -234,6 +238,7 @@ def list_expected_tables() -> List[str]:
         "rundown_instances",
         "rundown_instance_segments",
         "rundown_transitions",
+        "talk_cards",
         "game_events",
         "game_creatures",
         "game_work_docs",
@@ -674,6 +679,26 @@ CREATE TABLE IF NOT EXISTS rundown_transitions (
 CREATE INDEX IF NOT EXISTS idx_rundown_transitions_session ON rundown_transitions(live_session_id, at_ms);
 """.strip()
 
+
+# --- talk_cards —— 话题卡（杂谈自备素材）---
+# 卡片跨场次长期存在；used_in_session_id 只记"最近一次在哪场用过"，不设外键：
+# 场次被删时卡片照留（素材归运营所有，不随场次消失）。tags_json 为字符串列表。
+_TALK_CARDS_SQL = """
+CREATE TABLE IF NOT EXISTS talk_cards (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind               TEXT NOT NULL CHECK (kind IN ('marshmallow', 'episode', 'opinion')),
+    title              TEXT NOT NULL,
+    body               TEXT NOT NULL DEFAULT '',
+    asker              TEXT NOT NULL DEFAULT '',
+    tags_json          TEXT NOT NULL DEFAULT '[]',
+    enabled            INTEGER NOT NULL DEFAULT 1,
+    used_in_session_id INTEGER,
+    used_at_ms         INTEGER,
+    created_at_ms      INTEGER NOT NULL,
+    updated_at_ms      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_talk_cards_kind ON talk_cards(kind, enabled);
+""".strip()
 
 # 游戏里程碑：save_id / save_name 是事件发生时角色所在的存档，由发布事件的游戏 Agent 或
 # 采集器自己填（空串 = 这个游戏不分存档，或当时还没认出存档）。下播整理按它判定档案行与
