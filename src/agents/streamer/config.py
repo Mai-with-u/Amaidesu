@@ -52,7 +52,11 @@
         topic_required,
         rundown_speech_interval_ms,
     )
-    rundown_ready_interval_ms
+    (
+        rundown_ready_interval_ms,
+        rundown_silent_cooldown_ms,
+    )
+    rundown_silent_cooldown_talk_ms, rundown_ready_yield_max_ms
 
     [agents.streamer.word_filter]
     enabled, words, replacement, case_sensitive, drop_on_match
@@ -299,6 +303,31 @@ class StreamerProactiveConfig(BaseConfig):
         default=30_000,
         ge=5_000,
         description="环节供能期间给主播开口机会的节奏；只供机会不保证发言，质量由发言自检把关",
+    )
+    rundown_silent_cooldown_ms: int = Field(
+        title="主动沉默后冷却",
+        default=25_000,
+        ge=0,
+        description=(
+            "一轮主动决策走完却选择不开口后，多久内不再按环节节奏催她（毫秒）；"
+            "游戏里没新鲜事时让她真安静干活，不在沉默期反复空跑决策"
+        ),
+    )
+    rundown_silent_cooldown_talk_ms: int = Field(
+        title="杂谈环节沉默后冷却",
+        default=12_000,
+        ge=0,
+        description="杂谈档（流程单环节说话模式为 talk）的主动沉默冷却（毫秒）；杂谈要靠她自己撑场，冷却短一些",
+    )
+    rundown_ready_yield_max_ms: int = Field(
+        title="给弹幕让路最长时长",
+        default=15_000,
+        ge=0,
+        description=(
+            "观众弹幕在攒批等待放行时，环节节奏给的开口机会先让路，最多让这么久（毫秒）；"
+            "防止弹幕缓冲异常滞留时主动发言被永久压住"
+        ),
+        json_schema_extra={"x-ui-advanced": True},
     )
 
 

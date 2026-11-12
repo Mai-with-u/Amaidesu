@@ -116,6 +116,8 @@ class ProactiveSignals:
         rundown_overdue: bool,
         rundown_ready: bool,
         reminder_pending: bool,
+        talk_mode: bool = False,
+        viewer_waiting_since_ms: Optional[int] = None,
     ) -> Optional[TriggerKind]:
         """执行一个 tick 的完整主动发言判定序列，返回触发原因（None = 不触发）。
 
@@ -133,6 +135,9 @@ class ProactiveSignals:
         调用方拿到返回的触发原因后只负责执行：触发则发起一轮主动决策，
         不触发则本轮结束。"reminder 早退不消费 pending"属于调用方是否
         进入本判定的前置闸（递话必达优先于开播闸），不在本方法内。
+
+        ``talk_mode`` 与 ``viewer_waiting_since_ms`` 原样转给触发器，只影响
+        ``rundown_ready`` 的沉默冷却档位与给攒批弹幕让路。
         """
         tick = self.read_for_tick(live=live)
         kind = trigger.should_trigger(
@@ -144,6 +149,8 @@ class ProactiveSignals:
             rundown_ready=False if not live else rundown_ready,
             game_pending=tick.game_pending,
             reminder_pending=reminder_pending,
+            talk_mode=talk_mode,
+            viewer_waiting_since_ms=viewer_waiting_since_ms if live else None,
         )
         self.confirm(kind, tick)
         return kind

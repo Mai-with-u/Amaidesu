@@ -48,6 +48,14 @@
   主播开口机会——绕过公共三道前置（环节任务描述即话题）。这只供给机会：
   说不说、说什么由 Agent 按本窗新输入自定，发言质量由 ``is_novel`` 自检
   与台词重合度闸把关，闸打回即本轮沉默。
+- **主动沉默冷却**：``rundown_ready`` 只给机会，她可能看完觉得没什么新鲜事、选择不说。
+  沉默轮不刷新 ``last_speech_ms``，若只按开口时刻判定，下一个 tick 立刻又满足条件，
+  沉默期间每个 tick 都会空跑一轮大模型。:meth:`ProactiveTrigger.record_silent_round`
+  记下这一刻，此后 ``rundown_silent_cooldown_ms``（杂谈档用更短的
+  ``rundown_silent_cooldown_talk_ms``）内 ``rundown_ready`` 不再触发。
+- **给弹幕让路**：观众弹幕已进缓冲、还在攒批等放行时（``viewer_waiting_since_ms``
+  非空），``rundown_ready`` 先让路，免得她在观众提问和回答之间插一句无关旁白；
+  最多让 ``rundown_ready_yield_max_ms``，缓冲异常滞留也不会永久压住主动发言。
 - 仅受总开关约束（``enabled=False`` 时不触发任何 rundown）。
 
 **游戏待定夺触发源（game_pending）的限流独立性**
@@ -119,6 +127,11 @@ class ProactiveTrigger:
         self._rundown_overdue_interval_ms: int = config.rundown_overdue_interval_ms
         # 环节内持续发言间隔（毫秒）。仅 rundown_ready 触发源使用。
         self._rundown_ready_interval_ms: int = config.rundown_ready_interval_ms
+        # 主动沉默冷却（毫秒）：play 档与 talk 档各一档。仅 rundown_ready 触发源使用。
+        self._silent_cooldown_ms: int = config.rundown_silent_cooldown_ms
+        self._silent_cooldown_talk_ms: int = config.rundown_silent_cooldown_talk_ms
+        # 观众弹幕攒批期间 rundown_ready 最多让路多久（毫秒）
+        self._ready_yield_max_ms: int = config.rundown_ready_yield_max_ms
 
         # 运行期状态
         # 上次主动触发时刻（None = 尚未触发过）。仅 schedule 判定读取；
@@ -130,6 +143,8 @@ class ProactiveTrigger:
         # 上次环节超时提醒时刻（None = 尚未提醒过）。仅 overdue 分支读写；
         # pending 触发不更新它。
         self._last_overdue_ms: int | None = None
+        # 上次主动轮走完却没开口的时刻（None = 没有沉默过，或之后已经开过口）
+        self._last_silent_ms: int | None = None
 
     # ------------------------------------------------------------------
     # 公共 API
@@ -153,6 +168,8 @@ class ProactiveTrigger:
         rundown_ready: bool = False,
         game_pending: bool = False,
         reminder_pending: bool = False,
+        talk_mode: bool = False,
+        viewer_waiting_since_ms: int | None = None,
     ) -> TriggerKind | None:
         """判定当前 tick 是否应触发主动发言。
 
@@ -212,6 +229,10 @@ class ProactiveTrigger:
             ``min_interval_ms`` 防接龙一条约束（总开关/每小时上限/话题
             要求三道闸豁免——必达语义不辖"自主找话说"的规矩），通过即
             返回 ``TriggerKind.REMINDER``。
+        talk_mode: 当前是否处于杂谈档（流程单环节说话模式为 talk）；仅决定
+            ``rundown_ready`` 用哪一档主动沉默冷却。
+        viewer_waiting_since_ms: 观众弹幕正在攒批等放行时，最早一条的到达时刻；
+            非空且未超过让路上限时 ``rundown_ready`` 让路。
 
         Returns:
             ``TriggerKind`` 成员（``EXTERNAL`` / ``REMINDER`` / ``RUNDOWN`` /
@@ -269,9 +290,8 @@ class ProactiveTrigger:
         # （流程单环节任务描述即话题，不依赖弹幕消化出的话题摘要）。节奏对照
         # last_speech_ms 的 ready_interval_ms：这只是给主播开口的机会，说不说、
         # 说什么由模型按本窗新输入自定，is_novel 自检与台词重合度闸把关质量。
-        if rundown_ready:
-            if last_speech_ms is None or (now_ms - last_speech_ms) >= self._rundown_ready_interval_ms:
-                return TriggerKind.RUNDOWN
+        if rundown_ready and self._ready_allowed(last_speech_ms, now_ms, talk_mode, viewer_waiting_since_ms):
+            return TriggerKind.RUNDOWN
 
         # 公共前置（schedule / cold 专用，行为不变）
         if last_speech_ms is not None and (now_ms - last_speech_ms) < self._min_interval_ms:
@@ -310,12 +330,42 @@ class ProactiveTrigger:
             now_ms: 触发时刻（Unix 毫秒）。
         """
         self._last_trigger_ms = now_ms
+        # 开过口就不再处于"刚沉默过"的冷却里，下一轮按开口时刻重新计节奏
+        self._last_silent_ms = None
         if kind not in _UNCAPPED_KINDS:
             self._trigger_history.append(now_ms)
+
+    def record_silent_round(self, now_ms: int) -> None:
+        """记录一轮主动决策走完却没开口（由决策执行器在主动轮沉默收尾时调用）。
+
+        沉默轮不刷新开口时刻，不记的话下一个 tick ``rundown_ready`` 立刻又满足
+        条件，沉默期间每个 tick 都空跑一轮大模型；记下后按沉默冷却等一等。
+        """
+        self._last_silent_ms = now_ms
 
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
+
+    def _ready_allowed(
+        self,
+        last_speech_ms: int | None,
+        now_ms: int,
+        talk_mode: bool,
+        viewer_waiting_since_ms: int | None,
+    ) -> bool:
+        """``rundown_ready`` 的三道节奏闸：距上次开口、主动沉默冷却、给攒批弹幕让路。"""
+        # 距上次开口不足环节节奏间隔：刚说完，不催
+        if last_speech_ms is not None and (now_ms - last_speech_ms) < self._rundown_ready_interval_ms:
+            return False
+        # 上一轮主动决策刚选择了沉默：冷却期内不再催（杂谈档冷却更短，要靠她自己撑场）
+        cooldown = self._silent_cooldown_talk_ms if talk_mode else self._silent_cooldown_ms
+        if self._last_silent_ms is not None and (now_ms - self._last_silent_ms) < cooldown:
+            return False
+        # 观众弹幕正在攒批：先让弹幕批放行再说，最多让到上限，防缓冲滞留饿死主动发言
+        if viewer_waiting_since_ms is not None and (now_ms - viewer_waiting_since_ms) < self._ready_yield_max_ms:
+            return False
+        return True
 
     def _topic_available(self, room_state: Any, now_ms: int) -> bool:
         """判定当前话题是否满足 ``topic_required`` 约束。

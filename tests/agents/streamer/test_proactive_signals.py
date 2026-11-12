@@ -118,6 +118,8 @@ def _evaluate(signals: ProactiveSignals, room: _Room, now: int, *, live: bool = 
         rundown_overdue=kwargs.get("rundown_overdue", False),
         rundown_ready=kwargs.get("rundown_ready", False),
         reminder_pending=kwargs.get("reminder_pending", False),
+        talk_mode=kwargs.get("talk_mode", False),
+        viewer_waiting_since_ms=kwargs.get("viewer_waiting_since_ms"),
     )
 
 
@@ -168,3 +170,11 @@ def test_evaluate_tick_reads_once_per_tick_and_external_consumed_even_when_block
     assert _evaluate(signals, room, 10_000) is None
     assert not signals.external_pending, "尽力而为：条件不满足即弃"
     assert signals.read_for_tick(live=True).external_pending is False
+
+
+def test_evaluate_tick_forwards_viewer_wait_only_when_live() -> None:
+    """开播时攒批弹幕让 rundown_ready 让路；下播 tick 本来就不触发，让路参数不参与。"""
+    signals = ProactiveSignals()
+    room = _Room(last_speech_ms=1_000_000, last_message_ms=9_999_000)
+    assert _evaluate(signals, room, 10_000_000, rundown_ready=True, viewer_waiting_since_ms=9_995_000) is None
+    assert _evaluate(signals, room, 10_000_000, rundown_ready=True) is TriggerKind.RUNDOWN

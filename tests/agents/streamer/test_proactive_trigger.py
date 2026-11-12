@@ -190,3 +190,56 @@ def test_content_driven_sources_do_not_use_up_the_hourly_budget() -> None:
     assert (
         busy.should_trigger(room, now_ms=10_500_000) is TriggerKind.COLD
     )  # 若 rundown 照旧记账，hourly 上限已满，这里会是 None（场次 21 教训）
+
+
+def test_silent_round_cools_down_rundown_ready_instead_of_refiring_every_tick() -> None:
+    """主动轮选择沉默后：冷却期内 rundown_ready 不再触发，避免沉默期每个 tick 空跑大模型。"""
+    trigger = _trigger(rundown_ready_interval_ms=30_000, rundown_silent_cooldown_ms=25_000)
+    room = _Room(last_speech_ms=1_000_000)  # 上次开口很久以前：只看间隔的话每个 tick 都会触发
+    assert trigger.should_trigger(room, now_ms=2_000_000, rundown_ready=True) is TriggerKind.RUNDOWN
+
+    trigger.record_silent_round(2_000_000)
+    for now in (2_000_300, 2_010_000, 2_024_999):  # 连续多个 tick 都不再连调
+        assert trigger.should_trigger(room, now_ms=now, rundown_ready=True) is None
+    assert trigger.should_trigger(room, now_ms=2_025_000, rundown_ready=True) is TriggerKind.RUNDOWN
+
+    # 沉默冷却只辖 rundown_ready：环节切换与游戏待定夺照常立即触发
+    trigger.record_silent_round(3_000_000)
+    assert trigger.should_trigger(room, now_ms=3_000_100, rundown_pending=True) is TriggerKind.RUNDOWN
+    assert trigger.should_trigger(room, now_ms=3_000_100, game_pending=True) is TriggerKind.GAME
+
+
+def test_talk_mode_uses_shorter_silent_cooldown_and_speaking_clears_it() -> None:
+    trigger = _trigger(
+        rundown_ready_interval_ms=10_000, rundown_silent_cooldown_ms=25_000, rundown_silent_cooldown_talk_ms=12_000
+    )
+    room = _Room(last_speech_ms=1_000_000)
+    trigger.record_silent_round(2_000_000)
+    assert trigger.should_trigger(room, now_ms=2_012_000, rundown_ready=True) is None  # play 档仍在冷却
+    assert trigger.should_trigger(room, now_ms=2_012_000, rundown_ready=True, talk_mode=True) is TriggerKind.RUNDOWN
+
+    # 开过口就退出沉默冷却，之后只按开口时刻计节奏
+    trigger.record_silent_round(3_000_000)
+    trigger.record_trigger(TriggerKind.RUNDOWN, now_ms=3_001_000)
+    spoke = _Room(last_speech_ms=3_001_000)
+    assert trigger.should_trigger(spoke, now_ms=3_011_000, rundown_ready=True) is TriggerKind.RUNDOWN
+
+
+def test_rundown_ready_yields_to_waiting_viewer_batch_up_to_a_cap() -> None:
+    """观众弹幕在攒批等放行时 rundown_ready 先让路，最多让到上限，防缓冲滞留饿死主动发言。"""
+    trigger = _trigger(rundown_ready_interval_ms=30_000, rundown_ready_yield_max_ms=15_000)
+    room = _Room(last_speech_ms=1_000_000)
+    waiting_since = 2_000_000
+    assert (
+        trigger.should_trigger(room, now_ms=2_005_000, rundown_ready=True, viewer_waiting_since_ms=waiting_since)
+        is None
+    )
+    assert (
+        trigger.should_trigger(room, now_ms=2_015_000, rundown_ready=True, viewer_waiting_since_ms=waiting_since)
+        is TriggerKind.RUNDOWN
+    )
+    # 让路只针对环节节奏机会：环节切换不等弹幕批
+    assert (
+        trigger.should_trigger(room, now_ms=2_001_000, rundown_pending=True, viewer_waiting_since_ms=waiting_since)
+        is TriggerKind.RUNDOWN
+    )
