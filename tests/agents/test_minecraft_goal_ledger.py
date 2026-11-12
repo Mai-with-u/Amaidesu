@@ -92,6 +92,54 @@ def test_settle_finished_notes_batch_delegations_without_settling() -> None:
     assert deleg_updates[-1]["snapshot"]["game_progress_notes"] == ["游戏目标 1（maicraft:gather）done：砍了 5 块原木"]
 
 
+def test_finished_note_appends_purpose_tail() -> None:
+    """终态备注拼上目标 purpose 截短的"这一步"尾巴：摘要"找到 8 个"不带宾语时，主播能知道这一步在干嘛。"""
+    book = _FakeLedger()
+    book.records["deleg-9"] = MagicMock(status="running", snapshot={})
+    ledger = GoalLedger(task_tracker=_tracker(book), agent_name="minecraft", finished_ids=lambda: ("deleg-9",))
+
+    finished = _run(
+        state="finished",
+        purpose="看看身边最近的橡树叶子在哪，好直接上手砍",
+        result={"status": "done", "summary": "找到 8 个"},
+    )
+    ledger.settle_finished(finished)
+
+    deleg_updates = [u for u in book.updates if u["task_id"] == "deleg-9"]
+    assert deleg_updates[-1]["snapshot"]["game_progress_notes"] == [
+        "游戏目标 1（maicraft:gather）done：找到 8 个（这一步：看看身边最近的橡树叶子在哪，好直…）"
+    ]
+
+
+def test_finished_note_purpose_tail_is_folded_and_clipped() -> None:
+    book = _FakeLedger()
+    book.records["deleg-9"] = MagicMock(status="running", snapshot={})
+    ledger = GoalLedger(task_tracker=_tracker(book), agent_name="minecraft", finished_ids=lambda: ("deleg-9",))
+
+    finished = _run(
+        state="finished",
+        purpose="看看身边的橡树\n叶子集中在哪一片区域",
+        result={"status": "done", "summary": "找到 8 个"},
+    )
+    ledger.settle_finished(finished)
+
+    deleg_updates = [u for u in book.updates if u["task_id"] == "deleg-9"]
+    note = deleg_updates[-1]["snapshot"]["game_progress_notes"][-1]
+    assert "（这一步：看看身边的橡树 叶子集中在哪一片…）" in note
+
+
+def test_finished_note_without_purpose_has_no_tail() -> None:
+    book = _FakeLedger()
+    book.records["deleg-9"] = MagicMock(status="running", snapshot={})
+    ledger = GoalLedger(task_tracker=_tracker(book), agent_name="minecraft", finished_ids=lambda: ("deleg-9",))
+
+    finished = _run(state="finished", result={"status": "done", "summary": "砍了 5 块原木"})
+    ledger.settle_finished(finished)
+
+    deleg_updates = [u for u in book.updates if u["task_id"] == "deleg-9"]
+    assert deleg_updates[-1]["snapshot"]["game_progress_notes"] == ["游戏目标 1（maicraft:gather）done：砍了 5 块原木"]
+
+
 def test_batch_progress_notes_skip_removed_delegations_and_cap_history() -> None:
     book = _FakeLedger()
     book.records["deleg-1"] = MagicMock(status="running", snapshot={})

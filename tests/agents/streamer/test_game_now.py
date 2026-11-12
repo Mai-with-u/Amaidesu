@@ -111,6 +111,19 @@ def test_step_and_judgement_from_before_this_task_are_left_out() -> None:
     assert "游戏那边的判断（不一定对）：树苗还差两棵栽完。（5 分钟前）" in text_recent
 
 
+def test_progress_note_purpose_tail_survives_scrub_and_clip() -> None:
+    """备注里的"这一步"尾巴要活过脱敏和截短：摘要"找到 8 个"不带宾语，尾巴是主播知道这一步在干嘛的唯一凭据。"""
+    reading = AgentNow(step="找树苗", step_at_ms=_NOW - _MINUTE)
+    notes = ["游戏目标 550（maicraft:find）done：找到 8 个（这一步：看看身边最近的橡树叶子在哪，好直…）"]
+
+    text = render_game_now(
+        {"minecraft": _delegation()}, _record(notes), GameNow(agents={"minecraft": reading}), "", _NOW
+    )
+
+    assert "最近几步结果：做完了：找到 8 个（这一步：看看身边最近的橡树叶子在哪，好直…）" in text
+    assert "还在做，游戏那边有一步有结果了（见下面最近几步结果）。" in text
+
+
 def test_state_matches_the_delegation_line_when_stuck_or_idle() -> None:
     """卡住的活不写成"还在做"了事：停着没动静、账面多久没进展，和前段委派状态同一句，她才会去拿主意。"""
     stalled = _record([], stalled_goals={"g1": "找蒲公英"})

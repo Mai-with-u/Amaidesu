@@ -127,10 +127,22 @@ def pause_notice(
     )
 
 
+def _short_purpose(purpose: str) -> str:
+    """purpose 截成一行短尾巴：换行折空格，超过约 16 字截断补省略号。"""
+    flat = " ".join(purpose.split())
+    return flat if len(flat) <= 16 else f"{flat[:16]}…"
+
+
 def _dry_goal_summary(run: GoalRun) -> str:
-    """目标终态给委派账的干巴机器摘要：只陈述结果，话术语义留给 LLM 的交付语。"""
+    """目标终态给委派账的干巴机器摘要：只陈述结果，话术语义留给 LLM 的交付语。
+
+    摘要常不带宾语（如"找到 8 个"），脱敏后主播只看到"做完了：找到 8 个"就自己脑补了对象；
+    目标 purpose 非空时截短拼在后面，让备注自带"这一步在干嘛"。不拼进抬头括号——抬头整个会被
+    脱敏器剥掉，purpose 会跟着丢。
+    """
     label = run.result_status or "结束"
-    return f"游戏目标 {run.goal_id}（{run.ability}）{label}：{run.summary}"
+    tail = f"（这一步：{_short_purpose(run.purpose)}）" if run.purpose else ""
+    return f"游戏目标 {run.goal_id}（{run.ability}）{label}：{run.summary}{tail}"
 
 
 def _no_batch_task_ids() -> Sequence[str]:

@@ -37,7 +37,8 @@ _SELF_CHAT_BUFFER = 20
 # （现场速览按原样挪进来，第 58 场中位约 960 token，它的大小归游戏侧的看一眼工具管）
 _STATE_MAX_CHARS = 40
 _STEP_MAX_CHARS = 40
-_RESULT_MAX_CHARS = 30
+# 进展备注带"（这一步：……）"尾巴（交代这一步在干嘛）后 30 字经常把尾巴截掉，放宽到与状态行一致
+_RESULT_MAX_CHARS = 40
 _RESULTS_MAX = 3
 _JUDGEMENT_MAX_CHARS = 48
 # 游戏那边的判断超过这么久就不再展示（避免长单挂着 1 小时前的旧世界判断误导主播）
