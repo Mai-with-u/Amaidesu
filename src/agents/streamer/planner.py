@@ -227,6 +227,10 @@ class RoundOutcome:
     reply_player: Tuple[str, str] = ("", "")
     # 出声前最后一次与嘴核对的时刻（Unix 毫秒，0 表示未核对）：执行器在等播放槽位后只补查这一刻之后的新嘴话
     mouth_checked_ms: int = 0
+    # 杂谈档话头推进：模型在 streamer_reply 声明本轮已把当前提纲要点/话题卡聊透收尾
+    beat_done: bool = False
+    # 杂谈档选用哪张话题卡开话头（整数编号；未选用为 None）
+    use_card_id: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -277,6 +281,14 @@ class PlannerEnv:
     fresh_context_since: Optional[Callable[[int], Awaitable[Dict[str, Any]]]] = None
     # 可注入时钟（缺省为真实毫秒时钟）
     clock: Callable[[], int] = now_ms
+    # 本轮说话档位查询（"play" 边玩边说 / "talk" 杂谈唠嗑；缺省 "play"）
+    speech_mode_provider: Optional[Callable[[], str]] = None
+    # 话头工作台本窗渲染（入参 has_viewer_batch；返回【当前话头与本节提纲】或空串）
+    talk_workbench_provider: Optional[Callable[[bool], str]] = None
+    # 自备话题匣本窗刷新并渲染（入参 has_viewer_batch；异步返回【可抽的话题卡 / 提问箱】或空串）
+    talk_cards_provider: Optional[Callable[[bool], Awaitable[str]]] = None
+    # 上一轮主动决策窗是否以沉默收场（play 档游戏平静时解开 45 秒冷场死锁）
+    proactive_silent_provider: Optional[Callable[[], bool]] = None
 
 
 def _observation_error(observation: str) -> Optional[str]:
@@ -366,8 +378,12 @@ class Planner:
     TEMPLATE_NAME: str = "amaidesu_planner_react"
     #: 委派型游戏守则模板名：有能接收委派的 Agent 时追加进【当前游戏的玩法】
     DELEGATE_RULES_TEMPLATE: str = "amaidesu_planner_delegate_rules"
-    #: 没有任何游戏工具面时的玩法段：明说没有游戏，模型不对不存在的游戏工具硬凑动作
-    NO_GAME_RULES: str = "当前没有启用任何游戏：没有游戏工具可用，不要安排主播在游戏里动手，让她专心陪观众聊天。"
+    #: 没有任何游戏工具面时的玩法段：明说舞台杂谈语境，模型不对不存在的游戏工具硬凑动作
+    NO_GAME_RULES: str = (
+        "当前没有启用任何游戏（舞台杂谈模式）：她在镜头前用虚拟形象和观众面对面聊天，没有游戏工具可用，"
+        "不要安排她在游戏里动手，下文涉及游戏内行动、现场速览、背包与建筑的规则本场不适用；"
+        "让她专心陪观众聊天，可配合情绪与偶尔的 avatar_act 肢体动作。"
+    )
 
     def __init__(
         self,
@@ -383,6 +399,7 @@ class Planner:
         personality: str = "",
         boundaries: str = "",
         inside_jokes: str = "",
+        persona_profile: str = "",
         env: Optional[PlannerEnv] = None,
     ) -> None:
         """初始化 Planner。
@@ -431,6 +448,10 @@ class Planner:
         self._boundaries: str = boundaries or ""
         # 老梗栏：只进 Planner 系统提示词，观众提起时才接（渲染见 _inside_jokes_block）
         self._inside_jokes: str = inside_jokes or ""
+        # 结构化人物设定档案（已渲染文本）：整场静态，拼在「她是谁」里吃前缀缓存
+        self._persona_profile: str = (persona_profile or "").strip()
+        # 本决策窗说话档位（"play" / "talk"），每窗在 plan() 入口按环节与游戏态势刷新
+        self._round_speech_mode: str = "play"
         self._reply_provider: Any = None
         self._reply_provider_factory: Optional[Callable[[], Any]] = env.reply_provider_factory if env else None
         self._elapsed_live_provider = env.elapsed_live_provider if env else None
@@ -494,6 +515,10 @@ class Planner:
         self._open_games_provider = env.open_games_provider if env else None
         self._game_now_provider = env.game_now_provider if env else None
         self._paid_identities_provider = env.paid_identities_provider if env else None
+        self._speech_mode_provider = env.speech_mode_provider if env else None
+        self._talk_workbench_provider = env.talk_workbench_provider if env else None
+        self._talk_cards_provider = env.talk_cards_provider if env else None
+        self._proactive_silent_provider = env.proactive_silent_provider if env else None
 
         # 本窗合法的点名编号与卡片称呼（每窗在 plan() 入口重算，这里给默认值）
         self._round_memory_ids: Set[int] = set()
@@ -666,6 +691,9 @@ class Planner:
 
         # 决策前自动读一次配置的只读参考工具（如游戏现场速览）：结果直接进参考段，
         # 不必先花一步请求去查再决定说什么。
+        self._round_speech_mode = self._resolve_speech_mode()
+        talk_workbench_text = self._read_talk_workbench(bool(batch))
+        talk_cards_text = await self._read_talk_cards(bool(batch))
         overview = await self._read_reference_tools(round_id)
         self._last_overview_text = overview
         reference_text, reference_failure = await self._assemble_reference(
@@ -683,6 +711,8 @@ class Planner:
             overview=overview,
             trigger_cause=trigger_cause,
             memory_cues=memory_cues,
+            talk_workbench_text=talk_workbench_text,
+            talk_cards_text=talk_cards_text,
         )
         if reference_text is None:
             return replace(outcome, error=reference_failure, silent_reason="assembler_failed")
@@ -1014,15 +1044,18 @@ class Planner:
         return self._last_overview_text
 
     def _inside_jokes_block(self) -> str:
-        """老梗栏渲染：运营者手写的老梗，抬头写明只在观众提起时才接；空串时整段省略。
-
-        只进 Planner——Replyer 与快嘴若各自玩梗会反复出现同一段子；Planner 用交接稿
-        把态度交过去就够。内容来自配置、整场不随表变化，与人设一起吃前缀缓存。
-        """
+        """人物设定档案与老梗栏渲染：都放进「她是谁」一节，整场不随表变化，与人设一起吃前缀缓存。"""
+        blocks: List[str] = []
+        if self._persona_profile:
+            blocks.append(
+                f"{self._persona_profile}\n\n"
+                "（以上设定档案是她自己的真实底子：自我介绍环节、相关话头展开、或观众问起她的来历/外形/身份时"
+                "自然拿来聊；平时聊别的事时不硬扯设定词。）"
+            )
         text = self._inside_jokes.strip()
-        if not text:
-            return ""
-        return "## 直播间老梗（运营者写的；观众提起时才接，别自己翻出来，冷场时也别拿来凑话）\n" + text
+        if text:
+            blocks.append("## 直播间老梗（运营者写的；观众提起时才接，别自己翻出来，冷场时也别拿来凑话）\n" + text)
+        return "\n\n".join(blocks)
 
     def _boundaries_rule(self) -> str:
         """「她是谁」一节末尾、AI 声明之后的边界栏一行（带前导空行）；人设里没写时为空串。
@@ -1097,25 +1130,81 @@ class Planner:
         ids.update(int(item) for item in card_ids)
         return ids
 
+    _NON_GAME_GUIDE_PROVIDERS: Tuple[str, ...] = ("avatar", "talk", "streamer", "rundown", "memory")
+
+    def _visible_guides(self) -> List[tuple[str, str]]:
+        """注册表里对主播可见的各提供者使用说明；读取失败时降级为空列表。"""
+        if self._tool_registry is None:
+            return []
+        try:
+            return list(self._tool_registry.guides(for_agent="streamer"))
+        except Exception as exc:
+            self.logger.warning(f"读取工具面使用说明失败（本轮按没有游戏处理）: {exc}", exc=True)
+            return []
+
+    def _has_delegable_game(self) -> bool:
+        """是否存在能接收委派的游戏工具面。"""
+        return any(provider == FRAMEWORK_PROVIDER for provider, _text in self._visible_guides())
+
+    def _has_any_game(self) -> bool:
+        """是否启用了任何游戏工具面（形象、话题卡等舞台工具不算游戏）。"""
+        return any(provider not in self._NON_GAME_GUIDE_PROVIDERS for provider, _text in self._visible_guides())
+
+    def _resolve_speech_mode(self) -> str:
+        """读本决策窗说话档位（"talk" / "play"）；未注入或异常时按 "play" 兜底。"""
+        if self._speech_mode_provider is None:
+            return "play"
+        try:
+            mode = self._speech_mode_provider()
+            return "talk" if mode == "talk" else "play"
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(f"读取说话档位失败（按 play 处理）: {exc}", exc=True)
+            return "play"
+
+    def _read_talk_workbench(self, has_viewer_batch: bool) -> str:
+        """读取话头工作台本窗渲染文本（【当前话头与本节提纲】）；未注入或异常时为空串。"""
+        if self._talk_workbench_provider is None:
+            return ""
+        try:
+            return (self._talk_workbench_provider(has_viewer_batch) or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(f"读取话头工作台失败（本窗省略该段）: {exc}", exc=True)
+            return ""
+
+    async def _read_talk_cards(self, has_viewer_batch: bool) -> str:
+        """异步刷新话题匣并读取【可抽的话题卡 / 提问箱】文本；未注入或异常时为空串。"""
+        if self._talk_cards_provider is None:
+            return ""
+        try:
+            return ((await self._talk_cards_provider(has_viewer_batch)) or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(f"刷新话题匣失败（本窗不预摆话题卡）: {exc}", exc=True)
+            return ""
+
+    def _was_proactive_silent(self) -> bool:
+        """上一轮主动决策窗是否以沉默收场（play 档游戏平静时免等满 45 秒即可聊周边素材）。"""
+        if self._proactive_silent_provider is None:
+            return False
+        try:
+            return bool(self._proactive_silent_provider())
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning(f"读取主动沉默状态失败（按未沉默处理）: {exc}", exc=True)
+            return False
+
     def _render_game_rules(self) -> str:
         """拼装【当前游戏的玩法】：各工具面的使用说明 + 委派型游戏的守则。
 
         说明来自注册表里对主播可见的各工具面（每个游戏 Agent 自己说这款游戏是
         委派型还是遥控型、该调哪些工具）；框架的委派工具面只在有能接收委派的
         Agent 时才给说明，这时再追加委派型游戏的完整守则（开始做事、补充要求、
-        完成口径）。什么说明都没有就明说没有游戏——接哪款游戏只由启用名单决定，
-        这里不写死任何游戏名。
+        完成口径）。没有任何游戏说明时明说舞台杂谈模式，仍保留形象等非游戏说明。
         """
-        guides: List[tuple[str, str]] = []
-        if self._tool_registry is not None:
-            try:
-                guides = list(self._tool_registry.guides(for_agent="streamer"))
-            except Exception as exc:
-                self.logger.warning(f"读取工具面使用说明失败（本轮按没有游戏处理）: {exc}", exc=True)
-                guides = []
-        if not guides:
-            return self.NO_GAME_RULES
-        lines = [f"- {text}" for _provider, text in guides]
+        guides = self._visible_guides()
+        has_game = any(provider not in self._NON_GAME_GUIDE_PROVIDERS for provider, _text in guides)
+        lines: List[str] = []
+        if not has_game:
+            lines.append(self.NO_GAME_RULES)
+        lines.extend(f"- {text}" for _provider, text in guides)
         if any(provider == FRAMEWORK_PROVIDER for provider, _text in guides):
             lines.append(self._prompt_service.render(self.DELEGATE_RULES_TEMPLATE))
         return "\n".join(lines)
@@ -1136,6 +1225,8 @@ class Planner:
         overview: str = "",
         trigger_cause: Optional[TriggerCause] = None,
         memory_cues: Any = None,
+        talk_workbench_text: str = "",
+        talk_cards_text: str = "",
     ) -> Tuple[Optional[str], Optional[str]]:
         """构造参考段，返回（参考段文本, 失败原因）。
 
@@ -1164,15 +1255,23 @@ class Planner:
                 "也不必对中断过度道歉，按对话历史里刚才聊到的地方顺下去。"
             )
         elif proactive:
-            # 主动窗不只来自冷场/定时：环节切换、游戏上报、游戏里有人说话也会唤醒，按实际可能来源说明。
-            # 情境描述只交代触发来源与本窗可选的行动类别，不替她决定该不该开口——
-            # 这一轮不一定开口；不开口的一轮也有别的事可做。
-            lines.append(
-                "【情境】本窗为主动触发（定时、环节推进或游戏里有新动静）——弹幕可能为空；"
-                "这一轮不一定开口，不开口也有别的事可做：推进流程单（rundown_control 的 next / goto）、"
+            # 主动窗按当前实际装配说明触发来源与可选行动：没接委派游戏时不提派单与游戏工作日志，
+            # 纯杂谈场不会对着空气找游戏工具
+            has_game_activity = self._has_any_game() or bool(
+                game_events or fresh_game_chat or private_game_chat or self._round_player_notes
+            )
+            sources = "定时、环节推进或游戏里有新动静" if has_game_activity else "定时或环节推进"
+            delegate_actions = (
                 "安排游戏里的活（framework_delegate 派单、framework_prompt 补要求、"
                 "framework_task_cancel 撤单）、查游戏那边的工作日志、"
-                "查自己记得的事（memory_recall）、"
+                if self._has_delegable_game()
+                else ""
+            )
+            lines.append(
+                f"【情境】本窗为主动触发（{sources}）——弹幕可能为空；"
+                "这一轮不一定开口，不开口也有别的事可做：推进流程单（rundown_control 的 next / goto）、"
+                + delegate_actions
+                + "查自己记得的事（memory_recall）、"
                 + ("更正简报里的旧记忆（streamer_memory_correct）、" if self._memory_correct_tool_ready() else "")
                 + ("记一笔游戏里的社交事实（streamer_social_fact）、" if self._social_fact_tool_ready() else "")
                 + "让形象动一下（avatar_act，不出声不占台词预算）；也可以什么都不做，等下一个事件。"
@@ -1188,10 +1287,25 @@ class Planner:
             # 空房间连续提问/求押注只会自问自答
             lines.append(f"【房间活跃度】{activity}")
         silence = render_silence(self._room_state.last_speech_ms, self._cold_silence_ms, current_ms)
+        if not silence and proactive and not batch:
+            # 解开 rundown_ready（15~30s）与【冷场】（45s）的死锁：
+            # 杂谈档无弹幕时直接点亮找话提示；边玩边说档在游戏无新事件且上一轮主动窗已沉默过一次时同样点亮
+            if self._round_speech_mode == "talk":
+                silence = (
+                    "【冷场】当前为杂谈节奏且本窗没有新弹幕：按本节提纲或话题卡推进话头，"
+                    "也可从设定档案与冷场素材里挑本场没聊过的内容开口"
+                )
+            elif not game_events and self._was_proactive_silent():
+                silence = (
+                    "【冷场】游戏那边暂时没有新动静，且上一轮主动窗已沉默过一次："
+                    "这一轮可以从冷场素材里挑本场没聊过的内容开口，不必等满冷场阈值"
+                )
         if silence:
-            # 冷场行紧跟活跃度：线上回放里她只在游戏出事时开口，游戏一平静就整段不说话，
-            # 而模型看不到"已经多久没开口"——把沉默时长摆出来，提示词据此把找话说设为默认
             lines.append(silence)
+        if talk_workbench_text:
+            lines.append(talk_workbench_text)
+        if talk_cards_text:
+            lines.append(talk_cards_text)
         if private_game_chat:
             # 私密游戏聊天：只发给我一个人的话，不进对话历史（表达侧看不到），只在本窗参考段出现。
             # 决策据此安排回应，但原话与内容不能被当众念出或转述
@@ -1241,6 +1355,12 @@ class Planner:
             # 话题，再考虑沉默。
             # 这段话与提示词模板 amaidesu_planner_react.md 的"已聊话题必须有新角度"一条讲的是同一件事，
             # 措辞保持逐字一致（模板里那条是常驻版本，这里是每窗按实况注入的版本）
+            talk_tail = (
+                "杂谈环节围绕当前提纲要点或话题卡顺着讲出新的具体细节、来龙去脉算推进话头；"
+                "把讲过的同一层意思换词重讲才算重复。"
+                if self._round_speech_mode == "talk"
+                else ""
+            )
             lines.append(
                 "【已聊话题】（由旧到新，同一话题合并成一行：话题名（轮数，时间跨度）：最近一轮她当时说的那句。"
                 "都是当时的说法，不代表游戏里现在的样子）\n"
@@ -1248,7 +1368,8 @@ class Planner:
                 "硬规则：本轮想说的话题与清单重叠时，必须有事实上的新东西才开口"
                 "（新事件、新进展、新的互动对象、新信息）；只是换个态度、换个说法不算；"
                 "血量、数量、倒计时这类数值变化不算新东西；清单里讲过的结论和打算不再复述。"
-                "拿不出就换话题，或者干脆不开口。"
+                + talk_tail
+                + "拿不出就换话题，或者干脆不开口。"
             )
         if resume_replay:
             # 续播时补回的玩家聊天：上一进程最后一轮播出台词的决策之后才到的那几句，随重启没接上；
@@ -1489,6 +1610,7 @@ class Planner:
                 game_people=list(self._recent_player_notes),
                 # 回应对象：Planner 在 to_player 点名的玩家；没点名时，本窗唯一在公屏开口、话题摘要里又提到的那位
                 reply_to=answering_player,
+                speech_mode=self._round_speech_mode,
             )
             result = await self._tool_registry.invoke(
                 ToolInvocation(
@@ -1566,6 +1688,13 @@ class Planner:
         emotion = payload.get("emotion") if isinstance(payload.get("emotion"), dict) else {}
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         reply_to = args.get("target")
+        raw_card_id = metadata.get("use_card_id", args.get("use_card_id"))
+        parsed_card_id: Optional[int] = None
+        if raw_card_id is not None and not isinstance(raw_card_id, bool):
+            try:
+                parsed_card_id = int(raw_card_id)
+            except (TypeError, ValueError):
+                parsed_card_id = None
         outcome = replace(
             outcome,
             replied=True,
@@ -1582,6 +1711,8 @@ class Planner:
             # 落库的"回应哪位玩家"和交给表达侧的回应对象同一口径：点了名的按他记，没点名时是本窗唯一开口的那位
             reply_player=self._reply_player_identity(str(args.get("to_player") or ""), answering_player),
             mouth_checked_ms=checked_ms,
+            beat_done=bool(metadata.get("beat_done") or args.get("beat_done") is True),
+            use_card_id=parsed_card_id,
         )
         # 话说出口了、回应的是游戏里的某位玩家：他到此为止找她的条目标"已接过"，
         # 后面几窗换话题时表达侧不再把同一份礼谢一遍、同一句话接一遍

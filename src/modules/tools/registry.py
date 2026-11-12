@@ -477,7 +477,11 @@ class ToolRegistry:
         if not include_tripped:
             specs = [s for s in specs if not self.is_tripped(s.full_name)]
         if for_agent is not None:
-            specs = [s for s in specs if self._is_visible_to(s.full_name, for_agent)]
+            specs = [
+                s
+                for s in specs
+                if self._is_visible_to(s.full_name, for_agent) and self._provider_ready_for(s.provider, for_agent)
+            ]
         if provider is not None:
             specs = [s for s in specs if s.provider == provider]
         if category is not None:
@@ -562,6 +566,25 @@ class ToolRegistry:
         if entries is None:
             return agent_name in DEFAULT_VISIBLE_TO
         return "*" in entries or agent_name in entries
+
+    def _provider_ready_for(self, provider_name: str, agent_name: str) -> bool:
+        """提供者按运行期装配态决定是否向 ``agent_name`` 的 LLM 工具表暴露工具。
+
+        例如没有可接收委派的业务 Agent 启用时，框架委派提供者对主播返回 False，
+        纯杂谈场不会把委派四件挂进 Planner 请求；直连 invoke 与运营全集不受影响。
+        """
+        for provider in self._providers:
+            if provider.name != provider_name:
+                continue
+            check = getattr(provider, "has_tools_for", None)
+            if not callable(check):
+                return True
+            try:
+                return bool(check(agent_name))
+            except Exception as exc:  # noqa: BLE001 - 单个提供者探测失败按可见降级
+                logger.warning(f"Provider '{provider.name}' 工具可用性判断失败（按可见处理）: {exc}")
+                return True
+        return True
 
     def list_categories(self) -> List[str]:
         """返回当前已注册提供者声明的全部分类（去重、按名排序）。

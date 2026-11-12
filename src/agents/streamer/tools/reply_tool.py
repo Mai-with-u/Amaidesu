@@ -108,10 +108,12 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
         "is_novel": {
             "type": "boolean",
             "description": (
-                "新颖自检（必填）：填 true 前先确认本条有增量——平时增量只认事实上的新："
+                "新颖自检（必填）：填 true 前先确认本条有增量——边玩边说（play 档）增量只认事实上的新："
                 "新事件、新进展、新的互动对象、新信息；参考段出现【冷场】行时，"
-                "从冷场可聊素材里拿出本场还没聊过的内容也算有增量。"
-                "同一件事换个说法、换个态度或换种情绪再讲，不算新；"
+                "从冷场可聊素材里拿出本场还没聊过的内容也算有增量；"
+                "杂谈档（talk 档，或正按【当前话头与本节提纲】/话题卡展开）认话头推进增量："
+                "围绕当前提纲要点或话题卡讲出新的具体细节、来龙去脉、自身态度，或回应观众延伸提问都算有增量。"
+                "同一件事或同一层意思换个说法、换个态度或换种情绪再讲，不算新；"
                 "拿不准时按没有增量处理——"
                 "这里宁严勿松，打回重说的代价只是一轮，复述漏出去观众是直接听到的。"
                 "数值变化、把说过的结论或打算换个说法再讲都不算。"
@@ -164,6 +166,20 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
                 "要点名的那件旧事的编号（可空，一次至多一条）：【她记得的事】或【这一批想起来的事】里"
                 "标着的 约#N（答应过的事）或 档#N（记得的事），写编号本身（如 约#7、档#41）。"
                 "台词会拿到该说的内容；填了别的编号按没填处理。"
+            ),
+        },
+        "beat_done": {
+            "type": "boolean",
+            "description": (
+                "本轮是否把当前提纲要点或话题卡聊透收尾了（可空，默认 false）："
+                "杂谈环节一个要点通常展开 1～3 轮，这一轮讲完收束就设 true，话头工作台会推进到下一个未聊要点。"
+            ),
+        },
+        "use_card_id": {
+            "type": "integer",
+            "description": (
+                "本轮选用哪张话题卡/提问箱卡片开话头（可空）：填【可抽的话题卡 / 提问箱】或 talk_draw_cards 返回的卡片编号，"
+                "选用后该卡标为本场已用并进入话头工作台作为当前话头；接观众实时弹幕时不填。"
             ),
         },
     },
@@ -341,7 +357,8 @@ class ReplyToolProvider(BaseToolProvider):
                 success=False,
                 error_message=(
                     "你自评这是重复——要么拿出观众没听过的新内容重新调用"
-                    "（新事件、新进展这类事实上的新；参考段有【冷场】行时也可以用本场没聊过的冷场素材），"
+                    "（新事件、新进展这类事实上的新；杂谈档围绕当前提纲要点或话题卡讲出新细节、来龙去脉；"
+                    "参考段有【冷场】行时也可以用本场没聊过的冷场素材），"
                     "要么本轮别发言"
                 ),
             )
@@ -391,6 +408,7 @@ class ReplyToolProvider(BaseToolProvider):
             speech_history = assistant_speech_lines(history)
 
         # 思考流回调随 attachment 一次性传入（调用即弃，无跨轮残留）
+        speech_mode = "talk" if materials.speech_mode == "talk" else "play"
         try:
             result = await self._replyer.generate(
                 plan=plan,
@@ -404,6 +422,7 @@ class ReplyToolProvider(BaseToolProvider):
                 remembered=materials.remembered,
                 game_people=list(materials.game_people),
                 reply_to=materials.reply_to,
+                speech_mode=speech_mode,
             )
         except Exception as exc:
             self._logger.exception(f"reply_tool: Replyer.generate 抛出未捕获异常: {exc}")
@@ -420,18 +439,33 @@ class ReplyToolProvider(BaseToolProvider):
                 error_message="Replyer 返回 None（LLM 失败 / 空台词 / word_filter 丢弃）",
             )
 
+        metadata: Dict[str, Any] = {
+            "source_id": "streamer_agent",
+            "target": plan.target,
+            "topic_summary": plan.topic_summary,
+            "reply_guidance": plan.reply_guidance,
+        }
+        if args.get("beat_done") is True:
+            metadata["beat_done"] = True
+        raw_card_id = args.get("use_card_id")
+        if raw_card_id is not None and not isinstance(raw_card_id, bool):
+            try:
+                metadata["use_card_id"] = int(raw_card_id)
+            except (TypeError, ValueError):
+                self._logger.warning(f"reply_tool: use_card_id 非整数，已忽略: {raw_card_id!r}")
+
+        payload_out: Dict[str, Any] = {
+            "speech": result["speech"],
+            "emotion": {"name": plan.emotion.value, "intensity": plan.intensity},
+            "metadata": metadata,
+            "llm_request_id": result.get("llm_request_id"),
+        }
+        if speech_mode == "talk":
+            # 杂谈档随结构化结果带给发言管线，长段按句末标点拆句连播；边玩边说保持原字段结构不扰动既有消费方
+            payload_out["speech_mode"] = "talk"
+
         return ToolExecutionResult(
             tool_name=invocation.tool_name,
             success=True,
-            structured_content={
-                "speech": result["speech"],
-                "emotion": {"name": plan.emotion.value, "intensity": plan.intensity},
-                "metadata": {
-                    "source_id": "streamer_agent",
-                    "target": plan.target,
-                    "topic_summary": plan.topic_summary,
-                    "reply_guidance": plan.reply_guidance,
-                },
-                "llm_request_id": result.get("llm_request_id"),
-            },
+            structured_content=payload_out,
         )

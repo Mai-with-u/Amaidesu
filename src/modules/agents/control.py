@@ -928,6 +928,14 @@ class AgentControlProvider(BaseToolProvider):
             )
         return "目标 Agent 注册名（当前没有能接收的 Agent：启用的游戏若不走委派，直接用它自己的操作工具）"
 
+    def has_tools_for(self, agent_name: str) -> bool:
+        """存在除调用方以外能接收委派的 Agent 时，才把委派四件暴露进该 Agent 的 LLM 工具表。
+
+        纯杂谈场（仅启用主播）或仅启用遥控型游戏时没有委派接收方，隐藏工具定义避免误调；
+        注册表直连 invoke 与运营全集（for_agent=None）仍保留全部四件。
+        """
+        return any(name != agent_name for name in self._roster("receive_delegation"))
+
     def guide_for(self, agent_name: str) -> str:
         """framework 工具面的使用说明：有能接收委派的 Agent 才给，否则空串。
 

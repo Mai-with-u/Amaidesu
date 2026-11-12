@@ -85,6 +85,8 @@ class ReplyRoundAttachment(ToolCallAttachment):
     remembered: str = ""
     game_people: List[PlayerNote] = field(default_factory=list)
     reply_to: str = ""
+    #: 本轮说话档位（"play" 边玩边说 / "talk" 杂谈唠嗑），由宿主按环节与游戏态势判定
+    speech_mode: str = "play"
 
 
 def assistant_speech_lines(history: Optional[List[Any]]) -> List[str]:
