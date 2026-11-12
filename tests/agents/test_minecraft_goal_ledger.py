@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 from unittest.mock import MagicMock
 
-from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_label, pause_notice
+from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_failure_line, goal_label, pause_notice
 from src.agents.minecraft.maicraft import goal_run_of
 
 
@@ -139,6 +139,29 @@ def test_finish_notice_mentions_folded_path_and_self_brief() -> None:
     notice = finish_notice(run, "在河边，血量满。")
     assert goal_label(run) in notice and "结束时：在河边，血量满。" in notice
     assert "result.folded" in notice and "maicraft_goal(operation=get, goal_id=1, path=" in notice
+
+
+def test_goal_failure_line_names_failure_with_summary() -> None:
+    """没做成/只做一半：一行给主播的结果（能力+目的+结论句），不带目标编号。"""
+    failed = _run(
+        state="done",
+        purpose="找蒲公英",
+        result={"status": "failed", "summary": "这一片没有找到蒲公英"},
+    )
+    line = goal_failure_line(failed)
+    assert "没做成" in line and "找蒲公英" in line and "这一片没有找到蒲公英" in line
+    assert str(failed.goal_id) not in line, "目标编号是任务系统内部信息，不进主播侧"
+
+    partial = _run(state="done", purpose="搭水车", result={"status": "partial", "summary": "架子立了轮子没装"})
+    assert "只做了一半" in goal_failure_line(partial)
+
+
+def test_goal_failure_line_empty_for_done_and_cancelled() -> None:
+    """做成与主动取消不发：做成走委派交付上报，取消是人主动收手，都不是要说给观众的意外。"""
+    done = _run(state="done", result={"status": "done", "summary": "找到了 24 个"})
+    cancelled = _run(state="done", result={"status": "cancelled", "summary": "不找了"})
+    assert goal_failure_line(done) == ""
+    assert goal_failure_line(cancelled) == ""
 
 
 def test_pause_notice_prefers_mod_reason_and_ignores_stale_urgent() -> None:

@@ -31,7 +31,7 @@ from src.modules.tools.tasks import TERMINAL_TASK_STATES
 from .context import json_text
 from .maicraft import AWAITING_ANSWER, EXECUTE, PROVIDER, PAUSED, GoalRun, ledger_status_of, ledger_task_id
 
-__all__ = ["GoalLedger", "finish_notice", "goal_label", "pause_notice"]
+__all__ = ["GoalLedger", "finish_notice", "goal_failure_line", "goal_label", "pause_notice"]
 
 logger = get_logger("MinecraftGoalLedger")
 
@@ -76,6 +76,23 @@ def finish_notice(run: GoalRun, self_brief: str) -> str:
         f"[系统] 目标 {run.goal_id}（{goal_label(run)}）结束了：{run.result_status}。"
         f"{body}{label}：{json_text(run.result)}"
     )
+
+
+def goal_failure_line(run: GoalRun) -> str:
+    """目标没做成/只做了一半时给主播的一句话（milestone 事件用）；其余状态返回空串。
+
+    目标结束（做成与没做成）只走 ``finish_notice`` 注入游戏 Agent 自己的
+    队列，主播侧要等下一个决策窗才看得到——失败尤其值得当场说（场 65：
+    压机问题驻留 63 分钟，她每次都晚一拍）。做成不在此列：委派交付已有
+    delivery 上报当场触发，非委派的中间成果逐个播报会刷屏。
+    """
+    status = run.result_status
+    if status not in ("failed", "partial"):
+        return ""
+    label = "没做成" if status == "failed" else "只做了一半"
+    summary = (run.summary or "").strip()
+    body = f"：{summary}" if summary else ""
+    return f"{goal_label(run)}{label}{body}"
 
 
 def pause_notice(

@@ -51,7 +51,7 @@ from src.agents.minecraft.context_fold import (
 from src.agents.minecraft.creature_book import CreatureBook, creature_from_record, creature_record
 from src.agents.minecraft.delegation_book import DelegationBook
 from src.agents.minecraft.furnace_wait import TIMER_DUE, FurnaceWaits
-from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_label, pause_notice
+from src.agents.minecraft.goal_ledger import GoalLedger, finish_notice, goal_failure_line, goal_label, pause_notice
 from src.agents.minecraft.wait_progress import Coords, WaitProgress, self_coords, watchdog_wakeup_notice
 from src.agents.minecraft.glance import (
     RememberedPlacesCache,
@@ -1439,6 +1439,11 @@ class MinecraftAgent(BaseAgent):
             # obtain 装好炉先走（partial + WRONG_TIME）不是做不成：记下回炉计时，等它响之前结束一轮算在等炉子
             self._furnace_waits.absorb(run)
             self._inject_wakeup_message(finish_notice(run, self_brief))
+            failure_line = goal_failure_line(run)
+            if failure_line:
+                # 没做成/只做一半当场发给主播：做成走委派交付上报，失败没有别的实时通道，
+                # 不发她要等下一个决策窗才知道（场 65 压机问题驻留 63 分钟的教训）
+                await self._emit_game_event("milestone", failure_line)
             spar = spar_outcome_line(run)
             if spar is not None:
                 # 切磋中他打中她的不进挨打事件，主播只知道有人约切磋、不知道打得怎样：收手时把输赢告诉主播，
