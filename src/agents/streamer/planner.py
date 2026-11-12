@@ -105,6 +105,8 @@ PLANNER_PROFILE: str = "planner"
 
 #: 社交事实工具的全名：注册了才在提示词里点名它（作废条款与主动窗行动选项）
 SOCIAL_FACT_TOOL_NAME: str = "streamer_social_fact"
+#: 场内记忆更正工具的全名：注册了才在主动窗行动选项里点名它
+MEMORY_CORRECT_TOOL_NAME: str = "streamer_memory_correct"
 
 #: 作废条款里"记一条取代旧行的社交事实"那一步（模板变量 social_fact_step；工具没注册时为空串）
 _SOCIAL_FACT_RETRACTION_STEP: str = "再用 `streamer_social_fact` 把作废记成一条新事实，取代旧的那一行。"
@@ -498,6 +500,8 @@ class Planner:
         # 本窗能点名的档案行：常驻简报里标着编号的加本批卡片里的
         self._round_archive_ids: Set[int] = set()
         self._memory_labels: Dict[int, str] = {}
+        # 最近一轮决策前读取到的现场速览文本，供场内更正工具逐字核对游戏现场回执
+        self._last_overview_text: str = ""
 
         self._assembler = PlannerAssembler()
         # 工具刚返回的截图：观察里只留文字，真图挂在下一步请求的尾部让模型看一次
@@ -663,6 +667,7 @@ class Planner:
         # 决策前自动读一次配置的只读参考工具（如游戏现场速览）：结果直接进参考段，
         # 不必先花一步请求去查再决定说什么。
         overview = await self._read_reference_tools(round_id)
+        self._last_overview_text = overview
         reference_text, reference_failure = await self._assemble_reference(
             batch,
             history,
@@ -999,6 +1004,15 @@ class Planner:
         """社交事实工具注册了没有：提示词里点名它的两处（作废条款、主动窗行动选项）只在注册时出现。"""
         return self._tool_registry is not None and self._tool_registry.has(SOCIAL_FACT_TOOL_NAME)
 
+    def _memory_correct_tool_ready(self) -> bool:
+        """场内记忆更正工具注册了没有：主动窗行动选项里只在注册时列出。"""
+        return self._tool_registry is not None and self._tool_registry.has(MEMORY_CORRECT_TOOL_NAME)
+
+    @property
+    def last_overview_text(self) -> str:
+        """最近一轮决策前读取到的现场速览文本（供场内记忆更正工具核对现场回执）。"""
+        return self._last_overview_text
+
     def _inside_jokes_block(self) -> str:
         """老梗栏渲染：运营者手写的老梗，抬头写明只在观众提起时才接；空串时整段省略。
 
@@ -1159,6 +1173,7 @@ class Planner:
                 "安排游戏里的活（framework_delegate 派单、framework_prompt 补要求、"
                 "framework_task_cancel 撤单）、查游戏那边的工作日志、"
                 "查自己记得的事（memory_recall）、"
+                + ("更正简报里的旧记忆（streamer_memory_correct）、" if self._memory_correct_tool_ready() else "")
                 + ("记一笔游戏里的社交事实（streamer_social_fact）、" if self._social_fact_tool_ready() else "")
                 + "让形象动一下（avatar_act，不出声不占台词预算）；也可以什么都不做，等下一个事件。"
                 "这些只是此刻能做的几类，不限于此——手上有什么活、想做什么，就做什么。"

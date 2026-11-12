@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AbstractSet, Callable, List, Mapping, Optional, Sequence, Tuple
 
 from src.modules.storage.models.memory import ArchiveLine, Commitment, SnapshotLine
@@ -134,6 +134,8 @@ class BriefRenderContext:
     unsaved_games: Tuple[str, ...]
     used_archive_ids: AbstractSet[int]
     other_save_commitments: Tuple[Commitment, ...] = ()
+    archive_corrections: Mapping[int, str] = field(default_factory=dict)
+    operator_notes: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

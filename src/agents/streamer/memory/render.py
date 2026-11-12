@@ -112,6 +112,7 @@ _CUE_HEADER = (
     "一句台词最多带一件旧事）"
 )
 # 各分区抬头：新增分区只需往 BRIEF_ZONES 加一项，渲染骨架不动
+_OPERATOR_NOTES_HEADER = "【运营本场提醒过】（与旧记忆或之前的印象冲突时，以此为准）："
 _WORLD_ZONE_HEADER = "【这个世界里】"
 _RECENT_ZONE_HEADER = "【最近几场】"
 _ROOM_ZONE_HEADER = "【直播间里的事】"
@@ -250,8 +251,9 @@ def _format_event_line(
     current_saves: Mapping[str, GameSave],
     used_ids: AbstractSet[int],
     when_label: str = "",
+    correction_note: str = "",
 ) -> str:
-    """渲染单条普通事件档案行：带编号、标题、原话及必要的来源/存档/时间注记。"""
+    """渲染单条普通事件档案行：带编号、标题、原话及必要的来源/存档/时间/本场更正注记。"""
     title, quote = _line_texts(line)
     if not title:
         return ""
@@ -264,7 +266,9 @@ def _format_event_line(
         notes.append(when_label)
     head = f"- [{render_archive_number(line.id)}] {title}"
     text = f"{head}（{'；'.join(notes)}）" if notes else head
-    return f"{text}{_USED_THIS_SESSION}" if int(line.id) in used_ids else text
+    if int(line.id) in used_ids:
+        text = f"{text}{_USED_THIS_SESSION}"
+    return f"{text}（本场更正：{correction_note}）" if correction_note else text
 
 
 def _format_lasting_item(
@@ -273,8 +277,9 @@ def _format_lasting_item(
     current_saves: Mapping[str, GameSave],
     used_ids: AbstractSet[int],
     bullet: bool = True,
+    correction_note: str = "",
 ) -> str:
-    """渲染单条稳定的事：只给编号与标题（及必要的来源/存档不明注记），不带原话以节省常驻预算。"""
+    """渲染单条稳定的事：只给编号与标题（及必要的来源/存档不明/本场更正注记），不带原话以节省常驻预算。"""
     title, _quote = _line_texts(line)
     if not title:
         return ""
@@ -285,7 +290,9 @@ def _format_lasting_item(
     prefix = "- " if bullet else ""
     head = f"{prefix}[{render_archive_number(line.id)}] {title}"
     text = f"{head}（{'；'.join(notes)}）" if notes else head
-    return f"{text}{_USED_THIS_SESSION}" if int(line.id) in used_ids else text
+    if int(line.id) in used_ids:
+        text = f"{text}{_USED_THIS_SESSION}"
+    return f"{text}（本场更正：{correction_note}）" if correction_note else text
 
 
 def render_archive_block(
@@ -343,7 +350,11 @@ def _render_world_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
         parts: List[str] = []
         for item in chunk:
             formatted = _format_lasting_item(
-                item.line, current_saves=ctx.current_saves, used_ids=ctx.used_archive_ids, bullet=False
+                item.line,
+                current_saves=ctx.current_saves,
+                used_ids=ctx.used_archive_ids,
+                bullet=False,
+                correction_note=ctx.archive_corrections.get(int(item.line.id), ""),
             )
             if formatted:
                 parts.append(formatted)
@@ -353,7 +364,11 @@ def _render_world_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
             lines.append(prefix + "；".join(parts))
     for item in others:
         formatted = _format_lasting_item(
-            item.line, current_saves=ctx.current_saves, used_ids=ctx.used_archive_ids, bullet=True
+            item.line,
+            current_saves=ctx.current_saves,
+            used_ids=ctx.used_archive_ids,
+            bullet=True,
+            correction_note=ctx.archive_corrections.get(int(item.line.id), ""),
         )
         if formatted:
             lines.append(formatted)
@@ -371,14 +386,24 @@ def _render_recent_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
     if prev_items:
         lines.append(_WHEN_STALE_PREVIOUS_HEADER if ctx.previous_is_stale else _WHEN_PREVIOUS_HEADER)
         for item in prev_items:
-            formatted = _format_event_line(item.line, current_saves=ctx.current_saves, used_ids=ctx.used_archive_ids)
+            formatted = _format_event_line(
+                item.line,
+                current_saves=ctx.current_saves,
+                used_ids=ctx.used_archive_ids,
+                correction_note=ctx.archive_corrections.get(int(item.line.id), ""),
+            )
             if formatted:
                 lines.append(formatted)
                 cited.append(int(item.line.id))
     if earlier_items:
         lines.append(_WHEN_EARLIER_HEADER)
         for item in earlier_items:
-            formatted = _format_event_line(item.line, current_saves=ctx.current_saves, used_ids=ctx.used_archive_ids)
+            formatted = _format_event_line(
+                item.line,
+                current_saves=ctx.current_saves,
+                used_ids=ctx.used_archive_ids,
+                correction_note=ctx.archive_corrections.get(int(item.line.id), ""),
+            )
             if formatted:
                 lines.append(formatted)
                 cited.append(int(item.line.id))
@@ -397,14 +422,23 @@ def _render_room_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
         is_prev = is_from_session(item.line, ctx.archive_session_id)
         if is_prev:
             has_prev = True
+        note = ctx.archive_corrections.get(int(item.line.id), "")
         if item.lasting:
             formatted = _format_lasting_item(
-                item.line, current_saves=ctx.current_saves, used_ids=ctx.used_archive_ids, bullet=True
+                item.line,
+                current_saves=ctx.current_saves,
+                used_ids=ctx.used_archive_ids,
+                bullet=True,
+                correction_note=note,
             )
         else:
             when = _WHEN_PREVIOUS if is_prev and not ctx.previous_is_stale else _WHEN_EARLIER
             formatted = _format_event_line(
-                item.line, current_saves=ctx.current_saves, used_ids=ctx.used_archive_ids, when_label=when
+                item.line,
+                current_saves=ctx.current_saves,
+                used_ids=ctx.used_archive_ids,
+                when_label=when,
+                correction_note=note,
             )
         if formatted:
             lines.append(formatted)
@@ -489,6 +523,8 @@ def _build_render_context(
     current_saves: Optional[Mapping[str, GameSave]] = None,
     unsaved_games: Sequence[str] = (),
     used_archive_ids: AbstractSet[int] = frozenset(),
+    archive_corrections: Optional[Mapping[int, str]] = None,
+    operator_notes: Sequence[str] = (),
 ) -> BriefRenderContext:
     """把简报原始输入归一化为各分区共享的只读上下文（同句台词既写档案又记承诺时只留承诺）。"""
     listed = _listed_commitments(commitments)
@@ -513,6 +549,8 @@ def _build_render_context(
         unsaved_games=tuple(unsaved_games),
         used_archive_ids=used_archive_ids,
         other_save_commitments=tuple(other_save_commitments),
+        archive_corrections={int(k): str(v) for k, v in (archive_corrections or {}).items() if str(v).strip()},
+        operator_notes=tuple(" ".join(str(note).split()) for note in operator_notes if str(note).strip()),
     )
 
 
@@ -632,6 +670,8 @@ def render_brief(
     current_saves: Optional[Mapping[str, GameSave]] = None,
     unsaved_games: Sequence[str] = (),
     used_archive_ids: AbstractSet[int] = frozenset(),
+    archive_corrections: Optional[Mapping[int, str]] = None,
+    operator_notes: Sequence[str] = (),
     zones: Sequence[BriefZoneSpec] = BRIEF_ZONES,
 ) -> str:
     """Planner 系统提示词末尾的常驻简报；所有分区与别的存档折叠行都空时返回空串（整段省略）。
@@ -652,16 +692,29 @@ def render_brief(
         current_saves=current_saves,
         unsaved_games=unsaved_games,
         used_archive_ids=used_archive_ids,
+        archive_corrections=archive_corrections,
+        operator_notes=operator_notes,
     )
     folded_other_saves = _render_folded_other_saves(ctx)
+    operator_block: List[str] = []
+    if ctx.operator_notes:
+        operator_block = [_OPERATOR_NOTES_HEADER, *(f"- {note}" for note in ctx.operator_notes)]
     rendered_zones: List[str] = []
     for zone in zones:
         output = zone.render(ctx)
         if output.lines:
             rendered_zones.append("\n".join([zone.header, *output.lines]) if zone.header else "\n".join(output.lines))
-    if not folded_other_saves and not rendered_zones:
+    if not operator_block and not folded_other_saves and not rendered_zones:
         return ""
-    return "\n".join([_BRIEF_HEADER, *render_save_heads(ctx.current_saves), *folded_other_saves, *rendered_zones])
+    return "\n".join(
+        [
+            _BRIEF_HEADER,
+            *render_save_heads(ctx.current_saves),
+            *operator_block,
+            *folded_other_saves,
+            *rendered_zones,
+        ]
+    )
 
 
 def render_cue_header() -> str:

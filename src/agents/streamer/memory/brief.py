@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, AbstractSet, List, Mapping, Optional, Sequence
 
 from src.modules.logging import get_logger
 from src.modules.storage.models.memory import Commitment, SnapshotLine
+from src.modules.storage.repos.memory_corrections import format_correction_note
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
@@ -37,14 +38,16 @@ from .render import (
 )
 
 if TYPE_CHECKING:
-    from src.modules.storage.repos import ArchiveRepo, ChatRepo, CommitmentRepo, EventRepo
+    from src.modules.storage.repos import ArchiveRepo, ChatRepo, CommitmentRepo, EventRepo, MemoryCorrectionRepo
 
-__all__ = ["MemoryBrief", "build_brief", "load_used_refs"]
+__all__ = ["MAX_OPERATOR_NOTES_IN_BRIEF", "MemoryBrief", "build_brief", "load_used_refs"]
 
 logger = get_logger("MemoryBrief")
 
 # 一次读多少条未了结承诺（够筛出不挂游戏、不针对人的那几条）
 _CANDIDATE_LIMIT = 200
+# 常驻简报顶部最多保留最近几条本场运营提醒
+MAX_OPERATOR_NOTES_IN_BRIEF = 3
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,7 @@ async def build_brief(
     live_session_id: Optional[int] = None,
     event_repo: Optional["EventRepo"] = None,
     current_saves: Optional[Mapping[str, GameSave]] = None,
+    correction_repo: Optional["MemoryCorrectionRepo"] = None,
 ) -> MemoryBrief:
     """拼一份常驻简报；两段料都没取到时返回空简报（系统提示词里整段省略）。
 
@@ -103,6 +107,7 @@ async def build_brief(
         recent_session_ids=recent_session_ids,
         earliest_recent_ms=earliest_recent_ms,
     )
+    archive_corrections, operator_notes = await _load_session_corrections(correction_repo, live_session_id)
     text = render_brief(
         snapshot_lines=snapshot_lines,
         commitments=taken,
@@ -114,6 +119,8 @@ async def build_brief(
         current_saves=saves,
         unsaved_games=await _unsaved_games(event_repo, previous_session_id, saves),
         used_archive_ids=used_archive,
+        archive_corrections=archive_corrections,
+        operator_notes=operator_notes,
     )
     return MemoryBrief(
         text=text,
@@ -243,3 +250,25 @@ async def _pending_commitments(
         earliest_recent_ms=earliest_recent_ms,
         limit=MAX_BRIEF_COMMITMENTS,
     )
+
+
+async def _load_session_corrections(
+    correction_repo: Optional["MemoryCorrectionRepo"],
+    live_session_id: Optional[int],
+) -> Tuple[dict[int, str], List[str]]:
+    """读取本场生效中的档案行更正映射与最近几条运营常驻提醒；未开播或未注入时返回空。"""
+    if correction_repo is None or live_session_id is None:
+        return {}, []
+    try:
+        items = await correction_repo.list_active_by_session(live_session_id=int(live_session_id))
+    except Exception as exc:  # noqa: BLE001 - 更正读不到不挡常驻简报主干
+        logger.warning(f"读取本场记忆更正失败（简报暂不附更正注记）: {exc}", exc=exc)
+        return {}, []
+    archive_map: dict[int, str] = {}
+    operator_notes: List[str] = []
+    for item in items:
+        if item.target_kind == "archive" and item.archive_line_id is not None:
+            archive_map[int(item.archive_line_id)] = format_correction_note(item.verdict, item.summary)
+        elif item.target_kind == "general" and item.source == "operator" and item.summary.strip():
+            operator_notes.append(item.summary.strip())
+    return archive_map, operator_notes[-MAX_OPERATOR_NOTES_IN_BRIEF:]

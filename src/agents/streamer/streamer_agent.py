@@ -52,6 +52,8 @@ from src.modules.events.payloads.game_chat import GameChatPayload, GameSelfChatt
 from src.modules.llm.embedding import EmbeddingSetup
 from src.modules.logging import get_logger
 from src.modules.utils.task_utils import spawn_background_task
+from src.modules.storage.repos._base import BaseRepo
+from src.modules.storage.repos.memory_corrections import MemoryCorrectionRepo
 from src.modules.tools import ToolSpec
 from src.modules.tools.models import ToolInvocation
 from src.modules.tools.tasks import IN_PROGRESS_TASK_STATES, REPLY_NOTE_AT_KEY, REPLY_NOTE_KEY
@@ -98,6 +100,7 @@ from .planner_render import Intent
 from .stats import StreamerStats
 from .timeline import StreamerTimeline
 from .trigger_cause import TriggerCause, TriggerKind, TriggerSource, cause_for_batch_flush
+from .tools.memory_correct import MemoryCorrectionToolProvider, build_memory_correct_tool_spec
 from .tools.reply_tool import ReplyToolProvider
 from .tools.social_fact import SocialFactToolProvider, build_social_fact_tool_spec
 from .command.router import CommandRouter
@@ -382,6 +385,24 @@ class StreamerAgent(BaseAgent):
         # 账本两仓储（承诺 + 场次档案）：下播整理写入，常驻简报/线索卡/回想工具读取
         self._commitments_repo = commitments_repo
         self._archive_repo = archive_repo
+        self._game_player_repo = game_player_repo
+        # 场内记忆更正仓储：从已有 SQLite 账本仓储同库派生，供场内更正工具、运营常驻提醒与简报渲染共用
+        _correction_cm = (
+            archive_repo.connection_manager
+            if isinstance(archive_repo, BaseRepo)
+            else commitments_repo.connection_manager
+            if isinstance(commitments_repo, BaseRepo)
+            else sessions_repo.connection_manager
+            if isinstance(sessions_repo, BaseRepo)
+            else None
+        )
+        self._memory_correction_repo: Optional[MemoryCorrectionRepo] = (
+            MemoryCorrectionRepo(_correction_cm)
+            if _correction_cm is not None and (archive_repo is not None or commitments_repo is not None)
+            else None
+        )
+        # 待落库的本场运营常驻提醒（receive_prompt 同步入口入队，下一窗重渲简报前异步落进 memory_corrections）
+        self._pending_operator_notes: deque[str] = deque()
         # 游戏社交事实：场内工具登记、参考段每批现读、回想工具查（None 时三处都关）
         self._social_fact_repo = social_fact_repo
         self._event_repo = event_repo
@@ -955,8 +976,12 @@ class StreamerAgent(BaseAgent):
         ``_on_start → _register_tools`` 才实例化；此时回退到工厂函数构造
         spec（同一套定义，无事实源漂移）。
         """
-        # 社交事实工具只在仓储注入时注册，声明口径同注册口径
-        extra = [build_social_fact_tool_spec()] if self._social_fact_repo is not None else []
+        # 社交事实工具与场内记忆更正工具只在对应仓储可用时注册，声明口径同注册口径
+        extra: List[ToolSpec] = []
+        if self._social_fact_repo is not None:
+            extra.append(build_social_fact_tool_spec())
+        if self._memory_correction_repo is not None:
+            extra.append(build_memory_correct_tool_spec())
         if self._reply_provider is not None:
             return [*self._reply_provider.list_tools(), *extra]
 
@@ -1022,6 +1047,22 @@ class StreamerAgent(BaseAgent):
                     registry=self._tool_registry,
                 )
                 registered += " / streamer_social_fact"
+            if self._memory_correction_repo is not None:
+                self.register_tool_provider(
+                    MemoryCorrectionToolProvider(
+                        correction_repo=self._memory_correction_repo,
+                        session_provider=self._current_session_pk,
+                        brief_archive_ids_provider=lambda: self._memory_brief_archive_ids,
+                        commitments_repo=self._commitments_repo,
+                        event_repo=self._event_repo,
+                        game_player_repo=self._game_player_repo,
+                        chat_repo=self._chat_repo,
+                        overview_provider=lambda: getattr(self._planner, "last_overview_text", ""),
+                        on_written=self._refresh_memory_brief,
+                    ),
+                    registry=self._tool_registry,
+                )
+                registered += " / streamer_memory_correct"
             self._logger.info(f"StreamerAgent 工具已注册：{registered}（名单 [streamer]）")
 
     # ==================================================================
@@ -1194,6 +1235,7 @@ class StreamerAgent(BaseAgent):
             self._game_side.reset()
             self._room_state.reset_session()
             self._spoken_log.reset()
+            self._pending_operator_notes.clear()
         # 按场次类型先拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗按表快照重渲。
         # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策窗自然重渲出
         # 新简报，这期间简报退化为更早一场的档案
@@ -1551,6 +1593,7 @@ class StreamerAgent(BaseAgent):
             self._game_side.reset()
             self._room_state.reset_session()
             self._spoken_log.reset()
+            self._pending_operator_notes.clear()
         # 收播收尾：排进后台，依次是"等队尾台词播完 → 本场整理（有上限）→ 记账器清理"。
         # 场次行已删或将删时不整理（空场次没东西可整理，用户删掉的场次本意是清掉它），
         # 但后面的清理照跑：待删观众与保留期清理不依赖场次行。
@@ -1843,6 +1886,10 @@ class StreamerAgent(BaseAgent):
             label="StreamerAgent.settle_catchup",
         )
 
+    async def refresh_memory_brief(self, *, kind: Optional[SessionKind] = None, announce: bool = False) -> None:
+        """按台账快照重渲常驻简报（公开接缝，供决策窗与测试驱动重渲）。"""
+        await self._refresh_memory_brief(kind=kind, announce=announce)
+
     async def _refresh_memory_brief(self, *, kind: Optional[SessionKind] = None, announce: bool = False) -> None:
         """按台账快照重渲常驻简报（每决策窗一次）；仓储缺失时为空。
 
@@ -1856,6 +1903,7 @@ class StreamerAgent(BaseAgent):
             self._memory_brief_archive_ids = ()
             self._memory_used_archive_ids = ()
             return
+        await self._flush_pending_operator_notes()
         resolved_kind = kind if kind is not None else self._current_session_kind()
         try:
             brief = await build_brief(
@@ -1869,6 +1917,7 @@ class StreamerAgent(BaseAgent):
                 # 分存档的游戏：开头写眼下在哪个存档，上一场别的存档里的事折成一行
                 event_repo=self._event_repo,
                 current_saves=self._current_saves,
+                correction_repo=self._memory_correction_repo,
             )
         except Exception as exc:  # noqa: BLE001 - 简报拼不出来只省这一段，不挡开播
             self._logger.warning(f"拼常驻简报失败（本场省略简报段）: {exc}", exc=exc)
@@ -1883,6 +1932,24 @@ class StreamerAgent(BaseAgent):
         self._memory_used_archive_ids = brief.used_archive_ids
         if announce:
             await self._log_brief_summary(brief)
+
+    async def _flush_pending_operator_notes(self) -> None:
+        """把运营在本场递进来的提醒落进 memory_corrections，使它在本场常驻简报与下播整理中一直可见。"""
+        if not self._pending_operator_notes:
+            return
+        session_id = self._current_session_pk()
+        if self._memory_correction_repo is None or session_id is None:
+            self._pending_operator_notes.clear()
+            return
+        while self._pending_operator_notes:
+            note = self._pending_operator_notes.popleft()
+            try:
+                await self._memory_correction_repo.record_operator_note(
+                    live_session_id=int(session_id),
+                    content=note,
+                )
+            except Exception as exc:  # noqa: BLE001 - 单条提醒落库异常不阻塞本窗简报渲染
+                self._logger.warning(f"本场运营常驻提醒落库失败: {exc}", exc=exc)
 
     async def _log_brief_summary(self, brief: Any) -> None:
         """开播时记一条简报摘要：上一场编号、档案行数、播出台词数与承诺条数。"""
@@ -2433,6 +2500,9 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"提醒队列已满（{_REMINDER_QUEUE_MAX}），拒收递话（source={source or '未知'}）")
             return False
         self._reminder_queue.append(text)
+        # 运营从控制台发来的提醒除了进当窗【运营提醒】，还落成本场常驻更正提醒（本场未完不消失，下播整理按事实参考处理）
+        if source in ("operator", "dashboard") and self._current_session_pk() is not None:
+            self._pending_operator_notes.append(text)
         # 到达即唤醒 flush 循环：递话不必陪弹幕批次等完当前 tick
         self._flush_kick.set()
         self._emit_prompt_received(text=text, source=source)
