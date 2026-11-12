@@ -1,19 +1,21 @@
 """
-AgentControl —— 框架级 Agent 控制与委派/递话
+AgentControl —— 框架级 Agent 控制与委派/递话/结单
 
-- framework_delegate / framework_task_status / framework_task_cancel：
-  跨 Agent 委派原语——派活拿回执（accepted + task_id），任务进度随时可查，
-  在途可撤；指令只当自然语言（给目标，不给步骤），不加编排/条件分支
-- framework_prompt：递话原语——纯文本留言（插话/提醒），不派任务、
-  不进账本；与委派共享 Agent 侧文本接缝（receive_prompt），记账分家
-- provider="framework"（框架内置提供，非独立源；可见名单默认 ["*"]）
-- pause / resume / shutdown / 状态查询等控制能力由 ``AgentControl``
-  类本体承载，不进 LLM 工具面；控制面（DashboardServer）经 API 直调
-  （重建走 ``AgentManager.rebuild``，不经本类）
+- framework_delegate / framework_task_settle / framework_task_status：
+  跨 Agent 委派原语——每个执行者任何时刻至多一件【在做】，其余都在【待办】（还没开工的、
+  先搁下带进度的）；换活必须同时交代在做那件怎么结（做完了 / 先搁下 / 不做了），
+  日常结单与撤单直接报短编号（"在做"、"待办1"……），不把内部任务号念给模型
+- framework_prompt：递话原语——纯文本留言（给正在做的同一件事补充要求，或在聊天里回话），
+  不派新任务、不进账本；与委派共享 Agent 侧文本接缝，记账分家
+- provider="framework"（框架内置提供，非独立源；可见名单默认仅主播侧）
+- pause / resume / shutdown / 状态查询等控制能力由 ``AgentControl`` 类本体承载，
+  不进 LLM 工具面；控制面（DashboardServer）经 API 直调，并与工具面共用同一个
+  ``DelegationCore`` 单例
 
-LLM 工具面注册方式（framework provider 含 delegate/prompt/task_status/task_cancel 四个 spec）：
+LLM 工具面注册方式（framework provider 含 delegate/prompt/task_status/task_settle 四个 spec）：
 ```python
-provider = build_agent_control_provider(manager, task_ledger)
+core = DelegationCore(manager, task_ledger, event_bus=event_bus)
+provider = build_agent_control_provider(manager, task_ledger, event_bus=event_bus, delegation_core=core)
 tool_registry.register_provider(provider)
 ```
 """
@@ -22,21 +24,37 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from collections import deque
-from typing import Any, Callable, ClassVar, Deque, Dict, Iterable, List, Optional
+from typing import Any, Callable, ClassVar, Dict, Iterable, List, Optional
 
 from src.modules.agents.base import BaseAgent
+from src.modules.agents.delegation_board import (
+    BACKLOG_LABEL_PREFIX,
+    BACKLOG_NO_KEY,
+    BACKLOG_SEQ_KEY,
+    DELIVERED_AT_KEY,
+    DELIVERIES_KEY,
+    HELD_KEY,
+    IN_HAND_LABEL,
+    QUEUED_AT_KEY,
+    SHELVED_AT_KEY,
+    SHELVED_PROGRESS_KEY,
+    Board,
+    BoardItem,
+    find_item,
+    read_board,
+)
+from src.modules.agents.delegation_text import compose_redelivery, mark_prompt, own_words_of
 from src.modules.agents.game_tools import business_fail_result
 from src.modules.agents.manager import AgentManager
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.agents import AgentPromptedPayload
+from src.modules.events.payloads.tasks import TaskChangedPayload
+from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
-from src.modules.agents.delegation_text import own_words_of
-from src.modules.events.payloads.tasks import TaskChangedPayload
 from src.modules.tools.tasks import (
-    DELIVERED_TASK_STATES,
+    IN_PROGRESS_TASK_STATES,
     REPLY_NOTE_AT_KEY,
     REPLY_NOTE_KEY,
     TERMINAL_TASK_STATES,
@@ -50,23 +68,39 @@ logger = get_logger("AgentControl")
 # 提供者标识统一来源（ToolSpec.provider / 注册名前缀；主播 Planner 据此识别委派工具面）
 PROVIDER_NAME = "framework"
 
-# 委派队列深度上限（每个执行者一条队列）：超出后普通件拒收并附当前队列清单
+# 每个执行者的待办容量上限：排后面超出上限时拒收并附当前在做与待办清单
 _DELEGATION_QUEUE_LIMIT = 5
 
-# 在途委派看门狗：已送达且账面停在 accepted 的单超时未终态时升级通知发起方，由发起方
-# 决断（继续等/催办/撤单），框架不自动撤单。背景：委派队列只在在途单走到终态时投递
-# 下一件，在途单被实质放弃（执行方被别的事拉走、从没开跑）却永不终态，会把排队件堵死。
-# 只计 accepted：queued 是排队（没送到，不受执行方牵连）、suspended 是急件抢占的
-# 有意挂起（发起方可见），均不计超时；转 running 即执行方已接手，accepted 窗口结束。
-_DELEGATION_WATCHDOG_TIMEOUT_MS = 600_000
-# 同一单升级次数上限（每次升级重置计时窗口，可再超时再升级）：防发起方始终不决断时无限打扰
+# 在做委派看门狗：执行者手上那件【在做】既无在跑子目标、又超过该时长没有任何工具或任务活动、
+# 且未交付时，带短编号提醒发起方定夺（做完了 / 接着催 / 先搁下或作废），框架不代撤单
+_DELEGATION_WATCHDOG_TIMEOUT_MS = 300_000
+# 低频定时巡检间隔：静默期没有任务事件到达时，仍按此周期检查在做单是否停滞
+_DELEGATION_WATCHDOG_INTERVAL_MS = 30_000
+# 同一张在做单最多提醒次数（每次提醒重置窗口）：防发起方始终不决断时无限打扰
 _DELEGATION_WATCHDOG_MAX_ESCALATIONS = 2
 
-# 拒受理/队列清单里不当"已知进展"列出的快照字段：指令全文与原话另有一行；执行 Agent 最近那句判断是没脱敏的
-# 推理原文，不给发起方回读
-_NOT_PROGRESS_KEYS = frozenset({"instruction", "own_words", REPLY_NOTE_KEY, REPLY_NOTE_AT_KEY})
-# 委派队列自己写进快照的标记（急件、入队时刻）：不是执行进展，也不进拒收理由
-_QUEUE_SNAPSHOT_KEYS = frozenset({"urgent", "queued_at_ms"})
+# 拒收理由里不当"已知进展"回显的快照键：指令全文与原话另有一行；执行侧最近一句推理是未脱敏原文；
+# 看板簿记键是受理核心自己写的顺序与时刻，不是执行进展
+_NOT_PROGRESS_KEYS = frozenset(
+    {
+        "instruction",
+        "own_words",
+        REPLY_NOTE_KEY,
+        REPLY_NOTE_AT_KEY,
+        BACKLOG_NO_KEY,
+        BACKLOG_SEQ_KEY,
+        QUEUED_AT_KEY,
+        DELIVERIES_KEY,
+        DELIVERED_AT_KEY,
+        SHELVED_AT_KEY,
+        SHELVED_PROGRESS_KEY,
+        HELD_KEY,
+        "urgent",
+    }
+)
+
+_VALID_WHEN_BUSY = frozenset({"queue", "replace"})
+_VALID_OUTCOMES = frozenset({"done", "shelve", "drop"})
 
 
 def _emit_prompted(event_bus: Any, *, target: str, content: str, source: str) -> None:
@@ -89,67 +123,88 @@ def _emit_prompted(event_bus: Any, *, target: str, content: str, source: str) ->
     loop.create_task(_send())
 
 
+def _merge_progress(caller_note: str, executor_note: str) -> str:
+    """合并发起方补充的进度与执行方收手回报的进度（同文不重复）。"""
+    left = caller_note.strip()
+    right = executor_note.strip()
+    if left and right and left != right:
+        return f"{left}（执行侧记录：{right}）"
+    return left or right
+
+
 # -------------------- 工具规格 --------------------
 
-#: 委派工具的固定说明（可委派对象随名册动态追加，见 AgentControlProvider.list_tools）
+#: 委派工具的固定说明
 _DELEGATE_DESCRIPTION = (
-    "把一项工作委派给目标 Agent：给目标与自然语言指令（不给步骤），"
-    "立刻返回受理回执（accepted + task_id）。任务状态变化会以事件通知你；"
-    "随时可用 framework_task_status 按 task_id 查询进度与快照。"
-    "目标手上已有未完成的事时普通件自动排队（回执带排位），不用重复派、"
-    "也不用先撤在途；确属急事才把 urgent 设为 true：目标支持暂放时会放下手头的活"
-    "立刻办你的急事（手头那件挂起保留、急事做完接着做），不支持时急件置顶排队。"
-    "同一时刻最多一件急事在办，第二件急件也置顶排队。"
+    "安排目标 Agent 做一件事（给目标与完成标准，不给步骤），或把【待办】里已有的一件提上来做。"
+    "每个目标任何时刻至多一件【在做】，其余都在【待办】。目标手上已有【在做】时："
+    "when_busy='queue'（默认）排进待办后面，轮到时自动送达，不用重复派；"
+    "when_busy='replace' 停下手上那件换成这件——此时必须同时填 current 交代当前【在做】怎么结："
+    "'done'（已经做完了结单）/ 'shelve'（先搁下放回待办最前，保留做到哪）/ 'drop'（不做了作废）。"
 )
 
 #: 递话工具的固定说明
 _PROMPT_DESCRIPTION = (
-    "向目标 Agent 递话（插话/提醒/纠正）：纯文本留言，不派新任务、不产生"
-    "任务号。目标执行中会在下一步推理前吸收，任务挂起中会被唤醒重新判断。"
+    "向目标 Agent 递话：不派新任务、不改账面单子。分两种（kind）："
+    "'requirement'（默认）只给当前【在做】的同一件事补充要求、限制或回答卡点，要做的事变了（完成标准变了）"
+    "必须改用 framework_delegate 换单；'chat' 只是在游戏聊天里回一句话，不改手上的事。"
 )
 
 #: 任务状态工具规格
 _TASK_STATUS_SPEC: ToolSpec = ToolSpec(
     name="task_status",
     description=(
-        "按任务号查询异步任务（委派 / 回执型工具受理）的当前状态与快照。"
-        "查询玩家工作文档（todo/notebook/近期上报）用各游戏 Agent 的读取工具，"
-        "两者不重复。"
+        "查询委派任务或回执型工具任务的当前状态与快照：可填 item（短编号如 '在做'、'待办1'）或 task_id。"
+        "查询执行方的工作文档（待办/笔记/近期上报）用各游戏 Agent 自己的读取工具。"
     ),
     parameters_schema={
         "type": "object",
         "properties": {
-            "task_id": {"type": "string", "description": "受理回执返回的任务号"},
+            "agent": {"type": "string", "description": "目标 Agent 注册名（用 item 查询且仅有一个可委派目标时可留空）"},
+            "item": {"type": "string", "description": "看板短编号（'在做' 或 '待办1'、'待办2'……）"},
+            "task_id": {"type": "string", "description": "受理回执返回的任务号（可选，与 item 二选一）"},
         },
-        "required": ["task_id"],
     },
     kind="sync",
     provider=PROVIDER_NAME,
 )
 
-#: 任务撤销工具规格（与 task_status 对仗；只收框架委派号）
-_TASK_CANCEL_SPEC: ToolSpec = ToolSpec(
-    name="task_cancel",
+#: 任务结单/搁下/撤单工具规格（取代旧 task_cancel，支持短编号三选一）
+_TASK_SETTLE_SPEC: ToolSpec = ToolSpec(
+    name="task_settle",
     description=(
-        "撤掉一个还在途的委派任务：按任务号叫停，目标会收到停手通知。"
-        "只收 framework_delegate 受理回执里的委派任务号（deleg_ 开头）；"
-        "执行方自己在游戏里挂的目标不归它管，由执行方用自己的目标工具收场。"
+        "按短编号处置一件委派（不用内部任务号，直接填【我手头在游戏里做的事】或【待办】里的 '在做'、'待办1'……）。"
+        "outcome 三选一：'done'=认定这件已经做完了结单（在做的会收手并自动送达下一件待办）；"
+        "'shelve'=把【在做】先停下搁回待办最前（保留做到哪）；"
+        "'drop'=这件不做了撤单作废（待办件直接移除，不影响正在做的另一件）。"
+        "执行方自己在游戏里挂的子目标不归这里管。"
     ),
     parameters_schema={
         "type": "object",
         "properties": {
-            "task_id": {"type": "string", "description": "要撤掉的委派任务号（deleg_ 开头）"},
+            "agent": {"type": "string", "description": "目标 Agent 注册名（仅有一个可委派目标时可留空）"},
+            "item": {
+                "type": "string",
+                "description": "要处置哪一件：填短编号 '在做' 或 '待办1'、'待办2'……",
+            },
+            "outcome": {
+                "type": "string",
+                "enum": ["done", "shelve", "drop"],
+                "description": "处置结果：'done'=做完了结单，'shelve'=先搁下回待办最前，'drop'=不做了作废",
+            },
+            "progress": {
+                "type": "string",
+                "description": "选填：outcome='shelve' 时记一句做到哪了，或结单备注",
+            },
         },
-        "required": ["task_id"],
+        "required": ["item", "outcome"],
     },
     kind="sync",
     provider=PROVIDER_NAME,
 )
 
 
-# -------------------- AgentControl 工具（写形式，可直接 await） --------------------
-
-# 任务号序号源（模块级共享：provider 与控制面直调同一序列，避免同毫秒撞号）
+# 任务号序号源（模块级共享：多入口同一序列，避免同毫秒撞号）
 _task_id_seq = 0
 
 
@@ -160,81 +215,58 @@ def _generate_task_id() -> str:
     return f"deleg_{now_ms()}_{_task_id_seq}"
 
 
-# -------------------- 委派受理核心（两条入口共用） --------------------
+# -------------------- 委派受理核心（工具面与控制面单例共享） --------------------
 
 
 @dataclass(slots=True)
 class _DelegationOutcome:
-    """委派受理结果——受理核心的统一产出，失败形态由各入口适配器自行映射。
-
-    ``error`` 取值：not_found（目标不在名册/无候选）/ refused（自派、拒收、
-    满员、未接入）/ no_ledger（任务基建未装配）；工具面只消费 message，
-    控制面把 error 原样交给 REST 侧映射 404 / 409 / 503。
-    ``queued`` 为真表示目标忙、这件进了委派队列（``queue_position`` 从 1 起），
-    受理回执照常给任务号——排队也是受理。
-    """
+    """委派受理结果——受理核心的统一产出，失败形态由各入口适配器自行映射。"""
 
     ok: bool
     error: str = ""
     message: str = ""
     task_id: str = ""
     executor: str = ""
+    item: str = ""
+    own_words: str = ""
     queued: bool = False
     queue_position: int = 0
 
 
 @dataclass(slots=True)
-class _QueueEntry:
-    """委派队列条目：受理了还没送到执行方的那件（队列是 Amaidesu 侧机制，零 Mod 依赖）。
+class _SettleOutcome:
+    """结单/搁下/撤单结果——统一产出。"""
 
-    ``own_words`` 是发起方自己的原话（拒收理由与队列清单回显用它，附带的来源
-    对话不外传）；``urgent`` 为真表示急件（插队/置顶，不受深度上限约束）。
-    """
-
-    task_id: str
-    instruction: str
-    own_words: str
-    initiator: str
-    urgent: bool
-    enqueued_at_ms: int
+    ok: bool
+    error: str = ""
+    message: str = ""
+    task_id: str = ""
+    executor: str = ""
+    item: str = ""
+    outcome: str = ""
+    status: str = ""
 
 
 @dataclass(slots=True)
 class _WatchdogEntry:
-    """在途委派看门狗的计时条目（只记已送达且账面停在 accepted 的委派单）。
+    """每个执行者手上那件【在做】的活动看门狗计时。"""
 
-    ``timer_base_ms`` 是当前计时窗口起点：送达受理时起算，每次升级后重置、
-    挂起恢复（suspended 转 accepted）时重置；``suspended`` 为真表示急件抢占
-    挂起中（planner 可见的有意状态），挂起期间暂停计时。
-    ``escalations`` 是已升级次数，到达上限后不再升级。
-    """
-
+    task_id: str
     timer_base_ms: int
     escalations: int = 0
-    suspended: bool = False
 
 
-class _DelegationCore:
-    """委派受理核心：目标解析 → 忙闲三分支 → 目标接收入口 → 账面登记。
+class DelegationCore:
+    """委派受理与结单核心：任务账本唯一事实源，组合根单例供 LLM 工具面与运营控制面共用。
 
-    LLM 工具面（``AgentControlProvider``）与控制面直调（``AgentControl.delegate``）
-    两条入口共用同一套受理不变量——目标存在、禁自派、任务号同序列、账面条目同形
-    （source="agent"、tool="framework_delegate"）；本类只产受理结果，不关心调用方
-    是 LLM 还是运营。指令非空由调用方入口自行校验（provider 校验后给 LLM 可读理由；
-    REST 的请求体契约不在此收紧）。
-
-    受理三分支：目标闲着直派（原路径不动）；目标忙 + 普通件入队（上限
-    ``_DELEGATION_QUEUE_LIMIT``，满员拒收附队列清单）；目标忙 + 急件——先试
-    ``target.suspend_current()``（BaseAgent 可选协议；实现了的执行方暂放手头的活、
-    进度保留），成功就在途单转 suspended、急件立刻派，未实现或暂放失败降级为
-    急件置顶排队。在途单已是急件时不再嵌套挂起，第二件急件同样置顶排队
-    （同一时刻最多一件急事在办）。排队的单在目标名下在途件走到终态时按序送达
-    （订阅 task.changed 触发）；送达被目标拒收当场转 failed 带原因，不留孤儿条目。
-
-    在途单看门狗：accepted 的委派单超时未终态时升级通知发起方（见模块级
-    ``_DELEGATION_WATCHDOG_TIMEOUT_MS`` 注释），检查搭在既有事件驱动点上
-    （task.changed 回调与受理入口），不另起定时器循环——检查节拍跟随任务
-    活动走，长时间无任何任务事件的静默期不检查，是有意的取舍。
+    不变量：
+    1. 每个执行者任何时刻至多一件【在做】（账面 accepted / running / waiting_for_decision），
+       其余未了结的委派都在【待办】（账面 queued：未开工或先搁下）。
+    2. 换活必须结单：目标手上有【在做】且选 ``when_busy="replace"`` 时，按顺序让执行者收手 →
+       送达新件 → 结掉或搁下旧件；新件被目标拒收时立即把旧件原样送回执行者（送回也失败则搁回待办最前）。
+    3. 发起方认定完成记 ``closed_by_initiator``，与执行方主动交付的 ``succeeded`` 严格区分。
+    4. 看门狗盯实际活动：执行者名下没有在跑的 provider 子目标，且连续超过阈值没有任何工具调用
+       或任务状态活动、仍未交付时，带短编号【在做】递话提醒发起方定夺；兼备低频定时循环与事件触发。
     """
 
     def __init__(
@@ -243,169 +275,302 @@ class _DelegationCore:
         task_ledger: Optional[TaskLedger],
         event_bus: Optional[Any] = None,
         clock: Optional[Callable[[], int]] = None,
+        *,
+        watchdog_timeout_ms: int = _DELEGATION_WATCHDOG_TIMEOUT_MS,
+        watchdog_interval_ms: int = _DELEGATION_WATCHDOG_INTERVAL_MS,
     ) -> None:
         self._manager = manager
         self._task_ledger = task_ledger
-        # 每个执行者一条队列（注册名 → 排队条目，队首先送达）
-        self._queues: Dict[str, Deque[_QueueEntry]] = {}
-        # 在途单看门狗计时（task_id → 计时条目）；``clock`` 保留给测试注入假时钟
-        self._watchdog: Dict[str, _WatchdogEntry] = {}
+        self._event_bus = event_bus
         self._clock = clock or now_ms
+        self._watchdog_timeout_ms = watchdog_timeout_ms
+        self._watchdog_interval_ms = watchdog_interval_ms
+        # 每个执行者一把异步锁：收手、换单、结单、自动送达串行化，防并发双投
+        self._locks: Dict[str, asyncio.Lock] = {}
+        # 待办短编号计数器（每个执行者只增不减，本场内稳定）与队头/队尾序号游标
+        self._backlog_nos: Dict[str, int] = {}
+        self._tail_seq = 0
+        self._head_seq = 0
+        # 看门狗：executor → 当前在做单的计时条目，以及执行者最近一次工具/目标活动时刻
+        self._watchdog: Dict[str, _WatchdogEntry] = {}
+        self._last_activity_ms: Dict[str, int] = {}
+        self._watchdog_task: Optional[asyncio.Task[None]] = None
+        self._stopping = False
+        self._subscribed = False
         if event_bus is not None and task_ledger is not None:
             event_bus.on(CoreEvents.TASK_CHANGED, self._on_task_changed, model_class=TaskChangedPayload)
+            event_bus.on(CoreEvents.TOOL_RESULT_WILDCARD, self._on_tool_result, model_class=ToolResultPayload)
+            self._subscribed = True
+
+    # -------------------- 生命周期与后台定时巡检 --------------------
+
+    def start(self) -> None:
+        """启动看门狗低频定时检查循环（幂等；无账本或间隔 ≤0 时跳过）。"""
+        if self._task_ledger is None or self._watchdog_interval_ms <= 0:
+            return
+        if self._watchdog_task is not None and not self._watchdog_task.done():
+            return
+        self._stopping = False
+        self._watchdog_task = asyncio.create_task(self._watchdog_loop(), name="delegation-watchdog")
+
+    async def stop(self) -> None:
+        """停止看门狗定时循环并退订事件（幂等）。"""
+        self._stopping = True
+        task = self._watchdog_task
+        if task is not None:
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("委派看门狗定时循环取消等待超时（5s），继续停机")
+            self._watchdog_task = None
+        if self._subscribed and self._event_bus is not None:
+            for event_name, handler in (
+                (CoreEvents.TASK_CHANGED, self._on_task_changed),
+                (CoreEvents.TOOL_RESULT_WILDCARD, self._on_tool_result),
+            ):
+                try:
+                    self._event_bus.off(event_name, handler)
+                except Exception as exc:  # noqa: BLE001 - 退订失败不阻断停机
+                    logger.debug(f"委派核心退订 {event_name} 忽略异常: {exc}")
+            self._subscribed = False
+
+    async def _watchdog_loop(self) -> None:
+        """低频巡检循环：静默期没有任何任务事件时，仍按固定周期检查在做单是否无实际活动。"""
+        try:
+            while not self._stopping:
+                await asyncio.sleep(self._watchdog_interval_ms / 1000)
+                if self._stopping:
+                    break
+                try:
+                    self.check_watchdog()
+                except Exception as exc:  # noqa: BLE001 - 单步异常不杀循环
+                    logger.exception(f"委派看门狗巡检异常: {exc}")
+        except asyncio.CancelledError:
+            logger.debug("委派看门狗定时循环已取消")
+
+    # -------------------- 事件观察与看门狗 --------------------
+
+    def _lock_of(self, executor: str) -> asyncio.Lock:
+        lock = self._locks.get(executor)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[executor] = lock
+        return lock
+
+    def _note_executor_activity(self, executor: str, at_ms: Optional[int] = None) -> None:
+        """记录执行者一次真实工具或目标活动，同步推进其在做单的看门狗窗口。"""
+        if not executor:
+            return
+        ts = self._clock() if at_ms is None else at_ms
+        if ts > self._last_activity_ms.get(executor, 0):
+            self._last_activity_ms[executor] = ts
+        entry = self._watchdog.get(executor)
+        if entry is not None and ts > entry.timer_base_ms:
+            entry.timer_base_ms = ts
+
+    async def _on_tool_result(self, event_name: str, payload: ToolResultPayload, source: str) -> None:
+        """观察工具调用完成事件：执行者自己的 ReAct 循环调了工具即算有实际活动。"""
+        del event_name, source
+        caller = (payload.caller_source or "").strip()
+        if not caller:
+            return
+        executor = caller.removesuffix("-react")
+        if self._manager.get_agent_by_name(executor) is not None:
+            self._note_executor_activity(executor)
 
     async def _on_task_changed(self, event_name: str, payload: TaskChangedPayload, source: str) -> None:
-        """task.changed 回调：维护看门狗计时；目标名下在途件走到终态时，把排队的下一件送达。"""
+        """task.changed 回调：维护执行者活动时刻、巡检看门狗；委派走到终态时自动送达下一件待办。"""
         del event_name, source
-        self._watchdog_observe(payload)
-        self._watchdog_check()
-        if payload.source != "agent" or payload.status not in TERMINAL_TASK_STATES:
-            return
-        await self._drain_queue(payload.executor)
+        if not payload.alert:
+            if payload.source == "provider" and payload.initiator:
+                self._note_executor_activity(payload.initiator)
+            elif payload.source == "agent" and payload.executor and payload.status not in ("accepted", "queued"):
+                self._note_executor_activity(payload.executor)
+        self.check_watchdog()
+        if payload.source == "agent" and payload.status in TERMINAL_TASK_STATES and payload.executor:
+            await self._drain_queue(payload.executor)
 
-    # -------------------- 在途委派看门狗 --------------------
+    def _has_active_provider_goals(self, executor: str) -> bool:
+        """执行者名下此刻是否有正在跑的后台子目标（provider 型任务，如长距离出行、采集、建造）。"""
+        if self._task_ledger is None:
+            return False
+        for task_id in self._task_ledger.active_task_ids():
+            record = self._task_ledger.get(task_id)
+            if (
+                record is not None
+                and record.source == "provider"
+                and record.initiator == executor
+                and record.status in IN_PROGRESS_TASK_STATES
+            ):
+                return True
+        return False
 
-    def _watchdog_start(self, task_id: str) -> None:
-        """送达受理成功：看门狗开始计时（直派与排队送达两个受理点共用）。"""
-        self._watchdog[task_id] = _WatchdogEntry(timer_base_ms=self._clock())
+    def _watchdog_track(self, executor: str, task_id: str, base_ms: int) -> None:
+        self._watchdog[executor] = _WatchdogEntry(task_id=task_id, timer_base_ms=base_ms)
+        self._last_activity_ms[executor] = base_ms
 
-    def _watchdog_observe(self, payload: TaskChangedPayload) -> None:
-        """随 task.changed 观察计时中的单，按状态迁移维护计时条目。
-
-        终态：出看门狗（队列投递随之恢复，不再升级）。suspended：急件抢占
-        的有意挂起，暂停计时。挂起恢复回 accepted：重置计时窗口再计。
-        转 running / waiting_for_decision：执行方已接手开跑，"受理未开跑"
-        的窗口结束，出看门狗（后续停滞归执行方上报与通用停滞告警管）。
-        """
-        entry = self._watchdog.get(payload.task_id)
-        if entry is None:
-            return
-        if payload.status in TERMINAL_TASK_STATES:
-            self._watchdog.pop(payload.task_id, None)
-        elif payload.status == "suspended":
-            entry.suspended = True
-        elif payload.status == "accepted":
-            if entry.suspended:  # 挂起恢复：重置计时窗口
-                entry.suspended = False
-                entry.timer_base_ms = self._clock()
-        else:
-            self._watchdog.pop(payload.task_id, None)
-
-    def _watchdog_check(self) -> None:
-        """检查全部计时中的单：超时未终态的升级通知发起方，账面已变的对账清理。
-
-        以账面为准对账（accepted→running 这类组内静默迁移不发事件，靠这里
-        认出并出看门狗）；同一单每个超时窗口只升级一次（升级即重置窗口），
-        累计升级到上限后停手。升级只通知、不撤单、不代写账面状态——决断权
-        在发起方。
-        """
-        if not self._watchdog or self._task_ledger is None:
+    def check_watchdog(self) -> None:
+        """巡检全部执行者手上的【在做】委派：无在跑子目标且超时无工具/任务活动时提醒发起方定夺。"""
+        if self._task_ledger is None or self._watchdog_timeout_ms <= 0:
             return
         now = self._clock()
-        for task_id, entry in list(self._watchdog.items()):
-            record = self._task_ledger.get(task_id)
-            if record is None:
-                self._watchdog.pop(task_id, None)  # 已终态移除或被撤
+        executors = set(self._watchdog)
+        for task_id in self._task_ledger.active_task_ids():
+            rec = self._task_ledger.get(task_id)
+            if rec is not None and rec.source == "agent" and rec.tool == "framework_delegate":
+                executors.add(rec.executor)
+        for executor in sorted(executors):
+            board = read_board(self._task_ledger, executor)
+            in_hand = board.in_hand
+            if in_hand is None:
+                self._watchdog.pop(executor, None)
                 continue
-            if record.status == "suspended":
-                entry.suspended = True  # 挂起事件漏观测时的对账兜底：暂停计时
-                continue
-            if record.status != "accepted":
-                self._watchdog.pop(task_id, None)  # 执行方已接手（running 等）：窗口结束
-                continue
-            if entry.suspended:
-                # 挂起已恢复回 accepted（恢复事件没观测到时的对账兜底）：重置窗口
-                entry.suspended = False
+            entry = self._watchdog.get(executor)
+            if entry is None or entry.task_id != in_hand.task_id:
+                base = max(in_hand.delivered_at_ms, self._last_activity_ms.get(executor, 0)) or now
+                entry = _WatchdogEntry(task_id=in_hand.task_id, timer_base_ms=base)
+                self._watchdog[executor] = entry
+            # 执行者名下还有后台目标在跑：正在干活，刷新基准且绝不误报停滞
+            if self._has_active_provider_goals(executor):
                 entry.timer_base_ms = now
+                self._last_activity_ms[executor] = now
                 continue
+            reply_at = int(in_hand.snapshot.get(REPLY_NOTE_AT_KEY) or 0)
+            last_active = max(entry.timer_base_ms, self._last_activity_ms.get(executor, 0), reply_at)
+            if last_active > entry.timer_base_ms:
+                entry.timer_base_ms = last_active
             waited_ms = now - entry.timer_base_ms
-            if waited_ms < _DELEGATION_WATCHDOG_TIMEOUT_MS:
+            if waited_ms < self._watchdog_timeout_ms:
                 continue
             if entry.escalations >= _DELEGATION_WATCHDOG_MAX_ESCALATIONS:
                 continue
             entry.escalations += 1
             entry.timer_base_ms = now
-            self._watchdog_escalate(record, entry.escalations, waited_ms)
+            self._watchdog_escalate(in_hand.record, entry.escalations, waited_ms)
+
+    def _resolve_initiator_receiver(self, initiator: str, executor: str) -> Optional[BaseAgent]:
+        """定位接收看门狗提醒的发起方 Agent。
+
+        直接按名查名册优先；若发起方标识是内部调用源（如主播工作台的 ``planner-react`` 或运营 ``operator``）
+        不在名册，则回退到名册中除执行者外唯一覆写了 ``receive_prompt`` 的 Agent（生产环境即主播 Agent），
+        保证看门狗提醒不会因调用源别名而漏送。
+        """
+        direct = self._manager.get_agent_by_name(initiator)
+        if direct is not None:
+            return direct
+        candidates: List[BaseAgent] = []
+        for name in self._manager.list_agents():
+            if name == executor:
+                continue
+            agent = self._manager.get_agent_by_name(name)
+            if agent is not None and getattr(type(agent), "receive_prompt", None) is not BaseAgent.receive_prompt:
+                candidates.append(agent)
+        return candidates[0] if len(candidates) == 1 else None
 
     def _watchdog_escalate(self, record: TaskRecord, escalations: int, waited_ms: int) -> None:
-        """升级一件超时的在途单：把单号、原话摘要与已耗时报给发起方，请求决断。
-
-        升级通道跟随现状复用既有面：发起方实现递话入口就走 ``receive_prompt``
-        （下个决策窗必达）；发起方不在名册或拒收（如提醒队列满）时降级为
-        账本停滞告警（task.changed alert 载荷，看板可见），不新增事件名。
-        """
-        waited_min = waited_ms // 60_000
+        """向发起方递话提醒：带【在做】短编号、原话与三种定夺出口，不念内部任务号。"""
+        waited_min = max(1, waited_ms // 60_000)
+        own = self._quote_own_words(record.snapshot)
         summary = (
-            f"[委派看门狗] 委派 {record.task_id}「{self._quote_own_words(record.snapshot)}」"
-            f"已受理 {waited_min} 分钟无终态（第 {escalations}/{_DELEGATION_WATCHDOG_MAX_ESCALATIONS} 次升级），"
-            "请决断：继续等待、递话催办，或用 framework_task_cancel 撤单"
+            f"[委派看门狗] {record.executor} 手上的【{IN_HAND_LABEL}】「{own}」"
+            f"已 {waited_min} 分钟没有任何目标或工具活动、也未交付"
+            f"（第 {escalations}/{_DELEGATION_WATCHDOG_MAX_ESCALATIONS} 次提醒）。"
+            f"请定夺：若其实已做完，用 framework_task_settle(item='{IN_HAND_LABEL}', outcome='done') 结单；"
+            f"若还要接着做，用 framework_prompt 催办；若先放下或不做，用 outcome='shelve' 先搁下或 'drop' 作废。"
         )
-        initiator = self._manager.get_agent_by_name(record.initiator)
-        receive = getattr(initiator, "receive_prompt", None) if initiator is not None else None
+        receiver = self._resolve_initiator_receiver(record.initiator, record.executor)
+        receive = getattr(receiver, "receive_prompt", None) if receiver is not None else None
         if callable(receive) and receive(content=summary, source="委派看门狗"):
             logger.warning(
-                f"委派在途超时升级（已经递话送达发起方 '{record.initiator}'）: "
-                f"task_id={record.task_id}，已 {waited_min} 分钟无终态"
+                f"委派无活动提醒已送达 '{receiver.name}': task_id={record.task_id}，已 {waited_min} 分钟无活动"
             )
             return
         logger.warning(
-            f"委派在途超时升级（发起方 '{record.initiator}' 无递话入口或拒收，降级账本告警）: "
-            f"task_id={record.task_id}，已 {waited_min} 分钟无终态"
+            f"委派无活动提醒降级账本告警（发起方 '{record.initiator}' 无可用递话入口或拒收）: "
+            f"task_id={record.task_id}，已 {waited_min} 分钟无活动"
         )
-        self._task_ledger.alert_stall(record.task_id, summary=summary)
+        if self._task_ledger is not None:
+            self._task_ledger.alert_stall(record.task_id, summary=summary)
 
-    async def _drain_queue(self, executor: str) -> None:
-        """按序送达 ``executor`` 的排队件：队首已不在账（被撤/终态）就跳过；
-        目标还有非排队在途件（刚被恢复的挂起件、别的急件）就不送。"""
-        queue = self._queues.get(executor)
-        if not queue:
+    # -------------------- 看板辅助与序号分配 --------------------
+
+    def _alloc_backlog_no(self, executor: str, existing: int = 0) -> int:
+        if existing > 0:
+            if existing > self._backlog_nos.get(executor, 0):
+                self._backlog_nos[executor] = existing
+            return existing
+        nxt = self._backlog_nos.get(executor, 0) + 1
+        self._backlog_nos[executor] = nxt
+        return nxt
+
+    def _next_tail_seq(self) -> int:
+        self._tail_seq += 1
+        return self._tail_seq
+
+    def _next_head_seq(self) -> int:
+        self._head_seq -= 1
+        return self._head_seq
+
+    @staticmethod
+    def _quote_own_words(snapshot: Dict[str, Any]) -> str:
+        return str(
+            snapshot.get("own_words") or own_words_of(str(snapshot.get("instruction") or "")) or "（快照无指令原文）"
+        )
+
+    def board_of(self, executor: str) -> Board:
+        """读取 ``executor`` 当前的委派看板（在做 + 待办；只读）。"""
+        return read_board(self._task_ledger, executor)
+
+    def _clear_held_flags(self, executor: str, *, except_task_id: str = "") -> None:
+        """有新委派送达执行者后，清掉同执行者待办件上的 held 标记，使搁下的件后续能正常轮到。"""
+        if self._task_ledger is None:
             return
-        while queue:
-            head = queue[0]
-            record = self._task_ledger.get(head.task_id) if self._task_ledger is not None else None
-            if record is None or record.status != "queued":
-                # 账面已了结（下播结算、运营撤单）：队列条目跟着出队，不再送达
-                queue.popleft()
-                continue
-            if self._delivered_delegation(executor) is not None:
-                return  # 手上还有正在办的事（如刚恢复的挂起件），排队件继续等
-            queue.popleft()
-            target = self._manager.get_agent_by_name(executor)
-            if target is None:
-                # 执行者不在名册（被停用/重建中）：当场转 failed，不留排队孤儿
-                self._task_ledger.update(head.task_id, "failed", summary=f"送达失败：执行者 '{executor}' 不在名册")
-                continue
-            await self._deliver_entry(target, head)
-            return  # 一次终态只送一件；这件终态时下一件会再被触发
+        board = read_board(self._task_ledger, executor)
+        for item in board.backlog:
+            if item.task_id != except_task_id and item.held:
+                updated = {**item.snapshot, HELD_KEY: False}
+                self._task_ledger.update(item.task_id, "queued", snapshot=updated)
 
-    async def _deliver_entry(self, target: BaseAgent, entry: _QueueEntry) -> _DelegationOutcome:
-        """把排队那件送达执行方：拒收当场转 failed 带原因（不孤儿），接了转回 accepted。"""
-        receive = getattr(target, "receive_delegation", None)
-        rejected = (
-            receive(instruction=entry.instruction, task_id=entry.task_id) if callable(receive) else "目标未实现接收入口"
-        )
-        if rejected:
-            logger.info(f"排队件送达被拒（task_id={entry.task_id}, executor={target.name}）：{rejected}")
-            self._task_ledger.update(entry.task_id, "failed", summary=f"送达被目标拒收：{rejected}", snapshot=None)
-            return _DelegationOutcome(
-                ok=False, error="refused", message=f"受理失败：目标 '{target.name}' 拒收（{rejected}）"
-            )
-        self._task_ledger.update(entry.task_id, "accepted", summary="轮到执行，已送达目标")
-        self._watchdog_start(entry.task_id)
-        logger.info(f"排队件送达: {entry.initiator} -> {target.name}（task_id={entry.task_id}）")
-        return _DelegationOutcome(ok=True, task_id=entry.task_id, executor=target.name)
+    def _board_summary_lines(self, executor: str, board: Board) -> List[str]:
+        current_ms = self._clock()
+        lines: List[str] = []
+        if board.in_hand is not None:
+            lines.append(self._in_hand_line(board.in_hand, current_ms))
+        else:
+            lines.append(f"{IN_HAND_LABEL}：（空）")
+        if board.backlog:
+            lines.append("待办（按先后顺序）：")
+            for item in board.backlog:
+                waited_s = max(current_ms - item.queued_at_ms, 0) // 1000
+                state = f"搁下了，做到：{item.shelved_progress or '未记进展'}" if item.shelved else "还没开工"
+                lines.append(f"- {item.label}：「{item.own_words}」（{state}，排了 {waited_s} 秒）")
+        return lines
+
+    @staticmethod
+    def _in_hand_line(item: BoardItem, current_ms: int) -> str:
+        waited_s = max(current_ms - item.delivered_at_ms, 0) // 1000
+        line = f"{IN_HAND_LABEL}：「{item.own_words}」（已做 {waited_s} 秒）"
+        extras = {k: v for k, v in item.snapshot.items() if k not in _NOT_PROGRESS_KEYS}
+        if extras:
+            line += f"；已知进展：{extras}"
+        return line
+
+    def _queue_full_message(self, executor: str, board: Board) -> str:
+        lines = [
+            f"受理失败：目标 '{executor}' 的待办已排满 {_DELEGATION_QUEUE_LIMIT} 件，这件没排进去。",
+            *self._board_summary_lines(executor, board),
+            "等手上的事做完再派，不要重复派同一件事；不做的待办用 framework_task_settle(item='待办N', outcome='drop') 撤掉腾位置；"
+            "真要停下手上的事立刻换做这件，用 when_busy='replace' 并填 current（'done' / 'shelve' / 'drop'）。",
+        ]
+        return "\n".join(lines)
+
+    # -------------------- 目标解析 --------------------
 
     def resolve_target(
         self, target_name: str, caller: str, roster: Optional[Dict[str, str]]
     ) -> tuple[Optional[BaseAgent], Optional[_DelegationOutcome]]:
-        """解析目标 Agent（委派/递话共用）：留空兜底 + 禁自派 + 名册校验。
-
-        留空目标按**当前唯一能接收对应入口的 Agent** 解析：候选名单由调用方
-        按 ``roster``（覆写了接收入口的名册）传入，接的是哪个游戏由配置的
-        enabled 名单决定，这里不写死任何游戏名；候选不唯一就拒绝并要求点名，
-        避免把话递错游戏。控制面直调总是显式点名，``roster`` 传 None 即可。
-        解析失败返回 ``(None, failure)``。
-        """
+        """解析目标 Agent（委派/递话/结单共用）：留空唯一候选兜底 + 禁自派 + 名册校验。"""
         if not target_name:
             candidates = [name for name in (roster or {}) if name != caller]
             if len(candidates) != 1:
@@ -427,6 +592,9 @@ class _DelegationCore:
             )
         return target, None
 
+    # -------------------- 送达、收手与待办推进 --------------------
+
+    @staticmethod
     def _delivered_delegation(self, executor: str) -> Optional[TaskRecord]:
         """查目标 Agent 名下已送达、未终态的委派单（排队的还没送到，不算）。"""
         if self._task_ledger is None:
