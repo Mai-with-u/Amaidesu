@@ -171,11 +171,13 @@ def test_oversized_block_gap_logs_debug_only(sd, monkeypatch) -> None:
 
 
 class TestPlaybackStallDetection:
-    """播放中断流检测：utterance 播放会话进行中且超阈值无新音频块才告警
+    """播放中断流检测：声卡流已实际开播且超阈值无新音频块才告警
 
-    判定锚定"正在播放"而非"连接存活"：句间静默期没有播放会话，不告警；
-    正常播放块间隔远小于阈值，零告警。检测方法直接调用（注入时钟控时间，
-    不依赖后台巡检线程——stall_watchdog_enabled=False 关掉线程）。
+    判定锚定"声卡流已开播"而非"播放会话存活"：会话随 utterance 开启，但
+    预缓冲未攒够/合成慢期间声卡没出声——那属于发言间静默，不告警（场65
+    实测 228 条告警中 227 条是这种误报）；开播后的真断供照告。检测方法
+    直接调用（注入时钟控时间，不依赖后台巡检线程——
+    stall_watchdog_enabled=False 关掉线程）。
     """
 
     THRESHOLD_MS = 5000
@@ -245,13 +247,17 @@ class TestPlaybackStallDetection:
         assert m.check_playback_stall() is False
         m.logger.warning.assert_not_called()
 
-    def test_whole_sentence_without_any_block_still_judged(self, stall_setup) -> None:
-        """整句一个块都没来也落在判定范围内（旧告警的盲区：写块不被调用即永不触发）"""
+    def test_session_open_without_soundcard_start_alerts_nothing(self, stall_setup) -> None:
+        """播放会话已开启但声卡流尚未开播：静默超阈值零告警（场65 发言间静默误报形态）
+
+        会话随 utterance 开启，预缓冲未攒够/合成慢期间声卡流没启动——这不是
+        "正在播放中断供"，是发言间静默，不进告警面。
+        """
         m = stall_setup.manager
         m.start_stream(utterance_id="silent")
-        stall_setup.clock.t += 6.0  # 开播后无任何块到达
-        assert m.check_playback_stall() is True
-        assert "播放中断流" in str(m.logger.warning.call_args)
+        stall_setup.clock.t += 6.0  # 超阈值但声卡流从未开播（一块都没写）
+        assert m.check_playback_stall() is False
+        m.logger.warning.assert_not_called()
         m.stop_stream()
 
     def test_write_backpressure_does_not_trigger_false_stall_alert(self, stall_setup) -> None:
