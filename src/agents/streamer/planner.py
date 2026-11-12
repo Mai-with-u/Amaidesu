@@ -37,7 +37,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 from functools import partial
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from pydantic import Field
 
@@ -59,8 +59,8 @@ from src.agents.streamer.planner_render import (
     Intent,
     assemble_request_messages,
     forced_situation,
+    render_delegation_backlog,
     render_delegations,
-    render_delegation_queue,
     render_game_speakers,
     render_observation,
     render_recent_intents,
@@ -71,7 +71,8 @@ from src.agents.streamer.planner_render import (
     step_extra_messages,
     tool_call_parts,
 )
-from src.agents.streamer.game_now import GameNow, render_game_now
+from src.agents.streamer.game_now import GameNow, actual_doing_map, render_game_now
+from src.modules.agents.delegation_board import Board
 from src.agents.streamer.game_ledger import (
     GameLedger,
     answering_player,
@@ -265,6 +266,7 @@ class PlannerEnv:
     open_games_provider: Optional[Callable[[], Sequence[str]]] = None
     action_recorder: Optional[Callable[[str, str], None]] = None
     delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
+    delegation_boards_provider: Optional[Callable[[], Mapping[str, Board]]] = None
     # 游戏那边此刻的读数（此刻那一步、游戏那边的判断、她近几分钟的公屏话），按手上的事所在的 Agent 查
     game_now_provider: Optional[Callable[[Sequence[str]], GameNow]] = None
     # 本批付过费的观众身份键（异步；查付费三表）。None = 不标（查不到付费记录的能力缺席）
@@ -469,6 +471,7 @@ class Planner:
             relays_max=self.typed_config.planner_recent_relays_max,
             action_recorder=env.action_recorder if env else None,
             delegation_status_provider=env.delegation_status_provider if env else None,
+            delegation_boards_provider=env.delegation_boards_provider if env else None,
         )
         # 本决策窗的游戏事件素材：本轮新入账批次（决策窗边界批量追加进时间线的那一批，
         # 每轮 plan() 入口重置）。状态跃迁事实块（planner 参考段与表达侧交接各一份）
@@ -723,10 +726,8 @@ class Planner:
         messages = assemble_request_messages(
             system_prompt, self._build_dialogue_messages(batch, history, mark_paid=True), reference_text
         )
-        # 游戏委派保留当前来源原句，避免把具体物品名称或禁用条件只剩下一层口头概括。
-        source_dialogue = [
-            message for message in self._build_dialogue_messages(batch, []) if message.get("role") == "user"
-        ]
+        # 游戏委派与补充要求同时保留本窗观众原话与近期游戏公屏原话（路点、坐标、物品名逐字送达，不只剩口头概括）
+        source_dialogue = self._build_source_dialogue(batch, fresh_game_chat)
         # 流程单推进、冷场、定时这类主动窗没有观众、运营或游戏聊天的新输入：此时再给手上的游戏活
         # 补充要求，只会把游戏侧自己汇报过的进展或我的猜测转述回去，变成过时或互相矛盾的指令。
         # 游戏聊天只认本批新到的：更早的聊天已在历史里，拿历史判断会让几分钟前的
@@ -1263,7 +1264,7 @@ class Planner:
             sources = "定时、环节推进或游戏里有新动静" if has_game_activity else "定时或环节推进"
             delegate_actions = (
                 "安排游戏里的活（framework_delegate 派单、framework_prompt 补要求、"
-                "framework_task_cancel 撤单）、查游戏那边的工作日志、"
+                "framework_task_settle 结单/搁下/撤单）、查游戏那边的工作日志、"
                 if self._has_delegable_game()
                 else ""
             )
@@ -1324,18 +1325,23 @@ class Planner:
             # 游戏社交事实：环境里人与人怎么相处的现行事实（登记下一轮可见）；
             # 游戏里接话、安排给谁做什么时照这里的现状说
             lines.append(social_facts_text)
-        # 排队镜像先对账：账本显示已送达的挪进手头的事、已了结的移出，【委派队列】不再列旧账
-        self.workbench.settle_queue()
-        work = render_delegations(self.workbench.delegations, self.workbench.delegation_status_provider, current_ms)
+        # 现读任务账本看板并同步手头在做视图：已送达的进【我手头在游戏里做的事】，其余在【待办】
+        boards = self.workbench.sync_from_ledger()
+        now_reading = self._read_game_now()
+        doing_map = actual_doing_map(self.workbench.delegations, now_reading, current_ms)
+        work = render_delegations(
+            self.workbench.delegations,
+            self.workbench.delegation_status_provider,
+            current_ms,
+            actual_doing=doing_map,
+        )
         if work:
-            # 我手头在游戏里做的事：最近一次开始做的原话与进展。看得到自己在忙什么，
-            # 观众补充或催促时才会补充要求，而不是每条弹幕都换一个新目标
+            # 我手头在游戏里做的事：短编号、原话、已做时长、进展，加游戏那边此刻实际在做什么
             lines.append(f"【我手头在游戏里做的事】\n{work}")
-        queue = render_delegation_queue(self.workbench.queued_delegations, current_ms)
-        if queue:
-            # 委派队列：排着还没送到的委派一件一行。看得到自己排了几件，才不会把
-            # 排着的每件都当成没派出去再派一遍（s39/40 委派堆积的复发形态）
-            lines.append(f"【委派队列】\n{queue}")
+        backlog = render_delegation_backlog(boards, current_ms)
+        if backlog:
+            # 待办：现读账本看板，没送达过的写"还没开工"，先搁下的写"搁下了，做到：……"
+            lines.append(f"【待办】\n{backlog}")
         relays = render_recent_relays(self.workbench.recent_relays, current_ms)
         if relays:
             # 补充过的要求紧跟在手头的事后面：同一件事已经交代过什么一眼可见，没有新要求就不再补
@@ -1385,7 +1391,13 @@ class Planner:
         situation_text = "\n".join(lines)
         # 游戏那边此刻（含本轮决策前自动读取的现场速览）整块放在参考段最后：新读数离决策最近，
         # 不被前面已聊话题里的旧说法盖住；每窗重建，不进对话历史
-        game_now_text = self._render_game_now(overview, current_ms)
+        game_now_text = render_game_now(
+            self.workbench.delegations,
+            self.workbench.delegation_status_provider,
+            now_reading,
+            overview,
+            current_ms,
+        )
 
         if not self._context_enabled:
             # 裸消息路径：跳过环境快照与记忆召回，仅保留情境标注、私密聊天与游戏那边此刻等本窗素材
@@ -1422,19 +1434,44 @@ class Planner:
         parts = [block for block in (situation_text, assembled_text, cue_text, game_now_text) if block]
         return "\n\n".join(parts), None
 
-    def _render_game_now(self, overview: str, current_ms: int) -> str:
-        """【游戏那边此刻】一块：手上的事各自的读数、她近几分钟的公屏话，最后是现场速览。
-
-        读数取不到（没接环境、读的时候出错）时只给委派账与现场速览，不挡这一窗决策。
-        """
+    def _read_game_now(self) -> GameNow:
+        """读取游戏那边此刻的结构化快照；没接环境或读取出错时退回空快照，不挡决策。"""
         delegations = self.workbench.delegations
-        now = GameNow()
-        if self._game_now_provider is not None:
-            try:
-                now = self._game_now_provider(list(delegations))
-            except Exception as exc:  # noqa: BLE001 - 读数缺一块不挡决策
-                self.logger.warning(f"读游戏那边此刻失败，这一块只给委派与现场速览: {exc}", exc=True)
-        return render_game_now(delegations, self.workbench.delegation_status_provider, now, overview, current_ms)
+        if self._game_now_provider is None:
+            return GameNow()
+        try:
+            return self._game_now_provider(list(delegations))
+        except Exception as exc:  # noqa: BLE001 - 读数缺一块不挡决策
+            self.logger.warning(f"读游戏那边此刻失败，这一块只给委派与现场速览: {exc}", exc=True)
+            return GameNow()
+
+    def _render_game_now(self, overview: str, current_ms: int) -> str:
+        """【游戏那边此刻】一块：手上的事各自的读数、近期目标成败、她近几分钟的公屏话，最后是现场速览。"""
+        now = self._read_game_now()
+        return render_game_now(
+            self.workbench.delegations, self.workbench.delegation_status_provider, now, overview, current_ms
+        )
+
+    def _build_source_dialogue(self, batch: List[Any], fresh_game_chat: Sequence[str]) -> List[Dict[str, Any]]:
+        """拼随委派与补充要求附带的来源原话：本窗观众弹幕 + 近期与本窗游戏公屏原话（路点、坐标、物品名原样保留）。"""
+        entries = [message for message in self._build_dialogue_messages(batch, []) if message.get("role") == "user"]
+        seen_bodies: Set[str] = set()
+        for note in self._recent_player_notes:
+            if not (note.said and note.line):
+                continue
+            body = note.line.split("] ", 1)[-1].strip()
+            if body and body not in seen_bodies:
+                seen_bodies.add(body)
+                entries.append({"role": "game_chat", "content": note.line})
+        for raw_line in fresh_game_chat:
+            line = str(raw_line or "").strip()
+            if not line:
+                continue
+            body = line.split("] ", 1)[-1].strip()
+            if body and body not in seen_bodies:
+                seen_bodies.add(body)
+                entries.append({"role": "game_chat", "content": line})
+        return entries
 
     def _build_dialogue_messages(
         self,

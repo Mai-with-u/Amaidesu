@@ -19,28 +19,44 @@ from __future__ import annotations
 import re
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, List, Mapping, Optional, Tuple
+from typing import Any, Deque, Dict, List, Mapping, Optional, Tuple
 
 from .planner_context import age_text
 from .planner_render import Delegation, DelegationStatusProvider, delegation_state_line
 from .term_sanitizer import sanitize_internal_terms
 
-__all__ = ["AgentNow", "GameNow", "GameSideLog", "render_game_now", "scrub_game_readings"]
+__all__ = [
+    "AgentNow",
+    "GameNow",
+    "GameSideLog",
+    "GoalResultLine",
+    "actual_doing_map",
+    "goal_results_from_ledger",
+    "render_game_now",
+    "scrub_game_readings",
+]
 
 # 她在游戏公屏说过的话只看最近这么久、至多列几句、每句至多几个字
 _SELF_CHAT_WINDOW_MS = 5 * 60 * 1000
 _SELF_CHAT_LINES_MAX = 3
-_SELF_CHAT_MAX_CHARS = 24
+_SELF_CHAT_MAX_CHARS = 18
 # 公屏话缓冲上限（条）：五分钟里她说不了这么多，只防无限增长
 _SELF_CHAT_BUFFER = 20
+# 跨委派保留的近期目标成败清单（成了 / 做了一半 / 没成 / 取消了）：委派终态移除或换活后，
+# 决策环节仍看得到最近几步到底成没成，不靠印象编造完成断言
+_GOAL_RESULTS_WINDOW_MS = 15 * 60 * 1000
+_GOAL_RESULTS_MAX = 5
+_GOAL_RESULTS_WITH_DELEGATION_MAX = 2
+_GOAL_RESULTS_BUFFER = 30
+_GOAL_RESULT_MAX_CHARS = 18
 # 手上那件事的状态、此刻那一步、每步结果、游戏那边的判断各自至多几个字：除现场速览外整块封顶约 600 token
 # （现场速览按原样挪进来，第 58 场中位约 960 token，它的大小归游戏侧的看一眼工具管）
-_STATE_MAX_CHARS = 40
-_STEP_MAX_CHARS = 40
-# 进展备注带"（这一步：……）"尾巴（交代这一步在干嘛）后 30 字经常把尾巴截掉，放宽到与状态行一致
-_RESULT_MAX_CHARS = 40
+_STATE_MAX_CHARS = 36
+_STEP_MAX_CHARS = 28
+# 进展备注带"（这一步：……）"尾巴（交代这一步在干嘛）后 30 字以内经常把尾巴截掉，留足 36 字保住尾巴
+_RESULT_MAX_CHARS = 36
 _RESULTS_MAX = 3
-_JUDGEMENT_MAX_CHARS = 48
+_JUDGEMENT_MAX_CHARS = 28
 # 游戏那边的判断超过这么久就不再展示（避免长单挂着 1 小时前的旧世界判断误导主播）
 _JUDGEMENT_MAX_AGE_MS = 15 * 60 * 1000
 
@@ -86,18 +102,30 @@ class AgentNow:
 
 
 @dataclass(frozen=True)
+class GoalResultLine:
+    """最近结束的一条游戏目标结果（跨委派保留：成了 / 做了一半 / 没成 / 取消了）。"""
+
+    at_ms: int
+    game: str
+    outcome: str
+    purpose: str = ""
+    summary: str = ""
+
+
+@dataclass(frozen=True)
 class GameNow:
-    """游戏那边此刻：各游戏 Agent 的读数（按 Agent 注册名），加她最近在游戏公屏说过的话（时刻, 游戏, 原话；旧→新）。"""
+    """游戏那边此刻：各游戏 Agent 的读数（按 Agent 注册名）、近期目标成败清单，加她最近在游戏公屏说过的话。"""
 
     agents: Mapping[str, AgentNow] = field(default_factory=dict)
     self_chat: Tuple[Tuple[int, str, str], ...] = ()
+    goal_results: Tuple[GoalResultLine, ...] = ()
 
 
 class GameSideLog:
     """游戏那边的流水：她自己在游戏公屏说的话。
 
-    主播 Agent 的内部件：事件回调写入，决策窗开窗时读；场次边界（开播、下播）清空。游戏 Agent 最近的判断
-    不在这里：它记在任务账本里那件委派的快照旁注上，主播每窗决策前读。
+    主播 Agent 的内部件：事件回调写入，决策窗开窗时读；场次边界（开播、下播）清空，换存档按游戏清空。
+    游戏 Agent 最近的判断与近期目标成败都不在这里：它们记在任务账本上，主播每窗决策前直接查账本。
     """
 
     def __init__(self) -> None:
@@ -114,9 +142,86 @@ class GameSideLog:
         floor = current_ms - _SELF_CHAT_WINDOW_MS
         return tuple(item for item in self._self_chat if item[0] >= floor)
 
+    def forget_game(self, game: str) -> None:
+        """某个游戏换了存档：旧存档里的公屏话不再带进新世界。"""
+        kept_chat = [item for item in self._self_chat if item[1] != game]
+        self._self_chat.clear()
+        self._self_chat.extend(kept_chat)
+
     def reset(self) -> None:
         """场次复位：上一场她的公屏话不带进下一场。"""
         self._self_chat.clear()
+
+
+def goal_results_from_ledger(
+    ledger: Any,
+    *,
+    current_ms: int,
+    exclude_initiator: str = "",
+) -> Tuple[GoalResultLine, ...]:
+    """从任务账本查询最近 15 分钟内结束的游戏子目标成败结果（旧→新，跨委派保留）。"""
+    if ledger is None:
+        return ()
+    query = getattr(ledger, "recent_provider_outcomes", None)
+    if not callable(query):
+        return ()
+    floor = current_ms - _GOAL_RESULTS_WINDOW_MS
+    items: List[GoalResultLine] = []
+    for raw in query(since_ms=floor)[-_GOAL_RESULTS_BUFFER:]:
+        game = str(getattr(raw, "initiator", "") or "").strip()
+        if not game or game == exclude_initiator:
+            continue
+        purpose = str(getattr(raw, "purpose", "") or "").strip()
+        summary = str(getattr(raw, "summary", "") or "").strip()
+        if not purpose and not summary:
+            continue
+        result_status = str(getattr(raw, "result_status", "") or "").strip()
+        status = str(getattr(raw, "status", "") or "").strip()
+        if result_status == "partial":
+            outcome = "做了一半"
+        elif status == "succeeded":
+            outcome = "成了"
+        elif status == "cancelled":
+            outcome = "取消了"
+        else:
+            outcome = "没成"
+        items.append(
+            GoalResultLine(
+                at_ms=int(getattr(raw, "at_ms", 0) or current_ms),
+                game=game,
+                outcome=outcome,
+                purpose=purpose,
+                summary=summary,
+            )
+        )
+    return tuple(items)
+
+
+def actual_doing_map(
+    delegations: Mapping[str, Delegation],
+    now: GameNow,
+    current_ms: int,
+) -> Dict[str, str]:
+    """为每件在做的委派生成一句'游戏那边此刻实际在做什么'，供【我手头在游戏里做的事】与原话并排对照。"""
+    doing: Dict[str, str] = {}
+    for agent, delegation in delegations.items():
+        if delegation.report_kind not in ("", "escalation") or agent not in now.agents:
+            continue
+        reading = now.agents[agent]
+        if reading.step and reading.step_at_ms >= delegation.at_ms:
+            step = _clip(scrub_game_readings(reading.step), _STEP_MAX_CHARS)
+            doing[agent] = f"{step}（{age_text(current_ms - reading.step_at_ms)}开始）"
+        elif (
+            reading.judgement
+            and reading.judgement_at_ms >= delegation.at_ms
+            and current_ms - reading.judgement_at_ms <= _JUDGEMENT_MAX_AGE_MS
+        ):
+            first = next((line.strip() for line in reading.judgement.splitlines() if line.strip()), "")
+            judgement = _clip(scrub_game_readings(first), _JUDGEMENT_MAX_CHARS)
+            doing[agent] = f"当前没有在跑的动作（最近判断：{judgement}）" if judgement else "当前没有在跑的动作"
+        else:
+            doing[agent] = "当前没有在跑的动作"
+    return doing
 
 
 def render_game_now(
@@ -126,14 +231,18 @@ def render_game_now(
     overview: str,
     current_ms: int,
 ) -> str:
-    """拼【游戏那边此刻】一块：每件手上的事一组读数，她近五分钟的公屏话，最后是现场速览。
+    """拼【游戏那边此刻】一块：手上的事读数、近期目标成败清单、近五分钟公屏话，最后是现场速览。
 
-    什么都没有（没在玩、没委派、没读到现场）时为空串，整块省略。
+    什么都没有（没在玩、没委派、没目标记录、没读到现场）时为空串，整块省略。
     """
     rows: List[str] = []
     for delegation in delegations.values():
         reading = now.agents.get(delegation.agent, AgentNow())
         rows.extend(_delegation_rows(delegation, status_provider, reading, current_ms))
+    goal_limit = _GOAL_RESULTS_WITH_DELEGATION_MAX if rows else _GOAL_RESULTS_MAX
+    goal_row = _goal_results_row(now.goal_results, current_ms, limit=goal_limit)
+    if goal_row:
+        rows.append(goal_row)
     chat = _self_chat_row(now.self_chat, current_ms)
     if chat:
         rows.append(chat)
@@ -177,6 +286,34 @@ def _delegation_rows(
         judgement = _clip(scrub_game_readings(first), _JUDGEMENT_MAX_CHARS)
         rows.append(f"  游戏那边的判断（不一定对）：{judgement}（{age_text(judgement_age_ms)}）")
     return rows
+
+
+def _goal_results_row(
+    items: Tuple[GoalResultLine, ...],
+    current_ms: int,
+    *,
+    limit: int = _GOAL_RESULTS_MAX,
+) -> str:
+    """最近几条游戏目标结果紧凑清单（成了 / 做了一半 / 没成 / 取消了），按整块预算截断条数。"""
+    recent = [item for item in items if current_ms - item.at_ms <= _GOAL_RESULTS_WINDOW_MS][-limit:]
+    if not recent:
+        return ""
+    formatted: List[str] = []
+    for item in recent:
+        purpose = scrub_game_readings(item.purpose)
+        summary = scrub_game_readings(item.summary)
+        # 结果回执排在前面，防止长意图截断时把真正的成败原因切掉；意图简短且不在回执里时附在前面作指代
+        if summary and purpose and purpose not in summary:
+            short_purpose = _clip(purpose, 6)
+            raw = f"{short_purpose}→{summary}"
+        else:
+            raw = summary or purpose
+        detail = _clip(raw, _GOAL_RESULT_MAX_CHARS)
+        if detail:
+            formatted.append(f"{item.outcome}：{detail}（{age_text(current_ms - item.at_ms)}）")
+    if not formatted:
+        return ""
+    return "- 近期目标成败（只认成了算做完）：" + "；".join(formatted)
 
 
 def _self_chat_row(lines: Tuple[Tuple[int, str, str], ...], current_ms: int) -> str:

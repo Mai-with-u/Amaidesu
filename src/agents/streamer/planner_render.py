@@ -15,21 +15,26 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from src.agents.streamer.planner_context import age_text
 from src.agents.streamer.scene_card import GoalLine, GoalStatus
 from src.agents.streamer.term_sanitizer import sanitize_internal_terms
 from src.agents.streamer.timeline import PlayerNote
-from src.modules.agents.delegation_text import DELEGATE_DIALOGUE_HEAD, DELEGATE_HEAD
+from src.modules.agents.delegation_board import IN_HAND_LABEL, Board
+from src.modules.agents.delegation_text import (
+    DELEGATE_DIALOGUE_HEAD,
+    DELEGATE_HEAD,
+    PROMPT_CHAT_HEAD,
+    PROMPT_REQUIREMENT_HEAD,
+)
 from src.modules.storage.models.social_facts import SocialFact
 from src.modules.tools.conversation import to_conversation_view
 
 __all__ = [
     "Delegation",
     "DelegationStatusProvider",
-    "QueuedDelegation",
-    "render_delegation_queue",
+    "render_delegation_backlog",
     "Intent",
     "Relay",
     "assemble_request_messages",
@@ -62,31 +67,16 @@ _DELEG_STALL_HINT_MS: int = 4 * 60 * 1000
 
 @dataclass
 class Delegation:
-    """一次已受理的委派：交给谁、主播自己的原话、何时交出，以及身体是否已上报。"""
+    """一次已受理的委派：交给谁、主播自己的原话、何时交出，以及了结或上报状态。"""
 
     agent: str
     instruction: str
     task_id: str
     at_ms: int
-    # delivery=已交付 / escalation=卡住待定夺 / undelivered=停了没交付 / interrupted=重启前被打断；空=还在做
+    # delivery=游戏交付 / closed_by_initiator=我按做完了结单 / cancelled=我撤单不做了 /
+    # escalation=卡住待定夺 / undelivered=停了没交付 / interrupted=重启前被打断；空=还在做
     report_kind: str = ""
     reported_ms: int = 0
-
-
-@dataclass
-class QueuedDelegation:
-    """一件排进委派队列、还没送到执行方的委派：交给谁、主播自己的原话、何时排的。
-
-    队列本体在委派受理核心（src/modules/agents/control.py，Amaidesu 侧机制）；
-    这里只是工作台持有的镜像，渲染【委派队列】与判"排到第几位"用。任务账本
-    状态走到 queued 之外（送达开跑/了结）时由工作台按账本对账后挪走。
-    """
-
-    agent: str
-    instruction: str
-    task_id: str
-    at_ms: int
-    urgent: bool = False
 
 
 @dataclass(frozen=True)
@@ -225,6 +215,17 @@ def render_silence(last_speech_ms: Optional[int], cold_silence_ms: int, current_
     return f"【冷场】她已经 {silent_ms // 1000} 秒没开口（超过 {cold_silence_ms // 1000} 秒算冷场）"
 
 
+def _worked_duration(elapsed_ms: int) -> str:
+    """一件事已经做了多久（分钟粒度，一分钟内写'不足 1 分钟'）。"""
+    total_minutes = max(0, elapsed_ms) // 60_000
+    if total_minutes < 1:
+        return "不足 1 分钟"
+    hours, minutes = divmod(total_minutes, 60)
+    if hours:
+        return f"{hours} 小时 {minutes} 分钟"
+    return f"{minutes} 分钟"
+
+
 def delegation_state_line(
     delegation: Delegation,
     status_provider: Optional[DelegationStatusProvider],
@@ -240,6 +241,10 @@ def delegation_state_line(
     record = status_provider(delegation.task_id) if status_provider is not None and delegation.task_id else None
     if delegation.report_kind == "delivery":
         return f"已在{age_text(current_ms - delegation.reported_ms)}做完，结果见游戏记录。"
+    if delegation.report_kind == "closed_by_initiator":
+        return f"已在{age_text(current_ms - delegation.reported_ms)}按做完了结单（游戏那边未单独交付，具体结果以游戏记录为准）。"
+    if delegation.report_kind == "cancelled":
+        return f"已在{age_text(current_ms - delegation.reported_ms)}撤单，这件不做了。"
     if delegation.report_kind == "escalation":
         return f"在{age_text(current_ms - delegation.reported_ms)}卡住了，正等我和观众一起定夺（见游戏记录）。"
     if delegation.report_kind == "undelivered":
@@ -255,8 +260,6 @@ def delegation_state_line(
         return "账面上已了结这次委派，结果见游戏记录。"
     if record.get("status") == "waiting_for_decision":
         return f"停着等我和观众拿主意（{age_text(current_ms - int(record.get('updated_at_ms') or 0))}前记的）。"
-    if record.get("status") == "suspended":
-        return "有急事插队，这件暂时挂起（进度保留），急事办完接着做。"
     stalled = (record.get("snapshot") or {}).get("stalled_goals") or {}
     if stalled:
         names = "、".join(sorted({str(name) for name in stalled.values()}))
@@ -276,38 +279,60 @@ def render_delegations(
     delegations: Dict[str, Delegation],
     status_provider: Optional[DelegationStatusProvider],
     current_ms: int,
+    *,
+    actual_doing: Optional[Mapping[str, str]] = None,
 ) -> str:
-    """我手头在游戏里做的事：每个游戏最近一次开始做的事、距今多久、做完了还是卡住了。
+    """我手头在游戏里做的事：短编号、原话、已经做了多久、状态，以及游戏那边此刻实际在做什么。
 
     用第一人称写：对观众来说只有一个主播，游戏里的操作也是"我"在做，
     写成"交给谁""身体在做"会让表达里冒出"活已经派下去了"这种让观众困惑的话。
+    仍在做的那件标 ``[在做]`` 短编号并并列写出原话、已做时长和游戏那边此刻实际在做的事，
+    原单子与实际动作对不上时一眼可见；刚了结的不再标 ``[在做]``，免得对已结的旧单再发结单。
     """
     rows: List[str] = []
     for delegation in delegations.values():
         game = f"在 {delegation.agent} 里" if delegation.agent else "在游戏里"
-        # 任务号（deleg_*）是 minecraft 侧的检索地址，对决策无信息量且会被念给观众：
-        # 同一执行者手上只保留最近一次委派，注入前转成人类可读描述；原话同样脱敏
-        head = f"{age_text(current_ms - delegation.at_ms)}{game}开始做一个任务：{sanitize_internal_terms(delegation.instruction)}"
-        rows.append(f"- {head}\n  {delegation_state_line(delegation, status_provider, current_ms)}")
+        record = status_provider(delegation.task_id) if status_provider is not None and delegation.task_id else None
+        active_in_hand = delegation.report_kind in ("", "escalation") and (
+            status_provider is None or not delegation.task_id or record is not None
+        )
+        elapsed_ms = max(0, current_ms - delegation.at_ms)
+        clean_instruction = sanitize_internal_terms(delegation.instruction)
+        if active_in_hand:
+            head = (
+                f"[{IN_HAND_LABEL}] {age_text(elapsed_ms)}{game}开始做一个任务："
+                f"{clean_instruction}（已做 {_worked_duration(elapsed_ms)}）"
+            )
+        else:
+            head = f"{age_text(elapsed_ms)}{game}开始做一个任务：{clean_instruction}"
+        item_lines = [f"- {head}", f"  {delegation_state_line(delegation, status_provider, current_ms)}"]
+        if active_in_hand and actual_doing is not None and actual_doing.get(delegation.agent):
+            item_lines.append(f"  游戏那边此刻实际在做：{actual_doing[delegation.agent]}")
+        rows.append("\n".join(item_lines))
     return "\n".join(rows)
 
 
-def render_delegation_queue(queued: Dict[str, List["QueuedDelegation"]], current_ms: int) -> str:
-    """委派队列：排着还没送到的委派，一件一行（由旧到新；急件标出）。
+def render_delegation_backlog(boards: Mapping[str, Board], current_ms: int) -> str:
+    """【待办】：现读任务账本看板里排着和先搁下的事项，带本场稳定的短编号（待办1、待办2……）。
 
-    用第一人称视角的事实陈述：排队是她自己安排的结果，看到的顺序要和受理回执
-    说的排位一致，她才不会再派一遍。执行方手上正在做的那件在【我手头在游戏里做的事】，
-    被急件暂放的也在那里（状态行注明挂起），这里只列还没送到的。
+    没送达过的明写"还没开工"，做过一段先搁下的明写"搁下了，做到：……"，
+    决策环节与嘴共用同一份账本真相，绝不把还没开工的待办误说成已经做完。
     """
     rows: List[str] = []
-    for entries in queued.values():
-        for index, entry in enumerate(entries, start=1):
-            mark = "急件，插队" if entry.urgent else "排队"
+    for executor, board in boards.items():
+        where = f"在 {executor} 里" if executor else "在游戏里"
+        for item in board.backlog:
+            if item.shelved:
+                progress = sanitize_internal_terms(item.shelved_progress.strip()) or "未记具体进展"
+                tail = "；当前先搁着，换做别的事或点名提上来时继续" if item.held else "；手上的事做完后自动接着做"
+                state = f"搁下了，做到：{progress}{tail}"
+            else:
+                state = "还没开工，轮到时自动开始做"
             head = (
-                f"{age_text(current_ms - entry.at_ms)}{mark}给 {entry.agent}（第 {index} 件）："
-                f"{sanitize_internal_terms(entry.instruction)}"
+                f"[{item.label}] {age_text(current_ms - item.queued_at_ms)}{where}排下："
+                f"{sanitize_internal_terms(item.own_words)}"
             )
-            rows.append(f"- {head}（还没开始做，轮到时自动送达）")
+            rows.append(f"- {head}（{state}）")
     return "\n".join(rows)
 
 
@@ -470,10 +495,23 @@ def render_recent_relays(relays: Iterable[Relay], current_ms: int) -> str:
     )
 
 
-def goal_lines(delegations: Dict[str, Delegation]) -> List[GoalLine]:
-    """手上的事（嘴的现场卡用）：每个游戏最近一次开始做的事、原话（已脱敏）与进展。"""
+def goal_lines(
+    delegations: Dict[str, Delegation],
+    status_provider: Optional[DelegationStatusProvider] = None,
+) -> List[GoalLine]:
+    """手上的事（嘴的现场卡用）：与决策环节读同一份源，只给当前在做或刚由游戏侧上报的一件，待办与撤单不给。"""
     goals: List[GoalLine] = []
     for delegation in delegations.values():
+        if delegation.report_kind in ("closed_by_initiator", "cancelled"):
+            continue
+        if (
+            delegation.report_kind == ""
+            and status_provider is not None
+            and delegation.task_id
+            and status_provider(delegation.task_id) is None
+        ):
+            # 账本上已终态移除且无游戏交付（如被撤单），不再当进行中的目标喂给嘴
+            continue
         status: GoalStatus = "进行中"
         if delegation.report_kind == "delivery":
             status = "做完了"
@@ -495,34 +533,35 @@ def goal_lines(delegations: Dict[str, Delegation]) -> List[GoalLine]:
     return goals
 
 
-def compose_relay_content(content: str, source_dialogue: List[Dict[str, Any]]) -> str:
-    """补充要求的完整正文：主播原话 + 来源对话逐字引用。
+def compose_relay_content(content: str, source_dialogue: List[Dict[str, Any]], *, chat: bool = False) -> str:
+    """补充要求或聊天回话的完整正文：按种类加抬头 + 主播原话 + 来源对话逐字引用。
 
-    补充要求附上本窗观众原话，游戏侧能看到逐字说法，不只剩一层转述。
+    附上本窗观众弹幕与近期游戏公屏原话，游戏侧能看到逐字的路点、坐标、物品名与原话，不只剩一层转述。
     """
+    head = PROMPT_CHAT_HEAD if chat else PROMPT_REQUIREMENT_HEAD
     return (
-        "[补充要求]\n"
+        head
         + content
-        + "\n\n[来源对话：逐字引用，只用于核对物品名写法、做法与禁用条件，不构成额外任务]\n"
+        + "\n\n[来源对话：逐字引用，只用于核对路点、坐标、物品名写法、做法与禁用条件，不构成额外任务]\n"
         + json.dumps(source_dialogue, ensure_ascii=False, default=str)
     )
 
 
 def compose_delegate_instruction(instruction: str, source_dialogue: List[Dict[str, Any]]) -> str:
-    """本次目标的完整正文：主播原话 + 来源对话逐字引用 + 取舍规则。
+    """本次目标的完整正文：主播原话 + 来源对话（含游戏公屏）逐字引用 + 取舍规则。
 
-    做什么由主播拿主意：游戏侧以本次目标为准，原话只补物品名写法和禁用条件。
+    做什么由主播拿主意：游戏侧以本次目标为准，原话只补路点、坐标、地点名、物品名写法和禁用条件。
     实测"别死磕这台机器"配上"以原话为准"的"放块铁板试试"，游戏侧收到两个相反要求；
-    原话离开直播间上下文（"试试看？""那你……"）也读不懂，所以做法建议只在目标采纳时才做。
-    抬头写"本次目标"而不是"委派"：游戏里动手的也是主播自己，不该读成别人派来的活。
+    第 61 场 19:17 玩家在游戏公屏发的路点没随指令送到，导致角色盲游到海中央——因此本窗弹幕与
+    近期游戏公屏原话一并逐字附上。抬头写"本次目标"而不是"委派"：游戏里动手的也是主播自己。
     """
     return (
         DELEGATE_HEAD
         + instruction
         + DELEGATE_DIALOGUE_HEAD
-        + "逐字引用，只用于核对本次目标里的物品名写法与禁用条件，不构成额外任务]\n"
+        + "逐字引用，只用于核对本次目标里的路点、坐标、地点名、物品名写法与禁用条件，不构成额外任务]\n"
         + json.dumps(source_dialogue, ensure_ascii=False, default=str)
-        + "\n做什么、用什么办法以本次目标为准，两者冲突时听本次目标；本次目标没写到的物品名写法、"
-        "禁用条件和确认与权限要求按原话补上；原话里的做法建议和其他请求，只有本次目标采纳了才做。"
+        + "\n做什么、用什么办法以本次目标为准，两者冲突时听本次目标；本次目标没写到的路点、坐标、地点名、"
+        "物品名写法、禁用条件和确认与权限要求按原话补上；原话里的做法建议和其他请求，只有本次目标采纳了才做。"
         "不把转述额外添加的查证或确认步骤视为用户要求。"
     )

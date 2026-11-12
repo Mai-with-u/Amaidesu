@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Coroutine, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
 from src.modules.agents.base import AgentState, BaseAgent
+from src.modules.agents.delegation_board import read_boards
 from src.modules.agents.factory import AGENT_BINDINGS
 from src.modules.background import get_registry as get_task_registry
 from src.modules.background import setup_registry as setup_task_registry
@@ -56,7 +57,11 @@ from src.modules.storage.repos._base import BaseRepo
 from src.modules.storage.repos.memory_corrections import MemoryCorrectionRepo
 from src.modules.tools import ToolSpec
 from src.modules.tools.models import ToolInvocation
-from src.modules.tools.tasks import IN_PROGRESS_TASK_STATES, REPLY_NOTE_AT_KEY, REPLY_NOTE_KEY
+from src.modules.tools.tasks import (
+    IN_PROGRESS_TASK_STATES,
+    REPLY_NOTE_AT_KEY,
+    REPLY_NOTE_KEY,
+)
 from src.modules.tools.registry import ToolRegistry
 from src.modules.types.game_save import GameSave
 from src.modules.types.game_situation import GameSituation
@@ -95,7 +100,7 @@ from .scene_card import brief_of
 from .speech_dispatcher import SpeechDispatcher
 from .speech_guard import WordFilter
 from .game_ledger import GameLedger
-from .game_now import AgentNow, GameNow, GameSideLog
+from .game_now import AgentNow, GameNow, GameSideLog, goal_results_from_ledger
 from .planner_render import Intent
 from .stats import StreamerStats
 from .talk.deck import TopicDeck
@@ -487,6 +492,9 @@ class StreamerAgent(BaseAgent):
                 open_games_provider=self._playing_games,
                 action_recorder=self._record_delegation,
                 delegation_status_provider=self._delegation_machine_status if task_ledger is not None else None,
+                delegation_boards_provider=(lambda: read_boards(self._task_ledger))
+                if task_ledger is not None
+                else None,
                 game_now_provider=self._game_now,
                 # 付费史标注：查本批观众在付费三表有无记录，给决策侧的消息行加「（付费观众）」
                 paid_identities_provider=self._paid_viewer_lookup.paid_identities
@@ -1285,6 +1293,8 @@ class StreamerAgent(BaseAgent):
             self._spoken_log.reset()
             self._pending_operator_notes.clear()
             self._talk_workbench.sync_segment(None, [])
+            if self._task_ledger is not None:
+                self._task_ledger.clear_provider_outcomes()
         # 按场次类型先拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗按表快照重渲。
         # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策窗自然重渲出
         # 新简报，这期间简报退化为更早一场的档案
@@ -1644,6 +1654,8 @@ class StreamerAgent(BaseAgent):
             self._spoken_log.reset()
             self._pending_operator_notes.clear()
             self._talk_workbench.sync_segment(None, [])
+            if self._task_ledger is not None:
+                self._task_ledger.clear_provider_outcomes()
         # 收播收尾：排进后台，依次是"等队尾台词播完 → 本场整理（有上限）→ 记账器清理"。
         # 场次行已删或将删时不整理（空场次没东西可整理，用户删掉的场次本意是清掉它），
         # 但后面的清理照跑：待删观众与保留期清理不依赖场次行。
@@ -1977,6 +1989,9 @@ class StreamerAgent(BaseAgent):
             before = self._known_saves.get(game)
             if before is not None and before.id != save.id:
                 self._planner.workbench.forget_game(game)
+                self._game_side.forget_game(game)
+                if self._task_ledger is not None:
+                    self._task_ledger.clear_provider_outcomes(initiator=game)
                 self._logger.info(f"{game} 从存档「{before.label}」换到「{save.label}」：清掉手头这个游戏的事")
             self._known_saves[game] = save
         self._current_saves = dict(saves)
@@ -2164,6 +2179,7 @@ class StreamerAgent(BaseAgent):
 
     def _game_tasks(self) -> Dict[str, str]:
         """各游戏手上还在做的委派（她交代的原话）：游戏情境查询用，换了委派就是情境变了。"""
+        self._planner.workbench.sync_from_ledger()
         return {
             agent: delegation.instruction
             for agent, delegation in self._planner.workbench.delegations.items()
@@ -2304,15 +2320,15 @@ class StreamerAgent(BaseAgent):
             )
 
     async def _cancel_stalled_delegation(self, task_id: str) -> None:
-        """决断兜底的自动撤单：走 framework_task_cancel（排队的队列直撤，其余经执行方停手）。"""
+        """决断兜底的自动撤单：走 framework_task_settle(outcome='drop')（待办直撤，在做的收手后自动送达下一件）。"""
         if self._tool_registry is None:
             self._logger.warning(f"停滞决断兜底跳过撤单（task_id={task_id}）：工具注册表未注入")
             return
         try:
             result = await self._tool_registry.invoke(
                 ToolInvocation(
-                    tool_name="framework_task_cancel",
-                    arguments={"task_id": task_id},
+                    tool_name="framework_task_settle",
+                    arguments={"item": task_id, "outcome": "drop"},
                     source="streamer_stall_watch",
                 )
             )
@@ -2442,7 +2458,7 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"收集她自己的公屏话失败: {exc}", exc=True)
 
     def _game_now(self, agents: Sequence[str]) -> GameNow:
-        """游戏那边此刻的读数（Planner 每窗拼【游戏那边此刻】用）：各 Agent 此刻那一步与最近的判断，加她的公屏话。"""
+        """游戏那边此刻的读数（Planner 每窗拼【游戏那边此刻】用）：各 Agent 此刻那一步与最近的判断、近期目标成败，加她的公屏话。"""
         current = now_ms()
         readings: Dict[str, AgentNow] = {}
         for agent in agents:
@@ -2451,7 +2467,11 @@ class StreamerAgent(BaseAgent):
             readings[agent] = AgentNow(
                 step=step, step_at_ms=step_at_ms, judgement=judgement, judgement_at_ms=judged_at_ms
             )
-        return GameNow(agents=readings, self_chat=self._game_side.recent_self_chat(current))
+        return GameNow(
+            agents=readings,
+            self_chat=self._game_side.recent_self_chat(current),
+            goal_results=goal_results_from_ledger(self._task_ledger, current_ms=current, exclude_initiator=self.name),
+        )
 
     def _latest_game_step(self, agent: str) -> Tuple[str, int]:
         """这个游戏 Agent 此刻在做的那一步：任务账本里它自己发起、还在跑的最近一步的目的与开始时刻。

@@ -5,13 +5,13 @@
 委派计数告警，输出两样东西：
 
 - 每次告警一条决策窗必读材料行：委派原话、已停多久、第几次告警；
-- 排队（queued）与停着等定夺（waiting_for_decision）的委派连续收到第 N 次
+- 待办（queued）与停着等定夺（waiting_for_decision）的委派连续收到第 N 次
   告警仍无决断（无撤单 / 无改单 / 无账面变化）→ 判自动撤单，由调用方经
-  ``framework_task_cancel`` 撤掉并补一条场记事实（"这件事我喊停了"），主播
-  下一窗顺带交代。N 可配（``[tools.tasks].stall_auto_cancel_alerts``）。
+  ``framework_task_settle``（``outcome="drop"``）撤掉并补一条场记事实
+  （"这件事我喊停了"），主播下一窗顺带交代。N 可配
+  （``[tools.tasks].stall_auto_cancel_alerts``）。
 
-running 与急件抢占暂放（suspended）不自动杀：运行中任务有自己的升级与目标
-停滞通路；暂放件的恢复由急件收场驱动，不归停滞告警管。
+running 不自动杀：运行中任务有自己的活动看门狗与目标停滞通路。
 
 计数与"有无决断"的判定方式：停滞告警本身会刷新账面 ``updated_at_ms``，时间
 戳判不出决断；这里对每次告警比对（状态，过滤掉旁注键的快照）——旁注是执行

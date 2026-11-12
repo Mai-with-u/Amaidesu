@@ -18,12 +18,11 @@ from __future__ import annotations
 import json
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Deque, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.agents.streamer.planner_render import (
     Delegation,
     Intent,
-    QueuedDelegation,
     Relay,
     compose_delegate_instruction,
     compose_relay_content,
@@ -32,17 +31,19 @@ from src.agents.streamer.planner_render import (
     same_json_document,
 )
 from src.agents.streamer.scene_card import GoalLine
+from src.modules.agents.delegation_board import Board
 from src.modules.logging import get_logger
 from src.modules.tools.models import ToolExecutionResult, ToolInvocation
-from src.modules.tools.tasks import IN_PROGRESS_TASK_STATES
+from src.modules.tools.tasks import DELIVERED_TASK_STATES
 from src.modules.utils.time_utils import now_ms
 
 __all__ = ["DelegationWorkbench", "observation_data"]
 
-#: 委派型游戏的两个框架工具名（Planner 内部拦截的注册工具，名字与
+#: 委派型游戏的三个框架写工具名（Planner 内部拦截的注册工具，名字与
 #: src.modules.agents.control 的注册面一致）
 FRAMEWORK_DELEGATE_TOOL: str = "framework_delegate"
 FRAMEWORK_PROMPT_TOOL: str = "framework_prompt"
+FRAMEWORK_TASK_SETTLE_TOOL: str = "framework_task_settle"
 #: 经工作台受理的调用的来源名：受理核心把它记成委派的发起方，落库后续播据此认出"这件是我派的"
 PLANNER_CALL_SOURCE: str = "planner-react"
 
@@ -84,15 +85,12 @@ class DelegationWorkbench:
         relays_max: int,
         action_recorder: Optional[Callable[[str, str], None]] = None,
         delegation_status_provider: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
+        delegation_boards_provider: Optional[Callable[[], Mapping[str, Board]]] = None,
     ) -> None:
         self._tool_registry = tool_registry
-        # 每个执行 Agent 最近一次受理的委派：原话、时间、身体是否已上报。实测半小时委派
-        # 27 次、目标来回反转——主播看不到身体手上正做着什么，就会把每条弹幕都改派成新目标
+        # 每个执行 Agent 当前在做（或刚了结且无新件接手）的那件委派：账本有在做时与账本严格同步，
+        # 没有在做时保留刚了结那件及怎么了结的（交付/我认定完成/撤单/停了没交付/被打断）
         self._delegations: Dict[str, Delegation] = {}
-        # 排进委派队列、还没送到的委派镜像（按执行者分）：受理回执带 queued 时记进来，
-        # 账本状态走到 queued 之外（送达开跑/了结/被撤）时由 settle_queue 对账后挪走。
-        # 队列本体在委派受理核心（src/modules/agents/control.py），这里只是她看得见的影子
-        self._queued: Dict[str, List[QueuedDelegation]] = {}
         # 最近几轮自己说出口的打算（话题 + 指引）。对话历史里只有最终台词，看不出
         # "我已经连着几轮在讲同一件事"——实测主播连续十分钟句句提掉血，每轮都把它当新消息开口
         self._recent_intents: Deque[Intent] = deque(maxlen=intents_max)
@@ -114,11 +112,14 @@ class DelegationWorkbench:
         # 委派的机器状态查询（读任务账本）：任务号 → {"status", "updated_at_ms",
         # "snapshot"} 或 None（终态已移除/查不到）
         self._delegation_status_provider = delegation_status_provider
+        # 任务账本看板现读入口（唯一事实源：每个执行者的在做与待办，不再维护本地排队镜像）
+        self._delegation_boards_provider = delegation_boards_provider
 
         # 拦截规则表：工具名 → 受理规则。新拦截名在此登记，handle/settle 不加分支
         self._rules: Dict[str, _InterceptRule] = {
             FRAMEWORK_DELEGATE_TOOL: _InterceptRule(self._prepare_delegate, self._settle_delegate),
             FRAMEWORK_PROMPT_TOOL: _InterceptRule(self._prepare_prompt, self._settle_prompt),
+            FRAMEWORK_TASK_SETTLE_TOOL: _InterceptRule(self._prepare_settle, self._settle_task_settle),
         }
 
         self.logger = get_logger("DelegationWorkbench")
@@ -151,14 +152,13 @@ class DelegationWorkbench:
         return self._round_receipts
 
     @property
-    def queued_delegations(self) -> Dict[str, List[QueuedDelegation]]:
-        """排着还没送到的委派镜像（活引用，渲染层只读消费）。"""
-        return self._queued
-
-    @property
     def delegation_status_provider(self) -> Optional[Callable[[str], Optional[Dict[str, Any]]]]:
         """委派的机器状态查询（渲染手头的事时合并任务账本事实）。"""
         return self._delegation_status_provider
+
+    def boards(self) -> Dict[str, Board]:
+        """现读任务账本看板并同步手头在做视图（决策环节与嘴共用同一事实源）。"""
+        return self.sync_from_ledger()
 
     def handles(self, name: str) -> bool:
         """该工具名是否由工作台拦截受理（Planner 据此分派）。"""
@@ -180,8 +180,6 @@ class DelegationWorkbench:
         开场先碰一次壁。原地删改而不是换新容器：渲染层持有的是活引用。
         """
         kept = {agent for agent, delegation in self._delegations.items() if self._in_flight(delegation)}
-        # 排队镜像整个清掉：下播时排着的单已被强制结算成 cancelled，新的一场从空白排起
-        self._queued.clear()
         for agent in sorted(kept):
             self.logger.info(f"开播时 {agent} 手上的委派账面还在做，保留：{self._delegations[agent].instruction}")
         touched = set(self._delegations) | {relay.agent for relay in self._recent_relays} | set(self._last_relay_ms)
@@ -201,7 +199,6 @@ class DelegationWorkbench:
         if delegation is not None and self._in_flight(delegation):
             self.logger.info(f"{game} 换了存档，手上的委派账面还在做，保留：{delegation.instruction}")
             return
-        self._queued.pop(game, None)
         self._drop({game})
 
     def note_receipt(self, name: str, data: Dict[str, Any]) -> None:
@@ -260,50 +257,51 @@ class DelegationWorkbench:
             reported_ms=now_ms(),
         )
 
-    def settle_queue(self) -> None:
-        """排队镜像对账（渲染前调）：按任务账本把走到 queued 之外的单挪走。
+    def sync_from_ledger(self) -> Dict[str, Board]:
+        """从任务账本现读各执行者的看板，将手头在做视图对齐到账本唯一事实源。
 
-        - 账面已了结（终态移除查不到，含下播结算与被撤）：从镜像清掉——结果走
-          受理回执与 task.changed，不留在"排着"的清单里
-        - 已送达开跑（accepted/running/suspended）：挪进手头的事（"还在做"从现在算）
-        - 还在排队（queued）：留着，排位照旧
-        没装账本查询时不动镜像（降级装配下排队镜像只增不减，接受这条已知边界）。
+        - 账本上有在做（自动送达、提拔待办、回滚或运营直派）：立即更新 ``_delegations[agent]``，
+          决策参考段与嘴的现场卡读到的都是此刻真正正在做的这一件；
+        - 账本上没有在做，但原记录被搁回待办（shelved）：从手头在做移出，只在【待办】显示；
+        - 账本上没有在做且不在待办（已终态）：保留 ``_delegations[agent]`` 显示刚了结的那件及怎么了结的。
+        未注入看板查询（单测降级装配）时返回空字典，不改动既有内存记录。
         """
-        if self._delegation_status_provider is None:
-            return
-        for agent in list(self._queued):
-            remaining: List[QueuedDelegation] = []
-            for entry in self._queued[agent]:
-                record = self._delegation_status_provider(entry.task_id)
-                if record is None:
-                    self.logger.info(
-                        f"排队件 {entry.task_id} 已了结（被撤或终态），从排队清单移除：{entry.instruction}"
-                    )
-                    continue
-                status = record.get("status")
-                if status == "queued":
-                    remaining.append(entry)
-                    continue
-                # 送达了：成为手头正在做的那件
-                self.logger.info(f"排队件 {entry.task_id} 已送达 {agent}，挪进手头的事：{entry.instruction}")
-                self._delegations[agent] = Delegation(
-                    agent=agent, instruction=entry.instruction, task_id=entry.task_id, at_ms=now_ms()
+        if self._delegation_boards_provider is None:
+            return {}
+        boards = dict(self._delegation_boards_provider() or {})
+        for executor, board in boards.items():
+            if board.in_hand is None:
+                continue
+            in_hand = board.in_hand
+            current = self._delegations.get(executor)
+            if current is None or current.task_id != in_hand.task_id:
+                self._delegations[executor] = Delegation(
+                    agent=executor,
+                    instruction=in_hand.own_words,
+                    task_id=in_hand.task_id,
+                    at_ms=in_hand.delivered_at_ms,
                 )
-            if remaining:
-                self._queued[agent] = remaining
-            else:
-                self._queued.pop(agent, None)
+            elif not current.instruction and in_hand.own_words:
+                current.instruction = in_hand.own_words
+        for executor in list(self._delegations):
+            current = self._delegations[executor]
+            board = boards.get(executor)
+            if (board is None or board.in_hand is None) and current.report_kind in ("", "escalation"):
+                if board is not None and any(item.task_id == current.task_id for item in board.backlog):
+                    self._delegations.pop(executor, None)
+        return boards
 
     def current_goals(self) -> List[GoalLine]:
-        """手上的事（嘴的现场卡用）：每个游戏最近一次开始做的事、原话（已脱敏）与进展。"""
-        return goal_lines(self._delegations)
+        """手上的事（嘴的现场卡用）：先与任务账本看板对齐，再输出当前在做或刚由游戏上报的目标。"""
+        self.sync_from_ledger()
+        return goal_lines(self._delegations, self._delegation_status_provider)
 
     def _in_flight(self, delegation: Delegation) -> bool:
-        """任务账本上这件委派是否还在做（受理、在跑、停着等定夺）；没装账本、查不到或已结算都不算。"""
+        """任务账本上这件委派是否还在执行方手上做（受理、在跑、停着等定夺）；没装账本、查不到或已结算都不算。"""
         if self._delegation_status_provider is None or not delegation.task_id:
             return False
         record = self._delegation_status_provider(delegation.task_id)
-        return record is not None and record.get("status") in IN_PROGRESS_TASK_STATES
+        return record is not None and record.get("status") in DELIVERED_TASK_STATES
 
     def _drop(self, agents: Set[str]) -> None:
         """清掉这些执行者手上的委派、补充过的要求与"最近一次答复时刻"（原地删改，渲染层持有活引用）。
@@ -386,6 +384,7 @@ class DelegationWorkbench:
         "在等"有任务账本时以账面状态为准，没装账本时看身体有没有上报卡住；求助时刻取上报时刻，
         没有上报记录时取账面最近一次变动。``agent`` 为空串时看手上任意一件委派。
         """
+        self.sync_from_ledger()
         delegations = list(self._delegations.values()) if not agent else []
         if agent in self._delegations:
             delegations = [self._delegations[agent]]
@@ -424,45 +423,64 @@ class DelegationWorkbench:
     def _prepare_prompt(
         self, args: Dict[str, Any], source_dialogue: List[Dict[str, Any]]
     ) -> Tuple[Dict[str, Any], str]:
-        """递话参数整备：记下主播补充要求的原话（附来源对话之前）。"""
+        """递话参数整备：记下主播补充要求或回话的原话（附来源对话之前），按 kind 加对应抬头。"""
         own_relay = str(args.get("content") or "")
         if source_dialogue and isinstance(args.get("content"), str) and args["content"].strip():
-            # 补充要求同样附上本窗观众原话，游戏侧能看到逐字说法，不只剩一层转述
+            # 补充要求与聊天回话按 kind 区分抬头，避免聊天回话被误加成[补充要求]触发交付提醒
+            is_chat = str(args.get("kind") or "").strip() == "chat"
             args = dict(args)
-            args["content"] = compose_relay_content(args["content"], source_dialogue)
+            args["content"] = compose_relay_content(args["content"], source_dialogue, chat=is_chat)
         return args, own_relay
+
+    def _prepare_settle(
+        self, args: Dict[str, Any], _source_dialogue: List[Dict[str, Any]]
+    ) -> Tuple[Dict[str, Any], str]:
+        """结单参数整备：结单按看板短编号处置既有委派，不附带来源对话。"""
+        return args, str(args.get("progress") or "")
 
     # ----- 状态迁移（成功受理后） -----
 
     def _settle_delegate(self, args: Dict[str, Any], own_instruction: str, data: Dict[str, Any]) -> None:
-        """委派受理回执：accepted 才替换同一执行者手上的旧目标——只保留最近一次，
-        状态从"还在做"重新开始；并把"我开始做什么"记进时间线。
-
-        目标忙时回执带 queued：这件没开始做，记进排队镜像（不替换手头的目标——
-        手上正做着的是另一件），等账本显示送达开跑再挪进手头的事。
-        """
-        if not data.get("accepted"):
+        """委派受理回执：送达为在做时更新手头目标并记进时间线；排进待办时只留账本看板，不顶掉当前在做。"""
+        if not data.get("accepted") or data.get("queued"):
             return
         agent = str(data.get("executor") or args.get("agent") or "")
-        if data.get("queued"):
-            self._queued.setdefault(agent, []).append(
-                QueuedDelegation(
-                    agent=agent,
-                    instruction=own_instruction,
-                    task_id=str(data.get("task_id") or ""),
-                    at_ms=now_ms(),
-                    urgent=bool(args.get("urgent", False)),
-                )
-            )
-            return
+        resolved_instruction = own_instruction or str(data.get("own_words") or "")
         self._delegations[agent] = Delegation(
-            agent=agent, instruction=own_instruction, task_id=str(data.get("task_id") or ""), at_ms=now_ms()
+            agent=agent,
+            instruction=resolved_instruction,
+            task_id=str(data.get("task_id") or ""),
+            at_ms=now_ms(),
         )
-        if self._action_recorder is not None:
+        if self._action_recorder is not None and resolved_instruction:
             try:
-                self._action_recorder(agent, own_instruction)
+                self._action_recorder(agent, resolved_instruction)
             except Exception as exc:  # noqa: BLE001 - 记录失败不影响已受理的委派
                 self.logger.warning(f"委派记录写入时间线失败：{exc}", exc=True)
+
+    def _settle_task_settle(self, args: Dict[str, Any], _own_note: str, data: Dict[str, Any]) -> None:
+        """结单/搁下/撤单回执：对齐账本看板；若手上已无新件接手，记录刚了结那件是怎么收场的。"""
+        if not data.get("settled"):
+            return
+        agent = str(data.get("executor") or args.get("agent") or "")
+        settled_id = str(data.get("task_id") or "")
+        outcome = str(data.get("outcome") or "")
+        boards = self.sync_from_ledger()
+        board = boards.get(agent)
+        if board is not None and board.in_hand is not None:
+            # 待办里下一件已自动接手成为在做，sync_from_ledger 已更新 _delegations[agent]
+            return
+        current = self._delegations.get(agent)
+        if current is None or (settled_id and current.task_id and current.task_id != settled_id):
+            return
+        if outcome == "shelve":
+            self._delegations.pop(agent, None)
+        elif outcome == "done":
+            current.report_kind = "closed_by_initiator"
+            current.reported_ms = now_ms()
+        elif outcome == "drop":
+            current.report_kind = "cancelled"
+            current.reported_ms = now_ms()
 
     def _settle_prompt(self, args: Dict[str, Any], own_relay: str, data: Dict[str, Any]) -> None:
         """递话回执：delivered 且原话非空才记——被拒收的没交代到，不能当成"已经说过"。
