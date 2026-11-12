@@ -2,7 +2,7 @@
 
 构成：``DelegationStallWatch`` 直测（计数 / 决断判定 / 状态映射，注入假时钟）+
 StreamerAgent 挂接测（``on_task_notification`` 把材料记进游戏账本、置位待定夺信
-号、撤单经 ``framework_task_cancel`` 发出）。
+号、撤单经 ``framework_task_settle`` 发出）。
 """
 
 from __future__ import annotations
@@ -125,12 +125,16 @@ def test_terminal_change_drops_the_entry() -> None:
 
 
 async def test_streamer_routes_alerts_into_decision_material_and_cancels_on_threshold() -> None:
-    """挂接测：告警记进游戏账本必读材料、置位待定夺信号；到阈值的排队件经 framework_task_cancel 撤掉。"""
+    """挂接测：告警记进游戏账本必读材料、置位待定夺信号；到阈值的排队件经 framework_task_settle 撤掉。"""
     invokes: List[ToolInvocation] = []
 
     async def _invoke(invocation: ToolInvocation) -> ToolExecutionResult:
         invokes.append(invocation)
-        return ToolExecutionResult(tool_name=invocation.tool_name, success=True, structured_content={"cancelled": True})
+        return ToolExecutionResult(
+            tool_name=invocation.tool_name,
+            success=True,
+            structured_content={"settled": True, "outcome": "drop", "status": "cancelled"},
+        )
 
     registry = MagicMock()
     registry.invoke = AsyncMock(side_effect=_invoke)
@@ -146,7 +150,10 @@ async def test_streamer_routes_alerts_into_decision_material_and_cancels_on_thre
         agent.on_task_notification(_alert())
         await asyncio.sleep(0.05)
         assert len(invokes) == 1
-        assert invokes[0].tool_name == "framework_task_cancel" and invokes[0].arguments == {"task_id": "deleg_9"}
+        assert invokes[0].tool_name == "framework_task_settle" and invokes[0].arguments == {
+            "item": "deleg_9",
+            "outcome": "drop",
+        }
         assert any("auto_cancel" in line and "喊停" in line for line in agent._game_ledger.pending_lines()), (
             "撤单后补一条场记事实，主播下一窗顺带交代"
         )

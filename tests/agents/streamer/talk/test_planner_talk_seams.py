@@ -140,7 +140,7 @@ def test_framework_delegation_tools_hidden_from_planner_when_no_game_agent_enabl
     # 一旦注册了能接收委派的游戏 Agent，四件立即对主播可见
     mgr.register(_GameStubAgent())
     names = {spec.full_name for spec in reg.list_tools(for_agent="streamer")}
-    assert {"framework_delegate", "framework_prompt", "framework_task_status", "framework_task_cancel"} <= names
+    assert {"framework_delegate", "framework_prompt", "framework_task_status", "framework_task_settle"} <= names
 
 
 async def test_no_game_stage_mode_keeps_avatar_guide_and_cleans_proactive_reference(prompts: Any) -> None:

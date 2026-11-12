@@ -169,7 +169,11 @@ async def test_unwhitelisted_and_rate_limited_commands_do_not_delegate(harness: 
         if not in_flight:
             continue  # 第 4 条被限流拒收，没有在途单可撤
         cancel = await harness.registry.invoke(
-            ToolInvocation(tool_name="framework_task_cancel", arguments={"task_id": in_flight[0]}, source="test")
+            ToolInvocation(
+                tool_name="framework_task_settle",
+                arguments={"item": in_flight[0], "outcome": "drop"},
+                source="test",
+            )
         )
         assert cancel.success is True
     assert len({task_id for task_id, _ in harness.minecraft_stub.received}) == 3
