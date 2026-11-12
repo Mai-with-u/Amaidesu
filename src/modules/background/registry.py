@@ -12,12 +12,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.background import BackgroundTaskChangedPayload, BackgroundTaskState
+from src.modules.events.payloads.background import (
+    BackgroundTaskChangedPayload,
+    BackgroundTaskProgressLine,
+    BackgroundTaskState,
+)
 from src.modules.logging import get_logger
 from src.modules.utils.time_utils import now_ms
 
@@ -31,7 +35,8 @@ class BackgroundTaskInfo:
     """一条在途任务的现状（登记处的内存行，也是查询口的响应行）。
 
     output_chars / output_tail 只在模型调用期间非零/非空（流式输出字数与文字尾巴），
-    其他阶段的进度更新不携带，保持 0 与空串。
+    其他阶段的进度更新不携带，保持 0 与空串。progress_lines 装并行子步骤的进度行
+    （如整理的几笔模型调用各一行），单步骤任务保持空列表。
     """
 
     task_id: str
@@ -41,6 +46,7 @@ class BackgroundTaskInfo:
     started_at_ms: int
     output_chars: int = 0
     output_tail: str = ""
+    progress_lines: List[BackgroundTaskProgressLine] = field(default_factory=list)
 
 
 class BackgroundTaskRegistry:
@@ -71,11 +77,14 @@ class BackgroundTaskRegistry:
         *,
         output_chars: int = 0,
         output_tail: str = "",
+        progress_lines: Optional[List[BackgroundTaskProgressLine]] = None,
     ) -> None:
         """更新一条在途任务的进度文本并广播 running。
 
         模型调用期间（唯一知道输出增量的场景）顺带带上已输出字数与文字尾巴，
         面板据此显示实时输出预览；其他阶段不传，默认值把上一次的尾巴清掉。
+        ``progress_lines`` 装并行子步骤的进度行（每行一步，面板堆叠显示）；
+        不传或传空即清掉子步骤行，回到单行进度。
         """
         info = self._tasks.get(task_id)
         if info is None:
@@ -84,6 +93,7 @@ class BackgroundTaskRegistry:
         info.progress_text = progress_text
         info.output_chars = output_chars
         info.output_tail = output_tail
+        info.progress_lines = list(progress_lines) if progress_lines else []
         await self._emit(info)
 
     async def finish(self, task_id: str, *, success: bool, failure_reason: Optional[str] = None) -> None:
@@ -120,6 +130,7 @@ class BackgroundTaskRegistry:
                     failure_reason=failure_reason,
                     output_chars=info.output_chars,
                     output_tail=info.output_tail,
+                    progress_lines=info.progress_lines,
                 ),
                 source="BackgroundTaskRegistry",
             )

@@ -16,7 +16,8 @@
         </button>
       </template>
       <!-- 任务清单浮层：行 = 标题 / 进度文本 / 已跑时长（共享时钟逐秒刷新）；
-           模型调用期间另带实时输出预览（后端流式增量随事件刷新） -->
+           带并行子步骤的任务在行下堆叠子步骤行（每行一步，如整理的几笔模型调用）；
+           单步骤模型调用期间另带实时输出预览（后端流式增量随事件刷新） -->
       <div class="task-list">
         <div v-for="task in tasks" :key="task.task_id" class="task-row">
           <div class="task-line">
@@ -31,7 +32,20 @@
               查看模型调用
             </router-link>
           </div>
-          <div v-if="task.output_tail" class="task-output" :title="task.output_tail">
+          <div v-if="task.progress_lines?.length" class="task-sublines">
+            <div v-for="line in task.progress_lines" :key="line.label" class="task-subline">
+              <span class="task-subline-label">{{ line.label }}</span>
+              <span class="task-subline-progress">{{ line.progress_text }}</span>
+              <span
+                v-if="line.output_tail"
+                class="task-subline-output"
+                :title="line.output_tail"
+              >
+                正在写：{{ line.output_tail }}
+              </span>
+            </div>
+          </div>
+          <div v-else-if="task.output_tail" class="task-output" :title="task.output_tail">
             正在写：{{ task.output_tail }}
           </div>
         </div>
@@ -46,10 +60,11 @@
  *
  * 左侧摘要 = 在跑任务数 + 首个任务标题与进度文本，点开向上弹浮层看全部
  * 任务行；模型调用期间任务行下带实时输出预览（后端随事件带最近输出的文字尾巴）。
- * 下播整理的任务行另给一个「查看模型调用」入口，跳到按 settle
- * 档位筛选的模型调用历史。任务收到终态事件即从列表消失（完成/失败的提醒走右上角通知，
- * 见 useSystemNotifications）。数据面（订阅 background.task.changed +
- * 挂载恢复）在 useBackgroundTasks；本组件只做呈现。
+ * 带并行子步骤的任务（如下播整理的几笔模型调用）在任务行下堆叠子步骤行，
+ * 每行一步、各带自己的阶段与输出预览。下播整理的任务行另给一个「查看模型调用」
+ * 入口，跳到按 settle 档位筛选的模型调用历史。任务收到终态事件即从列表消失
+ * （完成/失败的提醒走右上角通知，见 useSystemNotifications）。数据面
+ * （订阅 background.task.changed + 挂载恢复）在 useBackgroundTasks；本组件只做呈现。
  */
 import { computed } from 'vue';
 import { useBackgroundTasks } from '@/composables/useBackgroundTasks';
@@ -173,5 +188,42 @@ function isSettleTask(task: BackgroundTask): boolean {
   color: var(--text-secondary);
   word-break: break-all;
   line-height: 1.4;
+}
+
+/* 并行子步骤堆叠行：下播整理的几笔模型调用各占一行（如 IDEA 后台任务清单） */
+.task-sublines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: var(--spacing-md);
+  border-left: 2px solid var(--border-color-light);
+}
+
+.task-subline {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+.task-subline-label {
+  flex-shrink: 0;
+  color: var(--text-primary);
+}
+
+.task-subline-progress {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+/* 该笔的实时输出预览：超长截断不撑宽浮层，全文看 title 提示 */
+.task-subline-output {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  word-break: break-all;
 }
 </style>

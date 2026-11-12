@@ -76,6 +76,18 @@ export type GameChatEvent = `${typeof EVENT_FAMILY.gameChat}${string}`;
 /** 后台任务状态（running=在跑；finished/failed=终态，收到即从面板移除） */
 export type BackgroundTaskState = 'running' | 'finished' | 'failed';
 
+/** 任务内一条并行子步骤的进度行（面板里一任务可堆叠多行，每行一步） */
+export interface BackgroundTaskProgressLine {
+  /** 子步骤名，如「整理本场档案」「找新承诺」 */
+  label: string;
+  /** 该步的进度自由文本，如「模型输出中（已 312 字）」 */
+  progress_text: string;
+  /** 该步已输出的正文字数（仅流式调用期间大于 0） */
+  output_chars?: number;
+  /** 该步最近输出的文字尾巴（非流式调用期间为空） */
+  output_tail?: string;
+}
+
 /**
  * 后台任务一行（background.task.changed 载荷 / GET /api/v1/background-tasks 行）。
  * 发布方 = 后端 BackgroundTaskRegistry；finished/failed 事件照发，随后该任务从
@@ -86,7 +98,7 @@ export interface BackgroundTask {
   /** 给人看的标题，如「整理场次：2026-11-06 周五 22:22」 */
   title: string;
   state: BackgroundTaskState;
-  /** 自由文本进度，如「第 2 笔/共 3 笔」「还缺 320 行」 */
+  /** 自由文本进度，如「并行模型整理中（已完成 1/3 笔）」「还缺 320 行」 */
   progress_text: string;
   /** 任务开始时刻（Unix 毫秒） */
   started_at_ms: number;
@@ -96,6 +108,8 @@ export interface BackgroundTask {
   output_chars?: number;
   /** 当前这笔模型调用最近输出的文字尾巴（浮层实时预览用，非模型调用期间为空） */
   output_tail?: string;
+  /** 并行子步骤的进度行（每行一步，面板堆叠显示；空/缺省 = 单步骤任务，看 progress_text 即可） */
+  progress_lines?: BackgroundTaskProgressLine[];
 }
 
 /** 总线事件 type 全集（WS kind="event"：折叠族 + 直通精确名 + 通配族具体名） */

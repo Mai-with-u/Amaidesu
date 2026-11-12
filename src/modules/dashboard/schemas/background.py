@@ -6,6 +6,10 @@ from typing import List, Literal
 
 from pydantic import BaseModel, Field
 
+from src.modules.events.payloads.background import BackgroundTaskProgressLine
+
+__all__ = ["BackgroundTaskItem", "BackgroundTaskListResponse"]
+
 
 class BackgroundTaskItem(BaseModel):
     """一条在途后台任务的现状行。"""
@@ -13,16 +17,17 @@ class BackgroundTaskItem(BaseModel):
     task_id: str = Field(..., description="任务号（如 settle-58 / memory-index-backfill）")
     title: str = Field(..., description="给人看的标题")
     state: Literal["running", "finished", "failed"] = Field(..., description="任务状态（查询口只见 running）")
-    progress_text: str = Field(default="", description="进度自由文本（如 第 2 笔/共 3 笔）")
+    progress_text: str = Field(default="", description="进度自由文本（如 取料中）")
     started_at_ms: int = Field(..., description="任务开始时刻（Unix 毫秒）")
     output_chars: int = Field(default=0, description="当前这笔模型调用已输出的正文字数（仅流式调用期间大于 0）")
     output_tail: str = Field(default="", description="当前这笔模型调用最近输出的文字尾巴（非模型调用期间为空）")
+    progress_lines: List[BackgroundTaskProgressLine] = Field(
+        default_factory=list,
+        description="并行子步骤的进度行（每行一步，面板堆叠显示；空 = 单步骤任务）",
+    )
 
 
 class BackgroundTaskListResponse(BaseModel):
     """当前全部在途后台任务（终态行不在注册表里，历史靠事件与应用日志）。"""
 
     tasks: List[BackgroundTaskItem] = Field(default_factory=list, description="按登记先后排列的在途任务")
-
-
-__all__ = ["BackgroundTaskItem", "BackgroundTaskListResponse"]

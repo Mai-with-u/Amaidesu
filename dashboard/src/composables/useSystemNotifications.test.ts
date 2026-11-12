@@ -163,7 +163,7 @@ describe('useSystemNotifications', () => {
         task_id: 'settle-58',
         title: '整理场次：58',
         state: 'running',
-        progress_text: '第 1 笔/共 3 笔',
+        progress_text: '并行模型整理中（已完成 0/3 笔）',
         started_at_ms: Date.now(),
       }),
     );

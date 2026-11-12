@@ -62,8 +62,24 @@ describe('整理任务的模型调用入口', () => {
 
 describe('模型调用的实时输出预览', () => {
   it('模型调用期间任务行下渲染输出尾巴预览', () => {
-    expect(sfcSource).toContain('v-if="task.output_tail"');
+    expect(sfcSource).toContain('v-else-if="task.output_tail"');
     expect(sfcSource).toContain('正在写：');
     expect(sfcSource).toContain('task.output_tail');
+  });
+});
+
+describe('并行子步骤的堆叠进度行', () => {
+  it('带 progress_lines 的任务在任务行下堆叠子步骤行（每行一步）', () => {
+    expect(sfcSource).toContain('v-if="task.progress_lines?.length"');
+    expect(sfcSource).toContain('v-for="line in task.progress_lines"');
+    expect(sfcSource).toContain('line.label');
+    expect(sfcSource).toContain('line.progress_text');
+  });
+
+  it('子步骤行各带自己的输出尾巴预览（与单步骤预览互斥，不重复渲染）', () => {
+    expect(sfcSource).toContain('v-if="line.output_tail"');
+    expect(sfcSource).toContain('line.output_tail');
+    // 单步骤预览降级为 v-else-if：同一任务行不会两种形态同时出现
+    expect(sfcSource).toContain('v-else-if="task.output_tail"');
   });
 });
