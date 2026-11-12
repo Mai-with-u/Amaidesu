@@ -572,8 +572,9 @@ async def create_app_components(
     tool_registry: Optional[ToolRegistry] = None
     tool_operations: Optional[ToolOperations] = None
     thinking_hub: Optional[StreamPreviewHub] = None
-    # Dashboard 装配段同样引用任务跟踪器与 TTS 引擎：无 [agents] 段时两者都不构造，以 None 交给 Dashboard
+    # Dashboard 装配段同样引用任务跟踪器与委派受理核心：无 [agents] 段时都不构造，以 None 交给 Dashboard
     task_tracker: Optional[TaskTracker] = None
+    delegation_core: Optional[Any] = None
     tts_engine: Optional[TTSProvider] = None
     avatar_tracking: Optional[TrackingRuntime] = None
     agents_config = config.get("agents", {}) if isinstance(config, dict) else {}
@@ -912,11 +913,14 @@ async def create_app_components(
         else:
             logger.info("[tools.health].enabled=false：仅保留 ToolRegistry 熔断判定，跳过探活循环")
 
-        # --- 框架 Agent 控制与委派原语（provider=framework；含 delegate/task_status）---
-        if tool_registry is not None:
-            from src.modules.agents.control import build_agent_control_provider
+        # --- 框架 Agent 控制与委派原语（provider=framework；组合根单例 DelegationCore 供工具面与控制面共享）---
+        from src.modules.agents.control import DelegationCore, build_agent_control_provider
 
-            framework_provider = build_agent_control_provider(agent_manager, task_ledger, event_bus=event_bus)
+        delegation_core = DelegationCore(agent_manager, task_ledger, event_bus=event_bus)
+        if tool_registry is not None:
+            framework_provider = build_agent_control_provider(
+                agent_manager, task_ledger, event_bus=event_bus, delegation_core=delegation_core
+            )
             framework_count = tool_registry.register_provider(framework_provider)
             logger.info(f"framework 工具已注册（控制+委派，新增 {framework_count} 个）")
 
@@ -1013,8 +1017,9 @@ async def create_app_components(
             # 观众身份人工处理：待确认页、合并与取消关联
             viewer_identity_repo=database.viewer_identity,
             privacy_service=privacy_service,
-            # 任务卡快照与运营委派的数据源（通用任务基建）
+            # 任务卡快照与运营委派的数据源（通用任务基建 + 组合根单例委派受理核心）
             task_tracker=task_tracker,
+            delegation_core=delegation_core,
             # 请求历史管理器：与引擎写入侧同源的共享实例
             request_history_manager=request_history_manager,
             # 基础设施直测面：/api/v1/debug/subtitle|tts 端点的数据源
@@ -1365,6 +1370,7 @@ async def _start_dashboard(
     talk_card_repo=None,
     storage_db_path=None,
     task_tracker=None,
+    delegation_core=None,
     subtitle_service=None,
     tts_engine=None,
     request_history_manager=None,
@@ -1453,8 +1459,9 @@ async def _start_dashboard(
             rundown_transition_repo=rundown_transition_repo,
             talk_card_repo=talk_card_repo,
             storage_db_path=storage_db_path,
-            # 任务跟踪器：任务卡快照（GET /api/v1/tasks）与运营委派的数据源
+            # 任务跟踪器：任务卡快照（GET /api/v1/tasks）与运营委派的数据源（共享同一个 DelegationCore）
             task_tracker=task_tracker,
+            delegation_core=delegation_core,
             # 字幕服务与 TTS 引擎：/api/v1/debug 直测端点经此驱动真实基础设施
             subtitle_service=subtitle_service,
             tts_engine=tts_engine,

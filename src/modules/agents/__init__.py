@@ -17,12 +17,13 @@ Amaidesu Agent 模块
 """
 
 from src.modules.agents.base import AgentState, BaseAgent
-from src.modules.agents.control import AgentControl, AgentControlProvider, build_agent_control_provider
+from src.modules.agents.control import AgentControl, AgentControlProvider, DelegationCore, build_agent_control_provider
 from src.modules.agents.manager import AgentManager
 
 __all__ = [
     "AgentState",
     "BaseAgent",
+    "DelegationCore",
     "AgentControl",
     "AgentControlProvider",
     "build_agent_control_provider",

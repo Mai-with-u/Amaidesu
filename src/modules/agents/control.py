@@ -1058,12 +1058,187 @@ class DelegationCore:
             urgent=urgent,
         )
 
+    async def settle(
+        self,
+        *,
+        target_name: str,
+        item_ref: str,
+        outcome: str,
+        caller: str,
+        progress: str = "",
+        roster: Optional[Dict[str, str]] = None,
+    ) -> _SettleOutcome:
+        """按短编号（'在做' / '待办N'）或内部任务号结单、搁下或撤单。"""
+        if self._task_ledger is None:
+            return _SettleOutcome(
+                ok=False, error="no_ledger", message="任务基建未装配（task_ledger 未注入），结单不可用"
+            )
+        ref = item_ref.strip()
+        if not ref:
+            return _SettleOutcome(
+                ok=False,
+                error="refused",
+                message="task_settle 需要 item（填短编号 '在做' 或 '待办1'、'待办2'……）",
+            )
+        action = outcome.strip()
+        if action not in _VALID_OUTCOMES:
+            return _SettleOutcome(
+                ok=False,
+                error="refused",
+                message=f"task_settle 的 outcome 只能是 'done'、'shelve' 或 'drop'（收到 '{action}'）",
+            )
+        # 拒绝执行方内部子目标号（如 maicraft-goal-489），避免把游戏子目标误当委派单
+        is_short_label = ref == IN_HAND_LABEL or (
+            ref.removeprefix(BACKLOG_LABEL_PREFIX).strip().isdigit()
+            and int(ref.removeprefix(BACKLOG_LABEL_PREFIX).strip()) > 0
+        )
+        if not is_short_label and not ref.startswith("deleg_"):
+            return _SettleOutcome(
+                ok=False,
+                error="refused",
+                message=(
+                    f"只能处置委派单（填 '{IN_HAND_LABEL}'、'{BACKLOG_LABEL_PREFIX}1' 等短编号），'{ref}' 是执行方内部目标号，"
+                    "不归这里管——让执行方用它自己的目标工具（如 maicraft_goal 的 cancel）收场"
+                ),
+            )
+
+        resolved_target = target_name.strip()
+        if not resolved_target and ref.startswith("deleg_"):
+            rec = self._task_ledger.get(ref)
+            if rec is not None and rec.source == "agent":
+                resolved_target = rec.executor
+            else:
+                return _SettleOutcome(
+                    ok=False,
+                    error="not_found",
+                    message=f"任务不存在: '{ref}'（未知委派号或已终态）",
+                )
+        target, failure = self.resolve_target(resolved_target, caller, roster)
+        if failure is not None:
+            return _SettleOutcome(ok=False, error=failure.error, message=failure.message)
+        assert target is not None
+        executor = target.name
+
+        async with self._lock_of(executor):
+            board = read_board(self._task_ledger, executor)
+            found = find_item(board, ref)
+            if found is None:
+                if ref.startswith("deleg_"):
+                    return _SettleOutcome(
+                        ok=False,
+                        error="not_found",
+                        message=f"任务不存在: '{ref}'（未知委派号或已终态）",
+                    )
+                lines = self._board_summary_lines(executor, board)
+                return _SettleOutcome(
+                    ok=False,
+                    error="not_found",
+                    message=f"在 '{executor}' 的看板上找不到 '{ref}'（可能已结单）。\n" + "\n".join(lines),
+                )
+
+            # 情况 1：处置的是【待办】里的件——执行者手上没有这件，绝不触碰执行者（不影响正在做的另一件）
+            if not found.in_hand:
+                if action == "shelve":
+                    if found.shelved and progress.strip():
+                        snap = {**found.snapshot, SHELVED_PROGRESS_KEY: progress.strip()}
+                        self._task_ledger.update(found.task_id, "queued", snapshot=snap)
+                        return _SettleOutcome(
+                            ok=True,
+                            task_id=found.task_id,
+                            executor=executor,
+                            item=found.label,
+                            outcome=action,
+                            status="queued",
+                        )
+                    return _SettleOutcome(
+                        ok=False,
+                        error="refused",
+                        message=(
+                            f"【{found.label}】「{found.own_words}」本来就在待办里（还没在做），不用再搁下；"
+                            "不做了请用 outcome='drop'，已经不用做且算完成请用 outcome='done'。"
+                        ),
+                    )
+                status = "closed_by_initiator" if action == "done" else "cancelled"
+                summary = (
+                    f"发起方认定已完成（待办直接结单{f'：{progress}' if progress else ''}）"
+                    if action == "done"
+                    else f"待办中被撤（还没送到执行方，source={caller or '未知'}{f'，{progress}' if progress else ''}）"
+                )
+                self._task_ledger.update(found.task_id, status, summary=summary)
+                logger.info(f"待办件已结单: {found.task_id} ({found.label}) -> {status}")
+                return _SettleOutcome(
+                    ok=True,
+                    task_id=found.task_id,
+                    executor=executor,
+                    item=found.label,
+                    outcome=action,
+                    status=status,
+                )
+
+            # 情况 2：处置的是【在做】那件——先让执行者收手，再落账并自动送达下一件就绪待办
+            released = await self._release_in_hand(target, found, reason=progress or action)
+            if released is None:
+                if action == "shelve":
+                    return _SettleOutcome(
+                        ok=False,
+                        error="refused",
+                        message=f"目标 '{executor}' 不支持中途收手，无法将【{IN_HAND_LABEL}】搁回待办",
+                    )
+                cancelled = await target.cancel_task_now(found.task_id, source=caller or "unknown", reason=progress)
+                if not cancelled:
+                    return _SettleOutcome(
+                        ok=False,
+                        error="not_found",
+                        message=f"结单失败：任务 '{found.task_id}' 不在执行者 '{executor}' 的追踪范围（未知号或已终态）",
+                    )
+                released = ""
+
+            merged = _merge_progress(progress, released)
+            if action == "shelve":
+                new_label = self._shelve_record(found, progress=merged, held=True)
+                self._watchdog.pop(executor, None)
+                await self._drain_unlocked(executor)
+                logger.info(f"在做委派先搁下: {found.task_id} -> {new_label}（{executor}）")
+                return _SettleOutcome(
+                    ok=True,
+                    task_id=found.task_id,
+                    executor=executor,
+                    item=new_label,
+                    outcome=action,
+                    status="queued",
+                )
+
+            status = "closed_by_initiator" if action == "done" else "cancelled"
+            if self._task_ledger.get(found.task_id) is not None:
+                summary = (
+                    f"发起方认定已完成：{merged}"
+                    if action == "done" and merged
+                    else (
+                        "发起方认定已完成结单"
+                        if action == "done"
+                        else (f"发起方撤单不做了（source={caller or '未知'}{f'，{progress}' if progress else ''}）")
+                    )
+                )
+                self._task_ledger.update(found.task_id, status, summary=summary)
+            self._watchdog.pop(executor, None)
+            await self._drain_unlocked(executor)
+            logger.info(f"在做委派已结单: {found.task_id} -> {status}（{executor}）")
+            return _SettleOutcome(
+                ok=True,
+                task_id=found.task_id,
+                executor=executor,
+                item=IN_HAND_LABEL,
+                outcome=action,
+                status=status,
+            )
+
+
 # 兼容内部别名
 _DelegationCore = DelegationCore
 
 
 class AgentControl:
-    """框架级控制——直接调用接口（不进 ToolRegistry）。"""
+    """框架级控制——直接调用接口（不进 ToolRegistry，供 Dashboard REST 控制面使用）。"""
 
     def __init__(
         self,
@@ -1071,11 +1246,21 @@ class AgentControl:
         task_ledger: Optional[TaskLedger] = None,
         event_bus: Optional[Any] = None,
         clock: Optional[Callable[[], int]] = None,
+        *,
+        delegation_core: Optional[DelegationCore] = None,
     ) -> None:
         self._manager = manager
-        self._task_ledger = task_ledger
+        self._task_ledger = (
+            task_ledger
+            if task_ledger is not None
+            else (delegation_core._task_ledger if delegation_core is not None else None)
+        )
         self._event_bus = event_bus
-        self._delegation = _DelegationCore(manager, task_ledger, event_bus, clock)
+        self._delegation = delegation_core or DelegationCore(manager, self._task_ledger, event_bus, clock)
+
+    @property
+    def delegation_core(self) -> DelegationCore:
+        return self._delegation
 
     async def pause(self, name: str) -> bool:
         agent = self._manager.get_agent_by_name(name)
@@ -1102,12 +1287,7 @@ class AgentControl:
         return True
 
     async def prompt(self, name: str, content: str, *, source: str = "operator") -> dict:
-        """向指定 Agent 递话（控制面直调，供运营 REST）。
-
-        返回 ``{"ok": True, "delivered": True, "executor": name}`` 或
-        ``{"ok": False, "error": "not_found"|"refused", "message": …}``——
-        两种失败语义分开，REST 侧据此映射 404 / 409。
-        """
+        """向指定 Agent 递话（控制面直调，供运营 REST）。"""
         agent = self._manager.get_agent_by_name(name)
         if agent is None:
             logger.warning(f"prompt: 未找到 Agent '{name}'")
@@ -1122,19 +1302,23 @@ class AgentControl:
     async def cancel_task(self, name: str, task_id: str, *, source: str = "operator", reason: str = "") -> dict:
         """硬取消指定 Agent 的任务（控制面直调，供运营 REST）。
 
-        取消经执行 Agent（单写者规则：框架不代写账面）；``reason`` 非空时
-        随停手通知原文转给执行 Agent。返回
-        ``{"ok": True, "cancelled": True}`` 或
-        ``{"ok": False, "error": "agent_not_found"|"task_not_found",
-        "message": …}``——REST 侧一律映射 404（不在名册 / 任务未知或已终态）。
+        账本在位且该任务是委派单时走统一 ``DelegationCore.settle(outcome='drop')``：
+        待办件直接移除不碰执行者，在做件收手后自动送达下一件待办；
+        无账本或非委派任务走执行 Agent 的 ``cancel_task_now``。
         """
-        # 还在排队、没送到执行方的单不经执行 Agent（它从没见过）：队列直接撤
-        if self._delegation.cancel_queued(task_id, source=source):
-            return {"ok": True, "cancelled": True}
         agent = self._manager.get_agent_by_name(name)
         if agent is None:
             logger.warning(f"cancel_task: 未找到 Agent '{name}'")
             return {"ok": False, "error": "agent_not_found", "message": f"Agent 不存在: {name}"}
+        if self._task_ledger is not None:
+            rec = self._task_ledger.get(task_id)
+            if rec is not None and rec.source == "agent" and rec.tool == "framework_delegate":
+                settled = await self._delegation.settle(
+                    target_name=name, item_ref=task_id, outcome="drop", caller=source, progress=reason
+                )
+                if settled.ok:
+                    return {"ok": True, "cancelled": True}
+                return {"ok": False, "error": "task_not_found", "message": settled.message}
         cancelled = await agent.cancel_task_now(task_id, source=source, reason=reason)
         if not cancelled:
             logger.info(f"cancel_task: Agent '{name}' 拒收取消（task_id={task_id}）")
@@ -1146,13 +1330,7 @@ class AgentControl:
         return {"ok": True, "cancelled": True}
 
     async def stop_actions(self, name: str, reason: str = "", *, cancel_delegations: bool = False) -> dict:
-        """急停指定 Agent（控制面直调，供运营 REST）：停掉所有在跑目标并注入叫停理由。
-
-        默认只停手不撤委派单；``cancel_delegations`` 为真时连委派单一起撤
-        （复用执行 Agent 的 cancel 路径，单写者规则不动）。返回
-        ``{"ok": True, "stopped": True}`` 或
-        ``{"ok": False, "error": "agent_not_found"|"not_supported", "message": …}``。
-        """
+        """急停指定 Agent（控制面直调，供运营 REST）。"""
         agent = self._manager.get_agent_by_name(name)
         if agent is None:
             logger.warning(f"stop_actions: 未找到 Agent '{name}'")
@@ -1163,21 +1341,35 @@ class AgentControl:
             return {"ok": False, "error": "not_supported", "message": f"Agent '{name}' 不支持急停"}
         return {"ok": True, "stopped": True}
 
-    async def delegate(self, name: str, instruction: str, *, initiator: str = "operator", urgent: bool = False) -> dict:
-        """运营直派任务（控制面直调，供 REST）：委托给受理核心，映射 REST 错误形态。
-
-        受理前置（目标存在、受理分支、接收入口、账面登记）全部在
-        ``_DelegationCore``——与 LLM 工具委派同一套不变量、同一张任务记录表
-        （source="agent"），发起方记 ``initiator``（REST 侧固定 "operator"）。
-        返回 ``{"ok": True, "accepted": True, "task_id": …, "executor": …}`` 或
-        ``{"ok": False, "error": "not_found"|"refused"|"no_ledger", "message": …}``——
-        REST 侧据此映射 404 / 409 / 503；排队复用受理成功形态、满员拒收复用 refused（409）。
-        """
+    async def delegate(
+        self,
+        name: str,
+        instruction: str,
+        *,
+        initiator: str = "operator",
+        urgent: bool = False,
+        when_busy: str = "queue",
+        current: str = "",
+        progress: str = "",
+    ) -> dict:
+        """运营直派任务（控制面直调，供 REST）：与主播委派共用同一个 ``DelegationCore``。"""
         outcome = await self._delegation.delegate(
-            target_name=name, instruction=instruction, caller=initiator, urgent=urgent
+            target_name=name,
+            instruction=instruction,
+            caller=initiator,
+            when_busy=when_busy,
+            current=current,
+            progress=progress,
+            urgent=urgent,
         )
         if outcome.ok:
-            receipt: dict = {"ok": True, "accepted": True, "task_id": outcome.task_id, "executor": outcome.executor}
+            receipt: dict = {
+                "ok": True,
+                "accepted": True,
+                "task_id": outcome.task_id,
+                "executor": outcome.executor,
+                "item": outcome.item,
+            }
             if outcome.queued:
                 receipt["queued"] = True
                 receipt["queue_position"] = outcome.queue_position
@@ -1192,7 +1384,6 @@ class AgentControl:
         agent = self._manager.get_agent_by_name(name)
         if agent is None:
             return None
-        # is_alive 走 manager 的守护阈值（config 化）；能走到这里说明 agent 在名册，不会是 None
         alive = self._manager.is_agent_alive(name)
         return {
             "name": agent.name,
@@ -1203,70 +1394,48 @@ class AgentControl:
         }
 
 
-# -------------------- Provider：用于注册进 ToolRegistry --------------------
+# -------------------- Provider：注册进 ToolRegistry --------------------
 
 
 @dataclass(slots=True)
 class AgentControlProvider(BaseToolProvider):
-    """把 framework LLM 工具面（委派/递话/任务状态）注册到 ToolRegistry 的 Provider。
-
-    控制工具（pause/resume/shutdown/restart/list/state）不在本 provider 中——
-    控制面由 DashboardServer 经 API 直调 ``AgentControl`` 类本体。
-
-    委派原语：
-    - ``framework_delegate(agent, instruction)``：名册校验 + **禁自派** +
-      目标接收入口（BaseAgent 默认拒收）→ 受理成功登记同一张任务记录表
-      （agent 型：发起方=调用方、执行者=目标、事实源=执行 Agent）
-    - 受理失败（目标不存在/未启用/拒收/自派/队列满员）与任务失败（执行中失败）分开
-    - ``framework_task_status(task_id)``：查记录表；未知任务号 → 失败结果
-    - ``framework_task_cancel(task_id)``：撤委派单——只收 deleg_ 前缀的框架
-      任务号，转发目标 Agent 的 ``cancel_task``（单写者规则：取消经执行 Agent，
-      框架不代写账面）；执行方内部目标号（如 maicraft-goal-N）拒绝并提示走
-      执行方自己的目标工具收场
-
-    递话原语（与委派并列：传输同路、记账分家——纯文本留言不进账本）：
-    - ``framework_prompt(agent, content)``：目标解析与禁自派复用委派同款
-      逻辑；调 ``target.receive_prompt``，拒收 → 失败结果、受理 → 回执
-      （无任务号）
-    """
+    """把 framework LLM 工具面（delegate / prompt / task_status / task_settle）注册到 ToolRegistry。"""
 
     manager: AgentManager
     task_ledger: Optional[TaskLedger] = None
     event_bus: Optional[Any] = None
-    clock: Optional[Callable[[], int]] = None  # 保留给测试注入假时钟（委派看门狗计时用）
-    _delegation: _DelegationCore = field(init=False, repr=False)  # 委派受理核心（与控制面直调共用）
+    clock: Optional[Callable[[], int]] = None
+    delegation_core: Optional[DelegationCore] = None
+    _delegation: DelegationCore = field(init=False, repr=False)
 
-    # 工具分类（provider=提供者名、category=分组、tools.toml 段=配置地址，三者正交）
     category: ClassVar[str] = "framework"
 
     def __post_init__(self) -> None:
-        self._delegation = _DelegationCore(self.manager, self.task_ledger, self.event_bus, self.clock)
+        if self.delegation_core is not None:
+            self._delegation = self.delegation_core
+            if self.task_ledger is None:
+                self.task_ledger = self.delegation_core._task_ledger
+        else:
+            self._delegation = DelegationCore(self.manager, self.task_ledger, self.event_bus, self.clock)
 
     @property
     def name(self) -> str:
         return PROVIDER_NAME
 
-    def list_tools(self) -> Iterable[ToolSpec]:
-        """委派 + 递话 + 任务状态 + 任务撤销工具（恒四件）。
+    async def setup(self) -> None:
+        """随 ToolRegistry.start_providers 启动看门狗低频巡检循环。"""
+        self._delegation.start()
 
-        **参数枚举里的名册只含真正覆写了接收入口的 Agent**——没接入的 Agent
-        （如纯手柄型游戏 Agent）不出现在 enum 与描述里，LLM 从源头选不出
-        "必被拒收"的委派目标。四件必须恒返回：registry 的 invoke 表是注册期
-        快照（装配顺序总是 framework 先注册、Agent 后注册），此刻名册常为空，
-        按名册裁剪工具会把 delegate 砍出 invoke 表、命令直连链路整体断掉。
-        接入状态变化经重启后下一次装配生效（与名册快照同节拍）。
-        """
-        return [self._delegate_spec(), self._prompt_spec(), _TASK_STATUS_SPEC, _TASK_CANCEL_SPEC]
+    async def cleanup(self) -> None:
+        """随 ToolRegistry.stop_providers 停止看门狗低频巡检循环。"""
+        await self._delegation.stop()
+
+    def list_tools(self) -> Iterable[ToolSpec]:
+        """委派 + 递话 + 任务状态 + 任务结单工具（恒四件）。"""
+        return [self._delegate_spec(), self._prompt_spec(), _TASK_STATUS_SPEC, _TASK_SETTLE_SPEC]
 
     def _roster(self, hook: str) -> Dict[str, str]:
-        """当前名册 {注册名: 描述}，仅含覆写了 ``hook`` 接收入口的 Agent。
-
-        能力探测，覆写即声明（单一事实源）：``BaseAgent.receive_delegation`` /
-        ``receive_prompt`` 默认拒收，子类覆写才代表真正接入。未覆写的 Agent
-        不进名册——委派/递话工具的参数枚举里看不到它，从源头杜绝"选了必被
-        拒收的目标"的无效调用（调用侧 ``_DelegationCore.resolve_target`` 的
-        拒收校验保留，防编名直调）。manager 不可达或缺查询接口时按空名册。
-        """
+        """当前名册 {注册名: 描述}，仅含覆写了 ``hook`` 接收入口的 Agent。"""
         roster: Dict[str, str] = {}
         list_agents = getattr(self.manager, "list_agents", None)
         descriptions = getattr(self.manager, "descriptions", {}) or {}
@@ -1281,12 +1450,11 @@ class AgentControlProvider(BaseToolProvider):
             if agent is None:
                 continue
             if getattr(type(agent), hook, None) is base_fn:
-                continue  # 未覆写：默认拒收，不进名册
+                continue
             roster[name] = str(descriptions.get(name, "") or "")
         return roster
 
     def _agent_target_description(self, roster: Dict[str, str]) -> str:
-        """构造 agent 参数的动态说明（名册 + 描述；委派/递话共用）。"""
         if roster:
             listed = "；".join(f"{name}={desc or '（无描述）'}" for name, desc in roster.items())
             return (
@@ -1304,27 +1472,22 @@ class AgentControlProvider(BaseToolProvider):
         return any(name != agent_name for name in self._roster("receive_delegation"))
 
     def guide_for(self, agent_name: str) -> str:
-        """framework 工具面的使用说明：有能接收委派的 Agent 才给，否则空串。
-
-        读说明的 Agent 自己不算候选（禁自派）。说明只点明"可以委派给谁"
-        与三件工具的分工；委派型游戏的完整守则由读说明的一方按自己的提示词
-        追加——框架不写主播口吻的话。
-        """
+        """framework 工具面的使用说明：有能接收委派的 Agent 才给，否则空串。"""
         roster = {name: desc for name, desc in self._roster("receive_delegation").items() if name != agent_name}
         if not roster:
             return ""
         listed = "；".join(f"{name}={desc or '（无描述）'}" for name, desc in sorted(roster.items()))
         return (
             f"委派型游戏（可以把一件事交给它在后台做）：{listed}。"
-            "用 framework_delegate 开始做一件事（只给目标与约束，不给步骤），"
-            "用 framework_prompt 给手上正在做的事补充要求；"
-            "目标手上有事没做完时普通件自动排队（回执带排位），急事才把 urgent 设为 true 插队；"
-            "用 framework_task_cancel 报委派任务号可以撤掉在途或排队的；"
+            "每个目标任何时刻至多一件【在做】，其余在【待办】。"
+            "用 framework_delegate 安排新的一件事或把待办提上来（目标忙时 when_busy 选 'queue' 排后面，"
+            "或选 'replace' 换活并用 current 交代在做那件是 'done' 做完了 / 'shelve' 先搁下 / 'drop' 不做了）；"
+            "用 framework_task_settle 报短编号（'在做'、'待办1'……）直接结单、先搁下或撤单；"
+            "用 framework_prompt 只给当前【在做】的同一件事补充要求（kind='requirement'）或在聊天里回话（kind='chat'），不拿它换活；"
             "进度以它的上报与 framework_task_status 的查询结果为准，不要自己推测。"
         )
 
     def _delegate_spec(self) -> ToolSpec:
-        """构造委派规格：把名册（注册名 + 描述）写进 agent 参数说明与枚举。"""
         roster = self._roster("receive_delegation")
         schema: Dict[str, Any] = {
             "type": "object",
@@ -1332,17 +1495,40 @@ class AgentControlProvider(BaseToolProvider):
                 "agent": {"type": "string", "description": self._agent_target_description(roster)},
                 "instruction": {
                     "type": "string",
-                    "description": "工作指令（自然语言：目标与约束，不规定步骤与次序）",
+                    "description": (
+                        "工作指令（自然语言：目标与完成标准，不规定步骤与次序）。"
+                        "新派一件事时填；把【待办】里已有的一件提上来做时可省略并改填 item"
+                    ),
+                },
+                "item": {
+                    "type": "string",
+                    "description": "要把【待办】里哪一件提上来做（填短编号，如 '待办1'、'待办2'；新派一件事时不填）",
+                },
+                "when_busy": {
+                    "type": "string",
+                    "enum": ["queue", "replace"],
+                    "description": (
+                        "目标手上有【在做】时怎么办：'queue'（默认）排进待办后面；"
+                        "'replace' 停下手上那件换成这件（选 'replace' 时必须填 current 交代在做那件怎么结）"
+                    ),
+                },
+                "current": {
+                    "type": "string",
+                    "enum": ["done", "shelve", "drop"],
+                    "description": (
+                        "when_busy='replace' 时必填，交代当前【在做】怎么结："
+                        "'done'=已经做完了结单，'shelve'=先搁下放回待办最前，'drop'=不做了作废"
+                    ),
+                },
+                "progress": {
+                    "type": "string",
+                    "description": "选填：current='shelve' 时记一句在做那件做到哪了（不填则采用执行侧回报的进度）",
                 },
                 "urgent": {
                     "type": "boolean",
-                    "description": (
-                        "是否急件（默认 false）。目标忙时：true 且确属急事才插队——目标会暂放手头的活"
-                        "立刻办这件（手头那件保留进度，办完接着做）；普通排队的事不要设 true。"
-                    ),
+                    "description": "急事简写（可选）：设为 true 等同于 when_busy='replace' 且默认 current='shelve'",
                 },
             },
-            "required": ["instruction"],
         }
         if roster:
             schema["properties"]["agent"]["enum"] = sorted(roster)
@@ -1355,13 +1541,20 @@ class AgentControlProvider(BaseToolProvider):
         )
 
     def _prompt_spec(self) -> ToolSpec:
-        """构造递话规格：agent 参数说明与枚举随可递话名册动态构造。"""
         roster = self._roster("receive_prompt")
         schema: Dict[str, Any] = {
             "type": "object",
             "properties": {
                 "agent": {"type": "string", "description": self._agent_target_description(roster)},
-                "content": {"type": "string", "description": "递话内容（自然语言：想说给目标的话）"},
+                "content": {"type": "string", "description": "递话内容（自然语言：补充给手上的事的要求，或聊天回话）"},
+                "kind": {
+                    "type": "string",
+                    "enum": ["requirement", "chat"],
+                    "description": (
+                        "递话种类：'requirement'（默认）给当前【在做】的同一件事补充要求；"
+                        "'chat' 只是在游戏聊天里回一句话、不改手上的事"
+                    ),
+                },
             },
             "required": ["content"],
         }
@@ -1378,16 +1571,15 @@ class AgentControlProvider(BaseToolProvider):
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         args = invocation.arguments or {}
         name = invocation.tool_name
-        # 调用方使用的就是派生全名（framework_delegate 等），等值对照分发
         try:
             if name == "framework_delegate":
                 return await self._invoke_delegate(args, caller=invocation.source)
             if name == "framework_prompt":
                 return self._invoke_prompt(args, caller=invocation.source)
             if name == "framework_task_status":
-                return self._invoke_task_status(args)
-            if name == "framework_task_cancel":
-                return await self._invoke_task_cancel(args, caller=invocation.source)
+                return self._invoke_task_status(args, caller=invocation.source)
+            if name == "framework_task_settle":
+                return await self._invoke_task_settle(args, caller=invocation.source)
             return ToolExecutionResult(
                 tool_name=name,
                 success=False,
@@ -1401,42 +1593,49 @@ class AgentControlProvider(BaseToolProvider):
                 error_message=f"{type(exc).__name__}: {exc}",
             )
 
-    # ----- 委派原语（framework_delegate / framework_task_status） -----
-
     async def _invoke_delegate(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
-        """受理委派：指令校验后委托受理核心，把统一结果映射成工具失败/回执。
-
-        目标解析、受理分支、接收入口、账面登记都在 ``_DelegationCore``——
-        与控制面直调（REST）共用同一套受理不变量。
-
-        失败分两类：目标不存在/在途冲突/目标拒收这类"对方或调用方纠正后能重派"的
-        业务拒绝，标 ``failure_kind="business"``（不算执行故障，不进熔断计数）；
-        任务基建未装配这类依赖不可用是真执行故障，不标——标了健康监控就废了。
-        """
         started_ms = now_ms()
-        instruction = str(args.get("instruction", "") or "")
-        if not instruction:
-            return business_fail_result("framework_delegate", started_ms, "delegate 需要 instruction（自然语言指令）")
+        instruction = str(args.get("instruction", "") or "").strip()
+        item_ref = str(args.get("item", "") or "").strip()
+        if not instruction and not item_ref:
+            return business_fail_result(
+                "framework_delegate",
+                started_ms,
+                "delegate 需要 instruction（新事的自然语言指令）或 item（待办短编号，如 '待办1'）",
+            )
+        raw_instruction = str(args.get("instruction", "") or "")
         outcome = await self._delegation.delegate(
             target_name=str(args.get("agent", "") or ""),
-            instruction=instruction,
+            instruction=raw_instruction,
             caller=caller,
             roster=self._roster("receive_delegation"),
+            item_ref=item_ref,
+            when_busy=str(args.get("when_busy", "") or "queue"),
+            current=str(args.get("current", "") or ""),
+            progress=str(args.get("progress", "") or ""),
             urgent=bool(args.get("urgent", False)),
         )
         if outcome.ok:
-            receipt: Dict[str, Any] = {"accepted": True, "task_id": outcome.task_id, "executor": outcome.executor}
+            receipt: Dict[str, Any] = {
+                "accepted": True,
+                "task_id": outcome.task_id,
+                "executor": outcome.executor,
+                "item": outcome.item,
+            }
+            if outcome.own_words:
+                receipt["own_words"] = outcome.own_words
             if outcome.queued:
                 receipt["queued"] = True
                 receipt["queue_position"] = outcome.queue_position
-                receipt["note"] = "目标手上有事，这件排进了委派队列，轮到时会送达；不要重复派。"
+                receipt["note"] = (
+                    f"目标手上有事，这件已排进待办（{outcome.item}，第 {outcome.queue_position} 位），轮到时自动送达；不要重复派。"
+                )
             return ToolExecutionResult(
                 tool_name="framework_delegate",
                 success=True,
                 structured_content=receipt,
             )
         if outcome.error == "no_ledger":
-            # 任务基建未装配：依赖不可用，重试无用——真执行故障，不标业务拒绝。
             return ToolExecutionResult(
                 tool_name="framework_delegate",
                 success=False,
@@ -1445,23 +1644,22 @@ class AgentControlProvider(BaseToolProvider):
         return business_fail_result("framework_delegate", started_ms, outcome.message)
 
     def _invoke_prompt(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
-        """受理递话：目标解析（复用受理核心，委派同款不变量）→ 目标接收入口 → 回执。
-
-        纯文本留言**不登记任务记录表**——递话与委派传输同路、记账分家。
-
-        失败都是对方或调用方纠正后能重来的业务拒绝（内容为空、目标不存在或自派、
-        目标拒收递话），标 ``failure_kind="business"``——不算执行故障，不进熔断计数。
-        """
         started_ms = now_ms()
         content = str(args.get("content", "") or "")
         if not content:
             return business_fail_result("framework_prompt", started_ms, "prompt 需要 content（递话文本）")
+        kind = str(args.get("kind", "") or "").strip()
+        if kind and kind not in ("requirement", "chat"):
+            return business_fail_result(
+                "framework_prompt", started_ms, f"prompt 的 kind 只能是 'requirement' 或 'chat'（收到 '{kind}'）"
+            )
         target_name = str(args.get("agent", "") or "")
         target, failure = self._delegation.resolve_target(target_name, caller, self._roster("receive_prompt"))
         if failure is not None:
             return business_fail_result("framework_prompt", started_ms, failure.message)
-        assert target is not None  # 解析成功时必有实例（类型收窄）
-        delivered = target.receive_prompt(content=content, source=caller or "unknown")
+        assert target is not None
+        outbound = mark_prompt(content, chat=True) if kind == "chat" else content
+        delivered = target.receive_prompt(content=outbound, source=caller or "unknown")
         if not delivered:
             return business_fail_result(
                 "framework_prompt",
@@ -1475,112 +1673,86 @@ class AgentControlProvider(BaseToolProvider):
             structured_content={"delivered": True, "executor": target.name},
         )
 
-    async def _invoke_task_cancel(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
-        """撤委派单：前缀校验 → 查记录表定位执行者 → 转发目标 cancel_task_now。
-
-        只收 deleg_ 前缀的框架委派号——执行方内部目标号（如 maicraft-goal-N）
-        是另一本账（执行 Agent 在游戏里挂的目标），不归框架撤，提示走执行方
-        自己的目标工具。取消经执行 Agent（单写者规则），框架不代写账面。
-
-        失败多数是业务拒绝（任务号写错、任务已终态、执行者不在名册）——调用方
-        换个号或等一会儿就能重来，标 ``failure_kind="business"``，不进熔断计数；
-        任务基建未装配是依赖不可用，属真执行故障，不标。
-        """
+    async def _invoke_task_settle(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
         started_ms = now_ms()
-        task_id = str(args.get("task_id", "") or "")
-        tool_name = "framework_task_cancel"
-        if not task_id:
-            return business_fail_result(
-                tool_name,
-                started_ms,
-                "task_cancel 需要 task_id（framework_delegate 回执返回的委派任务号）",
-            )
-        if not task_id.startswith("deleg_"):
-            return business_fail_result(
-                tool_name,
-                started_ms,
-                (
-                    f"只能撤委派任务（deleg_ 开头），'{task_id}' 是执行方内部目标号，"
-                    "不归这里撤——让执行方用它自己的目标工具（如 maicraft_goal 的 cancel）收场"
-                ),
-            )
-        if self.task_ledger is None:
-            # 任务基建未装配：依赖不可用，重试无用——真执行故障，不标业务拒绝。
-            return ToolExecutionResult(
-                tool_name=tool_name,
-                success=False,
-                error_message="任务基建未装配（task_ledger 未注入），撤单不可用",
-            )
-        record = self.task_ledger.get(task_id)
-        if record is None:
-            return business_fail_result(tool_name, started_ms, f"任务不存在: '{task_id}'（未知任务号或已终态）")
-        if record.status == "queued" and self._delegation.cancel_queued(task_id, source=caller or "unknown"):
+        tool_name = "framework_task_settle"
+        settled = await self._delegation.settle(
+            target_name=str(args.get("agent", "") or ""),
+            item_ref=str(args.get("item", "") or ""),
+            outcome=str(args.get("outcome", "") or ""),
+            caller=caller,
+            progress=str(args.get("progress", "") or ""),
+            roster=self._roster("receive_delegation"),
+        )
+        if settled.ok:
             return ToolExecutionResult(
                 tool_name=tool_name,
                 success=True,
-                structured_content={"cancelled": True, "task_id": task_id, "executor": record.executor},
+                structured_content={
+                    "settled": True,
+                    "outcome": settled.outcome,
+                    "status": settled.status,
+                    "item": settled.item,
+                    "task_id": settled.task_id,
+                    "executor": settled.executor,
+                },
             )
-        target = self.manager.get_agent_by_name(record.executor)
-        if target is None:
-            logger.warning(f"task_cancel: 执行者 '{record.executor}' 不在名册（task_id={task_id}）")
-            return business_fail_result(
-                tool_name,
-                started_ms,
-                f"撤单失败：执行者 '{record.executor}' 不在名册，无法送达停手通知",
-            )
-        cancelled = await target.cancel_task_now(task_id, source=caller or "unknown")
-        if not cancelled:
-            return business_fail_result(
-                tool_name,
-                started_ms,
-                f"撤单失败：任务 '{task_id}' 不在执行者 '{record.executor}' 的追踪范围（未知号或已终态）",
-            )
-        logger.info(f"委派撤单: {caller or 'unknown'} 撤掉 {record.executor} 的 {task_id}")
-        return ToolExecutionResult(
-            tool_name=tool_name,
-            success=True,
-            structured_content={"cancelled": True, "task_id": task_id, "executor": record.executor},
-        )
+        if settled.error == "no_ledger":
+            return ToolExecutionResult(tool_name=tool_name, success=False, error_message=settled.message)
+        return business_fail_result(tool_name, started_ms, settled.message)
 
-    def _invoke_task_status(self, args: Dict[str, Any]) -> ToolExecutionResult:
-        """按任务号查记录表：状态 + 快照；未知/已终态移除 → 失败结果。
-
-        查不到任务是业务拒绝（任务号写错或已终态），标 ``failure_kind="business"``；
-        任务基建未装配是依赖不可用，属真执行故障，不标。
-        """
+    def _invoke_task_status(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
         started_ms = now_ms()
-        task_id = str(args.get("task_id", "") or "")
-        if not task_id:
-            return business_fail_result(
-                "framework_task_status",
-                started_ms,
-                "task_status 需要 task_id（framework_delegate 回执返回的委派任务号）",
-            )
         if self.task_ledger is None:
-            # 任务基建未装配：依赖不可用，重试无用——真执行故障，不标业务拒绝。
             return ToolExecutionResult(
                 tool_name="framework_task_status",
                 success=False,
                 error_message="任务基建未装配（task_ledger 未注入），查状态不可用",
             )
-        record = self.task_ledger.get(task_id)
-        if record is None:
+        task_id = str(args.get("task_id", "") or "").strip()
+        item_ref = str(args.get("item", "") or "").strip()
+        if not task_id and not item_ref:
             return business_fail_result(
                 "framework_task_status",
                 started_ms,
-                f"任务不存在: '{task_id}'（未知任务号或已终态移除）",
+                "task_status 需要 item（短编号如 '在做'、'待办1'）或 task_id",
             )
+        record: Optional[TaskRecord] = None
+        label = ""
+        if task_id:
+            record = self.task_ledger.get(task_id)
+        else:
+            target, failure = self._delegation.resolve_target(
+                str(args.get("agent", "") or ""), caller, self._roster("receive_delegation")
+            )
+            if failure is not None:
+                return business_fail_result("framework_task_status", started_ms, failure.message)
+            assert target is not None
+            found = find_item(read_board(self.task_ledger, target.name), item_ref)
+            if found is not None:
+                record = found.record
+                label = found.label
+        if record is None:
+            key = task_id or item_ref
+            return business_fail_result(
+                "framework_task_status",
+                started_ms,
+                f"任务不存在: '{key}'（未知编号或已终态移除）",
+            )
+        payload: Dict[str, Any] = {
+            "task_id": record.task_id,
+            "status": record.status,
+            "initiator": record.initiator,
+            "executor": record.executor,
+            "snapshot": record.snapshot,
+            "updated_at_ms": record.updated_at_ms,
+        }
+        if label:
+            payload["item"] = label
         return ToolExecutionResult(
             tool_name="framework_task_status",
             success=True,
-            structured_content={
-                "task_id": record.task_id,
-                "status": record.status,
-                "initiator": record.initiator,
-                "executor": record.executor,
-                "snapshot": record.snapshot,
-                "updated_at_ms": record.updated_at_ms,
-            },
+            structured_content=payload,
         )
 
 
@@ -1589,13 +1761,22 @@ def build_agent_control_provider(
     task_ledger: Optional[TaskLedger] = None,
     event_bus: Optional[Any] = None,
     clock: Optional[Callable[[], int]] = None,
+    *,
+    delegation_core: Optional[DelegationCore] = None,
 ) -> AgentControlProvider:
-    """工厂：构造一个 AgentControlProvider 绑定 manager（+ 任务记录表供委派）。"""
-    return AgentControlProvider(manager=manager, task_ledger=task_ledger, event_bus=event_bus, clock=clock)
+    """工厂：构造 AgentControlProvider；传入 ``delegation_core`` 时与控制面共享同一个受理核心。"""
+    return AgentControlProvider(
+        manager=manager,
+        task_ledger=task_ledger,
+        event_bus=event_bus,
+        clock=clock,
+        delegation_core=delegation_core,
+    )
 
 
 __all__ = [
     "PROVIDER_NAME",
+    "DelegationCore",
     "AgentControl",
     "AgentControlProvider",
     "build_agent_control_provider",
