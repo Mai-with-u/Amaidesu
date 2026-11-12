@@ -611,7 +611,11 @@ class StorageLedger:
                 utterance_id=payload.utterance_id,
                 dropped_at_ms=payload.timestamp_ms,
             )
-            if not updated:
+            if not updated and payload.reason == "segment_interrupted":
+                # 杂谈档一段话拆成几句连播，后半句只在播放队列里有编号、没有独立台词行：
+                # 插断作废时找不到行是预期的，整段按说过一半保留在开头那句的台词行里
+                logger.debug(f"插断作废的段落后半句没有独立台词行: utterance_id={payload.utterance_id}")
+            elif not updated:
                 self._dropped_miss_count += 1
                 logger.warning(
                     f"没送达标记找不到台词行（按已说过保留）: utterance_id={payload.utterance_id}, "

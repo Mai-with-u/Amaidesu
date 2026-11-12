@@ -608,3 +608,40 @@ async def test_reaction_follow_ups_play_as_one_segment_with_their_own_emotions(s
         assert engine.calls[0][1] == utterance_id
     else:
         assert speeches == [("哇！什么东西？！……原来是只鸡。", "scared", False)]
+
+
+async def test_talk_mode_splits_clauses_and_records_interrupted_tail_on_viewer_reply(started) -> None:
+    """杂谈档台词拆成子句共用段落号连播；播完第一句前观众插话（priority>0）会收住后半句并记下尾句。"""
+    bus, engine = EventBus(), _Engine(delay_s=0.12)
+    captured = _capture_speech(bus)
+    dispatcher = await started(bus=bus, engine=engine, config=_TTS_ON)
+    tails: list[str] = []
+    dispatcher.bind_interrupted_tail_listener(tails.append)
+
+    talk_payload = {
+        "speech": "四亿年前我是萨卡班甲鱼混橙子。靠维C抗氧化活到了今天！后来苹果压过橙子我才变成AI。",
+        "emotion": {"name": "happy", "intensity": 0.6},
+        "speech_mode": "talk",
+    }
+    first_info = await dispatcher.dispatch(talk_payload, round_id="rnd_1")
+    assert first_info is not None
+    await _until(lambda: len(engine.calls) == 1)
+
+    # 第一句还在播时观众发弹幕：priority=1 先收住尚未开播的第 2、3 句，等第 1 句落音即接话
+    reply_info = await dispatcher.dispatch(
+        {"speech": "观众甲你好呀，刚才说到维C呢！", "emotion": {"name": "happy", "intensity": 0.7}},
+        target_user_id="viewer_1",
+        round_id="rnd_2",
+        priority=1,
+    )
+    assert reply_info is not None
+    await _until(lambda: len(engine.calls) == 2)
+    await asyncio.sleep(0.15)
+
+    assert [text for text, _ in engine.calls] == [
+        "四亿年前我是萨卡班甲鱼混橙子。",
+        "观众甲你好呀，刚才说到维C呢！",
+    ]
+    assert tails == ["靠维C抗氧化活到了今天！后来苹果压过橙子我才变成AI。"]
+    await bus.wait_until_drained()
+    assert len(captured) == 2

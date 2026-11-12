@@ -29,6 +29,7 @@ from src.modules.logging import ModuleLogger, get_logger
 from src.modules.subtitle.playback_follower import bind_playback_subtitle, unbind_playback_subtitle
 from src.modules.utils.time_utils import now_ms
 
+from .talk.speech_mode import split_talk_paragraph
 from .utterance_queue import (
     DEFAULT_MAX_QUEUE,
     DEFAULT_RENDER_TIMEOUT_MS,
@@ -107,6 +108,8 @@ class SpeechDispatcher:
         self._slot_claimed = False
         self._slot_free = asyncio.Event()
         self._slot_free.set()
+        # 杂谈档段落被插断时，没播的后半段原文交给这里（话头工作台记尾句；未接线为 None）
+        self._interrupted_tail_listener: Optional[Callable[[str], None]] = None
 
     def _spawn(self, coro: Coroutine[Any, Any, Any], *, label: str) -> None:
         """把后台 coroutine 创建并纳入强引用持有（决策循环同步返回，不等待）。
@@ -274,6 +277,37 @@ class SpeechDispatcher:
         self._utterance_seq += 1
         return f"utt_{now_ms()}_{self._utterance_seq}"
 
+    def bind_interrupted_tail_listener(self, listener: Optional[Callable[[str], None]]) -> None:
+        """接线杂谈档段落被插断时的尾句去处（话头工作台记下她没说完的后半段）。"""
+        self._interrupted_tail_listener = listener
+
+    async def _enqueue_paragraph(self, utterance_id: str, text: str, *, talk: bool, priority: int = 0) -> None:
+        """决策台词入播放队列：杂谈档的长段拆成两三句、共用一个段落号依次入队，其余整句入队。
+
+        拆开后句与句之间按播放自然停顿，被更急的台词插进来时还没播的后半段随段落作废，
+        作废的原文交给尾句去处。第一句沿用这句台词的 utterance_id（回弹幕确认、字幕、
+        记账都按它对上），后面几句派生编号只在播放队列里用；分段上限不超过队列容量，
+        避免一段话自己把开头挤出队列。
+        """
+        queue = self._utterance_queue
+        if queue is None:
+            return
+        max_parts = min(3, max(1, self._speech_max_queue))
+        parts = split_talk_paragraph(text, max_parts=max_parts) if talk else [text]
+        if len(parts) <= 1:
+            await queue.enqueue(utterance_id, text, priority=priority)
+            return
+        for index, part in enumerate(parts):
+            part_id = utterance_id if index == 0 else f"{utterance_id}_p{index + 1}"
+            await queue.enqueue(
+                part_id,
+                part,
+                priority=priority,
+                segment=utterance_id,
+                # 每句都挂尾句去处：插断时开头那句往往已经播了，作废的是后面几句，队列只通知一次
+                on_interrupted=self._interrupted_tail_listener,
+            )
+
     async def dispatch(
         self,
         reply_payload: Any,
@@ -285,6 +319,7 @@ class SpeechDispatcher:
         memory_refs: Optional[Sequence[str]] = None,
         reply_player: Tuple[str, str] = ("", ""),
         before_emit: Optional[Callable[[str], Awaitable[Optional[str]]]] = None,
+        priority: int = 0,
     ) -> Optional[tuple]:
         """消费 reply 结构化结果并触发下游管线（决策循环安全：永不抛异常）。
 
@@ -349,6 +384,10 @@ class SpeechDispatcher:
         # 再发布业务事件 + 写历史（与 TTS 启用与否正交），TTS 启用时复用
         # 同一 utterance_id 入 TTS 队列。
         if cleaned_speech:
+            if priority > 0 and self._tts_enabled and self._utterance_queue is not None:
+                # 回应观众弹幕或付费留言（priority > 0）先收住正在播的杂谈独白里还没念出的后半句，
+                # 只等嘴里正在念的那一小句自然落音就接话，被收住的尾句经回调记进话头工作台
+                await self._utterance_queue.interrupt_segment(priority)
             claimed = await self._wait_for_playback_slot()
             try:
                 # 占住播放空档后、真正发出业务事件前做最后一道核对：拦截等前一句播放期间被嘴抢先说完或推翻的旧话
@@ -374,7 +413,9 @@ class SpeechDispatcher:
                 self._schedule_subtitle_show(cleaned_speech, utterance_id)
                 self._notify_spoken(cleaned_speech, source="planner")
                 if self._tts_enabled and self._utterance_queue is not None:
-                    await self._utterance_queue.enqueue(utterance_id, cleaned_speech)
+                    # 杂谈档（reply 工具在结果里标了 speech_mode=talk）长段拆句连播，其余整句
+                    talk = reply_payload.get("speech_mode") == "talk"
+                    await self._enqueue_paragraph(utterance_id, cleaned_speech, talk=talk, priority=priority)
             finally:
                 if claimed:
                     self._release_slot()
@@ -426,6 +467,8 @@ class SpeechDispatcher:
             follow = []
         claimed = False
         if self._tts_enabled and queue is not None:
+            if priority > 0:
+                await queue.interrupt_segment(priority)
             claimed = await self._claim_slot(timeout_ms=max(1, wait_ms), gap_ms=gap_ms)
             if not claimed:
                 self._logger.info(f"反应等不到前一句播完（>{wait_ms}ms），整句作废: {text[:30]}")

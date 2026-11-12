@@ -424,6 +424,24 @@ async def test_urgent_line_cuts_a_passage_that_is_already_playing() -> None:
         await queue.stop()
 
 
+async def test_interrupted_segment_reports_unplayed_tail_once() -> None:
+    """段落被高优台词插断时，作废的后半句合并调一次 on_interrupted 回调。"""
+    recorder = _Recorder(delay_s=0.1)
+    queue = _queue_with(recorder)
+    tails: List[str] = []
+    await queue.start()
+    try:
+        await queue.enqueue("p0", "第一句。", segment="talk_1", on_interrupted=tails.append)
+        await queue.enqueue("p1", "第二句！", segment="talk_1", on_interrupted=tails.append)
+        await queue.enqueue("p2", "第三句~", segment="talk_1", on_interrupted=tails.append)
+        await _wait_for(lambda: len(recorder.calls) == 1)
+        cut = await queue.interrupt_segment(min_priority=1)
+        assert cut == ["第二句！", "第三句~"]
+        assert tails == ["第二句！第三句~"]
+    finally:
+        await queue.stop()
+
+
 async def test_passage_not_started_yet_is_not_cut() -> None:
     """段落还没开播时急的先播，段落随后整段照常播。"""
     recorder = _Recorder()

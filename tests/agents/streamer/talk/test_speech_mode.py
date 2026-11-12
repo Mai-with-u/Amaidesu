@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.agents.streamer.talk.speech_mode import resolve_speech_mode
+from src.agents.streamer.talk.speech_mode import resolve_speech_mode, split_talk_paragraph
 
 
 @pytest.mark.parametrize(
@@ -22,3 +22,16 @@ def test_resolve_speech_mode(segment_mode, game_active: bool, game_waiting: bool
     assert (
         resolve_speech_mode(segment_mode=segment_mode, game_active=game_active, game_waiting=game_waiting) == expected
     )
+
+
+def test_split_talk_paragraph_groups_up_to_three_clauses_without_losing_chars() -> None:
+    """杂谈档按句末标点拆成至多三句，超出的并入末句，拼回去与原文逐字一致。"""
+    assert split_talk_paragraph("") == []
+    assert split_talk_paragraph("只有一句话。") == ["只有一句话。"]
+    two = split_talk_paragraph("我是麦麦，先打个招呼！今天是出道杂谈回。")
+    assert two == ["我是麦麦，先打个招呼！", "今天是出道杂谈回。"]
+
+    four = "第一句起个头。第二句展开细节！第三句补个梗？第四句收尾~"
+    parts = split_talk_paragraph(four)
+    assert parts == ["第一句起个头。", "第二句展开细节！", "第三句补个梗？第四句收尾~"]
+    assert "".join(parts) == four

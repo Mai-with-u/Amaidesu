@@ -96,6 +96,8 @@ class _UtteranceItem:
         expires_at_ms: 过期时刻（Unix 毫秒），轮到它时已过就跳过；0 = 不过期。
         segment: 段落号：长段话拆成的几句共用一个，空串 = 独立一句。
         on_start: 轮到这句、交给 TTS 的那一刻调用一次；没轮到就被丢掉时不调用。
+        on_interrupted: 段落被更急的台词插断、这句和同段后面的句子一起作废时调用一次，
+            参数是作废的那几句拼起来的原文（同段作废几句只调一次）。
     """
 
     utterance_id: str
@@ -104,6 +106,7 @@ class _UtteranceItem:
     expires_at_ms: int = 0
     segment: str = ""
     on_start: Optional[Callable[[], None]] = None
+    on_interrupted: Optional[Callable[[str], None]] = None
 
 
 class UtteranceQueue:
@@ -220,6 +223,7 @@ class UtteranceQueue:
         ttl_ms: int = 0,
         segment: str = "",
         on_start: Optional[Callable[[], None]] = None,
+        on_interrupted: Optional[Callable[[str], None]] = None,
     ) -> bool:
         """将一条 utterance 投入播放队列。
 
@@ -237,6 +241,8 @@ class UtteranceQueue:
             on_start: 轮到这句、交给 TTS 的那一刻调用一次（流式引擎此刻发
                 ``tts.utterance.started``，字幕和口型也从这时开始）；用来记它实际
                 排了多久，回调出错只记日志不挡播放。
+            on_interrupted: 段落被插断、这句没播就作废时调用（参数是同段作废句拼起来的原文）；
+                杂谈档用它记下她没说完的后半段，下一轮决定要不要补完。
 
         Returns:
             是否被接受；队列停用、或队满时新条目优先级最低被丢掉时返回 False。
@@ -254,11 +260,13 @@ class UtteranceQueue:
             expires_at_ms=expires_at_ms,
             segment=segment,
             on_start=on_start,
+            on_interrupted=on_interrupted,
         )
         async with self._lock:
             interrupted = self._drop_interrupted_segment(item)
             for dropped_item in interrupted:
                 await self._emit_dropped(dropped_item.utterance_id, "segment_interrupted")
+            self._notify_interrupted(interrupted)
             if len(self._queue) >= self._max_queue:
                 # 丢优先级最低里最旧的；全部同级时就是丢最旧（队首），即普通 FIFO 行为
                 candidates = [queued for queued in self._queue if queued.priority <= item.priority]
@@ -367,6 +375,32 @@ class UtteranceQueue:
                 f"段落被插断，丢弃剩余 {len(rest)} 句: segment={self._current_segment}, 插队={item.utterance_id}"
             )
         return rest
+
+    async def interrupt_segment(self, min_priority: int) -> list[str]:
+        """更高优先级的发言（如回应观众弹幕、付费留言）到来时，先收住正在播的段落里还没念的后半句。
+
+        在背压等待之前调用，免得把整段独白全等播完才接观众的话；正在嘴里念的那一小句照常播完，
+        还没轮到的后半句发 ``tts.utterance.dropped`` 并经 ``on_interrupted`` 记下尾句大意。
+        """
+        if min_priority <= 0:
+            return []
+        probe = _UtteranceItem(utterance_id="interrupt", text="", priority=min_priority)
+        async with self._lock:
+            interrupted = self._drop_interrupted_segment(probe)
+            for dropped_item in interrupted:
+                await self._emit_dropped(dropped_item.utterance_id, "segment_interrupted")
+            self._notify_interrupted(interrupted)
+        return [item.text for item in interrupted]
+
+    def _notify_interrupted(self, dropped: list[_UtteranceItem]) -> None:
+        """段落被插断后把作废的那几句原文交给段首带的回调（同段只通知一次）；回调出错只记日志。"""
+        callback = next((item.on_interrupted for item in dropped if item.on_interrupted is not None), None)
+        if callback is None:
+            return
+        try:
+            callback("".join(item.text for item in dropped))
+        except Exception as exc:  # noqa: BLE001 - 回调只是记尾句，出错不挡入队
+            self._logger.warning(f"段落插断回调出错（已忽略）: {exc}", exc=True)
 
     @property
     def size(self) -> int:
