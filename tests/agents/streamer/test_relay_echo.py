@@ -451,6 +451,6 @@ def test_prompts_state_relay_and_completion_rules() -> None:
     assert "要的东西要收进背包才算到手" in game and "[运营原话]" in game and "[主播补充]" in game
     assert "身体同一时间只做一件事" in game
     assert "error.fields" in game
-    # 卡住等我拿主意时空窗也补；游戏里回话写成原句、像玩家打字那样短，游戏侧照发不加工
-    assert "停着等我拿主意" in planner and "在游戏聊天里回 某某：「要打的那句话」" in planner
+    # 卡住等我拿主意时空窗也补；游戏里回话用 minecraft_chat_send 直发、像玩家打字那样短，游戏侧照发不加工
+    assert "停着等我拿主意" in planner and "minecraft_chat_send" in planner
     assert "把「」里那句原样发出去" in game and "不把要问的事列成清单或编号" in game

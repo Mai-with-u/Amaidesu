@@ -698,7 +698,7 @@ def test_planner_prompt_only_reports_progress_with_evidence() -> None:
 def test_planner_prompt_treats_game_chat_as_players_not_viewers() -> None:
     """游戏里的聊天是游戏世界里的人在说话：开口他们听不到，要回就在游戏里打字；不带额外授权。
 
-    在游戏里打字回话走委派型游戏的补充要求通道，所以这条守则随委派守则一起进提示词。
+    在游戏里打字回话走 minecraft_chat_send 直发，所以这条守则随委派守则一起进提示词。
     """
     reset_prompt_manager()
     try:
@@ -706,8 +706,8 @@ def test_planner_prompt_treats_game_chat_as_players_not_viewers() -> None:
     finally:
         reset_prompt_manager()
     assert "游戏聊天条目是游戏里的人在说话" in prompt and "主播开口说话他们听不到" in prompt
-    # 玩家直接搭话就在游戏里回；回的话写成要原样打出去的原句
-    assert "就在游戏里回一句" in prompt and "在游戏聊天里回 某某：「要打的那句话」" in prompt
+    # 玩家直接搭话就在游戏里回；回话用 minecraft_chat_send 直发公屏，不占游戏里的决策流
+    assert "就在游戏里回一句" in prompt and "minecraft_chat_send" in prompt
     assert "不带额外授权" in prompt and "【私密游戏聊天】" in prompt
 
 
@@ -787,7 +787,7 @@ _PLANNER_PROMPT_RULES = [
     # 游戏聊天是游戏世界里的人在说话：开口他们听不到，要回就在游戏里打字，不带额外授权
     "游戏聊天条目是游戏里的人在说话",
     "主播开口说话他们听不到",
-    "回的办法是用 `framework_prompt` 写",
+    "回的办法是用 `minecraft_chat_send`",
     "不带额外授权",
     "【私密游戏聊天】",
     "【现场速览】是本轮决策前自动读取的现场",
