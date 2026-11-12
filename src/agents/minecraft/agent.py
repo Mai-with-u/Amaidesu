@@ -1635,8 +1635,11 @@ class MinecraftAgent(BaseAgent):
                 f"[系统] 目标 {run.goal_id}（{goal_label(run)}）在等你回答：{json_text(run.question)}。"
                 f"用 maicraft_goal(operation=answer, goal_id={run.goal_id}, answer=选项编号) 回答。"
             )
-        elif run.state == PAUSED and before.get("state") != PAUSED:
-            # 急事用一次就清掉，不拿去解释之后别的暂停；是否新鲜由通知函数按当下时刻判定
+        elif run.state == PAUSED and not self._goal_ledger.pause_notice_sent(run.goal_id):
+            # 急事用一次就清掉，不拿去解释之后别的暂停；是否新鲜由通知函数按当下时刻判定。
+            # 发没发过通知按通知簿判，不按账本状态——批内的目标查询会先把 paused 记上账
+            # （看门狗叫醒的批读一眼目标），随后才到的暂停事件不能因此被吞。
+            self._goal_ledger.mark_pause_notified(run.goal_id)
             urgent, self._urgent_before_pause = self._urgent_before_pause, None
             self._inject_wakeup_message(pause_notice(run, after_world_change, urgent, self._clock()))
 

@@ -76,10 +76,10 @@ async def test_memories_follow_the_save_through_a_round_trip(tmp_path: Path) -> 
                 save_id=save_id,
                 save_name=save_name,
             )
-        bridge = await db.commitments.insert_commitment(
+        await db.commitments.insert_commitment(
             what="修北边的桥", quote="桥下次修完", game="minecraft", save_id="home", save_name="老家"
         )
-        emerald = await db.commitments.insert_commitment(
+        await db.commitments.insert_commitment(
             what="去村里换绿宝石", quote="下回去村里换绿宝石", game="minecraft", save_id="new", save_name="新的世界"
         )
         current = await db.sessions.insert_live_session(
@@ -104,12 +104,14 @@ async def test_memories_follow_the_save_through_a_round_trip(tmp_path: Path) -> 
         )
         home, new = GameSave(id="home", name="老家"), GameSave(id="new", name="新的世界")
 
-        # 老家：老家的事照列、新的世界的折成一行；只推老家里答应的卡；记笔记、给女仆起名
+        # 老家：老家的事照列、新的世界的折成一行；记笔记、给女仆起名
+        # （承诺轮播已停：承诺卡改为走到提及地点时单推，简报窗不再按存档推卡）
         await _enter(server, registry, home)
         brief, cards = await _streamer_view(streamer)
         assert "眼下 minecraft 开着存档「老家」。" in brief and "屋顶终于封好了" in brief
-        assert "还在 minecraft「新的世界」里做过 1 件事" in brief and "出生点旁边就有村子" not in brief
-        assert cards == (bridge,)
+        # 折叠行的"做过 N 件事"含那边答应过的事（承诺与档案行一起归并计数）
+        assert "还在 minecraft「新的世界」里做过 2 件事" in brief and "出生点旁边就有村子" not in brief
+        assert cards == ()
         mc._mc_state.set_notebook("北边的桥还差三格")
         # 名册里那只叫阿缕的女仆经仓储预置（起名登记入口已退役），速览加载名册时读回
         await db.game_creatures.save_creatures(
@@ -146,13 +148,13 @@ async def test_memories_follow_the_save_through_a_round_trip(tmp_path: Path) -> 
         assert cards == ()
         assert "minecraft" in streamer._planner.workbench.delegations
 
-        # 新的世界：新世界的事照列、老家的折起来；只推新世界的卡；MC 笔记是空的、名册里没有阿缕；
+        # 新的世界：新世界的事照列、老家的折起来；MC 笔记是空的、名册里没有阿缕；
         # 老家交代的那件事账面还在跑，先留着——MC 会看眼前再决定接着做还是上报
         await _enter(server, registry, new)
         brief, cards = await _streamer_view(streamer)
         assert "眼下 minecraft 开着存档「新的世界」。" in brief and "出生点旁边就有村子" in brief
-        assert "还在 minecraft「老家」里做过 1 件事" in brief
-        assert cards == (emerald,)
+        assert "还在 minecraft「老家」里做过 2 件事" in brief
+        assert cards == ()
         # 工作文档里的笔记正文后面接着一段现查的快照：新世界的笔记是空的，只剩快照
         assert (await _work_log(registry))["notebook"].startswith("【当前状态快照】")
         assert "阿缕" not in (await mc._glance())["brief"]
@@ -160,15 +162,14 @@ async def test_memories_follow_the_save_through_a_round_trip(tmp_path: Path) -> 
         # 主播在新世界里叫停了那件事，账面结算
         ledger.update("d1", "cancelled")
 
-        # 下一场回老家：笔记、名册、简报、卡都回到老家的（换一场是因为同一张卡十分钟内不重推）；
-        # 已结算的那件委派随这次换存档清掉
+        # 下一场回老家：笔记、名册、简报都回到老家的；已结算的那件委派随这次换存档清掉
         live.active_pk = await db.sessions.insert_live_session(
             stream_id="room", platform="bilibili", started_at_ms=1_000 + 4 * _SESSION_MS
         )
         await _enter(server, registry, home)
         brief, cards = await _streamer_view(streamer)
-        assert "屋顶终于封好了" in brief and "还在 minecraft「新的世界」里做过 1 件事" in brief
-        assert cards == (bridge,)
+        assert "屋顶终于封好了" in brief and "还在 minecraft「新的世界」里做过 2 件事" in brief
+        assert cards == ()
         assert (await _work_log(registry))["notebook"].startswith("北边的桥还差三格")
         assert "阿缕（你的女仆，莫莫酒狐皮肤）在身边" in (await mc._glance())["brief"]
         assert "minecraft" not in streamer._planner.workbench.delegations
