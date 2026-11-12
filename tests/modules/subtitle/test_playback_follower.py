@@ -91,8 +91,18 @@ def test_binding_needs_both_bus_and_service() -> None:
         ("等等……好吧。", ["等等", "好吧"]),  # 叠用省略号是边界
         ("天啊！！！真的？！", ["天啊", "真的"]),  # 叠用叹号/问叹连用
         ("没有句末标点的一句话", ["没有句末标点的一句话"]),  # 单段 = 原行为
-        ("逗号，不切，句子。收尾", ["逗号，不切，句子", "收尾"]),  # 逗号不是句末标点
+        ("逗号，也切，分句。收尾", ["逗号", "也切", "分句", "收尾"]),  # 逗号同为切分点且不显示
+        ("慢一点,别急,慢慢来。", ["慢一点", "别急", "慢慢来"]),  # 半角逗号同切
+        ("第一点；第二点。完了", ["第一点", "第二点", "完了"]),  # 分号是停顿，同切
+        ("苹果、香蕉和橘子。", ["苹果、香蕉和橘子"]),  # 顿号是并列不是停顿，不切
+        ("提示：请注意，看这里。", ["提示：请注意", "看这里"]),  # 冒号是引出不是停顿，不切
+        ("他说：“来吧，坐下。”然后大家就坐了。", ["他说：“来吧，坐下。”然后大家就坐了"]),  # 引号内的逗号/句号不切
+        (
+            "大家好，“欢迎来到”，今天的直播。开始吧",
+            ["大家好", "“欢迎来到”", "今天的直播", "开始吧"],
+        ),  # 引号整体作一段，引号外的切点照切
         ("。。。", []),  # 纯标点 → 空段全滤
+        ("，，，没有内容的标点。好的", ["没有内容的标点", "好的"]),  # 纯标点段跳过，不产生空段
     ],
 )
 def test_split_subtitle_segments(text: str, expected: list) -> None:
@@ -145,16 +155,75 @@ async def test_boundary_event_switches_segment_and_cancels_timer() -> None:
     bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
     await _start(bus, "第一段。第二段。第三段")
     await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
+    clock.tick(1000)  # 段上屏已足最短时长：边界正常切
     svc.show.reset_mock()
     await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 1))
     svc.show.assert_awaited_once_with("第二段", "utt_p1")
-    # 事件先到：兜底定时被取消并按剩余段重排
-    assert sched.pending()[0]["delay_ms"] == 750  # "第三段" 3 字 × 250ms
+    # 事件先到：兜底定时被取消并按剩余段重排；3 字 × 250ms = 750ms 但不低于最短段显示时长
+    assert sched.pending()[0]["delay_ms"] == 800
     # 文本段耗尽后多余边界事件被忽略（reset_mock 后列表从第二段起计）
+    clock.tick(1000)
     await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 2))
+    clock.tick(1000)
     await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 3))
     calls = [call.args[0] for call in svc.show.await_args_list]
     assert calls == ["第二段", "第三段"]
+
+
+async def test_early_boundary_within_min_show_is_ignored() -> None:
+    # 缺陷场景：静音检测把逗号停顿也报成边界，出声后 ~600ms 就到——首段被过早
+    # 切走；段显示不足最短时长的边界事件直接忽略，段不被提前消耗
+    clock, sched = FakeClock(), FakeScheduler()
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
+    await _start(bus, "大家晚上好，今天我们聊聊最近发生的一些事。好的")
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
+    clock.tick(600)  # 出声后 600ms：不足最短段显示时长
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 1))
+    svc.show.assert_awaited_once_with("大家晚上好", "utt_p1")  # 仍停在首段
+    clock.tick(400)  # 距上屏已 1000ms：早到的边界放行
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 1))
+    calls = [call.args[0] for call in svc.show.await_args_list]
+    assert calls == ["大家晚上好", "今天我们聊聊最近发生的一些事"]
+
+
+async def test_comma_level_segments_flow_with_boundaries_and_timer() -> None:
+    # 逗号级切分后段数上升：边界事件照段序逐个切换；边界供完的段由估算定时接管
+    clock, sched = FakeClock(), FakeScheduler()
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
+    await _start(bus, "先说结论，再讲原因，最后给出建议，大家听完再提问。好的")
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
+    clock.tick(1000)
+    for index in range(1, 4):  # 三个边界把前三个逗号段依次切完
+        await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", index))
+        clock.tick(1000)
+    calls = [call.args[0] for call in svc.show.await_args_list]
+    assert calls == ["先说结论", "再讲原因", "最后给出建议", "大家听完再提问"]
+    assert len(sched.pending()) == 1  # 最后的"好的"段还有估算兜底定时
+    sched.fire_next()
+    await _pump()
+    calls = [call.args[0] for call in svc.show.await_args_list]
+    assert calls[-1] == "好的"
+    assert sched.pending() == []  # 段耗尽后不再建定时
+
+
+async def test_boundary_after_segments_exhausted_keeps_last_segment() -> None:
+    # 边界数多于段数（静音检测对逗号停顿也报边界）：段耗尽即收会话，多余边界忽略
+    clock, sched = FakeClock(), FakeScheduler()
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
+    await _start(bus, "一句话，两段。结尾")
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
+    clock.tick(1000)
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 1))
+    clock.tick(1000)
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 2))
+    clock.tick(1000)
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 3))  # 段已耗尽
+    calls = [call.args[0] for call in svc.show.await_args_list]
+    assert calls == ["一句话", "两段", "结尾"]
+    assert sched.pending() == []
 
 
 async def _pump() -> None:
@@ -194,6 +263,7 @@ async def test_event_beats_timer_no_double_switch() -> None:
     bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
     await _start(bus, "第一段。第二段。第三段")
     await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
+    clock.tick(1000)  # 段上屏已足最短时长：边界正常切
     await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 1))
     # 事件切段后原定时已取消：定时触发不到已被跳过的段
     assert len(sched.pending()) == 1
@@ -215,8 +285,8 @@ async def test_playback_started_arms_estimation_clock_at_audio_start() -> None:
     await _start(bus, "第一段。第二段。第三段")
     clock.tick(3000)  # 合成首块延迟 3s，音频此刻才真正出声
     await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
-    # 估算此刻才起跑："第二段" 3 字 × 250ms，与观众听到首声同步计数
-    assert sched.delays() == [750]
+    # 估算此刻才起跑："第二段" 3 字 × 250ms = 750ms，抬到最短段显示时长
+    assert sched.delays() == [800]
     assert len(sched.pending()) == 1
 
 

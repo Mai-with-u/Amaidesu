@@ -1,7 +1,8 @@
 """字幕播放事件跟随器（字幕源 = TTS 播放事件）
 
 字幕"一源 → 三面"的播放对齐模式：TTS 引擎在位时，字幕跟随
-``tts.utterance.*`` 生命周期——``started`` 把 speech_text 按句末标点切段、
+``tts.utterance.*`` 生命周期——``started`` 把 speech_text 按停顿标点
+（逗号/分号/句末标点，顿号与冒号不切、引号内不切）切段、
 先显示第一段，出声后再把上屏文本切到下一段；``failed`` 照常显示该句全文
 （无声音也要给文本，原文由 ``speech_text`` 必选字段承载，不分段）；
 ``finished`` 清空。与实际播放对齐：队列丢最旧的台词自然不显示。
@@ -14,15 +15,17 @@
 听感对齐。播放路径未挂分接（或整句无声）时该事件缺席，估算不起跑、字幕
 停在第一段，由 ``failed``（显全文）与 ``finished``（清空）兜底收尾。
 
-段切换的信号有两路，任一路先到即切：
+段切换的信号有两路，任一路先到即切，但都受最短段显示时长约束
+（``_MIN_SEGMENT_SHOW_MS``：当前段上屏不足该时长不切，防细段闪切）：
 
 - **句边界事件**（``tts.utterance.sentence_boundary``）：播放路径静音检测
-  检出句间隙的时刻发布，与观众听到的停顿天然同步，优先于定时；
+  检出停顿间隙的时刻发布，与观众听到的停顿天然同步，优先于定时；切分下沉
+  到逗号级后段数与边界数同量级，过早上屏的边界事件忽略不计段；
 - **估算兜底定时**：防"检测不工作导致字幕卡在第一段"——``duration_ms``
   可用（全量引擎）按剩余窗口的字数占比推，不可用（流式引擎）按每字约
-  250ms 估算。定时到点但边界事件还没到 → 照切（估算节奏）；边界事件先到
-  → 取消定时。检测工作 = 真实同步，检测失效 = 估算节奏，任何情况下观众
-  都能看到全部文本。
+  250ms 估算，两者都不低于最短段显示时长。定时到点但边界事件还没到 →
+  照切（估算节奏）；边界事件先到 → 取消定时。检测工作 = 真实同步，检测
+  失效 = 估算节奏，任何情况下观众都能看到全部文本。
 
 段数与边界数不齐不致命：多切按实际事件走，文本段耗尽后忽略多余事件；
 utterance 结束（finished）后其迟到事件按 utterance_id 不匹配丢弃。
@@ -49,22 +52,45 @@ from src.modules.events.payloads.utterance import (
 from src.modules.logging import ModuleLogger
 from src.modules.utils.time_utils import now_ms
 
-# 句末标点集合（含叠用省略号/叠用叹号等）；段尾标点不显示
-_SENTENCE_END_PATTERN = re.compile(r"[。！？…]+")
+# 停顿标点集合：句末标点（含叠用省略号/叠用叹号等）与句内停顿（逗号/分号）；
+# 切分点下沉到逗号级——真机上按句末标点切段过粗（"一逗到底"句整句不换行），
+# 且播放路径静音检测对逗号停顿同样报边界，段数须与边界数同量级；段尾标点不显示
+_CLAUSE_SPLIT_PATTERN = re.compile(r"[，,；。！？…]+")
+# 引号配对表：开引号 → 对应闭引号；引号内的停顿标点不切（对话内的逗号不是字幕分段的停顿）
+_QUOTE_CLOSERS = {"“": "”", "『": "』", "「": "」", '"': '"'}
+# 最短段显示时长：逗号级切分后单段变短，切早了画面闪切；
+# 估算定时与边界事件消费共用此下限
+_MIN_SEGMENT_SHOW_MS = 800
 # 流式引擎无 duration_ms 时的兜底语速估算：每字约 250ms
 _FALLBACK_MS_PER_CHAR = 250
 
 
 def split_subtitle_segments(text: str) -> List[str]:
-    """按句末标点把整句字幕切段；段尾标点不显示。
+    """按停顿标点把整句字幕切段；段尾标点不显示。
 
-    无句末标点的文本返回单段（整句），调用方按单段处理即维持原行为。
+    切分点：逗号/分号/句末标点；顿号（并列）、冒号（引出）不是停顿不切；
+    引号内的标点不切（引号配对栈跟踪，引号整体随所在段显示）。
+    无任何停顿标点的文本返回单段（整句），调用方按单段处理即维持原行为。
     """
     segments: List[str] = []
-    for part in _SENTENCE_END_PATTERN.split(text):
-        stripped = part.strip()
-        if stripped:
-            segments.append(stripped)
+    buf: List[str] = []
+    quote_closers: List[str] = []
+    for ch in text:
+        closer = _QUOTE_CLOSERS.get(ch)
+        if closer is not None:
+            quote_closers.append(closer)
+        elif quote_closers and ch == quote_closers[-1]:
+            quote_closers.pop()
+        if not quote_closers and _CLAUSE_SPLIT_PATTERN.match(ch):
+            stripped = "".join(buf).strip()
+            if stripped:
+                segments.append(stripped)
+            buf.clear()
+            continue
+        buf.append(ch)
+    stripped = "".join(buf).strip()
+    if stripped:
+        segments.append(stripped)
     return segments
 
 
@@ -73,7 +99,8 @@ class _SegmentSchedule:
 
     切换时刻估算规则：``duration_ms`` 可用时按"剩余窗口 × 剩余段字数占比"
     推（每次切换后以当前时刻为锚重排，早切/晚切后后续估算随之收敛）；
-    不可用时按每字约 250ms 估算。
+    不可用时按每字约 250ms 估算。估算值不低于最短段显示时长（逗号级细段
+    按字数或占比推会低于可读下限，定时切早了闪切）。
     """
 
     def __init__(self, utterance_id: str, segments: List[str], duration_ms: Optional[int]) -> None:
@@ -92,12 +119,13 @@ class _SegmentSchedule:
         if next_index >= len(self.segments):
             return 0
         chars_to_next = self.prefix[next_index + 1] - self.prefix[next_index]
+        delay_ms = chars_to_next * _FALLBACK_MS_PER_CHAR
         if self.duration_ms:
             remaining_total = max(0, started_ms + self.duration_ms - now_ms_value)
             chars_remaining = self.prefix[-1] - self.prefix[self.current_index]
             if chars_remaining > 0 and remaining_total > 0:
-                return int(remaining_total * chars_to_next / chars_remaining)
-        return chars_to_next * _FALLBACK_MS_PER_CHAR
+                delay_ms = int(remaining_total * chars_to_next / chars_remaining)
+        return max(delay_ms, _MIN_SEGMENT_SHOW_MS)
 
     def advance(self) -> bool:
         """切到下一段；返回是否确实有下一段（False = 文本段已耗尽）。"""
@@ -132,6 +160,8 @@ class _PlaybackSubtitleController:
         self._scheduler = scheduler if scheduler is not None else _LoopScheduler()
         self._session: Optional[_SegmentSchedule] = None
         self._started_ms = 0
+        # 当前段上屏时刻：最短段显示时长的计时锚点
+        self._last_switch_ms = 0
         self._cancel_timer: Optional[Callable[[], None]] = None
 
     async def on_started(self, payload: UtteranceStartedPayload) -> None:
@@ -140,6 +170,7 @@ class _PlaybackSubtitleController:
         if not segments:
             return
         await self._show(segments[0], payload.utterance_id)
+        self._last_switch_ms = self._now_ms()
         if len(segments) == 1:
             return
         self._session = _SegmentSchedule(payload.utterance_id, segments, payload.duration_ms)
@@ -159,6 +190,8 @@ class _PlaybackSubtitleController:
         session = self._session
         if session is None or payload.utterance_id != session.utterance_id:
             return  # 无会话 / 已结束 utterance 的迟到事件：丢弃
+        if self._now_ms() - self._last_switch_ms < _MIN_SEGMENT_SHOW_MS:
+            return  # 当前段上屏不足最短时长：静音检测对逗号停顿也报边界，早到的忽略不耗段
         self._disarm_timer()
         await self._advance(session)
 
@@ -202,6 +235,7 @@ class _PlaybackSubtitleController:
             self._cancel_session()
             return
         await self._show(session.segments[session.current_index], session.utterance_id)
+        self._last_switch_ms = self._now_ms()
         self._arm_fallback_timer()
 
     def _cancel_session(self) -> None:
