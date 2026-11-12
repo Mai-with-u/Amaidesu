@@ -57,6 +57,10 @@ class StreamerContextSnapshot(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     recent_messages: List[str] = Field(default_factory=list)
+    # 世界窗口按说话人拆开的两份：主播自己最近的台词、观众最近的弹幕（旧→新）。
+    # "主播最近说"只该填前者，混进观众弹幕会让模拟观众把别人的话当成主播说的
+    recent_streamer_lines: List[str] = Field(default_factory=list)
+    recent_chat_lines: List[str] = Field(default_factory=list)
     recent_emotion: Optional[str] = None
     last_activity_at_ms: int = 0
     is_online: bool = False

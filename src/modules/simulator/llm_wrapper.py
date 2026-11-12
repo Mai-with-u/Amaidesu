@@ -116,13 +116,25 @@ class SimulatorLLMWrapper:
 
     # === 公共 API：4 类消息生成 ===
 
+    @staticmethod
+    def _streamer_speech(context: StreamerContextSnapshot) -> str:
+        """ "主播最近说"一栏：只取主播自己的最近三句，没开口过就如实写没开口。"""
+        lines = context.recent_streamer_lines[-3:]
+        return "\n".join(lines) if lines else "(主播尚未发言)"
+
+    @staticmethod
+    def _chat_atmosphere(context: StreamerContextSnapshot) -> str:
+        """ "最近弹幕氛围"一栏：观众最近几条弹幕；没人说话时如实写安静。"""
+        lines = context.recent_chat_lines[-5:]
+        return "\n".join(lines) if lines else "(弹幕很安静)"
+
     async def generate_viewer_message(
         self,
         persona: Persona,
         context: StreamerContextSnapshot,
     ) -> Optional[GeneratedMessage]:
         """生成常驻观众的普通弹幕。"""
-        recent_speech = "\n".join(context.recent_messages[-3:]) if context.recent_messages else "(主播尚未发言)"
+        recent_speech = self._streamer_speech(context)
 
         prompt = self._prompts.render(
             "viewer_message",
@@ -132,7 +144,7 @@ class SimulatorLLMWrapper:
             persona_speaking_style=persona.speaking_style,
             streamer_recent_speech=recent_speech,
             streamer_emotion=context.recent_emotion or "未知",
-            recent_chat_context="(略)",
+            recent_chat_context=self._chat_atmosphere(context),
             language=self._config.language,
         )
 
@@ -156,7 +168,7 @@ class SimulatorLLMWrapper:
         amount_rmb: int,
     ) -> Optional[GeneratedMessage]:
         """生成 SuperChat 付费留言。"""
-        recent_speech = "\n".join(context.recent_messages[-3:]) if context.recent_messages else "(主播尚未发言)"
+        recent_speech = self._streamer_speech(context)
 
         prompt = self._prompts.render(
             "sc_message",
@@ -187,12 +199,12 @@ class SimulatorLLMWrapper:
         context: StreamerContextSnapshot,
     ) -> Optional[GeneratedMessage]:
         """生成路人的随机弹幕。"""
-        recent_speech = "\n".join(context.recent_messages[-3:]) if context.recent_messages else "(主播尚未发言)"
+        recent_speech = self._streamer_speech(context)
 
         prompt = self._prompts.render(
             "passerby_message",
             streamer_recent_speech=recent_speech,
-            recent_chat_context="(略)",
+            recent_chat_context=self._chat_atmosphere(context),
             language=self._config.language,
         )
 

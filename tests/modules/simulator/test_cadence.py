@@ -46,3 +46,10 @@ def test_token_budget_thresholds_remaining_reset_and_ignored_usage() -> None:
 
     budget.reset()
     assert budget.get_usage_last_hour() == 0
+
+
+def test_quiet_mode_never_schedules_a_message() -> None:
+    """零弹幕静默考场：节奏器一条都不排，专门考主播自己撑场。"""
+    cg = CadenceGenerator(SimulatorConfigSchema(cadence_mode="quiet"), seed=1)
+    cg._state = "NORMAL"  # type: ignore[attr-defined]
+    assert asyncio.run(cg.next_delay_seconds()) == float("inf")

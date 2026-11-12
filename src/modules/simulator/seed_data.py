@@ -191,6 +191,70 @@ DEFAULT_PERSONAS: tuple[Dict[str, Any], ...] = (
 )
 
 
+# 出道场彩排观众种子：专门问设定、问身上的细节、问是不是 AI、发表情起哄，考主播撑场与接话。
+# 不进默认常驻人设（日常游戏场不需要这批问题），彩排前在模拟器页导入或用 seed_debut_personas 补入
+DEBUT_PERSONAS: tuple[Dict[str, Any], ...] = (
+    {
+        "user_id": "sim_debut_lore_01",
+        "user_nickname": "考据观众甲",
+        "role": "newcomer",
+        "personality": "第一次来，对主播的来历和设定特别好奇，喜欢刨根问底",
+        "speaking_style": "认真提问，一次只问一件事，会追问细节",
+        "fans_medal_level": 0,
+        "guard_level": 0,
+    },
+    {
+        "user_id": "sim_debut_outfit_01",
+        "user_nickname": "细节控观众乙",
+        "role": "fan",
+        "personality": "盯着主播的模型看，总想知道身上每个装饰是干嘛用的",
+        "speaking_style": "带点兴奋，爱问这个那个是什么",
+        "fans_medal_level": 3,
+        "guard_level": 0,
+    },
+    {
+        "user_id": "sim_debut_ai_01",
+        "user_nickname": "怀疑派观众丙",
+        "role": "teaser",
+        "personality": "对 AI 主播半信半疑，爱试探主播到底是不是真人、会不会露馅",
+        "speaking_style": "半开玩笑地试探，偶尔反问",
+        "fans_medal_level": 0,
+        "guard_level": 0,
+    },
+    {
+        "user_id": "sim_debut_cheer_01",
+        "user_nickname": "起哄观众丁",
+        "role": "fan",
+        "personality": "气氛组，主播说什么都跟着起哄，偶尔只发表情或叠字",
+        "speaking_style": "很短，常常只有语气词或表情",
+        "fans_medal_level": 8,
+        "guard_level": 0,
+    },
+)
+
+
+async def seed_debut_personas(sim_repo: SimRepo) -> int:
+    """把出道场彩排观众种子补进常驻人设（已存在同 user_id 的跳过），返回新增数。"""
+    existing = {persona.user_id for persona in await sim_repo.list_sim_personas(include_inactive=True)}
+    added = 0
+    for item in DEBUT_PERSONAS:
+        if item["user_id"] in existing:
+            continue
+        await sim_repo.insert_sim_persona(
+            user_id=item["user_id"],
+            user_nickname=item["user_nickname"],
+            role=item["role"],
+            personality=item["personality"],
+            speaking_style=item["speaking_style"],
+            fans_medal_level=item.get("fans_medal_level", 0),
+            guard_level=item.get("guard_level", 0),
+        )
+        added += 1
+    if added:
+        logger.info(f"已补入 {added} 个出道场彩排观众人设")
+    return added
+
+
 async def seed_simulator_data(sim_repo: SimRepo) -> None:
     """启动期一次性种子导入：空表才插入内置默认值，已有数据一律不动。
 
@@ -223,4 +287,4 @@ async def seed_simulator_data(sim_repo: SimRepo) -> None:
         logger.info(f"sim_gifts 空表，已导入 {len(DEFAULT_GIFTS)} 个内置礼物")
 
 
-__all__ = ["DEFAULT_GIFTS", "DEFAULT_PERSONAS", "seed_simulator_data"]
+__all__ = ["DEBUT_PERSONAS", "DEFAULT_GIFTS", "DEFAULT_PERSONAS", "seed_debut_personas", "seed_simulator_data"]

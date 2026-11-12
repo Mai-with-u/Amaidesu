@@ -67,3 +67,10 @@ async def test_window_excludes_other_sessions(store: SQLiteDatabase) -> None:
 async def test_empty_session_gives_empty_window(store: SQLiteDatabase) -> None:
     service = await _service_with_chat(store, 0)
     assert await service._fetch_world_window(persona=_persona(PersonaRole.FAN)) == []
+
+
+async def test_split_window_separates_streamer_lines_from_viewer_chat(store: SQLiteDatabase) -> None:
+    service = await _service_with_chat(store, 10)  # 第 0、5 条是主播发言
+    streamer, chat = await service._fetch_split_window()
+    assert streamer == ["消息0", "消息5"]
+    assert len(chat) == 8 and all(line.startswith("观众") for line in chat)

@@ -126,3 +126,25 @@ async def test_generate_personas_parses_json_including_markdown_wrapped_and_long
 async def test_generate_personas_returns_empty_when_unusable(llm, response) -> None:
     llm.generate = AsyncMock(return_value=response)
     assert await _wrapper(llm).generate_personas(count=3) == []
+
+
+async def test_streamer_speech_slot_only_carries_streamer_lines_and_real_emotion(llm, persona) -> None:
+    """ "主播最近说"只填主播自己的台词；观众弹幕进"最近弹幕氛围"，主播情绪如实带上。"""
+    prompts = MagicMock()
+    prompts.render = MagicMock(return_value="PROMPT")
+    wrapper = SimulatorLLMWrapper(SimulatorConfigSchema(), llm, prompt_manager=prompts)
+    context = StreamerContextSnapshot(
+        recent_messages=["观众甲: 主播好", "主播: 欢迎欢迎"],
+        recent_streamer_lines=["欢迎欢迎"],
+        recent_chat_lines=["观众甲: 主播好"],
+        recent_emotion="happy",
+    )
+    await wrapper.generate_viewer_message(persona, context)
+    kwargs = prompts.render.call_args.kwargs
+    assert kwargs["streamer_recent_speech"] == "欢迎欢迎"
+    assert kwargs["recent_chat_context"] == "观众甲: 主播好"
+    assert kwargs["streamer_emotion"] == "happy"
+
+    await wrapper.generate_viewer_message(persona, StreamerContextSnapshot())
+    empty = prompts.render.call_args.kwargs
+    assert (empty["streamer_recent_speech"], empty["recent_chat_context"]) == ("(主播尚未发言)", "(弹幕很安静)")

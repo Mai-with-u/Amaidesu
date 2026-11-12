@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import random
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
@@ -80,6 +80,8 @@ _GUARD_CAPTAIN_PRICE_GOLD = 138_000
 
 # 世界窗口上限：模拟观众可见的近期公共对话条数封顶，防长场直播下每次生成全量读表线性变慢
 _WORLD_WINDOW_LIMIT = 200
+# 拆分窗口只看最近这么多条：生成一条弹幕只需要主播最近几句与弹幕氛围，不必读满世界窗口
+_SPLIT_WINDOW_LIMIT = 40
 
 
 class SimulatorService:
@@ -126,6 +128,8 @@ class SimulatorService:
         self._subscribed_live_started: bool = False
         # 生成循环的最后一次致命故障描述（FatalError 等，启动时清零；Dashboard 状态面展示）
         self._last_error: Optional[str] = None
+        # 主播最近一句话的情绪（streamer.speech 事件带来；未收到前为 None，提示词里写未知）
+        self._streamer_emotion: Optional[str] = None
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -350,6 +354,9 @@ class SimulatorService:
         if cadence is None:
             return
         cadence.notify_streamer_activity()
+        # 主播这句话的真实情绪：模拟观众据此判断"主播当前情绪"，不再一律写未知
+        if payload.emotion:
+            self._streamer_emotion = payload.emotion
         self.logger.debug(f"收到 streamer.speech → 已通知 cadence：utterance_id={payload.utterance_id}")
 
     # ------------------------------------------------------------------
@@ -397,6 +404,11 @@ class SimulatorService:
                 # （场次归属经 LiveSessionManager 解析当前场次）
                 window = await self._fetch_world_window(persona=persona)
                 context.recent_messages = window
+                # 按说话人拆开：主播台词进"主播最近说"，观众弹幕进"最近弹幕氛围"
+                streamer_lines, chat_lines = await self._fetch_split_window()
+                context.recent_streamer_lines = streamer_lines
+                context.recent_chat_lines = chat_lines
+                context.recent_emotion = self._streamer_emotion
 
                 # 概率触发付费事件（礼物 / SC / 上舰），否则走普通弹幕
                 gift_roll = random.random()
@@ -464,6 +476,29 @@ class SimulatorService:
             raise
         except Exception as exc:
             self.logger.exception(f"模拟器生成循环异常: {exc}")
+
+    async def _fetch_split_window(self) -> Tuple[List[str], List[str]]:
+        """当前场次最近公共流按说话人拆成（主播台词, 观众弹幕）两份，各自旧→新。
+
+        主播的话按 ``sender_role='assistant'`` 识别；读失败或没有场次时两份都为空。
+        """
+        if self._chat is None or self._session_manager is None:
+            return [], []
+        try:
+            live_pk = await self._session_manager.resolve_pk()
+            if live_pk is None:
+                return [], []
+            rows = await self._chat.list_recent_live_chat(live_session_id=live_pk, limit=_SPLIT_WINDOW_LIMIT)
+        except Exception as exc:
+            self.logger.warning(f"世界窗口拆分读取失败（本轮按无上下文生成）: {exc}")
+            return [], []
+        streamer = [row.content for row in rows if row.content and row.sender_role == "assistant"]
+        chat = [
+            f"{row.sender_name or row.sender_role}: {row.content}"
+            for row in rows
+            if row.content and row.sender_role != "assistant"
+        ]
+        return streamer, chat
 
     async def _fetch_world_window(self, *, persona: Any) -> List[str]:
         """读取当前场次近期公共对话（封顶 _WORLD_WINDOW_LIMIT 条）供模拟观众参考。

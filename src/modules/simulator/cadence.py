@@ -120,12 +120,16 @@ class CadenceGenerator:
         - ``uniform``：有界均匀分布，范围 [mean*0.3, mean*2.0]
         - ``fixed``：固定间隔 ``fixed_interval_s``
         - ``auto``：uniform 基础上再叠加突发（由外部 trigger_burst 驱动）
+        - ``quiet``：零弹幕静默考场，返回无穷大（不发任何消息）
         """
         self._advance_state(time.monotonic())
 
         mode = self.config.cadence_mode
         if mode == "fixed":
             return self.config.fixed_interval_s
+        # 零弹幕静默考场：一条都不发，生成循环只在等待里被停止信号唤醒
+        if mode == "quiet":
+            return float("inf")
 
         # uniform / auto 共用有界均匀
         rate_per_min: float = self._effective_rate_per_minute(self._state)

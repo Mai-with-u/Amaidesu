@@ -105,7 +105,10 @@ class SimulatorConfigSchema(BaseConfig):
     cadence_mode: str = Field(
         default="uniform",
         title="节奏模式",
-        description="节奏模式: uniform=均匀随机, fixed=固定间隔, auto=自适应突发",
+        description=(
+            "节奏模式: uniform=均匀随机, fixed=固定间隔, auto=自适应突发, "
+            "quiet=零弹幕静默考场（不发普通弹幕，专门考主播自己撑场）"
+        ),
     )
     fixed_interval_s: float = Field(
         default=10.0, title="固定间隔", ge=1.0, le=120.0, description="fixed 模式的固定间隔（秒）"
