@@ -30,6 +30,7 @@ from src.modules.tools.tasks import TERMINAL_TASK_STATES
 
 from .context import json_text
 from .maicraft import AWAITING_ANSWER, EXECUTE, PROVIDER, PAUSED, GoalRun, ledger_status_of, ledger_task_id
+from .mod_facts import goal_mining_and_pits_notes
 
 __all__ = [
     "GoalLedger",
@@ -177,11 +178,13 @@ def _dry_goal_summary(run: GoalRun) -> str:
 
     摘要常不带宾语（如"找到 8 个"），脱敏后主播只看到"做完了：找到 8 个"就自己脑补了对象；
     目标 purpose 非空时截短拼在后面，让备注自带"这一步在干嘛"。不拼进抬头括号——抬头整个会被
-    脱敏器剥掉，purpose 会跟着丢。
+    脱敏器剥掉，purpose 会跟着丢。采掘目标带了连锁批次或留坑回填时紧凑附在摘要后面。
     """
     label = run.result_status or "结束"
+    notes = goal_mining_and_pits_notes(run.result)
+    extra = "".join(f"；{notes[key]}" for key in ("chain_mining", "pits") if key in notes)
     tail = f"（这一步：{_short_purpose(run.purpose)}）" if run.purpose else ""
-    return f"游戏目标 {run.goal_id}（{run.ability}）{label}：{run.summary}{tail}"
+    return f"游戏目标 {run.goal_id}（{run.ability}）{label}：{run.summary}{extra}{tail}"
 
 
 def _no_batch_task_ids() -> Sequence[str]:
@@ -250,9 +253,14 @@ class GoalLedger:
 
     def remember_finished(self, run: GoalRun) -> None:
         """终态目标进最近结束簿（按 goal_id 去重、保留最近若干条，供恢复与集中整理带上看）。"""
-        self._append_finished_deduped(
-            {"goal_id": run.goal_id, "ability": run.ability, "status": run.result_status, "summary": run.summary}
-        )
+        entry: Dict[str, Any] = {
+            "goal_id": run.goal_id,
+            "ability": run.ability,
+            "status": run.result_status,
+            "summary": run.summary,
+        }
+        entry.update(goal_mining_and_pits_notes(run.result))
+        self._append_finished_deduped(entry)
 
     def settle_finished(self, run: GoalRun) -> None:
         """目标结束的完整收账：清此刻的样子与暂停标记、进最近结束簿、写任务账终态。"""

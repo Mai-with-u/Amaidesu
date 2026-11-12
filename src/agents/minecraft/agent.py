@@ -88,6 +88,7 @@ from src.agents.minecraft.maicraft import (
     goal_run_of,
     reply_of,
 )
+from src.agents.minecraft.mod_facts import WorldMiningFacts
 from src.agents.minecraft.notice_router import (
     GAME_NOT_CONNECTED,
     LIVE_NOT_ACTIVE,
@@ -332,6 +333,8 @@ class MinecraftAgent(BaseAgent):
         self._food_taken = FoodTakenLog()
         # 从别人放的容器里取放或拆改了别人放的方块：按世界记最近几笔放进任务事实，交付或被问起时如实认账
         self._others_things = OthersThingsLog()
+        # 当前世界已接入的模组能力、最近一次连锁挖矿批次统计与取材留坑回填情况：按世界隔离，缺省时不占空间
+        self._mining_facts = WorldMiningFacts()
         # 速览里记住的地点：最多 5 分钟真读一次世界记忆；记地点成功、换存档、连接变化时提前作废
         self._remembered_places = RememberedPlacesCache(self._clock)
         # 按名字点了对手的切磋：下令时记下名字，收手时连同输赢发一条玩家互动给存储记账（不改怎么打）
@@ -1480,6 +1483,7 @@ class MinecraftAgent(BaseAgent):
             return
         data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
         if name == OBSERVE and arguments.get("what") == "self":
+            self._mining_facts.absorb_self(self._mining_world_key(data), data)
             coords = self_coords(data)
             if coords is not None:
                 self._last_self_coords = coords
@@ -1509,6 +1513,7 @@ class MinecraftAgent(BaseAgent):
                 # 账面仍要记：先登记再写终态，直接写会因条目不存在而落空（终态变化广播不出来）。
                 self._goal_ledger.remember_finished(run)
                 self._goal_ledger.register_and_settle(run)
+                self._mining_facts.absorb_goal_result(self._mining_world_key(), run.result)
                 misuse_hint = use_air_misuse_hint(run)
                 if misuse_hint:
                     notes = list(observation.get("notes") or [])
@@ -1531,6 +1536,7 @@ class MinecraftAgent(BaseAgent):
             self._goal_ledger.forget(run.goal_id)
             self._goal_ledger.remember_finished(run)
             self._goal_ledger.update_task_ledger(run)
+            self._mining_facts.absorb_goal_result(self._mining_world_key(), run.result)
             # 模型先于结束事件读到结束的 obtain：装好炉先走的回炉计时从这里记上（同一个计时只记一次）
             self._furnace_waits.absorb(run)
             return
@@ -1592,6 +1598,7 @@ class MinecraftAgent(BaseAgent):
             # 目标结束时角色可能已走远，旧坐标不再给后续新目标充当站桩基线
             self._last_self_coords = None
             self._goal_ledger.settle_finished(run)
+            self._mining_facts.absorb_goal_result(self._mining_world_key(), run.result)
             # obtain 装好炉先走（partial + WRONG_TIME）不是做不成：记下回炉计时，等它响之前结束一轮算在等炉子
             self._furnace_waits.absorb(run)
             self._inject_wakeup_message(finish_notice(run, self_brief))
@@ -2027,6 +2034,8 @@ class MinecraftAgent(BaseAgent):
         touched = self._others_things.view(self._creatures.world_key)
         if touched:
             context["others_things_touched"] = touched
+        # 当前世界已观测到的模组能力、最近一次连锁挖矿统计与取材留坑记录（未报过的键不出现）
+        context.update(self._mining_facts.view(self._mining_world_key()))
         return context
 
     def _continue_task_context(self) -> Dict[str, Any]:
@@ -2294,6 +2303,14 @@ class MinecraftAgent(BaseAgent):
     # 主播看一眼
     # ==================================================================
 
+    def _mining_world_key(self, data: Optional[Dict[str, Any]] = None) -> str:
+        """采掘与模组能力事实的存档归属键：本次观察带了存档编号就优先用它，否则沿用当前已识别的存档键。"""
+        if isinstance(data, dict):
+            ref = world_ref_of(data.get("world"))
+            if ref is not None and ref.id:
+                return ref.id
+        return self._world.save_fields()[0] or (self._creatures.world_key or "")
+
     async def _state_snapshot(self) -> str:
         """读工作文档时附的当前状态快照：现查一次身体现状（位置/装备/背包/血量）。
 
@@ -2303,7 +2320,10 @@ class MinecraftAgent(BaseAgent):
         if not self._maicraft_ready():
             return unavailable_snapshot()
         reply = await self._call_maicraft(OBSERVE, {"what": "self"})
-        return build_snapshot(reply)
+        world_key = self._mining_world_key(reply.data if reply.ok else None)
+        if reply.ok:
+            self._mining_facts.absorb_self(world_key, reply.data)
+        return build_snapshot(reply, fallback_facts=self._mining_facts.view(world_key))
 
     async def _glance(self) -> Dict[str, Any]:
         """主播看一眼：读一次自己、周围与记住的地点，只留直播叙事用得上的事实，再附上身体手头的工作。
@@ -2319,6 +2339,11 @@ class MinecraftAgent(BaseAgent):
         else:
             body = await self._call_maicraft(OBSERVE, {"what": "self"})
             view.update(glance_self(body))
+            if body.ok:
+                world_key = self._mining_world_key(body.data)
+                self._mining_facts.absorb_self(world_key, body.data)
+                for key, value in self._mining_facts.view(world_key).items():
+                    view.setdefault(key, value)
             # 顺手记下这次读到的位置（读失败就清掉），主播要游戏情境时用；站桩中顺带喂给看门狗作位移进展
             position = self_position(body)
             self._last_position = (position, self._clock()) if position is not None else None

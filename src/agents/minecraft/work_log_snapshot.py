@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from .attention_matrix import dimension_name, item_name
 from .maicraft import MaicraftReply
+from .mod_facts import chain_mining_text, mod_features_text
 
 __all__ = ["SNAPSHOT_TITLE", "build_snapshot", "unavailable_snapshot"]
 
@@ -89,18 +90,22 @@ def _inventory_text(data: Dict[str, Any]) -> Optional[str]:
     return "、".join(parts) if parts else None
 
 
-def build_snapshot(reply: MaicraftReply) -> str:
+def build_snapshot(reply: MaicraftReply, fallback_facts: Optional[Dict[str, str]] = None) -> str:
     """一次 ``observe(self)`` 的回复 → 给读者看的当前状态快照段。"""
     if not reply.ok:
         reason = reply.error_message or reply.error_code or "读取失败"
         return f"{SNAPSHOT_TITLE}当前不可用（{reason}）：这一段没有现查的数字，笔记里的同类数字只能当历史参考。"
     data = reply.data
+    extra = fallback_facts or {}
     lines = [f"{SNAPSHOT_TITLE}读工作文档这一刻现查的，以这里的数字为准："]
     fields = [
         ("位置", _position_text(data)),
         ("状态", _health_text(data)),
         ("装备", _equipment_text(data)),
         ("背包", _inventory_text(data)),
+        ("实例能力", mod_features_text(data) or extra.get("mod_features")),
+        ("最近挖掘", chain_mining_text(data.get("last_chain_mining")) or extra.get("last_chain_mining")),
+        ("近期留坑", extra.get("recent_pits")),
     ]
     written = False
     for label, value in fields:

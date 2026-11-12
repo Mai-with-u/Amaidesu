@@ -24,6 +24,7 @@ from src.modules.types.game_situation import NearbyPlace
 
 from .attention_matrix import biome_name, item_name
 from .maicraft import MaicraftReply
+from .mod_facts import chain_mining_text, mod_features_text
 
 __all__ = [
     "HOSTILE_KINDS",
@@ -494,6 +495,13 @@ def glance_self(reply: MaicraftReply) -> Dict[str, Any]:
             for item in inventory
             if isinstance(item, dict) and item.get("item")
         ]
+    # 实例已接入的模组能力与最近一次连锁挖矿统计：只挂结构化字段供决策参考，不进一句话现场以免挤占核心空间
+    features = mod_features_text(data)
+    if features is not None:
+        result["mod_features"] = features
+    last_chain = chain_mining_text(data.get("last_chain_mining"))
+    if last_chain is not None:
+        result["last_chain_mining"] = last_chain
     return result
 
 
