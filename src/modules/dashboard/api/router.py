@@ -28,6 +28,7 @@ from src.modules.dashboard.api import (
     simulator,
     streamer,
     system,
+    talk_cards,
     tasks,
     tools,
     viewers,
@@ -62,6 +63,8 @@ def create_app() -> FastAPI:
     app.include_router(rundown.router, prefix="/api/v1/rundown", tags=["Rundown"])
     # 流程单库 CRUD（列表 / 模板 / upsert / 删除 / 复制 / 设为当前）
     app.include_router(rundowns.router, prefix="/api/v1/rundowns", tags=["Rundown"])
+    # 编排页提问箱 / 话题卡（主播杂谈冷场时抽来开话头的自备素材）
+    app.include_router(talk_cards.router, prefix="/api/v1/talk-cards", tags=["Rundown"])
     app.include_router(streamer.router, prefix="/api/v1/streamer", tags=["Streamer"])
 
     # 模拟器控制面（generate / replay 三模式工作台）

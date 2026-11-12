@@ -63,7 +63,7 @@ class StreamerStatusResponse(BaseModel):
 class TriggerProactiveRequest(BaseModel):
     """真实限流链路主动发言触发请求。"""
 
-    topic_hint: Optional[str] = Field(default=None, description="话题提示（仅日志记录）")
+    topic_hint: Optional[str] = Field(default=None, description="话题提示（经递话通道送进下一个决策窗的运营提醒段）")
 
 
 class TriggerProactiveResponse(BaseModel):

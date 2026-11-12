@@ -29,6 +29,7 @@ class FakeStreamerAgent:
         self._trigger_exception = trigger_exception
         self.debug_calls: list[Dict[str, Any]] = []
         self.trigger_calls: list[Optional[str]] = []
+        self.prompts: list[str] = []
         self.proactive_enabled = proactive_enabled
         self.proactive_toggle_calls: list[bool] = []
 
@@ -50,6 +51,10 @@ class FakeStreamerAgent:
             raise self._debug_exception
         assert self._debug_result is not None, "FakeStreamerAgent 未注入 debug_result"
         return self._debug_result
+
+    def receive_prompt(self, *, content: str, source: str = "") -> bool:
+        self.prompts.append(content)
+        return True
 
     def trigger_external_proactive(self, topic_hint: Optional[str] = None) -> None:
         self.trigger_calls.append(topic_hint)
@@ -183,6 +188,10 @@ def test_trigger_proactive(streamer_client, agent, enabled: bool, success: bool,
     assert resp.status_code == 200 and resp.json()["success"] is success and message in resp.json()["message"]
     if agent is not None and success:
         assert agent.trigger_calls == ["聊聊天气"]
+        # 话头经递话通道进上下文，而不是只落日志
+        assert len(agent.prompts) == 1 and "聊聊天气" in agent.prompts[0]
+        if enabled:
+            assert "话头已送进" in resp.json()["message"]
 
 
 def test_proactive_toggle_updates_runtime_and_config(streamer_client, tmp_path: Path) -> None:

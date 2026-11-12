@@ -221,6 +221,22 @@ async def trigger_proactive(
     if not callable(getattr(agent, "trigger_external_proactive", None)):
         return TriggerProactiveResponse(success=False, message="Agent 不支持外部主动发言触发")
 
+    # 导演点了话头时先经递话通道送进下一个决策窗的【运营提醒】段：
+    # 只置位主动信号的话，话头只会落进日志，她开口时根本不知道要聊什么
+    hint = (request.topic_hint or "").strip()
+    hint_delivered = False
+    if hint:
+        receive_prompt = getattr(agent, "receive_prompt", None)
+        if callable(receive_prompt):
+            try:
+                hint_delivered = bool(
+                    receive_prompt(content=f"导演点了个话头，方便时接过来聊：{hint}", source="dashboard")
+                )
+            except Exception as exc:
+                logger.exception(f"trigger-proactive 送达话头失败: {exc}")
+        if not hint_delivered:
+            logger.warning(f"trigger-proactive 话头未能送进上下文（Agent 无递话通道或队列已满）：{hint[:60]}")
+
     try:
         agent.trigger_external_proactive(request.topic_hint)
     except Exception as exc:
@@ -236,7 +252,12 @@ async def trigger_proactive(
                 "可在直播控制台打开开关，或改用「让主播马上回应」（不受规则约束）。"
             ),
         )
+    hint_note = ""
+    if hint:
+        hint_note = "话头已送进她下一轮的参考；" if hint_delivered else "话头没能送进她的参考（只记了日志）；"
     return TriggerProactiveResponse(
         success=True,
-        message=("已提醒：主播会在下个决策周期决定是否开口（受防接龙/每小时上限/话题要求约束，可能不开口）。"),
+        message=(
+            f"已提醒：{hint_note}主播会在下个决策周期决定是否开口（受防接龙/每小时上限/话题要求约束，可能不开口）。"
+        ),
     )

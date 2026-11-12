@@ -98,6 +98,7 @@ class DashboardServer:
         game_player_repo: Optional[Any] = None,
         embedding_setup: Optional[Any] = None,
         rundown_transition_repo: Optional[Any] = None,
+        talk_card_repo: Optional[Any] = None,
         storage_db_path: Optional[Path] = None,
         task_tracker: Optional[Any] = None,
         subtitle_service: Optional[Any] = None,
@@ -193,6 +194,8 @@ class DashboardServer:
         # 注入 RundownTransitionRepo 让 /live-sessions/{id}/rundown-execution
         # 读流程单变更事实行；未注入（极简启动/测试）时该端点返回 503
         self.rundown_transition_repo = rundown_transition_repo
+        # 注入 TalkCardRepo 让 `/api/v1/talk-cards*` 承载编排页提问箱；未注入时相关端点降级 success=false
+        self.talk_card_repo = talk_card_repo
         # 注入字幕服务与 TTS 引擎让 `/api/v1/debug/subtitle|tts` 直测端点
         # 可用；未注入（极简启动/测试）时相关端点返回 503
         self.subtitle_service = subtitle_service
