@@ -119,6 +119,7 @@ from src.agents.minecraft.wake_queue import WakeQueue, opens_task
 from src.agents.minecraft.work_log_snapshot import build_snapshot, unavailable_snapshot
 from src.agents.minecraft.world_identity import WorldChange, WorldIdentity, world_ref_of
 from src.modules.agents.base import AgentState, BaseAgent
+from src.modules.agents.delegation_text import is_chat_prompt
 from src.modules.context import (
     BackgroundCheckpoint,
     ContextFolds,
@@ -181,6 +182,13 @@ _FATAL_FAULT_REASON_WORDS: Dict[str, str] = {
 UNDELIVERED_REPORT_MESSAGE = "游戏那边停了，没交付结果，做没做完不确定"
 # 在做委派却没调交付就停下时先给模型的一次提醒：做完了交付、没做成报卡住，第二次还不交付才记停了没交付
 DELIVERY_REMINDER = "[还没交付] 做完了就用 minecraft_report 交付（delivery），没做成就报卡住（escalation）。"
+# 收到非聊天类补充要求、且手上已有在做委派时的机械兜底提醒：防补充要求把已做完的原单悄悄换成另一件新活
+SUPPLEMENT_DELIVERY_REMINDER = (
+    "\n[交付提醒] 若原委派要的结果其实已经达成，先用 minecraft_report(kind=delivery) 交付结单，"
+    "不要把新的一件事混在已做完的旧单里继续；仍属同一件事的要求再接着推进。"
+)
+# 公屏聊天回话的模式判据：未显式加 [聊天回话] 抬头、但正文是标准公屏回话句式时同样按聊天回话认，不附交付提醒
+_CHAT_REPLY_MARKERS = ("在游戏聊天里回", "在游戏公屏回", "在公屏回")
 # 同一个问题没人答、接着做又挂回等定夺满这么多次后，计时到点不再叫醒续原任务，只等主播回答：
 # 每次叫醒至少两次模型调用，模型每批都给自己挂计时的话会一直周期性空转
 MAX_REHOLDS_PER_QUESTION = 2
@@ -417,9 +425,11 @@ class MinecraftAgent(BaseAgent):
         )
         # 最近一条身体急事收尾的那句话与收到的时刻：紧接着到的暂停通知带上它，说清主任务为什么停在半路。
         self._urgent_before_pause: Optional[tuple[str, float]] = None
-        # 急件插队时被本 Agent 暂停的目标号：交付门禁豁免这些目标（它们不是本件事的活），
-        # 批结束后恢复它们并清空
-        self._preempt_paused: set[int] = set()
+        # 委派收手纪元（每次 release_delegation 自增）与已由收手取消的目标号：
+        # 正在跑的 ReAct 批在模型返回或工具返回后核对纪元，若已被收手则立刻停步并不把旧回复混进新任务；
+        # 由收手直连取消的目标在事件流发回 finished 时直接静默清理，不再唤醒新任务。
+        self._release_epoch: int = 0
+        self._released_goal_ids: set[int] = set()
 
         # Agent 私有 MCP（_on_start 装配；构造注入实例或工厂时按注入装配）
         self._mcp_client: Optional[Any] = mcp_client
@@ -711,12 +721,20 @@ class MinecraftAgent(BaseAgent):
     # ==================================================================
 
     def receive_prompt(self, *, content: str, source: str = "") -> bool:
-        """接收递话（纯文本留言，不派任务、不进账本）：入队 + 唤醒；收工态拒收。"""
+        """接收递话（纯文本留言，不派任务、不进账本）：入队 + 唤醒；收工态拒收。
+
+        主播或运营发来非聊天类的补充要求、且手上已有在做委派时，自动附上一次交付提醒：
+        原委派要是已经做完，先交付结单再接着做，防止把换活塞进同一张旧单里。
+        """
         if not self._live_active:
             self._logger.warning(f"收工态拒收递话（source={source or '未知'}）：{content[:60]}")
             return False
+        chat_only = is_chat_prompt(content) or any(marker in content for marker in _CHAT_REPLY_MARKERS)
+        body = content
+        if not chat_only and source != "委派看门狗" and self._delegations.tracked_ids():
+            body = f"{content}{SUPPLEMENT_DELIVERY_REMINDER}"
         label = PROMPT_SOURCE_LABELS.get(source, "")
-        self._wake_queue.push_instruction("", f"{label}\n{content}" if label else content)
+        self._wake_queue.push_instruction("", f"{label}\n{body}" if label else body)
         self._wake_event.set()
         self._logger.info(f"MinecraftAgent 收到递话（source={source or '未知'}）：{content[:60]}")
         return True
@@ -765,11 +783,12 @@ class MinecraftAgent(BaseAgent):
         self._logger.info(f"MinecraftAgent 任务已取消（task_id={task_id}, source={source or '未知'}）")
         return True
 
-    async def _cancel_tracked_goals(self) -> GoalStopOutcome:
+    async def _cancel_tracked_goals(self, *, settle_ledger: bool = False) -> GoalStopOutcome:
         """逐个向游戏直连取消在跑目标：让 Mod 立刻停手，不等游戏 Agent 下一轮推理。
 
         单个目标取消失败（游戏没连上、目标已结束）记 warning，不阻断其余目标；
-        取消成功后目标结束事件经事件流回来，跟踪名单与账面由既有路径收尾。
+        ``settle_ledger`` 为真（委派收手路径）时当场摘除跟踪并把目标在任务账本里结算掉，
+        不留僵尸运行目标；为假（急停原路径）时维持事件流回执收尾。
         返回每个目标停没停，叫停回执据此告诉主播哪个目标可能还在做；没停住的原因（Mod 原始报错）只进日志。
         """
         outcome = GoalStopOutcome()
@@ -787,13 +806,26 @@ class MinecraftAgent(BaseAgent):
                 outcome.not_stopped.append(label)
                 continue
             outcome.stopped.append(label)
+            if settle_ledger:
+                self._goals.untrack(goal.goal_id)
+                self._goal_ledger.forget(goal.goal_id)
+                run = goal_run_of(reply.data) if isinstance(reply.data, dict) else None
+                if run is not None:
+                    self._goal_ledger.update_task_ledger(run)
         return outcome
 
     async def cancel_task_now(self, task_id: str, source: str = "", reason: str = "") -> bool:
-        """急取消（运营 REST 与主播撤单用）：先经直连通道让游戏立刻停手，再走 cancel_task 记账与通知。
+        """急取消（运营 REST 与撤单兜底用）：先确认该单确实在队列或本 Agent 追踪清单里，再叫停在跑目标。
 
-        叫停目标 → 撤单记账 → 发回执：撤没撤成、哪些目标停下了、哪个没停下，进主播时间线。
+        只对还在队列里没开跑的单直接撤队记账，不去停其它单正在跑的目标；只有本 Agent 正在办的在途单
+        才直连取消在跑目标并记账发回执，避免撤一件误伤另一件的目标。
         """
+        if self._wake_queue.drop_task(task_id):
+            self._delegations.reject(task_id, summary=f"被取消（source={source or '未知'}）")
+            self._logger.info(f"MinecraftAgent 队列中的委派已撤（task_id={task_id}, source={source or '未知'}）")
+            return True
+        if task_id not in self._delegations.tracked_ids():
+            return False
         outcome = await self._cancel_tracked_goals()
         cancelled = self.cancel_task(task_id, source=source, reason=reason)
         await self._emit_stop_receipt(cancel_receipt(outcome, cancelled=cancelled, by_operator=source == "operator"))
@@ -821,58 +853,62 @@ class MinecraftAgent(BaseAgent):
         )
         return True
 
-    async def suspend_current(self) -> bool:
-        """急件插队：暂放手头的活（Mod 目标暂停、进度保留），稍后接续——不是取消。
+    def _summarize_current_progress(self) -> str:
+        """收手前提取一句当前做到哪了（已完成的待办、正在跑的目标、最近结束的一步），供搁下重送达携带。"""
+        parts: List[str] = []
+        done_todos = [t.content.strip() for t in self._mc_state.todos if t.status == "done" and t.content.strip()]
+        open_todos = [t.content.strip() for t in self._mc_state.todos if t.status != "done" and t.content.strip()]
+        if done_todos:
+            parts.append(f"已完成待办：{'、'.join(done_todos[:3])}")
+        if open_todos:
+            parts.append(f"未完待办：{'、'.join(open_todos[:3])}")
+        finished = self._goal_ledger.recent_finished()
+        if finished:
+            last = finished[-1]
+            summary = str(last.get("summary") or "").strip()
+            status = str(last.get("status") or "").strip()
+            if summary:
+                parts.append(f"最近一步（{status or '结束'}）：{summary}")
+        running_goals = self._goals.tracked_goals()
+        if running_goals:
+            labels = [stop_goal_label(g.ability, g.purpose) for g in running_goals]
+            parts.append(f"收手时停下：{'、'.join(labels[:2])}")
+        return "；".join(parts)
 
-        在跑的游戏目标逐个用 Mod 的暂停动词停下；名下在办委派挪进暂放清单（账面
-        suspended 由委派受理核心写）。任何目标没停成功都返回 False（急件降级置顶排队，
-        不做"一半暂停"的嵌套态）。
-        批结束后的恢复见 ``_resume_preempted``。
+    async def release_delegation(self, task_id: str, *, reason: str = "") -> Optional[str]:
+        """对正在做的委派收手（换活、先搁下或发起方结单时由委派受理核心调用）。
+
+        按顺序执行：
+        1. 若指令还在消息队列里没被任何批次读到，直接从队列撤除并返回"尚未开跑"——不动账本，
+           后续也不会跟着新任务一起被吸收成 succeeded。
+        2. 若已吸收进批次：推进收手纪元（在跑的 ReAct 批在当前 await 返回后立即停步）→
+           提取当前进度摘要 → 直连取消在跑游戏目标并清理跟踪 → 从委派账摘除该单（不写账本）→
+           复位任务完成态，使随后送达的新委派按干净的新任务开局。
         """
-        if not self._live_active:
-            return False
-        paused: List[int] = []
-        for goal in list(self._goals.tracked_goals()):
-            try:
-                reply = await self._call_maicraft(GOAL, {"operation": "pause", "goal_id": goal.goal_id})
-            except Exception as exc:  # noqa: BLE001 - 单个目标暂停失败即放弃本次插队
-                self._logger.warning(f"急件插队：目标 {goal.goal_id} 暂停失败：{exc}", exc=True)
-                return False
-            if not reply.ok:
-                self._logger.warning(
-                    f"急件插队：目标 {goal.goal_id} 暂停未成功：{reply.error_message or reply.error_code or '未知原因'}"
-                )
-                return False
-            paused.append(goal.goal_id)
-        self._preempt_paused.update(paused)
-        # 在办的委派挪进暂放清单：没有在跑目标也要挪（委派可能还没开跑成目标），
-        # 不挪的话急件批收尾会把暂放的当成在办的一起写终态
-        self._delegations.suspend("急事插队，暂放手头的活")
-        self._logger.info(f"急件插队：暂停了 {len(paused)} 个在跑目标（{', '.join(str(g) for g in paused)}）")
-        return True
-
-    async def _resume_preempted(self) -> None:
-        """急事办完（或这一批收场）：恢复被插队暂停的目标与暂放的委派。
-
-        没有插队过的痕迹时不做任何事。收工态不恢复（下播结算会把暂放的一并收掉）；
-        恢复失败只记日志，目标等下一轮决策或既有卡住上报路径兜底。
-        """
-        if not self._preempt_paused and not self._delegations.suspended_ids():
-            return
-        self._delegations.resume_suspended()
-        if self._live_active and self._preempt_paused:
-            for goal_id in sorted(self._preempt_paused):
-                try:
-                    reply = await self._call_maicraft(GOAL, {"operation": "resume", "goal_id": goal_id})
-                except Exception as exc:  # noqa: BLE001 - 单个目标恢复失败不挡其余目标
-                    self._logger.warning(f"恢复被插队暂停的目标 {goal_id} 异常：{exc}", exc=True)
-                    continue
-                if not reply.ok:
-                    self._logger.warning(
-                        f"恢复被插队暂停的目标 {goal_id} 未成功：{reply.error_message or reply.error_code or '未知原因'}"
-                    )
-            self._inject_wakeup_message("[系统] 急事办完了，之前为急事暂放的目标已恢复运行；手头接着照原任务推进。")
-        self._preempt_paused.clear()
+        del reason
+        if self._wake_queue.drop_task(task_id):
+            self._delegations.release(task_id)
+            self._logger.info(f"MinecraftAgent 委派收手（尚未开跑，已从消息队列撤除）：task_id={task_id}")
+            return "还没开跑"
+        if not self._delegations.release(task_id):
+            return None
+        self._release_epoch += 1
+        progress = self._summarize_current_progress()
+        tracked_ids = list(self._goals.tracked_ids())
+        self._released_goal_ids.update(tracked_ids)
+        await self._cancel_tracked_goals(settle_ledger=True)
+        for gid in tracked_ids:
+            self._goals.untrack(gid)
+            self._goal_ledger.forget(gid)
+        self._wait_progress.resume()
+        self._furnace_waits.clear()
+        self._set_open_question("")
+        self._task_finished = True
+        self._task_suspended = False
+        self._logger.info(
+            f"MinecraftAgent 委派收手完成：task_id={task_id}，停下 {len(tracked_ids)} 个目标，进度={progress or '无'}"
+        )
+        return progress
 
     async def _emit_stop_receipt(self, receipt: str) -> None:
         """叫停回执作为 attention_required 发给主播：只是叫停的结果，不带本批路上碰到的身体事件。
@@ -902,9 +938,6 @@ class MinecraftAgent(BaseAgent):
             except Exception as exc:  # noqa: BLE001 - 任务失败不杀死 worker
                 self._logger.exception(f"任务执行异常: {exc}")
                 await self.emit_error(f"任务执行异常: {exc}")
-            finally:
-                # 这一批收场即恢复急件插队时暂放的活：急事办完（交付/上报/停步）都算办完
-                await self._resume_preempted()
 
     async def _run_task(self) -> None:
         """执行单个任务批，直到批次终止语义命中。
@@ -973,10 +1006,16 @@ class MinecraftAgent(BaseAgent):
         polling_reminded = False
         # 请求发不出去时的补救进度：换过回执、重开过对话；请求一发成功就清零，下次再出事从头补救
         stripped = restarted = False
+        batch_epoch = self._release_epoch
         while self._running:
             await self._paused.wait()
             if not self._live_active:
                 self._logger.info(f"已收工，任务批停止（{steps} 步）")
+                return
+            if self._release_epoch != batch_epoch:
+                # 这一批期间手上的委派已被收手：结束本批（若队列里紧接着已排入新委派，置位唤醒让 worker 另开干净新批）
+                if self._message_queue:
+                    self._wake_event.set()
                 return
             if self._message_queue:
                 action_reminded = False
@@ -996,6 +1035,7 @@ class MinecraftAgent(BaseAgent):
                     if started_new:
                         self._start_new_task(messages, system_message)
                         opening_due = True
+                        batch_epoch = self._release_epoch
                     # 读到主播的递话或新委派：卡住时问的那个问题算有人答了；开新任务时也不再有在等的问题
                     self._set_open_question("")
                     self._task_instructions.append(content)
@@ -1084,6 +1124,12 @@ class MinecraftAgent(BaseAgent):
                 return
             self._body_fault = ""
             stripped = restarted = False
+            if self._release_epoch != batch_epoch:
+                # 模型推理期间委派已被收手：整段回复属于已收手的旧任务，丢弃不落地，让新任务从干净状态开批
+                self._logger.info("推理返回时委派已收手，丢弃旧回复并结束本批")
+                if self._message_queue:
+                    self._wake_event.set()
+                return
 
             tool_calls = response.tool_calls or []
             # 响应转回 assistant 消息（含线协议转换与思考回传）由 LLM 模块统一承载；
@@ -1124,6 +1170,18 @@ class MinecraftAgent(BaseAgent):
                 self._absorb_reply(call.name, arguments, observation)
                 await self._flush_place_marks()
                 await self._flush_self_chats()
+                if self._release_epoch != batch_epoch:
+                    # 工具执行期间委派被收手：这一步若刚下达了新游戏目标，一并取消并清理，停止执行余下工具调用
+                    late_ids = list(self._goals.tracked_ids())
+                    if late_ids:
+                        self._released_goal_ids.update(late_ids)
+                        await self._cancel_tracked_goals(settle_ledger=True)
+                        for gid in late_ids:
+                            self._goals.untrack(gid)
+                            self._goal_ledger.forget(gid)
+                    if self._message_queue:
+                        self._wake_event.set()
+                    return
                 polling_only &= self._polls_running_goal(call.name, arguments)
                 messages.append(
                     {
@@ -1196,7 +1254,6 @@ class MinecraftAgent(BaseAgent):
         self._goal_ledger.clear_finished()
         self._furnace_waits.clear()
         self._wait_progress.reset()
-        self._preempt_paused.clear()
         # 新任务只带系统说明和新指令：这个世界里拿过别人家的吃的、动过别人放的东西另附事实，主人来问时一开工就认得出
         taken = self._food_taken.view(self._creatures.world_key)
         if taken:
@@ -1285,7 +1342,7 @@ class MinecraftAgent(BaseAgent):
         """
         if self._task_reported or self._task_suspended:
             return
-        if [goal_id for goal_id in self._goals.tracked_ids() if goal_id not in self._preempt_paused]:
+        if self._goals.tracked_ids():
             return
         if self._unfinished_todos() or self._furnace_waits.waiting():
             return
@@ -1521,6 +1578,13 @@ class MinecraftAgent(BaseAgent):
         并转发"有目标停着没动静"给主播；不另唤醒模型（Mod 节流过，模型侧由任务账本
         的停滞告警兜底）。
         """
+        if run.goal_id in self._released_goal_ids:
+            # 收手已直连取消过的旧任务目标：迟到的事件流回执静默收尾，不注入新任务对话
+            if run.finished:
+                self._released_goal_ids.discard(run.goal_id)
+                self._goal_ledger.forget(run.goal_id)
+                self._goal_ledger.update_task_ledger(run)
+            return
         if not stalled:
             self._wait_progress.note_progress()
         before = self._goal_ledger.note_of(run.goal_id)
@@ -2510,7 +2574,7 @@ class MinecraftAgent(BaseAgent):
                 "这一轮只是回应别的玩家冲你做的动作，不是一件要交付的活：不交付也不上报，主播那边已经知道了；"
                 "回完动作就结束这一轮（不调工具），要说话用 chat"
             )
-        running = [goal_id for goal_id in self._goals.tracked_ids() if goal_id not in self._preempt_paused]
+        running = list(self._goals.tracked_ids())
         if kind == "delivery" and running:
             return (
                 f"还有 {len(running)} 个目标在跑（{', '.join(str(goal_id) for goal_id in running)}），不能交付——"

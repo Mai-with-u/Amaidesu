@@ -15,9 +15,13 @@ from src.modules.tools.tasks import TaskLedger
 
 
 class _FakeRecord:
-    def __init__(self, source: str, executor: str) -> None:
+    def __init__(
+        self, source: str, executor: str, status: str = "running", snapshot: Optional[Dict[str, Any]] = None
+    ) -> None:
         self.source = source
         self.executor = executor
+        self.status = status
+        self.snapshot = snapshot or {}
 
 
 class _FakeLedger:
@@ -217,7 +221,14 @@ def test_reject_writes_cancelled_without_tracking() -> None:
 
 def test_settle_on_live_end_cancels_own_agent_tasks_and_clears_lists() -> None:
     ledger = _FakeLedger()
-    ledger.active["d-1"] = _FakeRecord(source="agent", executor="minecraft")
+    ledger.active["d-1"] = _FakeRecord(source="agent", executor="minecraft", status="running")
+    ledger.active["d-q-fresh"] = _FakeRecord(source="agent", executor="minecraft", status="queued")
+    ledger.active["d-q-shelved"] = _FakeRecord(
+        source="agent",
+        executor="minecraft",
+        status="queued",
+        snapshot={"shelved_at_ms": 1234, "shelved_progress": "地基铺好"},
+    )
     ledger.active["d-2"] = _FakeRecord(source="agent", executor="text_adv")  # 别的 Agent 的
     ledger.active["d-3"] = _FakeRecord(source="tool", executor="minecraft")  # 工具型的不动
     book = _book(ledger)
@@ -226,9 +237,29 @@ def test_settle_on_live_end_cancels_own_agent_tasks_and_clears_lists() -> None:
     ledger.updates.clear()
 
     settled = book.settle_on_live_end()
-    assert settled == 1
-    assert [(u["task_id"], u["status"], u["summary"]) for u in ledger.updates] == [("d-1", "cancelled", "下播自动收尾")]
+    assert settled == 3
+    assert [(u["task_id"], u["status"], u["summary"]) for u in ledger.updates] == [
+        ("d-1", "cancelled", "下播自动收尾（当时在做）"),
+        ("d-q-fresh", "cancelled", "下播自动收尾（待办，还没开工）"),
+        ("d-q-shelved", "cancelled", "下播自动收尾（待办，搁下了，做到：地基铺好）"),
+    ]
     assert book.finished_ids == () and book.cancel("d-4", summary="x") is False, "追踪清单随账面清空"
+
+
+def test_release_removes_from_batch_and_finished_without_touching_ledger() -> None:
+    """收手移出只清本 Agent 追踪清单，不写任务账本（账面由受理核心按结单选项统一落账）。"""
+    ledger = _FakeLedger()
+    book = _book(ledger)
+    book.absorb("d-running")
+    book.mark_running()
+    book.absorb("d-pending")
+    ledger.updates.clear()
+
+    assert book.release("d-running") is True
+    assert book.release("d-pending") is True
+    assert book.release("d-absent") is False
+    assert book.tracked_ids() == ()
+    assert ledger.updates == []
 
 
 def test_no_tracker_degrades_to_no_op_and_keeps_lists_empty() -> None:
