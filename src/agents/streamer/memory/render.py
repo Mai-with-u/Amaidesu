@@ -25,6 +25,7 @@ from src.modules.storage.models.memory import ArchiveLine, Commitment, SnapshotL
 from src.modules.storage.privacy import mask_names_in_text
 from src.modules.types.game_save import GameSave
 
+from .commitment_ttl import effective_mentioned_session_id
 from .saves import SavePlace, canonical_save_names, place_of
 from .zones import (
     MAX_BRIEF_COMMITMENTS,
@@ -420,19 +421,27 @@ def _render_commitments_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
     for commitment in ctx.commitments:
         what = (commitment.what or "").strip()
         quote = (commitment.quote or "").strip()
+        ref_sid = effective_mentioned_session_id(commitment)
         is_previous = (
             not ctx.previous_is_stale
             and ctx.archive_session_id is not None
-            and commitment.created_session_id is not None
-            and int(commitment.created_session_id) == int(ctx.archive_session_id)
+            and ref_sid is not None
+            and int(ref_sid) == int(ctx.archive_session_id)
         )
         when = _when_word(is_previous=is_previous, spoken=False)
+        notes: List[str] = []
+        if commitment.game:
+            notes.append(f"{commitment.game}·{when}")
+            if place_of(commitment.game, commitment.save_id, ctx.current_saves) is SavePlace.UNSURE:
+                notes.append("不确定是哪个存档")
+        else:
+            notes.append(when)
         body = (
             f"- [{render_commitment_number(commitment.id)}] 「{quote}」"
             if quote
             else f"- [{render_commitment_number(commitment.id)}] {what}"
         )
-        pending.append(f"{body}（{when}）")
+        pending.append(f"{body}（{'；'.join(notes)}）")
     extra = max(0, int(ctx.earlier_commitment_count))
     if not pending and not extra:
         return BriefZoneOutput()
@@ -472,6 +481,7 @@ def _build_render_context(
     archive_lines: Sequence[ArchiveLine] = (),
     snapshot_lines: Sequence[SnapshotLine] = (),
     commitments: Sequence[Commitment] = (),
+    other_save_commitments: Sequence[Commitment] = (),
     previous_session_id: Optional[int] = None,
     previous_is_stale: bool = False,
     earliest_recent_ms: int = 0,
@@ -502,6 +512,7 @@ def _build_render_context(
         current_saves=dict(current_saves or {}),
         unsaved_games=tuple(unsaved_games),
         used_archive_ids=used_archive_ids,
+        other_save_commitments=tuple(other_save_commitments),
     )
 
 
@@ -509,7 +520,13 @@ def _render_folded_other_saves(ctx: BriefRenderContext) -> List[str]:
     """别的存档里的记忆按 ``(game, save_id)`` 全简报归并成每个存档一行，名字取最后一次非空记录。"""
     if not ctx.current_saves:
         return []
-    save_names = _canonical_names_for([item.line for item in ctx.snapshot_lines])
+    name_records: List[Tuple[Optional[str], str, str]] = [
+        (item.line.game, item.line.save_id, item.line.save_name)
+        for item in sorted(ctx.snapshot_lines, key=lambda s: (int(s.line.live_session_id), int(s.line.id)))
+    ]
+    for item in sorted(ctx.other_save_commitments, key=lambda c: (int(c.created_session_id or 0), int(c.id))):
+        name_records.append((item.game, item.save_id, item.save_name))
+    save_names = canonical_save_names(name_records)
     counts: Dict[Tuple[str, str], int] = {}
     order: List[Tuple[str, str]] = []
     fallback_names: Dict[Tuple[str, str], str] = {}
@@ -526,6 +543,17 @@ def _render_folded_other_saves(ctx: BriefRenderContext) -> List[str]:
             order.append(key)
         counts[key] += 1
         fallback_names[key] = line.save_name
+    for commitment in ctx.other_save_commitments:
+        if not (commitment.what or "").strip() or not commitment.game:
+            continue
+        if place_of(commitment.game, commitment.save_id, ctx.current_saves) is not SavePlace.OTHER:
+            continue
+        key = (commitment.game, commitment.save_id)
+        if key not in counts:
+            counts[key] = 0
+            order.append(key)
+        counts[key] += 1
+        fallback_names.setdefault(key, commitment.save_name)
     return [
         _render_other_save_line(
             game=game,
@@ -596,6 +624,7 @@ def render_brief(
     archive_lines: Sequence[ArchiveLine] = (),
     snapshot_lines: Sequence[SnapshotLine] = (),
     commitments: Sequence[Commitment] = (),
+    other_save_commitments: Sequence[Commitment] = (),
     previous_session_id: Optional[int] = None,
     previous_is_stale: bool = False,
     earliest_recent_ms: int = 0,
@@ -615,6 +644,7 @@ def render_brief(
         archive_lines=archive_lines,
         snapshot_lines=snapshot_lines,
         commitments=commitments,
+        other_save_commitments=other_save_commitments,
         previous_session_id=previous_session_id,
         previous_is_stale=previous_is_stale,
         earliest_recent_ms=earliest_recent_ms,

@@ -198,27 +198,30 @@ async def test_danmaku_arrival_prefetches_its_query_vector(store: SQLiteDatabase
 
 
 async def test_refresh_brief_reads_previous_archive_and_pending_commitments(store: SQLiteDatabase) -> None:
-    """常驻简报取上一场档案与不针对人、不挂游戏的未了结承诺。"""
+    """常驻简报按四分区取上一场档案与近期非私向未了结承诺（私向承诺不进简报）。"""
     previous_pk = await _ended_session(store, started=1_000)
     await store.archive.insert_line(
         live_session_id=previous_pk,
         text="Minecraft：水车搭好了",
         quote="水车搭好啦",
         evidence_chat_id=1,
+        game="minecraft",
     )
-    await store.commitments.insert_commitment(what="继续炸 TNT", quote="下次接着炸 TNT")
-    # 对某位观众的、挂游戏的都不进常驻简报
-    await store.commitments.insert_commitment(what="给 ta 盖房子", viewer_id=9)
-    await store.commitments.insert_commitment(what="继续挖矿", game="Minecraft")
+    await store.commitments.insert_commitment(what="继续炸 TNT", quote="下次接着炸 TNT", created_session_id=previous_pk)
+    # 对某位观众的私向承诺不进常驻简报；挂游戏的公开近期承诺取消轮播后进入【还惦记的事】
+    await store.commitments.insert_commitment(what="给 ta 盖房子", viewer_id=9, created_session_id=previous_pk)
+    await store.commitments.insert_commitment(
+        what="继续挖矿", quote="回头继续挖矿", game="minecraft", created_session_id=previous_pk
+    )
 
     agent = _build_agent(store, FakeLLMManager())
     await agent._refresh_memory_brief()
 
     brief = agent.memory_brief_text
     assert "上一场：" in brief and "水车搭好啦" in brief
-    assert "下次接着炸 TNT" in brief
-    assert "盖房子" not in brief and "继续挖矿" not in brief
-    assert len(agent.memory_brief_commitment_ids) == 1
+    assert "下次接着炸 TNT" in brief and "回头继续挖矿" in brief
+    assert "盖房子" not in brief
+    assert len(agent.memory_brief_commitment_ids) == 2
 
 
 async def test_next_brief_reflects_operator_corrections(store: SQLiteDatabase) -> None:
@@ -273,9 +276,11 @@ async def test_brief_rerender_is_byte_identical_when_ledger_unchanged(store: SQL
     first, first_ids = agent.memory_brief_text, agent.memory_brief_commitment_ids
     assert first
 
-    # 简报不取的行：对某位观众的承诺、挂游戏的承诺、彩排场的档案
+    # 简报不取的行：对某位观众的私向承诺、已了结的承诺、彩排场的档案
     await store.commitments.insert_commitment(what="给 ta 盖房子", viewer_id=9, now_ms_value=200)
-    await store.commitments.insert_commitment(what="继续挖矿", game="Minecraft", now_ms_value=200)
+    closed_cid = await store.commitments.insert_commitment(what="已做完的事", now_ms_value=200)
+    assert closed_cid is not None
+    await store.commitments.close_commitment(commitment_id=closed_cid, updated_at_ms=201)
     rehearsal_pk = await _ended_session(store, started=3_000, ended=4_000, kind="rehearsal")
     await store.archive.insert_line(
         live_session_id=rehearsal_pk, text="彩排试了新皮肤", quote="试试新皮肤", evidence_chat_id=3
@@ -342,10 +347,10 @@ async def test_brief_marks_archive_line_cited_this_session(store: SQLiteDatabase
     """本场她点名提过的档案行留在简报里、末尾标"（本场已提过）"，编号仍可点名；没在直播时不标。"""
     previous = await _ended_session(store, started=1_000)
     cited = await store.archive.insert_line(
-        live_session_id=previous, text="Minecraft：女仆取名团子", quote="就叫团子", evidence_chat_id=1
+        live_session_id=previous, text="Minecraft：女仆取名团子", quote="就叫团子", evidence_chat_id=1, game="minecraft"
     )
     other = await store.archive.insert_line(
-        live_session_id=previous, text="Minecraft：水车搭好了", quote="水车搭好啦", evidence_chat_id=2
+        live_session_id=previous, text="Minecraft：水车搭好了", quote="水车搭好啦", evidence_chat_id=2, game="minecraft"
     )
     assert cited is not None and other is not None
     current = await store.sessions.insert_live_session(stream_id="room", platform="bilibili", started_at_ms=5_000_000)

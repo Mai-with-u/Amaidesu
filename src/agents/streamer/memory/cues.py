@@ -39,12 +39,13 @@ from src.modules.logging import get_logger
 from src.modules.storage.models.memory import NewCueLogEntry
 from src.modules.types.game_save import GameSave
 from src.modules.types.game_situation import GameSituation
+from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.modules.utils.time_utils import now_ms
 
 from .brief import load_used_refs
+from .commitment_ttl import is_commitment_dormant
 from .passive import (
     SOURCE_DANMAKU,
-    SOURCE_GAME,
     SOURCE_PLACE,
     SOURCE_PLAYER,
     SOURCE_SELF,
@@ -66,7 +67,6 @@ from .render import (
     render_commitment_number,
     render_cue_block,
     render_forget_notice,
-    render_game_card,
     render_joke_card,
     render_player_card,
     render_presence_line,
@@ -182,6 +182,8 @@ class _Round:
     brief_archive: Set[int]
     saves: Mapping[str, GameSave]
     previous_session_id: Optional[int]
+    recent_session_ids: Tuple[int, ...] = ()
+    earliest_recent_ms: int = 0
     cards: List[_Card] = field(default_factory=list)
     carded_viewers: Set[int] = field(default_factory=set)
     skipped: List[str] = field(default_factory=list)
@@ -243,6 +245,7 @@ class MemoryCueProvider:
         search: Optional["MemorySearch"] = None,
         vector_enabled: bool = True,
         game_player_repo: Optional["GamePlayerRepo"] = None,
+        min_session_ms: int = 0,
     ) -> None:
         """仓储与时钟注入；隐私服务缺失时不出回执行（看不见遗忘命令）。
 
@@ -264,6 +267,7 @@ class MemoryCueProvider:
         self._search = search
         self._vector_enabled = vector_enabled
         self._players = game_player_repo
+        self._min_session_ms = max(0, int(min_session_ms))
         self._pool = RulePool(archive_repo=archive_repo, inside_jokes=inside_jokes, clock=clock)
         self._arrivals = PlaceArrivals()
         self._situation = SituationQuery()
@@ -307,6 +311,8 @@ class MemoryCueProvider:
         senders = await self._resolve_senders(batch)
         used, used_archive = await load_used_refs(self._chat, sid)
         await self._mark_used(sid, used_archive, used)
+        del open_games  # 游戏承诺不再按"游戏开着"轮播，只在对象开口、走到地点或情境命中时单推
+        recent_ids, earliest_ms = await self._recent_session_bounds(sid)
         state = _Round(
             used=used,
             used_archive=used_archive,
@@ -314,16 +320,17 @@ class MemoryCueProvider:
             brief_archive={int(item) for item in brief_archive_ids},
             saves=dict(current_saves or {}),
             previous_session_id=await self._previous_session_id(),
+            recent_session_ids=recent_ids,
+            earliest_recent_ms=earliest_ms,
         )
         self._round_labels = {}
-        # 对象开口（观众、游戏玩家） -> 游戏地点 -> 规则 -> 游戏开着 -> 向量：每一路只在前面没凑满三张时补
+        # 对象开口（观众、游戏玩家） -> 游戏地点 -> 规则 -> 向量：每一路只在前面没凑满上限时补
         await self._viewer_cards(senders, state)
         await self._player_cards(sid, game_players, state)
         if self._passive_enabled:
             await self._pool.refresh_if_stale()
-            self._place_cards(situations or {}, state)
+            await self._place_cards(situations or {}, state)
             self._rule_cards(self._pool.match(await self._rule_texts(sid, batch, senders)), state)
-        await self._game_cards(open_games, state)
         if self._vector_on():
             for situation in (situations or {}).values():
                 for player in situation.players:
@@ -595,6 +602,8 @@ class MemoryCueProvider:
                 continue
             for commitment in await self._open_commitments(viewer_id=sender.viewer_id):
                 key: ItemKey = ("commitment", int(commitment.id))
+                if self._skip(key, state, "搁了很久" if self._dormant_commitment(commitment, state) else None):
+                    continue
                 if self._blocked(key, state) is not None:
                     continue
                 text = render_viewer_card(
@@ -631,11 +640,11 @@ class MemoryCueProvider:
             if self._skip(key, state, "本场说上话了" if player.id in replied else self._blocked(key, state)):
                 continue
             history = await self._players.list_history(player_id=player.id, exclude_session_id=session_id)
-            # 答应过他的事：本场已经点名用上的不再写（用上即停），其余至多两条
+            # 答应过他的事：本场已经点名用上或已搁了很久的不再写，其余至多两条
             promises = [
                 item
                 for item in await self._open_commitments(player_id=int(player.id), limit=_MAX_PROMISES_PER_PLAYER)
-                if int(item.id) not in state.used
+                if int(item.id) not in state.used and not self._dormant_commitment(item, state)
             ]
             # 别的存档里答应的照样提，但写明是在哪个存档答应的
             notes = [(item, place_note(item.game, item.save_id, item.save_name, state.saves)) for item in promises]
@@ -662,29 +671,13 @@ class MemoryCueProvider:
             card = _Card(key=key, text=text, kind="player", sources=(SOURCE_PLAYER,), detail=detail)
             self._push(state, card)
 
-    async def _game_cards(self, open_games: Sequence[str], state: _Round) -> None:
-        """游戏开着：挂在这个游戏上、不针对具体的人的未了结承诺，每个游戏一张。"""
-        for game in open_games:
-            if state.full:
-                return
-            for commitment in await self._open_commitments(game=game, limit=_MAX_COMMITMENTS_PER_GAME):
-                if commitment.has_target:
-                    # 对某位观众、某位玩家的只在那个人露面时提
-                    continue
-                # 别的存档里答应的事不催她提起：眼前这个世界里没有那座房子
-                place = place_of(game, commitment.save_id, state.saves)
-                if place is SavePlace.OTHER:
-                    continue
-                key: ItemKey = ("commitment", int(commitment.id))
-                if self._blocked(key, state) is not None:
-                    continue
-                text = render_game_card(commitment, game=game, unsure_save=place is SavePlace.UNSURE)
-                self._push(state, _Card(key=key, text=text, kind="game", sources=(SOURCE_GAME,)))
-                break
-
-    def _place_cards(self, situations: Mapping[str, GameSituation], state: _Round) -> None:
-        """游戏地点：这一批刚走到某个记住的地点跟前，推挂在那里的档案行。"""
-        for game, place, distance in self._arrivals.update(situations, state.saves):
+    async def _place_cards(self, situations: Mapping[str, GameSituation], state: _Round) -> None:
+        """游戏地点：刚走到记住的地点跟前，单推挂在那里的档案行与提到该地点的未搁置公开承诺。"""
+        arrivals = self._arrivals.update(situations, state.saves)
+        if not arrivals:
+            return
+        game_commitments: Dict[str, List[Any]] = {}
+        for game, place, distance in arrivals:
             for line in self._pool.lines_at(game, place, state.saves):
                 key: ItemKey = ("archive", int(line.id))
                 if self._skip(key, state, self._passive_blocked(key, state)):
@@ -700,6 +693,32 @@ class MemoryCueProvider:
                 # 线索卡记录不存地点名：复盘时从档案行眼下挂的地点现查，行删了就看不到
                 detail = {"distance": distance}
                 self._push(state, _Card(key=key, text=text, kind="place", sources=(SOURCE_PLACE,), detail=detail))
+            if not place or state.full:
+                continue
+            if game not in game_commitments:
+                game_commitments[game] = await self._open_commitments(game=game, limit=_MAX_COMMITMENTS_PER_GAME)
+            for commitment in game_commitments[game]:
+                if commitment.has_target:
+                    continue
+                if place not in f"{commitment.what} {commitment.quote}":
+                    continue
+                key = ("commitment", int(commitment.id))
+                if self._skip(key, state, "搁了很久" if self._dormant_commitment(commitment, state) else None):
+                    continue
+                if self._skip(key, state, self._other_save(game, commitment.save_id, state)):
+                    continue
+                if self._skip(key, state, self._passive_blocked(key, state)):
+                    continue
+                save_place = place_of(game, commitment.save_id, state.saves)
+                text = render_recalled_commitment_card(
+                    commitment,
+                    why=f"游戏里的位置显示你可能走到了「{place}」附近",
+                    unsure_save=save_place is SavePlace.UNSURE,
+                )
+                self._push(
+                    state,
+                    _Card(key=key, text=text, kind="place", sources=(SOURCE_PLACE,), detail={"distance": distance}),
+                )
 
     def _rule_cards(self, hits: Sequence[PassiveHit], state: _Round) -> None:
         """规则：弹幕或她最近的台词提到了触发词；只由她自己台词命中的每条每场只推一次。"""
@@ -813,6 +832,8 @@ class MemoryCueProvider:
         if commitment is None:
             self._skip(hit.key, state, "不是未了结的公开承诺")
             return ""
+        if self._skip(hit.key, state, "搁了很久" if self._dormant_commitment(commitment, state) else None):
+            return ""
         if self._skip(hit.key, state, self._other_save(commitment.game, commitment.save_id, state)):
             return ""
         place = place_of(commitment.game, commitment.save_id, state.saves)
@@ -871,6 +892,38 @@ class MemoryCueProvider:
         if reason is None and state.full:
             return "每批上限"
         return reason
+
+    @staticmethod
+    def _dormant_commitment(commitment: Any, state: _Round) -> bool:
+        """承诺已转成"搁了很久"时线索侧不再推卡（只留回想工具可查）。"""
+        return is_commitment_dormant(
+            commitment,
+            recent_session_ids=state.recent_session_ids,
+            earliest_recent_ms=state.earliest_recent_ms,
+        )
+
+    async def _recent_session_bounds(self, session_id: int) -> Tuple[Tuple[int, ...], int]:
+        """本场之前最近至多三个已完结正式场的场次号与最早开播时刻（判承诺过期与自触发年龄共用）。"""
+        finder = getattr(self._archive, "recent_ended_session_bounds", None) or getattr(
+            self._commitments, "recent_ended_session_bounds", None
+        )
+        if finder is None:
+            return (), 0
+        try:
+            bounds = await finder(
+                kind=SESSION_KIND_LIVE,
+                min_duration_ms=self._min_session_ms,
+                exclude_session_id=session_id,
+                limit=3,
+            )
+        except Exception as exc:  # noqa: BLE001 - 查不到边界时不误拦承诺卡
+            logger.warning(f"线索推送查最近完结场次边界失败（本批不做场次过期拦截）: {exc}", exc=exc)
+            return (), 0
+        if not bounds:
+            return (), 0
+        recent_ids = tuple(int(item[0]) for item in bounds)
+        earliest_ms = int(bounds[2][1]) if len(bounds) >= 3 else 0
+        return recent_ids, earliest_ms
 
     @staticmethod
     def _other_save(game: Optional[str], save_id: str, state: _Round) -> Optional[str]:

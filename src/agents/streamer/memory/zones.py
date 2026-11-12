@@ -133,6 +133,7 @@ class BriefRenderContext:
     current_saves: Mapping[str, GameSave]
     unsaved_games: Tuple[str, ...]
     used_archive_ids: AbstractSet[int]
+    other_save_commitments: Tuple[Commitment, ...] = ()
 
 
 @dataclass(frozen=True)

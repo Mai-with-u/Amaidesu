@@ -27,6 +27,7 @@ from src.modules.storage.models.memory import Commitment, SnapshotLine
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE, SessionKind
 
+from .commitment_ttl import partition_brief_commitments
 from .render import (
     MAX_BRIEF_COMMITMENTS,
     brief_archive_ids,
@@ -82,8 +83,9 @@ async def build_brief(
     "上一场玩这些游戏时记没记下存档"（没记下的块尾注一句）。
     """
     previous_session_id, snapshot_lines = await _snapshot_lines(archive_repo, kind, min_session_ms)
-    previous_is_stale, earliest_recent_ms = await _recent_window(
+    previous_is_stale, earliest_recent_ms, recent_session_ids = await _recent_window(
         archive_repo,
+        commitments_repo=commitments_repo,
         kind=kind,
         min_session_ms=min_session_ms,
         live_session_id=live_session_id,
@@ -93,11 +95,18 @@ async def build_brief(
     used_archive: Set[int] = set()
     if chat_repo is not None and live_session_id is not None:
         used, used_archive = await load_used_refs(chat_repo, int(live_session_id))
-    taken, earlier = await _pending_commitments(commitments_repo, used)
     saves = dict(current_saves or {})
+    taken, earlier, other_save_rows = await _pending_commitments(
+        commitments_repo,
+        used=used,
+        current_saves=saves,
+        recent_session_ids=recent_session_ids,
+        earliest_recent_ms=earliest_recent_ms,
+    )
     text = render_brief(
         snapshot_lines=snapshot_lines,
         commitments=taken,
+        other_save_commitments=other_save_rows,
         previous_session_id=previous_session_id,
         previous_is_stale=previous_is_stale,
         earliest_recent_ms=earliest_recent_ms,
@@ -142,15 +151,18 @@ async def _snapshot_lines(
 async def _recent_window(
     archive_repo: "ArchiveRepo",
     *,
+    commitments_repo: Optional["CommitmentRepo"] = None,
     kind: SessionKind,
     min_session_ms: int,
     live_session_id: Optional[int],
     snapshot_owner_id: Optional[int],
-) -> Tuple[bool, int]:
-    """算两件事：快照所属场次是不是落后于最近已结束场次（中间有场次没整理完），以及最近三场的开播时刻下界。"""
-    finder = getattr(archive_repo, "recent_ended_session_bounds", None)
-    if finder is None or snapshot_owner_id is None:
-        return False, 0
+) -> Tuple[bool, int, List[int]]:
+    """算三件事：快照是否落后于最近完结场、最近三场的开播时刻下界、最近三场的场次号（新到旧）。"""
+    finder = getattr(archive_repo, "recent_ended_session_bounds", None) or getattr(
+        commitments_repo, "recent_ended_session_bounds", None
+    )
+    if finder is None:
+        return False, 0, []
     try:
         bounds = await finder(
             kind=kind,
@@ -160,13 +172,13 @@ async def _recent_window(
         )
     except Exception as exc:  # noqa: BLE001 - 查不到场次边界时不挡简报，按未落后、不限三场渲染
         logger.warning(f"查最近已结束场次边界失败（简报按常规上一场渲染）: {exc}", exc=exc)
-        return False, 0
+        return False, 0, []
     if not bounds:
-        return False, 0
-    latest_ended_id = int(bounds[0][0])
-    stale = latest_ended_id != int(snapshot_owner_id)
+        return False, 0, []
+    recent_ids = [int(item[0]) for item in bounds]
+    stale = snapshot_owner_id is not None and recent_ids[0] != int(snapshot_owner_id)
     earliest_ms = int(bounds[2][1]) if len(bounds) >= 3 else 0
-    return stale, earliest_ms
+    return stale, earliest_ms, recent_ids
 
 
 async def _unsaved_games(
@@ -207,19 +219,27 @@ async def load_used_refs(chat_repo: "ChatRepo", live_session_id: int) -> Tuple[S
 async def _pending_commitments(
     commitments_repo: "CommitmentRepo",
     used: AbstractSet[int] = frozenset(),
-) -> Tuple[Sequence[Commitment], int]:
-    """不针对具体的人、不挂游戏、本场还没点名用过的未了结承诺（最老的在前）与更多条数。
+    *,
+    current_saves: Optional[Mapping[str, GameSave]] = None,
+    recent_session_ids: Sequence[int] = (),
+    earliest_recent_ms: int = 0,
+) -> Tuple[Sequence[Commitment], int, Sequence[Commitment]]:
+    """切出进【还惦记的事】的近期未了结非私向承诺、搁了很久件数，以及别的存档里的承诺。
 
-    对某位观众、某位游戏玩家的承诺只经线索推送在那个人开口时出现，挂游戏的只在该游戏开着时
-    出现，都不进常驻简报——否则她每场都对着全场念叨不在场的人。
+    对某位观众、某位游戏玩家的承诺只经线索推送在那个人开口时出现，不进常驻简报；
+    挂在当前世界或不挂游戏的公开承诺若最近三场内被提起过（且未过短期时间词时效）进【还惦记的事】，
+    更早搁下的只汇总为一句件数提醒，不再靠轮播刷屏。
     """
     try:
         rows = await commitments_repo.list_commitments(statuses=["open"], limit=_CANDIDATE_LIMIT)
     except Exception as exc:  # noqa: BLE001 - 读不到就当没有待办，简报少一段
         logger.warning(f"读未了结承诺失败（简报不带承诺段）: {exc}", exc=exc)
-        return [], 0
-    candidates = [row for row in rows if not row.has_target and not row.game and int(row.id) not in used]
-    # 仓储按新的在前给，简报要最老的在前
-    candidates.reverse()
-    taken = candidates[:MAX_BRIEF_COMMITMENTS]
-    return taken, max(0, len(candidates) - len(taken))
+        return [], 0, []
+    return partition_brief_commitments(
+        rows,
+        used_ids=used,
+        current_saves=current_saves,
+        recent_session_ids=recent_session_ids,
+        earliest_recent_ms=earliest_recent_ms,
+        limit=MAX_BRIEF_COMMITMENTS,
+    )

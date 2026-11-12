@@ -610,6 +610,7 @@ class StreamerAgent(BaseAgent):
                 passive_enabled=self.typed_config.memory_passive_recall_enabled,
                 search=self._memory_search,
                 vector_enabled=self.typed_config.memory_passive_recall_vector_enabled,
+                min_session_ms=self.typed_config.memory_brief_min_session_ms,
             )
         # 回想工具：她说过的话、档案行、不针对具体人的承诺、本场观众弹幕
         self._memory_recall: Optional[MemoryRecallService] = None

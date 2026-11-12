@@ -255,6 +255,8 @@ class SettleMaterial:
     records_text: str = ""
     # 第四次调用（更新游戏社交事实）的紧凑原料；没接仓储或没有可据以更新的原料时为空
     social: SocialMaterial = field(default_factory=SocialMaterial)
+    # 本场已播出台词里经 use_memory 点名引用过的承诺编号：整理落库时推进最近提起场次
+    mentioned_ref_ids: Set[int] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -276,6 +278,8 @@ class SettleOutcome:
     # 第四次调用核过的社交事实与互动（一起做的事、帮过忙）
     social_facts: List["NewSocialFact"] = field(default_factory=list)
     player_interactions: List["PendingPlayerInteraction"] = field(default_factory=list)
+    # 本场被点名引用或被模型认出重申的未了结承诺编号：落库推进最近提起场次
+    mentioned_commitment_ids: List[int] = field(default_factory=list)
 
 
 @dataclass
@@ -777,6 +781,7 @@ class SessionSettler:
                 player_candidates=outcome.player_candidates,
                 social_facts=outcome.social_facts,
                 player_interactions=outcome.player_interactions,
+                mentioned_commitment_ids=outcome.mentioned_commitment_ids,
             )
         except Exception as exc:  # noqa: BLE001 - 写入失败按整理失败记账，事务已回滚
             logger.warning(f"场次 {live_session_id} 整理写入失败: {exc}", exc=exc)
@@ -927,6 +932,9 @@ class SessionSettler:
             social=await self._material_step(
                 9, self._load_social(session, games, saves, records, remembered_places(place_marks)), progress
             ),
+            mentioned_ref_ids={
+                int(cid) for line in delivered if line.memory_refs for cid in memory_ref_numbers(line.memory_refs)
+            },
         )
 
     async def _material_step(
@@ -1358,9 +1366,16 @@ class SessionSettler:
         # 先认了结、再认新承诺：一行台词点名了某条旧承诺时，那条旧承诺本场有没有了结，
         # 决定这一行里的新答应是"换了个做法"（照常登记）还是"又提了一遍旧事"（不登记、进报告）
         closures, closure_misses = self._validate_closures(closure_rows, material)
+        closed_set = {closure.commitment_id for closure in closures}
+        same_as_mentioned: Set[int] = set()
         commitments, commitment_misses = self._validate_commitments(
-            commitment_rows, material, closed_ids={closure.commitment_id for closure in closures}
+            commitment_rows,
+            material,
+            closed_ids=closed_set,
+            mentioned_out=same_as_mentioned,
         )
+        open_id_set = {int(row.id) for row in material.open_commitments}
+        mentioned_ids = sorted(((material.mentioned_ref_ids | same_as_mentioned) & open_id_set) - closed_set)
         # 人批准的观众来源行：重新整理时接着带进快照，和接住的旧行一起按规则取舍；基底里已有的不重复带
         kept_ids = {int(item.line.id) for item in plan.kept}
         carried = [item for item in material.carried if int(item.line.id) not in kept_ids]
@@ -1394,6 +1409,7 @@ class SessionSettler:
             player_candidates=player_check.candidates,
             social_facts=social_check.facts if social_check is not None else [],
             player_interactions=social_check.interactions if social_check is not None else [],
+            mentioned_commitment_ids=mentioned_ids,
         )
 
     async def _check_player_candidates(self, rows: Any, material: SettleMaterial) -> PlayerCandidateCheck:
@@ -1679,7 +1695,12 @@ class SessionSettler:
         return written, missed
 
     def _validate_commitments(
-        self, rows: List[Any], material: SettleMaterial, *, closed_ids: AbstractSet[int] = frozenset()
+        self,
+        rows: List[Any],
+        material: SettleMaterial,
+        *,
+        closed_ids: AbstractSet[int] = frozenset(),
+        mentioned_out: Optional[Set[int]] = None,
     ) -> Tuple[List[PendingCommitment], List[UnregisteredItem]]:
         """新承诺的校验：逐字引文、所属游戏、对谁、不重复。
 
@@ -1729,6 +1750,8 @@ class SessionSettler:
                 )
                 continue
             if same_as is not None and same_as in open_ids:
+                if mentioned_out is not None:
+                    mentioned_out.add(int(same_as))
                 logger.info(f"场次 {material.live_session_id}：模型认出这是又说了一遍 #{same_as}，不新建")
                 continue
             if same_as is not None and same_as in void_ids:
@@ -1743,6 +1766,8 @@ class SessionSettler:
                 continue
             referenced = memory_ref_numbers(line.memory_refs) if line is not None else set()
             if referenced and not referenced & closed_ids:
+                if mentioned_out is not None:
+                    mentioned_out.update(int(cid) for cid in (referenced & open_ids))
                 # 点名的旧承诺本场都没了结：按又提起旧事处理，不新建；进报告而不是静默丢掉
                 named = "、".join(render_commitment_number(number) for number in sorted(referenced))
                 missed.append(

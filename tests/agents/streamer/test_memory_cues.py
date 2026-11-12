@@ -208,7 +208,8 @@ async def test_new_session_resets_push_counters(store: SQLiteDatabase) -> None:
     assert cues.card_count == 1
 
 
-async def test_game_commitment_card_only_while_that_game_is_open(store: SQLiteDatabase) -> None:
+async def test_game_commitment_does_not_carousel_merely_because_game_is_open(store: SQLiteDatabase) -> None:
+    """游戏承诺取消轮播：仅开着游戏不再每批轮推挂该游戏的承诺卡。"""
     session_id = await _session(store)
     await store.commitments.insert_commitment(what="继续炸 TNT", quote="下次接着炸 TNT", game="Minecraft")
     provider = _provider(store, session_id=session_id)
@@ -216,10 +217,7 @@ async def test_game_commitment_card_only_while_that_game_is_open(store: SQLiteDa
     closed = await provider.collect(batch=[_message()])
     assert closed.card_count == 0
     opened = await provider.collect(batch=[_message()], open_games=["Minecraft"])
-    assert opened.card_count == 1
-    # 卡面点名编号、游戏与她的原话；不写"现在 X 开着"——open_games 是已启用的工具面，
-    # 不代表主播此刻正在玩哪一个
-    assert "[约#" in opened.text and "Minecraft" in opened.text and "下次接着炸 TNT" in opened.text
+    assert opened.card_count == 0 and opened.text == ""
 
 
 async def test_cards_are_capped_per_batch(store: SQLiteDatabase) -> None:
@@ -420,25 +418,37 @@ async def test_without_session_there_are_no_cues(store: SQLiteDatabase) -> None:
     assert cues.text == "" and cues.card_count == 0
 
 
-async def test_game_cards_only_for_the_current_save(store: SQLiteDatabase) -> None:
-    """眼下在新档：老档里答应的不推；新档里答应的照推；没记存档的照推并注明不确定。"""
+async def test_game_commitment_pushes_on_place_arrival_only_for_current_save_and_active_promise(
+    store: SQLiteDatabase,
+) -> None:
+    """游戏承诺在走到提及的地点时单推：别的存档与已搁置的不推，眼下存档的活跃承诺单推。"""
+    s1 = await store.sessions.insert_live_session(started_at_ms=_NOW - 90_000_000)
+    await store.sessions.close_live_session(live_session_id=s1, ended_at_ms=_NOW - 86_000_000)
+    s2 = await store.sessions.insert_live_session(started_at_ms=_NOW - 50_000_000)
+    await store.sessions.close_live_session(live_session_id=s2, ended_at_ms=_NOW - 46_000_000)
     session_id = await _session(store)
-    await store.commitments.insert_commitment(what="修北边的桥", quote="桥下次修完", game="minecraft", save_id="a")
-    here = await store.commitments.insert_commitment(
-        what="去村里换绿宝石", quote="下回去村里换绿宝石", game="minecraft", save_id="b"
+
+    await store.commitments.insert_commitment(
+        what="修北边木桥", quote="桥回头修完", game="minecraft", save_id="a", created_session_id=s2
     )
-    provider = _provider(store, session_id=session_id)
+    # s1 说的带"明天"的短期承诺隔过 s2 没再提，已搁了很久
+    await store.commitments.insert_commitment(
+        what="明天去北边木桥挂灯", quote="明天去北边木桥挂灯", game="minecraft", save_id="b", created_session_id=s1
+    )
+    here = await store.commitments.insert_commitment(
+        what="把北边木桥护栏补齐", quote="把北边木桥护栏补齐", game="minecraft", save_id="b", created_session_id=s2
+    )
+    provider = _passive(store, session_id, _Clock())
     current = {"minecraft": GameSave(id="b", name="新档")}
 
-    cues = await provider.collect(batch=[_message()], open_games=["minecraft"], current_saves=current)
+    # 先在 60 格外记下初始距离，再走进 24 格内触发到达
+    far = {"minecraft": GameSituation(age_ms=1_000, places=[NearbyPlace(name="北边木桥", distance=60)])}
+    near = {"minecraft": GameSituation(age_ms=1_000, places=[NearbyPlace(name="北边木桥", distance=12)])}
+    assert (await provider.collect(batch=[], current_saves=current, situations=far)).card_count == 0
+    cues = await provider.collect(batch=[], current_saves=current, situations=near)
     assert cues.commitment_ids == (here,)
-    assert "桥下次修完" not in cues.text
-
-    await store.execute("UPDATE commitments SET status='closed' WHERE id=?", (here,))
-    unsure = await store.commitments.insert_commitment(what="把仓库理一遍", quote="仓库我下次理", game="minecraft")
-    cues = await provider.collect(batch=[_message()], open_games=["minecraft"], current_saves=current)
-    assert cues.commitment_ids == (unsure,)
-    assert "不确定是在哪个存档里答应的" in cues.text
+    assert "把北边木桥护栏补齐" in cues.text
+    assert "桥回头修完" not in cues.text and "明天去北边木桥挂灯" not in cues.text
 
 
 async def test_viewer_card_says_which_save_the_promise_was_made_in(store: SQLiteDatabase) -> None:
