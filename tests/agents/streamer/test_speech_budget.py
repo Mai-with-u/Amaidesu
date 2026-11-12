@@ -108,3 +108,73 @@ def test_streamer_wires_speech_budget_into_replyer() -> None:
     """装配期把 speech_max_chars 交给表达引擎。"""
     agent = make_streamer_agent({"speech_max_chars": 30})
     assert agent._replyer._speech_max_chars == 30
+
+
+def _modal_replyer(*responses: Response, **config: Any) -> tuple[Replyer, MagicMock, MagicMock]:
+    llm = MagicMock()
+    llm.generate = AsyncMock(side_effect=list(responses))
+    prompt = MagicMock()
+    prompt.render = MagicMock(return_value="PROMPT")
+    return Replyer(config=config, llm_service=llm, prompt_service=prompt), llm, prompt
+
+
+def _rendered(prompt: MagicMock, template: str) -> dict[str, Any]:
+    return {call.args[0]: call.kwargs for call in prompt.render.call_args_list}[template]
+
+
+@pytest.mark.parametrize(
+    ("mode", "target", "expected_budget"),
+    [("play", None, 60), ("play", "m1", 85), ("talk", None, 150), ("talk", "m1", 175)],
+    ids=["play", "play-target", "talk", "talk-target"],
+)
+async def test_budget_follows_speech_mode_and_target(mode: str, target: Optional[str], expected_budget: int) -> None:
+    """边玩边说 60 字、杂谈 150 字；接某位观众时两档都多给 25 字，开头的称呼不挤掉正事。"""
+    replyer, _, prompt = _modal_replyer(
+        Response(success=True, content="好耶", request_id="r"), speech_max_chars=60, talk_speech_max_chars=150
+    )
+    plan = DecisionPlan(should_reply=True, topic_summary="话头", target=target)
+    await replyer.generate(plan, [], speech_mode=mode)
+    turn = _rendered(prompt, "amaidesu_replyer")
+    assert turn["length_rule"].startswith(f"不超过 {expected_budget} 字")
+    system = _rendered(prompt, "amaidesu_replyer_system")
+    if mode == "talk":
+        assert "两三句" in system["speech_style_rule"] and "两三个短句" in turn["pace_rule"]
+    else:
+        assert "一句话说完就停" in system["speech_style_rule"]
+
+
+async def test_shorten_with_target_keeps_the_opening_hook() -> None:
+    """接观众的话却超长：重说要求保留开头的称呼或接话钩子，删后面的枝节。"""
+    long_reply = "观众甲问腰上的旋钮啊——" + "这个旋钮可以调节麦麦的各种参数，" * 8
+    replyer, llm, _ = _modal_replyer(
+        Response(success=True, content=long_reply, request_id="r1"),
+        Response(success=True, content="观众甲问旋钮啊——拧一下我就变精神。", request_id="r2"),
+        speech_max_chars=60,
+    )
+    await replyer.generate(DecisionPlan(should_reply=True, topic_summary="旋钮", target="m1"), [])
+    instruction = llm.generate.await_args_list[1].args[0][0]["content"]
+    assert "开头那个称呼或接住对方的词要留着" in instruction and "不超过 85 字" in instruction
+
+
+async def test_no_game_omits_game_rules_and_section() -> None:
+    """没启用游戏：游戏第一人称规矩、游戏聊天一节、游戏读数要求整段省略。"""
+    replyer, _, prompt = _modal_replyer(Response(success=True, content="好耶", request_id="r"), has_game=False)
+    await replyer.generate(_plan(), [], game_chat=["玩家甲: 你好"], speech_mode="talk")
+    system = _rendered(prompt, "amaidesu_replyer_system")
+    turn = _rendered(prompt, "amaidesu_replyer")
+    assert system["game_rule_line"] == ""
+    assert (turn["game_heading"], turn["game_chat"], turn["game_turn_rules"], turn["game_people_section"]) == (
+        "",
+        "",
+        "",
+        "",
+    )
+
+
+async def test_persona_profile_is_appended_with_usage_note() -> None:
+    replyer, _, prompt = _modal_replyer(
+        Response(success=True, content="好耶", request_id="r"), persona_profile="身份与来历：测试设定"
+    )
+    await replyer.generate(_plan(), [])
+    section = _rendered(prompt, "amaidesu_replyer_system")["persona_profile_section"]
+    assert section.startswith("\n\n身份与来历：测试设定\n") and "聊别的事时不硬扯" in section

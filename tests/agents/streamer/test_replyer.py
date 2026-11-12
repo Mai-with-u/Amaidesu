@@ -89,6 +89,10 @@ async def test_persona_goes_into_system_template_and_turn_data_into_the_turn_tem
         "style_section": "\n\n说话风格：口语化、简短",
         "voice_examples_section": "\n\n下面几句只学口吻，不照搬句子：\n- 诶等一下\n- 行吧行吧",
         "boundaries_rule": "\n- 不答应的事：线下见面",
+        # 没配设定档案：档案段为空串；默认边玩边说档、启用游戏：说话方式与游戏第一人称两条照旧
+        "persona_profile_section": "",
+        "speech_style_rule": "像真人主播随口说话，不像写稿：一次只说一件事，一句话说完就停。",
+        "game_rule_line": '- 游戏里干活的就是你自己，用第一人称说，不说"活已经派下去了"，不提"游戏侧"这类幕后系统。\n',
     }
 
     turn = by_template["amaidesu_replyer"]  # 每轮变化的决策与弹幕；风格与备忘录都不在这里

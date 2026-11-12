@@ -46,6 +46,9 @@ def _render_channels(prompts: Any) -> Dict[str, str]:
             style_section="",
             voice_examples_section="",
             boundaries_rule="",
+            persona_profile_section="",
+            speech_style_rule="像真人主播随口说话，不像写稿：一次只说一件事，一句话说完就停。",
+            game_rule_line="",
         ),
         "mouth": prompts.render(
             "amaidesu_mouth",

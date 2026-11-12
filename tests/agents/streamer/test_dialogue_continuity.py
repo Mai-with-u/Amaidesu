@@ -570,6 +570,9 @@ def test_streamer_prompts_speak_as_one_streamer() -> None:
             style_section="",
             voice_examples_section="",
             boundaries_rule="",
+            persona_profile_section="",
+            speech_style_rule="像真人主播随口说话，不像写稿：一次只说一件事，一句话说完就停。",
+            game_rule_line='- 游戏里干活的就是你自己，用第一人称说，不说"活已经派下去了"，不提"游戏侧"这类幕后系统。\\n',
         )
     finally:
         reset_prompt_manager()
@@ -830,6 +833,9 @@ def test_streamer_prompts_keep_rules(prompts) -> None:
         style_section="",
         voice_examples_section="",
         boundaries_rule="",
+        persona_profile_section="",
+        speech_style_rule="像真人主播随口说话，不像写稿：一次只说一件事，一句话说完就停。",
+        game_rule_line='- 游戏里干活的就是你自己，用第一人称说，不说"活已经派下去了"，不提"游戏侧"这类幕后系统。\\n',
     )
     # 实测主播常说"活已经派下去了"，观众会疑惑派给了谁
     assert "游戏里干活的就是你自己" in replyer and "活已经派下去了" in replyer
@@ -891,6 +897,9 @@ def test_replyer_prompts_speak_like_a_streamer_not_a_group_member(prompts: Any) 
         style_section="",
         voice_examples_section="",
         boundaries_rule="",
+        persona_profile_section="",
+        speech_style_rule="像真人主播随口说话，不像写稿：一次只说一件事，一句话说完就停。",
+        game_rule_line='- 游戏里干活的就是你自己，用第一人称说，不说"活已经派下去了"，不提"游戏侧"这类幕后系统。\\n',
     )
     # 主播是撑场子的人，不是不抢话的群成员：角色定位在人设块，冷场照常说、有态度这类行为在规矩块
     persona, _, rules = system.partition("# 说话的规矩")
@@ -913,6 +922,9 @@ def test_replyer_prompts_speak_like_a_streamer_not_a_group_member(prompts: Any) 
         state_facts="",
         bot_name="麦麦",
         length_rule="整句不超过 40 字。",
+        game_heading="\\n\\n## 游戏里刚有人说的话\\n\\n",
+        game_turn_rules="游戏里有人搭话时，按游戏聊天和交接稿说，别当成观众弹幕或冷场。\\n台词里不念精确的游戏读数（血量、物品数、坐标、倒计时），换成处境白话（血见底了、材料差不多齐了）；观众问起或数字成了剧情（报惨、惊险逃生）才带精确数。\\n",
+        pace_rule="多数话一两句，有事才多说两句，",
     )
     # 主动发言先有自己的内容、反应和态度讲出来（不向空气求助的禁令已撤）
     assert "先有自己的内容，反应和态度要讲出来" in turn
@@ -953,6 +965,9 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
         style_section="",
         voice_examples_section="",
         boundaries_rule="",
+        persona_profile_section="",
+        speech_style_rule="像真人主播随口说话，不像写稿：一次只说一件事，一句话说完就停。",
+        game_rule_line='- 游戏里干活的就是你自己，用第一人称说，不说"活已经派下去了"，不提"游戏侧"这类幕后系统。\\n',
     )
     assert "不像写稿" in system and "一次只说一件事，一句话说完就停" in system
     assert "从零创作" not in system
@@ -971,6 +986,9 @@ def test_prompts_ask_for_one_spoken_line_not_a_written_bit(prompts: Any) -> None
         state_facts="",
         bot_name="麦麦",
         length_rule="",
+        game_heading="\\n\\n## 游戏里刚有人说的话\\n\\n",
+        game_turn_rules="游戏里有人搭话时，按游戏聊天和交接稿说，别当成观众弹幕或冷场。\\n台词里不念精确的游戏读数（血量、物品数、坐标、倒计时），换成处境白话（血见底了、材料差不多齐了）；观众问起或数字成了剧情（报惨、惊险逃生）才带精确数。\\n",
+        pace_rule="多数话一两句，有事才多说两句，",
     )
     assert "✗ 写稿" in turn and "✓ 说话" in turn and "不分段" in turn
     assert "你此刻的想法" in turn and "禁止逐句扩写" in turn
@@ -999,6 +1017,9 @@ def test_prompts_forbid_inventing_off_game_life_events(prompts: Any) -> None:
         style_section="",
         voice_examples_section="",
         boundaries_rule="",
+        persona_profile_section="",
+        speech_style_rule="像真人主播随口说话，不像写稿：一次只说一件事，一句话说完就停。",
+        game_rule_line='- 游戏里干活的就是你自己，用第一人称说，不说"活已经派下去了"，不提"游戏侧"这类幕后系统。\\n',
     )
     assert "不编现实生活经历" in system and "也不编观众以前说过的事" in system
 

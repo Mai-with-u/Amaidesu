@@ -13,16 +13,19 @@ from src.agents.streamer.talk.profile import (
     parse_persona_profile_toml,
     resolve_profile_path,
 )
+from src.agents.streamer.talk.speech_mode import SpeechMode, resolve_speech_mode
 from src.agents.streamer.talk.workbench import MAX_ROUNDS_PER_BEAT, MAX_WORKBENCH_CHARS, TalkWorkbench
 
 __all__ = [
     "DEFAULT_PRESET_COUNT",
     "MAX_ROUNDS_PER_BEAT",
     "MAX_WORKBENCH_CHARS",
+    "SpeechMode",
     "TalkCardStore",
     "TalkWorkbench",
     "TopicDeck",
     "render_cards",
+    "resolve_speech_mode",
     "MAX_PROFILE_CHARS",
     "OutfitEntry",
     "PERSONA_PROFILE_TEMPLATE_MD",

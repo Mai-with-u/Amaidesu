@@ -11,7 +11,7 @@
         planner_recent_intents_max,
         planner_recent_relays_max,
     )
-    speech_max_chars, replyer_history_items
+    speech_max_chars, talk_speech_max_chars, replyer_history_items
 
     [agents.streamer.persona]
     (
@@ -581,6 +581,14 @@ class StreamerConfig(BaseConfig):
         default=60,
         ge=0,
         description="一句台词最多多少字；超出时先让模型重说短一点，仍超就截到预算内最后一个完整句子（0 = 不限制）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    # 杂谈档（纯杂谈场、开场闲聊段、游戏失联等待）一轮能说两三句：上限放宽，出口同样有重说与截短兜底
+    talk_speech_max_chars: int = Field(
+        title="杂谈台词长度预算",
+        default=150,
+        ge=0,
+        description="杂谈档一轮台词最多多少字（两三句自然口语）；接某位观众的话时再多给 25 字（0 = 不限制）",
         json_schema_extra={"x-ui-advanced": True},
     )
     # 表达侧只看最近几条：Replyer 背着整场历史开口，后半场历史挤掉人设、说话像换了个人；

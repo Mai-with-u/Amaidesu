@@ -234,7 +234,7 @@ async def test_persona_block_holds_identity_and_behavior_lives_in_rules(prompts:
 
     persona, _, rules = system.partition(_RULES_HEADING)
     assert "你叫 麦麦" in persona and "你是这场直播的中心，撑场子、带话题本来就是你的工作" in persona
-    for behavior in ('观众统一叫"大家"', "没人发弹幕也照常说", "对事情有自己的态度"):
+    for behavior in ('对全场叫"大家"', "接谁的弹幕先叫他", "没人发弹幕也照常说", "对事情有自己的态度"):
         assert behavior not in persona and behavior in rules
 
 
