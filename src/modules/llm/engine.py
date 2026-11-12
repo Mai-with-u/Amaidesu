@@ -80,6 +80,15 @@ __all__ = ["ClientFactory", "LLMManager", "RetryConfig", "inline_payload_spans"]
 # 持续故障不把 WebUI 告警刷屏；窗口判定用注入时钟，测试可控
 ERROR_ALERT_THROTTLE_MS = 5 * 60 * 1000
 
+# 账户级状态码 → 给运营的行动提示文案：这类错误（欠费/未认证/无权限）故障切换
+# 成功后请求照常跑，"全部模型失败"告警永远不会响，需单独提醒主档要充值/换序。
+# 只收 401/402/403：400 参数错误切换也救不了，最终必然走到全部模型失败由既有告警覆盖
+ACCOUNT_ERROR_STATUS_MESSAGES: Dict[int, str] = {
+    401: "未认证",
+    402: "余额不足",
+    403: "检查权限/封禁",
+}
+
 # provider 客户端构造工厂：接收 provider 配置 dict，返回客户端实例。
 # 缺省路径走 clients 调度表按 client_type 构造；测试注入替身客户端用。
 ClientFactory = Callable[[Dict[str, Any]], Any]
@@ -463,6 +472,8 @@ class LLMManager:
         self._clock = clock or now_ms
         # 上一次"全部模型失败"告警的发布时刻（毫秒）；0 = 从未发布过
         self._last_all_failed_alert_ms: int = 0
+        # 上一次"账户级错误切换"告警的发布时刻（毫秒）；与全模型失败告警各自独立节流
+        self._last_account_alert_ms: int = 0
         # provider 客户端构造工厂：缺省 None 走 clients 调度表，行为与未注入时一致
         self._client_factory = client_factory
         # provider_name -> provider 配置 + 客户端实例（共享连接）
@@ -531,6 +542,37 @@ class LLMManager:
             )
         except Exception as exc:  # noqa: BLE001 - 告警是旁路，不阻断原失败路径
             self.logger.warning(f"发布 LLM 全部模型失败告警失败（已忽略）: profile={profile_name}, err={exc}")
+
+    async def _emit_account_error_alert(
+        self, profile_name: str, failed_model: str, next_model: str, status_code: int
+    ) -> None:
+        """ "账户级错误切换成功"旁路告警：发 core.error 让运营知道主档需要充值/续费/换序。
+
+        与"全部模型失败"告警是两类事件，节流计时各自独立；同一来源 5 分钟窗口
+        内只发第一条（节流判定用注入时钟）。事件总线未挂载或发布异常时只记
+        日志，不影响切换路径。
+        """
+        now = self._clock()
+        if now - self._last_account_alert_ms < ERROR_ALERT_THROTTLE_MS:
+            self.logger.debug(f"账户级错误切换告警处于节流窗口内，跳过发布: profile={profile_name}")
+            return
+        self._last_account_alert_ms = now
+        status_text = ACCOUNT_ERROR_STATUS_MESSAGES.get(status_code, "账户级错误")
+        message = (
+            f"LLM 模型 {failed_model} 账户级错误（HTTP {status_code}，{status_text}），"
+            f"已切换 {next_model}——主档需要充值、续费或换序"
+        )
+        self.logger.error(f"发布 core.error 运行告警: {message}")
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.emit(
+                CoreEvents.CORE_ERROR,
+                CoreErrorPayload(message=message, data={"source": "llm", "profile": profile_name}),
+                source="llm_manager",
+            )
+        except Exception as exc:  # noqa: BLE001 - 告警是旁路，不阻断切换路径
+            self.logger.warning(f"发布 LLM 账户级错误切换告警失败（已忽略）: profile={profile_name}, err={exc}")
 
     async def setup(self, config: Dict[str, Any]) -> None:
         """从三层配置（providers / models / profiles）初始化 LLM 运行时。
@@ -864,7 +906,7 @@ class LLMManager:
             model_kwargs = dict(kwargs)
             if isinstance(model_kwargs.get("request"), GenerateRequest):
                 model_kwargs["request"] = _request_for_model(model_kwargs["request"], resolved_model)
-            response, error = await self._call_one_with_retry(
+            response, error, llm_error = await self._call_one_with_retry(
                 method=method,
                 client=client,
                 provider_cfg=provider_cfg,
@@ -900,6 +942,16 @@ class LLMManager:
                 f"[LLM 故障切换] profile={profile_name} 模型 {resolved_model.model_name} 调用失败，"
                 f"尝试下一个：错误={error}"
             )
+            # 账户级错误（欠费/未认证/无权限）切换到还有备胎时发运营告警：
+            # 切换成功后请求照常跑，"全部模型失败"告警永远不响，运营需被告知主档要充值/换序
+            status_code = getattr(llm_error, "status_code", None)
+            if status_code in ACCOUNT_ERROR_STATUS_MESSAGES and idx + 1 < len(models_to_try):
+                await self._emit_account_error_alert(
+                    profile_name=profile_name,
+                    failed_model=resolved_model.model_name,
+                    next_model=models_to_try[idx + 1].model_name,
+                    status_code=status_code,
+                )
 
         # 全部失败
         self.logger.error(
@@ -936,7 +988,7 @@ class LLMManager:
         start_time: float,
         slow_threshold_ms: int,
         **kwargs: Any,
-    ) -> Tuple[Optional[Response], Optional[str]]:
+    ) -> Tuple[Optional[Response], Optional[str], Optional[LLMError]]:
         """等待当前模型完成，调用方取消时回收整个请求和重试任务。"""
         call_kwargs = dict(kwargs)
         call_kwargs["model"] = model_identifier
@@ -983,7 +1035,7 @@ class LLMManager:
         *,
         profile_name: str,
         model_name: str,
-    ) -> Tuple[Optional[Response], Optional[str]]:
+    ) -> Tuple[Optional[Response], Optional[str], Optional[LLMError]]:
         """等一个模型（连同它的重试）至多 ``give_up_ms``：到点还没返回就收回请求、按失败交回切换循环。
 
         收回走取消：guarded_call 收到取消会关掉底层连接与重试任务；调用方自己的取消照常向上传。
@@ -998,7 +1050,7 @@ class LLMManager:
                 f"[LLM 放弃等待] profile={profile_name} model={model_name} 等了 {give_up_ms}ms 没返回，"
                 "收回请求并按失败处理"
             )
-            return None, f"等了 {give_up_ms}ms 没返回，已放弃"
+            return None, f"等了 {give_up_ms}ms 没返回，已放弃", None
         finally:
             for pending in (task, timer):
                 if not pending.done():
@@ -1018,8 +1070,13 @@ class LLMManager:
         start_time: float,
         slow_threshold_ms: int,
         call_kwargs: Dict[str, Any],
-    ) -> Tuple[Optional[Response], Optional[str]]:
-        """单模型重试循环：按 ``_RETRY_POLICY`` 分类表驱动重试/切换/中止。"""
+    ) -> Tuple[Optional[Response], Optional[str], Optional[LLMError]]:
+        """单模型重试循环：按 ``_RETRY_POLICY`` 分类表驱动重试/切换/中止。
+
+        返回三元组 ``(response, error, llm_error)``：``llm_error`` 是分类异常
+        本体（裸异常兜底 / 空响应失败路径为 None），切换决策处需要读它的
+        细节字段（如 FatalError.status_code）而不是解析错误字符串。
+        """
         max_retries = int(provider_cfg.get("max_retries", self._retry_config.max_retries) or 0)
         base_delay = float(provider_cfg.get("retry_delay", self._retry_config.base_delay) or 0.0)
         max_delay = self._retry_config.max_delay
@@ -1049,7 +1106,7 @@ class LLMManager:
                         kwargs=call_kwargs,
                         start_time=start_time,
                     )
-                    return response, None
+                    return response, None, None
                 last_error = response.error or "未知客户端错误"
             except asyncio.CancelledError:
                 raise
@@ -1062,7 +1119,7 @@ class LLMManager:
                     raise
                 if decision == _RETRY_DECISION_FAILOVER:
                     # Fatal / Timeout 不在同一模型上重试，直接切下一个模型
-                    return None, last_error
+                    return None, last_error, exc
                 # retry：落到底部退避后继续下一轮
             except (asyncio.TimeoutError, Exception) as exc:  # noqa: BLE001
                 # 未分类异常兜底（legacy 客户端/测试桩直接抛裸异常）：维持既有重试行为
@@ -1073,7 +1130,7 @@ class LLMManager:
                 if delay > 0:
                     await asyncio.sleep(delay)
 
-        return None, last_error or "未知错误"
+        return None, last_error or "未知错误", None
 
     # === 清理 ===
 

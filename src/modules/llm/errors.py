@@ -48,9 +48,23 @@ class RetryableError(LLMError):
 
 
 class FatalError(LLMError):
-    """不可恢复失败：请求参数错误 / 鉴权失败等，重试无意义。"""
+    """不可恢复失败：请求参数错误 / 鉴权失败等，重试无意义。
+
+    ``status_code`` 携带触发本错误的 HTTP 状态码（来源是服务端状态拒绝时）；
+    非状态拒绝路径（未识别的 SDK 异常等）为 None。
+    """
 
     default_message = "不可恢复失败，重试无意义"
+
+    def __init__(
+        self,
+        message: Optional[str] = None,
+        *,
+        original: Optional[BaseException] = None,
+        status_code: Optional[int] = None,
+    ) -> None:
+        super().__init__(message, original=original)
+        self.status_code = status_code
 
 
 class UnsendableRequestError(ValueError):

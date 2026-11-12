@@ -214,6 +214,7 @@ class OpenAIClient(BaseLLMClient):
             return FatalError(
                 f"请求被服务端拒绝（HTTP {status}）：{_server_error_detail(exc)}，重试无意义",
                 original=exc,
+                status_code=status,
             )
         # 防御：调用方应传入 _TRANSLATABLE_SDK_ERRORS 内的类型
         return FatalError(f"未识别的 SDK 异常: {type(exc).__name__}", original=exc)

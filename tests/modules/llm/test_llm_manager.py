@@ -15,6 +15,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.core import CoreErrorPayload
 from src.modules.llm.clients import _CLIENT_DISPATCH
 from src.modules.llm.engine import ERROR_ALERT_THROTTLE_MS, LLMManager, RetryConfig
+from src.modules.llm.errors import FatalError
 from src.modules.llm.payload import Response, Usage
 
 
@@ -371,3 +372,89 @@ async def test_failover_backup_success_does_not_alert(event_bus: EventBus, fake_
 
     assert response.success is True and response.model == "m2"
     assert alerts == []
+
+
+# ---------------- 运行告警：账户级错误切换成功旁路发布 core.error ----------------
+
+
+@pytest.mark.parametrize("status_code", [401, 402, 403])
+async def test_account_error_failover_emits_core_error_alert(
+    event_bus: EventBus, fake_clock: Any, status_code: int
+) -> None:
+    """账户级错误切换到备胎成功：发布一条 core.error，文案含状态码、失败模型与切换目标。"""
+    config = _config({"m1": "id-m1", "m2": "id-m2"}, {"planner": ["m1", "m2"]})
+    alerts = _capture_core_error(event_bus)
+
+    async def m1_account_error(**kwargs):
+        if kwargs["model"] == "id-m1":
+            raise FatalError("upstream rejected", status_code=status_code)
+        return _ok("success from m2", model="id-m2")
+
+    manager = await _setup_with_alert_channel(config, _backend(m1_account_error), event_bus, fake_clock)
+    response = await manager.generate("Test", profile="planner")
+    await event_bus.wait_until_drained()
+
+    assert response.success is True and response.model == "m2"
+    assert len(alerts) == 1
+    message = alerts[0].message or ""
+    assert f"HTTP {status_code}" in message
+    assert "m1" in message and "已切换 m2" in message
+    assert "充值" in message
+
+
+async def test_fatal_400_failover_does_not_alert(event_bus: EventBus, fake_clock: Any) -> None:
+    """400 参数错误切换不发账户级告警：它救不回来，最终由"全部模型失败"告警覆盖。"""
+    config = _config({"m1": "id-m1", "m2": "id-m2"}, {"planner": ["m1", "m2"]})
+    alerts = _capture_core_error(event_bus)
+
+    async def m1_bad_request(**kwargs):
+        if kwargs["model"] == "id-m1":
+            raise FatalError("invalid parameter", status_code=400)
+        return _ok("success from m2", model="id-m2")
+
+    manager = await _setup_with_alert_channel(config, _backend(m1_bad_request), event_bus, fake_clock)
+    response = await manager.generate("Test", profile="planner")
+    await event_bus.wait_until_drained()
+
+    assert response.success is True
+    assert alerts == []
+
+
+async def test_account_error_alert_throttled_within_window(event_bus: EventBus, fake_clock: Any) -> None:
+    """账户级切换告警 5 分钟窗口内只发第一条；拨过窗口后才发下一条。"""
+    config = _config({"m1": "id-m1", "m2": "id-m2"}, {"planner": ["m1", "m2"]})
+    alerts = _capture_core_error(event_bus)
+
+    async def m1_account_error(**kwargs):
+        if kwargs["model"] == "id-m1":
+            raise FatalError("insufficient balance", status_code=402)
+        return _ok("success from m2", model="id-m2")
+
+    manager = await _setup_with_alert_channel(config, _backend(m1_account_error), event_bus, fake_clock)
+    await manager.generate("Test", profile="planner")
+    # 402 后每笔请求都会再 402 再切换：窗口内重复发生只发第一条
+    await manager.generate("Test", profile="planner")
+    await event_bus.wait_until_drained()
+    assert len(alerts) == 1
+
+    fake_clock.tick(ERROR_ALERT_THROTTLE_MS)
+    await manager.generate("Test", profile="planner")
+    await event_bus.wait_until_drained()
+    assert len(alerts) == 2
+
+
+async def test_account_error_alert_without_event_bus(fake_clock: Any) -> None:
+    """事件总线未挂载：账户级告警只记日志，切换照常成功不炸。"""
+    config = _config({"m1": "id-m1", "m2": "id-m2"}, {"planner": ["m1", "m2"]})
+
+    async def m1_account_error(**kwargs):
+        if kwargs["model"] == "id-m1":
+            raise FatalError("insufficient balance", status_code=402)
+        return _ok("success from m2", model="id-m2")
+
+    manager = LLMManager(clock=fake_clock.now_ms)
+    manager._retry_config = RetryConfig(max_retries=0)
+    with patch.dict(_CLIENT_DISPATCH, {"openai": MagicMock(return_value=_backend(m1_account_error))}):
+        await manager.setup(config)
+    response = await manager.generate("Test", profile="planner")
+    assert response.success is True and response.model == "m2"
