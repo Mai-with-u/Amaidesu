@@ -16,6 +16,7 @@ from src.agents.minecraft.glance import (
     glance_brief,
     glance_scene,
     glance_world_memory,
+    glance_worth_seeing,
     nearest_places,
 )
 from src.agents.minecraft.maicraft import MaicraftReply, goal_run_of
@@ -413,7 +414,8 @@ async def test_glance_lists_remembered_place_names_but_keeps_them_out_of_the_bri
 
     view = await agent._glance()
 
-    assert {"what": "world_memory", "sections": ["places"]} in server.calls_to("observe")
+    assert {"what": "places"} in server.calls_to("observe")
+    assert {"what": "world_memory"} not in server.calls_to("observe")
     assert view["remembered_places"] == "家、下界传送门（主世界侧）、下界传送门（下界侧）"
     assert "传送门" not in view["brief"], "嘴只讲眼前的事，记住的地点不进一句话现场"
     await agent.stop()
@@ -477,10 +479,8 @@ def test_remembered_places_cache_keeps_nothing_read_across_an_invalidation() -> 
 
 
 def _memory_reads(server: FakeMaicraft) -> int:
-    """宿主真读了几次世界记忆的 places 节（速览缓存没命中的次数）。"""
-    return sum(
-        1 for arguments in server.calls_to("observe") if arguments == {"what": "world_memory", "sections": ["places"]}
-    )
+    """宿主真读了几次紧凑地点视图 observe(what="places")（速览缓存没命中的次数）。"""
+    return sum(1 for arguments in server.calls_to("observe") if arguments == {"what": "places"})
 
 
 async def test_glance_reads_remembered_places_at_most_every_five_minutes() -> None:
@@ -552,30 +552,37 @@ async def test_switching_saves_rereads_and_never_falls_back_to_the_other_save() 
     await agent.stop()
 
 
-class _ModWithoutSections(FakeMaicraft):
-    """旧版 Mod：不认识 observe 的 sections 参数，按未知字段退 invalid_parameter（新版按节取，旧版全给）。"""
+class _ModWithoutPlacesView(FakeMaicraft):
+    """旧版 Mod：还不认识 observe(what="places") 视图，按 invalid_parameter 拒收。"""
 
     async def _observe(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        if "sections" in arguments:
+        if arguments.get("what") == "places":
             return {
                 "ok": False,
                 "error": {
                     "code": "invalid_parameter",
                     "message": "参数有 1 处问题",
-                    "fields": [{"field": "sections", "problem": "没有字段 sections", "advice": "可用的字段：what、id"}],
+                    "fields": [
+                        {
+                            "field": "what",
+                            "problem": "what 不能是 places",
+                            "advice": "可选值：self、scene、detail、world_memory、menu、picture",
+                        }
+                    ],
                 },
             }
         return await super()._observe(arguments)
 
 
 async def test_glance_falls_back_to_the_whole_memory_on_an_old_mod() -> None:
-    """连着旧版 Mod（不认识 sections）时退回整份倾倒的旧问法，地点行照常给出。"""
-    server = _ModWithoutSections()
+    """连着旧版 Mod（不认识 what="places"）时退回整份 world_memory 的旧问法，地点行照常给出。"""
+    server = _ModWithoutPlacesView()
     server.world_memory_view["places"] = [_place("家")]
     agent, _llm, _bus = await make_minecraft_agent(server, lambda messages: _resp("好"))
 
     assert (await agent._glance())["remembered_places"] == "家"
-    assert {"what": "world_memory"} in server.calls_to("observe"), "sections 被拒后退回不带它的旧问法"
+    assert {"what": "places"} in server.calls_to("observe")
+    assert {"what": "world_memory"} in server.calls_to("observe"), "what=places 被拒后退回 world_memory"
     await agent.stop()
 
 
@@ -673,3 +680,130 @@ async def test_a_delegation_is_refused_when_the_game_is_not_connected(provider: 
     else:
         assert refused is not None and refused.startswith("游戏没连上")
         assert len(agent.queued_messages) == 0
+
+
+def test_glance_keeps_distant_hostile_that_is_already_targeting_her() -> None:
+    """D-9（审查报告 4.1）：24 格外不相干的敌对照旧剔除，但已经盯上她（targeting_me=True）的恶魂、骷髅保留。"""
+    scene = {
+        "entities": [
+            {"type": "minecraft:pillager", "distance": 40, "hostile": True, "targeting_me": False},
+            {"type": "minecraft:ghast", "distance": 38, "hostile": True, "targeting_me": True},
+            {"type": "minecraft:skeleton", "distance": 28, "hostile": True, "targeting_me": True},
+            {"type": "minecraft:sheep", "distance": 45, "hostile": False},
+        ],
+        "distant_entities": {"minecraft:zombie": 4, "minecraft:squid": 6},
+    }
+    view = glance_scene(MaicraftReply(ok=True, data=scene))
+    assert "minecraft:ghast（正盯着你） ×1" in view["distant_entities"]
+    assert "minecraft:skeleton（正盯着你） ×1" in view["distant_entities"]
+    assert not any("pillager" in item or "zombie" in item for item in view["distant_entities"])
+
+    brief = glance_brief(view)
+    assert "远处有恶魂、骷髅正盯着你" in brief
+    assert "远处还有鱿鱼、羊" in brief
+
+
+async def test_glance_worth_seeing_surfaces_unopened_loot_unvisited_structures_and_player_activity() -> None:
+    """D-9：速览 worth_seeing 挑出没开过的战利品容器、没去过的洞口/结构与在场玩家的动作；已去过或已开过的不列。"""
+    server = FakeMaicraft()
+    server.scene_view = {
+        "time": "白天",
+        "weather": "晴",
+        "biome": "minecraft:plains",
+        "entities": [
+            {
+                "id": "e1",
+                "type": "lootr:lootr_minecart",
+                "direction": "右侧",
+                "distance": 18,
+                "hostile": False,
+                "traits": {"战利品容器": "是"},
+            },
+            {
+                "id": "e2",
+                "type": "minecraft:player",
+                "name": "玩家甲",
+                "direction": "前方",
+                "distance": 5,
+                "hostile": False,
+                "traits": {"看着你": "是", "手持物": "minecraft:iron_sword"},
+            },
+        ],
+        "features": [
+            {"id": "f1", "kind": "树林", "direction": "后方", "distance": 12, "position": {"x": 0, "y": 64, "z": 10}},
+            {
+                "id": "f2",
+                "kind": "洞口",
+                "direction": "左前方",
+                "distance": 15,
+                "position": {"x": 80, "y": 63, "z": 80},
+            },
+            # 离已记地点「老矿洞」(10, 64, -3) 不到 32 格：算已知地方，不重复当新发现推荐
+            {"id": "f3", "kind": "峡谷", "direction": "左侧", "distance": 10, "position": {"x": 12, "y": 60, "z": 0}},
+        ],
+        "facilities": [
+            {
+                "id": "b1",
+                "block": "lootr:lootr_chest",
+                "direction": "前方",
+                "distance": 9,
+                "whose": "natural_loot",
+                "opened_by_self": False,
+            },
+            {
+                "id": "b2",
+                "block": "lootr:lootr_barrel",
+                "direction": "后方",
+                "distance": 6,
+                "whose": "natural_loot",
+                "opened_by_self": True,
+            },
+            {
+                "id": "b3",
+                "block": "minecraft:chest",
+                "direction": "右侧",
+                "distance": 4,
+                "whose": "player",
+                "last_modified_by": "玩家甲",
+                "opened_by_self": False,
+            },
+        ],
+    }
+    server.world_memory_view["places"] = [_place("老矿洞")]
+    agent, _llm, _bus = await make_minecraft_agent(server, lambda _m: _resp("好"))
+
+    view = await agent._glance()
+    by_block = {item["block"]: item for item in view["facilities"]}
+    assert (
+        by_block["lootr:lootr_chest"]["whose"] == "natural_loot"
+        and by_block["lootr:lootr_chest"]["opened_by_self"] is False
+    )
+    assert (
+        by_block["minecraft:chest"]["whose"] == "player" and by_block["minecraft:chest"]["last_modified_by"] == "玩家甲"
+    )
+    worth = view["worth_seeing"]
+    assert worth.startswith("值得去看的：")
+    assert "前方的没开过的战利品箱子" in worth
+    assert "右侧的战利品箱子矿车" in worth
+    assert "左前方的洞口" in worth
+    assert "玩家甲在前方看着你、拿着铁剑" in worth
+    assert "树林" not in worth and "峡谷" not in worth and "木桶" not in worth
+
+    # 次一级候选：没有 natural_loot 时，whose=no_record 且没开过的容器顶上；什么都没有时不写 worth_seeing
+    no_record_reply = MaicraftReply(
+        ok=True,
+        data={
+            "facilities": [
+                {
+                    "block": "minecraft:barrel",
+                    "direction": "北面",
+                    "distance": 12,
+                    "whose": "no_record",
+                    "opened_by_self": False,
+                }
+            ]
+        },
+    )
+    assert glance_worth_seeing(no_record_reply) == "值得去看的：北面的没开过的无主木桶"
+    assert glance_worth_seeing(MaicraftReply(ok=True, data={"facilities": [], "entities": []})) is None
+    await agent.stop()

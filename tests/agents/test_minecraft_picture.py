@@ -218,7 +218,12 @@ async def test_the_streamer_never_reaches_the_picture_view() -> None:
 
     await agent._glance()
 
-    assert {arguments.get("what") for arguments in server.calls_to("observe")} <= {"self", "scene", "world_memory"}
+    assert {arguments.get("what") for arguments in server.calls_to("observe")} <= {
+        "self",
+        "scene",
+        "places",
+        "world_memory",
+    }
     streamer_tools = {spec.full_name for spec in registry.list_tools(for_agent="streamer")}
     assert "maicraft_observe" not in streamer_tools and "minecraft_glance" in streamer_tools
     await agent.stop()

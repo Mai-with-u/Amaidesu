@@ -59,6 +59,7 @@ from src.agents.minecraft.glance import (
     glance_scene,
     glance_self,
     glance_world_memory,
+    glance_worth_seeing,
     nearby_player_names,
     nearest_places,
     self_position,
@@ -187,11 +188,14 @@ _RESTART_NOTICE = (
 )
 
 
-def _sections_unknown_to_mod(reply: MaicraftReply) -> bool:
-    """Mod 是不是把 ``sections`` 当未知参数拒收了：旧版 Mod 认不出新参数按 ``invalid_parameter`` 退回，
-    错误明细里点名了字段；别的失败（不在世界里、回包超限等）不在此列，不做退回重试。
+def _places_view_unknown_to_mod(reply: MaicraftReply) -> bool:
+    """旧版 Mod 是否还不认识 ``observe(what="places")`` 视图：不认识时按 ``invalid_parameter`` 退回，
+    错误明细里点名了 ``what`` 或 ``places``；别的失败（不在世界里、连接断开等）不做退回重试。
     """
-    return reply.error_code == "invalid_parameter" and "sections" in json.dumps(reply.raw)
+    if reply.error_code != "invalid_parameter":
+        return False
+    raw_text = json.dumps(reply.raw, ensure_ascii=False)
+    return "what" in raw_text or "places" in raw_text
 
 
 # 只读查询目标的操作：一整轮都在查还在跑的目标、没做别的，就是在轮询等结果。
@@ -2243,6 +2247,9 @@ class MinecraftAgent(BaseAgent):
             memory = await self._read_remembered_places()
             dimension = str(view.get("body", {}).get("dimension") or "")
             view.update(glance_world_memory(memory, dimension))
+            worth = glance_worth_seeing(scene, memory.data.get("places") if memory.ok else None, dimension)
+            if worth:
+                view["worth_seeing"] = worth
             # 拿这次读到的位置和地点清单认"走近""离开"了哪个记住的地点（不多读游戏），连同待发的一起发出
             for mark in self._near_places.observe(self._world.save_fields()[0], self._current_situation()):
                 self._queue_place_mark(mark)
@@ -2284,22 +2291,22 @@ class MinecraftAgent(BaseAgent):
         return GameSituation(places=nearest_places(places, where), age_ms=age_ms, players=self._nearby_players)
 
     async def _read_remembered_places(self) -> MaicraftReply:
-        """速览用的记住的地点清单：缓存没到期就用缓存，否则真读一次 ``observe(world_memory)``。
+        """速览用的记住的地点清单：缓存没到期就用缓存，否则真读一次 ``observe(what="places")`` 紧凑视图。
 
-        顺序：缓存还新鲜 -> 直接用；否则读世界记忆的 places 一节 -> 成功就记进缓存（回复里没有地点清单
-        按一个都没记过）；读失败时有这个存档的旧清单就接着用旧的（记个警告，并把清单的岁数交给渲染层
-        标陈旧度），连旧的都没有才把失败原样交给速览照实写。返回值统一成 ``{"places": [...]}`` 形状的
-        回复，交给 ``glance_world_memory`` 现排。
+        顺序：缓存还新鲜 -> 直接用；否则首选读 ``observe(what="places")`` -> 旧版 Mod 不认识该视图退回
+        ``observe(what="world_memory")`` -> 成功就记进缓存（回复里没有地点清单按一个都没记过）；
+        读失败时有这个存档的旧清单就接着用旧的（记个警告，并把清单的岁数交给渲染层标陈旧度），
+        连旧的都没有才把失败原样交给速览照实写。返回值统一成 ``{"places": [...]}`` 形状的回复。
         """
         cached = self._remembered_places.fresh()
         if cached is not None:
             return MaicraftReply(ok=True, data={"places": cached})
         # 读之前记下作废次数：读的途中刚记了地点或换了存档，这次读回的只给这一次速览用，不进缓存
         generation = self._remembered_places.generation
-        # 只要 places 一节：整份倾倒里的容器与资源记录随游玩无界增长，会顶到 Mod 单回包上限被整包退回
-        reply = await self._call_maicraft(OBSERVE, {"what": "world_memory", "sections": ["places"]})
-        if not reply.ok and _sections_unknown_to_mod(reply):
-            # 旧版 Mod 把 sections 当未知参数拒收：退回三节全给的旧问法
+        # 首选 Mod 的紧凑 places 视图：只给命名地点与档案名，不拉整份随游玩无界增长的容器与产地记录
+        reply = await self._call_maicraft(OBSERVE, {"what": "places"})
+        if not reply.ok and _places_view_unknown_to_mod(reply):
+            # 旧版 Mod 把 what="places" 当未知视图拒收：退回整份 world_memory 的旧问法
             reply = await self._call_maicraft(OBSERVE, {"what": "world_memory"})
         if reply.ok:
             raw = reply.data.get("places")

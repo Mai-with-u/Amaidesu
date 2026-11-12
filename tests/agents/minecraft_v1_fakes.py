@@ -238,6 +238,16 @@ class FakeMaicraft(BaseToolProvider):
         what = arguments.get("what", "scene")
         if what == "picture":
             return ok(dict(self.picture_view))
+        if what == "places":
+            if self.world_memory_error:
+                return error("not_in_world", self.world_memory_error)
+            return ok(
+                {
+                    "places": list(self.world_memory_view.get("places") or []),
+                    "regions": list(self.world_memory_view.get("regions") or []),
+                    "record_counts": {},
+                }
+            )
         if what == "world_memory":
             if self.world_memory_error:
                 return error("not_in_world", self.world_memory_error)

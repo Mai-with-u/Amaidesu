@@ -41,6 +41,7 @@ __all__ = [
     "glance_scene",
     "glance_self",
     "glance_world_memory",
+    "glance_worth_seeing",
     "nearby_player_names",
     "REMEMBERED_PLACES_MAX",
     "REMEMBERED_PLACES_TTL_S",
@@ -81,6 +82,8 @@ _MOBS: Dict[str, str] = {
     "witch": "女巫",
     "slime": "史莱姆",
     "phantom": "幻翼",
+    "ghast": "恶魂",
+    "blaze": "烈焰人",
     "pillager": "掠夺者",
     "vindicator": "卫道士",
     "cow": "牛",
@@ -102,6 +105,8 @@ _MOBS: Dict[str, str] = {
     "salmon": "鲑鱼",
     "axolotl": "美西螈",
     "bat": "蝙蝠",
+    "chest_minecart": "运输矿车",
+    "lootr_minecart": "箱子矿车",
     "player": "玩家",
 }
 
@@ -156,7 +161,14 @@ HOSTILE_KINDS: frozenset[str] = frozenset(
 #: 常见设施方块的中文名
 _BLOCKS: Dict[str, str] = {
     "chest": "箱子",
+    "trapped_chest": "陷阱箱",
     "barrel": "木桶",
+    "shulker_box": "潜影盒",
+    "lootr_chest": "箱子",
+    "lootr_trapped_chest": "陷阱箱",
+    "lootr_barrel": "木桶",
+    "lootr_shulker": "潜影盒",
+    "lootr_inventory": "战利品箱",
     "crafting_table": "工作台",
     "furnace": "熔炉",
     "blast_furnace": "高炉",
@@ -166,6 +178,15 @@ _BLOCKS: Dict[str, str] = {
     "brewing_stand": "酿造台",
     "smithing_table": "锻造台",
 }
+
+#: 普通地表地形特征（不算"值得专程去看的未知结构/洞口/村庄"）
+_ORDINARY_TERRAIN_KINDS: frozenset[str] = frozenset({"水体", "树林", "落差"})
+#: 远处逐只实体里带"正盯着角色"时的后缀标记
+_TARGETING_TAG = "（正盯着你）"
+#: 结构/洞口与已记地点水平距离在此范围内视为已去过、不再重复列进"值得去看的"
+_VISITED_PLACE_RADIUS = 32.0
+#: "值得去看的"最多列几项（保持一行紧凑，不挤占速览）
+_WORTH_SEEING_MAX = 4
 
 #: 物品的中文名：只收"照英文原名直译会叫成别的名字"的条目，自定义模组物品为主。
 #: 名字取游戏自己的物品注册名（玩家在游戏里看到的那个名字），照英文原名直译会对不上同一件东西——
@@ -215,14 +236,16 @@ STATUS_DEAD = "已死"
 
 def _mob_name(raw: str) -> str:
     plain = item_name(raw)
-    return _MOBS.get(plain, plain)
+    short = raw.split(":", 1)[-1]
+    return _MOBS.get(plain) or _MOBS.get(short) or plain
 
 
 def _block_name(raw: str) -> str:
     plain = item_name(raw)
-    if plain.endswith("_bed"):
+    short = raw.split(":", 1)[-1]
+    if plain.endswith("_bed") or short.endswith("_bed"):
         return "床"
-    return _BLOCKS.get(plain, plain)
+    return _BLOCKS.get(plain) or _BLOCKS.get(short) or plain
 
 
 def _health_words(health: Any) -> str:
@@ -370,11 +393,18 @@ def glance_brief(view: Dict[str, Any]) -> str:
     ]
     if facilities:
         sentences.append("附近有" + _list_words(facilities, 4))
-    distant = [
-        _mob_name(str(entry).split(" ×", 1)[0].split("（", 1)[0]) for entry in view.get("distant_entities") or []
-    ]
-    if distant:
-        sentences.append("远处还有" + _list_words(distant, 3))
+    distant_targeting: List[str] = []
+    distant_passive: List[str] = []
+    for entry in view.get("distant_entities") or []:
+        head = str(entry).split(" ×", 1)[0]
+        if head.endswith(_TARGETING_TAG):
+            distant_targeting.append(_mob_name(head[: -len(_TARGETING_TAG)].split("（", 1)[0]))
+        else:
+            distant_passive.append(_mob_name(head.split("（", 1)[0]))
+    if distant_targeting:
+        sentences.append("远处有" + _list_words(distant_targeting, 3) + "正盯着你")
+    if distant_passive:
+        sentences.append("远处还有" + _list_words(distant_passive, 3))
     work = view.get("work") if isinstance(view.get("work"), dict) else {}
     goals = [goal for goal in work.get("goals") or [] if isinstance(goal, dict) and goal.get("purpose")]
     if work.get("fatal_fault") is True and work.get("state"):
@@ -511,10 +541,132 @@ def glance_scene(reply: MaicraftReply, nicknames: Optional[Dict[str, str]] = Non
     distant = _distant(data.get("entities"), data.get("distant_entities"))
     if distant:
         result["distant_entities"] = distant
-    facilities = _nearby(data.get("facilities"), ("block", "direction", "distance"))
+    facilities = _nearby(
+        data.get("facilities"),
+        ("block", "direction", "distance", "whose", "last_modified_by", "opened_by_self"),
+    )
     if facilities:
         result["facilities"] = facilities
     return result
+
+
+def _near_remembered_place(
+    center: Any, remembered: List[Dict[str, Any]], dimension: str, radius: float = _VISITED_PLACE_RADIUS
+) -> bool:
+    """某处特征坐标是否落在同一维度已记住地点的 ``radius`` 格以内（是则算已知地点，不再当新发现推荐）。"""
+    if not isinstance(center, dict):
+        return False
+    cx, cz = center.get("x"), center.get("z")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (cx, cz)):
+        return False
+    feat_dim = str(center.get("dimension") or dimension or "")
+    for place in remembered:
+        pos = place.get("position") if isinstance(place.get("position"), dict) else {}
+        if feat_dim and pos.get("dimension") and str(pos.get("dimension")) != feat_dim:
+            continue
+        px, pz = pos.get("x"), pos.get("z")
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (px, pz)):
+            continue
+        if math.hypot(float(px) - float(cx), float(pz) - float(cz)) <= radius:
+            return True
+    return False
+
+
+def _player_activity_note(entity: Dict[str, Any]) -> Optional[str]:
+    """从在场玩家条目提取正在做的事（拿什么、看没看着角色、蹲没蹲着，或就在身边）；远处无动作特征的不单列。"""
+    name = str(entity.get("name") or "").strip()
+    if not name:
+        return None
+    traits = entity.get("traits") if isinstance(entity.get("traits"), dict) else {}
+    distance = entity.get("distance")
+    in_nearby = isinstance(distance, (int, float)) and not isinstance(distance, bool) and distance <= NEARBY_BLOCKS
+    actions: List[str] = []
+    if traits.get("蹲着") == "是":
+        actions.append("蹲着")
+    if traits.get("看着你") == "是":
+        actions.append("看着你")
+    held = str(traits.get("手持物") or "").strip()
+    if held:
+        actions.append(f"拿着{_item_label(held)}")
+    if not actions and not in_nearby:
+        return None
+    where = f"在{entity['direction']}" if entity.get("direction") else "在身边"
+    if actions:
+        return f"{name}{where}{'、'.join(actions)}"
+    return f"{name}{where}"
+
+
+def glance_worth_seeing(
+    scene_reply: MaicraftReply,
+    remembered_places: Optional[List[Any]] = None,
+    dimension: str = "",
+) -> Optional[str]:
+    """从周围观察里挑出有看头的新候选（供主播选题用）：没开过的战利品容器、没去过的结构或村庄、在场玩家的动向。
+
+    只挑眼下真有看头的东西，最多列 ``_WORTH_SEEING_MAX`` 项；什么都没有时返回 ``None``（速览不写空栏）。
+    """
+    if not scene_reply.ok:
+        return None
+    data = scene_reply.data
+    places = [p for p in (remembered_places or []) if isinstance(p, dict)]
+    primary_loot: List[str] = []
+    secondary_loot: List[str] = []
+    for fac in data.get("facilities") or []:
+        if not isinstance(fac, dict) or not fac.get("block"):
+            continue
+        whose = fac.get("whose")
+        opened = fac.get("opened_by_self")
+        where = f"{fac['direction']}的" if fac.get("direction") else "附近的"
+        block_label = _block_name(str(fac["block"]))
+        if whose == "natural_loot" and opened is False:
+            primary_loot.append(f"{where}没开过的战利品{block_label}")
+        elif whose == "no_record" and opened is False:
+            secondary_loot.append(f"{where}没开过的无主{block_label}")
+    entities = [e for e in (data.get("entities") or []) if isinstance(e, dict) and e.get("type")]
+    for ent in entities:
+        traits = ent.get("traits") if isinstance(ent.get("traits"), dict) else {}
+        if traits.get("战利品容器") == "是":
+            where = f"{ent['direction']}的" if ent.get("direction") else "附近的"
+            primary_loot.append(f"{where}战利品{_mob_name(str(ent['type']))}")
+
+    structures: List[str] = []
+    has_village_feature = False
+    for feat in data.get("features") or []:
+        if not isinstance(feat, dict):
+            continue
+        kind = str(feat.get("kind") or "").strip()
+        if not kind or kind in _ORDINARY_TERRAIN_KINDS:
+            continue
+        if "村" in kind:
+            has_village_feature = True
+        if _near_remembered_place(feat.get("position"), places, dimension):
+            continue
+        where = f"{feat['direction']}的" if feat.get("direction") else "附近的"
+        structures.append(f"{where}{kind}")
+
+    if not has_village_feature and any(e.get("type") == "minecraft:villager" for e in entities):
+        has_remembered_village = any(
+            "村" in str(p.get("name") or "") and (not dimension or _in_dimension(p, dimension)) for p in places
+        )
+        if not has_remembered_village:
+            structures.append("附近有村民（可能有没去过的村庄）")
+
+    player_notes: List[str] = []
+    for ent in entities:
+        if ent.get("type") != "minecraft:player":
+            continue
+        note = _player_activity_note(ent)
+        if note:
+            player_notes.append(note)
+
+    loot_candidates = primary_loot if primary_loot else secondary_loot[:2]
+    merged: List[str] = []
+    for item in [*loot_candidates[:2], *structures[:2], *player_notes[:2]]:
+        if item and item not in merged:
+            merged.append(item)
+    if not merged:
+        return None
+    return "值得去看的：" + "；".join(merged[:_WORTH_SEEING_MAX])
 
 
 def glance_world_memory(reply: MaicraftReply, dimension: str = "") -> Dict[str, Any]:
@@ -686,8 +838,12 @@ def _distant(entities: Any, counts: Any) -> List[str]:
             # 没有距离的不知道远近，身边和远处都不算；身边范围内的已经在 entities 里逐只给了
             if not isinstance(distance, (int, float)) or distance <= NEARBY_BLOCKS:
                 continue
-            # 敌对生物不进远处清单，近处威胁由身边敌对句与挨打事件承载
+            # 不相干的远处敌对生物不进远处清单（防断头提及），但已经盯上角色的远处敌对保留并标明，让挨打前有铺垫
             if item.get("hostile") is True:
+                if item.get("targeting_me") is not True:
+                    continue
+                kind = f"{item['type']}{_TARGETING_TAG}"
+                tally[kind] = tally.get(kind, 0) + 1
                 continue
             kind = f"{item['type']}（{item['name']}）" if item.get("name") else str(item["type"])
             tally[kind] = tally.get(kind, 0) + 1
