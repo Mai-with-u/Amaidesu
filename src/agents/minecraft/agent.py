@@ -158,9 +158,16 @@ MINECRAFT_PROFILE = "minecraft"
 _GAME = "minecraft"
 
 # 模型调用失败、身体停下时主播看一眼读到的说法（她本人的口吻）：暂时性失败再派一次活就会重试；
+# 游戏侧模型因余额、鉴权或持续连不上而彻底用不了时，明说派活没用、等运营处理，免得主播反复重派撤单；
 # 请求发不出去且换回执、重开对话都补救不了时，再派活也是同一个结果
 _FAULT_RETRY = "身体出故障了，暂时动不了；再派一次活它会重新试"
+_FAULT_FATAL_MODEL = "游戏那边现在动不了，派活没用，等运营处理"
 _FAULT_STUCK = "身体出故障了，动不了；重新派活也没用，得等后台修好"
+_FATAL_FAULT_REASON_WORDS: Dict[str, str] = {
+    "balance": "余额不足",
+    "auth": "鉴权失败",
+    "unreachable": "连不上",
+}
 # 模型没交付就停下时代发给主播的那句：只说停了、没交付，做没做完不替它下结论
 UNDELIVERED_REPORT_MESSAGE = "游戏那边停了，没交付结果，做没做完不确定"
 # 在做委派却没调交付就停下时先给模型的一次提醒：做完了交付、没做成报卡住，第二次还不交付才记停了没交付
@@ -1050,8 +1057,16 @@ class MinecraftAgent(BaseAgent):
                 return
             if not response.success:
                 self._task_suspended = True
-                self._body_fault = _FAULT_RETRY
-                await self.emit_error(f"LLM 调用失败: {response.error or '未知错误'}")
+                if response.fault_kind is not None:
+                    # 余额耗尽、鉴权失败或全部端点连不上：再派活也只会重复撞同一面墙，明说等运营处理
+                    self._body_fault = _FAULT_FATAL_MODEL
+                    reason_word = _FATAL_FAULT_REASON_WORDS.get(response.fault_kind, response.fault_kind)
+                    await self.emit_error(
+                        f"游戏侧模型不可用（{reason_word}）：{response.error or '未知错误'}；{_FAULT_FATAL_MODEL}"
+                    )
+                else:
+                    self._body_fault = _FAULT_RETRY
+                    await self.emit_error(f"LLM 调用失败: {response.error or '未知错误'}")
                 return
             self._body_fault = ""
             stripped = restarted = False
@@ -2423,6 +2438,8 @@ class MinecraftAgent(BaseAgent):
         else:
             state = "空闲"
         work: Dict[str, Any] = {"state": state, "todo": self._mc_state.todo_doc()["todos"]}
+        if self._body_fault == _FAULT_FATAL_MODEL:
+            work["fatal_fault"] = True
         goals = [
             {key: note[key] for key in ("ability", "purpose", "state", "doing") if key in note}
             for note in self._goal_ledger.all_notes_sorted()

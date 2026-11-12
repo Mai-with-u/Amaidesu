@@ -206,7 +206,7 @@ class OpenAIClient(BaseLLMClient):
         if isinstance(exc, RateLimitError):
             return RetryableError("请求过于频繁（429），稍后重试", original=exc)
         if isinstance(exc, APIConnectionError):
-            return RetryableError("网络连接失败，请检查网络或端点可达性", original=exc)
+            return RetryableError("网络连接失败，请检查网络或端点可达性", original=exc, is_connection_error=True)
         if isinstance(exc, APIStatusError):
             status = exc.status_code
             if status == 429 or status >= 500:

@@ -15,10 +15,14 @@ Engine 按分类做表驱动的重试决策，只消费分类、不对异常做�
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
+
+#: 需要运营介入才能恢复的致命故障类别：余额耗尽（402）、鉴权失败（401/403）、端点持续连不上
+FatalFaultKind = Literal["balance", "auth", "unreachable"]
 
 __all__ = [
     "FatalError",
+    "FatalFaultKind",
     "LLMError",
     "LLMInterruptedError",
     "LLMTimeoutError",
@@ -42,9 +46,24 @@ class LLMError(Exception):
 
 
 class RetryableError(LLMError):
-    """临时性失败：限流 / 服务端故障 / 网络连接失败 / 空响应，可重试。"""
+    """临时性失败：限流 / 服务端故障 / 网络连接失败 / 空响应，可重试。
+
+    ``is_connection_error`` 标识底层端点连接本身未建立（DNS/TCP/TLS 不可达）；
+    Engine 仍按可重试策略在同模型上重试，只有当该用途档全部候选模型走完重试后仍全因连接不通倒下时，
+    才将其记为"连不上"致命故障（区别于 429 限流、5xx 临时故障或空响应）。
+    """
 
     default_message = "临时性失败，可重试"
+
+    def __init__(
+        self,
+        message: Optional[str] = None,
+        *,
+        original: Optional[BaseException] = None,
+        is_connection_error: bool = False,
+    ) -> None:
+        super().__init__(message, original=original)
+        self.is_connection_error = is_connection_error
 
 
 class FatalError(LLMError):

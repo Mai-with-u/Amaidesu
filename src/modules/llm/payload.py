@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
+from src.modules.llm.errors import FatalFaultKind
+
 
 class TextPart(BaseModel):
     """文本内容片段"""
@@ -187,6 +189,9 @@ class Response(BaseModel):
     # assistant 消息（dict 消息用 ``reasoning`` 键），下一步请求即带回给同一个模型
     reasoning_echo: Optional[Reasoning] = None
     error: Optional[str] = None
+    # 该用途档全部候选模型均因需运营介入的致命原因（余额不足/鉴权失败/持续连不上）倒下时填写；
+    # 限流 429、服务端 5xx、单次超时、空响应等可重试瞬时错误或已成功切换备用模型时恒为 None
+    fault_kind: Optional[FatalFaultKind] = None
     # 本次调用的请求历史 ID（账本落库键）；失败路径同样回填
     request_id: str = ""
     # 厂商原始 usage dict 的 JSON 序列化字符串：用于追溯重放（如解析字段更新后回填）；

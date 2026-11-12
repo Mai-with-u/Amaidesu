@@ -377,7 +377,10 @@ def glance_brief(view: Dict[str, Any]) -> str:
         sentences.append("远处还有" + _list_words(distant, 3))
     work = view.get("work") if isinstance(view.get("work"), dict) else {}
     goals = [goal for goal in work.get("goals") or [] if isinstance(goal, dict) and goal.get("purpose")]
-    if goals:
+    if work.get("fatal_fault") is True and work.get("state"):
+        # 模型已因余额、鉴权或连不上而停摆：排在最前面不被 300 字上限截掉，也不被残留目标遮住
+        sentences.insert(0, f"手上：{work['state']}")
+    elif goals:
         doing = f"，眼下{goals[0]['doing']}" if goals[0].get("doing") else ""
         sentences.append(f"手上在{goals[0]['purpose']}{doing}")
     elif work.get("state"):

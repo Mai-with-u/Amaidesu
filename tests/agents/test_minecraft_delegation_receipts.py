@@ -109,3 +109,47 @@ async def test_a_body_that_cannot_send_anything_says_it_is_broken_instead_of_wai
     await _wait_until(lambda: len(_reports(bus)) == 1)
     assert not agent.observation()["body_fault"] and agent._glance_work()["state"] != "卡住了，正等我拿主意"
     await agent.stop()
+
+
+async def test_fatal_model_unavailability_tells_streamer_dispatching_is_futile_even_with_active_goal() -> None:
+    """D-5（场 59）：模型余额耗尽、鉴权失败或连不上时，速览写明"游戏那边现在动不了，派活没用，等运营处理"，
+    且哪怕身上还挂着后台目标也不会被目标描述盖住；恢复成功后故障状态自动清除。"""
+    server = FakeMaicraft()
+    step = 0
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        nonlocal step
+        step += 1
+        if step == 1:
+            return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "suicide", "purpose": "回家"}})])
+        if step == 2:
+            return _resp("等重生通知")
+        if step == 3:
+            return Response(success=False, error="HTTP 402: insufficient balance", fault_kind="balance")
+        return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "回家了"})])
+
+    agent, _llm, bus = await make_minecraft_agent(server, script)
+    agent.receive_delegation(instruction="死一次回家", task_id="d-59-1")
+    await _wait_until(lambda: not agent.batch_active and bool(agent._glance_work().get("goals")))
+
+    # 第 59 场场景：目标还在后台挂着时收到补充或新派活，模型因 402 余额耗尽失败
+    agent.receive_prompt(content="怎么还在水里泡着", source="planner-react")
+    await _wait_until(lambda: len(_errors(bus)) == 1 and not agent.batch_active)
+
+    assert "余额不足" in _errors(bus)[0]
+    glance = await agent._glance()
+    assert glance["work"]["state"] == "游戏那边现在动不了，派活没用，等运营处理"
+    assert glance["work"]["fatal_fault"] is True
+    assert "再派一次活" not in glance["work"]["state"]
+    assert glance["brief"].startswith("手上：游戏那边现在动不了，派活没用，等运营处理。"), (
+        "即使身上挂着未结束的后台目标，一句话现场也必须置顶报出致命故障，不让主播继续重派撤单"
+    )
+
+    # 运营充值恢复后，再推进一次立即清除故障标记
+    agent.receive_prompt(content="修好了，继续", source="operator")
+    server.finish(1, status="done", summary="已回重生点")
+    await _wait_until(lambda: len(_reports(bus)) == 1 and not agent.batch_active)
+    after = await agent._glance()
+    assert "fatal_fault" not in after["work"]
+    assert after["work"]["state"] == "空闲"
+    await agent.stop()

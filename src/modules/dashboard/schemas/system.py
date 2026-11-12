@@ -23,8 +23,19 @@ class EventBusStats(BaseModel):
     total_events: int = 0
 
 
+class LLMFatalFaultItem(BaseModel):
+    """单个 LLM 用途档尚未解除的致命故障（需运营处理：余额不足/鉴权失败/连不上）。"""
+
+    profile: str
+    kind: Literal["balance", "auth", "unreachable"]
+    kind_label: str
+    since_ms: int
+    models: List[str] = []
+    detail: str = ""
+
+
 class SystemStatusResponse(BaseModel):
-    """系统状态响应（v2：采集器/Agent/工具三组 + EventBus 总吞吐）。"""
+    """系统状态响应（v2：采集器/Agent/工具三组 + EventBus 总吞吐 + 持续致命模型故障）。"""
 
     running: bool
     uptime_ms: int
@@ -32,6 +43,7 @@ class SystemStatusResponse(BaseModel):
     python_version: str
     groups: dict[str, GroupStatus]
     event_bus: EventBusStats
+    llm_fatal_faults: List[LLMFatalFaultItem] = []
 
 
 DomainHealthState = Literal["ok", "degraded", "offline", "unknown", "disabled"]

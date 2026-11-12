@@ -1,4 +1,4 @@
-﻿<!--
+<!--
   运行总览（直播间状态板）
 
   首页只回答运营视角的四个问题：
@@ -12,6 +12,27 @@
 -->
 <template>
   <div class="dashboard stagger-in">
+    <!-- 致命模型故障醒目告警（仅余额不足 / 鉴权失败 / 持续连不上触发，可重试瞬时错误不入表） -->
+    <section
+      v-if="fatalFaultAlerts.length > 0"
+      class="fatal-fault-banner"
+      role="alert"
+      aria-live="assertive"
+    >
+      <div class="fatal-fault-head">
+        <span class="fatal-fault-badge">模型不可用 · 需运营处理</span>
+        <span class="fatal-fault-hint">派活重试不会自行恢复，请充值、检查密钥或修复端点连接</span>
+      </div>
+      <ul class="fatal-fault-list">
+        <li v-for="alert in fatalFaultAlerts" :key="alert.profile" class="fatal-fault-item">
+          <strong class="fatal-fault-summary">{{ alert.summary }}</strong>
+          <span v-if="alert.modelsText" class="fatal-fault-models mono">
+            模型：{{ alert.modelsText }}
+          </span>
+        </li>
+      </ul>
+    </section>
+
     <!-- 结论条 -->
     <header class="verdict-bar" :class="`is-${verdict.tone}`">
       <div class="verdict-lamp">
@@ -184,6 +205,7 @@ import { EVENT } from '@/types/events';
 import { useChartPalette } from '@/composables/useECharts';
 import { useKeepAlivePolling } from '@/composables/useKeepAlivePolling';
 import {
+  buildFatalFaultAlerts,
   buildPulse,
   bufferCounts,
   formatUptime,
@@ -354,6 +376,8 @@ const statsStrip = computed<StatItem[]>(() => [
 
 // 结论条：异常 > 降级 > 直播中 > 空闲
 
+const fatalFaultAlerts = computed(() => buildFatalFaultAlerts(status.value?.llm_fatal_faults));
+
 const verdict = computed(() =>
   verdictOf(
     {
@@ -362,6 +386,7 @@ const verdict = computed(() =>
       collectors: collectors.value,
       streamerAvailable: streamerAvailable.value,
       sessions: sessions.value,
+      llmFatalFaults: status.value?.llm_fatal_faults,
     },
     Date.now(),
   ),
@@ -510,6 +535,60 @@ onDeactivated(() => {
 .card-link:hover {
   color: var(--color-primary-light);
 }
+/* 致命模型故障醒目告警 */
+.fatal-fault-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-md) var(--spacing-lg);
+  background: var(--color-danger-bg);
+  border: 2px solid var(--color-danger);
+  border-radius: var(--radius-lg);
+}
+.fatal-fault-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+.fatal-fault-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-danger);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.fatal-fault-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.fatal-fault-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fatal-fault-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+}
+.fatal-fault-summary {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-danger);
+}
+.fatal-fault-models {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 /* 行 1：结论条 */
 .verdict-bar {
   display: flex;

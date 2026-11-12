@@ -259,3 +259,28 @@ def test_changelog_serves_repo_file_and_degrades_to_503(client, monkeypatch: pyt
 
     monkeypatch.setattr(system_api, "_CHANGELOG_PATH", Path("<nonexistent>") / "CHANGELOG.md")
     assert client.get("/api/v1/system/changelog").status_code == 503
+
+
+def test_status_and_health_expose_llm_fatal_faults(mount, config_service: ConfigService) -> None:
+    """D-5：LLMManager 登记了未解除的致命故障（余额/鉴权/连不上）时，/status 与 /health 同步暴露供首页醒目展示。"""
+    fake_llm = MagicMock()
+    fake_llm.fatal_faults.return_value = [
+        {
+            "profile": "planner",
+            "kind": "balance",
+            "kind_label": "余额不足",
+            "since_ms": 1762524082000,
+            "models": ["deepseek-flash"],
+            "detail": "HTTP 402: insufficient balance",
+        }
+    ]
+    c = mount(event_bus=_FakeEventBus({}), config_service=config_service, llm_manager=fake_llm)
+    status_body = c.get("/api/v1/system/status").json()
+    assert len(status_body["llm_fatal_faults"]) == 1
+    assert status_body["llm_fatal_faults"][0]["kind"] == "balance"
+    assert status_body["llm_fatal_faults"][0]["since_ms"] == 1762524082000
+
+    health_body = c.get("/api/v1/system/health").json()
+    llm_by_name = {item["name"]: item for item in health_body["domains"]["llm"]}
+    assert llm_by_name["planner"]["state"] == "offline"
+    assert "余额不足" in llm_by_name["planner"]["detail"]

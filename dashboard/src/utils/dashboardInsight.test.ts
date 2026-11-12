@@ -13,6 +13,7 @@ import {
   PULSE_BUCKETS,
   PULSE_BUCKET_MS,
   type CollectorSummary,
+  buildFatalFaultAlerts,
   bufferCounts,
   buildPulse,
   formatUptime,
@@ -138,6 +139,64 @@ describe('verdictOf 结论条状态机', () => {
       events: [evt('core.error', {}, NOW - 300_001)],
     });
     expect(verdictOf(staleErrorThenIdle, NOW).tone).toBe('idle');
+  });
+
+  it('持续致命模型故障：写出余额不足/鉴权失败/连不上与起始时刻，且过 5 分钟不退回直播中', () => {
+    const sinceMs = new Date(2026, 10, 7, 22, 1, 22).getTime();
+    const alerts = buildFatalFaultAlerts([
+      {
+        profile: 'minecraft',
+        kind: 'balance',
+        kind_label: '余额不足',
+        since_ms: sinceMs,
+        models: ['deepseek-flash'],
+        detail: 'HTTP 402',
+      },
+      {
+        profile: 'planner',
+        kind: 'auth',
+        kind_label: '鉴权失败',
+        since_ms: sinceMs,
+        models: ['ds-chat'],
+        detail: 'HTTP 401',
+      },
+      {
+        profile: 'replyer',
+        kind: 'unreachable',
+        kind_label: '连不上',
+        since_ms: sinceMs,
+        models: ['local-vllm'],
+        detail: 'connection refused',
+      },
+    ]);
+    expect(alerts.map(a => a.summary)).toEqual([
+      'minecraft 模型余额不足（从 22:01 开始）',
+      'planner 模型鉴权失败（从 22:01 开始）',
+      'replyer 模型连不上（从 22:01 开始）',
+    ]);
+    expect(buildFatalFaultAlerts([])).toEqual([]);
+    expect(buildFatalFaultAlerts(undefined)).toEqual([]);
+
+    // 即使 core.error 已过 300s 窗口，只要致命故障未解除，结论条仍保持 error
+    const stillBroken = verdictInput({
+      events: [evt('core.error', {}, sinceMs)],
+      sessions: { items: [], active_session_id: 59 } as VerdictInput['sessions'],
+      llmFatalFaults: [
+        {
+          profile: 'minecraft',
+          kind: 'balance',
+          kind_label: '余额不足',
+          since_ms: sinceMs,
+          models: ['deepseek-flash'],
+          detail: 'HTTP 402',
+        },
+      ],
+    });
+    expect(verdictOf(stillBroken, sinceMs + 20 * 60_000)).toEqual({
+      tone: 'error',
+      phrase: '异常',
+      detail: 'minecraft 模型余额不足（从 22:01 开始）',
+    });
   });
 });
 

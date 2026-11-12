@@ -642,18 +642,18 @@ def test_streamer_guide_hands_place_memos_to_the_game_and_waits_for_the_receipt(
 
 
 def test_game_prompt_keeps_long_term_places_in_remember_not_the_notebook() -> None:
-    """游戏 Agent 提示词：长期地点用 remember（同名覆盖、带维度、必须给 y、同类地点分开起名），笔记重启就清空。"""
+    """游戏 Agent 提示词：长期地点用 remember（同名覆盖、带维度、必须给 y、同类地点分开起名），工作笔记按存档跨重启保留。"""
     reset_prompt_manager()
     try:
         game = get_prompt_manager().render("amaidesu_minecraft_agent")
     finally:
         reset_prompt_manager()
-    assert "## 记住地点" in game and "进程一重启就清空" in game
+    assert "## 记住地点" in game and "按存档跨重启保留" in game
     assert "同名会覆盖" in game and "previous_position" in game
     assert "minecraft:the_nether" in game and "缺 `y` 会被拒" in game
     assert "下界传送门（主世界侧）" in game and "下界传送门（下界侧）" in game
     notebook = build_notebook_spec().description
-    assert "重启就清空" in notebook and "remember" in notebook
+    assert "按存档跨重启保留" in notebook and "remember" in notebook
 
 
 @pytest.mark.parametrize(

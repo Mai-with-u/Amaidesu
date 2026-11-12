@@ -26,6 +26,16 @@ export interface EventBusStats {
   total_events: number;
 }
 
+/** 单个 LLM 用途档尚未解除的致命故障（需运营人工处理：余额不足 / 鉴权失败 / 连不上） */
+export interface LLMFatalFaultItem {
+  profile: string;
+  kind: 'balance' | 'auth' | 'unreachable';
+  kind_label: string;
+  since_ms: number;
+  models: string[];
+  detail: string;
+}
+
 /**
  * 系统状态响应。
  *
@@ -33,6 +43,7 @@ export interface EventBusStats {
  * - `running` / `uptime_ms` / `version` / `python_version`：运行时元信息
  * - `groups`：三组组件运行统计（collectors / agents / tools）
  * - `event_bus`：EventBus 全局吞吐
+ * - `llm_fatal_faults`：当前尚未解除的 LLM 致命故障快照
  */
 export interface SystemStatusResponse {
   running: boolean;
@@ -46,6 +57,7 @@ export interface SystemStatusResponse {
     tools: GroupStatus;
   };
   event_bus: EventBusStats;
+  llm_fatal_faults?: LLMFatalFaultItem[];
 }
 
 /**

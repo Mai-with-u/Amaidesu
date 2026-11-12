@@ -15,7 +15,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.core import CoreErrorPayload
 from src.modules.llm.clients import _CLIENT_DISPATCH
 from src.modules.llm.engine import ERROR_ALERT_THROTTLE_MS, LLMManager, RetryConfig
-from src.modules.llm.errors import FatalError
+from src.modules.llm.errors import FatalError, LLMTimeoutError, RetryableError
 from src.modules.llm.payload import Response, Usage
 
 
@@ -458,3 +458,102 @@ async def test_account_error_alert_without_event_bus(fake_clock: Any) -> None:
         await manager.setup(config)
     response = await manager.generate("Test", profile="planner")
     assert response.success is True and response.model == "m2"
+
+
+# ---------------- 持续致命故障观测：区分余额 / 鉴权 / 连不上 vs 瞬时可重试错误 ----------------
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_kind", "expected_label"),
+    [
+        (FatalError("insufficient balance", status_code=402), "balance", "余额不足"),
+        (FatalError("invalid api key", status_code=401), "auth", "鉴权失败"),
+        (FatalError("account banned", status_code=403), "auth", "鉴权失败"),
+        (RetryableError("connection refused", is_connection_error=True), "unreachable", "连不上"),
+    ],
+)
+async def test_all_failed_fatal_fault_records_profile_since_ms_and_clears_on_recovery(
+    event_bus: EventBus, fake_clock: Any, exc: Exception, expected_kind: str, expected_label: str
+) -> None:
+    """用途档全部模型因 402 / 401 / 403 / 端点连不上倒下时，标记 fault_kind 并登记 since_ms；恢复成功后立即消除。"""
+    config = _config({"m1": "id-m1"}, {"minecraft": ["m1"]})
+    healthy = False
+
+    async def call_model(**kwargs):
+        if healthy:
+            return _ok("recovered", model="id-m1")
+        raise exc
+
+    manager = await _setup_with_alert_channel(config, _backend(call_model), event_bus, fake_clock)
+    first_at = fake_clock.now_ms()
+    first = await manager.generate("Test", profile="minecraft")
+    assert first.success is False
+    assert first.fault_kind == expected_kind
+    faults = manager.fatal_faults()
+    assert len(faults) == 1
+    assert faults[0]["profile"] == "minecraft"
+    assert faults[0]["kind"] == expected_kind
+    assert faults[0]["kind_label"] == expected_label
+    assert faults[0]["since_ms"] == first_at
+
+    # 故障持续期间再次失败，since_ms 保持最初发生时刻不往后漂移
+    fake_clock.tick(60_000)
+    second = await manager.generate("Test", profile="minecraft")
+    assert second.fault_kind == expected_kind
+    assert manager.fatal_faults()[0]["since_ms"] == first_at
+
+    # 充值或网络恢复后首次成功，持续故障立即清空
+    healthy = True
+    recovered = await manager.generate("Test", profile="minecraft")
+    assert recovered.success is True
+    assert manager.fatal_faults() == []
+
+
+@pytest.mark.parametrize(
+    "transient_exc",
+    [
+        RetryableError("请求过于频繁（429），稍后重试"),
+        RetryableError("服务端临时性失败（HTTP 503）"),
+        RetryableError("响应内容为空"),
+        LLMTimeoutError("LLM 请求超时"),
+        FatalError("invalid parameter", status_code=400),
+    ],
+)
+async def test_retryable_or_transient_errors_never_trigger_fatal_fault_banner(
+    event_bus: EventBus, fake_clock: Any, transient_exc: Exception
+) -> None:
+    """副作用护栏：429 限流、5xx 临时故障、空响应、单次超时、400 参数错误都不触发首页致命告警。"""
+    config = _config({"m1": "id-m1"}, {"minecraft": ["m1"]})
+
+    async def transient_fail(**kwargs):
+        raise transient_exc
+
+    manager = await _setup_with_alert_channel(config, _backend(transient_fail), event_bus, fake_clock)
+    res = await manager.generate("Test", profile="minecraft")
+    assert res.success is False
+    assert res.fault_kind is None
+    assert manager.fatal_faults() == []
+
+
+async def test_transient_connection_blip_recovered_by_retry_or_backup_does_not_trigger_fatal_fault(
+    event_bus: EventBus, fake_clock: Any
+) -> None:
+    """副作用护栏：瞬时断连重试后成功、或主档 402 切换到备档成功，用途档整体仍可用，不记入致命故障表。"""
+    config = _config({"m1": "id-m1", "m2": "id-m2"}, {"planner": ["m1", "m2"]})
+    attempts = 0
+
+    async def blip_then_ok(**kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RetryableError("connection reset", is_connection_error=True)
+        return _ok("ok", model=kwargs["model"])
+
+    manager = LLMManager(event_bus=event_bus, clock=fake_clock.now_ms)
+    manager._retry_config = RetryConfig(max_retries=2, base_delay=0.0)
+    with patch.dict(_CLIENT_DISPATCH, {"openai": MagicMock(return_value=_backend(blip_then_ok))}):
+        await manager.setup(config)
+
+    res = await manager.generate("Test", profile="planner")
+    assert res.success is True
+    assert manager.fatal_faults() == []

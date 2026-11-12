@@ -17,6 +17,7 @@ from src.modules.dashboard.schemas.system import (
     EventBusStats,
     GroupStatus,
     HealthResponse,
+    LLMFatalFaultItem,
     SystemStatusResponse,
 )
 from src.modules.dashboard.utils.component_helper import build_config_view, get_v2_component_list
@@ -77,7 +78,21 @@ async def get_system_status(server: ServerDep) -> SystemStatusResponse:
         python_version=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         groups=groups,
         event_bus=event_bus_stats,
+        llm_fatal_faults=_build_llm_fatal_faults(server),
     )
+
+
+def _build_llm_fatal_faults(server: "DashboardServer") -> list[LLMFatalFaultItem]:
+    """只读读取 LLMManager 当前尚未解除的用途档致命故障（余额/鉴权/连不上）。"""
+    llm = server.llm_manager
+    if llm is None or not hasattr(llm, "fatal_faults"):
+        return []
+    try:
+        raw = llm.fatal_faults()
+    except Exception:
+        logger.warning("读取 LLM 致命故障快照失败，按无故障展示", exc=True)
+        return []
+    return [LLMFatalFaultItem(**item) for item in raw if isinstance(item, dict)]
 
 
 def _build_group_status(summaries: list[Any]) -> GroupStatus:
@@ -299,6 +314,7 @@ def _build_llm_items(server: "DashboardServer") -> list[DomainHealthItem]:
         return [DomainHealthItem(name="llm", state="unknown", detail="模型配置不可读")]
     model_by_name = _entries_by_name(model_section, "llm_models")
     provider_by_name = _entries_by_name(model_section, "llm_providers")
+    fatal_by_profile = {item.profile: item for item in _build_llm_fatal_faults(server)}
     items: list[DomainHealthItem] = []
     for profile_name, profile in profiles.items():
         if not isinstance(profile, dict):
@@ -310,7 +326,13 @@ def _build_llm_items(server: "DashboardServer") -> list[DomainHealthItem]:
         primary, backups = str(model_list[0]), [str(m) for m in model_list[1:]]
         missing_backups = [m for m in backups if m not in model_by_name]
         primary_model = model_by_name.get(primary)
-        if primary_model is None:
+        active_fault = fatal_by_profile.get(str(profile_name))
+        last_error = ""
+        if active_fault is not None:
+            state = "offline"
+            detail = f"{active_fault.kind_label}（主 {primary}）"
+            last_error = active_fault.detail
+        elif primary_model is None:
             state, detail = "offline", f"主模型 {primary} 未注册"
         else:
             provider_cfg = provider_by_name.get(str(primary_model.get("api_provider", "")), {})
@@ -320,7 +342,9 @@ def _build_llm_items(server: "DashboardServer") -> list[DomainHealthItem]:
                 state, detail = "degraded", f"备模型未注册：{'、'.join(missing_backups)}"
             else:
                 state, detail = "ok", f"主 {primary}" + (f" / 备 {'、'.join(backups)}" if backups else "")
-        items.append(DomainHealthItem(name=str(profile_name), state=state, detail=detail))  # type: ignore[arg-type]
+        items.append(
+            DomainHealthItem(name=str(profile_name), state=state, detail=detail, last_error=last_error)  # type: ignore[arg-type]
+        )
     return items
 
 

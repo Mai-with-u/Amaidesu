@@ -10,7 +10,7 @@
 // nowMs 参数，函数自身不取时钟；柱色等呈现值同样由调用方传入，保持纯函数。
 
 import { EVENT, isPlannerEvent } from '@/types/events';
-import type { LiveSessionListResponse, ToolEntry } from '@/types';
+import type { LiveSessionListResponse, LLMFatalFaultItem, ToolEntry } from '@/types';
 import type { FeedEvent } from './liveFeed';
 import { formatTimeHM } from './format';
 
@@ -48,14 +48,57 @@ export interface VerdictInput {
   collectors: CollectorSummary[];
   streamerAvailable: boolean;
   sessions: LiveSessionListResponse | null;
+  llmFatalFaults?: LLMFatalFaultItem[];
+}
+
+export interface FatalFaultAlertLine {
+  profile: string;
+  kindLabel: string;
+  sinceText: string;
+  modelsText: string;
+  summary: string;
+  detail: string;
+}
+
+const FATAL_KIND_FALLBACK: Record<LLMFatalFaultItem['kind'], string> = {
+  balance: '余额不足',
+  auth: '鉴权失败',
+  unreachable: '连不上',
+};
+
+/**
+ * 把后端尚未解除的 LLM 致命故障快照格式化成首页醒目横幅条目：
+ * 写明哪个用途档、是余额不足 / 鉴权失败 / 连不上，以及从几点开始。
+ */
+export function buildFatalFaultAlerts(
+  faults: readonly LLMFatalFaultItem[] | undefined,
+): FatalFaultAlertLine[] {
+  if (!faults || faults.length === 0) return [];
+  return faults.map(item => {
+    const kindLabel = item.kind_label || FATAL_KIND_FALLBACK[item.kind] || '不可用';
+    const sinceText = `从 ${formatTimeHM(item.since_ms)} 开始`;
+    const modelsText = item.models.length > 0 ? item.models.join(' / ') : '';
+    return {
+      profile: item.profile,
+      kindLabel,
+      sinceText,
+      modelsText,
+      summary: `${item.profile} 模型${kindLabel}（${sinceText}）`,
+      detail: item.detail,
+    };
+  });
 }
 
 /**
- * 结论条状态机：工具熔断 → 近 5 分钟 core.error → 启用未运行的采集器 →
- * 主播 Agent 未注册 → 活跃场次 → 空闲。判定顺序即优先级，文案逐条对应。
+ * 结论条状态机：持续致命模型故障 → 工具熔断 → 近 5 分钟 core.error →
+ * 启用未运行的采集器 → 主播 Agent 未注册 → 活跃场次 → 空闲。
  */
 export function verdictOf(input: VerdictInput, nowMs: number): Verdict {
-  // a) 异常：工具熔断 或 最近 5 分钟内的 core.error
+  // a) 异常：持续致命模型故障 / 工具熔断 / 最近 5 分钟内的 core.error
+  const fatalAlerts = buildFatalFaultAlerts(input.llmFatalFaults);
+  if (fatalAlerts.length > 0) {
+    return { tone: 'error', phrase: '异常', detail: fatalAlerts[0].summary };
+  }
   const tripped = input.tools.filter(t => t.health?.state === 'tripped');
   if (tripped.length > 0) {
     const head = tripped[0];

@@ -23,6 +23,7 @@ profile 解析与 provider 池/模型索引的装配在 :mod:`src.modules.llm.bo
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import json
 import random
 import re
@@ -50,6 +51,7 @@ from src.modules.llm.call_observer import CallObserver
 from src.modules.llm.clients import resolve_client_method
 from src.modules.llm.errors import (
     FatalError,
+    FatalFaultKind,
     LLMError,
     LLMInterruptedError,
     LLMTimeoutError,
@@ -74,7 +76,14 @@ from src.modules.storage.repos import LLMRepo
 from src.modules.utils.time_utils import now_ms
 from src.modules.vision.image_store import get_image_store
 
-__all__ = ["ClientFactory", "LLMManager", "RetryConfig", "inline_payload_spans"]
+__all__ = [
+    "ClientFactory",
+    "FATAL_FAULT_LABELS",
+    "LLMManager",
+    "ProfileFatalFault",
+    "RetryConfig",
+    "inline_payload_spans",
+]
 
 # 同类运行故障告警的最小重发间隔（毫秒）：5 分钟窗口内只发布第一条 core.error，
 # 持续故障不把 WebUI 告警刷屏；窗口判定用注入时钟，测试可控
@@ -88,6 +97,49 @@ ACCOUNT_ERROR_STATUS_MESSAGES: Dict[int, str] = {
     402: "余额不足",
     403: "检查权限/封禁",
 }
+
+#: 致命不可用类别 → 给运营首页与日志展示的简短中文名
+FATAL_FAULT_LABELS: Dict[FatalFaultKind, str] = {
+    "balance": "余额不足",
+    "auth": "鉴权失败",
+    "unreachable": "连不上",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileFatalFault:
+    """单个用途档当前尚未解除的致命故障快照。
+
+    只有整条候选模型链全军覆没、且根因属于需运营人工处理的类别（余额不足 402、
+    鉴权失败 401/403、全部端点重试后仍连不上）时才登记；429 限流、5xx 临时故障、
+    单次超时、空响应等可重试瞬时错误不入表。``since_ms`` 保留首次进入该类故障的时刻，
+    直到该用途档后续任一调用恢复成功或证明网络/账户已通才清除。
+    """
+
+    profile: str
+    kind: FatalFaultKind
+    since_ms: int
+    last_seen_ms: int
+    models: Tuple[str, ...]
+    detail: str
+
+
+def _classify_all_failed_fault(llm_errors: List[Optional[LLMError]]) -> Optional[FatalFaultKind]:
+    """当某用途档全部候选模型均失败时，判定是否属于需运营介入的致命不可用。
+
+    判定顺序：402 余额不足 > 401/403 鉴权失败 > 所有候选模型均在重试后仍连不上端点。
+    429、5xx、超时、空响应、400 参数错误及未分类异常均返回 None（可重试瞬时错误不误报）。
+    """
+    if not llm_errors:
+        return None
+    if any(isinstance(err, FatalError) and err.status_code == 402 for err in llm_errors):
+        return "balance"
+    if any(isinstance(err, FatalError) and err.status_code in (401, 403) for err in llm_errors):
+        return "auth"
+    if all(isinstance(err, RetryableError) and err.is_connection_error for err in llm_errors):
+        return "unreachable"
+    return None
+
 
 # provider 客户端构造工厂：接收 provider 配置 dict，返回客户端实例。
 # 缺省路径走 clients 调度表按 client_type 构造；测试注入替身客户端用。
@@ -474,6 +526,8 @@ class LLMManager:
         self._last_all_failed_alert_ms: int = 0
         # 上一次"账户级错误切换"告警的发布时刻（毫秒）；与全模型失败告警各自独立节流
         self._last_account_alert_ms: int = 0
+        # profile_name -> 当前持续中的致命不可用故障（供 WebUI 首页常驻醒目告警只读观测）
+        self._fatal_faults: Dict[str, ProfileFatalFault] = {}
         # provider 客户端构造工厂：缺省 None 走 clients 调度表，行为与未注入时一致
         self._client_factory = client_factory
         # provider_name -> provider 配置 + 客户端实例（共享连接）
@@ -516,6 +570,49 @@ class LLMManager:
         """
         if self._event_bus is None:
             self._event_bus = event_bus
+
+    def fatal_faults(self) -> List[Dict[str, Any]]:
+        """返回当前所有尚未解除的用途档致命故障快照（按首次发生时刻升序，只读无副作用）。"""
+        ordered = sorted(self._fatal_faults.values(), key=lambda item: (item.since_ms, item.profile))
+        return [
+            {
+                "profile": item.profile,
+                "kind": item.kind,
+                "kind_label": FATAL_FAULT_LABELS[item.kind],
+                "since_ms": item.since_ms,
+                "models": list(item.models),
+                "detail": item.detail,
+            }
+            for item in ordered
+        ]
+
+    def _record_fatal_fault(
+        self,
+        profile_name: str,
+        fault_kind: Optional[FatalFaultKind],
+        attempted_models: List[str],
+        last_error: Optional[str],
+        llm_errors: List[Optional[LLMError]],
+    ) -> None:
+        """全部候选模型失败后同步致命故障表：同类别延续最早的 since_ms；瞬时可重试错误不入表。"""
+        if fault_kind is None:
+            existing = self._fatal_faults.get(profile_name)
+            # 之前记为"连不上"、但这次已经有模型返回了服务端响应（如 429/5xx/空响应）：连接已通，清掉旧不可达标记
+            if existing is not None and existing.kind == "unreachable":
+                if any(not (isinstance(err, RetryableError) and err.is_connection_error) for err in llm_errors):
+                    self._fatal_faults.pop(profile_name, None)
+            return
+        now = self._clock()
+        existing = self._fatal_faults.get(profile_name)
+        since_ms = existing.since_ms if existing is not None and existing.kind == fault_kind else now
+        self._fatal_faults[profile_name] = ProfileFatalFault(
+            profile=profile_name,
+            kind=fault_kind,
+            since_ms=since_ms,
+            last_seen_ms=now,
+            models=tuple(attempted_models),
+            detail=last_error or "",
+        )
 
     async def _emit_all_failed_alert(
         self, profile_name: str, attempted_models: List[str], last_error: Optional[str]
@@ -610,6 +707,7 @@ class LLMManager:
         self._profiles.clear()
         self._profile_call_counts.clear()
         self._model_call_counts.clear()
+        self._fatal_faults.clear()
         self._rng = None
         # 原地清空不改引用：观测器按引用持有价格表，重绑会使其拿到永久空表
         self._model_prices.clear()
@@ -889,6 +987,7 @@ class LLMManager:
         self._profile_call_counts[profile_name] = self._profile_call_counts.get(profile_name, 0) + 1
 
         attempted_models: List[str] = []
+        llm_errors: List[Optional[LLMError]] = []
         last_error: Optional[str] = None
 
         for idx, resolved_model in enumerate(models_to_try):
@@ -920,6 +1019,8 @@ class LLMManager:
             )
 
             if response is not None:
+                # 任一候选模型调用成功即解除该用途档的持续致命故障记录（如充值或恢复网络后自动消警）
+                self._fatal_faults.pop(profile_name, None)
                 # 派生副本回填引擎侧字段（请求历史键 + 模型名归一 + 思考回传），
                 # 不改写 Client 返回的响应对象——它可能被客户端复用，改写会污染后续调用
                 response = response.model_copy(
@@ -937,6 +1038,7 @@ class LLMManager:
                     )
                 return response
 
+            llm_errors.append(llm_error)
             last_error = error
             self.logger.warning(
                 f"[LLM 故障切换] profile={profile_name} 模型 {resolved_model.model_name} 调用失败，"
@@ -953,7 +1055,9 @@ class LLMManager:
                     status_code=status_code,
                 )
 
-        # 全部失败
+        # 全部失败：区分需运营处理的致命故障（余额/鉴权/持续连不上）与瞬时可重试错误
+        fault_kind = _classify_all_failed_fault(llm_errors)
+        self._record_fatal_fault(profile_name, fault_kind, attempted_models, last_error, llm_errors)
         self.logger.error(
             f"[LLM 全部失败] profile={profile_name} 尝试模型 {attempted_models} 均失败，最后错误={last_error}"
         )
@@ -962,6 +1066,7 @@ class LLMManager:
             success=False,
             content=None,
             error=f"全部模型失败 {attempted_models}: {last_error}",
+            fault_kind=fault_kind,
             request_id=request_id,
         )
         await self._observer.record_call(
@@ -1084,6 +1189,7 @@ class LLMManager:
         total_attempts = max(max_retries, 1)
 
         last_error: Optional[str] = None
+        last_llm_error: Optional[LLMError] = None
         for attempt in range(total_attempts):
             attempt_start = time.time()
             try:
@@ -1108,12 +1214,14 @@ class LLMManager:
                     )
                     return response, None, None
                 last_error = response.error or "未知客户端错误"
+                last_llm_error = None
             except asyncio.CancelledError:
                 raise
             except LLMError as exc:
                 # 分类表驱动：按 Client 产出的分类查决策表，不解析异常内容
                 decision = _RETRY_POLICY.get(type(exc), _RETRY_DECISION_FAILOVER)
                 last_error = f"{type(exc).__name__}: {exc}"
+                last_llm_error = exc
                 if decision == _RETRY_DECISION_ABORT:
                     # 中断整体中止，向调用方传播
                     raise
@@ -1124,13 +1232,14 @@ class LLMManager:
             except (asyncio.TimeoutError, Exception) as exc:  # noqa: BLE001
                 # 未分类异常兜底（legacy 客户端/测试桩直接抛裸异常）：维持既有重试行为
                 last_error = f"{type(exc).__name__}: {exc}"
+                last_llm_error = None
 
             if attempt < total_attempts - 1:
                 delay = min(base_delay * (2**attempt), max_delay)
                 if delay > 0:
                     await asyncio.sleep(delay)
 
-        return None, last_error or "未知错误", None
+        return None, last_error or "未知错误", last_llm_error
 
     # === 清理 ===
 
@@ -1153,5 +1262,6 @@ class LLMManager:
         self._profiles.clear()
         self._profile_call_counts.clear()
         self._model_call_counts.clear()
+        self._fatal_faults.clear()
         self._model_prices.clear()
         self._model_context_windows.clear()
