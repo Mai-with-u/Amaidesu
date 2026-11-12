@@ -49,6 +49,7 @@ __all__ = [
     "IndexDoc",
     "IndexVector",
     "KeptSnapshotLine",
+    "MemoryCorrection",
     "NewCueLogEntry",
     "PendingArchiveLine",
     "PendingViewerCandidate",
@@ -277,6 +278,38 @@ class SideEffectStats(BaseModel):
     )
     self_triggered_cards: int = Field(default=0, description="只由她自己的台词触发的卡数（防打转的口径）")
     max_cards_per_player: int = Field(default=0, description="同一位游戏玩家这一场被推卡最多的张数")
+    opening_mentions_5m: int = Field(default=0, description="开场头五分钟内点名提旧事的台词句数")
+    corrections_made: int = Field(default=0, description="本场记录的场内更正条数（含运营纠正）")
+    corrections_reverted: int = Field(default=0, description="本场场内更正被人工撤回的条数")
+    settle_lag_ms: int = Field(default=0, description="下播整理完成时刻与本场结束时刻的差值（毫秒）")
+
+
+class MemoryCorrection(BaseModel):
+    """``memory_corrections`` 一行：主播决策工具或运营递话在本场留下的记忆更正。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int = Field(..., description="更正主键（自增）")
+    live_session_id: int = Field(..., description="所属场次主键")
+    target_kind: Literal["archive", "commitment", "general"] = Field(
+        ..., description="更正目标类型：档案行 / 承诺 / 无特定目标的本场运营纠正"
+    )
+    archive_line_id: Optional[int] = Field(default=None, description="目标档案行主键")
+    commitment_id: Optional[int] = Field(default=None, description="目标承诺主键")
+    verdict: Literal["done", "invalid", "wrong", "note"] = Field(
+        ..., description="结论：done 做完了 / invalid 不成立了 / wrong 记错了 / note 运营补充纠正"
+    )
+    summary: str = Field(..., description="一句话说明现状")
+    evidence_kind: Literal["game_receipt", "player_chat", "operator", "self_seen"] = Field(
+        ..., description="证据类别：游戏回执 / 玩家公屏 / 运营提醒 / 亲眼看到"
+    )
+    evidence_quote: str = Field(default="", description="证据逐字片段")
+    evidence_game_chat_id: Optional[int] = Field(default=None, description="引用的玩家公屏行主键（删玩家级联删除）")
+    source: Literal["streamer", "operator"] = Field(..., description="来源：streamer 主播工具 / operator 运营递话")
+    prev_commitment_status: str = Field(default="", description="当场改写承诺前的原状态（供人工撤回还原）")
+    created_at_ms: int = Field(..., description="记录时刻（Unix epoch 毫秒）")
+    reverted_at_ms: Optional[int] = Field(default=None, description="人工撤回时刻；None 表示生效中")
+    settled_disposition: str = Field(default="", description="下播整理处理结果（applied / unhandled / 空串未整理）")
 
 
 class SettleReport(BaseModel):

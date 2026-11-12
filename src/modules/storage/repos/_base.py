@@ -19,6 +19,11 @@ class BaseRepo:
     def __init__(self, manager: SQLiteConnectionManager) -> None:
         self._manager = manager
 
+    @property
+    def connection_manager(self) -> SQLiteConnectionManager:
+        """暴露共享连接管理器，供同进程按需派生相邻记忆表仓储而不穿透私有成员。"""
+        return self._manager
+
     async def _run_in_executor(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
         """统一 ``asyncio.to_thread`` 防漏（仓储内所有同步调用都走这里）。"""
         return await run_in_executor(fn, *args, **kwargs)

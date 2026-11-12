@@ -42,6 +42,7 @@ from src.modules.storage.repos import (
     GamePlayerRepo,
     GameWorkDocsRepo,
     LLMRepo,
+    MemoryCorrectionRepo,
     MemoryCueLogRepo,
     MemoryIndexRepo,
     MemoryReviewRepo,
@@ -155,6 +156,8 @@ class SQLiteDatabase:
         self.clips = ClipRepo(self._manager)
         # 游戏社交事实：她与游戏里的人怎么相处的可核对事实（场内工具登记，下播整理归纳）
         self.social_facts = SocialFactRepo(self._manager)
+        # 场内更正：主播决策工具或运营递话在本场对简报行或承诺的当场纠正
+        self.memory_corrections = MemoryCorrectionRepo(self._manager)
 
     # -------------------- 属性 --------------------
 

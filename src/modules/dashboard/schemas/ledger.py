@@ -23,6 +23,7 @@ class CommitmentItem(BaseModel):
     status: str = Field(description="open 未了结 / closed 已了结 / void 判误记")
     created_session_id: Optional[int] = Field(default=None, description="登记它的场次")
     close_quote: Optional[str] = Field(default=None, description="了结那句的原话")
+    close_source: str = Field(default="", description="关闭来源：空 / settle 整理 / correction 场内更正 / human 人工")
     created_at_ms: int = Field(description="登记时刻（Unix 毫秒）")
     updated_at_ms: int = Field(description="最近更新时刻（Unix 毫秒）")
 
@@ -178,3 +179,29 @@ class LedgerMutationResponse(BaseModel):
 
     success: bool = Field(description="是否改到了数据")
     detail: str = Field(default="", description="给页面看的说明")
+
+
+class MemoryCorrectionItem(BaseModel):
+    """一条场内记忆更正或运营常驻提醒记录。"""
+
+    id: int = Field(description="更正记录主键")
+    live_session_id: int = Field(description="所属场次")
+    target_kind: str = Field(description="archive 档案行 / commitment 承诺 / general 运营提醒")
+    archive_line_id: Optional[int] = Field(default=None, description="更正目标档案行主键")
+    commitment_id: Optional[int] = Field(default=None, description="更正目标承诺主键")
+    verdict: str = Field(description="done 已做完 / invalid 不成立 / wrong 当初记错 / note 运营提醒")
+    summary: str = Field(description="一句话现状说明")
+    evidence_kind: str = Field(description="game_receipt / player_chat / operator / self_seen")
+    evidence_quote: str = Field(default="", description="本场依据逐字片段")
+    source: str = Field(default="streamer", description="streamer 主播工具 / operator 运营")
+    prev_commitment_status: str = Field(default="", description="更正前承诺原状态（供撤回还原）")
+    created_at_ms: int = Field(description="记录时刻（Unix 毫秒）")
+    reverted_at_ms: Optional[int] = Field(default=None, description="人工撤回时刻；空 = 生效中")
+    settled_disposition: str = Field(default="", description="下播整理核对结果（applied / unhandled）")
+
+
+class MemoryCorrectionListResponse(BaseModel):
+    """某一场的场内记忆更正列表。"""
+
+    live_session_id: int = Field(description="场次主键")
+    items: List[MemoryCorrectionItem] = Field(default_factory=list, description="场内更正，按记录先后")

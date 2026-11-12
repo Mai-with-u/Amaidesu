@@ -50,12 +50,15 @@ from src.modules.dashboard.schemas.ledger import (
     CommitmentItem,
     CommitmentListResponse,
     LedgerMutationResponse,
+    MemoryCorrectionItem,
+    MemoryCorrectionListResponse,
     NearCommitment,
     SettleListResponse,
     SettleSessionItem,
 )
-from src.modules.storage.models.memory import Commitment, SettleReport, ViewerCandidate
+from src.modules.storage.models.memory import Commitment, MemoryCorrection, SettleReport, ViewerCandidate
 from src.modules.storage.privacy import mask_names_in_text
+from src.modules.storage.repos.memory_corrections import MemoryCorrectionRepo
 from src.modules.storage.repos.memory_review import MAX_PINNED_LINES, MemoryReviewError
 from src.modules.storage.repos.sessions import MAX_SETTLE_ATTEMPTS
 from src.modules.types.session_kind import SESSION_KIND_LIVE
@@ -121,6 +124,7 @@ def _to_item(commitment: Commitment, viewer_name: Optional[str]) -> CommitmentIt
         status=commitment.status,
         created_session_id=commitment.created_session_id,
         close_quote=commitment.close_quote,
+        close_source=commitment.close_source,
         created_at_ms=commitment.created_at_ms,
         updated_at_ms=commitment.updated_at_ms,
     )
@@ -541,6 +545,62 @@ async def reject_candidate(candidate_id: int, candidates: CandidateRepoDep) -> L
     except MemoryReviewError as exc:
         _raise_review_error(exc)
     return LedgerMutationResponse(success=True, detail="已驳回，以后不再列这一条")
+
+
+def _correction_repo(archive: ArchiveRepoDep) -> MemoryCorrectionRepo:
+    """从同库档案仓储派生场内更正仓储；底层非 SQLite 连接管理器时回 503。"""
+    cm = getattr(archive, "connection_manager", None)
+    if cm is None:
+        raise HTTPException(status_code=503, detail="场内更正账本不可用")
+    return MemoryCorrectionRepo(cm)
+
+
+CorrectionRepoDep = Annotated[MemoryCorrectionRepo, Depends(_correction_repo)]
+
+
+def _correction_item(row: MemoryCorrection) -> MemoryCorrectionItem:
+    """场内更正数据模型转接口响应项。"""
+    return MemoryCorrectionItem(
+        id=row.id,
+        live_session_id=row.live_session_id,
+        target_kind=row.target_kind,
+        archive_line_id=row.archive_line_id,
+        commitment_id=row.commitment_id,
+        verdict=row.verdict,
+        summary=row.summary,
+        evidence_kind=row.evidence_kind,
+        evidence_quote=row.evidence_quote,
+        source=row.source,
+        prev_commitment_status=row.prev_commitment_status,
+        created_at_ms=row.created_at_ms,
+        reverted_at_ms=row.reverted_at_ms,
+        settled_disposition=row.settled_disposition,
+    )
+
+
+@router.get("/corrections", response_model=MemoryCorrectionListResponse)
+async def list_corrections(
+    session_id: Annotated[int, Query(description="场次主键")],
+    corrections: CorrectionRepoDep,
+) -> MemoryCorrectionListResponse:
+    """列出某一场的场内记忆更正与运营常驻提醒（含已撤回记录与下播整理核对去向）。"""
+    rows = await corrections.list_by_session(live_session_id=int(session_id))
+    return MemoryCorrectionListResponse(
+        live_session_id=int(session_id),
+        items=[_correction_item(row) for row in rows],
+    )
+
+
+@router.post("/corrections/{correction_id}/revert", response_model=LedgerMutationResponse)
+async def revert_correction(
+    correction_id: int,
+    corrections: CorrectionRepoDep,
+) -> LedgerMutationResponse:
+    """人工撤回一条场内更正：若它当场关掉了某条承诺且未被后续另改，则还原回未了结并记入人工改动记录。"""
+    reverted = await corrections.revert_correction(correction_id=int(correction_id), at_ms=now_ms())
+    if not reverted:
+        raise HTTPException(status_code=404, detail=f"更正 #{correction_id} 不存在或已撤回")
+    return LedgerMutationResponse(success=True, detail=f"已撤回更正 #{correction_id}")
 
 
 __all__ = ["router"]
