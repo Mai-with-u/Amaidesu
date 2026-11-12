@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import base64
+import json
 import struct
-from typing import Optional
+from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.modules.events.event_bus import EventBus
@@ -16,6 +17,23 @@ from src.modules.events.payloads.utterance import (
 )
 from src.modules.llm.payload import Response
 from tests.modules.llm.fakes import FakeLLMManager
+
+
+def sse_event(payload: Dict[str, Any]) -> bytes:
+    """把一段 JSON 包成单条 SSE 事件（``data:`` 行 + 空行结尾）。"""
+    return b"data: " + json.dumps(payload).encode() + b"\n\n"
+
+
+def sse_audio_delta(pcm: bytes, *, response_format: str = "pcm") -> bytes:
+    """OpenAI speech 事件流的增量音频事件：PCM 经 base64 装在 delta 字段。"""
+    return sse_event(
+        {
+            "type": "speech.audio.delta",
+            "delta": base64.b64encode(pcm).decode("ascii"),
+            "response_format": response_format,
+        }
+    )
+
 
 LIFECYCLE_EVENTS = (
     (CoreEvents.TTS_UTTERANCE_STARTED, UtteranceStartedPayload),

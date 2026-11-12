@@ -18,6 +18,7 @@ from aiohttp.test_utils import TestServer
 import numpy as np
 
 from src.modules.tts.backends.openai.client import OpenAITTSApiError, OpenAITTSClient
+from tests.modules.tts.helpers import sse_audio_delta, sse_event
 
 # 服务端识别的测试密钥：客户端未按规范携带 Bearer 头时，服务端据此拒签
 _EXPECTED_AUTH = "Bearer sk-local"
@@ -177,6 +178,49 @@ async def test_close_is_idempotent_and_drops_session() -> None:
         await client.close()  # 二次关闭不得抛
         assert client._session is None
     finally:
+        await server.close()
+
+
+def _sse_app(release: asyncio.Event, received: List[dict[str, Any]]) -> web.Application:
+    """假事件流端点：首块立即写，第二块等测试放行——用来验证"边合成边到达"。"""
+
+    async def handle(request: web.Request) -> web.StreamResponse:
+        received.append(await request.json())
+        response = web.StreamResponse(status=200, headers={"Content-Type": "text/event-stream; charset=utf-8"})
+        await response.prepare(request)
+        await response.write(sse_audio_delta(b"\x01\x00" * 8))
+        await release.wait()
+        await response.write(sse_audio_delta(b"\x02\x00" * 8))
+        await response.write(sse_event({"type": "speech.audio.done"}))
+        await response.write_eof()
+        return response
+
+    app = web.Application()
+    app.router.add_post("/v1/audio/speech", handle)
+    return app
+
+
+async def test_sse_audio_arrives_before_generation_finishes() -> None:
+    """事件流真透传：服务端写完首块后卡住，客户端必须已经交出首块音频。
+
+    这是「首块到达即出声」的端到端证据。走 audio 形态时同样的服务端行为
+    会被网关整体缓冲，首字节要等到合成结束——本用例守住 sse 的增量语义。
+    """
+    received: List[dict[str, Any]] = []
+    release = asyncio.Event()
+    server = TestServer(_sse_app(release, received))
+    await server.start_server()
+    client = make_client(str(server.make_url("/v1/audio/speech")))
+    try:
+        stream = client.stream_synthesize("你好")
+        first = await asyncio.wait_for(stream.__anext__(), timeout=5.0)
+        assert first == b"\x01\x00" * 8  # 第二块尚未写入，收到的只能是第一块
+        release.set()
+        rest = [chunk async for chunk in stream]
+        assert b"".join(rest) == b"\x02\x00" * 8
+        assert received[0]["stream_format"] == "sse"
+    finally:
+        await client.close()
         await server.close()
 
 

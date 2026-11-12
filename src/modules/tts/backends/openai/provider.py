@@ -1,7 +1,8 @@
 """OpenAITTSProvider - OpenAI 语音合成引擎（openai_tts）
 
-- 引擎：经 OpenAI ``POST /v1/audio/speech`` 流式合成（响应体为裸 PCM 字节
-  流），逐块写声卡播放，首块到达即出声
+- 引擎：经 OpenAI ``POST /v1/audio/speech`` 流式合成（响应体按 ``stream_format``
+  为事件流或连续音频流，两者都归结为裸 PCM 片段），逐块写声卡播放，首块
+  到达即出声
 - 调用方：``src.agents.streamer.utterance_queue``（编排层确定性调用）
 - 自治生命周期：``handle_speech()`` 入口自动 ensure_setup，调用方无需预调
 - 错误语义：合成失败主动发 ``tts.utterance.failed`` 并 raise，由队列兜底；
@@ -79,6 +80,7 @@ class OpenAITTSProvider:
         self.voice = self.typed_config.voice.strip()
         self.instructions = self.typed_config.instructions
         self.speed = self.typed_config.speed
+        self.stream_format = self.typed_config.stream_format
 
         self.client: Optional[OpenAITTSClient] = None
         self.audio_manager: Any = None
@@ -124,6 +126,7 @@ class OpenAITTSProvider:
             voice=self.voice,
             instructions=self.instructions,
             speed=self.speed,
+            stream_format=self.stream_format,
         )
 
         # 首次导入声卡库会初始化 PortAudio（实测约半秒），setup 多在第一句话时懒触发，放工作线程，

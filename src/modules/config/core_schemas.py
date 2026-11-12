@@ -6,7 +6,7 @@
 ``InfraRootConfig`` 持有。
 """
 
-from typing import List
+from typing import List, Literal
 
 from pydantic import Field
 
@@ -513,6 +513,14 @@ class OpenAITTSParams(BaseConfig):
         le=4.0,
         title="语速",
         description="语速（0.25~4，1 为原速）",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+    stream_format: Literal["sse", "audio"] = Field(
+        default="sse",
+        title="流式形态",
+        description="sse=事件流（每块音频装在 JSON 事件里，经网关逐行透传）；"
+        "audio=连续音频字节流（部分网关会把整个响应缓冲到合成结束，首字节延迟到整句时长）。"
+        "响应实际形态以 Content-Type 为准，两者都能正确解析",
         json_schema_extra={"x-ui-advanced": True},
     )
 
