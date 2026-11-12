@@ -32,9 +32,12 @@ from src.agents.minecraft.context import (
     STATE_KEY,
     MinecraftHistoryCompactor,
     close_interrupted_calls,
+    invalidate_world_summaries,
     is_pinned_message,
     json_text,
+    prune_sent_chat_supplements,
     strip_unsendable,
+    trim_task_instructions,
 )
 from src.agents.minecraft.context_fold import (
     FOLD_GUIDE_FALLBACK,
@@ -941,16 +944,19 @@ class MinecraftAgent(BaseAgent):
                 # 轮到读时才看任务状态——已交付就和一条指令一样开新任务（计时的备注、要回答的决策就是
                 # 这次要做的事）；挂起着就接着原任务做，不记成原始指令；任务进行中只是一条普通通知。
                 opened = opens_task(queued, task_finished=self._task_finished)
+                started_new = False
                 if opened or isinstance(queued, WakeEvenIdle):
                     # 同一批里来了指令、计时到点或决策：照常开任务或续任务，不再只是回应互动
                     self._interaction_only = False
                 if opened:
-                    if self._task_finished:
+                    started_new = self._task_finished
+                    if started_new:
                         self._start_new_task(messages, system_message)
                         opening_due = True
                     # 读到主播的递话或新委派：卡住时问的那个问题算有人答了；开新任务时也不再有在等的问题
                     self._set_open_question("")
                     self._task_instructions.append(content)
+                    self._task_instructions[:] = trim_task_instructions(self._task_instructions)
                     self._task_finished = False
                     self._task_suspended = False
                     self._task_steps = 0
@@ -959,8 +965,8 @@ class MinecraftAgent(BaseAgent):
                 if task_id:
                     self._delegations.absorb(task_id)
                 incoming: Dict[str, Any] = {"role": "user", "content": content}
-                if opened:
-                    # 开任务的原话是任务的依据：后台折叠与收起都不碰它
+                if opened and started_new:
+                    # 只有开新任务的委派原话钉在固定层；中途补充留在普通历史，可随演进被折叠或摘要吸收
                     incoming[INSTRUCTION_KEY] = True
                 messages.append(incoming)
             if opening_due:
@@ -1741,6 +1747,19 @@ class MinecraftAgent(BaseAgent):
         self._furnace_waits.forget_world()
         self._wait_progress.clear_timers()
         self._last_self_coords = None
+        # 换存档时作废在跑的后台折叠/集中整理、旧存档的历史摘要、旧存档的目标终态与推理判断旁注
+        self._fold_epoch += 1
+        self._fold_job.abandon()
+        self._idle_prep.abandon()
+        if invalidate_world_summaries(
+            self._messages,
+            before_label=before,
+            after_id=change.after.id,
+            after_label=after,
+        ):
+            self._prefix_guard.expect_rewrite("换存档作废旧摘要")
+        self._goal_ledger.clear_finished()
+        self._delegations.clear_reply_notes()
         if not self._task_finished:
             self._inject_wakeup_message(
                 f"[系统] 角色进了另一个世界「{after}」（原来在「{before}」）。在「{before}」记的待办和工作笔记已经收起，"
@@ -1807,13 +1826,19 @@ class MinecraftAgent(BaseAgent):
         if self._context_compactor.measure(messages, tools) <= trigger:
             return
         facts = self._current_task_context()
-        self._idle_prep.start(self._compact_while_waiting(messages, tools, facts, trigger))
+        world_id = self._world.save_fields()[0]
+        self._idle_prep.start(self._compact_while_waiting(messages, tools, facts, trigger, world_id))
 
     async def _compact_while_waiting(
-        self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]], facts: Dict[str, Any], trigger: int
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        facts: Dict[str, Any],
+        trigger: int,
+        world_id: str = "",
     ) -> None:
         try:
-            if await self._context_compactor.compact(messages, tools, facts, trigger_tokens=trigger):
+            if await self._context_compactor.compact(messages, tools, facts, trigger_tokens=trigger, world_id=world_id):
                 self._shown_context = deepcopy(facts)
                 # 整理就地改写了历史前段，之后的第一次请求重算前缀是预期内的
                 self._prefix_guard.expect_rewrite("后台集中整理")
@@ -1855,8 +1880,9 @@ class MinecraftAgent(BaseAgent):
                 if self._context_compactor.measure(messages, tools) <= marks.budget:
                     return True
         facts = self._current_task_context()
+        world_id = self._world.save_fields()[0]
         try:
-            if await self._context_compactor.compact(messages, tools, facts):
+            if await self._context_compactor.compact(messages, tools, facts, world_id=world_id):
                 self._shown_context = deepcopy(facts)
                 self._prefix_guard.expect_rewrite("集中整理")
         except asyncio.CancelledError:
@@ -2393,6 +2419,8 @@ class MinecraftAgent(BaseAgent):
             await self._send_self_chat(self._pending_self_chats.pop(0))
 
     async def _send_self_chat(self, message: str) -> None:
+        # 纯公屏回话类的补充指令在原话发出后即已完成，从固定层摘掉免得一直占在指令清单里
+        self._task_instructions[:] = prune_sent_chat_supplements(self._task_instructions, message)
         if self._event_bus is None:
             return
         save_id, save_name = self._world.save_fields()

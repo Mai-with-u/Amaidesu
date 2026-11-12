@@ -40,6 +40,8 @@ _STEP_MAX_CHARS = 40
 _RESULT_MAX_CHARS = 30
 _RESULTS_MAX = 3
 _JUDGEMENT_MAX_CHARS = 48
+# 游戏那边的判断超过这么久就不再展示（避免长单挂着 1 小时前的旧世界判断误导主播）
+_JUDGEMENT_MAX_AGE_MS = 15 * 60 * 1000
 
 # 委派状态行里带着最近一步结果时的开头：这一块下面另有"最近几步结果"一行，状态里不再重复那一步
 _PROGRESS_STATE_PREFIX = "还在做，游戏那边有一步有结果了"
@@ -167,11 +169,12 @@ def _delegation_rows(
     results = [_clip(scrub_game_readings(str(note)), _RESULT_MAX_CHARS) for note in list(notes)[-_RESULTS_MAX:]]
     if results:
         rows.append("  最近几步结果：" + "；".join(results))
-    # 游戏那边的判断：它自己的推理，可能看错，标明不一定对；这件事开始之前说的不算
-    if reading.judgement and reading.judgement_at_ms >= delegation.at_ms:
+    # 游戏那边的判断：它自己的推理，可能看错，标明不一定对；这件事开始之前说的或过了保鲜期的旧句都不算
+    judgement_age_ms = current_ms - reading.judgement_at_ms
+    if reading.judgement and reading.judgement_at_ms >= delegation.at_ms and judgement_age_ms <= _JUDGEMENT_MAX_AGE_MS:
         first = next((line.strip() for line in reading.judgement.splitlines() if line.strip()), "")
         judgement = _clip(scrub_game_readings(first), _JUDGEMENT_MAX_CHARS)
-        rows.append(f"  游戏那边的判断（不一定对）：{judgement}（{age_text(current_ms - reading.judgement_at_ms)}）")
+        rows.append(f"  游戏那边的判断（不一定对）：{judgement}（{age_text(judgement_age_ms)}）")
     return rows
 
 

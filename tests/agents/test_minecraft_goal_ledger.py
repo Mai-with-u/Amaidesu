@@ -151,3 +151,21 @@ def test_pause_notice_prefers_mod_reason_and_ignores_stale_urgent() -> None:
 
     mod_reason = _run(state="paused", doing="目标 x 已暂停（第 0 步）：撤离后离打点 31 格，主任务停在半路")
     assert "Mod 说：" in pause_notice(mod_reason, False, None, 0.0)
+
+
+def test_remember_finished_deduplicates_same_goal_id_keeping_latest() -> None:
+    """同一目标从回执与事件流两头都看到终态时，最近结束簿只留一条，不重复占位（第 65 场回归）。"""
+    ledger = GoalLedger()
+    for gid in (2142, 2143, 2144):
+        first = _run(goal_id=gid, state="finished", result={"status": "done", "summary": f"目标 {gid} 回执终态"})
+        second = _run(goal_id=gid, state="finished", result={"status": "done", "summary": f"目标 {gid} 事件终态"})
+        ledger.remember_finished(first)
+        ledger.settle_finished(second)
+
+    recent = ledger.recent_finished()
+    assert [item["goal_id"] for item in recent] == [2142, 2143, 2144]
+    assert [item["summary"] for item in recent] == [
+        "目标 2142 事件终态",
+        "目标 2143 事件终态",
+        "目标 2144 事件终态",
+    ]

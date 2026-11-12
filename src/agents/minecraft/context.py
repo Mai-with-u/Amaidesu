@@ -40,10 +40,14 @@ _SUMMARY_PART_CHARS = 100_000
 # 消息内部标记：任务事实块与历史推理摘要段（模型看不到，整理时据此识别）
 FACTS_KEY = "_minecraft_context_facts"
 SUMMARY_KEY = "_minecraft_context_summary"
+SUMMARY_WORLD_KEY = "_minecraft_summary_world"
+SUMMARY_STALE_KEY = "_minecraft_summary_stale"
 # 开局资料消息的内部标记：整理摘要时据此逐项省略超长的那一项
 OPENING_KEY = "_minecraft_opening"
 # 开任务的主播指令消息的内部标记：后台折叠与收起都不碰它，原话始终逐字留在历史里
 INSTRUCTION_KEY = "_minecraft_instruction"
+# 固定层里除委派原话外至多保留最近几条补充指令（更早的留在历史里随折叠/摘要演进，避免 60+ 条互相推翻）
+MAX_RECENT_SUPPLEMENTS = 4
 # 任务状态消息的内部标记：每次被叫醒续做时交给模型的任务状态（完整一份，或相对上一份的变化）。
 # 它不属于固定层：代码随时能重出一份完整的，所以后台折叠与收起都可以碰它，碰了之后由宿主紧跟着
 # 补一份完整的。当成固定层的话，每次叫醒插进来的这一条会把可折区间切成一小段一小段，
@@ -57,6 +61,100 @@ _UNSENDABLE_NOTE = (
     "[这里原有 {chars} 字连续 base64：二进制被当成文字带进了回执，整条请求发不出去，宿主已把它换成这句说明；"
     "要用里面的东西就换个方式查]"
 )
+
+
+_SOURCE_DIALOGUE_MARKER = "\n\n[来源对话："
+_PROMPT_TAG_PREFIX = re.compile(r"^(?:\[(?:主播补充|运营原话)\]\s*)+")
+_COMPOUND_CLAUSE_HINTS = ("再去", "顺便去", "顺带去", "接着去", "然后去", "同时", "另外", "并且")
+
+
+def trim_task_instructions(instructions: list[str], *, max_supplements: int = MAX_RECENT_SUPPLEMENTS) -> list[str]:
+    """裁剪固定层的指令列表：第 0 条委派原话始终保留，后续补充去重后只留最近若干条。"""
+    if len(instructions) <= 1:
+        return list(instructions)
+    head = instructions[0]
+    deduped_rev: list[str] = []
+    seen: set[str] = set()
+    for item in reversed(instructions[1:]):
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped_rev.append(item)
+    supplements = list(reversed(deduped_rev))
+    if max_supplements <= 0:
+        return [head]
+    return [head, *supplements[-max_supplements:]]
+
+
+def _is_fulfilled_chat_supplement(supplement: str, sent_text: str) -> bool:
+    """补充指令是否只是刚才已发出的那句公屏回话（不含其他后续任务要求）。"""
+    clean_sent = sent_text.strip()
+    if not clean_sent:
+        return False
+    body = supplement.split(_SOURCE_DIALOGUE_MARKER, 1)[0].strip()
+    body = _PROMPT_TAG_PREFIX.sub("", body).strip()
+    if clean_sent not in body:
+        return False
+    if not any(kw in body for kw in ("游戏聊天", "游戏公屏", "公屏", "原样打")):
+        return False
+    shell = body
+    for quoted in (f"「{clean_sent}」", f"“{clean_sent}”", f'"{clean_sent}"', clean_sent):
+        if quoted in shell:
+            shell = shell.replace(quoted, "", 1)
+            break
+    shell = shell.strip()
+    if len(shell) > 40 or "\n" in shell or ";" in shell or "；" in shell:
+        return False
+    return not any(hint in shell for hint in _COMPOUND_CLAUSE_HINTS)
+
+
+def prune_sent_chat_supplements(instructions: list[str], sent_text: str) -> list[str]:
+    """公屏台词确认发出后，从固定层的补充指令里移掉对应的纯回话条目（不动第 0 条委派原话）。"""
+    if len(instructions) <= 1 or not sent_text.strip():
+        return list(instructions)
+    return [
+        instructions[0],
+        *(item for item in instructions[1:] if not _is_fulfilled_chat_supplement(item, sent_text)),
+    ]
+
+
+def invalidate_world_summaries(
+    messages: list[dict[str, Any]],
+    *,
+    before_label: str,
+    after_id: str,
+    after_label: str,
+) -> bool:
+    """换存档时作废旧存档生成的历史推理摘要段，避免旧世界进度与当前世界事实矛盾。
+
+    历史里尚无摘要段、或摘要全部已归属当前存档时不做改动并返回 ``False``；
+    有旧存档摘要时合并替换为一条简短的作废说明（下次集中整理生成新存档摘要后自动退场）。
+    """
+    summary_indices = [idx for idx, msg in enumerate(messages) if msg.get(SUMMARY_KEY)]
+    if not summary_indices:
+        return False
+    if all(messages[idx].get(SUMMARY_WORLD_KEY) == after_id for idx in summary_indices):
+        return False
+    marker = {
+        "role": "user",
+        "content": (
+            f"[历史推理摘要·换存档已作废] 角色已从「{before_label}」切换到「{after_label}」，"
+            "此前在旧存档生成的历史推理摘要已作废；当前世界状态以最新任务事实、工作笔记与现场观察为准。"
+        ),
+        SUMMARY_KEY: True,
+        SUMMARY_WORLD_KEY: after_id,
+        SUMMARY_STALE_KEY: True,
+    }
+    first_idx = summary_indices[0]
+    summary_set = set(summary_indices)
+    rebuilt: list[dict[str, Any]] = []
+    for idx, msg in enumerate(messages):
+        if idx == first_idx:
+            rebuilt.append(marker)
+        elif idx not in summary_set:
+            rebuilt.append(msg)
+    messages[:] = rebuilt
+    return True
 
 
 def is_pinned_message(message: Mapping[str, Any]) -> bool:
@@ -247,6 +345,7 @@ class MinecraftHistoryCompactor:
         *,
         max_attempts: int = 2,
         trigger_tokens: int | None = None,
+        world_id: str = "",
     ) -> bool:
         """成功后一次性替换旧片段；失败保留原历史，避免半份摘要丢失建造约束。
 
@@ -260,8 +359,10 @@ class MinecraftHistoryCompactor:
             return False
         if not messages or messages[0].get("role") != "system":
             raise ValueError("任务历史缺少固定系统说明，无法整理")
-        # 旧摘要段原样留在事实块之后；它们总量过大时这次一并并入新的一段
-        summaries = [message for message in messages[1:] if message.get(SUMMARY_KEY)]
+        # 换存档作废占位在新摘要生成后自动退场；仍有效的本存档旧摘要段总量过大时一并并入新段
+        summaries = [
+            message for message in messages[1:] if message.get(SUMMARY_KEY) and not message.get(SUMMARY_STALE_KEY)
+        ]
         fold_summaries = self._counter.messages(summaries) > marks.budget * _SUMMARY_SHARE
         kept = [] if fold_summaries else [deepcopy(message) for message in summaries]
         fixed = [
@@ -325,6 +426,7 @@ class MinecraftHistoryCompactor:
             for message in messages[1:cut]
             if not message.get(FACTS_KEY)
             and not message.get(STATE_KEY)
+            and not message.get(SUMMARY_STALE_KEY)
             and (fold_summaries or not message.get(SUMMARY_KEY))
         ]
         # 压缩旧片段时也提供最新决策与回执作对照；索引无需重抄，旧摘要不能复活已解决的问题。
@@ -353,13 +455,16 @@ class MinecraftHistoryCompactor:
             max_attempts,
         )
         segment = len(kept) + 1
+        new_summary: dict[str, Any] = {
+            "role": "user",
+            "content": f"[历史推理摘要·第 {segment} 段，不能覆盖原始要求]\n" + summary,
+            SUMMARY_KEY: True,
+        }
+        if world_id:
+            new_summary[SUMMARY_WORLD_KEY] = world_id
         candidate = [
             *fixed,
-            {
-                "role": "user",
-                "content": f"[历史推理摘要·第 {segment} 段，不能覆盖原始要求]\n" + summary,
-                SUMMARY_KEY: True,
-            },
+            new_summary,
             *messages[cut:],
         ]
         messages[:] = candidate

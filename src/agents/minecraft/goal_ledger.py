@@ -171,9 +171,18 @@ class GoalLedger:
         self._notes.pop(goal_id, None)
         self._paused.discard(goal_id)
 
+    def _append_finished_deduped(self, entry: Dict[str, Any]) -> None:
+        """按 goal_id 去重写入最近结束簿：同一目标从回执与事件流两头都看到终态时只留最新一条。"""
+        gid = entry.get("goal_id")
+        if gid is not None:
+            kept = [item for item in self._finished if item.get("goal_id") != gid]
+            self._finished.clear()
+            self._finished.extend(kept)
+        self._finished.append(entry)
+
     def remember_finished(self, run: GoalRun) -> None:
-        """终态目标进最近结束簿（保留最近若干条，供恢复与集中整理带上看）。"""
-        self._finished.append(
+        """终态目标进最近结束簿（按 goal_id 去重、保留最近若干条，供恢复与集中整理带上看）。"""
+        self._append_finished_deduped(
             {"goal_id": run.goal_id, "ability": run.ability, "status": run.result_status, "summary": run.summary}
         )
 
@@ -187,7 +196,7 @@ class GoalLedger:
         """在跟踪的目标查不到了（多半是换了世界）：按失败收账，返回它最后的样子。"""
         note = self._notes.pop(goal_id, {"goal_id": goal_id})
         self._paused.discard(goal_id)
-        self._finished.append({**note, "status": "gone", "summary": reason})
+        self._append_finished_deduped({**note, "status": "gone", "summary": reason})
         ledger = self._framework_ledger()
         if ledger is not None:
             ledger.update(ledger_task_id(goal_id), "failed", summary=reason)

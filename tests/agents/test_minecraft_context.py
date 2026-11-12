@@ -8,17 +8,23 @@ import pytest
 
 from src.agents.minecraft.config import MinecraftConfig, MinecraftContextConfig
 from src.agents.minecraft.context import (
+    INSTRUCTION_KEY,
     SUMMARY_KEY,
     MinecraftHistoryCompactor,
     close_interrupted_calls,
+    invalidate_world_summaries,
     opening_message,
+    prune_sent_chat_supplements,
     strip_unsendable,
+    trim_task_instructions,
 )
 from src.modules.config.agents_schemas import AgentsConfig
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.prompts import get_prompt_manager, reset_prompt_manager
+from src.modules.tools.registry import ToolRegistry
+from src.modules.tools.tasks import REPLY_NOTE_KEY, TaskLedger, TaskTracker
 
-from .minecraft_v1_fakes import assemble_minecraft_agent
+from .minecraft_v1_fakes import FakeMaicraft, _call, _resp, _wait_until, assemble_minecraft_agent, make_minecraft_agent
 
 
 @pytest.fixture(autouse=True)
@@ -473,6 +479,134 @@ def test_template_states_how_to_play_with_maicraft_v1() -> None:
     assert "## 遇到困难时" in prompt and '说"做不到"要有证据' in prompt
     assert "你就是这场直播的主播" in prompt and "没有谁派谁" in prompt
     assert "像生存玩家一样玩" in prompt and "/tp" in prompt and "创造模式" in prompt
+
+
+async def test_world_switch_invalidates_old_summaries_and_next_compaction_replaces_marker() -> None:
+    """换存档时旧世界的历史摘要整体替换为作废说明，下次集中整理在新世界生成第 1 段后作废说明退场。"""
+    llm = MagicMock()
+    llm.generate = AsyncMock(
+        side_effect=[
+            Response(success=True, content="最新落点是「新的世界」，树场四格 0/4 栽", finish_reason="stop"),
+            Response(success=True, content="回到麦窝后已补栽完四棵树苗", finish_reason="stop"),
+        ]
+    )
+    compactor = MinecraftHistoryCompactor(llm, MinecraftContextConfig(max_tokens=24000, recent_turns=2))
+    messages = history()
+    assert await compactor.compact(messages, [], {"original_instructions": ["栽树苗"]}, world_id="world-new")
+    assert "最新落点是「新的世界」" in messages[2]["content"]
+
+    changed = invalidate_world_summaries(
+        messages,
+        before_label="新的世界",
+        after_id="world-home",
+        after_label="麦窝",
+    )
+    assert changed is True
+    summaries = [m for m in messages if m.get(SUMMARY_KEY)]
+    assert len(summaries) == 1
+    assert "换存档已作废" in summaries[0]["content"]
+    assert "最新落点是「新的世界」" not in str(messages)
+    # 同存档内再次核对不重复改写
+    assert (
+        invalidate_world_summaries(
+            messages,
+            before_label="新的世界",
+            after_id="world-home",
+            after_label="麦窝",
+        )
+        is False
+    )
+
+    # 在新存档继续累积历史并触发集中整理：作废占位自动退场，新存档摘要从第 1 段起算且不混入旧作废占位原文
+    messages.extend(history()[2:])
+    assert await compactor.compact(messages, [], {"original_instructions": ["栽树苗"]}, world_id="world-home")
+    summaries_after = [m for m in messages if m.get(SUMMARY_KEY)]
+    assert len(summaries_after) == 1
+    assert "第 1 段" in summaries_after[0]["content"]
+    assert "回到麦窝后已补栽完四棵树苗" in summaries_after[0]["content"]
+    assert "换存档已作废" not in str(messages)
+
+
+def test_supplement_instructions_keep_original_plus_recent_and_prune_sent_chat() -> None:
+    """固定层补充指令只留委派原话加最近 4 条（去重），纯公屏回话发出后当场摘除，复合指令保留。"""
+    raw = ["把树场的四棵橡树苗补栽好"]
+    for idx in range(1, 20):
+        raw.append(f"[主播补充]\n第 {idx} 次调整要求")
+    raw.append("[主播补充]\n第 19 次调整要求")
+    trimmed = trim_task_instructions(raw)
+    assert trimmed == [
+        "把树场的四棵橡树苗补栽好",
+        "[主播补充]\n第 16 次调整要求",
+        "[主播补充]\n第 17 次调整要求",
+        "[主播补充]\n第 18 次调整要求",
+        "[主播补充]\n第 19 次调整要求",
+    ]
+
+    with_chats = [
+        "在游戏聊天里跟大家问好并去修门",
+        "[主播补充]\n在游戏聊天里回 玩家甲：「树苗刚种完啦！」\n\n[来源对话：逐字引用]\n玩家甲: 种完没",
+        "[主播补充]\n在游戏聊天里回 玩家甲：「好嘞」，再去东边砍十块橡木",
+        "[运营原话]\n原样打这一句：收到啦",
+    ]
+    after_first = prune_sent_chat_supplements(with_chats, "树苗刚种完啦！")
+    assert len(after_first) == 3
+    assert "树苗刚种完啦" not in "\n".join(after_first)
+    after_second = prune_sent_chat_supplements(after_first, "好嘞")
+    assert len(after_second) == 3, "带后续动作要求的复合补充不能当纯回话删掉"
+    after_third = prune_sent_chat_supplements(after_second, "收到啦")
+    assert after_third == [
+        "在游戏聊天里跟大家问好并去修门",
+        "[主播补充]\n在游戏聊天里回 玩家甲：「好嘞」，再去东边砍十块橡木",
+    ]
+    # 第 0 条委派原话即使包含刚发出的字也不动
+    assert prune_sent_chat_supplements(after_third, "在游戏聊天里跟大家问好并去修门") == after_third
+
+
+async def test_mid_task_supplements_are_not_pinned_as_instruction_barriers_and_world_switch_clears_notes() -> None:
+    """中途递话不打 INSTRUCTION_KEY 固定层钉子；换存档时同步清空旧世界的推理旁注与目标终态。"""
+    registry = ToolRegistry()
+    ledger = TaskLedger()
+    tracker = TaskTracker(registry, ledger=ledger)
+    ledger.register(
+        task_id="deleg_1",
+        source="agent",
+        provider="framework",
+        tool="framework_delegate",
+        initiator="streamer",
+        executor="minecraft",
+    )
+    server = FakeMaicraft()
+    server.enter_world("w-new", "新的世界")
+    rounds = iter(
+        [
+            Response(
+                success=True,
+                content="岩浆池已记成地点。",
+                tool_calls=[_call("maicraft_execute", {"goal": {"ability": "gather", "purpose": "采木头"}})],
+            ),
+            _resp("等目标跑完。"),
+            _resp("收到补充，继续等目标跑完。"),
+        ]
+    )
+    agent, llm, _bus = await make_minecraft_agent(
+        server, lambda _m: next(rounds, _resp("继续等。")), registry=registry, tracker=tracker
+    )
+    agent.receive_delegation(instruction="把营地的树苗栽好", task_id="deleg_1")
+    await _wait_until(lambda: agent.tracked_goal_ids == [1] and agent.batch_active is False)
+    record = ledger.get("deleg_1")
+    assert record is not None and record.snapshot.get(REPLY_NOTE_KEY) == "岩浆池已记成地点。"
+
+    agent.receive_prompt(content="顺便把门口填平", source="planner-react")
+    await _wait_until(lambda: len(llm.seen) >= 3 and agent.batch_active is False)
+    pinned_instructions = [m for m in llm.seen[-1] if m.get(INSTRUCTION_KEY)]
+    assert len(pinned_instructions) == 1 and pinned_instructions[0]["content"] == "把营地的树苗栽好"
+
+    # 存档从「新的世界」切回「麦窝」：旧世界的推理判断旁注清空
+    server.enter_world("w-home", "麦窝")
+    await _wait_until(
+        lambda: (ledger.get("deleg_1") is not None) and ledger.get("deleg_1").snapshot.get(REPLY_NOTE_KEY) == ""
+    )
+    await agent.stop()
 
 
 def test_fallback_prompt_keeps_the_bottom_lines() -> None:

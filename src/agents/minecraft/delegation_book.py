@@ -112,6 +112,14 @@ class DelegationBook:
         for task_id in self._finished_ids:
             ledger.annotate(task_id, {REPLY_NOTE_KEY: content, REPLY_NOTE_AT_KEY: at_ms})
 
+    def clear_reply_notes(self) -> None:
+        """换存档时清空名下委派的推理旁注：旧存档里说的判断在新存档里不再成立。"""
+        ledger = self._framework_ledger()
+        if ledger is None:
+            return
+        for task_id in self._finished_ids:
+            ledger.annotate(task_id, {REPLY_NOTE_KEY: "", REPLY_NOTE_AT_KEY: 0})
+
     # ----- 终态与中间态 -----
 
     def finish(self, status: str, *, summary: str) -> None:

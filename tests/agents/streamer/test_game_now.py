@@ -97,6 +97,19 @@ def test_step_and_judgement_from_before_this_task_are_left_out() -> None:
     text = render_game_now({"minecraft": cut}, None, GameNow(agents={"minecraft": fresh}), "", _NOW)
     assert "重启前在做这件事，被打断了，做到哪不确定" in text and "此刻那一步" not in text
 
+    # 第 65 场回归：长单跑了 80 分钟，1 小时 20 分钟前（旧存档）留下的判断超过 15 分钟保鲜期不再展示；5 分钟内的新判断保留
+    long_delegation = _delegation(at_ms=_NOW - 80 * _MINUTE)
+    ancient_judgement = AgentNow(judgement="岩浆池已记成地点。", judgement_at_ms=_NOW - 79 * _MINUTE)
+    text_ancient = render_game_now(
+        {"minecraft": long_delegation}, None, GameNow(agents={"minecraft": ancient_judgement}), "", _NOW
+    )
+    assert "游戏那边的判断" not in text_ancient
+    recent_judgement = AgentNow(judgement="树苗还差两棵栽完。", judgement_at_ms=_NOW - 5 * _MINUTE)
+    text_recent = render_game_now(
+        {"minecraft": long_delegation}, None, GameNow(agents={"minecraft": recent_judgement}), "", _NOW
+    )
+    assert "游戏那边的判断（不一定对）：树苗还差两棵栽完。（5 分钟前）" in text_recent
+
 
 def test_state_matches_the_delegation_line_when_stuck_or_idle() -> None:
     """卡住的活不写成"还在做"了事：停着没动静、账面多久没进展，和前段委派状态同一句，她才会去拿主意。"""
