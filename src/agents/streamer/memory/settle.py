@@ -73,6 +73,7 @@ from src.modules.storage.models.memory import (
     CommitmentClosure,
     CueLogEntry,
     KeptSnapshotLine,
+    MemoryCorrection,
     PendingArchiveLine,
     PendingCommitment,
     PendingViewerCandidate,
@@ -83,6 +84,11 @@ from src.modules.storage.models.memory import (
     UnregisteredItem,
 )
 from src.modules.storage.models.sessions import LiveSession
+from src.modules.storage.repos._base import BaseRepo
+from src.modules.storage.repos.memory_corrections import (
+    CORRECTION_VERDICT_LABELS,
+    MemoryCorrectionRepo,
+)
 from src.modules.storage.repos.sessions import MAX_SETTLE_ATTEMPTS
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE
@@ -260,6 +266,9 @@ class SettleMaterial:
     social: SocialMaterial = field(default_factory=SocialMaterial)
     # 本场已播出台词里经 use_memory 点名引用过的承诺编号：整理落库时推进最近提起场次
     mentioned_ref_ids: Set[int] = field(default_factory=set)
+    # 本场未撤回的场内记忆更正及给档案整理模型看的文本
+    corrections: List[MemoryCorrection] = field(default_factory=list)
+    corrections_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -283,6 +292,8 @@ class SettleOutcome:
     player_interactions: List["PendingPlayerInteraction"] = field(default_factory=list)
     # 本场被点名引用或被模型认出重申的未了结承诺编号：落库推进最近提起场次
     mentioned_commitment_ids: List[int] = field(default_factory=list)
+    # 场内更正的整理结果映射（更正主键 → applied / unhandled）
+    correction_dispositions: Dict[int, str] = field(default_factory=dict)
 
 
 class ProgressReporter(Protocol):
@@ -594,6 +605,7 @@ class SessionSettler:
         game_player_repo: Optional["GamePlayerRepo"] = None,
         cue_log_repo: Optional["MemoryCueLogRepo"] = None,
         social_fact_repo: Optional["SocialFactRepo"] = None,
+        correction_repo: Optional[MemoryCorrectionRepo] = None,
     ) -> None:
         """仓储、模型与提示词由主播 Agent 构造时注入。
 
@@ -616,6 +628,10 @@ class SessionSettler:
         self._players = game_player_repo
         self._cue_log = cue_log_repo
         self._social_facts = social_fact_repo
+        conn_mgr = sessions_repo.connection_manager if isinstance(sessions_repo, BaseRepo) else None
+        self._corrections: Optional[MemoryCorrectionRepo] = correction_repo or (
+            MemoryCorrectionRepo(conn_mgr) if conn_mgr is not None else None
+        )
         self._min_session_ms = max(0, int(min_session_ms))
         self._task_registry = task_registry
         self._clock = clock
@@ -772,7 +788,7 @@ class SessionSettler:
             # 本场写进档案、标了"游戏记录里没核实到"的完成说法几条：人审时一眼看得见
             unverified_claims=sum(1 for line in outcome.archive_lines if line.text.endswith(UNVERIFIED_MARK)),
             # 唠叨指标和本场整理一起写：同一件旧事提了几次、没人问时主动提几次、推的卡用上几张
-            side_effects=await self._side_effects(session, delivered),
+            side_effects=await self._side_effects(session, delivered, settled_at_ms=int(self._clock())),
         )
         has_report = bool(
             outcome.unregistered
@@ -819,6 +835,12 @@ class SessionSettler:
                 )
             return False
 
+        if self._corrections is not None and outcome.correction_dispositions:
+            try:
+                await self._corrections.mark_settled_dispositions(dispositions=outcome.correction_dispositions)
+            except Exception as exc:  # noqa: BLE001 - 回填更正处置标记失败不回滚已提交的整理主干
+                logger.warning(f"场次 {live_session_id} 回填场内更正处置标记失败: {exc}", exc=exc)
+
         logger.info(
             f"场次 {live_session_id} 整理完成：档案 {written.get('archive', 0)} 行、"
             f"新承诺 {written.get('commitments', 0)} 条、了结 {written.get('closed', 0)} 条、"
@@ -829,7 +851,13 @@ class SessionSettler:
             await registry.finish(current_task_id, success=True)
         return True
 
-    async def _side_effects(self, session: LiveSession, delivered: List[SettleSpeechLine]) -> Optional[SideEffectStats]:
+    async def _side_effects(
+        self,
+        session: LiveSession,
+        delivered: List[SettleSpeechLine],
+        *,
+        settled_at_ms: Optional[int] = None,
+    ) -> Optional[SideEffectStats]:
         """本场的唠叨指标；读线索卡记录失败时只按台词点名算，算的时候出错就不给这一节，都不拖累整理。
 
         指标是附带的：档案、承诺、了结已经由模型产出，指标算错（线索卡记录里有坏行之类）不能让这一场
@@ -841,9 +869,28 @@ class SessionSettler:
                 cards = await self._cue_log.list_session_entries(live_session_id=int(session.id))
             except Exception as exc:  # noqa: BLE001 - 指标是附带的，读不到卡照样整理
                 logger.warning(f"场次 {session.id} 读线索卡记录失败，唠叨指标不含线索卡: {exc}", exc=exc)
-        duration_ms = int(session.ended_at_ms or session.started_at_ms) - int(session.started_at_ms)
+        corrections_made = 0
+        corrections_reverted = 0
+        if self._corrections is not None:
+            try:
+                all_corr = await self._corrections.list_by_session(live_session_id=int(session.id))
+                corrections_made = len(all_corr)
+                corrections_reverted = sum(1 for item in all_corr if item.reverted_at_ms is not None)
+            except Exception as exc:  # noqa: BLE001 - 指标读取失败不拖累整理
+                logger.warning(f"场次 {session.id} 读记忆更正统计失败: {exc}", exc=exc)
+        ended_ms = int(session.ended_at_ms or session.started_at_ms)
+        duration_ms = ended_ms - int(session.started_at_ms)
+        lag_ms = max(0, int(settled_at_ms) - ended_ms) if settled_at_ms is not None and session.ended_at_ms else 0
         try:
-            return compute_side_effects(delivered, cards, duration_ms=duration_ms)
+            return compute_side_effects(
+                delivered,
+                cards,
+                duration_ms=duration_ms,
+                started_at_ms=int(session.started_at_ms),
+                corrections_made=corrections_made,
+                corrections_reverted=corrections_reverted,
+                settle_lag_ms=lag_ms,
+            )
         except Exception as exc:  # noqa: BLE001 - 指标算不出来，本场报告不含这一节，整理照常写入
             logger.warning(f"场次 {session.id} 唠叨指标没算出来，本场报告不含这一节: {exc}", exc=exc)
             return None
@@ -922,6 +969,7 @@ class SessionSettler:
         place_marks = await self._material_step(7, self._load_place_marks(session), progress)
         records = await self._material_step(8, self._load_game_records(session), progress)
         speech_text, lines_by_number, speech_note = self._render_speech(delivered, player_codes=players.codes)
+        corrections, corrections_text = await self._load_corrections(session, previous)
         game_agents = self._enabled_game_names()
         abilities_text = self._render_abilities(game_agents)
         return SettleMaterial(
@@ -955,6 +1003,8 @@ class SessionSettler:
             mentioned_ref_ids={
                 int(cid) for line in delivered if line.memory_refs for cid in memory_ref_numbers(line.memory_refs)
             },
+            corrections=corrections,
+            corrections_text=corrections_text,
         )
 
     async def _material_step(
@@ -977,6 +1027,49 @@ class SessionSettler:
         if elapsed_ms > _SLOW_MATERIAL_STEP_MS:
             logger.warning(f"取料步骤「{name}」已等待 {elapsed_ms} 毫秒，超过 {_SLOW_MATERIAL_STEP_MS} 毫秒")
         return result
+
+    async def _load_corrections(
+        self,
+        session: LiveSession,
+        previous: Optional[ArchiveSnapshot],
+    ) -> Tuple[List[MemoryCorrection], str]:
+        """读取本场未撤回的场内更正，并把针对旧档案行的编号对齐到上一份档案的 旧N 供模型直接核对。"""
+        if self._corrections is None:
+            return [], ""
+        try:
+            items = await self._corrections.list_active_by_session(live_session_id=int(session.id))
+        except Exception as exc:  # noqa: BLE001 - 更正读不到时不挡整理主干
+            logger.warning(f"场次 {session.id} 读取本场记忆更正失败: {exc}", exc=exc)
+            return [], ""
+        if not items:
+            return [], ""
+        old_index_by_line: Dict[int, int] = {}
+        if previous is not None:
+            for idx, snap_line in enumerate(previous.lines, start=1):
+                old_index_by_line[int(snap_line.line.id)] = idx
+        rendered: List[str] = []
+        for idx, item in enumerate(items, start=1):
+            if item.target_kind == "archive" and item.archive_line_id is not None:
+                old_no = old_index_by_line.get(int(item.archive_line_id))
+                target_desc = (
+                    f"针对 档#{item.archive_line_id}（即上一份档案 旧{old_no}）"
+                    if old_no is not None
+                    else f"针对 档#{item.archive_line_id}"
+                )
+            elif item.target_kind == "commitment" and item.commitment_id is not None:
+                target_desc = f"针对 约#{item.commitment_id}"
+            else:
+                target_desc = "运营本场纠正"
+            verdict_label = CORRECTION_VERDICT_LABELS.get(item.verdict, item.verdict)
+            backed = item.evidence_kind in ("game_receipt", "player_chat", "operator")
+            proof_tag = (
+                f'有本场依据（{item.evidence_kind}），drop 时可填 "correction": {idx}'
+                if backed
+                else "主播自述观察（跨场去掉仍须本场台词或游戏记录）"
+            )
+            quote_part = f"；依据「{item.evidence_quote}」" if item.evidence_quote else ""
+            rendered.append(f"更正{idx} [{target_desc}·{verdict_label}] {item.summary}（{proof_tag}{quote_part}）")
+        return items, "【本场更正（必须逐条核对处理）】\n" + "\n".join(rendered)
 
     async def _load_social(
         self,
@@ -1300,8 +1393,9 @@ class SessionSettler:
                 template=_ARCHIVE_TEMPLATE,
                 prompt=(
                     f"【上一份档案】\n{material.previous_text or '没有'}\n\n"
-                    f"【本场她说的话】\n{material.speech_text}\n\n"
-                    f"{material.games_text or '【本场没有玩游戏】'}\n\n"
+                    + (f"{material.corrections_text}\n\n" if material.corrections_text else "")
+                    + f"【本场她说的话】\n{material.speech_text}\n\n"
+                    + f"{material.games_text or '【本场没有玩游戏】'}\n\n"
                     + (f"{material.records_text}\n\n" if material.records_text else "")
                     + f"{render_places(material.places)}\n\n"
                     "请写出这一场的档案。"
@@ -1322,6 +1416,7 @@ class SessionSettler:
                 session_started_at_ms=material.started_at_ms,
                 line_of=lambda raw: self._line_of(raw, material),
                 validate_new=lambda raw: self._validate_archive([raw], material),
+                correction_of=lambda raw: self._correction_evidence_of(raw, material),
             )
         except ValueError as exc:
             raise SettleError(str(exc)) from exc
@@ -1408,6 +1503,7 @@ class SessionSettler:
         selection = select_snapshot(
             [*new_lines, *plan.replacements], [*plan.kept, *carried], session_started_at_ms=material.started_at_ms
         )
+        correction_misses, dispositions = self._evaluate_corrections(material, selection.kept)
         candidates = await self._check_candidates(archive_data.get("viewer_candidates"), material, selection.lines)
         claimed = await self._check_claimed(commitment_data.get("claimed_missing"), material, commitments, closures)
         player_check = await self._check_player_candidates(commitment_data.get("player_candidates"), material)
@@ -1420,6 +1516,7 @@ class SessionSettler:
             unregistered=[
                 *archive_misses,
                 *plan.misses,
+                *correction_misses,
                 *commitment_misses,
                 *closure_misses,
                 *candidates.missed,
@@ -1436,6 +1533,7 @@ class SessionSettler:
             social_facts=social_check.facts if social_check is not None else [],
             player_interactions=social_check.interactions if social_check is not None else [],
             mentioned_commitment_ids=mentioned_ids,
+            correction_dispositions=dispositions,
         )
 
     async def _check_player_candidates(self, rows: Any, material: SettleMaterial) -> PlayerCandidateCheck:
@@ -1661,6 +1759,62 @@ class SessionSettler:
         if number is None:
             return None
         return material.lines_by_number.get(number)
+
+    @staticmethod
+    def _correction_evidence_of(raw: Any, material: SettleMaterial) -> Optional[str]:
+        """解析模型填的 ``correction`` 编号；仅当指向本场有外部依据的更正时返回证据描述（self_seen 不顶替台词）。"""
+        if raw is None or isinstance(raw, bool):
+            return None
+        text = str(raw).strip()
+        for prefix in ("更正#", "更正", "#"):
+            if text.startswith(prefix):
+                text = text[len(prefix) :].strip()
+                break
+        if not text.isdigit():
+            return None
+        idx = int(text)
+        if not 1 <= idx <= len(material.corrections):
+            return None
+        item = material.corrections[idx - 1]
+        if item.evidence_kind not in ("game_receipt", "player_chat", "operator"):
+            return None
+        label = CORRECTION_VERDICT_LABELS.get(item.verdict, item.verdict)
+        quote_part = f"｜{item.evidence_quote}" if item.evidence_quote else ""
+        return f"更正{idx}（{label}）：{item.summary}{quote_part}"
+
+    @staticmethod
+    def _evaluate_corrections(
+        material: SettleMaterial,
+        kept: Sequence[KeptSnapshotLine],
+    ) -> Tuple[List[UnregisteredItem], Dict[int, str]]:
+        """核对本场每条更正在快照里的去向：针对旧档案行却仍原样保留的记进未登记清单供人工复核。"""
+        if not material.corrections:
+            return [], {}
+        previous_ids = (
+            {int(item.line.id) for item in material.previous.lines} if material.previous is not None else set()
+        )
+        surviving_ids = {int(item.archive_line_id) for item in kept}
+        misses: List[UnregisteredItem] = []
+        dispositions: Dict[int, str] = {}
+        for item in material.corrections:
+            if (
+                item.target_kind == "archive"
+                and item.archive_line_id is not None
+                and int(item.archive_line_id) in previous_ids
+                and int(item.archive_line_id) in surviving_ids
+            ):
+                dispositions[int(item.id)] = "unhandled"
+                misses.append(
+                    UnregisteredItem(
+                        kind="archive",
+                        what=f"档#{item.archive_line_id} 更正：{item.summary}"[:MAX_TITLE_CHARS],
+                        quote=item.evidence_quote,
+                        reason="本场有场内更正但快照仍保留原行，请人工复核",
+                    )
+                )
+            else:
+                dispositions[int(item.id)] = "applied"
+        return misses, dispositions
 
     def _validate_archive(
         self, rows: List[Any], material: SettleMaterial

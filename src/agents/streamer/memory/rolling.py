@@ -163,6 +163,7 @@ def plan_from_ops(
     session_started_at_ms: int,
     line_of: Callable[[Any], Optional[SettleSpeechLine]],
     validate_new: Callable[[Dict[str, Any]], Tuple[List[PendingArchiveLine], List[UnregisteredItem]]],
+    correction_of: Optional[Callable[[Any], Optional[str]]] = None,
 ) -> RollingPlan:
     """把模型对旧行的操作落成计划；``raw_ops`` 不是列表抛 ValueError（整理按失败处理）。
 
@@ -228,9 +229,10 @@ def plan_from_ops(
                 reason = str(raw.get("reason") or "").strip() or f"与{_OLD_PREFIX}{other}重复"
                 duplicates.append((index, other - 1, reason))
         elif op == "drop":
-            # 去掉：要有本场台词作证据、理由属于四类之一；"这场没提到""一次性的事"一律不采纳，旧行照留
+            # 去掉：要有本场台词或本场有外部依据的更正作证据、理由属于四类之一；"这场没提到""一次性的事"一律不采纳
             reason = str(raw.get("reason") or "").strip()
-            if not reason or evidence is None:
+            correction_quote = correction_of(raw.get("correction")) if correction_of is not None else None
+            if not reason or (evidence is None and not correction_quote):
                 changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_DROP_EVIDENCE))
             elif any(marker in reason for marker in _NOT_A_REASON):
                 changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_NOT_MENTIONED))
@@ -239,7 +241,8 @@ def plan_from_ops(
             else:
                 removed.add(index)
                 settled.add(index)
-                changes.append(SnapshotChange(action="drop", what=title, reason=reason, quote=_evidence(evidence)))
+                quote_text = _evidence(evidence) if evidence is not None else str(correction_quote)[:_EVIDENCE_CHARS]
+                changes.append(SnapshotChange(action="drop", what=title, reason=reason, quote=quote_text))
         elif op == "replace":
             # 替换：新行带本场原话、过新事校验器，通过才换掉旧行
             written, missed = validate_new(raw)

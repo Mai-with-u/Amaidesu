@@ -25,7 +25,10 @@ from src.modules.storage.models.memory import CardKindStat, CueLogEntry, SideEff
 
 #: 点名前多久之内有人提到同一条，就算"有人问起"（观众弹幕或游戏玩家开口命中了那张卡）
 PROMPTED_WINDOW_MS = 60_000
-#: "围着一件事绕"的窗口与次数：任意 30 分钟里同一条被点名 3 次及以上
+#: 开场头几分钟内提旧事单独计数的窗口（5 分钟）
+OPENING_WINDOW_MS = 5 * 60_000
+# 向量探测留痕行不算真正推出去的线索卡
+_PROBE_CARD_KIND = "vector_probe"
 CIRCLING_WINDOW_MS = 30 * 60_000
 CIRCLING_MIN_MENTIONS = 3
 # 线索卡里算"有人提到"的来源：观众弹幕、游戏玩家开口；地点、情境、她自己的台词不算
@@ -71,24 +74,33 @@ def compute_side_effects(
     cards: Sequence[CueLogEntry],
     *,
     duration_ms: int,
+    started_at_ms: int = 0,
+    corrections_made: int = 0,
+    corrections_reverted: int = 0,
+    settle_lag_ms: int = 0,
 ) -> Optional[SideEffectStats]:
-    """算一场的唠叨指标；本场既没点名旧事、也没推过卡时返回 None（报告里就不占一节）。
+    """算一场的唠叨与记忆健康指标；本场既没点名旧事、没推过卡、也没有更正时返回 None。
 
     没送达的台词不算她说过。"没人问时主动提"按两条判：这句不在回应观众弹幕或游戏玩家，
     而且点名前一分钟内没有观众弹幕或玩家开口命中同一条的线索卡。
     """
     delivered = sorted((line for line in speech if line.dropped_at_ms is None), key=lambda line: line.timestamp_ms)
+    pushed_cards = [card for card in cards if card.card_kind != _PROBE_CARD_KIND]
     # 有人提到某一条的时刻：那张卡的来源里有观众弹幕或玩家开口
     asked_at: Dict[str, List[int]] = defaultdict(list)
-    for card in cards:
+    for card in pushed_cards:
         item = _card_item(card)
         if item is not None and _PEOPLE_SOURCES.intersection(card.sources):
             asked_at[item].append(int(card.pushed_at_ms))
 
     mention_times: Dict[str, List[int]] = defaultdict(list)
     unprompted = 0
+    opening_5m = 0
+    origin_ms = int(started_at_ms) if started_at_ms > 0 else (int(delivered[0].timestamp_ms) if delivered else 0)
     for line in delivered:
         items = _speech_items(line)
+        if items and origin_ms > 0 and 0 <= int(line.timestamp_ms) - origin_ms <= OPENING_WINDOW_MS:
+            opening_5m += 1
         replying = line.reply_to_message_id is not None or line.reply_player_id is not None
         for item in items:
             mention_times[item].append(int(line.timestamp_ms))
@@ -98,7 +110,7 @@ def compute_side_effects(
             if not recently_asked:
                 unprompted += 1
 
-    if not mention_times and not cards:
+    if not mention_times and not pushed_cards and not corrections_made and not corrections_reverted:
         return None
 
     counts = Counter({item: len(times) for item, times in mention_times.items()})
@@ -107,7 +119,7 @@ def compute_side_effects(
 
     by_kind: Dict[str, CardKindStat] = {}
     per_player: Counter[int] = Counter()
-    for card in cards:
+    for card in pushed_cards:
         stat = by_kind.setdefault(card.card_kind, CardKindStat())
         stat.pushed += 1
         if card.used_at_ms is not None:
@@ -127,6 +139,10 @@ def compute_side_effects(
         unprompted_per_hour=round(unprompted / hours, 2) if hours else 0.0,
         circling_items=sum(1 for times in mention_times.values() if _circling(times)),
         cards=by_kind,
-        self_triggered_cards=sum(1 for card in cards if card.self_triggered),
+        self_triggered_cards=sum(1 for card in pushed_cards if card.self_triggered),
         max_cards_per_player=max(per_player.values(), default=0),
+        opening_mentions_5m=opening_5m,
+        corrections_made=max(0, int(corrections_made)),
+        corrections_reverted=max(0, int(corrections_reverted)),
+        settle_lag_ms=max(0, int(settle_lag_ms)),
     )
