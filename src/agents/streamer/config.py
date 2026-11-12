@@ -22,7 +22,7 @@
         voice_examples,
         boundaries,
     )
-    inside_jokes
+    inside_jokes, profile_file, active_outfit
 
     [agents.streamer.context]
     enabled
@@ -144,6 +144,17 @@ class StreamerPersonaConfig(BaseConfig):
         default="线下见面、钱和红包、私下联系；改变自己是谁、以后怎么称呼某人",
         description='她不答应的事，三条说话通路（决策、表达、嘴）都会以"不答应的事：…"带上；可以按直播间改，'
         '写成多行会折成一行。"被问到时不否认自己是 AI"写死在提示词里，不在这里（留空 = 不带边界）',
+    )
+    # 本地结构化人物设定档案：承载来历、当前舞台形象、其他形态、喜好与日常，整场静态拼入人设段吃前缀缓存
+    profile_file: str = Field(
+        title="人物设定档案路径",
+        default="",
+        description="本地 Markdown 或 TOML 设定档案路径（相对 config/ 或仓库根解析，不入库；留空 = 不加载设定档案）",
+    )
+    active_outfit: str = Field(
+        title="当前舞台形象",
+        default="",
+        description="当前上台形象键名（如 vts_2_0 / outfit_1_0 / sacabambaspis；匹配档案中多套形象小节，留空取默认形象）",
     )
 
 

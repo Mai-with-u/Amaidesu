@@ -39,6 +39,7 @@ def test_streamer_defaults_are_the_full_package_config() -> None:
     streamer = cfg.streamer
     assert isinstance(streamer, StreamerConfig)  # 默认就是完整配置，确保加载器自动补齐子树
     assert streamer.persona.bot_name == "麦麦"
+    assert (streamer.persona.profile_file, streamer.persona.active_outfit) == ("", "")
     assert not hasattr(streamer.persona, "audience_salutation")  # 称呼模板变量已随退役删除
     assert streamer.context.enabled is True and not hasattr(
         streamer.context, "memory_recall_long_term"
