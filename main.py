@@ -618,6 +618,8 @@ async def create_app_components(
             game_player_repo=database.game_players,
             # 游戏社交事实：主播场内登记、参考段常驻、下播整理归纳
             social_fact_repo=database.social_facts,
+            # 自备话题匣与提问箱：主播杂谈档预摆未用卡片与主动抽卡
+            talk_card_repo=database.talk_cards,
             event_repo=database.events,
             # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
             privacy_service=privacy_service,
@@ -771,6 +773,7 @@ async def create_app_components(
                 game_player_repo=database.game_players,
                 # 游戏社交事实：主播场内登记、参考段常驻、下播整理归纳
                 social_fact_repo=database.social_facts,
+                talk_card_repo=database.talk_cards,
                 event_repo=database.events,
                 # 删除/遮名服务：回想工具与线索推送按它遮名、核对遗忘命令
                 privacy_service=privacy_service,

@@ -207,8 +207,9 @@ class Replyer:
         # 结构化人物设定档案（本地文件渲染出的整段）：整场静态，拼在"你是谁"末尾吃前缀缓存
         profile_text = str(self._config.get("persona_profile", "") or "").strip()
         self._persona_profile_section: str = f"\n\n{profile_text}\n{_PROFILE_USAGE_NOTE}" if profile_text else ""
-        # 有没有启用游戏：没启用时游戏专属规矩、游戏聊天一节整段省略
-        self._has_game: bool = bool(self._config.get("has_game", True))
+        # 有没有启用游戏：支持布尔值或无参查询回调（运行期随工具表装配态动态生效）
+        raw_has_game = self._config.get("has_game", True)
+        self._has_game_source: Any = raw_has_game if callable(raw_has_game) else bool(raw_has_game)
         self._history_items: int = max(0, int(self._config.get("history_items", _DEFAULT_HISTORY_ITEMS)))
         # 人设块与规矩块里的可选段在构造期一次渲染好：人设整场不变，system 每轮逐字一致
         self._style_section: str = _style_section(self._config.get("style_constraints", _DEFAULT_STYLE_CONSTRAINTS))
@@ -439,6 +440,16 @@ class Replyer:
             return 0
         return base + _TARGET_EXTRA_CHARS if has_target else base
 
+    def _game_enabled(self) -> bool:
+        """当前是否挂有游戏（回调异常时按有游戏保底，不误删游戏规矩）。"""
+        if callable(self._has_game_source):
+            try:
+                return bool(self._has_game_source())
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning(f"读取游戏启用状态失败（按有游戏处理）: {exc}", exc=True)
+                return True
+        return bool(self._has_game_source)
+
     def _render_system_prompt(self, mode: str = "play") -> str:
         """渲染 system 提示词（全程稳定段）：人设块在前，说话规矩在后。
 
@@ -457,7 +468,7 @@ class Replyer:
             boundaries_rule=self._boundaries_rule,
             persona_profile_section=self._persona_profile_section,
             speech_style_rule=_SPEECH_STYLE_RULE.get(mode, _SPEECH_STYLE_RULE["play"]),
-            game_rule_line=_GAME_RULE_LINE if self._has_game else "",
+            game_rule_line=_GAME_RULE_LINE if self._game_enabled() else "",
         )
 
     def _render_turn_input(
@@ -519,7 +530,7 @@ class Replyer:
                 reply_to_spoke=any(note.said and note.who == reply_to for note in game_people),
             ),
             # 游戏里最近找她的人：玩家的话与举动单列，谁说的、谁做的一眼分清（较早的截短、整段封顶）
-            game_people_section=_game_people_section(people_lines) if self._has_game else "",
+            game_people_section=_game_people_section(people_lines) if self._game_enabled() else "",
             dialogue_prompt="\n".join(dialogue_lines) or "（暂无聊天记录）",
             # 有玩家条目时，她更早说过的话只用玩家条目一段剩下的行数：玩家条目从这一段让出预算，
             # 但她的原话保底留两句（防逐字复读的原料，最忙时也不能归零）；满批时整份输入略超的
@@ -541,12 +552,16 @@ class Replyer:
             turn_context=(
                 "本轮有新观众消息，请结合聊天记录与回复指引接话。"
                 if batch
-                else "本轮没有新观众消息；有游戏聊天时按游戏情况说，否则这是主动发言。"
+                else (
+                    "本轮没有新观众消息；有游戏聊天时按游戏情况说，否则这是主动发言。"
+                    if self._game_enabled()
+                    else "本轮没有新观众消息，这是你的主动发言，围绕当前话头或流程单自然展开。"
+                )
             ),
             # 没启用游戏：游戏聊天一节连同标题整段省略，纯杂谈场不出现游戏用语
-            game_chat=game_chat_text if self._has_game else "",
-            game_heading=_GAME_HEADING if self._has_game else "",
-            game_turn_rules=_GAME_TURN_RULES if self._has_game else "",
+            game_chat=game_chat_text if self._game_enabled() else "",
+            game_heading=_GAME_HEADING if self._game_enabled() else "",
+            game_turn_rules=_GAME_TURN_RULES if self._game_enabled() else "",
             pace_rule=_PACE_RULE.get(mode, _PACE_RULE["play"]),
             rundown=rundown_render,
             state_facts=state_facts.strip() or "（无）",

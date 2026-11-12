@@ -26,6 +26,8 @@ MAX_ROUNDS_PER_BEAT = 3
 MAX_WORKBENCH_CHARS = 300
 # 被打断尾句的保留长度：只留大意，够她想起来说到哪了
 _TAIL_MAX_CHARS = 60
+# 提问箱/问答类提纲要点特征词：这类要点本身就是靠抽话题卡展开，卡片聊完时同步推进该要点
+_CARD_BEAT_HINTS = ("提问", "问题", "棉花糖", "话题", "问答")
 
 BeatStatus = Literal["pending", "talking", "done"]
 
@@ -99,6 +101,10 @@ class TalkWorkbench:
             self._card.rounds += 1
             if beat_done or self._card.rounds >= self._max_rounds:
                 self._card = None
+                index = self._current_index()
+                if index is not None and any(hint in self._beats[index] for hint in _CARD_BEAT_HINTS):
+                    # 提问箱/话题卡专属环节的要点本来就是抽卡回答：卡片收尾时同步勾掉这一条提纲要点
+                    self._status[index] = "done"
             return
         index = self._current_index()
         if index is None:

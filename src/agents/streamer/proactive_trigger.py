@@ -343,6 +343,11 @@ class ProactiveTrigger:
         """
         self._last_silent_ms = now_ms
 
+    @property
+    def has_silent_cooldown(self) -> bool:
+        """最近一轮主动决策是否以沉默收尾（尚未开口清除）；供决策侧判断是否跳过 45 秒冷场死等。"""
+        return self._last_silent_ms is not None
+
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------

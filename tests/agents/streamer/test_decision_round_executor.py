@@ -276,3 +276,14 @@ async def test_execute_emits_human_readable_stage_detail():
 
     stage_details = [p.detail for name, p, _ in deps["emissions"] if name == CoreEvents.STREAMER_STAGE]
     assert stage_details == ["聚合窗口到期", "决策轮结束：发言已出"]
+
+
+async def test_silent_proactive_round_records_silent_cooldown_only_when_proactive() -> None:
+    """主动轮走完未开口时通知触发器进入主动沉默冷却；普通弹幕批沉默不触碰主动冷却。"""
+    executor, deps = _make_executor(RoundOutcome(silent_reason="natural"))
+
+    await executor.execute([], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.BATCH_FULL), proactive=False)
+    deps["proactive_trigger"].record_silent_round.assert_not_called()
+
+    await executor.execute([], forced=False, trigger_cause=TriggerCause(kind=TriggerKind.RUNDOWN), proactive=True)
+    deps["proactive_trigger"].record_silent_round.assert_called_once()

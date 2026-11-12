@@ -135,6 +135,7 @@ class DecisionRoundExecutor:
         speech_allowed: Optional[Callable[[], bool]] = None,
         mouth_reconciler: Optional[Callable[[str, int], Awaitable[ReconcileVerdict]]] = None,
         on_mouth_superseded: Optional[Callable[[], None]] = None,
+        on_round_spoken: Optional[Callable[[RoundOutcome, bool], Awaitable[None]]] = None,
         logger: Optional[ModuleLogger] = None,
     ) -> None:
         """决策窗材料的取用契约：
@@ -170,6 +171,7 @@ class DecisionRoundExecutor:
         self._speech_allowed = speech_allowed
         self._mouth_reconciler = mouth_reconciler
         self._on_mouth_superseded = on_mouth_superseded
+        self._on_round_spoken = on_round_spoken
         # 决策轮次自增计数器（round_id 生成用；进程内单调）
         self._round_seq: int = 0
 
@@ -351,6 +353,8 @@ class DecisionRoundExecutor:
         if outcome is None:
             self._stats.planner_failures += 1
             self._stats.total_no_action += 1
+            if proactive:
+                self._proactive_trigger.record_silent_round(now_ms())
             result["total_duration_ms"] = now_ms() - started_ms
             return result, None
 
@@ -378,6 +382,9 @@ class DecisionRoundExecutor:
                 result["error"] = f"planner_failed: {outcome.error}"
             if outcome.silent_reason == "mouth_superseded" and self._on_mouth_superseded is not None:
                 self._on_mouth_superseded()
+            elif proactive:
+                # 主动轮走完未开口（因嘴推翻唤醒重评的除外）：记入主动沉默冷却，防止下一 tick 立刻连调大模型
+                self._proactive_trigger.record_silent_round(now_ms())
             result["total_duration_ms"] = now_ms() - started_ms
             return result, outcome
 
@@ -412,15 +419,19 @@ class DecisionRoundExecutor:
         # reply 已在 Planner ReAct 循环内经 reply 工具完成（Planner 阶段耗时含
         # 表达生成）；此处仅把产出送发言管线（speech → TTS / emotion → VTS）。
         # await 保证 streamer.speech 先于本轮 planner.decision 与 idle 状态发出
+        target_user_id = resolve_reply_target_user(outcome, batch)
+        # 付费触发最高优（2）、回应观众弹幕批（1）可收住正在连播的杂谈独白后半句先接话；主动独白为 0
+        dispatch_priority = 2 if forced else (1 if (batch or target_user_id or result["reply_to_message_id"]) else 0)
         speech_info = await self._speech.dispatch(
             outcome.reply_payload,
-            target_user_id=resolve_reply_target_user(outcome, batch),
+            target_user_id=target_user_id,
             reply_to_message_id=result["reply_to_message_id"],
             round_id=round_id,
             live_session_id=scope_pk if scope_pk is not None else 0,
             memory_refs=list(outcome.memory_refs),
             reply_player=outcome.reply_player,
             before_emit=_before_emit if reconciler is not None else None,
+            priority=dispatch_priority,
         )
         if veto_reason is not None:
             self._logger.info(f"等播放空档期间嘴已先开口，出声前撤回本轮台词（{veto_reason}）: round_id={round_id}")
@@ -436,11 +447,13 @@ class DecisionRoundExecutor:
         if speech_info is not None:
             result["speech"], result["emotion"], result["utterance_id"] = speech_info
 
-        # 成功：保存上下文 + 记录发言时刻 + 频率限制
+        # 成功：保存上下文 + 记录发言时刻 + 频率限制 + 推进杂谈话头工作台/话题匣
         self._stats.total_replies += 1
         self._room_state.record_speech(now_ms())
         if proactive:
             self._proactive_trigger.record_trigger(trigger_cause.kind, now_ms())
+        if self._on_round_spoken is not None:
+            await self._on_round_spoken(outcome, bool(batch))
 
         result["total_duration_ms"] = now_ms() - started_ms
         return result, outcome

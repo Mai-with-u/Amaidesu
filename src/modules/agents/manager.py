@@ -80,6 +80,7 @@ class AgentManager:
         memory_cue_log_repo: Optional[Any] = None,
         game_player_repo: Optional[Any] = None,
         social_fact_repo: Optional[Any] = None,
+        talk_card_repo: Optional[Any] = None,
         event_repo: Optional[Any] = None,
         creature_repo: Optional[Any] = None,
         work_docs_repo: Optional[Any] = None,
@@ -106,6 +107,7 @@ class AgentManager:
         self._memory_cue_log_repo = memory_cue_log_repo
         self._game_player_repo = game_player_repo
         self._social_fact_repo = social_fact_repo
+        self._talk_card_repo = talk_card_repo
         self._event_repo = event_repo
         self._creature_repo = creature_repo
         self._work_docs_repo = work_docs_repo
@@ -254,6 +256,7 @@ class AgentManager:
             ),
             game_player_repo=d.game_player_repo if d.game_player_repo is not None else self._game_player_repo,
             social_fact_repo=d.social_fact_repo if d.social_fact_repo is not None else self._social_fact_repo,
+            talk_card_repo=d.talk_card_repo if d.talk_card_repo is not None else self._talk_card_repo,
             event_repo=d.event_repo if d.event_repo is not None else self._event_repo,
             creature_repo=d.creature_repo if d.creature_repo is not None else self._creature_repo,
             work_docs_repo=d.work_docs_repo if d.work_docs_repo is not None else self._work_docs_repo,

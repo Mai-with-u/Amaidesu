@@ -63,6 +63,8 @@ class AgentDeps:
     game_player_repo: Optional[Any] = None
     # 游戏社交事实（主播的社交事实工具、参考段与回想读写）
     social_fact_repo: Optional[Any] = None
+    # 自备话题匣与提问箱仓储（主播杂谈档预摆卡片与 talk_draw_cards 工具读写）
+    talk_card_repo: Optional[Any] = None
     event_repo: Optional[Any] = None
     creature_repo: Optional[Any] = None
     work_docs_repo: Optional[Any] = None

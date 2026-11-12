@@ -98,11 +98,16 @@ from .game_ledger import GameLedger
 from .game_now import AgentNow, GameNow, GameSideLog
 from .planner_render import Intent
 from .stats import StreamerStats
+from .talk.deck import TopicDeck
+from .talk.profile import PersonaProfile, load_persona_profile
+from .talk.speech_mode import SpeechMode, resolve_speech_mode
+from .talk.workbench import TalkWorkbench
 from .timeline import StreamerTimeline
 from .trigger_cause import TriggerCause, TriggerKind, TriggerSource, cause_for_batch_flush
 from .tools.memory_correct import MemoryCorrectionToolProvider, build_memory_correct_tool_spec
 from .tools.reply_tool import ReplyToolProvider
 from .tools.social_fact import SocialFactToolProvider, build_social_fact_tool_spec
+from .tools.talk_cards_tool import build_talk_cards_tool_provider
 from .command.router import CommandRouter
 from .config import StreamerConfig
 from .event_log_reader import EventLogFileReader
@@ -232,6 +237,7 @@ class StreamerAgent(BaseAgent):
         memory_cue_log_repo: Optional[Any] = None,
         game_player_repo: Optional[Any] = None,
         social_fact_repo: Optional[Any] = None,
+        talk_card_repo: Optional[Any] = None,
         embedding_setup: Optional[EmbeddingSetup] = None,
         event_repo: Optional[Any] = None,
         privacy_service: Optional[Any] = None,
@@ -443,6 +449,25 @@ class StreamerAgent(BaseAgent):
             notify_proactive=self._on_rundown_changed_proactive,
         )
 
+        # 杂谈与自我表达三件内部件（均不进工具表，仅 talk_draw_cards 在启动期注册工具）：
+        # 1) 结构化人物设定档案：本地 Markdown/TOML 解析，未配置或缺失时为 None
+        self._persona_profile: Optional[PersonaProfile] = load_persona_profile(
+            config.persona.profile_file,
+            active_outfit=config.persona.active_outfit,
+        )
+        # 2) 话头工作台：跟踪当前环节提纲要点进度与被打断尾句，并给流程单防早退护栏供数
+        self._talk_workbench = TalkWorkbench()
+        self._rundown_coord.set_remaining_beats_provider(self._talk_workbench.remaining_beats)
+        # 3) 自备话题匣：有话题卡仓储时按场次挑未用卡片预摆或供主动抽卡
+        self._topic_deck: Optional[TopicDeck] = (
+            TopicDeck(talk_card_repo, session_id_fn=self._current_session_pk, clock=now_ms)
+            if talk_card_repo is not None
+            else None
+        )
+
+        # 主动发言触发器（纯规则组件，Agent 内部件；先于 Planner 构造供冷场死锁判定查询）
+        self._proactive_trigger = ProactiveTrigger(config.proactive)
+
         # Planner（决策核心，Agent 内部件——非工具）；测试可注入替身
         if planner is not None:
             self._planner = planner
@@ -475,6 +500,11 @@ class StreamerAgent(BaseAgent):
                 recent_speeches_provider=self._spoken_log.recent_texts,
                 mouth_reconciler=self._reconcile_with_mouth,
                 fresh_context_since=self._fresh_context_since_open,
+                # 说话档位、话头工作台、自备话题匣与主动沉默状态
+                speech_mode_provider=self._current_speech_mode,
+                talk_workbench_provider=self._render_talk_workbench_for_window,
+                talk_cards_provider=self._refresh_talk_cards_for_window if self._topic_deck is not None else None,
+                proactive_silent_provider=lambda: self._proactive_trigger.has_silent_cooldown,
             )
             if config.live_frame.enabled:
                 planner_env = dataclasses.replace(
@@ -508,6 +538,7 @@ class StreamerAgent(BaseAgent):
                 # 边界栏三条通路同源：房管替她拿主意时也不答应线下见面、改称呼这类事
                 boundaries=config.persona.boundaries,
                 inside_jokes=config.persona.inside_jokes,
+                persona_profile=self._persona_profile.render_for_planner() if self._persona_profile is not None else "",
                 env=planner_env,
             )
 
@@ -532,8 +563,13 @@ class StreamerAgent(BaseAgent):
                 # 人设块的口吻示例与边界栏：系统提示词以人设为主，后半场说话仍像她
                 "voice_examples": config.persona.voice_examples,
                 "boundaries": config.persona.boundaries,
-                # 表达出口的台词长度预算：超出先重说成一句，仍超按完整句子截短
+                "persona_profile": (
+                    self._persona_profile.render_for_replyer() if self._persona_profile is not None else ""
+                ),
+                # 表达出口的台词长度预算：边玩边说与杂谈两档，超出先重说仍超按完整句截短
                 "speech_max_chars": config.speech_max_chars,
+                "talk_speech_max_chars": config.talk_speech_max_chars,
+                "has_game": self._has_enabled_game,
                 # 表达侧只带最近几条原文（0 = 回退到整份历史）
                 "history_items": config.replyer_history_items,
             },
@@ -541,9 +577,6 @@ class StreamerAgent(BaseAgent):
             prompt_service=prompt_manager,
             word_filter=self._word_filter,
         )
-
-        # 主动发言触发器（纯规则组件，Agent 内部件）
-        self._proactive_trigger = ProactiveTrigger(config.proactive)
 
         # 后台维护器（双任务：轻循环 + 压缩 worker）——读包内权威配置
         self._background = BackgroundMaintainer(
@@ -750,6 +783,8 @@ class StreamerAgent(BaseAgent):
             speech_config=speech_config,
             logger=self._logger,
         )
+        # 杂谈档连播段落被插话打断时，未播出的尾句交给话头工作台记下，下一轮空闲窗由她决定是否补完
+        self._speech.bind_interrupted_tail_listener(self._talk_workbench.note_interrupted_tail)
         # 决策执行器（两阶段决策的执行半；调度半留 Agent）。测试可注入替身，
         # 契约 = ``execute(batch, *, forced, trigger_cause, proactive, closing_session)``；
         # 注入方经 ``set_reminders_provider`` 接上递话取空动词（内建构造路径
@@ -773,6 +808,7 @@ class StreamerAgent(BaseAgent):
             speech_allowed=self._round_session_still_live,
             mouth_reconciler=self._reconcile_with_mouth,
             on_mouth_superseded=self._on_mouth_superseded,
+            on_round_spoken=self._on_round_spoken,
             logger=self._logger,
         )
 
@@ -1063,6 +1099,12 @@ class StreamerAgent(BaseAgent):
                     registry=self._tool_registry,
                 )
                 registered += " / streamer_memory_correct"
+            if self._topic_deck is not None:
+                self.register_tool_provider(
+                    build_talk_cards_tool_provider(self._topic_deck),
+                    registry=self._tool_registry,
+                )
+                registered += " / talk_draw_cards"
             self._logger.info(f"StreamerAgent 工具已注册：{registered}（名单 [streamer]）")
 
     # ==================================================================
@@ -1236,6 +1278,7 @@ class StreamerAgent(BaseAgent):
             self._room_state.reset_session()
             self._spoken_log.reset()
             self._pending_operator_notes.clear()
+            self._talk_workbench.sync_segment(None, [])
         # 按场次类型先拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗按表快照重渲。
         # 上一场若还没整理完，补整理排到后台跑，不阻塞开播；跑完后的下一个决策窗自然重渲出
         # 新简报，这期间简报退化为更早一场的档案
@@ -1594,6 +1637,7 @@ class StreamerAgent(BaseAgent):
             self._room_state.reset_session()
             self._spoken_log.reset()
             self._pending_operator_notes.clear()
+            self._talk_workbench.sync_segment(None, [])
         # 收播收尾：排进后台，依次是"等队尾台词播完 → 本场整理（有上限）→ 记账器清理"。
         # 场次行已删或将删时不整理（空场次没东西可整理，用户删掉的场次本意是清掉它），
         # 但后面的清理照跑：待删观众与保留期清理不依赖场次行。
@@ -1748,6 +1792,109 @@ class StreamerAgent(BaseAgent):
             return []
         registered = {provider for provider, _guide in self._tool_registry.guides(for_agent="streamer")}
         return sorted(registered.intersection(_GAME_AGENT_NAMES))
+
+    @property
+    def talk_workbench(self) -> TalkWorkbench:
+        """话头工作台（只读观测入口）。"""
+        return self._talk_workbench
+
+    @property
+    def topic_deck(self) -> Optional[TopicDeck]:
+        """自备话题匣（未注入话题卡仓储时为 None）。"""
+        return self._topic_deck
+
+    @property
+    def current_speech_mode(self) -> SpeechMode:
+        """当前说话档位（"play" 边玩边说 / "talk" 杂谈唠嗑）。"""
+        return self._current_speech_mode()
+
+    def _has_enabled_game(self) -> bool:
+        """本场是否挂有游戏（启用了游戏工具面，或本场已出现过游戏动静/在途委派）。"""
+        return bool(self._enabled_game_names() or self._session_games or self._playing_games())
+
+    def _is_game_waiting(self) -> bool:
+        """在途游戏委派是否全部处于停滞或等待定夺（游戏暂时没法推进时切杂谈档撑场）。"""
+        if self._task_ledger is None:
+            return False
+        has_active = False
+        for task_id in self._task_ledger.active_task_ids():
+            record = self._task_ledger.get(task_id)
+            if record is None or record.status not in IN_PROGRESS_TASK_STATES:
+                continue
+            has_active = True
+            snap = record.snapshot if isinstance(record.snapshot, dict) else {}
+            if not snap.get("stalled_goals") and record.status != "waiting":
+                return False
+        return has_active
+
+    def _current_speech_mode(self) -> SpeechMode:
+        """按当前流程单环节模式、游戏启用与失联等待判定说话档位。"""
+        return resolve_speech_mode(
+            segment_mode=self._rundown_coord.current_segment_mode(),
+            game_active=self._has_enabled_game(),
+            game_waiting=self._is_game_waiting(),
+        )
+
+    def _sync_talk_workbench(self) -> None:
+        """同步话头工作台到当前流程单环节（同环节同提纲幂等，换环节自动重置）。"""
+        segment = self._rundown_coord.current_segment()
+        if segment is None:
+            self._talk_workbench.sync_segment(None, [])
+        else:
+            self._talk_workbench.sync_segment(segment.id, list(segment.beats))
+
+    def _is_card_friendly_segment(self) -> bool:
+        """当前环节或当前提纲要点是否属于提问箱/话题卡/自由闲聊环节。"""
+        segment = self._rundown_coord.current_segment()
+        if segment is None:
+            return False
+        haystack = f"{segment.id} {segment.title} {segment.task_description}"
+        remaining = self._talk_workbench.remaining_beats(segment.id, list(segment.beats))
+        if remaining:
+            haystack += " " + remaining[0]
+        return any(hint in haystack for hint in ("提问箱", "棉花糖", "话题卡", "话题匣", "qna", "快问快答", "自由闲聊"))
+
+    def _render_talk_workbench_for_window(self, has_viewer_batch: bool) -> str:
+        """为本决策窗渲染【当前话头与本节提纲】；空闲窗读完即清尾句提醒，避免重复唠叨。"""
+        self._sync_talk_workbench()
+        if self._current_speech_mode() != "talk":
+            return ""
+        rendered = self._talk_workbench.render()
+        if rendered and not has_viewer_batch:
+            self._talk_workbench.consume_interrupted_tail()
+        return rendered
+
+    async def _refresh_talk_cards_for_window(self, has_viewer_batch: bool) -> str:
+        """为本决策窗刷新并渲染【可抽的话题卡 / 提问箱】（真人弹幕在场时不预摆）。"""
+        if self._topic_deck is None:
+            return ""
+        self._sync_talk_workbench()
+        should_preset = (
+            self._current_speech_mode() == "talk"
+            and not has_viewer_batch
+            and not self._talk_workbench.has_active_card()
+            and (not self._talk_workbench.has_open_beat() or self._is_card_friendly_segment())
+        )
+        await self._topic_deck.refresh(should_preset=should_preset)
+        return self._topic_deck.render()
+
+    async def _on_round_spoken(self, outcome: Any, had_viewer_batch: bool) -> None:
+        """一轮决策成功发出台词后更新话题匣与话头工作台进度。"""
+        self._sync_talk_workbench()
+        used_card = False
+        if outcome.use_card_id is not None and self._topic_deck is not None:
+            card = await self._topic_deck.use_card(outcome.use_card_id)
+            if card is not None:
+                self._talk_workbench.start_card(card.id, card.title)
+                used_card = True
+        if self._current_speech_mode() != "talk":
+            return
+        # 观众弹幕或玩家开口的插话轮若未主动选卡、也未声明收束要点，不扣减当前提纲要点轮数
+        answering_digression = bool(had_viewer_batch or outcome.target or outcome.reply_player[0])
+        if used_card or outcome.beat_done or not answering_digression:
+            self._talk_workbench.record_round(beat_done=outcome.beat_done)
+        if outcome.beat_done:
+            self._talk_workbench.consume_interrupted_tail()
 
     def _note_game_activity(self, game: str) -> None:
         """记一笔这个游戏刚有动静：game.* / game.body.* / game.chat.* 事件或委派受理。"""
@@ -2705,6 +2852,8 @@ class StreamerAgent(BaseAgent):
             # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
             # （送达在决策执行器取空队列处发生，任何决策窗都会消费）
             reminder_pending=bool(self._reminder_queue),
+            talk_mode=self._current_speech_mode() == "talk",
+            viewer_waiting_since_ms=None if self._buffer.is_empty else self._buffer.first_arrival_ms,
         )
         if reason is None:
             return False
