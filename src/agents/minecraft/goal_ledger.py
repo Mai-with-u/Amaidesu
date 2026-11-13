@@ -214,9 +214,21 @@ class GoalLedger:
         self._finished_ids = finished_ids if finished_ids is not None else _no_batch_task_ids
         self._notes: Dict[int, Dict[str, Any]] = {}
         self._paused: set[int] = set()
+        self._pause_notified: set[int] = set()
         self._finished: Deque[Dict[str, Any]] = deque(maxlen=_RECENT_FINISHED_GOALS)
 
     # ----- 三簿：目标此刻的样子 / 被暂停 / 最近结束 -----
+
+    def pause_notice_sent(self, goal_id: int) -> bool:
+        """这个目标的暂停是否已经给模型发过通知：判定只看通知簿，不看账本状态。
+
+        账本的暂停态可能被批内的目标查询先记上（看门狗叫醒的批读一眼目标就把
+        paused 记了账），随后事件流才送来暂停事件——按账本判会把第一次通知吞掉。
+        """
+        return goal_id in self._pause_notified
+
+    def mark_pause_notified(self, goal_id: int) -> None:
+        self._pause_notified.add(goal_id)
 
     def note(self, run: GoalRun) -> None:
         """记下目标此刻的样子：任务状态、看一眼与交付门禁都读它。"""
@@ -241,6 +253,7 @@ class GoalLedger:
         """目标移出跟踪时的簿记收尾：此刻的样子与暂停标记一并清除。"""
         self._notes.pop(goal_id, None)
         self._paused.discard(goal_id)
+        self._pause_notified.discard(goal_id)
 
     def _append_finished_deduped(self, entry: Dict[str, Any]) -> None:
         """按 goal_id 去重写入最近结束簿：同一目标从回执与事件流两头都看到终态时只留最新一条。"""

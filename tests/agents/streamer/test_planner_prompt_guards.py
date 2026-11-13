@@ -11,6 +11,7 @@ import pytest
 from src.agents.streamer.config import StreamerPersonaConfig
 from src.agents.streamer.game_now import GameNow, GoalResultLine
 from src.agents.streamer.planner import Planner, PlannerConfig, PlannerEnv
+from src.agents.streamer.planner_render import render_game_speakers
 from src.agents.streamer.room_state import RoomState
 from src.agents.streamer.timeline import GameEventBatch, PlayerNote
 from src.agents.streamer.tools.social_fact import SocialFactToolProvider
@@ -437,3 +438,133 @@ async def test_a4_why_not_use_capability_checks_game_records_instead_of_fabricat
     assert "有人问她为什么不用某种做法或能力时" in captured_system[0]
     assert "不许凭猜测现编缺少某样条件或资格之类的理由" in captured_system[0]
     assert invoked_tools == ["minecraft_get_work_log", "framework_prompt", "streamer_reply"]
+
+
+async def test_s66_remote_public_chat_exclamation_marks_absent_speakers_and_guards_against_self_attribution(
+    prompts: Any,
+) -> None:
+    """第 66 场 22:55:21 回归：两名玩家远在沙漠神殿发全服公屏感叹'wc'/'全是压力板'，主播独自在营地西边修压机。
+    即便营地机器归属字段写着玩家甲，现场速览的周边实体里没有这两名玩家——参考段必须点明两人当前不在身边，
+    且系统提示词明确未点名她的异地环境感叹不能硬套成自己手头工位的状况，拿不准可顺口问清在哪碰上的。"""
+    captured_messages: list[list[dict]] = []
+
+    async def _generate(messages: list[dict], **_: Any) -> Response:
+        captured_messages.append(list(messages))
+        return Response(
+            success=True,
+            tool_calls=[
+                ToolCall(
+                    id="r_afar",
+                    name="streamer_reply",
+                    arguments={
+                        "topic_summary": "玩家甲和玩家乙在游戏公屏感叹那边全是压力板，两人当前不在营地身边",
+                        "reply_guidance": "顺口问一句他们跑到哪儿碰上那么多压力板了，别认领成自己修压机脚下的状况",
+                        "topic_tag": "远处玩家遇机关",
+                        "to_player": "玩家乙",
+                        "emotion": "neutral",
+                        "intensity": 0.4,
+                    },
+                )
+            ],
+        )
+
+    async def _tool_handler(inv: Any) -> ToolExecutionResult:
+        if inv.tool_name == "minecraft_glance":
+            return ToolExecutionResult(
+                tool_name="minecraft_glance",
+                success=True,
+                structured_content={
+                    "tool": "glance",
+                    "body": {"dimension": "minecraft:overworld", "position": [12, 64, -8]},
+                    "entities": [{"type": "touhou_little_maid:maid", "name": "小女仆", "distance": 3.0}],
+                    "facilities": [
+                        {"block": "create:mechanical_press", "distance": 2.0, "whose": "玩家甲"},
+                    ],
+                },
+            )
+        return ToolExecutionResult(
+            tool_name=inv.tool_name,
+            success=True,
+            structured_content={
+                "speech": "你们跑到哪儿踩着一堆压力板啦？",
+                "emotion": {"name": "neutral"},
+                "metadata": {},
+            },
+        )
+
+    registry = ToolRegistry()
+    specs = [
+        ToolSpec(name="minecraft_glance", description="", kind="sync", provider=""),
+        ToolSpec(name="streamer_reply", description="", kind="sync", provider=""),
+    ]
+    registry.register_provider(make_provider_from_specs("", [(s, _tool_handler) for s in specs]))
+    llm = MagicMock()
+    llm.generate = AsyncMock(side_effect=_generate)
+    ts = now_ms()
+    planner = Planner(
+        config=PlannerConfig(planner_max_steps=2, reference_tools=["minecraft_glance"]),
+        llm_service=llm,
+        prompt_service=prompts,
+        room_state=RoomState(),
+        tool_registry=registry,
+        behavior_style="积极互动",
+        bot_name="麦麦",
+        personality="活泼",
+        env=PlannerEnv(reply_provider_factory=lambda: MagicMock()),
+    )
+
+    line_a = "[22:55 minecraft 公屏] 玩家 玩家甲：wc"
+    line_b = "[22:55 minecraft 公屏] 玩家 玩家乙：全是压力板"
+    outcome = await planner.plan(
+        [],
+        proactive=True,
+        game_batch=GameEventBatch(
+            events=(line_a, line_b),
+            fresh_chat=(line_a, line_b),
+            player_notes=(
+                PlayerNote(who="玩家甲", said=True, line=line_a, timestamp_ms=ts - 1000),
+                PlayerNote(who="玩家乙", said=True, line=line_b, timestamp_ms=ts),
+            ),
+        ),
+    )
+
+    assert outcome.replied is True
+    system_text = captured_messages[0][0]["content"]
+    ref_text = captured_messages[0][-1]["content"]
+    assert "不在她身边且未点名她的玩家感叹机关、怪物、地形或掉落物" in system_text
+    assert "不凭空认领到自己脚下" in system_text and "顺口问清在哪碰上的" in system_text
+    assert "玩家 玩家甲、玩家 玩家乙 当前不在【现场速览】身边" in ref_text
+    assert "未点名她的环境感叹是对方那边的遭遇" in ref_text
+
+
+def test_s66_nearby_and_named_players_keep_positive_response_guardrail(prompts: Any) -> None:
+    """配对副作用护栏：不能因为防远端公屏误认，压低对身边围观互动、点名主播或向主播求助搭话玩家的回应积极度。"""
+    system_text = prompts.render(
+        "amaidesu_planner_react",
+        bot_name="麦麦",
+        personality="活泼",
+        behavior_style="积极互动",
+        boundaries_rule="",
+        inside_jokes="",
+        game_rules="",
+        social_fact_step="",
+    )
+    assert "点名她、向她求助搭话或就在身边围观互动的玩家，照常积极回应" in system_text
+
+    # 玩家甲就在现场速览身边围观，玩家乙在远处向主播求助：两边都明确保留积极回应与游戏内回话提醒
+    overview = (
+        'minecraft_glance: {"tool": "glance", "body": {"dimension": "minecraft:overworld"}, '
+        '"entities": [{"type": "minecraft:player", "name": "玩家甲", "distance": 4.0}]}'
+    )
+    notes = (
+        PlayerNote(who="玩家甲", said=True, line="[22:56 minecraft 公屏] 玩家 玩家甲：这台压机转起来了"),
+        PlayerNote(who="玩家乙", said=True, line="[22:56 minecraft 公屏] 玩家 玩家乙：麦麦家里还有铁锭吗"),
+    )
+    mixed = render_game_speakers(notes, overview=overview)
+    assert "在游戏里回一句" in mixed
+    assert "玩家 玩家甲 当前就在身边，围观搭话照常积极回应" in mixed
+    assert "玩家 玩家乙 当前不在身边" in mixed and "点名她或求助搭话的照常积极回应" in mixed
+
+    # 全部发言玩家都在身边时，直接标明就在【现场速览】身边并积极回应
+    all_here = render_game_speakers(notes[:1], overview=overview)
+    assert "玩家 玩家甲 当前就在【现场速览】身边，围观互动或搭话照常积极回应" in all_here

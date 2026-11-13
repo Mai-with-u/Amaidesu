@@ -458,7 +458,7 @@ class NewCueLogEntry(BaseModel):
     card_kind: str = Field(
         ...,
         description="卡类：viewer 对象开口 / player 游戏玩家开口 / game 游戏开着 / place 地点 / rule 规则"
-        " / vector 向量 / joke 老梗",
+        " / vector 向量 / vector_probe 向量未推留痕 / joke 老梗",
     )
     archive_line_id: Optional[int] = Field(default=None, description="指向的档案行（档案卡才有）")
     commitment_id: Optional[int] = Field(default=None, description="指向的承诺（承诺卡才有）")

@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from src.modules.storage.models.game_players import (
@@ -42,6 +43,7 @@ from src.modules.storage.models.social_facts import (
     SOCIAL_FACT_KINDS,
     NewSocialFact,
     SocialFact,
+    is_works_downgraded,
 )
 
 from .saves import SaveTimeline
@@ -67,6 +69,8 @@ _WHAT_MAX_CHARS = 30
 _CHAT_PREFIX = "公屏#"
 _FACT_PREFIX = "事实#"
 _PLAYER_PREFIX = "玩家"
+# 单趟整词匹配玩家代号（"玩家1"不命中"玩家10"的前缀）
+_PLAYER_CODE_RE = re.compile(rf"{_PLAYER_PREFIX}(\d+)(?!\d)")
 
 _KIND_LABELS: Dict[str, str] = {
     "setting": "环境形态",
@@ -94,6 +98,9 @@ class SocialMaterial:
     facts: Dict[int, SocialFact] = field(default_factory=dict)
     # 没引公屏的归纳行挂在哪：(游戏, 存档编号, 存档名)
     default_scope: Tuple[str, str, str] = ("", "", "")
+    # 本场之前最近两场已完结正式场的编号与第二近场开播时刻（判 works 是否隔两场未再证实）
+    recent_two_session_ids: Tuple[int, ...] = ()
+    second_recent_started_ms: int = 0
 
     @property
     def empty(self) -> bool:
@@ -101,13 +108,17 @@ class SocialMaterial:
         return not self.text
 
     def restore_names(self, text: str) -> str:
-        """把模型写的玩家代号换回真名：代号只在这一个调用里有效，落库的正文得让下一次直播认得出是谁，
-        也只有真名才能被"忘了我"的删除按名字匹配到。"""
-        for player_id, code in self.player_codes.items():
-            name = self.player_names.get(player_id)
-            if name:
-                text = text.replace(code, name)
-        return text
+        """把模型写的玩家代号按整词还原回真名：单趟正则匹配避免"玩家1"吃掉"玩家10"前缀，也不会二次替换玩家真名。"""
+        if not text or not self.player_codes:
+            return text
+        code_to_name = {
+            code: self.player_names[player_id]
+            for player_id, code in self.player_codes.items()
+            if self.player_names.get(player_id)
+        }
+        if not code_to_name:
+            return text
+        return _PLAYER_CODE_RE.sub(lambda match: code_to_name.get(match.group(0), match.group(0)), text)
 
 
 @dataclass
@@ -135,6 +146,9 @@ def build_social_material(
     saves: SaveTimeline,
     started_at_ms: int,
     clock_text: Callable[[int], str],
+    current_session_id: Optional[int] = None,
+    recent_two_session_ids: Sequence[int] = (),
+    second_recent_started_ms: int = 0,
 ) -> SocialMaterial:
     """拼第四次调用的原料。``player_names`` 是玩家主键 → 现在的名字（读不到的玩家不给代号）。
 
@@ -180,11 +194,19 @@ def build_social_material(
         f"- {clock_text(int(item.at_ms))} {code_of(item.player_id)}：{_INTERACTION_LABELS.get(item.kind, item.kind)}"
         for item in interactions
     ]
-    fact_rows = [
-        f"{_FACT_PREFIX}{fact.id}（{_KIND_LABELS.get(fact.kind, fact.kind)}{'，运营者定的' if fact.human_locked else ''}）"
-        f"{fact.text}"
-        for fact in active
-    ]
+    fact_rows: List[str] = []
+    for fact in active:
+        tags = [_KIND_LABELS.get(fact.kind, fact.kind)]
+        if fact.human_locked:
+            tags.append("运营者定的")
+        elif is_works_downgraded(
+            fact,
+            current_session_id=current_session_id,
+            recent_two_session_ids=recent_two_session_ids,
+            second_recent_started_ms=second_recent_started_ms,
+        ):
+            tags.append("已隔多场未再证实，优先核实或取代")
+        fact_rows.append(f"{_FACT_PREFIX}{fact.id}（{'，'.join(tags)}）{fact.text}")
     roster = "；".join(f"{code} = {player_names.get(player_id, '（名字未知）')}" for player_id, code in codes.items())
     parts = [
         "【现有的社交事实】\n" + ("\n".join(fact_rows) if fact_rows else "没有"),
@@ -198,7 +220,9 @@ def build_social_material(
 
     if spoken:
         last = spoken[-1]
-        scope = (last.game, last.save_id, last.save_name)
+        distinct_saves = {line.save_id for line in spoken if line.game == last.game and line.save_id}
+        # 一场里跨过多个存档时，无引文的归纳行挂整游戏级，避免误绑到最后一句公屏所在的存档
+        scope = (last.game, "", "") if len(distinct_saves) > 1 else (last.game, last.save_id, last.save_name)
     elif games:
         save = saves.save_at(games[0], int(started_at_ms))
         scope = (games[0], save.id, save.name)
@@ -213,6 +237,8 @@ def build_social_material(
         player_names={int(pid): str(name) for pid, name in player_names.items() if name},
         facts={int(fact.id): fact for fact in active},
         default_scope=scope,
+        recent_two_session_ids=tuple(int(sid) for sid in recent_two_session_ids[:2]),
+        second_recent_started_ms=int(second_recent_started_ms),
     )
 
 
@@ -296,9 +322,32 @@ def validate_social_output(data: Mapping[str, Any], material: SocialMaterial, *,
         else:
             key = (scope[0], scope[1], kind)
             if counts.get(key, 0) >= MAX_FACTS_PER_KIND:
-                _miss(check, text, quote, f"{_KIND_LABELS[kind]}已经有 {MAX_FACTS_PER_KIND} 条，要先取代旧的")
-                continue
-            counts[key] = counts.get(key, 0) + 1
+                stale_candidates = (
+                    [
+                        old_f
+                        for old_f in material.facts.values()
+                        if old_f.id not in superseded
+                        and old_f.game == scope[0]
+                        and (old_f.save_id == scope[1] or old_f.save_id == "" or scope[1] == "")
+                        and is_works_downgraded(
+                            old_f,
+                            current_session_id=int(live_session_id),
+                            recent_two_session_ids=material.recent_two_session_ids,
+                            second_recent_started_ms=material.second_recent_started_ms,
+                        )
+                    ]
+                    if kind == "works"
+                    else []
+                )
+                if stale_candidates:
+                    oldest_stale = min(stale_candidates, key=lambda item: (item.updated_at_ms, item.id))
+                    supersedes = int(oldest_stale.id)
+                    superseded.add(supersedes)
+                else:
+                    _miss(check, text, quote, f"{_KIND_LABELS[kind]}已经有 {MAX_FACTS_PER_KIND} 条，要先取代旧的")
+                    continue
+            else:
+                counts[key] = counts.get(key, 0) + 1
         check.facts.append(
             NewSocialFact(
                 kind=kind,

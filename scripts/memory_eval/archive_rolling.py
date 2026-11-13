@@ -37,6 +37,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 import run_eval as base
 
 from openai import OpenAI
+from src.agents.streamer.memory.brief import build_brief
 from src.agents.streamer.memory.settle import SessionSettler
 from src.modules.logging import configure_from_config
 from src.modules.prompts import PromptManager
@@ -47,6 +48,7 @@ DATASET = "archive_rolling"
 DATASET_PATH = base.DATASET_DIR / f"{DATASET}.jsonl"
 MIN_CASES = 6
 ARCHIVE_MARKER = "【上一份档案】"
+COMMITMENT_MARKER = "请找出这一场她新答应的、还没兑现的事。"
 EMPTY_OTHER_REPLY = '{"commitments": [], "closed": []}'
 SESSION_START_CLOCK = clock_time(19, 50)
 SESSION_LENGTH_MS = 3 * 3_600_000
@@ -69,22 +71,26 @@ _BASE_ROW_RE = re.compile(r"^旧(\d+) \[[^\]]+\] .*?（原话「(.*?)」")
 
 @dataclass(frozen=True)
 class SessionCase:
-    """序列里的一场：台词、本场玩过的游戏、理想输出要写的新事与旧行操作、整理后运营者删哪些行。"""
+    """序列里的一场：台词、本场玩过的游戏、理想输出要写的新事/承诺与旧行操作、整理后运营者删哪些行。"""
 
     games: Tuple[str, ...]
     speech: Tuple[base.SpeechTurn, ...]
     archive: Tuple[Dict[str, Any], ...]
     previous: Tuple[Dict[str, Any], ...]
     delete_after: Tuple[str, ...]
+    commitments: Tuple[Dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
 class SequenceRecord:
-    """一条用例：连着的几场，与序列末尾该在、不该在快照里的事（按键名）。
+    """一条用例：连着的几场，与序列末尾该在、不该在快照和开播简报里的事（按键名）。
 
     ``present`` 是稳定的事（量遗忘率）；``kept`` 是哪一场都没有证据说它了结的旧行（多是一次性的
     小事），进过快照的序列末尾也必须还在；模型当初就没把它写成档案的不算"被丢"，另行报告。
     ``not_lasting`` 是建造进度、家具、种地、做菜这类进展，任何一场的快照里都不该标成稳定的事。
+    ``brief_archive_present`` 核对序列结束下一场开播时仍出现在常驻简报里的档案键（如隔一场事件与
+    多条取名并存时的事件名额）；``brief_commitments_present`` / ``brief_commitments_absent`` 核对
+    近期承诺进【还惦记的事】而过期承诺退居搁置计数。
     """
 
     case_id: str
@@ -94,18 +100,27 @@ class SequenceRecord:
     absent: Tuple[str, ...]
     kept: Tuple[str, ...] = ()
     not_lasting: Tuple[str, ...] = ()
+    brief_archive_present: Tuple[str, ...] = ()
+    brief_commitments_present: Tuple[str, ...] = ()
+    brief_commitments_absent: Tuple[str, ...] = ()
 
 
 def _parse_session(raw: Any, where: str) -> SessionCase:
     payload = base._as_dict(raw, where)
     base._check_keys(payload, {"games", "speech", "expect"}, where)
     expect = base._as_dict(payload["expect"], f"{where}.expect")
-    base._check_keys(expect, {"archive", "previous", "delete_after"}, f"{where}.expect")
+    extra_keys = set(expect.keys()) - {"archive", "previous", "delete_after", "commitments"}
+    if extra_keys:
+        raise base._fail(f"{where}.expect", f"未知字段：{sorted(extra_keys)}")
+    for required in ("archive", "previous", "delete_after"):
+        if required not in expect:
+            raise base._fail(f"{where}.expect", f"缺少必填字段：{required}")
     speech = base._parse_speech(payload["speech"], f"{where}.speech")
     texts = {turn.n: turn.text for turn in speech}
     items = [base._as_dict(item, f"{where}.expect.archive") for item in expect["archive"]]
     ops = [base._as_dict(item, f"{where}.expect.previous") for item in expect["previous"]]
-    for item in [*items, *ops]:
+    promises = [base._as_dict(item, f"{where}.expect.commitments") for item in expect.get("commitments", [])]
+    for item in [*items, *ops, *promises]:
         quote = item.get("quote_contains")
         if quote is not None and quote not in texts.get(int(item["line"]), ""):
             raise base._fail(where, f"quote_contains「{quote}」不是第 {item['line']} 行台词的逐字片段")
@@ -115,6 +130,7 @@ def _parse_session(raw: Any, where: str) -> SessionCase:
         archive=tuple(items),
         previous=tuple(ops),
         delete_after=tuple(str(key) for key in expect["delete_after"]),
+        commitments=tuple(promises),
     )
 
 
@@ -142,6 +158,9 @@ def load_records() -> List[SequenceRecord]:
                 absent=tuple(str(key) for key in final.get("absent", [])),
                 kept=tuple(str(key) for key in final.get("kept", [])),
                 not_lasting=tuple(str(key) for key in final.get("not_lasting", [])),
+                brief_archive_present=tuple(str(key) for key in final.get("brief_archive_present", [])),
+                brief_commitments_present=tuple(str(key) for key in final.get("brief_commitments_present", [])),
+                brief_commitments_absent=tuple(str(key) for key in final.get("brief_commitments_absent", [])),
             )
         )
     return records
@@ -153,14 +172,17 @@ def load_records() -> List[SequenceRecord]:
 
 
 class _ArchiveOnlyLLM:
-    """整理器要的模型接口：「写档案」那次交给 ``answer``，找承诺与了结两次回空。"""
+    """整理器要的模型接口：「写档案」那次交给 ``answer``，找承诺按样本确定性给出，了结回空。"""
 
-    def __init__(self, answer: Callable[[str, str], str]) -> None:
+    def __init__(self, answer: Callable[[str, str], str], commitment_reply: str = EMPTY_OTHER_REPLY) -> None:
         self._answer = answer
+        self._commitment_reply = commitment_reply
         self.outputs: List[str] = []
 
     async def generate(self, prompt: str, **kwargs: Any) -> Any:
         if ARCHIVE_MARKER not in prompt:
+            if COMMITMENT_MARKER in prompt:
+                return SimpleNamespace(ok=True, content=self._commitment_reply)
             return SimpleNamespace(ok=True, content=EMPTY_OTHER_REPLY)
         content = self._answer(str(kwargs.get("system") or ""), prompt)
         self.outputs.append(content)
@@ -194,6 +216,9 @@ class SequenceResult:
     kept_unwritten: List[str] = field(default_factory=list)
     not_lasting_total: int = 0
     wrongly_lasting: List[str] = field(default_factory=list)
+    brief_archive_missing: List[str] = field(default_factory=list)
+    brief_commitment_missing: List[str] = field(default_factory=list)
+    stale_commitment_leaked: List[str] = field(default_factory=list)
     forgotten: List[str] = field(default_factory=list)
     problems: List[str] = field(default_factory=list)
     sessions: List[Dict[str, Any]] = field(default_factory=list)
@@ -247,15 +272,34 @@ def _keys_of_session(case: SessionCase) -> Dict[int, str]:
     return keys
 
 
+def _commitment_reply_for(case: SessionCase) -> str:
+    if not case.commitments:
+        return EMPTY_OTHER_REPLY
+    payload = [
+        {
+            "line": int(item["line"]),
+            "what": str(item["what"]),
+            "quote": str(item["quote_contains"]),
+            "to": "everyone",
+            "game": item.get("game"),
+        }
+        for item in case.commitments
+    ]
+    return json.dumps({"commitments": payload, "closed": []}, ensure_ascii=False)
+
+
 async def run_sequence(
     record: SequenceRecord,
     prompt_manager: PromptManager,
     answer_for: Callable[[SessionCase, Dict[str, str]], Callable[[str, str], str]],
+    *,
+    dry: bool = True,
 ) -> SequenceResult:
     """在临时库里按场次跑完一条序列，返回各项计数。"""
     result = SequenceResult(case_id=record.case_id)
     key_quotes: Dict[str, str] = {}
     row_keys: Dict[int, str] = {}
+    commitment_keys: Dict[int, str] = {}
     originals: Dict[int, Tuple[Any, ...]] = {}
     # 进过任何一场快照的键：没进过的是模型当初没写成档案，不算"被丢"
     seen_keys: Set[str] = set()
@@ -288,7 +332,7 @@ async def run_sequence(
                 for op in case.previous:
                     if op["op"] == "replace":
                         key_quotes[str(op["new_key"])] = str(op["quote_contains"])
-                llm = _ArchiveOnlyLLM(answer_for(case, dict(key_quotes)))
+                llm = _ArchiveOnlyLLM(answer_for(case, dict(key_quotes)), _commitment_reply_for(case))
                 settler = SessionSettler(
                     sessions_repo=store.sessions,
                     chat_repo=store.chat,
@@ -310,6 +354,13 @@ async def run_sequence(
                     key = line_keys.get(chat_lines.get(int(line.evidence_chat_id), -1))
                     if key is not None:
                         row_keys[line.id] = key
+                if case.commitments:
+                    promise_line_keys = {int(item["line"]): str(item["key"]) for item in case.commitments}
+                    for comm in await store.commitments.list_commitments(statuses=["open"], limit=200):
+                        if comm.created_session_id == session_id and comm.evidence_chat_id is not None:
+                            ckey = promise_line_keys.get(chat_lines.get(int(comm.evidence_chat_id), -1))
+                            if ckey is not None:
+                                commitment_keys[int(comm.id)] = ckey
                 for key in case.delete_after:
                     for row_id, row_key in list(row_keys.items()):
                         if row_key == key:
@@ -336,6 +387,32 @@ async def run_sequence(
                     }
                 )
             final = await store.archive.get_snapshot(live_session_id=last_session) if last_session else None
+            if last_session is not None and (
+                record.brief_archive_present or record.brief_commitments_present or record.brief_commitments_absent
+            ):
+                next_day = _day_start_ms(0)
+                next_started = next_day + (SESSION_START_CLOCK.hour * 60 + SESSION_START_CLOCK.minute) * 60_000
+                next_session = await store.sessions.insert_live_session(started_at_ms=next_started, kind="live")
+                brief = await build_brief(
+                    archive_repo=store.archive,
+                    commitments_repo=store.commitments,
+                    chat_repo=store.chat,
+                    live_session_id=next_session,
+                )
+                brief_arc_keys = {row_keys.get(aid) for aid in brief.archive_ids if aid in row_keys}
+                brief_comm_keys = {commitment_keys.get(cid) for cid in brief.commitment_ids if cid in commitment_keys}
+                expected_arc = (
+                    record.brief_archive_present
+                    if dry
+                    else tuple(key for key in record.brief_archive_present if key in seen_keys)
+                )
+                result.brief_archive_missing = [key for key in expected_arc if key not in brief_arc_keys]
+                result.brief_commitment_missing = [
+                    key for key in record.brief_commitments_present if key not in brief_comm_keys
+                ]
+                result.stale_commitment_leaked = [
+                    key for key in record.brief_commitments_absent if key in brief_comm_keys
+                ]
         finally:
             await store.close()
     final_keys = {row_keys.get(item.line.id) for item in (final.lines if final is not None else [])}
@@ -377,6 +454,9 @@ class RollingMetrics:
     kept_unwritten: int
     not_lasting_total: int
     wrongly_lasting: int
+    brief_archive_missing: int
+    brief_commitment_missing: int
+    stale_commitment_leaked: int
     problems: int
 
 
@@ -397,6 +477,9 @@ def evaluate(results: Sequence[SequenceResult]) -> RollingMetrics:
         kept_unwritten=sum(len(item.kept_unwritten) for item in results),
         not_lasting_total=sum(item.not_lasting_total for item in results),
         wrongly_lasting=sum(len(item.wrongly_lasting) for item in results),
+        brief_archive_missing=sum(len(item.brief_archive_missing) for item in results),
+        brief_commitment_missing=sum(len(item.brief_commitment_missing) for item in results),
+        stale_commitment_leaked=sum(len(item.stale_commitment_leaked) for item in results),
         problems=sum(len(item.problems) for item in results),
     )
 
@@ -415,6 +498,12 @@ def verdict_failures(metrics: RollingMetrics, *, dry: bool) -> List[str]:
         failures.append(f"没有本场证据的旧行被丢了 {metrics.unevidenced_lost} 条")
     if metrics.wrongly_lasting > WRONGLY_LASTING_MAX:
         failures.append(f"进展被标成稳定的事 {metrics.wrongly_lasting} 条")
+    if metrics.brief_archive_missing > 0:
+        failures.append(f"开播简报漏掉应保留的事件行 {metrics.brief_archive_missing} 条")
+    if metrics.brief_commitment_missing > 0:
+        failures.append(f"开播简报【还惦记的事】漏掉近期活跃承诺 {metrics.brief_commitment_missing} 条")
+    if metrics.stale_commitment_leaked > 0:
+        failures.append(f"过期承诺混入【还惦记的事】 {metrics.stale_commitment_leaked} 条")
     if dry and metrics.kept_unwritten:
         failures.append(f"该留住的旧行有 {metrics.kept_unwritten} 条一开始就没写成档案")
     if dry and metrics.stale_removed != metrics.stale_total:
@@ -435,6 +524,8 @@ def format_metrics(metrics: RollingMetrics) -> str:
             f"没有本场证据的旧行被丢 {metrics.unevidenced_lost}/{metrics.kept_total} 条（阈值 {UNEVIDENCED_LOST_MAX}；"
             f"另有 {metrics.kept_unwritten} 条模型当初没写成档案，不计入）",
             f"进展被标成稳定的事 {metrics.wrongly_lasting}/{metrics.not_lasting_total} 条（阈值 {WRONGLY_LASTING_MAX}）",
+            f"开播简报核验：漏事件 {metrics.brief_archive_missing} 条，漏近期承诺 {metrics.brief_commitment_missing} 条，"
+            f"过期承诺混入 {metrics.stale_commitment_leaked} 条（阈值均为 0）",
             f"留下的旧行字节变化 {metrics.byte_mismatches} 处（阈值 {BYTE_MISMATCH_MAX}）",
         ]
     )
@@ -473,7 +564,7 @@ def _run(args: argparse.Namespace, prompt_manager: PromptManager, records: List[
     results: List[SequenceResult] = []
     for record in records:
         started = time.perf_counter()
-        result = asyncio.run(run_sequence(record, prompt_manager, answer_for))
+        result = asyncio.run(run_sequence(record, prompt_manager, answer_for, dry=dry))
         results.append(result)
         if args.verbose or result.forgotten or result.unevidenced_lost or result.problems:
             print(

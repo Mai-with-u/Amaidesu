@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,6 +26,8 @@ __all__ = [
     "SOCIAL_FACT_STATUSES",
     "MAX_ACTIVE_FACTS_PER_KIND",
     "QUOTE_OPTIONAL_KINDS",
+    "is_social_fact_resident",
+    "is_works_downgraded",
 ]
 
 # 六类事实（英文小写枚举）：环境形态 / 成员关系 / 共享惯例 / 进行中的事 /
@@ -72,6 +74,54 @@ class SocialFact(BaseModel):
     updated_session_id: Optional[int] = Field(default=None, description="最近更新场次")
     created_at_ms: int = Field(..., description="写入时刻（Unix epoch 毫秒）")
     updated_at_ms: int = Field(..., description="最近更新时刻（Unix epoch 毫秒）")
+    stale_unconfirmed: bool = Field(
+        default=False,
+        description="运行时标记：进行中的事已隔两场完结正式场未再被证实，渲染降级且满额时优先让位",
+    )
+
+
+def is_social_fact_resident(fact: SocialFact) -> bool:
+    """判定一条社交事实能否进入每轮常驻参考段【游戏社交事实】。
+
+    运营者锁定的行始终常驻；非人工锁定的行若没有逐字原话依据（模型归纳行），或仅挂在观众弹幕上
+    未经人工批准，只保留在库里供按需回想检索，不每轮常驻注入。
+    """
+    if fact.status != "active":
+        return False
+    if fact.human_locked:
+        return True
+    if fact.evidence_chat_id is not None and fact.evidence_game_chat_id is None:
+        return False
+    if not (fact.quote or "").strip():
+        return False
+    return True
+
+
+def is_works_downgraded(
+    fact: SocialFact,
+    *,
+    current_session_id: Optional[int] = None,
+    recent_two_session_ids: Sequence[int] = (),
+    second_recent_started_ms: int = 0,
+) -> bool:
+    """判定一条"进行中的事"（works）是否已过两场完结正式场未再证实而应降级。"""
+    if fact.stale_unconfirmed:
+        return True
+    if fact.kind != "works" or fact.human_locked:
+        return False
+    if len(recent_two_session_ids) < 2:
+        return False
+    touch_sid = fact.updated_session_id if fact.updated_session_id is not None else fact.created_session_id
+    if current_session_id is not None and touch_sid is not None and int(touch_sid) == int(current_session_id):
+        return False
+    recent_set = {int(sid) for sid in recent_two_session_ids[:2]}
+    if touch_sid is not None and int(touch_sid) in recent_set:
+        return False
+    if second_recent_started_ms > 0 and int(fact.updated_at_ms) >= int(second_recent_started_ms):
+        return False
+    if touch_sid is not None and second_recent_started_ms <= 0 and int(touch_sid) >= min(recent_set):
+        return False
+    return True
 
 
 class EvidenceHit(BaseModel):

@@ -415,7 +415,8 @@ uv run python scripts/memory_eval/retrieval.py --selftest
 
 每条用例是几场连着的直播。评测器在临时目录里起一份真实的库，按场次写入台词，跑生产整理器
 （快照的写入与取舍都走生产代码）；只有「写档案」那次模型调用是替身（dry 用 expect 反推的理想
-输出，live 真调模型），找承诺与了结两次调用一律回空，不在评测范围内。
+输出，live 真调模型），了结调用一律回空，带 `expect.commitments` 的场次按样本确定性写入承诺以核对
+序列结束下一场开播时的常驻简报（`build_brief`）。
 
 | 指标 | 阈值 | 算法 |
 | --- | --- | --- |
@@ -424,6 +425,7 @@ uv run python scripts/memory_eval/retrieval.py --selftest
 | 删掉的误记行回来 | 0 条 | 运营者在某场整理后删掉的行（`delete_after`），序列末尾又出现在快照里的条数 |
 | 进展被标成稳定的事 | 0 条 | `final.not_lasting` 里的键（建造进度、家具、种地、做菜），在任何一场的快照里被标成稳定的条数 |
 | 没有本场证据的旧行被丢 | 0 条 | `final.kept` 里的键（哪一场都没有证据说它了结，多是一次性的小事）进过快照、序列末尾却不在的条数；模型当初就没写成档案的不计入，另行报告 |
+| 开播简报核验（漏事件 / 漏近期承诺 / 过期承诺混入） | 0 条 | 序列结束开下一场调用 `build_brief`，核对隔一场事件、多条取名并存时的事件名额（`brief_archive_present`），以及近期承诺进【还惦记的事】（`brief_commitments_present`）而过期承诺退居搁置计数（`brief_commitments_absent`） |
 | 被改写或了结的事换掉 | 只报告 | `final.absent` 里不是运营者删的键，序列末尾确实不在快照里的比例 |
 
 ```bash

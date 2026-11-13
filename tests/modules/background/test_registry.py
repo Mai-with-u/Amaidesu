@@ -7,7 +7,7 @@ from typing import List
 from src.modules.background import BackgroundTaskRegistry
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.background import BackgroundTaskChangedPayload
+from src.modules.events.payloads.background import BackgroundTaskChangedPayload, BackgroundTaskProgressLine
 
 
 def _registry_with_recorder() -> tuple[BackgroundTaskRegistry, EventBus, List[BackgroundTaskChangedPayload]]:
@@ -62,6 +62,27 @@ async def test_update_carries_output_signal_and_plain_update_clears_it() -> None
     assert payloads[2].output_chars == 0 and payloads[2].output_tail == ""
     # 终态载荷同样不带残留的输出信号
     assert payloads[-1].output_chars == 0 and payloads[-1].output_tail == ""
+
+
+async def test_update_carries_progress_lines_and_plain_update_clears_them() -> None:
+    """并行子步骤的进度行随 update 走；不带行的 update 把上一次的行清掉，终态也不残留。"""
+    registry, bus, payloads = _registry_with_recorder()
+    lines = [
+        BackgroundTaskProgressLine(label="整理本场档案", progress_text="模型输出中（已 312 字）", output_chars=312),
+        BackgroundTaskProgressLine(label="找新承诺", progress_text="模型整理中（已 8 秒）"),
+    ]
+
+    await registry.begin("settle-58", "整理场次：2026-11-06 周五 22:22")
+    await registry.update("settle-58", "并行模型整理中（已完成 0/2 笔）", progress_lines=lines)
+    assert [line.label for line in registry.snapshot()[0].progress_lines] == ["整理本场档案", "找新承诺"]
+
+    await registry.update("settle-58", "2 笔模型调用完成，校验输出中")
+    await registry.finish("settle-58", success=True)
+    await bus.wait_until_drained()
+
+    assert [line.label for line in payloads[1].progress_lines] == ["整理本场档案", "找新承诺"]
+    assert payloads[2].progress_lines == []
+    assert payloads[-1].progress_lines == []
 
 
 async def test_finish_failure_carries_reason() -> None:

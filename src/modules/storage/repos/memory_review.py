@@ -457,6 +457,19 @@ class MemoryReviewRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def count_edit_records(self, *, live_session_id: int) -> int:
+        """某一场在 memory_edits 表里留下的人工改动记录总条数（含删行、改标题、标已审等审计记录）。"""
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM memory_edits WHERE live_session_id=?",
+                    (int(live_session_id),),
+                ).fetchone()
+                return int(row[0] or 0) if row else 0
+
+        return await self._run_in_executor(_exec)
+
 
 __all__ = [
     "MAX_PINNED_LINES",

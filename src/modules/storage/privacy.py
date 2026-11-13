@@ -954,6 +954,10 @@ class PrivacyService:
                 )
                 if session_ids:
                     _replace_nickname_in_sessions(conn, session_ids=session_ids, nickname=uname)
+                _replace_name_in_work_docs(conn, nickname=uname, label=MASKED_VIEWER_LABEL)
+
+            # 必须在删 live_chat 之前按 evidence_chat_id 删掉由该观众弹幕作证的社交事实（否则外键置 NULL 后留原话）
+            _delete_viewer_evidenced_social_facts(conn, viewer_ids=all_viewer_ids, external_ids=list(ext_ids))
 
             conn.execute(
                 f"DELETE FROM live_chat WHERE sender_role = 'viewer' AND viewer_id IN ({vid_placeholders})",  # noqa: S608
@@ -1068,26 +1072,94 @@ def _delete_player_rows(conn: sqlite3.Connection, *, player_id: int, secret_key:
         former = []
     names = {str(row["name"] or "").strip(), *(str(name).strip() for name in former if isinstance(name, str))}
     session_ids = _player_sessions(conn, player_id)
+    # 必须在删 game_players 级联删掉 game_chat 之前删掉本人公屏作证的社交事实（evidence_game_chat_id 为 SET NULL）
+    if table_exists(conn, "game_social_facts") and table_exists(conn, "game_chat"):
+        conn.execute(
+            "DELETE FROM game_social_facts WHERE evidence_game_chat_id IN"
+            " (SELECT id FROM game_chat WHERE player_id = ?)",
+            (player_id,),
+        )
     for name in sorted((name for name in names if len(name) >= MIN_MASK_NAME_LEN), key=len, reverse=True):
         if session_ids:
             _replace_nickname_in_sessions(conn, session_ids=session_ids, nickname=name, label=MASKED_PLAYER_LABEL)
         # 她在公屏打出去的话：所有场次都换，不只他留过记录的那几场（她可能在他没开口的场次里点他的名）
         _replace_name_in_her_game_chat(conn, nickname=name, label=MASKED_PLAYER_LABEL)
-        # 游戏社交事实：含他名字的行按同样的文本匹配口径换成代称（事实行不按场次维度，全表换）
+        # 别人作证但提到他名字的游戏社交事实与跨重启工作文档：按长到短换成代称
         _replace_name_in_social_facts(conn, nickname=name, label=MASKED_PLAYER_LABEL)
+        _replace_name_in_work_docs(conn, nickname=name, label=MASKED_PLAYER_LABEL, game=str(row["game"] or ""))
     conn.execute("DELETE FROM game_players WHERE id = ?", (player_id,))
     return True
 
 
 def _replace_name_in_social_facts(conn: sqlite3.Connection, *, nickname: str, label: str) -> None:
-    """把游戏社交事实正文与引文里的这个名字换成代称（玩家被删后事实行留着，名字不留着）。"""
+    """把游戏社交事实正文与引文里的这个名字换成代称（别人作证的事实行留着，被删玩家的名字不留着）。"""
     if not nickname or not table_exists(conn, "game_social_facts"):
         return
+    pattern = _like_contains(nickname)
     conn.execute(
         "UPDATE game_social_facts SET text = REPLACE(text, ?, ?), quote = REPLACE(quote, ?, ?)"
-        " WHERE text LIKE ? OR quote LIKE ?",
-        (nickname, label, nickname, label, f"%{nickname}%", f"%{nickname}%"),
+        " WHERE text LIKE ? ESCAPE '\\' OR quote LIKE ? ESCAPE '\\'",
+        (nickname, label, nickname, label, pattern, pattern),
     )
+
+
+def _delete_viewer_evidenced_social_facts(
+    conn: sqlite3.Connection,
+    *,
+    viewer_ids: Sequence[int],
+    external_ids: Sequence[str],
+) -> None:
+    """删观众时在删 live_chat 前删掉由该观众弹幕作证的社交事实行，避免外键置空后残留原话。"""
+    if not viewer_ids or not table_exists(conn, "game_social_facts") or not table_exists(conn, "live_chat"):
+        return
+    vid_ph = ",".join("?" for _ in viewer_ids)
+    conn.execute(
+        "DELETE FROM game_social_facts WHERE evidence_chat_id IN"  # noqa: S608 占位符由代码生成
+        f" (SELECT id FROM live_chat WHERE sender_role = 'viewer' AND viewer_id IN ({vid_ph}))",
+        list(viewer_ids),
+    )
+    if external_ids:
+        ext_ph = ",".join("?" for _ in external_ids)
+        conn.execute(
+            "DELETE FROM game_social_facts WHERE evidence_chat_id IN"  # noqa: S608 占位符由代码生成
+            f" (SELECT id FROM live_chat WHERE sender_role = 'viewer' AND sender_id IN ({ext_ph}))",
+            list(external_ids),
+        )
+
+
+def _replace_name_in_work_docs(conn: sqlite3.Connection, *, nickname: str, label: str, game: str = "") -> None:
+    """清理按存档持久化的游戏工作文档（notebook 与 todos JSON 的 content）中出现的名字。"""
+    if not nickname or not table_exists(conn, "game_work_docs"):
+        return
+    pattern = _like_contains(nickname)
+    where = " WHERE (notebook LIKE ? ESCAPE '\\' OR todos LIKE ? ESCAPE '\\')"
+    params: List[object] = [pattern, pattern]
+    if game:
+        where += " AND game = ?"
+        params.append(game)
+    rows = conn.execute(
+        f"SELECT game, save_id, notebook, todos FROM game_work_docs{where}",  # noqa: S608 常量表名与列名
+        params,
+    ).fetchall()
+    for row in rows:
+        new_notebook = str(row["notebook"] or "").replace(nickname, label)
+        raw_todos = str(row["todos"] or "[]")
+        try:
+            parsed = json.loads(raw_todos)
+        except (TypeError, ValueError):
+            new_todos = raw_todos.replace(nickname, label)
+        else:
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict) and isinstance(item.get("content"), str):
+                        item["content"] = item["content"].replace(nickname, label)
+                new_todos = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+            else:
+                new_todos = raw_todos.replace(nickname, label)
+        conn.execute(
+            "UPDATE game_work_docs SET notebook = ?, todos = ? WHERE game = ? AND save_id = ?",
+            (new_notebook, new_todos, str(row["game"]), str(row["save_id"])),
+        )
 
 
 def _replace_name_in_her_game_chat(conn: sqlite3.Connection, *, nickname: str, label: str) -> None:
@@ -1220,6 +1292,9 @@ def _replace_nickname_in_sessions(
 
     _clear_memory_edits_with_nickname(conn, session_ids=session_ids, nickname=nickname)
     _mask_candidates_with_nickname(conn, session_ids=session_ids, nickname=nickname, label=label)
+    _replace_nickname_in_social_and_corrections_for_sessions(
+        conn, session_ids=session_ids, nickname=nickname, label=label
+    )
     _replace_nickname_in_settle_reports(conn, session_ids=session_ids, nickname=nickname, label=label)
     _replace_nickname_in_game_data(conn, session_ids=session_ids, nickname=nickname, label=label)
 
@@ -1294,6 +1369,42 @@ def _mask_candidates_with_nickname(
         " OR word LIKE ? ESCAPE '\\')",
         [nickname, label] * 4 + [*session_ids, pattern, pattern, pattern, pattern],
     )
+
+
+def _replace_nickname_in_social_and_corrections_for_sessions(
+    conn: sqlite3.Connection,
+    *,
+    session_ids: Sequence[int],
+    nickname: str,
+    label: str,
+) -> None:
+    """在指定场次集合内替换剩余社交事实、场内更正里的名字，并丢弃含该名字的未完结整理断点。"""
+    if not nickname or not session_ids:
+        return
+    sid_ph = ",".join("?" for _ in session_ids)
+    pattern = _like_contains(nickname)
+    if table_exists(conn, "game_social_facts"):
+        conn.execute(
+            "UPDATE game_social_facts SET text = REPLACE(text, ?, ?), quote = REPLACE(quote, ?, ?)"  # noqa: S608
+            f" WHERE (created_session_id IN ({sid_ph}) OR updated_session_id IN ({sid_ph})"
+            "        OR created_session_id IS NULL)"
+            "   AND (text LIKE ? ESCAPE '\\' OR quote LIKE ? ESCAPE '\\')",
+            [nickname, label, nickname, label, *session_ids, *session_ids, pattern, pattern],
+        )
+    if table_exists(conn, "memory_corrections"):
+        conn.execute(
+            "UPDATE memory_corrections SET summary = REPLACE(summary, ?, ?),"  # noqa: S608
+            " evidence_quote = REPLACE(evidence_quote, ?, ?)"
+            f" WHERE live_session_id IN ({sid_ph})"
+            "   AND (summary LIKE ? ESCAPE '\\' OR evidence_quote LIKE ? ESCAPE '\\')",
+            [nickname, label, nickname, label, *session_ids, pattern, pattern],
+        )
+    if table_exists(conn, "settle_checkpoints"):
+        conn.execute(
+            f"DELETE FROM settle_checkpoints WHERE live_session_id IN ({sid_ph})"  # noqa: S608
+            " AND output_json LIKE ? ESCAPE '\\'",
+            [*session_ids, pattern],
+        )
 
 
 def _clear_memory_edits_with_nickname(

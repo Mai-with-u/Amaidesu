@@ -42,7 +42,7 @@ function taskRow(overrides: Partial<BackgroundTask> = {}): BackgroundTask {
     task_id: 'settle-58',
     title: '整理场次：58',
     state: 'running',
-    progress_text: '第 1 笔/共 3 笔',
+    progress_text: '并行模型整理中（已完成 0/3 笔）',
     started_at_ms: 1_706_745_600_000,
     ...overrides,
   };
@@ -120,7 +120,7 @@ describe('useBackgroundTasks', () => {
   it('running 事件登记新任务并覆盖同任务进度', async () => {
     listMock.mockResolvedValue({ data: [] });
     const { tasksRef, feed } = await mount();
-    feed(taskEvent(taskRow({ progress_text: '第 1 笔/共 3 笔' })));
+    feed(taskEvent(taskRow({ progress_text: '并行模型整理中（已完成 0/3 笔）' })));
     expect(tasksRef.tasks.value.map(t => t.task_id)).toEqual(['settle-58']);
     feed(
       taskEvent(
@@ -150,6 +150,28 @@ describe('useBackgroundTasks', () => {
       'settle-58',
       'memory-index-backfill',
     ]);
+  });
+
+  it('并行子步骤进度行（progress_lines）随载荷原样透传', async () => {
+    listMock.mockResolvedValue({ data: [] });
+    const { tasksRef, feed } = await mount();
+    feed(
+      taskEvent(
+        taskRow({
+          progress_lines: [
+            { label: '整理本场档案', progress_text: '模型输出中（已 312 字）', output_chars: 312, output_tail: '这场她' },
+            { label: '找新承诺', progress_text: '模型整理中（已 8 秒）' },
+          ],
+        }),
+      ),
+    );
+    expect(tasksRef.tasks.value[0]?.progress_lines).toEqual([
+      { label: '整理本场档案', progress_text: '模型输出中（已 312 字）', output_chars: 312, output_tail: '这场她' },
+      { label: '找新承诺', progress_text: '模型整理中（已 8 秒）' },
+    ]);
+    // 覆盖为不带行的载荷（调用全部完成）后行清空
+    feed(taskEvent(taskRow({ progress_text: '3 笔模型调用完成，校验输出中' })));
+    expect(tasksRef.tasks.value[0]?.progress_lines).toBeUndefined();
   });
 
   it('终态事件把任务移出列表', async () => {

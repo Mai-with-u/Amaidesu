@@ -9,11 +9,13 @@ from typing import Any, Dict, Optional
 
 import pytest
 
+from src.agents.streamer.planner_render import render_social_facts
 from src.agents.streamer.tools.social_fact import (
     MAX_FACTS_PER_KIND,
     SocialFactToolProvider,
     build_social_fact_tool_spec,
 )
+from src.modules.storage.models.social_facts import SocialFact
 from src.modules.tools import ToolInvocation
 
 _FULL = build_social_fact_tool_spec().full_name
@@ -84,17 +86,35 @@ async def _call(provider: SocialFactToolProvider, **args: Any):
     return await provider.invoke(ToolInvocation(tool_name=_FULL, arguments=args))
 
 
-async def test_viewer_danmaku_evidence_is_written_with_row_number(store) -> None:
+async def test_viewer_danmaku_routes_to_candidate_channel_instead_of_active_facts(store) -> None:
+    """观众弹幕作证不再直写跨场社交事实表：未当场回应时打回，已当场回应时落入待审候选（批准前不可见）。"""
     env = await _setup(store)
-    result = await _call(
-        env["provider"], kind="members", text="观众和阿杰合住一个基地", quote="和阿杰合住", evidence_message_id="dm1"
+    before_reply = await _call(
+        env["provider"], kind="members", text="观众乙和玩家甲合住基地", quote="和阿杰合住", evidence_message_id="dm1"
     )
-    assert result.success, result.error_message
-    fact = await store.social_facts.get_fact(fact_id=result.structured_content["id"])
-    assert fact is not None
-    assert (fact.evidence_chat_id, fact.evidence_game_chat_id) == (env["viewer_chat"], None)
-    assert (fact.game, fact.save_id, fact.created_session_id) == ("minecraft", "w1", env["session"])
-    assert result.structured_content["counts"] == {"members": 1}
+    assert not before_reply.success
+    assert "待审候选" in (before_reply.error_message or "")
+    assert await store.social_facts.list_active_facts(game="minecraft") == []
+
+    # 主播当场对 dm1 送达回应后，再登记转入 viewer_candidates 待审区，仍不直写 game_social_facts
+    await store.chat.insert_live_chat(
+        live_session_id=env["session"],
+        timestamp_ms=1250,
+        sender_role="assistant",
+        content="好呀记下你们合住基地啦",
+        message_type="speech",
+        reply_to_message_id="dm1",
+    )
+    after_reply = await _call(
+        env["provider"], kind="members", text="合住一个基地", quote="和阿杰合住", evidence_message_id="dm1"
+    )
+    assert after_reply.success, after_reply.error_message
+    assert after_reply.structured_content["queued_candidate"] is True
+    assert await store.social_facts.list_active_facts(game="minecraft") == []
+    pending = await store.viewer_candidates.list_candidates(status="pending", live_session_id=env["session"])
+    assert len(pending) == 1
+    assert pending[0].id == after_reply.structured_content["candidate_id"]
+    assert pending[0].title == "合住一个基地"
 
 
 async def test_game_chat_evidence_uses_that_line_and_its_save(store) -> None:
@@ -128,10 +148,10 @@ async def test_game_chat_evidence_uses_that_line_and_its_save(store) -> None:
 async def test_bounces(store, args: Dict[str, Any], expected: str) -> None:
     env = await _setup(store)
     call: Dict[str, Any] = {
-        "kind": "members",
-        "text": "合住一个基地",
-        "quote": "和阿杰合住",
-        "evidence_message_id": "dm1",
+        "kind": "sharing",
+        "text": "箱子是公用的",
+        "quote": "箱子大家随便用",
+        "evidence_message_id": "gc1",
     }
     call.update(args)
     result = await _call(env["provider"], **call)
@@ -144,7 +164,7 @@ async def test_no_session_bounces(store) -> None:
     provider = SocialFactToolProvider(
         repo=store.social_facts, session_provider=lambda: None, game_scope_provider=lambda: ("", "", "")
     )
-    result = await _call(provider, kind="members", text="合住", quote="和阿杰合住", evidence_message_id="dm1")
+    result = await _call(provider, kind="sharing", text="箱子公用", quote="箱子大家随便用", evidence_message_id="gc1")
     assert not result.success and "不在直播" in (result.error_message or "")
     del env
 
@@ -159,7 +179,7 @@ async def _seed(store: Any, kind: str, *, locked: int = 0, game: str = "minecraf
 
 async def test_supersede_rules(store) -> None:
     env = await _setup(store)
-    base: Dict[str, Any] = {"text": "合住一个基地", "quote": "和阿杰合住", "evidence_message_id": "dm1"}
+    base: Dict[str, Any] = {"text": "箱子公用", "quote": "箱子大家随便用", "evidence_message_id": "gc1"}
     locked = await _seed(store, "members", locked=1)
     other_kind = await _seed(store, "works")
     stale = await _seed(store, "members")
@@ -187,7 +207,7 @@ async def test_kind_cap_counts_current_save_and_points_at_oldest(store) -> None:
     # 别的存档的行不占本存档的名额
     await _seed(store, "works", save_id="w2")
     result = await _call(
-        env["provider"], kind="members", text="合住一个基地", quote="和阿杰合住", evidence_message_id="dm1"
+        env["provider"], kind="members", text="合住一个基地", quote="箱子大家随便用", evidence_message_id="gc1"
     )
     assert not result.success
     assert "supersedes_id" in (result.error_message or "") and f"行号 {ids[0]}" in (result.error_message or "")
@@ -195,8 +215,8 @@ async def test_kind_cap_counts_current_save_and_points_at_oldest(store) -> None:
         env["provider"],
         kind="works",
         text="在修房子",
-        quote="和阿杰合住",
-        evidence_message_id="dm1",
+        quote="箱子大家随便用",
+        evidence_message_id="gc1",
     )
     assert result.success, result.error_message
 
@@ -211,37 +231,132 @@ def test_registration_follows_repo_injection() -> None:
     assert _FULL in {spec.full_name for spec in with_repo.list_tools()}
 
 
-def _fact(fact_id: int, kind: str, *, locked: int = 0, updated: int = 0, status: str = "active"):
-    from src.modules.storage.models.social_facts import SocialFact
-
+def _fact(
+    fact_id: int,
+    kind: str,
+    *,
+    locked: int = 0,
+    updated: int = 0,
+    status: str = "active",
+    quote: str = "有原话依据",
+    session_id: Optional[int] = None,
+    evidence_chat_id: Optional[int] = None,
+) -> SocialFact:
     return SocialFact(
         id=fact_id,
         game="minecraft",
         kind=kind,
         text=f"事实{fact_id}",
+        quote=quote,
+        evidence_chat_id=evidence_chat_id,
         status=status,
         human_locked=locked,
+        created_session_id=session_id,
+        updated_session_id=session_id,
         created_at_ms=updated,
         updated_at_ms=updated,
     )
 
 
 def test_render_groups_by_kind_caps_and_orders_by_priority() -> None:
-    """参考段：现行行按类分组、总行数至多 12；人工锁 > works/her_role > 最近更新；被取代的不注入。"""
-    from src.agents.streamer.planner_render import render_social_facts
-
+    """参考段：可核对现行行按类分组、总行数至多 12；无证据归纳行与未锁弹幕行不常驻；隔两场旧 works 降级殿后。"""
     facts = [_fact(i, "members", updated=i) for i in range(1, 11)]
     facts += [_fact(20, "works", updated=1), _fact(21, "her_role", updated=1)]
-    facts += [_fact(30, "setting", locked=1, updated=0), _fact(31, "members", status="superseded", updated=99)]
+    facts += [
+        _fact(30, "setting", locked=1, updated=0, quote=""),
+        _fact(31, "members", status="superseded", updated=99),
+    ]
+    # 无引文且未人工锁定的模型归纳行、以及未批准的观众弹幕来源行均不进入每轮常驻参考段
+    facts += [_fact(40, "her_role", quote="", updated=99), _fact(41, "sharing", evidence_chat_id=7, updated=99)]
     text = render_social_facts(facts, 100_000, lambda ms: "刚才")
     lines = [line for line in text.splitlines()[1:] if not line.startswith("（")]
     assert text.startswith("【游戏社交事实】")
     assert len(lines) == 12
     assert lines[0].startswith("★ 事实30")
     assert "事实20" in text and "事实21" in text
-    assert "事实31" not in text
-    assert "事实1（" not in text and "事实2（" in text  # 13 行现行，最旧的一条成员关系被挤掉
+    assert "事实31" not in text and "事实40" not in text and "事实41" not in text
+    assert "事实1（" not in text and "事实2（" in text  # 13 行可常驻现行，最旧的一条成员关系被挤掉
     assert render_social_facts([], 0, lambda ms: "") == ""
+
+
+def test_stale_works_downgrades_to_tail_after_two_unconfirmed_sessions() -> None:
+    """进行中的事（works）隔过两个已完结正式场仍未再证实时，降到参考段末尾并标待确认。"""
+    stale_work = _fact(1, "works", updated=1_000, session_id=10)
+    fresh_member = _fact(2, "members", updated=3_500, session_id=12)
+    text = render_social_facts(
+        [stale_work, fresh_member],
+        5_000,
+        lambda ms: "早先",
+        current_session_id=13,
+        recent_two_session_ids=(12, 11),
+        second_recent_started_ms=2_000,
+    )
+    assert text.index("事实2") < text.index("事实1")
+    assert "（待确认的旧进展）" in text
+    assert "事实1（早先记的，已隔多场未再证实）" in text
+
+
+async def test_downgraded_works_yields_slot_when_kind_cap_is_full(store) -> None:
+    """进行中的事满 4 条时，已隔两场未再证实的旧 works 自动让位被新进展取代，不再拒收新进展。"""
+    s1 = await store.sessions.insert_live_session(started_at_ms=1_000)
+    s2 = await store.sessions.insert_live_session(started_at_ms=2_000)
+    s3 = await store.sessions.insert_live_session(started_at_ms=3_000)
+    await store.sessions.close_live_session(live_session_id=s1, ended_at_ms=1_500)
+    await store.sessions.close_live_session(live_session_id=s2, ended_at_ms=2_500)
+    await store.sessions.close_live_session(live_session_id=s3, ended_at_ms=3_500)
+    s4 = await store.sessions.insert_live_session(started_at_ms=4_000)
+
+    stale_id = await store.social_facts.insert_fact(
+        kind="works",
+        text="玩家甲在搭旧风车",
+        quote="搭旧风车",
+        game="minecraft",
+        save_id="w1",
+        created_session_id=s1,
+        updated_session_id=s1,
+        now_ms_value=1_200,
+    )
+    for idx in range(3):
+        await store.social_facts.insert_fact(
+            kind="works",
+            text=f"近期工程{idx}",
+            quote="近期",
+            game="minecraft",
+            save_id="w1",
+            created_session_id=s3,
+            updated_session_id=s3,
+            now_ms_value=3_200 + idx,
+        )
+
+    player = await store.game_players.meet_player(
+        game="minecraft", uuid="u-jia", name="玩家甲", live_session_id=s4, at_ms=4_100
+    )
+    await store.game_players.add_game_chat(
+        live_session_id=s4,
+        game="minecraft",
+        direction="player",
+        content="我现在开始修铁轨了",
+        player_id=player.id,
+        save_id="w1",
+        save_name="麦窝",
+        at_ms=4_200,
+        message_id="gc-rail",
+    )
+
+    async def _recent_two(_sid: int):
+        return [(s3, 3_000), (s2, 2_000)]
+
+    provider = SocialFactToolProvider(
+        repo=store.social_facts,
+        session_provider=lambda: s4,
+        game_scope_provider=lambda: ("minecraft", "w1", "麦窝"),
+        recent_sessions_provider=_recent_two,
+    )
+    res = await _call(
+        provider, kind="works", text="玩家甲开始修铁轨", quote="开始修铁轨", evidence_message_id="gc-rail"
+    )
+    assert res.success, res.error_message
+    assert res.structured_content["superseded"] == stale_id
 
 
 async def test_recall_finds_active_social_fact(store) -> None:

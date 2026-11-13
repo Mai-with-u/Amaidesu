@@ -1004,6 +1004,42 @@ async def test_send_streamer_chat_reports_unconfirmed_send() -> None:
         await agent.stop()
 
 
+async def test_send_streamer_chat_waits_for_late_finish() -> None:
+    """execute 下达即回（目标还在逐字打字），结束事件随后到达：等到 finished 且已交出去才算成功。"""
+    server = FakeMaicraft()
+    server.chat_instant = False
+    agent, _llm, bus = await make_minecraft_agent(server=server, llm=None)
+    try:
+        # 模拟 Mod 侧异步完成：下达后 0.5 秒目标才结束（结果细节带已提交）
+        send_task = asyncio.create_task(agent._send_streamer_chat("来啦"))
+        for _ in range(50):
+            if server.goals:
+                break
+            await asyncio.sleep(0.02)
+        run_id = max(server.goals)
+        await asyncio.sleep(0.3)
+        server.finish(run_id, status="done", summary="说了这句话", details={"submitted": True, "message": "来啦"})
+        result = await asyncio.wait_for(send_task, timeout=20)
+        assert result == {"success": True, "message": "来啦"}
+        chatted = [c.args[1] for c in bus.emit.await_args_list if isinstance(c.args[1], GameSelfChattedPayload)]
+        assert [p.message for p in chatted] == ["来啦"]
+    finally:
+        await agent.stop()
+
+
+async def test_send_streamer_chat_reports_timeout_without_finishing() -> None:
+    """等待期结束目标还没收场：报"没等到结果"（发送与否未知），不自动当成功或失败。"""
+    server = FakeMaicraft()
+    server.chat_instant = False
+    agent, _llm, bus = await make_minecraft_agent(server=server, llm=None)
+    try:
+        result = await agent._send_streamer_chat("来啦")
+        assert result["success"] is False and "没有回报这句话的结果" in result["error"]
+        assert not [c for c in bus.emit.await_args_list if isinstance(c.args[1], GameSelfChattedPayload)]
+    finally:
+        await agent.stop()
+
+
 async def test_mcp_disconnection_refresh_logs_removal(loguru_capture: Any) -> None:
     """断连换血成功路径必须有 INFO 日志（此前成功时零日志，2026-11-05 事故无法回查）。"""
     _FakeMcpClient.constructed = []

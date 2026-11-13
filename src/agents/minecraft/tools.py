@@ -388,7 +388,11 @@ def build_context_fold_spec() -> ToolSpec:
                                 "description": "起点的消息编号（如 m0012）或旧折叠块号（如 b3）",
                             },
                             "end": {"type": "string", "description": "终点的消息编号或旧折叠块号（含这一条）"},
-                            "summary": {"type": "string", "minLength": 1, "description": "替代这段原文的摘要"},
+                            "summary": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "替代这段原文的紧凑摘要（须明显短于被折区间，省不下足够空间会被拒收）",
+                            },
                         },
                         "required": ["start", "end", "summary"],
                         "additionalProperties": False,

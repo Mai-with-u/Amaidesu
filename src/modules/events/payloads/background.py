@@ -8,9 +8,9 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.base import BasePayload
@@ -19,6 +19,19 @@ from src.modules.events.registry import register_event
 # 任务状态的取值全集：running 进行中 / finished 已完成 / failed 失败。
 # 终态事件照发，但任务已从注册表移除。
 BackgroundTaskState = Literal["running", "finished", "failed"]
+
+
+class BackgroundTaskProgressLine(BaseModel):
+    """任务内一条并行子步骤的进度行（面板里一任务可堆叠多行，每行一步）。
+
+    典型场景是下播整理的并行模型调用：几笔互不依赖的调用同时跑，每笔一行
+    报各自的阶段与输出。单步骤任务不用它，看任务的 progress_text 即可。
+    """
+
+    label: str = Field(..., description="子步骤名（如 整理本场档案 / 找新承诺）")
+    progress_text: str = Field(..., description="该步的进度自由文本（如 模型输出中（已 312 字））")
+    output_chars: int = Field(default=0, description="该步已输出的正文字数（仅流式调用期间大于 0）")
+    output_tail: str = Field(default="", description="该步最近输出的文字尾巴（非流式调用期间为空）")
 
 
 @register_event(CoreEvents.BACKGROUND_TASK_CHANGED)
@@ -34,6 +47,7 @@ class BackgroundTaskChangedPayload(BasePayload):
         failure_reason: 失败原因（仅 failed 时带）
         output_chars: 当前这笔模型调用已输出的正文字数（仅模型调用期间大于 0）
         output_tail: 当前这笔模型调用最近输出的文字尾巴（浮层实时预览用，非模型调用期间为空）
+        progress_lines: 并行子步骤的进度行（每行一步；空 = 单步骤任务，看 progress_text 即可）
     """
 
     task_id: str = Field(..., description="任务号（登记方自定，同一任务的历次变化用它关联）")
@@ -44,6 +58,10 @@ class BackgroundTaskChangedPayload(BasePayload):
     failure_reason: Optional[str] = Field(default=None, description="失败原因（仅 failed 时带）")
     output_chars: int = Field(default=0, description="当前这笔模型调用已输出的正文字数（仅流式调用期间大于 0）")
     output_tail: str = Field(default="", description="当前这笔模型调用最近输出的文字尾巴（非模型调用期间为空）")
+    progress_lines: List[BackgroundTaskProgressLine] = Field(
+        default_factory=list,
+        description="并行子步骤的进度行（每行一步；空 = 单步骤任务）",
+    )
 
 
-__all__ = ["BackgroundTaskChangedPayload", "BackgroundTaskState"]
+__all__ = ["BackgroundTaskChangedPayload", "BackgroundTaskProgressLine", "BackgroundTaskState"]

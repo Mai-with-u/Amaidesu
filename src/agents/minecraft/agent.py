@@ -75,6 +75,7 @@ from src.agents.minecraft.goals import GoalWatch
 from src.agents.minecraft.interaction_throttle import InteractionThrottle, player_key_of
 from src.agents.minecraft.maicraft import (
     AWAITING_ANSWER,
+    EVENTS,
     EXECUTE,
     HOST_ONLY_TOOLS,
     OBSERVE,
@@ -84,6 +85,7 @@ from src.agents.minecraft.maicraft import (
     GOAL,
     GoalRun,
     MaicraftReply,
+    events_page_of,
     goal_id_of_ledger,
     goal_run_of,
     reply_of,
@@ -221,6 +223,10 @@ _GOAL_POLLING_OPERATIONS = frozenset({"get", "list"})
 # 委派自动收账的成功目标状态：批内目标回执全是 done 才算整单做成；
 # 其余非 cancelled 的终态（failed / partial / gone）都算没做成
 _AUTO_FINISH_DONE_STATUS = "done"
+
+# 主播直发公屏的确认等待：覆盖 Mod 侧 chat 任务的逐字打字与提交（确认窗约 5 秒），
+# 超出即按"没等到结果"收场——发送与否由发起方决定，不自动重发
+_CHAT_CONFIRM_WAIT_MS = 12_000
 
 
 class MinecraftAgent(BaseAgent):
@@ -1629,8 +1635,11 @@ class MinecraftAgent(BaseAgent):
                 f"[系统] 目标 {run.goal_id}（{goal_label(run)}）在等你回答：{json_text(run.question)}。"
                 f"用 maicraft_goal(operation=answer, goal_id={run.goal_id}, answer=选项编号) 回答。"
             )
-        elif run.state == PAUSED and before.get("state") != PAUSED:
-            # 急事用一次就清掉，不拿去解释之后别的暂停；是否新鲜由通知函数按当下时刻判定
+        elif run.state == PAUSED and not self._goal_ledger.pause_notice_sent(run.goal_id):
+            # 急事用一次就清掉，不拿去解释之后别的暂停；是否新鲜由通知函数按当下时刻判定。
+            # 发没发过通知按通知簿判，不按账本状态——批内的目标查询会先把 paused 记上账
+            # （看门狗叫醒的批读一眼目标），随后才到的暂停事件不能因此被吞。
+            self._goal_ledger.mark_pause_notified(run.goal_id)
             urgent, self._urgent_before_pause = self._urgent_before_pause, None
             self._inject_wakeup_message(pause_notice(run, after_world_change, urgent, self._clock()))
 
@@ -2702,6 +2711,10 @@ class MinecraftAgent(BaseAgent):
         公屏聊天（direction=streamer），主播下一轮上下文看得到自己说过什么。
         游戏侧没有回报交出去（没结束、被取消、打成了对某人的私聊）一律报错误，
         不当作已发送；以 ``/`` 开头是游戏命令，这个工具只发文本，直接拒绝。
+
+        ``execute`` 是下达即回（返回时目标多半还在逐字打字），这里用事件流按目标编号
+        长轮询等它结束，再按结束时的结果判断那句话交出去没有——不等就判，刚下达的
+        目标永远不满足"已结束"，会把发出去的话误报成失败、招来同一句话的重发。
         """
         message = text.strip()
         if not message:
@@ -2712,12 +2725,51 @@ class MinecraftAgent(BaseAgent):
         if not reply.ok:
             return {"success": False, "error": f"游戏没有受理发送：{reply.error_message}"}
         run = goal_run_of(reply.data)
-        details = (run.result or {}).get("details") if run is not None else None
+        if run is None:
+            return {"success": False, "error": "发送未确认：游戏没有返回目标编号"}
+        run = await self._await_goal_finished(run.goal_id)
+        if run is None:
+            # 确认窗内没等到结束不等于没发出去（提交可能在收场后才落地）；如实说不确定，
+            # 让发起方决定要不要再发——赌"没发出去"自动重发会造出公屏重复句。
+            return {"success": False, "error": "发送未确认：等待期内游戏没有回报这句话的结果"}
+        details = (run.result or {}).get("details") if isinstance(run.result, dict) else None
         submitted = isinstance(details, dict) and details.get("submitted") is True and "to" not in details
-        if run is None or not run.finished or not submitted:
+        if not submitted:
             return {"success": False, "error": "发送未确认：游戏侧没有回报这句话已交出去"}
         await self._send_self_chat(message)
         return {"success": True, "message": message}
+
+    async def _await_goal_finished(self, goal_id: int, wait_ms: int = _CHAT_CONFIRM_WAIT_MS) -> Optional[GoalRun]:
+        """等一个刚下达的目标结束：事件流按编号过滤长轮询，超时前查一次目标本体兜底。
+
+        每页事件只认这个编号的 finished，见到就查目标拿完整结果（事件行只有状态，
+        结果细节在目标里）。事件可能被挤出最近一页（首次读取只给最近几条），超时前
+        无论等到没有都查一次目标本体——已结束时它就是结果，没结束才按超时收场。
+        等待期挂起、Mod 断连都按超时同款收场——发送判定交回调用方。
+        """
+        deadline = self._clock() + wait_ms / 1000  # 时钟是秒，等待参数是毫秒
+        after_cursor = 0
+        while self._clock() < deadline:
+            remaining_ms = max(deadline - self._clock(), 0) * 1000
+            reply = await self._call_maicraft(
+                EVENTS, {"topic": "self", "goal_id": goal_id, "after_cursor": after_cursor, "wait_ms": remaining_ms}
+            )
+            if not reply.ok:
+                break
+            page = events_page_of(reply.data)
+            if page is None:
+                break
+            after_cursor = page.cursor
+            if any(
+                str(event.get("kind") or "") == "finished" and event.get("goal_id") == goal_id for event in page.events
+            ):
+                break
+        final = await self._call_maicraft(GOAL, {"operation": "get", "goal_id": goal_id})
+        if final.ok:
+            run = goal_run_of(final.data)
+            if run is not None and run.finished:
+                return run
+        return None
 
     async def _emit_spar_interaction(self, run: GoalRun) -> None:
         """切磋收手：按结果里 Mod 认出的对手（旧版 Mod 退回下令时点的名字）发一条玩家互动，只给存储记账，主播不订阅。"""

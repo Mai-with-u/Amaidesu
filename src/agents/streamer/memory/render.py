@@ -862,22 +862,36 @@ def render_player_card(
     return f"[玩家·{player.name}] {name} 在游戏里找你了。{past}{said_text}{promise_text}认得出他就好，别念清单。"
 
 
-def render_presence_line(viewers: Sequence[Tuple[str, Optional[int]]], *, now_ms: int) -> str:
-    """老观众在场一行：名字加档位词，最多 6 人，多的折成"等 N 位"。
+def render_presence_line(
+    viewers: Sequence[Tuple[str, Optional[int]]],
+    *,
+    now_ms: int,
+    entered_names: Sequence[str] = (),
+) -> str:
+    """老观众在场一行：开口的老观众给名字加档位词，只进房没说话的老观众给"常来的某某进来了"（与欢迎合并）。
 
-    viewers 是（昵称, 本场之前最后一次出现的时刻）序列；档位按距今三天分界，
-    没带上次时刻的按"有阵子没来"处理（宁可说得含糊，不编一个具体时长）。
+    viewers 是（昵称, 本场之前最后一次出现的时刻）序列；``entered_names`` 是本场刚进房、来过三场以上但
+    尚未说话的老观众昵称（每场每人最多提示一次）。
     """
     entries = list(viewers)
-    if not entries:
+    enters = [name.strip() for name in entered_names if name and name.strip()]
+    if not entries and not enters:
         return ""
-    shown = entries[:MAX_PRESENCE_VIEWERS]
-    parts = [f"{name}（{_presence_tier(prev_seen_ms, now_ms)}）" for name, prev_seen_ms in shown]
-    rest = len(entries) - len(shown)
-    text = "、".join(parts)
-    if rest > 0:
-        text += f"，等 {rest} 位"
-    return _PRESENCE_HEADER + text
+    lines: List[str] = []
+    if entries:
+        shown = entries[:MAX_PRESENCE_VIEWERS]
+        parts = [f"{name}（{_presence_tier(prev_seen_ms, now_ms)}）" for name, prev_seen_ms in shown]
+        rest = len(entries) - len(shown)
+        text = "、".join(parts)
+        if rest > 0:
+            text += f"，等 {rest} 位"
+        lines.append(_PRESENCE_HEADER + text)
+    if enters:
+        shown_enters = enters[:MAX_PRESENCE_VIEWERS]
+        enter_body = "、".join(f"常来的 {name} 进来了" for name in shown_enters)
+        prefix = _PRESENCE_HEADER if not lines else ""
+        lines.append(f"{prefix}{enter_body}（顺口欢迎一声就行，和进房名单是同一个人，别欢迎两遍）")
+    return "\n".join(lines)
 
 
 def _presence_tier(prev_seen_ms: Optional[int], now_ms: int) -> str:

@@ -53,6 +53,7 @@ from src.modules.events.payloads.game_chat import GameChatPayload, GameSelfChatt
 from src.modules.llm.embedding import EmbeddingSetup
 from src.modules.logging import get_logger
 from src.modules.utils.task_utils import spawn_background_task
+from src.modules.storage.models.social_facts import is_social_fact_resident, is_works_downgraded
 from src.modules.storage.repos._base import BaseRepo
 from src.modules.storage.repos.memory_corrections import MemoryCorrectionRepo
 from src.modules.tools import ToolSpec
@@ -1093,6 +1094,7 @@ class StreamerAgent(BaseAgent):
                         session_provider=self._current_session_pk,
                         game_scope_provider=self._social_game_scope,
                         on_written=self._wake_memory_indexer,
+                        recent_sessions_provider=self._recent_two_session_bounds,
                     ),
                     registry=self._tool_registry,
                 )
@@ -1953,15 +1955,44 @@ class StreamerAgent(BaseAgent):
         save = self._current_saves.get(games[0])
         return games[0], save.id if save is not None else "", save.name if save is not None else ""
 
+    async def _recent_two_session_bounds(self, current_session_id: int) -> List[Tuple[int, int]]:
+        """取本场之前最近两个已完结且时长达标的正式场边界（判进行中社交事实降级用）。"""
+        finder = getattr(self._archive_repo, "recent_ended_session_bounds", None)
+        if not callable(finder):
+            return []
+        min_ms = max(0, int(getattr(self.config, "memory_brief_min_session_ms", 0)))
+        return list(
+            await finder(
+                kind=SESSION_KIND_LIVE,
+                min_duration_ms=min_ms,
+                exclude_session_id=int(current_session_id),
+                limit=2,
+            )
+        )
+
     async def _load_social_facts(self) -> List[Any]:
-        """参考段用的现行社交事实：眼下在玩的每个游戏，按它当前存档取（存档不明时取整个游戏）。"""
+        """参考段用的现行社交事实：按当前游戏与存档读取，过滤无证据归纳行并标记隔两场未再证实的旧进展。"""
         if self._social_fact_repo is None:
             return []
+        sid = self._current_session_pk()
+        bounds = await self._recent_two_session_bounds(sid) if sid is not None else []
+        recent_ids = tuple(int(item[0]) for item in bounds[:2]) if len(bounds) >= 2 else ()
+        second_ms = int(bounds[1][1]) if len(bounds) >= 2 else 0
         facts: List[Any] = []
         for game in self._playing_games():
             save = self._current_saves.get(game)
             save_id = save.id if save is not None and save.known else None
-            facts.extend(await self._social_fact_repo.list_active_facts(game=game, save_id=save_id))
+            for fact in await self._social_fact_repo.list_active_facts(game=game, save_id=save_id):
+                if not is_social_fact_resident(fact):
+                    continue
+                if is_works_downgraded(
+                    fact,
+                    current_session_id=sid,
+                    recent_two_session_ids=recent_ids,
+                    second_recent_started_ms=second_ms,
+                ):
+                    fact = fact.model_copy(update={"stale_unconfirmed": True})
+                facts.append(fact)
         return facts
 
     async def _wake_memory_indexer(self) -> None:
@@ -2175,6 +2206,7 @@ class StreamerAgent(BaseAgent):
             brief_commitment_ids=self._memory_brief_ids,
             game_tasks=self._game_tasks(),
             game_players=list(game_players),
+            recent_enters=self._room_state.recent_unwelcomed_enters(),
         )
 
     def _game_tasks(self) -> Dict[str, str]:

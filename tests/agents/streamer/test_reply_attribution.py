@@ -403,3 +403,6 @@ async def test_s58_wolege_request_names_the_player_and_the_reply_target(prompts:
     assert wolege and all("玩家甲" in line and "小白" not in line for line in wolege)
     # 女仆只出现在她自己那句台词里，不在玩家条目和回应对象里
     assert "小白" not in people.split("\n## ", 1)[0] and "小白" not in text.split("回应对象:", 1)[1].split("\n", 1)[0]
+    # 第 66 场回归：表达侧归属规矩不再默认"玩家公屏说的事多半在说你"，明确公屏全服可见、不在身边别往自己脚下套
+    assert "玩家公屏说的事多半在说你" not in people
+    assert "公屏全服可见" in people and "没说在你身边就别往自己脚下套" in people

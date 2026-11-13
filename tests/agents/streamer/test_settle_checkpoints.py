@@ -194,7 +194,9 @@ async def test_clipping_auto_select_waits_until_session_settle_finishes(tmp_path
 
         async def _run_waiter() -> None:
             polled.set()
-            await service.wait_for_session_settle(sid, poll_s=0.0, max_wait_s=1.0)
+            # 轮询间隔给到现实量级：过密的轮询会在对方协程的落库（过线程池执行器）完成前
+            # 把礼让次数耗尽，负载下必现抢跑——测试意图是"会等"，不是"耗尽礼让也放行"
+            await service.wait_for_session_settle(sid, poll_s=0.05, max_wait_s=5.0)
             order.append("clip_proceed")
 
         await asyncio.gather(_run_waiter(), _finish_settle_when_polled())

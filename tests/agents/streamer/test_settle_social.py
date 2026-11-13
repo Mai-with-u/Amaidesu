@@ -271,3 +271,95 @@ def test_validate_cap_and_scope() -> None:
     check = validate_social_output({"facts": [{**row, "supersedes": 10}]}, material, live_session_id=1)
     (fact,) = check.facts
     assert (fact.game, fact.save_id, fact.evidence_game_chat_id, fact.supersedes_id) == ("minecraft", "w1", 1, 10)
+
+
+def test_restore_names_whole_token_and_stale_works_auto_supersede_and_multisave_scope() -> None:
+    """10 人以上时'玩家1'不吃掉'玩家10'前缀；隔两场未再证实的旧 works 在整理满额时自动让位；跨多存档归纳行不误绑单存档。"""
+    player_names = {idx: f"玩家名{idx:02d}" for idx in range(1, 13)}
+    chat_lines = [
+        GameChatLine(
+            id=idx,
+            live_session_id=5,
+            game="minecraft",
+            direction="player",
+            player_id=idx,
+            content=f"我是第{idx}号来集合修铁路",
+            save_id="w1" if idx <= 6 else "w2",
+            save_name="一档" if idx <= 6 else "二档",
+            at_ms=5_000 + idx,
+        )
+        for idx in range(1, 13)
+    ]
+    stale_works = SocialFact(
+        id=100,
+        game="minecraft",
+        save_id="w1",
+        kind="works",
+        text="旧工程",
+        quote="旧",
+        created_session_id=1,
+        updated_session_id=1,
+        created_at_ms=1_000,
+        updated_at_ms=1_000,
+    )
+    fresh_works = [
+        SocialFact(
+            id=101 + i,
+            game="minecraft",
+            save_id="w1",
+            kind="works",
+            text=f"新工程{i}",
+            quote="新",
+            created_session_id=4,
+            updated_session_id=4,
+            created_at_ms=4_000 + i,
+            updated_at_ms=4_000 + i,
+        )
+        for i in range(3)
+    ]
+    material = build_social_material(
+        chat_lines=chat_lines,
+        interactions=[],
+        facts=[stale_works, *fresh_works],
+        player_names=player_names,
+        records_text="",
+        places_text="【本场记住的地点】\n没有",
+        games=["minecraft"],
+        saves=SaveTimeline(),
+        started_at_ms=5_000,
+        clock_text=lambda ms: "00:00",
+        current_session_id=5,
+        recent_two_session_ids=(4, 3),
+        second_recent_started_ms=3_000,
+    )
+    assert material.restore_names("玩家1 带 玩家10 和 玩家12 修路") == "玩家名01 带 玩家名10 和 玩家名12 修路"
+    assert material.default_scope == ("minecraft", "", ""), "本场跨两个存档发言时，无引文归纳行不误绑最后一句的存档"
+
+    check = validate_social_output(
+        {
+            "facts": [
+                {
+                    "kind": "works",
+                    "text": "玩家1 和 玩家10 修铁路",
+                    "chat": "公屏#1",
+                    "quote": "来集合修铁路",
+                    "supersedes": None,
+                },
+                {
+                    "kind": "her_role",
+                    "text": "她给 玩家10 打下手",
+                    "chat": None,
+                    "quote": "",
+                    "supersedes": None,
+                },
+            ]
+        },
+        material,
+        live_session_id=5,
+    )
+    assert check.missed == []
+    assert len(check.facts) == 2
+    assert check.facts[0].text == "玩家名01 和 玩家名10 修铁路"
+    assert check.facts[0].supersedes_id == 100
+    assert check.facts[1].text == "她给 玩家名10 打下手"
+    assert check.facts[1].save_id == ""

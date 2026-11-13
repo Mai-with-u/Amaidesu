@@ -334,3 +334,164 @@ async def test_deleting_a_player_masks_his_name_in_other_players_self_statements
     with store.manager.transaction() as conn:
         rows = [tuple(row) for row in conn.execute("SELECT player_id, title, player_quote FROM player_candidates")]
     assert rows == [(jia.id, "他和一位玩家一起盖了塔", "和一位玩家一起盖的塔")]
+
+
+async def test_deleting_player_and_viewer_scrubs_social_facts_work_docs_and_checkpoints(
+    wired: Tuple[SQLiteDatabase, PrivacyService],
+) -> None:
+    """删玩家与删观众：本人话语作证的社交事实整条删掉不留原话；他人作证行、跨重启工作文档与更正/断点同步清理。"""
+    store, privacy = wired
+    session = await store.sessions.insert_live_session(started_at_ms=1_000, kind="live")
+
+    # 玩家乙曾用名更长，核对从长到短替换不留残截
+    jia = await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-p-jia", name="玩家甲", live_session_id=session, at_ms=1_010
+    )
+    await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-p-yi", name="玩家乙的长曾用名", live_session_id=session, at_ms=1_015
+    )
+    yi = await store.game_players.meet_player(
+        game="minecraft", uuid="uuid-p-yi", name="玩家乙", live_session_id=session, at_ms=1_020
+    )
+    jia_chat = await store.game_players.add_game_chat(
+        live_session_id=session,
+        game="minecraft",
+        direction="player",
+        content="公共仓库是我和玩家乙共用的",
+        player_id=jia.id,
+        save_id="w1",
+        save_name="存档一",
+        at_ms=1_030,
+        message_id="gc-jia",
+    )
+    yi_chat = await store.game_players.add_game_chat(
+        live_session_id=session,
+        game="minecraft",
+        direction="player",
+        content="我的私房矿洞在东山脚下",
+        player_id=yi.id,
+        save_id="w1",
+        save_name="存档一",
+        at_ms=1_040,
+        message_id="gc-yi",
+    )
+    fact_by_yi = await store.social_facts.insert_fact(
+        kind="works",
+        text="玩家乙在东山挖私房矿洞",
+        quote="我的私房矿洞在东山脚下",
+        game="minecraft",
+        save_id="w1",
+        evidence_game_chat_id=yi_chat,
+        created_session_id=session,
+        updated_session_id=session,
+    )
+    fact_by_jia = await store.social_facts.insert_fact(
+        kind="sharing",
+        text="公共仓库由玩家甲与玩家乙共用",
+        quote="我和玩家乙共用的",
+        game="minecraft",
+        save_id="w1",
+        evidence_game_chat_id=jia_chat,
+        created_session_id=session,
+        updated_session_id=session,
+    )
+    assert fact_by_yi is not None and fact_by_jia is not None
+
+    # 观众乙发过弹幕，假设存量库里有一条挂在该弹幕上的社交事实，且游戏工作文档与断点中也出现了名字
+    viewer_res = await store.viewers.resolve_viewer(
+        platform="bilibili",
+        id_kind="account",
+        external_id="uid-viewer-b",
+        user_name="观众乙",
+        timestamp_ms=1_050,
+        name_match_window_ms=0,
+    )
+    v_chat = await store.chat.insert_live_chat(
+        live_session_id=session,
+        timestamp_ms=1_055,
+        sender_role="viewer",
+        sender_name="观众乙",
+        sender_id="uid-viewer-b",
+        viewer_id=viewer_res.viewer_id,
+        content="大家说好西边牧场是公用的",
+        message_type="danmaku",
+        message_id="dm-vb",
+    )
+    fact_by_viewer = await store.social_facts.insert_fact(
+        kind="sharing",
+        text="西边牧场公用",
+        quote="西边牧场是公用的",
+        game="minecraft",
+        save_id="w1",
+        evidence_chat_id=v_chat,
+        created_session_id=session,
+        updated_session_id=session,
+    )
+    assert fact_by_viewer is not None
+
+    await store.game_work_docs.save_work_docs(
+        game="minecraft",
+        save_id="w1",
+        save_name="存档一",
+        notebook="帮玩家乙的长曾用名（现名玩家乙）和观众乙修栅栏",
+        todos=[
+            {"content": "给玩家乙送木板", "status": "in_progress"},
+            {"content": "替观众乙立路牌", "status": "pending"},
+        ],
+        updated_session_id=session,
+    )
+    await store.memory_corrections.insert_and_apply(
+        live_session_id=session,
+        target_kind="general",
+        verdict="invalid",
+        summary="玩家乙说矿洞封了",
+        evidence_kind="player_chat",
+        evidence_quote="我的私房矿洞在东山脚下",
+        evidence_game_chat_id=yi_chat,
+    )
+    await store.memory_corrections.insert_and_apply(
+        live_session_id=session,
+        target_kind="general",
+        verdict="note",
+        summary="运营提醒：玩家乙和观众乙刚换了基地",
+        evidence_kind="operator",
+        evidence_quote="玩家乙和观众乙刚换了基地",
+        source="operator",
+    )
+    await store.sessions.save_settle_checkpoint(
+        live_session_id=session,
+        step="archive",
+        fingerprint="fp1",
+        output_json='{"archive":[{"title":"和玩家乙挖矿"}]}',
+        saved_at_ms=1_100,
+    )
+
+    # 1. 删玩家乙：他本人公屏作证的社交事实与更正整行删除，甲作证行与运营更正换成"一位玩家"，工作文档与断点同步清理
+    assert await privacy.delete_player(player_id=yi.id) is True
+    assert await store.social_facts.get_fact(fact_id=fact_by_yi) is None
+    kept_jia = await store.social_facts.get_fact(fact_id=fact_by_jia)
+    assert kept_jia is not None
+    assert kept_jia.text == "公共仓库由玩家甲与一位玩家共用"
+    assert kept_jia.quote == "我和一位玩家共用的"
+
+    doc_after_player = await store.game_work_docs.get_work_docs(game="minecraft", save_id="w1")
+    assert doc_after_player is not None
+    assert "玩家乙" not in doc_after_player.notebook
+    assert doc_after_player.notebook == "帮一位玩家（现名一位玩家）和观众乙修栅栏"
+    assert doc_after_player.todos[0] == {"content": "给一位玩家送木板", "status": "in_progress"}
+
+    corrs = await store.memory_corrections.list_by_session(live_session_id=session)
+    assert len(corrs) == 1
+    assert corrs[0].summary == "运营提醒：一位玩家和观众乙刚换了基地"
+    assert await store.sessions.get_settle_checkpoint(live_session_id=session, step="archive") is None
+
+    # 2. 删观众乙：挂在其弹幕上的社交事实在外键置空前整行删除，工作文档与运营更正里的观众昵称换成"一位观众"
+    assert await privacy.delete_viewer(viewer_id=viewer_res.viewer_id, add_to_forget_list=True) is True
+    assert await store.social_facts.get_fact(fact_id=fact_by_viewer) is None
+    doc_after_viewer = await store.game_work_docs.get_work_docs(game="minecraft", save_id="w1")
+    assert doc_after_viewer is not None
+    assert "观众乙" not in doc_after_viewer.notebook
+    assert doc_after_viewer.notebook == "帮一位玩家（现名一位玩家）和一位观众修栅栏"
+    assert doc_after_viewer.todos[1] == {"content": "替一位观众立路牌", "status": "pending"}
+    corrs_after_viewer = await store.memory_corrections.list_by_session(live_session_id=session)
+    assert corrs_after_viewer[0].summary == "运营提醒：一位玩家和一位观众刚换了基地"

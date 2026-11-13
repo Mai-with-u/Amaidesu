@@ -267,3 +267,46 @@ async def test_fold_resumes_after_background_compaction() -> None:
         await agent.stop()
     # 集中整理确实在后台跑过，而且它之后又发过整理请求（没被跑完的那次整理一直占着位置）
     assert progress["compacted"] and progress["fold_after"]
+
+
+async def test_overlong_fold_summary_is_truncated_with_minecraft_recall_note_instead_of_discarded() -> None:
+    """第 66 场回归：后台折叠产出的摘要超出缓冲上限时，在句号处安全截断并附注 minecraft_context_recall 取回提示，不整单报废。"""
+    server = _big_server()
+    progress = {"steps": 0}
+    overlong_summary = (
+        "阶段勘察：" + "树" * 2400 + "坐标 x=16 z=-32 的箱子已清点完毕。" + "超出上限的赘述部分" + "草" * 1200
+    )
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if _is_fold_request(messages):
+            start, end = _listed_ranges(messages)[0]
+            fold = {"folds": [{"start": start, "end": end, "summary": overlong_summary}]}
+            return _resp(calls=[_call("minecraft_context_fold", fold, "f1")])
+        progress["steps"] += 1
+        if _has_text(messages, '"block":"b1"') or _has_text(messages, '"block": "b1"') or progress["steps"] > 30:
+            return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "清点好了"}, "d1")])
+        if _has_text(messages, "[已折叠 b1"):
+            return _resp(calls=[_call("minecraft_context_recall", {"block": "b1"}, "r1")])
+        return _resp(calls=[_call("maicraft_observe", {"what": "scene"}, f"c{progress['steps']}")])
+
+    agent, llm, bus = await make_minecraft_agent(server, script, config=_config(fold_summary_max_chars=3000))
+    try:
+        agent.receive_prompt(content="清点营地周围", source="test")
+        await _wait_until(lambda: bool(_reports(bus)))
+    finally:
+        await agent.stop()
+
+    fold_prompts = [seen[-1]["content"] for seen in llm.seen if _is_fold_request(seen)]
+    assert fold_prompts and "省不下足够空间会被拒收" in str(fold_prompts[0])
+    stand_ins = [
+        str(message.get("content"))
+        for seen in llm.seen
+        for message in seen
+        if str(message.get("content")).startswith("[已折叠 b1")
+    ]
+    assert stand_ins
+    assert "坐标 x=16 z=-32 的箱子已清点完毕。" in stand_ins[0]
+    assert "超出上限的赘述部分" not in stand_ins[0]
+    assert "（超长部分已截断，原文可用 minecraft_context_recall 取回）" in stand_ins[0]
+    recalled = [message for message in llm.seen[-1] if message.get("tool_call_id") == "r1"]
+    assert recalled and "开局资料" in str(recalled[0]["content"])
