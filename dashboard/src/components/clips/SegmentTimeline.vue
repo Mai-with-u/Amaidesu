@@ -99,7 +99,12 @@ function onEdgePointerDown(event: PointerEvent, segment: ClipSegment, edge: 'sta
   event.preventDefault();
   event.stopPropagation();
   (event.target as HTMLElement).setPointerCapture(event.pointerId);
-  dragging.value = { segmentId: segment.id, edge, baseStartMs: segment.start_ms, baseEndMs: segment.end_ms };
+  dragging.value = {
+    segmentId: segment.id,
+    edge,
+    baseStartMs: segment.start_ms,
+    baseEndMs: segment.end_ms,
+  };
   previewBounds.value = { id: segment.id, startMs: segment.start_ms, endMs: segment.end_ms };
 }
 
@@ -131,7 +136,10 @@ function onTrackDoubleClick(event: MouseEvent): void {
   const track = trackEl.value;
   if (!track) return;
   const pointerMs = pointerToMs(event as unknown as PointerEvent);
-  const startMs = Math.min(pointerMs, Math.max(props.sessionStartMs, props.sessionEndMs - CREATE_SPAN_MS));
+  const startMs = Math.min(
+    pointerMs,
+    Math.max(props.sessionStartMs, props.sessionEndMs - CREATE_SPAN_MS),
+  );
   const endMs = Math.min(pointerMs + CREATE_SPAN_MS, props.sessionEndMs);
   emit('create', Math.round(startMs), Math.round(endMs));
 }
@@ -169,19 +177,39 @@ function boundsOf(block: Block): { leftPct: number; widthPct: number } {
         v-for="block in blocks"
         :key="block.segment.id"
         class="clip-block"
-        :class="[block.statusClass, { 'is-selected': block.segment.id === selectedId, 'is-dragging': dragging?.segmentId === block.segment.id, 'is-narrow': block.narrow }]"
+        :class="[
+          block.statusClass,
+          {
+            'is-selected': block.segment.id === selectedId,
+            'is-dragging': dragging?.segmentId === block.segment.id,
+            'is-narrow': block.narrow,
+          },
+        ]"
         :style="{ left: `${boundsOf(block).leftPct}%`, width: `${boundsOf(block).widthPct}%` }"
         :title="`${block.segment.title || '未命名'}（${block.segment.status}）`"
         @click.stop="emit('select', block.segment.id)"
       >
-        <span class="clip-block-edge is-start" @pointerdown="onEdgePointerDown($event, block.segment, 'start')" />
+        <span
+          class="clip-block-edge is-start"
+          @pointerdown="onEdgePointerDown($event, block.segment, 'start')"
+        />
         <span class="clip-block-label">{{ block.segment.title || '未命名' }}</span>
-        <span class="clip-block-edge is-end" @pointerdown="onEdgePointerDown($event, block.segment, 'end')" />
+        <span
+          class="clip-block-edge is-end"
+          @pointerdown="onEdgePointerDown($event, block.segment, 'end')"
+        />
       </div>
-      <div v-if="blocks.length === 0" class="clip-track-empty">双击空白处新建切片段；AI 选段后这里会出现建议色块</div>
+      <div v-if="blocks.length === 0" class="clip-track-empty">
+        双击空白处新建切片段；AI 选段后这里会出现建议色块
+      </div>
     </div>
     <div class="clip-ruler">
-      <span v-for="tick in ticks" :key="`tick-${tick.pct}`" class="clip-tick" :style="{ left: `${tick.pct}%` }">
+      <span
+        v-for="tick in ticks"
+        :key="`tick-${tick.pct}`"
+        class="clip-tick"
+        :style="{ left: `${tick.pct}%` }"
+      >
         {{ tick.label }}
       </span>
     </div>
@@ -224,24 +252,38 @@ function boundsOf(block: Block): { leftPct: number; widthPct: number } {
   cursor: pointer;
   color: #fff;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-  transition: box-shadow 0.15s, filter 0.15s;
+  transition:
+    box-shadow 0.15s,
+    filter 0.15s;
 }
 
 .clip-block:hover {
   filter: brightness(1.08);
 }
 
-.clip-block.is-suggested { background: var(--el-color-primary); }
-.clip-block.is-confirmed { background: var(--el-color-warning); }
-.clip-block.is-cutting { background: var(--el-color-info); }
-.clip-block.is-done { background: var(--el-color-success); }
-.clip-block.is-failed { background: var(--el-color-danger); }
+.clip-block.is-suggested {
+  background: var(--el-color-primary);
+}
+.clip-block.is-confirmed {
+  background: var(--el-color-warning);
+}
+.clip-block.is-cutting {
+  background: var(--el-color-info);
+}
+.clip-block.is-done {
+  background: var(--el-color-success);
+}
+.clip-block.is-failed {
+  background: var(--el-color-danger);
+}
 .clip-block.is-selected {
   outline: 2px solid var(--el-color-primary-light-3);
   outline-offset: 1px;
   filter: brightness(1.1);
 }
-.clip-block.is-dragging { opacity: 0.85; }
+.clip-block.is-dragging {
+  opacity: 0.85;
+}
 
 .clip-block-label {
   flex: 1;
@@ -264,7 +306,9 @@ function boundsOf(block: Block): { leftPct: number; widthPct: number } {
   cursor: ew-resize;
   flex: none;
   opacity: 0;
-  transition: opacity 0.15s, background 0.15s;
+  transition:
+    opacity 0.15s,
+    background 0.15s;
 }
 
 .clip-block:hover .clip-block-edge,

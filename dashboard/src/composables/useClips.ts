@@ -17,7 +17,14 @@ import { getApiErrorMessage } from '@/utils/apiError';
 import { EVENT } from '@/types/events';
 import type { BackgroundTask } from '@/types/events';
 import type { WebSocketMessage } from '@/types';
-import type { ClipConfig, ClipConfigState, ClippedSessionItem, ClipSegment, RecordingFileInfo, UnmatchedFileInfo } from '@/types/clips';
+import type {
+  ClipConfig,
+  ClipConfigState,
+  ClippedSessionItem,
+  ClipSegment,
+  RecordingFileInfo,
+  UnmatchedFileInfo,
+} from '@/types/clips';
 
 // 本组合式负责的后台任务号前缀（任务号 clip-<动作>-<场次id>）
 const CLIP_TASK_RE = /^clip-(?:select|cut)-(\d+)$/;
@@ -201,7 +208,12 @@ export function useClips() {
   // 未就绪 → 走段级端点（后端只重封装那几分钟，秒级可播），不等整场转换。
   // durationS 为 null 表示"整段素材从头播、不自动停"，此时整场未就绪才退回
   // "等整场转换"的轮询流程。
-  const preview = ref<{ src: string; title: string; baseS: number; durationS: number | null } | null>(null);
+  const preview = ref<{
+    src: string;
+    title: string;
+    baseS: number;
+    durationS: number | null;
+  } | null>(null);
   const previewConverting = ref(false);
   let previewPollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -296,7 +308,11 @@ export function useClips() {
     }
   }
 
-  async function assignRecording(sessionId: number, path: string, startMs: number | null): Promise<boolean> {
+  async function assignRecording(
+    sessionId: number,
+    path: string,
+    startMs: number | null,
+  ): Promise<boolean> {
     try {
       await clipsApi.assignRecording(sessionId, path, startMs);
       await afterRecordingMutation(sessionId);

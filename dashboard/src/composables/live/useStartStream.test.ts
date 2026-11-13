@@ -111,7 +111,12 @@ describe('useStartStream', () => {
       data: { config: { tts: { enabled: true } } },
     } as never);
     healthMock.mockResolvedValue({
-      data: { status: 'ok', timestamp_ms: 0, checked_at_ms: 0, domains: { tts: [healthItem('ok')] } },
+      data: {
+        status: 'ok',
+        timestamp_ms: 0,
+        checked_at_ms: 0,
+        domains: { tts: [healthItem('ok')] },
+      },
     } as never);
     saveBatchMock.mockResolvedValue({ data: {} } as never);
   });
@@ -296,7 +301,12 @@ describe('useStartStream', () => {
   it('TTS 探针：服务不可达只落提示不拦开播；配置或健康面读不到按缺席降级', async () => {
     storageStub();
     healthMock.mockResolvedValue({
-      data: { status: 'ok', timestamp_ms: 0, checked_at_ms: 0, domains: { tts: [healthItem('offline')] } },
+      data: {
+        status: 'ok',
+        timestamp_ms: 0,
+        checked_at_ms: 0,
+        domains: { tts: [healthItem('offline')] },
+      },
     } as never);
     const stream = await mounted();
     expect(stream.ttsEngineReady.value).toBe(true);
@@ -315,7 +325,12 @@ describe('useStartStream', () => {
   it('TTS 开关：打开且引擎未装配 → 写盘 + 拦开播；引擎已装配不拦', async () => {
     storageStub();
     healthMock.mockResolvedValue({
-      data: { status: 'ok', timestamp_ms: 0, checked_at_ms: 0, domains: { tts: [healthItem('disabled')] } },
+      data: {
+        status: 'ok',
+        timestamp_ms: 0,
+        checked_at_ms: 0,
+        domains: { tts: [healthItem('disabled')] },
+      },
     } as never);
     const stream = await mounted();
     expect(stream.ttsEnabled.value).toBe(true);
@@ -333,7 +348,12 @@ describe('useStartStream', () => {
 
     // 引擎已装配：打开开关不拦
     healthMock.mockResolvedValue({
-      data: { status: 'ok', timestamp_ms: 0, checked_at_ms: 0, domains: { tts: [healthItem('ok')] } },
+      data: {
+        status: 'ok',
+        timestamp_ms: 0,
+        checked_at_ms: 0,
+        domains: { tts: [healthItem('ok')] },
+      },
     } as never);
     const ready = await mounted();
     await ready.toggleTts(false);

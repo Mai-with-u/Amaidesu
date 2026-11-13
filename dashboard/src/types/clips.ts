@@ -6,7 +6,13 @@
 export type ClipSegmentOrigin = 'ai' | 'manual';
 
 /** 段状态：suggested 提议 → confirmed 待切 → cutting → done / failed；dismissed 弃用 */
-export type ClipSegmentStatus = 'suggested' | 'confirmed' | 'cutting' | 'done' | 'failed' | 'dismissed';
+export type ClipSegmentStatus =
+  | 'suggested'
+  | 'confirmed'
+  | 'cutting'
+  | 'done'
+  | 'failed'
+  | 'dismissed';
 
 /** 一行切片段（时间用墙钟毫秒，场时间线坐标） */
 export interface ClipSegment {

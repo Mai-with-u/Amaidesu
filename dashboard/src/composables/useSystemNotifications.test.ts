@@ -216,7 +216,12 @@ describe('useSystemNotifications', () => {
     feed(event('live.started', { live_session_id: 59 }));
     await flushPromises();
     expect(notifyMock).toHaveBeenCalledTimes(1);
-    const call = notifyMock.mock.calls[0]?.[0] as { title: string; message: string; type: string; duration: number };
+    const call = notifyMock.mock.calls[0]?.[0] as {
+      title: string;
+      message: string;
+      type: string;
+      duration: number;
+    };
     expect(call.type).toBe('warning');
     // warning 级同样不自动消失（duration 0），需手动关闭
     expect(call.duration).toBe(0);

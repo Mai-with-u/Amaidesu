@@ -36,11 +36,7 @@
             <div v-for="line in task.progress_lines" :key="line.label" class="task-subline">
               <span class="task-subline-label">{{ line.label }}</span>
               <span class="task-subline-progress">{{ line.progress_text }}</span>
-              <span
-                v-if="line.output_tail"
-                class="task-subline-output"
-                :title="line.output_tail"
-              >
+              <span v-if="line.output_tail" class="task-subline-output" :title="line.output_tail">
                 正在写：{{ line.output_tail }}
               </span>
             </div>

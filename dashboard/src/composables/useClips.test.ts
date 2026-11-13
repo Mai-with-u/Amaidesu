@@ -47,7 +47,11 @@ function ok<T>(data: T) {
   return Promise.resolve({ data });
 }
 
-const SESSIONS = { sessions: [{ live_session_id: 7, started_at_ms: 1000, ended_at_ms: 2000, title: '一场', file_count: 2 }] };
+const SESSIONS = {
+  sessions: [
+    { live_session_id: 7, started_at_ms: 1000, ended_at_ms: 2000, title: '一场', file_count: 2 },
+  ],
+};
 const RECORDINGS = { live_session_id: 7, files: [], unmatched_files: [] };
 const SEGMENTS = { live_session_id: 7, segments: [] };
 
@@ -66,7 +70,9 @@ describe('useClips', () => {
 
     mocks.clipsApi.listSessions.mockRejectedValue(new Error('网络炸了'));
     await clips.loadSessions();
-    expect(mocks.ElMessage.error).toHaveBeenCalledWith(getApiErrorMessage(new Error('网络炸了'), '加载场次列表失败'));
+    expect(mocks.ElMessage.error).toHaveBeenCalledWith(
+      getApiErrorMessage(new Error('网络炸了'), '加载场次列表失败'),
+    );
   });
 
   it('openSession 并行取录播与段；失败清空并报错', async () => {
@@ -161,12 +167,19 @@ describe('useClips', () => {
     expect(clips.configState.value).toEqual(state);
 
     mocks.clipsApi.saveConfig.mockReturnValue(
-      ok({ success: true, message: '切片配置已保存并生效', assembled: true, recording_dir_exists: true }),
+      ok({
+        success: true,
+        message: '切片配置已保存并生效',
+        assembled: true,
+        recording_dir_exists: true,
+      }),
     );
     mocks.clipsApi.getConfig.mockReturnValue(
       ok({ ...state, assembled: true, recording_dir_exists: true }),
     );
-    expect(await clips.saveConfig({ ...state.config, enabled: true, recording_dir: 'E:\\rec' })).toBe(true);
+    expect(
+      await clips.saveConfig({ ...state.config, enabled: true, recording_dir: 'E:\\rec' }),
+    ).toBe(true);
     expect(clips.configState.value?.assembled).toBe(true);
     expect(mocks.ElMessage.success).toHaveBeenCalled();
 

@@ -27,12 +27,16 @@ describe('worstHealthState', () => {
     expect(worstHealthState([item({ state: 'ok' }), item({ state: 'offline' })])).toBe('offline');
     expect(worstHealthState([item({ state: 'ok' }), item({ state: 'unknown' })])).toBe('unknown');
     expect(worstHealthState([item({ state: 'ok' }), item({ state: 'disabled' })])).toBe('disabled');
-    expect(worstHealthState([item({ state: 'disabled' }), item({ state: 'offline' })])).toBe('offline');
+    expect(worstHealthState([item({ state: 'disabled' }), item({ state: 'offline' })])).toBe(
+      'offline',
+    );
     expect(worstHealthState([])).toBe('unknown');
   });
 
   it('全为 disabled 的组取 disabled（未启用是灰档，不冒充探不到的 unknown）', () => {
-    expect(worstHealthState([item({ state: 'disabled' }), item({ state: 'disabled' })])).toBe('disabled');
+    expect(worstHealthState([item({ state: 'disabled' }), item({ state: 'disabled' })])).toBe(
+      'disabled',
+    );
   });
 });
 

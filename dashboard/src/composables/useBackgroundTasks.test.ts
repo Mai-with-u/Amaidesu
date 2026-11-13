@@ -132,7 +132,9 @@ describe('useBackgroundTasks', () => {
       ),
     );
     expect(tasksRef.tasks.value).toHaveLength(1);
-    expect(tasksRef.tasks.value[0]?.progress_text).toBe('第 2 笔/共 3 笔 · 模型输出中（已 3 字，最后活动 0s 前）');
+    expect(tasksRef.tasks.value[0]?.progress_text).toBe(
+      '第 2 笔/共 3 笔 · 模型输出中（已 3 字，最后活动 0s 前）',
+    );
     // 模型调用期间的输出信号原样透传，浮层据此画实时输出预览
     expect(tasksRef.tasks.value[0]?.output_chars).toBe(3);
     expect(tasksRef.tasks.value[0]?.output_tail).toBe('整理中');
@@ -159,14 +161,24 @@ describe('useBackgroundTasks', () => {
       taskEvent(
         taskRow({
           progress_lines: [
-            { label: '整理本场档案', progress_text: '模型输出中（已 312 字）', output_chars: 312, output_tail: '这场她' },
+            {
+              label: '整理本场档案',
+              progress_text: '模型输出中（已 312 字）',
+              output_chars: 312,
+              output_tail: '这场她',
+            },
             { label: '找新承诺', progress_text: '模型整理中（已 8 秒）' },
           ],
         }),
       ),
     );
     expect(tasksRef.tasks.value[0]?.progress_lines).toEqual([
-      { label: '整理本场档案', progress_text: '模型输出中（已 312 字）', output_chars: 312, output_tail: '这场她' },
+      {
+        label: '整理本场档案',
+        progress_text: '模型输出中（已 312 字）',
+        output_chars: 312,
+        output_tail: '这场她',
+      },
       { label: '找新承诺', progress_text: '模型整理中（已 8 秒）' },
     ]);
     // 覆盖为不带行的载荷（调用全部完成）后行清空

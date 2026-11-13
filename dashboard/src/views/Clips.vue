@@ -10,7 +10,13 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
 import { formatDateTimeCn, formatTimeHM } from '@/utils/format';
-import { clampMs, formatLocalDateTime, formatRelClock, parseLocalDateTime, parseRelClock } from '@/utils/clipsTime';
+import {
+  clampMs,
+  formatLocalDateTime,
+  formatRelClock,
+  parseLocalDateTime,
+  parseRelClock,
+} from '@/utils/clipsTime';
 import { useClips } from '@/composables/useClips';
 import SegmentTimeline from '@/components/clips/SegmentTimeline.vue';
 import type {
@@ -127,7 +133,10 @@ const STATUS_LABELS: Record<ClipSegmentStatus, string> = {
   dismissed: '已弃用',
 };
 
-const STATUS_TAG_TYPES: Record<ClipSegmentStatus, 'primary' | 'warning' | 'info' | 'success' | 'danger'> = {
+const STATUS_TAG_TYPES: Record<
+  ClipSegmentStatus,
+  'primary' | 'warning' | 'info' | 'success' | 'danger'
+> = {
   suggested: 'primary',
   confirmed: 'warning',
   cutting: 'info',
@@ -146,7 +155,9 @@ const failedCount = computed(() => segments.value.filter(s => s.status === 'fail
 const dismissedCount = computed(() => segments.value.filter(s => s.status === 'dismissed').length);
 
 /** 素材折叠条标题里的就绪数（mp4 视为恒就绪） */
-const readyCount = computed(() => recordings.value.filter(f => previewReadiness.value[f.path]).length);
+const readyCount = computed(
+  () => recordings.value.filter(f => previewReadiness.value[f.path]).length,
+);
 
 // ---- 行内编辑草稿：segmentId → { title, startText, endText } ----
 // 草稿统一在 segments 变化时构建（渲染期不写状态）：已有的草稿保留（编辑中
@@ -185,7 +196,8 @@ function isDirty(segment: ClipSegment): boolean {
   if (!draft) return false;
   return (
     draft.title !== segment.title ||
-    draft.startText !== formatRelClock(segment.start_ms - (selectedSession.value?.started_at_ms ?? 0)) ||
+    draft.startText !==
+      formatRelClock(segment.start_ms - (selectedSession.value?.started_at_ms ?? 0)) ||
     draft.endText !== formatRelClock(segment.end_ms - (selectedSession.value?.started_at_ms ?? 0))
   );
 }
@@ -343,7 +355,9 @@ watch(preview, p => {
 /** 打开一场后：预热整场预览缓存 + 刷新各文件的就绪态 */
 watch(recordings, list => {
   const paths = list.map(f => f.path);
-  void preparePreviews(list.filter(f => !f.file_name.toLowerCase().endsWith('.mp4')).map(f => f.path));
+  void preparePreviews(
+    list.filter(f => !f.file_name.toLowerCase().endsWith('.mp4')).map(f => f.path),
+  );
   void refreshPreviewReadiness(paths);
 });
 
@@ -363,13 +377,23 @@ function onPreviewSegment(segment: ClipSegment): void {
     return;
   }
   const offsetS = Math.max(0, (segment.start_ms - file.started_at_ms) / 1000);
-  void openPreview(file.path, `源片段：${segment.title || '未命名段'}`, offsetS, (segment.end_ms - segment.start_ms) / 1000);
+  void openPreview(
+    file.path,
+    `源片段：${segment.title || '未命名段'}`,
+    offsetS,
+    (segment.end_ms - segment.start_ms) / 1000,
+  );
 }
 
 function onPreviewOutput(segment: ClipSegment): void {
   const output = outputsOf(segment)[0];
   if (!output) return;
-  void openPreview(output, `产物：${segment.title || '未命名段'}`, 0, (segment.end_ms - segment.start_ms) / 1000);
+  void openPreview(
+    output,
+    `产物：${segment.title || '未命名段'}`,
+    0,
+    (segment.end_ms - segment.start_ms) / 1000,
+  );
 }
 
 function onPreviewMeta(): void {
@@ -437,7 +461,11 @@ async function onConfirmAssign(): Promise<void> {
     ElMessage.warning('开始时刻格式不认识；用 YYYY-MM-DD HH:mm:ss');
     return;
   }
-  const ok = await assignRecording(selectedSession.value.live_session_id, assignTarget.value.path, startMs);
+  const ok = await assignRecording(
+    selectedSession.value.live_session_id,
+    assignTarget.value.path,
+    startMs,
+  );
   if (ok) assignDialogVisible.value = false;
 }
 
@@ -492,7 +520,13 @@ onMounted(async () => {
             </span>
           </div>
           <div class="md-batch-actions">
-            <el-button size="small" :loading="sessionsLoading" :disabled="!configState?.assembled" @click="refreshSessions">刷新</el-button>
+            <el-button
+              size="small"
+              :loading="sessionsLoading"
+              :disabled="!configState?.assembled"
+              @click="refreshSessions"
+              >刷新</el-button
+            >
           </div>
         </header>
         <div v-loading="sessionsLoading" class="md-list">
@@ -510,7 +544,8 @@ onMounted(async () => {
             </span>
           </button>
           <div v-if="!sessionsLoading && sessions.length === 0" class="md-list-empty">
-            录播目录里没有匹配到任何场次的文件。确认目录路径填对、且文件名带录制开始时刻（如 2026-11-08 20-00-00.mkv）后点刷新。
+            录播目录里没有匹配到任何场次的文件。确认目录路径填对、且文件名带录制开始时刻（如
+            2026-11-08 20-00-00.mkv）后点刷新。
           </div>
         </div>
       </aside>
@@ -520,18 +555,26 @@ onMounted(async () => {
           <div class="md-detail-title-block">
             <div class="md-detail-title-row">
               <h2 class="md-detail-name">{{ selectedSession?.title || '直播切片' }}</h2>
-              <span v-if="selectedSession" class="md-type-chip">#{{ selectedSession.live_session_id }}</span>
+              <span v-if="selectedSession" class="md-type-chip"
+                >#{{ selectedSession.live_session_id }}</span
+              >
             </div>
             <p class="md-detail-description">
               <template v-if="selectedSession">
-                {{ formatDateTimeCn(selectedSession.started_at_ms) }} 起播 ·
-                共 {{ recordings.length }} 个录播文件 · {{ segments.length }} 个切片段
+                {{ formatDateTimeCn(selectedSession.started_at_ms) }} 起播 · 共
+                {{ recordings.length }} 个录播文件 · {{ segments.length }} 个切片段
                 <span class="clip-meta-chip is-cut">{{ cuttableSegments.length }} 待切</span>
                 <span class="clip-meta-chip is-done">{{ doneCount }} 已出片</span>
-                <span v-if="failedCount" class="clip-meta-chip is-failed">{{ failedCount }} 失败</span>
-                <span v-if="dismissedCount" class="clip-meta-chip">{{ dismissedCount }} 已弃用</span>
+                <span v-if="failedCount" class="clip-meta-chip is-failed"
+                  >{{ failedCount }} 失败</span
+                >
+                <span v-if="dismissedCount" class="clip-meta-chip"
+                  >{{ dismissedCount }} 已弃用</span
+                >
               </template>
-              <template v-else>从左侧选一场开始；录播目录与 ffmpeg 在「设置」里配置，保存即生效</template>
+              <template v-else
+                >从左侧选一场开始；录播目录与 ffmpeg 在「设置」里配置，保存即生效</template
+              >
             </p>
           </div>
           <div class="md-detail-actions">
@@ -547,7 +590,12 @@ onMounted(async () => {
                 {{ segments.some(s => s.origin === 'ai') ? '重新 AI 选段' : 'AI 选段' }}
               </el-button>
               <el-button :loading="detailLoading" @click="openSessionSegments">刷新</el-button>
-              <el-button type="success" :loading="cutting" :disabled="cuttableSegments.length === 0" @click="onCutAll">
+              <el-button
+                type="success"
+                :loading="cutting"
+                :disabled="cuttableSegments.length === 0"
+                @click="onCutAll"
+              >
                 生成切片（{{ cuttableSegments.length }} 段）
               </el-button>
             </template>
@@ -555,41 +603,69 @@ onMounted(async () => {
         </header>
 
         <div v-if="settingsVisible && configDraft" class="clip-section clip-settings-card">
-          <h3 class="clip-section-title">切片设置<span class="clip-settings-hint">保存即生效，不用重启</span></h3>
+          <h3 class="clip-section-title">
+            切片设置<span class="clip-settings-hint">保存即生效，不用重启</span>
+          </h3>
           <el-form label-width="110px" class="clip-settings-form" @submit.prevent>
             <el-form-item label="启用切片">
               <el-switch v-model="configDraft.enabled" />
             </el-form-item>
             <el-form-item label="录播目录">
-              <el-input v-model="configDraft.recording_dir" placeholder="录播文件所在目录（录播姬、OBS 或其他录制软件均可）" />
+              <el-input
+                v-model="configDraft.recording_dir"
+                placeholder="录播文件所在目录（录播姬、OBS 或其他录制软件均可）"
+              />
               <div v-if="savedDirMissing" class="clip-dir-warning">
                 该目录当前不存在，检查盘符与路径拼写
               </div>
             </el-form-item>
             <el-form-item label="ffmpeg 路径">
-              <el-input v-model="configDraft.ffmpeg_path" placeholder="留空 = 使用 PATH 上的 ffmpeg" />
+              <el-input
+                v-model="configDraft.ffmpeg_path"
+                placeholder="留空 = 使用 PATH 上的 ffmpeg"
+              />
             </el-form-item>
             <el-form-item label="输出目录">
-              <el-input v-model="configDraft.output_dir" placeholder="留空 = 录播目录下的 切片 子目录" />
+              <el-input
+                v-model="configDraft.output_dir"
+                placeholder="留空 = 录播目录下的 切片 子目录"
+              />
             </el-form-item>
             <el-collapse class="clip-advanced">
               <el-collapse-item title="高级" name="advanced">
                 <el-form-item label="LLM 档位">
-                  <el-input v-model="configDraft.llm_profile" placeholder="AI 选段用的 model.toml 档位引用名" />
+                  <el-input
+                    v-model="configDraft.llm_profile"
+                    placeholder="AI 选段用的 model.toml 档位引用名"
+                  />
                 </el-form-item>
                 <el-form-item label="重编码切片">
                   <el-switch v-model="configDraft.reencode" />
-                  <span class="clip-settings-hint">开 = 边界精确到帧但接近实时速度；关 = 流复制秒级出片（边界可能差几秒）</span>
+                  <span class="clip-settings-hint"
+                    >开 = 边界精确到帧但接近实时速度；关 = 流复制秒级出片（边界可能差几秒）</span
+                  >
                 </el-form-item>
                 <el-form-item label="片段时长(秒)">
-                  <el-input-number v-model="configDraft.min_segment_seconds" :min="5" :max="3600" controls-position="right" />
+                  <el-input-number
+                    v-model="configDraft.min_segment_seconds"
+                    :min="5"
+                    :max="3600"
+                    controls-position="right"
+                  />
                   <span class="clip-time-sep">~</span>
-                  <el-input-number v-model="configDraft.max_segment_seconds" :min="10" :max="7200" controls-position="right" />
+                  <el-input-number
+                    v-model="configDraft.max_segment_seconds"
+                    :min="10"
+                    :max="7200"
+                    controls-position="right"
+                  />
                 </el-form-item>
               </el-collapse-item>
             </el-collapse>
             <el-form-item>
-              <el-button type="primary" :loading="configSaving" @click="onSaveSettings">保存并生效</el-button>
+              <el-button type="primary" :loading="configSaving" @click="onSaveSettings"
+                >保存并生效</el-button
+              >
               <el-button @click="settingsVisible = false">收起</el-button>
             </el-form-item>
           </el-form>
@@ -597,114 +673,143 @@ onMounted(async () => {
 
         <template v-if="selectedSession && configState?.assembled">
           <div class="clip-workspace">
-          <section class="clip-card clip-player-col">
-            <div class="clip-player-head">
-              <span class="clip-player-title">
-                {{ previewConverting ? '预览准备中，就绪自动开播…' : preview?.title || '预览' }}
-              </span>
-              <el-button v-if="preview || previewConverting" size="small" text @click="closePreview">关闭</el-button>
-            </div>
-            <video
-              v-if="preview"
-              ref="videoEl"
-              :key="previewSeq"
-              class="clip-player"
-              :src="preview.src"
-              controls
-              preload="metadata"
-              @loadedmetadata="onPreviewMeta"
-              @timeupdate="onPreviewTime"
-            />
-            <div v-else class="clip-player-empty">
-              点右侧任一段的「预览」开始核对切点；播放器固定在这里，调段不用来回滚。
-            </div>
-          </section>
+            <section class="clip-card clip-player-col">
+              <div class="clip-player-head">
+                <span class="clip-player-title">
+                  {{ previewConverting ? '预览准备中，就绪自动开播…' : preview?.title || '预览' }}
+                </span>
+                <el-button
+                  v-if="preview || previewConverting"
+                  size="small"
+                  text
+                  @click="closePreview"
+                  >关闭</el-button
+                >
+              </div>
+              <video
+                v-if="preview"
+                ref="videoEl"
+                :key="previewSeq"
+                class="clip-player"
+                :src="preview.src"
+                controls
+                preload="metadata"
+                @loadedmetadata="onPreviewMeta"
+                @timeupdate="onPreviewTime"
+              />
+              <div v-else class="clip-player-empty">
+                点右侧任一段的「预览」开始核对切点；播放器固定在这里，调段不用来回滚。
+              </div>
+            </section>
 
-          <section class="clip-card clip-segments-col">
-            <h3 class="clip-section-title">切片段（{{ segments.length }}）</h3>
-            <div class="clip-segments-scroll">
-            <div v-if="segments.length === 0" class="clip-no-segments">
-              还没有切片段。点「AI 选段」让它读本场记录提议几段，或双击下方时间轴手动建段。
-            </div>
-            <div
-              v-for="segment in segments"
-              :key="segment.id"
-              class="clip-segment-row"
-              :class="{ 'is-selected': segment.id === selectedSegmentId }"
-              @click="selectedSegmentId = segment.id"
-            >
-              <div class="clip-segment-main">
-                <div class="clip-segment-top">
-                  <el-tag size="small" :type="STATUS_TAG_TYPES[segment.status]">
-                    {{ STATUS_LABELS[segment.status] }}
-                  </el-tag>
-                  <el-tag v-if="segment.origin === 'ai'" size="small" effect="plain">AI</el-tag>
-                  <el-input
-                    v-model="draftOf(segment).title"
-                    class="clip-title-input"
-                    placeholder="片段标题"
-                    size="small"
-                    @click.stop
-                  />
+            <section class="clip-card clip-segments-col">
+              <h3 class="clip-section-title">切片段（{{ segments.length }}）</h3>
+              <div class="clip-segments-scroll">
+                <div v-if="segments.length === 0" class="clip-no-segments">
+                  还没有切片段。点「AI 选段」让它读本场记录提议几段，或双击下方时间轴手动建段。
                 </div>
-                <div class="clip-segment-time" @click.stop>
-                  <el-input v-model="draftOf(segment).startText" size="small" class="clip-time-input" />
-                  <span class="clip-time-sep">~</span>
-                  <el-input v-model="draftOf(segment).endText" size="small" class="clip-time-input" />
-                  <el-button
-                    v-if="isDirty(segment)"
-                    size="small"
-                    type="primary"
-                    @click.stop="saveRow(segment)"
-                  >
-                    保存
-                  </el-button>
+                <div
+                  v-for="segment in segments"
+                  :key="segment.id"
+                  class="clip-segment-row"
+                  :class="{ 'is-selected': segment.id === selectedSegmentId }"
+                  @click="selectedSegmentId = segment.id"
+                >
+                  <div class="clip-segment-main">
+                    <div class="clip-segment-top">
+                      <el-tag size="small" :type="STATUS_TAG_TYPES[segment.status]">
+                        {{ STATUS_LABELS[segment.status] }}
+                      </el-tag>
+                      <el-tag v-if="segment.origin === 'ai'" size="small" effect="plain">AI</el-tag>
+                      <el-input
+                        v-model="draftOf(segment).title"
+                        class="clip-title-input"
+                        placeholder="片段标题"
+                        size="small"
+                        @click.stop
+                      />
+                    </div>
+                    <div class="clip-segment-time" @click.stop>
+                      <el-input
+                        v-model="draftOf(segment).startText"
+                        size="small"
+                        class="clip-time-input"
+                      />
+                      <span class="clip-time-sep">~</span>
+                      <el-input
+                        v-model="draftOf(segment).endText"
+                        size="small"
+                        class="clip-time-input"
+                      />
+                      <el-button
+                        v-if="isDirty(segment)"
+                        size="small"
+                        type="primary"
+                        @click.stop="saveRow(segment)"
+                      >
+                        保存
+                      </el-button>
+                    </div>
+                    <p v-if="segment.reason" class="clip-segment-reason">{{ segment.reason }}</p>
+                    <p
+                      v-if="segment.status === 'failed' && segment.error_message"
+                      class="clip-segment-error"
+                    >
+                      {{ segment.error_message }}
+                    </p>
+                    <ul v-if="outputsOf(segment).length" class="clip-output-list">
+                      <li v-for="path in outputsOf(segment)" :key="path" class="clip-output-item">
+                        {{ path }}
+                      </li>
+                    </ul>
+                  </div>
+                  <div class="clip-segment-actions" @click.stop>
+                    <el-button size="small" type="primary" plain @click="onPreviewSegment(segment)"
+                      >预览</el-button
+                    >
+                    <el-button
+                      v-if="segment.status === 'suggested'"
+                      size="small"
+                      @click="onConfirmSegment(segment)"
+                    >
+                      确认
+                    </el-button>
+                    <el-button
+                      v-if="segment.status !== 'done' && segment.status !== 'cutting'"
+                      size="small"
+                      type="success"
+                      plain
+                      @click="onCutOne(segment)"
+                    >
+                      切这段
+                    </el-button>
+                    <el-button
+                      v-if="outputsOf(segment).length"
+                      size="small"
+                      @click="onPreviewOutput(segment)"
+                    >
+                      看产物
+                    </el-button>
+                    <el-button
+                      v-if="segment.status !== 'dismissed'"
+                      size="small"
+                      @click="onDismissSegment(segment)"
+                    >
+                      弃用
+                    </el-button>
+                    <el-button size="small" type="danger" plain @click="onDeleteSegment(segment)"
+                      >删除</el-button
+                    >
+                  </div>
                 </div>
-                <p v-if="segment.reason" class="clip-segment-reason">{{ segment.reason }}</p>
-                <p v-if="segment.status === 'failed' && segment.error_message" class="clip-segment-error">
-                  {{ segment.error_message }}
-                </p>
-                <ul v-if="outputsOf(segment).length" class="clip-output-list">
-                  <li v-for="path in outputsOf(segment)" :key="path" class="clip-output-item">{{ path }}</li>
-                </ul>
               </div>
-              <div class="clip-segment-actions" @click.stop>
-                <el-button size="small" type="primary" plain @click="onPreviewSegment(segment)">预览</el-button>
-                <el-button
-                  v-if="segment.status === 'suggested'"
-                  size="small"
-                  @click="onConfirmSegment(segment)"
-                >
-                  确认
-                </el-button>
-                <el-button
-                  v-if="segment.status !== 'done' && segment.status !== 'cutting'"
-                  size="small"
-                  type="success"
-                  plain
-                  @click="onCutOne(segment)"
-                >
-                  切这段
-                </el-button>
-                <el-button v-if="outputsOf(segment).length" size="small" @click="onPreviewOutput(segment)">
-                  看产物
-                </el-button>
-                <el-button
-                  v-if="segment.status !== 'dismissed'"
-                  size="small"
-                  @click="onDismissSegment(segment)"
-                >
-                  弃用
-                </el-button>
-                <el-button size="small" type="danger" plain @click="onDeleteSegment(segment)">删除</el-button>
-              </div>
-            </div>
-            </div>
-          </section>
+            </section>
           </div>
 
           <section class="clip-card" v-loading="detailLoading">
-            <h3 class="clip-section-title">切段时间轴<span class="clip-settings-hint">拖段边微调，双击空白新建</span></h3>
+            <h3 class="clip-section-title">
+              切段时间轴<span class="clip-settings-hint">拖段边微调，双击空白新建</span>
+            </h3>
             <SegmentTimeline
               :segments="segments"
               :session-start-ms="selectedSession.started_at_ms"
@@ -720,93 +825,130 @@ onMounted(async () => {
             <el-collapse-item name="files">
               <template #title>
                 <span class="clip-files-summary">
-                  录播素材 · {{ recordings.length }} 个文件<template v-if="readyCount"> · {{ readyCount }} 个预览就绪</template><template v-if="unmatchedFiles.length"> · {{ unmatchedFiles.length }} 个未识别</template>
+                  录播素材 · {{ recordings.length }} 个文件<template v-if="readyCount">
+                    · {{ readyCount }} 个预览就绪</template
+                  ><template v-if="unmatchedFiles.length">
+                    · {{ unmatchedFiles.length }} 个未识别</template
+                  >
                 </span>
               </template>
-            <div class="clip-files-scroll">
-            <ul class="clip-file-list">
-                <li v-for="file in recordings" :key="file.path" class="clip-file-row">
-                  <div class="clip-file-info">
-                    <span class="clip-file-name" :title="file.file_name">{{ file.file_name }}</span>
-                    <span class="clip-file-time">
-                      自 {{ formatRelClock(file.started_at_ms - selectedSession.started_at_ms) }} 起 ·
-                      {{ fileExtOf(file) }} ·
-                      {{ previewReadiness[file.path] ? '预览就绪' : '首次预览现转该段' }}
-                    </span>
-                  </div>
-                  <div class="clip-file-actions">
-                    <el-button size="small" text type="primary" @click="onPreviewFile(file)">预览</el-button>
-                    <el-button size="small" text @click="onRenameFile(file)">改名</el-button>
-                    <el-button size="small" text type="warning" @click="onDetachFile(file)">移出本场</el-button>
-                  </div>
-                </li>
-                <li v-for="file in detachedFiles" :key="`detached-${file.path}`" class="clip-file-row is-detached">
-                  <div class="clip-file-info">
-                    <span class="clip-file-name" :title="file.file_name">{{ file.file_name }}</span>
-                    <span class="clip-file-time">已被移出本场（人工）</span>
-                  </div>
-                  <div class="clip-file-actions">
-                    <el-button size="small" text @click="onRenameFile(file)">改名</el-button>
-                    <el-button size="small" text @click="onRestoreFile(file)">恢复</el-button>
-                  </div>
-                </li>
-                <li v-for="file in unmatchedFiles" :key="`unmatched-${file.path}`" class="clip-file-row">
-                  <div class="clip-file-info">
-                    <span class="clip-file-name" :title="file.file_name">{{ file.file_name }}</span>
-                    <span class="clip-file-time">文件名解析不出时刻（手工改名归档？）</span>
-                  </div>
-                  <div class="clip-file-actions">
-                    <el-button size="small" text @click="onRenameFile(file)">改名</el-button>
-                    <el-button size="small" text type="primary" @click="onAssignFile(file)">指派到本场</el-button>
-                  </div>
-                </li>
-              </ul>
-              <p v-if="recordings.length === 0 && detachedFiles.length === 0 && unmatchedFiles.length === 0" class="clip-unmatched-note">
-                录播目录里没有属于本场的文件。
-              </p>
-            </div>
+              <div class="clip-files-scroll">
+                <ul class="clip-file-list">
+                  <li v-for="file in recordings" :key="file.path" class="clip-file-row">
+                    <div class="clip-file-info">
+                      <span class="clip-file-name" :title="file.file_name">{{
+                        file.file_name
+                      }}</span>
+                      <span class="clip-file-time">
+                        自
+                        {{ formatRelClock(file.started_at_ms - selectedSession.started_at_ms) }} 起
+                        · {{ fileExtOf(file) }} ·
+                        {{ previewReadiness[file.path] ? '预览就绪' : '首次预览现转该段' }}
+                      </span>
+                    </div>
+                    <div class="clip-file-actions">
+                      <el-button size="small" text type="primary" @click="onPreviewFile(file)"
+                        >预览</el-button
+                      >
+                      <el-button size="small" text @click="onRenameFile(file)">改名</el-button>
+                      <el-button size="small" text type="warning" @click="onDetachFile(file)"
+                        >移出本场</el-button
+                      >
+                    </div>
+                  </li>
+                  <li
+                    v-for="file in detachedFiles"
+                    :key="`detached-${file.path}`"
+                    class="clip-file-row is-detached"
+                  >
+                    <div class="clip-file-info">
+                      <span class="clip-file-name" :title="file.file_name">{{
+                        file.file_name
+                      }}</span>
+                      <span class="clip-file-time">已被移出本场（人工）</span>
+                    </div>
+                    <div class="clip-file-actions">
+                      <el-button size="small" text @click="onRenameFile(file)">改名</el-button>
+                      <el-button size="small" text @click="onRestoreFile(file)">恢复</el-button>
+                    </div>
+                  </li>
+                  <li
+                    v-for="file in unmatchedFiles"
+                    :key="`unmatched-${file.path}`"
+                    class="clip-file-row"
+                  >
+                    <div class="clip-file-info">
+                      <span class="clip-file-name" :title="file.file_name">{{
+                        file.file_name
+                      }}</span>
+                      <span class="clip-file-time">文件名解析不出时刻（手工改名归档？）</span>
+                    </div>
+                    <div class="clip-file-actions">
+                      <el-button size="small" text @click="onRenameFile(file)">改名</el-button>
+                      <el-button size="small" text type="primary" @click="onAssignFile(file)"
+                        >指派到本场</el-button
+                      >
+                    </div>
+                  </li>
+                </ul>
+                <p
+                  v-if="
+                    recordings.length === 0 &&
+                    detachedFiles.length === 0 &&
+                    unmatchedFiles.length === 0
+                  "
+                  class="clip-unmatched-note"
+                >
+                  录播目录里没有属于本场的文件。
+                </p>
+              </div>
             </el-collapse-item>
           </el-collapse>
         </template>
         <div v-else class="md-list-empty clip-empty-detail">
-          <template v-if="needsSetup">先把上面的切片设置填好保存（不用重启），场次列表就会出现。</template>
+          <template v-if="needsSetup"
+            >先把上面的切片设置填好保存（不用重启），场次列表就会出现。</template
+          >
           <template v-else>从左侧选一场直播开始切。列表只显示匹配到了录播文件的场次。</template>
         </div>
       </section>
     </div>
 
-  <el-dialog v-model="assignDialogVisible" title="指派到本场" width="480px">
-    <p class="clip-assign-path">{{ assignTarget?.file_name }}</p>
-    <el-form label-width="110px" @submit.prevent>
-      <el-form-item label="录制开始">
-        <el-input v-model="assignStartText" placeholder="YYYY-MM-DD HH:mm:ss">
-          <template #append>
-            <el-button :loading="readingMeta" @click="onReadMetadata">读元数据</el-button>
-          </template>
-        </el-input>
-        <div class="clip-dir-warning">文件名解析不出时刻，切片偏移按这个时刻换算；默认预填本场开播时刻</div>
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button @click="assignDialogVisible = false">取消</el-button>
-      <el-button type="primary" @click="onConfirmAssign">指派</el-button>
-    </template>
-  </el-dialog>
+    <el-dialog v-model="assignDialogVisible" title="指派到本场" width="480px">
+      <p class="clip-assign-path">{{ assignTarget?.file_name }}</p>
+      <el-form label-width="110px" @submit.prevent>
+        <el-form-item label="录制开始">
+          <el-input v-model="assignStartText" placeholder="YYYY-MM-DD HH:mm:ss">
+            <template #append>
+              <el-button :loading="readingMeta" @click="onReadMetadata">读元数据</el-button>
+            </template>
+          </el-input>
+          <div class="clip-dir-warning">
+            文件名解析不出时刻，切片偏移按这个时刻换算；默认预填本场开播时刻
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="assignDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="onConfirmAssign">指派</el-button>
+      </template>
+    </el-dialog>
 
-  <el-dialog v-model="renameDialogVisible" title="改名" width="480px">
-    <el-form label-width="90px" @submit.prevent>
-      <el-form-item label="新文件名">
-        <el-input v-model="renameNewName" placeholder="含扩展名；扩展名不可改" />
-        <div class="clip-dir-warning">
-          改成 录制-房间号-日期-时刻-毫秒-标题.扩展名 形态即可恢复自动匹配；改名后该文件的人工归属记录跟着迁移
-        </div>
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button @click="renameDialogVisible = false">取消</el-button>
-      <el-button type="primary" @click="onConfirmRename">改名</el-button>
-    </template>
-  </el-dialog>
+    <el-dialog v-model="renameDialogVisible" title="改名" width="480px">
+      <el-form label-width="90px" @submit.prevent>
+        <el-form-item label="新文件名">
+          <el-input v-model="renameNewName" placeholder="含扩展名；扩展名不可改" />
+          <div class="clip-dir-warning">
+            改成 录制-房间号-日期-时刻-毫秒-标题.扩展名
+            形态即可恢复自动匹配；改名后该文件的人工归属记录跟着迁移
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="renameDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="onConfirmRename">改名</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 

@@ -47,7 +47,14 @@ export function parseLocalDateTime(text: string): number | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(text.trim());
   if (match === null) return null;
   const [, y, mo, d, h, mi, sec] = match;
-  const dt = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(sec ?? '0'));
+  const dt = new Date(
+    Number(y),
+    Number(mo) - 1,
+    Number(d),
+    Number(h),
+    Number(mi),
+    Number(sec ?? '0'),
+  );
   const ms = dt.getTime();
   return Number.isNaN(ms) ? null : ms;
 }

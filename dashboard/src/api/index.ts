@@ -724,18 +724,25 @@ export const clipsApi = {
     api.post<{ deleted: boolean }>(`/clips/sessions/${sessionId}/recordings/restore`, { path }),
   // 容器元数据里的录制时刻（指派对话框的取时来源）；WebUI 改名（归属覆盖随新路径迁移）
   creationTime: (path: string) =>
-    api.get<{ creation_time_ms: number | null }>('/clips/recordings/creation-time', { params: { path } }),
+    api.get<{ creation_time_ms: number | null }>('/clips/recordings/creation-time', {
+      params: { path },
+    }),
   renameRecording: (path: string, newName: string) =>
     api.post<{ path: string }>('/clips/recordings/rename', { path, new_name: newName }),
   select: (sessionId: number) =>
     api.post<{ suggestion_count: number }>(`/clips/sessions/${sessionId}/select`),
   listSegments: (sessionId: number) =>
-    api.get<{ live_session_id: number; segments: ClipSegment[] }>(`/clips/sessions/${sessionId}/segments`),
+    api.get<{ live_session_id: number; segments: ClipSegment[] }>(
+      `/clips/sessions/${sessionId}/segments`,
+    ),
   createSegment: (sessionId: number, body: { start_ms: number; end_ms: number; title: string }) =>
     api.post<{ segment: ClipSegment | null }>(`/clips/sessions/${sessionId}/segments`, body),
-  updateSegment: (segmentId: number, body: Partial<{ start_ms: number; end_ms: number; title: string; status: string }>) =>
-    api.put<{ segment: ClipSegment | null }>(`/clips/segments/${segmentId}`, body),
-  deleteSegment: (segmentId: number) => api.delete<{ deleted: boolean }>(`/clips/segments/${segmentId}`),
+  updateSegment: (
+    segmentId: number,
+    body: Partial<{ start_ms: number; end_ms: number; title: string; status: string }>,
+  ) => api.put<{ segment: ClipSegment | null }>(`/clips/segments/${segmentId}`, body),
+  deleteSegment: (segmentId: number) =>
+    api.delete<{ deleted: boolean }>(`/clips/segments/${segmentId}`),
   cut: (sessionId: number, segmentIds: number[]) =>
     api.post<{ accepted: number }>(`/clips/sessions/${sessionId}/cut`, { segment_ids: segmentIds }),
   // 预览：status 轻量轮询就绪态；文件本体走 <video> 直连 /clips/preview（不走 axios，免超时）

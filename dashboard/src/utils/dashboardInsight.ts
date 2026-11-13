@@ -294,4 +294,3 @@ export function buildMemoryReminderLine(input: MemoryReminderInput): MemoryRemin
   const tone: 'warn' | 'info' = failed > 0 || running > 0 ? 'warn' : 'info';
   return { tone, text: parts.join(' · ') };
 }
-

@@ -18,8 +18,8 @@ const sfcSource = readFileSync(
 
 describe('LLMHistory 直达筛选参数', () => {
   it('model_name / profile / start_time / end_time 四个查询参数都有读取分支', () => {
-    expect(sfcSource).toContain("route.query.model_name");
-    expect(sfcSource).toContain("route.query.profile");
+    expect(sfcSource).toContain('route.query.model_name');
+    expect(sfcSource).toContain('route.query.profile');
     expect(sfcSource).toContain('route.query.start_time');
     expect(sfcSource).toContain('route.query.end_time');
     expect(sfcSource).toContain('queryParams.profile_name = queryProfile');

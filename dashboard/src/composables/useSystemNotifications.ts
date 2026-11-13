@@ -42,8 +42,8 @@ const DEDUP_WINDOW_MS = 60_000;
 const MAX_PER_WINDOW = 5;
 /** 全局滑动窗口宽度（毫秒） */
 const RATE_WINDOW_MS = 60_000;
-  /** 通知自动消失时长（毫秒）：信息/成功类用；error/warning 不自动消失（见 notify） */
-  const NOTIFICATION_DURATION_MS = 8000;
+/** 通知自动消失时长（毫秒）：信息/成功类用；error/warning 不自动消失（见 notify） */
+const NOTIFICATION_DURATION_MS = 8000;
 
 /** 提取 payload 的人类可读正文（core.* 载荷的 message 字段） */
 function messageText(data: Record<string, unknown>): string {
