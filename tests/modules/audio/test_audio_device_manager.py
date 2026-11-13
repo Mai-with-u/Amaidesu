@@ -328,6 +328,27 @@ class TestSinkFeedAtSoundcardWrite:
         tapped.manager.stop_stream()
         assert self._fed_total(tapped.sink) == 4800  # 收尾不重复递入
 
+    def test_large_chunk_is_fed_piece_by_piece_interleaved_with_writes(self, tapped) -> None:
+        """大块写声卡按小片交替"递分接→写声卡"：递入贴住播放节奏
+
+        背景：网关整句下发等形态会让单块长达数秒，整块先递后写时口型与
+        字幕的分接消费方一次性读到句尾音频，读数整体超前于听感。
+        """
+        chunk = np.arange(15000, dtype=np.int16)  # 0.47s @32kHz：10 片、尾片不足整片
+        # 记录每次写声卡发生时分接已收到的片数：严格交替且递入在前的证据
+        write_seen_fed_counts: list[int] = []
+        tapped.stream.write.side_effect = lambda _chunk: write_seen_fed_counts.append(len(tapped.sink.fed_chunks()))
+
+        tapped.manager.start_stream(utterance_id="piece")
+        tapped.manager.write_chunk(chunk)
+
+        pieces = tapped.sink.fed_chunks()
+        assert len(pieces) == 10
+        assert all(len(p) <= 1600 for p in pieces)  # 片长上限 = 32000Hz × 0.05s
+        assert len(pieces[-1]) == 15000 - 1600 * 9
+        np.testing.assert_array_equal(np.concatenate(pieces), chunk)
+        assert write_seen_fed_counts == list(range(1, 11))
+
     def test_discard_leaves_sink_untouched(self, tapped) -> None:
         """取消/截断：未播的预缓冲被丢弃，不发声也不递分接"""
         tapped.manager.prebuffer_seconds = 100.0

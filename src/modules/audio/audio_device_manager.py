@@ -121,10 +121,12 @@ class AudioDeviceManager:
         self._stall_stop_event = threading.Event()
         self._stall_watchdog: Optional[threading.Thread] = None
         self._stall_poll_interval_s = 0.5
-        # 分接递入时机 = 写声卡时刻：write 在声卡缓冲满时按实时阻塞（背压），
-        # 紧贴 write 的递入因此跟随播放节奏。随"到达"递入则与听感脱节——
-        # 合成停顿、整段突发都会让 sink 跳到句尾，短句句身整段被消费方
-        # 跳过（口型不动的根因）
+        # 分接递入时机 = 写声卡时刻，且按此片长切成小片逐片递入：write 在
+        # 声卡缓冲满时按实时阻塞（背压），紧贴 write 的逐片递入因此跟随播
+        # 放节奏。随"到达"递入或整块先递后写都会让分接超前于听感——合成
+        # 停顿、整段突发、网关整句下发都会把分接推到句尾，消费方（口型分
+        # 析、句间隙检测）读到的"当前播放位置"随之失真。片长与全量播法的
+        # 逐片节奏一致
         self._PLAYBACK_FEED_PIECE_S = 0.05
 
         if not DEPENDENCIES_OK:
@@ -437,6 +439,20 @@ class AudioDeviceManager:
         self.logger.warning(f"播放中断流：正在播放但已 {idle_sec:.1f}s 未收到新音频块（TTS 上游供给中断）")
         return True
 
+    def _write_with_tap(self, chunk: np.ndarray) -> None:
+        """把一块音频切成小片，逐片交替"递分接 → 写声卡"。
+
+        写声卡在缓冲满时按实时阻塞（背压），紧贴它逐片递入使分接节奏跟随
+        播放；整块先递后写时块越大分接越超前于听感——分接消费方（口型分
+        析、句间隙检测）都以"最近递入的窗口"为当前播放位置，超前会让口型
+        与字幕整体提前。片长见 ``_PLAYBACK_FEED_PIECE_S``。
+        """
+        piece_samples = max(1, int(self._PLAYBACK_FEED_PIECE_S * self.sample_rate))
+        for start in range(0, len(chunk), piece_samples):
+            part = chunk[start : start + piece_samples]
+            self._sink_feed(part, self.sample_rate)
+            self._stream.write(part)
+
     def _flush_pending(self) -> None:
         """把预缓冲冲入声卡：首次冲入时启动流，随后逐块写入。"""
         if self._stream is None:
@@ -449,10 +465,9 @@ class AudioDeviceManager:
             self.logger.debug(f"预缓冲达阈值（{self.prebuffer_seconds:.1f}s），声卡流开播")
         t0 = time.perf_counter()
         for chunk in self._pending_chunks:
-            # 分接紧贴写声卡：冲播批次写入时按实时阻塞（缓冲满后），递入
-            # 因此与听感同步——短句兜底冲播的整段也在这里逐块递给分接
-            self._sink_feed(chunk, self.sample_rate)
-            self._stream.write(chunk)
+            # 逐片"递分接→写声卡"：冲播批次写入时按实时阻塞（缓冲满后），
+            # 递入因此与听感同步——短句兜底冲播的整段也在这里逐片递给分接
+            self._write_with_tap(chunk)
         self._last_write_block_sec = time.perf_counter() - t0
         self._backpressure_total += self._last_write_block_sec
         self._pending_chunks = []
@@ -491,9 +506,8 @@ class AudioDeviceManager:
                 if self._pending_samples >= int(self.prebuffer_seconds * self.sample_rate):
                     self._flush_pending()
             else:
-                self._sink_feed(chunk, self.sample_rate)
                 t0 = time.perf_counter()
-                self._stream.write(chunk)
+                self._write_with_tap(chunk)
                 self._last_write_block_sec = time.perf_counter() - t0
                 self._backpressure_total += self._last_write_block_sec
         except Exception as e:

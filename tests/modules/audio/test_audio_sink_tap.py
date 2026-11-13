@@ -68,7 +68,8 @@ def test_stream_lifecycle_drives_sink_session(fake_sounddevice: MagicMock) -> No
     fake_sounddevice.OutputStream.assert_called_once_with(samplerate=32000, channels=1, dtype=np.int16, device=None)
     stream = fake_sounddevice.OutputStream.return_value
     assert [c[0] for c in stream.method_calls] == ["start", "write", "stop", "close"]
-    assert stream.write.call_args.args[0] is chunk
+    # 写声卡按小片交替执行（分接跟随播放节奏），写盘内容与原块逐样本一致
+    np.testing.assert_array_equal(stream.write.call_args.args[0], chunk)
     assert not mgr.is_playing
     assert mgr._stream is None
 
