@@ -370,6 +370,16 @@ class RoomState:
         ]
         return names[-ENTER_RENDER_CAP:]
 
+    def recent_unwelcomed_enters(self, *, now_ms: Optional[int] = None) -> List[Tuple[str, str]]:
+        """返回窗口内最近进房且本场尚未被欢迎过的观众 ``(user_id, user_name)``（供老观众进房认人与欢迎协同）。"""
+        ts = self._resolve_now(now_ms)
+        pairs = [
+            (uid, name)
+            for enter_ts, uid, name in self._enters
+            if enter_ts >= ts - ENTER_WINDOW_MS and not self._is_welcomed(uid, name)
+        ]
+        return pairs[-ENTER_RENDER_CAP:]
+
     # ------------------------------------------------------------------
     # 观众规模(状态推送驱动)
     # ------------------------------------------------------------------

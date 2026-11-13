@@ -82,6 +82,18 @@ class ViewerNameMatch:
     by_former_name: bool
 
 
+@dataclass(frozen=True)
+class ViewerPresenceStats:
+    """观众在场认人用的合并统计：把待确认（pending）身份关联簇合并后计算的过往场次数与上次活跃时刻。"""
+
+    primary_viewer_id: int
+    cluster_viewer_ids: Tuple[int, ...]
+    user_name: str
+    earlier_sessions: int
+    prev_seen_ms: Optional[int]
+    forget_requested_at_ms: Optional[int]
+
+
 class ViewerRepo(BaseRepo):
     """viewers 观众表与 viewer_names 昵称记录的读写。"""
 
@@ -348,6 +360,134 @@ class ViewerRepo(BaseRepo):
                     # 同串命中多行时取最先命中的（开放平台 ID 的应用优先级已由排序保证）
                     found.setdefault(external_id, int(row["id"]))
                 return found
+
+        return await self._run_in_executor(_exec)
+
+    async def resolve_presence_stats(
+        self,
+        *,
+        platform: str = "",
+        external_id: str = "",
+        user_name: str = "",
+        viewer_id: Optional[int] = None,
+        current_session_id: Optional[int] = None,
+    ) -> Optional[ViewerPresenceStats]:
+        """解析一位发言或进房观众的合并来访统计，不把待确认（pending）身份关联拆成两份。
+
+        - 先按 ``viewer_id``、``(platform, external_id)``（不限平台时仅按外部 ID 查唯一非模拟行）或当前昵称定位主行；
+        - 再把该行与 ``link_status='pending'`` 指向它（或它指向的候选老观众）归成一个同人簇；
+        - ``earlier_sessions`` 综合两方面且不重复计场：① 明细表（弹幕/礼物/醒目留言/上舰）在非本场正式场上的去重场次数；
+          ② 各行历史累计 ``sessions_count`` 扣除本场与同场重叠后的累加值，取较大者（兼顾历史删场后明细已清的情形）。
+        """
+
+        def _exec() -> Optional[ViewerPresenceStats]:
+            with self._manager.transaction() as conn:
+                anchor = None
+                if viewer_id is not None:
+                    anchor = conn.execute(
+                        f"{_SELECT_VIEWER} WHERE id=?",  # noqa: S608
+                        (int(viewer_id),),
+                    ).fetchone()
+                if anchor is None and external_id:
+                    if platform:
+                        anchor = conn.execute(
+                            f"{_SELECT_VIEWER} WHERE {_MATCH_EXTERNAL} ORDER BY id LIMIT 1",  # noqa: S608
+                            (platform, external_id, external_id),
+                        ).fetchone()
+                    else:
+                        anchor = conn.execute(
+                            f"{_SELECT_VIEWER} WHERE (account_id=? OR open_id=?) AND simulated=0 ORDER BY id LIMIT 1",  # noqa: S608
+                            (external_id, external_id),
+                        ).fetchone()
+                if anchor is None and user_name and not is_placeholder_name(user_name):
+                    if platform:
+                        anchor = conn.execute(
+                            f"{_SELECT_VIEWER} WHERE platform=? AND user_name=? COLLATE NOCASE AND simulated=0"  # noqa: S608
+                            " ORDER BY name_seen_ms DESC, id ASC LIMIT 1",
+                            (platform, user_name.strip()),
+                        ).fetchone()
+                    else:
+                        anchor = conn.execute(
+                            f"{_SELECT_VIEWER} WHERE user_name=? COLLATE NOCASE AND simulated=0"  # noqa: S608
+                            " ORDER BY name_seen_ms DESC, id ASC LIMIT 1",
+                            (user_name.strip(),),
+                        ).fetchone()
+                if anchor is None:
+                    return None
+
+                anchor_id = int(anchor["id"])
+                root_id = (
+                    int(anchor["link_candidate_id"])
+                    if anchor["link_status"] == "pending" and anchor["link_candidate_id"] is not None
+                    else anchor_id
+                )
+                cluster_rows = conn.execute(
+                    f"{_SELECT_VIEWER} WHERE id=? OR id=? OR (link_status='pending' AND link_candidate_id=?)"  # noqa: S608
+                    " ORDER BY id ASC",
+                    (anchor_id, root_id, root_id),
+                ).fetchall()
+                if not cluster_rows:
+                    return None
+
+                cluster_ids = tuple(int(r["id"]) for r in cluster_rows)
+                placeholders = ",".join("?" for _ in cluster_ids)
+
+                # 明细现存的跨场正式场去重数 + 重叠扣除量
+                exclude_clause = " AND s.id <> ?" if current_session_id is not None else ""
+                base_params: List[Any] = list(cluster_ids)
+                if current_session_id is not None:
+                    base_params.append(int(current_session_id))
+
+                union_parts = [
+                    f"SELECT DISTINCT t.live_session_id AS sid, t.viewer_id AS vid FROM {tbl} t"  # noqa: S608
+                    f" JOIN live_sessions s ON s.id = t.live_session_id"
+                    f" WHERE t.viewer_id IN ({placeholders}) AND s.kind='live'{extra}{exclude_clause}"
+                    for tbl, extra in (
+                        ("live_chat", " AND t.sender_role='viewer'"),
+                        ("gifts", ""),
+                        ("super_chats", ""),
+                        ("guards", ""),
+                    )
+                ]
+                pair_rows = conn.execute(
+                    f"SELECT DISTINCT sid, vid FROM ({' UNION '.join(union_parts)})",  # noqa: S608
+                    base_params * 4,
+                ).fetchall()
+                distinct_sids = {int(r["sid"]) for r in pair_rows}
+                # 同一场里簇内多个 viewer_id 同时发过消息的重叠次数，从各行累加值里扣掉防虚高
+                overlap_extra = max(0, len(pair_rows) - len(distinct_sids))
+
+                summed_earlier = 0
+                for r in cluster_rows:
+                    sc = int(r["sessions_count"] or 0)
+                    last_sid = int(r["last_session_id"]) if r["last_session_id"] is not None else None
+                    if current_session_id is not None and last_sid == int(current_session_id):
+                        sc = max(0, sc - 1)
+                    summed_earlier += sc
+                earlier_sessions = max(len(distinct_sids), max(0, summed_earlier - overlap_extra))
+
+                # 取簇内本场之前最近一次活跃时刻：对本场已活跃的行看 prev_seen_ms，本场未活跃的行看 last_active_ms
+                prev_candidates: List[int] = []
+                forget_candidates: List[int] = []
+                for r in cluster_rows:
+                    if r["forget_requested_at_ms"] is not None:
+                        forget_candidates.append(int(r["forget_requested_at_ms"]))
+                    last_sid = int(r["last_session_id"]) if r["last_session_id"] is not None else None
+                    if current_session_id is not None and last_sid == int(current_session_id):
+                        if r["prev_seen_ms"] is not None:
+                            prev_candidates.append(int(r["prev_seen_ms"]))
+                    elif int(r["sessions_count"] or 0) > 0 and r["last_active_ms"]:
+                        prev_candidates.append(int(r["last_active_ms"]))
+
+                chosen_name = str(anchor["user_name"] or user_name or "")
+                return ViewerPresenceStats(
+                    primary_viewer_id=root_id,
+                    cluster_viewer_ids=cluster_ids,
+                    user_name=chosen_name,
+                    earlier_sessions=earlier_sessions,
+                    prev_seen_ms=max(prev_candidates) if prev_candidates else None,
+                    forget_requested_at_ms=min(forget_candidates) if forget_candidates else None,
+                )
 
         return await self._run_in_executor(_exec)
 

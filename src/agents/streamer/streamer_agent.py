@@ -2175,6 +2175,7 @@ class StreamerAgent(BaseAgent):
             brief_commitment_ids=self._memory_brief_ids,
             game_tasks=self._game_tasks(),
             game_players=list(game_players),
+            recent_enters=self._room_state.recent_unwelcomed_enters(),
         )
 
     def _game_tasks(self) -> Dict[str, str]:

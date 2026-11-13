@@ -147,10 +147,12 @@ class _Sender:
     message_type: str = ""
     platform: str = ""
     viewer_id: Optional[int] = None
+    cluster_viewer_ids: Tuple[int, ...] = ()
     forget_requested_at_ms: Optional[int] = None
     # 外部 ID 在不记录名单里：发过"忘了我"（建没建过档都算），或观众行已按要求删掉
     forget_listed: bool = False
     sessions_count: int = 0
+    earlier_sessions: Optional[int] = None
     last_session_id: Optional[int] = None
     prev_seen_ms: Optional[int] = None
 
@@ -277,6 +279,8 @@ class MemoryCueProvider:
         self._known_names: Set[str] = set()
         # 条目 → 本场推送时刻列表
         self._push_at: Dict[ItemKey, List[int]] = {}
+        # 本场已经给过"常来的某某进来了"提示的观众（按同人簇主 ID 记，每场每人最多一次）
+        self._announced_enter_viewers: Set[int] = set()
         # 本批推送的卡：编号 → 对方称呼（说话档据此说"答应过谁"）
         self._round_labels: Dict[int, str] = {}
 
@@ -295,6 +299,7 @@ class MemoryCueProvider:
         brief_commitment_ids: Sequence[int] = (),
         game_tasks: Optional[Mapping[str, str]] = None,
         game_players: Sequence[Tuple[str, str]] = (),
+        recent_enters: Sequence[Tuple[str, str]] = (),
     ) -> MemoryCues:
         """算一批的线索：卡片、老观众在场一行、回执行合成一个块；没有线索返回空串。
 
@@ -308,7 +313,7 @@ class MemoryCueProvider:
             return MemoryCues()
         sid = int(session_id)
         self._reset_if_new_session(sid)
-        senders = await self._resolve_senders(batch)
+        senders = await self._resolve_senders(batch, current_session_id=sid)
         used, used_archive = await load_used_refs(self._chat, sid)
         await self._mark_used(sid, used_archive, used)
         del open_games  # 游戏承诺不再按"游戏开着"轮播，只在对象开口、走到地点或情境命中时单推
@@ -337,8 +342,8 @@ class MemoryCueProvider:
                     self.note_name(player)
             self._situation.update(situations or {}, state.saves, game_tasks or {}, names=self._known_names)
             await self._vector_cards(batch, senders, state)
-        # 老观众一行不再因为"本批有别人的卡"整行消失；只跳过这一批拿了自己卡的观众
-        presence = await self._presence_line(sid, senders, state.carded_viewers)
+        # 老观众一行不再因为"本批有别人的卡"整行消失；只跳过这一批拿了自己卡的观众，并顺带认出只进房没说话的老观众
+        presence = await self._presence_line(sid, senders, state.carded_viewers, recent_enters=recent_enters)
         notices = self._command_notices(batch)
         text = render_cue_block(cards=[card.text for card in state.cards], presence=presence, notices=notices)
         await self._record_round(sid, state)
@@ -352,9 +357,10 @@ class MemoryCueProvider:
         )
 
     def reset(self) -> None:
-        """下播时清空本场状态（推送计数、到过的地点与回执追踪都只在本场内有效）。"""
+        """下播时清空本场状态（推送计数、进房提示去重、到过的地点与回执追踪都只在本场内有效）。"""
         self._session_id = None
         self._push_at.clear()
+        self._announced_enter_viewers.clear()
         self._arrivals.reset()
         self._pool.reset()
         self._situation.reset()
@@ -407,8 +413,10 @@ class MemoryCueProvider:
         self.reset()
         self._session_id = session_id
 
-    async def _resolve_senders(self, batch: Sequence[Any]) -> List[_Sender]:
-        """本批发言人解析成观众：模拟消息不解析，同一观众一批只算一次。"""
+    async def _resolve_senders(
+        self, batch: Sequence[Any], *, current_session_id: Optional[int] = None
+    ) -> List[_Sender]:
+        """本批发言人解析成观众：模拟消息不解析，同一观众（含待确认身份关联簇）一批只算一次。"""
         senders: List[_Sender] = []
         seen: Set[int] = set()
         for message in batch:
@@ -429,17 +437,28 @@ class MemoryCueProvider:
             )
             self.note_name(sender.user_name)
             if self._viewers is not None:
-                await self._fill_viewer(sender, platform=str(getattr(message, "platform", "") or ""))
+                await self._fill_viewer(
+                    sender,
+                    platform=str(getattr(message, "platform", "") or ""),
+                    current_session_id=current_session_id,
+                )
             sender.forget_listed = await self._on_forget_list(sender)
             if sender.viewer_id is not None:
-                if sender.viewer_id in seen:
+                dedup_ids = sender.cluster_viewer_ids or (sender.viewer_id,)
+                if seen.intersection(dedup_ids):
                     continue
-                seen.add(sender.viewer_id)
+                seen.update(dedup_ids)
             senders.append(sender)
         return senders
 
-    async def _fill_viewer(self, sender: _Sender, *, platform: str) -> None:
-        """按外部 ID 只读解析观众（不建观众行）；解析失败按陌生人处理。"""
+    async def _fill_viewer(
+        self,
+        sender: _Sender,
+        *,
+        platform: str,
+        current_session_id: Optional[int] = None,
+    ) -> None:
+        """按外部 ID 只读解析观众（合并待确认关联簇场次数，不建观众行）；解析失败按陌生人处理。"""
         assert self._viewers is not None  # noqa: S101 调用方已判空
         try:
             viewer_id = await self._viewers.find_viewer_id(platform=platform, external_id=sender.external_id)
@@ -456,11 +475,27 @@ class MemoryCueProvider:
         if row is None:
             return
         sender.viewer_id = int(viewer_id)
+        sender.cluster_viewer_ids = (int(viewer_id),)
         sender.user_name = row.user_name or sender.user_name
         sender.forget_requested_at_ms = row.forget_requested_at_ms
         sender.sessions_count = int(row.sessions_count)
         sender.last_session_id = int(row.last_session_id) if row.last_session_id is not None else None
         sender.prev_seen_ms = row.prev_seen_ms
+        resolver = getattr(self._viewers, "resolve_presence_stats", None)
+        if callable(resolver):
+            try:
+                merged = await resolver(
+                    viewer_id=int(viewer_id),
+                    current_session_id=current_session_id,
+                )
+                if merged is not None:
+                    sender.cluster_viewer_ids = merged.cluster_viewer_ids
+                    sender.earlier_sessions = merged.earlier_sessions
+                    sender.prev_seen_ms = merged.prev_seen_ms
+                    if merged.forget_requested_at_ms is not None:
+                        sender.forget_requested_at_ms = merged.forget_requested_at_ms
+            except Exception as exc:  # noqa: BLE001 - 合并查询失败退回单行计数
+                logger.debug(f"合并待确认观众场次数失败（退回单行计数）: {exc}", exc=exc)
 
     async def _on_forget_list(self, sender: _Sender) -> bool:
         """这位发言人的外部 ID 在不记录名单里就返回 True；没有隐私服务时只能靠观众行上的标记。
@@ -999,32 +1034,106 @@ class MemoryCueProvider:
         session_id: int,
         senders: Sequence[_Sender],
         carded_viewers: Set[int],
+        *,
+        recent_enters: Sequence[Tuple[str, str]] = (),
     ) -> str:
-        """老观众在场一行：本场之前来过至少三场正式场、她本场还没回应过、没有待删请求的观众。
-
-        ``sessions_count`` 是含本场的累计（观众本场首条弹幕进账时 +1）：这位观众上次计入
-        的场次就是本场时，先减掉本场再比门槛——否则回访第 3 场的人会被当成老观众。
-        这一批拿到对 ta 本人承诺卡的观众不进行：同一批里说两遍同一件事；别人拿卡不压 ta。
-        """
+        """老观众在场一行：覆盖本批开口的老观众，以及只进房尚未开口的老观众（每场每人最多提示一次）。"""
         replied = await self._replied_viewer_ids(session_id)
         entries: List[Tuple[str, Optional[int]]] = []
+        active_cluster_ids: Set[int] = set()
+        active_names_lower: Set[str] = set()
         for sender in senders:
             if sender.viewer_id is None:
                 continue
+            cluster_ids = sender.cluster_viewer_ids or (sender.viewer_id,)
+            active_cluster_ids.update(cluster_ids)
+            if sender.user_name:
+                active_names_lower.add(sender.user_name.strip().lower())
             # 只跳过这一批拿了对 ta 本人承诺卡的观众；别人拿卡不压 ta 这一行
-            if sender.viewer_id in carded_viewers:
+            if carded_viewers.intersection(cluster_ids):
                 continue
-            earlier_sessions = sender.sessions_count
-            if sender.last_session_id is not None and sender.last_session_id == session_id:
-                earlier_sessions -= 1
+            if sender.earlier_sessions is not None:
+                earlier_sessions = sender.earlier_sessions
+            else:
+                earlier_sessions = sender.sessions_count
+                if sender.last_session_id is not None and sender.last_session_id == session_id:
+                    earlier_sessions -= 1
             if earlier_sessions < MIN_SESSIONS_FOR_PRESENCE:
                 continue
             if sender.forget_requested_at_ms is not None:
                 continue
-            if sender.viewer_id in replied:
+            if replied.intersection(cluster_ids):
                 continue
             entries.append((sender.user_name or "观众", sender.prev_seen_ms))
-        return render_presence_line(entries, now_ms=int(self._clock()))
+
+        entered_veterans = await self._resolve_entered_veterans(
+            session_id=session_id,
+            recent_enters=recent_enters,
+            replied=replied,
+            active_cluster_ids=active_cluster_ids,
+            active_names_lower=active_names_lower,
+        )
+        return render_presence_line(entries, now_ms=int(self._clock()), entered_names=entered_veterans)
+
+    async def _resolve_entered_veterans(
+        self,
+        *,
+        session_id: int,
+        recent_enters: Sequence[Tuple[str, str]],
+        replied: Set[int],
+        active_cluster_ids: Set[int],
+        active_names_lower: Set[str],
+    ) -> List[str]:
+        """从近 10 分钟未欢迎进房名单里认出来过 ≥3 场的老观众，每场每人最多提示一次。"""
+        if not recent_enters or self._viewers is None:
+            return []
+        resolver = getattr(self._viewers, "resolve_presence_stats", None)
+        if not callable(resolver):
+            return []
+        entered_names: List[str] = []
+        for raw_uid, raw_name in recent_enters:
+            uid = (raw_uid or "").strip()
+            uname = (raw_name or "").strip()
+            if not uid and not uname:
+                continue
+            if uname and uname.lower() in active_names_lower:
+                continue
+            if uid and self._privacy is not None:
+                try:
+                    if await self._privacy.is_external_id_forgotten(
+                        id_kind="account", external_id=uid
+                    ) or await self._privacy.is_external_id_forgotten(id_kind="open", external_id=uid):
+                        continue
+                except Exception as exc:  # noqa: BLE001 - 查不了遗忘表时不报该进房人
+                    logger.debug(f"核对进房观众遗忘名单失败（跳过提示）: {exc}", exc=exc)
+                    continue
+            try:
+                stats = await resolver(
+                    external_id=uid,
+                    user_name=uname,
+                    current_session_id=session_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - 进房认人失败不挡线索
+                logger.debug(f"核对进房观众场次数失败: {exc}", exc=exc)
+                continue
+            if stats is None:
+                continue
+            if stats.primary_viewer_id in self._announced_enter_viewers:
+                continue
+            if active_cluster_ids.intersection(stats.cluster_viewer_ids):
+                continue
+            if replied.intersection(stats.cluster_viewer_ids):
+                continue
+            if stats.forget_requested_at_ms is not None:
+                continue
+            if stats.earlier_sessions < MIN_SESSIONS_FOR_PRESENCE:
+                continue
+            shown = uname or stats.user_name
+            if not shown:
+                continue
+            self._announced_enter_viewers.add(stats.primary_viewer_id)
+            entered_names.append(shown)
+        return entered_names
 
     def _command_notices(self, batch: Sequence[Any]) -> List[str]:
         """本批遗忘命令的回执行：逐条看非模拟弹幕，不按发言人去重。
