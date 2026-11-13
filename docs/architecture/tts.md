@@ -17,11 +17,13 @@
 | voicebox | 本地 HTTP 服务，音色 = `profile_id` 克隆 | 默认端口 17493 | SSE 轮询 | 无 |
 | omni_tts | 全模态大模型（经 LLM profile 调音频端点） | model.toml 档位指向的端点 | 否（全量收齐后播放） | 无 |
 | minimax_tts | MiniMax 云端合成（T2A 接口，密钥段内自持） | `base_url`（默认国内站，国际站账号改官方域名同路径） | 是（SSE 分块 hex 音频，`bytes.fromhex` 解码即裸 PCM） | 无（云服务无冷启动惩罚） |
-| openai_tts | OpenAI 官方语音合成（`/v1/audio/speech`，密钥段内自持） | `base_url`（默认官方端点，可整体替换为兼容网关） | 是（响应体即裸 PCM 24kHz 字节流，`np.frombuffer` 直接得样本） | 无（云服务无冷启动惩罚） |
+| openai_tts | OpenAI 官方语音合成（`/v1/audio/speech`，密钥段内自持） | `base_url`（默认官方端点，可整体替换为兼容网关） | 是（默认 `stream_format=sse` 事件流：每块 PCM 经 base64 装在 `speech.audio.delta` 事件里，逐块解码投递；响应非事件流时退化为裸 PCM 24kHz 字节流透传） | 无（云服务无冷启动惩罚） |
 
-> omni_tts 尚未经过实战调通验证；直播实战常用的是 edge_tts 与 gptsovits。minimax_tts 已过真机冒烟（密钥真实合成：流式 5 块、首块延迟约 0.5s），直播实战待用。openai_tts 与 omni_tts 同属"云端语音模型"但走不同端点：omni_tts 经 LLM 的 chat 模态音频输出（复用 model.toml 的 profile 与密钥），openai_tts 走专用 speech 端点，模型 / 音色 / 风格提示都是该端点自己的词表。openai_tts 的验证分两级：链路级用本地 aiohttp 服务冒充 speech 端点，跑通了真实 HTTP 请求、chunked 流式读取、样本拼接、事件派发全链路（`tests/modules/tts/test_openai_client_http.py`）；真机级用一个自建 OpenAI 兼容网关真实合成过一次（4.52 秒音频、48 个流式分块、首块 9.1s），核对过基频中位数 274Hz 与 95% 能量滚降 1132Hz，确认该网关按 24kHz 裸 PCM 返回、与官方规范一致。仍未验证的部分：官方 api.openai.com 本身（没拿官方密钥冒烟）、音色听感、云端首块延迟——网关首块 9.1s 是后端本地 GPT-SoVITS 推理耗时，不代表云端表现。
+> omni_tts 尚未经过实战调通验证；直播实战常用的是 edge_tts 与 gptsovits。minimax_tts 已过真机冒烟（密钥真实合成：流式 5 块、首块延迟约 0.5s），直播实战待用。openai_tts 与 omni_tts 同属"云端语音模型"但走不同端点：omni_tts 经 LLM 的 chat 模态音频输出（复用 model.toml 的 profile 与密钥），openai_tts 走专用 speech 端点，模型 / 音色 / 风格提示都是该端点自己的词表。openai_tts 的验证分两级：链路级用本地 aiohttp 服务冒充 speech 端点，跑通了真实 HTTP 请求、chunked 流式读取、SSE 事件切分、样本拼接、事件派发全链路（`tests/modules/tts/test_openai_client_http.py`）；真机级经自建 GPT-SoVITS 网关 + new-api 中转真实合成多次，两条通道对比过首字节：`stream_format=audio` 时中转站把二进制 body 整体缓冲、首字节 15.7s（等于整句合成耗时），`stream_format=sse` 时逐行透传、首字节 1.9~2.6s，这也是引擎默认改走 sse 的原因。仍未验证的部分：官方 api.openai.com 本身（没拿官方密钥冒烟）、音色听感、云端首块延迟——2s 级首块是后端本地 GPT-SoVITS 推理耗时，不代表云端表现。
 >
-> 该端点自身有生命周期风险：OpenAI 已把 tts-1 / tts-1-hd / gpt-4o-mini-tts 系列标记为弃用并于 2027-01-06 关停，官方引导新集成改走 Realtime API（不支持 `/v1/audio/speech`）。关停前本引擎照常可用，届时需要换端点或换引擎。
+> 事件 schema 按官方 `SpeechAudioDeltaEvent` 走：`type=speech.audio.delta`，base64 音频字段名是 `audio`（不是 Realtime API 的 `delta`）。自建网关早期用 `delta`，客户端两个字段都认、两者皆空直接报错（避免 schema 不符时静默丢音频）。错误事件 `speech.audio.error` 是网关自造扩展（官方只定义了 delta 与 done），形状兼容顶层 `message` 与嵌套 `error.message`。
+>
+> 该端点自身有生命周期风险：OpenAI 已把 tts-1 / tts-1-hd / gpt-4o-mini-tts 系列标记为弃用并于 2027-01-06 关停，官方引导新集成改走 Realtime API（不支持 `/v1/audio/speech`）。关停前本引擎照常可用，届时需要换端点或换引擎。另注意 tts-1 / tts-1-hd 不支持 `stream_format=sse`，用它们必须把 `stream_format` 改回 `audio`。
 
 GSV 的服务部署、参考音频与多音字维护见 [GPT-SoVITS 语音服务部署](../guides/gptsovits.md)。
 
@@ -44,7 +46,7 @@ Replyer 产出 speech
 
 ## 配置面
 
-`infra.toml` 的 `[tts]`：`enabled` 总开关、`provider` 单选、队列与超时参数、`wait_playback`，以及六个引擎同名子段（gptsovits 的合成调参、omni 的 `llm_profile` 与必填 `voice`、minimax 的 `api_key`/`group_id`/`voice_id`、openai 的 `api_key`/`model`/`voice`/`instructions` 等）。键全集以 `core_schemas.py` 的 TTS schema 为准。
+`infra.toml` 的 `[tts]`：`enabled` 总开关、`provider` 单选、队列与超时参数、`wait_playback`，以及六个引擎同名子段（gptsovits 的合成调参、omni 的 `llm_profile` 与必填 `voice`、minimax 的 `api_key`/`group_id`/`voice_id`、openai 的 `api_key`/`model`/`voice`/`instructions`/`stream_format` 等）。键全集以 `core_schemas.py` 的 TTS schema 为准。
 
 ## 相关决策
 

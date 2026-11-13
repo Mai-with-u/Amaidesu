@@ -520,7 +520,8 @@ class OpenAITTSParams(BaseConfig):
         title="流式形态",
         description="sse=事件流（每块音频装在 JSON 事件里，经网关逐行透传）；"
         "audio=连续音频字节流（部分网关会把整个响应缓冲到合成结束，首字节延迟到整句时长）。"
-        "响应实际形态以 Content-Type 为准，两者都能正确解析",
+        "响应实际形态以 Content-Type 为准，两者都能正确解析。"
+        "注意：官方 tts-1 / tts-1-hd 不支持 sse，用这两个模型须改回 audio",
         json_schema_extra={"x-ui-advanced": True},
     )
 

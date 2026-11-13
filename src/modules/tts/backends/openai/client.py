@@ -14,6 +14,9 @@
   合成边下发，但经反向代理/网关转发时 ``audio`` 的二进制 body 常被整体
   缓冲（首字节要等整句合成完，实测 15 秒级），``sse`` 则被逐行透传——
   所以默认走 ``sse``，配置可退回 ``audio``
+- 事件 schema 按官方 ``SpeechAudioDeltaEvent`` 走：``type=speech.audio.delta``，
+  音频在 ``audio`` 字段（base64）。自建网关曾用 Realtime API 的 ``delta``
+  命名，两个字段都认；两者皆空视为 schema 不符，直接报错而不是丢弃音频
 - 响应形态按 ``Content-Type`` 判而不是按请求参数判：服务端可能忽略
   ``stream_format`` 仍回连续音频（如老版本 tts-1 系列、未适配的兼容端点），
   此时直接透传字节流，不必为兼容性多开一条配置分支
@@ -52,6 +55,9 @@ _SSE_CONTENT_TYPE = "text/event-stream"
 _SSE_EVENT_DELTA = "speech.audio.delta"
 _SSE_EVENT_DONE = "speech.audio.done"
 _SSE_EVENT_ERROR = "speech.audio.error"
+
+# 增量事件的音频字段名：官方用 audio，自建网关沿用 Realtime API 的 delta
+_SSE_AUDIO_FIELDS = ("audio", "delta")
 
 
 class OpenAITTSApiError(Exception):
@@ -216,16 +222,63 @@ class OpenAITTSClient:
         if event_type == _SSE_EVENT_DONE:
             return None
         if event_type == _SSE_EVENT_ERROR:
-            raise OpenAITTSApiError(f"服务端中断合成: {data.get('message', '未提供原因')}")
+            raise OpenAITTSApiError(f"服务端中断合成: {cls._event_error_message(data)}")
         if event_type != _SSE_EVENT_DELTA:
             return b""  # 未知事件类型：向后兼容新事件，跳过不影响已收音频
-        delta = data.get("delta")
-        if not delta:
-            return b""
+        audio = cls._event_audio_field(data)
+        if audio is None:
+            # 载荷字段整个缺失，说明对端 schema 与本地解析不符。静默返回空块会
+            # 让整句音频凭空消失且不报错，故显式失败。
+            raise OpenAITTSApiError(
+                f"事件流音频块缺少载荷字段（键={sorted(data.keys())}）；对端事件 schema 与本地解析规则不一致"
+            )
+        if not audio:
+            return b""  # 字段在但为空串：对端的心跳式空块，跳过
         try:
-            return base64.b64decode(delta)
+            return base64.b64decode(audio)
         except (ValueError, TypeError) as e:
             raise OpenAITTSApiError("事件流音频块不是合法 base64") from e
+
+    @staticmethod
+    def _event_audio_field(data: Dict[str, Any]) -> Optional[str]:
+        """取增量事件里的 base64 音频串。
+
+        官方 ``SpeechAudioDeltaEvent`` 的字段名是 ``audio``；我们自己的
+        GPT-SoVITS 网关早期实现用的是 ``delta``（Realtime API 的命名），
+        两个都认，优先官方字段。
+
+        返回 ``None`` 表示两个字段都不存在（schema 不符，须报错）；返回空串
+        表示字段存在但没有内容（对端空块，可跳过）。同时出现时取第一个非空
+        串，避免 ``{"audio": null, "delta": "<有效>"}`` 这类混合形状被前一个
+        空值遮住。
+        """
+        present = False
+        for key in _SSE_AUDIO_FIELDS:
+            if key not in data:
+                continue
+            present = True
+            value = data[key]
+            if isinstance(value, str) and value:
+                return value
+        return "" if present else None
+
+    @staticmethod
+    def _event_error_message(data: Dict[str, Any]) -> str:
+        """取错误事件的描述文本。
+
+        官方 openapi 没有定义 ``speech.audio.error``，这条是各网关自造的扩展，
+        形状不统一：既可能是顶层 ``message``，也可能是嵌套 ``error.message``
+        （vllm-omni 的形状）。
+        """
+        error = data.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            if isinstance(message, str) and message:
+                return message
+        message = data.get("message")
+        if isinstance(message, str) and message:
+            return message
+        return "未提供原因"
 
     @staticmethod
     def _event_data(event: bytes) -> str:

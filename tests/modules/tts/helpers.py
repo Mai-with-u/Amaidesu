@@ -24,12 +24,16 @@ def sse_event(payload: Dict[str, Any]) -> bytes:
     return b"data: " + json.dumps(payload).encode() + b"\n\n"
 
 
-def sse_audio_delta(pcm: bytes, *, response_format: str = "pcm") -> bytes:
-    """OpenAI speech 事件流的增量音频事件：PCM 经 base64 装在 delta 字段。"""
+def sse_audio_delta(pcm: bytes, *, response_format: str = "pcm", audio_field: str = "delta") -> bytes:
+    """OpenAI speech 事件流的增量音频事件：PCM 经 base64 装在音频字段里。
+
+    ``audio_field`` 默认 ``delta``（自建 GPT-SoVITS 网关的命名）；官方
+    ``SpeechAudioDeltaEvent`` 用 ``audio``，需要验官方形状时显式传入。
+    """
     return sse_event(
         {
             "type": "speech.audio.delta",
-            "delta": base64.b64encode(pcm).decode("ascii"),
+            audio_field: base64.b64encode(pcm).decode("ascii"),
             "response_format": response_format,
         }
     )

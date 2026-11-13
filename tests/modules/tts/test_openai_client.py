@@ -210,6 +210,83 @@ async def test_stream_synthesize_skips_unknown_and_empty_events() -> None:
     assert await _collect(client) == [b"\x06\x00"]
 
 
+async def test_stream_synthesize_accepts_official_audio_field() -> None:
+    """官方 SpeechAudioDeltaEvent 的音频字段是 audio（不是 Realtime API 的 delta）。"""
+    body = [
+        sse_audio_delta(b"\x07\x00" * 2, audio_field="audio"),
+        _sse_event({"type": "speech.audio.done"}),
+    ]
+    client = make_client()
+    client._session = _FakeSession(_FakeResponse(200, body, content_type="text/event-stream"))  # type: ignore[assignment]
+
+    assert await _collect(client) == [b"\x07\x00" * 2]
+
+
+async def test_stream_synthesize_raises_when_delta_has_no_audio_field() -> None:
+    """音频字段整个缺失 = 对端 schema 与本地解析不符，必须显式失败。
+
+    静默返回空块会让整句凭空消失且无报错——这正是官方 ``audio`` 字段与
+    自建网关 ``delta`` 字段分道扬镳时的表现。
+    """
+    body = [_sse_event({"type": "speech.audio.delta", "payload": "whatever"})]
+    client = make_client()
+    client._session = _FakeSession(_FakeResponse(200, body, content_type="text/event-stream"))  # type: ignore[assignment]
+
+    with pytest.raises(OpenAITTSApiError, match="缺少载荷字段"):
+        await _collect(client)
+
+
+async def test_stream_synthesize_skips_empty_audio_field() -> None:
+    """字段在但为空串属于对端空块，跳过而不是报错。"""
+    body = [
+        _sse_event({"type": "speech.audio.delta", "delta": ""}),
+        sse_audio_delta(b"\x08\x00"),
+        _sse_event({"type": "speech.audio.done"}),
+    ]
+    client = make_client()
+    client._session = _FakeSession(_FakeResponse(200, body, content_type="text/event-stream"))  # type: ignore[assignment]
+
+    assert await _collect(client) == [b"\x08\x00"]
+
+
+async def test_stream_synthesize_raises_on_malformed_json_event() -> None:
+    body = [b"data: {not json}\n\n"]
+    client = make_client()
+    client._session = _FakeSession(_FakeResponse(200, body, content_type="text/event-stream"))  # type: ignore[assignment]
+
+    with pytest.raises(OpenAITTSApiError, match="不是合法 JSON"):
+        await _collect(client)
+
+
+async def test_stream_synthesize_raises_on_invalid_base64_payload() -> None:
+    body = [_sse_event({"type": "speech.audio.delta", "delta": "!!!not-base64!!!"})]
+    client = make_client()
+    client._session = _FakeSession(_FakeResponse(200, body, content_type="text/event-stream"))  # type: ignore[assignment]
+
+    with pytest.raises(OpenAITTSApiError, match="合法 base64"):
+        await _collect(client)
+
+
+async def test_stream_synthesize_raises_on_nested_error_event() -> None:
+    """错误事件的嵌套形状（vllm-omni 的 error.message）也要取出原因。"""
+    body = [_sse_event({"type": "speech.audio.error", "error": {"message": "上游模型超时", "code": "timeout"}})]
+    client = make_client()
+    client._session = _FakeSession(_FakeResponse(200, body, content_type="text/event-stream"))  # type: ignore[assignment]
+
+    with pytest.raises(OpenAITTSApiError, match="上游模型超时"):
+        await _collect(client)
+
+
+async def test_stream_synthesize_error_event_without_message_still_fails() -> None:
+    """错误事件没带可读原因时仍要失败，不能退化成静默结束。"""
+    body = [_sse_event({"type": "speech.audio.error"})]
+    client = make_client()
+    client._session = _FakeSession(_FakeResponse(200, body, content_type="text/event-stream"))  # type: ignore[assignment]
+
+    with pytest.raises(OpenAITTSApiError, match="未提供原因"):
+        await _collect(client)
+
+
 async def test_stream_synthesize_raises_with_server_message_on_http_error() -> None:
     """HTTP 非 200 抛简短业务异常，携带服务端错误描述（便于直接看懂原因）。"""
     body = json.dumps({"error": {"message": "Incorrect API key provided."}})
