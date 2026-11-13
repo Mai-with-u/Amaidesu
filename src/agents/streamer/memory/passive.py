@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
 from src.modules.logging import get_logger
 from src.modules.storage.models.memory import ArchiveLine
@@ -57,6 +57,7 @@ __all__ = [
     "parse_inside_jokes",
     "query_worthy",
     "vector_hits",
+    "vector_top3_summary",
 ]
 
 logger = get_logger("MemoryCueProvider")
@@ -150,6 +151,8 @@ class PassiveHit:
     cosine: Optional[float] = None
     vector_rank: Optional[int] = None
     fused: Optional[float] = None
+    top3: List[Dict[str, Any]] = field(default_factory=list)
+    best_query_index: Optional[int] = None
 
     @property
     def self_only(self) -> bool:
@@ -166,6 +169,7 @@ class RulePool:
         self._clock = clock
         self._loaded_at: Optional[int] = None
         self._lines: Dict[int, ArchiveLine] = {}
+        self._session_started_ms: Dict[int, int] = {}
         self._entries: Dict[ItemKey, List[str]] = {}
         self._matcher: KeywordMatcher[ItemKey] = KeywordMatcher({})
 
@@ -181,10 +185,15 @@ class RulePool:
         self._loaded_at = now
         try:
             lines = await self._archive.list_cue_lines(limit=POOL_MAX_LINES) if self._archive is not None else []
+            bounds_fn = (
+                getattr(self._archive, "list_archived_session_bounds", None) if self._archive is not None else None
+            )
+            session_bounds = await bounds_fn(limit=POOL_MAX_LINES) if callable(bounds_fn) else []
         except Exception as exc:  # noqa: BLE001 - 读不到候选池就沿用上一份，不挡决策
             logger.warning(f"读被动想起的候选池失败（沿用上一份）: {exc}", exc=exc)
             return
         self._lines = {int(line.id): line for line in lines}
+        self._session_started_ms = {int(sid): int(started_ms) for sid, started_ms in session_bounds}
         entries: Dict[ItemKey, List[str]] = {}
         for line in self._lines.values():
             if line.keywords:
@@ -196,6 +205,10 @@ class RulePool:
 
     def archive_line(self, line_id: int) -> Optional[ArchiveLine]:
         return self._lines.get(int(line_id))
+
+    def session_started_at_ms(self, session_id: int) -> Optional[int]:
+        """某档案行所属场次的开播时刻（判自触发是否来自两场以前用）；未知返回 None。"""
+        return self._session_started_ms.get(int(session_id))
 
     def joke_index(self, main: str) -> Optional[int]:
         """老梗在老梗栏里排第几条（从 0 起）；不在栏里返回 None。"""
@@ -236,13 +249,32 @@ class RulePool:
         return sorted(hits.values(), key=lambda hit: hit.self_only)
 
 
+def vector_top3_summary(result: SearchResult) -> List[Dict[str, Any]]:
+    """提取一次向量查询前 3 名的条目编号与分数（不带原词和观众身份），供线索记录留痕校准阈值。"""
+    top: List[Dict[str, Any]] = []
+    for found in result.hits[:VECTOR_TOP]:
+        if found.source not in ("archive", "commitment"):
+            continue
+        top.append(
+            {
+                "kind": found.source,
+                "id": int(found.source_id),
+                "cosine": round(found.vector_score, 4) if found.vector_score is not None else None,
+                "rank": found.vector_rank,
+                "fused": round(found.score, 5),
+            }
+        )
+    return top
+
+
 def vector_hits(results: Sequence[Tuple[str, str, SearchResult]]) -> List[PassiveHit]:
     """各条查询（来源, 弹幕编号, 检索结果）合成候选：前几名里余弦够高的档案行与承诺。
 
-    同一条目被几条查询找到时合并来源、留最高的余弦；按余弦从高到低排。
+    同一条目被几条查询找到时合并来源、留最高的余弦及对应查询的前三名分数；按余弦从高到低排。
     """
     hits: Dict[ItemKey, PassiveHit] = {}
-    for source, message_id, result in results:
+    for query_idx, (source, message_id, result) in enumerate(results):
+        top3 = vector_top3_summary(result)
         for found in result.hits[:VECTOR_TOP]:
             if found.source not in ("archive", "commitment"):
                 continue
@@ -255,6 +287,8 @@ def vector_hits(results: Sequence[Tuple[str, str, SearchResult]]) -> List[Passiv
                 hit.message_id = message_id
             if hit.cosine is None or found.vector_score > hit.cosine:
                 hit.cosine, hit.vector_rank, hit.fused = found.vector_score, found.vector_rank, found.score
+                hit.top3 = top3
+                hit.best_query_index = query_idx
     return sorted(hits.values(), key=lambda hit: -(hit.cosine or 0.0))
 
 

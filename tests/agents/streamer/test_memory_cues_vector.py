@@ -13,6 +13,7 @@ import pytest
 from src.agents.streamer.memory.cues import MemoryCueProvider
 from src.agents.streamer.memory.index import MemoryIndexer
 from src.agents.streamer.memory.search import MemorySearch
+from src.agents.streamer.memory.side_effects import compute_side_effects
 from src.modules.llm.embedding import BACKOFF_BASE_MS
 from src.modules.events.payloads.room import RoomMessageUser
 from src.modules.storage.database import SQLiteDatabase
@@ -127,6 +128,7 @@ async def test_danmaku_meaning_pushes_close_lines_once_its_vector_is_ready(store
     entries = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
     assert {entry.card_kind for entry in entries} == {"vector"}
     assert all(entry.sources == ["danmaku"] and entry.detail["cosine"] == 1.0 for entry in entries)
+    assert len(entries[0].detail["top3"]) == 3, "推出的向量卡同步记录本次查询前三名分数"
 
 
 async def test_vector_not_ready_means_this_batch_goes_without(store: SQLiteDatabase) -> None:
@@ -315,3 +317,43 @@ async def test_situation_query_replaces_known_player_names(store: SQLiteDatabase
     await memory.warm(expected)
 
     assert memory.sent() == [expected]
+
+
+async def test_unpushed_vector_query_still_logs_top3_probe_without_inflating_pushed_stats(
+    store: SQLiteDatabase,
+) -> None:
+    """向量查询未过余弦门槛没推卡时，仍把前三名分数以 vector_probe 记入线索记录，且不计入推卡与用上统计。"""
+    memory = await _Memory(store).seed()
+    session_id = await store.sessions.insert_live_session(started_at_ms=memory.clock.now_ms())
+    provider = await memory.provider(session_id)
+    # 不含"猫"也不含"水"的弹幕在假嵌入下与既有条目正交（余弦 0.0 < 0.65），不推卡但应落一条 vector_probe
+    msg = make_room_message(
+        user=RoomMessageUser(id="u2", name="观众乙"),
+        content="今天直播间大家吃过晚饭了吗",
+        message_id="m99",
+    )
+    await provider.prefetch(msg)
+    await memory.warm("今天直播间大家吃过晚饭了吗")
+
+    cues = await provider.collect(batch=[msg])
+    assert cues.card_count == 0 and cues.text == ""
+
+    entries = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
+    assert len(entries) == 1
+    probe = entries[0]
+    assert probe.card_kind == "vector_probe"
+    assert probe.sources == ["danmaku"]
+    assert probe.detail["pushed"] is False
+    assert len(probe.detail["top3"]) == 3
+    assert all("cosine" in item and "id" in item and "kind" in item for item in probe.detail["top3"])
+    assert "观众乙" not in str(probe.model_dump()) and "m99" not in str(probe.model_dump())
+
+    # 后续若主播从简报里点名了那一行，vector_probe 不应被回填 used_at_ms，也不计入唠叨指标推卡分母
+    updated = await store.memory_cue_log.mark_used(
+        live_session_id=session_id,
+        archive_line_ids=[memory.cat_line, memory.water_line],
+        commitment_ids=[memory.cat_promise],
+        used_at_ms=memory.clock.now_ms() + 1_000,
+    )
+    assert updated == 0
+    assert compute_side_effects([], entries, duration_ms=600_000) is None

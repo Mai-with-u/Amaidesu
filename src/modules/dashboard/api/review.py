@@ -204,7 +204,11 @@ async def session_cues(
     repo = server.memory_cue_log_repo
     if repo is None:
         raise HTTPException(status_code=503, detail="线索卡记录仓储未装配")
-    entries = await repo.list_session_entries(live_session_id=session_id)
+    entries = [
+        entry
+        for entry in await repo.list_session_entries(live_session_id=session_id)
+        if entry.card_kind != "vector_probe"
+    ]
     archive_lines = await _archive_lines(server, [entry.archive_line_id for entry in entries])
     commitment_titles = await _commitment_titles(server, [entry.commitment_id for entry in entries])
     items: List[ReviewCueItem] = []

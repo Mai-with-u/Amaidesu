@@ -221,6 +221,7 @@ async def test_game_commitment_does_not_carousel_merely_because_game_is_open(sto
 
 
 async def test_cards_are_capped_per_batch(store: SQLiteDatabase) -> None:
+    assert MAX_CARDS_PER_BATCH == 2
     session_id = await _session(store)
     for index in range(1, 6):
         viewer_id = await _viewer(store, external_id=f"u{index}", name=f"观众{index}")
@@ -543,25 +544,54 @@ async def test_archive_card_stops_once_she_used_it_and_backfills_the_log(store: 
 
 
 async def test_self_triggered_card_pushes_once_per_session(store: SQLiteDatabase) -> None:
-    """只由她自己台词命中的卡（自触发）每条每场只推一次；观众弹幕命中的照旧两次。"""
+    """自触发规则卡只在该行不在简报且来自两场以前才推（每场只推一次）；近两场内自触发不推，但观众弹幕提到照推。"""
+    # 铺三场已完结正式场：s_old（三场前 = 两场以前）、s_prev2（上上场）、s_prev1（上一场）
+    s_old = await store.sessions.insert_live_session(started_at_ms=_NOW - 300_000_000)
+    await store.sessions.close_live_session(live_session_id=s_old, ended_at_ms=_NOW - 290_000_000)
+    s_prev2 = await store.sessions.insert_live_session(started_at_ms=_NOW - 200_000_000)
+    await store.sessions.close_live_session(live_session_id=s_prev2, ended_at_ms=_NOW - 190_000_000)
+    s_prev1 = await store.sessions.insert_live_session(started_at_ms=_NOW - 100_000_000)
+    await store.sessions.close_live_session(live_session_id=s_prev1, ended_at_ms=_NOW - 90_000_000)
+
+    line_id = await store.archive.insert_line(
+        live_session_id=s_old,
+        text="Minecraft：女仆取名团子",
+        quote="就叫团子吧",
+        evidence_chat_id=1,
+        keywords=["团子"],
+    )
+    recent_line_id = await store.archive.insert_line(
+        live_session_id=s_prev2,
+        text="Minecraft：新风车试转",
+        quote="风车转了",
+        evidence_chat_id=2,
+        keywords=["风车"],
+    )
+
     session_id = await _session(store)
-    line_id = await _old_line(store)
     clock = _Clock()
     provider = _passive(store, session_id, clock)
-    await _her_line(store, session_id, "说起来团子最近怎么样了")
+    await _her_line(store, session_id, "说起来团子和风车最近怎么样了")
 
+    # 若已在简报里，连两场以前的也不推
+    assert (await provider.collect(batch=[], brief_archive_ids=[line_id])).archive_ids == ()
+
+    # 不在简报里：两场以前的 line_id 推一次；上上场（近两场内）的 recent_line_id 自触发不推
     first = await provider.collect(batch=[])
     assert first.archive_ids == (line_id,) and "想起它是因为你刚说到「团子」" in first.text
+    assert recent_line_id not in first.archive_ids
     assert first.asked_archive_ids == (), "只由她自己的台词想起的不算有人提到"
     clock.value += PUSH_COOLDOWN_MS + 1
     assert (await provider.collect(batch=[])).archive_ids == (), "自触发一场只推一次"
 
     clock.value += PUSH_COOLDOWN_MS + 1
-    assert (await provider.collect(batch=[_message(content="团子！")])).archive_ids == (line_id,), "观众提到照推"
+    danmaku_round = await provider.collect(batch=[_message(content="团子和风车！")])
+    assert set(danmaku_round.archive_ids) == {line_id, recent_line_id}, "观众提到时不限近两场照推"
     entries = await store.memory_cue_log.list_session_entries(live_session_id=session_id)
-    assert [(entry.self_triggered, entry.sources) for entry in entries] == [
-        (True, ["self"]),
-        (False, ["danmaku", "self"]),
+    assert [(entry.archive_line_id, entry.self_triggered, entry.sources) for entry in entries] == [
+        (line_id, True, ["self"]),
+        (recent_line_id, False, ["danmaku", "self"]),
+        (line_id, False, ["danmaku", "self"]),
     ]
 
 

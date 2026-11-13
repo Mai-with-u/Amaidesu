@@ -1,6 +1,6 @@
 """线索推送：每批 Planner 调用前，按线索找出这一批该想起来的事。
 
-线索按优先级取，每批至多三张卡：
+线索按优先级取，每批至多两张卡：
 
 1. 对象开口：本批发言人按外部 ID 精确解析出观众编号（只读，不建观众；有待执行删除请求
    的不算），名下有未了结承诺 → 推那张对 ta 的承诺卡，只给动作标题；
@@ -60,6 +60,7 @@ from .passive import (
     SituationQuery,
     query_worthy,
     vector_hits,
+    vector_top3_summary,
 )
 from .render import (
     render_archive_card,
@@ -101,8 +102,8 @@ __all__ = [
 
 logger = get_logger("MemoryCueProvider")
 
-# 一批最多推几张卡、同一张卡每场最多推几次（只由她自己台词触发的只推一次）
-MAX_CARDS_PER_BATCH = 3
+# 一批最多推几张卡、同一张卡每场最多推几次（只由她自己台词触发的必须来自两场以前且每场只推一次）
+MAX_CARDS_PER_BATCH = 2
 MAX_PUSHES_PER_CARD = 2
 MAX_SELF_PUSHES_PER_CARD = 1
 # 同一张卡两次推送的最小间隔
@@ -186,7 +187,9 @@ class _Round:
     previous_session_id: Optional[int]
     recent_session_ids: Tuple[int, ...] = ()
     earliest_recent_ms: int = 0
+    self_trigger_cutoff_ms: Optional[int] = None
     cards: List[_Card] = field(default_factory=list)
+    probes: List[NewCueLogEntry] = field(default_factory=list)
     carded_viewers: Set[int] = field(default_factory=set)
     skipped: List[str] = field(default_factory=list)
 
@@ -317,7 +320,7 @@ class MemoryCueProvider:
         used, used_archive = await load_used_refs(self._chat, sid)
         await self._mark_used(sid, used_archive, used)
         del open_games  # 游戏承诺不再按"游戏开着"轮播，只在对象开口、走到地点或情境命中时单推
-        recent_ids, earliest_ms = await self._recent_session_bounds(sid)
+        recent_ids, earliest_ms, self_cutoff_ms = await self._recent_session_bounds(sid)
         state = _Round(
             used=used,
             used_archive=used_archive,
@@ -327,6 +330,7 @@ class MemoryCueProvider:
             previous_session_id=await self._previous_session_id(),
             recent_session_ids=recent_ids,
             earliest_recent_ms=earliest_ms,
+            self_trigger_cutoff_ms=self_cutoff_ms,
         )
         self._round_labels = {}
         # 对象开口（观众、游戏玩家） -> 游戏地点 -> 规则 -> 向量：每一路只在前面没凑满上限时补
@@ -335,13 +339,13 @@ class MemoryCueProvider:
         if self._passive_enabled:
             await self._pool.refresh_if_stale()
             await self._place_cards(situations or {}, state)
-            self._rule_cards(self._pool.match(await self._rule_texts(sid, batch, senders)), state)
+            self._rule_cards(self._pool.match(await self._rule_texts(sid, batch, senders)), sid=sid, state=state)
         if self._vector_on():
             for situation in (situations or {}).values():
                 for player in situation.players:
                     self.note_name(player)
             self._situation.update(situations or {}, state.saves, game_tasks or {}, names=self._known_names)
-            await self._vector_cards(batch, senders, state)
+            await self._vector_cards(sid, batch, senders, state)
         # 老观众一行不再因为"本批有别人的卡"整行消失；只跳过这一批拿了自己卡的观众，并顺带认出只进房没说话的老观众
         presence = await self._presence_line(sid, senders, state.carded_viewers, recent_enters=recent_enters)
         notices = self._command_notices(batch)
@@ -603,7 +607,7 @@ class MemoryCueProvider:
             logger.info(f"线索推送：推了 {pushed}{skipped}")
         elif state.skipped:
             logger.debug(f"线索推送：没推 {'、'.join(state.skipped)}")
-        if self._cue_log is None or not state.cards:
+        if self._cue_log is None or (not state.cards and not state.probes):
             return
         now = int(self._clock())
         entries = [
@@ -619,6 +623,7 @@ class MemoryCueProvider:
             )
             for card in state.cards
         ]
+        entries.extend(state.probes)
         try:
             await self._cue_log.insert_entries(entries=entries)
         except Exception as exc:  # noqa: BLE001 - 记录写不进去不挡推送，日志里仍看得到这一批
@@ -755,12 +760,15 @@ class MemoryCueProvider:
                     _Card(key=key, text=text, kind="place", sources=(SOURCE_PLACE,), detail={"distance": distance}),
                 )
 
-    def _rule_cards(self, hits: Sequence[PassiveHit], state: _Round) -> None:
-        """规则：弹幕或她最近的台词提到了触发词；只由她自己台词命中的每条每场只推一次。"""
+    def _rule_cards(self, hits: Sequence[PassiveHit], *, sid: int, state: _Round) -> None:
+        """规则：弹幕或她最近的台词提到了触发词；自触发须不在简报、来自两场以前，且每条每场只推一次。"""
         for hit in hits:
             limit = MAX_SELF_PUSHES_PER_CARD if hit.self_only else MAX_PUSHES_PER_CARD
             if self._skip(hit.key, state, self._passive_blocked(hit.key, state, limit=limit)):
                 continue
+            if hit.self_only and hit.key[0] == "archive":
+                if self._skip(hit.key, state, self._self_trigger_age_blocked(int(hit.key[1]), sid=sid, state=state)):
+                    continue
             text = self._rule_card_text(hit, state)
             if not text:
                 continue
@@ -778,6 +786,25 @@ class MemoryCueProvider:
                 self_triggered=hit.self_only,
             )
             self._push(state, card)
+
+    def _self_trigger_age_blocked(self, line_id: int, *, sid: int, state: _Round) -> Optional[str]:
+        """只由她自己台词命中的规则卡，必须来自两场以前（排掉本场及最近两个完结正式场内的行）。"""
+        line = self._pool.archive_line(line_id)
+        if line is None:
+            return None
+        line_sid = int(line.live_session_id)
+        if line_sid == sid:
+            return "近两场内"
+        if state.self_trigger_cutoff_ms is None:
+            return None
+        if state.self_trigger_cutoff_ms <= 0:
+            return "近两场内"
+        if line_sid in state.recent_session_ids[:2]:
+            return "近两场内"
+        started_ms = self._pool.session_started_at_ms(line_sid)
+        if started_ms is not None and started_ms >= state.self_trigger_cutoff_ms:
+            return "近两场内"
+        return None
 
     def _rule_card_text(self, hit: PassiveHit, state: _Round) -> str:
         """规则命中的卡面；条目不在了、或是别的存档里的事（不催她提起）时返回空串。"""
@@ -800,8 +827,8 @@ class MemoryCueProvider:
             note=place_note(line.game, line.save_id, line.save_name, state.saves),
         )
 
-    async def _vector_cards(self, batch: Sequence[Any], senders: Sequence[_Sender], state: _Round) -> None:
-        """向量：本批弹幕（最新几条）与变了的游戏情境各查一次，向量没算好的这一批跳过。"""
+    async def _vector_cards(self, sid: int, batch: Sequence[Any], senders: Sequence[_Sender], state: _Round) -> None:
+        """向量：本批弹幕（最新几条）与变了的游戏情境各查一次，前三名分数无论推没推都记入线索记录。"""
         search = self._search
         if search is None:
             return
@@ -828,19 +855,47 @@ class MemoryCueProvider:
             if source == SOURCE_SITUATION:
                 self._situation.done()
             results.append((source, message_id, result))
+        recorded_queries: Set[int] = set()
         for hit in vector_hits(results):
             if self._skip(hit.key, state, self._passive_blocked(hit.key, state)):
                 continue
             text = await self._vector_card_text(hit, state)
             if not text:
                 continue
-            detail = {
+            detail: Dict[str, Any] = {
                 "cosine": round(hit.cosine or 0.0, 4),
                 "rank": hit.vector_rank,
                 "fused": round(hit.fused or 0.0, 5),
             }
+            if hit.top3:
+                detail["top3"] = list(hit.top3)
+            if hit.best_query_index is not None:
+                recorded_queries.add(hit.best_query_index)
             self._push(
                 state, _Card(key=hit.key, text=text, kind="vector", sources=tuple(sorted(hit.sources)), detail=detail)
+            )
+        # 没推出向量卡的语义查询同样把前三名余弦与融合分落库留痕，供阈值校准分析
+        now = int(self._clock())
+        for query_idx, (source, _message_id, result) in enumerate(results):
+            if query_idx in recorded_queries or not result.vector_used:
+                continue
+            top3 = vector_top3_summary(result)
+            first = top3[0] if top3 else None
+            state.probes.append(
+                NewCueLogEntry(
+                    live_session_id=sid,
+                    pushed_at_ms=now,
+                    card_kind="vector_probe",
+                    archive_line_id=int(first["id"]) if first is not None and first["kind"] == "archive" else None,
+                    commitment_id=int(first["id"]) if first is not None and first["kind"] == "commitment" else None,
+                    sources=[source],
+                    detail={
+                        "pushed": False,
+                        "cosine": first["cosine"] if first is not None else None,
+                        "top3": top3,
+                    },
+                    self_triggered=False,
+                )
             )
 
     async def _vector_card_text(self, hit: PassiveHit, state: _Round) -> str:
@@ -917,7 +972,7 @@ class MemoryCueProvider:
         return None
 
     def _passive_blocked(self, key: ItemKey, state: _Round, *, limit: int = MAX_PUSHES_PER_CARD) -> Optional[str]:
-        """被动想起另加两条：常驻简报里已经列着的不推；这一批已经凑满三张的不推。"""
+        """被动想起另加两条：常驻简报里已经列着的不推；这一批已经凑满上限的不推。"""
         kind, value = key
         if (kind == "commitment" and int(value) in state.brief_commitments) or (
             kind == "archive" and int(value) in state.brief_archive
@@ -937,13 +992,13 @@ class MemoryCueProvider:
             earliest_recent_ms=state.earliest_recent_ms,
         )
 
-    async def _recent_session_bounds(self, session_id: int) -> Tuple[Tuple[int, ...], int]:
-        """本场之前最近至多三个已完结正式场的场次号与最早开播时刻（判承诺过期与自触发年龄共用）。"""
+    async def _recent_session_bounds(self, session_id: int) -> Tuple[Tuple[int, ...], int, Optional[int]]:
+        """本场之前最近至多三个已完结正式场的场次号、三场最早开播时刻与两场前自触发门槛时刻。"""
         finder = getattr(self._archive, "recent_ended_session_bounds", None) or getattr(
             self._commitments, "recent_ended_session_bounds", None
         )
         if finder is None:
-            return (), 0
+            return (), 0, None
         try:
             bounds = await finder(
                 kind=SESSION_KIND_LIVE,
@@ -953,12 +1008,13 @@ class MemoryCueProvider:
             )
         except Exception as exc:  # noqa: BLE001 - 查不到边界时不误拦承诺卡
             logger.warning(f"线索推送查最近完结场次边界失败（本批不做场次过期拦截）: {exc}", exc=exc)
-            return (), 0
+            return (), 0, None
         if not bounds:
-            return (), 0
+            return (), 0, 0
         recent_ids = tuple(int(item[0]) for item in bounds)
         earliest_ms = int(bounds[2][1]) if len(bounds) >= 3 else 0
-        return recent_ids, earliest_ms
+        self_cutoff_ms = int(bounds[1][1]) if len(bounds) >= 2 else 0
+        return recent_ids, earliest_ms, self_cutoff_ms
 
     @staticmethod
     def _other_save(game: Optional[str], save_id: str, state: _Round) -> Optional[str]:

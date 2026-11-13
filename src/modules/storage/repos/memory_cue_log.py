@@ -111,7 +111,7 @@ class MemoryCueLogRepo(BaseRepo):
                     placeholders = ",".join("?" for _ in ids)
                     cur = conn.execute(
                         f"UPDATE memory_cue_log SET used_at_ms=? WHERE live_session_id=? AND used_at_ms IS NULL"  # noqa: S608 常量列名
-                        f" AND pushed_at_ms<=? AND {column} IN ({placeholders})",
+                        f" AND card_kind <> 'vector_probe' AND pushed_at_ms<=? AND {column} IN ({placeholders})",
                         (int(used_at_ms), int(live_session_id), int(used_at_ms), *ids),
                     )
                     updated += int(cur.rowcount or 0)
