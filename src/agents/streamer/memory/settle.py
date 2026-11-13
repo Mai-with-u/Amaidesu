@@ -91,6 +91,7 @@ from src.modules.storage.repos.memory_corrections import (
     MemoryCorrectionRepo,
 )
 from src.modules.storage.repos.sessions import MAX_SETTLE_ATTEMPTS
+from src.modules.storage.repos.viewers import ViewerRepo
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.agents.streamer.memory.render import memory_ref_numbers, render_commitment_number
@@ -270,6 +271,8 @@ class SettleMaterial:
     # 本场未撤回的场内记忆更正及给档案整理模型看的文本
     corrections: List[MemoryCorrection] = field(default_factory=list)
     corrections_text: str = ""
+    # 已知观众昵称（小写，排除本场游戏玩家名且至少 3 字符）：防止模型把念观众昵称误写成给动物/物件起名进标题
+    viewer_names_guard: Set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -586,6 +589,25 @@ def _has_value(raw: Any) -> bool:
     return True
 
 
+def _is_question_or_guess_quote(quote: str) -> bool:
+    """判断截取的原话是不是不能当事实证据的疑问句：整段以问号收尾，或去掉收尾标点后以疑问助词「吗」结尾。"""
+    stripped = (quote or "").strip()
+    if not stripped:
+        return True
+    if stripped.endswith(("?", "？")):
+        return True
+    core = stripped.rstrip("。！!~～… ")
+    return core.endswith("吗")
+
+
+def _title_hits_viewer_name(title: str, viewer_names_lower: AbstractSet[str]) -> bool:
+    """检查档案行标题是否写进了已知观众昵称（防泄露观众昵称，也防把念观众名字误当成给动物或物件起名）。"""
+    if not title or not viewer_names_lower:
+        return False
+    lowered = title.lower()
+    return any(vname in lowered for vname in viewer_names_lower)
+
+
 class SessionSettler:
     """下播整理的执行者：取料 → 三次调用 → 代码校验 → 一个事务写入。"""
 
@@ -633,6 +655,7 @@ class SessionSettler:
         self._corrections: Optional[MemoryCorrectionRepo] = correction_repo or (
             MemoryCorrectionRepo(conn_mgr) if conn_mgr is not None else None
         )
+        self._viewers: Optional[ViewerRepo] = ViewerRepo(conn_mgr) if conn_mgr is not None else None
         self._min_session_ms = max(0, int(min_session_ms))
         self._task_registry = task_registry
         self._clock = clock
@@ -975,6 +998,7 @@ class SessionSettler:
         records = await self._material_step(8, self._load_game_records(session), progress)
         speech_text, lines_by_number, speech_note = self._render_speech(delivered, player_codes=players.codes)
         corrections, corrections_text = await self._load_corrections(session, previous)
+        viewer_names_guard = await self._load_viewer_names_guard()
         game_agents = self._enabled_game_names()
         abilities_text = self._render_abilities(game_agents)
         return SettleMaterial(
@@ -1010,6 +1034,7 @@ class SessionSettler:
             },
             corrections=corrections,
             corrections_text=corrections_text,
+            viewer_names_guard=viewer_names_guard,
         )
 
     async def _material_step(
@@ -1075,6 +1100,35 @@ class SessionSettler:
             quote_part = f"；依据「{item.evidence_quote}」" if item.evidence_quote else ""
             rendered.append(f"更正{idx} [{target_desc}·{verdict_label}] {item.summary}（{proof_tag}{quote_part}）")
         return items, "【本场更正（必须逐条核对处理）】\n" + "\n".join(rendered)
+
+    async def _load_viewer_names_guard(self) -> Set[str]:
+        """读取至少 3 个字符且不与已知游戏玩家同名的已知观众昵称（小写），供代码拦截把观众名误记进档案标题。"""
+        if self._viewers is None:
+            return set()
+        try:
+            known = await self._viewers.list_known_names()
+        except Exception as exc:  # noqa: BLE001 - 观众名读不到时不挡整理
+            logger.debug(f"读取已知观众昵称做档案标题护栏失败: {exc}", exc=exc)
+            return set()
+        player_names_lower: Set[str] = set()
+        if self._players is not None:
+            try:
+                all_players = await self._players.list_players()
+                player_names_lower = {
+                    str(name).strip().lower()
+                    for p in all_players
+                    for name in (p.name, *p.former_names())
+                    if name and str(name).strip()
+                }
+            except Exception as exc:  # noqa: BLE001 - 玩家名读不到只按观众名单核对
+                logger.debug(f"读取游戏玩家名排除观众名同串失败: {exc}", exc=exc)
+        guarded: Set[str] = set()
+        for raw_name in known:
+            cleaned = (raw_name or "").strip().lower()
+            if len(cleaned) < 3 or cleaned in player_names_lower:
+                continue
+            guarded.add(cleaned)
+        return guarded
 
     async def _load_social(
         self,
@@ -1950,6 +2004,26 @@ class SessionSettler:
                         what=title,
                         quote=quote,
                         reason=f"原话不是第 {raw.get('line')} 行的逐字片段（或超过 {MAX_QUOTE_CHARS} 字）",
+                    )
+                )
+                continue
+            if _is_question_or_guess_quote(verified):
+                missed.append(
+                    UnregisteredItem(
+                        kind="archive",
+                        what=title,
+                        quote=verified,
+                        reason="疑问句或猜测句不能当事实的证据",
+                    )
+                )
+                continue
+            if _title_hits_viewer_name(title, material.viewer_names_guard):
+                missed.append(
+                    UnregisteredItem(
+                        kind="archive",
+                        what="",
+                        quote="",
+                        reason="标题含有观众昵称（不得写观众昵称，或误把观众名字当成事物名）",
                     )
                 )
                 continue
