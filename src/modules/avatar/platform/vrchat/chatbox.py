@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from src.modules.logging import get_logger
+
+if TYPE_CHECKING:
+    from src.modules.subtitle.protocol import ReplyQuote
 
 # 聊天框单条字数上限（VRChat 限制）
 CHATBOX_MAX_CHARS = 144
@@ -54,8 +57,17 @@ class VRChatChatboxBackend:
         self._flush_task: Optional[asyncio.Task] = None
         self.logger = get_logger("VRChatChatbox")
 
-    async def show(self, text: str, utterance_id: Optional[str] = None) -> None:
-        """显示一句：放进待发槽，节流到点后发出"""
+    async def show(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        reply_quote: Optional[ReplyQuote] = None,
+    ) -> None:
+        """显示一句：放进待发槽，节流到点后发出
+
+        ``utterance_id`` 与 ``reply_quote`` 不消费：聊天框只发当前这句字幕，
+        被回复弹幕的展示位在 Dashboard 字幕小部件（与 Tk 桌面调试窗同此口径）。
+        """
         if self.enabled:
             self._queue(fit_chatbox_text(text))
 
