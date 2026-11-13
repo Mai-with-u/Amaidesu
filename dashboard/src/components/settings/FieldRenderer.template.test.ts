@@ -7,8 +7,7 @@
 //
 // 守护方式：field-input 容器内所有输入分支必须构成**单条** v-if / v-else-if
 // 链——链内只允许一个 v-if（链头），其余分支一律 v-else-if。任何新分支用
-// 裸 v-if 插入链中都会在此失败。项目无组件挂载测试环境（无 jsdom /
-// @vue/test-utils），按现有惯例以源码结构断言守护模板不变量。
+// 裸 v-if 插入链中都会在此失败。本文件以源码结构断言守护模板不变量。
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

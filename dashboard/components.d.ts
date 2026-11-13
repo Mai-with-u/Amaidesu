@@ -28,6 +28,7 @@ declare module 'vue' {
     ChatBubbleCard: typeof import('./src/components/live/cards/ChatBubbleCard.vue')['default']
     CommandPalette: typeof import('./src/components/dashboard/CommandPalette.vue')['default']
     CommitmentPanel: typeof import('./src/components/memory/CommitmentPanel.vue')['default']
+    CommitOnBlurInput: typeof import('./src/components/settings/CommitOnBlurInput.vue')['default']
     ComponentCard: typeof import('./src/components/settings/ComponentCard.vue')['default']
     ComponentCardList: typeof import('./src/components/settings/ComponentCardList.vue')['default']
     ContextBreakdownCard: typeof import('./src/components/llm/ContextBreakdownCard.vue')['default']

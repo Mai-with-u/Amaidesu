@@ -193,10 +193,10 @@
                     <label class="name-field-label"
                       >模型名称<span class="required-mark">*</span></label
                     >
-                    <el-input
-                      :model-value="itemDisplayName(models[idx])"
+                    <CommitOnBlurInput
+                      :value="itemDisplayName(models[idx])"
                       placeholder="模型唯一名"
-                      @change="commitModelName(idx, $event)"
+                      @commit="commitModelName(idx, $event)"
                     />
                   </div>
                   <div class="name-field">
@@ -296,10 +296,10 @@
           <!-- name 失焦提交 + 引用守护级联；其余叶字段一律 FieldRenderer -->
           <div class="name-field">
             <label class="name-field-label">提供商名称<span class="required-mark">*</span></label>
-            <el-input
-              :model-value="itemDisplayName(entry.item)"
+            <CommitOnBlurInput
+              :value="itemDisplayName(entry.item)"
               placeholder="provider 唯一名称"
-              @change="commitProviderName(entry.index, $event)"
+              @commit="commitProviderName(entry.index, $event)"
             />
           </div>
           <div class="field-grid">
@@ -370,6 +370,7 @@ import { ElMessage } from 'element-plus';
 import { ArrowDown, ArrowRight, Close, Connection, Delete, Plus } from '@element-plus/icons-vue';
 import FieldRenderer from './FieldRenderer.vue';
 import SubFieldGroup from './SubFieldGroup.vue';
+import CommitOnBlurInput from './CommitOnBlurInput.vue';
 import { llmApi } from '@/api';
 import { confirmAction } from '@/utils/confirmAction';
 import { getApiErrorMessage } from '@/utils/apiError';
@@ -710,7 +711,11 @@ async function commitProviderName(index: number, input: string) {
   const current = arr[index];
   if (!current || typeof current !== 'object') return;
   const oldName = itemDisplayName(current);
-  const newName = input;
+  const newName = input.trim();
+  if (newName === '') {
+    ElMessage.warning('提供商名称不能为空');
+    return;
+  }
   if (newName === oldName) return;
   arr[index] = { ...current, name: newName };
   writeArray(providersField.value, arr);
@@ -737,7 +742,11 @@ async function commitModelName(index: number, input: string) {
   const current = arr[index];
   if (!current || typeof current !== 'object') return;
   const oldName = itemDisplayName(current);
-  const newName = input;
+  const newName = input.trim();
+  if (newName === '') {
+    ElMessage.warning('模型名称不能为空');
+    return;
+  }
   if (newName === oldName) return;
   arr[index] = { ...current, name: newName };
   writeArray(modelsField.value, arr);
