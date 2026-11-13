@@ -306,6 +306,79 @@ class SocialFactRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def enqueue_danmaku_candidate(
+        self,
+        *,
+        live_session_id: int,
+        message_id: str,
+        viewer_chat_id: int,
+        viewer_quote: str,
+        title: str,
+        game: str = "",
+        save_id: str = "",
+        save_name: str = "",
+        now_ms_value: Optional[int] = None,
+    ) -> Optional[int]:
+        """观众弹幕作证走观众待审候选通道：仅当主播本场已回应过该弹幕时写入 viewer_candidates。
+
+        返回值：
+        - 正整数：写入（或已存在）的待审候选主键，批准前对主播不可见；
+        - ``-1``：同一弹幕或同标题候选曾被运营者驳回过，不再重复入列；
+        - ``None``：主播本场尚未对该弹幕送达回应，不能入列跨场候选。
+        """
+        ts = int(now_ms_value if now_ms_value is not None else now_ms())
+        mid = (message_id or "").strip()
+        cleaned_title = (title or "").strip()[:30]
+        if not mid or not cleaned_title:
+            return None
+
+        def _exec() -> Optional[int]:
+            with self._manager.transaction() as conn:
+                reply_row = conn.execute(
+                    "SELECT id, content FROM live_chat"
+                    " WHERE live_session_id=? AND sender_role='assistant'"
+                    "   AND dropped_at_ms IS NULL AND reply_to_message_id=?"
+                    " ORDER BY id DESC LIMIT 1",
+                    (int(live_session_id), mid),
+                ).fetchone()
+                if reply_row is None:
+                    return None
+                rejected = conn.execute(
+                    "SELECT 1 FROM viewer_candidates WHERE status='rejected' AND (viewer_chat_id=? OR title=?) LIMIT 1",
+                    (int(viewer_chat_id), cleaned_title),
+                ).fetchone()
+                if rejected is not None:
+                    return -1
+                existing = conn.execute(
+                    "SELECT id FROM viewer_candidates WHERE live_session_id=? AND reply_chat_id=? LIMIT 1",
+                    (int(live_session_id), int(reply_row["id"])),
+                ).fetchone()
+                if existing is not None:
+                    return int(existing["id"])
+                reply_quote = str(reply_row["content"] or "").strip()[:80]
+                if not reply_quote:
+                    return None
+                cur = conn.execute(
+                    "INSERT INTO viewer_candidates(live_session_id, kind, title, viewer_chat_id, viewer_quote,"
+                    " reply_chat_id, reply_quote, game, save_id, save_name, created_at_ms, word)"
+                    " VALUES (?, 'viewer_defined', ?, ?, ?, ?, ?, ?, ?, ?, ?, '')",
+                    (
+                        int(live_session_id),
+                        cleaned_title,
+                        int(viewer_chat_id),
+                        (viewer_quote or "").strip()[:80],
+                        int(reply_row["id"]),
+                        reply_quote,
+                        game or None,
+                        save_id or "",
+                        save_name or "",
+                        ts,
+                    ),
+                )
+                return int(cur.lastrowid or 0)
+
+        return await self._run_in_executor(_exec)
+
 
 def delete_social_facts_by_session(conn: sqlite3.Connection, *, live_session_id: int) -> int:
     """删除某一场登记的全部事实，返回删除条数（场次改类型、删除场次时用）。

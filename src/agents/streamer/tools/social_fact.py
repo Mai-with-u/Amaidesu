@@ -19,11 +19,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, Optional, Tuple
+from typing import Any, Awaitable, Callable, ClassVar, Dict, Iterable, Optional, Sequence, Tuple
 
 from src.agents.streamer.memory.textmatch import verbatim_quote
 from src.modules.logging import get_logger
-from src.modules.storage.models.social_facts import MAX_ACTIVE_FACTS_PER_KIND, SOCIAL_FACT_KINDS
+from src.modules.storage.models.social_facts import (
+    MAX_ACTIVE_FACTS_PER_KIND,
+    SOCIAL_FACT_KINDS,
+    is_works_downgraded,
+)
 from src.modules.tools import ToolInvocation, ToolSpec
 from src.modules.tools.models import ToolExecutionResult
 from src.modules.tools.provider import BaseToolProvider
@@ -54,8 +58,9 @@ _KIND_LABELS: Dict[str, str] = {
 
 _DESCRIPTION = (
     "登记一条游戏社交事实：这个游戏环境里人与人现在怎么相处（谁在、什么关系、什么东西公用、谁在做什么事）。"
-    "只登记玩家或观众明说的事，不从行为推测关系；依据必须是别人说的一句话，填那一行末尾 [id:…] 里的号，"
-    "再抄一段原话。事实变了就用 supersedes_id 取代旧的那一行。"
+    "场内直接写入跨场社交事实只认游戏公屏里其他玩家明说的话，不从行为推测关系；填那行游戏公屏末尾 [id:…] 里的号，"
+    "再抄一段原话（观众弹幕里的说法走待审候选经运营批准后才进跨场记忆，不要直接拿弹幕写社交事实）。"
+    "事实变了就用 supersedes_id 取代旧的那一行。"
 )
 
 _PARAMETERS: Dict[str, Any] = {
@@ -73,7 +78,7 @@ _PARAMETERS: Dict[str, Any] = {
         "quote": {"type": "string", "description": "依据那句话里的原文片段，照抄（80 字以内）"},
         "evidence_message_id": {
             "type": "string",
-            "description": "依据那一行末尾 [id:…] 里的号（弹幕或游戏公屏里别人说的那一句）",
+            "description": "依据那一行游戏公屏末尾 [id:…] 里的号（游戏公屏里其他玩家说的那一句）",
         },
         "supersedes_id": {
             "type": "integer",
@@ -117,12 +122,14 @@ class SocialFactToolProvider(BaseToolProvider):
         session_provider: Callable[[], Optional[int]],
         game_scope_provider: GameScopeProvider,
         on_written: Optional[Callable[[], Awaitable[None]]] = None,
+        recent_sessions_provider: Optional[Callable[[int], Awaitable[Sequence[Tuple[int, int]]]]] = None,
     ) -> None:
         self._repo = repo
         self._session_provider = session_provider
         self._game_scope_provider = game_scope_provider
         # 写成后的回调（让索引任务立刻补一轮等）；失败不影响回执
         self._on_written = on_written
+        self._recent_sessions_provider = recent_sessions_provider
         self._logger = get_logger("SocialFactTool")
 
     @property
@@ -198,6 +205,36 @@ class SocialFactToolProvider(BaseToolProvider):
         else:
             game, save_id, save_name = self._game_scope_provider()
 
+        # 观众弹幕作证不直接写进跨场社交事实表：已当场回应过的转入观众待审候选，未回应的打回指引走回应+候选通道
+        if hit.source == "chat":
+            enqueue_fn = getattr(self._repo, "enqueue_danmaku_candidate", None)
+            if callable(enqueue_fn):
+                cand_id = await enqueue_fn(
+                    live_session_id=int(session_id),
+                    message_id=message_id,
+                    viewer_chat_id=hit.row_id,
+                    viewer_quote=verified,
+                    title=text,
+                    game=game,
+                    save_id=save_id,
+                    save_name=save_name,
+                )
+                if cand_id == -1:
+                    return self._bounce(tool_name, "这条观众弹幕对应的设定曾被运营者驳回，不再登记")
+                if cand_id is not None and cand_id > 0:
+                    self._logger.info(f"观众弹幕社交设定已转入待审候选：#{cand_id} {text}")
+                    return ToolExecutionResult(
+                        tool_name=tool_name,
+                        success=True,
+                        content=f"观众弹幕不直接进常驻社交事实，已转入待审候选 #{cand_id}（经运营者批准后跨场生效）",
+                        structured_content={"candidate_id": cand_id, "queued_candidate": True},
+                    )
+            return self._bounce(
+                tool_name,
+                "观众弹幕不能直接登记为跨场社交事实：场内直接写入只认游戏公屏里玩家说的话；"
+                "观众提的说法若你通过 streamer_reply 当场回应接受，下播整理会列进待审候选经运营者批准后生效，无需重试本工具",
+            )
+
         supersedes_id = args.get("supersedes_id")
         target_id: Optional[int] = None
         if supersedes_id not in (None, ""):
@@ -219,12 +256,17 @@ class SocialFactToolProvider(BaseToolProvider):
 
         counts = await self._repo.count_facts_by_kind(game=game, save_id=save_id)
         if target_id is None and counts.get(kind, 0) >= MAX_FACTS_PER_KIND:
-            oldest = await self._oldest(kind, game, save_id)
-            hint = f"，最旧的是行号 {oldest}" if oldest is not None else ""
-            return self._bounce(
-                tool_name,
-                f"{_KIND_LABELS[kind]}已经有 {MAX_FACTS_PER_KIND} 条了{hint}：用 supersedes_id 取代一条旧的再登记",
-            )
+            if kind == "works":
+                stale_id = await self._oldest_downgraded_works(int(session_id), game, save_id)
+                if stale_id is not None:
+                    target_id = stale_id
+            if target_id is None:
+                oldest = await self._oldest(kind, game, save_id)
+                hint = f"，最旧的是行号 {oldest}" if oldest is not None else ""
+                return self._bounce(
+                    tool_name,
+                    f"{_KIND_LABELS[kind]}已经有 {MAX_FACTS_PER_KIND} 条了{hint}：用 supersedes_id 取代一条旧的再登记",
+                )
 
         new_id = await self._repo.insert_fact(
             kind=kind,
@@ -262,3 +304,31 @@ class SocialFactToolProvider(BaseToolProvider):
         if not candidates:
             return None
         return int(min(candidates, key=lambda row: (row.updated_at_ms, row.id)).id)
+
+    async def _oldest_downgraded_works(self, current_session_id: int, game: str, save_id: str) -> Optional[int]:
+        """已隔两场未再证实的降级进行中事项：遇 4 条上限时自动让出最旧一槽。"""
+        if self._recent_sessions_provider is None:
+            return None
+        try:
+            bounds = await self._recent_sessions_provider(current_session_id)
+        except Exception as exc:  # noqa: BLE001 - 查不到场次边界时不自动顶替
+            self._logger.debug(f"读近两场边界判进行中事项降级失败: {exc}", exc=exc)
+            return None
+        if len(bounds) < 2:
+            return None
+        recent_ids = tuple(int(item[0]) for item in bounds[:2])
+        second_ms = int(bounds[1][1])
+        rows = await self._repo.list_active_facts(game=game, save_id=save_id)
+        stale = [
+            row
+            for row in rows
+            if is_works_downgraded(
+                row,
+                current_session_id=current_session_id,
+                recent_two_session_ids=recent_ids,
+                second_recent_started_ms=second_ms,
+            )
+        ]
+        if not stale:
+            return None
+        return int(min(stale, key=lambda row: (row.updated_at_ms, row.id)).id)

@@ -1160,6 +1160,21 @@ class SessionSettler:
         except Exception as exc:  # noqa: BLE001 - 少了这份原料只是这一场不更新社交事实
             logger.warning(f"场次 {session.id} 读游戏社交事实原料失败，这一场不更新社交事实: {exc}", exc=exc)
             return SocialMaterial()
+        recent_two_ids: Tuple[int, ...] = ()
+        second_started_ms = 0
+        if isinstance(self._archive, BaseRepo):
+            try:
+                bounds = await self._archive.recent_ended_session_bounds(
+                    kind=session.kind,
+                    min_duration_ms=self._min_session_ms,
+                    exclude_session_id=int(session.id),
+                    limit=2,
+                )
+                if len(bounds) >= 2:
+                    recent_two_ids = (int(bounds[0][0]), int(bounds[1][0]))
+                    second_started_ms = int(bounds[1][1])
+            except Exception as exc:  # noqa: BLE001 - 查不到近两场边界时不挡第四次调用
+                logger.debug(f"场次 {session.id} 读近两场边界判进行中社交事实降级失败: {exc}", exc=exc)
         return build_social_material(
             chat_lines=chat_lines,
             interactions=interactions,
@@ -1171,6 +1186,9 @@ class SessionSettler:
             saves=saves,
             started_at_ms=int(session.started_at_ms),
             clock_text=_clock_text,
+            current_session_id=int(session.id),
+            recent_two_session_ids=recent_two_ids,
+            second_recent_started_ms=second_started_ms,
         )
 
     async def _load_game_records(self, session: LiveSession) -> List[GameRecord]:

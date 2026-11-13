@@ -110,7 +110,10 @@ SOCIAL_FACT_TOOL_NAME: str = "streamer_social_fact"
 MEMORY_CORRECT_TOOL_NAME: str = "streamer_memory_correct"
 
 #: 作废条款里"记一条取代旧行的社交事实"那一步（模板变量 social_fact_step；工具没注册时为空串）
-_SOCIAL_FACT_RETRACTION_STEP: str = "再用 `streamer_social_fact` 把作废记成一条新事实，取代旧的那一行。"
+_SOCIAL_FACT_RETRACTION_STEP: str = (
+    "若依据是本场游戏公屏里玩家说的话，再用 `streamer_social_fact` 把作废记成一条新事实，取代旧的那一行"
+    "（观众弹幕的话不直接写跨场社交事实）。"
+)
 
 #: ReAct 循环默认步数上限（配置 planner_max_steps 可覆盖）。
 _DEFAULT_MAX_STEPS: int = 8

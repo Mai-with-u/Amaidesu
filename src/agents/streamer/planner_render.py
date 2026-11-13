@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from src.agents.streamer.planner_context import age_text
 from src.agents.streamer.scene_card import GoalLine, GoalStatus
@@ -28,7 +28,7 @@ from src.modules.agents.delegation_text import (
     PROMPT_CHAT_HEAD,
     PROMPT_REQUIREMENT_HEAD,
 )
-from src.modules.storage.models.social_facts import SocialFact
+from src.modules.storage.models.social_facts import SocialFact, is_social_fact_resident, is_works_downgraded
 from src.modules.tools.conversation import to_conversation_view
 
 __all__ = [
@@ -437,32 +437,54 @@ _SOCIAL_FACT_KIND_LABELS = {
 }
 
 
-def render_social_facts(facts: Iterable[SocialFact], current_ms: int, age_text_fn: Callable[[int], str]) -> str:
-    """【游戏社交事实】：现行事实按类分组，整段至多 12 行；没有现行事实时为空串（整段省略）。
+def render_social_facts(
+    facts: Iterable[SocialFact],
+    current_ms: int,
+    age_text_fn: Callable[[int], str],
+    *,
+    current_session_id: Optional[int] = None,
+    recent_two_session_ids: Sequence[int] = (),
+    second_recent_started_ms: int = 0,
+) -> str:
+    """【游戏社交事实】：可核对的现行事实按类分组，整段至多 12 行；没有现行事实时为空串（整段省略）。
 
-    取舍优先级：人工锁 > works / her_role > 最近更新；同类内由新到旧。全部从库现读（场内
-    登记下一轮就可见），每批重建、不进对话历史。
+    无逐字原话依据且未人工锁定的模型归纳行及未批准的观众弹幕行不常驻注入；已隔两场完结正式场
+    未再证实的进行中事项（works）降级到末尾，归入"待确认的旧进展"。
     """
-    rows = [fact for fact in facts if fact.status == "active"]
+    rows = [fact for fact in facts if is_social_fact_resident(fact)]
     if not rows:
         return ""
     rank = {kind: index for index, kind in enumerate(_SOCIAL_FACT_KIND_ORDER)}
+
+    def _downgraded(item: SocialFact) -> bool:
+        return is_works_downgraded(
+            item,
+            current_session_id=current_session_id,
+            recent_two_session_ids=recent_two_session_ids,
+            second_recent_started_ms=second_recent_started_ms,
+        )
+
     rows.sort(
         key=lambda fact: (
             0 if fact.human_locked else 1,
+            1 if _downgraded(fact) else 0,
             rank.get(fact.kind, len(rank)),
             -int(fact.updated_at_ms),
         )
     )
     shown = rows[:_SOCIAL_FACTS_MAX]
     lines: List[str] = []
-    last_kind = ""
+    last_group = ""
     for fact in shown:
-        if fact.kind != last_kind:
-            last_kind = fact.kind
-            lines.append(f"（{_SOCIAL_FACT_KIND_LABELS.get(fact.kind, fact.kind)}）")
+        stale = _downgraded(fact)
+        group_label = "待确认的旧进展" if stale else _SOCIAL_FACT_KIND_LABELS.get(fact.kind, fact.kind)
+        if group_label != last_group:
+            last_group = group_label
+            lines.append(f"（{group_label}）")
         mark = "★" if fact.human_locked else "-"
-        lines.append(f"{mark} {fact.text}（{age_text_fn(current_ms - int(fact.updated_at_ms))}记的）")
+        age = age_text_fn(current_ms - int(fact.updated_at_ms))
+        note = f"{age}记的，已隔多场未再证实" if stale else f"{age}记的"
+        lines.append(f"{mark} {fact.text}（{note}）")
     return "【游戏社交事实】\n" + "\n".join(lines)
 
 
