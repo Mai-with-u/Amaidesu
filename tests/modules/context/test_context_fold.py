@@ -169,14 +169,14 @@ def test_fold_can_swallow_an_earlier_block() -> None:
         (FoldRequest("m0099", "m0002", "摘要"), "编号不在"),
         (FoldRequest("m0003", "m0001", "摘要"), "起点在终点之后"),
         (FoldRequest("m0001", "m0002", "  "), "摘要为空"),
-        (FoldRequest("m0001", "m0002", "长" * 601), "超过上限"),
         (FoldRequest("m0001", "m0006", "摘要"), "不能折"),
         (FoldRequest("m0001", "m0001", "摘要"), "不值得折"),
-        (FoldRequest("m0001", "m0002", "长" * 520), "没比原文短一半"),
+        (FoldRequest("m0001", "m0002", "长" * 620), "净省不足"),
+        (FoldRequest("m0001", "m0002", "长" * 900), "净省不足"),
     ],
 )
 def test_apply_refuses_bad_requests_and_keeps_history(request_: FoldRequest, reason: str) -> None:
-    """编号不存在、起止颠倒、摘要空或过长、碰到最近几组、区间太小、摘要省不下空间：一律拒绝且历史不动。"""
+    """编号不存在、起止颠倒、摘要为空、碰到最近几组、区间太小、或折后净省空间不足：一律拒绝且历史不动。"""
     folds = _folds()
     messages = _history(rounds=6)
     folds.number(messages)
@@ -184,6 +184,98 @@ def test_apply_refuses_bad_requests_and_keeps_history(request_: FoldRequest, rea
     outcome = folds.apply(messages, [request_], keep_recent=2, min_tokens=600, max_summary_chars=600)
     assert not outcome.blocks and reason in outcome.errors[0]
     assert messages == before and not folds.blocks
+
+
+def test_apply_accepts_slightly_over_limit_summary_within_grace() -> None:
+    """轻微超限缓冲（第 66 场 3008 字超 3000 字上限 8 字）：落在缓冲内且净省充足时全文入账，不整单作废也不截断。"""
+    folds = _folds()
+    messages = _history(rounds=8, size=1100)
+    folds.number(messages)
+    summary = "记" * 3008
+    outcome = folds.apply(
+        messages,
+        [FoldRequest("m0001", "m0006", summary)],
+        keep_recent=2,
+        min_tokens=1000,
+        max_summary_chars=3000,
+    )
+    assert not outcome.errors and len(outcome.blocks) == 1
+    block = outcome.blocks[0]
+    assert block.summary == summary
+    assert "超长部分已截断" not in messages[2]["content"]
+    assert block.tokens_after < block.tokens_before
+    assert outcome.tokens_saved >= int(block.tokens_before * 0.4)
+
+
+def test_apply_truncates_overlong_summary_at_sentence_or_newline_with_recall_note() -> None:
+    """超出缓冲上限的长摘要：优先在后半段句号（含闭合引号）或换行处安全截断并附注取回方式，块库原文完整可查。"""
+    # 句末标点（带右引号）处截断，丢掉末尾半截残句
+    folds_sentence = _folds()
+    messages_a = _history(rounds=8, size=1100)
+    folds_sentence.number(messages_a)
+    prefix_a = "矿洞记录：" + "石" * 2400 + "第 3 层报错“路径被流体阻挡。”"
+    overlong_a = prefix_a + "后面这半句超出预算还没写完" + "尾" * 1200
+    outcome_a = folds_sentence.apply(
+        messages_a,
+        [FoldRequest("m0001", "m0006", overlong_a)],
+        keep_recent=2,
+        min_tokens=1000,
+        max_summary_chars=3000,
+    )
+    assert not outcome_a.errors and len(outcome_a.blocks) == 1
+    saved_a = outcome_a.blocks[0].summary
+    assert saved_a.endswith(f"第 3 层报错“路径被流体阻挡。”\n（超长部分已截断，{HINT}）")
+    assert "后面这半句超出预算还没写完" not in saved_a
+    assert len(saved_a) <= 3000
+    assert folds_sentence.recall(block="b1", max_chars=100_000)["ok"]
+
+    # 无句号的多行条目：在换行处干净截断
+    folds_newline = _folds()
+    messages_b = _history(rounds=8, size=1100)
+    folds_newline.number(messages_b)
+    line_block = "\n".join(f"- 条目{idx}：" + "木" * 180 for idx in range(14))
+    overlong_b = line_block + "\n- 未完条目：" + "枝" * 1200
+    outcome_b = folds_newline.apply(
+        messages_b,
+        [FoldRequest("m0001", "m0006", overlong_b)],
+        keep_recent=2,
+        min_tokens=1000,
+        max_summary_chars=3000,
+    )
+    assert not outcome_b.errors and len(outcome_b.blocks) == 1
+    saved_b = outcome_b.blocks[0].summary
+    assert saved_b.endswith(f"\n（超长部分已截断，{HINT}）")
+    assert "未完条目" not in saved_b
+
+
+def test_apply_guardrail_rejects_summary_fatter_than_or_too_close_to_original() -> None:
+    """配对副作用护栏：放宽字数后若摘要换算成替身消息比原区间还胖、或净省空间不足，必须拒收并保持历史不动。"""
+    folds = _folds()
+    messages = _history(rounds=6, size=400)
+    folds.number(messages)
+    before_snapshot = [dict(message) for message in messages]
+
+    # 摘要 1200 字虽未超 max_summary_chars=3000，但 m0001–m0002 原区间仅约 860 token，折后反而更胖
+    fatter = folds.apply(
+        messages,
+        [FoldRequest("m0001", "m0002", "胖" * 1200)],
+        keep_recent=2,
+        min_tokens=600,
+        max_summary_chars=3000,
+    )
+    assert not fatter.blocks and "净省不足" in fatter.errors[0]
+    assert messages == before_snapshot and not folds.blocks
+
+    # 折后略小于原区间但净省不到四成（m0001–m0003 原区间约 1527 token，摘要 1000 字折后约 1060 token）
+    meager = folds.apply(
+        messages,
+        [FoldRequest("m0001", "m0003", "近" * 1000)],
+        keep_recent=2,
+        min_tokens=600,
+        max_summary_chars=3000,
+    )
+    assert not meager.blocks and "净省不足" in meager.errors[0]
+    assert messages == before_snapshot and not folds.blocks
 
 
 def test_overlapping_request_in_same_batch_is_refused_alone() -> None:

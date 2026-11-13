@@ -7,8 +7,9 @@
   编号只写在还没发出过的新消息上，已发出的消息一个字节都不动，前缀缓存不受影响；
   编号在 Agent 的整个生命周期里只增不减，旧任务留下的折叠提议对不上新任务的消息；
 - 折叠：区间按"工具调用 + 回执"整组扩展，不拆开配对；固定层（哪些算固定由 Agent
-  判定，如系统说明、任务事实、原始指令）和最近几组不能折；区间太小、摘要不比原文
-  短一半的不执行——省下的空间抵不过一次前缀缓存失效；
+  判定，如系统说明、任务事实、原始指令）和最近几组不能折；摘要轻微超限时在缓冲内
+  保留、超出缓冲则在句末或换行处安全截断并附注取回提示；区间太小、或折后替身未能
+  比原区间净省足够 token 的不执行——省下的空间抵不过一次前缀缓存失效；
 - 块库：被折叠的原文整段存进块库，按块号读回，或按关键词只取命中的片段。读回的
   原文只作为一次工具结果出现在尾部，不塞回历史中段；
 - 收起：到了预算线又来不及等摘要时，把最老的大条记录换成一行占位、原文进块库。
@@ -42,8 +43,15 @@ __all__ = [
 REF_KEY = "_context_ref"
 BLOCK_KEY = "_context_block"
 
-# 摘要至多是原文的这一比例才执行：省不下一半空间的折叠，换来的只是一次缓存失效
-_MAX_SUMMARY_SHARE = 0.5
+# 摘要允许超出字数上限的缓冲比例：模型多写几十到两三百字时保留全文，避免仅超几个字就整单报废白付输出
+_SUMMARY_GRACE_SHARE = 0.1
+# 超出缓冲后在后半段寻找自然断点的标点集合：优先换行或句末标点，退而求其次取分句逗号与顿号
+_SENTENCE_ENDS = "。！？；.!?;"
+_CLOSING_MARKS = "”’）)\"'"
+_CLAUSE_ENDS = "，、,"
+# 折后完整替身消息必须严格小于原区间，且至少省下原区间四成（并不少于最少净省下限），否则抵不过前缀缓存失效
+_MIN_SAVED_SHARE = 0.4
+_MIN_SAVED_TOKENS = 400
 
 # 关键词查找最多返回的片段数，以及每个片段在命中处前后各带的字符数
 _MAX_HITS = 8
@@ -229,22 +237,38 @@ class ContextFolds:
                 error = "起点在终点之后"
             elif not summary:
                 error = "摘要为空"
-            elif len(summary) > max_summary_chars:
-                error = f"摘要 {len(summary)} 字，超过上限 {max_summary_chars} 字"
             else:
+                # 先扩展到完整工具调用配对组并核对区间边界，再收敛超长摘要，最后拿完整替身消息对比原区间算净省 token：
+                # 轻微超限保留全文、超出缓冲在句号或换行处截断附注，但折后若不比原区间小或省不下足够空间则拒收，防止折出比原文更胖的摘要。
                 head, tail = group_of[first], group_of[last]
                 low, high = spans[head][0], spans[tail][1]
-                before = self._counter.messages(messages[low:high])
+                originals = messages[low:high]
+                before = self._counter.messages(originals)
                 if not all(allowed[head : tail + 1]):
                     error = "区间含不能折的消息（固定层或最近几组记录）"
                 elif any(low < taken_high and taken_low < high for taken_low, taken_high, _ in accepted):
                     error = "与同批另一段区间重叠"
                 elif before < min_tokens:
                     error = f"区间只有约 {before} token，不值得折（至少 {min_tokens}）"
-                elif self._counter.text(summary) > before * _MAX_SUMMARY_SHARE:
-                    error = "摘要没比原文短一半，折了省不下空间"
                 else:
-                    accepted.append((low, high, summary))
+                    fitted = _fit_summary(summary, max_summary_chars, self._recall_hint)
+                    labels = [label for label in (_label(message) for message in originals) if label]
+                    preview = self._build_stand_in(
+                        f"b{self._next_block + len(accepted)}",
+                        labels[0],
+                        labels[-1],
+                        before,
+                        fitted,
+                    )
+                    after = self._counter.message(preview)
+                    floor_saved = min(_MIN_SAVED_TOKENS, max(1, min_tokens // 2))
+                    required_saved = max(floor_saved, int(before * _MIN_SAVED_SHARE))
+                    if after >= before or before - after < required_saved:
+                        error = (
+                            f"折后约 {after} token（原文约 {before} token），净省不足 {required_saved} token，不划算"
+                        )
+                    else:
+                        accepted.append((low, high, fitted))
             if error:
                 outcome.errors.append(f"{start}–{end}：{error}")
         # 从后往前替换：后面的区间先换，前面区间的下标不受影响；块号仍按历史先后分配
@@ -328,18 +352,22 @@ class ContextFolds:
             return _miss(query, "")
         return {"ok": True, "hits": found_hits[:_MAX_HITS]}
 
+    def _build_stand_in(self, block_id: str, start: str, end: str, before: int, summary: str) -> Dict[str, Any]:
+        """拼装折叠替身消息：统一用于入账前的折后 token 预估与正式落块，保证两侧计量口径一致。"""
+        span = start if start == end else f"{start}–{end}"
+        return {
+            "role": "user",
+            "content": f"[已折叠 {block_id} · {span} · 原文约 {before} token，{self._recall_hint}]\n{summary}",
+            BLOCK_KEY: block_id,
+        }
+
     def _fold_block(self, originals: Sequence[Dict[str, Any]], summary: str) -> Tuple[FoldBlock, Dict[str, Any]]:
         """为一段原文建块并生成替身消息（user 角色，带块号标记，不再编号）。"""
         labels = [label for label in (_label(message) for message in originals) if label]
         start, end = labels[0], labels[-1]
         before = self._counter.messages(originals)
         block_id = self._take_block_id()
-        span = start if start == end else f"{start}–{end}"
-        stand_in: Dict[str, Any] = {
-            "role": "user",
-            "content": f"[已折叠 {block_id} · {span} · 原文约 {before} token，{self._recall_hint}]\n{summary}",
-            BLOCK_KEY: block_id,
-        }
+        stand_in = self._build_stand_in(block_id, start, end, before, summary)
         block = FoldBlock(
             block_id,
             "fold",
@@ -367,6 +395,36 @@ class ContextFolds:
             number < cutoff and not any(self._is_pinned(message) for message in messages[start:end])
             for number, (start, end) in enumerate(spans)
         ]
+
+
+def _find_safe_cut(window: str, floor: int) -> Optional[int]:
+    """在截断窗口后半段从后往前找自然断点：优先换行或句末标点（保留紧跟的闭合引号/括号），其次取逗号与顿号。"""
+    for index in range(len(window) - 1, floor - 1, -1):
+        char = window[index]
+        if char == "\n":
+            return index
+        if char in _SENTENCE_ENDS:
+            end = index + 1
+            while end < len(window) and window[end] in _CLOSING_MARKS:
+                end += 1
+            return end
+    for index in range(len(window) - 1, floor - 1, -1):
+        if window[index] in _CLAUSE_ENDS:
+            return index
+    return None
+
+
+def _fit_summary(summary: str, max_chars: int, recall_hint: str) -> str:
+    """收敛超长折叠摘要：轻微超限在缓冲内原样放行；超出缓冲则在句号或换行处截断并附注原文取回方式。"""
+    grace_limit = max_chars + max(1, int(max_chars * _SUMMARY_GRACE_SHARE))
+    if len(summary) <= grace_limit:
+        return summary
+    note = f"（超长部分已截断，{recall_hint}）"
+    budget = max_chars - len(note) - 1 if max_chars > len(note) * 2 else max(1, max_chars)
+    window = summary[:budget]
+    cut = _find_safe_cut(window, budget // 2)
+    head = (window[:cut] if cut is not None else window).rstrip()
+    return f"{head}\n{note}" if head else note
 
 
 def _label(message: Mapping[str, Any]) -> Optional[str]:
