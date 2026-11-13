@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
 
 from src.agents.streamer.planner_context import age_text
 from src.agents.streamer.scene_card import GoalLine, GoalStatus
@@ -42,6 +42,7 @@ __all__ = [
     "compose_relay_content",
     "forced_situation",
     "goal_lines",
+    "nearby_players_from_overview",
     "render_delegations",
     "render_game_speakers",
     "render_social_facts",
@@ -465,12 +466,51 @@ def render_social_facts(facts: Iterable[SocialFact], current_ms: int, age_text_f
     return "【游戏社交事实】\n" + "\n".join(lines)
 
 
-def render_game_speakers(notes: Iterable[PlayerNote]) -> str:
-    """本窗在游戏公屏跟她说话的玩家：提醒在游戏里回一句；没人开口时为空串（整段省略）。
+def nearby_players_from_overview(overview: str) -> Optional[FrozenSet[str]]:
+    """从本轮参考工具产出的现场速览文本里取出当前在角色身边的玩家名集合。
 
-    游戏里的玩家听不到直播：只在直播里接话，他看到的就是她不理人。守则写在【当前游戏的玩法】
-    里，但第 58 场玩家在游戏里问"你有皮革吗"，她只在直播里说了一句——规矩埋在长守则里，
-    这一窗点出是谁在等她回话。
+    仅当速览成功返回了身体与周边场景快照（不含 unavailable / nearby_error）时返回集合：
+    只读取周边实体列表里的玩家条目，忽略设施归属人或生物驯服者字段，防止把远在别处探索、但早先在营地
+    放过机器的玩家误判成就在身边；未开启速览或周边读取失败时返回 None（在场关系未知）。
+    """
+    if not overview or not overview.strip():
+        return None
+    found_scene = False
+    players: set[str] = set()
+    for raw_line in overview.splitlines():
+        _, sep, payload = raw_line.partition(": ")
+        candidate = payload.strip() if sep else raw_line.strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            data = json.loads(candidate)
+        except ValueError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("unavailable") or data.get("nearby_error"):
+            continue
+        if "body" not in data and "entities" not in data:
+            continue
+        found_scene = True
+        for entity in data.get("entities") or ():
+            if not isinstance(entity, dict):
+                continue
+            raw_type = str(entity.get("type") or "").lower()
+            is_player = raw_type.split(":")[-1] == "player" or entity.get("kind") == "玩家"
+            name = str(entity.get("name") or "").strip()
+            if is_player and name:
+                players.add(name)
+    return frozenset(players) if found_scene else None
+
+
+def render_game_speakers(notes: Iterable[PlayerNote], overview: str = "") -> str:
+    """本窗在游戏公屏说话的玩家：提醒在游戏里回话，并对照现场速览标明在不在身边；没人开口时为空串。
+
+    游戏里的玩家听不到直播：问她事、跟她搭话的要在游戏里回一句，否则对方看到的就是她不理人。
+    同时游戏公屏是全服广播，远处玩家探索时的环境感叹也会进来：结合现场速览标出谁在身边、谁不在身边，
+    既保持对点名她、向她求助搭话或就在身边围观互动玩家的回应积极度，也防止把远处未点名她的环境感叹
+    硬套成她自己手头工位的状况。
     """
     names: List[str] = []
     for note in notes:
@@ -479,10 +519,31 @@ def render_game_speakers(notes: Iterable[PlayerNote]) -> str:
     if not names:
         return ""
     who = "、".join(f"玩家 {name}" for name in names)
-    return (
+    base = (
         f"【游戏里有人在跟她说话】{who}（在游戏里，听不到直播）：问她事、跟她搭话的，"
         "同一步按【当前游戏的玩法】里游戏聊天的办法在游戏里回一句——只在直播里接，对方看到的就是她不理人；"
         "感叹、自言自语可以只在直播里接。"
+    )
+    nearby_set = nearby_players_from_overview(overview)
+    if nearby_set is None:
+        return (
+            f"{base}公屏是全服广播：点名她、向她求助搭话或就在【现场速览】身边的照常积极回应；"
+            "不在身边且未点名她的环境感叹是对方那边的遭遇，别套成她手头工位的状况，拿不准可顺口问清在哪碰上的。"
+        )
+    here = [f"玩家 {name}" for name in names if name in nearby_set]
+    afar = [f"玩家 {name}" for name in names if name not in nearby_set]
+    if here and not afar:
+        return f"{base}（现场核对：{'、'.join(here)} 当前就在【现场速览】身边，围观互动或搭话照常积极回应。）"
+    if afar and not here:
+        return (
+            f"{base}（现场核对：{'、'.join(afar)} 当前不在【现场速览】身边——公屏是全服广播，"
+            "点名她或向她求助搭话的照常积极回应；未点名她的环境感叹是对方那边的遭遇，"
+            "别硬套成她手头工位的状况，拿不准对方在说什么时可顺口问清在哪碰上的。）"
+        )
+    return (
+        f"{base}（现场核对：{'、'.join(here)} 当前就在身边，围观搭话照常积极回应；"
+        f"{'、'.join(afar)} 当前不在身边——公屏是全服广播，点名她或求助搭话的照常积极回应，"
+        "未点名她的环境感叹别套成她手头工位的状况，拿不准可顺口问清在哪碰上的。）"
     )
 
 

@@ -1311,9 +1311,10 @@ class Planner:
             # 私密游戏聊天：只发给我一个人的话，不进对话历史（表达侧看不到），只在本窗参考段出现。
             # 决策据此安排回应，但原话与内容不能被当众念出或转述
             lines.append("【私密游戏聊天】（只发给我，不在直播里念出或转述）\n" + "\n".join(private_game_chat))
-        speakers = render_game_speakers(self._round_player_notes)
+        # 本窗有玩家在游戏公屏说话时，先结合本轮自动读取的现场速览核对发言玩家是否在角色身边，
+        # 再生成回话提醒与全服广播归属提示，避免把远处玩家的环境感叹误认成自己工位脚下的状况
+        speakers = render_game_speakers(self._round_player_notes, overview=overview)
         if speakers:
-            # 本窗有玩家在游戏公屏跟她说话：点出是谁在等她回话，回就在游戏里回（他听不到直播）
             lines.append(speakers)
         state_facts = self._round_facts_text
         if state_facts:
