@@ -10,6 +10,7 @@ import pytest
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import (
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
@@ -18,7 +19,12 @@ from src.modules.events.payloads.utterance import (
     UtteranceStartedPayload,
 )
 from src.modules.subtitle import DashboardBackend, SubtitleBackend, TkGuiBackend
-from src.modules.subtitle.playback_follower import bind_playback_subtitle, split_subtitle_segments
+from src.modules.subtitle.playback_follower import (
+    bind_playback_subtitle,
+    split_subtitle_segments,
+    unbind_playback_subtitle,
+)
+from src.modules.subtitle.protocol import ReplyQuote
 from tests.helpers import FakeClock
 from tests.modules.subtitle.helpers import FakeScheduler
 
@@ -33,6 +39,18 @@ def _service() -> AsyncMock:
     return AsyncMock(show=AsyncMock(), clear=AsyncMock())
 
 
+def _speech(utterance_id: str, user_name: str | None = None, target_text: str | None = None):
+    """构造 streamer.speech 载荷；user_name / target_text 齐全才有引用可登记。"""
+    return StreamerSpeechPayload(
+        utterance_id=utterance_id,
+        text="回复内容",
+        emotion="happy",
+        emotion_intensity=0.5,
+        reply_to_user_name=user_name,
+        reply_to_text=target_text,
+    )
+
+
 async def _emit(bus: EventBus, event_name: str, payload) -> None:
     await bus.emit(event_name, payload, source="test")
     await bus.wait_until_drained()
@@ -44,14 +62,14 @@ async def test_started_and_failed_show_the_sentence_and_finished_clears() -> Non
 
     started = UtteranceStartedPayload(utterance_id="utt_p1", speech_text="这句正在播", engine="edge", duration_ms=100)
     await _emit(bus, CoreEvents.TTS_UTTERANCE_STARTED, started)
-    svc.show.assert_awaited_once_with("这句正在播", "utt_p1")
+    svc.show.assert_awaited_once_with("这句正在播", "utt_p1", None)
 
     svc.show.reset_mock()
     failed = UtteranceFailedPayload(
         utterance_id="utt_p2", speech_text="失败但字幕要显示", engine="edge", error_message="boom"
     )
     await _emit(bus, CoreEvents.TTS_UTTERANCE_FAILED, failed)  # 合成失败逐句降级：无声音也要给文本
-    svc.show.assert_awaited_once_with("失败但字幕要显示", "utt_p2")
+    svc.show.assert_awaited_once_with("失败但字幕要显示", "utt_p2", None)
 
     finished = UtteranceFinishedPayload(utterance_id="utt_p3", engine="edge", duration_ms=100)
     await _emit(bus, CoreEvents.TTS_UTTERANCE_FINISHED, finished)
@@ -141,7 +159,7 @@ async def test_started_shows_first_segment_and_waits_for_playback() -> None:
     bus, svc = EventBus(), _service()
     bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
     await _start(bus, "第一段。第二段。第三段")
-    svc.show.assert_awaited_once_with("第一段", "utt_p1")
+    svc.show.assert_awaited_once_with("第一段", "utt_p1", None)
     # 估算定时不起跑：等真正出声（播放开始事件）再排，字幕不跑在声音前面
     assert sched.pending() == []
     clock.tick(10_000)  # 合成迟迟不回也照旧：字幕停在第一段，不会先行切完
@@ -158,7 +176,7 @@ async def test_boundary_event_switches_segment_and_cancels_timer() -> None:
     clock.tick(1000)  # 段上屏已足最短时长：边界正常切
     svc.show.reset_mock()
     await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 1))
-    svc.show.assert_awaited_once_with("第二段", "utt_p1")
+    svc.show.assert_awaited_once_with("第二段", "utt_p1", None)
     # 事件先到：兜底定时被取消并按剩余段重排；3 字 × 250ms = 750ms 但不低于最短段显示时长
     assert sched.pending()[0]["delay_ms"] == 800
     # 文本段耗尽后多余边界事件被忽略（reset_mock 后列表从第二段起计）
@@ -180,7 +198,7 @@ async def test_early_boundary_within_min_show_is_ignored() -> None:
     await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
     clock.tick(600)  # 出声后 600ms：不足最短段显示时长
     await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 1))
-    svc.show.assert_awaited_once_with("大家晚上好", "utt_p1")  # 仍停在首段
+    svc.show.assert_awaited_once_with("大家晚上好", "utt_p1", None)  # 仍停在首段
     clock.tick(400)  # 距上屏已 1000ms：早到的边界放行
     await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary("utt_p1", 1))
     calls = [call.args[0] for call in svc.show.await_args_list]
@@ -240,7 +258,7 @@ async def test_fallback_timer_switches_without_boundary_event() -> None:
     await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
     assert sched.fire_next() is not None  # 检测不工作：估算定时到点照切
     await _pump()
-    svc.show.assert_awaited_with("第二段", "utt_p1")
+    svc.show.assert_awaited_with("第二段", "utt_p1", None)
 
 
 async def test_duration_estimates_by_char_proportion() -> None:
@@ -348,7 +366,7 @@ async def test_failed_shows_full_text_without_segmentation() -> None:
         utterance_id="utt_p1", speech_text="第一段。第二段", engine="edge", error_message="boom"
     )
     await _emit(bus, CoreEvents.TTS_UTTERANCE_FAILED, failed)
-    svc.show.assert_awaited_once_with("第一段。第二段", "utt_p1")  # 全文不分段
+    svc.show.assert_awaited_once_with("第一段。第二段", "utt_p1", None)  # 全文不分段
     assert sched.pending() == []  # 失败即取消分段会话
 
 
@@ -370,8 +388,54 @@ async def test_single_segment_shows_full_text_without_schedule() -> None:
     bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
     await _start(bus, "整句无句末标点")
     await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
-    svc.show.assert_awaited_once_with("整句无句末标点", "utt_p1")
+    svc.show.assert_awaited_once_with("整句无句末标点", "utt_p1", None)
     assert sched.pending() == []  # 单段无分段会话，出声信号也不建定时
+
+
+# ---------------- 引用弹幕：streamer.speech 登记 → 显示携带 ----------------
+
+
+async def test_reply_quote_from_speech_flows_into_shows() -> None:
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger())
+
+    await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech("utt_q1", user_name="观众A", target_text="主播你好"))
+    await _start(bus, "你好呀观众A。今天玩什么", utterance_id="utt_q1")
+
+    assert svc.show.await_args_list[0].args == ("你好呀观众A", "utt_q1", ReplyQuote(user_name="观众A", text="主播你好"))
+
+
+async def test_speech_without_reply_target_shows_without_quote() -> None:
+    # 主动发言 / 解析不中（宁缺毋假）：无引用可登记，字幕不带引用行
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger())
+
+    await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech("utt_q2"))
+    await _start(bus, "大家好", utterance_id="utt_q2")
+
+    assert svc.show.await_args_list[0].args == ("大家好", "utt_q2", None)
+
+
+async def test_part_id_of_segmented_speech_falls_back_to_base_quote() -> None:
+    # 杂谈档分段连播：第 2 段以后的 TTS 事件带基编号加 _pN 后缀，回退基编号查回复目标
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger())
+
+    await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech("utt_q3", user_name="观众B", target_text="唱首歌吧"))
+    await _start(bus, "好呀。那我唱了", utterance_id="utt_q3_p2")
+
+    assert svc.show.await_args_list[0].args == ("好呀", "utt_q3_p2", ReplyQuote(user_name="观众B", text="唱首歌吧"))
+
+
+async def test_unbind_removes_speech_quote_registration() -> None:
+    bus, svc = EventBus(), _service()
+    handlers = bind_playback_subtitle(bus, svc, _Logger())
+    unbind_playback_subtitle(bus, handlers, _Logger())
+
+    await _emit(bus, CoreEvents.STREAMER_SPEECH, _speech("utt_q4", user_name="观众C", target_text="早上好"))
+    await _start(bus, "早上好呀", utterance_id="utt_q4")
+
+    svc.show.assert_not_awaited()  # 退订摘除跟随器全部订阅：引用登记与字幕显示都不再发生
 
 
 @pytest.mark.parametrize("enabled", [True, False])
@@ -387,7 +451,7 @@ async def test_backends_forward_text_only_and_expose_enabled(enabled: bool) -> N
         await backend.show("hello", utterance_id="u-42")  # 展示位暂未消费 utterance_id，只转发 text
         await backend.clear()
 
-    widget.show_subtitle.assert_awaited_once_with("hello")
+    widget.show_subtitle.assert_awaited_once_with("hello", reply_quote=None)
     widget.clear_subtitle.assert_awaited_once_with()
     gui.push_subtitle.assert_called_once_with("hello")
     gui.clear_subtitle.assert_called_once_with()  # 线程安全入队，禁止跨线程直调 Tk（会死锁 GUI 线程）

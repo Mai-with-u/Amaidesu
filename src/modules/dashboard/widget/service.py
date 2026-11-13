@@ -20,6 +20,7 @@ from src.modules.dashboard.widget.models import (
 from src.modules.events.names import CoreEvents
 from src.modules.events.payloads import RoomMessagePayload
 from src.modules.logging import get_logger
+from src.modules.subtitle.protocol import ReplyQuote
 from src.modules.utils.time_utils import now_ms
 from src.modules.types.currency import to_cny
 
@@ -124,7 +125,12 @@ class DanmakuWidgetService:
         except Exception as e:
             self.logger.exception(f"处理输入消息失败: {e}")
 
-    async def show_subtitle(self, text: str, duration_ms: Optional[int] = None) -> None:
+    async def show_subtitle(
+        self,
+        text: str,
+        duration_ms: Optional[int] = None,
+        reply_quote: Optional[ReplyQuote] = None,
+    ) -> None:
         """显示一条字幕（字幕基础设施 Backend 的调用入口）。
 
         构造 ``SubtitleWidgetMessage`` 并追加到字幕队列，然后通过
@@ -137,6 +143,10 @@ class DanmakuWidgetService:
             duration_ms: 自动隐藏时长（毫秒）；``None`` 时回退到
                 ``subtitle_config.auto_hide_after_ms``。合法范围由
                 ``SubtitleWidgetMessage`` Pydantic Schema 校验。
+            reply_quote: 本句在回复的那条观众发言（昵称 + 原文）；
+                随字幕 WebSocket 帧下发（``reply_user_name`` /
+                ``reply_text``），前端在主字幕上方渲染引用行；None
+                表示无回复目标，前端不显示。
         """
         if not self.subtitle_config.enabled:
             return
@@ -157,6 +167,8 @@ class DanmakuWidgetService:
             "background_color": self.subtitle_config.background_color,
             "border_color": self.subtitle_config.border_color,
             "position": self.subtitle_config.position,
+            "reply_user_name": reply_quote.user_name if reply_quote else None,
+            "reply_text": reply_quote.text if reply_quote else None,
         }
 
         if self._subtitle_callback:
@@ -188,6 +200,8 @@ class DanmakuWidgetService:
             "background_color": self.subtitle_config.background_color,
             "border_color": self.subtitle_config.border_color,
             "position": self.subtitle_config.position,
+            "reply_user_name": None,
+            "reply_text": None,
         }
 
         if self._subtitle_callback:

@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional
 
 from src.modules.logging import get_logger
 
-from .protocol import SubtitleBackend
+from .protocol import ReplyQuote, SubtitleBackend
 
 
 class SubtitleService:
@@ -125,7 +125,12 @@ class SubtitleService:
     # 广播
     # ------------------------------------------------------------------
 
-    async def show(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def show(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        reply_quote: Optional[ReplyQuote] = None,
+    ) -> None:
         """向全部已注册 Backend 并行推送字幕文本。
 
         Args:
@@ -133,6 +138,8 @@ class SubtitleService:
             utterance_id: 编排层关联键（与 ``tts.utterance`` /
                 ``streamer.speech`` 的 ``utterance_id`` 一致时的关联
                 目的）；None 表示无关联上下文。
+            reply_quote: 本句在回复的那条观众发言（昵称 + 原文）；
+                None 表示无回复目标，展示位不渲染引用行。
 
         单 Backend 异常被捕获并记 ERROR（带后端类名），不影响其他
         Backend。无 Backend 时 debug 跳过，不报错。
@@ -141,7 +148,7 @@ class SubtitleService:
             self.logger.debug("字幕 show 跳过：无任何 Backend 已注册")
             return
         results = await asyncio.gather(
-            *(backend.show(text, utterance_id) for backend in self._backends),
+            *(backend.show(text, utterance_id, reply_quote) for backend in self._backends),
             return_exceptions=True,
         )
         for backend, result in zip(self._backends, results, strict=False):

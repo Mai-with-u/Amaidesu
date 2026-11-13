@@ -58,6 +58,10 @@ class StreamerSpeechPayload(BasePayload):
             的编号，拦截器不覆盖非 0 值。补完仍为 0 表示未归属。
         reply_to_message_id: 本条发言回复的那条弹幕的 message_id（可选）；
             None 表示主动发言或未指向特定弹幕。
+        reply_to_user_name / reply_to_text: 被回复弹幕的发送者昵称与原文
+            （可选；与 reply_to_message_id 同源，决策期从本轮弹幕批解析，
+            宁缺毋假）。字幕小部件随字幕显示引用行用；None 表示主动发言
+            或未解析到。
         text: 主播发言文本（已 strip；空字符串不触发本事件）。
         emotion: 关联情绪标签（``Emotion`` 17 枚举值之一，小写；非法/缺失
             由回复器降级为 ``neutral``，生产者保证必有值）。
@@ -87,6 +91,20 @@ class StreamerSpeechPayload(BasePayload):
     reply_to_message_id: Optional[str] = Field(
         default=None,
         description="本条发言回复的那条弹幕的 message_id；None 表示主动发言或未指向特定弹幕",
+    )
+    reply_to_user_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "被回复弹幕的发送者昵称（与 reply_to_message_id 同源，决策期从本轮弹幕批解析）；"
+            "None 表示主动发言或未解析到，展示位不渲染引用行"
+        ),
+    )
+    reply_to_text: Optional[str] = Field(
+        default=None,
+        description=(
+            "被回复弹幕的原文（与 reply_to_message_id 同源，决策期从本轮弹幕批解析）；"
+            "None 表示主动发言或未解析到，展示位不渲染引用行"
+        ),
     )
     text: str = Field(..., description="主播发言文本")
     emotion: str = Field(..., description="关联情绪标签（Emotion 17 枚举值之一，小写；必有值）")

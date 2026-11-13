@@ -6,6 +6,8 @@
   到 ``subtitle_messages``、通过 ``_subtitle_callback`` 广播
 - ``show_subtitle`` 的 ``duration_ms`` 参数透传；``None`` 时回退到
   ``subtitle_config.auto_hide_after_ms``
+- ``show_subtitle`` 的 ``reply_quote`` 参数透传：引用弹幕（本句在回复
+  谁的哪条发言）随帧下发（``reply_user_name`` / ``reply_text``）
 - ``clear_subtitle`` 公开方法：清空 ``subtitle_messages``、广播清空
   消息（``text == ""`` 且 ``duration_ms == 0``）
 - ``subtitle_config.enabled=False`` 时 ``show_subtitle`` /
@@ -22,6 +24,7 @@ from src.modules.dashboard.widget.models import SubtitleWidgetConfig
 from src.modules.dashboard.widget.service import DanmakuWidgetService
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.subtitle.protocol import ReplyQuote
 
 
 def _make_service(
@@ -77,6 +80,23 @@ class TestShowSubtitle:
         svc = _make_service()
         await svc.show_subtitle("hello")
         assert len(svc.subtitle_messages) == 1
+
+    async def test_reply_quote_flows_into_broadcast_payload(self):
+        """引用弹幕随帧下发（``reply_user_name`` / ``reply_text``），前端渲染引用行。"""
+        svc = _make_service()
+        svc._subtitle_callback = AsyncMock()
+        quote = ReplyQuote(user_name="观众A", text="主播你好")
+        await svc.show_subtitle("你好呀观众A", reply_quote=quote)
+        data = svc._subtitle_callback.await_args.args[0]
+        assert (data["reply_user_name"], data["reply_text"]) == ("观众A", "主播你好")
+
+    async def test_without_reply_quote_payload_fields_are_none(self):
+        """无回复目标时两个引用键为 None（帧结构稳定，前端不渲染引用行）。"""
+        svc = _make_service()
+        svc._subtitle_callback = AsyncMock()
+        await svc.show_subtitle("大家好")
+        data = svc._subtitle_callback.await_args.args[0]
+        assert data["reply_user_name"] is None and data["reply_text"] is None
 
 
 # show_subtitle：subtitle_config.enabled gate

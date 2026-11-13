@@ -10,8 +10,10 @@
 
 职责：
 
-- ``show`` → 转发到 ``DanmakuWidgetService.show_subtitle(text)``；
-  ``utterance_id`` 暂不传给 widget（widget 暂无该键的展示位）
+- ``show`` → 转发到 ``DanmakuWidgetService.show_subtitle(text, reply_quote)``；
+  ``utterance_id`` 暂不传给 widget（widget 暂无该键的展示位）；
+  ``reply_quote`` 是本句在回复的那条观众发言（昵称 + 原文），widget
+  随字幕 WebSocket 帧下发、前端渲染引用行
 - ``clear`` → 转发到 ``DanmakuWidgetService.clear_subtitle()``
 - ``enabled`` → 转发 ``widget.subtitle_config.enabled``（widget 关
   闭时本 Backend 不产生副作用）
@@ -31,6 +33,8 @@ from typing import TYPE_CHECKING, Optional
 
 from src.modules.logging import get_logger
 
+from ..protocol import ReplyQuote
+
 if TYPE_CHECKING:
     from src.modules.dashboard.widget.service import DanmakuWidgetService
 
@@ -40,7 +44,7 @@ class DashboardBackend:
 
     满足 ``SubtitleBackend`` 协议（结构类型，不显式继承）：
 
-    - ``async def show(text, utterance_id=None)`` → 转发 widget.show_subtitle
+    - ``async def show(text, utterance_id=None, reply_quote=None)`` → 转发 widget.show_subtitle
     - ``async def clear()`` → 转发 widget.clear_subtitle
     - ``enabled`` 属性 → 转发 widget.subtitle_config.enabled
     """
@@ -65,15 +69,23 @@ class DashboardBackend:
         """
         return bool(self._widget is not None and self._widget.subtitle_config.enabled)
 
-    async def show(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def show(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        reply_quote: Optional[ReplyQuote] = None,
+    ) -> None:
         """推送字幕文本——转发到 widget 公开方法。
 
         ``utterance_id`` 暂不传给 widget（widget 暂无该键的展示位，
         留作未来在 Dashboard 上做关联展示如"发言 N"标记时再用）。
+        ``reply_quote`` 是本句在回复的那条观众发言（昵称 + 原文），
+        随字幕 WebSocket 帧下发，前端在主字幕上方渲染引用行；None
+        表示无回复目标，前端不显示。
         ``DanmakuWidgetService.show_subtitle`` 自身在 ``subtitle_config.enabled``
         为 False 时早退，本 Backend 不重复 gate。
         """
-        await self._widget.show_subtitle(text)
+        await self._widget.show_subtitle(text, reply_quote=reply_quote)
 
     async def clear(self) -> None:
         """清空字幕显示——转发到 widget 公开方法。

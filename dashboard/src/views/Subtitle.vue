@@ -1,6 +1,10 @@
 <template>
   <div class="subtitle-container" :style="containerStyle">
     <div v-if="subtitle" class="subtitle-area" :style="areaStyle">
+      <div v-if="replyQuote" class="reply-quote" :style="replyQuoteStyle">
+        <span class="reply-quote-name">{{ replyQuote.name }}</span>
+        <span class="reply-quote-text">{{ replyQuote.text }}</span>
+      </div>
       <span class="subtitle-text" :style="textStyle">{{ subtitle }}</span>
     </div>
     <WidgetStatusBadge :status="status" />
@@ -20,8 +24,10 @@ import WidgetStatusBadge from '@/components/widget/WidgetStatusBadge.vue';
  * infra [dashboard] 的字幕小部件配置）。字幕跟随语音生命周期显示：
  * 开始说话时出现、说完由清空消息撤下——**不按 duration_ms 自动隐藏**，
  * 直播画面上字幕中途消失等于不可见（payload 里的 duration_ms 是
- * 无消费者的遗留字段，留待配置域清理）。断线提示复用
- * WidgetStatusBadge（预览态醒目、嵌入态淡化）。
+ * 无消费者的遗留字段，留待配置域清理）。后端随帧带下 reply_user_name /
+ * reply_text（本句在回复的那条观众发言）时，在主字幕上方渲染引用行，
+ * 观众能看到主播正在回谁的哪条发言；随字幕消息整体出现/撤下。
+ * 断线提示复用 WidgetStatusBadge（预览态醒目、嵌入态淡化）。
  */
 
 interface SubtitleData {
@@ -33,6 +39,8 @@ interface SubtitleData {
   background_color?: string;
   border_color?: string;
   position?: string;
+  reply_user_name?: string | null;
+  reply_text?: string | null;
 }
 
 type SubtitlePosition = 'top' | 'bottom' | 'center';
@@ -43,6 +51,7 @@ const fontColor = ref<string>('#ffffff');
 const backgroundColor = ref<string>('rgba(0,0,0,0.45)');
 const borderColor = ref<string>('#ff8800');
 const position = ref<SubtitlePosition>('bottom');
+const replyQuote = ref<{ name: string; text: string } | null>(null);
 
 const containerStyle = computed(() => ({
   alignItems:
@@ -69,6 +78,14 @@ const textStyle = computed(() => ({
   lineHeight: '1.4',
 }));
 
+const replyQuoteStyle = computed(() => ({
+  fontSize: `${Math.max(18, Math.round(fontSize.value * 0.6))}px`,
+  color: fontColor.value,
+  opacity: '0.8',
+  textShadow:
+    '-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 0 10px rgba(0,0,0,0.8)',
+}));
+
 const { status } = useRawWebSocket('/ws/widget/subtitle', {
   onMessage: event => {
     try {
@@ -81,6 +98,11 @@ const { status } = useRawWebSocket('/ws/widget/subtitle', {
         if (data.border_color) borderColor.value = data.border_color;
         if (data.position === 'top' || data.position === 'bottom' || data.position === 'center') {
           position.value = data.position;
+        }
+        if (data.reply_user_name && data.reply_text) {
+          replyQuote.value = { name: data.reply_user_name, text: data.reply_text };
+        } else {
+          replyQuote.value = null;
         }
       }
     } catch (e) {
@@ -113,5 +135,23 @@ body,
 .subtitle-area {
   text-align: center;
   z-index: 100;
+}
+
+.reply-quote {
+  margin-bottom: 6px;
+  max-width: 72vw;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: normal;
+}
+
+.reply-quote-name {
+  font-weight: bold;
+  margin-right: 0.4em;
+}
+
+.reply-quote-text {
+  font-weight: normal;
 }
 </style>

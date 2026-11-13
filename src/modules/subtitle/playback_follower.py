@@ -30,6 +30,13 @@
 段数与边界数不齐不致命：多切按实际事件走，文本段耗尽后忽略多余事件；
 utterance 结束（finished）后其迟到事件按 utterance_id 不匹配丢弃。
 
+引用弹幕（本句在回复谁的哪条发言）不随 ``tts.utterance.*`` 走：跟随器
+额外订阅 ``streamer.speech``，按 utterance_id 记住该句的回复目标
+（有界映射，旧条目按先后挤出），显示每段字幕时反查带上——杂谈档分段
+连播时派生编号（基编号加 ``_pN`` 后缀）回退基编号查。发言事件先于语音
+合成发布，而合成首块延迟远大于事件总线一次后台派发，"先记后查"时序
+天然成立。派发直出模式不经本模块，引用随 ``show`` 调用显式携带。
+
 择源在装配期完成（有 TTS 引擎 → 本跟随器；无 → 编排层派发直出），
 两种模式互斥，非两套源同时跑。
 """
@@ -38,10 +45,11 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
+from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import (
     UtteranceFailedPayload,
     UtteranceFinishedPayload,
@@ -51,6 +59,8 @@ from src.modules.events.payloads.utterance import (
 )
 from src.modules.logging import ModuleLogger
 from src.modules.utils.time_utils import now_ms
+
+from .protocol import ReplyQuote
 
 # 停顿标点集合：句末标点（含叠用省略号/叠用叹号等）与句内停顿（逗号/分号）；
 # 切分点下沉到逗号级——真机上按句末标点切段过粗（"一逗到底"句整句不换行），
@@ -63,6 +73,11 @@ _QUOTE_CLOSERS = {"“": "”", "『": "』", "「": "」", '"': '"'}
 _MIN_SEGMENT_SHOW_MS = 800
 # 流式引擎无 duration_ms 时的兜底语速估算：每字约 250ms
 _FALLBACK_MS_PER_CHAR = 250
+# 回复目标映射的容量上限：只服务"当前正在显示的字幕"，超过即挤掉最早登记的；
+# 杂谈档分段派生编号共享基编号条目，不占额外容量
+_QUOTE_CACHE_MAX = 64
+# 杂谈档分段连播的派生编号后缀（基编号加 _p2 / _p3 …），反查引用时剥掉
+_PART_SUFFIX_PATTERN = re.compile(r"_p\d+$")
 
 
 def split_subtitle_segments(text: str) -> List[str]:
@@ -163,13 +178,42 @@ class _PlaybackSubtitleController:
         # 当前段上屏时刻：最短段显示时长的计时锚点
         self._last_switch_ms = 0
         self._cancel_timer: Optional[Callable[[], None]] = None
+        # utterance_id → 该句回复的观众发言；streamer.speech 订阅登记，
+        # 显示每段字幕时反查带上（容量超限挤最早条目）
+        self._reply_quotes: Dict[str, ReplyQuote] = {}
+
+    def remember_quote(self, utterance_id: str, quote: ReplyQuote) -> None:
+        """登记一句发言的回复目标（streamer.speech 订阅回调的落点）。
+
+        按 utterance_id 覆盖登记；容量超限时按登记先后挤出最早条目。
+        """
+        if utterance_id in self._reply_quotes:
+            del self._reply_quotes[utterance_id]
+        self._reply_quotes[utterance_id] = quote
+        while len(self._reply_quotes) > _QUOTE_CACHE_MAX:
+            oldest = next(iter(self._reply_quotes))
+            del self._reply_quotes[oldest]
+
+    def quote_for(self, utterance_id: str) -> Optional[ReplyQuote]:
+        """反查一句字幕的回复目标；查不到返回 None（不渲染引用行）。
+
+        分段连播的派生编号（基编号加 ``_pN`` 后缀）在基编号下查不到时
+        剥掉后缀回退基编号——几句共用同一次决策的回复目标。
+        """
+        quote = self._reply_quotes.get(utterance_id)
+        if quote is not None:
+            return quote
+        base_id = _PART_SUFFIX_PATTERN.sub("", utterance_id)
+        if base_id != utterance_id:
+            return self._reply_quotes.get(base_id)
+        return None
 
     async def on_started(self, payload: UtteranceStartedPayload) -> None:
         self._cancel_session()
         segments = split_subtitle_segments(payload.speech_text)
         if not segments:
             return
-        await self._show(segments[0], payload.utterance_id)
+        await self._show(segments[0], payload.utterance_id, self.quote_for(payload.utterance_id))
         self._last_switch_ms = self._now_ms()
         if len(segments) == 1:
             return
@@ -180,7 +224,7 @@ class _PlaybackSubtitleController:
     async def on_failed(self, payload: UtteranceFailedPayload) -> None:
         # 运行期逐句降级：合成失败该句照常显示全文（无声音也要给文本），不分段
         self._cancel_session()
-        await self._show(payload.speech_text, payload.utterance_id)
+        await self._show(payload.speech_text, payload.utterance_id, self.quote_for(payload.utterance_id))
 
     async def on_finished(self, payload: UtteranceFinishedPayload) -> None:
         self._cancel_session()
@@ -234,7 +278,11 @@ class _PlaybackSubtitleController:
         if not session.advance():
             self._cancel_session()
             return
-        await self._show(session.segments[session.current_index], session.utterance_id)
+        await self._show(
+            session.segments[session.current_index],
+            session.utterance_id,
+            self.quote_for(session.utterance_id),
+        )
         self._last_switch_ms = self._now_ms()
         self._arm_fallback_timer()
 
@@ -242,9 +290,9 @@ class _PlaybackSubtitleController:
         self._disarm_timer()
         self._session = None
 
-    async def _show(self, text: str, utterance_id: str) -> None:
+    async def _show(self, text: str, utterance_id: str, quote: Optional[ReplyQuote] = None) -> None:
         try:
-            await self._subtitle_service.show(text, utterance_id)
+            await self._subtitle_service.show(text, utterance_id, quote)
         except Exception as exc:  # noqa: BLE001 - 装饰性路径边界
             self._logger.warning(f"字幕 show 异常（已忽略）: utterance_id={utterance_id}, err={exc}")
 
@@ -262,15 +310,17 @@ def bind_playback_subtitle(
     *,
     now_ms_fn: Callable[[], int] = now_ms,
     scheduler: Any = None,
-) -> Optional[Tuple[Any, Any, Any, Any]]:
-    """订阅 ``tts.utterance.*`` 驱动字幕分段显示/清空；返回 handler 组供退订。
+) -> Optional[Tuple[Any, Any, Any, Any, Any, Any]]:
+    """订阅 ``tts.utterance.*`` 驱动字幕分段显示/清空 + ``streamer.speech``
+    登记回复目标；返回 handler 组供退订。
 
     handler 内部对 ``SubtitleService.show`` / ``clear`` 与分段会话做异常隔离
     （字幕是装饰性路径，异常吞掉记日志，不影响 TTS 生命周期广播的其他消费者）。
 
     Args:
         event_bus: 事件总线；None 或 subtitle_service 为 None 时不绑定。
-        subtitle_service: 字幕服务（``show(text, utterance_id)`` / ``clear()``）。
+        subtitle_service: 字幕服务（``show(text, utterance_id, reply_quote)`` /
+            ``clear()``）。
         logger: 项目门面 logger。
         now_ms_fn: 毫秒时刻入口（可注入假时钟供测试）。
         scheduler: 段切换兜底定时器（``schedule(delay_ms, callback) → cancel``）；
@@ -295,6 +345,13 @@ def bind_playback_subtitle(
     async def on_playback_started(event_name: str, payload: UtterancePlaybackStartedPayload, source: str) -> None:
         await controller.on_playback_started(payload)
 
+    async def on_speech(event_name: str, payload: StreamerSpeechPayload, source: str) -> None:
+        user_name = payload.reply_to_user_name
+        text = payload.reply_to_text
+        if not user_name or not text:
+            return  # 主动发言 / 未解析到回复目标：无引用可登记
+        controller.remember_quote(payload.utterance_id, ReplyQuote(user_name=user_name, text=text))
+
     event_bus.on(CoreEvents.TTS_UTTERANCE_STARTED, on_started, model_class=UtteranceStartedPayload)
     event_bus.on(CoreEvents.TTS_UTTERANCE_FAILED, on_failed, model_class=UtteranceFailedPayload)
     event_bus.on(CoreEvents.TTS_UTTERANCE_FINISHED, on_finished, model_class=UtteranceFinishedPayload)
@@ -302,11 +359,13 @@ def bind_playback_subtitle(
     event_bus.on(
         CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, on_playback_started, model_class=UtterancePlaybackStartedPayload
     )
+    event_bus.on(CoreEvents.STREAMER_SPEECH, on_speech, model_class=StreamerSpeechPayload)
     logger.debug(
         "已订阅 tts.utterance.* → 字幕跟随播放（started 分段显示第一段，playback_started 锚定出声时刻"
-        "起跑估算，句边界事件与估算定时双路切换，failed 显示全文，finished 清空）"
+        "起跑估算，句边界事件与估算定时双路切换，failed 显示全文，finished 清空）；"
+        "streamer.speech → 登记回复目标随字幕显示引用行"
     )
-    return (on_started, on_failed, on_finished, on_boundary, on_playback_started)
+    return (on_started, on_failed, on_finished, on_boundary, on_playback_started, on_speech)
 
 
 def unbind_playback_subtitle(
@@ -324,6 +383,7 @@ def unbind_playback_subtitle(
             CoreEvents.TTS_UTTERANCE_FINISHED,
             CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY,
             CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED,
+            CoreEvents.STREAMER_SPEECH,
         ),
         handlers,
         strict=True,

@@ -17,12 +17,12 @@
   并行广播时捕获并记 ERROR（隔离故障，不拖垮其他后端）；协议本身
   不规定 ``show`` / ``clear`` 失败时的抛错语义。
 
-调用入口 ``SubtitleService.show(text, utterance_id)`` / ``clear()``
+调用入口 ``SubtitleService.show(text, utterance_id, reply_quote)`` / ``clear()``
 向已注册的全部 Backend 并行广播。
 
 成员（与 ``SubtitleService`` 调用契约一一对应）：
 
-- ``async def show(text, utterance_id=None) -> None`` 推送一次字幕
+- ``async def show(text, utterance_id=None, reply_quote=None) -> None`` 推送一次字幕
 - ``async def clear() -> None`` 清空字幕
 
 参考模式：TTS 包的 ``TTSProvider``。
@@ -31,6 +31,20 @@
 from __future__ import annotations
 
 from typing import Optional, Protocol, runtime_checkable
+
+from pydantic import BaseModel, Field
+
+
+class ReplyQuote(BaseModel):
+    """本句字幕在回复的那条观众发言（昵称 + 原文）。
+
+    由决策层在解析回复目标时从本轮弹幕批顺带取出，沿
+    ``SubtitleService.show`` 链显式传参到各展示位；无回复目标或解析
+    不中时整份为 None（宁缺毋假，不显示引用行）。
+    """
+
+    user_name: str = Field(description="被回复弹幕的发送者昵称")
+    text: str = Field(description="被回复弹幕的原文")
 
 
 @runtime_checkable
@@ -44,7 +58,12 @@ class SubtitleBackend(Protocol):
     给鸭子类型增加运行期负担。
     """
 
-    async def show(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def show(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        reply_quote: Optional[ReplyQuote] = None,
+    ) -> None:
         """一次性推送全量字幕文本。
 
         Args:
@@ -54,6 +73,9 @@ class SubtitleBackend(Protocol):
                 关联 ``tts.utterance`` / ``streamer.speech`` 事件使用
                 （前后端可借此对齐"哪段语音对应哪段字幕"）；None 时
                 表示手动 / 直调场景，无 utterance 上下文。
+            reply_quote: 本句在回复的那条观众发言（昵称 + 原文）；
+                None 表示无回复目标（主动发言或未解析到），展示位不
+                渲染引用行。
 
         错误语义：实现可在内部抛任意异常，``SubtitleService`` 会捕获
         隔离并记 ERROR（不影响其他 Backend）。

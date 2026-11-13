@@ -9,19 +9,25 @@ import pytest
 
 from src.modules.subtitle import SubtitleBackend, SubtitleService, TkGuiBackend, build_subtitle_infrastructure
 from src.modules.subtitle.backends.tk_gui_service import SubtitleGuiService
+from src.modules.subtitle.protocol import ReplyQuote
 
 
 class _Backend:
     """满足 SubtitleBackend 协议的假后端：记录调用，可配置抛错；enabled 为 None 时不带该成员。"""
 
     def __init__(self, *, show_error: Optional[BaseException] = None, clear_error: Optional[BaseException] = None):
-        self.show_calls: list[tuple[str, Optional[str]]] = []
+        self.show_calls: list[tuple[str, Optional[str], Optional[ReplyQuote]]] = []
         self.clear_calls = 0
         self._show_error = show_error
         self._clear_error = clear_error
 
-    async def show(self, text: str, utterance_id: Optional[str] = None) -> None:
-        self.show_calls.append((text, utterance_id))
+    async def show(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        reply_quote: Optional[ReplyQuote] = None,
+    ) -> None:
+        self.show_calls.append((text, utterance_id, reply_quote))
         if self._show_error is not None:
             raise self._show_error
 
@@ -75,12 +81,25 @@ async def test_show_and_clear_broadcast_to_every_backend() -> None:
     svc.register_backend(second)
 
     await svc.show("hello", utterance_id="u-1")
-    await svc.show("plain text")  # utterance_id 缺省时透传 None
+    await svc.show("plain text")  # utterance_id / reply_quote 缺省时透传 None
     await svc.clear()
     await svc.clear()
 
     for backend in (first, second):
-        assert backend.show_calls == [("hello", "u-1"), ("plain text", None)] and backend.clear_calls == 2
+        assert backend.show_calls == [("hello", "u-1", None), ("plain text", None, None)] and backend.clear_calls == 2
+
+
+async def test_show_forwards_reply_quote_to_every_backend() -> None:
+    svc = SubtitleService()
+    first, second = _Backend(), _Backend()
+    svc.register_backend(first)
+    svc.register_backend(second)
+
+    quote = ReplyQuote(user_name="观众A", text="主播你好")
+    await svc.show("你好呀观众A", utterance_id="u-9", reply_quote=quote)
+
+    assert first.show_calls == [("你好呀观众A", "u-9", quote)]
+    assert second.show_calls == [("你好呀观众A", "u-9", quote)]
 
 
 async def test_failing_backend_never_blocks_the_others() -> None:
@@ -91,7 +110,7 @@ async def test_failing_backend_never_blocks_the_others() -> None:
     svc.register_backend(ok)
     await svc.show("hello")  # 异常不向上传播，其他后端照常被调用
     await svc.clear()
-    assert len(boom.show_calls) == 1 and ok.show_calls == [("hello", None)]
+    assert len(boom.show_calls) == 1 and ok.show_calls == [("hello", None, None)]
     assert boom.clear_calls == 1 and ok.clear_calls == 1
 
     everyone_fails = SubtitleService()

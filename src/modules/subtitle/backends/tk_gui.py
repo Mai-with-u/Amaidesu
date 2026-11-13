@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Optional
 
 from src.modules.logging import get_logger
 
+from ..protocol import ReplyQuote
+
 if TYPE_CHECKING:
     from .tk_gui_service import SubtitleGuiService
 
@@ -35,7 +37,7 @@ class TkGuiBackend:
 
     满足 ``SubtitleBackend`` 协议（结构类型，不显式继承）：
 
-    - ``async def show(text, utterance_id=None)`` → 转发入队
+    - ``async def show(text, utterance_id=None, reply_quote=None)`` → 转发入队
     - ``async def clear()`` → 转发清空
     - ``enabled`` 属性 → 转发 GUI 服务可用性
     """
@@ -56,15 +58,21 @@ class TkGuiBackend:
         """GUI 后端是否可用（CustomTkinter 缺失时为 False）。"""
         return bool(self._service.enabled)
 
-    async def show(self, text: str, utterance_id: Optional[str] = None) -> None:
+    async def show(
+        self,
+        text: str,
+        utterance_id: Optional[str] = None,
+        reply_quote: Optional[ReplyQuote] = None,
+    ) -> None:
         """推送字幕文本——线程安全入队。
 
         ``SubtitleGuiService.push_subtitle`` 是同步方法，内部走
         ``queue.Queue.put``；本方法直接 await 调用即可（无 await
         不挂起，但保留 async 形态以满足协议签名）。
         """
-        # utterance_id 暂不传给 GUI 服务（GUI 不消费该键，留作未来
-        # 在 GUI 上做关联展示如"发言 N"标记时再用）。
+        # utterance_id / reply_quote 暂不传给 GUI 服务（GUI 不消费这两个
+        # 键；引用弹幕展示位定在 Dashboard 字幕小部件，Tk 桌面调试窗
+        # 维持纯字幕文本）。
         self._service.push_subtitle(text)
 
     async def clear(self) -> None:

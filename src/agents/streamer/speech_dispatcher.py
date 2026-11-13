@@ -27,6 +27,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.logging import ModuleLogger, get_logger
 from src.modules.subtitle.playback_follower import bind_playback_subtitle, unbind_playback_subtitle
+from src.modules.subtitle.protocol import ReplyQuote
 from src.modules.utils.time_utils import now_ms
 
 from .talk.speech_mode import split_talk_paragraph
@@ -314,6 +315,7 @@ class SpeechDispatcher:
         *,
         target_user_id: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
+        reply_quote: Optional[ReplyQuote] = None,
         round_id: str = "",
         live_session_id: int = 0,
         memory_refs: Optional[Sequence[str]] = None,
@@ -332,6 +334,9 @@ class SpeechDispatcher:
                 ``streamer.speech`` 业务事件，None 表示主动发言/无特定对象）。
             reply_to_message_id: 本次回复所指向弹幕的 message_id（可选；
                 来自 Planner 决策输出，透传到发言事件并落库为互动关联）。
+            reply_quote: 本次回复的引用弹幕（发送者昵称 + 原文，可选）；
+                透传到发言事件与字幕 show 链，字幕小部件显示引用行用，
+                None 表示无回复目标/未解析到。
             round_id: 决策轮次 ID（可选；透传到 ``streamer.speech`` 事件供
                 观察器把发言卡与该轮思考过程成组）。
             memory_refs: 这句点名用了哪几条旧事（记忆编号文本，如 约#7；落库为
@@ -404,13 +409,14 @@ class SpeechDispatcher:
                     cleaned_emotion_intensity,
                     target_user_id,
                     reply_to_message_id=reply_to_message_id,
+                    reply_quote=reply_quote,
                     round_id=round_id,
                     llm_request_id=reply_payload.get("llm_request_id"),
                     live_session_id=live_session_id,
                     memory_refs=list(memory_refs or ()),
                     reply_player=reply_player,
                 )
-                self._schedule_subtitle_show(cleaned_speech, utterance_id)
+                self._schedule_subtitle_show(cleaned_speech, utterance_id, reply_quote=reply_quote)
                 self._notify_spoken(cleaned_speech, source="planner")
                 if self._tts_enabled and self._utterance_queue is not None:
                     # 杂谈档（reply 工具在结果里标了 speech_mode=talk）长段拆句连播，其余整句
@@ -589,6 +595,7 @@ class SpeechDispatcher:
         emotion_intensity: float,
         target_user_id: Optional[str] = None,
         reply_to_message_id: Optional[str] = None,
+        reply_quote: Optional[ReplyQuote] = None,
         round_id: str = "",
         llm_request_id: Optional[str] = None,
         emotion_at_playback: bool = False,
@@ -612,6 +619,8 @@ class SpeechDispatcher:
             emotion_intensity=emotion_intensity,
             target_user_id=target_user_id,
             reply_to_message_id=reply_to_message_id,
+            reply_to_user_name=reply_quote.user_name if reply_quote else None,
+            reply_to_text=reply_quote.text if reply_quote else None,
             llm_request_id=llm_request_id,
             emotion_at_playback=emotion_at_playback,
             memory_refs=list(memory_refs or ()),
@@ -630,10 +639,10 @@ class SpeechDispatcher:
         except Exception as exc:  # noqa: BLE001 - 观测事件不阻断决策循环
             self._logger.warning(f"streamer.speech 发布失败（已忽略）: utterance_id={utterance_id}, err={exc}")
 
-    def _schedule_subtitle_show(self, text: str, utterance_id: str) -> None:
+    def _schedule_subtitle_show(self, text: str, utterance_id: str, reply_quote: Optional[ReplyQuote] = None) -> None:
         """异步触发字幕推送（异步扇出不阻塞决策循环；任务强引用持有，停止时限期汇合）。
 
-        调用 ``SubtitleService.show(text, utterance_id)``：服务内部并行
+        调用 ``SubtitleService.show(text, utterance_id, reply_quote)``：服务内部并行
         广播到所有已注册 Backend，单 Backend 故障隔离由服务负责，本方法
         只关心"任务跑出去"。与 ``_emit_streamer_speech`` 同模式——
         决策循环同步路径绝不 await 异步操作。字幕跟随播放模式（构造期已
@@ -646,7 +655,7 @@ class SpeechDispatcher:
 
         async def _do_show() -> None:
             try:
-                await service.show(text, utterance_id)
+                await service.show(text, utterance_id, reply_quote)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - 异步背景任务边界

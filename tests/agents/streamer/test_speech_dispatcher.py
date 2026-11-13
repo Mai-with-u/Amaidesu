@@ -26,6 +26,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.planner import PlannerDecisionPayload, StreamerStagePayload
 from src.modules.events.payloads.speech import StreamerSpeechPayload
 from src.modules.events.payloads.utterance import UtteranceStartedPayload
+from src.modules.subtitle.protocol import ReplyQuote
 from src.modules.tools.registry import ToolRegistry
 from tests.agents.streamer.helpers import make_streamer_agent
 
@@ -100,6 +101,39 @@ async def test_dispatch_fans_out_with_shared_utterance_id(started) -> None:
     assert (payload.emotion, payload.emotion_intensity) == ("happy", 0.8)
     assert engine.calls == [("你好", utterance_id)]
     assert dispatcher.utterance_queue.get_stats()["enqueued"] == 1
+
+
+async def test_dispatch_carries_reply_quote_to_event_and_subtitle(started) -> None:
+    """引用弹幕（回的是谁说的哪句）随发言事件与字幕 show 链出站：直出模式字幕带上引用。"""
+    bus = EventBus()
+    captured = _capture_speech(bus)
+    subtitle = MagicMock()
+    subtitle.show = AsyncMock()
+    dispatcher = await started(bus=bus, subtitle=subtitle)  # 无引擎 → 派发直出
+
+    quote = ReplyQuote(user_name="观众A", text="主播你好")
+    await dispatcher.dispatch(
+        {"speech": "你好呀", "emotion": {}},
+        reply_to_message_id="m1",
+        reply_quote=quote,
+    )
+    await _until(lambda: captured and subtitle.show.await_count)
+
+    payload = captured[0][1]
+    assert (payload.reply_to_user_name, payload.reply_to_text) == ("观众A", "主播你好")
+    assert subtitle.show.await_args.args[2] == quote
+
+
+async def test_dispatch_without_reply_quote_leaves_event_fields_none(started) -> None:
+    bus = EventBus()
+    captured = _capture_speech(bus)
+    dispatcher = await started(bus=bus)
+
+    await dispatcher.dispatch({"speech": "大家好呀", "emotion": {}})
+    await _until(lambda: captured)
+
+    payload = captured[0][1]
+    assert payload.reply_to_user_name is None and payload.reply_to_text is None
 
 
 @pytest.mark.parametrize(("given", "expected"), [(None, 0), (42, 42)], ids=["stamped_later", "closing_session"])
@@ -222,7 +256,7 @@ async def test_subtitle_modes_are_mutually_exclusive(started) -> None:
         source="test",
     )
     await _until(lambda: follow_subtitle.show.await_count == 1)
-    assert follow_subtitle.show.await_args.args == ("第一句", engine.calls[0][1])
+    assert follow_subtitle.show.await_args.args == ("第一句", engine.calls[0][1], None)
 
     # 无引擎：直出模式，派发即显示
     direct_subtitle = MagicMock()

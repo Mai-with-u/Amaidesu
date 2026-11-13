@@ -28,6 +28,7 @@ from src.modules.events.payloads.planner import (
 )
 from src.modules.events.payloads.room import RoomMessagePayload
 from src.modules.logging import ModuleLogger, get_logger
+from src.modules.subtitle.protocol import ReplyQuote
 from src.modules.utils.time_utils import now_ms
 
 from src.agents.streamer import canonical
@@ -45,7 +46,9 @@ from .trigger_cause import TriggerCause, TriggerKind
 __all__ = [
     "DecisionRoundExecutor",
     "WindowOpener",
+    "find_reply_target_message",
     "resolve_reply_message_id",
+    "resolve_reply_quote",
     "resolve_reply_target_user",
 ]
 
@@ -420,12 +423,14 @@ class DecisionRoundExecutor:
         # 表达生成）；此处仅把产出送发言管线（speech → TTS / emotion → VTS）。
         # await 保证 streamer.speech 先于本轮 planner.decision 与 idle 状态发出
         target_user_id = resolve_reply_target_user(outcome, batch)
+        reply_quote = resolve_reply_quote(outcome, batch)
         # 付费触发最高优（2）、回应观众弹幕批（1）可收住正在连播的杂谈独白后半句先接话；主动独白为 0
         dispatch_priority = 2 if forced else (1 if (batch or target_user_id or result["reply_to_message_id"]) else 0)
         speech_info = await self._speech.dispatch(
             outcome.reply_payload,
             target_user_id=target_user_id,
             reply_to_message_id=result["reply_to_message_id"],
+            reply_quote=reply_quote,
             round_id=round_id,
             live_session_id=scope_pk if scope_pk is not None else 0,
             memory_refs=list(outcome.memory_refs),
@@ -598,19 +603,18 @@ def resolve_reply_target_user(
         return None
 
 
-def resolve_reply_message_id(
+def find_reply_target_message(
     outcome: RoundOutcome,
     batch: List[RoomMessagePayload],
-) -> Optional[str]:
-    """把 planner 给的回复指向（reply_to / target）解析为本轮批内真 message_id。
+) -> Optional[RoomMessagePayload]:
+    """把 planner 给的回复指向（reply_to / target）定位到本轮批内那条弹幕。
 
     reply_to / target 是 planner LLM 抄自 canonical 行尾 ``[id:…]`` 的自由文本，
-    可能是消息 ID、``[id:…]`` 引用写法、也可能是"用户名: 内容"整行展示串——
-    直接落库会让前端反查（按 message_id 等值）拿不到对应弹幕。这里在落库前
-    解析，两档匹配：target 恰为批内某条弹幕的 message_id 时直用；"用户名: 内容"
-    形态按用户名精确匹配、且该用户本轮仅一条弹幕时取那条。其余一律返回 None
-    （宁缺毋假——存错关联键比不存更糟）。只做解析，不写状态、不发事件；
-    异常记 warning 不上抛（决策循环必须继续）。
+    可能是消息 ID、``[id:…]`` 引用写法、也可能是"用户名: 内容"整行展示串。
+    两档匹配：target 归一后恰为批内某条弹幕的 message_id 时取那条；"用户名:
+    内容"形态按用户名精确匹配、且该用户本轮仅一条弹幕时取那条。其余一律
+    返回 None（宁缺毋假——关联错弹幕比不关联更糟）。只做解析，不写状态、
+    不发事件；异常记 warning 不上抛（决策循环必须继续）。
     """
     reply_to = outcome.reply_to
     target = reply_to or outcome.target
@@ -622,8 +626,10 @@ def resolve_reply_message_id(
     try:
         # ``[id:…]`` / ``id:…`` 引用写法归一成裸消息 ID（截断的 "[id:xxx" 也能归一）
         message_id = canonical.normalize_message_id(target).strip()
-        if message_id and any(getattr(msg, "message_id", None) == message_id for msg in batch):
-            return message_id
+        if message_id:
+            for msg in batch:
+                if getattr(msg, "message_id", None) == message_id:
+                    return msg
         # "用户名: 内容" 形态：用户名精确匹配，该用户本轮仅一条弹幕才取
         user, sep, _ = target.partition(":")
         if not sep:
@@ -633,9 +639,47 @@ def resolve_reply_message_id(
             return None
         hits = [msg for msg in batch if getattr(getattr(msg, "user", None), "name", None) == user_name]
         if len(hits) == 1:
-            hit_id = getattr(hits[0], "message_id", None)
-            return hit_id if isinstance(hit_id, str) and hit_id else None
+            return hits[0]
         return None
     except Exception as exc:
-        _MODULE_LOGGER.warning(f"解析回复关联键异常: {exc}")
+        _MODULE_LOGGER.warning(f"定位回复目标弹幕异常: {exc}")
         return None
+
+
+def resolve_reply_message_id(
+    outcome: RoundOutcome,
+    batch: List[RoomMessagePayload],
+) -> Optional[str]:
+    """把 planner 给的回复指向解析为本轮批内真 message_id。
+
+    定位规则见 :meth:`find_reply_target_message`；定位到弹幕后返回其
+    message_id，非字符串或空串按 None 处理（宁缺毋假——存错关联键比
+    不存更糟）。
+    """
+    message = find_reply_target_message(outcome, batch)
+    if message is None:
+        return None
+    message_id = getattr(message, "message_id", None)
+    return message_id if isinstance(message_id, str) and message_id else None
+
+
+def resolve_reply_quote(
+    outcome: RoundOutcome,
+    batch: List[RoomMessagePayload],
+) -> Optional[ReplyQuote]:
+    """解析本次回复的引用弹幕（发送者昵称 + 原文）。
+
+    与 :meth:`resolve_reply_message_id` 同源定位到同一条弹幕；昵称或
+    原文缺失时返回 None（宁缺毋假，展示位不渲染引用行）。随发言事件
+    与字幕 show 链出站，供字幕小部件显示"正在回谁的哪条发言"。
+    """
+    message = find_reply_target_message(outcome, batch)
+    if message is None:
+        return None
+    user_name = getattr(getattr(message, "user", None), "name", None)
+    content = getattr(message, "content", None)
+    if not isinstance(user_name, str) or not user_name:
+        return None
+    if not isinstance(content, str) or not content:
+        return None
+    return ReplyQuote(user_name=user_name, text=content)

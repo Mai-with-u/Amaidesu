@@ -6,9 +6,15 @@ from typing import List, Optional
 
 import pytest
 
-from src.agents.streamer.decision_executor import resolve_reply_message_id, resolve_reply_target_user
+from src.agents.streamer.decision_executor import (
+    find_reply_target_message,
+    resolve_reply_message_id,
+    resolve_reply_quote,
+    resolve_reply_target_user,
+)
 from src.agents.streamer.planner import RoundOutcome
 from src.modules.events.payloads.room import RoomMessagePayload, RoomMessageUser
+from src.modules.subtitle.protocol import ReplyQuote
 
 
 def _msg(text: str, user_id: str, message_id: str) -> RoomMessagePayload:
@@ -66,3 +72,30 @@ _BATCH_DUP: List[RoomMessagePayload] = [
 )
 def test_resolve_reply_message_id(plan: RoundOutcome, batch: list, expected: Optional[str]) -> None:
     assert resolve_reply_message_id(plan, batch) == expected
+
+
+# 回复目标定位与引用弹幕（昵称 + 原文）：与 message_id 同源定位
+
+
+def test_find_reply_target_message_returns_the_batch_message() -> None:
+    assert find_reply_target_message(RoundOutcome(target="m1"), _BATCH) is _BATCH[0]
+    assert find_reply_target_message(RoundOutcome(reply_to="[id:m2]"), _BATCH) is _BATCH[1]
+    assert find_reply_target_message(RoundOutcome(reply_to="user_bob: 你好呀主播"), _BATCH) is _BATCH[1]
+    assert find_reply_target_message(RoundOutcome(target="不存在的id"), _BATCH) is None
+    assert find_reply_target_message(RoundOutcome(target=None), _BATCH) is None
+
+
+@pytest.mark.parametrize(
+    ("plan", "batch", "expected"),
+    [
+        (RoundOutcome(target="m1"), _BATCH, ReplyQuote(user_name="user_alice", text="今天玩什么？")),
+        (RoundOutcome(reply_to="[id:m3"), _BATCH, ReplyQuote(user_name="user_carol", text="ccc")),
+        (RoundOutcome(reply_to="user_bob: 你好呀主播"), _BATCH, ReplyQuote(user_name="user_bob", text="你好呀主播")),
+        (RoundOutcome(reply_to="该死的断触: 第二条"), _BATCH_DUP, None),  # 该用户本轮两条，宁缺毋假
+        (RoundOutcome(target="不存在的id"), _BATCH, None),  # 解析不中不显示引用行
+        (RoundOutcome(target=None), _BATCH, None),
+        (RoundOutcome(target="m1"), [], None),
+    ],
+)
+def test_resolve_reply_quote(plan: RoundOutcome, batch: list, expected: Optional[ReplyQuote]) -> None:
+    assert resolve_reply_quote(plan, batch) == expected
