@@ -33,6 +33,7 @@ scripts/memory_eval/
   live_side_effects.py          直播库上复算唠叨指标（只读，只出编号和数字）与 `--selftest`
   review_diff.py                人工改动统计：整理写的档案被人改了多少（只读）与 `--selftest`
   retrieval.py                  语义一路门槛核对：在真实库存下的向量上量原话命中与误推（只读）与 `--selftest`
+  longmemeval.py               LongMemEval 跨场召回评测：临时库上走生产检索链路量召回率与 `--selftest`
   README.md                     本文件
 ```
 
@@ -406,6 +407,43 @@ uv run python scripts/memory_eval/review_diff.py --selftest
 uv run python scripts/memory_eval/retrieval.py --real <直播库副本>
 uv run python scripts/memory_eval/retrieval.py --selftest
 ```
+
+## LongMemEval 跨场召回（longmemeval.py）
+
+拿公开的 LongMemEval 基准量我方的跨场召回与副作用：语料灌进临时库，走生产的写入接口、索引任务
+（循环补算至 `pending_total == 0`）与回想工具（`MemoryRecallService.recall_detailed`），直接按
+真实入选的前 8 条判定。跑完即弃，不碰任何真实库。
+
+正向召回分三种口径（只统计语料里标了 `has_answer` 的可回答题），再配三项副作用指标：
+
+- **A（前 8 条含答案轮）**：召回的对不对——入选条目里有没有含答案的那一轮，衡量检索召回能力；
+- **B（第 1 条是答案轮）**：排序对不对——答案轮排第一的比例；
+- **C（结果文本含答案字符串）**：金标准答案措辞原样出现的比例。仅作对照，不代表检索质量：
+  LongMemEval 里金标准答案原样出现在语料里的题只占 46.6%（`single-session-preference` 为 0%），
+  其余题是改述或归纳句，拿答案措辞做子串匹配会大量误判未中；
+- **副作用指标**（与召回成对看）：**同源重复率**（同一轮台词与引用它的档案行重复占掉的名额占比，
+  正常应为 0）、**有答案题平均伴随无关条数**、**无答案题非空率与平均返回条数**（查不到时往上下文里塞了
+  多少似是而非的旧话，防诱导张冠李戴）。
+
+数据集档位与两个开关决定难度，对账时必须一起报：
+
+- **数据集档位**：官方 `longmemeval_oracle.json` 已剥离全部无关闲聊场次（每题中位仅约 23 轮），在
+  `per_item` 下取前 8 条等于捞走全库三分之一以上，只能看无干扰上限；标准检索应跑带约 40 场干扰对话的
+  `longmemeval_s`。
+- `--shape` 建库形态：`speech_only`（每轮一条台词）与 `speech_plus_archive`（每轮一条台词加一条引用它的
+  档案行，检验回想工具同源合并后不双占名额）。
+- `--isolation` 库隔离方式：`per_item`（每题独立建库）与 `shared`（先把全部题目的语料灌入同一库并补齐索引，
+  再统一跑全部查询）。主播一场直播常有三五百句台词，播满二三十场就到上万条规模；`oracle` 在 `shared` 下约
+  1.1 万轮，反映的正是跨场记忆库滚大后的真实稀释效应（尤其在未开语义嵌入时对改述类问题的影响），不能只看
+  `oracle + per_item` 的单题小库数字。
+
+```bash
+uv run python scripts/memory_eval/longmemeval.py --dataset <LongMemEval数据.json>
+uv run python scripts/memory_eval/longmemeval.py --dataset ... --shape speech_plus_archive --isolation shared
+uv run python scripts/memory_eval/longmemeval.py --selftest
+```
+
+数据要自己从 LongMemEval 官方取；仓库里不放它的原始数据。
 
 ## 档案快照多场序列（archive_rolling.py）
 
