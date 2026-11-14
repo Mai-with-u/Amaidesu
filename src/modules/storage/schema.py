@@ -61,7 +61,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 42
+SCHEMA_VERSION: int = 43
 
 
 # =============================================================================
@@ -551,7 +551,8 @@ CREATE TABLE IF NOT EXISTS archive_lines (
     human_locked     INTEGER NOT NULL DEFAULT 0,
     source           TEXT NOT NULL DEFAULT 'streamer',
     viewer_chat_id   INTEGER REFERENCES live_chat(id) ON DELETE CASCADE,
-    viewer_word      TEXT NOT NULL DEFAULT ''
+    viewer_word      TEXT NOT NULL DEFAULT '',
+    highlight        INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_archive_lines_session ON archive_lines(live_session_id);
 """.strip()
@@ -577,6 +578,7 @@ CREATE TABLE IF NOT EXISTS archive_snapshot_lines (
     lasting         INTEGER NOT NULL DEFAULT 0,
     seen_at_ms      INTEGER NOT NULL,
     pinned          INTEGER NOT NULL DEFAULT 0,
+    highlight       INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (live_session_id, archive_line_id)
 );
 CREATE INDEX IF NOT EXISTS idx_archive_snapshot_lines_line ON archive_snapshot_lines(archive_line_id);

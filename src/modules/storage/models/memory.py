@@ -192,10 +192,11 @@ class ArchiveLine(BaseModel):
             '渲染原话时和它相同的那一段不换成"那位观众"——观众的名字和起的名字撞上时，起的名字照说'
         ),
     )
+    highlight: bool = Field(default=False, description="是否整场最有代表性的共同经历、大工程落成或翻车名场面")
 
 
 class SnapshotLine(BaseModel):
-    """快照里的一行：引用的档案行原样带出，加快照自己的三项标注。"""
+    """快照里的一行：引用的档案行原样带出，加快照自己的四项标注。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -203,6 +204,7 @@ class SnapshotLine(BaseModel):
     lasting: bool = Field(default=False, description="是否名字、住处、关系这类稳定的事（超出上限时先留）")
     seen_at_ms: int = Field(..., description="最近一次写下或再提起这件事的那一场的开播时刻")
     pinned: bool = Field(default=False, description="运营者放回快照或新增的行（取舍时排在稳定的事之前）")
+    highlight: bool = Field(default=False, description="是否代表性名场面（独立保留名额，不被两场普通事件挤出）")
 
 
 class ArchiveSnapshot(BaseModel):
@@ -371,6 +373,9 @@ class PendingArchiveLine(BaseModel):
     save_id: str = Field(default="", description="那件事发生时角色所在的游戏存档编号；空串 = 不分存档或存档不明")
     save_name: str = Field(default="", description="那个存档给人看的名字（只显示，不当键）")
     lasting: bool = Field(default=False, description="是否名字、住处、关系这类稳定的事（快照标注）")
+    highlight: bool = Field(
+        default=False, description="是否代表性名场面（单场新事至多 2 条，未核实完成说法强制为 False）"
+    )
     in_snapshot: bool = Field(default=True, description="是否进本场快照；超出上限被挤出的照样写成本场档案行")
     keywords: List[str] = Field(default_factory=list, description="代码核过的触发词（至多 4 个）")
     place: str = Field(default="", description="代码核过的记住地点名；空串 = 不挂地点")
@@ -418,6 +423,7 @@ class KeptSnapshotLine(BaseModel):
     lasting: bool = Field(default=False, description="是否稳定的事")
     seen_at_ms: int = Field(..., description="最近一次写下或再提起它的那一场的开播时刻")
     pinned: bool = Field(default=False, description="运营者放回或新增的行，接进新快照时照旧带着")
+    highlight: bool = Field(default=False, description="是否代表性名场面，接进新快照时按独立名额保留")
 
 
 class CommitmentClosure(BaseModel):

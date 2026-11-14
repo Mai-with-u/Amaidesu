@@ -29,13 +29,14 @@ logger = get_logger("ArchiveRepo")
 # 档案行读面的列（与 ArchiveLine 字段一一对应）
 _ARCHIVE_COLUMNS = (
     "id, live_session_id, text, quote, evidence_chat_id, game, save_id, save_name, human_locked, keywords, place,"
-    " source, viewer_chat_id, viewer_word"
+    " source, viewer_chat_id, viewer_word, highlight"
 )
 # 快照读面：引用的档案行连同快照标注一起取
 _SNAPSHOT_COLUMNS = (
     "a.id, a.live_session_id, a.text, a.quote, a.evidence_chat_id, a.game, a.save_id, a.save_name, a.human_locked,"
-    " a.keywords, a.place, a.source, a.viewer_chat_id, a.viewer_word,"
-    " l.lasting AS snap_lasting, l.seen_at_ms AS snap_seen_at_ms, l.pinned AS snap_pinned"
+    " a.keywords, a.place, a.source, a.viewer_chat_id, a.viewer_word, a.highlight,"
+    " l.lasting AS snap_lasting, l.seen_at_ms AS snap_seen_at_ms, l.pinned AS snap_pinned,"
+    " l.highlight AS snap_highlight"
 )
 
 
@@ -194,17 +195,29 @@ def _stored_lines(conn: sqlite3.Connection, live_session_id: int) -> List[Snapsh
         lasting = bool(data.pop("snap_lasting"))
         seen_at_ms = int(data.pop("snap_seen_at_ms"))
         pinned = bool(data.pop("snap_pinned"))
-        result.append(SnapshotLine(line=archive_line_of(data), lasting=lasting, seen_at_ms=seen_at_ms, pinned=pinned))
+        highlight = bool(data.pop("snap_highlight"))
+        result.append(
+            SnapshotLine(
+                line=archive_line_of(data),
+                lasting=lasting,
+                seen_at_ms=seen_at_ms,
+                pinned=pinned,
+                highlight=highlight,
+            )
+        )
     return _with_snapshot_source_names(conn, result)
 
 
 def _own_lines(conn: sqlite3.Connection, candidate: _Candidate) -> List[SnapshotLine]:
-    """一个旧场次自己的档案行，按快照的样子带出：不算稳定的事，最近一次提起就是那一场。"""
+    """一个旧场次自己的档案行，按快照的样子带出：不算稳定的事，名场面标记沿用原行，最近一次提起就是那一场。"""
     rows = conn.execute(
         f"SELECT {_ARCHIVE_COLUMNS} FROM archive_lines WHERE live_session_id=? ORDER BY id ASC",  # noqa: S608
         (candidate.session_id,),
     ).fetchall()
-    own = [SnapshotLine(line=archive_line_of(item), seen_at_ms=candidate.started_at_ms) for item in rows]
+    own: List[SnapshotLine] = []
+    for item in rows:
+        parsed = archive_line_of(item)
+        own.append(SnapshotLine(line=parsed, seen_at_ms=candidate.started_at_ms, highlight=bool(parsed.highlight)))
     return _with_snapshot_source_names(conn, own)
 
 
@@ -275,6 +288,7 @@ class ArchiveRepo(BaseRepo):
         save_name: str = "",
         keywords: Sequence[str] = (),
         place: str = "",
+        highlight: bool = False,
     ) -> int:
         """写一行档案，返回主键；标题或原话为空时不写（返回 0）。
 
@@ -290,7 +304,7 @@ class ArchiveRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 cur = conn.execute(
                     "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id, game, save_id, save_name,"
-                    " keywords, place) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " keywords, place, highlight) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         int(live_session_id),
                         title,
@@ -301,6 +315,7 @@ class ArchiveRepo(BaseRepo):
                         save_name or "",
                         keywords_column(keywords),
                         place or "",
+                        1 if highlight else 0,
                     ),
                 )
                 return int(cur.lastrowid or 0)
@@ -361,7 +376,7 @@ class ArchiveRepo(BaseRepo):
                 for row in rows:
                     line = archive_line_of(row)
                     own = conn.execute(
-                        "SELECT lasting, seen_at_ms, pinned FROM archive_snapshot_lines"
+                        "SELECT lasting, seen_at_ms, pinned, highlight FROM archive_snapshot_lines"
                         " WHERE live_session_id = ? AND archive_line_id = ?",
                         (int(live_session_id), int(line.id)),
                     ).fetchone()
@@ -372,12 +387,13 @@ class ArchiveRepo(BaseRepo):
                                 lasting=bool(own["lasting"]),
                                 seen_at_ms=int(own["seen_at_ms"]),
                                 pinned=bool(own["pinned"]),
+                                highlight=bool(own["highlight"]),
                             )
                         )
                         continue
-                    # 这一场的快照里没有它（批准时最新快照是更晚的一场）：稳定与否照最近一份引用它的快照
+                    # 这一场的快照里没有它（批准时最新快照是更晚的一场）：稳定与名场面标记照最近一份引用它的快照
                     latest = conn.execute(
-                        "SELECT l.lasting, l.seen_at_ms FROM archive_snapshot_lines l"
+                        "SELECT l.lasting, l.seen_at_ms, l.highlight FROM archive_snapshot_lines l"
                         " JOIN live_sessions s ON s.id = l.live_session_id WHERE l.archive_line_id = ?"
                         " ORDER BY s.started_at_ms DESC, s.id DESC LIMIT 1",
                         (int(line.id),),
@@ -387,6 +403,7 @@ class ArchiveRepo(BaseRepo):
                             line=line,
                             lasting=bool(latest["lasting"]) if latest is not None else False,
                             seen_at_ms=int(latest["seen_at_ms"]) if latest is not None else int(started_at_ms),
+                            highlight=bool(latest["highlight"]) if latest is not None else bool(line.highlight),
                         )
                     )
                 return _with_snapshot_source_names(conn, carried)

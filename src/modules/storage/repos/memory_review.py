@@ -52,11 +52,12 @@ class MemoryReviewError(Exception):
 
 @dataclass(frozen=True)
 class ReviewSnapshotLine:
-    """最新一份快照里的一行：是不是稳定的事、是不是人放回或新增的。"""
+    """最新一份快照里的一行：是不是稳定的事、是不是人放回或新增的、是不是代表性名场面。"""
 
     archive_line_id: int
     lasting: bool
     pinned: bool
+    highlight: bool = False
 
 
 @dataclass(frozen=True)
@@ -96,7 +97,7 @@ def record_edit(
 def _line(conn: sqlite3.Connection, line_id: int) -> Any:
     """取一行档案；不存在就报 not_found。"""
     row = conn.execute(
-        "SELECT id, live_session_id, text, human_locked FROM archive_lines WHERE id=?", (int(line_id),)
+        "SELECT id, live_session_id, text, human_locked, highlight FROM archive_lines WHERE id=?", (int(line_id),)
     ).fetchone()
     if row is None:
         raise MemoryReviewError("not_found", f"档案行不存在: {line_id}")
@@ -118,11 +119,19 @@ def _snapshot_row(conn: sqlite3.Connection, owner: int, line_id: int) -> Optiona
     ).fetchone()
 
 
-def insert_snapshot_line(conn: sqlite3.Connection, *, owner: int, line_id: int, lasting: bool, pinned: bool) -> None:
-    """把一行插进最新快照的最前面：常驻简报按位置列，满 12 行时它也排得上。
+def insert_snapshot_line(
+    conn: sqlite3.Connection,
+    *,
+    owner: int,
+    line_id: int,
+    lasting: bool,
+    pinned: bool,
+    highlight: bool = False,
+) -> None:
+    """把一行插进最新快照的最前面：常驻简报按位置列，满上限时它也排得上。
 
     ``pinned`` 是人放回、新增的行（取舍时排第 0 档、不挤）；批准的观众候选以普通行插进来，
-    下一场整理按稳定与否、最近提起照常取舍。
+    下一场整理按稳定与否、名场面标记与最近提起照常取舍。
     """
     top = conn.execute(
         "SELECT MIN(position) FROM archive_snapshot_lines WHERE live_session_id=?", (int(owner),)
@@ -130,8 +139,8 @@ def insert_snapshot_line(conn: sqlite3.Connection, *, owner: int, line_id: int, 
     position = (int(top[0]) if top is not None and top[0] is not None else 0) - 1
     started = conn.execute("SELECT started_at_ms FROM live_sessions WHERE id=?", (int(owner),)).fetchone()
     conn.execute(
-        "INSERT INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting, seen_at_ms, pinned)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting, seen_at_ms, pinned,"
+        " highlight) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             int(owner),
             int(line_id),
@@ -139,6 +148,7 @@ def insert_snapshot_line(conn: sqlite3.Connection, *, owner: int, line_id: int, 
             1 if lasting else 0,
             int(started[0] or 0) if started else 0,
             1 if pinned else 0,
+            1 if highlight else 0,
         ),
     )
 
@@ -192,11 +202,15 @@ class MemoryReviewRepo(BaseRepo):
                 lines: Dict[int, ReviewSnapshotLine] = {}
                 if snapshot_id is not None:
                     for row in conn.execute(
-                        "SELECT archive_line_id, lasting, pinned FROM archive_snapshot_lines WHERE live_session_id=?",
+                        "SELECT archive_line_id, lasting, pinned, highlight FROM archive_snapshot_lines"
+                        " WHERE live_session_id=?",
                         (int(snapshot_id),),
                     ).fetchall():
                         lines[int(row[0])] = ReviewSnapshotLine(
-                            archive_line_id=int(row[0]), lasting=bool(row[1]), pinned=bool(row[2])
+                            archive_line_id=int(row[0]),
+                            lasting=bool(row[1]),
+                            pinned=bool(row[2]),
+                            highlight=bool(row[3]),
                         )
                 return SessionReviewState(
                     live_session_id=int(live_session_id),
@@ -273,12 +287,19 @@ class MemoryReviewRepo(BaseRepo):
                 # 放回至多 4 行：满了先让人取消一条，不替人挑
                 _ensure_pin_room(conn, owner, "放回")
                 last = conn.execute(
-                    "SELECT l.lasting FROM archive_snapshot_lines l JOIN live_sessions s ON s.id = l.live_session_id"
+                    "SELECT l.lasting, l.highlight FROM archive_snapshot_lines l"
+                    " JOIN live_sessions s ON s.id = l.live_session_id"
                     " WHERE l.archive_line_id=? ORDER BY s.started_at_ms DESC, s.id DESC LIMIT 1",
                     (int(line_id),),
                 ).fetchone()
+                # 放回旧行时沿用它上次在快照里的稳定与名场面标记；若当初写出时未进快照则回退原行自身的名场面标记
                 insert_snapshot_line(
-                    conn, owner=owner, line_id=int(line_id), lasting=bool(last[0]) if last else False, pinned=True
+                    conn,
+                    owner=owner,
+                    line_id=int(line_id),
+                    lasting=bool(last[0]) if last is not None else False,
+                    pinned=True,
+                    highlight=bool(last[1]) if last is not None else bool(row["highlight"]),
                 )
                 record_edit(
                     conn,

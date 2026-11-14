@@ -78,14 +78,18 @@ def _approved_unseen(
         return []
     seen = {int(item) for item in seen_line_ids}
     rows = conn.execute(
-        "SELECT p.archive_line_id, p.lasting, p.seen_at_ms, p.pinned FROM archive_snapshot_lines p"
+        "SELECT p.archive_line_id, p.lasting, p.seen_at_ms, p.pinned, p.highlight FROM archive_snapshot_lines p"
         " JOIN archive_lines a ON a.id = p.archive_line_id"
         " WHERE p.live_session_id=? AND a.source='viewer' ORDER BY p.position",
         (int(owner[0]),),
     ).fetchall()
     return [
         KeptSnapshotLine(
-            archive_line_id=int(row[0]), lasting=bool(row[1]), seen_at_ms=int(row[2] or 0), pinned=bool(row[3])
+            archive_line_id=int(row[0]),
+            lasting=bool(row[1]),
+            seen_at_ms=int(row[2] or 0),
+            pinned=bool(row[3]),
+            highlight=bool(row[4]),
         )
         for row in rows
         if int(row[0]) not in seen
@@ -97,7 +101,7 @@ def _write_snapshot(
     *,
     live_session_id: int,
     written_at_ms: int,
-    new_lines: Sequence[tuple[int, bool]],
+    new_lines: Sequence[tuple[int, bool, bool]],
     kept: Sequence[KeptSnapshotLine],
     front: Sequence[KeptSnapshotLine] = (),
 ) -> int:
@@ -105,7 +109,7 @@ def _write_snapshot(
 
     ``front`` 排在最前（整理调模型期间人批准的观众来源行，和批准时一样插在最前面），其后是本场新写的行，
     最后是接住的旧行。本场新写的行最近一次提起就是本场（记本场开播时刻）；接住的行只在原行还在时
-    才引用，运营者放回的标记跟着接进新快照（否则下一场整理就把人放回的行当普通行挤掉）。
+    才引用，运营者放回与名场面两项标记都跟着接进新快照（否则下一场整理会把人放回的行或名场面当普通行挤掉）。
     返回写进快照的行数。
     """
     conn.execute(
@@ -119,34 +123,43 @@ def _write_snapshot(
     for item in front:
         cur = conn.execute(
             "INSERT OR IGNORE INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting,"
-            " seen_at_ms, pinned) SELECT ?, id, ?, ?, ?, ? FROM archive_lines WHERE id=?",
+            " seen_at_ms, pinned, highlight) SELECT ?, id, ?, ?, ?, ?, ? FROM archive_lines WHERE id=?",
             (
                 int(live_session_id),
                 position,
                 1 if item.lasting else 0,
                 int(item.seen_at_ms),
                 1 if item.pinned else 0,
+                1 if item.highlight else 0,
                 int(item.archive_line_id),
             ),
         )
         position += max(0, int(cur.rowcount or 0))
-    for archive_line_id, lasting in new_lines:
+    for archive_line_id, lasting, highlight in new_lines:
         conn.execute(
-            "INSERT INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting, seen_at_ms)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (int(live_session_id), int(archive_line_id), position, 1 if lasting else 0, started_at_ms),
+            "INSERT INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting, seen_at_ms,"
+            " highlight) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                int(live_session_id),
+                int(archive_line_id),
+                position,
+                1 if lasting else 0,
+                started_at_ms,
+                1 if highlight else 0,
+            ),
         )
         position += 1
     for item in kept:
         cur = conn.execute(
             "INSERT OR IGNORE INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting,"
-            " seen_at_ms, pinned) SELECT ?, id, ?, ?, ?, ? FROM archive_lines WHERE id=?",
+            " seen_at_ms, pinned, highlight) SELECT ?, id, ?, ?, ?, ?, ? FROM archive_lines WHERE id=?",
             (
                 int(live_session_id),
                 position,
                 1 if item.lasting else 0,
                 int(item.seen_at_ms),
                 1 if item.pinned else 0,
+                1 if item.highlight else 0,
                 int(item.archive_line_id),
             ),
         )
@@ -704,15 +717,15 @@ class SessionRepo(BaseRepo):
                         "SELECT evidence_chat_id FROM archive_lines WHERE live_session_id=?", (int(live_session_id),)
                     ).fetchall()
                 }
-                # (档案行主键, 是否稳定的事)：本场新写、要进快照的行
-                snapshot_new: List[tuple[int, bool]] = []
+                # (档案行主键, 是否稳定的事, 是否名场面)：本场新写、要进快照的行
+                snapshot_new: List[tuple[int, bool, bool]] = []
                 for line in archive_lines:
                     evidence_chat_id = int(line.evidence_chat_id)
                     if evidence_chat_id in existing_evidence:
                         continue
                     cur = conn.execute(
                         "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id,"
-                        " game, save_id, save_name, keywords, place) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        " game, save_id, save_name, keywords, place, highlight) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             int(live_session_id),
                             line.text,
@@ -723,12 +736,13 @@ class SessionRepo(BaseRepo):
                             line.save_name,
                             keywords_column(line.keywords),
                             line.place,
+                            1 if line.highlight else 0,
                         ),
                     )
                     existing_evidence.add(evidence_chat_id)
                     written["archive"] += 1
                     if line.in_snapshot:
-                        snapshot_new.append((int(cur.lastrowid or 0), bool(line.lasting)))
+                        snapshot_new.append((int(cur.lastrowid or 0), bool(line.lasting), bool(line.highlight)))
                 # 观众候选进待审区：本场待审的整份替换，已批、已驳回的不动（批准前对她不可见）
                 written["candidates"] = replace_session_candidates(
                     conn,
