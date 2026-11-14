@@ -205,6 +205,75 @@ async def test_early_boundary_within_min_show_is_ignored() -> None:
     assert calls == ["大家晚上好", "今天我们聊聊最近发生的一些事"]
 
 
+def _boundary_at(clock: FakeClock, utterance_id: str, segment_index: int) -> UtteranceSentenceBoundaryPayload:
+    """带假钟时间戳的边界载荷：估算下限闸门比对检测时刻，须与本会话时钟同源。"""
+    return UtteranceSentenceBoundaryPayload(
+        utterance_id=utterance_id, segment_index=segment_index, timestamp_ms=clock.now_ms()
+    )
+
+
+async def test_extra_dense_pauses_are_gated_by_estimate() -> None:
+    # 缺陷场景：GSV 等分块合成引擎的音频停顿数多于文本段数（顿号处、凑块处
+    # 也停），按序硬配把文本段提前耗尽、字幕跑在语音前面。闸门：早于估算切
+    # 换时刻超过容差的碎停顿不耗段，估算定时到点照切
+    clock, sched = FakeClock(), FakeScheduler()
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
+    await _start(bus, "播MC啊，先去麦窝把小木屋整利索，门窗户全装好，收尾一句")
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
+    svc.show.reset_mock()
+
+    clock.tick(900)  # 首段讲完的真实停顿@900ms：估算切换时刻 1000ms，容差内采纳
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary_at(clock, "utt_p1", 1))
+    svc.show.assert_awaited_once_with("先去麦窝把小木屋整利索", "utt_p1", None)
+    assert sched.pending()[0]["delay_ms"] == 2750  # 估算第二段讲完：900 + 11 字 × 250ms
+    svc.show.reset_mock()
+
+    clock.tick(1200)  # 碎停顿@2100ms：比估算时刻（3650ms）早 1550ms
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary_at(clock, "utt_p1", 2))
+    svc.show.assert_not_awaited()  # 段不被提前消耗，估算定时保持
+    assert sched.pending()[0]["delay_ms"] == 2750
+
+    clock.tick(2000)  # 真实停顿@4100ms：晚于估算时刻，采纳
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary_at(clock, "utt_p1", 2))
+    svc.show.assert_awaited_once_with("门窗户全装好", "utt_p1", None)
+    svc.show.reset_mock()
+
+    clock.tick(1600)  # 真实停顿@5700ms：晚于校准后估算（4100 + 6 字 × 3200ms/15字 ≈ 5380ms）
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary_at(clock, "utt_p1", 3))
+    calls = [call.args[0] for call in svc.show.await_args_list]
+    assert calls == ["收尾一句"]
+
+
+async def test_gate_applies_to_duration_proportional_estimate() -> None:
+    # 全量引擎（duration_ms 可用）：闸门按出声窗口的字数占比估算同样生效
+    clock, sched = FakeClock(), FakeScheduler()
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
+    await _start(bus, "一二三，四五六七。八九十", duration_ms=9000)
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
+    svc.show.reset_mock()
+
+    clock.tick(1500)  # 停顿@1500ms：估算切换时刻 2700ms（窗口 9000 × 3/10 字），早 1200ms
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary_at(clock, "utt_p1", 1))
+    svc.show.assert_not_awaited()
+
+    clock.tick(1200)  # 停顿@2700ms：与估算时刻一致，采纳
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_SENTENCE_BOUNDARY, _boundary_at(clock, "utt_p1", 1))
+    svc.show.assert_awaited_once_with("四五六七", "utt_p1", None)
+
+
+async def test_fallback_delay_uses_current_segment_length() -> None:
+    # 切换延时按"正在讲的这段"的字数估算；旧实现误用下一段字数，长短段
+    # 不均时定时会切早/切晚一个段长
+    clock, sched = FakeClock(), FakeScheduler()
+    bus, svc = EventBus(), _service()
+    bind_playback_subtitle(bus, svc, _Logger(), now_ms_fn=clock.now_ms, scheduler=sched)
+    await _start(bus, "一二三。四。五六", duration_ms=3000)
+    await _emit(bus, CoreEvents.TTS_UTTERANCE_PLAYBACK_STARTED, _playback_started("utt_p1"))
+    assert sched.delays()[0] == 1500  # 窗口 3000 × 首段 3/6 字（旧实现按第二段 1 字给 500）
+
+
 async def test_comma_level_segments_flow_with_boundaries_and_timer() -> None:
     # 逗号级切分后段数上升：边界事件照段序逐个切换；边界供完的段由估算定时接管
     clock, sched = FakeClock(), FakeScheduler()

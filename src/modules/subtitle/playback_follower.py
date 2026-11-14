@@ -15,19 +15,23 @@
 听感对齐。播放路径未挂分接（或整句无声）时该事件缺席，估算不起跑、字幕
 停在第一段，由 ``failed``（显全文）与 ``finished``（清空）兜底收尾。
 
-段切换的信号有两路，任一路先到即切，但都受最短段显示时长约束
-（``_MIN_SEGMENT_SHOW_MS``：当前段上屏不足该时长不切，防细段闪切）：
+段切换的信号有两路，但都受两道约束：最短段显示时长（``_MIN_SEGMENT_SHOW_MS``：
+当前段上屏不足该时长不切，防细段闪切）与估算下限闸门（``_BOUNDARY_EARLY_
+TOLERANCE_MS``：事件比估算切换时刻早到超过容差不切）：
 
 - **句边界事件**（``tts.utterance.sentence_boundary``）：播放路径静音检测
-  检出停顿间隙的时刻发布，与观众听到的停顿天然同步，优先于定时；切分下沉
-  到逗号级后段数与边界数同量级，过早上屏的边界事件忽略不计段；
+  检出停顿间隙的时刻发布，与观众听到的停顿天然同步，优先于定时。停顿数
+  与文本段数不保证一致——GSV 等按标点分块合成的引擎停顿偏密（顿号处、
+  凑块处也停），按序硬配会把文本段提前耗尽、字幕跑在语音前面，故事件须
+  过估算下限闸门：早于估算的碎停顿忽略（段不消耗），晚于估算的真实长停
+  顿照常采纳，估算与事件各管自己准的那半；
 - **估算兜底定时**：防"检测不工作导致字幕卡在第一段"——``duration_ms``
-  可用（全量引擎）按剩余窗口的字数占比推，不可用（流式引擎）按每字约
-  250ms 估算，两者都不低于最短段显示时长。定时到点但边界事件还没到 →
-  照切（估算节奏）；边界事件先到 → 取消定时。检测工作 = 真实同步，检测
-  失效 = 估算节奏，任何情况下观众都能看到全部文本。
+  可用（全量引擎）按出声窗口的字数占比内插，不可用（流式引擎）按每字
+  约 250ms 外推（语速由已采纳边界的实测时刻在线校准），两者都不低于最
+  短段显示时长。定时到点但边界事件还没到 → 照切（估算节奏）；边界事件
+  先到 → 取消定时。检测工作 = 真实同步，检测失效 = 估算节奏，任何情况
+  下观众都能看到全部文本。
 
-段数与边界数不齐不致命：多切按实际事件走，文本段耗尽后忽略多余事件；
 utterance 结束（finished）后其迟到事件按 utterance_id 不匹配丢弃。
 
 引用弹幕（本句在回复谁的哪条发言）不随 ``tts.utterance.*`` 走：跟随器
@@ -73,6 +77,15 @@ _QUOTE_CLOSERS = {"“": "”", "『": "』", "「": "」", '"': '"'}
 _MIN_SEGMENT_SHOW_MS = 800
 # 流式引擎无 duration_ms 时的兜底语速估算：每字约 250ms
 _FALLBACK_MS_PER_CHAR = 250
+# 边界事件闸门容差：事件早于估算切换时刻超过此值视为合成器分块的碎停顿，
+# 不推进段（密停顿按序硬配会把文本提前耗尽，字幕跑在语音前面）
+_BOUNDARY_EARLY_TOLERANCE_MS = 800
+# 语速校准的起算字数：样本太少（首段常只有两三个字）时单段时长换算的语速
+# 方差过大，攒够字数才开始用实测语速替换兜底值
+_RATE_CALIBRATION_MIN_CHARS = 6
+# 校准语速的上下限：极端样本（异常拖长音的段）不把估算拉到离谱
+_MS_PER_CHAR_MIN = 80
+_MS_PER_CHAR_MAX = 500
 # 回复目标映射的容量上限：只服务"当前正在显示的字幕"，超过即挤掉最早登记的；
 # 杂谈档分段派生编号共享基编号条目，不占额外容量
 _QUOTE_CACHE_MAX = 64
@@ -110,12 +123,13 @@ def split_subtitle_segments(text: str) -> List[str]:
 
 
 class _SegmentSchedule:
-    """一句话的分段会话：当前段号与下一兜底切换时刻的估算。
+    """一句话的分段会话：当前段号与下一段切换时刻的估算。
 
-    切换时刻估算规则：``duration_ms`` 可用时按"剩余窗口 × 剩余段字数占比"
-    推（每次切换后以当前时刻为锚重排，早切/晚切后后续估算随之收敛）；
-    不可用时按每字约 250ms 估算。估算值不低于最短段显示时长（逗号级细段
-    按字数或占比推会低于可读下限，定时切早了闪切）。
+    切换时刻估算规则：``duration_ms`` 可用时按"出声窗口 × 段起点字数占比"
+    内插；不可用（流式引擎）按每字语速外推，语速初值 250ms/字、由已切换
+    边界的实测时刻在线校准（见 :meth:`note_segment_started`）。估算值不低
+    于最短段显示时长（逗号级细段按字数或占比推会低于可读下限，定时切早了
+    闪切）；闸门比对用的 :meth:`next_switch_time_ms` 不做此托底。
     """
 
     def __init__(self, utterance_id: str, segments: List[str], duration_ms: Optional[int]) -> None:
@@ -127,20 +141,40 @@ class _SegmentSchedule:
         self.prefix = [0] * (len(segments) + 1)
         for i, segment in enumerate(segments):
             self.prefix[i + 1] = self.prefix[i] + len(segment)
+        # 流式估算的语速（毫秒/字）与在线校准的累计样本
+        self.ms_per_char = float(_FALLBACK_MS_PER_CHAR)
+        self._calibrated_chars = 0
+        self._calibrated_ms = 0
+        # 当前段起讲时刻（出声时钟）：playback_started 时为首段起讲，其后
+        # 每次切换更新；duration 不可用时据此外推下一段切换时刻
+        self.boundary_ms: Optional[int] = None
 
     def next_delay_ms(self, now_ms_value: int, started_ms: int) -> int:
         """距下一段兜底切换时刻的毫秒数；已无下一段时返回 0（调用方不再建定时）。"""
+        est = self.next_switch_time_ms(now_ms_value, started_ms)
+        if est is None:
+            return 0
+        return max(est - now_ms_value, _MIN_SEGMENT_SHOW_MS)
+
+    def next_switch_time_ms(self, now_ms_value: int, started_ms: int) -> Optional[int]:
+        """下一段切换时刻的估算（绝对毫秒时刻）；无下一段或尚未出声时返回 None。
+
+        与 :meth:`next_delay_ms` 同源，但不做最短段显示时长托底——闸门要比
+        对"边界事件比估算早到了多少"，托底值会掩盖这个差值。
+        """
         next_index = self.current_index + 1
         if next_index >= len(self.segments):
-            return 0
-        chars_to_next = self.prefix[next_index + 1] - self.prefix[next_index]
-        delay_ms = chars_to_next * _FALLBACK_MS_PER_CHAR
+            return None
         if self.duration_ms:
-            remaining_total = max(0, started_ms + self.duration_ms - now_ms_value)
-            chars_remaining = self.prefix[-1] - self.prefix[self.current_index]
-            if chars_remaining > 0 and remaining_total > 0:
-                delay_ms = int(remaining_total * chars_to_next / chars_remaining)
-        return max(delay_ms, _MIN_SEGMENT_SHOW_MS)
+            total = self.prefix[-1]
+            if total <= 0:
+                return None
+            # 本段讲完即切下一段：段起点的字数占比 × 出声窗口
+            return started_ms + int(self.duration_ms * self.prefix[next_index] / total)
+        if self.boundary_ms is None:
+            return None
+        chars_to_boundary = self.prefix[next_index] - self.prefix[self.current_index]
+        return self.boundary_ms + int(chars_to_boundary * self.ms_per_char)
 
     def advance(self) -> bool:
         """切到下一段；返回是否确实有下一段（False = 文本段已耗尽）。"""
@@ -148,6 +182,26 @@ class _SegmentSchedule:
             return False
         self.current_index += 1
         return True
+
+    def note_segment_started(self, at_ms: int) -> None:
+        """记录当前段起讲时刻（出声时钟）；顺带用刚讲完的一段校准语速。
+
+        ``duration_ms`` 可用时不校准（估算走窗口占比，不依赖语速）；流式
+        路径用已讲完段落的实测耗时折算每字毫秒，累计字数过少（单段字数
+        太少时方差大）或超出上下限时保持/截断，防异常样本把估算拉偏。
+        """
+        if self.boundary_ms is not None and self.current_index > 0 and not self.duration_ms:
+            spoken_ms = at_ms - self.boundary_ms
+            spoken_chars = self.prefix[self.current_index] - self.prefix[self.current_index - 1]
+            if spoken_ms > 0 and spoken_chars > 0:
+                self._calibrated_ms += spoken_ms
+                self._calibrated_chars += spoken_chars
+                if self._calibrated_chars >= _RATE_CALIBRATION_MIN_CHARS:
+                    self.ms_per_char = min(
+                        max(self._calibrated_ms / self._calibrated_chars, float(_MS_PER_CHAR_MIN)),
+                        float(_MS_PER_CHAR_MAX),
+                    )
+        self.boundary_ms = at_ms
 
 
 class _LoopScheduler:
@@ -236,6 +290,13 @@ class _PlaybackSubtitleController:
             return  # 无会话 / 已结束 utterance 的迟到事件：丢弃
         if self._now_ms() - self._last_switch_ms < _MIN_SEGMENT_SHOW_MS:
             return  # 当前段上屏不足最短时长：静音检测对逗号停顿也报边界，早到的忽略不耗段
+        # 估算下限闸门：早于估算切换时刻超过容差的停顿是合成器分块的碎停顿
+        # （GSV 等按标点分块合成的引擎，停顿数多于文本段数，按序硬配会把
+        # 文本提前耗尽、字幕跑在语音前面），不推进段，估算定时到点照切；
+        # 晚于估算的真实长停顿不受影响，仍按事件精确对齐
+        est = session.next_switch_time_ms(payload.timestamp_ms, self._started_ms)
+        if est is not None and payload.timestamp_ms < est - _BOUNDARY_EARLY_TOLERANCE_MS:
+            return
         self._disarm_timer()
         await self._advance(session)
 
@@ -246,6 +307,7 @@ class _PlaybackSubtitleController:
         # 估算时钟零点 = 真正出声时刻：合成首块延迟不计入估算窗口，
         # 此刻才起跑兜底估算；句边界事件其后仍优先接管
         self._started_ms = self._now_ms()
+        session.note_segment_started(self._started_ms)
         self._disarm_timer()
         self._arm_fallback_timer()
 
@@ -284,6 +346,9 @@ class _PlaybackSubtitleController:
             self.quote_for(session.utterance_id),
         )
         self._last_switch_ms = self._now_ms()
+        # 新段起讲时刻与本会话其他时刻同钟（控制器时钟）；事件检测时刻与
+        # 此处的毫秒级差由语速校准的自然平滑吸收
+        session.note_segment_started(self._now_ms())
         self._arm_fallback_timer()
 
     def _cancel_session(self) -> None:
