@@ -2841,7 +2841,8 @@ class MinecraftAgent(BaseAgent):
         deadline = self._clock() + wait_ms / 1000  # 时钟是秒，等待参数是毫秒
         after_cursor = 0
         while self._clock() < deadline:
-            remaining_ms = max(deadline - self._clock(), 0) * 1000
+            # Mod 侧 wait_ms 校验只收整数，时钟是浮点秒，换算后必须取整否则长轮询每次被拒
+            remaining_ms = int(max(deadline - self._clock(), 0) * 1000)
             reply = await self._call_maicraft(
                 EVENTS, {"topic": "self", "goal_id": goal_id, "after_cursor": after_cursor, "wait_ms": remaining_ms}
             )
