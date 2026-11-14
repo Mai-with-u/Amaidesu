@@ -240,8 +240,6 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import DOMPurify from 'dompurify';
-import { marked } from 'marked';
 import { ElMessage } from 'element-plus';
 import { CopyDocument } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
@@ -252,6 +250,7 @@ import {
   normalizeMessage,
   type PreviewMessage,
 } from '@/utils/llmMessage';
+import { renderMarkdown } from '@/utils/markdown';
 import type { LLMRequestHistory } from '@/types';
 import {
   formatCost,
@@ -432,14 +431,7 @@ async function copyJson(data: unknown): Promise<void> {
   }
 }
 
-// Markdown 渲染（带 XSS 防护）：GFM 完整渲染，单换行视作换行以贴合 LLM 提示词排版
-marked.setOptions({ gfm: true, breaks: true });
-
-function renderMarkdown(text: string | null): string {
-  if (!text) return '';
-  const html = marked.parse(text);
-  return DOMPurify.sanitize(typeof html === 'string' ? html : '');
-}
+// Markdown 渲染（GFM 完整渲染，单换行视作换行；解析与 XSS 净化统一走 utils/markdown）
 
 function handleClose(value: boolean) {
   emit('update:visible', value);

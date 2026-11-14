@@ -25,7 +25,7 @@
             <span v-if="entry.date" class="toc-date">{{ entry.date }}</span>
           </button>
         </aside>
-        <!-- 内容经 DOMPurify 净化后输出 -->
+        <!-- 内容经 utils/markdown 渲染并净化后输出 -->
         <!-- eslint-disable-next-line vue/no-v-html -->
         <div
           ref="contentRef"
@@ -41,9 +41,8 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
 import { systemApi } from '@/api';
+import { renderMarkdown } from '@/utils/markdown';
 
 interface TocEntry {
   id: string;
@@ -65,11 +64,9 @@ const contentRef = ref<HTMLElement | null>(null);
 // 统一改写到 GitHub 仓库对应文件后新窗口打开
 const REPO_BLOB_BASE = 'https://github.com/Mai-with-u/Amaidesu/blob/main';
 
-marked.setOptions({ gfm: true, breaks: true });
-
 function renderChangelog(md: string): void {
-  // async: false 锁定同步重载，parse 返回 string 而非 Promise
-  const clean = DOMPurify.sanitize(marked.parse(md, { async: false }));
+  // 解析与 XSS 净化统一走 utils/markdown；这里只做仓库相对链接的改写
+  const clean = renderMarkdown(md);
   const doc = new DOMParser().parseFromString(clean, 'text/html');
   doc.querySelectorAll('a').forEach(a => {
     const href = a.getAttribute('href') ?? '';
