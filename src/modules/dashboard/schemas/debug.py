@@ -118,8 +118,28 @@ class TtsSayResponse(BaseModel):
     error: Optional[str] = None
 
 
+class TtsDebugParamInfo(BaseModel):
+    """调试页合成参数描述表单项：由引擎上报（仅 GPT-SoVITS 实现）。
+
+    ``default`` 为引擎当前生效的合成配置值，同时用作参数表单的初始值与"重置"基准。
+    """
+
+    key: str
+    label: str
+    min: float
+    max: float
+    step: float
+    precision: int
+    default: float
+
+
 class TtsStatusResponse(BaseModel):
-    """TTS 引擎状态：透传 ``get_stats()``（name/is_connected/计数等）"""
+    """TTS 引擎状态：透传 ``get_stats()``（name/is_connected/计数等）。
+
+    ``debug_params`` 是引擎上报的调试参数描述表，未上报（如非 GSV 引擎）时为
+    None，前端据此隐藏参数区。
+    """
 
     available: bool
     stats: Dict[str, Any] = {}
+    debug_params: Optional[List[TtsDebugParamInfo]] = None

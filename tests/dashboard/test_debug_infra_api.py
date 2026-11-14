@@ -60,7 +60,9 @@ class FakeTtsEngine:
         return b"RIFF-fake-audio"
 
     def get_stats(self) -> Dict[str, Any]:
-        return {"name": "FakeTTS", "is_connected": True, "render_count": 1, "error_count": 0}
+        stats: Dict[str, Any] = {"name": "FakeTTS", "is_connected": True, "render_count": 1, "error_count": 0}
+        stats.update(getattr(self, "stats_extra", {}))
+        return stats
 
 
 class _MinimalEngine:
@@ -177,3 +179,40 @@ def test_tts_say_replays_text_with_say_prefix_and_reports_failure(mount) -> None
 def test_tts_status_passes_engine_stats_through(mount) -> None:
     body = mount(tts_engine=FakeTtsEngine()).get("/api/v1/debug/tts/status").json()
     assert body["available"] is True and body["stats"]["name"] == "FakeTTS" and body["stats"]["is_connected"] is True
+
+
+def test_tts_status_extracts_debug_params_from_stats(mount) -> None:
+    """引擎上报的调试参数描述表被摘出 stats 单独下发（前端按此渲染参数区）。"""
+    engine = FakeTtsEngine()
+    engine.stats_extra = {
+        "debug_params": [
+            {"key": "temperature", "label": "温度", "min": 0, "max": 2, "step": 0.1, "precision": 1, "default": 1.0}
+        ]
+    }
+    body = mount(tts_engine=engine).get("/api/v1/debug/tts/status").json()
+    assert body["debug_params"] == [
+        {"key": "temperature", "label": "温度", "min": 0.0, "max": 2.0, "step": 0.1, "precision": 1, "default": 1.0}
+    ]
+    assert "debug_params" not in body["stats"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not-a-list",
+        [{"key": "temperature"}],  # 缺必填字段
+        ["not-a-dict"],
+    ],
+    ids=["not_list", "missing_fields", "not_dict_items"],
+)
+def test_tts_status_invalid_debug_params_hidden(mount, raw: Any) -> None:
+    """描述表不合规时 debug_params 置 None（参数区隐藏），其余 stats 照常透传。"""
+    engine = FakeTtsEngine()
+    engine.stats_extra = {"debug_params": raw}
+    body = mount(tts_engine=engine).get("/api/v1/debug/tts/status").json()
+    assert body["debug_params"] is None and body["stats"]["name"] == "FakeTTS"
+
+
+def test_tts_status_engine_without_debug_params_returns_none(mount) -> None:
+    body = mount(tts_engine=FakeTtsEngine()).get("/api/v1/debug/tts/status").json()
+    assert body["debug_params"] is None

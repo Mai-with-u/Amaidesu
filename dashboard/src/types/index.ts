@@ -361,9 +361,22 @@ export interface TtsSayResponse {
   error?: string;
 }
 
+/** 调试页合成参数描述表单项：由引擎上报（仅 GPT-SoVITS 实现），default 同时是表单初始值与"重置"基准 */
+export interface TtsDebugParamInfo {
+  key: string;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  precision: number;
+  default: number;
+}
+
 export interface TtsStatusResponse {
   available: boolean;
   stats: Record<string, unknown>;
+  /** 引擎上报的调试参数描述表；未上报（非 GSV 引擎）为 null，前端据此隐藏参数区 */
+  debug_params?: TtsDebugParamInfo[] | null;
 }
 
 // Streamer 测试台（主播发言调试）

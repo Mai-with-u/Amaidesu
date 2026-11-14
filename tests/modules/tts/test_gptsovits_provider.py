@@ -48,6 +48,30 @@ def test_schema_rejects_mp3_and_backend_is_api_v2() -> None:
     assert GPTSoVITSProvider(config={"type": "gptsovits"}).get_stats()["backend"] == "api_v2"
 
 
+def test_get_stats_reports_debug_params_with_config_defaults() -> None:
+    """调试参数描述表逐项含键名/标签/值域/步长/小数位，默认值取引擎当前生效配置。"""
+    provider = GPTSoVITSProvider(
+        config={
+            "type": "gptsovits",
+            "temperature": 0.7,
+            "speed_factor": 1.2,
+            "sample_steps": 16,
+            "top_k": 30,
+            "top_p": 0.8,
+        }
+    )
+    params = {p["key"]: p for p in provider.get_stats()["debug_params"]}
+    assert set(params) == {"temperature", "speed_factor", "sample_steps", "top_k", "top_p"}
+    temperature = params["temperature"]
+    assert temperature["label"] == "温度"
+    assert (temperature["min"], temperature["max"], temperature["step"], temperature["precision"]) == (0.0, 2.0, 0.1, 1)
+    assert temperature["default"] == 0.7
+    assert params["speed_factor"]["default"] == 1.2 and params["speed_factor"]["label"] == "语速"
+    assert params["sample_steps"]["default"] == 16 and params["sample_steps"]["precision"] == 0
+    assert params["top_k"]["default"] == 30
+    assert params["top_p"]["default"] == 0.8 and params["top_p"]["precision"] == 2
+
+
 async def test_handle_speech_with_empty_stream_counts_one_render() -> None:
     provider = GPTSoVITSProvider(config=dict(CONFIGURED))
     assert provider._has_started is False

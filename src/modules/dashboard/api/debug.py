@@ -6,7 +6,7 @@
 
 import base64
 import uuid
-from typing import TYPE_CHECKING, Annotated, Any, Optional
+from typing import TYPE_CHECKING, Annotated, Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -20,6 +20,7 @@ from src.modules.dashboard.schemas.debug import (
     SubtitleStatusResponse,
     SubtitleTestRequest,
     SubtitleTestResponse,
+    TtsDebugParamInfo,
     TtsSayRequest,
     TtsSayResponse,
     TtsStatusResponse,
@@ -280,10 +281,22 @@ async def get_tts_status(
 
     ``engine`` 按观测接口协议 ``TtsObservation`` 收窄：装配边界已保证在册
     引擎实现 ``get_stats``，这里只需兜读取异常（统计读失败按空 stats 展示）。
+    ``debug_params``（调试参数描述表）从 stats 中摘出按模型校验后单独下发，
+    引擎未上报（非 GSV）或条目不合规时为 None，前端据此隐藏参数区。
     """
     try:
         stats = dict(engine.get_stats())
     except Exception as e:
         logger.exception(f"读取 TTS 引擎状态失败: {e}")
         stats = {}
-    return TtsStatusResponse(available=True, stats=stats)
+    raw_debug_params = stats.pop("debug_params", None)
+    debug_params: Optional[List[TtsDebugParamInfo]] = None
+    if isinstance(raw_debug_params, list):
+        try:
+            parsed = [TtsDebugParamInfo(**item) for item in raw_debug_params if isinstance(item, dict)]
+            # 全部条目不合规时与"未上报"同义：置 None 让前端隐藏参数区
+            debug_params = parsed or None
+        except Exception as e:
+            logger.exception(f"校验 TTS 调试参数描述表失败，参数区将隐藏: {e}")
+            debug_params = None
+    return TtsStatusResponse(available=True, stats=stats, debug_params=debug_params)

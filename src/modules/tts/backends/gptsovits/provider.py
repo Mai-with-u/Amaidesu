@@ -419,14 +419,55 @@ class GPTSoVITSProvider:
         )
         # 对接的 GPT-SoVITS API 后端（调试页状态 chip 展示用）
         stats["backend"] = "api_v2"
-        # 调试页参数表单的默认值与重置基准：引擎当前生效的合成配置
-        stats["defaults"] = {
-            "temperature": self.temperature,
-            "speed_factor": self.speed_factor,
-            "sample_steps": self.sample_steps,
-            "top_k": self.top_k,
-            "top_p": self.top_p,
-        }
+        # 调试页参数表单的描述表：每项含键名/中文标签/值域/步长/小数位/默认值，
+        # 默认值与 debug_synthesize 覆盖键取同一份实例配置，前端按此表渲染参数区
+        stats["debug_params"] = [
+            {
+                "key": "temperature",
+                "label": "温度",
+                "min": 0.0,
+                "max": 2.0,
+                "step": 0.1,
+                "precision": 1,
+                "default": self.temperature,
+            },
+            {
+                "key": "speed_factor",
+                "label": "语速",
+                "min": 0.1,
+                "max": 3.0,
+                "step": 0.1,
+                "precision": 1,
+                "default": self.speed_factor,
+            },
+            {
+                "key": "sample_steps",
+                "label": "采样步数",
+                "min": 1,
+                "max": 50,
+                "step": 1,
+                "precision": 0,
+                "default": self.sample_steps,
+            },
+            {
+                "key": "top_k",
+                "label": "Top-K",
+                "min": 1,
+                "max": 100,
+                "step": 1,
+                "precision": 0,
+                "default": self.top_k,
+            },
+            {
+                "key": "top_p",
+                "label": "Top-P",
+                "min": 0.0,
+                "max": 1.0,
+                "step": 0.05,
+                "precision": 2,
+                "default": self.top_p,
+            },
+        ]
         # 参考音频转写：调试页文本框的默认值（试说参考音频原句）
         stats["prompt_text"] = self.prompt_text
         return stats
