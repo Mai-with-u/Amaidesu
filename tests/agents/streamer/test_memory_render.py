@@ -574,3 +574,219 @@ def test_cards_mark_unsure_save_and_where_a_viewer_promise_was_made() -> None:
         place="在 minecraft「老档」里，不是眼下这个存档",
     )
     assert "你答应过 ta：给 ta 盖个小房子（之前；在 minecraft「老档」里，不是眼下这个存档）。" in card
+
+
+def test_gameplay_mode_renders_earlier_highlights_after_recent_zone_with_strict_save_isolation() -> None:
+    """边玩边说模式下：仅当前存档中未出现在【这个世界里】和【最近几场】里的更早场次名场面进【忘不掉的名场面】
+    （排在【最近几场】之后、至多 4 行，带编号、原话与本场已提过标注）；别的存档的名场面照旧归入折叠计数。"""
+    saves = {"minecraft": GameSave(id="s1", name="一周目")}
+    snap = [
+        # 已在【这个世界里】展示的稳定行（哪怕同标 highlight 也不重复进名场面区）
+        SnapshotLine(
+            line=ArchiveLine(
+                id=10,
+                live_session_id=1,
+                text="Minecraft：小狗取名豆包",
+                quote="就叫豆包",
+                evidence_chat_id=10,
+                game="minecraft",
+                save_id="s1",
+                save_name="一周目",
+                highlight=True,
+            ),
+            lasting=True,
+            highlight=True,
+            seen_at_ms=1_000,
+        ),
+        # 已在【最近几场】展示的上一场名场面（不重复进【忘不掉的名场面】）
+        SnapshotLine(
+            line=ArchiveLine(
+                id=11,
+                live_session_id=10,
+                text="Minecraft：海底神殿守卫者混战",
+                quote="差点被激光秒掉",
+                evidence_chat_id=11,
+                game="minecraft",
+                save_id="s1",
+                save_name="一周目",
+                highlight=True,
+            ),
+            highlight=True,
+            seen_at_ms=10_000,
+        ),
+        # 当前存档 s1 更早场次（seen_at_ms < earliest_recent_ms=8000）的 5 条名场面：21 置顶，其余按 seen_at_ms 取前 3
+        *[
+            SnapshotLine(
+                line=ArchiveLine(
+                    id=21 + idx,
+                    live_session_id=2 + idx,
+                    text=f"Minecraft：一周目名场面{21 + idx}",
+                    quote=f"高光原话{21 + idx}",
+                    evidence_chat_id=21 + idx,
+                    game="minecraft",
+                    save_id="s1",
+                    save_name="一周目",
+                    highlight=True,
+                ),
+                pinned=(idx == 0),
+                highlight=True,
+                seen_at_ms=2_000 + idx * 100,
+            )
+            for idx in range(5)
+        ],
+        # 别的存档 s2 的名场面：必须严格隔离，折进别的存档计数，绝不进【忘不掉的名场面】
+        SnapshotLine(
+            line=ArchiveLine(
+                id=99,
+                live_session_id=3,
+                text="Minecraft：二周目打赢末影龙",
+                quote="龙蛋到手啦",
+                evidence_chat_id=99,
+                game="minecraft",
+                save_id="s2",
+                save_name="二周目",
+                highlight=True,
+            ),
+            highlight=True,
+            seen_at_ms=9_500,
+        ),
+        # 直播间不挂游戏的行
+        SnapshotLine(
+            line=ArchiveLine(
+                id=80,
+                live_session_id=10,
+                text="和弹幕猜谜互动",
+                quote="这道题太难猜了",
+                evidence_chat_id=80,
+                game=None,
+            ),
+            seen_at_ms=10_000,
+        ),
+    ]
+
+    brief = render_brief(
+        snapshot_lines=snap,
+        previous_session_id=10,
+        earliest_recent_ms=8_000,
+        current_saves=saves,
+        used_archive_ids={25},
+        speaking_mode="gameplay",
+    )
+
+    assert "还在 minecraft「二周目」里做过 1 件事" in brief
+    assert "二周目打赢末影龙" not in brief
+    assert "【一起经历过的名场面】" not in brief
+    # 【忘不掉的名场面】紧跟在【最近几场】之后、【直播间里的事】之前
+    assert brief.index("【最近几场】") < brief.index("【忘不掉的名场面】") < brief.index("【直播间里的事】")
+    assert "- [档#21] Minecraft：一周目名场面21（你说过「高光原话21」）" in brief
+    assert "- [档#25] Minecraft：一周目名场面25（你说过「高光原话25」）（本场已提过）" in brief
+    assert "- [档#24] Minecraft：一周目名场面24（你说过「高光原话24」）" in brief
+    assert "- [档#23] Minecraft：一周目名场面23（你说过「高光原话23」）" in brief
+    assert "一周目名场面22" not in brief, "超出 4 行名额的最老未置顶名场面不展示"
+    assert brief.count("[档#10]") == 1 and brief.count("[档#11]") == 1
+    assert brief_archive_ids(
+        snapshot_lines=snap,
+        previous_session_id=10,
+        earliest_recent_ms=8_000,
+        current_saves=saves,
+        speaking_mode="gameplay",
+    ) == [10, 11, 21, 25, 24, 23, 80]
+
+
+def test_zatsudan_mode_expands_cross_save_highlights_with_save_names_and_used_marks() -> None:
+    """纯杂谈模式（speaking_mode == 'zatsudan'）展开【一起经历过的名场面】（至多 6 行，按置顶与最近被提起挑选），
+    挂游戏的写明发生在哪个游戏与存档，普通游戏琐事不混入，且纳入 brief_archive_ids 与本场已提过标注。"""
+    snap = [
+        SnapshotLine(
+            line=ArchiveLine(
+                id=1,
+                live_session_id=2,
+                text="Minecraft：修通跨海铁路通车翻车",
+                quote="第一趟车翻进海里了",
+                evidence_chat_id=1,
+                game="minecraft",
+                save_id="s1",
+                save_name="一周目",
+                highlight=True,
+            ),
+            pinned=True,
+            highlight=True,
+            seen_at_ms=1_000,
+        ),
+        *[
+            SnapshotLine(
+                line=ArchiveLine(
+                    id=10 + idx,
+                    live_session_id=4 + idx,
+                    text=f"Minecraft：二周目大事{idx}",
+                    quote=f"二周目原话{idx}",
+                    evidence_chat_id=10 + idx,
+                    game="minecraft",
+                    save_id="s2",
+                    save_name="二周目",
+                    highlight=True,
+                ),
+                highlight=True,
+                seen_at_ms=2_000 + idx * 100,
+            )
+            for idx in range(5)
+        ],
+        # 不挂游戏的直播间高光：排进前 6 时不与【直播间里的事】重复出现
+        SnapshotLine(
+            line=ArchiveLine(
+                id=30,
+                live_session_id=9,
+                text="出道满月问答全场刷橘子梗",
+                quote="满屏都是小橘子",
+                evidence_chat_id=30,
+                game=None,
+                highlight=True,
+            ),
+            highlight=True,
+            seen_at_ms=9_000,
+        ),
+        # 普通挖矿琐事：纯杂谈模式下不展开，留在其他存档折叠计数里
+        SnapshotLine(
+            line=ArchiveLine(
+                id=40,
+                live_session_id=9,
+                text="Minecraft：挖了两组铁矿",
+                quote="铁矿够用了",
+                evidence_chat_id=40,
+                game="minecraft",
+                save_id="s2",
+                save_name="二周目",
+                highlight=False,
+            ),
+            highlight=False,
+            seen_at_ms=9_500,
+        ),
+    ]
+
+    for saves in ({}, {"minecraft": GameSave()}):
+        brief = render_brief(
+            snapshot_lines=snap,
+            previous_session_id=9,
+            current_saves=saves,
+            used_archive_ids={1},
+            speaking_mode="zatsudan",
+        )
+        assert "【一起经历过的名场面】" in brief
+        assert "【忘不掉的名场面】" not in brief
+        assert "【这个世界里】" not in brief and "【最近几场】" not in brief
+        assert (
+            "- [档#1] Minecraft：修通跨海铁路通车翻车（在 minecraft「一周目」；你说过「第一趟车翻进海里了」）（本场已提过）"
+            in brief
+        )
+        assert "- [档#14] Minecraft：二周目大事4（在 minecraft「二周目」；你说过「二周目原话4」）" in brief
+        assert "- [档#30] 出道满月问答全场刷橘子梗（你说过「满屏都是小橘子」）" in brief
+        assert brief.count("[档#30]") == 1, "直播间高光已在名场面区展示，不在直播间区重复出现"
+        assert "二周目大事0" not in brief, "共 7 条名场面时按置顶与 seen_at_ms 取前 6 条，最老的 10 被裁掉"
+        assert "挖了两组铁矿" not in brief, "普通游戏进展在纯杂谈模式下不平铺"
+        ids = brief_archive_ids(
+            snapshot_lines=snap,
+            previous_session_id=9,
+            current_saves=saves,
+            speaking_mode="zatsudan",
+        )
+        assert ids == [1, 30, 14, 13, 12, 11]

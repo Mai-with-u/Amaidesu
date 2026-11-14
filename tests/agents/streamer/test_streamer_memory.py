@@ -29,6 +29,8 @@ from src.modules.llm.embedding import EmbeddingSetup
 from src.modules.llm.payload import Response, ToolCall
 from src.modules.session.manager import LiveSessionManager
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.models.memory import KeptSnapshotLine, PendingArchiveLine
+from src.modules.storage.models.rundown import GAME_OPENING_TALK_RUNDOWN
 from src.modules.storage.repos import ChatRepo
 from src.modules.storage.storage_ledger import StorageLedger
 from src.modules.tools import ToolRegistry
@@ -615,3 +617,119 @@ async def test_brief_follows_the_save_the_game_reports(store: SQLiteDatabase) ->
     agent._sync_current_saves()
     await agent._refresh_memory_brief()
     assert "] Minecraft：屋顶封好了（你说过「屋顶终于封好了」）" in agent.memory_brief_text
+
+
+async def test_rundown_segment_mode_switch_refreshes_highlight_zones_and_tracks_used_ids(
+    store: SQLiteDatabase,
+) -> None:
+    """开场杂谈环节（talk）按纯杂谈展开跨存档【一起经历过的名场面】并纳入点名与已提过护栏；
+    切入主线游玩环节（play）后立即自动重渲为当前存档隔离的【忘不掉的名场面】。"""
+    s1 = await _ended_session(store, started=1_000_000)
+    await store.sessions.apply_settlement(
+        live_session_id=s1,
+        archive_lines=[
+            PendingArchiveLine(
+                text="Minecraft：跨海铁路通车翻车",
+                quote="第一趟车翻进海里了",
+                evidence_chat_id=101,
+                game="minecraft",
+                save_id="w1",
+                save_name="一周目",
+                highlight=True,
+            ),
+            PendingArchiveLine(
+                text="Minecraft：第一次打赢末影龙",
+                quote="龙蛋终于到手啦",
+                evidence_chat_id=102,
+                game="minecraft",
+                save_id="w2",
+                save_name="二周目",
+                highlight=True,
+            ),
+        ],
+        commitments=[],
+        closures=[],
+        settled_at_ms=2_900_000,
+        now_ms_value=2_900_000,
+    )
+    hl_lines = await store.archive.list_lines(live_session_id=s1)
+    w1_id, w2_id = hl_lines[0].id, hl_lines[1].id
+
+    # 再过三场时长达标的正式场，使 s1 的名场面滑出最近三场窗口、走名场面独立保留层
+    kept = [
+        KeptSnapshotLine(archive_line_id=w1_id, seen_at_ms=1_000_000, highlight=True),
+        KeptSnapshotLine(archive_line_id=w2_id, seen_at_ms=1_000_000, highlight=True),
+    ]
+    for offset in (1, 2, 3):
+        started = (offset + 1) * 3_000_000
+        sid = await _ended_session(store, started=started)
+        await store.sessions.apply_settlement(
+            live_session_id=sid,
+            archive_lines=[],
+            commitments=[],
+            closures=[],
+            settled_at_ms=started + _SESSION_MS + 1_000,
+            now_ms_value=started + _SESSION_MS + 1_000,
+            snapshot_kept=kept,
+        )
+
+    await store.rundowns.upsert_rundown(GAME_OPENING_TALK_RUNDOWN)
+    current_pk = await store.sessions.insert_live_session(
+        stream_id="room", platform="bilibili", started_at_ms=20_000_000
+    )
+    session = ActiveSessionStub(active_pk=current_pk)
+    registry = ToolRegistry()
+    game_provider = SavedGameProvider("minecraft", GameSave())
+    registry.register_provider(game_provider)
+    agent = make_streamer_agent(
+        {
+            "background": {"enabled": False},
+            "mouth": {"enabled": False},
+            "rundown_id": GAME_OPENING_TALK_RUNDOWN.rundown_id,
+        },
+        llm=FakeLLMManager(),
+        tool_registry=registry,
+        session_manager=session,
+        rundown_repo=store.rundowns,
+        chat_repo=store.chat,
+        event_repo=store.events,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
+    )
+    await agent.start()
+    try:
+        await agent.refresh_memory_brief()
+        # 启动落入开场闲聊热身环节（mode=talk → zatsudan）：跨存档名场面展开且均进合法点名名单
+        assert agent.current_speaking_mode == "zatsudan"
+        assert "【一起经历过的名场面】" in agent.memory_brief_text
+        assert "在 minecraft「一周目」；你说过「第一趟车翻进海里了」" in agent.memory_brief_text
+        assert "在 minecraft「二周目」；你说过「龙蛋终于到手啦」" in agent.memory_brief_text
+        assert set(agent.memory_brief_archive_ids) == {w1_id, w2_id}
+
+        # 本场点名提过一次后，刷新简报即标"（本场已提过）"并记入 memory_used_archive_ids 防反复念旧
+        await store.chat.insert_live_chat(
+            live_session_id=current_pk,
+            timestamp_ms=20_010_000,
+            sender_role="assistant",
+            content="还记得以前通车第一趟就翻进海里",
+            message_type="speak",
+            utterance_id="utt_hl",
+            memory_refs=f'["档#{w1_id}"]',
+        )
+        await agent.refresh_memory_brief()
+        assert agent.memory_used_archive_ids == (w1_id,)
+        assert f"[档#{w1_id}]" in agent.memory_brief_text and "（本场已提过）" in agent.memory_brief_text
+
+        # 进入二周目存档并切入主线游玩环节（mode=play → gameplay）：回调自动同步存档并刷新简报，一周目名场面严格隔离折叠
+        game_provider.save = GameSave(id="w2", name="二周目")
+        ok, _msg, _view = await agent.rundown_control("goto", segment_id="main_play")
+        assert ok is True
+        assert agent.current_speaking_mode == "gameplay"
+        await wait_until(lambda: "【忘不掉的名场面】" in agent.memory_brief_text, what="切环节触发简报重渲为边玩模式")
+        assert "【一起经历过的名场面】" not in agent.memory_brief_text
+        assert f"[档#{w2_id}] Minecraft：第一次打赢末影龙" in agent.memory_brief_text
+        assert "第一趟车翻进海里了" not in agent.memory_brief_text
+        assert "还在 minecraft「一周目」里做过 1 件事" in agent.memory_brief_text
+        assert agent.memory_brief_archive_ids == (w2_id,)
+    finally:
+        await agent.stop()

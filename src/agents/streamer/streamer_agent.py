@@ -665,6 +665,8 @@ class StreamerAgent(BaseAgent):
         self._memory_brief_archive_ids: tuple[int, ...] = ()
         # 本场已点名提过的档案行（随简报每窗重算）：Planner 拦住没人问起时的复提
         self._memory_used_archive_ids: tuple[int, ...] = ()
+        # 最近一次渲染简报所用的说话模式（gameplay / zatsudan）：流程单切环节改变了模式时立即触发重渲
+        self._memory_brief_speaking_mode: str = ""
         # 线索推送：每批按弹幕与开着的游戏算"这一批想起来的事"；状态只活在本场
         self._memory_cues: Optional[MemoryCueProvider] = memory_cues
         if memory_cues is None and commitments_repo is not None and chat_repo is not None:
@@ -885,6 +887,9 @@ class StreamerAgent(BaseAgent):
         if self.typed_config.background.enabled:
             await self._background.start()
 
+        # 先加载流程单再起记忆善后任务，使首次简报直接按开场环节的说话模式渲染
+        await self._rundown_coord.start()
+
         # 收播整理善后：上次退出时没整理完的场次（没写回顾，或回顾写完后整理被打断），
         # 启动后在后台补完一场，补完再把长期记忆与"上场回顾"段读出来（开播前就能用）
         if self._settler is not None:
@@ -898,9 +903,6 @@ class StreamerAgent(BaseAgent):
         # 记忆检索索引：第一轮就是启动补算，在后台跑，不挡开播
         if self._memory_indexer is not None:
             await self._memory_indexer.start()
-
-        # 启动流程单（fail-soft：加载失败降级为无流程单）
-        await self._rundown_coord.start()
 
         # 启动发言管线（speech → TTS / emotion → VTS；队列生命周期归 dispatcher）
         await self._speech.start()
@@ -1828,6 +1830,11 @@ class StreamerAgent(BaseAgent):
         """当前说话档位（"play" 边玩边说 / "talk" 杂谈唠嗑）。"""
         return self._current_speech_mode()
 
+    @property
+    def current_speaking_mode(self) -> str:
+        """常驻简报使用的当前说话模式（"gameplay" 常规边玩边说 / "zatsudan" 纯杂谈）。"""
+        return self._current_speaking_mode()
+
     def _has_enabled_game(self) -> bool:
         """本场是否挂有游戏（启用了游戏工具面，或本场已出现过游戏动静/在途委派）。"""
         return bool(self._enabled_game_names() or self._session_games or self._playing_games())
@@ -1854,6 +1861,22 @@ class StreamerAgent(BaseAgent):
             game_active=self._has_enabled_game(),
             game_waiting=self._is_game_waiting(),
         )
+
+    def _current_speaking_mode(self) -> str:
+        """判定常驻简报使用的环节说话模式（"zatsudan" 纯杂谈 / "gameplay" 常规边玩边说）。
+
+        流程单当前环节显式标为 talk，或流程单已加载且本场未启用任何游戏时按纯杂谈展开跨存档名场面；
+        主线游玩环节、启用了游戏的常规直播（含游戏委派短暂等待回复期间）均保持边玩边说的严格存档隔离，
+        避免游玩中途因委派短暂挂起而抖动提示词前缀缓存或串入其他存档记忆。
+        """
+        seg_mode = self._rundown_coord.current_segment_mode()
+        if seg_mode == "talk":
+            return "zatsudan"
+        if seg_mode == "play":
+            return "gameplay"
+        if self._rundown_coord.is_available() and not self._has_enabled_game():
+            return "zatsudan"
+        return "gameplay"
 
     def _sync_talk_workbench(self) -> None:
         """同步话头工作台到当前流程单环节（同环节同提纲幂等，换环节自动重置）。"""
@@ -2085,16 +2108,29 @@ class StreamerAgent(BaseAgent):
             label="StreamerAgent.settle_catchup",
         )
 
-    async def refresh_memory_brief(self, *, kind: Optional[SessionKind] = None, announce: bool = False) -> None:
-        """按台账快照重渲常驻简报（公开接缝，供决策窗与测试驱动重渲）。"""
-        await self._refresh_memory_brief(kind=kind, announce=announce)
+    async def refresh_memory_brief(
+        self,
+        *,
+        kind: Optional[SessionKind] = None,
+        announce: bool = False,
+        speaking_mode: Optional[str] = None,
+    ) -> None:
+        """同步各游戏当前存档并按台账快照重渲常驻简报（公开接缝，供决策窗与测试驱动重渲）。"""
+        self._sync_current_saves()
+        await self._refresh_memory_brief(kind=kind, announce=announce, speaking_mode=speaking_mode)
 
-    async def _refresh_memory_brief(self, *, kind: Optional[SessionKind] = None, announce: bool = False) -> None:
-        """按台账快照重渲常驻简报（每决策窗一次）；仓储缺失时为空。
+    async def _refresh_memory_brief(
+        self,
+        *,
+        kind: Optional[SessionKind] = None,
+        announce: bool = False,
+        speaking_mode: Optional[str] = None,
+    ) -> None:
+        """按台账快照重渲常驻简报（每决策窗一次，环节切换说话模式时亦触发）；仓储缺失时为空。
 
-        渲染只依赖表快照：表没变时输出逐字节相同，Planner 系统提示词的前缀缓存仍命中；
-        表变了（直播中纠错、上一场整理刚写完）下一窗就反映出来。``announce`` 只在开播与
-        启动善后打开：那条 info 日志带"上一场编号与播出台词数"，供运营者核对注入内容。
+        渲染只依赖表快照与当前环节说话模式：表没变、说话模式没换时输出逐字节相同，Planner 系统提示词的
+        前缀缓存仍命中；表变了（直播中纠错、上一场整理刚写完）或切进纯杂谈环节，下一窗就反映出来。
+        ``announce`` 只在开播与启动善后打开：那条 info 日志带"上一场编号与播出台词数"，供运营者核对注入内容。
         """
         if self._commitments_repo is None or self._archive_repo is None:
             self._memory_brief_text = ""
@@ -2104,6 +2140,7 @@ class StreamerAgent(BaseAgent):
             return
         await self._flush_pending_operator_notes()
         resolved_kind = kind if kind is not None else self._current_session_kind()
+        resolved_mode = speaking_mode if speaking_mode is not None else self._current_speaking_mode()
         try:
             brief = await build_brief(
                 archive_repo=self._archive_repo,
@@ -2117,6 +2154,7 @@ class StreamerAgent(BaseAgent):
                 event_repo=self._event_repo,
                 current_saves=self._current_saves,
                 correction_repo=self._memory_correction_repo,
+                speaking_mode=resolved_mode,
             )
         except Exception as exc:  # noqa: BLE001 - 简报拼不出来只省这一段，不挡开播
             self._logger.warning(f"拼常驻简报失败（本场省略简报段）: {exc}", exc=exc)
@@ -2125,6 +2163,7 @@ class StreamerAgent(BaseAgent):
             self._memory_brief_archive_ids = ()
             self._memory_used_archive_ids = ()
             return
+        self._memory_brief_speaking_mode = resolved_mode
         self._memory_brief_text = brief.text
         self._memory_brief_ids = brief.commitment_ids
         self._memory_brief_archive_ids = brief.archive_ids
@@ -2687,8 +2726,26 @@ class StreamerAgent(BaseAgent):
             self._logger.info(f"外部主动发言触发: {topic_hint}")
 
     def _on_rundown_changed_proactive(self) -> None:
-        """流程单环节变更通知（协调器回调）：置位 proactive 即时信号，下个 tick 消费。"""
+        """流程单环节变更通知（协调器回调）：置位主动发言信号；若说话模式发生切换则异步刷新常驻简报。"""
         self._proactive_signals.set_rundown()
+        next_mode = self._current_speaking_mode()
+        if (
+            self._memory_brief_speaking_mode
+            and next_mode != self._memory_brief_speaking_mode
+            and self._commitments_repo is not None
+            and self._archive_repo is not None
+        ):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            self._sync_current_saves()
+            spawn_background_task(
+                self._refresh_memory_brief(),
+                logger=self._logger,
+                tasks=self._memory_tasks,
+                label="StreamerAgent.refresh_brief_on_mode_change",
+            )
 
     def receive_prompt(self, *, content: str, source: str = "") -> bool:
         """接收递话（运营/跨 Agent 留言）：入提醒队列，下个决策窗必达。

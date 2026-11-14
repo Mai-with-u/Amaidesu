@@ -29,11 +29,13 @@ from .commitment_ttl import effective_mentioned_session_id
 from .saves import SavePlace, canonical_save_names, place_of
 from .zones import (
     MAX_BRIEF_COMMITMENTS,
+    MAX_GAMEPLAY_HIGHLIGHT_LINES,
     MAX_RECENT_EARLIER_LINES,
     MAX_RECENT_PREVIOUS_LINES,
     MAX_ROOM_LINES,
     MAX_WORLD_LINES,
     MAX_WORLD_NAMES,
+    MAX_ZATSUDAN_HIGHLIGHT_LINES,
     WORLD_NAMES_PER_ROW,
     BriefRenderContext,
     BriefZoneOutput,
@@ -41,9 +43,11 @@ from .zones import (
     is_from_session,
     is_naming_title,
     name_table_row_count,
+    select_gameplay_highlight_items,
     select_recent_zone_items,
     select_room_zone_items,
     select_world_zone_items,
+    select_zatsudan_highlight_items,
 )
 
 if TYPE_CHECKING:
@@ -55,19 +59,23 @@ __all__ = [
     "BriefZoneOutput",
     "BriefZoneSpec",
     "COMMITMENTS_ZONE",
+    "HIGHLIGHT_ZONE",
     "MAX_BRIEF_ARCHIVE_LINES",
     "MAX_BRIEF_COMMITMENTS",
+    "MAX_GAMEPLAY_HIGHLIGHT_LINES",
     "MAX_PRESENCE_VIEWERS",
     "MAX_RECENT_EARLIER_LINES",
     "MAX_RECENT_PREVIOUS_LINES",
     "MAX_ROOM_LINES",
     "MAX_WORLD_LINES",
     "MAX_WORLD_NAMES",
+    "MAX_ZATSUDAN_HIGHLIGHT_LINES",
     "PRESENCE_RECENT_MS",
     "RECENT_ZONE",
     "ROOM_ZONE",
     "WORLD_NAMES_PER_ROW",
     "WORLD_ZONE",
+    "ZATSUDAN_HIGHLIGHT_ZONE",
     "brief_archive_ids",
     "format_memory_refs",
     "is_naming_title",
@@ -115,6 +123,8 @@ _CUE_HEADER = (
 _OPERATOR_NOTES_HEADER = "【运营本场提醒过】（与旧记忆或之前的印象冲突时，以此为准）："
 _WORLD_ZONE_HEADER = "【这个世界里】"
 _RECENT_ZONE_HEADER = "【最近几场】"
+_GAMEPLAY_HIGHLIGHT_HEADER = "【忘不掉的名场面】"
+_ZATSUDAN_HIGHLIGHT_HEADER = "【一起经历过的名场面】"
 _ROOM_ZONE_HEADER = "【直播间里的事】"
 _COMMITMENTS_HEADER = "【还惦记的事】（想做再做的事，不用赶）："
 # 承诺段末尾固定的一行：做不到的事给一条收场的路（当众说清楚，下播整理才认得出是了结），
@@ -486,15 +496,96 @@ def _render_commitments_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
     return BriefZoneOutput(lines=tuple(lines))
 
 
+def _format_zatsudan_highlight_line(
+    line: ArchiveLine,
+    *,
+    save_names: Mapping[Tuple[str, str], str],
+    current_saves: Mapping[str, GameSave],
+    used_ids: AbstractSet[int],
+    correction_note: str = "",
+) -> str:
+    """渲染纯杂谈模式下的单条名场面：挂游戏的在行内写明发生在哪个游戏与存档，防串世界说错。"""
+    title, quote = _line_texts(line)
+    if not title:
+        return ""
+    notes: List[str] = []
+    if line.game:
+        now = current_saves.get(line.game)
+        if place_of(line.game, line.save_id, current_saves) is SavePlace.SAME and now is not None and now.name:
+            label = now.label
+        else:
+            resolved = save_names.get((line.game, line.save_id), line.save_name)
+            label = GameSave(id=line.save_id, name=resolved).label
+        notes.append(f"在 {line.game}「{label}」" if label else f"在 {line.game}")
+    if quote:
+        notes.append(f"你说过「{quote}」")
+    notes.extend(source_notes(line))
+    head = f"- [{render_archive_number(line.id)}] {title}"
+    text = f"{head}（{'；'.join(notes)}）" if notes else head
+    if int(line.id) in used_ids:
+        text = f"{text}{_USED_THIS_SESSION}"
+    return f"{text}（本场更正：{correction_note}）" if correction_note else text
+
+
+def _render_gameplay_highlight_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
+    """【忘不掉的名场面】：边玩边说模式下当前存档更早场次的代表性名场面（至多 4 行，严格存档隔离）。"""
+    selected = select_gameplay_highlight_items(ctx)
+    if not selected:
+        return BriefZoneOutput()
+    lines: List[str] = []
+    cited: List[int] = []
+    for item in selected:
+        formatted = _format_event_line(
+            item.line,
+            current_saves=ctx.current_saves,
+            used_ids=ctx.used_archive_ids,
+            correction_note=ctx.archive_corrections.get(int(item.line.id), ""),
+        )
+        if formatted:
+            lines.append(formatted)
+            cited.append(int(item.line.id))
+    return BriefZoneOutput(lines=tuple(lines), archive_ids=tuple(cited))
+
+
+def _render_zatsudan_highlight_zone(ctx: BriefRenderContext) -> BriefZoneOutput:
+    """【一起经历过的名场面】：纯杂谈模式下跨存档展开至多 6 行共同经历，行内标注所属游戏与存档。"""
+    selected = select_zatsudan_highlight_items(ctx)
+    if not selected:
+        return BriefZoneOutput()
+    save_names = _canonical_names_for([item.line for item in ctx.snapshot_lines])
+    lines: List[str] = []
+    cited: List[int] = []
+    for item in selected:
+        formatted = _format_zatsudan_highlight_line(
+            item.line,
+            save_names=save_names,
+            current_saves=ctx.current_saves,
+            used_ids=ctx.used_archive_ids,
+            correction_note=ctx.archive_corrections.get(int(item.line.id), ""),
+        )
+        if formatted:
+            lines.append(formatted)
+            cited.append(int(item.line.id))
+    return BriefZoneOutput(lines=tuple(lines), archive_ids=tuple(cited))
+
+
 WORLD_ZONE = BriefZoneSpec(key="world", header=_WORLD_ZONE_HEADER, render=_render_world_zone)
 RECENT_ZONE = BriefZoneSpec(key="recent", header=_RECENT_ZONE_HEADER, render=_render_recent_zone)
+HIGHLIGHT_ZONE = BriefZoneSpec(
+    key="highlights", header=_GAMEPLAY_HIGHLIGHT_HEADER, render=_render_gameplay_highlight_zone
+)
+ZATSUDAN_HIGHLIGHT_ZONE = BriefZoneSpec(
+    key="zatsudan_highlights", header=_ZATSUDAN_HIGHLIGHT_HEADER, render=_render_zatsudan_highlight_zone
+)
 ROOM_ZONE = BriefZoneSpec(key="room", header=_ROOM_ZONE_HEADER, render=_render_room_zone)
 COMMITMENTS_ZONE = BriefZoneSpec(key="commitments", header=_COMMITMENTS_HEADER, render=_render_commitments_zone)
 
-# 常驻简报的有序分区表：新增分区（如后续表达层"关于她自己"区）只需在此追加一项，不动下方渲染骨架
+# 常驻简报的有序分区表：新增分区只需在此追加一项，不动下方渲染骨架
 BRIEF_ZONES: Tuple[BriefZoneSpec, ...] = (
     WORLD_ZONE,
     RECENT_ZONE,
+    HIGHLIGHT_ZONE,
+    ZATSUDAN_HIGHLIGHT_ZONE,
     ROOM_ZONE,
     COMMITMENTS_ZONE,
 )
@@ -525,6 +616,7 @@ def _build_render_context(
     used_archive_ids: AbstractSet[int] = frozenset(),
     archive_corrections: Optional[Mapping[int, str]] = None,
     operator_notes: Sequence[str] = (),
+    speaking_mode: str = "gameplay",
 ) -> BriefRenderContext:
     """把简报原始输入归一化为各分区共享的只读上下文（同句台词既写档案又记承诺时只留承诺）。"""
     listed = _listed_commitments(commitments)
@@ -551,13 +643,19 @@ def _build_render_context(
         other_save_commitments=tuple(other_save_commitments),
         archive_corrections={int(k): str(v) for k, v in (archive_corrections or {}).items() if str(v).strip()},
         operator_notes=tuple(" ".join(str(note).split()) for note in operator_notes if str(note).strip()),
+        speaking_mode=str(speaking_mode or "gameplay"),
     )
 
 
 def _render_folded_other_saves(ctx: BriefRenderContext) -> List[str]:
-    """别的存档里的记忆按 ``(game, save_id)`` 全简报归并成每个存档一行，名字取最后一次非空记录。"""
+    """别的存档里的记忆按 ``(game, save_id)`` 全简报归并成每个存档一行，名字取最后一次非空记录。
+
+    常规边玩边说模式下别的存档的名场面照旧归入折叠计数、绝不串存档；纯杂谈模式下已展开进
+    【一起经历过的名场面】的行不再重复计入折叠数。
+    """
     if not ctx.current_saves:
         return []
+    expanded_ids = {int(item.line.id) for item in select_zatsudan_highlight_items(ctx)}
     name_records: List[Tuple[Optional[str], str, str]] = [
         (item.line.game, item.line.save_id, item.line.save_name)
         for item in sorted(ctx.snapshot_lines, key=lambda s: (int(s.line.live_session_id), int(s.line.id)))
@@ -570,6 +668,8 @@ def _render_folded_other_saves(ctx: BriefRenderContext) -> List[str]:
     fallback_names: Dict[Tuple[str, str], str] = {}
     for item in ctx.snapshot_lines:
         line = item.line
+        if int(line.id) in expanded_ids:
+            continue
         title, _quote = _line_texts(line)
         if not title or not line.game:
             continue
@@ -612,6 +712,7 @@ def brief_archive_ids(
     previous_session_id: Optional[int] = None,
     previous_is_stale: bool = False,
     earliest_recent_ms: int = 0,
+    speaking_mode: str = "gameplay",
     zones: Sequence[BriefZoneSpec] = BRIEF_ZONES,
 ) -> List[int]:
     """常驻简报里标着编号的档案行（Planner 点名的合法名单之一）：与 ``render_brief`` 跑同一套分区表。"""
@@ -623,11 +724,12 @@ def brief_archive_ids(
         previous_is_stale=previous_is_stale,
         earliest_recent_ms=earliest_recent_ms,
         current_saves=current_saves,
+        speaking_mode=speaking_mode,
     )
     cited: List[int] = []
     for zone in zones:
         cited.extend(zone.render(ctx).archive_ids)
-    return cited
+    return list(dict.fromkeys(cited))
 
 
 def _listed_commitments(commitments: Sequence[Commitment]) -> List[Commitment]:
@@ -672,13 +774,15 @@ def render_brief(
     used_archive_ids: AbstractSet[int] = frozenset(),
     archive_corrections: Optional[Mapping[int, str]] = None,
     operator_notes: Sequence[str] = (),
+    speaking_mode: str = "gameplay",
     zones: Sequence[BriefZoneSpec] = BRIEF_ZONES,
 ) -> str:
     """Planner 系统提示词末尾的常驻简报；所有分区与别的存档折叠行都空时返回空串（整段省略）。
 
-    按 ``zones`` 定义的分区顺序渲染（默认依次为【这个世界里】【最近几场】【直播间里的事】【还惦记的事】），
-    每个分区各自计额、空区自动省略；别的存档里的记忆按 ``(game, save_id)`` 归并名字并折成每个存档一行。
-    存档没换、表没变时输出逐字节不变，前缀缓存照旧命中。
+    按 ``zones`` 定义的分区顺序渲染（边玩边说模式下【最近几场】后按需跟【忘不掉的名场面】，
+    纯杂谈模式下展开跨存档【一起经历过的名场面】），每个分区各自计额、空区自动省略；
+    别的存档里的记忆按 ``(game, save_id)`` 归并名字并折成每个存档一行。
+    存档没换、说话模式没换、表没变时输出逐字节不变，前缀缓存照旧命中。
     """
     ctx = _build_render_context(
         archive_lines=archive_lines,
@@ -694,6 +798,7 @@ def render_brief(
         used_archive_ids=used_archive_ids,
         archive_corrections=archive_corrections,
         operator_notes=operator_notes,
+        speaking_mode=speaking_mode,
     )
     folded_other_saves = _render_folded_other_saves(ctx)
     operator_block: List[str] = []

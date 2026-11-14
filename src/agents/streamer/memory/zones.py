@@ -20,12 +20,14 @@ from .saves import SavePlace, place_of
 
 __all__ = [
     "MAX_BRIEF_COMMITMENTS",
+    "MAX_GAMEPLAY_HIGHLIGHT_LINES",
     "MAX_RECENT_EARLIER_LINES",
     "MAX_RECENT_PREVIOUS_LINES",
     "MAX_ROOM_LINES",
     "MAX_SNAPSHOT_HIGHLIGHTS",
     "MAX_WORLD_LINES",
     "MAX_WORLD_NAMES",
+    "MAX_ZATSUDAN_HIGHLIGHT_LINES",
     "WORLD_NAMES_PER_ROW",
     "BriefRenderContext",
     "BriefZoneOutput",
@@ -34,9 +36,11 @@ __all__ = [
     "is_naming_title",
     "name_table_row_count",
     "pick_within_quota",
+    "select_gameplay_highlight_items",
     "select_recent_zone_items",
     "select_room_zone_items",
     "select_world_zone_items",
+    "select_zatsudan_highlight_items",
 ]
 
 # 各分区各自的名额：取名与稳定事实不挤占最近事件，代表性名场面独立保留，游戏事件不挤占直播间里的事
@@ -46,6 +50,8 @@ WORLD_NAMES_PER_ROW = 6  # 名字表每行最多并列几个名字项
 MAX_RECENT_PREVIOUS_LINES = 6  # 【最近几场】上一场事件至多几行
 MAX_RECENT_EARLIER_LINES = 6  # 【最近几场】再往前两场事件合计至多几行（按最近被提起）
 MAX_SNAPSHOT_HIGHLIGHTS = 6  # 跨场滚动快照里每个游戏存档（及不挂游戏的直播间）独立保留名场面至多几行
+MAX_GAMEPLAY_HIGHLIGHT_LINES = 4  # 边玩边说模式下【忘不掉的名场面】至多展示几行（仅当前存档更早场次）
+MAX_ZATSUDAN_HIGHLIGHT_LINES = 6  # 纯杂谈模式下【一起经历过的名场面】至多展示几行（跨存档展开）
 MAX_ROOM_LINES = 6  # 【直播间里的事】不挂游戏的行至多几行（换存档照样带着）
 MAX_BRIEF_COMMITMENTS = 5  # 【还惦记的事】最近三场内提起过的未了结承诺至多几条
 
@@ -138,6 +144,7 @@ class BriefRenderContext:
     other_save_commitments: Tuple[Commitment, ...] = ()
     archive_corrections: Mapping[int, str] = field(default_factory=dict)
     operator_notes: Tuple[str, ...] = ()
+    speaking_mode: str = "gameplay"
 
 
 @dataclass(frozen=True)
@@ -161,14 +168,42 @@ def pick_within_quota(items: Sequence[SnapshotLine], quota: int) -> List[Snapsho
     return [item for idx, item in enumerate(items) if idx in kept_indices]
 
 
+def _in_active_game_world(item: SnapshotLine, ctx: BriefRenderContext) -> bool:
+    """判定一条挂游戏的快照行是否属于眼下正在游玩的存档世界。
+
+    纯杂谈模式（``speaking_mode == "zatsudan"``）下若未实际进入某存档，不把历史各存档的取名或琐事当成
+    "眼下这个世界"平铺；常规边玩边说模式照旧排除确认属于别的存档的行。
+    """
+    place = place_of(item.line.game, item.line.save_id, ctx.current_saves)
+    if ctx.speaking_mode == "zatsudan":
+        return place is SavePlace.SAME
+    return place is not SavePlace.OTHER
+
+
+def select_zatsudan_highlight_items(ctx: BriefRenderContext) -> List[SnapshotLine]:
+    """纯杂谈模式下挑出【一起经历过的名场面】（从全部快照名场面行里按置顶与最近被提起取至多 6 行）。"""
+    if ctx.speaking_mode != "zatsudan":
+        return []
+    candidates = [item for item in ctx.snapshot_lines if item.highlight and (item.line.text or "").strip()]
+    if not candidates:
+        return []
+    ranked = sorted(
+        enumerate(candidates),
+        key=lambda pair: (not pair[1].pinned, -int(pair[1].seen_at_ms), pair[0]),
+    )
+    return [item for _idx, item in ranked[:MAX_ZATSUDAN_HIGHLIGHT_LINES]]
+
+
 def select_world_zone_items(ctx: BriefRenderContext) -> Tuple[List[SnapshotLine], List[SnapshotLine]]:
     """筛出【这个世界里】的名字类列表与其余稳定事实列表（各自按名额裁剪）。"""
+    zatsudan_ids = {int(item.line.id) for item in select_zatsudan_highlight_items(ctx)}
     candidates = [
         item
         for item in ctx.snapshot_lines
         if item.line.game
         and item.lasting
-        and place_of(item.line.game, item.line.save_id, ctx.current_saves) is not SavePlace.OTHER
+        and int(item.line.id) not in zatsudan_ids
+        and _in_active_game_world(item, ctx)
         and (item.line.text or "").strip()
     ]
     if not candidates:
@@ -181,12 +216,14 @@ def select_world_zone_items(ctx: BriefRenderContext) -> Tuple[List[SnapshotLine]
 
 def select_recent_zone_items(ctx: BriefRenderContext) -> Tuple[List[SnapshotLine], List[SnapshotLine]]:
     """筛出【最近几场】的上一场事件（≤6）与再往前两场事件（按最近被提起，≤6）。"""
+    zatsudan_ids = {int(item.line.id) for item in select_zatsudan_highlight_items(ctx)}
     candidates = [
         item
         for item in ctx.snapshot_lines
         if item.line.game
         and not item.lasting
-        and place_of(item.line.game, item.line.save_id, ctx.current_saves) is not SavePlace.OTHER
+        and int(item.line.id) not in zatsudan_ids
+        and _in_active_game_world(item, ctx)
         and (item.line.text or "").strip()
     ]
     if not candidates:
@@ -198,15 +235,61 @@ def select_recent_zone_items(ctx: BriefRenderContext) -> Tuple[List[SnapshotLine
         item
         for item in candidates
         if not is_from_session(item.line, ctx.archive_session_id)
-        and (ctx.earliest_recent_ms <= 0 or item.pinned or int(item.seen_at_ms) >= ctx.earliest_recent_ms)
+        # 滑出近期窗口的置顶名场面交由【忘不掉的名场面】按置顶优先承接，不挤占【最近几场】或变相突破 4 行上限
+        and (
+            ctx.earliest_recent_ms <= 0
+            or (item.pinned and not item.highlight)
+            or int(item.seen_at_ms) >= ctx.earliest_recent_ms
+        )
     ]
     ranked = sorted(enumerate(earlier_pool), key=lambda pair: (not pair[1].pinned, -int(pair[1].seen_at_ms), pair[0]))
     return prev_items, [item for _idx, item in ranked[:MAX_RECENT_EARLIER_LINES]]
 
 
+def select_gameplay_highlight_items(ctx: BriefRenderContext) -> List[SnapshotLine]:
+    """常规边玩边说模式下筛出【忘不掉的名场面】（至多 4 行）。
+
+    严格遵守存档隔离：分存档游戏仅收确认属于当前存档（``SavePlace.SAME``）的行，别的存档与存档不明的行
+    绝不串进本区；同时排除已出现在【这个世界里】或【最近几场】里的行及上一场刚写的行，只补更早场次滑出
+    近期窗口的代表性名场面。
+    """
+    if ctx.speaking_mode == "zatsudan":
+        return []
+    world_naming, world_others = select_world_zone_items(ctx)
+    recent_prev, recent_earlier = select_recent_zone_items(ctx)
+    shown_ids = {int(item.line.id) for item in (*world_naming, *world_others, *recent_prev, *recent_earlier)}
+    candidates: List[SnapshotLine] = []
+    for item in ctx.snapshot_lines:
+        line = item.line
+        if not item.highlight or not line.game or not (line.text or "").strip():
+            continue
+        if int(line.id) in shown_ids or is_from_session(line, ctx.archive_session_id):
+            continue
+        place = place_of(line.game, line.save_id, ctx.current_saves)
+        # 工具面报了该游戏的当前存档状态时，必须精确匹配当前存档；未分存档时允许按同游戏展示
+        if line.game in ctx.current_saves:
+            if place is not SavePlace.SAME:
+                continue
+        elif place is SavePlace.OTHER:
+            continue
+        candidates.append(item)
+    if not candidates:
+        return []
+    ranked = sorted(
+        enumerate(candidates),
+        key=lambda pair: (not pair[1].pinned, -int(pair[1].seen_at_ms), pair[0]),
+    )
+    return [item for _idx, item in ranked[:MAX_GAMEPLAY_HIGHLIGHT_LINES]]
+
+
 def select_room_zone_items(ctx: BriefRenderContext) -> List[SnapshotLine]:
-    """筛出【直播间里的事】的不挂游戏行（人放回 → 稳定 → 上一场 → 最近被提起，≤6）。"""
-    candidates = [item for item in ctx.snapshot_lines if not item.line.game and (item.line.text or "").strip()]
+    """筛出【直播间里的事】的不挂游戏行（人放回 → 稳定 → 名场面 → 上一场 → 最近被提起，≤6）。"""
+    zatsudan_ids = {int(item.line.id) for item in select_zatsudan_highlight_items(ctx)}
+    candidates = [
+        item
+        for item in ctx.snapshot_lines
+        if not item.line.game and int(item.line.id) not in zatsudan_ids and (item.line.text or "").strip()
+    ]
     if not candidates:
         return []
     ranked = sorted(
@@ -214,6 +297,7 @@ def select_room_zone_items(ctx: BriefRenderContext) -> List[SnapshotLine]:
         key=lambda pair: (
             not pair[1].pinned,
             not pair[1].lasting,
+            not pair[1].highlight,
             not is_from_session(pair[1].line, ctx.archive_session_id),
             -int(pair[1].seen_at_ms),
             pair[0],

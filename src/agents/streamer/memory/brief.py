@@ -78,6 +78,7 @@ async def build_brief(
     event_repo: Optional["EventRepo"] = None,
     current_saves: Optional[Mapping[str, GameSave]] = None,
     correction_repo: Optional["MemoryCorrectionRepo"] = None,
+    speaking_mode: str = "gameplay",
 ) -> MemoryBrief:
     """拼一份常驻简报；两段料都没取到时返回空简报（系统提示词里整段省略）。
 
@@ -121,6 +122,7 @@ async def build_brief(
         used_archive_ids=used_archive,
         archive_corrections=archive_corrections,
         operator_notes=operator_notes,
+        speaking_mode=speaking_mode,
     )
     return MemoryBrief(
         text=text,
@@ -133,6 +135,7 @@ async def build_brief(
                 previous_session_id=previous_session_id,
                 previous_is_stale=previous_is_stale,
                 earliest_recent_ms=earliest_recent_ms,
+                speaking_mode=speaking_mode,
             )
         ),
         used_archive_ids=tuple(sorted(used_archive)),

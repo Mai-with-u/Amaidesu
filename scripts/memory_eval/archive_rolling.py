@@ -245,6 +245,8 @@ def _oracle(case: SessionCase, key_quotes: Dict[str, str]) -> Callable[[str, str
             item: Dict[str, Any] = {"old": number, "op": op["op"]}
             if "line" in op:
                 item["line"] = op["line"]
+            if "highlight" in op:
+                item["highlight"] = op["highlight"]
             if op["op"] == "drop":
                 item["reason"] = op["reason"]
             if op["op"] == "replace":
@@ -257,6 +259,7 @@ def _oracle(case: SessionCase, key_quotes: Dict[str, str]) -> Callable[[str, str
                 "quote": a["quote_contains"],
                 "game": a["game"],
                 "lasting": a["lasting"],
+                **({"highlight": a["highlight"]} if "highlight" in a else {}),
             }
             for a in case.archive
         ]
@@ -381,7 +384,12 @@ async def run_sequence(
                         "session": index + 1,
                         "model_output": base._clip_text(llm.outputs[-1] if llm.outputs else ""),
                         "snapshot": [
-                            {"key": row_keys.get(item.line.id), "title": item.line.text, "lasting": item.lasting}
+                            {
+                                "key": row_keys.get(item.line.id),
+                                "title": item.line.text,
+                                "lasting": item.lasting,
+                                "highlight": item.highlight,
+                            }
                             for item in rows
                         ],
                     }
