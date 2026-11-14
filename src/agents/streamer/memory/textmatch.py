@@ -42,6 +42,40 @@ PINYIN_MIN_CHARS = 3
 # 一个字的触发词不收：单字子串匹配几乎每条弹幕都会撞上
 KEYWORD_MIN_CHARS = 2
 
+# 回想查询剔除的中文纯语法/疑问/时间口语虚词（含三字口语套话两字切分后的碎片，避免"上次那个是什么"把全库带虚词的旧话全捞出来）
+_CN_RECALL_STOPWORDS: frozenset[str] = frozenset(
+    (
+        "上次 下次 那次 这次 什么 为什 怎么 怎样 哪儿 哪里 哪个 哪些 "
+        "我们 你们 他们 她们 咱们 大家 自己 那个 这个 这些 那些 那里 这里 "
+        "是不是 是不 不是 有没有 有没 没有 能不能 能不 不能 可不 不可 可以 "
+        "刚才 之前 以前 后来 当时 现在 一下 一点 一些 觉得 记得 还记 得吗 不记 "
+        "好像 应该 其实 就是 还是 或者 而且 因为 所以 如果 虽然 但是 不过 然后 接着 已经 正在 一直 "
+        "的 了 吗 呢 吧 啊 呀 啦 喔 哦 噢 哈 嘿 诶 唉 着 过 我 你 他 她 它 在 是 有 就 都 也 还 又"
+    ).split()
+)
+
+# 回想查询剔除的英文疑问词、冠介连助词与时间序数虚词（保留第一人称代词供自述轮加权，判纯实词时再由 _PRONOUN_STOPWORDS 剥离）
+_EN_RECALL_STOPWORDS: frozenset[str] = frozenset(
+    (
+        "what was the had with for did you how when where which from that this have been are were your "
+        "about after before first last a an of to in on at by and or is am be do does has can could will "
+        "would should not s t m re ve ll d many much who whom whose why whether these those as if so than "
+        "into over under between through during there here then"
+    ).split()
+)
+
+_RECALL_QUERY_STOPWORDS: frozenset[str] = _CN_RECALL_STOPWORDS | _EN_RECALL_STOPWORDS
+
+# 核算实词覆盖度与近似复读相似度时额外剥离的人称代词与句尾语气助词
+_PRONOUN_STOPWORDS: frozenset[str] = frozenset(
+    (
+        "i me my mine myself we us our ours ourselves he him his she her hers it its "
+        "they them their theirs yours yourself"
+    ).split()
+)
+_CONTENT_STOPWORDS: frozenset[str] = _RECALL_QUERY_STOPWORDS | _PRONOUN_STOPWORDS
+_TRAILING_MODAL_CHARS = "了啦呀啊呢吧喔哦噢嘛嘞"
+
 MatchHow = Literal["exact", "homophone", "initials"]
 K = TypeVar("K", bound=Hashable)
 
@@ -125,6 +159,51 @@ def fts_or_query(text: str) -> Optional[str]:
     if not unique:
         return None
     return " OR ".join('"' + token.replace('"', '""') + '"' for token in unique)
+
+
+def recall_query_tokens(text: str) -> List[str]:
+    """提取回想检索的有效词项（去重保序，剔除口语/疑问虚词；整句全是虚词时回退原词表防空查报错）。"""
+    unique = list(dict.fromkeys(bigram_tokens(text)))
+    if not unique:
+        return []
+    filtered = [token for token in unique if token not in _RECALL_QUERY_STOPWORDS]
+    return filtered if filtered else unique
+
+
+def fts_recall_query(text: str) -> Optional[str]:
+    """回想检索专用的 FTS5"或"查询：先剥离高频疑问词与语法虚词，全为虚词时自动回退原词表。"""
+    tokens = recall_query_tokens(text)
+    if not tokens:
+        return None
+    return " OR ".join('"' + token.replace('"', '""') + '"' for token in tokens)
+
+
+def content_tokens(text: str, *, strip_trailing_modals: bool = False) -> List[str]:
+    """提取一段文本里的实词/二元组（去重保序，剔除全部语法虚词与人称代词，不做纯虚词回退）。
+
+    ``strip_trailing_modals=True`` 时在每个连续段末尾剥掉句尾语气助词（如"卡住了"与"卡住啦"归一成"卡住"），
+    供跨场近似复读台词计算词项重合度。
+    """
+    if not strip_trailing_modals:
+        raw_tokens = bigram_tokens(text)
+    else:
+        raw_tokens = []
+        for run in _alnum_runs(text):
+            for part, is_cjk in _split_run(run):
+                cleaned = part.rstrip(_TRAILING_MODAL_CHARS) if is_cjk else part
+                if not cleaned:
+                    continue
+                if not is_cjk or len(cleaned) == 1:
+                    raw_tokens.append(cleaned)
+                else:
+                    raw_tokens.extend(cleaned[index : index + 2] for index in range(len(cleaned) - 1))
+    return [token for token in dict.fromkeys(raw_tokens) if token not in _CONTENT_STOPWORDS]
+
+
+def is_stopword_token(token: str) -> bool:
+    """判断单个归一化词项是否属于回想停用虚词（供单字 LIKE 兜底过滤纯语气字）。"""
+    norm = normalize(token)
+    return not norm or norm in _CONTENT_STOPWORDS
 
 
 def needs_like_fallback(text: str) -> bool:
@@ -229,9 +308,13 @@ __all__ = [
     "KeywordMatcher",
     "MatchHow",
     "bigram_tokens",
+    "content_tokens",
     "fts_or_query",
+    "fts_recall_query",
     "index_text",
+    "is_stopword_token",
     "needs_like_fallback",
     "normalize",
+    "recall_query_tokens",
     "verbatim_quote",
 ]

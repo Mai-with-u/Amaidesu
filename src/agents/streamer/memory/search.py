@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
@@ -26,7 +26,14 @@ from src.modules.logging import get_logger
 from src.modules.storage.models.memory import IndexCandidate
 from src.modules.storage.repos.memory_index import INDEX_SOURCES, IndexSource, MemoryIndexRepo
 
-from .textmatch import fts_or_query, needs_like_fallback
+from .textmatch import (
+    bigram_tokens,
+    content_tokens,
+    fts_recall_query,
+    is_stopword_token,
+    needs_like_fallback,
+    recall_query_tokens,
+)
 
 logger = get_logger("MemorySearch")
 
@@ -36,6 +43,13 @@ RRF_K = 60
 CANDIDATES_PER_PATH = 50
 # 查询向量缓存多少条查询文本
 QUERY_VECTOR_CACHE_SIZE = 64
+# 同分档微幅新近度偏置上限（约 1.3 个 RRF 名次差）：相关度难分伯仲时优先排近期状态更新，不跨档反超高相关早期事实
+RECENCY_MAX_BONUS = 0.00035
+# 判定两条候选属于同一相关度档的容差：关键词 BM25 分差不超过 3%，语义余弦差不超过 0.015
+_KEYWORD_BAND_RATIO = 0.97
+_VECTOR_BAND_DELTA = 0.015
+# 台词还原拼合窗口长度上限（超过此长度无法完整拼入前邻句，检索层不让超长后句白蹭前句词分）
+_SPEECH_WINDOW_FIT_CHARS = 140
 
 
 @dataclass(frozen=True)
@@ -58,6 +72,96 @@ class SearchResult:
 
     hits: List[SearchHit]
     vector_used: bool
+    used_stopword_fallback: bool = False
+
+
+def _rrf_with_band_recency(
+    items: Sequence[Tuple[int, float]],
+    *,
+    same_band: Callable[[float, float], bool],
+) -> List[Tuple[int, int, float, float]]:
+    """按单路排名计算带同分档微幅新近度偏置的 RRF 贡献：(rank, source_id, raw_score, rrf_contribution)。
+
+    只在原始相关度接近的同分档内部（档内至少 2 条候选）按主键新旧给至多 ``RECENCY_MAX_BONUS`` 的微幅加分；
+    独占单条分档的高相关早期事实加分为 0，且后续分档的天花板严格低于上一分档末名，杜绝低相关新记录跨档反超。
+    """
+    if not items:
+        return []
+    ordered_ids = sorted({source_id for source_id, _score in items})
+    id_span = len(ordered_ids) - 1
+    recency_pos = {source_id: (idx / id_span if id_span > 0 else 0.0) for idx, source_id in enumerate(ordered_ids)}
+
+    bands: List[List[Tuple[int, int, float]]] = []
+    for rank, (source_id, raw_score) in enumerate(items, start=1):
+        if not bands or not same_band(bands[-1][0][2], raw_score):
+            bands.append([(rank, source_id, raw_score)])
+        else:
+            bands[-1].append((rank, source_id, raw_score))
+
+    contributions: List[Tuple[int, int, float, float]] = []
+    for band in bands:
+        band_start = band[0][0]
+        head_rrf = 1.0 / (RRF_K + band_start)
+        if len(band) == 1:
+            rank, source_id, raw_score = band[0]
+            contributions.append((rank, source_id, raw_score, head_rrf))
+            continue
+        if band_start == 1:
+            ceiling = head_rrf + RECENCY_MAX_BONUS
+        else:
+            prev_floor = 1.0 / (RRF_K + band_start - 1)
+            ceiling = head_rrf + 0.5 * (prev_floor - head_rrf)
+        for rank, source_id, raw_score in band:
+            base = 1.0 / (RRF_K + rank)
+            boosted = min(ceiling, base + RECENCY_MAX_BONUS * recency_pos[source_id])
+            contributions.append((rank, source_id, raw_score, boosted))
+    return contributions
+
+
+def _same_keyword_band(head_score: float, score: float) -> bool:
+    if head_score <= 0.0:
+        return abs(head_score - score) <= 1e-6
+    return score >= head_score * _KEYWORD_BAND_RATIO
+
+
+def _same_vector_band(head_score: float, score: float) -> bool:
+    return score >= head_score - _VECTOR_BAND_DELTA
+
+
+def _de_echo_speech_keywords(
+    items: Sequence[Tuple[int, float]],
+    windows: Mapping[int, Tuple[str, Optional[int], str]],
+    query_terms: Set[str],
+) -> List[Tuple[int, float]]:
+    """消除台词前邻句滑窗带来的蹭词错位：后句无跨句新词或超长装不下前句时，把首发主分归还前句并按本句覆盖比折算。"""
+    if not items or not windows or not query_terms:
+        return list(items)
+    adjusted: Dict[int, float] = {}
+    for cid, score in items:
+        win = windows.get(cid)
+        if win is None or win[1] is None:
+            adjusted[cid] = max(adjusted.get(cid, 0.0), score)
+            continue
+        content, prev_id, prev_content = win
+        curr_own = set(bigram_tokens(content)) & query_terms
+        prev_own = set(bigram_tokens(prev_content)) & query_terms
+        new_terms = curr_own - prev_own
+        if not new_terms and prev_own:
+            # 后句未带来前邻句以外的任何新查询词：双倍词频涨出的高分归还给首次说全的前邻句
+            adjusted[prev_id] = max(adjusted.get(prev_id, 0.0), score)
+            if curr_own:
+                ratio = (len(curr_own) / len(prev_own)) * 0.72
+                adjusted[cid] = max(adjusted.get(cid, 0.0), score * ratio)
+            continue
+        if len(content) + len(prev_content) + 1 > _SPEECH_WINDOW_FIT_CHARS and prev_own:
+            # 两句总长超过 140 字无法完整拼成一条展示时，按各自词覆盖比例拆分，避免超长后话挤掉真正含词的前句
+            union_size = max(1, len(curr_own | prev_own))
+            if len(prev_own) >= len(curr_own):
+                adjusted[prev_id] = max(adjusted.get(prev_id, 0.0), score * (len(prev_own) / union_size))
+            adjusted[cid] = max(adjusted.get(cid, 0.0), score * (len(curr_own) / union_size))
+            continue
+        adjusted[cid] = max(adjusted.get(cid, 0.0), score)
+    return sorted(adjusted.items(), key=lambda pair: pair[1], reverse=True)[:CANDIDATES_PER_PATH]
 
 
 @dataclass
@@ -87,10 +191,16 @@ class MemorySearch:
         live_session_id: Optional[int] = None,
         limit: int = 8,
         wait_vector_ms: int = 0,
+        min_cosine: float = 0.0,
     ) -> List[SearchHit]:
         """查一段文本，返回融合后最相关的 ``limit`` 条；``live_session_id`` 给了就只查那一场。"""
         result = await self.search_detailed(
-            query, sources=sources, live_session_id=live_session_id, limit=limit, wait_vector_ms=wait_vector_ms
+            query,
+            sources=sources,
+            live_session_id=live_session_id,
+            limit=limit,
+            wait_vector_ms=wait_vector_ms,
+            min_cosine=min_cosine,
         )
         return result.hits
 
@@ -102,36 +212,51 @@ class MemorySearch:
         live_session_id: Optional[int] = None,
         limit: int = 8,
         wait_vector_ms: int = 0,
+        min_cosine: float = 0.0,
     ) -> SearchResult:
         """同 ``search``，另外告诉调用方这一次语义一路有没有用上（回想工具据此提醒"只按字面查"）。"""
         text = (query or "").strip()
         if not text:
             return SearchResult(hits=[], vector_used=False)
         fused: Dict[Tuple[IndexSource, int], _Fused] = {}
-        match_query = fts_or_query(text)
-        needles = [term for term in text.split() if needs_like_fallback(term)]
+        match_query = fts_recall_query(text)
+        query_terms = set(recall_query_tokens(text))
+        has_content_terms = bool(content_tokens(text))
+        raw_needles = [term for term in text.split() if needs_like_fallback(term)]
+        # 查询里已有实词时，单字口语虚词（如"我""的"）不再触发全表 LIKE 兜底，免得把近期闲聊塞进融合池
+        needles = [term for term in raw_needles if not is_stopword_token(term)] if has_content_terms else raw_needles
         query_vector = await self._query_vector(text, wait_vector_ms)
         for source in sources:
+            kw_items: List[Tuple[int, float]] = []
             if match_query is not None:
+                kw_limit = CANDIDATES_PER_PATH * 2 if source == "speech" else CANDIDATES_PER_PATH
                 found = await self._repo.keyword_candidates(
-                    source=source, match_query=match_query, limit=CANDIDATES_PER_PATH, live_session_id=live_session_id
+                    source=source, match_query=match_query, limit=kw_limit, live_session_id=live_session_id
                 )
-                for rank, candidate in enumerate(found, start=1):
-                    entry = fused.setdefault((source, candidate.source_id), _Fused())
-                    entry.score += 1 / (RRF_K + rank)
-                    entry.keyword = (rank, candidate.score)
+                kw_items = [(candidate.source_id, candidate.score) for candidate in found]
+            vec_items: List[Tuple[int, float]] = []
+            if query_vector is not None and self._embedding is not None:
+                vec_items = await self._vector_candidates(
+                    self._embedding, source, query_vector, live_session_id, min_cosine=min_cosine
+                )
+            if source == "speech" and kw_items and query_terms:
+                window_fn = getattr(self._repo, "speech_window_rows", None)
+                if callable(window_fn):
+                    windows = await window_fn(chat_ids=[cid for cid, _ in kw_items])
+                    kw_items = _de_echo_speech_keywords(kw_items, windows, query_terms)
+            for rank, source_id, kw_score, rrf_part in _rrf_with_band_recency(kw_items, same_band=_same_keyword_band):
+                entry = fused.setdefault((source, source_id), _Fused())
+                entry.score += rrf_part
+                entry.keyword = (rank, kw_score)
             if needles:
                 for rank, source_id in enumerate(await self._like_ids(source, needles, live_session_id), start=1):
                     entry = fused.setdefault((source, source_id), _Fused())
                     entry.score += 1 / (RRF_K + rank)
                     entry.like = rank
-            if query_vector is not None and self._embedding is not None:
-                for rank, (source_id, cosine) in enumerate(
-                    await self._vector_candidates(self._embedding, source, query_vector, live_session_id), start=1
-                ):
-                    entry = fused.setdefault((source, source_id), _Fused())
-                    entry.score += 1 / (RRF_K + rank)
-                    entry.vector = (rank, cosine)
+            for rank, source_id, cosine, rrf_part in _rrf_with_band_recency(vec_items, same_band=_same_vector_band):
+                entry = fused.setdefault((source, source_id), _Fused())
+                entry.score += rrf_part
+                entry.vector = (rank, cosine)
         ranked = sorted(fused.items(), key=lambda item: item[1].score, reverse=True)[: max(0, limit)]
         hits = [
             SearchHit(
@@ -146,7 +271,11 @@ class MemorySearch:
             )
             for (source, source_id), entry in ranked
         ]
-        return SearchResult(hits=hits, vector_used=query_vector is not None and self._embedding is not None)
+        return SearchResult(
+            hits=hits,
+            vector_used=query_vector is not None and self._embedding is not None,
+            used_stopword_fallback=match_query is not None and not has_content_terms,
+        )
 
     async def _like_ids(self, source: IndexSource, needles: Sequence[str], live_session_id: Optional[int]) -> List[int]:
         """子串兜底这一路：几个需要兜底的词各查一遍，按先后合并去重。"""
@@ -163,9 +292,15 @@ class MemorySearch:
         return merged[:CANDIDATES_PER_PATH]
 
     async def _vector_candidates(
-        self, embedding: EmbeddingClient, source: IndexSource, query_vector: np.ndarray, live_session_id: Optional[int]
+        self,
+        embedding: EmbeddingClient,
+        source: IndexSource,
+        query_vector: np.ndarray,
+        live_session_id: Optional[int],
+        *,
+        min_cosine: float = 0.0,
     ) -> List[Tuple[int, float]]:
-        """语义这一路：当前模型的全部向量与查询向量算余弦，取最高的一批。"""
+        """语义这一路：当前模型的全部向量与查询向量算余弦，丢弃低于 ``min_cosine`` 的低分噪声后取最高的一批。"""
         stored = [
             item
             for item in await self._repo.stored_vectors(
@@ -185,7 +320,11 @@ class MemorySearch:
         norms[norms == 0] = 1.0
         cosines = (matrix @ query_vector) / norms
         order = np.argsort(-cosines)[:CANDIDATES_PER_PATH]
-        return [(stored[int(index)].source_id, float(cosines[int(index)])) for index in order]
+        return [
+            (stored[int(index)].source_id, float(cosines[int(index)]))
+            for index in order
+            if float(cosines[int(index)]) >= min_cosine
+        ]
 
     @property
     def semantic_ready(self) -> bool:
@@ -258,4 +397,11 @@ class MemorySearch:
             self._query_vectors.popitem(last=False)
 
 
-__all__ = ["CANDIDATES_PER_PATH", "RRF_K", "MemorySearch", "SearchHit", "SearchResult"]
+__all__ = [
+    "CANDIDATES_PER_PATH",
+    "RECENCY_MAX_BONUS",
+    "RRF_K",
+    "MemorySearch",
+    "SearchHit",
+    "SearchResult",
+]

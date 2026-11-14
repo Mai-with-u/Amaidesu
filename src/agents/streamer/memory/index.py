@@ -210,15 +210,23 @@ class MemoryIndexer:
             logger.debug("记忆索引这一轮没有要补的")
 
     async def _fill_full_text(self, source: IndexSource, now: int) -> int:
-        """一类来源的全文：取缺的行、两字切分、写回，返回写了几行；整批都被跳过（读写之间正文变了）就留到下一轮。"""
+        """一类来源的全文：取缺的行、两字切分、写回，返回写了几行；台词切词时拼入同场前 30 秒紧邻台词而不改单句正本指纹。"""
         total = 0
         for _ in range(FULL_TEXT_MAX_BATCHES):
             docs = await self._repo.pending_full_text(source=source, now_ms=now, limit=FULL_TEXT_BATCH)
             if not docs:
                 return total
-            written = await self._repo.write_full_text(
-                source=source, items=[(doc, index_text(doc.document)) for doc in docs]
-            )
+            windows: Dict[int, Tuple[str, Optional[int], str]] = {}
+            if source == "speech":
+                window_fn = getattr(self._repo, "speech_window_rows", None)
+                if callable(window_fn):
+                    windows = await window_fn(chat_ids=[doc.source_id for doc in docs])
+            items = []
+            for doc in docs:
+                prev_content = windows.get(doc.source_id, ("", None, ""))[2] if windows else ""
+                fts_doc = f"{prev_content}\n{doc.document}" if prev_content else doc.document
+                items.append((doc, index_text(fts_doc)))
+            written = await self._repo.write_full_text(source=source, items=items)
             total += written
             if len(docs) < FULL_TEXT_BATCH or written == 0:
                 return total

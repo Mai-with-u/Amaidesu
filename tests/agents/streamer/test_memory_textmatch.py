@@ -14,7 +14,9 @@ from src.agents.streamer.memory.textmatch import (
     KeywordHit,
     KeywordMatcher,
     bigram_tokens,
+    content_tokens,
     fts_or_query,
+    fts_recall_query,
     index_text,
     needs_like_fallback,
     normalize,
@@ -58,6 +60,21 @@ def test_two_char_words_are_searchable_and_bm25_ranks_more_shared_words_first() 
 def test_or_query_quotes_every_word_so_operators_stay_literal() -> None:
     assert fts_or_query("倒立 OR 倒立") == '"倒立" OR "or"'
     assert fts_or_query("，，😂") is None
+
+
+def test_recall_query_strips_colloquial_fillers_and_falls_back_when_all_stopwords() -> None:
+    """回想查询剥离中英文疑问虚词与时间套话；整句只有虚词时回退原词表，确保纯虚词查询不报错也不返回空。"""
+    assert fts_recall_query("上次 那个 挖矿 是不是 钻石") == '"挖矿" OR "钻石"'
+    assert fts_recall_query("What was the camera you had before?") == '"camera"'
+    # 整句全是虚词时回退原去重词表，保持可检索
+    assert fts_recall_query("上次 那个 什么") == '"上次" OR "那个" OR "什么"'
+    assert fts_recall_query("what was the") == '"what" OR "was" OR "the"'
+    assert fts_recall_query("  ！？  ") is None
+    # content_tokens 不做纯虚词回退，并支持剥离句尾语气助词以归一化近似复读台词
+    assert content_tokens("上次 那个 什么") == []
+    assert content_tokens("拐角那台矿车又卡住了", strip_trailing_modals=True) == content_tokens(
+        "拐角那台矿车又卡住啦", strip_trailing_modals=True
+    )
 
 
 def test_single_cjk_char_queries_need_like_fallback() -> None:

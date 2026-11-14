@@ -143,3 +143,72 @@ async def test_embedding_failure_falls_back_to_keywords(store: SQLiteDatabase) -
 
     assert [(hit.source_id, hit.vector_rank) for hit in result.hits] == [(target, None)]
     assert result.vector_used is False, "嵌入失败这一次只走了关键词，调用方要能看出来"
+
+
+async def test_min_cosine_drops_low_similarity_vectors_from_rrf_fusion(store: SQLiteDatabase) -> None:
+    """低于 min_cosine 底线的低相关向量直接丢弃，防止全库最高余弦仅 0.25 时仍靠语义排名塞满候选。"""
+    clock = FakeClock()
+    session_id = await _session(store, clock)
+    # 与"猫"方向余弦 1.0 的强相关行 vs 正交后微偏（余弦约 0.25）的弱噪声行
+    strong_id = await store.archive.insert_line(
+        live_session_id=session_id, text="黑猫窝搭好了", quote="就叫芝麻", evidence_chat_id=1
+    )
+    weak_id = await store.archive.insert_line(
+        live_session_id=session_id, text="完全无关的种植记录", quote="收了一筐小麦", evidence_chat_id=2
+    )
+    docs = await store.memory_index.pending_full_text(source="archive", now_ms=clock.now_ms(), limit=10)
+    await store.memory_index.write_full_text(source="archive", items=[(doc, doc.document) for doc in docs])
+    doc_by_id = {doc.source_id: doc for doc in docs}
+    server = FakeEmbeddingServer()
+    embedding = server.client()
+    await store.memory_index.write_vectors(
+        source="archive",
+        model_key=embedding.model_key,
+        items=[
+            (doc_by_id[strong_id], [1.0, 0.0, 0.0]),
+            (doc_by_id[weak_id], [0.25, 0.0, 0.9682458]),
+        ],
+    )
+    search = MemorySearch(repo=store.memory_index, embedding=embedding)
+
+    # 默认 min_cosine=0.0 时两条都能看见（供被动想起留痕校准）
+    unfiltered = await search.search("小猫", sources=("archive",), wait_vector_ms=5_000)
+    assert {hit.source_id for hit in unfiltered} == {strong_id, weak_id}
+
+    # 回想传入 min_cosine=0.50 时，余弦 0.25 的弱向量被直接拦下
+    filtered = await search.search("小猫", sources=("archive",), wait_vector_ms=5_000, min_cosine=0.50)
+    assert [hit.source_id for hit in filtered] == [strong_id]
+
+
+async def test_recency_bias_prefers_newer_status_in_same_relevance_band_without_beating_unique_early_fact(
+    store: SQLiteDatabase,
+) -> None:
+    """同分档近场偏置：相关度接近的状态更新优先排较新场次，但绝不跨分档反超高相关的早期唯一事实。"""
+    clock = FakeClock()
+    early_session = await _session(store, clock)
+    clock.tick(86_400_000)
+    late_session = await _session(store, clock)
+
+    # 状态更新题：第 1 场住山洞基地 vs 第 2 场搬进山顶基地，关键词覆盖度同档，最新说法应排第 1
+    old_home = await store.archive.insert_line(
+        live_session_id=early_session, text="基地搬迁记录", quote="我们现在住在山洞基地里", evidence_chat_id=1
+    )
+    new_home = await store.archive.insert_line(
+        live_session_id=late_session, text="基地搬迁记录", quote="我们现在搬进山顶基地里", evidence_chat_id=2
+    )
+    # 早期唯一事实题：第 1 场唯一提到了紫水晶望远镜（双词全中），第 2 场只擦到普通单字词
+    early_unique = await store.archive.insert_line(
+        live_session_id=early_session, text="紫水晶望远镜做好了", quote="合成了紫水晶望远镜", evidence_chat_id=3
+    )
+    late_partial = await store.archive.insert_line(
+        live_session_id=late_session, text="普通望远镜架子", quote="摆了个架子", evidence_chat_id=4
+    )
+    clock.tick(60_000)
+    await _index(store, clock)
+    search = MemorySearch(repo=store.memory_index, embedding=None)
+
+    status_hits = await search.search("现在 基地", sources=("archive",))
+    assert [hit.source_id for hit in status_hits[:2]] == [new_home, old_home]
+
+    unique_hits = await search.search("紫水晶 望远镜", sources=("archive",))
+    assert [hit.source_id for hit in unique_hits[:2]] == [early_unique, late_partial]

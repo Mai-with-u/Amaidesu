@@ -14,6 +14,7 @@ from src.modules.events.names import CoreEvents
 from src.modules.events.payloads.background import BackgroundTaskChangedPayload
 from src.modules.llm.embedding import BACKOFF_BASE_MS
 from src.modules.storage.database import SQLiteDatabase
+from src.modules.storage.repos.memory_index import text_hash
 from tests.config.helpers import wait_until
 from tests.helpers import FakeClock
 from tests.modules.llm.fakes import FakeEmbeddingServer
@@ -210,3 +211,39 @@ async def test_small_backfill_below_threshold_stays_off_panel(store: SQLiteDatab
     await bus.wait_until_drained()
 
     assert payloads == [] and registry.snapshot() == []
+
+
+async def test_speech_fts_includes_adjacent_line_while_vector_keeps_single_line_hash(store: SQLiteDatabase) -> None:
+    """台词全文索引拼入同场前 30 秒紧邻台词以支持跨句检索，而嵌入请求与向量 text_hash 保持单句原样。"""
+    clock = FakeClock()
+    session_id = await store.sessions.insert_live_session(started_at_ms=clock.now_ms() - 3_600_000, kind="live")
+    first_id = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=clock.now_ms() - 75_000,
+        sender_role="assistant",
+        content="北边刚摆好高炉",
+        message_type="speak",
+    )
+    second_id = await store.chat.insert_live_chat(
+        live_session_id=session_id,
+        timestamp_ms=clock.now_ms() - 60_000,
+        sender_role="assistant",
+        content="结果蒸汽管接反了",
+        message_type="speak",
+    )
+    server = FakeEmbeddingServer()
+    indexer = MemoryIndexer(
+        repo=store.memory_index, embedding=server.client(), embedding_note="开着", clock=clock.now_ms
+    )
+
+    await indexer.run_once()
+
+    embedded_texts = [text for batch in server.requests for text in batch]
+    assert embedded_texts == ["北边刚摆好高炉", "结果蒸汽管接反了"]
+    (vec_row,) = await store.execute("SELECT text_hash FROM memory_vectors_speech WHERE chat_id = ?", (second_id,))
+    assert vec_row["text_hash"] == text_hash("结果蒸汽管接反了")
+    fts_rows = await store.execute(
+        'SELECT rowid FROM memory_fts_speech WHERE memory_fts_speech MATCH \'"高炉" AND "蒸汽"\''
+    )
+    assert [int(r[0]) for r in fts_rows] == [second_id]
+    assert first_id != second_id
