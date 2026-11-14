@@ -271,6 +271,7 @@ class _VectorDiskCache:
         )
         self._conn.commit()
         self._lock = asyncio.Lock()
+        self._cooldown_until = 0.0
 
     @property
     def model_key(self) -> str:
@@ -323,17 +324,24 @@ class _VectorDiskCache:
         self._conn.commit()
 
     async def _embed_with_retry(self, safe_batch: List[str]) -> List[List[float]]:
-        """调真实嵌入客户端并在瞬时网络抖动时重试至多 4 次，避免长程评测中途断流。"""
+        """调真实嵌入客户端并在 429 TPM 限流或瞬时网络抖动时跨分钟退避重试至多 8 次，避免大语料预热断流。"""
         last_exc: Optional[EmbeddingError] = None
-        for attempt in range(4):
+        for attempt in range(8):
+            now = time.monotonic()
+            if self._cooldown_until > now:
+                await asyncio.sleep(self._cooldown_until - now)
             try:
                 self._inner._failures = 0
                 self._inner._retry_at_ms = 0
                 return await self._inner.embed(safe_batch)
             except EmbeddingError as exc:
                 last_exc = exc
-                wait_s = 2**attempt
-                logger.warning(f"嵌入批次瞬时失败（第 {attempt + 1}/4 次，{wait_s}s 后重试）：{exc}")
+                is_rate_limit = "429" in str(exc) or "rate limit" in str(exc).lower() or "tpm" in str(exc).lower()
+                wait_s = min(65, 22 + attempt * 10) if is_rate_limit else min(30, 2**attempt)
+                if is_rate_limit:
+                    # 统一通知其它并发协程一起等待分钟级 TPM 窗口刷新，避免蜂拥重撞 429
+                    self._cooldown_until = max(self._cooldown_until, time.monotonic() + wait_s)
+                logger.warning(f"嵌入批次限流或瞬时失败（第 {attempt + 1}/8 次，{wait_s}s 后重试）：{exc}")
                 await asyncio.sleep(wait_s)
         assert last_exc is not None
         raise last_exc
