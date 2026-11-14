@@ -22,6 +22,7 @@ from src.modules.events.payloads.game_chat import GameSelfChattedPayload
 from src.modules.events.payloads.tool_result import ToolResultPayload
 from src.modules.llm.payload import Reasoning, Response, ToolCall
 from src.modules.mcp.config import McpServerConfig
+from src.modules.skills import SkillLibrary
 from src.modules.tools.models import ResultBlock, ToolExecutionResult, ToolInvocation, ToolSpec
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.tools.operations import ToolOperations
@@ -1116,5 +1117,55 @@ async def test_mcp_first_late_connect_refreshes_registry_for_minecraft() -> None
         assert {"maicraft_observe", "maicraft_lookup", "maicraft_execute", "maicraft_goal"} <= model_tools
         assert "maicraft_events" not in model_tools
         assert any("连接已恢复" in content for _, content in agent.queued_messages)
+    finally:
+        await agent.stop()
+
+
+async def test_mcp_connect_primes_remote_skills_eagerly() -> None:
+    """连上 Mod 即后台预读远端技能目录：不等第一批任务，恢复路径里读到的目录立刻可见。"""
+    _FakeMcpClient.constructed = []
+    registry = ToolRegistry()
+    library = SkillLibrary()
+    resources_read = asyncio.Event()
+
+    class _ResourcesClient(_FakeMcpClient):
+        connected = True  # 就绪判定读该属性；真客户端由连接态维护
+
+        async def list_resources(self) -> List[Any]:
+            resources_read.set()
+            return [
+                SimpleNamespace(
+                    uri="skill://gameplay/maid_getting_started/SKILL.md",
+                    name="maid_getting_started",
+                    description="女仆入门做法",
+                    mimeType="text/markdown",
+                )
+            ]
+
+    holder: List[_RecoverableMcpProvider] = []
+
+    def _make_provider(**kwargs: Any) -> _RecoverableMcpProvider:
+        prov = _RecoverableMcpProvider(**kwargs)
+        holder.append(prov)
+        return prov
+
+    agent = MinecraftAgent(
+        MinecraftConfig(mcp=McpServerConfig(enabled=True)),
+        llm_manager=MagicMock(),
+        event_bus=fake_bus(),
+        tool_registry=registry,
+        mcp_client_factory=_ResourcesClient,
+        mcp_provider_factory=_make_provider,
+        skill_library=library,
+    )
+    await agent.start()
+    try:
+        assert agent.remote_skill_status() == {"loaded": False}, "启动降级登记期还没读过目录"
+
+        holder[0].simulate_first_connect()
+        await asyncio.wait_for(resources_read.wait(), timeout=5)
+        assert agent.remote_skill_status() == {"loaded": True}, "连接建立即预读，不等第一批任务"
+        remote = library.remote("maid_getting_started", "minecraft")
+        assert remote is not None and remote.uri.endswith("maid_getting_started/SKILL.md")
     finally:
         await agent.stop()

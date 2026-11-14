@@ -8,6 +8,8 @@
 
 import axios from 'axios';
 import type {
+  SkillBodyResponse,
+  SkillsSnapshotResponse,
   AgentControlActionType,
   AgentMemoResponse,
   AgentControlResponse,
@@ -266,6 +268,18 @@ export const toolsApi = {
     }),
   reconnectProvider: (providerId: string) =>
     api.post<ToolReconnectResponse>(`/tools/providers/${providerId}/reconnect`),
+};
+
+// 技能检视（纯只读：目录 + 远端登记状态）
+//
+// 技能 = "怎么把一类事做成"的经验文档：本地技能随仓库发布，远端玩法技能由
+// 游戏 Agent 运行期从 MaiCraft 登记（内存持有，Agent 未连接时远端为空）。
+// fetchBody 对远端技能经游戏 Agent 向 MaiCraft 代读（与 minecraft_skill 同通道），
+// Agent 未运行时代读不可用，后端以 503 附原因。
+export const skillsApi = {
+  getSnapshot: () => api.get<SkillsSnapshotResponse>('/skills'),
+  fetchBody: (name: string) =>
+    api.get<SkillBodyResponse>(`/skills/${encodeURIComponent(name)}/body`),
 };
 
 // Agent 控制面（运行态观测 + 框架级控制）

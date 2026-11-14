@@ -60,6 +60,10 @@
             <el-icon><Tools /></el-icon>
             <span>工具</span>
           </el-menu-item>
+          <el-menu-item index="/skills">
+            <el-icon><Reading /></el-icon>
+            <span>技能</span>
+          </el-menu-item>
         </el-menu-item-group>
 
         <el-menu-item-group title="运行记录">
@@ -147,6 +151,7 @@ import {
   Avatar,
   Memo,
   VideoPlay,
+  Reading,
 } from '@element-plus/icons-vue';
 import { useSystemStore } from '@/stores';
 import ChangelogDialog from './ChangelogDialog.vue';

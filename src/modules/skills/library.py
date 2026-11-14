@@ -154,6 +154,10 @@ class SkillLibrary:
             return None
         return skill
 
+    def snapshot(self) -> tuple[list[Skill], list[RemoteSkill]]:
+        """全部技能的只读快照（检视用，不做受众与前提筛选）：本地与远端两列。"""
+        return list(self._skills.values()), list(self._remote.values())
+
     def catalog(self, agent: str, environment: Optional[SkillEnvironment] = None) -> list[SkillEntry]:
         """某个 Agent 在当前环境下可用的技能目录（按分类、名字排序）。
 

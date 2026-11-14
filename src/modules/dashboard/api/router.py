@@ -26,6 +26,7 @@ from src.modules.dashboard.api import (
     rundowns,
     sessions,
     simulator,
+    skills,
     streamer,
     system,
     talk_cards,
@@ -87,6 +88,9 @@ def create_app() -> FastAPI:
 
     # Agent 控制面（运行态观测 + 框架级控制）
     app.include_router(agents.router, prefix="/api/v1/agents", tags=["Agents"])
+
+    # 技能检视（本地 + 远端玩法技能目录与登记状态，纯只读）
+    app.include_router(skills.router, prefix="/api/v1", tags=["Skills"])
 
     # 记忆账本：承诺与场次档案的查看、纠错与整理状态（旧画像与长期记忆端点不再存在）
     app.include_router(ledger.router, prefix="/api/v1/memory", tags=["Memory"])

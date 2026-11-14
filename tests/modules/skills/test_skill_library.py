@@ -223,6 +223,31 @@ class TestRender:
 
 
 class TestRemote:
+    def test_snapshot_returns_local_and_remote_without_filtering(self, tmp_path: Path) -> None:
+        """检视快照：本地与远端两列全量返回，不做受众与前提筛选（与目录的筛选口径不同）。"""
+        _write(
+            tmp_path,
+            "survival/streaming_policy.md",
+            _skill("streaming_policy", agents="[streamer]"),
+        )
+        library = _library(tmp_path)
+        library.replace_remote(
+            "MaiCraft",
+            [
+                RemoteSkill(
+                    name="survival-opening",
+                    description="生存开局",
+                    category="survival",
+                    uri="skill://survival/survival-opening/SKILL.md",
+                    agents=("minecraft",),
+                )
+            ],
+        )
+
+        local, remote = library.snapshot()
+        assert [skill.name for skill in local] == ["streaming_policy"]
+        assert [skill.name for skill in remote] == ["survival-opening"]
+
     def test_remote_catalog_merges_and_is_visible_only_to_its_agent(self) -> None:
         library = SkillLibrary()
         library.replace_remote(

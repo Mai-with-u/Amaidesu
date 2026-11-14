@@ -86,6 +86,7 @@ describe('侧边栏导航信息架构', () => {
       { path: '/collectors', label: '采集器' },
       { path: '/agents', label: 'Agent' },
       { path: '/tools', label: '工具' },
+      { path: '/skills', label: '技能' },
       { path: '/eventlog', label: '事件流' },
       { path: '/logs', label: '日志' },
       { path: '/llm/usage', label: 'LLM 用量' },

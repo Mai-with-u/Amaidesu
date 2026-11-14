@@ -717,6 +717,21 @@ class MinecraftAgent(BaseAgent):
             "reports": [dict(r) for r in self._mc_state.reports],
         }
 
+    def remote_skill_status(self) -> Dict[str, Any]:
+        """远端技能登记状态快照（只读）：技能检视页的连接态数据源。
+
+        ``loaded`` 为 True 表示本轮连接已读过 MaiCraft 的技能目录（读到空目录
+        也算已读，即服务端未发布玩法技能）；为 False 表示尚未连上或还没轮到读。
+        """
+        return {"loaded": self._skill_support.remote_skills_loaded}
+
+    async def read_skill_body(self, name: str) -> Dict[str, Any]:
+        """读一份技能正文（检视页预览用）：与 minecraft_skill 工具同一条通道，模型读到什么这里读到什么。
+
+        无状态副作用：读取结果不进 Agent 的记忆与开局资料包（那是开局代读的路径）。
+        """
+        return await self._skill_support.read_skill(name)
+
     # ==================================================================
     # 工具提供（list_tools）
     # ==================================================================
