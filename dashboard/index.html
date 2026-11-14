@@ -33,6 +33,15 @@
     </script>
   </head>
   <body>
+    <script>
+      // widget 嵌入页（OBS 浏览器源、调试页 iframe）需要全透明画布；各视图的
+      // 透明覆盖随异步 chunk 注入，晚于入口样式，首帧会闪出主题底色。这里在
+      // 首帧绘制前按路径先声明透明，内联样式优先级高于样式表，应用主体不受影响。
+      if (window.location.pathname.startsWith('/widget/')) {
+        document.body.style.background = 'transparent';
+        document.documentElement.style.background = 'transparent';
+      }
+    </script>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import AppLayout from '@/components/layout/AppLayout.vue';
 // 导演命令面板挂全局层：热键与浮层都不依赖具体页面（keep-alive 之外，切页不销毁）
 import CommandPalette from '@/components/dashboard/CommandPalette.vue';
@@ -8,6 +9,14 @@ import ResidualSessionDialog from '@/components/live/ResidualSessionDialog.vue';
 import { liveSessionsApi } from '@/api';
 
 const residualDialogVisible = ref(false);
+
+// 首次路由导航完成前不渲染任何视图：导航期间 route.meta 为空，widget 嵌入页
+// （layout=false）会先把 AppLayout 壳渲染出来再卸载，OBS 浏览器源与页内 iframe
+// 里表现为闪过一次侧边栏+顶栏
+const routerReady = ref(false);
+useRouter().isReady().then(() => {
+  routerReady.value = true;
+});
 
 onMounted(async () => {
   // 启动探测待决残留场次：有就弹续播弹窗；查询失败静默（场次列表页仍可处置）
@@ -24,7 +33,7 @@ onMounted(async () => {
 
 <template>
   <!-- 单 router-view：布局包在插槽内而非 v-if 双视图，避免布局分支切换时 patch 失序 -->
-  <router-view v-slot="{ Component, route }">
+  <router-view v-if="routerReady" v-slot="{ Component, route }">
     <AppLayout v-if="route.meta.layout !== false">
       <!-- 切页过渡：旧页淡出后新页淡入上浮；各视图均为单根节点，可直接套 Transition -->
       <transition name="page" mode="out-in">

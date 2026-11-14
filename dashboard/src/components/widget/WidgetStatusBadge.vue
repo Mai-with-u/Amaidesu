@@ -3,18 +3,29 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 
 import type { WidgetSocketStatus } from '@/composables/useRawWebSocket';
 import { isPreviewMode } from '@/composables/useWidgetCatalog';
 
 /**
- * 嵌入页断线指示：WebSocket 非连接态时右下角显示细条。
+ * 嵌入页断线指示：连接建立过再掉线时右下角显示细条。
  * 预览态（管理页打开，?preview=1）醒目实底便于排查；嵌入态半透明淡化，
- * 断线仍可辨认但不抢直播画面。纯展示组件，无定时器与订阅。
+ * 断线仍可辨认但不抢直播画面。首次连接建立前不显示——冷启动（OBS 浏览
+ * 器源、页内 iframe）首连的那一瞬间不该喊"已断线"。纯展示组件，无定时
+ * 器与订阅。
  */
 const props = defineProps<{ status: WidgetSocketStatus }>();
-const visible = computed(() => props.status !== 'connected');
+
+const everConnected = ref(false);
+watch(
+  () => props.status,
+  status => {
+    if (status === 'connected') everConnected.value = true;
+  },
+  { immediate: true },
+);
+const visible = computed(() => everConnected.value && props.status !== 'connected');
 const prominent = isPreviewMode();
 </script>
 
