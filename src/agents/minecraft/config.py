@@ -30,14 +30,12 @@ class MinecraftContextConfig(ContextBudgetConfig):
         le=1.0,
         title="窗口占比",
         description="预算占模型上下文窗口的比例",
-        json_schema_extra={"x-ui-row": "budget", "x-ui-row-label": "预算"},
     )
     max_tokens: int = Field(
         default=200_000,
         ge=4_000,
         title="预算上限",
         description="触发集中整理的 token 上限（本地分词估算口径）",
-        json_schema_extra={"x-ui-row": "budget"},
     )
     prepare_ratio: float = Field(
         default=0.7,
@@ -45,7 +43,6 @@ class MinecraftContextConfig(ContextBudgetConfig):
         le=1.0,
         title="提前整理线",
         description="让出等待游戏结果时，历史超过预算的这一比例就借空档在后台提前整理",
-        json_schema_extra={"x-ui-row": "fold-lines", "x-ui-row-label": "整理与折叠"},
     )
     target_ratio: float = Field(
         default=0.6,
@@ -53,7 +50,6 @@ class MinecraftContextConfig(ContextBudgetConfig):
         lt=1.0,
         title="整理后回落线",
         description="集中整理把历史压回到预算的这一比例",
-        json_schema_extra={"x-ui-row": "fold-lines"},
     )
     recent_turns: int = Field(
         default=6,
@@ -76,7 +72,6 @@ class MinecraftContextConfig(ContextBudgetConfig):
         title="后台折叠",
         description="历史过了折叠线时，在后台请模型把已经用完的区间折成摘要，原文可取回；"
         "到预算线时先收起旧记录、不让角色停下来等整理。关掉则回到只靠集中整理",
-        json_schema_extra={"x-ui-row": "fold-lines"},
     )
     fold_ratio: float = Field(
         default=0.4,
@@ -84,7 +79,6 @@ class MinecraftContextConfig(ContextBudgetConfig):
         lt=1.0,
         title="折叠线",
         description="历史达到预算的这一比例时开始在后台请模型折叠，须低于提前整理线",
-        json_schema_extra={"x-ui-row": "fold-lines"},
     )
     fold_keep_recent: int = Field(
         default=4,

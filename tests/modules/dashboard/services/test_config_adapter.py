@@ -433,18 +433,9 @@ def test_response_shapes_are_locked() -> None:
     }
 
     fields = {f["key"]: f for f in _iter_fields(group["fields"])}
-    # 普通叶子字段（无任何可选修饰标记）的固定键集合
-    leaf = next(
-        f
-        for f in _iter_fields(group["fields"])
-        if (
-            f["type"] not in ("array", "object")
-            and "children" not in f
-            and not f.get("advanced")
-            and "validation" not in f
-        )
-    )
-    assert set(leaf.keys()) == {
+    # 普通叶子字段的固定键集合；row/rowLabel 是行分组布局的可选修饰键
+    # （集中注册表登记的字段才携带），见 webui.py 的 _FIELD_ROW_LAYOUT
+    plain_leaf_keys = {
         "key",
         "label",
         "description",
@@ -456,12 +447,24 @@ def test_response_shapes_are_locked() -> None:
         "readonly",
         "advanced",
     }
-    # 对象数组是一等字段：items.fields 元素子字段的键集合与叶子同构
+    leaf = next(
+        f
+        for f in _iter_fields(group["fields"])
+        if (
+            f["type"] not in ("array", "object")
+            and "children" not in f
+            and not f.get("advanced")
+            and "validation" not in f
+        )
+    )
+    extra_keys = set(leaf.keys()) - plain_leaf_keys
+    assert extra_keys <= {"row", "rowLabel"}, f"叶子字段出现未登记的可选键: {extra_keys}"
+    # 对象数组是一等字段：items.fields 元素子字段的键集合与叶子同构（行分组键同样可选）
     array_field = fields["model.llm_providers"]
     assert array_field["type"] == "array"
     assert set(array_field["items"].keys()) == {"type", "fields"}
     for sub in array_field["items"]["fields"]:
-        assert set(sub.keys()) == set(leaf.keys())  # 子字段键集合与叶子同构
+        assert set(sub.keys()) - plain_leaf_keys <= {"row", "rowLabel"}  # 子字段可选键同构
         break
 
     # 动态段实例的自由 dict 兜底叶（无 advanced 修饰位）键集合

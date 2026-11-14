@@ -34,14 +34,12 @@ class ContextBudgetConfig(BaseModel):
         le=1.0,
         title="窗口占比",
         description="预算占模型上下文窗口的比例；窗口未配置时按 128k 窗口换算",
-        json_schema_extra={"x-ui-row": "budget", "x-ui-row-label": "预算"},
     )
     max_tokens: int = Field(
         default=128_000,
         ge=4_000,
         title="预算上限",
         description="上下文预算的 token 上限（本地分词估算口径）",
-        json_schema_extra={"x-ui-row": "budget"},
     )
     prepare_ratio: float = Field(
         default=0.7,
@@ -49,7 +47,6 @@ class ContextBudgetConfig(BaseModel):
         le=1.0,
         title="提前整理线",
         description="达到预算的这一比例时在后台提前准备检查点摘要",
-        json_schema_extra={"x-ui-row": "watermarks", "x-ui-row-label": "水位线"},
     )
     target_ratio: float = Field(
         default=0.4,
@@ -57,7 +54,6 @@ class ContextBudgetConfig(BaseModel):
         lt=1.0,
         title="整理后回落线",
         description="检查点把工作层压回到预算的这一比例",
-        json_schema_extra={"x-ui-row": "watermarks"},
     )
 
     @model_validator(mode="after")

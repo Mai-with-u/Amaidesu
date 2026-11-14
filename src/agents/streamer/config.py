@@ -215,14 +215,14 @@ class StreamerBackgroundConfig(BaseConfig):
         ge=100,
         le=60_000,
         description="后台维护循环的巡检间隔（毫秒）",
-        json_schema_extra={"x-ui-advanced": True, "x-ui-row": "bg-tick", "x-ui-row-label": "巡检间隔"},
+        json_schema_extra={"x-ui-advanced": True},
     )
     summary_interval_ms: int = Field(
         title="摘要间隔",
         default=60_000,
         ge=0,
         description="后台定期做 LLM 摘要的间隔（毫秒）",
-        json_schema_extra={"x-ui-advanced": True, "x-ui-row": "bg-tick"},
+        json_schema_extra={"x-ui-advanced": True},
     )
     compressor: StreamerCompressorConfig = Field(
         title="压缩 worker 配置",
@@ -242,14 +242,12 @@ class StreamerBatchConfig(BaseConfig):
         default=3_000,
         ge=0,
         description="弹幕聚合时间窗口（毫秒）",
-        json_schema_extra={"x-ui-row": "batch", "x-ui-row-label": "聚合参数"},
     )
     batch_max_size: int = Field(
         title="单批条数上限",
         default=20,
         ge=1,
         description="单批最多聚合的弹幕条数",
-        json_schema_extra={"x-ui-row": "batch"},
     )
     tick_interval_ms: int = Field(
         title="聚合检查间隔",
@@ -262,14 +260,12 @@ class StreamerBatchConfig(BaseConfig):
         title="是否启用空窗补偿",
         default=True,
         description="空窗补偿开关",
-        json_schema_extra={"x-ui-row": "batch"},
     )
     batch_max_wait_ms: int = Field(
         title="单批最长等待",
         default=30_000,
         ge=1_000,
         description="首条弹幕到达后最多等待多久必须放行本批（毫秒）；防止空窗补偿在弹幕稀疏时无限推迟放行",
-        json_schema_extra={"x-ui-row": "batch"},
     )
 
 
@@ -300,47 +296,40 @@ class StreamerProactiveConfig(BaseConfig):
         default=45_000,
         ge=0,
         description="冷场判定阈值（毫秒）",
-        json_schema_extra={"x-ui-row": "timing", "x-ui-row-label": "触发时机"},
     )
     min_interval_ms: int = Field(
         title="发言最小间隔",
         default=120_000,
         ge=0,
         description="两次主动发言最小间隔",
-        json_schema_extra={"x-ui-row": "timing"},
     )
     schedule_interval_ms: int = Field(
         title="定时话题间隔",
         default=300_000,
         ge=0,
         description="定时话题触发间隔（0 = 关闭）",
-        json_schema_extra={"x-ui-row": "timing"},
     )
     schedule_only_cold: bool = Field(
         title="定时是否仅限冷场",
         default=True,
         description="定时触发是否仅限冷场",
-        json_schema_extra={"x-ui-row": "limits", "x-ui-row-label": "频率限额"},
     )
     max_per_hour: int = Field(
         title="每小时发言上限",
         default=6,
         ge=1,
         description="每小时主动发言次数上限",
-        json_schema_extra={"x-ui-row": "limits"},
     )
     topic_required: bool = Field(
         title="是否必须有话题",
         default=True,
         description="话题缺失时跳过触发",
-        json_schema_extra={"x-ui-row": "limits"},
     )
     rundown_speech_interval_ms: int = Field(
         title="流程单发言间隔",
         default=3_000,
         ge=1_000,
         description="流程单环节内两次主动发言最小间隔",
-        json_schema_extra={"x-ui-row": "rundown-rhythm", "x-ui-row-label": "流程单节奏"},
     )
     rundown_overdue_interval_ms: int = Field(
         title="环节超时提醒冷却",
@@ -354,7 +343,6 @@ class StreamerProactiveConfig(BaseConfig):
         default=30_000,
         ge=5_000,
         description="环节供能期间给主播开口机会的节奏；只供机会不保证发言，质量由发言自检把关",
-        json_schema_extra={"x-ui-row": "rundown-rhythm"},
     )
     rundown_silent_cooldown_ms: int = Field(
         title="主动沉默后冷却",
@@ -364,14 +352,12 @@ class StreamerProactiveConfig(BaseConfig):
             "一轮主动决策走完却选择不开口后，多久内不再按环节节奏催她（毫秒）；"
             "游戏里没新鲜事时让她真安静干活，不在沉默期反复空跑决策"
         ),
-        json_schema_extra={"x-ui-row": "rundown-rhythm"},
     )
     rundown_silent_cooldown_talk_ms: int = Field(
         title="杂谈环节沉默后冷却",
         default=12_000,
         ge=0,
         description="杂谈档（流程单环节说话模式为 talk）的主动沉默冷却（毫秒）；杂谈要靠她自己撑场，冷却短一些",
-        json_schema_extra={"x-ui-row": "rundown-rhythm"},
     )
     rundown_ready_yield_max_ms: int = Field(
         title="给弹幕让路最长时长",
@@ -507,14 +493,12 @@ class StreamerLiveFrameConfig(BaseConfig):
         title="是否看直播画面",
         default=False,
         description="决策时把最新的直播画面挂在请求尾部（需同时启用 live_frame 采集器、主模型支持视觉）",
-        json_schema_extra={"x-ui-row": "live-frame", "x-ui-row-label": "画面挂载"},
     )
     stale_warn_ms: int = Field(
         title="画面过时告警阈值",
         default=60_000,
         ge=0,
         description="挂帧时最新画面帧龄超过它就记一条告警（毫秒，限频 5 分钟一条）；用于暴露 OBS 画面断流",
-        json_schema_extra={"x-ui-row": "live-frame"},
     )
 
 

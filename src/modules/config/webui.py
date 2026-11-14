@@ -292,6 +292,414 @@ def _display_value(key: str, main_config: dict) -> Any:
     return _get_nested_value(main_config, path_in_file)
 
 
+# 行分组布局注册表：键为字段的完整 API 键（scope 前缀点分路径），
+# 值为 (行组标记, 行标题)。同容器内同行组标记的叶子字段在前端并成一个横行，
+# 行组标记按容器隔离、可跨容器复用。行分组是纯显示层布局信息，
+# 与 _CONTAINER_LABELS 同为集中注册表（原类内 json_schema_extra 标注已收敛至此）。
+# 未登记的字段独立成行；键名拼错只会导致该字段不成组，不影响其它功能。
+_FIELD_ROW_LAYOUT: dict[str, tuple[str, str]] = {
+    # ── agents 域 ──
+    # Minecraft：上下文预算与折叠水位线
+    "agents.agents.minecraft.context.window_ratio": ("budget", "预算"),
+    "agents.agents.minecraft.context.max_tokens": ("budget", "预算"),
+    "agents.agents.minecraft.context.prepare_ratio": ("fold-lines", "整理与折叠"),
+    "agents.agents.minecraft.context.target_ratio": ("fold-lines", "整理与折叠"),
+    "agents.agents.minecraft.context.active_fold": ("fold-lines", "整理与折叠"),
+    "agents.agents.minecraft.context.fold_ratio": ("fold-lines", "整理与折叠"),
+    # Minecraft：Mod 事件轮询与看图节奏
+    "agents.agents.minecraft.events_wait_ms": ("event-poll", "事件轮询"),
+    "agents.agents.minecraft.events_retry_interval_ms": ("event-poll", "事件轮询"),
+    "agents.agents.minecraft.picture.max_per_task": ("picture-rate", "看图节奏"),
+    "agents.agents.minecraft.picture.min_interval_ms": ("picture-rate", "看图节奏"),
+    # Minecraft：MCP 工具连接
+    "agents.agents.minecraft.mcp.enabled": ("mcp-conn", "连接方式"),
+    "agents.agents.minecraft.mcp.transport": ("mcp-conn", "连接方式"),
+    "agents.agents.minecraft.mcp.url": ("mcp-endpoint", "服务与重连"),
+    "agents.agents.minecraft.mcp.command": ("mcp-endpoint", "服务与重连"),
+    "agents.agents.minecraft.mcp.reconnect": ("mcp-endpoint", "服务与重连"),
+    "agents.agents.minecraft.mcp.timeout_seconds": ("mcp-timeout", "超时"),
+    "agents.agents.minecraft.mcp.request_timeout_ms": ("mcp-timeout", "超时"),
+    # 主播 Agent：Planner 上下文与台词预算
+    "agents.agents.streamer.planner_recent_intents_max": ("planner-recall", "上下文回看"),
+    "agents.agents.streamer.planner_recent_relays_max": ("planner-recall", "上下文回看"),
+    "agents.agents.streamer.speech_max_chars": ("speech-budget", "台词预算"),
+    "agents.agents.streamer.talk_speech_max_chars": ("speech-budget", "台词预算"),
+    "agents.agents.streamer.replyer_history_items": ("speech-budget", "台词预算"),
+    "agents.agents.streamer.memory_passive_recall_enabled": ("passive-recall", "被动想起"),
+    "agents.agents.streamer.memory_passive_recall_vector_enabled": ("passive-recall", "被动想起"),
+    # 主播 Agent：上下文预算与水位线
+    "agents.agents.streamer.context.window_ratio": ("budget", "预算"),
+    "agents.agents.streamer.context.max_tokens": ("budget", "预算"),
+    "agents.agents.streamer.context.prepare_ratio": ("watermarks", "水位线"),
+    "agents.agents.streamer.context.target_ratio": ("watermarks", "水位线"),
+    # 主播 Agent：后台维护与上下文压缩
+    "agents.agents.streamer.background.light_tick_ms": ("bg-tick", "巡检间隔"),
+    "agents.agents.streamer.background.summary_interval_ms": ("bg-tick", "巡检间隔"),
+    "agents.agents.streamer.background.compressor.concurrency": ("compressor-worker", "压缩 worker"),
+    "agents.agents.streamer.background.compressor.queue_max": ("compressor-worker", "压缩 worker"),
+    # 主播 Agent：弹幕聚合
+    "agents.agents.streamer.batch.batch_window_ms": ("batch", "聚合参数"),
+    "agents.agents.streamer.batch.batch_max_size": ("batch", "聚合参数"),
+    "agents.agents.streamer.batch.enable_idle_compensation": ("batch", "聚合参数"),
+    "agents.agents.streamer.batch.batch_max_wait_ms": ("batch", "聚合参数"),
+    # 主播 Agent：弹幕命令
+    "agents.agents.streamer.command.enabled": ("command-basic", "命令接线"),
+    "agents.agents.streamer.command.prefix": ("command-basic", "命令接线"),
+    "agents.agents.streamer.command.target_agent": ("command-basic", "命令接线"),
+    "agents.agents.streamer.command.rate_window_ms": ("command-rate", "限频"),
+    "agents.agents.streamer.command.rate_max": ("command-rate", "限频"),
+    # 主播 Agent：直播画面与即时反应
+    "agents.agents.streamer.live_frame.enabled": ("live-frame", "画面挂载"),
+    "agents.agents.streamer.live_frame.stale_warn_ms": ("live-frame", "画面挂载"),
+    "agents.agents.streamer.mouth.reaction_ttl_ms": ("mouth-rhythm", "触发节奏"),
+    "agents.agents.streamer.mouth.same_kind_cooldown_ms": ("mouth-rhythm", "触发节奏"),
+    "agents.agents.streamer.mouth.min_gap_ms": ("mouth-rhythm", "触发节奏"),
+    "agents.agents.streamer.mouth.quiet_ms": ("mouth-rhythm", "触发节奏"),
+    "agents.agents.streamer.mouth.history_items": ("mouth-card", "现场卡"),
+    "agents.agents.streamer.mouth.card_max_chars": ("mouth-card", "现场卡"),
+    "agents.agents.streamer.mouth.scene_refresh_ms": ("mouth-card", "现场卡"),
+    # 主播 Agent：思考流与发言过滤
+    "agents.agents.streamer.thinking_stream.flush_interval_ms": ("thinking-buffer", "推送与缓冲"),
+    "agents.agents.streamer.thinking_stream.buffer_max": ("thinking-buffer", "推送与缓冲"),
+    "agents.agents.streamer.word_filter.replacement": ("filter-rules", "净化规则"),
+    "agents.agents.streamer.word_filter.case_sensitive": ("filter-rules", "净化规则"),
+    "agents.agents.streamer.word_filter.drop_on_match": ("filter-rules", "净化规则"),
+    # 文字冒险：画面稳定判定
+    "agents.agents.text_adv.stability_sample_ms": ("stability", "画面稳定判定"),
+    "agents.agents.text_adv.stability_consecutive": ("stability", "画面稳定判定"),
+    "agents.agents.text_adv.stability_timeout_ms": ("stability", "画面稳定判定"),
+    "agents.agents.text_adv.no_change_limit": ("stability", "画面稳定判定"),
+    # ── collectors 域 ──
+    "collectors.bili_danmaku.room_id": ("bili-basic", "直播间轮询"),
+    "collectors.bili_danmaku.poll_interval": ("bili-basic", "直播间轮询"),
+    # B 站弹幕（Laplace）：连接 / 消息事件 / 去重重连
+    "collectors.bili_danmaku_laplace.url": ("laplace-conn", "连接"),
+    "collectors.bili_danmaku_laplace.token": ("laplace-conn", "连接"),
+    "collectors.bili_danmaku_laplace.room_id": ("laplace-conn", "连接"),
+    "collectors.bili_danmaku_laplace.emit_semantic_events": ("laplace-events", "消息事件"),
+    "collectors.bili_danmaku_laplace.handle_enter_messages": ("laplace-events", "消息事件"),
+    "collectors.bili_danmaku_laplace.handle_gift_messages": ("laplace-events", "消息事件"),
+    "collectors.bili_danmaku_laplace.handle_superchat_messages": ("laplace-paid", "付费消息"),
+    "collectors.bili_danmaku_laplace.handle_guard_messages": ("laplace-paid", "付费消息"),
+    "collectors.bili_danmaku_laplace.dedupe_cache_size": ("laplace-stability", "去重与重连"),
+    "collectors.bili_danmaku_laplace.reconnect_base_ms": ("laplace-stability", "去重与重连"),
+    "collectors.bili_danmaku_laplace.reconnect_max_ms": ("laplace-stability", "去重与重连"),
+    # B 站弹幕（官方）
+    "collectors.bili_danmaku_official.id_code": ("official-cred", "凭据"),
+    "collectors.bili_danmaku_official.app_id": ("official-cred", "凭据"),
+    "collectors.bili_danmaku_official.access_key": ("official-cred", "凭据"),
+    "collectors.bili_danmaku_official.access_key_secret": ("official-cred", "凭据"),
+    "collectors.bili_danmaku_official.emit_semantic_events": ("official-switches", "心跳与语义"),
+    "collectors.bili_danmaku_official.app_heartbeat_reopen": ("official-switches", "心跳与语义"),
+    # 控制台输入
+    "collectors.console_input.user_id": ("console-identity", "身份"),
+    "collectors.console_input.user_nickname": ("console-identity", "身份"),
+    # 直播画面采集器
+    "collectors.live_frame.source": ("lf-obs", "OBS 连接"),
+    "collectors.live_frame.obs_host": ("lf-obs", "OBS 连接"),
+    "collectors.live_frame.obs_port": ("lf-obs", "OBS 连接"),
+    "collectors.live_frame.obs_password": ("lf-obs", "OBS 连接"),
+    "collectors.live_frame.obs_source": ("lf-source", "画面来源"),
+    "collectors.live_frame.monitor_index": ("lf-source", "画面来源"),
+    "collectors.live_frame.interval_ms": ("lf-capture", "采集参数"),
+    "collectors.live_frame.max_width": ("lf-capture", "采集参数"),
+    "collectors.live_frame.change_threshold": ("lf-capture", "采集参数"),
+    "collectors.live_frame.refresh_ms": ("lf-capture", "采集参数"),
+    # 语音识别：音频格式 / 凭据 / 服务 / 识别参数 / 输出选项
+    "collectors.stt.audio.sample_rate": ("audio-format", "音频格式"),
+    "collectors.stt.audio.channels": ("audio-format", "音频格式"),
+    "collectors.stt.audio.dtype": ("audio-format", "音频格式"),
+    "collectors.stt.audio.stt_input_device_name": ("audio-device", "输入设备"),
+    "collectors.stt.audio.use_remote_stream": ("audio-device", "输入设备"),
+    "collectors.stt.iflytek_asr.appid": ("iflytek-cred", "凭据"),
+    "collectors.stt.iflytek_asr.api_key": ("iflytek-cred", "凭据"),
+    "collectors.stt.iflytek_asr.api_secret": ("iflytek-cred", "凭据"),
+    "collectors.stt.iflytek_asr.host": ("iflytek-service", "服务地址"),
+    "collectors.stt.iflytek_asr.path": ("iflytek-service", "服务地址"),
+    "collectors.stt.iflytek_asr.language": ("iflytek-recognize", "识别参数"),
+    "collectors.stt.iflytek_asr.domain": ("iflytek-recognize", "识别参数"),
+    "collectors.stt.iflytek_asr.accent": ("iflytek-recognize", "识别参数"),
+    "collectors.stt.iflytek_asr.ptt": ("iflytek-output", "输出选项"),
+    "collectors.stt.iflytek_asr.rlang": ("iflytek-output", "输出选项"),
+    "collectors.stt.iflytek_asr.vinfo": ("iflytek-output", "输出选项"),
+    "collectors.stt.iflytek_asr.dwa": ("iflytek-output", "输出选项"),
+    # 语音识别：消息身份与群组
+    "collectors.stt.message_config.user_id": ("msg-identity", "身份"),
+    "collectors.stt.message_config.user_nickname": ("msg-identity", "身份"),
+    "collectors.stt.message_config.enable_group_info": ("msg-group", "群组"),
+    "collectors.stt.message_config.group_id": ("msg-group", "群组"),
+    "collectors.stt.message_config.group_name": ("msg-group", "群组"),
+    # 静音检测
+    "collectors.stt.vad.enable": ("vad-params", "判定参数"),
+    "collectors.stt.vad.vad_threshold": ("vad-params", "判定参数"),
+    "collectors.stt.vad.silence_seconds": ("vad-params", "判定参数"),
+    # ── tools 域 ──
+    "tools.tools.health.enabled": ("health-probe", "熔断探活"),
+    "tools.tools.health.failure_threshold": ("health-probe", "熔断探活"),
+    "tools.tools.health.probe_interval_ms": ("health-probe", "熔断探活"),
+    "tools.tools.tasks.poll_interval_ms": ("tasks-poll", "轮询与超时"),
+    "tools.tools.tasks.wait_timeout_ms": ("tasks-poll", "轮询与超时"),
+    "tools.tools.tasks.stall_auto_cancel_alerts": ("tasks-poll", "轮询与超时"),
+    "tools.tools.vision.config.monitor_index": ("vision-capture", "截屏参数"),
+    "tools.tools.vision.config.default_max_width": ("vision-capture", "截屏参数"),
+    # ── avatar 域 ──
+    # 口型同步：采样增益 / 元音 / 嘴形阈值 / 信号处理
+    "avatar.lipsync.sample_rate": ("ls-gain", "采样与增益"),
+    "avatar.lipsync.volume_threshold": ("ls-gain", "采样与增益"),
+    "avatar.lipsync.volume_gain": ("ls-gain", "采样与增益"),
+    "avatar.lipsync.smoothing_factor": ("ls-gain", "采样与增益"),
+    "avatar.lipsync.vowel_detection_sensitivity": ("ls-vowel", "元音检测"),
+    "avatar.lipsync.vowel_open_weight": ("ls-vowel", "元音检测"),
+    "avatar.lipsync.vowel_decay": ("ls-vowel", "元音检测"),
+    "avatar.lipsync.max_mouth_open": ("ls-threshold", "嘴形阈值"),
+    "avatar.lipsync.silence_threshold": ("ls-threshold", "嘴形阈值"),
+    "avatar.lipsync.close_mouth_threshold": ("ls-threshold", "嘴形阈值"),
+    "avatar.lipsync.min_mouth_delta": ("ls-threshold", "嘴形阈值"),
+    "avatar.lipsync.power_curve": ("ls-signal", "信号处理"),
+    "avatar.lipsync.update_interval_ms": ("ls-signal", "信号处理"),
+    "avatar.lipsync.mouth_open_lerp_speed": ("ls-signal", "信号处理"),
+    # 平台连接与面捕参数
+    "avatar.platform.vrchat.vrc_host": ("vrc-osc", "OSC 连接"),
+    "avatar.platform.vrchat.vrc_out_port": ("vrc-osc", "OSC 连接"),
+    "avatar.platform.vrchat.face_tracking_enabled": ("vrc-facetrack", "面捕参数"),
+    "avatar.platform.vrchat.face_tracking_prefix": ("vrc-facetrack", "面捕参数"),
+    "avatar.platform.vrchat.emote_parameter": ("vrc-facetrack", "面捕参数"),
+    "avatar.platform.vrchat.chatbox_enabled": ("vrc-chatbox", "头顶聊天框"),
+    "avatar.platform.vrchat.chatbox_min_interval_ms": ("vrc-chatbox", "头顶聊天框"),
+    "avatar.platform.vts.vts_host": ("vts-conn", "连接"),
+    "avatar.platform.vts.vts_port": ("vts-conn", "连接"),
+    "avatar.platform.vts.eye_open_rest": ("vts-neutral", "输入基准值"),
+    "avatar.platform.vts.mouth_smile_neutral": ("vts-neutral", "输入基准值"),
+    "avatar.platform.vts.brow_neutral": ("vts-neutral", "输入基准值"),
+    "avatar.platform.warudo.tracking_host": ("warudo-tracking", "面捕接收"),
+    "avatar.platform.warudo.tracking_port": ("warudo-tracking", "面捕接收"),
+    "avatar.platform.warudo.ws_host": ("warudo-conn", "Warudo 连接"),
+    "avatar.platform.warudo.ws_port": ("warudo-conn", "Warudo 连接"),
+    "avatar.platform.warudo.reconnect_delay_seconds": ("warudo-misc", "重连与冷却"),
+    "avatar.platform.warudo.throw_fish_cooldown": ("warudo-misc", "重连与冷却"),
+    # 动作跟踪：微动 / 眨眼 / 视线 / 反应 / 表情 / 心情 / 身体
+    "avatar.tracking.tick_hz": ("tr-base", "采样与表情"),
+    "avatar.tracking.rest_smile": ("tr-base", "采样与表情"),
+    "avatar.tracking.head_wander_enabled": ("tr-head", "头部微动"),
+    "avatar.tracking.head_wander_deg": ("tr-head", "头部微动"),
+    "avatar.tracking.blink_enabled": ("tr-blink", "眨眼"),
+    "avatar.tracking.blink_per_min_idle": ("tr-blink", "眨眼"),
+    "avatar.tracking.blink_per_min_speaking": ("tr-blink", "眨眼"),
+    "avatar.tracking.blink_per_min_reading": ("tr-blink", "眨眼"),
+    "avatar.tracking.gaze_enabled": ("tr-gaze-camera", "镜头方向"),
+    "avatar.tracking.camera_gaze_x": ("tr-gaze-camera", "镜头方向"),
+    "avatar.tracking.camera_gaze_y": ("tr-gaze-camera", "镜头方向"),
+    "avatar.tracking.chat_gaze_x": ("tr-gaze-chat", "弹幕区方向"),
+    "avatar.tracking.chat_gaze_y": ("tr-gaze-chat", "弹幕区方向"),
+    "avatar.tracking.thinking_gaze_enabled": ("tr-gaze-think", "思考时视线"),
+    "avatar.tracking.thinking_gaze_x": ("tr-gaze-think", "思考时视线"),
+    "avatar.tracking.thinking_gaze_y": ("tr-gaze-think", "思考时视线"),
+    "avatar.tracking.thinking_gaze_mirror": ("tr-gaze-think", "思考时视线"),
+    "avatar.tracking.head_follow_deg": ("tr-response", "回应节奏"),
+    "avatar.tracking.reading_ms": ("tr-response", "回应节奏"),
+    "avatar.tracking.room_reactions_enabled": ("tr-reactions", "反应开关"),
+    "avatar.tracking.game_reactions_enabled": ("tr-reactions", "反应开关"),
+    "avatar.tracking.speech_nods_enabled": ("tr-reactions", "反应开关"),
+    "avatar.tracking.expression_linger_ms": ("tr-expression-hold", "表情停留"),
+    "avatar.tracking.expression_min_dwell_ms": ("tr-expression-hold", "表情停留"),
+    "avatar.tracking.expression_tool_hold_ms": ("tr-expression-hold", "表情停留"),
+    "avatar.tracking.intensity_floor": ("tr-intensity", "表情强度"),
+    "avatar.tracking.intensity_gain": ("tr-intensity", "表情强度"),
+    "avatar.tracking.mood_enabled": ("tr-mood", "心情"),
+    "avatar.tracking.mood_half_life_ms": ("tr-mood", "心情"),
+    "avatar.tracking.mood_gain": ("tr-mood", "心情"),
+    "avatar.tracking.body_enabled": ("tr-body", "身体动作"),
+    "avatar.tracking.body_stance_settle_ms": ("tr-stance", "站姿节奏"),
+    "avatar.tracking.body_stance_hold_ms": ("tr-stance", "站姿节奏"),
+    "avatar.tracking.body_stance_return_ms": ("tr-stance", "站姿节奏"),
+    "avatar.tracking.body_think_after_ms": ("tr-stance", "站姿节奏"),
+    "avatar.tracking.body_sway_gap_ms": ("tr-body-gap", "动作间隔"),
+    "avatar.tracking.body_laugh_gap_ms": ("tr-body-gap", "动作间隔"),
+    "avatar.tracking.body_gesture_gap_ms": ("tr-body-gap", "动作间隔"),
+    # ── model 域 ──
+    "model.embedding.enabled": ("emb-model", "嵌入模型"),
+    "model.embedding.provider": ("emb-model", "嵌入模型"),
+    "model.embedding.model_identifier": ("emb-model", "嵌入模型"),
+    "model.embedding.dimensions": ("emb-model", "嵌入模型"),
+    "model.embedding.batch_size": ("emb-batch", "批量与超时"),
+    "model.embedding.timeout_ms": ("emb-batch", "批量与超时"),
+    # ── infra 域 ──
+    # Agent 守护
+    "infra.agent_supervisor.heartbeat_interval_ms": ("sup-heartbeat", "心跳与判死"),
+    "infra.agent_supervisor.check_interval_ms": ("sup-heartbeat", "心跳与判死"),
+    "infra.agent_supervisor.dead_threshold_ms": ("sup-heartbeat", "心跳与判死"),
+    "infra.agent_supervisor.rebuild_failure_window_ms": ("sup-rebuild", "重建失败"),
+    "infra.agent_supervisor.max_rebuild_failures": ("sup-rebuild", "重建失败"),
+    # 直播切片
+    "infra.clipping.recording_dir": ("clip-dirs", "目录"),
+    "infra.clipping.output_dir": ("clip-dirs", "目录"),
+    "infra.clipping.ffmpeg_path": ("clip-pipeline", "转码与摘要"),
+    "infra.clipping.llm_profile": ("clip-pipeline", "转码与摘要"),
+    "infra.clipping.reencode": ("clip-pipeline", "转码与摘要"),
+    "infra.clipping.min_segment_seconds": ("clip-length", "切片时长"),
+    "infra.clipping.max_segment_seconds": ("clip-length", "切片时长"),
+    # 面板服务
+    "infra.dashboard.host": ("dash-server", "监听地址"),
+    "infra.dashboard.port": ("dash-server", "监听地址"),
+    "infra.dashboard.max_history_messages": ("dash-runtime", "运行参数"),
+    "infra.dashboard.websocket_heartbeat": ("dash-runtime", "运行参数"),
+    "infra.dashboard.auto_open_browser": ("dash-dev", "开发选项"),
+    "infra.dashboard.dev_mode": ("dash-dev", "开发选项"),
+    "infra.dashboard.vite_dev_port": ("dash-dev", "开发选项"),
+    # 弹幕小部件
+    "infra.dashboard.danmaku_widget.font_size": ("dw-params", "显示参数"),
+    "infra.dashboard.danmaku_widget.max_messages": ("dw-params", "显示参数"),
+    "infra.dashboard.danmaku_widget.min_importance": ("dw-params", "显示参数"),
+    "infra.dashboard.danmaku_widget.show_danmaku": ("dw-show-core", "显示内容"),
+    "infra.dashboard.danmaku_widget.show_gift": ("dw-show-core", "显示内容"),
+    "infra.dashboard.danmaku_widget.show_super_chat": ("dw-show-core", "显示内容"),
+    "infra.dashboard.danmaku_widget.show_guard": ("dw-show-core", "显示内容"),
+    "infra.dashboard.danmaku_widget.show_enter": ("dw-show-more", "更多显示"),
+    "infra.dashboard.danmaku_widget.show_reply": ("dw-show-more", "更多显示"),
+    # 字幕小部件
+    "infra.dashboard.subtitle_widget.max_messages": ("sw-display", "显示参数"),
+    "infra.dashboard.subtitle_widget.auto_hide_after_ms": ("sw-display", "显示参数"),
+    "infra.dashboard.subtitle_widget.position": ("sw-display", "显示参数"),
+    "infra.dashboard.subtitle_widget.font_size": ("sw-font", "字体与颜色"),
+    "infra.dashboard.subtitle_widget.font_color": ("sw-font", "字体与颜色"),
+    "infra.dashboard.subtitle_widget.background_color": ("sw-font", "字体与颜色"),
+    "infra.dashboard.subtitle_widget.border_color": ("sw-font", "字体与颜色"),
+    # 诊断
+    "infra.diagnostics.enabled": ("diag", "诊断落盘"),
+    "infra.diagnostics.retention_days": ("diag", "诊断落盘"),
+    # 日志
+    "infra.logging.enabled": ("log-level", "级别与格式"),
+    "infra.logging.format": ("log-level", "级别与格式"),
+    "infra.logging.level": ("log-level", "级别与格式"),
+    "infra.logging.console_level": ("log-level", "级别与格式"),
+    "infra.logging.rotation": ("log-rotation", "轮转与保留"),
+    "infra.logging.retention": ("log-rotation", "轮转与保留"),
+    "infra.logging.compression": ("log-rotation", "轮转与保留"),
+    "infra.logging.split_by_session": ("log-rotation", "轮转与保留"),
+    # 麦麦同步
+    "infra.maibot_sync.url": ("sync-conn", "连接"),
+    "infra.maibot_sync.token": ("sync-conn", "连接"),
+    "infra.maibot_sync.send_transcript": ("sync-push", "推送与心跳"),
+    "infra.maibot_sync.heartbeat_interval_ms": ("sync-push", "推送与心跳"),
+    "infra.maibot_sync.request_timeout_ms": ("sync-push", "推送与心跳"),
+    # 模拟器
+    "infra.simulator.replay_date": ("sim-replay", "回放"),
+    "infra.simulator.replay_speed": ("sim-replay", "回放"),
+    "infra.simulator.replay_gap_cap_s": ("sim-replay", "回放"),
+    "infra.simulator.base_rate_per_minute": ("sim-rate", "消息速率"),
+    "infra.simulator.burst_multiplier": ("sim-rate", "消息速率"),
+    "infra.simulator.burst_min_interval_s": ("sim-rate", "消息速率"),
+    "infra.simulator.burst_cooldown_s": ("sim-rate", "消息速率"),
+    "infra.simulator.temp_passerby_ratio": ("sim-probability", "事件概率"),
+    "infra.simulator.gift_probability": ("sim-probability", "事件概率"),
+    "infra.simulator.guard_probability": ("sim-probability", "事件概率"),
+    "infra.simulator.sc_pay_probability": ("sim-probability", "事件概率"),
+    "infra.simulator.idle_threshold_s": ("sim-idle", "空闲与暖场"),
+    "infra.simulator.idle_rate_multiplier": ("sim-idle", "空闲与暖场"),
+    "infra.simulator.warmup_duration_s": ("sim-idle", "空闲与暖场"),
+    "infra.simulator.llm_temperature": ("sim-llm", "生成参数"),
+    "infra.simulator.token_budget_per_hour": ("sim-llm", "生成参数"),
+    "infra.simulator.max_concurrent_llm": ("sim-llm", "生成参数"),
+    "infra.simulator.cadence_mode": ("sim-cadence", "节奏与语言"),
+    "infra.simulator.fixed_interval_s": ("sim-cadence", "节奏与语言"),
+    "infra.simulator.language": ("sim-cadence", "节奏与语言"),
+    # 字幕桌面窗口
+    "infra.subtitle.tk_gui.window_width": ("tk-window", "窗口尺寸"),
+    "infra.subtitle.tk_gui.window_height": ("tk-window", "窗口尺寸"),
+    "infra.subtitle.tk_gui.window_offset_y": ("tk-window", "窗口尺寸"),
+    "infra.subtitle.tk_gui.font_family": ("tk-font", "字体"),
+    "infra.subtitle.tk_gui.font_size": ("tk-font", "字体"),
+    "infra.subtitle.tk_gui.font_weight": ("tk-font", "字体"),
+    "infra.subtitle.tk_gui.text_color": ("tk-color", "颜色"),
+    "infra.subtitle.tk_gui.background_color": ("tk-color", "颜色"),
+    "infra.subtitle.tk_gui.outline_color": ("tk-color", "颜色"),
+    "infra.subtitle.tk_gui.outline_enabled": ("tk-outline", "描边"),
+    "infra.subtitle.tk_gui.outline_width": ("tk-outline", "描边"),
+    "infra.subtitle.tk_gui.use_chroma_key": ("tk-chroma", "色度键"),
+    "infra.subtitle.tk_gui.chroma_key_color": ("tk-chroma", "色度键"),
+    "infra.subtitle.tk_gui.fade_delay_ms": ("tk-fade", "显示与淡出"),
+    "infra.subtitle.tk_gui.auto_hide": ("tk-fade", "显示与淡出"),
+    "infra.subtitle.tk_gui.show_waiting_text": ("tk-fade", "显示与淡出"),
+    "infra.subtitle.tk_gui.always_on_top": ("tk-behavior", "窗口行为"),
+    "infra.subtitle.tk_gui.always_show_window": ("tk-behavior", "窗口行为"),
+    "infra.subtitle.tk_gui.show_in_taskbar": ("tk-behavior", "窗口行为"),
+    "infra.subtitle.tk_gui.window_minimizable": ("tk-behavior", "窗口行为"),
+    # TTS 主开关与引擎
+    "infra.tts.enabled": ("tts-basic", "引擎选择"),
+    "infra.tts.provider": ("tts-basic", "引擎选择"),
+    "infra.tts.wait_playback": ("tts-basic", "引擎选择"),
+    "infra.tts.max_queue": ("tts-timeout", "队列与超时"),
+    "infra.tts.render_timeout_ms": ("tts-timeout", "队列与超时"),
+    "infra.tts.wait_playback_timeout_ms": ("tts-timeout", "队列与超时"),
+    # GPT-SoVITS
+    "infra.tts.gptsovits.host": ("g2s-conn", "连接"),
+    "infra.tts.gptsovits.port": ("g2s-conn", "连接"),
+    "infra.tts.gptsovits.ref_audio_path": ("g2s-ref", "参考音频"),
+    "infra.tts.gptsovits.prompt_text": ("g2s-ref", "参考音频"),
+    "infra.tts.gptsovits.text_language": ("g2s-ref", "参考音频"),
+    "infra.tts.gptsovits.prompt_language": ("g2s-ref", "参考音频"),
+    "infra.tts.gptsovits.top_k": ("g2s-sampling", "采样参数"),
+    "infra.tts.gptsovits.top_p": ("g2s-sampling", "采样参数"),
+    "infra.tts.gptsovits.temperature": ("g2s-sampling", "采样参数"),
+    "infra.tts.gptsovits.repetition_penalty": ("g2s-sampling", "采样参数"),
+    "infra.tts.gptsovits.speed_factor": ("g2s-output", "输出"),
+    "infra.tts.gptsovits.streaming_mode": ("g2s-output", "输出"),
+    "infra.tts.gptsovits.media_type": ("g2s-output", "输出"),
+    "infra.tts.gptsovits.text_split_method": ("g2s-output", "输出"),
+    "infra.tts.gptsovits.batch_size": ("g2s-batch", "批处理"),
+    "infra.tts.gptsovits.batch_threshold": ("g2s-batch", "批处理"),
+    "infra.tts.gptsovits.sample_steps": ("g2s-batch", "批处理"),
+    "infra.tts.gptsovits.super_sampling": ("g2s-batch", "批处理"),
+    # MiniMax TTS
+    "infra.tts.minimax_tts.base_url": ("mm-cred", "接口凭据"),
+    "infra.tts.minimax_tts.group_id": ("mm-cred", "接口凭据"),
+    "infra.tts.minimax_tts.api_key": ("mm-cred", "接口凭据"),
+    "infra.tts.minimax_tts.model": ("mm-voice", "合成音色"),
+    "infra.tts.minimax_tts.voice_id": ("mm-voice", "合成音色"),
+    "infra.tts.minimax_tts.speed": ("mm-tuning", "音调调节"),
+    "infra.tts.minimax_tts.vol": ("mm-tuning", "音调调节"),
+    "infra.tts.minimax_tts.pitch": ("mm-tuning", "音调调节"),
+    "infra.tts.minimax_tts.emotion": ("mm-tuning", "音调调节"),
+    # Omni TTS / OpenAI TTS / Voicebox
+    "infra.tts.omni_tts.llm_profile": ("omni-output", "输出参数"),
+    "infra.tts.omni_tts.voice": ("omni-output", "输出参数"),
+    "infra.tts.omni_tts.audio_format": ("omni-output", "输出参数"),
+    "infra.tts.omni_tts.sample_rate": ("omni-output", "输出参数"),
+    "infra.tts.openai_tts.base_url": ("oai-conn", "连接凭据"),
+    "infra.tts.openai_tts.api_key": ("oai-conn", "连接凭据"),
+    "infra.tts.openai_tts.model": ("oai-synthesis", "合成参数"),
+    "infra.tts.openai_tts.voice": ("oai-synthesis", "合成参数"),
+    "infra.tts.openai_tts.speed": ("oai-synthesis", "合成参数"),
+    "infra.tts.openai_tts.stream_format": ("oai-synthesis", "合成参数"),
+    "infra.tts.voicebox.host": ("vb-conn", "连接与音色"),
+    "infra.tts.voicebox.port": ("vb-conn", "连接与音色"),
+    "infra.tts.voicebox.profile_id": ("vb-conn", "连接与音色"),
+    "infra.tts.voicebox.language": ("vb-output", "输出"),
+    "infra.tts.voicebox.sample_rate": ("vb-output", "输出"),
+    "infra.tts.voicebox.generation_timeout_ms": ("vb-output", "输出"),
+}
+
+# 模型用途分配（9 个用途档案共用同一字段结构）：超时与放弃 / 生成参数 / 选择策略
+for _profile_name in (
+    "minecraft",
+    "minecraft_builder",
+    "planner",
+    "replyer",
+    "settle",
+    "simulator",
+    "summary",
+    "tts",
+    "vision",
+):
+    _p = f"model.llm_profiles.{_profile_name}"
+    _FIELD_ROW_LAYOUT[f"{_p}.slow_threshold_ms"] = ("profile-timeout", "超时与放弃")
+    _FIELD_ROW_LAYOUT[f"{_p}.give_up_ms"] = ("profile-timeout", "超时与放弃")
+    _FIELD_ROW_LAYOUT[f"{_p}.temperature"] = ("profile-gen", "生成参数")
+    _FIELD_ROW_LAYOUT[f"{_p}.reasoning_effort"] = ("profile-gen", "生成参数")
+    _FIELD_ROW_LAYOUT[f"{_p}.selection_strategy.name"] = ("profile-strategy", "选择策略")
+    _FIELD_ROW_LAYOUT[f"{_p}.selection_strategy.seed"] = ("profile-strategy", "选择策略")
+
+
 def _convert_to_api_field(field: dict, main_config: dict) -> dict:
     """将 generator schema 的 field dict 转换为前端 API 字段格式。
 
@@ -338,12 +746,11 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
     # 网格布局宽度覆盖：full = 占满整行（缺省由前端按字段类型自动分列）
     if field.get("x-ui-width"):
         gfield["width"] = field["x-ui-width"]
-    # 声明式行分组：同容器内同 x-ui-row 的叶子字段并成一个横行（前端 SubFieldGroup 消费）；
-    # x-ui-row-label 为该行的显示标题（任一成员携带即可，前端取首个非空值）
-    if field.get("x-ui-row"):
-        gfield["row"] = field["x-ui-row"]
-    if field.get("x-ui-row-label"):
-        gfield["rowLabel"] = field["x-ui-row-label"]
+    # 行分组：集中注册表下发（见 _FIELD_ROW_LAYOUT）
+    layout = _FIELD_ROW_LAYOUT.get(dotted_key)
+    if layout is not None:
+        gfield["row"] = layout[0]
+        gfield["rowLabel"] = layout[1]
     validation: dict = {}
     for k in ("minValue", "maxValue", "options", "pattern"):
         if k in field:
