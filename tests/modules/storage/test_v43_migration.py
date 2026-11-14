@@ -55,13 +55,13 @@ def _to_v42(path: Path) -> None:
         )
         raw.execute(
             "INSERT INTO live_sessions(id, stream_id, platform, started_at_ms, ended_at_ms, kind, updated_at_ms, settled_at_ms)"
-            " VALUES (1, 'room', 'bilibili', 1000, 2_000_000, 'live', 2_000_000, 2_001_000)"
+            " VALUES (1, 'room', 'bilibili', 1000, 2000000, 'live', 2000000, 2001000)"
         )
         raw.execute(
             "INSERT INTO archive_lines(id, live_session_id, text, quote, evidence_chat_id, game, save_id, save_name)"
             " VALUES (10, 1, 'Minecraft：水车搭好了', '水车搭好啦', 3, 'minecraft', 's1', '一周目')"
         )
-        raw.execute("INSERT INTO archive_snapshots(live_session_id, written_at_ms) VALUES (1, 2_001_000)")
+        raw.execute("INSERT INTO archive_snapshots(live_session_id, written_at_ms) VALUES (1, 2001000)")
         raw.execute(
             "INSERT INTO archive_snapshot_lines(live_session_id, archive_line_id, position, lasting, seen_at_ms, pinned)"
             " VALUES (1, 10, 0, 0, 1000, 0)"
