@@ -764,12 +764,10 @@ class MemoryRecallService:
         *,
         used_stopword_fallback: bool,
     ) -> Tuple[List[RecallEntry], bool]:
-        """裁剪纯字面路径下零实词低分凑数尾行，并判定整次查询是否无任何强相关命中（仅剩字面弱擦边）。"""
+        """裁剪双路下零实词且低余弦的凑数尾行，并判定整次查询是否无任何强相关命中（仅剩弱擦边）。"""
         if not candidates:
             return [], False
-        has_semantic_or_like = any(
-            item.search_hit.vector_rank is not None or item.search_hit.like_rank is not None for item in candidates
-        )
+        has_like = any(item.search_hit.like_rank is not None for item in candidates)
         real_terms = set(content_tokens(query))
         specific_terms = real_terms - _GENERIC_QUERY_TERMS
         cjk_specific_terms = {term for term in specific_terms if _CJK_TOKEN_RE.search(term)}
@@ -783,32 +781,42 @@ class MemoryRecallService:
             (item.search_hit.keyword_score or 0.0 for item in candidates if item.search_hit.keyword_score is not None),
             default=0.0,
         )
+        top_vec_score = max(
+            (item.search_hit.vector_score or 0.0 for item in candidates if item.search_hit.vector_score is not None),
+            default=0.0,
+        )
         max_real = max(real_overlaps, default=0)
         max_spec = max(specific_overlaps, default=0)
 
-        # 首条已有明确实词命中时，剪掉尾部连 1 个实词都没撞上、BM25 远低于首条的纯代词/虚词凑数行
+        # 首条已有明确实词或高余弦命中时，剪掉尾部既零实词重合、余弦和 BM25 又明显偏低的凑数行
+        vec_tail_floor = max(0.55, top_vec_score - 0.08)
         kept_indices = list(range(len(candidates)))
-        if real_terms and (max_spec >= 2 or (max_real >= 1 and top_kw_score >= 2.5)):
+        if real_terms and (max_spec >= 2 or (max_real >= 1 and top_kw_score >= 2.5) or top_vec_score >= 0.58):
             kept_indices = [
                 idx
                 for idx in kept_indices
-                if candidates[idx].search_hit.vector_rank is not None
-                or candidates[idx].search_hit.like_rank is not None
+                if candidates[idx].search_hit.like_rank is not None
                 or real_overlaps[idx] > 0
+                or (candidates[idx].search_hit.vector_score or 0.0) >= vec_tail_floor
                 or (candidates[idx].search_hit.keyword_score or 0.0) >= max(0.5, top_kw_score * 0.25)
             ]
 
         kept_entries = [candidates[idx].entry for idx in kept_indices]
-        if has_semantic_or_like or not kept_entries:
+        if has_like or not kept_entries:
             return kept_entries, False
 
         max_spec_kept = max((specific_overlaps[idx] for idx in kept_indices), default=0)
         max_real_kept = max((real_overlaps[idx] for idx in kept_indices), default=0)
         max_cjk_kept = max((cjk_overlaps[idx] for idx in kept_indices), default=0)
+        max_vec_kept = max((candidates[idx].search_hit.vector_score or 0.0 for idx in kept_indices), default=0.0)
         non_cjk_spec = specific_terms - cjk_specific_terms
         has_non_cjk_hit = any(bool(doc_tokens_list[idx] & non_cjk_spec) for idx in kept_indices)
 
-        # 整次查询仅剩字面弱擦边：纯虚词回退、完全没命中任何具体主题实词、或多汉字复合词只擦到孤立 1 个双字碎片
+        # 语义路若有中强余弦命中（>= 0.57），视为有实质语义相关，不当作纯弱擦边截断
+        if max_vec_kept >= 0.57:
+            return kept_entries, False
+
+        # 整次查询仅剩弱擦边：纯虚词回退、完全没命中任何具体主题实词且余弦偏弱、或多汉字复合词只擦到孤立 1 个双字碎片
         weak_only = (
             used_stopword_fallback
             or not real_terms

@@ -43,11 +43,11 @@ RRF_K = 60
 CANDIDATES_PER_PATH = 50
 # 查询向量缓存多少条查询文本
 QUERY_VECTOR_CACHE_SIZE = 64
-# 同分档微幅新近度偏置上限（约 1.3 个 RRF 名次差）：相关度难分伯仲时优先排近期状态更新，不跨档反超高相关早期事实
-RECENCY_MAX_BONUS = 0.00035
-# 判定两条候选属于同一相关度档的容差：关键词 BM25 分差不超过 3%，语义余弦差不超过 0.015
-_KEYWORD_BAND_RATIO = 0.97
-_VECTOR_BAND_DELTA = 0.015
+# 同分档微幅新近度偏置上限（约 1 个 RRF 名次差）：仅在相关度几乎平分时优先排近期状态更新，不跨档反超高相关早期事实
+RECENCY_MAX_BONUS = 0.00028
+# 判定两条候选属于同一相关度档的容差：关键词 BM25 分差不超过 1.5%，语义余弦差不超过 0.005
+_KEYWORD_BAND_RATIO = 0.985
+_VECTOR_BAND_DELTA = 0.005
 # 台词还原拼合窗口长度上限（超过此长度无法完整拼入前邻句，检索层不让超长后句白蹭前句词分）
 _SPEECH_WINDOW_FIT_CHARS = 140
 

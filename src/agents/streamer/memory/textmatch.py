@@ -54,11 +54,11 @@ _CN_RECALL_STOPWORDS: frozenset[str] = frozenset(
     ).split()
 )
 
-# 回想查询剔除的英文疑问词、冠介连助词与时间序数虚词（保留第一人称代词供自述轮加权，判纯实词时再由 _PRONOUN_STOPWORDS 剥离）
+# 回想查询剔除的英文疑问词、冠介连助词（保留 first/last 次序定位词，剥离单字母 i 与 before/after 防稀释 BM25）
 _EN_RECALL_STOPWORDS: frozenset[str] = frozenset(
     (
-        "what was the had with for did you how when where which from that this have been are were your "
-        "about after before first last a an of to in on at by and or is am be do does has can could will "
+        "i what was the had with for did you how when where which from that this have been are were your "
+        "about after before a an of to in on at by and or is am be do does has can could will "
         "would should not s t m re ve ll d many much who whom whose why whether these those as if so than "
         "into over under between through during there here then"
     ).split()
