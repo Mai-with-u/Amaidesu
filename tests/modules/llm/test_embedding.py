@@ -14,7 +14,13 @@ import pytest
 from openai import AsyncOpenAI
 
 from src.modules.config.model_schemas import EmbeddingConfig, LLMProviderConfig
-from src.modules.llm.embedding import BACKOFF_BASE_MS, EmbeddingClient, EmbeddingError, build_embedding_client
+from src.modules.llm.embedding import (
+    BACKOFF_BASE_MS,
+    MAX_EMBED_INPUT_CHARS,
+    EmbeddingClient,
+    EmbeddingError,
+    build_embedding_client,
+)
 from tests.helpers import FakeClock
 
 Handler = Callable[[Dict[str, Any]], httpx.Response]
@@ -107,6 +113,21 @@ async def test_empty_text_is_rejected_without_a_request() -> None:
     with pytest.raises(ValueError, match="不能为空"):
         await _client(_vectors_reply, requests=requests).embed(["芝麻", "  "])
     assert requests == []
+
+
+async def test_overlong_text_is_clipped_on_wire_without_mutating_caller_document() -> None:
+    """超长单段文本送往嵌入接口前截到安全上限，防撑破模型上下文报 400 卡死退避队列，且调用方原字符串不变。"""
+    requests: List[Dict[str, Any]] = []
+    raw_long = "高炉蒸汽管" * 1_600  # 8000 字 > MAX_EMBED_INPUT_CHARS (6000)
+    short = "正常短句"
+    vectors = await _client(_vectors_reply, requests=requests).embed([raw_long, short])
+
+    assert len(vectors) == 2
+    sent_long, sent_short = requests[0]["input"]
+    assert len(sent_long) == MAX_EMBED_INPUT_CHARS
+    assert sent_long == raw_long[:MAX_EMBED_INPUT_CHARS]
+    assert sent_short == short
+    assert len(raw_long) == 8_000
 
 
 def test_not_configured_builds_no_client_and_says_why() -> None:

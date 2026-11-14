@@ -1014,6 +1014,58 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def list_speech_neighbors(
+        self,
+        *,
+        chat_ids: Sequence[int],
+        window_ms: int = 30_000,
+    ) -> Dict[int, Tuple[Optional[LiveChatMessage], Optional[LiveChatMessage]]]:
+        """按主键批量取每句已播出台词在同场前后 ``window_ms`` 内紧邻的 ±1 句合格主播台词。
+
+        严守跨场隐私边界：只查同一 ``live_session_id`` 下 ``sender_role='assistant'``、
+        ``dropped_at_ms IS NULL`` 且正文非空的主播台词，观众弹幕与未送达废稿一律不纳入。
+        """
+        ids = [int(chat_id) for chat_id in dict.fromkeys(chat_ids)]
+        if not ids:
+            return {}
+        span_ms = max(0, int(window_ms))
+
+        def _exec() -> Dict[int, Tuple[Optional[LiveChatMessage], Optional[LiveChatMessage]]]:
+            placeholders = ",".join("?" for _ in ids)
+            result: Dict[int, Tuple[Optional[LiveChatMessage], Optional[LiveChatMessage]]] = {}
+            with self._manager.transaction() as conn:
+                anchors = conn.execute(
+                    f"SELECT id, live_session_id, timestamp_ms FROM live_chat WHERE id IN ({placeholders})"  # noqa: S608
+                    " AND sender_role='assistant' AND dropped_at_ms IS NULL",
+                    ids,
+                ).fetchall()
+                for anchor in anchors:
+                    anchor_id = int(anchor["id"])
+                    session_id = int(anchor["live_session_id"])
+                    anchor_ts = int(anchor["timestamp_ms"])
+                    prev_row = conn.execute(
+                        "SELECT * FROM live_chat"
+                        " WHERE live_session_id=? AND sender_role='assistant' AND dropped_at_ms IS NULL"
+                        " AND length(trim(content, ' ' || char(9) || char(10) || char(13))) > 0"
+                        " AND id < ? AND ? - timestamp_ms BETWEEN 0 AND ?"
+                        " ORDER BY timestamp_ms DESC, id DESC LIMIT 1",
+                        (session_id, anchor_id, anchor_ts, span_ms),
+                    ).fetchone()
+                    next_row = conn.execute(
+                        "SELECT * FROM live_chat"
+                        " WHERE live_session_id=? AND sender_role='assistant' AND dropped_at_ms IS NULL"
+                        " AND length(trim(content, ' ' || char(9) || char(10) || char(13))) > 0"
+                        " AND id > ? AND timestamp_ms - ? BETWEEN 0 AND ?"
+                        " ORDER BY timestamp_ms ASC, id ASC LIMIT 1",
+                        (session_id, anchor_id, anchor_ts, span_ms),
+                    ).fetchone()
+                    prev_msg = LiveChatMessage.model_validate(dict(prev_row)) if prev_row is not None else None
+                    next_msg = LiveChatMessage.model_validate(dict(next_row)) if next_row is not None else None
+                    result[anchor_id] = (prev_msg, next_msg)
+            return result
+
+        return await self._run_in_executor(_exec)
+
     async def search_recall_danmaku(
         self,
         *,

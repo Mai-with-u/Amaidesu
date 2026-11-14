@@ -185,3 +185,30 @@ async def test_list_known_names_covers_current_and_former_names(store: SQLiteDat
 
 async def test_list_known_names_empty(store: SQLiteDatabase) -> None:
     assert await store.viewers.list_known_names() == []
+
+
+async def test_list_speech_neighbors_stays_in_same_session_within_30s_and_skips_danmaku_or_dropped(
+    store: SQLiteDatabase,
+) -> None:
+    """同场 ±30s 邻句查询只取已播出主播台词，跳过夹在中间的观众弹幕与未送达台词，不跨场、不超窗。"""
+    first_session = await _session(store, started=1_000, ended=50_000)
+    second_session = await _session(store, started=51_000)
+    await _say(store, first_session, "上一场结尾台词", 49_500)
+
+    far_before = await _say(store, second_session, "一分钟前的话", 60_000)
+    prev_ok = await _say(store, second_session, "北边刚摆好高炉", 100_000)
+    await _danmaku(store, second_session, user_id="u1", name="路人甲", text="观众弹幕插话", ts=105_000)
+    await _say(store, second_session, "没播出去的台词", 108_000, dropped_at_ms=108_500)
+    center = await _say(store, second_session, "结果蒸汽管接反了", 115_000)
+    next_ok = await _say(store, second_session, "赶紧拿扳手拆下来重接", 130_000)
+    await _say(store, second_session, "又过了一分钟的话", 170_000)
+
+    neighbors = await store.chat.list_speech_neighbors(chat_ids=[far_before, center, next_ok])
+
+    assert neighbors[far_before] == (None, None)
+    prev_msg, next_msg = neighbors[center]
+    assert prev_msg is not None and prev_msg.id == prev_ok
+    assert next_msg is not None and next_msg.id == next_ok
+    next_prev, next_after = neighbors[next_ok]
+    assert next_prev is not None and next_prev.id == center
+    assert next_after is None

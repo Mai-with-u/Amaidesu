@@ -29,6 +29,8 @@ logger = get_logger("EmbeddingClient")
 # 嵌入失败后的退避：从 30 秒起翻倍，封顶 10 分钟
 BACKOFF_BASE_MS = 30_000
 BACKOFF_MAX_MS = 600_000
+# 送往远端嵌入接口的单段字符上限：防止超长文本撑破模型上下文上限（如 8192 token）变成永久卡住退避队列的毒丸行
+MAX_EMBED_INPUT_CHARS = 6_000
 
 
 class EmbeddingError(Exception):
@@ -77,10 +79,12 @@ class EmbeddingClient:
         if self.backing_off:
             wait_s = max(0, self._retry_at_ms - self._clock()) // 1000
             raise EmbeddingError(f"嵌入服务退避中（连续失败 {self._failures} 次，{wait_s} 秒后再试），这次没发请求")
+        # 只截送往嵌入接口的请求字符串，不碰调用方手里的 IndexDoc.document 原文与 text_hash 指纹
+        clipped = [text[:MAX_EMBED_INPUT_CHARS] if len(text) > MAX_EMBED_INPUT_CHARS else text for text in texts]
         vectors: List[List[float]] = []
         try:
-            for start in range(0, len(texts), self._batch_size):
-                vectors.extend(await self._embed_batch(list(texts[start : start + self._batch_size])))
+            for start in range(0, len(clipped), self._batch_size):
+                vectors.extend(await self._embed_batch(clipped[start : start + self._batch_size]))
         except EmbeddingError as exc:
             self._arm_backoff(exc)
             raise
@@ -185,4 +189,10 @@ def _find_provider(providers: Sequence[LLMProviderConfig], name: str) -> Optiona
     return None
 
 
-__all__ = ["EmbeddingClient", "EmbeddingError", "EmbeddingSetup", "build_embedding_client"]
+__all__ = [
+    "MAX_EMBED_INPUT_CHARS",
+    "EmbeddingClient",
+    "EmbeddingError",
+    "EmbeddingSetup",
+    "build_embedding_client",
+]

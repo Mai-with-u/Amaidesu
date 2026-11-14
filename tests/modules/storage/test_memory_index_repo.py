@@ -198,3 +198,68 @@ async def test_switching_a_session_to_rehearsal_drops_its_speech_and_event_index
     await store.sessions.set_live_session_kind_with_ledger(live_session_id=switched, kind="live", updated_at_ms=NOW_MS)
     pending = await store.memory_index.pending_full_text(source="speech", now_ms=NOW_MS, limit=50)
     assert [doc.document for doc in pending] == [f"第 {switched} 场的台词"]
+
+
+async def test_speech_window_rows_resolves_adjacent_speech_while_keeping_single_line_document_hash(
+    store: SQLiteDatabase,
+) -> None:
+    """台词正本 document 与向量 text_hash 保持单句原样，speech_window_rows 单独取同场前 30 秒合格台词且排除弹幕与废稿。"""
+    earlier_session = await _session(store, start_ms=NOW_MS - 7_200_000)
+    live = await _session(store)
+
+    await _speech(store, earlier_session, "上一场末尾说的话", age_ms=125_000)
+    too_early = await _speech(store, live, "四十秒前聊别的", age_ms=120_000)
+    first_cause = await _speech(store, live, "北边刚摆好高炉", age_ms=80_000)
+    # 中间夹入观众弹幕与未送达废稿，均不得进入邻句窗口，也不阻断主播自身前后紧邻关系
+    await store.chat.insert_live_chat(
+        live_session_id=live,
+        timestamp_ms=NOW_MS - 75_000,
+        sender_role="viewer",
+        content="观众插话绝不能进跨场索引",
+        message_type="danmaku",
+        message_id="dm-mid",
+    )
+    await _speech(store, live, "半截打断废稿", age_ms=72_000, dropped_at_ms=NOW_MS - 71_000)
+    second_effect = await _speech(store, live, "结果蒸汽管接反了", age_ms=65_000)
+
+    pending = await store.memory_index.pending_full_text(source="speech", now_ms=NOW_MS, limit=50)
+    by_id = {doc.source_id: doc for doc in pending}
+    vec_docs = {
+        doc.source_id: doc
+        for doc in await store.memory_index.pending_vectors(source="speech", model_key="m", now_ms=NOW_MS, limit=50)
+    }
+
+    assert by_id[first_cause].document == "北边刚摆好高炉"
+    assert by_id[second_effect].document == "结果蒸汽管接反了", "单句正本不拼邻句，避免改动向量 text_hash"
+    assert vec_docs[second_effect].document == "结果蒸汽管接反了"
+
+    windows = await store.memory_index.speech_window_rows(chat_ids=[too_early, first_cause, second_effect])
+    assert windows[too_early] == ("四十秒前聊别的", None, "")
+    assert windows[first_cause] == ("北边刚摆好高炉", None, ""), "距上一句满 40 秒（>30 秒），不往前拼"
+    assert windows[second_effect] == ("结果蒸汽管接反了", first_cause, "北边刚摆好高炉")
+
+    assert await store.memory_index.pending_total(model_key="m", now_ms=NOW_MS) == len(pending)
+    assert await store.memory_index.write_full_text(
+        source="speech", items=[(doc, _tokens(doc.document)) for doc in pending]
+    ) == len(pending)
+    assert await store.memory_index.write_vectors(
+        source="speech", model_key="m", items=[(doc, [1.0, 0.0]) for doc in pending]
+    ) == len(pending)
+    (vec_row,) = await store.execute("SELECT text_hash FROM memory_vectors_speech WHERE chat_id = ?", (second_effect,))
+    assert vec_row["text_hash"] == text_hash("结果蒸汽管接反了")
+    assert await store.memory_index.pending_total(model_key="m", now_ms=NOW_MS) == 0
+
+
+async def test_blank_speech_and_newline_only_documents_never_enter_vector_queue(store: SQLiteDatabase) -> None:
+    """空白台词与拼出来只有换行符的空记录不进向量待补队列，避免空串打断整轮嵌入补算。"""
+    live = await _session(store)
+    await _speech(store, live, "   \n\t  ", age_ms=60_000)
+    await store.archive.insert_line(live_session_id=live, text="  ", quote="\t", evidence_chat_id=1)
+
+    assert await store.memory_index.pending_full_text(source="speech", now_ms=NOW_MS, limit=50) == []
+    assert await store.memory_index.pending_vectors(source="speech", model_key="m", now_ms=NOW_MS, limit=50) == []
+    assert await store.memory_index.pending_vectors(source="archive", model_key="m", now_ms=NOW_MS, limit=50) == []
+    # archive 全文行写完后，因正文剥除空白与换行后为空，pending_total 归零，不会卡在缺向量里
+    archive_docs = await store.memory_index.pending_full_text(source="archive", now_ms=NOW_MS, limit=50)
+    await store.memory_index.write_full_text(source="archive", items=[(doc, "") for doc in archive_docs])
+    assert await store.memory_index.pending_total(model_key="m", now_ms=NOW_MS) == 0

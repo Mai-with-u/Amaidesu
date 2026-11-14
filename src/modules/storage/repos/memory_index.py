@@ -38,6 +38,15 @@ INDEX_SOURCES: Tuple[IndexSource, ...] = ("archive", "commitment", "speech", "ev
 INDEXED_GAME_EVENT_TYPES: Tuple[str, ...] = ("milestone", "report")
 # 她的台词播出满这么久才收：台词被打断、标成没播出的标记会晚一点到
 SPEECH_SETTLE_MS = 30_000
+# 同场相邻主播台词的滑窗间隔上限（毫秒）：只拼她自己已播出的前一句，绝不纳入观众弹幕
+SPEECH_NEIGHBOR_WINDOW_MS = 30_000
+# SQLite 的 trim(x) 默认只去半角空格，连同换行、回车、制表符一起剥掉才能识破纯空白正文
+_SQL_WHITESPACE = "' ' || char(9) || char(10) || char(13)"
+
+
+def _nonblank_sql(expr: str) -> str:
+    """SQL 非空白条件：剥掉空格、制表符与换行后仍有字符。"""
+    return f"length(trim({expr}, {_SQL_WHITESPACE})) > 0"
 
 
 @dataclass(frozen=True)
@@ -84,7 +93,10 @@ _SPECS: Dict[IndexSource, _Spec] = {
         vectors="memory_vectors_speech",
         key="chat_id",
         document="t.content",
-        eligible="t.sender_role = 'assistant' AND t.dropped_at_ms IS NULL AND s.kind = 'live'",
+        eligible=(
+            "t.sender_role = 'assistant' AND t.dropped_at_ms IS NULL"
+            f" AND {_nonblank_sql('t.content')} AND s.kind = 'live'"
+        ),
         joins_session=True,
     ),
     "event": _Spec(
@@ -175,7 +187,7 @@ class MemoryIndexRepo(BaseRepo):
             f" LEFT JOIN {spec.vectors} v ON v.{spec.key} = t.id"
             f" WHERE {spec.eligible}{_settled_clause(source)}"
             # 空白正文算不出向量（服务端会拒），不排进队列，免得永远堵在队头
-            f" AND length(trim({spec.document})) > 0"
+            f" AND {_nonblank_sql(spec.document)}"
             " AND (v.model IS NULL OR v.model <> ?)"
             " ORDER BY t.id LIMIT ?"
         )
@@ -196,13 +208,11 @@ class MemoryIndexRepo(BaseRepo):
             with self._manager.transaction() as conn:
                 for source in INDEX_SOURCES:
                     spec = _SPECS[source]
-                    # 缺向量的行只在正文非空时才算"还缺"：空白正文算不出向量（同 pending_vectors 的排除）
+                    # 缺向量的行只在正文非空白时才算"还缺"：空白正文算不出向量（同 pending_vectors 的排除）
                     vector_missing = ""
                     params: List[object] = list(_settled_params(source, now_ms))
                     if model_key is not None:
-                        vector_missing = (
-                            " OR (length(trim(" + spec.document + ")) > 0 AND (v.model IS NULL OR v.model <> ?))"
-                        )
+                        vector_missing = f" OR ({_nonblank_sql(spec.document)} AND (v.model IS NULL OR v.model <> ?))"
                         params.append(model_key)
                     sql = (
                         f"SELECT COUNT(*) {_from(spec)}"  # noqa: S608 常量片段
@@ -313,6 +323,43 @@ class MemoryIndexRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def speech_window_rows(self, *, chat_ids: Sequence[int]) -> Dict[int, Tuple[str, Optional[int], str]]:
+        """按主键取台词本句正文与同场前 30 秒紧邻上一句（供检索层区分跨句互补命中与蹭词影子）。"""
+        ids = [int(chat_id) for chat_id in dict.fromkeys(chat_ids)]
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        prev_where = (
+            "prev.live_session_id = t.live_session_id"
+            " AND prev.sender_role = 'assistant'"
+            " AND prev.dropped_at_ms IS NULL"
+            f" AND {_nonblank_sql('prev.content')}"
+            " AND prev.id < t.id"
+            f" AND t.timestamp_ms - prev.timestamp_ms BETWEEN 0 AND {SPEECH_NEIGHBOR_WINDOW_MS}"
+        )
+        sql = (
+            "SELECT t.id, t.content,"
+            f" (SELECT prev.id FROM live_chat prev WHERE {prev_where}"  # noqa: S608 常量片段
+            " ORDER BY prev.timestamp_ms DESC, prev.id DESC LIMIT 1) AS prev_id,"
+            f" (SELECT prev.content FROM live_chat prev WHERE {prev_where}"
+            " ORDER BY prev.timestamp_ms DESC, prev.id DESC LIMIT 1) AS prev_content"
+            f" FROM live_chat t WHERE t.id IN ({placeholders})"
+        )
+
+        def _exec() -> Dict[int, Tuple[str, Optional[int], str]]:
+            with self._manager.transaction() as conn:
+                rows = conn.execute(sql, tuple(ids)).fetchall()
+            return {
+                int(row[0]): (
+                    str(row[1] or ""),
+                    int(row[2]) if row[2] is not None else None,
+                    str(row[3] or ""),
+                )
+                for row in rows
+            }
+
+        return await self._run_in_executor(_exec)
+
     def _read_candidates(self, sql: str, params: Tuple[object, ...]) -> List[IndexCandidate]:
         with self._manager.transaction() as conn:
             rows = conn.execute(sql, params).fetchall()
@@ -329,6 +376,7 @@ class MemoryIndexRepo(BaseRepo):
 __all__ = [
     "INDEXED_GAME_EVENT_TYPES",
     "INDEX_SOURCES",
+    "SPEECH_NEIGHBOR_WINDOW_MS",
     "SPEECH_SETTLE_MS",
     "IndexSource",
     "MemoryIndexRepo",
