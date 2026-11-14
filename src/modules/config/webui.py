@@ -335,6 +335,15 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
     # 描述展示形态：icon = 前端标签旁 ⓘ 悬浮提示（缺省 inline = 内联段落）
     if field.get("x-ui-description-display"):
         gfield["descriptionDisplay"] = field["x-ui-description-display"]
+    # 网格布局宽度覆盖：full = 占满整行（缺省由前端按字段类型自动分列）
+    if field.get("x-ui-width"):
+        gfield["width"] = field["x-ui-width"]
+    # 声明式行分组：同容器内同 x-ui-row 的叶子字段并成一个横行（前端 SubFieldGroup 消费）；
+    # x-ui-row-label 为该行的显示标题（任一成员携带即可，前端取首个非空值）
+    if field.get("x-ui-row"):
+        gfield["row"] = field["x-ui-row"]
+    if field.get("x-ui-row-label"):
+        gfield["rowLabel"] = field["x-ui-row-label"]
     validation: dict = {}
     for k in ("minValue", "maxValue", "options", "pattern"):
         if k in field:
@@ -357,6 +366,89 @@ def _convert_to_api_field(field: dict, main_config: dict) -> dict:
         else:
             gfield["items"] = items_schema
     return gfield
+
+
+# 容器分组的中文显示名：键为分组键最后一段（scope 无关，同名分组跨文件复用同一中文名）。
+# 未登记的容器回退到键名 title() 化（如动态实例名）。entity 注册名（minecraft 等）
+# 按各自语义登记；此处只做显示层翻译，配置键与写入路径不受影响。
+_CONTAINER_LABELS: dict[str, str] = {
+    # agents 域
+    "agents": "Agent 实体",
+    "streamer": "主播 Agent",
+    "minecraft": "Minecraft",
+    "game_2048": "游戏 2048",
+    "text_adv": "文字冒险",
+    "context": "上下文",
+    "mcp": "MCP 工具",
+    "picture": "看图额度",
+    "background": "后台行为",
+    "compressor": "上下文压缩",
+    "batch": "弹幕聚合",
+    "command": "弹幕命令",
+    "force": "强制响应",
+    "live_frame": "直播画面",
+    "mouth": "即时反应",
+    "persona": "人设",
+    "proactive": "主动发言",
+    "thinking_stream": "思考流",
+    "word_filter": "发言过滤",
+    # collectors 域
+    "stt": "语音识别",
+    "audio": "音频输入",
+    "iflytek_asr": "讯飞 ASR",
+    "message_config": "消息处理",
+    "vad": "静音检测",
+    "bili_danmaku": "B 站弹幕",
+    "bili_danmaku_laplace": "B 站弹幕（Laplace）",
+    "bili_danmaku_official": "B 站弹幕（官方）",
+    "console_input": "控制台输入",
+    # tools 域
+    "tools": "工具设置",
+    "health": "健康检查",
+    "tasks": "任务分配",
+    "vision": "视觉理解",
+    "config": "配置",
+    # avatar 域
+    "platform": "平台",
+    "expression_sheet": "差分立绘",
+    "lipsync": "口型同步",
+    "tracking": "动作跟踪",
+    # model 域
+    "llm_profiles": "模型用途分配",
+    "embedding": "向量嵌入",
+    "selection_strategy": "选择策略",
+    # storage 域
+    "privacy": "隐私",
+    "retention": "数据保留",
+    "sqlite": "SQLite",
+    "viewers": "观众画像",
+    # infra 域
+    "agent_supervisor": "Agent 守护",
+    "clipping": "自动切片",
+    "dashboard": "面板",
+    "danmaku_widget": "弹幕小部件",
+    "game2048_widget": "游戏 2048 小部件",
+    "subtitle_widget": "字幕小部件",
+    "diagnostics": "诊断",
+    "events": "事件",
+    "logging": "日志",
+    "maibot_sync": "麦麦同步",
+    "simulator": "模拟器",
+    "subtitle": "字幕",
+    "tk_gui": "桌面窗口",
+    "tts": "TTS 语音",
+    "edge_tts": "Edge TTS",
+    "gptsovits": "GPT-SoVITS",
+    "minimax_tts": "MiniMax TTS",
+    "omni_tts": "Omni TTS",
+    "openai_tts": "OpenAI TTS",
+    "voicebox": "Voicebox",
+}
+
+
+def _container_label(container_key: str, comp_name: str) -> str:
+    """容器分组显示名：先查注册表（按最后一段），未登记回退键名 title() 化。"""
+    return _CONTAINER_LABELS.get(comp_name) or comp_name.replace("_", " ").title()
 
 
 def _group_into_children(fields: list[dict], _depth: int = 1) -> list[dict]:
@@ -384,7 +476,7 @@ def _group_into_children(fields: list[dict], _depth: int = 1) -> list[dict]:
         _prefix_candidates = [f.get("key", "").split(".")[:_depth] for f in comp_fields if f.get("key")]
         _prefix = _prefix_candidates[0] if _prefix_candidates else [comp_name]
         container_key = ".".join(_prefix + [comp_name])
-        label = comp_name.replace("_", " ").title()
+        label = _container_label(container_key, comp_name)
         containers.append(
             {
                 "key": container_key,
