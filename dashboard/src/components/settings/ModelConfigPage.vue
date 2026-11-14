@@ -368,14 +368,8 @@
         </thead>
         <tbody>
           <template v-for="idx in filteredModelIndices" :key="idx">
-            <tr class="model-row" @click="toggleModelExpand(idx)">
-              <td class="mono">
-                <el-icon class="row-toggle">
-                  <ArrowRight v-if="modelExpanded[idx] !== true" />
-                  <ArrowDown v-else />
-                </el-icon>
-                {{ itemDisplayName(models[idx]) || '未命名' }}
-              </td>
+            <tr class="model-row" @click="emit('navigate', modelDetailKey(idx))">
+              <td class="mono">{{ itemDisplayName(models[idx]) || '未命名' }}</td>
               <td :class="{ 'dangling-cell': isProviderDangling(models[idx]) }">
                 {{ str(models[idx]?.api_provider) || '—' }}
               </td>
@@ -432,70 +426,6 @@
                 </div>
               </td>
             </tr>
-            <tr v-if="modelExpanded[idx] === true" class="model-edit-row">
-              <td colspan="7">
-                <div class="edit-body">
-                  <!-- 身份字段（name）：失焦/回车提交——改名触发引用守护，
-                       逐键提交会把中间态名字写进引用方 -->
-                  <div class="name-field">
-                    <label class="name-field-label"
-                      >模型名称<span class="required-mark">*</span></label
-                    >
-                    <CommitOnBlurInput
-                      :value="itemDisplayName(models[idx])"
-                      placeholder="模型唯一名"
-                      @commit="commitModelName(idx, $event)"
-                    />
-                  </div>
-                  <div class="name-field">
-                    <label class="name-field-label">所属提供商</label>
-                    <el-select
-                      :model-value="str(models[idx]?.api_provider)"
-                      filterable
-                      allow-create
-                      default-first-option
-                      placeholder="选择提供商"
-                      @update:model-value="updateModelField(idx, 'api_provider', $event)"
-                    >
-                      <el-option
-                        v-for="name in providerNames"
-                        :key="name"
-                        :label="name"
-                        :value="name"
-                      />
-                    </el-select>
-                  </div>
-                  <div class="field-grid">
-                    <FieldRenderer
-                      v-for="sub in modelEditorFields"
-                      :key="`${MODELS_KEY}.${idx}.${sub.key}`"
-                      :field="makeItemField(sub, MODELS_KEY, idx)"
-                      :model-value="itemValue(models[idx], sub.key)"
-                      :original-value="originalItemValue(MODELS_KEY, idx, sub.key)"
-                      @update:model-value="updateModelField(idx, sub.key, $event)"
-                    />
-                  </div>
-                  <details
-                    v-if="showAdvanced && modelAdvancedFields.length > 0"
-                    class="advanced-block"
-                  >
-                    <summary class="advanced-toggle">
-                      高级参数（{{ modelAdvancedFields.length }}）
-                    </summary>
-                    <div class="field-grid">
-                      <FieldRenderer
-                        v-for="sub in modelAdvancedFields"
-                        :key="`${MODELS_KEY}.${idx}.${sub.key}`"
-                        :field="makeItemField(sub, MODELS_KEY, idx)"
-                        :model-value="itemValue(models[idx], sub.key)"
-                        :original-value="originalItemValue(MODELS_KEY, idx, sub.key)"
-                        @update:model-value="updateModelField(idx, sub.key, $event)"
-                      />
-                    </div>
-                  </details>
-                </div>
-              </td>
-            </tr>
           </template>
         </tbody>
       </table>
@@ -514,11 +444,10 @@
         </span>
       </div>
       <div v-for="entry in providerEntries" :key="entry.index" class="prov">
-        <div class="prov-head" @click="toggleProviderOpen(entry.index)">
-          <el-icon class="row-toggle">
-            <ArrowRight v-if="providerOpen[entry.index] !== true" />
-            <ArrowDown v-else />
-          </el-icon>
+        <div
+          class="prov-head"
+          @click="emit('navigate', `${PROVIDERS_KEY}@${itemDisplayName(entry.item)}`)"
+        >
           <span class="name">{{ itemDisplayName(entry.item) || '未命名' }}</span>
           <span class="host mono">{{ str(entry.item.base_url) }}</span>
           <span class="key" :class="apiKeySet(entry.item.api_key) ? 'is-set' : 'is-unset'">
@@ -534,42 +463,6 @@
             :icon="Delete"
             @click.stop="removeProvider(entry.index)"
           />
-        </div>
-        <div v-if="providerOpen[entry.index] === true" class="prov-body">
-          <!-- name 失焦提交 + 引用守护级联；其余叶字段一律 FieldRenderer -->
-          <div class="name-field">
-            <label class="name-field-label">提供商名称<span class="required-mark">*</span></label>
-            <CommitOnBlurInput
-              :value="itemDisplayName(entry.item)"
-              placeholder="provider 唯一名称"
-              @commit="commitProviderName(entry.index, $event)"
-            />
-          </div>
-          <div class="field-grid">
-            <FieldRenderer
-              v-for="sub in providerEditorFields"
-              :key="`${PROVIDERS_KEY}.${entry.index}.${sub.key}`"
-              :field="makeItemField(sub, PROVIDERS_KEY, entry.index)"
-              :model-value="itemValue(entry.item, sub.key)"
-              :original-value="originalItemValue(PROVIDERS_KEY, entry.index, sub.key)"
-              @update:model-value="updateProviderField(entry.index, sub.key, $event)"
-            />
-          </div>
-          <details v-if="showAdvanced && providerAdvancedFields.length > 0" class="advanced-block">
-            <summary class="advanced-toggle">
-              高级参数（{{ providerAdvancedFields.length }}）
-            </summary>
-            <div class="field-grid">
-              <FieldRenderer
-                v-for="sub in providerAdvancedFields"
-                :key="`${PROVIDERS_KEY}.${entry.index}.${sub.key}`"
-                :field="makeItemField(sub, PROVIDERS_KEY, entry.index)"
-                :model-value="itemValue(entry.item, sub.key)"
-                :original-value="originalItemValue(PROVIDERS_KEY, entry.index, sub.key)"
-                @update:model-value="updateProviderField(entry.index, sub.key, $event)"
-              />
-            </div>
-          </details>
         </div>
       </div>
     </section>
@@ -603,17 +496,18 @@
  *
  * model.toml 的三类数据是相互引用的关系结构（provider ← model.api_provider、
  * model ← profile.model_list）。两种形态：
- * - 总览（默认）：关系视图——用途分配卡区（主模型 + 备选链 + 悬空引用警示）、
- *   模型注册表（行展开编辑 + 反向引用列）、提供商接入抽屉、语义检索区；
+ * - 总览（默认）：只读关系视图——用途分配卡区（主模型 + 备选链 + 悬空引用警示）、
+ *   模型注册表（价格/能力/反向引用列 + 测试连通）、提供商接入行、语义检索区；
+ *   行与提供商头部点击即进入对应详情，添加条目后也直接跳进详情填写；
  * - 详情（detailKey 传入时）：单实体全宽编辑，键格式见 detailTarget。
  * 叶字段编辑一律复用 FieldRenderer（同一条 store 更新路径），不 fork 第二条
  * 保存/脏跟踪路径；数组整值写回（与 ArrayEditor 同机制），provider/model
  * 改名经引用守护确认后级联更新引用方。详情里的交叉引用（被用途引用 /
  * 名下模型）点击后经 navigate 事件交由设置壳切换详情目标。
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { ArrowDown, ArrowRight, Close, Connection, Delete, Plus } from '@element-plus/icons-vue';
+import { Close, Connection, Delete, Plus } from '@element-plus/icons-vue';
 import FieldRenderer from './FieldRenderer.vue';
 import SubFieldGroup from './SubFieldGroup.vue';
 import CommitOnBlurInput from './CommitOnBlurInput.vue';
@@ -652,8 +546,6 @@ const props = defineProps<{
   updateValue: (field: ConfigFieldSchema, value: unknown) => void;
   getChangeCount: (key: string) => number;
   showAdvanced: boolean;
-  /** 页头"全部展开/收起"命令（与 ComponentCardList 同源），seq 变化即执行 */
-  expandCommand?: { action: 'expand' | 'collapse'; seq: number } | null;
   /**
    * 详情目标键：null/undefined = 总览形态。四种取值——
    * `model.llm_profiles.<name>`（用途，schema 真实键）、
@@ -707,41 +599,10 @@ function originalItemValue(arrayKey: string, index: number, relKey: string): unk
   return props.getOriginal(`${arrayKey}.${index}.${relKey}`);
 }
 
-// ── 展开状态（模型行/提供商行） ──────────────────────────
-const modelExpanded = ref<Record<number, boolean>>({});
-const providerOpen = ref<Record<number, boolean>>({});
-
-function toggleModelExpand(index: number) {
-  modelExpanded.value[index] = modelExpanded.value[index] !== true;
+/** 模型数组第 index 项的详情键（总览行点击跳详情用） */
+function modelDetailKey(index: number): string {
+  return `${MODELS_KEY}@${itemDisplayName(models.value[index])}`;
 }
-
-function toggleProviderOpen(index: number) {
-  providerOpen.value[index] = providerOpen.value[index] !== true;
-}
-
-// 页头"全部展开/收起"：expand 清空显式状态（模型收起/提供商收起），collapse 全量收起
-watch(
-  () => props.expandCommand?.seq,
-  () => {
-    const cmd = props.expandCommand;
-    if (!cmd) return;
-    if (cmd.action === 'expand') {
-      modelExpanded.value = {};
-      providerOpen.value = {};
-      return;
-    }
-    const collapsedModels: Record<number, boolean> = {};
-    models.value.forEach((_, index) => {
-      collapsedModels[index] = false;
-    });
-    modelExpanded.value = collapsedModels;
-    const closedProviders: Record<number, boolean> = {};
-    providers.value.forEach((_, index) => {
-      closedProviders[index] = false;
-    });
-    providerOpen.value = closedProviders;
-  },
-);
 
 // ── 数组读写（整值写回，与 ArrayEditor 同机制） ──────────
 function readArray(field: ConfigFieldSchema | undefined): ConfigItem[] {
@@ -1028,6 +889,7 @@ async function commitProviderName(index: number, input: string) {
   if (newName === oldName) return;
   arr[index] = { ...current, name: newName };
   writeArray(providersField.value, arr);
+  emit('navigate', `${PROVIDERS_KEY}@${newName}`);
   if (oldName === '') return;
   const referencing = providerNameReferences(models.value, oldName);
   if (referencing.length === 0) return;
@@ -1059,6 +921,8 @@ async function commitModelName(index: number, input: string) {
   if (newName === oldName) return;
   arr[index] = { ...current, name: newName };
   writeArray(modelsField.value, arr);
+  // 详情键按名字寻址：改名后同步刷新详情目标，避免详情停留在旧名上变"条目不存在"
+  emit('navigate', `${MODELS_KEY}@${newName}`);
   if (oldName === '') return;
   const referencing = modelUsageChips(profileListEntries.value, oldName);
   if (referencing.length === 0) return;
@@ -1077,7 +941,7 @@ async function commitModelName(index: number, input: string) {
   }
 }
 
-// ── 增删条目 ────────────────────────────────────────────
+// ── 增删条目（新增后跳进该条目详情继续填写） ─────────────
 function addProvider() {
   const arr = [...providers.value];
   const item = buildDefaultItem(providerItemFields.value);
@@ -1087,7 +951,7 @@ function addProvider() {
   );
   arr.push(item);
   writeArray(providersField.value, arr);
-  providerOpen.value[arr.length - 1] = true;
+  emit('navigate', `${PROVIDERS_KEY}@${String(item.name)}`);
 }
 
 function addModel() {
@@ -1096,8 +960,8 @@ function addModel() {
   item.name = uniqueName(modelNames.value, 'new-model');
   arr.push(item);
   writeArray(modelsField.value, arr);
-  modelExpanded.value[arr.length - 1] = true;
   providerFilter.value = 'all';
+  emit('navigate', `${MODELS_KEY}@${String(item.name)}`);
 }
 
 async function removeProvider(index: number) {
@@ -1352,17 +1216,6 @@ async function removeModel(index: number) {
   background: var(--color-primary-bg);
 }
 
-.model-edit-row td {
-  background: var(--bg-card);
-}
-
-.row-toggle {
-  font-size: 12px;
-  color: var(--text-secondary);
-  vertical-align: middle;
-  margin-right: 4px;
-}
-
 .dangling-cell {
   color: var(--color-warning);
 }
@@ -1412,19 +1265,7 @@ async function removeModel(index: number) {
   color: var(--color-danger);
 }
 
-/* ── 展开编辑区（模型行 / 提供商抽屉共用） ────────────── */
-.edit-body,
-.prov-body {
-  padding: var(--spacing-sm) var(--spacing-sm) var(--spacing-sm) 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
-}
-
-.prov-body {
-  padding: var(--spacing-sm) var(--spacing-md);
-}
-
+/* ── 详情与总览共用的身份字段 ──────────────────────────── */
 .name-field {
   display: flex;
   flex-direction: column;

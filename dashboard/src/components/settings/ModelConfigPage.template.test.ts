@@ -1,9 +1,9 @@
-// 模型专用页三层信息架构守护测试
+// 模型专用页信息架构守护测试
 //
 // 本文件以源码结构断言守护模板不变量；改名的实际交互（击键留字、失焦写回）
 // 由 ModelConfigPage.rename.test.ts 的挂载用例守护。
-// 1. 三层结构：用途分配卡区（主模型 = el-select）、模型注册表（table + 行展开）、
-//    提供商接入抽屉——模型不再嵌套在 provider 节下；
+// 1. 两种形态：总览 = 只读关系视图（用途卡区 + 模型注册表 + 提供商行 +
+//    语义检索区，行点击跳详情）；详情 = 单实体全宽编辑；
 // 2. 零指引文案：不出现任何解释页面用法/数据流向的提示段落；
 // 3. 叶字段一律经 FieldRenderer 渲染，改名守护走同一条 store 更新路径。
 
@@ -45,10 +45,10 @@ describe('ModelConfigPage 三层结构', () => {
     expect(pageSource).toContain('danglingModelRefs(profile.modelList, modelNames.value)');
   });
 
-  it('第二层模型注册：表格 + 按提供商筛选 chips + 行展开编辑，不嵌套在 provider 下', () => {
+  it('第二层模型注册：表格 + 按提供商筛选 chips，行点击跳详情（总览只读），不嵌套在 provider 下', () => {
     expect(pageSource).toContain('<table class="model-table"');
     expect(pageSource).toContain("providerFilter = 'all'");
-    expect(pageSource).toContain('toggleModelExpand(idx)');
+    expect(pageSource).toContain(`emit('navigate', modelDetailKey(idx))`);
     // 旧结构（provider 节内嵌模型子卡）不得残留
     expect(pageSource).not.toContain('owned-models');
     expect(pageSource).not.toContain('ModelItemCard');
@@ -63,19 +63,18 @@ describe('ModelConfigPage 三层结构', () => {
     expect(pageSource).toContain('class="unused">未投入使用</span>');
   });
 
-  it('第三层提供商抽屉：默认收起（!== true 才展开），密钥状态二态，展开区 FieldRenderer 全字段', () => {
-    expect(pageSource).toContain('providerOpen[entry.index] !== true');
+  it('第三层提供商行：头部点击跳详情，密钥状态二态，编辑只在详情形态', () => {
     expect(pageSource).toContain("apiKeySet(entry.item.api_key) ? '● 密钥已设置' : '○ 未设置'");
     expect(pageSource).toContain('providerEditorFields');
-    expect(pageSource).toContain('toggleProviderOpen(entry.index)');
+    expect(pageSource).toMatch(/prov-head"[\s\S]{0,80}@click="emit\('navigate'/);
   });
 
-  it('添加模型/提供商走 buildDefaultItem 追加并自动展开新行', () => {
+  it('添加模型/提供商走 buildDefaultItem 追加并跳进新条目详情', () => {
     expect(pageSource).toMatch(
-      /buildDefaultItem\(modelItemFields\.value\)[\s\S]*?modelExpanded\.value\[arr\.length - 1\] = true/,
+      /buildDefaultItem\(modelItemFields\.value\)[\s\S]*?emit\('navigate', `\$\{MODELS_KEY\}@\$\{String\(item\.name\)\}`\)/,
     );
     expect(pageSource).toMatch(
-      /buildDefaultItem\(providerItemFields\.value\)[\s\S]*?providerOpen\.value\[arr\.length - 1\] = true/,
+      /buildDefaultItem\(providerItemFields\.value\)[\s\S]*?emit\('navigate', `\$\{PROVIDERS_KEY\}@\$\{String\(item\.name\)\}`\)/,
     );
   });
 
@@ -89,10 +88,10 @@ describe('ModelConfigPage 三层结构', () => {
     expect(pageSource).toContain("embeddingState.ready ? 'success' : 'warning'");
   });
 
-  it('页头全部展开/收起命令接入专用页', () => {
-    expect(pageSource).toContain('expandCommand');
-    expect(pageSource).toMatch(/watch\(\s*\(\) => props\.expandCommand\?\.seq/);
-    expect(pageSource).toContain('providerOpen.value = {};');
+  it('总览只读化：不再接页头展开/收起命令，无行内展开状态', () => {
+    expect(pageSource).not.toContain('expandCommand');
+    expect(pageSource).not.toContain('modelExpanded');
+    expect(pageSource).not.toContain('providerOpen');
   });
 });
 
@@ -116,8 +115,8 @@ describe('ModelConfigPage 结构性绑定', () => {
     expect(pageSource).toContain("f.key !== 'name'");
   });
 
-  it('api_provider 用 el-select 绑 provider 名单，仍写字符串字段', () => {
-    expect(pageSource).toContain("updateModelField(idx, 'api_provider', $event)");
+  it('api_provider 用 el-select 绑 provider 名单，仍写字符串字段（编辑在详情形态）', () => {
+    expect(pageSource).toContain("updateModelField(detailTarget.index, 'api_provider', $event)");
   });
 
   it('叶字段编辑仍经 FieldRenderer（复用同一条控件与校验路径）', () => {

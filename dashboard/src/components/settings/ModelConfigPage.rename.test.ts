@@ -186,22 +186,23 @@ function mountPage() {
       getOriginal: () => undefined,
       getChangeCount: () => 0,
       showAdvanced: false,
+      detailKey: null,
     },
     global: { plugins: [ElementPlus] },
   });
   return { wrapper, store };
 }
 
-/** 展开后的模型行里的名称输入框 */
+/** 详情形态里的名称输入框 */
 function nameInput(wrapper: ReturnType<typeof mountPage>['wrapper']) {
-  return wrapper.find('.model-edit-row .name-field input');
+  return wrapper.find('.entity-detail .name-field input');
 }
 
 describe('模型注册表改名', () => {
-  it('新加模型后能改名称，名称写回配置', async () => {
+  it('新加模型后跳进详情，改名称写回配置', async () => {
     const { wrapper, store } = mountPage();
 
-    // ＋添加模型 → 新行自动展开
+    // ＋添加模型 → 数组追加并发出 navigate（设置壳据其把 detailKey 切到新条目）
     const addButton = wrapper.findAll('.zone-foot button').find(b => b.text().includes('添加模型'));
     expect(addButton).toBeDefined();
     await addButton!.trigger('click');
@@ -209,6 +210,11 @@ describe('模型注册表改名', () => {
 
     expect(store.model.llm_models).toHaveLength(2);
     expect(store.model.llm_models[1].name).toBe('new-model');
+    const nav = wrapper.emitted('navigate')?.at(-1)?.[0] as string;
+    expect(nav).toBe('model.llm_models@new-model');
+
+    await wrapper.setProps({ detailKey: nav });
+    await wrapper.vm.$nextTick();
 
     const input = nameInput(wrapper);
     expect(input.exists()).toBe(true);
@@ -218,12 +224,18 @@ describe('模型注册表改名', () => {
     await input.trigger('input');
     expect((input.element as HTMLInputElement).value).toBe('Mai-Replier');
 
-    // 失焦：名称写回配置
+    // 失焦：名称写回配置，并发出 navigate 指向新名（详情键按名字寻址，壳随之跟进）
     await input.trigger('blur');
     await wrapper.vm.$nextTick();
 
     expect(store.model.llm_models[1].name).toBe('Mai-Replier');
-    expect(wrapper.text()).toContain('Mai-Replier');
+    const renamedNav = wrapper.emitted('navigate')?.at(-1)?.[0] as string;
+    expect(renamedNav).toBe('model.llm_models@Mai-Replier');
+    await wrapper.setProps({ detailKey: renamedNav });
+    await wrapper.vm.$nextTick();
+    // 详情形态里名字只在输入框 value 中（不在文本节点），读元素值断言
+    const renamedInput = nameInput(wrapper);
+    expect((renamedInput.element as HTMLInputElement).value).toBe('Mai-Replier');
   });
 
   it('名称清空时拒绝写入并保留原名', async () => {
@@ -231,6 +243,9 @@ describe('模型注册表改名', () => {
 
     const addButton = wrapper.findAll('.zone-foot button').find(b => b.text().includes('添加模型'));
     await addButton!.trigger('click');
+    await wrapper.vm.$nextTick();
+    const nav = wrapper.emitted('navigate')?.at(-1)?.[0] as string;
+    await wrapper.setProps({ detailKey: nav });
     await wrapper.vm.$nextTick();
 
     const input = nameInput(wrapper);

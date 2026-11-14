@@ -204,8 +204,8 @@
               <el-radio-button value="simple">简洁模式</el-radio-button>
               <el-radio-button value="detailed">详细模式</el-radio-button>
             </el-radio-group>
-            <!-- 全部展开/收起只作用于总览长页；详情视图单实体无需批量折叠 -->
-            <el-button-group v-if="!isDetailMode" class="expand-group">
+            <!-- 全部展开/收起只作用于通用总览长页；模型域总览为只读关系视图无折叠内容 -->
+            <el-button-group v-if="!isDetailMode && !isModelDomain" class="expand-group">
               <el-button size="default" @click="issueExpandCommand('expand')">
                 <el-icon><ArrowDownBold /></el-icon>
                 全部展开
@@ -272,7 +272,6 @@
                 :update-value="updateFieldValue"
                 :get-change-count="getPendingChangeCount"
                 :show-advanced="showAdvanced"
-                :expand-command="cardExpandCommand"
                 :detail-key="activeEntityKey"
                 @navigate="openModelDetail"
               />
@@ -364,7 +363,7 @@
                     :update-value="updateFieldValue"
                     :get-change-count="getPendingChangeCount"
                     :show-advanced="showAdvanced"
-                    :expand-command="cardExpandCommand"
+                    @navigate="openModelDetail"
                   />
                   <!-- 总览模式：实体卡列表（与详情模式共用卡片渲染） -->
                   <ComponentCardList
