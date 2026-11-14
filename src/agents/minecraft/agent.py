@@ -114,6 +114,7 @@ from src.agents.minecraft.place_marks import NearPlaceTracker, PlaceMark, place_
 from src.agents.minecraft.player_body_language import PLAYER_BODY_LANGUAGE
 from src.agents.minecraft.player_interactions import SelfChatLog, SparOpponents, spar_interaction
 from src.agents.minecraft.skill_support import SkillSupport
+from src.agents.minecraft.social_rules import SOCIAL_RULES_MSG_KEY, WORLD_SOCIAL_RULES_KEY, WorldSocialRulesCache
 from src.agents.minecraft.sparring import spar_outcome_line
 from src.agents.minecraft.state import MinecraftAgentState, WakeEvenIdle
 from src.agents.minecraft.stop_receipt import GoalStopOutcome, cancel_receipt, stop_goal_label, stop_receipt
@@ -264,6 +265,7 @@ class MinecraftAgent(BaseAgent):
         skill_library: Optional[SkillLibrary] = None,
         creature_repo: Optional[Any] = None,
         work_docs_repo: Optional[Any] = None,
+        social_fact_repo: Optional[Any] = None,
         clock: Optional[Callable[[], float]] = None,
         live_active: Optional[bool] = None,
         mcp_client: Optional[Any] = None,
@@ -290,6 +292,8 @@ class MinecraftAgent(BaseAgent):
                 落库、跨场次记得主播起的名字与谁死了；None 时名册只在内存里，Agent 重建即丢。
             work_docs_repo: 游戏工作文档仓储（``get_work_docs`` / ``save_work_docs``）。注入时工作笔记与待办
                 按（游戏，存档）落库、跨重启保留；None 时退化为纯内存文档。
+            social_fact_repo: 游戏社交事实只读仓储（``list_active_facts``）。注入且认出具体存档后，
+                按存档筛选已核实的公共规矩缓存进任务上下文；None 时不注入公共规矩。
             clock: 保留给测试注入假时钟的构造参数（统一构造签名）。
             live_active: 直播闸初始态。None = 生产默认（构造期按直播中，启动钩子落收工态，
                 等 live.started 恢复）；显式给值（测试用）则启动钩子不再改写。
@@ -334,6 +338,9 @@ class MinecraftAgent(BaseAgent):
         self._creatures = CreatureBook()
         self._creature_repo = creature_repo
         self._work_docs_repo = work_docs_repo
+        self._social_fact_repo = social_fact_repo
+        # 当前存档已核实的公共社交规矩缓存：认出存档与新开委派任务时异步刷新，推理步内零查库
+        self._social_rules = WorldSocialRulesCache()
         self._current_session_id: Optional[int] = None
         # 饿急了从别人家箱子拿过的吃的：按世界记最近几笔放进任务事实，主人回头来问时按名字、区域或位置对上号
         self._food_taken = FoodTakenLog()
@@ -1046,6 +1053,7 @@ class MinecraftAgent(BaseAgent):
 
         steps = 0
         opening_due = False
+        attach_opening_social_rules = False
         mc_round = f"mc_{uuid.uuid4().hex[:12]}" if self._thinking_sink is not None else ""
         mc_seq_box = [0]
         action_reminded = False
@@ -1081,6 +1089,7 @@ class MinecraftAgent(BaseAgent):
                     if started_new:
                         self._start_new_task(messages, system_message)
                         opening_due = True
+                        attach_opening_social_rules = True
                         batch_epoch = self._release_epoch
                     # 读到主播的递话或新委派：卡住时问的那个问题算有人答了；开新任务时也不再有在等的问题
                     self._set_open_question("")
@@ -1102,7 +1111,25 @@ class MinecraftAgent(BaseAgent):
                 opening_due = False
                 if self._mc_state.dirty:
                     await self._save_work_docs()
+                seq_before_open = self._social_rules.load_seq
                 await self._skill_support.append_opening_bundle(messages)
+                current_save_id = self._world.save_fields()[0]
+                if current_save_id and self._social_rules.load_seq == seq_before_open:
+                    # 角色早已认出存档而未在开局代读中触发换档回调时，也在新任务开跑前异步刷新一次当前存档公共规矩
+                    await self._refresh_world_social_rules(current_save_id)
+                if attach_opening_social_rules:
+                    attach_opening_social_rules = False
+                    social_rules = self._social_rules.view(current_save_id)
+                    if social_rules:
+                        # 新任务首步推理前将当前存档公共规矩作为固定层事实附上，让角色第一次下达目标即遵守共享设施与领地规矩
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": "[当前存档公共规矩]\n" + json_text({WORLD_SOCIAL_RULES_KEY: social_rules}),
+                                FACTS_KEY: True,
+                                SOCIAL_RULES_MSG_KEY: True,
+                            }
+                        )
             if not self._interaction_only:
                 # 只回应互动的一批不碰委派账：等主播定夺的委派要一直显示在等定夺，不能被一次蹲起改回进行中
                 self._delegations.mark_running()
@@ -1966,8 +1993,12 @@ class MinecraftAgent(BaseAgent):
         """认出存档：进程启动后第一次认出加载该存档持久化的笔记与待办；换存档时先落库旧存档再切到新存档。"""
         if change.switched and change.before is not None and self._mc_state.dirty:
             await self._save_work_docs_for(change.before.id, change.before.name)
+        if change.switched:
+            # 检测到角色切换到另一个存档时，先立即清空旧存档公共规矩缓存，再读取新存档规矩，防止旧世界惯例串进新世界
+            self._social_rules.clear()
         self._mc_state.switch_world(change.after.id)
         await self._ensure_world_work_docs_loaded(change.after.id, change.after.name)
+        await self._refresh_world_social_rules(change.after.id)
         # 认出了（另一个）存档：手上记住的地点清单可能是别的存档的，整份丢掉，下一次速览按这个存档重读
         self._remembered_places.forget()
         if not change.switched or change.before is None:
@@ -1983,6 +2014,13 @@ class MinecraftAgent(BaseAgent):
         self._fold_epoch += 1
         self._fold_job.abandon()
         self._idle_prep.abandon()
+        if any(msg.get(SOCIAL_RULES_MSG_KEY) or msg.get(STATE_KEY) for msg in self._messages):
+            # 任务中途换存档时一并摘除旧存档开局公共规矩与旧世界任务状态快照，新存档续做将按新世界重出完整状态
+            self._messages[:] = [
+                msg for msg in self._messages if not msg.get(SOCIAL_RULES_MSG_KEY) and not msg.get(STATE_KEY)
+            ]
+            self._shown_context = {}
+            self._prefix_guard.expect_rewrite("换存档清退旧任务状态与公共规矩")
         if invalidate_world_summaries(
             self._messages,
             before_label=before,
@@ -2025,6 +2063,15 @@ class MinecraftAgent(BaseAgent):
                 self._mc_state.loaded_from_repo = True
         if self._mc_state.dirty:
             await self._save_work_docs_for(save_id, save_name)
+
+    async def _refresh_world_social_rules(self, save_id: str) -> None:
+        """按已认出的存档编号从仓储异步刷新公共规矩缓存；未认出存档或未装配仓储时保持空缓存。"""
+        await self._social_rules.refresh(
+            self._social_fact_repo,
+            game=_GAME,
+            save_id=save_id,
+            logger=self._logger,
+        )
 
     async def _save_work_docs(self) -> None:
         """把当前存档的工作笔记与待办写回仓储；还没认出存档或未装配仓储时只留在内存里。"""
@@ -2080,6 +2127,10 @@ class MinecraftAgent(BaseAgent):
         touched = self._others_things.view(self._creatures.world_key)
         if touched:
             context["others_things_touched"] = touched
+        # 当前存档已核实的公共规矩（未认出存档或当前存档无合格规矩时不出现该键）
+        social_rules = self._social_rules.view(self._world.save_fields()[0])
+        if social_rules:
+            context[WORLD_SOCIAL_RULES_KEY] = social_rules
         # 当前世界已观测到的模组能力、最近一次连锁挖矿统计与取材留坑记录（未报过的键不出现）
         context.update(self._mining_facts.view(self._mining_world_key()))
         return context
@@ -2092,6 +2143,9 @@ class MinecraftAgent(BaseAgent):
         if not shown:
             return current
         delta = {key: value for key, value in current.items() if shown.get(key) != value}
+        if WORLD_SOCIAL_RULES_KEY in shown and WORLD_SOCIAL_RULES_KEY not in current:
+            # 角色切入无公共规矩的新存档时，显式交付空列表告知前文公共规矩已失效，后续续做不再重复出现
+            delta[WORLD_SOCIAL_RULES_KEY] = []
         delta["unchanged_since_earlier_task_state"] = sorted(key for key in current if key not in delta)
         return delta
 

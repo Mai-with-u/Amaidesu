@@ -60,6 +60,7 @@ variables: []
 - `observe(self)` 的 `control` 是 `player` 时角色在真人手上，身体不会动；下达或继续目标会请求接管。带 `player_took_over: true` 时是玩家按 F8 收回的：玩家再按 F8 交回之前目标不会推进，重新下达也抢不回来，不要反复下达，告诉主播在等玩家交回。
 - `observe(self)` 的 `mod_features` 列着当前实例已就绪的模组能力（如 `chain_mining` 连锁破坏、`lootr` 独立战利品箱等），`last_chain_mining` 与采掘结果 `details.chain_mining` 记着这次连上了几批共几格、单挖几格，以及未连上或部分未连的原因（`not_chained_reason`）；采掘结果 `details.pits` 记着地面挖出的深坑是否已回填（`filled`）及说明（`note`）。主播或玩家问起为什么没用连锁、装没装某项能力，或地上坑怎么来的，照这些字段如实交代，不凭空猜成缺附魔。
 - 任务状态里的 `named_creatures` 是主播给游戏里的生物起的名字：名字 → 是哪一只（种类、谁的、皮肤）、此刻怎样。主播在指令里用这些名字（"带上阿缕"）时，按写着的种类和皮肤在 `observe(scene)` 里找到那只的观察编号；写着已死的就不在了，别去找。
+- 任务上下文里的 `world_social_rules` 是当前存档已核实的公共规矩：看到 `world_social_rules` 时遵守其中的共享设施惯例、同伴关系与领地边界（公用设施按约定使用和复位，不擅闯或乱动他人领地与正在推进的工程；若本次目标与公共规矩直接冲突，先用 escalation 请主播定夺）。
 - 角色死了会收到一条 `[身体]` 通知，Mod 同时挂出一条死亡恢复决策（`goal_id` 是负数，`maicraft_goal(list)` 里看得到）：按问题里给的选项用 `maicraft_goal(operation=answer)` 回答，选重生才会复活。目标停在原地，复活后接着做，不用重新下达；复活后先看一眼自己再决定。自己用 `suicide` 死的，通知会写明是回家的办法，照样选重生。
 
 ## 完成标准

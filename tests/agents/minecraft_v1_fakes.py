@@ -560,6 +560,7 @@ def assemble_minecraft_agent(
     clock: Optional[Callable[[], float]] = None,
     creature_repo: Optional[Any] = None,
     work_docs_repo: Optional[Any] = None,
+    social_fact_repo: Optional[Any] = None,
 ) -> MinecraftAgent:
     """构造未启动的 MinecraftAgent（装配单入口）。
 
@@ -584,6 +585,7 @@ def assemble_minecraft_agent(
         mcp_provider_factory=mcp_provider_factory,
         creature_repo=creature_repo,
         work_docs_repo=work_docs_repo,
+        social_fact_repo=social_fact_repo,
     )
 
 
@@ -603,6 +605,7 @@ async def make_minecraft_agent(
     clock: Optional[Callable[[], float]] = None,
     creature_repo: Optional[Any] = None,
     work_docs_repo: Optional[Any] = None,
+    social_fact_repo: Optional[Any] = None,
 ) -> Tuple[MinecraftAgent, Any, Any]:
     """装配并启动一个接上 MaiCraft 替身的玩家（直播中），返回 ``(agent, llm, bus)``。
 
@@ -637,6 +640,7 @@ async def make_minecraft_agent(
         mcp_provider=server,
         creature_repo=creature_repo,
         work_docs_repo=work_docs_repo,
+        social_fact_repo=social_fact_repo,
     )
     await agent.start()
     return agent, llm, bus
