@@ -123,6 +123,7 @@ declare module 'vue' {
     SpeechCard: typeof import('./src/components/live/cards/SpeechCard.vue')['default']
     StartStreamDialog: typeof import('./src/components/live/StartStreamDialog.vue')['default']
     SubFieldGroup: typeof import('./src/components/settings/SubFieldGroup.vue')['default']
+    TalkCardDrawer: typeof import('./src/components/rundown/TalkCardDrawer.vue')['default']
     ThinkingCard: typeof import('./src/components/live/cards/ThinkingCard.vue')['default']
     ToolCard: typeof import('./src/components/live/cards/ToolCard.vue')['default']
     TrendChart: typeof import('./src/components/llm/TrendChart.vue')['default']
