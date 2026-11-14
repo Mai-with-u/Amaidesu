@@ -90,9 +90,9 @@
                 size="small"
               />
             </button>
-            <!-- 图钉：把实体/子分组收藏进「常用分组」（模型页无详情形态不提供） -->
+            <!-- 图钉：把实体/子分组收藏进「常用分组」（总览条目与分区锚点除外） -->
             <el-icon
-              v-if="isDetailEnabled && entry.level >= 2"
+              v-if="!entry.anchorOnly"
               class="toc-pin"
               :title="isPinned(entry.key) ? '取消钉固' : '钉固到常用分组'"
               @click.stop="togglePin(entry)"
@@ -242,11 +242,44 @@
           </div>
         </header>
 
-        <!-- 滚动内容区：详情模式只渲染选中实体；总览/模型页渲染分区卡片长页 -->
+        <!-- 滚动内容区：详情模式只渲染选中实体；总览渲染分区卡片长页 -->
         <div ref="scrollEl" class="settings-body" @scroll.passive="onScroll">
           <div class="section-cards">
+            <!-- 模型域详情：专用页按 detailKey 渲染单实体（用途/模型/提供商/语义检索） -->
+            <template v-if="isDetailMode && isModelDomain && modelSection">
+              <div class="detail-header">
+                <el-button link type="primary" @click="exitDetail">
+                  <el-icon><ArrowLeft /></el-icon>
+                  总览
+                </el-button>
+                <div class="detail-title-area">
+                  <span class="detail-title">{{ detailTitle }}</span>
+                  <span class="detail-key">{{ activeEntityKey }}</span>
+                </div>
+                <el-button-group>
+                  <el-button size="small" :disabled="!canStepEntity(-1)" @click="stepEntity(-1)">
+                    <el-icon><ArrowLeft /></el-icon>
+                  </el-button>
+                  <el-button size="small" :disabled="!canStepEntity(1)" @click="stepEntity(1)">
+                    <el-icon><ArrowRight /></el-icon>
+                  </el-button>
+                </el-button-group>
+              </div>
+              <ModelConfigPage
+                :fields="getSectionFields(modelSection)"
+                :get-value="getFieldValue"
+                :get-original="settingsStore.originalValueAt"
+                :update-value="updateFieldValue"
+                :get-change-count="getPendingChangeCount"
+                :show-advanced="showAdvanced"
+                :expand-command="cardExpandCommand"
+                :detail-key="activeEntityKey"
+                @navigate="openModelDetail"
+              />
+            </template>
+
             <!-- 实体详情模式：文件级元数据条 + 选中实体卡（含其全部子分组） -->
-            <template v-if="isDetailMode && detailField">
+            <template v-else-if="isDetailMode && detailField">
               <ComponentCardList
                 v-if="detailMetaFields.length > 0"
                 :fields="detailMetaFields"
@@ -322,7 +355,7 @@
                   />
                 </div>
                 <div class="section-fields">
-                  <!-- 模型域：三层关系结构专用页（用途分配 → 模型注册 → 提供商接入），不支持实体详情形态 -->
+                  <!-- 模型域：三层关系结构专用页（用途分配 → 模型注册 → 提供商接入）作总览关系视图 -->
                   <ModelConfigPage
                     v-if="section.key === 'model'"
                     :fields="getSectionFields(section)"
@@ -463,6 +496,13 @@ import {
 } from '@/utils/settingsSchema';
 import ComponentCardList from '@/components/settings/ComponentCardList.vue';
 import ModelConfigPage from '@/components/settings/ModelConfigPage.vue';
+import {
+  EMBEDDING_KEY,
+  MODELS_KEY,
+  PROVIDERS_KEY,
+  PROFILES_CONTAINER_KEY,
+  profileName,
+} from '@/utils/modelConfig';
 
 // ── 文件导航定义（v2：7 文件配置树） ──────────────────────
 // 列表为前端硬编码（此处顺序即展示顺序）；后端 /config/schema 的 groups
@@ -559,8 +599,8 @@ const expandTargetKey = ref<string | null>(null);
 /** 总览目录条目的伪 key（详情模式下「返回长页」入口） */
 const OVERVIEW_KEY = '__overview__';
 /**
- * 详情模式的选中容器 key（实体或子分组）；null = 总览长页。
- * 模型页是专用三层结构，不支持详情形态，固定总览。
+ * 详情模式的选中实体 key（实体或子分组）；null = 总览长页。
+ * 模型域的取值格式见 modelTocEntries / modelDetailKeyForField。
  */
 const activeEntityKey = ref<string | null>(null);
 
@@ -612,16 +652,19 @@ function getSectionFields(section: ConfigGroupSchema): ConfigFieldSchema[] {
 }
 
 // ── 实体详情模式 ──────────────────────────────────────────
-const isDetailEnabled = computed(() => activeFileTab.value !== 'model.toml');
+/** 模型域：专用关系页承载详情形态（ModelConfigPage 按 detailKey 渲染单实体） */
+const isModelDomain = computed(() => activeFileTab.value === 'model.toml');
 
-/** 详情模式判定：选中容器存在且当前文件支持详情形态（模型页固定总览） */
-const isDetailMode = computed(
-  () => isDetailEnabled.value && activeEntityKey.value !== null && detailField.value !== null,
-);
+/** 模型域所属分区（详情渲染取字段树用） */
+const modelSection = computed<ConfigGroupSchema | null>(() => getFileSections('model.toml')[0] ?? null);
 
-/** 选中容器字段：跨当前文件各分区树查找（实体位于解包后的顶层或分类容器内） */
+/** 详情模式判定：选中实体存在（模型域由专用页渲染，其余域要求实体在 schema 树中） */
+const isDetailMode = computed(() => activeEntityKey.value !== null);
+
+/** 选中容器字段：跨当前文件各分区树查找（实体位于解包后的顶层或分类容器内）。
+ * 模型域的数组条目详情键不在 schema 树中，此处返回 null，由专用页渲染 */
 const detailField = computed<ConfigFieldSchema | null>(() => {
-  if (!activeEntityKey.value || !isDetailEnabled.value) return null;
+  if (!activeEntityKey.value) return null;
   for (const section of getFileSections(activeFileTab.value)) {
     const found = findFieldInSchema(getSectionFields(section), activeEntityKey.value);
     if (found) return found;
@@ -681,8 +724,23 @@ const detailOwnerEnabled = computed<boolean | null>(() => {
   return null;
 });
 
-/** 详情模式的上一项/下一项序列：当前文件全部容器目录条目（树序），总览条目不参与 */
-const detailableEntries = computed(() => tocEntries.value.filter(e => e.key !== OVERVIEW_KEY));
+/** 详情模式的上一项/下一项序列：当前文件全部可进详情的目录条目（树序），总览与分区锚点不参与 */
+const detailableEntries = computed(() =>
+  tocEntries.value.filter(e => e.key !== OVERVIEW_KEY && !e.anchorOnly),
+);
+
+/** 详情页标题：目录条目名（模型域数组条目的 label = 实体名） */
+const detailTitle = computed(
+  () => tocEntries.value.find(e => e.key === activeEntityKey.value)?.label ?? '',
+);
+
+/** 模型域详情页之间的跳转（ModelConfigPage 交叉引用点击回调） */
+function openModelDetail(key: string) {
+  activeEntityKey.value = key;
+  activeTocKey.value = key;
+  syncUrl(key);
+  nextTick(() => scrollEl.value?.scrollTo({ top: 0 }));
+}
 
 function canStepEntity(offset: number): boolean {
   const idx = detailableEntries.value.findIndex(e => e.key === activeEntityKey.value);
@@ -720,6 +778,8 @@ interface TocEntry {
   /** 层级：1 = 分区标题，2 = 实体卡/顶层容器，3 = 实体内子分组 */
   level: 1 | 2 | 3;
   changeCount: number;
+  /** 仅总览页锚点（模型域分区行）：点击滚动定位，不进详情、不可钉固 */
+  anchorOnly?: boolean;
 }
 
 /**
@@ -736,24 +796,77 @@ function hasVisibleContent(field: ConfigFieldSchema): boolean {
   return field.children.some(c => c.key !== enabledKey && hasVisibleContent(c));
 }
 
+/**
+ * 模型域目录：分区行 = 总览锚点（anchorOnly），实体行 = 用途/模型/提供商/语义检索，
+ * 实体键格式与 ModelConfigPage.detailKey 一致。模型/提供商是数组条目，
+ * schema 里没有对应实体，按名字合成键（@ 分隔）。
+ */
+function modelTocEntries(): TocEntry[] {
+  const section = modelSection.value;
+  if (!section) return [];
+  const entries: TocEntry[] = [];
+  for (const field of getSectionFields(section)) {
+    if (field.key === PROFILES_CONTAINER_KEY) {
+      entries.push({
+        key: field.key,
+        label: field.label || '用途分配',
+        level: 2,
+        anchorOnly: true,
+        changeCount: getPendingChangeCount(field.key),
+      });
+      for (const child of field.children ?? []) {
+        if (!child.children?.length) continue;
+        entries.push({
+          key: child.key,
+          label: profileName(child.key),
+          level: 3,
+          changeCount: getPendingChangeCount(child.key),
+        });
+      }
+    } else if (field.key === MODELS_KEY || field.key === PROVIDERS_KEY) {
+      entries.push({
+        key: field.key,
+        label: field.label || (field.key === MODELS_KEY ? '模型注册' : '提供商接入'),
+        level: 2,
+        anchorOnly: true,
+        changeCount: getPendingChangeCount(field.key),
+      });
+      const arr = getFieldValue(field.key);
+      if (!Array.isArray(arr)) continue;
+      (arr as unknown[]).forEach((item, i) => {
+        const name = String((item as Record<string, unknown> | undefined)?.name ?? '');
+        entries.push({
+          key: `${field.key}@${name || '未命名'}`,
+          label: name || '未命名',
+          level: 3,
+          changeCount: getPendingChangeCount(`${field.key}.${i}`),
+        });
+      });
+    } else if (field.key === EMBEDDING_KEY) {
+      entries.push({
+        key: EMBEDDING_KEY,
+        label: field.label || '语义检索',
+        level: 2,
+        changeCount: getPendingChangeCount(EMBEDDING_KEY),
+      });
+    }
+  }
+  return entries;
+}
+
 const tocEntries = computed<TocEntry[]>(() => {
   const entries: TocEntry[] = [];
   for (const section of getFileSections(activeFileTab.value)) {
-    if (isDetailEnabled.value) {
-      // 详情形态的文件：分区头条目让位给「总览」入口（长页形态从这里回）
-      entries.push({
-        key: OVERVIEW_KEY,
-        label: '总览',
-        level: 1,
-        changeCount: getSectionChangeCount(section.key),
-      });
-    } else {
-      entries.push({
-        key: section.key,
-        label: section.label,
-        level: 1,
-        changeCount: getSectionChangeCount(section.key),
-      });
+    // 详情形态的文件：分区头条目让位给「总览」入口（长页形态从这里回）
+    entries.push({
+      key: OVERVIEW_KEY,
+      label: '总览',
+      level: 1,
+      changeCount: getSectionChangeCount(section.key),
+    });
+    if (section.key === 'model') {
+      entries.push(...modelTocEntries());
+      continue;
     }
     for (const field of getSectionFields(section)) {
       if (!field.children?.length) continue;
@@ -849,17 +962,10 @@ function removePin(key: string) {
   persistPins();
 }
 
-/** 打开钉固条目：切到所属文件并进入详情（模型页无详情形态，退化为锚点滚动） */
+/** 打开钉固条目：切到所属文件并进入详情 */
 async function openPinned(p: PinnedEntry) {
   if (activeFileTab.value !== p.fileKey) {
     switchFile(p.fileKey);
-  }
-  if (!isDetailEnabled.value) {
-    await nextTick();
-    scrollEl.value
-      ?.querySelector(`[data-config-key="${p.key}"]`)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    return;
   }
   activeEntityKey.value = p.key;
   activeTocKey.value = p.key;
@@ -948,23 +1054,22 @@ function updateScrollSpy() {
   activeTocKey.value = current;
 }
 
-/** 侧栏目录点击：容器条目进入详情视图（详情形态文件），模型页或总览条目按锚点滚动 */
+/** 侧栏目录点击：实体条目进入详情视图；总览与分区锚点条目按锚点滚动（先退出详情） */
 async function scrollToTocEntry(key: string) {
-  if (key === OVERVIEW_KEY) {
-    activeEntityKey.value = null;
-    activeTocKey.value = OVERVIEW_KEY;
-    syncUrl(null);
-    await nextTick();
-    scrollEl.value?.scrollTo({ top: 0, behavior: 'smooth' });
-    return;
-  }
-  if (!isDetailEnabled.value) {
-    // 模型专用页：保持锚点滚动定位
+  const entry = tocEntries.value.find(e => e.key === key);
+  if (key === OVERVIEW_KEY || entry?.anchorOnly) {
+    if (activeEntityKey.value !== null) {
+      activeEntityKey.value = null;
+      syncUrl(null);
+    }
     activeTocKey.value = key;
-    syncUrl(null);
     await nextTick();
     const el = scrollEl.value?.querySelector(`[data-config-key="${key}"]`);
-    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      scrollEl.value?.scrollTo({ top: 0, behavior: 'smooth' });
+    }
     return;
   }
   activeEntityKey.value = key;
@@ -1105,6 +1210,30 @@ async function triggerExpandTarget(key: string) {
 }
 
 /**
+ * 字段 key → 模型域详情实体键。用途与语义检索按 schema 键前缀解析；
+ * 模型/提供商的叶字段 key 是数组下标合成键（llm_models.0.price_in），
+ * 先读当前数组把下标换成名字，再映射到 @ 键。解析不出实体的返回 null（留在总览）。
+ */
+function modelDetailKeyForField(key: string): string | null {
+  // @ 键本身就是详情实体键（深链/钉固直进），原样放行
+  if (key.startsWith(MODELS_KEY + '@') || key.startsWith(PROVIDERS_KEY + '@')) return key;
+  if (key.startsWith(PROFILES_CONTAINER_KEY + '.')) {
+    const top = key.slice(PROFILES_CONTAINER_KEY.length + 1).split('.')[0];
+    return top ? `${PROFILES_CONTAINER_KEY}.${top}` : null;
+  }
+  if (key === EMBEDDING_KEY || key.startsWith(EMBEDDING_KEY + '.')) return EMBEDDING_KEY;
+  for (const arrayKey of [MODELS_KEY, PROVIDERS_KEY]) {
+    const match = key.match(new RegExp(`^${arrayKey.replace(/\./g, '\\.')}\\.(\\d+)(\\.|$)`));
+    if (!match) continue;
+    const arr = getFieldValue(arrayKey);
+    const item = Array.isArray(arr) ? (arr[Number(match[1])] as Record<string, unknown> | undefined) : undefined;
+    const name = String(item?.name ?? '');
+    return name ? `${arrayKey}@${name}` : null;
+  }
+  return null;
+}
+
+/**
  * 统一跳转定位：切文件、开高级开关、进入目标所属容器的详情视图、滚动居中并闪烁高亮。
  * 搜索面板、保存失败清单、变更清单三处入口共用。
  * 详情实体取「目录树中含目标的最深容器条目」——跳到 minecraft.context.max_tokens
@@ -1122,15 +1251,16 @@ async function jumpToField(key: string) {
   if (!showAdvanced.value && isAdvancedFieldInGroups(key)) {
     showAdvanced.value = true;
   }
-  if (isDetailEnabled.value) {
+  if (isModelDomain.value) {
+    activeEntityKey.value = modelDetailKeyForField(key);
+    syncUrl(activeEntityKey.value);
+  } else {
     const ancestors = tocEntries.value.filter(
       e => e.level >= 2 && (key === e.key || key.startsWith(e.key + '.')),
     );
     const deepest = ancestors[ancestors.length - 1];
     activeEntityKey.value = deepest ? deepest.key : null;
     syncUrl(activeEntityKey.value);
-  } else {
-    activeEntityKey.value = null;
   }
   await triggerExpandTarget(key);
   await nextTick();

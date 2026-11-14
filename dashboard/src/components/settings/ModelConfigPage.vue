@@ -1,7 +1,256 @@
 <template>
   <div class="model-config-page">
+    <!-- ── 详情形态：单实体全宽编辑（设置壳目录/表格/搜索进入） ── -->
+    <template v-if="detailKey">
+      <div v-if="!detailTarget" class="detail-missing">
+        该条目已不存在（可能已被删除或改名）
+      </div>
+
+      <!-- 用途详情：主模型与备选链 + 子字段 -->
+      <div
+        v-else-if="detailTarget.kind === 'profile' && detailProfileEntry"
+        class="entity-detail"
+        :data-config-key="detailKey"
+      >
+        <div
+          v-if="danglingRefs(detailProfileEntry).length > 0"
+          class="warn"
+        >
+          引用的 {{ danglingRefs(detailProfileEntry).join('、') }} 已不在注册表
+        </div>
+        <div class="detail-block">
+          <div class="block-title">主模型与备选链</div>
+          <div class="use-main">
+            <span class="u-main-label">主模型</span>
+            <el-select
+              :model-value="detailProfileEntry.modelList[0] ?? ''"
+              filterable
+              allow-create
+              default-first-option
+              placeholder="未设置"
+              @update:model-value="setMainModel(detailProfileEntry, $event as string)"
+            >
+              <el-option v-for="name in modelNames" :key="name" :label="name" :value="name" />
+            </el-select>
+          </div>
+          <div class="use-chain">
+            <span
+              v-for="(name, i) in detailProfileEntry.modelList.slice(1)"
+              :key="`${detailProfileEntry.key}-fallback-${i}`"
+              class="chip"
+            >
+              {{ name }}
+              <el-icon class="chip-x" @click="removeFallback(detailProfileEntry, i + 1)">
+                <Close />
+              </el-icon>
+            </span>
+            <el-select
+              :model-value="''"
+              filterable
+              allow-create
+              default-first-option
+              placeholder="＋备选"
+              size="small"
+              class="add-fallback"
+              @update:model-value="addFallback(detailProfileEntry, $event as string)"
+            >
+              <el-option v-for="name in modelNames" :key="name" :label="name" :value="name" />
+            </el-select>
+          </div>
+        </div>
+        <div v-if="detailProfileEntry.otherChildren.length > 0" class="detail-block">
+          <div class="block-title">更多设置</div>
+          <SubFieldGroup
+            :fields="detailProfileEntry.otherChildren"
+            :get-value="getValue"
+            :get-original="getOriginal"
+            :update-value="updateValue"
+            :get-change-count="getChangeCount"
+            :show-advanced="showAdvanced"
+          />
+        </div>
+      </div>
+
+      <!-- 模型详情：身份 + 全宽字段 + 测试连通 + 反向引用 -->
+      <div
+        v-else-if="detailTarget.kind === 'model'"
+        class="entity-detail"
+        :data-config-key="`${MODELS_KEY}@${itemDisplayName(models[detailTarget.index])}`"
+      >
+        <div class="name-row">
+          <div class="name-field">
+            <label class="name-field-label">模型名称<span class="required-mark">*</span></label>
+            <CommitOnBlurInput
+              :value="itemDisplayName(models[detailTarget.index])"
+              placeholder="模型唯一名"
+              @commit="commitModelName(detailTarget.index, $event)"
+            />
+          </div>
+          <div class="name-field">
+            <label class="name-field-label">所属提供商</label>
+            <el-select
+              :model-value="str(models[detailTarget.index]?.api_provider)"
+              filterable
+              allow-create
+              default-first-option
+              placeholder="选择提供商"
+              @update:model-value="updateModelField(detailTarget.index, 'api_provider', $event)"
+            >
+              <el-option v-for="name in providerNames" :key="name" :label="name" :value="name" />
+            </el-select>
+          </div>
+          <div class="detail-test">
+            <el-button
+              :icon="Connection"
+              :loading="testStates[detailTarget.index]?.status === 'loading'"
+              @click="testModelConnectivity(detailTarget.index)"
+            >
+              测试连通
+            </el-button>
+            <el-tooltip
+              v-if="testStates[detailTarget.index]?.status === 'ok'"
+              :content="`服务端模型：${testStates[detailTarget.index]?.model ?? '未知'}${
+                testStates[detailTarget.index]?.finishReason
+                  ? ' · finish_reason: ' + testStates[detailTarget.index]?.finishReason
+                  : ''
+              }`"
+              placement="top"
+            >
+              <span class="test-ok mono">
+                连通 {{ testStates[detailTarget.index]?.latencyMs }}ms
+              </span>
+            </el-tooltip>
+            <el-tooltip
+              v-else-if="testStates[detailTarget.index]?.status === 'error'"
+              :content="testStates[detailTarget.index]?.error ?? ''"
+              placement="top"
+            >
+              <span class="test-fail">失败</span>
+            </el-tooltip>
+          </div>
+        </div>
+        <div class="field-grid">
+          <FieldRenderer
+            v-for="sub in modelEditorFields"
+            :key="`${MODELS_KEY}.${detailTarget.index}.${sub.key}`"
+            :field="makeItemField(sub, MODELS_KEY, detailTarget.index)"
+            :model-value="itemValue(models[detailTarget.index], sub.key)"
+            :original-value="originalItemValue(MODELS_KEY, detailTarget.index, sub.key)"
+            @update:model-value="updateModelField(detailTarget.index, sub.key, $event)"
+          />
+        </div>
+        <details v-if="showAdvanced && modelAdvancedFields.length > 0" class="advanced-block">
+          <summary class="advanced-toggle">高级参数（{{ modelAdvancedFields.length }}）</summary>
+          <div class="field-grid">
+            <FieldRenderer
+              v-for="sub in modelAdvancedFields"
+              :key="`${MODELS_KEY}.${detailTarget.index}.${sub.key}`"
+              :field="makeItemField(sub, MODELS_KEY, detailTarget.index)"
+              :model-value="itemValue(models[detailTarget.index], sub.key)"
+              :original-value="originalItemValue(MODELS_KEY, detailTarget.index, sub.key)"
+              @update:model-value="updateModelField(detailTarget.index, sub.key, $event)"
+            />
+          </div>
+        </details>
+        <div class="detail-references">
+          <span class="ref-label">被用途引用</span>
+          <template v-if="detailModelUsages.length > 0">
+            <button
+              v-for="usage in detailModelUsages"
+              :key="usage.key"
+              type="button"
+              class="usage-link"
+              @click="emit('navigate', usage.key)"
+            >
+              {{ usage.label }}
+            </button>
+          </template>
+          <span v-else class="unused">未投入使用</span>
+        </div>
+      </div>
+
+      <!-- 提供商详情：身份 + 全宽字段 + 名下模型 -->
+      <div
+        v-else-if="detailTarget.kind === 'provider'"
+        class="entity-detail"
+        :data-config-key="`${PROVIDERS_KEY}@${itemDisplayName(providers[detailTarget.index])}`"
+      >
+        <div class="name-row">
+          <div class="name-field">
+            <label class="name-field-label">提供商名称<span class="required-mark">*</span></label>
+            <CommitOnBlurInput
+              :value="itemDisplayName(providers[detailTarget.index])"
+              placeholder="provider 唯一名称"
+              @commit="commitProviderName(detailTarget.index, $event)"
+            />
+          </div>
+        </div>
+        <div class="field-grid">
+          <FieldRenderer
+            v-for="sub in providerEditorFields"
+            :key="`${PROVIDERS_KEY}.${detailTarget.index}.${sub.key}`"
+            :field="makeItemField(sub, PROVIDERS_KEY, detailTarget.index)"
+            :model-value="itemValue(providers[detailTarget.index], sub.key)"
+            :original-value="originalItemValue(PROVIDERS_KEY, detailTarget.index, sub.key)"
+            @update:model-value="updateProviderField(detailTarget.index, sub.key, $event)"
+          />
+        </div>
+        <details v-if="showAdvanced && providerAdvancedFields.length > 0" class="advanced-block">
+          <summary class="advanced-toggle">高级参数（{{ providerAdvancedFields.length }}）</summary>
+          <div class="field-grid">
+            <FieldRenderer
+              v-for="sub in providerAdvancedFields"
+              :key="`${PROVIDERS_KEY}.${detailTarget.index}.${sub.key}`"
+              :field="makeItemField(sub, PROVIDERS_KEY, detailTarget.index)"
+              :model-value="itemValue(providers[detailTarget.index], sub.key)"
+              :original-value="originalItemValue(PROVIDERS_KEY, detailTarget.index, sub.key)"
+              @update:model-value="updateProviderField(detailTarget.index, sub.key, $event)"
+            />
+          </div>
+        </details>
+        <div class="detail-references">
+          <span class="ref-label">名下模型</span>
+          <template v-if="detailProviderModels.length > 0">
+            <button
+              v-for="entry in detailProviderModels"
+              :key="entry.index"
+              type="button"
+              class="usage-link"
+              @click="emit('navigate', `${MODELS_KEY}@${itemDisplayName(entry.model)}`)"
+            >
+              {{ itemDisplayName(entry.model) || '未命名' }}
+            </button>
+          </template>
+          <span v-else class="unused">暂无模型挂在该提供商下</span>
+        </div>
+      </div>
+
+      <!-- 语义检索详情：运行状态 + 字段组 -->
+      <div
+        v-else-if="detailTarget.kind === 'embedding' && embeddingField"
+        class="entity-detail"
+        :data-config-key="EMBEDDING_KEY"
+      >
+        <div class="detail-embed-status">
+          <el-tag :type="embeddingState.ready ? 'success' : 'warning'" effect="plain">
+            {{ embeddingState.text }}
+          </el-tag>
+        </div>
+        <SubFieldGroup
+          :fields="embeddingField.children ?? []"
+          :get-value="getValue"
+          :get-original="getOriginal"
+          :update-value="updateValue"
+          :get-change-count="getChangeCount"
+          :show-advanced="showAdvanced"
+        />
+      </div>
+    </template>
+
+    <!-- ── 总览：三层关系 + 语义检索（关系视图） ── -->
+    <template v-else>
     <!-- ── 第一层：用途分配（llm_profiles） ── -->
-    <section class="zone">
+    <section class="zone" :data-config-key="PROFILES_CONTAINER_KEY">
       <div class="zone-head">
         <h2>用途分配</h2>
         <span class="cnt">{{ profileEntries.length }} 个用途</span>
@@ -80,7 +329,7 @@
     </section>
 
     <!-- ── 第二层：模型注册（llm_models） ── -->
-    <section class="zone">
+    <section class="zone" :data-config-key="MODELS_KEY">
       <div class="zone-head">
         <h2>模型注册</h2>
         <span class="cnt">{{ models.length }} 个模型 · {{ unusedCount }} 个未投入使用</span>
@@ -105,7 +354,7 @@
           {{ name }}
         </button>
       </div>
-      <table class="model-table" :data-config-key="MODELS_KEY">
+      <table class="model-table">
         <thead>
           <tr>
             <th>模型标识</th>
@@ -256,7 +505,7 @@
     </section>
 
     <!-- ── 第三层：提供商接入（llm_providers） ── -->
-    <section class="zone">
+    <section class="zone" :data-config-key="PROVIDERS_KEY">
       <div class="zone-head">
         <h2>提供商接入</h2>
         <span class="cnt">{{ providers.length }} 个提供商</span>
@@ -264,12 +513,7 @@
           <el-button type="primary" :icon="Plus" @click="addProvider">＋ 添加提供商</el-button>
         </span>
       </div>
-      <div
-        v-for="entry in providerEntries"
-        :key="entry.index"
-        class="prov"
-        :data-config-key="PROVIDERS_KEY"
-      >
+      <div v-for="entry in providerEntries" :key="entry.index" class="prov">
         <div class="prov-head" @click="toggleProviderOpen(entry.index)">
           <el-icon class="row-toggle">
             <ArrowRight v-if="providerOpen[entry.index] !== true" />
@@ -349,6 +593,7 @@
         :show-advanced="showAdvanced"
       />
     </section>
+    </template>
   </div>
 </template>
 
@@ -357,11 +602,14 @@
  * 模型域专用配置页
  *
  * model.toml 的三类数据是相互引用的关系结构（provider ← model.api_provider、
- * model ← profile.model_list），本组件按三层呈现这条关系：用途分配卡区
- * （主模型 + 备选链 + 悬空引用警示）、模型注册表（行展开编辑 + 反向引用列）、
- * 提供商接入抽屉（默认收起，展开编辑）。叶字段编辑一律复用 FieldRenderer
- * （同一条 store 更新路径），不 fork 第二条保存/脏跟踪路径；数组整值写回
- * （与 ArrayEditor 同机制），provider/model 改名经引用守护确认后级联更新引用方。
+ * model ← profile.model_list）。两种形态：
+ * - 总览（默认）：关系视图——用途分配卡区（主模型 + 备选链 + 悬空引用警示）、
+ *   模型注册表（行展开编辑 + 反向引用列）、提供商接入抽屉、语义检索区；
+ * - 详情（detailKey 传入时）：单实体全宽编辑，键格式见 detailTarget。
+ * 叶字段编辑一律复用 FieldRenderer（同一条 store 更新路径），不 fork 第二条
+ * 保存/脏跟踪路径；数组整值写回（与 ArrayEditor 同机制），provider/model
+ * 改名经引用守护确认后级联更新引用方。详情里的交叉引用（被用途引用 /
+ * 名下模型）点击后经 navigate 事件交由设置壳切换详情目标。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -406,7 +654,17 @@ const props = defineProps<{
   showAdvanced: boolean;
   /** 页头"全部展开/收起"命令（与 ComponentCardList 同源），seq 变化即执行 */
   expandCommand?: { action: 'expand' | 'collapse'; seq: number } | null;
+  /**
+   * 详情目标键：null/undefined = 总览形态。四种取值——
+   * `model.llm_profiles.<name>`（用途，schema 真实键）、
+   * `model.llm_models@<name>` 与 `model.llm_providers@<name>`（数组条目按名字
+   * 寻址，schema 无对应实体，@ 避免与点分 schema 键混淆）、
+   * `model.embedding`（语义检索）。
+   */
+  detailKey?: string | null;
 }>();
+
+const emit = defineEmits<{ navigate: [key: string] }>();
 
 // ── Schema 定位 ──────────────────────────────────────────
 const providersField = computed(() => props.fields.find(f => f.key === PROVIDERS_KEY));
@@ -566,6 +824,59 @@ const profileEntries = computed(() =>
 const profileListEntries = computed(() =>
   profileEntries.value.map(p => ({ key: p.key, modelList: p.modelList })),
 );
+
+// ── 详情目标解析（detailKey → 实体） ──────────────────────
+type DetailTarget =
+  | { kind: 'profile'; name: string }
+  | { kind: 'model'; index: number }
+  | { kind: 'provider'; index: number }
+  | { kind: 'embedding' };
+
+const detailTarget = computed<DetailTarget | null>(() => {
+  const key = props.detailKey;
+  if (!key) return null;
+  if (key.startsWith(PROFILES_CONTAINER_KEY + '.')) {
+    return { kind: 'profile', name: profileName(key) };
+  }
+  if (key === EMBEDDING_KEY) return { kind: 'embedding' };
+  if (key.startsWith(MODELS_KEY + '@')) {
+    const name = key.slice(MODELS_KEY.length + 1);
+    const index = models.value.findIndex(m => itemDisplayName(m) === name);
+    return index >= 0 ? { kind: 'model', index } : null;
+  }
+  if (key.startsWith(PROVIDERS_KEY + '@')) {
+    const name = key.slice(PROVIDERS_KEY.length + 1);
+    const index = providers.value.findIndex(p => itemDisplayName(p) === name);
+    return index >= 0 ? { kind: 'provider', index } : null;
+  }
+  return null;
+});
+
+const detailProfileEntry = computed(() => {
+  const target = detailTarget.value;
+  if (!target || target.kind !== 'profile') return null;
+  return profileEntries.value.find(p => p.key === `${PROFILES_CONTAINER_KEY}.${target.name}`) ?? null;
+});
+
+/** 模型详情底部的反向引用：被哪些用途以什么角色引用（点击跳到对应用途详情） */
+const detailModelUsages = computed(() => {
+  const target = detailTarget.value;
+  if (!target || target.kind !== 'model') return [];
+  const name = itemDisplayName(models.value[target.index]);
+  return profileEntries.value
+    .filter(p => p.modelList.includes(name))
+    .map(p => ({
+      key: p.key,
+      label: p.modelList[0] === name ? profileName(p.key) : `${profileName(p.key)}·备选`,
+    }));
+});
+
+/** 提供商详情底部的名下模型（点击跳到对应模型详情） */
+const detailProviderModels = computed(() => {
+  const target = detailTarget.value;
+  if (!target || target.kind !== 'provider') return [];
+  return modelsOfProvider(itemDisplayName(providers.value[target.index]));
+});
 
 // ── 第一层：用途分配 ─────────────────────────────────────
 function danglingRefs(profile: { modelList: string[] }): string[] {
@@ -1197,5 +1508,103 @@ async function removeModel(index: number) {
   font-size: 11.5px;
   color: var(--text-secondary);
   flex: none;
+}
+
+/* ── 详情形态（单实体全宽） ────────────────────────────── */
+.entity-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.detail-missing {
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border-color-light);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+  text-align: center;
+}
+
+.detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-md);
+}
+
+.block-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.detail-block .use-main .el-select {
+  flex: 1;
+  max-width: 480px;
+}
+
+/* 身份行：名称 + 提供商 + 测试连通，横向铺开 */
+.name-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+}
+
+.name-row .name-field {
+  flex: 1;
+  min-width: 220px;
+  max-width: 420px;
+}
+
+.name-row .name-field:last-of-type {
+  max-width: 360px;
+}
+
+.detail-test {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding-top: 22px; /* 与左侧标签行对齐 */
+}
+
+.detail-references {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color-light);
+  border-radius: var(--radius-lg);
+}
+
+.ref-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-right: var(--spacing-xs);
+}
+
+.usage-link {
+  font-size: 12px;
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+  border: none;
+  border-radius: 4px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+
+.usage-link:hover {
+  text-decoration: underline;
+}
+
+.detail-embed-status {
+  font-size: 12.5px;
 }
 </style>
