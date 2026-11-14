@@ -86,10 +86,6 @@
             <el-icon><Odometer /></el-icon>
             <span>调试</span>
           </el-menu-item>
-          <el-menu-item index="/avatar-debug">
-            <el-icon><PictureRounded /></el-icon>
-            <span>形象调试</span>
-          </el-menu-item>
           <el-menu-item index="/avatar-tuning">
             <el-icon><Operation /></el-icon>
             <span>形象调校</span>
@@ -147,7 +143,6 @@ import {
   MagicStick,
   Odometer,
   Operation,
-  PictureRounded,
   User,
   Avatar,
   Memo,

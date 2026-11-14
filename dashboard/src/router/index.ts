@@ -138,12 +138,6 @@ const router = createRouter({
       component: () => import('@/views/Debug.vue'),
     },
     {
-      // 形象表情调试台（四平台连接态 / 表情触发 / 参数直调）
-      path: '/avatar-debug',
-      name: 'avatar-debug',
-      component: () => import('@/views/AvatarDebug.vue'),
-    },
-    {
       // 形象调校（看着形象实时调面捕合成器：表情配方 / 眼神目标 / 人设 / 平台校准）
       path: '/avatar-tuning',
       name: 'avatar-tuning',

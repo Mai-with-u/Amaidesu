@@ -70,12 +70,7 @@ describe('侧边栏导航信息架构', () => {
   });
 
   it('调试组收齐把自己系统调到预期状态的手段', () => {
-    expect(groupEntries().get('调试')).toEqual([
-      '/debug',
-      '/avatar-debug',
-      '/avatar-tuning',
-      '/simulator',
-    ]);
+    expect(groupEntries().get('调试')).toEqual(['/debug', '/avatar-tuning', '/simulator']);
     expect(groupEntries().get('外部集成')).toEqual(['/widgets']);
   });
 
@@ -96,7 +91,6 @@ describe('侧边栏导航信息架构', () => {
       { path: '/llm/usage', label: 'LLM 用量' },
       { path: '/llm/history', label: 'LLM 历史' },
       { path: '/debug', label: '调试' },
-      { path: '/avatar-debug', label: '形象调试' },
       { path: '/avatar-tuning', label: '形象调校' },
       { path: '/simulator', label: '观众模拟器' },
       { path: '/widgets', label: '小部件' },

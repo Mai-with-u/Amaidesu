@@ -81,6 +81,7 @@
           @changed="onFieldsChanged"
           @calibrated="onCalibrated"
         />
+        <PlatformConnection class="block" />
       </el-col>
     </el-row>
   </div>
@@ -92,6 +93,7 @@ import { ElMessage } from 'element-plus';
 import { avatarTuningApi } from '@/api';
 import GazeTargets from '@/components/avatar-tuning/GazeTargets.vue';
 import LiveChannels from '@/components/avatar-tuning/LiveChannels.vue';
+import PlatformConnection from '@/components/avatar-tuning/PlatformConnection.vue';
 import RecipeEditor from '@/components/avatar-tuning/RecipeEditor.vue';
 import SpeakTest from '@/components/avatar-tuning/SpeakTest.vue';
 import TuningFields from '@/components/avatar-tuning/TuningFields.vue';
@@ -106,7 +108,8 @@ import { emotionLabel, groupTuningFields } from '@/utils/avatarTuning';
  * 改动（调参、表情配方、眼神目标、平台校准）都只在运行中生效，点"保存到配置"
  * 才写回 avatar.toml；没保存就重启会回到文件里的值，页面顶部据此提示。静态信息
  * （字段说明、配方、通道范围、动作目录）进页时取一次，"刷新"重取；身体状态每
- * 250 毫秒轮询一次喂给各块。
+ * 250 毫秒轮询一次喂给各块。右栏尾部的平台连接诊断区块默认收起，展开时
+ * 自行拉取状态，不随这里的轮询走。
  *
  * 生命周期语义（keep-alive）：状态轮询随页面激活启停（useKeepAlivePolling），
  * 离开页面即停；手动摆姿的续期与收尾由实时通道那一块自己负责。
