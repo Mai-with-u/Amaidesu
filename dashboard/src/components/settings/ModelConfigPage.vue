@@ -73,7 +73,6 @@
               :update-value="updateValue"
               :get-change-count="getChangeCount"
               :show-advanced="showAdvanced"
-              layout="list"
             />
           </details>
         </div>
@@ -348,7 +347,6 @@
         :update-value="updateValue"
         :get-change-count="getChangeCount"
         :show-advanced="showAdvanced"
-        layout="grid"
       />
     </section>
   </div>

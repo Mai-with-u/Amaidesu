@@ -1,5 +1,5 @@
 <template>
-  <div class="component-card" :class="{ 'is-disabled': !enabled }">
+  <div class="component-card" :class="{ 'is-disabled': !enabled }" :data-config-key="componentKey">
     <!-- 卡片头部：图标 + 名称 + 开关 -->
     <div class="card-header" @click="toggleExpand">
       <div class="card-header-left">
@@ -27,16 +27,20 @@
     <!-- 组件描述 -->
     <div v-if="description" class="card-desc">{{ description }}</div>
 
-    <!-- 卡片体：展开时显示子字段（禁用时也可查看配置） -->
+    <!-- 卡片体：展开时显示子字段（禁用时也可查看配置）；全部为高级字段时给出提示而非空壳 -->
     <div v-if="componentFields.length > 0 && expanded" class="card-body">
+      <p v-if="!hasVisibleFields" class="body-hidden-hint">
+        该分组的配置项全部为高级设置——打开顶部「高级设置」开关后显示
+      </p>
       <SubFieldGroup
+        v-else
         :fields="componentFields"
         :get-value="getValue"
         :get-original="getOriginal"
         :update-value="updateValue"
         :get-change-count="getChangeCount"
         :show-advanced="showAdvanced"
-        layout="grid"
+        :expand-target-key="expandTargetKey"
       />
     </div>
   </div>
@@ -68,6 +72,13 @@ const props = defineProps<{
   expandCommand?: { action: 'expand' | 'collapse'; seq: number } | null;
   /** 高级字段总开关（透传卡体 SubFieldGroup）；false = 卡内不渲染 advanced 字段 */
   showAdvanced?: boolean;
+  /** 跳转展开目标 key（透传卡体 SubFieldGroup，祖先链自动展开）；见 SubFieldGroup 同名 prop */
+  expandTargetKey?: string | null;
+  /**
+   * 外部强制的启用态（详情模式按属主实体解析后下发）：
+   * null = 未提供，回退卡片自身的布尔 enabled 子字段 / 名单语义。
+   */
+  forcedEnabled?: boolean | null;
 }>();
 
 // 默认展开：配置卡内容即页面主体，折叠与否交给工具栏命令
@@ -81,8 +92,30 @@ watch(
   },
 );
 
+// 跳转目标在本卡子树内时展开卡体
+watch(
+  () => props.expandTargetKey,
+  target => {
+    if (!target) return;
+    if (target === props.componentKey || target.startsWith(props.componentKey + '.')) {
+      expanded.value = true;
+    }
+  },
+);
+
+/** 当前开关下是否有可见配置内容（叶子看 advanced，容器递归） */
+const hasVisibleFields = computed(() => {
+  function walk(f: ConfigFieldSchema): boolean {
+    if (f.children?.length) return f.children.some(walk);
+    return props.showAdvanced === false ? !f.advanced : true;
+  }
+  return props.componentFields.some(walk);
+});
+
 const compName = computed(() => props.componentKey.split('.').pop() || '');
 const enabled = computed(() => {
+  // 详情模式下属主实体语义在页面层解析（子分组自身不在启用名单里，按默认名单判定会误暗淡）
+  if (props.forcedEnabled != null) return props.forcedEnabled;
   if (props.booleanEnabledKey) return props.getValue(props.booleanEnabledKey) === true;
   return props.enabledList.includes(compName.value);
 });
@@ -205,47 +238,9 @@ function toggleEnabled(val: boolean) {
   background: var(--bg-elevated);
 }
 
-.card-body :deep(.sub-card) {
-  border-color: var(--border-color-light);
-}
-
-.card-body :deep(.sub-card-header) {
-  padding: var(--spacing-xs) var(--spacing-sm);
-}
-
-.card-body :deep(.sub-card-body) {
-  padding: var(--spacing-xs) var(--spacing-sm) var(--spacing-sm);
-}
-
-.card-body :deep(.field-card) {
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--border-color-light);
-  border-radius: 0;
-  padding: var(--spacing-xs) 0;
-}
-
-.card-body :deep(.field-card:last-child) {
-  border-bottom: none;
-}
-
-.card-body :deep(.field-card:hover) {
-  box-shadow: none;
-}
-
-.card-body :deep(.field-renderer) {
-  border: none;
-  padding: var(--spacing-xs) 0;
-  background: transparent;
-  border-radius: 0;
-  border-bottom: 1px solid var(--border-color-light);
-}
-
-.card-body :deep(.field-renderer:last-child) {
-  border-bottom: none;
-}
-
-.card-body :deep(.field-label) {
-  font-size: 13px;
+.body-hidden-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 </style>

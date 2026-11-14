@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigFieldType, type ConfigFieldSchema, type ConfigGroupSchema } from '@/types/settings';
 import {
-  collectMatchingFields,
+  buildSearchResults,
   findFieldInSchema,
   findFieldValue,
   isAdvancedField,
@@ -20,58 +20,68 @@ function field(partial: Partial<ConfigFieldSchema> & { key: string }): ConfigFie
   } as ConfigFieldSchema;
 }
 
-describe('collectMatchingFields', () => {
-  it('三型下钻：children / properties 内的命中都被收集', () => {
-    const tree: ConfigFieldSchema[] = [
-      field({ key: 'a.host', label: '主机' }),
-      field({
-        key: 'a.group',
-        label: '分组',
-        children: [field({ key: 'a.group.port', label: '端口' })],
-      }),
-      field({
-        key: 'a.dict',
-        label: '字典',
-        properties: { inner: field({ key: 'a.dict.inner', label: '内部项' }) },
-      }),
+describe('buildSearchResults', () => {
+  function groupOf(fields: ConfigFieldSchema[]) {
+    return { key: 'g', label: 'G', fields, order: 0, file_name: 'g.toml' } as ConfigGroupSchema;
+  }
+
+  it('三型下钻：children / properties / items.fields 内的命中都被收集', () => {
+    const groups = [
+      groupOf([
+        field({ key: 'a.host', label: '主机' }),
+        field({
+          key: 'a.dict',
+          label: '字典',
+          properties: { inner: field({ key: 'a.dict.inner', label: '内部项' }) },
+        }),
+        field({
+          key: 'a.arr',
+          label: '数组',
+          type: ConfigFieldType.ARRAY,
+          items: field({
+            key: 'a.arr.elem',
+            type: ConfigFieldType.OBJECT,
+            fields: [field({ key: 'a.arr.elem.api_key', label: '密钥' })],
+          }),
+        }),
+      ]),
     ];
-    const seen = new Set<string>();
-    const out: ConfigFieldSchema[] = [];
-    collectMatchingFields(tree, 'a.', seen, out);
-    expect(out.map(f => f.key)).toEqual([
-      'a.host',
-      'a.group',
-      'a.group.port',
-      'a.dict',
-      'a.dict.inner',
-    ]);
+    const { hits, total } = buildSearchResults(groups, '密钥');
+    expect(total).toBe(1);
+    expect(hits[0]!.field.key).toBe('a.arr.elem.api_key');
+    expect(hits[0]!.path).toEqual(['数组']);
+    expect(hits[0]!.fileKey).toBe('g.toml');
   });
 
-  it('seen 去重：父命中后父不重复收集，但子级分支仍要继续遍历', () => {
-    const tree: ConfigFieldSchema[] = [
-      field({
-        key: 'grp',
-        label: 'grp',
-        children: [field({ key: 'grp.child', label: 'grp' })],
-      }),
+  it('容器自身可命中，分组链按从外到内携带祖先 label', () => {
+    const groups = [
+      groupOf([
+        field({
+          key: 'g.ctx',
+          label: '上下文',
+          children: [field({ key: 'g.ctx.max_tokens', label: '窗口上限' })],
+        }),
+      ]),
     ];
-    const seen = new Set<string>(['grp']);
-    const out: ConfigFieldSchema[] = [];
-    collectMatchingFields(tree, 'grp', seen, out);
-    // 父已在 seen 中不重复收集；子命中且被收集
-    expect(out.map(f => f.key)).toEqual(['grp.child']);
-    expect(seen.has('grp.child')).toBe(true);
+    const { hits, total } = buildSearchResults(groups, '上下文');
+    expect(total).toBe(1);
+    expect(hits[0]!.field.key).toBe('g.ctx');
+    expect(hits[0]!.path).toEqual([]);
+    // 子级字段不在本次命中中，但可通过其命中词搜到并携带分组链
+    const byChild = buildSearchResults(groups, '窗口');
+    expect(byChild.hits[0]!.field.key).toBe('g.ctx.max_tokens');
+    expect(byChild.hits[0]!.path).toEqual(['上下文']);
   });
 
-  it('同一轮遍历中重复 key 只收集一次', () => {
-    const tree: ConfigFieldSchema[] = [
-      field({ key: 'dup', label: 'dup' }),
-      field({ key: 'dup', label: 'dup', children: [field({ key: 'dup.c', label: 'dup' })] }),
+  it('跨分组去重：同一 key 只出现一次；limit 截断并保留 total', () => {
+    const groups = [
+      groupOf([field({ key: 'dup', label: '重复' })]),
+      groupOf([field({ key: 'dup', label: '重复' }), field({ key: 'b', label: '重复' })]),
     ];
-    const seen = new Set<string>();
-    const out: ConfigFieldSchema[] = [];
-    collectMatchingFields(tree, 'dup', seen, out);
-    expect(out.map(f => f.key)).toEqual(['dup', 'dup.c']);
+    const { hits, total } = buildSearchResults(groups, '重复', 1);
+    expect(total).toBe(2);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.fileKey).toBe('g.toml');
   });
 });
 

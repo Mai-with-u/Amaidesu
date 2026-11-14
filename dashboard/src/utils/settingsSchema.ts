@@ -13,29 +13,57 @@ export function fieldMatches(f: ConfigFieldSchema, q: string): boolean {
   );
 }
 
-/**
- * 递归遍历字段树收集搜索命中：children 是树形分组，properties 是字典式键值
- * （来自 object 类型）。命中即收集；seen 在「全组」粒度按 key 去重——已命中的
- * key 不重复收集，但其子级分支仍要继续遍历（子级有各自命中的字段）。
- */
-export function collectMatchingFields(
+/** 搜索面板的单条命中：命中字段 + 所属文件 + 分组链（祖先容器 label，不含自身） */
+export interface SearchHit {
+  field: ConfigFieldSchema;
+  fileKey: string;
+  /** 祖先容器 label 链（如 ["主播 Agent", "上下文"]），按从外到内排序 */
+  path: string[];
+}
+
+/** 在一棵字段树中收集命中及其分组链（path 由递归携带，调用方无需感知） */
+function collectHits(
   fields: ConfigFieldSchema[],
   q: string,
+  path: string[],
+  fileKey: string,
   seen: Set<string>,
-  out: ConfigFieldSchema[],
+  out: SearchHit[],
 ): void {
   for (const f of fields) {
-    if (!seen.has(f.key) && fieldMatches(f, q)) {
-      seen.add(f.key);
-      out.push(f);
-    }
     if (f.children && f.children.length > 0) {
-      collectMatchingFields(f.children, q, seen, out);
+      collectHits(f.children, q, [...path, f.label || f.key], fileKey, seen, out);
     }
     if (f.properties) {
-      collectMatchingFields(Object.values(f.properties), q, seen, out);
+      collectHits(Object.values(f.properties), q, path, fileKey, seen, out);
+    }
+    if (f.items?.fields) {
+      // 对象数组容器在 UI 中是一等卡片，其 label 计入分组链
+      collectHits(f.items.fields, q, [...path, f.label || f.key], fileKey, seen, out);
+    }
+    // 叶子（与容器）都可命中；容器命中时不重复收集其子级命中链上已有的 key
+    if (!seen.has(f.key) && fieldMatches(f, q)) {
+      seen.add(f.key);
+      out.push({ field: f, fileKey, path });
     }
   }
+}
+
+/**
+ * 全局搜索：跨所有分组收集命中，产出搜索面板数据（字段 + 文件 + 分组链）。
+ * limit 限制返回条数；超出部分丢弃并由调用方按 total 判断是否提示截断。
+ */
+export function buildSearchResults(
+  groups: ConfigGroupSchema[],
+  q: string,
+  limit = 50,
+): { hits: SearchHit[]; total: number } {
+  const seen = new Set<string>();
+  const hits: SearchHit[] = [];
+  for (const group of groups) {
+    collectHits(group.fields, q, [], group.file_name ?? '', seen, hits);
+  }
+  return { hits: hits.slice(0, limit), total: hits.length };
 }
 
 /** 按点路径从值树读取：任一中间层缺失返回 undefined */

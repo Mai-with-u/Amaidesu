@@ -51,6 +51,12 @@ export interface ConfigFieldSchema {
   precision?: number;
   /** 描述展示形态：icon = 标签旁 ⓘ 悬浮，inline = 内联段落；缺省 inline */
   descriptionDisplay?: 'icon' | 'inline';
+  /** x-ui-width 标记：网格布局宽度覆盖（full = 占满整行）；缺省由前端按字段类型自动分列 */
+  width?: 'full';
+  /** x-ui-row 标记：声明式行分组——同容器内同名的叶子字段并成一个横行（缺省独立成行） */
+  row?: string;
+  /** x-ui-row-label 标记：行分组的显示标题（任一成员携带即可，前端取首个非空值） */
+  rowLabel?: string;
 }
 
 // 配置分组 Schema

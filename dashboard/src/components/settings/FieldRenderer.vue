@@ -1,33 +1,36 @@
 <template>
   <div
     class="field-renderer"
-    :class="{ 'is-modified': isModified, 'has-error': error }"
+    :class="{ 'is-modified': isModified, 'has-error': error, 'field-renderer--h': isHorizontal }"
     :data-config-key="field.key"
   >
-    <!-- 字段标签 -->
-    <div class="field-header">
-      <label class="field-label">
-        {{ field.label }}
-        <span v-if="field.required" class="required-mark">*</span>
-        <el-tag v-if="field.readonly" size="small" type="info" effect="plain" class="readonly-tag"
-          >只读</el-tag
-        >
-        <!-- 描述图标模式：ⓘ 悬浮展示，替代内联段落（密集字段列表节省纵向空间） -->
-        <el-tooltip
-          v-if="field.description && showDescriptionIcon"
-          :content="field.description"
-          placement="top"
-        >
-          <el-icon class="description-icon"><InfoFilled /></el-icon>
-        </el-tooltip>
-      </label>
-      <el-tag v-if="isModified" size="small" type="warning" effect="plain">已修改</el-tag>
-    </div>
+    <!-- 左列：标签 + 描述（水平行布局时控件靠右同行；宽字段/纵向模式为上下堆叠） -->
+    <div class="field-left">
+      <!-- 字段标签 -->
+      <div class="field-header">
+        <label class="field-label">
+          {{ field.label }}
+          <span v-if="field.required" class="required-mark">*</span>
+          <el-tag v-if="field.readonly" size="small" type="info" effect="plain" class="readonly-tag"
+            >只读</el-tag
+          >
+          <!-- 描述图标模式：ⓘ 悬浮展示，替代内联段落（密集字段列表节省纵向空间） -->
+          <el-tooltip
+            v-if="field.description && showDescriptionIcon"
+            :content="field.description"
+            placement="top"
+          >
+            <el-icon class="description-icon"><InfoFilled /></el-icon>
+          </el-tooltip>
+        </label>
+        <el-tag v-if="isModified" size="small" type="warning" effect="plain">已修改</el-tag>
+      </div>
 
-    <!-- 字段描述（icon 模式改走上方 ⓘ 悬浮，不重复渲染内联段落） -->
-    <p v-if="field.description && !showDescriptionIcon" class="field-description">
-      {{ field.description }}
-    </p>
+      <!-- 字段描述（icon 模式改走上方 ⓘ 悬浮，不重复渲染内联段落） -->
+      <p v-if="field.description && !showDescriptionIcon" class="field-description">
+        {{ field.description }}
+      </p>
+    </div>
 
     <!-- 字段输入 -->
     <div class="field-input">
@@ -219,6 +222,10 @@ const props = defineProps<{
   field: ConfigFieldSchema;
   modelValue: unknown;
   originalValue?: unknown;
+  /** 水平行布局：标签+描述居左、控件居右；宽字段（数组/对象/长文本）自动回退上下堆叠 */
+  horizontal?: boolean;
+  /** 描述强制走 ⓘ 悬浮（行分组成员用：内联段落会让同行各列高度参差） */
+  descriptionAsIcon?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -239,8 +246,22 @@ watch(
 // 是否为长文本（判定规则见 utils/configField.ts 的 isLongTextOf）
 const isLongText = computed(() => isLongTextOf(props.field, props.modelValue));
 
-// 描述展示形态：icon = 标签旁 ⓘ 悬浮（缺省 inline = 内联段落）
-const showDescriptionIcon = computed(() => (props.field.descriptionDisplay ?? 'inline') === 'icon');
+/** 宽字段判定：数组/对象编辑器与长文本需要横向空间，走上下堆叠布局 */
+const isWideField = computed(
+  () =>
+    props.field.width === 'full' ||
+    props.field.type === 'array' ||
+    props.field.type === 'object' ||
+    isLongText.value,
+);
+
+/** 水平行布局生效判定（宽字段回退纵向） */
+const isHorizontal = computed(() => props.horizontal === true && !isWideField.value);
+
+// 描述展示形态：icon = 标签旁 ⓘ 悬浮（行分组成员强制 icon），inline = 内联段落；缺省 inline
+const showDescriptionIcon = computed(
+  () => props.descriptionAsIcon === true || (props.field.descriptionDisplay ?? 'inline') === 'icon',
+);
 
 // 滑条 + 数字框共用的数值视图：localValue 缺失时回退字段默认值，非数值输入不驱动控件
 const sliderModel = computed<number>({
@@ -348,6 +369,39 @@ function setObjectValue(key: string, value: unknown) {
   justify-content: space-between;
   align-items: center;
   margin-bottom: var(--spacing-xs);
+}
+
+/* ── 水平行布局：标签列固定宽居左，控件列占满剩余宽度；错误提示独占一行 ── */
+.field-renderer--h {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0 var(--spacing-lg);
+}
+
+.field-renderer--h .field-left {
+  width: 260px;
+  flex-shrink: 0;
+}
+
+.field-renderer--h .field-header {
+  margin-bottom: 0;
+}
+
+.field-renderer--h .field-description {
+  margin-bottom: 0;
+  margin-top: 2px;
+}
+
+.field-renderer--h .field-input {
+  flex: 1;
+  min-width: 0;
+  /* 控件占满标签右侧全部宽度：行右侧不留空带 */
+}
+
+.field-renderer--h .field-error {
+  flex-basis: 100%;
+  margin: var(--spacing-xs) 0 0 calc(260px + var(--spacing-lg));
 }
 
 .field-label {

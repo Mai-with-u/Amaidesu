@@ -30,6 +30,8 @@
             :get-change-count="getChangeCount"
             :expand-command="expandCommand"
             :show-advanced="showAdvanced"
+            :expand-target-key="expandTargetKey"
+            :forced-enabled="forcedEnabled"
           />
         </div>
 
@@ -72,6 +74,8 @@
           :on-toggle="handleToggle"
           :expand-command="expandCommand"
           :show-advanced="showAdvanced"
+          :expand-target-key="expandTargetKey"
+          :forced-enabled="forcedEnabled"
         />
       </template>
     </div>
@@ -97,6 +101,10 @@ const props = defineProps<{
   expandCommand?: { action: 'expand' | 'collapse'; seq: number } | null;
   /** 高级字段总开关：false = 名单/实体卡不含 advanced 字段；缺省 true = 全显示 */
   showAdvanced?: boolean;
+  /** 跳转展开目标 key（透传实体卡 → SubFieldGroup）；见 SubFieldGroup 同名 prop */
+  expandTargetKey?: string | null;
+  /** 外部强制的启用态（详情模式按属主实体解析）；null = 未提供，见 ComponentCard 同名 prop */
+  forcedEnabled?: boolean | null;
 }>();
 
 function hasChildren(f: ConfigFieldSchema): boolean {
