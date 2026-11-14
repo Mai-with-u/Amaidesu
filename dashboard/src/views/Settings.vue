@@ -47,28 +47,62 @@
           </button>
         </nav>
 
+        <!-- 常用分组：钉固的跨文件收藏（localStorage 持久化） -->
+        <template v-if="pinnedEntries.length > 0">
+          <div class="sidebar-divider"></div>
+          <div class="toc-title">常用分组</div>
+          <nav class="pinned-list">
+            <div v-for="p in pinnedEntries" :key="p.key" class="pinned-item">
+              <button type="button" class="pinned-open" :title="p.key" @click="openPinned(p)">
+                <el-icon class="pinned-star" :size="15"><StarFilled /></el-icon>
+                <span class="pinned-label">{{ p.label }}</span>
+              </button>
+              <el-icon class="pinned-remove" title="移除钉固" @click.stop="removePin(p.key)">
+                <Close />
+              </el-icon>
+            </div>
+          </nav>
+        </template>
+
         <div class="sidebar-divider"></div>
 
         <!-- 本页目录：当前文件的分区 → 实体 → 子分组，点击滚动定位 -->
         <div class="toc-title">本页目录</div>
         <nav class="toc">
-          <button
+          <div
             v-for="entry in tocEntries"
             :key="entry.key"
-            type="button"
-            class="toc-item"
-            :class="[`toc-item--l${entry.level}`, { active: entry.key === activeTocKey }]"
-            :title="entry.label"
-            @click="scrollToTocEntry(entry.key)"
+            class="toc-entry"
+            :class="{ 'toc-entry--pinned': isPinned(entry.key) }"
           >
-            <span class="toc-label">{{ entry.label }}</span>
-            <el-badge
-              v-if="entry.changeCount > 0"
-              :value="entry.changeCount"
-              type="warning"
-              size="small"
-            />
-          </button>
+            <button
+              type="button"
+              class="toc-item"
+              :class="[`toc-item--l${entry.level}`, { active: entry.key === activeTocKey }]"
+              :title="entry.label"
+              @click="scrollToTocEntry(entry.key)"
+            >
+              <span class="toc-label">{{ entry.label }}</span>
+              <el-badge
+                v-if="entry.changeCount > 0"
+                :value="entry.changeCount"
+                type="warning"
+                size="small"
+              />
+            </button>
+            <!-- 图钉：把实体/子分组收藏进「常用分组」（模型页无详情形态不提供） -->
+            <el-icon
+              v-if="isDetailEnabled && entry.level >= 2"
+              class="toc-pin"
+              :title="isPinned(entry.key) ? '取消钉固' : '钉固到常用分组'"
+              @click.stop="togglePin(entry)"
+            >
+              <el-icon class="toc-pin" :size="15">
+                <StarFilled v-if="isPinned(entry.key)" />
+                <Star v-else />
+              </el-icon>
+            </el-icon>
+          </div>
           <p v-if="tocEntries.length === 0" class="toc-empty">本页暂无可定位的分组</p>
         </nav>
       </aside>
@@ -383,7 +417,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
-import { onBeforeRouteLeave } from 'vue-router';
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { confirmAction } from '@/utils/confirmAction';
 import { Check, RefreshLeft, Loading, Search } from '@element-plus/icons-vue';
@@ -408,10 +442,14 @@ import {
   WarningFilled,
   ArrowDownBold,
   ArrowUpBold,
+  Star,
+  StarFilled,
+  Close,
   Right,
   ArrowLeft,
   ArrowRight,
 } from '@element-plus/icons-vue';
+import { loadPinnedEntries, savePinnedEntries, type PinnedEntry } from '@/utils/settingsPins';
 import { useSettingsStore } from '@/stores/settings';
 import { useAppRestartStore } from '@/stores/appRestart';
 import type { ConfigFieldSchema, ConfigGroupSchema } from '@/types/settings';
@@ -661,12 +699,14 @@ function stepEntity(offset: number) {
   if (!next) return;
   activeEntityKey.value = next.key;
   activeTocKey.value = next.key;
+  syncUrl(next.key);
   nextTick(() => scrollEl.value?.scrollTo({ top: 0 }));
 }
 
 function exitDetail() {
   activeEntityKey.value = null;
   activeTocKey.value = '';
+  syncUrl(null);
   nextTick(() => {
     scrollEl.value?.scrollTo({ top: 0, behavior: 'smooth' });
     updateScrollSpy();
@@ -754,10 +794,89 @@ watch(
   { immediate: true },
 );
 
-// 加载配置
+// ── URL 深链与钉固 ────────────────────────────────────────
+// ?key=<分组键> 深链：进入页面/外部改地址时定位到对应分组；
+// 页内切换导航时用 router.replace 反向同步（不堆积历史栈）。
+const route = useRoute();
+const router = useRouter();
+let lastSyncedKey: string | null | undefined;
+
+function syncUrl(entityKey: string | null) {
+  lastSyncedKey = entityKey;
+  const query = { ...route.query };
+  if (entityKey) {
+    query.key = entityKey;
+  } else {
+    delete query.key;
+  }
+  void router.replace({ query }).catch(() => {});
+}
+
+// 外部地址变化（粘贴新链接/浏览器前进后退）触发定位；页内自己写入的值跳过
+watch(
+  () => route.query.key,
+  k => {
+    const key = typeof k === 'string' && k ? k : null;
+    if (key === lastSyncedKey) return;
+    lastSyncedKey = key;
+    if (key) void jumpToField(key);
+  },
+);
+
+/** 钉固条目：localStorage 持久化的跨文件常用分组 */
+const pinnedEntries = ref<PinnedEntry[]>(loadPinnedEntries());
+
+function persistPins() {
+  savePinnedEntries(pinnedEntries.value);
+}
+
+function isPinned(key: string): boolean {
+  return pinnedEntries.value.some(p => p.key === key);
+}
+
+function togglePin(entry: TocEntry) {
+  const fileKey = `${entry.key.split('.')[0]!}.toml`;
+  if (isPinned(entry.key)) {
+    pinnedEntries.value = pinnedEntries.value.filter(p => p.key !== entry.key);
+  } else {
+    pinnedEntries.value = [...pinnedEntries.value, { key: entry.key, label: entry.label, fileKey }];
+  }
+  persistPins();
+}
+
+function removePin(key: string) {
+  pinnedEntries.value = pinnedEntries.value.filter(p => p.key !== key);
+  persistPins();
+}
+
+/** 打开钉固条目：切到所属文件并进入详情（模型页无详情形态，退化为锚点滚动） */
+async function openPinned(p: PinnedEntry) {
+  if (activeFileTab.value !== p.fileKey) {
+    switchFile(p.fileKey);
+  }
+  if (!isDetailEnabled.value) {
+    await nextTick();
+    scrollEl.value
+      ?.querySelector(`[data-config-key="${p.key}"]`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
+  activeEntityKey.value = p.key;
+  activeTocKey.value = p.key;
+  syncUrl(p.key);
+  await nextTick();
+  scrollEl.value?.scrollTo({ top: 0 });
+}
+
+// 加载配置；URL 带深链时定位到对应分组
 onMounted(async () => {
   await settingsStore.fetchSchema();
   nextTick(updateScrollSpy);
+  const deepKey = route.query.key;
+  if (typeof deepKey === 'string' && deepKey) {
+    lastSyncedKey = deepKey;
+    void jumpToField(deepKey);
+  }
 });
 
 // 切换文件后回到总览形态、回到顶部并重算目录高亮
@@ -766,6 +885,7 @@ function switchFile(fileKey: string) {
   activeFileTab.value = fileKey;
   activeEntityKey.value = null;
   activeTocKey.value = '';
+  syncUrl(null);
   nextTick(() => {
     scrollEl.value?.scrollTo({ top: 0 });
     updateScrollSpy();
@@ -776,6 +896,7 @@ function switchFile(fileKey: string) {
 function onMobileFileChange() {
   activeEntityKey.value = null;
   activeTocKey.value = '';
+  syncUrl(null);
   nextTick(() => {
     scrollEl.value?.scrollTo({ top: 0 });
     updateScrollSpy();
@@ -832,6 +953,7 @@ async function scrollToTocEntry(key: string) {
   if (key === OVERVIEW_KEY) {
     activeEntityKey.value = null;
     activeTocKey.value = OVERVIEW_KEY;
+    syncUrl(null);
     await nextTick();
     scrollEl.value?.scrollTo({ top: 0, behavior: 'smooth' });
     return;
@@ -839,6 +961,7 @@ async function scrollToTocEntry(key: string) {
   if (!isDetailEnabled.value) {
     // 模型专用页：保持锚点滚动定位
     activeTocKey.value = key;
+    syncUrl(null);
     await nextTick();
     const el = scrollEl.value?.querySelector(`[data-config-key="${key}"]`);
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -847,6 +970,7 @@ async function scrollToTocEntry(key: string) {
   activeEntityKey.value = key;
   // 置顶后多数情况不触发 scroll 事件，乐观设置当前项，滚动事件再行校正
   activeTocKey.value = key;
+  syncUrl(key);
   await nextTick();
   scrollEl.value?.scrollTo({ top: 0 });
 }
@@ -1004,6 +1128,7 @@ async function jumpToField(key: string) {
     );
     const deepest = ancestors[ancestors.length - 1];
     activeEntityKey.value = deepest ? deepest.key : null;
+    syncUrl(activeEntityKey.value);
   } else {
     activeEntityKey.value = null;
   }
@@ -1270,6 +1395,105 @@ async function handleRestart() {
   color: var(--text-secondary);
   padding: var(--spacing-sm);
   margin: 0;
+}
+
+/* ── 常用分组（钉固） ──────────────────────────────────── */
+.pinned-list {
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--spacing-sm) var(--spacing-xs);
+}
+
+.pinned-item {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+
+.pinned-item:hover {
+  background: var(--bg-hover);
+}
+
+.pinned-open {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex: 1;
+  min-width: 0;
+  padding: 4px var(--spacing-xs) 4px var(--spacing-sm);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.pinned-star {
+  font-size: 12px;
+  color: var(--color-warning);
+  flex-shrink: 0;
+}
+
+.pinned-label {
+  font-size: 12px;
+  color: var(--text-regular);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pinned-remove {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px;
+  margin-right: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--transition-fast);
+}
+
+.pinned-item:hover .pinned-remove {
+  opacity: 1;
+}
+
+.pinned-remove:hover {
+  color: var(--color-danger);
+}
+
+/* 目录条目：包一层便于悬停露出图钉 */
+.toc-entry {
+  display: flex;
+  align-items: center;
+}
+
+.toc-entry > .toc-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.toc-pin {
+  color: var(--text-secondary);
+  padding: 2px;
+  flex-shrink: 0;
+  opacity: 0.35;
+  cursor: pointer;
+  transition:
+    opacity var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.toc-entry:hover .toc-pin {
+  opacity: 1;
+}
+
+.toc-pin:hover {
+  color: var(--color-warning);
+}
+
+.toc-entry--pinned .toc-pin {
+  opacity: 1;
+  color: var(--color-warning);
 }
 
 /* ── 主列：横幅 + 复合页头 + 滚动内容 ──────────────────── */
