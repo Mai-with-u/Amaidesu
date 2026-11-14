@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<!--
+  开发周报长图模板（1080px 宽竖版）。
+  用法：把 {{...}} 占位符替换为实际内容后，经本地 HTTP 服务在 1080 宽视口下整页截图（流程见 SKILL.md）。
+  占位符清单：
+    {{RANGE_TEXT}}    统计区间一句话，如 "2026-11-09 10:17 到 11-14 12:47，共 158 次提交。"
+    {{LEAD_HTML}}     概述段：常规字重正文，最多两处 <b> 关键词，禁整段加粗
+    {{TOTAL}} {{FEAT}} {{FIX}}   三个大数字：提交总数 / 新特性数 / 修复数
+    {{ADD}} {{DEL}} {{FILES}}    代码增行 / 删行 / 改动文件数
+    {{FEAT_PCT}} {{FIX_PCT}} {{TEST_PCT}} {{OTHER_PCT}}  类型占比（%数值，合计 100）
+    {{FEAT_N}} {{FIX_N}} {{TEST_N}} {{OTHER_N}}          类型计数
+    {{DAILY_CHART}}   每日柱状图：<div class="col"><b>数量</b><i style="height:高度px;"></i></div> 序列
+    {{DAYS_ROW}}      日期标签行：<span>MM-DD</span> 序列，与柱一一对应
+    {{GROUPS_HTML}}   主要更新分组：<div class="group">…（h3 组名 + ul>li 条目，修复并入组内）…</div> 序列
+    {{SESSIONS_HTML}} 直播场次卡片：<div class="session">…（h3 + p.story + div.after）…</div> 序列；无直播则整块留空并省略"直播动态"节
+    {{SESSION_NOTE}}  调试开场说明行；没有调试开场时删除该行
+  视觉规范（已定案，勿改）：白底+深墨+单一深绿强调；全平色无渐变；数字 tabular-nums 不用等宽字体；分隔用灰色块不用细线；无眉标题；无 emoji。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: #e9eae7; }
+  .page { width: 1080px; margin: 0 auto; background: #ffffff; padding: 72px 76px 56px; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  h1 { font-size: 64px; color: #212427; font-weight: 800; letter-spacing: 0.5px; line-height: 1.1; }
+  .meta { margin-top: 18px; font-size: 22px; color: #74797e; line-height: 1.6; }
+  .meta b { color: #212427; font-weight: 700; }
+
+  .lead { margin-top: 40px; font-size: 27px; line-height: 1.75; color: #34383c; font-weight: 400; max-width: 920px; }
+  .lead b { color: #212427; font-weight: 700; }
+
+  .stats { display: flex; gap: 72px; margin-top: 56px; }
+  .stat b { display: block; font-size: 72px; color: #212427; font-weight: 800; line-height: 1; }
+  .stat.snd b { color: #0e7b4e; }
+  .stat span { display: block; margin-top: 10px; font-size: 21px; color: #74797e; }
+  .substats { margin-top: 28px; font-size: 21px; color: #74797e; }
+  .substats b { font-weight: 700; }
+  .substats .up { color: #0e7b4e; }
+  .substats .down { color: #d64545; }
+
+  .charts { display: flex; gap: 64px; margin-top: 56px; background: #f5f6f4; border-radius: 24px; padding: 44px 48px 40px; }
+  .chart-box { flex: 1; }
+  .chart-box h3 { font-size: 22px; color: #212427; font-weight: 700; margin-bottom: 24px; }
+  .bar { display: flex; height: 16px; border-radius: 8px; overflow: hidden; }
+  .legend { margin-top: 18px; }
+  .legend div { display: flex; align-items: baseline; font-size: 20px; color: #74797e; padding: 5px 0; }
+  .legend i { flex: none; width: 14px; height: 14px; border-radius: 4px; margin-right: 12px; align-self: center; }
+  .legend b { color: #212427; font-weight: 700; margin-left: auto; padding-left: 16px; }
+
+  .daily-chart { display: flex; gap: 20px; align-items: flex-end; height: 150px; }
+  .col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 10px; }
+  .col b { font-size: 20px; color: #212427; font-weight: 700; }
+  .col i { display: block; width: 100%; background: #0e7b4e; border-radius: 6px 6px 0 0; }
+  .days { display: flex; gap: 20px; margin-top: 12px; }
+  .days span { flex: 1; text-align: center; font-size: 15px; color: #74797e; white-space: nowrap; }
+
+  h2.section { font-size: 34px; color: #212427; margin: 72px 0 30px; font-weight: 800; }
+  .group { margin-bottom: 36px; }
+  .group h3 { font-size: 24px; color: #212427; font-weight: 800; margin-bottom: 10px; }
+  .group h3::before { content: ""; display: inline-block; width: 12px; height: 12px; background: #0e7b4e; border-radius: 3px; margin-right: 14px; }
+  .group li { list-style: none; font-size: 21px; line-height: 1.7; color: #34383c; padding: 5px 0 5px 26px; position: relative; }
+  .group li::before { content: ""; position: absolute; left: 7px; top: 18px; width: 7px; height: 7px; border-radius: 50%; background: #b9c0ba; }
+  .group li b { color: #212427; font-weight: 700; }
+
+  .session { background: #f5f6f4; border-radius: 24px; padding: 36px 44px 32px; margin-bottom: 24px; }
+  .session:last-of-type { margin-bottom: 0; }
+  .session h3 { font-size: 24px; color: #212427; font-weight: 800; margin-bottom: 14px; }
+  .session h3 span { color: #74797e; font-weight: 600; font-size: 21px; margin-left: 14px; }
+  .session .story { font-size: 21px; line-height: 1.72; color: #34383c; }
+  .session .after { margin-top: 16px; }
+  .session .after-label { font-size: 21px; color: #212427; font-weight: 700; margin-bottom: 4px; }
+  .session .after-label span { color: #74797e; font-weight: 600; font-size: 19px; margin-left: 10px; }
+  .session ul { margin-top: 6px; }
+  .session li { list-style: none; font-size: 21px; line-height: 1.72; color: #34383c; padding: 4px 0 4px 24px; position: relative; }
+  .session li::before { content: ""; position: absolute; left: 6px; top: 17px; width: 7px; height: 7px; border-radius: 50%; background: #0e7b4e; }
+  .session li b { color: #212427; font-weight: 700; }
+  .live-note { margin-top: 16px; font-size: 19px; color: #74797e; }
+
+  .footer { margin-top: 72px; background: #212427; border-radius: 24px; padding: 36px 48px; }
+  .footer .name { display: block; font-size: 24px; color: #ffffff; font-weight: 800; }
+  .footer .src { display: block; margin-top: 12px; font-size: 19px; color: #a6aba6; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Amaidesu 开发周报</h1>
+  <div class="meta num">{{RANGE_TEXT}}</div>
+
+  <p class="lead">{{LEAD_HTML}}</p>
+
+  <div class="stats num">
+    <div class="stat"><b>{{TOTAL}}</b><span>次提交</span></div>
+    <div class="stat snd"><b>{{FEAT}}</b><span>项新特性</span></div>
+    <div class="stat"><b>{{FIX}}</b><span>项修复</span></div>
+  </div>
+  <div class="substats num">代码变动 <b class="up">+{{ADD}}</b> 行、<b class="down">−{{DEL}}</b> 行；改动文件 <b>{{FILES}}</b> 个。</div>
+
+  <div class="charts">
+    <div class="chart-box">
+      <h3>提交类型分布</h3>
+      <div class="bar num">
+        <div style="width:{{FEAT_PCT}}%; background:#0e7b4e;"></div>
+        <div style="width:{{FIX_PCT}}%; background:#212427;"></div>
+        <div style="width:{{TEST_PCT}}%; background:#6d756e;"></div>
+        <div style="width:{{OTHER_PCT}}%; background:#b0b8b0;"></div>
+      </div>
+      <div class="legend num">
+        <div><i style="background:#0e7b4e;"></i>新特性<b>{{FEAT_N}} · {{FEAT_PCT}}%</b></div>
+        <div><i style="background:#212427;"></i>修复<b>{{FIX_N}} · {{FIX_PCT}}%</b></div>
+        <div><i style="background:#6d756e;"></i>测试<b>{{TEST_N}} · {{TEST_PCT}}%</b></div>
+        <div><i style="background:#b0b8b0;"></i>文档与其他<b>{{OTHER_N}} · {{OTHER_PCT}}%</b></div>
+      </div>
+    </div>
+    <div class="chart-box">
+      <h3>每日提交</h3>
+      <div class="daily-chart num">
+        {{DAILY_CHART}}
+      </div>
+      <div class="days num">{{DAYS_ROW}}</div>
+    </div>
+  </div>
+
+  <h2 class="section">主要更新</h2>
+  {{GROUPS_HTML}}
+
+  <!-- 有直播场次才输出此节：标题 + 卡片序列 + 说明行 -->
+  <h2 class="section">直播动态</h2>
+  {{SESSIONS_HTML}}
+  <div class="live-note">{{SESSION_NOTE}}</div>
+
+  <!-- 用户口述了"下一步计划"才输出此节：标题 + 一条普通 li 列表 -->
+  <!-- <h2 class="section">下一步计划</h2> <div class="group"><ul><li>…</li></ul></div> -->
+
+  <div class="footer">
+    <span class="name">Amaidesu · AI 虚拟主播系统</span>
+    <span class="src">GitHub · Mai-with-u/Amaidesu ｜ 数据来源：git 提交记录与场次记录</span>
+  </div>
+</div>
+</body>
+</html>
