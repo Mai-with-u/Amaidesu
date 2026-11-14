@@ -122,6 +122,7 @@ def instantiate_agent(
             memory_cue_log_repo=deps.memory_cue_log_repo,
             game_player_repo=deps.game_player_repo,
             social_fact_repo=deps.social_fact_repo,
+            work_docs_repo=deps.work_docs_repo,
             talk_card_repo=deps.talk_card_repo,
             event_repo=deps.event_repo,
             privacy_service=deps.privacy_service,

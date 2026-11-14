@@ -243,6 +243,7 @@ class StreamerAgent(BaseAgent):
         memory_cue_log_repo: Optional[Any] = None,
         game_player_repo: Optional[Any] = None,
         social_fact_repo: Optional[Any] = None,
+        work_docs_repo: Optional[Any] = None,
         talk_card_repo: Optional[Any] = None,
         embedding_setup: Optional[EmbeddingSetup] = None,
         event_repo: Optional[Any] = None,
@@ -686,7 +687,7 @@ class StreamerAgent(BaseAgent):
                 vector_enabled=self.typed_config.memory_passive_recall_vector_enabled,
                 min_session_ms=self.typed_config.memory_brief_min_session_ms,
             )
-        # 回想工具：她说过的话、档案行、不针对具体人的承诺、本场观众弹幕
+        # 回想工具：她说过的话、档案行、不针对具体人的承诺、当前存档工作笔记、本场观众弹幕
         self._memory_recall: Optional[MemoryRecallService] = None
         if commitments_repo is not None and chat_repo is not None and archive_repo is not None:
             self._memory_recall = MemoryRecallService(
@@ -700,6 +701,7 @@ class StreamerAgent(BaseAgent):
                 saves_provider=lambda: self._current_saves,
                 search=self._memory_search,
                 social_fact_repo=social_fact_repo,
+                work_docs_repo=work_docs_repo,
             )
         # 后台 flush 循环（Agent 主循环）
         self._flush_task: Optional[asyncio.Task] = None

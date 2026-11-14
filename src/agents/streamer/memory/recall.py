@@ -1,24 +1,23 @@
 """回想工具 ``memory_recall``：按关键词把她记得的事找回来。
 
 旧的记忆工具按固定键取数（往前第几场的回顾、某位观众的印象、本场备忘录），要求主播
-先知道该问哪一类；观众的问题通常只给得出一个词。本工具按关键词查五个来源，把内容连同
+先知道该问哪一类；观众的问题通常只给得出一个词。本工具按关键词查多个来源，把内容连同
 "什么时候、谁说的"一起摆出来：
 
-- 她已播出的台词（``live_chat`` 的 assistant 行；``dropped_at_ms`` 非空的不算说过）
+- 她已播出的台词（``live_chat`` 的 assistant 行；``dropped_at_ms`` 非空的不算说过，同场前后 30 秒紧邻台词自动连成一段）
 - 场次档案行（``archive_lines`` 的标题与原话都参与匹配）
 - 不针对具体观众的承诺（``commitments``；未了结与已了结都给，判误记的 ``void`` 不给）
 - 游戏里做到哪一步（``game_events`` 里的里程碑与阶段汇报；游戏聊天、肢体动作、安全阀不收）
 - 本场观众弹幕（``live_chat`` 的 viewer 行；不论 scope 都只查本场）
 - 游戏社交事实（``game_social_facts`` 的现行行；接了社交事实仓储才查）
+- 当前存档工作笔记（``game_work_docs`` 里眼下所在存档的笔记与未完待办；别的存档绝不串入）
 
-匹配口径：台词、档案、承诺、游戏进展四类走混合检索（``search``：关键词按两字切分 + BM25，配置了嵌入
-服务再加语义一路，按名次融合），按相关度取最相关的 8 条，不要求每个词都出现；同一句台词既进了
-台词索引、又作为档案行或公开承诺的原话证据被同时检索到时，在更靠前的名次上保留带标题、完成状态或
-存档注记的档案行/承诺，跳过重复的裸台词，不让同一句话占掉两个名额；本场观众弹幕
-不进任何持久索引，照旧在本场里按"每个词都包含"查，补剩下的位置。选好的结果默认最相关的在前，
-她也可以要求按时间排；语义一路这一次没用上（没配嵌入服务、没算好、算失败）时抬头注明只按字面查，
-让她知道换个说法也许查得到。每条带位置（本场写"本场 HH:MM"，跨场写"上一场"或"之前"）与说话人（"你""观众"）。索引由后台
-任务补算，刚播出不满 30 秒的台词还查不到——那几句本来就在她眼前的对话里。
+匹配口径：台词、档案、承诺、游戏进展与社交事实走混合检索（``search``：关键词按两字切分剥离虚词 + BM25，
+配置了嵌入服务再加高于余弦底线的语义一路，按名次融合并对同分档做微幅新近度偏置），按相关度取最相关的 8 条，
+不要求每个词都出现；同一句台词既进了台词索引、又作为档案行或公开承诺的原话证据被同时检索到时，在更靠前的名次上
+保留带标题、完成状态或存档注记的档案行/承诺，跳过重复的裸台词；同场前后紧邻台词已被完整拼进正文时也不再重复占坑；
+跨场或同场反复念叨的近似原样复读台词单次最多保留 2 条；若整次查询没有任何强相关命中、只剩字面弱擦边，最多给 2 条
+并在抬头下提醒拿不准就直说记不清。本场观众弹幕不进任何持久索引，照旧在本场里按"每个词都包含"查，补剩下的位置。
 
 不按名字查人：本场以外的结果里出现的已知观众昵称（``viewers`` 当前名与
 ``viewer_names`` 曾用名，2 字以上）一律替换成"某位观众"——跨场结果留下昵称等于把
@@ -33,13 +32,18 @@ ta 的发言和身份带到下一场；本场结果不替换。关键词恰好�
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.storage.privacy import MIN_MASK_NAME_LEN, mask_names_in_text
-from src.modules.storage.repos.memory_index import INDEXED_GAME_EVENT_TYPES, IndexSource
+from src.modules.storage.repos.memory_index import (
+    INDEXED_GAME_EVENT_TYPES,
+    SPEECH_NEIGHBOR_WINDOW_MS,
+    IndexSource,
+)
 from src.modules.storage.repos.viewers import is_placeholder_name
 from src.modules.tools.models import ToolInvocation, ToolSpec
 from src.modules.tools.provider import ToolProvider, as_tool_impl, make_provider_from_specs
@@ -49,18 +53,27 @@ from src.modules.utils.time_utils import now_ms
 from .render import source_notes
 from .saves import place_note, session_note
 from .search import MemorySearch, SearchHit
+from .textmatch import bigram_tokens, content_tokens, is_stopword_token, normalize, recall_query_tokens
 
 __all__ = [
+    "LITERAL_ONLY_NOTICE",
+    "MAX_NEAR_DUPLICATE_SPEECH",
+    "MAX_RESULTS",
     "MEMORY_RECALL_PROVIDER_NAME",
     "MEMORY_RECALL_SPEC",
     "MEMORY_RECALL_TOOL_NAME",
+    "NEAR_DUPLICATE_JACCARD",
     "ORDER_NEWEST",
     "ORDER_OLDEST",
     "ORDER_RELEVANT",
+    "RECALL_MIN_COSINE",
     "RecallEntry",
     "RecallOutcome",
     "SCOPE_ALL",
     "SCOPE_THIS_STREAM",
+    "SPEECH_SNIPPET_MAX_CHARS",
+    "WEAK_MATCH_MAX_RESULTS",
+    "WEAK_MATCH_NOTICE",
     "MemoryRecallService",
     "build_memory_recall_provider",
 ]
@@ -75,12 +88,28 @@ MEMORY_TOOL_CATEGORY = "memory"
 
 # 一次回想最多给几条
 MAX_RESULTS = 8
-# 混合检索多取一些候选：对某位观众的承诺会被筛掉，台词与引用它的档案行/承诺也会同源合并，留足余量才够选满 8 条
+# 混合检索多取一些候选：对某位观众的承诺会被筛掉，台词与引用它的档案行/承诺及同场邻句也会合并去重，留足余量才够选满 8 条
 _SEARCH_POOL = 32
 # 回想工具是她主动调的，查询向量没算好时可以等一小会儿（被动想起不等）
 RECALL_VECTOR_WAIT_MS = 1_500
-# 走混合检索的来源：游戏进展要有事件仓储才还原得出来，没接时不查
-_RECALL_SOURCES: Tuple[IndexSource, ...] = ("speech", "archive", "commitment")
+# 回想语义路余弦底线：低于该阈值的低相关向量不参与 RRF 融合投票，避免全库只有 0.25 余弦时仍凑满候选
+RECALL_MIN_COSINE = 0.50
+# 整次查询仅剩字面弱擦边时至多保留的条数与平实提醒
+WEAK_MATCH_MAX_RESULTS = 2
+WEAK_MATCH_NOTICE = "（未查到直接吻合的记录，以下仅字面擦边，拿不准就直接说记不清了）"
+# 单条台词连同前后 30 秒紧邻台词拼合后的总字数上限（优先完整保留核心命中句）
+SPEECH_SNIPPET_MAX_CHARS = 140
+# 邻句剩余空间不足以完整放下时，至少还要有这么多字才做截断补充，免得只塞进两三个碎字
+_NEIGHBOR_TRUNCATE_MIN_CHARS = 12
+# 跨场/同场高度近似复读的同一簇台词单次最多保留几条（留了"不止说了一次"的印象，又不霸占全部 8 个名额）
+MAX_NEAR_DUPLICATE_SPEECH = 2
+NEAR_DUPLICATE_JACCARD = 0.85
+NEAR_DUPLICATE_MIN_TOKENS = 3
+# 混合检索也有命中时，当前存档工作笔记优先占的前排配额（混合检索不足 8 条时仍可继续用剩余工作笔记补齐）
+_WORK_DOC_PRIMARY_QUOTA = 2
+
+# 走混合检索的来源：精炼账本（档案、承诺）排在裸台词前，平分时优先给出带标题与存档注记的行
+_RECALL_SOURCES: Tuple[IndexSource, ...] = ("archive", "commitment", "speech")
 _RECALL_SOURCES_WITH_EVENTS: Tuple[IndexSource, ...] = (*_RECALL_SOURCES, "event")
 # 社交事实六类在回想结果里的叫法
 _SOCIAL_FACT_LABELS = {
@@ -93,6 +122,21 @@ _SOCIAL_FACT_LABELS = {
 }
 # 游戏进展在结果里怎么称呼（只收这两类，见索引仓储的白名单）
 _EVENT_LABELS = {"milestone": "里程碑", "report": "阶段汇报"}
+# 已完结的工作待办状态：只把尚未做完的待办当当前存档线索返回
+_DONE_TODO_STATUSES = frozenset({"completed", "done", "cancelled", "canceled"})
+# Markdown 标题前缀与列表前缀清理正则（拆解当前存档工作笔记行用）
+_HEADING_RE = re.compile(r"^(#{1,6})\s*(.+?)\s*$")
+_BRACKET_TITLE_RE = re.compile(r"^【([^】]{1,24})】\s*$")
+_BULLET_PREFIX_RE = re.compile(r"^[-*•+]\s+|^\d+[.)、]\s+")
+# 仅表示时间跨度或频次的泛化疑问外壳词：保留在 FTS 查询中参与排序，但不单独算具体主题实词
+_GENERIC_QUERY_TERMS: frozenset[str] = frozenset(
+    (
+        "time times long old often days day weeks week months month years year total "
+        "started start current currently new past ago different recent recently used using "
+        "get got take took make made 时候 多久 几次 多少 几天 几个 最近 开始 一共"
+    ).split()
+)
+_CJK_TOKEN_RE = re.compile(r"[぀-ヿ㐀-䶿一-鿿]")
 
 SCOPE_ALL = "all"
 SCOPE_THIS_STREAM = "this_stream"
@@ -109,9 +153,9 @@ CROSS_SESSION_MASK_LABEL = "某位观众"
 MEMORY_RECALL_SPEC = ToolSpec(
     name="recall",
     description=(
-        "回想过去的事：你说过的话、每场的档案、答应过的事、游戏里做到哪一步、本场弹幕，按关键词找出最相关的几条"
-        "（几个关键词用空格分开，不要求每个词都出现，越相关越靠前选）。问「上次那个事」"
-        "「之前提到过什么」「我答应过什么」时用。不按观众名字查人——不知道某位观众是谁就问她本人。"
+        "回想过去的事：你说过的话、每场的档案、答应过的事、游戏里做到哪一步、当前存档工作笔记、本场弹幕，"
+        "按关键词找出最相关的几条（几个关键词用空格分开，不要求每个词都出现，越相关越靠前选）。"
+        "问「上次那个事」「之前提到过什么」「我答应过什么」时用。不按观众名字查人——不知道某位观众是谁就问她本人。"
     ),
     parameters_schema={
         "type": "object",
@@ -143,12 +187,13 @@ MEMORY_RECALL_SPEC = ToolSpec(
 
 @dataclass(frozen=True)
 class RecallEntry:
-    """回想工具最终选出的一条结果：来源类别、来源行主键、排序用的时刻与渲染好的一行正文。"""
+    """回想工具最终选出的一条结果：来源类别、来源行主键、排序用的时刻、渲染文本及已承载的原话主键。"""
 
     source: str
     source_id: int
     timestamp_ms: int
     text: str
+    covered_chat_ids: Tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -210,23 +255,89 @@ def _normalize_order(order: Optional[str]) -> str:
 
 
 @dataclass(frozen=True)
+class _CandidateRecord:
+    """混合检索还原后的一条待筛候选：条目本身、原始检索命中信息与参与匹配核对的原话文本。"""
+
+    entry: RecallEntry
+    search_hit: SearchHit
+    raw_text: str
+
+
+@dataclass(frozen=True)
 class _IndexedOutcome:
-    """混合检索这一次的结果：还原好的几条，与各路命中数（给完成日志看）。"""
+    """混合检索这一次的结果：还原好的几条、各路命中数日志说明、语义路开关与是否仅剩字面弱擦边。"""
 
     hits: List[RecallEntry]
     detail: str
     vector_used: bool
+    weak_only: bool = False
+
+
+def _extract_work_doc_segments(notebook: str, todos: Sequence[Mapping[str, Any]]) -> List[str]:
+    """把存档工作文档拆成语义自足的短候选行（非空笔记行带上所属小节名 + 未完成的待办项）。"""
+    segments: List[str] = []
+    section = ""
+    for raw_line in (notebook or "").splitlines():
+        stripped = raw_line.strip()
+        if not stripped or set(stripped) <= {"-", "=", "*", "_"}:
+            continue
+        if m := _HEADING_RE.match(stripped):
+            section = m.group(2).strip()
+        elif m := _BRACKET_TITLE_RE.match(stripped):
+            section = m.group(1).strip()
+        elif cleaned := _BULLET_PREFIX_RE.sub("", stripped).strip():
+            has_sec = not section or cleaned.startswith(f"【{section}】") or section in cleaned[: len(section) + 4]
+            segments.append(cleaned if has_sec else f"【{section}】{cleaned}")
+    for item in todos or ():
+        if isinstance(item, Mapping):
+            status = str(item.get("status", "pending") or "pending").strip().lower()
+            content = str(item.get("content", "") or "").strip()
+            if status not in _DONE_TODO_STATUSES and content:
+                segments.append(f"{'进行中待办' if status == 'in_progress' else '待办'}：{content}")
+    return segments
+
+
+def _compose_speech_window(
+    core_text: str,
+    core_id: int,
+    prev_pair: Optional[Tuple[int, str]],
+    next_pair: Optional[Tuple[int, str]],
+) -> Tuple[str, Tuple[int, ...]]:
+    """按 140 字预算拼合同场前后紧邻主播台词，返回（拼合文本, 实际完整覆盖的台词主键元组）。"""
+    if len(core_text) >= SPEECH_SNIPPET_MAX_CHARS:
+        return core_text, (core_id,)
+    prefix, suffix, used = "", "", len(core_text)
+    covered_before: List[int] = []
+    covered_after: List[int] = []
+    if prev_pair and prev_pair[1]:
+        prev_id, prev_text = prev_pair
+        if used + len(prev_text) + 1 <= SPEECH_SNIPPET_MAX_CHARS:
+            prefix, used = f"{prev_text} ", used + len(prev_text) + 1
+            covered_before.append(prev_id)
+        elif (avail := SPEECH_SNIPPET_MAX_CHARS - used - 2) >= _NEIGHBOR_TRUNCATE_MIN_CHARS:
+            prefix, used = f"…{prev_text[-avail:]} ", used + avail + 2
+    if next_pair and next_pair[1]:
+        next_id, next_text = next_pair
+        if used + len(next_text) + 1 <= SPEECH_SNIPPET_MAX_CHARS:
+            suffix = f" {next_text}"
+            covered_after.append(next_id)
+        elif (avail := SPEECH_SNIPPET_MAX_CHARS - used - 2) >= _NEIGHBOR_TRUNCATE_MIN_CHARS:
+            suffix = f" {next_text[:avail]}…"
+    return f"{prefix}{core_text}{suffix}", tuple([*covered_before, core_id, *covered_after])
+
+
+def _jaccard_similarity(left: Set[str], right: Set[str]) -> float:
+    return len(left & right) / len(left | right) if (left and right) else 0.0
 
 
 class MemoryRecallService:
-    """``memory_recall`` 的业务实现：查五个来源、合并排序、渲染成给模型看的一段文本。
+    """``memory_recall`` 的业务实现：查各路记忆来源、合并去重排序、渲染成给模型看的一段文本。
 
-    构造参数全由宿主注入：三个仓储（台词与弹幕、承诺、档案）、混合检索（没有时台词、档案、
-    承诺、游戏进展都查不到，只剩本场弹幕）、可选的隐私服务与观众仓储（跨场遮名、昵称关键词识别）、
-    进行中场次回调（决定"本场"是第几场）与毫秒时钟（耗时日志）。
-    可选的游戏事件仓储还原游戏进展、给台词注明那场的存档，眼下存档回调给结果注明存档；
-    缺了事件仓储就不查游戏进展、不注那场的存档。
-    仓储都按鸭子类型取用，只依赖它们各自读面上的方法。
+    构造参数全由宿主注入：三个基础仓储（台词与弹幕、承诺、档案）、混合检索（没有时台词、档案、
+    承诺、游戏进展都查不到，只剩当前存档工作笔记与本场弹幕）、可选的隐私服务与观众仓储（跨场遮名、
+    昵称关键词识别）、进行中场次回调（决定"本场"是第几场）与毫秒时钟（耗时日志）。
+    可选的游戏事件仓储还原游戏进展并给台词注明那场的存档，可选的工作文档仓储只读查询眼下所在存档的
+    工作笔记与未完待办。仓储都按鸭子类型取用，只依赖它们各自读面上的方法。
     """
 
     def __init__(
@@ -242,9 +353,11 @@ class MemoryRecallService:
         saves_provider: Optional[Callable[[], Mapping[str, GameSave]]] = None,
         search: Optional[MemorySearch] = None,
         social_fact_repo: Any = None,
+        work_docs_repo: Any = None,
     ) -> None:
         self._chat_repo = chat_repo
         self._social_fact_repo = social_fact_repo
+        self._work_docs_repo = work_docs_repo
         self._search = search
         self._commitments_repo = commitments_repo
         self._archive_repo = archive_repo
@@ -284,7 +397,7 @@ class MemoryRecallService:
         return outcome
 
     async def _recall(self, query: str, scope: str, order: str) -> Tuple[RecallOutcome, str]:
-        """查询主体：解析关键词 → 查五个来源 → 取前 8 条排好 → 渲染抬头与正文；另返回给日志的命中数。"""
+        """查询主体：解析关键词 → 查各路来源 → 取前 8 条排好 → 渲染抬头与正文；另返回给日志的命中数。"""
         newest_first = order != ORDER_OLDEST
         raw_query = (query or "").strip()
         keywords = _split_keywords(raw_query)
@@ -352,11 +465,41 @@ class MemoryRecallService:
             current_saves=self._current_saves(),
         )
 
-        # 检索结果按相关度排在前面，本场弹幕补剩下的位置；她要按时间看时再按时间排
-        indexed = await self._indexed_hits(" ".join(effective), context, archive_bounds)
-        hits = indexed.hits[:MAX_RESULTS]
-        danmaku = (await self._danmaku_hits(context))[: MAX_RESULTS - len(hits)]
+        effective_query = " ".join(effective)
+        indexed = await self._indexed_hits(effective_query, context, archive_bounds)
+        work_docs = await self._work_doc_hits(effective_query, context)
+
+        # 合并当前存档工作笔记与混合检索结果：两者都有时工作笔记先给前排核心项，其余给历史记忆，空余再补齐，严守 8 条上限
+        hits: List[RecallEntry] = []
+        if work_docs and indexed.hits and not indexed.weak_only:
+            primary_docs = work_docs[:_WORK_DOC_PRIMARY_QUOTA]
+            extra_docs = work_docs[_WORK_DOC_PRIMARY_QUOTA:]
+            hits.extend(primary_docs)
+            hits.extend(indexed.hits[: MAX_RESULTS - len(hits)])
+            if len(hits) < MAX_RESULTS and extra_docs:
+                hits.extend(extra_docs[: MAX_RESULTS - len(hits)])
+        elif work_docs:
+            hits.extend(work_docs[:MAX_RESULTS])
+            if len(hits) < MAX_RESULTS and indexed.hits:
+                hits.extend(indexed.hits[: MAX_RESULTS - len(hits)])
+        else:
+            cap = WEAK_MATCH_MAX_RESULTS if indexed.weak_only else MAX_RESULTS
+            hits.extend(indexed.hits[:cap])
+
+        danmaku_budget = (
+            max(0, WEAK_MATCH_MAX_RESULTS - len(hits))
+            if (indexed.weak_only and not work_docs)
+            else max(0, MAX_RESULTS - len(hits))
+        )
+        raw_danmaku = await self._danmaku_hits(context)
+        if raw_danmaku:
+            # 本场弹幕按每个有效关键词都包含命中时，属于直接字面命中，可补满正常剩余名额
+            danmaku = raw_danmaku[: max(0, MAX_RESULTS - len(hits))]
+        else:
+            danmaku = raw_danmaku[:danmaku_budget]
         hits.extend(danmaku)
+
+        show_weak_notice = bool(hits) and indexed.weak_only and not work_docs and not danmaku
         if order != ORDER_RELEVANT:
             hits.sort(key=lambda hit: hit.timestamp_ms, reverse=newest_first)
 
@@ -365,24 +508,22 @@ class MemoryRecallService:
             lines.append(notice)
         if self._search is not None and not indexed.vector_used:
             lines.append(LITERAL_ONLY_NOTICE)
+        if show_weak_notice:
+            lines.append(WEAK_MATCH_NOTICE)
         if not hits:
             lines.append("（没找到相关的记忆，换个关键词再试试）")
         else:
             lines.extend(hit.text for hit in hits)
         outcome = RecallOutcome(text="\n".join(lines), entries=tuple(hits), vector_used=indexed.vector_used)
-        return outcome, f"{indexed.detail}、弹幕 {len(danmaku)}，给出 {len(hits)} 条"
+        work_detail = f"、工作笔记 {len(work_docs)}" if work_docs else ""
+        return outcome, f"{indexed.detail}{work_detail}、弹幕 {len(danmaku)}，给出 {len(hits)} 条"
 
     async def _indexed_hits(
         self, query: str, context: _RecallContext, archive_bounds: Sequence[Tuple[int, int]]
     ) -> _IndexedOutcome:
-        """台词、档案行、承诺、游戏进展四类：按混合检索的相关度取，还原成行后渲染（按相关度先后）。
-
-        检索只给主键，这里按主键把行读回来再核一遍：没送到观众面前的台词、对某位观众的承诺
-        （原话可能夹着 ta 的私事）、判了误记的承诺、白名单以外的游戏事件都不给。scope=this_stream
-        时只查本场（承诺按登记它的场次算）。档案行的时刻取写下它的那一场最后一条明细的时刻。
-        """
+        """台词、档案行、承诺、游戏进展与社交事实：按混合检索相关度取回、合并去重并识别纯字面弱擦边。"""
         if self._search is None:
-            return _IndexedOutcome(hits=[], detail="没接混合检索", vector_used=False)
+            return _IndexedOutcome(hits=[], detail="没接混合检索", vector_used=False, weak_only=False)
         sources = _RECALL_SOURCES_WITH_EVENTS if self._event_repo is not None else _RECALL_SOURCES
         if self._social_fact_repo is not None:
             sources = (*sources, "social_fact")
@@ -392,12 +533,14 @@ class MemoryRecallService:
             live_session_id=context.current_session_id if context.scope == SCOPE_THIS_STREAM else None,
             limit=_SEARCH_POOL,
             wait_vector_ms=RECALL_VECTOR_WAIT_MS,
+            min_cosine=RECALL_MIN_COSINE,
         )
         found = result.hits
         ids: Dict[str, List[int]] = {source: [] for source in sources}
         for hit in found:
             ids[hit.source].append(hit.source_id)
         speech = {int(row.id): row for row in await self._chat_repo.list_speech_by_ids(chat_ids=ids["speech"])}
+        neighbors = await self._load_speech_neighbors(list(speech.keys()))
         lines = {int(line.id): line for line in await self._archive_repo.list_lines_by_ids(line_ids=ids["archive"])}
         commitments: Dict[int, Any] = {}
         for commitment_id in ids["commitment"]:
@@ -405,19 +548,59 @@ class MemoryRecallService:
             # 对某位观众、某位玩家的承诺不经回想翻给全场
             if row is not None and not row.has_target and row.status in ("open", "closed"):
                 commitments[commitment_id] = row
+        # 档案行与承诺关联的证据台词若不在 speech 候选里，也读出供实词核对（防止证据原话含查询词而摘要标题简写漏判）
+        ref_ids = (
+            *(line.evidence_chat_id for line in lines.values()),
+            *(row.evidence_chat_id for row in commitments.values()),
+            *(row.close_chat_id for row in commitments.values()),
+        )
+        extra_ids = [int(r) for r in ref_ids if r is not None and int(r) not in speech]
+        extra_rows = await self._chat_repo.list_speech_by_ids(chat_ids=extra_ids) if extra_ids else ()
+        evidence_speech = {**speech, **{int(r.id): r for r in extra_rows}}
+
         events = await self._events_by_ids(ids.get("event", []))
         facts = await self._facts_by_ids(ids.get("social_fact", []))
         notes = await self._session_notes([row.live_session_id for row in speech.values()], context)
-        last_ms = dict(archive_bounds)
-        hits = self._merge_indexed_hits(found, speech, lines, commitments, events, facts, notes, last_ms, context)
-        return _IndexedOutcome(
-            hits=hits, detail=_path_counts(found, result.vector_used), vector_used=result.vector_used
+        candidates = self._merge_indexed_hits(
+            query,
+            found,
+            speech,
+            neighbors,
+            evidence_speech,
+            lines,
+            commitments,
+            events,
+            facts,
+            notes,
+            dict(archive_bounds),
+            context,
         )
+        filtered_hits, weak_only = self._prune_literal_noise(
+            query, candidates, used_stopword_fallback=result.used_stopword_fallback
+        )
+        return _IndexedOutcome(
+            hits=filtered_hits,
+            detail=_path_counts(found, result.vector_used),
+            vector_used=result.vector_used,
+            weak_only=weak_only,
+        )
+
+    async def _load_speech_neighbors(self, chat_ids: Sequence[int]) -> Dict[int, Tuple[Any, Any]]:
+        """批量读取命中台词同场前后 30 秒紧邻台词；测试替身未实现该方法时降级为空字典。"""
+        if not chat_ids:
+            return {}
+        loader = getattr(self._chat_repo, "list_speech_neighbors", None)
+        if not callable(loader):
+            return {}
+        return dict(await loader(chat_ids=chat_ids, window_ms=SPEECH_NEIGHBOR_WINDOW_MS))
 
     def _merge_indexed_hits(
         self,
+        query: str,
         found: Sequence[SearchHit],
         speech: Mapping[int, Any],
+        neighbors: Mapping[int, Tuple[Any, Any]],
+        evidence_speech: Mapping[int, Any],
         lines: Mapping[int, Any],
         commitments: Mapping[int, Any],
         events: Mapping[int, Any],
@@ -425,14 +608,8 @@ class MemoryRecallService:
         notes: Mapping[int, str],
         last_ms: Mapping[int, int],
         context: _RecallContext,
-    ) -> List[RecallEntry]:
-        """按融合相关度顺序组装结果，合并同一句台词的重复呈现。
-
-        下播整理写出的档案行和公开承诺都把她播出的那句台词记在 ``evidence_chat_id``（及了结时的
-        ``close_chat_id``）上。检索时裸台词与引用它的档案行/承诺往往一起命中：若两边都保留，同一句话
-        会占掉两个名额，把前 8 条挤成前 4 条。这里在两者更靠前的名次上输出带归纳标题、完成状态与
-        存档注记的档案行或承诺，跳过重复的裸台词；没有账本行覆盖的普通台词照常保留。
-        """
+    ) -> List[_CandidateRecord]:
+        """按融合相关度顺序组装结果，消除账本同源重复、邻句滑窗重复与跨场近似复读霸屏。"""
         archive_by_chat: Dict[int, List[int]] = {}
         commitment_by_chat: Dict[int, List[int]] = {}
         for hit in found:
@@ -448,61 +625,254 @@ class MemoryRecallService:
                         if int(hit.source_id) not in bucket:
                             bucket.append(int(hit.source_id))
 
+        query_terms = set(content_tokens(query)) or set(recall_query_tokens(query))
+        ledger_chat_ids: Set[int] = set(archive_by_chat) | set(commitment_by_chat)
         emitted_archives: Set[int] = set()
         emitted_commitments: Set[int] = set()
         covered_chats: Set[int] = set()
-        hits: List[RecallEntry] = []
+        # 近似复读台词簇：[(实词二元组集合, 已入选条数)]
+        speech_clusters: List[List[Any]] = []
+        records: List[_CandidateRecord] = []
+
+        def _emit_archive(line_id: int, trigger_hit: SearchHit) -> None:
+            if line_id in emitted_archives:
+                return
+            emitted_archives.add(line_id)
+            line = lines[line_id]
+            ev_text = ""
+            if line.evidence_chat_id is not None:
+                ev_id = int(line.evidence_chat_id)
+                covered_chats.add(ev_id)
+                if ev_id in evidence_speech:
+                    ev_text = evidence_speech[ev_id].content or ""
+            session_id = int(line.live_session_id)
+            entry = self._archive_hit(line, session_id, int(last_ms.get(session_id, 0)), context)
+            records.append(
+                _CandidateRecord(
+                    entry=entry,
+                    search_hit=trigger_hit,
+                    raw_text=f"{line.text or ''}\n{line.quote or ''}\n{ev_text}",
+                )
+            )
+
+        def _emit_commitment(commitment_id: int, trigger_hit: SearchHit) -> None:
+            if commitment_id in emitted_commitments:
+                return
+            emitted_commitments.add(commitment_id)
+            row_c = commitments[commitment_id]
+            ev_parts: List[str] = []
+            for ref_id in (row_c.evidence_chat_id, row_c.close_chat_id):
+                if ref_id is not None:
+                    rid = int(ref_id)
+                    covered_chats.add(rid)
+                    if rid in evidence_speech:
+                        ev_parts.append(evidence_speech[rid].content or "")
+            entry = self._commitment_hit(row_c, context)
+            records.append(
+                _CandidateRecord(
+                    entry=entry,
+                    search_hit=trigger_hit,
+                    raw_text="\n".join([row_c.what or "", row_c.quote or "", row_c.close_quote or "", *ev_parts]),
+                )
+            )
+
+        def _emit_linked_ledger(target_chat_id: int, trigger_hit: SearchHit) -> bool:
+            linked_archives = archive_by_chat.get(target_chat_id, [])
+            linked_commitments = commitment_by_chat.get(target_chat_id, [])
+            if not linked_archives and not linked_commitments:
+                return False
+            for line_id in linked_archives:
+                _emit_archive(line_id, trigger_hit)
+            for commitment_id in linked_commitments:
+                _emit_commitment(commitment_id, trigger_hit)
+            covered_chats.add(target_chat_id)
+            return True
+
         for hit in found:
             if hit.source == "speech" and hit.source_id in speech:
                 chat_id = int(hit.source_id)
                 if chat_id in covered_chats:
                     continue
-                linked_archives = archive_by_chat.get(chat_id, [])
-                linked_commitments = commitment_by_chat.get(chat_id, [])
-                if linked_archives or linked_commitments:
-                    for line_id in linked_archives:
-                        if line_id not in emitted_archives:
-                            emitted_archives.add(line_id)
-                            line = lines[line_id]
-                            session_id = int(line.live_session_id)
-                            hits.append(self._archive_hit(line, session_id, int(last_ms.get(session_id, 0)), context))
-                    for commitment_id in linked_commitments:
-                        if commitment_id not in emitted_commitments:
-                            emitted_commitments.add(commitment_id)
-                            row = commitments[commitment_id]
-                            for ref_id in (row.evidence_chat_id, row.close_chat_id):
-                                if ref_id is not None:
-                                    covered_chats.add(int(ref_id))
-                            hits.append(self._commitment_hit(row, context))
+                row = speech[chat_id]
+                prev_msg, next_msg = neighbors.get(chat_id, (None, None))
+
+                # 识别邻句滑窗纯借词影子：后句自身未提任何查询词、完全靠拼入的前邻句才上榜时，归还前句或跳过回声
+                if hit.vector_rank is None and prev_msg is not None and query_terms:
+                    prev_id = int(prev_msg.id)
+                    curr_own = set(bigram_tokens(row.content or "")) & query_terms
+                    prev_own = set(bigram_tokens(prev_msg.content or "")) & query_terms
+                    if not curr_own and prev_own:
+                        if prev_id in covered_chats or _emit_linked_ledger(prev_id, hit):
+                            covered_chats.add(chat_id)
+                            continue
+
+                if _emit_linked_ledger(chat_id, hit):
+                    continue
+
+                if not self._accept_speech_near_duplicate(row.content or "", speech_clusters):
                     covered_chats.add(chat_id)
                     continue
-                covered_chats.add(chat_id)
-                hits.append(self._speech_hit(speech[hit.source_id], notes, context))
+
+                # 已被展示过、或本轮自有档案行/承诺单独承载的邻句不再重复拼进当前引号
+                excluded_neighbors = covered_chats | ledger_chat_ids
+                avail_prev = prev_msg if (prev_msg is not None and int(prev_msg.id) not in excluded_neighbors) else None
+                avail_next = next_msg if (next_msg is not None and int(next_msg.id) not in excluded_neighbors) else None
+                entry, raw_window = self._speech_hit(row, (avail_prev, avail_next), notes, context)
+                covered_chats.update(entry.covered_chat_ids)
+                records.append(_CandidateRecord(entry=entry, search_hit=hit, raw_text=raw_window))
             elif hit.source == "archive" and hit.source_id in lines:
-                line_id = int(hit.source_id)
-                if line_id in emitted_archives:
-                    continue
-                emitted_archives.add(line_id)
-                line = lines[line_id]
-                if line.evidence_chat_id is not None:
-                    covered_chats.add(int(line.evidence_chat_id))
-                session_id = int(line.live_session_id)
-                hits.append(self._archive_hit(line, session_id, int(last_ms.get(session_id, 0)), context))
+                _emit_archive(int(hit.source_id), hit)
             elif hit.source == "commitment" and hit.source_id in commitments:
-                commitment_id = int(hit.source_id)
-                if commitment_id in emitted_commitments:
-                    continue
-                emitted_commitments.add(commitment_id)
-                row = commitments[commitment_id]
-                for ref_id in (row.evidence_chat_id, row.close_chat_id):
-                    if ref_id is not None:
-                        covered_chats.add(int(ref_id))
-                hits.append(self._commitment_hit(row, context))
+                _emit_commitment(int(hit.source_id), hit)
             elif hit.source == "event" and hit.source_id in events:
-                hits.append(self._event_hit(events[hit.source_id], context))
+                ev_row = events[hit.source_id]
+                entry = self._event_hit(ev_row, context)
+                records.append(_CandidateRecord(entry=entry, search_hit=hit, raw_text=ev_row.message or ""))
             elif hit.source == "social_fact" and hit.source_id in facts:
-                hits.append(self._social_fact_hit(facts[hit.source_id], context))
-        return hits
+                fact_row = facts[hit.source_id]
+                entry = self._social_fact_hit(fact_row, context)
+                records.append(
+                    _CandidateRecord(
+                        entry=entry,
+                        search_hit=hit,
+                        raw_text=f"{fact_row.text or ''}\n{fact_row.quote or ''}",
+                    )
+                )
+        return records
+
+    @staticmethod
+    def _accept_speech_near_duplicate(content: str, clusters: List[List[Any]]) -> bool:
+        """检查候选台词是否与更靠前的已选台词近似原样复读（Jaccard >= 0.85）；同一簇最多保留 2 条。"""
+        tokens = set(content_tokens(content, strip_trailing_modals=True))
+        if len(tokens) < NEAR_DUPLICATE_MIN_TOKENS:
+            return True
+        for cluster in clusters:
+            cluster_tokens: Set[str] = cluster[0]
+            count: int = cluster[1]
+            if _jaccard_similarity(tokens, cluster_tokens) >= NEAR_DUPLICATE_JACCARD:
+                if count >= MAX_NEAR_DUPLICATE_SPEECH:
+                    return False
+                cluster[1] = count + 1
+                return True
+        clusters.append([tokens, 1])
+        return True
+
+    @staticmethod
+    def _prune_literal_noise(
+        query: str,
+        candidates: Sequence[_CandidateRecord],
+        *,
+        used_stopword_fallback: bool,
+    ) -> Tuple[List[RecallEntry], bool]:
+        """裁剪纯字面路径下零实词低分凑数尾行，并判定整次查询是否无任何强相关命中（仅剩字面弱擦边）。"""
+        if not candidates:
+            return [], False
+        has_semantic_or_like = any(
+            item.search_hit.vector_rank is not None or item.search_hit.like_rank is not None for item in candidates
+        )
+        real_terms = set(content_tokens(query))
+        specific_terms = real_terms - _GENERIC_QUERY_TERMS
+        cjk_specific_terms = {term for term in specific_terms if _CJK_TOKEN_RE.search(term)}
+
+        doc_tokens_list = [set(bigram_tokens(item.raw_text)) for item in candidates]
+        real_overlaps = [len(tokens & real_terms) for tokens in doc_tokens_list]
+        specific_overlaps = [len(tokens & specific_terms) for tokens in doc_tokens_list]
+        cjk_overlaps = [len(tokens & cjk_specific_terms) for tokens in doc_tokens_list]
+
+        top_kw_score = max(
+            (item.search_hit.keyword_score or 0.0 for item in candidates if item.search_hit.keyword_score is not None),
+            default=0.0,
+        )
+        max_real = max(real_overlaps, default=0)
+        max_spec = max(specific_overlaps, default=0)
+
+        # 首条已有明确实词命中时，剪掉尾部连 1 个实词都没撞上、BM25 远低于首条的纯代词/虚词凑数行
+        kept_indices = list(range(len(candidates)))
+        if real_terms and (max_spec >= 2 or (max_real >= 1 and top_kw_score >= 2.5)):
+            kept_indices = [
+                idx
+                for idx in kept_indices
+                if candidates[idx].search_hit.vector_rank is not None
+                or candidates[idx].search_hit.like_rank is not None
+                or real_overlaps[idx] > 0
+                or (candidates[idx].search_hit.keyword_score or 0.0) >= max(0.5, top_kw_score * 0.25)
+            ]
+
+        kept_entries = [candidates[idx].entry for idx in kept_indices]
+        if has_semantic_or_like or not kept_entries:
+            return kept_entries, False
+
+        max_spec_kept = max((specific_overlaps[idx] for idx in kept_indices), default=0)
+        max_real_kept = max((real_overlaps[idx] for idx in kept_indices), default=0)
+        max_cjk_kept = max((cjk_overlaps[idx] for idx in kept_indices), default=0)
+        non_cjk_spec = specific_terms - cjk_specific_terms
+        has_non_cjk_hit = any(bool(doc_tokens_list[idx] & non_cjk_spec) for idx in kept_indices)
+
+        # 整次查询仅剩字面弱擦边：纯虚词回退、完全没命中任何具体主题实词、或多汉字复合词只擦到孤立 1 个双字碎片
+        weak_only = (
+            used_stopword_fallback
+            or not real_terms
+            or (max_real_kept == 0 and top_kw_score < 4.0)
+            or (bool(specific_terms) and max_spec_kept == 0 and top_kw_score < 8.0)
+            or (len(cjk_specific_terms) >= 4 and max_cjk_kept <= 1 and not has_non_cjk_hit)
+        )
+        return kept_entries, weak_only
+
+    async def _work_doc_hits(self, query: str, context: _RecallContext) -> List[RecallEntry]:
+        """只读检索眼下所在存档的 ``game_work_docs``（工作笔记行与未完成待办），别的存档绝不串入。"""
+        if self._work_docs_repo is None or not context.current_saves:
+            return []
+        norm_keywords = [normalize(kw) for kw in context.keywords if normalize(kw) and not is_stopword_token(kw)]
+        if not norm_keywords:
+            norm_keywords = [normalize(kw) for kw in context.keywords if normalize(kw)]
+        query_terms = set(content_tokens(query)) or set(recall_query_tokens(query))
+
+        scored: List[Tuple[int, int, int, RecallEntry]] = []
+        seq = 0
+        for game, save in sorted(context.current_saves.items()):
+            if save is None or not save.known:
+                continue
+            try:
+                record = await self._work_docs_repo.get_work_docs(game=game, save_id=save.id)
+            except Exception as exc:  # noqa: BLE001 - 工作文档读取异常只跳过这一路，不打断回想主流程
+                logger.warning(f"回想工具读取 {game} 存档 {save.id!r} 工作文档失败: {exc}", exc=True)
+                continue
+            if record is None:
+                continue
+            if context.scope == SCOPE_THIS_STREAM and record.updated_session_id != context.current_session_id:
+                continue
+
+            save_label = save.label if save.name else GameSave(id=save.id, name=record.save_name).label
+            segments = _extract_work_doc_segments(record.notebook, record.todos)
+            for segment in segments:
+                norm_seg = normalize(segment)
+                if not norm_seg:
+                    continue
+                seg_tokens = set(bigram_tokens(segment))
+                kw_hits = sum(1 for kw in norm_keywords if kw and kw in norm_seg)
+                tok_hits = len(seg_tokens & query_terms)
+                matched = (
+                    kw_hits >= 1
+                    or (len(query_terms) == 1 and tok_hits == 1)
+                    or (len(query_terms) >= 2 and tok_hits >= 2)
+                )
+                if not matched:
+                    continue
+                seq += 1
+                # 工作笔记跨场持续保留，一律按跨场口径遮掉已知观众昵称与本场遗忘名单
+                masked = self._mask(segment, None, context)
+                if len(masked) > SPEECH_SNIPPET_MAX_CHARS:
+                    masked = f"{masked[: SPEECH_SNIPPET_MAX_CHARS - 1]}…"
+                entry = RecallEntry(
+                    source="work_doc",
+                    source_id=seq,
+                    timestamp_ms=int(record.updated_at_ms or 0),
+                    text=f"- 当前存档工作笔记（{game}「{save_label}」）：{masked}",
+                )
+                scored.append((kw_hits, tok_hits, -seq, entry))
+
+        scored.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+        return [item[3] for item in scored[:MAX_RESULTS]]
 
     async def _events_by_ids(self, event_ids: Sequence[int]) -> Dict[int, Any]:
         """按主键读回游戏事件，只留里程碑与阶段汇报（索引已按白名单收，这里再核一遍）。"""
@@ -546,19 +916,41 @@ class MemoryRecallService:
             text=f"{text}（{note}）" if note else text,
         )
 
-    def _speech_hit(self, row: Any, notes: Mapping[int, str], context: _RecallContext) -> RecallEntry:
-        """一句台词渲染成「位置 + 你说：原话」，那场只玩过别的存档时补一句注。"""
-        note = notes.get(row.live_session_id, "")
-        text = (
-            f"- {self._when(row.live_session_id, row.timestamp_ms, context)} 你说："
-            f"「{self._mask(row.content, row.live_session_id, context)}」"
+    def _speech_hit(
+        self,
+        row: Any,
+        neighbor_pair: Tuple[Any, Any],
+        notes: Mapping[int, str],
+        context: _RecallContext,
+    ) -> Tuple[RecallEntry, str]:
+        """一句台词连同同场前后 30 秒紧邻台词拼成连贯单条（140 字内保留核心句），并返回参与匹配核对的原话。"""
+        session_id, core_id = row.live_session_id, int(row.id)
+        prev_row, next_row = neighbor_pair
+
+        def _to_pair(msg: Any) -> Optional[Tuple[int, str]]:
+            return (int(msg.id), self._mask((msg.content or "").strip(), session_id, context)) if msg else None
+
+        snippet, covered_ids = _compose_speech_window(
+            self._mask((row.content or "").strip(), session_id, context),
+            core_id,
+            _to_pair(prev_row),
+            _to_pair(next_row),
         )
-        return RecallEntry(
+        raw_parts = [
+            prev_row.content if prev_row is not None and int(prev_row.id) in covered_ids else "",
+            row.content or "",
+            next_row.content if next_row is not None and int(next_row.id) in covered_ids else "",
+        ]
+        note = notes.get(session_id, "")
+        text = f"- {self._when(session_id, row.timestamp_ms, context)} 你说：「{snippet}」"
+        entry = RecallEntry(
             source="speech",
-            source_id=int(row.id),
+            source_id=core_id,
             timestamp_ms=int(row.timestamp_ms),
             text=f"{text}（{note}）" if note else text,
+            covered_chat_ids=covered_ids,
         )
+        return entry, "\n".join(part for part in raw_parts if part)
 
     async def _session_notes(self, session_ids: Sequence[Optional[int]], context: _RecallContext) -> Dict[int, str]:
         """过去几场里，眼下分存档的游戏只在别的存档里玩过的，各给一句注（本场不注）。"""
@@ -614,7 +1006,14 @@ class MemoryRecallService:
         notes = [*source_notes(line), place_note(line.game, line.save_id, line.save_name, context.current_saves)]
         if any(notes):
             body += f"（{'；'.join(item for item in notes if item)}）"
-        return RecallEntry(source="archive", source_id=int(line.id), timestamp_ms=timestamp_ms, text=body)
+        covered = (int(line.evidence_chat_id),) if line.evidence_chat_id is not None else ()
+        return RecallEntry(
+            source="archive",
+            source_id=int(line.id),
+            timestamp_ms=timestamp_ms,
+            text=body,
+            covered_chat_ids=covered,
+        )
 
     def _commitment_hit(self, row: Any, context: _RecallContext) -> RecallEntry:
         """一条承诺渲染成「位置 + 你答应过（状态）+ 标题与原话 / 了结原话」。"""
@@ -633,7 +1032,16 @@ class MemoryRecallService:
         note = place_note(row.game, row.save_id, row.save_name, context.current_saves)
         if note:
             body += f"（{note}）"
-        return RecallEntry(source="commitment", source_id=int(row.id), timestamp_ms=timestamp_ms, text=body)
+        covered = tuple(
+            int(ref_id) for ref_id in dict.fromkeys((row.evidence_chat_id, row.close_chat_id)) if ref_id is not None
+        )
+        return RecallEntry(
+            source="commitment",
+            source_id=int(row.id),
+            timestamp_ms=timestamp_ms,
+            text=body,
+            covered_chat_ids=covered,
+        )
 
     def _when(self, session_id: Optional[int], timestamp_ms: int, context: _RecallContext) -> str:
         """位置词：本场写「本场 HH:MM」，上一场写「上一场」，其余（含无场次的承诺）写「之前」。"""

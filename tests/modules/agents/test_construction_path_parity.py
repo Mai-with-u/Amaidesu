@@ -99,8 +99,11 @@ def test_decision_profile_is_decided_by_the_agent_class_not_the_factory() -> Non
 
 
 def test_factory_forwards_streamer_infrastructure_and_repositories() -> None:
-    session, tts, subtitle, sink = object(), object(), object(), object()
-    repos = {name: object() for name in ("rundown_repo", "chat_repo", "sessions_repo", "topic_repo")}
+    session, tts, subtitle, sink, work_docs = object(), object(), object(), object(), object()
+    repos = {
+        name: object()
+        for name in ("rundown_repo", "chat_repo", "sessions_repo", "topic_repo", "commitments_repo", "archive_repo")
+    }
     agent = instantiate_agent(
         "streamer",
         {},
@@ -112,6 +115,7 @@ def test_factory_forwards_streamer_infrastructure_and_repositories() -> None:
             subtitle_service=subtitle,
             session_manager=session,
             thinking_sink=sink,
+            work_docs_repo=work_docs,
             **repos,
         ),
     )
@@ -125,6 +129,7 @@ def test_factory_forwards_streamer_infrastructure_and_repositories() -> None:
         agent._background._sessions_repo is repos["sessions_repo"]
         and agent._background._topic_repo is repos["topic_repo"]
     )
+    assert agent._memory_recall is not None and agent._memory_recall._work_docs_repo is work_docs
 
 
 def test_minecraft_gets_the_creature_roster_repository() -> None:

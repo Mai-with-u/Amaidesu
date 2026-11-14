@@ -19,14 +19,18 @@ import pytest
 
 from src.agents.streamer.memory.index import MemoryIndexer
 from src.agents.streamer.memory.recall import (
+    LITERAL_ONLY_NOTICE,
+    MAX_NEAR_DUPLICATE_SPEECH,
     MEMORY_RECALL_PROVIDER_NAME,
     MEMORY_RECALL_TOOL_NAME,
-    LITERAL_ONLY_NOTICE,
     ORDER_NEWEST,
     ORDER_OLDEST,
     ORDER_RELEVANT,
+    RECALL_MIN_COSINE,
     SCOPE_ALL,
     SCOPE_THIS_STREAM,
+    WEAK_MATCH_MAX_RESULTS,
+    WEAK_MATCH_NOTICE,
     MemoryRecallService,
     build_memory_recall_provider,
 )
@@ -132,9 +136,9 @@ async def test_recall_picks_the_most_relevant_eight_without_requiring_every_keyw
     """十句都提到挖矿，只有最早那句同时提到钻石：它最相关，一定在选出的 8 条里；只提钻石的也能查到。"""
     pk = await _session(store, started=1_000)
     await _streamer_says(store, pk, "今天挖矿挖到钻石了", 1_100)
-    for minute in range(10):
-        await _streamer_says(store, pk, f"第 {minute} 回接着挖矿", 1_200 + minute)
-    await _streamer_says(store, pk, "钻石真好看", 1_300)
+    for minute in range(1, 11):
+        await _streamer_says(store, pk, f"第 {minute} 回接着挖矿", 1_100 + minute * 60_000)
+    await _streamer_says(store, pk, "钻石真好看", 1_100 + 11 * 60_000)
     service = await _service(store, current_session=pk)
 
     text = await service.recall("挖矿 钻石", SCOPE_ALL, ORDER_NEWEST)
@@ -606,3 +610,128 @@ async def test_recall_marks_the_save_of_game_progress_and_respects_this_stream(s
     assert "- 上一场 游戏里（里程碑）：灯塔盖好了（在 minecraft「老档」里，不是眼下这个存档）" in everything
     this_stream = _hit_lines(await service.recall("灯塔", scope=SCOPE_THIS_STREAM))
     assert len(this_stream) == 1 and "开始在新档盖灯塔" in this_stream[0] and "就是眼下这个存档" in this_stream[0]
+
+
+async def test_recall_merges_adjacent_same_session_speech_once_without_danmaku_or_dropped(
+    store: SQLiteDatabase,
+) -> None:
+    """同场 ±30s 内相邻两句同时命中时拼成连贯单条，只占 1 个名额、covered_chat_ids 含两句主键，且绝不混入观众弹幕。"""
+    old = await _session(store, started=1_000, ended=200_000)
+    current = await _session(store, started=300_000)
+    first_id = await _streamer_says(store, old, "北边刚摆好高炉", 10_000)
+    await _viewer_says(store, old, user_id="u1", name="路人甲", text="高炉旁边蒸汽管歪了", ts=15_000)
+    await _streamer_says(store, old, "高炉这句没送出去", 18_000, dropped_at_ms=18_500)
+    second_id = await _streamer_says(store, old, "结果蒸汽管接反了", 22_000)
+
+    service = await _service(store, current_session=current)
+    outcome = await service.recall_detailed("高炉 蒸汽管")
+    lines = _hit_lines(outcome.text)
+
+    assert len(outcome.entries) == 1
+    assert len(lines) == 1
+    assert "北边刚摆好高炉 结果蒸汽管接反了" in lines[0]
+    assert "蒸汽管歪了" not in outcome.text
+    assert "没送出去" not in outcome.text
+    assert outcome.entries[0].covered_chat_ids == (first_id, second_id)
+
+
+async def test_recall_caps_near_duplicate_speech_across_sessions_without_blocking_distinct_memories(
+    store: SQLiteDatabase,
+) -> None:
+    """跨 5 场反复说几乎同一句话时，近似复读台词最多占 2 个名额，把剩余坑位留给不同往事。"""
+    for idx in range(5):
+        sess = await _session(store, started=1_000 + idx * 100_000, ended=50_000 + idx * 100_000)
+        suffix = "了" if idx % 2 == 0 else "啦"
+        await _streamer_says(store, sess, f"拐角那台运输矿车又卡住{suffix}", 10_000 + idx * 100_000)
+
+    other_sess = await _session(store, started=600_000, ended=650_000)
+    await _streamer_says(store, other_sess, "今天把海底神殿的矿车铁轨全铺通了", 610_000)
+    await _streamer_says(store, other_sess, "矿车卸载站加了漏斗箱子", 645_000)
+    current = await _session(store, started=800_000)
+
+    service = await _service(store, current_session=current)
+    outcome = await service.recall_detailed("矿车")
+    lines = _hit_lines(outcome.text)
+
+    repeated = [line for line in lines if "拐角那台运输矿车又卡住" in line]
+    assert len(repeated) == MAX_NEAR_DUPLICATE_SPEECH == 2
+    assert any("海底神殿的矿车铁轨全铺通了" in line for line in lines)
+    assert any("矿车卸载站加了漏斗箱子" in line for line in lines)
+
+
+async def test_recall_trims_weak_literal_matches_to_two_with_plain_notice(store: SQLiteDatabase) -> None:
+    """整次查询无强相关命中、只剩字面孤立碎片或纯虚词擦边时，最多保留前 2 条并在抬头下附平实提醒。"""
+    old = await _session(store, started=1_000, ended=500_000)
+    for idx in range(6):
+        await _streamer_says(store, old, f"今天吃了个红苹果补充体力第 {idx} 次", 10_000 + idx * 60_000)
+    current = await _session(store, started=600_000)
+    service = await _service(store, current_session=current)
+
+    # 查询"沙漠神殿 附魔金苹果"（多个汉字实词二元组），库里只零星擦到"苹果"一词，无强相关命中
+    outcome = await service.recall_detailed("沙漠神殿 附魔金苹果")
+    lines = _hit_lines(outcome.text)
+
+    assert len(outcome.entries) <= WEAK_MATCH_MAX_RESULTS == 2
+    assert len(lines) == len(outcome.entries) <= 2
+    assert WEAK_MATCH_NOTICE in outcome.text.splitlines()
+    assert RECALL_MIN_COSINE == pytest.approx(0.50)
+
+
+async def test_recall_reads_current_save_work_docs_with_masking_and_isolates_other_saves(
+    store: SQLiteDatabase,
+) -> None:
+    """回想只读命中眼下所在存档的工作笔记与未完成待办，跨场遮名、跳过已完结待办，且别的存档工作文档绝不串入。"""
+    await seed_viewer(store.viewers, platform="bilibili", user_id="u1", user_name="路人甲", timestamp_ms=500)
+    old = await _session(store, started=1_000, ended=50_000)
+    current = await _session(store, started=100_000)
+
+    await store.game_work_docs.save_work_docs(
+        game="minecraft",
+        save_id="save-now",
+        save_name="现行世界",
+        notebook="## 刷铁机\n- 北侧还差两格栏杆，路人甲提醒过注意防雷",
+        todos=[
+            {"content": "补齐刷铁机北侧两格栏杆", "status": "in_progress"},
+            {"content": "刷铁机旧脚手架已拆除", "status": "completed"},
+        ],
+        updated_session_id=old,
+    )
+    await store.game_work_docs.save_work_docs(
+        game="minecraft",
+        save_id="save-other",
+        save_name="隔壁旧档",
+        notebook="【刷铁机】隔壁旧档的刷铁机建在海底",
+        todos=[{"content": "隔壁旧档刷铁机扩建", "status": "pending"}],
+        updated_session_id=old,
+    )
+    for idx in range(8):
+        await _streamer_says(store, old, f"之前聊过刷铁机方案第 {idx} 版", 2_000 + idx * 60_000)
+    await _index(store)
+
+    service = MemoryRecallService(
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        archive_repo=store.archive,
+        viewer_repo=store.viewers,
+        current_session_provider=lambda: current,
+        clock=FakeClock().now_ms,
+        event_repo=store.events,
+        saves_provider=lambda: {"minecraft": GameSave(id="save-now", name="现行世界")},
+        search=MemorySearch(repo=store.memory_index, embedding=None),
+        work_docs_repo=store.game_work_docs,
+    )
+
+    outcome = await service.recall_detailed("刷铁机")
+    lines = _hit_lines(outcome.text)
+
+    assert len(outcome.entries) <= 8
+    work_doc_entries = [entry for entry in outcome.entries if entry.source == "work_doc"]
+    assert len(work_doc_entries) >= 1
+    assert any(
+        "当前存档工作笔记（minecraft「现行世界」）：【刷铁机】北侧还差两格栏杆，某位观众提醒过注意防雷" in line
+        for line in lines
+    )
+    assert any("进行中待办：补齐刷铁机北侧两格栏杆" in line for line in lines)
+    assert "路人甲" not in outcome.text, "跨场工作笔记须遮掉已知观众昵称"
+    assert "旧脚手架已拆除" not in outcome.text, "已完成待办不返回"
+    assert "隔壁旧档" not in outcome.text, "非当前存档的工作文档绝不串入"
