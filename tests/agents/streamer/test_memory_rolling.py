@@ -7,12 +7,16 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytest
 
 from src.agents.streamer.memory.rolling import (
+    MAX_BASE_LINES,
+    MAX_HIGHLIGHT_QUOTA,
     MAX_LASTING_LINES,
+    MAX_SESSION_HIGHLIGHTS,
     MAX_SNAPSHOT_LINES,
     plan_from_ops,
     render_base,
     select_snapshot,
 )
+from src.agents.streamer.memory.settle_proof import mark_unverified
 from src.modules.storage.models.chat import SettleSpeechLine
 from src.modules.storage.models.memory import (
     ArchiveLine,
@@ -27,20 +31,46 @@ _NOW = 9_000
 
 
 def _old(
-    index: int, *, session: int = 1, lasting: bool = False, seen: int = 1_000, pinned: bool = False, **extra: Any
+    index: int,
+    *,
+    session: int = 1,
+    lasting: bool = False,
+    seen: int = 1_000,
+    pinned: bool = False,
+    highlight: bool = False,
+    **extra: Any,
 ) -> SnapshotLine:
     line = ArchiveLine(
-        id=index, live_session_id=session, text=f"旧事{index}", quote=f"原话{index}", evidence_chat_id=index, **extra
+        id=index,
+        live_session_id=session,
+        text=f"旧事{index}",
+        quote=f"原话{index}",
+        evidence_chat_id=index,
+        highlight=highlight,
+        **extra,
     )
-    return SnapshotLine(line=line, lasting=lasting, seen_at_ms=seen, pinned=pinned)
+    return SnapshotLine(line=line, lasting=lasting, seen_at_ms=seen, pinned=pinned, highlight=highlight)
 
 
 def _new(
-    count: int, *, lasting: bool = False, start: int = 500, game: Optional[str] = None, prefix: str = "新事"
+    count: int,
+    *,
+    lasting: bool = False,
+    highlight: bool = False,
+    start: int = 500,
+    game: Optional[str] = None,
+    save_id: str = "",
+    prefix: str = "新事",
 ) -> List[PendingArchiveLine]:
     return [
         PendingArchiveLine(
-            text=f"{prefix}{index}", quote=f"新{index}", evidence_chat_id=index, lasting=lasting, game=game
+            text=f"{prefix}{index}",
+            quote=f"新{index}",
+            evidence_chat_id=index,
+            lasting=lasting,
+            highlight=highlight,
+            game=game,
+            save_id=save_id,
         )
         for index in range(start, start + count)
     ]
@@ -397,11 +427,11 @@ def test_duplicate_drop_pointing_at_a_locked_row_does_not_make_it_stable() -> No
 
 
 def test_render_base_marks_previous_and_earlier_rows_with_save_and_stable_flag() -> None:
-    """快照所属那一场的行写"上一场"，更早的写"之前"；挂游戏的写上存档，稳定的事标出来。"""
+    """快照所属那一场的行写"上一场"，更早的写"之前"；挂游戏的写上存档，稳定与名场面都标出来。"""
     snapshot = ArchiveSnapshot(
         owner_session_id=2,
         lines=[
-            _old(1, session=2, game="minecraft", save_id="abcdef1234", save_name="新的世界"),
+            _old(1, session=2, game="minecraft", save_id="abcdef1234", save_name="新的世界", highlight=True),
             _old(2, session=1, lasting=True, game="minecraft", save_id="abcdef1234"),
             _old(3, session=1),
             _old(4, session=1, game="minecraft", save_id="9988776655"),
@@ -409,9 +439,179 @@ def test_render_base_marks_previous_and_earlier_rows_with_save_and_stable_flag()
     )
 
     assert render_base(snapshot).splitlines() == [
-        "旧1 [上一场] 旧事1（原话「原话1」；在 minecraft「新的世界」）",
+        "旧1 [上一场] 旧事1（原话「原话1」；在 minecraft「新的世界」；名场面）",
         "旧2 [之前] 旧事2（原话「原话2」；在 minecraft「新的世界」；稳定）",
         "旧3 [之前] 旧事3（原话「原话3」）",
         "旧4 [之前] 旧事4（原话「原话4」；在 minecraft「99887766」）",
     ]
     assert render_base(None) == ""
+    assert (MAX_SNAPSHOT_LINES, MAX_BASE_LINES, MAX_HIGHLIGHT_QUOTA, MAX_SESSION_HIGHLIGHTS) == (48, 56, 6, 2)
+
+
+def test_keep_and_same_as_respect_human_locked_and_unverified_highlight_guards() -> None:
+    """未锁定的旧行可用 keep 补标或取消 highlight；human_locked 的旧行无论是 keep 还是 same_as 都不能篡改其
+    highlight；未经游戏记录核实的完成说法旧行不能被补标成名场面。"""
+    unverified_line = SnapshotLine(
+        line=ArchiveLine(
+            id=5,
+            live_session_id=1,
+            text=mark_unverified("Minecraft：修通海底隧道"),
+            quote="海底隧道修好啦",
+            evidence_chat_id=5,
+            game="minecraft",
+        ),
+        seen_at_ms=1_000,
+    )
+    base = [
+        _old(1, highlight=True, human_locked=True),
+        _old(2, highlight=False, human_locked=True),
+        _old(3, highlight=False),
+        _old(4, highlight=True),
+        unverified_line,
+        _old(6, highlight=True),
+        _old(7, highlight=False),
+    ]
+
+    plan = _plan(
+        [
+            {"old": 1, "op": "keep", "highlight": False},
+            {"old": 3, "op": "keep", "highlight": True},
+            {"old": 4, "op": "keep", "highlight": False},
+            {"old": 5, "op": "keep", "highlight": True},
+            {"old": 6, "op": "drop", "same_as": 2},
+            {"old": 7, "op": "keep"},
+        ],
+        base,
+    )
+
+    by_id = {item.line.id: item.highlight for item in plan.kept}
+    assert by_id == {
+        1: True,  # 锁定为名场面：模型取消无效
+        2: False,  # 锁定为非名场面：借 same_as 继承也无效
+        3: True,  # 未锁定旧行补标名场面生效
+        4: False,  # 未锁定旧行取消名场面生效
+        5: False,  # 未核实的完成说法强制不标名场面
+        7: False,
+    }
+
+
+def test_single_session_caps_new_highlights_at_two_and_rejects_unverified_claims() -> None:
+    """单场新事最多保留前 2 条 highlight=True，超出自动降为普通行；未核实完成说法强制降为 highlight=False
+    且不白占这 2 个名场面名额。"""
+    candidates = [
+        PendingArchiveLine(
+            text=mark_unverified("Minecraft：末地城拿齐鞘翅"),
+            quote="鞘翅拿到啦",
+            evidence_chat_id=501,
+            game="minecraft",
+            highlight=True,
+        ),
+        *_new(3, highlight=True, start=502, game="minecraft", prefix="名场面"),
+    ]
+
+    selection = select_snapshot(candidates, [], session_started_at_ms=_NOW)
+
+    assert [(line.text, line.highlight, line.in_snapshot) for line in selection.lines] == [
+        ("Minecraft：她说末地城拿齐鞘翅（游戏记录里没核实到）", False, True),
+        ("名场面502", True, True),
+        ("名场面503", True, True),
+        ("名场面504", False, True),
+    ]
+
+
+def test_highlights_survive_four_subsequent_sessions_with_independent_quota() -> None:
+    """名场面拥有按存档独立的 6 条保留名额：跨过 4 场（含薄场与满额普通事件场）仍留在快照里，
+    既不被普通事件挤掉，也不挤占【这个世界里】12 行稳定名额和【最近几场】6+6 普通事件名额；
+    同一存档超过 6 条名场面时按 pinned 与 seen_at_ms 取舍。"""
+    # 第 1 场：立下 1 条名场面 + 12 条稳定事实 + 1 条普通事件
+    stable = [_old(idx, session=1, lasting=True, seen=1_000, game="minecraft", save_id="s1") for idx in range(1, 13)]
+    first_sel = select_snapshot(
+        [
+            PendingArchiveLine(
+                text="Minecraft：跨海铁路通车翻车",
+                quote="第一趟车翻沟里全服爆笑",
+                evidence_chat_id=100,
+                game="minecraft",
+                save_id="s1",
+                highlight=True,
+            ),
+            PendingArchiveLine(
+                text="Minecraft：挖了一组煤矿",
+                quote="挖了一组煤",
+                evidence_chat_id=101,
+                game="minecraft",
+                save_id="s1",
+            ),
+        ],
+        stable,
+        session_started_at_ms=2_000,
+    )
+
+    def _to_kept(sel, session_no: int, started_ms: int) -> List[SnapshotLine]:
+        by_old = {item.line.id: item.line for item in current_kept}
+        rows: List[SnapshotLine] = []
+        for idx, pending in enumerate(sel.lines):
+            if not pending.in_snapshot:
+                continue
+            line_id = session_no * 1000 + idx
+            rows.append(
+                SnapshotLine(
+                    line=ArchiveLine(
+                        id=line_id,
+                        live_session_id=session_no,
+                        text=pending.text,
+                        quote=pending.quote,
+                        evidence_chat_id=pending.evidence_chat_id,
+                        game=pending.game,
+                        save_id=pending.save_id,
+                        highlight=pending.highlight,
+                    ),
+                    lasting=pending.lasting,
+                    seen_at_ms=started_ms,
+                    highlight=pending.highlight,
+                )
+            )
+        for ref in sel.kept:
+            rows.append(
+                SnapshotLine(
+                    line=by_old[ref.archive_line_id],
+                    lasting=ref.lasting,
+                    seen_at_ms=ref.seen_at_ms,
+                    pinned=ref.pinned,
+                    highlight=ref.highlight,
+                )
+            )
+        return rows
+
+    current_kept = list(stable)
+    current_kept = _to_kept(first_sel, 1, 2_000)
+
+    # 连续经过第 2～5 场（2 场薄场 + 2 场各写满 6 条普通事件）：第 1 场的普通挖煤早被挤出，名场面与 12 条稳定全在
+    schedules = [
+        (2, 3_000, []),
+        (3, 4_000, _new(6, start=300, game="minecraft", save_id="s1", prefix="三场琐事")),
+        (4, 5_000, []),
+        (5, 6_000, _new(6, start=500, game="minecraft", save_id="s1", prefix="五场琐事")),
+    ]
+    for sess_no, started_ms, session_new in schedules:
+        sel = select_snapshot(session_new, current_kept, session_started_at_ms=started_ms)
+        current_kept = _to_kept(sel, sess_no, started_ms)
+
+    titles = {item.line.text for item in current_kept}
+    assert "Minecraft：跨海铁路通车翻车" in titles
+    assert "Minecraft：挖了一组煤矿" not in titles
+    assert sum(1 for item in current_kept if item.lasting) == 12
+    assert sum(1 for item in current_kept if not item.lasting and not item.highlight) == 12  # 本场 6 + 往前 6
+
+    # 同一存档攒到 7 条名场面（其中最老的一条若标了 pinned 则不挤，改挤次老的未置顶名场面）
+    hl_pool = [
+        _old(200 + idx, seen=1_000 + idx * 100, pinned=(idx == 0), highlight=True, game="minecraft", save_id="s1")
+        for idx in range(7)
+    ]
+    hl_sel = select_snapshot([], hl_pool, session_started_at_ms=9_000)
+    kept_hl_ids = [ref.archive_line_id for ref in hl_sel.kept]
+    # 200 因 pinned 留在第 0 档，其余 6 条未置顶名场面（201..206）占满 6 条名额；若再加第 8 条未置顶则挤掉 201
+    assert kept_hl_ids == [200, 201, 202, 203, 204, 205, 206]
+    hl_pool_8 = [*hl_pool, _old(207, seen=2_000, highlight=True, game="minecraft", save_id="s1")]
+    hl_sel_8 = select_snapshot([], hl_pool_8, session_started_at_ms=9_000)
+    assert [ref.archive_line_id for ref in hl_sel_8.kept] == [200, 202, 203, 204, 205, 206, 207]

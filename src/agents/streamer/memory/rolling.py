@@ -45,10 +45,12 @@ from src.modules.storage.models.memory import (
 )
 
 from .saves import canonical_save_names
+from .settle_proof import UNVERIFIED_MARK
 from .zones import (
     MAX_RECENT_EARLIER_LINES,
     MAX_RECENT_PREVIOUS_LINES,
     MAX_ROOM_LINES,
+    MAX_SNAPSHOT_HIGHLIGHTS,
     MAX_WORLD_LINES,
     MAX_WORLD_NAMES,
     is_naming_title,
@@ -57,8 +59,10 @@ from .zones import (
 
 __all__ = [
     "MAX_BASE_LINES",
+    "MAX_HIGHLIGHT_QUOTA",
     "MAX_LASTING_LINES",
     "MAX_ROOM_LASTING_QUOTA",
+    "MAX_SESSION_HIGHLIGHTS",
     "MAX_SNAPSHOT_LINES",
     "RollingPlan",
     "SnapshotSelection",
@@ -69,14 +73,18 @@ __all__ = [
 
 logger = get_logger("RollingArchive")
 
-# 单存档或跨存档快照的总安全上限（各分区独立计额后再以此兜底，防止存档极多时快照无限膨胀）
-MAX_SNAPSHOT_LINES = 40
+# 单存档或跨存档快照的总安全上限（各分区独立计额后再以此兜底，容纳多存档与独立名场面层）
+MAX_SNAPSHOT_LINES = 48
 # 单个游戏世界里稳定事实的展示行名额（名字表占 0～2 行，其余稳定占剩余名额，合计 ≤ 12）
 MAX_LASTING_LINES = MAX_WORLD_LINES
+# 每个游戏存档（及不挂游戏的直播间）各自独立保留的代表性名场面名额，不占稳定与普通事件名额
+MAX_HIGHLIGHT_QUOTA = MAX_SNAPSHOT_HIGHLIGHTS
+# 单场新事里最多允许保留几条代表性名场面（超出部分按顺序自动降为普通事件，防模型整场滥标）
+MAX_SESSION_HIGHLIGHTS = 2
 # 不挂游戏的直播间稳定事实名额（与直播间普通事件 MAX_ROOM_LINES 分开计，互不挤占）
 MAX_ROOM_LASTING_QUOTA = 6
 # 交给模型的旧行至多几行（大于等于 MAX_SNAPSHOT_LINES，整份快照都能给模型核对；超出的尾部原样保留）
-MAX_BASE_LINES = 48
+MAX_BASE_LINES = 56
 # 旧行编号前缀：与台词编号（#N）、承诺编号（约#N）分开，模型不会把它们混成一类
 _OLD_PREFIX = "旧"
 # 证据台词进整理报告时的截断长度
@@ -125,6 +133,8 @@ def render_base(snapshot: Optional[ArchiveSnapshot]) -> str:
             notes.append(f"在 {line.game}「{save}」" if save else f"在 {line.game}")
         if item.lasting:
             notes.append("稳定")
+        if item.highlight:
+            notes.append("名场面")
         rows.append(f"{_OLD_PREFIX}{index} [{when}] {line.text}（{'；'.join(notes)}）")
     return "\n".join(rows)
 
@@ -210,8 +220,13 @@ def plan_from_ops(
             changes.append(SnapshotChange(action="refused", what=title, reason=_REFUSED_HUMAN_LOCKED))
             continue
         if op == "keep":
-            # 保留：本场哪一行又提到它就算再提起；重标是否稳定的事（人改过的行按人标的算）
+            # 保留：本场哪一行又提到它就算再提起；重标稳定或名场面（人改过的行按人标的算，未核实完成说法不标名场面）
             lasting = raw.get("lasting")
+            highlight = raw.get("highlight")
+            can_highlight = not item.line.text.endswith(UNVERIFIED_MARK)
+            next_highlight = (
+                (highlight and can_highlight) if isinstance(highlight, bool) and not locked else item.highlight
+            )
             updated[index] = SnapshotLine(
                 line=item.line,
                 lasting=lasting if isinstance(lasting, bool) and not locked else item.lasting,
@@ -219,6 +234,7 @@ def plan_from_ops(
                 if evidence is not None
                 else item.seen_at_ms,
                 pinned=item.pinned,
+                highlight=next_highlight,
             )
         elif op == "drop" and raw.get("same_as") is not None:
             # 与另一行重复：事实由那一行留着，不需要本场证据
@@ -251,9 +267,19 @@ def plan_from_ops(
                 removed.add(index)
                 settled.add(index)
                 replacement = written[0]
-                # 被换掉的是稳定的事（名字、住处换了说法仍是稳定的事），新行也算稳定；模型明确写了不稳定的照它
-                if item.lasting and raw.get("lasting") is not False and not replacement.lasting:
+                unverified_rep = replacement.text.endswith(UNVERIFIED_MARK)
+                if unverified_rep and replacement.highlight:
+                    replacement = replacement.model_copy(update={"highlight": False})
+                # 被换掉的是稳定或名场面时（未核实完成说法除外），模型没明确改为 false 的新行沿用原标记
+                if item.lasting and raw.get("lasting") is not False and not replacement.lasting and not unverified_rep:
                     replacement = replacement.model_copy(update={"lasting": True})
+                if (
+                    item.highlight
+                    and raw.get("highlight") is not False
+                    and not replacement.highlight
+                    and not unverified_rep
+                ):
+                    replacement = replacement.model_copy(update={"highlight": True})
                 replacements.append(replacement)
                 changes.append(
                     SnapshotChange(
@@ -276,11 +302,19 @@ def plan_from_ops(
             # 重复的那一行本场被替换或带证据去掉了：这件事已由替换出的新行接着，或已由同一份证据了结
             reason = f"{reason}（{_OLD_PREFIX}{other + 1}本场已被替换或去掉）"
         else:
-            # 重复的两行里有一行标了稳定，留下的那一行也算稳定；留下的那一行是人改过的，
-            # 是不是稳定的事按人标的算，模型借"按重复去掉"也改不了它
+            # 重复的两行里有一行标了稳定或名场面，留下的那一行继承该标记；但留下的那一行若已被人锁定，
+            # 稳定与名场面标记一律维持人工状态，模型借"按重复去掉"也篡改不了它
             survivor = updated.get(other, shown[other])
-            if updated.get(index, shown[index]).lasting and not survivor.lasting and not survivor.line.human_locked:
-                updated[other] = survivor.model_copy(update={"lasting": True})
+            dropped_item = updated.get(index, shown[index])
+            if not survivor.line.human_locked:
+                inherit_lasting = survivor.lasting or dropped_item.lasting
+                inherit_highlight = survivor.highlight or (
+                    dropped_item.highlight and not survivor.line.text.endswith(UNVERIFIED_MARK)
+                )
+                if inherit_lasting != survivor.lasting or inherit_highlight != survivor.highlight:
+                    updated[other] = survivor.model_copy(
+                        update={"lasting": inherit_lasting, "highlight": inherit_highlight}
+                    )
         changes.append(SnapshotChange(action="drop", what=shown[index].line.text, reason=reason))
     kept = [*(updated.get(index, item) for index, item in enumerate(shown) if index not in removed), *unshown_tail]
     return RollingPlan(kept=kept, replacements=replacements, changes=changes, misses=misses)
@@ -297,7 +331,7 @@ class SnapshotSelection:
 
 @dataclass(frozen=True)
 class _Entry:
-    """参与取舍的一行：本场新写的（new）或接住的（kept），连同所属游戏存档与是否名字类。"""
+    """参与取舍的一行：本场新写的（new）或接住的（kept），连同所属游戏存档、是否名字类与是否名场面。"""
 
     new: bool
     index: int
@@ -308,6 +342,7 @@ class _Entry:
     save_id: str = ""
     is_name: bool = False
     pinned: bool = False
+    highlight: bool = False
 
 
 def select_snapshot(
@@ -316,17 +351,34 @@ def select_snapshot(
     *,
     session_started_at_ms: int,
 ) -> SnapshotSelection:
-    """按分区各自的名额凑本场快照，让稳定取名、最近事件与直播间记忆互不抢位置：
+    """按分区各自的名额凑本场快照，让稳定取名、代表性名场面、最近事件与直播间记忆互不抢位置：
 
     0. 运营者放回或新增的行（pinned）：排最前、一行不挤，且不占下面各区的名额；
-    1. 游戏世界稳定的事（按 ``(game, save_id)`` 各自计额）：名字类至多 12 条（渲染成 1～2 行名字表），
+    1. 代表性名场面（highlight）：单场新事强制至多保留前 2 条（且未核实的完成说法一律降为普通行）；
+       每个游戏存档 ``(game, save_id)`` 及不挂游戏的直播间各自独立保留至多 6 条（按 ``seen_at_ms`` 取舍），
+       不被两场普通事件挤出快照，也不挤占【这个世界里】的 12 行稳定名额与【最近几场】的普通事件名额；
+    2. 游戏世界稳定的事（按 ``(game, save_id)`` 各自计额）：名字类至多 12 条（渲染成 1～2 行名字表），
        其余稳定（住处、关系、规矩）至多 ``12 - 名字表行数`` 条，本场新写在前、其余按最近被提起；
-    2. 游戏世界普通事件：本场新写的至多 6 行（按模型给出的先后），前几场接住的至多 6 行（按最近被提起）；
-    3. 直播间里的事（不挂游戏的行）：稳定的事至多 6 行，普通事件至多 6 行（本场新写在前、其余按最近被提起）。
+    3. 游戏世界普通事件：本场新写的至多 6 行（按模型给出的先后），前几场接住的至多 6 行（按最近被提起）；
+    4. 直播间里的事（不挂游戏的行）：稳定的事至多 6 行，普通事件至多 6 行（本场新写在前、其余按最近被提起）。
 
-    多存档累计超过总安全上限 ``MAX_SNAPSHOT_LINES`` 时，再按"稳定优先 → 本场新事 → 最近被提起"兜底裁剪。
+    多存档累计超过总安全上限 ``MAX_SNAPSHOT_LINES`` 时，再按"稳定优先 → 名场面 → 本场新事 → 最近被提起"兜底裁剪。
     被挤出的本场新事照样写成本场档案行（回想工具查得到），只是不进快照。
     """
+    # 硬护栏：单场新事最多保留前 2 条 highlight=True，未经游戏记录核实的完成说法一律强制 highlight=False
+    new_highlight_count = 0
+    normalized_new: List[PendingArchiveLine] = []
+    for line in new_lines:
+        want_hl = bool(line.highlight) and not line.text.endswith(UNVERIFIED_MARK)
+        if want_hl and new_highlight_count < MAX_SESSION_HIGHLIGHTS:
+            new_highlight_count += 1
+            effective_hl = True
+        else:
+            effective_hl = False
+        if effective_hl != bool(line.highlight):
+            line = line.model_copy(update={"highlight": effective_hl})
+        normalized_new.append(line)
+
     entries = [
         _Entry(
             new=True,
@@ -337,19 +389,21 @@ def select_snapshot(
             game=line.game,
             save_id=line.save_id or "",
             is_name=bool(line.game and line.lasting and is_naming_title(line.text)),
+            highlight=bool(line.highlight),
         )
-        for index, line in enumerate(new_lines)
+        for index, line in enumerate(normalized_new)
     ] + [
         _Entry(
             new=False,
             index=index,
             lasting=item.lasting,
             seen_at_ms=item.seen_at_ms,
-            order=len(new_lines) + index,
+            order=len(normalized_new) + index,
             game=item.line.game,
             save_id=item.line.save_id or "",
             is_name=bool(item.line.game and item.lasting and is_naming_title(item.line.text)),
             pinned=item.pinned,
+            highlight=bool(item.highlight) and not item.line.text.endswith(UNVERIFIED_MARK),
         )
         for index, item in enumerate(kept)
     ]
@@ -358,47 +412,83 @@ def select_snapshot(
     unpinned = [entry for entry in by_recency if not entry.pinned]
 
     bucketed: List[_Entry] = []
-    # 1. 游戏世界稳定的事：按 (game, save_id) 分世界，名字类与其余稳定各自计额，取名再多也不挤掉住处和事件
-    world_keys = list(dict.fromkeys((e.game, e.save_id) for e in unpinned if e.game and e.lasting))
+    # 1. 代表性名场面独立名额：每个游戏存档（及不挂游戏）各自保留至多 6 条，不挤占稳定或普通事件名额
+    highlight_worlds = list(dict.fromkeys((e.game, e.save_id) for e in unpinned if e.game and e.highlight))
+    selected_highlights: List[_Entry] = []
+    for h_game, h_save in highlight_worlds:
+        scope_hl = sorted(
+            (e for e in unpinned if e.game == h_game and e.save_id == h_save and e.highlight),
+            key=lambda e: (-e.seen_at_ms, not e.new, e.order),
+        )[:MAX_HIGHLIGHT_QUOTA]
+        selected_highlights.extend(scope_hl)
+    room_highlights = sorted(
+        (e for e in unpinned if not e.game and e.highlight),
+        key=lambda e: (-e.seen_at_ms, not e.new, e.order),
+    )[:MAX_HIGHLIGHT_QUOTA]
+    selected_highlights.extend(room_highlights)
+    bucketed.extend(selected_highlights)
+    highlight_keys = {(e.new, e.index) for e in selected_highlights}
+
+    # 2. 游戏世界稳定的事：按 (game, save_id) 分世界，名字类与其余稳定各自计额，取名再多也不挤掉住处和事件
+    world_keys = list(
+        dict.fromkeys(
+            (e.game, e.save_id) for e in unpinned if e.game and e.lasting and (e.new, e.index) not in highlight_keys
+        )
+    )
     for w_game, w_save in world_keys:
-        world_lasting = [e for e in unpinned if e.game == w_game and e.save_id == w_save and e.lasting]
+        world_lasting = [
+            e
+            for e in unpinned
+            if e.game == w_game and e.save_id == w_save and e.lasting and (e.new, e.index) not in highlight_keys
+        ]
         names = [e for e in world_lasting if e.is_name][:MAX_WORLD_NAMES]
         other_cap = max(0, MAX_LASTING_LINES - name_table_row_count(len(names)))
         others = [e for e in world_lasting if not e.is_name][:other_cap]
         bucketed.extend(names)
         bucketed.extend(others)
 
-    # 2. 游戏世界普通事件：本场新事至多 6 行（保模型先后），前几场接住的至多 6 行（按最近被提起）
+    # 3. 游戏世界普通事件：本场新事至多 6 行（保模型先后），前几场接住的至多 6 行（按最近被提起）
     game_new_events = sorted(
-        (e for e in unpinned if e.game and not e.lasting and e.new),
+        (e for e in unpinned if e.game and not e.lasting and not e.highlight and e.new),
         key=lambda e: e.order,
     )[:MAX_RECENT_PREVIOUS_LINES]
-    game_kept_events = [e for e in unpinned if e.game and not e.lasting and not e.new][:MAX_RECENT_EARLIER_LINES]
+    game_kept_events = [e for e in unpinned if e.game and not e.lasting and not e.highlight and not e.new][
+        :MAX_RECENT_EARLIER_LINES
+    ]
     bucketed.extend(game_new_events)
     bucketed.extend(game_kept_events)
 
-    # 3. 直播间里的事（不挂游戏）：稳定与普通事件分开计额，换任何游戏存档都不丢
-    room_lasting = [e for e in unpinned if not e.game and e.lasting][:MAX_ROOM_LASTING_QUOTA]
-    room_events = [e for e in unpinned if not e.game and not e.lasting][:MAX_ROOM_LINES]
+    # 4. 直播间里的事（不挂游戏）：稳定与普通事件分开计额，换任何游戏存档都不丢
+    room_lasting = [e for e in unpinned if not e.game and e.lasting and (e.new, e.index) not in highlight_keys][
+        :MAX_ROOM_LASTING_QUOTA
+    ]
+    room_events = [e for e in unpinned if not e.game and not e.lasting and not e.highlight][:MAX_ROOM_LINES]
     bucketed.extend(room_lasting)
     bucketed.extend(room_events)
 
-    # 多存档总行数超过安全上限时，稳定优先、本场新事其次、再按最近被提起兜底裁剪
-    safety_ranked = sorted(bucketed, key=lambda e: (not e.lasting, not e.new, -e.seen_at_ms, e.order))
+    # 多存档总行数超过安全上限时，稳定优先、名场面次之、本场新事再次、最后按最近被提起兜底裁剪
+    safety_ranked = sorted(
+        bucketed,
+        key=lambda e: (not (e.lasting or e.highlight), not e.lasting, not e.new, -e.seen_at_ms, e.order),
+    )
     chosen = pinned + safety_ranked[: max(0, MAX_SNAPSHOT_LINES - len(pinned))]
     chosen_new = {entry.index for entry in chosen if entry.new}
     chosen_kept = {entry.index for entry in chosen if not entry.new}
-    lines = [line.model_copy(update={"in_snapshot": index in chosen_new}) for index, line in enumerate(new_lines)]
+    lines = [line.model_copy(update={"in_snapshot": index in chosen_new}) for index, line in enumerate(normalized_new)]
     kept_refs = [
         KeptSnapshotLine(
-            archive_line_id=int(item.line.id), lasting=item.lasting, seen_at_ms=item.seen_at_ms, pinned=item.pinned
+            archive_line_id=int(item.line.id),
+            lasting=item.lasting,
+            seen_at_ms=item.seen_at_ms,
+            pinned=item.pinned,
+            highlight=bool(item.highlight) and not item.line.text.endswith(UNVERIFIED_MARK),
         )
         for index, item in enumerate(kept)
         if index in chosen_kept
     ]
     evicted = [
         SnapshotChange(action="evicted", what=line.text, reason=_EVICTED_NEW)
-        for index, line in enumerate(new_lines)
+        for index, line in enumerate(normalized_new)
         if index not in chosen_new
     ] + [
         SnapshotChange(action="evicted", what=item.line.text, reason=_EVICTED_OLD)

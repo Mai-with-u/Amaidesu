@@ -280,3 +280,85 @@ async def test_done_claims_need_a_game_record_in_archive_and_closures(
     report = SettleReport.model_validate_json(session.settle_report)
     unproven: List[str] = [item.what for item in report.unregistered if "游戏记录里没核实到" in item.reason]
     assert unproven == [f"了结 #{ids['flower']}"] and report.unverified_claims == 2
+
+
+async def test_unverified_claim_cannot_be_highlight_and_session_caps_highlights_at_two(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """下播整理硬护栏：未核实到的完成说法即使模型填了 highlight:true 也强制降为 False；
+    单场通过核实的 highlight:true 最多保留前 2 条，第 3 条起自动降为 False。"""
+    ids = await _scene(store)
+    await store.chat.insert_live_chat(
+        live_session_id=ids["session"],
+        timestamp_ms=12 * _MINUTE,
+        sender_role="assistant",
+        content="刚才过桥直接一脚踩空摔进岩浆，全直播间都在笑我",
+        message_type="speech",
+    )
+    await store.chat.insert_live_chat(
+        live_session_id=ids["session"],
+        timestamp_ms=13 * _MINUTE,
+        sender_role="assistant",
+        content="今天和大家一起把开场暗号对上了，特别默契",
+        message_type="speech",
+    )
+    archive = [
+        # 未核实的完成说法（种花停在 undelivered）：模型硬标 highlight:true 也必须降为 False，且不占 2 条名额
+        {**_archive(2, "Minecraft：门口种了一排花", "花都种好了", "记录#2"), "highlight": True},
+        # 第 1 条合法名场面（有交付委派记录#1 支撑）
+        {**_archive(1, "Minecraft：营地正门装好", "门装好啦", "记录#1"), "highlight": True},
+        # 第 2 条合法名场面（非完成说法的翻车经历）
+        {
+            "line": 6,
+            "title": "Minecraft：过桥踩空摔进岩浆",
+            "quote": "过桥直接一脚踩空摔进岩浆",
+            "game": "Minecraft",
+            "highlight": True,
+            "evidence": None,
+        },
+        # 第 3 条模型标了 highlight:true：超出单场 2 条上限，自动降为普通档案行
+        {
+            "line": 7,
+            "title": "和观众对上开场暗号",
+            "quote": "和大家一起把开场暗号对上了",
+            "game": None,
+            "highlight": True,
+            "evidence": None,
+        },
+    ]
+    llm = FakeLLMManager(
+        responses=[
+            Response(success=True, content=json.dumps({"archive": archive}, ensure_ascii=False)),
+            Response(success=True, content='{"commitments": []}'),
+            Response(success=True, content='{"closed": []}'),
+        ]
+    )
+    settler = SessionSettler(
+        sessions_repo=store.sessions,
+        chat_repo=store.chat,
+        commitments_repo=store.commitments,
+        event_repo=store.events,
+        archive_repo=store.archive,
+        llm_service=llm,
+        prompt_manager=prompt_manager,
+        game_names_provider=lambda: ["Minecraft"],
+        clock=lambda: 8_888,
+    )
+
+    assert await settler.settle_session(ids["session"]) is True
+
+    lines = await store.archive.list_lines(live_session_id=ids["session"])
+    assert [(line.text, line.highlight) for line in lines] == [
+        ("Minecraft：她说门口种了一排花（游戏记录里没核实到）", False),
+        ("Minecraft：营地正门装好", True),
+        ("Minecraft：过桥踩空摔进岩浆", True),
+        ("和观众对上开场暗号", False),
+    ]
+    snapshot = await store.archive.get_snapshot(live_session_id=ids["session"])
+    assert snapshot is not None
+    assert [(item.line.text, item.highlight) for item in snapshot.lines] == [
+        ("Minecraft：她说门口种了一排花（游戏记录里没核实到）", False),
+        ("Minecraft：营地正门装好", True),
+        ("Minecraft：过桥踩空摔进岩浆", True),
+        ("和观众对上开场暗号", False),
+    ]

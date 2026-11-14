@@ -23,6 +23,7 @@ __all__ = [
     "MAX_RECENT_EARLIER_LINES",
     "MAX_RECENT_PREVIOUS_LINES",
     "MAX_ROOM_LINES",
+    "MAX_SNAPSHOT_HIGHLIGHTS",
     "MAX_WORLD_LINES",
     "MAX_WORLD_NAMES",
     "WORLD_NAMES_PER_ROW",
@@ -38,12 +39,13 @@ __all__ = [
     "select_world_zone_items",
 ]
 
-# 四个分区各自的名额：取名与稳定事实不挤占最近事件，游戏事件不挤占直播间里的事
+# 各分区各自的名额：取名与稳定事实不挤占最近事件，代表性名场面独立保留，游戏事件不挤占直播间里的事
 MAX_WORLD_LINES = 12  # 【这个世界里】总展示行数名额（1～2 行名字表 + 其余稳定行 ≤ 12）
 MAX_WORLD_NAMES = 12  # 【这个世界里】名字类最多收几条（压进 1～2 行名字表）
 WORLD_NAMES_PER_ROW = 6  # 名字表每行最多并列几个名字项
 MAX_RECENT_PREVIOUS_LINES = 6  # 【最近几场】上一场事件至多几行
 MAX_RECENT_EARLIER_LINES = 6  # 【最近几场】再往前两场事件合计至多几行（按最近被提起）
+MAX_SNAPSHOT_HIGHLIGHTS = 6  # 跨场滚动快照里每个游戏存档（及不挂游戏的直播间）独立保留名场面至多几行
 MAX_ROOM_LINES = 6  # 【直播间里的事】不挂游戏的行至多几行（换存档照样带着）
 MAX_BRIEF_COMMITMENTS = 5  # 【还惦记的事】最近三场内提起过的未了结承诺至多几条
 

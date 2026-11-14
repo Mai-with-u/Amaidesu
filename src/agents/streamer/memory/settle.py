@@ -95,7 +95,7 @@ from src.modules.storage.repos.viewers import ViewerRepo
 from src.modules.types.game_save import GameSave
 from src.modules.types.session_kind import SESSION_KIND_LIVE
 from src.agents.streamer.memory.render import memory_ref_numbers, render_commitment_number
-from src.agents.streamer.memory.rolling import plan_from_ops, render_base, select_snapshot
+from src.agents.streamer.memory.rolling import MAX_SESSION_HIGHLIGHTS, plan_from_ops, render_base, select_snapshot
 from src.agents.streamer.memory.saves import SaveTimeline
 from src.agents.streamer.memory.side_effects import compute_side_effects
 from src.agents.streamer.memory.settle_candidates import (
@@ -1998,6 +1998,7 @@ class SessionSettler:
         """
         written: List[PendingArchiveLine] = []
         missed: List[UnregisteredItem] = []
+        highlight_count = 0
         for raw in rows:
             if not isinstance(raw, dict):
                 continue
@@ -2047,11 +2048,17 @@ class SessionSettler:
                 continue
             game_name = _game_of(raw.get("game"), material)
             # 游戏里做成了什么：要有一条不晚于她这句的游戏记录撑着，嘴上说做好了不算。没核实到的照写，
-            # 写成"她说……（游戏记录里没核实到）"、不当稳定的事：顺手做成却没留下记录的事不被略掉，
-            # 下一场她也知道这只是自己说过的话
+            # 写成"她说……（游戏记录里没核实到）"、不当稳定的事，也强制禁止标为名场面（防吹牛当名场面沉淀）；
+            # 单场新事至多保留前 2 条名场面，超出部分自动降为普通进展
             unverified = game_name is not None and not self._proven(
                 raw, f"{title} {verified}", material, game_name, line
             )
+            is_unverified = unverified or title.endswith(UNVERIFIED_MARK)
+            if raw.get("highlight") is True and not is_unverified and highlight_count < MAX_SESSION_HIGHLIGHTS:
+                is_highlight = True
+                highlight_count += 1
+            else:
+                is_highlight = False
             save = material.saves.save_at(game_name, int(line.timestamp_ms))
             place = ""
             if game_name is not None:
@@ -2071,7 +2078,8 @@ class SessionSettler:
                     game=game_name,
                     save_id=save.id,
                     save_name=save.name,
-                    lasting=raw.get("lasting") is True and not unverified,
+                    lasting=raw.get("lasting") is True and not is_unverified,
+                    highlight=is_highlight,
                     keywords=verified_keywords(raw.get("keywords"), title, verified),
                     place=place,
                 )
