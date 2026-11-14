@@ -12,7 +12,9 @@
 - 游戏社交事实（``game_social_facts`` 的现行行；接了社交事实仓储才查）
 
 匹配口径：台词、档案、承诺、游戏进展四类走混合检索（``search``：关键词按两字切分 + BM25，配置了嵌入
-服务再加语义一路，按名次融合），按相关度取最相关的 8 条，不要求每个词都出现；本场观众弹幕
+服务再加语义一路，按名次融合），按相关度取最相关的 8 条，不要求每个词都出现；同一句台词既进了
+台词索引、又作为档案行或公开承诺的原话证据被同时检索到时，在更靠前的名次上保留带标题、完成状态或
+存档注记的档案行/承诺，跳过重复的裸台词，不让同一句话占掉两个名额；本场观众弹幕
 不进任何持久索引，照旧在本场里按"每个词都包含"查，补剩下的位置。选好的结果默认最相关的在前，
 她也可以要求按时间排；语义一路这一次没用上（没配嵌入服务、没算好、算失败）时抬头注明只按字面查，
 让她知道换个说法也许查得到。每条带位置（本场写"本场 HH:MM"，跨场写"上一场"或"之前"）与说话人（"你""观众"）。索引由后台
@@ -33,7 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from src.modules.logging import get_logger
 from src.modules.storage.privacy import MIN_MASK_NAME_LEN, mask_names_in_text
@@ -55,6 +57,8 @@ __all__ = [
     "ORDER_NEWEST",
     "ORDER_OLDEST",
     "ORDER_RELEVANT",
+    "RecallEntry",
+    "RecallOutcome",
     "SCOPE_ALL",
     "SCOPE_THIS_STREAM",
     "MemoryRecallService",
@@ -71,8 +75,8 @@ MEMORY_TOOL_CATEGORY = "memory"
 
 # 一次回想最多给几条
 MAX_RESULTS = 8
-# 混合检索多取一些候选：对某位观众的承诺等会在还原时被筛掉，剩下的才取前 8 条
-_SEARCH_POOL = 24
+# 混合检索多取一些候选：对某位观众的承诺会被筛掉，台词与引用它的档案行/承诺也会同源合并，留足余量才够选满 8 条
+_SEARCH_POOL = 32
 # 回想工具是她主动调的，查询向量没算好时可以等一小会儿（被动想起不等）
 RECALL_VECTOR_WAIT_MS = 1_500
 # 走混合检索的来源：游戏进展要有事件仓储才还原得出来，没接时不查
@@ -138,11 +142,22 @@ MEMORY_RECALL_SPEC = ToolSpec(
 
 
 @dataclass(frozen=True)
-class _RecallHit:
-    """一条回想结果：排序用的时刻 + 已渲染好的一行正文。"""
+class RecallEntry:
+    """回想工具最终选出的一条结果：来源类别、来源行主键、排序用的时刻与渲染好的一行正文。"""
 
+    source: str
+    source_id: int
     timestamp_ms: int
     text: str
+
+
+@dataclass(frozen=True)
+class RecallOutcome:
+    """一次回想的完整产出：给模型看的整段文本、最终入选的条目清单，以及语义一路是否参与。"""
+
+    text: str
+    entries: Tuple[RecallEntry, ...]
+    vector_used: bool
 
 
 @dataclass(frozen=True)
@@ -198,7 +213,7 @@ def _normalize_order(order: Optional[str]) -> str:
 class _IndexedOutcome:
     """混合检索这一次的结果：还原好的几条，与各路命中数（给完成日志看）。"""
 
-    hits: List[_RecallHit]
+    hits: List[RecallEntry]
     detail: str
     vector_used: bool
 
@@ -242,38 +257,60 @@ class MemoryRecallService:
 
     async def recall(self, query: str, scope: str = SCOPE_ALL, order: str = ORDER_RELEVANT) -> str:
         """执行一次回想，返回给模型看的文本；查询异常不抛，转成「没查到（原因）」。"""
+        return (await self.recall_detailed(query, scope=scope, order=order)).text
+
+    async def recall_detailed(self, query: str, scope: str = SCOPE_ALL, order: str = ORDER_RELEVANT) -> RecallOutcome:
+        """执行一次回想，同时返回渲染文本、最终入选条目与语义路开关（供离线评测与诊断直接核对）。"""
         scope_value = _normalize_scope(scope)
         order_value = _normalize_order(order)
         started_ms = int(self._clock())
         try:
-            text, detail = await self._recall(query, scope_value, order_value)
+            outcome, detail = await self._recall(query, scope_value, order_value)
         except Exception as exc:  # noqa: BLE001 - 工具边界：查询失败转成给模型的说明，不反噬决策轮
             logger.error(
                 f"memory_recall 查询失败（query={query!r}, scope={scope_value}, order={order_value}）:"
                 f" {type(exc).__name__}: {exc}",
                 exc=True,
             )
-            return f"没查到（{str(exc).strip() or type(exc).__name__}）"
+            return RecallOutcome(
+                text=f"没查到（{str(exc).strip() or type(exc).__name__}）",
+                entries=(),
+                vector_used=False,
+            )
         logger.info(
             f"memory_recall 完成：query={query!r} scope={scope_value} order={order_value}"
             f"{' ' + detail if detail else ''} 耗时 {int(self._clock()) - started_ms}ms"
         )
-        return text
+        return outcome
 
-    async def _recall(self, query: str, scope: str, order: str) -> Tuple[str, str]:
+    async def _recall(self, query: str, scope: str, order: str) -> Tuple[RecallOutcome, str]:
         """查询主体：解析关键词 → 查五个来源 → 取前 8 条排好 → 渲染抬头与正文；另返回给日志的命中数。"""
         newest_first = order != ORDER_OLDEST
         raw_query = (query or "").strip()
         keywords = _split_keywords(raw_query)
         if not keywords:
-            return "（想查什么？给一个或多个关键词，用空格分开，比如「挖矿 钻石」）", ""
+            return (
+                RecallOutcome(
+                    text="（想查什么？给一个或多个关键词，用空格分开，比如「挖矿 钻石」）",
+                    entries=(),
+                    vector_used=False,
+                ),
+                "",
+            )
 
         current_session_id = self._current_session()
         if scope == SCOPE_THIS_STREAM and current_session_id is None:
             return (
-                f"{self._header(raw_query, scope, order, 0)}\n"
-                "（现在不在直播，没有「本场」可查；scope 用 all 可以查全部历史）"
-            ), ""
+                RecallOutcome(
+                    text=(
+                        f"{self._header(raw_query, scope, order, 0)}\n"
+                        "（现在不在直播，没有「本场」可查；scope 用 all 可以查全部历史）"
+                    ),
+                    entries=(),
+                    vector_used=False,
+                ),
+                "",
+            )
 
         names = await self._load_known_names()
         known = set(names)
@@ -281,15 +318,22 @@ class MemoryRecallService:
         effective = [keyword for keyword in keywords if keyword not in known]
         notice = f"（回想工具不按观众名字查，已忽略 {len(ignored)} 个名字）" if ignored else ""
         if not effective:
-            return "\n".join(
-                line
-                for line in (
-                    self._header(raw_query, scope, order, 0),
-                    notice,
-                    "（没有可用的关键词了，换成跟事情有关的关键词再试试）",
-                )
-                if line
-            ), ""
+            return (
+                RecallOutcome(
+                    text="\n".join(
+                        line
+                        for line in (
+                            self._header(raw_query, scope, order, 0),
+                            notice,
+                            "（没有可用的关键词了，换成跟事情有关的关键词再试试）",
+                        )
+                        if line
+                    ),
+                    entries=(),
+                    vector_used=False,
+                ),
+                "",
+            )
 
         session_bounds = await self._chat_repo.list_chat_session_bounds()
         # 档案按"有档案行的场次"检索：保留期清掉早年弹幕之后，档案仍然查得到
@@ -325,7 +369,8 @@ class MemoryRecallService:
             lines.append("（没找到相关的记忆，换个关键词再试试）")
         else:
             lines.extend(hit.text for hit in hits)
-        return "\n".join(lines), f"{indexed.detail}、弹幕 {len(danmaku)}，给出 {len(hits)} 条"
+        outcome = RecallOutcome(text="\n".join(lines), entries=tuple(hits), vector_used=indexed.vector_used)
+        return outcome, f"{indexed.detail}、弹幕 {len(danmaku)}，给出 {len(hits)} 条"
 
     async def _indexed_hits(
         self, query: str, context: _RecallContext, archive_bounds: Sequence[Tuple[int, int]]
@@ -364,23 +409,100 @@ class MemoryRecallService:
         facts = await self._facts_by_ids(ids.get("social_fact", []))
         notes = await self._session_notes([row.live_session_id for row in speech.values()], context)
         last_ms = dict(archive_bounds)
-        hits: List[_RecallHit] = []
+        hits = self._merge_indexed_hits(found, speech, lines, commitments, events, facts, notes, last_ms, context)
+        return _IndexedOutcome(
+            hits=hits, detail=_path_counts(found, result.vector_used), vector_used=result.vector_used
+        )
+
+    def _merge_indexed_hits(
+        self,
+        found: Sequence[SearchHit],
+        speech: Mapping[int, Any],
+        lines: Mapping[int, Any],
+        commitments: Mapping[int, Any],
+        events: Mapping[int, Any],
+        facts: Mapping[int, Any],
+        notes: Mapping[int, str],
+        last_ms: Mapping[int, int],
+        context: _RecallContext,
+    ) -> List[RecallEntry]:
+        """按融合相关度顺序组装结果，合并同一句台词的重复呈现。
+
+        下播整理写出的档案行和公开承诺都把她播出的那句台词记在 ``evidence_chat_id``（及了结时的
+        ``close_chat_id``）上。检索时裸台词与引用它的档案行/承诺往往一起命中：若两边都保留，同一句话
+        会占掉两个名额，把前 8 条挤成前 4 条。这里在两者更靠前的名次上输出带归纳标题、完成状态与
+        存档注记的档案行或承诺，跳过重复的裸台词；没有账本行覆盖的普通台词照常保留。
+        """
+        archive_by_chat: Dict[int, List[int]] = {}
+        commitment_by_chat: Dict[int, List[int]] = {}
+        for hit in found:
+            if hit.source == "archive" and hit.source_id in lines:
+                line = lines[hit.source_id]
+                if line.evidence_chat_id is not None:
+                    archive_by_chat.setdefault(int(line.evidence_chat_id), []).append(int(hit.source_id))
+            elif hit.source == "commitment" and hit.source_id in commitments:
+                row = commitments[hit.source_id]
+                for ref_id in (row.evidence_chat_id, row.close_chat_id):
+                    if ref_id is not None:
+                        bucket = commitment_by_chat.setdefault(int(ref_id), [])
+                        if int(hit.source_id) not in bucket:
+                            bucket.append(int(hit.source_id))
+
+        emitted_archives: Set[int] = set()
+        emitted_commitments: Set[int] = set()
+        covered_chats: Set[int] = set()
+        hits: List[RecallEntry] = []
         for hit in found:
             if hit.source == "speech" and hit.source_id in speech:
+                chat_id = int(hit.source_id)
+                if chat_id in covered_chats:
+                    continue
+                linked_archives = archive_by_chat.get(chat_id, [])
+                linked_commitments = commitment_by_chat.get(chat_id, [])
+                if linked_archives or linked_commitments:
+                    for line_id in linked_archives:
+                        if line_id not in emitted_archives:
+                            emitted_archives.add(line_id)
+                            line = lines[line_id]
+                            session_id = int(line.live_session_id)
+                            hits.append(self._archive_hit(line, session_id, int(last_ms.get(session_id, 0)), context))
+                    for commitment_id in linked_commitments:
+                        if commitment_id not in emitted_commitments:
+                            emitted_commitments.add(commitment_id)
+                            row = commitments[commitment_id]
+                            for ref_id in (row.evidence_chat_id, row.close_chat_id):
+                                if ref_id is not None:
+                                    covered_chats.add(int(ref_id))
+                            hits.append(self._commitment_hit(row, context))
+                    covered_chats.add(chat_id)
+                    continue
+                covered_chats.add(chat_id)
                 hits.append(self._speech_hit(speech[hit.source_id], notes, context))
             elif hit.source == "archive" and hit.source_id in lines:
-                line = lines[hit.source_id]
+                line_id = int(hit.source_id)
+                if line_id in emitted_archives:
+                    continue
+                emitted_archives.add(line_id)
+                line = lines[line_id]
+                if line.evidence_chat_id is not None:
+                    covered_chats.add(int(line.evidence_chat_id))
                 session_id = int(line.live_session_id)
                 hits.append(self._archive_hit(line, session_id, int(last_ms.get(session_id, 0)), context))
             elif hit.source == "commitment" and hit.source_id in commitments:
-                hits.append(self._commitment_hit(commitments[hit.source_id], context))
+                commitment_id = int(hit.source_id)
+                if commitment_id in emitted_commitments:
+                    continue
+                emitted_commitments.add(commitment_id)
+                row = commitments[commitment_id]
+                for ref_id in (row.evidence_chat_id, row.close_chat_id):
+                    if ref_id is not None:
+                        covered_chats.add(int(ref_id))
+                hits.append(self._commitment_hit(row, context))
             elif hit.source == "event" and hit.source_id in events:
                 hits.append(self._event_hit(events[hit.source_id], context))
             elif hit.source == "social_fact" and hit.source_id in facts:
                 hits.append(self._social_fact_hit(facts[hit.source_id], context))
-        return _IndexedOutcome(
-            hits=hits, detail=_path_counts(found, result.vector_used), vector_used=result.vector_used
-        )
+        return hits
 
     async def _events_by_ids(self, event_ids: Sequence[int]) -> Dict[int, Any]:
         """按主键读回游戏事件，只留里程碑与阶段汇报（索引已按白名单收，这里再核一遍）。"""
@@ -396,15 +518,20 @@ class MemoryRecallService:
         rows = await self._social_fact_repo.list_facts_by_ids(fact_ids=fact_ids)
         return {int(row.id): row for row in rows if row.status == "active"}
 
-    def _social_fact_hit(self, row: Any, context: _RecallContext) -> _RecallHit:
+    def _social_fact_hit(self, row: Any, context: _RecallContext) -> RecallEntry:
         """一条社交事实渲染成「游戏里的人（类别）：事实」，挂了存档的注明是哪个存档。"""
         session_id = int(row.created_session_id) if row.created_session_id is not None else None
         label = _SOCIAL_FACT_LABELS.get(row.kind, row.kind)
         text = f"- 游戏里的人（{label}）：{self._mask((row.text or '').strip(), session_id, context)}"
         note = place_note(row.game, row.save_id, row.save_name, context.current_saves)
-        return _RecallHit(timestamp_ms=int(row.updated_at_ms), text=f"{text}（{note}）" if note else text)
+        return RecallEntry(
+            source="social_fact",
+            source_id=int(row.id),
+            timestamp_ms=int(row.updated_at_ms),
+            text=f"{text}（{note}）" if note else text,
+        )
 
-    def _event_hit(self, row: Any, context: _RecallContext) -> _RecallHit:
+    def _event_hit(self, row: Any, context: _RecallContext) -> RecallEntry:
         """一条游戏进展渲染成「位置 + 游戏里（里程碑/阶段汇报）+ 正文」，挂了存档的注明是哪个存档。"""
         session_id = int(row.live_session_id)
         text = (
@@ -412,16 +539,26 @@ class MemoryRecallService:
             f"{self._mask((row.message or '').strip(), session_id, context)}"
         )
         note = place_note(row.game, row.save_id, row.save_name, context.current_saves)
-        return _RecallHit(timestamp_ms=int(row.timestamp_ms), text=f"{text}（{note}）" if note else text)
+        return RecallEntry(
+            source="event",
+            source_id=int(row.id),
+            timestamp_ms=int(row.timestamp_ms),
+            text=f"{text}（{note}）" if note else text,
+        )
 
-    def _speech_hit(self, row: Any, notes: Mapping[int, str], context: _RecallContext) -> _RecallHit:
+    def _speech_hit(self, row: Any, notes: Mapping[int, str], context: _RecallContext) -> RecallEntry:
         """一句台词渲染成「位置 + 你说：原话」，那场只玩过别的存档时补一句注。"""
         note = notes.get(row.live_session_id, "")
         text = (
             f"- {self._when(row.live_session_id, row.timestamp_ms, context)} 你说："
             f"「{self._mask(row.content, row.live_session_id, context)}」"
         )
-        return _RecallHit(timestamp_ms=int(row.timestamp_ms), text=f"{text}（{note}）" if note else text)
+        return RecallEntry(
+            source="speech",
+            source_id=int(row.id),
+            timestamp_ms=int(row.timestamp_ms),
+            text=f"{text}（{note}）" if note else text,
+        )
 
     async def _session_notes(self, session_ids: Sequence[Optional[int]], context: _RecallContext) -> Dict[int, str]:
         """过去几场里，眼下分存档的游戏只在别的存档里玩过的，各给一句注（本场不注）。"""
@@ -441,7 +578,7 @@ class MemoryRecallService:
                 notes[int(session_id)] = note
         return notes
 
-    async def _danmaku_hits(self, context: _RecallContext) -> List[_RecallHit]:
+    async def _danmaku_hits(self, context: _RecallContext) -> List[RecallEntry]:
         """本场观众弹幕；没在直播时没有本场，直接跳过。"""
         current_session_id = context.current_session_id
         if current_session_id is None:
@@ -453,7 +590,9 @@ class MemoryRecallService:
             newest_first=context.newest_first,
         )
         return [
-            _RecallHit(
+            RecallEntry(
+                source="danmaku",
+                source_id=int(row.id),
                 timestamp_ms=int(row.timestamp_ms),
                 text=(
                     f"- {self._when(current_session_id, row.timestamp_ms, context)} 观众说："
@@ -463,7 +602,7 @@ class MemoryRecallService:
             for row in rows
         ]
 
-    def _archive_hit(self, line: Any, session_id: int, timestamp_ms: int, context: _RecallContext) -> _RecallHit:
+    def _archive_hit(self, line: Any, session_id: int, timestamp_ms: int, context: _RecallContext) -> RecallEntry:
         """一行档案渲染成「位置 + 你说（档案「标题」）+ 她的原话」。"""
         when = self._when(session_id, timestamp_ms, context)
         title = self._mask((line.text or "").strip(), session_id, context)
@@ -475,9 +614,9 @@ class MemoryRecallService:
         notes = [*source_notes(line), place_note(line.game, line.save_id, line.save_name, context.current_saves)]
         if any(notes):
             body += f"（{'；'.join(item for item in notes if item)}）"
-        return _RecallHit(timestamp_ms=timestamp_ms, text=body)
+        return RecallEntry(source="archive", source_id=int(line.id), timestamp_ms=timestamp_ms, text=body)
 
-    def _commitment_hit(self, row: Any, context: _RecallContext) -> _RecallHit:
+    def _commitment_hit(self, row: Any, context: _RecallContext) -> RecallEntry:
         """一条承诺渲染成「位置 + 你答应过（状态）+ 标题与原话 / 了结原话」。"""
         session_id = int(row.created_session_id) if row.created_session_id is not None else None
         timestamp_ms = int(row.created_at_ms)
@@ -494,7 +633,7 @@ class MemoryRecallService:
         note = place_note(row.game, row.save_id, row.save_name, context.current_saves)
         if note:
             body += f"（{note}）"
-        return _RecallHit(timestamp_ms=timestamp_ms, text=body)
+        return RecallEntry(source="commitment", source_id=int(row.id), timestamp_ms=timestamp_ms, text=body)
 
     def _when(self, session_id: Optional[int], timestamp_ms: int, context: _RecallContext) -> str:
         """位置词：本场写「本场 HH:MM」，上一场写「上一场」，其余（含无场次的承诺）写「之前」。"""

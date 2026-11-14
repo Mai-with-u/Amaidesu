@@ -444,7 +444,8 @@ async def test_provider_exposes_memory_recall_tool(store: SQLiteDatabase) -> Non
 async def test_recall_marks_which_save_game_memories_belong_to(store: SQLiteDatabase) -> None:
     """眼下在新档：老档里的档案行、承诺注明不是眼下这个存档；那场只在老档玩过时，她那场说过的话也注明。"""
     old = await _session(store, started=1_000, ended=2_000)
-    await _streamer_says(store, old, "屋顶终于封好了", 1_100)
+    roof_chat_id = await _streamer_says(store, old, "屋顶终于封好了", 1_100)
+    await _streamer_says(store, old, "屋顶还差避雷针", 1_150)
     await store.events.insert_game_event(
         live_session_id=old,
         game="minecraft",
@@ -458,7 +459,7 @@ async def test_recall_marks_which_save_game_memories_belong_to(store: SQLiteData
         live_session_id=old,
         text="Minecraft：屋顶封好了",
         quote="屋顶终于封好了",
-        evidence_chat_id=1,
+        evidence_chat_id=roof_chat_id,
         game="minecraft",
         save_id="a",
         save_name="老档",
@@ -478,13 +479,74 @@ async def test_recall_marks_which_save_game_memories_belong_to(store: SQLiteData
 
     lines = _hit_lines(await service.recall("屋顶"))
 
-    assert any("你说：「屋顶终于封好了」（那场 minecraft 在「老档」里，不是眼下这个存档）" in line for line in lines)
+    assert any("你说：「屋顶还差避雷针」（那场 minecraft 在「老档」里，不是眼下这个存档）" in line for line in lines)
+    assert not any("你说：「屋顶终于封好了」" in line for line in lines)
     assert any(
         "档案「Minecraft：屋顶封好了」" in line and "在 minecraft「老档」里，不是眼下这个存档" in line for line in lines
     )
     assert any("屋顶再加一层" in line and "在 minecraft 里，不确定是哪个存档" in line for line in lines)
     # 不分存档时一句都不注
     assert "存档" not in await (await _service(store)).recall("屋顶")
+
+
+async def test_recall_deduplicates_speech_covered_by_archive_or_commitment(store: SQLiteDatabase) -> None:
+    """同一句话既有台词又有档案行/公开承诺时只占一个回想名额，8 件独立往事都能进前 8 条。"""
+    old = await _session(store, started=1_000, ended=2_000)
+    current = await _session(store, started=3_000)
+    # 7 件各有台词+档案行的往事 + 1 件有台词+公开承诺的往事：若不去重，前 4 件就会占满 8 个名额
+    for index in range(7):
+        phrase = f"我们在花园第 {index} 区种了蓝绣球"
+        chat_id = await _streamer_says(store, old, phrase, 1_100 + index * 10)
+        await store.archive.insert_line(
+            live_session_id=old,
+            text=f"花园第 {index} 区种蓝绣球",
+            quote=phrase,
+            evidence_chat_id=chat_id,
+        )
+    promise_phrase = "下次在花园入口补一排蓝绣球"
+    promise_chat_id = await _streamer_says(store, old, promise_phrase, 1_500)
+    await store.commitments.insert_commitment(
+        what="花园入口补蓝绣球",
+        quote=promise_phrase,
+        evidence_chat_id=promise_chat_id,
+        created_session_id=old,
+        now_ms_value=1_500,
+    )
+    service = await _service(store, current_session=current)
+
+    outcome = await service.recall_detailed("花园 蓝绣球")
+    lines = _hit_lines(outcome.text)
+
+    assert len(outcome.entries) == 8
+    assert len(lines) == 8
+    for index in range(7):
+        assert any(f"档案「花园第 {index} 区种蓝绣球」" in line for line in lines)
+    assert any("你答应过（未了结）花园入口补蓝绣球" in line for line in lines)
+    assert all(entry.source in ("archive", "commitment") for entry in outcome.entries)
+
+
+async def test_recall_promotes_archive_line_when_its_speech_ranks_higher(store: SQLiteDatabase) -> None:
+    """裸台词因多含一个查询词排第 1、引用它的档案行排在干扰项后面时，仍在第 1 名给出带来源注记的档案行。"""
+    old = await _session(store, started=1_000, ended=2_000)
+    current = await _session(store, started=3_000)
+    target_chat_id = await _streamer_says(store, old, "我们在古堡塔尖挂好了风铃", 1_100)
+    for index in range(9):
+        await _streamer_says(store, old, f"走廊窗边也挂了第 {index} 串风铃", 1_200 + index * 10)
+    with store.manager.transaction() as conn:
+        conn.execute(
+            "INSERT INTO archive_lines(live_session_id, text, quote, evidence_chat_id, source)"
+            " VALUES (?, '塔尖挂风铃', '挂好了风铃', ?, 'viewer')",
+            (old, target_chat_id),
+        )
+    service = await _service(store, current_session=current)
+
+    outcome = await service.recall_detailed("古堡 风铃")
+    lines = _hit_lines(outcome.text)
+
+    assert outcome.entries[0].source == "archive"
+    assert "档案「塔尖挂风铃」" in lines[0]
+    assert "和观众一起定的，不记得是哪一位，别点名" in lines[0]
+    assert not any("你说：「我们在古堡塔尖挂好了风铃」" in line for line in lines)
 
 
 # ---------------------------------------------------------------------------
