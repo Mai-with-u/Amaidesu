@@ -14,9 +14,11 @@ const residualDialogVisible = ref(false);
 // （layout=false）会先把 AppLayout 壳渲染出来再卸载，OBS 浏览器源与页内 iframe
 // 里表现为闪过一次侧边栏+顶栏
 const routerReady = ref(false);
-useRouter().isReady().then(() => {
-  routerReady.value = true;
-});
+useRouter()
+  .isReady()
+  .then(() => {
+    routerReady.value = true;
+  });
 
 onMounted(async () => {
   // 启动探测待决残留场次：有就弹续播弹窗；查询失败静默（场次列表页仍可处置）

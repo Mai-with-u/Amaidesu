@@ -35,12 +35,19 @@
             :precision="param.precision"
           />
         </label>
-        <el-button class="tts-param-reset" link type="primary" :disabled="!debugParams" @click="resetTtsParams"
+        <el-button
+          class="tts-param-reset"
+          link
+          type="primary"
+          :disabled="!debugParams"
+          @click="resetTtsParams"
           >重置为引擎配置</el-button
         >
       </div>
       <div class="card-actions">
-        <el-button :disabled="!available" :loading="testing" @click="testTts">试说一句（扬声器）</el-button>
+        <el-button :disabled="!available" :loading="testing" @click="testTts"
+          >试说一句（扬声器）</el-button
+        >
         <el-button
           type="primary"
           :disabled="!available || !text.trim()"
@@ -48,11 +55,14 @@
           @click="renderTtsAudio"
           >生成试听音频</el-button
         >
-        <el-button v-if="audioUrl" tag="a" :href="audioUrl" :download="audioFilename">下载 wav</el-button>
+        <el-button v-if="audioUrl" tag="a" :href="audioUrl" :download="audioFilename"
+          >下载 wav</el-button
+        >
       </div>
       <audio v-if="audioUrl" controls :src="audioUrl" class="tts-audio" />
       <p class="card-hint">
-        试说经扬声器播放并联动字幕；生成试听按上方参数合成（表单初始值为引擎配置，非 GSV 引擎不支持音频合成），可在页面内播放与下载对比。
+        试说经扬声器播放并联动字幕；生成试听按上方参数合成（表单初始值为引擎配置，非 GSV
+        引擎不支持音频合成），可在页面内播放与下载对比。
       </p>
     </div>
   </section>
@@ -92,7 +102,9 @@ const backend = computed(() => {
   return typeof value === 'string' ? value : '';
 });
 const chipLabel = computed(() =>
-  backend.value ? `${engineName.value || 'TTS 引擎'} · ${backend.value}` : engineName.value || 'TTS 引擎',
+  backend.value
+    ? `${engineName.value || 'TTS 引擎'} · ${backend.value}`
+    : engineName.value || 'TTS 引擎',
 );
 
 function resetTtsParams(): void {

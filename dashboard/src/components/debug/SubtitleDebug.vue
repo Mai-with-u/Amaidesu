@@ -30,7 +30,9 @@
         <el-button type="primary" :disabled="!available" :loading="sending" @click="sendSubtitle"
           >发送测试字幕</el-button
         >
-        <el-button :disabled="!available" :loading="clearing" @click="clearSubtitle">清空字幕</el-button>
+        <el-button :disabled="!available" :loading="clearing" @click="clearSubtitle"
+          >清空字幕</el-button
+        >
       </div>
       <p class="card-hint">将实际显示在桌面悬浮窗与 OBS 字幕位；直播中测试观众会看见。</p>
       <!-- 页内预览：直接嵌入字幕组件页（与桌面悬浮窗 / OBS 字幕源同一页面），发测试即可看到真实效果 -->
@@ -46,12 +48,10 @@
             >新窗口打开</el-link
           >
         </div>
-        <iframe
-          src="/widget/subtitle"
-          class="subtitle-preview"
-          title="字幕页内预览"
-        />
-        <p class="card-hint">字幕位在画面底部，预览上下留白模拟实际画面；新窗口地址可直接填入 OBS 浏览器源。</p>
+        <iframe src="/widget/subtitle" class="subtitle-preview" title="字幕页内预览" />
+        <p class="card-hint">
+          字幕位在画面底部，预览上下留白模拟实际画面；新窗口地址可直接填入 OBS 浏览器源。
+        </p>
       </div>
     </div>
   </section>
