@@ -42,31 +42,39 @@
         <div v-else-if="entries.length === 0" class="md-list-empty">
           <el-empty :image-size="64" description="还没有任何技能" />
         </div>
-        <ul v-else class="md-list" role="listbox">
-          <template v-for="group in groupedEntries" :key="group.category">
-            <li class="category-title">{{ group.category }}</li>
-            <li
-              v-for="entry in group.items"
-              :key="entry.name"
-              class="md-row"
-              :class="{ 'is-selected': entry.name === selectedName }"
-              role="option"
-              :aria-selected="entry.name === selectedName"
-              tabindex="0"
-              @keydown.enter.prevent="select(entry)"
-              @keydown.space.prevent="select(entry)"
-              @click="select(entry)"
-            >
-              <span class="md-row-name" :title="entry.name">{{ entry.name }}</span>
-              <el-tag
-                size="small"
-                :type="entry.origin === 'local' ? 'info' : 'warning'"
-                effect="plain"
-                class="origin-tag"
+        <ul v-else class="md-list skill-list" role="listbox">
+          <template v-for="source in groupedEntries" :key="source.origin">
+            <!-- 一级：来源。本地策略与 MaiCraft 玩法技能是两种东西，不混排 -->
+            <li class="source-heading" :class="{ 'is-local': source.origin === 'local' }">
+              <span class="source-label">{{ source.label }}</span>
+              <span class="source-count"
+                >{{ source.categories.reduce((sum, c) => sum + c.items.length, 0) }} 项</span
               >
-                {{ entry.origin === 'local' ? '本地' : entry.origin }}
-              </el-tag>
             </li>
+            <template v-for="group in source.categories" :key="group.category">
+              <!-- 二级：分类。前导短横与缩进把它和条目分开；来源下只有一个分类时省略这一行 -->
+              <li v-if="source.categories.length > 1" class="category-heading">
+                <span class="category-mark" aria-hidden="true" />
+                <span class="category-name">{{ group.category }}</span>
+              </li>
+              <li
+                v-for="entry in group.items"
+                :key="entry.name"
+                class="md-row skill-row"
+                :class="{
+                  'is-selected': entry.name === selectedName,
+                  'is-flat': source.categories.length === 1,
+                }"
+                role="option"
+                :aria-selected="entry.name === selectedName"
+                tabindex="0"
+                @keydown.enter.prevent="select(entry)"
+                @keydown.space.prevent="select(entry)"
+                @click="select(entry)"
+              >
+                <span class="md-row-name" :title="entry.name">{{ entry.name }}</span>
+              </li>
+            </template>
           </template>
         </ul>
       </aside>
@@ -164,18 +172,46 @@ const bodyHtml = computed(() => renderMarkdown(body.value));
 /** 当前选中的技能条目 */
 const active = computed(() => entries.value.find(item => item.name === selectedName.value) ?? null);
 
-/** 目录按分类分组（后端已按分类与名字排序，这里只做分组） */
+/** 目录分组：来源为一级、分类为二级
+ *
+ * 分类名（building / create）与条目名（building-workflow）形近，压在同一平面时
+ * 层级读不出来；来源也不该只靠每行一个小标签区分——本地那份策略会夹在远端条目
+ * 中间（按分类排序时它落在 streaming 分类里）。所以一级按来源分（本地策略与
+ * MaiCraft 玩法技能是两种东西），二级再按分类分，条目缩进在分类之下。
+ *
+ * 本地策略排在前面：自家维护的那份先看。单个来源下只有一个分类时不再显示分类
+ * 标题（一级标题已经说明是什么，这一级没有信息量）。
+ */
 const groupedEntries = computed(() => {
-  const groups: { category: string; items: SkillItem[] }[] = [];
+  const sources: {
+    origin: string;
+    label: string;
+    categories: { category: string; items: SkillItem[] }[];
+  }[] = [];
   for (const entry of entries.value) {
-    const last = groups[groups.length - 1];
-    if (last && last.category === entry.category) {
-      last.items.push(entry);
-    } else {
-      groups.push({ category: entry.category, items: [entry] });
+    let source = sources.find(item => item.origin === entry.origin);
+    if (!source) {
+      source = {
+        origin: entry.origin,
+        label: entry.origin === 'local' ? '本地策略' : `${entry.origin} 玩法技能`,
+        categories: [],
+      };
+      sources.push(source);
     }
+    let category = source.categories.find(item => item.category === entry.category);
+    if (!category) {
+      category = { category: entry.category, items: [] };
+      source.categories.push(category);
+    }
+    category.items.push(entry);
   }
-  return groups;
+  // 本地在前，其余按显示名排（来源名来自服务端，字典序稳定）
+  sources.sort((a, b) => {
+    if (a.origin === 'local') return -1;
+    if (b.origin === 'local') return 1;
+    return a.label.localeCompare(b.label);
+  });
+  return sources;
 });
 
 /** 远端登记状态提示：按可观测性逐级降级，各级空态文案分开写 */
@@ -303,18 +339,74 @@ onMounted(() => {
 }
 
 /* 目录里的分类小标题：分组边界，不参与选中 */
-.category-title {
-  padding: var(--spacing-sm) var(--spacing-md) var(--spacing-xs);
+/* 一级：来源标题
+ *
+ * 左侧色条 + 分隔线把来源从条目里拎出来：本地策略用主色（自家维护），
+ * 远端玩法技能用工具绿（随服务端发布）。字重与留白都比二级分类强一档。 */
+.source-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  margin: var(--spacing-sm) 0 0;
+  padding: var(--spacing-xs) var(--spacing-md) var(--spacing-xs) 10px;
+  border-left: 3px solid var(--md-accent);
+  border-bottom: 1px solid var(--border-color-light);
+  list-style: none;
+}
+
+.source-heading.is-local {
+  border-left-color: var(--color-primary);
+}
+
+.source-label {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.source-count {
   font-size: var(--text-2xs);
-  font-weight: 600;
-  letter-spacing: 0.08em;
   color: var(--text-secondary);
+}
+
+/* 二级：分类标题
+ *
+ * 分类名与条目名形近（building / building-workflow），所以给它前导短横、
+ * 加大字距并整体缩进，靠位置与形态和条目区分开。 */
+.category-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: var(--spacing-sm) var(--spacing-md) 2px 22px;
   list-style: none;
   cursor: default;
 }
 
-.origin-tag {
-  flex-shrink: 0;
+.category-mark {
+  width: 10px;
+  height: 1px;
+  background-color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+.category-name {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+}
+
+/* 三级：条目。缩进在分类之下，名字不再被来源徽标挤到截断 */
+.skill-row {
+  padding-left: 34px;
+  margin-bottom: 1px;
+}
+
+/* 来源下只有一个分类时没有分类层级，条目直接跟在来源标题下 */
+.skill-row.is-flat {
+  padding-left: 22px;
 }
 
 .list-error {
