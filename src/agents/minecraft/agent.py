@@ -593,6 +593,7 @@ class MinecraftAgent(BaseAgent):
         self.register_mcp_client(client)
         if count > 0:
             self._logger.info(f"Agent 私有 MCP 已就绪：{count} 个工具")
+            self._prime_remote_skills()
             return
         self._logger.warning("Agent 私有 MCP 连接失败或 server 未暴露工具，已降级登记（0 工具），后台退避重试装配")
         prov.start_recovery()
@@ -628,12 +629,33 @@ class MinecraftAgent(BaseAgent):
     def _on_mcp_recovered(self) -> None:
         """连接恢复：Mod 可能重启过，能力清单、远端技能与事件流都重新读；在做的任务收到通知后评估现场。"""
         self._skill_support.reset_connection_cache()
+        self._prime_remote_skills()
         self._goals.forget_stream()
         self._inject_wakeup_message(
             "[系统] Minecraft 连接已恢复，maicraft 工具重新可用。若此前因连接失败受阻，请评估现场并继续原任务。"
         )
         self._task_suspended = False
         self._wake_event.set()
+
+    def _prime_remote_skills(self) -> "asyncio.Task[None] | None":
+        """连接建立即后台预读远端技能目录：不等第一批任务，检视页与首批都不用等。
+
+        开批处的兜底读保留（``ensure_remote_skills`` 幂等，读了就跳过）；与本读并发时
+        最坏重复一次 ``resources/list``，无害。预读失败只记日志，由下次开批兜底重试。
+        Returns:
+            预读任务（未注入技能库或本轮已读过时为 None），测试据此等待预读完成。
+        """
+        if self._skills is None or self._skill_support.remote_skills_loaded:
+            return None
+        task = asyncio.create_task(self._skill_support.ensure_remote_skills())
+
+        def _log_failure(done: "asyncio.Task[None]") -> None:
+            if not done.cancelled() and done.exception() is not None:
+                exc = done.exception()
+                self._logger.error(f"远端技能目录预读失败: {type(exc).__name__}: {exc}")
+
+        task.add_done_callback(_log_failure)
+        return task
 
     def _maicraft_ready(self) -> bool:
         client = self._mcp_client

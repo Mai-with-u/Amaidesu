@@ -20,8 +20,12 @@ def _support(
     skills: Optional[SkillLibrary],
     ready: bool = True,
     client: Optional[Any] = None,
+    ready_fn: Optional[Any] = None,
 ) -> Tuple[SkillSupport, List[Tuple[str, Dict[str, Any]]], List[Tuple[str, Dict[str, Any], Dict[str, Any]]]]:
-    """搭一个最小支撑件：工具执行与回复吸收都记进列表，返回 (支撑件, 执行记录, 吸收记录)。"""
+    """搭一个最小支撑件：工具执行与回复吸收都记进列表，返回 (支撑件, 执行记录, 吸收记录)。
+
+    ``ready_fn`` 给出时优先生效（连接就绪判定可在测试中途翻转），否则用固定 ``ready``。
+    """
     executed: List[Tuple[str, Dict[str, Any]]] = []
     absorbed: List[Tuple[str, Dict[str, Any], Dict[str, Any]]] = []
 
@@ -36,7 +40,7 @@ def _support(
         agent_name="minecraft",
         state=MinecraftAgentState(),
         logger=get_logger("test_skill_support"),
-        maicraft_ready=lambda: ready,
+        maicraft_ready=ready_fn if ready_fn is not None else (lambda: ready),
         mcp_client=lambda: client,
         execute_tool=execute_tool,
         absorb_reply=lambda name, arguments, observation: absorbed.append((name, arguments, observation)),
@@ -136,9 +140,12 @@ async def test_remote_skills_are_registered_from_the_client_and_dropped_when_dis
         ]
 
     client = SimpleNamespace(list_resources=list_resources, read_resource=read_resource)
-    support, _executed, _absorbed = _support(library, client=client)
+    ready = {"connected": True}
+    support, _executed, _absorbed = _support(library, client=client, ready_fn=lambda: ready["connected"])
 
+    assert support.remote_skills_loaded is False, "还没读过服务端目录"
     await support.ensure_remote_skills()
+    assert support.remote_skills_loaded is True, "读过一次就标记已读（读到空目录也算）"
     catalog = [entry.name for entry in library.catalog("minecraft")]
     assert catalog == ["survival-opening"], "远端技能进了目录"
 
@@ -148,10 +155,13 @@ async def test_remote_skills_are_registered_from_the_client_and_dropped_when_dis
     support.drop_remote_if_disconnected()
     assert [entry.name for entry in library.catalog("minecraft")] == ["survival-opening"], "连接还就绪时不撤下"
 
-    support_down, _executed2, _absorbed3 = _support(library, ready=False, client=client)
-    support_down._remote_skills_loaded = True
-    support_down.drop_remote_if_disconnected()
+    ready["connected"] = False
+    support.drop_remote_if_disconnected()
     assert [entry.name for entry in library.catalog("minecraft")] == [], "连接断了远端技能撤下"
+    assert support.remote_skills_loaded is False, "撤下后回到未读状态，下次连接重读"
+
+    support.reset_connection_cache()
+    assert support.remote_skills_loaded is False
 
 
 async def test_remote_skill_body_is_read_through_the_real_mcp_sdk(loguru_capture: Any) -> None:

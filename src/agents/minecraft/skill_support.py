@@ -155,6 +155,11 @@ class SkillSupport:
         if self._skills is not None:
             self._skills.clear_remote("MaiCraft")
 
+    @property
+    def remote_skills_loaded(self) -> bool:
+        """本轮连接是否已读过 MaiCraft 的技能目录（含读到空目录的情况）。"""
+        return self._remote_skills_loaded
+
     def _ability_ids(self) -> Optional[Set[str]]:
         """能力清单里的能力 ID；还没读到返回 None（按未知处理，不当成"一个能力都没有"）。"""
         listing = self._ability_listing
