@@ -1464,6 +1464,7 @@ class SessionSettler:
         archive_prompt = (
             f"【上一份档案】\n{material.previous_text or '没有'}\n\n"
             + (f"{material.corrections_text}\n\n" if material.corrections_text else "")
+            + f"【现行承诺台账】\n{material.open_text or '没有'}\n\n"
             + f"【本场她说的话】\n{material.speech_text}\n\n"
             + f"{material.games_text or '【本场没有玩游戏】'}\n\n"
             + (f"{material.records_text}\n\n" if material.records_text else "")

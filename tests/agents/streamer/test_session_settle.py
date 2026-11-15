@@ -1749,3 +1749,26 @@ async def test_settle_resets_panel_to_step_label_after_each_call(
     # 还原载荷不带上一笔调用留下的输出信号
     reset_payloads = [payload for payload in payloads if payload.progress_text == "第 2 笔/共 2 笔：找新承诺"]
     assert all(payload.output_chars == 0 and payload.output_tail == "" for payload in reset_payloads)
+
+
+async def test_archive_call_input_carries_open_commitment_ledger(
+    store: SQLiteDatabase, prompt_manager: PromptManager
+) -> None:
+    """档案那笔调用的输入要带现行承诺台账（open 承诺的原文与当初原话）。
+
+    场 67 实证：档案整理模型看不到台账，写了"当初答应的事兑现了"而台账里
+    该承诺仍 open，自相矛盾落进结算报告。
+    """
+    session_id = await _ended_session(store)
+    old = await store.commitments.insert_commitment(what="画生日贺图", quote="下播给你画张生日贺图", now_ms_value=100)
+    assert old is not None
+    await _speech(store, session_id, "今天聊得很开心", timestamp_ms=1_100)
+
+    llm = _reply('{"archive": []}', '{"commitments": []}', '{"closed": []}')
+    settler = _settler(store, llm, prompt_manager)
+
+    assert await settler.settle_session(session_id) is True
+    archive_prompt = llm.calls[0]["input"]
+    assert "【现行承诺台账】" in archive_prompt
+    assert f"#{old} 「画生日贺图」" in archive_prompt
+    assert "下播给你画张生日贺图" in archive_prompt
