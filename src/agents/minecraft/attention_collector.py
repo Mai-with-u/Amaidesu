@@ -130,17 +130,16 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
     async def _forward_food_taken(self, event: Dict[str, Any]) -> bool:
         """拿了别人家的吃的：连同回应口径转给主播（主人来问时由主播在游戏聊天里认下）。
 
-        事件面还没有这一种的专名，走 ``unknown`` 并留上游种类；一句话由归属与 Mod 原话拼出，
-        保留主人名和区域名（对号要用），去掉坐标。
+        一句话由归属与 Mod 原话拼出，保留主人名和区域名（对号要用），去掉坐标。
         """
         payload = BodyEventPayload(
             game="minecraft",
-            kind="unknown",
+            kind="others_food_taken",
             summary=spoken_line(food_taken_of(event, self._clock())),
             source_event_type=OTHERS_FOOD_TAKEN,
             resolved=True,
         )
-        await self.emit_event(KIND_TO_EVENT["unknown"], payload, source=self.name)
+        await self.emit_event(KIND_TO_EVENT["others_food_taken"], payload, source=self.name)
         self.logger.info(f"[身体事件] {payload.summary}（{OTHERS_FOOD_TAKEN}）")
         return True
 
@@ -150,14 +149,14 @@ class MaicraftAttentionCollector(MaicraftEventsCollector):
         owner_name = "" if entry.owner == "一位不在线的玩家" else entry.owner
         payload = BodyEventPayload(
             game="minecraft",
-            kind="unknown",
+            kind="others_things_touched",
             summary=others_things_line(entry),
             source_event_type=OTHERS_THINGS_TOUCHED,
             resolved=True,
             player_uuid=entry.owner_uuid,
             player_name=owner_name,
         )
-        await self.emit_event(KIND_TO_EVENT["unknown"], payload, source=self.name)
+        await self.emit_event(KIND_TO_EVENT["others_things_touched"], payload, source=self.name)
         self.logger.info(f"[身体事件] {payload.summary}（{OTHERS_THINGS_TOUCHED}）")
         return True
 

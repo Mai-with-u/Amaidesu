@@ -201,6 +201,10 @@ class CoreEvents:
     # 别的玩家冲 AI 玩家做的肢体动作（蹲起、挥手、拍一下、扔东西过来）：是有人找它玩，不是挨打；
     # 和 Mod 的事件种类同名，两边搜同一个词就对得上
     GAME_BODY_PLAYER_BODY_LANGUAGE = "game.body.player_body_language"
+    # 动了别人的东西：拿了别人家的吃的、动了别人放的容器或方块（上游是两种任务事件，
+    # 叙事面各给专名；kind 与事件名末段一致）
+    GAME_BODY_OTHERS_FOOD_TAKEN = "game.body.others_food_taken"
+    GAME_BODY_OTHERS_THINGS_TOUCHED = "game.body.others_things_touched"
 
     # ========== v2 语义域事件（game.body.* 通配订阅模式） ==========
     # **这是通配订阅模式专用**，不是被 emit 的具体事件名：订阅方用它一站式

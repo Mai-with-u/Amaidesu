@@ -56,6 +56,8 @@ KIND_TO_EVENT: Dict[str, str] = {
     "follow_status": CoreEvents.GAME_BODY_FOLLOW_STATUS,
     "sky_changed": CoreEvents.GAME_BODY_SKY_CHANGED,
     "player_body_language": CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE,
+    "others_food_taken": CoreEvents.GAME_BODY_OTHERS_FOOD_TAKEN,
+    "others_things_touched": CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED,
     # 步进完成不进身体事件通道，转 game.milestone（主播可讲的进展）
     "milestone": CoreEvents.GAME_MILESTONE,
 }

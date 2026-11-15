@@ -80,7 +80,7 @@ async def test_attention_collector_forwards_others_things_touched_and_rare_loot_
     assert m_payload.message == "打开战利品箱开出了海洋之心 ×1，已经拿走"
 
     b_name, b_payload = bus.events[1]
-    assert b_name == CoreEvents.GAME_BODY_UNKNOWN and isinstance(b_payload, BodyEventPayload)
+    assert b_name == CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED and isinstance(b_payload, BodyEventPayload)
     assert b_payload.source_event_type == OTHERS_THINGS_TOUCHED
     assert b_payload.player_name == "玩家甲"
     assert b_payload.player_uuid == "ae0dce67-1111-2222-3333-444455556666"

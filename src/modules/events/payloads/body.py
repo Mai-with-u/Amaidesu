@@ -39,6 +39,8 @@ BodyKind = Literal[
     "follow_status",
     "sky_changed",
     "player_body_language",
+    "others_food_taken",
+    "others_things_touched",
 ]
 
 
@@ -56,6 +58,8 @@ BodyKind = Literal[
 @register_event(CoreEvents.GAME_BODY_FOLLOW_STATUS)
 @register_event(CoreEvents.GAME_BODY_SKY_CHANGED)
 @register_event(CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE)
+@register_event(CoreEvents.GAME_BODY_OTHERS_FOOD_TAKEN)
+@register_event(CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED)
 class BodyEventPayload(BasePayload):
     """AI 玩家身体事件（已分类、已叙事化）。
 

@@ -242,6 +242,8 @@ def test_body_event_names_are_the_closed_kind_set() -> None:
         CoreEvents.GAME_BODY_FOLLOW_STATUS,
         CoreEvents.GAME_BODY_SKY_CHANGED,
         CoreEvents.GAME_BODY_PLAYER_BODY_LANGUAGE,
+        CoreEvents.GAME_BODY_OTHERS_FOOD_TAKEN,
+        CoreEvents.GAME_BODY_OTHERS_THINGS_TOUCHED,
         CoreEvents.GAME_MILESTONE,
     }
     for kind, event_name in KIND_TO_EVENT.items():
@@ -443,7 +445,7 @@ async def test_food_taken_from_others_reaches_the_streamer_with_how_to_answer() 
     await collector._drain()
 
     [(name, payload)] = bus.events
-    assert name == CoreEvents.GAME_BODY_UNKNOWN and payload.source_event_type == "others_food_taken"
+    assert name == CoreEvents.GAME_BODY_OTHERS_FOOD_TAKEN and payload.source_event_type == "others_food_taken"
     assert payload.summary.startswith("饿到饱食度 3，从 Steve 家的箱子拿了 2 个面包")
     assert "Steve 来问，就大方认下是我拿的" in payload.summary and payload.resolved is True
 
