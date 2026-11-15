@@ -67,6 +67,16 @@ export function formatDateMD(ms: number): string {
 }
 
 /**
+ * 时刻 → 本地完整日期（yyyy-MM-DD）。
+ * 跨月跨年的分组键用（场次按日分布等），MM-DD 在跨年时看不出是哪年。
+ */
+export function formatDateYMD(ms: number): string {
+  const date = new Date(ms);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/**
  * 时刻 → 本地完整日期时间（zh-CN，24 小时制；不含显式字段选择）。
  */
 export function formatDateTimeCn(ms: number): string {

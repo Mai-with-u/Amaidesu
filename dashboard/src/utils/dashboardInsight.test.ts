@@ -124,7 +124,7 @@ describe('verdictOf 结论条状态机', () => {
 
   it('直播中：存在活跃场次（detail 为空）', () => {
     const input = verdictInput({
-      sessions: { items: [], active_session_id: 1 } as VerdictInput['sessions'],
+      sessions: { items: [], active_session_id: 1, total: 1 } as VerdictInput['sessions'],
     });
     expect(verdictOf(input, NOW)).toEqual({ tone: 'live', phrase: '直播中', detail: '' });
   });
@@ -132,7 +132,7 @@ describe('verdictOf 结论条状态机', () => {
   it('优先级：熔断压过直播中；窗口外 error 压不过未注册主播', () => {
     const live = verdictInput({
       tools: [{ name: 't', health: { state: 'tripped' } }] as VerdictInput['tools'],
-      sessions: { items: [], active_session_id: 1 } as VerdictInput['sessions'],
+      sessions: { items: [], active_session_id: 1, total: 1 } as VerdictInput['sessions'],
     });
     expect(verdictOf(live, NOW).tone).toBe('error');
 
@@ -181,7 +181,7 @@ describe('verdictOf 结论条状态机', () => {
     // 即使 core.error 已过 300s 窗口，只要致命故障未解除，结论条仍保持 error
     const stillBroken = verdictInput({
       events: [evt('core.error', {}, sinceMs)],
-      sessions: { items: [], active_session_id: 59 } as VerdictInput['sessions'],
+      sessions: { items: [], active_session_id: 59, total: 1 } as VerdictInput['sessions'],
       llmFatalFaults: [
         {
           profile: 'minecraft',

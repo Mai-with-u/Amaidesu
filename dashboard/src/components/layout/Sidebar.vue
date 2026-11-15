@@ -29,6 +29,10 @@
         </el-menu-item-group>
 
         <el-menu-item-group title="档案与复盘">
+          <el-menu-item index="/sessions">
+            <el-icon><Tickets /></el-icon>
+            <span>场次管理</span>
+          </el-menu-item>
           <el-menu-item index="/review">
             <el-icon><DataAnalysis /></el-icon>
             <span>场次复盘</span>

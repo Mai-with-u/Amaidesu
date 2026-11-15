@@ -128,6 +128,11 @@ describe('useLiveScoreboard（store 接线）', () => {
     ended_at_ms: null,
     message_count: 0,
     is_active: true,
+    notes: null,
+    settled_at_ms: null,
+    settle_attempts: 0,
+    reviewed_at_ms: null,
+    overview: null,
   };
 
   beforeEach(() => {

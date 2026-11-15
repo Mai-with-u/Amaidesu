@@ -52,6 +52,11 @@ function sessionItem(): LiveSessionItem {
     ended_at_ms: 9000,
     message_count: 5,
     is_active: false,
+    notes: null,
+    settled_at_ms: null,
+    settle_attempts: 0,
+    reviewed_at_ms: null,
+    overview: null,
   };
 }
 

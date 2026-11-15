@@ -3,60 +3,20 @@
  *
  * 页面私有状态（仅直播控制台消费），走 composable 而非 Pinia——场次列表与
  * 筛选词离开页面即失效，没有跨页共享语义。场次生命周期本身归后端
- * LiveSessionManager，这里只是控制面：开启 / 结束 / 重命名 / 更正类型 / 删除 +
- * 生命周期事件驱动侧边栏刷新。
+ * LiveSessionManager，这里只是控制面：选场回看 + 开启 / 结束 + 生命周期事件
+ * 驱动侧边栏刷新。改名、改类型、删除这些"回头补账"的动作在场次管理页
+ * （/sessions），那边是逐场处置的地方。
  */
 
 import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
 import { useEventsStore } from '@/stores';
-import { useNowTick } from '@/composables/useNowTick';
 import { liveSessionsApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
-import { formatDateMD, formatTimeHM, formatElapsedMs } from '@/utils/format';
+import { formatDateMD, formatTimeHM } from '@/utils/format';
+import { SESSION_FILTER_ALL, type SessionSource } from '@/utils/sessionManager';
 import type { LiveSessionItem, SessionKind } from '@/types';
-
-/** 场次来源的取值与显示名（筛选框的选项直接取这里，来源只有这一处定义） */
-const SOURCE_LABEL = {
-  manual: '手动',
-  replay: '回放',
-  generate: '模拟',
-  legacy: '历史',
-} as const;
-
-/** 场次类型的取值与显示名 */
-const KIND_LABEL = {
-  live: '正式',
-  rehearsal: '彩排',
-} as const satisfies Record<SessionKind, string>;
-
-/**
- * 筛选取值里的"不限"：来源与类型两个筛选框都按这个值表示不筛。
- * 不用空串——Element Plus 的选项在 value 为空时按 label 注册，空串选项永远选不中，
- * 下拉框只能落回"请选择"占位，读者看不出这个框筛的是什么。
- */
-export const SESSION_FILTER_ALL = 'all';
-
-/** 场次来源取值（筛选框按这些值过滤） */
-export type SessionSource = keyof typeof SOURCE_LABEL;
-
-/** 筛选框的来源选项（顺序即下拉框顺序） */
-export const SESSION_SOURCE_OPTIONS = (
-  Object.entries(SOURCE_LABEL) as [SessionSource, string][]
-).map(([value, label]) => ({ value, label }));
-
-/** 筛选框的类型选项（顺序即下拉框顺序） */
-export const SESSION_KIND_OPTIONS = (Object.entries(KIND_LABEL) as [SessionKind, string][]).map(
-  ([value, label]) => ({ value, label }),
-);
-
-/** 场次默认标题（yyyy-MM-dd 周X HH:mm，按给定时刻）：开场次预填与未命名场次重命名预填共用 */
-export function defaultSessionTitle(at: Date = new Date()): string {
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][at.getDay()] ?? '';
-  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${weekday} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
-}
 
 /** 侧栏时钟/时长的时刻标签（事件→条目取值助手见 utils/liveFeed.ts） */
 function clockLabel(ms: number): string {
@@ -65,8 +25,6 @@ function clockLabel(ms: number): string {
 
 export function useLiveSessions() {
   const { events } = storeToRefs(useEventsStore());
-  // 共享 1s 时钟：驱动进行中场次"已播"标签逐秒刷新
-  const nowTick = useNowTick();
 
   const sessions = ref<LiveSessionItem[]>([]);
   /** 进行中的显式场次主键（来自 API 响应，不受侧边栏筛选影响——筛选只是视图） */
@@ -89,15 +47,6 @@ export function useLiveSessions() {
     return `场次 #${item.live_session_id}`;
   }
 
-  function sourceLabel(source: string): string {
-    const labels: Record<string, string> = SOURCE_LABEL;
-    return labels[source] ?? source;
-  }
-
-  function kindLabel(kind: SessionKind): string {
-    return KIND_LABEL[kind] ?? kind;
-  }
-
   function sessionTimeLabel(item: LiveSessionItem): string {
     const start = `${formatDateMD(item.started_at_ms)} ${clockLabel(item.started_at_ms)}`;
     if (item.ended_at_ms == null) return `${start} 起`;
@@ -114,22 +63,6 @@ export function useLiveSessions() {
       return item.is_active;
     }
     return selectedSession.value?.live_session_id === item.live_session_id;
-  }
-
-  /**
-   * 场次时长标签：进行中场次走共享时钟（已播，逐秒刷新），已结束场次用结束时刻
-   * 减开始时刻（用时）。缺结束时刻（残留场次）或起止倒挂（脏数据）不显示。
-   * 时长固定带小时位：短场次（"0:04:00"）与长场次（"3:01:00"）形状一致，
-   * 不会被误读成几小时。
-   */
-  function durationLabel(item: LiveSessionItem): string | null {
-    if (item.is_active) {
-      return `已播 ${formatElapsedMs(nowTick.value - item.started_at_ms, { alwaysHours: true })}`;
-    }
-    if (item.ended_at_ms == null) return null;
-    const duration = item.ended_at_ms - item.started_at_ms;
-    if (duration < 0) return null;
-    return `用时 ${formatElapsedMs(duration, { alwaysHours: true })}`;
   }
 
   async function loadSessions(): Promise<void> {
@@ -179,73 +112,6 @@ export function useLiveSessions() {
     await loadSessions();
   }
 
-  async function removeSession(item: LiveSessionItem): Promise<void> {
-    try {
-      await liveSessionsApi.remove(item.live_session_id);
-      ElMessage.success('场次已删除');
-    } catch (error) {
-      ElMessage.error(getApiErrorMessage(error, '删除失败'));
-    }
-    if (selectedSession.value?.live_session_id === item.live_session_id) backToLive();
-    await loadSessions();
-  }
-
-  /** 重命名场次：预填当前标题（未命名回落开播时刻默认名），保存后刷新并同步回看选中引用 */
-  async function renameSession(item: LiveSessionItem): Promise<void> {
-    let title: string | undefined;
-    try {
-      const { value } = await ElMessageBox.prompt('场次标题（留空恢复未命名）', '重命名场次', {
-        confirmButtonText: '保存',
-        cancelButtonText: '取消',
-        inputValue: item.title ?? defaultSessionTitle(new Date(item.started_at_ms)),
-      });
-      title = value?.trim() || undefined;
-    } catch {
-      return; // 取消输入
-    }
-    try {
-      await liveSessionsApi.rename(item.live_session_id, title);
-      ElMessage.success('场次已重命名');
-    } catch (error) {
-      ElMessage.error(getApiErrorMessage(error, '重命名失败'));
-      return;
-    }
-    await loadSessions();
-    // 回看中的该场换上新引用，回看标题跟随新名
-    if (selectedSession.value?.live_session_id === item.live_session_id) {
-      selectedSession.value =
-        sessions.value.find(s => s.live_session_id === item.live_session_id) ?? null;
-    }
-  }
-
-  /**
-   * 更正已结束场次的类型（正式 ↔ 彩排）：存量回填判错时人手改。类型决定这场的
-   * 回顾进哪条记忆线、要不要对外同步，改前确认一次。
-   */
-  async function toggleSessionKind(item: LiveSessionItem): Promise<void> {
-    const next: SessionKind = item.kind === 'live' ? 'rehearsal' : 'live';
-    const hint =
-      next === 'live'
-        ? '改为正式后，这场的回顾会进正式直播的记忆线（下次正式开播可能被当成上一场）。'
-        : '改为彩排后，这场的回顾只在彩排时被读到，正式开播不再把它当成上一场。';
-    try {
-      await ElMessageBox.confirm(hint, `改为${KIND_LABEL[next]}`, {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-      });
-    } catch {
-      return; // 取消
-    }
-    try {
-      await liveSessionsApi.setKind(item.live_session_id, next);
-      ElMessage.success(`场次已改为${KIND_LABEL[next]}`);
-    } catch (error) {
-      ElMessage.error(getApiErrorMessage(error, '修改类型失败'));
-      return;
-    }
-    await loadSessions();
-  }
-
   /** 历史场次 → 回看模式；进行中场次 → 实时模式 */
   function selectSession(item: LiveSessionItem): void {
     if (item.is_active) {
@@ -283,19 +149,13 @@ export function useLiveSessions() {
     sessionMode,
     selectedSession,
     sessionTitle,
-    sourceLabel,
-    kindLabel,
     sessionTimeLabel,
-    durationLabel,
     isSelected,
     loadSessions,
     startStreamVisible,
     openStartStream,
     onStreamOpened,
     closeSession,
-    renameSession,
-    toggleSessionKind,
-    removeSession,
     selectSession,
     backToLive,
   };

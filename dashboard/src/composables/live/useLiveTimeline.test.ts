@@ -202,6 +202,11 @@ describe('useLiveTimeline', () => {
       ended_at_ms: 2,
       message_count: 1,
       is_active: false,
+      notes: null,
+      settled_at_ms: null,
+      settle_attempts: 0,
+      reviewed_at_ms: null,
+      overview: null,
     };
     timelineMock.mockResolvedValueOnce({
       data: {
@@ -236,6 +241,11 @@ describe('useLiveTimeline', () => {
       ended_at_ms: 2,
       message_count: 0,
       is_active: false,
+      notes: null,
+      settled_at_ms: null,
+      settle_attempts: 0,
+      reviewed_at_ms: null,
+      overview: null,
     };
     rundownExecutionMock.mockResolvedValueOnce({
       data: {
@@ -269,6 +279,11 @@ describe('useLiveTimeline', () => {
       ended_at_ms: 2,
       message_count: 1,
       is_active: false,
+      notes: null,
+      settled_at_ms: null,
+      settle_attempts: 0,
+      reviewed_at_ms: null,
+      overview: null,
     };
     rundownExecutionMock.mockRejectedValueOnce(new Error('down'));
     timelineMock.mockResolvedValueOnce({

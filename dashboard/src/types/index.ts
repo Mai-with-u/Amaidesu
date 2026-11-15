@@ -1040,6 +1040,8 @@ export interface LiveSessionItem {
   source: string;
   kind: SessionKind;
   title: string | null;
+  /** 运营者手写的场次备注（自由文本） */
+  notes: string | null;
   room_id: string;
   platform: string;
   started_at_ms: number;
@@ -1048,11 +1050,21 @@ export interface LiveSessionItem {
   message_count: number;
   /** 是否为当前进行中的显式场次 */
   is_active: boolean;
+  /** 整理完成时刻；NULL = 尚未整理完成 */
+  settled_at_ms: number | null;
+  /** 自动重新整理已尝试的次数 */
+  settle_attempts: number;
+  /** 运营者标已审的时刻；NULL = 尚未标已审 */
+  reviewed_at_ms: number | null;
+  /** 模型写的这场概览（这场发生了什么；空 = 还没生成） */
+  overview: string | null;
 }
 
 export interface LiveSessionListResponse {
   items: LiveSessionItem[];
   active_session_id: number | null;
+  /** 筛选后共有多少场（分页总数） */
+  total: number;
 }
 
 /** 待决残留场次响应（GET /api/v1/live-sessions/residual） */
@@ -1802,4 +1814,3 @@ export interface SettleListResponse {
   items: SettleSessionItem[];
 }
 export * from './skills';
-

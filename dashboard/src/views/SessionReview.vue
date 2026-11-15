@@ -425,6 +425,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { EChartsCoreOption } from 'echarts/core';
 import { ledgerApi, liveSessionsApi, reviewApi } from '@/api';
@@ -461,6 +462,8 @@ import { useChartPalette, useECharts } from '@/composables/useECharts';
 const sessions = ref<LiveSessionItem[]>([]);
 const sessionsLoading = ref(false);
 const selectedIds = ref<number[]>([]);
+/** 深链参数：场次管理页点"复盘"带 session 进来（多 id 逗号分隔） */
+const route = useRoute();
 const review = ref<SessionReviewResponse | null>(null);
 const loading = ref(false);
 const errorMessage = ref('');
@@ -512,9 +515,20 @@ onMounted(async () => {
   try {
     const resp = await liveSessionsApi.list({ limit: 200 });
     sessions.value = resp.data.items;
-    // 默认选最新已结束场次（列表倒序，第一个 ended 非空的）
-    const latestEnded = resp.data.items.find(item => item.ended_at_ms !== null);
-    if (latestEnded) selectedIds.value = [latestEnded.live_session_id];
+    // 深链：场次管理页点"复盘"带 session 参数进来（多个场次用逗号分隔）；
+    // 参数里的场次不存在就落回默认选择，不报错。
+    const deepLinkIds = String(route.query.session ?? '')
+      .split(',')
+      .map(Number)
+      .filter(id => Number.isFinite(id) && id > 0);
+    const linked = resp.data.items.filter(item => deepLinkIds.includes(item.live_session_id));
+    if (linked.length) {
+      selectedIds.value = linked.map(item => item.live_session_id);
+    } else {
+      // 默认选最新已结束场次（列表倒序，第一个 ended 非空的）
+      const latestEnded = resp.data.items.find(item => item.ended_at_ms !== null);
+      if (latestEnded) selectedIds.value = [latestEnded.live_session_id];
+    }
   } catch (error) {
     errorMessage.value = getApiErrorMessage(error, '场次列表加载失败');
   } finally {

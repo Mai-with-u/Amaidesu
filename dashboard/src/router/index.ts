@@ -15,6 +15,12 @@ const router = createRouter({
       component: () => import('@/views/SessionReview.vue'),
     },
     {
+      // 场次管理（全部场次的清单 + 逐场/批量处置）
+      path: '/sessions',
+      name: 'sessions',
+      component: () => import('@/views/SessionManager.vue'),
+    },
+    {
       // 直播切片（录播匹配 + AI 选段 + ffmpeg 切割）
       path: '/clips',
       name: 'clips',

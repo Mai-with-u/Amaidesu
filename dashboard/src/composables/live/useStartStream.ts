@@ -18,7 +18,7 @@ import { computed, ref } from 'vue';
 import { ElMessageBox } from 'element-plus';
 import { componentApi, configApi, liveSessionsApi, rundownApi, systemApi } from '@/api';
 import { getApiErrorMessage } from '@/utils/apiError';
-import { defaultSessionTitle } from '@/composables/live/useLiveSessions';
+import { defaultSessionTitle } from '@/utils/sessionManager';
 import type {
   ComponentListResponse,
   ComponentPlanReport,

@@ -364,10 +364,10 @@ export const simulatorApi = {
 
 // 直播场次（直播控制台）
 //
-// `GET /live-sessions`：场次列表（倒序 + 消息数）。
+// `GET /live-sessions`：场次列表（倒序 + 消息数 + 话题标签；分页与开播区间筛选）。
 // `POST /live-sessions/open`：开启新场次（进行中场次自动结束）。
 // `POST /live-sessions/{id}/close`：结束场次（空场次整行丢弃）。
-// `PATCH /live-sessions/{id}`：重命名场次（title 空=清除标题，列表回落"场次 #id"）。
+// `PATCH /live-sessions/{id}`：改场次资料（标题与备注各改各的；空串=清除该字段）。
 // `PATCH /live-sessions/{id}/kind`：更正已结束场次的类型（正式 / 彩排；进行中 409）。
 // `DELETE /live-sessions/{id}`：删除场次（级联清明细）。
 // `GET /live-sessions/{id}/timeline`：单场时间线回看（明细行 + 事件侧合并；
@@ -375,8 +375,16 @@ export const simulatorApi = {
 // `POST /live-sessions/open`：带 component_plan（期望运行全集）时，开场后把组件
 // 运行态与配置态对齐到该清单（开播引导弹窗），逐项结果随 plan_report 回传。
 export const liveSessionsApi = {
-  list: (params?: { source?: string; kind?: SessionKind; q?: string; limit?: number }) =>
-    api.get<LiveSessionListResponse>('/live-sessions', { params }),
+  list: (params?: {
+    source?: string;
+    kind?: SessionKind;
+    q?: string;
+    limit?: number;
+    offset?: number;
+    started_after_ms?: number;
+    started_before_ms?: number;
+    settle_state?: 'pending' | 'failed' | 'review' | 'reviewed';
+  }) => api.get<LiveSessionListResponse>('/live-sessions', { params }),
   // 开场必须声明类型（正式 / 彩排）
   open: (payload: { kind: SessionKind; title?: string; component_plan?: ComponentRef[] }) =>
     api.post<SessionOpenResponse>('/live-sessions/open', payload),
@@ -385,8 +393,9 @@ export const liveSessionsApi = {
   resume: (id: number) => api.post<SessionActionResponse>(`/live-sessions/${id}/resume`),
   discardResidual: (id: number) => api.post<SessionActionResponse>(`/live-sessions/${id}/discard`),
   close: (id: number) => api.post<SessionActionResponse>(`/live-sessions/${id}/close`),
-  rename: (id: number, title?: string) =>
-    api.patch<SessionActionResponse>(`/live-sessions/${id}`, { title }),
+  // 改标题或备注：只带哪个改哪个，空串=清除该字段
+  update: (id: number, payload: { title?: string; notes?: string }) =>
+    api.patch<SessionActionResponse>(`/live-sessions/${id}`, payload),
   setKind: (id: number, kind: SessionKind) =>
     api.patch<SessionActionResponse>(`/live-sessions/${id}/kind`, { kind }),
   remove: (id: number) => api.delete<SessionActionResponse>(`/live-sessions/${id}`),

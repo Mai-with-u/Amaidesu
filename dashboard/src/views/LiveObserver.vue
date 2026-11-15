@@ -117,36 +117,13 @@
               <span class="session-time">{{ sessionTimeLabel(item) }}</span>
               <span class="session-stats">
                 <span
-                  v-if="durationLabel(item)"
+                  v-if="sessionDurationLabel(item, nowTick)"
                   class="session-duration"
                   :class="{ 'is-running': item.is_active }"
-                  >{{ durationLabel(item) }}</span
+                  >{{ sessionDurationLabel(item, nowTick) }}</span
                 >
                 <span class="grow" />
                 <span class="msg-count">{{ item.message_count }} 条</span>
-                <span class="session-actions">
-                  <el-button class="session-ren" link size="small" @click.stop="renameSession(item)"
-                    >改名</el-button
-                  >
-                  <el-button
-                    v-if="!item.is_active"
-                    class="session-ren"
-                    link
-                    size="small"
-                    @click.stop="toggleSessionKind(item)"
-                    >{{ item.kind === 'live' ? '改彩排' : '改正式' }}</el-button
-                  >
-                  <el-popconfirm
-                    v-if="!item.is_active && item.source !== 'legacy'"
-                    title="删除该场次及其全部明细？"
-                    width="220"
-                    @confirm="removeSession(item)"
-                  >
-                    <template #reference>
-                      <el-button class="session-del" link size="small" @click.stop>删除</el-button>
-                    </template>
-                  </el-popconfirm>
-                </span>
               </span>
             </div>
           </li>
@@ -496,12 +473,15 @@ import { EVENT } from '@/types/events';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
 import StartStreamDialog from '@/components/live/StartStreamDialog.vue';
 import { useNowTick } from '@/composables/useNowTick';
+import { useLiveSessions } from '@/composables/live/useLiveSessions';
 import {
-  useLiveSessions,
   SESSION_FILTER_ALL,
   SESSION_SOURCE_OPTIONS,
   SESSION_KIND_OPTIONS,
-} from '@/composables/live/useLiveSessions';
+  kindLabel,
+  sessionDurationLabel,
+  sourceLabel,
+} from '@/utils/sessionManager';
 import { useThinkingStream } from '@/composables/live/useThinkingStream';
 import { useLiveTimeline } from '@/composables/live/useLiveTimeline';
 import { useLiveStatus } from '@/composables/live/useLiveStatus';
@@ -564,19 +544,13 @@ const {
   sessionMode,
   selectedSession,
   sessionTitle,
-  sourceLabel,
-  kindLabel,
   sessionTimeLabel,
-  durationLabel,
   isSelected,
   loadSessions,
   startStreamVisible,
   openStartStream,
   onStreamOpened,
   closeSession,
-  renameSession,
-  toggleSessionKind,
-  removeSession,
   selectSession,
   backToLive,
 } = useLiveSessions();
@@ -1345,40 +1319,6 @@ onMounted(() => {
 .msg-count {
   flex-shrink: 0;
   white-space: nowrap;
-}
-
-/* 操作按钮与消息数共用统计行右槽：悬停/选中时按钮换入，避免绝对定位叠字 */
-.session-actions {
-  display: none;
-  flex-shrink: 0;
-  align-items: center;
-}
-.session-actions :deep(.el-button) {
-  padding: 0;
-  font-size: inherit;
-}
-.session-actions :deep(.el-button + .el-button) {
-  margin-left: 6px;
-}
-.session-card:hover .session-actions,
-.session-card.is-selected .session-actions {
-  display: inline-flex;
-}
-.session-card:hover .msg-count,
-.session-card.is-selected .msg-count {
-  display: none;
-}
-.session-ren {
-  color: var(--text-placeholder);
-}
-.session-ren:hover {
-  color: var(--color-primary);
-}
-.session-del {
-  color: var(--text-placeholder);
-}
-.session-del:hover {
-  color: var(--color-danger);
 }
 
 .sessions-hint {

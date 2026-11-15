@@ -9,9 +9,9 @@
 // 后面。误排会让高频页面掉进列表深处，运营者只能靠滚动找页面。
 //
 // 分组语义：直播中 = 直播现场的操作台；档案与复盘 = 积累下来的记录（场次
-// 复盘 / 记忆账本 / 观众名单）；系统组件 = 组件注册与启停；运行记录 = 系统
-// 跑出来的痕迹；调试 = 把自己系统调到预期状态的手段（基础设施直测、形象
-// 链路排查与调参、注入模拟观众）；外部集成 = 对外输出页（OBS 嵌入页）。
+// 管理 / 场次复盘 / 记忆账本 / 观众名单）；系统组件 = 组件注册与启停；运行
+// 记录 = 系统跑出来的痕迹；调试 = 把自己系统调到预期状态的手段（基础设施直测、
+// 形象链路排查与调参、注入模拟观众）；外部集成 = 对外输出页（OBS 嵌入页）。
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -66,7 +66,13 @@ describe('侧边栏导航信息架构', () => {
 
   it('直播主循环条目连续排在首位，观众归档案侧', () => {
     expect(groupEntries().get('直播中')).toEqual(['/', '/live', '/outline']);
-    expect(groupEntries().get('档案与复盘')).toEqual(['/review', '/clips', '/memory', '/viewers']);
+    expect(groupEntries().get('档案与复盘')).toEqual([
+      '/sessions',
+      '/review',
+      '/clips',
+      '/memory',
+      '/viewers',
+    ]);
   });
 
   it('调试组收齐把自己系统调到预期状态的手段', () => {
@@ -79,6 +85,7 @@ describe('侧边栏导航信息架构', () => {
       { path: '/', label: '运行总览' },
       { path: '/live', label: '直播控制台' },
       { path: '/outline', label: '流程单工作台' },
+      { path: '/sessions', label: '场次管理' },
       { path: '/review', label: '场次复盘' },
       { path: '/clips', label: '直播切片' },
       { path: '/memory', label: '记忆账本' },
