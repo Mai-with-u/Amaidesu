@@ -1280,6 +1280,7 @@ class StreamerAgent(BaseAgent):
         # 保持 armed，begin 照常起算，退化为从头跑
         if resumed:
             await self._rundown_coord.resume_restore()
+            await self._restore_interrupted_delegations_to_ledger(int(payload.live_session_id))
         # 流程单开播起算：armed（已装载待开播）→ running，双锚点 = 开播时刻。
         # 已起算的场（崩溃恢复的进行中/已完成）被结构化拒绝，保持现态静默忽略；
         # begin 经 on_changed 置位 proactive pending——开场白信号在开播时刻才置
@@ -2052,6 +2053,48 @@ class StreamerAgent(BaseAgent):
             )
         except Exception as emit_exc:  # noqa: BLE001 - 告警是旁路，不阻断决策
             self._logger.warning(f"发布社交事实读取告警失败（已忽略）: {emit_exc}")
+
+    async def _restore_interrupted_delegations_to_ledger(self, live_session_id: int) -> None:
+        """续播恢复：上一进程在途的委派重登记进任务记录表（轻量半补）。
+
+        与 ``_restore_interrupted_delegations``（续播认领，记回手头的事）分工：
+        认领管决策侧的"她手头有事"，本方法管任务记录表（看板/观察面的委派账）。
+        记录表只在内存里，进程重启后整本清空；库里的委派账在启动期把上一进程
+        没等到终态的受理统一记成"被打断"（StorageLedger 启动收尾），这些被打断
+        的行就是要恢复的集合。重登记标注来源，不伪造终态。失败只记日志，不挡续播。
+        """
+        if self._task_ledger is None or self._event_repo is None:
+            return
+        try:
+            records = await self._event_repo.list_session_delegations(live_session_id=int(live_session_id))
+        except Exception as exc:  # noqa: BLE001 - 读不到账就跳过恢复，不挡续播
+            self._logger.warning(f"续播恢复：读本场委派账失败（跳过重登记）: {exc}", exc=True)
+            return
+        restored = 0
+        for record in records:
+            if record.status != "interrupted" or self._task_ledger.get(record.task_id) is not None:
+                continue
+            self._task_ledger.register(
+                task_id=record.task_id,
+                provider=record.game,
+                tool="framework_delegate",
+                initiator=record.initiator or "streamer",
+                executor=record.game,
+                source="agent",
+                snapshot={
+                    "restored": True,
+                    "note": "恢复自上一进程（重启中断）",
+                    "instruction": record.instruction,
+                    "accepted_ms": record.started_ms,
+                },
+                summary="恢复自上一进程（重启中断）",
+            )
+            restored += 1
+        if restored:
+            self._logger.info(
+                f"续播恢复：上一进程在途委派已重登记 {restored} 件（恢复自上一进程（重启中断），"
+                f"场次 {live_session_id}）"
+            )
 
     async def _wake_memory_indexer(self) -> None:
         """社交事实写成后叫醒索引任务补一轮（回想马上查得到）；没装索引时什么都不做。"""
