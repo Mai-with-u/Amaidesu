@@ -104,6 +104,7 @@ class CommandRouter:
             tool_name="framework_delegate",
             arguments={"agent": target, "instruction": action},
             source="streamer",
+            invoking_agent="streamer",
         )
         result = await self._tool_registry.invoke(invocation)
         if not result.success:
@@ -122,7 +123,9 @@ class CommandRouter:
         也不进决策链——游戏状态变化由游戏自己的事件告诉主播。
         """
         tool_name, arguments = tool_action
-        invocation = ToolInvocation(tool_name=tool_name, arguments=arguments, source="streamer")
+        invocation = ToolInvocation(
+            tool_name=tool_name, arguments=arguments, source="streamer", invoking_agent="streamer"
+        )
         result = await self._tool_registry.invoke(invocation)
         if not result.success:
             self._logger.warning(f"命令 /{command_name} 工具调用失败（{tool_name}）: {result.error_message}")

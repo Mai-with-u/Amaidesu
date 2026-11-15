@@ -123,6 +123,11 @@ def rig() -> _Rig:
     return _Rig(_StubAgent("agent_a"), _StubAgent("agent_b"))
 
 
+@pytest.fixture
+def rig_named() -> _Rig:
+    return _Rig(_StubAgent("streamer"), _StubAgent("minecraft"))
+
+
 def _agent(rig: _Rig, name: str) -> _StubAgent:
     return rig.manager.get_agent_by_name(name)  # type: ignore[return-value]
 
@@ -513,3 +518,21 @@ async def test_live_ended_records_distinct_summaries_for_in_hand_and_backlog() -
     assert any("还没开工" in s for s in cancelled_summaries)
     assert any("搁下了，做到：" in s and "墙砌好" in s for s in cancelled_summaries)
     assert mc.ledger.get(first) is None
+
+
+async def test_invoking_agent_enables_unique_candidate_auto_accept(rig_named) -> None:
+    """发起者身份（invoking_agent）参与自排除：source 不是名册名时，
+    未点名目标且候选含发起者自己与其他 Agent 时仍能唯一候选自动受理。"""
+    inv = ToolInvocation(
+        tool_name="framework_prompt",
+        arguments={"content": "去把刷铁机接上"},
+        source="planner-react",
+        invoking_agent="streamer",
+    )
+    result = await rig_named.registry.invoke(inv)
+    assert result.success, result.error_message
+    assert result.structured_content["executor"] == "minecraft"
+    # 回退行为：不填 invoking_agent 时维持现状——多候选（含未知 source）拒绝并要求点名
+    inv2 = ToolInvocation(tool_name="framework_prompt", arguments={"content": "去把刷铁机接上"}, source="planner-react")
+    result2 = await rig_named.registry.invoke(inv2)
+    assert not result2.success and "多个候选" in (result2.error_message or "")

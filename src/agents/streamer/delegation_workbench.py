@@ -362,6 +362,7 @@ class DelegationWorkbench:
                     source=PLANNER_CALL_SOURCE,
                     round_id=round_id,
                     caller_profile=caller_profile,
+                    invoking_agent="streamer",
                 )
             )
         except Exception as e:

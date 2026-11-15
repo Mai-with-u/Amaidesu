@@ -568,11 +568,16 @@ class DelegationCore:
     # -------------------- 目标解析 --------------------
 
     def resolve_target(
-        self, target_name: str, caller: str, roster: Optional[Dict[str, str]]
+        self, target_name: str, caller: str, roster: Optional[Dict[str, str]], invoking_agent: str = ""
     ) -> tuple[Optional[BaseAgent], Optional[_DelegationOutcome]]:
-        """解析目标 Agent（委派/递话/结单共用）：留空唯一候选兜底 + 禁自派 + 名册校验。"""
+        """解析目标 Agent（委派/递话/结单共用）：留空唯一候选兜底 + 禁自派 + 名册校验。
+
+        自排除优先用 ``invoking_agent``（发起 Agent 的注册名）；为空时退回
+        ``caller``（source 标识，形如注册名的调用方仍可自排除）。
+        """
+        exclusion = (invoking_agent or "").strip() or caller
         if not target_name:
-            candidates = [name for name in (roster or {}) if name != caller]
+            candidates = [name for name in (roster or {}) if name != exclusion]
             if len(candidates) != 1:
                 detail = (
                     "当前没有能接收的 Agent（启用的游戏若不走委派，直接用它自己的操作工具）"
@@ -583,7 +588,7 @@ class DelegationCore:
                     ok=False, error="not_found", message=f"受理失败：未指定目标，且{detail}——请点名目标注册名"
                 )
             target_name = candidates[0]
-        if target_name == (caller or "unknown"):
+        if target_name == (exclusion or "unknown"):
             return None, _DelegationOutcome(ok=False, error="refused", message="受理失败：目标不能是自己（自派被拒）")
         target = self._manager.get_agent_by_name(target_name)
         if target is None:
@@ -1037,13 +1042,14 @@ class DelegationCore:
         current: str = "",
         progress: str = "",
         urgent: bool = False,
+        invoking_agent: str = "",
     ) -> _DelegationOutcome:
         """受理一次委派（完整前置序列）：基建在位 → 解析目标 → 接单。"""
         if self._task_ledger is None:
             return _DelegationOutcome(
                 ok=False, error="no_ledger", message="任务基建未装配（task_ledger 未注入），委派不可用"
             )
-        target, failure = self.resolve_target(target_name, caller, roster)
+        target, failure = self.resolve_target(target_name, caller, roster, invoking_agent=invoking_agent)
         if failure is not None:
             return failure
         assert target is not None  # 解析成功时必有实例（类型收窄）
@@ -1067,6 +1073,7 @@ class DelegationCore:
         caller: str,
         progress: str = "",
         roster: Optional[Dict[str, str]] = None,
+        invoking_agent: str = "",
     ) -> _SettleOutcome:
         """按短编号（'在做' / '待办N'）或内部任务号结单、搁下或撤单。"""
         if self._task_ledger is None:
@@ -1113,7 +1120,7 @@ class DelegationCore:
                     error="not_found",
                     message=f"任务不存在: '{ref}'（未知委派号或已终态）",
                 )
-        target, failure = self.resolve_target(resolved_target, caller, roster)
+        target, failure = self.resolve_target(resolved_target, caller, roster, invoking_agent=invoking_agent)
         if failure is not None:
             return _SettleOutcome(ok=False, error=failure.error, message=failure.message)
         assert target is not None
@@ -1573,13 +1580,17 @@ class AgentControlProvider(BaseToolProvider):
         name = invocation.tool_name
         try:
             if name == "framework_delegate":
-                return await self._invoke_delegate(args, caller=invocation.source)
+                return await self._invoke_delegate(
+                    args, caller=invocation.source, invoking_agent=invocation.invoking_agent
+                )
             if name == "framework_prompt":
-                return self._invoke_prompt(args, caller=invocation.source)
+                return self._invoke_prompt(args, caller=invocation.source, invoking_agent=invocation.invoking_agent)
             if name == "framework_task_status":
                 return self._invoke_task_status(args, caller=invocation.source)
             if name == "framework_task_settle":
-                return await self._invoke_task_settle(args, caller=invocation.source)
+                return await self._invoke_task_settle(
+                    args, caller=invocation.source, invoking_agent=invocation.invoking_agent
+                )
             return ToolExecutionResult(
                 tool_name=name,
                 success=False,
@@ -1593,7 +1604,9 @@ class AgentControlProvider(BaseToolProvider):
                 error_message=f"{type(exc).__name__}: {exc}",
             )
 
-    async def _invoke_delegate(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
+    async def _invoke_delegate(
+        self, args: Dict[str, Any], *, caller: str, invoking_agent: str = ""
+    ) -> ToolExecutionResult:
         started_ms = now_ms()
         instruction = str(args.get("instruction", "") or "").strip()
         item_ref = str(args.get("item", "") or "").strip()
@@ -1614,6 +1627,7 @@ class AgentControlProvider(BaseToolProvider):
             current=str(args.get("current", "") or ""),
             progress=str(args.get("progress", "") or ""),
             urgent=bool(args.get("urgent", False)),
+            invoking_agent=invoking_agent,
         )
         if outcome.ok:
             receipt: Dict[str, Any] = {
@@ -1643,7 +1657,7 @@ class AgentControlProvider(BaseToolProvider):
             )
         return business_fail_result("framework_delegate", started_ms, outcome.message)
 
-    def _invoke_prompt(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
+    def _invoke_prompt(self, args: Dict[str, Any], *, caller: str, invoking_agent: str = "") -> ToolExecutionResult:
         started_ms = now_ms()
         content = str(args.get("content", "") or "")
         if not content:
@@ -1654,7 +1668,9 @@ class AgentControlProvider(BaseToolProvider):
                 "framework_prompt", started_ms, f"prompt 的 kind 只能是 'requirement' 或 'chat'（收到 '{kind}'）"
             )
         target_name = str(args.get("agent", "") or "")
-        target, failure = self._delegation.resolve_target(target_name, caller, self._roster("receive_prompt"))
+        target, failure = self._delegation.resolve_target(
+            target_name, caller, self._roster("receive_prompt"), invoking_agent=invoking_agent
+        )
         if failure is not None:
             return business_fail_result("framework_prompt", started_ms, failure.message)
         assert target is not None
@@ -1673,7 +1689,9 @@ class AgentControlProvider(BaseToolProvider):
             structured_content={"delivered": True, "executor": target.name},
         )
 
-    async def _invoke_task_settle(self, args: Dict[str, Any], *, caller: str) -> ToolExecutionResult:
+    async def _invoke_task_settle(
+        self, args: Dict[str, Any], *, caller: str, invoking_agent: str = ""
+    ) -> ToolExecutionResult:
         started_ms = now_ms()
         tool_name = "framework_task_settle"
         settled = await self._delegation.settle(
@@ -1683,6 +1701,7 @@ class AgentControlProvider(BaseToolProvider):
             caller=caller,
             progress=str(args.get("progress", "") or ""),
             roster=self._roster("receive_delegation"),
+            invoking_agent=invoking_agent,
         )
         if settled.ok:
             return ToolExecutionResult(

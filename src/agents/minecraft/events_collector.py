@@ -204,7 +204,11 @@ class MaicraftEventsCollector(BaseCollector):
             raise RuntimeError(f"{self.stream_label}连接已不可用")
         if self.topic != _DEFAULT_TOPIC:
             arguments = {"topic": self.topic, **arguments}
-        reply = reply_of(await provider.invoke(ToolInvocation(tool_name=EVENTS, arguments=arguments, source=self.name)))
+        reply = reply_of(
+            await provider.invoke(
+                ToolInvocation(tool_name=EVENTS, arguments=arguments, source=self.name, invoking_agent="minecraft")
+            )
+        )
         if not reply.ok:
             raise RuntimeError(f"events 读取失败：{reply.error_code} {reply.error_message}")
         page = events_page_of(reply.data)

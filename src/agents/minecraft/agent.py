@@ -1493,6 +1493,7 @@ class MinecraftAgent(BaseAgent):
                 source="minecraft-react",
                 round_id=round_id,
                 caller_profile=MINECRAFT_PROFILE,
+                invoking_agent="minecraft",
             )
         )
         if name.startswith(f"{PROVIDER}_"):
@@ -1552,7 +1553,7 @@ class MinecraftAgent(BaseAgent):
         if provider is None:
             return MaicraftReply(ok=False, error_code="not_connected", error_message="游戏连接还没就绪")
         result: ToolExecutionResult = await provider.invoke(
-            ToolInvocation(tool_name=name, arguments=arguments, source="minecraft-host")
+            ToolInvocation(tool_name=name, arguments=arguments, source="minecraft-host", invoking_agent="minecraft")
         )
         return reply_of(result)
 

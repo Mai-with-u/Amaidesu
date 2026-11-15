@@ -1540,6 +1540,7 @@ class Planner:
                         source="planner-reference",
                         round_id=round_id,
                         caller_profile=PLANNER_PROFILE,
+                        invoking_agent="streamer",
                     )
                 )
             except Exception as e:
@@ -1661,6 +1662,7 @@ class Planner:
                     round_id=round_id,
                     caller_profile=PLANNER_PROFILE,
                     attachment=attachment,
+                    invoking_agent="streamer",
                 )
             )
         except Exception as e:
@@ -1809,6 +1811,7 @@ class Planner:
                     source="planner-react",
                     round_id=round_id,
                     caller_profile=PLANNER_PROFILE,
+                    invoking_agent="streamer",
                 )
             )
         except Exception as e:

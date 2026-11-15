@@ -65,7 +65,11 @@ class MaicraftChatCollector(MaicraftEventsCollector):
             return ""
         try:
             reply = reply_of(
-                await provider.invoke(ToolInvocation(tool_name=OBSERVE, arguments={"what": "self"}, source=self.name))
+                await provider.invoke(
+                    ToolInvocation(
+                        tool_name=OBSERVE, arguments={"what": "self"}, source=self.name, invoking_agent="minecraft"
+                    )
+                )
             )
         except Exception as exc:  # noqa: BLE001 - 读不到账号名只影响认回显，聊天照转
             self.logger.warning("读角色账号名失败，这条聊天按别人的话转出", exc=exc)

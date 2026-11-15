@@ -176,6 +176,11 @@ class ToolInvocation:
             与具体工具的 Provider 约定形状）；None = 本窗无宿主材料。与
             arguments 的分工：arguments 由 LLM 生成、模型可伪造，attachment
             由宿主代码构造、不经 LLM
+        invoking_agent: 发起这次调用的 Agent 注册名（如 "streamer" /
+            "minecraft"）。source 记"调用出于什么场景"（如 "planner-react"，
+            不是名册名字），本字段记"调用者是谁"（在册注册名）；委派/递话
+            类框架工具用它把发起者自己从候选里排除。可空——空时框架退回
+            用 source 做自排除（对 name 形如注册名的调用方仍有效）
     """
 
     tool_name: str
@@ -186,6 +191,7 @@ class ToolInvocation:
     round_id: str = ""
     caller_profile: str = ""
     attachment: Optional[ToolCallAttachment] = None
+    invoking_agent: str = ""
 
 
 __all__ = [

@@ -2436,6 +2436,7 @@ class StreamerAgent(BaseAgent):
                     tool_name="framework_task_settle",
                     arguments={"item": task_id, "outcome": "drop"},
                     source="streamer_stall_watch",
+                    invoking_agent="streamer",
                 )
             )
         except Exception as exc:  # noqa: BLE001 - 撤单失败只记日志，账面等下一轮告警重判
@@ -2633,7 +2634,13 @@ class StreamerAgent(BaseAgent):
         for name in self.typed_config.reference_tools:
             try:
                 result = await self._tool_registry.invoke(
-                    ToolInvocation(tool_name=name, arguments={}, source="mouth-scene", caller_profile=_PROFILE_REPLYER)
+                    ToolInvocation(
+                        tool_name=name,
+                        arguments={},
+                        source="mouth-scene",
+                        caller_profile=_PROFILE_REPLYER,
+                        invoking_agent="streamer",
+                    )
                 )
             except Exception as exc:  # noqa: BLE001 - 读不到现场不挡反应
                 self._logger.warning(f"嘴读现场工具 '{name}' 失败: {exc}", exc=True)
