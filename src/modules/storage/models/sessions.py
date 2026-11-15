@@ -34,6 +34,8 @@ class LiveSession(BaseModel):
     started_at_ms: int = Field(..., description="开播时刻（Unix epoch 毫秒）")
     ended_at_ms: Optional[int] = Field(default=None, description="结账时刻（Unix epoch 毫秒）；None 即进行中")
     title: Optional[str] = Field(default=None, description="场次标题；None 即未命名")
+    notes: Optional[str] = Field(default=None, description="运营者手写的场次备注（自由文本；None 即没写）")
+    overview: Optional[str] = Field(default=None, description="模型写的这场概览（这场发生了什么；None 即还没生成）")
     source: str = Field(default="manual", description="场次来源（manual / replay / generate / legacy）")
     kind: SessionKind = Field(default=SESSION_KIND_LIVE, description="场次类型（live=正式 / rehearsal=彩排）")
     heat: int = Field(default=0, description="最近一次心跳的热度")

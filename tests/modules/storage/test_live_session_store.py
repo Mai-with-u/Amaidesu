@@ -110,6 +110,41 @@ async def test_list_sessions_order_counts_and_filters(store: SQLiteDatabase) -> 
     assert await sessions.list_live_sessions(source="replay", title_keyword="不存在的标题") == []
 
 
+async def test_update_session_notes(store: SQLiteDatabase) -> None:
+    """备注写入 / 清除 / 行不存在返回 False（不建行）。"""
+    sessions = store.sessions
+    pk = await sessions.insert_live_session(started_at_ms=1_000, title="带备注的场")
+    assert (
+        await sessions.update_live_session_notes(live_session_id=pk, notes="这场水车翻车了", updated_at_ms=2_000)
+        is True
+    )
+    row = await sessions.get_live_session(live_session_id=pk)
+    assert (row.notes, row.updated_at_ms) == ("这场水车翻车了", 2_000)
+
+    assert await sessions.update_live_session_notes(live_session_id=pk, notes=None, updated_at_ms=3_000) is True
+    assert (await sessions.get_live_session(live_session_id=pk)).notes is None
+    assert await sessions.update_live_session_notes(live_session_id=999_999, notes="x", updated_at_ms=4_000) is False
+    assert len(await store.execute("SELECT * FROM live_sessions")) == 1
+
+
+async def test_list_sessions_paging_and_time_range(store: SQLiteDatabase) -> None:
+    """分页与开播区间筛选：页与页不重不漏，计数与筛选口径一致。"""
+    sessions = store.sessions
+    for seq in range(1, 4):
+        await sessions.insert_live_session(started_at_ms=1_000 * seq, title=f"第{seq}场")
+
+    first = await sessions.list_live_sessions(limit=2)
+    second = await sessions.list_live_sessions(limit=2, offset=2)
+    assert [r.title for r in first] == ["第3场", "第2场"]
+    assert [r.title for r in second] == ["第1场"]
+    assert await sessions.count_live_sessions() == 3
+
+    ranged = await sessions.list_live_sessions(started_after=2_000, started_before=2_000)
+    assert [r.title for r in ranged] == ["第2场"]
+    assert await sessions.count_live_sessions(started_after=2_000, started_before=2_000) == 1
+    assert await sessions.count_live_sessions(title_keyword="第1") == 1
+
+
 def _maintainer(store: SQLiteDatabase, session_manager: Any = None) -> BackgroundMaintainer:
     # 轻 tick 不走摘要渲染：满足 render() -> str 的最小替身即可
     prompt_manager = MagicMock()

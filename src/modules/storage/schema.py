@@ -18,6 +18,9 @@
 - ``live_sessions.kind`` 标记场次类型（live=正式，面向真实观众 / rehearsal=
   彩排，模拟、回放与调试）；与来源正交，开场时声明。主播记忆按类型分两条线，
   对外同步与统计只认正式场
+- ``live_sessions.notes`` 是运营者手写的场次备注（自由文本，一行；与自动
+  整理出的场次档案不是一回事）；``live_sessions.overview`` 是模型写的这场概览
+  （"这场发生了什么"，给人回看与查找用；不进任何记忆表）
 - ``live_chat.message_id`` 与 ``live_chat.reply_to_message_id`` 构成"主播发言
   回复了哪条观众弹幕"的关联键（互动分析数据面）
 - ``live_chat.sender_role`` 取值：``viewer``（观众弹幕）/ ``assistant``（主播
@@ -61,7 +64,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 43
+SCHEMA_VERSION: int = 44
 
 
 # =============================================================================
@@ -286,6 +289,8 @@ CREATE TABLE IF NOT EXISTS live_sessions (
     started_at_ms   INTEGER NOT NULL,
     ended_at_ms     INTEGER,
     title           TEXT,
+    notes           TEXT,
+    overview        TEXT,
     source          TEXT NOT NULL DEFAULT 'manual',
     kind            TEXT NOT NULL DEFAULT 'live' CHECK (kind IN ('live', 'rehearsal')),
     heat            INTEGER NOT NULL DEFAULT 0,

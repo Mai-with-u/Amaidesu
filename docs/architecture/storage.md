@@ -8,7 +8,7 @@
 
 **场次与消息**
 
-- `live_sessions`：一场直播一行，开播/下播边界与人数、热度实时状态，以及下播整理的进度：`settled_at_ms`（整理完成的时刻，空 = 待整理）、`settle_attempts`（自动重试次数，用满后等运营者手动重排）、`settle_report`（失败原因或未登记清单，JSON 文本）。
+- `live_sessions`：一场直播一行，开播/下播边界与人数、热度实时状态，以及下播整理的进度：`settled_at_ms`（整理完成的时刻，空 = 待整理）、`settle_attempts`（自动重试次数，用满后等运营者手动重排）、`settle_report`（失败原因或未登记清单，JSON 文本）。`notes` 是运营者手写的场次备注（自由文本，空 = 没写；与自动整理出的场次档案不是一回事）；`overview` 是模型写的这场概览（"这场发生了什么"，给人快速回看与查找用；不进任何记忆表，主播说话时看不到它）。两列各写各的：人写的话不会被整理覆盖，模型写的也不参与记忆审核。
 - `live_chat`：全量消息流，观众/主播/搭档同表（`sender_role` 区分）；`message_id` ↔ `reply_to_message_id` 构成"主播回复了哪条弹幕"的关联键。主播行另带 `utterance_id`（与 `tts.utterance.*` 共用的全链路关联键）、`dropped_at_ms`（播放队列确知这句没送到观众面前的时刻；为空即送到过，算"她说过"）与 `memory_refs`（这句点名引用了哪条记忆）。
 - `gifts` / `super_chats` / `guards`：付费明细三表，按平台原始单位入库（口径见 [观众身份复合键与货币口径](../decisions/029-viewer-identity-key-and-currency-unit.md)）。
 - `timeline_summary`：一场内的分段摘要轨迹（后台维护者写入）。

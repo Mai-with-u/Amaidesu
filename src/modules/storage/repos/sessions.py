@@ -247,6 +247,44 @@ class SessionRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def update_live_session_notes(
+        self,
+        *,
+        live_session_id: int,
+        notes: Optional[str],
+        updated_at_ms: int,
+    ) -> bool:
+        """改写场次备注（运营者手写；None 即清除备注）。行不存在返回 False。"""
+
+        def _exec() -> bool:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "UPDATE live_sessions SET notes=?, updated_at_ms=? WHERE id=?",
+                    (notes, updated_at_ms, live_session_id),
+                )
+                return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
+    async def update_live_session_overview(
+        self,
+        *,
+        live_session_id: int,
+        overview: Optional[str],
+        updated_at_ms: int,
+    ) -> bool:
+        """改写场次概览（模型写的"这场发生了什么"；None 即清除）。行不存在返回 False。"""
+
+        def _exec() -> bool:
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "UPDATE live_sessions SET overview=?, updated_at_ms=? WHERE id=?",
+                    (overview, updated_at_ms, live_session_id),
+                )
+                return cur.rowcount > 0
+
+        return await self._run_in_executor(_exec)
+
     async def set_live_session_kind_with_ledger(
         self,
         *,
@@ -892,28 +930,17 @@ class SessionRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
-    async def list_live_sessions(
-        self,
+    @staticmethod
+    def _session_filter_clause(
         *,
-        limit: int = 50,
-        source: Optional[str] = None,
-        kind: Optional[SessionKind] = None,
-        title_keyword: Optional[str] = None,
-    ) -> List[LiveSessionListItem]:
-        """列出场次（附消息数），供场次列表/回看选择。
-
-        排序：按开始时间倒序。无显式场次期间不创建兜底行；列表只含历史
-        显式场次。
-        筛选：``source`` 精确匹配来源；``kind`` 精确匹配类型；``title_keyword``
-        对 title 做包含匹配。
-
-        Args:
-            limit: 最多返回条数
-            source: 来源过滤（manual / replay / generate / legacy）；None 不过滤
-            kind: 类型过滤（live / rehearsal）；None 不过滤
-            title_keyword: 标题关键字；None 或空串不过滤
-        """
-
+        source: Optional[str],
+        kind: Optional[SessionKind],
+        title_keyword: Optional[str],
+        started_after: Optional[int],
+        started_before: Optional[int],
+        settle_state: Optional[str],
+    ) -> tuple[str, List[object]]:
+        """场次列表的筛选条件（列表与计数共用，保证分页总数与当页同口径）。"""
         conditions: List[str] = []
         params: List[object] = []
         if source:
@@ -925,8 +952,62 @@ class SessionRepo(BaseRepo):
         if title_keyword:
             conditions.append("s.title LIKE ?")
             params.append(f"%{title_keyword}%")
+        if started_after is not None:
+            conditions.append("s.started_at_ms >= ?")
+            params.append(started_after)
+        if started_before is not None:
+            conditions.append("s.started_at_ms <= ?")
+            params.append(started_before)
+        # 整理状态：pending=没整理过 / failed=整理试过没成 / review=整理完还没标已审 / reviewed=已标已审
+        if settle_state == "pending":
+            conditions.append("s.settled_at_ms IS NULL AND s.settle_attempts = 0")
+        elif settle_state == "failed":
+            conditions.append("s.settled_at_ms IS NULL AND s.settle_attempts > 0")
+        elif settle_state == "review":
+            conditions.append("s.settled_at_ms IS NOT NULL AND s.reviewed_at_ms IS NULL")
+        elif settle_state == "reviewed":
+            conditions.append("s.reviewed_at_ms IS NOT NULL")
         where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        params.append(limit)
+        return where_clause, params
+
+    async def list_live_sessions(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        source: Optional[str] = None,
+        kind: Optional[SessionKind] = None,
+        title_keyword: Optional[str] = None,
+        started_after: Optional[int] = None,
+        started_before: Optional[int] = None,
+        settle_state: Optional[str] = None,
+    ) -> List[LiveSessionListItem]:
+        """列出场次（附消息数），供场次列表/回看选择。
+
+        排序：按开始时间倒序。无显式场次期间不创建兜底行；列表只含历史
+        显式场次。
+        筛选：``source`` 精确匹配来源；``kind`` 精确匹配类型；``title_keyword``
+        对 title 做包含匹配；``started_after`` / ``started_before`` 按开播时刻取区间
+        （闭区间两端）。
+
+        Args:
+            limit: 最多返回条数
+            offset: 跳过前多少条（分页用）
+            source: 来源过滤（manual / replay / generate / legacy）；None 不过滤
+            kind: 类型过滤（live / rehearsal）；None 不过滤
+            title_keyword: 标题关键字；None 或空串不过滤
+            started_after: 开播时刻下界（含）；None 不过滤
+            started_before: 开播时刻上界（含）；None 不过滤
+        """
+        where_clause, params = self._session_filter_clause(
+            source=source,
+            kind=kind,
+            title_keyword=title_keyword,
+            started_after=started_after,
+            started_before=started_before,
+            settle_state=settle_state,
+        )
+        params.extend([limit, max(0, offset)])
 
         def _exec() -> List[LiveSessionListItem]:
             with self._manager.transaction() as conn:
@@ -935,10 +1016,40 @@ class SessionRepo(BaseRepo):
                     "SELECT COUNT(*) FROM live_chat c WHERE c.live_session_id = s.id"
                     ") AS message_count "
                     f"FROM live_sessions s {where_clause} "
-                    "ORDER BY s.started_at_ms DESC LIMIT ?",
+                    "ORDER BY s.started_at_ms DESC LIMIT ? OFFSET ?",
                     params,
                 ).fetchall()
                 return [LiveSessionListItem.model_validate(dict(row)) for row in rows]
+
+        return await self._run_in_executor(_exec)
+
+    async def count_live_sessions(
+        self,
+        *,
+        source: Optional[str] = None,
+        kind: Optional[SessionKind] = None,
+        title_keyword: Optional[str] = None,
+        started_after: Optional[int] = None,
+        started_before: Optional[int] = None,
+        settle_state: Optional[str] = None,
+    ) -> int:
+        """数一数筛选后共有多少场（分页总数；与列表同一套筛选条件）。"""
+        where_clause, params = self._session_filter_clause(
+            source=source,
+            kind=kind,
+            title_keyword=title_keyword,
+            started_after=started_after,
+            started_before=started_before,
+            settle_state=settle_state,
+        )
+
+        def _exec() -> int:
+            with self._manager.transaction() as conn:
+                row = conn.execute(
+                    f"SELECT COUNT(*) AS total FROM live_sessions s {where_clause}",
+                    params,
+                ).fetchone()
+                return int(row["total"]) if row else 0
 
         return await self._run_in_executor(_exec)
 
