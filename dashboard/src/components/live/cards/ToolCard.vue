@@ -4,21 +4,25 @@
      载荷入口收在头行右侧小字（失败卡显示"错误"并用错误色）。
      轮次跳转收在头部蓝字链接（整卡可点误触率高）；compact 下成功徽标与载荷入口不渲染。
      maicraft_execute（游戏 Agent 下达 Minecraft 目标的调用）按 actor 分流出专用卡面：
-     头行同构，正文默认展开能力/意图/要点，steps 可展开，完成时显示结果总结 -->
+     头行同构，正文默认展开能力/意图/要点，steps 可展开，完成时显示结果总结。
+     framework_delegate（主播 Agent 派活给游戏 Agent）同款分流：徽标改已受理/已排队，
+     头行尾缀目标 Agent，正文为指令与执行方复述（均 2 行钳制 + 合并展开开关） -->
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { CopyDocument } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
 import { formatLatency, formatTimeHMS } from '@/utils/format';
 import {
   agentGroupOf,
+  frameworkDelegateSummary,
+  isFrameworkDelegateCard,
   isMinecraftExecuteEntry,
   maicraftExecuteSummary,
   minecraftGoalIdOf,
   minecraftGoalOperationOf,
 } from '@/utils/liveFeed';
-import type { MinecraftExecuteSummary } from '@/utils/liveFeed';
+import type { FrameworkDelegateSummary, MinecraftExecuteSummary } from '@/utils/liveFeed';
 import { useTimelineCardHost } from './context';
 import type { CardProps } from './registry';
 
@@ -124,6 +128,59 @@ function togglePolls(): void {
   pollsOpen.value = !pollsOpen.value;
 }
 
+// framework_delegate 专用卡面：按 actor 分流（失败卡走通用错误路径）。
+// 受理态缺失（accepted=false 且未排队）或指令为空的旧事件退回通用形态
+const delegate = computed<FrameworkDelegateSummary | null>(() => {
+  if (!isFrameworkDelegateCard(props.entry)) return null;
+  const d = toolDetail(props.entry);
+  const summary = frameworkDelegateSummary(d.args, d.result);
+  return summary.instruction && (summary.accepted || summary.queued) ? summary : null;
+});
+
+/** 状态徽标：排队优先于受理（排队必然也受理了，"已排队 · 第 N 位"信息量更大） */
+const delegateBadge = computed(() => {
+  const s = delegate.value;
+  if (!s) return null;
+  if (s.queued) {
+    return {
+      label: s.queuePosition != null ? `已排队 · 第 ${s.queuePosition} 位` : '已排队',
+      success: true,
+    };
+  }
+  return { label: '已受理', success: true };
+});
+
+// 指令/复述两行共用一个展开开关：两行是对照阅读的关系，合并开关一次放开
+// 双行钳制；行数未超 2 行时不渲染入口（渲染后按实际溢出量测）
+const delegateExpanded = ref(false);
+const delegateOverflow = ref(false);
+/** 钳制行元素（指令行 + 复述行）：函数式 ref 收集，溢出量测用；卸载回调入参为 null 时跳过 */
+const delegateLinesEl = ref<HTMLElement[]>([]);
+
+function setDelegateLineEl(el: unknown): void {
+  if (el instanceof HTMLElement && !delegateLinesEl.value.includes(el)) {
+    delegateLinesEl.value.push(el);
+  }
+}
+
+function measureDelegateOverflow(): void {
+  delegateOverflow.value = delegateLinesEl.value.some(
+    el => el != null && el.scrollHeight > el.clientHeight + 1,
+  );
+}
+
+function toggleDelegateExpand(): void {
+  delegateExpanded.value = !delegateExpanded.value;
+}
+
+// 溢出量测依赖钳制样式已生效：挂载后与摘要变化（受理结果异步补齐 own_words 等）后各测一次
+onMounted(() => nextTick(measureDelegateOverflow));
+watch(delegate, () => {
+  delegateExpanded.value = false;
+  delegateLinesEl.value = [];
+  nextTick(measureDelegateOverflow);
+});
+
 /** vue-json-pretty 的 data 仅接受 JSON 结构；事件 payload 来自线上数据用 JSON 往返归一化
  * （剥掉 undefined / 函数等非 JSON 值），避免直接强转掩盖真实脏数据。
  * 序列化结果按载荷对象引用缓存（WeakMap）：同一事件的 args/result 在缓冲区里引用稳定，
@@ -188,6 +245,12 @@ async function copyText(text: string): Promise<void> {
         </span>
         <span v-if="exec.dryRun" class="act-badge is-dry-run-badge">预演</span>
       </template>
+      <!-- 派活卡状态徽标：已受理 / 已排队 · 第 N 位（绿色成功样式） -->
+      <template v-else-if="delegate && !host.compact">
+        <span v-if="delegateBadge" class="act-badge is-success-badge">
+          {{ delegateBadge.label }}
+        </span>
+      </template>
       <span
         v-else-if="entry.badge && (!host.compact || entry.failed)"
         class="act-badge"
@@ -195,17 +258,20 @@ async function copyText(text: string): Promise<void> {
       >
         {{ entry.badge }}
       </span>
-      <!-- 来源徽标（中性色，与状态徽标区分不抢视觉） -->
-      <span v-if="entry.source" class="act-source">{{ entry.source }}</span>
+      <!-- 来源徽标（中性色，与状态徽标区分不抢视觉）；派活卡换成目标 Agent（游戏色） -->
+      <span v-if="delegate" class="act-source is-delegate-target" :title="delegate.targetAgent">
+        → {{ delegate.targetAgent || '游戏 Agent' }}
+      </span>
+      <span v-else-if="entry.source" class="act-source">{{ entry.source }}</span>
       <!-- 参数药丸并入头行：超宽整体截断，完整参数在载荷区；入参为空时回退纯文本正文。
            专用卡面头行不塞药丸——要点在第 2 行平文展示 -->
-      <div v-if="!exec && entry.argPills.length > 0" class="act-args">
+      <div v-if="!exec && !delegate && entry.argPills.length > 0" class="act-args">
         <span v-for="pill in entry.argPills" :key="pill.key" class="arg-pill">
           <span class="arg-key">{{ pill.key }}</span>
           <span class="arg-value">{{ pill.value }}</span>
         </span>
       </div>
-      <p v-else-if="!exec && entry.text" class="act-text">{{ entry.text }}</p>
+      <p v-else-if="!exec && !delegate && entry.text" class="act-text">{{ entry.text }}</p>
       <span class="grow" />
       <!-- 载荷入口：头行右侧小字，失败卡点名"错误"并用错误色 -->
       <button
@@ -274,6 +340,37 @@ async function copyText(text: string): Promise<void> {
           </li>
         </ul>
       </div>
+    </div>
+    <!-- framework_delegate 专用正文：指令行默认展开（2 行钳制 + 展开全文），
+         执行方复述与指令字面不同才渲染；排队时一行小字说明（全文在载荷区） -->
+    <div v-else-if="delegate" class="delegate-body">
+      <p
+        :ref="el => setDelegateLineEl(el)"
+        class="delegate-line"
+        :class="{ 'is-clamped': !delegateExpanded }"
+      >
+        <span class="delegate-label">指令：</span><span class="delegate-text">{{ delegate.instruction }}</span>
+      </p>
+      <p
+        v-if="delegate.ownWords"
+        :ref="el => setDelegateLineEl(el)"
+        class="delegate-line"
+        :class="{ 'is-clamped': !delegateExpanded }"
+      >
+        <span class="delegate-label">复述：</span><span class="delegate-text">{{ delegate.ownWords }}</span>
+      </p>
+      <button
+        v-if="delegateOverflow"
+        type="button"
+        class="delegate-toggle"
+        :title="delegateExpanded ? '收起' : '展开全文'"
+        @click.stop="toggleDelegateExpand"
+      >
+        {{ delegateExpanded ? '收起 ▴' : '展开 ▾' }}
+      </button>
+      <p v-if="delegate.queued && delegate.queueNote" class="delegate-queue-note">
+        {{ delegate.queueNote }}
+      </p>
     </div>
     <p v-else-if="entry.note" class="act-note">{{ entry.note }}</p>
     <!-- 参数/结果载荷区：compact 下不渲染（首页保持紧凑）；detail 为空时整段不渲染。
@@ -546,6 +643,61 @@ async function copyText(text: string): Promise<void> {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
+}
+
+/* framework_delegate 专用卡面：指令/复述行自动换行，收起时 2 行钳制，
+   展开开关放开钳制；排队说明单行截断（全文在载荷区） */
+.delegate-body {
+  margin-top: 4px;
+  min-width: 0;
+}
+.delegate-line {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+.delegate-line.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.delegate-label {
+  color: var(--text-secondary);
+}
+.delegate-toggle {
+  display: block;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+.delegate-toggle:hover {
+  color: var(--text-primary);
+}
+.delegate-queue-note {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 目标 Agent 徽标：沿用 act-source 形状，文字与描边换游戏色（跨轨去向一眼可辨） */
+.act-source.is-delegate-target {
+  color: var(--color-game);
+  border-color: var(--color-game-bg);
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .act-tool {

@@ -18,9 +18,13 @@ import {
   callerSourceLabel,
   decisionDetail,
   formatAmount,
+  frameworkDelegateInstruction,
+  frameworkDelegateSummary,
   fromDecision,
   guidanceOf,
   isConversationEntry,
+  isFrameworkDelegateCard,
+  isFrameworkDelegateEntry,
   isMinecraftExecuteEntry,
   isRoundLinkable,
   isSilentDecision,
@@ -1178,5 +1182,104 @@ describe('maicraft_execute 专用卡面解析', () => {
     );
     expect(entry?.kind).toBe('tool');
     expect(entry?.actor).toBe('maicraft_execute');
+  });
+});
+
+describe('framework_delegate 专用卡面解析', () => {
+  /** 完整的 framework_delegate 入参/结果样本（形状对照线上 46 条样本） */
+  function delegateArgs(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      agent: 'minecraft',
+      instruction: '去村庄找村民，用 3 个绿宝石换 5 个面包，回来放进箱子里',
+      when_busy: 'replace',
+      ...extra,
+    };
+  }
+  function delegateResult(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      accepted: true,
+      task_id: 'deleg_abc123',
+      executor: 'minecraft',
+      queued: false,
+      own_words: '我知道了，我这就去村庄用绿宝石换面包回来存箱子',
+      ...extra,
+    };
+  }
+
+  it('主路径：取目标 Agent/指令/复述/受理态', () => {
+    const s = frameworkDelegateSummary(delegateArgs(), delegateResult());
+    expect(s.targetAgent).toBe('minecraft');
+    expect(s.instruction).toBe('去村庄找村民，用 3 个绿宝石换 5 个面包，回来放进箱子里');
+    expect(s.ownWords).toBe('我知道了，我这就去村庄用绿宝石换面包回来存箱子');
+    expect(s.accepted).toBe(true);
+    expect(s.queued).toBe(false);
+    expect(s.queuePosition).toBeNull();
+    expect(s.queueNote).toBe('');
+  });
+
+  it('queued：位次与排队说明都取到', () => {
+    const s = frameworkDelegateSummary(
+      delegateArgs(),
+      delegateResult({ queued: true, queue_position: 1, note: '目标手上有事，这件已排进待办（待办2，第 1 位）' }),
+    );
+    expect(s.queued).toBe(true);
+    expect(s.queuePosition).toBe(1);
+    expect(s.queueNote).toBe('目标手上有事，这件已排进待办（待办2，第 1 位）');
+  });
+
+  it('own_words 与指令字面相同时留空（卡面不渲染复述行）', () => {
+    const same = '去村庄换面包';
+    const s = frameworkDelegateSummary(
+      delegateArgs({ instruction: same }),
+      delegateResult({ own_words: same }),
+    );
+    expect(s.ownWords).toBe('');
+  });
+
+  it('结果包一层 data 时穿透读取；字段缺失时各留空', () => {
+    const wrapped = frameworkDelegateSummary(
+      delegateArgs(),
+      { ok: true, data: delegateResult({ accepted: true, own_words: '' }) },
+    );
+    expect(wrapped.accepted).toBe(true);
+    const empty = frameworkDelegateSummary(null, null);
+    expect(empty).toEqual({
+      targetAgent: '',
+      instruction: '',
+      ownWords: '',
+      accepted: false,
+      queued: false,
+      queuePosition: null,
+      queueNote: '',
+    });
+  });
+
+  it('frameworkDelegateInstruction：取 args.instruction，非对象/缺失返回空串', () => {
+    expect(frameworkDelegateInstruction(delegateArgs())).toBe(
+      '去村庄找村民，用 3 个绿宝石换 5 个面包，回来放进箱子里',
+    );
+    expect(frameworkDelegateInstruction(null)).toBe('');
+    expect(frameworkDelegateInstruction({ agent: 'minecraft' })).toBe('');
+  });
+
+  it('isFrameworkDelegateEntry：仅 tool + framework_delegate 命中', () => {
+    const tool = makeEntry({ id: '1', kind: 'tool', tsMs: 1000, actor: 'framework_delegate', text: '' });
+    const other = makeEntry({ id: '2', kind: 'tool', tsMs: 1000, actor: 'maicraft_execute', text: '' });
+    const speech = makeEntry({ id: '3', kind: 'speech', tsMs: 1000, actor: 'framework_delegate', text: '' });
+    expect(isFrameworkDelegateEntry(tool)).toBe(true);
+    expect(isFrameworkDelegateEntry(other)).toBe(false);
+    expect(isFrameworkDelegateEntry(speech)).toBe(false);
+  });
+
+  it('isFrameworkDelegateCard：失败卡退回通用错误路径', () => {
+    const failed = makeEntry({
+      id: '1',
+      kind: 'tool',
+      tsMs: 1000,
+      actor: 'framework_delegate',
+      text: '',
+      failed: true,
+    });
+    expect(isFrameworkDelegateCard(failed)).toBe(false);
   });
 });

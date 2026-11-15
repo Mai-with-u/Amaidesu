@@ -321,6 +321,7 @@
                 ref="lanesRef"
                 :entries="allEntries"
                 :tasks="taskWindows"
+                :task-facts="taskFacts"
                 :boundaries="laneBoundaries"
                 :empty-text="timelineEmptyText"
               />

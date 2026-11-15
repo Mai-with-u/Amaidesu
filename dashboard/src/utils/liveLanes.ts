@@ -12,13 +12,17 @@
 // 两条轨道都用同一套卡片渲染（LiveLanes），因此这里产出的是 ShowEntry[]。
 
 import {
+  frameworkDelegateInstruction,
+  frameworkDelegateTaskId,
   isMinecraftExecuteEntry,
   isMinecraftGoalEntry,
+  makeEntry,
   minecraftExecuteGoalId,
   minecraftGoalIdOf,
   minecraftGoalOperationOf,
   type ShowEntry,
 } from '@/utils/liveFeed';
+import { truncateText } from '@/utils/format';
 
 /** 轨道：现场（观众 ⇄ 主播）与游戏（游戏 Agent 与它的世界事件） */
 export type LaneId = 'stage' | 'game';
@@ -58,9 +62,6 @@ function isGameTool(entry: ShowEntry): boolean {
   return entry.source === '游戏 Agent';
 }
 
-/** 主播派给游戏 Agent 的指令（跨轨因果的起点） */
-const DELEGATE_TOOLS = new Set(['framework_delegate', 'framework_prompt']);
-
 /** 条目归属的轨道（游戏侧 = 游戏 Agent 产生的条目 + 它的世界事件） */
 export function laneOf(entry: ShowEntry): LaneId {
   if (
@@ -68,7 +69,8 @@ export function laneOf(entry: ShowEntry): LaneId {
     entry.kind === 'game_body' ||
     entry.kind === 'others_things' ||
     entry.kind === 'game_chat' ||
-    entry.kind === 'agent_reply'
+    entry.kind === 'agent_reply' ||
+    entry.kind === 'delegate_receipt'
   ) {
     return 'game';
   }
@@ -157,51 +159,60 @@ export function buildLaneSections(
   return sections;
 }
 
-/** 一次派活的生命期：从下达时刻到下一次派活（或最后一条回报）为止。
+/**
+ * 收活卡：游戏 Agent 接活的权威事实是 task.changed 受理回执，按 task.changed 的
+ * task_id 与主播列 framework_delegate 卡返回的 result.task_id 精确相等做身份配对
+ * （任务号由后端按时间+序号生成，全局唯一），在受理时刻往游戏列插一张轻量小卡。
  *
- * 事件里没有跨 Agent 的任务号，所以"这次派活到哪一步结束"只能按时间推断：
- * 下一次派活下达即认为上一件结束；没有下一次时，最后一条回报结束就算收尾。
- * 推断只用于卡片上的标注，不改变任何条目归类。
+ * 为什么不再按时间近邻猜归属：两次派活挨得近时，"最近一次派活"的推断会错配；
+ * 任务号是身份，配不上就是配不上——没有对应派活卡的受理不渲染收活卡。
+ * 终态回执不上这张卡：终态已由 execute 卡的任务终态徽标承载。
  */
-export interface DelegationWindow {
-  delegate: ShowEntry;
-  startMs: number;
-  endMs: number;
-  replies: number;
-}
-
-function isDelegateEntry(entry: ShowEntry): boolean {
-  return entry.kind === 'tool' && DELEGATE_TOOLS.has(entry.actor);
-}
-
-export function delegationWindows(entries: ShowEntry[]): DelegationWindow[] {
-  const delegates = entries.filter(isDelegateEntry);
-  return delegates.map((delegate, index) => {
-    const next = delegates[index + 1];
-    const limit = next ? next.tsMs : Number.POSITIVE_INFINITY;
-    const replies = entries.filter(
-      entry => entry.kind === 'agent_reply' && entry.tsMs >= delegate.tsMs && entry.tsMs < limit,
-    );
-    const lastReply = replies.length > 0 ? replies[replies.length - 1]!.tsMs : delegate.tsMs;
-    return {
-      delegate,
-      startMs: delegate.tsMs,
-      endMs: next ? next.tsMs : lastReply + 1,
-      replies: replies.length,
-    };
-  });
-}
-
-/** 一条回报属于哪次派活（不在任何派活生命期内返回 null） */
-export function delegationOfReply(
-  windows: DelegationWindow[],
-  entry: ShowEntry,
-): DelegationWindow | null {
-  if (entry.kind !== 'agent_reply') return null;
-  for (const window of windows) {
-    if (entry.tsMs >= window.startMs && entry.tsMs < window.endMs) return window;
+export function buildDelegateReceipts(entries: ShowEntry[], facts: TaskFact[]): ShowEntry[] {
+  // task_id → 派活卡条目（同任务号多张卡时取最早一张；正常不会发生，任务号唯一）
+  const delegateByTaskId = new Map<string, ShowEntry>();
+  for (const entry of entries) {
+    const taskId = frameworkDelegateTaskId(entry);
+    if (taskId && !delegateByTaskId.has(taskId)) delegateByTaskId.set(taskId, entry);
   }
-  return null;
+
+  const seen = new Set<string>();
+  const receipts: ShowEntry[] = [];
+  for (const fact of facts) {
+    // 只认受理回执；同一任务号的重复受理只出一张卡
+    if (fact.status !== 'accepted' || seen.has(fact.taskId)) continue;
+    const delegate = delegateByTaskId.get(fact.taskId);
+    if (!delegate) continue;
+    seen.add(fact.taskId);
+    const args = (delegate.detail as { args?: unknown } | null)?.args;
+    const instruction = frameworkDelegateInstruction(args);
+    const receipt = makeEntry({
+      id: `delegate_receipt:${fact.taskId}`,
+      kind: 'delegate_receipt',
+      tsMs: fact.tsMs,
+      actor: '游戏 Agent',
+      text: instruction ? truncateText(instruction, 20) : '（无指令摘要）',
+      badge: '收到派活',
+      source: '游戏 Agent',
+    });
+    receipt.delegateEntryId = delegate.id;
+    receipt.delegateTsMs = delegate.tsMs;
+    receipts.push(receipt);
+  }
+
+  // 受理时刻通常晚于派活时刻，两条流各自升序，按时间归并保持整列有序
+  receipts.sort((a, b) => a.tsMs - b.tsMs);
+  const merged: ShowEntry[] = [];
+  let index = 0;
+  for (const receipt of receipts) {
+    while (index < entries.length && entries[index]!.tsMs <= receipt.tsMs) {
+      merged.push(entries[index]!);
+      index += 1;
+    }
+    merged.push(receipt);
+  }
+  merged.push(...entries.slice(index));
+  return merged;
 }
 
 // ---------------------------------------------------------------------------

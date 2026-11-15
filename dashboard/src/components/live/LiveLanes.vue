@@ -11,8 +11,8 @@
 
      两列渲染的是同一套卡片（CARD_REGISTRY），不是摘要行：卡面版式、参数/结果折叠、
      统计胶囊、完整请求链接都与单列时间线完全一致。跨轨因果只有一种：主播派活
-     （framework_delegate / framework_prompt）→ 游戏 Agent 的回报，靠卡片上的
-     「派活 → 游戏 · 回报 N 条」「← 派活：<指令>」标记表达，点标记跳到对侧那张卡。 -->
+     （framework_delegate）→ 游戏 Agent 受理，靠游戏列的收活卡表达（task.changed
+     受理回执按 task_id 与派活卡返回的任务号身份配对合成），点收活卡跳回对侧那张派活卡。 -->
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 
@@ -22,17 +22,17 @@ import '@/components/live/cards/cards-shared.css';
 import { useLaneScroll } from '@/composables/live/useLaneScroll';
 import {
   annotateTaskEnds,
+  buildDelegateReceipts,
   buildLaneSections,
   collapseGoalPolls,
-  delegationOfReply,
-  delegationWindows,
   type LaneId,
   type LaneSection,
   type SegmentBoundary,
+  type TaskFact,
   type TaskWindow,
 } from '@/utils/liveLanes';
 import type { ShowEntry } from '@/utils/liveFeed';
-import { formatTimeHMS, truncateText } from '@/utils/format';
+import { formatTimeHMS } from '@/utils/format';
 import { useNowTick } from '@/composables/useNowTick';
 
 const props = withDefaults(
@@ -41,6 +41,8 @@ const props = withDefaults(
     emptyText?: string;
     /** 任务区间（task.changed 的受理 + 终态）：按 goal_id 回填到发起它的 execute 卡 */
     tasks?: TaskWindow[];
+    /** 任务事实（task.changed 逐条，含未终态的受理）：收活卡的身份配对数据源 */
+    taskFacts?: TaskFact[];
     /**
      * 环节边界（环节名 + 起止时刻）：回看窗口内没有流程单条目时，用它判断
      * 窗口内容属于哪个环节。undefined 表示没有这个信息渠道（实时模式），
@@ -48,13 +50,19 @@ const props = withDefaults(
      */
     boundaries?: SegmentBoundary[] | undefined;
   }>(),
-  { emptyText: '暂无内容', tasks: () => [], boundaries: undefined },
+  {
+    emptyText: '暂无内容',
+    tasks: () => [],
+    taskFacts: () => [],
+    boundaries: undefined,
+  },
 );
 
-// 任务终态回填在分节之前：execute 卡带着 taskEnd 进节，游戏列据此渲染终态徽标
-const annotated = computed(() => annotateTaskEnds(props.entries, props.tasks));
+// 合成条目先插入（收活卡）、再回填终态（taskEnd），都发生在分节之前：
+// 游戏列拿到的是带上收活卡与终态徽标的完整视图
+const withReceipts = computed(() => buildDelegateReceipts(props.entries, props.taskFacts));
+const annotated = computed(() => annotateTaskEnds(withReceipts.value, props.tasks));
 const sections = computed<LaneSection[]>(() => buildLaneSections(annotated.value, props.boundaries));
-const windows = computed(() => delegationWindows(props.entries));
 
 // 相对时间标签（"12s 前"）每秒刷新；卡片 props 恒为 entry + nowMs
 const nowMs = useNowTick();
@@ -155,6 +163,11 @@ const INTERACTIVE = 'button, a, summary, input, textarea, select, [role="button"
 function onCardClick(entry: ShowEntry, lane: LaneId, event: MouseEvent): void {
   const target = event.target;
   if (target instanceof Element && target.closest(INTERACTIVE)) return;
+  // 收活卡的点击语义是"跳到这次派活的指令卡"（身份配对已给出目标），不走对侧近邻对齐
+  if (entry.kind === 'delegate_receipt' && entry.delegateEntryId) {
+    focusEntry(entry.delegateEntryId, 'stage');
+    return;
+  }
   alignFrom(entry, lane);
 }
 
@@ -164,7 +177,7 @@ function alignFrom(entry: ShowEntry, lane: LaneId): void {
   reveal(other, nearestIn(other, entry.tsMs));
 }
 
-/** 跳到某条指定卡（回报卡上的「← 派活」用它回到对侧的指令卡） */
+/** 跳到某条指定卡（游戏列收活卡用它回到主播列对应的派活卡） */
 function focusEntry(entryId: string, lane: LaneId): void {
   const column = columnOf(lane);
   if (!column) return;
@@ -177,39 +190,6 @@ function focusEntry(entryId: string, lane: LaneId): void {
 // 相等的查询卡，从原位摘除挂到那张 execute 条目的 polls 字段，卡体内部渲染
 // （ToolCard 的专用卡面负责"进度查询 ×N"与明细展开）
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// 跨轨标记
-// ---------------------------------------------------------------------------
-
-/** 派活卡上的标记：这条指令之后共收到多少条回报 */
-function delegateChip(entry: ShowEntry): string {
-  const window = windows.value.find(item => item.delegate.id === entry.id);
-  if (!window) return '';
-  return `派活 → 游戏 · 回报 ${window.replies} 条`;
-}
-
-/** 派活卡上的指令原文（tool 条目的 detail.args.instruction） */
-function delegateInstruction(entry: ShowEntry): string {
-  const args = (entry.detail as { args?: unknown } | undefined)?.args;
-  if (!args || typeof args !== 'object') return '';
-  const instruction = (args as { instruction?: unknown }).instruction;
-  return typeof instruction === 'string' ? instruction : '';
-}
-
-/** 回报卡上的来处：写清是哪条指令的回报；指令在另一列，点一下滚过去 */
-function replyChip(entry: ShowEntry): string {
-  const window = delegationOfReply(windows.value, entry);
-  if (!window) return '';
-  const instruction = delegateInstruction(window.delegate);
-  const head = instruction ? truncateText(instruction, 16) : formatTimeHMS(window.delegate.tsMs);
-  return `← 派活：${head}`;
-}
-
-function focusDelegate(entry: ShowEntry): void {
-  const owner = delegationOfReply(windows.value, entry);
-  if (owner) focusEntry(owner.delegate.id, 'stage');
-}
 </script>
 
 <template>
@@ -245,12 +225,10 @@ function focusDelegate(entry: ShowEntry): void {
               v-for="entry in section.stage"
               :key="entry.id"
               class="lane-card"
-              :class="{ 'is-delegate': delegateChip(entry) }"
               :data-entry-id="entry.id"
               :data-entry-ts="entry.tsMs"
               @click="onCardClick(entry, 'stage', $event)"
             >
-              <p v-if="delegateChip(entry)" class="lane-chip is-from">{{ delegateChip(entry) }}</p>
               <Component :is="CARD_REGISTRY[entry.kind]" :entry="entry" :now-ms="nowMs" />
             </div>
             <p v-if="section.stage.length === 0" class="lane-empty">本节主播侧无内容</p>
@@ -283,20 +261,10 @@ function focusDelegate(entry: ShowEntry): void {
             <template v-for="entry in collapseGoalPolls(section.game)" :key="entry.id">
               <div
                 class="lane-card"
-                :class="{ 'is-reply': replyChip(entry) }"
                 :data-entry-id="entry.id"
                 :data-entry-ts="entry.tsMs"
                 @click="onCardClick(entry, 'game', $event)"
               >
-                <button
-                  v-if="replyChip(entry)"
-                  type="button"
-                  class="lane-chip is-to"
-                  title="跳到这次派活的指令卡"
-                  @click.stop="focusDelegate(entry)"
-                >
-                  {{ replyChip(entry) }}
-                </button>
                 <Component :is="CARD_REGISTRY[entry.kind]" :entry="entry" :now-ms="nowMs" />
               </div>
             </template>
@@ -474,30 +442,6 @@ function focusDelegate(entry: ShowEntry): void {
   outline: 1px solid var(--border-color);
   outline-offset: 1px;
   border-radius: var(--radius-sm);
-}
-
-.lane-chip {
-  margin: 0 0 3px;
-  font-size: 10px;
-  letter-spacing: 0.2px;
-}
-
-.lane-chip.is-from {
-  color: var(--color-primary);
-}
-
-.lane-chip.is-to {
-  cursor: pointer;
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  text-align: left;
-  color: var(--color-primary);
-}
-
-.lane-chip.is-to:hover {
-  text-decoration: underline;
 }
 
 .lane-card.is-flash {

@@ -35,6 +35,7 @@ declare module 'vue' {
     CtxPill: typeof import('./src/components/live/cards/CtxPill.vue')['default']
     DecisionCard: typeof import('./src/components/live/cards/DecisionCard.vue')['default']
     DecisionRoundCard: typeof import('./src/components/agents/DecisionRoundCard.vue')['default']
+    DelegateReceiptCard: typeof import('./src/components/live/cards/DelegateReceiptCard.vue')['default']
     DictEditor: typeof import('./src/components/settings/DictEditor.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAside: typeof import('element-plus/es')['ElAside']

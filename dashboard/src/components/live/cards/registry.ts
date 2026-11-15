@@ -15,6 +15,7 @@ import type { ShowEntry } from '@/utils/liveFeed';
 import AgentReplyCard from './AgentReplyCard.vue';
 import BeatCard from './BeatCard.vue';
 import ChatBubbleCard from './ChatBubbleCard.vue';
+import DelegateReceiptCard from './DelegateReceiptCard.vue';
 import DecisionCard from './DecisionCard.vue';
 import GameCard from './GameCard.vue';
 import MilestoneCard from './MilestoneCard.vue';
@@ -60,6 +61,8 @@ export const CARD_REGISTRY: Record<ShowEntry['kind'], Component> = {
   decision: DecisionCard,
   verdict: DecisionCard,
   agent_reply: AgentReplyCard,
+  // 收活卡：游戏 Agent 认领派活的轻量小卡（点击跳回主播列派活卡）
+  delegate_receipt: DelegateReceiptCard,
   // 工具调用
   tool: ToolCard,
   // 主播发言

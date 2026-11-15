@@ -75,6 +75,9 @@ export type EntryKind =
   | 'prompt'
   /** Agent 每步响应（agent.replied）：命令驱动型 Agent 中间步骤的行动说明，决定卡形态 */
   | 'agent_reply'
+  /** 收活卡（视图层合成条目，不对应事件）：游戏 Agent 按 task.changed 受理回执认领
+   *  某次派活的轻量小卡，点击跳回主播列对应的 framework_delegate 卡 */
+  | 'delegate_receipt'
   /** 思考行：ReAct 各步/生成段思考流（视图层合成条目，不对应事件；流式期间文本原地增长） */
   | 'thinking'
   /** 系统事件行（core.error / core.startup / core.shutdown）：运营必看，两个视图档位都显示 */
@@ -131,6 +134,11 @@ export interface ShowEntry {
   /** 收拢到本卡名下的进度查询卡（maicraft_goal operation=get 且 goal_id 相等）。
    *  只由 liveLanes.collapseGoalPolls 写到 execute 卡上，其他条目无此字段 */
   polls?: ShowEntry[];
+  /** 收活卡的跳转目标：配对到的 framework_delegate 条目 id。只由
+   *  liveLanes.buildDelegateReceipts 写到 delegate_receipt 条目上，其他条目无此字段 */
+  delegateEntryId?: string;
+  /** 收活卡标注的派活时刻（配对到的 framework_delegate 条目时间，Unix 毫秒） */
+  delegateTsMs?: number;
 }
 
 /** maicraft_execute 卡上的任务终态徽标取值 */
@@ -345,6 +353,72 @@ export function minecraftGoalIdOf(entry: ShowEntry): number | null {
 export function minecraftGoalOperationOf(entry: ShowEntry): string {
   const args = entry.detail?.args;
   return isRecord(args) ? str(args.operation) : '';
+}
+
+// framework_delegate 专用卡面解析（主播 Agent 派活给游戏 Agent 的工具调用）
+
+/** framework_delegate 工具的 actor 判定（actor = 工具名，来自 fromToolResult） */
+export function isFrameworkDelegateEntry(entry: ShowEntry): boolean {
+  return entry.kind === 'tool' && entry.actor === 'framework_delegate';
+}
+
+/** 是否走 framework_delegate 专用卡面：失败卡不进（走通用错误路径），与 maicraft_execute 同款处理 */
+export function isFrameworkDelegateCard(entry: ShowEntry): boolean {
+  return isFrameworkDelegateEntry(entry) && !entry.failed;
+}
+
+/** 派活入参里的指令原文（args.instruction）；framework_delegate 专用卡面与
+ *  游戏列收活卡的指令摘要共用同一读取 */
+export function frameworkDelegateInstruction(args: unknown): string {
+  if (!isRecord(args)) return '';
+  return str(args.instruction);
+}
+
+/** framework_delegate 卡面的取值结果：字段缺失时为空串/null，渲染层按空值跳过 */
+export interface FrameworkDelegateSummary {
+  /** 目标 Agent 名（args.agent，头行"→ 名字"） */
+  targetAgent: string;
+  /** 派活指令原文（args.instruction，卡面主文案） */
+  instruction: string;
+  /** 执行方复述（result.own_words）；与指令字面相同时留空（不渲染复述行） */
+  ownWords: string;
+  /** 目标受理标记（result.accepted） */
+  accepted: boolean;
+  /** 排队受理（result.queued）：目标手上有事，指令进了待办队列 */
+  queued: boolean;
+  /** 队列位次（result.queue_position），非数字为 null */
+  queuePosition: number | null;
+  /** 排队说明（result.note，卡面单行截断，全文在载荷区） */
+  queueNote: string;
+}
+
+/** framework_delegate 的入参与结果 → 卡面取值。结果字段在线上样本位于 result 顶层，
+ *  个别事件包一层 data 时穿透读取；入参非对象时各字段留空 */
+export function frameworkDelegateSummary(args: unknown, result: unknown): FrameworkDelegateSummary {
+  const a = isRecord(args) ? args : {};
+  let r: Record<string, unknown> = isRecord(result) ? result : {};
+  if (r.accepted === undefined && isRecord(r.data)) r = r.data;
+  const instruction = frameworkDelegateInstruction(a);
+  const ownWords = str(r.own_words);
+  return {
+    targetAgent: str(a.agent),
+    instruction,
+    ownWords: ownWords && ownWords !== instruction ? ownWords : '',
+    accepted: bool(r.accepted),
+    queued: bool(r.queued),
+    queuePosition: num(r.queue_position),
+    queueNote: str(r.note),
+  };
+}
+
+/** framework_delegate 卡携带的任务号（结果载荷 result.task_id；个别事件包一层 data 时
+ *  穿透读取）。缺失为空串。收活卡按它与 task.changed 受理回执的 task_id 做身份配对 */
+export function frameworkDelegateTaskId(entry: ShowEntry): string {
+  if (!isFrameworkDelegateEntry(entry)) return '';
+  const result = entry.detail?.result;
+  if (!isRecord(result)) return '';
+  const source = result.task_id !== undefined ? result : isRecord(result.data) ? result.data : {};
+  return str(source.task_id);
 }
 
 /** RoomMessageUser → 展示名（与 summarizeEvent 的取名口径一致） */

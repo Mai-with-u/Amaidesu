@@ -1,4 +1,4 @@
-// liveLanes.ts：双轨的轨道归属 / 环节分段 / 派活生命期。
+// liveLanes.ts：双轨的轨道归属 / 环节分段 / 收活卡配对 / 任务区间。
 //
 // 轨道只决定左右位置：游戏 Agent 的条目及其世界事件进游戏轨，其余进现场轨，
 // 任何条目都不会因为分轨而消失。分段的边界只来自流程单（真实环节），
@@ -8,12 +8,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   annotateTaskEnds,
+  buildDelegateReceipts,
   buildLaneSections,
   buildTaskWindows,
   collapseGoalPolls,
-  delegationOfReply,
-  delegationWindows,
   laneOf,
+  type TaskFact,
 } from '@/utils/liveLanes';
 import { makeEntry, type ShowEntry } from '@/utils/liveFeed';
 
@@ -30,6 +30,9 @@ describe('laneOf', () => {
   it('游戏世界事件与游戏 Agent 回执进游戏轨', () => {
     expect(laneOf(entryOf({ id: 'g', tsMs: 1, kind: 'game', actor: 'minecraft' }))).toBe('game');
     expect(laneOf(entryOf({ id: 'a', tsMs: 1, kind: 'agent_reply', actor: '游戏 Agent' }))).toBe(
+      'game',
+    );
+    expect(laneOf(entryOf({ id: 'rc', tsMs: 1, kind: 'delegate_receipt', actor: '游戏 Agent' }))).toBe(
       'game',
     );
   });
@@ -135,47 +138,87 @@ describe('buildLaneSections', () => {
   });
 });
 
-describe('派活生命期', () => {
-  it('派活窗口止于下一次派活，回报按时间归入窗口', () => {
-    const entries = [
-      entryOf({ id: 'dele1', tsMs: 1_000, kind: 'tool', actor: 'framework_delegate' }),
-      entryOf({ id: 'reply1', tsMs: 2_000, kind: 'agent_reply', actor: '游戏 Agent' }),
-      entryOf({ id: 'reply2', tsMs: 3_000, kind: 'agent_reply', actor: '游戏 Agent' }),
-      entryOf({ id: 'dele2', tsMs: 4_000, kind: 'tool', actor: 'framework_delegate' }),
-      entryOf({ id: 'reply3', tsMs: 5_000, kind: 'agent_reply', actor: '游戏 Agent' }),
-    ];
-    const windows = delegationWindows(entries);
+/** framework_delegate 派活卡条目：detail 里带线上形状的入参/结果（result.task_id 是收活配对键） */
+function delegateEntry(id: string, tsMs: number, taskId: string, instruction = '去村里买面包'): ShowEntry {
+  return makeEntry({
+    id,
+    kind: 'tool',
+    tsMs,
+    actor: 'framework_delegate',
+    text: '',
+    detail: { args: { agent: 'minecraft', instruction }, result: { accepted: true, task_id: taskId } },
+  });
+}
 
-    expect(windows).toHaveLength(2);
-    expect(windows[0].replies).toBe(2);
-    expect(windows[1].replies).toBe(1);
-    expect(delegationOfReply(windows, entries[1]!)?.delegate.id).toBe('dele1');
-    expect(delegationOfReply(windows, entries[4]!)?.delegate.id).toBe('dele2');
+describe('收活卡配对（buildDelegateReceipts）', () => {
+  const accepted = (taskId: string, tsMs: number): TaskFact => ({
+    taskId,
+    status: 'accepted',
+    tsMs,
   });
 
-  it('最后一次派活以最后一条回报收尾，之后没有回报时窗口收在下达时刻', () => {
-    const withReply = [
-      entryOf({ id: 'dele', tsMs: 1_000, kind: 'tool', actor: 'framework_delegate' }),
-      entryOf({ id: 'reply', tsMs: 7_000, kind: 'agent_reply', actor: '游戏 Agent' }),
+  it('受理回执按 task_id 配到派活卡，合成收活卡并按受理时刻插进时间线', () => {
+    const entries = [
+      delegateEntry('dele1', 1_000, 'deleg_1', '去村里买面包'),
+      entryOf({ id: 's1', tsMs: 3_000, kind: 'speech', actor: '主播', text: '话' }),
     ];
-    expect(delegationWindows(withReply)[0]!.endMs).toBe(7_001);
+    const merged = buildDelegateReceipts(entries, [accepted('deleg_1', 2_000)]);
 
-    const lonely = [
-      entryOf({ id: 'dele', tsMs: 1_000, kind: 'tool', actor: 'framework_delegate' }),
-    ];
-    expect(delegationWindows(lonely)[0]!.endMs).toBe(1_001);
+    expect(merged.map(entry => entry.id)).toEqual(['dele1', 'delegate_receipt:deleg_1', 's1']);
+    const receipt = merged[1]!;
+    expect(receipt.kind).toBe('delegate_receipt');
+    expect(receipt.text).toBe('去村里买面包');
+    expect(receipt.delegateEntryId).toBe('dele1');
+    expect(receipt.delegateTsMs).toBe(1_000);
   });
 
-  it('非回报条目、窗口外的回报都不归任何派活', () => {
-    const entries = [
-      entryOf({ id: 'dele', tsMs: 5_000, kind: 'tool', actor: 'framework_delegate' }),
-      entryOf({ id: 'early', tsMs: 1_000, kind: 'agent_reply', actor: '游戏 Agent' }),
-      entryOf({ id: 'speech', tsMs: 6_000, kind: 'speech', actor: '主播', text: '话' }),
-    ];
-    const windows = delegationWindows(entries);
+  it('指令摘要超过 20 字截断', () => {
+    const long = '这是一条非常长的派活指令，需要被截断以保持收活卡的轻量形态';
+    const merged = buildDelegateReceipts([delegateEntry('dele', 1_000, 'deleg_2', long)], [
+      accepted('deleg_2', 2_000),
+    ]);
+    expect(merged[1]!.text).toBe(`${long.slice(0, 20)}…`);
+  });
 
-    expect(delegationOfReply(windows, entries[1]!)).toBeNull();
-    expect(delegationOfReply(windows, entries[2]!)).toBeNull();
+  it('受理配不到派活卡时不渲染收活卡', () => {
+    const entries = [delegateEntry('dele1', 1_000, 'deleg_1')];
+    const merged = buildDelegateReceipts(entries, [accepted('deleg_404', 2_000)]);
+    expect(merged).toEqual(entries);
+  });
+
+  it('终态回执不上收活卡（终态由 execute 卡徽标承载）', () => {
+    const entries = [delegateEntry('dele1', 1_000, 'deleg_1')];
+    const merged = buildDelegateReceipts(entries, [
+      { taskId: 'deleg_1', status: 'succeeded', tsMs: 5_000 },
+    ]);
+    expect(merged).toEqual(entries);
+  });
+
+  it('两次派活时间交错时按身份配对，不按时间近邻猜（受理顺序与派活顺序相反也不串）', () => {
+    // 派活甲 1s / 派活乙 2s；游戏 Agent 乙先受理（2.5s）、甲后受理（3s）。
+    // 时间近邻会把甲的受理猜给乙；身份配对各自落到正确的派活卡
+    const entries = [
+      delegateEntry('dele_a', 1_000, 'deleg_a', '任务甲'),
+      delegateEntry('dele_b', 2_000, 'deleg_b', '任务乙'),
+    ];
+    const merged = buildDelegateReceipts(entries, [
+      accepted('deleg_b', 2_500),
+      accepted('deleg_a', 3_000),
+    ]);
+
+    const receipts = merged.filter(entry => entry.kind === 'delegate_receipt');
+    expect(receipts.map(entry => entry.delegateEntryId)).toEqual(['dele_b', 'dele_a']);
+    expect(receipts.map(entry => entry.text)).toEqual(['任务乙', '任务甲']);
+    expect(merged.map(entry => entry.tsMs)).toEqual(merged.map(entry => entry.tsMs).sort((a, b) => a - b));
+  });
+
+  it('同一任务号的重复受理只出一张收活卡', () => {
+    const entries = [delegateEntry('dele1', 1_000, 'deleg_1')];
+    const merged = buildDelegateReceipts(entries, [
+      accepted('deleg_1', 2_000),
+      accepted('deleg_1', 2_500),
+    ]);
+    expect(merged.filter(entry => entry.kind === 'delegate_receipt')).toHaveLength(1);
   });
 });
 
