@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from src.modules.agents.control import AgentControl
 from src.modules.dashboard.api.router import create_app, setup_cors
 from src.modules.dashboard.dependencies import set_dashboard_server
+from src.modules.dashboard.shutdown import ShutdownGuard, ShutdownJournal
 from src.modules.config.core_schemas import DEFAULT_VITE_DEV_PORT, DashboardConfig
 from src.modules.dashboard.vite_dev import ViteDevServer
 from src.modules.dashboard.widget import DanmakuWidgetService, Game2048WidgetService
@@ -58,6 +59,10 @@ if TYPE_CHECKING:
 
 from src.modules.dashboard.websocket.broadcaster import EventBroadcaster
 from src.modules.dashboard.websocket.handler import WebSocketHandler
+
+#: 拉起新进程前给旧进程留的收尾时间（秒）：新进程冷启动要十几秒，
+#: 这一点只是让"新进程已创建"与旧进程开始清理之间有个交接间隔
+RESTART_SPAWN_DELAY_S = 0.5
 
 
 class DashboardServer:
@@ -109,6 +114,9 @@ class DashboardServer:
         avatar_tracking: Optional[Any] = None,
         clipping_service: Optional[Any] = None,
         clipping_factory: Optional[Any] = None,
+        shutdown_timeout_s: float = 30.0,
+        exit_func: Optional[Callable[[int], None]] = None,
+        shutdown_journal: Optional[ShutdownJournal] = None,
     ) -> None:
         self.event_bus = event_bus
         self.collector_manager = collector_manager
@@ -239,6 +247,13 @@ class DashboardServer:
         self.dev_mode: bool = dashboard_config.dev_mode
         self.vite_dev_port: int = dashboard_config.vite_dev_port
         self._vite_dev: Optional[ViteDevServer] = None
+
+        # 停机清理的时限（秒）：超过就留证并强制退出，保证重启不会留下旧进程
+        self.shutdown_timeout_s = shutdown_timeout_s
+        # 进程退出动作可注入：默认直接终止进程，注入替身时便于验证退出时机
+        self._exit_func = exit_func if exit_func is not None else os._exit
+        # 停机现场日志可注入：默认写 logs/shutdown/，注入替身时避免落进真实目录
+        self._shutdown_journal = shutdown_journal
 
     async def start(self) -> None:
         """启动 Dashboard 服务器"""
@@ -482,18 +497,22 @@ class DashboardServer:
         return f"http://{self.host}:{self.port}"
 
     async def graceful_restart(self) -> None:
-        """重启整个服务进程：拉起新实例 → 优雅清理当前进程 → os._exit 收口。
+        """重启整个服务进程：拉起新实例 → 限时清理当前进程 → os._exit 收口。
 
         先拉起新进程再清理旧进程：旧进程的 stop/清理序列只需几百毫秒即可完成，
         而新进程的 Python 解释器冷启动加应用装配需要数秒，新进程绑定端口时旧
         进程监听 socket 早已释放，不会冲突。
+
+        清理序列有时限（``ShutdownGuard``）：其中任一 await 卡住都会让旧进程永远
+        活着——它既占着弹幕采集的游戏会话（新进程连不上，弹幕收不到），又继续往
+        虚拟形象注入捕捉参数（形象高频闪烁）。到点留证并强制退出。
 
         终态必须用 ``os._exit``：运行在 ``asyncio.run`` 内，``sys.exit`` 会转为
         异常沿事件循环传播走非干净路径；os._exit 跳过的清理由前面的优雅清理
         序列补齐（WS/广播/日志 sink/vite 子进程/SQLite 连接落盘）。
         """
         self.logger.info("准备重启服务进程...")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(RESTART_SPAWN_DELAY_S)
         try:
             subprocess.Popen(
                 [sys.executable] + sys.argv,
@@ -504,23 +523,43 @@ class DashboardServer:
             self.logger.exception("拉起新进程失败，放弃重启（当前进程保持运行）")
             return
 
+        guard = ShutdownGuard(
+            timeout_s=self.shutdown_timeout_s,
+            journal=self._shutdown_journal,
+            exit_func=self._exit_func,
+        )
+        cleaned = await guard.run(self._shutdown_sequence)
+        if not cleaned:
+            # 真实运行时进程已被守卫强制退出，走到这里只可能是退出动作被替换
+            self.logger.warning("停机清理未在时限内完成，已留证并请求强制退出")
+            return
+        self.logger.info("重启清理完成，进程即将退出")
+        self._exit_func(0)
+
+    async def _shutdown_sequence(self) -> None:
+        """停机清理序列：Dashboard 停止 → 资源引用清理 → SQLite 连接落盘。"""
         await self.stop()
         await self.cleanup()
         await self._close_shared_storage()
-        self.logger.info("重启清理完成，进程即将退出")
-        os._exit(0)
 
     async def _close_shared_storage(self) -> None:
-        """关闭注入仓储共享的 SQLite 连接管理器，确保 WAL/事务落盘。
+        """关闭注入仓储的 SQLite 连接，确保 WAL/事务落盘。
 
-        各仓储构造时注入同一连接管理器，关闭一次即可（close_all 幂等）。
+        各仓储构造时注入同一连接管理器，``close_all`` 幂等，逐个关闭安全；
+        不依赖"共享同一管理器"这个前提——哪个仓储持有独立连接都能被关掉。
         """
         repos = (self.viewer_repo, self.chat_repo, self.llm_repo, self.rundown_repo)
+        closed = 0
         for repo in repos:
-            if repo is not None:
+            if repo is None:
+                continue
+            try:
                 await repo.close()
-                return
-        self.logger.debug("无注入仓储，跳过 SQLite 连接关闭")
+                closed += 1
+            except Exception as exc:
+                self.logger.warning(f"仓储连接关闭失败（继续其余）: {type(exc).__name__}: {exc}", exc=True)
+        if closed == 0:
+            self.logger.debug("无注入仓储，跳过 SQLite 连接关闭")
 
     @property
     def widget_service(self) -> Optional[DanmakuWidgetService]:
