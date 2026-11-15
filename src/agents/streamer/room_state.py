@@ -56,8 +56,9 @@ AUDIENCE_WINDOW_MS: int = 600_000
 #: 观众进入样本的容量上限（防御性：正常推送频率下远达不到）
 _AUDIENCE_SAMPLE_CAP: int = 64
 
-#: 进房记录的渲染窗口（毫秒）：activity_line 只报最近这段时间进房的观众
-ENTER_WINDOW_MS: int = 600_000
+#: 进房记录的渲染窗口（毫秒）：activity_line 只报进房后约一次发言时机内的观众，
+#: 错过即不再提起——欢迎是顺手行为，不防延迟补欢迎；窗口内已欢迎的不重复欢迎
+ENTER_WINDOW_MS: int = 90_000
 
 #: 同一观众进房记录的限频（毫秒）：窗口内反复进出不重复记，欢迎不追着同一人刷
 ENTER_DEDUP_MS: int = 1_800_000
@@ -418,9 +419,9 @@ class RoomState:
         """房间活跃度一句话（planner 参考段用，校准互动密度与发言策略）。
 
         事实陈述不带指令：近 10 分钟新增观看（累计口径的窗口增量；推送样本
-        不足时如实说未知）+ 近 1 分钟弹幕量与热度等级 + 近 10 分钟进房且尚未欢迎的
-        观众名单。``include_enters=False`` 时不附进房名单——进房欢迎只由决策环节负责，
-        嘴不读进房名单，避免几分钟后因游戏小事开口时顺嘴二次欢迎。
+        不足时如实说未知）+ 近 1 分钟弹幕量与热度等级 + 进房后约一次发言时机内
+        且尚未欢迎的观众名单。``include_enters=False`` 时不附进房名单——进房欢迎
+        只由决策环节负责，嘴不读进房名单，避免几分钟后因游戏小事开口时顺嘴二次欢迎。
         """
         ts = self._resolve_now(now_ms)
         self._trim(ts)
@@ -430,7 +431,7 @@ class RoomState:
         else:
             audience_text = f"近 10 分钟新增观看 {increment}"
         enter_names = self._recent_enter_names(ts) if include_enters else []
-        enter_text = f"；近 10 分钟进房：{'、'.join(enter_names)}" if enter_names else ""
+        enter_text = f"；近 90 秒进房：{'、'.join(enter_names)}" if enter_names else ""
         return f"{audience_text}；近 1 分钟弹幕 {len(self._window)} 条（热度 {self._compute_heat(ts)}）{enter_text}"
 
     # ------------------------------------------------------------------

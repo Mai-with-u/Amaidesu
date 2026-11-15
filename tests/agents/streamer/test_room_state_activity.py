@@ -73,10 +73,10 @@ def test_activity_line_lists_recent_enters_within_window() -> None:
     state.record_enter("u1", "阿明", now_ms=1_000_000)
     state.record_enter("u2", "小麦", now_ms=1_001_000)
     line = state.activity_line(now_ms=1_002_000)
-    assert "近 10 分钟进房：阿明、小麦" in line
+    assert "近 90 秒进房：阿明、小麦" in line
 
-    # 窗口外的进房不再渲染
-    line_later = state.activity_line(now_ms=1_001_000 + 600_000 + 1)
+    # 窗口外的进房不再渲染（欢迎是顺手行为，错过时机不补欢迎）
+    line_later = state.activity_line(now_ms=1_001_000 + 90_000 + 1)
     assert "进房" not in line_later
 
 
@@ -84,8 +84,8 @@ def test_enter_records_are_rate_limited_per_user() -> None:
     """同人限频：限频窗口内反复进房只记一次，不重复点名；过窗后再进重新记。"""
     state = RoomState()
     state.record_enter("u1", "阿明", now_ms=1_000_000)
-    state.record_enter("u1", "阿明", now_ms=1_100_000)
-    assert "近 10 分钟进房：阿明" in state.activity_line(now_ms=1_200_000)
+    state.record_enter("u1", "阿明", now_ms=1_010_000)
+    assert "近 90 秒进房：阿明" in state.activity_line(now_ms=1_050_000)
 
     # 限频窗口（30 分钟）过后再进房：重新记录、重新可欢迎
     state.record_enter("u1", "阿明", now_ms=1_000_000 + 1_800_000)
@@ -98,7 +98,7 @@ def test_enter_render_is_capped_to_recent_few() -> None:
     state = RoomState()
     for i in range(8):
         state.record_enter(f"u{i}", f"观众{i}", now_ms=1_000_000 + i)
-    line = state.activity_line(now_ms=1_100_000)
+    line = state.activity_line(now_ms=1_070_000)
     assert "观众0" not in line and "观众2" not in line
     assert "观众7" in line
 
