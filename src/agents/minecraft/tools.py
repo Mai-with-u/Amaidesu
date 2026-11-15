@@ -122,6 +122,7 @@ _LOCAL_VISIBLE_TO: Dict[str, List[str]] = {
     "skill": ["minecraft"],
     "context_fold": ["minecraft"],
     "context_recall": ["minecraft"],
+    "drawing": ["minecraft"],
 }
 
 # 行动中调用折叠工具时的回执：折叠只在宿主的后台整理请求里执行，行动路径上写摘要会让角色站着等
@@ -427,6 +428,37 @@ def build_context_recall_spec() -> ToolSpec:
     )
 
 
+def build_drawing_spec() -> ToolSpec:
+    """``minecraft_drawing`` 工具规格——委派后台生成建筑图纸（异步，完成/失败都有 [系统] 通知）"""
+    return ToolSpec(
+        name="drawing",
+        provider=PROVIDER_NAME,
+        kind="sync",
+        description=(
+            "画建筑图纸（后台异步）：下达要什么样的房子，当场返回任务编号，"
+            "后台用画图专档生成图纸并存进游戏档案。"
+            "purpose 写清：建在哪/参照哪栋、大小、材料偏好、风格。"
+            "图纸画好（或画不成）都会以 [系统] 通知你——画好按通知里的编号 build(design_id=编号)；"
+            "等图纸期间可以先备常用的料或干别的活；画不成就自己调 design 直接画或上报。"
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "purpose": {
+                    "type": "string",
+                    "description": "要什么样的房子：位置/参照哪栋、大小、材料偏好、风格，写清楚",
+                },
+                "target": {
+                    "type": "object",
+                    "description": "可选：参照的建筑或地点（写法同 maicraft_execute 的 target），后台会读一次它的现场",
+                },
+            },
+            "required": ["purpose"],
+            "additionalProperties": False,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Provider（注册到 ToolRegistry）
 # ---------------------------------------------------------------------------
@@ -508,6 +540,9 @@ class MinecraftToolProvider(GameToolProvider):
     snapshot_reader: Optional[Callable[[], Awaitable[str]]] = None
     # 取回被折叠或收起的原文：由 Agent 按块号或关键词查自己的块库（未开后台折叠时不提供折叠与取回两个工具）
     context_recall: Optional[Callable[[str, str], Dict[str, Any]]] = None
+    # 委派后台生成建筑图纸：由 Agent 注入图纸生成器的受理入口（同步——受理即挂后台协程并当场返回；
+    # 未注入/未启用时不提供该工具）
+    drawing_starter: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
     # 待办或工作笔记写入后的持久化回调（按游戏与当前存档落库）
     on_work_docs_changed: Optional[Callable[[], Awaitable[None]]] = None
 
@@ -538,6 +573,8 @@ class MinecraftToolProvider(GameToolProvider):
             specs.append(build_skill_spec(PROVIDER_NAME))
         if self.context_recall is not None:
             specs.extend([build_context_fold_spec(), build_context_recall_spec()])
+        if self.drawing_starter is not None:
+            specs.append(build_drawing_spec())
         # 逐 spec 盖可见名单（技能工具未注入读取器时本就不提供，名单映射无残留键）
         for spec in specs:
             spec.visible_to = list(_LOCAL_VISIBLE_TO[spec.name])
@@ -574,7 +611,14 @@ class MinecraftToolProvider(GameToolProvider):
             fold_spec, recall_spec = build_context_fold_spec(), build_context_recall_spec()
             handlers[fold_spec.full_name] = self._dict_handler(fold_spec, self._invoke_context_fold)
             handlers[recall_spec.full_name] = self._dict_handler(recall_spec, self._invoke_context_recall)
+        if self.drawing_starter is not None:
+            drawing_spec = build_drawing_spec()
+            handlers[drawing_spec.full_name] = self._dict_handler(drawing_spec, self._invoke_drawing)
         return handlers
+
+    async def _invoke_drawing(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        assert self.drawing_starter is not None  # 处理器表按受理入口在册建表
+        return self.drawing_starter(args)
 
     def _dict_handler(
         self, spec: ToolSpec, run: Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]

@@ -121,6 +121,8 @@ class FakeMaicraft(BaseToolProvider):
         # 公屏说话是否当场交出去（关了逐字打字）：True 时 execute 直接回结束与 submitted 细节，
         # False 时照要动手的目标回 running，测试用 finish 推进（打字中途被打断即交不出去）
         self.chat_instant = True
+        # design create 的自增序号：图纸存档回执 design-{n}（图纸生成协程走这条通道）
+        self.design_seq = 0
         self.world: Optional[Dict[str, Any]] = None
         self._streams = 1
         self.self_view: Dict[str, Any] = {
@@ -258,12 +260,37 @@ class FakeMaicraft(BaseToolProvider):
         return ok(view)
 
     async def _lookup(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        if arguments.get("topic") == "knowledge":
+            doc_id = arguments.get("id")
+            if doc_id:
+                return ok({"doc": f"{doc_id} 的格式资料正文（替身）"})
+            return ok({"docs": ["building/house", "building/roofs", "building/styles"]})
         return ok({"abilities": [{"ability": "maicraft:gather"}, {"ability": "maicraft:remember"}]})
 
     async def _execute(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         goal = arguments.get("goal") or {}
         ability = str(goal.get("ability") or "")
         ability = ability if ":" in ability else f"maicraft:{ability}"
+        if ability == "maicraft:design":
+            # design 是 MEMORY_ONLY：当场返回，不占目标流水（图纸生成协程走这条通道）
+            params = goal.get("parameters") if isinstance(goal.get("parameters"), dict) else {}
+            operation = str(params.get("operation") or "")
+            if operation == "create":
+                self.design_seq += 1
+                drawing = params.get("drawing") if isinstance(params.get("drawing"), dict) else {}
+                name = str(drawing.get("name") or f"图纸{self.design_seq}")
+                if not drawing:
+                    return error("invalid_drawing", "drawing 缺失或不是对象")
+                return ok(
+                    {
+                        "design_id": f"design-{self.design_seq}",
+                        "name": name,
+                        "summary": f"图纸「{name}」已存档",
+                    }
+                )
+            if operation == "read_site":
+                return ok({"layout": "替身现场层图"})
+            return error("unknown_operation", f"design 不支持 {operation}")
         goal_id = self._next_id
         self._next_id += 1
         run: Dict[str, Any] = {"goal_id": goal_id, "ability": ability, "state": "running"}
@@ -521,6 +548,11 @@ class ScriptLlm:
         self.tools_given.append(list(kwargs.get("tools") or []))
         # 真实的模型调用总要等网络、让出事件循环；替身也让出一次，与推理并行的后台任务（如后台折叠）才推进得了
         await asyncio.sleep(0)
+        # 剧本收 profile 参数（可选分流主档与专用档，如图纸生成的 minecraft_builder）：
+        # 按剧本声明的参数个数自适应——单参剧本（既有大量用例）不感知 profile，双参剧本可分流
+        profile = kwargs.get("profile")
+        if self.script.__code__.co_argcount >= 2:
+            return self.script(messages, profile)
         return self.script(messages)
 
     def is_profile_visual(self, profile: Optional[str]) -> bool:

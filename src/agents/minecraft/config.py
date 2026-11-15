@@ -129,6 +129,27 @@ class MinecraftPictureConfig(BaseConfig):
     )
 
 
+class MinecraftDrawingBuilderConfig(BaseConfig):
+    """后台建筑图纸生成（minecraft_drawing 工具）。
+
+    主模型调 minecraft_drawing 委派画图：后台用 minecraft_builder 档生成 drawing JSON，
+    发 Mod design create 校验收档，成功/失败都以 [系统] 通知回主模型。
+    """
+
+    enabled: bool = Field(
+        default=True,
+        title="启用图纸工具",
+        description="关闭后 minecraft_drawing 不进模型工具列表",
+    )
+    max_validation_retries: int = Field(
+        default=3,
+        ge=0,
+        title="校验重试上限",
+        description="图纸被 Mod 校验拒绝后带着错误重画的最多次数",
+        json_schema_extra={"x-ui-advanced": True},
+    )
+
+
 class MinecraftConfig(BaseConfig):
     """MinecraftAgent 运行时配置
 
@@ -173,6 +194,16 @@ class MinecraftConfig(BaseConfig):
         title="看画面",
         description="游戏 Agent 看画面的次数与间隔（默认每个任务最多 6 次、两次至少隔 10 秒）",
     )
+    drawing_builder: MinecraftDrawingBuilderConfig = Field(
+        default_factory=MinecraftDrawingBuilderConfig,
+        title="图纸生成",
+        description="后台建筑图纸生成（minecraft_drawing 工具，用 minecraft_builder 档画图）",
+    )
 
 
-__all__ = ["MinecraftConfig", "MinecraftContextConfig", "MinecraftPictureConfig"]
+__all__ = [
+    "MinecraftConfig",
+    "MinecraftContextConfig",
+    "MinecraftDrawingBuilderConfig",
+    "MinecraftPictureConfig",
+]

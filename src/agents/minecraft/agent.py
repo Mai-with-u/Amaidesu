@@ -50,6 +50,7 @@ from src.agents.minecraft.context_fold import (
 )
 from src.agents.minecraft.creature_book import CreatureBook, creature_from_record, creature_record
 from src.agents.minecraft.delegation_book import DelegationBook
+from src.agents.minecraft.drawing import DrawingBuilder
 from src.agents.minecraft.furnace_wait import TIMER_DUE, FurnaceWaits
 from src.agents.minecraft.goal_ledger import (
     GoalLedger,
@@ -374,6 +375,13 @@ class MinecraftAgent(BaseAgent):
         # obtain 装好炉先走时自动挂的回炉计时：没响之前模型结束一轮算在等炉子，不催、不上报、不代发停了没交付
         self._furnace_waits = FurnaceWaits(self._clock)
         # 局部工具执行器：LLM 循环直接调（不依赖 registry；有 registry 时同一实例注册）
+        self._drawing_builder = DrawingBuilder(
+            llm=self._llm,
+            maicraft_call=self._maicraft_raw,
+            notify=self._notify_drawing,
+            release_epoch_reader=lambda: self._release_epoch,
+            max_validation_retries=config.drawing_builder.max_validation_retries,
+        )
         self._tool_provider: MinecraftToolProvider = MinecraftToolProvider(
             state=self._mc_state,
             report_callback=self._handle_report,
@@ -385,6 +393,7 @@ class MinecraftAgent(BaseAgent):
             snapshot_reader=self._state_snapshot,
             context_recall=self._recall_context if config.context.active_fold else None,
             on_work_docs_changed=self._save_work_docs,
+            drawing_starter=self._drawing_builder.start if config.drawing_builder.enabled else None,
         )
 
         # 命令驱动运行骨架：worker 等命令信号，收到命令后持续推进当前游戏任务。
@@ -831,6 +840,7 @@ class MinecraftAgent(BaseAgent):
             return True
         if not self._delegations.cancel(task_id, summary=f"被取消（source={source or '未知'}）"):
             return False
+        self._drawing_builder.cancel()
         notice = (
             f"[系统] 任务 {task_id} 已被取消，请停止相关工作；若还有在跑的游戏目标，"
             "用 maicraft_goal(operation=cancel) 取消。"
@@ -951,6 +961,7 @@ class MinecraftAgent(BaseAgent):
         if not self._delegations.release(task_id):
             return None
         self._release_epoch += 1
+        self._drawing_builder.cancel()
         progress = self._summarize_current_progress()
         tracked_ids = list(self._goals.tracked_ids())
         self._released_goal_ids.update(tracked_ids)
@@ -1149,6 +1160,9 @@ class MinecraftAgent(BaseAgent):
                 # 行动期间也在后台备好整理：先请模型折叠，跟不上时再起集中整理；角色都不用等
                 self._schedule_idle_compaction(messages, tool_defs)
             self._task_steps += 1
+
+            # 图纸完成通知从这一轮起算已进对话：通知先到而模型随后让出时，不再按"在跑"挂起
+            self._drawing_builder.mark_notice_consumed()
 
             on_delta = self._build_thinking_callback(mc_round, steps, mc_seq_box) if mc_round else None
             # 上一步看过的截图只挂在这一次请求尾部，不写回历史：下一步请求时它已消失，
@@ -1368,6 +1382,10 @@ class MinecraftAgent(BaseAgent):
             # 让出等目标事件：记录此刻位置与目标动作基线，开始站桩监视（超限且无位移/步数进展才叫醒核对）
             await self._stand_for_goals(pending)
             self._logger.info(f"任务批次自然终止（{steps} 步），{len(pending)} 个后台目标在跑，静默让出")
+        elif self._drawing_builder.in_progress() or self._drawing_builder.has_unconsumed_notice():
+            # 图纸在后台生成（或刚完成、通知还没进对话）：完成/失败会以 [系统] 通知叫醒，
+            # 不能判成"停了没交付"（§5 设计定案）
+            self._logger.info(f"任务批次自然终止（{steps} 步），图纸生成中，静默让出等通知")
         elif cooking:
             self._logger.info(f"任务批次自然终止（{steps} 步），{len(cooking)} 台炉子在烧、到点会叫醒，静默让出")
         elif not self._task_reported and not self._delegations.finished_ids:
@@ -2119,6 +2137,28 @@ class MinecraftAgent(BaseAgent):
     def _inject_wakeup_message(self, content: str) -> None:
         self._wake_queue.push_notice(content)
         self._wake_event.set()
+
+    def _notify_drawing(self, content: str) -> None:
+        """图纸生成完成/失败的通知：排成闲着也叫醒的通知——完成时模型多半在挂起等它。"""
+        self._wake_even_idle(content)
+
+    async def _maicraft_raw(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """后台生成用的 Mod 直调通道：绕开批次循环的暂停/收手检查，回执转成通用 dict。"""
+        if self._tool_registry is None:
+            return {"ok": False, "error": {"code": "no_registry", "message": "tool_registry 未注入"}}
+        result = await self._tool_registry.invoke(
+            ToolInvocation(
+                tool_name=tool_name,
+                arguments=arguments,
+                source="minecraft-drawing",
+                caller_profile=MINECRAFT_PROFILE,
+                invoking_agent="minecraft",
+            )
+        )
+        reply = reply_of(result)
+        if reply.ok:
+            return {"ok": True, "data": reply.data}
+        return {"ok": False, "error": {"code": reply.error_code, "message": reply.error_message}}
 
     # ==================================================================
     # 等待、任务状态与历史整理
