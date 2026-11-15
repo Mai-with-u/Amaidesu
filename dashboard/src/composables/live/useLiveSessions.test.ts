@@ -11,7 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { liveSessionsApi } from '@/api';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useEventsStore, useWebSocketStore } from '@/stores';
-import { defaultSessionTitle, useLiveSessions } from '@/composables/live/useLiveSessions';
+import {
+  defaultSessionTitle,
+  SESSION_FILTER_ALL,
+  useLiveSessions,
+} from '@/composables/live/useLiveSessions';
 import { formatDateMD } from '@/utils/format';
 import type { LiveSessionItem } from '@/types';
 
@@ -123,6 +127,14 @@ describe('useLiveSessions', () => {
     listMock.mockRejectedValue(new Error('network'));
     await composable.loadSessions();
     expect(composable.sessions.value).toEqual([]);
+  });
+
+  it('筛选值为"全部"时该维度不透传参数', async () => {
+    const composable = mount();
+    composable.sessionSourceFilter.value = SESSION_FILTER_ALL;
+    composable.sessionKindFilter.value = SESSION_FILTER_ALL;
+    await composable.loadSessions();
+    expect(listMock).toHaveBeenCalledWith({ source: undefined, kind: undefined, q: undefined });
   });
 
   it('selectSession：进行中场次回实时；历史场次进回看并选中', () => {
@@ -271,14 +283,20 @@ describe('useLiveSessions', () => {
     expect(crossLabel).toContain(formatDateMD(9_000_000 + 26 * 3_600_000));
   });
 
-  it('elapsedLabel：进行中场次返回已播标签并随时钟刷新；非进行中场次不显示', async () => {
+  it('durationLabel：进行中场次返回已播标签并随时钟刷新；已结束场次给固定用时', async () => {
     vi.setSystemTime(9_000_000);
     const composable = mount();
     const active = sessionItem({ is_active: true, started_at_ms: 8_880_000 });
-    const ended = sessionItem({ is_active: false });
-    expect(composable.elapsedLabel(ended)).toBeNull();
+    const ended = sessionItem({
+      is_active: false,
+      started_at_ms: 9_000_000,
+      ended_at_ms: 9_180_000,
+    });
+    const noEnd = sessionItem({ is_active: false, ended_at_ms: null });
+    expect(composable.durationLabel(noEnd)).toBeNull();
     // 共享时钟 tick 一次才把 nowTick 推到当前假系统时间（模块级 ref 初值是真实时刻）
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(composable.elapsedLabel(active)).toBe('已播 2:01');
+    expect(composable.durationLabel(active)).toBe('已播 0:02:01');
+    expect(composable.durationLabel(ended)).toBe('用时 0:03:00');
   });
 });

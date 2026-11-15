@@ -17,17 +17,39 @@ import { getApiErrorMessage } from '@/utils/apiError';
 import { formatDateMD, formatTimeHM, formatElapsedMs } from '@/utils/format';
 import type { LiveSessionItem, SessionKind } from '@/types';
 
-const SOURCE_LABEL: Record<string, string> = {
+/** 场次来源的取值与显示名（筛选框的选项直接取这里，来源只有这一处定义） */
+const SOURCE_LABEL = {
   manual: '手动',
   replay: '回放',
   generate: '模拟',
   legacy: '历史',
-};
+} as const;
 
-const KIND_LABEL: Record<SessionKind, string> = {
+/** 场次类型的取值与显示名 */
+const KIND_LABEL = {
   live: '正式',
   rehearsal: '彩排',
-};
+} as const satisfies Record<SessionKind, string>;
+
+/**
+ * 筛选取值里的"不限"：来源与类型两个筛选框都按这个值表示不筛。
+ * 不用空串——Element Plus 的选项在 value 为空时按 label 注册，空串选项永远选不中，
+ * 下拉框只能落回"请选择"占位，读者看不出这个框筛的是什么。
+ */
+export const SESSION_FILTER_ALL = 'all';
+
+/** 场次来源取值（筛选框按这些值过滤） */
+export type SessionSource = keyof typeof SOURCE_LABEL;
+
+/** 筛选框的来源选项（顺序即下拉框顺序） */
+export const SESSION_SOURCE_OPTIONS = (
+  Object.entries(SOURCE_LABEL) as [SessionSource, string][]
+).map(([value, label]) => ({ value, label }));
+
+/** 筛选框的类型选项（顺序即下拉框顺序） */
+export const SESSION_KIND_OPTIONS = (Object.entries(KIND_LABEL) as [SessionKind, string][]).map(
+  ([value, label]) => ({ value, label }),
+);
 
 /** 场次默认标题（yyyy-MM-dd 周X HH:mm，按给定时刻）：开场次预填与未命名场次重命名预填共用 */
 export function defaultSessionTitle(at: Date = new Date()): string {
@@ -56,8 +78,8 @@ export function useLiveSessions() {
   );
   /** 场次筛选：标题关键字 + 来源 + 类型（服务端筛选） */
   const sessionQuery = ref('');
-  const sessionSourceFilter = ref('');
-  const sessionKindFilter = ref<SessionKind | ''>('');
+  const sessionSourceFilter = ref<SessionSource | typeof SESSION_FILTER_ALL>(SESSION_FILTER_ALL);
+  const sessionKindFilter = ref<SessionKind | typeof SESSION_FILTER_ALL>(SESSION_FILTER_ALL);
   const sessionMode = ref<'live' | 'replay'>('live');
   const selectedSession = ref<LiveSessionItem | null>(null);
 
@@ -68,7 +90,8 @@ export function useLiveSessions() {
   }
 
   function sourceLabel(source: string): string {
-    return SOURCE_LABEL[source] ?? source;
+    const labels: Record<string, string> = SOURCE_LABEL;
+    return labels[source] ?? source;
   }
 
   function kindLabel(kind: SessionKind): string {
@@ -93,17 +116,28 @@ export function useLiveSessions() {
     return selectedSession.value?.live_session_id === item.live_session_id;
   }
 
-  /** 进行中场次已播时长标签（随共享时钟逐秒刷新；非进行中场次不显示） */
-  function elapsedLabel(item: LiveSessionItem): string | null {
-    if (!item.is_active) return null;
-    return `已播 ${formatElapsedMs(nowTick.value - item.started_at_ms)}`;
+  /**
+   * 场次时长标签：进行中场次走共享时钟（已播，逐秒刷新），已结束场次用结束时刻
+   * 减开始时刻（用时）。缺结束时刻（残留场次）或起止倒挂（脏数据）不显示。
+   * 时长固定带小时位：短场次（"0:04:00"）与长场次（"3:01:00"）形状一致，
+   * 不会被误读成几小时。
+   */
+  function durationLabel(item: LiveSessionItem): string | null {
+    if (item.is_active) {
+      return `已播 ${formatElapsedMs(nowTick.value - item.started_at_ms, { alwaysHours: true })}`;
+    }
+    if (item.ended_at_ms == null) return null;
+    const duration = item.ended_at_ms - item.started_at_ms;
+    if (duration < 0) return null;
+    return `用时 ${formatElapsedMs(duration, { alwaysHours: true })}`;
   }
 
   async function loadSessions(): Promise<void> {
     try {
       const response = await liveSessionsApi.list({
-        source: sessionSourceFilter.value || undefined,
-        kind: sessionKindFilter.value || undefined,
+        source:
+          sessionSourceFilter.value === SESSION_FILTER_ALL ? undefined : sessionSourceFilter.value,
+        kind: sessionKindFilter.value === SESSION_FILTER_ALL ? undefined : sessionKindFilter.value,
         q: sessionQuery.value.trim() || undefined,
       });
       sessions.value = response.data.items;
@@ -252,7 +286,7 @@ export function useLiveSessions() {
     sourceLabel,
     kindLabel,
     sessionTimeLabel,
-    elapsedLabel,
+    durationLabel,
     isSelected,
     loadSessions,
     startStreamVisible,

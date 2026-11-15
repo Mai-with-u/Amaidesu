@@ -44,19 +44,48 @@
           <el-button :disabled="!activeExplicitSession" @click="closeSession">下播</el-button>
         </header>
         <div class="sessions-filters">
-          <el-input v-model="sessionQuery" size="small" placeholder="搜索场次标题" clearable />
-          <el-select v-model="sessionSourceFilter" size="small" class="sessions-source">
-            <el-option label="全部来源" value="" />
-            <el-option label="手动" value="manual" />
-            <el-option label="回放" value="replay" />
-            <el-option label="模拟" value="generate" />
-            <el-option label="历史" value="legacy" />
-          </el-select>
-          <el-select v-model="sessionKindFilter" size="small" class="sessions-kind">
-            <el-option label="全部类型" value="" />
-            <el-option label="正式" value="live" />
-            <el-option label="彩排" value="rehearsal" />
-          </el-select>
+          <!-- 搜索单独一行：标题关键字最常改，占满整行不必挤在下拉框边上 -->
+          <el-input
+            v-model="sessionQuery"
+            size="small"
+            class="sessions-search"
+            placeholder="搜索场次标题"
+            clearable
+            aria-label="搜索场次标题"
+          />
+          <!-- 两个下拉框各带常驻前缀（来源 / 类型），不选时也知道自己筛的是什么 -->
+          <div class="sessions-filter-row">
+            <el-select
+              v-model="sessionSourceFilter"
+              size="small"
+              class="sessions-source"
+              aria-label="按来源筛选场次"
+            >
+              <template #prefix><span class="filter-cap">来源</span></template>
+              <el-option label="全部" :value="SESSION_FILTER_ALL" />
+              <el-option
+                v-for="opt in SESSION_SOURCE_OPTIONS"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
+            <el-select
+              v-model="sessionKindFilter"
+              size="small"
+              class="sessions-kind"
+              aria-label="按类型筛选场次"
+            >
+              <template #prefix><span class="filter-cap">类型</span></template>
+              <el-option label="全部" :value="SESSION_FILTER_ALL" />
+              <el-option
+                v-for="opt in SESSION_KIND_OPTIONS"
+                :key="opt.value"
+                :label="opt.label"
+                :value="opt.value"
+              />
+            </el-select>
+          </div>
         </div>
         <ul class="session-list">
           <li
@@ -84,34 +113,40 @@
               }}</span>
             </div>
             <div class="session-meta mono">
+              <!-- 起止时刻独占一行：加进时长后同一行放不下，挤下去会把结束时刻甩到下一行 -->
               <span class="session-time">{{ sessionTimeLabel(item) }}</span>
-              <span v-if="elapsedLabel(item)" class="session-elapsed">{{
-                elapsedLabel(item)
-              }}</span>
-              <span class="grow" />
-              <span class="msg-count">{{ item.message_count }} 条</span>
-              <span class="session-actions">
-                <el-button class="session-ren" link size="small" @click.stop="renameSession(item)"
-                  >改名</el-button
+              <span class="session-stats">
+                <span
+                  v-if="durationLabel(item)"
+                  class="session-duration"
+                  :class="{ 'is-running': item.is_active }"
+                  >{{ durationLabel(item) }}</span
                 >
-                <el-button
-                  v-if="!item.is_active"
-                  class="session-ren"
-                  link
-                  size="small"
-                  @click.stop="toggleSessionKind(item)"
-                  >{{ item.kind === 'live' ? '改彩排' : '改正式' }}</el-button
-                >
-                <el-popconfirm
-                  v-if="!item.is_active && item.source !== 'legacy'"
-                  title="删除该场次及其全部明细？"
-                  width="220"
-                  @confirm="removeSession(item)"
-                >
-                  <template #reference>
-                    <el-button class="session-del" link size="small" @click.stop>删除</el-button>
-                  </template>
-                </el-popconfirm>
+                <span class="grow" />
+                <span class="msg-count">{{ item.message_count }} 条</span>
+                <span class="session-actions">
+                  <el-button class="session-ren" link size="small" @click.stop="renameSession(item)"
+                    >改名</el-button
+                  >
+                  <el-button
+                    v-if="!item.is_active"
+                    class="session-ren"
+                    link
+                    size="small"
+                    @click.stop="toggleSessionKind(item)"
+                    >{{ item.kind === 'live' ? '改彩排' : '改正式' }}</el-button
+                  >
+                  <el-popconfirm
+                    v-if="!item.is_active && item.source !== 'legacy'"
+                    title="删除该场次及其全部明细？"
+                    width="220"
+                    @confirm="removeSession(item)"
+                  >
+                    <template #reference>
+                      <el-button class="session-del" link size="small" @click.stop>删除</el-button>
+                    </template>
+                  </el-popconfirm>
+                </span>
               </span>
             </div>
           </li>
@@ -460,7 +495,12 @@ import { EVENT } from '@/types/events';
 import InterventionInput from '@/components/dashboard/InterventionInput.vue';
 import StartStreamDialog from '@/components/live/StartStreamDialog.vue';
 import { useNowTick } from '@/composables/useNowTick';
-import { useLiveSessions } from '@/composables/live/useLiveSessions';
+import {
+  useLiveSessions,
+  SESSION_FILTER_ALL,
+  SESSION_SOURCE_OPTIONS,
+  SESSION_KIND_OPTIONS,
+} from '@/composables/live/useLiveSessions';
 import { useThinkingStream } from '@/composables/live/useThinkingStream';
 import { useLiveTimeline } from '@/composables/live/useLiveTimeline';
 import { useLiveStatus } from '@/composables/live/useLiveStatus';
@@ -526,7 +566,7 @@ const {
   sourceLabel,
   kindLabel,
   sessionTimeLabel,
-  elapsedLabel,
+  durationLabel,
   isSelected,
   loadSessions,
   startStreamVisible,
@@ -1165,22 +1205,36 @@ onMounted(() => {
   color: var(--text-primary);
 }
 
+/* 筛选区：搜索独占一行，两个下拉框并排一行 */
 .sessions-filters {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 6px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-color-light);
   flex-shrink: 0;
 }
 
-.sessions-source {
-  width: 96px;
-  flex-shrink: 0;
+.sessions-search {
+  width: 100%;
 }
+
+.sessions-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sessions-source,
 .sessions-kind {
-  width: 92px;
-  flex-shrink: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+/* 下拉框常驻前缀（来源 / 类型）：不选值时也说明这个框筛的是什么 */
+.filter-cap {
+  font-size: 11px;
+  color: var(--text-placeholder);
 }
 
 .session-list {
@@ -1260,19 +1314,31 @@ onMounted(() => {
 
 .session-meta {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 2px;
   margin-top: 3px;
   font-size: 11px;
   color: var(--text-secondary);
 }
+
+/* 时长与消息数同一行（消息数右对齐）；起止时刻在其上方独占一行 */
+.session-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .session-time {
   min-width: 0;
 }
-.session-elapsed {
+.session-duration {
   flex-shrink: 0;
   white-space: nowrap;
   font-weight: 700;
+  color: var(--text-secondary);
+}
+/* 进行中的场次：时长随时钟走，用醒目色标出"还在播" */
+.session-duration.is-running {
   color: var(--color-danger);
 }
 .msg-count {
@@ -1280,14 +1346,7 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-/* 操作按钮与消息数共用 meta 行右槽：悬停/选中时按钮换入，避免绝对定位叠字；
-   时间标签仅悬停时收为单行省略，静止态始终完整（超长自然换行） */
-.session-card:hover .session-time,
-.session-card.is-selected .session-time {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
+/* 操作按钮与消息数共用统计行右槽：悬停/选中时按钮换入，避免绝对定位叠字 */
 .session-actions {
   display: none;
   flex-shrink: 0;

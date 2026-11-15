@@ -55,6 +55,12 @@ describe('formatElapsedMs', () => {
   ])('%i 毫秒 → "%s"', (ms, expected) => {
     expect(formatElapsedMs(ms)).toBe(expected);
   });
+
+  it('alwaysHours：固定带小时位，短时长与长时长形状一致', () => {
+    expect(formatElapsedMs(40_000, { alwaysHours: true })).toBe('0:00:40');
+    expect(formatElapsedMs(300_000, { alwaysHours: true })).toBe('0:05:00');
+    expect(formatElapsedMs(5_423_045, { alwaysHours: true })).toBe('1:30:23');
+  });
 });
 
 describe('formatLatency', () => {
