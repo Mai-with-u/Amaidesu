@@ -365,6 +365,8 @@ async function copyText(text: string): Promise<void> {
   display: flex;
   flex-wrap: nowrap;
   gap: 4px;
+  /* 药丸区是头行里的可让出部分：先压缩药丸，工具名与时间戳不被挤占 */
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
 }
@@ -550,6 +552,9 @@ async function copyText(text: string): Promise<void> {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
+  /* 工具名是头行里的不可让出部分：不许被药丸挤窄（工具名很短，截断即丢关键信息） */
+  flex-shrink: 0;
+  max-width: 30ch;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
