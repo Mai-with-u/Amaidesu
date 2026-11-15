@@ -501,6 +501,20 @@ describe('rundown.changed / game.*', () => {
     expect(toGameEntry(evt('room.message', { content: 'hi' }))).toBe(null);
   });
 
+  it('toGameEntry：body_events 进 detail 供上报卡渲染；后端缺字段时安全回空数组', () => {
+    const bodyEvents = [
+      { event_type: 'attacked', message: '被僵尸攻击', cursor: 12 },
+      { event_type: 'died', message: '阵亡一次', cursor: 13 },
+    ];
+    const withEvents = toGameEntry(
+      evt('game.attention_required', { message: '先回血', body_events: bodyEvents }),
+    );
+    expect(withEvents?.detail).toEqual({ body_events: bodyEvents });
+
+    const withoutEvents = toGameEntry(evt('game.attention_required', { message: '需要看一眼' }));
+    expect(withoutEvents?.detail).toEqual({ body_events: [] });
+  });
+
   it('toEntry：未识别事件（system.* 等）不进时间线', () => {
     expect(toEntry(evt('system.hello', {}))).toBe(null);
   });
@@ -883,6 +897,40 @@ describe('game.body.* → 身体事件轻量行', () => {
       }),
     );
     expect(entry).toMatchObject({ kind: 'game_body', badge: '未知', text: '未知遭遇' });
+  });
+
+  it('others_things 叙事（旧事件路径）：game.body.unknown + source_event_type 命中即归专有小卡', () => {
+    const entry = toEntry(
+      evt('game.body.unknown', {
+        game: 'minecraft',
+        kind: 'unknown',
+        summary: '我动了别人放在箱子里的东西，回头得认个账',
+        source_event_type: 'others_things_touched',
+      }),
+    );
+    expect(entry).not.toBeNull();
+    expect(entry!.kind).toBe('others_things');
+    expect(entry!.badge).toBe('动了别人的东西');
+    // 叙事全文不截断
+    expect(entry!.text).toBe('我动了别人放在箱子里的东西，回头得认个账');
+    expect(entry!.source).toBe('游戏 Agent');
+    expect(entry && agentGroupOf(entry)).toBe('game');
+    // 不进简洁档（过程性动态）
+    expect(entry && isConversationEntry(entry)).toBe(false);
+  });
+
+  it('others_things 叙事（专名事件）：game.body.others_food_taken 直接命中', () => {
+    const entry = toEntry(
+      evt('game.body.others_food_taken', {
+        game: 'minecraft',
+        kind: 'others_food_taken',
+        summary: '我拿了别人家门口的面包，之后要说清楚',
+      }),
+    );
+    expect(entry).not.toBeNull();
+    expect(entry!.kind).toBe('others_things');
+    expect(entry!.badge).toBe('拿了别人家的吃的');
+    expect(entry!.text).toBe('我拿了别人家门口的面包，之后要说清楚');
   });
 
   it('不进简洁档（过程性动态）', () => {

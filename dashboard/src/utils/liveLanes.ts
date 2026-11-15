@@ -59,6 +59,7 @@ export function laneOf(entry: ShowEntry): LaneId {
   if (
     entry.kind === 'game' ||
     entry.kind === 'game_body' ||
+    entry.kind === 'others_things' ||
     entry.kind === 'game_chat' ||
     entry.kind === 'agent_reply'
   ) {

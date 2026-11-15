@@ -104,6 +104,7 @@ declare module 'vue' {
     MilestoneCard: typeof import('./src/components/live/cards/MilestoneCard.vue')['default']
     ModelConfigPage: typeof import('./src/components/settings/ModelConfigPage.vue')['default']
     ModelCostDonut: typeof import('./src/components/llm/ModelCostDonut.vue')['default']
+    OthersThingsCard: typeof import('./src/components/live/cards/OthersThingsCard.vue')['default']
     PlatformConnection: typeof import('./src/components/avatar-tuning/PlatformConnection.vue')['default']
     PlayerCandidatePanel: typeof import('./src/components/memory/PlayerCandidatePanel.vue')['default']
     PlayerPanel: typeof import('./src/components/memory/PlayerPanel.vue')['default']

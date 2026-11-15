@@ -18,6 +18,7 @@ import ChatBubbleCard from './ChatBubbleCard.vue';
 import DecisionCard from './DecisionCard.vue';
 import GameCard from './GameCard.vue';
 import MilestoneCard from './MilestoneCard.vue';
+import OthersThingsCard from './OthersThingsCard.vue';
 import PromptCard from './PromptCard.vue';
 import SpeechCard from './SpeechCard.vue';
 import ThinkingCard from './ThinkingCard.vue';
@@ -48,6 +49,8 @@ export const CARD_REGISTRY: Record<ShowEntry['kind'], Component> = {
   stage: WhisperCard,
   enter: WhisperCard,
   game_body: WhisperCard,
+  // others_things 叙事小卡：动了别人的东西/拿了别人家吃的的富叙事
+  others_things: OthersThingsCard,
   tts: WhisperCard,
   system: WhisperCard,
   tool_health: WhisperCard,

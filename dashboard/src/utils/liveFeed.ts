@@ -64,6 +64,10 @@ export type EntryKind =
   | 'game_chat'
   /** 游戏身体事件（game.body.*）：AI 玩家遭遇的轻量小行 */
   | 'game_body'
+  /** 动别人东西/拿别人家吃的的叙事小卡：挂在 game.body.unknown（或同义专名
+   *  事件 game.body.others_things_touched / game.body.others_food_taken）上的
+   *  富叙事，双行专有展示，不混进占位"未知"单行 */
+  | 'others_things'
   /** 工具健康跃迁（tool.health.*）：熔断/恢复系统行（独立于 kind='system'，
    *  因简洁档口径不同——guard 进简洁档、tool.health 不进） */
   | 'tool_health'
@@ -318,8 +322,9 @@ export type AgentGroup = 'streamer' | 'game' | 'room';
 export function agentGroupOf(entry: ShowEntry): AgentGroup {
   if (entry.kind === 'game') return 'game';
   if (entry.kind === 'agent_reply') return 'game';
-  // 游戏域事件流：身体事件与游戏内聊天都是游戏 Agent 采集的游戏世界事实
+  // 游戏域事件流：身体事件、叙事小卡与游戏内聊天都是游戏 Agent 采集的游戏世界事实
   if (entry.kind === 'game_body') return 'game';
+  if (entry.kind === 'others_things') return 'game';
   if (entry.kind === 'game_chat') return 'game';
   if (entry.kind === 'thinking') {
     return entry.source === '游戏 Agent' ? 'game' : 'streamer';
@@ -803,6 +808,9 @@ export function toGameEntry(event: FeedEvent): ShowEntry | null {
     note: noteParts.join(' · '),
     badge,
     failed: eventType === 'error',
+    // body_events：上报随带的原始身体事件清单（GamePayload 契约，空 = 无），
+    // 上报卡渲染成缩进小列表；数组形态保证后端缺字段/脏字段时不炸
+    detail: { body_events: Array.isArray(data.body_events) ? data.body_events : [] },
     source: '游戏 Agent',
   });
 }
@@ -838,10 +846,52 @@ function fromAgentReply(event: FeedEvent, data: Record<string, unknown>): ShowEn
   });
 }
 
+/** others_things 叙事的来源种类：payload.source_event_type（旧事件 game.body.unknown
+ *  按它判别）与专名事件名末段（game.body.others_things_touched 等）共用同一组词 */
+export const OTHERS_THINGS_SOURCES: ReadonlySet<string> = new Set([
+  'others_things_touched',
+  'others_food_taken',
+]);
+
+/** 来源种类 → 徽标实词 */
+const OTHERS_THINGS_BADGE: Record<string, string> = {
+  others_things_touched: '动了别人的东西',
+  others_food_taken: '拿了别人家的吃的',
+};
+
+/** 身体事件是否为 others_things 叙事：专名事件名或 payload.source_event_type
+ *  任一命中即算——前端判定不依赖后端专名事件的上线顺序 */
+export function isOthersThingsBodyEvent(
+  eventType: string,
+  data: Record<string, unknown>,
+): boolean {
+  const kind = eventType.startsWith(EVENT_FAMILY.gameBody)
+    ? eventType.slice(EVENT_FAMILY.gameBody.length)
+    : '';
+  return OTHERS_THINGS_SOURCES.has(kind) || OTHERS_THINGS_SOURCES.has(str(data.source_event_type));
+}
+
 /** 游戏身体事件：game.body.*（BodyEventPayload，kind 为判别字段）。
  *  轻量小行（对齐 whisper 级别），死亡行红色醒目；summary 已是叙事化中文事实 */
 function fromBodyEvent(event: FeedEvent, data: Record<string, unknown>): ShowEntry {
   const kind = str(data.kind) || event.type.slice(EVENT_FAMILY.gameBody.length);
+  // others_things 叙事走专有双行小卡：实词徽标 + summary 全文（不截断），
+  // 不与占位"未知"单行混排（那类单行截断会把富叙事的认账口径切没）
+  if (isOthersThingsBodyEvent(event.type, data)) {
+    const source =
+      OTHERS_THINGS_SOURCES.has(kind) && kind
+        ? kind
+        : str(data.source_event_type) || event.type.slice(EVENT_FAMILY.gameBody.length);
+    return makeEntry({
+      id: event.id,
+      kind: 'others_things',
+      tsMs: event.timestamp_ms,
+      actor: str(data.game) || '游戏',
+      text: str(data.summary),
+      badge: OTHERS_THINGS_BADGE[source] ?? '',
+      source: '游戏 Agent',
+    });
+  }
   const badge =
     kind === 'attacked'
       ? '遇袭'
