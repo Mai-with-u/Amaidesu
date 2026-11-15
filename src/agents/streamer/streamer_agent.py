@@ -45,7 +45,7 @@ from src.modules.background import get_registry as get_task_registry
 from src.modules.background import setup_registry as setup_task_registry
 from src.modules.events.event_bus import EventBus
 from src.modules.events.names import CoreEvents
-from src.modules.events.payloads.core import CoreStartupPayload
+from src.modules.events.payloads.core import CoreErrorPayload, CoreStartupPayload
 from src.modules.events.payloads.live import LiveEndedPayload, LiveStartedPayload
 from src.modules.events.payloads.game import GamePayload
 from src.modules.events.payloads.body import BodyEventPayload
@@ -418,6 +418,8 @@ class StreamerAgent(BaseAgent):
         self._pending_operator_notes: deque[str] = deque()
         # 游戏社交事实：场内工具登记、参考段每批现读、回想工具查（None 时三处都关）
         self._social_fact_repo = social_fact_repo
+        # 社交事实读取失败的正式告警只发一次（每进程一条 core.error），后续失败仅记日志
+        self._social_facts_alert_emitted = False
         self._event_repo = event_repo
         # 隐私服务：线索推送要按配置的短语表判定"忘了我"与撤回（缺失时不出回执行）
         self._privacy_service = privacy_service
@@ -1985,7 +1987,7 @@ class StreamerAgent(BaseAgent):
         finder = getattr(self._archive_repo, "recent_ended_session_bounds", None)
         if not callable(finder):
             return []
-        min_ms = max(0, int(getattr(self.config, "memory_brief_min_session_ms", 0)))
+        min_ms = max(0, int(self.typed_config.memory_brief_min_session_ms))
         return list(
             await finder(
                 kind=SESSION_KIND_LIVE,
@@ -1996,9 +1998,21 @@ class StreamerAgent(BaseAgent):
         )
 
     async def _load_social_facts(self) -> List[Any]:
-        """参考段用的现行社交事实：按当前游戏与存档读取，过滤无证据归纳行并标记隔两场未再证实的旧进展。"""
+        """参考段用的现行社交事实：按当前游戏与存档读取，过滤无证据归纳行并标记隔两场未再证实的旧进展。
+
+        读失败不挡决策：本批省略该段；首个进程生命周期内只发一条 core.error 正式告警，
+        之后每次失败仅记 WARNING 日志。
+        """
         if self._social_fact_repo is None:
             return []
+        try:
+            return await self._read_social_facts()
+        except Exception as exc:  # noqa: BLE001 - 读不到只少这一段参考，不挡决策
+            self._logger.warning(f"读游戏社交事实失败（本批省略该段）: {exc}", exc=True)
+            await self._emit_social_facts_alert(exc)
+            return []
+
+    async def _read_social_facts(self) -> List[Any]:
         sid = self._current_session_pk()
         bounds = await self._recent_two_session_bounds(sid) if sid is not None else []
         recent_ids = tuple(int(item[0]) for item in bounds[:2]) if len(bounds) >= 2 else ()
@@ -2019,6 +2033,25 @@ class StreamerAgent(BaseAgent):
                     fact = fact.model_copy(update={"stale_unconfirmed": True})
                 facts.append(fact)
         return facts
+
+    async def _emit_social_facts_alert(self, exc: Exception) -> None:
+        """社交事实读取失败第一次发 core.error 让 WebUI 告警可见；之后同因失败不再重复弹窗。"""
+        if self._social_facts_alert_emitted:
+            return
+        self._social_facts_alert_emitted = True
+        if self._event_bus is None:
+            return
+        try:
+            await self._event_bus.emit(
+                CoreEvents.CORE_ERROR,
+                CoreErrorPayload(
+                    message="游戏社交事实读取持续失败，参考段缺【游戏社交事实】（每次失败都记日志）",
+                    data={"source": "streamer", "error": f"{type(exc).__name__}: {exc}"},
+                ),
+                source="streamer_agent",
+            )
+        except Exception as emit_exc:  # noqa: BLE001 - 告警是旁路，不阻断决策
+            self._logger.warning(f"发布社交事实读取告警失败（已忽略）: {emit_exc}")
 
     async def _wake_memory_indexer(self) -> None:
         """社交事实写成后叫醒索引任务补一轮（回想马上查得到）；没装索引时什么都不做。"""
