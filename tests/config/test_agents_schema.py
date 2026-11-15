@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import get_args
 
 import pytest
@@ -12,6 +13,13 @@ from src.agents.streamer.config import StreamerConfig
 from src.agents.text_adv.config import TextAdvConfig
 from src.modules.agents.factory import AGENT_BINDINGS
 from src.modules.config.agents_schemas import AgentsConfig, AgentsRootConfig, AgentType
+from src.modules.config.multi_file_loader import generate_default_configs, load_config_dir
+from tests.config.helpers import read_doc
+
+
+@pytest.fixture
+def config_dir(tmp_path: Path) -> Path:
+    return tmp_path / "config"
 
 
 def test_enabled_list_accepts_known_agents_only() -> None:
@@ -65,6 +73,29 @@ def test_minecraft_config_comes_from_its_package_and_has_no_step_limit() -> None
     )
     with pytest.raises(ValidationError):  # 旧步数键须经配置迁移清理，不能成为可编辑但不生效的参数
         AgentsConfig(minecraft={"max_steps": 50})
+
+
+def test_minecraft_drawing_builder_defaults_and_constraints() -> None:
+    drawing = AgentsConfig().minecraft.drawing_builder
+    assert (drawing.enabled, drawing.max_validation_retries) == (True, 3)
+
+    custom = AgentsConfig(
+        minecraft={"drawing_builder": {"enabled": False, "max_validation_retries": 5}}
+    ).minecraft.drawing_builder
+    assert (custom.enabled, custom.max_validation_retries) == (False, 5)
+
+    with pytest.raises(ValidationError):  # 重试上限不允许负数
+        AgentsConfig(minecraft={"drawing_builder": {"max_validation_retries": -1}})
+
+
+def test_materialized_agents_toml_holds_drawing_builder_section(config_dir: Path) -> None:
+    """首启生成的 agents.toml 直接物化出 [agents.minecraft.drawing_builder]，加载不因新段硬错。"""
+    generate_default_configs(config_dir)
+    doc = read_doc(config_dir, "agents.toml")
+    section = doc["agents"]["minecraft"]["drawing_builder"].unwrap()
+    assert section == {"enabled": True, "max_validation_retries": 3}
+
+    load_config_dir(config_dir)  # 物化出的段必须是加载器认识的键，未知键会在这里抛 ConfigValidationError
 
 
 def test_text_adv_config_comes_from_its_package() -> None:

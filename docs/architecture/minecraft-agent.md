@@ -51,6 +51,8 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 
 一整轮只在查询还在跑的目标（`maicraft_goal` get/list）时，先提醒结束这一轮等通知；连续第二轮直接替它让出，不再推理。带 `path` 的 get 是在读结束了的目标里折起来的证据，不算查询。
 
+图纸生成（`minecraft_drawing`）完成的瞬间到其通知注入进对话之间有一个窗口，这段窗口按"在跑"对待：此时自然终止不判"停了没交付"。
+
 ### 后台目标跟踪（events → 唤醒）
 
 - **登记**：`maicraft_execute` 返回没结束的目标（`state` 为 running / awaiting_answer / paused）即开始跟踪；当场完成的目标（只改记忆、只读分析）结果已在回复里，不跟踪。模型用 `maicraft_goal(resume)` 解除暂停的旧目标也纳入跟踪
@@ -83,6 +85,7 @@ Minecraft 游戏 Agent（AI 玩家）的架构设计。定位：事件驱动的 
 | `minecraft_notebook` | 工作笔记（read/write）。对话历史会整理、笔记不会——这一场的重要发现写这里；按存档分开，进程重启清空。长期要记的地点用 MaiCraft 的 `remember` 记成命名地点（按存档存在 Mod 的世界记忆里） |
 | `minecraft_report` | 上报通道（玩家→主播唯一发声出口）：delivery 交付总结 / escalation 升级决策 |
 | `minecraft_skill` | 按名读技能正文（装配了技能库时才有）。技能目录随系统提示词给出，由本地直播策略与 MaiCraft 的 `resources/list` 合并而成；玩法技能随 Mod 发布，目录里标着“来自 MaiCraft”，正文按 `skill://` 地址经 `resources/read` 读；MaiCraft 没连上时远端技能消失，本地策略照常可用 |
+| `minecraft_drawing` | 建筑图纸委派（异步内部工具）：主模型调它委派画图——`purpose` 必填（要什么样的房子）、`target` 可选（参照建筑/地点）。工具当场返回任务编号即返回，不等画完；后台在 agent 事件循环里生成：读一次现场（指了参照时经 design(read_site)）→ 拉 Mod 知识目录与 building 文档 → 用 `minecraft_builder` 档生成 drawing JSON → 发 Mod design create 校验，被拒把报错拼回去重画（重画上限按 `[agents.minecraft.drawing_builder]`），成功/失败都以 [系统] 通知注入唤醒主模型，模型按通知里的编号 `build(design_id=编号)` 落地。同一时间最多一张图纸，第二个调用当场拒绝；委派收手（release）时取消生成、结果静默丢弃。交付门禁不管图纸——build 引用还没就绪的图纸会得到 Mod 的明确错误观察，由模型按错误处置 |
 | `maicraft_observe` / `maicraft_lookup` / `maicraft_execute` / `maicraft_goal` | MaiCraft v1 的工具，registry 动态发现（每任务重新拉取）；参数按 Mod 定义填写。`maicraft_events` 只给宿主读，不进 LLM 工具列表；截桌面的 `vision_look_at_screen` 也不交给游戏 Agent 的模型（看游戏画面用 `observe(what=picture)`）。画面的文字那一块当观察进历史，图在模型能看图时只挂在下一次请求尾部，不能看图时经视觉模型转成文字接在观察后面；一个任务里看几次、两次隔多久按 `[agents.minecraft.picture]` 限，超了不调 Mod |
 
 **对外工具**（经 ToolRegistry 注册、主播工具列表可见，不进玩家 LLM 工具列表）：
@@ -131,6 +134,10 @@ fold_ratio = 0.4                  # 超过这一比例开始在后台请模型�
 [agents.minecraft.mcp]            # Agent 私有 MCP（位置即归属，owner_agent="minecraft"）
 enabled = true
 url = "http://127.0.0.1:8766/mcp"
+
+[agents.minecraft.drawing_builder] # 建筑图纸生成（minecraft_drawing 工具）
+enabled = true                     # 总开关，关闭时 minecraft_drawing 不进模型工具列表
+max_validation_retries = 3         # 图纸被 Mod 校验拒绝后的重画上限
 ```
 
 配版本同步规则：配置结构变更升该文件 `[meta].version` 并保证漂移写回（见 [配置文件按领域拆分](../decisions/014-config-six-file-refactor.md)）。
