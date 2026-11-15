@@ -86,6 +86,7 @@ from .memory.last_wrapup import OPENING_WRAPUP_MAX_WINDOWS, build_last_wrapup
 from .memory.recall import MemoryRecallService, build_memory_recall_provider
 from .memory.search import MemorySearch
 from .memory.settle import SessionSettler
+from .session_overview import SessionOverviewWriter
 from .message_buffer import MessageBuffer
 from .delegation_workbench import PLANNER_CALL_SOURCE
 from .delegation_stall_watch import DelegationStallWatch
@@ -641,6 +642,25 @@ class StreamerAgent(BaseAgent):
                 # 第四次调用：更新游戏社交事实（没接仓储时不跑）
                 social_fact_repo=social_fact_repo,
                 # 后台任务面板：整理全程（取料/第 N 笔模型调用/写库）在这里可见
+                task_registry=task_registry,
+            )
+
+        # 场次概览：下播后给这一场写一段"发生了什么"（给人看，不进记忆）。
+        # 与整理是两回事：概览只写 live_sessions.overview 一列，仓储/模型/提示词
+        # 任一缺失就整体关闭，场次行照旧没有概览。
+        self._overview_writer: Optional[SessionOverviewWriter] = None
+        if (
+            sessions_repo is not None
+            and topic_repo is not None
+            and llm_manager is not None
+            and prompt_manager is not None
+        ):
+            self._overview_writer = SessionOverviewWriter(
+                sessions_repo=sessions_repo,
+                topic_repo=topic_repo,
+                event_repo=event_repo,
+                llm_service=llm_manager,
+                prompt_manager=prompt_manager,
                 task_registry=task_registry,
             )
 
@@ -1727,17 +1747,30 @@ class StreamerAgent(BaseAgent):
             self._logger.warning(f"下播收尾前等队尾出错（照常收尾）: {exc}", exc=exc)
         if settle:
             await self._settle_this_session(live_session_id)
-        if self._stream_ledger is None:
+        if self._stream_ledger is not None:
+            try:
+                await self._stream_ledger.wait_writes_idle(timeout_ms=_STREAM_END_WRITE_WAIT_MS)
+                # 道别期间已开新场次时不清遮名：新场次刚记下的遮名不能被旧场次的收尾抹掉
+                await self._stream_ledger.finish_stream_end(clear_masks=self._session_epoch == epoch)
+            except Exception as exc:  # noqa: BLE001 - 清理失败记日志，下次启动的清理兜底
+                self._logger.error(
+                    f"场次 {live_session_id} 的下播清理失败（下次启动的清理与 24 小时兜底补上）: {exc}",
+                    exc=exc,
+                )
+        # 概览排在清理之后：它的原料（话题摘要、游戏事件）不含观众昵称，不依赖遮名集合
+        await self._write_session_overview(live_session_id)
+
+    async def _write_session_overview(self, live_session_id: int) -> None:
+        """给这一场写概览（给人看的这场发生了什么）；失败只记日志，不牵连任何账本。"""
+        if self._overview_writer is None:
             return
         try:
-            await self._stream_ledger.wait_writes_idle(timeout_ms=_STREAM_END_WRITE_WAIT_MS)
-            # 道别期间已开新场次时不清遮名：新场次刚记下的遮名不能被旧场次的收尾抹掉
-            await self._stream_ledger.finish_stream_end(clear_masks=self._session_epoch == epoch)
-        except Exception as exc:  # noqa: BLE001 - 清理失败记日志，下次启动的清理兜底
-            self._logger.error(
-                f"场次 {live_session_id} 的下播清理失败（下次启动的清理与 24 小时兜底补上）: {exc}",
-                exc=exc,
-            )
+            written = await self._overview_writer.write_overview(live_session_id)
+        except Exception as exc:  # noqa: BLE001 - 概览失败不影响收尾
+            self._logger.warning(f"场次 {live_session_id} 的概览没写成（照常收尾）: {exc}", exc=exc)
+            return
+        if written:
+            self._logger.info(f"场次 {live_session_id} 的概览已写入")
 
     async def _settle_this_session(self, live_session_id: int) -> None:
         """整理这一场（最多等 ``_STREAM_END_SETTLE_WAIT_MS``）；失败、超时都只记日志，不挡清理。"""
