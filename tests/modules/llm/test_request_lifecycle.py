@@ -217,3 +217,47 @@ async def test_zero_give_up_waits_without_a_timer() -> None:
     manager, record = await _give_up_manager(set(), timer, give_up_ms=0)
     response = await asyncio.wait_for(manager.generate("说句话", profile="replyer"), 1)
     assert response.content == "m1 的台词" and timer.started == []
+
+
+async def test_give_up_error_carries_partial_output_counts() -> None:
+    """放弃等待的错误带取消前经流式收到的增量字数：排障可区分零产出挂死与活着但极慢。"""
+    timer = _ManualTimer()
+    emitted = asyncio.Event()
+
+    class DribbleClient(BaseLLMClient):
+        async def generate(
+            self,
+            request: GenerateRequest,
+            *,
+            model: str,
+            temperature: float | None = None,
+            reasoning_effort: Optional[str] = None,
+            on_delta: Any = None,
+            interrupt_flag: Any = None,
+        ) -> Response:
+            if model == "m1" and on_delta is not None:
+                on_delta("reasoning", "abcde")
+                on_delta("content", "你好")
+                emitted.set()
+            await asyncio.Event().wait()
+            return Response(success=True, content="", model=model)
+
+    manager = LLMManager(give_up_timer=timer)
+    with patch.dict(_CLIENT_DISPATCH, {"dribble": DribbleClient}):
+        await manager.setup(
+            {
+                "llm_providers": [{"name": "p", "client_type": "dribble", "max_retries": 1, "retry_delay": 0}],
+                "llm_models": [
+                    {"name": "m1", "model_identifier": "m1", "api_provider": "p"},
+                    {"name": "m2", "model_identifier": "m2", "api_provider": "p"},
+                ],
+                "llm_profiles": {"replyer": {"model_list": ["m1", "m2"], "give_up_ms": 60_000}},
+            }
+        )
+        task = asyncio.create_task(manager.generate("说句话", profile="replyer", on_delta=lambda kind, delta: None))
+        await wait_until(emitted.is_set, what="第一个模型已吐出部分增量")
+        timer.fire.set()
+        response = await asyncio.wait_for(task, 1)
+
+    assert not response.success and "已放弃" in (response.error or "")
+    assert "思考 5 字" in (response.error or "") and "正文 2 字" in (response.error or "")

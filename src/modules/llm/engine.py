@@ -989,6 +989,10 @@ class LLMManager:
         attempted_models: List[str] = []
         llm_errors: List[Optional[LLMError]] = []
         last_error: Optional[str] = None
+        # 部分产出观测：放弃等待取消时，取消前经流式回调收到的增量字数累计在此。
+        # 跨模型共享——最终错误里带的是整个请求实际收到的产出总量，用来区分
+        # "上游零产出挂死"与"活着但极慢"。
+        stream_progress: Optional[Dict[str, int]] = {"reasoning": 0, "content": 0} if profile.give_up_ms > 0 else None
 
         for idx, resolved_model in enumerate(models_to_try):
             attempted_models.append(resolved_model.model_name)
@@ -1005,6 +1009,8 @@ class LLMManager:
             model_kwargs = dict(kwargs)
             if isinstance(model_kwargs.get("request"), GenerateRequest):
                 model_kwargs["request"] = _request_for_model(model_kwargs["request"], resolved_model)
+            if stream_progress is not None:
+                model_kwargs["stream_progress"] = stream_progress
             response, error, llm_error = await self._call_one_with_retry(
                 method=method,
                 client=client,
@@ -1096,6 +1102,8 @@ class LLMManager:
     ) -> Tuple[Optional[Response], Optional[str], Optional[LLMError]]:
         """等待当前模型完成，调用方取消时回收整个请求和重试任务。"""
         call_kwargs = dict(kwargs)
+        # 部分产出计数容器由故障切换层注入（key 只在本层消费，不透传给 Client）
+        stream_progress: Optional[Dict[str, int]] = call_kwargs.pop("stream_progress", None)
         call_kwargs["model"] = model_identifier
         # 完整等待模型生成；只让单次温度/思考强度覆盖用途默认值，主动中断仍立即回收连接。
         profile = self._get_profile(profile_name)
@@ -1114,6 +1122,16 @@ class LLMManager:
                 call_kwargs["request"] = request.model_copy(
                     update={"temperature": final_temperature, "reasoning_effort": final_effort}
                 )
+        # 放弃等待路径包一层计数回调：记下取消前经流式收到的增量字数（不改变回调转发）。
+        if stream_progress is not None and call_kwargs.get("on_delta") is not None:
+            caller_delta = call_kwargs["on_delta"]
+
+            def _counting_delta(kind: str, text_delta: str) -> None:
+                if kind in stream_progress:
+                    stream_progress[kind] += len(text_delta)
+                caller_delta(kind, text_delta)
+
+            call_kwargs["on_delta"] = _counting_delta
         call = guarded_call(
             lambda: self._retry_loop(
                 method=method,
@@ -1131,7 +1149,9 @@ class LLMManager:
         )
         if profile.give_up_ms <= 0:
             return await call
-        return await self._give_up_after(call, profile.give_up_ms, profile_name=profile_name, model_name=model_name)
+        return await self._give_up_after(
+            call, profile.give_up_ms, profile_name=profile_name, model_name=model_name, progress=stream_progress
+        )
 
     async def _give_up_after(
         self,
@@ -1140,10 +1160,12 @@ class LLMManager:
         *,
         profile_name: str,
         model_name: str,
+        progress: Optional[Dict[str, int]] = None,
     ) -> Tuple[Optional[Response], Optional[str], Optional[LLMError]]:
         """等一个模型（连同它的重试）至多 ``give_up_ms``：到点还没返回就收回请求、按失败交回切换循环。
 
         收回走取消：guarded_call 收到取消会关掉底层连接与重试任务；调用方自己的取消照常向上传。
+        ``progress`` 非空时把取消前经流式收到的增量字数写进错误信息，供排障区分零产出与极慢产出。
         """
         task = asyncio.ensure_future(call)
         timer = asyncio.ensure_future(self._give_up_timer(give_up_ms))
@@ -1151,11 +1173,14 @@ class LLMManager:
             done, _pending = await asyncio.wait({task, timer}, return_when=asyncio.FIRST_COMPLETED)
             if task in done:
                 return task.result()
+            error = f"等了 {give_up_ms}ms 没返回，已放弃"
+            if progress and (progress.get("reasoning") or progress.get("content")):
+                error += f"（已收到部分产出：思考 {progress['reasoning']} 字、正文 {progress['content']} 字）"
             self.logger.warning(
                 f"[LLM 放弃等待] profile={profile_name} model={model_name} 等了 {give_up_ms}ms 没返回，"
                 "收回请求并按失败处理"
             )
-            return None, f"等了 {give_up_ms}ms 没返回，已放弃", None
+            return None, error, None
         finally:
             for pending in (task, timer):
                 if not pending.done():
