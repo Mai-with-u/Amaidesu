@@ -78,6 +78,7 @@ from src.agents.minecraft.maicraft import (
     EVENTS,
     EXECUTE,
     HOST_ONLY_TOOLS,
+    LOOKUP,
     OBSERVE,
     PAUSED,
     PROVIDER,
@@ -220,6 +221,10 @@ def _places_view_unknown_to_mod(reply: MaicraftReply) -> bool:
 
 # 只读查询目标的操作：一整轮都在查还在跑的目标、没做别的，就是在轮询等结果。
 _GOAL_POLLING_OPERATIONS = frozenset({"get", "list"})
+
+# 天然只读的工具：看现场、查资料、读技能、读回折叠原文——用它们拼出的一整轮没有推进任务。
+# goal 不在此列：get/list 还须命中在跟踪的在跑目标（见 _polls_running_goal）才算读。
+_READ_ONLY_TOOL_NAMES = frozenset({OBSERVE, LOOKUP, "minecraft_skill", "minecraft_context_recall"})
 
 # 委派自动收账的成功目标状态：批内目标回执全是 done 才算整单做成；
 # 其余非 cancelled 的终态（failed / partial / gone）都算没做成
@@ -1235,7 +1240,7 @@ class MinecraftAgent(BaseAgent):
                     action_reminded = True
                 continue
 
-            polling_only = True
+            read_only_round = True
             for call in tool_calls:
                 await self._paused.wait()
                 arguments = call.arguments if isinstance(call.arguments, dict) else {}
@@ -1255,7 +1260,7 @@ class MinecraftAgent(BaseAgent):
                     if self._message_queue:
                         self._wake_event.set()
                     return
-                polling_only &= self._polls_running_goal(call.name, arguments)
+                read_only_round &= self._call_is_read_only(call.name, arguments)
                 messages.append(
                     {
                         "role": "tool",
@@ -1267,17 +1272,21 @@ class MinecraftAgent(BaseAgent):
             if self._task_reported:
                 self._logger.info(f"LLM 已上报，任务批次结束（{steps} 步）")
                 return
-            if polling_only and not self._message_queue:
-                # 一整轮只在查还在跑的目标：第一次提醒别反复查，第二次直接替它让出（等目标事件唤醒）。
+            if read_only_round and not self._message_queue:
+                # 一整轮只有读取、没有任何推进：第一次提醒；连续第二次且有目标在跑就替它让出（等目标事件唤醒）。
                 if polling_reminded:
-                    self._logger.info("连续轮询在跑的目标，已替它让出，等目标事件唤醒")
-                    await self._stand_for_goals(self._goals.tracked_ids())
-                    self._schedule_idle_compaction(messages, tool_defs)
-                    return
+                    tracked = self._goals.tracked_ids()
+                    if tracked:
+                        self._logger.info("连续两轮只读无推进，已替它让出，等目标事件唤醒")
+                        await self._stand_for_goals(tracked)
+                        self._schedule_idle_compaction(messages, tool_defs)
+                        return
+                    # 没有在跑的目标就没有唤醒源，不能替它让出：重置提醒，让下一轮再次提醒
+                    polling_reminded = False
                 messages.append(
                     {
                         "role": "user",
-                        "content": "[系统] 这一轮只在查询还在跑的目标。宿主盯着事件流，目标有结果、提问或被暂停时会通知你；"
+                        "content": "[系统] 这一轮只在读取信息、没有推进。宿主盯着事件流，目标有结果、提问或被暂停时会通知你；"
                         "有可推进或可提前准备的事就去做，没有就结束这一轮（不调工具），等通知。",
                     }
                 )
@@ -1617,6 +1626,18 @@ class MinecraftAgent(BaseAgent):
         if self._goals.tracking(run.goal_id):
             self._goal_ledger.note(run)
             self._goal_ledger.update_task_ledger(run)
+
+    def _call_is_read_only(self, name: str, arguments: Dict[str, Any]) -> bool:
+        """这次调用只读取信息、不推进任务（纯读轮判定用）。
+
+        看现场、查资料、读技能、读回折叠原文天然只读；goal 只有在查在跟踪的在跑目标时
+        才算读——带 ``path`` 读证据、回答提问、暂停取消都是在做事，不算读。
+        """
+        if name in _READ_ONLY_TOOL_NAMES:
+            return True
+        if name == GOAL:
+            return self._polls_running_goal(name, arguments)
+        return False
 
     def _polls_running_goal(self, name: str, arguments: Dict[str, Any]) -> bool:
         """这次调用只是在查询还在跑的目标（没提问、没被暂停），不算推进。

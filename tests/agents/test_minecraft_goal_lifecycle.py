@@ -187,8 +187,55 @@ async def test_polling_a_running_goal_is_folded_into_waiting() -> None:
     await asyncio.sleep(0.2)
 
     assert len(llm.seen) == 3, "第二次轮询后并入等待"
-    assert "只在查询还在跑的目标" in _texts(llm.seen[2])
+    assert "只在读取信息" in _texts(llm.seen[2])
     assert _reports(bus) == []
+    await agent.stop()
+
+
+async def test_pure_read_rounds_without_advancing_are_folded_into_waiting() -> None:
+    """一整轮只看不推进（连目标都没查）：先提醒，第二次直接替它让出。"""
+    server = FakeMaicraft()
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        if not _called(messages, "maicraft_execute"):
+            return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
+        return _resp(calls=[_call("maicraft_observe", {"what": "self"})])
+
+    agent, llm, bus = await make_minecraft_agent(server, script)
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: len(llm.seen) == 3 and agent.batch_active is False)
+    await asyncio.sleep(0.2)
+
+    assert len(llm.seen) == 3, "第二次纯读轮后并入等待"
+    assert "只在读取信息" in _texts(llm.seen[2])
+    assert _reports(bus) == []
+    await agent.stop()
+
+
+async def test_read_only_streak_without_tracked_goals_does_not_yield() -> None:
+    """目标全部结束后只读不推进：没有可等的唤醒源，不替它让出，提醒后模型仍能继续到交付。"""
+    server = FakeMaicraft()
+    rounds_after_finish = {"n": 0}
+
+    def script(messages: List[Dict[str, Any]]) -> Response:
+        text = _texts(messages)
+        if "结束了" not in text:
+            if not _called(messages, "maicraft_execute"):
+                return _resp(calls=[_call("maicraft_execute", {"goal": {"ability": "gather"}})])
+            return _resp("等目标事件通知")
+        rounds_after_finish["n"] += 1
+        if rounds_after_finish["n"] <= 2:
+            return _resp(calls=[_call("maicraft_observe", {"what": "self"})])
+        return _resp(calls=[_call("minecraft_report", {"kind": "delivery", "content": "做完了"})])
+
+    agent, llm, bus = await make_minecraft_agent(server, script)
+    agent.receive_delegation(instruction="去砍点木头", task_id="d-1")
+    await _wait_until(lambda: agent.tracked_goal_ids == [1])
+    server.finish(1, summary="砍完了")
+    await _wait_until(lambda: len(_reports(bus)) == 1)
+
+    assert rounds_after_finish["n"] == 3, "没有在跑目标时不替它让出，模型继续到交付"
+    assert any("只在读取信息" in _texts(seen) for seen in llm.seen), "纯读轮收到提醒"
     await agent.stop()
 
 
