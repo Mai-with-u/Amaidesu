@@ -1,26 +1,31 @@
 <!-- 工具调用卡（tool.result.*）：状态徽标（成功/失败）+ 来源徽标（主播决策/游戏 Agent）拆双槽。
      工具卡一律中性底——状态由左边线色 + 徽标承载，避免高频工具行刷成警报墙。
-     轮次跳转收在头部蓝字链接（整卡可点误触率高）；compact 下成功徽标与载荷折叠区不渲染 -->
+     默认单行：头行内并排工具名、状态徽标、参数药丸（超宽截断）与时间戳；
+     载荷入口收在头行右侧小字（失败卡显示"错误"并用错误色）。
+     轮次跳转收在头部蓝字链接（整卡可点误触率高）；compact 下成功徽标与载荷入口不渲染。
+     maicraft_execute（游戏 Agent 下达 Minecraft 目标的调用）按 actor 分流出专用卡面：
+     头行同构，正文默认展开能力/意图/要点，steps 可展开，完成时显示结果总结 -->
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { CopyDocument } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
 import { formatTimeHMS } from '@/utils/format';
-import { agentGroupOf } from '@/utils/liveFeed';
+import { agentGroupOf, isMinecraftExecuteEntry, maicraftExecuteSummary } from '@/utils/liveFeed';
+import type { MinecraftExecuteSummary } from '@/utils/liveFeed';
 import { useTimelineCardHost } from './context';
 import type { CardProps } from './registry';
 
-defineProps<CardProps>();
+const props = defineProps<CardProps>();
 
 const host = useTimelineCardHost();
 
 /** 载荷懒渲染：首次展开才挂载 JSON 树。声明在卡实例内——条目卸载即随实例回收，
  *  外壳无需再做展开集合的随列修剪 */
-const payloadOpened = ref(false);
+const payloadOpen = ref(false);
 
-function onPayloadToggle(event: Event): void {
-  if ((event.target as HTMLDetailsElement).open) payloadOpened.value = true;
+function togglePayload(): void {
+  payloadOpen.value = !payloadOpen.value;
 }
 
 /** 工具卡的 detail 字段读取守卫——liveFeed.fromToolResult 总是写入 detail，但回看路径或老事件可能为 null */
@@ -57,6 +62,44 @@ function hasToolResult(entry: CardProps['entry']): boolean {
 }
 function toolErrorOf(entry: CardProps['entry']): string {
   return toolDetail(entry).error_message;
+}
+
+// maicraft_execute 专用卡面：按 actor 分流（工具名两种拼写都覆盖）。
+// 失败卡不进专用面（走通用错误路径）；入参解析不出 ability/purpose/steps 时
+// 同样退回通用形态，避免老事件渲染成空卡
+const exec = computed<MinecraftExecuteSummary | null>(() => {
+  if (!isMinecraftExecuteEntry(props.entry) || props.entry.failed) return null;
+  const d = toolDetail(props.entry);
+  const summary = maicraftExecuteSummary(d.args, d.result);
+  const usable =
+    summary.ability || summary.purpose || summary.keyPoints || summary.steps.length > 0;
+  return usable ? summary : null;
+});
+
+/** 状态徽标文案：异步受理态 running=执行中，finished=完成；其余（缺失等）按执行中处理 */
+const execStateBadge = computed(() => (exec.value?.state === 'finished' ? '完成' : '执行中'));
+
+/** 步骤单行预览："步骤 N：①〈purpose〉②…"，缺 purpose 的步骤回退能力名 */
+const execStepsPreview = computed(() => {
+  const steps = exec.value?.steps ?? [];
+  const items = steps
+    .map((s, i) => `${stepMark(i)}${s.purpose || s.ability}`)
+    .join(' ')
+    .trim();
+  return `步骤 ${steps.length}：${items}`;
+});
+
+/** 步骤序号标记：圈号 ①-⑳，超出回退数字 */
+const STEP_MARKS = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
+function stepMark(index: number): string {
+  return STEP_MARKS[index] ?? `${index + 1}.`;
+}
+
+/** 步骤展开态：声明在卡实例内，条目卸载即随实例回收 */
+const execStepsOpen = ref(false);
+
+function toggleExecSteps(): void {
+  execStepsOpen.value = !execStepsOpen.value;
 }
 
 /** vue-json-pretty 的 data 仅接受 JSON 结构；事件 payload 来自线上数据用 JSON 往返归一化
@@ -104,8 +147,18 @@ async function copyText(text: string): Promise<void> {
       <span class="act-kind">工具调用</span>
       <code class="act-tool mono">{{ entry.actor }}</code>
       <!-- 状态徽标：成功/失败。compact 模式下成功徽标隐藏（失败照常显示） -->
+      <!-- 专用卡面状态徽标：执行中/完成（完成沿用成功徽标样式），预演加灰色徽标 -->
+      <template v-if="exec && !host.compact">
+        <span
+          class="act-badge"
+          :class="exec.state === 'finished' ? 'is-success-badge' : 'is-silent-badge'"
+        >
+          {{ execStateBadge }}
+        </span>
+        <span v-if="exec.dryRun" class="act-badge is-dry-run-badge">预演</span>
+      </template>
       <span
-        v-if="entry.badge && (!host.compact || entry.failed)"
+        v-else-if="entry.badge && (!host.compact || entry.failed)"
         class="act-badge"
         :class="{ 'is-success-badge': entry.badge === '成功' }"
       >
@@ -113,7 +166,26 @@ async function copyText(text: string): Promise<void> {
       </span>
       <!-- 来源徽标（中性色，与状态徽标区分不抢视觉） -->
       <span v-if="entry.source" class="act-source">{{ entry.source }}</span>
+      <!-- 参数药丸并入头行：超宽整体截断，完整参数在载荷区；入参为空时回退纯文本正文。
+           专用卡面头行不塞药丸——要点在第 2 行平文展示 -->
+      <div v-if="!exec && entry.argPills.length > 0" class="act-args">
+        <span v-for="pill in entry.argPills" :key="pill.key" class="arg-pill">
+          <span class="arg-key">{{ pill.key }}</span>
+          <span class="arg-value">{{ pill.value }}</span>
+        </span>
+      </div>
+      <p v-else-if="!exec && entry.text" class="act-text">{{ entry.text }}</p>
       <span class="grow" />
+      <!-- 载荷入口：头行右侧小字，失败卡点名"错误"并用错误色 -->
+      <button
+        v-if="!host.compact && hasToolDetail(entry)"
+        type="button"
+        class="payload-toggle"
+        :class="{ 'is-error': entry.failed }"
+        @click.stop="togglePayload"
+      >
+        {{ entry.failed ? '错误 ▸' : '载荷 ▸' }}
+      </button>
       <a
         v-if="host.isRoundClickable(entry)"
         class="d-link"
@@ -124,27 +196,41 @@ async function copyText(text: string): Promise<void> {
       </a>
       <time class="stamp mono">{{ formatTimeHMS(entry.tsMs) }}</time>
     </div>
-    <!-- 参数药丸：入参轮廓一眼可扫；入参为空/非对象时回退纯文本正文 -->
-    <div v-if="entry.argPills.length > 0" class="act-args">
-      <span v-for="pill in entry.argPills" :key="pill.key" class="arg-pill">
-        <span class="arg-key">{{ pill.key }}</span>
-        <span class="arg-value">{{ pill.value }}</span>
-      </span>
+    <!-- maicraft_execute 专用正文：意图行默认展开（这是实际进行游戏操作的卡，信息量最大）；
+         有分步计划时单行预览可点开纵向列；完成态第三行显示结果总结，执行中不渲染 -->
+    <div v-if="exec" class="exec-body">
+      <p class="exec-line exec-main">
+        <code v-if="exec.ability" class="exec-ability mono">{{ exec.ability }}</code>
+        <span v-if="exec.purpose" class="exec-purpose">{{ exec.purpose }}</span>
+        <span v-if="exec.keyPoints" class="exec-points">{{ exec.keyPoints }}</span>
+      </p>
+      <div v-if="exec.steps.length > 0" class="exec-steps">
+        <button
+          type="button"
+          class="exec-steps-line"
+          :title="execStepsOpen ? '收起分步计划' : '展开分步计划'"
+          @click.stop="toggleExecSteps"
+        >
+          {{ execStepsPreview }}
+        </button>
+        <ol v-if="execStepsOpen" class="exec-steps-list">
+          <li v-for="(step, i) in exec.steps" :key="i" class="exec-step">
+            <span class="exec-step-mark">{{ stepMark(i) }}</span>
+            <code v-if="step.ability" class="exec-ability mono">{{ step.ability }}</code>
+            <span v-if="step.purpose">{{ step.purpose }}</span>
+          </li>
+        </ol>
+      </div>
+      <p v-if="exec.state === 'finished' && exec.summary" class="exec-line exec-summary">
+        {{ exec.summary }}
+      </p>
     </div>
-    <p v-else-if="entry.text" class="act-text">{{ entry.text }}</p>
-    <p v-if="entry.note" class="act-note">{{ entry.note }}</p>
-    <!-- 参数/结果折叠区：compact 下不渲染（首页保持紧凑）；detail 为空时整段不渲染。
+    <p v-else-if="entry.note" class="act-note">{{ entry.note }}</p>
+    <!-- 参数/结果载荷区：compact 下不渲染（首页保持紧凑）；detail 为空时整段不渲染。
          JSON 树与复制交互对齐 LLM 历史页（vue-json-pretty + 剪贴板） -->
-    <details
-      v-if="!host.compact && hasToolDetail(entry)"
-      class="t-payload"
-      :class="{ 'is-failed': entry.failed }"
-      @toggle="onPayloadToggle($event)"
-    >
-      <summary @click.stop>参数 / 结果</summary>
-      <!-- 载荷懒渲染：展开过才挂载（details 折叠态下子节点仍会进 DOM，
-           大 JSON 树在高频重渲染的时间线里是主要渲染成本） -->
-      <template v-if="payloadOpened">
+    <div v-if="!host.compact && payloadOpen" class="t-payload">
+      <!-- 载荷懒渲染：展开才挂载——大 JSON 树在高频重渲染的时间线里是主要渲染成本 -->
+      <template v-if="payloadOpen">
         <!-- 失败时错误文本优先展示（开发者定位异常最直接的线索） -->
         <div v-if="entry.failed && toolErrorOf(entry)" class="t-payload-block">
           <div class="t-payload-head">
@@ -205,7 +291,7 @@ async function copyText(text: string): Promise<void> {
           </div>
         </div>
       </template>
-    </details>
+    </div>
   </div>
 </template>
 
@@ -215,24 +301,28 @@ async function copyText(text: string): Promise<void> {
 .act.is-tool-neutral {
   background: var(--bg-card);
 }
-/* 工具卡正文（入参摘要）钳制两行：长值全文在"参数/结果"折叠面板，正文只保留调用轮廓 */
+/* 工具卡正文（无药丸时的回退文本）并入头行：超宽截断，全文在载荷区 */
 .act.is-tool-neutral .act-text {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
-/* 参数药丸：键灰值亮的圆角浅底块——入参轮廓一眼可扫，全文在"参数/结果"折叠面板 */
+/* 参数药丸并入头行：单行不换行，容器截断超宽部分——入参轮廓一眼可扫，全文在载荷区 */
 .act-args {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
-  margin: 2px 0 0;
+  min-width: 0;
+  overflow: hidden;
 }
 .arg-pill {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
+  flex: none;
   max-width: 100%;
   padding: 1px 8px;
   border-radius: var(--radius-sm);
@@ -240,6 +330,9 @@ async function copyText(text: string): Promise<void> {
   border: 1px solid var(--border-color-light);
   font-size: 11px;
   line-height: 1.7;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .arg-key {
   flex-shrink: 0;
@@ -276,6 +369,97 @@ async function copyText(text: string): Promise<void> {
   background: var(--bg-card);
 }
 
+/* maicraft_execute 专用卡面：正文行单行截断（超长省略，全文在载荷区）；
+ * 灰底"预演"徽标区别于状态徽标（执行中=中性灰、完成=绿色成功样式） */
+.is-dry-run-badge {
+  background: var(--bg-active);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color-dark);
+  font-weight: 600;
+}
+.exec-body {
+  margin-top: 4px;
+  min-width: 0;
+}
+.exec-line {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.exec-main {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.exec-ability {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--color-game);
+}
+.exec-purpose {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.exec-points {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.exec-steps {
+  margin-top: 2px;
+  min-width: 0;
+}
+.exec-steps-line {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.exec-steps-line:hover {
+  color: var(--text-primary);
+}
+.exec-steps-list {
+  margin: 4px 0 0;
+  padding-left: 0;
+  list-style: none;
+}
+.exec-step {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.exec-step-mark {
+  flex-shrink: 0;
+}
+.exec-step > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.exec-summary {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 .act-tool {
   font-size: 11px;
   font-weight: 600;
@@ -285,34 +469,27 @@ async function copyText(text: string): Promise<void> {
   text-overflow: ellipsis;
 }
 
-/* 参数/结果折叠区：形态对齐 LLM 历史页（暗底 JSON 树 + 悬浮复制），
-   summary 压到 11px 弱色，避免与卡片主文案争夺层级 */
-.t-payload {
-  margin-top: 6px;
-}
-.t-payload summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+/* 参数/结果载荷区：形态对齐 LLM 历史页（暗底 JSON 树 + 悬浮复制），
+   入口是头行右侧的 11px 小字按钮，避免与卡片主文案争夺层级 */
+.payload-toggle {
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
   font-size: 11px;
   color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
-  list-style: none;
 }
-.t-payload summary::-webkit-details-marker {
-  display: none;
-}
-.t-payload summary::before {
-  content: '▸';
-  font-size: 11px;
-  transition: transform 0.15s ease;
-}
-.t-payload[open] summary::before {
-  transform: rotate(90deg);
-}
-.t-payload summary:hover {
+.payload-toggle:hover {
   color: var(--text-primary);
+}
+.payload-toggle.is-error {
+  color: var(--color-danger);
+}
+.t-payload {
+  margin-top: 6px;
 }
 .t-payload-block {
   margin-top: 6px;

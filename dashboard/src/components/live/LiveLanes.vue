@@ -533,20 +533,6 @@ function focusDelegate(entry: ShowEntry): void {
   display: none;
 }
 
-/* 参数药丸在双轨里压成一行：超出部分省略，完整参数仍在"参数 / 结果"折叠区 */
-.lanes :deep(.act-args) {
-  flex-wrap: nowrap;
-  overflow: hidden;
-}
-
-.lanes :deep(.act-args .arg-pill) {
-  flex: none;
-  max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .lane-card {
   position: relative;
   min-width: 0;

@@ -21,8 +21,10 @@ import {
   fromDecision,
   guidanceOf,
   isConversationEntry,
+  isMinecraftExecuteEntry,
   isRoundLinkable,
   isSilentDecision,
+  maicraftExecuteSummary,
   makeEntry,
   mergeEntriesByTime,
   pickToolText,
@@ -1015,5 +1017,118 @@ describe('tts.utterance.started/finished → 发言行播报态回填', () => {
       new Set(),
     );
     expect(entries).toHaveLength(0);
+  });
+});
+
+describe('maicraft_execute 专用卡面解析', () => {
+  /** 完整的 maicraft_execute 事件入参/结果样本（形状对照线上数据） */
+  function executeArgs(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      goal: {
+        ability: 'maicraft:obtain',
+        purpose: '挖 12 层以下的钻石并带回',
+        target: { kind: 'position', x: 128, y: -58, z: -240 },
+        parameters: { item: 'diamond', count: 5 },
+        steps: [
+          { ability: 'maicraft:descend', purpose: '下到深层' },
+          { ability: 'maicraft:mine', purpose: '挖钻石' },
+        ],
+      },
+      ...extra,
+    };
+  }
+
+  it('maicraftExecuteSummary：取 ability（去前缀）/purpose/要点/steps', () => {
+    const s = maicraftExecuteSummary(executeArgs(), null);
+    expect(s.ability).toBe('obtain');
+    expect(s.purpose).toBe('挖 12 层以下的钻石并带回');
+    expect(s.keyPoints).toBe('坐标 128,-58,-240 · diamond ×5');
+    expect(s.steps).toEqual([
+      { ability: 'descend', purpose: '下到深层' },
+      { ability: 'mine', purpose: '挖钻石' },
+    ]);
+    expect(s.dryRun).toBe(false);
+    expect(s.state).toBe('');
+    expect(s.summary).toBe('');
+  });
+
+  it('ability 已无前缀时原样保留；target 非坐标时取 kind/name', () => {
+    const s = maicraftExecuteSummary(
+      { goal: { ability: 'travel', purpose: '回出生点', target: { kind: 'block', name: 'oak_door' } } },
+      null,
+    );
+    expect(s.ability).toBe('travel');
+    expect(s.keyPoints).toBe('oak_door');
+  });
+
+  it('dry_run=true 时置位预演标记', () => {
+    const s = maicraftExecuteSummary(executeArgs({ dry_run: true }), null);
+    expect(s.dryRun).toBe(true);
+  });
+
+  it('state=running：state 取 running，summary 为空', () => {
+    const s = maicraftExecuteSummary(
+      executeArgs(),
+      { ok: true, data: { goal_id: 'g1', state: 'running' } },
+    );
+    expect(s.state).toBe('running');
+    expect(s.summary).toBe('');
+  });
+
+  it('state=finished：取 result.data.result.summary', () => {
+    const s = maicraftExecuteSummary(
+      executeArgs(),
+      {
+        ok: true,
+        data: { goal_id: 'g1', state: 'finished', result: { status: 'success', summary: '读完 12 层存成图纸' } },
+      },
+    );
+    expect(s.state).toBe('finished');
+    expect(s.summary).toBe('读完 12 层存成图纸');
+  });
+
+  it('steps 缺失/含非对象成员时安全跳过', () => {
+    const s = maicraftExecuteSummary(
+      { goal: { ability: 'obtain', purpose: 'x', steps: [{ ability: 'mine' }, 'junk', null] } },
+      null,
+    );
+    expect(s.steps).toEqual([{ ability: 'mine', purpose: '' }]);
+  });
+
+  it('入参非对象时返回全空摘要', () => {
+    expect(maicraftExecuteSummary(null, null)).toEqual({
+      ability: '',
+      purpose: '',
+      keyPoints: '',
+      dryRun: false,
+      state: '',
+      summary: '',
+      steps: [],
+    });
+  });
+
+  it('isMinecraftExecuteEntry：maicraft/minecraft 两种拼写都命中，非 tool 卡不命中', () => {
+    const tool = makeEntry({ id: '1', kind: 'tool', tsMs: 1000, actor: 'maicraft_execute', text: '' });
+    const alt = makeEntry({ id: '2', kind: 'tool', tsMs: 1000, actor: 'minecraft_execute', text: '' });
+    const other = makeEntry({ id: '3', kind: 'tool', tsMs: 1000, actor: 'glance', text: '' });
+    const speech = makeEntry({ id: '4', kind: 'speech', tsMs: 1000, actor: 'maicraft_execute', text: '' });
+    expect(isMinecraftExecuteEntry(tool)).toBe(true);
+    expect(isMinecraftExecuteEntry(alt)).toBe(true);
+    expect(isMinecraftExecuteEntry(other)).toBe(false);
+    expect(isMinecraftExecuteEntry(speech)).toBe(false);
+  });
+
+  it('fromToolResult：maicraft_execute 事件的 actor 取 tool_name，供专用卡面分流', () => {
+    const entry = toEntry(
+      evt('tool.result.maicraft_execute', {
+        tool_name: 'maicraft_execute',
+        status: 'ok',
+        arguments: executeArgs(),
+        caller_source: 'minecraft-react',
+        result: { ok: true, data: { goal_id: 'g1', state: 'running' } },
+      }),
+    );
+    expect(entry?.kind).toBe('tool');
+    expect(entry?.actor).toBe('maicraft_execute');
   });
 });

@@ -187,6 +187,115 @@ export function toolArgPills(args: unknown): ToolArgPill[] {
   return pills;
 }
 
+// maicraft_execute 专用卡面解析（纯函数，ToolCard 按 actor 分流时调用）
+
+/** maicraft_execute 工具的 actor 取值：工具名历史上出现过 maicraft/minecraft 两种拼写 */
+const MINECRAFT_EXECUTE_ACTORS: ReadonlySet<string> = new Set(['maicraft_execute', 'minecraft_execute']);
+
+/** 该工具条目是否走 maicraft_execute 专用卡面（actor = 工具名，来自 fromToolResult） */
+export function isMinecraftExecuteEntry(entry: ShowEntry): boolean {
+  return entry.kind === 'tool' && MINECRAFT_EXECUTE_ACTORS.has(entry.actor);
+}
+
+/** goal 的 ability 名去掉 maicraft: 前缀（前缀是包名，卡面上只留能力名） */
+function stripAbilityPrefix(ability: string): string {
+  return ability.replace(/^maicraft:/, '');
+}
+
+/** 单步行动（goal.steps 成员） */
+export interface MinecraftExecuteStep {
+  ability: string;
+  purpose: string;
+}
+
+/** maicraft_execute 卡面的取值结果：字段缺失时为空串/空数组，渲染层按空值跳过 */
+export interface MinecraftExecuteSummary {
+  /** 目标能力名（已去 maicraft: 前缀） */
+  ability: string;
+  /** 人类写的意图句（goal.purpose，卡面主文案） */
+  purpose: string;
+  /** 从 target/parameters 提取的要点（坐标 / 物品·数量 / 操作名），多段用 · 连接 */
+  keyPoints: string;
+  /** 入参 dry_run=true 时为真（渲染灰色"预演"徽标） */
+  dryRun: boolean;
+  /** 异步受理状态：running=执行中 / finished=已完成；缺失或未知为空串 */
+  state: string;
+  /** 完成时的结果总结（result.data.result.summary），running 时为空 */
+  summary: string;
+  /** 分步计划（goal.steps），无则为空数组 */
+  steps: MinecraftExecuteStep[];
+}
+
+/** target 字段 → 要点文本：position 给坐标，其余取 kind/name 等可读值 */
+function targetKeyPoint(target: unknown): string {
+  if (!isRecord(target)) return '';
+  const x = num(target.x);
+  const y = num(target.y);
+  const z = num(target.z);
+  if (x != null && y != null && z != null) return `坐标 ${x},${y},${z}`;
+  return str(target.name) || str(target.kind) || str(target.item) || '';
+}
+
+/** parameters 字段 → 要点文本：识别"物品·数量"组合，其余原样跳过（完整内容在载荷区） */
+function parametersKeyPoint(parameters: unknown): string {
+  if (!isRecord(parameters)) return '';
+  const item = str(parameters.item) || str(parameters.name);
+  const count = num(parameters.count) ?? num(parameters.amount);
+  if (item && count != null) return `${item} ×${count}`;
+  return item || '';
+}
+
+/** maicraft_execute 的入参与结果 → 卡面取值。args/result 任一非对象时字段留空，
+ *  调用方（ToolCard）以 ability/purpose 均空判定退回通用卡面 */
+export function maicraftExecuteSummary(args: unknown, result: unknown): MinecraftExecuteSummary {
+  const empty: MinecraftExecuteSummary = {
+    ability: '',
+    purpose: '',
+    keyPoints: '',
+    dryRun: false,
+    state: '',
+    summary: '',
+    steps: [],
+  };
+  if (!isRecord(args)) return empty;
+  const goal = isRecord(args.goal) ? args.goal : {};
+  const dryRun = bool(args.dry_run);
+
+  const keyPointParts = [targetKeyPoint(goal.target), parametersKeyPoint(goal.parameters)]
+    .filter(Boolean)
+    .map(part => part.trim())
+    .filter(part => part.length > 0);
+
+  // steps 每步 {ability, purpose}，ability 同样去前缀；非对象成员跳过
+  const rawSteps = Array.isArray(goal.steps) ? goal.steps : [];
+  const steps: MinecraftExecuteStep[] = rawSteps.flatMap(step => {
+    if (!isRecord(step)) return [];
+    const ability = stripAbilityPrefix(str(step.ability));
+    const purpose = str(step.purpose);
+    return ability || purpose ? [{ ability, purpose }] : [];
+  });
+
+  // 结果形状：{ok, data:{state, result:{summary, ...}}}；data 或内层 result 缺失时留空
+  let state = '';
+  let summary = '';
+  if (isRecord(result)) {
+    const data = isRecord(result.data) ? result.data : {};
+    state = str(data.state);
+    const inner = isRecord(data.result) ? data.result : {};
+    summary = str(inner.summary);
+  }
+
+  return {
+    ability: stripAbilityPrefix(str(goal.ability)),
+    purpose: str(goal.purpose),
+    keyPoints: keyPointParts.join(' · '),
+    dryRun,
+    state,
+    summary,
+    steps,
+  };
+}
+
 /** RoomMessageUser → 展示名（与 summarizeEvent 的取名口径一致） */
 export function userLabel(value: unknown): string {
   if (!isRecord(value)) return '匿名观众';
