@@ -21,24 +21,25 @@ import { useCardHost } from './cards/useCardHost';
 import '@/components/live/cards/cards-shared.css';
 import { useLaneScroll } from '@/composables/live/useLaneScroll';
 import {
+  annotateTaskEnds,
   buildLaneSections,
+  collapseGoalPolls,
   delegationOfReply,
   delegationWindows,
-  taskOfEntry,
   type LaneId,
   type LaneSection,
   type SegmentBoundary,
   type TaskWindow,
 } from '@/utils/liveLanes';
 import type { ShowEntry } from '@/utils/liveFeed';
-import { formatLatency, formatTimeHMS, truncateText } from '@/utils/format';
+import { formatTimeHMS, truncateText } from '@/utils/format';
 import { useNowTick } from '@/composables/useNowTick';
 
 const props = withDefaults(
   defineProps<{
     entries: ShowEntry[];
     emptyText?: string;
-    /** 任务区间（task.changed 的受理 + 终态）：游戏列据此把一次工具调用的前后收成一组 */
+    /** 任务区间（task.changed 的受理 + 终态）：按 goal_id 回填到发起它的 execute 卡 */
     tasks?: TaskWindow[];
     /**
      * 环节边界（环节名 + 起止时刻）：回看窗口内没有流程单条目时，用它判断
@@ -50,7 +51,9 @@ const props = withDefaults(
   { emptyText: '暂无内容', tasks: () => [], boundaries: undefined },
 );
 
-const sections = computed<LaneSection[]>(() => buildLaneSections(props.entries, props.boundaries));
+// 任务终态回填在分节之前：execute 卡带着 taskEnd 进节，游戏列据此渲染终态徽标
+const annotated = computed(() => annotateTaskEnds(props.entries, props.tasks));
+const sections = computed<LaneSection[]>(() => buildLaneSections(annotated.value, props.boundaries));
 const windows = computed(() => delegationWindows(props.entries));
 
 // 相对时间标签（"12s 前"）每秒刷新；卡片 props 恒为 entry + nowMs
@@ -170,38 +173,10 @@ function focusEntry(entryId: string, lane: LaneId): void {
 }
 
 // ---------------------------------------------------------------------------
-// 游戏侧任务分组：同一次工具调用的受理与终态之间，卡片收成一组
+// 游戏侧进度查询收拢：maicraft_goal(operation=get) 且 goal_id 与某张 execute 卡
+// 相等的查询卡，从原位摘除挂到那张 execute 条目的 polls 字段，卡体内部渲染
+// （ToolCard 的专用卡面负责"进度查询 ×N"与明细展开）
 // ---------------------------------------------------------------------------
-
-function taskOf(entry: ShowEntry): TaskWindow | null {
-  return props.tasks.length ? taskOfEntry(entry, props.tasks) : null;
-}
-
-/**
- * 组头只在"值得说明"时出现：组内有两次以上调用，或这次调用本身够久。
- * 每次点击级别的短调用都挂一行组头，反而把游戏列读成表格。
- */
-function showTaskHead(entries: ShowEntry[], index: number): boolean {
-  const window = taskOf(entries[index]);
-  if (!window) return false;
-  const prev = index > 0 ? taskOf(entries[index - 1]) : null;
-  if (prev?.taskId === window.taskId) return false;
-  let count = 1;
-  for (let i = index + 1; i < entries.length; i += 1) {
-    if (taskOf(entries[i])?.taskId !== window.taskId) break;
-    count += 1;
-  }
-  return count >= 2 || window.endMs - window.startMs >= 2_000;
-}
-
-/** 组头短名：能力名去掉命名空间前缀，过长截断 */
-function taskLabel(window: TaskWindow): string {
-  return truncateText(window.label.replace(/^maicraft:/, ''), 24) || '游戏侧任务';
-}
-
-function taskWindowOf(entry: ShowEntry): TaskWindow {
-  return taskOf(entry) as TaskWindow;
-}
 
 // ---------------------------------------------------------------------------
 // 跨轨标记
@@ -305,19 +280,7 @@ function focusDelegate(entry: ShowEntry): void {
             </span>
           </header>
           <div v-show="!isCollapsed(section)" class="lane-body">
-            <template v-for="(entry, index) in section.game" :key="entry.id">
-              <p v-if="showTaskHead(section.game, index)" class="lane-task">
-                <span class="lane-task-name">{{ taskLabel(taskWindowOf(entry)) }}</span>
-                <span class="lane-task-meta">
-                  {{ formatTimeHMS(taskWindowOf(entry).startMs) }} ·
-                  {{ formatLatency(taskWindowOf(entry).endMs - taskWindowOf(entry).startMs) }}
-                </span>
-                <span
-                  class="lane-task-status"
-                  :class="{ 'is-bad': taskWindowOf(entry).statusLabel !== '完成' }"
-                  >{{ taskWindowOf(entry).statusLabel }}</span
-                >
-              </p>
+            <template v-for="entry in collapseGoalPolls(section.game)" :key="entry.id">
               <div
                 class="lane-card"
                 :class="{ 'is-reply': replyChip(entry) }"
@@ -404,38 +367,6 @@ function focusDelegate(entry: ShowEntry): void {
    滚动高度恒等于可视高度，两列都滚不动 */
 .lane-col > * {
   flex: none;
-}
-
-.lane-task {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin: 10px 0 4px;
-  padding: 2px 6px 2px 8px;
-  border-left: 2px solid var(--color-game);
-  color: var(--text-secondary);
-  font-size: 11px;
-}
-
-.lane-task-name {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.lane-task-meta {
-  font-variant-numeric: tabular-nums;
-}
-
-.lane-task-status {
-  margin-left: auto;
-  padding: 0 5px;
-  border-radius: 3px;
-  background: var(--bg-inset);
-  color: var(--text-secondary);
-}
-
-.lane-task-status.is-bad {
-  color: var(--color-danger);
 }
 
 .lane-tip {

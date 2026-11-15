@@ -124,6 +124,21 @@ export interface ShowEntry {
   /** TTS 播报态：speaking=开始出声 / done=播放完成；空串=无信号（未启用 TTS 等）。
    *  由 buildLiveEntries 按 utteranceId 就地回填，不新增时间线行 */
   ttsState: '' | 'speaking' | 'done';
+  /** 游戏侧任务终态：maicraft_execute 卡与 task.changed 任务窗口按 goal_id 配对后
+   *  回填（statusLabel=终态中文短名，durationMs=受理到终态耗时，failed=失败类终态）。
+   *  未配对为 null；由 liveLanes.annotateTaskEnds 写入，通用时间线不依赖此字段 */
+  taskEnd?: TaskEndBadge | null;
+  /** 收拢到本卡名下的进度查询卡（maicraft_goal operation=get 且 goal_id 相等）。
+   *  只由 liveLanes.collapseGoalPolls 写到 execute 卡上，其他条目无此字段 */
+  polls?: ShowEntry[];
+}
+
+/** maicraft_execute 卡上的任务终态徽标取值 */
+export interface TaskEndBadge {
+  statusLabel: string;
+  /** 受理到终态的耗时（毫秒）；拿不到终态时刻为 null */
+  durationMs: number | null;
+  failed: boolean;
 }
 
 /** 单步思考段（与工具卡时间交织的实时思考流片段） */
@@ -298,6 +313,38 @@ export function maicraftExecuteSummary(args: unknown, result: unknown): Minecraf
     summary,
     steps,
   };
+}
+
+// maicraft_goal（进度查询/回答/取消等目标操作）与 execute 卡的 goal_id 关联助手
+
+/** maicraft_goal 工具的 actor 取值 */
+export function isMinecraftGoalEntry(entry: ShowEntry): boolean {
+  return entry.kind === 'tool' && entry.actor === 'maicraft_goal';
+}
+
+/** maicraft_execute 卡携带的 goal_id：结果载荷 result.data.goal_id（后端 ledger_task_id
+ *  即 `maicraft-goal-<goal_id>` 的配对键）。缺失或非数字为 null */
+export function minecraftExecuteGoalId(entry: ShowEntry): number | null {
+  if (!isMinecraftExecuteEntry(entry)) return null;
+  const result = entry.detail?.result;
+  if (!isRecord(result)) return null;
+  const data = isRecord(result.data) ? result.data : {};
+  const goalId = num(data.goal_id);
+  return goalId ?? null;
+}
+
+/** maicraft_goal 调用携带的 goal_id（入参 args.goal_id）；缺失或非数字为 null */
+export function minecraftGoalIdOf(entry: ShowEntry): number | null {
+  const args = entry.detail?.args;
+  if (!isRecord(args)) return null;
+  const goalId = num(args.goal_id);
+  return goalId ?? null;
+}
+
+/** maicraft_goal 调用的 operation 入参（get/answer/cancel/…）；缺失为空串 */
+export function minecraftGoalOperationOf(entry: ShowEntry): string {
+  const args = entry.detail?.args;
+  return isRecord(args) ? str(args.operation) : '';
 }
 
 /** RoomMessageUser → 展示名（与 summarizeEvent 的取名口径一致） */

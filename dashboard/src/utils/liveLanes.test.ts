@@ -7,12 +7,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  annotateTaskEnds,
   buildLaneSections,
   buildTaskWindows,
+  collapseGoalPolls,
   delegationOfReply,
   delegationWindows,
   laneOf,
-  taskOfEntry,
 } from '@/utils/liveLanes';
 import { makeEntry, type ShowEntry } from '@/utils/liveFeed';
 
@@ -181,59 +182,131 @@ describe('派活生命期', () => {
 describe('任务区间（task.changed 受理 + 终态）', () => {
   it('同一任务号的受理与终态合成带时长的区间', () => {
     const windows = buildTaskWindows([
-      {
-        taskId: 'g1',
-        status: 'accepted',
-        tsMs: 1_000,
-        summary: '已受理',
-        ability: 'maicraft:travel',
-      },
-      {
-        taskId: 'g1',
-        status: 'succeeded',
-        tsMs: 13_400,
-        summary: '走到了目的地',
-        ability: 'maicraft:travel',
-      },
+      { taskId: 'maicraft-goal-7', status: 'accepted', tsMs: 1_000 },
+      { taskId: 'maicraft-goal-7', status: 'succeeded', tsMs: 13_400 },
     ]);
     expect(windows).toHaveLength(1);
     expect(windows[0]).toMatchObject({
-      taskId: 'g1',
+      taskId: 'maicraft-goal-7',
       startMs: 1_000,
       endMs: 13_400,
       statusLabel: '完成',
-      label: 'maicraft:travel',
     });
   });
 
-  it('只有终态回执的任务不成区间（旧数据没有起点，画出来是零长度假分组）', () => {
+  it('只有终态回执的任务不成区间（旧数据没有起点，没有耗时可说）', () => {
     expect(
-      buildTaskWindows([
-        { taskId: 'g2', status: 'succeeded', tsMs: 5_000, summary: '完成', ability: '' },
-      ]),
+      buildTaskWindows([{ taskId: 'maicraft-goal-8', status: 'succeeded', tsMs: 5_000 }]),
     ).toHaveLength(0);
   });
 
-  it('按开始时刻排序，且条目能找回自己所在的区间', () => {
+  it('按开始时刻排序，失败/取消终态也成区间', () => {
     const windows = buildTaskWindows([
-      { taskId: 'b', status: 'accepted', tsMs: 9_000, summary: '', ability: 'maicraft:find' },
-      { taskId: 'b', status: 'failed', tsMs: 9_800, summary: '', ability: '' },
-      { taskId: 'a', status: 'accepted', tsMs: 1_000, summary: '', ability: 'maicraft:travel' },
-      { taskId: 'a', status: 'cancelled', tsMs: 4_000, summary: '', ability: '' },
+      { taskId: 'maicraft-goal-2', status: 'accepted', tsMs: 9_000 },
+      { taskId: 'maicraft-goal-2', status: 'failed', tsMs: 9_800 },
+      { taskId: 'maicraft-goal-1', status: 'accepted', tsMs: 1_000 },
+      { taskId: 'maicraft-goal-1', status: 'cancelled', tsMs: 4_000 },
     ]);
-    expect(windows.map(window => window.taskId)).toEqual(['a', 'b']);
-    expect(windows[1].statusLabel).toBe('失败');
-    expect(
-      taskOfEntry(
-        entryOf({ id: 'e1', tsMs: 9_500, kind: 'tool', actor: 'maicraft_execute' }),
-        windows,
-      )?.taskId,
-    ).toBe('b');
-    expect(
-      taskOfEntry(
-        entryOf({ id: 'e2', tsMs: 20_000, kind: 'tool', actor: 'maicraft_execute' }),
-        windows,
-      ),
-    ).toBeNull();
+    expect(windows.map(window => window.taskId)).toEqual(['maicraft-goal-1', 'maicraft-goal-2']);
+    expect(windows[1]!.statusLabel).toBe('失败');
+  });
+});
+
+/** maicraft_execute 卡条目：detail 里带线上形状的入参/结果（goal_id 是配对键） */
+function executeEntry(id: string, tsMs: number, goalId: number): ShowEntry {
+  return makeEntry({
+    id,
+    kind: 'tool',
+    tsMs,
+    actor: 'maicraft_execute',
+    source: '游戏 Agent',
+    text: '',
+    detail: {
+      args: { goal: { ability: 'maicraft:travel', purpose: '去村庄' } },
+      result: { ok: true, data: { goal_id: goalId, state: 'finished', result: { summary: '到了' } } },
+    },
+  });
+}
+
+/** maicraft_goal 进度查询卡条目 */
+function goalPollEntry(id: string, tsMs: number, goalId: number, operation = 'get'): ShowEntry {
+  return makeEntry({
+    id,
+    kind: 'tool',
+    tsMs,
+    actor: 'maicraft_goal',
+    source: '游戏 Agent',
+    text: '',
+    detail: { args: { operation, goal_id: goalId } },
+  });
+}
+
+describe('任务终态回填到 execute 卡（annotateTaskEnds）', () => {
+  const windows = buildTaskWindows([
+    { taskId: 'maicraft-goal-7', status: 'accepted', tsMs: 1_000 },
+    { taskId: 'maicraft-goal-7', status: 'succeeded', tsMs: 10_800 },
+  ]);
+
+  it('goal_id 配对成功的 execute 卡带上终态与耗时', () => {
+    const execute = executeEntry('exec', 1_200, 7);
+    const [annotated] = annotateTaskEnds([execute], windows);
+    expect(annotated!.taskEnd).toEqual({
+      statusLabel: '完成',
+      durationMs: 9_800,
+      failed: false,
+    });
+  });
+
+  it('goal_id 配不上的 execute 卡维持原样（taskEnd 不写入）', () => {
+    const execute = executeEntry('exec', 1_200, 99);
+    const [annotated] = annotateTaskEnds([execute], windows);
+    expect(annotated!.taskEnd).toBeUndefined();
+    expect(annotated).toBe(execute);
+  });
+
+  it('失败终态标记 failed，徽标据此用红色', () => {
+    const failWindows = buildTaskWindows([
+      { taskId: 'maicraft-goal-3', status: 'accepted', tsMs: 1_000 },
+      { taskId: 'maicraft-goal-3', status: 'failed', tsMs: 4_000 },
+    ]);
+    const [annotated] = annotateTaskEnds([executeEntry('exec', 1_100, 3)], failWindows);
+    expect(annotated!.taskEnd).toMatchObject({ statusLabel: '失败', durationMs: 3_000, failed: true });
+  });
+
+  it('非 execute 条目不参与配对', () => {
+    const danmaku = entryOf({ id: 'd', tsMs: 2_000, kind: 'danmaku', actor: '观众', text: '好' });
+    const [annotated] = annotateTaskEnds([danmaku], windows);
+    expect(annotated).toBe(danmaku);
+  });
+});
+
+describe('进度查询收拢（collapseGoalPolls）', () => {
+  it('goal_id 相等的 goal 查询卡挂到对应 execute 条目的 polls 上，其余条目留在原位', () => {
+    const entries = [
+      goalPollEntry('p0', 500, 7),
+      executeEntry('exec', 1_000, 7),
+      goalPollEntry('p1', 2_000, 7),
+      goalPollEntry('p2', 3_000, 8),
+      entryOf({ id: 'look', tsMs: 4_000, kind: 'tool', actor: 'maicraft_lookup', text: '' }),
+    ];
+    const result = collapseGoalPolls(entries);
+
+    // execute 前出现的查询卡也按 goal_id 归属（身份配对，不看先后）
+    expect(result.map(entry => entry.id)).toEqual(['exec', 'p2', 'look']);
+    expect(result[0]!.polls!.map(poll => poll.id)).toEqual(['p0', 'p1']);
+    // goal_id 对不上的查询卡留在原位，且不带 polls 字段（不是 execute 卡）
+    expect(result[1]!.polls).toBeUndefined();
+    expect(result[2]!.polls).toBeUndefined();
+  });
+
+  it('answer/cancel 等操作不是查询，不平铺收拢', () => {
+    const entries = [
+      executeEntry('exec', 1_000, 7),
+      goalPollEntry('answer', 2_000, 7, 'answer'),
+      goalPollEntry('cancel', 3_000, 7, 'cancel'),
+    ];
+    const result = collapseGoalPolls(entries);
+    expect(result.map(entry => entry.id)).toEqual(['exec', 'answer', 'cancel']);
+    expect(result[0]!.polls).toHaveLength(0);
   });
 });

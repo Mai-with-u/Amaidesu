@@ -10,8 +10,14 @@ import { computed, ref } from 'vue';
 import { CopyDocument } from '@element-plus/icons-vue';
 import VueJsonPretty from 'vue-json-pretty';
 import 'vue-json-pretty/lib/styles.css';
-import { formatTimeHMS } from '@/utils/format';
-import { agentGroupOf, isMinecraftExecuteEntry, maicraftExecuteSummary } from '@/utils/liveFeed';
+import { formatLatency, formatTimeHMS } from '@/utils/format';
+import {
+  agentGroupOf,
+  isMinecraftExecuteEntry,
+  maicraftExecuteSummary,
+  minecraftGoalIdOf,
+  minecraftGoalOperationOf,
+} from '@/utils/liveFeed';
 import type { MinecraftExecuteSummary } from '@/utils/liveFeed';
 import { useTimelineCardHost } from './context';
 import type { CardProps } from './registry';
@@ -79,6 +85,15 @@ const exec = computed<MinecraftExecuteSummary | null>(() => {
 /** 状态徽标文案：异步受理态 running=执行中，finished=完成；其余（缺失等）按执行中处理 */
 const execStateBadge = computed(() => (exec.value?.state === 'finished' ? '完成' : '执行中'));
 
+/** 任务终态徽标：execute 卡与 task.changed 任务窗口按 goal_id 配对后回填的
+ *  "终态 · 耗时"（如"完成 · 9.8s"），替换掉"执行中/完成"；未配对为 null */
+const execEndBadge = computed(() => {
+  const end = props.entry.taskEnd;
+  if (!end) return null;
+  const duration = end.durationMs != null ? ` · ${formatLatency(end.durationMs)}` : '';
+  return { label: `${end.statusLabel}${duration}`, failed: end.failed };
+});
+
 /** 步骤单行预览："步骤 N：①〈purpose〉②…"，缺 purpose 的步骤回退能力名 */
 const execStepsPreview = computed(() => {
   const steps = exec.value?.steps ?? [];
@@ -100,6 +115,13 @@ const execStepsOpen = ref(false);
 
 function toggleExecSteps(): void {
   execStepsOpen.value = !execStepsOpen.value;
+}
+
+/** 进度查询明细展开态：同样由卡实例自持 */
+const pollsOpen = ref(false);
+
+function togglePolls(): void {
+  pollsOpen.value = !pollsOpen.value;
 }
 
 /** vue-json-pretty 的 data 仅接受 JSON 结构；事件 payload 来自线上数据用 JSON 往返归一化
@@ -147,9 +169,18 @@ async function copyText(text: string): Promise<void> {
       <span class="act-kind">工具调用</span>
       <code class="act-tool mono">{{ entry.actor }}</code>
       <!-- 状态徽标：成功/失败。compact 模式下成功徽标隐藏（失败照常显示） -->
-      <!-- 专用卡面状态徽标：执行中/完成（完成沿用成功徽标样式），预演加灰色徽标 -->
+      <!-- 专用卡面状态徽标：配对到任务终态时显示"终态 · 耗时"（失败类红色），
+           未配对维持执行中/完成（完成沿用成功徽标样式），预演加灰色徽标 -->
       <template v-if="exec && !host.compact">
         <span
+          v-if="execEndBadge"
+          class="act-badge"
+          :class="{ 'is-success-badge': !execEndBadge.failed }"
+        >
+          {{ execEndBadge.label }}
+        </span>
+        <span
+          v-else
           class="act-badge"
           :class="exec.state === 'finished' ? 'is-success-badge' : 'is-silent-badge'"
         >
@@ -224,6 +255,25 @@ async function copyText(text: string): Promise<void> {
       <p v-if="exec.state === 'finished' && exec.summary" class="exec-line exec-summary">
         {{ exec.summary }}
       </p>
+      <!-- 收拢的进度查询（liveLanes.collapseGoalPolls 挂到 polls 字段）：默认一行小字，
+           展开逐条列出时刻 + goal_id + 操作；展开状态由卡实例自持 -->
+      <div v-if="entry.polls && entry.polls.length > 0" class="exec-polls">
+        <button
+          type="button"
+          class="exec-polls-toggle"
+          :title="pollsOpen ? '收起进度查询' : '展开进度查询'"
+          @click.stop="togglePolls"
+        >
+          进度查询 ×{{ entry.polls.length }} {{ pollsOpen ? '▴' : '▸' }}
+        </button>
+        <ul v-if="pollsOpen" class="exec-polls-list">
+          <li v-for="poll in entry.polls" :key="poll.id" class="exec-polls-item">
+            <time class="mono">{{ formatTimeHMS(poll.tsMs) }}</time>
+            <span class="mono">goal_id {{ minecraftGoalIdOf(poll) ?? '—' }}</span>
+            <span>{{ minecraftGoalOperationOf(poll) || 'get' }}</span>
+          </li>
+        </ul>
+      </div>
     </div>
     <p v-else-if="entry.note" class="act-note">{{ entry.note }}</p>
     <!-- 参数/结果载荷区：compact 下不渲染（首页保持紧凑）；detail 为空时整段不渲染。
@@ -458,6 +508,42 @@ async function copyText(text: string): Promise<void> {
   margin-top: 2px;
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+/* 收拢的进度查询：入口与"载荷 ▸"同级低调（11px 次要色小字），展开为逐条明细 */
+.exec-polls {
+  margin-top: 2px;
+  min-width: 0;
+}
+.exec-polls-toggle {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.exec-polls-toggle:hover {
+  color: var(--text-primary);
+}
+.exec-polls-list {
+  margin: 2px 0 0;
+  padding-left: 0;
+  list-style: none;
+}
+.exec-polls-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .act-tool {

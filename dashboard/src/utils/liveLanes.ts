@@ -11,7 +11,14 @@
 //
 // 两条轨道都用同一套卡片渲染（LiveLanes），因此这里产出的是 ShowEntry[]。
 
-import type { ShowEntry } from '@/utils/liveFeed';
+import {
+  isMinecraftExecuteEntry,
+  isMinecraftGoalEntry,
+  minecraftExecuteGoalId,
+  minecraftGoalIdOf,
+  minecraftGoalOperationOf,
+  type ShowEntry,
+} from '@/utils/liveFeed';
 
 /** 轨道：现场（观众 ⇄ 主播）与游戏（游戏 Agent 与它的世界事件） */
 export type LaneId = 'stage' | 'game';
@@ -198,7 +205,8 @@ export function delegationOfReply(
 }
 
 // ---------------------------------------------------------------------------
-// 游戏侧任务区间：task.changed 的受理与终态配对成"这件工具调用从几点到几点"
+// 游戏侧任务：task.changed 的受理与终态配对成区间，按 goal_id 挂到发起它的
+// maicraft_execute 卡上（终态徽标 + 进度查询收拢），不再有浮动的任务组头
 // ---------------------------------------------------------------------------
 
 /** 一条 task.changed 事实（受理与终态各算一条，同一 task_id 归并成一个区间） */
@@ -206,22 +214,15 @@ export interface TaskFact {
   taskId: string;
   status: string;
   tsMs: number;
-  summary: string;
-  /** 快照里的能力名（如 maicraft:travel），组头用它当短名 */
-  ability: string;
 }
 
-/** 一次工具调用的完整区间 */
+/** 一次任务调用的完整区间（受理 → 终态） */
 export interface TaskWindow {
   taskId: string;
   startMs: number;
   endMs: number;
   /** 终态的中文短名（完成 / 失败 / 取消 / 超时 / 未送达） */
   statusLabel: string;
-  /** 组头短名：能力名，取不到时退回终态摘要 */
-  label: string;
-  /** 终态摘要（组头右侧提示用） */
-  summary: string;
 }
 
 const TERMINAL_STATUS_LABEL: Record<string, string> = {
@@ -233,11 +234,14 @@ const TERMINAL_STATUS_LABEL: Record<string, string> = {
   undelivered: '未送达',
 };
 
+/** 失败类终态：execute 卡徽标据此用红色 */
+const FAILED_STATUS_LABEL = new Set(['失败', '超时', '未送达']);
+
 /**
  * 把事实合成区间。
  *
  * 只有拿得到受理时刻的才成区间——旧数据里每个任务只剩一条终态回执，
- * 起点等于终点，画出来是零长度的假分组，这类直接丢弃。
+ * 起点等于终点，没有耗时可说，这类直接丢弃。
  */
 export function buildTaskWindows(facts: TaskFact[]): TaskWindow[] {
   const grouped = new Map<string, TaskFact[]>();
@@ -257,31 +261,82 @@ export function buildTaskWindows(facts: TaskFact[]): TaskWindow[] {
       taskId,
       startMs: accepted.tsMs,
       endMs: Math.max(terminal.tsMs, accepted.tsMs),
-      statusLabel: TERMINAL_STATUS_LABEL[terminal.status],
-      label: terminal.ability || accepted.ability || '游戏侧任务',
-      summary: terminal.summary || accepted.summary,
+      statusLabel: TERMINAL_STATUS_LABEL[terminal.status]!,
     });
   }
   return windows.sort((a, b) => a.startMs - b.startMs);
 }
 
-/** 条目落在哪个区间（取包含它的区间；没有则 null） */
-export function taskOfEntry(entry: ShowEntry, windows: TaskWindow[]): TaskWindow | null {
-  for (const window of windows) {
-    if (entry.tsMs >= window.startMs && entry.tsMs <= window.endMs) return window;
-  }
-  return null;
+/**
+ * 把任务区间按 goal_id 回填到发起它的 maicraft_execute 条目上。
+ *
+ * 配对键是身份不是时间：execute 的 result.data.goal_id ↔ 任务号的
+ * `maicraft-goal-<goal_id>` 形态。配对成功且窗口已有终态时写 taskEnd
+ * （终态短名 + 耗时），execute 卡据此把"执行中"徽标替换为"完成 · 9.8s"；
+ * 配不上的条目原样返回，维持现状。
+ */
+export function annotateTaskEnds(entries: ShowEntry[], windows: TaskWindow[]): ShowEntry[] {
+  if (windows.length === 0) return entries;
+  const windowByTaskId = new Map(windows.map(window => [window.taskId, window]));
+  return entries.map(entry => {
+    if (!isMinecraftExecuteEntry(entry)) return entry;
+    const goalId = minecraftExecuteGoalId(entry);
+    if (goalId === null) return entry;
+    const window = windowByTaskId.get(`maicraft-goal-${goalId}`);
+    if (!window) return entry;
+    return {
+      ...entry,
+      taskEnd: {
+        statusLabel: window.statusLabel,
+        durationMs: Math.max(0, window.endMs - window.startMs),
+        failed: FAILED_STATUS_LABEL.has(window.statusLabel),
+      },
+    };
+  });
+}
+
+/** 进度查询卡判定：maicraft_goal 的 operation=get 调用（answer/cancel 等是操作不是查询，不平铺收拢） */
+function isGoalPollEntry(entry: ShowEntry): boolean {
+  return isMinecraftGoalEntry(entry) && minecraftGoalOperationOf(entry) === 'get';
+}
+
+/**
+ * 把进度查询卡收拢到对应的 maicraft_execute 卡上。
+ *
+ * 判据是 goal_id 精确相等，不是时间窗口：operation=get 且 goal_id 与列表内某张
+ * execute 卡相等的查询卡从原位摘除，挂到那张 execute 条目的 polls 字段（卡体内部
+ * 渲染"进度查询 ×N"，见 ToolCard）；goal_id 对不上的查询卡与 lookup/glance/observe
+ * 等其他调用卡一律留在原位。
+ *
+ * 返回新数组：execute 条目是带 polls 的浅拷贝，其余条目原引用透传。
+ */
+export function collapseGoalPolls(entries: ShowEntry[]): ShowEntry[] {
+  // goal_id → execute 条目在结果数组里的下标（同 goal_id 多张 execute 时取最早一张）
+  const ownerOfGoal = new Map<number, number>();
+  entries.forEach((entry, index) => {
+    const goalId = minecraftExecuteGoalId(entry);
+    if (goalId !== null && !ownerOfGoal.has(goalId)) ownerOfGoal.set(goalId, index);
+  });
+
+  const result: ShowEntry[] = entries.map(entry =>
+    isMinecraftExecuteEntry(entry) ? { ...entry, polls: [] } : entry,
+  );
+  return result.filter(item => {
+    if (!isGoalPollEntry(item)) return true;
+    const goalId = minecraftGoalIdOf(item);
+    const owner = goalId !== null ? ownerOfGoal.get(goalId) : undefined;
+    if (owner === undefined) return true;
+    const ownerEntry = result[owner]!;
+    ownerEntry.polls = [...(ownerEntry.polls ?? []), item];
+    return false;
+  });
 }
 
 /** 从 `task.changed` 载荷读一条事实（实时事件与归档条目同形状） */
 export function taskFactOf(data: Record<string, unknown>, tsMs: number): TaskFact {
-  const snapshot = (data.snapshot ?? {}) as Record<string, unknown>;
-  const ability = typeof snapshot.ability === 'string' ? snapshot.ability : '';
   return {
     taskId: typeof data.task_id === 'string' ? data.task_id : '',
     status: typeof data.status === 'string' ? data.status : '',
     tsMs,
-    summary: typeof data.summary === 'string' ? data.summary : '',
-    ability,
   };
 }
