@@ -141,7 +141,8 @@ class SocialFactToolProvider(BaseToolProvider):
 
     def _bounce(self, tool_name: str, reason: str) -> ToolExecutionResult:
         self._logger.info(f"社交事实登记打回：{reason}")
-        return ToolExecutionResult(tool_name=tool_name, success=False, error_message=reason)
+        # 业务打回（调用方参数/规则问题）不计入工具健康计数，避免误触熔断
+        return ToolExecutionResult(tool_name=tool_name, success=False, error_message=reason, failure_kind="business")
 
     async def invoke(self, invocation: ToolInvocation) -> ToolExecutionResult:
         tool_name = invocation.tool_name

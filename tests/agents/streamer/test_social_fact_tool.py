@@ -157,6 +157,7 @@ async def test_bounces(store, args: Dict[str, Any], expected: str) -> None:
     result = await _call(env["provider"], **call)
     assert not result.success
     assert expected in (result.error_message or "")
+    assert result.failure_kind == "business"  # 业务打回不计入熔断计数（见 tool_health_monitor.record）
 
 
 async def test_no_session_bounces(store) -> None:
@@ -166,7 +167,22 @@ async def test_no_session_bounces(store) -> None:
     )
     result = await _call(provider, kind="sharing", text="箱子公用", quote="箱子大家随便用", evidence_message_id="gc1")
     assert not result.success and "不在直播" in (result.error_message or "")
+    assert result.failure_kind == "business"
     del env
+
+
+async def test_repeated_bounces_never_trip_circuit_breaker(store) -> None:
+    """业务打回连续多次不累计健康失败数：不误触熔断（场 67 曾因缺 business 标记误熔断丢登记）。"""
+    from src.modules.tools import ToolRegistry, ToolSpec
+
+    env = await _setup(store)
+    provider = env["provider"]
+    registry = ToolRegistry(failure_threshold=3)
+    registry.register(ToolSpec(name=_FULL, description="d", kind="sync", provider="streamer"), provider.invoke)
+    for _ in range(5):
+        result = await registry.invoke(ToolInvocation(tool_name=_FULL, arguments={"kind": "sharing"}))
+        assert not result.success
+    assert not registry.is_tripped(_FULL)
 
 
 async def _seed(store: Any, kind: str, *, locked: int = 0, game: str = "minecraft", save_id: str = "w1") -> int:
