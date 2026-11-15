@@ -2,13 +2,14 @@
 
 提供场次的查询与生命周期控制（``/api/v1/live-sessions/*``；
 与弹幕消息流 live_chat 无关，仅管理场次生命周期）：
-- ``GET  /sessions``           场次列表（倒序 + 消息数，供控制台场次侧边栏）
+- ``GET  /sessions``           场次列表（倒序 + 消息数 + 话题标签；分页与区间筛选，
+  供控制台场次侧边栏与场次管理页）
 - ``POST /sessions/open``      开启新场次（进行中场次先自动结束；可带组件期望运行全集做意图对齐）
 - ``GET  /sessions/residual``  待决残留场次列表（上次进程未正常退出留下的未结账场次）
 - ``POST /sessions/{id}/resume``   续播待决残留场次（断线续播；已有进行中场次时 409）
 - ``POST /sessions/{id}/discard``  收尾待决残留场次（补结束时间为最后活动时刻）
 - ``POST /sessions/{id}/close`` 结束指定场次（须为当前进行中场次）
-- ``PATCH /sessions/{id}``     重命名场次（title 空=清除标题）
+- ``PATCH /sessions/{id}``     更新场次资料（标题与备注各改各的；空串=清除该字段）
 - ``PATCH /sessions/{id}/kind`` 更正已结束场次的类型（正式 / 彩排；进行中的场次 409）
 - ``DELETE /sessions/{id}``    删除场次（级联清除明细）
 - ``GET  /sessions/{id}/timeline``          单场时间线回看（明细行 + 事件侧）
@@ -36,10 +37,10 @@ from src.modules.dashboard.schemas.session import (
     SessionListResponse,
     SessionOpenRequest,
     SessionOpenResponse,
-    SessionRenameRequest,
     SessionResidualResponse,
     SessionRundownExecutionResponse,
     SessionTimelineResponse,
+    SessionUpdateRequest,
 )
 from src.modules.dashboard.services.component_runtime import (
     ComponentRuntimeContext,
@@ -49,6 +50,7 @@ from src.modules.dashboard.services.config_adapter import sync_enabled_lists
 from src.modules.dashboard.services.event_query import events_dir_of
 from src.modules.dashboard.services.session_details import list_session_details
 from src.modules.dashboard.services.session_events import SessionEventReader
+from src.modules.dashboard.services.session_manager import list_session_ledger
 from src.modules.dashboard.services.session_rundown import build_rundown_execution
 from src.modules.dashboard.services.session_timeline import build_timeline_items
 from src.modules.dashboard.utils.component_helper import config_dir
@@ -92,17 +94,25 @@ def _row_to_item(row: LiveSessionListItem, active_pk: Optional[int]) -> SessionI
         source=row.source or "manual",
         kind=row.kind,
         title=row.title,
+        notes=row.notes,
+        overview=row.overview,
         room_id=row.stream_id or "",
         platform=row.platform or "",
         started_at_ms=int(row.started_at_ms),
         ended_at_ms=int(ended) if ended is not None else None,
         message_count=int(row.message_count or 0),
         is_active=active_pk is not None and row.id == active_pk,
+        settled_at_ms=int(row.settled_at_ms) if row.settled_at_ms is not None else None,
+        settle_attempts=int(row.settle_attempts or 0),
+        reviewed_at_ms=int(row.reviewed_at_ms) if row.reviewed_at_ms is not None else None,
     )
 
 
 # 来源筛选白名单（防脏值进 SQL 语义层）
 _SESSION_SOURCE_FILTERS = frozenset({"manual", "replay", "generate", "legacy"})
+
+# 整理状态筛选白名单（pending=没整理过 / failed=整理试过没成 / review=整理完还没标已审 / reviewed=已标已审）
+_SESSION_SETTLE_FILTERS = frozenset({"pending", "failed", "review", "reviewed"})
 
 
 @router.get("", response_model=SessionListResponse)
@@ -110,23 +120,37 @@ async def list_sessions(
     server: ServerDep,
     manager: SessionManagerDep,  # noqa: B008
     limit: Annotated[int, Query(ge=1, le=200, description="最多返回条数")] = 50,
+    offset: Annotated[int, Query(ge=0, description="跳过前多少场（分页用）")] = 0,
     source: Annotated[Optional[str], Query(description="来源筛选：manual / replay / generate / legacy")] = None,
     kind: Annotated[Optional[SessionKind], Query(description="类型筛选：live=正式 / rehearsal=彩排")] = None,
     q: Annotated[Optional[str], Query(description="标题关键字筛选")] = None,
+    started_after_ms: Annotated[Optional[int], Query(description="开播时刻下界（含，Unix 毫秒）")] = None,
+    started_before_ms: Annotated[Optional[int], Query(description="开播时刻上界（含，Unix 毫秒）")] = None,
+    settle_state: Annotated[
+        Optional[str], Query(description="整理状态筛选：pending / failed / review / reviewed")
+    ] = None,
 ) -> SessionListResponse:
-    """列出直播场次（按开始时间倒序，附消息数），支持来源、类型与标题筛选。"""
+    """列出直播场次（按开始时间倒序，附消息数），支持来源、类型、标题、开播区间与整理状态筛选。"""
     if source is not None and source != "" and source not in _SESSION_SOURCE_FILTERS:
         raise HTTPException(status_code=400, detail=f"非法来源筛选: {source}")
-    rows = await manager.list_sessions(
+    if settle_state is not None and settle_state != "" and settle_state not in _SESSION_SETTLE_FILTERS:
+        raise HTTPException(status_code=400, detail=f"非法整理状态筛选: {settle_state}")
+    page = await list_session_ledger(
+        manager,
         limit=limit,
+        offset=offset,
         source=source or None,
         kind=kind,
         title_keyword=(q or "").strip() or None,
+        started_after=started_after_ms,
+        started_before=started_before_ms,
+        settle_state=settle_state or None,
     )
     active_pk = manager.active_pk
     return SessionListResponse(
-        items=[_row_to_item(row, active_pk) for row in rows],
+        items=[_row_to_item(row, active_pk) for row in page.rows],
         active_session_id=active_pk,
+        total=page.total,
     )
 
 
@@ -289,18 +313,32 @@ async def close_session(
 
 
 @router.patch("/{session_id}", response_model=SessionActionResponse)
-async def rename_session(
+async def update_session(
     session_id: int,
-    request: SessionRenameRequest,
+    request: SessionUpdateRequest,
     server: ServerDep,
     manager: SessionManagerDep,  # noqa: B008
 ) -> SessionActionResponse:
-    """重命名场次（进行中/历史场次均可；title 空串规范化为 None=清除标题）。"""
-    title = (request.title or "").strip() or None
-    renamed = await manager.rename_session(session_id, title)
-    if not renamed:
-        raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
-    return SessionActionResponse(success=True, detail="场次已重命名" if title else "场次标题已清除")
+    """改场次资料（标题与备注各改各的；进行中/历史场次均可）。
+
+    请求里带了哪个字段就改哪个：``title`` 空串规范化为 None=清除标题，
+    ``notes`` 空串规范化为 None=清除备注；两个都没带即 400。
+    """
+    fields_set = request.model_fields_set
+    if not fields_set:
+        raise HTTPException(status_code=400, detail="没有要修改的内容")
+    changed: List[str] = []
+    if "title" in fields_set:
+        title = (request.title or "").strip() or None
+        if not await manager.rename_session(session_id, title):
+            raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
+        changed.append("场次已重命名" if title else "场次标题已清除")
+    if "notes" in fields_set:
+        notes = (request.notes or "").strip() or None
+        if not await manager.set_session_notes(session_id, notes):
+            raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
+        changed.append("场次备注已更新" if notes else "场次备注已清除")
+    return SessionActionResponse(success=True, detail="；".join(changed))
 
 
 @router.patch("/{session_id}/kind", response_model=SessionActionResponse)

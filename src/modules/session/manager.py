@@ -428,6 +428,17 @@ class LiveSessionManager:
             logger.info(f"场次已重命名: id={live_session_id} title={title!r}")
         return renamed
 
+    # -------------------- 备注改写 --------------------
+
+    async def set_session_notes(self, live_session_id: int, notes: Optional[str]) -> bool:
+        """改写场次备注（运营者手写；None/空串的清除语义由调用方规范化后传入）。行不存在返回 False。"""
+        written = await self._sessions.update_live_session_notes(
+            live_session_id=live_session_id, notes=notes, updated_at_ms=self._clock()
+        )
+        if written:
+            logger.info(f"场次备注已改写: id={live_session_id}")
+        return written
+
     # -------------------- 类型更正 --------------------
 
     async def set_session_kind(self, live_session_id: int, kind: SessionKind) -> bool:
@@ -551,13 +562,44 @@ class LiveSessionManager:
         self,
         *,
         limit: int = 50,
+        offset: int = 0,
         source: Optional[str] = None,
         kind: Optional[SessionKind] = None,
         title_keyword: Optional[str] = None,
+        started_after: Optional[int] = None,
+        started_before: Optional[int] = None,
+        settle_state: Optional[str] = None,
     ) -> List[LiveSessionListItem]:
         """场次列表（显式场次按开始时间倒序 + 消息数），供 Dashboard API / 控制台侧边栏。"""
         return await self._sessions.list_live_sessions(
-            limit=limit, source=source, kind=kind, title_keyword=title_keyword
+            limit=limit,
+            offset=offset,
+            source=source,
+            kind=kind,
+            title_keyword=title_keyword,
+            started_after=started_after,
+            started_before=started_before,
+            settle_state=settle_state,
+        )
+
+    async def count_sessions(
+        self,
+        *,
+        source: Optional[str] = None,
+        kind: Optional[SessionKind] = None,
+        title_keyword: Optional[str] = None,
+        started_after: Optional[int] = None,
+        started_before: Optional[int] = None,
+        settle_state: Optional[str] = None,
+    ) -> int:
+        """筛选后共有多少场（分页总数；与 ``list_sessions`` 同一套筛选条件）。"""
+        return await self._sessions.count_live_sessions(
+            source=source,
+            kind=kind,
+            title_keyword=title_keyword,
+            started_after=started_after,
+            started_before=started_before,
+            settle_state=settle_state,
         )
 
 

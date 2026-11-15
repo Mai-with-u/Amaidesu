@@ -17,12 +17,17 @@ class SessionItem(BaseModel):
     source: str = Field(default="manual", description="场次来源：manual / replay / generate / legacy")
     kind: SessionKind = Field(default=SESSION_KIND_LIVE, description="场次类型：live=正式 / rehearsal=彩排")
     title: Optional[str] = Field(default=None, description="场次标题")
+    notes: Optional[str] = Field(default=None, description="运营者手写的场次备注（自由文本）")
+    overview: Optional[str] = Field(default=None, description="模型写的这场概览（这场发生了什么；空 = 还没生成）")
     room_id: str = Field(default="", description="房间/频道标识（普通属性）")
     platform: str = Field(default="", description="平台标识")
     started_at_ms: int = Field(..., description="开始时刻（Unix 毫秒）")
     ended_at_ms: Optional[int] = Field(default=None, description="结束时刻（Unix 毫秒）；NULL=进行中")
     message_count: int = Field(default=0, description="本场次消息数（live_chat 行数）")
     is_active: bool = Field(default=False, description="是否为当前进行中的显式场次")
+    settled_at_ms: Optional[int] = Field(default=None, description="整理完成时刻（Unix 毫秒）；NULL=尚未整理完成")
+    settle_attempts: int = Field(default=0, description="自动重新整理已尝试的次数")
+    reviewed_at_ms: Optional[int] = Field(default=None, description="运营者标已审的时刻（Unix 毫秒）；NULL=尚未标已审")
 
 
 class SessionListResponse(BaseModel):
@@ -30,6 +35,7 @@ class SessionListResponse(BaseModel):
 
     items: List[SessionItem] = Field(default_factory=list)
     active_session_id: Optional[int] = Field(default=None, description="当前进行中的显式场次主键")
+    total: int = Field(default=0, description="筛选后共有多少场（分页总数）")
 
 
 class SessionResidualResponse(BaseModel):
@@ -104,10 +110,15 @@ class SessionActionResponse(BaseModel):
     detail: str = Field(default="", description="动作结果说明")
 
 
-class SessionRenameRequest(BaseModel):
-    """场次重命名请求"""
+class SessionUpdateRequest(BaseModel):
+    """场次资料更新请求（标题与备注各改各的）。
 
-    title: Optional[str] = Field(default=None, description="新标题；None/空串=清除标题")
+    两个字段各自可选，没带的那个不动——带 ``title`` 只改标题，带 ``notes``
+    只改备注。空串表示清掉该字段。
+    """
+
+    title: Optional[str] = Field(default=None, description="新标题；空串=清除标题")
+    notes: Optional[str] = Field(default=None, description="新备注；空串=清除备注")
 
 
 class SessionKindRequest(BaseModel):

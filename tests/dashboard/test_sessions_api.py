@@ -144,6 +144,70 @@ async def test_rename_session(sessions_client) -> None:
     assert (await client.patch(f"/api/v1/live-sessions/{pk + 99999}", json={"title": "x"})).status_code == 404
 
 
+async def test_update_session_notes(sessions_client) -> None:
+    """备注单独改：只带 notes 不动标题；只带 title 不动备注；空串=清除；两个都没带 400。"""
+    client = sessions_client
+    pk = await _open(client, "备注场")
+
+    written = await client.patch(f"/api/v1/live-sessions/{pk}", json={"notes": "  这场水车翻车了  "})
+    assert (written.status_code, written.json()["detail"]) == (200, "场次备注已更新")
+
+    async def fields() -> tuple:
+        item = next(
+            i for i in (await client.get("/api/v1/live-sessions")).json()["items"] if i["live_session_id"] == pk
+        )
+        return item["title"], item["notes"]
+
+    assert await fields() == ("备注场", "这场水车翻车了")
+
+    # 只改标题：备注原样留着
+    await client.patch(f"/api/v1/live-sessions/{pk}", json={"title": "改过的标题"})
+    assert await fields() == ("改过的标题", "这场水车翻车了")
+
+    cleared = await client.patch(f"/api/v1/live-sessions/{pk}", json={"notes": "  "})
+    assert (cleared.status_code, cleared.json()["detail"]) == (200, "场次备注已清除")
+    assert await fields() == ("改过的标题", None)
+
+    assert (await client.patch(f"/api/v1/live-sessions/{pk}", json={})).status_code == 400
+    assert (await client.patch(f"/api/v1/live-sessions/{pk + 99999}", json={"notes": "x"})).status_code == 404
+
+
+async def test_session_list_carries_ledger_columns(sessions_client, store) -> None:
+    """清单页要的列：分页总数、开播区间筛选、话题标签与整理状态列。"""
+    client = sessions_client
+    # 直接造两场已结束场次（走 API 开场是"现在"开播，开播时刻与空场次丢弃都不便断言）
+    first = await store.sessions.insert_live_session(started_at_ms=1_000, title="第一场")
+    await store.sessions.close_live_session(live_session_id=first, ended_at_ms=61_000)
+    second = await store.sessions.insert_live_session(started_at_ms=121_000, title="第二场")
+    await store.sessions.close_live_session(live_session_id=second, ended_at_ms=241_000)
+
+    # 概要列：模型写的这场发生了什么（与人写的备注各管各的）
+    await store.sessions.update_live_session_overview(
+        live_session_id=first, overview="这场在造水车", updated_at_ms=241_000
+    )
+
+    body = (await client.get("/api/v1/live-sessions")).json()
+    assert body["total"] == 2
+    item = next(i for i in body["items"] if i["live_session_id"] == first)
+    assert item["overview"] == "这场在造水车"
+    # 整理状态三列：没整理过 = 未标已审
+    assert (item["settled_at_ms"], item["settle_attempts"], item["reviewed_at_ms"]) == (None, 0, None)
+
+    # 分页：第二页只剩一场，总数不变
+    page = (await client.get("/api/v1/live-sessions", params={"limit": 1, "offset": 1})).json()
+    assert len(page["items"]) == 1 and page["total"] == 2
+
+    # 开播区间筛选：夹住第二场
+    ranged = (
+        await client.get(
+            "/api/v1/live-sessions",
+            params={"started_after_ms": 121_000, "started_before_ms": 121_000},
+        )
+    ).json()
+    assert [i["live_session_id"] for i in ranged["items"]] == [second]
+    assert ranged["total"] == 1
+
+
 async def test_list_filters_by_source_and_title(sessions_client, session_manager, store) -> None:
     """前两个显式场次都需有明细，否则自动结束时会被整行丢弃。"""
     client = sessions_client
