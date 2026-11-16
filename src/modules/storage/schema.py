@@ -64,7 +64,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 44
+SCHEMA_VERSION: int = 45
 
 
 # =============================================================================
