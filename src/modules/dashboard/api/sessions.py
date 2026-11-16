@@ -13,6 +13,7 @@
 - ``PATCH /sessions/{id}/kind`` 更正已结束场次的类型（正式 / 彩排；进行中的场次 409）
 - ``DELETE /sessions/{id}``    删除场次（级联清除明细）
 - ``GET  /sessions/{id}/timeline``          单场时间线回看（明细行 + 事件侧）
+- ``GET  /sessions/{id}/search``            单场内容检索（整场：明细行 + 事件侧按关键词命中）
 - ``GET  /sessions/{id}/rundown-execution``  单场流程单执行回看（实际 vs 预计）
 
 场次归属由 ``LiveSessionManager`` 负责（唯一事实源）；本层只做参数校验与
@@ -40,6 +41,7 @@ from src.modules.dashboard.schemas.session import (
     SessionOpenResponse,
     SessionResidualResponse,
     SessionRundownExecutionResponse,
+    SessionSearchResponse,
     SessionTimelineResponse,
     SessionUpdateRequest,
 )
@@ -49,8 +51,8 @@ from src.modules.dashboard.services.component_runtime import (
 )
 from src.modules.dashboard.services.config_adapter import sync_enabled_lists
 from src.modules.dashboard.services.event_query import events_dir_of
-from src.modules.dashboard.services.session_details import list_session_details
-from src.modules.dashboard.services.session_events import SessionEventReader
+from src.modules.dashboard.services.session_details import list_session_details, search_session_details
+from src.modules.dashboard.services.session_events import SessionEventReader, record_matches_keyword
 from src.modules.dashboard.services.session_manager import list_session_ledger
 from src.modules.dashboard.services.session_rundown import build_rundown_execution
 from src.modules.dashboard.services.session_timeline import build_timeline_items
@@ -432,6 +434,53 @@ async def session_timeline(
     )
     items, has_more = build_timeline_items(detail_rows, window.records, limit, before_timestamp_ms=before_timestamp_ms)
     return SessionTimelineResponse(
+        live_session_id=session_id,
+        items=items,
+        has_more=has_more,
+        events_pruned=window.days_pruned,
+    )
+
+
+@router.get("/{session_id}/search", response_model=SessionSearchResponse)
+async def session_search(
+    session_id: int,
+    server: ServerDep,
+    manager: SessionManagerDep,  # noqa: B008
+    q: Annotated[str, Query(min_length=1, max_length=200, description="关键词")],
+    limit: Annotated[int, Query(ge=1, le=500, description="最多返回条数")] = 200,
+) -> SessionSearchResponse:
+    """单场内容检索：整场范围内按关键词找内容。
+
+    检索范围不限当前加载窗口：明细行（弹幕 / 发言 / 上舰 / SC / 礼物）走
+    SQLite 的包含匹配，事件侧收齐本场事件（诊断文件 ∪ 内存环形缓冲）后按
+    事件名、摘要与载荷内容匹配——工具调用的入参与结果因此可被搜到。
+
+    事件侧收集是整场扫描，成本与回看时间线端点同量级（每次检索一次）；
+    诊断天目录被清理时事件侧降级，``events_pruned`` 如实回报。
+    """
+    keyword = q.strip()
+    if not keyword:
+        raise HTTPException(status_code=422, detail="关键词不能为空")
+    row = await _fetch_session_row(server, session_id)
+
+    chat_repo = server.chat_repo
+    if chat_repo is None:
+        raise HTTPException(status_code=503, detail="ChatRepo 未装配")
+    detail_rows = await search_session_details(chat_repo, session_id, keyword=keyword, limit=limit)
+    reader = SessionEventReader(
+        event_history=server.event_history,
+        events_dir=events_dir_of(server),
+    )
+    # 文件扫描是同步 IO，放线程池避免阻塞事件循环（检索是低频操作，无缓存）
+    window = await asyncio.to_thread(
+        reader.collect,
+        live_session_id=session_id,
+        started_at_ms=int(row.started_at_ms),
+        ended_at_ms=row.ended_at_ms,
+    )
+    matched = [record for record in window.records if record_matches_keyword(record, keyword)]
+    items, has_more = build_timeline_items(detail_rows, matched, limit)
+    return SessionSearchResponse(
         live_session_id=session_id,
         items=items,
         has_more=has_more,

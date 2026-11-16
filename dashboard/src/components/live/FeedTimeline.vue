@@ -10,7 +10,10 @@
         v-for="entry in entries"
         :key="entry.id"
         class="feed-row"
-        :class="{ 'is-anchored': entry.id === anchorEntryId }"
+        :class="{
+          'is-anchored': entry.id === anchorEntryId,
+          'is-matched': matchedTs?.has(entry.tsMs),
+        }"
         :data-entry-id="entry.id"
       >
         <!-- 注册表直派：卡片按 kind 查表渲染（registry.ts 是分发的唯一缝隙，
@@ -63,6 +66,9 @@ interface Props {
   simple?: boolean;
   /** 锚定高亮条目 id（回看深链 ?at= 定位；非空时该行加 is-anchored 类） */
   anchorEntryId?: string | null;
+  /** 搜索命中时刻集合：命中的行加竖条标记（按时刻匹配——服务端命中的 id 与
+   *  本地条目不同，时刻是两边一致的东西；不传 = 无搜索标记） */
+  matchedTs?: Set<number>;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -71,6 +77,7 @@ const props = withDefaults(defineProps<Props>(), {
   roundClickable: false,
   simple: false,
   anchorEntryId: null,
+  matchedTs: undefined,
 });
 
 const emit = defineEmits<{
@@ -145,6 +152,11 @@ const nowMs = useNowTick();
   border-radius: var(--radius-md);
   background: var(--bg-hover);
   transition: background 0.6s ease;
+}
+
+/* 搜索命中标记：竖条只说"这一行命中过"，不隐藏不重排（清单负责跳转） */
+.feed-row.is-matched {
+  box-shadow: inset 3px 0 0 var(--color-primary);
 }
 
 @keyframes rowIn {

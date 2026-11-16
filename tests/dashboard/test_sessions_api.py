@@ -315,6 +315,47 @@ async def test_timeline_cursor_pagination(sessions_client, event_history) -> Non
     assert [i["data"]["round_id"] for i in page2["items"]] == ["rnd_1"] and page2["has_more"] is False
 
 
+async def test_search_matches_details_and_events(sessions_client, event_history, store) -> None:
+    """内容检索：明细行按正文与昵称命中、事件侧按载荷内容命中；未命中为空；空关键词 422。"""
+    client = sessions_client
+    pk = await _open(client, "检索测试")
+    chat = store.chat
+    await chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=BASE, sender_role="viewer", sender_id="u1", sender_name="观众A",
+        content="今天天气不错", message_type="danmaku", message_id="msg_1",
+    )  # fmt: skip
+    await chat.insert_live_chat(
+        live_session_id=pk, timestamp_ms=BASE + 1_000, sender_role="assistant", sender_name="主播",
+        content="我们开始吧", message_type="speak",
+    )  # fmt: skip
+    await chat.insert_gift(
+        live_session_id=pk, timestamp_ms=BASE + 2_000, user_id="u2", user_name="土豪B",
+        gift_name="小花花", quantity=1, total_price=100,
+    )  # fmt: skip
+    event_history.record(_decision(pk, 1, BASE + 3_000, topic_summary="破防话题"))
+
+    url = f"/api/v1/live-sessions/{pk}/search"
+
+    # 明细行按正文命中
+    body = (await client.get(url, params={"q": "天气"})).json()
+    assert [(i["kind"], i["content"]) for i in body["items"]] == [("danmaku", "今天天气不错")]
+
+    # 送礼者昵称命中礼物行
+    body = (await client.get(url, params={"q": "土豪B"})).json()
+    assert [i["kind"] for i in body["items"]] == ["gift"]
+
+    # 事件侧按载荷内容命中（工具调用的入参与结果就在载荷里）
+    body = (await client.get(url, params={"q": "破防"})).json()
+    assert [i["event_type"] for i in body["items"]] == ["planner.decision"]
+
+    # 没有命中时返回空列表而不是报错
+    body = (await client.get(url, params={"q": "不存在的词"})).json()
+    assert body["items"] == []
+
+    # 关键词只含空白视为未给关键词
+    assert (await client.get(url, params={"q": "   "})).status_code == 422
+
+
 # -------------------- 开场次带组件意图对齐 --------------------
 
 

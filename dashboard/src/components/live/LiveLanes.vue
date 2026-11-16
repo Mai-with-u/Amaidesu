@@ -49,12 +49,15 @@ const props = withDefaults(
      * 空数组表示本场查不到环节事实。
      */
     boundaries?: SegmentBoundary[] | undefined;
+    /** 搜索命中时刻集合：命中的卡加竖条标记（按时刻匹配，与单列时间线同语义） */
+    matchedTs?: Set<number>;
   }>(),
   {
     emptyText: '暂无内容',
     tasks: () => [],
     taskFacts: () => [],
     boundaries: undefined,
+    matchedTs: undefined,
   },
 );
 
@@ -62,7 +65,9 @@ const props = withDefaults(
 // 游戏列拿到的是带上收活卡与终态徽标的完整视图
 const withReceipts = computed(() => buildDelegateReceipts(props.entries, props.taskFacts));
 const annotated = computed(() => annotateTaskEnds(withReceipts.value, props.tasks));
-const sections = computed<LaneSection[]>(() => buildLaneSections(annotated.value, props.boundaries));
+const sections = computed<LaneSection[]>(() =>
+  buildLaneSections(annotated.value, props.boundaries),
+);
 
 // 相对时间标签（"12s 前"）每秒刷新；卡片 props 恒为 entry + nowMs
 const nowMs = useNowTick();
@@ -119,8 +124,10 @@ const {
 } = useLaneScroll(computed(() => props.entries));
 
 // 页面的"回到最新"按钮驱动的是双轨（这一档外层容器不滚）：暴露两列回到底部
-// 的动作与落下的新内容条数
-defineExpose({ scrollToLatest, pendingCount });
+// 的动作与落下的新内容条数；搜索跳转用 focusEntry（有本地条目 id 时）与
+// revealNearest（服务端命中只有时刻，两列里找最近的卡）。
+// focusEntry / revealNearest 是函数声明（提升可用），在此处暴露成立。
+defineExpose({ scrollToLatest, pendingCount, focusEntry, revealNearest });
 
 // ---------------------------------------------------------------------------
 // 按需对齐：点一张卡 → 对侧列滚到同一时刻；对侧没有内容时什么也不做
@@ -177,12 +184,24 @@ function alignFrom(entry: ShowEntry, lane: LaneId): void {
   reveal(other, nearestIn(other, entry.tsMs));
 }
 
-/** 跳到某条指定卡（游戏列收活卡用它回到主播列对应的派活卡） */
+/** 跳到某条指定卡（游戏列收活卡用它回到主播列对应的派活卡；搜索跳转在
+ *  命中有本地条目时也走这里） */
 function focusEntry(entryId: string, lane: LaneId): void {
   const column = columnOf(lane);
   if (!column) return;
   const card = column.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(entryId)}"]`);
   if (card) reveal(lane, card);
+}
+
+/** 按时刻近邻定位：两列里离目标时刻最近的卡滚到可视区（搜索的服务端命中
+ *  没有本地条目 id 可用，时刻是唯一能对上的东西） */
+function revealNearest(tsMs: number): void {
+  const stageCard = nearestIn('stage', tsMs);
+  const gameCard = nearestIn('game', tsMs);
+  const stageGap = stageCard ? Math.abs(Number(stageCard.dataset.entryTs) - tsMs) : Infinity;
+  const gameGap = gameCard ? Math.abs(Number(gameCard.dataset.entryTs) - tsMs) : Infinity;
+  if (stageGap <= gameGap && stageCard) reveal('stage', stageCard);
+  else if (gameCard) reveal('game', gameCard);
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +244,7 @@ function focusEntry(entryId: string, lane: LaneId): void {
               v-for="entry in section.stage"
               :key="entry.id"
               class="lane-card"
+              :class="{ 'is-matched': matchedTs?.has(entry.tsMs) }"
               :data-entry-id="entry.id"
               :data-entry-ts="entry.tsMs"
               @click="onCardClick(entry, 'stage', $event)"
@@ -261,6 +281,7 @@ function focusEntry(entryId: string, lane: LaneId): void {
             <template v-for="entry in collapseGoalPolls(section.game)" :key="entry.id">
               <div
                 class="lane-card"
+                :class="{ 'is-matched': matchedTs?.has(entry.tsMs) }"
                 :data-entry-id="entry.id"
                 :data-entry-ts="entry.tsMs"
                 @click="onCardClick(entry, 'game', $event)"
@@ -448,5 +469,10 @@ function focusEntry(entryId: string, lane: LaneId): void {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
   transition: outline-color 0.2s;
+}
+
+/* 搜索命中标记：与单列时间线同语义（竖条，不隐藏不重排） */
+.lane-card.is-matched {
+  box-shadow: inset 3px 0 0 var(--color-primary);
 }
 </style>

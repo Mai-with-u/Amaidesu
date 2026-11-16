@@ -145,6 +145,22 @@ class SessionTimelineResponse(BaseModel):
     )
 
 
+class SessionSearchResponse(BaseModel):
+    """单场内容检索响应。
+
+    ``items`` 条目形状与回看时间线一致（明细行 + 事件条目），前端复用同一套
+    映射渲染；``has_more`` 指示命中数超出返回条数（还有更早的命中没返回）。
+    """
+
+    live_session_id: int = Field(..., description="场次主键")
+    items: List["SessionTimelineItem"] = Field(default_factory=list, description="命中条目（按 ts_ms 升序）")
+    has_more: bool = Field(default=False, description="命中数超出返回条数，还有更早的命中")
+    events_pruned: bool = Field(
+        default=False,
+        description="场次时间范围内存在缺失的诊断天目录（被清理或未落盘），事件侧降级为空/部分",
+    )
+
+
 class _TimelineEntry(BaseModel):
     """时间线条目公共约束：形状互斥靠 extra=forbid + kind 字面量保证。"""
 
@@ -222,6 +238,7 @@ SessionTimelineItem = Union[
 
 # 前向引用在此刻已全部可解析，显式重建避免延迟解析失败
 SessionTimelineResponse.model_rebuild()
+SessionSearchResponse.model_rebuild()
 
 
 class RundownSegmentRun(BaseModel):

@@ -252,6 +252,29 @@
             >
           </header>
 
+          <!-- 内容搜索：整场检索（落库明细 + 事件载荷），命中清单跳到那一刻。
+               主时间线只加命中竖条，不隐藏不重排；回放调试档不提供（跳转会
+               打乱放映游标） -->
+          <LiveSearchBar
+            v-if="!replayActive"
+            ref="searchBarRef"
+            v-model:query="searchQuery"
+            class="stage-search"
+            :hits="searchHits"
+            :index="searchIndex"
+            :loading="searchLoading"
+            :scope-note="searchScopeNote"
+            :show-list="searchExpanded"
+            :has-more="searchHasMore"
+            @next="searchNext()"
+            @previous="searchPrevious()"
+            @confirm="onSearchConfirm"
+            @select="onSearchSelect"
+            @hover="onSearchHover"
+            @clear="searchClear()"
+            @collapse="searchExpanded = false"
+          />
+
           <div class="stage-body">
             <div
               ref="scrollRef"
@@ -279,6 +302,8 @@
                 :empty-text="audienceEmptyText"
                 :round-clickable="true"
                 :simple="true"
+                :matched-ts="searchMatchedTs"
+                :anchor-entry-id="searchAnchorId || timelineAnchoredId"
                 @round-click="onTimelineRoundClick"
               />
               <LiveLanes
@@ -288,6 +313,7 @@
                 :tasks="taskWindows"
                 :task-facts="taskFacts"
                 :boundaries="laneBoundaries"
+                :matched-ts="searchMatchedTs"
                 :empty-text="timelineEmptyText"
               />
               <RequestTimeline
@@ -390,6 +416,8 @@
       <ul class="shortcut-list">
         <li><kbd>Space</kbd><span>暂停 / 继续时间线</span></li>
         <li><kbd>F</kbd><span>回到实时（回看模式下）</span></li>
+        <li><kbd>/</kbd><span>聚焦内容搜索框</span></li>
+        <li><kbd>F3</kbd> <kbd>Shift+F3</kbd><span>下一条 / 上一条搜索命中</span></li>
         <li><kbd>?</kbd><span>打开本帮助</span></li>
         <li>
           <kbd>Tab</kbd> <kbd>↑</kbd> <kbd>↓</kbd
@@ -452,7 +480,16 @@
  * 组装（useTimelineScroll）。全局共享态（events 流、WS 连接）仍在 Pinia store。
  * 本组件只做装配与跨块的少量编排（清空时间线联动未读计数）。
  */
-import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue';
+import {
+  computed,
+  nextTick,
+  onActivated,
+  onDeactivated,
+  onMounted,
+  onUnmounted,
+  ref,
+  watch,
+} from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { storeToRefs } from 'pinia';
 import { Loading, QuestionFilled } from '@element-plus/icons-vue';
@@ -484,7 +521,9 @@ import { taskStatusText, useAgentTasks } from '@/composables/useAgentTasks';
 import { useTimelineScroll } from '@/composables/live/useTimelineScroll';
 import { useTimelineAnchor } from '@/composables/live/useTimelineAnchor';
 import { useTimelineReplay } from '@/composables/live/useTimelineReplay';
+import { useLiveSearch } from '@/composables/live/useLiveSearch';
 import ReplayControlBar from '@/components/live/ReplayControlBar.vue';
+import LiveSearchBar from '@/components/live/LiveSearchBar.vue';
 import { confirmAction } from '@/utils/confirmAction';
 import { ElMessage } from 'element-plus';
 import { formatNumber } from '@/utils/format';
@@ -495,8 +534,9 @@ import LiveLanes from '@/components/live/LiveLanes.vue';
 import RequestDetail from '@/components/live/RequestDetail.vue';
 import RequestTimeline from '@/components/live/RequestTimeline.vue';
 import { buildRequestRecords } from '@/utils/requestRecords';
-import { buildTaskWindows, taskFactOf } from '@/utils/liveLanes';
+import { buildTaskWindows, laneOf, taskFactOf } from '@/utils/liveLanes';
 import { isAudienceEntry } from '@/utils/liveFeed';
+import type { SearchHit } from '@/utils/liveSearch';
 import type { RequestMessage, RequestRecord } from '@/utils/requestRecords';
 import type { TaskFact, TaskWindow } from '@/utils/liveLanes';
 import AgentMemoPanel from '@/components/live/AgentMemoPanel.vue';
@@ -818,8 +858,9 @@ function jumpToLatest(): void {
 }
 
 // 回看时刻锚定：复盘页指标卡深链（/live?session=&at=<ms>）跳入时自动向前
-// 翻页到目标时刻，滚动定位并短暂高亮（翻页上限与降级提示在组合式内）
-const { anchorAt } = useTimelineAnchor({
+// 翻页到目标时刻，滚动定位并短暂高亮（翻页上限与降级提示在组合式内）。
+// anchoredId 同时供搜索的时刻跳转复用（同一套滚动+高亮机制）
+const { anchorAt, anchoredId: timelineAnchoredId } = useTimelineAnchor({
   entries: displayEntries,
   hasMore: replayHasMore,
   loadingMore: replayLoadingMore,
@@ -836,6 +877,99 @@ async function anchorAfterReplayLoad(targetMs: number): Promise<void> {
   });
   if (sessionMode.value === 'replay') await anchorAt(targetMs);
 }
+
+// ---------------------------------------------------------------------------
+// 时间线内容搜索：整场检索（落库明细 + 事件载荷），命中清单跳到那一刻。
+// 检索源随档位走（观众口径 / 全部条目 / 已加载的请求记录）；主时间线只加
+// 命中竖条，不隐藏不重排——"跳到那一刻"才是搜索的出口
+// ---------------------------------------------------------------------------
+
+const SEARCH_ANCHOR_MS = 4_000;
+
+const searchEntries = computed<ShowEntry[]>(() =>
+  stageView.value === 'audience' ? audienceEntries.value : allEntries.value,
+);
+
+/** 可检索的场次主键：实时档=进行中场次（整场落库内容）；回看=所选场次；
+ *  回放调试不显示搜索条（该档为 null，检索源自然落回已加载窗口） */
+const searchSessionId = computed<number | null>(() => {
+  if (replayActive.value) return replaySession.value?.live_session_id ?? null;
+  if (sessionMode.value === 'replay') return selectedSession.value?.live_session_id ?? null;
+  return activeSessionId.value;
+});
+
+/** 搜索跳到的本地条目高亮（数秒后熄灭）；时刻跳转的高亮由 useTimelineAnchor 承担 */
+const searchAnchorId = ref<string | null>(null);
+let searchAnchorTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flashSearchAnchor(entryId: string): void {
+  searchAnchorId.value = entryId;
+  if (searchAnchorTimer) clearTimeout(searchAnchorTimer);
+  searchAnchorTimer = setTimeout(() => {
+    searchAnchorId.value = null;
+  }, SEARCH_ANCHOR_MS);
+}
+
+/** 按档位跳到一条命中：观众=滚动+高亮；后台=定位到那张卡；轨迹=打开详情 */
+async function onSearchJump(hit: SearchHit): Promise<void> {
+  if (stageView.value === 'trajectory') {
+    if (hit.record && hit.message) openMessage(hit.record, hit.message);
+    return;
+  }
+  if (stageView.value === 'backstage') {
+    if (hit.entry) lanesRef.value?.focusEntry(hit.entry.id, laneOf(hit.entry));
+    else lanesRef.value?.revealNearest(hit.tsMs);
+    return;
+  }
+  if (hit.entry) {
+    flashSearchAnchor(hit.entry.id);
+    await nextTick();
+    scrollRef.value
+      ?.querySelector(`[data-entry-id="${CSS.escape(hit.entry.id)}"]`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    return;
+  }
+  // 服务端命中没有本地条目可定位：按时刻锚定（滚动+高亮，与回看深链 ?at= 同一套机制）
+  await anchorAt(hit.tsMs);
+}
+
+const {
+  query: searchQuery,
+  hits: searchHits,
+  index: searchIndex,
+  loading: searchLoading,
+  scopeNote: searchScopeNote,
+  expanded: searchExpanded,
+  hasMore: searchHasMore,
+  matchedTimestamps: searchMatchedTs,
+  goTo: searchGoTo,
+  next: searchNext,
+  previous: searchPrevious,
+  clear: searchClear,
+} = useLiveSearch({
+  view: stageView,
+  entries: searchEntries,
+  records: requestRecords,
+  sessionId: searchSessionId,
+  jump: onSearchJump,
+});
+
+/** Enter：跳到当前选中的命中 */
+function onSearchConfirm(): void {
+  if (searchIndex.value >= 0) void searchGoTo(searchIndex.value);
+}
+
+/** 清单行点击：跳到那一条 */
+function onSearchSelect(index: number): void {
+  void searchGoTo(index);
+}
+
+/** 鼠标移过清单行：只改选中不跳转（跟随命令面板的既有交互） */
+function onSearchHover(index: number): void {
+  searchIndex.value = index;
+}
+
+const searchBarRef = ref<InstanceType<typeof LiveSearchBar> | null>(null);
 
 const sendBarRef = ref<InstanceType<typeof InterventionInput> | null>(null);
 
@@ -917,6 +1051,18 @@ function onConsoleKeydown(e: KeyboardEvent): void {
   if (e.key === '?') {
     e.preventDefault();
     showShortcuts.value = !showShortcuts.value;
+    return;
+  }
+  // 搜索：/ 聚焦输入框；F3 / Shift+F3 下一条 / 上一条命中（回放调试档不参与）
+  if (e.key === '/') {
+    e.preventDefault();
+    searchBarRef.value?.focus();
+    return;
+  }
+  if (e.key === 'F3' && !replayActive.value) {
+    e.preventDefault();
+    if (e.shiftKey) void searchPrevious();
+    else void searchNext();
     return;
   }
   // 回放调试优先：空格=播放/暂停，F=退出回放（退出流程含确认）

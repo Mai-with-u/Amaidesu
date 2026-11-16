@@ -683,6 +683,79 @@ class ChatRepo(BaseRepo):
 
         return await self._run_in_executor(_exec)
 
+    async def search_session_live_chat(
+        self,
+        *,
+        live_session_id: int,
+        keyword: str,
+        limit: int = 200,
+    ) -> List[LiveChatMessage]:
+        """按关键词检索本场消息（弹幕 / 发言 / 上舰）：正文或发送者昵称包含关键词。
+
+        按时间正序返回最近 ``limit`` 条（取法与 list_recent_live_chat 一致：
+        先按时间倒序取最近若干行，再反转回正序）。
+        """
+
+        def _exec() -> List[LiveChatMessage]:
+            pattern = _like_contains(keyword)
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "SELECT * FROM live_chat WHERE live_session_id=?"
+                    " AND (content LIKE ? ESCAPE '\\' OR sender_name LIKE ? ESCAPE '\\')"
+                    " ORDER BY timestamp_ms DESC LIMIT ?",
+                    (live_session_id, pattern, pattern, limit),
+                )
+                rows = [LiveChatMessage.model_validate(dict(row)) for row in cur.fetchall()]
+            return list(reversed(rows))
+
+        return await self._run_in_executor(_exec)
+
+    async def search_session_gifts(
+        self,
+        *,
+        live_session_id: int,
+        keyword: str,
+        limit: int = 200,
+    ) -> List[GiftRecord]:
+        """按关键词检索本场礼物明细行（礼物名或送礼者昵称包含关键词），时间正序。"""
+
+        def _exec() -> List[GiftRecord]:
+            pattern = _like_contains(keyword)
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "SELECT * FROM gifts WHERE live_session_id=?"
+                    " AND (gift_name LIKE ? ESCAPE '\\' OR user_name LIKE ? ESCAPE '\\')"
+                    " ORDER BY timestamp_ms DESC LIMIT ?",
+                    (live_session_id, pattern, pattern, limit),
+                )
+                rows = [GiftRecord.model_validate(dict(row)) for row in cur.fetchall()]
+            return list(reversed(rows))
+
+        return await self._run_in_executor(_exec)
+
+    async def search_session_super_chats(
+        self,
+        *,
+        live_session_id: int,
+        keyword: str,
+        limit: int = 200,
+    ) -> List[SuperChatRecord]:
+        """按关键词检索本场 SC 明细行（SC 正文或付费者昵称包含关键词），时间正序。"""
+
+        def _exec() -> List[SuperChatRecord]:
+            pattern = _like_contains(keyword)
+            with self._manager.transaction() as conn:
+                cur = conn.execute(
+                    "SELECT * FROM super_chats WHERE live_session_id=?"
+                    " AND (message LIKE ? ESCAPE '\\' OR user_name LIKE ? ESCAPE '\\')"
+                    " ORDER BY timestamp_ms DESC LIMIT ?",
+                    (live_session_id, pattern, pattern, limit),
+                )
+                rows = [SuperChatRecord.model_validate(dict(row)) for row in cur.fetchall()]
+            return list(reversed(rows))
+
+        return await self._run_in_executor(_exec)
+
     async def list_viewer_dialogue(
         self,
         *,

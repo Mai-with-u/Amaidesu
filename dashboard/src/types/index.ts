@@ -1114,6 +1114,16 @@ export interface SessionTimelineResponse {
   events_pruned: boolean;
 }
 
+/** 单场内容检索响应（命中条目形状与时间线一致） */
+export interface SessionSearchResponse {
+  live_session_id: number;
+  items: SessionTimelineItem[];
+  /** 命中数超出返回条数，还有更早的命中没返回 */
+  has_more: boolean;
+  /** 场次时间范围内存在缺失的诊断天目录（被清理或未落盘），事件侧降级 */
+  events_pruned: boolean;
+}
+
 /** 流程单单段执行事实（一次进入 = 一条；goto 回跳会再次出现） */
 export interface RundownSegmentRun {
   seg_id: string;

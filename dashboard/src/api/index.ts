@@ -118,6 +118,7 @@ import type {
   SessionResidualResponse,
   SessionKind,
   SessionRundownExecutionResponse,
+  SessionSearchResponse,
   SessionTimelineResponse,
   SessionReviewResponse,
   SettleListResponse,
@@ -401,6 +402,9 @@ export const liveSessionsApi = {
   remove: (id: number) => api.delete<SessionActionResponse>(`/live-sessions/${id}`),
   timeline: (id: number, params?: { limit?: number; before_timestamp_ms?: number }) =>
     api.get<SessionTimelineResponse>(`/live-sessions/${id}/timeline`, { params }),
+  // 单场内容检索（整场：明细行 + 事件侧按关键词命中，不限当前加载窗口）
+  search: (id: number, params?: { q?: string; limit?: number }) =>
+    api.get<SessionSearchResponse>(`/live-sessions/${id}/search`, { params }),
   // 单场流程单执行回看（rundown_transitions 事实行重放：各环节实际停留 vs 预计）
   rundownExecution: (id: number) =>
     api.get<SessionRundownExecutionResponse>(`/live-sessions/${id}/rundown-execution`),

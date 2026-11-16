@@ -102,6 +102,7 @@ declare module 'vue' {
     InterventionInput: typeof import('./src/components/dashboard/InterventionInput.vue')['default']
     LiveChannels: typeof import('./src/components/avatar-tuning/LiveChannels.vue')['default']
     LiveLanes: typeof import('./src/components/live/LiveLanes.vue')['default']
+    LiveSearchBar: typeof import('./src/components/live/LiveSearchBar.vue')['default']
     MilestoneCard: typeof import('./src/components/live/cards/MilestoneCard.vue')['default']
     ModelConfigPage: typeof import('./src/components/settings/ModelConfigPage.vue')['default']
     ModelCostDonut: typeof import('./src/components/llm/ModelCostDonut.vue')['default']

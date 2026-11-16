@@ -288,11 +288,44 @@ class SessionEventReader:
         return records
 
 
+def _payload_matches(value: Any, needle: str) -> bool:
+    """载荷里是否出现关键词（字典的键与值都算，字符串大小写不敏感）。"""
+    if isinstance(value, str):
+        return needle in value.lower()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if needle in str(key).lower():
+                return True
+            if _payload_matches(item, needle):
+                return True
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(_payload_matches(item, needle) for item in value)
+    return False
+
+
+def record_matches_keyword(record: EventRecord, keyword: str) -> bool:
+    """事件记录是否命中关键词：事件名、摘要或载荷里出现关键词。
+
+    载荷逐层展开，工具调用的入参与结果因此可被搜到；键名也参与匹配，
+    搜参数名（如 "reply"）能命中对应调用。
+    """
+    needle = keyword.strip().lower()
+    if not needle:
+        return False
+    if needle in record.type.lower():
+        return True
+    if needle in (record.summary or "").lower():
+        return True
+    return _payload_matches(record.data, needle)
+
+
 __all__ = [
     "SessionEventReader",
     "SessionEventWindow",
     "is_replay_event_type",
     "trim_long_strings",
+    "record_matches_keyword",
     "REPLAY_EVENT_TYPES",
     "REPLAY_EVENT_PREFIXES",
     "MAX_FIELD_STRING_LEN",
