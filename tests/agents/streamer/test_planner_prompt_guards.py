@@ -568,3 +568,16 @@ def test_s66_nearby_and_named_players_keep_positive_response_guardrail(prompts: 
     # 全部发言玩家都在身边时，直接标明就在【现场速览】身边并积极回应
     all_here = render_game_speakers(notes[:1], overview=overview)
     assert "玩家 玩家甲 当前就在【现场速览】身边，围观互动或搭话照常积极回应" in all_here
+
+
+def test_game_chat_vs_streamer_reply_role_split_in_prompt_and_speakers(prompts: Any) -> None:
+    """系统提示词与公屏说话人参考段均明确区分 minecraft_chat_send（往游戏公屏发字）与 streamer_reply（直播间口播收口）。"""
+    system_text = _render_bare(prompts)
+    assert "单独填 `to_player` 只标记口播对象、不会往游戏公屏发字" in system_text
+    assert "调用 `minecraft_chat_send` 把游戏内文字发进公屏，再用 `streamer_reply` 收口直播口播" in system_text
+
+    note = PlayerNote(who="玩家甲", said=True, line="[21:00 minecraft 公屏] 玩家 玩家甲：在忙什么")
+    speakers_text = render_game_speakers((note,))
+    assert "调用 `minecraft_chat_send` 在游戏里回一句" in speakers_text
+    assert "再用 `streamer_reply` 收口直播口播" in speakers_text
+    assert "单独填 `to_player` 不会往游戏公屏发字" in speakers_text

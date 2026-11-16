@@ -900,3 +900,185 @@ async def test_card_pushed_by_someone_and_answering_a_danmaku_are_not_bounced() 
 
     planner, _llm, _provider = _repeat_planner(_reply_to("m1", "档#41"))
     assert (await planner.plan([_msg("那个女仆叫啥")])).memory_refs == ["档#41"], "回本窗那条弹幕"
+
+
+def _registry_with_chat_send(
+    chat_result: ToolExecutionResult,
+    reply_provider: Any,
+) -> tuple[ToolRegistry, AsyncMock]:
+    """构造同时提供 minecraft_chat_send 与 streamer_reply 的真实注册表，返回注册表与公屏发送调用桩。"""
+    registry = ToolRegistry()
+    chat_handler = AsyncMock(return_value=chat_result)
+    chat_spec = ToolSpec(name="chat_send", description="直发游戏公屏文字", kind="sync", provider="minecraft")
+    reply_spec = ToolSpec(name="reply", description="主播口播出口", kind="sync", provider="streamer")
+    registry.register_provider(make_provider_from_specs("minecraft", [(chat_spec, chat_handler)]))
+    registry.register_provider(
+        make_provider_from_specs("streamer", [(reply_spec, lambda inv: reply_provider.invoke(inv))])
+    )
+    return registry, chat_handler
+
+
+def _reply_player_args(player_name: str = "玩家甲", summary: str = "回应玩家甲在公屏的提问") -> dict[str, Any]:
+    return {
+        "topic_summary": summary,
+        "reply_guidance": "自然接上对方在公屏问的事",
+        "to_player": player_name,
+        "is_novel": True,
+        "emotion": "happy",
+        "intensity": 0.5,
+    }
+
+
+async def test_game_chat_reply_bounces_once_before_replyer_then_marks_answered_after_chat_send() -> None:
+    """玩家公屏发问时首次仅调 streamer_reply 会在进表达侧前退回一次；补调 minecraft_chat_send 成功后放行并标已回。"""
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    chat_ok = ToolExecutionResult(
+        tool_name="minecraft_chat_send",
+        success=True,
+        structured_content={"success": True, "message": "在修压机呢"},
+    )
+    registry, chat_handler = _registry_with_chat_send(chat_ok, provider)
+    responses = [
+        _resp(tool_calls=[_tc("streamer_reply", _reply_player_args(), call_id="r1")]),
+        _resp(
+            tool_calls=[
+                _tc("minecraft_chat_send", {"text": "在修压机呢"}, call_id="g1"),
+                _tc("streamer_reply", _reply_player_args(), call_id="r2"),
+            ]
+        ),
+    ]
+    planner, llm, _prompt = _make_planner(responses, registry=registry, reply_provider=provider)
+    chat_note = PlayerNote(
+        who="玩家甲",
+        said=True,
+        line="[21:10 minecraft 公屏] 玩家 玩家甲：麦麦你在忙啥",
+        timestamp_ms=now_ms(),
+    )
+
+    outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(player_notes=(chat_note,)))
+
+    assert outcome.replied is True and outcome.steps == 2
+    assert chat_handler.await_count == 1
+    assert provider.invoke.await_count == 1, "首次被拦在表达侧调用之前，仅第二次真正调用表达侧"
+    bounce_obs = " ".join(str(msg.get("content") or "") for msg in llm.generate.await_args_list[1].args[0])
+    assert "minecraft_chat_send" in bounce_obs and "held_reply" in bounce_obs
+    delivered_people = provider.invoke.await_args.args[0].attachment.game_people
+    assert [note.answered for note in delivered_people] == [False]
+    assert [(note.who, note.said, note.answered) for note in planner.recent_player_notes] == [("玩家甲", True, True)]
+
+
+async def test_second_reply_without_chat_send_passes_through_without_marking_chat_answered() -> None:
+    """同轮第二次仍仅调用 streamer_reply 时放行出声防整窗静默，但只标纯送礼已回，未发公屏的 chat 绝不标已回。"""
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    chat_ok = ToolExecutionResult(
+        tool_name="minecraft_chat_send",
+        success=True,
+        structured_content={"success": True, "message": "收到"},
+    )
+    registry, chat_handler = _registry_with_chat_send(chat_ok, provider)
+    responses = [
+        _resp(tool_calls=[_tc("streamer_reply", _reply_player_args(), call_id="r1")]),
+        _resp(tool_calls=[_tc("streamer_reply", _reply_player_args(), call_id="r2")]),
+    ]
+    planner, _llm, _prompt = _make_planner(responses, registry=registry, reply_provider=provider)
+    ts = now_ms()
+    gift_note = PlayerNote(
+        who="玩家甲",
+        said=False,
+        line="[21:09 minecraft 动作] 玩家 玩家甲 朝我扔了 2 个铁锭",
+        timestamp_ms=ts - 1000,
+    )
+    chat_note = PlayerNote(
+        who="玩家甲",
+        said=True,
+        line="[21:10 minecraft 公屏] 玩家 玩家甲：够不够用呀",
+        timestamp_ms=ts,
+    )
+
+    outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(player_notes=(gift_note, chat_note)))
+
+    assert outcome.replied is True and outcome.steps == 2
+    assert chat_handler.await_count == 0
+    assert provider.invoke.await_count == 1
+    assert [(note.said, note.answered) for note in planner.recent_player_notes] == [
+        (False, True),
+        (True, False),
+    ]
+
+
+@pytest.mark.parametrize(
+    "failed_result",
+    [
+        ToolExecutionResult(
+            tool_name="minecraft_chat_send",
+            success=True,
+            structured_content={"success": False, "error": "发送未确认：游戏侧没有回报这句话已交出去"},
+        ),
+        ToolExecutionResult(
+            tool_name="minecraft_chat_send",
+            success=False,
+            error_message="游戏未连接",
+        ),
+    ],
+    ids=["dict_business_false", "registry_exec_false"],
+)
+async def test_failed_chat_send_payload_does_not_count_as_game_chat_answered(
+    failed_result: ToolExecutionResult,
+) -> None:
+    """minecraft_chat_send 返回业务失败（success=False）或执行失败时不算已发公屏：首次口播照拦，二次放行后 chat 仍未标已回。"""
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    registry, chat_handler = _registry_with_chat_send(failed_result, provider)
+    responses = [
+        _resp(
+            tool_calls=[
+                _tc("minecraft_chat_send", {"text": "收到啦"}, call_id="g1"),
+                _tc("streamer_reply", _reply_player_args(), call_id="r1"),
+            ]
+        ),
+        _resp(tool_calls=[_tc("streamer_reply", _reply_player_args(), call_id="r2")]),
+    ]
+    planner, _llm, _prompt = _make_planner(responses, registry=registry, reply_provider=provider)
+    chat_note = PlayerNote(
+        who="玩家甲",
+        said=True,
+        line="[21:11 minecraft 公屏] 玩家 玩家甲：听得见吗",
+        timestamp_ms=now_ms(),
+    )
+
+    outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(player_notes=(chat_note,)))
+
+    assert outcome.replied is True and outcome.steps == 2
+    assert chat_handler.await_count == 1
+    assert provider.invoke.await_count == 1, "同一步的公屏发送业务失败，首次口播仍在表达侧前被退回"
+    assert [(note.who, note.said, note.answered) for note in planner.recent_player_notes] == [("玩家甲", True, False)]
+
+
+async def test_successful_chat_send_without_spoken_reply_marks_round_chat_answered() -> None:
+    """本轮真实成功调用 minecraft_chat_send 后自然终止不口播时，本窗待回的公屏发言照常标记为已回。"""
+    provider = MagicMock()
+    provider.invoke = AsyncMock(return_value=_REPLY_RESULT)
+    chat_ok = ToolExecutionResult(
+        tool_name="minecraft_chat_send",
+        success=True,
+        structured_content={"success": True, "message": "马上过来"},
+    )
+    registry, chat_handler = _registry_with_chat_send(chat_ok, provider)
+    responses = [
+        _resp(tool_calls=[_tc("minecraft_chat_send", {"text": "马上过来"}, call_id="g1")]),
+        _resp(content="已在游戏公屏回过，直播间不重复念"),
+    ]
+    planner, _llm, _prompt = _make_planner(responses, registry=registry, reply_provider=provider)
+    chat_note = PlayerNote(
+        who="玩家甲",
+        said=True,
+        line="[21:12 minecraft 公屏] 玩家 玩家甲：来东边看一眼",
+        timestamp_ms=now_ms(),
+    )
+
+    outcome = await planner.plan([], proactive=True, game_batch=GameEventBatch(player_notes=(chat_note,)))
+
+    assert outcome.replied is False and chat_handler.await_count == 1
+    assert [(note.who, note.said, note.answered) for note in planner.recent_player_notes] == [("玩家甲", True, True)]

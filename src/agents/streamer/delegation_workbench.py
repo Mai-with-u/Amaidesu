@@ -57,7 +57,9 @@ def observation_data(result: ToolExecutionResult) -> Dict[str, Any]:
     结果再序列化成正文返回一遍，完全相同时只给一份，避免上下文翻倍。
     """
     data = dict(result.structured_content) if isinstance(result.structured_content, dict) else {}
-    data.setdefault("ok", True)
+    # 游戏侧返回结构化 dict 的工具在业务拒绝时仍带外层 success=True、内层 success=False，
+    # 此时观察结果标 ok=False，避免把未发出去的游戏聊天等失败回执包装成成功观察误导决策层
+    data.setdefault("ok", data.get("success") is not False)
     if result.content and "content" not in data and not same_json_document(result.content, result.structured_content):
         data["content"] = result.content
     return data

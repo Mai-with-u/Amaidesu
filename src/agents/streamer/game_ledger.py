@@ -91,12 +91,28 @@ def keep_recent_notes(kept: Sequence[PlayerNote], fresh: Sequence[PlayerNote], a
     return tuple(recent[-_PLAYER_NOTES_MAX:])
 
 
-def mark_answered(notes: Sequence[PlayerNote], who: str) -> Tuple[PlayerNote, ...]:
-    """她回应了这位玩家：他到此为止找她的条目都标成已接过，别的玩家的不动。
+def mark_answered(
+    notes: Sequence[PlayerNote],
+    who: str,
+    *,
+    include_chat: bool = True,
+    include_actions: bool = True,
+) -> Tuple[PlayerNote, ...]:
+    """按互动渠道把指定玩家的待接条目标成已接过，其他玩家的条目保持不变。
 
-    不标的话，上一窗已经谢过的礼还在"最近找你的人"里，这一窗她换个话题时会再谢一遍。
+    玩家公屏发言（``said=True``）只有在游戏公屏发送工具真实把文字发出去后才允许标已回；
+    仅完成直播间口播时只消费投掷送礼等肢体动作（``said=False``），不把尚未在游戏聊天栏回字的话误标为已接过。
     """
-    return tuple(replace(note, answered=True) if note.who == who and not note.answered else note for note in notes)
+    return tuple(
+        replace(note, answered=True)
+        if (
+            note.who == who
+            and not note.answered
+            and ((note.said and include_chat) or (not note.said and include_actions))
+        )
+        else note
+        for note in notes
+    )
 
 
 def sole_speaker_name(notes: Sequence[PlayerNote]) -> str:

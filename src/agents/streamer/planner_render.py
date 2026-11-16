@@ -541,10 +541,13 @@ def render_game_speakers(notes: Iterable[PlayerNote], overview: str = "") -> str
     if not names:
         return ""
     who = "、".join(f"玩家 {name}" for name in names)
+    # 游戏内玩家听不到直播间口播：这里明确点名先用 minecraft_chat_send 往游戏公屏发字，
+    # 再用 streamer_reply 收口直播口播，避免模型误以为填了 to_player 就等于在游戏里回了话
     base = (
         f"【游戏里有人在跟她说话】{who}（在游戏里，听不到直播）：问她事、跟她搭话的，"
-        "同一步按【当前游戏的玩法】里游戏聊天的办法在游戏里回一句——只在直播里接，对方看到的就是她不理人；"
-        "感叹、自言自语可以只在直播里接。"
+        "先（或同一步并列）调用 `minecraft_chat_send` 在游戏里回一句，再用 `streamer_reply` 收口直播口播"
+        "（`streamer_reply` 只对直播间出声，单独填 `to_player` 不会往游戏公屏发字——只在直播里接，对方看到的就是她不理人）；"
+        "纯感叹、自言自语可以只用 `streamer_reply` 在直播里接。"
     )
     nearby_set = nearby_players_from_overview(overview)
     if nearby_set is None:

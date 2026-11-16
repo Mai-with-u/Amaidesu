@@ -108,6 +108,8 @@ PLANNER_PROFILE: str = "planner"
 SOCIAL_FACT_TOOL_NAME: str = "streamer_social_fact"
 #: 场内记忆更正工具的全名：注册了才在主动窗行动选项里点名它
 MEMORY_CORRECT_TOOL_NAME: str = "streamer_memory_correct"
+#: 主播直发游戏公屏文字的工具全名：公屏发言只有经它真实发送成功才算在游戏内已回
+GAME_CHAT_SEND_TOOL_NAME: str = "minecraft_chat_send"
 
 #: 作废条款里"记一条取代旧行的社交事实"那一步（模板变量 social_fact_step；工具没注册时为空串）
 _SOCIAL_FACT_RETRACTION_STEP: str = (
@@ -372,6 +374,16 @@ def _held_reply_error(arrangement: str) -> str:
     )
 
 
+def _missing_game_chat_error(player_name: str) -> str:
+    """回应游戏公屏玩家却尚未发游戏聊天时，退回口播的提示。"""
+    return (
+        f"玩家 {player_name} 是在游戏公屏说话，听不到直播口播，而本轮尚未成功调用 "
+        f"{GAME_CHAT_SEND_TOOL_NAME} 在游戏里回字。这句口播先压住（原意在 held_reply）："
+        f"若需要向对方回话，请先调用 {GAME_CHAT_SEND_TOOL_NAME} 把游戏内文字发进公屏，再同一步或下一步调用 "
+        "streamer_reply 收口直播口播；若判断只是无需回字的纯感叹，再次调用 streamer_reply 将直接放行出声。"
+    )
+
+
 class Planner:
     """主播 Agent 决策核心：ReAct 循环（查→想→说）。
 
@@ -496,6 +508,12 @@ class Planner:
         self._round_asked_archive_ids: Set[int] = set()
         # 本窗是否已因点名提过的旧事退回过一次：每窗只退一次，第二次照常说（点名留着，照样记成提过）
         self._round_memory_bounced: bool = False
+        # 本窗游戏公屏回话追踪：是否已真实业务成功发送公屏文字、是否已因漏发公屏回字退回过一次口播、
+        # 本轮可用工具名集合及已按回应对象结算过公屏已回的玩家名单
+        self._round_game_chat_sent: bool = False
+        self._round_game_chat_bounced: bool = False
+        self._round_tool_names: Optional[Set[str]] = None
+        self._round_answered_chat_players: Set[str] = set()
         # 本窗开窗时刻（毫秒）与是否已因嘴带来的新事实推翻退回过一次（每窗最多退一次重想）
         self._round_started_ms: int = 0
         self._round_mouth_bounced: bool = False
@@ -662,12 +680,18 @@ class Planner:
         # 本批的现行社交事实从库现读（场内登记下一轮可见；读失败只少一段参考，不挡决策）
         self._round_social_facts = await self._load_social_facts()
         self._round_memory_bounced = False
+        self._round_game_chat_sent = False
+        self._round_game_chat_bounced = False
+        self._round_tool_names = None
+        self._round_answered_chat_players = set()
         self._round_started_ms = self._clock()
         self._round_mouth_bounced = False
         self._round_game_players = resolved_batch.addressed_players
         # 玩家扔来东西常在上一窗入账、这一窗才接话：表达侧拿的是最近几分钟的，不只本窗
         self._round_player_notes = resolved_batch.player_notes
-        self._recent_player_notes = keep_recent_notes(self._recent_player_notes, resolved_batch.player_notes, now_ms())
+        self._recent_player_notes = keep_recent_notes(
+            self._recent_player_notes, resolved_batch.player_notes, self._clock()
+        )
         self.workbench.begin_round()
         # 游戏聊天原话（非私聊）随本轮说话交给表达侧；私聊行只进本窗参考段
         fresh_game_chat = list(resolved_batch.fresh_chat)
@@ -724,6 +748,9 @@ class Planner:
             return replace(outcome, error=reference_failure, silent_reason="assembler_failed")
 
         tool_list = self._build_tool_list()
+        self._round_tool_names = {
+            str(item.get("name") or "") for item in tool_list if isinstance(item, Mapping) and item.get("name")
+        }
         # 消息序列：[system] + 历史（user/assistant 原生消息）+ 本批（user）+ 参考段（user，序列尾）；
         # ReAct 循环的 assistant/tool 消息 append-only 追加在参考段之后，绝不插中间。
         messages = assemble_request_messages(
@@ -768,10 +795,12 @@ class Planner:
                 )
             except Exception as e:
                 self.logger.warning(f"Planner LLM 调用异常: {e}")
+                self._settle_round_game_chat()
                 return replace(outcome, error=f"llm_error: {e}", silent_reason="llm_error")
 
             if not response.ok:
                 error = response.error or "unknown"
+                self._settle_round_game_chat()
                 return replace(outcome, error=f"llm_failed: {error}", silent_reason="llm_failed")
 
             outcome = replace(
@@ -790,6 +819,7 @@ class Planner:
 
             # 自然终止：LLM 不再调用任何工具 = 本轮不说话
             if not tool_calls:
+                self._settle_round_game_chat()
                 return replace(outcome, silent_reason=self._silent_reason(held_once, "natural"))
 
             stop_round = False
@@ -850,9 +880,11 @@ class Planner:
                     }
                 )
                 if stop_round:
+                    self._settle_round_game_chat()
                     return outcome
 
         # 超步：未完成说话即收场（压住过一句又没再开口时记成 reply_held）
+        self._settle_round_game_chat()
         return replace(outcome, silent_reason=self._silent_reason(held_once, "max_steps"))
 
     def _silent_reason(self, held_once: bool, default: str) -> str:
@@ -1633,6 +1665,32 @@ class Planner:
                     False,
                 )
             self.logger.info(f"{number} 本窗已退回过一次，这句照常说（点名留着，照样记成提过）")
+        # 回应对象是游戏公屏里开口且尚未回字的玩家，而本轮工具表有直发公屏工具却还没成功发过文字时：
+        # 在进入表达侧渲染前先退回一次，让决策层先调用 minecraft_chat_send 把游戏内文字回出去再收口口播；
+        # 同一轮仅拦截一次且要求还有剩余步数，若模型第二次仍直接调用 streamer_reply 则放行出声以免整窗静默。
+        if (
+            answering_player
+            and self._has_unanswered_player_chat(answering_player)
+            and self._has_round_tool(GAME_CHAT_SEND_TOOL_NAME)
+            and not self._round_game_chat_sent
+            and not self._round_game_chat_bounced
+            and outcome.steps < self.max_steps
+        ):
+            self._round_game_chat_bounced = True
+            held = _held_reply_words(args)
+            self.logger.info(f"回应公屏玩家「{answering_player}」前尚未成功发送游戏聊天，先退回一次口播")
+            return (
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": _missing_game_chat_error(answering_player),
+                        "held_reply": held,
+                    },
+                    ensure_ascii=False,
+                ),
+                outcome,
+                False,
+            )
         try:
             remembered, memory_ids = await self._resolve_use_memory(args)
             attachment = ReplyRoundAttachment(
@@ -1757,10 +1815,23 @@ class Planner:
             beat_done=bool(metadata.get("beat_done") or args.get("beat_done") is True),
             use_card_id=parsed_card_id,
         )
-        # 话说出口了、回应的是游戏里的某位玩家：他到此为止找她的条目标"已接过"，
-        # 后面几窗换话题时表达侧不再把同一份礼谢一遍、同一句话接一遍
+        # 口播送出且回应对象是游戏里的某位玩家时：仅当本轮已真实成功发送游戏公屏文字，才把他的公屏发言标已接过；
+        # 单独口播只消费投掷送礼等肢体动作，绝不把尚未在游戏聊天栏实际回字的公屏话误标为已接过
         if answering_player:
-            self._recent_player_notes = mark_answered(self._recent_player_notes, answering_player)
+            self._recent_player_notes = mark_answered(
+                self._recent_player_notes,
+                answering_player,
+                include_chat=self._round_game_chat_sent,
+                include_actions=True,
+            )
+            self._round_player_notes = mark_answered(
+                self._round_player_notes,
+                answering_player,
+                include_chat=self._round_game_chat_sent,
+                include_actions=True,
+            )
+            if self._round_game_chat_sent:
+                self._round_answered_chat_players.add(answering_player)
         # 话说出口了才记下这轮的打算；表达失败或被净化丢弃的不算，观众没听到
         self.workbench.note_intent(
             Intent(
@@ -1820,8 +1891,60 @@ class Planner:
         absorb_result_images(self._transient_images, self._llm_service, PLANNER_PROFILE, name, result)
         if result.success:
             data = observation_data(result)
+            # 直发游戏公屏工具返回 dict 经外层包装后可能带 success=False，需核对业务载荷确认真实发出去才计入已发
+            if name == GAME_CHAT_SEND_TOOL_NAME and self._is_game_chat_send_succeeded(result):
+                self._round_game_chat_sent = True
             # 本轮回执进状态素材：reply 交接时的状态跃迁事实块从这里取观察工具的关键字段
             self.workbench.note_receipt(name, data)
         else:
             data = {"ok": False, "error": result.error_message or "工具执行失败"}
         return render_observation(data)
+
+    def _has_round_tool(self, tool_name: str) -> bool:
+        """本轮请求的工具表里是否存在指定工具（未走 plan 入口的单测按实时工具表兜底）。"""
+        if self._round_tool_names is not None:
+            return tool_name in self._round_tool_names
+        return any(isinstance(item, Mapping) and item.get("name") == tool_name for item in self._build_tool_list())
+
+    def _has_unanswered_player_chat(self, who: str) -> bool:
+        """指定玩家在最近或本窗互动条目里，是否仍有未在游戏公屏回复过的公屏发言。"""
+        if not who:
+            return False
+        return any(
+            note.who == who and note.said and not note.answered
+            for note in (*self._recent_player_notes, *self._round_player_notes)
+        )
+
+    def _settle_round_game_chat(self) -> None:
+        """本轮已真实成功发出游戏公屏文字但未走口播点名结算时，将该轮待回的公屏发言标为已回。"""
+        if not self._round_game_chat_sent or self._round_answered_chat_players:
+            return
+        targets = {note.who for note in self._round_player_notes if note.said and not note.answered and note.who}
+        if not targets:
+            targets = {note.who for note in self._recent_player_notes if note.said and not note.answered and note.who}
+        for who in targets:
+            self._recent_player_notes = mark_answered(
+                self._recent_player_notes, who, include_chat=True, include_actions=False
+            )
+            self._round_player_notes = mark_answered(
+                self._round_player_notes, who, include_chat=True, include_actions=False
+            )
+            self._round_answered_chat_players.add(who)
+
+    @staticmethod
+    def _is_game_chat_send_succeeded(result: Any) -> bool:
+        """核对游戏公屏发送工具是否真实业务成功：外层执行成功且返回载荷显式带 ``success is True``。"""
+        if not getattr(result, "success", False):
+            return False
+        structured = getattr(result, "structured_content", None)
+        if isinstance(structured, Mapping):
+            return structured.get("success") is True
+        content = getattr(result, "content", "")
+        if isinstance(content, str) and content.strip():
+            try:
+                parsed = json.loads(content)
+            except ValueError:
+                return False
+            if isinstance(parsed, Mapping):
+                return parsed.get("success") is True
+        return False
