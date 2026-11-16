@@ -128,7 +128,9 @@ async def test_history_is_merged_into_one_user_turn_and_system_stays_byte_identi
     first, second = llm.generate.await_args_list
     assert [m["role"] for m in first.args[0]] == ["user"]  # 历史与本轮要求合并进单条 user
     dialogue = first.args[0][0]["content"]
-    assert "小明说：大家好呀" in dialogue and "麦麦(你)说：晚上好" in dialogue  # 观众行去"昵称: "前缀，主播行标注(你)
+    assert (
+        "小明说：大家好呀" in dialogue and "麦麦(你)说：[直播间] 晚上好" in dialogue
+    )  # 观众行去"昵称: "前缀，主播行标注(你)与直播间通道
     assert "[id:" not in dialogue  # 消息 ID 只给 Planner 指定目标用，表达侧看到只是噪声
     assert (
         first.kwargs["system"] == second.kwargs["system"] == "SYSTEM-STABLE"

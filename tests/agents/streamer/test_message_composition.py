@@ -68,7 +68,7 @@ def _make_planner() -> tuple[Planner, MagicMock, List[List[dict]]]:
 
 
 def test_canonical_mapping() -> None:
-    """批与历史同形；类型前缀按登记表渲染；assistant 行原样、不加 id；文本视图主播行加前缀。"""
+    """批与历史同形；类型前缀按登记表渲染；assistant 行带 [直播间] 标注、不加 id；文本视图主播行加前缀。"""
     batch_msg = canonical.batch_item_to_message(_batch_msg("来个落地水", "m9", nickname="小明"))
     history_msg = canonical.turn_to_message(
         FakeTurn(role="user", content="来个落地水", sender_name="小明", message_id="m9")
@@ -80,8 +80,8 @@ def test_canonical_mapping() -> None:
     speak = canonical.turn_to_message(
         FakeTurn(role="assistant", content="晚上好", message_type="speak", message_id="m3")
     )
-    assert speak == {"role": "assistant", "content": "晚上好"}
-    assert canonical.to_text_view([history_msg, speak]) == "小明: 来个落地水 [id:m9]\n主播: 晚上好"
+    assert speak == {"role": "assistant", "content": "[直播间] 晚上好"}
+    assert canonical.to_text_view([history_msg, speak]) == "小明: 来个落地水 [id:m9]\n主播: [直播间] 晚上好"
 
 
 # 消息构成

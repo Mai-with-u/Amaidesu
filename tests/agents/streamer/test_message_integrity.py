@@ -28,7 +28,8 @@ def test_long_message_keeps_tail_and_message_id(size: int) -> None:
     text = "长" * size + "保留蓝色屋顶"
     content = canonical.canonical_content(role="user", nickname="小明", text=text, message_id="target")
     assert content == f"小明: {text} [id:target]"
-    assert canonical.canonical_content(role="assistant", text=text) == text
+    assert canonical.canonical_content(role="assistant", text=text) == f"{canonical.ASSISTANT_CHANNEL_PREFIX}{text}"
+    assert canonical.strip_assistant_channel_prefix(canonical.canonical_content(role="assistant", text=text)) == text
 
 
 def test_planner_keeps_all_history_messages_in_order() -> None:

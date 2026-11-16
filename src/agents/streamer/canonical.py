@@ -10,7 +10,9 @@
 ## 内容格式（canonical content）
 - 观众行：``[类型前缀] 昵称: 内容 [id:消息ID]``（类型前缀由 message_type
   登记表的 prompt 模板承载；`[id:…]` 目标机制保留在 content 内）
-- 主播行：原样内容（发言即正文，不加昵称前缀）
+- 主播行：``[直播间] ``
+  前缀 + 原样内容（发言即正文，不加昵称前缀）——与游戏条目的 ``[时刻 minecraft]``
+  标注对称，标明这句只在直播间开口（观众听得到，游戏里的玩家看不到）
 """
 
 from __future__ import annotations
@@ -22,12 +24,14 @@ from src.modules.logging import get_logger
 from src.agents.streamer.paid_viewers import PAID_VIEWER_NOTE
 
 __all__ = [
+    "ASSISTANT_CHANNEL_PREFIX",
     "ROLE_LABELS",
     "batch_item_to_message",
     "canonical_content",
     "find_target_message",
     "live_chat_row_to_message",
     "normalize_message_id",
+    "strip_assistant_channel_prefix",
     "to_text_view",
     "trim_batch_echo",
     "turn_to_message",
@@ -79,6 +83,17 @@ def _field(row: Any, name: str) -> Any:
         return getattr(row, name, "")
 
 
+#: 主播行的通道标注前缀：台词只在直播间开口，游戏里的玩家看不到——
+#: 与游戏条目的 ``[时刻 minecraft]`` 标注对称，通道归属在对话形态上自明。
+ASSISTANT_CHANNEL_PREFIX = "[直播间] "
+
+
+def strip_assistant_channel_prefix(text: str) -> str:
+    """去掉主播行的通道标注前缀，回到台词原文（比对与再加工用原始域）。"""
+    body = text or ""
+    return body[len(ASSISTANT_CHANNEL_PREFIX) :] if body.startswith(ASSISTANT_CHANNEL_PREFIX) else body
+
+
 def canonical_content(
     *,
     role: str,
@@ -89,7 +104,7 @@ def canonical_content(
 ) -> str:
     """单条直播消息 → canonical content（见模块 docstring 的格式约定）。"""
     if role == "assistant":
-        content = text
+        content = f"{ASSISTANT_CHANNEL_PREFIX}{text}"
     else:
         line = prompt_template_for(message_type).format(nickname=nickname or "观众", content=text)
         content = line

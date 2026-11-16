@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from src.modules.logging import get_logger
 
 from . import canonical
+from .canonical import strip_assistant_channel_prefix
 from .persona_rules import boundaries_line
 from .plan import DecisionPlan, assistant_speech_lines
 from .speech_guard import (
@@ -519,7 +520,10 @@ class Replyer:
         people_rows = len(people_lines) + (1 if _has_answered(people_lines) else 0)
         entries = self._dialogue_entries(full_history, batch)
         dialogue_lines = [self._render_entry(entry) for entry in entries]
-        shown_speeches = [entry.content.strip() for entry in entries if entry.role == "assistant"]
+        # 去重比对按台词原文：canonical 行带的通道标注前缀在这里剥掉，与 speech_history 同域
+        shown_speeches = [
+            strip_assistant_channel_prefix(entry.content).strip() for entry in entries if entry.role == "assistant"
+        ]
         return self._prompt_service.render(
             _REPLYER_TEMPLATE,
             plan=_render_plan_text(

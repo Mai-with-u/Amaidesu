@@ -35,7 +35,7 @@ def _batch_msg(
 
 
 def test_golden_canonical_content_bytes() -> None:
-    """观众行带类型前缀与 [id:] 后缀；主播行原样、无 id、无前缀。"""
+    """观众行带类型前缀与 [id:] 后缀；主播行带 [直播间] 通道标注、无 id、无昵称前缀。"""
     assert (
         canonical.canonical_content(role="user", nickname="小明", text="来个落地水", message_id="m9")
         == "小明: 来个落地水 [id:m9]"
@@ -47,7 +47,10 @@ def test_golden_canonical_content_bytes() -> None:
         == "[礼物] 小红: 送出 小花花 x1 [id:m2]"
     )
     assert canonical.canonical_content(role="user", nickname="小红", text="来个落地水") == "小红: 来个落地水"
-    assert canonical.canonical_content(role="assistant", text="晚上好", message_id="m3") == "晚上好"
+    assert canonical.canonical_content(role="assistant", text="晚上好", message_id="m3") == "[直播间] 晚上好"
+    # 主播行的通道标注可剥回台词原文；原文无前缀时原样返回
+    assert canonical.strip_assistant_channel_prefix("[直播间] 晚上好") == "晚上好"
+    assert canonical.strip_assistant_channel_prefix("晚上好") == "晚上好"
     # 未知/空类型按普通弹幕渲染
     assert canonical.canonical_content(role="user", nickname="小明", text="hi", message_type="") == "小明: hi"
 
@@ -68,7 +71,7 @@ def test_golden_text_view_bytes() -> None:
         canonical.turn_to_message(FakeTurn(role="user", content="大家好", sender_name="小明", message_id="m1")),
         canonical.turn_to_message(FakeTurn(role="assistant", content="晚上好", message_type="speak", message_id="m2")),
     ]
-    assert canonical.to_text_view(messages) == "小明: 大家好 [id:m1]\n主播: 晚上好"
+    assert canonical.to_text_view(messages) == "小明: 大家好 [id:m1]\n主播: [直播间] 晚上好"
 
 
 def test_golden_text_view_proactive_placeholder_annotated() -> None:
@@ -86,7 +89,7 @@ def test_golden_text_view_turn_channel_placeholder_prefixed() -> None:
 def test_golden_text_view_assistant_placeholder_not_annotated() -> None:
     """同文内容出现在 assistant 行不加 [系统]——标注只针对 user 占位。"""
     messages = [canonical.turn_to_message(FakeTurn(role="assistant", content="（主动发言，主题：测试）"))]
-    assert canonical.to_text_view(messages) == "主播: （主动发言，主题：测试）"
+    assert canonical.to_text_view(messages) == "主播: [直播间] （主动发言，主题：测试）"
 
 
 # golden：批渲染（MessageBuffer / replyer 包装）

@@ -29,7 +29,7 @@ from src.agents.streamer.timeline import PlayerNote
 from src.modules.tools.models import ToolCallAttachment
 from src.modules.types.emotion_vocab import Emotion
 
-from .canonical import turn_to_message
+from .canonical import strip_assistant_channel_prefix, turn_to_message
 
 
 class DecisionPlan(BaseModel):
@@ -94,13 +94,15 @@ def assistant_speech_lines(history: Optional[List[Any]]) -> List[str]:
 
     历史里自己说过的话才是观众听过的内容。决策窗起点由 Planner 从本窗
     历史算一次，随 attachment 交 reply 工具（见 ``ReplyRoundAttachment.speech_history``）。
+    canonical 行带的通道标注前缀在这里剥掉：这份语料与实时口头流水同在原始
+    文本域，复读比对与"更早说过的话"去重都按原文比对。
     """
     lines: List[str] = []
     for turn in history or []:
         message = turn_to_message(turn)
         content = str(message.get("content") or "").strip()
         if message.get("role") == "assistant" and content:
-            lines.append(content)
+            lines.append(strip_assistant_channel_prefix(content))
     return lines
 
 
