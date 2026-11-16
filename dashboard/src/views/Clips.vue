@@ -345,12 +345,42 @@ function outputsOf(segment: ClipSegment): string[] {
 
 // ---- 视频预览：源段（seek 到段起点、到段尾停）与已出片产物 ----
 const videoEl = ref<HTMLVideoElement | null>(null);
-// 播放器重建序号：同为整场文件时各段 src 相同，key 不变会让 <video> 被复用、
-// loadedmetadata 不再触发（跳段起点失效）——每次打开预览强制换 key 重建
+/** 播放头位置（墙钟毫秒）；整场文件预览才有意义，段级现转/产物预览不显示 */
+const playheadMs = ref<number | null>(null);
+// 播放器重建序号：换源才换 key 重建 <video>；同源（同整场文件）保持复用，
+// 播放位置由下方 watch 直接改 currentTime——同源时 loadedmetadata 不会再触发，
+// 重建反而让画面闪一下且重新拉流
 const previewSeq = ref(0);
-watch(preview, p => {
-  if (p) previewSeq.value += 1;
+watch(preview, (p, old) => {
+  if (!p) {
+    playheadMs.value = null;
+    return;
+  }
+  if (old && p.src === old.src) {
+    const player = videoEl.value;
+    if (player && player.readyState >= 1) {
+      player.currentTime = p.baseS;
+      void player.play().catch(() => undefined); // 自动播放可能被浏览器策略拦下，交给用户点播放
+    }
+  } else {
+    previewSeq.value += 1;
+  }
 });
+
+/** 把当前播放位置映射到场次时间轴（段级现转的视频起点不对应场次时刻，映射不了） */
+function updatePlayhead(): void {
+  const player = videoEl.value;
+  const current = preview.value;
+  const file =
+    current && !current.range
+      ? recordings.value.find(f => f.path === current.sourcePath)
+      : undefined;
+  if (!player || !file) {
+    playheadMs.value = null;
+    return;
+  }
+  playheadMs.value = file.started_at_ms + player.currentTime * 1000;
+}
 
 /** 打开一场后：预热整场预览缓存 + 刷新各文件的就绪态 */
 watch(recordings, list => {
@@ -402,16 +432,66 @@ function onPreviewMeta(): void {
   previewConverting.value = false; // 元数据可读 = 片段/整场已可播（段级现转在此收尾）
   if (preview.value.baseS > 0) player.currentTime = preview.value.baseS;
   void player.play().catch(() => undefined); // 自动播放可能被浏览器策略拦下，交给用户点播放
+  updatePlayhead();
 }
 
 function onPreviewTime(): void {
   const player = videoEl.value;
   const current = preview.value;
-  if (!player || !current || current.durationS === null) return;
-  if (player.currentTime > current.baseS + current.durationS) {
+  if (!player || !current) return;
+  if (current.durationS !== null && player.currentTime > current.baseS + current.durationS) {
     player.pause();
   }
+  updatePlayhead();
 }
+
+/** 时间轴跳转：同整场文件的预览直接改播放位置，否则打开整段素材预览并定位 */
+function seekPreviewTo(ms: number): void {
+  const file = recordings.value[0]; // 常规单文件场；多文件场与段预览同一取法（见 onPreviewSegment）
+  if (!file) {
+    ElMessage.info('该场没有匹配到录播文件，无法跳转');
+    return;
+  }
+  const offsetS = Math.max(0, (ms - file.started_at_ms) / 1000);
+  const player = videoEl.value;
+  const current = preview.value;
+  if (
+    current &&
+    !current.range &&
+    current.sourcePath === file.path &&
+    player &&
+    player.readyState >= 1
+  ) {
+    // 同一整场文件已在播：不重建播放器，直接改播放位置；段范围自动停同时解除
+    current.baseS = 0;
+    current.durationS = null;
+    current.title = `整段素材：${file.file_name}`;
+    player.currentTime = offsetS;
+    void player.play().catch(() => undefined);
+    updatePlayhead();
+    return;
+  }
+  void openPreview(file.path, `整段素材：${file.file_name}`, offsetS, null);
+}
+
+/** 时间轴点段块：选中该段并跳到段起点 */
+function onSelectSegment(segmentId: number): void {
+  selectedSegmentId.value = segmentId;
+  const segment = segments.value.find(s => s.id === segmentId);
+  if (segment) seekPreviewTo(segment.start_ms);
+}
+
+// ---- 段列表滚动定位：时间轴点段块时把对应行滚进可视区 ----
+const segmentRowEls = new Map<number, HTMLElement>();
+
+function setSegmentRowEl(segmentId: number, el: unknown): void {
+  if (el instanceof HTMLElement) segmentRowEls.set(segmentId, el);
+  else segmentRowEls.delete(segmentId);
+}
+
+watch(selectedSegmentId, segmentId => {
+  if (segmentId !== null) segmentRowEls.get(segmentId)?.scrollIntoView({ block: 'nearest' });
+});
 
 // ---- 归属人工修正：移出 / 恢复 / 指派（指派需补录制开始时刻）----
 async function onDetachFile(file: RecordingFileInfo): Promise<void> {
@@ -698,7 +778,7 @@ onMounted(async () => {
                 @timeupdate="onPreviewTime"
               />
               <div v-else class="clip-player-empty">
-                点右侧任一段的「预览」开始核对切点；播放器固定在这里，调段不用来回滚。
+                点右侧段行的「预览」核对切点，或点下方时间轴任意位置跳转播放；播放器固定在这里，调段不用来回滚。
               </div>
             </section>
 
@@ -706,11 +786,13 @@ onMounted(async () => {
               <h3 class="clip-section-title">切片段（{{ segments.length }}）</h3>
               <div class="clip-segments-scroll">
                 <div v-if="segments.length === 0" class="clip-no-segments">
-                  还没有切片段。点「AI 选段」让它读本场记录提议几段，或双击下方时间轴手动建段。
+                  还没有切片段。点「AI
+                  选段」让它读本场记录提议几段，或按住下方时间轴拖动框选手动建段。
                 </div>
                 <div
                   v-for="segment in segments"
                   :key="segment.id"
+                  :ref="el => setSegmentRowEl(segment.id, el)"
                   class="clip-segment-row"
                   :class="{ 'is-selected': segment.id === selectedSegmentId }"
                   @click="selectedSegmentId = segment.id"
@@ -808,16 +890,20 @@ onMounted(async () => {
 
           <section class="clip-card" v-loading="detailLoading">
             <h3 class="clip-section-title">
-              切段时间轴<span class="clip-settings-hint">拖段边微调，双击空白新建</span>
+              切段时间轴<span class="clip-settings-hint"
+                >点击跳转播放 · 按住空白拖动建段 · 拖段边微调</span
+              >
             </h3>
             <SegmentTimeline
               :segments="segments"
               :session-start-ms="selectedSession.started_at_ms"
               :session-end-ms="sessionEndMs"
               :selected-id="selectedSegmentId"
-              @select="selectedSegmentId = $event"
+              :playhead-ms="playheadMs"
+              @select="onSelectSegment"
               @resize="onResize"
               @create="onCreate"
+              @seek="seekPreviewTo"
             />
           </section>
 

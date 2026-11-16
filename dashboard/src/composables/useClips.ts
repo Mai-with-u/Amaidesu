@@ -213,6 +213,10 @@ export function useClips() {
     title: string;
     baseS: number;
     durationS: number | null;
+    /** 预览对应的源录播文件路径（整场预览与段级现转都指向源文件） */
+    sourcePath: string;
+    /** 是否段级现转：视频 t=0 对应段起点而非文件起点，播放位置不能映射回场次时刻 */
+    range: boolean;
   } | null>(null);
   const previewConverting = ref(false);
   let previewPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -246,7 +250,14 @@ export function useClips() {
           if (check.data.ready) {
             stopPreviewPoll();
             previewConverting.value = false;
-            preview.value = { src: previewFileUrl(sourcePath), title, baseS: 0, durationS: null };
+            preview.value = {
+              src: previewFileUrl(sourcePath),
+              title,
+              baseS: 0,
+              durationS: null,
+              sourcePath,
+              range: false,
+            };
           }
         } catch {
           /* 单次轮询失败静默，下个周期再试 */
@@ -266,7 +277,14 @@ export function useClips() {
       const { data } = await clipsApi.previewStatus(sourcePath);
       if (data.ready) {
         previewConverting.value = false;
-        preview.value = { src: previewFileUrl(sourcePath), title, baseS: offsetS, durationS };
+        preview.value = {
+          src: previewFileUrl(sourcePath),
+          title,
+          baseS: offsetS,
+          durationS,
+          sourcePath,
+          range: false,
+        };
         return;
       }
       if (durationS === null) {
@@ -280,6 +298,8 @@ export function useClips() {
         title,
         baseS: 0,
         durationS,
+        sourcePath,
+        range: true,
       };
     } catch (error) {
       previewConverting.value = false;

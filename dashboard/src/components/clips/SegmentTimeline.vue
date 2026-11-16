@@ -2,10 +2,13 @@
 /**
  * 切片段时间轴条：全场一根横条，段渲染为色块。
  *
- * 交互：
+ * 交互（对齐视频编辑器惯例，不需要文字说明也能猜对）：
+ * - 单击空白 → 播放器跳到该时刻（抛出 seek）
+ * - 空白按下拖动 → 框选区间，松手新建一段（抛出 create；拖动不足 5 秒视为误触，按单击跳转处理）
+ * - 单击色块 → 选中（抛出 select；父组件同时让播放器跳到段起点）
  * - 拖动色块左右边缘 → 调整起止（pointer 事件，pointerup 才提交）
- * - 双击空白处 → 在该位置新建一段（默认 5 分钟，夹进场次范围）
- * - 单击色块 → 选中（高亮 + 抛出 select 事件）
+ *
+ * 播放头（playheadMs）实时标记播放位置，仅整场文件预览时有值。
  *
  * 色块颜色按状态：suggested=AI 建议色 / confirmed=确认色 / done=完成色 /
  * failed=失败色 / cutting=进行色 / dismissed=置灰。
@@ -21,16 +24,21 @@ const props = defineProps<{
   /** 场次终点（墙钟毫秒；进行中场次用最后活动时刻兜底） */
   sessionEndMs: number;
   selectedId: number | null;
+  /** 当前播放位置（墙钟毫秒）；无整场预览时为 null，不渲染播放头 */
+  playheadMs: number | null;
 }>();
 
 const emit = defineEmits<{
   (e: 'select', segmentId: number): void;
   (e: 'resize', segmentId: number, startMs: number, endMs: number): void;
   (e: 'create', startMs: number, endMs: number): void;
+  (e: 'seek', startMs: number): void;
 }>();
 
-/** 双击新建段的默认时长 */
-const CREATE_SPAN_MS = 5 * 60 * 1000;
+/** 按下后移动超过该距离才进入框选，否则松手按单击跳转处理 */
+const DRAG_THRESHOLD_PX = 4;
+/** 框选建段的最短时长；更短的拖动视为误触单击 */
+const MIN_CREATE_SPAN_MS = 5 * 1000;
 
 const trackEl = ref<HTMLElement | null>(null);
 
@@ -64,6 +72,13 @@ const blocks = computed<Block[]>(() =>
     }),
 );
 
+/** 播放头位置（百分比，夹在场次范围内） */
+const playheadPct = computed(() => {
+  if (props.playheadMs === null) return 0;
+  const rel = Math.min(durationMs.value, Math.max(0, props.playheadMs - props.sessionStartMs));
+  return (rel / durationMs.value) * 100;
+});
+
 /** 刻度尺：从 5 分钟到 2 小时里选能让标签数 ≤ 8 的最大密度 */
 const ticks = computed(() => {
   const totalMin = durationMs.value / 60000;
@@ -75,7 +90,7 @@ const ticks = computed(() => {
   });
 });
 
-// ---- 拖动状态（pointer 捕获期间非响应式值走普通变量）----
+// ---- 指针状态（pointer 捕获期间非响应式值走普通变量）----
 interface DragState {
   segmentId: number;
   edge: 'start' | 'end';
@@ -86,6 +101,11 @@ interface DragState {
 const dragging = ref<DragState | null>(null);
 /** 拖动中的预览边界（毫秒，相对值由 blocks 内即时重算） */
 const previewBounds = ref<{ id: number; startMs: number; endMs: number } | null>(null);
+
+/** 空白处按下的待定起点；跨过拖动阈值前只是"待定单击" */
+const press = ref<{ x: number; ms: number } | null>(null);
+/** 框选中的区间（跨过拖动阈值后出现，松手提交建段或回退为单击） */
+const draftRange = ref<{ startMs: number; endMs: number } | null>(null);
 
 function pointerToMs(event: PointerEvent): number {
   const track = trackEl.value;
@@ -108,40 +128,70 @@ function onEdgePointerDown(event: PointerEvent, segment: ClipSegment, edge: 'sta
   previewBounds.value = { id: segment.id, startMs: segment.start_ms, endMs: segment.end_ms };
 }
 
+function onTrackPointerDown(event: PointerEvent): void {
+  if (event.button !== 0) return;
+  const track = trackEl.value;
+  if (!track) return;
+  track.setPointerCapture(event.pointerId);
+  press.value = { x: event.clientX, ms: pointerToMs(event) };
+  draftRange.value = null;
+}
+
 function onPointerMove(event: PointerEvent): void {
-  const state = dragging.value;
-  if (!state) return;
-  const pointerMs = pointerToMs(event);
-  const minSpanMs = 5 * 1000;
-  if (state.edge === 'start') {
-    const startMs = Math.min(pointerMs, state.baseEndMs - minSpanMs);
-    previewBounds.value = { id: state.segmentId, startMs, endMs: state.baseEndMs };
-  } else {
-    const endMs = Math.max(pointerMs, state.baseStartMs + minSpanMs);
-    previewBounds.value = { id: state.segmentId, startMs: state.baseStartMs, endMs };
+  if (dragging.value) {
+    const state = dragging.value;
+    const pointerMs = pointerToMs(event);
+    const minSpanMs = 5 * 1000;
+    if (state.edge === 'start') {
+      const startMs = Math.min(pointerMs, state.baseEndMs - minSpanMs);
+      previewBounds.value = { id: state.segmentId, startMs, endMs: state.baseEndMs };
+    } else {
+      const endMs = Math.max(pointerMs, state.baseStartMs + minSpanMs);
+      previewBounds.value = { id: state.segmentId, startMs: state.baseStartMs, endMs };
+    }
+    return;
   }
+  const origin = press.value;
+  if (!origin) return;
+  const pointerMs = pointerToMs(event);
+  if (!draftRange.value && Math.abs(event.clientX - origin.x) < DRAG_THRESHOLD_PX) return;
+  draftRange.value = {
+    startMs: Math.min(origin.ms, pointerMs),
+    endMs: Math.max(origin.ms, pointerMs),
+  };
 }
 
 function onPointerUp(): void {
-  const state = dragging.value;
-  const bounds = previewBounds.value;
-  dragging.value = null;
-  previewBounds.value = null;
-  if (state && bounds) {
-    emit('resize', state.segmentId, Math.round(bounds.startMs), Math.round(bounds.endMs));
+  if (dragging.value) {
+    const state = dragging.value;
+    const bounds = previewBounds.value;
+    dragging.value = null;
+    previewBounds.value = null;
+    press.value = null;
+    draftRange.value = null;
+    if (state && bounds) {
+      emit('resize', state.segmentId, Math.round(bounds.startMs), Math.round(bounds.endMs));
+    }
+    return;
   }
+  const origin = press.value;
+  const range = draftRange.value;
+  press.value = null;
+  draftRange.value = null;
+  if (range && range.endMs - range.startMs >= MIN_CREATE_SPAN_MS) {
+    emit('create', Math.round(range.startMs), Math.round(range.endMs));
+    return;
+  }
+  // 无拖动或拖动太短：按单击跳转处理
+  if (origin) emit('seek', Math.round(origin.ms));
 }
 
-function onTrackDoubleClick(event: MouseEvent): void {
-  const track = trackEl.value;
-  if (!track) return;
-  const pointerMs = pointerToMs(event as unknown as PointerEvent);
-  const startMs = Math.min(
-    pointerMs,
-    Math.max(props.sessionStartMs, props.sessionEndMs - CREATE_SPAN_MS),
-  );
-  const endMs = Math.min(pointerMs + CREATE_SPAN_MS, props.sessionEndMs);
-  emit('create', Math.round(startMs), Math.round(endMs));
+function onPointerCancel(): void {
+  // 拖动调界被系统打断视为未发生；框选/单击同样作废，不触发跳转
+  dragging.value = null;
+  previewBounds.value = null;
+  press.value = null;
+  draftRange.value = null;
 }
 
 function boundsOf(block: Block): { leftPct: number; widthPct: number } {
@@ -155,6 +205,18 @@ function boundsOf(block: Block): { leftPct: number; widthPct: number } {
   }
   return { leftPct: block.leftPct, widthPct: block.widthPct };
 }
+
+function draftStyle(): { left: string; width: string } {
+  const range = draftRange.value;
+  const startMs = range ? range.startMs : props.sessionStartMs;
+  const endMs = range ? range.endMs : props.sessionStartMs;
+  const startRel = Math.max(0, startMs - props.sessionStartMs);
+  const endRel = Math.min(durationMs.value, endMs - props.sessionStartMs);
+  return {
+    left: `${(startRel / durationMs.value) * 100}%`,
+    width: `${(Math.max(0, endRel - startRel) / durationMs.value) * 100}%`,
+  };
+}
 </script>
 
 <template>
@@ -162,10 +224,10 @@ function boundsOf(block: Block): { leftPct: number; widthPct: number } {
     <div
       ref="trackEl"
       class="clip-track"
+      @pointerdown="onTrackPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
-      @pointercancel="onPointerUp"
-      @dblclick="onTrackDoubleClick"
+      @pointercancel="onPointerCancel"
     >
       <span
         v-for="tick in ticks.slice(1)"
@@ -187,6 +249,7 @@ function boundsOf(block: Block): { leftPct: number; widthPct: number } {
         ]"
         :style="{ left: `${boundsOf(block).leftPct}%`, width: `${boundsOf(block).widthPct}%` }"
         :title="`${block.segment.title || '未命名'}（${block.segment.status}）`"
+        @pointerdown.stop
         @click.stop="emit('select', block.segment.id)"
       >
         <span
@@ -199,8 +262,10 @@ function boundsOf(block: Block): { leftPct: number; widthPct: number } {
           @pointerdown="onEdgePointerDown($event, block.segment, 'end')"
         />
       </div>
+      <div v-if="draftRange" class="clip-block is-draft" :style="draftStyle()" />
+      <div v-if="playheadMs !== null" class="clip-playhead" :style="{ left: `${playheadPct}%` }" />
       <div v-if="blocks.length === 0" class="clip-track-empty">
-        双击空白处新建切片段；AI 选段后这里会出现建议色块
+        点击跳转播放；按住空白拖动框选，松手即新建切片段
       </div>
     </div>
     <div class="clip-ruler">
@@ -305,7 +370,8 @@ function boundsOf(block: Block): { leftPct: number; widthPct: number } {
   align-self: stretch;
   cursor: ew-resize;
   flex: none;
-  opacity: 0;
+  /* 常显：隐藏到悬停才出现的把手没法被发现 */
+  opacity: 0.45;
   transition:
     opacity 0.15s,
     background 0.15s;
@@ -313,8 +379,34 @@ function boundsOf(block: Block): { leftPct: number; widthPct: number } {
 
 .clip-block:hover .clip-block-edge,
 .clip-block.is-dragging .clip-block-edge {
-  opacity: 1;
+  opacity: 0.9;
   background: rgba(255, 255, 255, 0.45);
+}
+
+.clip-block.is-draft {
+  background: var(--el-color-primary-light-5);
+  border: 1px dashed var(--el-color-primary);
+  box-shadow: none;
+  pointer-events: none;
+}
+
+.clip-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--el-color-danger);
+  pointer-events: none;
+}
+
+.clip-playhead::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -4px;
+  border: 5px solid transparent;
+  border-top-color: var(--el-color-danger);
 }
 
 .clip-track-empty {
