@@ -9,7 +9,8 @@
  * - 稍后：关闭弹窗不动场次，待决状态保持（场次列表仍显示进行中），下次启动再问。
  *
  * 打开期间每次显隐都会重新拉取待决列表；动作完成后刷新列表，全部处置完自动关闭。
- * 挂在 App.vue 全局层（keep-alive 之外）：用户落在任何页面都能看到弹窗。
+ * 挂在 App.vue 全局层（keep-alive 之外）：壳内任何页面都能看到弹窗；
+ * OBS 嵌入页（layout=false）不渲染——浏览器源里无人能点按钮，弹窗会永久糊在画面上。
  */
 import { ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';

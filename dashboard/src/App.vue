@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onMounted, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import AppLayout from '@/components/layout/AppLayout.vue';
 // 导演命令面板挂全局层：热键与浮层都不依赖具体页面（keep-alive 之外，切页不销毁）
 import CommandPalette from '@/components/dashboard/CommandPalette.vue';
@@ -9,6 +9,11 @@ import ResidualSessionDialog from '@/components/live/ResidualSessionDialog.vue';
 import { liveSessionsApi } from '@/api';
 
 const residualDialogVisible = ref(false);
+
+// OBS 嵌入页（layout=false）不渲染全局浮层：浏览器源里没人能点弹窗按钮，
+// 也不感知主界面已处置完，弹窗会永久糊在直播画面上
+const route = useRoute();
+const isEmbedPage = computed(() => route.meta.layout === false);
 
 // 首次路由导航完成前不渲染任何视图：导航期间 route.meta 为空，widget 嵌入页
 // （layout=false）会先把 AppLayout 壳渲染出来再卸载，OBS 浏览器源与页内 iframe
@@ -48,8 +53,8 @@ onMounted(async () => {
   </router-view>
   <!-- 全局命令面板（Ctrl/Cmd+K），遮罩浮层形态，不进布局头部 -->
   <CommandPalette />
-  <!-- 断线续播弹窗：待决残留场次有就弹，用户拍板续播或收尾 -->
-  <ResidualSessionDialog v-model="residualDialogVisible" />
+  <!-- 断线续播弹窗：待决残留场次有就弹，用户拍板续播或收尾；OBS 嵌入页不渲染 -->
+  <ResidualSessionDialog v-if="!isEmbedPage" v-model="residualDialogVisible" />
 </template>
 
 <style>
