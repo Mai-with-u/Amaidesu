@@ -252,8 +252,12 @@ def delegation_state_line(
         # 游戏侧没交付就停了：只认交付算做完，这里不能读成做好了
         return f"游戏那边在{age_text(current_ms - delegation.reported_ms)}停了，没交付结果，做没做完不确定。"
     if delegation.report_kind == "interrupted":
-        # 续播认领的：重启把这件事打断了，游戏那边不会接着做，做到哪也没人报过
-        return "重启前在做这件事，被打断了，做到哪不确定。"
+        # 续播认领的：重启把这件事打断了，游戏那边不会接着做，做到哪也没人报过；
+        # 重启后执行方手上并没有这件活，明示"还没重派"，让她重新委派或结掉，而不是干等执行方推进
+        return (
+            "重启前在做这件事，被打断了，做到哪不确定；重启后还没重新委派，"
+            "游戏那边没有这件活，要么重新委派一次，要么用 framework_task_settle 结掉这件。"
+        )
     if record is None:
         if status_provider is None:
             # 未绑定机器账查询（缺 task_ledger 的装配）：维持只有交付语的渲染

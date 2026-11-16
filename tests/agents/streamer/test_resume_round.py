@@ -212,6 +212,7 @@ async def test_resume_restores_only_my_unfinished_delegation_of_this_session(liv
 
     work = planner_requests[0].split("【我手头在游戏里做的事】", 1)[1].split("【", 1)[0]
     assert "开始做一个任务：把营地的门装好" in work and "重启前在做这件事，被打断了，做到哪不确定" in work
+    assert "重启后还没重新委派" in work and "framework_task_settle" in work
     assert "运营调试" not in work and "2048" not in work and "搭个棚子" not in work
     statuses = {r.task_id: r.status for r in await stack.store.events.list_session_delegations(live_session_id=pk)}
     assert statuses == {"deleg_done": "succeeded", "deleg_open": "accepted", "deleg_debug": "accepted"}, (
