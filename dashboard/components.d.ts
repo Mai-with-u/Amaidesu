@@ -119,6 +119,7 @@ declare module 'vue' {
     RestartOverlay: typeof import('./src/components/layout/RestartOverlay.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    RundownSlate: typeof import('./src/components/live/RundownSlate.vue')['default']
     ScoreboardStrip: typeof import('./src/components/live/ScoreboardStrip.vue')['default']
     SegmentTimeline: typeof import('./src/components/clips/SegmentTimeline.vue')['default']
     SettlePanel: typeof import('./src/components/memory/SettlePanel.vue')['default']

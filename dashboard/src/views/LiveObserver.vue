@@ -135,28 +135,16 @@
 
       <!-- 右区：环节横幅 + 时间线                                        -->
       <section class="console-main">
-        <section class="slate" :class="{ 'is-idle': !rundownBanner }" aria-label="当前环节">
-          <span class="slate-eyebrow">当前环节</span>
-          <template v-if="rundownBanner">
-            <span class="slate-order mono">#{{ rundownBanner.order }}</span>
-            <h2 class="slate-label" :title="rundownBanner.label">{{ rundownBanner.label }}</h2>
-            <span class="slate-action">{{ rundownBanner.actionLabel }}</span>
-            <span v-if="rundownBanner.note" class="slate-note" :title="rundownBanner.note">{{
-              rundownBanner.note
-            }}</span>
-            <span class="grow" />
-            <span v-if="rundownBanner.startLabel" class="slate-meta mono"
-              >计划 {{ rundownBanner.startLabel }}</span
-            >
-            <span v-if="rundownBanner.expectedLabel" class="slate-meta mono">
-              预计 {{ rundownBanner.expectedLabel }}
-            </span>
-            <span class="slate-meta mono">{{
-              relativeTime(nowTick, rundownBanner.changedAtMs)
-            }}</span>
-          </template>
-          <span v-else class="slate-idle">流程单未运行或未接入</span>
-        </section>
+        <!-- 环节横幅：当前段 + 本段要聊什么 + 时间账；点开是流程单时间轴 -->
+        <RundownSlate
+          :rows="rundownRows"
+          :current-row="rundownCurrentRow"
+          :live="sessionMode === 'live'"
+          :paused="rundownPaused"
+          :action-loading="rundownActionLoading"
+          :idle-text="rundownIdleText"
+          @control="onRundownControl"
+        />
 
         <div v-if="showTestModeNotice" class="test-mode-notice" title="正式直播请先在左侧开启场次">
           测试模式：未开启场次，消息仅在内存中流转不落库
@@ -485,6 +473,7 @@ import {
 import { useThinkingStream } from '@/composables/live/useThinkingStream';
 import { useLiveTimeline } from '@/composables/live/useLiveTimeline';
 import { useLiveStatus } from '@/composables/live/useLiveStatus';
+import { useRundownConsole } from '@/composables/live/useRundownConsole';
 import {
   MINECRAFT_AGENT_NAME,
   STREAMER_AGENT_NAME,
@@ -500,8 +489,8 @@ import { confirmAction } from '@/utils/confirmAction';
 import { ElMessage } from 'element-plus';
 import { formatNumber } from '@/utils/format';
 import { waitFor } from '@/utils/waitFor';
-import { MAX_ENTRIES, relativeTime, type ShowEntry } from '@/utils/liveFeed';
-import type { LiveSessionItem } from '@/types';
+import { MAX_ENTRIES, type ShowEntry } from '@/utils/liveFeed';
+import type { LiveSessionItem, RundownControlAction } from '@/types';
 import LiveLanes from '@/components/live/LiveLanes.vue';
 import RequestDetail from '@/components/live/RequestDetail.vue';
 import RequestTimeline from '@/components/live/RequestTimeline.vue';
@@ -511,6 +500,7 @@ import { isAudienceEntry } from '@/utils/liveFeed';
 import type { RequestMessage, RequestRecord } from '@/utils/requestRecords';
 import type { TaskFact, TaskWindow } from '@/utils/liveLanes';
 import AgentMemoPanel from '@/components/live/AgentMemoPanel.vue';
+import RundownSlate from '@/components/live/RundownSlate.vue';
 import ScoreboardStrip from '@/components/live/ScoreboardStrip.vue';
 import TtsWaterLevel from '@/components/live/TtsWaterLevel.vue';
 
@@ -536,6 +526,7 @@ const watchedLabel = computed<string | null>(() => {
 
 const {
   sessions,
+  activeSessionId,
   activeExplicitSession,
   showTestModeNotice,
   sessionQuery,
@@ -674,7 +665,41 @@ const stageHint = computed<string>(() => {
     : '该场次观众看到的内容：弹幕、礼物、她的发言、游戏侧公开进展';
 });
 
-const { rundownBanner, stageChip, simulatorChip, loadSimulatorStatus } = useLiveStatus();
+const { stageChip, simulatorChip, loadSimulatorStatus } = useLiveStatus();
+
+/**
+ * 环节横幅的数据源：按场次取流程单事实——实时模式看进行中的场次，回看
+ * 模式看正在回看的那场（事件流不带场次范围，按事件取会对错场）。
+ */
+const rundownSessionId = computed<number | null>(() =>
+  sessionMode.value === 'replay'
+    ? (selectedSession.value?.live_session_id ?? null)
+    : activeSessionId.value,
+);
+
+const {
+  rows: rundownRows,
+  currentRow: rundownCurrentRow,
+  paused: rundownPaused,
+  actionLoading: rundownActionLoading,
+  performControl: performRundownControl,
+} = useRundownConsole({
+  sessionId: rundownSessionId,
+  live: computed(() => sessionMode.value === 'live'),
+});
+
+/** 无流程单时的横幅占位文案：实时与回看的说法不同 */
+const rundownIdleText = computed(() =>
+  sessionMode.value === 'replay' ? '该场次没有流程单记录' : '流程单未运行或未接入',
+);
+
+/** 横幅操作件：下一环节 / 暂停恢复 / 跳转 / 插话题都走后端控制口 */
+function onRundownControl(
+  action: RundownControlAction,
+  extra?: { segment_id?: string; payload?: { title: string; content?: string } },
+): void {
+  void performRundownControl(action, extra);
+}
 
 /** 状态条数据源：当前进行中的显式场次（无进行中场次时计分板时长显示占位） */
 const activeSessionItem = computed<LiveSessionItem | null>(
@@ -1338,82 +1363,6 @@ onMounted(() => {
   flex-direction: column;
   gap: var(--spacing-sm);
   min-height: 0;
-}
-
-/* 环节横幅（常驻，不滚动）                                       */
-.slate {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  flex-shrink: 0;
-  min-height: 48px;
-  padding: var(--spacing-sm) var(--spacing-md);
-  border: 1px solid var(--border-color-light);
-  border-left: 3px solid var(--color-rundown);
-  border-radius: var(--radius-md);
-  background: var(--color-rundown-bg);
-}
-.slate.is-idle {
-  border-left-color: var(--border-color-dark);
-  background: var(--bg-card);
-}
-
-.slate-eyebrow {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 1.6px;
-  color: var(--color-rundown);
-  flex-shrink: 0;
-}
-.slate.is-idle .slate-eyebrow {
-  color: var(--text-placeholder);
-}
-
-.slate-order {
-  font-size: 11px;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-
-.slate-label {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 40%;
-}
-
-.slate-action {
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--color-rundown);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-rundown);
-  flex-shrink: 0;
-}
-
-.slate-note {
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 28%;
-}
-
-.slate-meta {
-  font-size: 11px;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-
-.slate-idle {
-  font-size: 13px;
-  color: var(--text-placeholder);
 }
 
 /* 测试模式提示：单行小字，不占用时间线空间 */

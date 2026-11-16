@@ -1,8 +1,11 @@
 /**
- * 顶栏与环节横幅的派生徽章：决策管线阶段 chip、观众模拟器模式 chip、当前环节横幅。
+ * 顶栏派生徽章：决策管线阶段 chip、观众模拟器模式 chip。
  *
- * 前两者从 events store 只读投影（取最近一条对应事件）；观众模拟器模式不走事件流，
+ * 前者从 events store 只读投影（取最近一条对应事件）；观众模拟器模式不走事件流，
  * 挂载时拉一次状态接口（观众模拟器启停在别页操作，控制台只观测）。
+ *
+ * 环节横幅不在这儿——它按场次取数（useRundownConsole）：事件流里的
+ * rundown.changed 不带场次范围，回看别场时会对错场。
  */
 
 import { computed, ref } from 'vue';
@@ -12,45 +15,8 @@ import { simulatorApi } from '@/api';
 import { bool, isRecord, str } from '@/utils/guards';
 import { STAGE_LABEL } from '@/utils/liveFeed';
 
-interface RundownBanner {
-  order: number;
-  label: string;
-  actionLabel: string;
-  note: string;
-  startLabel: string;
-  expectedLabel: string;
-  changedAtMs: number;
-}
-
 export function useLiveStatus() {
   const { events } = storeToRefs(useEventsStore());
-
-  // 当前环节横幅：取最近一条 rundown.changed
-
-  const rundownBanner = computed<RundownBanner | null>(() => {
-    const list = events.value;
-    for (let i = list.length - 1; i >= 0; i -= 1) {
-      const event = list[i];
-      if (event.type !== 'rundown.changed') continue;
-      const data = isRecord(event.data) ? event.data : {};
-      const by = typeof data.by === 'string' ? data.by : 'agent';
-      const changedAtMs = typeof data.at_ms === 'number' ? data.at_ms : null;
-      const index = typeof data.index === 'number' ? data.index : 0;
-      const total = typeof data.total === 'number' ? data.total : 0;
-      // 流程单走完：下标到达环节总数，此时没有当前环节（事件载荷的 segment_title 为空）
-      const finished = total > 0 && index >= total;
-      return {
-        order: finished ? total : index + 1,
-        label: finished ? '流程单完成' : str(data.segment_title) || '未命名环节',
-        actionLabel: by === 'human' ? '手动切换' : by === 'system' ? '系统切换' : 'Agent 切换',
-        note: '',
-        startLabel: '',
-        expectedLabel: '',
-        changedAtMs: changedAtMs ?? event.timestamp_ms,
-      };
-    }
-    return null;
-  });
 
   // 顶栏徽章：决策管线阶段 + 观众模拟器模式
 
@@ -94,5 +60,5 @@ export function useLiveStatus() {
     }
   }
 
-  return { rundownBanner, stageChip, simulatorChip, loadSimulatorStatus };
+  return { stageChip, simulatorChip, loadSimulatorStatus };
 }

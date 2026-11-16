@@ -1,7 +1,6 @@
-// useLiveStatus.ts 顶栏与环节横幅派生徽章的测试
+// useLiveStatus.ts 顶栏派生徽章的测试
 //
-// 覆盖：rundown.changed → 环节横幅（序号/标签/切换方/时刻回退）、
-// streamer.stage → 阶段 chip、观众模拟器状态拉的标签与点亮矩阵、接口失败静默。
+// 覆盖：streamer.stage → 阶段 chip、观众模拟器状态拉的标签与点亮矩阵、接口失败静默。
 
 import { effectScope, type EffectScope } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
@@ -59,62 +58,9 @@ describe('useLiveStatus', () => {
     return scope.run(() => useLiveStatus())!;
   }
 
-  it('无相关事件时横幅与阶段 chip 均为空', () => {
-    const { rundownBanner, stageChip } = mount();
-    expect(rundownBanner.value).toBeNull();
+  it('无相关事件时阶段 chip 为空', () => {
+    const { stageChip } = mount();
     expect(stageChip.value).toBeNull();
-  });
-
-  it('rundown.changed：取最近一条，序号 = index+1，切换方映射标签', () => {
-    const { rundownBanner } = mount();
-    const store = useEventsStore();
-    store.events = [
-      event('1', 'rundown.changed', 1000, {
-        index: 0,
-        total: 3,
-        segment_title: '开场',
-        by: 'agent',
-      }),
-      event('2', 'rundown.changed', 2000, {
-        index: 1,
-        total: 3,
-        segment_title: '唱歌',
-        by: 'human',
-      }),
-    ];
-    expect(rundownBanner.value).toMatchObject({
-      order: 2,
-      label: '唱歌',
-      actionLabel: '手动切换',
-      changedAtMs: 2000,
-    });
-  });
-
-  it('rundown.changed：缺省回退——at_ms 缺失用信封时刻、无标题用"未命名环节"', () => {
-    const { rundownBanner } = mount();
-    const store = useEventsStore();
-    store.events = [event('1', 'rundown.changed', 5000, { index: 2 })];
-    expect(rundownBanner.value).toMatchObject({
-      order: 3,
-      label: '未命名环节',
-      actionLabel: 'Agent 切换',
-      changedAtMs: 5000,
-    });
-  });
-
-  it('rundown.changed：流程单走完（index 达到 total）时显示"流程单完成"', () => {
-    const { rundownBanner } = mount();
-    const store = useEventsStore();
-    store.events = [
-      event('1', 'rundown.changed', 1000, { index: 3, total: 4, segment_title: '收尾' }),
-      event('2', 'rundown.changed', 2000, { index: 4, total: 4, segment_title: '' }),
-    ];
-    expect(rundownBanner.value).toMatchObject({
-      order: 4,
-      label: '流程单完成',
-      actionLabel: 'Agent 切换',
-      changedAtMs: 2000,
-    });
   });
 
   it('streamer.stage：未知阶段透传原文，running 随 agent_state', () => {

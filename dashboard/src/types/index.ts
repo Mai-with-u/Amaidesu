@@ -859,6 +859,10 @@ export interface RundownCurrentSegment {
   expected_ms: number;
   elapsed_ms: number;
   remaining_ms: number;
+  /** 说话模式：play 边玩边说 / talk 杂谈（空 = 按游戏在线状态自动判定） */
+  mode?: string | null;
+  /** 本环节要聊的提纲要点（主播按点推进） */
+  beats?: string[];
 }
 
 /** 流程单环节完整定义（`/api/v1/rundown/state` 的 `segments` 字段）。 */
@@ -1123,6 +1127,25 @@ export interface RundownSegmentRun {
   /** 进入时该环节的预计时长 */
   expected_ms: number | null;
   pause_ms: number;
+  /** 本段内发生过几次暂停 */
+  pause_count: number;
+  /** 进入本段的触发方（agent/human/system） */
+  by: string;
+  /** 进入本段的变更动作（begin/next/goto/append/load/restore…） */
+  action: string;
+}
+
+/** 流程单计划环节（该场实例快照里的环节全量，含尚未到达的） */
+export interface RundownPlannedSegment {
+  seq: number;
+  seg_id: string;
+  title: string;
+  task_description: string;
+  expected_ms: number;
+  min_duration_ms: number | null;
+  notes: string | null;
+  mode: string | null;
+  beats: string[];
 }
 
 /** 单场流程单执行回看（GET /api/v1/live-sessions/{id}/rundown-execution） */
@@ -1130,6 +1153,8 @@ export interface SessionRundownExecutionResponse {
   live_session_id: number;
   rundown_id: string;
   segments: RundownSegmentRun[];
+  /** 还没走到的计划环节（来自该场实例快照） */
+  planned_segments: RundownPlannedSegment[];
   pause_total_ms: number;
   transitions_count: number;
 }
