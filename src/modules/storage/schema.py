@@ -46,7 +46,7 @@
   物理同库无隔离机制，且"免检"是伪豁免）
 
 ## Schema 迁移机制
-- ``schema_migrations(version PK, applied_at_ms)``
+- ``schema_migrations(version PK, applied_at_ms, content_hash)``
 - ``SCHEMA_VERSION`` 常量 = 当前权威版本
 - 版本迁移注册表在 ``migrations/`` 包（一版本一文件，严格 +1，每版必有
   条目）。``SQLiteDatabase`` 推进版本时从注册表按序执行；回调原地修改、幂等，
@@ -64,7 +64,7 @@ from __future__ import annotations
 from typing import List
 
 # 当前 Schema 版本——改动表结构时必须同步升级
-SCHEMA_VERSION: int = 45
+SCHEMA_VERSION: int = 46
 
 
 # =============================================================================
@@ -1239,7 +1239,8 @@ CREATE INDEX IF NOT EXISTS idx_clip_segments_session ON clip_segments(live_sessi
 _SCHEMA_MIGRATIONS_SQL = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version        INTEGER PRIMARY KEY,
-    applied_at_ms  INTEGER NOT NULL
+    applied_at_ms  INTEGER NOT NULL,
+    content_hash   TEXT
 );
 """.strip()
 

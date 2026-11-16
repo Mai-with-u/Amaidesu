@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
+from pathlib import Path
 
 
 def table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -17,4 +19,9 @@ def column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return any(row[1] == column for row in rows)
 
 
-__all__ = ["table_exists", "column_exists"]
+def compute_content_hash(path: Path) -> str:
+    """计算迁移脚本文件的内容指纹（sha256 十六进制），供迁移账本比对。"""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+__all__ = ["table_exists", "column_exists", "compute_content_hash"]

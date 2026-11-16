@@ -31,7 +31,8 @@ from typing import Any, Callable, List, Optional
 from src.modules.logging import get_logger
 from src.modules.storage.connection import SQLiteConnectionManager
 from src.modules.storage.run_in_executor import run_in_executor
-from src.modules.storage.migrations import SCHEMA_MIGRATIONS
+from src.modules.storage.migrations import SCHEMA_MIGRATION_FILES, SCHEMA_MIGRATIONS
+from src.modules.storage.migrations._common import compute_content_hash
 from src.modules.storage.repos import (
     ArchiveRepo,
     ChatRepo,
@@ -70,6 +71,14 @@ logger = get_logger("SQLiteDatabase")
 
 class SchemaVersionDowngradeError(RuntimeError):
     """数据库 schema 版本高于当前代码（这份库来自更新的程序）。"""
+
+
+class SchemaMigrationTamperedError(RuntimeError):
+    """迁移账本与迁移注册表不一致：已执行版本的脚本内容与账本指纹对不上，或版本已不在注册表内。
+
+    迁移机制隐含契约"同一版本号内容不可变"：版本号一经执行记录就不再重跑，
+    脚本事后被改动不会重放，差异会静默留在库里。
+    """
 
 
 # =============================================================================
@@ -318,6 +327,9 @@ class SQLiteDatabase:
 
     def _apply_schema_blocking(self) -> None:
         """同步执行 schema 应用；由 ``initialize()`` 在 executor 内调度。"""
+        # 账本校验在 DDL 之前：库停在可疑状态时不继续改库
+        self._validate_migration_ledger_blocking()
+
         # 升版前先快照旧库（备份失败只告警，不阻塞迁移）
         pre_version = self._peek_pre_migration_version_blocking()
         if pre_version is not None:
@@ -337,10 +349,7 @@ class SQLiteDatabase:
                     migration = SCHEMA_MIGRATIONS.get(version)
                     if migration is not None:
                         migration(conn)
-                    conn.execute(
-                        "INSERT OR IGNORE INTO schema_migrations(version, applied_at_ms) VALUES (?, ?)",
-                        (version, int(time.time() * 1000)),
-                    )
+                    self._record_migration_blocking(conn, version)
                 logger.info(f"SQLiteDatabase schema 已应用: version={SCHEMA_VERSION}（前版本={current_version}）")
             elif current_version > SCHEMA_VERSION:
                 raise SchemaVersionDowngradeError(
@@ -350,6 +359,70 @@ class SQLiteDatabase:
                 )
             else:
                 logger.debug(f"SQLiteDatabase schema 已是当前版本: {SCHEMA_VERSION}")
+
+    def _validate_migration_ledger_blocking(self) -> None:
+        """DDL 前校验迁移账本：已记录版本的脚本指纹与当前文件比对，不一致即硬错。
+
+        账本指纹为空的记录（v46 回填前的老账本）视为"指纹未知"放行，由本轮迁移的
+        回填迁移补齐；高于 ``SCHEMA_VERSION`` 的记录交给降版检查处理，此处跳过。
+        """
+        if not self._db_path.exists():
+            return
+        try:
+            conn = sqlite3.connect(str(self._db_path))
+            try:
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if "schema_migrations" not in tables:
+                    return
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(schema_migrations)")}
+                if "content_hash" in columns:
+                    rows = conn.execute("SELECT version, content_hash FROM schema_migrations").fetchall()
+                else:
+                    rows = [(row[0], None) for row in conn.execute("SELECT version FROM schema_migrations")]
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            logger.warning(f"读取迁移账本失败（跳过指纹校验）: {exc}")
+            return
+
+        for version_raw, stored_hash in rows:
+            version = int(version_raw)
+            if version > SCHEMA_VERSION:
+                continue
+            if version not in SCHEMA_MIGRATIONS:
+                raise SchemaMigrationTamperedError(
+                    f"迁移账本中记录了版本 {version}，但当前代码的迁移注册表里没有这个版本的迁移脚本。"
+                    f"这通常意味着脚本文件被删除或版本号被改动，账本与代码已对不上。"
+                    f"请恢复该版本对应的迁移脚本，或用升级前备份恢复数据库。"
+                )
+            if stored_hash is None:
+                continue
+            current_hash = compute_content_hash(SCHEMA_MIGRATION_FILES[version])
+            if current_hash != stored_hash:
+                raise SchemaMigrationTamperedError(
+                    f"迁移版本 {version} 的脚本在执行后被改动过：账本记录的指纹与当前脚本文件不一致。"
+                    f"已执行过的迁移不会重跑，改动内容不会落到库里。"
+                    f"若确认改动无害，请显式更新账本中该版本的指纹；否则请回退脚本改动。"
+                )
+
+    def _record_migration_blocking(self, conn: sqlite3.Connection, version: int) -> None:
+        """写入版本记录；账本已有指纹列时一并记入当前脚本文件的内容指纹。
+
+        指纹列是否在位以 PRAGMA 为准：旧库升到 v46 之前账本还没有该列，
+        此时按两列写入，指纹由 v46 回填补齐。
+        """
+        applied_at_ms = int(time.time() * 1000)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(schema_migrations)")}
+        if "content_hash" in columns:
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at_ms, content_hash) VALUES (?, ?, ?)",
+                (version, applied_at_ms, compute_content_hash(SCHEMA_MIGRATION_FILES[version])),
+            )
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at_ms) VALUES (?, ?)",
+                (version, applied_at_ms),
+            )
 
     def _peek_pre_migration_version_blocking(self) -> Optional[int]:
         """DDL 前探测旧库版本；返回 ``None`` 表示无需备份（全新库或已是最新版本）。"""

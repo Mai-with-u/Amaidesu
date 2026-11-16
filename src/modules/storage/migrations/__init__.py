@@ -9,6 +9,9 @@
   条目为显式 no-op 并注明该版本改了什么。
 - **一版本一文件**：文件名 ``<版本>_<语义>.py``，每文件导出
   ``migrate(conn)``（原地修改、幂等）。
+- **内容指纹**：迁移账本记录每个已执行版本的脚本内容指纹（sha256）；
+  指纹从 ``_MIGRATION_MODULES`` 派生的 ``SCHEMA_MIGRATION_FILES`` 解析脚本
+  文件路径后按文件内容计算，启动时与账本比对（见 ``database.py``）。
 - 新建库的 DDL 已是最新形态；回调只需保证对旧库升级与重复执行安全
   （列存在性检查 / IF NOT EXISTS / IF EXISTS）。
 """
@@ -16,6 +19,8 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
+from types import ModuleType
 from typing import Callable, Dict
 
 from src.modules.storage.migrations import (
@@ -64,54 +69,67 @@ from src.modules.storage.migrations import (
     v43_archive_highlights,
     v44_session_notes_and_overview,
     v45_session_overview_backfill,
+    v46_migration_ledger_content_hash,
 )
 
-SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
-    1: v1_initial_schema.migrate,
-    2: v2_sim_runtime_tables.migrate,
-    3: v3_memory_private_tables.migrate,
-    4: v4_session_semantics.migrate,
-    5: v5_event_llm_history_tables.migrate,
-    6: v6_rundowns_replace_agenda.migrate,
-    7: v7_drop_profiles_table.migrate,
-    8: v8_llm_request_link.migrate,
-    9: v9_drop_event_history_table.migrate,
-    10: v10_payment_details_platform_identity.migrate,
-    11: v11_drop_simulator_context_window.migrate,
-    12: v12_llm_observation_and_profile_rename.migrate,
-    13: v13_llm_context_breakdown.migrate,
-    14: v14_llm_request_preview_column.migrate,
-    15: v15_session_recaps_drop_viewer_facts.migrate,
-    16: v16_llm_request_image_count.migrate,
-    17: v17_rundown_rows_and_column_cleanup.migrate,
-    18: v18_viewer_identity_mapping.migrate,
-    19: v19_live_session_kind.migrate,
-    20: v20_session_recap_settlement.migrate,
-    21: v21_live_session_notebook.migrate,
-    22: v22_game_creatures.migrate,
-    23: v23_privacy_and_speech_delivery.migrate,
-    24: v24_memory_ledger.migrate,
-    25: v25_drop_legacy_memory.migrate,
-    26: v26_game_save_columns.migrate,
-    27: v27_rolling_archive.migrate,
-    28: v28_archive_snapshots.migrate,
-    29: v29_memory_index.migrate,
-    30: v30_memory_review.migrate,
-    31: v31_viewer_candidates.migrate,
-    32: v32_game_players.migrate,
-    33: v33_memory_edit_candidate.migrate,
-    34: v34_viewer_candidate_word.migrate,
-    35: v35_game_event_initiator.migrate,
-    36: v36_delegation_own_words.migrate,
-    37: v37_clip_segments.migrate,
-    38: v38_game_social_facts.migrate,
-    39: v39_memory_zones_lifecycle.migrate,
-    40: v40_game_work_docs.migrate,
-    41: v41_rundown_segment_mode_and_beats.migrate,
-    42: v42_talk_cards.migrate,
-    43: v43_archive_highlights.migrate,
-    44: v44_session_notes_and_overview.migrate,
-    45: v45_session_overview_backfill.migrate,
+_MIGRATION_MODULES: Dict[int, ModuleType] = {
+    1: v1_initial_schema,
+    2: v2_sim_runtime_tables,
+    3: v3_memory_private_tables,
+    4: v4_session_semantics,
+    5: v5_event_llm_history_tables,
+    6: v6_rundowns_replace_agenda,
+    7: v7_drop_profiles_table,
+    8: v8_llm_request_link,
+    9: v9_drop_event_history_table,
+    10: v10_payment_details_platform_identity,
+    11: v11_drop_simulator_context_window,
+    12: v12_llm_observation_and_profile_rename,
+    13: v13_llm_context_breakdown,
+    14: v14_llm_request_preview_column,
+    15: v15_session_recaps_drop_viewer_facts,
+    16: v16_llm_request_image_count,
+    17: v17_rundown_rows_and_column_cleanup,
+    18: v18_viewer_identity_mapping,
+    19: v19_live_session_kind,
+    20: v20_session_recap_settlement,
+    21: v21_live_session_notebook,
+    22: v22_game_creatures,
+    23: v23_privacy_and_speech_delivery,
+    24: v24_memory_ledger,
+    25: v25_drop_legacy_memory,
+    26: v26_game_save_columns,
+    27: v27_rolling_archive,
+    28: v28_archive_snapshots,
+    29: v29_memory_index,
+    30: v30_memory_review,
+    31: v31_viewer_candidates,
+    32: v32_game_players,
+    33: v33_memory_edit_candidate,
+    34: v34_viewer_candidate_word,
+    35: v35_game_event_initiator,
+    36: v36_delegation_own_words,
+    37: v37_clip_segments,
+    38: v38_game_social_facts,
+    39: v39_memory_zones_lifecycle,
+    40: v40_game_work_docs,
+    41: v41_rundown_segment_mode_and_beats,
+    42: v42_talk_cards,
+    43: v43_archive_highlights,
+    44: v44_session_notes_and_overview,
+    45: v45_session_overview_backfill,
+    46: v46_migration_ledger_content_hash,
 }
 
-__all__ = ["SCHEMA_MIGRATIONS"]
+
+# 回调表与脚本文件路径表都从模块表派生：版本号只登记一次
+SCHEMA_MIGRATIONS: Dict[int, Callable[[sqlite3.Connection], None]] = {
+    version: module.migrate for version, module in _MIGRATION_MODULES.items()
+}
+
+# 版本号 → 迁移脚本文件路径（内容指纹的取材来源；模块加载时 __file__ 已解析）
+SCHEMA_MIGRATION_FILES: Dict[int, Path] = {
+    version: Path(str(module.__file__)) for version, module in _MIGRATION_MODULES.items()
+}
+
+__all__ = ["SCHEMA_MIGRATIONS", "SCHEMA_MIGRATION_FILES"]
