@@ -786,7 +786,8 @@ async def test_glance_worth_seeing_surfaces_unopened_loot_unvisited_structures_a
     assert "前方的没开过的战利品箱子" in worth
     assert "右侧的战利品箱子矿车" in worth
     assert "左前方的洞口" in worth
-    assert "玩家甲在前方看着你、拿着铁剑" in worth
+    assert "玩家甲在前方看着你" in worth
+    assert "拿着铁剑" not in worth
     assert "树林" not in worth and "峡谷" not in worth and "木桶" not in worth
 
     # 次一级候选：没有 natural_loot 时，whose=no_record 且没开过的容器顶上；什么都没有时不写 worth_seeing
@@ -807,3 +808,52 @@ async def test_glance_worth_seeing_surfaces_unopened_loot_unvisited_structures_a
     assert glance_worth_seeing(no_record_reply) == "值得去看的：北面的没开过的无主木桶"
     assert glance_worth_seeing(MaicraftReply(ok=True, data={"facilities": [], "entities": []})) is None
     await agent.stop()
+
+
+@pytest.mark.parametrize(
+    ("entity", "expected"),
+    [
+        # 近处仅静态拿着工具或空手站立：常态手持不进 worth_seeing
+        (
+            {
+                "type": "minecraft:player",
+                "name": "玩家甲",
+                "direction": "前方",
+                "distance": 6,
+                "traits": {"手持物": "minecraft:iron_pickaxe"},
+            },
+            None,
+        ),
+        (
+            {"type": "minecraft:player", "name": "玩家甲", "direction": "前方", "distance": 6, "traits": {}},
+            None,
+        ),
+        # 超出 NEARBY_BLOCKS（24 格）的玩家：即便有姿态或手持物也绝不进 worth_seeing
+        (
+            {
+                "type": "minecraft:player",
+                "name": "玩家乙",
+                "direction": "右侧",
+                "distance": 30,
+                "traits": {"蹲着": "是", "看着你": "是", "手持物": "minecraft:diamond"},
+            },
+            None,
+        ),
+        # 近处存在真实互动姿态：只保留互动姿态，不带静态手持物
+        (
+            {
+                "type": "minecraft:player",
+                "name": "玩家丙",
+                "direction": "左侧",
+                "distance": 8,
+                "traits": {"蹲着": "是", "看着你": "是", "手持物": "minecraft:bread"},
+            },
+            "值得去看的：玩家丙在左侧蹲着、看着你",
+        ),
+    ],
+    ids=["nearby_static_held_ignored", "nearby_idle_ignored", "beyond_nearby_ignored", "nearby_interactive_pose_kept"],
+)
+def test_worth_seeing_filters_distant_and_static_held_players(entity: dict[str, object], expected: str | None) -> None:
+    """worth_seeing 只收录近处带真实互动姿态的玩家，排除超距玩家与常态静态手持物。"""
+    reply = MaicraftReply(ok=True, data={"entities": [entity]})
+    assert glance_worth_seeing(reply) == expected

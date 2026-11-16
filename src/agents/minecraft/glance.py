@@ -581,27 +581,26 @@ def _near_remembered_place(
 
 
 def _player_activity_note(entity: Dict[str, Any]) -> Optional[str]:
-    """从在场玩家条目提取正在做的事（拿什么、看没看着角色、蹲没蹲着，或就在身边）；远处无动作特征的不单列。"""
+    """从近处在场玩家条目提取真实互动姿态（蹲着、看着你）；超距玩家与仅静态手持物品的常态站立不单列。"""
     name = str(entity.get("name") or "").strip()
     if not name:
         return None
-    traits = entity.get("traits") if isinstance(entity.get("traits"), dict) else {}
     distance = entity.get("distance")
     in_nearby = isinstance(distance, (int, float)) and not isinstance(distance, bool) and distance <= NEARBY_BLOCKS
+    # 超出“身边”范围的玩家不进值得去看的动向候选，避免远处玩家刷进每轮提示词底部
+    if not in_nearby:
+        return None
+    traits = entity.get("traits") if isinstance(entity.get("traits"), dict) else {}
+    # 常规位置与静态手持物已在周边实体列表呈现，这里只提取真实的互动姿态特征
     actions: List[str] = []
     if traits.get("蹲着") == "是":
         actions.append("蹲着")
     if traits.get("看着你") == "是":
         actions.append("看着你")
-    held = str(traits.get("手持物") or "").strip()
-    if held:
-        actions.append(f"拿着{_item_label(held)}")
-    if not actions and not in_nearby:
+    if not actions:
         return None
     where = f"在{entity['direction']}" if entity.get("direction") else "在身边"
-    if actions:
-        return f"{name}{where}{'、'.join(actions)}"
-    return f"{name}{where}"
+    return f"{name}{where}{'、'.join(actions)}"
 
 
 def glance_worth_seeing(

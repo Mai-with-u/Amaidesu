@@ -53,3 +53,11 @@ def test_spoken_line_tells_the_streamer_it_is_play_not_an_attack() -> None:
 
 def test_spoken_line_without_the_mod_message_still_has_something_to_say() -> None:
     assert spoken_line("").startswith("有玩家冲我比划了几下。")
+
+
+def test_spoken_line_distinguishes_holding_gesture_from_throwing_gift() -> None:
+    """手持物品挥动/展示与把物品扔到身边在口径上明确区分，避免把拿东西比划误导成送礼致谢。"""
+    line = spoken_line("玩家 玩家甲（e4）看着你拿出面包，对着你挥了 2 下；他在你前方 3 格")
+    assert line.startswith("玩家 玩家甲看着我拿出面包，对着我挥了 2 下。")
+    assert "朝我扔过来落在身边" in line
+    assert "拿着东西比划或展示" in line and "不算送礼" in line
