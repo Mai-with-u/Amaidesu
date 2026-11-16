@@ -31,6 +31,7 @@ from src.modules.dashboard.dependencies import get_dashboard_server, server_comp
 from src.modules.dashboard.schemas.session import (
     ComponentPlanItem,
     ComponentPlanReport,
+    RundownPlannedSegment,
     SessionActionResponse,
     SessionItem,
     SessionKindRequest,
@@ -84,6 +85,34 @@ async def _fetch_session_row(server: "DashboardServer", session_id: int) -> Live
     if row is None:
         raise HTTPException(status_code=404, detail=f"场次不存在: {session_id}")
     return row
+
+
+async def _planned_segments_of(server: "DashboardServer", session_id: int) -> List[RundownPlannedSegment]:
+    """该场次的计划环节全量（含尚未到达的）——取实例快照。
+
+    实例快照是一场直播一份的环节全量，模板后来被改写也不回溯影响该场口径；
+    仓储未装配或该场没有实例行时返回空列表（不影响执行视图本身）。
+    """
+    repo = server.rundown_instance_repo
+    if repo is None:
+        return []
+    instance = await repo.get_by_session(session_id)
+    if instance is None:
+        return []
+    return [
+        RundownPlannedSegment(
+            seq=seg.seq,
+            seg_id=seg.seg_id,
+            title=seg.title,
+            task_description=seg.task_description,
+            expected_ms=seg.expected_ms,
+            min_duration_ms=seg.min_duration_ms,
+            notes=seg.notes,
+            mode=seg.mode,
+            beats=list(seg.beats),
+        )
+        for seg in instance.segments
+    ]
 
 
 def _row_to_item(row: LiveSessionListItem, active_pk: Optional[int]) -> SessionItem:
@@ -416,13 +445,23 @@ async def session_rundown_execution(
     server: ServerDep,
     manager: SessionManagerDep,  # noqa: B008
 ) -> SessionRundownExecutionResponse:
-    """单场流程单执行回看：变更事实行重放为"各环节实际停留 vs 预计时长"。"""
+    """单场流程单执行回看：变更事实行重放为"各环节实际停留 vs 预计时长"。
+
+    附上该场实例快照里的计划环节全量（含尚未到达的），执行视图与计划列表
+    合起来才是这场直播的完整流程单。
+    """
     repo = server.rundown_transition_repo
     if repo is None:
         raise HTTPException(status_code=503, detail="RundownTransitionRepo 未装配")
     row = await _fetch_session_row(server, session_id)
     transitions = await repo.list_by_session(session_id)
-    return build_rundown_execution(session_id, transitions, ended_at_ms=row.ended_at_ms)
+    planned = await _planned_segments_of(server, session_id)
+    return build_rundown_execution(
+        session_id,
+        transitions,
+        ended_at_ms=row.ended_at_ms,
+        planned_segments=planned,
+    )
 
 
 @router.delete("/{session_id}", response_model=SessionActionResponse)

@@ -450,6 +450,7 @@ async def rundown_client(api, event_bus, session_manager, store):
         session_manager=session_manager,
         session_repo=store.sessions,
         rundown_transition_repo=store.rundown_transitions,
+        rundown_instance_repo=store.rundown_instances,
     )
 
 
@@ -486,6 +487,45 @@ async def test_rundown_execution_endpoint(rundown_client, store) -> None:
     body = (await rundown_client.get(f"/api/v1/live-sessions/{pk}/rundown-execution")).json()
     assert body["live_session_id"] == pk and body["rundown_id"] == "rd-1"
     assert [(s["seg_id"], s["dwell_ms"]) for s in body["segments"]] == [("s1", 300_000), ("s2", 300_000)]
+    # 每段带"谁切的/什么动作进的"
+    assert [(s["by"], s["action"]) for s in body["segments"]] == [("agent", "load"), ("agent", "next")]
     assert body["transitions_count"] == 3
     # 未装配事实仓储 → 503；不存在的场次 → 404
     assert (await rundown_client.get("/api/v1/live-sessions/99999/rundown-execution")).status_code == 404
+
+
+async def test_rundown_execution_includes_planned_segments(rundown_client, store) -> None:
+    """实例快照里的计划环节（含未到达的）随执行视图一并返回。"""
+    from src.modules.storage.models.rundown import RundownInstance, RundownInstanceSegment
+
+    pk = await store.sessions.insert_live_session(started_at_ms=BASE, title="计划环节场")
+    await store.sessions.close_live_session(live_session_id=pk, ended_at_ms=BASE + 60_000)
+    await store.rundown_instances.upsert(
+        RundownInstance(
+            live_session_id=pk,
+            template_id="rd-1",
+            seg_index=0,
+            segment_started_at_ms=BASE,
+            rundown_started_at_ms=BASE,
+            updated_at_ms=BASE,
+            segments=[
+                RundownInstanceSegment(
+                    seq=0,
+                    seg_id="s1",
+                    title="开场",
+                    task_description="交代目标",
+                    expected_ms=300_000,
+                    beats=["说清今天的玩法"],
+                ),
+                RundownInstanceSegment(seq=1, seg_id="s2", title="正题", expected_ms=900_000),
+            ],
+        )
+    )
+
+    body = (await rundown_client.get(f"/api/v1/live-sessions/{pk}/rundown-execution")).json()
+    assert [(p["seg_id"], p["title"], p["expected_ms"]) for p in body["planned_segments"]] == [
+        ("s1", "开场", 300_000),
+        ("s2", "正题", 900_000),
+    ]
+    assert body["planned_segments"][0]["beats"] == ["说清今天的玩法"]
+    assert body["planned_segments"][0]["task_description"] == "交代目标"

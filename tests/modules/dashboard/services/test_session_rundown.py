@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from src.modules.dashboard.schemas.session import RundownPlannedSegment
 from src.modules.dashboard.services.session_rundown import build_rundown_execution
 from src.modules.storage.models.rundown import RundownTransition
 
@@ -19,6 +20,7 @@ def _t(
     seg_index: int = 0,
     expected_ms: int | None = None,
     rundown_id: str = "rd-1",
+    by: str = "agent",
 ) -> RundownTransition:
     return RundownTransition(
         live_session_id=1,
@@ -27,7 +29,7 @@ def _t(
         seg_id=seg_id,
         seg_title=seg_title,
         seg_index=seg_index,
-        by="agent",
+        by=by,
         at_ms=at,
         expected_ms=expected_ms,
         updated_at_ms=at,
@@ -103,3 +105,44 @@ def test_ongoing_session_tail_left_open() -> None:
 def test_empty_transitions() -> None:
     body = build_rundown_execution(7, [], ended_at_ms=END)
     assert (body.live_session_id, body.segments, body.transitions_count) == (7, [], 0)
+
+
+def test_segment_run_carries_who_switched_and_pause_count() -> None:
+    """每段带"谁切的/什么动作进的"，暂停次数单列。"""
+    transitions = [
+        _t(1, "load", BASE + 0, seg_id="s1", seg_title="开场", seg_index=0, expected_ms=600_000, by="system"),
+        _t(2, "pause", BASE + 100_000, seg_id="s1", seg_index=0, expected_ms=600_000),
+        _t(3, "resume", BASE + 160_000, seg_id="s1", seg_index=0, expected_ms=600_000),
+        _t(4, "pause", BASE + 200_000, seg_id="s1", seg_index=0, expected_ms=600_000),
+        _t(5, "resume", BASE + 240_000, seg_id="s1", seg_index=0, expected_ms=600_000),
+        _t(6, "next", BASE + 300_000, seg_id="s2", seg_title="正题", seg_index=1, expected_ms=1_800_000, by="human"),
+    ]
+    body = build_rundown_execution(1, transitions, ended_at_ms=BASE + 400_000)
+
+    assert [(s.by, s.action) for s in body.segments] == [("system", "load"), ("human", "next")]
+    assert body.segments[0].pause_count == 2
+    assert body.segments[1].pause_count == 0
+
+
+def test_planned_segments_pass_through() -> None:
+    """计划环节全量（含未到达的）原样带回，与执行视图并列。"""
+    planned = [
+        RundownPlannedSegment(seq=0, seg_id="s1", title="开场", expected_ms=600_000),
+        RundownPlannedSegment(seq=1, seg_id="s2", title="正题", expected_ms=1_800_000),
+    ]
+    body = build_rundown_execution(
+        1,
+        [_t(1, "load", BASE + 0, seg_id="s1", seg_index=0, expected_ms=600_000)],
+        ended_at_ms=None,
+        planned_segments=planned,
+    )
+
+    assert [(p.seq, p.seg_id, p.title) for p in body.planned_segments] == [
+        (0, "s1", "开场"),
+        (1, "s2", "正题"),
+    ]
+
+
+def test_planned_segments_default_empty() -> None:
+    body = build_rundown_execution(1, [], ended_at_ms=END)
+    assert body.planned_segments == []

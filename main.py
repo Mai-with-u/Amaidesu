@@ -1004,6 +1004,8 @@ async def create_app_components(
             embedding_setup=embedding_setup,
             # 主播记忆页查看与编辑长期记忆文件（MEMORY.md）
             rundown_transition_repo=database.rundown_transitions,
+            # 流程单执行视图补"还没走到"的计划环节（该场实例快照）
+            rundown_instance_repo=database.rundown_instances,
             # 编排页提问箱：运营塞的话题卡，主播杂谈冷场时抽来开话头
             talk_card_repo=database.talk_cards,
             # 观众域查询接口：列表 / 档案 / 对话 / 贡献聚合直查存储层
@@ -1367,6 +1369,7 @@ async def _start_dashboard(
     game_player_repo=None,
     embedding_setup=None,
     rundown_transition_repo=None,
+    rundown_instance_repo=None,
     talk_card_repo=None,
     storage_db_path=None,
     task_tracker=None,
@@ -1457,6 +1460,7 @@ async def _start_dashboard(
             embedding_setup=embedding_setup,
             # 流程单执行面板读变更事实行
             rundown_transition_repo=rundown_transition_repo,
+            rundown_instance_repo=rundown_instance_repo,
             talk_card_repo=talk_card_repo,
             storage_db_path=storage_db_path,
             # 任务跟踪器：任务卡快照（GET /api/v1/tasks）与运营委派的数据源（共享同一个 DelegationCore）

@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 from src.modules.dashboard.schemas.session import (
+    RundownPlannedSegment,
     RundownSegmentRun,
     SessionRundownExecutionResponse,
 )
@@ -35,8 +36,13 @@ def build_rundown_execution(
     transitions: List[RundownTransition],
     *,
     ended_at_ms: Optional[int] = None,
+    planned_segments: Optional[List[RundownPlannedSegment]] = None,
 ) -> SessionRundownExecutionResponse:
-    """事实行列表 → 执行视图（``transitions`` 须按 ``at_ms`` 升序）。"""
+    """事实行列表 → 执行视图（``transitions`` 须按 ``at_ms`` 升序）。
+
+    ``planned_segments`` 是该场实例快照里的环节全量（含尚未到达的），原样
+    带回响应——执行视图只覆盖"走过的"，两者合起来才是完整流程单。
+    """
     runs: List[RundownSegmentRun] = []
     current: Optional[RundownSegmentRun] = None
     pause_started: Optional[int] = None
@@ -51,6 +57,7 @@ def build_rundown_execution(
         if t.action == "pause":
             if current is not None and pause_started is None:
                 pause_started = t.at_ms
+                current.pause_count += 1
             continue
         if t.action == "resume":
             if current is not None and pause_started is not None:
@@ -74,6 +81,8 @@ def build_rundown_execution(
             seg_index=t.seg_index,
             entered_at_ms=t.at_ms,
             expected_ms=expected_by_seg.get(t.seg_id),
+            by=t.by,
+            action=t.action,
         )
         runs.append(current)
 
@@ -88,6 +97,7 @@ def build_rundown_execution(
         live_session_id=live_session_id,
         rundown_id=rundown_id,
         segments=runs,
+        planned_segments=list(planned_segments or []),
         pause_total_ms=sum(r.pause_ms for r in runs),
         transitions_count=len(transitions),
     )

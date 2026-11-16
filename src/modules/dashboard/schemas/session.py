@@ -241,17 +241,43 @@ class RundownSegmentRun(BaseModel):
     expected_ms: Optional[int] = None
     """进入时该环节的预计时长（变更事实行自带，模板改写后以最新一次为准）。"""
     pause_ms: int = 0
+    pause_count: int = 0
+    """本段内发生过几次暂停（resume 次数）。"""
+    by: str = ""
+    """进入本段的触发方（agent/human/system）。"""
+    action: str = ""
+    """进入本段的变更动作（begin/next/goto/append/load/restore…）。"""
+
+
+class RundownPlannedSegment(BaseModel):
+    """流程单计划环节（该场次实例快照里的环节全量，含尚未到达的）。
+
+    来源是 rundown_instances 的实例快照——一场直播一份，模板后来被改写
+    也不回溯影响该场当时的口径。
+    """
+
+    seq: int = 0
+    seg_id: str
+    title: str = ""
+    task_description: str = ""
+    expected_ms: int = 0
+    min_duration_ms: Optional[int] = None
+    notes: Optional[str] = None
+    mode: Optional[str] = None
+    beats: List[str] = Field(default_factory=list)
 
 
 class SessionRundownExecutionResponse(BaseModel):
     """单场流程单执行回看（``GET /live-sessions/{id}/rundown-execution``）。
 
     把 rundown_transitions 事实行重放为"各环节实际停留 vs 预计时长"的
-    结构化视图；无任何变更事实的场次 segments 为空。
+    结构化视图；无任何变更事实的场次 segments 为空。``planned_segments``
+    补上"还没走到"的环节（来自该场实例快照），两者合起来才是完整流程单。
     """
 
     live_session_id: int
     rundown_id: str = ""
     segments: List[RundownSegmentRun] = Field(default_factory=list)
+    planned_segments: List[RundownPlannedSegment] = Field(default_factory=list)
     pause_total_ms: int = 0
     transitions_count: int = 0
