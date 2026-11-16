@@ -1142,8 +1142,10 @@ async function restoreReplayFromQuery(): Promise<void> {
   if (!Number.isFinite(sid) || sid <= 0) return;
   const target = sessions.value.find(item => item.live_session_id === sid && !item.is_active);
   if (!target) return;
-  await startReplay(target);
+  // 游标时刻必须在 await 之前取：startReplay 载入归档期间，URL 回写钩子见游标
+  // 时刻为空会把 rpt 从地址栏删掉，等 await 返回再读就读不到了
   const ts = Number(route.query[REPLAY_QUERY_CURSOR]);
+  await startReplay(target);
   if (Number.isFinite(ts) && ts > 0) replayJumpToTime(ts);
 }
 
