@@ -38,7 +38,9 @@ _NOT_PLACE_EVENT = "event_type NOT IN (" + ", ".join(f"'{event_type}'" for event
 # cancelled 等任务账本终态）/ delegation_interrupted（重启前没了结、续播时认领成被打断）
 DELEGATION_EVENT_PREFIX = "delegation_"
 DELEGATION_ACCEPTED = f"{DELEGATION_EVENT_PREFIX}accepted"
+DELEGATION_QUEUED = f"{DELEGATION_EVENT_PREFIX}queued"
 DELEGATION_INTERRUPTED = f"{DELEGATION_EVENT_PREFIX}interrupted"
+_QUEUED_INTERRUPTED_SUMMARY = "重启前在待办排队，被打断了，还没轮到开工"
 # 按前缀认委派行：前缀是代码内常量；不用 LIKE，下划线在 LIKE 里是通配符
 _IS_DELEGATION_EVENT = f"substr(event_type, 1, {len(DELEGATION_EVENT_PREFIX)}) = '{DELEGATION_EVENT_PREFIX}'"
 # 读游戏进展、按类型计数只看真正的游戏事件：地点动静与委派账都不算
@@ -206,10 +208,12 @@ class EventRepo(BaseRepo):
                 open_ones = [
                     record
                     for record in _delegations_of(conn, live_session_id=None)
-                    if record.status == "accepted" and record.started_ms < accepted_before_ms
+                    if record.status in ("accepted", "queued") and record.started_ms < accepted_before_ms
                 ]
                 settled: List[DelegationRecord] = []
                 for record in open_ones:
+                    # 区分中断前是在做还是在待办排队，避免后续续播与回顾把没轮到开工的待办误认成当时在做
+                    summary_text = _QUEUED_INTERRUPTED_SUMMARY if record.status == "queued" else text
                     conn.execute(
                         "INSERT INTO game_events (live_session_id, game, event_type, message, scene, timestamp_ms,"
                         " save_id, save_name, initiator) VALUES (?, ?, ?, ?, ?, ?, '', '', ?)",
@@ -217,13 +221,18 @@ class EventRepo(BaseRepo):
                             record.live_session_id,
                             record.game,
                             DELEGATION_INTERRUPTED,
-                            text,
+                            summary_text,
                             record.task_id,
                             timestamp_ms,
                             record.initiator,
                         ),
                     )
-                    update = {"status": "interrupted", "summary": text, "ended_ms": int(timestamp_ms)}
+                    update = {
+                        "prior_status": record.status,
+                        "status": "interrupted",
+                        "summary": summary_text,
+                        "ended_ms": int(timestamp_ms),
+                    }
                     settled.append(record.model_copy(update=update))
                 return settled
 
@@ -348,19 +357,30 @@ def _delegations_of(conn: Any, *, live_session_id: Optional[int]) -> List[Delega
             game=str(row["game"]),
             initiator=str(row["initiator"] or ""),
         )
-        if kind == "accepted":
-            accepted = {
-                "live_session_id": int(row["live_session_id"]),
-                "instruction": str(row["message"] or ""),
-                "initiator": str(row["initiator"] or ""),
-                "started_ms": int(row["timestamp_ms"]),
+        if kind in ("accepted", "queued"):
+            # 首次受理或入队时记录场次、指令原话与起点；在 accepted 与 queued 之间流转时更新当前阶段并保留原指令
+            if record.status in ("accepted", "queued") or not (record.started_ms or record.ended_ms):
+                updates: Dict[str, Any] = {"status": kind, "prior_status": kind}
+                if not record.started_ms:
+                    updates["live_session_id"] = int(row["live_session_id"])
+                    updates["started_ms"] = int(row["timestamp_ms"])
+                msg = str(row["message"] or "")
+                if msg and not record.instruction:
+                    updates["instruction"] = msg
+                init = str(row["initiator"] or "")
+                if init and not record.initiator:
+                    updates["initiator"] = init
+                record = record.model_copy(update=updates)
+        elif record.status in ("accepted", "queued"):
+            ended = {
+                "prior_status": record.status,
+                "status": kind,
+                "summary": str(row["message"] or ""),
+                "ended_ms": int(row["timestamp_ms"]),
             }
-            record = record.model_copy(update=accepted)
-        elif record.status == "accepted":
-            ended = {"status": kind, "summary": str(row["message"] or ""), "ended_ms": int(row["timestamp_ms"])}
             record = record.model_copy(update=ended)
         records[task_id] = record
     return sorted(records.values(), key=lambda record: (record.started_ms or record.ended_ms, record.task_id))
 
 
-__all__ = ["DELEGATION_ACCEPTED", "DELEGATION_EVENT_PREFIX", "DELEGATION_INTERRUPTED", "EventRepo"]
+__all__ = ["DELEGATION_ACCEPTED", "DELEGATION_EVENT_PREFIX", "DELEGATION_INTERRUPTED", "DELEGATION_QUEUED", "EventRepo"]

@@ -20,7 +20,7 @@ from tests.agents.streamer.helpers import make_streamer_agent
 
 def _alert(
     task_id: str = "deleg_9",
-    status: str = "queued",
+    status: str = "waiting_for_decision",
     snapshot: Optional[Dict[str, Any]] = None,
     timestamp_ms: int = 0,
 ) -> TaskChangedPayload:
@@ -31,9 +31,7 @@ def _alert(
         initiator="streamer",
         executor="minecraft",
         source="agent",
-        snapshot={"instruction": "去栽一批树苗", "own_words": "帮我栽一批树苗", "queued_at_ms": 1}
-        if snapshot is None
-        else snapshot,
+        snapshot={"instruction": "去栽一批树苗", "own_words": "帮我栽一批树苗"} if snapshot is None else snapshot,
         timestamp_ms=timestamp_ms,
         alert=True,
     )
@@ -61,12 +59,17 @@ def test_first_alert_builds_material_with_instruction_and_stopped_time() -> None
     assert outcome is not None and "2 分钟" in outcome.material and "第 2 次" in outcome.material
 
 
-def test_third_alert_on_queued_delegation_decides_auto_cancel() -> None:
+def test_third_alert_on_waiting_for_decision_decides_auto_cancel_while_queued_is_ignored() -> None:
     watch, _ = _watch(threshold=3)
-    watch.note_alert(_alert())
-    watch.note_alert(_alert())
-    outcome = watch.note_alert(_alert())
-    assert outcome is not None and outcome.auto_cancel, "排队件第 3 次告警仍无决断 → 自动撤单"
+    watch.note_alert(_alert(status="waiting_for_decision"))
+    watch.note_alert(_alert(status="waiting_for_decision"))
+    outcome = watch.note_alert(_alert(status="waiting_for_decision"))
+    assert outcome is not None and outcome.auto_cancel, "停手等定夺件第 3 次告警仍无决断 → 自动撤单"
+
+    # 排队等待前序长任务释放通道的委派（queued）尚未开工：不产停滞材料、更不误判卡死自动撤单
+    watch_queued, _ = _watch(threshold=2)
+    for _ in range(4):
+        assert watch_queued.note_alert(_alert(status="queued")) is None
 
     # 决断兜底不杀运行中的任务：running 状态怎么告警都不判撤单
     watch_running, _ = _watch(threshold=3)
@@ -79,30 +82,36 @@ def test_progress_between_alerts_resets_the_count() -> None:
     watch, _ = _watch(threshold=3)
     watch.note_alert(_alert())
     watch.note_alert(_alert())
-    # 两次告警之间账面真变化（queued → accepted，快照变了）：算有进展，重新计数
+    # 两次告警之间账面真变化（补了进展快照）：算有进展，重新计数
     changed = TaskChangedPayload(
         task_id="deleg_9",
-        status="accepted",
-        summary="轮到执行",
+        status="waiting_for_decision",
+        summary="重做一步后再次等定夺",
         initiator="streamer",
         executor="minecraft",
         source="agent",
-        snapshot={"instruction": "去栽一批树苗", "own_words": "帮我栽一批树苗"},
+        snapshot={"instruction": "去栽一批树苗", "own_words": "帮我栽一批树苗", "step": 2},
         timestamp_ms=5,
     )
     watch.note_change(changed)
     outcome = watch.note_alert(
-        _alert(status="accepted", snapshot={"instruction": "去栽一批树苗", "own_words": "帮我栽一批树苗"})
+        _alert(
+            status="waiting_for_decision",
+            snapshot={"instruction": "去栽一批树苗", "own_words": "帮我栽一批树苗", "step": 2},
+        )
     )
     assert outcome is not None and not outcome.auto_cancel, "变化后计数重置，第 1 次不撤单"
 
     # 旁注与受理原文不算进展：快照只有这些键变化时计数照常累计（已数到 1，再两轮到阈值）
-    annotated = dict(_alert().snapshot or {})
-    annotated["latest_reply"] = "我觉得快好了"
-    watch.note_alert(_alert(snapshot=annotated))
-    outcome = watch.note_alert(_alert(snapshot=annotated))
+    annotated = {
+        "instruction": "去栽一批树苗",
+        "own_words": "帮我栽一批树苗",
+        "step": 2,
+        "latest_reply": "我觉得快好了",
+    }
+    outcome = watch.note_alert(_alert(status="waiting_for_decision", snapshot=annotated))
     assert outcome is not None and not outcome.auto_cancel
-    outcome = watch.note_alert(_alert(snapshot=annotated))
+    outcome = watch.note_alert(_alert(status="waiting_for_decision", snapshot=annotated))
     assert outcome is not None and outcome.auto_cancel, "旁注不算决断，第 3 次照判撤单"
 
 
@@ -140,6 +149,11 @@ async def test_streamer_routes_alerts_into_decision_material_and_cancels_on_thre
     registry.invoke = AsyncMock(side_effect=_invoke)
     agent = make_streamer_agent(tool_registry=registry)
     try:
+        # 排队件即使收到告警也不入账本、不唤醒决策、不撤单
+        agent.on_task_notification(_alert(task_id="deleg_queued", status="queued"))
+        assert agent._proactive_signals.game_pending is False
+        assert agent._game_ledger.pending_lines() == []
+
         agent.on_task_notification(_alert())
         assert agent._proactive_signals.game_pending is True, "告警置位待定夺信号唤醒决策"
         lines = agent._game_ledger.pending_lines()
@@ -148,7 +162,8 @@ async def test_streamer_routes_alerts_into_decision_material_and_cancels_on_thre
 
         agent.on_task_notification(_alert())
         agent.on_task_notification(_alert())
-        await asyncio.sleep(0.05)
+        if agent._memory_tasks:
+            await asyncio.gather(*list(agent._memory_tasks))
         assert len(invokes) == 1
         assert invokes[0].tool_name == "framework_task_settle" and invokes[0].arguments == {
             "item": "deleg_9",

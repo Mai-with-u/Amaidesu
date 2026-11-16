@@ -15,6 +15,7 @@ from src.agents.minecraft.glance import (
     entity_label,
     glance_brief,
     glance_scene,
+    glance_self,
     glance_world_memory,
     glance_worth_seeing,
     nearest_places,
@@ -857,3 +858,55 @@ def test_worth_seeing_filters_distant_and_static_held_players(entity: dict[str, 
     """worth_seeing 只收录近处带真实互动姿态的玩家，排除超距玩家与常态静态手持物。"""
     reply = MaicraftReply(ok=True, data={"entities": [entity]})
     assert glance_worth_seeing(reply) == expected
+
+
+def test_glance_self_surfaces_damaged_inventory_durability_and_low_gear_bars() -> None:
+    """跨仓契约：背包受损工具标注剩余/满耐久，手持与护甲栏 bar_percent <= 20 时透出低耐久提醒；旧版无字段保持兼容。"""
+    damaged_reply = MaicraftReply(
+        ok=True,
+        data={
+            "position": {"x": 10.0, "y": 64.0, "z": -5.0, "dimension": "minecraft:overworld"},
+            "health": 20,
+            "food": 20,
+            "held": "minecraft:iron_pickaxe",
+            "armor": ["minecraft:iron_helmet", "minecraft:iron_chestplate"],
+            "gear_bars": [
+                {"slot": "mainhand", "item": "minecraft:iron_pickaxe", "bar_percent": 4},
+                {"slot": "head", "item": "minecraft:iron_helmet", "bar_percent": 20},
+                {"slot": "chest", "item": "minecraft:iron_chestplate", "bar_percent": 21},
+            ],
+            "inventory": [
+                {"item": "minecraft:iron_pickaxe", "count": 1, "durability": 1, "max_durability": 250},
+                {"item": "minecraft:iron_pickaxe", "count": 2},
+                {"item": "minecraft:stone_axe", "count": 1, "durability": 131, "max_durability": 131},
+            ],
+        },
+    )
+    view = glance_self(damaged_reply)
+    assert view["inventory"] == [
+        "minecraft:iron_pickaxe ×1（耐久 1/250）",
+        "minecraft:iron_pickaxe ×2",
+        "minecraft:stone_axe ×1",
+    ]
+    low = view["body"]["low_durability"]
+    assert "主手铁镐（低耐久，剩 4%）" in low
+    assert "头部铁头盔（低耐久，剩 20%）" in low
+    assert "铁胸甲" not in low
+
+    # 白话一句话现场仍不带数字且物品去重正常
+    brief = glance_brief(view)
+    assert "背包里有铁镐、石斧。" in brief
+    assert not any(ch.isdigit() for ch in brief)
+
+    # 旧版无 durability / gear_bars 字段时无缝兼容原有输出
+    legacy_view = glance_self(
+        MaicraftReply(
+            ok=True,
+            data={
+                "held": "minecraft:stone_pickaxe",
+                "inventory": [{"item": "minecraft:cobblestone", "count": 32}],
+            },
+        )
+    )
+    assert legacy_view["inventory"] == ["minecraft:cobblestone ×32"]
+    assert "low_durability" not in legacy_view["body"]

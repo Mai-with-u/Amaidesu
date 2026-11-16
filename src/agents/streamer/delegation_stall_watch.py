@@ -5,13 +5,15 @@
 委派计数告警，输出两样东西：
 
 - 每次告警一条决策窗必读材料行：委派原话、已停多久、第几次告警；
-- 待办（queued）与停着等定夺（waiting_for_decision）的委派连续收到第 N 次
+- 停着等定夺（waiting_for_decision）的委派连续收到第 N 次
   告警仍无决断（无撤单 / 无改单 / 无账面变化）→ 判自动撤单，由调用方经
   ``framework_task_settle``（``outcome="drop"``）撤掉并补一条场记事实
   （"这件事我喊停了"），主播下一窗顺带交代。N 可配
   （``[tools.tasks].stall_auto_cancel_alerts``）。
 
-running 不自动杀：运行中任务有自己的活动看门狗与目标停滞通路。
+处于排队等待（queued）的委派还没轮到开工（正在等前序长任务释放执行通道），
+排队等待阶段不产生停滞告警材料、也不判自动撤单；running 不自动杀：运行中
+任务有自己的活动看门狗与目标停滞通路。
 
 计数与"有无决断"的判定方式：停滞告警本身会刷新账面 ``updated_at_ms``，时间
 戳判不出决断；这里对每次告警比对（状态，过滤掉旁注键的快照）——旁注是执行
@@ -36,8 +38,8 @@ logger = get_logger("DelegationStallWatch")
 
 # 快照里不算进展的键：受理原文与执行侧旁注（口径与 src/modules/agents/control.py 看门狗一致）
 _NON_PROGRESS_KEYS = frozenset({"instruction", "own_words", REPLY_NOTE_KEY, REPLY_NOTE_AT_KEY})
-# 第 N 次告警可自动撤单的状态：排队（还没送到执行方）与停着等主播定夺（执行方上报卡住后停手）
-_AUTO_CANCEL_STATUSES = frozenset({"queued", "waiting_for_decision"})
+# 第 N 次告警可自动撤单的状态：仅限执行方上报卡住后停手等待主播定夺的委派；排队等待（queued）尚未开工不判停滞撤单
+_AUTO_CANCEL_STATUSES = frozenset({"waiting_for_decision"})
 
 
 def _progress_view(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
@@ -91,6 +93,10 @@ class DelegationStallWatch:
         """
         task_id = str(payload.task_id)
         status = str(payload.status)
+        # 还在排队等待前序任务释放通道的委派未轮到开工，清理残留计数并忽略告警，避免排队阶段误判卡死
+        if status == "queued":
+            self._entries.pop(task_id, None)
+            return None
         snapshot = payload.snapshot if isinstance(payload.snapshot, Mapping) else {}
         digest = (status, _progress_view(snapshot))
         entry = self._entries.get(task_id)
@@ -132,7 +138,8 @@ class DelegationStallWatch:
         entry = self._entries.get(task_id)
         if entry is None:
             return
-        if str(payload.status) in TERMINAL_TASK_STATES:
+        if str(payload.status) in TERMINAL_TASK_STATES or str(payload.status) == "queued":
+            # 走到终态或被搁回待办排队时出册，等再次出队真正执行后再重新起算停滞计数
             self._entries.pop(task_id, None)
             return
         snapshot = payload.snapshot if isinstance(payload.snapshot, Mapping) else {}

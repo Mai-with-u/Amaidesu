@@ -121,3 +121,31 @@ async def test_agent_reads_the_game_once_to_build_the_snapshot() -> None:
         assert "oak_log ×6" in notebook  # 替身背包里的橡木原木
     finally:
         await agent.stop()
+
+
+def test_snapshot_annotates_damaged_inventory_and_low_durability_equipment() -> None:
+    """工作文档快照：背包受损物品附剩余/满耐久，装备栏 bar_percent <= 20 时附低耐久提醒，高于 20% 不报。"""
+    text = build_snapshot(
+        _ok(
+            {
+                "held": "minecraft:iron_pickaxe",
+                "armor": ["minecraft:iron_helmet", "minecraft:iron_chestplate"],
+                "gear_bars": [
+                    {"slot": "head", "item": "minecraft:iron_helmet", "bar_percent": 15},
+                    {"slot": "chest", "item": "minecraft:iron_chestplate", "bar_percent": 80},
+                    {"slot": "mainhand", "item": "minecraft:iron_pickaxe", "bar_percent": 1},
+                    {"slot": "offhand", "item": "minecraft:shield", "bar_percent": 20},
+                ],
+                "inventory": [
+                    {"item": "minecraft:iron_pickaxe", "count": 1, "durability": 3, "max_durability": 250},
+                    {"item": "minecraft:iron_pickaxe", "count": 1},
+                    {"item": "minecraft:oak_planks", "count": 16},
+                ],
+            }
+        )
+    )
+    assert (
+        "装备：铁头盔（低耐久，剩 15%）、铁胸甲、手上拿着铁镐（低耐久，剩 1%）、副手拿着shield（低耐久，剩 20%）"
+        in text
+    )
+    assert "背包：铁镐 ×1（耐久 3/250）、铁镐 ×1、oak_planks ×16" in text

@@ -67,6 +67,11 @@ class DelegationRecord(BaseModel):
     summary: str = Field(default="", description="终态摘要（交付内容、没交付时模型最后一句、撤单来源等）")
     started_ms: int = Field(default=0, description="受理时刻（Unix epoch 毫秒）；没有受理行时为 0")
     ended_ms: int = Field(default=0, description="了结时刻（Unix epoch 毫秒）；还没了结为 0")
+    prior_status: str = Field(
+        default="",
+        exclude=True,
+        description="进入终态或重启被打断前的最后进行中状态（accepted=在做 / queued=排队待办）",
+    )
 
 
 class IndexedGameEvent(BaseModel):

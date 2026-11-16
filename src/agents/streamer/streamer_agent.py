@@ -39,7 +39,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Coroutine, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
 from src.modules.agents.base import AgentState, BaseAgent
-from src.modules.agents.delegation_board import read_boards
+from src.modules.agents.delegation_board import (
+    BACKLOG_NO_KEY,
+    BACKLOG_SEQ_KEY,
+    DELIVERED_AT_KEY,
+    DELIVERIES_KEY,
+    QUEUED_AT_KEY,
+    read_board,
+    read_boards,
+)
+from src.modules.agents.delegation_text import own_words_of
 from src.modules.agents.factory import AGENT_BINDINGS
 from src.modules.background import get_registry as get_task_registry
 from src.modules.background import setup_registry as setup_task_registry
@@ -1384,11 +1393,19 @@ class StreamerAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001 - 认领失败只少一条手头的事，不挡续播
             self._logger.warning(f"续播读委派账失败（手头的事不标被打断）: {exc}", exc=exc)
             return
-        # 按受理先后排好的：同一个游戏后派的覆盖先派的，留下每个游戏我最后派的那件
-        latest = {record.game: record for record in records if record.initiator == PLANNER_CALL_SOURCE}
-        for record in latest.values():
-            if record.started_ms >= self._startup_ms or record.status not in ("accepted", "interrupted"):
+        # 按受理先后筛选我派出的在途单：原本处于待办排队的单留在待办看板，不覆盖真正重启前在做的主任务；
+        # 同一游戏若存在多条未标排队的存量中断行，取最早处于在做的第一条而非后面排队的待办
+        claimed_games: set[str] = set()
+        for record in records:
+            if record.initiator != PLANNER_CALL_SOURCE or record.started_ms >= self._startup_ms:
                 continue
+            if record.status not in ("accepted", "interrupted"):
+                continue
+            if record.prior_status == "queued" or "待办" in (record.summary or ""):
+                continue
+            if record.game in claimed_games:
+                continue
+            claimed_games.add(record.game)
             self._planner.workbench.restore_interrupted(
                 record.game, instruction=record.instruction, task_id=record.task_id, at_ms=record.started_ms
             )
@@ -2103,30 +2120,87 @@ class StreamerAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001 - 读不到账就跳过恢复，不挡续播
             self._logger.warning(f"续播恢复：读本场委派账失败（跳过重登记）: {exc}", exc=True)
             return
-        restored = 0
+        restored_in_hand = 0
+        restored_queued = 0
+        next_backlog_no: Dict[str, int] = {}
+        next_seq = 0
+        for task_id in self._task_ledger.active_task_ids():
+            existing_rec = self._task_ledger.get(task_id)
+            if existing_rec is not None:
+                seq_val = int(existing_rec.snapshot.get(BACKLOG_SEQ_KEY) or 0)
+                if seq_val > next_seq:
+                    next_seq = seq_val
         for record in records:
-            if record.status != "interrupted" or self._task_ledger.get(record.task_id) is not None:
+            if record.status not in ("interrupted", "queued") or self._task_ledger.get(record.task_id) is not None:
                 continue
-            self._task_ledger.register(
-                task_id=record.task_id,
-                provider=record.game,
-                tool="framework_delegate",
-                initiator=record.initiator or "streamer",
-                executor=record.game,
-                source="agent",
-                snapshot={
-                    "restored": True,
-                    "note": "恢复自上一进程（重启中断）",
-                    "instruction": record.instruction,
-                    "accepted_ms": record.started_ms,
-                },
-                summary="恢复自上一进程（重启中断）",
+            if record.status == "queued" and record.started_ms >= self._startup_ms:
+                continue
+            executor = record.game
+            board = read_board(self._task_ledger, executor)
+            # 原本在待办排队（或同执行者名下已有在做单时排在后面的存量记录）保留 queued 排队次序，绝不提前按 accepted 激活
+            was_queued = (
+                record.status == "queued"
+                or record.prior_status == "queued"
+                or "待办" in (record.summary or "")
+                or board.in_hand is not None
             )
-            restored += 1
-        if restored:
+            own = own_words_of(record.instruction)
+            if was_queued:
+                cur_max = next_backlog_no.get(executor, 0)
+                for item in board.backlog:
+                    if item.backlog_no > cur_max:
+                        cur_max = item.backlog_no
+                no = cur_max + 1
+                next_backlog_no[executor] = no
+                next_seq += 1
+                self._task_ledger.register(
+                    task_id=record.task_id,
+                    provider="framework",
+                    tool="framework_delegate",
+                    initiator=record.initiator or "streamer",
+                    executor=executor,
+                    status="queued",
+                    source="agent",
+                    snapshot={
+                        "restored": True,
+                        "note": "恢复自上一进程（重启中断）",
+                        "instruction": record.instruction,
+                        "own_words": own,
+                        "accepted_ms": record.started_ms,
+                        BACKLOG_NO_KEY: no,
+                        BACKLOG_SEQ_KEY: next_seq,
+                        DELIVERIES_KEY: 0,
+                        QUEUED_AT_KEY: record.started_ms,
+                    },
+                    summary="恢复自上一进程（重启中断，待办排队）",
+                )
+                restored_queued += 1
+            else:
+                self._task_ledger.register(
+                    task_id=record.task_id,
+                    provider="framework",
+                    tool="framework_delegate",
+                    initiator=record.initiator or "streamer",
+                    executor=executor,
+                    status="accepted",
+                    source="agent",
+                    snapshot={
+                        "restored": True,
+                        "note": "恢复自上一进程（重启中断）",
+                        "instruction": record.instruction,
+                        "own_words": own,
+                        "accepted_ms": record.started_ms,
+                        DELIVERIES_KEY: 1,
+                        DELIVERED_AT_KEY: record.started_ms,
+                    },
+                    summary="恢复自上一进程（重启中断）",
+                )
+                restored_in_hand += 1
+        total_restored = restored_in_hand + restored_queued
+        if total_restored:
             self._logger.info(
-                f"续播恢复：上一进程在途委派已重登记 {restored} 件（恢复自上一进程（重启中断），"
-                f"场次 {live_session_id}）"
+                f"续播恢复：上一进程未了结委派已重登记 {total_restored} 件"
+                f"（在做 {restored_in_hand} 件，待办排队 {restored_queued} 件，场次 {live_session_id}）"
             )
 
     async def _wake_memory_indexer(self) -> None:

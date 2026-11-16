@@ -713,8 +713,9 @@ class StorageLedger:
         """
         if payload.source != "agent" or payload.alert:
             return
-        if payload.status == "accepted":
-            kind, text = "accepted", str((payload.snapshot or {}).get("own_words") or "")
+        if payload.status in ("accepted", "queued"):
+            # 区分受理在做与入待办排队，续播恢复据此保留排队状态而不把待办提前激活为在做
+            kind, text = payload.status, str((payload.snapshot or {}).get("own_words") or "")
         elif payload.status in TERMINAL_TASK_STATES:
             kind, text = payload.status, payload.summary
         else:

@@ -449,8 +449,61 @@ def _creature_sentences(creatures: Any) -> List[str]:
     return sentences
 
 
+# 手持与护甲栏位名称映射及低耐久告警百分比阈值（bar_percent <= 20 时提醒即将用坏）
+_GEAR_SLOT_LABELS: Dict[str, str] = {
+    "mainhand": "主手",
+    "offhand": "副手",
+    "head": "头部",
+    "chest": "胸部",
+    "legs": "腿部",
+    "feet": "脚部",
+}
+_LOW_GEAR_BAR_PERCENT = 20
+
+
 def _failure(reply: MaicraftReply) -> str:
     return reply.error_message or reply.error_code or "读取失败"
+
+
+def _damaged_durability_suffix(entry: Dict[str, Any]) -> str:
+    """背包物品带有效未满耐久时生成后缀（如『（耐久 1/250）』）；满耐久或旧版无字段返回空串。"""
+    durability = entry.get("durability")
+    max_durability = entry.get("max_durability")
+    if (
+        isinstance(durability, int)
+        and not isinstance(durability, bool)
+        and isinstance(max_durability, int)
+        and not isinstance(max_durability, bool)
+        and max_durability > 0
+        and 0 <= durability < max_durability
+    ):
+        return f"（耐久 {durability}/{max_durability}）"
+    return ""
+
+
+def _low_durability_gear_text(gear_bars: Any) -> Optional[str]:
+    """检查手持与护甲栏位的耐久条百分比，将不高于 20% 的装备整理成低耐久提醒文本。"""
+    if not isinstance(gear_bars, list):
+        return None
+    warnings: List[str] = []
+    for bar in gear_bars:
+        if not isinstance(bar, dict):
+            continue
+        slot = str(bar.get("slot") or "").strip()
+        slot_label = _GEAR_SLOT_LABELS.get(slot)
+        raw_item = str(bar.get("item") or "").strip()
+        percent = bar.get("bar_percent")
+        if (
+            slot_label is None
+            or not raw_item
+            or isinstance(percent, bool)
+            or not isinstance(percent, (int, float))
+            or not (0 <= percent <= _LOW_GEAR_BAR_PERCENT)
+        ):
+            continue
+        pct_text = str(int(round(percent)))
+        warnings.append(f"{slot_label}{_item_label(raw_item)}（低耐久，剩 {pct_text}%）")
+    return "、".join(warnings) if warnings else None
 
 
 def glance_self(reply: MaicraftReply) -> Dict[str, Any]:
@@ -469,6 +522,10 @@ def glance_self(reply: MaicraftReply) -> Dict[str, Any]:
     for key in ("health", "food", "facing", "held"):
         if data.get(key) is not None:
             body[key] = data[key]
+    low_gear = _low_durability_gear_text(data.get("gear_bars"))
+    if low_gear is not None:
+        # 手持工具或身上护甲耐久不足两成时挂进身体标量，供决策层与表达回执同步感知快坏了的装备
+        body["low_durability"] = low_gear
     air, max_air = data.get("air"), data.get("max_air")
     if isinstance(air, int) and isinstance(max_air, int) and air < max_air:
         # 氧气满格时不提，憋气时才是值得讲的事
@@ -491,7 +548,7 @@ def glance_self(reply: MaicraftReply) -> Dict[str, Any]:
     inventory = data.get("inventory")
     if isinstance(inventory, list):
         result["inventory"] = [
-            f"{item['item']} ×{item.get('count', '?')}"
+            f"{item['item']} ×{item.get('count', '?')}{_damaged_durability_suffix(item)}"
             for item in inventory
             if isinstance(item, dict) and item.get("item")
         ]

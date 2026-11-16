@@ -21,6 +21,18 @@ __all__ = ["SNAPSHOT_TITLE", "build_snapshot", "unavailable_snapshot"]
 #: 快照段的抬头
 SNAPSHOT_TITLE = "【当前状态快照】"
 
+#: 装备与手持栏位低耐久提醒阈值（bar_percent <= 20 时附低耐久提醒）
+_LOW_GEAR_BAR_PERCENT = 20
+_ARMOR_SLOTS = frozenset({"head", "chest", "legs", "feet"})
+_SLOT_PREFIXES: Dict[str, str] = {
+    "mainhand": "手上拿着",
+    "offhand": "副手拿着",
+    "head": "",
+    "chest": "",
+    "legs": "",
+    "feet": "",
+}
+
 
 def unavailable_snapshot(reason: str = "游戏连接还没就绪") -> str:
     """现查不可用时的快照段：写明当前不可用，不中断读取。"""
@@ -61,20 +73,92 @@ def _health_text(data: Dict[str, Any]) -> Optional[str]:
     return "、".join(parts) if parts else None
 
 
+def _damaged_durability_suffix(entry: Dict[str, Any]) -> str:
+    """背包物品带有效未满耐久时生成后缀（如『（耐久 1/250）』）；满耐久或旧版无字段返回空串。"""
+    durability = entry.get("durability")
+    max_durability = entry.get("max_durability")
+    if (
+        isinstance(durability, int)
+        and not isinstance(durability, bool)
+        and isinstance(max_durability, int)
+        and not isinstance(max_durability, bool)
+        and max_durability > 0
+        and 0 <= durability < max_durability
+    ):
+        return f"（耐久 {durability}/{max_durability}）"
+    return ""
+
+
+def _low_gear_bars(data: Dict[str, Any]) -> List[tuple[str, str, int]]:
+    """提取手持与护甲栏位中 bar_percent <= 20 的低耐久条目（栏位名、物品 ID、整数百分比）。"""
+    raw_bars = data.get("gear_bars")
+    if not isinstance(raw_bars, list):
+        return []
+    low: List[tuple[str, str, int]] = []
+    for bar in raw_bars:
+        if not isinstance(bar, dict):
+            continue
+        slot = str(bar.get("slot") or "").strip()
+        raw_item = str(bar.get("item") or "").strip()
+        percent = bar.get("bar_percent")
+        if (
+            slot not in _SLOT_PREFIXES
+            or not raw_item
+            or isinstance(percent, bool)
+            or not isinstance(percent, (int, float))
+            or not (0 <= percent <= _LOW_GEAR_BAR_PERCENT)
+        ):
+            continue
+        low.append((slot, raw_item, int(round(percent))))
+    return low
+
+
 def _equipment_text(data: Dict[str, Any]) -> Optional[str]:
-    """身上的装备：护甲与手上拿的东西。"""
+    """身上的装备：护甲与手上拿的东西；对应手持或护甲格耐久条 ≤20% 时一并附低耐久提醒。"""
+    low_bars = _low_gear_bars(data)
+    consumed_indices: set[int] = set()
     parts: List[str] = []
     for item in data.get("armor") or []:
-        if isinstance(item, str) and item:
+        if not isinstance(item, str) or not item:
+            continue
+        matched = next(
+            (
+                idx
+                for idx, (slot, bar_item, _pct) in enumerate(low_bars)
+                if idx not in consumed_indices and slot in _ARMOR_SLOTS and bar_item == item
+            ),
+            None,
+        )
+        if matched is not None:
+            consumed_indices.add(matched)
+            parts.append(f"{item_name(item)}（低耐久，剩 {low_bars[matched][2]}%）")
+        else:
             parts.append(item_name(item))
     held = data.get("held")
     if isinstance(held, str) and held:
-        parts.append(f"手上拿着{item_name(held)}")
+        matched = next(
+            (
+                idx
+                for idx, (slot, _bar_item, _pct) in enumerate(low_bars)
+                if idx not in consumed_indices and slot == "mainhand"
+            ),
+            None,
+        )
+        if matched is not None:
+            consumed_indices.add(matched)
+            parts.append(f"手上拿着{item_name(held)}（低耐久，剩 {low_bars[matched][2]}%）")
+        else:
+            parts.append(f"手上拿着{item_name(held)}")
+    for idx, (slot, bar_item, pct) in enumerate(low_bars):
+        if idx in consumed_indices:
+            continue
+        prefix = _SLOT_PREFIXES[slot]
+        parts.append(f"{prefix}{item_name(bar_item)}（低耐久，剩 {pct}%）")
     return "、".join(parts) if parts else None
 
 
 def _inventory_text(data: Dict[str, Any]) -> Optional[str]:
-    """背包：按物品合并后的名称与数量。"""
+    """背包：按物品合并后的名称、数量及受损装备的剩余耐久。"""
     entries = data.get("inventory")
     if not isinstance(entries, list):
         return None
@@ -86,7 +170,8 @@ def _inventory_text(data: Dict[str, Any]) -> Optional[str]:
         if not name:
             continue
         count = _number(entry.get("count"))
-        parts.append(f"{name} ×{count}" if count is not None else name)
+        base = f"{name} ×{count}" if count is not None else name
+        parts.append(f"{base}{_damaged_durability_suffix(entry)}")
     return "、".join(parts) if parts else None
 
 

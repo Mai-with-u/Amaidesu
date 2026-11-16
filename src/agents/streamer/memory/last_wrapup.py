@@ -85,6 +85,8 @@ def classify_ending_delegation(record: DelegationRecord) -> Optional[str]:
     if status == "queued":
         return "待办"
     if status == "interrupted":
+        if record.prior_status == "queued" or "待办" in summary:
+            return "待办"
         return "当时在做，被重启打断"
     if status == "cancelled" and summary.startswith(_AUTO_CLOSE_PREFIX):
         tail = summary[len(_AUTO_CLOSE_PREFIX) :].strip()

@@ -496,19 +496,40 @@ class DelegationCore:
     # -------------------- 看板辅助与序号分配 --------------------
 
     def _alloc_backlog_no(self, executor: str, existing: int = 0) -> int:
+        # 续播恢复可能已把上一进程的待办单直接写回任务账本，分配前先与账本既有最大短编号对齐以免撞号
+        floor = self._backlog_nos.get(executor, 0)
+        if self._task_ledger is not None:
+            for item in read_board(self._task_ledger, executor).backlog:
+                if item.backlog_no > floor:
+                    floor = item.backlog_no
         if existing > 0:
-            if existing > self._backlog_nos.get(executor, 0):
-                self._backlog_nos[executor] = existing
+            if existing > floor:
+                floor = existing
+            self._backlog_nos[executor] = floor
             return existing
-        nxt = self._backlog_nos.get(executor, 0) + 1
+        nxt = floor + 1
         self._backlog_nos[executor] = nxt
         return nxt
 
     def _next_tail_seq(self) -> int:
+        if self._task_ledger is not None:
+            for task_id in self._task_ledger.active_task_ids():
+                rec = self._task_ledger.get(task_id)
+                if rec is not None:
+                    seq = int(rec.snapshot.get(BACKLOG_SEQ_KEY) or 0)
+                    if seq > self._tail_seq:
+                        self._tail_seq = seq
         self._tail_seq += 1
         return self._tail_seq
 
     def _next_head_seq(self) -> int:
+        if self._task_ledger is not None:
+            for task_id in self._task_ledger.active_task_ids():
+                rec = self._task_ledger.get(task_id)
+                if rec is not None:
+                    seq = int(rec.snapshot.get(BACKLOG_SEQ_KEY) or 0)
+                    if seq < self._head_seq:
+                        self._head_seq = seq
         self._head_seq -= 1
         return self._head_seq
 
@@ -742,24 +763,20 @@ class DelegationCore:
             BACKLOG_SEQ_KEY: seq,
             DELIVERIES_KEY: 0,
         }
+        queued_snapshot = {**base_snapshot, QUEUED_AT_KEY: ts}
+        board_preview = read_board(self._task_ledger, executor)
+        position = 1 if front else len(board_preview.backlog) + 1
+        # 新排入待办的委派直接按 queued 状态入账广播，避免先伪造 accepted 导致落库误把排队单记成已在做
         self._task_ledger.register(
             task_id=task_id,
             provider="framework",
             tool="framework_delegate",
             initiator=initiator,
             executor=executor,
-            status="accepted",
+            status="queued",
             source="agent",
-            snapshot=base_snapshot,
-        )
-        queued_snapshot = {**base_snapshot, QUEUED_AT_KEY: ts}
-        board_preview = read_board(self._task_ledger, executor)
-        position = 1 if front else len(board_preview.backlog) + 1
-        self._task_ledger.update(
-            task_id,
-            "queued",
-            summary=f"目标手上有事，排进待办（待办{no}，第 {position} 位）",
             snapshot=queued_snapshot,
+            summary=f"目标手上有事，排进待办（待办{no}，第 {position} 位）",
         )
         board_after = read_board(self._task_ledger, executor)
         actual_pos = next((idx for idx, b in enumerate(board_after.backlog, start=1) if b.task_id == task_id), position)

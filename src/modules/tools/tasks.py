@@ -150,8 +150,14 @@ class TaskLedger:
     目标由执行 Agent 自己挂、自己知道，登记不广播。
     """
 
-    def __init__(self, event_bus: Optional["EventBus"] = None) -> None:
+    def __init__(
+        self,
+        event_bus: Optional["EventBus"] = None,
+        *,
+        clock: Optional[Callable[[], int]] = None,
+    ) -> None:
         self._event_bus = event_bus
+        self._clock = clock or now_ms
         self._records: Dict[str, TaskRecord] = {}
         self._recent_provider_outcomes: Deque[ProviderTaskOutcome] = deque(maxlen=_RECENT_PROVIDER_OUTCOMES_MAX)
 
@@ -173,7 +179,7 @@ class TaskLedger:
         if existing is not None:
             logger.debug(f"任务 {task_id} 已登记（保留先登记，source={existing.source}）")
             return existing
-        ts = now_ms()
+        ts = self._clock()
         record = TaskRecord(
             task_id=task_id,
             provider=provider,
@@ -258,25 +264,25 @@ class TaskLedger:
             # 计时基准），快照原样重复不刷新——无信息的轮询不应顺延停滞告警
             if snapshot is not None and dict(snapshot) != record.snapshot:
                 record.snapshot = dict(snapshot)
-                record.updated_at_ms = now_ms()
+                record.updated_at_ms = self._clock()
             return None
 
         # "继续后台跑"组内迁移（accepted <-> running）静默记录：受理后任务
         # 转入进行中不值得唤醒发起方——决策点（waiting_for_decision）与终态
         # 才是唤醒级变化（对齐 maicraft 既有行为：pending/running 不注入）
         _quiet_group = {"accepted", "running"}
-        # 排队那件轮到送达（queued -> accepted）同样静默：入队时已经广播过一次排队，
-        # 送达之后执行方开跑才是下一步；按"回退到受理"拦掉的话，排队的单永远送不出去
-        delivered_from_queue = record.status == "queued" and status == "accepted"
-        if delivered_from_queue or (record.status in _quiet_group and status in _quiet_group):
+        if record.status in _quiet_group and status in _quiet_group:
             record.status = status
             if snapshot is not None:
                 record.snapshot = dict(snapshot)
-            record.updated_at_ms = now_ms()
+            record.updated_at_ms = self._clock()
             logger.debug(f"任务 {task_id} 静默迁移到 {status}（不发事件）")
             return None
 
-        if status == "accepted" and record.status in IN_PROGRESS_TASK_STATES:
+        # 排队待办轮到出队送达执行（queued -> accepted）是真实阶段跃迁，重新起算执行进展超时并广播变化；
+        # 其余进行中状态（如 waiting_for_decision）禁止回退为 accepted
+        delivered_from_queue = record.status == "queued" and status == "accepted"
+        if status == "accepted" and record.status in IN_PROGRESS_TASK_STATES and not delivered_from_queue:
             logger.debug(f"任务 {task_id} 状态回退被忽略: {record.status} -> accepted")
             return None
 
@@ -284,7 +290,7 @@ class TaskLedger:
         record.status = status
         if snapshot is not None:
             record.snapshot = dict(snapshot)
-        record.updated_at_ms = now_ms()
+        record.updated_at_ms = self._clock()
 
         text = summary or f"状态变化 {old_status} -> {status}"
         payload = TaskChangedPayload(
@@ -354,7 +360,7 @@ class TaskLedger:
         record = self._records.get(task_id)
         if record is None:
             return
-        record.updated_at_ms = now_ms()
+        record.updated_at_ms = self._clock()
         payload = TaskChangedPayload(
             task_id=task_id,
             status=record.status,
@@ -424,11 +430,13 @@ class TaskTracker:
         *,
         poll_interval_ms: int = 2000,
         wait_timeout_ms: int = 1_800_000,
+        clock: Optional[Callable[[], int]] = None,
     ) -> None:
         self._registry = registry
         self._ledger = ledger
         self._poll_interval_ms = poll_interval_ms
         self._wait_timeout_ms = wait_timeout_ms
+        self._clock = clock or now_ms
         self._wakeup = asyncio.Event()
         # 订阅按提供者复用（非每任务）：provider 名 → 退订句柄
         self._subscriptions: Dict[str, Unsubscribe] = {}
@@ -549,15 +557,22 @@ class TaskTracker:
 
         告警经 ``task.changed`` 承载（``payload.alert=True``，status 保持
         当前值——告警是唤醒类通知不是状态变化）；不杀任务。同任务两个
-        wait_timeout 周期内只告警一次（告警后顺延）。
+        wait_timeout 周期内只告警一次（告警后顺延）。处于 ``queued`` 排队等待前序长任务
+        释放通道的委派还没轮到开工，排队等待阶段不发无进展告警，真正出队执行后再重新起算。
         """
         if self._wait_timeout_ms <= 0:
             return
-        if now_ms() - record.updated_at_ms < self._wait_timeout_ms:
+        # 还在待办队列等待前序任务释放执行通道时未开工，清除旧记账并跳过无进展巡检
+        if record.status == "queued":
+            self._stall_alerted_at.pop(record.task_id, None)
             return
-        if now_ms() - self._stall_alerted_at.get(record.task_id, 0) < self._wait_timeout_ms:
+        now = self._clock()
+        if now - record.updated_at_ms < self._wait_timeout_ms:
+            return
+        last_alert_ms = self._stall_alerted_at.get(record.task_id, 0)
+        if last_alert_ms >= record.updated_at_ms and now - last_alert_ms < self._wait_timeout_ms:
             return  # 本周期已告警过（顺延语义）
-        self._stall_alerted_at[record.task_id] = now_ms()
+        self._stall_alerted_at[record.task_id] = now
         self._ledger.alert_stall(
             record.task_id,
             summary=(

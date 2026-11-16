@@ -536,3 +536,78 @@ async def test_invoking_agent_enables_unique_candidate_auto_accept(rig_named) ->
     inv2 = ToolInvocation(tool_name="framework_prompt", arguments={"content": "去把刷铁机接上"}, source="planner-react")
     result2 = await rig_named.registry.invoke(inv2)
     assert not result2.success and "多个候选" in (result2.error_message or "")
+
+
+async def test_queued_delegation_skips_1800s_stall_alert_until_dequeued_to_execute(fake_clock: Any) -> None:
+    """排队等待前序长任务的 queued 委派在排队阶段绝不触发 1800s 无进展告警；真正出队执行后才从出队时刻重新起算。"""
+    baseline_tasks = set(asyncio.all_tasks())
+    bus = EventBus(enable_stats=False)
+    registry = ToolRegistry(event_bus=bus)
+    ledger = TaskLedger(event_bus=bus, clock=fake_clock.now_ms)
+    tracker = TaskTracker(registry, ledger, wait_timeout_ms=1_800_000, clock=fake_clock.now_ms)
+    manager = AgentManager()
+    initiator = _StubAgent("streamer")
+    executor = _StubAgent("minecraft")
+    manager.register(initiator)
+    manager.register(executor)
+    core = DelegationCore(manager, ledger, event_bus=bus, clock=fake_clock.now_ms)
+    registry.register_provider(
+        build_agent_control_provider(manager, ledger, event_bus=bus, clock=fake_clock.now_ms, delegation_core=core)
+    )
+
+    async def _flush_emits() -> None:
+        # TaskLedger 经 create_task 异步投递 task.changed，先等本用例新派生的后台广播任务进入并跑完再排空总线
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while True:
+            pending = [t for t in asyncio.all_tasks() if t not in baseline_tasks and not t.done()]
+            remaining = deadline - asyncio.get_running_loop().time()
+            if not pending or remaining <= 0:
+                break
+            await asyncio.wait(pending, timeout=min(remaining, 0.5))
+        await bus.wait_until_drained()
+
+    alerts: List[TaskChangedPayload] = []
+
+    async def _on_changed(name: str, payload: TaskChangedPayload, source: str) -> None:
+        del name, source
+        if payload.alert:
+            alerts.append(payload)
+
+    bus.on(CoreEvents.TASK_CHANGED, _on_changed, model_class=TaskChangedPayload)
+
+    # 第 1 件建造长任务在做，第 2 件排进 queued 待办等待
+    first_res = await registry.invoke(
+        _inv("framework_delegate", {"agent": "minecraft", "instruction": "盖一座三层石堡"}, source="streamer")
+    )
+    second_res = await registry.invoke(
+        _inv("framework_delegate", {"agent": "minecraft", "instruction": "去河边钓三条鱼"}, source="streamer")
+    )
+    await _flush_emits()
+    first_id = first_res.structured_content["task_id"]
+    second_id = second_res.structured_content["task_id"]
+    assert ledger.get(second_id) is not None and ledger.get(second_id).status == "queued"
+
+    # 前序建造任务持续推进（每 10 分钟刷新一次进展），总耗时 40 分钟（2400s > 1800s）
+    for step_idx in range(1, 5):
+        fake_clock.tick(600_000)
+        ledger.update(first_id, "running", snapshot={"instruction": "盖一座三层石堡", "floor": step_idx})
+        await tracker.step()
+        await _flush_emits()
+
+    assert [a.task_id for a in alerts] == [], "queued 待办在排队等待的 2400s 内绝不误报 1800s 无进展"
+
+    # 前序任务完工，第 2 件真正出队送达执行者（queued -> accepted）
+    executor.finish_latest(ledger)
+    await _flush_emits()
+    assert ledger.get(second_id) is not None and ledger.get(second_id).status == "accepted"
+
+    # 出队后 1700s 内尚未满 1800s 执行超时，不应告警；再过 200s（共 1900s）才首次触发无进展告警
+    fake_clock.tick(1_700_000)
+    await tracker.step()
+    await _flush_emits()
+    assert alerts == []
+
+    fake_clock.tick(200_000)
+    await tracker.step()
+    await _flush_emits()
+    assert [a.task_id for a in alerts] == [second_id]
