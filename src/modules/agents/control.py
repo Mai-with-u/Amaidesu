@@ -986,7 +986,11 @@ class DelegationCore:
                     return _DelegationOutcome(
                         ok=False,
                         error="refused",
-                        message=f"受理失败：目标 '{executor}' 不支持中途收手，无法替换当前【{IN_HAND_LABEL}】",
+                        message=(
+                            f"受理失败：目标 '{executor}' 不支持中途收手，无法替换当前【{IN_HAND_LABEL}】。"
+                            "想做的这件去掉 when_busy 直接派，会排进待办按序轮到；"
+                            "手上的活确实做完或不要了，用 framework_task_settle 结掉后再换。"
+                        ),
                     )
                 released = ""
 
