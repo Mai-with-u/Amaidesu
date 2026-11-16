@@ -94,13 +94,15 @@
             class="session-card"
             :class="{ 'is-selected': isSelected(item), 'is-live': item.is_active }"
             @click="selectSession(item)"
-            role="button"
-            tabindex="0"
-            @keydown.enter.prevent="selectSession(item)"
-            @keydown.space.prevent="selectSession(item)"
           >
             <div class="session-top">
-              <span class="session-name" :title="sessionTitle(item)">{{ sessionTitle(item) }}</span>
+              <!-- 标题是回看入口（整场数据浏览）；回放（逐条放映）另给按钮。
+                   两个入口都用真实 button，避免把交互元素套进 role="button" 里 -->
+              <button type="button" class="session-open" @click.stop="selectSession(item)">
+                <span class="session-name" :title="sessionTitle(item)">{{
+                  sessionTitle(item)
+                }}</span>
+              </button>
               <!-- 彩排场（模拟 / 回放 / 调试）单独标出；不标即正式场 -->
               <span
                 v-if="item.kind === 'rehearsal'"
@@ -124,6 +126,15 @@
                 >
                 <span class="grow" />
                 <span class="msg-count">{{ item.message_count }} 条</span>
+                <button
+                  v-if="!item.is_active"
+                  type="button"
+                  class="session-replay"
+                  title="回放这场直播：逐条放映当时的决策链"
+                  @click.stop="enterReplay(item)"
+                >
+                  回放
+                </button>
               </span>
             </div>
           </li>
@@ -155,9 +166,14 @@
         </div>
 
         <section class="stage" aria-label="时间线">
+          <!-- 回放态切换的读屏播报：界面上已有整条着色与标题，这里只把状态变化念出来 -->
+          <p class="sr-only" role="status">{{ replayAnnouncement }}</p>
           <header
             class="stage-bar"
-            :class="{ 'is-paused': paused && sessionMode === 'live' && !replayActive }"
+            :class="{
+              'is-paused': paused && sessionMode === 'live' && !replayActive,
+              'is-replay': replayActive,
+            }"
           >
             <h2 class="stage-title">{{ stageTitle }}</h2>
             <span class="stage-hint">{{ stageHint }}</span>
@@ -170,53 +186,26 @@
               <el-radio-button value="backstage">后台视角</el-radio-button>
               <el-radio-button value="trajectory">决策轨迹</el-radio-button>
             </el-radio-group>
-            <!-- 回放调试入口：选历史场次 + 可选起始时刻，整条时间线切归档数据 -->
-            <span v-if="!replayActive" class="replay-entry">
-              <el-select
-                v-model="replaySessionId"
-                size="small"
-                class="replay-entry-session"
-                placeholder="选择场次"
-                clearable
-                aria-label="回放场次"
-              >
-                <el-option
-                  v-for="item in replayCandidateSessions"
-                  :key="item.live_session_id"
-                  :label="sessionTitle(item)"
-                  :value="item.live_session_id"
-                />
-              </el-select>
-              <el-date-picker
-                v-model="replayStartAt"
-                type="datetime"
-                size="small"
-                class="replay-entry-start"
-                placeholder="起始时间（可选）"
-                :disabled="!replaySessionId"
-                aria-label="回放起始时间"
-              />
-              <el-button
-                size="small"
-                :disabled="!replaySessionId || replayPhase === 'loading'"
-                :loading="replayPhase === 'loading'"
-                @click="enterReplay"
-              >
-                回放
-              </el-button>
-            </span>
-            <!-- 回放控制条：播放/步进/倍速/进度/退出（状态机在 useTimelineReplay） -->
+            <!-- 回放控制条：走带控制 + 节奏倍速 + 时间轴 + 定位 + 退出（状态机在 useTimelineReplay）。
+                 独占一行（flex-basis 100%），与标题区分开 -->
             <ReplayControlBar
               v-if="replayActive"
+              class="replay-transport"
               :playing="replayPlaying"
               :speed="replaySpeed"
+              :pace="replayPace"
               :cursor="replayCursor"
               :total="replayTotalCount"
               :loading="replayPhase === 'loading'"
+              :cursor-ts-ms="replayCursorTs"
+              :archive-start-ms="replayArchiveStartMs"
+              :archive-end-ms="replayArchiveEndMs"
               @toggle-play="replayTogglePlay"
               @step-forward="replayStepForward"
               @step-back="replayStepBack"
               @update:speed="replaySetSpeed"
+              @update:pace="replaySetPace"
+              @locate="replayJumpToTime"
               @exit="exitReplay"
             />
             <template v-if="sessionMode === 'live' && !replayActive">
@@ -677,7 +666,7 @@ const audienceEmptyText = computed<string>(() =>
 
 /** 区头标题：三档共用同一个滚动容器，标题按档位换名，避免"时间线"三字盖住整块内容 */
 const stageTitle = computed<string>(() => {
-  if (replayActive.value) return '回放调试';
+  if (replayActive.value) return `回放 · ${sessionTitle(replaySession.value)}`;
   if (sessionMode.value === 'live') {
     if (stageView.value === 'trajectory') return '决策轨迹';
     if (stageView.value === 'backstage') return '后台视角';
@@ -689,7 +678,13 @@ const stageTitle = computed<string>(() => {
 /** 区头提示：每档说清自己在讲什么；暂停与数据清理的提示照旧 */
 const stageHint = computed<string>(() => {
   if (replayActive.value) {
-    return `回放 · ${sessionTitle(replaySession.value)}（实时新事件入缓冲不渲染）`;
+    // 行一只说"与实况有什么不同"：逐条播放历史归档、实时仍在跑、归档可能不完整。
+    // 游标时刻与条数在回放控制条里，不在这里重复
+    const parts = [`逐条播放历史归档，实时仍在进行（已缓冲 ${replayBufferedCount.value} 条）`];
+    if (replayArchivePruned.value)
+      parts.push('部分时段的事件诊断数据已清理，对应区间仅显示消息明细');
+    if (replayArchiveTruncated.value) parts.push('本场事件数超过上限，仅回放最近一段');
+    return parts.join(' · ');
   }
   if (stageView.value === 'trajectory')
     return '一次请求一条记录：输入、思考、调用、结果、发言各占一行；点任意一行看详情';
@@ -752,10 +747,15 @@ const {
   phase: replayPhase,
   session: replaySession,
   playing: replayPlaying,
+  pace: replayPace,
   speed: replaySpeed,
   active: replayActive,
   cursor: replayCursor,
   cursorTsMs: replayCursorTs,
+  archiveStartMs: replayArchiveStartMs,
+  archiveEndMs: replayArchiveEndMs,
+  pruned: replayArchivePruned,
+  truncated: replayArchiveTruncated,
   visibleEntries: replayVisibleEntries,
   totalCount: replayTotalCount,
   start: startReplay,
@@ -764,23 +764,20 @@ const {
   pause: replayPause,
   stepForward: replayStepForward,
   stepBack: replayStepBack,
+  setPace: replaySetPace,
   setSpeed: replaySetSpeed,
   jumpToTime: replayJumpToTime,
 } = useTimelineReplay({ agentFilter });
 
-/** 回放入口的场次选择与可选起始时刻 */
-const replaySessionId = ref<number | null>(null);
-const replayStartAt = ref<Date | null>(null);
-/** 回放候选：历史场次（进行中场次没有可回放的归档全量） */
-const replayCandidateSessions = computed(() => sessions.value.filter(item => !item.is_active));
-
-/** 进入回放：整条时间线切到归档渲染；起始时刻缺省从第一条开始（暂停态） */
-async function enterReplay(): Promise<void> {
-  const item = replayCandidateSessions.value.find(
-    candidate => candidate.live_session_id === replaySessionId.value,
-  );
-  if (!item) return;
-  await startReplay(item, replayStartAt.value?.getTime());
+/**
+ * 进入回放（入口在左栏场次卡上）：整条时间线切到归档渲染，从第一条开始（暂停态）。
+ * 一并选中该场次，退出回放后落在这场直播的回看视图，而不是跳回实时流。
+ * 场次没有归档内容时状态机内部会提示并复位，这里不重复处理。
+ */
+async function enterReplay(item: LiveSessionItem): Promise<void> {
+  if (item.is_active) return;
+  selectSession(item);
+  await startReplay(item);
 }
 
 /** 回放期间到达的实时事件数：进入回放时快照事件缓冲长度，退出时差值即错过量
@@ -790,22 +787,37 @@ watch(replayActive, active => {
   if (active) replayMissedSnapshot.value = eventsStore.events.length;
 });
 
-/** 退出回放：确认后回到实时流；有错过条数时如实提示 */
+/** 回放期间已缓冲的实时事件数：回放中就看得见，不必等退出时才告知 */
+const replayBufferedCount = computed<number>(() =>
+  replayActive.value ? Math.max(0, eventsStore.events.length - replayMissedSnapshot.value) : 0,
+);
+
+/** 回放态切换的读屏播报（界面另有整条着色，这里只把状态变化念出来） */
+const replayAnnouncement = ref('');
+watch(replayActive, active => {
+  replayAnnouncement.value = active
+    ? `进入回放：${sessionTitle(replaySession.value)}`
+    : '已退出回放';
+});
+
+/**
+ * 退出回放：确认后离开回放态，落到退出前所在的模式（从场次卡进回放时落在那场
+ * 的回看视图，从深链进回放时落在实时流）；有错过条数时如实说明它们在哪。
+ */
 async function exitReplay(): Promise<void> {
   if (!replayActive.value) return;
-  const missed = Math.max(0, eventsStore.events.length - replayMissedSnapshot.value);
+  const missed = replayBufferedCount.value;
+  const landsIn = sessionMode.value === 'replay' ? '这场直播的回看视图' : '实时流';
   const confirmed = await confirmAction(
     missed > 0
-      ? `退出回放并回到实时流？回放期间到达的 ${missed} 条实时事件已在缓冲中，回到实时后立即显示。`
-      : '退出回放并回到实时流？',
+      ? `退出回放？将回到${landsIn}。回放期间到达的 ${missed} 条实时事件已缓存在后台，切回实时流后可见。`
+      : `退出回放？将回到${landsIn}。`,
     '退出回放',
   );
   if (!confirmed) return;
   exitReplayState();
-  replaySessionId.value = null;
-  replayStartAt.value = null;
   if (missed > 0) {
-    ElMessage.info(`已退出回放，缓冲中的 ${missed} 条实时事件已回到时间线`);
+    ElMessage.info(`已退出回放，缓冲中的 ${missed} 条实时事件在切回实时流后可见`);
   }
 }
 
@@ -1434,9 +1446,53 @@ onMounted(() => {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+/* 标题按钮：承载回看入口的键盘可达性，外观仍是原来的标题文字 */
+.session-open {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.session-open:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* 回放按钮：默认安静，悬停或聚焦才提亮 */
+.session-replay {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border: 1px solid var(--border-color-dark);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.session-replay:hover,
+.session-replay:focus-visible {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.session-replay:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 .session-badge {
@@ -1585,6 +1641,12 @@ onMounted(() => {
 }
 .stage-bar.is-paused {
   background: var(--color-warning-bg);
+}
+
+/* 回放态：整条工具栏着色，一眼可辨当前看到的是历史归档而不是实况 */
+.stage-bar.is-replay {
+  background: var(--color-primary-bg);
+  box-shadow: inset 3px 0 0 var(--color-primary);
 }
 
 .stage-title {
@@ -1797,20 +1859,9 @@ onMounted(() => {
   border-radius: 3px;
 }
 
-/* 回放调试入口：场次下拉 + 起始时刻 + 进入按钮（行内排布，随 stage-bar 折行） */
-.replay-entry {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.replay-entry-session {
-  width: 150px;
-}
-.replay-entry-start {
-  width: 180px;
-}
-.replay-entry-start :deep(.el-input__wrapper) {
-  padding-left: 6px;
+/* 回放控制条独占一行：标题与提示在上行，走带控制在下行 */
+.replay-transport {
+  flex-basis: 100%;
 }
 
 /* 回看向旧翻页条：滚动流内置顶居中 */
@@ -1843,6 +1894,19 @@ onMounted(() => {
 .jump:hover {
   background: var(--bg-active);
   transform: translateX(-50%) translateY(-1px);
+}
+
+/* 只给读屏用：视觉隐藏但仍留在无障碍树里 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* 窄屏                                                          */
