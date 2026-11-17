@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -87,6 +87,8 @@ class ReplyRoundAttachment(ToolCallAttachment):
     reply_to: str = ""
     #: 本轮说话档位（"play" 边玩边说 / "talk" 杂谈唠嗑），由宿主按环节与游戏态势判定
     speech_mode: str = "play"
+    #: 本轮观众弹幕 message_id → 熟悉度档位（"close" / "regular"），供表达侧对熟客放轻松语气
+    familiarity_by_message_id: Dict[str, str] = field(default_factory=dict)
 
 
 def assistant_speech_lines(history: Optional[List[Any]]) -> List[str]:

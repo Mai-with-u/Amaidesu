@@ -36,7 +36,7 @@ from collections import deque
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
 from src.modules.agents.base import AgentState, BaseAgent
 from src.modules.agents.delegation_board import (
@@ -180,6 +180,10 @@ _CLOSING_SESSION: ContextVar[Optional[ClosingSession]] = ContextVar("streamer_cl
 # 道别那一轮能开口。与 _CLOSING_SESSION 同理放在上下文变量里，并发的轮次各看各的
 _ROUND_LIVE_EPOCH: ContextVar[Optional[int]] = ContextVar("streamer_round_live_epoch", default=None)
 
+# 本轮决策窗的触发原因（_execute_round 开头设上、跑完复位）：供话头工作台在窗口渲染与发言收尾中
+# 识别游戏待定夺唤醒、收播道别或断线续播，并发轮次各自隔离
+_ROUND_TRIGGER_CAUSE: ContextVar[Optional[TriggerCause]] = ContextVar("streamer_round_trigger_cause", default=None)
+
 
 def _chat_speaker(payload: GameChatPayload) -> str:
     """这句游戏聊天是谁说的：核对过在线的玩家写 UUID，认不出是谁的玩家聊天写 "?"，系统消息为空。"""
@@ -274,6 +278,7 @@ class StreamerAgent(BaseAgent):
         mouth: Optional[Mouth] = None,
         memory_cues: Optional[MemoryCueProvider] = None,
         events_dir: Optional[Path] = None,
+        clock: Callable[[], int] = now_ms,
     ) -> None:
         """初始化主播 Agent。
 
@@ -364,6 +369,7 @@ class StreamerAgent(BaseAgent):
         """
         super().__init__(event_bus=event_bus)
         self.typed_config = config
+        self._clock: Callable[[], int] = clock
         self._llm = llm_manager
         # LLMManager 先于事件总线由组合根构造，挂载点在 Agent 侧：总线到手后
         # 递给它，"全部模型失败"才能旁路发布 core.error 告警（幂等，不覆盖已有总线）
@@ -479,7 +485,7 @@ class StreamerAgent(BaseAgent):
         self._rundown_coord.set_remaining_beats_provider(self._talk_workbench.remaining_beats)
         # 3) 自备话题匣：有话题卡仓储时按场次挑未用卡片预摆或供主动抽卡
         self._topic_deck: Optional[TopicDeck] = (
-            TopicDeck(talk_card_repo, session_id_fn=self._current_session_pk, clock=now_ms)
+            TopicDeck(talk_card_repo, session_id_fn=self._current_session_pk, clock=self._clock)
             if talk_card_repo is not None
             else None
         )
@@ -522,6 +528,7 @@ class StreamerAgent(BaseAgent):
                 recent_speeches_provider=self._spoken_log.recent_texts,
                 mouth_reconciler=self._reconcile_with_mouth,
                 fresh_context_since=self._fresh_context_since_open,
+                clock=self._clock,
                 # 说话档位、话头工作台、自备话题匣与主动沉默状态
                 speech_mode_provider=self._current_speech_mode,
                 talk_workbench_provider=self._render_talk_workbench_for_window,
@@ -650,6 +657,7 @@ class StreamerAgent(BaseAgent):
                 cue_log_repo=memory_cue_log_repo,
                 # 第四次调用：更新游戏社交事实（没接仓储时不跑）
                 social_fact_repo=social_fact_repo,
+                viewer_repo=viewer_repo,
                 # 后台任务面板：整理全程（取料/第 N 笔模型调用/写库）在这里可见
                 task_registry=task_registry,
             )
@@ -853,6 +861,8 @@ class StreamerAgent(BaseAgent):
             mouth_reconciler=self._reconcile_with_mouth,
             on_mouth_superseded=self._on_mouth_superseded,
             on_round_spoken=self._on_round_spoken,
+            on_round_silent=self._on_round_silent,
+            clock=self._clock,
             logger=self._logger,
         )
 
@@ -1331,6 +1341,8 @@ class StreamerAgent(BaseAgent):
             self._spoken_log.reset()
             self._pending_operator_notes.clear()
             self._talk_workbench.sync_segment(None, [])
+            self._talk_workbench.clear_viewer_tangent()
+            self._talk_workbench.consume_interrupted_tail()
             if self._task_ledger is not None:
                 self._task_ledger.clear_provider_outcomes()
         # 按场次类型先拼第一份简报（正式场接正式场、彩排场接彩排场）；此后每窗按表快照重渲。
@@ -1701,6 +1713,8 @@ class StreamerAgent(BaseAgent):
             self._spoken_log.reset()
             self._pending_operator_notes.clear()
             self._talk_workbench.sync_segment(None, [])
+            self._talk_workbench.clear_viewer_tangent()
+            self._talk_workbench.consume_interrupted_tail()
             if self._task_ledger is not None:
                 self._task_ledger.clear_provider_outcomes()
         # 收播收尾：排进后台，依次是"等队尾台词播完 → 本场整理（有上限）→ 记账器清理"。
@@ -1953,12 +1967,29 @@ class StreamerAgent(BaseAgent):
             haystack += " " + remaining[0]
         return any(hint in haystack for hint in ("提问箱", "棉花糖", "话题卡", "话题匣", "qna", "快问快答", "自由闲聊"))
 
-    def _render_talk_workbench_for_window(self, has_viewer_batch: bool) -> str:
-        """为本决策窗渲染【当前话头与本节提纲】；空闲窗读完即清尾句提醒，避免重复唠叨。"""
+    def _render_talk_workbench_for_window(self, has_viewer_batch: bool, *, urgent_game: bool = False) -> str:
+        """为本决策窗渲染话头工作台（杂谈档【当前话头与本节提纲】或边玩边说档【刚聊开的话头】）；空闲窗读完即清尾句提醒。"""
         self._sync_talk_workbench()
-        if self._current_speech_mode() != "talk":
+        if self._current_speech_mode() == "talk":
+            rendered = self._talk_workbench.render()
+            if rendered and not has_viewer_batch:
+                self._talk_workbench.consume_interrupted_tail()
+            return rendered
+        cause = _ROUND_TRIGGER_CAUSE.get()
+        if cause is not None and cause.kind in (TriggerKind.SIGNOFF, TriggerKind.RESUME):
             return ""
-        rendered = self._talk_workbench.render()
+        # 边玩边说档：当前若有待定夺信号、由游戏急事触发本轮或账本内已有待入账突发遭遇事件，立即清空余温
+        is_urgent = (
+            urgent_game
+            or self._proactive_signals.game_pending
+            or (cause is not None and cause.kind is TriggerKind.GAME)
+            or self._game_ledger.has_pending_urgent()
+        )
+        rendered = self._talk_workbench.render_play_window(
+            now_ms=self._clock(),
+            has_viewer_batch=has_viewer_batch,
+            urgent_game=is_urgent,
+        )
         if rendered and not has_viewer_batch:
             self._talk_workbench.consume_interrupted_tail()
         return rendered
@@ -1978,7 +2009,7 @@ class StreamerAgent(BaseAgent):
         return self._topic_deck.render()
 
     async def _on_round_spoken(self, outcome: Any, had_viewer_batch: bool) -> None:
-        """一轮决策成功发出台词后更新话题匣与话头工作台进度。"""
+        """一轮决策成功发出台词后更新话题匣与话头工作台进度（含边玩边说档的观众话头短余温）。"""
         self._sync_talk_workbench()
         used_card = False
         if outcome.use_card_id is not None and self._topic_deck is not None:
@@ -1987,6 +2018,23 @@ class StreamerAgent(BaseAgent):
                 self._talk_workbench.start_card(card.id, card.title)
                 used_card = True
         if self._current_speech_mode() != "talk":
+            cause = _ROUND_TRIGGER_CAUSE.get()
+            if cause is not None and cause.kind in (TriggerKind.SIGNOFF, TriggerKind.RESUME):
+                return
+            # 边玩边说档回应观众弹幕或付费留言（排除对游戏内玩家的回应）且未声明收尾时，启动或刷新 1 拍短余温；
+            # 无弹幕主动轮发声或显式声明 beat_done=True 时推进清空余温，确保无追问时最多顺延 1 拍即收束回游戏
+            answering_viewer = not bool(outcome.reply_player[0]) and (bool(outcome.target) or had_viewer_batch)
+            if answering_viewer and not outcome.beat_done:
+                self._talk_workbench.start_viewer_tangent(
+                    outcome.topic_tag,
+                    outcome.topic_summary,
+                    at_ms=self._clock(),
+                )
+            else:
+                self._talk_workbench.consume_viewer_tangent_round()
+                if outcome.beat_done:
+                    self._talk_workbench.clear_viewer_tangent()
+                    self._talk_workbench.consume_interrupted_tail()
             return
         # 观众弹幕或玩家开口的插话轮若未主动选卡、也未声明收束要点，不扣减当前提纲要点轮数
         answering_digression = bool(had_viewer_batch or outcome.target or outcome.reply_player[0])
@@ -1994,6 +2042,15 @@ class StreamerAgent(BaseAgent):
             self._talk_workbench.record_round(beat_done=outcome.beat_done)
         if outcome.beat_done:
             self._talk_workbench.consume_interrupted_tail()
+
+    def _on_round_silent(self, had_viewer_batch: bool, proactive: bool, trigger_cause: TriggerCause) -> None:
+        """边玩边说档无观众弹幕的主动轮沉默收尾时消费当次余温机会，防止多个主动窗反复提示同一余温。"""
+        if not proactive or had_viewer_batch:
+            return
+        if trigger_cause.kind in (TriggerKind.SIGNOFF, TriggerKind.RESUME):
+            return
+        if self._current_speech_mode() == "play":
+            self._talk_workbench.consume_viewer_tangent_round()
 
     def _note_game_activity(self, game: str) -> None:
         """记一笔这个游戏刚有动静：game.* / game.body.* / game.chat.* 事件或委派受理。"""
@@ -3154,7 +3211,7 @@ class StreamerAgent(BaseAgent):
             live=self._live_active,
             trigger=self._proactive_trigger,
             room_state=self._room_state,
-            now_ms=now_ms(),
+            now_ms=self._clock(),
             rundown_overdue=self._rundown_coord.is_overdue(),
             rundown_ready=self._rundown_coord.is_active(),
             # 提醒队列非空即催醒；防接龙阻塞时队列保留，下一 tick 重试
@@ -3206,6 +3263,7 @@ class StreamerAgent(BaseAgent):
         # 道别轮不记：它就是下播后那唯一一句
         is_signoff = trigger_cause.kind is TriggerKind.SIGNOFF
         live_token = _ROUND_LIVE_EPOCH.set(self._session_epoch if self._live_active and not is_signoff else None)
+        cause_token = _ROUND_TRIGGER_CAUSE.set(trigger_cause)
         try:
             # 开窗前先看各游戏眼下在哪个存档（换了存档清掉那个游戏手头的事），再按台账快照重渲
             # 常驻简报（直播中纠错下一窗生效；表没变、存档没换时逐字节相同，缓存不失效）
@@ -3223,6 +3281,7 @@ class StreamerAgent(BaseAgent):
                 batch, speech=result.get("speech"), batch_persisted=batch_persisted, scope_pk=scope_pk
             )
         finally:
+            _ROUND_TRIGGER_CAUSE.reset(cause_token)
             _ROUND_LIVE_EPOCH.reset(live_token)
             _CLOSING_SESSION.reset(token)
         return result

@@ -37,6 +37,12 @@ _PENDING_GAME_EVENTS_MAX = 200
 #: 游戏进展线（game.*）的交付/升级上报（任务结束或卡住待定夺）
 _STATE_KINDS = frozenset({"died", "respawned", "reflex_started", "reflex_finished", "report"})
 
+#: 需要立即打断场外闲聊余温、优先处置眼下游戏处境的突发遭遇与待定夺事件种类
+_URGENT_ENCOUNTER_KINDS = frozenset(
+    {"attacked", "died", "respawned", "dimension_changed", "need_unhandled", "reflex_started"}
+)
+_URGENT_GAME_EVENT_TYPES = frozenset({"report", "error", "attention_required", "task_alert", "auto_cancel"})
+
 #: 事件正文按关键词命中状态跃迁（睡觉/起床/死亡/重生/任务开始与结束常以这些词出现在
 #: milestone / attention_required 条目里）；挨打、聊天、剧情叙述不含这些词，不进本块
 _STATE_KEYWORDS: Tuple[str, ...] = ("睡", "醒", "起床", "倒下", "死亡", "重生", "交付", "完成", "开始做")
@@ -170,6 +176,24 @@ class GameLedger:
     def pending_lines(self) -> List[str]:
         """待入账事件行的只读快照（已脱敏的行原文；出账经 ``drain``，本方法只看不取）。"""
         return [entry.base for entry in self._pending]
+
+    def has_pending_urgent(self) -> bool:
+        """待入账队列中是否已有需要立即关注的突发遭遇或游戏急事上报。"""
+        return any(self._is_urgent_label(entry.label) for entry in self._pending)
+
+    @classmethod
+    def has_urgent_events(cls, events: Sequence[str]) -> bool:
+        """判断已渲染的事件行序列里是否包含突发遭遇或待定夺急事（供手造批次与窗口判定复用）。"""
+        for line in events:
+            if not line.startswith("["):
+                continue
+            head, sep, _ = line[1:].partition("]")
+            if not sep:
+                continue
+            label = head.split(" ", 1)[-1]
+            if cls._is_urgent_label(label):
+                return True
+        return False
 
     # ==================== 标签构造（账本外零手写标签字面量） ====================
 
@@ -348,6 +372,7 @@ class GameLedger:
                 notes.append(self._player_note(item))
         if len(state_lines) > _MAX_STATE_LINES:
             state_lines = state_lines[-_MAX_STATE_LINES:]
+        has_urgent = any(self._is_urgent_label(item.label) for item in staged)
         return GameEventBatch(
             events=tuple(events),
             fresh_chat=tuple(fresh_chat),
@@ -357,6 +382,7 @@ class GameLedger:
             facts_text="\n".join(state_lines),
             timeline_turns=tuple(turns),
             player_notes=tuple(notes),
+            has_urgent=has_urgent,
         )
 
     @staticmethod
@@ -375,6 +401,18 @@ class GameLedger:
             game=item.game if uuid else "",
             uuid=uuid,
         )
+
+    @staticmethod
+    def _is_urgent_label(label: str) -> bool:
+        """事件行标签是否属于突发身体遭遇或待定夺/异常类游戏急事。"""
+        parts = label.split("·")
+        if len(parts) != 3:
+            return False
+        if parts[0] == "遭遇":
+            return parts[-1] in _URGENT_ENCOUNTER_KINDS
+        if parts[0] == "游戏":
+            return parts[-1] in _URGENT_GAME_EVENT_TYPES
+        return False
 
     @staticmethod
     def _is_state_line(label: str, body: str) -> bool:

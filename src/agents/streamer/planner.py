@@ -34,6 +34,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -290,8 +291,8 @@ class PlannerEnv:
     clock: Callable[[], int] = now_ms
     # 本轮说话档位查询（"play" 边玩边说 / "talk" 杂谈唠嗑；缺省 "play"）
     speech_mode_provider: Optional[Callable[[], str]] = None
-    # 话头工作台本窗渲染（入参 has_viewer_batch；返回【当前话头与本节提纲】或空串）
-    talk_workbench_provider: Optional[Callable[[bool], str]] = None
+    # 话头工作台本窗渲染（入参 has_viewer_batch 与可选关键字 urgent_game；返回提纲或余温段）
+    talk_workbench_provider: Optional[Callable[..., str]] = None
     # 自备话题匣本窗刷新并渲染（入参 has_viewer_batch；异步返回【可抽的话题卡 / 提问箱】或空串）
     talk_cards_provider: Optional[Callable[[bool], Awaitable[str]]] = None
     # 上一轮主动决策窗是否以沉默收场（play 档游戏平静时解开 45 秒冷场死锁）
@@ -517,6 +518,8 @@ class Planner:
         # 本窗开窗时刻（毫秒）与是否已因嘴带来的新事实推翻退回过一次（每窗最多退一次重想）
         self._round_started_ms: int = 0
         self._round_mouth_bounced: bool = False
+        # 本窗非遗忘熟客弹幕 message_id → 熟悉度档位，随 reply 调用单交表达侧
+        self._round_familiarity_by_msg_id: Dict[str, str] = {}
         # 本窗在游戏里开口或冲她做动作的玩家：线索推送据此推玩家卡
         self._round_game_players: Tuple[Tuple[str, str], ...] = ()
         # 玩家找她的条目：本窗新到的（定回应对象）与最近几分钟的（交给表达侧，说清谁说的、谁做的）
@@ -718,11 +721,20 @@ class Planner:
             int(item) for item in (getattr(memory_cues, "asked_archive_ids", ()) if memory_cues is not None else ())
         }
         self._memory_labels = dict(getattr(memory_cues, "labels", {}) or {})
+        self._round_familiarity_by_msg_id = dict(getattr(memory_cues, "familiarity_by_message_id", {}) or {})
 
         # 决策前自动读一次配置的只读参考工具（如游戏现场速览）：结果直接进参考段，
         # 不必先花一步请求去查再决定说什么。
         self._round_speech_mode = self._resolve_speech_mode()
-        talk_workbench_text = self._read_talk_workbench(bool(batch))
+        # 本窗若由游戏待定夺唤醒、新入账突发遭遇/急事上报或有待回的游戏内聊天，按游戏急事通知工作台清空场外余温
+        urgent_game = (
+            (trigger_cause is not None and trigger_cause.kind is TriggerKind.GAME)
+            or resolved_batch.has_urgent
+            or GameLedger.has_urgent_events(resolved_batch.events)
+            or bool(private_game_chat)
+            or any(note.said and not note.answered for note in resolved_batch.player_notes)
+        )
+        talk_workbench_text = self._read_talk_workbench(bool(batch), urgent_game=urgent_game)
         talk_cards_text = await self._read_talk_cards(bool(batch))
         overview = await self._read_reference_tools(round_id)
         self._last_overview_text = overview
@@ -1197,12 +1209,21 @@ class Planner:
             self.logger.warning(f"读取说话档位失败（按 play 处理）: {exc}", exc=True)
             return "play"
 
-    def _read_talk_workbench(self, has_viewer_batch: bool) -> str:
-        """读取话头工作台本窗渲染文本（【当前话头与本节提纲】）；未注入或异常时为空串。"""
+    def _read_talk_workbench(self, has_viewer_batch: bool, *, urgent_game: bool = False) -> str:
+        """读取话头工作台本窗渲染文本（杂谈提纲或边玩边说刚聊开的话头）；兼容单参替身，异常时为空串。"""
         if self._talk_workbench_provider is None:
             return ""
         try:
-            return (self._talk_workbench_provider(has_viewer_batch) or "").strip()
+            params = inspect.signature(self._talk_workbench_provider).parameters
+            accepts_urgent = "urgent_game" in params or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+            )
+            raw = (
+                self._talk_workbench_provider(has_viewer_batch, urgent_game=urgent_game)
+                if accepts_urgent
+                else self._talk_workbench_provider(has_viewer_batch)
+            )
+            return (raw or "").strip()
         except Exception as exc:  # noqa: BLE001
             self.logger.warning(f"读取话头工作台失败（本窗省略该段）: {exc}", exc=True)
             return ""
@@ -1316,7 +1337,7 @@ class Planner:
         if opening_wrapup:
             # 开播头两窗（或第一件委派受理前）注入确定性【上次收尾】，让主播开场知道上次停在哪、最后说了什么
             lines.append(opening_wrapup)
-        current_ms = now_ms()
+        current_ms = self._clock()
         activity = self._room_state.activity_line()
         if activity:
             # 房间活跃度事实一行（观众增量+弹幕量）：互动话术密度与发言策略的校准依据，
@@ -1397,12 +1418,19 @@ class Planner:
             # 话题，再考虑沉默。
             # 这段话与提示词模板 amaidesu_planner_react.md 的"已聊话题必须有新角度"一条讲的是同一件事，
             # 措辞保持逐字一致（模板里那条是常驻版本，这里是每窗按实况注入的版本）
-            talk_tail = (
-                "杂谈环节围绕当前提纲要点或话题卡顺着讲出新的具体细节、来龙去脉算推进话头；"
-                "把讲过的同一层意思换词重讲才算重复。"
-                if self._round_speech_mode == "talk"
-                else ""
-            )
+            if self._round_speech_mode == "talk":
+                talk_tail = (
+                    "杂谈环节围绕当前提纲要点或话题卡顺着讲出新的具体细节、来龙去脉算推进话头；"
+                    "把讲过的同一层意思换词重讲才算重复。"
+                )
+            elif "【刚聊开的话头】" in talk_workbench_text:
+                # 边玩边说档存在观众刚引出话头的 1 拍余温时，放行这一轮延伸看法或设定喜好，聊完即收束回游戏
+                talk_tail = (
+                    "当参考段存在【刚聊开的话头】时，围绕该话头顺延这一轮讲出本场未说过的延伸看法或设定喜好算有增量"
+                    "（聊完即收束回游戏）。"
+                )
+            else:
+                talk_tail = ""
             lines.append(
                 "【已聊话题】（由旧到新，同一话题合并成一行：话题名（轮数，时间跨度）：最近一轮她当时说的那句。"
                 "都是当时的说法，不代表游戏里现在的样子）\n"
@@ -1711,6 +1739,7 @@ class Planner:
                 # 回应对象：Planner 在 to_player 点名的玩家；没点名时，本窗唯一在公屏开口、话题摘要里又提到的那位
                 reply_to=answering_player,
                 speech_mode=self._round_speech_mode,
+                familiarity_by_message_id=dict(self._round_familiarity_by_msg_id),
             )
             result = await self._tool_registry.invoke(
                 ToolInvocation(

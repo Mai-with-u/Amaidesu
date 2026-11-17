@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, ClassVar, Dict, Iterable, List, Optional
+from typing import Any, ClassVar, Dict, Iterable, List, Optional, Sequence
 
 from src.agents.streamer.speech_guard import strip_memory_numbers
 from src.modules.events.names import CoreEvents
@@ -32,6 +32,7 @@ from src.modules.tools.models import ToolExecutionResult
 from src.modules.tools.provider import BaseToolProvider
 from src.modules.types.emotion_vocab import Emotion
 
+from .. import canonical
 from ..plan import DecisionPlan, ReplyRoundAttachment, assistant_speech_lines
 from ..replyer import Replyer
 
@@ -109,8 +110,9 @@ _REPLY_PARAMETERS_SCHEMA: dict[str, Any] = {
             "type": "boolean",
             "description": (
                 "新颖自检（必填）：填 true 前先确认本条有增量——边玩边说（play 档）增量只认事实上的新："
-                "新事件、新进展、新的互动对象、新信息；参考段出现【冷场】行时，"
-                "从冷场可聊素材里拿出本场还没聊过的内容也算有增量；"
+                "新事件、新进展、新的互动对象、新信息；参考段存在【刚聊开的话头】时，"
+                "围绕该话头顺延这一轮讲出本场未说过的延伸看法或设定喜好算有增量（聊完即收束回游戏）；"
+                "参考段出现【冷场】行时，从冷场可聊素材里拿出本场还没聊过的内容也算有增量；"
                 "杂谈档（talk 档，或正按【当前话头与本节提纲】/话题卡展开）认话头推进增量："
                 "围绕当前提纲要点或话题卡讲出新的具体细节、来龙去脉、自身态度，或回应观众延伸提问都算有增量。"
                 "同一件事或同一层意思换个说法、换个态度或换种情绪再讲，不算新；"
@@ -207,6 +209,32 @@ _REPLY_TOOL_FULL_NAME = build_reply_tool_spec().full_name
 # ---------------------------------------------------------------------------
 # Provider 类
 # ---------------------------------------------------------------------------
+
+
+def _resolve_target_message_id(
+    target: Optional[str],
+    batch: Sequence[Any],
+    history: Optional[Sequence[Any]],
+    familiarity_map: Dict[str, str],
+) -> str:
+    """把回应目标解析为观众消息 ID（支持 [id:…]、裸 ID 或本批唯一匹配的原文片段）；非观众消息返回空串。"""
+    normalized = canonical.normalize_message_id(target or "")
+    if not normalized:
+        return ""
+    for msg in batch:
+        if str(getattr(msg, "message_id", "") or "") == normalized:
+            return normalized
+    for turn in reversed(history or ()):
+        if str(getattr(turn, "message_id", "") or "") == normalized:
+            return normalized if getattr(turn, "role", "user") == "user" else ""
+    matched_ids = [
+        str(getattr(msg, "message_id", "") or "")
+        for msg in batch
+        if str(getattr(msg, "message_id", "") or "") and normalized in str(getattr(msg, "content", "") or "")
+    ]
+    if len(matched_ids) == 1:
+        return matched_ids[0]
+    return normalized if normalized in familiarity_map else ""
 
 
 class ReplyToolProvider(BaseToolProvider):
@@ -360,6 +388,7 @@ class ReplyToolProvider(BaseToolProvider):
                 error_message=(
                     "你自评这是重复——要么拿出观众没听过的新内容重新调用"
                     "（新事件、新进展这类事实上的新；杂谈档围绕当前提纲要点或话题卡讲出新细节、来龙去脉；"
+                    "参考段存在【刚聊开的话头】时可围绕该话头顺延这一轮讲出本场未说过的延伸看法或设定喜好；"
                     "参考段有【冷场】行时也可以用本场没聊过的冷场素材），"
                     "要么本轮别发言"
                 ),
@@ -411,6 +440,8 @@ class ReplyToolProvider(BaseToolProvider):
 
         # 思考流回调随 attachment 一次性传入（调用即弃，无跨轮残留）
         speech_mode = "talk" if materials.speech_mode == "talk" else "play"
+        target_msg_id = _resolve_target_message_id(plan.target, batch, history, materials.familiarity_by_message_id)
+        target_familiarity = materials.familiarity_by_message_id.get(target_msg_id, "") if target_msg_id else ""
         try:
             result = await self._replyer.generate(
                 plan=plan,
@@ -425,6 +456,7 @@ class ReplyToolProvider(BaseToolProvider):
                 game_people=list(materials.game_people),
                 reply_to=materials.reply_to,
                 speech_mode=speech_mode,
+                target_familiarity=target_familiarity,
             )
         except Exception as exc:
             self._logger.exception(f"reply_tool: Replyer.generate 抛出未捕获异常: {exc}")

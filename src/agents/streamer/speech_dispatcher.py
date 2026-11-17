@@ -283,12 +283,12 @@ class SpeechDispatcher:
         self._interrupted_tail_listener = listener
 
     async def _enqueue_paragraph(self, utterance_id: str, text: str, *, talk: bool, priority: int = 0) -> None:
-        """决策台词入播放队列：杂谈档的长段拆成两三句、共用一个段落号依次入队，其余整句入队。
+        """决策台词入播放队列：杂谈档长段或有观众回复目标的多句评论回复拆成两三句、共用段落号依次入队，其余整句入队。
 
         拆开后句与句之间按播放自然停顿，被更急的台词插进来时还没播的后半段随段落作废，
         作废的原文交给尾句去处。第一句沿用这句台词的 utterance_id（回弹幕确认、字幕、
-        记账都按它对上），后面几句派生编号只在播放队列里用；分段上限不超过队列容量，
-        避免一段话自己把开头挤出队列。
+        记账都按它对上；后续派生编号在字幕跟随器里回退基编号显示同一引用气泡），
+        分段上限不超过队列容量，避免一段话自己把开头挤出队列。
         """
         queue = self._utterance_queue
         if queue is None:
@@ -419,8 +419,9 @@ class SpeechDispatcher:
                 self._schedule_subtitle_show(cleaned_speech, utterance_id, reply_quote=reply_quote)
                 self._notify_spoken(cleaned_speech, source="planner")
                 if self._tts_enabled and self._utterance_queue is not None:
-                    # 杂谈档（reply 工具在结果里标了 speech_mode=talk）长段拆句连播，其余整句
-                    talk = reply_payload.get("speech_mode") == "talk"
+                    # 处于杂谈档或本句有观众回复目标时传 talk=True：单句仍单句入队，2～3 句的回应按句拆段连播且保留引用气泡
+                    has_viewer_target = bool(target_user_id or reply_to_message_id)
+                    talk = reply_payload.get("speech_mode") == "talk" or has_viewer_target
                     await self._enqueue_paragraph(utterance_id, cleaned_speech, talk=talk, priority=priority)
             finally:
                 if claimed:

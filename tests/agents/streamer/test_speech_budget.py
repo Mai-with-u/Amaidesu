@@ -123,37 +123,51 @@ def _rendered(prompt: MagicMock, template: str) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize(
-    ("mode", "target", "expected_budget"),
-    [("play", None, 60), ("play", "m1", 85), ("talk", None, 150), ("talk", "m1", 175)],
-    ids=["play", "play-target", "talk", "talk-target"],
+    ("mode", "target", "reply_to", "expected_budget", "expected_rule"),
+    [
+        ("play", None, "", 60, "不超过 60 字，可以是一两句。"),
+        ("play", "m1", "", 100, "不超过 100 字，两三句短话以内。"),
+        ("play", None, "小夏", 100, "不超过 100 字，两三句短话以内。"),
+        ("talk", None, "", 150, "不超过 150 字，两三句。"),
+        ("talk", "m1", "", 190, "不超过 190 字，两三句。"),
+    ],
+    ids=["play", "play-target", "play-reply-to-player", "talk", "talk-target"],
 )
-async def test_budget_follows_speech_mode_and_target(mode: str, target: Optional[str], expected_budget: int) -> None:
-    """边玩边说 60 字、杂谈 150 字；接某位观众时两档都多给 25 字，开头的称呼不挤掉正事。"""
+async def test_budget_follows_speech_mode_and_target(
+    mode: str,
+    target: Optional[str],
+    reply_to: str,
+    expected_budget: int,
+    expected_rule: str,
+) -> None:
+    """边玩边说 60 字、杂谈 150 字；接某位观众或玩家时两档都多给 40 字，容纳起手亮话头且不挤掉正事。"""
     replyer, _, prompt = _modal_replyer(
         Response(success=True, content="好耶", request_id="r"), speech_max_chars=60, talk_speech_max_chars=150
     )
     plan = DecisionPlan(should_reply=True, topic_summary="话头", target=target)
-    await replyer.generate(plan, [], speech_mode=mode)
+    await replyer.generate(plan, [], reply_to=reply_to, speech_mode=mode)
     turn = _rendered(prompt, "amaidesu_replyer")
-    assert turn["length_rule"].startswith(f"不超过 {expected_budget} 字")
+    assert turn["length_rule"] == expected_rule
     system = _rendered(prompt, "amaidesu_replyer_system")
     if mode == "talk":
         assert "两三句" in system["speech_style_rule"] and "两三个短句" in turn["pace_rule"]
     else:
-        assert "一句话说完就停" in system["speech_style_rule"]
+        assert "平时一次只说一件事、干脆收住" in system["speech_style_rule"]
+        assert "先顺口带出对方问的事再答，两三句短话自然说完就停" in system["speech_style_rule"]
+        assert "一句话说完就停" not in system["speech_style_rule"]
 
 
 async def test_shorten_with_target_keeps_the_opening_hook() -> None:
-    """接观众的话却超长：重说要求保留开头的称呼或接话钩子，删后面的枝节。"""
-    long_reply = "观众甲问腰上的旋钮啊——" + "这个旋钮可以调节麦麦的各种参数，" * 8
+    """接观众的话却超长：重说要求保留开头顺口带出的问题由头或称呼，删后面的枝节，防止削掉转场锚点。"""
+    long_reply = "阿杰问腰上的旋钮能不能拧啊——" + "这个旋钮可以调节麦麦的各种参数，" * 8
     replyer, llm, _ = _modal_replyer(
         Response(success=True, content=long_reply, request_id="r1"),
-        Response(success=True, content="观众甲问旋钮啊——拧一下我就变精神。", request_id="r2"),
+        Response(success=True, content="阿杰问旋钮能不能拧——拧一下我就变精神。", request_id="r2"),
         speech_max_chars=60,
     )
     await replyer.generate(DecisionPlan(should_reply=True, topic_summary="旋钮", target="m1"), [])
     instruction = llm.generate.await_args_list[1].args[0][0]["content"]
-    assert "开头那个称呼或接住对方的词要留着" in instruction and "不超过 85 字" in instruction
+    assert "开头顺口带出的问题由头、称呼或接住对方的词要留着" in instruction and "不超过 100 字" in instruction
 
 
 async def test_no_game_omits_game_rules_and_section() -> None:

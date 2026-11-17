@@ -139,6 +139,8 @@ class DecisionRoundExecutor:
         mouth_reconciler: Optional[Callable[[str, int], Awaitable[ReconcileVerdict]]] = None,
         on_mouth_superseded: Optional[Callable[[], None]] = None,
         on_round_spoken: Optional[Callable[[RoundOutcome, bool], Awaitable[None]]] = None,
+        on_round_silent: Optional[Callable[[bool, bool, TriggerCause], None]] = None,
+        clock: Callable[[], int] = now_ms,
         logger: Optional[ModuleLogger] = None,
     ) -> None:
         """决策窗材料的取用契约：
@@ -175,6 +177,8 @@ class DecisionRoundExecutor:
         self._mouth_reconciler = mouth_reconciler
         self._on_mouth_superseded = on_mouth_superseded
         self._on_round_spoken = on_round_spoken
+        self._on_round_silent = on_round_silent
+        self._clock: Callable[[], int] = clock
         # 决策轮次自增计数器（round_id 生成用；进程内单调）
         self._round_seq: int = 0
 
@@ -238,7 +242,7 @@ class DecisionRoundExecutor:
                 }
         """
         round_id = self._next_round_id()
-        started_ms = now_ms()
+        started_ms = self._clock()
         await self._emit_streamer_stage(
             stage="planning",
             agent_state="running",
@@ -306,12 +310,12 @@ class DecisionRoundExecutor:
             "llm_request_id": None,
             "planner_duration_ms": 0,
             "reply_duration_ms": 0,
-            "total_duration_ms": now_ms() - started_ms,
+            "total_duration_ms": self._clock() - started_ms,
         }
 
         # 开决策窗：出账 + 读历史 + 本窗批次 + 时间线 notes 一次取齐（顺序不变量
         # 在 SessionScope.open_window 内化——出账的时间线行必先进本轮投影）
-        window_opened_ms = now_ms()
+        window_opened_ms = self._clock()
         materials = await self._window_opener(scope_pk=scope_pk)
         history = materials.history
 
@@ -325,7 +329,7 @@ class DecisionRoundExecutor:
 
         # Planner ReAct 决策（循环内完成查信息与 reply 调用；失败细节经
         # outcome.error 带出，供决策事件区分降级原因）
-        planner_started_ms = now_ms()
+        planner_started_ms = self._clock()
         thinking = None
         if self._thinking_sink is not None and self._thinking_enabled:
             thinking = ThinkingStreamContext(self._thinking_sink, round_id)
@@ -347,7 +351,7 @@ class DecisionRoundExecutor:
             self._logger.exception(f"Planner 调用异常: {exc}")
             outcome = None
             result["error"] = f"planner_failed: {exc}"
-        result["planner_duration_ms"] = now_ms() - planner_started_ms
+        result["planner_duration_ms"] = self._clock() - planner_started_ms
         # 原始输出与请求指针随 outcome 带回（plan() 的返回值契约）；异常收场时没有
         # outcome，保持空值——异常本身已写进 result.error
         result["planner_raw"] = outcome.raw_content if outcome is not None else ""
@@ -357,8 +361,10 @@ class DecisionRoundExecutor:
             self._stats.planner_failures += 1
             self._stats.total_no_action += 1
             if proactive:
-                self._proactive_trigger.record_silent_round(now_ms())
-            result["total_duration_ms"] = now_ms() - started_ms
+                self._proactive_trigger.record_silent_round(self._clock())
+            if self._on_round_silent is not None:
+                self._on_round_silent(bool(batch), proactive, trigger_cause)
+            result["total_duration_ms"] = self._clock() - started_ms
             return result, None
 
         result["plan"] = {
@@ -387,8 +393,11 @@ class DecisionRoundExecutor:
                 self._on_mouth_superseded()
             elif proactive:
                 # 主动轮走完未开口（因嘴推翻唤醒重评的除外）：记入主动沉默冷却，防止下一 tick 立刻连调大模型
-                self._proactive_trigger.record_silent_round(now_ms())
-            result["total_duration_ms"] = now_ms() - started_ms
+                self._proactive_trigger.record_silent_round(self._clock())
+            # 边玩边说档主动轮沉默收尾时同步推进/消费当次余温机会，避免多个主动窗反复提示同一余温
+            if self._on_round_silent is not None:
+                self._on_round_silent(bool(batch), proactive, trigger_cause)
+            result["total_duration_ms"] = self._clock() - started_ms
             return result, outcome
 
         # 开窗时所在的场次已经下播（常规轮跑到一半，运营结束了场次）：这句不送发言管线。
@@ -399,7 +408,7 @@ class DecisionRoundExecutor:
             self._stats.total_no_action += 1
             result["silent_reason"] = "session_ended"
             result["plan"]["silent_reason"] = "session_ended"
-            result["total_duration_ms"] = now_ms() - started_ms
+            result["total_duration_ms"] = self._clock() - started_ms
             return result, outcome
 
         # 出声前第二道关口：台词生成完后等 TTS 播放空档的十几秒里，嘴可能刚插话回应了新事件或欢迎了同一个人；
@@ -447,20 +456,22 @@ class DecisionRoundExecutor:
             outcome = replace(outcome, replied=False, silent_reason=veto_reason, speech=None)
             if veto_reason == "mouth_superseded" and self._on_mouth_superseded is not None:
                 self._on_mouth_superseded()
-            result["total_duration_ms"] = now_ms() - started_ms
+            if self._on_round_silent is not None:
+                self._on_round_silent(bool(batch), proactive, trigger_cause)
+            result["total_duration_ms"] = self._clock() - started_ms
             return result, outcome
         if speech_info is not None:
             result["speech"], result["emotion"], result["utterance_id"] = speech_info
 
         # 成功：保存上下文 + 记录发言时刻 + 频率限制 + 推进杂谈话头工作台/话题匣
         self._stats.total_replies += 1
-        self._room_state.record_speech(now_ms())
+        self._room_state.record_speech(self._clock())
         if proactive:
-            self._proactive_trigger.record_trigger(trigger_cause.kind, now_ms())
+            self._proactive_trigger.record_trigger(trigger_cause.kind, self._clock())
         if self._on_round_spoken is not None:
             await self._on_round_spoken(outcome, bool(batch))
 
-        result["total_duration_ms"] = now_ms() - started_ms
+        result["total_duration_ms"] = self._clock() - started_ms
         return result, outcome
 
     def _next_round_id(self) -> str:
@@ -470,7 +481,7 @@ class DecisionRoundExecutor:
         发言、工具结果经它成组（观察器按轮渲染）。
         """
         self._round_seq += 1
-        return f"rnd_{now_ms()}_{self._round_seq}"
+        return f"rnd_{self._clock()}_{self._round_seq}"
 
     async def _emit_streamer_stage(
         self,

@@ -225,6 +225,7 @@ class GameEventBatch:
     facts_text: str = ""
     timeline_turns: Tuple[TimelineTurn, ...] = ()
     player_notes: Tuple[PlayerNote, ...] = ()
+    has_urgent: bool = False
 
 
 class StreamerTimeline:

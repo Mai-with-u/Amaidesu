@@ -51,12 +51,15 @@ _DEFAULT_BOUNDARIES = "线下见面、钱和红包、私下联系；改变自己
 _DEFAULT_SPEECH_MAX_CHARS = 60
 # 杂谈档一轮台词的长度上限（与 StreamerConfig.talk_speech_max_chars 默认值对齐）
 _DEFAULT_TALK_SPEECH_MAX_CHARS = 150
-# 接某位观众或玩家的话时篇幅多给这么多字：开头要先带上称呼或接住对方的词，不能挤掉正事
-_TARGET_EXTRA_CHARS = 25
+# 接某位观众或玩家的话时篇幅多给这么多字：起手先把对方问的事顺口带出来让全场听清转场由头，再接回答，不挤掉正事
+_TARGET_EXTRA_CHARS = 40
 
-# 说话方式那一条规矩：边玩边说一轮一事；杂谈像跟朋友唠嗑，围绕一个话头说两三句
+# 说话方式那一条规矩：边玩边说平时一事一毕，接弹幕亮话头时两三句短话；杂谈像跟朋友唠嗑，围绕一个话头说两三句
 _SPEECH_STYLE_RULE = {
-    "play": "像真人主播随口说话，不像写稿：一次只说一件事，一句话说完就停。",
+    "play": (
+        "像真人主播随口说话，不像写稿：平时一次只说一件事、干脆收住；"
+        "接弹幕或醒目留言亮话头时先顺口带出对方问的事再答，两三句短话自然说完就停。"
+    ),
     "talk": (
         "像真人主播跟朋友唠嗑，不像写稿：围绕这一个话头自然说两三句，把细节或你觉得好玩的地方讲出来，说完自然停住。"
     ),
@@ -238,6 +241,7 @@ class Replyer:
         game_people: Sequence[PlayerNote] = (),
         reply_to: str = "",
         speech_mode: str = "play",
+        target_familiarity: str = "",
     ) -> Optional[Dict[str, Any]]:
         """按一条 system 与一条 user 的复古布局请求纯文本台词。
 
@@ -278,6 +282,7 @@ class Replyer:
             reply_to=reply_to,
             mode=mode,
             budget=budget,
+            target_familiarity=target_familiarity,
         )
         messages: List[Dict[str, Any]] = [{"role": "user", "content": turn_input}]
 
@@ -358,9 +363,10 @@ class Replyer:
 
         重说只带人设（system 稳定段，前缀缓存可命中）和原台词，不重发整段上下文——
         要的只是"同一个人把这句话说短"，事实都在原台词里。接观众或玩家的话时（``keep_hook``）
-        明确要求保留开头的称呼或接话钩子、删后面的枝节：钩子被削掉，直播间就听不出她在接谁。
+        明确要求保留开头顺口带出的问题由头、称呼或接话钩子，删后面的枝节：转场锚点被削掉，
+        直播间就听不出她在回应哪件事、接谁的话。
         """
-        hook_note = "开头那个称呼或接住对方的词要留着，删后面的枝节；" if keep_hook else ""
+        hook_note = "开头顺口带出的问题由头、称呼或接住对方的词要留着，删后面的枝节；" if keep_hook else ""
         instruction = (
             f"你刚想说的这段话有 {len(speech)} 字，太长了，像在写稿：\n{speech}\n\n"
             f"说短一点，像口头说话那样，不超过 {budget} 字，不分段。{hook_note}"
@@ -487,6 +493,7 @@ class Replyer:
         reply_to: str = "",
         mode: str = "play",
         budget: Optional[int] = None,
+        target_familiarity: str = "",
     ) -> str:
         """她更早说过的话、最近几条聊天记录与本轮材料合并成一条 user。
 
@@ -532,6 +539,7 @@ class Replyer:
                 reply_to=reply_to,
                 # 回应对象这一窗在公屏开过口：说"他刚在游戏公屏跟你说话"；只冲她做了事的说"刚在游戏里找过你"
                 reply_to_spoke=any(note.said and note.who == reply_to for note in game_people),
+                target_familiarity=target_familiarity,
             ),
             # 游戏里最近找她的人：玩家的话与举动单列，谁说的、谁做的一眼分清（较早的截短、整段封顶）
             game_people_section=_game_people_section(people_lines) if self._game_enabled() else "",
@@ -569,8 +577,12 @@ class Replyer:
             pace_rule=_PACE_RULE.get(mode, _PACE_RULE["play"]),
             rundown=rundown_render,
             state_facts=state_facts.strip() or "（无）",
-            # 长度预算先在提示里说清，多数台词一次就落在预算内；出口处还有截短兜底
-            length_rule=_length_rule(self._speech_max_chars if budget is None else budget, mode),
+            # 长度预算先在提示里说清，多数台词一次就落在预算内；接观众或玩家时放宽到两三句短话以容纳起手亮话头
+            length_rule=_length_rule(
+                self._speech_max_chars if budget is None else budget,
+                mode,
+                has_target=bool(plan.target or reply_to),
+            ),
         )
 
     def _dialogue_entries(self, history: List[Any], batch: List[Any]) -> List[_DialogueEntry]:
@@ -656,12 +668,14 @@ _THINK_UNCLOSED = re.compile(r"<think>.*", re.DOTALL)
 _EXAMPLE_MARKS = "-*•· \t"
 
 
-def _length_rule(budget: int, mode: str) -> str:
-    """本轮回复要求里的字数要求：杂谈档说两三句，边玩边说一两句；预算 0 = 不写。"""
+def _length_rule(budget: int, mode: str, *, has_target: bool = False) -> str:
+    """本轮回复要求里的字数要求：杂谈档两三句，边玩边说接话有目标时两三句短话以内、无目标一两句；预算 0 = 不写。"""
     if budget <= 0:
         return ""
     if mode == "talk":
         return f"不超过 {budget} 字，两三句。"
+    if has_target:
+        return f"不超过 {budget} 字，两三句短话以内。"
     return f"不超过 {budget} 字，可以是一两句。"
 
 
@@ -956,8 +970,22 @@ def _unresolved_target(target: Optional[str]) -> str:
     return raw
 
 
+def _familiarity_line(target_familiarity: str) -> str:
+    """被回应弹幕的发言人为熟客时，紧跟 target 原文附一行关系语气说明；陌生人或空串返回空串。"""
+    if target_familiarity == "close":
+        return "发言人关系: 常来的老熟人（语气自然松弛、像老朋友接茬调侃，少客套寒暄，起手引话时可自然直呼名字）\n"
+    if target_familiarity == "regular":
+        return "发言人关系: 眼熟的老观众（语气自然熟络，不必生分客套）\n"
+    return ""
+
+
 def _render_plan_text(
-    plan: DecisionPlan, *, target_text: str = "", reply_to: str = "", reply_to_spoke: bool = True
+    plan: DecisionPlan,
+    *,
+    target_text: str = "",
+    reply_to: str = "",
+    reply_to_spoke: bool = True,
+    target_familiarity: str = "",
 ) -> str:
     """把 DecisionPlan 渲染为交接稿文本；查到要回应的原话时直接给原话，不再给消息 ID。
 
@@ -967,7 +995,7 @@ def _render_plan_text(
     """
     unresolved = _unresolved_target(plan.target)
     if target_text:
-        target_line = f"target 原文: {target_text}\n"
+        target_line = f"target 原文: {target_text}\n{_familiarity_line(target_familiarity)}"
     elif reply_to:
         how = "他刚在游戏公屏跟你说话" if reply_to_spoke else "他刚在游戏里找过你"
         target_line = f"回应对象: 游戏里的玩家 {reply_to}（{how}）\n"

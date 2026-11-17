@@ -679,3 +679,115 @@ async def test_talk_mode_splits_clauses_and_records_interrupted_tail_on_viewer_r
     assert tails == ["靠维C抗氧化活到了今天！后来苹果压过橙子我才变成AI。"]
     await bus.wait_until_drained()
     assert len(captured) == 2
+
+
+async def test_play_mode_splits_multi_sentence_viewer_reply_and_keeps_quote(started) -> None:
+    """边玩边说档有观众回复目标时，2～3 句回应按句拆段连播且派生编号回退基编号保留引用气泡；单句与无目标独白整句入队。"""
+    bus = EventBus()
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    all_done = asyncio.Event()
+    spoken_calls: list[tuple[str, Optional[str]]] = []
+
+    class _GateEngine:
+        def __init__(self) -> None:
+            self.gate_first = False
+
+        async def handle_speech(self, text: str, utterance_id: Optional[str] = None) -> None:
+            spoken_calls.append((text, utterance_id))
+            if self.gate_first and len(spoken_calls) == 1:
+                first_started.set()
+                await release_first.wait()
+            if len(spoken_calls) >= 5:
+                all_done.set()
+
+    engine = _GateEngine()
+    subtitle = MagicMock()
+    subtitle.show = AsyncMock()
+    subtitle.clear = AsyncMock()
+    dispatcher = await started(bus=bus, subtitle=subtitle, engine=engine, config=_TTS_ON)
+    tails: list[str] = []
+    tail_recorded = asyncio.Event()
+
+    def _on_tail(text: str) -> None:
+        tails.append(text)
+        tail_recorded.set()
+
+    dispatcher.bind_interrupted_tail_listener(_on_tail)
+
+    # 1) 有观众回复目标且含 3 句短话：按句拆成 3 个入队片段，字幕跟随器对 _p2 派生编号照样带出引用气泡
+    quote = ReplyQuote(user_name="阿杰", text="怎么突然去挖红石啦？")
+    reply_res = await dispatcher.dispatch(
+        {
+            "speech": "阿杰问怎么突然去挖红石？家里自动门还差两把红石火把呢。挖完这几块咱们就回地面！",
+            "emotion": {"name": "happy", "intensity": 0.6},
+        },
+        target_user_id="u_ajie",
+        reply_to_message_id="m_ajie_1",
+        reply_quote=quote,
+        round_id="rnd_play_1",
+        priority=1,
+    )
+    assert reply_res is not None
+    base_uid = reply_res[2]
+    assert await dispatcher.wait_idle(timeout_ms=2000) is True
+    await bus.wait_until_drained()
+
+    assert spoken_calls == [
+        ("阿杰问怎么突然去挖红石？", base_uid),
+        ("家里自动门还差两把红石火把呢。", f"{base_uid}_p2"),
+        ("挖完这几块咱们就回地面！", f"{base_uid}_p3"),
+    ]
+    # 模拟 TTS 引擎播放第 2 段派生编号时发布 started，验证字幕跟随器经回退基编号带上同一 ReplyQuote
+    await bus.emit(
+        CoreEvents.TTS_UTTERANCE_STARTED,
+        UtteranceStartedPayload(
+            utterance_id=f"{base_uid}_p2",
+            speech_text="家里自动门还差两把红石火把呢。",
+            engine="test",
+        ),
+        source="test",
+    )
+    await bus.wait_until_drained()
+    assert subtitle.show.await_args.args == ("家里自动门还差两把红石火把呢", f"{base_uid}_p2", quote)
+
+    # 2) 单句观众回复与无目标多句独白：均整句单条入队，不派生 _p2
+    await dispatcher.dispatch(
+        {"speech": "收到小夏的提醒啦！", "emotion": {"name": "happy", "intensity": 0.5}},
+        target_user_id="u_xiaoxia",
+        round_id="rnd_play_2",
+        priority=1,
+    )
+    mono_res = await dispatcher.dispatch(
+        {"speech": "前面好像有岩浆亮光。我慢点探头看一眼。", "emotion": {"name": "neutral", "intensity": 0.4}},
+        round_id="rnd_play_3",
+        priority=0,
+    )
+    assert mono_res is not None
+    await asyncio.wait_for(all_done.wait(), timeout=2.0)
+    assert await dispatcher.wait_idle(timeout_ms=2000) is True
+    assert spoken_calls[3][0] == "收到小夏的提醒啦！" and not str(spoken_calls[3][1]).endswith("_p2")
+    assert spoken_calls[4] == ("前面好像有岩浆亮光。我慢点探头看一眼。", mono_res[2])
+
+    # 3) 多句观众回复在播第 1 句期间遇到更高优付费留言（priority=2）：后半段按 segment=utterance_id 收住进尾句
+    spoken_calls.clear()
+    engine.gate_first = True
+    await dispatcher.dispatch(
+        {"speech": "小夏问那款老街机好不好玩？以前看别人投币通关过一次。配乐特别洗脑！", "emotion": {}},
+        reply_to_message_id="m_xiaoxia_2",
+        priority=1,
+    )
+    await asyncio.wait_for(first_started.wait(), timeout=2.0)
+    sc_task = asyncio.create_task(
+        dispatcher.dispatch(
+            {"speech": "感谢阿杰的醒目留言！这就给你看一眼背包。", "emotion": {}},
+            target_user_id="u_ajie",
+            priority=2,
+        )
+    )
+    # 等高优插断回调触发后再放行正在播的第 1 句，全程事件同步无 sleep
+    await asyncio.wait_for(tail_recorded.wait(), timeout=2.0)
+    release_first.set()
+    await asyncio.wait_for(sc_task, timeout=2.0)
+    assert await dispatcher.wait_idle(timeout_ms=2000) is True
+    assert tails == ["以前看别人投币通关过一次。配乐特别洗脑！"]
